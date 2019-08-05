@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
  * Test sorting strings that have different length but otherwise equal.
  */
@@ -32,4 +32,3 @@ function ut_main()
 
 require_once( 'ut_common.inc' );
 ut_run();
-?>

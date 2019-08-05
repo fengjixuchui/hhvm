@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /*
    +-------------------------------------------------------------+
@@ -23,13 +23,6 @@ foreach (series(1, 5) as $key => $val)
 {
     echo "key: $key, value: $val\n";
 }
-
-echo "===========================\n";
-
-foreach (series('d', 'f') as $key => $val)
-{
-    echo "key: $key, value: $val\n";
-}
 //*/
 
 ///*
@@ -39,7 +32,7 @@ foreach (series('d', 'f') as $key => $val)
 echo "===========================\n";
 $a = series(5, 15);
 var_dump($a);   // PHP5 and HHVM: type Generator
-echo "This type " . (($a instanceof Generator)
+echo "This type " . (($a is Generator)
                      ? "is"
                      : "is not")
                   . " an instance of Generator\n";
@@ -136,12 +129,5 @@ foreach (series2(1, 5, "X") as $key => $val)
 {
     echo "key: $key, value: $val\n";
 //  echo ($val == NULL) ? "value is NULL\n" : "value is not NULL\n";
-}
-
-echo "===========================\n";
-
-foreach (series2('d', 'f', "Key") as $key => $val)
-{
-    echo "key: $key, value: $val\n";
 }
 //*/

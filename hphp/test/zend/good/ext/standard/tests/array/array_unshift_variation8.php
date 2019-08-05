@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int array_unshift(array $array, mixed $var [, mixed ...])
  * Description: Pushes elements onto the beginning of the array
  * Source code: ext/standard/array.c
@@ -9,7 +9,7 @@
  * single quoted strings for $var argument that is prepended to the array
  * passed through $array argument
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_unshift() : single quoted strings for \$var argument ***\n";
 
 // array to be passed to $array argument
@@ -50,4 +50,4 @@ foreach($vars as $var) {
 }
 
 echo "Done";
-?>
+}

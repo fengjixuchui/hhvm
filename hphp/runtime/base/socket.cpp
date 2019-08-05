@@ -23,8 +23,8 @@
 #include "hphp/runtime/base/exceptions.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/server/server-stats.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/util/logger.h"
+#include "hphp/util/rds-local.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -124,7 +124,6 @@ bool Socket::open(const String& /*filename*/, const String& /*mode*/) {
 }
 
 bool Socket::close() {
-  invokeFiltersOnClose();
   return closeImpl();
 }
 
@@ -266,13 +265,7 @@ void Socket::inferStreamType() {
 
     if (m_data->m_type == AF_INET || m_data->m_type == AF_INET6) {
       if (type == SOCK_STREAM) {
-        if (RuntimeOption::EnableHipHopSyntax) {
-          setStreamType(s_tcp_socket);
-        } else {
-          // Note: PHP returns "tcp_socket/ssl" for this query,
-          // even though the socket is clearly not an SSL socket.
-          setStreamType(s_tcp_socket_ssl);
-        }
+        setStreamType(s_tcp_socket);
       } else if (type == SOCK_DGRAM) {
         setStreamType(s_udp_socket);
       }

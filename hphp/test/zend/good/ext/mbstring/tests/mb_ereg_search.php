@@ -1,4 +1,4 @@
-<?php
+<?hh
     $str = "中国abc + abc ?!？！字符＃　china string";
 
     $reg = "\w+";
@@ -22,4 +22,3 @@
         }
         while($r);
     }
-?>

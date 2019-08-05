@@ -1,5 +1,5 @@
-<?php // $Id$
-
+<?hh // $Id$
+<<__EntryPoint>> function main(): void {
 $long_max = is_int(5000000000)? (double)9223372036854775807 : (double)0x7FFFFFFF;
 $long_min = -$long_max - 1;
 printf("%d,%d,%d,%d\n",is_float($long_min  ),is_float($long_max  ),
@@ -62,7 +62,7 @@ $tests = <<<TESTS
  100000000  === pow(-10,8)
  1    === pow(-1,1443279822)
 -1    === pow(-1,1443279821)
-sqrt(2) ~== pow(2,1/2)
+sqrt(2.0) ~== pow(2,1/2)
  0.25 === pow(-2.0,-2.0)
 -0.5  === pow(-2.0,-1.0)
  1.0  === pow(-2.0, 0.0)
@@ -139,3 +139,4 @@ TESTS;
 
  echo "On failure, please mail result to php-dev@lists.php.net\n";
  include(dirname(__FILE__) . '/../../../../tests/quicktester.inc');
+}

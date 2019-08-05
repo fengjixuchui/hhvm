@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : string realpath(string path)
  * Description: Return the resolved path 
  * Source code: ext/standard/file.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing realpath() : variation ***\n";
 
 $paths = array('c:\\', 
@@ -24,5 +24,5 @@ foreach($paths as $path) {
       var_dump( realpath($path) );
 };
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -58,7 +58,7 @@ bool HHVM_FUNCTION(ob_start, const Variant& callback /* = null */,
 
   if (!callback.isNull()) {
     CallCtx ctx;
-    vm_decode_function(callback, nullptr, false, ctx);
+    vm_decode_function(callback, ctx);
     if (!ctx.func) {
       return false;
     }
@@ -127,7 +127,7 @@ int64_t HHVM_FUNCTION(ob_get_length) {
 int64_t HHVM_FUNCTION(ob_get_level) {
   return g_context->obGetLevel();
 }
-Array HHVM_FUNCTION(ob_get_status, bool full_status /* = false */) {
+Variant HHVM_FUNCTION(ob_get_status, bool full_status /* = false */) {
   return g_context->obGetStatus(full_status);
 }
 void HHVM_FUNCTION(ob_implicit_flush, bool flag /* = true */) {
@@ -149,7 +149,12 @@ int64_t HHVM_FUNCTION(hphp_get_stats, const String& name) {
 }
 Array HHVM_FUNCTION(hphp_get_status) {
   auto const out = ServerStats::ReportStatus(Writer::Format::JSON);
-  return Variant::attach(HHVM_FN(json_decode)(String(out))).toArray();
+  auto result = HHVM_FN(json_decode)(
+    String(out),
+    false,
+    512,
+    HPHP::k_JSON_FB_DARRAYS_AND_VARRAYS);
+  return Variant::attach(result).toArray().toDArray();
 }
 Array HHVM_FUNCTION(hphp_get_iostatus) {
   return ServerStats::GetThreadIOStatuses();
@@ -250,19 +255,6 @@ void HHVM_FUNCTION(hphp_clear_hardware_events) {
   HardwareCounter::ClearPerfEvents();
 }
 
-// __SystemLib\print_hashbang
-void HHVM_FUNCTION(SystemLib_print_hashbang, const String& hashbang) {
-  auto const ar = GetCallerFrame();
-
-  if (ar->m_func->name()->empty() && (!RuntimeOption::ServerExecutionMode() ||
-      is_cli_mode())) {
-    // If run in cli mode, print nothing in the lowest pseudomain
-    if (!g_context->getPrevFunc(ar)) return;
-  }
-
-  g_context->write(hashbang);
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 void StandardExtension::initOutput() {
@@ -292,7 +284,6 @@ void StandardExtension::initOutput() {
   HHVM_FE(hphp_get_hardware_counters);
   HHVM_FE(hphp_set_hardware_events);
   HHVM_FE(hphp_clear_hardware_events);
-  HHVM_FALIAS(__SystemLib\\print_hashbang, SystemLib_print_hashbang);
 
   HHVM_RC_INT(PHP_OUTPUT_HANDLER_CONT, k_PHP_OUTPUT_HANDLER_CONT);
   HHVM_RC_INT(PHP_OUTPUT_HANDLER_WRITE, k_PHP_OUTPUT_HANDLER_WRITE);

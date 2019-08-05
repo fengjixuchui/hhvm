@@ -12,14 +12,16 @@ class StaticClosureTest {
 
   public function getStaticLambda(): mixed {
     return static function() {
-      return $this->foo();
+      return foo();
     };
   }
 
   public function getNamedStaticLambda(): mixed {
     $f = static function () {
-      return $this->foo();
+      return foo();
     };
     return $f;
   }
 }
+
+<<__EntryPoint>> function main(): void {}

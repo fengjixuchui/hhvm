@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $db = new SQLite3(':memory:');
 
 echo "Creating Table\n";
@@ -14,4 +14,4 @@ try { $db->lastInsertRowID(""); } catch (Exception $e) { echo "\n".'Warning: '.$
 echo "Closing database\n";
 var_dump($db->close());
 echo "Done";
-?>
+}

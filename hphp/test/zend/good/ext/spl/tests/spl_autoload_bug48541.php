@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class X {
   public function getClosure() {
@@ -7,7 +7,7 @@ class X {
     };
   }
 }
-
+<<__EntryPoint>> function main(): void {
 $a = function ($class) {
     echo "a called\n";
 };
@@ -26,5 +26,5 @@ $c2 = $a2;
 spl_autoload_register($c);
 spl_autoload_register($c2);
 $c = new foo;
-?>
-===DONE===
+echo "===DONE===\n";
+}

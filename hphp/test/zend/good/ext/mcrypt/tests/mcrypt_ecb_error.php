@@ -1,10 +1,10 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 error_reporting(E_ALL & ~E_DEPRECATED);
 
 /* Prototype  : string mcrypt_ecb(int cipher, string key, string data, int mode, string iv)
- * Description: ECB crypt/decrypt data using key key with cipher cipher starting with iv 
+ * Description: ECB crypt/decrypt data using key key with cipher cipher starting with iv
  * Source code: ext/mcrypt/mcrypt.c
- * Alias to functions: 
+ * Alias to functions:
  */
 
 echo "*** Testing mcrypt_ecb() : error conditions ***\n";
@@ -27,5 +27,5 @@ $key = 'string_val';
 $data = 'string_val';
 try { var_dump( mcrypt_ecb($cipher, $key, $data) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

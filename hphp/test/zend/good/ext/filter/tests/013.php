@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 var_dump(filter_var("  234", FILTER_VALIDATE_INT));
 var_dump(filter_var("234    ", FILTER_VALIDATE_INT));
 var_dump(filter_var("  234  ", FILTER_VALIDATE_INT));
@@ -34,4 +34,4 @@ var_dump(filter_var("0ff", FILTER_VALIDATE_INT));
 var_dump(filter_var("010", FILTER_VALIDATE_INT));
 
 echo "Done\n";
-?>
+}

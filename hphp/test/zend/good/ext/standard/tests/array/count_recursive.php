@@ -1,8 +1,17 @@
-<?php
+<?hh
 /* Prototype: int count ( mixed $var [, int $mode] );
-   Discription: Count elements in an array, or properties in an object
-*/
+ * Description: Count elements in an array, or properties in an object
+ */
+class count_class implements Countable {
+  private $var_private;
+  public $var_public;
+  protected $var_protected;
 
+  public function count() {
+    return 3;
+  }
+}
+<<__EntryPoint>> function main(): void {
 echo "*** Testing basic functionality of count() function ***\n";
 print "-- Testing NULL --\n";
 $arr = NULL;
@@ -28,7 +37,7 @@ print "COUNT_NORMAL: should be 1, is ".count("string")."\n";
 print "COUNT_NORMAL: should be 2, is ".count(array("a", array("b")))."\n";
 
 $arr = array('a'=>array(NULL, NULL, NULL), 1=>array(NULL=>1, 1=>NULL),
-	array(array(array(array(array(NULL))))));
+    array(array(array(array(array(NULL))))));
 print "-- Testing really cool arrays --\n";
 print "COUNT_NORMAL: should be 3, is ".count($arr, COUNT_NORMAL)."\n";
 print "COUNT_RECURSIVE: should be 13, is ".count($arr, COUNT_RECURSIVE)."\n";
@@ -44,7 +53,7 @@ $count_array = array(
   array( 4 => 1, 3 => -2.344, "3" => "string", "2" => NULL,
          1 => -2.344, array()),
   array( TRUE => TRUE, FALSE => FALSE, "" => "", " " => " ",
-	 NULL => NULL, "\x000" => "\x000", "\000" => "\000"),
+     NULL => NULL, "\x000" => "\x000", "\000" => "\000"),
   array( NULL, 1.23 => "Hi", "string" => "hello",
          array("" => "World", "-2.34" => "a", "0" => "b"))
 );
@@ -75,15 +84,6 @@ print "COUNT_NORMAL: should be 2, is ".count($arr, COUNT_NORMAL)."\n";
 print "COUNT_RECURSIVE: should be 5, is ".count($arr, COUNT_RECURSIVE)."\n";
 
 echo "\n-- Testing count() on objects with Countable interface --\n";
-class count_class implements Countable {
-  private $var_private;
-  public $var_public;
-  protected $var_protected;
-
-  public function count() {
-    return 3;
-  }
-}
 
 $obj = new count_class();
 print "COUNT_NORMAL: should be 3, is ".count($obj)."\n";
@@ -96,18 +96,6 @@ $resource2 = opendir( "." );  // Creating dir resource
 /* creating an array with resources as elements */
 $arr_resource = array("a" => $resource1, "b" => $resource2);
 var_dump(count($arr_resource));
-
-echo "\n-- Testing count() on arrays containing references --\n";
-$arr = array(1, array("a", "b", "c"));
-$arr[2] = &$arr[1];
-
-$mode_arr = array( COUNT_NORMAL, COUNT_RECURSIVE, 0, 1, -1, -1.45, 2, TRUE,
-                   FALSE, NULL);
-for( $i =0; $i < count( $mode_arr ); $i++) {
-  echo "For mode '$mode_arr[$i]' count is => ";
-  var_dump(count($arr, $mode_arr[$i]));
-}
-
 
 echo "\n-- Testing error conditions --";
 try { var_dump( count() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; } // No. of args = 0
@@ -122,4 +110,4 @@ echo "\nDone";
 /* closing the resource handles */
 fclose( $resource1 );
 closedir( $resource2 );
-?>
+}

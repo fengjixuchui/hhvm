@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $tests =array(
 	array('$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW', 'U*U'),
 	array('$2a$05$CCCCCCCCCCCCCCCCCCCCC.VGOzA784oUp/Z0DY336zx7pLYAy0lwK', 'U*U*'),
@@ -38,5 +38,4 @@ foreach($tests as $test) {
   }
   $i++;
 }
-
-?>
+}

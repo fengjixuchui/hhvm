@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $tmp_link = __FILE__.".tmp.link";
 $tmp_link2 = __FILE__.".tmp.link2";
 
@@ -16,4 +16,4 @@ var_dump(readlink($tmp_link2));
 @unlink($tmp_link2);
 
 echo "Done\n";
-?>
+}

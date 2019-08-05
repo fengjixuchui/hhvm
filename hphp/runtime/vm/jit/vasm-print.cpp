@@ -112,6 +112,9 @@ struct FormatVisitor {
     case CallSpec::Kind::Destructor:
       str << sep() << folly::format("destructor({})", show(call.reg()));
       break;
+    case CallSpec::Kind::ObjDestructor:
+      str << sep() << folly::format("obj-destructor({})", show(call.reg()));
+      break;
     case CallSpec::Kind::Stub:
       return imm(call.stubAddr());
     }
@@ -133,7 +136,6 @@ struct FormatVisitor {
     }
   }
   void imm(TransFlags f) {
-    if (f.noinlineSingleton) str << sep() << "noinlineSingleton";
   }
   void imm(DestType dt) {
     str << sep() << destTypeName(dt);
@@ -237,13 +239,11 @@ std::string show(const VregSet& s) {
   std::ostringstream str;
   auto comma = false;
   str << '{';
-  s.forEach(
-    [&] (Vreg r) {
-      if (comma) str << ", ";
-      comma = true;
-      str << show(r);
-    }
-  );
+  for (auto const r : s) {
+    if (comma) str << ", ";
+    comma = true;
+    str << show(r);
+  }
   str << '}';
   return str.str();
 }
@@ -266,11 +266,11 @@ std::string show(Vptr p) {
       // [%fs + %base + disp + %index * scale]
       str = "[";
       auto prefix = false;
-      if (p.seg == Vptr::FS) {
+      if (p.seg == Segment::FS) {
         str += "%fs";
         prefix = true;
       }
-      if (p.seg == Vptr::GS) {
+      if (p.seg == Segment::GS) {
         str += "%gs";
         prefix = true;
       }
@@ -359,8 +359,9 @@ void printBlock(std::ostream& out, const Vunit& unit,
                 const IRInstruction*& origin) {
   auto& block = unit.blocks[b];
   out << '\n' << color(ANSI_COLOR_MAGENTA);
-  out << folly::format(" B{: <6} {}", size_t(b),
-           area_names[int(block.area_idx)]);
+  out << folly::format(" B{: <6} {} ({})", size_t(b),
+                       area_names[int(block.area_idx)],
+                       block.weight);
   for (auto p : preds[b]) out << ", B" << size_t(p);
   out << color(ANSI_COLOR_END) << '\n';
 

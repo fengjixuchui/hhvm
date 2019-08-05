@@ -30,8 +30,8 @@
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/instance-bits.h"
+#include "hphp/runtime/vm/jit/array-access-profile.h"
 #include "hphp/runtime/vm/jit/array-kind-profile.h"
-#include "hphp/runtime/vm/jit/array-offset-profile.h"
 #include "hphp/runtime/vm/jit/call-target-profile.h"
 #include "hphp/runtime/vm/jit/cls-cns-profile.h"
 #include "hphp/runtime/vm/jit/containers.h"
@@ -72,10 +72,6 @@ namespace {
 TRACE_SET_MOD(hhbc);
 
 StaticString s_invoke("__invoke");
-StaticString s_86ctor("86ctor");
-StaticString s_86pinit("86pinit");
-StaticString s_86sinit("86sinit");
-StaticString s_86linit("86linit");
 
 constexpr uint32_t k86pinitSlot = 0x80000000u;
 constexpr uint32_t k86sinitSlot = 0x80000001u;
@@ -343,6 +339,7 @@ void write_prof_trans_rec(ProfDataSerializer& ser,
   if (ptr->kind() == TransKind::Profile) {
     write_raw(ser, ptr->lastBcOff());
     write_region_desc(ser, ptr->region().get());
+    write_raw(ser, ptr->asmSize());
   } else {
     write_raw(ser, ptr->prologueArgs());
 
@@ -357,6 +354,7 @@ void write_prof_trans_rec(ProfDataSerializer& ser,
     for (auto const caller : ptr->mainCallers()) addCaller(caller);
     for (auto const caller : ptr->guardCallers()) addCaller(caller);
     write_container(ser, callers, write_raw<TransID>);
+    write_raw(ser, ptr->asmSize());
   }
 }
 
@@ -370,16 +368,18 @@ std::unique_ptr<ProfTransRec> read_prof_trans_rec(ProfDataDeserializer& ser) {
   if (kind == TransKind::Profile) {
     auto const lastBcOff = read_raw<Offset>(ser);
     auto const region = read_region_desc(ser);
-    return std::make_unique<ProfTransRec>(lastBcOff, sk, region);
+    auto const asmSize = read_raw<uint32_t>(ser);
+    return std::make_unique<ProfTransRec>(lastBcOff, sk, region, asmSize);
   }
 
-  auto ret = std::make_unique<ProfTransRec>(sk, read_raw<int>(ser));
+  auto ret = std::make_unique<ProfTransRec>(sk, read_raw<int>(ser), 0);
 
   read_container(ser,
                  [&] {
                    ret->profCallers().push_back(read_raw<TransID>(ser));
                  });
-
+  auto const asmSize = read_raw<uint32_t>(ser);
+  ret->setAsmSize(asmSize);
   return ret;
 }
 
@@ -389,6 +389,8 @@ bool write_type_alias_or_class(ProfDataSerializer& ser, const NamedEntity* ne) {
   if (!ne) return false;
   if (auto const cls = ne->clsList()) {
     if (!(cls->attrs() & AttrUnique)) return false;
+    auto const filepath = cls->preClass()->unit()->filepath();
+    if (!filepath || filepath->empty()) return false;
     if (!cls->wasSerialized()) write_class(ser, cls);
     return true;
   }
@@ -419,7 +421,9 @@ bool write_type_alias(ProfDataSerializer& ser, const TypeAliasReq* td) {
     if (ta.name == name) {
       auto const kind = get_ts_kind(ta.typeStructure.get());
       switch (kind) {
-        case TypeStructure::Kind::T_unresolved: {
+        case TypeStructure::Kind::T_unresolved:
+        case TypeStructure::Kind::T_xhp:
+        {
           auto const clsname = get_ts_classname(ta.typeStructure.get());
           if (!write_type_alias_or_class(ser,
                                          NamedEntity::get(clsname, false))) {
@@ -436,9 +440,13 @@ bool write_type_alias(ProfDataSerializer& ser, const TypeAliasReq* td) {
         case TypeStructure::Kind::T_resource:
         case TypeStructure::Kind::T_num:
         case TypeStructure::Kind::T_arraykey:
+        case TypeStructure::Kind::T_nothing:
         case TypeStructure::Kind::T_noreturn:
         case TypeStructure::Kind::T_tuple:
+        case TypeStructure::Kind::T_fun:
         case TypeStructure::Kind::T_array:
+        case TypeStructure::Kind::T_typevar:
+        case TypeStructure::Kind::T_shape:
         case TypeStructure::Kind::T_darray:
         case TypeStructure::Kind::T_varray:
         case TypeStructure::Kind::T_varray_or_darray:
@@ -448,25 +456,12 @@ bool write_type_alias(ProfDataSerializer& ser, const TypeAliasReq* td) {
         case TypeStructure::Kind::T_vec_or_dict:
         case TypeStructure::Kind::T_arraylike:
         case TypeStructure::Kind::T_nonnull:
+        case TypeStructure::Kind::T_dynamic:
+        case TypeStructure::Kind::T_typeaccess:
         case TypeStructure::Kind::T_mixed:
           break;
 
-        case TypeStructure::Kind::T_fun:
-        case TypeStructure::Kind::T_typevar:
-        case TypeStructure::Kind::T_shape:
-        case TypeStructure::Kind::T_typeaccess:
-        case TypeStructure::Kind::T_xhp:
-        case TypeStructure::Kind::T_reifiedtype: {
-          Logger::Warning("jit_serialize: TypedAlias %s of Kind %d skipped",
-                          name->data(), (int)kind);
-          static auto missedTypeAliasCounter = ServiceData::createTimeSeries(
-            "jit.serialize.skipped_type_aliases",
-            {ServiceData::StatsType::COUNT}
-          );
-          missedTypeAliasCounter->addValue(1);
-          return false;
-        }
-
+        case TypeStructure::Kind::T_reifiedtype:
         case TypeStructure::Kind::T_class:
         case TypeStructure::Kind::T_interface:
         case TypeStructure::Kind::T_trait:
@@ -639,6 +634,14 @@ void read_classes_and_type_aliases(ProfDataDeserializer& ser) {
 }
 
 void write_prof_data(ProfDataSerializer& ser, ProfData* pd) {
+  // Write the profiled metadata to output
+  std::string metaFile = ser.filename() + ".meta";
+  if (auto out = fopen(metaFile.c_str(), "w")) {
+    fprintf(out, "profFuncCnt=%ld\n", pd->profilingFuncs());
+    fprintf(out, "profBCSize=%ld\n", pd->profilingBCSize());
+    fclose(out);
+  }
+
   write_profiled_funcs(ser, pd);
 
   write_raw(ser, pd->counterDefault());
@@ -818,7 +821,7 @@ void merge_loaded_units(int numWorkers) {
   // the first worker to finish.
   auto const batchSize{std::max(units.size() / numWorkers / 16, size_t(1))};
   std::atomic<size_t> index{0};
-  std::atomic_int curr_node{0};
+  std::atomic<uint32_t> curr_node{0};
   for (auto worker = 0; worker < numWorkers; ++worker) {
     WorkerSpec spec;
     spec.numaNode = next_numa_node(curr_node);
@@ -1093,7 +1096,7 @@ Unit* read_unit(ProfDataDeserializer& ser) {
       if (filepath->data()[0] == '/' && filepath->data()[1] == ':') {
         return lookupSyslibUnit(filepath, nativeFuncs);
       }
-      return lookupUnit(filepath, "", nullptr, nativeFuncs);
+      return lookupUnit(filepath, "", nullptr, nativeFuncs, false);
     }
   );
 }
@@ -1195,7 +1198,8 @@ void write_func(ProfDataSerializer& ser, const Func* func) {
   uint32_t fid = func->getFuncId();
   assertx(!(fid & 0x80000000));
   if (func == SystemLib::s_nullCtor ||
-      (!func->isMethod() && !func->isPseudoMain() && func->isBuiltin())) {
+      (!func->isMethod() && !func->isPseudoMain() && func->isBuiltin() &&
+      !func->isMethCaller())) {
     if (func == SystemLib::s_nullCtor) {
       assertx(func->name()->isame(s_86ctor.get()));
     }
@@ -1219,7 +1223,7 @@ void write_func(ProfDataSerializer& ser, const Func* func) {
         if (func->name() == s_86pinit.get()) return k86pinitSlot;
         if (func->name() == s_86sinit.get()) return k86sinitSlot;
         if (func->name() == s_86linit.get()) return k86linitSlot;
-        cls = getOwningClassForFunc(func);
+        cls = func->cls();
         assertx(cls->getMethod(slot) == func);
       }
       return ~slot;
@@ -1282,7 +1286,6 @@ Func* read_func(ProfDataDeserializer& ser) {
         not_reached();
       }();
       ser.recordFid(fid, func->getFuncId());
-      const_cast<Func*>(func)->setHot();
       return const_cast<Func*>(func);
     }
   );
@@ -1317,7 +1320,7 @@ ClsMethDataRef read_clsmeth(ProfDataDeserializer& ser) {
   ITRACE(2, "ClsMeth: {}, {}\n",
     cls ? cls->name() : staticEmptyString(),
     func ? func->fullName() : staticEmptyString());
-  return ClsMethDataRef(cls, func);
+  return ClsMethDataRef::create(cls, func);
 }
 
 std::string serializeProfData(const std::string& filename) {
@@ -1398,7 +1401,9 @@ std::string deserializeProfData(const std::string& filename, int numWorkers) {
       throw std::runtime_error(
           "Stale profile data (check Eval.ProfDataTTLHours)");
     } else if (buildTime > currTime) {
-      throw std::runtime_error("profile data dumped in the future?");
+      throw std::runtime_error(
+          folly::sformat("profile data build timestame: {}, currTime: {}",
+                         buildTime, currTime).c_str());
     }
 
     InstanceBits::deserialize(ser);

@@ -1,10 +1,10 @@
-<?php
+<?hh
 /*
-Prototype: bool flock(resource $handle, int $operation [, int &$wouldblock]);
-Description: PHP supports a portable way of locking complete files
-  in an advisory way
-*/
-
+ * Prototype: bool flock(resource $handle, int $operation [, int &$wouldblock]);
+ * Description: PHP supports a portable way of locking complete files
+ * in an advisory way
+ */
+<<__EntryPoint>> function main(): void {
 echo "*** Testing error conditions ***\n";
 
 $file = dirname(__FILE__)."/flock.tmp";
@@ -46,9 +46,7 @@ try { var_dump(flock($fp)); } catch (Exception $e) { echo "\n".'Warning: '.$e->g
 try { var_dump(flock($fp, "", &$var, "")); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "\n*** Done ***\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file = dirname(__FILE__)."/flock.tmp";
 unlink($file);
-?>
+}

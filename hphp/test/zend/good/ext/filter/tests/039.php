@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 echo "-- (1)\n";
 var_dump(filter_var_array(NULL));
 var_dump(filter_var_array(array()));
@@ -43,4 +43,4 @@ var_dump(filter_var_array($a, $b));
 var_dump($a, $b);
 
 echo "Done\n";
-?>
+}

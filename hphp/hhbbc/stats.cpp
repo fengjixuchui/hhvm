@@ -120,6 +120,8 @@ struct Builtins {
 constexpr uint32_t kNumRATTags = REPO_AUTH_TYPE_TAGS 0 ;
 #undef TAG
 
+}
+
 struct Stats {
   std::array<std::atomic<uint64_t>,Op_count> op_counts;
   std::array<std::atomic<uint64_t>,kNumRATTags> ratL_tags;
@@ -146,6 +148,8 @@ struct Stats {
   TypeStat iterInitKBase;
   Builtins builtins;
 };
+
+namespace {
 
 void type_stat_string(std::string& ret,
                       const std::string& prefix,
@@ -314,7 +318,7 @@ bool in(StatsSS& env, const bc::FCallBuiltin& op) {
 
   default_dispatch(env, op);
 
-  auto builtin = op.str3;
+  auto builtin = op.str4;
   {
     BuiltinInfo::accessor acc;
     auto inserted = env.stats.builtins.builtinsInfo.insert(acc, builtin);
@@ -415,8 +419,9 @@ void collect_func(Stats& stats, const Index& index, php::Func& func) {
 
   add_type(stats.returns, ty);
 
-  for (auto& blk : func.blocks) {
-    if (blk->id == NoBlockId) continue;
+  for (auto const bid : func.blockRange()) {
+    auto const blk = func.blocks[bid].get();
+    if (blk->dead) continue;
     for (auto& bc : blk->hhbcs) {
       collect_simple(stats, bc);
     }
@@ -425,25 +430,24 @@ void collect_func(Stats& stats, const Index& index, php::Func& func) {
   if (!options.extendedStats) return;
 
   auto const ctx = Context { func.unit, &func, func.cls };
-  auto const fa  = analyze_func(index, ctx,
-                                CollectionOpts::TrackConstantArrays);
+  auto const fa  = analyze_func(index, ctx, CollectionOpts{});
   {
     Trace::Bump bumper{Trace::hhbbc, kStatsBump};
-    for (auto& blk : func.blocks) {
-      if (blk->id == NoBlockId) continue;
-      auto state = fa.bdata[blk->id].stateIn;
+    for (auto const bid : func.blockRange()) {
+      auto const blk = func.blocks[bid].get();
+      auto state = fa.bdata[bid].stateIn;
       if (!state.initialized) continue;
 
       CollectedInfo collect {
         index, ctx, nullptr, CollectionOpts {}, &fa
       };
-      Interp interp { index, ctx, collect, blk.get(), state };
+      Interp interp { index, ctx, collect, bid, blk, state };
       for (auto& bc : blk->hhbcs) {
         auto noop    = [] (BlockId, const State*) {};
-        auto flags   = StepFlags {};
-        ISS env { interp, flags, noop };
+        ISS env { interp, noop };
         StatsSS sss { env, stats };
         dispatch(sss, bc);
+        if (state.unreachable) break;
       }
     }
   }
@@ -511,15 +515,39 @@ void collect_stats(Stats& stats,
 
 //////////////////////////////////////////////////////////////////////
 
-void print_stats(const Index& index, const php::Program& program) {
+StatsHolder::StatsHolder() {
   if (!Trace::moduleEnabledRelease(Trace::hhbbc_time, 1)) return;
+  stats = new Stats{};
+}
 
-  trace_time timer("stats");
+StatsHolder::~StatsHolder() {
+  delete stats;
+}
 
-  Stats stats{};
-  collect_stats(stats, index, program);
+StatsHolder allocate_stats() {
+  return StatsHolder();
+}
 
-  auto const str = show(stats);
+void collect_stats(const StatsHolder& stats,
+                   const Index& index,
+                   const php::Unit* unit) {
+  if (!stats) return;
+  for (auto& c : unit->classes) {
+    collect_class(*stats.stats, index, *c);
+    for (auto& m : c->methods) {
+      collect_func(*stats.stats, index, *m);
+    }
+  }
+  for (auto& x : unit->funcs) {
+    collect_func(*stats.stats, index, *x);
+  }
+  collect_func(*stats.stats, index, *unit->pseudomain);
+}
+
+void print_stats(const StatsHolder& stats) {
+  if (!stats) return;
+
+  auto const str = show(*stats.stats);
   if (Trace::moduleEnabledRelease(Trace::hhbbc_time, 2)) {
     std::cout << str;
   }

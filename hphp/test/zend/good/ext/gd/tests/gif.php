@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function check_box($r,$g,$b, $error=0) {
 	$cwd = dirname(__FILE__);
@@ -121,4 +121,3 @@ if (check_box(255,255,255, 10)) {
 
 @unlink($cwd . "/test_gif.gif");
 @unlink($cwd . "/test_gif_2.gif");
-?>

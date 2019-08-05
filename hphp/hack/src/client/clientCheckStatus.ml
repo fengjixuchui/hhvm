@@ -57,6 +57,9 @@ let print_error_color e =
   print_reason_color ~first:true ~code (List.hd_exn msg_list);
   List.iter (List.tl_exn msg_list) (print_reason_color ~first:false ~code)
 
+let print_error_contextual e =
+  Printf.printf "%s" (Errors.to_contextual_string e)
+
 let is_stale_msg liveness =
    match liveness with
     | Stale_status ->
@@ -71,13 +74,14 @@ let warn_unsaved_changes () =
   Tty.cprintf (Tty.Bold Tty.Yellow) "Warning: " ~out_channel:stderr;
   prerr_endline
 {|there is an editor connected to the Hack server.
-The errors below may reflect your unsaved changes in the editor.|}
+The errors above may reflect your unsaved changes in the editor.|}
 
-let go status output_json from =
+let go status output_json from error_format max_errors =
   let {
     Server_status.liveness;
     has_unsaved_changes;
     error_list;
+    last_recheck_stats;
   } = status in
   let stale_msg = is_stale_msg liveness in
   if output_json || from <> "" || error_list = []
@@ -85,9 +89,21 @@ let go status output_json from =
     (* this should really go to stdout but we need to adapt the various
      * IDE plugins first *)
     let oc = if output_json then stderr else stdout in
-    ServerError.print_error_list oc ~stale_msg ~output_json ~error_list ~edges_added:None
+    ServerError.print_error_list
+      oc
+      ~stale_msg
+      ~output_json
+      ~error_list
+      ~save_state_result:None
+      ~recheck_stats:last_recheck_stats
   end else begin
-    List.iter error_list print_error_color;
+    let f = match error_format with
+      | Errors.Context -> print_error_contextual
+      | Errors.Raw -> print_error_color
+    in
+    List.iter error_list f;
+    Option.iter (Errors.format_summary error_format error_list max_errors)
+      ~f:(fun msg -> Printf.printf "%s" msg);
     Option.iter stale_msg ~f:(fun msg -> Printf.printf "%s" msg);
     if has_unsaved_changes then warn_unsaved_changes ()
   end;

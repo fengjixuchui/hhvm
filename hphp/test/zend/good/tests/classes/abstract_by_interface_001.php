@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Root {
 }
@@ -21,5 +21,4 @@ var_dump(new Leaf);
 class Fails extends Root implements MyInterface {
 }
 
-?>
-===DONE===
+echo "===DONE===\n";

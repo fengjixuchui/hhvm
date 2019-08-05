@@ -1,4 +1,6 @@
-<?hh
+<?hh // partial
+
+namespace {
 
 /**
  * Close an open gz-file pointer
@@ -351,6 +353,8 @@ function nzcompress(string $uncompressed): mixed;
 <<__Native, __HipHopSpecific, __IsFoldable, __Rx>>
 function nzuncompress(string $compressed): mixed;
 
+} // root namespace
+
 /**
  * Implementation detail for zlib.inflate stream filter.
  *
@@ -360,18 +364,30 @@ namespace __SystemLib {
 <<__NativeData("__SystemLib\\ChunkedInflator")>>
 class ChunkedInflator {
   <<__Native>>
-  function eof(): bool;
+  public function eof(): bool;
 
   <<__Native>>
-  function inflateChunk(string $chunk): string;
+  public function inflateChunk(string $chunk): string;
+
+  <<__Native>>
+  public function close(): void;
+
+  <<__Native>>
+  public function getUndecompressedByteCount(): int;
 }
 
 <<__NativeData("__SystemLib\\ChunkedGunzipper")>>
 class ChunkedGunzipper {
   <<__Native>>
-  function eof(): bool;
+  public function eof(): bool;
 
   <<__Native>>
-  function inflateChunk(string $chunk): string;
+  public function inflateChunk(string $chunk): string;
+
+  <<__Native>>
+    public function close(): void;
+
+  <<__Native>>
+  public function getUndecompressedByteCount(): int;
 }
 }

@@ -60,6 +60,14 @@ struct EmptyArray final : type_scan::MarkCollectable<EmptyArray> {
   }
   static constexpr auto NvTryGetStr = &NvGetStr;
 
+  static ssize_t NvGetIntPos(const ArrayData* ad, int64_t) {
+    return ArrayCommon::ReturnInvalidIndex(ad);
+  }
+
+  static ssize_t NvGetStrPos(const ArrayData* ad, const StringData*) {
+    return ArrayCommon::ReturnInvalidIndex(ad);
+  }
+
   static tv_rval RvalInt(const ArrayData* ad, int64_t k) {
     return NvGetInt(ad, k);
   }
@@ -101,15 +109,8 @@ struct EmptyArray final : type_scan::MarkCollectable<EmptyArray> {
     return false;
   }
   static arr_lval LvalInt(ArrayData*, int64_t k, bool copy);
-  static arr_lval LvalIntRef(ArrayData*, int64_t k, bool copy);
   static arr_lval LvalStr(ArrayData*, StringData* k, bool copy);
-  static arr_lval LvalStrRef(ArrayData*, StringData* k, bool copy);
   static arr_lval LvalNew(ArrayData*, bool copy);
-  static arr_lval LvalNewRef(ArrayData*, bool copy);
-  static ArrayData* SetRefInt(ArrayData*, int64_t k, tv_lval v);
-  static constexpr auto SetRefIntInPlace = &SetRefInt;
-  static ArrayData* SetRefStr(ArrayData*, StringData* k, tv_lval v);
-  static constexpr auto SetRefStrInPlace = &SetRefStr;
   static constexpr auto IterBegin = &ArrayCommon::ReturnInvalidIndex;
   static constexpr auto IterLast = &ArrayCommon::ReturnInvalidIndex;
   static constexpr auto IterEnd = &ArrayCommon::ReturnInvalidIndex;
@@ -138,8 +139,6 @@ struct EmptyArray final : type_scan::MarkCollectable<EmptyArray> {
   static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* Append(ArrayData*, Cell v);
   static constexpr auto AppendInPlace = &Append;
-  static ArrayData* AppendRef(ArrayData*, tv_lval v);
-  static constexpr auto AppendRefInPlace = &AppendRef;
   static ArrayData* AppendWithRef(ArrayData*, TypedValue v);
   static constexpr auto AppendWithRefInPlace = &AppendWithRef;
   static ArrayData* PlusEq(ArrayData*, const ArrayData* elems);

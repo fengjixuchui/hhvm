@@ -8,42 +8,16 @@
  *)
 
  open Typing_defs
- open Type_parameter_env
  module TySet = Typing_set
  module type S = sig
 
- type fake_members = {
-   last_call : Pos.t option;
-   invalid   : SSet.t;
-   valid     : SSet.t;
- }
- (* Along with a type, each local variable has a expression id associated with
-  * it. This is used when generating expression dependent types for the 'this'
-  * type. The idea is that if two local variables have the same expression_id
-  * then they refer to the same late bound type, and thus have compatible
-  * 'this' types.
-  *)
- type expression_id = Ident.t
- type local = locl ty * expression_id
- type local_id_map = local Local_id.Map.t
- type local_types = local_id_map Typing_continuations.Map.t
-
  (* Local environment includes types of locals and bounds on type parameters. *)
  type local_env = {
-   fake_members       : fake_members;
-   local_types        : local_types;
+   per_cont_env       : Typing_per_cont_env.t;
    local_mutability   : Typing_mutability_env.mutability_env;
    local_reactive : reactivity;
    (* Local variables that were assigned in a `using` clause *)
    local_using_vars   : Local_id.Set.t;
-   (* Type parameter environment
-    * Lower and upper bounds on generic type parameters and abstract types
-    * For constraints of the form Tu <: Tv where both Tu and Tv are type
-    * parameters, we store an upper bound for Tu and a lower bound for Tv.
-    * Contrasting with tenv and subst, bounds are *assumptions* for type
-    * inference, not conclusions.
-    *)
-   tpenv              : tpenv;
  }
 
  type tyvar_info = {
@@ -53,35 +27,32 @@
    appears_contravariantly: bool;
    lower_bounds : TySet.t;
    upper_bounds : TySet.t;
-   type_constants : (Nast.sid * locl ty) SMap.t;
+   type_constants : (Aast.sid * locl ty) SMap.t;
  }
  type tvenv = tyvar_info IMap.t
 
  type env = {
    (* position of the function/method being checked *)
    function_pos: Pos.t  ;
-   pos     : Pos.t      ;
-   (* Position and reason information on entry to a subtype or unification check *)
-   outer_pos : Pos.t;
-   outer_reason : Typing_reason.ureason;
    tenv    : locl ty IMap.t ;
    subst   : int IMap.t ;
+   fresh_typarams : SSet.t;
    lenv    : local_env  ;
    genv    : genv       ;
    decl_env: Decl_env.env;
-   todo    : tfun list  ;
-   checking_todos : bool;
    in_loop : bool       ;
    in_try  : bool       ;
    in_case : bool       ;
    inside_constructor: bool;
    inside_ppl_class: bool;
    (* A set of constraints that are global to a given method *)
-   global_tpenv : tpenv ;
+   global_tpenv : Type_parameter_env.t;
    subtype_prop : Typing_logic.subtype_prop;
    log_levels : int SMap.t;
    tvenv : tvenv;
-   tyvars_stack : Ident.t list list;
+   tyvars_stack : (Pos.t * Ident.t list) list;
+   allow_wildcards : bool;
+   big_envs : (Pos.t * env) list ref ;
  }
 and genv = {
   tcopt   : TypecheckerOptions.t;
@@ -100,7 +71,8 @@ and genv = {
   (* Type of the enclosing class, instantiated at its generic parameters *)
   self    : locl ty;
   static  : bool;
-  fun_kind : Ast.fun_kind;
+  fun_kind : Ast_defs.fun_kind;
+  val_kind : Typing_defs.val_kind;
   fun_mutable : param_mutability option;
   anons   : anon IMap.t;
   file    : Relative_path.t;
@@ -114,18 +86,18 @@ and genv = {
  * - the expected return type of the body (optional)
  *)
 and anon_log = locl ty list * locl ty list
-and anon =
-  reactivity *
-  Nast.is_coroutine *
-  anon_log ref *
-  Pos.t *
-  (?el:Nast.expr list ->
-  ?ret_ty: locl ty ->
-  env ->
-  locl fun_params ->
-  locl fun_arity ->
-  env * Tast.expr * locl ty)
+and anon = {
+  rx : reactivity;
+  is_coroutine : Aast.is_coroutine;
+  counter : anon_log ref;
+  pos : Pos.t;
+  typecheck :
+    ?el:Nast.expr list ->
+    ?ret_ty: locl ty ->
+    env ->
+    locl fun_params ->
+    locl fun_arity ->
+    env * Tast.expr * locl ty;
+}
 
-(* A deferred check; return true if the check should now be removed from the list *)
- and tfun = env -> env * bool
 end

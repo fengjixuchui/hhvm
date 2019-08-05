@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Ref {
   public function __construct(public $val) {}
@@ -10,7 +10,7 @@ function new_closure_gen() {
     yield ++$ref->val;
   };
 }
-
+<<__EntryPoint>> function main(): void {
 $closure1 = new_closure_gen();
 $closure2 = new_closure_gen();
 
@@ -23,5 +23,4 @@ foreach (array($gen1, $gen2, $gen3) as $gen) {
         var_dump($val);
     }
 }
-
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto int iconv_strrpos(string haystack, string needle [, string charset])
  * Description: Find position of last occurrence of a string within another 
  * Source code: ext/iconv/iconv.c
@@ -7,7 +7,7 @@
 /*
  * Pass iconv_strrpos() an incorrect number of arguments
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing iconv_strrpos() : error conditions ***\n";
 
 
@@ -25,4 +25,4 @@ $haystack = 'string_val';
 try { var_dump( iconv_strrpos($haystack) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

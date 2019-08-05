@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool usort(&array $array_arg, string $cmp_function)
  * Description: Sort an array by values using a user-defined comparison function 
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass incorrect number of arguments to usort() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing usort() : error conditions ***\n";
 
 //Test usort with one more than the expected number of arguments
@@ -21,5 +21,5 @@ try { var_dump( usort(&$array_arg, $cmp_function, $extra_arg) ); } catch (Except
 echo "\n-- Testing usort() function with less than expected no. of arguments --\n";
 $array_arg = array(1, 2);
 try { var_dump( usort(&$array_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
-?>
-===DONE===
+echo "===DONE===\n";
+}

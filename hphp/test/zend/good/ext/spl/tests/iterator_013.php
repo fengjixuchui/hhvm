@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 echo "===Empty===\n";
 
 $it = new AppendIterator;
@@ -41,6 +41,5 @@ foreach($it as $key=>$val)
 	echo "$key=>$val\n";
 }
 
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

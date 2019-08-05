@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function test() {
   (new X)->foo();
@@ -18,15 +18,10 @@ function setup() {
   $text .= "class Y { const C = $i; }\n";
 
   $file = __FILE__ . ".$i.inc";
-  file_put_contents($file, "<?php $text");
+  file_put_contents($file, "<?hh $text");
   include $file;
   unlink($file);
-  class X extends Y {
-    private $priv = 42;
-    function foo() {
-      var_dump($this->priv + self::C);
-    }
-  }
+  include 'func-guards.inc';
 }
 
 

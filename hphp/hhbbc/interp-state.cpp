@@ -33,6 +33,8 @@ namespace HPHP { namespace HHBBC {
 
 namespace {
 
+const StaticString s_Throwable("Throwable");
+
 template<class JoinOp>
 bool merge_into(Iter& dst, const Iter& src, JoinOp join) {
   auto const mergeCounts = [](IterTypes::Count c1, IterTypes::Count c2) {
@@ -152,7 +154,6 @@ CollectedInfo::CollectedInfo(const Index& index,
     , opts{fa ? opts | CollectionOpts::Optimizing : opts}
 {
   if (fa) {
-    localStaticTypes = fa->localStaticTypes;
     unfoldableFuncs = fa->unfoldableFuncs;
   }
 }
@@ -164,16 +165,13 @@ bool operator==(const ActRec& a, const ActRec& b) {
     a.func.hasValue() != b.func.hasValue() ? false :
     a.func.hasValue() ? a.func->same(*b.func) :
     true;
-  auto const fsame2 =
-    a.fallbackFunc.hasValue() != b.fallbackFunc.hasValue() ? false :
-    a.fallbackFunc.hasValue() ? a.fallbackFunc->same(*b.fallbackFunc) :
-    true;
-  return a.kind == b.kind && fsame && fsame2 &&
+  return a.kind == b.kind && fsame &&
          equivalently_refined(a.context, b.context);
 }
 bool operator!=(const ActRec& a, const ActRec& b) { return !(a == b); }
 
-State without_stacks(const State& src) {
+State with_throwable_only(const Index& index, const State& src) {
+  auto throwable = subObj(index.builtin_class(s_Throwable.get()));
   auto ret          = State{};
   ret.initialized   = src.initialized;
   ret.thisType      = src.thisType;
@@ -197,8 +195,8 @@ State without_stacks(const State& src) {
   }
 
   ret.locals        = src.locals;
-  ret.clsRefSlots   = src.clsRefSlots;
   ret.iters         = src.iters;
+  ret.stack.push_elem(std::move(throwable), NoLocalId);
   return ret;
 }
 
@@ -283,19 +281,15 @@ bool merge_into(ActRec& dst, const ActRec& src) {
 template<class JoinOp>
 bool merge_impl(State& dst, const State& src, JoinOp join) {
   if (!dst.initialized) {
-    dst = src;
-    dst.speculatedIsUnconditional = dst.speculatedIsFallThrough = false;
-    dst.speculatedPops = 0;
-    dst.speculated = NoBlockId;
+    dst.copy_and_compact(src);
     return true;
   }
 
   assert(src.initialized);
   assert(dst.locals.size() == src.locals.size());
   assert(dst.iters.size() == src.iters.size());
-  assert(dst.clsRefSlots.size() == src.clsRefSlots.size());
   assert(dst.stack.size() == src.stack.size());
-  assert(dst.fpiStack.size() == src.fpiStack.size());
+  assert(dst.fpiStack.size() + src.fpiStack.size() == 0);
 
   if (src.unreachable) {
     // If we're coming from unreachable code and the dst is already
@@ -306,7 +300,7 @@ bool merge_impl(State& dst, const State& src, JoinOp join) {
     // If we're going to code currently believed to be unreachable, take the
     // src state, and consider the dest state changed only if the source state
     // was reachable.
-    dst = src;
+    dst.copy_and_compact(src);
     return !src.unreachable;
   }
 
@@ -342,15 +336,6 @@ bool merge_impl(State& dst, const State& src, JoinOp join) {
     if (!equivalently_refined(dst.locals[i], newT)) {
       changed = true;
       dst.locals[i] = std::move(newT);
-    }
-  }
-
-  for (auto i = size_t{0}; i < dst.clsRefSlots.size(); ++i) {
-    auto newT = join(dst.clsRefSlots[i], src.clsRefSlots[i]);
-    assert(newT.subtypeOf(BCls));
-    if (!equivalently_refined(dst.clsRefSlots[i], newT)) {
-      changed = true;
-      dst.clsRefSlots[i] = std::move(newT);
     }
   }
 
@@ -424,25 +409,6 @@ bool merge_impl(State& dst, const State& src, JoinOp join) {
     }
   }
 
-  auto const sz = std::max(dst.localStaticBindings.size(),
-                           src.localStaticBindings.size());
-  if (sz) {
-    CompactVector<LocalStaticBinding> lsb;
-    for (auto i = size_t{0}; i < sz; i++) {
-      auto b1 = i < dst.localStaticBindings.size() ?
-        dst.localStaticBindings[i] : LocalStaticBinding::None;
-      auto b2 = i < src.localStaticBindings.size() ?
-        src.localStaticBindings[i] : LocalStaticBinding::None;
-
-      if (b1 != LocalStaticBinding::None || b2 != LocalStaticBinding::None) {
-        lsb.resize(i + 1);
-        lsb[i] = b1 == b2 ? b1 : LocalStaticBinding::Maybe;
-        changed |= lsb[i] != b1;
-      }
-    }
-    dst.localStaticBindings = std::move(lsb);
-  }
-
   return changed;
 }
 
@@ -454,6 +420,119 @@ bool widen_into(State& dst, const State& src) {
   return merge_impl(dst, src, widening_union);
 }
 
+void InterpStack::refill(size_t elemIx, size_t indexLow,
+                         int numPop, int numPush) {
+  auto constexpr NoIndex =
+    std::numeric_limits<decltype(index)::value_type>::max();
+
+  if (numPush) {
+    index.erase(index.begin() + indexLow, index.begin() + indexLow + numPush);
+    elems.erase(elems.begin() + elemIx, elems.begin() + elemIx + numPush);
+    for (auto i = indexLow; i < index.size(); i++) {
+      if (index[i] >= elemIx) {
+        auto DEBUG_ONLY ii = index[i] -= numPush;
+        assertx(ii >= elemIx);
+      }
+    }
+  }
+
+  if (numPush != numPop) {
+    for (auto i = elemIx; i < elems.size(); i++) {
+      auto& elem = elems[i];
+      if (elem.index >= indexLow) {
+        elem.index += numPop - numPush;
+      }
+    }
+  }
+
+  if (!numPop) return;
+
+  auto const indexHigh = indexLow + numPop;
+  index.insert(index.begin() + indexLow, numPop, NoIndex);
+  for (auto i = elemIx; i--; ) {
+    auto const& elm = elems[i];
+    if (elm.index >= indexLow &&
+        elm.index < indexHigh &&
+        index[elm.index] == NoIndex) {
+      index[elm.index] = i;
+      if (!--numPop) return;
+    }
+  }
+
+  always_assert(false);
+}
+
+void InterpStack::rewind(int numPop, int numPush) {
+  refill(elems.size() - numPush, index.size() - numPush, numPop, numPush);
+}
+
+void InterpStack::kill(int numPop, int numPush, uint32_t id) {
+  for (auto i = elems.size(); i--; ) {
+    auto const &elem = elems[i];
+    if (elem.id == id) {
+      for (auto j = 1; j < numPush; j++) {
+        if (!i || elems[--i].id != id) always_assert(false);
+      }
+      return refill(i, elems[i].index, numPop, numPush);
+    }
+  }
+
+  always_assert(false);
+}
+
+void InterpStack::insert_after(int numPop, int numPush, const Type* types,
+                               uint32_t numInst, uint32_t id) {
+  for (auto i = elems.size(); i--; ) {
+    auto const &elem = elems[i];
+    if (elem.id == id) {
+      auto const indexLow = elem.index + 1 - numPop;
+      index.erase(index.begin() + indexLow, index.begin() + indexLow + numPop);
+      auto const elemIx = i + 1;
+      elems.resize(elems.size() + numPush);
+      for (auto j = elems.size() - numPush; j-- > elemIx; ) {
+        auto& e = elems[j + numPush];
+        e = std::move(elems[j]);
+        e.index += numPush - numPop;
+        if (e.id != StackElem::NoId) e.id += numInst;
+      }
+      for (auto j = indexLow; j < index.size(); j++) {
+        index[j] += numPush;
+      }
+      index.insert(index.begin() + indexLow, numPush, uint32_t{});
+      for (auto j = 0; j < numPush; j++) {
+        auto& e = elems[elemIx + j];
+        e.type = types[j];
+        e.equivLoc = NoLocalId;
+        e.index = indexLow + j;
+        e.id = id + numInst;
+        index[indexLow + j] = elemIx + j;
+      }
+      return;
+    }
+  }
+
+  always_assert(false);
+}
+
+void InterpStack::peek(int numPop,
+                       const StackElem** values,
+                       int numPush) const {
+  for (auto i = 0; i < numPop; i++) values[i] = nullptr;
+
+  auto const sz = index.size() - numPush;
+  for (auto i = elems.size() - numPush; i--; ) {
+    auto const& elm = elems[i];
+    if (elm.index >= sz &&
+        elm.index - sz < numPop &&
+        values[elm.index - sz] == nullptr) {
+      values[elm.index - sz] = &elm;
+      if (!--numPop) return;
+    }
+  }
+
+  always_assert(false);
+}
+
 //////////////////////////////////////////////////////////////////////
 
 static std::string fpiKindStr(FPIKind k) {
@@ -461,10 +540,6 @@ static std::string fpiKindStr(FPIKind k) {
   case FPIKind::Unknown:     return "unk";
   case FPIKind::CallableArr: return "arr";
   case FPIKind::Func:        return "func";
-  case FPIKind::Ctor:        return "ctor";
-  case FPIKind::ObjMeth:     return "objm";
-  case FPIKind::ObjMethNS:   return "objm?";
-  case FPIKind::ClsMeth:     return "clsm";
   case FPIKind::ObjInvoke:   return "invoke";
   case FPIKind::Builtin:     return "builtin";
   }
@@ -479,7 +554,6 @@ std::string show(const ActRec& a) {
     a.cls ? show(*a.cls) : "",
     a.cls && a.func ? "::" : "",
     a.func ? show(*a.func) : "",
-    a.fallbackFunc ? show(*a.fallbackFunc) : "",
     a.foldable ? " (foldable)" : "",
     " ", show(a.context),
     " }"
@@ -525,7 +599,7 @@ std::string show(const php::Func& f, const Base& b) {
   not_reached();
 }
 
-std::string show(const php::Func& f, const State::MInstrState& s) {
+std::string show(const php::Func& f, const CollectedInfo::MInstrState& s) {
   if (s.arrayChain.empty()) return show(f, s.base);
   return folly::sformat(
     "{} ({})",
@@ -533,7 +607,7 @@ std::string show(const php::Func& f, const State::MInstrState& s) {
     [&]{
       using namespace folly::gen;
       return from(s.arrayChain)
-        | map([&] (const State::MInstrState::ArrayChainEnt& e) {
+        | map([&] (const CollectedInfo::MInstrState::ArrayChainEnt& e) {
             return folly::sformat("<{},{}>", show(e.key), show(e.base));
           })
         | unsplit<std::string>(" -> ");
@@ -560,34 +634,13 @@ std::string state_string(const php::Func& f, const State& st,
   }
 
   for (auto i = size_t{0}; i < st.locals.size(); ++i) {
-    auto staticLocal = [&] () -> std::string {
-      if (i >= st.localStaticBindings.size() ||
-          st.localStaticBindings[i] == LocalStaticBinding::None) {
-        return "";
-      }
-
-      if (i >= collect.localStaticTypes.size()) {
-        return " (!!! unknown static !!!)";
-      }
-
-      return folly::sformat(
-        " ({}static: {})",
-        st.localStaticBindings[i] == LocalStaticBinding::Maybe ? "maybe-" : "",
-        show(collect.localStaticTypes[i]));
-    };
-    folly::format(&ret, "{: <8} :: {}{}\n",
+    folly::format(&ret, "{: <8} :: {}\n",
                   local_string(f, i),
-                  show(st.locals[i]),
-                  staticLocal());
+                  show(st.locals[i]));
   }
 
   for (auto i = size_t{0}; i < st.iters.size(); ++i) {
     folly::format(&ret, "iter {: <2}  :: {}\n", i, show(f, st.iters[i]));
-  }
-
-  for (auto i = size_t{0}; i < st.clsRefSlots.size(); ++i) {
-    folly::format(&ret, "class-ref slot {: <2}   :: {}\n",
-                  i, show(st.clsRefSlots[i]));
   }
 
   for (auto i = size_t{0}; i < st.stack.size(); ++i) {
@@ -608,30 +661,8 @@ std::string state_string(const php::Func& f, const State& st,
     ret += "\n";
   }
 
-  if (st.mInstrState.base.loc != BaseLoc::None) {
-    folly::format(&ret, "mInstrState   :: {}\n", show(f, st.mInstrState));
-  }
-
-  if (st.speculated != NoBlockId) {
-    folly::format(
-      &ret,
-      "speculated   :: B{}({}{}{})\n",
-      st.speculated,
-      st.speculatedPops,
-      st.speculatedIsUnconditional ? ", unconditional" : "",
-      st.speculatedIsFallThrough ? ", fallthrough" : ""
-    );
-  } else if (st.speculatedPops ||
-             st.speculatedIsUnconditional ||
-             st.speculatedIsFallThrough) {
-    folly::format(
-      &ret,
-      "Broken speculated info  :: {}({}{}{})\n",
-      -1,
-      st.speculatedPops,
-      st.speculatedIsUnconditional ? ", unconditional" : "",
-      st.speculatedIsFallThrough ? ", fallthrough" : ""
-    );
+  if (collect.mInstrState.base.loc != BaseLoc::None) {
+    folly::format(&ret, "mInstrState   :: {}\n", show(f, collect.mInstrState));
   }
 
   return ret;

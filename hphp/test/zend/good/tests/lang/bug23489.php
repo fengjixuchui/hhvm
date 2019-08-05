@@ -1,6 +1,6 @@
-<?php
+<?hh
 class Test {
-  function Test() {
+  function __construct() {
     ob_start(
       array(
         $this, 'transform'
@@ -12,7 +12,7 @@ class Test {
     return 'success';
   }
 }
-
+<<__EntryPoint>> function main(): void {
 $t = new Test;
-?>
-failure
+echo "failure";
+}

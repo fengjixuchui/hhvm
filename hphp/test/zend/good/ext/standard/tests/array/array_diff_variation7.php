@@ -1,7 +1,7 @@
-<?php
+<?hh
 /* Prototype  : array array_diff(array $arr1, array $arr2 [, array ...])
- * Description: Returns the entries of $arr1 that have values which are not 
- * present in any of the others arguments. 
+ * Description: Returns the entries of $arr1 that have values which are not
+ * present in any of the others arguments.
  * Source code: ext/standard/array.c
  */
 
@@ -10,7 +10,7 @@
  * 1. Contain referenced variables
  * 2. Have been referenced to each other
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_diff() : usage variations ***\n";
 $a = 'a';
 
@@ -26,19 +26,5 @@ echo "-- \$a changed --\n";
 var_dump(array_diff($arr1, $arr2));
 var_dump(array_diff($arr2, $arr1));
 
-
-$arr2 = &$arr1;
-echo "-- Arrays referenced to each other --\n";
-var_dump(array_diff($arr1, $arr2));
-var_dump(array_diff($arr2, $arr1));
-
-
-$arr1 = array('x', 'y', 'z');
-echo "-- \$arr1 changed --\n";
-var_dump(array_diff($arr1, $arr2));
-var_dump(array_diff($arr2, $arr1));
-
-
 echo "Done";
-?>
-
+}

@@ -1,9 +1,11 @@
 <?hh
 
 trait T {
-  function C(inout $x) {}
+  function __construct(inout $x) {}
 }
 
 class C {
   use T;
 }
+
+<<__EntryPoint>> function main(): void {}

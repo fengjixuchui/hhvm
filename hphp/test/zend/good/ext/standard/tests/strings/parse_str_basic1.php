@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 /* Prototype  : void parse_str  ( string $str  [, array &$arr  ] )
  * Description: Parses the string into variables
  * Source code: ext/standard/string.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing parse_str() : basic functionality ***\n";
 
 echo "\nBasic test WITH undefined var for result arg\n";
@@ -23,5 +23,5 @@ $res3_array = array(1,2,3,4);
 var_dump(parse_str($s1, &$res3_array));
 var_dump($res3_array);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

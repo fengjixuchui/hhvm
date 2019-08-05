@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_diff_assoc(array $arr1, array $arr2 [, array ...])
  * Description: Returns the entries of arr1 that have values which are not present 
  * in any of the others arguments but do additional checks whether the keys are equal 
@@ -8,7 +8,7 @@
 /*
  * Test errors for array_diff with too few\zero arguments
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_diff_assoc() : error conditions ***\n";
 
 // Zero arguments
@@ -22,4 +22,4 @@ try { var_dump( array_diff_assoc($arr1) ); } catch (Exception $e) { echo "\n".'W
 
 
 echo "Done";
-?>
+}

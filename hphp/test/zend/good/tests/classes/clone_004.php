@@ -1,4 +1,4 @@
-<?php
+<?hh
 abstract class base {
   public $a = 'base';
 
@@ -13,10 +13,10 @@ class test extends base {
   public function __clone() {}
 
   public function show() {
-	var_dump($this);
+    var_dump($this);
   }
 }
-
+<<__EntryPoint>> function main(): void {
 echo "Original\n";
 $o1 = new test;
 $o1->a = array(1,2);
@@ -33,4 +33,4 @@ $o2->b = 6;
 $o2->show();
 
 echo "Done\n";
-?>
+}

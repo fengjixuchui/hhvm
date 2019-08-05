@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_chunk(array $array, int $size [, bool $preserve_keys])
  * Description: Split array into chunks
  *            : Chunks an array into size large chunks
@@ -11,7 +11,7 @@
  *   2. associative array with duplicate keys
  *   3. array with one element 
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_chunk() : usage variations ***\n";
 
 // input array
@@ -43,4 +43,4 @@ foreach ($input_arrays as $input_array){
 }
 
 echo "Done";
-?>
+}

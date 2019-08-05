@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class C {
 }
@@ -14,4 +14,6 @@ function foo() {
   if ($x) return 1;
 }
 
+<<__EntryPoint>> function main(): void {
 foo();
+}

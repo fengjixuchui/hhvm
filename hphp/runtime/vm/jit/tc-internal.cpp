@@ -17,8 +17,8 @@
 #include "hphp/runtime/vm/jit/tc-internal.h"
 #include "hphp/runtime/vm/jit/tc.h"
 
+#include "hphp/runtime/base/init-fini-node.h"
 #include "hphp/runtime/base/perf-warning.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/stats.h"
 #include "hphp/runtime/vm/debug/debug.h"
@@ -43,7 +43,10 @@
 #include "hphp/util/disasm.h"
 #include "hphp/util/mutex.h"
 #include "hphp/util/process.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/trace.h"
+
+#include <tbb/concurrent_hash_map.h>
 
 #include <atomic>
 
@@ -70,10 +73,13 @@ bool shouldPGOFunc(const Func* func) {
   // JITing pseudo-mains requires extra checks that blow the IR.  PGO
   // can significantly increase the size of the regions, so disable it for
   // pseudo-mains (so regions will be just tracelets).
-  if (func->isPseudoMain()) return false;
-
-  if (!RuntimeOption::EvalJitPGOHotOnly) return true;
-  return func->isHot();
+  //
+  // However, on many OSS workloads, this is not an issue. Furthermore, JITing
+  // pseudo-mains on these workloads increase performance due to the fact that
+  // the pseudo-mains are now optimized and their call sites point to new
+  // optimized functions. Without, many of the pseudo-main's call sites
+  // point to the profile versions of those functions.
+  return !func->isPseudoMain() || RuntimeOption::EvalJitPGOPseudomain;
 }
 
 }
@@ -95,11 +101,27 @@ bool canTranslate() {
     RuntimeOption::EvalJitGlobalTranslationLimit;
 }
 
-bool shouldTranslateNoSizeLimit(const Func* func, TransKind kind) {
+static AtomicVector<uint32_t> s_func_counters{0, 0};
+static InitFiniNode s_func_counters_reinit(
+  [] {
+    UnsafeReinitEmptyAtomicVector(s_func_counters,
+                                  RuntimeOption::EvalFuncCountHint);
+  },
+  InitFiniNode::When::PostRuntimeOptions, "s_func_counters reinit"
+);
+
+using SrcKeyCounters = tbb::concurrent_hash_map<SrcKey, uint32_t,
+                                                SrcKey::TbbHashCompare>;
+
+static SrcKeyCounters s_sk_counters;
+
+bool shouldTranslateNoSizeLimit(SrcKey sk, TransKind kind) {
   // If we've hit Eval.JitGlobalTranslationLimit, then we stop translating.
   if (!canTranslate()) {
     return false;
   }
+
+  const Func* func = sk.func();
 
   // Do not translate functions from units marked as interpret-only.
   if (func->unit()->isInterpretOnly()) {
@@ -112,15 +134,42 @@ bool shouldTranslateNoSizeLimit(const Func* func, TransKind kind) {
     return false;
   }
 
+  // Refuse to JIT Live / Profile translations for a function until
+  // Eval.JitLiveThreshold / Eval.JitProfileThreshold is hit.
+  const bool isLive = kind == TransKind::Live ||
+                      kind == TransKind::LivePrologue;
+  const bool isProf = kind == TransKind::Profile ||
+                      kind == TransKind::ProfPrologue;
+  if (isLive || isProf) {
+    auto const funcId = func->getFuncId();
+    s_func_counters.ensureSize(funcId + 1);
+    s_func_counters[funcId].fetch_add(1, std::memory_order_relaxed);
+    uint32_t skCount = 1;
+    {
+      SrcKeyCounters::accessor acc;
+      if (!s_sk_counters.insert(acc, SrcKeyCounters::value_type(sk, 1))) {
+        skCount = ++acc->second;
+      }
+    }
+    auto const funcThreshold = isLive ? RuntimeOption::EvalJitLiveThreshold
+                                      : RuntimeOption::EvalJitProfileThreshold;
+    if (s_func_counters[funcId] < funcThreshold) {
+      return false;
+    }
+    if (skCount < RuntimeOption::EvalJitSrcKeyThreshold) {
+      return false;
+    }
+  }
+
   return true;
 }
 
 static std::atomic_flag s_did_log = ATOMIC_FLAG_INIT;
 static std::atomic<bool> s_TCisFull{false};
 
-bool shouldTranslate(const Func* func, TransKind kind) {
+bool shouldTranslate(SrcKey sk, TransKind kind) {
   if (s_TCisFull.load(std::memory_order_relaxed) ||
-      !shouldTranslateNoSizeLimit(func, kind)) {
+      !shouldTranslateNoSizeLimit(sk, kind)) {
     return false;
   }
 
@@ -167,6 +216,7 @@ bool shouldTranslate(const Func* func, TransKind kind) {
   // Set a flag so we quickly bail from trying to generate new translations next
   // time.
   s_TCisFull.store(true, std::memory_order_relaxed);
+  Treadmill::enqueue([] { s_sk_counters.clear(); });
 
   if (main_under && !s_did_log.test_and_set() &&
       RuntimeOption::EvalProfBranchSampleFreq == 0) {
@@ -320,6 +370,15 @@ void freeProfCode() {
   Treadmill::enqueue([]{
     dropSrcDBProfIncomingBranches();
     code().freeProf();
+    // Clearing the inline stacks map is purely an optimization, and it barely
+    // buys us anything when we're using jumpstart (because we have very few
+    // profiling translations, if any), so we skip it in this case.
+    if (!isJitDeserializing(RuntimeOption::EvalJitSerdesMode)) {
+      auto metaLock = lockMetadata();
+      auto const base     = code().prof().base();
+      auto const frontier = code().prof().frontier();
+      eraseInlineStacksInRange(base, frontier);
+    }
   });
 }
 

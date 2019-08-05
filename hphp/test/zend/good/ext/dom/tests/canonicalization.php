@@ -1,4 +1,4 @@
-<?php
+<?hh
 $xml = <<<EOXML
 <?xml version="1.0" encoding="ISO-8859-1" ?>
 <foo xmlns="http://www.example.com/ns/foo"
@@ -42,4 +42,3 @@ echo $doc->c14N(TRUE, FALSE,
 /* exclusive/without comments first child element of doc element is context. 
    test namespace prefix is also included */
 echo $doc->C14N(TRUE, FALSE, NULL, array('test'));
-?>

@@ -1,5 +1,3 @@
-<?php
+<?hh
 
-unset($x)
-
-?>
+unset($x);

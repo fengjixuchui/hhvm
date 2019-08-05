@@ -24,6 +24,7 @@
 #include "hphp/runtime/vm/unit.h"
 
 namespace HPHP { namespace Native {
+
 //////////////////////////////////////////////////////////////////////////////
 
 FuncTable s_systemNativeFuncs;
@@ -31,167 +32,184 @@ const FuncTable s_noNativeFuncs; // always empty
 ConstantMap s_constant_map;
 ClassConstantMapMap s_class_constant_map;
 
-static size_t numGPRegArgs() {
+/////////////////////////////////////////////////////////////////////////////
+
+namespace {
+
 #ifdef __aarch64__
-  return 8; // r0-r7
+  constexpr size_t kNumGPRegs = 8;
 #elif defined(__powerpc64__)
-  return 31;
-#else // amd64
-  return 6; // rdi, rsi, rdx, rcx, r8, r9
+  constexpr size_t kNumGPRegs = 31;
+#else
+  // amd64 calling convention (also used by x64): rdi, rsi, rdx, rcx, r8, r9
+  constexpr size_t kNumGPRegs = 6;
 #endif
-}
 
 // Note: This number should generally not be modified
 // as it depends on the CPU's ABI.
 // If an update is needed, however, update and run
 // make_native-func-caller.php as well
-const size_t kNumSIMDRegs = 8;
+constexpr size_t kNumSIMDRegs = 8;
 
-/////////////////////////////////////////////////////////////////////////////
 #include "hphp/runtime/vm/native-func-caller.h"
 
-static void nativeArgHelper(const Func* func, int i,
-                            const MaybeDataType& type,
-                            TypedValue& arg,
-                            int64_t* GP_args, int& GP_count) {
-  auto val = arg.m_data.num;
-  if (!type) {
-    if (func->byRef(i)) {
-      if (!isRefType(arg.m_type)) {
-        // For OutputArgs, if the param is not a KindOfRef,
-        // we give it a nullptr
-        val = 0;
-      }
-    } else {
-      GP_args[GP_count++] = val;
-      assertx((GP_count + 1) < kMaxBuiltinArgs);
-      val = static_cast<data_type_t>(arg.m_type);
-    }
+struct Registers {
+  // The spilled arguments come right after the GP regs so that we can treat
+  // them as a single array of kMaxBuiltinArgs ints after populating them.
+  int64_t GP_regs[kNumGPRegs];
+  int64_t spilled_args[kMaxBuiltinArgs - kNumGPRegs];
+  double SIMD_regs[kNumSIMDRegs];
+
+  int GP_count{0};
+  int SIMD_count{0};
+  int spilled_count{0};
+};
+
+// Push an int argument, spilling to the stack if necessary.
+void pushInt(Registers& regs, const int64_t value) {
+  if (regs.GP_count < kNumGPRegs) {
+    regs.GP_regs[regs.GP_count++] = value;
+  } else {
+    assertx(regs.spilled_count < kMaxBuiltinArgs - kNumGPRegs);
+    regs.spilled_args[regs.spilled_count++] = value;
   }
-  GP_args[GP_count++] = val;
 }
 
-/* Shuffle args into two vectors.
- *
- * SIMD_args contains at most 8 elements for the first 8 double args in the
- * call which will end up in xmm0-xmm7 (or v0-v7)
- *
- * GP_args contains all remaining args optionally with padding to ensure the
- * GP regs only contain integer arguments (when there are less than
- * numGPRegArgs INT args)
- */
-static void populateArgs(const Func* func,
-                         TypedValue* args, const int numArgs,
-                         int64_t* GP_args, int& GP_count,
-                         double* SIMD_args, int& SIMD_count) {
-  auto numGP = numGPRegArgs();
-  int64_t tmp[kMaxBuiltinArgs];
-  int ntmp = 0;
-
-  for (int i = 0; i < numArgs; ++i) {
-    const auto& pi = func->params()[i];
-    MaybeDataType type = pi.builtinType;
-    if (type == KindOfDouble) {
-      if (SIMD_count < kNumSIMDRegs) {
-        SIMD_args[SIMD_count++] = args[-i].m_data.dbl;
+// Push a double argument, spilling to the stack if necessary. We take the
+// input as a Value in order to type-pun it as an int when we spill.
+void pushDouble(Registers& regs, const Value value) {
+  if (regs.SIMD_count < kNumSIMDRegs) {
+    regs.SIMD_regs[regs.SIMD_count++] = value.dbl;
 #if defined(__powerpc64__)
-        // According with ABI, the GP index must be incremented after
-        // a floating point function argument
-        if (GP_count < numGP) GP_args[GP_count++] = 0;
+    // Following ABI, we must increment the GP reg index for each double arg.
+    if (regs.GP_count < kNumGPRegs) regs.GP_regs[regs.GP_count++] = 0;
 #endif
-      } else if (GP_count < numGP) {
-        // We have enough double args to hit the stack
-        // but we haven't finished filling the GP regs yet.
-        // Stack these in tmp (autoboxed to int64_t)
-        // until we fill the GP regs, or we run out of args
-        // (in which case we'll pad them).
-        tmp[ntmp++] = args[-i].m_data.num;
-      } else {
-        // Additional SIMD args wind up on the stack
-        // and can autobox with integer types
-        GP_args[GP_count++] = args[-i].m_data.num;
-      }
-    } else {
-      assertx((GP_count + 1) < kMaxBuiltinArgs);
-      if (pi.nativeArg) {
-        nativeArgHelper(func, i, type, args[-i], GP_args, GP_count);
-      } else if (!type) {
-        GP_args[GP_count++] = (int64_t)(args - i);
-      } else if (isBuiltinByRef(type)) {
-        GP_args[GP_count++] = (int64_t)&args[-i].m_data;
-      } else {
-        GP_args[GP_count++] = args[-i].m_data.num;
-      }
-      if ((GP_count == numGP) && ntmp) {
-        // GP regs are now full, bring tmp back to fill the initial stack
-        assertx((GP_count + ntmp) <= kMaxBuiltinArgs);
-        memcpy(GP_args + GP_count, tmp, ntmp * sizeof(int64_t));
-        GP_count += ntmp;
-        ntmp = 0;
-      }
-    }
-  }
-  if (ntmp) {
-    assertx((GP_count + ntmp) <= kMaxBuiltinArgs);
-    // We had more than kNumSIMDRegs doubles,
-    // but less than numGPRegArgs INTs.
-    // Push out the count and leave garbage behind.
-    if (GP_count < numGP) {
-      GP_count = numGP;
-    }
-    memcpy(GP_args + GP_count, tmp, ntmp * sizeof(int64_t));
-    GP_count += ntmp;
+  } else {
+    assertx(regs.spilled_count < kMaxBuiltinArgs - kNumGPRegs);
+    regs.spilled_args[regs.spilled_count++] = value.num;
   }
 }
 
-/* A much simpler version of the above specialized for GP-arg-only methods */
-static void populateArgsNoDoubles(const Func* func,
-                                  TypedValue* args, int numArgs,
-                                  int64_t* GP_args, int& GP_count) {
-  assertx(numArgs >= 0);
-  for (int i = 0; i < numArgs; ++i) {
+// Push a TypedValue argument, spilling to the stack if necessary. We need
+// two free GP registers to avoid spilling here. The details of what happens
+// when we spill with one free GP register changes between architectures.
+void pushTypedValue(Registers& regs, TypedValue tv) {
+  auto const dataType = static_cast<data_type_t>(type(tv));
+  if (regs.GP_count + 1 < kNumGPRegs) {
+    regs.GP_regs[regs.GP_count++] = val(tv).num;
+    regs.GP_regs[regs.GP_count++] = dataType;
+  } else {
+#if defined(__powerpc64__)
+    // We don't have room to spill two 64-bit values in PowerPC. If it becomes
+    // an issue, we can always up kMaxBuiltinArgs later. (We have room to pass
+    // 15 TypedValue arguments on PowerPC already, which should be plenty.)
+    always_assert(false);
+#else
+    assertx(regs.spilled_count + 1 < kMaxBuiltinArgs - kNumGPRegs);
+    regs.spilled_args[regs.spilled_count++] = val(tv).num;
+    regs.spilled_args[regs.spilled_count++] = dataType;
+    // On x86, if we have one free GP register left, we'll use it for the next
+    // int argument, but on ARM, we'll just spill all later int arguments.
+    #ifdef __aarch64__
+      regs.GP_count = kNumGPRegs;
+    #endif
+#endif
+  }
+}
+
+// Push a native argument (e.g an ArrayData / TypedValue, not Array / Variant).
+void pushNativeArg(Registers& regs, const Func* const func, const int i,
+                   MaybeDataType builtinType, TypedValue arg) {
+  // If the param type is known, just pass the value.
+  if (builtinType) return pushInt(regs, val(arg).num);
+
+  // For OutputArgs, if the param is not a KindOfRef, pass a nullptr.
+  if (func->byRef(i)) {
+    auto const isRef = isRefType(type(arg));
+    return pushInt(regs, isRef ? val(arg).num : 0);
+  }
+
+  // Pass both the type and value for TypedValue parameters.
+  pushTypedValue(regs, arg);
+}
+
+// Push each argument, spilling ones we don't have registers for to the stack.
+void populateArgs(Registers& regs, const Func* const func,
+                  const TypedValue* const args, const int numArgs,
+                  bool isFCallBuiltin) {
+  auto io = const_cast<TypedValue*>(args + 1);
+
+  // Regular FCalls will have their out parameter locations below the ActRec on
+  // the stack, while FCallBuiltin has no ActRec to skip over.
+  if (!isFCallBuiltin) io += kNumActRecCells;
+  for (auto i = 0; i < numArgs; ++i) {
+    auto const& arg = args[-i];
     auto const& pi = func->params()[i];
-    auto dt = pi.builtinType;
-    assertx(dt != KindOfDouble);
-    if (pi.nativeArg) {
-      nativeArgHelper(func, i, dt, args[-i], GP_args, GP_count);
-    } else if (!dt) {
-      GP_args[GP_count++] = (int64_t)(args - i);
-    } else if (isBuiltinByRef(dt)) {
-      GP_args[GP_count++] = (int64_t)&(args[-i].m_data);
+    auto const type = pi.builtinType;
+    if (pi.inout) {
+      if (auto const iv = builtinInValue(func, i)) {
+        *io = *iv;
+        tvDecRefGen(arg);
+      } else {
+        *io = arg;
+      }
+
+      // Any persistent values may become counted...
+      if (isArrayLikeType(io->m_type)) {
+        io->m_type = io->m_data.parr->toDataType();
+      } else if (isStringType(io->m_type)) {
+        io->m_type = KindOfString;
+      }
+
+      // Set the input value to null to avoid double freeing it
+      const_cast<TypedValue&>(arg).m_type = KindOfNull;
+
+      pushInt(regs, (int64_t)io++);
+    } else if (type == KindOfDouble) {
+      pushDouble(regs, val(arg));
+    } else if (pi.nativeArg) {
+      pushNativeArg(regs, func, i, type, arg);
+    } else if (!type) {
+      pushInt(regs, (int64_t)&arg);
+    } else if (isBuiltinByRef(type)) {
+      pushInt(regs, (int64_t)&val(arg));
     } else {
-      GP_args[GP_count++] = args[-i].m_data.num;
+      pushInt(regs, val(arg).num);
     }
   }
 }
 
-template<bool usesDoubles>
-void callFunc(const Func* func, void *ctx,
-              TypedValue *args, int32_t numNonDefault,
-              TypedValue& ret) {
-  int64_t GP_args[kMaxBuiltinArgs];
-  double SIMD_args[kNumSIMDRegs];
-  int GP_count = 0, SIMD_count = 0;
+}  // namespace
 
+/////////////////////////////////////////////////////////////////////////////
+
+void callFunc(const Func* const func, const void* const ctx,
+              const TypedValue* const args, const int numNonDefault,
+              TypedValue& ret, bool isFCallBuiltin) {
+  auto const f = func->nativeFuncPtr();
   auto const numArgs = func->numParams();
   auto retType = func->hniReturnType();
+  auto regs = Registers{};
 
-  if (ctx) {
-    GP_args[GP_count++] = (int64_t)ctx;
-  }
+  if (ctx) pushInt(regs, (int64_t)ctx);
+  populateArgs(regs, func, args, numArgs, isFCallBuiltin);
 
-  if (func->takesNumArgs()) {
-    GP_args[GP_count++] = (int64_t)numNonDefault;
-  }
-
-  if (usesDoubles) {
-    populateArgs(func, args, numArgs,
-                           GP_args, GP_count, SIMD_args, SIMD_count);
-  } else {
-    populateArgsNoDoubles(func, args, numArgs, GP_args, GP_count);
-  }
-
-  auto const f = func->nativeFuncPtr();
+  // Decide how many int and double arguments we need to call func. Note that
+  // spilled arguments come after the GP registers, in line with them. We can
+  // spill to the stack without exhausting the GP registers, in two ways:
+  //
+  //  1. If we exceeed the number of SIMD arguments and spill doubles.
+  //
+  //  2. If we fill all but 1 GP register and then need to pass a TypedValue
+  //     (two registers in size) by value.
+  //
+  // In these cases, we'll pass garbage in the unused GP registers to force
+  // everything in the regs.spilled_args array to go on the stack.
+  auto const spilled = regs.spilled_count;
+  auto const GP_args = &regs.GP_regs[0];
+  auto const GP_count = spilled > 0 ? spilled + kNumGPRegs : regs.GP_count;
+  auto const SIMD_args = &regs.SIMD_regs[0];
+  auto const SIMD_count = regs.SIMD_count;
 
   if (!retType) {
     // A folly::none return signifies Variant.
@@ -243,6 +261,7 @@ void callFunc(const Func* func, void *ctx,
     case KindOfClsMeth:
     case KindOfObject:
     case KindOfResource:
+    case KindOfRecord:
     case KindOfRef: {
       assertx(isBuiltinByRef(ret.m_type));
       if (func->isReturnByValue()) {
@@ -269,50 +288,11 @@ void callFunc(const Func* func, void *ctx,
 
 //////////////////////////////////////////////////////////////////////////////
 
-#define COERCE_OR_CAST(kind, warn_kind)                         \
-  if (paramCoerceMode) {                                        \
-    auto ty = args[-i].m_type;                                  \
-    if (!tvCoerceParamTo##kind##InPlace(&args[-i],              \
-                                        func->isBuiltin())) {   \
-      auto msg = param_type_error_message(                      \
-        func->displayName()->data(),                            \
-        i+1,                                                    \
-        KindOf##warn_kind,                                      \
-        args[-i].m_type                                         \
-      );                                                        \
-      if (RuntimeOption::PHP7_EngineExceptions) {               \
-        SystemLib::throwTypeErrorObject(msg);                   \
-      }                                                         \
-      SystemLib::throwRuntimeExceptionObject(msg);              \
-    } else {                                                    \
-      if (RuntimeOption::EvalWarnOnCoerceBuiltinParams &&       \
-          !equivDataTypes(ty, KindOf##warn_kind) &&             \
-          args[-i].m_type != KindOfNull) {                      \
-        raise_warning(                                          \
-          "Argument %i of type %s was passed to %s, "           \
-          "it was coerced to %s",                               \
-          i + 1,                                                \
-          getDataTypeString(ty).data(),                         \
-          func->fullDisplayName()->data(),                      \
-          getDataTypeString(KindOf##warn_kind).data()           \
-        );                                                      \
-      }                                                         \
-    }                                                           \
-  } else {                                                      \
-    tvCastTo##kind##InPlace(&args[-i]);                         \
-  }
-
-#define CASE(kind)                                      \
-  case KindOf##kind:                                    \
-    COERCE_OR_CAST(kind, kind)                          \
-    break; /* end of case */
-
 void coerceFCallArgs(TypedValue* args,
                      int32_t numArgs, int32_t numNonDefault,
                      const Func* func) {
+  assertx(func->isBuiltin() && "func is not a builtin");
   assertx(numArgs == func->numParams());
-
-  bool paramCoerceMode = func->isParamCoerceMode();
 
   for (int32_t i = 0; (i < numNonDefault) && (i < numArgs); i++) {
     const Func::ParamInfo& pi = func->params()[i];
@@ -332,8 +312,7 @@ void coerceFCallArgs(TypedValue* args,
       targetType = tc.underlyingDataType();
     }
 
-    // Skip tvCoerceParamTo*() call if we're already the right type, or if its a
-    // Variant.
+    // Check if we have the right type, or if its a Variant.
     if (!targetType || equivDataTypes(args[-i].m_type, *targetType)) {
       auto const c = &args[-i];
       auto const raise = [&] {
@@ -363,49 +342,60 @@ void coerceFCallArgs(TypedValue* args,
       continue;
     }
 
-    if (RuntimeOption::PHP7_ScalarTypes && call_uses_strict_types(func)) {
-      tc.verifyParam(&args[-i], func, i);
-      return;
-    }
-
-    switch (*targetType) {
-      CASE(Boolean)
-      CASE(Int64)
-      CASE(Double)
-      CASE(String)
-      CASE(Vec)
-      CASE(Dict)
-      CASE(Keyset)
-      CASE(Shape)
-      CASE(Array)
-      CASE(Resource)
-
-      case KindOfObject: {
-        if (pi.hasDefaultValue()) {
-          COERCE_OR_CAST(NullableObject, Object);
-        } else {
-          COERCE_OR_CAST(Object, Object);
-        }
-        break;
+    if (isFuncType(args[-i].m_type) && isStringType(*targetType)) {
+      args[-i].m_data.pstr = const_cast<StringData*>(
+        args[-i].m_data.pfunc->name()
+      );
+      args[-i].m_type = KindOfPersistentString;
+      if (RuntimeOption::EvalStringHintNotices) {
+        raise_notice("Implicit Func to string conversion for type-hint");
       }
-
-      case KindOfUninit:
-      case KindOfNull:
-      case KindOfPersistentString:
-      case KindOfPersistentVec:
-      case KindOfPersistentDict:
-      case KindOfPersistentKeyset:
-      case KindOfPersistentShape:
-      case KindOfPersistentArray:
-      case KindOfRef:
-      case KindOfFunc:
-      case KindOfClass:
-      case KindOfClsMeth:
-        not_reached();
+      continue;
     }
-  }
+    if (isClassType(args[-i].m_type) && isStringType(*targetType)) {
+      args[-i].m_data.pstr = const_cast<StringData*>(
+        args[-i].m_data.pclass->name()
+      );
+      args[-i].m_type = KindOfPersistentString;
+      if (RuntimeOption::EvalStringHintNotices) {
+        raise_notice("Implicit Class to string conversion for type-hint");
+      }
+      continue;
+    }
+    if (isClsMethType(args[-i].m_type)) {
+      auto raise = [&] {
+        if (RuntimeOption::EvalVecHintNotices) {
+          raise_clsmeth_compat_type_hint(
+            func, tc.displayName(func->cls()), i);
+        }
+      };
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        if (isVecType(*targetType)) {
+          tvCastToVecInPlace(&args[-i]);
+          raise();
+          continue;
+        }
+      } else {
+        if (isArrayType(*targetType)) {
+          tvCastToVArrayInPlace(&args[-i]);
+          raise();
+          continue;
+        }
+      }
+    }
 
-  return;
+
+    auto msg = param_type_error_message(
+      func->displayName()->data(),
+      i+1,
+      *targetType,
+      args[-i].m_type
+    );
+    if (RuntimeOption::PHP7_EngineExceptions) {
+      SystemLib::throwTypeErrorObject(msg);
+    }
+    SystemLib::throwRuntimeExceptionObject(msg);
+  }
 }
 
 #undef CASE
@@ -441,8 +431,9 @@ bool nativeWrapperCheckArgs(ActRec* ar) {
       if (InvalidAbsoluteOffset == paramInfo[i].funcletOff) {
         // There's at least one non-default param which wasn't passed, throw a
         // RuntimeException
-        throw_wrong_arguments_nr(getInvokeName(ar)->data(),
-              numNonDefault, minNumArgs(ar), numArgs);
+        throw_wrong_arguments_nr(
+            getInvokeName(ar)->data(), numNonDefault, minNumArgs(ar),
+            func->hasVariadicCaptureParam() ? INT_MAX : numArgs);
       }
     }
   } else if (numNonDefault > numArgs && !func->hasVariadicCaptureParam()) {
@@ -455,7 +446,6 @@ bool nativeWrapperCheckArgs(ActRec* ar) {
   return true;
 }
 
-template<bool usesDoubles>
 TypedValue* functionWrapper(ActRec* ar) {
   assertx(ar);
   auto func = ar->m_func;
@@ -471,7 +461,7 @@ TypedValue* functionWrapper(ActRec* ar) {
 
   TypedValue rv;
   rv.m_type = KindOfUninit;
-  callFunc<usesDoubles>(func, nullptr, args, numNonDefault, rv);
+  callFunc(func, nullptr, args, numNonDefault, rv, false);
 
   assertx(rv.m_type != KindOfUninit);
   frame_free_locals_no_this_inl(ar, func->numLocals(), &rv);
@@ -479,7 +469,6 @@ TypedValue* functionWrapper(ActRec* ar) {
   return ar->retSlot();
 }
 
-template<bool usesDoubles>
 TypedValue* methodWrapper(ActRec* ar) {
   assertx(ar);
   auto func = ar->m_func;
@@ -512,7 +501,7 @@ TypedValue* methodWrapper(ActRec* ar) {
 
   TypedValue rv;
   rv.m_type = KindOfUninit;
-  callFunc<usesDoubles>(func, ctx, args, numNonDefault, rv);
+  callFunc(func, ctx, args, numNonDefault, rv, false);
 
   assertx(rv.m_type != KindOfUninit);
   if (isStatic) {
@@ -552,38 +541,97 @@ void getFunctionPointers(const NativeFunctionInfo& info, int nativeAttrs,
     bif = unimplementedWrapper;
     return;
   }
-  if (nativeAttrs & AttrActRec) {
-    // NativeFunction with the ArFunction signature
-    bif = reinterpret_cast<ArFunction>(nif);
-    nif = nullptr;
-    return;
-  }
 
-  bool usesDoubles = false;
-  for (auto const argType : info.sig.args) {
-    if (argType == NativeSig::Type::Double) {
-      usesDoubles = true;
-      break;
-    }
-  }
-
-  bool isMethod = info.sig.args.size() &&
+  auto const isMethod = info.sig.args.size() &&
       ((info.sig.args[0] == NativeSig::Type::This) ||
        (info.sig.args[0] == NativeSig::Type::Class));
+  bif = isMethod ? methodWrapper : functionWrapper;
+}
 
-  if (isMethod) {
-    if (usesDoubles) {
-      bif = methodWrapper<true>;
-    } else {
-      bif = methodWrapper<false>;
-    }
-  } else {
-    if (usesDoubles) {
-      bif = functionWrapper<true>;
-    } else {
-      bif = functionWrapper<false>;
-    }
+//////////////////////////////////////////////////////////////////////////////
+
+const StaticString s_outOnly("__OutOnly");
+
+static MaybeDataType typeForOutParam(TypedValue attr) {
+
+  if (!isArrayLikeType(attr.m_type) || attr.m_data.parr->size() < 1) {
+    return {};
   }
+
+  auto const& type = attr.m_data.parr->atPos(attr.m_data.parr->iter_begin());
+  if (!isStringType(type.m_type)) return {};
+
+  auto const str = type.m_data.pstr->data();
+
+#define DT(name, ...) if (strcmp(str, "KindOf" #name) == 0) return KindOf##name;
+  DATATYPES
+#undef DT
+
+  return {};
+}
+
+MaybeDataType builtinOutType(
+  const TypeConstraint& tc,
+  const UserAttributeMap& map
+) {
+  auto const tcDT = tc.underlyingDataType();
+
+  auto const it = map.find(s_outOnly.get());
+  if (it == map.end()) return tcDT;
+
+  auto const dt = typeForOutParam(it->second);
+  return dt ? dt : tcDT;
+}
+
+static folly::Optional<TypedValue> builtinInValue(
+  const Func::ParamInfo& pinfo
+) {
+  assertx(pinfo.inout);
+  auto& map = pinfo.userAttributes;
+
+  auto const it = map.find(s_outOnly.get());
+  if (it == map.end()) return {};
+
+  auto const dt = typeForOutParam(it->second);
+  if (!dt) return make_tv<KindOfNull>();
+
+  switch (*dt) {
+  case KindOfNull:    return make_tv<KindOfNull>();
+  case KindOfBoolean: return make_tv<KindOfBoolean>(false);
+  case KindOfInt64:   return make_tv<KindOfInt64>(0);
+  case KindOfDouble:  return make_tv<KindOfDouble>(0.0);
+  case KindOfPersistentString:
+  case KindOfString:  return make_tv<KindOfString>(empty_string().get());
+  case KindOfPersistentVec:
+  case KindOfVec:     return make_tv<KindOfVec>(empty_vec_array().get());
+  case KindOfPersistentDict:
+  case KindOfDict:    return make_tv<KindOfDict>(empty_dict_array().get());
+  case KindOfPersistentKeyset:
+  case KindOfKeyset:  return make_tv<KindOfNull>();
+  case KindOfPersistentShape:
+  case KindOfShape:   return make_array_like_tv(empty_darray().get());
+  case KindOfPersistentArray:
+  case KindOfArray:   return make_tv<KindOfArray>(empty_array().get());
+  case KindOfUninit:
+  case KindOfObject:
+  case KindOfResource:
+  case KindOfRef:
+  case KindOfFunc:
+  case KindOfClass:
+  case KindOfClsMeth:
+  case KindOfRecord:  return make_tv<KindOfNull>();
+  }
+
+  not_reached();
+}
+
+MaybeDataType builtinOutType(const Func* builtin, uint32_t i) {
+  auto const& pinfo = builtin->params()[i];
+  return builtinOutType(pinfo.typeConstraint, pinfo.userAttributes);
+}
+
+folly::Optional<TypedValue> builtinInValue(const Func* builtin, uint32_t i) {
+  return builtinInValue(builtin->params()[i]);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -625,8 +673,64 @@ static bool tcCheckNative(const TypeConstraint& tc, const NativeSig::Type ty) {
     case KindOfFunc:         return ty == T::Func;
     case KindOfClass:        return ty == T::Class;
     case KindOfClsMeth:      return ty == T::ClsMeth;
+    case KindOfRecord:       return false; // TODO (T41031632)
   }
   not_reached();
+}
+
+static bool tcCheckNativeIO(
+  const Func::ParamInfo& pinfo, const NativeSig::Type ty
+) {
+  using T = NativeSig::Type;
+
+  auto const checkDT = [&] (DataType dt) -> bool {
+    switch (dt) {
+      case KindOfDouble:       return ty == T::DoubleIO;
+      case KindOfBoolean:      return ty == T::BoolIO;
+      case KindOfObject:       return ty == T::ObjectIO;
+      case KindOfPersistentString:
+      case KindOfString:       return ty == T::StringIO;
+      case KindOfPersistentVec:
+      case KindOfVec:          return ty == T::ArrayIO;
+      case KindOfPersistentDict:
+      case KindOfDict:         return ty == T::ArrayIO;
+      case KindOfPersistentKeyset:
+      case KindOfKeyset:       return ty == T::ArrayIO;
+      case KindOfPersistentShape:
+      case KindOfShape:        return ty == T::ArrayIO;
+      case KindOfPersistentArray:
+      case KindOfArray:        return ty == T::ArrayIO;
+      case KindOfResource:     return ty == T::ResourceIO;
+      case KindOfUninit:
+      case KindOfNull:         return false;
+      case KindOfRef:          return ty == T::MixedIO;
+      case KindOfInt64:        return ty == T::IntIO;
+      case KindOfFunc:         return ty == T::FuncIO;
+      case KindOfClass:        return ty == T::ClassIO;
+      case KindOfClsMeth:      return ty == T::ClsMethIO;
+      case KindOfRecord:       return false; // TODO (T41031632)
+    }
+    not_reached();
+  };
+
+  auto const tv = builtinInValue(pinfo);
+  if (tv) {
+    if (isNullType(tv->m_type)) return ty == T::MixedIO;
+    return checkDT(tv->m_type);
+  }
+
+  auto const& tc = pinfo.typeConstraint;
+  if (!tc.hasConstraint() || tc.isNullable() || tc.isCallable() ||
+      tc.isArrayKey() || tc.isNumber() || tc.isVecOrDict() ||
+      tc.isVArrayOrDArray() || tc.isArrayLike()) {
+    return ty == T::MixedIO;
+  }
+
+  if (!tc.underlyingDataType()) {
+    return false;
+  }
+
+  return checkDT(*tc.underlyingDataType());
 }
 
 const char* kInvalidReturnTypeMessage = "Invalid return type detected";
@@ -638,9 +742,6 @@ const char* kNeedStaticContextMessage =
   "Static class functions must take a Class* as their first argument";
 const char* kNeedObjectContextMessage =
   "Instance methods must take an ObjectData* as their first argument";
-const char* kInvalidActRecFuncMessage =
-  "Functions declared as ActRec must return a TypedValue* and take an ActRec* "
-  "as their sole argument";
 
 static const StaticString
   s_native("__Native"),
@@ -650,18 +751,6 @@ const char* checkTypeFunc(const NativeSig& sig,
                           const TypeConstraint& retType,
                           const FuncEmitter* func) {
   using T = NativeSig::Type;
-
-  auto dummy = HPHP::AttrNone;
-  auto nativeAttributes = func->parseNativeAttributes(dummy);
-
-  if (nativeAttributes & Native::AttrActRec) {
-    return
-      sig.ret == T::ARReturn &&
-      sig.args.size() == 1 &&
-      sig.args[0] == T::VarArgs
-        ? nullptr
-        : kInvalidActRecFuncMessage;
-  }
 
   if (!tcCheckNative(retType, sig.ret)) return kInvalidReturnTypeMessage;
 
@@ -675,10 +764,6 @@ const char* checkTypeFunc(const NativeSig& sig,
     } else {
       if (ctxTy != T::This) return kNeedObjectContextMessage;
     }
-  }
-
-  if (nativeAttributes & Native::AttrTakesNumArgs) {
-    if (*argIt++ != T::Int64) return kInvalidNumArgsMessage;
   }
 
   for (auto const& pInfo : func->params) {
@@ -696,6 +781,13 @@ const char* checkTypeFunc(const NativeSig& sig,
 
     if (pInfo.variadic) {
       if (argTy != T::Array) return kInvalidArgTypeMessage;
+      continue;
+    }
+
+    if (pInfo.inout) {
+      if (!tcCheckNativeIO(pInfo, argTy)) {
+        return kInvalidArgTypeMessage;
+      }
       continue;
     }
 
@@ -746,9 +838,9 @@ void registerNativeFunc(Native::FuncTable& nativeFuncs,
 
 void FuncTable::insert(const StringData* name,
                        const NativeFunctionInfo& info) {
-  assert(name->isStatic());
+  assertx(name->isStatic());
   DEBUG_ONLY auto it = m_infos.insert(std::make_pair(name, info));
-  assert(it.second || it.first->second == info);
+  assertx(it.second || it.first->second == info);
 }
 
 NativeFunctionInfo FuncTable::get(const StringData* name) const {
@@ -781,14 +873,23 @@ static std::string nativeTypeString(NativeSig::Type ty) {
   case T::OutputArg:  return "mixed&";
   case T::Mixed:      return "mixed";
   case T::MixedTV:    return "mixed";
-  case T::ARReturn:   return "[TypedValue*]";
   case T::MixedRef:   return "mixed&";
-  case T::VarArgs:    return "...";
   case T::This:       return "this";
   case T::Class:      return "class";
   case T::Void:       return "void";
   case T::Func:       return "func";
   case T::ClsMeth:    return "clsmeth";
+  case T::IntIO:      return "inout int";
+  case T::DoubleIO:   return "inout double";
+  case T::BoolIO:     return "inout bool";
+  case T::ObjectIO:   return "inout object";
+  case T::StringIO:   return "inout string";
+  case T::ArrayIO:    return "inout array";
+  case T::ResourceIO: return "inout resource";
+  case T::FuncIO:     return "inout func";
+  case T::ClassIO:    return "inout class";
+  case T::ClsMethIO:  return "inout clsmeth";
+  case T::MixedIO:    return "inout mixed";
   }
   not_reached();
 }
@@ -838,16 +939,6 @@ bool registerConstant(const StringData* cnsName,
   s_constant_map[cnsName] = tv;
   return true;
 }
-
-template
-void callFunc<true>(const Func* func, void *ctx,
-                    TypedValue *args, int32_t numNonDefault,
-                    TypedValue& ret);
-
-template
-void callFunc<false>(const Func* func, void *ctx,
-                     TypedValue *args, int32_t numNonDefault,
-                     TypedValue& ret);
 
 //////////////////////////////////////////////////////////////////////////////
 }} // namespace HPHP::Native

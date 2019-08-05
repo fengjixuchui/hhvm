@@ -1,4 +1,4 @@
-<?php
+<?hh
     // homepage: 
     
     //$mb_str = "Алексей Федорович Карамазов был Алексей Федорович Карамазов был kyrillischer string string";
@@ -12,4 +12,3 @@
     var_dump($match);  
     
     
-?>

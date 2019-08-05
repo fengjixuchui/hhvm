@@ -3,32 +3,32 @@
 namespace MyNS {
   class Foo {
     public function __construct() {
-      var_dump(__CLASS__);
+      \var_dump(__CLASS__);
     }
   }
 
   class Bar {
     public function __construct() {
-      var_dump(__CLASS__);
+      \var_dump(__CLASS__);
     }
   }
 
   class Herp {
     public function __construct() {
-      var_dump(__CLASS__);
+      \var_dump(__CLASS__);
     }
   }
 
   class Derp {
     public function __construct() {
-      var_dump(__CLASS__);
+      \var_dump(__CLASS__);
     }
   }
 }
 namespace Type {
   class Hello {
     public function __construct() {
-      var_dump(__CLASS__);
+      \var_dump(__CLASS__);
     }
   }
 }
@@ -40,8 +40,11 @@ namespace {
     Herp,
     Derp,
   };
-  new Foo();
-  new Bar();
-  new Herp();
-  new Derp();
+
+  <<__EntryPoint>> function main(): void {
+    new Foo();
+    new Bar();
+    new Herp();
+    new Derp();
+  }
 }

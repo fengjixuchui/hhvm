@@ -18,7 +18,6 @@
 #include "hphp/runtime/ext/thrift/ext_thrift.h"
 
 #include "hphp/runtime/base/array-init.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/request-event-handler.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
@@ -35,6 +34,7 @@
 #include "hphp/runtime/vm/jit/perf-counters.h"
 
 #include "hphp/util/fixed-vector.h"
+#include "hphp/util/rds-local.h"
 
 #include <folly/AtomicHashMap.h>
 #include <folly/Format.h>
@@ -1010,7 +1010,7 @@ struct CompactReader {
         readCollectionEnd();
         return Variant(std::move(ret));
       } else {
-        ArrayInit arr(size, ArrayInit::Mixed{});
+        DArrayInit arr(size);
         for (uint32_t i = 0; i < size; i++) {
           auto key = readField(keySpec, keyType);
           auto value = readField(valueSpec, valueType);
@@ -1048,17 +1048,17 @@ struct CompactReader {
         int64_t i = 0;
         do {
           auto val = readField(valueSpec, valueType);
-          cellDup(*val.toCell(), *vec->appendForUnserialize(i));
+          cellDup(*val.toCell(), vec->appendForUnserialize(i));
         } while (++i < size);
         readCollectionEnd();
         return Variant(std::move(vec));
       } else {
-        PackedArrayInit pai(size);
+        VArrayInit vai(size);
         for (auto i = uint32_t{0}; i < size; ++i) {
-          pai.append(readField(valueSpec, valueType));
+          vai.append(readField(valueSpec, valueType));
         }
         readCollectionEnd();
-        return pai.toVariant();
+        return vai.toVariant();
       }
     }
 
@@ -1089,10 +1089,7 @@ struct CompactReader {
         readCollectionEnd();
         return Variant(std::move(set_ret));
       } else {
-        // Note: the Mixed{} is just out of uncertainty right now.
-        // These probably are generally string keys and this should
-        // probably be ArrayInit::Map.
-        ArrayInit ainit(size, ArrayInit::Mixed{});
+        DArrayInit ainit(size);
         for (uint32_t i = 0; i < size; i++) {
           Variant value = readField(valueSpec, valueType);
           set_with_intish_key_cast(ainit, value, true);

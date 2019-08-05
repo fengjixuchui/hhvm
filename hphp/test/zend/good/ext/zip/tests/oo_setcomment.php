@@ -1,4 +1,4 @@
-<?php
+<?hh
 $dirname = dirname(__FILE__) . '/';
 include $dirname . 'utils.inc';
 $file = $dirname . '__tmp_oo_set_comment.zip';
@@ -46,4 +46,3 @@ var_dump($zip->getArchiveComment());
 $zip->close();
 @unlink($file);
 
-?>

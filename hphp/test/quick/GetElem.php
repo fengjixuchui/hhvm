@@ -1,4 +1,4 @@
-<?hh
+<?hh <<__EntryPoint>> function main(): void {
 error_reporting(0);
 
 $a = array(0, "b", "c");
@@ -12,7 +12,4 @@ print "\n";
 
 $a[3]++;
 print_r($a);
-
-$b = null;
-print $b[0]++;
-print "\n";
+}

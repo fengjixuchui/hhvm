@@ -61,14 +61,13 @@ inline bool cellToBool(Cell cell) {
     case KindOfArray:         return !cell.m_data.parr->empty();
     case KindOfObject:        return cell.m_data.pobj->toBoolean();
     case KindOfResource:      return cell.m_data.pres->data()->o_toBoolean();
+    case KindOfRecord:        raise_convert_record_to_type("bool");
     case KindOfRef:           break;
     case KindOfFunc:
       return funcToStringHelper(cell.m_data.pfunc)->toBoolean();
     case KindOfClass:
       return classToStringHelper(cell.m_data.pclass)->toBoolean();
-    case KindOfClsMeth:
-      raiseClsMethConvertWarningHelper("bool");
-      return true;
+    case KindOfClsMeth:       return true;
   }
   not_reached();
 }
@@ -96,6 +95,7 @@ inline int64_t cellToInt(Cell cell) {
     case KindOfArray:         return cell.m_data.parr->empty() ? 0 : 1;
     case KindOfObject:        return cell.m_data.pobj->toInt64();
     case KindOfResource:      return cell.m_data.pres->data()->o_toInt64();
+    case KindOfRecord:        raise_convert_record_to_type("int");
     case KindOfRef:           break;
     case KindOfFunc:
       return funcToStringHelper(cell.m_data.pfunc)->toInt64(10);
@@ -117,13 +117,13 @@ inline double cellToDouble(Cell cell) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-template <IntishCast intishCast>
+template <IntishCast IC>
 inline Cell cellToKey(Cell cell, const ArrayData* ad) {
   assertx(cellIsPlausible(cell));
 
   auto coerceKey = [&] (const StringData* str) {
     int64_t n;
-    if (ad->convertKey<intishCast>(str, n)) {
+    if (ad->convertKey<IC>(str, n)) {
       return make_tv<KindOfInt64>(n);
     }
     return make_tv<KindOfString>(const_cast<StringData*>(str));
@@ -131,7 +131,7 @@ inline Cell cellToKey(Cell cell, const ArrayData* ad) {
 
   if (isStringType(cell.m_type)) {
     int64_t n;
-    if (ad->convertKey<intishCast>(cell.m_data.pstr, n)) {
+    if (ad->convertKey<IC>(cell.m_data.pstr, n)) {
       return make_tv<KindOfInt64>(n);
     }
     return cell;
@@ -176,6 +176,7 @@ inline Cell cellToKey(Cell cell, const ArrayData* ad) {
     case KindOfPersistentKeyset:
     case KindOfKeyset:
     case KindOfObject:
+    case KindOfRecord:
       raise_warning("Invalid operand type was used: Invalid type used as key");
       return make_tv<KindOfNull>();
 
@@ -190,10 +191,10 @@ inline Cell cellToKey(Cell cell, const ArrayData* ad) {
   not_reached();
 }
 
-template <IntishCast intishCast>
+template <IntishCast IC>
 inline Cell tvToKey(TypedValue tv, const ArrayData* ad) {
   assertx(tvIsPlausible(tv));
-  return cellToKey<intishCast>(tvToCell(tv), ad);
+  return cellToKey<IC>(tvToCell(tv), ad);
 }
 
 

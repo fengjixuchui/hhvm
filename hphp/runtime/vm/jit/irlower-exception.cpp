@@ -74,16 +74,6 @@ IMPL_OPCODE_CALL(DebugBacktraceFast)
 
 ///////////////////////////////////////////////////////////////////////////////
 
-static void raiseVarEnvDynCall(const Func* func) {
-  assertx(func->readsCallerFrame());
-  raise_disallowed_dynamic_call(func);
-}
-
-void cgRaiseVarEnvDynCall(IRLS& env, const IRInstruction* inst) {
-  cgCallHelper(vmain(env), env, CallSpec::direct(raiseVarEnvDynCall),
-               kVoidDest, SyncOptions::Sync, argGroup(env, inst).ssa(0));
-}
-
 static void raiseHackArrCompatNotice(const StringData* msg) {
   raise_hackarr_compat_notice(msg->toCppString());
 }
@@ -94,10 +84,17 @@ void cgRaiseHackArrCompatNotice(IRLS& env, const IRInstruction* inst) {
 }
 
 static void raiseForbiddenDynCall(const Func* func) {
-  assertx(RuntimeOption::EvalForbidDynamicCalls > 0);
   assertx(!func->isDynamicallyCallable());
+  int dynCallErrorLevel = func->isMethod() ?
+    (
+      func->isStatic() ?
+        RuntimeOption::EvalForbidDynamicCallsToClsMeth :
+        RuntimeOption::EvalForbidDynamicCallsToInstMeth
+    ) :
+    RuntimeOption::EvalForbidDynamicCallsToFunc;
+  if (dynCallErrorLevel <= 0) return;
 
-  if (RuntimeOption::EvalForbidDynamicCalls >= 2) {
+  if (dynCallErrorLevel >= 2) {
     std::string msg;
     string_printf(
       msg,
@@ -114,10 +111,10 @@ static void raiseForbiddenDynCall(const Func* func) {
 }
 
 static void raiseForbiddenDynConstruct(const Class* cls) {
-  assertx(RuntimeOption::EvalForbidDynamicCalls > 0);
+  assertx(RuntimeOption::EvalForbidDynamicConstructs > 0);
   assertx(!cls->isDynamicallyConstructible());
 
-  if (RuntimeOption::EvalForbidDynamicCalls >= 2) {
+  if (RuntimeOption::EvalForbidDynamicConstructs >= 2) {
     std::string msg;
     string_printf(
       msg,
@@ -159,8 +156,7 @@ IMPL_OPCODE_CALL(RestoreErrorLevel)
 
 IMPL_OPCODE_CALL(CheckClsReifiedGenericMismatch)
 IMPL_OPCODE_CALL(CheckFunReifiedGenericMismatch)
-IMPL_OPCODE_CALL(RaiseArrayIndexNotice)
-IMPL_OPCODE_CALL(RaiseArrayKeyNotice)
+IMPL_OPCODE_CALL(RaiseErrorOnInvalidIsAsExpressionType)
 IMPL_OPCODE_CALL(RaiseError)
 IMPL_OPCODE_CALL(RaiseMissingArg)
 IMPL_OPCODE_CALL(RaiseTooManyArg)
@@ -168,15 +164,21 @@ IMPL_OPCODE_CALL(RaiseNotice)
 IMPL_OPCODE_CALL(RaiseUndefProp)
 IMPL_OPCODE_CALL(RaiseUninitLoc)
 IMPL_OPCODE_CALL(RaiseWarning)
-IMPL_OPCODE_CALL(RaiseParamRefMismatchForFunc)
-IMPL_OPCODE_CALL(RaiseMissingThis)
-IMPL_OPCODE_CALL(RaiseHasThisNeedStatic)
-IMPL_OPCODE_CALL(FatalMissingThis)
+IMPL_OPCODE_CALL(RaiseRxCallViolation)
 IMPL_OPCODE_CALL(ThrowArithmeticError)
+IMPL_OPCODE_CALL(ThrowArrayIndexException)
+IMPL_OPCODE_CALL(ThrowArrayKeyException)
+IMPL_OPCODE_CALL(ThrowAsTypeStructException)
 IMPL_OPCODE_CALL(ThrowDivisionByZeroError)
+IMPL_OPCODE_CALL(ThrowDivisionByZeroException)
+IMPL_OPCODE_CALL(ThrowHasThisNeedStatic)
 IMPL_OPCODE_CALL(ThrowInvalidArrayKey)
 IMPL_OPCODE_CALL(ThrowInvalidOperation)
+IMPL_OPCODE_CALL(ThrowMissingThis)
 IMPL_OPCODE_CALL(ThrowOutOfBounds)
+IMPL_OPCODE_CALL(ThrowParameterWrongType)
+IMPL_OPCODE_CALL(ThrowParamRefMismatch)
+IMPL_OPCODE_CALL(ThrowParamRefMismatchRange)
 
 ///////////////////////////////////////////////////////////////////////////////
 

@@ -18,9 +18,9 @@
 
 #include <cstdlib>
 
+#include "hphp/runtime/vm/hhbc.h"
 #include "hphp/runtime/vm/jit/location.h"
 #include "hphp/runtime/vm/jit/minstr-effects.h"
-#include "hphp/runtime/vm/jit/normalized-instruction.h"
 
 #include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-internal.h"
@@ -86,16 +86,16 @@ Type setOpResult(Type locType, Type valType, SetOpOp op) {
   not_reached();
 }
 
-uint32_t localInputId(const NormalizedInstruction& inst) {
-  return inst.imm[localImmIdx(inst.op())].u_LA;
+uint32_t localInputId(SrcKey sk) {
+  return getImm(sk.pc(), localImmIdx(sk.op())).u_LA;
 }
 
 folly::Optional<Type> interpOutputType(IRGS& env,
-                                       const NormalizedInstruction& inst,
                                        folly::Optional<Type>& checkTypeType) {
   using namespace jit::InstrFlags;
+  auto const sk = curSrcKey(env);
   auto localType = [&]{
-    auto locId = localInputId(inst);
+    auto locId = localInputId(sk);
     static_assert(std::is_unsigned<decltype(locId)>::value,
                   "locId should be unsigned");
     assertx(locId < curFunc(env)->numLocals());
@@ -109,7 +109,7 @@ folly::Optional<Type> interpOutputType(IRGS& env,
     return TBoxedInitCell;
   };
 
-  switch (getInstrInfo(inst.op()).type) {
+  switch (getInstrInfo(sk.op()).type) {
     case OutNull:        return TInitNull;
     case OutNullUninit:  return TUninit;
     case OutString:      return TStr;
@@ -132,17 +132,16 @@ folly::Optional<Type> interpOutputType(IRGS& env,
     case OutKeysetImm:   return TKeyset;
     case OutObject:
     case OutThisObject:  return TObj;
+    case OutRecord:      return TRecord;
     case OutResource:    return TRes;
 
     case OutFDesc:       return folly::none;
     case OutCns:         return TCell;
-    case OutVUnknown:    return TBoxedInitCell;
 
     case OutSameAsInput1: return topType(env, BCSPRelOffset{0});
     case OutSameAsInput2: return topType(env, BCSPRelOffset{1});
     case OutModifiedInput2: return topType(env, BCSPRelOffset{1}).modified();
     case OutModifiedInput3: return topType(env, BCSPRelOffset{2}).modified();
-    case OutVInput:      return boxed(topType(env, BCSPRelOffset{0}));
     case OutVInputL:     return boxed(localType());
 
     case OutArith:
@@ -155,11 +154,11 @@ folly::Optional<Type> interpOutputType(IRGS& env,
 
     case OutBitOp:
       return bitOpResult(topType(env, BCSPRelOffset{0}),
-                         inst.op() == HPHP::OpBitNot ?
+                         sk.op() == HPHP::OpBitNot ?
                             TBottom : topType(env, BCSPRelOffset{1}));
     case OutSetOp:      return setOpResult(localType(),
                           topType(env, BCSPRelOffset{0}),
-                          SetOpOp(inst.imm[1].u_OA));
+                          SetOpOp(getImm(sk.pc(), 1).u_OA));
     case OutIncDec: {
       auto ty = localType().unbox();
       return ty <= TDbl ? ty : TCell;
@@ -194,11 +193,11 @@ folly::Optional<Type> interpOutputType(IRGS& env,
 
 jit::vector<InterpOneData::LocalType>
 interpOutputLocals(IRGS& env,
-                   const NormalizedInstruction& inst,
                    bool& smashesAllLocals,
                    folly::Optional<Type> pushedType) {
   using namespace jit::InstrFlags;
-  auto const& info = getInstrInfo(inst.op());
+  auto const sk = curSrcKey(env);
+  auto const& info = getInstrInfo(sk.op());
   // Anything with Local in its output or a member base input can modify a
   // local.
   if (!(info.out & Local) && !(info.in & MBase)) return {};
@@ -212,7 +211,7 @@ interpOutputLocals(IRGS& env,
   };
   auto setImmLocType = [&](uint32_t id, Type t) {
     assertx(id < kMaxHhbcImms);
-    setLocType(inst.imm[id].u_LA, t);
+    setLocType(getImm(sk.pc(), id).u_LA, t);
   };
   auto handleBoxiness = [&] (Type testTy, Type useTy) {
     return testTy <= TBoxedCell ? TBoxedInitCell :
@@ -222,11 +221,11 @@ interpOutputLocals(IRGS& env,
 
   auto const mDefine = static_cast<unsigned char>(MOpMode::Define);
 
-  switch (inst.op()) {
+  switch (sk.op()) {
     case OpSetOpL:
     case OpIncDecL: {
       assertx(pushedType.hasValue());
-      auto locType = env.irb->local(localInputId(inst), DataTypeSpecific).type;
+      auto locType = env.irb->local(localInputId(sk), DataTypeSpecific).type;
       assertx(locType < TGen || curFunc(env)->isPseudoMain());
 
       auto stackType = pushedType.value();
@@ -234,29 +233,19 @@ interpOutputLocals(IRGS& env,
       break;
     }
 
-    case OpStaticLocInit:
-    case OpStaticLocDef:
-      setImmLocType(0, TBoxedInitCell);
-      break;
-
-    case OpStaticLocCheck:
-      setImmLocType(0, TGen);
-      break;
-
     case OpInitThisLoc:
       setImmLocType(0, TCell);
       break;
 
     case OpSetL:
     case OpPopL: {
-      auto locType = env.irb->local(localInputId(inst), DataTypeSpecific).type;
+      auto locType = env.irb->local(localInputId(sk), DataTypeSpecific).type;
       auto stackType = topType(env, BCSPRelOffset{0});
       // [Set,Pop]L preserves reffiness of a local.
       setImmLocType(0, handleBoxiness(locType, stackType));
       break;
     }
-    case OpVGetL:
-    case OpBindL: {
+    case OpVGetL: {
       assertx(pushedType.hasValue());
       assertx(*pushedType <= TBoxedCell);
       setImmLocType(0, pushedType.value());
@@ -276,13 +265,11 @@ interpOutputLocals(IRGS& env,
     case OpMemoSetEager:
       break;
     case OpDim:
-      if (inst.imm[0].u_OA & mDefine) smashesAllLocals = true;
+      if (getImm(sk.pc(), 0).u_OA & mDefine) smashesAllLocals = true;
       break;
-    case OpVGetM:
     case OpSetM:
     case OpIncDecM:
     case OpSetOpM:
-    case OpBindM:
     case OpUnsetM:
       smashesAllLocals = true;
       break;
@@ -307,77 +294,55 @@ interpOutputLocals(IRGS& env,
 
     case OpVerifyParamTypeTS:
     case OpVerifyParamType: {
-      auto locType = env.irb->local(localInputId(inst), DataTypeSpecific).type;
+      auto locType = env.irb->local(localInputId(sk), DataTypeSpecific).type;
       setImmLocType(0, handleBoxiness(locType, TCell));
       break;
     }
 
     case OpSilence:
-      if (static_cast<SilenceOp>(inst.imm[1].u_OA) == SilenceOp::Start) {
+      if (static_cast<SilenceOp>(getImm(sk.pc(), 1).u_OA) == SilenceOp::Start) {
         setImmLocType(0, TInt);
       }
       break;
 
     default:
       always_assert_flog(
-        false, "Unknown local-modifying op {}", opcodeToName(inst.op())
+        false, "Unknown local-modifying op {}", opcodeToName(sk.op())
       );
   }
 
   return locals;
 }
 
-jit::vector<InterpOneData::ClsRefSlot>
-interpClsRefSlots(IRGS& /*env*/, const NormalizedInstruction& inst) {
-  jit::vector<InterpOneData::ClsRefSlot> slots;
-
-  auto const op = inst.op();
-  auto const numImmeds = numImmediates(op);
-  for (auto i = uint32_t{0}; i < numImmeds; ++i) {
-    auto const type = immType(op, i);
-    if (type == ArgType::CAR) {
-      slots.emplace_back(inst.imm[i].u_CAR, false);
-    } else if (type == ArgType::CAW) {
-      slots.emplace_back(inst.imm[i].u_CAW, true);
-    }
-  }
-
-  return slots;
-}
-
 //////////////////////////////////////////////////////////////////////
 
 }
 
-void interpOne(IRGS& env, const NormalizedInstruction& inst) {
+void interpOne(IRGS& env) {
   folly::Optional<Type> checkTypeType;
-  auto stackType = interpOutputType(env, inst, checkTypeType);
-  auto popped = getStackPopped(inst.pc());
-  auto pushed = getStackPushed(inst.pc());
+  auto const sk = curSrcKey(env);
+  auto stackType = interpOutputType(env, checkTypeType);
+  auto popped = getStackPopped(sk.pc());
+  auto pushed = getStackPushed(sk.pc());
   FTRACE(1, "emitting InterpOne for {}, result = {}, popped {}, pushed {}\n",
-         inst.toString(),
+         instrToString(sk.pc(), sk.unit()),
          stackType.hasValue() ? stackType->toString() : "<none>",
          popped, pushed);
 
   InterpOneData idata { spOffBCFromIRSP(env) };
-  auto locals = interpOutputLocals(env, inst, idata.smashesAllLocals,
-    stackType);
+  auto locals = interpOutputLocals(env, idata.smashesAllLocals, stackType);
   idata.nChangedLocals = locals.size();
   idata.changedLocals = locals.data();
 
-  auto slots = interpClsRefSlots(env, inst);
-  idata.nChangedClsRefSlots = slots.size();
-  idata.changedClsRefSlots = slots.data();
-
   interpOne(env, stackType, popped, pushed, idata);
   if (checkTypeType) {
-    auto const out = getInstrInfo(inst.op()).out;
+    auto const out = getInstrInfo(sk.op()).out;
     auto const checkIdx = BCSPRelOffset{
       (out & InstrFlags::StackIns1) ? 1 : 0
     }.to<FPInvOffset>(env.irb->fs().bcSPOff());
 
     checkType(env, Location::Stack { checkIdx }, *checkTypeType,
-              inst.nextSk().offset(), true /* outerOnly */);
+              nextBcOff(env), true /* outerOnly */);
   }
 }
 
@@ -421,47 +386,34 @@ void interpOne(IRGS& env,
  * translated here.
  */
 
-#define INTERP interpOne(env, *env.currentNormalizedInstruction);
-
-void emitFPushObjMethod(IRGS& env, uint32_t, ObjMethodOp, const ImmVector&) {
-  INTERP
-}
-
-void emitAddElemV(IRGS& env)                  { INTERP }
-void emitAddNewElemV(IRGS& env)               { INTERP }
-void emitExit(IRGS& env)                      { INTERP }
-void emitFatal(IRGS& env, FatalOp)            { INTERP }
-void emitUnwind(IRGS& env)                    { INTERP }
-void emitSetOpG(IRGS& env, SetOpOp)           { INTERP }
-void emitSetOpS(IRGS& env, SetOpOp, uint32_t) { INTERP }
-void emitIncDecG(IRGS& env, IncDecOp)         { INTERP }
-void emitBindS(IRGS& env, uint32_t)           { INTERP }
-void emitUnsetG(IRGS& env)                    { INTERP }
-void emitVGetS(IRGS& env, uint32_t)           { INTERP }
-void emitIncl(IRGS& env)                      { INTERP }
-void emitInclOnce(IRGS& env)                  { INTERP }
-void emitReq(IRGS& env)                       { INTERP }
-void emitReqDoc(IRGS& env)                    { INTERP }
-void emitReqOnce(IRGS& env)                   { INTERP }
-void emitEval(IRGS& env)                      { INTERP }
-void emitDefTypeAlias(IRGS& env, uint32_t)    { INTERP }
-void emitDefCns(IRGS& env, const StringData*) { INTERP }
-void emitDefCls(IRGS& env, uint32_t)          { INTERP }
+void emitExit(IRGS& env)                      { interpOne(env); }
+void emitFatal(IRGS& env, FatalOp)            { interpOne(env); }
+void emitSetOpG(IRGS& env, SetOpOp)           { interpOne(env); }
+void emitSetOpS(IRGS& env, SetOpOp)           { interpOne(env); }
+void emitIncDecG(IRGS& env, IncDecOp)         { interpOne(env); }
+void emitUnsetG(IRGS& env)                    { interpOne(env); }
+void emitIncl(IRGS& env)                      { interpOne(env); }
+void emitInclOnce(IRGS& env)                  { interpOne(env); }
+void emitReq(IRGS& env)                       { interpOne(env); }
+void emitReqDoc(IRGS& env)                    { interpOne(env); }
+void emitReqOnce(IRGS& env)                   { interpOne(env); }
+void emitEval(IRGS& env)                      { interpOne(env); }
+void emitDefTypeAlias(IRGS& env, uint32_t)    { interpOne(env); }
+void emitDefCns(IRGS& env, const StringData*) { interpOne(env); }
+void emitDefCls(IRGS& env, uint32_t)          { interpOne(env); }
+void emitDefRecord(IRGS& env, uint32_t)       { interpOne(env); }
 void emitAliasCls(IRGS& env,
                   const StringData*,
-                  const StringData*)          { INTERP }
-void emitCatch(IRGS& env)                     { INTERP }
-void emitChainFaults(IRGS& env)               { INTERP }
-void emitContGetReturn(IRGS& env)             { INTERP }
+                  const StringData*)          { interpOne(env); }
+void emitChainFaults(IRGS& env)               { interpOne(env); }
+void emitContGetReturn(IRGS& env)             { interpOne(env); }
 void emitContAssignDelegate(IRGS& env, int32_t)
-                                              { INTERP }
-void emitContEnterDelegate(IRGS& env)         { INTERP }
+                                              { interpOne(env); }
+void emitContEnterDelegate(IRGS& env)         { interpOne(env); }
 void emitYieldFromDelegate(IRGS& env, int32_t, int32_t)
-                                              { INTERP }
+                                              { interpOne(env); }
 void emitContUnsetDelegate(IRGS& env, CudOp, int32_t)
-                                              { INTERP }
-void emitCombineAndResolveTypeStruct(IRGS& env, uint32_t)
-                                              { INTERP }
+                                              { interpOne(env); }
 
 //////////////////////////////////////////////////////////////////////
 

@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $im = imagecreatetruecolor(6,6);
 imagefill($im, 0,0, 0xffffff);
 
@@ -19,7 +19,7 @@ $p5 = imagecolorat($im, 5,5) == $b;
 
 
 if ($p1 && $p2 && $p3 && $p4 && $p5) {
-	echo "Horizontal: ok\n";
+    echo "Horizontal: ok\n";
 }
 imagedestroy($im);
 
@@ -39,7 +39,7 @@ $p5 = imagecolorat($im, 2,4) == $r;
 $p6 = imagecolorat($im, 2,5) == $b;
 
 if ($p1 && $p2 && $p3 && $p4 && $p5 && $p6) {
-	echo "Vertical: ok\n";
+    echo "Vertical: ok\n";
 }
 imagedestroy($im);
 
@@ -59,9 +59,7 @@ $p5 = imagecolorat($im, 4,4) == $r;
 $p6 = imagecolorat($im, 5,5) == $b;
 
 if ($p1 && $p2 && $p3 && $p4 && $p5 && $p6) {
-	echo "Diagonal: ok\n";
+    echo "Diagonal: ok\n";
 }
 imagedestroy($im);
-
-
-?>
+}

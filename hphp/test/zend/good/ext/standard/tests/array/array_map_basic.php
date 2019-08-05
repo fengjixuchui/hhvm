@@ -1,10 +1,8 @@
-<?php
+<?hh
 /* Prototype  : array array_map  ( callback $callback  , array $arr1  [, array $...  ] )
  * Description: Applies the callback to the elements of the given arrays
  * Source code: ext/standard/array.c
  */
-
-echo "*** Testing array_map() : basic functionality ***\n";
 
 function multiply($p, $q) {
   return ($p * $q);
@@ -17,6 +15,8 @@ function square($p) {
 function concatenate($a, $b) {
   return "$a = $b";
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing array_map() : basic functionality ***\n";
 
 // integer array
 $arr1 = array(1, 2, 3);
@@ -36,4 +36,4 @@ echo "-- With string array --\n";
 var_dump( array_map('concatenate', $arr1, $arr2) );
 
 echo "Done";
-?>
+}

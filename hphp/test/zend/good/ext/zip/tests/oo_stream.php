@@ -1,4 +1,4 @@
-<?php
+<?hh
 $dirname = dirname(__FILE__) . '/';
 $file = $dirname . 'test_with_comment.zip';
 include $dirname . 'utils.inc';
@@ -31,4 +31,3 @@ while (!feof($fp)) {
 var_dump($contents);
 fclose($fp);
 
-?>

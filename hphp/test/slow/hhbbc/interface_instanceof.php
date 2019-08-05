@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 abstract class Base {}
 abstract class Derived extends Base {}
@@ -18,7 +18,7 @@ class Factory {
 
 function main($k) {
   $x = Factory::create($k);
-  if ($x instanceof Derived) {
+  if ($x is Derived) {
     echo "derived\n";
   }
 }

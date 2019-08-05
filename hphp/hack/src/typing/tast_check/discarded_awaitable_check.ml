@@ -8,36 +8,32 @@
  *)
 
 open Core_kernel
-open Tast
+open Aast
 open Typing_defs
+
+module Env = Tast_env
 module MakeType = Typing_make_type
 
 let is_awaitable env ty =
   let mixed = MakeType.mixed Typing_reason.none in
   let awaitable_of_mixed = MakeType.awaitable Typing_reason.none mixed in
-  let _, is_ty_awaitable = Tast_env.subtype env ty awaitable_of_mixed in
-  is_ty_awaitable
+  Tast_env.can_subtype env ty awaitable_of_mixed
 
-let rec can_be_null env ty =
-  let _, (_, ety) = Tast_env.expand_type env ty in
-  match ety with
-  | Toption _ | Tprim Nast.Tnull -> true
-  | Tunresolved tyl -> List.exists tyl (can_be_null env)
-  | Terr | Tany | Tnonnull | Tarraykind _ | Tprim _ | Tvar _
-    | Tfun _ | Tabstract _ | Tclass _ | Ttuple _
-    | Tanon _ | Tobject | Tshape _ | Tdynamic -> false
+let can_be_null env ty =
+  let null = MakeType.null Typing_reason.none in
+  Tast_env.can_subtype env null ty
 
 let rec enforce_not_awaitable env p ty =
   let _, ety = Tast_env.expand_type env ty in
   match ety with
-  | _, Tunresolved tyl ->
+  | _, Tunion tyl | _, Tintersection tyl ->
     List.iter tyl (enforce_not_awaitable env p)
   | r, Tclass ((_, awaitable), _, _) when
       awaitable = SN.Classes.cAwaitable ->
     Errors.discarded_awaitable p (Typing_reason.to_pos r)
   | _, (Terr | Tany | Tnonnull | Tarraykind _ | Tprim _ | Toption _
     | Tvar _ | Tfun _ | Tabstract _ | Tclass _ | Ttuple _
-    | Tanon _ | Tobject | Tshape _ | Tdynamic) -> ()
+    | Tanon _ | Tobject | Tshape _ | Tdynamic | Tdestructure _) -> ()
 
 let enforce_nullable_or_not_awaitable env p ty =
   if can_be_null env ty then ()
@@ -77,13 +73,13 @@ let visitor = object(this)
   inherit [_] Tast_visitor.iter_with_state as super
 
   method! on_expr (env, ctx) ((p, ty), e as te) = match e with
-    | Unop (Ast.Unot, e) | Assert (AE_assert e) ->
+    | Unop (Ast_defs.Unot, e) | Assert (AE_assert e) ->
       this#on_expr (env, disallow_non_nullable_awaitable ctx) e
-    | Binop (Ast.(Eqeq | Eqeqeq | Diff | Diff2 | Barbar | Ampamp | LogXor),
+    | Binop (Ast_defs.(Eqeq | Eqeqeq | Diff | Diff2 | Barbar | Ampamp | LogXor),
              e1, e2) ->
       this#on_expr (env, disallow_non_nullable_awaitable ctx) e1;
       this#on_expr (env, disallow_non_nullable_awaitable ctx) e2
-    | Binop (Ast.QuestionQuestion, e1, e2) ->
+    | Binop (Ast_defs.QuestionQuestion, e1, e2) ->
       this#on_expr (env, disallow_non_nullable_awaitable ctx) e1;
       this#on_expr (env, ctx) e2
     | Eif (e1, e2, e3) ->
@@ -93,11 +89,15 @@ let visitor = object(this)
     | Cast (hint, e) ->
       this#on_hint (env, ctx) hint;
       this#on_expr (env, disallow_awaitable ctx) e
-    | InstanceOf (e, ((_, obj_ty), _)) ->
+    | Is (e, hint)
+    | As (e, hint, _) ->
+      let hint_ty = Env.hint_to_ty env hint in
+      let env, hint_ty = Env.localize_with_self env hint_ty in
       let ctx' =
-        if is_awaitable env obj_ty
+        if is_awaitable env hint_ty
         then allow_awaitable
-        else disallow_non_nullable_awaitable ctx in
+        else disallow_non_nullable_awaitable ctx
+      in
       this#on_expr (env, ctx') e
     | _ ->
       if ctx.awaitable_disallowed then
@@ -106,8 +106,8 @@ let visitor = object(this)
         enforce_nullable_or_not_awaitable env p ty;
       super#on_expr (env, allow_awaitable) te
 
-  method! on_stmt (env, ctx) stmt = match stmt with
-    | Expr (_, Binop (Ast.Eq _, _, _) as e) ->
+  method! on_stmt (env, ctx) stmt = match snd stmt with
+    | Expr (_, Binop (Ast_defs.Eq _, _, _) as e) ->
       this#on_expr (env, allow_awaitable) e
     | Expr e ->
       this#on_expr (env, disallow_awaitable ctx) e

@@ -1,4 +1,4 @@
-<?php
+<?hh
 class myAppendIterator extends AppendIterator {}
 try {
 	$it = new myAppendIterator();
@@ -6,4 +6,3 @@ try {
 } catch (InvalidArgumentException $e) {
 	echo 'InvalidArgumentException thrown';
 }
-?>

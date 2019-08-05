@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool sort(&array &array_arg [, int $sort_flags])
  * Description: Sort an array
  * Source code: ext/standard/array.c
@@ -12,7 +12,7 @@
  * 3. SORT_NUMERIC - compare items numerically
  * 4. SORT_STRING - compare items as strings
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sort() : usage variations ***\n";
 
 //get an unset variable
@@ -80,4 +80,4 @@ for($index = 0; $index < count($unexpected_values); $index ++) {
 }
 
 echo "Done";
-?>
+}

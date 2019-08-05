@@ -10,7 +10,7 @@
 open Core_kernel
 module Acc = Mutable_accumulator
 module H = Hhbc_ast
-module A = Ast
+module A = Aast
 module SU = Hhbc_string_utils
 module SN = Naming_special_names
 module ULS = Unique_list_string
@@ -58,15 +58,11 @@ let string_of_basic instruction =
     | PopV        -> "PopV"
     | PopU        -> "PopU"
     | Dup         -> "Dup"
-    | Box         -> "Box"
-    | Unbox       -> "Unbox"
 
 let string_of_list_of_shape_fields sl =
   String.concat ~sep:" " @@ List.map ~f:SU.quote_string sl
 
 let string_of_stack_index si = string_of_int si
-
-let string_of_classref id = string_of_int id
 
 let string_of_adata_id id = "@" ^ id
 
@@ -113,35 +109,28 @@ let string_of_lit_const instruction =
     | NewStructDict l  ->
       sep ["NewStructDict"; "<" ^ string_of_list_of_shape_fields l ^ ">"]
     | NewPair -> "NewPair"
-    | ClsCns (cnsid, cr) ->
-      sep ["ClsCns"; string_of_const_id cnsid; string_of_classref cr]
+    | NewRecord (cid, l) ->
+      sep ["NewRecord"; string_of_class_id cid; "<" ^ string_of_list_of_shape_fields l ^ ">"]
+    | NewRecordArray (cid, l) ->
+      sep ["NewRecordArray"; string_of_class_id cid; "<" ^ string_of_list_of_shape_fields l ^ ">"]
+    | ClsCns cnsid ->
+      sep ["ClsCns"; string_of_const_id cnsid]
     | ClsCnsD (cnsid, cid) ->
       sep ["ClsCnsD"; string_of_const_id cnsid; string_of_class_id cid]
     | File -> "File"
     | Dir -> "Dir"
+    | FuncCred -> "FuncCred"
     | NullUninit -> "NullUninit"
-    | AddElemV -> "AddElemV"
-    | AddNewElemV -> "AddNewElemV"
     | Method -> "Method"
     | NewArray n -> sep ["NewArray"; string_of_int n]
     | NewLikeArrayL (id, n) ->
       sep ["NewLikeArrayL"; string_of_local_id id; string_of_int n]
-    | Cns cnsid -> sep ["Cns"; string_of_const_id cnsid]
     | CnsE cnsid -> sep ["CnsE"; string_of_const_id cnsid]
-    | CnsU (id1, id2) ->
-      sep ["CnsU"; string_of_const_id id1; SU.quote_string id2]
-    | CnsUE (id1, id2) ->
-      sep ["CnsUE"; string_of_const_id id1; SU.quote_string id2]
 
 
 let string_of_typestruct_resolve_op = function
   | Resolve -> "Resolve"
   | DontResolve -> "DontResolve"
-
-let string_of_has_generics_op = function
-  | NoGenerics -> "NoGenerics"
-  | HasGenerics -> "HasGenerics"
-  | MaybeGenerics -> "MaybeGenerics"
 
 let string_of_operator instruction =
   match instruction with
@@ -190,10 +179,10 @@ let string_of_operator instruction =
     | CastDArray -> "CastDArray"
     | InstanceOf -> "InstanceOf"
     | InstanceOfD id -> sep ["InstanceOfD"; string_of_class_id id]
+    | IsLateBoundCls -> "IsLateBoundCls"
     | IsTypeStructC op ->
       sep ["IsTypeStructC"; string_of_typestruct_resolve_op op]
-    | AsTypeStructC op ->
-      sep ["AsTypeStructC"; string_of_typestruct_resolve_op op]
+    | ThrowAsTypeStructException -> "ThrowAsTypeStructException"
     | CombineAndResolveTypeStruct n ->
       sep ["CombineAndResolveTypeStruct"; string_of_int n]
     | Print -> "Print"
@@ -212,13 +201,10 @@ let string_of_get x =
   | CUGetL id -> sep ["CUGetL"; string_of_local_id id]
   | PushL id -> sep ["PushL"; string_of_local_id id]
   | CGetG -> "CGetG"
-  | CGetQuietG -> "CGetQuietG"
-  | CGetS id -> sep ["CGetS"; string_of_classref id]
-  | VGetG -> "VGetG"
-  | VGetS id -> sep ["VGetS"; string_of_classref id]
+  | CGetS -> "CGetS"
   | VGetL id -> sep ["VGetL"; string_of_local_id id]
-  | ClsRefGetC cr -> sep ["ClsRefGetC"; string_of_int cr]
-  | ClsRefGetTS cr -> sep ["ClsRefGetTS"; string_of_int cr]
+  | ClassGetC -> "ClassGetC"
+  | ClassGetTS -> "ClassGetTS"
 
 let string_of_member_key mk =
   let open MemberKey in
@@ -295,19 +281,15 @@ let string_of_mutator x =
   | SetL id -> sep ["SetL"; string_of_local_id id]
   | PopL id -> sep ["PopL"; string_of_local_id id]
   | SetG -> "SetG"
-  | SetS id -> sep ["SetS"; string_of_classref id]
+  | SetS -> "SetS"
   | SetOpL (id, op) ->
     sep ["SetOpL"; string_of_local_id id; string_of_eq_op op]
   | SetOpG op -> sep ["SetOpG"; string_of_eq_op op]
-  | SetOpS (op, id) -> sep ["SetOpS"; string_of_eq_op op; string_of_classref id]
+  | SetOpS op -> sep ["SetOpS"; string_of_eq_op op]
   | IncDecL (id, op) ->
     sep ["IncDecL"; string_of_local_id id; string_of_incdec_op op]
   | IncDecG op -> sep ["IncDecG"; string_of_incdec_op op]
-  | IncDecS (op, id) ->
-    sep ["IncDecS"; string_of_incdec_op op; string_of_classref id]
-  | BindL id -> sep ["BindL"; string_of_local_id id]
-  | BindG -> "BindG"
-  | BindS id -> sep ["BindS"; string_of_classref id]
+  | IncDecS op -> sep ["IncDecS"; string_of_incdec_op op]
   | UnsetL id -> sep ["UnsetL"; string_of_local_id id]
   | UnsetG -> "UnsetG"
   | CheckProp id -> sep ["CheckProp"; string_of_prop_id id]
@@ -316,8 +298,6 @@ let string_of_mutator x =
 
 let string_of_label = function
   | Label.Regular id -> "L" ^ (string_of_int id)
-  | Label.Catch id -> "C" ^ (string_of_int id)
-  | Label.Fault id -> "F" ^ (string_of_int id)
   | Label.DefaultArg id -> "DV" ^ (string_of_int id)
   | Label.Named id -> id
 
@@ -330,6 +310,7 @@ let string_of_fcall_flags fl =
   let fl = [
     if fl.has_unpack then "Unpack" else "";
     if fl.supports_async_eager_return then "SupportsAER" else "";
+    if fl.lock_while_unwinding then "LockWhileUnwinding" else "";
   ] in
   "<" ^ (String.concat ~sep:" " @@ List.filter ~f:(fun f -> f <> "") fl) ^ ">"
 
@@ -377,15 +358,14 @@ let string_of_control_flow instruction =
   | RetCSuspended -> "RetCSuspended"
   | RetM p -> "RetM " ^ string_of_int p
   | Throw -> "Throw"
-  | Unwind -> "Unwind"
   | Switch (kind, base, labels) -> string_of_switch kind base labels
   | SSwitch cases -> string_of_sswitch cases
 
 let string_of_iterator_id i = Iterator.to_string i
 let string_of_null_flavor nf =
   match nf with
-  | Ast.OG_nullthrows -> "NullThrows"
-  | Ast.OG_nullsafe -> "NullSafe"
+  | Ast_defs.OG_nullthrows -> "NullThrows"
+  | Ast_defs.OG_nullsafe -> "NullSafe"
 
 let string_of_class_kind ck =
   match ck with
@@ -398,10 +378,10 @@ let string_of_isset instruction =
   | IssetC -> "IssetC"
   | IssetL id -> "IssetL " ^ string_of_local_id id
   | IssetG -> "IssetG"
-  | IssetS cls -> "IssetS " ^ string_of_int cls
+  | IssetS -> "IssetS"
   | EmptyL id -> "EmptyL " ^ string_of_local_id id
   | EmptyG -> "EmptyG"
-  | EmptyS cls -> "EmptyS " ^ string_of_int cls
+  | EmptyS -> "EmptyS"
   | IsTypeC op -> "IsTypeC " ^ string_of_istype_op op
   | IsTypeL (id, op) ->
     "IsTypeL " ^ string_of_local_id id ^ " " ^ string_of_istype_op op
@@ -412,9 +392,9 @@ let string_of_base x =
     sep ["BaseGC"; string_of_stack_index si; MemberOpMode.to_string m]
   | BaseGL (id, m) ->
     sep ["BaseGL"; string_of_local_id id; MemberOpMode.to_string m]
-  | BaseSC (si, id, m) ->
+  | BaseSC (si, si2, m) ->
     sep ["BaseSC";
-         string_of_stack_index si; string_of_classref id; MemberOpMode.to_string m]
+         string_of_stack_index si; string_of_stack_index si2; MemberOpMode.to_string m]
   | BaseL (lid, m) ->
     sep ["BaseL"; string_of_local_id lid; MemberOpMode.to_string m]
   | BaseC (si, m) ->
@@ -429,14 +409,8 @@ let string_of_final instruction =
   | QueryM (n, op, mk) ->
     sep ["QueryM";
       string_of_int n; QueryOp.to_string op; string_of_member_key mk]
-  | VGetM (n, mk) ->
-    sep ["VGetM";
-      string_of_int n; string_of_member_key mk]
   | UnsetM (n, mk) ->
     sep ["UnsetM";
-      string_of_int n; string_of_member_key mk]
-  | BindM (n, mk) ->
-    sep ["BindM";
       string_of_int n; string_of_member_key mk]
   | SetM (i, mk) ->
     sep ["SetM";
@@ -466,44 +440,68 @@ let string_of_call instruction =
     sep ["FPushFunc"; string_of_int n; string_of_param_locations pl]
   | FPushFuncD (n, id) ->
     sep ["FPushFuncD"; string_of_int n; string_of_function_id id]
-  | FPushFuncU (n, id1, id2) ->
-    sep ["FPushFuncU"; string_of_int n; string_of_function_id id1; SU.quote_string id2]
-  | FPushObjMethod (n, nf, pl) ->
-    sep ["FPushObjMethod"; string_of_int n; string_of_null_flavor nf; string_of_param_locations pl]
-  | FPushObjMethodD (n, id, nf) ->
-    sep ["FPushObjMethodD";
-      string_of_int n; string_of_method_id id; string_of_null_flavor nf]
-  | FPushClsMethod (n, id, pl) ->
-    sep ["FPushClsMethod"; string_of_int n; string_of_classref id; string_of_param_locations pl]
-  | FPushClsMethodD (n, id, cid) ->
-    sep ["FPushClsMethodD";
-      string_of_int n;
-      string_of_method_id id; string_of_class_id cid]
-  | FPushClsMethodS (n, r) ->
-     sep ["FPushClsMethodS";
-          string_of_int n;
-          SpecialClsRef.to_string r]
-  | FPushClsMethodSD (n, r, id) ->
-     sep ["FPushClsMethodSD";
-          string_of_int n;
-          SpecialClsRef.to_string r;
-          string_of_method_id id]
-  | NewObj (id, op) ->
-    sep ["NewObj"; string_of_int id; string_of_has_generics_op op]
+  | FPushFuncRD (n, id) ->
+    sep ["FPushFuncRD"; string_of_int n; string_of_function_id id]
+  | NewObj -> "NewObj"
+  | NewObjR -> "NewObjR"
   | NewObjD cid ->
     sep ["NewObjD"; string_of_class_id cid]
-  | NewObjI id ->
-    sep ["NewObjI"; string_of_classref id]
+  | NewObjRD cid ->
+    sep ["NewObjRD"; string_of_class_id cid]
   | NewObjS r ->
     sep ["NewObjS"; SpecialClsRef.to_string r]
-  | FPushCtor n ->
-    sep ["FPushCtor"; string_of_int n]
-  | FCall (fcall_args, c, f) ->
-    sep ["FCall";
-      string_of_fcall_args fcall_args;
-      string_of_class_id c; string_of_function_id f]
-  | FCallBuiltin (n1, n2, id) ->
-    sep ["FCallBuiltin"; string_of_int n1; string_of_int n2; SU.quote_string id]
+  | FCall fcall_args ->
+    sep ["FCall"; string_of_fcall_args fcall_args; "\"\""; "\"\"" ]
+  | FCallBuiltin (n1, n2, n3, id) ->
+    sep ["FCallBuiltin"; string_of_int n1; string_of_int n2; string_of_int n3;
+         SU.quote_string id]
+  | FCallClsMethod (fcall_args, pl) ->
+    sep [
+      "FCallClsMethod"; string_of_fcall_args fcall_args; "\"\"";
+      string_of_param_locations pl
+    ]
+  | FCallClsMethodD (fcall_args, cid, mid) ->
+    sep [
+      "FCallClsMethodD"; string_of_fcall_args fcall_args; "\"\"";
+      string_of_class_id cid; string_of_method_id mid
+    ]
+  | FCallClsMethodRD (fcall_args, cid, mid) ->
+    sep [
+      "FCallClsMethodRD"; string_of_fcall_args fcall_args; "\"\"";
+      string_of_class_id cid; string_of_method_id mid
+    ]
+  | FCallClsMethodS (fcall_args, r) ->
+    sep [
+      "FCallClsMethodS"; string_of_fcall_args fcall_args; "\"\"";
+      SpecialClsRef.to_string r
+    ]
+  | FCallClsMethodSD (fcall_args, r, mid) ->
+    sep [
+      "FCallClsMethodSD"; string_of_fcall_args fcall_args; "\"\"";
+      SpecialClsRef.to_string r; string_of_method_id mid
+    ]
+  | FCallClsMethodSRD (fcall_args, r, mid) ->
+    sep [
+      "FCallClsMethodSRD"; string_of_fcall_args fcall_args; "\"\"";
+      SpecialClsRef.to_string r; string_of_method_id mid
+    ]
+  | FCallCtor fcall_args ->
+    sep ["FCallCtor"; string_of_fcall_args fcall_args; "\"\""]
+  | FCallObjMethod (fcall_args, nf, pl) ->
+    sep [
+      "FCallObjMethod"; string_of_fcall_args fcall_args; "\"\"";
+      string_of_null_flavor nf; string_of_param_locations pl
+    ]
+  | FCallObjMethodD (fcall_args, nf, id) ->
+    sep [
+      "FCallObjMethodD"; string_of_fcall_args fcall_args; "\"\"";
+      string_of_null_flavor nf; string_of_method_id id
+    ]
+  | FCallObjMethodRD (fcall_args, nf, id) ->
+    sep [
+      "FCallObjMethodRD"; string_of_fcall_args fcall_args; "\"\"";
+      string_of_null_flavor nf; string_of_method_id id
+    ]
 
 let string_of_barethis_op i =
   match i with
@@ -520,30 +518,22 @@ let string_of_misc instruction =
   match instruction with
     | This -> "This"
     | BareThis op -> sep ["BareThis"; string_of_barethis_op op]
-    | Self id -> sep ["Self"; string_of_classref id]
-    | Parent id -> sep ["Parent"; string_of_classref id]
-    | LateBoundCls id -> sep ["LateBoundCls"; string_of_classref id]
-    | ClsRefName id -> sep ["ClsRefName"; string_of_classref id]
-    | ReifiedName (n, name) ->
-      sep ["ReifiedName"; string_of_int n; SU.quote_string name]
-    | RecordReifiedGeneric n -> sep ["RecordReifiedGeneric"; string_of_int n]
+    | Self -> "Self"
+    | Parent -> "Parent"
+    | LateBoundCls -> "LateBoundCls"
+    | ClassName -> "ClassName"
+    | ReifiedName name -> sep ["ReifiedName"; SU.quote_string name]
+    | RecordReifiedGeneric-> "RecordReifiedGeneric"
     | CheckReifiedGenericMismatch -> "CheckReifiedGenericMismatch"
     | VerifyParamType id -> sep ["VerifyParamType"; string_of_param_id id]
     | VerifyParamTypeTS id -> sep ["VerifyParamTypeTS"; string_of_param_id id]
     | VerifyOutType id -> sep ["VerifyOutType"; string_of_param_id id]
     | VerifyRetTypeC -> "VerifyRetTypeC"
     | VerifyRetTypeTS -> "VerifyRetTypeTS"
-    | Catch -> "Catch"
     | ChainFaults -> "ChainFaults"
     | CheckThis -> "CheckThis"
     | CGetCUNop -> "CGetCUNop"
     | UGetCUNop -> "UGetCUNop"
-    | StaticLocCheck (local, text) ->
-      sep ["StaticLocCheck"; string_of_local_id local; "\"" ^ text ^ "\""]
-    | StaticLocDef (local, text) ->
-      sep ["StaticLocDef"; string_of_local_id local; "\"" ^ text ^ "\""]
-    | StaticLocInit (local, text) ->
-      sep ["StaticLocInit"; string_of_local_id local; "\"" ^ text ^ "\""]
     | MemoGet (label, Some (Local.Unnamed first, local_count)) ->
       Printf.sprintf "MemoGet %s L:%d+%d"
                      (string_of_label label) first local_count
@@ -573,6 +563,7 @@ let string_of_misc instruction =
     | Idx -> "Idx"
     | ArrayIdx -> "ArrayIdx"
     | InitThisLoc id -> sep ["InitThisLoc"; string_of_local_id id]
+    | FuncNumArgs -> "FuncNumArgs"
     | AKExists -> "AKExists"
     | OODeclExists ck -> sep ["OODeclExists"; string_of_class_kind ck]
     | Silence (local, op) ->
@@ -583,6 +574,7 @@ let string_of_misc instruction =
       sep ["AssertRATStk"; string_of_int n; s]
     | NativeImpl -> "NativeImpl"
     | BreakTraceHint -> "BreakTraceHint"
+    | LockObj -> "LockObj"
 
 let iterator_instruction_name_prefix instruction =
   let iterator_instruction_name =
@@ -671,12 +663,6 @@ let string_of_iterator instruction =
 
 let string_of_try instruction =
   match instruction with
-  | TryFaultBegin label ->
-    ".try_fault " ^ (string_of_label label) ^ " {"
-  | TryCatchLegacyBegin label ->
-    ".try_catch " ^ (string_of_label label) ^ " {"
-  | TryFaultEnd
-  | TryCatchLegacyEnd -> "}"
   | TryCatchBegin -> ".try {"
   | TryCatchMiddle -> "} .catch {"
   | TryCatchEnd -> "}"
@@ -714,6 +700,7 @@ let string_of_include_eval_define = function
     sep ["AliasCls"; SU.quote_string c1; SU.quote_string c2]
   | DefCls id -> sep ["DefCls"; string_of_class_num id]
   | DefClsNop id -> sep ["DefClsNop"; string_of_class_num id]
+  | DefRecord id -> sep ["DefRecord"; string_of_class_num id]
   | DefCns id -> sep ["DefCns"; string_of_const_id id]
   | DefTypeAlias id -> sep ["DefTypeAlias"; string_of_typedef_num id]
 
@@ -760,19 +747,13 @@ let adjusted_indent instruction indent =
   match instruction with
   | IComment _ -> 0
   | ILabel _
-  | ITry TryFaultEnd
-  | ITry TryCatchLegacyEnd
   | ITry TryCatchMiddle
   | ITry TryCatchEnd -> indent - 2
   | _ -> indent
 
 let new_indent instruction indent =
   match instruction with
-  | ITry (TryFaultBegin _)
-  | ITry (TryCatchLegacyBegin _)
   | ITry TryCatchBegin -> indent + 2
-  | ITry TryFaultEnd
-  | ITry TryCatchLegacyEnd
   | ITry TryCatchEnd -> indent - 2
   | _ -> indent
 
@@ -836,11 +817,12 @@ let string_of_type_info_option tio =
   | Some ti -> string_of_type_info ti ^ " "
 
 type default_value_printing_env = {
-  codegen_env      : Emit_env.t option;
-  in_xhp: bool;
+  codegen_env : Emit_env.t option;
+  in_xhp : bool;
 }
 
-let rec string_of_afield ~env = function
+let rec string_of_afield ~env af =
+  match af with
   | A.AFvalue e ->
     string_of_param_default_value ~env e
   | A.AFkvalue (k, v) ->
@@ -852,51 +834,52 @@ and string_of_afield_list ~env afl =
   then ""
   else String.concat ~sep:", " @@ List.map ~f:(string_of_afield ~env) afl
 
-and shape_field_name_to_expr = function
-  | A.SFlit_int (pos, s) -> (pos, A.Int s)
-  | A.SFlit_str (pos, s)
-  | A.SFclass_const (_, (pos, s)) -> (pos, A.String s)
+and shape_field_name_to_expr sfn =
+  match sfn with
+  | Ast_defs.SFlit_int (pos, s) -> Tast_annotate.with_pos pos (A.Int s)
+  | Ast_defs.SFlit_str (pos, s)
+  | Ast_defs.SFclass_const (_, (pos, s)) -> Tast_annotate.with_pos pos (A.String s)
 
 and string_of_bop = function
-  | A.Plus -> "+"
-  | A.Minus -> "-"
-  | A.Star -> "*"
-  | A.Slash -> "/"
-  | A.Eqeq -> "=="
-  | A.Eqeqeq -> "==="
-  | A.Starstar -> "**"
-  | A.Eq None -> "="
-  | A.Eq (Some bop) -> "=" ^ string_of_bop bop
-  | A.Ampamp -> "&&"
-  | A.Barbar -> "||"
-  | A.Lt -> "<"
-  | A.Lte -> "<="
-  | A.Cmp -> "<=>"
-  | A.Gt -> ">"
-  | A.Gte -> ">="
-  | A.Dot -> "."
-  | A.Amp -> "&"
-  | A.Bar -> "|"
-  | A.Ltlt -> "<<"
-  | A.Gtgt -> ">>"
-  | A.Percent -> "%"
-  | A.Xor -> "^"
-  | A.LogXor -> "xor"
-  | A.Diff -> "!="
-  | A.Diff2 -> "!=="
-  | A.QuestionQuestion -> "\\?\\?"
+  | Ast_defs.Plus -> "+"
+  | Ast_defs.Minus -> "-"
+  | Ast_defs.Star -> "*"
+  | Ast_defs.Slash -> "/"
+  | Ast_defs.Eqeq -> "=="
+  | Ast_defs.Eqeqeq -> "==="
+  | Ast_defs.Starstar -> "**"
+  | Ast_defs.Eq None -> "="
+  | Ast_defs.Eq (Some bop) -> "=" ^ string_of_bop bop
+  | Ast_defs.Ampamp -> "&&"
+  | Ast_defs.Barbar -> "||"
+  | Ast_defs.Lt -> "<"
+  | Ast_defs.Lte -> "<="
+  | Ast_defs.Cmp -> "<=>"
+  | Ast_defs.Gt -> ">"
+  | Ast_defs.Gte -> ">="
+  | Ast_defs.Dot -> "."
+  | Ast_defs.Amp -> "&"
+  | Ast_defs.Bar -> "|"
+  | Ast_defs.Ltlt -> "<<"
+  | Ast_defs.Gtgt -> ">>"
+  | Ast_defs.Percent -> "%"
+  | Ast_defs.Xor -> "^"
+  | Ast_defs.LogXor -> "xor"
+  | Ast_defs.Diff -> "!="
+  | Ast_defs.Diff2 -> "!=="
+  | Ast_defs.QuestionQuestion -> "\\?\\?"
 
 and string_of_uop = function
-  | A.Utild -> "~"
-  | A.Unot -> "!"
-  | A.Uplus -> "+"
-  | A.Uminus -> "-"
-  | A.Uincr -> "++"
-  | A.Udecr -> "--"
-  | A.Uref -> "&"
-  | A.Usilence -> "@"
-  | A.Upincr
-  | A.Updecr
+  | Ast_defs.Utild -> "~"
+  | Ast_defs.Unot -> "!"
+  | Ast_defs.Uplus -> "+"
+  | Ast_defs.Uminus -> "-"
+  | Ast_defs.Uincr -> "++"
+  | Ast_defs.Udecr -> "--"
+  | Ast_defs.Uref -> "&"
+  | Ast_defs.Usilence -> "@"
+  | Ast_defs.Upincr
+  | Ast_defs.Updecr
     -> failwith "string_of_uop - should have been captures earlier"
 
 and string_of_hint ~ns h =
@@ -904,16 +887,16 @@ and string_of_hint ~ns h =
     Emit_type_hint.fmt_hint
       ~tparams:[]
       ~namespace:Namespace_env.empty_with_default_popt
-      h
-  in
+      h in
   let h = if ns then h else SU.strip_ns h in
   Php_escaping.escape h
 
-and string_of_import_flavor = function
-  | A.Include -> "include"
-  | A.Require -> "require"
-  | A.IncludeOnce -> "include_once"
-  | A.RequireOnce -> "require_once"
+and string_of_import_flavor import_flavor =
+  match import_flavor with
+  | Aast.Include -> "include"
+  | Aast.Require -> "require"
+  | Aast.IncludeOnce -> "include_once"
+  | Aast.RequireOnce -> "require_once"
 
 and string_of_is_variadic b =
   if b then "..." else ""
@@ -922,44 +905,44 @@ and string_of_is_reference b =
 
 and string_of_fun ~env f use_list =
   let string_of_args p =
-    match snd @@ p.A.param_id with
-    | "" | "..." -> None
+    match p.A.param_name with
+    | ""
+    | "..." -> None
     | name ->
-    let inout = if p.A.param_callconv = Some A.Pinout then "inout " else "" in
-    let hint =
-      Option.value_map p.A.param_hint ~default:"" ~f:(string_of_hint ~ns:true)
-    in
-    let default_val =
-      Option.value_map
-        p.A.param_expr
-        ~default:""
-        ~f:(fun e -> " = " ^ (string_of_param_default_value ~env e)) in
-    let param_text =
-      inout ^ string_of_is_variadic p.A.param_is_variadic ^ hint in
-    let param_text =
-      if String.length param_text = 0
-      then param_text
-      else param_text ^ " " in
-    let param_text =
-      param_text ^ string_of_is_reference p.A.param_is_reference ^ name in
-    Some (param_text ^ default_val)
-  in
+      let inout = if p.A.param_callconv = Some Ast_defs.Pinout then "inout " else "" in
+      let hint =
+        Option.value_map p.A.param_hint ~default:"" ~f:(string_of_hint ~ns:true) in
+      let default_val =
+        Option.value_map
+          p.A.param_expr
+          ~default:""
+          ~f:(fun e -> " = " ^ (string_of_param_default_value ~env e)) in
+      let param_text =
+        inout ^ string_of_is_variadic p.A.param_is_variadic ^ hint in
+      let param_text =
+        if String.length param_text = 0
+        then param_text
+        else param_text ^ " " in
+      let param_text =
+        param_text ^ string_of_is_reference p.A.param_is_reference ^ name in
+      Some (param_text ^ default_val) in
   let args = String.concat ~sep:", " @@ List.filter_map ~f:string_of_args f.A.f_params in
-  let use_list_helper ((_, id), b) = (if b then "&" else "") ^ id in
-  let use_statement = match use_list with
+  let use_list_helper (_, id) = Local_id.get_name id in
+  let use_statement =
+    match use_list with
     | [] -> ""
     | _ ->
       "use ("
       ^ (String.concat ~sep:", " @@ List.map ~f:use_list_helper use_list)
-      ^ ") "
-  in
+      ^ ") " in
   (if f.A.f_static then "static " else "")
-  ^ (if f.A.f_fun_kind = A.FAsync || f.A.f_fun_kind = A.FAsyncGenerator then "async " else "")
+  ^ (if f.A.f_fun_kind = Ast_defs.FAsync || f.A.f_fun_kind = Ast_defs.FAsyncGenerator then "async " else "")
   ^ "function ("
   ^ args
   ^ ") "
   ^ use_statement
-  ^ (string_of_statement ~env ~indent:"" (Pos.none, A.Block f.A.f_body))
+  ^ (string_of_statement ~env ~indent:""
+      (Pos.none, A.Block f.A.f_body.A.fb_ast))
 
 and string_of_optional_expr ~env e =
   string_of_optional_value (string_of_expression ~env) e
@@ -970,11 +953,12 @@ and string_of_block_ ~env ~start_indent ~block_indent ~end_indent block =
       List.map ~f:(string_of_statement ~env ~indent:block_indent) block) in
   start_indent ^ "{\\n" ^ lines ^ end_indent ^ "}\\n"
 
-and string_of_block ~env ~indent (block:A.stmt list) =
+and string_of_block ~env ~indent block =
   match block with
-  | [] | [_, A.Noop] -> ""
+  | []
+  | [(_, A.Noop)] -> ""
   | [(_, A.Block ([_] as block))]
-  | (_::_::_ as block)->
+  | (_::_::_ as block) ->
     string_of_block_
       ~env
       ~start_indent:""
@@ -984,17 +968,17 @@ and string_of_block ~env ~indent (block:A.stmt list) =
   | [stmt] ->
     string_of_statement ~env ~indent:"" stmt
 
-and string_of_statement ~env ~indent ((_, stmt_) : A.stmt) =
+and string_of_statement ~env ~indent (_p, stmt_) =
   let text, is_single_line =
     match stmt_ with
     | A.Return e ->
       "return" ^ (string_of_optional_expr ~env e), true
     | A.Expr e ->
       string_of_expression ~env e, true
-    | A.Break level_opt ->
-      "break" ^ (string_of_optional_expr ~env level_opt), true
-    | A.Continue level_opt ->
-      "continue" ^ (string_of_optional_expr ~env level_opt), true
+    | A.Break ->
+      "break", true
+    | A.Continue ->
+      "continue", true
     | A.Throw e ->
       "throw " ^ (string_of_expression ~env e), true
     | A.Block block ->
@@ -1014,7 +998,6 @@ and string_of_statement ~env ~indent ((_, stmt_) : A.stmt) =
         ~indent
         body in
       header_text ^ body_text, false
-
     | A.If (cond, then_block, else_block) ->
       let header_text =
         indent ^ "if (" ^ (string_of_expression ~env cond) ^ ") " in
@@ -1026,11 +1009,12 @@ and string_of_statement ~env ~indent ((_, stmt_) : A.stmt) =
         ~env
         ~indent
         else_block in
-      header_text ^ then_text ^
-      (if String.length else_text <> 0 then " else " ^ else_text else ""),
+      header_text
+      ^ then_text
+      ^ (if String.length else_text <> 0 then " else " ^ else_text else ""),
       false
     | A.Noop -> "", false
-    | _ -> (* TODO(T29869930) *) "NYI: Default value printing", false in
+    | _ -> (* TODO(T29869930) *) "TODO Unimplemented NYI: Default value printing", false in
   let text =
     if is_single_line then indent ^ text ^ ";\\n"
     else text in
@@ -1041,15 +1025,15 @@ and string_of_expression ~env e =
 
 and string_of_xml ~env (_, id) attributes children =
   let env = { env with in_xhp = true } in
-  let p = Pos.none in
   let name = SU.Xhp.mangle id in
   let _, attributes =
-    List.fold_right ~f:(string_of_xhp_attr p) attributes ~init:(0, [])
-  in
-  let attributes = string_of_param_default_value ~env (p, A.Darray (None, attributes)) in
-  let children = string_of_param_default_value ~env
-   (p, A.Varray (None, children))
-  in
+    List.fold_right ~f:string_of_xhp_attr attributes ~init:(0, []) in
+  let attributes =
+    string_of_param_default_value ~env
+      (Tast_annotate.make (A.Darray (None, attributes))) in
+  let children =
+    string_of_param_default_value ~env
+      (Tast_annotate.make (A.Varray (None, children))) in
   "new "
   ^ name
   ^ "("
@@ -1058,84 +1042,81 @@ and string_of_xml ~env (_, id) attributes children =
   ^ children
   ^ ", __FILE__, __LINE__)"
 
-and string_of_xhp_attr p attr (spread_id, attrs) = match attr with
-  | A.Xhp_simple ((_, s), e) -> (spread_id, ((p, A.String s), e)::attrs)
+and string_of_xhp_attr attr (spread_id, attrs) =
+  match attr with
+  | A.Xhp_simple ((_, s), e) ->
+    (spread_id, (Tast_annotate.make (A.String s), e) :: attrs)
   | A.Xhp_spread e ->
     let s = "...$" ^ (string_of_int spread_id) in
-    (spread_id + 1, ((p, A.String s), e)::attrs)
+    (spread_id + 1, (Tast_annotate.make (A.String s), e) :: attrs)
 
 and string_of_param_default_value ~env expr =
   let p = Pos.none in
   let middle_aux e1 s e2 =
     let e1 = string_of_param_default_value ~env e1 in
     let e2 = string_of_param_default_value ~env e2 in
-    e1 ^ s ^ e2
-  in
+    e1 ^ s ^ e2 in
   let fmt_class_name ~is_class_constant cn =
-    let cn = if SU.Xhp.is_xhp (Utils.strip_ns cn)
-    then SU.Xhp.mangle cn else cn in
-    let cn = (Php_escaping.escape (SU.strip_global_ns cn)) in
-    if is_class_constant then "\\\\" ^ cn else cn in
+    let cn =
+      if SU.Xhp.is_xhp (Utils.strip_ns cn)
+      then SU.Xhp.mangle cn else cn in
+      let cn = (Php_escaping.escape (SU.strip_global_ns cn)) in
+      if is_class_constant then "\\\\" ^ cn else cn in
   let get_special_class_name ~env ~is_class_constant id =
     let scope = match env with
       | None -> Ast_scope.Scope.toplevel
       | Some env -> Emit_env.get_scope env in
     let module ACE = Ast_class_expr in
     let e =
-      let p0 = Pos.none in
-      (p0, (A.Id (p0, id))) in
-    fmt_class_name ~is_class_constant @@
+      Tast_annotate.make (A.Id (p, id)) in
+    let class_name =
       match ACE.expr_to_class_expr ~check_traits:true ~resolve_self:true scope e with
       | ACE.Class_id (_, name) -> name
-      | _ -> id
-  in
+      | _ -> id in
+    fmt_class_name ~is_class_constant class_name in
   let get_class_name_from_id ~env ~should_format ~is_class_constant id =
     if id = SN.Classes.cSelf || id = SN.Classes.cParent || id = SN.Classes.cStatic
     then get_special_class_name ~env ~is_class_constant id
     else
-    let id =
-      match env with
-      | Some env ->
-        Hhbc_id.Class.to_raw_string @@ fst @@
-          Hhbc_id.Class.elaborate_id
-            (Emit_env.get_namespace env) (p, id)
-      | _ -> id
-    in
-    if should_format then fmt_class_name ~is_class_constant id else id
-  in
-  let handle_possible_colon_colon_class_expr ~env ~is_array_get = function
-    | _, A.Class_const ((_, A.Id (p, s1)), (_, s2))
-      when SU.is_class s2 && not
-        (SU.is_self s1 || SU.is_parent s1 || SU.is_static s1) ->
-
-      let s1 = get_class_name_from_id
-        ~env:env.codegen_env ~should_format:false ~is_class_constant:false s1 in
-      let e =
-        (fst expr, if is_array_get then A.Id (p, s1) else A.String s1) in
-      Some (string_of_param_default_value ~env e)
-    | _ -> None
-  in
-  let escape_char_for_printing = function
+      let id =
+        match env with
+        | Some env ->
+          Hhbc_id.Class.to_raw_string @@
+            Hhbc_id.Class.elaborate_id
+              (Emit_env.get_namespace env) (p, id)
+        | _ -> id in
+      if should_format then fmt_class_name ~is_class_constant id else id in
+  let string_of_class_get_expr ~env cge =
+    match cge with
+    | A.CGstring (_, litstr) -> Php_escaping.escape litstr
+    | A.CGexpr e -> string_of_param_default_value ~env e in
+  let handle_possible_colon_colon_class_expr ~env ~is_array_get e =
+    match e with
+    | _, A.Class_const ((_, A.CIexpr (_, A.Id (p, s1))), (_, s2))
+      when SU.is_class s2 && not (SU.is_self s1 || SU.is_parent s1 || SU.is_static s1) ->
+        let s1 = get_class_name_from_id
+          ~env:env.codegen_env ~should_format:false ~is_class_constant:false s1 in
+        let e = (fst expr, if is_array_get then A.Id (p, s1) else A.String s1) in
+        Some (string_of_param_default_value ~env e)
+    | _ -> None in
+  let escape_char_for_printing chr =
+    match chr with
     | '\\' | '$' | '"' -> "\\\\"
     | '\n' | '\r' | '\t' -> "\\"
     | c when not (Php_escaping.is_lit_printable c) -> "\\"
-    | _ -> ""
-  in
+    | _ -> "" in
   let escape_fn c = escape_char_for_printing c ^ Php_escaping.escape_char c in
   match snd expr with
   | A.Id (p, id) ->
-    let id = match env.codegen_env with
+    let id =
+      match env.codegen_env with
       | Some env when SU.has_ns id ->
-        let id, _, _ =
-          Hhbc_id.Const.elaborate_id
-            (Emit_env.get_namespace env) (p, id)
-        in
+        let id =
+          Hhbc_id.Const.elaborate_id (Emit_env.get_namespace env) (p, id) in
         "\\" ^ Hhbc_id.Const.to_raw_string id
-      | _ -> id
-    in
+      | _ -> id in
     Php_escaping.escape id
-  | A.PU_atom (_, litstr)
-  | A.Lvar (_, litstr) -> Php_escaping.escape litstr
+  | A.Lvar (_, litstr) -> Php_escaping.escape (Local_id.get_name litstr)
   | A.Float litstr -> SU.Float.with_scientific_notation litstr
   | A.Int litstr -> SU.Integer.to_decimal litstr
   | A.String litstr ->
@@ -1153,77 +1134,89 @@ and string_of_param_default_value ~env expr =
     name ^ "[" ^ string_of_afield_list ~env afl ^ "]"
   | A.Collection ((_, name), _, afl) ->
     let name = SU.Types.fix_casing @@ SU.strip_ns name in
-    begin match name with
-    | "Set" | "Pair" | "Vector" | "Map"
-    | "ImmSet" | "ImmVector" | "ImmMap" ->
-      let elems = string_of_afield_list ~env afl in
-      let elems =
-        if String.length elems <> 0 then " " ^ elems ^ " " else elems in
-      "HH\\\\" ^ name ^ " {" ^ elems ^ "}"
-    | _ ->
-      failwith ("Default value for an unknown collection - " ^ name)
+    begin
+      match name with
+      | "Set" | "Pair" | "Vector" | "Map"
+      | "ImmSet" | "ImmVector" | "ImmMap" ->
+        let elems = string_of_afield_list ~env afl in
+        let elems =
+          if String.length elems <> 0 then " " ^ elems ^ " " else elems in
+        "HH\\\\" ^ name ^ " {" ^ elems ^ "}"
+      | _ ->
+        failwith ("Default value for an unknown collection - " ^ name)
     end
   | A.Shape fl ->
     let fl =
       List.map
-        ~f:(fun (f_name, e) ->
-          (shape_field_name_to_expr f_name, e))
-        fl
-    in
+        ~f:(fun (f_name, e) -> (shape_field_name_to_expr f_name, e))
+        fl in
     string_of_param_default_value ~env (fst expr, A.Darray (None, fl))
   | A.Binop (bop, e1, e2) ->
     let bop = string_of_bop bop in
     let e1 = string_of_param_default_value ~env e1 in
     let e2 = string_of_param_default_value ~env e2 in
     e1 ^ " " ^ bop ^ " " ^ e2
-  | A.New (e, _, es, ues)
-  | A.Call (e, _, es, ues) ->
+  | A.New ((_, A.CIexpr e), _, es, ues, _)
+  | A.Call (_, e, _, es, ues) ->
     let e = String_utils.lstrip (string_of_param_default_value ~env e) "\\\\" in
     let es = List.map ~f:(string_of_param_default_value ~env) (es @ ues) in
-    let prefix = match snd expr with A.New (_, _, _, _) -> "new " | _ -> "" in
+    let prefix =
+      match snd expr with
+      | A.New (_, _, _, _, _) -> "new "
+      | _ -> "" in
     prefix
     ^ e
     ^ "("
     ^ String.concat ~sep:", " es
     ^ ")"
-  | A.NewAnonClass (es, ues, _) ->
-    let es = List.map ~f:(string_of_param_default_value ~env) (es @ ues) in
-    "new class"
-    ^ "("
-    ^ String.concat ~sep:", " es
-    ^ ")"
-  | A.Class_get (e1, e2) ->
-    let s1 = match snd e1 with
-      | A.Id (_, s1) ->
+  | A.Record (e, _, es) ->
+    let es = List.map ~f:(fun (e1, e2) -> A.AFkvalue (e1, e2)) es in
+    let e =
+      match e with
+      | (_, A.CIexpr e) ->
+        String_utils.lstrip (string_of_param_default_value ~env e) "\\\\"
+      | _ -> failwith "Expected CIexpr in ast_to_aast" in
+    e ^ (string_of_afield_list ~env es)
+  | A.Class_get (cid, cge) ->
+    let s1 =
+      match snd cid with
+      | A.CIexpr (_, A.Id (_, s1)) ->
         get_class_name_from_id
           ~env:env.codegen_env ~should_format:true ~is_class_constant:false s1
-      | _ -> string_of_param_default_value ~env e1 in
-    let s2 = string_of_param_default_value ~env e2 in
+      | A.CIexpr e1 -> string_of_param_default_value ~env e1
+      | _ -> failwith "TODO Unimplemented unexpected non-CIexpr" in
+    let s2 = string_of_class_get_expr ~env cge in
     s1 ^ "::" ^ s2
-  | A.Class_const (e1, (_, s2)) ->
+  | A.Class_const ((_, A.CIexpr e1), (_, s2)) ->
     let cexpr_o =
       handle_possible_colon_colon_class_expr ~env ~is_array_get:false expr in
-    begin match snd e1, cexpr_o with
-    | _, Some cexpr_o -> cexpr_o
-    | A.Id (_, s1), _ ->
-      let s1 = get_class_name_from_id
-        ~env:env.codegen_env ~should_format:true ~is_class_constant:true s1 in
-      s1 ^ "::" ^ s2
-    | _ ->
-      let s1 = string_of_param_default_value ~env e1 in
-      s1 ^ "::" ^ s2
+    begin
+      match snd e1, cexpr_o with
+      | _, Some cexpr_o -> cexpr_o
+      | A.Id (_, s1), _ ->
+        let s1 = get_class_name_from_id
+          ~env:env.codegen_env ~should_format:true ~is_class_constant:true s1 in
+        s1 ^ "::" ^ s2
+      | _ ->
+        let s1 = string_of_param_default_value ~env e1 in
+        s1 ^ "::" ^ s2
     end
-  | A.Unop (uop, e) -> begin
-    let e = string_of_param_default_value ~env e in
-    match uop with
-    | A.Upincr -> e ^ "++"
-    | A.Updecr -> e ^ "--"
-    | _ -> string_of_uop uop ^ e
+  | A.Class_const _ -> failwith "TODO: Only expected CIexpr in class_const"
+  | A.Unop (uop, e) ->
+    begin
+      let e = string_of_param_default_value ~env e in
+      match uop with
+      | Ast_defs.Upincr -> e ^ "++"
+      | Ast_defs.Updecr -> e ^ "--"
+      | _ -> string_of_uop uop ^ e
     end
   | A.Obj_get (e1, e2, f) ->
     let e1 = string_of_param_default_value ~env e1 in
     let e2 = string_of_param_default_value ~env e2 in
-    let f = match f with A.OG_nullthrows -> "->" | A.OG_nullsafe -> "\\?->" in
+    let f =
+      match f with
+      | Aast.OG_nullthrows -> "->"
+      | Aast.OG_nullsafe -> "\\?->" in
     e1 ^ f ^ e2
   | A.Clone e -> "clone " ^ string_of_param_default_value ~env e
   | A.Array_get (e, eo) ->
@@ -1236,29 +1229,30 @@ and string_of_param_default_value ~env expr =
                   ~env ~is_array_get:true e in
               match cexpr_o with
               | Some s -> s
-              | None -> string_of_param_default_value ~env e)
-    in
+              | None -> string_of_param_default_value ~env e) in
     e ^ "[" ^ eo ^ "]"
   | A.String2 es ->
-    String.concat ~sep:" . " @@ List.map ~f:(string_of_param_default_value ~env) es
+    String.concat ~sep:" . " @@
+      List.map ~f:(string_of_param_default_value ~env) es
   | A.PrefixedString (name, e) ->
-    String.concat ~sep:" . " @@ [name; string_of_param_default_value ~env e]
+    String.concat ~sep:" . " @@
+      [name; string_of_param_default_value ~env e]
   | A.Eif (cond, etrue, efalse) ->
     let cond = string_of_param_default_value ~env cond in
     let etrue =
-      Option.value_map etrue ~default:"" ~f:(string_of_param_default_value ~env)
-    in
+      Option.value_map
+        etrue
+        ~default:""
+        ~f:(string_of_param_default_value ~env) in
     let efalse = string_of_param_default_value ~env efalse in
     cond ^ " \\? " ^ etrue ^ " : " ^ efalse
-  | A.Unsafeexpr e -> string_of_param_default_value ~env  e
   | A.BracedExpr e -> "{" ^ string_of_param_default_value ~env e ^ "}"
   | A.ParenthesizedExpr e -> "(" ^ string_of_param_default_value ~env e ^ ")"
   | A.Cast (h, e) ->
-    let h = string_of_hint ~ns: false h in
+    let h = string_of_hint ~ns:false h in
     let e = string_of_param_default_value ~env e in
     "(" ^ h ^ ")" ^ e
-  | A.Pipe (e1, e2) -> middle_aux e1 " |> " e2
-  | A.InstanceOf (e1, e2) -> middle_aux e1 " instanceof " e2
+  | A.Pipe (_, e1, e2) -> middle_aux e1 " |> " e2
   | A.Is (e, h) ->
     let e = string_of_param_default_value ~env e in
     let h = string_of_hint ~ns:true h in
@@ -1294,12 +1288,15 @@ and string_of_param_default_value ~env expr =
   | A.Efun (f, use_list) -> string_of_fun ~env f use_list
   | A.Omitted -> ""
   | A.Lfun _ ->
-    failwith "expected Lfun to be converted to Efun during closure conversion"
+     failwith "expected Lfun to be converted to Efun during closure conversion string_of_param_default_value"
   | A.Suspend _
   | A.Callconv _
   | A.Expr_list _ -> failwith "illegal default value"
+  | _ -> failwith
+    "TODO Unimplemented: We are missing alot of cases in the case match. Delete this catchall"
 
-let string_of_param_default_value_option env = function
+let string_of_param_default_value_option env default_val =
+  match default_val with
   | None -> ""
   | Some (label, expr) ->
     let env = { codegen_env = env; in_xhp = false } in
@@ -1322,7 +1319,7 @@ let string_of_param env p =
   let param_type_info = Hhas_param.type_info p in
   let param_name = Hhas_param.name p in
   let param_default_value = Hhas_param.default_value p in
-    string_of_param_user_attributes p
+  string_of_param_user_attributes p
   ^ string_of_is_inout (Hhas_param.is_inout p)
   ^ string_of_is_variadic (Hhas_param.is_variadic p)
   ^ string_of_type_info_option param_type_info
@@ -1338,11 +1335,6 @@ let add_indented_line buf indent str =
   Acc.add buf "\n";
   add_indent buf indent;
   Acc.add buf str
-
-let add_num_cls_ref_slots buf indent num_cls_ref_slots =
-  if num_cls_ref_slots <> 0
-  then add_indented_line buf indent
-    (Printf.sprintf ".numclsrefslots %d;" num_cls_ref_slots)
 
 let is_bareword_char c =
   match Char.lowercase c with
@@ -1369,13 +1361,6 @@ let add_num_iters buf indent num_iters =
   then add_indented_line buf indent
     (Printf.sprintf ".numiters %d;" num_iters)
 
-let add_static_default_value_option buf indent label =
-  add_indented_line buf indent (".static " ^ label ^ ";")
-
-let add_static_values buf indent lst =
-  Hh_core.List.iter lst
-    (fun label -> add_static_default_value_option buf indent label)
-
 let add_doc buf indent doc_comment =
   match doc_comment with
   | Some cmt ->
@@ -1390,9 +1375,7 @@ let add_body buf indent body =
   if Hhas_body.is_memoize_wrapper_lsb body
   then add_indented_line buf indent ".ismemoizewrapperlsb;";
   add_num_iters buf indent (Hhas_body.num_iters body);
-  add_num_cls_ref_slots buf indent (Hhas_body.num_cls_ref_slots body);
   add_decl_vars buf indent (Hhas_body.decl_vars body);
-  add_static_values buf indent (Hhas_body.static_inits body);
   Acc.add buf "\n";
   add_instruction_list buf indent
     (Instruction_sequence.instr_seq_to_list (Hhas_body.instrs body))
@@ -1404,28 +1387,42 @@ let function_attributes f =
     then "unique" :: "builtin" :: "persistent" :: attrs else attrs in
   let attrs =
     if Emit_env.is_systemlib () ||
-         ((Hhas_attribute.has_dynamically_callable user_attrs) &&
-            not (Hhas_function.is_memoize_impl f))
-    then "dyn_callable" :: attrs else attrs
-  in
+      ((Hhas_attribute.has_dynamically_callable user_attrs) &&
+      not (Hhas_function.is_memoize_impl f))
+    then "dyn_callable" :: attrs
+    else attrs in
   let attrs =
-    if Hhas_attribute.is_reads_caller_frame user_attrs && not (Hhas_function.inout_wrapper f) then "reads_frame" :: attrs else attrs in
+    if not (Hhas_function.is_top f)
+    then "nontop" :: attrs
+    else attrs in
   let attrs =
-    if not (Hhas_function.is_top f) then "nontop" :: attrs else attrs in
+    if Hhas_function.inout_wrapper f
+    then "inout_wrapper" :: attrs
+    else attrs in
   let attrs =
-    if Hhas_function.inout_wrapper f then "inout_wrapper" :: attrs else attrs in
+    if Hhas_function.no_injection f
+    then "no_injection" :: attrs
+    else attrs in
   let attrs =
-    if Hhas_function.no_injection f then "no_injection" :: attrs else attrs in
+    if Hhas_attribute.has_provenance_skip_frame user_attrs
+    then "prov_skip_frame" :: attrs
+    else attrs in
   let attrs =
-    if Hhas_attribute.has_native user_attrs then "skip_frame" :: attrs else attrs in
+    if Hhas_attribute.has_foldable user_attrs
+    then "foldable" :: attrs
+    else attrs in
   let attrs =
-    if Hhas_attribute.has_foldable user_attrs then "foldable" :: attrs else attrs in
+    if Hhas_function.is_interceptable f
+    then "interceptable" :: attrs
+    else attrs in
   let attrs =
-    if Hhas_function.is_interceptable f then "interceptable" :: attrs else attrs in
-  let attrs = match Rx.rx_level_to_attr_string (Hhas_function.rx_level f) with
+    if Hhas_attribute.has_meth_caller user_attrs
+    then "builtin" :: "is_meth_caller" :: attrs
+    else attrs in
+  let attrs =
+    match Rx.rx_level_to_attr_string (Hhas_function.rx_level f) with
     | Some s -> s :: attrs
-    | None -> attrs
-  in
+    | None -> attrs in
   let text = String.concat ~sep:" " attrs in
   if text = "" then "" else "[" ^ text ^ "] "
 
@@ -1460,7 +1457,7 @@ let attributes_to_string attrs =
   let text = if text = "" then "" else "[" ^ text ^ "] " in
   text
 
-let method_attributes m =
+let method_attributes (m : Hhas_method.t) =
   let user_attrs = Hhas_method.attributes m in
   let attrs = Emit_adata.attributes_to_strings user_attrs in
   let is_native_opcode_impl = Hhas_attribute.is_native_opcode_impl user_attrs in
@@ -1475,19 +1472,14 @@ let method_attributes m =
   let attrs = if is_systemlib && is_native then "persistent" :: attrs else attrs in
   let attrs = if is_systemlib then "builtin" :: attrs else attrs in
   let attrs = if is_systemlib && is_native then "unique" :: attrs else attrs in
-  let attrs =
-    if Hhas_attribute.is_reads_caller_frame user_attrs && not (Hhas_method.inout_wrapper m) then "reads_frame" :: attrs else attrs in
   let attrs = if Hhas_method.inout_wrapper m then "inout_wrapper" :: attrs else attrs in
   let attrs = if Hhas_method.no_injection m then "no_injection" :: attrs else attrs in
-  let attrs = if is_systemlib && is_native then "skip_frame" :: attrs else attrs in
   let attrs =
     if Hhas_attribute.has_foldable user_attrs then "foldable" :: attrs else attrs in
   let attrs = if Hhas_method.is_abstract m then "abstract" :: attrs else attrs in
   let attrs = if Hhas_method.is_final m then "final" :: attrs else attrs in
   let attrs = if Hhas_method.is_static m then "static" :: attrs else attrs in
-  let attrs = if Hhas_method.is_public m then "public" :: attrs else attrs in
-  let attrs = if Hhas_method.is_protected m then "protected" :: attrs else attrs in
-  let attrs = if Hhas_method.is_private m then "private" :: attrs else attrs in
+  let attrs = Aast.string_of_visibility (Hhas_method.visibility m) :: attrs in
   let attrs = if Hhas_method.is_interceptable m then "interceptable" :: attrs else attrs in
   let attrs = match Rx.rx_level_to_attr_string (Hhas_method.rx_level m) with
     | Some s -> s :: attrs
@@ -1533,37 +1525,40 @@ let add_method_def buf method_def =
 let class_special_attributes c =
   let user_attrs = Hhas_class.attributes c in
   let attrs = Emit_adata.attributes_to_strings user_attrs in
-  let attrs = if Hhas_class.needs_no_reifiedinit c
-    then "noreifiedinit" :: attrs else attrs in
-  let attrs = if Hhas_class.no_dynamic_props c
-    then "no_dynamic_props" :: attrs else attrs in
   let attrs =
-    if Hhas_class.has_immutable c then "has_immutable" :: attrs else attrs in
+    if Hhas_class.needs_no_reifiedinit c
+    then "noreifiedinit" :: attrs
+    else attrs in
   let attrs =
-    if Hhas_class.is_immutable c then "is_immutable" :: attrs else attrs in
+    if Hhas_class.no_dynamic_props c
+    then "no_dynamic_props" :: attrs
+    else attrs in
+  let attrs = if Hhas_class.is_const c
+    then "is_const" :: attrs else attrs in
   let attrs =
     if Hhas_attribute.has_foldable user_attrs then "foldable" :: attrs else attrs in
-  let attrs = if Emit_env.is_systemlib ()
-    then "unique" :: "builtin" :: "persistent" :: attrs else attrs in
+  let attrs =
+    if Emit_env.is_systemlib ()
+    then "unique" :: "builtin" :: "persistent" :: attrs
+    else attrs in
   let attrs =
     if Hhas_attribute.has_dynamically_constructible user_attrs
-    then "dyn_constructible" :: attrs else attrs
-  in
+    then "dyn_constructible" :: attrs
+    else attrs in
   let attrs = if not (Hhas_class.is_top c) then "nontop" :: attrs else attrs in
   let attrs =
     if Hhas_class.is_closure_class c && not @@ Emit_env.is_systemlib ()
-    then "unique" :: attrs else attrs in
+    then "unique" :: attrs
+    else attrs in
   let attrs =
     if Hhas_class.is_closure_class c then "no_override" :: attrs else attrs in
   let attrs = if Hhas_class.is_trait c then "trait" :: attrs else attrs in
   let attrs =
-    if Hhas_class.is_interface c then "interface" :: attrs else attrs
-  in
+    if Hhas_class.is_interface c then "interface" :: attrs else attrs in
   let attrs = if Hhas_class.is_final c then "final" :: attrs else attrs in
   let attrs = if Hhas_class.is_sealed c then "sealed" :: attrs else attrs in
   let attrs =
-    if Hhas_class.enum_type c <> None then "enum" :: attrs else attrs
-  in
+    if Hhas_class.enum_type c <> None then "enum" :: attrs else attrs in
   let attrs = if Hhas_class.is_abstract c then "abstract" :: attrs else attrs in
   let text = String.concat ~sep:" " attrs in
   let text = if text = "" then "" else "[" ^ text ^ "] " in
@@ -1599,13 +1594,11 @@ let property_attributes p =
   let attrs = if P.initial_satisfies_tc p then "initial_satisfies_tc" :: attrs else attrs in
   let attrs = if P.no_implicit_null p then "no_implicit_null" :: attrs else attrs in
   let attrs = if P.has_system_initial p then "sys_initial_val" :: attrs else attrs in
-  let attrs = if P.is_immutable p then "is_immutable" :: attrs else attrs in
+  let attrs = if P.is_const p then "is_const" :: attrs else attrs in
   let attrs = if P.is_deep_init p then "deep_init" :: attrs else attrs in
   let attrs = if P.is_lsb p then "lsb" :: attrs else attrs in
   let attrs = if P.is_static p then "static" :: attrs else attrs in
-  let attrs = if P.is_public p then "public" :: attrs else attrs in
-  let attrs = if P.is_protected p then "protected" :: attrs else attrs in
-  let attrs = if P.is_private p then "private" :: attrs else attrs in
+  let attrs = Aast.string_of_visibility (P.visibility p) :: attrs in
   let text = String.concat ~sep:" " attrs in
   let text = if text = "" then "" else "[" ^ text ^ "] " in
   text
@@ -1619,7 +1612,7 @@ let property_doc_comment p =
   | None -> ""
   | Some s -> Printf.sprintf "%s " (SU.triple_quote_string s)
 
-let add_property class_def buf property =
+let add_property (class_def : Hhas_class.t) buf property =
   Acc.add buf "\n  .property ";
   Acc.add buf (property_attributes property);
   Acc.add buf (property_doc_comment property);
@@ -1630,7 +1623,9 @@ let add_property class_def buf property =
   if Hhas_class.is_closure_class class_def
   || initial_value = Some Typed_value.Uninit
   then Acc.add buf "uninit;"
-  else begin
+  else if Hhas_class.is_record class_def && initial_value = None
+  then Acc.add buf "uninit;"
+  else  begin
     Acc.add buf "\"\"\"";
     begin match initial_value with
       | None -> Acc.add buf "N;"
@@ -1670,9 +1665,9 @@ let add_type_constant buf c =
 let add_requirement buf r =
   Acc.add buf "\n  .require ";
   match r with
-  | (Ast.MustExtend, name) ->
+  | (Hhas_class.MustExtend, name) ->
       Acc.add buf ("extends <" ^ name ^ ">;")
-  | (Ast.MustImplement, name) ->
+  | (Hhas_class.MustImplement, name) ->
       Acc.add buf ("implements <" ^ name ^ ">;")
 
 let add_enum_ty buf c =
@@ -1691,63 +1686,65 @@ let add_use_precedence buf (id1, id2, ids) =
 
 let add_use_alias buf (ido1, id, ido2, kindl) =
   let aliasing_id =
-    Option.value_map ~f:(fun id1 -> id1 ^ "::" ^ id) ~default:id ido1
-  in
+    Option.value_map ~f:(fun id1 -> id1 ^ "::" ^ id) ~default:id ido1 in
   let kind =
     match kindl with
     | [] -> None
-    | x -> Some ("[" ^ (String.concat ~sep:" " @@ List.map ~f:Ast.string_of_kind x ) ^ "]")
+    | x -> Some ("[" ^ (String.concat ~sep:" " @@ List.map ~f:Aast.string_of_use_as_visibility x ) ^ "]")
   in
   let rest = Option.merge kind ido2 ~f:(fun x y -> x ^ " " ^ y) in
   let rest = Option.value ~default:"" rest in
   Acc.add buf @@ Printf.sprintf "\n    %s as %s;" aliasing_id rest
 
-let add_replace buf (trait, id, new_id, kindl, fun_kind) =
+(* Replacement for add_replace *)
+let add_method_trait_resolutions buf (mtr, kind_as_string) =
   Acc.add buf @@ Printf.sprintf
     "\n    %s::%s as strict "
-    trait id;
-  if fun_kind = Ast_defs.FAsync || fun_kind = Ast_defs.FAsyncGenerator
-  then Acc.add buf "async ";
+    kind_as_string (snd mtr.A.mt_method);
+  if mtr.A.mt_fun_kind = Ast_defs.FAsync || mtr.A.mt_fun_kind = Ast_defs.FAsyncGenerator
+  then
+    Acc.add buf "async ";
   Acc.add buf "[";
-  let rec concat kindl =
-    match kindl with
-    | [] -> ()
-    | kind :: [] ->
-      Acc.add buf (Printf.sprintf "%s" (Ast.string_of_kind kind))
-    | kind :: kindl ->
-      Acc.add buf (Printf.sprintf "%s " (Ast.string_of_kind kind));
-      concat kindl in
-  concat kindl;
+  if mtr.A.mt_final then Acc.add buf "final ";
+  Acc.add buf (Printf.sprintf "%s" (Aast.string_of_visibility mtr.A.mt_visibility));
+  if mtr.A.mt_abstract then Acc.add buf " abstract";
+  if mtr.A.mt_static then Acc.add buf " static";
   Acc.add buf "] ";
-  Acc.add buf (Printf.sprintf "%s;" new_id)
+  Acc.add buf (Printf.sprintf "%s;" (snd mtr.A.mt_name))
 
 let add_uses buf c =
   let use_l = Hhas_class.class_uses c in
   let use_alias_list = Hhas_class.class_use_aliases c in
   let use_precedence_list = Hhas_class.class_use_precedences c in
   let class_method_trait_resolutions = Hhas_class.class_method_trait_resolutions c in
-  if use_l = [] && class_method_trait_resolutions = [] then () else
+  if use_l = [] && class_method_trait_resolutions = []
+  then ()
+  else
     begin
       let unique_ids =
-        List.fold_left ~f:(fun l e -> ULS.add l (Utils.strip_ns e)) ~init:ULS.empty use_l
-      in
+        List.fold_left
+          ~f:(fun l e -> ULS.add l (Utils.strip_ns e))
+          ~init:ULS.empty
+          use_l in
       let use_l = String.concat ~sep:" " @@ ULS.items unique_ids in
       Acc.add buf @@ Printf.sprintf "\n  .use %s" use_l;
       if use_alias_list = [] && use_precedence_list = [] && class_method_trait_resolutions = []
-      then Acc.add buf ";" else
-      begin
-        Acc.add buf " {";
-        List.iter ~f:(add_use_precedence buf) use_precedence_list;
-        List.iter ~f:(add_use_alias buf) use_alias_list;
-        List.iter ~f:(add_replace buf) class_method_trait_resolutions;
-        Acc.add buf "\n  }";
-      end
+      then Acc.add buf ";"
+      else
+        begin
+          Acc.add buf " {";
+          List.iter ~f:(add_use_precedence buf) use_precedence_list;
+          List.iter ~f:(add_use_alias buf) use_alias_list;
+          List.iter ~f:(add_method_trait_resolutions buf) class_method_trait_resolutions;
+          Acc.add buf "\n  }";
+        end
     end
 
 let add_class_def buf class_def =
   let class_name = Hhas_class.name class_def in
   (* TODO: user attributes *)
-  Acc.add buf "\n.class ";
+  Acc.add buf
+    (if Hhas_class.is_record class_def then "\n.record " else "\n.class ");
   Acc.add buf (class_special_attributes class_def);
   Acc.add buf (Hhbc_id.Class.to_raw_string class_name);
   if Hhbc_options.source_mapping !Hhbc_options.compiler_options
@@ -1877,33 +1874,27 @@ let add_program_content ?path dump_symbol_refs buf hhas_prog =
   List.iter ~f:(add_class_def buf) classes;
   List.iter ~f:(add_typedef buf) (Hhas_program.typedefs hhas_prog);
   add_file_attributes buf (Hhas_program.file_attributes hhas_prog);
-  if dump_symbol_refs then begin
+  if dump_symbol_refs
+  then
     let opts = !Hhbc_options.compiler_options in
     add_include_region ?path buf symbol_refs.Hhas_symbol_refs.includes
       ~doc_root:(Hhbc_options.doc_root opts)
       ~search_paths:(Hhbc_options.include_search_paths opts)
       ~include_roots:(Hhbc_options.include_roots opts);
     add_symbol_ref_regions buf symbol_refs
-  end
 
 let add_program ?path dump_symbol_refs buf hhas_prog =
-  let strict_types =
-    match Hhas_program.strict_types hhas_prog with
-    | Some true -> ".strict 1;\n\n"
-    | Some false -> ".strict 0;\n\n"
-    | None -> "" in
   match path with
   | Some p ->
     let p = Php_escaping.escape @@ Relative_path.to_absolute p in
     Acc.add buf
-      (Printf.sprintf "# %s starts here\n\n%s.filepath \"%s\";\n" p strict_types p);
+      (Printf.sprintf "# %s starts here\n\n.filepath \"%s\";\n" p p);
     add_program_content ~path:p dump_symbol_refs buf hhas_prog;
     Acc.add buf (Printf.sprintf "\n# %s ends here\n" p)
   | None ->
-      Acc.add buf "#starts here\n";
-      Acc.add buf strict_types;
-      add_program_content dump_symbol_refs buf hhas_prog;
-      Acc.add buf "\n#ends here\n"
+    Acc.add buf "#starts here\n";
+    add_program_content dump_symbol_refs buf hhas_prog;
+    Acc.add buf "\n#ends here\n"
 
 let to_segments ?path ?(dump_symbol_refs=false) hhas_prog =
   let buf = Acc.create () in

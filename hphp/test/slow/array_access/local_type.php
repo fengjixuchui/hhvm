@@ -1,10 +1,11 @@
-<?php
+<?hh
 
 class thing {
   private $prop;
 
   function go() {
     $idx = 'five';
+    $instances = array();
     $instances[$this->prop] = false;
     return isset($this->prop[$idx]);
   }

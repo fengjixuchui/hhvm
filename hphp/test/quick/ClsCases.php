@@ -12,13 +12,14 @@ function clsFact() {
 }
 
 // Cls :: [ String ] -> [ Class ]
+<<__EntryPoint>> function main(): void {
 MyClass::$x = 1;
-
 // Any way to coerce the [ Obj ] -> [ Class ] variety?
 $foo = new MyClass();
 $foo::$x = 1;
 
 // ClsH
+$refs = array();
 $refs[] = clsFact();
 $refs[] = 'MyClass';
 $s = 'MyClass';
@@ -26,11 +27,4 @@ $s = 'MyClass';
 foreach($refs as $r) {
   $r::foo();
 }
-
-$refs2[] = &$s;
-$obj = clsFact();
-$refs2[] = &$obj;
-
-foreach($refs2 as $r) {
-  $r::foo();
 }

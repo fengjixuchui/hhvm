@@ -1,7 +1,8 @@
-<?php
+<?hh
 namespace HH {
-  if (false) {
-    class Array {}
-  }
-  echo "Done\n";
+
+class Array {}
+<<__EntryPoint>> function main(): void {
+echo "Done\n";
+}
 }

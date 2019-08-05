@@ -1,8 +1,8 @@
-<?php
+<?hh
 /* Prototype  : mixed date_sunrise(mixed time [, int format [, float latitude [, float longitude [, float zenith [, float gmt_offset]]]]])
- * Description: Returns time of sunrise for a given day and location 
+ * Description: Returns time of sunrise for a given day and location
  * Source code: ext/date/php_date.c
- * Alias to functions: 
+ * Alias to functions:
  */
 
 echo "*** Testing date_sunrise() : usage variation ***\n";
@@ -11,7 +11,7 @@ echo "*** Testing date_sunrise() : usage variation ***\n";
 date_default_timezone_set("Asia/Calcutta");
 $time = mktime(8, 8, 8, 8, 8, 2008);
 $latitude = 38.4;
-$longitude = -9;
+$longitude = -9.0;
 $gmt_offset = 5.5;
 
 //get an unset variable
@@ -94,5 +94,4 @@ foreach($inputs as $key =>$value) {
       try { var_dump( date_sunrise($time, SUNFUNCS_RET_TIMESTAMP, $latitude, $longitude, $value, $gmt_offset) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
 
-?>
-===DONE===
+echo "===DONE===\n";

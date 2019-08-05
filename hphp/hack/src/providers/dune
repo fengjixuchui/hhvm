@@ -1,0 +1,68 @@
+(library
+  (name provider_config)
+  (wrapped false)
+  (modules provider_config)
+  (libraries
+    heap_shared_mem
+    memory_bounded_lru_cache))
+
+(library
+  (name memory_bounded_lru_cache)
+  (wrapped false)
+  (modules memory_bounded_lru_cache)
+  (libraries
+    core_kernel))
+
+(library
+  (name file_provider)
+  (wrapped false)
+  (modules file_provider)
+  (libraries
+    ast
+    heap_shared_mem
+    provider_config
+    relative_path
+    sys_utils))
+
+(library
+  (name ast_provider)
+  (wrapped false)
+  (modules ast_provider)
+  (libraries
+    ast
+    file_provider
+    heap_shared_mem
+    nast
+    parser
+    relative_path
+    server_command_types
+    utils_find))
+
+(library
+  (name decl_provider)
+  (wrapped false)
+  (modules
+    decl_lru_cache
+    decl_provider)
+  (libraries
+    lru_worker_stubs
+    provider_config
+    typing_heap))
+
+(library
+  (name fixme_provider)
+  (wrapped false)
+  (modules fixme_provider)
+  (libraries
+    collections
+    errors
+    heap_shared_mem
+    pos))
+
+(library
+  (name partial_provider)
+  (wrapped false)
+  (modules partial_provider)
+  (libraries
+    errors
+    file_info))

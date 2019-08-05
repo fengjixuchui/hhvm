@@ -17,9 +17,9 @@
 val get_spread_attributes :
   Typing_env.env ->
   Pos.t ->
-  Typing_heap.Classes.t ->
+  Decl_provider.class_decl ->
   Typing_defs.locl Typing_defs.ty ->
-  Typing_env.env * (Nast.pstring * (Nast.PosAnnotation.t * Typing_defs.locl Typing_defs.ty)) list
+  Typing_env.env * (Aast.pstring * (Pos.t * Typing_defs.locl Typing_defs.ty)) list
 
 (**
  * Verify that an XHP body expression is legal.

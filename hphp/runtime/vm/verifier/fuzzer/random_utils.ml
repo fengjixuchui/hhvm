@@ -100,8 +100,6 @@ let random_key () : MemberKey.t =
       fun () -> W]
      |> rand_elt) ()
 
-let random_fault_label () : Label.t = Label.Fault (Random.int 10)
-let random_catch_label () : Label.t = Label.Catch (Random.int 10)
 let random_adata_id () : adata_id =  "A_" ^ (Random.int 10 |> string_of_int)
 
 (* A list of generators for instructions. Doesn't include all instructions;
@@ -109,8 +107,7 @@ let random_adata_id () : adata_id =  "A_" ^ (Random.int 10 |> string_of_int)
  TODO(T20108993): autogenerate this somehow; this doesn't scale well for adding
  instructions at all. Perhaps the project for generating code based on the
  bytecode spec could handle this *)
-let all_instrs (fn : IS.t) : lazy_instruct list =
-   let cls_ref_slts = IS.get_num_cls_ref_slots fn in
+let all_instrs (_ : IS.t) : lazy_instruct list =
    [(fun () -> IBasic Nop);
     (fun () -> IBasic EntryNop);
     (fun () -> IGet (VGetL (random_local ())));
@@ -128,15 +125,13 @@ let all_instrs (fn : IS.t) : lazy_instruct list =
     (fun () -> ILitConst (NewDictArray (Random.int 1000)));
     (fun () -> ILitConst (NewLikeArrayL (random_local (), Random.int 1000)));
     (fun () -> ILitConst (NewCol (random_collection_type ())));
-    (fun () -> ILitConst (Cns (Const.from_raw_string "")));
     (fun () -> ILitConst (CnsE (Const.from_raw_string "")));
-    (fun () -> ILitConst (CnsU (Const.from_raw_string "", "")));
-    (fun () -> ILitConst (CnsUE (Const.from_raw_string "", "")));
     (fun () -> ILitConst (ClsCnsD (Const.from_raw_string "",
                                    Class.from_raw_string "")));
     (fun () -> ILitConst File);
     (fun () -> ILitConst Dir);
     (fun () -> ILitConst Method);
+    (fun () -> ILitConst FuncCred);
     (fun () -> IGet (CGetL (random_local ())));
     (fun () -> IGet (CGetQuietL (random_local ())));
     (fun () -> IGet (CUGetL (random_local ())));
@@ -169,7 +164,6 @@ let all_instrs (fn : IS.t) : lazy_instruct list =
     (fun () -> IOp Hhbc_ast.Exit);
     (fun () -> IGet (CGetL2 (random_local ())));
     (fun () -> IGet CGetG);
-    (fun () -> IGet CGetQuietG);
     (*(fun () -> IIsset IssetC);*)
     (fun () -> IIsset IssetG);
     (fun () -> IIsset EmptyG);
@@ -177,9 +171,6 @@ let all_instrs (fn : IS.t) : lazy_instruct list =
     (fun () -> IMutator (SetL (random_local ())));
     (fun () -> IMutator (SetOpL (random_local (), random_eq_op ())));
     (fun () -> IMutator (SetOpG (random_eq_op ())));
-    (fun () -> IBasic Box);
-    (fun () -> IGet VGetG);
-    (fun () -> IBasic Unbox);
     (fun () -> IMisc UGetCUNop);
     (fun () -> IMisc CGetCUNop);
     (fun () -> IBasic Dup);
@@ -213,13 +204,9 @@ let all_instrs (fn : IS.t) : lazy_instruct list =
     (fun () -> IOp Shr);
     (fun () -> IOp InstanceOf);
     (fun () -> IMutator SetG);
-    (fun () -> ILitConst AddNewElemV);
     (fun () -> ILitConst AddElemC);
-    (fun () -> ILitConst AddElemV);
     (fun () -> IMutator (IncDecL (random_local (), random_incdec_op ())));
     (fun () -> IMutator (IncDecG (random_incdec_op ())));
-    (fun () -> IMutator (BindL (random_local ())));
-    (fun () -> IMutator BindG);
     (fun () -> IMutator (UnsetL (random_local ())));
     (fun () -> IMutator UnsetG);
     (fun () -> IMutator (CheckProp (Prop.from_raw_string "")));
@@ -239,10 +226,6 @@ let all_instrs (fn : IS.t) : lazy_instruct list =
     (fun () -> IMisc (BareThis (random_bare_op())));
     (fun () -> IMisc CheckThis);
     (fun () -> IMisc (InitThisLoc (random_local ())));
-    (fun () -> IMisc (StaticLocCheck (random_local (), "")));
-    (fun () -> IMisc (StaticLocDef (random_local (), "")));
-    (fun () -> IMisc (StaticLocInit (random_local (), "")));
-    (fun () -> IMisc Catch);
     (fun () -> IMisc (OODeclExists (random_class_kind ())));
     (fun () -> IMisc (VerifyParamType (random_param_id ())));
     (fun () -> IMisc VerifyRetTypeC);
@@ -257,52 +240,26 @@ let all_instrs (fn : IS.t) : lazy_instruct list =
     (fun () -> IMisc (GetMemoKeyL (random_local ())));
     (*(fun () -> IMisc VarEnvDynCall);*)
     (fun () -> IAsync WHResult);
-    (fun () -> IAsync Await)] @
-    begin
-      if cls_ref_slts <= 0 then [] else
-      [(fun () -> IMisc (Self (Random.int cls_ref_slts)));
-       (fun () -> IIsset (IssetS (Random.int cls_ref_slts)));
-       (fun () -> IIsset (EmptyS (Random.int cls_ref_slts)));
-       (fun () -> IMisc (Parent (Random.int cls_ref_slts)));
-       (fun () -> IMisc (LateBoundCls (Random.int cls_ref_slts)));
-       (fun () -> IMutator (SetOpS (random_eq_op (), Random.int cls_ref_slts)));
-       (fun () -> IGet (CGetS (Random.int cls_ref_slts)));
-       (fun () -> IGet (VGetS (Random.int cls_ref_slts)));
-       (fun () -> ILitConst (ClsCns ((Const.from_raw_string ""),
-                                      Random.int cls_ref_slts)));
-       (fun () -> IMutator (SetS (Random.int cls_ref_slts)));
-       (fun () -> IMisc (ClsRefName (Random.int cls_ref_slts)));
-       (fun () -> IMutator (IncDecS (random_incdec_op (),
-                                     Random.int cls_ref_slts)));
-       (fun () -> IGet (ClsRefGetC (Random.int cls_ref_slts)));
-       (fun () -> IMutator (BindS (Random.int cls_ref_slts)))]
-    end
+    (fun () -> IAsync Await)]
 
 (* Generators for base instructions *)
-let base_instrs (fn : IS.t) : lazy_instruct list =
-  let cls_ref_slts = IS.get_num_cls_ref_slots fn in
+let base_instrs (_ : IS.t) : lazy_instruct list =
   [(fun () -> IBase (BaseGC (Random.int 10, random_mode ())));
    (fun () -> IBase (BaseGL (random_local (), random_mode ())));
    (fun () -> IBase (BaseL (random_local (), random_mode ())));
    (fun () -> IBase (BaseC (Random.int 10, random_mode ())));
    (fun () -> IBase BaseH);
-   (fun () -> IBase (Dim (random_mode(), random_key ())))] @
-   begin
-     if cls_ref_slts <= 0 then [] else
-     [(fun () -> IBase (BaseSC (Random.int 10, Random.int 10, random_mode ())))]
-    end
+   (fun () -> IBase (Dim (random_mode(), random_key ())))]
 
 (* Generators for final instructions *)
 let final_instrs (_ : IS.t) : lazy_instruct list =
   [(fun () -> IFinal (QueryM (Random.int 10,
     random_query_op (), random_key ())));
-   (fun () -> IFinal (VGetM (Random.int 10, random_key ())));
    (fun () -> IFinal (SetM (Random.int 10, random_key ())));
    (fun () -> IFinal (IncDecM (Random.int 10,
      random_incdec_op (), random_key ())));
    (fun () -> IFinal (SetOpM (Random.int 10,
      random_eq_op (), random_key ())));
-   (fun () -> IFinal (BindM (Random.int 10, random_key ())));
    (fun () -> IFinal (UnsetM (Random.int 10, random_key ())))]
 
 (* An association list of stack signatures to random generators for

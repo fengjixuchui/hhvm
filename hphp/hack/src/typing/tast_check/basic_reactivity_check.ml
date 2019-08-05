@@ -1,4 +1,5 @@
 open Core_kernel
+open Aast
 open Tast
 open Typing_defs
 
@@ -21,7 +22,7 @@ let expr_is_valid_owned_arg (e : expr) : bool =
 let expr_is_valid_borrowed_arg env (e: expr): bool =
   expr_is_valid_owned_arg e || begin
     match snd e with
-    | Callconv (Ast.Pinout, (_, Lvar (_, id)))
+    | Callconv (Ast_defs.Pinout, (_, Lvar (_, id)))
     | Lvar (_, id) -> Env.local_is_mutable ~include_borrowed:true env id
     | This when Env.function_is_mutable env = Some Param_borrowed_mutable -> true
     | _ ->
@@ -35,15 +36,16 @@ let expr_is_valid_borrowed_arg env (e: expr): bool =
 let rec is_byval_collection_or_string_or_any_type env ty =
   let check t =
     match t with
+    | _, Toption inner -> is_byval_collection_or_string_or_any_type env inner
     | _, Tclass ((_, x), _, _) ->
       x = SN.Collections.cVec ||
       x = SN.Collections.cDict ||
       x = SN.Collections.cKeyset
     | _, (Tarraykind _ | Ttuple _ | Tshape _)
       -> true
-    | _, Tprim Nast.Tstring
+    | _, Tprim Tstring
     | _, Tany -> true
-    | _, Tunresolved tl -> List.for_all tl ~f:(is_byval_collection_or_string_or_any_type env)
+    | _, Tunion tl -> List.for_all tl ~f:(is_byval_collection_or_string_or_any_type env)
     | _ -> false in
   let _, tl = Tast_env.get_concrete_supertypes env ty in
   List.for_all tl ~f:check
@@ -132,7 +134,7 @@ let with_mutable_value env e ~default ~f =
   (* invoke f only for mutable values *)
   | This when Env.function_is_mutable env <> None ->
     f Arg_this
-  | Callconv (Ast.Pinout, (_, Lvar (_, id)))
+  | Callconv (Ast_defs.Pinout, (_, Lvar (_, id)))
   | Lvar (_, id) when Env.local_is_mutable ~include_borrowed:true env id ->
     f (Arg_local id)
   | _ -> default
@@ -287,6 +289,7 @@ let is_valid_rx_mutable_arg env e =
   | KeyValCollection ((`Map | `ImmMap), _, _)
   | ValCollection ((`Vector | `ImmVector | `Set | `ImmSet), _, _)
   | Pair _
+  | Clone _
   | Xml _ ->
     true
   | _ -> is_fun_call_returning_mutable env e
@@ -368,19 +371,6 @@ let check_conditional_operator
       (get_position when_false)
       (get_position when_true)
 
-let disallow_static_or_global ~is_static el =
-  let rec get_name = function
-  (* name *)
-  | _, Lvar (_, id) -> Local_id.to_string id
-  (* name = initializer *)
-  | _, Binop (_, lhs, _) -> get_name lhs
-  | _ -> "_" in
-  (List.hd el) |> Option.iter ~f:(fun n ->
-    let p = get_position n in
-    let name = get_name n in
-    if is_static then Errors.static_in_reactive_context p name
-    else Errors.global_in_reactive_context p name)
-
 type ctx = {
   reactivity: reactivity;
   allow_awaitable: bool;
@@ -450,7 +440,7 @@ let check = object(self)
     then List.iter b.fb_ast (check_non_rx#on_stmt env)
     else
       match b.fb_ast with
-      | [If ((_, Id (_, c)), then_stmt, else_stmt ) ]
+      | [_, If ((_, Id (_, c)), then_stmt, else_stmt ) ]
         when c = SN.Rx.is_enabled ->
           List.iter then_stmt (self#on_stmt (env, ctx));
           List.iter else_stmt ~f:(check_non_rx#on_stmt env)
@@ -459,19 +449,12 @@ let check = object(self)
   method! on_Expr (env, ctx) e =
     self#on_expr (env, set_expr_statement ctx) e
 
-  method! on_Global_var s el =
-    disallow_static_or_global ~is_static:false el;
-    super#on_Global_var s el
-
-  method! on_Static_var s el =
-    disallow_static_or_global ~is_static:true el;
-    super#on_Static_var s el
-
-  method! on_Awaitall (env, ctx) _ els =
+  method! on_Awaitall (env, ctx) (els, b) =
     let allow_awaitable_s = (env, allow_awaitable ctx) in
     List.iter els ~f:(fun (_, rhs) ->
       super#on_expr allow_awaitable_s rhs
-    )
+    );
+    self#on_block (env, ctx) b
 
   method! on_expr (env, ctx) expr =
     let check_reactivity =
@@ -552,7 +535,7 @@ let check = object(self)
         self#on_expr (env, ctx) e1
       );
       self#on_expr (env, ctx) e2
-    | _, Binop (Ast.QuestionQuestion, e1, e2) ->
+    | _, Binop (Ast_defs.QuestionQuestion, e1, e2) ->
       let ctx = allow_awaitable ctx in
       check_conditional_operator e1 e2;
       self#on_expr (env, ctx) e1;
@@ -562,7 +545,10 @@ let check = object(self)
       begin match e with
       | _, Lvar (p, id) ->
         let local_id = Local_id.to_string id in
-        if SN.Superglobals.is_superglobal local_id
+        if (
+          SN.Superglobals.is_superglobal local_id
+          || local_id = SN.Superglobals.globals
+        )
         then Errors.superglobal_in_reactive_context p local_id;
       | _, Class_get _ ->
         Errors.static_property_in_reactive_context (get_position expr);
@@ -570,7 +556,8 @@ let check = object(self)
         super#on_expr (env, ctx) expr
       | _, This when ctx.disallow_this ->
         Errors.escaping_mutable_object (get_position e)
-      | (_, (_, Tfun _)), Efun (f, idl) ->
+      | (_, (_, Tfun _)), Efun (f, idl)
+      | (_, (_, Tfun _)), Lfun (f, idl) ->
         List.iter idl (check_escaping_mutable env);
 
         let ctx =
@@ -590,7 +577,7 @@ let check = object(self)
         in
         self#handle_body env ctx f.f_body;
 
-      | _, Binop (Ast.Eq _, te1, _) ->
+      | _, Binop (Ast_defs.Eq _, te1, _) ->
         check_assignment_or_unset_target
           ~is_assignment:true
           ~append_pos_opt:(get_position expr)
@@ -637,9 +624,7 @@ let check_redundant_rx_condition env pos r =
   match r with
   | Reactive (Some cond_ty) | Local (Some cond_ty) | Shallow (Some cond_ty) ->
     let env, cond_ty = Tast_env.localize_with_self env cond_ty in
-    let _, is_subtype =
-      Tast_env.subtype env (Tast_env.get_self_exn env) cond_ty in
-    if is_subtype
+    if Tast_env.can_subtype env (Tast_env.get_self_exn env) cond_ty
     then Errors.redundant_rx_condition pos
   | _ -> ()
 

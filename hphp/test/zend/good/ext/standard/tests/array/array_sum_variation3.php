@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : mixed array_sum(array $input)
  * Description: Returns the sum of the array entries 
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * sum of array containing different float values
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_sum() : array with different float values ***\n";
 
 // Simple float array
@@ -37,5 +37,5 @@ $float_input = array(
 echo "-- Mixed float array --\n";
 var_dump( array_sum($float_input) );
                      
-echo "Done"
-?>
+echo "Done";
+}

@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $ctxs = array(
 	NULL,
 	'bogus',
@@ -19,5 +19,4 @@ foreach ($ctxs as $ctx) {
 }
 
 echo "Done\n";
-
-?>
+}

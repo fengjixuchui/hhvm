@@ -1,11 +1,11 @@
-<?php
+<?hh
 
 /*
    +-------------------------------------------------------------+
    | Copyright (c) 2015 Facebook, Inc. (http://www.facebook.com) |
    +-------------------------------------------------------------+
 */
-
+<<__EntryPoint>> function main(): void {
 error_reporting(-1);
 
 $array = array();
@@ -18,9 +18,10 @@ $colors = array("red", "white", "blue");
 
 // access each element's value
 
-foreach ($colors as $color)  :
+foreach ($colors as $color)
+{
     echo $color."\n";
-endforeach  ;
+}
 echo $color."\n";
 
 // access each element's value anf its element number
@@ -44,9 +45,9 @@ foreach ($colors as $color)
 var_dump($colors);
 
 $ary = array();
-$ary[0][0] = "abc";
+$ary[0] = ["abc"];
 $ary[0][1] = "ij";
-$ary[1][0] = "mnop";
+$ary[1] = ["mnop"];
 $ary[1][1] = "xyz";
 
 foreach ($ary as $e1)
@@ -74,4 +75,5 @@ foreach ($a as $key => list($v1, $v2))
     var_dump($key);
     var_dump($v1);
     var_dump($v2);
+}
 }

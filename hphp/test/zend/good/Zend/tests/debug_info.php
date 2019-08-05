@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Foo {
   public $d = 4;
@@ -17,9 +17,10 @@ class Bar {
     return null;
   }
 }
-
+<<__EntryPoint>> function main(): void {
 $f = new Foo;
 var_dump($f);
 
 $b = new Bar;
 var_dump($b);
+}

@@ -58,33 +58,26 @@ SSATmp* staticTVCns(IRGS& env, const TypedValue* tv) {
     case KindOfFunc:
     case KindOfClass:
     case KindOfClsMeth:
+    case KindOfRecord: // TODO(arnabde)
       break;
   }
   always_assert(false);
 }
 
-void implCns(IRGS& env,
-             const StringData* name,
-             const StringData* fallbackName,
-             bool error) {
+//////////////////////////////////////////////////////////////////////
+
+} // namespace
+
+void emitCnsE(IRGS& env, const StringData* name) {
   auto const cnsNameTmp = cns(env, name);
   auto const tv = Unit::lookupPersistentCns(name);
   SSATmp* result = nullptr;
 
-  SSATmp* fallbackNameTmp = nullptr;
-  if (fallbackName != nullptr) {
-    fallbackNameTmp = cns(env, fallbackName);
-  }
   if (tv) {
     if (tv->m_type == KindOfUninit) {
       // KindOfUninit is a dynamic system constant. always a slow
       // lookup.
-      assertx(!fallbackNameTmp);
-      if (error) {
-        result = gen(env, LookupCnsE, cnsNameTmp);
-      } else {
-        result = gen(env, LookupCns, cnsNameTmp);
-      }
+      result = gen(env, LookupCnsE, cnsNameTmp);
     } else {
       result = staticTVCns(env, tv);
     }
@@ -100,23 +93,16 @@ void implCns(IRGS& env,
       },
       [&] { // Taken: miss in TC, do lookup & init
         hint(env, Block::Hint::Unlikely);
-
-        if (fallbackNameTmp) {
-          if (error) {
-            return gen(env, LookupCnsUE, cnsNameTmp, fallbackNameTmp);
-          } else {
-            return gen(env, LookupCnsU, cnsNameTmp, fallbackNameTmp);
-          }
-        }
-        if (error) {
-          return gen(env, LookupCnsE, cnsNameTmp);
-        }
-        return gen(env, LookupCns, cnsNameTmp);
+        return gen(env, LookupCnsE, cnsNameTmp);
       }
     );
   }
   push(env, result);
 }
+
+namespace {
+
+//////////////////////////////////////////////////////////////////////
 
 void implClsCns(IRGS& env,
                 const Class* cls,
@@ -166,34 +152,17 @@ void implClsCns(IRGS& env,
 
 StaticString clsCnsProfileKey { "ClsCnsProfile" };
 
-void clsCnsHelper(IRGS& env, SSATmp* ptv, uint32_t clsRefSlot,
-                      Block* exit = nullptr) {
+void clsCnsHelper(IRGS& env, SSATmp* ptv, Block* exit = nullptr) {
   if (!exit) exit = makeExitSlow(env);
   gen(env, CheckTypeMem, TUncountedInit, exit, ptv);
-  killClsRef(env, clsRefSlot);
+  discard(env);
   auto const val = gen(env, LdMem, TUncountedInit, ptv);
   push(env, val);
 }
 
 //////////////////////////////////////////////////////////////////////
 
-}
-
-void emitCns(IRGS& env, const StringData* name) {
-  implCns(env, name, nullptr, false);
-}
-
-void emitCnsE(IRGS& env, const StringData* name) {
-  implCns(env, name, nullptr, true);
-}
-
-void emitCnsU(IRGS& env, const StringData* name, const StringData* fallback) {
-  implCns(env, name, fallback, false);
-}
-
-void emitCnsUE(IRGS& env, const StringData* name, const StringData* fallback) {
-  implCns(env, name, fallback, true);
-}
+} // namespace
 
 void emitClsCnsD(IRGS& env,
                  const StringData* cnsNameStr,
@@ -201,16 +170,19 @@ void emitClsCnsD(IRGS& env,
   implClsCns(env, Unit::lookupClass(clsNameStr), cnsNameStr, clsNameStr);
 }
 
-void emitClsCns(IRGS& env, const StringData* cnsNameStr, uint32_t clsRefSlot) {
-  auto const clsTmp = peekClsRefCls(env, clsRefSlot);
+void emitClsCns(IRGS& env, const StringData* cnsNameStr) {
+  auto const clsTmp = topC(env);
   auto const clsTy = clsTmp->type();
+
+  if (!(clsTy <= TCls)) PUNT(ClsCns-NotClass);
+
   if (!clsTy.clsSpec() || !isNormalClass(clsTy.clsSpec().cls())) {
     if (RuntimeOption::RepoAuthoritative) {
       TargetProfile<ClsCnsProfile> profile(env.context, env.irb->curMarker(),
                                            clsCnsProfileKey.get());
       if (profile.profiling()) {
         auto const data = ProfileSubClsCnsData { cnsNameStr, profile.handle() };
-        clsCnsHelper(env, gen(env, ProfileSubClsCns, data, clsTmp), clsRefSlot);
+        clsCnsHelper(env, gen(env, ProfileSubClsCns, data, clsTmp));
         return;
       }
       if (profile.optimizing()) {
@@ -222,30 +194,30 @@ void emitClsCns(IRGS& env, const StringData* cnsNameStr, uint32_t clsRefSlot) {
           gen(env, JmpNZero, exit, cmp);
           auto const data = LdSubClsCnsData { cnsNameStr, slot };
           gen(env, CheckSubClsCns, data, exit, clsTmp);
-          clsCnsHelper(env, gen(env, LdSubClsCns, data, clsTmp),
-                       clsRefSlot, exit);
+          clsCnsHelper(env, gen(env, LdSubClsCns, data, clsTmp), exit);
           return;
         }
       }
     }
-    interpOne(env, *env.currentNormalizedInstruction);
+    interpOne(env);
     return;
   }
   auto const cls = clsTy.clsSpec().cls();
   if (clsTy.clsSpec().exact()) {
-    killClsRef(env, clsRefSlot);
+    discard(env);
     implClsCns(env, cls, cnsNameStr, cls->name());
   } else {
     Slot cnsSlot;
-    auto const tv = cls->cnsNameToTV(cnsNameStr, cnsSlot, true);
+    auto const tv = cls->cnsNameToTV(cnsNameStr, cnsSlot,
+                                     ClsCnsLookup::IncludeTypes);
     if (cnsSlot != kInvalidSlot &&
         (!tv ||
-         !static_cast<const TypedValueAux*>(tv)->constModifiers().isType)) {
+         !static_cast<const TypedValueAux*>(tv)->constModifiers().isType())) {
       auto const data = LdSubClsCnsData { cnsNameStr, cnsSlot };
-      clsCnsHelper(env, gen(env, LdSubClsCns, data, clsTmp), clsRefSlot);
+      clsCnsHelper(env, gen(env, LdSubClsCns, data, clsTmp));
       return;
     }
-    interpOne(env, *env.currentNormalizedInstruction);
+    interpOne(env);
   }
 }
 

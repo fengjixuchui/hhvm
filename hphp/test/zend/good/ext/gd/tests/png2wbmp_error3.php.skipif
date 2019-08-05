@@ -1,8 +1,7 @@
-<?php 
+<?hh 
 if(!extension_loaded('gd')) {
     die('skip gd extension is not loaded');
 }
 if(!function_exists('png2wbmp')) {
     die('skip png2wbmp function is not available');
 }
-?>

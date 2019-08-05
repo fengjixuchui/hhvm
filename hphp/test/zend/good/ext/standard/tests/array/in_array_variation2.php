@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
  * Prototype  : bool in_array ( mixed $needle, array $haystack [, bool $strict] )
  * Description: Searches haystack for needle and returns TRUE  
@@ -7,7 +7,7 @@
 */
 
 /* Test in_array() with different possible haystack values */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing in_array() with different haystack values ***\n";
 $misc_array = array (
   'a',
@@ -45,4 +45,4 @@ foreach($array_type as $type) {
 }
 
 echo "Done\n";
-?>
+}

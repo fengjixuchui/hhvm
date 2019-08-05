@@ -1,7 +1,11 @@
+.hh_file 1;
 # SSwitch with integer-like strings uses a different translator
 # implementation.
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
   FCall <> 0 1 "" - "" ""
   RetC
@@ -41,13 +45,19 @@ fail:
 }
 
 .function case_three() {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "get_three"
   FCall <> 0 1 "" - "" ""
   SetL $foo
   PopC
 
-  FPushFuncD 1 "sswitch_on"
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $foo
+  FPushFuncD 1 "sswitch_on"
   FCall <> 1 1 "" - "" ""
   RetC
 }
@@ -63,34 +73,51 @@ fail:
 .function with_obj() {
   NewObjD "Obj"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $obj
   PopC
 
-  FPushFuncD 1 "sswitch_on"
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $obj
+  FPushFuncD 1 "sswitch_on"
   FCall <> 1 1 "" - "" ""
   RetC
 }
 
 .function case_default() {
-  FPushFuncD 1 "sswitch_on"
+  NullUninit
+  NullUninit
+  NullUninit
   String "kujhasekguheku"
+  FPushFuncD 1 "sswitch_on"
   FCall <> 1 1 "" - "" ""
   RetC
 }
 
 .function main() {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "case_three"
   FCall <> 0 1 "" - "" ""
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "with_obj"
   FCall <> 0 1 "" - "" ""
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "case_default"
   FCall <> 0 1 "" - "" ""
   PopC

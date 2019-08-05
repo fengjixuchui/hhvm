@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : mixed array_shift(array &$stack)
  * Description: Pops an element off the beginning of the array
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass incorrect number of arguments to array_shift() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_shift() : error conditions ***\n";
 
 // Zero arguments
@@ -21,4 +21,4 @@ $extra_arg = 10;
 try { var_dump( array_shift(&$stack, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

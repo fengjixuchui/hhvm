@@ -1,8 +1,8 @@
-<?php
+<?hh
 
 // standard execution
 class C1 {
-  public function __invoke($a0, $a1) {
+  public static function __invoke($a0, $a1) {
     var_dump('C1');
     var_dump($a0, $a1);
   }
@@ -10,7 +10,7 @@ class C1 {
 class D1 extends C1 {
 }
 class E1 extends D1 {
-  public function __invoke($a0, $a1) {
+  public static function __invoke($a0, $a1) {
     var_dump('D2');
     var_dump($a0, $a1);
   }
@@ -46,9 +46,9 @@ call_user_func($e, 0, 1);
 call_user_func_array($c, array(0, 1));
 call_user_func_array($d, array(0, 1));
 call_user_func_array($e, array(0, 1));
-$c->__invoke(0, 1);
-$d->__invoke(0, 1);
-$e->__invoke(0, 1);
+$c::__invoke(0, 1);
+$d::__invoke(0, 1);
+$e::__invoke(0, 1);
 (new E1)->test();
 var_dump(array_filter(array(0, 1, 11, 13), new F1));
 }

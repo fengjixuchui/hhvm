@@ -1,4 +1,4 @@
-<?php # vim:ft=php:
+<?hh # vim:ft=php:
 
   for ($i=0; $i<100; $i++) {
     $port = rand(10000, 65000);
@@ -32,4 +32,3 @@
 	fclose($client);
 	fclose($socket);
 	fclose($server);
-?>

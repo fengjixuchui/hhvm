@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* 
  Prototype: array fgetcsv ( resource $handle [, int $length [, string $delimiter [, string $enclosure]]] );
  Description: Gets line from file pointer and parse for CSV fields
 */
 
 /* Testing fgetcsv() to read a file when all its parameters are provided */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing fgetcsv() : with all parameters specified ***\n";
 
 /* the array is with three elements in it. Each element should be read as 
@@ -83,4 +83,4 @@ foreach ($csv_lists as $csv_list) {
 } // end of foreach
 
 echo "Done\n";
-?>
+}

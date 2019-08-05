@@ -1,7 +1,8 @@
 [(Fun
     { f_span = [3:1-5:2]; f_annotation = (); f_mode = <opaque>;
-      f_ret = (Some ([3:21-24], (Hprim Tint))); f_name = ([3:10-11], "\\f");
-      f_tparams = []; f_where_constraints = []; f_variadic = FVnonVariadic;
+      f_ret = (([Pos.none], _), (Some ([3:21-24], (Hprim Tint))));
+      f_name = ([3:10-11], "\\f"); f_tparams = []; f_where_constraints = [];
+      f_variadic = FVnonVariadic;
       f_params =
       [{ param_annotation = ([3:16-18], int);
          param_hint = (Some ([3:12-15], (Hprim Tint)));
@@ -11,11 +12,11 @@
         ];
       f_body =
       { fb_ast =
-        [(Return ([4:3-17],
-            (Some (([4:10-16], int),
-                   (Binop (Plus, (([4:10-12], int), (Lvar ([4:10-12], $x))),
-                      (([4:15-16], int), (Int "3"))))))
-            ))
+        [([4:3-17],
+          (Return
+             (Some (([4:10-16], int),
+                    (Binop (Plus, (([4:10-12], int), (Lvar ([4:10-12], $x))),
+                       (([4:15-16], int), (Int "3"))))))))
           ];
         fb_annotation = No unsafe blocks };
       f_fun_kind = FSync; f_user_attributes = []; f_file_attributes = [];

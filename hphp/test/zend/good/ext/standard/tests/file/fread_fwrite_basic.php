@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /* 
  * proto int fwrite(resource fp, string str [, int length])
@@ -13,7 +13,7 @@
    opening userspace stream) when 8192 bytes have been read whichever comes first.
 */
 
-
+<<__EntryPoint>> function main(): void {
 $outputfile = __FILE__.".tmp";
 
 echo "--- testing rw moving about the file ---\n";
@@ -51,4 +51,4 @@ fclose($h);
 unlink($outputfile);
 
 echo "Done";
-?>
+}

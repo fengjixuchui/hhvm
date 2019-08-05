@@ -1,4 +1,4 @@
-<?php
+<?hh
 class mytest
 {
   const classConstant = '01';
@@ -11,9 +11,11 @@ class mytest
   }
 }
 
+const normalConstant = '01';
+
+<<__EntryPoint>> function main(): void {
 $classtest = new mytest();
 
-const normalConstant = '01';
 $normalArray = array( normalConstant => 'value' );
 print_r($normalArray);
-?>
+}

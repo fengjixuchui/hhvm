@@ -1,4 +1,4 @@
-<?php 
+<?hh 
 
 $a = clone clone $b = new stdClass;
 var_dump($a == $b);
@@ -12,4 +12,3 @@ class foo { }
 $d = clone $a = $b = new foo;
 var_dump($a == $d, $b == $d, $c == $a);
 
-?>

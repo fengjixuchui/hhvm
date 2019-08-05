@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array class_uses(mixed what [, bool autoload ])
  * Description: Return all traits used by a class
  * Source code: ext/spl/php_spl.c
@@ -107,5 +107,4 @@ foreach($inputs as $key =>$value) {
 
 fclose($res);
 
-?>
-===DONE===
+echo "===DONE===\n";

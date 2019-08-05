@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto string base64_decode(string str[, bool strict])
  * Description: Decodes string using MIME base64 algorithm 
  * Source code: ext/standard/base64.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing base64_decode() : error conditions ***\n";
 
 // Zero arguments
@@ -19,4 +19,4 @@ $extra_arg = 10;
 try { var_dump( base64_decode($str, $strict, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

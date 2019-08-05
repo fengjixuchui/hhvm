@@ -1,6 +1,6 @@
-<?php
+<?hh
 // Test code from: http://www.php.net/manual/en/splobjectstorage.getinfo.php
-
+<<__EntryPoint>> function main(): void {
 $s = new SplObjectStorage();
 
 $o1 = new StdClass;
@@ -23,4 +23,4 @@ while($s->valid()) {
 // now mutate $o2 and ensure it sticks
 $s->attach($o2, "mutated");
 var_dump($s[$o2]);
-?>
+}

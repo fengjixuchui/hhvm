@@ -1,4 +1,4 @@
-<?php
+<?hh
 function f2 ($a) {
   return $a+200;
 }
@@ -45,6 +45,9 @@ class G extends B {
     return $a;
   }
   function f1($a) {
+    return $a;
+  }
+  static function sf1($a) {
     return $a;
   }
   // override
@@ -96,7 +99,7 @@ class G extends B {
   // static call
 }
 class H {
-  function f($a) {
+  static function f($a) {
 
     ObjectMethod736::$trace="H::f,";
     return "";
@@ -196,7 +199,7 @@ echo "dynamic call \$g->'G::f' ".ObjectMethod736::$trace.", 21 == $res\n";
  // G::H::f better break
 
 // Test on static class, dynamic method name, static call
-$f = 'f1';
+$f = 'sf1';
 echo "31 == ",G::$f(31),"\n";
  // G::f exists
 $f = 'f3';
@@ -232,7 +235,7 @@ call_user_func_array(array($j,'missing'),array(3));
 
 // test mapping for system function names
 $ourFileName = "testFile.txt";
-$ourFileHandle = fopen($ourFileName, 'w') or die("can't open file");
+($ourFileHandle = fopen($ourFileName, 'w')) || die("can't open file");
 fclose($ourFileHandle);
 unlink($ourFileName);
 

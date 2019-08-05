@@ -51,6 +51,7 @@
 #include "hphp/runtime/vm/jit/stack-overflow.h"
 #include "hphp/runtime/vm/jit/target-cache.h"
 #include "hphp/runtime/vm/jit/tc.h"
+#include "hphp/runtime/vm/jit/tc-internal.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/vm/jit/unique-stubs-arm.h"
 #include "hphp/runtime/vm/jit/unique-stubs-ppc64.h"
@@ -739,14 +740,17 @@ TCA emitInterpOneCFHelper(CodeBlock& cb, DataBlock& data, Op op,
 }
 
 void emitInterpOneCFHelpers(CodeBlock& cb, DataBlock& data, UniqueStubs& us,
+                            CodeCache::View view,
                             const ResumeHelperEntryPoints& rh,
                             const CodeCache& code, Debug::DebugInfo& dbg) {
   alignJmpTarget(cb);
 
   auto const emit = [&] (Op op, const char* name) {
+    tc::TransLocMaker maker{view};
+    maker.markStart();
     auto const stub = emitInterpOneCFHelper(cb, data, op, rh);
     us.interpOneCFHelpers[op] = stub;
-    us.add(name, stub, code, dbg);
+    us.add(name, code, stub, view, maker.markEnd().loc(), dbg);
   };
 
 #define O(name, imm, in, out, flags)          \
@@ -798,11 +802,15 @@ TCA emitDecRefGeneric(CodeBlock& cb, DataBlock& data) {
       auto const callerSaved = abi().gpUnreserved - abi().calleeSaved;
       PhysRegSaver prs{v, callerSaved};
 
-      // As a consequence of being called via callfaststub, we can't safely use
-      // any Vregs here except for status flags registers, at least not with
-      // the default vwrap() ABI.  Just use the argument registers instead.
+      // Since we've manually saved the caller saved registers, we can
+      // use those for Vregs. We use the helper ABI for this stub
+      // which only allows caller saved registers.
       assertx(callerSaved.contains(rdata));
       assertx(callerSaved.contains(rtype));
+      assertx(
+        (callerSaved & abi(CodeKind::Helper).gpUnreserved) ==
+        abi(CodeKind::Helper).gpUnreserved
+      );
 
       auto const dtor = lookupDestructor(v, rtype);
       v << callm{dtor, arg_regs(1)};
@@ -817,7 +825,7 @@ TCA emitDecRefGeneric(CodeBlock& cb, DataBlock& data) {
     emitDecRefWork(v, v, rdata, destroy, false, TRAP_REASON);
 
     v << stubret{{}, fullFrame};
-  });
+  }, CodeKind::Helper);
 
   meta.process(nullptr);
   return start;
@@ -1049,19 +1057,6 @@ TCA emitThrowSwitchMode(CodeBlock& cb, DataBlock& data) {
   });
 }
 
-template<class F>
-TCA emitHelperThunk(CodeCache& code, CodeBlock& cb, DataBlock& data, F* func) {
-  // we only emit these calls into hot, main and cold.
-  if (deltaFits(code.base() - (TCA)func, sz::dword) &&
-      deltaFits(code.frozen().base() - (TCA)func, sz::dword)) {
-    return (TCA)func;
-  }
-  alignJmpTarget(cb);
-  return vwrap(cb, data, [&] (Vout& v) {
-      v << jmpi{(TCA)func};
-  });
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 }
@@ -1071,126 +1066,160 @@ void UniqueStubs::emitAll(CodeCache& code, Debug::DebugInfo& dbg) {
   auto& main = view.main();
   auto& cold = view.cold();
   auto& frozen = view.frozen();
-  auto& hotBlock = code.view(TransKind::Optimize).main();
+  auto optView = code.view(TransKind::Optimize);
+  auto& hotBlock = optView.main();
   auto& data = view.data();
 
   auto const hot = [&]() -> CodeBlock& {
     return hotBlock.available() > 512 ? hotBlock : main;
   };
+  auto const hotView = [&]() -> CodeCache::View& {
+    return hotBlock.available() > 512 ? optView : view;
+  };
 
-#define ADD(name, stub) name = add(#name, (stub), code, dbg)
-  ADD(enterTCExit,   emitEnterTCExit(hot(), data, *this));
+#define EMIT(name, v_in, stub)                                     \
+  [&] {                                                            \
+    auto const& v = (v_in);                                        \
+    tc::TransLocMaker maker{v};                                    \
+    maker.markStart();                                             \
+    auto const start = (stub)();                                   \
+    add(name, code, start, v, maker.markEnd().loc(), dbg);         \
+    return start;                                                  \
+  }()
+
+#define ADD(name, v, stub) name = EMIT(#name, v, [&] { return (stub); })
+  ADD(enterTCExit,   hotView(), emitEnterTCExit(hot(), data, *this));
   enterTCHelper =
-    decltype(enterTCHelper)(add("enterTCHelper",
-                                emitEnterTCHelper(main, data, *this),
-                                code,
-                                dbg));
+    decltype(enterTCHelper)(
+      EMIT(
+        "enterTCHelper",
+        view,
+        [&] { return emitEnterTCHelper(main, data, *this); }
+      )
+    );
 
   // These guys are required by a number of other stubs.
-  ADD(handleSRHelper, emitHandleSRHelper(hot(), data));
-  ADD(endCatchHelper, emitEndCatchHelper(hot(), data, *this));
-  ADD(unknownExceptionHandler, emitUnknownExceptionHandler(cold, data, *this));
+  ADD(handleSRHelper, hotView(), emitHandleSRHelper(hot(), data));
+  ADD(endCatchHelper, hotView(), emitEndCatchHelper(hot(), data, *this));
+  ADD(unknownExceptionHandler,
+      view,
+      emitUnknownExceptionHandler(cold, data, *this));
 
-  ADD(funcPrologueRedispatch, emitFuncPrologueRedispatch(hot(), data));
-  ADD(fcallHelperThunk,       emitFCallHelperThunk(cold, frozen, data));
-  ADD(funcBodyHelperThunk,    emitFuncBodyHelperThunk(cold, data));
-  ADD(functionEnterHelper, emitFunctionEnterHelper(hot(), cold, data, *this));
+  ADD(funcPrologueRedispatch,
+      hotView(),
+      emitFuncPrologueRedispatch(hot(), data));
+  ADD(fcallHelperThunk,       view, emitFCallHelperThunk(cold, frozen, data));
+  ADD(funcBodyHelperThunk,    view, emitFuncBodyHelperThunk(cold, data));
+  ADD(functionEnterHelper,
+      hotView(),
+      emitFunctionEnterHelper(hot(), cold, data, *this));
   ADD(functionSurprisedOrStackOverflow,
+      hotView(),
       emitFunctionSurprisedOrStackOverflow(hot(), cold, data, *this));
 
-  ADD(retHelper,                  emitInterpRet(hot(), data));
-  ADD(genRetHelper,               emitInterpGenRet<false>(cold, data));
-  ADD(asyncGenRetHelper,          emitInterpGenRet<true>(hot(), data));
-  ADD(retInlHelper,               emitInterpRet(hot(), data));
-  ADD(debuggerRetHelper,          emitDebuggerInterpRet(cold, data));
-  ADD(debuggerGenRetHelper,       emitDebuggerInterpGenRet<false>(cold, data));
-  ADD(debuggerAsyncGenRetHelper,  emitDebuggerInterpGenRet<true>(cold, data));
+  ADD(retHelper, hotView(), emitInterpRet(hot(), data));
+  ADD(genRetHelper, view, emitInterpGenRet<false>(cold, data));
+  ADD(asyncGenRetHelper, hotView(), emitInterpGenRet<true>(hot(), data));
+  ADD(retInlHelper, hotView(), emitInterpRet(hot(), data));
+  ADD(debuggerRetHelper, view, emitDebuggerInterpRet(cold, data));
+  ADD(debuggerGenRetHelper, view, emitDebuggerInterpGenRet<false>(cold, data));
+  ADD(debuggerAsyncGenRetHelper,
+      view,
+      emitDebuggerInterpGenRet<true>(cold, data));
 
-  ADD(bindCallStub,          emitBindCallStub<false>(cold, data));
-  ADD(immutableBindCallStub, emitBindCallStub<true>(cold, data));
-  ADD(fcallUnpackHelper,     emitFCallUnpackHelper(hot(), cold, data, *this));
+  ADD(bindCallStub,          view, emitBindCallStub<false>(cold, data));
+  ADD(immutableBindCallStub, view, emitBindCallStub<true>(cold, data));
+  ADD(fcallUnpackHelper,
+      hotView(),
+      emitFCallUnpackHelper(hot(), cold, data, *this));
 
-  ADD(decRefGeneric,  emitDecRefGeneric(hot(), data));
+  ADD(decRefGeneric,  hotView(), emitDecRefGeneric(hot(), data));
 
-  ADD(callToExit,         emitCallToExit(hot(), data, *this));
-  ADD(throwSwitchMode,    emitThrowSwitchMode(frozen, data));
-
-  ADD(handlePrimeCacheInit,
-      emitHelperThunk(code, cold, data,
-                      MethodCache::handlePrimeCacheInit<false>));
-  ADD(handlePrimeCacheInitFatal,
-      emitHelperThunk(code, cold, data,
-                      MethodCache::handlePrimeCacheInit<true>));
-  ADD(handleSlowPath,
-      emitHelperThunk(code, main, data,
-                      MethodCache::handleSlowPath<false>));
-  ADD(handleSlowPathFatal,
-      emitHelperThunk(code, main, data,
-                      MethodCache::handleSlowPath<true>));
-
+  ADD(callToExit,         hotView(), emitCallToExit(hot(), data, *this));
+  ADD(throwSwitchMode,    view, emitThrowSwitchMode(frozen, data));
 #undef ADD
 
-  add("freeLocalsHelpers",
-      emitFreeLocalsHelpers(hot(), data, *this), code, dbg);
+  EMIT(
+    "freeLocalsHelpers",
+    hotView(),
+    [&] { return emitFreeLocalsHelpers(hot(), data, *this); }
+  );
 
   ResumeHelperEntryPoints rh;
-  add("resumeInterpHelpers",
-      emitResumeInterpHelpers(hot(), data, *this, rh),
-      code, dbg);
-  emitInterpOneCFHelpers(cold, data, *this, rh, code, dbg);
+  EMIT(
+    "resumeInterpHelpers",
+    hotView(),
+    [&] { return emitResumeInterpHelpers(hot(), data, *this, rh); }
+  );
+  emitInterpOneCFHelpers(cold, data, *this, view, rh, code, dbg);
 
   emitAllResumable(code, dbg);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-TCA UniqueStubs::add(const char* name, TCA start,
-                     const CodeCache& code, Debug::DebugInfo& dbg) {
-  if (!code.isValidCodeAddress(start)) return start;
+void UniqueStubs::add(const char* name,
+                      const CodeCache& code,
+                      TCA mainStart,
+                      CodeCache::View view,
+                      TransLoc loc,
+                      Debug::DebugInfo& dbg) {
+  if (!code.isValidCodeAddress(mainStart)) return;
 
-  auto& cb = code.blockFor(start);
-  auto const end = cb.frontier();
+  auto const& startBlock = code.blockFor(mainStart);
 
-  FTRACE(1, "unique stub: {} @ {} -- {:4} bytes: {}\n",
-         cb.name(),
-         static_cast<void*>(start),
-         static_cast<size_t>(end - start),
-         name);
+  auto const process = [&] (const CodeBlock& cb, Address start, Address end) {
+    if (start == end) return;
 
-  ONTRACE(2,
-          [&]{
-            std::ostringstream os;
-            disasmRange(os, start, end);
-            FTRACE(2, "{}\n", os.str());
-          }()
-         );
+    // We may have inserted padding at the beginning, so adjust past it (using
+    // the start address).
+    if (&cb == &startBlock) start = mainStart;
 
-  if (!RuntimeOption::EvalJitNoGdb) {
-    dbg.recordStub(Debug::TCRange(start, end, &cb == &code.cold()),
-                   folly::sformat("HHVM::{}", name));
+    FTRACE(1, "unique stub: {} @ {} -- {:4} bytes: {}\n",
+           cb.name(),
+           static_cast<void*>(start),
+           static_cast<size_t>(end - start),
+           name);
+
+    ONTRACE(2,
+            [&]{
+              std::ostringstream os;
+              disasmRange(os, TransKind::Optimize, start, end);
+              FTRACE(2, "{}\n", os.str());
+            }()
+           );
+
+    if (!RuntimeOption::EvalJitNoGdb) {
+      dbg.recordStub(Debug::TCRange(start, end, &cb == &code.cold()),
+                     folly::sformat("HHVM::{}", name));
+    }
+    if (RuntimeOption::EvalJitUseVtuneAPI) {
+      reportHelperToVtune(folly::sformat("HHVM::{}", name).c_str(),
+                          start,
+                          end);
+    }
+    if (RuntimeOption::EvalPerfPidMap) {
+      dbg.recordPerfMap(Debug::TCRange(start, end, &cb == &code.cold()),
+                        SrcKey{},
+                        nullptr,
+                        false,
+                        false,
+                        folly::sformat("HHVM::{}", name));
+    }
+
+    auto const newStub = StubRange{name, start, end};
+    auto lower = std::lower_bound(m_ranges.begin(), m_ranges.end(), newStub);
+
+    // We assume ranges are non-overlapping.
+    assertx(lower == m_ranges.end() || newStub.end <= lower->start);
+    assertx(lower == m_ranges.begin() || (lower - 1)->end <= newStub.start);
+    m_ranges.insert(lower, newStub);
+  };
+  process(view.main(), loc.mainStart(), loc.mainEnd());
+  process(view.cold(), loc.coldCodeStart(), loc.coldEnd());
+  if (&view.cold() != &view.frozen()) {
+    process(view.frozen(), loc.frozenCodeStart(), loc.frozenEnd());
   }
-  if (RuntimeOption::EvalJitUseVtuneAPI) {
-    reportHelperToVtune(folly::sformat("HHVM::{}", name).c_str(),
-                        start,
-                        end);
-  }
-  if (RuntimeOption::EvalPerfPidMap) {
-    dbg.recordPerfMap(Debug::TCRange(start, end, &cb == &code.cold()),
-                      SrcKey{},
-                      nullptr,
-                      false,
-                      false,
-                      folly::sformat("HHVM::{}", name));
-  }
-
-  auto const newStub = StubRange{name, start, end};
-  auto lower = std::lower_bound(m_ranges.begin(), m_ranges.end(), newStub);
-
-  // We assume ranges are non-overlapping.
-  assertx(lower == m_ranges.end() || newStub.end <= lower->start);
-  assertx(lower == m_ranges.begin() || (lower - 1)->end <= newStub.start);
-  m_ranges.insert(lower, newStub);
-  return start;
 }
 
 std::string UniqueStubs::describe(TCA address) const {
@@ -1224,6 +1253,10 @@ void emitInterpReq(Vout& v, SrcKey sk, FPInvOffset spOff) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+// see T39604764: inlining-specific issue that might also affect GCC
+#ifdef __clang__
+NEVER_INLINE
+#endif
 void enterTCImpl(TCA start, ActRec* stashedAR) {
   // We have to force C++ to spill anything that might be in a callee-saved
   // register (aside from rvmfp()), since enterTCHelper does not save them.

@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : array array_unique(array $input)
  * Description: Removes duplicate values from array 
  * Source code: ext/standard/array.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_unique() : error conditions ***\n";
 
 // Zero arguments
@@ -17,4 +17,4 @@ $extra_arg = 10;
 try { var_dump( array_unique($input, SORT_NUMERIC, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

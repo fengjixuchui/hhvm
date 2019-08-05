@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
  * Check if collator_sort() properly supports copy-on-write.
  */
@@ -46,4 +46,3 @@ function ut_main()
 
 require_once( 'ut_common.inc' );
 ut_run();
-?>

@@ -45,9 +45,9 @@ let keys_to_sset smap =
   SMap.fold smap ~init:SSet.empty ~f:(fun k _ s -> SSet.add s k)
 
 let get_class_filename cid =
-  match Naming_heap.TypeIdHeap.get cid with
-  | None | Some (_, `Typedef) -> None
-  | Some (pos, `Class) -> Some (FileInfo.get_pos_filename pos)
+  match Naming_table.Types.get_pos cid with
+  | None | Some (_, Naming_table.TTypedef) -> None
+  | Some (pos, Naming_table.TClass) -> Some (FileInfo.get_pos_filename pos)
 
 let rec collect_class
     ?(fail_if_missing=false)
@@ -68,7 +68,11 @@ let rec collect_class
         | None -> raise Exit
         | Some filename ->
           Hh_logger.log "Declaring %s class %s" kind cid;
-          Decl.declare_class_in_file filename cid;
+          (* NOTE: the following relies on the fact that declaring a class puts
+          the inheritance hierarchy into the shared memory heaps. When that
+          invariant no longer holds, the following will no longer work. *)
+          let _: Decl_defs.decl_class_type option =
+            Decl.declare_class_in_file filename cid in
           collect_class requested_classes cid decls ~fail_if_missing:true
       with Exit | Decl_not_found _ ->
         if not @@ SSet.mem requested_classes cid
@@ -126,12 +130,12 @@ let rec collect_class
       || Relative_path.Map.mem decls.decl_fixmes filename
       then decls
       else
-        match Fixmes.HH_FIXMES.get filename with
+        match Fixme_provider.get_hh_fixmes filename with
         | Some fixmes ->
           {decls with fixmes =
             Relative_path.Map.add decls.fixmes filename fixmes}
         | None ->
-          match Fixmes.DECL_HH_FIXMES.get filename with
+          match Fixme_provider.get_decl_hh_fixmes filename with
           | Some fixmes ->
             {decls with decl_fixmes =
               Relative_path.Map.add decls.decl_fixmes filename fixmes}
@@ -155,8 +159,8 @@ let restore_decls decls =
   CEKMap.iter meths Methods.add;
   CEKMap.iter smeths StaticMethods.add;
   SMap.iter cstrs Constructors.add;
-  Relative_path.Map.iter fixmes Fixmes.HH_FIXMES.add;
-  Relative_path.Map.iter decl_fixmes Fixmes.DECL_HH_FIXMES.add
+  Relative_path.Map.iter fixmes Fixme_provider.provide_hh_fixmes;
+  Relative_path.Map.iter decl_fixmes Fixme_provider.provide_decl_hh_fixmes
 
 let export_class_decls classes =
   collect_classes classes empty_decls classes

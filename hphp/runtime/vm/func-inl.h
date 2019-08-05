@@ -18,7 +18,6 @@
 #error "func-inl.h should only be included by func.h"
 #endif
 
-#include "hphp/runtime/vm/cls-ref.h"
 #include "hphp/runtime/vm/unit-util.h"
 
 namespace HPHP {
@@ -38,8 +37,7 @@ void FPIEnt::serde(SerDe& sd) {
 
 template<class SerDe>
 void EHEnt::serde(SerDe& sd) {
-  sd(m_type)
-    (m_base)
+  sd(m_base)
     (m_past)
     (m_iterId)
     (m_handler)
@@ -119,7 +117,7 @@ inline Unit* Func::unit() const {
 }
 
 inline Class* Func::cls() const {
-  return m_cls;
+  return !isMethCaller() ? m_u.cls() : nullptr;
 }
 
 inline PreClass* Func::preClass() const {
@@ -127,7 +125,8 @@ inline PreClass* Func::preClass() const {
 }
 
 inline Class* Func::baseCls() const {
-  return m_baseCls;
+  return !(m_baseCls & kMethCallerBit) ?
+    reinterpret_cast<Class*>(m_baseCls) : nullptr;
 }
 
 inline Class* Func::implCls() const {
@@ -146,12 +145,16 @@ inline StrNR Func::nameStr() const {
 
 inline const StringData* Func::fullName() const {
   if (m_fullName == nullptr) return m_name;
+  if (UNLIKELY((intptr_t)m_fullName.get() == kNeedsFullName)) {
+    m_fullName = makeStaticString(
+      std::string(cls()->name()->data()) + "::" + m_name->data());
+  }
   return m_fullName;
 }
 
 inline StrNR Func::fullNameStr() const {
   assertx(m_fullName != nullptr);
-  return StrNR(m_fullName);
+  return StrNR(fullName());
 }
 
 inline const StringData* Func::displayName() const {
@@ -182,6 +185,17 @@ inline const NamedEntity* Func::getNamedEntity() const {
 
 inline void Func::setNamedEntity(const NamedEntity* e) {
   *reinterpret_cast<LowPtr<const NamedEntity>*>(&m_namedEntity) = e;
+}
+
+inline const StringData* Func::methCallerClsName() const {
+  assertx(isMethCaller() && isBuiltin());
+  return m_u.name();
+}
+
+inline const StringData* Func::methCallerMethName() const {
+  assertx(isMethCaller() && isBuiltin() &&
+          (m_methCallerMethName & kMethCallerBit));
+  return reinterpret_cast<StringData*>(m_methCallerMethName - kMethCallerBit);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -342,12 +356,6 @@ inline int Func::numIterators() const {
   return shared()->m_numIterators;
 }
 
-inline int Func::numClsRefSlots() const {
-  auto const ex = extShared();
-  if (LIKELY(!ex)) return shared()->m_numClsRefSlots;
-  return ex->m_actualNumClsRefSlots;
-}
-
 inline Id Func::numNamedLocals() const {
   return shared()->m_localNames.size();
 }
@@ -366,9 +374,9 @@ inline int Func::maxStackCells() const {
 }
 
 inline int Func::numSlotsInFrame() const {
-  return shared()->m_numLocals +
-    shared()->m_numIterators * (sizeof(Iter) / sizeof(Cell)) +
-    (numClsRefSlots() * sizeof(cls_ref) + sizeof(Cell) - 1) / sizeof(Cell);
+  return
+    shared()->m_numLocals +
+    shared()->m_numIterators * (sizeof(Iter) / sizeof(Cell));
 }
 
 inline bool Func::hasForeignThis() const {
@@ -381,21 +389,6 @@ inline void Func::setHasForeignThis(bool hasForeignThis) {
 
 inline void Func::setGenerated(bool isGenerated) {
   shared()->m_isGenerated = isGenerated;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// Static locals.
-
-inline const Func::SVInfoVec& Func::staticVars() const {
-  return shared()->m_staticVars;
-}
-
-inline bool Func::hasStaticLocals() const {
-  return !shared()->m_staticVars.empty();
-}
-
-inline int Func::numStaticLocals() const {
-  return shared()->m_staticVars.size();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -472,14 +465,6 @@ inline bool Func::isBuiltin() const {
 inline bool Func::isCPPBuiltin() const {
   auto const ex = extShared();
   return UNLIKELY(!!ex) && ex->m_arFuncPtr;
-}
-
-inline bool Func::readsCallerFrame() const {
-  return m_attrs & AttrReadsCallerFrame;
-}
-
-inline bool Func::takesNumArgs() const {
-  return shared()->m_takesNumArgs;
 }
 
 inline ArFunction Func::arFuncPtr() const {
@@ -564,16 +549,8 @@ inline bool Func::isGenerated() const {
   return shared()->m_isGenerated;
 }
 
-inline bool Func::isMagic() const {
-  return isMagicCallMethod() || isMagicCallStaticMethod();
-}
-
 inline bool Func::isMagicCallMethod() const {
-  return m_name->isame(s___call);
-}
-
-inline bool Func::isMagicCallStaticMethod() const {
-  return m_name->isame(s___callStatic);
+  return m_name->isame(s___call.get());
 }
 
 inline bool Func::isSpecial(const StringData* name) {
@@ -608,15 +585,15 @@ inline bool Func::isNoInjection() const {
 }
 
 inline bool Func::isSkipFrame() const {
-  return m_attrs & AttrSkipFrame;
+  return isCPPBuiltin() || (isBuiltin() && !isMethod() && !isPseudoMain());
+}
+
+inline bool Func::isProvenanceSkipFrame() const {
+  return m_attrs & AttrProvenanceSkipFrame;
 }
 
 inline bool Func::isFoldable() const {
   return m_attrs & AttrIsFoldable;
-}
-
-inline bool Func::isParamCoerceMode() const {
-  return nativeFuncPtr() != nullptr;
 }
 
 inline bool Func::supportsAsyncEagerReturn() const {
@@ -627,12 +604,8 @@ inline bool Func::isDynamicallyCallable() const {
   return m_attrs & AttrDynamicallyCallable;
 }
 
-inline bool Func::isHot() const {
-  return m_hot;
-}
-
-inline void Func::setHot() {
-  m_hot = true;
+inline bool Func::isMethCaller() const {
+  return m_attrs & AttrIsMethCaller;
 }
 
 inline bool Func::isPhpLeafFn() const {
@@ -659,11 +632,6 @@ inline const EHEnt* Func::findEH(Offset o) const {
   return findEH(shared()->m_ehtab, o);
 }
 
-inline const EHEnt* Func::findEHbyHandler(Offset o) const {
-  assertx(o >= base() && o < past());
-  return findEHbyHandler(shared()->m_ehtab, o);
-}
-
 template<class Container>
 const typename Container::value_type*
 Func::findEH(const Container& ehtab, Offset o) {
@@ -676,28 +644,6 @@ Func::findEH(const Container& ehtab, Offset o) {
   }
   return eh;
 }
-
-template<class Container>
-const typename Container::value_type*
-Func::findEHbyHandler(const Container& ehtab, Offset o) {
-  const typename Container::value_type* eh = nullptr;
-  Offset closest = 0;
-
-  // We cannot rely on m_end to be a useful value (not kInvalidOffset), so
-  // instead we take the handler whose start is the closest without going
-  // over the offset we are looking for. We can rely on the fault handlers
-  // to be both contigous and dominated by an Unwind/Catch because we
-  // verify this in checkSection() in the verifier
-
-  for (uint32_t i = 0, sz = ehtab.size(); i < sz; ++i) {
-    if (ehtab[i].m_handler <= o && ehtab[i].m_handler > closest) {
-      eh = &ehtab[i];
-      closest = ehtab[i].m_handler;
-    }
-  }
-  return eh;
-}
-
 
 inline const FPIEnt* Func::findFPI(Offset o) const {
   assertx(o >= base() && o < past());
@@ -739,18 +685,17 @@ inline int8_t& Func::maybeIntercepted() const {
 
 inline void Func::setAttrs(Attr attrs) {
   m_attrs = attrs;
-  assertx(IMPLIES(readsCallerFrame(), isBuiltin() && !isMethod()));
 }
 
 inline void Func::setBaseCls(Class* baseCls) {
-  m_baseCls = baseCls;
+  m_baseCls = to_low(baseCls);
 }
 
 inline void Func::setFuncHandle(rds::Link<LowPtr<Func>,
                                           rds::Mode::NonLocal> l) {
   // TODO(#2950356): This assertion fails for create_function with an existing
   // declared function named __lambda_func.
-  //assert(!m_cachedFunc.valid());
+  //assertx(!m_cachedFunc.valid());
   m_cachedFunc = l;
 }
 

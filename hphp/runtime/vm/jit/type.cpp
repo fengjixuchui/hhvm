@@ -399,6 +399,9 @@ void Type::serialize(ProfDataSerializer& ser) const {
       return write_array(ser, t.m_arrVal);
     }
     if (t <= TCctx)      return write_class(ser, t.m_cctxVal.cls());
+    if (use_lowptr && (t <= TClsMeth)) {
+      return write_clsmeth(ser, t.m_clsmethVal);
+    }
     assertx(t.subtypeOfAny(TBool, TInt, TDbl));
     return write_raw(ser, t.m_extra);
   }
@@ -441,6 +444,10 @@ Type Type::deserialize(ProfDataDeserializer& ser) {
       }
       if (t <= TCctx) {
         t.m_cctxVal = ConstCctx::cctx(read_class(ser));
+        return t;
+      }
+      if (use_lowptr && (t <= TClsMeth)) {
+        t.m_clsmethVal = read_clsmeth(ser);
         return t;
       }
       read_raw(ser, t.m_extra);
@@ -524,6 +531,7 @@ Type::bits_t Type::bitsFromDataType(DataType outer, DataType inner) {
     case KindOfFunc             : return kFunc;
     case KindOfClass            : return kCls;
     case KindOfClsMeth          : return kClsMeth;
+    case KindOfRecord           : return kRecord;
     case KindOfRef:
       assertx(inner != KindOfUninit);
       return bitsFromDataType(inner, KindOfUninit) << kBoxShift;
@@ -559,6 +567,7 @@ DataType Type::toDataType() const {
   if (*this <= TFunc)        return KindOfFunc;
   if (*this <= TCls)         return KindOfClass;
   if (*this <= TClsMeth)     return KindOfClsMeth;
+  if (*this <= TRecord)      return KindOfRecord;
   if (*this <= TBoxedCell)   return KindOfRef;
   always_assert_flog(false,
                      "Bad Type {} in Type::toDataType()", *this);
@@ -890,6 +899,7 @@ Type typeFromRAT(RepoAuthType ty, const Class* ctx) {
     case T::OptFunc:        return TFunc       | TInitNull;
     case T::OptCls:         return TCls        | TInitNull;
     case T::OptClsMeth:     return TClsMeth    | TInitNull;
+    case T::OptRecord:      return TRecord     | TInitNull;
     case T::OptArrKey:      return TInt | TStr | TInitNull;
     case T::OptUncArrKey:   return TInt | TPersistentStr | TInitNull;
     case T::OptStrLike:     return TFunc | TStr | TInitNull;
@@ -908,6 +918,7 @@ Type typeFromRAT(RepoAuthType ty, const Class* ctx) {
     case T::Func:           return TFunc;
     case T::Cls:            return TCls;
     case T::ClsMeth:        return TClsMeth;
+    case T::Record:         return TRecord;
 
     case T::Cell:           return TCell;
     case T::Ref:            return TBoxedInitCell;
@@ -988,6 +999,26 @@ Type typeFromRAT(RepoAuthType ty, const Class* ctx) {
       }
       return base;
     }
+
+    case T::SubCls:
+    case T::ExactCls:
+    case T::OptSubCls:
+    case T::OptExactCls: {
+      auto base = TCls;
+
+      if (auto const cls = Unit::lookupUniqueClassInContext(ty.clsName(),
+                                                            ctx)) {
+        if (ty.tag() == T::ExactCls || ty.tag() == T::OptExactCls) {
+          base = Type::ExactCls(cls);
+        } else {
+          base = Type::SubCls(cls);
+        }
+      }
+      if (ty.tag() == T::OptSubCls || ty.tag() == T::OptExactCls) {
+        base |= TInitNull;
+      }
+      return base;
+    }
   }
   not_reached();
 }
@@ -1011,6 +1042,7 @@ Type typeFromPropTC(const HPHP::TypeConstraint& tc,
       case A::Float:      return TDbl;
       case A::String:     return TStr;
       case A::Array:      return TArr;
+      case A::Record:     return TRecord;
       // We only call this once we've attempted resolving the
       // type-constraint. If we successfully resolved it, we'll never get here,
       // So if we're here and we have AnnotType::Object, we don't know what the
@@ -1033,6 +1065,7 @@ Type typeFromPropTC(const HPHP::TypeConstraint& tc,
         return (isSProp && !tc.couldSeeMockObject())
           ? Type::ExactObj(propCls)
           : Type::SubObj(propCls);
+      case A::Nothing:
       case A::NoReturn:
       case A::Self:
       case A::Parent:

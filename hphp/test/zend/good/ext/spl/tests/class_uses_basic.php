@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array class_uses(mixed what [, bool autoload ])
  * Description: Return all traits used by a class
  * Source code: ext/spl/php_spl.c
@@ -15,5 +15,4 @@ var_dump(class_uses(new bar));
 var_dump(class_uses('bar'));
 
 
-?>
-===DONE===
+echo "===DONE===\n";

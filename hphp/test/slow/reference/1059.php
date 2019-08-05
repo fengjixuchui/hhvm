@@ -1,9 +1,11 @@
-<?php
+<?hh
 
+function run(&$a, &$b) {
+  $a = 10;
+  var_dump($b);
+}
 
 <<__EntryPoint>>
-function main_1059() {
-$a = &$b;
- $a = 10;
- var_dump($b);
+function main() {
+  run(&$a, &$a);
 }

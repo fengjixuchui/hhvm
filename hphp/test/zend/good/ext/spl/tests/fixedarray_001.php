@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $a = new SplFixedArray(0);
 // errors
 try {
@@ -23,10 +23,7 @@ $a[0] = "value0";
 $a[1] = "value1";
 $a[2] = "value2";
 $a[3] = "value3";
-$ref = "value4";
-$ref2 =&$ref;
-$a[4] = $ref;
-$ref = "value5";
+$a[4] = "value4";
 
 unset($a[1]);
 
@@ -40,5 +37,5 @@ var_dump(count($a), $a->getSize(), count($a) == $a->getSize());
 $b = clone $a;
 $a[0] = "valueNew";
 var_dump($b[0]);
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -19,7 +19,6 @@
 
 #include <folly/Range.h>
 
-#include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/static-string-table.h"
 #include "hphp/runtime/base/type-string.h"
 #include "hphp/runtime/base/type-structure.h"
@@ -52,9 +51,11 @@ inline bool notClassMethodPair(const StringData* name) {
 
 const char kInOutSuffix[] = "$inout";
 inline bool needsStripInOut(const StringData* name) {
-  return
-    name->size() > sizeof(kInOutSuffix) &&
-    !strcmp(name->data() + name->size() - strlen(kInOutSuffix), kInOutSuffix);
+  auto const sz = name->size();
+  return sz > 6 &&
+    !memcmp(name->data() + sz - 6, kInOutSuffix, 6) &&
+    folly::qfind(name->slice().subpiece(0, sz - 6), folly::StringPiece("$")) !=
+      std::string::npos;
 }
 
 /*
@@ -117,20 +118,7 @@ inline String mangleInOutFuncName(const StringData* name,
   ));
 }
 
-inline std::string mangleReifiedGenericsName(const ArrayData* tsList) {
-  std::vector<std::string> l;
-  IterateV(
-    tsList,
-    [&](TypedValue v) {
-      assertx(isArrayLikeType(v.m_type));
-      auto str =
-        TypeStructure::toStringForDisplay(ArrNR(v.m_data.parr)).toCppString();
-      str.erase(remove_if(str.begin(), str.end(), isspace), str.end());
-      l.emplace_back(str);
-    }
-  );
-  return folly::sformat("<{}>", folly::join(",", l));
-}
+std::string mangleReifiedGenericsName(const ArrayData* tsList);
 
 inline StringData* mangleReifiedName(
   const StringData* name,
@@ -145,6 +133,16 @@ inline bool isReifiedName(const StringData* name) {
          name->data()[0] == '$' &&
          name->data()[1] == '$' &&
          folly::qfind(name->slice(), folly::StringPiece("$$<"))
+          != std::string::npos;
+}
+
+inline bool isMangledReifiedGenericInClosure(const StringData* name) {
+  // mangled name is of the form
+  // __captured$reifiedgeneric$class$ or __captured$reifiedgeneric$function$
+  // so it must be longer than 32 characters
+  return name->size() > 32 &&
+         folly::qfind(name->slice(),
+                      folly::StringPiece("__captured$reifiedgeneric$"))
           != std::string::npos;
 }
 

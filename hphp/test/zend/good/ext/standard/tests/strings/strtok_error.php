@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string strtok ( string $str, string $token )
  * Description: splits a string (str) into smaller strings (tokens), with each token being delimited by any character from token
  * Source code: ext/standard/string.c
@@ -7,7 +7,7 @@
 /*
  * Testing strtok() for error conditions
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing strtok() : error conditions ***\n";
 
 // Zero argument
@@ -31,4 +31,4 @@ var_dump( strtok($str));
 var_dump( $str );
 
 echo "Done\n";
-?>
+}

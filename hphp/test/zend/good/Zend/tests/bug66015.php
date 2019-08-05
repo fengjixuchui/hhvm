@@ -1,4 +1,4 @@
-<?php
+<?hh
 class Test
 {
    const FIRST = 1;
@@ -16,6 +16,6 @@ class Test
        var_export(self::$array);
    }
 }
-
+<<__EntryPoint>> function main(): void {
 $test = new Test();
-?>
+}

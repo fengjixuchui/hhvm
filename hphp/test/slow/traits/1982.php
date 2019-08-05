@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 error_reporting(E_ALL);
 trait THello1 {
@@ -18,4 +18,3 @@ var_dump(property_exists('TraitsTest', 'hello'));
 var_dump(property_exists('TraitsTest', 'world'));
 $t = new TraitsTest;
 $t->test();
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array each(&array $arr)
  * Description: Return the currently pointed key..value pair in the passed array, 
  * and advance the pointer to the next element 
@@ -8,7 +8,7 @@
 /*
  * Pass an incorrect number of arguments to each() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing each() : error conditions ***\n";
 
 // Zero arguments
@@ -22,5 +22,4 @@ $extra_arg = 10;
 try { var_dump( each(&$arr, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
-
+}

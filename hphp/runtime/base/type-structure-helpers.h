@@ -30,9 +30,14 @@ namespace HPHP {
 
 /*
  * Checks whether the given cell is an instance of the class referred by
- * given named entity
+ * given named entity.
  */
 bool cellInstanceOf(const Cell* tv, const NamedEntity* ne);
+
+/*
+ * Checks whether the given cell is an instance of the given class.
+ */
+bool cellInstanceOf(const Cell* tv, const Class* cls);
 
 /*
  * Returns true is all the generics on the type type structure are
@@ -47,11 +52,11 @@ bool isTSAllWildcards(const ArrayData* ts);
  * Sets the warn flag if the type parameter is denoted as soft either through
  * an annotation at the declaration site or by soft type hint at the generic
  * level
- * Currently only checks for classes and interfaces.
  */
 bool verifyReifiedLocalType(
   const ArrayData* type,
   const TypedValue* param,
+  bool isTypeVar,
   bool& warn
 );
 
@@ -80,19 +85,23 @@ Array resolveAndVerifyTypeStructure(
 );
 
 /*
- * Errors when the type structure contains invalid types for is/as expressions
+ * Raises an error if the type hint for is/as expression contains an invalid
+ * type such as callables, erased type variables and trait type hints
+ * If dryrun is set, it does not actually raise the error
+ * If allowWildcard is set, then it does not error on wildcards
  */
-void errorOnIsAsExpressionInvalidTypes(const Array& ts);
+bool errorOnIsAsExpressionInvalidTypes(const Array& ts, bool dryrun,
+                                       bool allowWildcard = false);
 
 /**
  * Returns whether the type structure may not be able to be resolved statically,
  * i.e. if it contains `this` references.
  */
-bool typeStructureCouldBeNonStatic(const Array& ts);
+bool typeStructureCouldBeNonStatic(const ArrayData* ts);
 
 /*
- * Checks whether the type of the given cell matches the type structure
- * Expects a resolved type structure
+ * Checks whether the type of the given cell matches the type structure.
+ * Expects a resolved type structure.
  */
 bool checkTypeStructureMatchesCell(const Array& ts, Cell c1);
 
@@ -107,6 +116,13 @@ bool checkTypeStructureMatchesCell(
   std::string& expectedType,
   std::string& errorKey
 );
+
+/*
+ * In addition to regular checkTypeStructureMatchesCell, also sets the warn flag
+ * if the type parameter is denoted as soft either through an annotation at the
+ * declaration site or by soft type hint at the generic level
+ */
+bool checkTypeStructureMatchesCell(const Array& ts, Cell c1, bool& warn);
 
 /*
  * Throws user catchable exception that tells the user what the given type is,

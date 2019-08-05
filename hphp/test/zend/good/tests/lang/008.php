@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 abstract final class TestStatics {
   public static $a =1;
@@ -6,11 +6,10 @@ abstract final class TestStatics {
 
 function Test()
 {
-	echo TestStatics::$a . " ";
-	TestStatics::$a++;
-	if(TestStatics::$a<10): Test(); endif;
+    echo TestStatics::$a . " ";
+    TestStatics::$a++;
+    if(TestStatics::$a<10) Test();
 }
-
+<<__EntryPoint>> function main(): void {
 Test();
-
-?>
+}

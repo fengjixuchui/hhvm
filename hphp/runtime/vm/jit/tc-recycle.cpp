@@ -30,11 +30,10 @@
 #include "hphp/runtime/vm/jit/srcdb.h"
 #include "hphp/runtime/vm/jit/vasm-gen.h"
 
-#include "hphp/runtime/base/rds-local.h"
-
 #include "hphp/util/arch.h"
 #include "hphp/util/asm-x64.h"
 #include "hphp/util/match.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/trace.h"
 
 #include "hphp/ppc64-asm/asm-ppc64.h"
@@ -240,6 +239,7 @@ void clearTCMaps(TCA start, TCA end) {
       }
     }
     eraseCatchTrace(start);
+    eraseInlineStack(start);
     if (isCall) {
       if (auto call = eraseSmashedCall(start)) {
         clearProfCaller(start, call->isGuard, call->rec);
@@ -470,7 +470,7 @@ void recordJump(TCA toSmash, SrcRec* sr) {
 
 void reclaimFunction(const Func* func) {
   clobberFuncGuards(func); // do this before func is freed
-  enqueueJob(FuncJob {func->fullName(), func->getFuncId()});
+  enqueueJob(FuncJob {func->name(), func->getFuncId()});
 }
 
 void reclaimTranslations(GrowableVector<TransLoc>&& trans) {

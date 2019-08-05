@@ -23,12 +23,12 @@
 #include "hphp/runtime/base/req-ptr.h"
 #include "hphp/runtime/base/tv-val.h"
 #include "hphp/runtime/base/weakref-data.h"
-#include "hphp/runtime/base/rds-local.h"
 
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/hhbc.h"
 
 #include "hphp/util/low-ptr.h"
+#include "hphp/util/rds-local.h"
 
 #include <vector>
 
@@ -146,16 +146,14 @@ struct InvokeResult {
 #pragma pack(push, 1)
 #endif
 
-extern DECLARE_RDS_LOCAL_HOTVALUE(uint32_t, os_max_id);
 struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   enum Attribute : uint8_t {
     NoAttrs            = 0x00,
     IsWeakRefed        = 0x02, // Is pointed to by at least one WeakRef
     HasDynPropArr      = 0x04, // has a dynamic properties array
     IsBeingConstructed = 0x08, // Constructor for most derived class has not
-                               // finished. Only set during construction when
-                               // the class has immutable properties (to
-                               // temporarily allow writing to them).
+                               // finished. Set during construction to
+                               // temporarily allow writing to const props.
     UsedMemoCache      = 0x10, // Object has had data set in its memo slots
     HasUninitProps     = 0x20  // The object's properties are being initialized
   };
@@ -167,8 +165,6 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   static constexpr size_t sizeofAttrs() {
     return sizeof(m_aux16);
   }
-
-  static void resetMaxId();
 
   explicit ObjectData(Class*, uint8_t flags = 0,
                       HeaderKind = HeaderKind::Object);
@@ -193,7 +189,10 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
  public:
   ALWAYS_INLINE void decRefAndRelease() {
     assertx(kindIsValid());
-    if (decReleaseCheck()) release();
+    if (decReleaseCheck()) {
+      auto const cls = getVMClass();
+      return cls->releaseFunc()(this, cls);
+    }
   }
   bool kindIsValid() const { return isObjectKind(headerKind()); }
 
@@ -203,20 +202,35 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
 
   void setWeakRefed() { setAttribute(IsWeakRefed); }
 
-  public:
+ private:
+  template <bool Unlocked, typename Init>
+  static ObjectData* newInstanceImpl(Class*, Init);
 
+  void setReifiedGenerics(Class*, ArrayData*);
+
+ public:
   /*
    * Call newInstance() to instantiate a PHP object. The initial ref-count will
-   * be greater than zero. Since this gives you a raw pointer, it is your
-   * responsibility to manage the ref-count yourself. Whenever possible, prefer
-   * using the Object class instead, which takes care of this for you.
+   * be greater than zero. Will raise if the class has reified generics; if
+   * the class may have reified generics, you must use newInstanceReified.
+   * Since this gives you a raw pointer, it is your responsibility to manage
+   * the ref-count yourself. Whenever possible, prefer using the Object class
+   * instead, which takes care of this for you.
    */
+  template <bool Unlocked = false>
   static ObjectData* newInstance(Class*);
 
   /*
+   * Same as newInstance, but classes with reified generics are allowed.
+   * If the class has reified generics, the second arg must be an array of
+   * type structures representing the reified types.
+   */
+  template <bool Unlocked = false>
+  static ObjectData* newInstanceReified(Class*, ArrayData*);
+
+  /*
    * Instantiate a new object without initializing its declared properties. The
-   * given Class must be a concrete, regular Class, without an instanceCtor or
-   * customInit.
+   * given Class must be a concrete, regular Class.
    */
   static ObjectData* newInstanceNoPropInit(Class*);
 
@@ -232,8 +246,6 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
    *
    * The initial ref-count will be set to one.
    */
-  static const uint8_t DefaultAttrs = NoAttrs;
-
   static ObjectData* newInstanceRawSmall(Class*, size_t size, size_t index);
   static ObjectData* newInstanceRawBig(Class*, size_t size);
 
@@ -241,12 +253,11 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
                                              size_t index, size_t objoff);
   static ObjectData* newInstanceRawMemoBig(Class*, size_t size, size_t objoff);
 
-  void release() noexcept;
+  static void release(ObjectData* obj, const Class* cls) noexcept;
 
   Class* getVMClass() const;
   void setVMClass(Class* cls);
   StrNR getClassName() const;
-  uint32_t getId() const;
 
   // instanceof() can be used for both classes and interfaces.
   bool instanceof(const String&) const;
@@ -271,9 +282,12 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   // in C++, you need this.
   bool isCppBuiltin() const;
 
-  // Is this an object with (some) immutable properties for which construction
-  // has not finished yet?
+  // Is this an object for which construction has not finished yet?
   bool isBeingConstructed() const;
+  // Clear the IsBeingConstructed bit to indicate that construction is done.
+  void lockObject();
+  // Temporarily set the IsBeingConstructed bit
+  void unlockObject();
 
   // Set if we might re-enter while some of the properties contain
   // garbage, eg after calling newInstanceNoPropInit, and before
@@ -307,7 +321,7 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   int64_t toInt64() const;
   double toDouble() const;
 
-  template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+  template <IntishCast IC = IntishCast::None>
   Array toArray(bool pubOnly = false, bool ignoreLateInit = false) const;
 
   /*
@@ -403,7 +417,6 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   // to these properties, they are responsible for validating the values with
   // any type-hints on the properties. Likewise the caller is responsible for
   // enforcing AttrLateInit.
-  TypedValue* propVecForWrite();
   TypedValue* propVecForConstruct();
   const TypedValue* propVec() const;
 
@@ -455,9 +468,7 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   Array& reserveProperties(int nProp = 2);
 
   [[noreturn]] NEVER_INLINE
-  void throwMutateImmutable(Slot prop) const;
-  [[noreturn]] NEVER_INLINE
-  void throwBindImmutable(Slot prop) const;
+  void throwMutateConstProp(Slot prop) const;
 
  public:
   // never box the lval returned from getPropLval; use propB instead
@@ -467,8 +478,8 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   // KindOfUninit.
   tv_rval getPropIgnoreLateInit(const Class* ctx,
                                 const StringData* key) const;
-  // don't use vGetPropIgnoreAccessibility in new code
-  tv_lval vGetPropIgnoreAccessibility(const StringData*);
+  // don't use getPropIgnoreAccessibility in new code
+  tv_rval getPropIgnoreAccessibility(const StringData*);
 
  private:
   struct PropLookup {
@@ -476,7 +487,7 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
     const Class::Prop* prop;
     Slot slot;
     bool accessible;
-    bool immutable;
+    bool isConst;
   };
 
   template <bool forWrite, bool forRead, bool ignoreLateInit>
@@ -487,7 +498,6 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
     ReadNoWarn,
     ReadWarn,
     DimForWrite,
-    Bind,
   };
 
   template<PropMode mode>
@@ -512,8 +522,6 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   tv_lval propW(TypedValue* tvRef, const Class* ctx, const StringData* key);
   tv_lval propU(TypedValue* tvRef, const Class* ctx, const StringData* key);
   tv_lval propD(TypedValue* tvRef, const Class* ctx,
-                const StringData* key, MInstrPropState* pState);
-  tv_lval propB(TypedValue* tvRef, const Class* ctx,
                 const StringData* key, MInstrPropState* pState);
 
   bool propIsset(const Class* ctx, const StringData* key);
@@ -552,23 +560,29 @@ private:
   double toDoubleImpl() const noexcept;
 
   bool slowDestroyCheck() const;
+  void slowDestroyCases();
 
   bool assertTypeHint(tv_rval, Slot) const;
 
   void verifyPropTypeHintImpl(tv_rval, const Class::Prop&) const;
 
-// offset:  0        8       12   16   20          32
-// 64bit:   header   cls          id   [subclass]  [props...]
-// lowptr:  header   cls     id   [subclass][props...]
+// offset:  0       8       12      16
+// 64bit:   header  cls             [subclass][props...]
+// lowptr:  header  cls     [subclass][props...]
 
 private:
   LowPtr<Class> m_cls;
-  uint32_t o_id; // id of this object (used for var_dump(), and WeakRefs)
 };
 #ifdef _MSC_VER
 #pragma pack(pop)
 #endif
 
+#ifdef _MSC_VER
+static_assert(sizeof(ObjectData) == (use_lowptr ? 12 : 16),
+              "Change this only on purpose");
+#else
+static_assert(sizeof(ObjectData) == 16, "Change this only on purpose");
+#endif
 ///////////////////////////////////////////////////////////////////////////////
 
 ALWAYS_INLINE void decRefObj(ObjectData* obj) {

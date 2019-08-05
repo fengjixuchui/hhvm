@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $n = gmp_nextprime(-1);
 var_dump(gmp_strval($n));
 $n = gmp_nextprime(0);
@@ -18,4 +18,4 @@ $n = gmp_nextprime(new stdclass());
 var_dump(gmp_strval($n));
 	
 echo "Done\n";
-?>
+}

@@ -1,7 +1,8 @@
-<?php
+<?hh
 namespace HH {
-  if (false) {
-    class Callable {}
-  }
-  echo "Done\n";
+
+class Callable {}
+<<__EntryPoint>> function main(): void {
+echo "Done\n";
+}
 }

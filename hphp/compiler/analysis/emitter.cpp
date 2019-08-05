@@ -20,7 +20,6 @@
 #include "hphp/compiler/builtin_symbols.h"
 #include "hphp/compiler/option.h"
 #include "hphp/hhbbc/hhbbc.h"
-#include "hphp/hhbbc/parallel.h"
 
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/program-functions.h"
@@ -49,8 +48,6 @@ namespace Compiler {
 
 namespace {
 
-static HHBBC::UnitEmitterQueue s_ueq;
-
 void genText(UnitEmitter* ue, const std::string& outputPath) {
   std::unique_ptr<Unit> unit(ue->create(true));
   auto const basePath = AnalysisResult::prepareFile(
@@ -65,7 +62,7 @@ void genText(UnitEmitter* ue, const std::string& outputPath) {
     if (!f) {
       Logger::Error("Unable to open %s for write", fullPath.c_str());
     } else {
-      f << "Hash: " << ue->md5().toString() << std::endl;
+      f << "Hash: " << ue->sha1().toString() << std::endl;
       f << unit->toString();
       f.close();
     }
@@ -135,18 +132,12 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable) {
     );
 
   auto gd                        = Repo::GlobalData{};
-  gd.UsedHHBBC                   = RuntimeOption::EvalUseHHBBC;
   gd.Signature                   = nanos.count();
-  gd.EnableHipHopSyntax          = RuntimeOption::EnableHipHopSyntax;
-  gd.HardTypeHints               = RuntimeOption::EvalHardTypeHints;
   gd.HardReturnTypeHints         = RuntimeOption::EvalCheckReturnTypeHints >= 3;
   gd.CheckPropTypeHints          = RuntimeOption::EvalCheckPropTypeHints;
   gd.HardPrivatePropInference    = true;
-  gd.DisallowDynamicVarEnvFuncs  = RuntimeOption::DisallowDynamicVarEnvFuncs;
-  gd.ElideAutoloadInvokes        = HHBBC::options.ElideAutoloadInvokes;
   gd.PHP7_IntSemantics           = RuntimeOption::PHP7_IntSemantics;
   gd.PHP7_NoHexNumerics          = RuntimeOption::PHP7_NoHexNumerics;
-  gd.PHP7_ScalarTypes            = RuntimeOption::PHP7_ScalarTypes;
   gd.PHP7_Substr                 = RuntimeOption::PHP7_Substr;
   gd.PHP7_Builtins               = RuntimeOption::PHP7_Builtins;
   gd.PromoteEmptyObject          = RuntimeOption::EvalPromoteEmptyObject;
@@ -155,9 +146,14 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable) {
   gd.HackArrCompatNotices        = RuntimeOption::EvalHackArrCompatNotices;
   gd.EnableIntrinsicsExtension   = RuntimeOption::EnableIntrinsicsExtension;
   gd.ReffinessInvariance         = RuntimeOption::EvalReffinessInvariance;
-  gd.ForbidDynamicCalls          = RuntimeOption::EvalForbidDynamicCalls;
-  gd.UndefinedConstFallback      = RuntimeOption::UndefinedConstFallback;
-  gd.UndefinedFunctionFallback   = RuntimeOption::UndefinedFunctionFallback;
+  gd.ForbidDynamicCallsToFunc    = RuntimeOption::EvalForbidDynamicCallsToFunc;
+  gd.ForbidDynamicCallsToClsMeth =
+    RuntimeOption::EvalForbidDynamicCallsToClsMeth;
+  gd.ForbidDynamicCallsToInstMeth =
+    RuntimeOption::EvalForbidDynamicCallsToInstMeth;
+  gd.ForbidDynamicConstructs     = RuntimeOption::EvalForbidDynamicConstructs;
+  gd.EnableArgsInBacktraces      = RuntimeOption::EnableArgsInBacktraces;
+  gd.ArrayProvenance             = RuntimeOption::EvalArrayProvenance;
   gd.NoticeOnBuiltinDynamicCalls =
     RuntimeOption::EvalNoticeOnBuiltinDynamicCalls;
   gd.InitialNamedEntityTableSize =
@@ -173,8 +169,11 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable) {
   gd.HackArrCompatSerializeNotices =
     RuntimeOption::EvalHackArrCompatSerializeNotices;
   gd.HackArrDVArrs = RuntimeOption::EvalHackArrDVArrs;
-  gd.EnableIntishCast = RuntimeOption::EvalEnableIntishCast;
   gd.AbortBuildOnVerifyError = RuntimeOption::EvalAbortBuildOnVerifyError;
+  gd.EmitClsMethPointers = RuntimeOption::EvalEmitClsMethPointers;
+  gd.IsVecNotices = RuntimeOption::EvalIsVecNotices;
+  gd.IsCompatibleClsMethType = RuntimeOption::EvalIsCompatibleClsMethType;
+  gd.StrictArrayFillKeys = RuntimeOption::StrictArrayFillKeys;
 
   for (auto a : Option::APCProfile) {
     gd.APCProfile.emplace_back(StringData::MakeStatic(folly::StringPiece(a)));
@@ -196,12 +195,8 @@ void emitAllHHBC(AnalysisResultPtr&& ar) {
   decltype(ues) ues_to_print;
   auto const outputPath = ar->getOutputPath();
 
-  std::thread wp_thread, dispatcherThread;
+  std::thread wp_thread;
   auto unexpectedException = [&] (const char* what) {
-    if (dispatcherThread.joinable()) {
-      Logger::Error("emitAllHHBC exited via an exception "
-                    "before dispatcherThread was joined: %s", what);
-    }
     if (wp_thread.joinable()) {
       Logger::Error("emitAllHHBC exited via an exception "
                     "before wp_thread was joined: %s", what);
@@ -228,6 +223,8 @@ void emitAllHHBC(AnalysisResultPtr&& ar) {
         commitSome(ues);
       }
 
+      HHBBC::UnitEmitterQueue ueq;
+
       auto commitLoop = [&] {
         folly::Optional<Timer> commitTime;
         // kBatchSize needs to strike a balance between reducing
@@ -238,7 +235,7 @@ void emitAllHHBC(AnalysisResultPtr&& ar) {
         // the 2-10 range is reasonable.
         static const unsigned kBatchSize = 8;
 
-        while (auto ue = s_ueq.pop()) {
+        while (auto ue = ueq.pop()) {
           if (!commitTime) {
             commitTime.emplace(Timer::WallTime, "committing units to repo");
           }
@@ -275,7 +272,7 @@ void emitAllHHBC(AnalysisResultPtr&& ar) {
           };
 
           HHBBC::whole_program(
-            std::move(ues), s_ueq, arrTable,
+            std::move(ues), ueq, arrTable,
             Option::ParserThreadCount > 0 ? Option::ParserThreadCount : 0);
         });
 
@@ -305,7 +302,7 @@ extern "C" {
  * a NULL `code' parameter to do initialization.
  */
 
-Unit* hphp_compiler_parse(const char* code, int codeLen, const MD5& md5,
+Unit* hphp_compiler_parse(const char* code, int codeLen, const SHA1& sha1,
                           const char* filename,
                           const Native::FuncTable& nativeFuncs,
                           Unit** releaseUnit, bool forDebuggerEval,
@@ -313,9 +310,7 @@ Unit* hphp_compiler_parse(const char* code, int codeLen, const MD5& md5,
   if (UNLIKELY(!code)) {
     // Do initialization when code is null; see above.
     Option::RecordErrors = false;
-    Option::ParseTimeOpts = false;
     Option::WholeProgram = false;
-    BuiltinSymbols::LoadSuperGlobals();
     TypeConstraint tc;
     return nullptr;
   }
@@ -348,7 +343,7 @@ Unit* hphp_compiler_parse(const char* code, int codeLen, const MD5& md5,
       if (const char* dot = strrchr(filename, '.')) {
         const char hhbc_ext[] = "hhas";
         if (!strcmp(dot + 1, hhbc_ext)) {
-          ue = assemble_string(code, codeLen, filename, md5, nativeFuncs);
+          ue = assemble_string(code, codeLen, filename, sha1, nativeFuncs);
         }
       }
     }
@@ -356,7 +351,7 @@ Unit* hphp_compiler_parse(const char* code, int codeLen, const MD5& md5,
     // If ue != nullptr then we assembled it above, so don't feed it into
     // the extern compiler
     if (!ue) {
-      auto uc = UnitCompiler::create(code, codeLen, filename, md5,
+      auto uc = UnitCompiler::create(code, codeLen, filename, sha1,
                                      nativeFuncs, forDebuggerEval, options);
       assertx(uc);
       try {
@@ -381,7 +376,7 @@ Unit* hphp_compiler_parse(const char* code, int codeLen, const MD5& md5,
         // the unit was not committed to the Repo, probably because
         // another thread did it first. Try to use the winner.
         auto u = Repo::get().loadUnit(filename ? filename : "",
-                                      md5,
+                                      sha1,
                                       nativeFuncs);
         if (u != nullptr) {
           return u.release();

@@ -17,19 +17,14 @@
 #ifndef TYPE_PROFILE_H_
 #define TYPE_PROFILE_H_
 
-#include "hphp/runtime/base/datatype.h"
-#include "hphp/runtime/base/rds-local.h"
-#include "hphp/runtime/vm/hhbc.h"
+#include "hphp/util/rds-local.h"
 
 namespace HPHP {
 
 //////////////////////////////////////////////////////////////////////
 
-struct Func;
-
 enum class RequestKind {
   Warmup,
-  Profile,
   NonVM,
   Standard,
 };
@@ -50,29 +45,16 @@ void profileWarmupStart();
 void profileWarmupEnd();
 void profileRequestStart();
 void profileRequestEnd();
-void profileSetHotFunc();
 
-int64_t requestCount();
-int singleJitRequestCount();
-
-/*
- * Profiling for func hotness goes through this module.
- */
-void profileIncrementFuncCounter(const Func*);
+uint64_t requestCount();
 
 struct TypeProfileLocals {
   RequestKind requestKind = RequestKind::Warmup;
   bool forceInterpret = false;
-  bool acquiredSingleJit = false;
-  bool acquiredSingleJitConcurrent = false;
   bool nonVMThread = false;
 };
 
 extern RDS_LOCAL_NO_CHECK(TypeProfileLocals, rl_typeProfileLocals);
-
-inline bool isProfileRequest() {
-  return rl_typeProfileLocals->requestKind == RequestKind::Profile;
-}
 
 inline bool isStandardRequest() {
   return rl_typeProfileLocals->requestKind == RequestKind::Standard;
@@ -82,7 +64,8 @@ inline bool isForcedToInterpret() {
   return rl_typeProfileLocals->forceInterpret;
 }
 
-void setRelocateRequests(int32_t n);
+void setRelocateRequests(int n);
+
 //////////////////////////////////////////////////////////////////////
 
 }

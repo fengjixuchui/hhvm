@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /*
    +-------------------------------------------------------------+
@@ -7,7 +7,7 @@
 */
 namespace MyInclude;
 
-error_reporting(-1);
+\error_reporting(-1);
 
 echo "================= xxx =================\n";
 
@@ -16,5 +16,3 @@ echo "Inside file >" . __FILE__ . "< at line >" . __LINE__ .
 
 const MY_MIN = 10;
 const MY_MAX = 50;
-
-// ?>

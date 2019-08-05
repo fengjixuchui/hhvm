@@ -1,4 +1,4 @@
-<?php
+<?hh
 	include "resourcebundle.inc";
 
 	// fall back
@@ -20,4 +20,3 @@
 
 	$t = $r['nonexisting'];
 	echo debug( $t );
-?>

@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype : bool unlink ( string $filename [, resource $context] );
    Description : Deletes filename
 */
 
 /* delete files with different file permission(0000 to 0777) */
-
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 // temp file used
@@ -24,4 +24,4 @@ for($mode = 0000; $mode <= 0777; $mode++ ) {
 }
 
 echo "Done\n";
-?>
+}

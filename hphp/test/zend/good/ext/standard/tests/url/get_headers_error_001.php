@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto array get_headers(string url[, int format])
  * Description: Fetches all the headers sent by the server in response to a HTTP request
  * Source code: ext/standard/url.c
  * Alias to functions:
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing get_headers() : error conditions ***\n";
 
 // Zero arguments
@@ -19,4 +19,4 @@ $extra_arg = 10;
 try { var_dump( get_headers($url, $format, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

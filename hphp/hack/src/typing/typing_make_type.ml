@@ -11,6 +11,7 @@ open Typing_defs
 
 module SN = Naming_special_names
 module Reason = Typing_reason
+module Nast = Aast
 
 let class_type r name tyl = (r, Tclass ((Reason.to_pos r, name), Nonexact, tyl))
 let prim_type r t = (r, Tprim t)
@@ -74,14 +75,27 @@ let nonnull r =
   (r, Tnonnull)
 let dynamic r =
   (r, Tdynamic)
+let like r ty =
+  (r, Tlike ty)
 let mixed r =
   (r, Toption (r, Tnonnull))
 let resource r =
   prim_type r Nast.Tresource
-let nullable r ty =
+let nullable : type a. Reason.t -> a ty -> a ty = fun r ty ->
   (* Cheap avoidance of double nullable *)
   match ty with
   | _, (Toption _ as ty_) -> (r, ty_)
+  | _, Tunion [] -> null r
   | _ -> (r, Toption ty)
 let nothing r =
-  (r, Tunresolved [])
+  (r, Tunion [])
+
+let union r tyl =
+  match tyl with
+  | [ty] -> ty
+  | _ -> (r, Tunion tyl)
+let intersection r tyl =
+  match tyl with
+  | [] -> mixed r
+  | [ty] -> ty
+  | _ -> (r, Tintersection tyl)

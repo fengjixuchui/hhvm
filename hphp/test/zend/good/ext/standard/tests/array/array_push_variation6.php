@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int array_push(&array $stack, mixed $var [, mixed $...])
  * Description: Pushes elements onto the end of the array
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass array_push arrays where the keys are different data types.
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_push() : usage variations ***\n";
 
 // Initialise function arguments not being substituted
@@ -101,5 +101,4 @@ foreach($inputs as $key => $input) {
 };
 
 echo "Done";
-?>
-
+}

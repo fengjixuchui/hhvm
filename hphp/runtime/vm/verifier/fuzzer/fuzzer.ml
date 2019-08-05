@@ -168,6 +168,17 @@ let should_mutate () = Random.float 1.0 < !mut_prob
 
 let mutate_bool b = if should_mutate() then not b else b
 
+let mutate_visibility v =
+  if should_mutate () then
+    let second_choice = (Random.int 2 = 1) in
+    Aast.(
+      match v with
+      | Public -> if second_choice then Private else Protected
+      | Private -> if second_choice then Public else Protected
+      | Protected -> if second_choice then Public else Private
+    )
+  else v
+
 let mutate_hoisted h =
   if should_mutate () then
     match h with
@@ -251,7 +262,6 @@ let maintain_stack (data : Instr_utils.seq_data) :
           let old_stk = !stk in
           stk := num_fold List.tl_exn (List.length !stk - 1) !stk;
           empty_stk old_stk 1
-      | IContFlow Unwind (* require a stack height of 0 *)
       | IMisc NativeImpl -> let old_stk = !stk in
                             stk := []; empty_stk old_stk 0
       | ILabel _
@@ -288,10 +298,7 @@ let mut_imms (is : IS.t) : IS.t =
     | CGetQuietL  id     -> CGetQuietL (mutate_local_id id !mag)
     | CGetL2      id     -> CGetL2     (mutate_local_id id !mag)
     | PushL       id     -> PushL      (mutate_local_id id !mag)
-    | CGetS       i      -> CGetS      (mutate_int      i  !mag)
     | VGetL       id     -> VGetL      (mutate_local_id id !mag)
-    | VGetS       i      -> VGetS      (mutate_int      i  !mag)
-    | ClsRefGetC  i      -> ClsRefGetC (mutate_int      i  !mag)
     | _ -> s in  (*TODO: in general it might be worthwhile to get rid of wild
                    card cases like this. It would make the code more verbose,
                    but it will make adding new bytecodes easier since this will
@@ -299,9 +306,7 @@ let mut_imms (is : IS.t) : IS.t =
   let mutate_isset s =
     match s with
     | IssetL   id        -> IssetL  (mutate_local_id id !mag)
-    | IssetS   i         -> IssetS  (mutate_int      i  !mag)
     | EmptyL   id        -> EmptyL  (mutate_local_id id !mag)
-    | EmptyS   i         -> EmptyS  (mutate_int      i  !mag)
     | IsTypeL (id, op)   -> IsTypeL (mutate_local_id id !mag, op)
     | _ -> s in
   let mutate_mutator s =
@@ -310,15 +315,10 @@ let mut_imms (is : IS.t) : IS.t =
       if should_mutate () then random_incdec_op () else op in
     match s with
     | SetL      id       -> SetL    (mutate_local_id id !mag)
-    | SetS      i        -> SetS    (mutate_int      i  !mag)
     | SetOpL   (id, op)  -> SetOpL  (mutate_local_id id !mag, mutate_eq_op op)
     | SetOpG    op       -> SetOpG  (mutate_eq_op op)
-    | SetOpS   (op, i )  -> SetOpS  (mutate_eq_op op,         mutate_int i !mag)
     | IncDecL  (id, op)  -> IncDecL (mutate_local_id id !mag, mutate_inc_op op)
     | IncDecG   op       -> IncDecG (mutate_inc_op op)
-    | IncDecS  (op, i )  -> IncDecS (mutate_inc_op op,        mutate_int i !mag)
-    | BindL     id       -> BindL   (mutate_local_id id !mag)
-    | BindS     i        -> BindS   (mutate_int      i  !mag)
     | UnsetL    id       -> UnsetL  (mutate_local_id id !mag)
     | CheckProp p        -> CheckProp p
     | InitProp (p, Static) ->
@@ -329,26 +329,26 @@ let mut_imms (is : IS.t) : IS.t =
   let mutate_call s =
     match s with (*It's not worth mutating arg numbers for Push* or Call*,
                    because we already know it will fail the verifier/assembler*)
-    | FPushObjMethod   (i, Ast_defs.OG_nullthrows, pl)    ->
-         FPushObjMethod(i,    (if should_mutate()
+    | FCallObjMethod   (i, Ast_defs.OG_nullthrows, pl)    ->
+         FCallObjMethod(i,    (if should_mutate()
                               then Ast_defs.OG_nullsafe
                               else Ast_defs.OG_nullthrows),
                         pl)
-    | FPushObjMethod   (i, Ast_defs.OG_nullsafe, pl)      ->
-         FPushObjMethod(i,    (if should_mutate()
+    | FCallObjMethod   (i, Ast_defs.OG_nullsafe, pl)      ->
+         FCallObjMethod(i,    (if should_mutate()
                               then Ast_defs.OG_nullthrows
                               else Ast_defs.OG_nullsafe),
                         pl)
-    | FPushObjMethodD  (i, m, Ast_defs.OG_nullthrows) ->
-        FPushObjMethodD(i, m, if should_mutate()
+    | FCallObjMethodD  (i, Ast_defs.OG_nullthrows, m) ->
+        FCallObjMethodD(i, (if should_mutate()
                               then Ast_defs.OG_nullsafe
-                              else Ast_defs.OG_nullthrows)
-    | FPushObjMethodD  (i, m, Ast_defs.OG_nullsafe)   ->
-        FPushObjMethodD(i, m, if should_mutate()
+                              else Ast_defs.OG_nullthrows),
+                        m)
+    | FCallObjMethodD  (i, Ast_defs.OG_nullsafe, m)   ->
+        FCallObjMethodD(i, (if should_mutate()
                               then Ast_defs.OG_nullthrows
-                              else Ast_defs.OG_nullsafe)
-    | NewObj    (id, op) -> NewObj    (mutate_int        id !mag, op)
-    | NewObjI   (id)     -> NewObjI   (mutate_int        id !mag)
+                              else Ast_defs.OG_nullsafe),
+                        m)
     | _ -> s in
   let mutate_base s =
     match s with
@@ -385,11 +385,9 @@ let mut_imms (is : IS.t) : IS.t =
     match s with
     | QueryM  (i, op, k) ->
         QueryM (mutate_int i !mag,   mutate_op      op,      mutate_key k !mag)
-    | VGetM   (i,     k) -> VGetM   (mutate_int i  !mag,     mutate_key k !mag)
     | SetM    (i,     k) -> SetM    (mutate_int i  !mag,     mutate_key k !mag)
     | IncDecM (i, op, k) -> IncDecM (mutate_int i  !mag, op, mutate_key k !mag)
     | SetOpM  (i, op, k) -> SetOpM  (mutate_int i  !mag, op, mutate_key k !mag)
-    | BindM   (i,     k) -> BindM   (mutate_int i  !mag,     mutate_key k !mag)
     | UnsetM  (i,     k) -> UnsetM  (mutate_int i  !mag,     mutate_key k !mag)
     | SetRangeM (i, op, s) ->
         SetRangeM (mutate_int i !mag, op, mutate_int s !mag)
@@ -424,16 +422,9 @@ let mut_imms (is : IS.t) : IS.t =
     match s with
     | BareThis        b       -> BareThis        (mutate_bare            b)
     | InitThisLoc    id       -> InitThisLoc     (mutate_local_id id  !mag)
-    | StaticLocCheck (id, str) -> StaticLocCheck (mutate_local_id id  !mag, str)
-    | StaticLocInit  (id, str) -> StaticLocInit  (mutate_local_id id  !mag, str)
-    | StaticLocDef  (id, str)  -> StaticLocDef   (mutate_local_id id  !mag, str)
     | OODeclExists    k       -> OODeclExists    (mutate_kind            k)
     | VerifyParamType p       -> VerifyParamType (mutate_param_id p   !mag)
     | VerifyOutType p         -> VerifyOutType   (mutate_param_id p   !mag)
-    | Self            i       -> Self            (mutate_int      i   !mag)
-    | Parent          i       -> Parent          (mutate_int      i   !mag)
-    | LateBoundCls    i       -> LateBoundCls    (mutate_int      i   !mag)
-    | ClsRefName      i       -> ClsRefName      (mutate_int      i   !mag)
     | CreateCl       (i,  i') -> CreateCl        (mutate_int      i   !mag,
                                                   mutate_int      i'  !mag)
     | GetMemoKeyL    id       -> GetMemoKeyL     (mutate_local_id id !mag)
@@ -508,10 +499,8 @@ let mutate_reorder (input : HP.t) : mutation_monad =
     let newseq = subinstrs (-1) start1 @ subinstrs start2 end2 @
                  subinstrs end1 start2 @ subinstrs start1 end1 @
                  subinstrs end2 (List.length instrs - 1) in
-    (* Reattach fault regions that were discarded by converting to list *)
-    IS.gather [IS.InstrSeq.flat_map (IS.Instr_list newseq)
-               ~f:(maintain_stack (seq_data is) List.return);
-               IS.extract_fault_funclets is] in
+    IS.InstrSeq.flat_map (IS.Instr_list newseq)
+      ~f:(maintain_stack (seq_data is) List.return) in
   Nondet.return input |> mutate mut input !reorder_reps
 
 (* This will randomly remove some of the instructions in a sequence. *)
@@ -528,8 +517,8 @@ let mutate_remove (input : HP.t) : mutation_monad =
     IS.InstrSeq.flat_map is (maintain_stack (seq_data is) remove) in
   Nondet.return input |> mutate mut input !remove_reps
 
-(* This will randomly wrap instruction sequences in try/fault or try/catch
-   blocks with trivial handlers. *)
+(* This will randomly wrap instruction sequences in try/catch blocks with
+   with trivial handlers. *)
 let mutate_exceptions (input : HP.t) : mutation_monad =
   let rec new_exn_region (f : IS.t -> IS.t * IS.t) (is : IS.t) : IS.t =
     let primary = IS.instr_seq_to_list is in
@@ -542,25 +531,16 @@ let mutate_exceptions (input : HP.t) : mutation_monad =
            let body, faults = subinstrs start end_pos |> IS.instrs |> f in
            IS.gather [subinstrs (-1) start |> IS.instrs; body;
                       subinstrs end_pos (primary_len - 1) |> IS.instrs;
-                      IS.extract_fault_funclets is; faults]
+                      faults]
          with Invalid_argument _ -> new_exn_region f is in
-  let make_fault (label : Label.t) (body : IS.t) : IS.t * IS.t =
-    let open IS in gather [ITry (TryFaultBegin label) |> instr; body;
-                           ITry TryFaultEnd |> instr],
-                   gather [ILabel label |> instr; instr_unwind] in
   let make_catch (label : Label.t) (body : IS.t) : IS.t * IS.t =
-    let open IS in gather [instr_try_catch_begin; body; instr_jmp label;
-                           instr_try_catch_middle; instr_throw;
-                           instr_try_catch_end; instr_label label], IS.empty in
+    IS.create_try_catch ~opt_done_label:label body IS.empty, IS.empty in
   let resume_label () =
     Label.get_next_label () |> string_of_int |> (^) "resume" |> Label.named in
   let new_catch = resume_label ()       |> make_catch |> new_exn_region in
-  let new_fault = random_fault_label () |> make_fault |> new_exn_region in
   let mut (is : IS.t) =
     if not (should_mutate()) then is
-    else if Random.int 2 < 1
-      then new_catch is
-      else new_fault is in
+    else new_catch is in
   Nondet.return input |> mutate mut input !exn_reps
 
 (* This will replace random instructions with others of the
@@ -637,17 +617,14 @@ let mutate_metadata (input : HP.t)  =
       (param |> Hhas_param.type_info    |> option_lift mutate_type_info)
       (param |> Hhas_param.default_value) in
   let mutate_body_data (body : Hhas_body.t) : Hhas_body.t =
-    let mutate_static_init s = s in
     Hhas_body.make
       (body |> Hhas_body.instrs)
       (body |> Hhas_body.decl_vars)
       (body |> Hhas_body.num_iters)
-      (body |> Hhas_body.num_cls_ref_slots      |> fun n -> mutate_int n !mag)
       (body |> Hhas_body.is_memoize_wrapper     |> mutate_bool)
       (body |> Hhas_body.is_memoize_wrapper_lsb |> mutate_bool)
       (body |> Hhas_body.params                 |> delete_map mutate_param)
       (body |> Hhas_body.return_type            |> option_lift mutate_type_info)
-      (body |> Hhas_body.static_inits           |> delete_map mutate_static_init)
       (body |> Hhas_body.doc_comment)
       (body |> Hhas_body.env) in
   let mutate_class_data (ids : Hhbc_id.Class.t list) (cls : Hhas_class.t) =
@@ -657,9 +634,7 @@ let mutate_metadata (input : HP.t)  =
     let mutate_method_data (m : Hhas_method.t) : Hhas_method.t =
       Hhas_method.make
         (m |> Hhas_method.attributes        |> delete_map mutate_attribute)
-        (m |> Hhas_method.is_protected      |> mutate_bool)
-        (m |> Hhas_method.is_public         |> mutate_bool)
-        (m |> Hhas_method.is_private        |> mutate_bool)
+        (m |> Hhas_method.visibility        |> mutate_visibility)
         (m |> Hhas_method.is_static         |> mutate_bool)
         (m |> Hhas_method.is_final          |> mutate_bool)
         (m |> Hhas_method.is_abstract       |> mutate_bool)
@@ -679,12 +654,10 @@ let mutate_metadata (input : HP.t)  =
     let mutate_property (prop : Hhas_property.t) : Hhas_property.t =
       Hhas_property.make
         (prop |> Hhas_property.attributes)
-        (prop |> Hhas_property.is_private         |> mutate_bool)
-        (prop |> Hhas_property.is_protected       |> mutate_bool)
-        (prop |> Hhas_property.is_public          |> mutate_bool)
+        (prop |> Hhas_property.visibility         |> mutate_visibility)
         (prop |> Hhas_property.is_static          |> mutate_bool)
         (prop |> Hhas_property.is_deep_init       |> mutate_bool)
-        (prop |> Hhas_property.is_immutable       |> mutate_bool)
+        (prop |> Hhas_property.is_const           |> mutate_bool)
         (prop |> Hhas_property.is_lsb             |> mutate_bool)
         (prop |> Hhas_property.is_no_bad_redeclare |> mutate_bool)
         (prop |> Hhas_property.has_system_initial |> mutate_bool)
@@ -702,6 +675,7 @@ let mutate_metadata (input : HP.t)  =
       Hhas_constant.make
         (const |> Hhas_constant.name)
         (const |> Hhas_constant.value |> option_lift mutate_typed_value)
+        (const |> Hhas_constant.visibility         |> mutate_visibility)
         (const |> Hhas_constant.initializer_instrs |> mutate_option) in
     let mutate_typed_constant (const : Hhas_type_constant.t) =
       Hhas_type_constant.make
@@ -710,8 +684,8 @@ let mutate_metadata (input : HP.t)  =
                                           |> option_lift mutate_typed_value) in
     let mutate_req ((trait, str) as pair) =
       if should_mutate() then match trait with
-                              | Ast.MustExtend -> Ast.MustImplement, str
-                              | Ast.MustImplement -> Ast.MustExtend, str
+                              | Hhas_class.MustExtend -> Hhas_class.MustImplement, str
+                              | Hhas_class.MustImplement -> Hhas_class.MustExtend, str
                          else pair in
     HC.make
       (cls |> HC.attributes         |> delete_map mutate_attribute)
@@ -724,10 +698,10 @@ let mutate_metadata (input : HP.t)  =
       (cls |> HC.is_abstract        |> mutate_bool)
       (cls |> HC.is_interface       |> mutate_bool)
       (cls |> HC.is_trait           |> mutate_bool)
+      (cls |> HC.is_record          |> mutate_bool)
       (cls |> HC.is_xhp             |> mutate_bool)
       (cls.HC.class_hoisted         |> mutate_hoisted)
-      (cls |> HC.is_immutable       |> mutate_bool)
-      (cls |> HC.has_immutable      |> mutate_bool)
+      (cls |> HC.is_const           |> mutate_bool)
       (cls |> HC.no_dynamic_props   |> mutate_bool)
       (cls |> HC.needs_no_reifiedinit |> mutate_bool)
       (cls |> HC.class_uses)
@@ -778,8 +752,7 @@ let mutate_metadata (input : HP.t)  =
       (prog |> HP.typedefs        |> delete_map mutate_typedef)
       (prog |> HP.file_attributes |> delete_map mutate_attribute)
       (prog |> HP.main            |> mutate_body_data)
-      Emit_symbol_refs.empty_symbol_refs
-      (prog |> HP.strict_types    |> option_lift mutate_bool) in
+      Emit_symbol_refs.empty_symbol_refs in
   let open Nondet in
   return input |> num_fold
     (fun a -> mut_data input |> add_event a) !metadata_reps

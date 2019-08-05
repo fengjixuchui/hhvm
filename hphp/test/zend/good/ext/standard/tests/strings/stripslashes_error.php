@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string stripslashes ( string $str )
  * Description: Returns an un-quoted string
  * Source code: ext/standard/string.c
@@ -7,7 +7,7 @@
 /*
  * Testing stripslashes() for error conditions
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing stripslashes() : error conditions ***\n";
 
 // Zero argument
@@ -23,4 +23,4 @@ try { var_dump( stripslashes($str, $extra_arg) ); } catch (Exception $e) { echo 
 var_dump( $str );
 
 echo "Done\n";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function g($key, $old, $new, $s = false) {
   $diff = array();
@@ -7,7 +7,9 @@ function g($key, $old, $new, $s = false) {
       $old = f($old, true);
       $new = f($new, true);
     }
+    $diff['old'] = array();
     $diff['old'][$key] = $old;
+    $diff['new'] = array();
     $diff['new'][$key] = $new;
   }
   return $diff;

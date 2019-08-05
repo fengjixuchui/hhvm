@@ -1,7 +1,7 @@
-<?php
+<?hh
 /* Prototype  : proto int strspn(string str, string mask [, int start [, int len]])
  * Description: Finds length of initial segment consisting entirely of characters found in mask.
-                If start or/and length is provided works like strspn(substr($s,$start,$len),$good_chars) 
+                If start or/and length is provided works like strspn(substr($s,$start,$len),$good_chars)
  * Source code: ext/standard/string.c
  * Alias to functions: none
 */
@@ -9,7 +9,7 @@
 /*
 * Test strspn() : for error conditons
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing strspn() : error conditions ***\n";
 
 // Zero arguments
@@ -32,5 +32,5 @@ echo "\n-- Testing strspn() function with less than expected no. of arguments --
 $str = 'string_val';
 try { var_dump( strspn($str) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-echo "Done"
-?>
+echo "Done";
+}

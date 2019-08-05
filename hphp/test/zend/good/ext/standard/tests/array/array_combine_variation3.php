@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_combine(array $keys, array $values)
  * Description: Creates an array by using the elements of the first parameter as keys
  *              and the elements of the second as the corresponding values
@@ -6,10 +6,10 @@
 */
 
 /*
-* Passing different types of arrays to both $keys and $values arguments and testing whether 
+* Passing different types of arrays to both $keys and $values arguments and testing whether
 * array_combine() behaves in an expected way with the arguments passed to the function
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_combine() : Passing different types of arrays to both \$keys and \$values argument ***\n";
 /* Different heredoc strings passed as argument to arrays */
 // heredoc with blank line
@@ -80,4 +80,4 @@ foreach($arrays as $array) {
 }
 
 echo "Done";
-?>
+}

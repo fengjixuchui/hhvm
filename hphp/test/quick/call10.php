@@ -10,17 +10,17 @@ class C1 {
 function main1() {
   $obj = new C1;
 
-  // FPushObjMethodD
+  // FCallObjMethodD
   $obj->__call("a", "b", "c", "d");
   $obj->foo("a", "b", "c", "d");
 
-  // FPushObjMethod
+  // FCallObjMethod
   $fn = '__call';
   $obj->$fn("a", "b", "c", "d");
   $fn = 'foo';
   $obj->$fn("a", "b", "c", "d");
 }
- 
+
 main1();
 
 class C2 {
@@ -31,11 +31,11 @@ class C2 {
     echo "\n";
   }
   public function test() {
-    // FPushClsMethodD
+    // FCallClsMethodD
     C2::__call("a", "b", "c", "d");
     C2::foo("a", "b", "c", "d");
 
-    // FPushClsMethod
+    // FCallClsMethod
     $cls = 'C2';
     $cls::__call("a", "b", "c", "d");
     $cls::foo("a", "b", "c", "d");
@@ -48,7 +48,7 @@ class C2 {
     $fn = 'foo';
     $cls::$fn("a", "b", "c", "d");
 
-    // FPushClsMethodF
+    // FCallClsMethodSD
     self::__call("a", "b", "c", "d");
     self::foo("a", "b", "c", "d");
   }
@@ -73,11 +73,11 @@ class C3 extends B3 {
 function main3() {
   $obj = new C3;
 
-  // FPushObjMethodD
+  // FCallObjMethodD
   $obj->__call("a", "b", "c", "d");
   $obj->foo("a", "b", "c", "d");
 
-  // FPushObjMethod
+  // FCallObjMethod
   $fn = '__call';
   $obj->$fn("a", "b", "c", "d");
   $fn = 'foo';

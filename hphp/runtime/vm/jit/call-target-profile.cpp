@@ -69,34 +69,40 @@ void CallTargetProfile::reduce(CallTargetProfile& profile,
   Entry allEntries[kMaxEntries * 2];
   size_t nEntries = 0;
 
-  profile.m_init |= other.m_init;
-
-  // Copy into `allEntries' all the valid entries from `profile'.
-  for (size_t i = 0; i < kMaxEntries; i++) {
-    auto const& entry = profile.m_entries[i];
-    if (entry.funcId == InvalidFuncId) break;
-    allEntries[nEntries++] = entry;
+  if (profile.m_init) {
+    // Copy into `allEntries' all the valid entries from `profile'.
+    for (size_t i = 0; i < kMaxEntries; i++) {
+      auto const& entry = profile.m_entries[i];
+      if (entry.funcId == InvalidFuncId) break;
+      allEntries[nEntries++] = entry;
+    }
   }
 
-  // Handle the entries from `other', either by adding to matching entries from
-  // `profile' or by adding new entries to `allEntries'.
-  for (size_t o = 0; o < kMaxEntries; o++) {
-    auto const& otherEntry = other.m_entries[o];
-    if (otherEntry.funcId == InvalidFuncId) break;
-    size_t p = 0;
-    for (; p < kMaxEntries; p++) {
-      auto& entry = allEntries[p];
-      if (entry.funcId == otherEntry.funcId) {
-        entry.count += otherEntry.count;
-        break;
+  if (other.m_init) {
+    // Handle the entries from `other', either by adding to matching entries
+    // from `profile' or by adding new entries to `allEntries'.
+    for (size_t o = 0; o < kMaxEntries; o++) {
+      auto const& otherEntry = other.m_entries[o];
+      if (otherEntry.funcId == InvalidFuncId) break;
+      size_t p = 0;
+      for (; p < kMaxEntries; p++) {
+        auto& entry = allEntries[p];
+        if (entry.funcId == otherEntry.funcId) {
+          entry.count += otherEntry.count;
+          break;
+        }
+      }
+      if (p == kMaxEntries) {
+        // Didn't find `otherEntry' among the entries from `profile', so add a
+        // new entry.
+        allEntries[nEntries++] = otherEntry;
       }
     }
-    if (p == kMaxEntries) {
-      // Didn't find `otherEntry' among the entries from `profile', so add a new
-      // entry.
-      allEntries[nEntries++] = otherEntry;
-    }
   }
+
+  profile.m_init |= other.m_init;
+
+  if (!profile.m_init) return;
 
   // Sort the entries in `allEntries' and select the top kMaxEntries.  The rest
   // is put in m_untracked.
@@ -104,8 +110,9 @@ void CallTargetProfile::reduce(CallTargetProfile& profile,
             [&] (const Entry& a, const Entry& b) {
               // Sort in decreasing order of `count' while keeping invalid
               // entries at the end.
-              if (b.funcId == InvalidFuncId) return true;
-              return a.count >= b.count;
+              if (b.funcId == InvalidFuncId) return a.funcId != InvalidFuncId;
+              if (a.funcId == InvalidFuncId) return false;
+              return a.count > b.count;
             });
   auto const nEntriesToCopy = std::min(kMaxEntries, nEntries);
   memcpy(profile.m_entries, allEntries, nEntriesToCopy * sizeof(Entry));
@@ -153,12 +160,21 @@ const Func* CallTargetProfile::choose(double& probability) const {
 std::string CallTargetProfile::toString() const {
   if (!m_init) return std::string("uninitialized");
   std::ostringstream out;
+  uint64_t total = m_untracked;
   for (auto const& entry : m_entries) {
     if (entry.funcId != InvalidFuncId) {
-      out << folly::format("FuncId {}: {}, ", entry.funcId, entry.count);
+      total += entry.count;
     }
   }
-  out << folly::format("Untracked: {}", m_untracked);
+  for (auto const& entry : m_entries) {
+    if (entry.funcId != InvalidFuncId) {
+      out << folly::format("FuncId {}: {} ({:.1f}%), ",
+                           entry.funcId, entry.count,
+                           total == 0 ? 0 : 100.0 * entry.count / total);
+    }
+  }
+  out << folly::format("Untracked: {} ({:.1f}%)", m_untracked,
+                       total == 0 ? 0 : 100.0 * m_untracked / total);
   return out.str();
 }
 

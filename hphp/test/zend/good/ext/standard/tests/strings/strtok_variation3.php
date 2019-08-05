@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string strtok ( str $str, str $token )
  * Description: splits a string (str) into smaller strings (tokens), with each token being delimited by any character from token
  * Source code: ext/standard/string.c
@@ -7,7 +7,7 @@
 /*
  * Testing strtok() : with heredoc strings
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing strtok() : with heredoc strings ***\n";
 
 // defining different heredoc strings
@@ -63,4 +63,4 @@ foreach($heredoc_strings as $string)  {
 
 
 echo "Done\n";
-?>
+}

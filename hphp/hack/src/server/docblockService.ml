@@ -6,5 +6,19 @@
  * LICENSE file in the "hack" directory of this source tree.
  *
  *)
+type docblock_element =
+  | HackSnippet of string
+  | XhpSnippet of string
+  | Markdown of string
 
-type result = string option
+type result = docblock_element list
+
+(* Represents a symbol location determined by the docblock service *)
+type dbs_symbol_location = {
+  dbs_filename: string;
+  dbs_line: int;
+  dbs_column: int;
+  dbs_base_class: string option;
+}
+
+type dbs_symbol_location_result = dbs_symbol_location option

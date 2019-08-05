@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL);
 
 trait THello1 {
@@ -20,4 +20,3 @@ class TraitsTest {
 }
 
 $t = new TraitsTest;
-?>

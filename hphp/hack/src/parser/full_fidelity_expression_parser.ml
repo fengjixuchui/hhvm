@@ -66,20 +66,10 @@ module WithStatementAndDeclAndTypeParser
 
   [@@@warning "-32"] (* next line warning 32 unused variable pp_binary_expression_prefix_kind *)
   type binary_expression_prefix_kind =
-    | Prefix_byref_assignment | Prefix_assignment | Prefix_none [@@deriving show]
+    | Prefix_assignment
+    | Prefix_less_than of (t * Parser.SC.r)
+    | Prefix_none [@@deriving show]
   [@@@warning "+32"]
-
-  let make_and_track_prefix_unary_expression parser operator kind operand =
-    let (parser, node) = Make.prefix_unary_expression parser operator operand in
-    let prefix_unary_expression_stack =
-      {node; operator_kind = kind; operand} ::
-        parser.prefix_unary_expression_stack
-    in
-    {parser with prefix_unary_expression_stack}, node
-
-  let find_in_prefix_unary_expression_stack parser node =
-    List.find_opt (fun {node = n; _} -> n == node)
-      parser.prefix_unary_expression_stack
 
   let with_type_parser : 'a . t -> (TypeParser.t -> TypeParser.t * 'a) -> t * 'a
   = fun parser f ->
@@ -103,9 +93,7 @@ module WithStatementAndDeclAndTypeParser
   let parse_generic_type_arguments parser =
     with_type_parser parser
       (fun p ->
-        let (p, items, no_arg_is_missing) =
-          TypeParser.parse_generic_type_argument_list p
-        in
+        let (p, items, no_arg_is_missing) = TypeParser.parse_generic_type_argument_list p in
         (p, (items, no_arg_is_missing))
       )
 
@@ -192,7 +180,8 @@ module WithStatementAndDeclAndTypeParser
 
   and parse_term parser =
     let (parser1, token) = next_xhp_class_name_or_other_token parser in
-    match (Token.kind token) with
+    let allow_new_attr = Full_fidelity_parser_env.allow_new_attribute_syntax parser.env in
+    match Token.kind token with
     | DecimalLiteral
     | OctalLiteral
     | HexadecimalLiteral
@@ -224,25 +213,35 @@ module WithStatementAndDeclAndTypeParser
         scan_remaining_qualified_name parser token
       in
       let (parser1, str_maybe) = next_token_no_trailing parser in
-      begin match Token.kind str_maybe with
-      | SingleQuotedStringLiteral | NowdocStringLiteral
-      | HeredocStringLiteral | HeredocStringLiteralHead ->
-        (* Treat as an attempt to prefix a non-double-quoted string *)
-        let parser = with_error parser SyntaxError.prefixed_invalid_string_kind in
-        parse_name_or_collection_literal_expression parser qualified_name
-      | DoubleQuotedStringLiteral ->
-        (* This name prefixes a double-quoted string *)
-        let (parser, str) = Make.token parser1 str_maybe in
-        let (parser, str) = Make.literal_expression parser str in
-        Make.prefixed_string_expression parser qualified_name str
-      | DoubleQuotedStringLiteralHead ->
-        (* This name prefixes a double-quoted string containing embedded expressions *)
-        let (parser, str) = parse_double_quoted_like_string
-          parser1 str_maybe Lexer.Literal_double_quoted in
-        Make.prefixed_string_expression parser qualified_name str
-      | _ ->
-        (* Not a prefixed string or an attempt at one *)
-        parse_name_or_collection_literal_expression parser qualified_name
+      begin
+        match Token.kind str_maybe with
+        | SingleQuotedStringLiteral | NowdocStringLiteral
+        (* for now, try generic type argument list with attributes before resorting to bad prefix *)
+        | HeredocStringLiteral ->
+          begin
+            match try_parse_specified_function_call parser qualified_name with
+            | Some r -> r
+            | None ->
+              let parser = with_error parser SyntaxError.prefixed_invalid_string_kind in
+              parse_name_or_collection_literal_expression parser qualified_name
+          end
+        | HeredocStringLiteralHead ->
+          (* Treat as an attempt to prefix a non-double-quoted string *)
+          let parser = with_error parser SyntaxError.prefixed_invalid_string_kind in
+          parse_name_or_collection_literal_expression parser qualified_name
+        | DoubleQuotedStringLiteral ->
+          (* This name prefixes a double-quoted string *)
+          let (parser, str) = Make.token parser1 str_maybe in
+          let (parser, str) = Make.literal_expression parser str in
+          Make.prefixed_string_expression parser qualified_name str
+        | DoubleQuotedStringLiteralHead ->
+          (* This name prefixes a double-quoted string containing embedded expressions *)
+          let (parser, str) = parse_double_quoted_like_string
+              parser1 str_maybe Lexer.Literal_double_quoted in
+          Make.prefixed_string_expression parser qualified_name str
+        | _ ->
+          (* Not a prefixed string or an attempt at one *)
+          parse_name_or_collection_literal_expression parser qualified_name
       end
     | Backslash ->
       let (parser, qualified_name) =
@@ -268,10 +267,11 @@ module WithStatementAndDeclAndTypeParser
     | Ampersand
     | Await
     | Clone
-    | Print
-    | At -> parse_prefix_unary_expression parser
+    | Print -> parse_prefix_unary_expression parser
+    (* Allow error suppression prefix when not using new attributes *)
+    | At when not allow_new_attr -> parse_prefix_unary_expression parser
     | LeftParen -> parse_cast_or_parenthesized_or_lambda_expression parser
-    | LessThan -> parse_possible_xhp_expression ~consume_trailing_trivia:true parser
+    | LessThan -> parse_possible_xhp_expression ~in_xhp_body:false token parser1
     | List  -> parse_list_expression parser
     | New -> parse_object_creation_expression parser
     | Array -> parse_array_intrinsic_expression parser
@@ -294,16 +294,16 @@ module WithStatementAndDeclAndTypeParser
     | LessThanLessThan
     | Async
     | Coroutine -> parse_anon_or_lambda_or_awaitable parser
+    | At when allow_new_attr -> parse_anon_or_lambda_or_awaitable parser
     | Include
     | Include_once
     | Require
     | Require_once -> parse_inclusion_expression parser
-    | Empty -> parse_empty_expression parser
     | Isset -> parse_isset_expression parser
     | Define -> parse_define_expression parser
     | HaltCompiler -> parse_halt_compiler_expression parser
     | Eval -> parse_eval_expression parser
-    | PUAtom -> parse_pocket_atom parser
+    | ColonAt -> parse_pocket_atom parser
     | kind when Parser.expects parser kind ->
       (* ERROR RECOVERY: if we've prematurely found a token we're expecting
        * later, mark the expression missing, throw an error, and do not advance
@@ -312,26 +312,6 @@ module WithStatementAndDeclAndTypeParser
       Make.missing parser (pos parser)
     | TokenKind.EndOfFile
     | _ -> parse_as_name_or_error parser
-
-  and parse_empty_expression parser =
-    (* TODO: This is a PHP-ism. Open questions:
-      * Should we allow a trailing comma? it is not a function call and
-        never has more than one argument. See D4273242 for discussion.
-      * Is there any restriction on the kind of expression this can be?
-      * Should this be an error in strict mode?
-      * Should this be in the specification?
-      * Empty is case-insensitive; should use of non-lowercase be an error?
-    *)
-    (* TODO: The original Hack and HHVM parsers accept "empty" as an
-    identifier, so we do too; consider whether it should be reserved. *)
-    let (parser1, keyword) = assert_token parser Empty in
-    if peek_token_kind parser1 = LeftParen then
-      let (parser, left) = assert_token parser1 LeftParen in
-      let (parser, arg) = parse_expression_with_reset_precedence parser in
-      let (parser, right) = require_right_paren parser in
-      Make.empty_expression parser keyword left arg right
-    else
-      parse_as_name_or_error parser
 
   and parse_eval_expression parser =
     (* TODO: This is a PHP-ism. Open questions:
@@ -608,8 +588,8 @@ module WithStatementAndDeclAndTypeParser
 
     * An embedded variable expression inside braces can be a much more complex
       expression than indicated by the grammar above.  For example,
-      {$c->x->y[0]} is good, and {$c[$x instanceof foo ? 0 : 1]} is good,
-      but {$c instanceof foo ? $x : $y} is not.  It is not clear to me what
+      {$c->x->y[0]} is good, and {$c[$x is foo ? 0 : 1]} is good,
+      but {$c is foo ? $x : $y} is not.  It is not clear to me what
       the legal grammar here is; it seems best in this situation to simply
       parse any expression and do an error pass later.
 
@@ -879,66 +859,40 @@ module WithStatementAndDeclAndTypeParser
     | None -> true
     | Some kind -> operator_has_lower_precedence kind parser
 
-  and parse_remaining_expression_or_specified_function_call parser term
-      prefix_kind =
-    let (parser1, (type_arguments, no_arg_is_missing)) =
-      parse_generic_type_arguments parser
-    in
-    if no_arg_is_missing && parser.errors = parser1.errors
-    then
-      let parser, result =
-        begin match peek_token_kind parser1 with
-        | ColonColon ->
-          (* handle a<type-args>::... case *)
-          let (parser, type_specifier) =
-            Make.generic_type_specifier parser1 term type_arguments
+  and try_parse_specified_function_call parser term =
+    if not (can_term_take_type_args term) then None else
+      match peek_token_kind_with_possible_attributized_type_list parser with
+      | LessThan ->
+        let (parser1, (type_arguments, no_arg_is_missing)) = parse_generic_type_arguments parser in
+        if not no_arg_is_missing || parser.errors <> parser1.errors then None else
+          let (parser, result) =
+            match peek_token_kind parser1 with
+            | ColonColon ->
+              (* handle a<type-args>::... case *)
+              let (parser, type_specifier) =
+                Make.generic_type_specifier parser1 term type_arguments
+              in
+              parse_scope_resolution_expression parser type_specifier
+            | _ ->
+              let (parser, left, args, right) = parse_expression_list_opt parser1 in
+              Make.function_call_expression
+                parser
+                term
+                type_arguments
+                left args right
           in
-          parse_scope_resolution_expression parser type_specifier
-        | _ ->
-          let (parser, left, args, right) = parse_expression_list_opt parser1 in
-          Make.function_call_with_type_arguments_expression
-            parser
-            term
-            type_arguments
-            left args right
-        end in
-      parse_remaining_expression parser result
-    else
-      parse_remaining_binary_expression parser term prefix_kind
+          Some (parse_remaining_expression parser result)
+      | _ -> None
 
   (* Checks if given expression is a PHP variable.
   per PHP grammar:
   https://github.com/php/php-langspec/blob/master/spec/10-expressions.md#grammar-variable
    A variable is an expression that can in principle be used as an lvalue *)
-  and can_be_used_as_lvalue parser t =
+  and can_be_used_as_lvalue t =
     SC.is_variable_expression t
     || SC.is_subscript_expression t
     || SC.is_member_selection_expression t
     || SC.is_scope_resolution_expression t
-    || prefix_unary_expression_checker_helper ~is_rhs:false parser t Dollar
-
-  and can_be_used_as_right_hand_side_of_byref_asignment parser t =
-    can_be_used_as_lvalue parser t
-    || SC.is_object_creation_expression t
-    || SC.is_function_call_expression t
-
-  (* Checks if given node is prefix unary expression and verifies operator kind.
-  Recursively run can_be_used_as_lvalue *)
-  and prefix_unary_expression_checker_helper ~is_rhs parser t kind =
-    match find_in_prefix_unary_expression_stack parser t with
-    | Some { operator_kind; operand; _ } ->
-      if operator_kind = kind then
-        if is_rhs
-        then can_be_used_as_right_hand_side_of_byref_asignment parser operand
-        else can_be_used_as_lvalue parser operand
-      else
-        false
-    | None -> false
-
-  (* checks if expression is a valid right hand side in by-ref assignment
-   which is '&'PHP variable *)
-  and is_byref_assignment_source parser t =
-    prefix_unary_expression_checker_helper ~is_rhs:true parser t Ampersand
 
   (*detects if left_term and operator can be treated as a beginning of
    assignment (respecting the precedence of operator on the left of
@@ -948,27 +902,44 @@ module WithStatementAndDeclAndTypeParser
    assignment.
    - Prefix_assignment - left_term  and operator can be interpreted as a
    prefix of assignment
-   - Prefix_byref_assignment - left_term and operator can be interpreted as a
-   prefix of byref assignment.*)
-  and check_if_parsable_as_assignment parser left_term operator left_precedence
-  =
-    (* in PHP precedence of assignment in expression is bumped up to
-       recognize cases like !$x = ... or $a == $b || $c = ...
-       which should be parsed as !($x = ...) and $a == $b || ($c = ...)
+   - Prefix_less_than - is the start of a specified function call f<T>(...)
+   *)
+  and check_if_should_override_normal_precedence parser left_term operator left_precedence =
+    (*
+      We need to override the precedence of the < operator in the case where it
+      is the start of a specified function call.
     *)
-    if left_precedence >= Operator.precedence_for_assignment_in_expressions then
-      Prefix_none
-    else match operator with
-    | Equal when can_be_used_as_lvalue parser left_term ->
-      Prefix_byref_assignment
-    | Equal when SC.is_list_expression left_term -> Prefix_assignment
-    | PlusEqual | MinusEqual | StarEqual | SlashEqual |
-      StarStarEqual | DotEqual | PercentEqual | AmpersandEqual |
-      BarEqual | CaratEqual | LessThanLessThanEqual |
-      GreaterThanGreaterThanEqual | QuestionQuestionEqual
-      when can_be_used_as_lvalue parser left_term ->
-      Prefix_assignment
-    | _ -> Prefix_none
+    let maybe_prefix =
+      match peek_token_kind_with_possible_attributized_type_list parser with
+      | LessThan ->
+        begin
+          match try_parse_specified_function_call parser left_term with
+          | Some r -> Some (Prefix_less_than r)
+          | None -> None
+        end
+      | _ -> None
+    in
+    match maybe_prefix with
+    | Some r -> r
+    | None ->
+      (* in PHP precedence of assignment in expression is bumped up to
+         recognize cases like !$x = ... or $a == $b || $c = ...
+         which should be parsed as !($x = ...) and $a == $b || ($c = ...)
+      *)
+      if left_precedence >= Operator.precedence_for_assignment_in_expressions then
+        Prefix_none
+      else
+        begin
+          match operator with
+          | Equal when SC.is_list_expression left_term -> Prefix_assignment
+          | Equal | PlusEqual | MinusEqual | StarEqual | SlashEqual |
+            StarStarEqual | DotEqual | PercentEqual | AmpersandEqual |
+            BarEqual | CaratEqual | LessThanLessThanEqual |
+            GreaterThanGreaterThanEqual | QuestionQuestionEqual
+            when can_be_used_as_lvalue left_term ->
+            Prefix_assignment
+          | _ -> Prefix_none
+        end
 
   and can_term_take_type_args term =
     SC.is_name term
@@ -982,7 +953,7 @@ module WithStatementAndDeclAndTypeParser
     | None -> (parser, term)
     | Some token ->
     let assignment_prefix_kind =
-      check_if_parsable_as_assignment parser term token parser.precedence
+      check_if_should_override_normal_precedence parser term token parser.precedence
     in
     (* stop parsing expression if:
     - precedence of the operator is less than precedence of the operator
@@ -990,17 +961,14 @@ module WithStatementAndDeclAndTypeParser
     AND
     - <term> <operator> does not look like a prefix of
       some assignment expression*)
-    if operator_has_lower_precedence token parser &&
-       assignment_prefix_kind = Prefix_none then (parser, term)
-    else match token with
+    match assignment_prefix_kind with
+    | Prefix_less_than r -> r
+    | Prefix_none when operator_has_lower_precedence token parser ->
+      (parser, term)
+    | _ ->
+    match token with
     (* Binary operators *)
     (* TODO Add an error if PHP style <> is used in Hack. *)
-    | LessThan when can_term_take_type_args term ->
-      parse_remaining_expression_or_specified_function_call parser term
-        assignment_prefix_kind
-    | And
-    | Or
-    | Xor
     | Plus
     | Minus
     | Star
@@ -1028,7 +996,6 @@ module WithStatementAndDeclAndTypeParser
     | AmpersandAmpersand
     | BarBar
     | ExclamationEqual
-    | LessThanGreaterThan
     | ExclamationEqualEqual
     | LessThanEqual
     | LessThanEqualGreaterThan
@@ -1044,7 +1011,8 @@ module WithStatementAndDeclAndTypeParser
     | QuestionQuestionEqual ->
       parse_remaining_binary_expression parser term assignment_prefix_kind
     | Instanceof ->
-      parse_instanceof_expression parser term
+      let parser = with_error parser SyntaxError.instanceof_disabled in
+      Make.missing parser (pos parser)
     | Is ->
       parse_is_expression parser term
     | As when allow_as_expressions parser ->
@@ -1057,6 +1025,9 @@ module WithStatementAndDeclAndTypeParser
       parse_remaining_expression parser result
     | ColonColon ->
       let (parser, result) = parse_scope_resolution_expression parser term in
+      parse_remaining_expression parser result
+    | ColonAt ->
+      let (parser, result) = parse_pocket_identifier_expression parser term in
       parse_remaining_expression parser result
     | PlusPlus
     | MinusMinus -> parse_postfix_unary parser term
@@ -1217,8 +1188,9 @@ module WithStatementAndDeclAndTypeParser
         let (parser, start_token) = Make.token parser start_token in
         scan_remaining_qualified_name parser start_token
     in
-    match peek_token_kind parser with
-    | LeftParen | LessThan -> Some (parser, name)
+    match peek_token_kind_with_possible_attributized_type_list parser with
+    | LeftParen
+    | LessThan -> Some (parser, name)
     | _ -> None
 
   and parse_designator parser =
@@ -1238,44 +1210,35 @@ module WithStatementAndDeclAndTypeParser
     TODO: This will need to be fixed to allow situations where the qualified name
       is also a non-reserved token.
     *)
-    let default parser =
-      parse_expression_with_operator_precedence parser Operator.NewOperator in
+    let default parser = parse_expression_with_operator_precedence parser Operator.NewOperator in
     let (parser1, token) = next_token parser in
     match Token.kind token with
     | Parent
     | Self ->
-      begin match peek_token_kind parser1 with
-      | LeftParen -> Make.token parser1 token
-      | LessThan ->
-        let (parser1, (type_arguments, no_arg_is_missing)) =
-          parse_generic_type_arguments parser1
-        in
-        if no_arg_is_missing && parser.errors = parser1.errors
-        then
-          let (parser, token) = Make.token parser1 token in
-          let (parser, type_specifier) =
+      begin
+        match peek_token_kind_with_possible_attributized_type_list parser1 with
+        | LeftParen -> Make.token parser1 token
+        | LessThan ->
+          let (parser, (type_arguments, no_arg_is_missing)) = parse_generic_type_arguments parser1 in
+          if no_arg_is_missing && parser.errors = parser1.errors then
+            let (parser, token) = Make.token parser token in
             Make.generic_type_specifier parser token type_arguments
-          in
-          parser, type_specifier
-        else
-          default parser
-      | _ ->
-        default parser
+          else
+            default parser
+        | _ -> default parser
       end
-    | Static when peek_token_kind parser1 = LeftParen ->
-      Make.token parser1 token
+    | Static when peek_token_kind parser1 = LeftParen -> Make.token parser1 token
     | Name
     | Backslash ->
-      begin match parse_start_of_type_specifier parser1 token with
-      | Some (parser, name) ->
-        (* We want to parse new C() and new C<int>() as types, but
-        new C::$x() as an expression. *)
-        with_type_parser parser (TypeParser.parse_remaining_type_specifier name)
-      | None ->
-        default parser
+      begin
+        match parse_start_of_type_specifier parser1 token with
+        | Some (parser, name) ->
+          (* We want to parse new C() and new C<int>() as types, but
+             new C::$x() as an expression. *)
+          with_type_parser parser (TypeParser.parse_remaining_type_specifier name)
+        | None -> default parser
       end
-    | _ ->
-      default parser
+    | _ -> default parser
       (* TODO: We need to verify in a later pass that the expression is a
       scope resolution (that does not end in class!), a member selection,
       a name, a variable, a property, or an array subscript expression. *)
@@ -1286,56 +1249,8 @@ module WithStatementAndDeclAndTypeParser
         new object-creation-what
     *)
     let (parser, new_token) = assert_token parser New in
-    let (parser, new_what) =
-      let (parser1, token) = next_token parser in
-      begin match Token.kind token with
-      | Class -> parse_anonymous_class token parser1
-      | _ -> parse_constructor_call parser
-      end
-    in
+    let (parser, new_what) = parse_constructor_call parser in
     Make.object_creation_expression parser new_token new_what
-
-  and parse_anonymous_class class_token parser =
-    let (parser, class_token) = Make.token parser class_token in
-    let (parser, left, args, right) =
-      if peek_token_kind parser = LeftParen
-      then parse_expression_list_opt parser
-      else
-        let (parser, missing1) = Make.missing parser (pos parser) in
-        let (parser, missing2) = Make.missing parser (pos parser) in
-        let (parser, missing3) = Make.missing parser (pos parser) in
-        (parser, missing1, missing2, missing3)
-    in
-    let parser
-        , ( classish_extends
-          , classish_extends_list
-          , classish_implements
-          , classish_implements_list
-          , body
-          )
-    = with_decl_parser parser
-      (fun decl_parser ->
-        let (decl_parser, classish_extends, classish_extends_list) =
-          DeclParser.parse_classish_extends_opt decl_parser in
-        let (decl_parser, classish_implements, classish_implements_list) =
-          DeclParser.parse_classish_implements_opt decl_parser in
-        let (decl_parser, body) = DeclParser.parse_classish_body decl_parser in
-        decl_parser
-        , ( classish_extends
-          , classish_extends_list
-          , classish_implements
-          , classish_implements_list
-          , body
-          )
-      )
-    in
-    Make.anonymous_class
-      parser
-      class_token
-      left args right
-      classish_extends classish_extends_list
-      classish_implements classish_implements_list
-      body
 
   and parse_constructor_call parser =
     (* SPEC
@@ -1349,9 +1264,9 @@ module WithStatementAndDeclAndTypeParser
      * Update the spec to say that the argument expression list is required. *)
     let (parser, designator) = parse_designator parser in
     let (parser, left, args, right) =
-      if peek_token_kind parser = LeftParen then
-        parse_expression_list_opt parser
-      else
+      match peek_token_kind parser with
+      | LeftParen -> parse_expression_list_opt parser
+      | _ ->
         let (parser, missing1) = Make.missing parser (pos parser) in
         let (parser, missing2) = Make.missing parser (pos parser) in
         let (parser, missing3) = Make.missing parser (pos parser) in
@@ -1364,9 +1279,10 @@ module WithStatementAndDeclAndTypeParser
       function-call-expression:
         postfix-expression  (  argument-expression-list-opt  )
     *)
+    let (parser, type_arguments) = Make.missing parser (pos parser) in
     let (parser, result) = with_as_expressions parser ~enabled:true (fun parser ->
       let (parser, left, args, right) = parse_expression_list_opt parser in
-        Make.function_call_expression parser receiver left args right) in
+        Make.function_call_expression parser receiver type_arguments left args right) in
     parse_remaining_expression parser result
 
   and parse_variable_or_lambda parser =
@@ -1439,7 +1355,7 @@ module WithStatementAndDeclAndTypeParser
 
     * If the thing in parens is one of the keywords mentioned above, then
       it's a cast.
-    * If the token which follows (x) is "as" or "instanceof" then
+    * If the token which follows (x) is "is" or "as" then
       it's a parenthesized expression.
     * PHP-ism extension: if the token is "and", "or" or "xor", then it's a
       parenthesized expression.
@@ -1571,7 +1487,7 @@ module WithStatementAndDeclAndTypeParser
     let (parser, operand) =
       parse_expression_with_operator_precedence parser operator
     in
-    make_and_track_prefix_unary_expression parser token kind operand
+    Make.prefix_unary_expression parser token operand
 
   and parse_simple_variable parser =
     match peek_token_kind parser with
@@ -1593,106 +1509,7 @@ module WithStatementAndDeclAndTypeParser
         parse_expression_with_operator_precedence parser
           (Operator.prefix_unary_from_token Dollar)
     in
-    make_and_track_prefix_unary_expression parser dollar Dollar operand
-
-  and parse_instanceof_expression parser left =
-    (* SPEC:
-    instanceof-expression:
-      instanceof-subject  instanceof   instanceof-type-designator
-
-    instanceof-subject:
-      expression
-
-    instanceof-type-designator:
-      qualified-name
-      variable-name
-
-    TODO: The spec is plainly wrong here. This is a bit of a mess and there
-    are a number of issues.
-
-    The issues arise from the fact that the thing on the right can be either
-    a type, or an expression that evaluates to a string that names the type.
-
-    The grammar in the spec, above, says that the only things that can be
-    here are a qualified name -- in which case it names the type directly --
-    or a variable of classname type, which names the type.  But this is
-    not the grammar that is accepted by Hack / HHVM.  The accepted grammar
-    treats "instanceof" as a binary operator which takes expressions on
-    each side, and is of lower precedence than ->.  Thus
-
-    $x instanceof $y -> z
-
-    must be parsed as ($x instanceof ($y -> z)), and not, as the grammar
-    implies, (($x instanceof $y) -> z).
-
-    But wait, it gets worse.
-
-    The less-than operator is of lower precedence than instanceof, so
-    "$x instanceof foo < 10" should be parsed as (($x instanceof foo) < 10).
-    But it seems plausible that we might want to parse
-    "$x instanceof foo<int>" someday, in which case now we have an ambiguity.
-    How do we know when we see the < whether we are attempting to parse a type?
-
-    Moreover: we need to be able to parse XHP class names on the right hand
-    side of the operator.  That is, we need to be able to say
-
-    $x instanceof :foo
-
-    However, we cannot simply say that the grammar is
-
-    instanceof-type-designator:
-      xhp-class-name
-      expression
-
-    Why not?   Because that then gives the wrong parse for:
-
-    class :foo { static $bar = "abc" }
-    class abc { }
-    ...
-    $x instanceof :foo :: $bar
-
-    We need to parse that as $x instanceof (:foo :: $bar).
-
-    The solution to all this is as follows.
-
-    First, an XHP class name must be a legal expression. I had thought that
-    it might be possible to say that an XHP class name is a legal type, or
-    legal in an expression context when immediately followed by ::, but
-    that's not the case. We need to be able to parse both
-
-    $x instanceof :foo :: $bar
-
-    and
-
-    $x instanceof :foo
-
-    so the most expedient way to do that is to parse any expression on the
-    right, and to make XHP class names into legal expressions.
-
-    So, with all this in mind, the grammar we will actually parse here is:
-
-    instanceof-type-designator:
-      expression
-
-    This has the unfortunate property that the common case, say,
-
-    $x instanceof C
-
-    creates a parse node for C as a name token, not as a name token wrapped
-    up as a simple type.
-
-    Should we ever need to parse both arbitrary expressions and arbitrary
-    types here, we'll have some tricky problems to solve.
-
-    *)
-    let (parser, op) = assert_token parser Instanceof in
-    let precedence = Operator.precedence parser.env Operator.InstanceofOperator in
-    let (parser, right_term) = parse_term parser in
-    let (parser, right) =
-      parse_remaining_binary_expression_helper parser right_term precedence
-    in
-    let (parser, result) = Make.instanceof_expression parser left op right in
-    parse_remaining_expression parser result
+    Make.prefix_unary_expression parser dollar operand
 
   and parse_is_as_helper parser f left kw =
     let (parser, op) = assert_token parser kw in
@@ -1770,60 +1587,25 @@ module WithStatementAndDeclAndTypeParser
       let is_rhs_of_assignment = assignment_prefix_kind <> Prefix_none in
       assert (not (next_is_lower_precedence parser) || is_rhs_of_assignment);
 
-      let pre_assignment_precedence = parser.precedence in
       let (parser, token) = next_token parser in
-      let default () =
-        let operator = Operator.trailing_from_token (Token.kind token) in
-        let precedence = Operator.precedence parser.env operator in
-        let (parser, token) = Make.token parser token in
-        let (parser, right_term) =
-          if is_rhs_of_assignment then
-            (* reset the current precedence to make sure that expression on
-              the right hand side of the assignment is fully consumed *)
-            with_reset_precedence parser parse_term
-          else
-            parse_term parser
-        in
-        let (parser, right_term) =
-          parse_remaining_binary_expression_helper parser right_term precedence
-        in
-        let (parser, term) =
-          Make.binary_expression parser left_term token right_term
-        in
-        parse_remaining_expression parser term
-      in
-      (*if we are on the right hand side of the assignment - peek if next
-      token is '&'. If it is - then parse next term. If overall next term is
-      '&'PHP variable then the overall expression should be parsed as
-      ... (left_term = & right_term) ...
-      *)
-      if assignment_prefix_kind = Prefix_byref_assignment &&
-         Token.kind (peek_token parser) = Ampersand then
-        let (parser1, right_term) =
-          parse_term @@ with_precedence
-            parser
-            Operator.precedence_for_assignment_in_expressions
-        in
-        if is_byref_assignment_source parser1 right_term then
-          (* We backtrack here to call smart constructors in the correct order. *)
-          let (parser, token) = Make.token parser token in
-          let (parser, right_term) =
-            parse_term @@ with_precedence
-              parser
-              Operator.precedence_for_assignment_in_expressions
-          in
-          let (parser, left_term) =
-            Make.binary_expression parser left_term token right_term
-          in
-          let (parser, left_term) =
-            parse_remaining_binary_expression_helper parser left_term
-              pre_assignment_precedence
-          in
-          parse_remaining_expression parser left_term
+      let operator = Operator.trailing_from_token (Token.kind token) in
+      let precedence = Operator.precedence parser.env operator in
+      let (parser, token) = Make.token parser token in
+      let (parser, right_term) =
+        if is_rhs_of_assignment then
+          (* reset the current precedence to make sure that expression on
+            the right hand side of the assignment is fully consumed *)
+          with_reset_precedence parser parse_term
         else
-          default ()
-      else
-        default ()
+          parse_term parser
+      in
+      let (parser, right_term) =
+        parse_remaining_binary_expression_helper parser right_term precedence
+      in
+      let (parser, term) =
+        Make.binary_expression parser left_term token right_term
+      in
+      parse_remaining_expression parser term
 
   and parse_remaining_binary_expression_helper
       parser right_term left_precedence =
@@ -1853,7 +1635,7 @@ module WithStatementAndDeclAndTypeParser
           bumped priority fort the assignment we reset precedence before parsing
           right hand side of the assignment to make sure it is consumed.
           *)
-        check_if_parsable_as_assignment
+        check_if_should_override_normal_precedence
           parser
           right_term
           kind
@@ -1864,32 +1646,12 @@ module WithStatementAndDeclAndTypeParser
          right_precedence = left_precedence ) ||
          is_parsable_as_assignment then
         let (parser2, right_term) =
-          let precedence =
-            if is_parsable_as_assignment then
-              (* if expression can be parsed as an assignment, keep track of
-                 the precedence on the left of the assignment (it is ok since
-                 we'll internally boost the precedence when parsing rhs of the
-                 assignment)
-                 This is necessary for cases like:
-                 ... + $a = &$b * $c + ...
-                       ^             ^
-                       #             $
-                 it should be parsed as
-                 (... + ($a = &$b) * $c) + ...
-                 when we are at position (#)
-                 - we will first consume byref assignment as a e1
-                 - check that precedence of '*' is greater than precedence of
-                   the '+' (left_precedence) and consume e1 * $c as $e2
-                 - check that precedence of '+' is less or equal than precedence
-                   of the '+' (left_precedence) and stop so the final result
-                   before we get to the point ($) will be
-                   (... + $e2)
-                 *)
-              left_precedence
-            else
-              right_precedence
-          in
-          let parser1 = with_precedence parser precedence in
+          if is_parsable_as_assignment then
+            with_reset_precedence parser (fun p ->
+              parse_remaining_expression p right_term
+            )
+          else
+            let parser1 = with_precedence parser right_precedence in
           parse_remaining_expression parser1 right_term
         in
         let parser3 = with_precedence parser2 parser.precedence in
@@ -1956,25 +1718,66 @@ module WithStatementAndDeclAndTypeParser
       alternative
 
   and parse_name_or_collection_literal_expression parser name =
-    match peek_token_kind parser with
+    match peek_token_kind_with_possible_attributized_type_list parser with
     | LeftBrace ->
       let (parser, name) = Make.simple_type_specifier parser name in
       parse_collection_literal_expression parser name
     | LessThan ->
-      let (parser1, (type_arguments, no_arg_is_missing)) =
-        parse_generic_type_arguments parser
-      in
+      let (parser1, (type_arguments, no_arg_is_missing)) = parse_generic_type_arguments parser in
       if no_arg_is_missing
       && parser.errors = parser1.errors
       && peek_token_kind parser1 = LeftBrace
       then
-        let (parser, name) =
-          Make.generic_type_specifier parser1 name type_arguments
-        in
+        let (parser, name) = Make.generic_type_specifier parser1 name type_arguments in
         parse_collection_literal_expression parser name
       else
         (parser, name)
+    | LeftBracket ->
+      if peek_token_kind ~lookahead:2 parser = EqualGreaterThan
+      then
+        parse_record_creation_expression parser name
+      else
+        (parser, name)
+    | At ->
+      if peek_token_kind ~lookahead:1 parser = LeftBracket
+      then
+        parse_record_creation_expression parser name
+      else
+        (parser, name)
     | _ -> (parser, name)
+
+  and parse_record_creation_expression parser name =
+    (* SPEC
+     * record-creation:
+       * record-name [ record-field-initializer-list ]
+     * record-fileld-initilizer-list:
+       * record-field-initilizer
+       * record-field-initializer-list, record-field-initializer
+     * record-field-initializer
+       * field-name => expression
+     *)
+    let (parser, array_token) =
+      match peek_token_kind parser with
+      | At -> assert_token parser At
+      | _ ->
+        let (parser, missing) = Make.missing parser (pos parser) in
+        (parser, missing)
+    in
+    let (parser1, left_bracket) = assert_token parser LeftBracket in
+    let (parser, members) =
+      parse_comma_list_opt_allow_trailing
+      parser1
+      RightBracket
+      SyntaxError.error1015
+      parse_keyed_element_initializer in
+    let (parser, right_bracket) = require_right_bracket parser in
+    Make.record_creation_expression
+      parser
+      name
+      array_token
+      left_bracket
+      members
+      right_bracket
 
   and parse_collection_literal_expression parser name =
 
@@ -2087,11 +1890,11 @@ module WithStatementAndDeclAndTypeParser
       make_intrinsic_function =
     let (parser1, keyword) = assert_token parser keyword_token in
     let (parser1, explicit_type) =
-      match peek_token_kind parser1 with
+      match peek_token_kind_with_possible_attributized_type_list parser1 with
       | LessThan ->
         let (parser1, (type_arguments, _)) = parse_generic_type_arguments parser1 in
         (* skip no_arg_is_missing check since there must only be 1 or 2 type arguments*)
-        parser1, type_arguments
+        (parser1, type_arguments)
       | _ -> Make.missing parser1 (pos parser1)
     in
     let (parser1, left_bracket) = optional_token parser1 LeftBracket in
@@ -2241,13 +2044,10 @@ module WithStatementAndDeclAndTypeParser
     Make.tuple_expression parser keyword left_paren items right_paren
 
   and parse_use_variable parser =
-    (* TODO: Is it better that this returns the variable as a *token*, or
-    as an *expression* that consists of the token? We do the former. *)
-    let (parser1, token) = next_token parser in
+    let (_, token) = next_token parser in
     if Token.kind token = Ampersand then
-      let (parser, ampersand) = Make.token parser1 token in
-      let (parser, variable) = require_variable parser in
-      make_and_track_prefix_unary_expression parser ampersand Ampersand variable
+      let parser = with_error parser SyntaxError.error1062 in
+      Make.missing parser (pos parser)
     else
       require_variable parser
 
@@ -2257,16 +2057,16 @@ module WithStatementAndDeclAndTypeParser
     (* Skip any async or coroutine declarations that may be present. When we
        feed the original parser into the syntax parsers. they will take care of
        them as appropriate. *)
-    let (parser, attribute_spec) =
+    let (parser1, attribute_spec) =
       with_decl_parser parser DeclParser.parse_attribute_specification_opt in
-    let (parser1, _) = optional_token parser Static in
-    let (parser1, _) = optional_token parser1 Async in
-    let (parser1, _) = optional_token parser1 Coroutine in
-    match peek_token_kind parser1 with
-    | Function -> parse_anon parser attribute_spec
-    | LeftBrace -> parse_async_block parser attribute_spec
+    let (parser2, _) = optional_token parser1 Static in
+    let (parser2, _) = optional_token parser2 Async in
+    let (parser2, _) = optional_token parser2 Coroutine in
+    match peek_token_kind parser2 with
+    | Function -> parse_anon parser1 attribute_spec
+    | LeftBrace -> parse_async_block parser1 attribute_spec
     | Variable
-    | LeftParen -> parse_lambda_expression parser attribute_spec
+    | LeftParen -> parse_lambda_expression parser1 attribute_spec
     | _ ->
       let (parser, static_or_async_or_coroutine_as_name) = next_token_as_name
         parser in
@@ -2293,11 +2093,6 @@ module WithStatementAndDeclAndTypeParser
       use-variable-name-list:
         variable-name
         use-variable-name-list  ,  variable-name
-
-      TODO: Strict mode requires that it be a list of variables; in
-      non-strict mode we allow variables to be decorated with a leading
-      & to indicate they are captured by reference. We need to give an
-      error in a later pass for this.
     *)
     let (parser, use_token) = optional_token parser Use in
     if SC.is_missing use_token then
@@ -2341,42 +2136,36 @@ module WithStatementAndDeclAndTypeParser
     let (parser, left_paren, params, right_paren) =
       parse_parameter_list_opt parser
     in
-    let (parser1, use_clause) = parse_anon_use_opt parser in
-    if not (SC.is_missing use_clause) && peek_token_kind parser1 = Colon then
-      let (parser, colon, return_type) = parse_optional_return parser1 in
-      let (parser, body) = parse_compound_statement parser in
-      Make.php7_anonymous_function
+    let (parser, colon, return_type) = parse_optional_return parser in
+    let (parser, use_clause) = parse_anon_use_opt parser in
+    (* Detect if the user has the type in the wrong place
+       function() use(): T // wrong
+       function(): T use() // correct
+     *)
+    let parser =
+      if SC.is_missing use_clause then
         parser
-        attribute_spec
-        static
-        async
-        coroutine
-        fn
-        left_paren
-        params
-        right_paren
-        use_clause
-        colon
-        return_type
-        body
-    else
-      let (parser, colon, return_type) = parse_optional_return parser in
-      let (parser, use_clause) = parse_anon_use_opt parser in
-      let (parser, body) = parse_compound_statement parser in
-      Make.anonymous_function
-        parser
-        attribute_spec
-        static
-        async
-        coroutine
-        fn
-        left_paren
-        params
-        right_paren
-        colon
-        return_type
-        use_clause
-        body
+      else
+        (let (_, misplaced_colon) = optional_token parser Colon in
+         if SC.is_missing misplaced_colon then
+           parser
+         else
+           with_error parser "Bad signature: use(...) should occur after the type") in
+    let (parser, body) = parse_compound_statement parser in
+    Make.anonymous_function
+      parser
+      attribute_spec
+      static
+      async
+      coroutine
+      fn
+      left_paren
+      params
+      right_paren
+      colon
+      return_type
+      use_clause
+      body
 
   and parse_braced_expression parser =
     let (parser, left_brace) = assert_token parser LeftBrace in
@@ -2488,7 +2277,7 @@ module WithStatementAndDeclAndTypeParser
       (parser, Some token)
     | LessThan ->
       let (parser, expr) =
-        parse_possible_xhp_expression ~consume_trailing_trivia:false parser in
+        parse_possible_xhp_expression ~in_xhp_body:true token parser1 in
       (parser, Some expr)
     | _ -> (parser, None)
 
@@ -2532,7 +2321,7 @@ module WithStatementAndDeclAndTypeParser
       (* ERROR RECOVERY: We probably got a < without a following / or name.
          TODO: For now we'll just bail out. We could use a more
          sophisticated strategy here. *)
-      let parser = with_error parser SyntaxError.error1026 in
+      let parser = with_error parser SyntaxError.error1039 in
       let (parser, missing1) = Make.missing parser (pos parser) in
       let (parser, missing2) = Make.missing parser (pos parser) in
       Make.xhp_close
@@ -2588,22 +2377,27 @@ module WithStatementAndDeclAndTypeParser
       let parser = with_error parser SyntaxError.error1013 in
       Make.xhp_expression parser xhp_open missing1 missing2
 
-  and parse_possible_xhp_expression ~consume_trailing_trivia parser =
+  and parse_possible_xhp_expression ~in_xhp_body less_than parser =
+    let parser, less_than = Make.token parser less_than in
     (* We got a < token where an expression was expected. *)
-    let (parser, less_than) = assert_xhp_body_token parser LessThan in
     let (parser1, name, text) = next_xhp_element_token parser in
     if (Token.kind name) = XHPElementName then
       let (parser, token) = Make.token parser1 name in
-      parse_xhp_expression ~consume_trailing_trivia
+      parse_xhp_expression ~consume_trailing_trivia:(not in_xhp_body)
         parser less_than token text
     else
       (* ERROR RECOVERY
-      Hard to say what to do here. We are expecting an expression;
-      we could simply produce an error for the < and call that the
-      expression. Or we could assume the the left side of an inequality is
-      missing, give a missing node for the left side, and parse the
-      remainder as the right side. We'll go for the former for now. *)
-      (with_error parser SyntaxError.error1015, less_than)
+      In an expression context, it's hard to say what to do here. We are
+      expecting an expression, so we could simply produce an error for the < and
+      call that the expression. Or we could assume the the left side of an
+      inequality is missing, give a missing node for the left side, and parse
+      the remainder as the right side. We'll go for the former for now.
+
+      In an XHP body context, we certainly expect a name here, because the <
+      could only legally be the first token in another XHPExpression. *)
+      let error =
+        if in_xhp_body then SyntaxError.error1004 else SyntaxError.error1015 in
+      (with_error parser error, less_than)
 
   and parse_anon_or_awaitable_or_scope_resolution_or_name parser =
     (* static is a legal identifier, if next token is scope resolution operatpr
@@ -2673,9 +2467,29 @@ module WithStatementAndDeclAndTypeParser
     in
     Make.scope_resolution_expression parser qualifier op name
 
+  and parse_pocket_identifier_expression parser qualifier =
+    (* SPEC
+      pocket-identifier-expression:
+        scope-resolution-qualifier  :@ name ::  name
+
+      scope-resolution-qualifier:
+        qualified-name
+        variable-name
+        self
+        parent
+        static
+    *)
+    (* TODO: see TODO in parse_scope_resolution_expression *)
+    let (parser, op_pu) = require_colonat parser in
+    let (parser, field_name) = require_name parser in
+    let (parser, op) = require_coloncolon parser in
+    let (parser, name) = require_name parser in
+    Make.pocket_identifier_expression parser qualifier op_pu field_name op  name
+
   and parse_pocket_atom parser =
-    let (parser1, atom) = assert_token parser PUAtom in
-    Make.pocket_atom_expression parser1 atom
+    let (parser, glyph) = assert_token parser ColonAt in
+    let (parser, atom_name) = require_name parser in
+    Make.pocket_atom_expression parser glyph atom_name
 end
 end (* WithSmartConstructors *)
 end (* WithSyntax *)

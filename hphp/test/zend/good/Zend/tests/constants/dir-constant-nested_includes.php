@@ -1,4 +1,4 @@
-<?php
+<?hh
 echo __DIR__ . "\n";
 echo dirname(__FILE__) . "\n";
 include 'fixtures/folder1/fixture.php';
@@ -21,4 +21,3 @@ include 'fixtures/folder4/subfolder1/fixture.php';
 include 'fixtures/folder4/subfolder2/fixture.php';
 include 'fixtures/folder4/subfolder3/fixture.php';
 include 'fixtures/folder4/subfolder4/fixture.php';
-?>

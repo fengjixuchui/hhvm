@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : array get_class_vars(string class_name)
  * Description: Returns an array of default properties of the class.
  * Source code: Zend/zend_builtin_functions.c
  * Alias to functions:
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing get_class_vars() : error conditions ***\n";
 
 
@@ -18,5 +18,5 @@ try { var_dump(get_class_vars($obj,$extra_arg) ); } catch (Exception $e) { echo 
 echo "\n-- Testing get_class_vars() function with less than expected no. of arguments --\n";
 try { var_dump(get_class_vars()); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

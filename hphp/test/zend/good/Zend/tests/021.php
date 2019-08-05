@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 var_dump(true ?: false);
 var_dump(false ?: true);
 var_dump(23 ?: 42);
@@ -19,4 +19,4 @@ $e = array();
 $e['e'] = 'e';
 $e['e'] = $e['e'] ?: 'e';
 print_r($e);
-?>
+}

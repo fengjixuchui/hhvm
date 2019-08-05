@@ -108,9 +108,8 @@ module PositionedValueBuilder = struct
        the node are missing - this means that entire node is missing.
        NOTE: offset must match otherwise it will mean that there is a real node
        in between that should be picked instead *)
-    | (PSV.Missing { offset = o1; _} as v), PSV.Missing { offset = o2; _} when o1 = o2
-      -> v
-
+    | PSV.Missing { offset = o1; source_text}, PSV.Missing { offset = o2; _} when o1 = o2
+      -> PSV.Missing { offset = o1; source_text }
     | _ -> assert false
 
   let width n =
@@ -318,3 +317,17 @@ let leading_trivia node =
   match token with
   | None -> []
   | Some t -> Token.leading t
+
+type 'a rust_parse_type = Full_fidelity_source_text.t -> Full_fidelity_parser_env.t
+  -> 'a * t * Full_fidelity_syntax_error.t list
+let rust_parse_ref : unit rust_parse_type ref =
+  ref (fun _  _ -> failwith "This should be lazily set in Rust_parser_ffi")
+let rust_parse text env = !rust_parse_ref text env
+
+let rust_parse_with_coroutine_sc_ref : bool rust_parse_type ref =
+  ref (fun _  _ -> failwith "This should be lazily set in Rust_parser_ffi")
+let rust_parse_with_coroutine_sc text env = !rust_parse_with_coroutine_sc_ref text env
+
+let rust_parse_with_decl_mode_sc_ref : (bool list) rust_parse_type ref =
+  ref (fun _  _ -> failwith "This should be lazily set in Rust_parser_ffi")
+let rust_parse_with_decl_mode_sc text env = !rust_parse_with_decl_mode_sc_ref text env

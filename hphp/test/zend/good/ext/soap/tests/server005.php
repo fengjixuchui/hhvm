@@ -1,10 +1,10 @@
-<?php
+<?hh
 class Foo {
   function test() {
     return "Hello World";
   }
 }
-
+<<__EntryPoint>> function main(): void {
 $server = new soapserver(null,array('uri'=>"http://testuri.org"));
 $server->setclass("Foo");
 
@@ -24,4 +24,4 @@ EOF;
 
 $server->handle($HTTP_RAW_POST_DATA);
 echo "ok\n";
-?>
+}

@@ -20,14 +20,18 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+#include <folly/json.h>
+
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/autoload-handler.h"
+#include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/container-functions.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/file-stream-wrapper.h"
 #include "hphp/runtime/base/request-tracing.h"
 #include "hphp/runtime/base/stream-wrapper-registry.h"
 #include "hphp/runtime/base/unit-cache.h"
+#include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/ext/fb/ext_fb.h"
 #include "hphp/runtime/ext/collections/ext_collections-pair.h"
 #include "hphp/runtime/vm/class-meth-data-ref.h"
@@ -80,7 +84,7 @@ bool HHVM_FUNCTION(autoload_set_paths,
 
 bool HHVM_FUNCTION(could_include, const String& file) {
   return lookupUnit(file.get(), "", nullptr /* initial_opt */,
-                    Native::s_noNativeFuncs) != nullptr;
+                    Native::s_noNativeFuncs, false) != nullptr;
 }
 
 namespace {
@@ -182,10 +186,26 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, const TypedValue *tv) {
   serialize_memoize_tv(sb, depth, *tv);
 }
 
+ALWAYS_INLINE void serialize_memoize_arraykey(StringBuffer& sb,
+                                              const Cell& c) {
+  switch (c.m_type) {
+    case KindOfPersistentString:
+    case KindOfString:
+      serialize_memoize_code(sb, SER_MC_STRING);
+      serialize_memoize_string_data(sb, c.m_data.pstr);
+      break;
+    case KindOfInt64:
+      serialize_memoize_int64(sb, c.m_data.num);
+      break;
+    default:
+      always_assert(false);
+  }
+}
+
 void serialize_memoize_array(StringBuffer& sb, int depth, const ArrayData* ad) {
   serialize_memoize_code(sb, SER_MC_CONTAINER);
   IterateKV(ad, [&] (Cell k, TypedValue v) {
-    serialize_memoize_tv(sb, depth, k);
+    serialize_memoize_arraykey(sb, k);
     serialize_memoize_tv(sb, depth, v);
     return false;
   });
@@ -291,6 +311,7 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, TypedValue tv) {
       break;
 
     case KindOfResource:
+    case KindOfRecord: // TODO(T41025646)
     case KindOfRef: {
       auto msg = folly::format(
         "Cannot Serialize unexpected type {}",
@@ -499,7 +520,6 @@ bool HHVM_FUNCTION(clear_instance_memoization, const Object& obj) {
 }
 
 void HHVM_FUNCTION(set_frame_metadata, const Variant&) {
-  raise_disallowed_dynamic_call(Unit::lookupFunc(s_set_frame_metadata.get()));
   SystemLib::throwInvalidArgumentExceptionObject(
     "Unsupported dynamic call of set_frame_metadata()");
 }
@@ -563,6 +583,104 @@ TypedValue HHVM_FUNCTION(process_event_stats, StringArg event) {
   return tvReturn(from_stats(rqtrace::process_stats_for(event->data())));
 }
 
+int64_t HHVM_FUNCTION(get_request_count) {
+  return requestCount();
+}
+
+Array HHVM_FUNCTION(get_compiled_units, int64_t kind) {
+  auto const& units = g_context.getNoCheck()->m_evaledFiles;
+  KeysetInit init{units.size()};
+  for (auto& u : units) {
+    switch (u.second.flags) {
+    case FileLoadFlags::kDup:     break;
+    case FileLoadFlags::kHitMem:  break;
+    case FileLoadFlags::kWaited:  if (kind < 2) break;
+    case FileLoadFlags::kHitDisk: if (kind < 1) break;
+    case FileLoadFlags::kCompiled:if (kind < 0) break;
+    case FileLoadFlags::kEvicted:
+      init.add(const_cast<StringData*>(u.first));
+    }
+  }
+  return init.toArray();
+}
+
+TypedValue HHVM_FUNCTION(dynamic_fun, StringArg fun) {
+  auto const func = Unit::loadFunc(fun.get());
+  if (!func) {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("Unable to find function {}", fun.get()->data())
+    );
+  }
+  if (!func->isDynamicallyCallable()) {
+    auto const level = RuntimeOption::EvalDynamicFunLevel;
+    if (level == 2) {
+      SystemLib::throwInvalidArgumentExceptionObject(
+        folly::sformat("Function {} not marked dynamic", fun.get()->data())
+      );
+    }
+    if (level == 1) {
+      raise_warning("Function %s not marked dynamic", fun.get()->data());
+    }
+  }
+  return tvReturn(func);
+}
+
+TypedValue HHVM_FUNCTION(dynamic_class_meth, StringArg cls, StringArg meth) {
+  auto const c = Unit::loadClass(cls.get());
+  if (!c) {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("Unable to find class {}", cls.get()->data())
+    );
+  }
+  auto const func = c->lookupMethod(meth.get());
+  if (!func) {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("Unable to find method {}::{}",
+                     cls.get()->data(), meth.get()->data())
+    );
+  }
+  if (!func->isStatic()) {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("Method {}::{} is not static",
+                     cls.get()->data(), meth.get()->data())
+    );
+  }
+  if (!func->isPublic()) {
+    auto const ctx = fromCaller(
+      [] (const ActRec* fp, Offset) { return fp->func()->cls(); }
+    );
+    if (func->attrs() & AttrPrivate) {
+      if (func->cls() != ctx) {
+        SystemLib::throwInvalidArgumentExceptionObject(
+          folly::sformat("Method {}::{} is marked Private",
+                         cls.get()->data(), meth.get()->data())
+        );
+      }
+    } else if (func->attrs() & AttrProtected) {
+      if (!ctx || !ctx->classof(func->cls())) {
+        SystemLib::throwInvalidArgumentExceptionObject(
+          folly::sformat("Method {}::{} is marked Protected",
+                         cls.get()->data(), meth.get()->data())
+        );
+      }
+    }
+  }
+  if (!func->isDynamicallyCallable()) {
+    auto const level = RuntimeOption::EvalDynamicClsMethLevel;
+    if (level == 2) {
+      SystemLib::throwInvalidArgumentExceptionObject(
+        folly::sformat("Method {}::{} not marked dynamic",
+                       cls.get()->data(), meth.get()->data())
+      );
+    }
+    if (level == 1) {
+      raise_warning("Method %s::%s not marked dynamic",
+                    cls.get()->data(), meth.get()->data());
+    }
+  }
+  return tvReturn(ClsMethDataRef::create(c, func));
+}
+
 }
 
 static struct HHExtension final : Extension {
@@ -581,6 +699,8 @@ static struct HHExtension final : Extension {
     HHVM_NAMED_FE(HH\\clear_instance_memoization,
                   HHVM_FN(clear_instance_memoization));
     HHVM_NAMED_FE(HH\\set_frame_metadata, HHVM_FN(set_frame_metadata));
+    HHVM_NAMED_FE(HH\\get_request_count, HHVM_FN(get_request_count));
+    HHVM_NAMED_FE(HH\\get_compiled_units, HHVM_FN(get_compiled_units));
 
     HHVM_NAMED_FE(HH\\rqtrace\\is_enabled, HHVM_FN(is_enabled));
     HHVM_NAMED_FE(HH\\rqtrace\\force_enable, HHVM_FN(force_enable));
@@ -590,6 +710,8 @@ static struct HHExtension final : Extension {
                   HHVM_FN(request_event_stats));
     HHVM_NAMED_FE(HH\\rqtrace\\process_event_stats,
                   HHVM_FN(process_event_stats));
+    HHVM_NAMED_FE(HH\\dynamic_fun, HHVM_FN(dynamic_fun));
+    HHVM_NAMED_FE(HH\\dynamic_class_meth, HHVM_FN(dynamic_class_meth));
     loadSystemlib();
   }
 } s_hh_extension;

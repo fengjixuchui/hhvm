@@ -1,14 +1,20 @@
-<?php
+<?hh
 /* Prototype  : array array_intersect_uassoc(array arr1, array arr2 [, array ...], callback key_compare_func)
  * Description: Computes the intersection of arrays with additional index check, compares indexes by a callback function
  * Source code: ext/standard/array.c
  */
 
-echo "*** Testing array_intersect_uassoc() : usage variation ***\n";
+// define some classes
+class classWithToString
+{
+    public function __toString() {
+        return "Class A object";
+    }
+}
 
-// Initialise function arguments 
-$array1 = array("a" => "green", "b" => "brown", "c" => "blue", "red");
-$array2 = array("a" => "green", "yellow", "red");
+class classWithoutToString
+{
+}
 
 //Callback function
 function key_compare_func($a, $b) {
@@ -17,6 +23,12 @@ function key_compare_func($a, $b) {
     }
     return ($a > $b) ? 1 : -1;
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing array_intersect_uassoc() : usage variation ***\n";
+
+// Initialise function arguments
+$array1 = array("a" => "green", "b" => "brown", "c" => "blue", "red");
+$array2 = array("a" => "green", "yellow", "red");
 
 //get an unset variable
 $unset_var = 10;
@@ -24,18 +36,6 @@ unset ($unset_var);
 
 //resource variable
 $fp = fopen(__FILE__, "r");
-
-// define some classes
-class classWithToString
-{
-	public function __toString() {
-		return "Class A object";
-	}
-}
-
-class classWithoutToString
-{
-}
 
 // heredoc string
 $heredoc = <<<EOT
@@ -103,5 +103,5 @@ foreach($inputs as $key =>$value) {
 };
 
 fclose($fp);
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto bool stream_set_timeout(resource stream, int seconds, int microseconds)
  * Description: Set timeout on stream read to seconds + microseonds 
  * Source code: ext/standard/streamsfuncs.c
  * Alias to functions: socket_set_timeout
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing stream_set_timeout() : error conditions ***\n";
 
 //Test stream_set_timeout with one more than the expected number of arguments
@@ -48,4 +48,4 @@ fclose($filestream);
 fclose($server);
 
 echo "Done";
-?>
+}

@@ -4,8 +4,6 @@ async function foo(): Awaitable<void> {
   $x = 1 ? (await genx()) : 2;
   $x = 1 ? 2 : (await genx());
   $x = $y?->foo(await genx());
-  $x = (false and (await genx()));
-  $x = (true or (await genx()));
   $x = (false && (await genx()));
   $x = (true || (await genx()));
   $x = true ?: (await genx());
@@ -25,7 +23,9 @@ async function foo(): Awaitable<void> {
   $x[(await genx())] >>= 42;
   $x[(await genx())] ??= 42;
   $x ??= (await genx());
-  $x = (await genx()) |> await f($$);
+  $x = true |> await f($$);
+  $x = 42 |> f(await $$);
+  $x = true |> (await f(42)) + $$;
   $x = (await (await genx()));
   for ($i = 0; (await genx()); 43) {}
   for ($i = 0; 42; (await genx())) {}

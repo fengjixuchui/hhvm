@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string mb_decode_mimeheader(string string)
  * Description: Decodes the MIME "encoded-word" in the string 
  * Source code: ext/mbstring/mbstring.c
@@ -105,5 +105,4 @@ foreach($inputs as $key =>$value) {
 
 fclose($fp);
 
-?>
-===DONE===
+echo "===DONE===\n";

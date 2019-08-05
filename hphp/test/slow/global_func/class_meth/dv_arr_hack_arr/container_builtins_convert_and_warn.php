@@ -28,7 +28,7 @@ function test_compact_builtins($c, $f) {
   var_dump(hphp_array_idx(HH\class_meth($c, $f), 0, null));
 
   var_dump(array_change_key_case(HH\class_meth($c, $f), CASE_UPPER));
-  var_dump(array_fill_keys(HH\class_meth($c, $f), 'foo'));
+
   var_dump(array_unique(HH\class_meth($c, $f)));
 
   array_rand(HH\class_meth($c, $f), 1);
@@ -43,8 +43,8 @@ function test_compact_builtins($c, $f) {
 
   var_dump(array_flip(HH\class_meth($c, $f)));
   var_dump(array_reverse(HH\class_meth($c, $f)));
-  // TODO(T41492579): implicit ClsMeth conversion doesn't work with LIters
-  // var_dump(array_map(($n) ==> { return $n * $n; }, HH\class_meth($c, $f)));
+
+
   var_dump(array_merge(HH\class_meth($c, $f), vec[3,4]));
   var_dump(array_merge_recursive(HH\class_meth($c, $f), vec[3,4]));
   var_dump(array_replace(HH\class_meth($c, $f), vec[3,4]));
@@ -68,4 +68,6 @@ function main() {
   test_compact_builtins($c, $f);
 
   test_string_builtins($c, $f);
+  // Fatal
+  var_dump(array_map(($n) ==> { return $n * $n; }, HH\class_meth($c, $f)));
 }

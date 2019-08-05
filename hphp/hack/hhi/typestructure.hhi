@@ -8,6 +8,8 @@
  *
  */
 
+namespace HH {
+
 /*
  * The following enum values are defined in
  * hphp/runtime/ext/reflection/ext_reflection-classes.php
@@ -40,6 +42,9 @@ enum TypeStructureKind : int {
   OF_DARRAY = 0;
   OF_VARRAY = 0;
   OF_VARRAY_OR_DARRAY = 0;
+  OF_NULL = 0;
+  OF_NOTHING = 0;
+  OF_DYNAMIC = 0;
   OF_UNRESOLVED = 0;
 }
 
@@ -71,6 +76,8 @@ newtype TypeStructure<T> as shape(
   'value' => ?darray,
   'typevars' => ?string,
   'alias' => ?string,
+  ?'exact' => bool,
+  ?'like' => bool,
 ) = shape(
   'nullable' => ?bool,
   'kind' => TypeStructureKind,
@@ -104,6 +111,10 @@ newtype TypeStructure<T> as shape(
   'typevars' => ?string,
   // for type aliases
   'alias' => ?string,
+  // if the type is exact (i.e., not a subtype)
+  ?'exact' => bool,
+  // if the type is a like-type
+  ?'like' => bool,
 );
 
 /*
@@ -114,3 +125,5 @@ function type_structure(mixed $cls_or_obj, string $cns_name);
 // becomes:
 // type_structure(C::class or new C, 'type_const_name')
 //   : TypeStructure
+
+} // namespace HH

@@ -1,7 +1,7 @@
-<?php
+<?hh
 class object implements ArrayAccess {
 
-	public $a = array('1st', 1, 2=>'3rd', '4th'=>4);
+    public $a = array('1st', 1, 2=>'3rd', '4th'=>4);
 
 	function offsetExists($index) {
 		echo __METHOD__ . "($index)\n";
@@ -9,7 +9,12 @@ class object implements ArrayAccess {
 	}
 	function offsetGet($index) {
 		echo __METHOD__ . "($index)\n";
-		return $this->a[$index];
+		try {
+			return $this->a[$index];
+		} catch (Exception $e) {
+			echo $e->getMessage()."\n";
+			return null;
+		}
 	}
 	function offsetSet($index, $newval) {
 		echo __METHOD__ . "($index,$newval)\n";
@@ -20,18 +25,10 @@ class object implements ArrayAccess {
 		unset($this->a[$index]);
 	}
 }
-
+<<__EntryPoint>> function main(): void {
 $obj = new Object;
 
 var_dump($obj->a);
-
-echo "===EMPTY===\n";
-var_dump(empty($obj[0]));
-var_dump(empty($obj[1]));
-var_dump(empty($obj[2]));
-var_dump(empty($obj['4th']));
-var_dump(empty($obj['5th']));
-var_dump(empty($obj[6]));
 
 echo "===isset===\n";
 var_dump(isset($obj[0]));
@@ -78,5 +75,5 @@ unset($obj[7]);
 unset($obj['8th']);
 var_dump($obj->a);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

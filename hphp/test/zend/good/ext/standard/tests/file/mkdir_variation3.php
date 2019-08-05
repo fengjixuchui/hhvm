@@ -1,19 +1,31 @@
-<?php
+<?hh
 /* Prototype  : bool mkdir(string pathname [, int mode [, bool recursive [, resource context]]])
  * Description: Create a directory
  * Source code: ext/standard/file.c
  * Alias to functions:
  */
 
-echo "*** Testing mkdir() : usage variation ***\n";
+// define some classes
+class classWithToString
+{
+    public function __toString() {
+        return "Class A object";
+    }
+}
+
+class classWithoutToString
+{
+}
 
 // Define error handler
 function test_error_handler($err_no, $err_msg, $filename, $linenum, $vars) {
-	if (error_reporting() != 0) {
-		// report non-silenced errors
-		echo "Error: $err_no - $err_msg, $filename($linenum)\n";
-	}
+    if (error_reporting() != 0) {
+        // report non-silenced errors
+        echo "Error: $err_no - $err_msg, $filename($linenum)\n";
+    }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing mkdir() : usage variation ***\n";
 set_error_handler('test_error_handler');
 
 // Initialise function arguments not being substituted (if any)
@@ -23,18 +35,6 @@ $mode = 0777;
 //get an unset variable
 $unset_var = 10;
 unset ($unset_var);
-
-// define some classes
-class classWithToString
-{
-	public function __toString() {
-		return "Class A object";
-	}
-}
-
-class classWithoutToString
-{
-}
 
 // heredoc string
 $heredoc = <<<EOT
@@ -102,7 +102,7 @@ $inputs = array(
 
 foreach($inputs as $key =>$value) {
       echo "\n--$key--\n";
-			$h = null;
+            $h = null;
       try { $h = mkdir($pathname, $mode, $value); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
       if ($h === true) {
          echo "Directory created\n";
@@ -110,5 +110,5 @@ foreach($inputs as $key =>$value) {
       }
 };
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

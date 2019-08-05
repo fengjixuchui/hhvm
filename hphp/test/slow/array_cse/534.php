@@ -1,9 +1,15 @@
-<?php
+<?hh
 
 function f(array $a = null, $e) {
-  $a[$e]['foo'] = 30;
-  $x = $a[$e]['baz'];
-  $a[$e]['bar'] = 50;
+  if (is_int($e) || is_string($e)) {
+    $a[$e] ??= array();
+    $a[$e]['foo'] = 30;
+    try { $x = $a[$e]['baz']; } catch (Exception $e) { echo $e->getMessage()."\n"; $x = null; }
+  } else {
+    $a[$e] = 30;
+    try { $x = $a[$e]; } catch (Exception $e) { echo $e->getMessage()."\n"; $x = null; }
+    $a[$e] = 50;
+  }
   var_dump($a, $x);
 }
 function g($x, $y) {
@@ -21,12 +27,11 @@ function h($x, $y) {
     $x[$y]['foo'] = 30;
     $x[$y]['bar'] = 30;
   }
-  var_dump($x[$y]['foo']);
+  try { var_dump($x[$y]['foo']); } catch (Exception $e) { echo $e->getMessage()."\n"; }
 }
 
 <<__EntryPoint>>
 function main_534() {
-f(null, 'e');
 f(array(), 'e');
 f(array('e' => array('baz' => 40)), 'e');
 var_dump(f(array('y' => array()), 'y'));

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_change_key_case(array $input [, int $case])
  * Description: Retuns an array with all string keys lowercased [or uppercased] 
  * Source code: ext/standard/array.c
@@ -8,7 +8,7 @@
  * Pass arrays with different data types as keys to array_change_key_case()
  * to test conversion
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_change_key_case() : usage variations ***\n";
 
 //get an unset variable
@@ -96,4 +96,4 @@ foreach($inputs as $key => $input) {
 };
 
 echo "Done";
-?>
+}

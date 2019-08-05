@@ -1,12 +1,12 @@
-<?php
+<?hh
 /* Prototype: string readlink ( string $path );
    Description: Returns the target of a symbolic link
 
    Prototype: string realpath ( string $path );
    Description: Returns canonicalized absolute pathname
 */
-
 /* creating directories, symbolic links and files */
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 mkdir("$file_path/readlink_realpath_basic1/home/test/", 0777, true);
 
@@ -17,7 +17,7 @@ fclose($file_handle1);
 fclose($file_handle2);
 fclose($file_handle3);
 
-symlink("$file_path/readlink_realpath_basic1/home/test/readlink_realpath_basic1.tmp", 
+symlink("$file_path/readlink_realpath_basic1/home/test/readlink_realpath_basic1.tmp",
         "$file_path/readlink_realpath_basic1/home/test/readlink_realpath_basic1_link.tmp");
 symlink("$file_path/readlink_realpath_basic1/home/readlink_realpath_basic1.tmp",
         "$file_path/readlink_realpath_basic1/home/readlink_realpath_basic1_link.tmp");
@@ -29,7 +29,7 @@ $linknames = array (
   "$file_path/readlink_realpath_basic1/home/readlink_realpath_basic1_link.tmp",
   "$file_path/readlink_realpath_basic1/home/test/readlink_realpath_basic1_link.tmp",
   "$file_path/readlink_realpath_basic1//home/test//../test/./readlink_realpath_basic1_link.tmp",
-  
+
   /* linknames with invalid linkpath */
   "$file_path///readlink_realpath_basic1/home//..//././test//readlink_realpath_basic1_link.tmp",
   "$file_path/readlink_realpath_basic1/home/../home/../test/../readlink_realpath_basic1_link.tmp",
@@ -48,9 +48,7 @@ foreach($linknames as $link) {
 }
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $name_prefix = $file_path."/readlink_realpath_basic1";
 unlink("$name_prefix/home/test/readlink_realpath_basic1.tmp");
@@ -61,4 +59,4 @@ unlink("$name_prefix/home/readlink_realpath_basic1_link.tmp");
 rmdir("$name_prefix/home/test/");
 rmdir("$name_prefix/home/");
 rmdir("$name_prefix/");
-?>
+}

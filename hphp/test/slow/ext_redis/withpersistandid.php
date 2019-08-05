@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function NewRedisTestInstance() {
   $expecting = array(
@@ -19,6 +19,7 @@ function NewRedisTestInstance() {
   var_dump($authok);
   return $r;
 }
-
+<<__EntryPoint>> function main(): void {
 $r = NewRedisTestInstance();
 if ($r) echo true;
+}

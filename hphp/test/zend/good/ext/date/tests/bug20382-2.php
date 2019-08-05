@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $tests = array(
 	array("Europe/Andorra",     17, 17, 17, 1, 24764, 1970),
 	array("Asia/Dubai",         17, 17, 17, 1, 1, 1970),
@@ -39,4 +39,4 @@ foreach ($tests as $test) {
 	print "result = ".date("l Y-m-d H:i:s T", $strtotime_tstamp)."\n";
 	print "wanted = Monday            00:00:00\n\n";
 }
-?>
+}

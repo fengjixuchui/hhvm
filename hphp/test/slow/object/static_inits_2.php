@@ -1,21 +1,17 @@
-<?php
+<?hh
 
 function __autoload($x) {
-  global $y;
-  $y = new stdclass;
+
+  $GLOBALS['y'] = new stdclass;
   if (mt_rand()) {
-    class Zoo {
-      const Bar = 2;
-    }
+    include 'static_inits_2-1.inc';
   } else {
-    class Zoo {
-      const Baz = 4;
-    }
+    include 'static_inits_2-2.inc';
   }
 }
 
 class A {
-  static $foo = Zoo::Bar;
+  public static $foo = Zoo::Bar;
   function k() {
     echo "ok\n";
   }

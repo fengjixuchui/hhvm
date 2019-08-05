@@ -1,14 +1,12 @@
-<?php
+<?hh
 /* Prototype  : array array_filter(array $input [, callback $callback])
- * Description: Filters elements from the array via the callback. 
+ * Description: Filters elements from the array via the callback.
  * Source code: ext/standard/array.c
 */
 
 /*
 * Passing 'input' array which contains elements as reference to other data
 */
-
-echo "*** Testing array_filter() : usage variations - 'input' containing references ***\n";
 
 // Callback function
 /* Prototype : bool callback(array $input)
@@ -26,17 +24,19 @@ function callback($input)
     return false;
   }
 }
-  
+<<__EntryPoint>> function main(): void {
+echo "*** Testing array_filter() : usage variations - 'input' containing references ***\n";
+
 // initializing variables
 $value1 = array(1, 2, 8);
 $value2 = array(5, 6, 4);
-$input = array(&$value1, 10, &$value2, 'value');
+$input = array($value1, 10, $value2, 'value');
 
 // with 'callback' argument
 var_dump( array_filter($input, 'callback') );
 
 // with default 'callback' argument
-var_dump( array_filter($input) ); 
+var_dump( array_filter($input) );
 
-echo "Done"
-?>
+echo "Done";
+}

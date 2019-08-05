@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto string posix_strerror(int errno)
  * Description: Retrieve the system error message associated with the given errno.
  * Source code: ext/posix/posix.c
  * Alias to functions:
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing posix_strerror() : usage variations ***\n";
 
 // Initialise function arguments not being substituted (if any)
@@ -66,4 +66,4 @@ foreach($values as $value) {
 };
 
 echo "Done";
-?>
+}

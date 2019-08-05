@@ -1,15 +1,15 @@
-<?php
+<?hh
 
-error_reporting(E_ALL);
-	
 class test {
-	function __get($name) {
-		return $undef_name;
-	}
-	function __set($name, $value) {
-		return $undef_value;
-	}
+    function __get($name) {
+        return $undef_name;
+    }
+    function __set($name, $value) {
+        return $undef_value;
+    }
 }
+<<__EntryPoint>> function main(): void {
+error_reporting(E_ALL);
 
 $test = new test;
 
@@ -22,4 +22,4 @@ echo @$test->wer;
 var_dump(error_reporting());
 
 echo "Done\n";
-?>
+}

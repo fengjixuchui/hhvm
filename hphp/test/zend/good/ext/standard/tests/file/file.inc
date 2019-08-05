@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Header file for common file test functions 
      Following functions are provided :
        create_files() : create files with specified contents 
@@ -647,4 +647,3 @@ function compare_stats($stat1, $stat2, $fields, $op = "==", $flag = false ) {
   return $result;
 }
 
-?>

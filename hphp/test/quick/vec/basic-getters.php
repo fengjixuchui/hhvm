@@ -83,7 +83,7 @@ function test($v, $description) {
   foreach ($tests as $str => $key) {
     try {
       echo "   empty(\$vec[$str]) => ";
-      $res = empty($v[$key]);
+      $res = !($v[$key] ?? false);
       var_dump($res);
     } catch (Exception $e) {
       echo "<Exception: \"", $e->getMessage(), "\">\n";
@@ -107,7 +107,7 @@ function test($v, $description) {
   }
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   test(vec[], "empty");
   test(vec[new stdclass(), new stdclass(), new stdclass()],
        "3 objects");
@@ -118,5 +118,3 @@ function main() {
        "9 strings");
   test(vec[1, 'a', 2, 'b'], "2 ints and 2 strings");
 }
-
-main();

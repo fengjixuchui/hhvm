@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : bool interface_exists(string classname [, bool autoload])
  * Description: Checks if the class exists 
  * Source code: Zend/zend_builtin_functions.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing interface_exists() : error conditions ***\n";
 
 // Zero arguments
@@ -18,5 +18,5 @@ $autoload = true;
 $extra_arg = 10;
 try { var_dump( interface_exists($classname, $autoload, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

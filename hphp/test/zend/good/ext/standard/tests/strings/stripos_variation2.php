@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype  : int stripos ( string $haystack, string $needle [, int $offset] );
  * Description: Find position of first occurrence of a case-insensitive string
  * Source code: ext/standard/string.c
 */
 
 /* Test stripos() function by passing single quoted strings to 'haystack' & 'needle' arguments */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing stripos() function: with single quoted strings ***\n";
 $haystack = 'Hello,\t\n\0\n  $&!#%\o,()*+-./:;<=>?@hello123456he \x234 \101 ';
 $needle = array(
@@ -79,4 +79,4 @@ for($index=0; $index<count($needle); $index++) {
   $count++;
 }
 echo "*** Done ***";
-?>
+}

@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto int fseek(resource fp, int offset [, int whence])
  * Description: Seek on a file pointer 
  * Source code: ext/standard/file.c
  * Alias to functions: gzseek
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing fseek() : variation - beyond file boundaries ***\n";
 
 $outputfile = __FILE__.".tmp";
@@ -33,4 +33,4 @@ fclose($h);
 unlink($outputfile);
 
 echo "Done";
-?>
+}

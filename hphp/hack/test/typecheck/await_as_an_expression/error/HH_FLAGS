@@ -1,1 +1,1 @@
---enable-await-as-an-expression
+--max-errors 1

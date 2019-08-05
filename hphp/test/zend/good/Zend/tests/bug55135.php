@@ -1,4 +1,5 @@
-<?php
+<?hh
+<<__EntryPoint>> function main(): void {
 // This fails.
 $array = array(1 => 2);
 $a = "1";
@@ -19,4 +20,4 @@ $array = array(1 => 2);
 $a = 1;
 unset($array["1"]);
 print_r($array);
-?>
+}

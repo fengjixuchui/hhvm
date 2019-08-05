@@ -18,11 +18,54 @@
 #include "hphp/runtime/base/tv-variant.h"
 #include "hphp/runtime/ext/vsdebug/command.h"
 #include "hphp/runtime/ext/vsdebug/debugger.h"
+#include "hphp/runtime/vm/named-entity-defs.h"
 #include "hphp/runtime/vm/runtime-compiler.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
+#include <algorithm>
+
 namespace HPHP {
 namespace VSDEBUG {
+
+namespace {
+class FramePointer {
+  public:
+    FramePointer(Debugger *debugger, int frameDepth)
+      : m_fp(nullptr),
+      m_exitDummyContext(false) {
+        VMRegAnchor _;
+
+        if (debugger->isDummyRequest()) {
+          m_fp = vmfp();
+          if (m_fp == nullptr && vmStack().count() == 0) {
+            g_context->enterDebuggerDummyEnv();
+            m_fp = vmfp();
+            m_exitDummyContext = true;
+          }
+        } else {
+          m_fp = g_context->getFrameAtDepthForDebuggerUnsafe(frameDepth);
+        }
+    }
+
+    ~FramePointer() {
+      if (m_exitDummyContext) {
+        g_context->exitDebuggerDummyEnv();
+      }
+    }
+
+    operator ActRec *() {
+      return m_fp;
+    }
+
+    ActRec * operator ->() {
+      return m_fp;
+    }
+
+  private:
+    ActRec *m_fp;
+    bool m_exitDummyContext;
+};
+}
 
 CompletionsCommand::CompletionsCommand(
   Debugger* debugger,
@@ -295,17 +338,19 @@ void CompletionsCommand::addVariableCompletions(
   SuggestionContext& context,
   folly::dynamic& targets
 ) {
-  if (m_frameObj == nullptr) {
-    return;
-  }
+  int frameDepth = m_frameObj ? m_frameObj->m_frameDepth : 0;
+  auto fp = FramePointer(m_debugger, frameDepth);
 
-  auto const fp = g_context->getFrameAtDepth(m_frameObj->m_frameDepth);
-  if (fp == nullptr || fp->func() == nullptr) {
+  if (fp == nullptr) {
     return;
   }
 
   // If there is a $this, add it.
-  if (fp->func()->cls() != nullptr && fp->hasThis()) {
+  if (
+    !fp->isInlined() &&
+    fp->func() != nullptr &&
+    fp->func()->cls() != nullptr &&
+    fp->hasThis()) {
     static const std::string thisName("this");
     if (context.matchPrefix.size() >= thisName.size() &&
         std::equal(
@@ -335,7 +380,10 @@ void CompletionsCommand::addMemberCompletions(
   SuggestionContext& context,
   folly::dynamic& targets
 ) {
-  if (m_frameObj == nullptr) {
+  int frameDepth = m_frameObj ? m_frameObj->m_frameDepth : 0;
+  FramePointer fp(m_debugger, frameDepth);
+
+  if (fp == nullptr) {
     return;
   }
 
@@ -374,7 +422,7 @@ void CompletionsCommand::addMemberCompletions(
   ri->m_evaluationUnits.push_back(std::move(unit));
   const auto& result = g_context->evalPHPDebugger(
     rawUnit,
-    m_frameObj->m_frameDepth
+    frameDepth
   );
 
   if (result.failed) {
@@ -412,19 +460,15 @@ void CompletionsCommand::addMemberCompletions(
   }
 
   // Add any instance methods of this object's class, or any of its parent
-  // classes.
+  // classes. NB parent methods are automatic, no need to walk the tree.
   Class* cls = object->getVMClass();
-  while (cls != nullptr) {
-    int methodCount = cls->numMethods();
-    for (Slot i = 0; i < methodCount; ++i) {
-      const Func* method = cls->getMethod(i);
-      if (method != nullptr && (method->attrs() & AttrStatic) == 0) {
-        const std::string& name = method->name()->toCppString();
-        addIfMatch(name, context.matchPrefix, CompletionTypeFn, targets);
-      }
+  int methodCount = cls->numMethods();
+  for (Slot i = 0; i < methodCount; ++i) {
+    const Func* method = cls->getMethod(i);
+    if (method != nullptr && (method->attrs() & AttrStatic) == 0) {
+      const std::string& name = method->name()->toCppString();
+      addIfMatch(name, context.matchPrefix, CompletionTypeFn, targets);
     }
-
-    cls = cls->parent();
   }
 }
 
@@ -433,25 +477,31 @@ void CompletionsCommand::addClassConstantCompletions(
   folly::dynamic& targets
 ) {
   HPHP::String classStr(context.matchContext.c_str());
-  Class* cls = Unit::lookupClass(classStr.get());
+  Class* cls = Unit::loadClass(classStr.get());
+  if (cls == nullptr) {
+    return;
+  }
 
-  while (cls != nullptr) {
-    for (Slot i = 0; i < cls->numConstants(); i++) {
-      const std::string& name = cls->constants()[i].name->toCppString();
+  // Add constants of this class. Note that here and in methods, we get
+  // everything from this class and its ancestors
+  for (Slot i = 0; i < cls->numConstants(); i++) {
+    auto const &clsConst = cls->constants()[i];
+    // constants() includes type constants and abstract constants, neither of
+    // which are particularly useful for debugger completion
+    if (!(clsConst.isType() || clsConst.isAbstract())) {
+      const std::string& name = clsConst.name->toCppString();
       addIfMatch(name, context.matchPrefix, CompletionTypeValue, targets);
     }
+  }
 
-    // Add static methods of this class.
-    int methodCount = cls->numMethods();
-    for (Slot i = 0; i < methodCount; ++i) {
-      const Func* method = cls->getMethod(i);
-      if (method != nullptr && method->attrs() & AttrStatic) {
-        const std::string& name = method->name()->toCppString();
-        addIfMatch(name, context.matchPrefix, CompletionTypeFn, targets);
-      }
+  // Add static methods of this class.
+  int methodCount = cls->numMethods();
+  for (Slot i = 0; i < methodCount; ++i) {
+    const Func* method = cls->getMethod(i);
+    if (method != nullptr && method->attrs() & AttrStatic) {
+      const std::string& name = method->name()->toCppString();
+      addIfMatch(name, context.matchPrefix, CompletionTypeFn, targets);
     }
-
-    cls = cls->parent();
   }
 }
 
@@ -460,7 +510,7 @@ void CompletionsCommand::addClassStaticCompletions(
   folly::dynamic& targets
 ) {
   HPHP::String classStr(context.matchContext.c_str());
-  Class* cls = Unit::lookupClass(classStr.get());
+  Class* cls = Unit::loadClass(classStr.get());
 
   while (cls != nullptr) {
     // Add static propreties of this class.
@@ -505,24 +555,31 @@ void CompletionsCommand::addFuncConstantCompletions(
   SuggestionContext& context,
   folly::dynamic& targets
 ) {
-  auto systemFuncs = Unit::getSystemFunctions();
-  auto userFuncs = Unit::getUserFunctions();
-  auto consts = lookupDefinedConstants();
-
-  for (ArrayIter iter(systemFuncs); iter; ++iter) {
-    const std::string& name = iter.second().toString().toCppString();
+  NamedEntity::foreach_cached_func([&](Func* func) {
+    if (func->isGenerated()) return; //continue
+    auto name = func->name()->toCppString();
+    // Unit::getFunctions returns all lowercase names, lowercase here too.
+    std::transform(name.begin(), name.end(), name.begin(), ::tolower);
     addIfMatch(name, context.matchPrefix, CompletionTypeFn, targets);
-  }
+  });
 
-  for (ArrayIter iter(userFuncs); iter; ++iter) {
-    const std::string& name = iter.second().toString().toCppString();
-    addIfMatch(name, context.matchPrefix, CompletionTypeFn, targets);
-  }
+  auto const consts = lookupDefinedConstants();
+  IterateKVNoInc(consts.get(), [&] (Cell k, TypedValue) {
+    auto const& name = String::attach(cellCastToStringData(k));
+    addIfMatch(
+      name.toCppString(),
+      context.matchPrefix,
+      CompletionTypeFn,
+      targets
+    );
+  });
 
-  for (ArrayIter iter(consts); iter; ++iter) {
-    const std::string& name = iter.first().toString().toCppString();
-    addIfMatch(name, context.matchPrefix, CompletionTypeFn, targets);
-  }
+  NamedEntity::foreach_cached_class([&](Class* c) {
+    if (!(c->attrs() & (AttrInterface | AttrTrait))) {
+      auto const& name = c->name()->toCppString();
+      addIfMatch(name, context.matchPrefix, CompletionTypeClass, targets);
+    }
+  });
 
   // Add PHP keywords.
   static const char* suggestionKeywords[] = {
@@ -542,20 +599,16 @@ void CompletionsCommand::addFuncConstantCompletions(
     "clone",
     "const",
     "continue",
-    "declare",
     "default",
     "do",
-    "double",
     "echo",
     "else",
     "elseif",
     "empty",
-    "enddeclare",
     "endfor",
     "endforeach",
     "endif",
     "endswitch",
-    "endwhile",
     "eval",
     "exit",
     "extends",
@@ -563,8 +616,6 @@ void CompletionsCommand::addFuncConstantCompletions(
     "for",
     "foreach",
     "function",
-    "global",
-    "halt_compiler",
     "if",
     "implements",
     "include",
@@ -576,7 +627,6 @@ void CompletionsCommand::addFuncConstantCompletions(
     "list",
     "new",
     "null",
-    "object",
     "parent",
     "print",
     "private",
@@ -593,7 +643,6 @@ void CompletionsCommand::addFuncConstantCompletions(
     "try",
     "unset",
     "use",
-    "var",
     "while"
   };
 

@@ -1,8 +1,12 @@
+.hh_file 1;
 #
 # NewLikeArray on hack arrays should create a PHP array
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
   FCall <> 0 1 "" - "" ""
   PopC
@@ -23,8 +27,11 @@
           AddElemC
           SetL $d
           PopC
-          FPushFuncD 1 "var_dump"
+          NullUninit
+          NullUninit
+          NullUninit
           NewLikeArrayL $d 3
+          FPushFuncD 1 "var_dump"
           FCall <> 1 1 "" - "" ""
           PopC
           True

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int ArrayObject::uasort(callback cmp_function)
  * Description: proto int ArrayIterator::uasort(callback cmp_function)
  Sort the entries by values user defined function. 
@@ -23,5 +23,4 @@ $ao = new ArrayObject(array(2,3,1));
 
 $ao->uasort('cmp');
 var_dump($ao);
-?>
-===DONE===
+echo "===DONE===\n";

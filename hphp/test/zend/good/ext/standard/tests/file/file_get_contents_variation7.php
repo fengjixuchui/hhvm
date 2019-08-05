@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : string file_get_contents(string filename [, bool use_include_path [, resource context [, long offset [, long maxlen]]]])
  * Description: Read the entire file into a string 
  * Source code: ext/standard/file.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing file_get_contents() : variation ***\n";
 $mainDir = "fileGetContentsVar7.dir";
 $subDir = "fileGetContentsVar7Sub";
@@ -53,4 +53,4 @@ rmdir($absSubDir);
 rmdir($absMainDir);
 
 echo "\n*** Done ***\n";
-?>
+}

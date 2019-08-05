@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 echo "*** Testing get_html_translation_table() : basic functionality/HTML5/SJIS ***\n";
 echo "*** Only basic entities supported! ***\n";
 
@@ -40,4 +40,4 @@ var_dump( $tt );
 
 
 echo "Done\n";
-?>
+}

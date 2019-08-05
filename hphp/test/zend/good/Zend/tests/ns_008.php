@@ -1,8 +1,9 @@
-<?php
+<?hh
 namespace test;
 
 class foo {
 }
-
-$x = __NAMESPACE__ . "\\foo"; 
-echo get_class(new $x),"\n";
+<<__EntryPoint>> function main(): void {
+$x = __NAMESPACE__ . "\\foo";
+echo \get_class(new $x),"\n";
+}

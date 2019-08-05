@@ -29,6 +29,7 @@
 #include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/base/request-tracing.h"
 #include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/base/stat-cache.h"
 #include "hphp/runtime/base/timestamp.h"
 #include "hphp/runtime/base/unit-cache.h"
 
@@ -260,8 +261,11 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
       string usage =
         "/stop:            stop the web server\n"
         "    instance-id   optional, if specified, instance ID has to match\n"
+        "/oom-kill:        abort all requests whose memory usage exceed\n"
+        "                  Server.RequestMemoryOOMKillBytes\n"
         "/free-mem:        ask allocator to release unused memory to system\n"
         "/prepare-to-stop: ask the server to prepare for stopping\n"
+        "/flush-profile:   flush profiling counters (in -fprofile-gen builds)\n"
         "/flush-logs:      trigger batching log-writers to flush all content\n"
         "/translate:       translate hex encoded stacktrace in 'stack' param\n"
         "    stack         required, stack trace to translate\n"
@@ -271,6 +275,7 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
         "\n"
         "/instance-id:     instance id that's passed in from command line\n"
         "/compiler-id:     returns the compiler id that built this app\n"
+        "/config-id:       returns the config id passed in from command line\n"
         "/repo-schema:     return the repo schema id used by this app\n"
         "/ini-get-all:     dump all settings as JSON\n"
         "/check-load:      how many threads are actively handling requests\n"
@@ -294,6 +299,8 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
         "/memory.xml:      show memory status in XML\n"
         "/memory.json:     show memory status in JSON\n"
         "/memory.html:     show memory status in HTML\n"
+
+        "/statcache-clear: clear the stat cache entries\n"
 
         "/stats-on:        main switch: enable server stats\n"
         "/stats-off:       main switch: disable server stats\n"
@@ -342,6 +349,9 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
         "/pcre-cache-size: get pcre cache map size\n"
         "/dump-pcre-cache: dump cached pcre's to /tmp/pcre_cache\n"
         "/dump-array-info: dump array tracer info to /tmp/array_tracer_dump\n"
+
+        "/invalidate-units: remove specified files from the unit cache\n"
+        "    path           absolute path of files to invalidate\n"
 
         "/start-stacktrace-profiler: set enable_stacktrace_profiler to true\n"
         "/relocate:        relocate translations\n"
@@ -430,7 +440,7 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
 
     bool needs_password = (cmd != "build-id") && (cmd != "compiler-id") &&
                           (cmd != "instance-id") && (cmd != "flush-logs") &&
-                          (cmd != "warmup-status")
+                          (cmd != "warmup-status") && (cmd != "config-id")
 #if defined(ENABLE_HHPROF) && defined(USE_JEMALLOC)
                           && (mallctl == nullptr || (
                                  (cmd != "hhprof/start")
@@ -487,6 +497,13 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
       HttpServer::Server->stop();
       break;
     }
+    if (cmd == "oom-kill") {
+      Logger::Info("Invoking OOM killer upon admin port request from %s",
+                   transport->getRemoteHost());
+      RequestInfo::InvokeOOMKiller();
+      transport->sendString("OOM killer invoked");
+      break;
+    }
     if (cmd == "free-mem") {
       const auto before = Process::GetMemUsageMb();
       std::string errStr;
@@ -521,6 +538,13 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
       Logger::FInfo("free/cached/buffer {}/{}/{} -> {}/{}/{}",
                     info.freeMb, info.cachedMb, info.buffersMb,
                     newInfo.freeMb, newInfo.cachedMb, newInfo.buffersMb);
+      break;
+    }
+    if (cmd == "flush-profile") {
+      HttpServer::ProfileFlush();
+      // send the response *after* flushing, so the caller knows the
+      // data has been updated.
+      transport->sendString("OK\n");
       break;
     }
     if (cmd == "flush-logs") {
@@ -576,6 +600,10 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
       transport->sendString(compilerId().begin(), 200);
       break;
     }
+    if (cmd == "config-id") {
+      transport->sendString(std::to_string(RuntimeOption::ConfigId), 200);
+      break;
+    }
     if (cmd == "repo-schema") {
       transport->sendString(repoSchemaId().begin(), 200);
       break;
@@ -614,6 +642,10 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
     }
     if (strncmp(cmd.c_str(), "dump-apc", 8) == 0 &&
         handleDumpCacheRequest(cmd, transport)) {
+      break;
+    }
+    if (strncmp(cmd.c_str(), "invalidate-units", 16) == 0 &&
+        handleInvalidateUnitRequest(cmd, transport)) {
       break;
     }
     if (strncmp(cmd.c_str(), "xenon-snap", 10) == 0) {
@@ -678,6 +710,11 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
     }
     if (cmd == "proxy") {
       handleProxyRequest(cmd, transport);
+      break;
+    }
+
+    if (cmd == "statcache-clear") {
+      StatCache::clearCache();
       break;
     }
 
@@ -804,72 +841,12 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
       break;
     }
 
-#ifdef USE_TCMALLOC
-    if (MallocExtensionInstance) {
-      if (cmd == "tcmalloc-stats") {
-        std::ostringstream stats;
-        size_t user_allocated, heap_size, slack_bytes;
-        size_t pageheap_free, pageheap_unmapped;
-        size_t tc_max, tc_allocated;
-
-        MallocExtensionInstance()->
-          GetNumericProperty("generic.current_allocated_bytes",
-              &user_allocated);
-        MallocExtensionInstance()->
-          GetNumericProperty("generic.heap_size", &heap_size);
-        MallocExtensionInstance()->
-          GetNumericProperty("tcmalloc.slack_bytes", &slack_bytes);
-        MallocExtensionInstance()->
-          GetNumericProperty("tcmalloc.pageheap_free_bytes", &pageheap_free);
-        MallocExtensionInstance()->
-          GetNumericProperty("tcmalloc.pageheap_unmapped_bytes",
-              &pageheap_unmapped);
-        MallocExtensionInstance()->
-          GetNumericProperty("tcmalloc.max_total_thread_cache_bytes",
-              &tc_max);
-        MallocExtensionInstance()->
-          GetNumericProperty("tcmalloc.current_total_thread_cache_bytes",
-              &tc_allocated);
-        stats << "<tcmalloc-stats>" << endl;
-        stats << "  <user_allocated>" << user_allocated << "</user_allocated>"
-          << endl;
-        stats << "  <heap_size>" << heap_size << "</heap_size>" << endl;
-        stats << "  <slack_bytes>" << slack_bytes << "</slack_bytes>" << endl;
-        stats << "  <pageheap_free>" << pageheap_free
-          << "</pageheap_free>" << endl;
-        stats << "  <pageheap_unmapped>" << pageheap_unmapped
-          << "</pageheap_unmapped>" << endl;
-        stats << "  <thread_cache_max>" << tc_max
-          << "</thread_cache_max>" << endl;
-        stats << "  <thread_cache_allocated>" << tc_allocated
-          << "</thread_cache_allocated>" << endl;
-        stats << "</tcmalloc-stats>" << endl;
-        transport->sendString(stats.str());
-        break;
-      }
-      if (cmd == "tcmalloc-set-tc") {
-        size_t tc_max;
-
-        MallocExtensionInstance()->
-          GetNumericProperty("tcmalloc.max_total_thread_cache_bytes", &tc_max);
-
-        size_t tcache = transport->getInt64Param("s");
-        bool retval = MallocExtensionInstance()->
-          SetNumericProperty("tcmalloc.max_total_thread_cache_bytes", tcache);
-        transport->sendString(retval == true ? "OK\n" : "FAILED\n");
-        break;
-      }
-    }
-#endif
-
 #ifdef USE_JEMALLOC
     assertx(mallctlnametomib && mallctlbymib);
     if (cmd == "jemalloc-stats") {
-      // Force jemalloc to update stats cached for use by mallctl().
+      // jemalloc stats update is periodically triggered in the
+      // host-health-monitor thread.
       uint32_t error = 0;
-      if (mallctlWrite<uint64_t, true>("epoch", 1) != 0) {
-        error = 1;
-      }
 
       auto call_mallctl = [&](const char* statName) {
         size_t value = 0;
@@ -881,32 +858,24 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
       size_t allocated = call_mallctl("stats.allocated");
       size_t active = call_mallctl("stats.active");
       size_t mapped = call_mallctl("stats.mapped");
+
+#if USE_JEMALLOC_EXTENT_HOOKS
+      size_t low_mapped = 0;
+      // The low range [1G, 4G) is divided into two ranges, and shared by 3
+      // arenas.
+      low_mapped += alloc::getRange(alloc::AddrRangeClass::VeryLow).used();
+      low_mapped += alloc::getRange(alloc::AddrRangeClass::Low).used();
+#else
       size_t low_mapped = call_mallctl(
           folly::sformat("stats.arenas.{}.mapped",
                          low_arena).c_str());
-      size_t low_small_allocated = call_mallctl(
-          folly::sformat("stats.arenas.{}.small.allocated",
-                         low_arena).c_str());
-      size_t low_large_allocated = call_mallctl(
-          folly::sformat("stats.arenas.{}.large.allocated",
-                         low_arena).c_str());
-      size_t low_active = call_mallctl(
-          folly::sformat("stats.arenas.{}.pactive",
-                         low_arena).c_str()) * sysconf(_SC_PAGESIZE);
-
+#endif
       std::ostringstream stats;
       stats << "<jemalloc-stats>" << endl;
       stats << "  <allocated>" << allocated << "</allocated>" << endl;
       stats << "  <active>" << active << "</active>" << endl;
       stats << "  <mapped>" << mapped << "</mapped>" << endl;
       stats << "  <low_mapped>" << low_mapped << "</low_mapped>" << endl;
-      stats << "  <low_allocated>"
-            << (low_small_allocated + low_large_allocated)
-            << "</low_allocated>" << endl;
-      stats << "  <low_active>"
-            << low_active
-            << "</low_active>" << endl;
-      stats << "  <error>" << error << "</error>" << endl;
       stats << "</jemalloc-stats>" << endl;
       transport->sendString(stats.str());
       break;
@@ -1090,7 +1059,6 @@ bool AdminRequestHandler::handleCheckRequest(const std::string &cmd,
     }
     appendStat("static-strings", makeStaticStringCount());
     appendStat("request-count", requestCount());
-    appendStat("single-jit-requests", singleJitRequestCount());
     appendStat("jit-des", jit::ProfData::triedDeserialization());
     appendStat("jit-des-succ", jit::ProfData::wasDeserialized());
 
@@ -1178,6 +1146,37 @@ bool AdminRequestHandler::handleStatusRequest(const std::string &cmd,
     return send_status(transport, Writer::Format::HTML, "text/html");
   }
   return false;
+}
+
+bool AdminRequestHandler::handleInvalidateUnitRequest(const std::string &cmd,
+                                                      Transport *transport) {
+  if (RuntimeOption::RepoAuthoritative) {
+    transport->sendString("Cannot invalidate units in repo authoritative mode\n", 400);
+    return true;
+  }
+
+  std::string invalidated;
+  std::vector<std::string> paths;
+  // Support GET for convenience, and POST for large requests.
+  transport->getArrayParam("path", paths, Transport::Method::AUTO);
+
+  bool first = true;
+  for (auto const& path : paths) {
+    String translatedPath = File::TranslatePathKeepRelative(path);
+    invalidateUnit(translatedPath.get());
+
+    if (first) {
+      first = false;
+    } else {
+      invalidated += " ";
+    }
+    invalidated += translatedPath.c_str();
+  }
+
+  auto msg = folly::sformat("Invalidated {} path(s): {}\n",
+                            paths.size(), invalidated);
+  transport->sendString(msg);
+  return true;
 }
 
 bool AdminRequestHandler::handleMemoryRequest(const std::string &cmd,

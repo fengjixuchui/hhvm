@@ -10,7 +10,7 @@
       ((missing 0 ()) (missing 0 ())
        (((end_of_line 1)) class 5 ((whitespace 1)))
        (() name 3 ((whitespace 1))) (missing 0 ()) (missing 0 ())
-       (missing 0 ()) (missing 0 ()) (missing 0 ())
+       (missing 0 ()) (missing 0 ()) (missing 0 ()) (missing 0 ())
        (classish_body 43
         ((() { 1 ((end_of_line 1)))
          (list 37
@@ -71,7 +71,7 @@
                   ((list_item 4
                     ((((whitespace 2)) name 3 ()) (() "\\" 1 ())))
                    (list_item 8 ((() name 8 ()) (missing 0 ())))))))
-               (() "(" 1 ())
+               (missing 0 ()) (() "(" 1 ())
                (list 4
                 ((list_item 4
                   ((variable 4 ((() variable 4 ()))) (missing 0 ())))))

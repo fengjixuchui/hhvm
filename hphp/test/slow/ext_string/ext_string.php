@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 
 //////////////////////////////////////////////////////////////////////
@@ -146,7 +146,7 @@ $ret = chunk_split("ABCD", 2);
 var_dump($ret, "AB\r\nCD\r\n");
 
 $s = "This is\tan ";
-$tok = strtok($s, " \n\t");
+$tok = strtok($s, " \n\t"); $tokens = array();
 while ($tok) {
   $tokens[] = $tok;
   $tok = strtok(" \n\t");
@@ -157,7 +157,7 @@ var_dump($tokens);
   var_dump(str_replace("%body%", "black", "<body text='%body%'>"));
 }
 {
-  $vowels[] = "a";
+  $vowels = array(); $vowels[] = "a";
   $vowels[] = "e";
   $vowels[] = "i";
   $vowels[] = "o";
@@ -176,8 +176,8 @@ var_dump($tokens);
   var_dump(str_replace($healthy, $yummy, $phrase));
 }
 {
-  $str = str_replace("ll", "", "good golly miss molly!",
-                              &$count);
+  $count = 0;
+  $s = str_replace_with_count("ll", "", "good golly miss molly!", inout $count);
   var_dump($count);
 }
 {
@@ -293,9 +293,6 @@ var_dump(vsprintf("A%sB%dC", array("test", 10)));
 
 var_dump(sscanf("SN/2350001", "SN/%d"));
 
-var_dump(sscanf("SN/2350001", "SN/%d", &$out));
-var_dump($out);
-
 var_dump(chr(92));
 
 var_dump(ord("\\"));
@@ -391,6 +388,15 @@ var_dump(strrpos("0123456789a123456789b123456789c", "7", 28));
 
 var_dump(strripos("abcdef abcdef", "A"));
 
+var_dump(strrpos("abc", "c\0", -1));
+var_dump(strripos("abc", "c\0", -1));
+var_dump(strrpos("abc", "abc", -3));
+var_dump(strripos("abc", "abc", -3));
+var_dump(strrpos("aaaa", "aa", -1));
+var_dump(strripos("aaaa", "aa", -1));
+var_dump(strrpos("aaaa", "aa", -2));
+var_dump(strripos("aaaa", "aa", -2));
+
 $text = "This is a test";
 var_dump(substr_count($text, "is"));
 var_dump(substr_count($text, "is", 3));
@@ -440,13 +446,13 @@ var_dump(wordwrap("123ab123ab123", 5, "ab"));
 var_dump(wordwrap("123  123ab123", 3, "ab"));
 var_dump(wordwrap("123 123ab123", 5, "ab"));
 var_dump(wordwrap("123 123 123", 10, "ab"));
-var_dump(wordwrap("123ab123ab123", 3, "ab", 1));
-var_dump(wordwrap("123ab123ab123", 5, "ab", 1));
-var_dump(wordwrap("123  123ab123", 3, "ab", 1));
-var_dump(wordwrap("123  123ab123", 5, "ab", 1));
-var_dump(wordwrap("123  123  123", 8, "ab", 1));
-var_dump(wordwrap("123  12345  123", 8, "ab", 1));
-var_dump(wordwrap("1234", 1, "ab", 1));
-var_dump(wordwrap("12345 1234567890", 5, "|", 1));
-var_dump(wordwrap("123 1234567890 123", 10, "|==", 1));
+var_dump(wordwrap("123ab123ab123", 3, "ab", true));
+var_dump(wordwrap("123ab123ab123", 5, "ab", true));
+var_dump(wordwrap("123  123ab123", 3, "ab", true));
+var_dump(wordwrap("123  123ab123", 5, "ab", true));
+var_dump(wordwrap("123  123  123", 8, "ab", true));
+var_dump(wordwrap("123  12345  123", 8, "ab", true));
+var_dump(wordwrap("1234", 1, "ab", true));
+var_dump(wordwrap("12345 1234567890", 5, "|", true));
+var_dump(wordwrap("123 1234567890 123", 10, "|==", true));
 }

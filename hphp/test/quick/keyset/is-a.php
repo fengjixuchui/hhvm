@@ -50,36 +50,36 @@ function test_is_a($a, $interfaces) {
   echo "\tis_resource: ";
   var_dump(is_resource($a));
 
-  echo "instanceof Traversable: ";
-  var_dump($a instanceof Traversable);
+  echo "is Traversable: ";
+  var_dump($a is Traversable);
 
-  echo "instanceof KeyedTraversable: ";
-  var_dump($a instanceof KeyedTraversable);
+  echo "is KeyedTraversable: ";
+  var_dump($a is KeyedTraversable);
 
-  echo "instanceof Container: ";
-  var_dump($a instanceof Container);
+  echo "is Container: ";
+  var_dump($a is Container);
 
-  echo "instanceof KeyedContainer: ";
-  var_dump($a instanceof KeyedContainer);
+  echo "is KeyedContainer: ";
+  var_dump($a is KeyedContainer);
 
-  echo "instanceof XHPChild: ";
-  var_dump($a instanceof XHPChild);
+  echo "is XHPChild: ";
+  var_dump($a is XHPChild);
 
-  echo "instanceof ArrayAccess: ";
-  var_dump($a instanceof ArrayAccess);
+  echo "is ArrayAccess: ";
+  var_dump($a is ArrayAccess);
 
-  echo "instanceof Vector: ";
-  var_dump($a instanceof Vector);
+  echo "is Vector: ";
+  var_dump($a is Vector);
 
-  echo "instanceof Map: ";
-  var_dump($a instanceof Map);
+  echo "is Map: ";
+  var_dump($a is Map);
 
-  echo "instanceof Foo: ";
-  var_dump($a instanceof Foo);
+  echo "is Foo: ";
+  var_dump($a is Foo);
 
   foreach ($interfaces as $i) {
-    echo "instanceof (string) " . $i . ": ";
-    var_dump($a instanceof $i);
+    echo "is (string) " . $i . ": ";
+    var_dump(is_a($a, $i));
   }
 }
 
@@ -94,7 +94,7 @@ function test_is_keyset($val) {
   }
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   $interfaces = [
     "HH\\Traversable",
     "HH\\KeyedTraversable",
@@ -125,4 +125,3 @@ function main() {
   test_is_keyset($resource);
   imagedestroy($resource);
 }
-main();

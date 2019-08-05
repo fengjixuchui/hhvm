@@ -11,8 +11,6 @@ open Core_kernel
 open Utils
 open ServerCommandTypes
 
-module TLazyHeap = Typing_lazy_heap
-
 exception Nonfatal_rpc_exception of exn * string * ServerEnv.env
 
 
@@ -24,6 +22,7 @@ let rpc_command_needs_full_check : type a. a t -> bool =
   | STATUS _ -> true
   | LIST_FILES_WITH_ERRORS -> true  (* Same as STATUS *)
   | REMOVE_DEAD_FIXMES _ -> true (* needs same information as STATUS *)
+  | REWRITE_LAMBDA_PARAMETERS _ -> true
   (* some Ai stuff - calls to those will likely never be interleaved with IDE
    * file sync commands (and resulting small checks), but putting it here just
    * to be safe *)
@@ -32,6 +31,7 @@ let rpc_command_needs_full_check : type a. a t -> bool =
   | FIND_REFS _ -> true
   | IDE_FIND_REFS _ -> true
   | METHOD_JUMP (_, _, find_children) -> find_children (* uses find refs *)
+  | SAVE_NAMING _ -> false
   | SAVE_STATE _ -> true
   (* COVERAGE_COUNTS (unnecessarily) uses GlobalStorage, so it cannot safely run
    * during interruptions *)
@@ -55,6 +55,8 @@ let rpc_command_needs_full_check : type a. a t -> bool =
   | TYPED_AST _ -> false
   | IDE_HOVER _ -> false
   | DOCBLOCK_AT _ -> false
+  | LOCATE_SYMBOL _ -> false
+  | DOCBLOCK_FOR_SYMBOL _ -> false
   | IDE_SIGNATURE_HELP _ -> false
   | COVERAGE_LEVELS _ -> false
   | AUTOCOMPLETE _ -> false
@@ -74,7 +76,6 @@ let rpc_command_needs_full_check : type a. a t -> bool =
   | UNSUBSCRIBE_DIAGNOSTIC _ -> false
   | OUTLINE _ -> false
   | IDE_IDLE -> false
-  | INFER_RETURN_TYPE _ -> false
   | RAGE -> false
   | DYNAMIC_VIEW _ -> false
   | CST_SEARCH _ -> false
@@ -84,6 +85,13 @@ let rpc_command_needs_full_check : type a. a t -> bool =
   | EDIT_FILE _ -> false
   | FUN_DEPS_BATCH _ -> false
   | FUN_IS_LOCALLABLE_BATCH _ -> false
+  | FILE_DEPENDENCIES _ -> true
+  | IDENTIFY_TYPES _ -> false
+  | EXTRACT_STANDALONE _ -> false
+  | GO_TO_DEFINITION _ -> false
+  | BIGCODE _ -> false
+  | PAUSE true -> false
+  | PAUSE false -> true (* when you unpause, then it will catch up *)
 
 let command_needs_full_check = function
   | Rpc x -> rpc_command_needs_full_check x
@@ -92,6 +100,72 @@ let command_needs_full_check = function
 let is_edit : type a. a command -> bool = function
   | Rpc EDIT_FILE _ -> true
   | _ -> false
+
+let get_description : type a. a command -> string = function
+  | Debug -> "Debug"
+  | Rpc STATUS _ -> "STATUS"
+  | Rpc LIST_FILES_WITH_ERRORS -> "LIST_FILES_WITH_ERRORS"
+  | Rpc REMOVE_DEAD_FIXMES _ -> "REMOVE_DEAD_FIXMES"
+  | Rpc REWRITE_LAMBDA_PARAMETERS _ -> "REWRITE_LAMBDA_PARAMETERS"
+  | Rpc AI_QUERY _ -> "AI_QUERY"
+  | Rpc FIND_REFS _ -> "FIND_REFS"
+  | Rpc IDE_FIND_REFS _ -> "IDE_FIND_REFS"
+  | Rpc METHOD_JUMP _ -> "METHOD_JUMP"
+  | Rpc SAVE_NAMING _ -> "SAVE_NAMING"
+  | Rpc SAVE_STATE _ -> "SAVE_STATE"
+  | Rpc COVERAGE_COUNTS _ -> "COVERAGE_COUNTS"
+  | Rpc REFACTOR _ -> "REFACTOR"
+  | Rpc IDE_REFACTOR _ -> "IDE_REFACTOR"
+  | Rpc CREATE_CHECKPOINT _ -> "CREATE_CHECKPOINT"
+  | Rpc RETRIEVE_CHECKPOINT _ -> "RETRIEVE_CHECKPOINT"
+  | Rpc DELETE_CHECKPOINT _ -> "DELETE_CHECKPOINT"
+  | Rpc IN_MEMORY_DEP_TABLE_SIZE -> "IN_MEMORY_DEP_TABLE_SIZE"
+  | Rpc NO_PRECHECKED_FILES -> "NO_PRECHECKED_FILES"
+  | Rpc GEN_HOT_CLASSES _ -> "GEN_HOT_CLASSES"
+  | Rpc STATS -> "STATS"
+  | Rpc DISCONNECT -> "DISCONNECT"
+  | Rpc STATUS_SINGLE _ -> "STATUS_SINGLE"
+  | Rpc INFER_TYPE _ -> "INFER_TYPE"
+  | Rpc INFER_TYPE_BATCH _ -> "INFER_TYPE_BATCH"
+  | Rpc TYPED_AST _ -> "TYPED_AST"
+  | Rpc IDE_HOVER _ -> "IDE_HOVER"
+  | Rpc DOCBLOCK_AT _ -> "DOCBLOCK_AT"
+  | Rpc LOCATE_SYMBOL _ -> "LOCATE_SYMBOL"
+  | Rpc DOCBLOCK_FOR_SYMBOL _ -> "DOCBLOCK_FOR_SYMBOL"
+  | Rpc IDE_SIGNATURE_HELP _ -> "IDE_SIGNATURE_HELP"
+  | Rpc COVERAGE_LEVELS _ -> "COVERAGE_LEVELS"
+  | Rpc AUTOCOMPLETE _ -> "AUTOCOMPLETE"
+  | Rpc IDENTIFY_FUNCTION _ -> "IDENTIFY_FUNCTION"
+  | Rpc METHOD_JUMP_BATCH _ -> "METHOD_JUMP_BATCH"
+  | Rpc IDE_HIGHLIGHT_REFS _ -> "IDE_HIGHLIGHT_REFS"
+  | Rpc DUMP_SYMBOL_INFO _ -> "DUMP_SYMBOL_INFO"
+  | Rpc LINT _ -> "LINT"
+  | Rpc LINT_STDIN _ -> "LINT_STDIN"
+  | Rpc LINT_ALL _ -> "LINT_ALL"
+  | Rpc LINT_XCONTROLLER _ -> "LINT_XCONTROLLER"
+  | Rpc FORMAT _ -> "FORMAT"
+  | Rpc DUMP_FULL_FIDELITY_PARSE _ -> "DUMP_FULL_FIDELITY_PARSE"
+  | Rpc IDE_AUTOCOMPLETE _ -> "IDE_AUTOCOMPLETE"
+  | Rpc IDE_FFP_AUTOCOMPLETE _ -> "IDE_FFP_AUTOCOMPLETE"
+  | Rpc SUBSCRIBE_DIAGNOSTIC _ -> "SUBSCRIBE_DIAGNOSTIC"
+  | Rpc UNSUBSCRIBE_DIAGNOSTIC _ -> "UNSUBSCRIBE_DIAGNOSTIC"
+  | Rpc OUTLINE _ -> "OUTLINE"
+  | Rpc IDE_IDLE -> "IDE_IDLE"
+  | Rpc RAGE -> "RAGE"
+  | Rpc DYNAMIC_VIEW _ -> "DYNAMIC_VIEW"
+  | Rpc CST_SEARCH _ -> "CST_SEARCH"
+  | Rpc SEARCH _ -> "SEARCH"
+  | Rpc OPEN_FILE _ -> "OPEN_FILE"
+  | Rpc CLOSE_FILE _ -> "CLOSE_FILE"
+  | Rpc EDIT_FILE _ -> "EDIT_FILE"
+  | Rpc FUN_DEPS_BATCH _ -> "FUN_DEPS_BATCH"
+  | Rpc FUN_IS_LOCALLABLE_BATCH _ -> "FUN_IS_LOCALLABLE_BATCH"
+  | Rpc FILE_DEPENDENCIES _ -> "FILE_DEPENDENCIES"
+  | Rpc IDENTIFY_TYPES _ -> "IDENTIFY_TYPES"
+  | Rpc EXTRACT_STANDALONE _ -> "EXTRACT_STANDALONE"
+  | Rpc GO_TO_DEFINITION _ -> "GO_TO_DEFINITION"
+  | Rpc BIGCODE _ -> "BIGCODE"
+  | Rpc PAUSE _ -> "PAUSE"
 
 let rpc_command_needs_writes : type a. a t -> bool  = function
   | OPEN_FILE _ -> true
@@ -170,23 +244,31 @@ let predeclare_ide_deps genv {FileInfo.n_funs; n_classes; n_types; n_consts} =
     Utils.try_finally ~f:begin fun () ->
       (* We only want to populate declaration heap, without wasting space in lower
        * heaps (similar to what Typing_check_service.check_files does) *)
-      File_heap.FileHeap.LocalChanges.push_stack ();
-      Parser_heap.ParserHeap.LocalChanges.push_stack ();
+      File_provider.local_changes_push_stack ();
+      Ast_provider.local_changes_push_stack ();
       let iter: type a.
           (string -> bool) ->
           (string -> a) ->
           SSet.t -> unit =
         fun mem declare s -> SSet.iter begin fun x ->
-        (* Depending on Typing_lazy_heap putting the thing we ask for in shared memory *)
+        (* Depending on Decl_provider putting the thing we ask for in shared memory *)
         if not @@ mem x then ignore @@ ((declare x) : a)
       end s in
-      iter Decl_heap.Funs.mem Typing_lazy_heap.get_fun n_funs;
-      iter Decl_heap.Classes.mem Typing_lazy_heap.get_class n_classes;
-      iter Decl_heap.Typedefs.mem Typing_lazy_heap.get_typedef n_types;
-      iter Decl_heap.GConsts.mem Typing_lazy_heap.get_gconst n_consts
+      let declare_class x =
+        let cls = Decl_provider.get_class x in
+        (* For now, is_disposable forces the eager computation of all ancestor
+           declarations. In the future, we will want to explicitly declare all
+           ancestors when shallow decl is enabled instead. *)
+        let _ : bool option = Option.map cls Decl_provider.Class.is_disposable in
+        ()
+      in
+      iter Decl_heap.Funs.mem Decl_provider.get_fun n_funs;
+      iter Decl_heap.Classes.mem declare_class n_classes;
+      iter Decl_heap.Typedefs.mem Decl_provider.get_typedef n_types;
+      iter Decl_heap.GConsts.mem Decl_provider.get_gconst n_consts
     end ~finally:begin fun () ->
-      Parser_heap.ParserHeap.LocalChanges.pop_stack ();
-      File_heap.FileHeap.LocalChanges.pop_stack ()
+      Ast_provider.local_changes_pop_stack ();
+      File_provider.local_changes_pop_stack ()
     end
   end
 
@@ -197,8 +279,9 @@ let with_decl_tracking f =
     let res = f () in
     res, Decl.stop_tracking ()
   with e ->
+    let stack = Caml.Printexc.get_raw_backtrace () in
     let _ : FileInfo.names = Decl.stop_tracking () in
-    raise e
+    Caml.Printexc.raise_with_backtrace e stack
 
 (* Construct a continuation that will finish handling the command and update
  * the environment. Server can execute the continuation immediately, or store it
@@ -224,9 +307,9 @@ let actually_handle genv client msg full_recheck_needed ~is_stale = fun env ->
       let (new_env, response), declared_names = try
         with_decl_tracking @@ fun () -> ServerRpc.handle ~is_stale genv env cmd
       with e ->
-        let stack = Printexc.get_backtrace () in
-        if ServerCommandTypes.is_critical_rpc cmd then raise e
-        else raise (Nonfatal_rpc_exception (e, stack, env))
+        let stack = Caml.Printexc.get_raw_backtrace () in
+        if ServerCommandTypes.is_critical_rpc cmd then Caml.Printexc.raise_with_backtrace e stack
+        else raise (Nonfatal_rpc_exception (e, Caml.Printexc.raw_backtrace_to_string stack, env))
       in
       let cmd_string = ServerCommandTypesUtils.debug_describe_t cmd in
       let parsed_files = Full_fidelity_parser_profiling.stop_profiling () in
@@ -261,7 +344,7 @@ let handle
      * to stopping and resuming the global typechecking jobs, which leads to
      * flaky experience. To avoid this, we don't restart the global rechecking
      * after IDE edits - you need to save the file againg to restart it. *)
-    ServerUtils.Needs_writes (env, continuation, not (is_edit msg))
+    ServerUtils.Needs_writes (env, continuation, not (is_edit msg), (get_description msg))
   else if full_recheck_needed then
     ServerUtils.Needs_full_recheck (env, continuation, reason msg)
   else

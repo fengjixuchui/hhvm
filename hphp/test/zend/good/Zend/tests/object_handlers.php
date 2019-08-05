@@ -1,4 +1,4 @@
-<?php
+<?hh
 function f($x) {
 	return $x;
 }
@@ -11,9 +11,6 @@ class foo implements ArrayAccess {
 		$GLOBALS["y"] = $property;
 	}
 	function __call($func, $args) {
-		$GLOBALS["y"] = $func;
-	}
-	static function __callStatic($func, $args) {
 		$GLOBALS["y"] = $func;
 	}
 	function offsetGet($index) {
@@ -39,8 +36,6 @@ echo $y,"\n";
 $x->const_set = 1;
 echo $y,"\n";
 $x->const_call();
-echo $y,"\n";
-foo::const_callstatic();
 echo $y,"\n";
 $z = $x["const_dim_get"];
 echo $y,"\n";
@@ -133,4 +128,3 @@ $z = $x->{f(7)};
 echo $y,"\n";
 $x->{f(8)} = 1;
 echo $y,"\n";
-?>

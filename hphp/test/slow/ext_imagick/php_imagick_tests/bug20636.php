@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $image = new Imagick();
 $image->newImage(0, 0, '#dddddd', 'png' );
 
@@ -8,5 +8,4 @@ try {
 } catch (ImagickException $e) {
     echo "success\n";
 }
-
-?>
+}

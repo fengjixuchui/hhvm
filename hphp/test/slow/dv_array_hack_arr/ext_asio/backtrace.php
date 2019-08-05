@@ -10,7 +10,9 @@ class CatWrapper {
       0 => varray["pipe", "r"],
       1 => varray["pipe", "w"],
     ];
-    $this->proc = proc_open("cat", $descriptorspec, &$this->pipes);
+    $__pipes = $this->pipes;
+    $this->proc = proc_open("cat", $descriptorspec, &$__pipes);
+    $this->pipes = $__pipes;
     if (!is_resource($this->proc) ||
         !is_resource($this->pipes[0]) ||
         !is_resource($this->pipes[0])) {
@@ -83,7 +85,7 @@ async function testBacktrace(): Awaitable<void> {
 
   // try backtracing wait handle, before anything awaits on it
   $bt = HH\Asio\backtrace($wh);
-  var_dump(empty($bt));
+  var_dump(!($bt ?? false));
 
   $wrapper_frame = async {
     await correctFrame($wh);
@@ -91,7 +93,7 @@ async function testBacktrace(): Awaitable<void> {
 
   // now something awaits on $wh, but it's not in asio context yet
   $bt = HH\Asio\backtrace($wh);
-  var_dump(empty($bt));
+  var_dump(!($bt ?? false));
 
   $resv = await HH\Asio\vw(ImmVector {
       $wrapper_frame,
@@ -100,11 +102,11 @@ async function testBacktrace(): Awaitable<void> {
 
   // try backtracing wait handle, after it has already finished
   $bt = HH\Asio\backtrace($wh);
-  var_dump(empty($bt));
+  var_dump(!($bt ?? false));
 
   // try backtracing static wait handle
   $bt = HH\Asio\backtrace(HH\Asio\null());
-  var_dump(empty($bt));
+  var_dump(!($bt ?? false));
 
   // try backtracing something, that is not a wait handle
   try {

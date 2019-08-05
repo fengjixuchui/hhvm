@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
  *  proto int preg_match(string pattern, string subject [, array subpatterns [, int flags [, int offset]]])
  * Function is implemented in ext/pcre/php_pcre.c
@@ -9,5 +9,4 @@
 $string = "-1";
 preg_match('/[\-\+]?[0-9\.]*/', $string, &$string);
 var_dump($string);
-?>
-===Done===
+echo "===Done===";

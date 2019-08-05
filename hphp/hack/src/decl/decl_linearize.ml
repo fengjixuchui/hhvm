@@ -14,7 +14,16 @@ open Typing_defs
 
 (* Module calculating the Member Resolution Order of a class *)
 
-type env = { class_stack: SSet.t; decl_env: Decl_env.env }
+type linearization_kind =
+  | Member_resolution
+  | Ancestor_types
+  [@@deriving show]
+
+type env = {
+  class_stack: SSet.t;
+  decl_env: Decl_env.env;
+  linearization_kind: linearization_kind;
+}
 
 (** These state variants drive the Sequence generating the linearization. *)
 type state =
@@ -24,36 +33,69 @@ type state =
   | Next_ancestor
   (** [Next_ancestor] indicates that the next ancestor linearization should be
       lazily computed and emitted. *)
-  | Ancestor of linearization
+  | Ancestor of (string * linearization)
   (** [Ancestor] indicates that we are in the middle of emitting an ancestor
       linearization. For each of its elements, the element should be emitted as
       an element of the current linearization (with the appropriate source and
       type parameters substituted) unless it was already emitted earlier in the
       current linearization sequence. *)
   | Synthesized_elts of mro_element list
-  (** A list of synthesized ancestor MRO elements which were accumulated while
-      we iterated over ancestor linearizations. We want to de-prioritize
-      synthesized ancestors (i.e., ancestors arising from a require-extends or
-      require-implements relationship) by placing them at the end of the
+  (** A list of synthesized ancestor MRO elements (that is, classes which were
+      specified in a require-extends clause, plus all ancestors of those
+      classes) which were accumulated while we iterated over ancestor
+      linearizations. These are called "synthesized" ancestors because although
+      traits and interfaces don't actually inherit from them at runtime, the
+      typechecker acts as if they do, in order to support typechecking of trait
+      method bodies and uses of values with interface types. We want to
+      de-prioritize require-extends ancestors by placing them at the end of the
       linearization, so that non-synthesized members (if they are present) are
-      inherited instead of synthesized ones. For each MRO element in the list,
-      that element should be emitted as an element of the current linearization
-      (with the appropriate source and type parameters substituted) unless it
-      was already emitted earlier in the current linearization sequence. *)
+      inherited instead of synthesized ones (since we are interested in the
+      actual type arguments rather than the type arguments applied in the
+      requirement). For each MRO element in the list, that element should be
+      emitted as an element of the current linearization (with the appropriate
+      type parameter substitutions) unless it was already emitted earlier in the
+      current linearization sequence. *)
 
-module Cache = SharedMem.LocalCache (StringKey) (struct
+module CacheKey = struct
+  type t = string * linearization_kind [@@deriving show]
+  let compare = compare
+  let to_string = show
+end
+
+module CacheKeySet = Reordered_argument_set(Caml.Set.Make(CacheKey))
+
+module Cache = SharedMem.WithCache (SharedMem.ProfiledImmediate) (CacheKey) (struct
+  type t = mro_element list
+  let prefix = Prefix.make()
+  let description = "Linearization"
+end)
+
+let push_local_changes = Cache.LocalChanges.push_stack
+let pop_local_changes = Cache.LocalChanges.pop_stack
+
+let remove_batch classes =
+  let keys =
+    SSet.fold classes ~init:CacheKeySet.empty ~f:begin fun class_name acc ->
+      let acc = CacheKeySet.add acc (class_name, Member_resolution) in
+      let acc = CacheKeySet.add acc (class_name, Ancestor_types) in
+      acc
+    end
+  in
+  Cache.remove_batch keys
+
+module LocalCache = SharedMem.LocalCache (CacheKey) (struct
   type t = linearization
   let prefix = Prefix.make()
   let description = "LazyLinearization"
-  let use_sqlite_fallback () = false
 end)
 
 let ancestor_from_ty
     (source : source_type)
     (ty : decl ty)
-  : string * decl ty list * source_type =
-  let _, (_, class_name), type_args = Decl_utils.unwrap_class_type ty in
-  class_name, type_args, source
+  : Pos.t * (Pos.t * string) * decl ty list * source_type =
+  let r, class_name, type_args = Decl_utils.unwrap_class_type ty in
+  let ty_pos = Typing_reason.to_pos r in
+  ty_pos, class_name, type_args, source
 
 let from_parent (c : shallow_class) : decl ty list =
   (* In an abstract class or a trait, we assume the interfaces
@@ -61,141 +103,349 @@ let from_parent (c : shallow_class) : decl ty list =
    * part of the class (as requested by dependency injection implementers)
    *)
   match c.sc_kind with
-  | Ast.Cabstract -> c.sc_implements @ c.sc_extends
-  | Ast.Ctrait -> c.sc_implements @ c.sc_extends @ c.sc_req_implements
+  | Ast_defs.Cabstract -> c.sc_implements @ c.sc_extends
+  | Ast_defs.Ctrait -> c.sc_implements @ c.sc_extends @ c.sc_req_implements
   | _ -> c.sc_extends
+
+let normalize_for_comparison x =
+  if x.mro_use_pos = Pos.none
+  && x.mro_ty_pos = Pos.none
+  && x.mro_required_at = None
+  then x
+  else { x with
+    mro_use_pos = Pos.none;
+    mro_ty_pos = Pos.none;
+    mro_required_at = Option.map x.mro_required_at (fun _ -> Pos.none);
+  }
+
+let mro_elements_equal a =
+  let a = normalize_for_comparison a in
+  fun b ->
+  let b = normalize_for_comparison b in
+  a = b
+
+let empty_mro_element = {
+  mro_name = "";
+  mro_use_pos = Pos.none;
+  mro_ty_pos = Pos.none;
+  mro_type_args = [];
+  mro_class_not_found = false;
+  mro_cyclic = None;
+  mro_trait_reuse = None;
+  mro_required_at = None;
+  mro_via_req_extends = false;
+  mro_via_req_impl = false;
+  mro_xhp_attrs_only = false;
+  mro_consts_only = false;
+  mro_copy_private_members = false;
+  mro_passthrough_abstract_typeconst = false;
+}
+
+let no_trait_reuse_enabled env =
+  TypecheckerOptions.experimental_feature_enabled
+    env.decl_env.Decl_env.decl_tcopt
+    TypecheckerOptions.experimental_no_trait_reuse
+
+let is_requirement (source : source_type) =
+  match source with
+  | ReqImpl | ReqExtends -> true
+  | Child | Parent | Trait | XHPAttr | Interface -> false
+
+let is_interface (source : source_type) =
+  match source with
+  | Interface | ReqImpl -> true
+  | Child | Parent | Trait | XHPAttr | ReqExtends -> false
 
 let rec ancestor_linearization
     (env : env)
-    (ancestor : string * decl ty list * source_type)
-  : linearization =
-  let class_name, type_args, source = ancestor in
+    (child_class_concrete : bool)
+    (ancestor : Pos.t * (Pos.t * string) * decl ty list * source_type)
+  : string * linearization =
+  let ty_pos, (use_pos, class_name), type_args, source = ancestor in
   Decl_env.add_extends_dependency env.decl_env class_name;
   let lin = get_linearization env class_name in
   let lin = Sequence.map lin ~f:begin fun c ->
-    let is_synthesized = function
-      | ReqImpl | ReqExtends -> true
-      | Child | Parent | Trait | XHPAttr | Interface -> false
-    in
-    let is_interface = function
-      | Interface | ReqImpl -> true
-      | Child | Parent | Trait | XHPAttr | ReqExtends -> false
-    in
-    let mro_synthesized = c.mro_synthesized || is_synthesized source in
+    let mro_via_req_extends = c.mro_via_req_extends || source = ReqExtends in
+    let mro_via_req_impl = c.mro_via_req_impl || source = ReqImpl in
     let mro_xhp_attrs_only = c.mro_xhp_attrs_only || source = XHPAttr in
     let mro_consts_only = c.mro_consts_only || is_interface source in
     let mro_copy_private_members = c.mro_copy_private_members && source = Trait in
+    let mro_passthrough_abstract_typeconst = c.mro_passthrough_abstract_typeconst &&
+      not child_class_concrete in
     { c with
-      mro_synthesized;
+      mro_trait_reuse = Option.map c.mro_trait_reuse ~f:(Fn.const class_name);
+      mro_via_req_extends;
+      mro_via_req_impl;
       mro_xhp_attrs_only;
       mro_consts_only;
       mro_copy_private_members;
+      mro_passthrough_abstract_typeconst;
     }
   end in
   match Sequence.next lin with
-  | None -> Sequence.empty
+  | None -> class_name, Sequence.empty
   | Some (c, rest) ->
-    (* Fill in the type parameterization of the starting class *)
-    let c = { c with mro_type_args = type_args } in
-    (* Instantiate its linearization with those type parameters *)
+    let c = { c with
+      (* Fill in the type arguments applied to the ancestor and the position
+         where it was included into the linearization of the child class. *)
+      mro_type_args = type_args;
+      mro_use_pos = use_pos;
+      mro_ty_pos = ty_pos;
+      (* If this is the mro_element representing an ancestor which directly
+         appeared in a require extends clause, tag it as a requirement. *)
+      mro_required_at = if is_requirement source then Some use_pos else None;
+    } in
     let tparams =
       Shallow_classes_heap.get class_name
       |> Option.value_map ~default:[] ~f:(fun c -> c.sc_tparams)
     in
     let subst = Decl_subst.make tparams type_args in
     let rest = Sequence.map rest ~f:begin fun c ->
-      { c with mro_type_args =
-        List.map c.mro_type_args ~f:(Decl_instantiate.instantiate subst)
+      { c with
+        (* Instantiate the remainder of this ancestor's linearization with the
+           type arguments applied to it. *)
+        mro_type_args =
+          List.map c.mro_type_args ~f:(Decl_instantiate.instantiate subst);
+        (* Update positions of requirements in the remainder of the
+           linearization to reflect their immediate provenance as well. *)
+        mro_required_at = Option.map c.mro_required_at ~f:(fun _ -> use_pos);
       }
     end in
-    Sequence.append (Sequence.singleton c) rest
+    let rest =
+      (* Don't aggregate requirements applied to ancestors. We have already
+         verified that the ancestor extends and implements the required classes
+         and interfaces, so there is no need to do so for the child. *)
+      let ancestor_checks_requirements =
+        Shallow_classes_heap.get class_name
+        |> Option.value_map ~default:false ~f:begin fun c ->
+          match c.sc_kind with
+          | Ast_defs.(Cnormal | Cabstract) -> true
+          | Ast_defs.(Ctrait | Cinterface | Cenum | Crecord) -> false
+        end
+      in
+      if not ancestor_checks_requirements
+      then rest
+      else Sequence.map rest ~f:(fun mro -> { mro with mro_required_at = None })
+    in
+    class_name, Sequence.append (Sequence.singleton c) rest
 
 (* Linearize a class declaration given its shallow declaration *)
 and linearize (env : env) (c : shallow_class) : linearization =
   let mro_name = snd c.sc_name in
   (* The first class doesn't have its type parameters filled in *)
-  let child = {
+  let child = { empty_mro_element with
     mro_name;
-    mro_type_args = [];
-    mro_synthesized = false;
-    mro_xhp_attrs_only = false;
-    mro_consts_only = false;
-    mro_copy_private_members = c.sc_kind = Ast.Ctrait;
+    mro_use_pos = fst c.sc_name;
+    mro_ty_pos = fst c.sc_name;
+    mro_copy_private_members = c.sc_kind = Ast_defs.Ctrait;
+    mro_passthrough_abstract_typeconst = c.sc_kind <> Ast_defs.Cnormal;
   } in
   let get_ancestors kind = List.map ~f:(ancestor_from_ty kind) in
-  let interfaces     = get_ancestors Interface c.sc_implements in
-  let req_implements = get_ancestors ReqImpl c.sc_req_implements in
-  let xhp_attr_uses  = get_ancestors XHPAttr (List.rev c.sc_xhp_attr_uses) in
-  let traits         = get_ancestors Trait (List.rev c.sc_uses) in
-  let req_extends    = get_ancestors ReqExtends c.sc_req_extends in
-  let parents        = get_ancestors Parent (from_parent c) in
+  let interfaces c     = get_ancestors Interface c.sc_implements in
+  let req_implements c = get_ancestors ReqImpl c.sc_req_implements in
+  let xhp_attr_uses c  = get_ancestors XHPAttr c.sc_xhp_attr_uses in
+  let traits c         = get_ancestors Trait c.sc_uses in
+  let req_extends c    = get_ancestors ReqExtends c.sc_req_extends in
+  let parents c        = get_ancestors Parent (from_parent c) in
+  let extends c        = get_ancestors Parent c.sc_extends in
+  (* HHVM implicitly adds the Stringish interface to every class, interface, and
+     trait with a __toString method. The primitive type `string` is considered
+     to also implement this interface. *)
+  let stringish_interface c =
+    let module SN = Naming_special_names in
+    if mro_name = SN.Classes.cStringish then [] else
+    let is_to_string m = snd m.sm_name = SN.Members.__toString in
+    match List.find c.sc_methods is_to_string with
+    | None -> []
+    | Some { sm_type = { ft_pos = pos; _ }; _ } ->
+      let ty =
+        Typing_reason.Rhint pos, Tapply ((pos, SN.Classes.cStringish), []) in
+      [ancestor_from_ty Interface ty]
+  in
   let ancestors =
-    List.concat [
-      interfaces;
-      req_implements;
-      xhp_attr_uses;
-      traits;
-      req_extends;
-      parents;
-    ]
+    match env.linearization_kind with
+    | Member_resolution ->
+      List.concat [
+        List.rev (interfaces c);
+        List.rev (req_implements c);
+        List.rev (xhp_attr_uses c);
+        List.rev (traits c);
+        List.rev (req_extends c);
+        parents c;
+      ]
+    | Ancestor_types ->
+      (* In order to match the historical handling of ancestor types (that is,
+         the collection of "canonical" type parameterizations of each ancestor
+         of a class, which is used in subtyping), we need to build the
+         linearization in the order [extends; implements; uses]. Require-extends
+         and require-implements relationships need to be included only to
+         support Stringish (and can be removed here if we remove support for the
+         magic Stringish type, or require it to be explicitly implemented). *)
+      List.concat [
+        extends c;
+        req_extends c;
+        req_implements c;
+        stringish_interface c;
+        interfaces c;
+        traits c;
+      ]
   in
   Sequence.unfold_step
     ~init:(Child child, ancestors, [], [])
-    ~f:(next_state env)
+    ~f:(next_state env mro_name c.sc_kind)
   |> Sequence.memoize
 
-and next_state (env : env) (state, ancestors, acc, synths) =
+and next_state
+    (env : env)
+    (class_name : string)
+    (child_class_kind: Ast_defs.class_kind)
+    (state, ancestors, acc, synths) =
   let open Sequence.Step in
+  let child_class_concrete = child_class_kind = Ast_defs.Cnormal in
   match state, ancestors with
   | Child child, _ -> Yield (child, (Next_ancestor, ancestors, child::acc, synths))
   | Next_ancestor, ancestor::ancestors ->
-    Skip (Ancestor (ancestor_linearization env ancestor), ancestors, acc, synths)
-  | Ancestor lin, ancestors ->
+    let name_and_lin = ancestor_linearization env child_class_concrete ancestor in
+    Skip (Ancestor name_and_lin, ancestors, acc, synths)
+  | Ancestor (name, lin), ancestors ->
     begin match Sequence.next lin with
     | None -> Skip (Next_ancestor, ancestors, acc, synths)
     (* Lazy.Undefined occurs if we attempt to include a linearization within
        itself. This will only happen when we have a class dependency cycle (and
        only in some particular circumstances), so it will not arise in legal
        programs. *)
-    | exception Lazy.Undefined -> Skip (Next_ancestor, ancestors, acc, synths)
+    | exception Lazy.Undefined ->
+      let next = { empty_mro_element with
+        mro_name = name;
+        mro_cyclic = Some (SSet.add env.class_stack name);
+      } in
+      Yield (next, (Next_ancestor, ancestors, next::acc, synths))
     | Some (next, rest) ->
-      let should_skip, synths =
-        if next.mro_synthesized
-        then true, next::synths
-        else List.mem acc next ~equal:(=), synths
+      let names_equal a b = a.mro_name = b.mro_name in
+      let skip_or_mark_trait_reuse equals_next =
+        let is_trait class_name =
+          match Shallow_classes_heap.get class_name with
+          | Some { sc_kind = Ast_defs.Ctrait; _ } -> true
+          | _ -> false
+        in
+        if no_trait_reuse_enabled env
+        && Option.is_none next.mro_trait_reuse
+        && is_trait next.mro_name
+        then
+          (* When the no_trait_reuse feature is enabled, we want to report
+             an error for reused traits. Instead of skipping trait
+             mro_elements when they are already present in the
+             linearization, we emit an element with the trait_reuse flag
+             set so that we can error later. *)
+          if List.exists acc ~f:(names_equal next)
+          then Some { next with mro_trait_reuse = Some name }
+          else Some next
+        else
+          if List.exists acc ~f:equals_next
+          then None
+          else Some next
       in
-      if should_skip
-      then Skip (Ancestor rest, ancestors, acc, synths)
-      else Yield (next, (Ancestor rest, ancestors, next::acc, synths))
+      let next, synths =
+        match env.linearization_kind with
+        | Member_resolution ->
+          if next.mro_via_req_extends
+          then
+            let synths =
+              match next.mro_required_at, child_class_kind with
+              (* Always aggregate synthesized ancestors for traits and
+                 interfaces (necessary for typechecking) *)
+              | _, Ast_defs.(Ctrait | Cinterface)
+              (* Otherwise, keep them only if they represent a requirement that
+                 we will need to validate later. *)
+              | Some _, Ast_defs.(Cnormal | Cabstract | Cenum | Crecord) ->
+                if List.exists synths ~f:(mro_elements_equal next)
+                then synths
+                else next::synths
+              | None, _ ->
+                synths
+            in
+            None, synths
+          else
+            let next = skip_or_mark_trait_reuse (mro_elements_equal next) in
+            next, synths
+        | Ancestor_types ->
+          (* For ancestor types, we don't care about require-extends or
+             require-implements relationships, except for the fact that we want
+             Stringish as an ancestor if we have some ancestor which requires
+             it. *)
+          let should_skip =
+            (next.mro_via_req_extends || next.mro_via_req_impl)
+            && next.mro_name <> SN.Classes.cStringish
+          in
+          let next =
+            if should_skip
+            then None
+            else skip_or_mark_trait_reuse (names_equal next)
+          in
+          next, synths
+      in
+      match next with
+      | None -> Skip (Ancestor (name, rest), ancestors, acc, synths)
+      | Some next -> Yield (next, (Ancestor (name, rest), ancestors, next::acc, synths))
     end
   | Next_ancestor, [] ->
     let synths = List.rev synths in
     Skip (Synthesized_elts synths, ancestors, acc, synths)
   | Synthesized_elts (next::synths), ancestors ->
-    if List.mem acc next ~equal:(=)
-    then Skip (Synthesized_elts synths, ancestors, next::acc, synths)
-    else Yield (next, (Synthesized_elts synths, ancestors, next::acc, synths))
-  | Synthesized_elts [], _ -> Done
+    Yield (next, (Synthesized_elts synths, ancestors, next::acc, synths))
+  | Synthesized_elts [], _ ->
+    let key = class_name, env.linearization_kind in
+    Cache.add key (List.rev acc);
+    Done
 
 and get_linearization (env : env) (class_name : string) : linearization =
-  let { class_stack; _ } = env in
-  if SSet.mem class_stack class_name then Sequence.empty else
+  let { class_stack; linearization_kind; _ } = env in
+  if SSet.mem class_stack class_name
+  then
+    Sequence.singleton { empty_mro_element with
+      mro_name = class_name;
+      mro_cyclic = Some class_stack;
+    }
+  else
   let class_stack = SSet.add class_stack class_name in
   let env = { env with class_stack } in
-  match Cache.get class_name with
-  | Some lin -> lin
+  let key = class_name, linearization_kind in
+  match Cache.get key with
+  | Some lin -> Sequence.of_list lin
   | None ->
-    match Shallow_classes_heap.get class_name with
-    | None -> Sequence.empty
-    | Some c ->
-      let lin = linearize env c in
-      Cache.add class_name lin;
-      lin
+    match LocalCache.get key with
+    | Some lin -> lin
+    | None ->
+      match Shallow_classes_heap.get class_name with
+      | Some c ->
+        let lin = linearize env c in
+        LocalCache.add key lin;
+        lin
+      | None ->
+        (* There is no known definition for the class with the given name. This
+           is always an "Unbound name" error, and we will emit one wherever this
+           class was specified as an ancestor. In order to suppress downstream
+           errors (and, historically, to support the now-removed assume_php
+           feature), we include this fake mro_element with the
+           mro_class_not_found flag set. This logic is largely here to ensure
+           that the behavior of shallow_class_decl is equivalent to legacy decl,
+           and we should look into removing it (along with
+           Typing_classes_heap.members_fully_known) after we have removed legacy
+           decl. *)
+        Sequence.singleton { empty_mro_element with
+          mro_name = class_name;
+          mro_class_not_found = true; (* This class is not known to exist! *)
+        }
 
-let get_linearization class_name =
+let get_linearization ?(kind=Member_resolution) class_name =
   let decl_env = { Decl_env.
     mode = FileInfo.Mstrict;
     droot = Some (Typing_deps.Dep.Class class_name);
     decl_tcopt = GlobalNamingOptions.get ();
   } in
-  get_linearization { class_stack = SSet.empty; decl_env } class_name
+  let env = {
+    class_stack = SSet.empty;
+    decl_env;
+    linearization_kind = kind;
+  } in
+  get_linearization env class_name

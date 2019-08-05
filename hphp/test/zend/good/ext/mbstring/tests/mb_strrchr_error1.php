@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : string mb_strrchr(string haystack, string needle[, bool part[, string encoding]])
  * Description: Finds the last occurrence of a character in a string within another 
  * Source code: ext/mbstring/mbstring.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mb_strrchr() : error conditions ***\n";
 
 
@@ -22,5 +22,5 @@ echo "\n-- Testing mb_strrchr() function with less than expected no. of argument
 $haystack = b'string_val';
 try { var_dump( mb_strrchr($haystack) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

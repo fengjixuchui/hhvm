@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool copy ( string $source, string $dest );
    Description: Makes a copy of the file source to dest.
      Returns TRUE on success or FALSE on failure.
@@ -7,7 +7,7 @@
 /* Test copy() function: In creation of destination file names containing numerics/strings 
      and checking the existence and size of destination files
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Test copy() function: destination file names containing numerics/strings ***\n";
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $src_file_name = $file_path."/copy_variation1.tmp";
@@ -65,9 +65,6 @@ foreach($dest_files as $dest_file) {
 }
 
 echo "*** Done ***\n";
-?>
-
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 unlink(dirname(__FILE__)."/copy_variation1.tmp");
-?>
+}

@@ -28,22 +28,41 @@
 
 namespace HPHP {
 
-std::string NewAnonymousClassName(const std::string& name) {
-  static std::atomic<uint32_t> next_anon_class;
-  return folly::sformat("{};{}", name, next_anon_class.fetch_add(1));
-}
-
 namespace {
+
+/*
+ * Important: We rely on generating unique anonymous class names (ie
+ * Closures) by tacking ";<next_anon_class>" onto the end of the name.
+ *
+ * Its important that code that creates new closures goes through
+ * preClassName, or NewAnonymousClassName to make sure this works.
+ */
+static std::atomic<uint32_t> next_anon_class{};
 
 const StringData* preClassName(const std::string& name) {
   if (PreClassEmitter::IsAnonymousClassName(name)) {
-    if (name.find(';') == std::string::npos) {
+    auto const pos = name.find(';');
+    if (pos == std::string::npos) {
       return makeStaticString(NewAnonymousClassName(name));
+    }
+    auto const id = strtol(name.c_str() + pos + 1, nullptr, 10);
+    if (id > 0 && id < INT_MAX) {
+      auto next = next_anon_class.load(std::memory_order_relaxed);
+      while (id >= next &&
+             next_anon_class.compare_exchange_weak(
+               next, id + 1, std::memory_order_relaxed
+             )) {
+        // nothing to do; just try again.
+      }
     }
   }
   return makeStaticString(name);
 }
 
+}
+
+std::string NewAnonymousClassName(folly::StringPiece name) {
+  return folly::sformat("{};{}", name, next_anon_class.fetch_add(1));
 }
 
 //=============================================================================
@@ -305,15 +324,16 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
   for (unsigned i = 0; i < m_constMap.size(); ++i) {
     const Const& const_ = m_constMap[i];
     TypedValueAux tvaux;
+    tvaux.constModifiers() = {};
     if (const_.isAbstract()) {
       tvWriteUninit(tvaux);
-      tvaux.constModifiers().isAbstract = true;
+      tvaux.constModifiers().setIsAbstract(true);
     } else {
       tvCopy(const_.val(), tvaux);
-      tvaux.constModifiers().isAbstract = false;
+      tvaux.constModifiers().setIsAbstract(false);
     }
 
-    tvaux.constModifiers().isType = const_.isTypeconst();
+    tvaux.constModifiers().setIsType(const_.isTypeconst());
 
     constBuild.add(const_.name(), PreClass::Const(const_.name(),
                                                   tvaux,
@@ -323,7 +343,7 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
     for (auto cnsMap : *nativeConsts) {
       TypedValueAux tvaux;
       tvCopy(cnsMap.second, tvaux);
-      tvaux.constModifiers() = { false, false };
+      tvaux.constModifiers() = {};
       constBuild.add(cnsMap.first, PreClass::Const(cnsMap.first,
                                                    tvaux,
                                                    staticEmptyString()));
@@ -404,7 +424,7 @@ void PreClassRepoProxy::InsertPreClassStmt
     std::string::npos : qfind(n, ';');
   auto const nm = pos == std::string::npos ?
     n : folly::StringPiece{n.data(), pos};
-  BlobEncoder extraBlob;
+  BlobEncoder extraBlob{pce.useGlobalIds()};
   RepoTxnQuery query(txn, *this);
   query.bindInt64("@unitSn", unitSn);
   query.bindId("@preClassId", preClassId);
@@ -434,7 +454,7 @@ void PreClassRepoProxy::GetPreClassesStmt
       Id preClassId;          /**/ query.getId(0, preClassId);
       std::string name;       /**/ query.getStdString(1, name);
       int hoistable;          /**/ query.getInt(2, hoistable);
-      BlobDecoder extraBlob = /**/ query.getBlob(3);
+      BlobDecoder extraBlob = /**/ query.getBlob(3, ue.useGlobalIds());
       PreClassEmitter* pce = ue.newPreClassEmitter(
         name, (PreClass::Hoistable)hoistable);
       pce->serdeMetaData(extraBlob);

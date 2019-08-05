@@ -13,7 +13,7 @@ open Reordered_argument_collections
 open ServerCommandTypes.Find_refs
 open Typing_defs
 
-module Cls = Typing_classes_heap
+module Cls = Decl_provider.Class
 
 
 (* The class containing the member can be specified in two ways:
@@ -39,7 +39,7 @@ let process_fun_id target_fun id =
   else Pos.Map.empty
 
 let check_if_extends_class target_class_name class_name =
-  let class_ = Typing_lazy_heap.get_class class_name in
+  let class_ = Decl_provider.get_class class_name in
   match class_ with
   | Some cls
     when Cls.has_ancestor cls target_class_name
@@ -93,12 +93,12 @@ let add_if_extends_class target_class_name class_name acc =
   if check_if_extends_class target_class_name class_name
   then SSet.add acc class_name else acc
 
-let find_child_classes target_class_name files_info files =
+let find_child_classes target_class_name naming_table files =
   SharedMem.invalidate_caches();
   Relative_path.Set.fold files ~init:SSet.empty ~f:begin fun fn acc ->
     (try
       let { FileInfo.classes; _ } =
-        Relative_path.Map.find_unsafe files_info fn in
+        Naming_table.get_file_info_unsafe naming_table fn in
       List.fold_left classes ~init:acc ~f:begin fun acc cid ->
         add_if_extends_class target_class_name (snd cid) acc
       end
@@ -109,7 +109,7 @@ let find_child_classes target_class_name files_info files =
 let get_origin_class_name class_name member =
   let origin = match member with
     | Method method_name ->
-      begin match Typing_lazy_heap.get_class class_name with
+      begin match Decl_provider.get_class class_name with
       | Some class_ ->
         let get_origin_class meth = match meth with
           | Some meth -> Some meth.ce_origin
@@ -126,8 +126,8 @@ let get_origin_class_name class_name member =
   Option.value origin ~default:class_name
 
 let get_child_classes_files class_name =
-  match Naming_heap.TypeIdHeap.get class_name with
-  | Some (_, `Class) ->
+  match Naming_table.Types.get_pos class_name with
+  | Some (_, Naming_table.TClass) ->
     (* Find the files that contain classes that extend class_ *)
     let cid_hash =
       Typing_deps.Dep.make (Typing_deps.Dep.Class class_name) in
@@ -141,7 +141,7 @@ let get_child_classes_files class_name =
 
 let get_deps_set classes =
   let get_filename class_name =
-    Naming_heap.TypeIdHeap.get class_name >>= fun (pos, _) ->
+    Naming_table.Types.get_pos class_name >>= fun (pos, _) ->
     Some (FileInfo.get_pos_filename pos)
   in
   SSet.fold classes ~f:begin fun class_name acc ->
@@ -156,7 +156,7 @@ let get_deps_set classes =
   end ~init:Relative_path.Set.empty
 
 let get_deps_set_function f_name =
-  match Naming_heap.FunPosHeap.get f_name with
+  match Naming_table.Funs.get_pos f_name with
   | Some pos ->
     let fn = FileInfo.get_pos_filename pos in
     let dep = Typing_deps.Dep.Fun f_name in
@@ -167,7 +167,7 @@ let get_deps_set_function f_name =
     Relative_path.Set.empty
 
 let get_deps_set_gconst cst_name =
-  match Naming_heap.ConstPosHeap.get cst_name with
+  match Naming_table.Consts.get_pos cst_name with
   | Some pos ->
     let fn = FileInfo.get_pos_filename pos in
     let dep = Typing_deps.Dep.GConst cst_name in
@@ -222,7 +222,7 @@ let parallel_find_refs workers fileinfo_l target tcopt =
 let get_definitions = function
   | IMember (Class_set classes, Method method_name) ->
     SSet.fold classes ~init:[] ~f:begin fun class_name acc ->
-      match Typing_lazy_heap.get_class class_name with
+      match Decl_provider.get_class class_name with
       | Some class_ ->
         let add_meth get acc = match get method_name with
           | Some meth when meth.ce_origin = (Cls.name class_) ->
@@ -237,7 +237,7 @@ let get_definitions = function
     end
   | IMember (Class_set classes, Class_const class_const_name) ->
     SSet.fold classes ~init:[] ~f:begin fun class_name acc ->
-      match Typing_lazy_heap.get_class class_name with
+      match Decl_provider.get_class class_name with
       | Some class_ ->
         let add_class_const get acc = match get class_const_name with
           | Some class_const when class_const.cc_origin = (Cls.name class_) ->
@@ -250,14 +250,14 @@ let get_definitions = function
       | None -> acc
     end
   | IClass class_name ->
-    Option.value ~default:[] begin Naming_heap.TypeIdHeap.get class_name >>=
-    function (_, `Class) -> Typing_lazy_heap.get_class class_name >>=
+    Option.value ~default:[] begin Naming_table.Types.get_pos class_name >>=
+    function (_, Naming_table.TClass) -> Decl_provider.get_class class_name >>=
       fun class_ -> Some([(class_name, (Cls.pos class_))])
-    | (_, `Typedef) -> Typing_lazy_heap.get_typedef class_name >>=
+    | (_, Naming_table.TTypedef) -> Decl_provider.get_typedef class_name >>=
       fun type_ -> Some([class_name, type_.td_pos])
     end
   | IFunction fun_name ->
-    begin match Typing_lazy_heap.get_fun fun_name with
+    begin match Decl_provider.get_fun fun_name with
       | Some fun_ -> [fun_name, fun_.ft_pos]
       | None -> []
     end
@@ -269,9 +269,9 @@ let get_definitions = function
     []
 
 let find_references tcopt workers target include_defs
-      files_info files =
+      naming_table files =
   let fileinfo_l = Relative_path.Set.fold files ~f:begin fun fn acc ->
-    match Relative_path.Map.get files_info fn with
+    match Naming_table.get_file_info naming_table fn with
     | Some fi -> (fn, fi) :: acc
     | None -> acc
   end ~init:[] in

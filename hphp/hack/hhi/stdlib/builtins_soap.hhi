@@ -96,7 +96,7 @@ function _soap_active_version();
 
 class SoapServer {
   public function __construct($wsdl, $options = null);
-  public function setclass(string $name, ...);
+  public function setclass(string $name, ...$args);
   public function setobject($obj);
   public function addfunction($func);
   public function getfunctions();
@@ -109,7 +109,7 @@ class SoapServer {
 class SoapClient {
   public function __construct($wsdl, $options = null);
   public function __call($name, $args);
-  public function __soapcall(string $name, $args, $options = null, $input_headers = null, &$output_headers = null);
+  public function __soapcall(string $name, $args, $options = null, $input_headers = null);
   public function __getlastrequest();
   public function __getlastresponse();
   public function __getlastrequestheaders();

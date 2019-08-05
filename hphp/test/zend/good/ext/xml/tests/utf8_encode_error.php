@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto string utf8_encode(string data)
  * Description: Encodes an ISO-8859-1 string to UTF-8 
  * Source code: ext/xml/xml.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing utf8_encode() : error conditions ***\n";
 
 // Zero arguments
@@ -18,4 +18,4 @@ $extra_arg = 10;
 try { var_dump( utf8_encode($data, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

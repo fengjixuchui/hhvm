@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function blah() {
   $xs = array(1, 2, 3);
@@ -33,5 +33,6 @@ function blah() {
     echo "6\n";
   }
 }
-
+<<__EntryPoint>> function main(): void {
 var_dump(blah());
+}

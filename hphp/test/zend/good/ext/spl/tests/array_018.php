@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 try
 {
 	$foo = new ArrayObject();
@@ -25,5 +25,5 @@ catch (Exception $e)
 
 var_dump($foo);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

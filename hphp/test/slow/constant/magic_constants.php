@@ -1,4 +1,4 @@
-<?php
+<?hh
 namespace NS;
 
 const WHERE_I_AM = __FILE__.':'.__LINE__;
@@ -11,7 +11,7 @@ class Foo {
 
 <<__EntryPoint>>
 function main_magic_constants() {
-var_dump(WHERE_I_AM);
-var_dump(Foo::DOUBLE_THE_FUN);
-var_dump(Foo::INVALIDS);
+\var_dump(WHERE_I_AM);
+\var_dump(Foo::DOUBLE_THE_FUN);
+\var_dump(Foo::INVALIDS);
 }

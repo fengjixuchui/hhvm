@@ -1,4 +1,4 @@
-<?php
+<?hh
 class C {
 	public $a = 1;
 	public $b = 2;
@@ -8,26 +8,26 @@ class C {
 }
 
 class UsesMagic extends ArrayObject {
-	
+
 	public $b = "This should appear in storage";
 
-	function __get($name) { 
-		$args = func_get_args();
+	function __get($name) {
+		$args = array($name);
 		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
 	}
-	function __set($name, $value) { 
-		$args = func_get_args();
+	function __set($name, $value) {
+		$args = array($name, $value);
 		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
 	}
-	function __isset($name) { 
-		$args = func_get_args();
+	function __isset($name) {
+		$args = array($name);
 		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
 	}
-	function __unset($name) { 
-		$args = func_get_args();
+	function __unset($name) {
+		$args = array($name);
 		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
 	}
-	
+
 }
 $obj = new C;
 $ao = new UsesMagic($obj);
@@ -66,4 +66,3 @@ echo "  Original wrapped object:\n";
 var_dump($obj);
 echo "  Wrapping ArrayObject:\n";
 var_dump($ao);
-?>

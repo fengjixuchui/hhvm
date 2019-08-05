@@ -33,7 +33,7 @@ namespace HPHP {
 //////////////////////////////////////////////////////////////////////
 
 namespace jit {
-struct ArrayOffsetProfile;
+struct ArrayAccessProfile;
 }
 struct APCArray;
 struct APCHandle;
@@ -221,7 +221,7 @@ private:
   static SetArray* CopyReserve(const SetArray* src, size_t expectedSize);
   SetArray* copySet() const { return CopySet(*this, AllocMode::Request); }
 
-  template <typename Init, IntishCast intishCast>
+  template <typename Init, IntishCast IC>
   static ArrayData* ToArrayImpl(ArrayData*, bool);
 
 private:
@@ -372,7 +372,6 @@ private:
   using ArrayData::lval;
   using ArrayData::lvalNew;
   using ArrayData::set;
-  using ArrayData::setRef;
   using ArrayData::remove;
   using ArrayData::release;
 
@@ -382,7 +381,7 @@ private:
 private:
   friend struct array::HashTable<SetArray, SetArrayElm>;
   friend struct MemoryProfile;
-  friend struct jit::ArrayOffsetProfile;
+  friend struct jit::ArrayAccessProfile;
   friend struct EmptyArray;
   friend struct PackedArray;
   friend struct StructArray;
@@ -421,11 +420,8 @@ public:
   static bool ExistsInt(const ArrayData*, int64_t);
   static bool ExistsStr(const ArrayData*, const StringData*);
   static arr_lval LvalInt(ArrayData*, int64_t, bool);
-  static arr_lval LvalIntRef(ArrayData*, int64_t, bool);
   static arr_lval LvalStr(ArrayData*, StringData*, bool);
-  static arr_lval LvalStrRef(ArrayData*, StringData*, bool);
   static arr_lval LvalNew(ArrayData*, bool);
-  static arr_lval LvalNewRef(ArrayData*, bool);
   static ArrayData* SetInt(ArrayData*, int64_t, Cell);
   static constexpr auto SetIntInPlace = &SetInt;
   static ArrayData* SetStr(ArrayData*, StringData*, Cell);
@@ -434,10 +430,6 @@ public:
   static constexpr auto SetWithRefIntInPlace = &SetWithRefInt;
   static ArrayData* SetWithRefStr(ArrayData*, StringData*, TypedValue);
   static constexpr auto SetWithRefStrInPlace = &SetWithRefStr;
-  static ArrayData* SetRefInt(ArrayData*, int64_t, tv_lval);
-  static constexpr auto SetRefIntInPlace = &SetRefInt;
-  static ArrayData* SetRefStr(ArrayData*, StringData*, tv_lval);
-  static constexpr auto SetRefStrInPlace = &SetRefStr;
   static ArrayData* RemoveInt(ArrayData*, int64_t);
   static ArrayData* RemoveIntInPlace(ArrayData*, int64_t);
   static ArrayData* RemoveStr(ArrayData*, const StringData*);
@@ -446,8 +438,6 @@ public:
   static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* Append(ArrayData*, Cell);
   static ArrayData* AppendInPlace(ArrayData*, Cell);
-  static ArrayData* AppendRef(ArrayData*, tv_lval);
-  static constexpr auto AppendRefInPlace = &AppendRef;
   static ArrayData* AppendWithRef(ArrayData*, TypedValue);
   static ArrayData* AppendWithRefInPlace(ArrayData*, TypedValue);
   static ArrayData* PlusEq(ArrayData*, const ArrayData*);

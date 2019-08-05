@@ -16,6 +16,7 @@ type type_kind =
   | TKInterface
   | TKEnum
   | TKTrait
+  | TKTypeAlias
   | TKUnknown
   | TKMixed
 
@@ -25,6 +26,7 @@ type type_facts = {
   flags: int;
   require_extends: InvSSet.t;
   require_implements: InvSSet.t;
+  attributes: string list InvSMap.t;
 }
 
 type facts = {
@@ -36,4 +38,5 @@ type facts = {
 
 val empty: facts
 
-val facts_to_json: md5:string -> sha1:string -> facts -> Hh_json.json
+val facts_to_json : md5:string -> sha1:string -> facts -> Hh_json.json
+val facts_from_json : Hh_json.json -> facts option

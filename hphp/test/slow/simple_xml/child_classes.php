@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class MyElement extends SimpleXMLElement
 {
@@ -6,7 +6,7 @@ class MyElement extends SimpleXMLElement
   public function checkChildClass()
   {
     foreach ($this->children() as $child) {
-      if (!$child instanceof MyElement) {
+      if (!$child is MyElement) {
         printf("Hello ");
         break;
       }

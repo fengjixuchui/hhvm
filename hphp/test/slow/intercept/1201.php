@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 // Make sure that we can tell which class was called for intercepted static
 // methods
 
 class A {
-  public function foo() {
+  public static function foo() {
     echo 'foo called';
   }
 }

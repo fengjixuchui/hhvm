@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int count(mixed var [, int mode])
  * Description: Count the number of elements in a variable (usually an array) 
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass incorrect number of arguments to count() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing count() : error conditions ***\n";
 
 // Zero arguments
@@ -22,4 +22,4 @@ $extra_arg = 10;
 try { var_dump( count($var, $mode, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

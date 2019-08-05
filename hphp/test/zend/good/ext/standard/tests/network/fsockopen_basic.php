@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto resource fsockopen(string hostname, int port [, int errno [, string errstr [, float timeout]]])
  * Description: Open Internet or Unix domain socket connection
  * Source code: ext/standard/fsock.c
@@ -41,4 +41,3 @@ var_dump($third_client);
 fclose($third_client);
 
 echo "Done";
-?>

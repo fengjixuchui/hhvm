@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype: bool is_file ( string $filename );
    Description: Tells whether the filename is a regular file
      Returns TRUE if the filename exists and is a regular file
 */
 
 /* Testing is_file() with invalid arguments -int, float, bool, NULL, resource */
-
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $file_handle = fopen($file_path."/is_file_variation3.tmp", "w");
 
@@ -33,9 +33,7 @@ foreach( $filenames as $filename ) {
 fclose($file_handle);
 
 echo "\n*** Done ***";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 unlink($file_path."/is_file_variation3.tmp");
-?>
+}

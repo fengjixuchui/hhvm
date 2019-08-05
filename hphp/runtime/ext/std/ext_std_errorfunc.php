@@ -1,4 +1,6 @@
-<?hh
+<?hh // partial
+
+namespace {
 
 /**
  * Generates a backtrace
@@ -243,11 +245,13 @@ function hphp_clear_unflushed(): void;
  *    indicate the filename, function, line number and class name (if in class
  *    context) of the callsite that invoked the current function or method.
  */
-<<__Native, __HipHopSpecific>>
+<<__Native, __HipHopSpecific, __Rx>>
 function hphp_debug_caller_info(): darray<string, mixed>;
 
 <<__Native("NoInjection"), __HipHopSpecific>>
 function hphp_debug_backtrace_hash(int $options = 0): int;
+
+} // root namespace
 
 namespace HH {
 

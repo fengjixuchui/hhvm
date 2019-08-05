@@ -77,11 +77,9 @@ instruction on tmps whose must-alias-sets say they "will_be_used_again" to
 DecRefNZ.
 
 One rule this pass relies on is that it is illegal to DecRef an object in a way
-that takes its refcount to zero, and then IncRef it again after that.  This is
-not illegal for trivial reasons, because object __destruct methods can
-ressurect an object in PHP.  But within one JIT region, right now we declare it
-illegal to generate IR that uses an object after a DecRef that might take it to
-zero.
+that takes its refcount to zero, and then IncRef it again after that.  Within
+one JIT region, right now we declare it illegal to generate IR that uses an
+object after a DecRef that might take it to zero.
 
 Since this pass converts instructions that may (in general) re-enter the
 VM---running arbitrary PHP code for a destructor---it's potentially profitable
@@ -976,6 +974,7 @@ void mrinfo_step_impl(Env& env,
     [&](ReturnEffects) {}, [&](GeneralEffects) {},
     [&](UnknownEffects) { kill(ALocBits{}.set()); },
     [&](PureStore x) { do_store(x.dst, x.value); },
+    [&] (InlineEnterEffects) {}, [&] (InlineExitEffects) {},
 
     /*
      * Note that loads do not kill a location.  In fact, it's possible that the
@@ -1322,23 +1321,24 @@ bool irrelevant_inst(const IRInstruction& inst) {
     [&] (PureStore) { return true; },
     [&] (PureSpillFrame) { return true; },
     [&] (IrrelevantEffects) { return true; },
+    [&] (InlineEnterEffects) { return true; },
+    [&] (InlineExitEffects) { return true; },
 
     // Inlining related instructions can manipulate the frame but don't
     // observe reference counts.
     [&] (GeneralEffects g) {
       if (inst.is(BeginInlining,
-                  DefInlineFP,
-                  InlineReturn,
                   InlineReturnNoFrame,
                   SyncReturnBC
                  )) {
         return true;
       }
       if (inst.consumesReferences()) return false;
-      if (g.loads <= AEmpty &&
-          g.stores <= AEmpty &&
-          g.moves <= AEmpty &&
-          g.kills <= AEmpty) {
+      // IncRefs/DecRefs can only touch heap locations, so any other instruction
+      // that doesn't affect these locations is irrelevant.
+      if (!g.stores.maybe(AHeapAny) &&
+          !g.moves.maybe(AHeapAny)  &&
+          !g.kills.maybe(AHeapAny)) {
         return true;
       }
       return false;
@@ -1354,23 +1354,10 @@ bool irrelevant_inst(const IRInstruction& inst) {
 
 //////////////////////////////////////////////////////////////////////
 
-struct LdStaticLocHashEqual {
-  size_t operator()(const IRInstruction* inst) const {
-    return inst->extra<LdStaticLoc>()->hash();
-  }
-  bool operator()(const IRInstruction* i1, const IRInstruction* i2) const {
-    return i1->extra<LdStaticLoc>()->equals(*i2->extra<LdStaticLoc>());
-  }
-};
-
 void find_alias_sets(Env& env) {
   FTRACE(2, "find_alias_sets --------------------------------------\n");
 
   auto frame_to_ctx = sparse_idptr_map<SSATmp,ASetID>(env.unit.numTmps());
-
-  jit::fast_set<IRInstruction*,
-                LdStaticLocHashEqual,
-                LdStaticLocHashEqual> ldStaticLocs;
 
   auto add = [&] (SSATmp* tmp) {
     if (!tmp->type().maybe(TCounted)) return;
@@ -1403,11 +1390,6 @@ void find_alias_sets(Env& env) {
     }
 
     auto canon = canonical(tmp);
-    if (canon->inst()->is(LdStaticLoc)) {
-      auto const res = ldStaticLocs.insert(canon->inst());
-      if (!res.second) canon = (*res.first)->dst();
-    }
-
     if (env.asetMap[canon] != -1) {
       id = env.asetMap[canon];
     } else {
@@ -2084,7 +2066,7 @@ void pure_spill_frame(Env& env,
    * frames even within our region (via DefInlineFP).  However, in the
    * meantime, we need to treat the store of the context like a normal
    * pure_store, because there are various IR instructions that can decref the
-   * context on a pre-live ActRec through memory (e.g. LdObjMethod).
+   * context on a pre-live ActRec through memory (e.g. LdFunc).
    *
    * If the frame becomes live via DefInlineFP, we don't need to treat it as
    * memory support for this set anymore, for the same reason that LdCtx
@@ -2107,6 +2089,8 @@ void analyze_mem_effects(Env& env,
   match<void>(
     effects,
     [&] (IrrelevantEffects) {},
+    [&] (InlineEnterEffects) {},
+    [&] (InlineExitEffects) {},
 
     [&] (GeneralEffects x)  {
       if (inst.is(CallBuiltin)) {
@@ -2125,8 +2109,6 @@ void analyze_mem_effects(Env& env,
       // prevent store sinking, but don't actually change any
       // refcounts, so we don't need to reduce lower bounds.
       auto const may_decref = !inst.is(BeginInlining,
-                                       DefInlineFP,
-                                       InlineReturn,
                                        InlineReturnNoFrame,
                                        SyncReturnBC
                                       );
@@ -2169,8 +2151,6 @@ void analyze_mem_effects(Env& env,
 bool consumes_reference_taken(const IRInstruction& inst, uint32_t srcID) {
   switch (inst.op()) {
   // The following consume some arguments only in the event of an exception.
-  case LookupClsMethod:
-    return srcID == 1;
   case LdArrFuncCtx:
   case SuspendHookAwaitEF:
   case SuspendHookAwaitEG:
@@ -2556,7 +2536,10 @@ bool can_sink_inc_through(const IRInstruction& inst) {
     // these commonly occur along with type guards
     case LdLoc:
     case LdStk:
+    case BeginInlining:
+    case DefInlineFP:
     case InlineReturn:
+    case InlineSuspend:
     case InlineReturnNoFrame:
     case Nop:        return true;
 
@@ -3106,7 +3089,7 @@ bool pre_insertions_for_delete_recur(PreEnv& penv, Block* blk,
     for (auto i = bitset_find_first(bitset);
          i < bitset.size();
          i = bitset_find_next(bitset, i)) {
-      auto const t = atFront ? b->back().src(i) : b->front().dst(i);
+      auto const t = atFront ? blk->back().src(i) : blk->front().dst(i);
       if (t == tmp) return i;
     }
     return -1;
@@ -3207,7 +3190,7 @@ bool pre_apply(PreEnv& penv, bool incDec) {
                        bool removeDec, bool insertAtFront) {
       if (removeDec ? inst.is(DecRef, DecRefNZ) : inst.is(IncRef)) {
         auto const id = penv.env.asetMap[inst.src(0)];
-        if (del.test(id)) {
+        if (id >= 0 && del.test(id)) {
           if (!pre_insertions_for_delete(penv, &inst, insertAtFront)) {
             FTRACE(3, "No insertion for {} ({}) in B{}\n",
                    id, inst.toString(), blk->id());
@@ -3306,7 +3289,7 @@ bool pre_apply(PreEnv& penv, bool incDec) {
                        bool removeDec, bool insertAtFront) {
       if (removeDec ? inst.is(DecRef, DecRefNZ) : inst.is(IncRef)) {
         auto const id = penv.env.asetMap[inst.src(0)];
-        if (del.test(id)) {
+        if (id >= 0 && del.test(id)) {
           FTRACE(3, "delete: {} = {}\n", id, inst.toString());
           remove_helper(penv.env.unit, &inst);
           del.reset(id);
@@ -3393,6 +3376,58 @@ void pre_incdecs(Env& env, RCAnalysis& rca, bool incDec) {
 }
 
 //////////////////////////////////////////////////////////////////////
+
+/*
+ * This pass delays DecRef* instructions to try to expose more opportunities
+ * for eliminating IncRef/DecRef pairs. The idea is to remember the last IncRef
+ * tX that was seen and move DecRefs of other SSATmps later, until after a
+ * DecRef tX is found.  If any other instruction that is not "irrelevant" is
+ * found along the way, the set of DecRefs that are candidates to be moved has
+ * to be cleared.  For now, this pass is only applied locally, within a basic
+ * block.
+ */
+void delay_decrefs(IRUnit& unit) {
+  FTRACE(2, "delay_decrefs: unit before: {}\n", show(unit));
+
+  auto blocks = rpoSortCfg(unit);
+  for (auto block : blocks) {
+    IRInstruction* last_incref = nullptr;
+    jit::vector<IRInstruction*> other_decrefs;
+
+    for (auto& inst : *block) {
+      if (inst.is(IncRef)) {
+        last_incref = &inst;
+        other_decrefs.clear();
+      }
+
+      if (last_incref == nullptr || irrelevant_inst(inst)) continue;
+
+      if (inst.is(DecRef, DecRefNZ)) {
+        if (inst.src(0) != last_incref->src(0)) {
+          other_decrefs.push_back(&inst);
+          continue;
+        }
+        // Move all the DecRefs in other_decrefs after inst
+        auto iter = block->iteratorTo(&inst);
+        iter++;
+        for (auto other : other_decrefs) {
+          auto new_decref = unit.gen(DecRef, other->bcctx(),
+                                     *(other->extra<DecRefData>()),
+                                     other->src(0));
+          FTRACE(2, "delay_decrefs: moving {} after {} as {}\n",
+                 *other, inst, *new_decref);
+          remove_helper(unit, other);
+          block->insert(iter, new_decref);
+        }
+      }
+      // Either we moved other_decrefs or we hit some other relevant
+      // instruction.  In either case, we need to forget the other decrefs.
+      other_decrefs.clear();
+    }
+  }
+}
+
+//////////////////////////////////////////////////////////////////////
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -3400,6 +3435,7 @@ void pre_incdecs(Env& env, RCAnalysis& rca, bool incDec) {
 void optimizeRefcounts(IRUnit& unit) {
   Timer timer(Timer::optimize_refcountOpts, unit.logEntry().get_pointer());
   splitCriticalEdges(unit);
+  delay_decrefs(unit);
 
   PassTracer tracer{&unit, Trace::hhir_refcount, "optimizeRefcounts"};
   Env env { unit };
@@ -3437,7 +3473,7 @@ void optimizeRefcounts(IRUnit& unit) {
  * can be more aggressive because they don't hold internal references to other
  * objects, so a separate threshold is used in that case.
  */
-void selectiveDecRefNZ(IRUnit& unit) {
+void selectiveWeakenDecRefs(IRUnit& unit) {
   auto blocks = poSortCfg(unit);
 
   // Union of types that cannot trigger Copy-On-Write for inner elements in case
@@ -3450,12 +3486,21 @@ void selectiveDecRefNZ(IRUnit& unit) {
         const auto profile = decRefProfile(unit.context(), &inst);
         if (profile.optimizing()) {
           const auto data = profile.data();
-          const auto destroyPct = data.percent(data.destroyed());
-          double pctLimit = inst.src(0)->type() <= cowFree
-            ? RuntimeOption::EvalJitPGODecRefNZReleasePercent
-            : RuntimeOption::EvalJitPGODecRefNZReleasePercentCOW;
-          if (destroyPct < pctLimit) {
-            inst.setOpcode(DecRefNZ);
+          const auto decrefdPct = data.percent(data.destroyed()) +
+                                  data.percent(data.survived());
+          double decrefdPctLimit = inst.src(0)->type() <= cowFree
+            ? RuntimeOption::EvalJitPGODecRefNopDecPercent
+            : RuntimeOption::EvalJitPGODecRefNopDecPercentCOW;
+          if (decrefdPct < decrefdPctLimit) {
+            inst.convertToNop();
+          } else {
+            const auto destroyPct = data.percent(data.destroyed());
+            double destroyPctLimit = inst.src(0)->type() <= cowFree
+              ? RuntimeOption::EvalJitPGODecRefNZReleasePercent
+              : RuntimeOption::EvalJitPGODecRefNZReleasePercentCOW;
+            if (destroyPct < destroyPctLimit) {
+              inst.setOpcode(DecRefNZ);
+            }
           }
         }
       }

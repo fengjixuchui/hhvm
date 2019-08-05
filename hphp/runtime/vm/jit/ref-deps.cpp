@@ -18,8 +18,9 @@
 #include <iostream>
 #include <sstream>
 
+#include "hphp/runtime/vm/method-lookup.h"
+
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
-#include "hphp/runtime/vm/jit/translator-inline.h"
 
 namespace HPHP { namespace jit {
 
@@ -27,12 +28,12 @@ TRACE_SET_MOD(trans);
 
 void
 ActRecState::pushFunc(const NormalizedInstruction& inst) {
-  assertx(isFPush(inst.op()));
+  assertx(isLegacyFPush(inst.op()));
 
   const Unit& unit = *inst.unit();
   const Func* func = nullptr;
 
-  if (inst.op() == OpFPushFuncD || inst.op() == OpFPushFuncU) {
+  if (inst.op() == OpFPushFuncD || inst.op() == OpFPushFuncRD) {
     Id funcId = inst.imm[1].u_SA;
     auto const& nep = unit.lookupNamedEntityPairId(funcId);
     func = lookupImmutableFunc(&unit, nep.first).func;

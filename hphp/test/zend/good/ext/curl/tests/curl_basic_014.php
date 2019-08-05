@@ -1,5 +1,6 @@
-<?php
+<?hh
   $ch = curl_init();
   var_dump($ch);
-?>
-===DONE===
+<<__EntryPoint>> function main(): void {
+echo "===DONE===\n";
+}

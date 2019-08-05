@@ -1,4 +1,4 @@
-<?php
+<?hh
 function ReflectionParameterTest($test, $test2 = null) {
 	echo $test;
 }
@@ -7,5 +7,4 @@ $params = $reflect->getParameters();
 foreach($params as $key => $value) {
 	echo $value->getDeclaringFunction() . "\n";
 }
-?>
-==DONE==
+echo "==DONE==";

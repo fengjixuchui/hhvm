@@ -318,39 +318,6 @@ SSATmp* IRBuilder::preOptimizeAssertStk(IRInstruction* inst) {
   return preOptimizeAssertLocation(inst, stk(inst->extra<AssertStk>()->offset));
 }
 
-SSATmp* IRBuilder::preOptimizeLdARFuncPtr(IRInstruction* inst) {
-  auto const& fpiStack = fs().fpiStack();
-  auto const arOff = inst->extra<LdARFuncPtr>()->offset;
-  auto const invOff = arOff.to<FPInvOffset>(fs().irSPOff()) - kNumActRecCells;
-
-  for (auto i = fpiStack.size(); i--; ) {
-    auto const& info = fpiStack[i];
-    if (info.returnSP == inst->src(0) &&
-        info.returnSPOff == invOff) {
-      if (info.func) return m_unit.cns(info.func);
-      return nullptr;
-    }
-  }
-
-  return nullptr;
-}
-
-SSATmp* IRBuilder::preOptimizeLdARIsDynamic(IRInstruction* inst) {
-  auto const& fpiStack = fs().fpiStack();
-  auto const arOff = inst->extra<LdARIsDynamic>()->offset;
-  auto const invOff = arOff.to<FPInvOffset>(fs().irSPOff()) - kNumActRecCells;
-
-  for (auto i = fpiStack.size(); i--; ) {
-    auto const& info = fpiStack[i];
-    if (info.returnSP == inst->src(0) &&
-        info.returnSPOff == invOff) {
-      return info.dynamicCall;
-    }
-  }
-
-  return nullptr;
-}
-
 SSATmp* IRBuilder::preOptimizeCheckCtxThis(IRInstruction* inst) {
   auto const func = inst->marker().func();
   if (!func->mayHaveThis()) {
@@ -439,41 +406,6 @@ SSATmp* IRBuilder::preOptimizeLdStk(IRInstruction* inst) {
   return preOptimizeLdLocation(inst, stk(inst->extra<LdStk>()->offset));
 }
 
-SSATmp* IRBuilder::preOptimizeLdClsRefCls(IRInstruction* inst) {
-  return preOptimizeLdLocation(
-    inst,
-    cslotcls(inst->extra<LdClsRefCls>()->slot)
-  );
-}
-
-SSATmp* IRBuilder::preOptimizeCastStk(IRInstruction* inst) {
-  auto const off = inst->extra<CastStk>()->offset;
-  auto const curType = stack(off, DataTypeGeneric).type;
-
-  if (inst->typeParam() == TNullableObj && curType <= TNull) {
-    // If we're casting Null to NullableObj, we still need to call
-    // tvCastToNullableObjectInPlace. See comment there and t3879280 for
-    // details.
-    return nullptr;
-  }
-  if (curType <= inst->typeParam()) {
-    inst->convertToNop();
-    return nullptr;
-  }
-  return nullptr;
-}
-
-SSATmp* IRBuilder::preOptimizeCoerceStk(IRInstruction* inst) {
-  auto const off = inst->extra<CoerceStk>()->offset;
-  auto const curType = stack(off, DataTypeGeneric).type;
-
-  if (curType <= inst->typeParam()) {
-    inst->convertToNop();
-    return nullptr;
-  }
-  return nullptr;
-}
-
 SSATmp* IRBuilder::preOptimizeLdMBase(IRInstruction* inst) {
   if (auto ptr = m_state.mbr().ptr) return ptr;
 
@@ -495,11 +427,6 @@ SSATmp* IRBuilder::preOptimize(IRInstruction* inst) {
   X(CheckMBase)
   X(LdLoc)
   X(LdStk)
-  X(LdClsRefCls)
-  X(CastStk)
-  X(CoerceStk)
-  X(LdARFuncPtr)
-  X(LdARIsDynamic)
   X(CheckCtxThis)
   X(LdCtx)
   X(LdCctx)
@@ -725,9 +652,7 @@ bool IRBuilder::constrainValue(SSATmp* const val, GuardConstraint gc) {
 
 bool IRBuilder::constrainLocation(Location l, GuardConstraint gc,
                                   const std::string& why) {
-  if (!shouldConstrainGuards() ||
-      l.tag() == LTag::CSlotCls || l.tag() == LTag::CSlotTS ||
-      gc.empty()) return false;
+  if (!shouldConstrainGuards() || gc.empty()) return false;
 
   ITRACE(1, "constraining {} to {} (for {})\n", show(l), gc, why);
   Indent _i;
@@ -858,14 +783,6 @@ const StackState& IRBuilder::stack(IRSPRelOffset offset, GuardConstraint gc) {
   return m_state.stack(offset);
 }
 
-const CSlotClsState& IRBuilder::clsRefClsSlot(uint32_t slot) {
-  return m_state.clsRefClsSlot(slot);
-}
-
-const CSlotTSState& IRBuilder::clsRefTSSlot(uint32_t slot) {
-  return m_state.clsRefTSSlot(slot);
-}
-
 SSATmp* IRBuilder::valueOf(Location l, GuardConstraint gc) {
   constrainLocation(l, gc, "");
   return m_state.valueOf(l);
@@ -897,7 +814,7 @@ Type IRBuilder::predictedMBaseInnerType() const {
 }
 
 /*
- * Wrap a local, stack ID, or class-ref slot into a Location.
+ * Wrap a local or stack ID into a Location.
  */
 Location IRBuilder::loc(uint32_t id) const {
   return Location::Local { id };
@@ -905,12 +822,6 @@ Location IRBuilder::loc(uint32_t id) const {
 Location IRBuilder::stk(IRSPRelOffset off) const {
   auto const fpRel = off.to<FPInvOffset>(m_state.irSPOff());
   return Location::Stack { fpRel };
-}
-Location IRBuilder::cslotcls(uint32_t slot) const {
-  return Location::CSlotCls { slot };
-}
-Location IRBuilder::cslotts(uint32_t slot) const {
-  return Location::CSlotTS { slot };
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -960,10 +871,6 @@ Block* IRBuilder::makeBlock(SrcKey sk, uint64_t profCount) {
   return it->second;
 }
 
-void IRBuilder::resetOffsetMapping() {
-  m_skToBlockMap.clear();
-}
-
 bool IRBuilder::hasBlock(SrcKey sk) const {
   return m_skToBlockMap.count(sk);
 }
@@ -980,6 +887,25 @@ void IRBuilder::appendBlock(Block* block, Block* pred) {
   // Load up the state for the new block.
   m_state.startBlock(block, false, pred);
   m_curBlock = block;
+}
+
+void IRBuilder::resetBlock(Block* block, Block* pred) {
+  block->instrs().clear();
+  m_state.resetBlock(block, pred);
+}
+
+void IRBuilder::resetOffsetMapping() {
+  m_skToBlockMap.clear();
+}
+
+jit::flat_map<SrcKey, Block*> IRBuilder::saveAndClearOffsetMapping() {
+  return std::move(m_skToBlockMap);
+}
+
+void IRBuilder::restoreOffsetMapping(
+  jit::flat_map<SrcKey, Block*>&& offsetMapping
+) {
+  m_skToBlockMap = std::move(offsetMapping);
 }
 
 Block* IRBuilder::guardFailBlock() const {

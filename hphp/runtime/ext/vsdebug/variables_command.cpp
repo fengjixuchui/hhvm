@@ -58,7 +58,7 @@ DebugSummaryPHPExecutor::DebugSummaryPHPExecutor(
   DebuggerSession *session,
   request_id_t threadId,
   const Object &obj
-) : PHPExecutor(debugger, session, "Debug summary returned", threadId)
+) : PHPExecutor(debugger, session, "Debug summary returned", threadId, true)
   , m_obj{obj}
 {
 }
@@ -389,10 +389,11 @@ int VariablesCommand::addLocals(
   int count = 0;
 
   const int frameDepth = scope->m_frameDepth;
-  auto const fp = g_context->getFrameAtDepth(frameDepth);
+  auto const fp = g_context->getFrameAtDepthForDebuggerUnsafe(frameDepth);
 
   // If the frame at the specified depth has a $this, include it.
   if (fp != nullptr &&
+      !fp->isInlined() &&
       fp->func() != nullptr &&
       fp->func()->cls() != nullptr &&
       fp->hasThis()) {
@@ -498,7 +499,6 @@ const auto globalKeys = {
   StaticString{"_FILES"},
   StaticString{"_ENV"},
   StaticString{"_REQUEST"},
-  StaticString{"_SESSION"},
   StaticString{"GLOBALS"},
 };
 }
@@ -720,8 +720,15 @@ const VariablesCommand::VariableValue VariablesCommand::getVariableValue(
     }
 
     case KindOfPersistentString:
-    case KindOfString:
-      return VariableValue{variable.toCStrRef().toCppString()};
+    case KindOfString: {
+      std::string value {variable.toCStrRef().toCppString()};
+      int maxDisplayLength =
+        debugger->getDebuggerOptions().maxReturnedStringLength;
+      if (value.length() > maxDisplayLength) {
+        value = value.substr(0, maxDisplayLength) + std::string{"..."};
+      }
+      return VariableValue{value};
+    }
 
     case KindOfResource: {
       auto res = variable.toResource();

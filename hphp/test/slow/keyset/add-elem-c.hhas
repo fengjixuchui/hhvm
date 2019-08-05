@@ -1,8 +1,12 @@
+.hh_file 1;
 #
 # Can only use AddElemC on PHP arrays or dicts
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
   FCall <> 0 1 "" - "" ""
   PopC

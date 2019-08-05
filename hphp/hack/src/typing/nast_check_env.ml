@@ -8,7 +8,7 @@
  *)
 
 open Core_kernel
-open Nast
+open Aast
 
 module SN = Naming_special_names
 
@@ -20,14 +20,16 @@ type control_context =
 type env = {
   tcopt: TypecheckerOptions.t;
   is_reactive: bool;
-  class_kind: Ast.class_kind option;
+  class_kind: Ast_defs.class_kind option;
   class_name: string option;
   function_name: string option;
   file_mode: FileInfo.mode;
-  function_kind: Ast.fun_kind option;
+  function_kind: Ast_defs.fun_kind option;
   is_finally: bool;
   control_context: control_context;
   rx_is_enabled_allowed: bool;
+  array_append_allowed: bool;
+  rx_move_allowed: bool;
 }
 
 let is_some_reactivity_attribute { ua_name = (_, name); _ } =
@@ -75,6 +77,8 @@ let get_empty_env () = {
   is_finally = false;
   control_context = Toplevel;
   rx_is_enabled_allowed = false;
+  array_append_allowed = false;
+  rx_move_allowed = false;
 }
 
 let def_env x =
@@ -87,4 +91,10 @@ let def_env x =
   | Stmt _
   | Namespace _
   | NamespaceUse _
-  | SetNamespaceEnv _ -> empty_env
+  | SetNamespaceEnv _
+  | FileAttributes _ -> empty_env
+
+let is_rx_move e =
+  match e with
+  | _, Id (_, v) -> Utils.add_ns v = SN.Rx.move
+  | _ -> false

@@ -63,7 +63,7 @@ const StaticString
   s_format("format"),
   s_collection("collection"),
   s_harray("harray"),
-  s_TSPEC("_TSPEC"),
+  s_SPEC("SPEC"),
   s_TProtocolException("TProtocolException"),
   s_TApplicationException("TApplicationException");
 
@@ -253,7 +253,7 @@ Variant binary_deserialize(int8_t thrift_typeID, PHPInputTransport& transport,
         }
         return Variant(std::move(obj));
       } else {
-        ArrayInit arr(size, ArrayInit::Mixed{});
+        DArrayInit arr(size);
         for (uint32_t i = 0; i < size; i++) {
           auto key =  binary_deserialize(types[0], transport, keyspec);
           auto val = binary_deserialize(types[1], transport, valspec);
@@ -286,15 +286,15 @@ Variant binary_deserialize(int8_t thrift_typeID, PHPInputTransport& transport,
         int64_t i = 0;
         do {
           auto val = binary_deserialize(type, transport, elemspec);
-          cellDup(*val.toCell(), *vec->appendForUnserialize(i));
+          cellDup(*val.toCell(), vec->appendForUnserialize(i));
         } while (++i < size);
         return Variant(std::move(vec));
       } else {
-        PackedArrayInit pai(size);
+        VArrayInit vai(size);
         for (auto s = uint32_t{0}; s < size; ++s) {
-          pai.append(binary_deserialize(type, transport, elemspec));
+          vai.append(binary_deserialize(type, transport, elemspec));
         }
-        return pai.toVariant();
+        return vai.toVariant();
       }
     }
     case T_SET: { // array of key -> TRUE
@@ -329,7 +329,7 @@ Variant binary_deserialize(int8_t thrift_typeID, PHPInputTransport& transport,
 
         return Variant(std::move(set_ret));
       } else {
-        ArrayInit init(size, ArrayInit::Mixed{});
+        DArrayInit init(size);
         for (uint32_t s = 0; s < size; ++s) {
           Variant key = binary_deserialize(type, transport, elemspec);
           set_with_intish_key_cast(init, key, true);
@@ -568,7 +568,7 @@ void binary_serialize(int8_t thrift_typeID, PHPOutputTransport& transport,
         transport.writeString(sv.data(), sv.size());
     } return;
     case T_MAP: {
-      Array ht = value.toArray<IntishCast::CastSilently>();
+      Array ht = value.toArray<IntishCast::Cast>();
       uint8_t keytype = (char)tvCastToInt64(
         fieldspec.rvalAt(s_ktype, AccessFlags::ErrorKey).tv()
       );
@@ -589,7 +589,7 @@ void binary_serialize(int8_t thrift_typeID, PHPOutputTransport& transport,
       }
     } return;
     case T_LIST: {
-      Array ht = value.toArray<IntishCast::CastSilently>();
+      Array ht = value.toArray<IntishCast::Cast>();
       Variant val;
 
       uint8_t valtype = tvCastToInt64(
@@ -605,7 +605,7 @@ void binary_serialize(int8_t thrift_typeID, PHPOutputTransport& transport,
       }
     } return;
     case T_SET: {
-      Array ht = value.toArray<IntishCast::CastSilently>();
+      Array ht = value.toArray<IntishCast::Cast>();
 
       uint8_t keytype = (char)tvCastToInt64(
         fieldspec.rvalAt(s_etype, AccessFlags::ErrorKey).tv()

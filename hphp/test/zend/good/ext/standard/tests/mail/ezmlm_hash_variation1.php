@@ -1,22 +1,22 @@
-<?php
+<?hh
 
 /* Prototype  : array explode  ( string $delimiter  , string $string  [, int $limit  ] )
  * Description: Split a string by string.
  * Source code: ext/standard/string.c
 */
 
+//defining a class
+class sample  {
+  public function __toString() {
+    return "sample object";
+  }
+}
+<<__EntryPoint>> function main(): void {
 echo "*** Testing explode() function: with unexpected inputs for 'delimiter' argument ***\n";
 
 //get an unset variable
 $unset_var = 'string_val';
 unset($unset_var);
-
-//defining a class
-class sample  {
-  public function __toString() {
-    return "sample object";
-  } 
-}
 
 //getting the resource
 $file_handle = fopen(__FILE__, "r");
@@ -76,6 +76,5 @@ foreach($delimiters as $delimiter) {
 }
 
 fclose($file_handle);  //closing the file handle
-
-?>
-===Done===
+echo "===Done===";
+}

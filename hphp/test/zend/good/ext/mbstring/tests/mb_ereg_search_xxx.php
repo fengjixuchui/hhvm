@@ -1,4 +1,4 @@
-<?php
+<?hh
 	mb_regex_set_options( '' );
 
 	$encs = array( 'EUC-JP', 'Shift_JIS', 'SJIS', 'UTF-8' );
@@ -23,5 +23,3 @@
 		do_tests( $enc, '' );
 		do_tests( $enc, 'x' );
 	}
-?>
-

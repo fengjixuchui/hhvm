@@ -35,7 +35,6 @@
 #include "hphp/runtime/base/perf-mem-event.h"
 #include "hphp/runtime/base/php-globals.h"
 #include "hphp/runtime/base/plain-file.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/stat-cache.h"
@@ -45,7 +44,6 @@
 #include "hphp/runtime/base/unit-cache.h"
 #include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/base/zend-math.h"
-#include "hphp/runtime/base/zend-strtod.h"
 #include "hphp/runtime/debugger/debugger.h"
 #include "hphp/runtime/debugger/debugger_client.h"
 #include "hphp/runtime/debugger/debugger_hook_handler.h"
@@ -83,6 +81,7 @@
 #include "hphp/runtime/vm/treadmill.h"
 
 #include "hphp/util/abi-cxx.h"
+#include "hphp/util/alloc.h"
 #include "hphp/util/arch.h"
 #include "hphp/util/boot-stats.h"
 #include "hphp/util/build-info.h"
@@ -100,6 +99,7 @@
 #include "hphp/util/perf-event.h"
 #include "hphp/util/process-exec.h"
 #include "hphp/util/process.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/service-data.h"
 #include "hphp/util/shm-counter.h"
 #include "hphp/util/stack-trace.h"
@@ -108,6 +108,7 @@
 #include "hphp/util/type-scan.h"
 
 #include "hphp/zend/zend-string.h"
+#include "hphp/zend/zend-strtod.h"
 
 #include <folly/CPortability.h>
 #include <folly/Portability.h>
@@ -257,11 +258,14 @@ static void process_cmd_arguments(int argc, char **argv) {
   php_global_set(s_argv, argvArray.toArray());
 }
 
-static void process_env_variables(Array& variables, char** envp,
-                           std::map<std::string, std::string>& envVariables) {
-  for (auto& kv : envVariables) {
+static void process_env_variables(
+  Array& variables,
+  char** envp,
+  const std::map<std::string, std::string>& envVariables
+) {
+  for (auto const& kv : envVariables) {
     String idx(kv.first);
-    auto const arrkey = variables.convertKey<IntishCast::CastSilently>(idx);
+    auto const arrkey = variables.convertKey<IntishCast::Cast>(idx);
     String str(kv.second);
     variables.set(arrkey, make_tv<KindOfString>(str.get()));
   }
@@ -367,7 +371,7 @@ void register_variable(Array& variables, char *name, const Variant& value,
       } else {
         String key_str(index, index_len, CopyString);
         auto const key =
-          symtable->convertKey<IntishCast::CastSilently>(key_str.toCell());
+          symtable->convertKey<IntishCast::Cast>(key_str.toCell());
         auto const v = symtable->rvalAt(key).unboxed();
         if (isNullType(v.type()) || !isArrayLikeType(v.type())) {
           symtable->set(key, make_tv<KindOfPersistentArray>(staticEmptyArray()));
@@ -395,7 +399,7 @@ void register_variable(Array& variables, char *name, const Variant& value,
     } else {
       String key_str(index, index_len, CopyString);
       auto key =
-        symtable->convertKey<IntishCast::CastSilently>(key_str.toCell());
+        symtable->convertKey<IntishCast::Cast>(key_str.toCell());
       if (overwrite || !symtable->exists(key)) {
         symtable->set(key, *value.toCell(), true);
       }
@@ -682,15 +686,17 @@ void init_command_line_session(int argc, char** argv) {
 }
 
 void
-init_command_line_globals(int argc, char** argv, char** envp,
-                          int xhprof,
-                          std::map<std::string, std::string>& serverVariables,
-                          std::map<std::string, std::string>& envVariables) {
+init_command_line_globals(
+  int argc, char** argv, char** envp,
+  int xhprof,
+  const std::map<std::string, std::string>& serverVariables,
+  const std::map<std::string, std::string>& envVariables
+) {
   auto& variablesOrder = RID().getVariablesOrder();
 
   if (variablesOrder.find('e') != std::string::npos ||
       variablesOrder.find('E') != std::string::npos) {
-    Array envArr(Array::Create());
+    auto envArr = Array::CreateDArray();
     process_env_variables(envArr, envp, envVariables);
     envArr.set(s_HPHP, 1);
     envArr.set(s_HHVM, 1);
@@ -708,14 +714,14 @@ init_command_line_globals(int argc, char** argv, char** envp,
       envArr.set(s_HHVM_ARCH, "ppc64");
       break;
     }
-    php_global_set(s__ENV, envArr);
+    php_global_set(s__ENV, std::move(envArr));
   }
 
   process_cmd_arguments(argc, argv);
 
   if (variablesOrder.find('s') != std::string::npos ||
       variablesOrder.find('S') != std::string::npos) {
-    Array serverArr(Array::Create());
+    auto serverArr = Array::CreateDArray();
     process_env_variables(serverArr, envp, envVariables);
     time_t now;
     struct timeval tp = {0};
@@ -734,7 +740,7 @@ init_command_line_globals(int argc, char** argv, char** envp,
     serverArr.set(s_REQUEST_START_TIME, now);
     serverArr.set(s_REQUEST_TIME, now);
     serverArr.set(s_REQUEST_TIME_FLOAT, now_double);
-    serverArr.set(s_DOCUMENT_ROOT, empty_string_variant_ref);
+    serverArr.set(s_DOCUMENT_ROOT, empty_string_tv());
     serverArr.set(s_SCRIPT_FILENAME, file);
     serverArr.set(s_SCRIPT_NAME, file);
     serverArr.set(s_PHP_SELF, file);
@@ -750,15 +756,15 @@ init_command_line_globals(int argc, char** argv, char** envp,
       serverArr.set(s_HOSTNAME, String(hostname, CopyString));
     }
 
-    for (auto& kv : serverVariables) {
-      serverArr.set(String(kv.first.c_str()), String(kv.second.c_str()));
+    for (auto const& kv : serverVariables) {
+      serverArr.set(String{kv.first}, String{kv.second});
     }
 
-    php_global_set(s__SERVER, serverArr);
+    php_global_set(s__SERVER, std::move(serverArr));
   }
 
   if (xhprof) {
-    HHVM_FN(xhprof_enable)(xhprof, uninit_null().toArray());
+    HHVM_FN(xhprof_enable)(xhprof, null_array);
   }
 
   if (RuntimeOption::RequestTimeoutSeconds) {
@@ -769,7 +775,6 @@ init_command_line_globals(int argc, char** argv, char** envp,
     Xenon::getInstance().surpriseAll();
   }
 
-  InitFiniNode::GlobalsInit();
   // Initialize the debugger
   DEBUGGER_ATTACHED_ONLY(phpDebuggerRequestInitHook());
 }
@@ -784,7 +789,7 @@ void execute_command_line_begin(int argc, char **argv, int xhprof) {
 void execute_command_line_end(int xhprof, bool coverage, const char *program) {
   if (RuntimeOption::EvalDumpTC ||
       RuntimeOption::EvalDumpIR ||
-      RuntimeOption::EvalDumpInlRefuse ||
+      RuntimeOption::EvalDumpInlDecision ||
       RuntimeOption::EvalDumpRegion) {
     jit::mcgen::joinWorkerThreads();
     jit::tc::dump();
@@ -960,7 +965,8 @@ static void pagein_self(void) {
           if (to - from >  maxHugeHotTextBytes) {
             to = from + maxHugeHotTextBytes;
           }
-          if (to <= (void*)hugifyText) {
+          // Check that hugifyText() does not start in hot text.
+          if (to <= (void*)hugifyText || from > (void*)hugifyText) {
             mapped_huge = true;
             hugifyText(from, to);
           }
@@ -1159,62 +1165,24 @@ static int start_server(const std::string &username, int xhprof) {
     InitFiniNode::WarmupConcurrentWaitForEnd();
   }
 
-  if (RuntimeOption::RepoPreload) {
-    HttpServer::CheckMemAndWait();
-    BootStats::Block timer("Preloading Repo", true);
-    profileWarmupStart();
-    preloadRepo();
-    profileWarmupEnd();
-  }
-
   // If we have any warmup requests, replay them before listening for
   // real connections
   {
     Logger::Info("Warming up");
     if (!RuntimeOption::EvalJitProfileWarmupRequests) profileWarmupStart();
     SCOPE_EXIT { profileWarmupEnd(); };
-    using WarmupThread = AsyncFunc<InternalWarmupWorker>;
-    std::vector<std::unique_ptr<InternalWarmupWorker>> workers;
-    std::vector<std::unique_ptr<WarmupThread>> threads;
-    std::map<std::string, unsigned> seen;
-    for (auto const& file : RuntimeOption::ServerWarmupRequests) {
-      HttpServer::CheckMemAndWait();
-      auto const count = ++seen[file];
-      auto worker = std::make_unique<InternalWarmupWorker>(file, count);
-      auto workerThread =
-        std::make_unique<WarmupThread>(worker.get(),
-                                       &InternalWarmupWorker::run);
-      workerThread->start();
-      if (RuntimeOption::ServerWarmupConcurrently) {
-        // destruct worker and workerThread later, after the threads are joined.
-        workers.emplace_back(std::move(worker));
-        threads.emplace_back(std::move(workerThread));
-      } else {
-        workerThread->waitForEnd();
-      }
-    }
-    for (auto& t : threads) t->waitForEnd();
+    InternalWarmupRequestPlayer{RuntimeOption::ServerWarmupThreadCount}.
+      runAfterDelay(RuntimeOption::ServerWarmupRequests);
   }
   BootStats::mark("warmup");
 
   if (RuntimeOption::StopOldServer) HttpServer::StopOldServer();
 
-  if (RuntimeOption::EvalEnableNuma && !getenv("HHVM_DISABLE_NUMA")) {
-#ifdef USE_JEMALLOC
-    unsigned narenas;
-    size_t mib[3];
-    size_t miblen = 3;
-    if (mallctlWrite<uint64_t, true>("epoch", 1) == 0 &&
-        mallctlRead<unsigned, true>("arenas.narenas", &narenas) == 0 &&
-        mallctlnametomib("arena.0.purge", mib, &miblen) == 0) {
-      mib[1] = size_t(narenas);
-      mallctlbymib(mib, miblen, nullptr, nullptr, nullptr, 0);
-    }
-#endif
-    enable_numa(RuntimeOption::EvalEnableNumaLocal);
+  if (RuntimeOption::EvalEnableNuma) {
+    purge_all();
+    enable_numa();
     BootStats::mark("enable_numa");
   }
-
   HttpServer::CheckMemAndWait(true); // Final wait
   if (readaheadThread.get()) {
     readaheadThread->join();
@@ -1223,11 +1191,6 @@ static int start_server(const std::string &username, int xhprof) {
 
   if (!RuntimeOption::EvalUnixServerPath.empty()) {
     start_cli_server();
-  } else {
-    // allocate hugetlb pages for pooled slabs
-    // it is not safe to do this after any threads that do hphp_thread_init
-    // have started (and start_cli_server creates such a thread)
-    SlabManager::init();
   }
 
   if (jit::mcgen::retranslateAllScheduled()) {
@@ -1235,6 +1198,23 @@ static int start_server(const std::string &username, int xhprof) {
     BootStats::Block timer("waitForRetranslateAll", true);
     jit::mcgen::joinWorkerThreads();
   }
+
+#ifdef USE_JEMALLOC
+  // Eventually, we are going to remove options Eval.Num1GPagesForSlabs and
+  // Eval.Num2MPagesForSlabs, and use the ForReqHeap spec together with
+  // Eval.NumReservedSlabs. For now, we keep the old options working.
+  auto const reqHeapSpec = PageSpec{
+    std::max(RuntimeOption::EvalNum1GPagesForReqHeap,
+             RuntimeOption::EvalNum1GPagesForSlabs),
+    std::max(RuntimeOption::EvalNum2MPagesForReqHeap,
+             RuntimeOption::EvalNum2MPagesForSlabs)
+  };
+  auto const nSlabs =
+    std::max(RuntimeOption::EvalNumReservedSlabs,
+             RuntimeOption::EvalNum2MPagesForSlabs +
+             512 * RuntimeOption::EvalNum1GPagesForSlabs);
+  setup_local_arenas(reqHeapSpec, nSlabs);
+#endif
 
   HttpServer::Server->runOrExitProcess();
   HttpServer::Server.reset();
@@ -1816,8 +1796,8 @@ static int execute_program_impl(int argc, char** argv) {
     contents << fs.rdbuf();
 
     auto const str = contents.str();
-    auto const md5 = MD5{
-      mangleUnitMd5(string_md5(str), RepoOptions::defaults())
+    auto const sha1 = SHA1{
+      mangleUnitSha1(string_sha1(str), file, RepoOptions::defaults())
     };
 
     compilers_start();
@@ -1835,7 +1815,7 @@ static int execute_program_impl(int argc, char** argv) {
     // Ensure write to SystemLib::s_inited is visible by other threads.
     std::atomic_thread_fence(std::memory_order_release);
 
-    auto compiled = compile_file(str.c_str(), str.size(), md5, file.c_str(),
+    auto compiled = compile_file(str.c_str(), str.size(), sha1, file.c_str(),
                                  Native::s_noNativeFuncs,
                                  RepoOptions::defaults(), nullptr);
 
@@ -1906,15 +1886,21 @@ static int execute_program_impl(int argc, char** argv) {
   }
 #endif
 #if USE_JEMALLOC_EXTENT_HOOKS
-  // Set up extent hook so that we can place jemalloc metadata on 1G pages.
-  // This needs to be done after initializing LightProcess (which forks),
-  // because the child process does malloc which won't work with jemalloc
-  // metadata on 1G huge pages.
-  setup_jemalloc_metadata_extent_hook(
-    RuntimeOption::EvalEnableArenaMetadata1GPage,
-    RuntimeOption::EvalEnableNumaArenaMetadata1GPage,
-    RuntimeOption::EvalArenaMetadataReservedSize
-  );
+  if (RuntimeOption::EvalEnableArenaMetadata1GPage) {
+    // Set up extent hook so that we can place jemalloc metadata on 1G pages.
+    // This needs to be done after initializing LightProcess (which forks),
+    // because the child process does malloc which won't work with jemalloc
+    // metadata on 1G huge pages.
+    setup_jemalloc_metadata_extent_hook(
+      RuntimeOption::EvalEnableArenaMetadata1GPage,
+      RuntimeOption::EvalEnableNumaArenaMetadata1GPage,
+      RuntimeOption::EvalArenaMetadataReservedSize
+    );
+  } else if (RuntimeOption::ServerExecutionMode()) {
+    purge_all();
+    setup_arena0({RuntimeOption::EvalNum1GPagesForA0,
+                  RuntimeOption::EvalNum2MPagesForA0});
+  }
 #endif
 
   auto const addTypeToEmbeddedPath = [&](std::string path, const char* type) {
@@ -1996,7 +1982,7 @@ static int execute_program_impl(int argc, char** argv) {
     try {
       auto const unit = lookupUnit(
         makeStaticString(po.lint.c_str()), "", nullptr,
-        Native::s_noNativeFuncs);
+        Native::s_noNativeFuncs, false);
       if (unit == nullptr) {
         throw FileOpenException(po.lint);
       }
@@ -2236,8 +2222,6 @@ static void on_timeout(int sig, siginfo_t* info, void* /*context*/) {
     auto data = (RequestTimer*)info->si_value.sival_ptr;
     if (data) {
       data->onTimeout();
-    } else {
-      Xenon::getInstance().onTimer();
     }
   }
 }
@@ -2281,7 +2265,7 @@ static void update_constants_and_options() {
 
 void hphp_thread_init() {
 #if USE_JEMALLOC_EXTENT_HOOKS
-  high_arena_tcache_create();
+  arenas_thread_init();
 #endif
   rds::threadInit();
   ServerStats::GetLogger();
@@ -2309,7 +2293,7 @@ void hphp_thread_exit() {
   if (!g_context.isNull()) g_context.destroy();
   rds::threadExit();
 #if USE_JEMALLOC_EXTENT_HOOKS
-  high_arena_tcache_destroy();
+  arenas_thread_exit();
 #endif
 }
 
@@ -2370,10 +2354,6 @@ void hphp_process_init() {
   // thread safe due to bugs
   onig_init();
   BootStats::mark("onig_init");
-
-  // simple xml also needs one time init
-  xmlInitParser();
-  BootStats::mark("xmlInitParser");
 
   g_context.getCheck();
   // Some event handlers are registered during the startup process.
@@ -2478,8 +2458,6 @@ void hphp_process_init() {
         BootStats::set("prof_data_source_host",
                        jit::ProfData::buildHost()->toCppString());
         BootStats::set("prof_data_timestamp", jit::ProfData::buildTime());
-        RuntimeOption::EvalNumSingleJitRequests = 0;
-        RuntimeOption::EvalJitProfileInterpRequests = 0;
         RuntimeOption::EvalJitProfileRequests = 0;
         RuntimeOption::EvalJitWorkerThreads = numWorkers;
 
@@ -2492,7 +2470,8 @@ void hphp_process_init() {
           }
           if (RuntimeOption::EvalDumpTC ||
               RuntimeOption::EvalDumpIR ||
-              RuntimeOption::EvalDumpRegion) {
+              RuntimeOption::EvalDumpRegion ||
+              RuntimeOption::EvalDumpInlDecision) {
             jit::mcgen::joinWorkerThreads();
             jit::tc::dump();
           }
@@ -2590,7 +2569,7 @@ void invoke_prelude_script(
     [currentDir] (const String& f) {
       auto const w = Stream::getWrapperFromURI(f, nullptr, false);
       if (w->access(f, R_OK) == 0) {
-        require(f, true, currentDir, true);
+        include_impl_invoke(f, true, currentDir, true);
         return true;
       }
       return false;
@@ -2603,7 +2582,8 @@ static bool hphp_warmup(ExecutionContext *context,
                         const std::string &reqInitFunc,
                         const std::string &reqInitDoc,
                         const std::string &prelude,
-                        bool &error) {
+                        bool &error,
+                        bool runEntryPoint) {
   bool ret = true;
   error = false;
   std::string errorMsg;
@@ -2617,7 +2597,7 @@ static bool hphp_warmup(ExecutionContext *context,
     }
 
     if (!reqInitDoc.empty()) {
-      include_impl_invoke(reqInitDoc, true);
+      include_impl_invoke(reqInitDoc, true, "", runEntryPoint);
     }
     if (!reqInitFunc.empty()) {
       invoke(reqInitFunc.c_str(), Array());
@@ -2703,7 +2683,8 @@ bool hphp_invoke(ExecutionContext *context, const std::string &cmd,
   if (isServer) {
     oldCwd = context->getCwd();
   }
-  if (!hphp_warmup(context, cmd, reqInitFunc, reqInitDoc, prelude, error)) {
+  if (!hphp_warmup(context, cmd, reqInitFunc, reqInitDoc, prelude, error,
+                   func)) {
     if (isServer) context->setCwd(oldCwd);
     return false;
   }
@@ -2746,67 +2727,12 @@ bool hphp_invoke(ExecutionContext *context, const std::string &cmd,
   return ret;
 }
 
-namespace {
-
-THREAD_LOCAL(std::vector<const Unit*>, tl_loaded_units);
-
-const char* basename(const char* path) {
-  for (size_t i = strlen(path); i > 0; --i) {
-    if (path[i - 1] == '/') return &path[i];
-  }
-  return path;
-}
-
-std::string logPath(std::string prefix, std::string path) {
-  if (path.compare(0, prefix.size(), prefix) == 0) {
-    return path.substr(prefix.size());
-  }
-  return path;
-}
-
-void flushLoadedUnitLogs() {
-  if (tl_loaded_units.isNull()) return;
-  auto const prefix = [&] {
-    auto const& s = RuntimeOption::EvalLogLoadedUnitsBaseDir;
-    if (s.empty() || s.front() != '{' || s.back() != '}') return s;
-    auto const arr = php_global(s__SERVER);
-    String key{makeStaticString(s.substr(1, s.size() - 2))};
-    if (!arr.isArray() || !arr.toCArrRef().exists(key)) return s;
-    auto const val = arr.toArray()[key];
-    return val.isString() ? val.toCStrRef().get()->toCppString() : s;
-  }();
-  std::vector<folly::Future<folly::Unit>> futures;
-  for (auto u : *tl_loaded_units) {
-    StructuredLogEntry ent;
-    auto const path = logPath(prefix, u->filepath()->toCppString());
-    auto const md5 = u->md5().toString();
-    ent.setStr("filename", basename(u->filepath()->data()));
-    ent.setStr("filepath", path);
-    ent.force_init = true;
-    ent.ratelim.emplace(
-      "hhvm_loaded_files", path, RuntimeOption::EvalLogLoadedUnitsRate, futures
-    );
-    StructuredLog::log("hhvm_loaded_files", ent);
-  }
-  tl_loaded_units.destroy();
-  folly::collectAll(futures).wait();
-}
-
-}
-
-void log_loaded_unit(const Unit* u) {
-  tl_loaded_units->emplace_back(u);
-}
-
 void hphp_context_exit() {
   // Run shutdown handlers. This may cause user code to run.
   g_thread_safe_locale_handler->reset();
 
   auto const context = g_context.getNoCheck();
   context->onRequestShutdown();
-
-  // Log any loaded units
-  flushLoadedUnitLogs();
 
   // Extensions could have shutdown handlers
   ExtensionRegistry::requestShutdown();

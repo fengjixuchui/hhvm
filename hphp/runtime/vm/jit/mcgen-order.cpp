@@ -55,15 +55,21 @@ createCallGraph(jit::hash_map<hfsort::TargetId, FuncId>& funcID) {
   FTRACE(3, "createCallGraph: maxFuncId = {}\n", maxFuncId);
   for (FuncId fid = 0; fid <= maxFuncId; fid++) {
     if (!Func::isFuncIdValid(fid) || !pd->profiling(fid)) continue;
+    const auto func = Func::fromFuncId(fid);
+    const auto baseOffset = func->base();
     const auto transIds = pd->funcProfTransIDs(fid);
     uint32_t size = 1; // avoid zero-sized functions
+    uint32_t profCount = 0;
     for (auto transId : transIds) {
       const auto trec = pd->transRec(transId);
       assertx(trec->kind() == TransKind::Profile);
-      // TODO: maybe save the size of the machine code and use it here
-      size += trec->lastBcOff() - trec->startBcOff();
+      size += trec->asmSize();
+      if (trec->srcKey().offset() == baseOffset) {
+        profCount += pd->transCounter(transId);
+      }
     }
-    const auto targetId = cg.addTarget(size);
+    // NB: avoid division by 0
+    const auto targetId = cg.addTarget(size, profCount ? profCount : 1);
     targetID[fid] = targetId;
     funcID[targetId] = fid;
     FTRACE(3, "  - adding node FuncId = {} => TargetId = {}\n", fid, targetId);
@@ -106,7 +112,6 @@ createCallGraph(jit::hash_map<hfsort::TargetId, FuncId>& funcID) {
     const auto calleeTargetId = targetID[fid];
     const auto transIds = pd->funcProfTransIDs(fid);
     uint32_t totalCalls = 0;
-    uint32_t profCount  = 1; // avoid zero sample counts
     for (int nargs = 0; nargs <= func->numNonVariadicParams() + 1; nargs++) {
       auto transId = pd->proflogueTransId(func, nargs);
       if (transId == kInvalidTransID) continue;
@@ -120,9 +125,9 @@ createCallGraph(jit::hash_map<hfsort::TargetId, FuncId>& funcID) {
       }
       addCallersCount(calleeTargetId, trec->mainCallers(),  totalCalls);
       addCallersCount(calleeTargetId, trec->guardCallers(), totalCalls);
-      profCount += pd->transCounter(transId);
     }
-    cg.setSamples(calleeTargetId, std::max(totalCalls, profCount));
+    auto samples = cg.getSamples(calleeTargetId);
+    cg.setSamples(calleeTargetId, std::max(totalCalls, samples));
   }
   cg.normalizeArcWeights();
   return cg;
@@ -185,7 +190,7 @@ std::pair<std::vector<FuncId>, uint64_t> hfsortFuncs() {
     print(cg, "/tmp/hotfuncs-pgo.txt", clusters, target2FuncId);
     if (serverMode) {
       Logger::Info("retranslateAll: saved sorted list of hot functions at "
-                   "/tmp/hotfuncs-pgo.dot");
+                   "/tmp/hotfuncs-pgo.txt");
     }
   }
 

@@ -1,16 +1,15 @@
-<?php
+<?hh
 
 class PEAR {
   static function f() {
  PEAR::g();
  }
-  function g() {
+  static function g() {
  echo 'This is g()';
  }
 }
 if ($x) {
-  class PEAR {
-}
+  include '1476.inc';
 }
 class D1 extends PEAR {
   public $foo;

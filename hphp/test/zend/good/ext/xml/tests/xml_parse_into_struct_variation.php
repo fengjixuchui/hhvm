@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto int xml_parse_into_struct(resource parser, string data, array &struct, array &index)
  * Description: Parsing a XML document
  * Source code: ext/xml/xml.c
  * Alias to functions:
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing xml_parse_into_struct() : variation ***\n";
 
 $simple = "<main><para><note>simple note</note></para><para><note>simple note</note></para></main>";
@@ -18,4 +18,4 @@ print_r($vals);
 
 
 echo "Done";
-?>
+}

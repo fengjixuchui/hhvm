@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 error_reporting(E_ALL);
 
@@ -21,4 +21,3 @@ class MyHelloWorld extends Base {
 
 $o = new MyHelloWorld();
 $o->sayHello();
-?>

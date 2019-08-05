@@ -81,7 +81,7 @@ inline SSATmp* IRInstruction::getPassthroughValue() const {
   assertx(isPassthrough());
   assertx(is(CheckType, CheckVArray, CheckDArray,
              AssertType, AssertNonNull, Mov,
-             ConvPtrToLval));
+             ConvPtrToLval, CheckFuncMMNonMagic));
   return src(0);
 }
 
@@ -162,7 +162,7 @@ inline uint32_t IRInstruction::numDsts() const {
 }
 
 inline SSATmp* IRInstruction::src(uint32_t i) const {
-  always_assert(i < numSrcs());
+  always_assert_flog(i < numSrcs(), "src {} out of range in {}", i, toString());
   return m_srcs[i];
 }
 
@@ -235,10 +235,16 @@ typename IRExtraDataType<opc>::type* IRInstruction::extra() {
   return static_cast<typename IRExtraDataType<opc>::type*>(m_extra);
 }
 
-template<class T>
+template<typename T>
 const T* IRInstruction::extra() const {
   if (debug) assert_opcode_extra<T>(op());
   return static_cast<const T*>(m_extra);
+}
+
+template<typename T>
+T* IRInstruction::extra() {
+  if (debug) assert_opcode_extra<T>(op());
+  return static_cast<T*>(m_extra);
 }
 
 inline const IRExtraData* IRInstruction::rawExtra() const {

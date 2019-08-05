@@ -36,6 +36,8 @@
 
 namespace HPHP {
 
+///////////////////////////////////////////////////////////////////////////////
+
 const StaticString
   s_file("file"),
   s_line("line"),
@@ -47,36 +49,46 @@ const StaticString
   s_include("include"),
   s_main("{main}"),
   s_metadata("metadata"),
-  s_86metadata("86metadata"),
   s_arrow("->"),
   s_double_colon("::");
 
+///////////////////////////////////////////////////////////////////////////////
+
+namespace backtrace_detail {
+
+BTContext::BTContext() {
+  auto const flags = ActRec::LocalsDecRefd; // don't attempt to read locals
+  auto const handler = (intptr_t)jit::tc::ustubs().retInlHelper;
+  fakeAR[0].m_sfp = &fakeAR[1];
+  fakeAR[1].m_sfp = &fakeAR[0];
+  fakeAR[0].m_savedRip = fakeAR[1].m_savedRip = handler;
+  fakeAR[0].m_numArgsAndFlags = fakeAR[1].m_numArgsAndFlags = flags;
+}
+
+const ActRec* BTContext::clone(const BTContext& src, const ActRec* fp) {
+  fakeAR[0].m_func = src.fakeAR[0].m_func;
+  fakeAR[0].m_callOff = src.fakeAR[0].m_callOff;
+
+  fakeAR[1].m_func = src.fakeAR[1].m_func;
+  fakeAR[1].m_callOff = src.fakeAR[1].m_callOff;
+
+  stashedAR = src.stashedAR;
+  stashedPC = src.stashedPC;
+  inlineStack = src.inlineStack;
+  hasInlFrames = src.hasInlFrames;
+  assertx(!!stashedAR == (fp == &src.fakeAR[0] || fp == &src.fakeAR[1]));
+
+  return
+    fp == &src.fakeAR[0] ? &fakeAR[0] :
+    fp == &src.fakeAR[1] ? &fakeAR[1] :
+    fp;
+}
+
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 namespace {
-
-struct BTContext {
-  BTContext() {
-    auto const flags = ActRec::LocalsDecRefd; // don't attempt to read locals
-    auto const handler = (intptr_t)jit::tc::ustubs().retInlHelper;
-    fakeAR[0].m_sfp = &fakeAR[1];
-    fakeAR[1].m_sfp = &fakeAR[0];
-    fakeAR[0].m_savedRip = fakeAR[1].m_savedRip = handler;
-    fakeAR[0].m_numArgsAndFlags = fakeAR[1].m_numArgsAndFlags = flags;
-  }
-
-  bool hasInlFrames{false};
-
-  // fakeAR is used to generate pseudo-frames representing inlined functions
-  // whose frames have been elided. The array operates like a ring buffer as
-  // createBacktrace needs to inspect the current and previous frame pointer,
-  // thus we introduce an m_sfp cycle between these frames.
-  ActRec fakeAR[2];
-  jit::IStack inlineStack;
-
-  // stashedAR stores a pointer to the frame that should be returned after the
-  // inlined stack has been traversed and stashedPC stores the corresponding PC.
-  ActRec* stashedAR{nullptr};
-  Offset stashedPC{kInvalidOffset};
-};
 
 c_WaitableWaitHandle* getParentWH(
     c_WaitableWaitHandle* wh,
@@ -120,9 +132,45 @@ ActRec* getActRecFromWaitHandle(
   return AsioSession::Get()->getContext(contextIdx)->getSavedFP();
 }
 
-ActRec* initBTContextAt(
-  BTContext& ctx, jit::CTCA ip, ActRec* fp, Offset* prevPc
-) {
+// wrapper around getActRecFromWaitHandle, which does some extra validation
+ActRec* getActRecFromWaitHandleWrapper(
+    c_WaitableWaitHandle* currentWaitHandle, Offset* prevPc,
+    folly::small_vector<c_WaitableWaitHandle*, 64>& visitedWHs) {
+  if (currentWaitHandle->isFinished()) {
+    return nullptr;
+  }
+
+  auto const contextIdx = currentWaitHandle->getContextIdx();
+  if (contextIdx <= 0) {
+    return nullptr;
+  }
+
+  return getActRecFromWaitHandle(
+    currentWaitHandle, contextIdx, prevPc, visitedWHs);
+}
+
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+namespace backtrace_detail {
+
+ActRec* initBTContextAt(BTContext& ctx, jit::CTCA ip,
+                        ActRec* fp, Offset* prevPc) {
+  // The bytecode supports a limited form of inlining via FCallBuiltin. If the
+  // call itself was interpreted there won't be any fixup information, but
+  // we should still be able to extract the target from the bytecode on the
+  // stack and use that directly.
+  auto const getBuiltin = [&] () -> const Func* {
+    if (!fp || !prevPc) {
+      return nullptr;
+    }
+    auto const func = fp->func();
+    auto const pc = func->unit()->entry() + *prevPc;
+    if (peek_op(pc) != OpFCallBuiltin) return nullptr;
+    auto const ne = func->unit()->lookupNamedEntityId(getImm(pc, 3).u_SA);
+    return Unit::lookupFunc(ne);
+  };
   if (auto stk = jit::inlineStackAt(ip)) {
     assertx(stk->nframes != 0);
     auto prevFp = &ctx.fakeAR[0];
@@ -137,6 +185,16 @@ ActRec* initBTContextAt(
     if (prevPc) {
       ctx.stashedPC = *prevPc;
       *prevPc = stk->callOff + ifr.func->base();
+    }
+    return prevFp;
+  } else if (auto const f = getBuiltin()) {
+    auto prevFp = &ctx.fakeAR[0];
+    prevFp->m_func = f;
+    prevFp->m_callOff = *prevPc - fp->func()->base();
+    ctx.stashedAR = fp;
+    if (prevPc) {
+      ctx.stashedPC = *prevPc;
+      *prevPc = f->base();
     }
     return prevFp;
   }
@@ -217,24 +275,11 @@ ActRec* getPrevActRec(
   return prevFp;
 }
 
-// wrapper around getActRecFromWaitHandle, which does some extra validation
-ActRec* getActRecFromWaitHandleWrapper(
-    c_WaitableWaitHandle* currentWaitHandle, Offset* prevPc,
-    folly::small_vector<c_WaitableWaitHandle*, 64>& visitedWHs) {
-  if (currentWaitHandle->isFinished()) {
-    return nullptr;
-  }
-
-  auto const contextIdx = currentWaitHandle->getContextIdx();
-  if (contextIdx <= 0) {
-    return nullptr;
-  }
-
-  return getActRecFromWaitHandle(
-    currentWaitHandle, contextIdx, prevPc, visitedWHs);
 }
 
-}
+using namespace backtrace_detail;
+
+///////////////////////////////////////////////////////////////////////////////
 
 Array createBacktrace(const BacktraceArgs& btArgs) {
   if (btArgs.isCompact()) {
@@ -290,7 +335,7 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
     }
 
     if (btArgs.m_skipInlined && RuntimeOption::EvalJit) {
-      while (fp && (jit::TCA)fp->m_savedRip == jit::tc::ustubs().retInlHelper) {
+      while (fp && fp->isInlined()) {
         fp = getPrevActRec(ctx, fp, &pc, visitedWHs);
       }
       if (!fp) return bt;
@@ -300,10 +345,11 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
   // Handle the top frame.
   if (btArgs.m_withSelf) {
     // Builtins don't have a file and line number, so find the first user frame
-    auto curFp = fp;
+    BTContext ctxCopy;
+    auto curFp = ctxCopy.clone(ctx, fp);
     auto curPc = pc;
     while (curFp && curFp->func()->isBuiltin()) {
-      curFp = g_context->getPrevVMState(curFp, &curPc);
+      curFp = getPrevActRec(ctxCopy, curFp, &curPc, visitedWHs);
     }
     if (curFp) {
       auto const unit = curFp->func()->unit();
@@ -367,6 +413,7 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
     }
 
     if (RuntimeOption::EnableArgsInBacktraces &&
+        !fp->localsDecRefd() &&
         fp->func()->hasReifiedGenerics()) {
       // First local is always $0ReifiedGenerics which comes right after params
       auto const tv = frame_local(fp, fp->func()->numParams());
@@ -386,20 +433,17 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
       if (ctx != nullptr && !fp->func()->isClosureBody()) {
         String clsname{const_cast<StringData*>(ctx->name())};
         if (RuntimeOption::EnableArgsInBacktraces &&
+            !fp->localsDecRefd() &&
             ctx->hasReifiedGenerics() &&
             fp->hasThis()) {
           auto const reified_generics = getClsReifiedGenericsProp(ctx, fp);
           clsname += mangleReifiedGenericsName(reified_generics);
         }
         frame.set(s_class, clsname);
-        if (!isReturning && fp->hasThis()) {
-          if (btArgs.m_withThis) {
-            frame.set(s_object, Object(fp->getThis()));
-          }
-          frame.set(s_type, s_arrow);
-        } else {
-          frame.set(s_type, s_double_colon);
+        if (!isReturning && fp->hasThis() && btArgs.m_withThis) {
+          frame.set(s_object, Object(fp->getThis()));
         }
+        frame.set(s_type, fp->func()->isStatic() ? s_double_colon : s_arrow);
       }
     }
 
@@ -418,8 +462,6 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
     } else {
       auto args = Array::CreateVArray();
       auto const nparams = fp->func()->numNonVariadicParams();
-      auto const nargs = fp->numArgs();
-      auto const nformals = std::min<int>(nparams, nargs);
 
       if (UNLIKELY(mayUseVV) &&
           UNLIKELY(fp->hasVarEnv() && fp->getVarEnv()->getFP() != fp)) {
@@ -427,7 +469,7 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
         // frame. Access locals thru VarEnv.
         auto varEnv = fp->getVarEnv();
         auto func = fp->func();
-        for (int i = 0; i < nformals; i++) {
+        for (int i = 0; i < nparams; i++) {
           auto const argname = func->localVarName(i);
           auto const tv = varEnv->lookup(argname);
 
@@ -443,7 +485,7 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
           }
         }
       } else {
-        for (int i = 0; i < nformals; i++) {
+        for (int i = 0; i < nparams; i++) {
           Variant val = withValues ? tvAsVariant(frame_local(fp, i)) : "";
 
           if (withNames) {
@@ -455,17 +497,6 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
         }
       }
 
-      // Builtin extra args are not stored in varenv.
-      if (UNLIKELY(mayUseVV) && nargs > nparams && fp->hasExtraArgs()) {
-        for (int i = nparams; i < nargs; i++) {
-          auto arg = fp->getExtraArg(i - nparams);
-          if (arg->m_type == KindOfUninit) {
-            args.append(init_null());
-          } else {
-            args.append(tvAsVariant(arg));
-          }
-        }
-      }
       frame.set(s_args, args);
     }
 
@@ -526,32 +557,7 @@ void addBacktraceToStructLog(const Array& bt, StructuredLogEntry& cols) {
   cols.setVec("php_lines", lines);
 }
 
-template<class L>
-static void walkStack(L func) {
-  VMRegAnchor _;
-  folly::small_vector<c_WaitableWaitHandle*, 64> visitedWHs;
-  ActRec* fp = vmfp();
-
-  // If there are no VM frames, we're done.
-  if (!fp || !rds::header()) return;
-
-  BTContext ctx;
-
-  // Handle the subsequent VM frames.
-  Offset prevPc = vmfp()->func()->unit()->offsetOf(vmpc());
-  auto const addr = vmJitReturnAddr();
-  if (auto inl = initBTContextAt(ctx, addr, vmfp(), &prevPc)) {
-    fp = inl;
-  }
-
-  for (; fp != nullptr; fp = getPrevActRec(ctx, fp, &prevPc, visitedWHs)) {
-
-    // Do not capture frame for HPHP only functions.
-    if (fp->func()->isNoInjection()) continue;
-
-    func(fp, prevPc);
-  }
-}
+///////////////////////////////////////////////////////////////////////////////
 
 int64_t createBacktraceHash(bool consider_metadata) {
   // Settings constants before looping
@@ -559,6 +565,9 @@ int64_t createBacktraceHash(bool consider_metadata) {
   Unit* prev_unit = nullptr;
 
   walkStack([&] (ActRec* fp, Offset) {
+    // Do not capture frame for HPHP only functions.
+    if (fp->func()->isNoInjection()) return;
+
     auto const curFunc = fp->func();
     auto const curUnit = curFunc->unit();
 
@@ -615,7 +624,12 @@ int64_t createBacktraceHash(bool consider_metadata) {
 
 req::ptr<CompactTrace> createCompactBacktrace() {
   auto ret = req::make<CompactTrace>();
-  walkStack([&] (ActRec* fp, Offset prevPc) { ret->insert(fp, prevPc); });
+  walkStack([&] (ActRec* fp, Offset prevPc) {
+    // Do not capture frame for HPHP only functions.
+    if (fp->func()->isNoInjection()) return;
+
+    ret->insert(fp, prevPc);
+  });
   return ret;
 }
 
@@ -655,6 +669,7 @@ bool CTKHasher::equal(
   }
   return true;
 }
+
 }
 
 IMPLEMENT_RESOURCE_ALLOCATION(CompactTrace)
@@ -755,5 +770,7 @@ Array CompactTrace::extract() const {
   }
   return Array(ins.get());
 }
+
+///////////////////////////////////////////////////////////////////////////////
 
 } // HPHP

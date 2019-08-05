@@ -217,10 +217,10 @@ void RepoQuery::bindBlob(const char* paramName, const BlobEncoder& blob,
   return bindBlob(paramName, blob.data(), blob.size(), isStatic);
 }
 
-void RepoQuery::bindMd5(const char* paramName, const MD5& md5) {
-  char md5nbo[16];
-  md5.nbo((void*)md5nbo);
-  bindBlob(paramName, md5nbo, sizeof(md5nbo));
+void RepoQuery::bindSha1(const char* paramName, const SHA1& sha1) {
+  char sha1nbo[SHA1::kQNumWords * SHA1::kQWordLen];
+  sha1.nbo((void*)sha1nbo);
+  bindBlob(paramName, sha1nbo, sizeof(sha1nbo));
 }
 
 void RepoQuery::bindTypedValue(const char* paramName, const TypedValue& tv) {
@@ -389,24 +389,25 @@ void RepoQuery::getBlob(int iCol, const void*& blob, size_t& size) {
   size = size_t(sqlite3_column_bytes(m_stmt.get(), iCol));
 }
 
-BlobDecoder RepoQuery::getBlob(int iCol) {
+BlobDecoder RepoQuery::getBlob(int iCol, bool useGlobalIds) {
   const void* vp;
   size_t sz;
   getBlob(iCol, vp, sz);
-  return BlobDecoder(vp, sz);
+  return BlobDecoder(vp, sz, useGlobalIds);
 }
 
-void RepoQuery::getMd5(int iCol, MD5& md5) {
+void RepoQuery::getSha1(int iCol, SHA1& sha1) {
   const void* blob;
   size_t size;
   getBlob(iCol, blob, size);
-  if (size != 16) {
+  auto const sha1bytes = SHA1::kQNumWords * SHA1::kQWordLen;
+  if (size != sha1bytes) {
     throw RepoExc(
       "RepoQuery::%s(repo=%p) error: Column %d is the wrong size"
-      " (expected 16, got %zu) in '%s'",
-      __func__, &m_stmt.repo(), iCol, size, m_stmt.sql().c_str());
+      " (expected %zu, got %zu) in '%s'",
+      __func__, &m_stmt.repo(), iCol, sha1bytes, size, m_stmt.sql().c_str());
   }
-  new (&md5) MD5(blob, size);
+  new (&sha1) SHA1(blob, size);
 }
 
 void RepoQuery::getTypedValue(int iCol, TypedValue& tv) {
@@ -415,6 +416,10 @@ void RepoQuery::getTypedValue(int iCol, TypedValue& tv) {
   getBlob(iCol, blob, size);
   tvWriteUninit(tv);
   if (size > 0) {
+    // We check that arrays do not exceed a configurable maximum size in the
+    // assembler, so just assume that they're okay here.
+    MemoryManager::SuppressOOM so(*tl_heap);
+
     String s = String((const char*)blob, size, CopyString);
     Variant v =
       unserialize_from_string(s, VariableUnserializer::Type::Internal);

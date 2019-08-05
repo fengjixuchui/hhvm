@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : int imagecolorstotal  ( resource $image  )
  * Description: Find out the number of colors in an image's palette
  * Source code: ext/gd/gd.c
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing imagecolorstotal() : error conditions ***\n";
 
 // Get a resource
@@ -20,5 +20,5 @@ echo "\n-- Testing imagecolorstotal() function with a invalid resource\n";
 var_dump( imagecolorstotal($im) );
 
 fclose($im); 
-?>
-===DONE===
+echo "===DONE===\n";
+}

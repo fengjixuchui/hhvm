@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : array array_reverse(array $array [, bool $preserve_keys])
  * Description: Return input as a new array with the order of the entries reversed 
  * Source code: ext/standard/array.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_reverse() : error conditions ***\n";
 
 // zero arguments
@@ -18,4 +18,4 @@ try { var_dump( array_reverse($array, true, $extra_arg) ); } catch (Exception $e
 try { var_dump( array_reverse($array, false, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

@@ -19,23 +19,11 @@
 #include <string>
 #include <utility>
 
-#include "hphp/util/hash-map.h"
-#include "hphp/util/hash-set.h"
-#include "hphp/util/hash.h"
+#include "hphp/hhbbc/hhbbc.h"
 
 namespace HPHP {
 
-enum class Op : uint16_t;
-struct OpHash {
-  size_t operator()(Op op) const {
-    return hash_int64(static_cast<uint16_t>(op));
-  }
-};
-
 namespace HHBBC {
-
-using MethodMap = hphp_fast_string_imap<hphp_fast_string_iset>;
-using OpcodeSet = hphp_fast_set<Op,OpHash>;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -151,12 +139,6 @@ struct Options {
   bool RemoveUnusedLocals = true;
 
   /*
-   * Whether to remove completely unused class-ref slots.  This requires
-   * GlobalDCE.
-   */
-  bool RemoveUnusedClsRefSlots = true;
-
-  /*
    * If true, insert opcodes that assert inferred types, so we can assume them
    * at runtime.
    */
@@ -176,12 +158,6 @@ struct Options {
    * E.g. InstanceOf -> InstanceOfD or FPushFunc -> FPushFuncD.
    */
   bool StrengthReduce = true;
-
-  /*
-   * Whether to turn on peephole optimizations (e.g., Concat, ..., Concat ->
-   * ..., ConcatN).
-   */
-  bool Peephole = true;
 
   /*
    * Whether to enable 'FuncFamily' method resolution.
@@ -230,13 +206,6 @@ struct Options {
    * inferred, we'll raise a notice and unserialize() returns false.
    */
   bool HardPrivatePropInference = true;
-
-  /*
-   * If true, we'll perform optimizations which can remove invocations of the
-   * autoloader, if it can be proven the invocation would not find a viable
-   * function.
-   */
-  bool ElideAutoloadInvokes = true;
 
   /*
    * Whether to flatten trait methods and properties into the classes

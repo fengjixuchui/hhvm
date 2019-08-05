@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype  : int sizeof($mixed var[, int $mode])
  * Description: Counts an elements in an array. If Standard PHP library is installed,
  * it will return the properties of an object.
  * Source code: ext/standard/basic_functions.c
  * Alias to functions: count()
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sizeof() : usage variations ***\n";
 
 echo "-- Testing sizeof() for infinite recursion with arrays as argument in COUNT_RECURSIVE mode --\n";
@@ -21,4 +21,4 @@ echo "\n";
 var_dump( sizeof($array4, COUNT_RECURSIVE) );
 
 echo "Done";
-?>
+}

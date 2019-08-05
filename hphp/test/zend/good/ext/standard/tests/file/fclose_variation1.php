@@ -1,8 +1,9 @@
-<?php
-$s = fopen(__FILE__, "rb");
+<?hh
 function separate_zval(&$var) { }
-$s2 = $s;
+<<__EntryPoint>> function main(): void {
+$s = fopen(__FILE__, "rb"); $s2 = $s;
 separate_zval(&$s2);
 fclose($s);
-echo fread($s2, strlen("<?php"));
+echo fread($s2, strlen("<?hh"));
 echo "\nDone.\n";
+}

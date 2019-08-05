@@ -46,10 +46,6 @@ enum class FPIKind {
   Unknown,     // Nothing is known.
   CallableArr, // May be an ObjMeth or a ClsMeth.
   Func,        // Definitely a non-member function.
-  Ctor,        // Definitely a constructor for an object.
-  ObjMeth,     // Definitely a method on an object (possibly __call).
-  ObjMethNS,   // ObjMeth, but allows obj to be null.
-  ClsMeth,     // Definitely a static method on a class (possibly__callStatic).
   ObjInvoke,   // Closure invoke or __invoke on an object.
   Builtin,     // Resolved builtin call; we will convert params and FCall as
                // we go
@@ -63,12 +59,10 @@ struct ActRec {
   explicit ActRec(FPIKind kind,
                   Type calledOn,
                   folly::Optional<res::Class> c = folly::none,
-                  folly::Optional<res::Func> f = folly::none,
-                  folly::Optional<res::Func> f2 = folly::none)
+                  folly::Optional<res::Func> f = folly::none)
     : kind(kind)
     , cls(std::move(c))
     , func(std::move(f))
-    , fallbackFunc(std::move(f2))
     , context(std::move(calledOn))
   {}
 
@@ -77,8 +71,6 @@ struct ActRec {
   BlockId pushBlk{NoBlockId};
   folly::Optional<res::Class> cls;
   folly::Optional<res::Func> func;
-  // Possible fallback func if we cannot determine which will be called.
-  folly::Optional<res::Func> fallbackFunc;
   // isCtx of context is whether it matches caller's context
   Type context;
 };
@@ -205,6 +197,8 @@ struct Base {
 
 // An element on the eval stack
 struct StackElem {
+  static auto constexpr NoId = std::numeric_limits<uint32_t>::max();
+
   Type type;
   // A location which is known to have an equivalent value to this
   // stack value. This could be a valid LocalId, the special value
@@ -213,23 +207,144 @@ struct StackElem {
   // value of $this, or NoLocalId if it has no known equivalents.
   // Note that the location may not match the stack value wrt Uninit.
   LocalId equivLoc;
-
-  bool operator==(const StackElem& other) const {
-    return type == other.type && equivLoc == other.equivLoc;
-  }
+  uint32_t index;
+  uint32_t id;
 };
 
-/*
- * Used to track the state of the binding between locals, and their
- * corresponding static (if any).
- */
-enum class LocalStaticBinding {
-  // This local is not bound to a local static
-  None,
-  // This local might be bound to its local static
-  Maybe,
-  // This local is known to be bound to its local static
-  Bound
+struct InterpStack {
+private:
+  template<typename S>
+  struct Iterator {
+    friend struct InterpStack;
+    Iterator(S* owner, uint32_t idx) :
+        owner(owner), idx(idx) {
+      assertx(idx <= owner->size());
+    }
+    void operator++() {
+      assertx(idx < owner->size());
+      ++idx;
+    }
+    void operator--() {
+      assertx(idx);
+      --idx;
+    }
+    Iterator operator-(ssize_t off) {
+      return Iterator(owner, idx - off);
+    }
+    Iterator operator+(ssize_t off) {
+      return Iterator(owner, idx + off);
+    }
+    auto& operator*() const {
+      assertx(idx < owner->index.size());
+      return owner->elems[owner->index[idx]];
+    }
+    auto* operator->() const {
+      return &operator*();
+    }
+    // very special helper for use with Add*ElemC. To prevent
+    // quadratic time/space when appending to an array, we need to
+    // ensure we're appending to an array with a single reference; but
+    // popping from an InterpStack doesn't actually remove the
+    // element. This allows us to drop the type's datatag. It means
+    // that rewinding wouldn't see the original type; but Add*ElemC is
+    // very carefully coded anyway.
+    auto unspecialize() const {
+      auto t = std::move((*this)->type);
+      (*this)->type = loosen_values(t);
+      return t;
+    }
+    StackElem* next_elem(ssize_t off) const {
+      const size_t i = owner->index[idx] + off;
+      if (i > owner->elems.size()) return nullptr;
+      return &owner->elems[i];
+    }
+    template<typename T>
+    bool operator==(const Iterator<T>& other) const {
+      return owner == other.owner && idx == other.idx;
+    }
+    template<typename T>
+    bool operator!=(const Iterator<T>& other) const {
+      return !operator==(other);
+    }
+    template<typename T>
+    const Iterator& operator=(const Iterator<T>& other) const {
+      owner = other.owner;
+      idx = other.idx;
+      return *this;
+    }
+  private:
+    S* owner;
+    uint32_t idx;
+  };
+public:
+  using iterator = Iterator<InterpStack>;
+  using const_iterator = Iterator<const InterpStack>;
+  auto begin() { return iterator(this, 0); }
+  auto end() { return iterator(this, index.size()); }
+  auto begin() const { return const_iterator(this, 0); }
+  auto end() const { return const_iterator(this, index.size()); }
+  auto& operator[](size_t idx) { return *iterator(this, idx); }
+  auto& operator[](size_t idx) const { return *const_iterator(this, idx); }
+  auto& back() { return *iterator(this, index.size() - 1); }
+  auto& back() const { return *const_iterator(this, index.size() - 1); }
+  void push_elem(const StackElem& elm) {
+    assertx(elm.index == index.size());
+    index.push_back(elems.size());
+    elems.push_back(elm);
+  }
+  void push_elem(StackElem&& elm) {
+    assertx(elm.index == index.size());
+    index.push_back(elems.size());
+    elems.push_back(std::move(elm));
+  }
+  void push_elem(const Type& t, LocalId equivLoc,
+                 uint32_t id = StackElem::NoId) {
+    uint32_t isize = index.size();
+    push_elem({t, equivLoc, isize, id});
+  }
+  void push_elem(Type&& t, LocalId equivLoc, uint32_t id = StackElem::NoId) {
+    uint32_t isize = index.size();
+    push_elem({std::move(t), equivLoc, isize, id});
+  }
+  void pop_elem() {
+    index.pop_back();
+  }
+  void erase(iterator i1, iterator i2) {
+    assertx(i1.owner == i2.owner);
+    assertx(i1.idx < i2.idx);
+    i1.owner->index.erase(i1.owner->index.begin() + i1.idx,
+                          i1.owner->index.begin() + i2.idx);
+  }
+  bool empty() const { return index.empty(); }
+  size_t size() const { return index.size(); }
+  void clear() {
+    index.clear();
+    elems.clear();
+  }
+  void compact() {
+    uint32_t i = 0;
+    for (auto& ix : index) {
+      if (ix != i) {
+        assertx(ix > i);
+        std::swap(elems[i], elems[ix]);
+        ix = i;
+      }
+      ++i;
+    }
+    elems.resize(i);
+  }
+  // rewind the stack to the state it was in before the last
+  // instruction ran (which is known to have popped numPop items and
+  // pushed numPush items).
+  void rewind(int numPop, int numPush);
+  void peek(int numPop, const StackElem** values, int numPush) const;
+  void kill(int numPop, int numPush, uint32_t id);
+  void insert_after(int numPop, int numPush, const Type* types,
+                    uint32_t numInst, uint32_t id);
+private:
+  void refill(size_t elemIx, size_t indexLow, int numPop, int numPush);
+  CompactVector<uint32_t> index;
+  CompactVector<StackElem> elems;
 };
 
 /*
@@ -258,57 +373,27 @@ enum class LocalStaticBinding {
  * aren't possible at runtime.  We're only doing this to handle FPI regions for
  * now, but it's not ideal.
  *
+ * We split off a base class from State as a convenience to enable the use
+ * default copy construction and assignment.
+ *
  */
-struct State {
-  State() {
+struct StateBase {
+  StateBase() {
     initialized = unreachable = false;
-    speculatedIsUnconditional = false;
-    speculatedIsFallThrough = false;
   };
-  State(const State&) = default;
-  State(State&&) = default;
-  State& operator=(const State&) = default;
-  State& operator=(State&&) = default;
+  StateBase(const StateBase&) = default;
+  StateBase(StateBase&&) = default;
+  StateBase& operator=(const StateBase&) = default;
+  StateBase& operator=(StateBase&&) = default;
 
   uint8_t initialized : 1;
   uint8_t unreachable : 1;
-  // if set, speculated is where we end up when we fall through
-  uint8_t speculatedIsFallThrough : 1;
-  // if set, speculated is taken unconditionally
-  uint8_t speculatedIsUnconditional : 1;
-  // when speculated is set, the number of extra pops to be inserted
-  uint8_t speculatedPops{};
-  uint32_t speculated = NoBlockId;
+
   LocalId thisLoc = NoLocalId;
   Type thisType;
   CompactVector<Type> locals;
   CompactVector<Iter> iters;
-  CompactVector<Type> clsRefSlots;
-  CompactVector<StackElem> stack;
   CompactVector<ActRec> fpiStack;
-
-  struct MInstrState {
-    /*
-     * The current member base. Updated as we move through bytecodes
-     * representing the operation.
-     */
-    Base base{};
-
-    /*
-     * Chains of member operations on array elements will affect the type of
-     * something further back in the member instruction. This vector tracks the
-     * base,key type pair that was used at each stage. See
-     * interp-minstr.cpp:resolveArrayChain().
-     */
-    struct ArrayChainEnt {
-      Type base;
-      Type key;
-      LocalId keyLoc;
-    };
-    using ArrayChain = CompactVector<ArrayChainEnt>;
-    ArrayChain arrayChain;
-  };
-  MInstrState mInstrState;
 
   /*
    * Mapping of a local to other locals which are known to have
@@ -316,11 +401,49 @@ struct State {
    * compare types if they care.
    */
   CompactVector<LocalId> equivLocals;
+};
 
-  /*
-   * LocalStaticBindings. Only allocated on demand.
-   */
-  CompactVector<LocalStaticBinding> localStaticBindings;
+struct State : StateBase {
+  State() = default;
+  State(const State&) = default;
+  State(State&&) = default;
+
+  enum class Compact {};
+  State(const State& src, Compact) : StateBase(src) {
+    for (auto const& elm : src.stack) {
+      stack.push_elem(elm.type, elm.equivLoc);
+    }
+  }
+
+  // delete assignment operator, so we have to explicitly choose what
+  // we want to do from amongst the various copies.
+  State& operator=(const State&) = delete;
+  State& operator=(State&&) = delete;
+
+  void copy_from(const State& src) {
+    *static_cast<StateBase*>(this) = src;
+    stack = src.stack;
+  }
+
+  void copy_from(State&& src) {
+    *static_cast<StateBase*>(this) = std::move(src);
+    stack = std::move(src.stack);
+  }
+
+  void copy_and_compact(const State& src) {
+    *static_cast<StateBase*>(this) = src;
+    stack.clear();
+    for (auto const& elm : src.stack) {
+      stack.push_elem(elm.type, elm.equivLoc);
+    }
+  }
+
+  void swap(State& other) {
+    std::swap(static_cast<StateBase&>(*this), static_cast<StateBase&>(other));
+    std::swap(stack, other.stack);
+  }
+
+  InterpStack stack;
 };
 
 /*
@@ -332,9 +455,9 @@ bool operator!=(const ActRec&, const ActRec&);
 
 /*
  * Return a copy of a State without copying either the evaluation
- * stack or FPI stack.
+ * stack or FPI stack, pushing Throwable on the stack.
  */
-State without_stacks(const State&);
+State with_throwable_only(const Index& env, const State&);
 
 //////////////////////////////////////////////////////////////////////
 
@@ -387,11 +510,10 @@ void merge_closure_use_vars_into(ClosureUseVarMap& dst,
 //////////////////////////////////////////////////////////////////////
 
 enum class CollectionOpts {
-  TrackConstantArrays = 1,
+  Speculating = 1,
   Inlining = 2,
   EffectFreeOnly = 4,
   Optimizing = 8,
-  Speculating = 16,
 };
 
 inline CollectionOpts operator|(CollectionOpts o1, CollectionOpts o2) {
@@ -434,16 +556,46 @@ struct CollectedInfo {
   bool effectFree{true};
   bool hasInvariantIterBase{false};
   bool readsUntrackedConstants{false};
-  CollectionOpts opts{CollectionOpts::TrackConstantArrays};
+  CollectionOpts opts{};
   bool (*propagate_constants)(const Bytecode& bc, State& state,
                               BytecodeVec& out) = nullptr;
-  CompactVector<Type> localStaticTypes;
   /*
    * See FuncAnalysisResult for details.
    */
   std::bitset<64> usedParams;
 
   PublicSPropMutations publicSPropMutations;
+
+  struct MInstrState {
+    /*
+     * The current member base. Updated as we move through bytecodes
+     * representing the operation.
+     */
+    Base base{};
+
+    bool noThrow{false};
+    bool extraPop{false};
+
+    /*
+     * Chains of member operations on array elements will affect the type of
+     * something further back in the member instruction. This vector tracks the
+     * base,key type pair that was used at each stage. See
+     * interp-minstr.cpp:resolveArrayChain().
+     */
+    struct ArrayChainEnt {
+      Type base;
+      Type key;
+      LocalId keyLoc;
+    };
+    using ArrayChain = CompactVector<ArrayChainEnt>;
+    ArrayChain arrayChain;
+
+    void clear() {
+      base.loc = BaseLoc::None;
+      arrayChain.clear();
+    }
+  };
+  MInstrState mInstrState;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -470,7 +622,7 @@ void widen_props(PropState&);
  */
 std::string show(const ActRec& a);
 std::string show(const php::Func&, const Base& b);
-std::string show(const php::Func&, const State::MInstrState&);
+std::string show(const php::Func&, const CollectedInfo::MInstrState&);
 std::string show(const php::Func&, const Iter&);
 std::string property_state_string(const PropertiesInfo&);
 std::string state_string(const php::Func&, const State&, const CollectedInfo&);
@@ -478,5 +630,4 @@ std::string state_string(const php::Func&, const State&, const CollectedInfo&);
 //////////////////////////////////////////////////////////////////////
 
 }}
-
 #endif

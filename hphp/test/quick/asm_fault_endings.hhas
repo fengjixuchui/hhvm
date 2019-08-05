@@ -1,5 +1,9 @@
+.hh_file 1;
 .main {
   .try {
+    NullUninit
+    NullUninit
+    NullUninit
     FPushFuncD 0 "main"
     FCall <> 0 1 "" - "" ""
     RetC
@@ -20,10 +24,12 @@
     .try {
       NewObjD "Exception"
       Dup
-      FPushCtor 1
+      NullUninit
+      NullUninit
       String "ex"
-      FCall <> 1 1 "" - "" ""
+      FCallCtor <LockWhileUnwinding> 1 1 "" - ""
       PopC
+      LockObj
       Throw
     } .catch {
       String "handler2\n"

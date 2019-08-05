@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 MongoLog::setModule(MongoLog::ALL);
 MongoLog::setLevel(MongoLog::ALL);
 
@@ -27,4 +27,4 @@ echo "\nForth one\n";
 try {
     $m = new Mongo("mongodb:///tmp/mongodb-27017.sock/databasename", array("connect" => 0));
 } catch(Exception $e) {}
-?>
+}

@@ -21,44 +21,44 @@ let get_occurrence_and_map tcopt content line char ~f =
     f path file_info result
   end tcopt
 
+(* Order symbols from innermost to outermost *)
+let by_nesting x y =
+  if Pos.contains x.SymbolOccurrence.pos y.SymbolOccurrence.pos
+  then
+    if Pos.contains y.SymbolOccurrence.pos x.SymbolOccurrence.pos
+    then 0
+    else 1
+  else -1
+
+let rec take_best_suggestions l = match l with
+  | (first :: rest) ->
+    (* Check if we should stop finding suggestions. For example, in
+     "foo($bar)" it's not useful to look outside the local variable "$bar". *)
+    let stop = match first.SymbolOccurrence.type_ with
+      | SymbolOccurrence.LocalVar -> true
+      | SymbolOccurrence.Method _ -> true
+      | _ -> false
+    in
+    if stop then
+      (* We're stopping here, but also include the other suggestions for
+         this span. *)
+      first :: List.take_while rest ~f:(fun x -> by_nesting first x = 0)
+    else first :: take_best_suggestions rest
+  | [] -> []
+
 (** NOTE: the paths of any positions within any returned `SymbolOccurrence` or
     `SymbolDefinition` objects will be the empty string (`""`) if the symbol is
     located in the passed in content buffer. *)
 let go content line char (tcopt : TypecheckerOptions.t) =
-  (* Order symbols from innermost to outermost *)
-  let by_nesting x y =
-    if Pos.contains x.SymbolOccurrence.pos y.SymbolOccurrence.pos
-    then
-      if Pos.contains y.SymbolOccurrence.pos x.SymbolOccurrence.pos
-      then 0
-      else 1
-    else -1
-  in
-
-  let rec take_best_suggestions l = match l with
-    | (first :: rest) ->
-      (* Check if we should stop finding suggestions. For example, in
-       "foo($bar)" it's not useful to look outside the local variable "$bar". *)
-      let stop = match first.SymbolOccurrence.type_ with
-        | SymbolOccurrence.LocalVar -> true
-        | SymbolOccurrence.Method _ -> true
-        | _ -> false
-      in
-      if stop then
-        (* We're stopping here, but also include the other suggestions for
-           this span. *)
-        first :: List.take_while rest ~f:(fun x -> by_nesting first x = 0)
-      else first :: take_best_suggestions rest
-    | [] -> []
-  in
-
   get_occurrence_and_map tcopt content line char ~f:(fun path _ symbols ->
-  let symbols = take_best_suggestions (List.sort by_nesting symbols) in
-  let (ast, _) = Parser_heap.ParserHeap.find_unsafe path in
-    List.map symbols ~f:(fun x ->
+    let symbols = take_best_suggestions (List.sort by_nesting symbols) in
+    let ast = Some (Ast_provider.get_ast path) in
+    let result = List.map symbols ~f:(fun x ->
       let symbol_definition = ServerSymbolDefinition.go ast x in
       x, symbol_definition)
-      )
+    in
+    result
+  )
 
 (** NOTE: the paths of any positions within any returned `SymbolOccurrence` or
     `SymbolDefinition` objects will be the empty string (`""`) if the symbol is
@@ -67,3 +67,32 @@ let go_absolute content line char tcopt =
   List.map (go content line char tcopt) begin fun (x, y) ->
     SymbolOccurrence.to_absolute x, Option.map y SymbolDefinition.to_absolute
   end
+
+let go_ctx
+    ~(entry : ServerIdeContext.entry)
+    ~(line : int)
+    ~(column : int) =
+  let ast = Some (ServerIdeContext.get_ast entry) in
+  let tast = ServerIdeContext.get_tast entry in
+  let symbols = IdentifySymbolService.go tast line column in
+  let symbols = take_best_suggestions (List.sort by_nesting symbols) in
+  List.map symbols ~f:(fun symbol ->
+    let symbol_definition = ServerSymbolDefinition.go ast symbol in
+    (symbol, symbol_definition)
+  )
+
+let go_ctx_absolute
+    ~(entry : ServerIdeContext.entry)
+    ~(line : int)
+    ~(column : int)
+    : (string SymbolOccurrence.t *
+       string SymbolDefinition.t option) list =
+  go_ctx
+    ~entry
+    ~line
+    ~column
+    |> List.map ~f:(fun (occurrence, definition) ->
+      let occurrence = SymbolOccurrence.to_absolute occurrence in
+      let definition = Option.map ~f:SymbolDefinition.to_absolute definition in
+      (occurrence, definition)
+    )

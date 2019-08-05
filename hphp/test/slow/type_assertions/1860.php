@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Base {
   public function f() {
@@ -9,29 +9,20 @@ function get() {
  return true;
  }
 if (get()) {
-  class X {
-    public function f() {
-      var_dump('X1::f');
-    }
-  }
-}
- else {
-  class X {
-    public function f() {
-      var_dump('X2::f');
-    }
-  }
+  include '1860-1.inc';
+} else {
+  include '1860-2.inc';
 }
 class Y extends X {
 }
 function f($x) {
-  if ($x instanceof Base) {
+  if ($x is Base) {
     $x->f();
   }
-  if ($x instanceof X) {
+  if ($x is X) {
     $x->f();
   }
-  if ($x instanceof Y) {
+  if ($x is Y) {
     $x->f();
   }
 }

@@ -20,23 +20,54 @@ fi
 
 ARROW="$(tput bold)$(tput setaf 6)==>$(tput setaf 7)"
 
+function reconstitute_full_path {
+  TEST_PATH=$1
+  ROOT=$2
+  if [ -n "${ROOT}" ]; then
+    if [[ "$TEST_PATH" = "$SOURCE_ROOT"* ]]; then
+      FULL_PATH="${ROOT}${TEST_PATH#"${SOURCE_ROOT}"}"
+    elif [[ "$TEST_PATH" = ./hphp/hack/* ]]; then
+      FULL_PATH="${ROOT}/${TEST_PATH#"./hphp/hack/"}"
+    elif [[ "$TEST_PATH" = hphp/hack/* ]]; then
+      FULL_PATH="${ROOT}/${TEST_PATH#"hphp/hack/"}"
+    fi
+  fi
+  echo "$FULL_PATH"
+}
+
 for f in "$@"; do
   echo "$ARROW $f $(tput sgr0)"
-  nl --body-numbering=a "$f"
+  # `-b a` means to number all lines; this is the same as
+  # --body-numbering=a, but works with both BSD and GNU `nl`
+  nl -b a "$f"
   echo
-  if [ -e "$f$EXP_EXT" ]; then
-    EXP="$f$EXP_EXT"
+
+  OUT_BASE=$(reconstitute_full_path "$f" "$OUTPUT_ROOT")
+  EXP_BASE=$(reconstitute_full_path "$f" "$SOURCE_ROOT")
+  if [ -e "$OUT_BASE$OUT_EXT" ]; then
+    OUT="$OUT_BASE$OUT_EXT"
+  else
+    OUT=/dev/null
+  fi
+  EXP_TO="$EXP_BASE$EXP_EXT"
+  if [ -e "$EXP_BASE$EXP_EXT" ]; then
+    EXP="$EXP_BASE$EXP_EXT"
+  elif [ -n "${FALLBACK_EXP_EXT+x}" ] && [ -e "$EXP_BASE$FALLBACK_EXP_EXT" ]; then
+    EXP="$EXP_BASE$FALLBACK_EXP_EXT"
   else
     EXP=/dev/null
   fi
 
-  echo "$ARROW Diff between $EXP and $(basename "$f$OUT_EXT") $(tput sgr0)"
+  echo "$ARROW Diff between $EXP and $(basename "$OUT") $(tput sgr0)"
 
   # Use git diff to give us color and word diffs. The patience algorithm
   # produces more readable diffs in some situations.
-  git --no-pager diff --diff-algorithm=histogram --color=always \
+  #
+  # --no-index makes us ignore the git repo, if any - otherwise this only
+  # works in hg checkouts (i.e. fbcode)
+  git --no-pager diff --no-index --diff-algorithm=histogram --color=always \
     --word-diff=color --word-diff-regex='[a-zA-Z0-9_:;-]+' \
-    $EXP "$f$OUT_EXT" | tail -n +5
+    $EXP "$OUT" | tail -n +5
   echo
   if [ "$NO_COPY" = true ]; then
     if [ "$TERM" = "dumb" ]; then
@@ -51,7 +82,7 @@ for f in "$@"; do
   fi
   echo ""
   if [ "$REPLY" = "y" ] && [ "$NO_COPY" = false ]; then
-    cp "$f$OUT_EXT" "$f$EXP_EXT"
+    cp "$OUT" "$EXP_TO"
   elif [ "$REPLY" = "q" ]; then
     exit 0
   fi

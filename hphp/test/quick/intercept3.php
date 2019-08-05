@@ -8,14 +8,11 @@ function test($f, $x) {
   baz();
 }
 
-function main() {
-  $x[] = 1;
+<<__EntryPoint>> function main(): void {
+  $x = array(1);
   fb_intercept('bar', 'baz', 'fiz');
   for ($i = 0; $i < 10000; $i++) {
     test('bar', $x);
   }
   var_dump('done');
 }
-
-main();
-

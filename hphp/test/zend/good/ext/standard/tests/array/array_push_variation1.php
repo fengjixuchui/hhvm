@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int array_push(&array $stack, mixed $var [, mixed $...])
  * Description: Pushes elements onto the end of the array
  * Source code: ext/standard/array.c
@@ -8,6 +8,14 @@
  * Pass different data types as $stack argument to array_push() to test behaviour
  */
 
+// get a class
+class classA
+{
+  public function __toString() {
+    return "Class A object";
+  }
+}
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_push() : usage variations ***\n";
 
 // Initialise function arguments not being substituted
@@ -16,14 +24,6 @@ $var = 'value';
 //get an unset variable
 $unset_var = 10;
 unset ($unset_var);
-
-// get a class
-class classA
-{
-  public function __toString() {
-    return "Class A object";
-  }
-}
 
 // heredoc string
 $heredoc = <<<EOT
@@ -93,4 +93,4 @@ foreach($inputs as $input) {
 fclose($fp);
 
 echo "Done";
-?>
+}

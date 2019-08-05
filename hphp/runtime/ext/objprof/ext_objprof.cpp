@@ -46,6 +46,7 @@
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/runtime/vm/named-entity-defs.h"
 #include "hphp/util/alloc.h"
+#include "hphp/util/low-ptr.h"
 
 namespace HPHP {
 size_t asio_object_size(const ObjectData*);
@@ -301,6 +302,7 @@ std::pair<int, double> sizeOfArray(
         case KindOfFunc:
         case KindOfClass:
         case KindOfClsMeth:
+        case KindOfRecord:
           always_assert(false);
       }
 
@@ -401,6 +403,7 @@ void stringsOfArray(
         case KindOfFunc:
         case KindOfClass:
         case KindOfClsMeth:
+        case KindOfRecord:
           // this should be an always_assert(false), but that appears to trigger
           // a gcc-4.9 bug (t16350411); even after t16350411 is fixed, we
           // can't always_assert(false) here until we stop supporting gcc-4.9
@@ -618,25 +621,33 @@ std::pair<int, double> tvGetSize(
       break;
     }
     case KindOfClsMeth: {
-      auto const clsmeth = tv.m_data.pclsmeth;
-      auto const sz = sizeof(*clsmeth);
-      size += sz;
-      if (clsmeth->isRefCounted()) {
-        auto ref_count = int{tvGetCount(tv)};
-        FTRACE(3, " ClsMeth tv: clsmeth at {} with ref count {}\n",
-              (void*)clsmeth.get(), ref_count);
-        if (one_bit_refcount) {
-          sized += sz;
-        } else {
-          assertx(ref_count > 0);
-          sized += (sz / (double)(ref_count));
-        }
-      } else {
+      if (use_lowptr) {
         FTRACE(3, " ClsMeth tv: clsmeth at {} uncounted\n",
-              (void*)clsmeth.get());
+              (void*)tv.m_data.pclsmeth.get());
+      } else {
+        auto const clsmeth = tv.m_data.pclsmeth;
+        auto const sz = sizeof(*clsmeth);
+        size += sz;
+        if (isRefCountedClsMeth(clsmeth)) {
+          auto ref_count = int{tvGetCount(tv)};
+          FTRACE(3, " ClsMeth tv: clsmeth at {} with ref count {}\n",
+                (void*)clsmeth.get(), ref_count);
+          if (one_bit_refcount) {
+            sized += sz;
+          } else {
+            assertx(ref_count > 0);
+            sized += sz / (double)ref_count;
+          }
+        } else {
+          FTRACE(3, " ClsMeth tv: clsmeth at {} uncounted\n",
+                (void*)clsmeth.get());
+        }
       }
       break;
     }
+
+    case KindOfRecord: // TODO(T41026982)
+      raise_error(Strings::RECORD_NOT_SUPPORTED);
   }
 
   return std::make_pair(size, sized);
@@ -712,6 +723,8 @@ void tvGetStrings(
       );
       break;
     }
+    case HPHP::KindOfRecord: // TODO(T41026982)
+      raise_error(Strings::RECORD_NOT_SUPPORTED);
   }
 }
 

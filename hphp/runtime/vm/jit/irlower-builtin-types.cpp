@@ -41,202 +41,43 @@ TRACE_SET_MOD(irlower);
 
 ///////////////////////////////////////////////////////////////////////////////
 
-/*
- * Attempt to convert `tv' to a given type, raising a warning and throwing a
- * Exception on failure.
- */
-#define XX(kind, expkind)                                             \
-void tvCoerceParamTo##kind##OrThrow(TypedValue* tv,                   \
-                                    const Func* callee,               \
-                                    unsigned int arg_num) {           \
-  tvCoerceIfStrict(*tv, arg_num, callee);                             \
-  auto ty = tv->m_type;                                               \
-  if (LIKELY(tvCoerceParamTo##kind##InPlace(tv,                       \
-                                            callee->isBuiltin()))) {  \
-    if (RuntimeOption::EvalWarnOnCoerceBuiltinParams &&               \
-        tv->m_type != KindOfNull &&                                   \
-        !equivDataTypes(ty, KindOf##expkind)) {                       \
-      raise_warning(                                                  \
-        "Argument %i of type %s was passed to %s, "                   \
-        "it was coerced to %s",                                       \
-        arg_num,                                                      \
-        getDataTypeString(ty).data(),                                 \
-        callee->fullDisplayName()->data(),                            \
-        getDataTypeString(KindOf##expkind).data()                     \
-      );                                                              \
-    }                                                                 \
-    return;                                                           \
-  }                                                                   \
-  auto msg = param_type_error_message(callee->displayName()->data(),  \
-                                      arg_num, KindOf##expkind,       \
-                                      tv->m_type);                    \
-  if (RuntimeOption::PHP7_EngineExceptions) {                         \
-    SystemLib::throwTypeErrorObject(msg);                             \
-  }                                                                   \
-  SystemLib::throwRuntimeExceptionObject(msg);                        \
-}
-#define X(kind) XX(kind, kind)
-X(Boolean)
-X(Int64)
-X(Double)
-X(String)
-X(Vec)
-X(Dict)
-X(Keyset)
-X(Array)
-X(Object)
-XX(NullableObject, Object)
-X(Resource)
-#undef X
-#undef XX
-
-///////////////////////////////////////////////////////////////////////////////
-
 namespace {
+template<typename T>
+constexpr Type getType();
+template<>
+constexpr Type getType<Class>() { return TCls; }
+template<>
+constexpr Type getType<RecordDesc>() { return TRecDesc; }
 
-void implCast(IRLS& env, const IRInstruction* inst, Vreg base, int offset) {
-  auto type = inst->typeParam();
-  auto nullable = false;
-
-  if (!type.isKnownDataType()) {
-    assertx(TNull <= type);
-    type -= TNull;
-    assertx(type.isKnownDataType());
-    nullable = true;
-  }
-  assertx(IMPLIES(nullable, type <= TObj));
-
-  auto const args = argGroup(env, inst).addr(base, offset);
-
-  auto const helper = [&]() -> void (*)(TypedValue*) {
-    if (type <= TBool) {
-      return tvCastToBooleanInPlace<TypedValue*>;
-    } else if (type <= TInt) {
-      return tvCastToInt64InPlace<TypedValue*>;
-    } else if (type <= TDbl) {
-      return tvCastToDoubleInPlace<TypedValue*>;
-    } else if (type <= TArr) {
-      return tvCastToArrayInPlace<TypedValue*>;
-    } else if (type <= TVec) {
-      return tvCastToVecInPlace<TypedValue*>;
-    } else if (type <= TDict) {
-      return tvCastToDictInPlace<TypedValue*>;
-    } else if (type <= TKeyset) {
-      return tvCastToKeysetInPlace<TypedValue*>;
-    } else if (type <= TStr) {
-      return tvCastToStringInPlace<TypedValue*>;
-    } else if (type <= TObj) {
-      return nullable ? tvCastToNullableObjectInPlace<TypedValue*> :
-                        tvCastToObjectInPlace<TypedValue*>;
-    } else if (type <= TRes) {
-      return tvCastToResourceInPlace<TypedValue*>;
-    } else {
-      not_reached();
-    }
-  }();
-  cgCallHelper(vmain(env), env, CallSpec::direct(helper),
-               kVoidDest, SyncOptions::Sync, args);
+template<typename T>
+const T* constVal(SSATmp*);
+template<>
+const Class* constVal<Class>(SSATmp* cls) { return cls->clsVal(); }
+// Records do not have constant value yet. This will never be called.
+template<>
+const RecordDesc* constVal<RecordDesc>(SSATmp*) {
+  always_assert(false);
+  return nullptr;
 }
 
-void implCoerce(IRLS& env, const IRInstruction* inst,
-                Vreg base, int offset, Func const* callee, int argNum) {
-  auto const type = inst->typeParam();
-  assertx(type.isKnownDataType());
-
-  auto args = argGroup(env, inst)
-    .addr(base, offset)
-    .imm(callee)
-    .imm(argNum);
-
-  auto const helper = [&]()
-    -> void (*)(TypedValue*, const Func*, unsigned int)
-  {
-    if (type <= TBool) {
-      return tvCoerceParamToBooleanOrThrow;
-    } else if (type <= TInt) {
-      return tvCoerceParamToInt64OrThrow;
-    } else if (type <= TDbl) {
-      return tvCoerceParamToDoubleOrThrow;
-    } else if (type <= TArr) {
-      return tvCoerceParamToArrayOrThrow;
-    } else if (type <= TVec) {
-      return tvCoerceParamToVecOrThrow;
-    } else if (type <= TDict) {
-      return tvCoerceParamToDictOrThrow;
-    } else if (type <= TKeyset) {
-      return tvCoerceParamToKeysetOrThrow;
-    } else if (type <= TStr) {
-      return tvCoerceParamToStringOrThrow;
-    } else if (type <= TObj) {
-      return tvCoerceParamToObjectOrThrow;
-    } else if (type <= TRes) {
-      return tvCoerceParamToResourceOrThrow;
-    } else {
-      not_reached();
-    }
-  }();
-
-  cgCallHelper(vmain(env), env, CallSpec::direct(helper),
-               kVoidDest, SyncOptions::Sync, args);
-}
-
-}
-
-void cgCastStk(IRLS& env, const IRInstruction *inst) {
-  auto const sp = srcLoc(env, inst, 0).reg();
-  auto const offset = inst->extra<CastStk>()->offset;
-
-  implCast(env, inst, sp, cellsToBytes(offset.offset));
-}
-
-void cgCastMem(IRLS& env, const IRInstruction *inst) {
-  auto const ptr = srcLoc(env, inst, 0).reg();
-
-  implCast(env, inst, ptr, 0);
-}
-
-void cgCoerceStk(IRLS& env, const IRInstruction *inst) {
-  auto const extra = inst->extra<CoerceStk>();
-  auto const sp = srcLoc(env, inst, 0).reg();
-  auto const offset = cellsToBytes(extra->offset.offset);
-
-  implCoerce(env, inst, sp, offset, extra->callee, extra->argNum);
-}
-
-void cgCoerceMem(IRLS& env, const IRInstruction *inst) {
-  auto const extra = inst->extra<CoerceMem>();
-  auto const ptr = srcLoc(env, inst, 0).reg();
-
-  implCoerce(env, inst, ptr, 0, extra->callee, extra->argNum);
-}
-
-IMPL_OPCODE_CALL(CoerceCellToBool);
-IMPL_OPCODE_CALL(CoerceCellToInt);
-IMPL_OPCODE_CALL(CoerceCellToDbl);
-IMPL_OPCODE_CALL(CoerceStrToDbl);
-IMPL_OPCODE_CALL(CoerceStrToInt);
-
-///////////////////////////////////////////////////////////////////////////////
-
-namespace {
-
-void implVerifyCls(IRLS& env, const IRInstruction* inst) {
-  auto const cls = inst->src(0);
+template<typename T>
+void implVerifyType(IRLS& env, const IRInstruction* inst) {
+  auto const type = inst->src(0);
   auto const constraint = inst->src(1);
   auto& v = vmain(env);
 
-  if (cls->hasConstVal() && constraint->hasConstVal(TCls)) {
-    if (cls->clsVal() != constraint->clsVal()) {
+  if (type->hasConstVal() && constraint->hasConstVal(getType<T>())) {
+    if (constVal<T>(type) != constVal<T>(constraint)) {
       cgCallNative(v, env, inst);
     }
     return;
   }
 
-  auto const rcls = srcLoc(env, inst, 0).reg();
+  auto const rtype = srcLoc(env, inst, 0).reg();
   auto const rconstraint = srcLoc(env, inst, 1).reg();
   auto const sf = v.makeReg();
 
-  v << cmpq{rconstraint, rcls, sf};
+  v << cmpq{rconstraint, rtype, sf};
 
   // The native call for this instruction is the slow path that does proper
   // subtype checking.  The comparisons above are just to short-circuit the
@@ -256,10 +97,17 @@ IMPL_OPCODE_CALL(VerifyReifiedLocalType)
 IMPL_OPCODE_CALL(VerifyReifiedReturnType)
 
 void cgVerifyParamCls(IRLS& env, const IRInstruction* inst) {
-  implVerifyCls(env, inst);
+  implVerifyType<Class>(env, inst);
 }
 void cgVerifyRetCls(IRLS& env, const IRInstruction* inst) {
-  implVerifyCls(env, inst);
+  implVerifyType<Class>(env, inst);
+}
+
+void cgVerifyParamRecDesc(IRLS& env, const IRInstruction* inst) {
+  implVerifyType<RecordDesc>(env, inst);
+}
+void cgVerifyRetRecDesc(IRLS& env, const IRInstruction* inst) {
+  implVerifyType<RecordDesc>(env, inst);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -293,6 +141,41 @@ static void verifyStaticPropFailImpl(const Class* objCls, Cell val, Slot slot) {
     true
   );
 }
+
+static void verifyPropRecDescImpl(const Class* objCls,
+                                  const RecordDesc* constraint,
+                                  RecordData* val,
+                                  Slot slot) {
+  assertx(slot < objCls->numDeclProperties());
+  auto const& tc = objCls->declProperties()[slot].typeConstraint;
+  assertx(tc.isRecord());
+  auto const success = [&]{
+    auto const valRec = val->record();
+    if (LIKELY(constraint != nullptr)) return valRec->recordDescOf(constraint);
+    return tc.checkTypeAliasRecord(valRec);
+  }();
+  if (!success) {
+    verifyPropFailImpl(objCls, make_tv<KindOfRecord>(val), slot);
+  }
+}
+
+static void verifyStaticPropRecDescImpl(const Class* objCls,
+                                        const RecordDesc* constraint,
+                                        RecordData* val,
+                                        Slot slot) {
+  assertx(slot < objCls->numStaticProperties());
+  auto const& tc = objCls->staticProperties()[slot].typeConstraint;
+  assertx(tc.isRecord());
+  auto const success = [&]{
+    auto const valRec = val->record();
+    if (LIKELY(constraint != nullptr)) return valRec->recordDescOf(constraint);
+    return tc.checkTypeAliasRecord(valRec);
+  }();
+  if (!success) {
+    verifyStaticPropFailImpl(objCls, make_tv<KindOfRecord>(val), slot);
+  }
+}
+
 
 static void verifyPropClsImpl(const Class* objCls,
                               const Class* constraint,
@@ -387,6 +270,22 @@ void cgVerifyPropCls(IRLS& env, const IRInstruction* inst) {
   );
 }
 
+void cgVerifyPropRecDesc(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    inst->src(4)->boolVal()
+      ? CallSpec::direct(verifyStaticPropRecDescImpl)
+      : CallSpec::direct(verifyPropRecDescImpl),
+    kVoidDest,
+    SyncOptions::Sync,
+    argGroup(env, inst)
+      .ssa(0)
+      .ssa(2)
+      .ssa(3)
+      .ssa(1)
+  );
+}
 void cgVerifyProp(IRLS& env, const IRInstruction* inst) {
   cgCallHelper(
     vmain(env),
@@ -497,6 +396,21 @@ void cgRaiseStrToClassNotice(IRLS& env, const IRInstruction* inst) {
     callDest(env, inst),
     SyncOptions::Sync,
     argGroup(env, inst).ssa(0)
+  );
+}
+
+void raiseArraySerializeImpl(const StringData* source, const ArrayData* ad) {
+  raise_array_serialization_notice(source->data(), ad);
+}
+
+void cgRaiseArraySerializeNotice(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::direct(raiseArraySerializeImpl),
+    callDest(env, inst),
+    SyncOptions::Sync,
+    argGroup(env, inst).ssa(0).ssa(1)
   );
 }
 

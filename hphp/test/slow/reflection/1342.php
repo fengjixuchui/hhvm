@@ -1,6 +1,6 @@
-<?php
+<?hh
 
-Trait T {
+trait T {
  function bar() {
  yield 1;
  }

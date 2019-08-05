@@ -1,4 +1,4 @@
-<?php 
+<?hh 
 	if (!extension_loaded('posix')) { 
         die('SKIP - POSIX extension not available');
     }
@@ -6,4 +6,3 @@
     if (!function_exists('posix_ctermid')) { 
         die('SKIP - Function posix_ctermid() not available');
     }
-?>

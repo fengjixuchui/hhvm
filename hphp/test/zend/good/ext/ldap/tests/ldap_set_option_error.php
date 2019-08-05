@@ -1,4 +1,4 @@
-<?php
+<?hh
 require "connect.inc";
 
 $link = ldap_connect($host, $port);
@@ -30,5 +30,4 @@ foreach ($controls as $control)
 	var_dump(ldap_set_option($link, LDAP_OPT_SERVER_CONTROLS, $control));
 
 var_dump(ldap_set_option($link, 999999, 999999));
-?>
-===DONE===
+echo "===DONE===\n";

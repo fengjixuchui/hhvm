@@ -1,4 +1,4 @@
-<?php 
+<?hh
 
 $xml =<<<EOF
 <?xml version='1.0'?>
@@ -71,8 +71,7 @@ $rit = new RecursiveIteratorIterator($sxe, RecursiveIteratorIterator::SELF_FIRST
 
 foreach($rit as $data) {
 	var_dump(get_class($data));
-	var_dump(trim($data));
+	var_dump(trim((string)$data));
 }
 
-?>
-===DONE===
+echo "===DONE===\n";

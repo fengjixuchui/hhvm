@@ -1,8 +1,12 @@
+.hh_file 1;
 #
 # Test arrays for hhbc asm.
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   String "main"
   FPushFunc 0
   FCall <> 0 1 "" - "" "" # allow the JIT why not
@@ -20,12 +24,14 @@
 }
 
 .function ArrayMember() {
-  .numclsrefslots 1;
-  FPushFuncD 1 "var_dump"
+  NullUninit
+  NullUninit
+  NullUninit
     String "arr"
     String "ClassWithArray"
-    ClsRefGetC 0
-    CGetS 0
+    ClassGetC
+    CGetS
+  FPushFuncD 1 "var_dump"
   FCall <> 1 1 "" - "" ""
   PopC
 
@@ -33,13 +39,16 @@
   SetL $x
   PopC
 
-  FPushFuncD 1 "var_dump"
+  NullUninit
+  NullUninit
+  NullUninit
     String "arr"
     Int 2
     CGetL $x
-    ClsRefGetC 0
-    BaseSC 1 0 Warn
-    QueryM 2 CGet EC:0
+    ClassGetC
+    BaseSC 2 0 Warn
+    QueryM 3 CGet EC:1
+  FPushFuncD 1 "var_dump"
   FCall <> 1 1 "" - "" ""
   PopC
 
@@ -48,6 +57,9 @@
 }
 
 .function main() {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "ArrayMember"
   FCall <> 0 1 "" - "" ""
   PopC
@@ -98,15 +110,21 @@ unset_label:  String "win\n"
               Print
               PopC
 
-              FPushFuncD 1 "var_dump"
+              NullUninit
+              NullUninit
+              NullUninit
               CGetL $arr
+              FPushFuncD 1 "var_dump"
               FCall <> 1 1 "" - "" ""
               PopC
 
-              FPushFuncD 1 "var_dump"
+              NullUninit
+              NullUninit
+              NullUninit
               Int 1
               String "b"
               NewPackedArray 2
+              FPushFuncD 1 "var_dump"
               FCall <> 1 1 "" - "" ""
               PopC
 

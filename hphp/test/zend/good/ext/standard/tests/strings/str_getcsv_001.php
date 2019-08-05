@@ -1,6 +1,7 @@
-<?php
+<?hh
 
 // string input[, string delimiter[, string enclosure[, string escape]]]
+<<__EntryPoint>> function main(): void {
 var_dump(str_getcsv('"f", "o", ""'));
 print "-----\n";
 var_dump(str_getcsv('foo||bar', '|'));
@@ -21,9 +22,6 @@ var_dump(str_getcsv('.foo  . .  bar  .', ' ', '.', ''));
 print "-----\n";
 var_dump(str_getcsv('" "" "', ' '));
 print "-----\n";
-var_dump(str_getcsv(NULL));
-print "-----\n";
 var_dump(str_getcsv(''));
 print "-----\n";
-
-?>
+}

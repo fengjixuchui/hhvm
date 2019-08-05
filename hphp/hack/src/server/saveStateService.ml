@@ -8,56 +8,11 @@
  *)
 
 open Core_kernel
-
-(* An alias for the errors type that we marshal to and unmarshal from the saved state *)
-type saved_state_errors = (Errors.phase * Relative_path.Set.t) list
+open SaveStateServiceTypes
 
 let get_errors_filename (filename: string) : string = filename ^ ".err"
 
 let get_decls_filename (filename: string) : string = filename ^ ".decls"
-
-(* Experimental: save the naming table ("file info") into the same SQLite
-    database that we save the dependency table into. The table's name is NAME_INFO *)
-let save_all_file_info_sqlite
-    (db_name: string)
-    (files_info: FileInfo.t Relative_path.Map.t) : unit =
-  begin
-    SharedMem.save_file_info_init db_name;
-    Relative_path.Map.iter files_info (
-      fun path file_info ->
-        let funs = file_info.FileInfo.funs in
-        let classes = file_info.FileInfo.classes in
-        let typedefs = file_info.FileInfo.typedefs in
-        let consts = file_info.FileInfo.consts in
-
-        (* NOTE: uncompressing the path here seems to have a significant negative effect
-            on the size of the naming table in SQLite. This needs more work: TODO. *)
-        let path = Relative_path.S.to_string path in
-        begin
-          List.iter funs ~f:(fun (_pos, name) ->
-            SharedMem.save_file_info_sqlite ~hash:(
-              Naming_heap.heap_string_of_key `FunPos name
-            ) ~name:name `FuncK path
-          );
-          List.iter classes ~f:(fun (_pos, name) ->
-            SharedMem.save_file_info_sqlite ~hash:(
-              Naming_heap.heap_string_of_key `TypeId name
-            ) ~name:name `ClassK path
-          );
-          List.iter typedefs ~f:(fun (_pos, name) ->
-            SharedMem.save_file_info_sqlite ~hash:(
-              Naming_heap.heap_string_of_key `TypeId name
-            ) ~name:name `ClassK path
-          );
-          List.iter consts ~f:(fun (_pos, name) ->
-            SharedMem.save_file_info_sqlite ~hash:(
-              Naming_heap.heap_string_of_key `ConstPos name
-            ) ~name:name `ConstantK path
-          )
-        end
-    );
-    SharedMem.save_file_info_free ()
-  end
 
 (* Gets a set of file paths out of saved state errors *)
 let fold_error_files (errors_in_phases: saved_state_errors) : Relative_path.Set.t =
@@ -107,12 +62,19 @@ let load_class_decls (input_filename: string) : unit =
 (* Loads the file info and the errors, if any. *)
 let load_saved_state
     ~(load_decls: bool)
+    ~(naming_table_fallback_path: string option)
     (saved_state_filename: string)
-  : FileInfo.saved_state_info * saved_state_errors =
-  let chan = In_channel.create ~binary:true saved_state_filename in
-  let (old_saved: FileInfo.saved_state_info) =
-    Marshal.from_channel chan in
-  Sys_utils.close_in_no_fail saved_state_filename chan;
+  : Naming_table.t * saved_state_errors =
+  let old_naming_table = match naming_table_fallback_path with
+    | Some nt_path ->
+      Naming_table.load_from_sqlite ~update_reverse_entries:true nt_path
+    | None ->
+      let chan = In_channel.create ~binary:true saved_state_filename in
+      let (old_saved: Naming_table.saved_state_info) =
+        Marshal.from_channel chan in
+      Sys_utils.close_in_no_fail saved_state_filename chan;
+      Naming_table.from_saved old_saved
+  in
 
   let errors_filename = get_errors_filename saved_state_filename in
   let (old_errors: saved_state_errors) = if not (Sys.file_exists errors_filename) then [] else
@@ -120,22 +82,15 @@ let load_saved_state
 
   if load_decls then load_class_decls (get_decls_filename saved_state_filename);
 
-  (old_saved, old_errors)
+  (old_naming_table, old_errors)
 
 (* Writes some OCaml object to a file with the given filename. *)
 let dump_contents
     (output_filename: string)
     (contents: 'a) : unit =
-  let chan = Sys_utils.open_out_bin_no_fail output_filename in
+  let chan = Pervasives.open_out_bin output_filename in
   Marshal.to_channel chan contents [];
-  Sys_utils.close_out_no_fail output_filename chan
-
-let dump_contents_exn
-    (output_filename: string)
-    (contents: 'a) : unit =
-  let oc = Pervasives.open_out_bin output_filename in
-  Marshal.to_channel oc contents [];
-  Pervasives.close_out oc
+  Pervasives.close_out chan
 
 let get_hot_classes_filename () =
   let prefix = Relative_path.(path_of_prefix Root) in
@@ -169,7 +124,7 @@ let dump_class_decls filename =
     Hh_logger.log "Exporting %d class declarations..." @@ SSet.cardinal classes;
     let decls = Decl_export.export_class_decls classes in
     Hh_logger.log "Marshalling class declarations...";
-    dump_contents_exn filename decls;
+    dump_contents filename decls;
     ignore @@ Hh_logger.log_duration "Saved class declarations" start_t
   with exn ->
     let stack = Printexc.get_backtrace () in
@@ -180,10 +135,18 @@ let dump_class_decls filename =
 let dump_saved_state
     ~(save_decls: bool)
     (output_filename: string)
-    (files_info: FileInfo.t Relative_path.Map.t)
+    (naming_table: Naming_table.t)
     (errors: Errors.t) : unit =
-  let (files_info_saved: FileInfo.saved_state_info) = FileInfo.info_to_saved files_info in
-  dump_contents output_filename files_info_saved;
+  Hh_logger.log "Marshalling the naming table...";
+  let (naming_table_saved: Naming_table.saved_state_info) =
+    Naming_table.to_saved naming_table
+  in
+  dump_contents output_filename naming_table_saved;
+
+  if not (Sys.file_exists output_filename) then
+    failwith (Printf.sprintf "Did not find file infos file '%s'" output_filename)
+  else
+    Hh_logger.log "Saved file infos to '%s'" output_filename;
 
   (* Let's not write empty error files. *)
   if Errors.is_empty errors then () else begin
@@ -198,38 +161,33 @@ let dump_saved_state
     dump_class_decls (get_decls_filename output_filename)
 
 let update_save_state
-    ~(file_info_on_disk: bool)
     ~(save_decls: bool)
-    (files_info: FileInfo.t Relative_path.Map.t)
-    (errors: Errors.t)
+    (env: ServerEnv.env)
     (output_filename: string)
-    (replace_state_after_saving: bool) : int =
+    (replace_state_after_saving: bool) : save_state_result =
   let t = Unix.gettimeofday () in
   let db_name = output_filename ^ ".sql" in
   if not (RealDisk.file_exists db_name) then
     failwith "Given existing save state SQL file missing";
-  dump_saved_state ~save_decls output_filename files_info errors;
-  let () = if file_info_on_disk then begin
-    failwith "incrementally updating file info on disk not yet implemented"
-  end else begin
-    Hh_logger.log "skip writing file info to sqlite table"
-  end in
-  let edges_added = SharedMem.update_dep_table_sqlite
+  let naming_table = env.ServerEnv.naming_table in
+  let errors = env.ServerEnv.errorl in
+  dump_saved_state ~save_decls output_filename naming_table errors;
+  let dep_table_edges_added = SharedMem.update_dep_table_sqlite
     db_name
     Build_id.build_revision
     replace_state_after_saving in
   ignore @@ Hh_logger.log_duration "Updating saved state took" t;
-  edges_added
+  let result = { dep_table_edges_added } in
+  result
 
 (** Saves the saved state to the given path. Returns number of dependency
 * edges dumped into the database. *)
 let save_state
-    ~(file_info_on_disk: bool)
+    ~(dep_table_as_blob: bool)
     ~(save_decls: bool)
-    (files_info: FileInfo.t Relative_path.Map.t)
-    (errors: Errors.t)
+    (env: ServerEnv.env)
     (output_filename: string)
-    ~(replace_state_after_saving: bool): int =
+    ~(replace_state_after_saving: bool): save_state_result =
   let () = Sys_utils.mkdir_p (Filename.dirname output_filename) in
   let db_name = output_filename ^ ".sql" in
   let () = if Sys.file_exists output_filename then
@@ -240,34 +198,35 @@ let save_state
            else () in
   match SharedMem.loaded_dep_table_filename () with
   | None ->
+    let naming_table = env.ServerEnv.naming_table in
+    let errors = env.ServerEnv.errorl in
     let t = Unix.gettimeofday () in
-    dump_saved_state ~save_decls output_filename files_info errors;
-    let () = if file_info_on_disk then begin
-      Hh_logger.log "Saving file info (naming table) into a SQLite table.\n";
-      (save_all_file_info_sqlite db_name files_info : unit)
-    end in
+    dump_saved_state ~save_decls output_filename naming_table errors;
+
+    let dep_table_saver =
+      if dep_table_as_blob then
+        SharedMem.save_dep_table_blob
+      else
+        SharedMem.save_dep_table_sqlite in
+
     let dep_table_edges_added =
-      SharedMem.save_dep_table_sqlite
+      dep_table_saver
         db_name
         Build_id.build_revision
         replace_state_after_saving in
     let _ : float = Hh_logger.log_duration "Saving saved state took" t in
-    dep_table_edges_added
+    { dep_table_edges_added }
   | Some old_table_filename ->
-    (** If server is running from a loaded saved state, it's in-memory
+    (** If server is running from a loaded saved state, its in-memory
      * tracked depdnencies are incomplete - most of the actual dependencies
      * are in the SQL table. We need to copy that file and update it with
      * the in-memory edges. *)
     let t = Unix.gettimeofday () in
-    let content = RealDisk.cat old_table_filename in
-    let () = RealDisk.mkdir_p (Filename.dirname output_filename) in
-    let () = RealDisk.write_file ~file:db_name ~contents:content in
+    FileUtil.cp [ old_table_filename ] db_name;
     let _ : float = Hh_logger.log_duration "Made disk copy of loaded saved state. Took" t in
     update_save_state
-      ~file_info_on_disk
       ~save_decls
-      files_info
-      errors
+      env
       output_filename
       replace_state_after_saving
 
@@ -276,21 +235,33 @@ let get_in_memory_dep_table_entry_count () : (int, string) result =
     SharedMem.get_in_memory_dep_table_entry_count ())
   |> Result.map_error ~f:(fun (exn, _stack) -> Exn.to_string exn)
 
+let go_naming
+  (naming_table: Naming_table.t)
+  (output_filename: string)
+: (save_naming_result, string) result =
+  Utils.try_with_stack begin fun () ->
+    let save_result = Naming_table.save naming_table output_filename in
+    {
+      nt_files_added = save_result.Naming_table.files_added;
+      nt_symbols_added = save_result.Naming_table.symbols_added;
+    }
+  end
+  |> Result.map_error ~f:(fun (exn, _stack) -> Exn.to_string exn)
+
 (* If successful, returns the # of edges from the dependency table that were written. *)
 (* TODO: write some other stats, e.g., the number of names, the number of errors, etc. *)
 let go
-    ~(file_info_on_disk: bool)
+    ~(dep_table_as_blob: bool)
     ~(save_decls: bool)
-    (files_info: FileInfo.t Relative_path.Map.t)
-    (errors: Errors.t)
+    (env: ServerEnv.env)
     (output_filename: string)
-    ~(replace_state_after_saving: bool): (int, string) result =
+    ~(replace_state_after_saving: bool): (save_state_result, string) result =
   Utils.try_with_stack
   begin
     fun () -> save_state
-      ~file_info_on_disk
+      ~dep_table_as_blob
       ~save_decls
-      files_info errors
+      env
       output_filename
       ~replace_state_after_saving
   end

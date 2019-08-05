@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 require_once(dirname(__FILE__) . '/new_db.inc');
 $timenow = time();
@@ -17,4 +17,3 @@ while ($result = $results->fetchArray(SQLITE3_NUM))
 	var_dump($result);
 }
 echo "Done\n";
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $args = array(
   "curve_name" => "secp384r1",
   "private_key_type" => OPENSSL_KEYTYPE_EC,
@@ -75,4 +75,4 @@ foreach ($curve_names as $curve_name) {
     echo "Found secp384r1 in curve names\n";
   }
 }
-?>
+}

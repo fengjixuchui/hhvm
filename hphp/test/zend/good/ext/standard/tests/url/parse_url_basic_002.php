@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto mixed parse_url(string url, [int url_component])
  * Description: Parse a URL and return its components 
  * Source code: ext/standard/url.c
@@ -17,4 +17,3 @@ foreach ($urls as $url) {
 }
 
 echo "Done";
-?>

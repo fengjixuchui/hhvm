@@ -1,9 +1,9 @@
-<?php
+<?hh
 
 class A {}
 
 function foo() {
-  if ($x instanceof A) {
+  if ($x is A) {
     $y = "asd";
   } else {
     $y = "asd2";

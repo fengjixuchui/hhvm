@@ -81,29 +81,35 @@ struct RepoOptions {
   N(StringMap,      AliasedNamespaces,              StringMap{})      \
   P(bool,           UVS,                            s_PHP7_master)    \
   P(bool,           LTRAssign,                      s_PHP7_master)    \
-  H(bool,           EnableIsExprPrimitiveMigration, true)             \
   H(bool,           EnableCoroutines,               true)             \
   H(bool,           Hacksperimental,                false)            \
-  H(bool,           EnableConcurrent,               false)            \
-  H(bool,           EnableAwaitAsAnExpression,      false)            \
-  H(bool,           EnableStrongerAwaitBinding,     false)            \
-  H(bool,           EnableReifiedGenerics,          false)            \
   H(bool,           DisableLvalAsAnExpression,      false)            \
+  H(bool,           HackCompilerUseRustParser,      false)            \
+  H(bool,           AllowNewAttributeSyntax,        false)            \
+  H(bool,           ConstDefaultFuncArgs,           false)            \
   E(bool,           CreateInOutWrapperFunctions,    true)             \
+  E(std::string,    HHJSAdditionalTransform,        "")               \
+  E(bool,           HHJSNoBabel,                    false)            \
   E(bool,           HHJSUniqueFilenames,            true)             \
-  E(std::string,    HHJSBabelTransform,             "")               \
+  E(std::string,    HHJSBabelTransform,                               \
+                                         hhjsBabelTransformDefault()) \
+  E(bool,           HHJSSetLocs,                    false)            \
+  E(std::string,    HHJSNodeModules,                "")               \
   E(bool,           EmitFuncPointers,               true)             \
-  E(bool,           EmitClsMethPointers,            EmitFuncPointers) \
   E(bool,           EmitInstMethPointers,           EmitFuncPointers) \
-  E(bool,           EmitMethCallerFuncPointers,     false)            \
+  /**/
+
+#define AUTOLOADFLAGS() \
+  N(std::string,    Query,                                        "") \
   /**/
 
   std::string path() const { return m_path; }
   std::string cacheKeyRaw() const;
-  std::string cacheKeyMd5() const;
+  std::string cacheKeySha1() const;
   std::string toJSON() const;
   folly::dynamic toDynamic() const;
   struct stat stat() const { return m_stat; }
+  std::string autoloadQuery() const noexcept { return Query; }
 
   bool operator==(const RepoOptions& o) const;
 
@@ -124,6 +130,7 @@ private:
 #define H(t, n, ...) t n;
 #define E(t, n, ...) t n;
 PARSERFLAGS()
+AUTOLOADFLAGS()
 #undef N
 #undef P
 #undef H
@@ -245,7 +252,12 @@ struct RuntimeOption {
   static bool ServerForkEnabled;
   static bool ServerForkLogging;
   static bool ServerWarmupConcurrently;
+  static int ServerWarmupThreadCount;
+  static int ServerExtendedWarmupThreadCount;
+  static unsigned ServerExtendedWarmupRepeat;
+  static unsigned ServerExtendedWarmupDelaySeconds;
   static std::vector<std::string> ServerWarmupRequests;
+  static std::vector<std::string> ServerExtendedWarmupRequests;
   static std::string ServerCleanupRequest;
   static int ServerInternalWarmupThreads;
   static boost::container::flat_set<std::string> ServerHighPriorityEndPoints;
@@ -381,6 +393,8 @@ struct RuntimeOption {
   static std::map<std::string, std::string> IncludeRoots;
   static std::map<std::string, std::string> AutoloadRoots;
 
+  static std::string AutoloadDBPath;
+
   static std::string FileCache;
   static std::string DefaultDocument;
   static std::string ErrorDocument404;
@@ -498,23 +512,17 @@ struct RuntimeOption {
   static bool EnableHipHopSyntax;
   static bool EnableShortTags;
   static bool EnableXHP;
-  static bool EnablePHP;
-  static bool CheckParamTypeInvariance;
   static bool EnableIntrinsicsExtension;
   static bool CheckSymLink;
+  static bool TrustAutoloaderPath;
   static bool EnableArgsInBacktraces;
   static bool EnableZendIniCompat;
   static bool TimeoutsUseWallTime;
   static bool CheckFlushOnUserClose;
   static bool EvalAuthoritativeMode;
-  static bool IntsOverflowToInts;
   static HackStrictOption StrictArrayFillKeys;
-  static HackStrictOption DisallowDynamicVarEnvFuncs;
-  static HackStrictOption IconvIgnoreCorrect;
-  static HackStrictOption MinMaxAllowDegenerate;
   static bool LookForTypechecker;
   static bool AutoTypecheck;
-  static bool EnableReifiedGenerics;
   static uint32_t EvalInitialStaticStringTableSize;
   static uint32_t EvalInitialNamedEntityTableSize;
   static JitSerdesMode EvalJitSerdesMode;
@@ -524,11 +532,9 @@ struct RuntimeOption {
   static bool EnablePocketUniverses;
 
   // ENABLED (1) selects PHP7 behavior.
-  static bool PHP7_DeprecationWarnings;
   static bool PHP7_IntSemantics;
   static bool PHP7_NoHexNumerics;
   static bool PHP7_Builtins;
-  static bool PHP7_ScalarTypes;
   static bool PHP7_EngineExceptions;
   static bool PHP7_Substr;
   static bool PHP7_DisallowUnsafeCurlUploads;
@@ -539,30 +545,6 @@ struct RuntimeOption {
   static int64_t HeapLowWaterMark;
   static int64_t HeapHighWaterMark;
 
-  // Disables PHP's forward_static_call function.
-  // Valid values are 0 => enabled (default),
-  // 1 => warning, 2 => error.
-  static uint64_t DisableForwardStaticCall;
-  // Disables PHP's forward_static_call_array function.
-  // Valid values are 0 => enabled (default),
-  // 1 => warning, 2 => error.
-  static uint64_t DisableForwardStaticCallArray;
-  // Controls PHP's behavior of evaluating undefined constants as string
-  // literals.
-  // true => evaluate as string (default), false => error.
-  static bool UndefinedConstAsString;
-  // Controls PHP's behavior of falling back to the default namespace for
-  // undefined constants.
-  // 0 => fall back to root namespace (default)
-  // 1 => raise notice and fall back to root namespace
-  // 2 => raise error
-  static uint64_t UndefinedConstFallback;
-  // Controls PHP's behavior of falling back to the default namespace for
-  // undefined functions.
-  // 0 => fall back to root namespace (default)
-  // 1 => raise notice and fall back to root namespace
-  // 2 => raise error
-  static uint64_t UndefinedFunctionFallback;
   // Disables PHP's call_user_func function.
   // Valid values are 0 => enabled (default),
   // 1 => warning, 2 => error.
@@ -582,10 +564,6 @@ struct RuntimeOption {
   // valid values are 0 => enabled (default)
   // 1 => warning, 2 => error
   static uint64_t DisableConstant;
-  // Disables PHP's define() function
-  // valid values are 0 => enabled (default)
-  // 1 => warning, 2 => error
-  static uint64_t DisableDefine;
   // Disables PHP's assert() function
   // valid values are 0 => enabled (default)
   // 1 => warning, 2 => error
@@ -596,9 +574,9 @@ struct RuntimeOption {
   // Disables static closures
   // true => error, false => default behaviour
   static bool DisableStaticClosures;
-  // Disables static local variables
-  // true => error, false => default behaviour
-  static bool DisableStaticLocalVariables;
+  // Enables the class-level where constraints
+  // true => allow the feature, false => disable the feature
+  static bool EnableClassLevelWhereClauses;
 
   // Disables the setting of reserved variable php_errorsmg
   // true => error, false => php_errormsg can be set
@@ -618,7 +596,6 @@ struct RuntimeOption {
   static std::vector<std::string> TzdataSearchPaths;
 
 #define HAC_CHECK_OPTS                         \
-  HC(IntishCast, intish_cast)                  \
   HC(RefBind, ref_bind)                        \
   HC(FalseyPromote, falsey_promote)            \
   HC(EmptyStringPromote, empty_string_promote) \
@@ -645,8 +622,6 @@ struct RuntimeOption {
   F(uint64_t, JitMatureSize,           125 << 20)                       \
   F(bool, JitMatureAfterWarmup,        true)                            \
   F(double, JitMaturityExponent,       1.)                              \
-  F(double, LogLoadedUnitsRate,        0.0)                             \
-  F(string, LogLoadedUnitsBaseDir,     "{PHP_ROOT}")                    \
   F(bool, JitTimer,                    kJitTimerDefault)                \
   F(int, JitConcurrently,              1)                               \
   F(int, JitThreads,                   4)                               \
@@ -705,6 +680,7 @@ struct RuntimeOption {
   F(bool, DumpHHJS,                    false)                           \
   F(bool, UseHHBBC,                    !getenv("HHVM_DISABLE_HHBBC"))   \
   F(bool, EnablePerRepoOptions,        true)                            \
+  F(bool, CachePerRepoOptionsPath,     true)                            \
   /* Generate warning of side effect of the pseudomain is called by     \
      top-level code.*/                                                  \
   F(bool, WarnOnRealPseudomain, false)                                  \
@@ -723,7 +699,7 @@ struct RuntimeOption {
    * 3 - Check `this` typehints as hard `this` typehints (unless explicitly
    *     soft).  This is the only option which enable optimization in HHBBC.
    */                                                                   \
-  F(int32_t, ThisTypeHintLevel,        EnableHipHopSyntax ? 3 : 0)      \
+  F(int32_t, ThisTypeHintLevel,        3)                               \
   /* CheckReturnTypeHints:
      0 - No checks or enforcement for return type hints.
      1 - Raises E_WARNING if a return type hint fails.
@@ -752,27 +728,22 @@ struct RuntimeOption {
         fatal error.
   */                                                                    \
   F(int32_t, CheckPropTypeHints,       0)                               \
-  /* Whether or not to assume that VerifyParamType instructions must
-     throw if the parameter does not match the associated type
-     constraint. This changes program behavior because parameter type
-     hint validation is normally a recoverable fatal. When this option
-     is on, hhvm will fatal if the error handler tries to recover in
-     this situation.
-     1) In repo-mode, we only set this option to hphpc, and serialize
-        it in Repo::GlobalData::HardTypeHints. Subsequent invocations
-        to hhbbc/hhvm runtime will only load it from the GlobalData.
-     2) In non-repo mode, we set this option to the runtime as usual.
-     3) Both HHBBC and the runtime should query only this option
-        instead of the GlobalData.
-  */                                                                    \
-  F(bool, HardTypeHints,               RepoAuthoritative)               \
   /* WarnOnTooManyArguments:
    * 0 -> no warning, 1 -> warning, 2 -> exception
    */                                                                   \
   F(uint32_t, WarnOnTooManyArguments,  0)                               \
-  F(bool, PromoteEmptyObject,          !EnableHipHopSyntax)             \
+  /* GetClassBadArgument:
+   * 0 -> no warning, 1 -> warning, 2 -> exception
+   */                                                                   \
+  F(uint32_t, GetClassBadArgument,     0)                               \
+  /* WarnOnIncDecInvalidType:
+   * 0 - No restrictions on types that can be incremented or decremented
+   * 1 - Warn when incrementing or decrementing non numeric types
+   * 2 - Throw when incrementing or decrementing non numeric types
+   */                                                                   \
+  F(uint32_t, WarnOnIncDecInvalidType, 0)                               \
+  F(bool, PromoteEmptyObject,          false)                           \
   F(bool, LibXMLUseSafeSubtrees,       true)                            \
-  F(bool, AllDestructorsOptional,      false)                           \
   F(bool, AllowScopeBinding,           false)                           \
   F(bool, JitNoGdb,                    true)                            \
   F(bool, SpinOnCrash,                 false)                           \
@@ -783,7 +754,7 @@ struct RuntimeOption {
   F(string, PerfJitDumpDir,            "/tmp")                          \
   F(bool, PerfDataMap,                 false)                           \
   F(bool, KeepPerfPidMap,              false)                           \
-  F(int32_t, PerfRelocate,             0)                               \
+  F(int, PerfRelocate,                 0)                               \
   F(uint32_t, ThreadTCMainBufferSize,  6 << 20)                         \
   F(uint32_t, ThreadTCColdBufferSize,  6 << 20)                         \
   F(uint32_t, ThreadTCFrozenBufferSize,4 << 20)                         \
@@ -806,10 +777,8 @@ struct RuntimeOption {
   F(uint64_t, JitGlobalTranslationLimit, -1)                            \
   F(int64_t, JitMaxRequestTranslationTime, -1)                          \
   F(uint32_t, JitMaxRegionInstrs,      1347)                            \
-  F(uint32_t, JitProfileInterpRequests, kDefaultProfileInterpRequests)  \
   F(uint32_t, JitMaxAwaitAllUnroll,    8)                               \
   F(bool, JitProfileWarmupRequests,    false)                           \
-  F(uint32_t, NumSingleJitRequests,    nsjrDefault())                   \
   F(uint32_t, JitProfileRequests,      profileRequestsDefault())        \
   F(uint32_t, JitProfileBCSize,        profileBCSizeDefault())          \
   F(uint32_t, JitResetProfCountersRequest, resetProfCountersDefault())  \
@@ -822,7 +791,6 @@ struct RuntimeOption {
   F(int32_t,  JitLayoutMainFactor,     1000)                            \
   F(int32_t,  JitLayoutColdFactor,     5)                               \
   F(bool,     JitAHotSizeRoundUp,      true)                            \
-  F(bool, JitProfileRecord,            false)                           \
   F(uint32_t, GdbSyncChunks,           128)                             \
   F(bool, JitKeepDbgFiles,             false)                           \
   /* despite the unfortunate name, this enables function renaming and
@@ -834,6 +802,7 @@ struct RuntimeOption {
                                                                         \
   F(bool, JitDisabledByHphpd,          false)                           \
   F(bool, JitPseudomain,               true)                            \
+  F(bool, JitPGOPseudomain,            false)                           \
   F(uint32_t, JitWarmupStatusBytes,    ((25 << 10) + 1))                \
   F(uint32_t, JitWarmupMaxCodeGenRate, 20000)                           \
   F(uint32_t, JitWarmupRateSeconds,    64)                              \
@@ -844,26 +813,33 @@ struct RuntimeOption {
   F(bool, HHIRGenOpts,                 true)                            \
   F(bool, HHIRRefcountOpts,            true)                            \
   F(bool, HHIREnableGenTimeInlining,   true)                            \
-  F(uint32_t, HHIRInliningVasmCostLimit, 175)                           \
-  F(uint32_t, HHIRInliningMinVasmCostLimit, 100)                        \
-  F(uint32_t, HHIRInliningMaxVasmCostLimit, 400)                        \
-  F(uint32_t, HHIRAlwaysInlineVasmCostLimit, 80)                        \
+  F(uint32_t, HHIRInliningCostFactorMain, 100)                          \
+  F(uint32_t, HHIRInliningCostFactorCold, 32)                           \
+  F(uint32_t, HHIRInliningCostFactorFrozen, 10)                         \
+  F(uint32_t, HHIRInliningVasmCostLimit, 17500)                         \
+  F(uint32_t, HHIRInliningMinVasmCostLimit, 10000)                      \
+  F(uint32_t, HHIRInliningMaxVasmCostLimit, 40000)                      \
+  F(uint32_t, HHIRAlwaysInlineVasmCostLimit, 8000)                      \
+  F(uint32_t, HHIRInliningMaxDepth,    1000)                            \
   F(double,   HHIRInliningVasmCallerExp, .5)                            \
   F(double,   HHIRInliningVasmCalleeExp, .5)                            \
-  F(uint32_t, HHIRInliningMaxReturnDecRefs, 12)                         \
-  F(uint32_t, HHIRInliningMaxReturnLocals, 20)                          \
+  F(double,   HHIRInliningDepthExp, 0)                                  \
+  F(uint32_t, HHIRInliningMaxReturnDecRefs, 24)                         \
+  F(uint32_t, HHIRInliningMaxReturnLocals, 40)                          \
   F(uint32_t, HHIRInliningMaxInitObjProps, 12)                          \
   F(bool,     HHIRInliningIgnoreHints, !debug)                          \
+  F(bool,     HHIRInliningUseStackedCost, true)                         \
+  F(bool,     HHIRInliningUseReachableCost, false)                      \
+  F(bool,     HHIRInliningUseLayoutBlocks, false)                       \
   F(bool, HHIRInlineFrameOpts,         true)                            \
   F(bool, HHIRPartialInlineFrameOpts,  true)                            \
-  F(bool, HHIRInlineSingletons,        true)                            \
-  F(std::string, InlineRegionMode,     "both")                          \
   F(bool, HHIRGenerateAsserts,         false)                           \
   F(bool, HHIRDeadCodeElim,            true)                            \
   F(bool, HHIRGlobalValueNumbering,    true)                            \
   F(bool, HHIRPredictionOpts,          true)                            \
   F(bool, HHIRMemoryOpts,              true)                            \
   F(bool, AssemblerFoldDefaultValues,  true)                            \
+  F(uint64_t, AssemblerMaxScalarSize,  1073741824) /* 1GB */            \
   F(uint32_t, HHIRLoadElimMaxIters,    10)                              \
   F(bool, HHIRStorePRE,                true)                            \
   F(bool, HHIROutlineGenericIncDecRef, true)                            \
@@ -879,7 +855,6 @@ struct RuntimeOption {
   F(string,   JitPGORegionSelector,    "hotcfg")                        \
   F(uint64_t, JitPGOThreshold,         pgoThresholdDefault())           \
   F(bool,     JitPGOOnly,              false)                           \
-  F(bool,     JitPGOHotOnly,           false)                           \
   F(bool,     JitPGOUsePostConditions, true)                            \
   F(bool,     JitPGOUseAddrCountedCheck, false)                         \
   F(uint32_t, JitPGOUnlikelyIncRefCountedPercent, 2)                    \
@@ -889,8 +864,13 @@ struct RuntimeOption {
   F(uint32_t, JitPGOUnlikelyDecRefPersistPercent, 5)                    \
   F(uint32_t, JitPGOUnlikelyDecRefSurvivePercent, 5)                    \
   F(uint32_t, JitPGOUnlikelyDecRefDecrementPercent, 5)                  \
-  F(double,   JitPGODecRefNZReleasePercentCOW, 0.5)                     \
-  F(double,   JitPGODecRefNZReleasePercent, 5)                          \
+  F(double,   JitPGODecRefNZReleasePercentCOW,                          \
+                                       ServerExecutionMode() ? 0.5 : 0) \
+  F(double,   JitPGODecRefNZReleasePercent,                             \
+                                         ServerExecutionMode() ? 5 : 0) \
+  F(double,   JitPGODecRefNopDecPercentCOW,                             \
+                                       ServerExecutionMode() ? 0.5 : 0) \
+  F(double,   JitPGODecRefNopDecPercent, ServerExecutionMode() ? 5 : 0) \
   F(uint32_t, JitPGOReleaseVVMinPercent, 8)                             \
   F(bool,     JitPGOArrayGetStress,    false)                           \
   F(double,   JitPGOMinBlockCountPercent, 0.05)                         \
@@ -900,27 +880,31 @@ struct RuntimeOption {
   F(uint32_t, JitPGORelaxUncountedToGenPercent, 20)                     \
   F(uint32_t, JitPGORelaxCountedToGenPercent, 75)                       \
   F(uint32_t, JitPGOBindCallThreshold, 50)                              \
-  F(double,   JitPGOCalledFuncThreshold, 90)                            \
+  F(double,   JitPGOCalledFuncCheckThreshold, 50)                       \
+  F(double,   JitPGOCalledFuncExitThreshold,  99.9)                     \
   F(bool,     JitPGODumpCallGraph,     false)                           \
   F(bool,     JitPGORacyProfiling,     false)                           \
+  F(uint32_t, JitLiveThreshold,       ServerExecutionMode() ? 1000 : 0) \
+  F(uint32_t, JitProfileThreshold,     ServerExecutionMode() ? 200 : 0) \
+  F(uint32_t, JitSrcKeyThreshold,      0)                               \
   F(uint64_t, FuncCountHint,           10000)                           \
   F(uint64_t, PGOFuncCountHint,        1000)                            \
-  F(uint32_t, HotFuncCount,            4100)                            \
   F(bool, RegionRelaxGuards,           true)                            \
   /* DumpBytecode =1 dumps user php, =2 dumps systemlib & user php */   \
   F(int32_t, DumpBytecode,             0)                               \
   /* DumpHhas =1 dumps user php, =2 dumps systemlib & user php */       \
   F(int32_t, DumpHhas,                 0)                               \
   F(string, DumpHhasToFile,            "")                              \
-  F(bool, DisableHphpcOpts,            false)                           \
-  F(bool, DisableErrorHandler,         false)                           \
   F(bool, DumpTC,                      false)                           \
   F(string, DumpTCPath,                "/tmp")                          \
   F(bool, DumpTCAnchors,               false)                           \
   F(uint32_t, DumpIR,                  0)                               \
+  F(uint32_t, DumpIRJson,             0)                               \
   F(bool, DumpTCAnnotationsForAllTrans,debug)                           \
-  F(bool, DumpInlRefuse,               false)                           \
+  /* DumpInlDecision 0=none ; 1=refuses ; 2=refuses+accepts */          \
+  F(uint32_t, DumpInlDecision,         0)                               \
   F(uint32_t, DumpRegion,              0)                               \
+  F(bool,     DumpCallTargets,         false)                           \
   F(bool, DumpAst,                     false)                           \
   F(bool, DumpTargetProfiles,          false)                           \
   F(bool, MapTgtCacheHuge,             false)                           \
@@ -929,6 +913,14 @@ struct RuntimeOption {
   F(uint32_t, MaxHighArenaHugePages,   0)                               \
   F(uint32_t, Num1GPagesForSlabs,      0)                               \
   F(uint32_t, Num2MPagesForSlabs,      0)                               \
+  F(uint32_t, Num1GPagesForReqHeap,    0)                               \
+  F(uint32_t, Num2MPagesForReqHeap,    0)                               \
+  F(uint32_t, NumReservedSlabs,        0)                               \
+  F(uint32_t, Num1GPagesForA0,         0)                               \
+  F(uint32_t, Num2MPagesForA0,         0)                               \
+  F(bool, BigAllocUseLocalArena,       true)                            \
+  F(bool, JsonParserUseLocalArena,     true)                            \
+  F(bool, XmlParserUseLocalArena,      true)                            \
   F(bool, LowStaticArrays,             true)                            \
   F(int64_t, HeapPurgeWindowSize,      5 * 1000000)                     \
   F(uint64_t, HeapPurgeThreshold,      128 * 1024 * 1024)               \
@@ -944,8 +936,6 @@ struct RuntimeOption {
   F(bool, TwoPhaseGC,                  false)                           \
   F(bool, EnableGC,                    enableGcDefault())               \
   /* End of GC Options */                                               \
-  F(bool, RaiseMissingThis,            !EnableHipHopSyntax)             \
-  F(bool, QuoteEmptyShellArg,          !EnableHipHopSyntax)             \
   F(bool, Verify,                      (getenv("HHVM_VERIFY") ||        \
     !EvalHackCompilerCommand.empty()))                                  \
   F(bool, VerifyOnly,                  false)                           \
@@ -957,6 +947,8 @@ struct RuntimeOption {
   F(bool, JitAlignMacroFusionPairs, alignMacroFusionPairs())            \
   F(bool, JitAlignUniqueStubs,         true)                            \
   F(uint32_t, SerDesSampleRate,            0)                           \
+  F(bool, JitSerdesModeForceOff,       false)                           \
+  F(std::set<std::string>, JitSerdesDebugFunctions, {})                 \
   F(int, SimpleJsonMaxLength,        2 << 20)                           \
   F(uint32_t, JitSampleRate,               0)                           \
   F(uint32_t, TraceServerRequestRate,      0)                           \
@@ -974,8 +966,7 @@ struct RuntimeOption {
   F(uint64_t, PCREExpireInterval, 2 * 60 * 60)                          \
   F(string, PCRECacheType, std::string("static"))                       \
   F(bool, EnableCompactBacktrace, true)                                 \
-  F(bool, EnableNuma, ServerExecutionMode())                            \
-  F(bool, EnableNumaLocal, ServerExecutionMode())                       \
+  F(bool, EnableNuma, (numa_num_nodes > 1) && ServerExecutionMode())    \
   /* Use 1G pages for jemalloc metadata. */                             \
   F(bool, EnableArenaMetadata1GPage, false)                             \
   /* Use 1G pages for jemalloc metadata (NUMA arenas if applicable). */ \
@@ -998,7 +989,6 @@ struct RuntimeOption {
    * HackArrCompatNotices option, and control whether various runtime
    * checks are made; they do not affect any optimizations. */          \
   F(bool, HackArrCompatNotices, false)                                  \
-  F(bool, HackArrCompatCheckIntishCast, false)                          \
   F(bool, HackArrCompatCheckRefBind, false)                             \
   F(bool, HackArrCompatCheckFalseyPromote, false)                       \
   F(bool, HackArrCompatCheckEmptyStringPromote, false)                  \
@@ -1026,12 +1016,20 @@ struct RuntimeOption {
   /* Raises notice when a function that returns a PHP array, not */     \
   /* a v/darray, is called */                                           \
   F(bool, HackArrCompatArrayProducingFuncNotices, false)                \
-  /* Disables intish cast wherever we would have warned for             \
-   * HackArrCompatCheckIntishCast--this includes intish key cast in any \
-   * PHP code and much of the runtime and extensions */                 \
-  F(bool, EnableIntishCast, true)                                       \
   F(bool, HackArrDVArrs, false)                                         \
-  F(uint32_t, LogSuppressedIntishCastRate, 0)                           \
+  /* Enable instrumentation and information in the repo for tracking    \
+   * the source of vecs and dicts whose vec/dict-ness is observed       \
+   * during program execution                                           \
+   *                                                                    \
+   * Latches to false at startup if either the repo we're loading in    \
+   * RepoAuthoritativeMode wasn't built with this flag or if the        \
+   * flag LogArrayProvenance is unset */                                \
+  F(bool, ArrayProvenance, false)                                       \
+  /* Enable logging the source of vecs/dicts whose vec/dict-ness is     \
+   * observed, e.g. through serialization */                            \
+  F(bool, LogArrayProvenance, false)                                    \
+  /* Log only out out of this many array headers when serializing */    \
+  F(uint32_t, LogArrayProvenanceSampleRatio, 1000)                      \
   /* Warn if is expression are used with type aliases that cannot be    |
    * resolved */                                                        \
   F(bool, IsExprEnableUnresolvedWarning, false)                         \
@@ -1050,7 +1048,13 @@ struct RuntimeOption {
   F(bool, NoticeOnReadDynamicProp, false)                               \
   F(bool, NoticeOnImplicitInvokeToString, false)                        \
   F(bool, FatalOnConvertObjectToString, false)                          \
-  F(bool, ReffinessInvariance, false)                                   \
+  /* Indicates whether parameters of overridden methods must match the
+     reffiness of the parent method. When set to enforcing mode, inout
+     wrappers will be created for methods.
+       0 - do nothing
+       1 - raise a warning on reffiness mismatch
+       2 - raise a fatal on reffiness mismatch */                       \
+  F(uint32_t, ReffinessInvariance, 0)                                   \
   F(bool, NoticeOnBuiltinDynamicCalls, false)                           \
   F(bool, RxPretendIsEnabled, false)                                    \
   F(bool, NoArrayAccessInIdx, false)                                    \
@@ -1059,13 +1063,24 @@ struct RuntimeOption {
   F(bool, RaiseFuncConversionWarning, false)                            \
   /* Raise warning when class pointers are used as strings. */          \
   F(bool, RaiseClassConversionWarning, false)                           \
+  F(bool, EmitClsMethPointers, false)                                   \
+  /* false to skip type refinement for ClsMeth type at HHBBC. */        \
+  F(bool, IsCompatibleClsMethType, false)                               \
   /* Raise warning when ClsMethDataRef is used as varray/vec. */        \
   F(bool, RaiseClsMethConversionWarning, false)                         \
   /* Raise warning when strings are used as classes. */                 \
   F(bool, RaiseStrToClsConversionWarning, false)                        \
+  F(bool, EmitMethCallerFuncPointers, false)                            \
+  /* trigger E_USER_WARNING error when getClassName()/getMethodName()
+   * is used on __SystemLib\MethCallerHelper */                         \
+  F(bool, NoticeOnMethCallerHelperUse, false)                           \
   F(bool, NoticeOnCollectionToBool, false)                              \
   F(bool, NoticeOnSimpleXMLBehavior, false)                             \
-  F(bool, NoticeOnBadMethodStaticness, false)                           \
+  F(bool, NoticeOnBadMethodStaticness, true)                            \
+  F(bool, ForbidDivisionByZero, true)                                   \
+  F(bool, NoticeOnByRefArgumentTypehintViolation, false)                \
+  /* Enables Hack records. */                                           \
+  F(bool, HackRecords, false)                                           \
   /*                                                                    \
    * Control dynamic calls to functions and dynamic constructs of       \
    * classes which haven't opted into being called that way.            \
@@ -1075,7 +1090,10 @@ struct RuntimeOption {
    * 2 - Throw exception                                                \
    *                                                                    \
    */                                                                   \
-  F(int32_t, ForbidDynamicCalls, 0)                                     \
+  F(int32_t, ForbidDynamicCallsToFunc, 0)                               \
+  F(int32_t, ForbidDynamicCallsToClsMeth, 0)                            \
+  F(int32_t, ForbidDynamicCallsToInstMeth, 0)                           \
+  F(int32_t, ForbidDynamicConstructs, 0)                                \
   /*                                                                    \
    * Control handling of out-of-range integer values in the compact     \
    * Thrift serializer.                                                 \
@@ -1149,6 +1167,25 @@ struct RuntimeOption {
   F(uint32_t, ProfBranchSampleFreq, 0)                                  \
   /* Sampling frequency for profiling packed array accesses. */         \
   F(uint32_t, ProfPackedArraySampleFreq, 0)                             \
+  F(bool, UseXedAssembler, false)                                       \
+  /* Record the first N units loaded via StructuredLog::log()        */ \
+  F(uint64_t, RecordFirstUnits, 0)                                      \
+  /* More aggresively reuse already compiled units based on SHA1     */ \
+  F(bool, CheckUnitSHA1, true)                                          \
+  /* When dynamic_fun is called on a function not marked as
+     __DynamicallyCallable:
+
+     0 - do nothing
+     1 - raise a warning
+     2 - throw */                                                       \
+  F(uint64_t, DynamicFunLevel, 1)                                       \
+  /* When dynamic_class_meth is called on a method not marked as
+     __DynamicallyCallable:
+
+     0 - do nothing
+     1 - raise a warning
+     2 - throw */                                                       \
+  F(uint64_t, DynamicClsMethLevel, 1)                                   \
   /* */
 
 private:
@@ -1180,9 +1217,9 @@ public:
   static bool RepoCommit;
   static bool RepoDebugInfo;
   static bool RepoAuthoritative;
-  static bool RepoPreload;
   static int64_t RepoLocalReadaheadRate;
   static bool RepoLocalReadaheadConcurrent;
+  static uint32_t RepoBusyTimeoutMS;
 
   // pprof/hhprof options
   static bool HHProfEnabled;
@@ -1253,6 +1290,8 @@ public:
   static double XenonPeriodSeconds;
   static uint32_t XenonRequestFreq;
   static bool XenonForceAlwaysOn;
+
+  static bool SetProfileNullThisObject;
 };
 static_assert(sizeof(RuntimeOption) == 1, "no instance variables");
 

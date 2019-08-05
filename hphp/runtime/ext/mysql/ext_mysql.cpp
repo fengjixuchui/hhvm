@@ -20,7 +20,6 @@
 #include <folly/String.h>
 #include <folly/portability/Sockets.h>
 
-#include "hphp/runtime/base/actrec-args.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
@@ -330,10 +329,8 @@ static Variant HHVM_FUNCTION(mysql_multi_query, const String& query,
 
   if (mysql_real_query(conn, query.data(), query.size())) {
 #ifdef HHVM_MYSQL_TRACE_MODE
-    if (RuntimeOption::EnableHipHopSyntax) {
-      raise_notice("runtime/ext_mysql: failed executing [%s] [%s]",
-                   query.data(), mysql_error(conn));
-    }
+    raise_notice("runtime/ext_mysql: failed executing [%s] [%s]",
+                 query.data(), mysql_error(conn));
 #endif
     // turning this off clears the errors
     if (!mysql_set_server_option(conn, MYSQL_OPTION_MULTI_STATEMENTS_OFF)) {

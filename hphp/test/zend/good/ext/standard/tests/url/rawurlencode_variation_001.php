@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto string rawurlencode(string str)
  * Description: URL-encodes string
  * Source code: ext/standard/url.c
@@ -8,10 +8,10 @@
 // NB: basic functionality tested in tests/strings/001.phpt
 
 function test_error_handler($err_no, $err_msg, $filename, $linenum, $vars) {
-	echo "Error: $err_no - $err_msg, $filename($linenum)\n";
+    echo "Error: $err_no - $err_msg, $filename($linenum)\n";
 }
+<<__EntryPoint>> function main(): void {
 set_error_handler('test_error_handler');
-
 echo "*** Testing rawurlencode() : usage variations ***\n";
 
 // Initialise function arguments not being substituted (if any)
@@ -75,4 +75,4 @@ foreach($values as $value) {
 };
 
 echo "Done";
-?>
+}

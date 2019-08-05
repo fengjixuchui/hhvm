@@ -14,14 +14,13 @@ module WithSmartConstructors : functor (SmartConstructors : SmartConstructors.Sm
 ) -> sig
   type error_level = Minimum | Typical | Maximum
 
-  type hhvm_compat_mode = NoCompat | HHVMCompat | SystemLibCompat
+  type hhvm_compat_mode = NoCompat | HHVMCompat
 
   type env
   val make_env :
     (* Optional parts *)
        ?level:error_level
     -> ?hhvm_compat_mode:hhvm_compat_mode
-    -> ?enable_hh_syntax:bool
     -> ?hhi_mode:bool
     (* Required parts *)
     -> parser_options:ParserOptions.t

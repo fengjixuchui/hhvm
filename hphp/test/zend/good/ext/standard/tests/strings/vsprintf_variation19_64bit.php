@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : string vsprintf(string $format , array $args)
  * Description: Return a formatted string 
  * Source code: ext/standard/formatted_print.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vsprintf() : with  white spaces in format strings ***\n";
 
 // initializing the format array
@@ -45,4 +45,4 @@ foreach($formats as $format) {
 }
 
 echo "Done";
-?>
+}

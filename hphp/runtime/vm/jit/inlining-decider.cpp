@@ -24,6 +24,7 @@
 #include "hphp/runtime/vm/jit/irgen.h"
 #include "hphp/runtime/vm/jit/location.h"
 #include "hphp/runtime/vm/jit/irlower.h"
+#include "hphp/runtime/vm/jit/mcgen.h"
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
 #include "hphp/runtime/vm/jit/prof-data.h"
 #include "hphp/runtime/vm/jit/prof-data-serialize.h"
@@ -58,18 +59,18 @@ std::string nameAndReason(int bcOff, std::string caller, std::string callee,
 }
 
 bool traceRefusal(SrcKey callerSk, const Func* callee, std::string why,
-                  Annotations& annotations) {
+                  Annotations* annotations) {
   // This is not under Trace::enabled so that we can collect the data in prod.
   const Func* caller = callerSk.func();
   int bcOff = callerSk.offset();
   auto calleeName = callee ? callee->fullName()->data() : "(unknown)";
-  if (RuntimeOption::EvalDumpInlRefuse) {
-    annotations.emplace_back("NoInline",
+  if (annotations && RuntimeOption::EvalDumpInlDecision > 0) {
+    annotations->emplace_back("NoInline",
       nameAndReason(bcOff, caller->fullName()->data(), calleeName, why));
   }
   if (Trace::enabled) {
     assertx(caller);
-    FTRACE(2, "InliningDecider: refusing {}() <- {}{}\t<reason: {}>\n",
+    FTRACE(2, "Inlining decider: refusing {}() <- {}{}\t<reason: {}>\n",
            caller->fullName()->data(), calleeName, callee ? "()" : "", why);
   }
   if (caller->shouldSampleJit() || (callee && callee->shouldSampleJit())) {
@@ -79,7 +80,7 @@ bool traceRefusal(SrcKey callerSk, const Func* callee, std::string why,
       bcStrn << bcOff;
       return bcStrn.str();
     } ();
-    inlLog.setStr("BC off", bcStr);
+    inlLog.setStr("bc_off", bcStr);
     inlLog.setStr("caller", caller->fullName()->data());
     inlLog.setStr("callee", calleeName);
     inlLog.setStr("reason", why);
@@ -102,8 +103,8 @@ const StaticString
  * without peeking into its bytecode or regions.
  */
 bool isCalleeInlinable(SrcKey callSK, const Func* callee,
-                      Annotations& annotations) {
-  assertx(callSK.op() == Op::FCall);
+                       Annotations* annotations) {
+  assertx(hasFCallEffects(callSK.op()));
   auto refuse = [&] (const char* why) {
     return traceRefusal(callSK, callee, why, annotations);
   };
@@ -126,7 +127,7 @@ bool isCalleeInlinable(SrcKey callSK, const Func* callee,
       return refuse("callee has variadic capture with non-empty value");
     }
   }
-  if (callee->isMagic()) {
+  if (callee->isMagicCallMethod()) {
     return refuse("magic callee");
   }
   if (callee->isGenerator()) {
@@ -138,8 +139,7 @@ bool isCalleeInlinable(SrcKey callSK, const Func* callee,
   if (callee->isMethod() && callee->cls() == Generator::getClass()) {
     return refuse("generator member function");
   }
-  if (!RuntimeOption::EvalHHIRInliningIgnoreHints &&
-      callee->userAttributes().count(s_NeverInline.get())) {
+  if (callee->userAttributes().count(s_NeverInline.get())) {
     return refuse("callee marked __NEVER_INLINE");
   }
 
@@ -149,8 +149,8 @@ bool isCalleeInlinable(SrcKey callSK, const Func* callee,
 /*
  * Check that we don't have any missing or extra arguments.
  */
-bool checkNumArgs(SrcKey callSK, const Func* callee, Annotations& annotations) {
-  assertx(callSK.op() == Op::FCall);
+bool checkNumArgs(SrcKey callSK, const Func* callee, Annotations* annotations) {
+  assertx(hasFCallEffects(callSK.op()));
   assertx(callee);
 
   auto refuse = [&] (const char* why) {
@@ -167,10 +167,6 @@ bool checkNumArgs(SrcKey callSK, const Func* callee, Annotations& annotations) {
 
   if (fca.hasUnpack()) {
     return refuse("callee called with variadic arguments");
-  }
-
-  if (fca.numRets != 1) {
-    return refuse("callee with multiple returns");
   }
 
   if (fca.enforceReffiness()) {
@@ -197,13 +193,9 @@ bool checkNumArgs(SrcKey callSK, const Func* callee, Annotations& annotations) {
 ///////////////////////////////////////////////////////////////////////////////
 }
 
-bool InliningDecider::canInlineAt(SrcKey callSK, const Func* callee,
-                                  Annotations& annotations) const {
-  assertx(callSK.op() == Op::FCall);
+bool canInlineAt(SrcKey callSK, const Func* callee, Annotations* annotations) {
+  assertx(hasFCallEffects(callSK.op()));
 
-  if (m_disabled) {
-    return traceRefusal(callSK, callee, "m_disabled", annotations);
-  }
   if (!callee) {
     return traceRefusal(callSK, callee, "unknown callee", annotations);
   }
@@ -217,10 +209,6 @@ bool InliningDecider::canInlineAt(SrcKey callSK, const Func* callee,
   }
   if (callee->attrs() & AttrInterceptable) {
     return traceRefusal(callSK, callee, "callee is interceptable", annotations);
-  }
-  if (callee->takesInOutParams()) {
-    return traceRefusal(callSK, callee, "callee takes inout params",
-                        annotations);
   }
 
   // TODO(#4238160): Inlining into pseudomain callsites is still buggy.
@@ -383,7 +371,8 @@ using InlineCostCache = jit::fast_map<
 >;
 
 Vcost computeTranslationCostSlow(SrcKey at, Op callerFPushOp,
-                         const RegionDesc& region, Annotations& annotations) {
+                                 const RegionDesc& region,
+                                 Annotations& annotations) {
   TransContext ctx {
     kInvalidTransID,
     TransKind::Optimize,
@@ -448,7 +437,10 @@ int computeTranslationCost(SrcKey at, Op callerFPushOp,
 }
 
 uint64_t adjustedMaxVasmCost(const irgen::IRGS& env,
-                             const RegionDesc& calleeRegion) {
+                             const RegionDesc& calleeRegion,
+                             uint32_t depth) {
+  auto const maxDepth = RuntimeOption::EvalHHIRInliningMaxDepth;
+  if (depth >= maxDepth) return 0;
   const auto baseVasmCost = RuntimeOption::EvalHHIRInliningVasmCostLimit;
   const auto baseProfCount = s_baseProfCount.load();
   if (baseProfCount == 0) return baseVasmCost;
@@ -461,6 +453,8 @@ uint64_t adjustedMaxVasmCost(const irgen::IRGS& env,
     adjustedCost *= std::pow((double)callerProfCount / calleeProfCount,
                              RuntimeOption::EvalHHIRInliningVasmCalleeExp);
   }
+  adjustedCost *= std::pow(1 - (double)depth / maxDepth,
+                           RuntimeOption::EvalHHIRInliningDepthExp);
   if (adjustedCost < RuntimeOption::EvalHHIRInliningMinVasmCostLimit) {
     adjustedCost = RuntimeOption::EvalHHIRInliningMinVasmCostLimit;
   }
@@ -470,18 +464,24 @@ uint64_t adjustedMaxVasmCost(const irgen::IRGS& env,
   if (calleeProfCount) {
     FTRACE(3, "adjustedMaxVasmCost: adjustedCost ({}) = baseVasmCost ({}) * "
            "(callerProfCount ({}) / baseProfCount ({})) ^ {} * "
-           "(callerProfCount ({}) / calleeProfCount ({})) ^ {}\n",
+           "(callerProfCount ({}) / calleeProfCount ({})) ^ {} * "
+           "(1 - depth ({}) / maxDepth ({})) ^ {}\n",
            adjustedCost, baseVasmCost,
            callerProfCount, baseProfCount,
            RuntimeOption::EvalHHIRInliningVasmCallerExp,
            callerProfCount, calleeProfCount,
-           RuntimeOption::EvalHHIRInliningVasmCalleeExp);
+           RuntimeOption::EvalHHIRInliningVasmCalleeExp,
+           depth, maxDepth,
+           RuntimeOption::EvalHHIRInliningDepthExp);
   } else {
     FTRACE(3, "adjustedMaxVasmCost: adjustedCost ({}) = baseVasmCost ({}) * "
-           "(callerProfCount ({}) / baseProfCount ({})) ^ {}\n",
+           "(callerProfCount ({}) / baseProfCount ({})) ^ {} * "
+           "(1 - depth ({}) / maxDepth ({})) ^ {}\n",
            adjustedCost, baseVasmCost,
            callerProfCount, baseProfCount,
-           RuntimeOption::EvalHHIRInliningVasmCallerExp);
+           RuntimeOption::EvalHHIRInliningVasmCallerExp,
+           depth, maxDepth,
+           RuntimeOption::EvalHHIRInliningDepthExp);
   }
   return adjustedCost;
 }
@@ -490,61 +490,69 @@ uint64_t adjustedMaxVasmCost(const irgen::IRGS& env,
 }
 
 /*
- * Update context for start of inlining.
+ * Return the cost of inlining the given callee.
  */
-int InliningDecider::accountForInlining(SrcKey callerSk,
-                                        Op callerFPushOp,
-                                        const Func* callee,
-                                        const RegionDesc& region,
-                                        const irgen::IRGS& irgs,
-                                        Annotations& annotations) {
+int costOfInlining(SrcKey callerSk,
+                   Op callerFPushOp,
+                   const Func* callee,
+                   const RegionDesc& region,
+                   Annotations& annotations) {
   auto const alwaysInl =
     !RuntimeOption::EvalHHIRInliningIgnoreHints &&
     callee->userAttributes().count(s_AlwaysInline.get());
 
   // Functions marked as always inline don't contribute to overall cost
-  int cost = alwaysInl
+  return alwaysInl
     ? 0
     : computeTranslationCost(callerSk, callerFPushOp, region, annotations);
-
-  m_costStack.push_back(cost);
-  m_cost       += cost;
-  m_callDepth  += 1;
-  m_stackDepth += callee->maxStackCells();
-
-  return cost;
 }
 
-void InliningDecider::initWithCallee(const Func* callee) {
-  m_costStack.push_back(0);
-  m_callDepth  += 1;
-  m_stackDepth += callee->maxStackCells();
-}
-
-bool InliningDecider::shouldInline(const irgen::IRGS& irgs,
-                                   SrcKey callerSk,
-                                   Op callerFPushOp,
-                                   const Func* callee,
-                                   const RegionDesc& region,
-                                   uint32_t maxTotalCost,
-                                   Annotations& annotations) {
+bool shouldInline(const irgen::IRGS& irgs,
+                  SrcKey callerSk,
+                  Op callerFPushOp,
+                  const Func* callee,
+                  const RegionDesc& region,
+                  uint32_t maxTotalCost,
+                  Annotations& annotations) {
   auto sk = region.empty() ? SrcKey() : region.start();
   assertx(callee);
   assertx(sk.func() == callee);
 
+  auto annotationsPtr = mcgen::dumpTCAnnotation(irgs.context.kind) ?
+                        &annotations : nullptr;
+
   // Tracing return lambdas.
   auto refuse = [&] (const std::string& why) {
     FTRACE(2, "shouldInline: rejecting callee region: {}", show(region));
-    return traceRefusal(callerSk, callee, why, annotations);
+    return traceRefusal(callerSk, callee, why, annotationsPtr);
   };
 
-  auto accept = [&, this] (const char* kind) {
-    FTRACE(2, "InliningDecider: inlining {}() <- {}()\t<reason: {}>\n",
-           m_topFunc->fullName()->data(), callee->fullName()->data(), kind);
+  auto accept = [&] (std::string why) {
+    auto static inlineAccepts = ServiceData::createTimeSeries(
+      "jit.inline.accepts", {ServiceData::StatsType::COUNT});
+    inlineAccepts->addValue(1);
+
+    if (annotationsPtr && RuntimeOption::EvalDumpInlDecision >= 2) {
+      auto str = nameAndReason(callerSk.offset(),
+                               callerSk.func()->fullName()->data(),
+                               callee->fullName()->data(),
+                               why);
+      annotationsPtr->emplace_back("DoInline", str);
+    }
+
+    UNUSED auto const topFunc = [&] {
+      return irgs.inlineState.bcStateStack.empty()
+        ? irgs.bcState.func()
+        : irgs.inlineState.bcStateStack[0].func();
+    };
+
+    FTRACE(2, "Inlining decider: inlining {}() <- {}()\t<reason: {}>\n",
+           topFunc()->fullName()->data(), callee->fullName()->data(), why);
     return true;
   };
 
-  if (m_stackDepth + callee->maxStackCells() >= kStackCheckLeafPadding) {
+  auto const stackDepth = irgs.inlineState.stackDepth;
+  if (stackDepth + callee->maxStackCells() >= kStackCheckLeafPadding) {
     return refuse("inlining stack depth limit exceeded");
   }
 
@@ -597,11 +605,6 @@ bool InliningDecider::shouldInline(const irgen::IRGS& irgs,
                                     opcodeToName(op)).str().c_str());
       }
 
-      // RetM is currently not supported in the callee region.
-      if (op == OpRetM) {
-        return refuse("RetM is not supported");
-      }
-
       // Detect that the region contains a return.
       if (isReturnish(op)) {
         hasRet = true;
@@ -637,33 +640,32 @@ bool InliningDecider::shouldInline(const irgen::IRGS& irgs,
   const int cost = computeTranslationCost(callerSk, callerFPushOp, region,
                                           annotations);
   if (cost <= RuntimeOption::EvalHHIRAlwaysInlineVasmCostLimit) {
-    return accept("within always inline limit");
+    return accept(folly::sformat("cost={} within always-inline limit", cost));
   }
 
-  const int maxCost = maxTotalCost - m_cost;
+  int maxCost = maxTotalCost;
+  if (RuntimeOption::EvalHHIRInliningUseStackedCost) {
+    maxCost -= irgs.inlineState.cost;
+  }
+  const auto baseProfCount = s_baseProfCount.load();
+  const auto callerProfCount = irgen::curProfCount(irgs);
+  const auto calleeProfCount = irgen::calleeProfCount(irgs, region);
   if (cost > maxCost) {
-    const auto baseProfCount = s_baseProfCount.load();
-    const auto callerProfCount = irgen::curProfCount(irgs);
-    const auto calleeProfCount = irgen::calleeProfCount(irgs, region);
+    auto const depth = inlineDepth(irgs);
     return refuse(folly::sformat(
-      "too expensive: cost={} : maxTotalCost={} : maxCost={} : "
-      "baseProfCount={} : callerProfCount={} : calleeProfCount={}", cost,
-      maxTotalCost, maxCost, baseProfCount, callerProfCount, calleeProfCount));
+      "too expensive: cost={} : maxCost={} : "
+      "baseProfCount={} : callerProfCount={} : calleeProfCount={} : depth={}",
+      cost, maxCost, baseProfCount, callerProfCount, calleeProfCount, depth));
   }
 
-  return accept("small region with return");
+  return accept(folly::sformat("small region with return: cost={} : "
+                               "maxTotalCost={} : maxCost={} : baseProfCount={}"
+                               " : callerProfCount={} : calleeProfCount={}",
+                               cost, maxTotalCost, maxCost, baseProfCount,
+                               callerProfCount, calleeProfCount));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-void InliningDecider::registerEndInlining(const Func* callee) {
-  auto cost = m_costStack.back();
-  m_costStack.pop_back();
-
-  m_cost -= cost;
-  m_callDepth -= 1;
-  m_stackDepth -= callee->maxStackCells();
-}
 
 namespace {
 RegionDescPtr selectCalleeTracelet(const Func* callee,
@@ -724,6 +726,8 @@ TransID findTransIDForCallee(const ProfData* profData,
   TransID ret = kInvalidTransID;
   bool hasThisVaries = callee->hasThisVaries() &&
     ctxType.maybe(TObj) && !(ctxType <= TObj);
+  FTRACE(2, "findTransIDForCallee: offset={}  hasThisVaries={}\n",
+         offset, hasThisVaries);
   for (auto const id : idvec) {
     auto const rec = profData->transRec(id);
     if (rec->startBcOff() != offset) continue;
@@ -738,7 +742,7 @@ TransID findTransIDForCallee(const ProfData* profData,
         if (typeloc.location.tag() != LTag::Local) continue;
         auto const locId = typeloc.location.localId();
 
-        if (locId < numArgs && !(argTypes[locId] <= typeloc.type)) {
+        if (locId < numArgs && !(argTypes[locId].maybe(typeloc.type))) {
           return false;
         }
       }
@@ -746,9 +750,8 @@ TransID findTransIDForCallee(const ProfData* profData,
     }();
 
     if (!isvalid) continue;
-    if (!hasThisVaries) return id;
-    // The function may be called with or without $this, if we've seen
-    // both, give up.
+    // Found multiple entries that may match the arguments, so don't return
+    // any.
     if (ret != kInvalidTransID) return kInvalidTransID;
     ret = id;
   }
@@ -759,7 +762,7 @@ RegionDescPtr selectCalleeCFG(SrcKey callerSk, const Func* callee,
                               const int numArgs,
                               Type ctxType, std::vector<Type>& argTypes,
                               int32_t maxBCInstrs,
-                              Annotations& annotations) {
+                              Annotations* annotations) {
   auto const profData = jit::profData();
   if (!profData) {
     traceRefusal(callerSk, callee, "no profData", annotations);
@@ -810,44 +813,48 @@ RegionDescPtr selectCalleeCFG(SrcKey callerSk, const Func* callee,
 }
 }
 
-RegionDescPtr selectCalleeRegion(const SrcKey& sk,
+RegionDescPtr selectCalleeRegion(const irgen::IRGS& irgs,
                                  const Func* callee,
-                                 const irgen::IRGS& irgs,
-                                 InliningDecider& inl,
-                                 int32_t maxBCInstrs,
+                                 const FCallArgs& fca,
+                                 Type ctxType,
+                                 Op writeArOpc,
+                                 const SrcKey& sk,
                                  Annotations& annotations) {
-  assertx(sk.op() == OpFCall);
-  auto const numArgs = getImm(sk.pc(), 0).u_FCA.numArgs;
-  auto const& fpiStack = irgs.irb->fs().fpiStack();
-  assertx(!fpiStack.empty());
-  auto const& fpiInfo = fpiStack.back();
-  auto ctx = fpiInfo.ctxType;
+  assertx(hasFCallEffects(sk.op()));
+  auto static inlineAttempts = ServiceData::createTimeSeries(
+    "jit.inline.attempts", {ServiceData::StatsType::COUNT});
+  inlineAttempts->addValue(1);
 
-  if (ctx == TBottom) {
-    traceRefusal(sk, callee, "ctx is TBottom", annotations);
+  auto kind = irgs.context.kind;
+  auto annotationsPtr = mcgen::dumpTCAnnotation(kind) ?
+                        &annotations : nullptr;
+
+  if (ctxType == TBottom) {
+    traceRefusal(sk, callee, "ctx is TBottom", annotationsPtr);
     return nullptr;
   }
   if (callee->isClosureBody()) {
     if (!callee->cls()) {
-      ctx = TNullptr;
+      ctxType = TNullptr;
     } else if (callee->mayHaveThis()) {
-      ctx = TCtx;
+      ctxType = TCtx;
     } else {
-      ctx = TCctx;
+      ctxType = TCctx;
     }
   } else {
     // Bail out if calling a static methods with an object ctx.
-    if (ctx.maybe(TObj) &&
+    if (ctxType.maybe(TObj) &&
         (callee->isStaticInPrologue() ||
-         (!sk.hasThis() && isFPushClsMethod(fpiInfo.fpushOpc)))) {
+         (!sk.hasThis() && isFCallClsMethod(writeArOpc)))) {
       traceRefusal(sk, callee, "calling static method with an object",
-                   annotations);
+                   annotationsPtr);
       return nullptr;
     }
   }
 
+  FTRACE(2, "selectCalleeRegion: callee = {}\n", callee->fullName()->data());
   std::vector<Type> argTypes;
-  for (int i = numArgs - 1; i >= 0; --i) {
+  for (int i = fca.numArgs - 1; i >= 0; --i) {
     // DataTypeGeneric is used because we're just passing the locals into the
     // callee.  It's up to the callee to constrain further if needed.
     auto type = irgen::publicTopType(irgs, BCSPRelOffset{i});
@@ -858,39 +865,31 @@ RegionDescPtr selectCalleeRegion(const SrcKey& sk,
     if (type == TBottom) return nullptr;
     if (!(type <= TCell) && !(type <= TBoxedCell)) {
       traceRefusal(sk, callee, folly::sformat("maybe boxed arg num: {}", i),
-                   annotations);
+                   annotationsPtr);
       return nullptr;
     }
+    FTRACE(2, "arg {}: {}\n", i, type);
     argTypes.push_back(type);
   }
 
-  const auto mode = RuntimeOption::EvalInlineRegionMode;
-
-  if (mode == "cfg" || mode == "both") {
-    if (profData()) {
-      auto region = selectCalleeCFG(sk, callee, numArgs, ctx, argTypes,
-                                    maxBCInstrs, annotations);
-      if (region &&
-          inl.shouldInline(irgs, sk, fpiInfo.fpushOpc, callee, *region,
-                           adjustedMaxVasmCost(irgs, *region), annotations)) {
-        return region;
-      }
+  const auto depth = inlineDepth(irgs);
+  if (profData()) {
+    auto region = selectCalleeCFG(sk, callee, fca.numArgs, ctxType, argTypes,
+                                  irgs.budgetBCInstrs, annotationsPtr);
+    if (region &&
+        shouldInline(irgs, sk, writeArOpc, callee, *region,
+                     adjustedMaxVasmCost(irgs, *region, depth), annotations)) {
+      return region;
     }
-
-    if (mode == "cfg") return nullptr;
+    return nullptr;
   }
 
-  auto region = selectCalleeTracelet(
-    callee,
-    numArgs,
-    ctx,
-    argTypes,
-    maxBCInstrs
-  );
+  auto region = selectCalleeTracelet(callee, fca.numArgs, ctxType, argTypes,
+                                     irgs.budgetBCInstrs);
 
   if (region &&
-      inl.shouldInline(irgs, sk, fpiInfo.fpushOpc, callee, *region,
-                       adjustedMaxVasmCost(irgs, *region), annotations)) {
+      shouldInline(irgs, sk, writeArOpc, callee, *region,
+                   adjustedMaxVasmCost(irgs, *region, depth), annotations)) {
     return region;
   }
 

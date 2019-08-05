@@ -167,7 +167,7 @@ class DOMDocument extends DOMNode {
   // methods
   public function __construct($version = null, $encoding = null);
   public function createAttribute(string $name);
-  public function createAttributens(string $namespaceuri, string $qualifiedname);
+  public function createAttributeNS(string $namespaceuri, string $qualifiedname);
   public function createCDATASection(string $data);
   public function createComment(string $data);
   public function createDocumentFragment();
@@ -308,6 +308,11 @@ class DOMDocumentFragment extends DOMNode {
   public function __construct();
   public function appendXML(string $data): bool;
 
+}
+
+class DOMComment extends DOMCharacterData {
+  // Methods
+  public function __construct(?string $value = null);
 }
 
 <<__PHPStdLib>>

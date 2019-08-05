@@ -23,6 +23,7 @@
 #include <folly/Optional.h>
 
 #include "hphp/util/copy-ptr.h"
+#include "hphp/util/low-ptr.h"
 
 #include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/base/repo-auth-type-array.h"
@@ -50,9 +51,9 @@ struct Type;
  *                 |     |    |
  *              Cls<=c  Cell  Ref
  *                 |     |
- *              Cls=c    +-------------+--------+-------+-------+
- *                       |             |        |       |       |
- *                      Unc            |        |      Obj     Res
+ *              Cls=c    +-------------+--------+-------+-------+-----+
+ *                       |             |        |       |       |     |
+ *                      Unc            |        |      Obj     Res   Record
  *                       | \           |        |      /  \
  *                       |  \          |        |  Obj<=c Obj<=WaitHandle
  *                     Prim  \         |        |    |       |
@@ -239,6 +240,8 @@ enum trep : uint64_t {
   BSKeysetN = 1ULL << 36, // static non-empty keyset
   BCKeysetN = 1ULL << 37, // counted non-empty keyset
 
+  BRecord  = 1ULL << 38,
+
   BSPArr    = BSPArrE | BSPArrN,
   BCPArr    = BCPArrE | BCPArrN,
   BPArrE    = BSPArrE | BCPArrE,
@@ -338,6 +341,7 @@ enum trep : uint64_t {
   BOptKeysetE  = BInitNull | BKeysetE,
   BOptKeysetN  = BInitNull | BKeysetN,
   BOptKeyset   = BInitNull | BKeyset,
+  BOptRecord   = BInitNull | BRecord,
 
   BOptSPArrE   = BInitNull | BSPArrE,
   BOptCPArrE   = BInitNull | BCPArrE,
@@ -380,12 +384,14 @@ enum trep : uint64_t {
   BOptStrLike    = BInitNull | BStrLike,
   BOptUncStrLike = BInitNull | BUncStrLike,
 
-  BInitPrim = BInitNull | BBool | BNum | BFunc | BCls,
+  BInitPrim = BInitNull | BBool | BNum | BFunc | BCls |
+              (use_lowptr ? BClsMeth : 0),
+
   BPrim     = BInitPrim | BUninit,
   BInitUnc  = BInitPrim | BSStr | BSArr | BSVec | BSDict | BSKeyset,
   BUnc      = BInitUnc | BUninit,
   BInitCell = BInitNull | BBool | BInt | BDbl | BStr | BArr | BObj | BRes |
-              BVec | BDict | BKeyset | BFunc | BCls | BClsMeth,
+              BVec | BDict | BKeyset | BFunc | BCls | BClsMeth | BRecord,
   BCell     = BUninit | BInitCell,
   BInitGen  = BInitCell | BRef,
   BGen      = BUninit | BInitGen,
@@ -822,6 +828,7 @@ X(Cls)                                          \
 X(Ref)                                          \
 X(Func)                                         \
 X(ClsMeth)                                      \
+X(Record)                                       \
 X(SVecE)                                        \
 X(SVecN)                                        \
 X(SDictE)                                       \
@@ -893,6 +900,7 @@ X(OptRes)                                       \
 X(OptFunc)                                      \
 X(OptCls)                                       \
 X(OptClsMeth)                                   \
+X(OptRecord)                                    \
 X(OptSVecE)                                     \
 X(OptSVecN)                                     \
 X(OptSVec)                                      \

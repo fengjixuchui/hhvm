@@ -1,10 +1,10 @@
-<?php
+<?hh
 function __autoload($name) {
-	echo("AUTOLOAD '$name'\n");
-	eval("class $name {}");
+    echo("AUTOLOAD '$name'\n");
+    eval("class $name {}");
 }
 
-
+<<__EntryPoint>> function main(): void {
 try {
 } catch (A $e) {
 }
@@ -13,6 +13,6 @@ try {
   throw new Exception();
 } catch (B $e) {
 } catch (Exception $e) {
-	echo "ok\n";
+    echo "ok\n";
 }
-?>
+}

@@ -32,7 +32,7 @@ SOFTWARE.
 
 #include "hphp/runtime/ext/json/JSON_parser.h"
 
-#include <vector>
+#include <folly/FBVector.h>
 
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/collections.h"
@@ -41,12 +41,12 @@ SOFTWARE.
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/base/init-fini-node.h"
 #include "hphp/runtime/base/utf8-decode.h"
-#include "hphp/runtime/base/zend-strtod.h"
 #include "hphp/runtime/ext/json/ext_json.h"
 #include "hphp/runtime/ext/collections/ext_collections-map.h"
 #include "hphp/runtime/ext/collections/ext_collections-vector.h"
 #include "hphp/system/systemlib.h"
 #include "hphp/util/fast_strtoll_base10.h"
+#include "hphp/zend/zend-strtod.h"
 
 #define MAX_LENGTH_OF_LONG 20
 static const char long_min_digits[] = "9223372036854775808";
@@ -301,6 +301,13 @@ enum class Mode {
 
 namespace {
 
+int dehexchar(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - ('A' - 10);
+  if (c >= 'a' && c <= 'f') return c - ('a' - 10);
+  return -1;
+}
+
 NEVER_INLINE
 static void tvDecRefRange(TypedValue* begin, TypedValue* end) {
   assertx(begin <= end);
@@ -331,8 +338,8 @@ struct SimpleParser {
    */
   static bool TryParse(const char* inp, int length,
                        TypedValue* buf, Variant& out,
-                       JSONContainerType container_type) {
-    SimpleParser parser(inp, length, buf, container_type);
+                       JSONContainerType container_type, bool is_tsimplejson) {
+    SimpleParser parser(inp, length, buf, container_type, is_tsimplejson);
     bool ok = parser.parseValue();
     parser.skipSpace();
     if (!ok || parser.p != inp + length) {
@@ -346,11 +353,12 @@ struct SimpleParser {
 
  private:
   SimpleParser(const char* input, int length, TypedValue* buffer,
-               JSONContainerType container_type)
+               JSONContainerType container_type, bool is_tsimplejson)
     : p(input)
     , top(buffer)
     , array_depth(-kMaxArrayDepth) /* Start negative to simplify check. */
     , container_type(container_type)
+    , is_tsimplejson(is_tsimplejson)
   {
     assertx(input[length] == 0);  // Parser relies on sentinel to avoid checks.
   }
@@ -429,13 +437,62 @@ struct SimpleParser {
     return true;
   }
 
+  bool handleBackslash(signed char& out) {
+    char ch = *p++;
+    switch (ch) {
+      case 0: return false;
+      case '"': out = ch; return true;
+      case '\\': out = ch; return true;
+      case '/': out = ch; return true;
+      case 'b': out = '\b'; return true;
+      case 'f': out = '\f'; return true;
+      case 'n': out = '\n'; return true;
+      case 'r': out = '\r'; return true;
+      case 't': out = '\t'; return true;
+      case 'u': {
+        if (UNLIKELY(is_tsimplejson)) {
+          auto const ch1 = *p++;
+          auto const ch2 = *p++;
+          auto const dch3 = dehexchar(*p++);
+          auto const dch4 = dehexchar(*p++);
+          if (UNLIKELY(ch1 != '0' || ch2 != '0' || dch3 < 0 || dch4 < 0)) {
+            return false;
+          }
+          out = (dch3 << 4) | dch4;
+          return true;
+        } else {
+          uint16_t u16cp = 0;
+          for (int i = 0; i < 4; i++) {
+            auto const hexv = dehexchar(*p++);
+            if (hexv < 0) return false; // includes check for end of string
+            u16cp <<= 4;
+            u16cp |= hexv;
+          }
+          if (u16cp > 0x7f) {
+            return false;
+          } else {
+            out = u16cp;
+            return true;
+          }
+        }
+      }
+      default: return false;
+    }
+  }
+
   bool parseString() {
     int len = 0;
     auto const charTop = reinterpret_cast<signed char*>(top);
+    assertx(p[-1] == '"'); // SimpleParser only handles "-quoted strings
     for (signed char ch = *p++; ch != '\"'; ch = *p++) {
-      charTop[len++] = ch;
-      // Signed char means less than ' ' also catches non-ASCII.
-      if (ch < ' ' || ch == '\\' || ch == '\'') return false;
+      charTop[len++] = ch; // overwritten later if `ch == '\\'`
+      if (ch < ' ') {
+        // `ch < ' '` catches null and also non-ASCII (since signed char)
+        return false;
+      }
+      if (ch == '\\') {
+        if (!handleBackslash(charTop[len - 1])) return false;
+      }
     }
     pushStringData(StringData::Make(
       reinterpret_cast<char*>(charTop), len, CopyString));
@@ -495,6 +552,10 @@ struct SimpleParser {
           tv.m_type = KindOfInt64;
           tv.m_data.pstr->release();
           tv.m_data.num = num;
+        } else if (auto sstr = lookupStaticString(tv.m_data.pstr)){
+          tv.m_type = KindOfPersistentString;
+          tv.m_data.pstr->release();
+          tv.m_data.pstr = sstr;
         }
         // TODO(14491721): Precompute and save hash to avoid deref in MakeMixed.
         if (!matchSeparator(':')) return false;
@@ -613,6 +674,7 @@ struct SimpleParser {
   TypedValue* top;
   int array_depth;
   JSONContainerType container_type;
+  bool is_tsimplejson;
 };
 
 /*
@@ -663,7 +725,7 @@ struct json_parser {
     String key;
     Variant val;
   };
-  std::vector<json_state> stack;
+  folly::fbvector<json_state> stack;
   // check_non_safepoint_surprise() above will not trigger gc
   TYPE_SCAN_IGNORE_FIELD(stack);
   int top;
@@ -689,12 +751,12 @@ struct json_parser {
         SimpleParser::BufferBytesForLength(length) :
         new_cap * 2;
       if (tl_buffer.raw) {
-        free(tl_buffer.raw);
+        json_free(tl_buffer.raw);
         tl_buffer.raw = nullptr;
       }
       sb_cap = 0;
       if (!tl_heap->preAllocOOM(bufSize)) {
-        tl_buffer.raw = (char*)malloc(bufSize);
+        tl_buffer.raw = (char*)json_malloc(bufSize);
         if (!tl_buffer.raw) tl_heap->forceOOM();
       }
       check_non_safepoint_surprise();
@@ -710,12 +772,27 @@ struct json_parser {
   }
   void flushSb() {
     if (tl_buffer.raw) {
-      free(tl_buffer.raw);
+      json_free(tl_buffer.raw);
       tl_buffer.raw = nullptr;
     }
     sb_cap = 0;
     sb_buf.setBuf(nullptr, 0);
     sb_key.setBuf(nullptr, 0);
+  }
+ private:
+  static void* json_malloc(size_t size) {
+    if (RuntimeOption::EvalJsonParserUseLocalArena) {
+      return local_malloc(size);
+    } else {
+      return malloc(size);
+    }
+  }
+  static void json_free(void* ptr) {
+    if (RuntimeOption::EvalJsonParserUseLocalArena) {
+      return local_free(ptr);
+    } else {
+      return free(ptr);
+    }
   }
 };
 
@@ -794,13 +871,6 @@ static int pop(json_parser *json, Mode mode) {
   json->stack[json->top].mode = Mode::INVALID;
   json->top -= 1;
   return true;
-}
-
-static int dehexchar(char c) {
-  if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'A' && c <= 'F') return c - ('A' - 10);
-  if (c >= 'a' && c <= 'f') return c - ('a' - 10);
-  return -1;
 }
 
 static String copy_and_clear(UncheckedBuffer &buf) {
@@ -889,6 +959,7 @@ static void json_create_zval(Variant &z, UncheckedBuffer &buf, DataType type,
     case KindOfFunc:
     case KindOfClass:
     case KindOfClsMeth:
+    case KindOfRecord:
       z = uninit_null();
       return;
   }
@@ -1061,7 +1132,10 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
   // they exceed kMaxPersistentStringBufferCapacity at exit or if the thread
   // is explicitly flushed (e.g., due to being idle).
   json->initSb(length);
-
+  SCOPE_EXIT {
+    constexpr int kMaxPersistentStringBufferCapacity = 256 * 1024;
+    if (json->sb_cap > kMaxPersistentStringBufferCapacity) json->flushSb();
+  };
   // SimpleParser only handles the most common set of options. Also, only use it
   // if its array nesting depth check is *more* restrictive than what the user
   // asks for, to ensure that the precise semantics of the general case is
@@ -1070,11 +1144,13 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
       options == (options & (k_JSON_FB_LOOSE |
                              k_JSON_FB_DARRAYS |
                              k_JSON_FB_DARRAYS_AND_VARRAYS |
-                             k_JSON_FB_HACK_ARRAYS)) &&
+                             k_JSON_FB_HACK_ARRAYS |
+                             k_JSON_FB_THRIFT_SIMPLE_JSON)) &&
       depth >= SimpleParser::kMaxArrayDepth &&
       length <= RuntimeOption::EvalSimpleJsonMaxLength &&
       SimpleParser::TryParse(p, length, json->tl_buffer.tv, z,
-                             get_container_type_from_options(options))) {
+                             get_container_type_from_options(options),
+                             options & k_JSON_FB_THRIFT_SIMPLE_JSON)) {
     return true;
   }
 
@@ -1101,10 +1177,9 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
 
   UncheckedBuffer *buf = &json->sb_buf;
   UncheckedBuffer *key = &json->sb_key;
-  static const int kMaxPersistentStringBufferCapacity = 256 * 1024;
 
   DataType type = kInvalidDataType;
-  unsigned short utf16 = 0;
+  unsigned short escaped_bytes = 0;
 
   auto reset_type = [&] { type = kInvalidDataType; };
 
@@ -1116,7 +1191,6 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
     json->stack.resize(depth);
   }
   SCOPE_EXIT {
-    if (json->sb_cap > kMaxPersistentStringBufferCapacity) json->flushSb();
     if (json->stack.empty()) return;
     for (int i = 0; i <= json->mark; i++) {
       json->stack[i].key.reset();
@@ -1440,6 +1514,7 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
       /*
         Change the state and iterate.
       */
+      bool is_tsimplejson = options & k_JSON_FB_THRIFT_SIMPLE_JSON;
       if (type == KindOfString) {
         if (/*<fb>*/(/*</fb>*/s == 3/*<fb>*/ || s == 30)/*</fb>*/ &&
             state != 8) {
@@ -1458,14 +1533,33 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
             }
           }
         } else if (s == 6) {
-          utf16 = dehexchar(b) << 12;
+          if (UNLIKELY(is_tsimplejson)) {
+            if (UNLIKELY(b != '0'))  {
+              s_json_parser->error_code = JSON_ERROR_SYNTAX;
+              return false;
+            }
+            escaped_bytes = 0;
+          } else {
+            escaped_bytes = dehexchar(b) << 12;
+          }
         } else if (s == 7) {
-          utf16 += dehexchar(b) << 8;
+          if (UNLIKELY(is_tsimplejson)) {
+            if (UNLIKELY(b != '0'))  {
+              s_json_parser->error_code = JSON_ERROR_SYNTAX;
+              return false;
+            }
+          } else {
+            escaped_bytes += dehexchar(b) << 8;
+          }
         } else if (s == 8) {
-          utf16 += dehexchar(b) << 4;
+          escaped_bytes += dehexchar(b) << 4;
         } else if (s == 3 && state == 8) {
-          utf16 += dehexchar(b);
-          utf16_to_utf8(*buf, utf16);
+          escaped_bytes += dehexchar(b);
+          if (UNLIKELY(is_tsimplejson)) {
+            buf->append((char)escaped_bytes);
+          } else {
+            utf16_to_utf8(*buf, escaped_bytes);
+          }
         }
       } else if ((type == kInvalidDataType || type == KindOfNull) &&
                  (c == S_DIG || c == S_ZER)) {

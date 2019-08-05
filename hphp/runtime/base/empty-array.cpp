@@ -124,8 +124,8 @@ arr_lval EmptyArray::MakePackedInl(TypedValue tv) {
   );
   ad->m_sizeAndPos = 1; // size=1, pos=0
 
-  auto const elem = packedData(ad);
-  *elem = tv;
+  auto elem = PackedArray::LvalUncheckedInt(ad, 0);
+  tvCopy(tv, elem);
 
   assertx(ad->kind() == ArrayData::kPackedKind);
   assertx(ad->dvArray() == ArrayData::kNotDVArray);
@@ -267,18 +267,8 @@ arr_lval EmptyArray::LvalInt(ArrayData* ad, int64_t k, bool copy) {
   return LvalIntImpl<true>(ad, k, copy);
 }
 
-arr_lval EmptyArray::LvalIntRef(ArrayData* ad, int64_t k, bool copy) {
-  if (checkHACRefBind()) raiseHackArrCompatRefBind(k);
-  return LvalInt(ad, k, copy);
-}
-
 arr_lval EmptyArray::LvalStr(ArrayData* ad, StringData* k, bool copy) {
   return LvalStrImpl<true>(ad, k, copy);
-}
-
-arr_lval EmptyArray::LvalStrRef(ArrayData* ad, StringData* k, bool copy) {
-  if (checkHACRefBind()) raiseHackArrCompatRefBind(k);
-  return LvalStr(ad, k, copy);
 }
 
 arr_lval EmptyArray::LvalNew(ArrayData*, bool) {
@@ -288,37 +278,9 @@ arr_lval EmptyArray::LvalNew(ArrayData*, bool) {
   return EmptyArray::MakePacked(make_tv<KindOfNull>());
 }
 
-arr_lval EmptyArray::LvalNewRef(ArrayData* ad, bool copy) {
-  if (checkHACRefBind()) raiseHackArrCompatRefNew();
-  return LvalNew(ad, copy);
-}
-
-ArrayData* EmptyArray::SetRefInt(ArrayData*, int64_t k, tv_lval v) {
-  if (checkHACRefBind()) raiseHackArrCompatRefBind(k);
-  tvBoxIfNeeded(v);
-  tvIncRefCountable(v.tv());
-  auto const lval = k == 0 ? EmptyArray::MakePacked(v.tv())
-                           : EmptyArray::MakeMixed(k, v.tv());
-  return lval.arr;
-}
-
-ArrayData* EmptyArray::SetRefStr(ArrayData*, StringData* k, tv_lval v) {
-  if (checkHACRefBind()) raiseHackArrCompatRefBind(k);
-  tvBoxIfNeeded(v);
-  tvIncRefCountable(v.tv());
-  return EmptyArray::MakeMixed(k, v.tv()).arr;
-}
-
 ArrayData* EmptyArray::Append(ArrayData*, Cell v) {
   tvIncRefGen(v);
   return EmptyArray::MakePackedInl(v).arr;
-}
-
-ArrayData* EmptyArray::AppendRef(ArrayData*, tv_lval v) {
-  if (checkHACRefBind()) raiseHackArrCompatRefNew();
-  tvBoxIfNeeded(v);
-  tvIncRefCountable(v.tv());
-  return EmptyArray::MakePacked(v.tv()).arr;
 }
 
 ArrayData* EmptyArray::AppendWithRef(ArrayData*, TypedValue v) {

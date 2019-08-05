@@ -9,7 +9,7 @@
 
 (*
  * This function works by side effects. It is adding in the
- * Naming_heap the nast produced from the ast passed as a parameter
+ * Naming_table the nast produced from the ast passed as a parameter
  * (the SharedMem must thus have been initialized via SharedMem.init
  * prior to calling this function). It also assumes the Parser_heap
  * has been previously populated. It also adds dependencies
@@ -17,8 +17,7 @@
  * about classes, functions, typedefs, respectively in the globals
  * in Typing_env.Class, Typing_env.Fun, and Typing_env.Typedef.
  *)
-val name_and_declare_types_program:
-  Ast.program -> unit
+val name_and_declare_types_program: Nast.program -> unit
 
 val make_env: Relative_path.t -> unit
 
@@ -26,16 +25,16 @@ val fun_decl_in_env:
   Decl_env.env -> Nast.fun_ -> Typing_defs.decl Typing_defs.fun_type
 
 val declare_const_in_file:
-  Relative_path.t -> string -> unit
+  Relative_path.t -> string -> Typing_defs.decl Typing_defs.ty * Errors.t
 
 val declare_typedef_in_file:
-  Relative_path.t -> string -> unit
+  Relative_path.t -> string -> Typing_defs.typedef_type
 
 val declare_class_in_file:
-  Relative_path.t -> string -> unit
+  Relative_path.t -> string -> Decl_defs.decl_class_type option
 
 val declare_fun_in_file:
-  Relative_path.t -> string -> unit
+  Relative_path.t -> string -> Typing_defs.decl Typing_defs.fun_type
 
 val start_tracking : unit -> unit
 

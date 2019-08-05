@@ -1,11 +1,11 @@
-<?php
+<?hh
 
 /*
    +-------------------------------------------------------------+
    | Copyright (c) 2015 Facebook, Inc. (http://www.facebook.com) |
    +-------------------------------------------------------------+
 */
-
+<<__EntryPoint>> function main(): void {
 error_reporting(-1);
 
 for ($i = 1; $i <= 10; ++$i)
@@ -16,10 +16,11 @@ for ($i = 1; $i <= 10; ++$i)
 // omit 1st and 3rd expressions
 
 $i = 1;
-for (; $i <= 10;):
+for (; $i <= 10;)
+{
     echo "$i\t".($i * $i)."\n"; // output a table of squares
     ++$i;
-endfor;
+}
 
 // omit all 3 expressions
 
@@ -37,4 +38,5 @@ for (;;)
 for ($a = 100, $i = 1; ++$i, $i <= 10; ++$i, $a -= 10)
 {
     echo "$i\t$a\n";
+}
 }

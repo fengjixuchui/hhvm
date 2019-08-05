@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* include('test.inc'); */
 /* charset=EUC-JP */
 
@@ -14,4 +14,3 @@ $str = str_repeat("日本語テキストと English text", 30);
 $str .= "日本語";
 
 echo hexdump(iconv("EUC-JP", "ISO-2022-JP", $str));
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 class Foo {}
 interface I {
   public function __construct(Foo $x);
@@ -6,3 +6,5 @@ interface I {
 class D implements I {
   public function __construct(array $x) {}
 }
+
+<<__EntryPoint>> function main(): void {}

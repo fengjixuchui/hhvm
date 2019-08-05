@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array gettimeofday([bool get_as_float])
  * Description: Returns the current time as array 
  * Source code: ext/standard/microtime.c
@@ -94,5 +94,4 @@ foreach($inputs as $key =>$value) {
       try { var_dump( gettimeofday($value) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
 
-?>
-===DONE===
+echo "===DONE===\n";

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /*
  * Get/set text attribute.
@@ -56,7 +56,7 @@ function ut_main()
             $res_str .= "ERROR: New $attr_name symbol value has not been set correctly.\n";
 
         // Restore attribute's value to default
-        ut_nfmt_set_text_attribute( $fmt, $attr, $def_val );
+      	ut_nfmt_set_text_attribute( $fmt, $attr, (string)$def_val );
 
         if( $attr == NumberFormatter::PADDING_CHARACTER )
            ut_nfmt_set_attribute( $fmt, NumberFormatter::FORMAT_WIDTH, 0 );
@@ -73,4 +73,3 @@ function ut_main()
 include_once( 'ut_common.inc' );
 ut_run();
 
-?>

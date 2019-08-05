@@ -25,10 +25,18 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         let error_list = List.map ~f:Errors.to_absolute error_list in
         let liveness = (if is_stale then Stale_status else Live_status) in
         let has_unsaved_changes = ServerFileSync.has_unsaved_changes env in
-        env, { Server_status.liveness; has_unsaved_changes; error_list; }
+        let last_recheck_info = env.ServerEnv.last_recheck_info in
+        let last_recheck_stats = match last_recheck_info with
+          | None -> None
+          | Some info -> Some { Recheck_stats.
+            id = info.recheck_id;
+            time = info.recheck_time;
+          }
+        in
+        env, { Server_status.liveness; has_unsaved_changes; error_list; last_recheck_stats; }
     | STATUS_SINGLE fn -> env, ServerStatusSingle.go fn env.tcopt
     | COVERAGE_LEVELS fn ->
-        env, ServerColorFile.go env.ServerEnv.tcopt env.ServerEnv.files_info fn
+        env, ServerColorFile.go env.ServerEnv.tcopt env.ServerEnv.naming_table fn
     | INFER_TYPE (fn, line, char, dynamic_view) ->
         env, ServerInferType.go env (fn, line, char, dynamic_view)
     | INFER_TYPE_BATCH (positions, dynamic_view) ->
@@ -38,18 +46,41 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         env, ServerInferTypeBatch.go genv.workers positions env
     | TYPED_AST (filename) ->
         env, ServerTypedAst.go env filename
-    | IDE_HOVER (fn, line, char) ->
-        let basic_only = genv.local_config.ServerLocalConfig.basic_autocomplete_only in
-        env, ServerHover.go env (fn, line, char) ~basic_only
-    | DOCBLOCK_AT (filename, line, char, base_class_name) ->
-        let basic_only = genv.local_config.ServerLocalConfig.basic_autocomplete_only in
-        env, ServerDocblockAt.go_location env (filename, line, char) ~base_class_name
-          ~basic_only
+    | IDE_HOVER (path, line, column) ->
+        let relative_path = Relative_path.create_detect_prefix path in
+        let (ctx, entry) = ServerIdeContext.update
+          ~tcopt:env.ServerEnv.tcopt
+          ~ctx:ServerIdeContext.empty
+          ~path:relative_path
+          ~file_input:(ServerCommandTypes.FileName path)
+        in
+        let result  = ServerHover.go_ctx
+          ~ctx
+          ~entry
+          ~line
+          ~column
+        in
+        env, result
+    | DOCBLOCK_AT (filename, line, column, base_class_name, kind) ->
+        let _ = base_class_name in
+        let r = ServerDocblockAt.go_docblock_at
+          ~env ~filename ~line ~column ~kind in
+        env, r
+    | DOCBLOCK_FOR_SYMBOL (symbol, kind) ->
+        let r = ServerDocblockAt.go_docblock_for_symbol ~env ~symbol ~kind in
+        env, r
+    | LOCATE_SYMBOL (symbol, kind) ->
+        let loc_opt = ServerDocblockAt.go_locate_symbol ~env ~symbol ~kind in
+        let r = match loc_opt with
+        | None -> (env, None)
+        | Some loc ->
+          let open DocblockService in
+          (env, Some (loc.dbs_filename, loc.dbs_line, loc.dbs_column, loc.dbs_base_class))
+        in
+        r
     | IDE_SIGNATURE_HELP (fn, line, char) ->
-        let basic_only = genv.local_config.ServerLocalConfig.basic_autocomplete_only in
-        env, ServerSignatureHelp.go env (fn, line, char) ~basic_only
+        env, ServerSignatureHelp.go env (fn, line, char)
     | AUTOCOMPLETE content ->
-      let basic_only = genv.local_config.ServerLocalConfig.basic_autocomplete_only in
         let autocomplete_context = { AutocompleteTypes.
           is_manually_invoked = false;
           is_xhp_classname = false;
@@ -60,14 +91,17 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
           is_after_quote = false;
         } in (* feature not implemented here; it only works for LSP *)
         let result = ServerAutoComplete.auto_complete
-          ~tcopt:env.tcopt ~delimit_on_namespaces:false ~autocomplete_context ~basic_only content in
+          ~tcopt:env.tcopt
+          ~autocomplete_context
+          ~sienv:(!(env.ServerEnv.local_symbol_table))
+          content in
         env, result.With_complete_flag.value
     | IDENTIFY_FUNCTION (file_input, line, char) ->
         let content = ServerFileSync.get_file_content file_input in
         env, ServerIdentifyFunction.go_absolute content line char env.tcopt
     | METHOD_JUMP (class_, filter, find_children) ->
       env, MethodJumps.get_inheritance class_ ~filter ~find_children
-        env.files_info genv.workers
+        env.naming_table genv.workers
     | METHOD_JUMP_BATCH (classes, filter) ->
       env, ServerMethodJumpsBatch.go genv.workers classes filter
     | FIND_REFS find_refs_action ->
@@ -101,30 +135,33 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         env, `Ok (ServerRefactor.get_fixme_patches codes env)
       end else
         env, (`Error remove_dead_fixme_warning)
+    | REWRITE_LAMBDA_PARAMETERS files ->
+        env, ServerRefactor.get_lambda_parameter_rewrite_patches env files
     | DUMP_SYMBOL_INFO file_list ->
         env, SymbolInfoService.go genv.workers file_list env
     | IN_MEMORY_DEP_TABLE_SIZE ->
       env, (SaveStateService.get_in_memory_dep_table_entry_count ())
+    | SAVE_NAMING filename ->
+      env, (SaveStateService.go_naming env.naming_table filename)
     | SAVE_STATE (
         filename,
         gen_saved_ignore_type_errors,
-        file_info_on_disk,
         replace_state_after_saving) ->
       if Errors.is_empty env.errorl || gen_saved_ignore_type_errors then
         let save_decls =
           genv.local_config.ServerLocalConfig.store_decls_in_saved_state in
         env,
         SaveStateService.go
-          ~file_info_on_disk
+          ~dep_table_as_blob:false
           ~save_decls
-          env.ServerEnv.files_info
-          env.errorl
+          env
           filename
           ~replace_state_after_saving
       else
         env, Error "There are typecheck errors; cannot generate saved state."
     | SEARCH (query, type_) ->
-       env, ServerSearch.go genv.workers query type_
+      let lst = env.ServerEnv.local_symbol_table in
+      env, ServerSearch.go genv.workers query type_ !lst
     | COVERAGE_COUNTS path -> env, ServerCoverageMetric.go path genv env
     | LINT fnl -> env, ServerLint.go genv env fnl
     | LINT_STDIN { filename; contents } ->
@@ -155,16 +192,15 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         let predeclare = genv.local_config.ServerLocalConfig.predeclare_ide in
         let edits = List.map edits ~f:Ide_api_types.ide_text_edit_to_fc in
         ServerFileSync.edit_file ~predeclare env path edits, ()
-    | IDE_AUTOCOMPLETE (path, pos, delimit_on_namespaces, is_manually_invoked) ->
+    | IDE_AUTOCOMPLETE (path, pos, is_manually_invoked) ->
         let open With_complete_flag in
         let pos = pos |> Ide_api_types.ide_pos_to_fc in
         let file_content = ServerFileSync.get_file_content (ServerCommandTypes.FileName path) in
         let offset = File_content.get_offset file_content pos in (* will raise if out of bounds *)
         let char_at_pos = File_content.get_char file_content offset in
-        let basic_only = genv.local_config.ServerLocalConfig.basic_autocomplete_only in
         let results = ServerAutoComplete.auto_complete_at_position
-          ~delimit_on_namespaces ~is_manually_invoked ~file_content ~basic_only ~pos
-          ~tcopt:env.tcopt
+          ~is_manually_invoked ~file_content ~pos
+          ~tcopt:env.tcopt ~sienv:!(env.ServerEnv.local_symbol_table)
         in
         let completions = results.value in
         let is_complete = results.is_complete in
@@ -174,10 +210,9 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         let content = ServerFileSync.get_file_content (ServerCommandTypes.FileName path) in
         let offset = File_content.get_offset content pos in (* will raise if out of bounds *)
         let char_at_pos = File_content.get_char content offset in
-        let basic_only = genv.local_config.ServerLocalConfig.basic_autocomplete_only in
         let result =
           FfpAutocompleteService.auto_complete env.tcopt content pos
-            ~basic_only ~filter_by_token:false
+            ~filter_by_token:false ~sienv:!(env.ServerEnv.local_symbol_table)
         in
         env, { AutocompleteTypes.completions = result; char_at_pos; is_complete = true; }
     | DISCONNECT ->
@@ -188,11 +223,16 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         let new_env = { env with
           diag_subscribe = Some (Diagnostic_subscription.of_id id init)
         } in
+        let () = Hh_logger.log "Diag_subscribe: SUBSCRIBE %d" id in
         new_env, ()
     | UNSUBSCRIBE_DIAGNOSTIC id ->
         let diag_subscribe = match env.diag_subscribe with
-          | Some x when Diagnostic_subscription.get_id x = id -> None
-          | x -> x
+          | Some x when Diagnostic_subscription.get_id x = id ->
+            let () = Hh_logger.log "Diag_subscribe: UNSUBSCRIBE %d" id in
+            None
+          | x ->
+            let () = Hh_logger.log "Diag_subscribe: UNSUBSCRIBE %d no effect" id in
+            x
         in
         let new_env = { env with diag_subscribe } in
         new_env, ()
@@ -206,16 +246,6 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
       env, ServerRage.go genv env
     | DYNAMIC_VIEW toggle ->
       ServerFileSync.toggle_dynamic_view env toggle, ()
-    | INFER_RETURN_TYPE id_info ->
-      let open ServerCommandTypes.Infer_return_type in
-      begin match id_info with
-      | Function fun_name ->
-        env, InferReturnTypeService.get_fun_return_ty
-          env.tcopt fun_name
-      | Method (class_name, meth_name) ->
-        env, InferReturnTypeService.get_meth_return_ty
-          env.tcopt class_name meth_name
-      end
     | CST_SEARCH { sort_results; input; files_to_search }->
       begin try
         env, CstSearchService.go genv env ~sort_results ~files_to_search input
@@ -246,3 +276,26 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         env, ServerFunIsLocallableBatch.go genv.workers positions env
     | LIST_FILES_WITH_ERRORS ->
       env, ServerEnv.list_files env
+    | FILE_DEPENDENCIES filenames ->
+        let files = ServerFileDependencies.go genv env filenames in
+        env, files
+    | IDENTIFY_TYPES (filename, line, char) ->
+        env, ServerTypeDefinition.go env (filename, line, char)
+    | EXTRACT_STANDALONE name ->
+        env, ServerExtractStandalone.go env.tcopt name
+    | GO_TO_DEFINITION (labelled_file, line, column) ->
+        let (path, file_input) =
+          ServerCommandTypesUtils.extract_labelled_file labelled_file in
+        let (ctx, entry) = ServerIdeContext.update
+          ~tcopt:env.ServerEnv.tcopt
+          ~ctx:ServerIdeContext.empty
+          ~path
+          ~file_input
+        in
+        ServerIdeContext.with_context ~ctx ~f:(fun () ->
+          env, ServerGoToDefinition.go_ctx ~entry ~line ~column
+        )
+    | BIGCODE filename ->
+        env, ServerBigCode.go env filename
+    | PAUSE pause ->
+        { env with paused = pause }, ()

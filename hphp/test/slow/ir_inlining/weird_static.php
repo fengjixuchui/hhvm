@@ -1,7 +1,7 @@
-<?php
+<?hh
 
 final class Constants {
-  public function gen() {
+  public static function gen() {
     yield 'foo';
   }
 }

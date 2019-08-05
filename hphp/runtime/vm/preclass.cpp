@@ -59,7 +59,7 @@ void PreClass::atomicRelease() {
 const StringData* PreClass::manglePropName(const StringData* className,
                                            const StringData* propName,
                                            Attr attrs) {
-  switch (attrs & (AttrPublic|AttrProtected|AttrPrivate)) {
+  switch (attrs & VisibilityAttrs) {
     case AttrPublic: {
       return propName;
     }
@@ -102,13 +102,12 @@ void PreClass::prettyPrint(std::ostream &out) const {
   if (m_attrs & AttrNoOverride){ out << " (nooverride)"; }
   if (m_attrs & AttrUnique)     out << " (unique)";
   if (m_attrs & AttrPersistent) out << " (persistent)";
-  if (m_attrs & AttrIsImmutable) {
-    // AttrIsImmutable classes will always also have AttrHasImmutable and
-    // AttrForbidDynamicProps set, so don't bother printing those
-    out << " (immutable)";
-  } else {
-    if (m_attrs & AttrHasImmutable) out << " (has-immutable)";
-    if (m_attrs & AttrForbidDynamicProps) out << " (no-dynamic-props)";
+  if (m_attrs & AttrIsConst) {
+    // AttrIsConst classes will always also have AttrForbidDynamicProps set,
+    // so don't bother printing it
+    out << " (const)";
+  } else if (m_attrs & AttrForbidDynamicProps) {
+    out << " (no-dynamic-props)";
   }
   if (m_attrs & AttrDynamicallyConstructible) out << " (dyn_constructible)";
   if (m_id != -1) {
@@ -143,7 +142,7 @@ void PreClass::enforceInMaybeSealedParentWhitelist(
     return;
   }
   const UserAttributeMap& parent_attrs = parentPreClass->userAttributes();
-  assert(parent_attrs.find(s___Sealed.get()) != parent_attrs.end());
+  assertx(parent_attrs.find(s___Sealed.get()) != parent_attrs.end());
   const auto& parent_sealed_attr = parent_attrs.find(s___Sealed.get())->second;
   bool in_sealed_whitelist = false;
   IterateV(parent_sealed_attr.m_data.parr,
@@ -195,7 +194,7 @@ void PreClass::Prop::prettyPrint(std::ostream& out,
   if (m_attrs & AttrProtected) { out << "protected "; }
   if (m_attrs & AttrPrivate) { out << "private "; }
   if (m_attrs & AttrPersistent) { out << "(persistent) "; }
-  if (m_attrs & AttrIsImmutable) { out << "(immutable) "; }
+  if (m_attrs & AttrIsConst) { out << "(const) "; }
   if (m_attrs & AttrTrait) { out << "(trait) "; }
   if (m_attrs & AttrNoBadRedeclare) { out << "(no-bad-redeclare) "; }
   if (m_attrs & AttrNoOverride) { out << "(no-override) "; }

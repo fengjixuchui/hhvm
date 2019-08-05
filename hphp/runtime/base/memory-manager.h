@@ -30,6 +30,8 @@
 #include "hphp/util/bloom-filter.h"
 #include "hphp/util/compilation-flags.h"
 #include "hphp/util/radix-map.h"
+#include "hphp/util/rds-local.h"
+#include "hphp/util/slab-manager.h"
 #include "hphp/util/struct-log.h"
 #include "hphp/util/thread-local.h"
 #include "hphp/util/trace.h"
@@ -40,10 +42,8 @@
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/sweepable.h"
 #include "hphp/runtime/base/header-kind.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/req-malloc.h"
 #include "hphp/runtime/base/req-ptr.h"
-#include "hphp/runtime/base/slab-manager.h"
 
 namespace HPHP {
 
@@ -391,7 +391,6 @@ static_assert(kMaxSmallSize < kMaxSizeClass,
  */
 constexpr char kSmallFreeFill   = 0x6a;
 constexpr char kRDSTrashFill    = 0x6b; // used by RDS for "normal" section
-constexpr char kTrashClsRef     = 0x6c; // used for class-ref slots
 constexpr char kTVTrashFill     = 0x7a; // used by interpreter
 constexpr char kTVTrashFill2    = 0x7b; // used by req::ptr dtors
 constexpr char kTVTrashJITStk   = 0x7c; // used by the JIT for stack slots
@@ -551,7 +550,7 @@ struct SparseHeap {
   std::vector<SlabInfo> m_pooled_slabs;
   RadixMap<HeapObject*,kLgSmallSizeQuantum,8> m_bigs;
   MemBlock m_slab_range;
-  int64_t m_hugeBytes{0};             // compare with RequestHugeMaxBytes
+  int64_t m_hugeBytes{0};               // compare with RequestHugeMaxBytes
   SlabManager* m_slabManager{nullptr};
 };
 
@@ -719,8 +718,8 @@ struct MemoryManager {
   /*
    * Heap iterator methods.  `fn' takes a HeapObject* argument.
    *
-   * initFree(): prepare to iterate by initializing free block headers,
-   *             initializing dead space past m_front, and sorting slabs.
+   * initFree(): prepare to iterate by initializing free block headers
+   *             and initializing dead space past m_front
    * reinitFree(): like initFree() but only update the freelists.
    * iterate(): Raw iterator loop over every HeapObject in the heap.
    *            Skips Holes and Slab headers. Clients can call this directly

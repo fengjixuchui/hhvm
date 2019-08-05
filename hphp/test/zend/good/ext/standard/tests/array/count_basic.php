@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int count(mixed $var [, int $mode])
  * Description: Count the number of elements in a variable (usually an array) 
  * Source code: ext/standard/array.c
@@ -8,7 +8,7 @@
  * Test basic functionality of count() using an array as $var argument
  * and different values as $mode argument.
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing count() : basic functionality ***\n";
 
 echo "\n-- One Dimensional Array: --\n";
@@ -27,4 +27,4 @@ echo "\$mode = 1:               ";
 var_dump(count($array_multi, 1));
 
 echo "Done";
-?>
+}

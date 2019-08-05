@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $s = new SplObjectStorage();
 $o1 = new stdClass();
 
@@ -8,5 +8,4 @@ try {
 } catch (UnexpectedValueException $e) {
 	echo $e->getMessage();
 }
-
-?>
+}

@@ -11,28 +11,33 @@ open Typing_defs
 open Pp_type
 
 type shallow_class_const = {
-  scc_abstract : bool;
-  scc_expr     : Nast.expr option;
-  scc_name     : Aast.sid;
-  scc_type     : decl ty;
+  scc_abstract   : bool;
+  scc_expr       : Nast.expr option;
+  scc_name       : Aast.sid;
+  scc_type       : decl ty;
+  scc_visibility : Aast.visibility;
 } [@@deriving show]
 
 type shallow_typeconst = {
+  stc_abstract    : typeconst_abstract_kind;
   stc_constraint  : decl ty option;
   stc_name        : Aast.sid;
   stc_type        : decl ty option;
   stc_enforceable : Pos.t * bool;
+  stc_visibility  : Aast.visibility;
+  stc_disallow_php_arrays : Pos.t option;
 } [@@deriving show]
 
 type shallow_prop = {
   sp_const       : bool;
-  sp_is_xhp_attr : bool;
+  sp_xhp_attr    : xhp_attr option;
   sp_lateinit    : bool;
   sp_lsb         : bool;
   sp_name        : Aast.sid;
   sp_needs_init  : bool;
   sp_type        : decl ty option;
   sp_visibility  : Aast.visibility;
+  sp_fixme_codes : ISet.t;
 } [@@deriving show]
 
 type shallow_method = {
@@ -43,8 +48,8 @@ type shallow_method = {
   sm_override   : bool;
   sm_reactivity : Decl_defs.method_reactivity option;
   sm_type       : decl fun_type;
-  sm_unsafecstr : bool;
   sm_visibility : Aast.visibility;
+  sm_fixme_codes: ISet.t;
 } [@@deriving show]
 
 type shallow_method_redeclaration = {
@@ -56,15 +61,17 @@ type shallow_method_redeclaration = {
   smr_visibility : Aast.visibility;
   smr_trait      : Aast.hint;
   smr_method     : Aast.pstring;
+  smr_fixme_codes: ISet.t;
 } [@@deriving show]
 
 type shallow_class = {
   sc_mode            : FileInfo.mode;
   sc_final           : bool;
   sc_is_xhp          : bool;
-  sc_kind            : Ast.class_kind;
+  sc_kind            : Ast_defs.class_kind;
   sc_name            : Aast.sid;
   sc_tparams         : decl tparam list;
+  sc_where_constraints  : decl where_constraint list;
   sc_extends         : decl ty list;
   sc_uses            : decl ty list;
   sc_method_redeclarations : shallow_method_redeclaration list;

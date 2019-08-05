@@ -1,8 +1,8 @@
-<?php
+<?hh
 
-function foo($p) {
-  return $p;
-}
+function foo($p) { return $p; }
+
+<<__EntryPoint>> function main(): void {
 $a = array(1, 2, 3, 4);
 $a[123] = 5;
 $a["0000"] = 6;
@@ -11,5 +11,6 @@ var_dump(foo(array()));
 var_dump(foo(array(1, 2, 3)));
 var_dump(foo($a[123]));
 var_dump(foo($a[0000]));
-var_dump(foo("$a[123]"));
+try { var_dump(foo("$a[123]")); } catch (Exception $e) { echo $e->getMessage()."\n"; }
 var_dump(foo("$a[0000]"));
+}

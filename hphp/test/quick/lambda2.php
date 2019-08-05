@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 // lambdas in class bodies
 
@@ -22,7 +22,7 @@ class bar {
   }
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   var_dump((new bar)->foo());
   $k = (new bar)->getClos();
   // dtor prints here
@@ -34,5 +34,3 @@ function main() {
   unset($k);
   echo "Done\n";
 }
-
-main();

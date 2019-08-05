@@ -1,4 +1,4 @@
-<?php /* destructor */
+<?hh /* destructor */
 
 function foo() {
  var_dump('failed');
@@ -6,8 +6,8 @@ function foo() {
 }
 
 class lol {}
-function bar() {
-  var_dump(func_get_args());
+function bar(...$args) {
+  var_dump($args);
   $x = new lol();
   return $x;
 }

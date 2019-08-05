@@ -1,5 +1,7 @@
 <?hh
 
-function() {
-  await null;
-};
+<<__EntryPoint>> function main(): void {
+  function() {
+    await null;
+  };
+}

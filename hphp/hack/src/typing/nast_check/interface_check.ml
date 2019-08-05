@@ -8,9 +8,7 @@
  *)
 
 open Core_kernel
-open Nast
-
-module SN = Naming_special_names
+open Aast
 
 let enforce_no_body m =
   match m.m_body.fb_ast with
@@ -19,24 +17,19 @@ let enforce_no_body m =
     then Errors.not_public_or_protected_interface (fst m.m_name)
   | _ -> Errors.abstract_body (fst m.m_name)
 
-(* make sure that interface methods are not async, in line with HHVM *)
-let enforce_not_async m =
-  match m.m_fun_kind with
-  | Ast.FAsync -> Errors.async_in_interface (fst m.m_name)
-  | Ast.FAsyncGenerator -> Errors.async_in_interface (fst m.m_name)
-  | _ -> ()
-
 let check_interface c =
   List.iter c.c_uses (fun (p, _) -> Errors.interface_use_trait p);
 
-  begin match c.c_vars with
-  | hd::_ ->
-    let pos = fst hd.cv_id in
-    Errors.interface_with_member_variable pos
-  | _ -> ()
+  let statics, vars = split_vars c in
+  begin
+    match vars with
+    | hd::_ ->
+      let pos = fst hd.cv_id in
+      Errors.interface_with_member_variable pos
+    | _ -> ()
   end;
 
-  begin match c.c_static_vars with
+  begin match statics with
   | hd::_ ->
     let pos = fst hd.cv_id in
     Errors.interface_with_static_member_variable pos
@@ -50,18 +43,12 @@ let check_interface c =
   end;
 
   (* make sure that interfaces only have empty public methods *)
-  List.iter (c.c_static_methods @ c.c_methods) enforce_no_body;
-  List.iter (c.c_static_methods @ c.c_methods) enforce_not_async;
-
-  (* make sure constructor has no body *)
-  Option.iter c.c_constructor enforce_no_body;
-  Option.iter c.c_constructor enforce_not_async
-
+  List.iter ~f:enforce_no_body c.c_methods
 
 let handler = object
   inherit Nast_visitor.handler_base
 
   method! at_class_ _ c =
-    if c.c_kind = Ast.Cinterface then check_interface c
+    if c.c_kind = Ast_defs.Cinterface then check_interface c
 
 end

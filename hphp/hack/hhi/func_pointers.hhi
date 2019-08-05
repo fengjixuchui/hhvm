@@ -8,6 +8,8 @@
  *
  */
 
+namespace HH {
+
 // The functions in this file are defined in HHVM and known to the
 // typechecker. There's no typechecker annotation syntax capable of
 // describing how they are used to infer type info; these .hhi declarations
@@ -178,7 +180,7 @@ function inst_meth($inst, string $meth_name); // becomes:
 <<__Rx>>
 function invariant(
   $condition, // e.g. is_int($x) or ($y instanceof SomeClass)
-  \HH\FormatString<PlainSprintf> $f, ...$f_args
+  FormatString<\PlainSprintf> $f, ...$f_args
 ): void; // becomes:
 // if (!(<condition>)) { // an Exception is thrown
 //   invariant_violation('sprintf format: %s', 'string', ...);
@@ -190,5 +192,7 @@ function invariant(
  * http://docs.hhvm.com/hack/reference/function/HH.invariant_callback_register/
  */
 function invariant_callback_register(
-  (function(string, ...): void) $callback
+  (function(string, mixed ...): void) $callback
 ): void {}
+
+} // namespace HH

@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : resource gzopen(string filename, string mode [, int use_include_path])
  * Description: Open a .gz-file and return a .gz-file pointer 
  * Source code: ext/zlib/zlib.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing gzopen() : variation ***\n";
 $absfile = __FILE__.'.tmp';
 $relfile = "gzopen_variation6.tmp";
@@ -29,5 +29,5 @@ echo "\n";
 
 unlink($absfile);
 unlink($relfile);
-?>
-===DONE===
+echo "===DONE===\n";
+}

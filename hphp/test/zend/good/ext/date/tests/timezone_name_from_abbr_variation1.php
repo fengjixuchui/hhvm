@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string timezone_name_from_abbr  ( string $abbr  [, int $gmtOffset= -1  [, int $isdst= -1  ]] )
  * Description: Returns the timezone name from abbrevation
  * Source code: ext/date/php_date.c
@@ -102,5 +102,4 @@ foreach($inputs as $variation =>$abbr) {
 // closing the resource
 fclose( $file_handle );
 
-?>
-===DONE===
+echo "===DONE===\n";

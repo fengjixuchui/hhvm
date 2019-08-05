@@ -1,6 +1,6 @@
 [(Fun
     { f_span = [3:1-7:2]; f_annotation = (); f_mode = <opaque>;
-      f_ret = (Some ([3:44-48], (Hprim Tvoid)));
+      f_ret = (([Pos.none], _), (Some ([3:44-48], (Hprim Tvoid))));
       f_name = ([3:10-30], "\\throwFromDoWhileLoop"); f_tparams = [];
       f_where_constraints = []; f_variadic = FVnonVariadic;
       f_params =
@@ -12,18 +12,20 @@
         ];
       f_body =
       { fb_ast =
-        [(Do (
-            [(Throw (true,
-                (([5:11-39], Exception),
-                 (New (
-                    (([5:15-24], Exception), (CI ([5:15-24], "\\Exception"))),
-                    [], [(([5:25-38], string), (String "DoWhileBody"))], 
-                    [],
-                    ([5:15-24], (function(string $message, int $code, ?Exception $previous): _))
-                    )))
-                ))
-              ],
-            (([6:12-17], _), Any)))
+        [([4:3-6:19],
+          (Do (
+             [([5:5-40],
+               (Throw
+                  (([5:11-39], Exception),
+                   (New (
+                      (([5:15-24], Exception),
+                       (CI ([5:15-24], "\\Exception"))),
+                      [], [(([5:25-38], string), (String "DoWhileBody"))],
+                      [],
+                      ([5:15-24], (function(string $message, int $code, ?Exception $previous): _))
+                      )))))
+               ],
+             (([6:12-17], nothing), (Lvar ([6:12-17], $cond))))))
           ];
         fb_annotation = No unsafe blocks };
       f_fun_kind = FSync; f_user_attributes = []; f_file_attributes = [];

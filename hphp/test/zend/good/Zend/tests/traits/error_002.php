@@ -1,7 +1,7 @@
-<?php
+<?hh
 
 class A {
-	use abc;
+    use abc;
 }
 
-?>
+<<__EntryPoint>> function main(): void {}

@@ -150,14 +150,14 @@ bool find_hugetlbfs_path() {
 }
 
 HugePageInfo read_hugepage_info(size_t pagesize, int node /* = -1 */) {
-  int nr_huge = 0, free_huge = 0;
+  unsigned nr_huge = 0, free_huge = 0;
   if (pagesize != size2m && pagesize != size1g) { // only 2M and 1G supported
     return HugePageInfo{0, 0};
   }
 #ifdef __linux__
   if (node >= 0) {
     auto const readNumFrom = [] (const char* path) {
-      int result = 0;
+      unsigned result = 0;
       char buffer[32];
       memset(buffer, 0, sizeof(buffer));
       int fd = open(path, O_RDONLY);
@@ -496,9 +496,9 @@ int remap_interleaved_2m_pages(void* addr, size_t pages) {
   assert(reinterpret_cast<uintptr_t>(addr) % size2m == 0);
   assert(addr != nullptr);
   int count = 0;
-  std::atomic_int node{0};
+  std::atomic<uint32_t> node{0};
   while (pages > 0) {
-    int curr_node = next_numa_node(node);
+    auto const curr_node = next_numa_node(node);
     count += (remap_2m(addr, curr_node) != nullptr);
     addr = (char*)addr + size2m;
     --pages;

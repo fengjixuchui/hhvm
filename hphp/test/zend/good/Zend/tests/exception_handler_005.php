@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 set_exception_handler("foo");
 set_exception_handler("foo1");
@@ -15,4 +15,3 @@ function foo1($e) {
 throw new excEption();
 
 echo "Done\n";
-?>

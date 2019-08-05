@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class TProtocolException extends Exception {}
 
@@ -33,7 +33,7 @@ class DummyTransport {
 class TestStruct {
   public $anI32 = null;
 
-  static $_TSPEC = array(
+  const SPEC = array(
     1 => array(
       'var' => 'anI32',
       'type' => TType::I32,

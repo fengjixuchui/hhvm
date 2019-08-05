@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool ctype_upper(mixed $c)
  * Description: Checks for uppercase character(s) 
  * Source code: ext/ctype/ctype.c
@@ -8,7 +8,7 @@
  * Pass strings containing different character types to ctype_upper() to test
  * which are considered valid uppercase character only strings
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing ctype_upper() : usage variations ***\n";
 $orig = setlocale(LC_CTYPE, "C");
 
@@ -49,5 +49,5 @@ foreach($values as $value) {
 };
 
 setlocale(LC_CTYPE, $orig);
-?>
-===DONE===
+echo "===DONE===\n";
+}

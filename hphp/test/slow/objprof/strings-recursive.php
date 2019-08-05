@@ -31,11 +31,9 @@ function main(): void {
   test("GLOBALS", $GLOBALS);
 
   $r = array();
-  $r[] = &$r;
   test("shallow array", $r);
 
   $r = array(array());
-  $r[0][] =& $r;
   test("deep array", $r);
 
   echo "---- the end ----\n";

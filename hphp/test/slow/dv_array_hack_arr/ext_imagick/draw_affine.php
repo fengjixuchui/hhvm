@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $affine_matrix = darray[
   'sx' => 1,
   'rx' => 0,
@@ -25,4 +25,5 @@ try {
   $draw->affine(darray[]);
 } catch (Exception $ex) {
   echo "PASS\n";
+}
 }

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto array array_count_values(array input)
  * Description: Return the value as key and the frequency of that value in input as value 
  * Source code: ext/standard/array.c
@@ -8,7 +8,7 @@
 /*
  * Test for handling of incorrect parameters.
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_count_values() : error conditions ***\n";
 
 // Zero arguments
@@ -26,4 +26,4 @@ echo "\n-- Testing array_count_values() function integer arguments --\n";
 var_dump( array_count_values(1 ));
 
 echo "Done";
-?>
+}

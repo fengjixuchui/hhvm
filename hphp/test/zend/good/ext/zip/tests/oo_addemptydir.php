@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 $dirname = dirname(__FILE__) . '/';
 include $dirname . 'utils.inc';
@@ -19,4 +19,3 @@ if ($zip->status == ZIPARCHIVE::ER_OK) {
 	echo "failed\n";
 }
 @unlink($file);
-?>

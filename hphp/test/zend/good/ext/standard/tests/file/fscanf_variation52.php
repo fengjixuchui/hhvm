@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /*
   Prototype: mixed fscanf ( resource $handle, string $format [, mixed &$...] );
@@ -6,7 +6,7 @@
 */
 
 /* Test fscanf() to scan an empty file */
-
+<<__EntryPoint>> function main(): void {
 $file_path = dirname(__FILE__);
 
 echo "*** Test fscanf(): to read an empty file ***\n"; 
@@ -51,12 +51,10 @@ foreach($modes as $mode) {
 }
 
 echo "\n*** Done ***";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = dirname(__FILE__);
 $filename = "$file_path/fscanf_variation52.tmp";
 if(file_exists($filename)) {
   unlink($filename);
 }
-?>
+}

@@ -203,7 +203,7 @@ struct HashTable : HashTableCommon {
   static ALWAYS_INLINE
   ArrayType* staticAlloc(uint32_t scale) {
     auto const size = computeAllocBytes(scale);
-    auto mem = RuntimeOption::EvalLowStaticArrays ? low_malloc(size)
+    auto mem = RuntimeOption::EvalLowStaticArrays ? lower_malloc(size)
                                                   : uncounted_malloc(size);
     return static_cast<ArrayType*>(mem);
   }
@@ -232,6 +232,9 @@ struct HashTable : HashTableCommon {
 
   static tv_rval NvGetInt(const ArrayData* ad, int64_t k);
   static tv_rval NvGetStr(const ArrayData* ad, const StringData* k);
+
+  static ssize_t NvGetIntPos(const ArrayData* ad, int64_t k);
+  static ssize_t NvGetStrPos(const ArrayData* ad, const StringData* k);
 
   static tv_rval RvalInt(const ArrayData* ad, int64_t k) {
     return NvGetInt(ad, k);
@@ -350,17 +353,6 @@ public:
         h0,
         [ki](const Elm& e) {
           return hitIntKey(e, ki);
-        },
-        [](Elm&){}
-      );
-  }
-
-  ALWAYS_INLINE
-  bool findForExists(const StringData* ks, hash_t h0) const {
-    return findImpl<FindType::Exists>(
-        h0,
-        [ks, h0](const Elm& e) {
-          return hitStrKey(e, ks, h0);
         },
         [](Elm&){}
       );

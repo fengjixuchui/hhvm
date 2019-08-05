@@ -125,6 +125,7 @@ void cgLdCns(IRLS& env, const IRInstruction* inst) {
       case KindOfFunc:
       case KindOfClass:
       case KindOfClsMeth:
+      case KindOfRecord:
         v << copy{v.cns(pcns->m_data.num), dst.reg(0)};
         break;
       case KindOfDouble:
@@ -152,29 +153,18 @@ tv_rval lookupCnsImpl(StringData* nm) {
   return cns;
 }
 
-Cell lookupCnsHelper(StringData* nm, bool error) {
+Cell lookupCnsEHelper(StringData* nm) {
   auto const cns = lookupCnsImpl(nm);
   if (LIKELY(cns != nullptr)) {
     Cell c1;
     cellDup(*cns, c1);
     return c1;
   }
-
-  // Undefined constants.
-  if (error) {
-    raise_error("Undefined constant '%s'", nm->data());
-  } else {
-    raise_notice(Strings::UNDEFINED_CONSTANT, nm->data(), nm->data());
-    Cell c1;
-    c1.m_data.pstr = const_cast<StringData*>(nm);
-    c1.m_type = KindOfPersistentString;
-    return c1;
-  }
-  not_reached();
+  raise_error("Undefined constant '%s'", nm->data());
 }
 
-Cell lookupCnsHelperNormal(rds::Handle tv_handle,
-                           StringData* nm, bool error) {
+Cell lookupCnsEHelperNormal(rds::Handle tv_handle,
+                           StringData* nm) {
   assertx(rds::isNormalHandle(tv_handle));
   if (UNLIKELY(rds::isHandleInit(tv_handle))) {
     auto const tv = rds::handleToPtr<TypedValue, rds::Mode::Normal>(tv_handle);
@@ -190,11 +180,11 @@ Cell lookupCnsHelperNormal(rds::Handle tv_handle,
   }
   assertx(!rds::isHandleInit(tv_handle));
 
-  return lookupCnsHelper(nm, error);
+  return lookupCnsEHelper(nm);
 }
 
-Cell lookupCnsHelperPersistent(rds::Handle tv_handle,
-                               StringData* nm, bool error) {
+Cell lookupCnsEHelperPersistent(rds::Handle tv_handle,
+                               StringData* nm) {
   assertx(rds::isPersistentHandle(tv_handle));
   auto tv = rds::handleToPtr<TypedValue, rds::Mode::Persistent>(tv_handle);
   assertx(tv->m_type == KindOfUninit);
@@ -209,128 +199,29 @@ Cell lookupCnsHelperPersistent(rds::Handle tv_handle,
       return c1;
     }
   }
-  return lookupCnsHelper(nm, error);
-}
-
-Cell lookupCnsUHelperNormal(rds::Handle tv_handle,
-                            StringData* nm, StringData* fallback,
-                            bool error) {
-  assertx(rds::isNormalHandle(tv_handle));
-
-  // Lookup qualified name in thread-local constants.
-  auto cns = lookupCnsImpl(nm);
-
-  // Try cache handle for unqualified name.
-  if (UNLIKELY(!cns && rds::isHandleInit(tv_handle, rds::NormalTag{}))) {
-    raise_undefined_const_fallback_notice(nm, fallback);
-    cns = rds::handleToPtr<TypedValue, rds::Mode::Normal>(tv_handle);
-    assertx(type(cns) != KindOfUninit);
-  }
-
-  if (LIKELY(cns != nullptr)) {
-    Cell c1;
-    cellDup(*cns, c1);
-    return c1;
-  }
-
-  // Lookup unqualified name in thread-local constants.
-  raise_undefined_const_fallback_notice(nm, fallback);
-  return lookupCnsHelper(fallback, error);
-}
-
-Cell lookupCnsUHelperPersistent(rds::Handle tv_handle,
-                                StringData* nm, StringData* fallback,
-                                bool error) {
-  assertx(rds::isPersistentHandle(tv_handle));
-
-  // Lookup qualified name in thread-local constants.
-  auto cns = lookupCnsImpl(nm);
-
-  if (UNLIKELY(!cns)) {
-    // Try cache handle for unqualified name.
-    auto const tv =
-      rds::handleToPtr<TypedValue, rds::Mode::Persistent>(tv_handle);
-    if (tv->m_type != KindOfUninit) {
-      raise_undefined_const_fallback_notice(nm, fallback);
-      cns = tv;
-    }
-  }
-
-  if (LIKELY(cns != nullptr)) {
-    Cell c1;
-    cellDup(*cns, c1);
-    return c1;
-  }
-
-  raise_undefined_const_fallback_notice(nm, fallback);
-  return lookupCnsHelper(fallback, error);
+  return lookupCnsEHelper(nm);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-namespace {
-
-void implLookupCns(IRLS& env, const IRInstruction* inst) {
+void cgLookupCnsE(IRLS& env, const IRInstruction* inst) {
   auto const cnsName = inst->src(0)->strVal();
   auto const ch = makeCnsHandle(cnsName);
   assertx(rds::isHandleBound(ch));
 
   auto const args = argGroup(env, inst)
     .imm(ch)
-    .immPtr(cnsName)
-    .imm(inst->is(LookupCnsE));
+    .immPtr(cnsName);
 
   cgCallHelper(
     vmain(env), env,
     rds::isNormalHandle(ch)
-      ? CallSpec::direct(lookupCnsHelperNormal)
-      : CallSpec::direct(lookupCnsHelperPersistent),
+      ? CallSpec::direct(lookupCnsEHelperNormal)
+      : CallSpec::direct(lookupCnsEHelperPersistent),
     callDestTV(env, inst),
     SyncOptions::Sync,
     args
   );
-}
-
-void implLookupCnsU(IRLS& env, const IRInstruction* inst) {
-  auto const cnsName = inst->src(0)->strVal();
-  auto const fallbackName = inst->src(1)->strVal();
-
-  auto const fallbackCh = makeCnsHandle(fallbackName);
-  assertx(rds::isHandleBound(fallbackCh));
-
-  auto const args = argGroup(env, inst)
-    .imm(fallbackCh)
-    .immPtr(cnsName)
-    .immPtr(fallbackName)
-    .imm(inst->is(LookupCnsUE));
-
-  cgCallHelper(
-    vmain(env), env,
-    rds::isNormalHandle(fallbackCh)
-      ? CallSpec::direct(lookupCnsUHelperNormal)
-      : CallSpec::direct(lookupCnsUHelperPersistent),
-    callDestTV(env, inst),
-    SyncOptions::Sync,
-    args
-  );
-}
-
-}
-
-void cgLookupCns(IRLS& env, const IRInstruction* inst) {
-  implLookupCns(env, inst);
-}
-
-void cgLookupCnsE(IRLS& env, const IRInstruction* inst) {
-  implLookupCns(env, inst);
-}
-
-void cgLookupCnsU(IRLS& env, const IRInstruction* inst) {
-  implLookupCnsU(env, inst);
-}
-
-void cgLookupCnsUE(IRLS& env, const IRInstruction* inst) {
-  implLookupCnsU(env, inst);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -355,6 +246,29 @@ void cgLdSubClsCns(IRLS& env, const IRInstruction* inst) {
   auto const tmp = v.makeReg();
   v << load{srcLoc(env, inst, 0).reg()[Class::constantsVecOff()], tmp};
   v << lea{tmp[slot * sizeof(Class::Const) + offsetof(Class::Const, val)], dst};
+}
+
+void cgLdSubClsCnsClsName(IRLS& env, const IRInstruction* inst) {
+  auto const extra = inst->extra<LdSubClsCnsClsName>();
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto& v = vmain(env);
+
+  auto const slot = extra->slot;
+  auto const tmp = v.makeReg();
+  v << load{srcLoc(env, inst, 0).reg()[Class::constantsVecOff()], tmp};
+#ifndef USE_LOWPTR
+  auto const offset = tmp[slot * sizeof(Class::Const) +
+                          offsetof(Class::Const, pointedClsName)];
+  v << load{offset, dst};
+#else
+  auto const rawData = v.makeReg();
+  auto const offset = tmp[slot * sizeof(Class::Const) +
+                          offsetof(Class::Const, val) +
+                          offsetof(TypedValue, m_aux)];
+  v << loadzlq{offset, rawData};
+  v << andqi{static_cast<int32_t>(ConstModifiers::kMask), rawData,
+             dst, v.makeReg()};
+#endif
 }
 
 void cgCheckSubClsCns(IRLS& env, const IRInstruction* inst) {
@@ -440,7 +354,7 @@ void cgLdTypeCns(IRLS& env, const IRInstruction* inst) {
 static ArrayData* loadClsTypeCnsHelper(
   const Class* cls, const StringData* name
 ) {
-  auto typeCns = cls->clsCnsGet(name, true);
+  auto typeCns = cls->clsCnsGet(name, ClsCnsLookup::IncludeTypes);
   if (typeCns.m_type == KindOfUninit) {
     if (cls->hasTypeConstant(name, true)) {
       raise_error("Type constant %s::%s is abstract",
@@ -457,9 +371,28 @@ static ArrayData* loadClsTypeCnsHelper(
   return typeCns.m_data.parr;
 }
 
+const StaticString s_classname("classname");
+
+static StringData* loadClsTypeCnsClsNameHelper(const Class* cls,
+                                              const StringData* name) {
+  auto const ts = loadClsTypeCnsHelper(cls, name);
+  if (auto const classname_field = ts->rval(s_classname.get())) {
+    assertx(isStringType(classname_field.type()));
+    return classname_field.val().pstr;
+  }
+  raise_error("Type constant %s::%s does not have a 'classname' field",
+              cls->name()->data(), name->data());
+}
+
 void cgLdClsTypeCns(IRLS& env, const IRInstruction* inst) {
   auto const args = argGroup(env, inst).ssa(0).ssa(1);
   cgCallHelper(vmain(env), env, CallSpec::direct(loadClsTypeCnsHelper),
+               callDest(env, inst), SyncOptions::Sync, args);
+}
+
+void cgLdClsTypeCnsClsName(IRLS& env, const IRInstruction* inst) {
+  auto const args = argGroup(env, inst).ssa(0).ssa(1);
+  cgCallHelper(vmain(env), env, CallSpec::direct(loadClsTypeCnsClsNameHelper),
                callDest(env, inst), SyncOptions::Sync, args);
 }
 

@@ -63,6 +63,8 @@ const int64_t k_JSON_FB_DARRAYS_AND_VARRAYS = 1ll << 29;
 const int64_t k_JSON_FB_WARN_EMPTY_DARRAYS = 1ll << 30;
 const int64_t k_JSON_FB_WARN_VEC_LIKE_DARRAYS = 1ll << 31;
 const int64_t k_JSON_FB_WARN_DICT_LIKE_DARRAYS = 1ll << 32;
+const int64_t k_JSON_FB_IGNORE_LATEINIT = 1ll << 33;
+const int64_t k_JSON_FB_THRIFT_SIMPLE_JSON = 1ll << 34;
 
 const int64_t k_JSON_ERROR_NONE
   = json_error_codes::JSON_ERROR_NONE;
@@ -100,8 +102,7 @@ Variant json_guard_error_result(const String& partial_error_output,
 
    // Issue a warning on unsupported type in case of HH syntax.
   if (json_get_last_error_code() ==
-      json_error_codes::JSON_ERROR_UNSUPPORTED_TYPE &&
-      RuntimeOption::EnableHipHopSyntax) {
+      json_error_codes::JSON_ERROR_UNSUPPORTED_TYPE) {
     // Unhandled case is always returned as `false`; for partial output
     // we render "null" value.
     raise_warning("json_encode(): type is unsupported, encoded as %s",
@@ -132,6 +133,7 @@ TypedValue HHVM_FUNCTION(json_encode, const Variant& value,
   if (options & k_JSON_FB_WARN_EMPTY_DARRAYS) vs.setEmptyDArrayWarn();
   if (options & k_JSON_FB_WARN_VEC_LIKE_DARRAYS) vs.setVecLikeDArrayWarn();
   if (options & k_JSON_FB_WARN_DICT_LIKE_DARRAYS) vs.setDictLikeDArrayWarn();
+  if (options & k_JSON_FB_IGNORE_LATEINIT) vs.setIgnoreLateInit();
 
   String json = vs.serializeValue(value, !(options & k_JSON_FB_UNLIMITED));
   assertx(json.get() != nullptr);
@@ -165,7 +167,8 @@ TypedValue HHVM_FUNCTION(json_decode, const String& json,
     k_JSON_BIGINT_AS_STRING |
     k_JSON_FB_HACK_ARRAYS |
     k_JSON_FB_DARRAYS |
-    k_JSON_FB_DARRAYS_AND_VARRAYS;
+    k_JSON_FB_DARRAYS_AND_VARRAYS |
+    k_JSON_FB_THRIFT_SIMPLE_JSON;
   int64_t parser_options = options & supported_options;
   Variant z;
   const auto ok =
@@ -283,6 +286,8 @@ struct JsonExtension final : Extension {
                 k_JSON_FB_WARN_VEC_LIKE_DARRAYS);
     HHVM_RC_INT(JSON_FB_WARN_DICT_LIKE_DARRAYS,
                 k_JSON_FB_WARN_DICT_LIKE_DARRAYS);
+    HHVM_RC_INT(JSON_FB_IGNORE_LATEINIT, k_JSON_FB_IGNORE_LATEINIT);
+    HHVM_RC_INT(JSON_FB_THRIFT_SIMPLE_JSON, k_JSON_FB_THRIFT_SIMPLE_JSON);
 
     HHVM_RC_INT(JSON_ERROR_NONE, k_JSON_ERROR_NONE);
     HHVM_RC_INT(JSON_ERROR_DEPTH, k_JSON_ERROR_DEPTH);

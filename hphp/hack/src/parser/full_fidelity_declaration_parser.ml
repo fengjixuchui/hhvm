@@ -84,16 +84,16 @@ module WithExpressionAndStatementAndTypeParser
     let parser = { env; lexer; errors; context; sc_state } in
     (parser, node)
 
-  let parse_possible_generic_specifier parser =
-    with_type_parser parser TypeParser.parse_possible_generic_specifier
-
-  let parse_type_specifier ?(allow_var=false) parser =
-    with_type_parser parser (TypeParser.parse_type_specifier ~allow_var)
+  let parse_type_specifier ?(allow_var=false) ?(allow_attr=true) parser =
+    with_type_parser parser (TypeParser.parse_type_specifier ~allow_var ~allow_attr)
 
   let parse_simple_type_or_type_constant parser =
-    with_type_parser parser (TypeParser.parse_simple_type_or_type_constant)
+    with_type_parser parser TypeParser.parse_simple_type_or_type_constant
 
-  let parse_type_constraint_opt parser =
+  let parse_simple_type_or_generic parser =
+    with_type_parser parser TypeParser.parse_simple_type_or_generic
+
+   let parse_type_constraint_opt parser =
     with_type_parser parser TypeParser.parse_type_constraint_opt
 
   let with_statement_parser
@@ -260,6 +260,55 @@ module WithExpressionAndStatementAndTypeParser
     Make.enum_declaration parser attrs enum name colon base enum_type left_brace
       enumerators right_brace
 
+  and parse_record_field parser =
+    (* SPEC
+      record_field:
+        record-constant : type field-initializer-opt,
+      record-constant:
+        name
+      field-initializer:
+        = expression
+    *)
+    let (parser, name) = require_name_allow_non_reserved parser in
+    let (parser, colon) = require_colon parser in
+    let (parser, field_type) = parse_type_specifier parser in
+    let (parser, init) = parse_simple_initializer_opt parser in
+    let (parser, comma) = require_comma parser in
+    Make.record_field parser name colon field_type init comma
+
+  and parse_record_fields parser =
+    (* SPEC
+      record-list:
+        record-field
+        record-list record-field
+    *)
+    parse_terminated_list parser parse_record_field RightBrace
+
+  and parse_record_declaration parser attrs =
+    (*
+    record-declaration:
+      (abstract|final) record name { record-list }
+    *)
+  let (parser, modifier) = require_token_one_of parser [Abstract; Final] SyntaxError.error1037 in
+  let (parser, record) = assert_token parser RecordDec in
+  let (parser, name) = require_name parser in
+  let (parser, record_extends, record_extends_list) =
+      parse_extends_opt parser in
+  let (parser, left_brace, record_fields, right_brace) =
+    parse_braced_list parser parse_record_fields
+  in
+  Make.record_declaration
+    parser
+    attrs
+    modifier
+    record
+    name
+    record_extends
+    record_extends_list
+    left_brace
+    record_fields
+    right_brace
+
   and parse_namespace_declaration parser =
     (* SPEC
       namespace-definition:
@@ -338,7 +387,7 @@ module WithExpressionAndStatementAndTypeParser
     let (parser, as_token, alias) =
       if Token.kind as_token = As then
         let (parser, as_token) = Make.token parser1 as_token in
-        let (parser, alias) = require_name_allow_std_constants parser in
+        let (parser, alias) = require_name parser in
         (parser, as_token, alias)
       else
         let (parser, missing1) = Make.missing parser (pos parser) in
@@ -443,9 +492,11 @@ module WithExpressionAndStatementAndTypeParser
     let (parser, generic_type_parameter_list) =
       parse_generic_type_parameter_list_opt parser in
     let (parser, classish_extends, classish_extends_list) =
-      parse_classish_extends_opt parser in
+      parse_extends_opt parser in
     let (parser, classish_implements, classish_implements_list) =
       parse_classish_implements_opt parser in
+    let (parser, classish_where_clause) =
+      parse_classish_where_clause_opt parser in
     let (parser, body) = parse_classish_body parser in
     Make.classish_declaration
       parser
@@ -457,6 +508,7 @@ module WithExpressionAndStatementAndTypeParser
       classish_extends_list
       classish_implements
       classish_implements_list
+      classish_where_clause
       body
 
   and parse_classish_modifiers parser =
@@ -493,7 +545,7 @@ module WithExpressionAndStatementAndTypeParser
         let parser = with_error parser SyntaxError.error1035 in
         Make.missing parser (pos parser)
 
-  and parse_classish_extends_opt parser =
+  and parse_extends_opt parser =
     let (parser1, extends_token) = next_token parser in
     if (Token.kind extends_token) <> Extends then
       let (parser, missing1) = Make.missing parser (pos parser) in
@@ -514,6 +566,12 @@ module WithExpressionAndStatementAndTypeParser
     let (parser, implements_token) = Make.token parser1 implements_token in
     let (parser, implements_list) = parse_special_type_list parser in
     (parser, implements_token, implements_list)
+
+  and parse_classish_where_clause_opt parser =
+    if peek_token_kind parser <> Where then
+      Make.missing parser (pos parser)
+    else
+      parse_where_clause parser
 
   and parse_special_type parser =
     let (parser1, token) = next_xhp_class_name_or_other_token parser in
@@ -537,6 +595,7 @@ module WithExpressionAndStatementAndTypeParser
       (parser, list_item, comma)
     | Parent
     | Enum
+    | RecordDec
     | Shape
     | Self when Env.hhvm_compat_mode (env parser) ->
       (* HHVM allows these keywords here for some reason *)
@@ -614,10 +673,6 @@ module WithExpressionAndStatementAndTypeParser
      Note that a visibility modifier is required; static is optional;
      any order is allowed.
 
-     TODO: The spec indicates that abstract is disallowed, but Hack allows
-     TODO: it; resolve this disagreement.
-     (This work is tracked by task T21622566)
-
      // method-declaration
      <<attr>> public/private/protected/abstract/final/static async function
      Note that a modifier is required, the attr and async are optional.
@@ -629,13 +684,6 @@ module WithExpressionAndStatementAndTypeParser
      <<attr>> public/private/protected/abstract/final function __construct
      Note that we allow static constructors in this parser; we produce an
      error in the post-parse error detection pass.
-
-     // destructor-declaration
-     <<attr>> public/private/protected function __destruct
-     TODO: Hack and HHVM allow final and abstract destructors, but the
-     TODO: spec says that these should not be legal; resolve this discrepancy.
-     We do not give an error for incorrect destructor modifiers in this parser;
-     we produce an error in the post-parse error detection pass.
 
      // trait clauses
     require  extends  qualified-name
@@ -651,59 +699,36 @@ module WithExpressionAndStatementAndTypeParser
     children ... ;
 
     // Pocket Universe Enumeration
-    final? enum id { ... (pocket-field ') * }
+    final? enum id { ... (pocket-field ;) * }
 
   *)
     match peek_token_kind parser with
     | Children -> parse_xhp_children_declaration parser
     | Category -> parse_xhp_category_declaration parser
     | Use -> parse_trait_use parser
-    | Const ->
-      begin
-        let (parser, missing) = Make.missing parser (pos parser) in
-        let kind1 = peek_token_kind ~lookahead:1 parser in
-        let kind2 = peek_token_kind ~lookahead:2 parser in
-        match kind1, kind2 with
-        | Type, Semicolon ->
-          let (parser, missing') = Make.missing parser (pos parser) in
-          let (parser, const) = assert_token parser Const in
-          parse_const_declaration parser missing missing' const
-        | Type, _ when kind2 <> Equal ->
-          let (parser, missing') = Make.missing parser (pos parser) in
-          let (parser, const) = assert_token parser Const in
-          parse_type_const_declaration parser missing missing' const
-        | _, _ ->
-          let (parser, missing') = Make.missing parser (pos parser) in
-          let (parser, const) = assert_token parser Const in
-          parse_const_declaration parser missing missing' const
-      end
-    | Abstract -> parse_methodish_or_const_or_type_const parser
+    | Const
+    | Abstract
     | Public
     | Protected
-    | Private ->
-      let (parser1, visibility) = next_token parser in
-      let next_kind = peek_token_kind parser1 in
-      if next_kind = Const then
-        let (parser, visibility) = Make.token parser1 visibility in
-        let (parser, missing) = Make.missing parser (pos parser) in
-        let (parser, const) = assert_token parser Const in
-        parse_const_declaration parser visibility missing const
-      else
-        let (parser, missing) = Make.missing parser (pos parser) in
-        parse_methodish_or_property parser missing
+    | Private
+    | Static ->
+        parse_methodish_or_property_or_const_or_type_const parser
     | Enum -> parse_class_enum parser
     | Final -> begin
         match peek_token_kind ~lookahead:1 parser with
         | Enum -> parse_class_enum ~final:true parser
-        | _ -> (* Parse class methods, constructors, destructors, properties
+        | _ -> (* Parse class methods, constructors, properties
                or type constants. *)
           let (parser, attr) = parse_attribute_specification_opt parser in
           parse_methodish_or_property_or_type_constant parser attr
       end
     | Async
-    | Static
     | LessThanLessThan ->
-      (* Parse methods, constructors, destructors, properties, or type constants. *)
+      (* Parse methods, constructors, properties, or type constants. *)
+      let (parser, attr) = parse_attribute_specification_opt parser in
+      parse_methodish_or_property_or_type_constant parser attr
+    | At when Full_fidelity_parser_env.allow_new_attribute_syntax parser.env ->
+      (* Parse methods, constructors, properties, or type constants. *)
       let (parser, attr) = parse_attribute_specification_opt parser in
       parse_methodish_or_property_or_type_constant parser attr
     | Require ->
@@ -933,13 +958,18 @@ module WithExpressionAndStatementAndTypeParser
   and parse_xhp_required_opt parser =
     (* SPEC (Draft)
       xhp-required :
-        @  required
+        @  (required | lateinit)
 
       Note that these are two tokens. They can have whitespace between them. *)
     if peek_token_kind parser = At then
       let (parser, at) = assert_token parser At in
-      let (parser, req) = require_required parser in
-      Make.xhp_required parser at req
+      let (parser, token) = next_token parser in
+      let (parser, token') = Make.token parser token in
+      match Token.kind token with
+      | TokenKind.Required -> Make.xhp_required parser at token'
+      | TokenKind.Lateinit -> Make.xhp_lateinit parser at token'
+      | _ -> let parser = with_error parser SyntaxError.error1051 in
+            Make.missing parser (pos parser)
     else
       Make.missing parser (pos parser)
 
@@ -1002,8 +1032,7 @@ module WithExpressionAndStatementAndTypeParser
        argument list; if we don't have a name, give an error. *)
     match peek_token_kind parser with
     | Backslash
-    | Name ->
-      parse_possible_generic_specifier parser
+    | Name -> parse_simple_type_or_generic parser
     | _ -> require_qualified_name parser
 
   and parse_qualified_name_type_opt parser =
@@ -1012,7 +1041,7 @@ module WithExpressionAndStatementAndTypeParser
     match peek_token_kind parser with
     | Backslash
     | Construct
-    | Name -> parse_possible_generic_specifier parser
+    | Name -> parse_simple_type_or_generic parser
     | _ -> Make.missing parser (pos parser)
 
   and parse_require_clause parser =
@@ -1045,35 +1074,57 @@ module WithExpressionAndStatementAndTypeParser
     in
     let (parser, name) =
       if is_next_xhp_class_name parser
-      then parse_possible_generic_specifier parser
+      then parse_simple_type_or_generic parser
       else parse_qualified_name_type parser
     in
     let (parser, semi) = require_semicolon parser in
     Make.require_clause parser req req_kind name semi
 
-  (* This duplicates work from parse_methodish_or_property, but this function is only
-   * invoked after an attribute spec, while parse_methodish_or_property is called after
-   * a modifier. Having this function prevents "private abstract const type T".
-   * See also, parse_methodish_or_const_or_type_const *)
+  (* This duplicates work from parse_methodish_or_const_or_type_const,
+   * but this function is only invoked after an attribute spec, while
+   * parse_methodish_or_const_or_type_const is called after a modifier.
+   * Having this function prevents constants from having attributes as
+   * this cannot be checked in parser_errors as there is no field in constant
+   * declaration to store 'attributes'.
+   *)
   and parse_methodish_or_property_or_type_constant parser attribute_spec =
-    let (parser1, _, contains_abstract) = parse_modifiers parser in
+    let (parser1, modifiers) = parse_modifiers parser in
     let current_token_kind = peek_token_kind parser1 in
     let next_token = peek_token ~lookahead:1 parser1 in
     let next_token_kind = Token.kind next_token in
     match current_token_kind, next_token_kind with
     | Const, Type ->
-      let (parser, abstr) =
-        if contains_abstract
-        then assert_token parser Abstract
-        else Make.missing parser (pos parser) in
-      let (parser, const) = assert_token parser Const in
-      parse_type_const_declaration parser attribute_spec abstr const
+      let (parser, const) = assert_token parser1 Const in
+      parse_type_const_declaration parser attribute_spec modifiers const
     | _ ->
       parse_methodish_or_property parser attribute_spec
 
+  (* Parses modifiers and passes them into the parse methods for the
+  respective class body element.
+  *)
+  and parse_methodish_or_property_or_const_or_type_const parser =
+    let (parser1, modifiers) = parse_modifiers parser in
+    let kind0 = peek_token_kind ~lookahead:0 parser1 in
+    let kind1 = peek_token_kind ~lookahead:1 parser1 in
+    let kind2 = peek_token_kind ~lookahead:2 parser1 in
+    match kind0, kind1, kind2 with
+    | Const, Type, Semicolon ->
+      let (parser, const) = assert_token parser1 Const in
+      parse_const_declaration parser modifiers const
+    | Const, Type, _ when kind2 <> Equal ->
+      let (parser, attributes) = Make.missing parser (pos parser) in
+      let (parser, modifiers) = parse_modifiers parser in
+      let (parser, const) = assert_token parser Const in
+      parse_type_const_declaration parser attributes modifiers const
+    | Const, _, _ ->
+      let (parser, const) = assert_token parser1 Const in
+      parse_const_declaration parser modifiers const
+    | _ ->
+      let (parser, missing) = Make.missing parser (pos parser) in
+      parse_methodish_or_property parser missing
 
   and parse_methodish_or_property parser attribute_spec =
-    let (parser, modifiers, contains_abstract) = parse_modifiers parser in
+    let (parser, modifiers) = parse_modifiers parser in
     (* ERROR RECOVERY: match against two tokens, because if one token is
      * in error but the next isn't, then it's likely that the user is
      * simply still typing. Throw an error on what's being typed, then eat
@@ -1086,8 +1137,7 @@ module WithExpressionAndStatementAndTypeParser
     | (Async | Coroutine | Function) , _ ->
       parse_methodish parser attribute_spec modifiers
     | LeftParen, _ ->
-      parse_property_declaration
-        parser attribute_spec modifiers ~contains_abstract
+      parse_property_declaration parser attribute_spec modifiers
     (* We encountered one unexpected token, but the next still indicates that
      * we should be parsing a methodish. Throw an error, process the token
      * as an extra, and keep going. *)
@@ -1100,8 +1150,7 @@ module WithExpressionAndStatementAndTypeParser
       parse_methodish parser attribute_spec modifiers
     (* Otherwise, continue parsing as a property (which might be a lambda). *)
     | ( _ , _ ) ->
-      parse_property_declaration
-        parser attribute_spec modifiers ~contains_abstract
+      parse_property_declaration parser attribute_spec modifiers
 
   and parse_trait_use_precedence_item parser name =
     let (parser, keyword) = assert_token parser Insteadof in
@@ -1115,7 +1164,7 @@ module WithExpressionAndStatementAndTypeParser
   and parse_trait_use_alias_item parser aliasing_name =
     let (parser, keyword) =
       require_token parser As SyntaxError.expected_as_or_insteadof in
-    let (parser, visibility, _) = parse_modifiers parser in
+    let (parser, visibility) = parse_modifiers parser in
     let (parser, aliased_name) = parse_qualified_name_type_opt parser in
     Make.trait_use_alias_item parser aliasing_name keyword visibility
       aliased_name
@@ -1213,8 +1262,7 @@ module WithExpressionAndStatementAndTypeParser
       let (parser, semi) = require_semicolon parser in
       Make.trait_use parser use_token trait_name_list semi
 
-  and parse_property_declaration
-    ?(contains_abstract=false) parser attribute_spec modifiers =
+  and parse_property_declaration parser attribute_spec modifiers =
     (* SPEC:
         property-declaration:
           attribute-spec-opt  property-modifier  type-specifier
@@ -1228,7 +1276,7 @@ module WithExpressionAndStatementAndTypeParser
       strict mode. We give an error in a later pass. *)
     let (parser, prop_type) = match peek_token_kind parser with
       | Variable -> Make.missing parser (pos parser)
-      | _ -> parse_type_specifier parser
+      | _ -> parse_type_specifier parser ~allow_attr:false
     in
     let (parser, decls) =
       parse_comma_list parser Semicolon SyntaxError.error1008
@@ -1238,11 +1286,6 @@ module WithExpressionAndStatementAndTypeParser
     let (parser, result) =
       Make.property_declaration
         parser attribute_spec modifiers prop_type decls semi
-    in
-    (* TODO: Move this to Full_fidelity_parser_errors. *)
-    let parser =
-      if contains_abstract then with_error parser SyntaxError.error2058
-      else parser
     in
     (parser, result)
 
@@ -1269,7 +1312,7 @@ module WithExpressionAndStatementAndTypeParser
     constant-initializer:
       =  const-expression
   *)
-  and parse_const_declaration parser visibility abstr const =
+  and parse_const_declaration parser modifiers const =
     let (parser, type_spec) =
       if is_type_in_const parser then
         parse_type_specifier parser
@@ -1282,8 +1325,7 @@ module WithExpressionAndStatementAndTypeParser
     let (parser, semi) = require_semicolon parser in
     Make.const_declaration
       parser
-      visibility
-      abstr
+      modifiers
       const
       type_spec
       const_list
@@ -1333,15 +1375,15 @@ module WithExpressionAndStatementAndTypeParser
     CONSIDER: We could detect this error in a post-parse pass; it is entirely
     syntactic.  Consider moving the error detection out of the type checker.
   *)
-  and parse_type_const_declaration parser attributes abstr const =
+  and parse_type_const_declaration parser attributes modifiers const =
     let (parser, type_token) = assert_token parser Type in
     let (parser, name) = require_name_allow_non_reserved parser in
     let (parser, generic_type_parameter_list) =
       parse_generic_type_parameter_list_opt parser
     in
     let (parser, type_constraint) = parse_type_constraint_opt parser in
-    let (parser, equal_token, type_specifier) = if SC.is_missing abstr then
-      let (parser, equal_token) = require_equal parser in
+    let (parser, equal_token, type_specifier) = if peek_token_kind parser = Equal then
+      let (parser, equal_token) = assert_token parser Equal in
       let (parser, type_spec) = parse_type_specifier parser in
       (parser, equal_token, type_spec)
     else
@@ -1353,7 +1395,7 @@ module WithExpressionAndStatementAndTypeParser
     Make.type_const_declaration
       parser
       attributes
-      abstr
+      modifiers
       const
       type_token
       name
@@ -1364,11 +1406,18 @@ module WithExpressionAndStatementAndTypeParser
       semicolon
 
   (* SPEC:
-    attribute_specification := << attribute_list >>
+    attribute_specification :=
+      attribute_list
+      old_attribute_specification
     attribute_list :=
       attribute
-      attribute_list , attribute
-    attribute := attribute_name attribute_value_list_opt
+      attribute_list attribute
+    attribute := @ attribute_name attribute_value_list_opt
+    old_attribute_specification := << old_attribute_list >>
+    old_attribute_list :=
+      old_attribute
+      old_attribute_list , old_attribute
+    old_attribute := attribute_name attribute_value_list_opt
     attribute_name := name
     attribute_value_list := ( attribute_values_opt )
     attribute_values :=
@@ -1381,17 +1430,42 @@ module WithExpressionAndStatementAndTypeParser
    TODO: The list of values can have a trailing comma. Update the spec.
    (Both these work items are tracked by spec issue 106.) *)
 
-  and parse_attribute_specification_opt parser =
+  and parse_old_attribute_specification_opt parser =
     if peek_token_kind parser = LessThanLessThan then
       let (parser, left, items, right) =
-        parse_double_angled_comma_list_allow_trailing parser parse_attribute
+        parse_double_angled_comma_list_allow_trailing parser parse_old_attribute
       in
-      Make.attribute_specification parser left items right
+      Make.old_attribute_specification parser left items right
     else
       Make.missing parser (pos parser)
 
-  and parse_attribute parser =
+  and parse_old_attribute parser =
     with_expression_parser parser ExpressionParser.parse_constructor_call
+
+  and parse_attribute_specification_opt parser =
+    match peek_token_kind parser with
+    | At when Full_fidelity_parser_env.allow_new_attribute_syntax parser.env ->
+      parse_new_attribute_specification_opt parser
+    | LessThanLessThan -> parse_old_attribute_specification_opt parser
+    | _ -> Make.missing parser (pos parser)
+
+  and parse_new_attribute_specification_opt parser =
+    let (parser, attributes) =
+      parse_list_while parser parse_new_attribute (fun parser -> peek_token_kind parser = At)
+    in
+    Make.attribute_specification parser attributes
+
+  and parse_new_attribute parser =
+    let (parser, at) = assert_token parser At in
+    let token = peek_token parser in
+    let (parser, constructor_call) =
+      match Token.kind token with
+      | Name -> with_expression_parser parser ExpressionParser.parse_constructor_call
+      | _ ->
+        let parser = with_error parser SyntaxError.expected_user_attribute in
+        Make.missing parser (pos parser)
+    in
+    Make.attribute parser at constructor_call
 
   and parse_file_attribute_specification_opt parser =
     if peek_token_kind parser = LessThanLessThan then
@@ -1403,18 +1477,16 @@ module WithExpressionAndStatementAndTypeParser
           parser
           GreaterThanGreaterThan
           SyntaxError.expected_user_attribute
-          parse_attribute in
+          parse_old_attribute in
       let (parser, right) = require_token parser GreaterThanGreaterThan SyntaxError.error1029 in
       Make.file_attribute_specification parser left keyword colon items right
     else
       Make.missing parser (pos parser)
 
   and parse_generic_type_parameter_list_opt parser =
-    if peek_next_partial_token_is_left_angle parser
-    then
-      with_type_parser parser TypeParser.parse_generic_type_parameter_list
-    else
-      Make.missing parser (pos parser)
+    match peek_token_kind_with_possible_attributized_type_list parser with
+    | LessThan -> with_type_parser parser TypeParser.parse_generic_type_parameter_list
+    | _ -> Make.missing parser (pos parser)
 
   and parse_return_type_hint_opt parser =
     let (parser1, colon_token) = next_token parser in
@@ -1505,7 +1577,7 @@ module WithExpressionAndStatementAndTypeParser
     let (parser, type_specifier) =
       match Token.kind token with
         | Variable | DotDotDot | Ampersand -> Make.missing parser (pos parser)
-        | _ -> parse_type_specifier parser
+        | _ -> parse_type_specifier parser ~allow_attr:false
     in
     let (parser, name) = parse_decorated_variable_opt parser in
     let (parser, default) = parse_simple_initializer_opt parser in
@@ -1583,7 +1655,7 @@ module WithExpressionAndStatementAndTypeParser
     | _ -> Make.missing parser (pos parser)
 
   and parse_function_declaration parser attribute_specification =
-    let (parser, modifiers, _) = parse_modifiers parser in
+    let (parser, modifiers) = parse_modifiers parser in
     let (parser, header) =
       parse_function_declaration_header parser ~is_methodish:false modifiers in
     let (parser, body) = parse_compound_statement parser in
@@ -1683,8 +1755,7 @@ module WithExpressionAndStatementAndTypeParser
       return_type
       where_clause
 
-  (* A function label is either a function name, a __construct label, or a
-  __destruct label. *)
+  (* A function label is either a function name or a __construct label *)
   and parse_function_label_opt parser ~is_methodish =
     let report_error parser token =
       let parser = with_error parser SyntaxError.error1044 in
@@ -1694,8 +1765,7 @@ module WithExpressionAndStatementAndTypeParser
     let (parser1, token) = next_token parser in
     match Token.kind token with
     | Name
-    | Construct
-    | Destruct -> Make.token parser1 token
+    | Construct -> Make.token parser1 token
     | LeftParen ->
       (* It turns out, it was just a verbose lambda; YOLO PHP *)
       Make.missing parser (pos parser)
@@ -1726,31 +1796,6 @@ module WithExpressionAndStatementAndTypeParser
         abstract
         final
    *)
-  and parse_methodish_or_const_or_type_const parser =
-    if peek_token_kind ~lookahead:1 parser = Const then
-      let kind1 = peek_token_kind ~lookahead:2 parser in
-      let kind2 = peek_token_kind ~lookahead:3 parser in
-      match kind1, kind2 with
-      | Type, Semicolon ->
-        let (parser, missing) = Make.missing parser (pos parser) in
-        let (parser, abstr) = assert_token parser Abstract in
-        let (parser, const) = assert_token parser Const in
-        parse_const_declaration parser missing abstr const
-      | Type, _ when kind2 <> Equal ->
-        let (parser, attributes) = Make.missing parser (pos parser) in
-        let (parser, abstr) = assert_token parser Abstract in
-        let (parser, const) = assert_token parser Const in
-        parse_type_const_declaration parser attributes abstr const
-      | _, _ ->
-        let (parser, missing) = Make.missing parser (pos parser) in
-        let (parser, abstr) = assert_token parser Abstract in
-        let (parser, const) = assert_token parser Const in
-        parse_const_declaration parser missing abstr const
-    else
-      let (parser, missing) = Make.missing parser (pos parser) in
-      let (parser, modifiers, _) = parse_modifiers parser in
-      parse_methodish parser missing modifiers
-
   and parse_methodish parser attribute_spec modifiers =
     let (parser, header) =
       parse_function_declaration_header parser modifiers ~is_methodish:true in
@@ -1801,9 +1846,8 @@ module WithExpressionAndStatementAndTypeParser
       | _ -> (parser, List.rev acc)
     in
     let (parser, items) = aux parser [] in
-    let contains_abstract = List.exists ~f:SC.is_abstract items in
     let (parser, items_list) = make_list parser items in
-    (parser, items_list, contains_abstract)
+    (parser, items_list)
 
   and parse_enum_or_classish_or_function_declaration parser =
     (* An enum, type alias, function, interface, trait or class may all
@@ -1859,6 +1903,9 @@ module WithExpressionAndStatementAndTypeParser
       | Enum ->
         let (parser, missing) = Make.missing parser (pos parser) in
         parse_enum_declaration parser missing
+      | RecordDec ->
+        let (parser, missing) = Make.missing parser (pos parser) in
+        parse_record_declaration parser missing
       (* The keyword namespace before a name should be parsed as
         "the current namespace we are in", essentially a no op.
         example:
@@ -1870,17 +1917,24 @@ module WithExpressionAndStatementAndTypeParser
       | Use -> parse_namespace_use_declaration parser
       | Trait
       | Interface
-      | Abstract
-      | Final
       | Class ->
         let (parser, missing) = Make.missing parser (pos parser) in
         parse_classish_declaration parser missing
+      | Abstract
+      | Final ->
+        let (parser, missing) = Make.missing parser (pos parser) in
+        begin match peek_token_kind parser1 with
+        | RecordDec -> parse_record_declaration parser missing
+        | _ -> parse_classish_declaration parser missing
+        end
       | Async
       | Coroutine
       | Function ->
         with_statement_parser
           parser
           (StatementParser.parse_possible_php_function ~toplevel:true)
+      | At when Full_fidelity_parser_env.allow_new_attribute_syntax parser.env ->
+        parse_enum_or_classish_or_function_declaration parser
       | LessThanLessThan ->
         begin match peek_token_kind parser1 with
         | File when peek_token_kind ~lookahead:1 parser1 = Colon ->
@@ -1891,9 +1945,8 @@ module WithExpressionAndStatementAndTypeParser
       | Const ->
         let pos = pos parser in
         let (parser, missing1) = Make.missing parser1 pos in
-        let (parser, missing2) = Make.missing parser pos in
         let (parser, token) = Make.token parser token in
-        parse_const_declaration parser missing1 missing2 token
+        parse_const_declaration parser missing1 token
       | _ ->
         with_statement_parser parser StatementParser.parse_statement
         (* TODO: What if it's not a legal statement? Do we still make progress
@@ -1908,7 +1961,6 @@ module WithExpressionAndStatementAndTypeParser
          | 'type' identifier '=' type-expression
          | identifier '=' expression
     *)
-    let puerror = SyntaxError.pocket_universe_invalid_field in
     match peek_token_kind parser with
     | Type -> let (parser, typ) = require_token parser Type SyntaxError.type_keyword in
       let (parser, tyname) = require_name parser in
@@ -1920,7 +1972,8 @@ module WithExpressionAndStatementAndTypeParser
       let (parser, simple_init) = parse_expression parser in
       let (parser, sc_init) = Make.simple_initializer parser equal simple_init in
       Make.pocket_mapping_id_declaration parser id sc_init
-    | _ -> let parser = with_error parser (puerror 0) in
+    | _ -> let parser = with_error parser
+               SyntaxError.pocket_universe_invalid_field in
       Make.missing parser (pos parser)
 
   and parse_pocket_field parser =
@@ -1933,26 +1986,28 @@ module WithExpressionAndStatementAndTypeParser
 
        enum-member ::= ':@' name
     *)
-    let puerror = SyntaxError.pocket_universe_invalid_field in
     match peek_token_kind parser with
-    | PUAtom -> let (parser, enum_name) = require_token parser PUAtom (puerror 1) in
+    | ColonAt ->
+      let (parser, glyph) = assert_token parser ColonAt in
+      let (parser, enum_name) = require_name parser in
       (match peek_token_kind parser with
        | LeftParen ->
          let (parser, left_paren, mappings, right_paren) =
            parse_parenthesized_comma_list parser parse_pocket_mapping in
          let (parser, semi) = require_semicolon parser in
-         Make.pocket_atom_mapping_declaration parser enum_name left_paren mappings right_paren semi
+         Make.pocket_atom_mapping_declaration parser glyph enum_name
+           left_paren mappings right_paren semi
        | _ -> let (parser, missing_left) = Make.missing parser (pos parser) in
          let (parser, missing_mappings) = Make.missing parser (pos parser) in
          let (parser, missing_right) = Make.missing parser (pos parser) in
          let (parser, semi) = require_semicolon parser in
-         Make.pocket_atom_mapping_declaration parser enum_name missing_left
-           missing_mappings missing_right semi
+         Make.pocket_atom_mapping_declaration parser glyph enum_name
+           missing_left missing_mappings missing_right semi
       )
-    | Case -> let (parser, case_tok) = require_token parser Case (puerror 2) in
+    | Case -> let (parser, case_tok) = assert_token parser Case in
       (match peek_token_kind parser with
        | Type ->
-         let (parser, type_tok) = require_token parser Type (puerror 3) in
+         let (parser, type_tok) = assert_token parser Type in
          let (parser, name) = require_name parser in
          let (parser, semi) = require_semicolon parser in
          Make.pocket_field_type_declaration parser case_tok type_tok name semi
@@ -1962,7 +2017,8 @@ module WithExpressionAndStatementAndTypeParser
          let (parser, semi) = require_semicolon parser in
          Make.pocket_field_type_expr_declaration parser case_tok ty name semi
       )
-    | _ -> let parser = with_error parser (puerror 4) in
+    | _ -> let parser = with_error parser
+               SyntaxError.pocket_universe_invalid_field in
       Make.missing parser (pos parser)
 
   and parse_pocket_fields_opt parser =
@@ -2005,7 +2061,7 @@ module WithExpressionAndStatementAndTypeParser
       with_statement_parser parser
       (fun p ->
         let (p, s, has_suffix) =
-          StatementParser.parse_markup_section ~is_leading_section:true p
+          StatementParser.parse_header p
         in
         p, (s, has_suffix)
       )
@@ -2013,18 +2069,17 @@ module WithExpressionAndStatementAndTypeParser
       (* proceed successfully if we've consumed <?..., or dont need it *)
       (* We purposefully ignore leading trivia before the <?hh, and handle
       the error on a later pass *)
-      (* TODO: Handle the case where the langauge is not a Name. *)
-    (* Do not attempt to recover in HHVM compatibility mode *)
-    if (has_suffix || Env.hhvm_compat_mode (env parser)) then
-      parser1, markup_section
+    if has_suffix then
+      parser1, Some markup_section
     else
-      (* error recovery *)
-      let parser = with_error parser SyntaxError.error1001 in
-      let (parser, missing1) = Make.missing parser (pos parser) in
-      let (parser, missing2) = Make.missing parser (pos parser) in
-      let (parser, missing3) = Make.missing parser (pos parser) in
-      let (parser, missing4) = Make.missing parser (pos parser) in
-      Make.markup_section parser missing1 missing2 missing3 missing4
+      let text = (pos parser) |> fst in
+      let suffix = text |> SourceText.file_path |> Relative_path.suffix in
+      let parser =
+        if (SourceText.length text) > 0 && String_utils.string_ends_with suffix ".php"
+        then with_error parser SyntaxError.error1001
+        else parser
+      in
+      parser, None
 
   let parse_script parser =
     Full_fidelity_parser_profiling.record_parse ();
@@ -2040,20 +2095,13 @@ module WithExpressionAndStatementAndTypeParser
         aux parser (declaration :: acc)
     in
     (* parse leading markup section *)
-    let file = SourceText.file_path (fst (pos parser)) in
-    let suffix = Relative_path.suffix file in
-    let no_markup = String_utils.string_ends_with suffix ".hack" in
-    let (parser, header) =
-      if no_markup
-      then Make.missing parser (pos parser)
-      else parse_leading_markup_section parser
-    in
+    let (parser, header) = parse_leading_markup_section parser in
     let (parser, declarations) = aux parser [] in
     (* include leading markup section as a head of declaration list *)
     let (parser, declarations) =
-      if no_markup
-      then make_list parser (List.rev declarations)
-      else make_list parser (header :: List.rev declarations)
+      match header with
+      | None -> make_list parser (List.rev declarations)
+      | Some header -> make_list parser (header :: List.rev declarations)
     in
     let (parser, result) = Make.script parser declarations in
     (* If we are not at the end of the file, something is wrong. *)

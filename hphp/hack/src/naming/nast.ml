@@ -8,46 +8,59 @@
  *)
 
 open Core_kernel
+open Aast
 
 module SN = Naming_special_names
 
-include Aast
+type func_body_ann =
+  | Named
+  | NamedWithUnsafeBlocks
+  (* Namespace info *)
+  | Unnamed of Namespace_env.env [@opaque]
 
-(* The NAST definitions, which we just include into this file *)
-module PosAnnotation = struct type t = Pos.t [@@deriving show] end
-module UnitAnnotation = struct type t = unit [@@deriving show] end
-module BodyNamingAnnotation = struct
-  type t =
-    | Named
-    | NamedWithUnsafeBlocks
-    | Unnamed of Namespace_env.env [@opaque] (* Namespace info *)
+let show_func_body_ann = function
+  | Named -> "Named"
+  | NamedWithUnsafeBlocks -> "NamedWithUnsafeBlocks"
+  | Unnamed _ -> "Unnamed"
 
-  let pp f t =
-    let s =
-      match t with
-      | Named -> "Named"
-      | NamedWithUnsafeBlocks -> "NamedWithUnsafeBlocks"
-      | Unnamed _ -> "Unnamed" in
-    Format.pp_print_string f s
-end
+let pp_func_body_ann fmt fba =
+  Format.pp_print_string fmt (show_func_body_ann fba)
 
-module Annotations = struct
-  module ExprAnnotation = PosAnnotation
-  module EnvAnnotation = UnitAnnotation
-  module FuncBodyAnnotation = BodyNamingAnnotation
-end
+type program = (Pos.t, func_body_ann, unit) Aast.program [@@deriving show]
+type def = (Pos.t, func_body_ann, unit) Aast.def
+type expr = (Pos.t, func_body_ann, unit) Aast.expr [@@deriving show]
+type expr_ = (Pos.t, func_body_ann, unit) Aast.expr_
+type stmt = (Pos.t, func_body_ann, unit) Aast.stmt
+type block = (Pos.t, func_body_ann, unit) Aast.block
+type user_attribute = (Pos.t, func_body_ann, unit) Aast.user_attribute [@@deriving show]
+type class_id_ = (Pos.t, func_body_ann, unit) Aast.class_id_
+type class_ = (Pos.t, func_body_ann, unit) Aast.class_
+type method_ = (Pos.t, func_body_ann, unit) Aast.method_
+type fun_ = (Pos.t, func_body_ann, unit) Aast.fun_
+type fun_def = (Pos.t, func_body_ann, unit) Aast.fun_def
+type func_body = (Pos.t, func_body_ann, unit) Aast.func_body
+type fun_param = (Pos.t, func_body_ann, unit) Aast.fun_param
+type fun_variadicity = (Pos.t, func_body_ann, unit) Aast.fun_variadicity
+type typedef = (Pos.t, func_body_ann, unit) Aast.typedef
+type tparam = (Pos.t, func_body_ann, unit) Aast.tparam
+type gconst = (Pos.t, func_body_ann, unit) Aast.gconst
+type class_id = (Pos.t, func_body_ann, unit) Aast.class_id
+type catch = (Pos.t, func_body_ann, unit) Aast.catch
+type case = (Pos.t, func_body_ann, unit) Aast.case
+type field = (Pos.t, func_body_ann, unit) Aast.field
+type afield = (Pos.t, func_body_ann, unit) Aast.afield
+type sid = Aast.sid
 
-module PosAnnotatedAST = AnnotatedAST(Annotations)
-include PosAnnotatedAST
+module ShapeMap = Ast_defs.ShapeMap
 
 (* Expecting that Naming.func_body / Naming.class_meth_bodies has been
  * allowed at the AST. Ideally this would be enforced by the compiler,
  * a la the typechecking decl vs local phases *)
 let is_body_named fb =
  match fb.fb_annotation with
- | BodyNamingAnnotation.Named
- | BodyNamingAnnotation.NamedWithUnsafeBlocks -> true
- | BodyNamingAnnotation.Unnamed _ -> false
+ | Named
+ | NamedWithUnsafeBlocks -> true
+ | Unnamed _ -> false
 
 let assert_named_body fb =
   if is_body_named fb
@@ -56,9 +69,9 @@ let assert_named_body fb =
 
 let named_body_is_unsafe fb =
   match fb.fb_annotation with
-  | BodyNamingAnnotation.Named -> false
-  | BodyNamingAnnotation.NamedWithUnsafeBlocks -> true
-  | BodyNamingAnnotation.Unnamed _ -> failwith "Expecting a named function body"
+  | Named -> false
+  | NamedWithUnsafeBlocks -> true
+  | Unnamed _ -> failwith "Expecting a named function body"
 
 let class_id_to_str = function
   | CIparent -> SN.Classes.cParent
@@ -130,6 +143,36 @@ let get_xhp_attr_expr = function
 let get_simple_xhp_attrs =
   List.filter_map ~f:(function Xhp_simple (id, e) -> Some (id, e) | Xhp_spread _ -> None)
 
+(* Given a Nast.program, give me the list of entities it defines *)
+let get_defs ast =
+  (* fold_right traverses the file from top to bottom, and as such gives nicer
+   * error messages than fold_left. E.g. in the case where a function is
+   * declared twice in the same file, the error will say that the declaration
+   * with the larger line number is a duplicate. *)
+  let rec get_defs ast acc =
+  List.fold_right ast ~init:acc
+    ~f:begin fun def (acc1, acc2, acc3, acc4 as acc) ->
+      let open Aast in
+      match def with
+      | Fun f ->
+        (FileInfo.pos_full f.f_name) :: acc1, acc2, acc3, acc4
+      | Class c ->
+        acc1, (FileInfo.pos_full c.c_name) :: acc2, acc3, acc4
+      | Typedef t ->
+        acc1, acc2, (FileInfo.pos_full t.t_name) :: acc3, acc4
+      | Constant cst ->
+        acc1, acc2, acc3, (FileInfo.pos_full cst.cst_name) :: acc4
+      | Namespace(_, defs) ->
+        get_defs defs acc
+      | NamespaceUse _ | SetNamespaceEnv _ ->
+        acc
+       (* toplevel statements are ignored *)
+      | FileAttributes _
+      | Stmt _ -> acc
+    end
+in
+  get_defs ast ([],[],[],[])
+
 (*****************************************************************************)
 (** This module defines a visitor class on the Nast data structure.
     To use it you must inherit the generic object and redefine the appropriate
@@ -192,10 +235,12 @@ module Visitor_DEPRECATED = struct
 
 class type ['a] visitor_type = object
   method on_block : 'a -> block -> 'a
-  method on_break : 'a -> Pos.t -> 'a
+  method on_break : 'a -> 'a
+  method on_temp_break : 'a -> expr -> 'a
   method on_case : 'a -> case -> 'a
   method on_catch : 'a -> catch -> 'a
-  method on_continue : 'a -> Pos.t -> 'a
+  method on_continue : 'a -> 'a
+  method on_temp_continue : 'a -> expr -> 'a
   method on_darray : 'a -> (targ * targ) option -> field list -> 'a
   method on_varray : 'a -> targ option -> expr list -> 'a
   method on_do : 'a -> block -> expr -> 'a
@@ -204,28 +249,26 @@ class type ['a] visitor_type = object
   method on_for :
       'a -> expr -> expr -> expr -> block -> 'a
   method on_foreach :
-      'a -> expr -> as_expr -> block -> 'a
+      'a -> expr -> (Pos.t, func_body_ann, unit) as_expr -> block -> 'a
   method on_if : 'a -> expr -> block -> block -> 'a
   method on_noop : 'a -> 'a
-  method on_unsafe_block : 'a -> block -> 'a
   method on_fallthrough : 'a -> 'a
-  method on_return : 'a -> Pos.t -> expr option -> 'a
+  method on_return : 'a -> expr option -> 'a
   method on_goto_label : 'a -> pstring -> 'a
   method on_goto : 'a -> pstring -> 'a
-  method on_static_var : 'a -> expr list -> 'a
-  method on_global_var : 'a -> expr list -> 'a
-  method on_awaitall : 'a -> (id option * expr) list -> 'a
+  method on_awaitall : 'a -> (id option * expr) list -> block -> 'a
   method on_stmt : 'a -> stmt -> 'a
+  method on_stmt_ : 'a -> (Pos.t, func_body_ann, unit) stmt_ -> 'a
   method on_switch : 'a -> expr -> case list -> 'a
-  method on_throw : 'a -> is_terminal -> expr -> 'a
+  method on_throw : 'a -> expr -> 'a
   method on_try : 'a -> block -> catch list -> block -> 'a
   method on_def_inline : 'a -> def -> 'a
   method on_let : 'a -> id -> hint option -> expr -> 'a
   method on_while : 'a -> expr -> block -> 'a
-  method on_using : 'a -> using_stmt -> 'a
-  method on_as_expr : 'a -> as_expr -> 'a
+  method on_using : 'a -> (Pos.t, func_body_ann, unit) using_stmt -> 'a
+  method on_as_expr : 'a -> (Pos.t, func_body_ann, unit) as_expr -> 'a
   method on_array : 'a -> afield list -> 'a
-  method on_shape : 'a -> (shape_field_name * expr) list -> 'a
+  method on_shape : 'a -> (Ast_defs.shape_field_name * expr) list -> 'a
   method on_valCollection : 'a -> vc_kind -> targ option -> expr list -> 'a
   method on_keyValCollection : 'a -> kvc_kind -> (targ * targ) option -> field list -> 'a
   method on_collection : 'a -> collection_targ option -> afield list -> 'a
@@ -240,7 +283,7 @@ class type ['a] visitor_type = object
   method on_method_caller : 'a -> sid -> pstring -> 'a
   method on_obj_get : 'a -> expr -> expr -> 'a
   method on_array_get : 'a -> expr -> expr option -> 'a
-  method on_class_get : 'a -> class_id -> class_get_expr -> 'a
+  method on_class_get : 'a -> class_id -> (Pos.t, func_body_ann, unit) class_get_expr -> 'a
   method on_class_const : 'a -> class_id -> pstring -> 'a
   method on_call : 'a -> call_type -> expr -> expr list -> expr list -> 'a
   method on_true : 'a -> 'a
@@ -250,7 +293,7 @@ class type ['a] visitor_type = object
   method on_null : 'a -> 'a
   method on_string : 'a -> string -> 'a
   method on_string2 : 'a -> expr list -> 'a
-  method on_special_func : 'a -> special_func -> 'a
+  method on_special_func : 'a -> (Pos.t, func_body_ann, unit) special_func -> 'a
   method on_yield_break : 'a -> 'a
   method on_yield : 'a -> afield -> 'a
   method on_yield_from : 'a -> expr -> 'a
@@ -260,26 +303,31 @@ class type ['a] visitor_type = object
   method on_pair : 'a -> expr -> expr -> 'a
   method on_expr_list : 'a -> expr list -> 'a
   method on_cast : 'a -> hint -> expr -> 'a
-  method on_unop : 'a -> Ast.uop -> expr -> 'a
-  method on_binop : 'a -> Ast.bop -> expr -> expr -> 'a
+  method on_unop : 'a -> Ast_defs.uop -> expr -> 'a
+  method on_binop : 'a -> Ast_defs.bop -> expr -> expr -> 'a
   method on_pipe : 'a -> id -> expr -> expr -> 'a
   method on_eif : 'a -> expr -> expr option -> expr -> 'a
   method on_typename : 'a -> sid -> 'a
-  method on_instanceOf : 'a -> expr -> class_id -> 'a
   method on_is : 'a -> expr -> hint -> 'a
   method on_as : 'a -> expr -> hint -> bool -> 'a
   method on_class_id : 'a -> class_id -> 'a
   method on_class_id_ : 'a -> class_id_ -> 'a
   method on_new : 'a -> class_id -> expr list -> expr list -> 'a
+  method on_record : 'a -> class_id -> (expr * expr) list -> 'a
   method on_efun : 'a -> fun_ -> id list -> 'a
-  method on_xml : 'a -> sid -> xhp_attribute list -> expr list -> 'a
-  method on_param_kind : 'a -> Ast.param_kind -> 'a
-  method on_unsafe_expr : 'a -> expr -> 'a
-  method on_callconv : 'a -> Ast.param_kind -> expr -> 'a
-  method on_assert : 'a -> assert_expr -> 'a
+  method on_lfun : 'a -> fun_ -> id list -> 'a
+  method on_xml : 'a -> sid -> (Pos.t, func_body_ann, unit) xhp_attribute list -> expr list -> 'a
+  method on_param_kind : 'a -> Ast_defs.param_kind -> 'a
+  method on_callconv : 'a -> Ast_defs.param_kind -> expr -> 'a
+  method on_assert : 'a -> (Pos.t, func_body_ann, unit) assert_expr -> 'a
   method on_clone : 'a -> expr -> 'a
   method on_field: 'a -> field -> 'a
   method on_afield: 'a -> afield -> 'a
+  method on_class_typeconst: 'a -> (Pos.t, func_body_ann, unit) class_typeconst -> 'a
+  method on_class_c_const: 'a -> (Pos.t, func_body_ann, unit) class_const -> 'a
+  method on_class_var: 'a -> (Pos.t, func_body_ann, unit) class_var -> 'a
+  method on_class_use: 'a -> hint -> 'a
+  method on_class_req: 'a -> (hint * bool) -> 'a
 
   method on_func_named_body: 'a -> func_body -> 'a
   method on_func_unnamed_body: 'a -> func_body -> 'a
@@ -298,7 +346,6 @@ class type ['a] visitor_type = object
   method on_program: 'a -> program -> 'a
 
   method on_markup: 'a -> pstring -> expr option -> 'a
-  method on_declare: 'a -> bool -> expr -> block -> 'a
 
   method on_pu_atom : 'a -> string -> 'a
   method on_pu_identifier : 'a -> class_id -> pstring -> pstring -> 'a
@@ -310,10 +357,11 @@ end
 
 class virtual ['a] visitor: ['a] visitor_type = object(this)
 
-  method on_break acc _ = acc
-  method on_continue acc _ = acc
+  method on_break acc = acc
+  method on_temp_break acc e = this#on_expr acc e
+  method on_continue acc = acc
+  method on_temp_continue acc e = this#on_expr acc e
   method on_noop acc = acc
-  method on_unsafe_block acc _ = acc
   method on_fallthrough acc = acc
   method on_goto_label acc _ = acc
   method on_goto acc _ = acc
@@ -322,30 +370,25 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
   | Some e -> this#on_expr acc e
   | None -> acc
 
-  method on_declare acc _ e b =
-    let acc = this#on_expr acc e in
-    this#on_block acc b
-
-  method on_throw acc _ e =
+  method on_throw acc e =
     let acc = this#on_expr acc e in
     acc
 
-  method on_return acc _ eopt =
+  method on_return acc eopt =
     match eopt with
     | None -> acc
     | Some e -> this#on_expr acc e
 
-  method on_static_var acc el = List.fold_left el ~f:this#on_expr ~init:acc
-
-  method on_global_var acc el = List.fold_left el ~f:this#on_expr ~init:acc
-
-  method on_awaitall acc el = List.fold_left ~f:(fun acc (x, y) ->
-    let acc = match x with
-    | Some x -> this#on_lvar acc x
-    | None -> acc in
-    let acc = this#on_expr acc y in
+  method on_awaitall acc el b =
+    let acc = List.fold_left ~f:(fun acc (x, y) ->
+      let acc = match x with
+      | Some x -> this#on_lvar acc x
+      | None -> acc in
+      let acc = this#on_expr acc y in
+      acc
+    ) ~init:acc el in
+    let acc = this#on_block acc b in
     acc
-  ) ~init:acc el
 
   method on_if acc e b1 b2 =
     let acc = this#on_expr acc e in
@@ -428,12 +471,17 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
 
   method on_catch acc (_, _, b) = this#on_block acc b
 
-  method on_stmt acc = function
+  method on_stmt acc (_, stmt) =
+    this#on_stmt_ acc stmt
+
+  method on_stmt_ acc = function
     | Expr e                  -> this#on_expr acc e
-    | Break p                 -> this#on_break acc p
-    | Continue p              -> this#on_continue acc p
-    | Throw   (is_term, e)    -> this#on_throw acc is_term e
-    | Return  (p, eopt)       -> this#on_return acc p eopt
+    | Break                   -> this#on_break acc
+    | TempBreak e             -> this#on_temp_break acc e
+    | Continue                -> this#on_continue acc
+    | TempContinue e          -> this#on_temp_continue acc e
+    | Throw e                 -> this#on_throw acc e
+    | Return  eopt            -> this#on_return acc eopt
     | GotoLabel label         -> this#on_goto_label acc label
     | Goto label              -> this#on_goto acc label
     | If      (e, b1, b2)     -> this#on_if acc e b1 b2
@@ -445,16 +493,12 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
     | Foreach (e, ae, b)      -> this#on_foreach acc e ae b
     | Try     (b, cl, fb)     -> this#on_try acc b cl fb
     | Noop                    -> this#on_noop acc
-    | Unsafe_block b          -> this#on_unsafe_block acc b
     | Fallthrough             -> this#on_fallthrough acc
-    | Static_var el           -> this#on_static_var acc el
-    | Global_var el           -> this#on_global_var acc el
-    | Awaitall (_, el)        -> this#on_awaitall acc el
+    | Awaitall (el, b)        -> this#on_awaitall acc el b
     | Def_inline d            -> this#on_def_inline acc d
     | Let     (x, h, e)       -> this#on_let acc x h e
     | Block b                 -> this#on_block acc b
     | Markup (s, e)           -> this#on_markup acc s e
-    | Declare (is_blk, e, b)  -> this#on_declare acc is_blk e b
 
   method on_expr acc (_, e) =
     this#on_expr_ acc e
@@ -505,25 +549,20 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
    | Binop       (bop, e1, e2)    -> this#on_binop acc bop e1 e2
    | Pipe        (id, e1, e2)         -> this#on_pipe acc id e1 e2
    | Eif         (e1, e2, e3)     -> this#on_eif acc e1 e2 e3
-   | InstanceOf  (e1, e2)         -> this#on_instanceOf acc e1 e2
    | Is          (e, h)           -> this#on_is acc e h
    | As          (e, h, b)           -> this#on_as acc e h b
    | Typename n -> this#on_typename acc n
    | New         (cid, _, el, uel, _)   -> this#on_new acc cid el uel
-   | Efun        (f, idl)         -> this#on_efun acc f idl
+   | Efun        (f, idl)-> this#on_efun acc f idl
+   | Record      (cid, _, fl)        -> this#on_record acc cid fl
    | Xml         (sid, attrl, el) -> this#on_xml acc sid attrl el
-   | Unsafe_expr (e)              -> this#on_unsafe_expr acc e
    | Callconv    (kind, e)        -> this#on_callconv acc kind e
    | ValCollection    (s, ta, el)     ->
        this#on_valCollection acc s ta el
    | KeyValCollection (s, tap, fl)     ->
        this#on_keyValCollection acc s tap fl
    | Omitted -> acc
-   | NewAnonClass (el1, el2, c) ->
-      let acc = this#on_list acc el1 in
-      let acc = this#on_list acc el2 in
-      this#on_class_ acc c
-   | Lfun f -> this#on_fun_ acc f
+   | Lfun (f, idl) -> this#on_lfun acc f idl
    | Import (_, e) -> this#on_expr acc e
    | Collection (_, tal, fl) -> this#on_collection acc tal fl
    | BracedExpr e -> this#on_expr acc e
@@ -637,8 +676,6 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
     acc
 
   method on_special_func acc = function
-    | Gena e
-    | Gen_array_rec e -> this#on_expr acc e
     | Genva el -> List.fold_left el ~f:this#on_expr ~init:acc
 
   method on_yield_break acc = acc
@@ -680,11 +717,6 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
     let acc = this#on_expr acc e3 in
     acc
 
-  method on_instanceOf acc e1 e2 =
-    let acc = this#on_expr acc e1 in
-    let acc = this#on_class_id acc e2 in
-    acc
-
   method on_is acc e _ = this#on_expr acc e
 
   method on_as acc e _ _ = this#on_expr acc e
@@ -706,6 +738,15 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
     then this#on_block acc f.f_body.fb_ast
     else failwith "lambdas expected to be named in the context of the surrounding function"
 
+  method on_lfun acc f _ =
+    if is_body_named f.f_body
+    then this#on_block acc f.f_body.fb_ast
+    else failwith "lambdas expected to be named in the context of the surrounding function"
+
+  method on_record acc cid fl =
+    let acc = this#on_class_id acc cid in
+    List.fold_left fl ~f:this#on_field ~init:acc
+
   method on_xml acc _ attrl el =
     let acc = List.fold_left attrl ~init:acc ~f:begin fun acc attr -> match attr with
       | Xhp_simple (_, e)
@@ -715,8 +756,6 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
     acc
 
   method on_param_kind acc _ = acc
-
-  method on_unsafe_expr acc _ = acc
 
   method on_callconv acc kind e =
     let acc = this#on_param_kind acc kind in
@@ -746,7 +785,7 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
   method on_fun_ acc f =
     let acc = this#on_id acc f.f_name in
     let acc = this#on_func_body acc f.f_body in
-    let acc = match f.f_ret with
+    let acc = match hint_of_type_hint f.f_ret with
       | Some h -> this#on_hint acc h
       | None -> acc in
     acc
@@ -773,18 +812,51 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
     let acc = List.fold_left c.c_uses ~f:this#on_hint ~init:acc in
     let acc = List.fold_left c.c_implements ~f:this#on_hint ~init:acc in
 
-    let acc = match c.c_constructor with
-      | Some ctor -> this#on_method_ acc ctor
-      | None -> acc in
+    let acc = List.fold_left c.c_typeconsts ~f:this#on_class_typeconst ~init:acc in
+    let acc = List.fold_left c.c_consts ~f:this#on_class_c_const ~init:acc in
+    let acc = List.fold_left c.c_vars ~f:this#on_class_var ~init:acc in
+    let acc = List.fold_left c.c_uses ~f:this#on_class_use ~init:acc in
+    let acc = List.fold_left c.c_reqs ~f:this#on_class_req ~init:acc in
     let acc = List.fold_left c.c_methods ~f:this#on_method_ ~init:acc in
-    let acc = List.fold_left c.c_static_methods ~f:this#on_method_ ~init:acc in
     acc
+
+  method on_class_typeconst acc t =
+    let acc = this#on_id acc t.c_tconst_name in
+    let acc = match t.c_tconst_constraint with
+      | Some h -> this#on_hint acc h
+      | None -> acc in
+    let acc = match t.c_tconst_type with
+      | Some h -> this#on_hint acc h
+      | None -> acc in
+    acc
+
+  method on_class_c_const acc c_const =
+    let acc = match c_const.cc_type with
+      | Some h -> this#on_hint acc h
+      | None -> acc in
+    let acc = this#on_id acc c_const.cc_id in
+    let acc = match c_const.cc_expr with
+      | Some e -> this#on_expr acc e
+      | None -> acc in
+    acc
+
+  method on_class_var acc c_var =
+    let acc = this#on_id acc c_var.cv_id in
+    let acc = match c_var.cv_type with
+      | Some h -> this#on_hint acc h
+      | None -> acc in
+    let acc = match c_var.cv_expr with
+      | Some e -> this#on_expr acc e
+      | None -> acc in
+    acc
+
+  method on_class_use acc h = this#on_hint acc h
+
+  method on_class_req acc (h, _) = this#on_hint acc h
 
   method on_gconst acc g =
     let acc = this#on_id acc g.cst_name in
-    let acc = match g.cst_value with
-      | Some e -> this#on_expr acc e
-      | None -> acc in
+    let acc = this#on_expr acc g.cst_value in
     let acc = match g.cst_type with
       | Some h -> this#on_hint acc h
       | None -> acc in
@@ -812,91 +884,12 @@ class virtual ['a] visitor: ['a] visitor_type = object(this)
     | Constant g -> this#on_gconst acc g
     | Namespace (_, p) -> this#on_program acc p
     | NamespaceUse _
-    | SetNamespaceEnv _ -> acc
+    | SetNamespaceEnv _
+    | FileAttributes _ -> acc
 
   method on_program acc p =
     let acc = List.fold_left p ~init:acc ~f:this#on_def in
     acc
 end
 
-(*****************************************************************************)
-(* Returns true if a block has a return statement. *)
-(*****************************************************************************)
-
-module HasReturn: sig
-  val block: block -> bool
-end = struct
-
-  let visitor =
-    object
-      inherit [bool] visitor
-      method! on_expr acc _ = acc
-      method! on_return _ _ _ = true
-    end
-
-  let block b = visitor#on_block false b
-
 end
-
-(* Used by HasBreak and HasContinue. Does not traverse nested loops, since the
- * breaks / continues in those loops do not affect the control flow of the
- * outermost loop. *)
-
-class loop_visitor =
-  object
-    inherit [bool] visitor
-    method! on_expr acc _ = acc
-    method! on_for acc _ _ _ _ = acc
-    method! on_foreach acc _ _ _ = acc
-    method! on_do acc _ _ = acc
-    method! on_while acc _ _ = acc
-    method! on_switch acc _ _ = acc
-  end
-
-(*****************************************************************************)
-(* Returns true if a block has a continue statement.
- * It is necessary to properly handle the type of locals.
- * When a block statement has a continue statement, the control flow graph
- * could be interrupted. When that is the case, the types of locals has to
- * be more conservative. Locals can have different types depending on their
- * position in a block. In the presence of constructions that can interrupt
- * the control flow (exceptions, continue), the type of the local becomes:
- * "any type that the local had, regardless of its position".
- *)
-(*****************************************************************************)
-
-module HasContinue: sig
-  val block: block -> bool
-end = struct
-
-  let visitor =
-    object
-      inherit loop_visitor
-      method! on_continue _ _ = true
-    end
-
-  let block b = visitor#on_block false b
-
-end
-
-(*****************************************************************************)
-(* Returns true if a block has a continue statement.
- * Useful for checking if a while(true) {...} loop is non-terminating.
- *)
-(*****************************************************************************)
-
-module HasBreak: sig
-  val block: block -> bool
-end = struct
-
-  let visitor =
-    object
-      inherit loop_visitor
-      method! on_break _ _ = true
-    end
-
-  let block b = visitor#on_block false b
-
-end
-
-end (* of Visitor *)

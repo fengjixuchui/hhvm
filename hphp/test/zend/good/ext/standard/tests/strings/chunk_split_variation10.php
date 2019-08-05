@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string chunk_split(string $str [, int $chunklen [, string $ending]])
  * Description: Returns split line
  * Source code: ext/standard/string.c
@@ -9,7 +9,7 @@
 * passing different single quoted strings for 'ending' arguments to chunk_split()
 * 'chunklen' is set to 9.2 for this testcase
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing chunk_split() : different single quoted strings as 'ending' ***\n";
 
 
@@ -25,12 +25,12 @@ $values = array (
   'ENDING',  //String
   '@#$%^',  //Special chars
 
-  
-  '\t',  
+
+  '\t',
   '\n',
   '\r',
   '\r\n',
-  
+
   '\0',  //Null char
   '123',  //Numeric
   '(MSG)',  //With ( and )
@@ -43,8 +43,8 @@ $values = array (
 //loop through each element of values for 'ending'
 for($count = 0; $count < count($values); $count++) {
   echo "-- Iteration $count --\n";
-  var_dump( chunk_split($str, $chunklen, $values[$count]) );
+  try { var_dump( chunk_split($str, $chunklen, $values[$count]) ); } catch (Exception $e) { var_dump($e->getMessage()); }
 }
 
-echo "Done"
-?>
+echo "Done";
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string vsprintf(string format, array args)
  * Description: Return a formatted string 
  * Source code: ext/standard/formatted_print.c
@@ -8,7 +8,7 @@
  * Test vsprintf() when different scientific formats and non-scientific values are passed to
  * the '$format' and '$args' arguments of the function
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vsprintf() : scientific formats and non-scientific values ***\n";
 
 // defining array of non-scientific formats
@@ -63,4 +63,4 @@ foreach($args_array as $args) {
 }
 
 echo "Done";
-?>
+}

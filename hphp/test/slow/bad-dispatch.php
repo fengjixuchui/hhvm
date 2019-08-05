@@ -7,9 +7,36 @@ class Foo {
 
 <<__EntryPoint>>
 function main() {
-  (new Foo)->a();
-  Foo::b();
+  $foo = 'Foo';
+  $a = 'a';
+  $b = 'b';
 
-  Foo::a();
-  (new Foo)->b();
+  (new Foo)->a();
+  (new $foo)->$a();
+  Foo::b();
+  $foo::$b();
+
+  try {
+    Foo::a();
+  } catch (BadMethodCallException $e) {
+    var_dump($e->getMessage());
+  }
+
+  try {
+    $foo::$a();
+  } catch (BadMethodCallException $e) {
+    var_dump($e->getMessage());
+  }
+
+  try {
+    (new Foo)->b();
+  } catch (BadMethodCallException $e) {
+    var_dump($e->getMessage());
+  }
+
+  try {
+    (new $foo)->$b();
+  } catch (BadMethodCallException $e) {
+    var_dump($e->getMessage());
+  }
 }

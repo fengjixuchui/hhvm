@@ -2,8 +2,8 @@
 
 class E<reify T1, reify T2> {
   public function f() {
-    var_dump(HH\ReifiedGenerics\getType<T1>());
-    var_dump(HH\ReifiedGenerics\getType<T2>());
+    var_dump(HH\ReifiedGenerics\get_type_structure<T1>());
+    var_dump(HH\ReifiedGenerics\get_type_structure<T2>());
   }
 }
 
@@ -18,7 +18,8 @@ class C extends D {
     parent::f();
   }
 }
-
+<<__EntryPoint>> function main(): void {
 $c = new C();
 
 $c->f();
+}

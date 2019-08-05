@@ -22,6 +22,18 @@ type load_state_approach =
   | Load_state_natively of bool
   | Load_state_natively_with_target of ServerMonitorUtils.target_saved_state
 
+type remote_init = {
+  worker_key: string;
+  check_id: string;
+}
+
+type init_approach =
+  | Full_init
+  | Parse_only_init
+  | Saved_state_init of load_state_approach
+  | Remote_init of remote_init
+  | Write_symbol_info
+
 (** Docs are in .mli *)
 type init_result =
   | Load_state_succeeded of int option
@@ -46,14 +58,18 @@ type files_changed_while_parsing = Relative_path.Set.t
 type loaded_info =
 {
   saved_state_fn : string;
+  deptable_fn : string;
+  naming_table_fn : string option;
   corresponding_rev : Hg.rev;
-  mergebase_rev : Hg.svn_rev option;
+  mergebase_rev : Hg.global_rev option;
+  (* Files changed between the loaded naming table saved state and current revision. *)
+  dirty_naming_files : Relative_path.Set.t;
   (* Files changed between saved state revision and current public merge base *)
   dirty_master_files : Relative_path.Set.t;
   (* Files changed between public merge base and current revision *)
   dirty_local_files : Relative_path.Set.t;
-  old_saved : FileInfo.saved_state_info;
-  old_errors : SaveStateService.saved_state_errors;
+  old_naming_table : Naming_table.t;
+  old_errors : SaveStateServiceTypes.saved_state_errors;
   state_distance: int option;
 }
 

@@ -27,18 +27,15 @@
 #include "hphp/runtime/base/http-client.h"
 #include "hphp/runtime/base/http-stream-wrapper.h"
 #include "hphp/runtime/base/ini-setting.h"
-#include "hphp/runtime/base/actrec-args.h"
 #include "hphp/runtime/base/pipe.h"
 #include "hphp/runtime/base/plain-file.h"
 #include "hphp/runtime/base/temp-file.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/stat-cache.h"
 #include "hphp/runtime/base/stream-wrapper-registry.h"
 #include "hphp/runtime/base/string-util.h"
 #include "hphp/runtime/base/request-info.h"
-#include "hphp/runtime/base/user-stream-wrapper.h"
 #include "hphp/runtime/base/zend-scanf.h"
 #include "hphp/runtime/ext/hash/ext_hash.h"
 #if ENABLE_EXTENSION_POSIX
@@ -51,6 +48,7 @@
 #include "hphp/system/systemlib.h"
 #include "hphp/util/logger.h"
 #include "hphp/util/process.h"
+#include "hphp/util/rds-local.h"
 
 #include <folly/String.h>
 #include <folly/portability/Dirent.h>
@@ -441,32 +439,15 @@ Variant HHVM_FUNCTION(fgetss,
   return ret;
 }
 
-Variant fscanfImpl(const Resource& handle,
-                   const String& format,
-                   const req::vector<Variant*>& args) {
+Variant HHVM_FUNCTION(fscanf,
+                      const Resource& handle,
+                      const String& format) {
   CHECK_HANDLE(handle, f);
   String line = f->readLine();
   if (line.length() == 0) {
     return false;
   }
-  return sscanfImpl(line, format, args);
-}
-
-TypedValue* HHVM_FN(fscanf)(ActRec* ar) {
-  Resource handle{getArg<KindOfResource>(ar, 0)};
-  if (ar->numArgs() < 1) {
-    return arReturn(ar, init_null());
-  }
-  String format{getArg<KindOfString>(ar, 1)};
-  if (ar->numArgs() < 2) {
-    return arReturn(ar, false);
-  }
-  req::vector<Variant*> args;
-  args.reserve(ar->numArgs() - 2);
-  for (int i = 2; i < ar->numArgs(); ++i) {
-    args.push_back(getArg<KindOfRef>(ar, i));
-  }
-  return arReturn(ar, fscanfImpl(handle, format, args));
+  return HHVM_FN(sscanf)(line, format);
 }
 
 Variant HHVM_FUNCTION(fpassthru,
@@ -738,6 +719,9 @@ Variant HHVM_FUNCTION(file_put_contents,
       }
       break;
     }
+    case KindOfRecord:
+      raise_warning("Not a valid stream resource");
+      return false;
   }
 
   // like fwrite(), fclose() can error when fflush()ing

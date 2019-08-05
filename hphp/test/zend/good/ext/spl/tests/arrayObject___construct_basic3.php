@@ -1,4 +1,4 @@
-<?php
+<?hh
 class C {
 	public $prop = 'C::prop.orig';
 }
@@ -42,4 +42,3 @@ function testAccess($c, $ao) {
 	echo "  - After:\n";
 	var_dump($ao, $c);
 }
-?>

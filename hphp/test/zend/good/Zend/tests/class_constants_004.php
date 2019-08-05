@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 namespace foo;
 
@@ -15,7 +15,7 @@ interface Ifoo {
 $const  = __NAMESPACE__ .'\\foo';  // class
 $const2 = __NAMESPACE__ .'\\Ifoo'; // interface
 
-var_dump(
+\var_dump(
 			\foo\foo,
 			namespace\foo,
 			\foo\foo::foo,
@@ -23,4 +23,3 @@ var_dump(
 			Ifoo::foo,
 			$const2::foo
 			);
-?>

@@ -1,26 +1,27 @@
-<?php
+<?hh
 /* Prototype  : bool array_multisort(array ar1 [, SORT_ASC|SORT_DESC [, SORT_REGULAR|SORT_NUMERIC|SORT_STRING|SORT_NATURAL|SORT_FLAG_CASE]] [, array ar2 [, SORT_ASC|SORT_DESC [, SORT_REGULAR|SORT_NUMERIC|SORT_STRING|SORT_NATURAL|SORT_FLAG_CASE]], ...])
  * Description: Sort multiple arrays at once similar to how ORDER BY clause works in SQL
  * Source code: ext/standard/array.c
  * Alias to functions:
  */
 
-echo "*** Testing array_multisort() : usage variation  - test sort order of all types***\n";
-
-// Define error handler
-function test_error_handler($err_no, $err_msg, $filename, $linenum, $vars) {
-	// We're testing sort order not errors so ignore.
-}
-set_error_handler('test_error_handler');
-
 // define some classes
 class classWithToString {
-	public function __toString() {
-		return "Class A object";
-	}
+    public function __toString() {
+        return "Class A object";
+    }
 }
 
 class classWithoutToString { }
+
+// Define error handler
+function test_error_handler($err_no, $err_msg, $filename, $linenum, $vars) {
+    // We're testing sort order not errors so ignore.
+}
+<<__EntryPoint>> function main(): void {
+echo "*** Testing array_multisort() : usage variation  - test sort order of all types***\n";
+
+set_error_handler('test_error_handler');
 
 $inputs = array(
       'int 0' => 0,
@@ -39,5 +40,5 @@ $string = SORT_STRING;
 var_dump(array_multisort(&$inputs, &$string));
 var_dump($inputs);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

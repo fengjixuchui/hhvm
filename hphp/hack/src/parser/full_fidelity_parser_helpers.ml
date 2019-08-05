@@ -37,7 +37,7 @@ module WithParser(Parser : Parser_S) = struct
     val next_token : ?tokenizer:(Lexer.t ->Lexer.t * Syntax.Token.t) -> t -> t * Syntax.Token.t
     val fetch_token : t -> t * Parser.SC.r
   end = struct
-    let next_token_impl ~tokenizer parser =
+    let next_token ?(tokenizer=Lexer.next_token) parser =
       let lexer = lexer parser in
       let (lexer, token) = tokenizer lexer in
       let parser = with_lexer parser lexer in
@@ -67,8 +67,6 @@ module WithParser(Parser : Parser_S) = struct
          in
       (parser, token)
 
-    let magic_cache = Little_magic_cache.make ()
-    let next_token ?(tokenizer=Lexer.next_token) = Little_magic_cache.memoize magic_cache (next_token_impl ~tokenizer)
     let fetch_token parser =
       let (parser, token) = next_token parser in
       Make.token parser token
@@ -131,9 +129,9 @@ module WithParser(Parser : Parser_S) = struct
   let peek_token_kind ?(lookahead=0) parser =
     Token.kind (peek_token ~lookahead parser)
 
-  let scan_markup parser ~is_leading_section =
+  let scan_header parser =
     let (lexer, markup, suffix) =
-      Lexer.scan_markup (lexer parser) ~is_leading_section
+      Lexer.scan_header (lexer parser)
     in
     with_lexer parser lexer, markup, suffix
 
@@ -313,9 +311,6 @@ module WithParser(Parser : Parser_S) = struct
       end
     end
 
-  let require_required parser =
-    require_token parser TokenKind.Required SyntaxError.error1051
-
   let require_name parser =
     require_token parser TokenKind.Name SyntaxError.error1004
 
@@ -338,16 +333,6 @@ module WithParser(Parser : Parser_S) = struct
          and continue on from the current token. Don't skip it. *)
       let parser = with_error parser SyntaxError.error1004 in
       Make.missing parser (pos parser)
-
-  let require_name_allow_std_constants parser =
-    let start_offset = Lexer.end_offset @@ lexer parser in
-    let (parser1, token) = require_name_allow_non_reserved parser in
-    let end_offset = Lexer.end_offset @@ lexer parser1 in
-    let source = Lexer.source @@ lexer parser in
-    let text = SourceText.sub source start_offset (end_offset - start_offset) in
-    match String.lowercase text with
-    | "true" | "false" | "null" -> (parser1, token)
-    | _ -> require_name parser
 
   let next_xhp_category_name parser =
     let lexer = lexer parser in
@@ -535,6 +520,9 @@ module WithParser(Parser : Parser_S) = struct
   let require_colon parser =
     require_token parser TokenKind.Colon SyntaxError.error1020
 
+  let require_comma parser =
+    require_token parser TokenKind.Comma SyntaxError.error1054
+
   let require_left_brace parser =
     require_token parser TokenKind.LeftBrace SyntaxError.error1034
 
@@ -553,8 +541,8 @@ module WithParser(Parser : Parser_S) = struct
   let require_right_angle parser =
     require_token parser TokenKind.GreaterThan SyntaxError.error1013
 
-  let require_comma parser =
-    require_token parser TokenKind.Comma SyntaxError.error1054
+  let require_slashgt parser =
+    require_token parser TokenKind.SlashGreaterThan SyntaxError.error1029
 
   let require_right_bracket parser =
     require_token parser TokenKind.RightBracket SyntaxError.error1032
@@ -601,6 +589,9 @@ module WithParser(Parser : Parser_S) = struct
     else
       require_name_or_variable parser
 
+  let require_colonat parser =
+    require_token parser TokenKind.ColonAt SyntaxError.error1061
+
   let optional_token parser kind =
     let (parser1, token) = next_token parser in
     if (Token.kind token) = kind then
@@ -624,18 +615,28 @@ module WithParser(Parser : Parser_S) = struct
    * when the parser is at the <<<, it will scan the entire file looking for an
    * ending to the heredoc, which could quickly get bad if there are many such
    * declarations in a file. *)
-  let peek_next_partial_token_is_left_angle parser =
+  let peek_next_partial_token_is_triple_left_angle parser =
     let lexer = lexer parser in
     let lexer, _ = Lexer.scan_leading_php_trivia lexer in
-    let c = Lexer.peek_char lexer 0 in
-    c = '<'
+    let tparam_open = Lexer.peek_char lexer 0 in
+    let attr1 = Lexer.peek_char lexer 1 in
+    let attr2 = Lexer.peek_char lexer 2 in
+    tparam_open = '<' && attr1 = '<' && attr2 = '<'
+
+  (* Type parameter/argument lists begin with < and can have attributes immediately
+   * afterwards, so this peeks a token kind at the beginning of such a list. *)
+  let peek_token_kind_with_possible_attributized_type_list parser =
+    if peek_next_partial_token_is_triple_left_angle parser then
+      TokenKind.LessThan
+    else
+      peek_token_kind parser
 
   (* In the case of attributes on generics, one could write
-   * function f<<<__Attr>> reify T, ...>
+   * function f<<<__Attr>> reify T, ...> or Awaitable<<<__Soft>> int>
    * The triple left angle is currently lexed as a HeredocStringLiteral,
    * but we can get around this by manually advancing the lexer one token
    * and returning a LeftAngle. Then, the next token will be a LeftAngleLeftAngle *)
-  let assert_left_angle_in_type_param_list_with_possible_attribute parser =
+  let assert_left_angle_in_type_list_with_possible_attribute parser =
     let lexer = lexer parser in
     let tparam_open = Lexer.peek_char lexer 0 in
     let attr1 = Lexer.peek_char lexer 1 in
@@ -925,8 +926,9 @@ module WithParser(Parser : Parser_S) = struct
       | _ -> true) in
     if SC.is_missing block
     then
-      let parser, empty = Make.missing parser (pos parser) in
-      let parser, es = Make.expression_statement parser empty empty in
+      let parser, empty1 = Make.missing parser (pos parser) in
+      let parser, empty2 = Make.missing parser (pos parser) in
+      let parser, es = Make.expression_statement parser empty1 empty2 in
       make_list parser [es]
     else
       parser1, block

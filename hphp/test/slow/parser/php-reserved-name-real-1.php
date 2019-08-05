@@ -1,9 +1,9 @@
-<?php
+<?hh
 
-<<__EntryPoint>>
-function main_php_reserved_name_real_1() {
-if (false) {
+
+
+
   class Real {}
-}
+<<__EntryPoint>> function main(): void {
 echo "Done\n";
 }

@@ -1,7 +1,7 @@
 File "shape_to_dict.php", line 15, characters 3-29:
   dict<arraykey, mixed>
 File "shape_to_dict.php", line 16, characters 3-34:
-  dict<[unresolved], [unresolved]>
+  dict<nothing, nothing>
 File "shape_to_dict.php", line 17, characters 3-56:
   dict<string, (int | string)>
 File "shape_to_dict.php", line 18, characters 3-64:
@@ -11,6 +11,6 @@ File "shape_to_dict.php", line 21, characters 3-29:
 File "shape_to_dict.php", line 25, characters 10-54:
 Invalid return type (Typing[4110])
 File "shape_to_dict.php", line 24, characters 22-39:
-This is an array (used like a hashtable)
-File "hhi_lib__srcs/Shapes.hhi", line 67, characters 6-26:
-It is incompatible with an object of type dict
+Expected array<string, num>
+File "Shapes.hhi", line 67, characters 6-26:
+But got dict<string, num>

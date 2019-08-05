@@ -2,10 +2,10 @@
 
 class Foo<reify T> {}
 
-function f(Foo<int> $a) {
+function f(@Foo<int> $a) {
   return $a;
 }
-
+<<__EntryPoint>> function main(): void {
 set_error_handler(
   (int $errno,
   string $errstr,
@@ -20,3 +20,4 @@ set_error_handler(
 
 f(new Foo<int>);
 f(new Foo<string>);
+}

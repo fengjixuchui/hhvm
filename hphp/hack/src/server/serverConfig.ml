@@ -16,8 +16,7 @@ open Config_file.Getters
 open Reordered_argument_collections
 
 type t = {
-  version : string option;
-
+  version : Config_file.version;
   load_script_timeout : int; (* in seconds *)
 
   (* Configures only the workers. Workers can have more relaxed GC configs as
@@ -34,6 +33,7 @@ type t = {
   extra_paths      : Path.t list;
   (* A list of regexps for paths to ignore for typechecking coroutines *)
   coroutine_whitelist_paths : string list;
+  warn_on_non_opt_build : bool
 }
 
 let filename = Relative_path.from_root Config_file.file_path_relative_to_repo_root
@@ -213,18 +213,35 @@ let prepare_auto_namespace_map config =
     ~default:[]
     ~f:convert_auto_namespace_to_map
 
-let prepare_ignored_fixme_codes config =
-  SMap.get config "ignored_fixme_codes"
+let prepare_iset config config_name initial_values =
+  SMap.get config config_name
   |> Option.value_map ~f:(Str.split config_list_regexp) ~default:[]
   |> List.map ~f:int_of_string
-  |> List.fold_right ~init:Errors.default_ignored_fixme_codes ~f:ISet.add
+  |> List.fold_right ~init:initial_values ~f:ISet.add
+
+let prepare_ignored_fixme_codes config =
+  prepare_iset config "ignored_fixme_codes" Errors.default_ignored_fixme_codes
+
+let prepare_error_codes_treated_strictly config =
+  prepare_iset config "error_codes_treated_strictly" (ISet.of_list [])
+
+let prepare_disallowed_decl_fixmes config =
+  prepare_iset config "disallowed_decl_fixmes" (ISet.of_list [])
 
 let load config_filename options =
-  let config_hash, config = Config_file.parse (Relative_path.to_absolute config_filename) in
   let config_overrides = SMap.of_list @@ ServerArgs.config options in
-  let config = SMap.union config config_overrides in
+  let config_hash, config = Config_file.parse_hhconfig
+    ~silent:true
+    (Relative_path.to_absolute config_filename)
+  in
+  let config = Config_file.apply_overrides
+    ~silent:true
+    ~config
+    ~overrides:config_overrides
+  in
   process_untrusted_mode config;
-  let local_config = ServerLocalConfig.load ~silent:false in
+  let version = Config_file.parse_version (SMap.get config "version") in
+  let local_config = ServerLocalConfig.load ~silent:false ~current_version:version config_overrides in
   let local_config =
     if ServerArgs.ai_mode options <> None then
       ServerLocalConfig.{
@@ -238,30 +255,33 @@ let load config_filename options =
     else
       local_config
   in
-  let version = SMap.get config "version" in
   let ignored_paths = process_ignored_paths config in
   let extra_paths = process_extra_paths config in
   let coroutine_whitelist_paths = process_coroutine_whitelist_paths config in
   (* Since we use the unix alarm() for our timeouts, a timeout value of 0 means
    * to wait indefinitely *)
   let load_script_timeout = int_ "load_script_timeout" ~default:0 config in
+  let warn_on_non_opt_build = bool_ "warn_on_non_opt_build" ~default:false config in
   let formatter_override =
     Option.map (SMap.get config "formatter_override") maybe_relative_path in
   let global_opts = GlobalOptions.make
     ?tco_safe_array:(bool_opt "safe_array" config)
     ?tco_safe_vector_array:(bool_opt "safe_vector_array" config)
     ?po_deregister_php_stdlib:(bool_opt "deregister_php_stdlib" config)
-    ?po_enable_concurrent:(bool_opt "enable_concurrent" config)
-    ?po_enable_await_as_an_expression:(bool_opt "enable_await_as_an_expression" config)
     ?po_allow_goto:(Option.map ~f:not (bool_opt "disallow_goto" config))
     ?po_disable_static_closures:(bool_opt "disable_static_closures" config)
-    ?po_disable_static_local_variables:(bool_opt "disable_static_local_variables" config)
     ?tco_disallow_array_as_tuple:(bool_opt "disallow_array_as_tuple" config)
     ?tco_disallow_ambiguous_lambda:(bool_opt "disallow_ambiguous_lambda" config)
     ?tco_disallow_array_typehint:(bool_opt "disallow_array_typehint" config)
     ?tco_disallow_array_literal:(bool_opt "disallow_array_literal" config)
-    ?tco_untyped_nonstrict_lambda_parameters:
-      (bool_opt "untyped_nonstrict_lambda_parameters" config)
+    ?tco_defer_class_declaration_threshold:(local_config.ServerLocalConfig.defer_class_declaration_threshold)
+    ?tco_remote_type_check_threshold:(local_config.ServerLocalConfig.remote_type_check_threshold)
+    ?tco_remote_type_check:(Some local_config.ServerLocalConfig.remote_type_check)
+    ?tco_remote_worker_key:(local_config.ServerLocalConfig.remote_worker_key)
+    ?tco_remote_check_id:(local_config.ServerLocalConfig.remote_check_id)
+    ?tco_num_remote_workers:(Some local_config.ServerLocalConfig.num_remote_workers)
+    ?so_remote_worker_eden_checkout_threshold:(int_opt "remote_worker_eden_checkout_threshold" config)
+    ?so_naming_sqlite_path:(local_config.ServerLocalConfig.naming_sqlite_path)
     ?tco_language_feature_logging:(bool_opt "language_feature_logging" config)
     ?tco_unsafe_rx:(bool_opt "unsafe_rx" config)
     ?tco_disallow_implicit_returns_in_non_void_functions:
@@ -270,31 +290,54 @@ let load config_filename options =
     ?tco_disallow_scrutinee_case_value_type_mismatch:
       (bool_opt "disallow_scrutinee_case_value_type_mismatch" config)
     ?tco_disallow_stringish_magic:(bool_opt "disallow_stringish_magic" config)
-    ?tco_disallow_anon_use_capture_by_ref:
-      (bool_opt "disallow_anon_use_capture_by_ref" config)
-    ?tco_new_inference:(float_opt "new_inference" config)
-    ?tco_new_inference_no_eager_solve:(bool_opt "new_inference_no_eager_solve" config)
+    ?tco_new_inference_lambda:(bool_opt "new_inference_lambda" config)
     ?tco_timeout:(int_opt "timeout" config)
     ?tco_disallow_invalid_arraykey:(bool_opt "disallow_invalid_arraykey" config)
-    ?tco_disable_instanceof_refinement:(bool_opt "disable_instanceof_refinement" config)
-    ?tco_disallow_ref_param_on_constructor:(bool_opt "disallow_ref_param_on_constructor" config)
-    ?po_enable_stronger_await_binding:(bool_opt "stronger_await_binding" config)
+    ?tco_disallow_byref_dynamic_calls:(bool_opt "disallow_byref_dynamic_calls" config)
+    ?tco_disallow_byref_calls:(bool_opt "disallow_byref_calls" config)
     ?po_disable_lval_as_an_expression:(bool_opt "disable_lval_as_an_expression" config)
-    ?po_disable_unsafe_expr:(bool_opt "disable_unsafe_expr" config)
-    ?po_disable_unsafe_block:(bool_opt "disable_unsafe_block" config)
     ?tco_typecheck_xhp_cvars:(bool_opt "typecheck_xhp_cvars" config)
     ?tco_ignore_collection_expr_type_arguments:(bool_opt "ignore_collection_expr_type_arguments" config)
-    ?tco_disallow_unsafe_construct:(bool_opt "disallow_unsafe_construct" config)
     ~ignored_fixme_codes:(prepare_ignored_fixme_codes config)
     ?ignored_fixme_regex:(string_opt "ignored_fixme_regex" config)
     ~po_auto_namespace_map:(prepare_auto_namespace_map config)
     ~tco_experimental_features:(config_experimental_tc_features config)
     ~tco_log_inference_constraints:(ServerArgs.log_inference_constraints options)
     ~tco_migration_flags:(config_tc_migration_flags config)
+    ~tco_shallow_class_decl:(local_config.ServerLocalConfig.shallow_class_decl)
+    ~po_rust:(local_config.ServerLocalConfig.rust)
+    ~profile_type_check_duration_threshold:(local_config.ServerLocalConfig.profile_type_check_duration_threshold)
+    ?tco_like_types:(bool_opt "like_types" config)
+    ?tco_pessimize_types:(bool_opt "pessimize_types" config)
+    ?tco_coercion_from_dynamic:(bool_opt "coercion_from_dynamic" config)
+    ?tco_disable_partially_abstract_typeconsts:(bool_opt "disable_partially_abstract_typeconsts" config)
+    ~error_codes_treated_strictly:(prepare_error_codes_treated_strictly config)
+    ?tco_check_xhp_attribute:(bool_opt "check_xhp_attribute" config)
+    ?tco_disallow_unresolved_type_variables:(bool_opt "disallow_unresolved_type_variables" config)
+    ?tco_disallow_invalid_arraykey_constraint:(bool_opt "disallow_invalid_arraykey_constraint" config)
+    ?po_enable_class_level_where_clauses:(bool_opt "class_level_where_clauses" config)
+    ?po_enable_constant_visibility_modifiers:(bool_opt "enable_constant_visibility_modifiers" config)
+    ?po_disable_legacy_soft_typehints:(bool_opt "disable_legacy_soft_typehints" config)
+    ?tco_use_lru_workers:(Some local_config.ServerLocalConfig.use_lru_workers)
+    ?use_new_type_errors:(bool_opt "use_new_type_errors" config)
+    ?po_disable_outside_dollar_str_interp:(bool_opt "disable_outside_dollar_str_interp" config)
+    ?po_disallow_toplevel_requires:(bool_opt "disallow_toplevel_requires" config)
+    ?disable_linter_fixmes:(bool_opt "disable_linter_fixmes" config)
+    ~po_disallowed_decl_fixmes:(prepare_disallowed_decl_fixmes config)
+    ?po_allow_new_attribute_syntax:(bool_opt "allow_new_attribute_syntax" config)
+    ?po_disable_legacy_attribute_syntax:(bool_opt "disable_legacy_attribute_syntax" config)
+    ?tco_const_attribute:(bool_opt "const_attribute" config)
+    ?po_const_default_func_args:(bool_opt "const_default_func_args" config)
     ()
   in
   Errors.ignored_fixme_codes :=
     (GlobalOptions.ignored_fixme_codes global_opts);
+  Errors.error_codes_treated_strictly :=
+    (GlobalOptions.error_codes_treated_strictly global_opts);
+  Errors.use_new_type_errors :=
+    (GlobalOptions.use_new_type_errors global_opts);
+  Errors.disable_linter_fixmes :=
+    (GlobalOptions.disable_linter_fixmes global_opts);
   {
     version = version;
     load_script_timeout = load_script_timeout;
@@ -307,11 +350,12 @@ let load config_filename options =
     ignored_paths = ignored_paths;
     extra_paths = extra_paths;
     coroutine_whitelist_paths = coroutine_whitelist_paths;
+    warn_on_non_opt_build;
   }, local_config
 
 (* useful in testing code *)
 let default_config = {
-  version = None;
+  version = Config_file.Opaque_version None;
   load_script_timeout = 0;
   gc_control = GlobalConfig.gc_control;
   sharedmem_config = GlobalConfig.default_sharedmem_config;
@@ -322,6 +366,7 @@ let default_config = {
   ignored_paths = [];
   extra_paths = [];
   coroutine_whitelist_paths = [];
+  warn_on_non_opt_build = false;
 }
 
 let set_parser_options config popt = { config with parser_options = popt }
@@ -336,3 +381,4 @@ let ignored_paths config = config.ignored_paths
 let extra_paths config = config.extra_paths
 let coroutine_whitelist_paths config = config.coroutine_whitelist_paths
 let version config = config.version
+let warn_on_non_opt_build config = config.warn_on_non_opt_build

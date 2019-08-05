@@ -16,13 +16,62 @@
 
 #include "hphp/runtime/base/runtime-option.h"
 
+#include "hphp/parser/scanner.h"
+#include "hphp/runtime/base/apc-file-storage.h"
+#include "hphp/runtime/base/autoload-handler.h"
+#include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/base/config.h"
+#include "hphp/runtime/base/crash-reporter.h"
+#include "hphp/runtime/base/execution-context.h"
+#include "hphp/runtime/base/extended-logger.h"
+#include "hphp/runtime/base/file-util-defs.h"
+#include "hphp/runtime/base/file-util.h"
+#include "hphp/runtime/base/hphp-system.h"
+#include "hphp/runtime/base/ini-setting.h"
+#include "hphp/runtime/base/init-fini-node.h"
+#include "hphp/runtime/base/memory-manager.h"
+#include "hphp/runtime/base/preg.h"
+#include "hphp/runtime/base/request-info.h"
+#include "hphp/runtime/base/static-string-table.h"
+#include "hphp/runtime/base/zend-url.h"
+#include "hphp/runtime/ext/extension-registry.h"
+#include "hphp/runtime/server/access-log.h"
+#include "hphp/runtime/server/cli-server.h"
+#include "hphp/runtime/server/files-match.h"
+#include "hphp/runtime/server/satellite-server.h"
+#include "hphp/runtime/server/virtual-host.h"
+#include "hphp/runtime/vm/jit/code-cache.h"
+#include "hphp/runtime/vm/jit/mcgen-translate.h"
+#include "hphp/runtime/vm/treadmill.h"
+#include "hphp/util/arch.h"
+#include "hphp/util/atomic-vector.h"
+#include "hphp/util/build-info.h"
+#include "hphp/util/cpuid.h"
+#include "hphp/util/current-executable.h"
+#include "hphp/util/file-cache.h"
+#include "hphp/util/gzip.h"
+#include "hphp/util/hardware-counter.h"
+#include "hphp/util/hdf.h"
+#include "hphp/util/hphp-config.h"
+#include "hphp/util/hugetlb.h"
+#include "hphp/util/log-file-flusher.h"
+#include "hphp/util/logger.h"
+#include "hphp/util/network.h"
+#include "hphp/util/numa.h"
+#include "hphp/util/process.h"
+#include "hphp/util/service-data.h"
+#include "hphp/util/stack-trace.h"
+#include "hphp/util/text-util.h"
+#include "hphp/util/zstd.h"
+#include "hphp/zend/zend-string.h"
+
 #include <cstdint>
 #include <libgen.h>
 #include <limits>
-#include <stdexcept>
 #include <map>
 #include <memory>
 #include <set>
+#include <stdexcept>
 #include <vector>
 
 #include <boost/algorithm/string/predicate.hpp>
@@ -33,58 +82,10 @@
 #include <folly/portability/SysTime.h>
 #include <folly/portability/Unistd.h>
 
-#include "hphp/util/arch.h"
-#include "hphp/util/atomic-vector.h"
-#include "hphp/util/build-info.h"
-#include "hphp/util/cpuid.h"
-#include "hphp/util/current-executable.h"
-#include "hphp/util/hdf.h"
-#include "hphp/util/hphp-config.h"
-#include "hphp/util/text-util.h"
-#include "hphp/util/network.h"
-#include "hphp/util/hardware-counter.h"
-#include "hphp/util/logger.h"
-#include "hphp/util/stack-trace.h"
-#include "hphp/util/process.h"
-#include "hphp/util/file-cache.h"
-#include "hphp/util/log-file-flusher.h"
-#include "hphp/util/service-data.h"
-
 #if defined (__linux__) && defined (__aarch64__)
 #include <sys/auxv.h>
 #include <asm/hwcap.h>
 #endif
-
-#include "hphp/parser/scanner.h"
-#include "hphp/zend/zend-string.h"
-
-#include "hphp/runtime/server/satellite-server.h"
-#include "hphp/runtime/server/virtual-host.h"
-#include "hphp/runtime/server/files-match.h"
-#include "hphp/runtime/server/access-log.h"
-#include "hphp/runtime/server/cli-server.h"
-
-#include "hphp/runtime/base/apc-file-storage.h"
-#include "hphp/runtime/base/autoload-handler.h"
-#include "hphp/runtime/base/builtin-functions.h"
-#include "hphp/runtime/base/config.h"
-#include "hphp/runtime/base/crash-reporter.h"
-#include "hphp/runtime/base/extended-logger.h"
-#include "hphp/runtime/base/file-util.h"
-#include "hphp/runtime/base/file-util-defs.h"
-#include "hphp/runtime/base/hphp-system.h"
-#include "hphp/runtime/base/ini-setting.h"
-#include "hphp/runtime/base/init-fini-node.h"
-#include "hphp/runtime/base/memory-manager.h"
-#include "hphp/runtime/base/preg.h"
-#include "hphp/runtime/base/static-string-table.h"
-#include "hphp/runtime/base/request-info.h"
-#include "hphp/runtime/base/zend-url.h"
-#include "hphp/runtime/ext/extension-registry.h"
-
-#include "hphp/runtime/vm/jit/code-cache.h"
-#include "hphp/runtime/vm/jit/mcgen-translate.h"
-#include "hphp/runtime/vm/treadmill.h"
 
 #ifdef __APPLE__
 #define st_mtim st_mtimespec
@@ -219,41 +220,134 @@ using RepoOptionCache = tbb::concurrent_hash_map<
 >;
 RepoOptionCache s_repoOptionCache;
 
+template<class F>
+bool walkDirTree(std::string fpath, F func) {
+  const char* filename = ".hhvmconfig.hdf";
+  do {
+    auto const off = fpath.rfind('/');
+    if (off == std::string::npos) return false;
+    fpath.resize(off);
+    fpath += '/';
+    fpath += filename;
+
+    if (func(fpath)) return true;
+
+    fpath.resize(off);
+  } while (!fpath.empty() && fpath != "/");
+  return false;
+}
+
+RDS_LOCAL(std::string, s_lastSeenRepoConfig);
+
 }
 
 const RepoOptions& RepoOptions::forFile(const char* path) {
   if (!RuntimeOption::EvalEnablePerRepoOptions) return defaults();
 
-  const char* filename = ".hhvmconfig.hdf";
   std::string fpath{path};
   if (boost::starts_with(fpath, "/:")) return defaults();
-  do {
-    auto const off = fpath.rfind('/');
-    if (off == std::string::npos) return defaults();
-    fpath.resize(off);
-    fpath += '/';
-    fpath += filename;
 
-    if (!access(fpath.data(), R_OK)) {
-      struct stat st;
-      lstat(fpath.data(), &st);
+  // Fast path: we have an active request and it has cached a RepoOptions
+  // which has not been modified. This only works when the runtime option
+  // Eval.FatalOnParserOptionMismatch is set. It can cause us to miss out on
+  // configs that were added between the current directory and the source file.
+  // (Loading these configs would result in a fatal anyway with this option)
+  if (!g_context.isNull()) {
+    if (auto const opts = g_context->getRepoOptionsForRequest()) {
+      // If path() is empty we have the default() options, which means we have
+      // negatively cached the existance of a .hhvmconfig.hdf for this request.
+      if (opts->path().empty()) return *opts;
 
-      RepoOptionCache::const_accessor rpathAcc;
-      s_repoOptionCache.insert(rpathAcc, fpath);
-
-      if (auto const opts = rpathAcc->second.fetch(st)) {
-        return *opts;
+      if (boost::starts_with(fpath, opts->path())) {
+        struct stat st;
+        if (lstat(opts->path().data(), &st) == 0) {
+          if (!CachedRepoOptions::isChanged(opts, st)) return *opts;
+        }
       }
+    }
+  }
 
-      RepoOptions newOpts{fpath.data()};
-      newOpts.m_stat = st;
-      return *rpathAcc->second.update(std::move(newOpts));
+  auto const set = [&] (
+    RepoOptionCache::const_accessor& rpathAcc,
+    const std::string& path,
+    const struct stat& st
+  ) -> const RepoOptions* {
+    *s_lastSeenRepoConfig = path;
+    if (auto const opts = rpathAcc->second.fetch(st)) {
+      return opts;
+    }
+    RepoOptions newOpts{path.data()};
+    newOpts.m_stat = st;
+    return rpathAcc->second.update(std::move(newOpts));
+  };
+
+  auto const test = [&] (const std::string& path) -> const RepoOptions* {
+    struct stat st;
+    RepoOptionCache::const_accessor rpathAcc;
+    if (!s_repoOptionCache.find(rpathAcc, path)) return nullptr;
+    if (lstat(path.data(), &st) != 0) {
+      s_repoOptionCache.erase(rpathAcc);
+      return nullptr;
+    }
+    return set(rpathAcc, path, st);
+  };
+
+  const RepoOptions* ret{nullptr};
+
+  // WARNING: when Eval.CachePerRepoOptionsPath we cache the last used path for
+  //          RepoOptions per thread, and while we will detect changes to this
+  //          file, and do a rescan in the event that it is deleted or doesn't
+  //          match the current file being loaded, we will miss out on new
+  //          configs that may be added. Since we expect to see a single config
+  //          per repository we expect that this will be a reasonably safe,
+  //          optimization.
+  if (RuntimeOption::EvalCachePerRepoOptionsPath) {
+    if (!s_lastSeenRepoConfig->empty() &&
+        boost::starts_with(fpath, *s_lastSeenRepoConfig)) {
+      if (auto const r = test(*s_lastSeenRepoConfig)) return *r;
+      s_lastSeenRepoConfig->clear();
     }
 
-    fpath.resize(off);
-  } while (!fpath.empty() && fpath != "/");
+    // If the last seen path isn't set yet or is no longer accurate try checking
+    // other cached paths before falling back to the filesystem.
+    walkDirTree(fpath, [&] (const std::string& path) {
+      return (ret = test(path)) != nullptr;
+    });
+  }
 
-  return defaults();
+  if (ret) return *ret;
+
+  walkDirTree(fpath, [&] (const std::string& path) {
+    struct stat st;
+    if (lstat(path.data(), &st) != 0) return false;
+    RepoOptionCache::const_accessor rpathAcc;
+    s_repoOptionCache.insert(rpathAcc, path);
+    ret = set(rpathAcc, path, st);
+    return true;
+  });
+
+  return ret ? *ret : defaults();
+}
+
+static inline std::string hhjsBabelTransformDefault() {
+  std::vector<folly::StringPiece> searchPaths;
+  folly::split(":", hhjsBabelTransform(), searchPaths);
+  std::string here = current_executable_directory();
+
+  for (folly::StringPiece searchPath : searchPaths) {
+    std::string transform = searchPath.toString();
+    std::size_t found = transform.find("{}");
+
+    if (found != std::string::npos) {
+      transform.replace(found, 2, here);
+    }
+
+    if (::access(transform.data(), X_OK) == 0) {
+      return transform;
+    }
+  }
+
+  return "";
 }
 
 std::string RepoOptions::cacheKeyRaw() const {
@@ -262,15 +356,16 @@ std::string RepoOptions::cacheKeyRaw() const {
 #define P(_, n, ...) + mangleForKey(n)
 #define H(_, n, ...) + mangleForKey(n)
 #define E(_, n, ...) + mangleForKey(n)
-PARSERFLAGS();
+PARSERFLAGS()
+AUTOLOADFLAGS();
 #undef N
 #undef P
 #undef H
 #undef E
 }
 
-std::string RepoOptions::cacheKeyMd5() const {
-  return string_md5(cacheKeyRaw());
+std::string RepoOptions::cacheKeySha1() const {
+  return string_sha1(cacheKeyRaw());
 }
 
 std::string RepoOptions::toJSON() const {
@@ -294,7 +389,8 @@ folly::dynamic RepoOptions::toDynamic() const {
 #define P(_, n, ...) OUT("PHP7." #n, n)
 #define H(_, n, ...) OUT("Hack.Lang." #n, n)
 #define E(_, n, ...) OUT("Eval." #n, n)
-PARSERFLAGS();
+PARSERFLAGS()
+AUTOLOADFLAGS();
 #undef N
 #undef P
 #undef H
@@ -310,7 +406,8 @@ bool RepoOptions::operator==(const RepoOptions& o) const {
 #define P(_, n, ...) if (n != o.n) return false;
 #define H(_, n, ...) if (n != o.n) return false;
 #define E(_, n, ...) if (n != o.n) return false;
-PARSERFLAGS();
+PARSERFLAGS()
+AUTOLOADFLAGS();
 #undef N
 #undef P
 #undef H
@@ -342,13 +439,26 @@ void RepoOptions::filterNamespaces() {
 
 RepoOptions::RepoOptions(const char* file) : m_path(file) {
   always_assert(s_init);
-  Hdf config = (Hdf{file})["Parser"];
+  Hdf config{file};
+  Hdf parserConfig = config["Parser"];
 
-#define N(_, n, ...) hdfExtract(config, #n, n, s_defaults.n);
-#define P(_, n, ...) hdfExtract(config, "PHP7." #n, n, s_defaults.n);
-#define H(_, n, ...) hdfExtract(config, "Hack.Lang." #n, n, s_defaults.n);
-#define E(_, n, ...) hdfExtract(config, "Eval." #n, n, s_defaults.n);
+#define N(_, n, ...) hdfExtract(parserConfig, #n, n, s_defaults.n);
+#define P(_, n, ...) hdfExtract(parserConfig, "PHP7." #n, n, s_defaults.n);
+#define H(_, n, ...) hdfExtract(parserConfig, "Hack.Lang." #n, n, s_defaults.n);
+#define E(_, n, ...) hdfExtract(parserConfig, "Eval." #n, n, s_defaults.n);
 PARSERFLAGS();
+#undef N
+#undef P
+#undef H
+#undef E
+
+  Hdf autoloadConfig = config["Autoload"];
+#define N(_, n, ...) hdfExtract(autoloadConfig, #n, n, s_defaults.n);
+#define P(_, n, ...) hdfExtract(autoloadConfig, "PHP7." #n, n, s_defaults.n);
+#define H(_, n, ...) hdfExtract(autoloadConfig, "Hack.Lang." #n, n, \
+                                s_defaults.n);
+#define E(_, n, ...) hdfExtract(autoloadConfig, "Eval." #n, n, s_defaults.n);
+AUTOLOADFLAGS();
 #undef N
 #undef P
 #undef H
@@ -363,13 +473,14 @@ void RepoOptions::initDefaults(const Hdf& hdf, const IniSettingMap& ini) {
 #define H(_, n, dv) Config::Bind(n, ini, hdf, "Hack.Lang." #n, dv);
 #define E(_, n, dv) Config::Bind(n, ini, hdf, "Eval." #n, dv);
 PARSERFLAGS()
+AUTOLOADFLAGS()
 #undef N
 #undef P
 #undef H
 #undef E
 
   filterNamespaces();
-  m_path = "{default options}";
+  m_path.clear();
 }
 
 void RepoOptions::setDefaults(const Hdf& hdf, const IniSettingMap& ini) {
@@ -388,20 +499,17 @@ std::string RuntimeOption::PidFile = "www.pid";
 
 bool RuntimeOption::ServerMode = false;
 
-bool RuntimeOption::EnableHipHopSyntax = false;
+bool RuntimeOption::EnableHipHopSyntax = true;
 bool RuntimeOption::EnableShortTags = true;
-bool RuntimeOption::EnablePHP = false;
-bool RuntimeOption::EnableXHP = false;
+bool RuntimeOption::EnableXHP = true;
 bool RuntimeOption::EnableIntrinsicsExtension = false;
 bool RuntimeOption::CheckSymLink = true;
+bool RuntimeOption::TrustAutoloaderPath = false;
 bool RuntimeOption::EnableArgsInBacktraces = true;
 bool RuntimeOption::EnableZendIniCompat = true;
 bool RuntimeOption::TimeoutsUseWallTime = true;
 bool RuntimeOption::CheckFlushOnUserClose = true;
 bool RuntimeOption::EvalAuthoritativeMode = false;
-bool RuntimeOption::IntsOverflowToInts = false;
-bool RuntimeOption::EnableReifiedGenerics = false;
-bool RuntimeOption::CheckParamTypeInvariance = true;
 bool RuntimeOption::DumpPreciseProfData = true;
 bool RuntimeOption::EnablePocketUniverses = false;
 uint32_t RuntimeOption::EvalInitialStaticStringTableSize =
@@ -420,8 +528,7 @@ std::string RuntimeOption::LogFileSymLink;
 uint16_t RuntimeOption::LogFilePeriodMultiplier;
 
 int RuntimeOption::LogHeaderMangle = 0;
-bool RuntimeOption::AlwaysLogUnhandledExceptions =
-  RuntimeOption::EnableHipHopSyntax;
+bool RuntimeOption::AlwaysLogUnhandledExceptions = true;
 bool RuntimeOption::AlwaysEscapeLog = true;
 bool RuntimeOption::NoSilencer = false;
 int RuntimeOption::ErrorUpgradeLevel = 0;
@@ -481,7 +588,12 @@ bool RuntimeOption::ServerLogSettingsOnStartup = false;
 bool RuntimeOption::ServerForkEnabled = true;
 bool RuntimeOption::ServerForkLogging = false;
 bool RuntimeOption::ServerWarmupConcurrently = false;
+int RuntimeOption::ServerWarmupThreadCount = 1;
+int RuntimeOption::ServerExtendedWarmupThreadCount = 1;
+unsigned RuntimeOption::ServerExtendedWarmupRepeat = 1;
+unsigned RuntimeOption::ServerExtendedWarmupDelaySeconds = 60;
 std::vector<std::string> RuntimeOption::ServerWarmupRequests;
+std::vector<std::string> RuntimeOption::ServerExtendedWarmupRequests;
 std::string RuntimeOption::ServerCleanupRequest;
 int RuntimeOption::ServerInternalWarmupThreads = 0;
 boost::container::flat_set<std::string>
@@ -594,6 +706,7 @@ std::string RuntimeOption::SourceRoot = Process::GetCurrentDirectory() + '/';
 std::vector<std::string> RuntimeOption::IncludeSearchPaths;
 std::map<std::string, std::string> RuntimeOption::IncludeRoots;
 std::map<std::string, std::string> RuntimeOption::AutoloadRoots;
+std::string RuntimeOption::AutoloadDBPath;
 std::string RuntimeOption::FileCache;
 std::string RuntimeOption::DefaultDocument;
 std::string RuntimeOption::ErrorDocument404;
@@ -707,22 +820,16 @@ int64_t RuntimeOption::HeapResetCountBase = 1;
 int64_t RuntimeOption::HeapResetCountMultiple = 2;
 int64_t RuntimeOption::HeapLowWaterMark = 16;
 int64_t RuntimeOption::HeapHighWaterMark = 1024;
-uint64_t RuntimeOption::DisableForwardStaticCall = 2;
-uint64_t RuntimeOption::DisableForwardStaticCallArray = 2;
 uint64_t RuntimeOption::DisableCallUserFunc = 0;
 uint64_t RuntimeOption::DisableCallUserFuncArray = 0;
 uint64_t RuntimeOption::DisableParseStrSingleArg = 0;
-uint64_t RuntimeOption::DisableDefine = 2;
-bool RuntimeOption::UndefinedConstAsString = false;
-uint64_t RuntimeOption::UndefinedConstFallback = 0;
-uint64_t RuntimeOption::UndefinedFunctionFallback = 0;
 uint64_t RuntimeOption::DisableAssert = 0;
 bool RuntimeOption::DisallowExecutionOperator = true;
 bool RuntimeOption::DisableReservedVariables = true;
 uint64_t RuntimeOption::DisableConstant = 0;
 bool RuntimeOption::DisableNontoplevelDeclarations = false;
 bool RuntimeOption::DisableStaticClosures = false;
-bool RuntimeOption::DisableStaticLocalVariables = false;
+bool RuntimeOption::EnableClassLevelWhereClauses = false;
 
 #ifdef HHVM_DYNAMIC_EXTENSION_DIR
 std::string RuntimeOption::ExtensionDir = HHVM_DYNAMIC_EXTENSION_DIR;
@@ -735,29 +842,22 @@ std::vector<std::string> RuntimeOption::DynamicExtensions;
 std::string RuntimeOption::DynamicExtensionPath = ".";
 
 HackStrictOption
-  RuntimeOption::StrictArrayFillKeys = HackStrictOption::OFF,
-  RuntimeOption::DisallowDynamicVarEnvFuncs = HackStrictOption::OFF,
-  RuntimeOption::IconvIgnoreCorrect = HackStrictOption::OFF,
-  RuntimeOption::MinMaxAllowDegenerate = HackStrictOption::OFF;
+  RuntimeOption::StrictArrayFillKeys = HackStrictOption::OFF;
 
 // defaults set when the INI option is bound - values below are irrelevant.
 bool RuntimeOption::LookForTypechecker = false;
 bool RuntimeOption::AutoTypecheck = false;
 
-bool RuntimeOption::PHP7_DeprecationWarnings = false;
 bool RuntimeOption::PHP7_EngineExceptions = false;
 bool RuntimeOption::PHP7_IntSemantics = false;
 bool RuntimeOption::PHP7_NoHexNumerics = false;
 bool RuntimeOption::PHP7_Builtins = false;
-bool RuntimeOption::PHP7_ScalarTypes = false;
 bool RuntimeOption::PHP7_Substr = false;
 bool RuntimeOption::PHP7_DisallowUnsafeCurlUploads = false;
 
 int RuntimeOption::GetScannerType() {
   int type = 0;
   if (EnableShortTags) type |= Scanner::AllowShortTags;
-  if (EnableXHP) type |= Scanner::AllowXHPSyntax;
-  if (EnableHipHopSyntax) type |= Scanner::AllowHipHopSyntax;
   return type;
 }
 
@@ -875,10 +975,6 @@ static inline uint32_t hotTextHugePagesDefault() {
   return arch() == Arch::ARM ? 12 : 8;
 }
 
-static inline int nsjrDefault() {
-  return RuntimeOption::ServerExecutionMode() ? 20 : 0;
-}
-
 static inline uint32_t profileRequestsDefault() {
   return debug ? std::numeric_limits<uint32_t>::max() : 2500;
 }
@@ -929,7 +1025,6 @@ const uint64_t kEvalVMStackElmsDefault =
  ;
 
 constexpr uint32_t kEvalVMInitialGlobalTableSizeDefault = 512;
-constexpr int kDefaultProfileInterpRequests = debug ? 1 : 11;
 constexpr uint64_t kJitRelocationSizeDefault = 1 << 20;
 
 static const bool kJitTimerDefault =
@@ -964,9 +1059,9 @@ bool RuntimeOption::RepoCommit = true;
 bool RuntimeOption::RepoDebugInfo = true;
 // Missing: RuntimeOption::RepoAuthoritative's physical location is
 // perf-sensitive.
-bool RuntimeOption::RepoPreload;
 int64_t RuntimeOption::RepoLocalReadaheadRate = 0;
 bool RuntimeOption::RepoLocalReadaheadConcurrent = false;
+uint32_t RuntimeOption::RepoBusyTimeoutMS = 15000;
 
 bool RuntimeOption::HHProfEnabled = false;
 bool RuntimeOption::HHProfActive = false;
@@ -1033,6 +1128,8 @@ double RuntimeOption::XenonPeriodSeconds = 0.0;
 uint32_t RuntimeOption::XenonRequestFreq = 1;
 bool RuntimeOption::XenonForceAlwaysOn = false;
 bool RuntimeOption::TrackPerUnitMemory = false;
+
+bool RuntimeOption::SetProfileNullThisObject = true;
 
 std::map<std::string, std::string> RuntimeOption::CustomSettings;
 
@@ -1103,7 +1200,7 @@ static std::vector<std::string> getTierOverwrites(IniSetting::Map& ini,
                                                   Hdf& config) {
 
   // Machine metrics
-  string hostname, tier, cpu, tiers;
+  string hostname, tier, task, cpu, tiers, tags;
   {
     hostname = Config::GetString(ini, config, "Machine.name");
     if (hostname.empty()) {
@@ -1111,6 +1208,8 @@ static std::vector<std::string> getTierOverwrites(IniSetting::Map& ini,
     }
 
     tier = Config::GetString(ini, config, "Machine.tier");
+
+    task = Config::GetString(ini, config, "Machine.task");
 
     cpu = Config::GetString(ini, config, "Machine.cpu");
     if (cpu.empty()) {
@@ -1123,6 +1222,13 @@ static std::vector<std::string> getTierOverwrites(IniSetting::Map& ini,
         tiers.clear();
       }
     }
+
+    tags = Config::GetString(ini, config, "Machine.tags");
+    if (!tags.empty()) {
+      if (!folly::readFile(tags.c_str(), tags)) {
+        tags.clear();
+      }
+    }
   }
 
   std::vector<std::string> messages;
@@ -1133,16 +1239,18 @@ static std::vector<std::string> getTierOverwrites(IniSetting::Map& ini,
       if (messages.empty()) {
         messages.emplace_back(folly::sformat(
                                 "Matching tiers using: "
-                                "machine='{}', tier='{}', "
-                                "cpu = '{}', tiers = '{}'",
-                                hostname, tier, cpu, tiers));
+                                "machine='{}', tier='{}', task='{}', "
+                                "cpu='{}', tiers='{}', tags='{}'",
+                                hostname, tier, task, cpu, tiers, tags));
       }
       // Check the patterns using "&" rather than "&&" so they all get
       // evaluated; otherwise with multiple patterns, if an earlier
       // one fails to match, the later one is reported as unused.
       if (matchHdfPattern(hostname, ini, hdf, "machine") &
           matchHdfPattern(tier, ini, hdf, "tier") &
+          matchHdfPattern(task, ini, hdf, "task") &
           matchHdfPattern(tiers, ini, hdf, "tiers", "m") &
+          matchHdfPattern(tags, ini, hdf, "tags", "m") &
           matchHdfPattern(cpu, ini, hdf, "cpu")) {
         messages.emplace_back(folly::sformat(
                                 "Matched tier: {}", hdf.getName()));
@@ -1372,7 +1480,7 @@ void RuntimeOption::Load(
                  "Log.HeaderMangle", 0);
     Config::Bind(AlwaysLogUnhandledExceptions, ini,
                  config, "Log.AlwaysLogUnhandledExceptions",
-                 RuntimeOption::EnableHipHopSyntax);
+                 true);
     Config::Bind(NoSilencer, ini, config, "Log.NoSilencer");
     Config::Bind(RuntimeErrorReportingLevel, ini,
                  config, "Log.RuntimeErrorReportingLevel",
@@ -1485,21 +1593,6 @@ void RuntimeOption::Load(
   }
   {
     // PHPisms
-    Config::Bind(DisableForwardStaticCall, ini, config,
-                 "Hack.Lang.Phpism.DisableForwardStaticCall",
-                 DisableForwardStaticCall);
-    Config::Bind(DisableForwardStaticCallArray, ini, config,
-                 "Hack.Lang.Phpism.DisableForwardStaticCallArray",
-                 DisableForwardStaticCallArray);
-    Config::Bind(UndefinedConstAsString, ini, config,
-                 "Hack.Lang.Phpism.UndefinedConstAsString",
-                 UndefinedConstAsString);
-    Config::Bind(UndefinedConstFallback, ini, config,
-                 "Hack.Lang.Phpism.UndefinedConstFallback",
-                 UndefinedConstFallback);
-    Config::Bind(UndefinedFunctionFallback, ini, config,
-                 "Hack.Lang.Phpism.UndefinedFunctionFallback",
-                 UndefinedFunctionFallback);
     Config::Bind(DisableCallUserFunc, ini, config,
                  "Hack.Lang.Phpism.DisableCallUserFunc",
                  DisableCallUserFunc);
@@ -1512,9 +1605,6 @@ void RuntimeOption::Load(
     Config::Bind(DisallowExecutionOperator, ini, config,
                  "Hack.Lang.Phpism.DisallowExecutionOperator",
                  DisallowExecutionOperator);
-    Config::Bind(DisableDefine, ini, config,
-                 "Hack.Lang.Phpism.DisableDefine",
-                 DisableDefine);
     Config::Bind(DisableAssert, ini, config,
                  "Hack.Lang.Phpism.DisableAssert",
                  DisableAssert);
@@ -1524,9 +1614,6 @@ void RuntimeOption::Load(
     Config::Bind(DisableStaticClosures, ini, config,
                  "Hack.Lang.Phpism.DisableStaticClosures",
                  DisableStaticClosures);
-    Config::Bind(DisableStaticLocalVariables, ini, config,
-                 "Hack.Lang.Phpism.DisableStaticLocalVariables",
-                 DisableStaticLocalVariables);
     Config::Bind(DisableConstant, ini, config,
                  "Hack.Lang.Phpism.DisableConstant",
                  DisableConstant);
@@ -1588,11 +1675,12 @@ void RuntimeOption::Load(
     Config::Bind(RepoDebugInfo, ini, config, "Repo.DebugInfo", RepoDebugInfo);
     Config::Bind(RepoAuthoritative, ini, config, "Repo.Authoritative",
                  RepoAuthoritative);
-    Config::Bind(RepoPreload, ini, config, "Repo.Preload", false);
     Config::Bind(RepoLocalReadaheadRate, ini, config,
                  "Repo.LocalReadaheadRate", 0);
     Config::Bind(RepoLocalReadaheadConcurrent, ini, config,
                  "Repo.LocalReadaheadConcurrent", false);
+    Config::Bind(RepoBusyTimeoutMS, ini, config,
+                 "Repo.BusyTimeoutMS", RepoBusyTimeoutMS);
   }
 
   if (use_jemalloc) {
@@ -1607,7 +1695,6 @@ void RuntimeOption::Load(
     Config::Bind(EnableHipHopSyntax, ini, config, "Eval.EnableHipHopSyntax",
                  EnableHipHopSyntax);
     Config::Bind(EnableShortTags, ini, config, "Eval.EnableShortTags", true);
-    Config::Bind(EnablePHP, ini, config, "Eval.EnablePHP", EnablePHP);
     Config::Bind(EnableXHP, ini, config, "Eval.EnableXHP", EnableXHP);
     Config::Bind(TimeoutsUseWallTime, ini, config, "Eval.TimeoutsUseWallTime",
                  true);
@@ -1619,9 +1706,6 @@ void RuntimeOption::Load(
     Config::Bind(EvalInitialStaticStringTableSize, ini, config,
                  "Eval.InitialStaticStringTableSize",
                  EvalInitialStaticStringTableSize);
-    Config::Bind(CheckParamTypeInvariance, ini, config,
-                 "Eval.CheckParamTypeInvariance",
-                 !EnableHipHopSyntax);
 
     static std::string jitSerdesMode;
     Config::Bind(jitSerdesMode, ini, config, "Eval.JitSerdesMode", "Off");
@@ -1655,18 +1739,28 @@ void RuntimeOption::Load(
     Config::Bind(ProfDataTTLHours, ini, config,
                  "Eval.ProfDataTTLHours", ProfDataTTLHours);
 
-    if (EnableHipHopSyntax) {
-      // If EnableHipHopSyntax is true, it forces EnableXHP to true
-      // regardless of how it was set in the config
-      EnableXHP = true;
-    }
-
     Config::Bind(CheckSymLink, ini, config, "Eval.CheckSymLink", true);
+    Config::Bind(TrustAutoloaderPath, ini, config, "Eval.TrustAutoloaderPath", false);
 
 #define F(type, name, defaultVal) \
     Config::Bind(Eval ## name, ini, config, "Eval."#name, defaultVal);
     EVALFLAGS()
 #undef F
+
+    if (EvalJitSerdesModeForceOff) EvalJitSerdesMode = JitSerdesMode::Off;
+    if (getenv("HHVM_DISABLE_NUMA") || (numa_num_nodes <= 1)) {
+      EvalEnableNuma = false;
+    }
+
+    Config::Bind(ServerForkEnabled, ini, config,
+                 "Server.Forking.Enabled", ServerForkEnabled);
+    Config::Bind(ServerForkLogging, ini, config,
+                 "Server.Forking.LogForkAttempts", ServerForkLogging);
+    if (!ServerForkEnabled && ServerExecutionMode()) {
+      // Only use hugetlb pages when we don't fork().
+      low_2m_pages(EvalMaxLowMemHugePages);
+      high_2m_pages(EvalMaxHighArenaHugePages);
+    }
 
     EvalHackCompilerExtractPath = insertSchema(
       EvalHackCompilerExtractPath.data()
@@ -1700,8 +1794,6 @@ void RuntimeOption::Load(
       DumpPreciseProfData = false;
     }
     EvalJitPGOUseAddrCountedCheck &= addr_encodes_persistency;
-    low_2m_pages(EvalMaxLowMemHugePages);
-    high_2m_pages(EvalMaxHighArenaHugePages);
     HardwareCounter::Init(EvalProfileHWEnable,
                           url_decode(EvalProfileHWEvents.data(),
                                      EvalProfileHWEvents.size()).toCppString(),
@@ -1789,21 +1881,13 @@ void RuntimeOption::Load(
     Config::Bind(CodeCache::GlobalDataSize, ini, config,
                  "Eval.JitGlobalDataSize", CodeCache::ASize >> 2);
 
-    Config::Bind(CodeCache::AMaxUsage, ini, config, "Eval.JitAMaxUsage",
-                 CodeCache::maxUsage(CodeCache::ASize));
-    Config::Bind(CodeCache::AProfMaxUsage, ini, config, "Eval.JitAProfMaxUsage",
-                 CodeCache::maxUsage(CodeCache::AProfSize));
-    Config::Bind(CodeCache::AColdMaxUsage, ini, config, "Eval.JitAColdMaxUsage",
-                 CodeCache::maxUsage(CodeCache::AColdSize));
-    Config::Bind(CodeCache::AFrozenMaxUsage, ini, config,
-                 "Eval.JitAFrozenMaxUsage",
-                 CodeCache::maxUsage(CodeCache::AFrozenSize));
-
     Config::Bind(CodeCache::MapTCHuge, ini, config, "Eval.MapTCHuge",
                  hugePagesSoundNice());
 
     Config::Bind(CodeCache::TCNumHugeHotMB, ini, config,
-                 "Eval.TCNumHugeHotMB", 16);
+                 "Eval.TCNumHugeHotMB", 64);
+    Config::Bind(CodeCache::TCNumHugeMainMB, ini, config,
+                 "Eval.TCNumHugeMainMB", 16);
     Config::Bind(CodeCache::TCNumHugeColdMB, ini, config,
                  "Eval.TCNumHugeColdMB", 4);
 
@@ -1811,19 +1895,8 @@ void RuntimeOption::Load(
   }
   {
     // Hack Language
-    Config::Bind(IntsOverflowToInts, ini, config,
-                 "Hack.Lang.IntsOverflowToInts", EnableHipHopSyntax);
-    auto const def = RuntimeOption::EnableHipHopSyntax ?
-      HackStrictOption::ON : HackStrictOption::OFF;
-
     Config::Bind(StrictArrayFillKeys, ini, config,
-                 "Hack.Lang.StrictArrayFillKeys", def);
-    Config::Bind(DisallowDynamicVarEnvFuncs, ini, config,
-                 "Hack.Lang.DisallowDynamicVarEnvFuncs", def);
-    Config::Bind(IconvIgnoreCorrect, ini, config,
-                 "Hack.Lang.IconvIgnoreCorrect", def);
-    Config::Bind(MinMaxAllowDegenerate, ini, config,
-                 "Hack.Lang.MinMaxAllowDegenerate", def);
+                 "Hack.Lang.StrictArrayFillKeys", HackStrictOption::ON);
 
     Config::Bind(LookForTypechecker, ini, config,
                  "Hack.Lang.LookForTypechecker", false);
@@ -1834,12 +1907,11 @@ void RuntimeOption::Load(
     // some reason.
     Config::Bind(AutoTypecheck, ini, config, "Hack.Lang.AutoTypecheck",
                  LookForTypechecker);
-
-    Config::Bind(EnableReifiedGenerics, ini, config,
-                 "Hack.Lang.EnableReifiedGenerics",
-                 false);
     Config::Bind(EnablePocketUniverses, ini, config,
                  "Hack.Lang.EnablePocketUniverses",
+                 false);
+    Config::Bind(EnableClassLevelWhereClauses, ini, config,
+                 "Hack.Lang.EnableClassLevelWhereClauses",
                  false);
   }
   {
@@ -1857,8 +1929,6 @@ void RuntimeOption::Load(
     // get-go, but threading that through turns out to be kind of annoying and
     // of questionable value, so just doing this for now.
     Config::Bind(s_PHP7_master, ini, config, "PHP7.all", s_PHP7_default);
-    Config::Bind(PHP7_DeprecationWarnings, ini, config,
-                 "PHP7.DeprecationWarnings", s_PHP7_master);
     Config::Bind(PHP7_EngineExceptions, ini, config, "PHP7.EngineExceptions",
                  s_PHP7_master);
     Config::Bind(PHP7_IntSemantics, ini, config, "PHP7.IntSemantics",
@@ -1866,8 +1936,6 @@ void RuntimeOption::Load(
     Config::Bind(PHP7_NoHexNumerics, ini, config, "PHP7.NoHexNumerics",
                  s_PHP7_master);
     Config::Bind(PHP7_Builtins, ini, config, "PHP7.Builtins", s_PHP7_master);
-    Config::Bind(PHP7_ScalarTypes, ini, config, "PHP7.ScalarTypes",
-                 s_PHP7_master);
     Config::Bind(PHP7_Substr, ini, config, "PHP7.Substr",
                  s_PHP7_master);
     Config::Bind(PHP7_DisallowUnsafeCurlUploads, ini, config,
@@ -1930,13 +1998,21 @@ void RuntimeOption::Load(
                  ServerAddVaryEncoding);
     Config::Bind(ServerLogSettingsOnStartup, ini, config,
                  "Server.LogSettingsOnStartup", false);
-    Config::Bind(ServerForkEnabled, ini, config,
-                 "Server.Forking.Enabled", true);
-    Config::Bind(ServerForkLogging, ini, config,
-                 "Server.Forking.LogForkAttempts", false);
     Config::Bind(ServerWarmupConcurrently, ini, config,
                  "Server.WarmupConcurrently", false);
+    Config::Bind(ServerWarmupThreadCount, ini, config,
+                 "Server.WarmupThreadCount", ServerWarmupThreadCount);
+    Config::Bind(ServerExtendedWarmupThreadCount, ini, config,
+                 "Server.ExtendedWarmup.ThreadCount",
+                 ServerExtendedWarmupThreadCount);
+    Config::Bind(ServerExtendedWarmupDelaySeconds, ini, config,
+                 "Server.ExtendedWarmup.DelaySeconds",
+                 ServerExtendedWarmupDelaySeconds);
+    Config::Bind(ServerExtendedWarmupRepeat, ini, config,
+                 "Server.ExtendedWarmup.Repeat", ServerExtendedWarmupRepeat);
     Config::Bind(ServerWarmupRequests, ini, config, "Server.WarmupRequests");
+    Config::Bind(ServerExtendedWarmupRequests, ini, config,
+                 "Server.ExtendedWarmup.Requests");
     Config::Bind(ServerCleanupRequest, ini, config, "Server.CleanupRequest");
     Config::Bind(ServerInternalWarmupThreads, ini, config,
                  "Server.InternalWarmupThreads", 0);  // 0 = skip
@@ -1986,6 +2062,9 @@ void RuntimeOption::Load(
 
     Config::Bind(ServerNextProtocols, ini, config, "Server.SSLNextProtocols");
     Config::Bind(ServerEnableH2C, ini, config, "Server.EnableH2C");
+    extern bool g_brotliUseLocalArena;
+    Config::Bind(g_brotliUseLocalArena, ini, config,
+                 "Server.BrotliUseLocalArena", g_brotliUseLocalArena);
     Config::Bind(BrotliCompressionEnabled, ini, config,
                  "Server.BrotliCompressionEnabled", -1);
     Config::Bind(BrotliChunkedCompressionEnabled, ini, config,
@@ -1998,12 +2077,16 @@ void RuntimeOption::Load(
                  "Server.BrotliCompressionQuality", 6);
     Config::Bind(ZstdCompressionEnabled, ini, config,
                  "Server.ZstdCompressionEnabled", -1);
+    Config::Bind(ZstdCompressor::s_useLocalArena, ini, config,
+                 "Server.ZstdUseLocalArena", ZstdCompressor::s_useLocalArena);
     Config::Bind(ZstdCompressionLevel, ini, config,
                  "Server.ZstdCompressionLevel", 3);
     Config::Bind(GzipCompressionLevel, ini, config,
                  "Server.GzipCompressionLevel", 3);
     Config::Bind(GzipMaxCompressionLevel, ini, config,
                  "Server.GzipMaxCompressionLevel", 9);
+    Config::Bind(GzipCompressor::s_useLocalArena, ini, config,
+                 "Server.GzipUseLocalArena", GzipCompressor::s_useLocalArena);
     Config::Bind(EnableKeepAlive, ini, config, "Server.EnableKeepAlive", true);
     Config::Bind(ExposeHPHP, ini, config, "Server.ExposeHPHP", true);
     Config::Bind(ExposeXFBServer, ini, config, "Server.ExposeXFBServer", false);
@@ -2059,6 +2142,8 @@ void RuntimeOption::Load(
       IncludeSearchPaths[i] = FileUtil::normalizeDir(IncludeSearchPaths[i]);
     }
     IncludeSearchPaths.insert(IncludeSearchPaths.begin(), ".");
+
+    Config::Bind(AutoloadDBPath, ini, config, "Autoload.DBPath");
 
     Config::Bind(FileCache, ini, config, "Server.FileCache");
     Config::Bind(DefaultDocument, ini, config, "Server.DefaultDocument",
@@ -2147,7 +2232,7 @@ void RuntimeOption::Load(
     Config::Bind(ForceServerNameToHeader, ini, config,
                  "Server.ForceServerNameToHeader");
     Config::Bind(AllowDuplicateCookies, ini, config,
-                 "Server.AllowDuplicateCookies", !EnableHipHopSyntax);
+                 "Server.AllowDuplicateCookies", false);
     Config::Bind(PathDebug, ini, config, "Server.PathDebug", false);
     Config::Bind(ServerUser, ini, config, "Server.User", "");
     Config::Bind(AllowRunAsRoot, ini, config, "Server.AllowRunAsRoot", false);
@@ -2399,6 +2484,11 @@ void RuntimeOption::Load(
     Config::Bind(XenonForceAlwaysOn, ini, config, "Xenon.ForceAlwaysOn", false);
   }
   {
+    // Profiling
+    Config::Bind(SetProfileNullThisObject, ini, config,
+                 "SetProfile.NullThisObject", true);
+  }
+  {
     // We directly read zend.assertions here, so that we can get its INI value
     // in order to know how we should emit bytecode. We don't actually Bind the
     // option here though, since its runtime value can be changed and is per
@@ -2561,6 +2651,10 @@ void RuntimeOption::Load(
   RuntimeOption::EvalHackArrCompatCheckImplicitVarrayAppend =
     RuntimeOption::EvalHackArrCompatCheckImplicitVarrayAppend &&
     RuntimeOption::EvalHackArrCompatNotices;
+
+  if (!RuntimeOption::EvalEmitClsMethPointers) {
+    RuntimeOption::EvalIsCompatibleClsMethType = false;
+  }
 
   // Initialize defaults for repo-specific parser configuration options.
   RepoOptions::setDefaults(config, ini);

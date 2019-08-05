@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 set_exception_handler("foo");
 
@@ -12,4 +12,3 @@ class test extends Exception {
 throw new test();
 
 echo "Done\n";
-?>

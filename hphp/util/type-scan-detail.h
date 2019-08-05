@@ -102,6 +102,8 @@ struct ScanAction {};
  * type-indices. (It can do this because it knows the addresses of all the
  * instances from the debug information).
  */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wignored-attributes"
 template <typename T, typename A> struct Indexer {
   static volatile Index
     ATTRIBUTE_USED ATTRIBUTE_UNUSED EXTERNALLY_VISIBLE s_index;
@@ -109,9 +111,10 @@ template <typename T, typename A> struct Indexer {
   // about A.
   A m_action;
 };
+#pragma GCC diagnostic pop
 
 template <typename T, typename A>
-  volatile Index Indexer<T, A>::s_index = kIndexUnknown;
+  volatile Index ATTRIBUTE_USED Indexer<T, A>::s_index = kIndexUnknown;
 
 // Empty types used as part of type annotations. These types don't really
 // matter, as the behavior is inferred from the field names.

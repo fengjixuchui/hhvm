@@ -1,4 +1,5 @@
-<?php
+<?hh
+<<__EntryPoint>> function main(): void {
 // Initialise all required variables
 $to = 'user@example.com';
 $subject = 'Test Subject';
@@ -12,5 +13,5 @@ var_dump( mail($to, $subject, $message, $additional_headers) );
 echo file_get_contents($outFile);
 unlink($outFile);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

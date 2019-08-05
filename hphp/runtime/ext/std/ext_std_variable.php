@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 namespace {
 /* Finds whether the given variable is a boolean.
@@ -111,12 +111,6 @@ function doubleval(mixed $var): float;
 <<__IsFoldable, __Native, __Rx>>
 function strval(mixed $var): string;
 
-/* Set the type of variable var to type.
- */
-<<__Native>>
-function settype(mixed &$var,
-                 string $type): bool;
-
 /* print_r() displays information about a variable in a way that's readable by
  * humans.  print_r(), var_dump() and var_export() will also show protected
  * and private properties of objects with PHP 5. Static class members will not
@@ -154,10 +148,10 @@ function debug_zval_dump(mixed $variable): void;
  * Calls to serialize are foldable because only objects can invoke user-defined
  * code.
  */
-<<__IsFoldable, __Native>>
+<<__IsFoldable, __Native, __Rx>>
 function serialize(mixed $value): string;
 
-<<__Native>>
+<<__Native, __Rx>>
 function unserialize(string $str,
                      darray $options = darray[]): mixed;
 
@@ -225,6 +219,9 @@ namespace HH {
   <<__Native, __IsFoldable, __Rx>>
   function is_list_like(<<__MaybeMutable>> arraylike $var): bool;
 
+  <<__Native, __IsFoldable, __Rx>>
+  function is_meth_caller(<<__MaybeMutable>> mixed $var): bool;
+
  /*
   * Behaves like serialize() but takes an optional set of options.
   *
@@ -244,7 +241,7 @@ namespace HH {
    * as casting the object to an array.
    */
   <<__Native>>
-  function object_prop_array(object $obj): array;
+  function object_prop_array(object $obj): darray;
 
   /*
    * Return true if the <<__LateInit>> property (with name $prop) on the given
@@ -264,6 +261,20 @@ namespace HH {
    */
   <<__Native>>
   function is_late_init_sprop_init(string $cls, string $prop): bool;
+
+  /*
+   * Return all of the keys of the globals array shared between
+   * runtime and user code. Currently backed by $GLOBALS.
+   */
+  <<__Native>>
+  function global_keys(): keyset<string>;
+
+  /*
+   * Does the key exist in the globals array shared between runtime
+   * and code.
+   */
+  <<__Native>>
+  function global_key_exists(string $key): bool;
 }
 
 namespace HH\Lib\_Private\Native {

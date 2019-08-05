@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $closure = function($a, $b = 0) { };
 
 $method = new ReflectionMethod ($closure, '__invoke');
@@ -14,5 +14,5 @@ $method = $parameter->getDeclaringFunction ();
 unset ($parameter);
 echo $method->getName ()."\n";
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

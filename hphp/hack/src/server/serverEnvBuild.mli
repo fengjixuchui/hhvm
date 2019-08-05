@@ -12,8 +12,9 @@ val make_genv:
   ServerConfig.t ->
   ServerLocalConfig.t ->
   MultiWorker.worker list ->
+  Shared_lru.host_env option ->
     ServerEnv.genv
 
 val default_genv: ServerEnv.genv
 
-val make_env: ServerConfig.t -> ServerEnv.env
+val make_env: ?init_id:string -> ServerConfig.t -> ServerEnv.env

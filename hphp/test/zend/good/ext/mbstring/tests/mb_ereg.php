@@ -1,4 +1,4 @@
-<?php
+<?hh
 	mb_regex_set_options( '' );
 
 	$encs = array( 'EUC-JP', 'Shift_JIS', 'SJIS', 'UTF-8' );
@@ -19,5 +19,3 @@
 	foreach( $encs as $enc ) {
 		do_tests( $enc );
 	}
-?>
-

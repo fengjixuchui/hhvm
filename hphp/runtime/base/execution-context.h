@@ -23,7 +23,6 @@
 #include "hphp/runtime/base/apc-handle.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/mixed-array.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/ext/stream/ext_stream.h"
 #include "hphp/runtime/server/transport.h"
@@ -35,6 +34,7 @@
 
 #include "hphp/util/lock.h"
 #include "hphp/util/logger.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/thread-local.h"
 
 #include <list>
@@ -122,6 +122,15 @@ struct ThrowAllErrorsSetter {
 
 private:
   bool m_throwAllErrors;
+};
+
+enum class FileLoadFlags {
+  kDup,
+  kHitMem,
+  kWaited,
+  kHitDisk,
+  kCompiled,
+  kEvicted
 };
 
 using InvokeArgs = folly::Range<const TypedValue*>;
@@ -317,6 +326,8 @@ public:
 
   const RepoOptions& getRepoOptionsForCurrentFrame() const;
 
+  const RepoOptions* getRepoOptionsForRequest() const;
+
   // When a file is loaded inside of a request context we perform a consistency
   // check to ensure that all files loaded within the request use the same
   // options.
@@ -380,11 +391,8 @@ public:
 
   ActRec* getStackFrame();
   ObjectData* getThis();
-  Class* getContextClass();
-  Class* getParentContextClass();
   StringData* getContainingFileName();
   int getLine();
-  Array getCallerInfo();
   bool evalUnit(Unit* unit, PC callPC, PC& pc, int funcType);
   TypedValue invokeUnit(const Unit* unit, bool callByHPHPInvoke = false);
   Unit* compileEvalString(StringData* code,
@@ -435,11 +443,14 @@ public:
    */
   const Func* getPrevFunc(const ActRec*);
 
-  ActRec* getFrameAtDepth(int frame = 0);
-  VarEnv* hasVarEnv(int frame = 0);
+  /*
+   * Returns the call frame at the specified depth, intended only
+   * for use by the debugger. Use in other contexts may not be safe.
+   */
+  ActRec* getFrameAtDepthForDebuggerUnsafe(int frame = 0);
+  VarEnv* getVarEnv(const ActRec* fp);
   void setVar(StringData* name, tv_rval v);
-  void bindVar(StringData* name, tv_lval v);
-  Array getLocalDefinedVariables(int frame);
+  Array getLocalDefinedVariablesDebugger(int frame);
   Variant getEvaledArg(const StringData* val,
                        const String& namespacedName,
                        const Unit* funcUnit);
@@ -467,8 +478,7 @@ public:
                         bool checkRefAnnot = false);
 
   TypedValue invokeFunc(const CallCtx& ctx,
-                        const Variant& args_,
-                        VarEnv* varEnv = nullptr);
+                        const Variant& args_);
 
   TypedValue invokeFuncFew(const Func* f,
                            void* thisOrCls,
@@ -590,11 +600,11 @@ public:
     Unit* unit;
     time_t ts_sec; // timestamp seconds
     unsigned long ts_nsec; // timestamp nanoseconds (or 0 if ns not supported)
+    FileLoadFlags flags;
   };
   req::fast_map<const StringData*, FileInfo, string_data_hash, string_data_same>
     m_evaledFiles;
   req::vector<const StringData*> m_evaledFilesOrder;
-  req::vector<Fault> m_faults;
   int m_lambdaCounter;
   using VMStateVec = req::TinyVector<VMState, 32>;
   VMStateVec m_nestedVMs;
@@ -611,6 +621,7 @@ public:
   Variant m_memThresholdCallback;
   uint64_t m_setprofileFlags;
   bool m_executingSetprofileCallback;
+  hphp_fast_set<std::string> m_setprofileFunctions;
 public:
   Cell m_headerCallback;
   bool m_headerCallbackDone{false}; // used to prevent infinite loops

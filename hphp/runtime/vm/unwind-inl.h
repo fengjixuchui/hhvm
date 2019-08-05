@@ -32,20 +32,6 @@ inline void exception_handler(Action action) {
     return;
   }
 
-  /*
-   * Unwind (repropagating from a fault funclet) is slightly different
-   * from the throw cases, because we need to re-raise the exception
-   * as if it came from the same offset to handle nested fault
-   * handlers correctly, and we continue propagating the current Fault
-   * instead of pushing a new one.
-   */
-  catch (const VMPrepareUnwind&) {
-    checkVMRegState();
-    ITRACE_MOD(Trace::unwind, 1, "unwind: restoring offset {}\n", vmpc());
-    unwindPhp();
-    return;
-  }
-
   catch (const Object& o) {
     checkVMRegState();
     ITRACE_MOD(Trace::unwind, 1, "unwind: Object of class {}\n",
@@ -78,33 +64,6 @@ inline void exception_handler(Action action) {
                vmfp()->m_func->fullName()->data());
     unwindBuiltinFrame();
     return;
-  }
-
-  catch (VMStackOverflow&) {
-    checkVMRegState();
-    ITRACE_MOD(Trace::unwind, 1, "unwind: VMStackOverflow\n");
-    auto const fp = vmfp();
-    auto const reenter = fp == vmFirstAR();
-    if (!reenter) {
-      /*
-       * vmfp() is actually a pre-live ActRec, so rejig things so that
-       * it looks like the exception was thrown when we were just
-       * about to do the call. See handleStackOverflow for more
-       * details.
-       */
-      auto const outer = fp->m_sfp;
-      auto const off = outer->func()->base() + fp->m_callOff;
-      vmpc() = outer->func()->unit()->at(off);
-      assertx(isFCallStar(peek_op(vmpc())));
-      vmfp() = outer;
-      assertx(vmsp() == reinterpret_cast<Cell*>(fp) - fp->numArgs());
-    } else {
-      vmsp() = reinterpret_cast<Cell*>(fp + 1);
-    }
-    auto fatal = new FatalErrorException("Stack overflow");
-    if (reenter) fatal->throwException();
-    unwindCpp(fatal);
-    not_reached();
   }
 
   catch (Exception& e) {

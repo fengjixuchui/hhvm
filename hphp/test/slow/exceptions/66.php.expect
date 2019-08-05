@@ -1,4 +1,4 @@
-array(2) {
+array(3) {
   [0]=>
   array(3) {
     ["class"]=>
@@ -16,10 +16,15 @@ array(2) {
     string(1) "f"
     ["type"]=>
     string(2) "->"
+  }
+  [2]=>
+  array(1) {
+    ["function"]=>
+    string(4) "main"
   }
 }
 ------------------------
-array(2) {
+array(3) {
   [0]=>
   array(4) {
     ["class"]=>
@@ -27,7 +32,7 @@ array(2) {
     ["function"]=>
     string(1) "g"
     ["object"]=>
-    object(C)#1 (0) {
+    object(C) (0) {
     }
     ["type"]=>
     string(2) "->"
@@ -39,9 +44,14 @@ array(2) {
     ["function"]=>
     string(1) "f"
     ["object"]=>
-    object(C)#1 (0) {
+    object(C) (0) {
     }
     ["type"]=>
     string(2) "->"
+  }
+  [2]=>
+  array(1) {
+    ["function"]=>
+    string(4) "main"
   }
 }

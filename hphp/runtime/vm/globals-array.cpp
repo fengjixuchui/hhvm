@@ -15,12 +15,14 @@
 */
 #include "hphp/runtime/vm/globals-array.h"
 
+#include <algorithm>
+
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/array-iterator.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/tv-val.h"
 #include "hphp/runtime/base/mixed-array-defs.h"
 #include "hphp/runtime/base/runtime-error.h"
+#include "hphp/util/rds-local.h"
 
 namespace HPHP {
 
@@ -37,7 +39,7 @@ GlobalsArray::GlobalsArray(NameValueTable* tab)
   : ArrayData(kGlobalsKind)
   , m_tab(tab)
 {
-  Variant arr(staticEmptyArray());
+  Variant arr(staticEmptyDArray());
 #define X(s,v) tab->set(makeStaticString(#s), v.asTypedValue());
 
   X(argc,                 init_null_variant);
@@ -49,7 +51,6 @@ GlobalsArray::GlobalsArray(NameValueTable* tab)
   X(_FILES,               arr);
   X(_ENV,                 arr);
   X(_REQUEST,             arr);
-  X(_SESSION,             arr);
   X(HTTP_RAW_POST_DATA,   init_null_variant);
 #undef X
 
@@ -81,6 +82,25 @@ size_t GlobalsArray::Vsize(const ArrayData* ad) {
     ++count;
   }
   return count;
+}
+
+ArrayData* GlobalsArray::keys() {
+  auto iter = NameValueTable::Iterator::getEnd(this->m_tab);
+  KeysetInit ret(iter.toInteger());
+  for (iter.prev(); iter.valid(); iter.prev()) {
+    auto const& k = iter.curKey();
+    if (k->isRefCounted()) {
+      k->rawIncRefCount();
+      ret.add(make_tv<KindOfString>(const_cast<StringData*>(k)));
+    } else {
+      ret.add(make_tv<KindOfPersistentString>(k));
+    }
+  }
+  return ret.create();
+}
+
+bool GlobalsArray::keyExists(const StringData* k) {
+  return this->m_tab->lookup(k) != nullptr;
 }
 
 Cell GlobalsArray::NvGetKey(const ArrayData* ad, ssize_t pos) {
@@ -121,6 +141,14 @@ tv_rval GlobalsArray::NvGetInt(const ArrayData* ad, int64_t k) {
   return asGlobals(ad)->m_tab->lookup(String(k).get());
 }
 
+ssize_t GlobalsArray::NvGetStrPos(const ArrayData* ad, const StringData* k) {
+  return asGlobals(ad)->m_tab->lookupPos(k);
+}
+
+ssize_t GlobalsArray::NvGetIntPos(const ArrayData* ad, int64_t k) {
+  return asGlobals(ad)->m_tab->lookupPos(String(k).get());
+}
+
 arr_lval GlobalsArray::LvalInt(ArrayData* ad, int64_t k, bool copy) {
   return LvalStr(ad, String(k).get(), copy);
 }
@@ -152,27 +180,13 @@ GlobalsArray::SetStrInPlace(ArrayData* ad, StringData* k, Cell v) {
 }
 
 ArrayData*
-GlobalsArray::SetWithRefIntInPlace(ArrayData* ad, int64_t k, TypedValue v) {
-  return SetWithRefStrInPlace(ad, String(k).get(), v);
+GlobalsArray::SetWithRefIntInPlace(ArrayData*, int64_t, TypedValue) {
+  throw_not_implemented("references not allowed in $GLOBALS");
 }
 
 ArrayData*
-GlobalsArray::SetWithRefStrInPlace(ArrayData* ad, StringData* k, TypedValue v) {
-  auto a = asGlobals(ad);
-  tvSetWithRef(v, *a->m_tab->lookupAdd(k));
-  return a;
-}
-
-ArrayData*
-GlobalsArray::SetRefIntInPlace(ArrayData* ad, int64_t k, tv_lval v) {
-  return SetRefStrInPlace(ad, String(k).get(), v);
-}
-
-ArrayData*
-GlobalsArray::SetRefStrInPlace(ArrayData* ad, StringData* k, tv_lval v) {
-  auto a = asGlobals(ad);
-  tvAsVariant(a->m_tab->lookupAdd(k)).assignRef(v);
-  return a;
+GlobalsArray::SetWithRefStrInPlace(ArrayData*,  StringData*, TypedValue) {
+  throw_not_implemented("references not allowed in $GLOBALS");
 }
 
 ArrayData*
@@ -195,10 +209,6 @@ GlobalsArray::RemoveStrInPlace(ArrayData* ad, const StringData* k) {
 
 ArrayData* GlobalsArray::AppendInPlace(ArrayData*, Cell /*v*/) {
   throw_not_implemented("append on $GLOBALS");
-}
-
-ArrayData* GlobalsArray::AppendRefInPlace(ArrayData*, tv_lval) {
-  throw_not_implemented("appendRef on $GLOBALS");
 }
 
 ArrayData* GlobalsArray::AppendWithRefInPlace(ArrayData*, TypedValue) {

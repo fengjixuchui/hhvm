@@ -1,4 +1,4 @@
-<?php
+<?hh // partial
 
 class APCIterator implements Iterator{
 
@@ -123,7 +123,8 @@ class APCIterator implements Iterator{
       $ret['key'] = $info['info'];
     }
     if ($this->format & APC_ITER_VALUE) {
-      $ret['value'] = apc_fetch($info['info']);
+      $ignored = false;
+      $ret['value'] = apc_fetch($info['info'], inout $ignored);
     }
     if ($this->format & APC_ITER_MEM_SIZE) {
       $ret['mem_size'] = $info['mem_size'];
@@ -204,9 +205,10 @@ class APCIterator implements Iterator{
   }
 
   private function init() {
-    $this->info = apc_cache_info()['cache_list'];
+    $info = apc_cache_info()['cache_list'];
     // Order defined by ksort
-    ksort(&$this->info);
+    ksort(&$info);
+    $this->info = $info;
     $this->initialized = true;
     $this->index = -1;
     $this->next();

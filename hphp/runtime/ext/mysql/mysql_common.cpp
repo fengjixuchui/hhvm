@@ -28,6 +28,7 @@
 #include <folly/portability/Sockets.h>
 
 #include "hphp/util/network.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/text-util.h"
 #include "hphp/util/timer.h"
 
@@ -37,7 +38,6 @@
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/extended-logger.h"
 #include "hphp/runtime/base/preg.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/socket.h"
 #include "hphp/runtime/base/tv-refcount.h"
@@ -998,7 +998,7 @@ MySQLFieldInfo *MySQLResult::fetchFieldInfo() {
 ///////////////////////////////////////////////////////////////////////////////
 // MySQLStmtVariables
 
-MySQLStmtVariables::MySQLStmtVariables(const Array& arr): m_arr(arr) {
+MySQLStmtVariables::MySQLStmtVariables(RefVector&& v): m_arr(std::move(v)) {
   int count = m_arr.size();
   m_vars   = req::calloc_raw_array<MYSQL_BIND>(count);
   m_null   = req::calloc_raw_array<my_bool>(count);
@@ -1120,7 +1120,7 @@ void MySQLStmtVariables::update_result() {
       }
     }
 
-    tvSet(*v.asTypedValue(), m_arr.lvalAt(i));
+    tvSet(*v.asTypedValue(), m_arr[i]->cell());
   }
 }
 
@@ -1154,7 +1154,7 @@ bool MySQLStmtVariables::bind_params(MYSQL_STMT *stmt) {
   m_value_arr.clear();
   for (int i = 0; i < m_arr.size(); i++) {
     MYSQL_BIND *b = &m_vars[i];
-    auto const var = m_arr.lvalAt(i).unboxed();
+    tv_rval var = m_arr[i]->cell();
     Variant v;
     if (isNullType(var.type())) {
       *b->is_null = 1;
@@ -1258,17 +1258,17 @@ Variant MySQLStmt::attr_set(int64_t attr, int64_t value) {
   return !mysql_stmt_attr_set(m_stmt, (enum_stmt_attr_type)attr, &value);
 }
 
-Variant MySQLStmt::bind_param(const String& types, const Array& vars) {
+Variant MySQLStmt::bind_param(const String& types, RefVector&& vars) {
   VALIDATE_PREPARED
 
-  m_param_vars = req::make_unique<MySQLStmtVariables>(vars);
+  m_param_vars = req::make_unique<MySQLStmtVariables>(std::move(vars));
   return m_param_vars->init_params(m_stmt, types);
 }
 
-Variant MySQLStmt::bind_result(const Array& vars) {
+Variant MySQLStmt::bind_result(RefVector&& vars) {
   VALIDATE_PREPARED
 
-  m_result_vars = req::make_unique<MySQLStmtVariables>(vars);
+  m_result_vars = req::make_unique<MySQLStmtVariables>(std::move(vars));
   return m_result_vars->bind_result(m_stmt);
 }
 
@@ -1551,10 +1551,8 @@ MySQLQueryReturn php_mysql_do_query(const String& query, const Variant& link_id,
 
   if (mysql_real_query(conn, query.data(), query.size())) {
 #ifdef HHVM_MYSQL_TRACE_MODE
-    if (RuntimeOption::EnableHipHopSyntax) {
-      raise_notice("runtime/ext_mysql: failed executing [%s] [%s]",
-                   query.data(), mysql_error(conn));
-    }
+    raise_notice("runtime/ext_mysql: failed executing [%s] [%s]",
+                 query.data(), mysql_error(conn));
 #endif
 
     // When we are timed out, and we're SELECT-ing, we're potentially
@@ -1669,7 +1667,7 @@ Variant php_mysql_fetch_hash(const Resource& result, int result_type) {
       if (result_type & PHP_MYSQL_ASSOC) {
         MySQLFieldInfo *info = res->getFieldInfo(i);
         auto const arrkey =
-          ret.convertKey<IntishCast::CastSilently>(info->name);
+          ret.convertKey<IntishCast::Cast>(info->name);
         ret.set(arrkey, *res->getField(i).asTypedValue());
       }
     }
@@ -1702,7 +1700,7 @@ Variant php_mysql_fetch_hash(const Resource& result, int result_type) {
     }
     if (result_type & PHP_MYSQL_ASSOC) {
       String str(mysql_field->name, CopyString);
-      auto const array_key = ret.convertKey<IntishCast::CastSilently>(str);
+      auto const array_key = ret.convertKey<IntishCast::Cast>(str);
       ret.set(array_key, *data.asTypedValue());
     }
   }

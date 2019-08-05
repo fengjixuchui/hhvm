@@ -59,17 +59,19 @@ module FullFidelityParseArgs = struct
     keep_errors : bool;
     quick_mode : bool;
     lower_coroutines : bool;
-    enable_hh_syntax : bool;
-    enable_await_as_an_expression : bool;
     fail_open : bool;
     (* Defining the input *)
     files : string list;
     dump_nast : bool;
-    enable_stronger_await_binding : bool;
     disable_lval_as_an_expression : bool;
     pocket_universes : bool;
-    disable_unsafe_expr : bool;
-    disable_unsafe_block : bool;
+    rust : bool;
+    enable_constant_visibility_modifiers: bool;
+    enable_class_level_where_clauses : bool;
+    disable_legacy_soft_typehints : bool;
+    disable_outside_dollar_str_interp : bool;
+    allow_new_attribute_syntax : bool;
+    disable_legacy_attribute_syntax : bool;
   }
 
   let make
@@ -92,17 +94,20 @@ module FullFidelityParseArgs = struct
     keep_errors
     quick_mode
     lower_coroutines
-    enable_hh_syntax
-    enable_await_as_an_expression
     fail_open
     show_file_name
     files
     dump_nast
-    enable_stronger_await_binding
     disable_lval_as_an_expression
     pocket_universes
-    disable_unsafe_expr
-    disable_unsafe_block = {
+    rust
+    enable_constant_visibility_modifiers
+    enable_class_level_where_clauses
+    disable_legacy_soft_typehints
+    disable_outside_dollar_str_interp
+    allow_new_attribute_syntax
+    disable_legacy_attribute_syntax
+    = {
     full_fidelity_json;
     full_fidelity_dot;
     full_fidelity_dot_edges;
@@ -122,17 +127,19 @@ module FullFidelityParseArgs = struct
     keep_errors;
     quick_mode;
     lower_coroutines;
-    enable_hh_syntax;
-    enable_await_as_an_expression;
     fail_open;
     show_file_name;
     files;
     dump_nast;
-    enable_stronger_await_binding;
     disable_lval_as_an_expression;
     pocket_universes;
-    disable_unsafe_expr;
-    disable_unsafe_block;
+    rust;
+    enable_constant_visibility_modifiers;
+    enable_class_level_where_clauses;
+    disable_legacy_soft_typehints;
+    disable_outside_dollar_str_interp;
+    allow_new_attribute_syntax;
+    disable_legacy_attribute_syntax;
   }
 
   let parse_args () =
@@ -169,18 +176,21 @@ module FullFidelityParseArgs = struct
     let quick_mode = ref false in
     let lower_coroutines = ref true in
     let enable_hh_syntax = ref false in
-    let enable_await_as_an_expression = ref false in
     let fail_open = ref true in
     let show_file_name = ref false in
     let dump_nast = ref false in
-    let enable_stronger_await_binding = ref false in
     let disable_lval_as_an_expression = ref false in
     let set_show_file_name () = show_file_name := true in
     let pocket_universes = ref false in
     let files = ref [] in
     let push_file file = files := file :: !files in
-    let disable_unsafe_expr = ref false in
-    let disable_unsafe_block = ref false in
+    let rust = ref false in
+    let enable_constant_visibility_modifiers = ref false in
+    let enable_class_level_where_clauses = ref false in
+    let disable_legacy_soft_typehints = ref false in
+    let allow_new_attribute_syntax = ref false in
+    let disable_outside_dollar_str_interp = ref true in
+    let disable_legacy_attribute_syntax = ref false in
     let options =  [
       (* modes *)
       "--full-fidelity-json",
@@ -274,33 +284,55 @@ No errors are filtered out.";
         "Unset the fail_open option for the parser.";
       "--force-hh-syntax",
         Arg.Set enable_hh_syntax,
-        "Force hh syntax for the parser.";
-      "--enable-await-as-an-expression",
-        Arg.Set enable_await_as_an_expression,
-        "Enable await-as-an-expression";
+        "Ignored. Do not use.";
       "--show-file-name",
         Arg.Unit set_show_file_name,
         "Displays the file name.";
       "--dump-nast",
         Arg.Set dump_nast,
         "Converts the legacy AST to a NAST and prints it.";
-      "--stronger-await-binding",
-        Arg.Set enable_stronger_await_binding,
-        "Increases precedence of await during parsing.";
       "--disable-lval-as-an-expression",
         Arg.Set disable_lval_as_an_expression,
         "Disable lval as an expression.";
       "--pocket-universes",
         Arg.Set pocket_universes,
         "Enables support for Pocket Universes";
-      "--disable-unsafe-expr",
-        Arg.Set disable_unsafe_expr,
-        "Treat UNSAFE_EXPR comments as just comments, the typechecker will ignore them";
-      "--disable-unsafe-block",
-        Arg.Set disable_unsafe_block,
-        "Treat UNSAFE block comments as just comments, the typechecker will ignore them";
+      "--rust",
+        Arg.Set rust,
+        "Use the parser written in Rust instead of OCaml one";
+      "--enable-constant-visibility-modifiers",
+        Arg.Set enable_constant_visibility_modifiers,
+        "Require constants to have visibility modifiers";
+      "--enable-class-level-where-clauses",
+        Arg.Set enable_class_level_where_clauses,
+        "Enables support for class-level where clauses";
+      "--disable-legacy-soft-typehints",
+        Arg.Set disable_legacy_soft_typehints,
+        "Disables the legacy @ syntax for soft typehints (use __Soft instead)";
+      "--disable-outside-dollar-str-interp",
+        Arg.Set disable_outside_dollar_str_interp,
+        "Disables ${x} syntax for string interpolation (use {$x} instead)";
+      "--allow-new-attribute-syntax",
+        Arg.Set allow_new_attribute_syntax,
+        "Allow the new @ attribute syntax (disables legacy soft typehints)";
+      "--disable-legacy-attribute-syntax",
+        Arg.Set disable_legacy_attribute_syntax,
+        "Disable the legacy <<...>> user attribute syntax";
       ] in
     Arg.parse options push_file usage;
+    let modes = [
+      !full_fidelity_json ;
+      !full_fidelity_text_json ;
+      !full_fidelity_dot ;
+      !full_fidelity_dot_edges ;
+      !full_fidelity_errors ;
+      !full_fidelity_errors_all ;
+      !full_fidelity_s_expr ;
+      !full_fidelity_ast_s_expr ;
+      !program_text ;
+      !pretty_print ;
+      !schema] in
+    if not (List.exists (fun x -> x) modes) then full_fidelity_errors_all := true;
     make
       !full_fidelity_json
       !full_fidelity_text_json
@@ -321,21 +353,22 @@ No errors are filtered out.";
       !keep_errors
       !quick_mode
       !lower_coroutines
-      !enable_hh_syntax
-      !enable_await_as_an_expression
       !fail_open
       !show_file_name
       (List.rev !files)
       !dump_nast
-      !enable_stronger_await_binding
       !disable_lval_as_an_expression
       !pocket_universes
-      !disable_unsafe_expr
-      !disable_unsafe_block
+      !rust
+      !enable_constant_visibility_modifiers
+      !enable_class_level_where_clauses
+      !disable_legacy_soft_typehints
+      !disable_outside_dollar_str_interp
+      !allow_new_attribute_syntax
+      !disable_legacy_attribute_syntax
 end
 
 open FullFidelityParseArgs
-
 (* Prints a single FFP error. *)
 let print_full_fidelity_error source_text error =
   let text = SyntaxError.to_positioned_string
@@ -344,26 +377,35 @@ let print_full_fidelity_error source_text error =
 
 let handle_existing_file args filename =
   let popt = ParserOptions.default in
-  let popt = ParserOptions.with_hh_syntax_for_hhvm popt
-    (args.codegen && args.enable_hh_syntax) in
-  let popt = ParserOptions.with_enable_await_as_an_expression popt
-    (args.enable_await_as_an_expression) in
+  let popt = ParserOptions.with_codegen popt args.codegen in
   let popt = ParserOptions.with_disable_lval_as_an_expression popt
     (args.disable_lval_as_an_expression) in
   let popt = ParserOptions.setup_pocket_universes popt
     (args.pocket_universes) in
+  let popt = ParserOptions.with_rust popt args.rust in
+  let popt = ParserOptions.with_enable_constant_visibility_modifiers popt
+    (args.enable_constant_visibility_modifiers) in
+  let popt = { popt with
+    GlobalOptions.po_enable_class_level_where_clauses = args.enable_class_level_where_clauses}
+  in
+  let popt = ParserOptions.with_disable_legacy_soft_typehints popt
+    args.disable_legacy_soft_typehints in
+  let popt = ParserOptions.with_disable_outside_dollar_str_interp popt
+    args.disable_outside_dollar_str_interp in
+  let popt = ParserOptions.with_allow_new_attribute_syntax popt args.allow_new_attribute_syntax in
+  let popt = ParserOptions.with_disable_legacy_attribute_syntax popt
+    args.disable_legacy_attribute_syntax in
 
   (* Parse with the full fidelity parser *)
   let file = Relative_path.create Relative_path.Dummy filename in
   let source_text = SourceText.from_file file in
-  let mode = Full_fidelity_parser.parse_mode source_text in
+  let mode = Full_fidelity_parser.parse_mode ~rust:args.rust source_text in
   let env = Full_fidelity_parser_env.make
-    ~force_hh:args.enable_hh_syntax
-    ~enable_xhp:args.enable_hh_syntax
-    ~enable_stronger_await_binding:args.enable_stronger_await_binding
     ~disable_lval_as_an_expression:args.disable_lval_as_an_expression
-    ~disable_unsafe_expr:args.disable_unsafe_expr
-    ~disable_unsafe_block:args.disable_unsafe_block
+    ~rust:args.rust
+    ~disable_legacy_soft_typehints:args.disable_legacy_soft_typehints
+    ~allow_new_attribute_syntax:args.allow_new_attribute_syntax
+    ~disable_legacy_attribute_syntax:args.disable_legacy_attribute_syntax
     ?mode () in
   let syntax_tree = SyntaxTree.make ~env source_text in
   let editable = SyntaxTransforms.editable_from_positioned syntax_tree in
@@ -393,10 +435,6 @@ let handle_existing_file args filename =
   let dump_needed = args.full_fidelity_ast_s_expr || args.dump_nast in
   let lowered = if dump_needed || print_errors then begin
     let popt =
-      if args.dump_nast
-      then { popt with GlobalOptions.po_enable_concurrent = true }
-      else popt in
-    let popt =
       GlobalOptions.setup_pocket_universes popt args.pocket_universes in
     let env =
       Full_fidelity_ast.make_env
@@ -407,8 +445,6 @@ let handle_existing_file args filename =
         ~keep_errors:(args.keep_errors && not print_errors)
         ~quick_mode:args.quick_mode
         ~lower_coroutines:args.lower_coroutines
-        ~enable_hh_syntax:args.enable_hh_syntax
-        ~enable_xhp:args.enable_hh_syntax
         ~parser_options:popt
         ~fail_open:args.fail_open
         ~is_hh_file:args.is_hh_file

@@ -1,4 +1,4 @@
-<?php
+<?hh
 class main
 {
    public static $dummy        = NULL ;
@@ -20,9 +20,9 @@ class relay
 class dummy
 {
 }
-
+<<__EntryPoint>> function main(): void {
 main::$dummy        = new dummy();
 main::$dataAccessor = new relay();
 main::$dataAccessor->bar;
 echo "ok\n";
-?>
+}

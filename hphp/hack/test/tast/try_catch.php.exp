@@ -1,9 +1,10 @@
 [(Fun
     { f_span = [11:1-32]; f_annotation = (); f_mode = <opaque>;
-      f_ret = (Some ([11:25-29], (Hprim Tvoid)));
+      f_ret = (([Pos.none], _), (Some ([11:25-29], (Hprim Tvoid))));
       f_name = ([11:10-21], "\\might_throw"); f_tparams = [];
       f_where_constraints = []; f_variadic = FVnonVariadic; f_params = [];
-      f_body = { fb_ast = [Noop]; fb_annotation = No unsafe blocks };
+      f_body =
+      { fb_ast = [([Pos.none], Noop)]; fb_annotation = No unsafe blocks };
       f_fun_kind = FSync; f_user_attributes = []; f_file_attributes = [];
       f_external = false; f_namespace = <opaque>;
       f_doc_comment =
@@ -11,56 +12,64 @@
       f_static = false });
   (Fun
      { f_span = [13:1-31:2]; f_annotation = (); f_mode = <opaque>;
-       f_ret = (Some ([13:44-47], (Hprim Tint)));
+       f_ret = (([Pos.none], _), (Some ([13:44-47], (Hprim Tint))));
        f_name = ([13:10-40], "\\terminal_catch_can_do_whatever");
        f_tparams = []; f_where_constraints = []; f_variadic = FVnonVariadic;
        f_params = [];
        f_body =
        { fb_ast =
-         [(Expr
-             (([14:3-10], int),
-              (Binop ((Eq None), (([14:3-5], int), (Lvar ([14:3-5], $a))),
-                 (([14:8-10], int), (Int "23"))))));
-           (Try (
-              [(Expr
-                  (([16:5-13], int),
-                   (Binop ((Eq None),
-                      (([16:5-7], int), (Lvar ([16:5-7], $a))),
-                      (([16:10-13], int), (Int "456"))))));
-                (Expr
-                   (([17:5-18], void),
-                    (Call (Cnormal,
-                       (([17:5-16], (function(): void)),
-                        (Id ([17:5-16], "\\might_throw"))),
-                       [], [], []))))
-                ],
-              [(([18:12-25], "\\YourException"), ([18:26-28], $e),
-                [(Return ([19:5-15],
-                    (Some (([19:12-14], int), (Lvar ([19:12-14], $a))))))
-                  ]);
-                (([20:12-23], "\\MyException"), ([20:24-26], $e),
-                 [(Expr
-                     (([22:5-16], string),
-                      (Binop ((Eq None),
-                         (([22:5-7], string), (Lvar ([22:5-7], $a))),
-                         (([22:10-16], string), (String "duck"))))));
-                   (Return ([23:5-18],
-                      (Some (([23:12-17], int), (Int "23904")))))
+         [([14:3-11],
+           (Expr
+              (([14:3-10], int),
+               (Binop ((Eq None), (([14:3-5], int), (Lvar ([14:3-5], $a))),
+                  (([14:8-10], int), (Int "23")))))));
+           ([15:3-28:4],
+            (Try (
+               [([16:5-14],
+                 (Expr
+                    (([16:5-13], int),
+                     (Binop ((Eq None),
+                        (([16:5-7], int), (Lvar ([16:5-7], $a))),
+                        (([16:10-13], int), (Int "456")))))));
+                 ([17:5-19],
+                  (Expr
+                     (([17:5-18], void),
+                      (Call (Cnormal,
+                         (([17:5-16], (function(): void)),
+                          (Id ([17:5-16], "\\might_throw"))),
+                         [], [], [])))))
+                 ],
+               [(([18:12-25], "\\YourException"), ([18:26-28], $e),
+                 [([19:5-15],
+                   (Return
+                      (Some (([19:12-14], int), (Lvar ([19:12-14], $a))))))
                    ]);
-                (([24:12-21], "\\Exception"), ([24:22-24], $e),
-                 [(Return ([25:5-15],
-                     (Some (([25:12-14], int), (Lvar ([25:12-14], $a))))))
-                   ])
-                ],
-              [(Expr
-                  (([27:5-11], int),
-                   (Binop ((Eq None),
-                      (([27:5-7], int), (Lvar ([27:5-7], $a))),
-                      (([27:10-11], int), (Int "4"))))))
-                ]
-              ));
-           (Return ([30:3-13],
-              (Some (([30:10-12], int), (Lvar ([30:10-12], $a))))))
+                 (([20:12-23], "\\MyException"), ([20:24-26], $e),
+                  [([22:5-17],
+                    (Expr
+                       (([22:5-16], string),
+                        (Binop ((Eq None),
+                           (([22:5-7], string), (Lvar ([22:5-7], $a))),
+                           (([22:10-16], string), (String "duck")))))));
+                    ([23:5-18],
+                     (Return (Some (([23:12-17], int), (Int "23904")))))
+                    ]);
+                 (([24:12-21], "\\Exception"), ([24:22-24], $e),
+                  [([25:5-15],
+                    (Return
+                       (Some (([25:12-14], int), (Lvar ([25:12-14], $a))))))
+                    ])
+                 ],
+               [([27:5-12],
+                 (Expr
+                    (([27:5-11], int),
+                     (Binop ((Eq None),
+                        (([27:5-7], int), (Lvar ([27:5-7], $a))),
+                        (([27:10-11], int), (Int "4")))))))
+                 ]
+               )));
+           ([30:3-13],
+            (Return (Some (([30:10-12], int), (Lvar ([30:10-12], $a))))))
            ];
          fb_annotation = No unsafe blocks };
        f_fun_kind = FSync; f_user_attributes = []; f_file_attributes = [];
@@ -72,26 +81,26 @@
        c_name = ([33:7-20], "\\YourException");
        c_tparams = { c_tparam_list = []; c_tparam_constraints = <opaque> };
        c_extends = [([33:29-38], (Happly (([33:29-38], "\\Exception"), [])))];
-       c_uses = []; c_method_redeclarations = []; c_xhp_attr_uses = [];
-       c_xhp_category = []; c_req_extends = []; c_req_implements = [];
-       c_implements = []; c_consts = []; c_typeconsts = [];
-       c_static_vars = []; c_vars = []; c_constructor = None;
-       c_static_methods = []; c_methods = []; c_attributes = [];
-       c_xhp_children = []; c_xhp_attrs = []; c_namespace = <opaque>;
-       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-       c_pu_enums = []; c_doc_comment = None });
+       c_uses = []; c_use_as_alias = []; c_insteadof_alias = [];
+       c_method_redeclarations = []; c_xhp_attr_uses = [];
+       c_xhp_category = None; c_reqs = []; c_implements = [];
+       c_where_constraints = []; c_consts = []; c_typeconsts = [];
+       c_vars = []; c_methods = []; c_attributes = []; c_xhp_children = [];
+       c_xhp_attrs = []; c_namespace = <opaque>; c_user_attributes = [];
+       c_file_attributes = []; c_enum = None; c_pu_enums = [];
+       c_doc_comment = None });
   (Class
      { c_span = [34:1-39]; c_annotation = (); c_mode = <opaque>;
        c_final = false; c_is_xhp = false; c_kind = Cnormal;
        c_name = ([34:7-18], "\\MyException");
        c_tparams = { c_tparam_list = []; c_tparam_constraints = <opaque> };
        c_extends = [([34:27-36], (Happly (([34:27-36], "\\Exception"), [])))];
-       c_uses = []; c_method_redeclarations = []; c_xhp_attr_uses = [];
-       c_xhp_category = []; c_req_extends = []; c_req_implements = [];
-       c_implements = []; c_consts = []; c_typeconsts = [];
-       c_static_vars = []; c_vars = []; c_constructor = None;
-       c_static_methods = []; c_methods = []; c_attributes = [];
-       c_xhp_children = []; c_xhp_attrs = []; c_namespace = <opaque>;
-       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-       c_pu_enums = []; c_doc_comment = None })
+       c_uses = []; c_use_as_alias = []; c_insteadof_alias = [];
+       c_method_redeclarations = []; c_xhp_attr_uses = [];
+       c_xhp_category = None; c_reqs = []; c_implements = [];
+       c_where_constraints = []; c_consts = []; c_typeconsts = [];
+       c_vars = []; c_methods = []; c_attributes = []; c_xhp_children = [];
+       c_xhp_attrs = []; c_namespace = <opaque>; c_user_attributes = [];
+       c_file_attributes = []; c_enum = None; c_pu_enums = [];
+       c_doc_comment = None })
   ]

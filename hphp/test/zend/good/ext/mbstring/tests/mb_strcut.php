@@ -1,4 +1,4 @@
-<?php
+<?hh
 // TODO: Add more encodings
 ini_set('include_path', dirname(__FILE__));
 include_once('common.inc');
@@ -14,7 +14,3 @@ $str = mb_strcut($euc_jp, 100, 10,'EUC-JP');
 
 $str = mb_strcut($euc_jp, -100, 10,'EUC-JP');
 ($str !== "") ?	print "OK: $str\n" : print "NG:\n";
-
-
-?>
-

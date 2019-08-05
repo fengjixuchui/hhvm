@@ -1,19 +1,12 @@
-<?php
+<?hh
 
 
 <<__EntryPoint>>
 function main_1483() {
 if (isset($g)) {
-  class X {
-}
+  include '1483-1.inc';
 }
  else {
-  class X {
-    static function foo() {
-}
-    function bar() {
-      X::foo(1,2,3);
-    }
-  }
+  include '1483-2.inc';
 }
 }

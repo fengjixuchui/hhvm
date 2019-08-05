@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool symlink ( string $target, string $link );
    Description: creates a symbolic link to the existing target with the specified name link
 
@@ -11,7 +11,7 @@
    Prototype: int linkinfo ( string $path );
    Description: Gets information about a link
 */
-
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 // temp dir created in present working directory
@@ -73,11 +73,9 @@ foreach($files as $file) {
 }
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $dirname = $file_path."/symlink_link_linkinfo_is_link_basic1";
 unlink("$dirname/symlink_link_linkinfo_is_link_basic1.tmp");
 rmdir($dirname);
-?>
+}

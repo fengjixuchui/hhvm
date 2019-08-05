@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $n = gmp_init(0);
 gmp_clrbit(&$n, 0);
 var_dump(gmp_strval($n));
@@ -29,4 +29,4 @@ try { gmp_clrbit(&$n); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMes
 try { gmp_clrbit(); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done\n";
-?>
+}

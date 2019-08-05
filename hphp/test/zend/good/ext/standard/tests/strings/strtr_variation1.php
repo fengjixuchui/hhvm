@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string strtr(string $str, string $from[, string $to]);
                 string strtr(string $str, array $replace_pairs);
  * Description: Translates characters in str using given translation tables
@@ -9,7 +9,7 @@
  *   combination of numeric & regular strings for 'str' argument and
  *   corresponding translation pair of chars for 'from', 'to' & 'replace_pairs' arguments
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing strtr() : numeric & regular double quoted strings ***\n";
 /* definitions of required input variables */
 $count = 1;
@@ -52,4 +52,4 @@ for($index = 0; $index < count($str_arr); $index++) {
   $count++;
 }
 echo "*** Done ***";
-?>
+}

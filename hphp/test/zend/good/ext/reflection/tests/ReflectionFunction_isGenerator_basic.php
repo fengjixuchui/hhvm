@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 $closure1 = function() {return "this is a closure"; };
 $closure2 = function($param) {
@@ -39,4 +39,3 @@ $rc = new ReflectionClass('Foo');
 foreach($rc->getMethods() as $m) {
 	var_dump($m->isGenerator());
 }
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string imap_base64  ( string $text  )
  * Description: Decode BASE64 encoded text.
  * Source code: ext/imap/php_imap.c
@@ -28,7 +28,5 @@ if (imap_base64($base64) == $hex) {
 	echo "TEST PASSED\n";
 } else {
 	echo "TEST FAILED";
-}		
-
-?>
-===Done===
+}
+echo "===Done===";

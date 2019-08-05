@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $filename = dirname(__FILE__)."/DOMDocument_saveHTMLFile_basic".time().".html";
 $doc = new DOMDocument('1.0');
 $root = $doc->createElement('html');
@@ -13,4 +13,4 @@ $bytes = $doc->saveHTMLFile($filename);
 var_dump($bytes);
 echo file_get_contents($filename);
 unlink($filename);
-?>
+}

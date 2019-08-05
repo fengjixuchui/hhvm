@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : int readfile(string filename [, bool use_include_path[, resource context]])
  * Description: Output a file or a URL 
  * Source code: ext/standard/file.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing readfile() : variation ***\n";
 
 
@@ -33,4 +33,4 @@ for( $i=0; $i<count($names_arr); $i++ ) {
 }
 
 echo "\n*** Done ***\n";
-?>
+}

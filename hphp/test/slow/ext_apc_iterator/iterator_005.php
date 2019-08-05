@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 error_reporting(E_ALL & ~E_USER_NOTICE & ~E_NOTICE);
 
 $vals = array();
@@ -19,6 +19,5 @@ ksort(&$vals2);
 var_dump($vals);
 var_dump($vals2);
 
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

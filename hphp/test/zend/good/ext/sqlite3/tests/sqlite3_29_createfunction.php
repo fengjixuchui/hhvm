@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 require_once(dirname(__FILE__) . '/new_db.inc');
 
@@ -14,4 +14,3 @@ var_dump($db->createfunction($func, $func2));
 var_dump($db->querySingle('SELECT strtoupper("tEst")'));
 
 
-?>

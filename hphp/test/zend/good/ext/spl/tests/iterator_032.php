@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $it = new LimitIterator(new ArrayIterator(array(1,2,3,4)), 1, 2);
 
 foreach($it as $k=>$v)
@@ -32,6 +32,5 @@ catch(OutOfBoundsException $e)
 $it->next();
 var_dump($it->valid());
 
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

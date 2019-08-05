@@ -34,13 +34,16 @@ BCMarker initial_marker(TransContext ctx) {
 
 //////////////////////////////////////////////////////////////////////
 
-IRGS::IRGS(IRUnit& unit, const RegionDesc* region)
+IRGS::IRGS(IRUnit& unit, const RegionDesc* region, int32_t budgetBCInstrs,
+           TranslateRetryContext* retryContext)
   : context(unit.context())
   , transFlags(unit.context().flags)
   , region(region)
   , unit(unit)
   , irb(new IRBuilder(unit, initial_marker(context)))
-  , bcStateStack { context.srcKey() }
+  , bcState(context.srcKey())
+  , budgetBCInstrs(budgetBCInstrs)
+  , retryContext(retryContext)
 {
   updateMarker(*this);
   auto const frame = gen(*this, DefFP);
@@ -109,7 +112,7 @@ std::string show(const IRGS& irgs) {
                        stackDepth).str());
   assertx(spOffset <= curFunc(irgs)->maxStackCells());
 
-  for (auto i = 0; i < spOffset; ) {
+  for (auto i = 0; i < stackDepth; ) {
     if (checkFpi()) {
       i += kNumActRecCells;
       continue;

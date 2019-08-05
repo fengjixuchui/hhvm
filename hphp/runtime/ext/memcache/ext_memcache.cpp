@@ -21,9 +21,9 @@
 #include "hphp/runtime/vm/native-data.h"
 #include "hphp/runtime/ext/memcached/libmemcached_portability.h"
 #include "hphp/runtime/ext/sockets/ext_sockets.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/zend-string.h"
+#include "hphp/util/rds-local.h"
 #include <vector>
 
 // MMC values must match pecl-memcache for compatibility
@@ -172,6 +172,7 @@ static uint32_t memcache_get_flag_for_type(const Variant& var) {
     case KindOfFunc:
     case KindOfClass:
     case KindOfClsMeth:
+    case KindOfRecord:
       return MMC_TYPE_STRING;
   }
   not_reached();
@@ -782,7 +783,7 @@ struct MemcacheExtension final : Extension {
 
     void moduleInit() override {
       HHVM_RC_INT(MEMCACHE_COMPRESSED, k_MEMCACHE_COMPRESSED);
-      HHVM_RC_BOOL(MEMCACHE_HAVE_SESSION, true);
+      HHVM_RC_BOOL(MEMCACHE_HAVE_SESSION, false);
       HHVM_ME(Memcache, connect);
       HHVM_ME(Memcache, add);
       HHVM_ME(Memcache, set);

@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype  : string strrchr(string $haystack, string $needle);
  * Description: Finds the last occurrence of a character in a string.
  * Source code: ext/standard/string.c
 */
 
 /* Test strrchr() function: with binary values & null terminated strings passed to 'str1' & 'str2' */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Test strrchr() function: binary safe ***\n";
 $haystacks = array(
   "Hello".chr(0)."World",
@@ -24,4 +24,4 @@ for($index = 0; $index < count($haystacks); $index++ ) {
   var_dump( strrchr($haystacks[$index], NULL) );
 }
 echo "*** Done ***";
-?>
+}

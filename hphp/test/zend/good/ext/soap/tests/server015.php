@@ -1,8 +1,8 @@
-<?php
+<?hh
 function test() {
   return "Hello World";
 }
-
+<<__EntryPoint>> function main(): void {
 $server = new soapserver(null,array('uri'=>"http://testuri.org"));
 $server->addfunction("test");
 
@@ -21,4 +21,4 @@ $envelope = <<<EOF
 EOF;
 $server->handle($envelope);
 echo "ok\n";
-?>
+}

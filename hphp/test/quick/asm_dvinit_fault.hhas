@@ -1,3 +1,4 @@
+.hh_file 1;
 #
 # Try/catch in a DV initializer.
 #
@@ -5,9 +6,15 @@
 #
 
 .main {
-  FPushFuncD 1 "var_dump"
+  NullUninit
+  NullUninit
+  NullUninit
+    NullUninit
+    NullUninit
+    NullUninit
     FPushFuncD 0 "main"
     FCall <> 0 1 "" - "" ""
+  FPushFuncD 1 "var_dump"
   FCall <> 1 1 "" - "" ""
   PopC
   Int 1
@@ -34,9 +41,11 @@ dv_init2:
 
       NewObjD "Exception"
       Dup
-      FPushCtor 0
-      FCall <> 0 1 "" - "" ""
+      NullUninit
+      NullUninit
+      FCallCtor <LockWhileUnwinding> 0 1 "" - ""
       PopC
+      LockObj
       Throw
     } .catch {
       Int 4321

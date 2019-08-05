@@ -1,11 +1,11 @@
-<?php
+<?hh
 
 /*
    +-------------------------------------------------------------+
    | Copyright (c) 2015 Facebook, Inc. (http://www.facebook.com) |
    +-------------------------------------------------------------+
 */
-
+<<__EntryPoint>> function main(): void {
 error_reporting(-1);
 
 $i = 1;
@@ -14,12 +14,6 @@ while ($i <= 10)
     echo "$i\t".($i * $i)."\n";
     ++$i;
 }
-
-$i = 1;
-while ($i <= 10):
-    echo "$i\t".($i * $i)."\n"; // output a table of squares
-    ++$i;
-endwhile;
 
 $count = 0;
 while (TRUE)
@@ -31,4 +25,5 @@ while (TRUE)
     if ($done)
         break;  // break out of the while loop
     // ...
+}
 }

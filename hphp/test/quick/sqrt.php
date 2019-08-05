@@ -11,14 +11,30 @@ function neg_zero() {
 function main($f) {
   var_dump(sqrt(0.0));
   var_dump(sqrt(neg_zero()));
-  var_dump(sqrt(5));
+  var_dump(sqrt(5.0));
   var_dump(sqrt(2.5));
-  var_dump(sqrt(-3));
+  var_dump(sqrt(-3.0));
   var_dump(sqrt($f));
-  var_dump(sqrt(true));
-  var_dump(sqrt(false));
-  var_dump(sqrt(null));
-  var_dump(sqrt("15"));
+  try {
+    var_dump(sqrt(true));
+  } catch (Exception $e) {
+    var_dump($e->getMessage());
+  }
+  try {
+    var_dump(sqrt(false));
+  } catch (Exception $e) {
+    var_dump($e->getMessage());
+  }
+  try {
+    var_dump(sqrt(null));
+  } catch (Exception $e) {
+    var_dump($e->getMessage());
+  }
+  try {
+    var_dump(sqrt("15"));
+  } catch (Exception $e) {
+    var_dump($e->getMessage());
+  }
   try {
     var_dump(sqrt("hello"));
   } catch (Exception $e) {
@@ -40,4 +56,6 @@ function main($f) {
     var_dump($e->getMessage());
   }
 }
+<<__EntryPoint>> function main_entry(): void {
 main(2.241987);
+}

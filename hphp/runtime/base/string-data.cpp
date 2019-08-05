@@ -33,8 +33,9 @@
 #include "hphp/runtime/base/zend-functions.h"
 #include "hphp/runtime/base/zend-printf.h"
 #include "hphp/runtime/base/zend-string.h"
-#include "hphp/runtime/base/zend-strtod.h"
 #include "hphp/runtime/ext/apc/ext_apc.h"
+
+#include "hphp/zend/zend-strtod.h"
 
 namespace HPHP {
 
@@ -81,7 +82,7 @@ StringData* StringData::MakeShared(folly::StringPiece sl) {
 
   auto const allocSize = sl.size() + kStringOverhead;
   StringData* sd = reinterpret_cast<StringData*>(
-    trueStatic ? low_malloc(allocSize) : uncounted_malloc(allocSize)
+    trueStatic ? lower_malloc(allocSize) : uncounted_malloc(allocSize)
   );
   auto const data = reinterpret_cast<char*>(sd + 1);
 
@@ -142,7 +143,7 @@ StringData* StringData::MakeEmpty() {
 void StringData::destructStatic() {
   assertx(checkSane() && isStatic());
   assertx(isFlat());
-  low_free(this);
+  lower_free(this);
 }
 
 void StringData::ReleaseUncounted(const StringData* str) {
@@ -252,6 +253,8 @@ StringData* StringData::Make(char* data, size_t len, AttachStringMode) {
 }
 
 StringData* StringData::Make(folly::StringPiece r1, folly::StringPiece r2) {
+  // Undefined behavior if we pass nullptr strings into StringData::Make
+  assertx(r1.data() && r2.data());
   auto const len = r1.size() + r2.size();
   auto const sd = allocFlat(len);
   sd->m_lenAndHash = len; // hash=0
@@ -629,9 +632,7 @@ StringData* StringData::increment() {
 }
 
 void StringData::incrementHelper() {
-  if (RuntimeOption::EnableHipHopSyntax) {
-    raise_notice("Increment on string '%s'", data());
-  }
+  raise_notice("Increment on string '%s'", data());
   m_hash = 0;
 
   enum class CharKind {
@@ -793,6 +794,7 @@ bool StringData::isNumeric() const {
     case KindOfFunc:
     case KindOfClass:
     case KindOfClsMeth:
+    case KindOfRecord:
       break;
   }
   not_reached();
@@ -828,6 +830,7 @@ bool StringData::isInteger() const {
     case KindOfFunc:
     case KindOfClass:
     case KindOfClsMeth:
+    case KindOfRecord:
       break;
   }
   not_reached();

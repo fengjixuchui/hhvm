@@ -87,9 +87,6 @@ void freeLocalsAndThis(IRGS& env) {
 
   if (shouldFreeInline) {
     decRefLocalsInline(env);
-    for (unsigned i = 0; i < localCount; ++i) {
-      env.irb->constrainLocal(i, DataTypeCountness, "inlined RetC/V");
-    }
   } else {
     gen(env, GenericRetDecRefs, fp(env));
   }
@@ -252,10 +249,14 @@ void emitRetC(IRGS& env) {
 }
 
 void emitRetM(IRGS& env, uint32_t nvals) {
-  assertx(!isInlining(env));
   assertx(resumeMode(env) == ResumeMode::None);
   assertx(!curFunc(env)->isResumable());
   assertx(nvals > 1);
+
+  if (isInlining(env)) {
+    retFromInlined(env);
+    return;
+  }
 
   // Pop the return values. Since they will be teleported to their places in
   // memory, we don't care about their types.

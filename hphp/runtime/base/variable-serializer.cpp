@@ -24,7 +24,6 @@
 #include "hphp/runtime/base/mixed-array-defs.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/packed-array-defs.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/base/type-variant.h"
@@ -42,6 +41,7 @@
 #include "hphp/runtime/vm/class-meth-data-ref.h"
 
 #include "hphp/util/exception.h"
+#include "hphp/util/rds-local.h"
 
 #include <cmath>
 
@@ -112,14 +112,12 @@ VariableSerializer::getKind(const ArrayData* arr) const {
   return VariableSerializer::ArrayKind::PHP;
 }
 
-void VariableSerializer::pushObjectInfo(const String& objClass, int objId,
-                                        char objCode) {
+void VariableSerializer::pushObjectInfo(const String& objClass, char objCode) {
   assertx(objCode == 'O' || objCode == 'V' || objCode == 'K');
   m_objectInfos.emplace_back(
-    ObjectInfo { m_objClass, m_objId, m_objCode, m_rsrcName, m_rsrcId }
+    ObjectInfo { m_objClass, m_objCode, m_rsrcName, m_rsrcId }
   );
   m_objClass = objClass;
-  m_objId = objId;
   m_objCode = objCode;
   m_rsrcName.reset();
   m_rsrcId = 0;
@@ -127,10 +125,9 @@ void VariableSerializer::pushObjectInfo(const String& objClass, int objId,
 
 void VariableSerializer::pushResourceInfo(const String& rsrcName, int rsrcId) {
   m_objectInfos.emplace_back(
-    ObjectInfo { m_objClass, m_objId, m_objCode, m_rsrcName, m_rsrcId }
+    ObjectInfo { m_objClass, m_objCode, m_rsrcName, m_rsrcId }
   );
   m_objClass.reset();
-  m_objId = 0;
   m_objCode = 0;
   m_rsrcName = rsrcName;
   m_rsrcId = rsrcId;
@@ -139,7 +136,6 @@ void VariableSerializer::pushResourceInfo(const String& rsrcName, int rsrcId) {
 void VariableSerializer::popObjectInfo() {
   ObjectInfo &info = m_objectInfos.back();
   m_objClass = info.objClass;
-  m_objId = info.objId;
   m_objCode = info.objCode;
   m_rsrcName = info.rsrcName;
   m_rsrcId = info.rsrcId;
@@ -603,7 +599,10 @@ void VariableSerializer::write(const char *v, int len /* = -1 */,
 }
 
 void VariableSerializer::write(const String& v) {
-  if (m_type == Type::APCSerialize && !v.isNull() && v.get()->isStatic()) {
+  if (m_type == Type::APCSerialize &&
+      !(m_option & kAPC_PRIME_SERIALIZE) &&
+      !v.isNull() &&
+      v.get()->isStatic()) {
     union {
       char buf[8];
       StringData *sd;
@@ -641,18 +640,13 @@ void VariableSerializer::write(const Object& v) {
       if (v->isCollection()) {
         serializeCollection(v.get());
       } else if (v->instanceof(c_Closure::classof())) {
-        // We serialize closures as "{}" in JSON mode to be compatible
-        // with PHP. And issue a warning in HipHop syntax.
-        if (RuntimeOption::EnableHipHopSyntax) {
-          m_buf->append("null");
-          json_set_last_error_code(
-            json_error_codes::JSON_ERROR_UNSUPPORTED_TYPE);
-          return;
-        }
-        m_buf->append("{}");
+        m_buf->append("null");
+        json_set_last_error_code(
+          json_error_codes::JSON_ERROR_UNSUPPORTED_TYPE);
+        return;
       } else {
-        auto props = v->toArray(true);
-        pushObjectInfo(v->getClassName(), v->getId(), 'O');
+        auto props = v->toArray(true, m_ignoreLateInit);
+        pushObjectInfo(v->getClassName(), 'O');
         serializeArray(props, true);
         popObjectInfo();
       }
@@ -903,9 +897,7 @@ void VariableSerializer::writeArrayHeader(int size, bool isVectorData,
     } else if (!m_objClass.empty()) {
       m_buf->append("object(");
       m_buf->append(m_objClass);
-      m_buf->append(")#");
-      m_buf->append(m_objId);
-      m_buf->append(' ');
+      m_buf->append(") ");
     } else {
       switch (kind) {
       case ArrayKind::Dict:
@@ -1452,6 +1444,7 @@ void VariableSerializer::serializeFunc(const Func* func) {
       // TODO (T29639296)
       // For now we use function(foo) to dump function pointers in most cases,
       // and this can be changed in the future.
+      indent();
       m_buf->append("function(");
       m_buf->append(name->data());
       m_buf->append(")\n");
@@ -1487,6 +1480,7 @@ void VariableSerializer::serializeClass(const Class* cls) {
       // TODO (T29639296)
       // For now we use function(foo) to dump function pointers in most cases,
       // and this can be changed in the future.
+      indent();
       m_buf->append("class(");
       m_buf->append(cls->name());
       m_buf->append(")\n");
@@ -1648,6 +1642,10 @@ void VariableSerializer::serializeVariant(tv_rval tv,
       assertx(!isArrayKey);
       serializeClsMeth(val(tv).pclsmeth, skipNestCheck);
       return;
+
+    case KindOfRecord:
+      // TODO(T41025646): implement serialization of record
+      always_assert(false);
   }
   not_reached();
 }
@@ -1715,6 +1713,20 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
     }
   }
 
+  if (UNLIKELY(RuntimeOption::EvalLogArrayProvenance &&
+               (arr->isDict() || arr->isVecArray()))) {
+    auto const source = [&]() -> const char* {
+      switch (getType()) {
+      case VariableSerializer::Type::JSON:      return "json_encode";
+      case VariableSerializer::Type::Serialize: return "serialize";
+      case VariableSerializer::Type::VarExport: return "var_export";
+      case VariableSerializer::Type::PrintR:    return "print_r";
+      default:                                  return nullptr;
+      }
+    }();
+    if (source) raise_array_serialization_notice(source, arr);
+  }
+
   if (arr->size() == 0) {
     auto const kind = getKind(arr);
     writeArrayHeader(0, arr->isVectorData(), kind);
@@ -1751,7 +1763,7 @@ void VariableSerializer::serializeCollection(ObjectData* obj) {
   auto type = obj->collectionType();
 
   if (isMapCollection(type)) {
-    pushObjectInfo(obj->getClassName(), obj->getId(), 'K');
+    pushObjectInfo(obj->getClassName(),'K');
     writeArrayHeader(sz, false, AK::PHP);
     for (ArrayIter iter(obj); iter; ++iter) {
       writeCollectionKey(iter.first(), AK::PHP);
@@ -1763,7 +1775,7 @@ void VariableSerializer::serializeCollection(ObjectData* obj) {
     assertx(isVectorCollection(type) ||
             isSetCollection(type) ||
             (type == CollectionType::Pair));
-    pushObjectInfo(obj->getClassName(), obj->getId(), 'V');
+    pushObjectInfo(obj->getClassName(), 'V');
     writeArrayHeader(sz, true, AK::PHP);
     auto ser_type = getType();
     if (ser_type == VariableSerializer::Type::Serialize ||
@@ -1831,7 +1843,8 @@ Array VariableSerializer::getSerializeProps(const ObjectData* obj) const {
   if ((getType() != VariableSerializer::Type::PrintR) &&
       (getType() != VariableSerializer::Type::VarDump)) {
     auto const ignoreLateInit =
-      (getType() == VariableSerializer::Type::DebugDump ||
+      (m_ignoreLateInit ||
+       getType() == VariableSerializer::Type::DebugDump ||
        getType() == VariableSerializer::Type::DebuggerDump ||
        getType() == VariableSerializer::Type::DebuggerSerialize);
     return obj->toArray(false, ignoreLateInit);
@@ -1978,7 +1991,9 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
 
           if (propVal.type() == KindOfUninit &&
               (prop.attrs & AttrLateInitSoft)) {
-            raise_soft_late_init_prop(prop.cls, memberName.get(), false);
+            if (!m_ignoreLateInit) {
+              raise_soft_late_init_prop(prop.cls, memberName.get(), false);
+            }
             tvDup(
               *g_context->getSoftLateInitDefault().asTypedValue(),
               propVal
@@ -1997,7 +2012,11 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
               continue;
             }
           } else if (prop.attrs & AttrLateInit) {
-            throw_late_init_prop(prop.cls, memberName.get(), false);
+            if (m_ignoreLateInit) {
+              continue;
+            } else {
+              throw_late_init_prop(prop.cls, memberName.get(), false);
+            }
           }
         }
         if (!attrMask &&
@@ -2011,7 +2030,7 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
                      "__sleep() but does not exist", propName.data());
         wanted.set(propName, init_null());
       }
-      pushObjectInfo(obj->getClassName(), obj->getId(), 'O');
+      pushObjectInfo(obj->getClassName(), 'O');
       if (!serializableNativeData.isNull()) {
         wanted.set(s_serializedNativeDataKey, serializableNativeData);
       }
@@ -2093,14 +2112,14 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
           s_PHP_Incomplete_Class_Name.get()
         ).unboxed();
         if (cname && isStringType(cname.type())) {
-          pushObjectInfo(StrNR(cname.val().pstr), obj->getId(), 'O');
+          pushObjectInfo(StrNR(cname.val().pstr), 'O');
           properties.remove(s_PHP_Incomplete_Class_Name, true);
           serializeArray(properties, true);
           popObjectInfo();
           return;
         }
       }
-      pushObjectInfo(className, obj->getId(), 'O');
+      pushObjectInfo(className, 'O');
       if (!serializableNativeData.isNull()) {
         properties.set(s_serializedNativeDataKey, serializableNativeData);
       }

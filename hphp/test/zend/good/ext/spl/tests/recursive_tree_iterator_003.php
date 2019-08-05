@@ -1,8 +1,8 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 try {
-	new RecursiveTreeIterator(new ArrayIterator(array()));
+    new RecursiveTreeIterator(new ArrayIterator(array()));
 } catch (InvalidArgumentException $e) {
-	echo "InvalidArgumentException thrown\n";
+    echo "InvalidArgumentException thrown\n";
 }
-?>
-===DONE===
+echo "===DONE===\n";
+}

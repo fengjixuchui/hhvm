@@ -107,7 +107,7 @@ inline void ActRec::setHasReifiedGenerics() {
 }
 
 inline void ActRec::setResumed() {
-  assertx((flags() & ~(AsyncEagerRet | DynamicCall))
+  assertx((flags() & ~(AsyncEagerRet | DynamicCall | HasReifiedGenerics))
          == Flags::None);
   m_numArgsAndFlags = encodeNumArgsAndFlags(
     numArgs(),
@@ -116,10 +116,11 @@ inline void ActRec::setResumed() {
 }
 
 inline void ActRec::setAsyncEagerReturn() {
-  assertx((flags() & ~DynamicCall) == Flags::None);
+  assertx((flags() & ~(DynamicCall | HasReifiedGenerics)) == Flags::None);
   m_numArgsAndFlags = encodeNumArgsAndFlags(
     numArgs(),
-    static_cast<Flags>(AsyncEagerRet | (flags() & DynamicCall))
+    static_cast<Flags>(AsyncEagerRet |
+                       (flags() & (DynamicCall | HasReifiedGenerics)))
   );
 }
 
@@ -229,16 +230,16 @@ inline void ActRec::trashThis() {
 
 inline void ActRec::setReifiedGenerics(ArrayData* rg) {
   m_numArgsAndFlags |= HasReifiedGenerics;
-  m_reifiedGenerics = rg;
+  m_reifiedGenerics.set(0, rg);
 }
 
 inline ArrayData* ActRec::getReifiedGenerics() const {
-  return m_reifiedGenerics;
+  return m_reifiedGenerics.ptr();
 }
 
 inline void ActRec::trashReifiedGenerics() {
   if (!debug) return;
-  m_reifiedGenerics = reinterpret_cast<ArrayData*>(kTrashedReifiedGenericsSlot);
+  m_reifiedGenerics = ReifiedGenericsPtr(kTrashedReifiedGenericsSlot);
 }
 /////////////////////////////////////////////////////////////////////////////
 

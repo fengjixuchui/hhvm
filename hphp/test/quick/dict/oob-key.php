@@ -22,12 +22,13 @@ function manipulate($arr) {
     echo "Caught ".$ex->getMessage()."\n";
   }
   $arr['foo'][3][] = 5;
-  $arr['foo'][3]['bar'][] = 12;
-  var_dump($arr['foo'][3]['bar'][256]);
+  $arr['foo'][3]['bar'] = [12];
+  try { var_dump($arr['foo'][3]['bar'][256]); }
+  catch (Exception $e) { echo $e->getMessage()."\n"; }
   var_dump($arr);
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   $foo = dict['a' => 'b', 'c' => 'd'];
   $foo[1] = 'INT-ONE';
   $foo['2'] = 'STR-TWO';
@@ -52,5 +53,3 @@ function main() {
   $arr = array('foo' => dict[1 => 'hello', '2' => 'world', 3 => array()]);
   manipulate($arr);
 }
-
-main();

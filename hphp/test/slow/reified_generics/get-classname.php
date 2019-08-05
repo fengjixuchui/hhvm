@@ -2,6 +2,7 @@
 
 class C {}
 class D<reify T> {}
-
-var_dump(HH\ReifiedGenerics\getClassname<C>());
-var_dump(HH\ReifiedGenerics\getClassname<D<int>>());
+<<__EntryPoint>> function main(): void {
+var_dump(HH\ReifiedGenerics\get_classname<C>());
+var_dump(HH\ReifiedGenerics\get_classname<D<int>>());
+}

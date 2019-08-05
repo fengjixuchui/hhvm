@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool ctype_space(mixed $c)
  * Description: Checks for whitespace character(s)
  * Source code: ext/ctype/ctype.c
@@ -7,7 +7,7 @@
 /*
  * Pass an incorrect number of arguments to ctype_space() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing ctype_space() : error conditions ***\n";
 
 $orig = setlocale(LC_CTYPE, "C");
@@ -23,5 +23,5 @@ $extra_arg = 10;
 try { var_dump( ctype_space($c, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 setlocale(LC_CTYPE, $orig);
-?>
-===DONE===
+echo "===DONE===\n";
+}

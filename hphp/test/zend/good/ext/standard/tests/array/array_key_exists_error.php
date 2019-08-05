@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool array_key_exists(mixed $key, array $search)
  * Description: Checks if the given key or index exists in the array 
  * Source code: ext/standard/array.c
@@ -8,7 +8,7 @@
 /*
  * Pass incorrect number of arguments to array_key_exists() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_key_exists() : error conditions ***\n";
 
 //Test array_key_exists with one more than the expected number of arguments
@@ -24,5 +24,4 @@ $key = 1;
 try { var_dump( array_key_exists($key) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
-
+}

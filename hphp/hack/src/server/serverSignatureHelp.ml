@@ -36,10 +36,6 @@ let get_positional_info (cst : Syntax.t) (file_offset : int) : ((int * int) * in
     match syntax.syntax with
     | FunctionCallExpression children ->
       Some (children.function_call_receiver, children.function_call_argument_list)
-    | FunctionCallWithTypeArgumentsExpression children ->
-      Some (
-        children.function_call_with_type_arguments_receiver,
-        children.function_call_with_type_arguments_argument_list)
     | ConstructorCall children ->
       Some (children.constructor_call_type, children.constructor_call_argument_list)
     | _ -> None
@@ -75,6 +71,7 @@ let get_positional_info (cst : Syntax.t) (file_offset : int) : ((int * int) * in
     end
 
 let get_occurrence_info ast tast (line, char) occurrence =
+  let ast = Some ast in
   let def_opt = ServerSymbolDefinition.go ast occurrence in
   ServerInferType.type_at_pos tast line char
   >>= fun (env, ty) ->
@@ -85,7 +82,7 @@ let get_occurrence_info ast tast (line, char) occurrence =
   end
   >>| fun ft -> (occurrence, env, ft, def_opt)
 
-let go env (file, line, char) ~basic_only =
+let go env (file, line, char) =
   let ServerEnv.{tcopt; _} = env in
   let tcopt = {
     tcopt with
@@ -126,7 +123,7 @@ let go env (file, line, char) ~basic_only =
     >>= fun def ->
     let file =
       ServerCommandTypes.FileName (def.SymbolDefinition.pos |> Pos.to_absolute |> Pos.filename) in
-    ServerDocblockAt.go_def def ~base_class_name ~file ~basic_only
+    ServerDocblockAt.go_comments_for_symbol ~def ~base_class_name ~file
   in
   let signature_information = {
     siginfo_label;

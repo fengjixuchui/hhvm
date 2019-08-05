@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class a {
   public static function x() {
@@ -13,9 +13,8 @@ class b extends a{
 
 <<__EntryPoint>>
 function main_1466() {
-if (0) {
-  class b {
+  if (__hhvm_intrinsics\launder_value(0)) {
+    include '1466-1.inc';
   }
-}
-b::x();
+  b::x();
 }

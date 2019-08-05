@@ -206,6 +206,10 @@ inline void ExecutionContext::setSoftLateInitDefault(Variant d) {
   m_softLateInitDefault = std::move(d);
 }
 
+inline const RepoOptions* ExecutionContext::getRepoOptionsForRequest() const {
+  return m_requestOptions.get_pointer();
+}
+
 inline const Func* ExecutionContext::getPrevFunc(const ActRec* fp) {
   auto state = getPrevVMState(fp, nullptr, nullptr, nullptr);
   return state ? state->func() : nullptr;
@@ -213,10 +217,9 @@ inline const Func* ExecutionContext::getPrevFunc(const ActRec* fp) {
 
 inline TypedValue ExecutionContext::invokeFunc(
   const CallCtx& ctx,
-  const Variant& args_,
-  VarEnv* varEnv
+  const Variant& args_
 ) {
-  return invokeFunc(ctx.func, args_, ctx.this_, ctx.cls, varEnv,
+  return invokeFunc(ctx.func, args_, ctx.this_, ctx.cls, nullptr,
                     ctx.invName, InvokeNormal, ctx.dynamic);
 }
 
@@ -286,9 +289,8 @@ inline Cell ExecutionContext::lookupClsCns(const StringData* cls,
   return lookupClsCns(NamedEntity::get(cls), cls, cns);
 }
 
-inline VarEnv* ExecutionContext::hasVarEnv(int frame) {
-  auto const fp = getFrameAtDepth(frame);
-  if (fp && (fp->func()->attrs() & AttrMayUseVV)) {
+inline VarEnv* ExecutionContext::getVarEnv(const ActRec* fp) {
+  if (fp && !fp->isInlined() && (fp->func()->attrs() & AttrMayUseVV)) {
     if (fp->hasVarEnv()) return fp->getVarEnv();
   }
   return nullptr;

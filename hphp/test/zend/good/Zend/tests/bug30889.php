@@ -1,6 +1,5 @@
-<?php
-class overloaded
-{
+<?hh
+ class overloaded {
   private $values;
   function __construct()
   {
@@ -17,7 +16,7 @@ class overloaded
     return $this->values[$name];
   }
 }
+
 $test = new overloaded();
 $test->a++;     // __get(), then __set()
 ++$test->a;
-?>

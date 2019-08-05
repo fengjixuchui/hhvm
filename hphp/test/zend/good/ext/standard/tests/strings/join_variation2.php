@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string join( string $glue, array $pieces )
  * Description: Join array elements with a string
  * Source code: ext/standard/string.c
@@ -9,6 +9,16 @@
  * test join() by passing different unexpected value for pieces argument
 */
 
+// define a class
+class test
+{
+  var $t = 10;
+  var $p = 10;
+  function __toString() {
+    return "testObject";
+  }
+}
+<<__EntryPoint>> function main(): void {
 echo "*** Testing join() : usage variations ***\n";
 // initialize all required variables
 $glue = '::';
@@ -19,16 +29,6 @@ unset($unset_var);
 
 // get a resouce variable
 $fp = fopen(__FILE__, "r");
-
-// define a class
-class test
-{
-  var $t = 10;
-  var $p = 10;
-  function __toString() {
-    return "testObject";
-  }
-}
 
 // array with different values
 $values =  array (
@@ -69,7 +69,7 @@ $values =  array (
 
   // resource variable
   $fp,
- 
+
   // undefined variable
   @$undefined_var,
 
@@ -95,4 +95,4 @@ for($index = 0; $index < count($values); $index ++) {
 fclose($fp);
 
 echo "Done\n";
-?>
+}

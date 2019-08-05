@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $org_data = <<<EOT
 uncompressed contents of 004.txt.gz is:
 When you're taught through feelings
@@ -37,5 +37,5 @@ else {
 }
 unlink($inputFileName);
 unlink($outputFileName);
-?>
-===DONE===
+echo "===DONE===\n";
+}

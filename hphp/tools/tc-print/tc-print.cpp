@@ -25,7 +25,11 @@
 #include <sstream>
 
 #include <folly/Format.h>
+#include <folly/dynamic.h>
+#include <folly/json.h>
 #include <folly/Singleton.h>
+
+#include "hphp/util/build-info.h"
 
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/base/preg.h"
@@ -52,13 +56,14 @@ std::string     configFile;
 std::string     profFileName;
 uint32_t        nTopTrans       = 0;
 uint32_t        nTopFuncs       = 0;
+bool            useJSON         = false;
 bool            creationOrder   = false;
 bool            transCFG        = false;
 bool            collectBCStats  = false;
 bool            inclusiveStats  = false;
 bool            verboseStats    = false;
 bool            hostOpcodes     = false;
-folly::Optional<MD5> md5Filter;
+folly::Optional<SHA1> sha1Filter;
 PerfEventType   sortBy          = EVENT_CYCLES;
 bool            sortByDensity   = false;
 bool            sortBySize      = false;
@@ -78,6 +83,8 @@ std::vector<uint32_t> transPrintOrder;
 RepoWrapper*      g_repo;
 OfflineTransData* g_transData;
 OfflineCode*   transCode;
+
+std::unique_ptr<AnnotationCache> g_annotations;
 
 const char* kListKeyword = "list";
 TCPrintLogger* g_logger;
@@ -121,7 +128,7 @@ void usage() {
     "    -p <FILE>       : uses raw profile data from <FILE>\n"
     "    -s              : prints all translations sorted by creation "
     "order\n"
-    "    -u <MD5>        : prints all translations from the specified "
+    "    -u <SHA1>        : prints all translations from the specified "
     "unit\n"
     "    -t <NUMBER>     : prints top <NUMBER> translations according to "
     "profiling info\n"
@@ -152,8 +159,11 @@ void usage() {
     "    -v <PERCENTAGE> : sets the minimum percentage to <PERCENTAGE> "
     "when printing the top helpers (implies -i). The lower the percentage,"
     " the more helpers that will show up.\n"
+    "    -j              : outputs tc-dump in JSON format (not compatible with "
+    "some other flags).\n"
+    // TODO(elijahrivera) - investigate compatibility with other flags
     #ifdef FACEBOOK
-    "   -x               : log translations to database"
+    "    -x              : log translations to database\n"
     #endif
     "    -h              : prints help message\n",
     kListKeyword,
@@ -182,7 +192,7 @@ void parseOptions(int argc, char *argv[]) {
   int c;
   opterr = 0;
   char* sortByArg = nullptr;
-  while ((c = getopt (argc, argv, "hc:Dd:f:g:ip:st:u:S:T:o:e:E:bB:v:k:a:A:n:x"))
+  while ((c = getopt(argc, argv, "hc:Dd:f:g:ip:st:u:S:T:o:e:E:bB:v:k:a:A:n:jx"))
          != -1) {
     switch (c) {
       case 'A':
@@ -234,7 +244,7 @@ void parseOptions(int argc, char *argv[]) {
         break;
       case 'u':
         if (strlen(optarg) == 32) {
-          md5Filter = MD5(optarg);
+          sha1Filter = SHA1(optarg);
         } else {
           usage();
           exit(1);
@@ -309,6 +319,9 @@ void parseOptions(int argc, char *argv[]) {
         }
       case 'o':
         hostOpcodes = true;
+        break;
+      case 'j':
+        useJSON = true;
         break;
       #ifdef FACEBOOK
       case 'x':
@@ -502,6 +515,180 @@ void loadProfData() {
   }
 }
 
+const char* getDisasmStr(OfflineCode* code,
+                         TCA startAddr,
+                         uint32_t len,
+                         const std::vector<TransBCMapping>& bcMap,
+                         const PerfEventsMap<TCA>& perfEvents,
+                         bool hostOpcodes) {
+  std::ostringstream os;
+  code->printDisasm(os, startAddr, len, bcMap, perfEvents, hostOpcodes);
+  return os.str().c_str();
+}
+
+namespace get_json {
+
+using folly::dynamic;
+
+std::string show(TCA tca) {
+  return folly::sformat("{}", static_cast<void*>(tca));
+}
+
+dynamic getAnnotations(const Annotations& annotations) {
+  dynamic annotationObjs = dynamic::array;
+  for (auto const& annotation : annotations) {
+    auto const rawValue = g_annotations->getAnnotation(annotation.second);
+    dynamic annotationValue;
+    try {
+      annotationValue = folly::parseJson(rawValue);
+    }
+    catch (const std::runtime_error&){
+      annotationValue = rawValue;
+    }
+    annotationObjs.push_back(dynamic::object("caption", annotation.first)
+                                            ("value", annotationValue));
+  }
+  return annotationObjs;
+}
+
+dynamic getTransRec(const TransRec* tRec,
+                    const PerfEventsMap<TransID>& transPerfEvents) {
+  auto const guards = dynamic(tRec->guards.begin(), tRec->guards.end());
+
+  auto const resumeMode = [&] {
+    switch (tRec->src.resumeMode()) {
+      case ResumeMode::None: return "None";
+      case ResumeMode::Async: return "Async";
+      case ResumeMode::GenIter: return "GenIter";
+    }
+    always_assert(false);
+  }();
+
+  const dynamic src = dynamic::object("sha1", tRec->sha1.toString())
+                                     ("funcId", tRec->src.funcID())
+                                     ("funcName", tRec->funcName)
+                                     ("resumeMode", resumeMode)
+                                     ("hasThis", tRec->src.hasThis())
+                                     ("prologue", tRec->src.prologue())
+                                     ("bcStartOffset", tRec->src.offset())
+                                     ("guards", guards);
+
+  const dynamic result = dynamic::object("id", tRec->id)
+                                        ("src", src)
+                                        ("kind", show(tRec->kind))
+                                        ("hasLoop", tRec->hasLoop)
+                                        ("aStart", show(tRec->aStart))
+                                        ("aLen", tRec->aLen)
+                                        ("coldStart", show(tRec->acoldStart))
+                                        ("coldLen", tRec->acoldLen)
+                                        ("frozenStart",
+                                         show(tRec->afrozenStart))
+                                        ("frozenLen", tRec->afrozenLen)
+                                        ("annotations",
+                                         getAnnotations(tRec->annotations));
+
+  return result;
+}
+
+dynamic getPerfEvents(const PerfEventsMap<TransID>& transPerfEvents,
+                      const TransID transId) {
+  dynamic eventsObj = dynamic::object();
+  auto const events = transPerfEvents.getAllEvents(transId);
+
+  bool hasEvents = false;
+  for (auto const c : events) {
+    if (c) hasEvents = true;
+  }
+  if (!hasEvents) return eventsObj;
+
+  auto const numEvents = getNumEventTypes();
+  for (int i = 0; i < numEvents; i++) {
+    auto const event = static_cast<PerfEventType>(i);
+    auto const eventName = eventTypeToCommandLineArgument(event);
+    eventsObj[eventName] = events[i];
+  }
+
+  return eventsObj;
+}
+
+dynamic getTrans(TransID transId) {
+  always_assert(transId < NTRANS);
+
+  auto const* tRec = TREC(transId);
+  if (!tRec->isValid()) return dynamic();
+
+  auto const transRec = getTransRec(tRec, transPerfEvents);
+  auto const perfEvents = getPerfEvents(transPerfEvents, transId);
+
+  dynamic blocks = dynamic::array;
+  for (auto const& block : tRec->blocks) {
+    std::stringstream byteInfo; // TODO(elijahrivera) - translate to actual data
+
+    auto const unit = g_repo->getUnit(block.sha1);
+    if (unit) {
+      auto const newFunc = unit->getFunc(block.bcStart);
+      always_assert(newFunc);
+      newFunc->prettyPrint(byteInfo, HPHP::Func::PrintOpts().noFpi()
+                                                            .noMetadata());
+      unit->prettyPrint(byteInfo, HPHP::Unit::PrintOpts().range(block.bcStart,
+                                                                block.bcPast)
+                                                         .noFuncs());
+    }
+
+    blocks.push_back(dynamic::object("sha1", block.sha1.toString())
+                                    ("start", block.bcStart)
+                                    ("end", block.bcPast)
+                                    ("unit", unit ?
+                                             byteInfo.str() :
+                                             dynamic()));
+  }
+
+  const dynamic mainDisasm = tRec->aLen ?
+                             transCode->getDisasm(tRec->aStart,
+                                                  tRec->aLen,
+                                                  tRec->bcMapping,
+                                                  tcaPerfEvents,
+                                                  hostOpcodes) :
+                             dynamic();
+
+  auto const coldIsFrozen = tRec->acoldStart == tRec->afrozenStart;
+  const dynamic coldDisasm = !coldIsFrozen && tRec->acoldLen ?
+                             transCode->getDisasm(tRec->acoldStart,
+                                                  tRec->acoldLen,
+                                                  tRec->bcMapping,
+                                                  tcaPerfEvents,
+                                                  hostOpcodes) :
+                             dynamic();
+  const dynamic frozenDisasm = tRec -> afrozenLen ?
+                               transCode->getDisasm(tRec->afrozenStart,
+                                                    tRec->afrozenLen,
+                                                    tRec->bcMapping,
+                                                    tcaPerfEvents,
+                                                    hostOpcodes) :
+                               dynamic();
+  const dynamic disasmObj = dynamic::object("main", mainDisasm)
+                                           ("cold", coldDisasm)
+                                           ("frozen", frozenDisasm);
+
+  return dynamic::object("transRec", transRec)
+                        ("blocks", blocks)
+                        ("archName", transCode->getArchName())
+                        ("regions", disasmObj)
+                        ("perfEvents", perfEvents);
+}
+
+dynamic getTC() {
+  dynamic translations = dynamic::array;
+  for (uint32_t t = 0; t < NTRANS; t++) {
+    translations.push_back(getTrans(t));
+  }
+
+  return dynamic::object("configFile", configFile)
+                        ("repoSchema", repoSchemaId().begin())
+                        ("translations", translations);
+}
+}
+
 // Prints the metadata, bytecode, and disassembly for the given translation
 void printTrans(TransID transId) {
   always_assert(transId < NTRANS);
@@ -517,11 +704,11 @@ void printTrans(TransID transId) {
     const Func* curFunc = nullptr;
     for (auto& block : tRec->blocks) {
       std::stringstream byteInfo;
-      auto unit = g_repo->getUnit(block.md5);
+      auto unit = g_repo->getUnit(block.sha1);
       if (!unit) {
         byteInfo << folly::format(
           "<<< couldn't find unit {} to print bytecode range [{},{}) >>>\n",
-          block.md5, block.bcStart, block.bcPast);
+          block.sha1, block.bcStart, block.bcPast);
         continue;
       }
 
@@ -542,24 +729,36 @@ void printTrans(TransID transId) {
 
   g_logger->printGeneric("----------\n%s: main\n----------\n",
                          transCode->getArchName());
-  transCode->printDisasm(tRec->aStart, tRec->aLen, tRec->bcMapping,
-                         tcaPerfEvents, hostOpcodes);
+  g_logger->printAsm("%s", getDisasmStr(transCode,
+                                        tRec->aStart,
+                                        tRec->aLen,
+                                        tRec->bcMapping,
+                                        tcaPerfEvents,
+                                        hostOpcodes));
 
   g_logger->printGeneric("----------\n%s: cold\n----------\n",
                          transCode->getArchName());
   // Sometimes acoldStart is the same as afrozenStart.  Avoid printing the code
   // twice in such cases.
   if (tRec->acoldStart != tRec->afrozenStart) {
-    transCode->printDisasm(tRec->acoldStart, tRec->acoldLen, tRec->bcMapping,
-                           tcaPerfEvents, hostOpcodes);
+    g_logger->printAsm("%s", getDisasmStr(transCode,
+                                          tRec->acoldStart,
+                                          tRec->acoldLen,
+                                          tRec->bcMapping,
+                                          tcaPerfEvents,
+                                          hostOpcodes));
   }
 
   g_logger->printGeneric("----------\n%s: frozen\n----------\n",
                          transCode->getArchName());
-  transCode->printDisasm(tRec->afrozenStart, tRec->afrozenLen, tRec->bcMapping,
-                         tcaPerfEvents, hostOpcodes);
-
+  g_logger->printAsm("%s", getDisasmStr(transCode,
+                                        tRec->afrozenStart,
+                                        tRec->afrozenLen,
+                                        tRec->bcMapping,
+                                        tcaPerfEvents,
+                                        hostOpcodes));
   g_logger->printGeneric("----------\n");
+
 }
 
 
@@ -795,7 +994,7 @@ void printTopBytecodes(const OfflineTransData* tdata,
     const TransFragment& tfrag = ranking[i].second;
     const TransRec* trec = tdata->getTransRec(tfrag.tid);
 
-    Unit* unit = g_repo->getUnit(trec->md5);
+    Unit* unit = g_repo->getUnit(trec->sha1);
     always_assert(unit);
 
     g_logger->printGeneric("\n====================\n");
@@ -807,27 +1006,30 @@ void printTopBytecodes(const OfflineTransData* tdata,
 
     g_logger->printGeneric("----------\n%s: main\n----------\n",
                            olCode->getArchName());
-    olCode->printDisasm(tfrag.aStart,
-                        tfrag.aLen,
-                        trec->bcMapping,
-                        samples,
-                        hostOpcodes);
+    g_logger->printAsm("%s", getDisasmStr(olCode,
+                                          tfrag.aStart,
+                                          tfrag.aLen,
+                                          trec->bcMapping,
+                                          samples,
+                                          hostOpcodes));
 
     g_logger->printGeneric("----------\n%s: cold\n----------\n",
                            olCode->getArchName());
-    olCode->printDisasm(tfrag.acoldStart,
-                        tfrag.acoldLen,
-                        trec->bcMapping,
-                        samples,
-                        hostOpcodes);
+    g_logger->printAsm("%s", getDisasmStr(olCode,
+                                          tfrag.acoldStart,
+                                          tfrag.acoldLen,
+                                          trec->bcMapping,
+                                          samples,
+                                          hostOpcodes));
 
     g_logger->printGeneric("----------\n%s: frozen\n----------\n",
                            olCode->getArchName());
-    olCode->printDisasm(tfrag.afrozenStart,
-                        tfrag.afrozenLen,
-                        trec->bcMapping,
-                        samples,
-                        hostOpcodes);
+    g_logger->printAsm("%s", getDisasmStr(olCode,
+                                          tfrag.afrozenStart,
+                                          tfrag.afrozenLen,
+                                          trec->bcMapping,
+                                          samples,
+                                          hostOpcodes));
   }
 }
 
@@ -859,7 +1061,8 @@ int main(int argc, char *argv[]) {
                               g_transData->getProfBase(),
                               g_transData->getColdBase(),
                               g_transData->getFrozenBase());
-  g_repo = new RepoWrapper(g_transData->getRepoSchema(), configFile);
+  g_repo = new RepoWrapper(g_transData->getRepoSchema(), configFile, !useJSON);
+  g_annotations = std::make_unique<AnnotationCache>(dumpDir);
 
   loadProfData();
 
@@ -898,13 +1101,15 @@ int main(int argc, char *argv[]) {
                       tcaPerfEvents,
                       sortBy,
                       filterByOpcode);
+  } else if (useJSON) {
+    std::cout << get_json::getTC() << std::endl;
   } else {
     // Print all translations in original order, filtered by unit if desired.
     for (uint32_t t = 0; t < NTRANS; t++) {
       auto tRec = TREC(t);
       if (!tRec->isValid()) continue;
       if (tRec->kind == TransKind::Anchor) continue;
-      if (md5Filter && tRec->md5 != *md5Filter) continue;
+      if (sha1Filter && tRec->sha1 != *sha1Filter) continue;
 
       printTrans(t);
       bool opt = (tRec->kind == TransKind::OptPrologue

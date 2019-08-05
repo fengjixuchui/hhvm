@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $xml = simplexml_load_string('<xml></xml>');
 
 $str = "abc & def" ;
@@ -15,4 +15,4 @@ $xml["a3"] = $str ;
 $xml["a4"] = $str ;
 
 echo $xml->asXML();
-?>
+}

@@ -1,7 +1,7 @@
-<?php
+<?hh
 // TODO: Add more encoding names
 
-//$debug=true;
+
 ini_set('include_path', dirname(__FILE__));
 include_once('common.inc');
 
@@ -37,6 +37,3 @@ echo "== INVALID PARAMETER ==\n";
 // Invalid name
 $r = mb_preferred_mime_name('BAD_NAME');
 ($r === FALSE) ? print("OK_BAD_NAME\n") : print("NG_BAD_NAME\n");
-
-?>
-

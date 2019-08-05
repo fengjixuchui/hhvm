@@ -285,6 +285,8 @@ struct Vgen {
   void emit(const addsd& i) { a->Fadd(D(i.d), D(i.s1), D(i.s0)); }
   void emit(const andb& i) { a->And(W(i.d), W(i.s1), W(i.s0), UF(i.fl)); }
   void emit(const andbi& i) { a->And(W(i.d), W(i.s1), i.s0.ub(), UF(i.fl)); }
+  void emit(const andw& i) { a->And(W(i.d), W(i.s1), W(i.s0), UF(i.fl)); }
+  void emit(const andwi& i) { a->And(W(i.d), W(i.s1), i.s0.uw(), UF(i.fl)); }
   void emit(const andl& i) { a->And(W(i.d), W(i.s1), W(i.s0), UF(i.fl)); }
   void emit(const andli& i) { a->And(W(i.d), W(i.s1), i.s0.l(), UF(i.fl)); }
   void emit(const andq& i) { a->And(X(i.d), X(i.s1), X(i.s0), UF(i.fl)); }
@@ -328,6 +330,7 @@ struct Vgen {
   void emit(const jmpr& i) { a->Br(X(i.target)); }
   void emit(const lea& i);
   void emit(const leap& i);
+  void emit(const leav& i);
   void emit(const lead& i);
   void emit(const loadb& i) { a->Ldrb(W(i.d), M(i.s)); }
   void emit(const loadl& i) { a->Ldr(W(i.d), M(i.s)); }
@@ -358,7 +361,10 @@ struct Vgen {
   void emit(const nop& /*i*/) { a->Nop(); }
   void emit(const notb& i) { a->Mvn(W(i.d), W(i.s)); }
   void emit(const not& i) { a->Mvn(X(i.d), X(i.s)); }
+  void emit(const orbi& i);
   void emit(const orq& i);
+  void emit(const orwi& i);
+  void emit(const orli& i);
   void emit(const orqi& i);
   void emit(const pop& i);
   void emit(const popp& i);
@@ -616,7 +622,7 @@ void Vgen::patch(Venv& env) {
     patchTarget32(targetAddr, target);
   };
 
-  for (auto& p : env.jmps) {
+  for (auto const& p : env.jmps) {
     auto addr = toReal(env, p.instr);
     auto const target = env.addrs[p.target];
     assertx(target);
@@ -628,7 +634,7 @@ void Vgen::patch(Venv& env) {
     // Patch the address we are jumping to.
     patch(addr, target);
   }
-  for (auto& p : env.jccs) {
+  for (auto const& p : env.jccs) {
     auto addr = toReal(env, p.instr);
     auto const target = env.addrs[p.target];
     assertx(target);
@@ -643,6 +649,10 @@ void Vgen::patch(Venv& env) {
       addr += kInstructionSize;
     }
     patch(addr, target);
+  }
+  for (auto const& p : env.leas) {
+    (void)p;
+    not_implemented();
   }
 }
 
@@ -751,7 +761,7 @@ void Vgen::emit(const mcprep& i) {
    *
    * We set the low bit for two reasons: the Class* will never be a valid
    * Class*, so we'll always miss the inline check before it's smashed, and
-   * handlePrimeCacheInit can tell it's not been smashed yet
+   * MethodCache::handleStaticCall can tell it's not been smashed yet
    */
 
   align(*env.cb, &env.meta, Alignment::SmashMovq, AlignContext::Live);
@@ -1036,6 +1046,12 @@ void Vgen::emit(const lea& i) {
   }
 }
 
+void Vgen::emit(const leav& i) {
+  auto const addr = a->frontier();
+  emit(leap{reg::rip[0xdeadbeef], i.d});
+  env.leas.push_back({addr, i.s});
+}
+
 void Vgen::emit(const leap& i) {
   vixl::Label imm_data;
   vixl::Label after_data;
@@ -1090,6 +1106,9 @@ void Vgen::emit(const vasm_opc& i) {                  \
   }                                                   \
 }
 
+Y(orbi, Orr, W, i.s0.ub(), wzr);
+Y(orwi, Orr, W, i.s0.uw(), xzr);
+Y(orli, Orr, W, i.s0.l(), xzr);
 Y(orqi, Orr, X, i.s0.q(), xzr);
 Y(orq, Orr, X, X(i.s0), xzr);
 Y(xorb, Eor, W, W(i.s0), wzr);

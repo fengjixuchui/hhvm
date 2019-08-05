@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $booleans = array(
 '1' => true,
 'On' => true,
@@ -18,9 +18,9 @@ $booleans = array(
 
 foreach($booleans as $val=>$exp) {
     $res =filter_var($val, FILTER_VALIDATE_BOOLEAN);
-	    if ($res !== $exp) {
+        if ($res !== $exp) {
         echo "$val failed,'$exp' expect, '$res' received.\n";
     }
 }
 echo "Ok.";
-?>
+}

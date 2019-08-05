@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function __autoload($class_name)
 {
@@ -8,5 +8,4 @@ function __autoload($class_name)
 
 var_dump(get_class_methods('autoload_root'));
 
-?>
-===DONE===
+echo "===DONE===\n";

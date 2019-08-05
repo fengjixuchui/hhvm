@@ -7,7 +7,7 @@
  *
  *)
 open Core_kernel
-open Nast
+open Aast
 open Typing_defs
 
 module Env = Typing_env
@@ -25,33 +25,32 @@ let check_param : Env.env -> Nast.fun_param -> unit =
   let rec check_memoizable: Env.env -> locl ty -> unit =
     fun env ty ->
     let env, ty = Env.expand_type env ty in
+    let ety_env = Typing_phase.env_with_self env in
+    let env, ty, _ =
+      Typing_tdef.force_expand_typedef ~ety_env env ty in
     match ty with
     | _, (Tprim (Tnull | Tarraykey | Tbool | Tint | Tfloat | Tstring | Tnum)
-         | Tnonnull | Tany | Terr | Tabstract (AKenum _, _) | Tdynamic) ->
+         | Tnonnull | Tany | Terr | Tdynamic) ->
        ()
     | _, Tprim (Tvoid | Tresource | Tnoreturn) -> error ty
     | _, Toption ty -> check_memoizable env ty
     | _, Ttuple tyl -> List.iter tyl (check_memoizable env)
-    | _, Tabstract (AKnewtype (_, _), _) ->
-      let env, t', _ =
-        let ety_env = Typing_phase.env_with_self env in
-        Typing_tdef.force_expand_typedef ~ety_env env ty in
-      check_memoizable env t'
     (* Just accept all generic types for now. Stricter check_memoizables to come later. *)
     | _, Tabstract (AKgeneric _, _) ->
       ()
     (* For parameter type 'this::TID' defined by 'type const TID as Bar' check_memoizables
-     * Bar recursively.
+     * Bar recursively. Also enums represented using AKnewtype.
      *)
-    | _, Tabstract (AKdependent _, Some ty) -> check_memoizable env ty
-    (* Allow unconstrined dependent type `abstract type const TID` just as we
+    | _, Tabstract ((AKnewtype _ | AKdependent _), Some ty) -> check_memoizable env ty
+    (* Allow unconstrained dependent type `abstract type const TID` just as we
      * allow unconstrained generics. *)
-    | _, Tabstract (AKdependent _, None) -> ()
-    (* Handling Tunresolved case here for completeness, even though it
+    | _, Tabstract (_, None) -> ()
+    (* Handling Tunion and Tintersection case here for completeness, even though it
      * shouldn't be possible to have an unresolved type when check_memoizableing
      * the method declaration. No corresponding test case for this.
      *)
-    | _, Tunresolved tyl -> List.iter tyl (check_memoizable env)
+    | _, Tunion tyl
+    | _, Tintersection tyl -> List.iter tyl (check_memoizable env)
     (* Allow untyped arrays. *)
     | _, Tarraykind AKany
     | _, Tarraykind AKempty ->
@@ -70,27 +69,29 @@ let check_param : Env.env -> Nast.fun_param -> unit =
         check_memoizable env sft_ty
       end fdm
     | r, Tclass _ ->
-      let env = Env.open_tyvars env in
-      let env, type_param = Env.fresh_unresolved_type env (Reason.to_pos r) in
+      let p = Reason.to_pos r in
+      let env = Env.open_tyvars env p in
+      let env, type_param = Env.fresh_type env p in
       let container_type = MakeType.container Reason.none type_param in
       let env, is_container =
         Errors.try_
           (fun () ->
-            SubType.sub_type env ty container_type, true)
+            SubType.sub_type env ty container_type Errors.unify_error, true)
           (fun _ -> env, false) in
       let env = Env.set_tyvar_variance env container_type in
-      let env = SubType.close_tyvars_and_solve env in
+      let env = Typing_solver.close_tyvars_and_solve env Errors.unify_error in
       if is_container then
         check_memoizable env type_param
       else
         let r, _ = ty in
         let memoizable_type = MakeType.class_type r SN.Classes.cIMemoizeParam [] in
-        if SubType.is_sub_type env ty memoizable_type
+        if Typing_solver.is_sub_type env ty memoizable_type
         then ()
         else error ty;
     | _, Tfun _
     | _, Tvar _
     | _, Tanon (_, _)
+    | _, Tdestructure _
     | _, Tobject -> error ty
   in
   match param_hint with

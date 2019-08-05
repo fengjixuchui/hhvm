@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_values(array $input)
  * Description: Return just the values from the input array 
  * Source code: ext/standard/array.c
@@ -8,7 +8,7 @@
  * Pass arrays where the keys are different data types as $input argument
  * to array_values() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_values() : usage variations ***\n";
 
 //get an unset variable
@@ -98,5 +98,4 @@ foreach($inputs as $key => $input) {
   $iterator++;
 };
 echo "Done";
-?>
-
+}

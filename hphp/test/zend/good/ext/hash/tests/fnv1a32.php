@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $tests = array(
 	array( 'l', 'e90c310b' ),
 	array( 'b', 'e70c2de5' ),
@@ -317,4 +317,4 @@ foreach($tests as $test) {
 if($pass) {
 	echo "PASS";
 }
-?>
+}

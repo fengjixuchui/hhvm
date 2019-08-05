@@ -10,10 +10,11 @@
 (* Typing code concerned the <<__PPL>> attribute. *)
 open Core_kernel
 open Typing_defs
-open Tast
-open Decl_defs
+open Aast
 
+module Cls = Decl_provider.Class
 module Env = Tast_env
+module TLazyHeap = Decl_provider
 
 let has_ppl_attribute c =
   List.exists
@@ -37,11 +38,11 @@ let check_ppl_class c =
   let error = Errors.extend_ppl c_pos child_class_string is_ppl in
   let check verb parent_class_string =
     function
-    | _, Nast.Happly ((_, name), _) ->
-      begin match Decl_heap.Classes.get name with
+    | _, Happly ((_, name), _) ->
+      begin match TLazyHeap.get_class name with
         | Some parent_type ->
-          if not (phys_equal parent_type.dc_ppl is_ppl)
-          then error parent_type.dc_pos parent_class_string parent_type.dc_name verb
+          if Cls.ppl parent_type <> is_ppl
+          then error (Cls.pos parent_type) parent_class_string (Cls.name parent_type) verb
           else ()
         | None -> ()
       end
@@ -49,8 +50,9 @@ let check_ppl_class c =
   List.iter (c.c_extends) (check "extend" "class");
   List.iter (c.c_implements) (check "implement" "interface");
   List.iter (c.c_uses) (check "use" "trait");
-  List.iter (c.c_req_extends) (check "require" "class");
-  List.iter (c.c_req_implements) (check "require" "interface")
+  let c_extends, c_implements = split_reqs c in
+  List.iter (c_extends) (check "require" "class");
+  List.iter (c_implements) (check "require" "interface")
 
 (**
  * When we call a method on an object, if the object is a <<__PPL>> object,
@@ -63,8 +65,8 @@ let check_ppl_obj_get env ((p, ty), e) =
     match snd (base_type ty) with
     | Tclass ((_, name), _, _) ->
       begin
-        match Decl_heap.Classes.get name with
-        | Some ({ dc_ppl = true; _ }) ->
+        match TLazyHeap.get_class name with
+        | Some cls when Cls.ppl cls ->
           if not @@ Env.get_inside_ppl_class env
           then Errors.invalid_ppl_call p "from a different class";
           if Env.get_inside_constructor env
@@ -104,16 +106,16 @@ let check_ppl_class_const env p e =
     else ()
   | CI (_, name) ->
     begin
-      match Decl_heap.Classes.get name with
-      | Some ({ dc_ppl = true; _ }) ->
+      match TLazyHeap.get_class name with
+      | Some cls when Cls.ppl cls ->
         Errors.invalid_ppl_static_call p "by classname. Use self::, static::, or parent::"
       | _ -> ()
     end
   | CIexpr e -> check_ppl_obj_get env e
 
 let check_ppl_meth_pointers p classname special_name =
-  match Decl_heap.Classes.get classname with
-  | Some ({ dc_ppl = true; _ }) -> Errors.ppl_meth_pointer p special_name
+  match TLazyHeap.get_class classname with
+  | Some cls when Cls.ppl cls -> Errors.ppl_meth_pointer p special_name
   | _ -> ()
 
 let check_ppl_inst_meth env ((p, ty), _) =
@@ -121,8 +123,8 @@ let check_ppl_inst_meth env ((p, ty), _) =
     match snd (base_type ty) with
     | Tclass ((_, name), _, _) ->
       begin
-        match Decl_heap.Classes.get name with
-        | Some ({ dc_ppl = true; _ }) -> Errors.ppl_meth_pointer p "inst_meth"
+        match TLazyHeap.get_class name with
+        | Some cls when Cls.ppl cls -> Errors.ppl_meth_pointer p "inst_meth"
         | _ -> ()
       end
     | _ -> () in

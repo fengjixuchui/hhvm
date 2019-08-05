@@ -1,4 +1,4 @@
-<?php
+<?hh
 class A {
     public static function who() {
         echo "A\n";
@@ -17,7 +17,7 @@ class B extends A {
 class C extends B {
     public function call($cb) {
         echo join('|', $cb) . "\n";
-        call_user_func($cb);
+        $cb();
     }
     public function test() {
         $this->call(array('parent', 'who'));
@@ -42,9 +42,6 @@ class E extends D {
     }
 }
 
-$o = new C;
-$o->test();
-
 class O {
     public function who() {
         echo "O\n";
@@ -60,20 +57,22 @@ class P extends O {
     }
     public function call($cb) {
         echo join('|', $cb) . "\n";
-        call_user_func($cb);
+        $cb();
     }
     public function test() {
         $this->call(array('parent', 'who'));
         $this->call(array('P', 'parent::who'));
         $this->call(array($this, 'O::who'));
-        $this->call(array($this, 'B::who'));
     }
 }
+<<__EntryPoint>> function main(): void {
+$o = new C;
+$o->test();
 
 echo "===FOREIGN===\n";
 
 $o = new P;
 $o->test();
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

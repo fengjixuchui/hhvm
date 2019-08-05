@@ -7,10 +7,10 @@ class C {
     echo "\n";
   }
   public static function test() {
-    // FPushClsMethodD
+    // FCallClsMethodD
     C::foo("a", "b", "c", "d");
 
-    // FPushClsMethod
+    // FCallClsMethod
     $cls = 'C';
     $cls::foo("a", "b", "c", "d");
     $fn = 'foo';
@@ -18,14 +18,12 @@ class C {
     $fn = 'foo';
     $cls::$fn("a", "b", "c", "d");
 
-    // FPushClsMethodF
+    // FCallClsMethodSD
     self::foo("a", "b", "c", "d");
   }
 }
 
+<<__EntryPoint>>
 function main() {
-  $obj = new C;
-  $obj->test();
+  C::test();
 }
-
-main();

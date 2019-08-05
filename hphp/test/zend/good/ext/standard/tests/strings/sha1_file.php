@@ -1,9 +1,9 @@
-<?php
+<?hh
 
 /* Prototype: string sha1_file( string filename[, bool raw_output] )
  * Description: Calculate the sha1 hash of a file
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sha1_file() : basic functionality ***\n";
 
 /* Creating an empty file */
@@ -14,7 +14,7 @@ return false;
 if (($handle2 = fopen( "sha1_DataFile.txt", "w+")) == FALSE)
 return false;
 
-/* Writing into file */ 
+/* Writing into file */
 $filename = "sha1_DataFile.txt";
 $content = b"Add this to the file\n";
 if (is_writable($filename)) {
@@ -24,7 +24,7 @@ if (is_writable($filename)) {
   }
 }
 
-// close the files 
+// close the files
 fclose($handle);
 fclose($handle2);
 
@@ -36,12 +36,6 @@ var_dump( sha1_file("") );
 
 echo "\n-- invalid filename --\n";
 var_dump( sha1_file("rewncwYcn89q") );
-
-echo "\n-- Scalar value as filename --\n";
-var_dump( sha1_file(12) );
-
-echo "\n-- NULL as filename --\n";
-var_dump( sha1_file(NULL) );
 
 echo "\n-- Zero arguments --\n";
  try { var_dump ( sha1_file() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
@@ -65,5 +59,5 @@ var_dump ( bin2hex(sha1_file("sha1_DataFile.txt", true)));
 unlink("sha1_DataFile.txt");
 unlink("sha1_EmptyFile.txt");
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

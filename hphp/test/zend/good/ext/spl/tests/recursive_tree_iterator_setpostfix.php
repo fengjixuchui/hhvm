@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $arr = array(
 	0 => array(
 		"a",
@@ -48,5 +48,5 @@ foreach($it as $k => $v) {
 
 
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

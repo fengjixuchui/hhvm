@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class C {
   function simpleRet() {
@@ -12,7 +12,8 @@ function foo() {
   var_dump($x);
   var_dump($y);
 }
-
+<<__EntryPoint>> function main(): void {
 foo();
 
 echo "End\n";
+}

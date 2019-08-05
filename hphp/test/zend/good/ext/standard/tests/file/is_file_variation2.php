@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype: bool is_file ( string $filename );
    Description: Tells whether the filename is a regular file
      Returns TRUE if the filename exists and is a regular file
 */
 
 /* Creating soft and hard links to a file and applying is_file() on links */ 
-
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 fclose( fopen($file_path."/is_file_variation2.tmp", "w") );
 
@@ -21,11 +21,9 @@ var_dump( is_file($file_path."/is_file_variation2_link.tmp") );  // expected: tr
 clearstatcache();
 
 echo "\n*** Done ***";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 unlink($file_path."/is_file_variation2_symlink.tmp");
 unlink($file_path."/is_file_variation2_link.tmp");
 unlink($file_path."/is_file_variation2.tmp");
-?>
+}

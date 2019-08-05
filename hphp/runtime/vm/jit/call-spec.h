@@ -23,6 +23,7 @@
 #include "hphp/runtime/vm/jit/vasm-reg.h"
 
 #include "hphp/runtime/base/array-data.h"
+#include "hphp/runtime/base/record-data.h"
 #include "hphp/runtime/vm/class-meth-data-ref.h"
 
 #include <array>
@@ -104,6 +105,17 @@ template<typename A> struct jit_cpp_type<
   static auto constexpr type() { return TArrLike; }
 };
 
+template<typename A> struct jit_cpp_type<
+  A*, std::enable_if_t<std::is_base_of<RecordData, A>::value>
+> {
+  static auto constexpr type() { return TRecord; }
+};
+
+template<typename A> struct jit_cpp_type<
+  A*, std::enable_if_t<std::is_base_of<RecordDesc, A>::value>
+> {
+  static auto constexpr type() { return TRecDesc; }
+};
 /*
  * Parameter types: Many helper functions take various enums or pointers to
  * runtime types that have no jit::Type equivalent. These are usually passed as
@@ -225,6 +237,14 @@ struct CallSpec {
      * TODO(#8425101): Make this true.
      */
     Stub,
+
+    /*
+     * Call the appropriate release function for an object.
+     *
+     * A Vreg containing the object's class is used to determine the correct
+     * function to call.
+     */
+    ObjDestructor
   };
 
   CallSpec() = delete;
@@ -241,7 +261,7 @@ struct CallSpec {
    */
   template<class Ret, class... Args>
   static CallSpec direct(Ret (*fp)(Args...), const FuncType* type) {
-    return CallSpec{Kind::Direct, reinterpret_cast<void*>(fp), type};
+    return CallSpec { Kind::Direct, reinterpret_cast<void*>(fp), type };
   }
 
   template<class F>
@@ -309,6 +329,13 @@ struct CallSpec {
     return CallSpec { Kind::Stub, addr };
   }
 
+  /*
+   * A Destructor for an object with class `cls'.
+   */
+  static CallSpec objDestruct(Vreg cls) {
+    return CallSpec { Kind::ObjDestructor, cls };
+  }
+
   /////////////////////////////////////////////////////////////////////////////
   // Accessors.
 
@@ -338,7 +365,8 @@ struct CallSpec {
    * The register containing the DataType, for Destructor calls.
    */
   Vreg reg() const {
-    assertx(kind() == Kind::Destructor);
+    assertx(kind() == Kind::Destructor ||
+            kind() == Kind::ObjDestructor);
     return m_u.reg;
   }
 
@@ -369,6 +397,7 @@ struct CallSpec {
       case CallSpec::Kind::ArrayVirt:  return arrayTable() == o.arrayTable();
       case CallSpec::Kind::Destructor: return reg() == o.reg();
       case CallSpec::Kind::Stub:       return stubAddr() == o.stubAddr();
+      case CallSpec::Kind::ObjDestructor: return reg() == o.reg();
     }
     always_assert(false);
   }

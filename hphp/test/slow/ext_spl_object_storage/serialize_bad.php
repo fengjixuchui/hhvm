@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 try {
     $s = new SplObjectStorage();
     $s->unserialize('s:31:"something which is not an array";');
@@ -19,4 +19,4 @@ try {
 }
 
 var_dump($s->count() == 0);
-?>
+}

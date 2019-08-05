@@ -35,14 +35,7 @@ struct apcExtension final : Extension {
   static std::string PrimeLibrary;
   static int LoadThread;
   static std::set<std::string> CompletionKeys;
-  enum class TableTypes {
-    ConcurrentTable
-  };
-  static TableTypes TableType;
   static bool EnableApcSerialize;
-  static int64_t KeyMaturityThreshold;
-  static int64_t MaximumCapacity;
-  static int KeyFrequencyUpdatePeriod;
   static bool ExpireOnSets;
   static int PurgeFrequency;
   static int PurgeRate;
@@ -61,7 +54,6 @@ struct apcExtension final : Extension {
   static int FileStorageAdviseOutPeriod;
   static std::string FileStorageFlagKey;
   static bool FileStorageKeepFileLinked;
-  static std::vector<std::string> NoTTLPrefix;
   static bool UseUncounted;
   static bool ShareUncounted;
   static bool Stat;
@@ -86,9 +78,7 @@ Variant HHVM_FUNCTION(apc_store,
 bool HHVM_FUNCTION(apc_store_as_primed_do_not_use,
                    const String& key,
                    const Variant& var);
-TypedValue HHVM_FUNCTION(apc_fetch,
-                         const Variant& key,
-                         VRefParam success = uninit_null());
+TypedValue HHVM_FUNCTION(apc_fetch, const Variant& key, bool& success);
 Variant HHVM_FUNCTION(apc_delete,
                       const Variant& key);
 bool HHVM_FUNCTION(apc_clear_cache,
@@ -180,9 +170,16 @@ static_assert(sizeof(int64_t) == sizeof(long long),
 ///////////////////////////////////////////////////////////////////////////////
 // apc serialization
 
-String apc_serialize(const_variant_ref value);
-inline String apc_serialize(const Variant& var) {
-  return apc_serialize(const_variant_ref{var});
+enum APCSerializeMode {
+  Normal,
+  Prime
+};
+
+String apc_serialize(const_variant_ref value,
+                     APCSerializeMode mode = APCSerializeMode::Normal);
+inline String apc_serialize(const Variant& var,
+                            APCSerializeMode mode = APCSerializeMode::Normal) {
+  return apc_serialize(const_variant_ref{var}, mode);
 }
 Variant apc_unserialize(const char* data, int len);
 String apc_reserialize(const String& str);

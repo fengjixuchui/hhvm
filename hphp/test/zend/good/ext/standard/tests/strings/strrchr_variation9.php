@@ -1,25 +1,25 @@
-<?php
+<?hh
 /* Prototype  : string strrchr(string $haystack, string $needle);
  * Description: Finds the last occurrence of a character in a string.
  * Source code: ext/standard/string.c
 */
 
-/* Test strrchr() function with unexpected inputs for haystack 
- *  and expected type for 'needle' 
+/* Test strrchr() function with unexpected inputs for haystack
+ *  and expected type for 'needle'
 */
-
-echo "*** Testing strrchr() function: with unexpected inputs for haystack ***\n";
-
-// get an unset variable
-$unset_var = 'string_val';
-unset($unset_var);
 
 // declaring a class
 class sample  {
   public function __toString() {
     return "object";
-  } 
+  }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing strrchr() function: with unexpected inputs for haystack ***\n";
+
+// get an unset variable
+$unset_var = 'string_val';
+unset($unset_var);
 
 //getting the resource
 $file_handle = fopen(__FILE__, "r");
@@ -105,7 +105,7 @@ $needles =  array (
   //empty string
   "",
   '',
- 
+
   //resource variable in string form
   "\$file_handle",
 
@@ -125,4 +125,4 @@ for($index = 0; $index < count($haystacks); $index++) {
 fclose($file_handle);  //closing the file handle
 
 echo "*** Done ***";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Test
 {
@@ -7,7 +7,7 @@ class Test
         throw new Exception($msg);
     }
 }
-
+<<__EntryPoint>> function main(): void {
 try
 {
     $o = new Test('Hello');
@@ -18,5 +18,5 @@ catch (Exception $e)
     echo 'Caught ' . get_class($e) . '(' . $e->getMessage() . ")\n";
 }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

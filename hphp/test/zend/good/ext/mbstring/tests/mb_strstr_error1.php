@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : string mb_strstr(string haystack, string needle[, bool part[, string encoding]])
  * Description: Finds first occurrence of a string within another 
  * Source code: ext/mbstring/mbstring.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mb_strstr() : error conditions ***\n";
 
 
@@ -22,5 +22,5 @@ echo "\n-- Testing mb_strstr() function with less than expected no. of arguments
 $haystack = b'string_val';
 try { var_dump( mb_strstr($haystack) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -58,10 +58,10 @@ function array_combine($keys, $values);
 <<__PHPStdLib, __Rx>>
 function array_count_values($input);
 <<__PHPStdLib, __Rx>>
-function array_column<Tk as arraykey, Tv>(
-  array<array<Tk, Tv>> $array,
-  ?Tk $column_key,
-  ?Tk $index_key = null,
+function array_column(
+  array<array<arraykey, mixed>> $array,
+  ?arraykey $column_key,
+  ?arraykey $index_key = null,
 ): array;
 <<__PHPStdLib, __Rx>>
 function array_fill_keys($keys, $value);
@@ -85,8 +85,8 @@ function array_flip($trans);
 <<__PHPStdLib, __Rx>>
 function key_exists($key, $search);
 <<__PHPStdLib, __Rx>>
-function array_keys<Tk as arraykey, Tv>(
-  KeyedContainer<Tk, Tv> $input,
+function array_keys<Tk as arraykey>(
+  KeyedContainer<Tk, mixed> $input,
 ): varray<Tk>;
 /**
  * array_map signature is rewritten based on the arity of the call:
@@ -112,25 +112,36 @@ function array_keys<Tk as arraykey, Tv>(
  * X (unknown type)      -> R = Y (other unknown type)
  */
 <<__PHPStdLib>>
-function array_map($callback, $arr1, ...);
+function array_map($callback, $arr1, ...$args);
 <<__PHPStdLib, __Rx>>
-function array_merge_recursive($array1, ...);
+function array_merge_recursive($array1, ...$args);
 <<__PHPStdLib, __Rx>>
-function array_merge($array1, ...);
-<<__Rx>>
-function array_replace_recursive($array1, ...);
-<<__Rx>>
-function array_replace($array1, ...);
-/* HH_IGNORE_ERROR[3068] this is a builtin */
-function array_multisort(&$arr1, &...$rest);
+function array_merge($array1, ...$args);
+<<__PHPStdLib, __Rx>>
+function array_replace_recursive($array1, ...$args);
+<<__PHPStdLib, __Rx>>
+function array_replace($array1, ...$args);
+<<__PHPStdLib>>
+function array_multisort(
+  mixed &$arg1,
+  mixed &$arg2 = null,
+  mixed &$arg3 = null,
+  mixed &$arg4 = null,
+  mixed &$arg5 = null,
+  mixed &$arg6 = null,
+  mixed &$arg7 = null,
+  mixed &$arg8 = null,
+  mixed &$arg9 = null,
+);
 <<__PHPStdLib, __Rx>>
 function array_pad($input, int $pad_size, $pad_value);
 <<__PHPStdLib>>
 function array_pop(&$array);
 <<__PHPStdLib>>
-function array_push(&$array, $var, ...);
+function array_push(&$array, $var, ...$args);
 <<__PHPStdLib>>
 function array_rand($input, int $num_req = 1);
+<<__PHPStdLib>>
 function array_reduce($input, $callback, $initial = null);
 <<__PHPStdLib, __Rx>>
 function array_reverse($array, bool $preserve_keys = false);
@@ -145,7 +156,7 @@ function array_splice(&$input, int $offset, $length = null, $replacement = null)
 <<__PHPStdLib, __Rx>>
 function array_unique($array, int $sort_flags = 2);
 <<__PHPStdLib>>
-function array_unshift(&$array, $var, ...);
+function array_unshift(&$array, $var, ...$args);
 <<__PHPStdLib, __Rx>>
 function array_values<Tv>(Container<Tv> $input): array<Tv>;
 <<__PHPStdLib, __Deprecated('This function is scheduled for removal')>>
@@ -184,37 +195,37 @@ function in_array($needle, $haystack, bool $strict = false);
 <<__PHPStdLib, __Rx>>
 function range($low, $high, $step = 1);
 <<__PHPStdLib, __Rx>>
-function array_diff($array1, $array2, ...);
+function array_diff($array1, $array2, ...$args);
 <<__PHPStdLib>>
-function array_udiff($array1, $array2, $data_compare_func, ...);
+function array_udiff($array1, $array2, $data_compare_func, ...$args);
 <<__PHPStdLib, __Rx>>
-function array_diff_assoc($array1, $array2, ...);
+function array_diff_assoc($array1, $array2, ...$args);
 <<__PHPStdLib>>
-function array_diff_uassoc($array1, $array2, $key_compare_func, ...);
+function array_diff_uassoc($array1, $array2, $key_compare_func, ...$args);
 <<__PHPStdLib>>
-function array_udiff_assoc($array1, $array2, $data_compare_func, ...);
+function array_udiff_assoc($array1, $array2, $data_compare_func, ...$args);
 <<__PHPStdLib>>
-function array_udiff_uassoc($array1, $array2, $data_compare_func, $key_compare_func, ...);
+function array_udiff_uassoc($array1, $array2, $data_compare_func, $key_compare_func, ...$args);
 <<__PHPStdLib, __Rx>>
-function array_diff_key($array1, $array2, ...);
+function array_diff_key($array1, $array2, ...$args);
 <<__PHPStdLib>>
-function array_diff_ukey($array1, $array2, $key_compare_func, ...);
+function array_diff_ukey($array1, $array2, $key_compare_func, ...$args);
 <<__PHPStdLib, __Rx>>
-function array_intersect($array1, $array2, ...);
+function array_intersect($array1, $array2, ...$args);
 <<__PHPStdLib>>
-function array_uintersect($array1, $array2, $data_compare_func, ...);
+function array_uintersect($array1, $array2, $data_compare_func, ...$args);
 <<__PHPStdLib, __Rx>>
-function array_intersect_assoc($array1, $array2, ...);
+function array_intersect_assoc($array1, $array2, ...$args);
 <<__PHPStdLib>>
-function array_intersect_uassoc($array1, $array2, $key_compare_func, ...);
+function array_intersect_uassoc($array1, $array2, $key_compare_func, ...$args);
 <<__PHPStdLib>>
-function array_uintersect_assoc($array1, $array2, $data_compare_func, ...);
+function array_uintersect_assoc($array1, $array2, $data_compare_func, ...$args);
 <<__PHPStdLib>>
-function array_uintersect_uassoc($array1, $array2, $data_compare_func, $key_compare_func, ...);
+function array_uintersect_uassoc($array1, $array2, $data_compare_func, $key_compare_func, ...$args);
 <<__PHPStdLib, __Rx>>
-function array_intersect_key($array1, $array2, ...);
+function array_intersect_key($array1, $array2, ...$args);
 <<__PHPStdLib>>
-function array_intersect_ukey($array1, $array2, $key_compare_func, ...);
+function array_intersect_ukey($array1, $array2, $key_compare_func, ...$args);
 <<__PHPStdLib>>
 function natsort(&$array);
 <<__PHPStdLib>>

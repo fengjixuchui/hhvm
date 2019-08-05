@@ -1,4 +1,4 @@
-<?php
+<?hh
 class TestSoapClient extends SoapClient{
   function __doRequest($request, $location, $action, $version, $one_way = 0) {
 		return <<<EOF
@@ -10,20 +10,20 @@ class TestSoapClient extends SoapClient{
 </res>
 </ns1:dotest2Response></SOAP-ENV:Body></SOAP-ENV:Envelope>
 EOF;
-	}	
+	}
 }
 
 class book{
 	public $a="a";
 	public $b="c";
-		
+
 }
 
 function book_from_xml($xml) {
 	throw new SoapFault("Client", "Conversion Error");
 }
 
-$options=Array(
+$options=array(
 		'actor' =>'http://schemas.nothing.com',
 		'typemap' => array(array("type_ns"   => "http://schemas.nothing.com",
 		                         "type_name" => "book",
@@ -38,4 +38,3 @@ try {
 }
 var_dump($ret);
 echo "ok\n";
-?>

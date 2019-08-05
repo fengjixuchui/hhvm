@@ -8,21 +8,19 @@
  *)
 
 open Core_kernel
-open Nast
+open Aast
 open Nast_check_env
 
-module SN = Naming_special_names
-
 let is_coroutine env =
-  env.function_kind = Some Ast.FCoroutine
+  env.function_kind = Some Ast_defs.FCoroutine
 
 let is_generator env =
   let fun_kind = env.function_kind in
-  fun_kind = Some Ast.FGenerator || fun_kind = Some Ast.FAsyncGenerator
+  fun_kind = Some Ast_defs.FGenerator || fun_kind = Some Ast_defs.FAsyncGenerator
 
 let is_sync env =
   let fun_kind = env.function_kind in
-  fun_kind = Some Ast.FGenerator || fun_kind = Some Ast.FSync
+  fun_kind = Some Ast_defs.FGenerator || fun_kind = Some Ast_defs.FSync
 
 let handler = object
   inherit Nast_visitor.handler_base
@@ -43,7 +41,7 @@ let handler = object
     end;
 
   method! at_stmt env s =
-    begin match s with
+    begin match (snd s) with
     | Using { us_has_await = has_await; us_expr = e;  _ } when has_await ->
       let p = fst e in
       if is_coroutine env then Errors.await_in_coroutine p;
@@ -51,8 +49,12 @@ let handler = object
     | Foreach (_, (Await_as_v (p, _) | Await_as_kv (p, _, _)), _) ->
       if is_coroutine env then Errors.await_in_coroutine p;
       if is_sync env then Errors.await_in_sync_function p
-    | Return (p, Some _) when is_generator env ->
-      Errors.return_in_gen p
+    | Return (Some _) when is_generator env ->
+      Errors.return_in_gen (fst s)
+    | Awaitall _ ->
+      let p = fst s in
+      if is_coroutine env then Errors.await_in_coroutine p;
+      if is_sync env then Errors.await_in_sync_function p
     | _ -> ()
     end;
 

@@ -10,7 +10,7 @@
 (* This module implements the typing for type_structure. *)
 open Core_kernel
 open Common
-open Nast
+open Aast
 open Typing_defs
 
 module Env = Typing_env
@@ -19,7 +19,6 @@ module Reason = Typing_reason
 module SN = Naming_special_names
 module Subst = Decl_subst
 module TUtils = Typing_utils
-module SubType = Typing_subtype
 
 let make_ts env ty =
   match Env.get_typedef env SN.FB.cTypeStructure with
@@ -38,7 +37,7 @@ let make_ts env ty =
 
 let rec transform_shapemap ?(nullable = false) env pos ty shape =
   let env, ty =
-    SubType.expand_type_and_solve ~description_of_expected:"a shape" env pos ty in
+    Typing_solver.expand_type_and_solve ~description_of_expected:"a shape" env pos ty Errors.unify_error in
   let env, ty = TUtils.fold_unresolved env ty in
   (* If there are Tanys, be conservative and don't try to represent the
    * type more precisely
@@ -51,14 +50,14 @@ let rec transform_shapemap ?(nullable = false) env pos ty shape =
       (* If the abstract type is unbounded we do not specialize at all *)
       let is_unbound = match ty |> TUtils.get_base_type env |> snd with
         (* An enum is considered a valid bound *)
-        | Tabstract (AKenum _, _) -> false
+        | Tabstract (AKnewtype(s, _), _) when Env.is_enum env s -> false
         | Tabstract (_, None) -> true
         | _ -> false in
       if is_unbound then (env, shape) else
       let is_generic =
         match snd ty with Tabstract (AKgeneric _, _) -> true | _ -> false in
       let transform_shape_field field { sft_ty; _ } (env, shape) =
-        let open Ast in
+        let open Ast_defs in
 
         (* Accumulates the provided type for this iteration of the fold, adding
            it to the accumulation ShapeMap for the current field. Since the
@@ -72,7 +71,10 @@ let rec transform_shapemap ?(nullable = false) env pos ty shape =
         | SFlit_str (_, "nullable"), (_, Toption (fty)), (_, Toption _) ->
             env, acc_field_with_type fty
         | SFlit_str (_, "classname"), (_, Toption (fty)),
-          (_, (Tclass _ | Tabstract (AKenum _, _))) ->
+          (_, Tclass _) ->
+            env, acc_field_with_type fty
+        | SFlit_str (_, "classname"), (_, Toption (fty)),
+          (_, Tabstract (AKnewtype (cid, _), _)) when Env.is_enum env cid ->
             env, acc_field_with_type fty
         | SFlit_str (_, "elem_types"), _, (r, Ttuple tyl) ->
             let env, tyl = List.map_env env tyl make_ts in
@@ -84,9 +86,9 @@ let rec transform_shapemap ?(nullable = false) env pos ty shape =
         | SFlit_str (_, "return_type"), _, (r, Tfun funty) ->
             let env, ty = make_ts env funty.ft_ret in
             env, acc_field_with_type (r, Ttuple [ty])
-        | SFlit_str (_, "fields"), _, (r, Tshape (fk, fields)) ->
+        | SFlit_str (_, "fields"), _, (r, Tshape (shape_kind, fields)) ->
             let env, fields = ShapeFieldMap.map_env make_ts env fields in
-            env, acc_field_with_type (r, Tshape (fk, fields))
+            env, acc_field_with_type (r, Tshape (shape_kind, fields))
         (* For generics we cannot specialize the generic_types field. Consider:
          *
          *  class C<T> {}

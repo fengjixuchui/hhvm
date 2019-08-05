@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class A {
 }
@@ -20,13 +20,8 @@ function test() {
 
 <<__EntryPoint>>
 function main_1482() {
-if (false) {
-  class A {
-}
-  class B {
-}
-  class C {
-}
-}
-test();
+  if (__hhvm_intrinsics\launder_value(false)) {
+    include '1482.inc';
+  }
+  test();
 }

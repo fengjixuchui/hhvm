@@ -1,15 +1,10 @@
-<?php
+<?hh
 
 if (isset($g)) {
-  class X {
-}
+  include '1489-1.inc';
 }
  else {
-  class X {
-    protected $prot_over_prot = 1;
-    public $pub_over_pub = 2;
-    protected $pub_over_prot = 3;
-  }
+  include '1489-2.inc';
 }
 class Y extends X {
   protected $prot_over_prot = 4;
@@ -33,7 +28,7 @@ function foo($x) {
   var_dump((array)$y);
   if (function_exists('apc_store')) {
     apc_store('foo', $y);
-    $z = apc_fetch('foo');
+    $z = __hhvm_intrinsics\apc_fetch_no_check('foo');
   }
  else {
     $z = clone $y;

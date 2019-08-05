@@ -1,7 +1,7 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 spl_autoload_register(function(){});
 
 new Foo;
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

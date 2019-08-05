@@ -1,4 +1,4 @@
-<?php
+<?hh
 class Foo {
 	public    $p1;
 	protected $p2;
@@ -14,4 +14,3 @@ var_dump($obj->hasProperty("p1"));
 var_dump($obj->hasProperty("p2"));
 var_dump($obj->hasProperty("p3"));
 var_dump($obj->hasProperty("p4"));
-?>

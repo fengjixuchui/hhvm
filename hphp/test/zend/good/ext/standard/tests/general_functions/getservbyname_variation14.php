@@ -1,6 +1,6 @@
-<?php
+<?hh
 
-
+<<__EntryPoint>> function main(): void {
 echo "*** Test substituting argument 2 with string values ***\n";
 
 $service = "www"; 
@@ -21,4 +21,4 @@ $variation_array = array(
 foreach ( $variation_array as $var ) {
   var_dump(getservbyname( $service, $var  ) );
 }
-?>
+}

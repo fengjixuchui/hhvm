@@ -8,7 +8,7 @@
  *)
 
 val go :
-  Ast.program ->
+  Ast.program option ->
   Relative_path.t SymbolOccurrence.t ->
   Relative_path.t SymbolDefinition.t option
 
@@ -16,6 +16,11 @@ val get_definition_cst_node_from_pos :
   SymbolDefinition.kind ->
   Full_fidelity_source_text.t ->
   'a Pos.pos ->
+  Full_fidelity_positioned_syntax.t option
+
+val get_definition_cst_node_from_file_input :
+  ServerCommandTypes.file_input ->
+  'a SymbolDefinition.t ->
   Full_fidelity_positioned_syntax.t option
 
 val get_definition_cst_node :

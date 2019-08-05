@@ -23,8 +23,6 @@
 #include <vector>
 
 #include "hphp/compiler/analysis/analysis_result.h"
-#include "hphp/compiler/analysis/class_scope.h"
-#include "hphp/compiler/analysis/file_scope.h"
 
 #include "hphp/parser/scanner.h"
 
@@ -33,6 +31,7 @@
 #include "hphp/runtime/base/preg.h"
 #include "hphp/runtime/base/variable-unserializer.h"
 
+#include "hphp/util/file-cache.h"
 #include "hphp/util/hdf.h"
 #include "hphp/util/logger.h"
 #include "hphp/util/process.h"
@@ -82,19 +81,15 @@ bool Option::KeepStatementsWithNoEffect = false;
 
 std::string Option::ProgramName;
 
-bool Option::ParseTimeOpts = true;
 bool Option::EnableShortTags = true;
 int Option::ParserThreadCount = 0;
 
 int Option::GetScannerType() {
   int type = 0;
   if (EnableShortTags) type |= Scanner::AllowShortTags;
-  if (RuntimeOption::EnableXHP) type |= Scanner::AllowXHPSyntax;
-  if (RuntimeOption::EnableHipHopSyntax) type |= Scanner::AllowHipHopSyntax;
   return type;
 }
 
-bool Option::DumpAst = false;
 bool Option::WholeProgram = true;
 bool Option::RecordErrors = true;
 
@@ -188,9 +183,6 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
     AutoloadRoot = Config::GetString(ini, config, "AutoloadMap.root");
   }
 
-  Config::Bind(RuntimeOption::EvalHardTypeHints, ini, config,
-               "HardTypeHints", RuntimeOption::EvalHardTypeHints);
-
   static bool HardReturnTypeHints;
   Config::Bind(HardReturnTypeHints, ini, config, "HardReturnTypeHints", true);
 
@@ -211,10 +203,9 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
     RuntimeOption::EvalCheckReturnTypeHints = HardReturnTypeHints ? 3 : 2;
   }
 
-  Config::Bind(HHBBC::options.HardConstProp, ini, config,
-               "HardConstProp", HHBBC::options.HardConstProp);
-  Config::Bind(HHBBC::options.ElideAutoloadInvokes, ini, config,
-               "ElideAutoloadInvokes", HHBBC::options.ElideAutoloadInvokes);
+  static bool HardConstProp = true;
+  Config::Bind(HardConstProp, ini, config, "HardConstProp", HardConstProp);
+  HHBBC::hard_constprop(HardConstProp);
 
   Config::Bind(APCProfile, ini, config, "APCProfile");
 
@@ -230,6 +221,9 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
   Config::Bind(RuntimeOption::EvalJitEnableRenameFunction,
                ini, config, "JitEnableRenameFunction",
                RuntimeOption::EvalJitEnableRenameFunction);
+  Config::Bind(RuntimeOption::EvalArrayProvenance,
+               ini, config, "ArrayProvenance",
+               RuntimeOption::EvalArrayProvenance);
   Config::Bind(EnableShortTags, ini, config, "EnableShortTags", true);
 
 #define BIND_HAC_OPTION(Name, Def)                      \
@@ -240,7 +234,6 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
 #define BIND_HAC_OPTION_SELF(Name)  BIND_HAC_OPTION(Name, Name)
 
   BIND_HAC_OPTION_SELF(Notices)
-  BIND_HAC_OPTION(CheckIntishCast, Notices)
   BIND_HAC_OPTION(CheckRefBind, Notices)
   BIND_HAC_OPTION(CheckFalseyPromote, Notices)
   BIND_HAC_OPTION(CheckCompare, Notices)
@@ -255,16 +248,22 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
 #undef BIND_HAC_OPTION_SELF
 #undef BIND_HAC_OPTION
 
-  Config::Bind(RuntimeOption::EvalEnableIntishCast,
-               ini, config, "EnableIntishCast",
-               RuntimeOption::EvalEnableIntishCast);
   Config::Bind(RuntimeOption::EvalHackArrDVArrs,
                ini, config, "HackArrDVArrs",
                RuntimeOption::EvalHackArrDVArrs);
 
-  Config::Bind(RuntimeOption::EvalForbidDynamicCalls,
-               ini, config, "ForbidDynamicCalls",
-               RuntimeOption::EvalForbidDynamicCalls);
+  Config::Bind(RuntimeOption::EvalForbidDynamicCallsToFunc,
+               ini, config, "ForbidDynamicCallsToFunc",
+               RuntimeOption::EvalForbidDynamicCallsToFunc);
+  Config::Bind(RuntimeOption::EvalForbidDynamicCallsToClsMeth,
+               ini, config, "ForbidDynamicCallsToClsMeth",
+               RuntimeOption::EvalForbidDynamicCallsToClsMeth);
+  Config::Bind(RuntimeOption::EvalForbidDynamicCallsToInstMeth,
+               ini, config, "ForbidDynamicCallsToInstMeth",
+               RuntimeOption::EvalForbidDynamicCallsToInstMeth);
+  Config::Bind(RuntimeOption::EvalForbidDynamicConstructs,
+               ini, config, "ForbidDynamicConstructs",
+               RuntimeOption::EvalForbidDynamicConstructs);
   Config::Bind(RuntimeOption::EvalNoticeOnBuiltinDynamicCalls,
                ini, config, "NoticeOnBuiltinDynamicCalls",
                RuntimeOption::EvalNoticeOnBuiltinDynamicCalls);
@@ -274,25 +273,13 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
 
   {
     // Hack
-    Config::Bind(RuntimeOption::IntsOverflowToInts, ini, config,
-                 "Hack.Lang.IntsOverflowToInts",
-                 RuntimeOption::IntsOverflowToInts);
     Config::Bind(RuntimeOption::StrictArrayFillKeys, ini, config,
                  "Hack.Lang.StrictArrayFillKeys",
                  RuntimeOption::StrictArrayFillKeys);
-    Config::Bind(RuntimeOption::DisallowDynamicVarEnvFuncs, ini, config,
-                 "Hack.Lang.DisallowDynamicVarEnvFuncs",
-                 RuntimeOption::DisallowDynamicVarEnvFuncs);
   }
 
   Config::Bind(RuntimeOption::EnableXHP, ini, config, "EnableXHP",
                RuntimeOption::EnableXHP);
-
-  if (RuntimeOption::EnableHipHopSyntax) {
-    // If EnableHipHopSyntax is true, it forces EnableXHP to true
-    // regardless of how it was set in the config
-    RuntimeOption::EnableXHP = true;
-  }
 
   Config::Bind(ParserThreadCount, ini, config, "ParserThreadCount", 0);
   if (ParserThreadCount <= 0) {
@@ -307,7 +294,6 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
 
   Config::Bind(RuntimeOption::EvalGenerateDocComments, ini, config,
                "GenerateDocComments", RuntimeOption::EvalGenerateDocComments);
-  Config::Bind(DumpAst, ini, config, "DumpAst", false);
   Config::Bind(WholeProgram, ini, config, "WholeProgram", true);
   Config::Bind(RuntimeOption::EvalUseHHBBC, ini, config, "UseHHBBC",
                RuntimeOption::EvalUseHHBBC);

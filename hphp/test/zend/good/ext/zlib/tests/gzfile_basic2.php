@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $plaintxt = b<<<EOT
 hello world
 is a very common test
@@ -16,5 +16,5 @@ var_dump(gzfile( $filename ) );
 
 unlink($filename);
 rmdir($dirname);
-?>
-===DONE===
+echo "===DONE===\n";
+}

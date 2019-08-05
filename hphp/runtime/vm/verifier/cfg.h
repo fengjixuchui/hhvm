@@ -123,8 +123,7 @@ inline int getImmIva(PC pc) {
 }
 
 inline int numSuccBlocks(const Block* b) {
-  // Fault handlers are a special case with 1 edge (to the parent)
-  return peek_op(b->last) == Op::Unwind ? 1 : numSuccs(b->last);
+  return numSuccs(b->last);
 }
 
 #define APPLY(d, l, r)                         \
@@ -175,12 +174,6 @@ struct SomeFunc {
     return m_func.match(
       [&] (const Func* f) { return Func::findEH(f->ehtab(), off); },
       [&] (const FuncEmitter* f) { return Func::findEH(f->ehtab, off); }
-    );
-  }
-  const EHEnt* findEHbyHandler(Offset off) const {
-    return m_func.match(
-      [&] (const Func* f) { return Func::findEHbyHandler(f->ehtab(), off); },
-      [&] (const FuncEmitter* f) { return Func::findEHbyHandler(f->ehtab, off);}
     );
   }
 
@@ -318,12 +311,12 @@ inline LinearBlocks linearBlocks(const Graph* g) {
   return LinearBlocks(g->first_linear, 0);
 }
 
-// A callsite starts with FPush*, pushes 0 or more values, and usually
-// ends with FCall* (If there is a terminal making the FCall*
-// unreachable, the fpi region will end there). The FPI Region
-// protects the range of instructions that execute with the partial
-// activation on the stack, which is the instruction after FPush* up
-// to and including FCall*.  FPush* is not in the protected region.
+// A callsite pushes 0 or more arguments on the stack, followed by a FPush* and
+// FCall opcodes. The FPI Region protects the range of instructions that execute
+// with the partial activation on the stack, which is the instruction after
+// FPush* up to and including FCall. FPush* is not in the protected region. In
+// other words, only FCall is part of the FPI region. This mechanism is being
+// actively dismantled.
 
 inline Offset fpiBase(const FPIEnt& fpi, PC bc) {
   PC fpush = bc + fpi.m_fpushOff;

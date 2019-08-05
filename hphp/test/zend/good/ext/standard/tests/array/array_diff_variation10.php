@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_diff(array $arr1, array $arr2 [, array ...])
  * Description: Returns the entries of $arr1 that have values which are 
  * not present in any of the others arguments. 
@@ -8,7 +8,7 @@
 /*
  * Test behaviour of array_diff() function with binary input
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_diff() : usage variations ***\n";
 
 
@@ -27,4 +27,4 @@ var_dump(array_diff($array1, $array2));
 var_dump(array_diff($array2, $array1));
 
 echo "Done";
-?>
+}

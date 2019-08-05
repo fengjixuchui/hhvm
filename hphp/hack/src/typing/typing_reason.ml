@@ -43,7 +43,7 @@ type t =
   | Rstmt            of Pos.t
   | Rno_return       of Pos.t
   | Rno_return_async of Pos.t
-  | Rret_fun_kind    of Pos.t * Ast.fun_kind
+  | Rret_fun_kind    of Pos.t * Ast_defs.fun_kind
   | Rhint            of Pos.t
   | Rnull_check      of Pos.t
   | Rnot_in_cstr     of Pos.t
@@ -56,7 +56,7 @@ type t =
   | Ryield_asyncgen  of Pos.t
   | Ryield_asyncnull of Pos.t
   | Ryield_send      of Pos.t
-  | Rlost_info       of string * t * Pos.t
+  | Rlost_info       of string * t * Pos.t * bool (* true if due to lambda *)
   | Rcoerced         of t * Pos.t * string
   | Rformat          of Pos.t * string * t
   | Rclass_class     of Pos.t * string
@@ -68,14 +68,14 @@ type t =
   | Rinout_param     of Pos.t
   | Rinstantiate     of t * string * t
   | Rarray_filter    of Pos.t * t
-  | Rtype_access     of t * string list * t
+  | Rtypeconst       of t * (Pos.t * string) * string * t
+  | Rtype_access     of t * (t * string) list
   | Rexpr_dep_type   of t * Pos.t * expr_dep_type_reason
   | Rnullsafe_op     of Pos.t (* ?-> operator is used *)
-  | Rtconst_no_cstr  of Nast.sid
+  | Rtconst_no_cstr  of Aast.sid
   | Rused_as_map     of Pos.t
   | Rused_as_shape   of Pos.t
   | Rpredicated      of Pos.t * string
-  | Rinstanceof      of Pos.t * string
   | Ris              of Pos.t
   | Ras              of Pos.t
   | Rfinal_property  of Pos.t
@@ -84,14 +84,22 @@ type t =
   | Rdynamic_prop    of Pos.t
   | Rdynamic_call    of Pos.t
   | Ridx_dict        of Pos.t
+  | Rmissing_required_field of Pos.t * string
   | Rmissing_optional_field of Pos.t * string
+  | Runset_field of Pos.t * string
   | Rcontravariant_generic of t * string
   | Rinvariant_generic of t * string
   | Rregex           of Pos.t
   | Rlambda_use      of Pos.t
   | Rimplicit_upper_bound of Pos.t * string
   | Rtype_variable   of Pos.t
+  | Rtype_variable_generics   of Pos.t * string * string
   | Rsolve_fail      of Pos.t
+  | Rcstr_on_generics of Pos.t * Aast.sid
+  | Rlambda_param    of Pos.t * t
+  | Rshape of Pos.t * string
+  | Renforceable     of Pos.t
+  | Rdestructure     of Pos.t * int
 
 and arg_position =
   | Aonly
@@ -173,10 +181,10 @@ let rec to_string prefix r =
     Awaitable<void>")]
   | Rret_fun_kind    (_, kind) ->
       [(p, match kind with
-        | Ast.FAsyncGenerator -> prefix ^ " (result of 'async function' containing a 'yield')"
-        | Ast.FGenerator -> prefix ^ " (result of function containing a 'yield')"
-        | Ast.FAsync -> prefix ^ " (result of 'async function')"
-        | Ast.FCoroutine | Ast.FSync -> prefix)]
+        | Ast_defs.FAsyncGenerator -> prefix ^ " (result of 'async function' containing a 'yield')"
+        | Ast_defs.FGenerator -> prefix ^ " (result of function containing a 'yield')"
+        | Ast_defs.FAsync -> prefix ^ " (result of 'async function')"
+        | Ast_defs.FCoroutine | Ast_defs.FSync -> prefix)]
   | Rhint            _ -> [(p, prefix)]
   | Rnull_check      _ -> [(p, prefix ^ " because this was checked to see if the value was null")]
   | Rnot_in_cstr     _ -> [(p, prefix ^ " because it is not always defined in __construct")]
@@ -200,12 +208,13 @@ let rec to_string prefix r =
         (p, prefix);
         (p2, "It was implicitly typed as "^s^" during this operation")
       ]
-  | Rlost_info (s, r1, p2) ->
+  | Rlost_info (s, r1, p2, under_lambda) ->
       let s = Utils.strip_ns s in
+      let cause = if under_lambda then "by this lambda function" else "during this call" in
       (to_string prefix r1) @
       [
-        (p2, "All the local information about "^s^" has been invalidated \
-              during this call.\nThis is a limitation of the type-checker, \
+        (p2, "All the local information about "^s^" has been invalidated "
+        ^ cause ^ ".\nThis is a limitation of the type-checker, \
               use a local if that's the problem.")
       ]
   | Rformat       (_,s,t) ->
@@ -231,6 +240,9 @@ let rec to_string prefix r =
         (to_string ("  via this generic " ^ generic_name) r_inst)
   | Rtype_variable p ->
       [(p, prefix ^ " because a type could not be determined here")]
+  | Rtype_variable_generics (p, tp_name, s) ->
+      [(p, prefix ^ " because type parameter " ^ tp_name ^ " of " ^ s ^
+      " could not be determined. Please add explicit type parameters to the invocation of " ^ s)]
   | Rsolve_fail p ->
       [(p, prefix ^ " because a type could not be determined here")]
   | Rarray_filter (_, r) ->
@@ -238,14 +250,27 @@ let rec to_string prefix r =
       [(p, "array_filter converts KeyedContainer<Tk, Tv> to \
       array<Tk, Tv>, and Container<Tv> to array<arraykey, Tv>. \
       Single argument calls additionally remove nullability from Tv.")]
-  | Rtype_access (r_orig, expansions, r_expanded) ->
-      let expand_prefix =
-        if List.length expansions = 1 then
-          "  resulting from expanding the type constant "
-        else
-          "  resulting from expanding a type constant as follows:\n    " in
-      (to_string prefix r_orig) @
-      (to_string (expand_prefix^String.concat ~sep:" -> " expansions) r_expanded)
+  | Rtypeconst (Rnone, (pos, tconst), ty_str, r_root) ->
+    let prefix = if prefix = "" then "" else prefix^"\n  " in
+    [pos, sprintf "%sby accessing the type constant '%s'" prefix tconst] @
+    (to_string ("on " ^ ty_str) r_root)
+  | Rtypeconst (r_orig, (pos, tconst), ty_str, r_root) ->
+    (to_string prefix r_orig) @
+    [pos, sprintf "  resulting from accessing the type constant '%s'" tconst] @
+    (to_string ("  on " ^ ty_str) r_root)
+  | Rtype_access (Rtypeconst(Rnone, _, _, _), (r, _)::l) ->
+    to_string prefix (Rtype_access (r, l))
+  | Rtype_access (Rtypeconst(r, _, _, _), x) ->
+    to_string prefix (Rtype_access (r, x))
+  | Rtype_access (Rtype_access (r, expand2), expand1) ->
+    to_string prefix (Rtype_access (r, expand1 @ expand2))
+  | Rtype_access (r, []) -> to_string prefix r
+  | Rtype_access (r, (r_hd, tconst)::tail) ->
+    (to_string prefix r) @
+    (to_string ("  resulting from expanding the type constant " ^ tconst) r_hd) @
+    List.concat_map tail ~f:(fun (r, s) ->
+      to_string ("  then expanding the type constant " ^ s) r
+    )
   | Rexpr_dep_type (r, p, e) ->
       (to_string prefix r) @ [p, "  "^expr_dep_type_reason_string e]
   | Rtconst_no_cstr (_, n) ->
@@ -255,8 +280,6 @@ let rec to_string prefix r =
       [(p, prefix ^ " because it is used as shape-like array here")]
   | Rpredicated (p, f) ->
       [(p, prefix ^ " from the argument to this "^ f ^" test")]
-  | Rinstanceof (p,s) ->
-      [(p, prefix ^ " from this instanceof test matching " ^ s)]
   | Ris p ->
     [(p, prefix ^ " from this is expression test")]
   | Ras p ->
@@ -277,8 +300,13 @@ let rec to_string prefix r =
     [(p, prefix ^ ", the result of calling a dynamic type as a function")]
   | Ridx_dict _ -> [(p, prefix ^
     " because only array keys can be used to index into a Map, dict, darray, Set, or keyset")]
+  | Rmissing_required_field (p, name) ->
+    [(p, prefix ^ " because the field '" ^ name ^ "' is not defined in this shape type, " ^
+           "and this shape type does not allow unknown fields")]
   | Rmissing_optional_field (p, name) ->
     [(p, prefix ^ " because the field '" ^ name ^ "' may be set to any type in this shape")]
+  | Runset_field (p, name) ->
+    [(p, prefix ^ " because the field '" ^ name ^ "' was unset here")]
   | Rcontravariant_generic (r_orig, class_name) ->
     (to_string prefix r_orig) @
     [(p, "Considering that this type argument is contravariant with respect to " ^ class_name)]
@@ -291,6 +319,20 @@ let rec to_string prefix r =
     [(p, prefix ^ " because the lambda function was used here")]
   | Rimplicit_upper_bound (_, cstr) ->
     [(p, prefix ^ " arising from an implicit 'as " ^ cstr ^ "' constraint on this type")]
+  | Rcstr_on_generics _ -> [(p, prefix)]
+  (* If type originated with an unannotated lambda parameter with type variable type,
+   * suggested annotating the lambda parameter. Otherwise defer to original reason. *)
+  | Rlambda_param (p,
+      (Rsolve_fail _ | Rtype_variable_generics _ | Rtype_variable _ | Rinstantiate _)) ->
+    [(p, prefix ^" because the type of the lambda parameter could not be determined. \
+                   Please add a type hint to the parameter")]
+  | Rlambda_param (_, r_orig) ->
+    to_string prefix r_orig
+  | Rshape (p, fun_name) -> [(p, prefix ^ " because " ^ fun_name ^ " expects a shape")]
+  | Renforceable p ->
+    [(p, prefix ^ " because it is an unenforceable type")]
+  | Rdestructure (p, n) ->
+    [(p, prefix ^ " resulting from a list destructuring assignment of length " ^ (string_of_int n))]
 
 and to_pos = function
   | Rnone     -> Pos.none
@@ -330,7 +372,7 @@ and to_pos = function
   | Ryield_asyncnull p -> p
   | Ryield_send  p -> p
   | Rcoerced    (r, _, _) -> to_pos r
-  | Rlost_info (_, r, _) -> to_pos r
+  | Rlost_info (_, r, _, _) -> to_pos r
   | Rformat      (p, _, _) -> p
   | Rclass_class (p, _) -> p
   | Runknown_class p -> p
@@ -340,15 +382,16 @@ and to_pos = function
   | Runpack_param p -> p
   | Rinout_param p -> p
   | Rinstantiate (_, _, r) -> to_pos r
+  | Rtypeconst (Rnone, (p, _), _, _)
   | Rarray_filter (p, _) -> p
-  | Rtype_access (r, _, _) -> to_pos r
+  | Rtypeconst (r, _, _, _)
+  | Rtype_access (r, _) -> to_pos r
   | Rexpr_dep_type (r, _, _) -> to_pos r
   | Rnullsafe_op p -> p
   | Rtconst_no_cstr (p, _) -> p
   | Rused_as_map p -> p
   | Rused_as_shape p -> p
   | Rpredicated (p, _) -> p
-  | Rinstanceof (p, _) -> p
   | Ris p -> p
   | Ras p -> p
   | Rvarray_or_darray_key p
@@ -357,7 +400,9 @@ and to_pos = function
   | Rdynamic_prop p -> p
   | Rdynamic_call p -> p
   | Ridx_dict p -> p
+  | Rmissing_required_field (p, _) -> p
   | Rmissing_optional_field (p, _) -> p
+  | Runset_field (p, _) -> p
   | Rcontravariant_generic (r, _) -> to_pos r
   | Rinvariant_generic (r, _) -> to_pos r
   | Rregex p -> p
@@ -370,7 +415,13 @@ and to_pos = function
   | Rbitwise_dynamic p -> p
   | Rincdec_dynamic p -> p
   | Rtype_variable p -> p
+  | Rtype_variable_generics (p, _, _) -> p
   | Rsolve_fail p -> p
+  | Rcstr_on_generics (p, _) -> p
+  | Rlambda_param (p, _) -> p
+  | Rshape (p, _) -> p
+  | Renforceable p -> p
+  | Rdestructure (p, _) -> p
 
 (* This is a mapping from internal expression ids to a standardized int.
  * Used for outputting cleaner error messages to users
@@ -449,6 +500,7 @@ match r with
   | Rinout_param _ -> "Rinout_param"
   | Rinstantiate _ -> "Rinstantiate"
   | Rarray_filter _ -> "Rarray_filter"
+  | Rtypeconst _ -> "Rtypeconst"
   | Rtype_access _ -> "Rtype_access"
   | Rexpr_dep_type _ -> "Rexpr_dep_type"
   | Rnullsafe_op _ -> "Rnullsafe_op"
@@ -456,7 +508,6 @@ match r with
   | Rused_as_map _ -> "Rused_as_map"
   | Rused_as_shape _ -> "Rused_as_shape"
   | Rpredicated _ -> "Rpredicated"
-  | Rinstanceof _ -> "Rinstanceof"
   | Ris _ -> "Ris"
   | Ras _ -> "Ras"
   | Rfinal_property _ -> "Rfinal_property"
@@ -465,7 +516,9 @@ match r with
   | Rdynamic_prop _ -> "Rdynamic_prop"
   | Rdynamic_call _ -> "Rdynamic_call"
   | Ridx_dict _ -> "Ridx_dict"
+  | Rmissing_required_field _ -> "Rmissing_required_field"
   | Rmissing_optional_field _ -> "Rmissing_optional_field"
+  | Runset_field _ -> "Runset_field"
   | Rcontravariant_generic _ -> "Rcontravariant_generic"
   | Rinvariant_generic _ -> "Rinvariant_generic"
   | Rregex _ -> "Rregex"
@@ -479,7 +532,13 @@ match r with
   | Rbitwise_dynamic _ -> "Rbitwise_dynamic"
   | Rincdec_dynamic _ -> "Rincdec_dynamic"
   | Rtype_variable _ -> "Rtype_variable"
+  | Rtype_variable_generics _ -> "Rtype_variable_generics"
   | Rsolve_fail _ -> "Rsolve_fail"
+  | Rcstr_on_generics _ -> "Rcstr_on_generics"
+  | Rlambda_param _ -> "Rlambda_param"
+  | Rshape _ -> "Rshape"
+  | Renforceable _ -> "Renforceable"
+  | Rdestructure _ -> "Rdestructure"
 
 let pp fmt r =
   Format.pp_print_string fmt @@ to_constructor_string r
@@ -515,12 +574,15 @@ type ureason =
   | URclass_req
   | URenum
   | URenum_cstr
+  | URenum_underlying
+  | URenum_incompatible_cstr
   | URtypeconst_cstr
   | URsubsume_tconst_cstr
   | URsubsume_tconst_assign
   | URfinal_property
   | URclone
   | URusing
+  [@@deriving show]
 
 let index_array = URindex "array"
 let index_tuple = URindex "tuple"
@@ -563,6 +625,10 @@ let string_of_ureason = function
       "Constant does not match the type of the enum it is in"
   | URenum_cstr ->
       "Invalid constraint on enum"
+  | URenum_underlying ->
+      "Invalid underlying type for enum"
+  | URenum_incompatible_cstr ->
+      "Underlying type for enum is incompatible with constraint"
   | URtypeconst_cstr ->
      "Unable to satisfy constraint on this type constant"
   | URsubsume_tconst_cstr ->

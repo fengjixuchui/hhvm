@@ -32,11 +32,11 @@
 #include "hphp/util/logger.h"
 #include "hphp/util/maphuge.h"
 #include "hphp/util/numa.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/smalllocks.h"
 #include "hphp/util/type-scan.h"
 
 #include "hphp/runtime/base/rds-header.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/vm/debug/debug.h"
 #include "hphp/runtime/vm/jit/mcgen.h"
 #include "hphp/runtime/vm/jit/mcgen-translate.h"
@@ -63,7 +63,6 @@ std::mutex s_allocMutex;
 //////////////////////////////////////////////////////////////////////
 
 struct SymbolKind : boost::static_visitor<std::string> {
-  std::string operator()(StaticLocal /*k*/) const { return "StaticLocal"; }
   std::string operator()(ClsConstant /*k*/) const { return "ClsConstant"; }
   std::string operator()(StaticMethod /*k*/) const { return "StaticMethod"; }
   std::string operator()(StaticMethodF /*k*/) const { return "StaticMethodF"; }
@@ -77,19 +76,6 @@ struct SymbolKind : boost::static_visitor<std::string> {
 };
 
 struct SymbolRep : boost::static_visitor<std::string> {
-  std::string operator()(StaticLocal k) const {
-    const Func* func = Func::fromFuncId(k.funcId);
-    const Class* cls = getOwningClassForFunc(func);
-    std::string name;
-    if (cls != func->cls()) {
-      name = cls->name()->toCppString() + "::" +
-        func->name()->toCppString();
-    } else {
-      name = func->fullName()->toCppString();
-    }
-    return name + "::" + k.name->toCppString();
-  }
-
   std::string operator()(ClsConstant k) const {
     return k.clsName->data() + std::string("::") + k.cnsName->data();
   }
@@ -139,11 +125,6 @@ struct SymbolEq : boost::static_visitor<bool> {
     bool
   >::type operator()(const T&, const U&) const { return false; }
 
-  bool operator()(StaticLocal k1, StaticLocal k2) const {
-    assertx(k1.name->isStatic() && k2.name->isStatic());
-    return k1.funcId == k2.funcId && k1.name == k2.name;
-  }
-
   bool operator()(ClsConstant k1, ClsConstant k2) const {
     assertx(k1.clsName->isStatic() && k1.cnsName->isStatic());
     assertx(k2.clsName->isStatic() && k2.cnsName->isStatic());
@@ -191,13 +172,6 @@ struct SymbolEq : boost::static_visitor<bool> {
 };
 
 struct SymbolHash : boost::static_visitor<size_t> {
-  size_t operator()(StaticLocal k) const {
-    return folly::hash::hash_128_to_64(
-      std::hash<FuncId>()(k.funcId),
-      k.name->hash()
-    );
-  }
-
   size_t operator()(ClsConstant k) const {
     return folly::hash::hash_128_to_64(
       k.clsName->hash(),
@@ -368,7 +342,7 @@ folly::Optional<Handle> findFreeBlock(FreeLists& lists, size_t size,
 // 's_persistent_free_lists' yet.
 NEVER_INLINE void addNewPersistentChunk(size_t size) {
   assertx(size > 0 && size < kMaxHandle && size % 4096 == 0);
-  auto const raw = static_cast<char*>(low_malloc(size));
+  auto const raw = static_cast<char*>(lower_malloc(size));
   auto const addr = reinterpret_cast<uintptr_t>(raw);
   memset(raw, 0, size);
 #if !RDS_FIXED_PERSISTENT_BASE
@@ -380,7 +354,7 @@ NEVER_INLINE void addNewPersistentChunk(size_t size) {
   s_persistent_base = s_persistent_frontier - size4g;
 #else
   always_assert_flog(addr >= kMinPersistentHandle && addr < size4g,
-                     "low_malloc() failed to return suitable address for RDS");
+                     "failed to suitable address for persistent RDS");
   assertx(s_persistent_frontier >= s_persistent_limit);
   if (s_persistent_frontier != s_persistent_limit) {
     addFreeBlock(s_persistent_free_lists,
@@ -902,6 +876,50 @@ folly::Optional<Symbol> reverseLink(Handle handle) {
     return acc->second;
   }
   return folly::none;
+}
+
+namespace {
+local::RegisterConfig s_rdsLocalConfigRegistration({
+  .rdsInitFunc =
+    [] (size_t size) -> uint32_t {
+      return rds::detail::allocUnlocked(rds::Mode::Local,
+                                        std::max(size, 16UL), 16U,
+                                        type_scan::kIndexUnknown);
+    },
+  .initFunc =
+    [](size_t size, uint32_t handle) -> void* {
+      if (rds::tl_base) {
+        return rds::handleToPtr<void, rds::Mode::Local>(handle);
+      }
+      return local_malloc(size);
+    },
+  .finiFunc =
+    [](void* ptr) -> void{
+      local_free(ptr);
+    },
+  .inRdsFunc =
+    [](void* ptr, size_t size) -> bool {
+      return tl_base &&
+             std::less_equal<void>()(localSection().cbegin(), ptr)
+                && std::less_equal<void>()(
+                  (const char*)ptr
+                  + size, localSection().cend());
+    },
+  .initRequestEventHandler =
+    [](RequestEventHandler* h) -> void {
+      h->setInited(true);
+      // This registration makes sure obj->requestShutdown() will be called.
+      // Do it before calling requestInit() so that obj is reachable to the
+      // GC no matter what the callback does.
+      auto index = g_context->registerRequestEventHandler(h);
+      SCOPE_FAIL {
+        h->setInited(false);
+        g_context->unregisterRequestEventHandler(h, index);
+      };
+
+      h->requestInit();
+    }
+});
 }
 
 //////////////////////////////////////////////////////////////////////

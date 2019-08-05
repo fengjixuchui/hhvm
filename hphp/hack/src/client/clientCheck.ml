@@ -18,6 +18,30 @@ module Rpc = ServerCommandTypes
 module SyntaxTree = Full_fidelity_syntax_tree
   .WithSyntax(Full_fidelity_minimal_syntax)
 
+module SaveStateResultPrinter = ClientResultPrinter.Make (struct
+    type t = SaveStateServiceTypes.save_state_result
+    let to_string t =
+      Printf.sprintf "Dependency table edges added: %d"
+        t.SaveStateServiceTypes.dep_table_edges_added
+    let to_json t =
+      Hh_json.JSON_Object (ServerError.get_save_state_result_props_json t)
+  end)
+
+module SaveNamingResultPrinter = ClientResultPrinter.Make (struct
+    type t = SaveStateServiceTypes.save_naming_result
+    let to_string t =
+      Printf.sprintf "Files added: %d, symbols added: %d"
+        t.SaveStateServiceTypes.nt_files_added
+        t.SaveStateServiceTypes.nt_symbols_added
+    let to_json t =
+      Hh_json.JSON_Object [
+        "files_added",
+          Hh_json.JSON_Number (string_of_int t.SaveStateServiceTypes.nt_files_added);
+        "symbols_added",
+          Hh_json.JSON_Number (string_of_int t.SaveStateServiceTypes.nt_symbols_added);
+      ]
+  end)
+
 let parse_function_or_method_id ~func_action ~meth_action name =
   let pieces = Str.split (Str.regexp "::") name in
   try
@@ -28,6 +52,7 @@ let parse_function_or_method_id ~func_action ~meth_action name =
   with _ ->
     Printf.eprintf "Invalid input\n";
     raise Exit_status.(Exit_with Input_error)
+
 let print_all ic =
   try
     while true do
@@ -66,8 +91,7 @@ let connect ?(use_priority_pipe=false) args =
     from = args.from;
     autostart = args.autostart;
     force_dormant_start = args.force_dormant_start;
-    retries = Some args.retries;
-    expiry = args.timeout;
+    deadline = args.deadline;
     no_load = args.no_load;
     watchman_debug_logging = args.watchman_debug_logging;
     log_inference_constraints = args.log_inference_constraints;
@@ -80,6 +104,7 @@ let connect ?(use_priority_pipe=false) args =
     use_priority_pipe;
     prechecked = args.prechecked;
     config = args.config;
+    allow_non_opt_build = args.allow_non_opt_build;
   }
 
 (* This is a function, because server closes the connection after each command,
@@ -127,6 +152,14 @@ let parse_positions positions =
     Printf.eprintf "Invalid position\n";
     raise Exit_status.(Exit_with Input_error)
   end
+
+(* Filters and prints errors when a path is not a realpath *)
+let filter_real_paths paths =
+  List.filter_map paths
+    ~f:(fun fn -> match Sys_utils.realpath fn with
+      | Some path -> Some path
+      | None -> prerr_endlinef "Could not find file '%s'" fn; None)
+
 let main (args : client_check_env) : Exit_status.t Lwt.t =
   let mode_s = ClientEnv.mode_to_string args.mode in
   HackEventLogger.set_from args.from;
@@ -137,7 +170,7 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
   let%lwt exit_status =
     match args.mode with
     | MODE_LIST_FILES ->
-      let%lwt infol = rpc args @@ Rpc.LIST_FILES_WITH_ERRORS  in
+      let%lwt infol = rpc args @@ Rpc.LIST_FILES_WITH_ERRORS in
       List.iter infol (Printf.printf "%s\n");
       Lwt.return Exit_status.No_error
     | MODE_COLORING file ->
@@ -234,6 +267,11 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
       let%lwt () =
         ClientRefactor.go_ide conn args filename line char new_name in
       Lwt.return Exit_status.No_error
+    | MODE_EXTRACT_STANDALONE name ->
+      let%lwt pretty_printed_dependencies =
+        rpc args @@ Rpc.EXTRACT_STANDALONE name in
+      print_endline pretty_printed_dependencies;
+      Lwt.return Exit_status.No_error
     | MODE_IDENTIFY_SYMBOL1 arg
     | MODE_IDENTIFY_SYMBOL2 arg
     | MODE_IDENTIFY_SYMBOL3 arg ->
@@ -317,6 +355,8 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
       ClientAutocomplete.go results args.output_json;
       Lwt.return Exit_status.No_error
     | MODE_OUTLINE | MODE_OUTLINE2 ->
+      let (_handle: SharedMem.handle) =
+        SharedMem.init ~num_workers:0 GlobalConfig.default_sharedmem_config in
       let content = Sys_utils.read_stdin_to_string () in
       let results = FileOutline.outline
       (**
@@ -364,6 +404,12 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
       let%lwt result = rpc args @@ Rpc.IN_MEMORY_DEP_TABLE_SIZE in
       ClientResultPrinter.Int_printer.go result args.output_json;
       Lwt.return Exit_status.No_error
+    | MODE_SAVE_NAMING path ->
+      let () = Sys_utils.mkdir_p (Filename.dirname path) in
+      let path = Path.make path in
+      let%lwt result = rpc args @@ Rpc.SAVE_NAMING (Path.to_string path) in
+      SaveNamingResultPrinter.go result args.output_json;
+      Lwt.return Exit_status.No_error
     | MODE_SAVE_STATE path ->
       let () = Sys_utils.mkdir_p (Filename.dirname path) in
       (** Convert to real path because Client and Server may have
@@ -372,9 +418,8 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
       let%lwt result = rpc args @@ Rpc.SAVE_STATE (
         Path.to_string path,
         args.gen_saved_ignore_type_errors,
-        args.file_info_on_disk,
         args.replace_state_after_saving) in
-      ClientResultPrinter.Int_printer.go result args.output_json;
+      SaveStateResultPrinter.go result args.output_json;
       Lwt.return Exit_status.No_error
     | MODE_STATUS ->
       let ignore_ide = ClientMessages.ignore_ide_from args.from in
@@ -385,7 +430,7 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
       in
       let%lwt status = rpc args (Rpc.STATUS ignore_ide) in
       let exit_status =
-        ClientCheckStatus.go status args.output_json args.from in
+        ClientCheckStatus.go status args.output_json args.from args.error_format args.max_errors in
       Lwt.return exit_status
     | MODE_STATUS_SINGLE filename ->
       let file_input = match filename with
@@ -399,29 +444,26 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
         error_list;
         Rpc.Server_status.liveness = Rpc.Live_status;
         has_unsaved_changes = false;
+        last_recheck_stats = None;
       } in
       let exit_status =
-        ClientCheckStatus.go status args.output_json args.from in
+        ClientCheckStatus.go status args.output_json args.from args.error_format args.max_errors in
       Lwt.return exit_status
     | MODE_SEARCH (query, type_) ->
       let%lwt results = rpc args @@ Rpc.SEARCH (query, type_) in
       ClientSearch.go results args.output_json;
       Lwt.return Exit_status.No_error
     | MODE_LINT ->
-      let fnl = List.filter_map args.lint_paths
-        (fun fn -> match Sys_utils.realpath fn with
-          | Some path -> Some path
-          | None -> prerr_endlinef "Could not find file '%s'" fn; None)
-      in
+      let fnl = filter_real_paths args.paths in
       begin
-        match args.lint_paths with
+        match args.paths with
         | [] ->
            prerr_endline "No lint errors (0 files checked)!";
            prerr_endline "Note: --lint expects a list of filenames to check.";
            Lwt.return Exit_status.No_error
         | _ ->
            let%lwt results = rpc args @@ Rpc.LINT fnl in
-           ClientLint.go results args.output_json;
+           ClientLint.go results args.output_json args.error_format;
            Lwt.return Exit_status.No_error
       end
     | MODE_LINT_STDIN filename ->
@@ -433,12 +475,12 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
         let contents = Sys_utils.read_stdin_to_string () in
         let%lwt results = rpc args @@ Rpc.LINT_STDIN
           { ServerCommandTypes.filename; contents } in
-        ClientLint.go results args.output_json;
+        ClientLint.go results args.output_json args.error_format;
         Lwt.return Exit_status.No_error
       end
     | MODE_LINT_ALL code ->
       let%lwt results = rpc args @@ Rpc.LINT_ALL code in
-      ClientLint.go results args.output_json;
+      ClientLint.go results args.output_json args.error_format;
       Lwt.return Exit_status.No_error
     | MODE_LINT_XCONTROLLER filename ->
       begin try
@@ -460,7 +502,7 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
             end
           in
           let%lwt results = rpc args @@ Rpc.LINT_XCONTROLLER files in
-          ClientLint.go results args.output_json;
+          ClientLint.go results args.output_json args.error_format;
           Lwt.return Exit_status.No_error
         with Exit -> Lwt.return Exit_status.Input_error
       end
@@ -504,6 +546,14 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
         else apply_patches patches;
         Lwt.return Exit_status.No_error
       end end
+    | MODE_REWRITE_LAMBDA_PARAMETERS files ->
+      let%lwt conn = connect args in
+      let%lwt patches = ClientConnect.rpc conn @@
+          Rpc.REWRITE_LAMBDA_PARAMETERS files in
+      if args.output_json
+      then print_patches_json patches
+      else apply_patches patches;
+      Lwt.return Exit_status.No_error
     | MODE_FORMAT (from, to_) ->
       let content = Sys_utils.read_stdin_to_string () in
       let%lwt result =
@@ -532,27 +582,6 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
       let schema = Full_fidelity_schema.schema_as_json() in
       print_string schema;
       Lwt.return Exit_status.No_error
-    | MODE_INFER_RETURN_TYPE name ->
-      let open ServerCommandTypes.Infer_return_type in
-      let action =
-        parse_function_or_method_id
-          ~func_action:(fun fun_name -> Function fun_name)
-          ~meth_action:(fun class_name meth_name ->
-            Method (class_name, meth_name))
-          name
-      in
-      let%lwt result = rpc args @@ Rpc.INFER_RETURN_TYPE action in
-      begin match result with
-      | Error error_str ->
-        Printf.eprintf "%s\n" error_str;
-        raise Exit_status.(Exit_with Input_error)
-      | Ok ty ->
-        if args.output_json then
-          print_endline Hh_json.(json_to_string (JSON_String ty))
-        else
-          print_endline ty;
-        Lwt.return Exit_status.No_error
-      end
     | MODE_CST_SEARCH files_to_search ->
       let sort_results = args.sort_results in
       let input = Sys_utils.read_stdin_to_string () |> Hh_json.json_of_string in
@@ -568,6 +597,42 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
       | Error error -> print_endline error;
         raise Exit_status.(Exit_with Input_error)
       end
+    | MODE_FILE_DEPENDENTS ->
+      let paths = filter_real_paths args.paths in
+      let%lwt responses =
+        rpc args @@ Rpc.FILE_DEPENDENCIES paths in
+      if args.output_json
+      then
+        let open Hh_json in
+        let json_path_list = List.map responses ~f:(fun path -> JSON_String path) in
+        let output = JSON_Object [("dependents", JSON_Array json_path_list)] in
+        print_endline @@ json_to_string output
+      else
+        List.iter responses ~f:(Printf.printf "%s\n");
+      Lwt.return Exit_status.No_error
+    | MODE_BIGCODE arg ->
+      let filename = arg in
+      let fn =
+        try
+          (expand_path filename)
+        with _ ->
+          Printf.eprintf "Invalid filename: %s\n" filename;
+          raise Exit_status.(Exit_with Input_error)
+      in
+      let%lwt result = rpc args @@ Rpc.BIGCODE (fn) in
+      print_endline result;
+      Lwt.return Exit_status.No_error
+    | MODE_PAUSE pause ->
+      let%lwt () = rpc args @@ Rpc.PAUSE pause in
+      if pause then begin
+        print_endline "Paused the automatic triggering of full checks upon file changes.";
+        print_endline "To manually trigger a full check, do `hh check`.";
+        print_endline "***PAUSE MODE CURRENTLY GETS RESET UPON REBASES.***";
+        print_endline "***PAUSE MODE IS EXPERIMENTAL. USE AT YOUR OWN RISK.***";
+      end else begin
+        print_endline "Resumed the automatic triggering of full checks upon file changes.";
+      end;
+      Lwt.return Exit_status.No_error
   in
   HackEventLogger.client_check_finish exit_status;
   Lwt.return exit_status

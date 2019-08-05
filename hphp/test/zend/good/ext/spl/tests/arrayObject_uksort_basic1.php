@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int ArrayObject::uksort(callback cmp_function)
  * Description: proto int ArrayIterator::uksort(callback cmp_function)
  * Sort the entries by key using user defined function. 
@@ -22,5 +22,4 @@ $ao = new ArrayObject(array(3=>0, 2=>1, 5=>2, 6=>3, 1=>4));
 
 $ao->uksort('cmp');
 var_dump($ao);
-?>
-===DONE===
+echo "===DONE===\n";

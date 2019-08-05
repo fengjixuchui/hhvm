@@ -1,6 +1,6 @@
-<?php
+<?hh
 
-
+<<__EntryPoint>> function main(): void {
 $filename = dirname(__FILE__)."/004.txt.gz";
 
 
@@ -15,5 +15,5 @@ $variation = array (
 foreach ( $variation as $var ) {
   var_dump(gzfile( $filename, $var  ) );
 }
-?>
-===DONE===
+echo "===DONE===\n";
+}

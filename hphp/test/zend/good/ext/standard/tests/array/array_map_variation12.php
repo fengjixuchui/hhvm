@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_map  ( callback $callback  , array $arr1  [, array $...  ] )
  * Description: Applies the callback to the elements of the given arrays 
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Test array_map() by passing buit-in function as callback function
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_map() : built-in function ***\n";
 
 $array1 = array(1, 2, 3);
@@ -23,4 +23,4 @@ echo "-- with language construct --\n";
 var_dump( array_map('echo', $array1));
 
 echo "Done";
-?>
+}

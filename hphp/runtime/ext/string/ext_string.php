@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 namespace HH {
 newtype FormatString<T> = string;
@@ -170,7 +170,7 @@ function strrev(string $str): string;
  * @return string - Returns the lowercased string.
  *
  */
-<<__Native>>
+<<__Native, __Rx>>
 function strtolower(string $str): string;
 
 /**
@@ -183,7 +183,7 @@ function strtolower(string $str): string;
  * @return string - Returns the uppercased string.
  *
  */
-<<__Native>>
+<<__Native, __Rx>>
 function strtoupper(string $str): string;
 
 /**
@@ -449,6 +449,12 @@ function str_replace(mixed $search,
                      mixed $subject,
                      mixed &$count = null): mixed;
 
+<<__IsFoldable, __Native, __Rx>>
+function str_replace_with_count(mixed $search,
+                                mixed $replace,
+                                mixed $subject,
+                                mixed &$count): mixed;
+
 /**
  * This function returns a string or an array with all occurrences of search
  *   in subject (ignoring case) replaced with the given replace value. If you
@@ -477,6 +483,12 @@ function str_ireplace(mixed $search,
                       mixed $replace,
                       mixed $subject,
                       mixed &$count = null): mixed;
+
+<<__IsFoldable, __Native, __Rx>>
+function str_ireplace_with_count(mixed $search,
+                                 mixed $replace,
+                                 mixed $subject,
+                                 mixed &$count): mixed;
 
 /**
  * substr_replace() replaces a copy of string delimited by the start and
@@ -773,7 +785,7 @@ function htmlspecialchars(string $str,
 function fb_htmlspecialchars(string $str,
                              int $quote_style = ENT_COMPAT,
                              string $charset = "ISO-8859-1",
-                             mixed $extra = array()): string;
+                             mixed $extra = varray[]): string;
 
 /**
  * Returns a quoted printable string created according to  RFC2045, section
@@ -1063,7 +1075,7 @@ function hebrevc(string $hebrew_text, int $max_chars_per_line = 0): string;
  *   running. It returns exactly what the system setlocale function returns.
  *
  */
-<<__Native>>
+<<__Native, __NonRx('Sets Global')>>
 function setlocale(int $category, mixed $locale, ...$argv): mixed;
 
 /**
@@ -1111,8 +1123,8 @@ function nl_langinfo(int $item): mixed;
  *   values. The optional parameters must be passed by reference.
  *
  */
-<<__Native("ActRec", "VariadicByRef")>>
-function sscanf(string $str, string $format, ...): mixed;
+<<__Native>>
+function sscanf(string $str, string $format): mixed;
 
 /**
  * Returns a one-character string containing the character specified by ascii.

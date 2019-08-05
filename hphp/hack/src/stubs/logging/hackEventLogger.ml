@@ -30,6 +30,12 @@ let init
   ~predeclare_ide:_
   ~max_typechecker_worker_memory_mb:_
   = ()
+let init_worker
+  ?exit_on_parent_exit:_
+  ~root:_
+  ~init_id:_
+  ~time:_
+  = ()
 let init_monitor
   ?exit_on_parent_exit:_
   ~from:_
@@ -47,7 +53,10 @@ let init_lazy_end
   ~approach_name:_
   ~init_error:_
   ~init_type:_ = ()
+let server_is_partially_ready () = ()
+let server_is_ready () = ()
 let load_deptable_end _ = ()
+let init_start _ = ()
 let nfs_root _ = ()
 let load_state_worker_end ~is_cached:_ _ _ = ()
 let vcs_changed_files_end _ _ = ()
@@ -57,13 +66,9 @@ let lock_stolen _ = ()
 let client_init ?exit_on_parent_exit:_ _ = ()
 let client_set_mode _ = ()
 let client_check () = ()
-let client_build _ _ = ()
 let client_start _ = ()
 let client_stop _ = ()
 let client_restart _ = ()
-let client_build_begin_work _ _ = ()
-let client_build_finish
-  ~rev_changed:_ ~build_type:_ ~request_id:_ ~exit_status:_ = ()
 let client_check_finish _ = ()
 let client_lsp_method_handled
   ~root:_ ~method_:_ ~kind:_ ~start_queue_time:_ ~start_hh_server_state:_ ~start_handle_time:_
@@ -90,8 +95,6 @@ let handle_connection_exception _ _ = ()
 let handled_persistent_connection _ = ()
 let handle_persistent_connection_exception _ _ = ()
 let handled_command _ ~start_t ~major_gc_time ~minor_gc_time ~parsed_files = ()
-let build_differs _ _ _ = ()
-let build_same _ _ = ()
 let recheck_end _ _ _ _ = ()
 let indexing_end _ = ()
 let parsing_end _ _ ~parsed_count:_ = ()
@@ -99,8 +102,6 @@ let updating_deps_end _ = ()
 let naming_end _ = ()
 let global_naming_end _ = ()
 let run_search_end _ = ()
-let send_hg_end _ = ()
-let wait_hg_end _ = ()
 let update_search_end _ = ()
 let fast_naming_end _ = ()
 let type_decl_end _ = ()
@@ -109,7 +110,6 @@ let second_redecl_end _ _ = ()
 let type_check_end _ _ _ = ()
 let notifier_returned _ _ = ()
 let load_state_exn _ = ()
-let hg_cat_exn _ = ()
 let prechecked_update_rechecked _ = ()
 let prechecked_evaluate_init _ _ = ()
 let prechecked_evaluate_incremental _ _ = ()
@@ -167,3 +167,13 @@ let init_watchman_failed _ = ()
 let restarting_watchman_subscription _ = ()
 let uncaught_exception _ = ()
 let processed_clients _ = ()
+
+let search_symbol_index
+    ~(query_text:string)
+    ~(max_results:int)
+    ~(results:int)
+    ~(kind_filter:string)
+    ~(duration:float)
+    ~(actype:string)
+    ~(caller:string)
+    ~(search_provider:string) = ()

@@ -32,13 +32,13 @@
 #include "hphp/compiler/analysis/analysis_result.h"
 #include "hphp/compiler/json.h"
 #include "hphp/compiler/option.h"
-#include "hphp/compiler/parser/parser.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/file-util-defs.h"
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/vm/as.h"
 #include "hphp/runtime/vm/extern-compiler.h"
+#include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/unit-emitter.h"
 #include "hphp/util/exception.h"
 #include "hphp/util/job-queue.h"
@@ -291,6 +291,56 @@ bool Package::parse(bool check) {
   auto const threadCount = Option::ParserThreadCount <= 0 ?
     1 : Option::ParserThreadCount;
 
+  std::thread unit_emitter_thread {
+    [&] {
+      hphp_thread_init();
+      hphp_session_init(Treadmill::SessionKind::CompilerEmit);
+      SCOPE_EXIT {
+        hphp_context_exit();
+        hphp_session_exit();
+        hphp_thread_exit();
+      };
+
+      static const unsigned kBatchSize = 8;
+
+      std::vector<std::unique_ptr<UnitEmitter>> batched_ues;
+
+      auto commitSome = [&] {
+        batchCommit(batched_ues);
+        {
+          Lock lock(m_ar->getMutex());
+          for (auto& ue : batched_ues) {
+            m_ar->addHhasFile(std::move(ue));
+          }
+        }
+        batched_ues.clear();
+      };
+
+      while (auto ue = m_ueq.pop()) {
+        if (m_stop_caching.load(std::memory_order_relaxed)) {
+          Lock lock(m_ar->getMutex());
+          do {
+            m_ar->addHhasFile(std::move(ue));
+          } while ((ue = m_ueq.pop()) != nullptr);
+          break;
+        }
+        batched_ues.push_back(std::move(ue));
+        if (batched_ues.size() == kBatchSize) {
+          commitSome();
+        }
+      }
+      if (batched_ues.size()) commitSome();
+    }
+  };
+
+  if (RuntimeOption::RepoLocalPath.size() &&
+      RuntimeOption::RepoLocalMode != "--") {
+    auto units = Repo::get().enumerateUnits(RepoIdLocal, false);
+    for (auto& elm : units) {
+      m_locally_cached_bytecode.insert(elm.first);
+    }
+  }
+
   // If we're using the hack compiler, make sure it agrees on the thread count.
   RuntimeOption::EvalHackCompilerWorkers = threadCount;
   ParserDispatcher dispatcher { threadCount, threadCount, 0, false, this };
@@ -312,8 +362,13 @@ bool Package::parse(bool check) {
     }
   }
   dispatcher.waitEmpty();
+  if (!m_cache_only) {
+    m_stop_caching.store(true, std::memory_order_relaxed);
+  }
+  m_ueq.push(nullptr);
+  unit_emitter_thread.join();
 
-  m_dispatcher = 0;
+  m_dispatcher = nullptr;
 
   auto workers = dispatcher.getWorkers();
   for (unsigned int i = 0; i < workers.size(); i++) {
@@ -358,10 +413,10 @@ bool Package::parseImpl(const std::string* fileName) {
       std::string content {
         std::istreambuf_iterator<char>(s), std::istreambuf_iterator<char>()
       };
-      MD5 md5{string_md5(content)};
+      SHA1 sha1{string_sha1(content)};
 
       std::unique_ptr<UnitEmitter> ue{
-        assemble_string(content.data(), content.size(), fileName->c_str(), md5,
+        assemble_string(content.data(), content.size(), fileName->c_str(), sha1,
                         Native::s_noNativeFuncs)
       };
       Lock lock(m_ar->getMutex());
@@ -391,18 +446,47 @@ bool Package::parseImpl(const std::string* fileName) {
   std::ifstream s(fullPath);
   std::string content {
     std::istreambuf_iterator<char>(s), std::istreambuf_iterator<char>() };
-  MD5 md5{string_md5(content)};
+
+  auto const& options = RepoOptions::forFile(fullPath.data());
+  auto const sha1 = SHA1{mangleUnitSha1(string_sha1(content),
+                                        *fileName,
+                                        options)};
+  if (RuntimeOption::RepoLocalPath.size() &&
+      RuntimeOption::RepoLocalMode != "--" &&
+      m_locally_cached_bytecode.count(*fileName)) {
+    // Try the repo; if it's not already there, invoke the compiler.
+    if (auto ue = Repo::get().urp().loadEmitter(
+          *fileName, sha1, Native::s_noNativeFuncs
+        )) {
+      for (auto& ent : ue->m_symbol_refs) {
+        m_ar->parseOnDemandBy(ent.first, ent.second);
+      }
+      Lock lock(m_ar->getMutex());
+      m_ar->addHhasFile(std::move(ue));
+      return true;
+    }
+  }
 
   // Invoke external compiler. If it fails to compile the file we log an
   // error and and skip it.
   auto uc = UnitCompiler::create(
-    content.data(), content.size(), fileName->c_str(), md5,
-    Native::s_noNativeFuncs, false, RepoOptions::forFile(fileName->data()));
+    content.data(), content.size(), fileName->c_str(), sha1,
+    Native::s_noNativeFuncs, false, options);
   assertx(uc);
   try {
-    auto ue = uc->compile(m_ar->getParseOnDemandCallBacks());
+    auto ue = uc->compile(true);
     if (ue && !ue->m_ICE) {
-      m_ar->lock()->addHhasFile(std::move(ue));
+      for (auto& ent : ue->m_symbol_refs) {
+        m_ar->parseOnDemandBy(ent.first, ent.second);
+      }
+      if (RuntimeOption::RepoCommit &&
+          RuntimeOption::RepoLocalPath.size() &&
+          RuntimeOption::RepoLocalMode == "rw") {
+        m_ueq.push(std::move(ue));
+      } else {
+        Lock lock(m_ar->getMutex());
+        m_ar->addHhasFile(std::move(ue));
+      }
       report(0);
       return true;
     } else {
@@ -429,15 +513,10 @@ void Package::saveStatsToFile(const char *filename, int totalSeconds) const {
     ms.add("FileCount", getFileCount())
       .add("LineCount", getLineCount())
       .add("CharCount", getCharCount())
-      .add("FunctionCount", m_ar->getFunctionCount())
-      .add("ClassCount", m_ar->getClassCount())
       .add("TotalTime", totalSeconds);
 
     if (getLineCount()) {
       ms.add("AvgCharPerLine", getCharCount() / getLineCount());
-    }
-    if (m_ar->getFunctionCount()) {
-      ms.add("AvgLinePerFunc", getLineCount()/m_ar->getFunctionCount());
     }
 
     ms.done();

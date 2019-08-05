@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : array getimagesize(string imagefile [, array info])
  * Description: Get the size of an image as 4-element array
  * Source code: ext/standard/image.c
  */
-
+<<__EntryPoint>> function main(): void {
 $imagetype_filenames = array(
       // GIF file
       "GIF image file" => "200x100.gif",
@@ -41,5 +41,5 @@ foreach($imagetype_filenames as $key => $filename) {
       var_dump( getimagesize(dirname(__FILE__)."/$filename", &$info) );
       var_dump( $info );
 };
-?>
-===DONE===
+echo "===DONE===\n";
+}

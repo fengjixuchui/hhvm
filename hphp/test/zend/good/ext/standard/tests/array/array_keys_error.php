@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 echo "\n*** Testing error conditions ***";
 var_dump(array_keys(100));
 var_dump(array_keys("string"));
@@ -9,4 +9,4 @@ try { var_dump(array_keys(array(), "", TRUE, 100));  } catch (Exception $e) { ec
 var_dump(array_keys(array(1,2,3, array() => array())));  // (W)illegal offset
 
 echo "Done\n";
-?>
+}

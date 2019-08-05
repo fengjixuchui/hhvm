@@ -1,11 +1,11 @@
-<?php
+<?hh
 
 function handler() {
  var_dump(__METHOD__);
  return true;
  }
 
-function foo(array &$a) {
+function foo(@array &$a) {
  var_dump($a);
  }
 

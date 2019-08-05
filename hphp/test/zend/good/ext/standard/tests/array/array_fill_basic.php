@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : proto array array_fill(int start_key, int num, mixed val)
  * Description: Create an array containing num elements starting with index start_key each initialized to val 
  * Source code: ext/standard/array.c
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_fill() : basic functionality ***\n";
 
 // calling the array_fill with all possible valid values for 'val' argument
@@ -38,4 +38,4 @@ for($i = 0; $i < count($values); $i ++)
 }  
 
 echo "Done";
-?>
+}

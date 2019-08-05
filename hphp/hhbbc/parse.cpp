@@ -61,21 +61,18 @@ const StaticString s_Closure("Closure");
 const StaticString s_toString("__toString");
 const StaticString s_Stringish("Stringish");
 const StaticString s_XHPChild("XHPChild");
-const StaticString s_86cinit("86cinit");
-const StaticString s_86sinit("86sinit");
-const StaticString s_86linit("86linit");
-const StaticString s_86pinit("86pinit");
 const StaticString s_attr_Deprecated("__Deprecated");
 const StaticString s_class_alias("class_alias");
-const StaticString s_Reified("__Reified");
+const StaticString s___NoContextSensitiveAnalysis(
+    "__NoContextSensitiveAnalysis");
 
 //////////////////////////////////////////////////////////////////////
 
-void record_const_init(php::Program& prog, uintptr_t encoded_func) {
+void record_const_init(php::Program& prog, php::Func* func) {
   auto id = prog.nextConstInit.fetch_add(1, std::memory_order_relaxed);
   prog.constInits.ensureSize(id + 1);
 
-  DEBUG_ONLY auto const oldVal = prog.constInits.exchange(id, encoded_func);
+  DEBUG_ONLY auto const oldVal = prog.constInits.exchange(id, func);
   assert(oldVal == 0);
 }
 
@@ -130,7 +127,7 @@ struct ParseUnitState {
    * pinit and sinit functions are added to improve overall
    * performance.
    */
-  hphp_fast_map<php::Func*, int> constPassFuncs;
+  hphp_fast_set<php::Func*> constPassFuncs;
 
   /*
    * List of class aliases defined by this unit
@@ -174,7 +171,7 @@ std::set<Offset> findBasicBlocks(const FuncEmitter& fe) {
     auto const breaksBB =
       instrIsNonCallControlFlow(op) ||
       instrFlags(op) & TF ||
-      (isFCallStar(op) && !instrJumpOffsets(pc).empty());
+      (hasFCallEffects(op) && !instrJumpOffsets(pc).empty());
 
     if (options.TraceBytecodes.count(op)) traceBc = true;
 
@@ -192,15 +189,15 @@ std::set<Offset> findBasicBlocks(const FuncEmitter& fe) {
   /*
    * Find blocks associated with exception handlers.
    *
-   *   - The start of each fault-protected region begins a block.
+   *   - The start of each EH protected region begins a block.
    *
    *   - The instruction immediately after the end of any
-   *     fault-protected region begins a block.
+   *     EH protected region begins a block.
    *
-   *   - Each fault or catch entry point begins a block.
+   *   - Each catch entry point begins a block.
    *
    *   - The instruction immediately after the end of any
-   *     fault or catch region begins a block.
+   *     catch region begins a block.
    */
   for (auto& eh : fe.ehtab) {
     markBlock(eh.m_base);
@@ -229,25 +226,6 @@ struct ExnTreeInfo {
    * behavior in that region.
    */
   hphp_fast_map<const EHEnt*,ExnNodeId> ehMap;
-
-  /*
-   * Keep track of the start offsets for all fault funclets.  This is
-   * used to find the extents of each handler for find_fault_funclets.
-   * It is assumed that each fault funclet handler extends from its
-   * entry offset until the next fault funclet entry offset (or end of
-   * the function).
-   *
-   * This relies on the following bytecode invariants:
-   *
-   *   - All fault funclets come after the primary function body.
-   *
-   *   - Each fault funclet is a contiguous region of bytecode that
-   *     does not jump into other fault funclets or into the primary
-   *     function body.
-   *
-   *   - Nothing comes after the fault funclets.
-   */
-  std::set<Offset> faultFuncletStarts;
 };
 
 template<class FindBlock>
@@ -257,27 +235,12 @@ ExnTreeInfo build_exn_tree(const FuncEmitter& fe,
   ExnTreeInfo ret;
   func.exnNodes.reserve(fe.ehtab.size());
   for (auto& eh : fe.ehtab) {
+    auto const catchBlk = findBlock(eh.m_handler, true);
     auto node = php::ExnNode{};
     node.idx = func.exnNodes.size();
     node.parent = NoExnNodeId;
     node.depth = 1; // 0 depth means no ExnNode
-
-    switch (eh.m_type) {
-    case EHEnt::Type::Fault:
-      {
-        auto const fault = findBlock(eh.m_handler);
-        ret.faultFuncletStarts.insert(eh.m_handler);
-        node.info = php::FaultRegion { fault->id, eh.m_iterId };
-      }
-      break;
-    case EHEnt::Type::Catch:
-      {
-        auto const catchBlk = findBlock(eh.m_handler);
-        node.info = php::CatchRegion { catchBlk->id, eh.m_iterId };
-      }
-      break;
-    }
-
+    node.region = php::CatchRegion { catchBlk, eh.m_iterId };
     ret.ehMap[&eh] = node.idx;
 
     if (eh.m_parentIndex != -1) {
@@ -292,371 +255,7 @@ ExnTreeInfo build_exn_tree(const FuncEmitter& fe,
     func.exnNodes.emplace_back(std::move(node));
   }
 
-  ret.faultFuncletStarts.insert(fe.past);
-
   return ret;
-}
-
-/*
- * Locate all the basic blocks associated with fault funclets, and
- * mark them as such.
- */
-template <class BlockStarts, class FindBlock>
-void find_fault_funclets(ExnTreeInfo& tinfo, const php::Func& /*func*/,
-                         const BlockStarts& blockStarts, FindBlock findBlock) {
-  auto sectionId = uint32_t{1};
-
-  for (auto funcletStartIt = begin(tinfo.faultFuncletStarts);
-      std::next(funcletStartIt) != end(tinfo.faultFuncletStarts);
-      ++funcletStartIt, ++sectionId) {
-    auto const nextFunclet = *std::next(funcletStartIt);
-
-    auto offIt = blockStarts.find(*funcletStartIt);
-    assert(offIt != end(blockStarts));
-
-    do {
-      auto const blk = findBlock(*offIt);
-      blk->section   = static_cast<php::Block::Section>(sectionId);
-      ++offIt;
-    } while (offIt != end(blockStarts) && *offIt < nextFunclet);
-  }
-}
-
-BlockId node_entry_block(const php::ExnNode& node) {
-  return match<BlockId>(
-    node.info,
-    [] (const php::CatchRegion& cr) { return cr.catchEntry; },
-    [] (const php::FaultRegion& fr) { return fr.faultEntry; }
-  );
-}
-
-/*
- * Build the exceptional edge lists for a function for the simple (and common
- * case). If the function's exception tree is all flat (no children), then
- * unwind edges are always empty (you cannot unwind from the main section, and
- * if you're in the fault handler you'll exit the function). Throw exits just
- * jump to the associated handler (and any throw in the handler will exit the
- * function).
- */
-void build_exceptional_edges_simple(php::Func& func) {
-  for (auto& blk : func.blocks) {
-    assert(blk->throwExits.empty());
-    assert(blk->unwindExits.empty());
-    if (blk->exnNodeId == NoExnNodeId) continue;
-    blk.mutate()->throwExits.push_back(
-      node_entry_block(func.exnNodes[blk->exnNodeId])
-    );
-  }
-}
-
-/*
- * Populate the throw and unwind edges for all blocks in the function.
- *
- * - An Unwind instruction will jump to the handler's parent, if any. If the
- *   handler has no parent, it will either exit the function (and thus no edge),
- *   or it will jump to a different handler, depending on the unwinder's state
- *   machine.
- *
- * - A throwing instruction (which can happen anytime within a block) will jump
- *   to the block's exception handler (given by the exnNode), if any. If there
- *   is not, and we're in a handler, it will jump to the same place an Unwind
- *   instruction would (which may be nowhere).
- *
- * These cases are difficult to get right (especially when unwinding without a
- * parent region). So, we simulate the unwinder as a state machine and find the
- * closure of all of its possible states. From these states we can then infer
- * which edges can be traversed by the unwinder. Once we have the unwinder
- * edges, we can then calculate the throw edges.
- */
-void build_exceptional_edges(const ExnTreeInfo& tinfo, php::Func& func) {
-  // Check for the simple and quicker cases
-  if (func.exnNodes.empty()) return;
-  if (std::all_of(
-        func.exnNodes.begin(),
-        func.exnNodes.end(),
-        [](auto const& n){ return n.children.empty(); })
-     ) {
-    return build_exceptional_edges_simple(func);
-  }
-
-  FTRACE(4, "    -------- build exceptional edges (full) --------\n");
-  FTRACE(8, "{}\n", show(func));
-
-  // Map of exceptional regions that can be entered from other exceptional
-  // regions via throws.
-  folly::sorted_vector_map<
-    const php::ExnNode*,
-    folly::sorted_vector_set<const php::ExnNode*>
-  > throws;
-
-  // Map of blocks to the exceptional regions that block belongs to (a block can
-  // belong to multiple exceptional regions at once).
-  folly::sorted_vector_map<
-    BlockId,
-    folly::sorted_vector_set<const php::ExnNode*>
-  > blocksToNodes;
-
-  auto const add = [&] (BlockId bid, const php::ExnNode* node) {
-    auto const& blk = *func.blocks[bid];
-    assert(blk.throwExits.empty());
-    assert(blk.unwindExits.empty());
-    if (node) blocksToNodes[blk.id].insert(node);
-    if (blk.exnNodeId == NoExnNodeId) return;
-    throws[node].insert(&func.exnNodes[blk.exnNodeId]);
-  };
-
-  // There's no easy way to determine which blocks belong to which exceptional
-  // regions, except by doing a walk from each region's entry block.
-  auto const mainBlocks = rpoSortAddDVs(func);
-  for (auto const bid : mainBlocks) add(bid, nullptr);
-
-  uint32_t nodeCount = 0;
-  visitExnLeaves(
-    func,
-    [&] (const php::ExnNode& node) {
-      ++nodeCount;
-      auto const blocks = rpoSortFromBlock(func, node_entry_block(node));
-      for (auto const bid : blocks) add(bid, &node);
-    }
-  );
-
-  FTRACE(
-    8, "    throws: {}\n",
-    [&]{
-      using namespace folly::gen;
-      return from(throws)
-        | map([] (auto const& p) {
-            return folly::sformat(
-              "{} -> {}",
-              p.first ? folly::sformat("E{}", p.first->idx) : "*",
-              from(p.second)
-                | map([] (auto const& n) {
-                    return folly::sformat("E{}", n->idx);
-                  })
-                | unsplit<std::string>(",")
-            );
-          })
-        | unsplit<std::string>(", ");
-    }()
-  );
-
-  FTRACE(
-    8, "    blocks to nodes: {}\n",
-    [&]{
-      using namespace folly::gen;
-      return from(blocksToNodes)
-        | map([] (auto const& p) {
-            return folly::sformat(
-              "B{} -> {}",
-              p.first,
-              from(p.second)
-                | map([] (auto const& n) {
-                    return folly::sformat("E{}", n->idx);
-                  })
-                | unsplit<std::string>(",")
-            );
-          })
-        | unsplit<std::string>(", ");
-    }()
-  );
-
-  /* Unwinder state machine simulation */
-
-  // The unwinder's state is a stack of regions (the current region is just the
-  // top of the stack).
-  using State = std::vector<const php::ExnNode*>;
-
-  DEBUG_ONLY auto const showState = [&](const State& state) {
-    using namespace folly::gen;
-    return from(state)
-    | map([&] (const php::ExnNode* n) {
-        return folly::sformat("E{}", n->idx);
-      })
-    | unsplit<std::string>("->");
-  };
-
-  folly::sorted_vector_set<State> states;
-  folly::sorted_vector_set<State> newStates;
-  folly::sorted_vector_map<
-    const php::ExnNode*,
-    folly::sorted_vector_set<const php::ExnNode*>
-  > unwindEdges;
-
-  auto iters = 0;
-  auto changed = false;
-
-  auto const dumpStates = [&] (const char* header, int space, int level) {
-    FTRACE(
-      level, "{}{}:\n{}\n",
-      std::string(space, ' '),
-      header,
-      [&]{
-        using namespace folly::gen;
-        return from(states)
-          | map([&] (const State& state) {
-              return folly::sformat(
-                "{}{}",
-                std::string(space+2, ' '),
-                showState(state)
-              );
-            })
-          | unsplit<std::string>("\n");
-      }()
-    );
-  };
-
-  /*
-   * We need to find all the possible states that the unwinder can be in from
-   * the (known) initial states. These initial states are just the regions that
-   * are reachable via throws from the main region.
-   *
-   * At each round, we take the current known states and then apply the various
-   * unwinder rules to them to generate new states. We accumulate the states
-   * until we reach a fixed point (no new states encountered). At this point,
-   * the edges between the various states give the unwind edges between regions.
-   */
-
-  for (auto const& dst : throws[nullptr]) states.insert({dst});
-  do {
-    FTRACE(6, "    -- iteration #{}\n", iters+1);
-    dumpStates("start", 6, 6);
-
-    FTRACE(6, "      update:\n");
-    // Iterate over new states, generate new ones.
-    for (auto state : states) {
-      assert(!state.empty());
-      auto const current = state.back();
-      assert(current);
-
-      FTRACE(6, "        * {}\n", showState(state));
-
-      // Sanity check. In a well-formed func, we should always reach a
-      // fixed-point. This is a very crude test to avoid looping forever. We
-      // should never have a stack with duplicate regions.
-      always_assert(state.size() <= nodeCount);
-
-      // If this is a catch region, the unwinder pops off the top of its stack
-      // first.
-      match<void>(
-        current->info,
-        [&](const php::CatchRegion&) {
-          state.pop_back();
-          FTRACE(6, "          Pop (catch)\n");
-        },
-        [] (const php::FaultRegion&) {}
-      );
-
-      // For each region that we can jump to via a throw from this region,
-      // record a new state. The new state is the current state with the
-      // destination region pushed onto it.
-      for (auto const& dst : throws[current]) {
-        state.push_back(dst);
-        FTRACE(6, "          => {} (throw)\n", showState(state));
-        newStates.insert(state);
-        state.pop_back();
-      }
-
-      // Handle the unwind case. While the top doesn't have a parent, pop. If
-      // the stack is now empty, an unwind will exit the function, so there's no
-      // new state.
-      while (!state.empty() && state.back()->parent == NoExnNodeId) {
-        state.pop_back();
-      }
-      if (state.empty()) continue;
-
-      // The stack is non-empty and the top has a parent. We'll unwind to the
-      // top's parent, so record that new state and record the edge.
-      auto const oldNode = state.back();
-      state.back() = &func.exnNodes[oldNode->parent];
-      FTRACE(6, "          =>  {} (unwind E{} to E{})\n",
-             showState(state), oldNode->idx, state.back()->idx);
-      newStates.insert(state);
-      unwindEdges[current].insert(state.back());
-    }
-
-    // Merge the new states into the old ones. If we've generated new ones, then
-    // we have to repeat.
-    auto const old = states.size();
-    states.insert(newStates.begin(), newStates.end());
-    changed = states.size() != old;
-    newStates.clear();
-    ++iters;
-  } while (changed);
-
-  FTRACE(4, "    fixed-point reached in {} iterations\n", iters);
-  dumpStates("fixed-point", 4, 4);
-
-  FTRACE(
-    6, "    unwind edges: {}\n",
-    [&]{
-      using namespace folly::gen;
-      return from(unwindEdges)
-        | map([] (auto const& p) {
-            return folly::sformat(
-              "E{} -> {}",
-              p.first->idx,
-              from(p.second)
-                | map([] (auto const& n) {
-                    return folly::sformat("E{}", n->idx);
-                  })
-                | unsplit<std::string>(",")
-            );
-          })
-        | unsplit<std::string>(", ");
-    }()
-  );
-
-  // Now that we have the unwind edges for regions, we can populate the block's
-  // unwind edges. For each block, they're just the union of the unwind edges of
-  // all the regions the block belongs to. With the unwind edges done, the throw
-  // edges are easily computed.
-  auto const unwindExitsForBlock = [&] (BlockId blk) {
-    CompactVector<BlockId> exits;
-    for (auto const& node : blocksToNodes[blk]) {
-      for (auto const& edge : unwindEdges[node]) {
-        exits.push_back(node_entry_block(*edge));
-      }
-    }
-    // We might have duplicate exits now, so we need to remove them.
-    std::sort(exits.begin(), exits.end());
-    exits.resize(std::unique(exits.begin(), exits.end()) - exits.begin());
-    return exits;
-  };
-
-  for (auto& cblk : func.blocks) {
-    auto const blk = cblk.mutate();
-    assert(blk->throwExits.empty());
-    assert(blk->unwindExits.empty());
-
-    if (ends_with_unwind(*blk)) {
-      blk->unwindExits = unwindExitsForBlock(blk->id);
-    }
-
-    if (blk->exnNodeId != NoExnNodeId) {
-      blk->throwExits.push_back(
-        node_entry_block(func.exnNodes[blk->exnNodeId])
-      );
-    } else if (blk->section != php::Block::Section::Main) {
-      blk->throwExits = unwindExitsForBlock(blk->id);
-    }
-
-    FTRACE(
-      8, "    blk:{} (throw:{}) (unwind:{})\n",
-      blk->id,
-      [&]{
-        using namespace folly::gen;
-        return from(blk->throwExits)
-          | map([] (BlockId b) { return folly::sformat(" blk:{}", b); })
-          | unsplit<std::string>("");
-      }(),
-      [&]{
-        using namespace folly::gen;
-        return from(blk->unwindExits)
-          | map([] (BlockId b) { return folly::sformat(" blk:{}", b); })
-          | unsplit<std::string>("");
-      }()
-    );
-  }
 }
 
 template<class T> T decode(PC& pc) {
@@ -710,7 +309,7 @@ void populate_block(ParseUnitState& puState,
     for (int32_t i = 0; i < vecLen; ++i) {
       ret.push_back(findBlock(
         opPC + decode<Offset>(pc) - ue.bc()
-      )->id);
+      ));
     }
     return ret;
   };
@@ -723,14 +322,14 @@ void populate_block(ParseUnitState& puState,
       auto const id = decode<Id>(pc);
       auto const offset = decode<Offset>(pc);
       ret.emplace_back(ue.lookupLitstr(id),
-                       findBlock(opPC + offset - ue.bc())->id);
+                       findBlock(opPC + offset - ue.bc()));
     }
 
     // Final case is the default, and must have a litstr id of -1.
     DEBUG_ONLY auto const defId = decode<Id>(pc);
     auto const defOff = decode<Offset>(pc);
     assert(defId == -1);
-    ret.emplace_back(nullptr, findBlock(opPC + defOff - ue.bc())->id);
+    ret.emplace_back(nullptr, findBlock(opPC + defOff - ue.bc()));
     return ret;
   };
 
@@ -761,10 +360,7 @@ void populate_block(ParseUnitState& puState,
   };
 
   auto defcns = [&] () {
-    puState.constPassFuncs[&func] |= php::Program::ForAnalyze;
-  };
-  auto addelem = [&] () {
-    puState.constPassFuncs[&func] |= php::Program::ForOptimize;
+    puState.constPassFuncs.insert(&func);
   };
   auto defcls = [&] (const Bytecode& b) {
     puState.defClsMap[b.DefCls.arg1] = &func;
@@ -778,14 +374,9 @@ void populate_block(ParseUnitState& puState,
   auto createcl = [&] (const Bytecode& b) {
     puState.createClMap[b.CreateCl.arg2].insert(&func);
   };
-  auto fpushfuncu = [&] (const Bytecode& b) {
-    if (b.FPushFuncU.str3 == s_class_alias.get()) {
-      puState.constPassFuncs[&func] |= php::Program::ForAnalyze;
-    }
-  };
   auto fpushfuncd = [&] (const Bytecode& b) {
     if (b.FPushFuncD.str2 == s_class_alias.get()) {
-      puState.constPassFuncs[&func] |= php::Program::ForAnalyze;
+      puState.constPassFuncs.insert(&func);
     }
   };
   auto has_call_unpack = [&] {
@@ -793,8 +384,8 @@ void populate_block(ParseUnitState& puState,
                                    &*fe.fpitab.end(), pc - ue.bc());
     auto pc = ue.bc() + fpi->m_fpiEndOff;
     auto const op = decode_op(pc);
-    if (op != OpFCall) return false;
-    return decodeFCallArgs(pc).hasUnpack();
+    if (!isLegacyFCall(op)) return false;
+    return decodeFCallArgs(op, pc).hasUnpack();
   };
 
 #define IMM_BLA(n)     auto targets = decode_switch(opPC);
@@ -813,23 +404,13 @@ void populate_block(ParseUnitState& puState,
                          always_assert(id < func.numIters);      \
                          return id;                              \
                        }();
-#define IMM_CAR(n)     auto slot = [&] {                                \
-                         ClsRefSlotId id = decode_iva(pc);              \
-                         always_assert(id >= 0 && id < func.numClsRefSlots); \
-                         return id;                                     \
-                       }();
-#define IMM_CAW(n)     auto slot = [&] {                                \
-                         ClsRefSlotId id = decode_iva(pc);              \
-                         always_assert(id >= 0 && id < func.numClsRefSlots); \
-                         return id;                                     \
-                       }();
 #define IMM_DA(n)      auto dbl##n = decode<double>(pc);
 #define IMM_SA(n)      auto str##n = ue.lookupLitstr(decode<Id>(pc));
 #define IMM_RATA(n)    auto rat = decodeRAT(ue, pc);
 #define IMM_AA(n)      auto arr##n = ue.lookupArray(decode<Id>(pc));
 #define IMM_BA(n)      assert(next == past);     \
                        auto target##n = findBlock(  \
-                         opPC + decode<Offset>(pc) - ue.bc())->id;
+                         opPC + decode<Offset>(pc) - ue.bc());
 #define IMM_OA_IMPL(n) subop##n; decode(pc, subop##n);
 #define IMM_OA(type)   type IMM_OA_IMPL
 #define IMM_VSA(n)     auto keys = decode_stringvec();
@@ -840,23 +421,23 @@ void populate_block(ParseUnitState& puState,
                                        <= func.locals.size());           \
                          return LocalRange { range.first, range.count }; \
                        }();
-#define IMM_FCA(n)     auto fca = [&] {                                   \
-                         auto const fca = decodeFCallArgs(pc);            \
-                         auto const numBytes = (fca.numArgs + 7) / 8;     \
-                         auto byRefs = fca.enforceReffiness()             \
-                           ? std::make_unique<uint8_t[]>(numBytes)        \
-                           : nullptr;                                     \
-                         if (byRefs) {                                    \
-                           memcpy(byRefs.get(), fca.byRefs, numBytes);    \
-                         }                                                \
-                         auto const aeOffset = fca.asyncEagerOffset;      \
-                         auto const aeTarget = aeOffset != kInvalidOffset \
-                           ? findBlock(opPC + aeOffset - ue.bc())->id     \
-                           : NoBlockId;                                   \
-                         assertx(aeTarget == NoBlockId || next == past);  \
-                         return FCallArgs(fca.flags, fca.numArgs,         \
-                                          fca.numRets, std::move(byRefs), \
-                                          aeTarget);                      \
+#define IMM_FCA(n)     auto fca = [&] {                                      \
+                         auto const fca = decodeFCallArgs(op, pc);           \
+                         auto const numBytes = (fca.numArgs + 7) / 8;        \
+                         auto byRefs = fca.enforceReffiness()                \
+                           ? std::make_unique<uint8_t[]>(numBytes)           \
+                           : nullptr;                                        \
+                         if (byRefs) {                                       \
+                           memcpy(byRefs.get(), fca.byRefs, numBytes);       \
+                         }                                                   \
+                         auto const aeOffset = fca.asyncEagerOffset;         \
+                         auto const aeTarget = aeOffset != kInvalidOffset    \
+                           ? findBlock(opPC + aeOffset - ue.bc())            \
+                           : NoBlockId;                                      \
+                         assertx(aeTarget == NoBlockId || next == past);     \
+                         return FCallArgs(fca.flags, fca.numArgs,            \
+                                          fca.numRets, std::move(byRefs),    \
+                                          aeTarget, fca.lockWhileUnwinding); \
                        }();
 
 #define IMM_NA
@@ -904,14 +485,11 @@ void populate_block(ParseUnitState& puState,
         return bc::opcode { IMM_ARG_##imms FLAGS_ARG_##flags };    \
       }();                                                         \
       b.srcLoc = srcLocIx;                                         \
-      if (Op::opcode == Op::DefCns) defcns();                      \
-      if (Op::opcode == Op::AddElemC ||                            \
-          Op::opcode == Op::AddNewElemC) addelem();                \
+      if (Op::opcode == Op::DefCns)      defcns();                 \
       if (Op::opcode == Op::DefCls)      defcls(b);                \
       if (Op::opcode == Op::DefClsNop)   defclsnop(b);             \
       if (Op::opcode == Op::AliasCls)    aliascls(b);              \
       if (Op::opcode == Op::CreateCl)    createcl(b);              \
-      if (Op::opcode == Op::FPushFuncU)  fpushfuncu(b);            \
       if (Op::opcode == Op::FPushFuncD)  fpushfuncd(b);            \
       blk.hhbcs.push_back(std::move(b));                           \
       assert(pc == next);                                          \
@@ -953,12 +531,12 @@ void populate_block(ParseUnitState& puState,
     auto const srcLocIx = puState.srcLocs.emplace(
       srcLoc, puState.srcLocs.size()).first->second;
 
-    auto const op = decode_op(pc);
+    auto op = decode_op(pc);
     switch (op) { OPCODES }
 
     if (next == past) {
       if (instrAllowsFallThru(op)) {
-        blk.fallthrough = findBlock(next - ue.bc())->id;
+        blk.fallthrough = findBlock(next - ue.bc());
       }
     }
 
@@ -991,8 +569,6 @@ void populate_block(ParseUnitState& puState,
 #undef IMM_I64A
 #undef IMM_LA
 #undef IMM_IA
-#undef IMM_CAR
-#undef IMM_CAW
 #undef IMM_DA
 #undef IMM_SA
 #undef IMM_RATA
@@ -1023,13 +599,18 @@ void populate_block(ParseUnitState& puState,
    * If a block ends with an unconditional jump, change it to a
    * fallthrough edge.
    *
-   * Just convert the opcode to a Nop, because this could create an
-   * empty block and we have an invariant that no blocks are empty.
+   * If the jmp is the only instruction, convert it to a Nop, to avoid
+   * creating an empty block (we have an invariant that no blocks are
+   * empty).
    */
 
   auto make_fallthrough = [&] {
     blk.fallthrough = blk.hhbcs.back().Jmp.target1;
-    blk.hhbcs.back() = bc_with_loc(blk.hhbcs.back().srcLoc, bc::Nop{});
+    if (blk.hhbcs.size() == 1) {
+      blk.hhbcs.back() = bc_with_loc(blk.hhbcs.back().srcLoc, bc::Nop{});
+    } else {
+      blk.hhbcs.pop_back();
+    }
   };
 
   switch (blk.hhbcs.back().op) {
@@ -1046,12 +627,12 @@ void link_entry_points(php::Func& func,
   func.dvEntries.resize(fe.params.size(), NoBlockId);
   for (size_t i = 0, sz = fe.params.size(); i < sz; ++i) {
     if (fe.params[i].hasDefaultValue()) {
-      auto const dv = findBlock(fe.params[i].funcletOff)->id;
+      auto const dv = findBlock(fe.params[i].funcletOff);
       func.params[i].dvEntryPoint = dv;
       func.dvEntries[i] = dv;
     }
   }
-  func.mainEntry = findBlock(fe.base)->id;
+  func.mainEntry = findBlock(fe.base);
 }
 
 void build_cfg(ParseUnitState& puState,
@@ -1068,19 +649,21 @@ void build_cfg(ParseUnitState& puState,
     }()
   );
 
-  std::map<Offset,copy_ptr<php::Block>> blockMap;
+  std::map<Offset,std::pair<BlockId, copy_ptr<php::Block>>> blockMap;
   auto const bc = fe.ue().bc();
 
-  auto findBlock = [&] (Offset off) {
-    auto& ptr = blockMap[off];
-    if (!ptr) {
-      auto blk = php::Block{};
-      blk.id           = blockMap.size() - 1;
-      blk.section      = php::Block::Section::Main;
+  auto findBlock = [&] (Offset off, bool catchEntry = false) {
+    auto& ent = blockMap[off];
+    if (!ent.second) {
+      auto blk         = php::Block{};
+      ent.first        = blockMap.size() - 1;
       blk.exnNodeId    = NoExnNodeId;
-      ptr.emplace(blk);
+      blk.catchEntry   = catchEntry;
+      ent.second.emplace(std::move(blk));
+    } else if (catchEntry) {
+      ent.second.mutate()->catchEntry = true;
     }
-    return ptr.mutate();
+    return ent.first;
   };
 
   auto exnTreeInfo = build_exn_tree(fe, func, findBlock);
@@ -1090,7 +673,8 @@ void build_cfg(ParseUnitState& puState,
   for (auto it = begin(blockStarts);
        std::next(it) != end(blockStarts);
        ++it) {
-    auto const block   = findBlock(*it);
+    auto const bid     = findBlock(*it);
+    auto const block   = blockMap[*it].second.mutate();
     auto const bcStart = bc + *it;
     auto const bcStop  = bc + *std::next(it);
 
@@ -1098,28 +682,26 @@ void build_cfg(ParseUnitState& puState,
       auto it = exnTreeInfo.ehMap.find(eh);
       assert(it != end(exnTreeInfo.ehMap));
       block->exnNodeId = it->second;
+      block->throwExit = func.exnNodes[it->second].region.catchEntry;
     }
 
     populate_block(puState, fe, func, *block, bcStart, bcStop, findBlock);
     forEachNonThrowSuccessor(*block, [&] (BlockId blkId) {
         predSuccCounts[blkId].first++;
-        predSuccCounts[block->id].second++;
+        predSuccCounts[bid].second++;
     });
   }
 
   link_entry_points(func, fe, findBlock);
-  find_fault_funclets(exnTreeInfo, func, blockStarts, findBlock);
 
   func.blocks.resize(blockMap.size());
   for (auto& kv : blockMap) {
-    auto const blk = kv.second.mutate();
-    auto const id = blk->id;
+    auto const blk = kv.second.second.mutate();
+    auto const id = kv.second.first;
     blk->multiSucc = predSuccCounts[id].second > 1;
     blk->multiPred = predSuccCounts[id].first > 1;
-    func.blocks[id] = std::move(kv.second);
+    func.blocks[id] = std::move(kv.second.second);
   }
-
-  build_exceptional_edges(exnTreeInfo, func);
 }
 
 void add_frame_variables(php::Func& func, const FuncEmitter& fe) {
@@ -1149,14 +731,6 @@ void add_frame_variables(php::Func& func, const FuncEmitter& fe) {
   }
 
   func.numIters = fe.numIterators();
-  func.numClsRefSlots = fe.numClsRefSlots();
-
-  func.staticLocals.reserve(fe.staticVars.size());
-  for (auto& sv : fe.staticVars) {
-    func.staticLocals.push_back(
-      php::StaticLocalInfo { sv.name }
-    );
-  }
 }
 
 std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
@@ -1188,9 +762,11 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
   ret->isMemoizeWrapper    = fe.isMemoizeWrapper;
   ret->isMemoizeWrapperLSB = fe.isMemoizeWrapperLSB;
   ret->isMemoizeImpl       = Func::isMemoizeImplName(fe.name);
-  ret->isReified           = fe.userAttributes.find(s_Reified.get()) !=
+  ret->isReified           = fe.userAttributes.find(s___Reified.get()) !=
                              fe.userAttributes.end();
   ret->isRxDisabled        = fe.isRxDisabled;
+  ret->noContextSensitiveAnalysis = fe.userAttributes.find(
+    s___NoContextSensitiveAnalysis.get()) != fe.userAttributes.end();
 
   add_frame_variables(*ret, fe);
 
@@ -1203,20 +779,16 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
     if (it != RuntimeOption::ConstantFunctions.end()) {
       ret->locals.resize(fe.params.size());
       ret->numIters = 0;
-      ret->numClsRefSlots = 0;
-      ret->staticLocals.clear();
       ret->attrs |= AttrIsFoldable;
 
       auto const mainEntry = BlockId{0};
 
       auto blk         = php::Block{};
-      blk.id           = mainEntry;
-      blk.section      = php::Block::Section::Main;
       blk.exnNodeId    = NoExnNodeId;
 
       blk.hhbcs.push_back(gen_constant(it->second));
       blk.hhbcs.push_back(bc::RetC {});
-      ret->blocks.push_back(copy_ptr<php::Block>(std::move(blk)));
+      ret->blocks.emplace_back(std::move(blk));
 
       ret->dvEntries.resize(fe.params.size(), NoBlockId);
       ret->mainEntry = mainEntry;
@@ -1288,13 +860,13 @@ void parse_methods(ParseUnitState& puState,
   for (auto& me : pce.methods()) {
     auto f = parse_func(puState, unit, ret, *me);
     if (f->name == s_86cinit.get()) {
-      puState.constPassFuncs[f.get()] |= php::Program::ForAnalyze;
+      puState.constPassFuncs.insert(f.get());
       cinit = std::move(f);
     } else {
       if (f->name == s_86pinit.get() ||
           f->name == s_86sinit.get() ||
           f->name == s_86linit.get()) {
-        puState.constPassFuncs[f.get()] |= php::Program::ForAnalyze;
+        puState.constPassFuncs.insert(f.get());
       }
       ret->methods.push_back(std::move(f));
     }
@@ -1328,6 +900,37 @@ void add_stringish(php::Class* cls) {
   }
 }
 
+std::unique_ptr<php::Record> parse_record(php::Unit* unit,
+                                          const RecordEmitter& re) {
+  FTRACE(2, "  record: {}\n", re.name()->data());
+
+  auto ret                = std::make_unique<php::Record>();
+  ret->unit               = unit;
+  ret->srcInfo            = php::SrcInfo {re.getLocation(), re.docComment()};
+  ret->name               = re.name();
+  ret->attrs              = static_cast<Attr>(re.attrs() & ~AttrNoOverride);
+  ret->parentName         = re.parentName();
+  ret->id                 = re.id();
+  ret->userAttributes     = re.userAttributes();
+
+  auto& fieldMap = re.fieldMap();
+  for (size_t idx = 0; idx < fieldMap.size(); ++idx) {
+    auto& field = fieldMap[idx];
+    ret->fields.push_back(
+      php::RecordField {
+        field.name(),
+        field.attrs(),
+        field.userType(),
+        field.docComment(),
+        field.val(),
+        field.typeConstraint(),
+        field.userAttributes()
+      }
+    );
+  }
+  return ret;
+}
+
 std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
                                         php::Unit* unit,
                                         const PreClassEmitter& pce) {
@@ -1345,8 +948,9 @@ std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
   ret->hoistability       = pce.hoistability();
   ret->userAttributes     = pce.userAttributes();
   ret->id                 = pce.id();
-  ret->hasReifiedGenerics = ret->userAttributes.find(s_Reified.get()) !=
+  ret->hasReifiedGenerics = ret->userAttributes.find(s___Reified.get()) !=
                             ret->userAttributes.end();
+  ret->hasConstProp       = false;
 
   for (auto& iface : pce.interfaces()) {
     ret->interfaceNames.push_back(iface);
@@ -1374,11 +978,16 @@ std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
         prop.val()
       }
     );
+    if ((prop.attrs() & (AttrStatic | AttrIsConst)) == AttrIsConst) {
+      ret->hasConstProp = true;
+    }
   }
 
   auto& constMap = pce.constMap();
   for (size_t idx = 0; idx < constMap.size(); ++idx) {
     auto& cconst = constMap[idx];
+    // Set all constants as NoOverride, we'll clear this while building
+    // the index
     ret->constants.push_back(
       php::Const {
         cconst.name(),
@@ -1386,7 +995,8 @@ std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
         cconst.valOption(),
         cconst.phpCode(),
         cconst.typeConstraint(),
-        cconst.isTypeconst()
+        cconst.isTypeconst(),
+        true // NoOverride
       }
     );
   }
@@ -1396,7 +1006,7 @@ std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
       for (auto const& cnsMap : *nativeConsts) {
         TypedValueAux tvaux;
         tvCopy(cnsMap.second, tvaux);
-        tvaux.constModifiers() = { false, false };
+        tvaux.constModifiers() = {};
         ret->constants.push_back(
           php::Const {
             cnsMap.first,
@@ -1498,12 +1108,9 @@ std::unique_ptr<php::Unit> parse_unit(php::Program& prog,
   auto const& ue = *uep;
 
   auto ret      = std::make_unique<php::Unit>();
-  ret->md5      = ue.md5();
+  ret->sha1     = ue.sha1();
   ret->filename = ue.m_filepath;
-  ret->preloadPriority = ue.m_preloadPriority;
   ret->isHHFile = ue.m_isHHFile;
-  ret->useStrictTypes = ue.m_useStrictTypes;
-  ret->useStrictTypesForBuiltins = ue.m_useStrictTypesForBuiltins;
   ret->metaData = ue.m_metaData;
   ret->fileAttributes = ue.m_fileAttributes;
 
@@ -1518,6 +1125,11 @@ std::unique_ptr<php::Unit> parse_unit(php::Program& prog,
   for (size_t i = 0; i < ue.numPreClasses(); ++i) {
     auto cls = parse_class(puState, ret.get(), *ue.pce(i));
     ret->classes.push_back(std::move(cls));
+  }
+
+  for (size_t i = 0; i < ue.numRecords(); ++i) {
+    auto rec = parse_record(ret.get(), *ue.re(i));
+    ret->records.push_back(std::move(rec));
   }
 
   for (auto& fe : ue.fevec()) {
@@ -1546,8 +1158,7 @@ std::unique_ptr<php::Unit> parse_unit(php::Program& prog,
   find_additional_metadata(puState, ret.get());
 
   for (auto const item : puState.constPassFuncs) {
-    auto encoded_val = reinterpret_cast<uintptr_t>(item.first) | item.second;
-    record_const_init(prog, encoded_val);
+    record_const_init(prog, item);
   }
 
   assert(check(*ret));

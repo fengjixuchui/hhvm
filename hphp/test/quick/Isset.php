@@ -1,38 +1,51 @@
 <?hh
 
+abstract final class quickIsset {
+  public static $y;
+}
+
 function f() {
-  global $y;
+
 
   print ":".isset($x).":\n";
-  print ":".isset($y).":\n";
+  print ":".isset($GLOBALS['y']).":\n";
+  print ":".isset(quickIsset::$y).":\n";
 
   $x = 0;
-  $y = 0;
+  $GLOBALS['y'] = 0;
+  quickIsset::$y = 0;
   print ":".isset($x).":\n";
-  print ":".isset($y).":\n";
+  print ":".isset($GLOBALS['y']).":\n";
+  print ":".isset(quickIsset::$y).":\n";
 
   unset($x);
-  unset($y);
+  unset($GLOBALS['y']);
+  quickIsset::$y = null;
   print ":".isset($x).":\n";
-  print ":".isset($y).":\n";
+  print ":".isset($GLOBALS['y']).":\n";
+  print ":".isset(quickIsset::$y).":\n";
 
   $a = array();
   $a["foo"] = null;
   var_dump(isset($a["foo"]));
-  $q =& $a["foo"];
-  var_dump(isset($a["foo"]));
-  unset($q);
-  var_dump(isset($a["foo"]));
 }
-
-f();
-
-/*********/
 
 function get_index() {
   echo "I've made a huge mistake\n";
   return 0;
 }
+
+function g($dontTake, &$toFillIn, $id, $key, $value) {
+  $toFillIn = array();
+  if (isset($toFillIn[$id])) {
+    $cur = $toFillIn[$id];
+  }
+  $toFillIn[$id] = $value;
+}
+
+/*********/
+<<__EntryPoint>> function main(): void {
+f();
 
 $a = 4;
 $arr = array("get_index should not be called");
@@ -44,15 +57,7 @@ var_dump(isset($a, $b, $arr[get_index()]));
  * local to morph into a cell.
  */
 
-function g($dontTake, &$toFillIn, $id, $key, $value) {
-  $toFillIn = array();
-  if (isset($toFillIn[$id])) {
-    $cur = $toFillIn[$id];
-  }
-  $toFillIn[$id] = $value;
-}
-
 $a = null;
 g(null, &$a, "127.0.0.1", null, null );
 var_dump($a);
-
+}

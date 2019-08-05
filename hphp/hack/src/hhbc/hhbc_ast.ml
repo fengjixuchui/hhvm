@@ -23,6 +23,7 @@ type param_num = int
 type stack_index = int
 type class_id = Hhbc_id.Class.t
 type class_num = int
+type record_num = int
 type typedef_num = int
 type function_id = Hhbc_id.Function.t
 type method_id = Hhbc_id.Method.t
@@ -32,6 +33,7 @@ type num_params = int
 type fcall_flags = {
   has_unpack : bool;
   supports_async_eager_return : bool;
+  lock_while_unwinding : bool;
 }
 type by_refs = bool list
 type fcall_args =
@@ -40,19 +42,6 @@ type classref_id = int
 (* Conventionally this is "A_" followed by an integer *)
 type adata_id = string
 type param_locations = int list
-
-(* These are the three flavors of value that can live on the stack:
- *   C = cell
- *   V = ref
- *   R = return value
- *   F = function argument
- *   U = uninit
- * Note: Function argument and uninit are not added to the type
- *       as they are handled separately
- *)
-module Flavor = struct
-  type t = Cell | Ref
-end
 
 module SpecialClsRef = struct
 
@@ -161,8 +150,6 @@ type instruct_basic =
   | PopV
   | PopU
   | Dup
-  | Box
-  | Unbox
 
 type typestruct_resolve_op =
   | Resolve
@@ -201,21 +188,19 @@ type instruct_lit_const =
   | NewVecArray of int
   | NewKeysetArray of int
   | NewPair
+  | NewRecord of class_id * string list
+  | NewRecordArray of class_id * string list
   | AddElemC
-  | AddElemV
   | AddNewElemC
-  | AddNewElemV
   | NewCol of CollectionType.t
   | ColFromArray of CollectionType.t
-  | Cns of const_id
   | CnsE of const_id
-  | CnsU of const_id * string
-  | CnsUE of const_id * string
-  | ClsCns of const_id * classref_id
+  | ClsCns of const_id
   | ClsCnsD of const_id * class_id
   | File
   | Dir
   | Method
+  | FuncCred
 
 type instruct_operator =
   | Concat
@@ -263,8 +248,9 @@ type instruct_operator =
   | CastDArray
   | InstanceOf
   | InstanceOfD of class_id
+  | IsLateBoundCls
   | IsTypeStructC of typestruct_resolve_op
-  | AsTypeStructC of typestruct_resolve_op
+  | ThrowAsTypeStructException
   | CombineAndResolveTypeStruct of int
   | Print
   | Clone
@@ -290,7 +276,6 @@ type instruct_control_flow =
   | RetC
   | RetCSuspended
   | RetM of num_params
-  | Unwind
   | Throw
 
 type instruct_special_flow =
@@ -305,13 +290,10 @@ type instruct_get =
   | CUGetL of local_id
   | PushL of local_id
   | CGetG
-  | CGetQuietG
-  | CGetS of classref_id
+  | CGetS
   | VGetL of local_id
-  | VGetG
-  | VGetS of classref_id
-  | ClsRefGetC of classref_id
-  | ClsRefGetTS of classref_id
+  | ClassGetC
+  | ClassGetTS
 
 type istype_op =
   | OpNull
@@ -335,10 +317,10 @@ type instruct_isset =
   | IssetC
   | IssetL of local_id
   | IssetG
-  | IssetS of classref_id
+  | IssetS
   | EmptyL of local_id
   | EmptyG
-  | EmptyS of classref_id
+  | EmptyS
   | IsTypeC of istype_op
   | IsTypeL of local_id * istype_op
 
@@ -382,16 +364,13 @@ type instruct_mutator =
   (* PopL is put in mutators since it behaves as SetL + PopC *)
   | PopL of Local.t
   | SetG
-  | SetS of classref_id
+  | SetS
   | SetOpL of local_id * eq_op
   | SetOpG of eq_op
-  | SetOpS of eq_op * classref_id
+  | SetOpS of eq_op
   | IncDecL of local_id * incdec_op
   | IncDecG of incdec_op
-  | IncDecS of incdec_op * classref_id
-  | BindL of local_id
-  | BindG
-  | BindS of classref_id
+  | IncDecS of incdec_op
   | UnsetL of local_id
   | UnsetG
   | CheckProp of prop_id
@@ -400,25 +379,29 @@ type instruct_mutator =
 type instruct_call =
   | FPushFunc of num_params * param_locations
   | FPushFuncD of num_params * function_id
-  | FPushFuncU of num_params * function_id * string
-  | FPushObjMethod of num_params * Ast.og_null_flavor * param_locations
-  | FPushObjMethodD of num_params * method_id * Ast.og_null_flavor
-  | FPushClsMethod of num_params * classref_id * param_locations
-  | FPushClsMethodD of num_params * method_id * class_id
-  | FPushClsMethodS of num_params * SpecialClsRef.t
-  | FPushClsMethodSD of num_params * SpecialClsRef.t * method_id
-  | NewObj of classref_id * has_generics_op
+  | FPushFuncRD of num_params * function_id
+  | NewObj
+  | NewObjR
   | NewObjD of class_id
-  | NewObjI of classref_id
+  | NewObjRD of class_id
   | NewObjS of SpecialClsRef.t
-  | FPushCtor of num_params
-  | FCall of fcall_args * class_id * function_id
-  | FCallBuiltin of num_params * num_params * string
+  | FCall of fcall_args
+  | FCallBuiltin of num_params * num_params * num_params * string
+  | FCallClsMethod of fcall_args * param_locations
+  | FCallClsMethodD of fcall_args * class_id * method_id
+  | FCallClsMethodRD of fcall_args * class_id * method_id
+  | FCallClsMethodS of fcall_args * SpecialClsRef.t
+  | FCallClsMethodSD of fcall_args * SpecialClsRef.t * method_id
+  | FCallClsMethodSRD of fcall_args * SpecialClsRef.t * method_id
+  | FCallCtor of fcall_args
+  | FCallObjMethod of fcall_args * Ast_defs.og_null_flavor * param_locations
+  | FCallObjMethodD of fcall_args * Ast_defs.og_null_flavor * method_id
+  | FCallObjMethodRD of fcall_args * Ast_defs.og_null_flavor * method_id
 
 type instruct_base =
   | BaseGC of stack_index * MemberOpMode.t
   | BaseGL of local_id * MemberOpMode.t
-  | BaseSC of stack_index * classref_id * MemberOpMode.t
+  | BaseSC of stack_index * stack_index * MemberOpMode.t
   | BaseL of local_id * MemberOpMode.t
   | BaseC of stack_index * MemberOpMode.t
   | BaseH
@@ -426,11 +409,9 @@ type instruct_base =
 
 type instruct_final =
   | QueryM of num_params * QueryOp.t * MemberKey.t
-  | VGetM of num_params * MemberKey.t
   | SetM of num_params * MemberKey.t
   | IncDecM of num_params * incdec_op * MemberKey.t
   | SetOpM of num_params  * eq_op * MemberKey.t
-  | BindM of num_params * MemberKey.t
   | UnsetM of num_params * MemberKey.t
   | SetRangeM of num_params * setrange_op * int
 
@@ -461,6 +442,7 @@ type instruct_include_eval_define =
   | AliasCls of string * string
   | DefCls of class_num
   | DefClsNop of class_num
+  | DefRecord of record_num
   | DefCns of const_id
   | DefTypeAlias of typedef_num
 
@@ -483,10 +465,7 @@ type instruct_misc =
   | BareThis of bare_this_op
   | CheckThis
   | InitThisLoc of local_id
-  | StaticLocCheck of local_id * string
-  | StaticLocDef of local_id * string
-  | StaticLocInit of local_id * string
-  | Catch
+  | FuncNumArgs
   | ChainFaults
   | OODeclExists of class_kind
   | VerifyParamType of param_id
@@ -494,12 +473,12 @@ type instruct_misc =
   | VerifyOutType of param_id
   | VerifyRetTypeC
   | VerifyRetTypeTS
-  | Self of classref_id
-  | Parent of classref_id
-  | LateBoundCls of classref_id
-  | ClsRefName of classref_id
-  | ReifiedName of int * string
-  | RecordReifiedGeneric of int
+  | Self
+  | Parent
+  | LateBoundCls
+  | ClassName
+  | ReifiedName of string
+  | RecordReifiedGeneric
   | CheckReifiedGenericMismatch
   | NativeImpl
   | AKExists
@@ -517,6 +496,7 @@ type instruct_misc =
   | MemoGetEager of Label.t * Label.t * (local_id * int) option
   | MemoSet of (local_id * int) option
   | MemoSetEager of (local_id * int) option
+  | LockObj
 
 type gen_creation_execution =
   | CreateCont
@@ -545,10 +525,6 @@ type instruct_try =
   | TryCatchBegin
   | TryCatchMiddle
   | TryCatchEnd
-  | TryCatchLegacyBegin of Label.t
-  | TryCatchLegacyEnd
-  | TryFaultBegin of Label.t
-  | TryFaultEnd
 
 type srcloc = { line_begin:int; col_begin:int; line_end:int; col_end:int }
 type instruct =

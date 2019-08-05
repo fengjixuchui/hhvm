@@ -1,10 +1,19 @@
-<?php
+<?hh
 /* Prototype  : string chunk_split(string $str [, int $chunklen [, string $ending]])
  * Description: Returns split line %d%d
  * Source code: ext/standard/string.c
  * Alias to functions: none
 */
+//class for object variable
+class MyClass
+{
+  public function __toString()
+  {
+    return "object";
+  }
+}
 
+<<__EntryPoint>> function main(): void {
 echo "*** Testing chunk_split() : with unexpected values for 'str' argument ***\n";
 
 // Initialising variables
@@ -14,15 +23,6 @@ $ending = ' ';
 //get an unset variable
 $unset_var = 10;
 unset ($unset_var);
-
-//class for object variable
-class MyClass
-{
-  public function __toString()
-  {
-    return "object";
-  }
-}
 
 //resource  variable
 $fp = fopen(__FILE__, 'r');
@@ -78,7 +78,7 @@ $values = array(
   @$unset_var,
 
   // resource data
-  $fp	
+  $fp
 );
 
 // loop through each element of the array for 'str'
@@ -91,5 +91,4 @@ echo "Done";
 
 // close the resource
 fclose($fp);
-
-?>
+}

@@ -130,6 +130,8 @@ TypedNum numericConvHelper(Cell cell) {
       throw ExtendedException("Invalid operand type was used: cannot perform "
                               "this operation with clsmeth");
 
+    case KindOfRecord:
+      raise_error(Strings::RECORD_NOT_SUPPORTED);
     case KindOfObject:
       return make_int(cell.m_data.pobj->toInt64());
 
@@ -244,6 +246,9 @@ struct Mul {
 struct Div {
   Cell operator()(int64_t t, int64_t u) const {
     if (UNLIKELY(u == 0)) {
+      if (RuntimeOption::EvalForbidDivisionByZero) {
+        SystemLib::throwDivisionByZeroExceptionObject();
+      }
       raise_warning(Strings::DIVISION_BY_ZERO);
       if (RuntimeOption::PHP7_IntSemantics) {
         // PHP 7 requires IEEE compliance (+/- INF and NAN) with the result
@@ -286,6 +291,9 @@ struct Div {
     Cell
   >::type operator()(T t, U u) const {
     if (UNLIKELY(u == 0)) {
+      if (RuntimeOption::EvalForbidDivisionByZero) {
+        SystemLib::throwDivisionByZeroExceptionObject();
+      }
       raise_warning(Strings::DIVISION_BY_ZERO);
       if (RuntimeOption::PHP7_IntSemantics) {
         // PHP7 uses the IEEE definition (+/- INF and NAN).
@@ -473,6 +481,23 @@ void stringIncDecOp(Op op, tv_lval cell, StringData* sd) {
   }
 }
 
+void raiseIncDecInvalidType(tv_lval cell) {
+  switch (RuntimeOption::EvalWarnOnIncDecInvalidType) {
+    case 0:
+      break;
+    case 1:
+      raise_warning("Unsupported operand type (%s) for IncDec",
+                    describe_actual_type(cell, true).c_str());
+      break;
+    case 2:
+      raise_error("Unsupported operand type (%s) for IncDec",
+                  describe_actual_type(cell, true).c_str());
+      // fallthrough
+    default:
+      always_assert(false);
+  }
+}
+
 /*
  * Inc or Dec for a string, depending on Op.  Op must implement
  *
@@ -491,6 +516,7 @@ void cellIncDecOp(Op op, tv_lval cell) {
   switch (type(cell)) {
     case KindOfUninit:
     case KindOfNull:
+      raiseIncDecInvalidType(cell);
       op.nullCase(cell);
       return;
 
@@ -503,12 +529,14 @@ void cellIncDecOp(Op op, tv_lval cell) {
       return;
 
     case KindOfFunc: {
+      raiseIncDecInvalidType(cell);
       auto s = funcToStringHelper(val(cell).pfunc);
       stringIncDecOp(op, cell, const_cast<StringData*>(s));
       return;
     }
 
     case KindOfClass: {
+      raiseIncDecInvalidType(cell);
       auto s = classToStringHelper(val(cell).pclass);
       stringIncDecOp(op, cell, const_cast<StringData*>(s));
       return;
@@ -516,6 +544,7 @@ void cellIncDecOp(Op op, tv_lval cell) {
 
     case KindOfPersistentString:
     case KindOfString:
+      raiseIncDecInvalidType(cell);
       stringIncDecOp(op, cell, val(cell).pstr);
       return;
 
@@ -533,6 +562,8 @@ void cellIncDecOp(Op op, tv_lval cell) {
     case KindOfObject:
     case KindOfResource:
     case KindOfClsMeth:
+    case KindOfRecord:
+      raiseIncDecInvalidType(cell);
       return;
 
     case KindOfRef:
@@ -588,9 +619,7 @@ struct DecBase {
   Cell emptyString() const { return make_int(-1); }
   void nullCase(tv_lval) const {}
   void nonNumericString(tv_lval cell) const {
-    if (RuntimeOption::EnableHipHopSyntax) {
-      raise_notice("Decrement on string '%s'", val(cell).pstr->data());
-    }
+    raise_notice("Decrement on string '%s'", val(cell).pstr->data());
   }
 };
 
@@ -659,6 +688,8 @@ Cell cellMod(Cell c1, Cell c2) {
   if (UNLIKELY(i2 == 0)) {
     if (RuntimeOption::PHP7_IntSemantics) {
       SystemLib::throwDivisionByZeroErrorObject(Strings::MODULO_BY_ZERO);
+    } else if (RuntimeOption::EvalForbidDivisionByZero) {
+      SystemLib::throwDivisionByZeroExceptionObject();
     } else {
       raise_warning(Strings::DIVISION_BY_ZERO);
       return make_tv<KindOfBoolean>(false);
@@ -841,6 +872,7 @@ void cellBitNot(Cell& cell) {
     case KindOfResource:
     case KindOfRef:
     case KindOfClsMeth:
+    case KindOfRecord:
       raise_error("Unsupported operand type for ~");
   }
 }

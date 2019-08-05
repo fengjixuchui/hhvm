@@ -4,7 +4,7 @@
 // disallowed in RepoAuthoritative mode. Thus, this test
 // is set to be norepo.
 function err($code, $msg) {
-  echo "Handled ${code}: $msg", "\n";
+  echo "Handled {$code}: $msg", "\n";
   return true;
 }
 
@@ -32,18 +32,18 @@ class CThruTrait {
   use TStringish;
 }
 
-function f1(?Stringish $x): void {
+function f1(@?Stringish $x): void {
   $s = Stringish::class;
-  echo ($x instanceof Stringish) ? "true" : "false", ", ";
-  echo ($x instanceof $s) ? "true" : "false", ", ";
+  echo ($x is Stringish) ? "true" : "false", ", ";
+  echo (is_a($x, $s)) ? "true" : "false", ", ";
   var_dump($x);
   echo "\n";
 }
 
-function f2(Stringish $x): void {
+function f2(@Stringish $x): void {
   $s = Stringish::class;
-  echo ($x instanceof Stringish) ? "true" : "false", ", ";
-  echo ($x instanceof $s) ? "true" : "false", ", ";
+  echo ($x is Stringish) ? "true" : "false", ", ";
+  echo (is_a($x, $s)) ? "true" : "false", ", ";
   var_dump($x);
   echo "\n";
 }

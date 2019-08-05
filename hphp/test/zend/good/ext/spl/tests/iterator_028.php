@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $ar = array(1, 2, array(31, 32, array(331, array(3321, array(33221)))), 4);
 
 $it = new RecursiveIteratorIterator(new RecursiveArrayIterator($ar));
@@ -46,6 +46,5 @@ catch(Exception $e)
 	var_dump($e->getMessage());
 }
 var_dump($it->getMaxDepth());
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

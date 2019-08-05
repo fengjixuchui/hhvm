@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
   Prototype: mixed str_replace(mixed $search, mixed $replace,
                                mixed $subject [, int &$count]);
@@ -6,7 +6,7 @@
                the replacement string
 */
 
-
+<<__EntryPoint>> function main(): void {
 echo "\n*** Testing str_replace() with various search values ***";
 $search_arr = array( TRUE, FALSE, 1, 0, -1, "1", "0", "-1",  NULL,
                      array(), "php", "");
@@ -16,10 +16,11 @@ $i = 0;
 foreach( $search_arr as $value ) {
   echo "\n-- Iteration $i --\n";
   /* replace the string in array */
-  var_dump( str_replace($value, "FOUND", $search_arr, &$count) );
+  $count = 0;
+  var_dump( str_replace_with_count($value, "FOUND", $search_arr, inout $count) );
   var_dump( $count );
   $i++;
 }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 // With autoload, no warning.
 $i = 0;
 function __autoload($k) {
   if ($GLOBALS['i'] == 0) {
-    class a {}
+    include 'class_alias2.inc';
   }
   ++$GLOBALS['i'];
 }

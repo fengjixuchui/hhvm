@@ -25,6 +25,7 @@ namespace HPHP { namespace HHBBC {
 struct Index;
 struct FuncAnalysis;
 struct Bytecode;
+struct BlockUpdateInfo;
 
 /*
  * Use information from an analyze call to perform various
@@ -38,6 +39,11 @@ struct Bytecode;
  * php::Func itself.
  */
 void optimize_func(const Index&, FuncAnalysis&&, bool isFinal);
+
+void update_bytecode(
+    php::Func* func,
+    CompactVector<std::pair<BlockId, BlockUpdateInfo>>&& blockUpdates,
+    FuncAnalysis* = nullptr);
 
 /*
  * Optimize property type hints for a particular class.

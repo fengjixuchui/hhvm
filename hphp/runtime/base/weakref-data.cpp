@@ -16,10 +16,11 @@
 #include "hphp/runtime/base/weakref-data.h"
 
 #include "hphp/runtime/base/string-hash-map.h"
+#include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/base/type-object.h"
 #include "hphp/runtime/base/type-variant.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/system/systemlib.h"
+#include "hphp/util/rds-local.h"
 
 namespace HPHP {
 
@@ -66,6 +67,26 @@ WeakRefData::~WeakRefData() {
     ObjectData* obj = unpack_tv<KindOfObject>(&pointee);
     s_weakref_data.get()->erase((uintptr_t)obj);
   }
+}
+
+/**
+ * The problem this logic tries to solve:
+ * - We have a weakref object that points to an object.
+ * - We use DecRefNZ to get the reference count of the object down to 0 but it
+ *   hasn't been destructed or sweeped yet. But the GC could sweep it at any
+ *   moment.
+ * - Some code now call valid() or get() which without the refcount check would
+ *   return true or the object.
+ * - Because we know that if the sweep or destructor had run the pointer would
+ *   have been cleaned up so if we have a pointer it is safe to look at the
+ *   object.
+ * - So we look at the refcount of the object and make sure it is > 0.
+ */
+bool WeakRefData::isValid() const {
+  if (LIKELY(isRefcountedType(pointee.m_type))) {
+    return tvGetCount(pointee) > 0;
+  }
+  return pointee.m_type != KindOfUninit;
 }
 
 } // namespace HPHP

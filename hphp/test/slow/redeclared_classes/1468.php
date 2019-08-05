@@ -1,10 +1,9 @@
-<?php
+<?hh
 
 class A {
-  protected static function foo() {
+  protected static function foo() {}
 }
-}
-class B extends A{
+class B extends A {
 }
 class C extends B {
   function x() {
@@ -14,10 +13,7 @@ class C extends B {
 
 <<__EntryPoint>>
 function main_1468() {
-if (false) {
-  class A{
-    protected static function foo() {
-}
+  if (__hhvm_intrinsics\launder_value(false)) {
+    include '1468-1.inc';
   }
-}
 }

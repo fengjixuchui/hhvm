@@ -11,14 +11,12 @@ open Core_kernel
 open Hh_core
 open Typing_defs
 
-module TO = TypecheckerOptions
 module Env = Typing_env
 module Reason = Typing_reason
 module TySet = Typing_set
-module Unify = Typing_unify
-module URec = Typing_unify_recursive
 module Utils = Typing_utils
 module MakeType = Typing_make_type
+module Nast = Aast
 
 exception Not_equiv
 exception Dont_unify
@@ -42,8 +40,8 @@ let ty_equiv env ty1 ty2 ~are_ty_param =
   let env, ety1 = Env.expand_type env ty1 in
   let env, ety2 = Env.expand_type env ty2 in
   let ty = match (ety1, ty1), (ety2, ty2) with
-    | ((_, Tunresolved []), _), (_, ty)
-    | (_, ty), ((_, Tunresolved []), _) when are_ty_param -> ty
+    | ((_, Tunion []), _), (_, ty)
+    | (_, ty), ((_, Tunion []), _) when are_ty_param -> ty
     | _ when ty_equal ety1 ety2 ->
       begin match ty1 with
       | _, Tvar _ -> ty1
@@ -56,24 +54,28 @@ let make_union r tyl reason_nullable_opt ~discard_singletons =
   match discard_singletons, reason_nullable_opt, tyl with
   | _, Some null_r, [] ->  (null_r, Tprim Nast.Tnull)
   | true, None, [ty] -> ty
-  | _, None, tyl -> (r, Tunresolved tyl)
+  | _, None, tyl -> (r, Tunion tyl)
   | true, Some null_r, [ty] -> (null_r, Toption ty)
-  | _, Some null_r, tyl -> (null_r, Toption (r, Tunresolved tyl))
+  | _, Some null_r, tyl -> (null_r, Toption (r, Tunion tyl))
 
 let rec union env (r1, _ as ty1) (r2, _ as ty2) =
-  if ty_equal ty1 ty2 then env, ty1
-  else
-    let is_sub_type = Typing_utils.is_sub_type_alt ~no_top_bottom:true in
-    if is_sub_type env ty1 ty2 = Some true then env, ty2
-    else if is_sub_type env ty2 ty1 = Some true then env, ty1
-    else
-      let r = union_reason r1 r2 in
-      union_ env ty1 ty2 r
+  let env, result =
+  if ty_equal ty1 ty2 then env, ty1 else
+  if Typing_utils.is_sub_type_for_union env ty1 ty2 then env, ty2 else
+  if Typing_utils.is_sub_type_for_union env ty2 ty1 then env, ty1 else
+  let r = union_reason r1 r2 in
+  union_ env ty1 ty2 r in
+    Typing_log.(log_with_level env "union" 1 (fun () ->
+      log_types (Reason.to_pos r2) env
+      [Log_head ("Typing_union.union",
+         [Log_type ("ty1", ty1);
+          Log_type ("ty2", ty2); Log_type("result", result)])]));
+          env, result
+
 
 and union_ env ty1 ty2 r =
-  let new_inference = TypecheckerOptions.new_inference (Env.get_tcopt env) in
-  let (env, ty1) = if new_inference then Env.expand_type env ty1 else env, ty1 in
-  let (env, ty2) = if new_inference then Env.expand_type env ty2 else env, ty2 in
+  let env, ty1 = Env.expand_type env ty1 in
+  let env, ty2 = Env.expand_type env ty2 in
   try
   begin match ty1, ty2 with
   | (r1, Tprim Nast.Tint), (r2, Tprim Nast.Tfloat)
@@ -95,28 +97,11 @@ and union_ env ty1 ty2 r =
     | _, Toption _ -> env, ty
     | _ -> env, (r, Toption ty)
     end
-  | (_, Tvar n1), (_, Tvar n2) when not new_inference ->
-    let env, n1 = Env.get_var env n1 in
-    let env, n2 = Env.get_var env n2 in
-    if n1 = n2 then env, (r, Tvar n1) else
-    let env, ty1 = Env.get_type_unsafe env n1 in
-    let env, ty2 = Env.get_type_unsafe env n2 in
-    let n' = Env.fresh () in
-    let env, ty = union env ty1 ty2 in
-    let env = URec.add env n' ty in
-    env, (r, Tvar n')
-  | (r, Tvar n), ty2
-  | ty2, (r, Tvar n) when not new_inference ->
-    let env, ty1 = Env.get_type env r n in
-    let n' = Env.fresh () in
-    let env, ty = union env ty1 ty2 in
-    let env = URec.add env n' ty in
-    env, (r, Tvar n')
-  | (_, Tunresolved tyl1), (_, Tunresolved tyl2) ->
-    union_unresolved env tyl1 tyl2 r
-  | (r, Tunresolved tyl), ty2
-  | ty2, (r, Tunresolved tyl) ->
-    union_unresolved env tyl [ty2] r
+  | (_, Tunion tyl1), (_, Tunion tyl2) ->
+    union_lists env tyl1 tyl2 r
+  | (r, Tunion tyl), ty2
+  | ty2, (r, Tunion tyl) ->
+    union_lists env tyl [ty2] r
   | (_, Tarraykind ak1), (_, Tarraykind ak2) ->
     let env, ak = union_arraykind env ak1 ak2 in
     env, (r, Tarraykind ak)
@@ -124,13 +109,6 @@ and union_ env ty1 ty2 r =
     let env, ak = union_ak env ak1 ak2 in
     let env, tcstr = union_tconstraints env tcstr1 tcstr2 in
     env, (r, Tabstract (ak, tcstr))
-  (* TODO AKgeneric will be killed and replaces with Tgeneric*)
-  | (_, Tabstract (AKgeneric x, _)), ty
-    when Unify.generic_param_matches ~opts:Utils.default_unify_opt env x ty ->
-    env, ty
-  | ty, (_, Tabstract (AKgeneric x, _))
-    when Unify.generic_param_matches ~opts:Utils.default_unify_opt env x ty ->
-    env, ty
   | (_, Tabstract (AKdependent _, Some (_, Tclass _ as ty1))), ty2
   | ty2, (_, Tabstract (AKdependent _, Some (_, Tclass _ as ty1))) ->
     begin try ty_equiv env ty1 ty2 ~are_ty_param:false
@@ -143,8 +121,8 @@ and union_ env ty1 ty2 r =
       env, (r, Ttuple tyl)
     else
       raise Dont_unify
-  | (r1, Tshape (fk1, fdm1)), (r2, Tshape (fk2, fdm2)) ->
-    let env, ty = union_shapes env (fk1, fdm1, r1) (fk2, fdm2, r2) in
+  | (r1, Tshape (shape_kind1, fdm1)), (r2, Tshape (shape_kind2, fdm2)) ->
+    let env, ty = union_shapes env (shape_kind1, fdm1, r1) (shape_kind2, fdm2, r2) in
     env, (r, ty)
   | (_, Tfun ft1), (_, Tfun ft2) ->
     let env, ft = union_funs env ft1 ft2 in
@@ -152,12 +130,12 @@ and union_ env ty1 ty2 r =
   | (_, Tanon (_, id1)), (_, Tanon (_, id2)) when id1 = id2 -> env, ty1
   (* TODO with Tclass, union type arguments if covariant *)
   | (_, ((Tarraykind _ | Tprim _ | Tdynamic | Tabstract _ | Tclass _
-    | Ttuple _ | Tanon _ | Tfun _ | Tobject | Tshape _ | Terr | Tvar _
+    | Ttuple _ | Tanon _ | Tfun _ | Tobject | Tshape _ | Terr | Tvar _ | Tdestructure _
     (* If T cannot be null, `union T nonnull = nonnull`. However, it's hard
      * to say whether a given T can be null - e.g. opaque newtypes, dependent
      * types, etc. - so for now we leave it here.
      * TODO improve that. *)
-    | Tnonnull | Tany) as ty1_)),
+    | Tnonnull | Tany | Tintersection _) as ty1_)),
     (_, ty2_) ->
     (* Make sure to add a dependency on any classes referenced here, even if
      * we're in an error state (i.e., where we are right now). The need for
@@ -206,14 +184,14 @@ and union_ env ty1 ty2 r =
     with Not_equiv -> raise Dont_unify
   end
   with Dont_unify ->
-    env, (r, Tunresolved [ty1; ty2])
+    env, (r, Tunion [ty1; ty2])
 
 and try_union env ty1 ty2 =
   match union env ty1 ty2 with
-  | _, (_, Tunresolved _) -> env, None
+  | env, (_, Tunion _) -> env, None
   | env, ty -> env, Some ty
 
-and union_unresolved env tyl1 tyl2 r =
+and union_lists env tyl1 tyl2 r =
   let attempt_union env tyl ty2 res_is_opt =
     let rec go env tyl ty2 missed res_is_opt =
       match tyl with
@@ -221,7 +199,7 @@ and union_unresolved env tyl1 tyl2 r =
       | ty1::tyl ->
         let env, ety1 = Env.expand_type env ty1 in
         begin match ety1 with
-        | _, Tunresolved tyl1 ->
+        | _, Tunion tyl1 ->
           go env (tyl1@tyl) ty2 missed res_is_opt
         | r, Toption ty ->
           go env (ty::tyl) ty2 missed (Some r)
@@ -241,7 +219,7 @@ and union_unresolved env tyl1 tyl2 r =
     | ty2::tyl2 ->
       let env, ety2 = Env.expand_type env ty2 in
       begin match ety2 with
-      | _, Tunresolved tyl ->
+      | _, Tunion tyl ->
         normalize_union env tyl1 (tyl@tyl2) res_is_opt
       | r, Toption ty ->
         normalize_union env tyl1 (ty::tyl2) (Some r)
@@ -252,8 +230,7 @@ and union_unresolved env tyl1 tyl2 r =
         normalize_union env tyl1 tyl2 res_is_opt
       end in
   let env, tyl, res_is_opt = normalize_union env tyl1 tyl2 None in
-  let new_inference = TypecheckerOptions.new_inference (Env.get_tcopt env) in
-  env, make_union r tyl res_is_opt ~discard_singletons:new_inference
+  env, make_union r tyl res_is_opt ~discard_singletons:true
 
 and union_arraykind env ak1 ak2 =
   match ak1, ak2 with
@@ -300,7 +277,7 @@ and union_funs env fty1 fty2 =
 and union_class env name tyl1 tyl2 =
   let tparams = match Env.get_class env name with
     | None -> []
-    | Some c -> Typing_classes_heap.tparams c in
+    | Some c -> Decl_provider.Class.tparams c in
   union_tylists_w_variances env tparams tyl1 tyl2
 
 and union_ak env ak1 ak2 =
@@ -324,10 +301,10 @@ and union_tylists_w_variances env tparams tyl1 tyl2 =
       let len = List.length l in
       if len < newlen then l @ (List.init (newlen - len) (fun _ -> filler))
       else List.sub l 0 newlen in
-    adjust_list_length variances (List.length tyl1) Ast.Invariant in
+    adjust_list_length variances (List.length tyl1) Ast_defs.Invariant in
   let merge_ty_params env ty1 ty2 variance =
     match variance with
-    | Ast.Covariant -> union env ty1 ty2
+    | Ast_defs.Covariant -> union env ty1 ty2
     | _ -> ty_equiv env ty1 ty2 ~are_ty_param:true in
   let env, tyl = try List.map3_env env tyl1 tyl2 variances ~f:merge_ty_params
     with Not_equiv | Invalid_argument _ -> raise Dont_unify in
@@ -340,61 +317,39 @@ and union_tconstraints env tcstr1 tcstr2 =
     env, Some ty
   | _ -> env, None
 
-and union_shapes env (fields_known1, fdm1, r1) (fields_known2, fdm2, r2) =
-  let fields_known = union_fields_known fields_known1 fields_known2 in
-  let (env, fields_known), fdm =
-    Nast.ShapeMap.merge_env (env, fields_known) fdm1 fdm2 ~combine:
-      (fun (env, fields_known) k fieldopt1 fieldopt2 ->
+and union_shapes env (shape_kind1, fdm1, r1) (shape_kind2, fdm2, r2) =
+  let shape_kind = union_shape_kind shape_kind1 shape_kind2 in
+  let (env, shape_kind), fdm =
+    Nast.ShapeMap.merge_env (env, shape_kind) fdm1 fdm2 ~combine:
+      (fun (env, shape_kind) k fieldopt1 fieldopt2 ->
         match
-          (fields_known1, fieldopt1, r1),
-          (fields_known2, fieldopt2, r2) with
-        | (_, None, _), (_, None, _) -> (env, fields_known), None
+          (shape_kind1, fieldopt1, r1),
+          (shape_kind2, fieldopt2, r2) with
+        | (_, None, _), (_, None, _) -> (env, shape_kind), None
         (* key is present on one side but not the other *)
-        | (_, Some { sft_ty; _ }, _), (fields_known_other, None, r)
-        | (fields_known_other, None, r), (_, Some { sft_ty; _ }, _) ->
-          if TO.experimental_feature_enabled (Env.get_tcopt env)
-            TO.experimental_disable_optional_and_unknown_shape_fields
-          then raise Dont_unify;
-          let fields_known = begin match fields_known with
-            | FieldsPartiallyKnown unset_fields ->
-              FieldsPartiallyKnown (Nast.ShapeMap.remove k unset_fields)
-            | FieldsFullyKnown -> FieldsFullyKnown end in
-          let sft_ty = match fields_known_other with
-            | FieldsFullyKnown ->
+        | (_, Some { sft_ty; _ }, _), (shape_kind_other, None, r)
+        | (shape_kind_other, None, r), (_, Some { sft_ty; _ }, _) ->
+          let sft_ty = match shape_kind_other with
+            | Closed_shape ->
               sft_ty
-            | FieldsPartiallyKnown l when Nast.ShapeMap.has_key k l ->
-              sft_ty
-            (* If the fields are partially known in the shape not containing
-             * the key k, this shape may actually contain this key, so after
-             * unioning, we only know that the key is (optionally) present but
-             * can say nothing about its type. Therefore we assign the top
-             * type. *)
-            | FieldsPartiallyKnown _ ->
+            | Open_shape ->
               let r = Reason.Rmissing_optional_field (
                 Reason.to_pos r,
                 Utils.get_printable_shape_field_name k) in
               (MakeType.mixed r) in
-          (env, fields_known), Some { sft_optional = true; sft_ty }
+          (env, shape_kind), Some { sft_optional = true; sft_ty }
         (* key is present on both sides *)
         | (_, Some { sft_optional = optional1; sft_ty = ty1 }, _),
           (_, Some { sft_optional = optional2; sft_ty = ty2 }, _) ->
           let sft_optional = optional1 || optional2 in
           let env, sft_ty = union env ty1 ty2 in
-          (env, fields_known), Some { sft_optional; sft_ty }) in
-    env, Tshape (fields_known, fdm)
+          (env, shape_kind), Some { sft_optional; sft_ty }) in
+    env, Tshape (shape_kind, fdm)
 
-and union_fields_known fields_known1 fields_known2 =
-  match fields_known1, fields_known2 with
-  | FieldsFullyKnown, FieldsFullyKnown -> FieldsFullyKnown
-  | FieldsFullyKnown, FieldsPartiallyKnown l
-  | FieldsPartiallyKnown l, FieldsFullyKnown -> FieldsPartiallyKnown l
-  | FieldsPartiallyKnown unset_fields1, FieldsPartiallyKnown unset_fields2 ->
-    (* intersect sets of unset fields *)
-    let unset_fields = Nast.ShapeMap.merge (fun _k posopt1 posopt2 ->
-      match posopt1, posopt2 with
-      | Some p, Some _ -> Some p
-      | _ -> None) unset_fields1 unset_fields2 in
-    FieldsPartiallyKnown unset_fields
+and union_shape_kind shape_kind1 shape_kind2 =
+  match shape_kind1, shape_kind2 with
+  | Closed_shape, Closed_shape -> Closed_shape
+  | _ -> Open_shape
 
 (* TODO: add a new reason with positions of merge point and possibly merged
  * envs.*)
@@ -404,22 +359,32 @@ and union_reason r1 r2 =
       if (Reason.compare r1 r2) <= 0 then r1
       else r2
 
-let normalize_union env tyl =
-  let new_inference = TypecheckerOptions.new_inference (Env.get_tcopt env) in
+let normalize_union env ?on_tyvar tyl =
   let orr r_opt r = Some (Option.value r_opt ~default:r) in
-  let rec normalize_union tyl r_null r_union =
+  let rec normalize_union env tyl r_null r_union =
     match tyl with
-    | [] -> r_null, r_union, TySet.empty
+    | [] -> env, r_null, r_union, TySet.empty
     | ty :: tyl ->
-      let ty = if new_inference then Typing_expand.fully_expand env ty else ty in
-      let r_null, r_union, tys' = match ty with
-        | (r, Tprim Nast.Tnull) -> normalize_union [] (orr r_null r) r_union
-        | (r, Toption ty) -> normalize_union [ty] (orr r_null r) r_union
-        | (r, Tunresolved tyl') -> normalize_union tyl' r_null (orr r_union r)
-        | ty -> r_null, r_union, TySet.singleton ty in
-      let r_null, r_union, tys = normalize_union tyl r_null r_union in
-      r_null, r_union, TySet.union tys' tys in
-  normalize_union tyl None None
+      let ty = Typing_expand.fully_expand env ty in
+      let proceed env ty = env, r_null, r_union, TySet.singleton ty in
+      let env, r_null, r_union, tys' = match ty, on_tyvar with
+        | (r, Tvar v), Some on_tyvar ->
+          let env, ty' = on_tyvar env r v in
+          if ty_equal ty ty' then proceed env ty' else
+          normalize_union env [ty'] r_null r_union
+        | (r, Tprim Nast.Tnull), _ -> normalize_union env [] (orr r_null r) r_union
+        | (r, Toption ty), _ -> normalize_union env [ty] (orr r_null r) r_union
+        | (r, Tunion tyl'), _ -> normalize_union env tyl' r_null (orr r_union r)
+        | (_, Tintersection _), _ ->
+          let env, ty = Utils.simplify_intersections env ty ?on_tyvar in
+          begin match ty with
+          | (_, Tintersection _) -> proceed env ty
+          | _ -> normalize_union env [ty] r_null r_union
+          end
+        | ty, _ -> proceed env ty in
+      let env, r_null, r_union, tys = normalize_union env tyl r_null r_union in
+      env, r_null,  r_union, TySet.union tys' tys in
+  normalize_union env tyl None None
 
 let union_list_2_by_2 env tyl =
   let max_n_iter = 20 in
@@ -439,24 +404,38 @@ let union_list_2_by_2 env tyl =
   env, tyl
 
 let union_list env r tyl =
-  let r_null, _r_union, tys = normalize_union env tyl in
+  let env, r_null, _r_union, tys = normalize_union env tyl in
   let env, tyl = union_list_2_by_2 env (TySet.elements tys) in
-  let new_inference = TypecheckerOptions.new_inference (Env.get_tcopt env) in
-  env, make_union r tyl r_null ~discard_singletons:new_inference
+  env, make_union r tyl r_null ~discard_singletons:true
 
-let simplify_unions env (r, _ as ty) =
-  let r_null, r_union, tys = normalize_union env [ty] in
+let fold_union env r tyl =
+  List.fold_left_env env tyl ~init:(MakeType.nothing r) ~f:union
+
+let simplify_unions env ?on_tyvar (r, _ as ty) =
+  let env, r_null, r_union, tys = normalize_union env [ty] ?on_tyvar in
   let env, tyl = union_list_2_by_2 env (TySet.elements tys) in
   let r = Option.value r_union ~default:r in
   env, make_union r tyl r_null ~discard_singletons:true
 
-let diff ty1 ty2 =
-  let filter tyl = List.filter tyl ~f:(fun ty -> not (ty_equal ty ty2)) in
+(* Only ever called with ty2 a type variable and ty1 a normalized union, so
+unless those conditions are met, this is an overapproximation. *)
+let rec diff ty1 ty2 =
   match ty1 with
-  | r, Toption (r', Tunresolved tyl) -> r, Toption (r', Tunresolved (filter tyl))
-  | r, Tunresolved tyl -> r, Tunresolved (filter tyl)
-  | _ -> ty1
+  | r, Toption ty ->
+    begin match diff ty ty2 with
+    | _, Tunion [] -> r, Tprim Nast.Tnull
+    | ty -> r, Toption ty
+    end
+  | r, Tunion tyl ->
+    begin match List.filter tyl ~f:(fun ty -> not (ty_equal ty ty2)) with
+    | [ty] -> ty
+    | tyl -> r, Tunion tyl
+    end
+  | r, _ ->
+    if ty_equal ty1 ty2 then r, Tunion [] else ty1
 
 let () = Typing_utils.union_ref := union
 let () = Typing_utils.union_list_ref := union_list
+let () = Typing_utils.fold_union_ref := fold_union
+let () = Typing_utils.simplify_unions_ref := simplify_unions
 let () = Typing_utils.diff_ref := diff

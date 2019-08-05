@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool ctype_digit(mixed $c)
  * Description: Checks for numeric character(s) 
  * Source code: ext/ctype/ctype.c
@@ -7,7 +7,7 @@
 /*
  * Pass an incorrect number of arguments to ctype_digit() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing ctype_digit() : error conditions ***\n";
 
 // Zero arguments
@@ -19,5 +19,5 @@ echo "\n-- Testing ctype_digit() function with more than expected no. of argumen
 $c = 1;
 $extra_arg = 10;
 try { var_dump( ctype_digit($c, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
-?>
-===DONE===
+echo "===DONE===\n";
+}

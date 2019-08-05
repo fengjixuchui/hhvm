@@ -32,6 +32,7 @@
 #include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/func.h"
+#include "hphp/runtime/vm/interp-helpers.h"
 #include "hphp/runtime/vm/method-lookup.h"
 #include "hphp/runtime/vm/named-entity.h"
 #include "hphp/runtime/vm/unit.h"
@@ -134,21 +135,33 @@ void cgLdFunc(IRLS& env, const IRInstruction* inst) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-const Class* lookupKnownClass(rds::Handle cache_handle,
-                              const StringData* name) {
+template<class T>
+constexpr const char* errorString();
+template<>
+constexpr const char* errorString<Class>() {
+  return Strings::UNKNOWN_CLASS;
+}
+template<>
+constexpr const char* errorString<RecordDesc>() {
+  return Strings::UNKNOWN_RECORD;
+}
+
+template<class T>
+const T* lookupKnownType(rds::Handle cache_handle,
+                         const StringData* name) {
   assertx(rds::isNormalHandle(cache_handle));
   // The caller should already have checked.
   assertx(!rds::isHandleInit(cache_handle));
 
-  AutoloadHandler::s_instance->autoloadClass(
+  AutoloadHandler::s_instance->autoloadType<T>(
     StrNR(const_cast<StringData*>(name))
   );
 
   // Autoloader should have inited it as a side-effect.
   if (UNLIKELY(!rds::isHandleInit(cache_handle, rds::NormalTag{}))) {
-    raise_error(Strings::UNKNOWN_CLASS, name->data());
+    raise_error(errorString<T>(), name->data());
   }
-  return rds::handleToRef<LowPtr<Class>, rds::Mode::Normal>(cache_handle).get();
+  return rds::handleToRef<LowPtr<T>, rds::Mode::Normal>(cache_handle).get();
 }
 
 const Func* loadUnknownFunc(const StringData* name) {
@@ -157,24 +170,6 @@ const Func* loadUnknownFunc(const StringData* name) {
 
 const Func* lookupUnknownFunc(const StringData* name) {
   return loadUnknownFuncHelper(name, raise_resolve_undefined);
-}
-
-const Func* lookupFallbackFunc(const StringData* name,
-                               const StringData* fallback) {
-  VMRegAnchor _;
-
-  // Try to load the first function.
-  auto func = Unit::loadFunc(name);
-  if (LIKELY(!func)) {
-    // Then try to load the fallback function.
-    raise_undefined_function_fallback_notice(name, fallback);
-    func = Unit::loadFunc(fallback);
-    if (UNLIKELY(!func)) {
-      raise_error("Call to undefined function %s()",
-                  stripInOutSuffix(name)->data());
-    }
-  }
-  return func;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -190,6 +185,10 @@ rds::Handle handleFrom<Func>(const NamedEntity* ne) {
 template<>
 rds::Handle handleFrom<Class>(const NamedEntity* ne) {
   return ne->getClassHandle();
+}
+template<>
+rds::Handle handleFrom<RecordDesc>(const NamedEntity* ne) {
+  return ne->getRecordDescHandle();
 }
 
 template<class T, class SlowPath>
@@ -264,7 +263,20 @@ void cgLdClsCached(IRLS& env, const IRInstruction* inst) {
   implLdCached<Class>(env, inst, name, [&] (Vout& v, rds::Handle ch) {
     auto const ptr = v.makeReg();
     auto const args = argGroup(env, inst).imm(ch).ssa(0);
-    cgCallHelper(v, env, CallSpec::direct(lookupKnownClass),
+    cgCallHelper(v, env, CallSpec::direct(lookupKnownType<Class>),
+                 callDest(ptr), SyncOptions::Sync, args);
+    return ptr;
+  });
+}
+
+void cgLdRecDescCached(IRLS& env, const IRInstruction* inst) {
+  auto const extra = inst->extra<LdRecDescCached>();
+
+  implLdCached<RecordDesc>(env, inst, extra->recName,
+                           [&] (Vout& v, rds::Handle ch) {
+    auto const ptr = v.makeReg();
+    auto const args = argGroup(env, inst).imm(ch).immPtr(extra->recName);
+    cgCallHelper(v, env, CallSpec::direct(lookupKnownType<RecordDesc>),
                  callDest(ptr), SyncOptions::Sync, args);
     return ptr;
   });
@@ -282,33 +294,21 @@ void cgLookupFuncCached(IRLS& env, const IRInstruction* inst) {
   );
 }
 
-void cgLdFuncCachedU(IRLS& env, const IRInstruction* inst) {
-  auto const extra = inst->extra<LdFuncCachedU>();
-
-  implLdCached<Func>(env, inst, extra->name, [&] (Vout& v, rds::Handle) {
-    // If we get here, things are going to be slow anyway, so shunt all the
-    // autoloading logic to lookupFallbackFunc().
-    auto const ptr = v.makeReg();
-    auto const args = argGroup(env, inst)
-      .immPtr(extra->name)
-      .immPtr(extra->fallback);
-
-    cgCallHelper(v, env, CallSpec::direct(lookupFallbackFunc),
-                 callDest(ptr), SyncOptions::Sync, args);
-    return ptr;
-  });
-}
-
 void cgLdClsCachedSafe(IRLS& env, const IRInstruction* inst) {
   auto const name = inst->src(0)->strVal();
   implLdCachedSafe<Class>(env, inst, name);
+}
+
+void cgLdRecDescCachedSafe(IRLS& env, const IRInstruction* inst) {
+  auto const name = inst->extra<LdRecDescCachedSafe>()->recName;
+  implLdCachedSafe<RecordDesc>(env, inst, name);
 }
 
 IMPL_OPCODE_CALL(LookupClsRDS)
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void loadFuncContextImpl(ArrayData* arr, ActRec* preLiveAR, ActRec* fp) {
+const Func* loadFuncContextImpl(ArrayData* arr, ActRec* preLiveAR, ActRec* fp) {
   ObjectData* inst = nullptr;
   Class* cls = nullptr;
   StringData* invName = nullptr;
@@ -318,7 +318,6 @@ void loadFuncContextImpl(ArrayData* arr, ActRec* preLiveAR, ActRec* fp) {
   auto func = vm_decode_function(
     VarNR(arr).operator const Variant&(),
     fp,
-    false, // forward
     inst,
     cls,
     invName,
@@ -330,6 +329,10 @@ void loadFuncContextImpl(ArrayData* arr, ActRec* preLiveAR, ActRec* fp) {
   if (UNLIKELY(func == nullptr)) {
     raise_error("Invalid callable (array)");
   }
+
+  assertx(preLiveAR->isDynamicCall());
+  callerDynamicCallChecks(func);
+  callerRxChecks(fp, func);
 
   preLiveAR->m_func = func;
   if (inst) {
@@ -346,11 +349,13 @@ void loadFuncContextImpl(ArrayData* arr, ActRec* preLiveAR, ActRec* fp) {
   if (func->hasReifiedGenerics()) {
     preLiveAR->setReifiedGenerics(reifiedGenerics);
   }
+  return func;
 }
 
-void loadArrayFunctionContext(ArrayData* arr, ActRec* preLiveAR, ActRec* fp) {
+const Func*
+loadArrayFunctionContext(ArrayData* arr, ActRec* preLiveAR, ActRec* fp) {
   try {
-    loadFuncContextImpl(arr, preLiveAR, fp);
+    return loadFuncContextImpl(arr, preLiveAR, fp);
   } catch (...) {
     *arPreliveOverwriteCells(preLiveAR) = make_array_like_tv(arr);
     throw;

@@ -1,6 +1,6 @@
-<?php
+<?hh
 
-
+<<__EntryPoint>> function main(): void {
 echo "*** Test substituting argument 1 with emptyUnsetUndefNull values ***\n";
 
 
@@ -21,4 +21,4 @@ $variation_array = array(
 foreach ( $variation_array as $var ) {
   var_dump(posix_ttyname( $var  ) );
 }
-?>
+}

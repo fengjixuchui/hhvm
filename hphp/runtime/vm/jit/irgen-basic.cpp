@@ -17,6 +17,7 @@
 #include "hphp/runtime/base/stats.h"
 #include "hphp/runtime/base/strings.h"
 
+#include "hphp/runtime/ext/functioncredential/ext_functioncredential.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-internal.h"
 #include "hphp/runtime/vm/jit/irgen-interpone.h"
@@ -39,87 +40,85 @@ const StaticString s_new_instance_of_not_string(
 
 } // namespace
 
-void emitClsRefGetC(IRGS& env, uint32_t slot) {
+void emitClassGetC(IRGS& env) {
   auto const name = topC(env);
-  if (!name->type().subtypeOfAny(TObj, TStr)) {
-    interpOne(env, *env.currentNormalizedInstruction);
+  if (!name->type().subtypeOfAny(TObj, TCls, TStr)) {
+    interpOne(env);
     return;
   }
   popC(env);
+
+  if (name->isA(TCls)) {
+    push(env, name);
+    return;
+  }
+
   if (name->isA(TObj)) {
-    putClsRef(env, slot, gen(env, LdObjClass, name));
+    push(env, gen(env, LdObjClass, name));
     decRef(env, name);
     return;
   }
+
   if (!name->hasConstVal()) gen(env, RaiseStrToClassNotice, name);
+
   auto const cls = ldCls(env, name);
-  ifThenElse(
-    env,
-    [&] (Block* taken) {
-      auto const isreified = gen(env, IsReifiedName, name);
-      gen(env, JmpZero, taken, isreified);
-    },
-    [&] {
-      auto ts = gen(env, LdReifiedGeneric, name);
-      putClsRef(env, slot, cls, ts);
-    },
-    [&] { putClsRef(env, slot, cls); }
-  );
   decRef(env, name);
+  push(env, cls);
 }
 
-void emitClsRefGetTS(IRGS& env, uint32_t slot) {
+void emitClassGetTS(IRGS& env) {
   auto const required_ts_type = RuntimeOption::EvalHackArrDVArrs ? TDict : TArr;
   auto const ts = topC(env);
   if (!ts->isA(required_ts_type)) {
     if (ts->type().maybe(required_ts_type)) {
-      PUNT(ClsRefGetTS-UnguardedTS);
+      PUNT(ClassGetTS-UnguardedTS);
     } else {
       gen(env, RaiseError, cns(env, s_reified_type_must_be_ts.get()));
     }
   }
-  ifThenElse(
+
+  auto const val = gen(
     env,
-    [&] (Block* taken) {
-      auto const val = gen(
+    RuntimeOption::EvalHackArrDVArrs ? AKExistsDict : AKExistsArr,
+    ts,
+    cns(env, s_generic_types.get())
+  );
+  // Side-exit for now if it has reified generics
+  gen(env, JmpNZero, makeExitSlow(env), val);
+
+  auto const clsName = profiledArrayAccess(
+    env, ts, cns(env, s_classname.get()),
+    [&] (SSATmp* base, SSATmp* key, uint32_t pos) {
+      return gen(
         env,
-        RuntimeOption::EvalHackArrDVArrs ? AKExistsDict : AKExistsArr,
-        ts,
-        cns(env, s_generic_types.get())
+        RuntimeOption::EvalHackArrDVArrs
+          ? DictGetK
+          : MixedArrayGetK,
+        IndexData { pos }, base, key
       );
-      gen(env, JmpZero, taken, val);
     },
-    [&] {
-      // Has reified generics
-      hint(env, Block::Hint::Unlikely);
-      interpOne(env, *env.currentNormalizedInstruction);
-    },
-    // taken
-    [&] {
-      // Does not have reified generics
-      auto const key = cns(env, s_classname.get());
-      auto const clsName = profiledArrayAccess(env, ts, key,
-        [&] (SSATmp* base, SSATmp* key, uint32_t pos) {
-          return gen(env, RuntimeOption::EvalHackArrDVArrs ? DictGetK
-                                                           : MixedArrayGetK,
-                     IndexData { pos }, base, key);
-        },
-        [&] (SSATmp* key) {
-          if (RuntimeOption::EvalHackArrDVArrs) {
-            return gen(env, DictGet, ts, key);
-          }
-          return gen(env, ArrayGet, MOpModeData { MOpMode::Warn }, ts, key);
-        }
-      );
-      if (!clsName->isA(TStr)) {
-        if (!ts->type().maybe(TStr)) PUNT(ClsRefGetTS-ClassnameNotStr);
-        gen(env, RaiseError, cns(env, s_new_instance_of_not_string.get()));
-      }
-      auto const cls = ldCls(env, clsName);
-      popDecRef(env);
-      putClsRef(env, slot, cls);
+    [&] (SSATmp* key) {
+      if (RuntimeOption::EvalHackArrDVArrs) return gen(env, DictGet, ts, key);
+      return gen(env, ArrayGet, MOpModeData { MOpMode::Warn }, ts, key);
     }
   );
+
+  SSATmp* name;
+  ifThen(
+    env,
+    [&] (Block* taken) {
+      name = gen(env, CheckType, TStr, taken, clsName);
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      gen(env, RaiseError, cns(env, s_new_instance_of_not_string.get()));
+    }
+  );
+
+  auto const cls = ldCls(env, name);
+  popDecRef(env);
+  push(env, cls);
+  push(env, cns(env, TInitNull));
 }
 
 void emitCGetL(IRGS& env, int32_t id) {
@@ -213,31 +212,10 @@ void emitVGetL(IRGS& env, int32_t id) {
   pushIncRef(env, boxed);
 }
 
-void emitBox(IRGS& env) {
-  push(env, gen(env, Box, pop(env, DataTypeGeneric)));
-}
-
 void emitUnsetL(IRGS& env, int32_t id) {
   auto const prev = ldLoc(env, id, makeExit(env), DataTypeBoxAndCountness);
   stLocRaw(env, id, fp(env), cns(env, TUninit));
   decRef(env, prev);
-}
-
-void emitBindL(IRGS& env, int32_t id) {
-  if (curFunc(env)->isPseudoMain()) {
-    interpOne(env, TBoxedInitCell, 1);
-    return;
-  }
-
-  auto const ldPMExit = makePseudoMainExit(env);
-  auto const newValue = popV(env);
-  // Note that the IncRef must happen first, for correctness in a
-  // pseudo-main: the destructor could decref the value again after
-  // we've stored it into the local.
-  pushIncRef(env, newValue);
-  auto const oldValue = ldLoc(env, id, ldPMExit, DataTypeSpecific);
-  stLocRaw(env, id, fp(env), newValue);
-  decRef(env, oldValue);
 }
 
 void emitSetL(IRGS& env, int32_t id) {
@@ -331,37 +309,38 @@ void emitClone(IRGS& env) {
   decRef(env, obj);
 }
 
-void emitLateBoundCls(IRGS& env, uint32_t slot) {
+void emitLateBoundCls(IRGS& env) {
   auto const clss = curClass(env);
   if (!clss) {
     // no static context class, so this will raise an error
-    interpOne(env, *env.currentNormalizedInstruction);
+    interpOne(env);
     return;
   }
   auto const ctx = ldCtx(env);
-  putClsRef(env, slot, gen(env, LdClsCtx, ctx));
+  push(env, gen(env, LdClsCtx, ctx));
 }
 
-void emitSelf(IRGS& env, uint32_t slot) {
+void emitSelf(IRGS& env) {
   auto const clss = curClass(env);
   if (clss == nullptr) {
-    interpOne(env, *env.currentNormalizedInstruction);
+    interpOne(env);
   } else {
-    putClsRef(env, slot, cns(env, clss));
+    push(env, cns(env, clss));
   }
 }
 
-void emitParent(IRGS& env, uint32_t slot) {
+void emitParent(IRGS& env) {
   auto const clss = curClass(env);
   if (clss == nullptr || clss->parent() == nullptr) {
-    interpOne(env, *env.currentNormalizedInstruction);
+    interpOne(env);
   } else {
-    putClsRef(env, slot, cns(env, clss->parent()));
+    push(env, cns(env, clss->parent()));
   }
 }
 
-void emitClsRefName(IRGS& env, uint32_t slot) {
-  auto const cls = takeClsRefCls(env, slot);
+void emitClassName(IRGS& env) {
+  auto const cls = popC(env);
+  if (!cls->isA(TCls)) PUNT(ClassName-NotClass);
   push(env, gen(env, LdClsName, cls));
 }
 
@@ -624,8 +603,6 @@ void implIncStat(IRGS& env, uint32_t counter) {
 
 //////////////////////////////////////////////////////////////////////
 
-void emitDiscardClsRef(IRGS& env, uint32_t slot)   { killClsRef(env, slot); }
-
 void emitPopC(IRGS& env)   { popDecRef(env, DataTypeGeneric); }
 void emitPopV(IRGS& env)   { popDecRef(env, DataTypeGeneric); }
 void emitPopU(IRGS& env)   { popU(env); }
@@ -642,11 +619,21 @@ void emitPopL(IRGS& env, int32_t id) {
   stLocMove(env, id, ldrefExit, ldPMExit, src);
 }
 
+void emitPopFrame(IRGS& env, uint32_t nout) {
+  jit::vector<SSATmp*> v{nout, nullptr};
+  for (auto i = nout; i > 0; --i) v[i - 1] = pop(env, DataTypeGeneric);
+  for (uint32_t i = 0; i < 3; ++i) popU(env);
+  for (auto tmp : v) push(env, tmp);
+}
+
 void emitDir(IRGS& env)    { push(env, cns(env, curUnit(env)->dirpath())); }
 void emitFile(IRGS& env)   { push(env, cns(env, curUnit(env)->filepath())); }
 void emitMethod(IRGS& env) { push(env, cns(env, curFunc(env)->fullName())); }
 void emitDup(IRGS& env)    { pushIncRef(env, topC(env)); }
 
+void emitFuncCred(IRGS& env) {
+  push(env, gen(env, FuncCred, cns(env, curFunc(env))));
+}
 //////////////////////////////////////////////////////////////////////
 
 void emitArray(IRGS& env, const ArrayData* x) {

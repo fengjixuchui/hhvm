@@ -1,4 +1,4 @@
-<?php
+<?hh
 date_default_timezone_set('Europe/Berlin');
 class _d extends DateTime {}
 class _t extends DateTimeZone {}
@@ -14,4 +14,3 @@ $t = new _t("Asia/Tokyo");
 var_dump($t->getName());
 $c = clone $t;
 var_dump($c->getName());
-?>

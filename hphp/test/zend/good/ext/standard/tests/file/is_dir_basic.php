@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype: bool is_dir ( string $filename );
    Description: Tells whether the filename is a regular file
      Returns TRUE if the filename exists and is a regular file
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing is_dir(): basic functionality ***\n";
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 var_dump( is_dir($file_path) );
@@ -20,10 +20,8 @@ var_dump( is_bool( is_dir($file_path) ) );
 var_dump( is_bool( is_dir("/no/such/dir") ) );
 
 echo "*** Done ***";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $dir_name = $file_path."/is_dir_basic";
 rmdir($dir_name);
-?>
+}

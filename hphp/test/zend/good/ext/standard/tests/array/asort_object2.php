@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool asort ( array &$array [, int $asort_flags] )
  * Description: Sort an array and maintain index association.
                 Elements will be arranged from lowest to highest when this function has completed.
@@ -10,8 +10,6 @@
  * 1. Defualt flag value
    2. SORT_REGULAR - compare items normally
 */
-
-echo "*** Testing asort() : object functionality ***\n";
 
 // class declaration for integer objects
 class for_integer_asort
@@ -46,6 +44,8 @@ class for_string_asort
    return (string)$this->value;
   }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing asort() : object functionality ***\n";
 
 // array of integer objects
 $unsorted_int_obj = array (
@@ -84,4 +84,4 @@ var_dump(asort(&$temp_array, SORT_REGULAR) );
 var_dump($temp_array);
 
 echo "Done\n";
-?>
+}

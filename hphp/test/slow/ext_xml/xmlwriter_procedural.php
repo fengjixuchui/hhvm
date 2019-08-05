@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function VS($x, $y) {
   var_dump($x === $y);
@@ -33,7 +33,7 @@ VERIFY(xmlwriter_start_attribute_ns($xml, "fb", "attr2",
                                     "http://www.facebook.com/"));
 VERIFY(xmlwriter_end_attribute($xml));
 VERIFY(xmlwriter_write_element_ns($xml, "prefix", "name",
-                                  "http://some.url/", 1337));
+                                  "http://some.url/", '1337'));
 VERIFY(xmlwriter_start_element($xml, "node"));
 VERIFY(xmlwriter_full_end_element($xml));
 VERIFY(xmlwriter_end_element($xml));
@@ -56,7 +56,7 @@ VERIFY(xmlwriter_write_comment($xml, "More comments"));
 
 VERIFY(xmlwriter_start_pi($xml, "lol"));
 VERIFY(xmlwriter_end_pi($xml));
-VERIFY(xmlwriter_write_pi($xml, "php", "print 'Hello world!';"));
+VERIFY(xmlwriter_write_pi($xml, "hh", "print 'Hello world!';"));
 
 VERIFY(xmlwriter_write_raw($xml, "<node>Raw XML</node>"));
 

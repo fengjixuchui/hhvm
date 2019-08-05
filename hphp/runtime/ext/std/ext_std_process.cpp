@@ -36,11 +36,11 @@
 #include "hphp/util/process.h"
 #include "hphp/util/lock.h"
 #include "hphp/util/logger.h"
+#include "hphp/util/rds-local.h"
 
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/plain-file.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/surprise-flags.h"
 #include "hphp/runtime/base/request-info.h"
@@ -256,12 +256,7 @@ Variant HHVM_FUNCTION(shell_exec,
   if (!fp) return init_null();
   StringBuffer sbuf;
   sbuf.read(fp);
-  auto ret = sbuf.detach();
-  if (ret.empty() && !RuntimeOption::EnableHipHopSyntax) {
-    // Match php5
-    return init_null();
-  }
-  return ret;
+  return sbuf.detach();
 }
 
 String HHVM_FUNCTION(exec,
@@ -1065,10 +1060,9 @@ String HHVM_FUNCTION(escapeshellarg,
                      const String& arg) {
   if (!arg.empty()) {
     return string_escape_shell_arg(arg.c_str());
-  } else if (RuntimeOption::EvalQuoteEmptyShellArg) {
+  } else {
     return String(s_twosinglequotes);
   }
-  return arg;
 }
 
 String HHVM_FUNCTION(escapeshellcmd,

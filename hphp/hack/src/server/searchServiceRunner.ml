@@ -10,29 +10,17 @@
 open Core_kernel
 open ServerEnv
 
-module SearchServiceRunner  = struct
-  type info =
-    | Full of FileInfo.t
-    | Fast of FileInfo.names
-
-  type t = (HackSearchService.SS.Trie.SearchUpdates.key * info)
+module SearchServiceRunner = struct
+  type t = Relative_path.t * SearchUtils.info
 
   (* Chosen so that multiworker takes about ~2.5 seconds *)
   let chunk_size genv =
     genv.local_config.ServerLocalConfig.search_chunk_size
 
-  (* Update the search service for this file *)
-  let update_single (fn, info) =
-    match info with
-    | Full infos ->
-      HackSearchService.WorkerApi.update_from_fileinfo fn infos
-    | Fast names ->
-      HackSearchService.WorkerApi.update_from_fast fn names
-
   let queue = Queue.create ()
 
   (* Pops the first num_files from the queue *)
-  let update_search genv num_files =
+  let update_search genv num_files (sienv: SearchUtils.si_env ref) =
     let t = Unix.gettimeofday() in
     let rec iter acc n =
       if n <= 0 || Queue.is_empty queue then acc
@@ -40,57 +28,65 @@ module SearchServiceRunner  = struct
         let x = Queue.dequeue_exn queue in
         iter (x::acc) (n-1) in
     let fast = iter [] num_files in
-    let update_single_search _ fast_list =
-      List.iter fast_list update_single in
 
-    (* If there aren't enough files just do it on one thread *)
-    (if (List.length fast) < 100
-      then update_single_search () fast
-      else
-        let next_fast_files =
-          MultiWorker.next genv.workers fast in
-        MultiWorker.call
-            genv.workers
-            ~job:update_single_search
-            ~neutral:()
-            ~merge:(fun _ _ -> ())
-            ~next:next_fast_files);
+    SymbolIndex.update_files ~sienv ~workers:genv.workers ~paths:fast;
 
-    HackSearchService.MasterApi.update_search_index
-      ~fuzzy:!HackSearchService.fuzzy (List.map fast fst);
     if (List.length fast > 0) then begin
-      let str = Printf.sprintf "Updating %d search files:" (List.length fast) in
+      let str =
+        Printf.sprintf
+          "Updated search index for symbols in %d files:"
+          (List.length fast)
+      in
       ignore(Hh_logger.log_duration (str) t);
       if Queue.is_empty queue
-      then Hh_logger.log "Done updating search files"
+      then Hh_logger.log "Done updating search index"
     end
 
   (* Completely clears the queue *)
-  let run_completely genv =
-    update_search genv (Queue.length queue)
+  let run_completely genv (sienv: SearchUtils.si_env ref)=
+    update_search genv (Queue.length queue) sienv
 
-  let run genv () =
+  let run genv (sienv: SearchUtils.si_env ref) () =
     if ServerArgs.ai_mode genv.options = None then begin
       let size = if chunk_size genv = 0
         then Queue.length queue
         else chunk_size genv
       in
-      update_search genv size
+      update_search genv size sienv
     end
     else ()
 
-  let update x = Queue.enqueue queue x
+  let internal_ssr_update
+      (fn: Relative_path.t)
+      (info: SearchUtils.info)
+      ~(source: SearchUtils.file_source) =
+    Queue.enqueue queue (fn, info, source)
 
-  let update_full fn ast = Queue.enqueue queue (fn, Full ast)
+  (* Return true if it's best to run all queue items in one go,
+   * false if we should run small chunks every few seconds *)
+  let should_run_completely
+      (genv: ServerEnv.genv)
+      (provider: SearchUtils.search_provider): bool =
 
-  let should_run_completely genv =
-   chunk_size genv = 0
-   && ServerArgs.ai_mode genv.options = None
+    (* If we are using a non-trie provider, no need to use chunks *)
+    if provider <> SearchUtils.TrieIndex then begin
+      true
+    end else begin
+      if (chunk_size genv) = 0 && (ServerArgs.ai_mode genv.options) = None then begin
+        true
+      end else begin
+        false
+      end
+    end
 
-  let update_fileinfo_map fast =
-    Relative_path.Map.iter fast
+  let update_fileinfo_map
+    (fast: Naming_table.t)
+    ~(source: SearchUtils.file_source): unit =
+    let i = ref 0 in
+    Naming_table.iter fast
     ~f: begin fun fn info ->
-      update_full fn info
+      internal_ssr_update fn (SearchUtils.Full info) source;
+      i := !i + 1
     end
 
 end

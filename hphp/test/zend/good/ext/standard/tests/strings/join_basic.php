@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : string join( string $glue, array $pieces )
  * Description: Join array elements with a string
  * Source code: ext/standard/string.c
  * Alias of function: implode()
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing join() : basic functionality ***\n";
 
 // Initialize all required variables
@@ -30,4 +30,4 @@ $glue = '/';
 var_dump( join($glue, $pieces) );
 
 echo "Done\n";
-?>
+}

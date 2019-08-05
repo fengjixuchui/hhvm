@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 trait foo {
 }
@@ -15,4 +15,3 @@ interface baz {
 $obj = new ReflectionClass('baz');
 var_dump($obj->isCloneable());
 
-?>

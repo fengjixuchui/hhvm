@@ -27,21 +27,16 @@ class D extends C {
   }
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   $c = new C;
   $d = new D;
 
   $c->foo();
   $d->foo();
   echo "**************\n";
-  $c->bar();
-  $d->bar();
-  echo "**************\n";
-  C::foo();
+  C::bar();
   D::bar();
   echo "**************\n";
+  $c->yar();
   $d->yar();
-  D::yar();
 }
-
-main();

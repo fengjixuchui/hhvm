@@ -13,12 +13,12 @@ module Make(S : SearchUtils.Searchable) = struct
 
 open SearchUtils
 
-type search_result_type = S.t
+type si_kind = S.t
 
 let all_types = S.fuzzy_types
 
 module TMap = MyMap.Make (struct
-  type t = search_result_type
+  type t = si_kind
   let compare = S.compare_result_type
 end)
 
@@ -46,7 +46,6 @@ module SearchKeys = SharedMem.NoCache (SharedMem.ProfiledImmediate) (Relative_pa
   type t = type_to_keyset
   let prefix = Prefix.make()
   let description = "SearchKeys"
-  let use_sqlite_fallback () = false
 end)
 
 (* The workers are in charge of keeping this up to date per file, we use it
@@ -71,7 +70,6 @@ module SearchKeyToTermMap = SharedMem.WithCache (SharedMem.ProfiledImmediate) (R
   type t = type_to_key_to_term_list
   let prefix = Prefix.make()
   let description = "SearchKeyToTermMap"
-  let use_sqlite_fallback () = false
 end)
 
 (* This is the table which we can find which terms are relevant to the query.

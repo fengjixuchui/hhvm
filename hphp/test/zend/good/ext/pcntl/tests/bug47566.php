@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $pid = pcntl_fork();
 if ($pid == -1) {
  echo "Unable to fork";
@@ -9,4 +9,4 @@ if ($pid == -1) {
 } else {
  exit(128);
 }
-?>
+}

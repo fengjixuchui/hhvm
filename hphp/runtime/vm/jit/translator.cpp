@@ -56,6 +56,7 @@
 #include "hphp/runtime/vm/jit/irgen-basic.h"
 #include "hphp/runtime/vm/jit/irgen-control.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
+#include "hphp/runtime/vm/jit/irgen-interpone.h"
 #include "hphp/runtime/vm/jit/irgen.h"
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
 #include "hphp/runtime/vm/jit/print.h"
@@ -88,7 +89,6 @@ static const struct {
 
   /*** 1. Basic instructions ***/
 
-  { OpDiscardClsRef, {None,           None,         OutNone         }},
   { OpPopC,        {Stack1|
                     DontGuardStack1,  None,         OutNone         }},
   { OpPopV,        {Stack1|
@@ -97,10 +97,10 @@ static const struct {
                     DontGuardStack1,  None,         OutNone         }},
   { OpPopU2,       {StackTop2|
                     DontGuardAny,     Stack1,       OutSameAsInput1 }},
+  { OpPopFrame,    {StackN|
+                    DontGuardAny,     StackN,       OutUnknown      }},
   { OpPopL,        {Stack1|Local,     Local,        OutNone         }},
   { OpDup,         {Stack1,           StackTop2,    OutSameAsInput1 }},
-  { OpBox,         {Stack1,           Stack1,       OutVInput       }},
-  { OpUnbox,       {Stack1,           Stack1,       OutCInput       }},
 
   /*** 2. Literal and constant instructions ***/
 
@@ -128,22 +128,19 @@ static const struct {
   { OpNewVArray,   {StackN,           Stack1,       OutArray        }},
   { OpNewDArray,   {None,             Stack1,       OutArray        }},
   { OpAddElemC,    {StackTop3,        Stack1,       OutModifiedInput3 }},
-  { OpAddElemV,    {StackTop3,        Stack1,       OutArray        }},
   { OpAddNewElemC, {StackTop2,        Stack1,       OutModifiedInput2 }},
-  { OpAddNewElemV, {StackTop2,        Stack1,       OutArray        }},
   { OpNewCol,      {None,             Stack1,       OutObject       }},
   { OpNewPair,     {StackTop2,        Stack1,       OutObject       }},
+  { OpNewRecord,   {StackN,           Stack1,       OutRecord       }},
   { OpColFromArray,   {Stack1,        Stack1,       OutObject       }},
-  { OpCns,         {None,             Stack1,       OutCns          }},
   { OpCnsE,        {None,             Stack1,       OutCns          }},
-  { OpCnsU,        {None,             Stack1,       OutCns          }},
-  { OpCnsUE,       {None,             Stack1,       OutCns          }},
-  { OpClsCns,      {None,             Stack1,       OutUnknown      }},
+  { OpClsCns,      {Stack1,           Stack1,       OutUnknown      }},
   { OpClsCnsD,     {None,             Stack1,       OutUnknown      }},
   { OpFile,        {None,             Stack1,       OutString       }},
   { OpDir,         {None,             Stack1,       OutString       }},
   { OpMethod,      {None,             Stack1,       OutString       }},
-  { OpClsRefName,  {None,             Stack1,       OutString       }},
+  { OpClassName,   {Stack1,           Stack1,       OutString       }},
+  { OpFuncCred,    {None,             Stack1,       OutObject       }},
 
   /*** 3. Operator instructions ***/
 
@@ -196,8 +193,10 @@ static const struct {
   { OpDblAsBits,   {Stack1,           Stack1,       OutInt64        }},
   { OpInstanceOf,  {StackTop2,        Stack1,       OutBoolean      }},
   { OpInstanceOfD, {Stack1,           Stack1,       OutPredBool     }},
+  { OpIsLateBoundCls,{Stack1,         Stack1,       OutBoolean      }},
   { OpIsTypeStructC,{StackTop2,       Stack1,       OutBoolean      }},
-  { OpAsTypeStructC,{StackTop2,       Stack1,       OutSameAsInput2 }},
+  { OpThrowAsTypeStructException,
+                   {StackTop2,        None,         OutNone         }},
   { OpCombineAndResolveTypeStruct,
                    {StackN,           Stack1,       OutDArray       }},
   { OpSelect,      {StackTop3,        Stack1,       OutUnknown      }},
@@ -228,7 +227,6 @@ static const struct {
   { OpRetCSuspended,
                    {None,             None,         OutNone         }},
   { OpThrow,       {Stack1,           None,         OutNone         }},
-  { OpUnwind,      {None,             None,         OutNone         }},
 
   /*** 5. Get instructions ***/
 
@@ -241,27 +239,20 @@ static const struct {
   { OpCUGetL,      {Local,            Stack1,       OutCInputL      }},
   { OpPushL,       {Local,            Stack1|Local, OutCInputL      }},
   { OpCGetG,       {Stack1,           Stack1,       OutUnknown      }},
-  { OpCGetQuietG,  {Stack1,           Stack1,       OutUnknown      }},
-  { OpCGetS,       {Stack1,           Stack1,       OutUnknown      }},
+  { OpCGetS,       {StackTop2,        Stack1,       OutUnknown      }},
   { OpVGetL,       {Local,            Stack1|Local, OutVInputL      }},
-  // TODO: In pseudo-main, the VGetG instruction invalidates what we know
-  // about the types of the locals because it could cause any one of the
-  // local variables to become "boxed". We need to add logic to tracelet
-  // analysis to deal with this properly.
-  { OpVGetG,       {Stack1,           Stack1,       OutVUnknown     }},
-  { OpVGetS,       {Stack1,           Stack1,       OutVUnknown     }},
-  { OpClsRefGetC,  {Stack1,           None,         OutNone         }},
-  { OpClsRefGetTS, {Stack1,           None,         OutNone         }},
+  { OpClassGetC,   {Stack1,           Stack1,       OutClass        }},
+  { OpClassGetTS,  {Stack1,           StackTop2,    OutUnknown      }},
 
   /*** 6. Isset, Empty, and type querying instructions ***/
 
   { OpAKExists,    {StackTop2,        Stack1,       OutBoolean      }},
   { OpIssetL,      {Local,            Stack1,       OutBoolean      }},
   { OpIssetG,      {Stack1,           Stack1,       OutBoolean      }},
-  { OpIssetS,      {Stack1,           Stack1,       OutBoolean      }},
+  { OpIssetS,      {StackTop2,        Stack1,       OutBoolean      }},
   { OpEmptyL,      {Local,            Stack1,       OutBoolean      }},
   { OpEmptyG,      {Stack1,           Stack1,       OutBoolean      }},
-  { OpEmptyS,      {Stack1,           Stack1,       OutBoolean      }},
+  { OpEmptyS,      {StackTop2,        Stack1,       OutBoolean      }},
   { OpIsTypeC,     {Stack1|
                     DontGuardStack1,  Stack1,       OutBoolean      }},
   { OpIsTypeL,     {Local,            Stack1,       OutIsTypeL      }},
@@ -270,48 +261,55 @@ static const struct {
 
   { OpSetL,        {Stack1|Local,     Stack1|Local, OutSameAsInput1  }},
   { OpSetG,        {StackTop2,        Stack1,       OutSameAsInput1  }},
-  { OpSetS,        {StackTop2,        Stack1,       OutSameAsInput1  }},
+  { OpSetS,        {StackTop3,        Stack1,       OutSameAsInput1  }},
   { OpSetOpL,      {Stack1|Local,     Stack1|Local, OutSetOp        }},
   { OpSetOpG,      {StackTop2,        Stack1,       OutUnknown      }},
-  { OpSetOpS,      {StackTop2,        Stack1,       OutUnknown      }},
+  { OpSetOpS,      {StackTop3,        Stack1,       OutUnknown      }},
   { OpIncDecL,     {Local,            Stack1|Local, OutIncDec       }},
   { OpIncDecG,     {Stack1,           Stack1,       OutUnknown      }},
-  { OpIncDecS,     {Stack1,           Stack1,       OutUnknown      }},
-  { OpBindL,       {Stack1|Local,     Stack1|Local, OutSameAsInput1  }},
-  { OpBindG,       {StackTop2,        Stack1,       OutSameAsInput1  }},
-  { OpBindS,       {StackTop2,        Stack1,       OutSameAsInput1  }},
+  { OpIncDecS,     {StackTop2,        Stack1,       OutUnknown      }},
   { OpUnsetL,      {Local,            Local,        OutNone         }},
   { OpUnsetG,      {Stack1,           None,         OutNone         }},
 
   /*** 8. Call instructions ***/
 
+  { OpNewObj,      {Stack1,           Stack1,       OutObject       }},
+  { OpNewObjR,     {StackTop2,        Stack1,       OutObject       }},
+  { OpNewObjD,     {None,             Stack1,       OutObject       }},
+  { OpNewObjRD,    {Stack1,           Stack1,       OutObject       }},
+  { OpNewObjS,     {None,             Stack1,       OutObject       }},
+  { OpLockObj,     {Stack1,           Stack1,       OutSameAsInput1 }},
+
+  /*
+   * FPush* and FCall are special. Like the Ret* instructions, their
+   * manipulation of the runtime stack are outside the boundaries of
+   * the tracelet abstraction.
+   */
   { OpFPushFunc,   {Stack1,           FStack,       OutFDesc        }},
   { OpFPushFuncD,  {None,             FStack,       OutFDesc        }},
-  { OpFPushFuncU,  {None,             FStack,       OutFDesc        }},
-  { OpFPushObjMethod,
-                   {StackTop2,        FStack,       OutFDesc        }},
-  { OpFPushObjMethodD,
-                   {Stack1,           FStack,       OutFDesc        }},
-  { OpFPushClsMethod,
-                   {Stack1,           FStack,       OutFDesc        }},
-  { OpFPushClsMethodS,
-                   {Stack1,           FStack,       OutFDesc        }},
-  { OpFPushClsMethodSD,
-                   {None,             FStack,       OutFDesc        }},
-  { OpFPushClsMethodD,
-                   {None,             FStack,       OutFDesc        }},
-  { OpNewObj,      {None,             Stack1,       OutObject       }},
-  { OpNewObjD,     {None,             Stack1,       OutObject       }},
-  { OpNewObjI,     {None,             Stack1,       OutObject       }},
-  { OpNewObjS,     {None,             Stack1,       OutObject       }},
-  { OpFPushCtor,   {Stack1,           FStack,       OutFDesc        }},
-  /*
-   * FCall is special. Like the Ret* instructions, its manipulation of the
-   * runtime stack are outside the boundaries of the tracelet abstraction.
-   */
+  { OpFPushFuncRD, {Stack1,           FStack,       OutFDesc        }},
+  { OpFCallClsMethod,
+                   {StackTop2,        StackN,       OutUnknown      }},
+  { OpFCallClsMethodD,
+                   {None,             StackN,       OutUnknown      }},
+  { OpFCallClsMethodRD,
+                   {Stack1,           StackN,       OutUnknown      }},
+  { OpFCallClsMethodS,
+                   {Stack1,           StackN,       OutUnknown      }},
+  { OpFCallClsMethodSD,
+                   {None,             StackN,       OutUnknown      }},
+  { OpFCallClsMethodSRD,
+                   {Stack1,           StackN,       OutUnknown      }},
+  { OpFCallCtor,   {None,             StackN,       OutUnknown      }},
+  { OpFCallObjMethod,
+                   {Stack1,           StackN,       OutUnknown      }},
+  { OpFCallObjMethodD,
+                   {None,             StackN,       OutUnknown      }},
+  { OpFCallObjMethodRD,
+                   {Stack1,           StackN,       OutUnknown      }},
   { OpFCall,       {FStack,           StackN,       OutUnknown      }},
   { OpFCallBuiltin,{BStackN|DontGuardAny,
-                                      Stack1,       OutUnknown      }},
+                                      StackN,       OutUnknown      }},
 
   /*** 11. Iterator instructions ***/
 
@@ -337,6 +335,7 @@ static const struct {
   { OpEval,        {Stack1,           Stack1,       OutUnknown      }},
   { OpDefTypeAlias,{None,             None,         OutNone         }},
   { OpDefCls,      {None,             None,         OutNone         }},
+  { OpDefRecord,   {None,             None,         OutNone         }},
   { OpDefCns,      {Stack1,           Stack1,       OutBoolean      }},
   { OpAliasCls,    {Stack1,           Stack1,       OutBoolean      }},
 
@@ -347,13 +346,6 @@ static const struct {
   { OpCheckThis,   {This,             None,         OutNone         }},
   { OpInitThisLoc,
                    {None,             Local,        OutUnknown      }},
-  { OpStaticLocCheck,
-                   {None,             Stack1|Local, OutBoolean      }},
-  { OpStaticLocDef,
-                   {Stack1,           Local,        OutVUnknown     }},
-  { OpStaticLocInit,
-                   {Stack1,           Local,        OutVUnknown     }},
-  { OpCatch,       {None,             Stack1,       OutObject       }},
   { OpChainFaults, {StackTop2,        Stack1,       OutObject       }},
   { OpVerifyParamType,
                    {Local,            Local,        OutUnknown      }},
@@ -369,12 +361,12 @@ static const struct {
                    {Stack1,           Stack1,       OutSameAsInput1  }},
   { OpOODeclExists,
                    {StackTop2,        Stack1,       OutBoolean      }},
-  { OpSelf,        {None,             None,         OutNone         }},
-  { OpParent,      {None,             None,         OutNone         }},
-  { OpLateBoundCls,{None,             None,         OutNone         }},
+  { OpSelf,        {None,             Stack1,       OutClass        }},
+  { OpParent,      {None,             Stack1,       OutClass        }},
+  { OpLateBoundCls,{None,             Stack1,       OutClass        }},
   { OpRecordReifiedGeneric,
-                   {StackN,           Stack1,       OutVArray       }},
-  { OpReifiedName, {StackN,           Stack1,       OutString       }},
+                   {Stack1,           Stack1,       OutVArray       }},
+  { OpReifiedName, {Stack1,           Stack1,       OutString       }},
   { OpCheckReifiedGenericMismatch,
                    {Stack1,           None,         OutNone         }},
   { OpNativeImpl,  {None,             None,         OutNone         }},
@@ -427,15 +419,13 @@ static const struct {
 
   { OpBaseGC,      {StackI,           MBase,        OutNone         }},
   { OpBaseGL,      {Local,            MBase,        OutNone         }},
-  { OpBaseSC,      {StackI,           MBase,        OutNone         }},
+  { OpBaseSC,      {StackI|StackI2,   MBase,        OutNone         }},
   { OpBaseL,       {Local,            MBase,        OutNone         }},
   { OpBaseC,       {StackI,           MBase,        OutNone         }},
   { OpBaseH,       {None,             MBase,        OutNone         }},
   { OpDim,         {MBase|MKey,       MBase,        OutNone         }},
   { OpQueryM,      {BStackN|MBase|MKey,
                                       Stack1,       OutUnknown      }},
-  { OpVGetM,       {BStackN|MBase|MKey,
-                                      Stack1,       OutVUnknown     }},
   { OpSetM,        {Stack1|BStackN|MBase|MKey,
                                       Stack1,       OutUnknown      }},
   { OpSetRangeM,   {BStackN|MBase,    None,         OutNone         }},
@@ -443,8 +433,6 @@ static const struct {
                                       Stack1,       OutUnknown      }},
   { OpSetOpM,      {Stack1|BStackN|MBase|MKey,
                                       Stack1,       OutUnknown      }},
-  { OpBindM,       {Stack1|BStackN|MBase|MKey,
-                                      Stack1,       OutSameAsInput1  }},
   { OpUnsetM,      {BStackN|MBase|MKey,
                                       None,         OutNone         }},
   { OpMemoGet,     {LocalRange,       None,         OutUnknown      }},
@@ -487,7 +475,7 @@ const InstrInfo& getInstrInfo(Op op) {
 namespace {
 int64_t countOperands(uint64_t mask) {
   const uint64_t ignore = Local | Iter | DontGuardStack1 |
-    DontGuardAny | This | MBase | StackI | MKey | LocalRange |
+    DontGuardAny | This | MBase | StackI | StackI2 | MKey | LocalRange |
     DontGuardBase;
   mask &= ~ignore;
 
@@ -514,14 +502,32 @@ int64_t countOperands(uint64_t mask) {
 int64_t getStackPopped(PC pc) {
   auto const op = peek_op(pc);
   switch (op) {
+    case Op::FPushFunc:
+    case Op::FPushFuncD:
+    case Op::FPushFuncRD:
+      return getImm(pc, 0).u_IVA + countOperands(getInstrInfo(op).in) + 3;
+
+    case Op::FCallClsMethod:
+    case Op::FCallClsMethodD:
+    case Op::FCallClsMethodRD:
+    case Op::FCallClsMethodS:
+    case Op::FCallClsMethodSD:
+    case Op::FCallClsMethodSRD:
+    case Op::FCallCtor:
+    case Op::FCallObjMethod:
+    case Op::FCallObjMethodD:
+    case Op::FCallObjMethodRD: {
+      auto const fca = getImm(pc, 0).u_FCA;
+      auto const nin = countOperands(getInstrInfo(op).in);
+      return nin + fca.numArgsInclUnpack() + kNumActRecCells - 1 + fca.numRets;
+    }
+
     case Op::FCall: {
       auto const fca = getImm(pc, 0).u_FCA;
-      return fca.numArgs + (fca.hasUnpack() ? 1 : 0) + fca.numRets +
-        kNumActRecCells - 1;
+      return fca.numArgsInclUnpack() + fca.numRets + kNumActRecCells - 1;
     }
 
     case Op::QueryM:
-    case Op::VGetM:
     case Op::IncDecM:
     case Op::UnsetM:
     case Op::NewPackedArray:
@@ -530,39 +536,62 @@ int64_t getStackPopped(PC pc) {
     case Op::NewVArray:
     case Op::ConcatN:
     case Op::CombineAndResolveTypeStruct:
-    case Op::RecordReifiedGeneric:
-    case Op::ReifiedName:
-    case Op::FCallBuiltin:
     case Op::CreateCl:
       return getImm(pc, 0).u_IVA;
 
+    case Op::FCallBuiltin:
+      return getImm(pc, 0).u_IVA + getImm(pc, 2).u_IVA;
+
+    case Op::PopFrame:
+      return getImm(pc, 0).u_IVA + 3;
+
     case Op::SetM:
     case Op::SetOpM:
-    case Op::BindM:
       return getImm(pc, 0).u_IVA + 1;
 
+    case Op::NewRecord:
     case Op::NewStructArray:
     case Op::NewStructDArray:
     case Op::NewStructDict:
       return getImmVector(pc).size();
 
-    default:             break;
+    default:
+      break;
   }
 
   uint64_t mask = getInstrInfo(op).in;
-  int64_t count = 0;
 
   // All instructions with these properties are handled above
   assertx((mask & (StackN | BStackN)) == 0);
 
-  return count + countOperands(mask);
+  return countOperands(mask);
 }
 
 int64_t getStackPushed(PC pc) {
   auto const op = peek_op(pc);
   switch (op) {
-    case Op::FCall:        return getImm(pc, 0).u_FCA.numRets;
-    default:               break;
+    case Op::FPushFunc:
+    case Op::FPushFuncD:
+    case Op::FPushFuncRD:
+      return getImm(pc, 0).u_IVA + kNumActRecCells;
+    case Op::FCall:
+    case Op::FCallClsMethod:
+    case Op::FCallClsMethodD:
+    case Op::FCallClsMethodRD:
+    case Op::FCallClsMethodS:
+    case Op::FCallClsMethodSD:
+    case Op::FCallClsMethodSRD:
+    case Op::FCallCtor:
+    case Op::FCallObjMethod:
+    case Op::FCallObjMethodD:
+    case Op::FCallObjMethodRD:
+      return getImm(pc, 0).u_FCA.numRets;
+    case Op::FCallBuiltin:
+      return getImm(pc, 2).u_IVA + 1;
+    case Op::PopFrame:
+      return getImm(pc, 0).u_IVA;
+    default:
+      break;
   }
 
   uint64_t mask = getInstrInfo(op).out;
@@ -604,8 +633,6 @@ bool isAlwaysNop(const NormalizedInstruction& ni) {
 #define IVA(n)
 #define I64A(n)
 #define IA(n)
-#define CAR(n)
-#define CAW(n)
 #define DA(n)
 #define SA(n)
 #define AA(n)
@@ -665,8 +692,6 @@ size_t memberKeyImmIdx(Op op) {
 #undef IVA
 #undef I64A
 #undef IA
-#undef CAR
-#undef CAW
 #undef DA
 #undef SA
 #undef AA
@@ -697,10 +722,8 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
   auto const flags = info.in;
   auto stackOff = bcSPOff;
 
-  if (flags & FStack) {
-    assertx(isFCallStar(ni.op()));
-    stackOff -= ni.imm[0].u_FCA.numArgs;  // arguments consumed
-    stackOff -= (ni.imm[0].u_FCA.hasUnpack() ? 1 : 0);  // unpack
+  if (isLegacyFCall(ni.op())) {
+    stackOff -= ni.imm[0].u_FCA.numArgsInclUnpack();  // arguments consumed
     stackOff -= kNumActRecCells;  // ActRec is torn down as well
   }
 
@@ -726,17 +749,30 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
         to<FPInvOffset>(bcSPOff)
     });
   }
+  if (flags & StackI2) {
+    inputs.emplace_back(Location::Stack {
+      BCSPRelOffset{safe_cast<int32_t>(ni.imm[1].u_IVA)}.
+        to<FPInvOffset>(bcSPOff)
+    });
+  }
+
   if (flags & StackN) {
-    int numArgs = (ni.op() == Op::NewPackedArray ||
-                   ni.op() == Op::NewVecArray ||
-                   ni.op() == Op::NewKeysetArray ||
-                   ni.op() == Op::NewVArray ||
-                   ni.op() == Op::CombineAndResolveTypeStruct ||
-                   ni.op() == Op::RecordReifiedGeneric ||
-                   ni.op() == Op::ReifiedName ||
-                   ni.op() == Op::ConcatN)
-      ? ni.imm[0].u_IVA
-      : ni.immVec.numStackValues();
+    int numArgs = [&] () -> int {
+      switch (ni.op()) {
+      case Op::NewPackedArray:
+      case Op::NewVecArray:
+      case Op::NewKeysetArray:
+      case Op::NewVArray:
+      case Op::CombineAndResolveTypeStruct:
+      case Op::ConcatN:
+        return ni.imm[0].u_IVA;
+      case Op::PopFrame:
+        return ni.imm[0].u_IVA + 3;
+      default:
+        return ni.immVec.numStackValues();
+      }
+      not_reached();
+    }();
 
     SKTRACE(1, sk, "getInputs: StackN %d %d\n", stackOff.offset, numArgs);
     for (int i = 0; i < numArgs; i++) {
@@ -751,6 +787,25 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
     SKTRACE(1, sk, "getInputs: BStackN %d %d\n", stackOff.offset, numArgs);
     for (int i = 0; i < numArgs; i++) {
       inputs.emplace_back(Location::Stack { stackOff-- });
+    }
+  }
+  if (hasFPushEffects(ni.op())) {
+    auto const numArgs = isLegacyFPush(ni.op())
+      ? ni.imm[0].u_IVA : ni.imm[0].u_FCA.numArgsInclUnpack();
+
+    SKTRACE(1, sk, "getInputs: %s %d %d\n",
+            opcodeToName(ni.op()), stackOff.offset, numArgs);
+    stackOff -= numArgs + 2;
+    switch (ni.op()) {
+      case Op::FCallCtor:
+      case Op::FCallObjMethod:
+      case Op::FCallObjMethodD:
+      case Op::FCallObjMethodRD:
+        inputs.emplace_back(Location::Stack { stackOff-- });
+        break;
+      default:
+        stackOff--;
+        break;
     }
   }
 
@@ -854,13 +909,13 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::IsTypeC:
   case Op::IncDecL:
   case Op::DefCls:
+  case Op::DefRecord:
   case Op::AliasCls:
   case Op::Eq:
   case Op::Neq:
   case Op::AssertRATL:
   case Op::AssertRATStk:
   case Op::SetL:
-  case Op::BindL:
   case Op::EmptyL:
   case Op::CastBool:
   case Op::Same:
@@ -881,8 +936,8 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::MulO:
   case Op::Add:
   case Op::AddO:
-  case Op::ClsRefGetC:
-  case Op::ClsRefGetTS:
+  case Op::ClassGetC:
+  case Op::ClassGetTS:
   case Op::AKExists:
   case Op::AddElemC:
   case Op::AddNewElemC:
@@ -892,11 +947,8 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::Vec:
   case Op::ArrayIdx:
   case Op::BareThis:
-  case Op::BindG:
-  case Op::BindS:
   case Op::BitNot:
   case Op::CGetG:
-  case Op::CGetQuietG:
   case Op::CGetL:
   case Op::CGetQuietL:
   case Op::CGetL2:
@@ -916,10 +968,7 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::CheckProp:
   case Op::CheckThis:
   case Op::Clone:
-  case Op::Cns:
   case Op::CnsE:
-  case Op::CnsU:
-  case Op::CnsUE:
   case Op::ColFromArray:
   case Op::CombineAndResolveTypeStruct:
   case Op::RecordReifiedGeneric:
@@ -940,27 +989,31 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::Dup:
   case Op::EmptyG:
   case Op::EmptyS:
-  case Op::FPushClsMethodD:
-  case Op::FPushClsMethod:
-  case Op::FPushClsMethodS:
-  case Op::FPushClsMethodSD:
-  case Op::FPushCtor:
+  case Op::FCallClsMethod:
+  case Op::FCallClsMethodD:
+  case Op::FCallClsMethodRD:
+  case Op::FCallClsMethodS:
+  case Op::FCallClsMethodSD:
+  case Op::FCallClsMethodSRD:
+  case Op::FCallCtor:
   case Op::FPushFunc:
   case Op::FPushFuncD:
-  case Op::FPushFuncU:
-  case Op::FPushObjMethodD:
+  case Op::FPushFuncRD:
+  case Op::FCallObjMethodD:
+  case Op::FCallObjMethodRD:
   case Op::ResolveFunc:
   case Op::ResolveClsMethod:
   case Op::ResolveObjMethod:
   case Op::False:
   case Op::File:
+  case Op::FuncCred:
   case Op::GetMemoKeyL:
   case Op::Idx:
   case Op::InitThisLoc:
   case Op::InstanceOf:
   case Op::InstanceOfD:
+  case Op::IsLateBoundCls:
   case Op::IsTypeStructC:
-  case Op::AsTypeStructC:
   case Op::Int:
   case Op::IssetG:
   case Op::IssetL:
@@ -971,7 +1024,7 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::Method:
   case Op::Mod:
   case Op::Pow:
-  case Op::ClsRefName:
+  case Op::ClassName:
   case Op::NativeImpl:
   case Op::NewArray:
   case Op::NewCol:
@@ -985,19 +1038,21 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::NewVArray:
   case Op::NewDArray:
   case Op::NewObj:
+  case Op::NewObjR:
   case Op::NewObjD:
-  case Op::NewObjI:
+  case Op::NewObjRD:
   case Op::NewObjS:
+  case Op::NewRecord:
   case Op::Not:
   case Op::Null:
   case Op::NullUninit:
   case Op::OODeclExists:
   case Op::Parent:
-  case Op::DiscardClsRef:
   case Op::PopC:
   case Op::PopV:
   case Op::PopU:
   case Op::PopU2:
+  case Op::PopFrame:
   case Op::PopL:
   case Op::Print:
   case Op::PushL:
@@ -1009,18 +1064,13 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::Shl:
   case Op::Shr:
   case Op::Silence:
-  case Op::StaticLocDef:
-  case Op::StaticLocCheck:
-  case Op::StaticLocInit:
   case Op::String:
   case Op::This:
   case Op::Throw:
+  case Op::ThrowAsTypeStructException:
   case Op::True:
-  case Op::Unbox:
   case Op::UnsetL:
-  case Op::VGetG:
   case Op::VGetL:
-  case Op::VGetS:
   case Op::VerifyParamType:
   case Op::VerifyParamTypeTS:
   case Op::VerifyRetTypeC:
@@ -1037,11 +1087,9 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::BaseH:
   case Op::Dim:
   case Op::QueryM:
-  case Op::VGetM:
   case Op::SetM:
   case Op::IncDecM:
   case Op::SetOpM:
-  case Op::BindM:
   case Op::UnsetM:
   case Op::SetRangeM:
   case Op::MemoGet:
@@ -1050,26 +1098,23 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::MemoSetEager:
   case Op::RetM:
   case Op::Select:
+  case Op::LockObj:
     return false;
 
   // These are instructions that are always interp-one'd, or are always no-ops.
   case Op::Nop:
   case Op::EntryNop:
-  case Op::Box:
   case Op::CGetCUNop:
   case Op::UGetCUNop:
-  case Op::AddElemV:
-  case Op::AddNewElemV:
   case Op::ClsCns:
   case Op::Exit:
   case Op::Fatal:
-  case Op::Unwind:
   case Op::SetOpG:
   case Op::SetOpS:
   case Op::IncDecG:
   case Op::IncDecS:
   case Op::UnsetG:
-  case Op::FPushObjMethod:
+  case Op::FCallObjMethod:
   case Op::Incl:
   case Op::InclOnce:
   case Op::Req:
@@ -1078,7 +1123,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::Eval:
   case Op::DefClsNop:
   case Op::DefTypeAlias:
-  case Op::Catch:
   case Op::ChainFaults:
   case Op::ContAssignDelegate:
   case Op::ContEnterDelegate:
@@ -1091,7 +1135,7 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
 }
 
 bool instrBreaksProfileBB(const NormalizedInstruction* inst) {
-  if (isFCallStar(inst->op())) return true;
+  if (hasFCallEffects(inst->op())) return true;
 
   if (instrIsNonCallControlFlow(inst->op()) ||
       inst->op() == OpAwait || // may branch to scheduler and suspend execution
@@ -1122,8 +1166,6 @@ bool instrBreaksProfileBB(const NormalizedInstruction* inst) {
 #define IMM_I64A(n)    ni.imm[n].u_I64A
 #define IMM_LA(n)      ni.imm[n].u_LA
 #define IMM_IA(n)      ni.imm[n].u_IA
-#define IMM_CAR(n)     ni.imm[n].u_CAR
-#define IMM_CAW(n)     ni.imm[n].u_CAW
 #define IMM_DA(n)      ni.imm[n].u_DA
 #define IMM_SA(n)      ni.unit()->lookupLitstrId(ni.imm[n].u_SA)
 #define IMM_RATA(n)    ni.imm[n].u_RATA
@@ -1164,8 +1206,6 @@ static void translateDispatch(irgen::IRGS& irgs,
 #undef IMM_I64A
 #undef IMM_LA
 #undef IMM_IA
-#undef IMM_CAR
-#undef IMM_CAW
 #undef IMM_DA
 #undef IMM_SA
 #undef IMM_RATA
@@ -1200,21 +1240,16 @@ Type flavorToType(FlavorDesc f) {
 void translateInstr(irgen::IRGS& irgs, const NormalizedInstruction& ni,
                     bool /*checkOuterTypeOnly*/, bool /*firstInst*/
                     ) {
-  irgen::prepareForNextHHBC(
-    irgs,
-    &ni,
-    ni.source,
-    ni.endsRegion && !irgen::isInlining(irgs)
-  );
+  irgen::prepareForNextHHBC(irgs, &ni, ni.source);
 
   const Func* builtinFunc = nullptr;
   if (ni.op() == OpFCallBuiltin) {
-    auto str = ni.m_unit->lookupLitstrId(ni.imm[2].u_SA);
+    auto str = ni.m_unit->lookupLitstrId(ni.imm[3].u_SA);
     builtinFunc = Unit::lookupBuiltin(str);
   }
   auto pc = ni.pc();
   for (auto i = 0, num = instrNumPops(pc); i < num; ++i) {
-    if (ni.op() == OpFCall && instrInputFlavor(pc, i) == UV) {
+    if (hasFCallEffects(ni.op()) && instrInputFlavor(pc, i) == UV) {
       // This is a hack to deal with the fact that this instruction is
       // actually popping an ActRec in the middle of its "pops." We could
       // assert on the Uninit values on the stack, but the call is going to
@@ -1238,7 +1273,7 @@ void translateInstr(irgen::IRGS& irgs, const NormalizedInstruction& ni,
 
   if (isAlwaysNop(ni)) return;
   if (ni.interp || RuntimeOption::EvalJitAlwaysInterpOne) {
-    irgen::interpOne(irgs, ni);
+    irgen::interpOne(irgs);
     return;
   }
 
@@ -1254,117 +1289,6 @@ void translateInstr(irgen::IRGS& irgs, const NormalizedInstruction& ni,
 
 //////////////////////////////////////////////////////////////////////
 
-const Func* lookupImmutableMethod(const Class* cls, const StringData* name,
-                                  bool& magicCall, bool staticLookup,
-                                  const Func* ctxFunc,
-                                  bool exactClass) {
-  if (!cls) return nullptr;
-  if (cls->attrs() & AttrInterface) return nullptr;
-  auto ctx = ctxFunc->cls();
-  const Func* func;
-  LookupResult res = staticLookup ?
-    lookupClsMethod(func, cls, name, nullptr, ctx, false) :
-    lookupObjMethod(func, cls, name, ctx, false);
-
-  if (res == LookupResult::MethodNotFound) return nullptr;
-
-  if (func->isAbstract() && exactClass) return nullptr;
-
-  assertx(res == LookupResult::MethodFoundWithThis ||
-          res == LookupResult::MethodFoundNoThis ||
-          (staticLookup ?
-           res == LookupResult::MagicCallStaticFound :
-           res == LookupResult::MagicCallFound));
-
-  magicCall =
-    res == LookupResult::MagicCallStaticFound ||
-    res == LookupResult::MagicCallFound;
-
-  if (staticLookup) {
-    if (magicCall) {
-      if (ctx && !ctxFunc->isStatic() &&
-          (ctx->classof(cls) || cls->classof(ctx))) {
-        // we might need to call __call instead
-        return nullptr;
-      }
-      if (!exactClass && !(cls->attrs() & AttrNoOverride)) {
-        // there might be a derived class which defines the method
-        return nullptr;
-      }
-    }
-  } else if (!exactClass && !(func->attrs() & AttrPrivate)) {
-    if (magicCall) {
-      if (!(cls->attrs() & AttrNoOverride)) {
-        return nullptr;
-      }
-    }
-  }
-  return func;
-}
-
-const Func* lookupImmutableCtor(const Class* cls, const Class* ctx) {
-  if (!cls) return nullptr;
-
-  auto const func = cls->getCtor();
-  if (func && !(func->attrs() & AttrPublic)) {
-    auto fcls = func->cls();
-    if (fcls != ctx) {
-      if (!ctx) return nullptr;
-      if ((func->attrs() & AttrPrivate) ||
-          !(ctx->classof(fcls) || fcls->classof(ctx))) {
-        return nullptr;
-      }
-    }
-  }
-
-  return func;
-}
-
-ImmutableFuncLookup lookupImmutableFunc(const Unit* unit,
-                                        const StringData* name) {
-  // Trust nothing if we can rename functions
-  if (RuntimeOption::EvalJitEnableRenameFunction) return {nullptr, true};
-
-  auto const ne = NamedEntity::get(name);
-  if (auto const f = ne->uniqueFunc()) {
-    // We have an unique function. However, it may be conditionally defined
-    // (!f->top()) or interceptable, which means we can't use it directly.
-    if (!f->top() || f->isInterceptable()) return {nullptr, true};
-    // We can use this function. If its persistent (which means its unit's
-    // pseudo-main is trivial), its safe to use unconditionally. If its defined
-    // in the same unit as the caller, its also safe to use unconditionally. By
-    // virtue of the fact that we're already in the unit, we know its already
-    // defined.
-    if (f->isPersistent() || f->unit() == unit) return {f, false};
-    // Use the function, but ensure its unit is loaded.
-    return {f, true};
-  }
-
-  // There's no unique function currently known for this name. However, if the
-  // current unit defines a single top-level function with this name, we can use
-  // it. Why? When this unit is loaded, either it successfully defined the
-  // function, in which case its the correct function, or it fataled, which
-  // means this code won't run anyways.
-
-  Func* found = nullptr;
-  for (auto& f : unit->funcs()) {
-    if (f->isPseudoMain()) continue;
-    if (!f->name()->isame(name)) continue;
-    if (found) {
-      // Function with duplicate name
-      found = nullptr;
-      break;
-    }
-    found = f;
-  }
-
-  if (found && found->top() && !found->isInterceptable()) {
-    return {found, false};
-  }
-  return {nullptr, true};
-}
-
-///////////////////////////////////////////////////////////////////////////////
 }
 
 void invalidatePath(const std::string& path) {
@@ -1381,7 +1305,7 @@ void invalidatePath(const std::string& path) {
      */
     String spath(path);
     lookupUnit(spath.get(), "", nullptr /* initial_opt */,
-               Native::s_noNativeFuncs);
+               Native::s_noNativeFuncs, false);
   });
 }
 

@@ -21,6 +21,8 @@
 #include <iterator>
 
 #include <folly/Optional.h>
+#include <folly/gen/Base.h>
+#include <folly/gen/String.h>
 
 #include "hphp/util/trace.h"
 #include "hphp/runtime/base/array-init.h"
@@ -59,29 +61,383 @@ namespace HPHP { namespace HHBBC {
 
 namespace {
 
-const StaticString s_Throwable("Throwable");
-const StaticString s_construct("__construct");
-const StaticString s_86ctor("86ctor");
 const StaticString s_PHP_Incomplete_Class("__PHP_Incomplete_Class");
 const StaticString s_IMemoizeParam("HH\\IMemoizeParam");
 const StaticString s_getInstanceKey("getInstanceKey");
 const StaticString s_Closure("Closure");
-const StaticString s_byRefWarn("Only variables should be passed by reference");
-const StaticString s_byRefError("Only variables can be passed by reference");
-const StaticString s_trigger_error("trigger_error");
+const StaticString s_this("HH\\this");
+
+bool poppable(Op op) {
+  switch (op) {
+    case Op::Dup:
+    case Op::Null:
+    case Op::False:
+    case Op::True:
+    case Op::Int:
+    case Op::Double:
+    case Op::String:
+    case Op::Array:
+    case Op::Vec:
+    case Op::Dict:
+    case Op::Keyset:
+    case Op::NewArray:
+    case Op::NewDArray:
+    case Op::NewMixedArray:
+    case Op::NewDictArray:
+    case Op::NewLikeArrayL:
+    case Op::NewCol:
+      return true;
+    default:
+      return false;
+  }
+}
+
+void interpStep(ISS& env, const Bytecode& bc);
+
+void record(ISS& env, const Bytecode& bc) {
+  if (bc.srcLoc != env.srcLoc) {
+    Bytecode tmp = bc;
+    tmp.srcLoc = env.srcLoc;
+    return record(env, tmp);
+  }
+
+  if (!env.replacedBcs.size() &&
+      env.unchangedBcs < env.blk.hhbcs.size() &&
+      bc == env.blk.hhbcs[env.unchangedBcs]) {
+    env.unchangedBcs++;
+    return;
+  }
+
+  ITRACE(2, "  => {}\n", show(env.ctx.func, bc));
+  env.replacedBcs.push_back(bc);
+}
+
+// The number of pops as seen by interp.
+uint32_t numPop(const Bytecode& bc) {
+  if (bc.op == Op::CGetL2) return 1;
+  return bc.numPop();
+}
+
+// The number of pushes as seen by interp.
+uint32_t numPush(const Bytecode& bc) {
+  if (bc.op == Op::CGetL2) return 2;
+  return bc.numPush();
+}
+
+void reprocess(ISS& env) {
+  env.reprocess = true;
+}
+
+ArrayData** add_elem_array(ISS& env) {
+  auto const idx = env.trackedElems.back().idx;
+  if (idx < env.unchangedBcs) {
+    auto const DEBUG_ONLY& bc = env.blk.hhbcs[idx];
+    assertx(bc.op == Op::Concat);
+    return nullptr;
+  }
+  assertx(idx >= env.unchangedBcs);
+  auto& bc = env.replacedBcs[idx - env.unchangedBcs];
+  auto arr = [&] () -> const ArrayData** {
+    switch (bc.op) {
+      case Op::Array:   return &bc.Array.arr1;
+      case Op::Dict:    return &bc.Dict.arr1;
+      case Op::Keyset:  return &bc.Keyset.arr1;
+      case Op::Vec:     return &bc.Vec.arr1;
+      case Op::Concat: return nullptr;
+      default:          not_reached();
+    }
+  }();
+  return const_cast<ArrayData**>(arr);
+}
+
+bool start_add_elem(ISS& env, Type& ty, Op op) {
+  auto value = tvNonStatic(ty);
+  if (!value || !isArrayLikeType(value->m_type)) return false;
+
+  if (op == Op::AddElemC) {
+    reduce(env, bc::PopC {}, bc::PopC {}, bc::PopC {});
+  } else {
+    reduce(env, bc::PopC {}, bc::PopC {});
+  }
+  env.trackedElems.emplace_back(
+    env.state.stack.size(),
+    env.unchangedBcs + env.replacedBcs.size()
+  );
+
+  auto const arr = value->m_data.parr;
+  env.replacedBcs.push_back(
+    [&] () -> Bytecode {
+      if (arr->isKeyset()) {
+        return bc::Keyset { arr };
+      }
+      if (arr->isVecArray()) {
+        return bc::Vec { arr };
+      }
+      if (arr->isDict()) {
+        return bc::Dict { arr };
+      }
+      if (arr->isPHPArray()) {
+        return bc::Array { arr };
+      }
+
+      not_reached();
+    }()
+  );
+  env.replacedBcs.back().srcLoc = env.srcLoc;
+  ITRACE(2, "(addelem* -> {}\n",
+         show(env.ctx.func, env.replacedBcs.back()));
+  push(env, std::move(ty));
+  effect_free(env);
+  return true;
+}
+
+void finish_tracked_elem(ISS& env) {
+  auto const arr = add_elem_array(env);
+  env.trackedElems.pop_back();
+  if (arr) ArrayData::GetScalarArray(arr);
+}
+
+void finish_tracked_elems(ISS& env, size_t depth) {
+  while (!env.trackedElems.empty() && env.trackedElems.back().depth >= depth) {
+    finish_tracked_elem(env);
+  }
+}
+
+uint32_t id_from_slot(ISS& env, int slot) {
+  auto const id = (env.state.stack.end() - (slot + 1))->id;
+  assertx(id == StackElem::NoId ||
+          id < env.unchangedBcs + env.replacedBcs.size());
+  return id;
+}
+
+const Bytecode* op_from_id(ISS& env, uint32_t id) {
+  if (id == StackElem::NoId) return nullptr;
+  if (id < env.unchangedBcs) return &env.blk.hhbcs[id];
+  auto const off = id - env.unchangedBcs;
+  assertx(off < env.replacedBcs.size());
+  return &env.replacedBcs[off];
+}
+
+void ensure_mutable(ISS& env, uint32_t id) {
+  if (id < env.unchangedBcs) {
+    auto const delta = env.unchangedBcs - id;
+    env.replacedBcs.resize(env.replacedBcs.size() + delta);
+    for (auto i = env.replacedBcs.size(); i-- > delta; ) {
+      env.replacedBcs[i] = std::move(env.replacedBcs[i - delta]);
+    }
+    for (auto i = 0; i < delta; i++) {
+      env.replacedBcs[i] = env.blk.hhbcs[id + i];
+    }
+    env.unchangedBcs = id;
+  }
+}
+
+/*
+ * Turn the instruction that wrote the slot'th element from the top of
+ * the stack into a Nop, adjusting the stack appropriately. If its the
+ * previous instruction, just rewind.
+ */
+int kill_by_slot(ISS& env, int slot) {
+  auto const id = id_from_slot(env, slot);
+  assertx(id != StackElem::NoId);
+  auto const sz = env.state.stack.size();
+  // if its the last bytecode we processed, we can rewind and avoid
+  // the reprocess overhead.
+  if (id == env.unchangedBcs + env.replacedBcs.size() - 1) {
+    rewind(env, 1);
+    return env.state.stack.size() - sz;
+  }
+  ensure_mutable(env, id);
+  auto& bc = env.replacedBcs[id - env.unchangedBcs];
+  auto const pop = numPop(bc);
+  auto const push = numPush(bc);
+  ITRACE(2, "kill_by_slot: slot={}, id={}, was {}\n",
+         slot, id, show(env.ctx.func, bc));
+  bc = bc_with_loc(bc.srcLoc, bc::Nop {});
+  env.state.stack.kill(pop, push, id);
+  reprocess(env);
+  return env.state.stack.size() - sz;
+}
+
+/*
+ * Check whether an instruction can be inserted immediately after the
+ * slot'th stack entry was written. This is only possible if slot was
+ * the last thing written by the instruction that wrote it (ie some
+ * bytecodes push more than one value - there's no way to insert a
+ * bytecode that will write *between* those values on the stack).
+ */
+bool can_insert_after_slot(ISS& env, int slot) {
+  auto const it = env.state.stack.end() - (slot + 1);
+  if (it->id == StackElem::NoId) return false;
+  if (auto const next = it.next_elem(1)) {
+    return next->id != it->id;
+  }
+  return true;
+}
+
+/*
+ * Insert a sequence of bytecodes after the instruction that wrote the
+ * slot'th element from the top of the stack.
+ *
+ * The entire sequence pops numPop, and pushes numPush stack
+ * elements. Only the last bytecode can push anything onto the stack,
+ * and the types it pushes are pointed to by types (if you have more
+ * than one bytecode that pushes, call this more than once).
+ */
+void insert_after_slot(ISS& env, int slot,
+                       int numPop, int numPush, const Type* types,
+                       const BytecodeVec& bcs) {
+  assertx(can_insert_after_slot(env, slot));
+  auto const id = id_from_slot(env, slot);
+  assertx(id != StackElem::NoId);
+  ensure_mutable(env, id + 1);
+  env.state.stack.insert_after(numPop, numPush, types, bcs.size(), id);
+  env.replacedBcs.insert(env.replacedBcs.begin() + (id + 1 - env.unchangedBcs),
+                         bcs.begin(), bcs.end());
+  using namespace folly::gen;
+  ITRACE(2, "insert_after_slot: slot={}, id={}  [{}]\n",
+         slot, id,
+         from(bcs) |
+         map([&] (const Bytecode& bc) { return show(env.ctx.func, bc); }) |
+         unsplit<std::string>(", "));
+}
+
+Bytecode& mutate_last_op(ISS& env) {
+  assertx(will_reduce(env));
+
+  if (!env.replacedBcs.size()) {
+    assertx(env.unchangedBcs);
+    env.replacedBcs.push_back(env.blk.hhbcs[--env.unchangedBcs]);
+  }
+  return env.replacedBcs.back();
+}
+
+/*
+ * Can be used to replace one op with another when rewind/reduce isn't
+ * safe (eg to change a SetL to a PopL - its not safe to rewind/reduce
+ * because the SetL changed both the Type and the equiv of its local).
+ */
+void replace_last_op(ISS& env, Bytecode&& bc) {
+  auto& last = mutate_last_op(env);
+  auto const newPush = numPush(bc);
+  auto const oldPush = numPush(last);
+  auto const newPops = numPop(bc);
+  auto const oldPops = numPop(last);
+
+  assertx(newPush <= oldPush);
+  assertx(newPops <= oldPops);
+
+  if (newPush != oldPush || newPops != oldPops) {
+    env.state.stack.rewind(oldPops - newPops, oldPush - newPush);
+  }
+  ITRACE(2, "(replace: {}->{}\n",
+         show(env.ctx.func, last), show(env.ctx.func, bc));
+  last = bc_with_loc(last.srcLoc, bc);
+}
+
 }
 
 //////////////////////////////////////////////////////////////////////
 
+const Bytecode* op_from_slot(ISS& env, int slot, int prev /* = 0 */) {
+  if (!will_reduce(env)) return nullptr;
+  auto const id = id_from_slot(env, slot);
+  if (id == StackElem::NoId) return nullptr;
+  if (id < prev) return nullptr;
+  return op_from_id(env, id - prev);
+}
+
+const Bytecode* last_op(ISS& env, int idx /* = 0 */) {
+  if (!will_reduce(env)) return nullptr;
+
+  if (env.replacedBcs.size() > idx) {
+    return &env.replacedBcs[env.replacedBcs.size() - idx - 1];
+  }
+
+  idx -= env.replacedBcs.size();
+  if (env.unchangedBcs > idx) {
+    return &env.blk.hhbcs[env.unchangedBcs - idx - 1];
+  }
+  return nullptr;
+}
+
+/*
+ * Assuming bc was just interped, rewind to the state immediately
+ * before it was interped.
+ *
+ * This is rarely what you want. Its used for constprop, where the
+ * bytecode has been interped, but not yet committed to the bytecode
+ * stream. We want to undo its effects, the spit out pops for its
+ * inputs, and commit a constant-generating bytecode.
+ */
+void rewind(ISS& env, const Bytecode& bc) {
+  ITRACE(2, "(rewind: {}\n", show(env.ctx.func, bc));
+  env.state.stack.rewind(numPop(bc), numPush(bc));
+}
+
+/*
+ * Used for peephole opts. Will undo the *stack* effects of the last n
+ * committed byte codes, and remove them from the bytecode stream, in
+ * preparation for writing out an optimized replacement sequence.
+ *
+ * WARNING: Does not undo other changes to state, such as local types,
+ * local equivalency, and thisType. Take care when rewinding such
+ * things.
+ */
+void rewind(ISS& env, int n) {
+  assertx(n);
+  while (env.replacedBcs.size()) {
+    rewind(env, env.replacedBcs.back());
+    env.replacedBcs.pop_back();
+    if (!--n) return;
+  }
+  while (n--) {
+    rewind(env, env.blk.hhbcs[--env.unchangedBcs]);
+  }
+}
+
 void impl_vec(ISS& env, bool reduce, BytecodeVec&& bcs) {
-  BytecodeVec currentReduction;
-  if (!options.StrengthReduce) reduce = false;
+  if (!will_reduce(env)) reduce = false;
+
+  if (reduce) {
+    using namespace folly::gen;
+    ITRACE(2, "(reduce: {}\n",
+           from(bcs) |
+           map([&] (const Bytecode& bc) { return show(env.ctx.func, bc); }) |
+           unsplit<std::string>(", "));
+    if (bcs.size()) {
+      auto ef = !env.flags.reduced || env.flags.effectFree;
+      Trace::Indent _;
+      for (auto const& bc : bcs) {
+        assert(
+          env.flags.jmpDest == NoBlockId &&
+          "you can't use impl with branching opcodes before last position"
+        );
+        interpStep(env, bc);
+        if (!env.flags.effectFree) ef = false;
+        if (env.state.unreachable || env.flags.jmpDest != NoBlockId) break;
+      }
+      env.flags.effectFree = ef;
+    } else if (!env.flags.reduced) {
+      effect_free(env);
+    }
+    env.flags.reduced = true;
+    return;
+  }
+
+  env.analyzeDepth++;
+  SCOPE_EXIT { env.analyzeDepth--; };
+
+  // We should be at the start of a bytecode.
+  assertx(env.flags.wasPEI &&
+          !env.flags.canConstProp &&
+          !env.flags.effectFree);
 
   env.flags.wasPEI          = false;
   env.flags.canConstProp    = true;
   env.flags.effectFree      = true;
 
-  for (auto it = begin(bcs); it != end(bcs); ++it) {
+  for (auto const& bc : bcs) {
     assert(env.flags.jmpDest == NoBlockId &&
            "you can't use impl with branching opcodes before last position");
 
@@ -89,55 +445,23 @@ void impl_vec(ISS& env, bool reduce, BytecodeVec&& bcs) {
     auto const canConstProp = env.flags.canConstProp;
     auto const effectFree = env.flags.effectFree;
 
-    FTRACE(3, "    (impl {}\n", show(env.ctx.func, *it));
+    ITRACE(3, "    (impl {}\n", show(env.ctx.func, bc));
     env.flags.wasPEI          = true;
     env.flags.canConstProp    = false;
     env.flags.effectFree      = false;
-    env.flags.strengthReduced = folly::none;
-    default_dispatch(env, *it);
+    default_dispatch(env, bc);
 
-    if (env.flags.strengthReduced) {
-      if (instrFlags(env.flags.strengthReduced->back().op) & TF) {
-        unreachable(env);
-      }
-      if (reduce) {
-        std::move(begin(*env.flags.strengthReduced),
-                  end(*env.flags.strengthReduced),
-                  std::back_inserter(currentReduction));
-      }
-    } else {
-      if (instrFlags(it->op) & TF) {
-        unreachable(env);
-      }
-      auto applyConstProp = [&] {
+    if (env.flags.canConstProp) {
+      [&] {
         if (env.flags.effectFree && !env.flags.wasPEI) return;
         auto stk = env.state.stack.end();
-        for (auto i = it->numPush(); i--; ) {
+        for (auto i = bc.numPush(); i--; ) {
           --stk;
           if (!is_scalar(stk->type)) return;
         }
         env.flags.effectFree = true;
         env.flags.wasPEI = false;
-      };
-      if (reduce) {
-        auto added = false;
-        if (env.flags.canConstProp) {
-          if (env.collect.propagate_constants) {
-            if (env.collect.propagate_constants(*it, env.state,
-                                                currentReduction)) {
-              added = true;
-              env.flags.canConstProp = false;
-              env.flags.wasPEI = false;
-              env.flags.effectFree = true;
-            }
-          } else {
-            applyConstProp();
-          }
-        }
-        if (!added) currentReduction.push_back(std::move(*it));
-      } else if (env.flags.canConstProp) {
-        applyConstProp();
-      }
+      }();
     }
 
     // If any of the opcodes in the impl list said they could throw,
@@ -145,13 +469,7 @@ void impl_vec(ISS& env, bool reduce, BytecodeVec&& bcs) {
     env.flags.wasPEI = env.flags.wasPEI || wasPEI;
     env.flags.canConstProp = env.flags.canConstProp && canConstProp;
     env.flags.effectFree = env.flags.effectFree && effectFree;
-    if (env.state.unreachable) break;
-  }
-
-  if (reduce) {
-    env.flags.strengthReduced = std::move(currentReduction);
-  } else {
-    env.flags.strengthReduced = folly::none;
+    if (env.state.unreachable || env.flags.jmpDest != NoBlockId) break;
   }
 }
 
@@ -197,18 +515,232 @@ SString getNameFromType(const Type& t) {
   return nullptr;
 }
 
+//////////////////////////////////////////////////////////////////////
+
+namespace {
+
+ArrayData*
+resolveTSListStatically(ISS& env, SArray tsList, const php::Class* declaringCls,
+                        bool checkArrays) {
+  auto arr = Array::attach(const_cast<ArrayData*>(tsList));
+  for (auto i = 0; i < arr.size(); i++) {
+    auto elemArr = arr[i].getArrayData();
+    auto elem = resolveTSStatically(env, elemArr, declaringCls, checkArrays);
+    if (!elem) return nullptr;
+    arr.set(i, Variant(elem));
+  }
+  return arr.detach();
+}
+
+} // namespace
+
+ArrayData*
+resolveTSStatically(ISS& env, SArray ts, const php::Class* declaringCls,
+                    bool checkArrays) {
+  auto const addModifiers = [&](ArrayData* result) {
+    auto a = Array::attach(result);
+    if (is_ts_like(ts) && !is_ts_like(a.get())) {
+      a.set(s_like, make_tv<KindOfBoolean>(true));
+    }
+    if (is_ts_nullable(ts) && !is_ts_nullable(a.get())) {
+      a.set(s_nullable, make_tv<KindOfBoolean>(true));
+    }
+    if (is_ts_soft(ts) && !is_ts_soft(a.get())) {
+      a.set(s_soft, make_tv<KindOfBoolean>(true));
+    }
+    return a.detach();
+  };
+  auto const finish = [&](const ArrayData* result) {
+    auto r = const_cast<ArrayData*>(result);
+    ArrayData::GetScalarArray(&r);
+    return r;
+  };
+  switch (get_ts_kind(ts)) {
+    case TypeStructure::Kind::T_int:
+    case TypeStructure::Kind::T_bool:
+    case TypeStructure::Kind::T_float:
+    case TypeStructure::Kind::T_string:
+    case TypeStructure::Kind::T_num:
+    case TypeStructure::Kind::T_arraykey:
+    case TypeStructure::Kind::T_void:
+    case TypeStructure::Kind::T_null:
+    case TypeStructure::Kind::T_nothing:
+    case TypeStructure::Kind::T_noreturn:
+    case TypeStructure::Kind::T_mixed:
+    case TypeStructure::Kind::T_dynamic:
+    case TypeStructure::Kind::T_nonnull:
+    case TypeStructure::Kind::T_resource:
+      return finish(ts);
+    case TypeStructure::Kind::T_typevar:
+      if (ts->exists(s_name.get()) &&
+          get_ts_name(ts)->equal(s_wildcard.get())) {
+        return finish(ts);
+      }
+      return nullptr;
+    case TypeStructure::Kind::T_dict:
+    case TypeStructure::Kind::T_vec:
+    case TypeStructure::Kind::T_keyset:
+    case TypeStructure::Kind::T_vec_or_dict:
+    case TypeStructure::Kind::T_arraylike:
+      if (!checkArrays || isTSAllWildcards(ts)) return finish(ts);
+      return nullptr;
+    case TypeStructure::Kind::T_class:
+    case TypeStructure::Kind::T_interface:
+    case TypeStructure::Kind::T_xhp:
+    case TypeStructure::Kind::T_enum:
+      // Generics for these must have been resolved already as we'd never set
+      // the TS Kind to be one of these until resolution
+      return finish(ts);
+    case TypeStructure::Kind::T_tuple: {
+      auto const elems = get_ts_elem_types(ts);
+      auto relems =
+        resolveTSListStatically(env, elems, declaringCls, checkArrays);
+      if (!relems) return nullptr;
+      auto result = const_cast<ArrayData*>(ts);
+      return finish(result->set(s_elem_types.get(), Variant(relems)));
+    }
+    case TypeStructure::Kind::T_shape:
+      // TODO(T31677864): We can also optimize this but shapes could have
+      // optional fields or they could allow unknown fields, so this one is
+      // slightly more tricky
+      return nullptr;
+    case TypeStructure::Kind::T_unresolved: {
+      assertx(ts->exists(s_classname));
+      auto result = const_cast<ArrayData*>(ts);
+      if (ts->exists(s_generic_types)) {
+        auto const generics = get_ts_generic_types(ts);
+        auto rgenerics =
+          resolveTSListStatically(env, generics, declaringCls, checkArrays);
+        if (!rgenerics) return nullptr;
+        result = result->set(s_generic_types.get(), Variant(rgenerics));
+      }
+      auto const rcls = env.index.resolve_class(env.ctx, get_ts_classname(ts));
+      if (!rcls || !rcls->resolved()) return nullptr;
+      auto const attrs = rcls->cls()->attrs;
+      auto const kind = [&] {
+        if (attrs & AttrEnum)      return TypeStructure::Kind::T_enum;
+        if (attrs & AttrTrait)     return TypeStructure::Kind::T_trait;
+        if (attrs & AttrInterface) return TypeStructure::Kind::T_interface;
+        return TypeStructure::Kind::T_class;
+      }();
+      return finish(result->set(s_kind.get(),
+                                Variant(static_cast<uint8_t>(kind))));
+    }
+    case TypeStructure::Kind::T_typeaccess: {
+      auto const accList = get_ts_access_list(ts);
+      auto const size = accList->size();
+      auto clsName = get_ts_root_name(ts);
+      auto checkNoOverrideOnFirst = false;
+      if (declaringCls) {
+        if (clsName->isame(s_self.get())) {
+          clsName = declaringCls->name;
+        } else if (clsName->isame(s_parent.get()) && declaringCls->parentName) {
+          clsName = declaringCls->parentName;
+        } else if (clsName->isame(s_this.get())) {
+          clsName = declaringCls->name;
+          checkNoOverrideOnFirst = true;
+        }
+      }
+      ArrayData* typeCnsVal = nullptr;
+      for (auto i = 0; i < size; i++) {
+        auto const rcls = env.index.resolve_class(env.ctx, clsName);
+        if (!rcls || !rcls->resolved()) return nullptr;
+        auto const cnsName = accList->at(i);
+        if (!tvIsString(&cnsName)) return nullptr;
+        auto const cnst = env.index.lookup_class_const_ptr(env.ctx, *rcls,
+                                                           cnsName.m_data.pstr,
+                                                           true);
+        if (!cnst || !cnst->val || !cnst->isTypeconst ||
+            !tvIsDictOrDArray(&*cnst->val)) {
+          return nullptr;
+        }
+        if (checkNoOverrideOnFirst && i == 0 && !cnst->isNoOverride) {
+          return nullptr;
+        }
+        typeCnsVal = resolveTSStatically(env, cnst->val->m_data.parr, cnst->cls,
+                                         checkArrays);
+        if (!typeCnsVal) return nullptr;
+        if (i == size - 1) break;
+        auto const kind = get_ts_kind(typeCnsVal);
+        if (kind != TypeStructure::Kind::T_class &&
+            kind != TypeStructure::Kind::T_interface) {
+          return nullptr;
+        }
+        clsName = get_ts_classname(typeCnsVal);
+      }
+      if (!typeCnsVal) return nullptr;
+      return finish(addModifiers(typeCnsVal));
+    }
+    case TypeStructure::Kind::T_fun: {
+      // TODO(T46022709): Handle variadic args
+      auto rreturn = resolveTSStatically(env, get_ts_return_type(ts),
+                                         declaringCls, checkArrays);
+      if (!rreturn) return nullptr;
+      auto rparams = resolveTSListStatically(env, get_ts_param_types(ts),
+                                             declaringCls, checkArrays);
+      if (!rparams) return nullptr;
+      auto const result = const_cast<ArrayData*>(ts)
+        ->set(s_return_type.get(), Variant(rreturn))
+        ->set(s_param_types.get(), Variant(rparams));
+      return finish(result);
+    }
+    case TypeStructure::Kind::T_array:
+    case TypeStructure::Kind::T_darray:
+    case TypeStructure::Kind::T_varray:
+    case TypeStructure::Kind::T_varray_or_darray:
+    case TypeStructure::Kind::T_reifiedtype:
+    case TypeStructure::Kind::T_trait:
+      return nullptr;
+  }
+  not_reached();
+}
+
+//////////////////////////////////////////////////////////////////////
+
 namespace interp_step {
 
-void in(ISS& env, const bc::Nop&)  { effect_free(env); }
-void in(ISS& env, const bc::DiscardClsRef& op) {
-  nothrow(env);
-  takeClsRefSlot(env, op.slot);
-}
+void in(ISS& env, const bc::Nop&)  { reduce(env); }
+
 void in(ISS& env, const bc::PopC&) {
+  if (auto const last = last_op(env)) {
+    if (poppable(last->op)) {
+      rewind(env, 1);
+      return reduce(env);
+    }
+    if (last->op == Op::This) {
+      // can't rewind This because it removed null from thisType (so
+      // CheckThis at this point is a no-op) - and note that it must
+      // have *been* nullable, or we'd have turned it into a
+      // `BareThis NeverNull`
+      replace_last_op(env, bc::CheckThis {});
+      return reduce(env);
+    }
+    if (last->op == Op::SetL) {
+      // can't rewind a SetL because it changes local state
+      replace_last_op(env, bc::PopL { last->SetL.loc1 });
+      return reduce(env);
+    }
+    if (last->op == Op::CGetL2) {
+      auto loc = last->CGetL2.loc1;
+      rewind(env, 1);
+      return reduce(env, bc::PopC {}, bc::CGetL { loc });
+    }
+  }
+
   effect_free(env);
   popC(env);
 }
-void in(ISS& env, const bc::PopU&) { effect_free(env); popU(env); }
+
+void in(ISS& env, const bc::PopU&) {
+  if (auto const last = last_op(env)) {
+    if (last->op == Op::NullUninit) {
+      rewind(env, 1);
+      return reduce(env);
+    }
+  }
+  effect_free(env); popU(env);
+}
+
 void in(ISS& env, const bc::PopU2&) {
   effect_free(env);
   auto equiv = topStkEquiv(env);
@@ -217,6 +749,20 @@ void in(ISS& env, const bc::PopU2&) {
   push(env, std::move(val), equiv != StackDupId ? equiv : NoLocalId);
 }
 void in(ISS& env, const bc::PopV&) { nothrow(env); popV(env); }
+
+void in(ISS& env, const bc::PopFrame& op) {
+  effect_free(env);
+
+  std::vector<std::pair<Type, LocalId>> vals{op.arg1};
+  for (auto i = op.arg1; i > 0; --i) {
+    vals[i - 1] = {popC(env), topStkEquiv(env)};
+  }
+  for (uint32_t i = 0; i < 3; i++) popU(env);
+  for (auto& p : vals) {
+    push(
+      env, std::move(p.first), p.second != StackDupId ? p.second : NoLocalId);
+  }
+}
 
 void in(ISS& env, const bc::EntryNop&) { effect_free(env); }
 
@@ -238,18 +784,6 @@ void in(ISS& env, const bc::AssertRATStk&) {
 }
 
 void in(ISS& env, const bc::BreakTraceHint&) { effect_free(env); }
-
-void in(ISS& env, const bc::Box&) {
-  effect_free(env);
-  popC(env);
-  push(env, TRef);
-}
-
-void in(ISS& env, const bc::Unbox&) {
-  effect_free(env);
-  popV(env);
-  push(env, TInitCell);
-}
 
 void in(ISS& env, const bc::CGetCUNop&) {
   effect_free(env);
@@ -324,18 +858,18 @@ void in(ISS& env, const bc::Keyset& op) {
 }
 
 void in(ISS& env, const bc::NewArray& op) {
-  push(env, op.arg1 == 0 ?
-       effect_free(env), aempty() : some_aempty());
+  effect_free(env);
+  push(env, op.arg1 == 0 ? aempty() : some_aempty());
 }
 
 void in(ISS& env, const bc::NewDictArray& op) {
-  push(env, op.arg1 == 0 ?
-       effect_free(env), dict_empty() : some_dict_empty());
+  effect_free(env);
+  push(env, op.arg1 == 0 ? dict_empty() : some_dict_empty());
 }
 
 void in(ISS& env, const bc::NewMixedArray& op) {
-  push(env, op.arg1 == 0 ?
-       effect_free(env), aempty() : some_aempty());
+  effect_free(env);
+  push(env, op.arg1 == 0 ? aempty() : some_aempty());
 }
 
 void in(ISS& env, const bc::NewPackedArray& op) {
@@ -358,13 +892,19 @@ void in(ISS& env, const bc::NewVArray& op) {
   }
   discard(env, op.arg1);
   push(env, arr_packed_varray(std::move(elems)));
+  effect_free(env);
   constprop(env);
 }
 
 void in(ISS& env, const bc::NewDArray& op) {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
-  push(env, op.arg1 == 0 ?
-       effect_free(env), aempty_darray() : some_aempty_darray());
+  effect_free(env);
+  push(env, op.arg1 == 0 ? aempty_darray() : some_aempty_darray());
+}
+
+void in(ISS& env, const bc::NewRecord& op) {
+  discard(env, op.keys.size());
+  push(env, TRecord);
 }
 
 void in(ISS& env, const bc::NewStructArray& op) {
@@ -373,6 +913,7 @@ void in(ISS& env, const bc::NewStructArray& op) {
     map.emplace_front(make_tv<KindOfPersistentString>(*--it), popC(env));
   }
   push(env, arr_map(std::move(map)));
+  effect_free(env);
   constprop(env);
 }
 
@@ -383,6 +924,7 @@ void in(ISS& env, const bc::NewStructDArray& op) {
     map.emplace_front(make_tv<KindOfPersistentString>(*--it), popC(env));
   }
   push(env, arr_map_darray(std::move(map)));
+  effect_free(env);
   constprop(env);
 }
 
@@ -392,6 +934,7 @@ void in(ISS& env, const bc::NewStructDict& op) {
     map.emplace_front(make_tv<KindOfPersistentString>(*--it), popC(env));
   }
   push(env, dict_map(std::move(map)));
+  effect_free(env);
   constprop(env);
 }
 
@@ -402,6 +945,7 @@ void in(ISS& env, const bc::NewVecArray& op) {
     elems.push_back(std::move(topC(env, op.arg1 - i - 1)));
   }
   discard(env, op.arg1);
+  effect_free(env);
   constprop(env);
   push(env, vec(std::move(elems)));
 }
@@ -412,8 +956,10 @@ void in(ISS& env, const bc::NewKeysetArray& op) {
   auto ty = TBottom;
   auto useMap = true;
   auto bad = false;
+  auto mayThrow = false;
   for (auto i = uint32_t{0}; i < op.arg1; ++i) {
     auto k = disect_strict_key(popC(env));
+    mayThrow |= k.mayThrow;
     if (k.type == TBottom) {
       bad = true;
       useMap = false;
@@ -427,9 +973,10 @@ void in(ISS& env, const bc::NewKeysetArray& op) {
     }
     ty |= std::move(k.type);
   }
+  if (!mayThrow) effect_free(env);
   if (useMap) {
     push(env, keyset_map(std::move(map)));
-    constprop(env);
+    if (!mayThrow) constprop(env);
   } else if (!bad) {
     push(env, keyset_n(ty));
   } else {
@@ -444,10 +991,12 @@ void in(ISS& env, const bc::NewLikeArrayL& op) {
 }
 
 void in(ISS& env, const bc::AddElemC& /*op*/) {
-  auto const v = popC(env);
-  auto const k = popC(env);
+  auto const v = topC(env, 0);
+  auto const k = topC(env, 1);
 
-  auto const outTy = [&] (Type ty) ->
+  auto inTy = (env.state.stack.end() - 3).unspecialize();
+
+  auto outTy = [&] (Type ty) ->
     folly::Optional<std::pair<Type,ThrowMode>> {
     if (ty.subtypeOf(BArr)) {
       return array_set(std::move(ty), k, v);
@@ -456,7 +1005,39 @@ void in(ISS& env, const bc::AddElemC& /*op*/) {
       return dict_set(std::move(ty), k, v);
     }
     return folly::none;
-  }(popC(env));
+  }(std::move(inTy));
+
+  if (outTy && outTy->second == ThrowMode::None && will_reduce(env)) {
+    if (!env.trackedElems.empty() &&
+        env.trackedElems.back().depth + 3 == env.state.stack.size()) {
+      auto const handled = [&] {
+        if (!k.subtypeOf(BArrKey)) return false;
+        auto ktv = tv(k);
+        if (!ktv) return false;
+        auto vtv = tv(v);
+        if (!vtv) return false;
+        auto const arr = add_elem_array(env);
+        if (!arr) return false;
+        *arr = (*arr)->set(*ktv, *vtv);
+        return true;
+      }();
+      if (handled) {
+        (env.state.stack.end() - 3)->type = std::move(outTy->first);
+        reduce(env, bc::PopC {}, bc::PopC {});
+        ITRACE(2, "(addelem* -> {}\n",
+               show(env.ctx.func,
+                    env.replacedBcs[env.trackedElems.back().idx - env.unchangedBcs]));
+        return;
+      }
+    } else {
+      if (start_add_elem(env, outTy->first, Op::AddElemC)) {
+        return;
+      }
+    }
+  }
+
+  discard(env, 3);
+  finish_tracked_elems(env, env.state.stack.size());
 
   if (!outTy) {
     return push(env, union_of(TArr, TDict));
@@ -465,24 +1046,17 @@ void in(ISS& env, const bc::AddElemC& /*op*/) {
   if (outTy->first.subtypeOf(BBottom)) {
     unreachable(env);
   } else if (outTy->second == ThrowMode::None) {
-    nothrow(env);
-    if (any(env.collect.opts & CollectionOpts::TrackConstantArrays)) {
-      constprop(env);
-    }
+    effect_free(env);
+    constprop(env);
   }
   push(env, std::move(outTy->first));
 }
 
-void in(ISS& env, const bc::AddElemV& /*op*/) {
-  popV(env); popC(env);
-  popC(env);
-  push(env, TArr);
-}
-
 void in(ISS& env, const bc::AddNewElemC&) {
-  auto v = popC(env);
+  auto v = topC(env);
+  auto inTy = (env.state.stack.end() - 2).unspecialize();
 
-  auto const outTy = [&] (Type ty) -> folly::Optional<Type> {
+  auto outTy = [&] (Type ty) -> folly::Optional<Type> {
     if (ty.subtypeOf(BArr)) {
       return array_newelem(std::move(ty), std::move(v)).first;
     }
@@ -493,7 +1067,36 @@ void in(ISS& env, const bc::AddNewElemC&) {
       return keyset_newelem(std::move(ty), std::move(v)).first;
     }
     return folly::none;
-  }(popC(env));
+  }(std::move(inTy));
+
+  if (outTy && will_reduce(env)) {
+    if (!env.trackedElems.empty() &&
+        env.trackedElems.back().depth + 2 == env.state.stack.size()) {
+      auto const handled = [&] {
+        auto vtv = tv(v);
+        if (!vtv) return false;
+        auto const arr = add_elem_array(env);
+        if (!arr) return false;
+        *arr = (*arr)->append(*vtv);
+        return true;
+      }();
+      if (handled) {
+        (env.state.stack.end() - 2)->type = std::move(*outTy);
+        reduce(env, bc::PopC {});
+        ITRACE(2, "(addelem* -> {}\n",
+               show(env.ctx.func,
+                    env.replacedBcs[env.trackedElems.back().idx - env.unchangedBcs]));
+        return;
+      }
+    } else {
+      if (start_add_elem(env, *outTy, Op::AddNewElemC)) {
+        return;
+      }
+    }
+  }
+
+  discard(env, 2);
+  finish_tracked_elems(env, env.state.stack.size());
 
   if (!outTy) {
     return push(env, TInitCell);
@@ -502,53 +1105,52 @@ void in(ISS& env, const bc::AddNewElemC&) {
   if (outTy->subtypeOf(BBottom)) {
     unreachable(env);
   } else {
-    if (any(env.collect.opts & CollectionOpts::TrackConstantArrays)) {
-      constprop(env);
-    }
+    constprop(env);
   }
   push(env, std::move(*outTy));
-}
-
-void in(ISS& env, const bc::AddNewElemV&) {
-  popV(env);
-  popC(env);
-  push(env, TArr);
 }
 
 void in(ISS& env, const bc::NewCol& op) {
   auto const type = static_cast<CollectionType>(op.subop1);
   auto const name = collections::typeToString(type);
   push(env, objExact(env.index.builtin_class(name)));
+  effect_free(env);
 }
 
 void in(ISS& env, const bc::NewPair& /*op*/) {
   popC(env); popC(env);
   auto const name = collections::typeToString(CollectionType::Pair);
   push(env, objExact(env.index.builtin_class(name)));
+  effect_free(env);
 }
 
 void in(ISS& env, const bc::ColFromArray& op) {
-  popC(env);
+  auto const src = popC(env);
   auto const type = static_cast<CollectionType>(op.subop1);
+  assertx(type != CollectionType::Pair);
+  if (type == CollectionType::Vector || type == CollectionType::ImmVector) {
+    if (src.subtypeOf(TVec)) effect_free(env);
+  } else {
+    assertx(type == CollectionType::Map ||
+            type == CollectionType::ImmMap ||
+            type == CollectionType::Set ||
+            type == CollectionType::ImmSet);
+    if (src.subtypeOf(TDict)) effect_free(env);
+  }
   auto const name = collections::typeToString(type);
   push(env, objExact(env.index.builtin_class(name)));
 }
 
-void doCns(ISS& env, SString str, SString fallback)  {
+void in(ISS& env, const bc::CnsE& op) {
   if (!options.HardConstProp) return push(env, TInitCell);
-  if (RuntimeOption::UndefinedConstFallback > 0) {
-    // Disable optimization to force the fallback to raise a notice.
-    fallback = nullptr;
-  }
-
-  auto t = env.index.lookup_constant(env.ctx, str, fallback);
+  auto t = env.index.lookup_constant(env.ctx, op.str1);
   if (!t) {
     // There's no entry for this constant in the index. It must be
     // the first iteration, so we'll add a dummy entry to make sure
     // there /is/ something next time around.
     Cell val;
     val.m_type = kReadOnlyConstant;
-    env.collect.cnsMap.emplace(str, val);
+    env.collect.cnsMap.emplace(op.str1, val);
     t = TInitCell;
     // make sure we're re-analyzed
     env.collect.readsUntrackedConstants = true;
@@ -560,27 +1162,26 @@ void doCns(ISS& env, SString str, SString fallback)  {
   push(env, std::move(*t));
 }
 
-void in(ISS& env, const bc::Cns& op)  { doCns(env, op.str1, nullptr); }
-void in(ISS& env, const bc::CnsE& op) { doCns(env, op.str1, nullptr); }
-void in(ISS& env, const bc::CnsU& op) { doCns(env, op.str1, op.str2); }
-void in(ISS& env, const bc::CnsUE& op) { doCns(env, op.str1, op.str2); }
-
 void in(ISS& env, const bc::ClsCns& op) {
-  auto const& t1 = peekClsRefSlot(env, op.slot);
+  auto const& t1 = topC(env);
   if (is_specialized_cls(t1)) {
     auto const dcls = dcls_of(t1);
-    if (dcls.type == DCls::Exact) {
-      return reduce(env, bc::DiscardClsRef { op.slot },
-                         bc::ClsCnsD { op.str1, dcls.cls.name() });
-    }
+    auto const finish = [&] {
+      reduce(env, bc::PopC { },
+                  bc::ClsCnsD { op.str1, dcls.cls.name() });
+    };
+    if (dcls.type == DCls::Exact) return finish();
+    auto const cnst = env.index.lookup_class_const_ptr(env.ctx, dcls.cls,
+                                                       op.str1, false);
+    if (cnst && cnst->isNoOverride) return finish();
   }
-  takeClsRefSlot(env, op.slot);
+  popC(env);
   push(env, TInitCell);
 }
 
 void in(ISS& env, const bc::ClsCnsD& op) {
   if (auto const rcls = env.index.resolve_class(env.ctx, op.str2)) {
-    auto t = env.index.lookup_class_constant(env.ctx, *rcls, op.str1);
+    auto t = env.index.lookup_class_constant(env.ctx, *rcls, op.str1, false);
     if (options.HardConstProp) constprop(env);
     push(env, std::move(t));
     return;
@@ -592,56 +1193,163 @@ void in(ISS& env, const bc::File&)   { effect_free(env); push(env, TSStr); }
 void in(ISS& env, const bc::Dir&)    { effect_free(env); push(env, TSStr); }
 void in(ISS& env, const bc::Method&) { effect_free(env); push(env, TSStr); }
 
-void in(ISS& env, const bc::ClsRefName& op) {
-  auto ty = peekClsRefSlot(env, op.slot);
+void in(ISS& env, const bc::FuncCred&) { effect_free(env); push(env, TObj); }
+
+void in(ISS& env, const bc::ClassName& op) {
+  auto const ty = topC(env);
   if (is_specialized_cls(ty)) {
     auto const dcls = dcls_of(ty);
     if (dcls.type == DCls::Exact) {
       return reduce(env,
-                    bc::DiscardClsRef { op.slot },
+                    bc::PopC {},
                     bc::String { dcls.cls.name() });
     }
   }
-  nothrow(env);
-  takeClsRefSlot(env, op.slot);
+  if (ty.subtypeOf(TCls)) nothrow(env);
+  popC(env);
   push(env, TSStr);
 }
 
 void concatHelper(ISS& env, uint32_t n) {
-  uint32_t i = 0;
-  StringData* result = nullptr;
-  while (i < n) {
-    auto const t = topC(env, i);
-    auto const v = tv(t);
-    if (!v) break;
-    if (!isStringType(v->m_type)   &&
-        v->m_type != KindOfNull    &&
-        v->m_type != KindOfBoolean &&
-        v->m_type != KindOfInt64   &&
-        v->m_type != KindOfDouble) {
-      break;
+  auto changed = false;
+  auto side_effects = false;
+  if (will_reduce(env)) {
+    auto litstr = [&] (SString next, uint32_t i) -> SString {
+      auto const t = topC(env, i);
+      auto const v = tv(t);
+      if (!v) return nullptr;
+      if (!isStringType(v->m_type)   &&
+          v->m_type != KindOfNull    &&
+          v->m_type != KindOfBoolean &&
+          v->m_type != KindOfInt64   &&
+          v->m_type != KindOfDouble) {
+        return nullptr;
+      }
+      auto const cell = eval_cell_value(
+        [&] {
+          auto const s = makeStaticString(
+            next ?
+            StringData::Make(tvAsCVarRef(&*v).toString().get(), next) :
+            tvAsCVarRef(&*v).toString().get());
+          return make_tv<KindOfString>(s);
+        }
+      );
+      if (!cell) return nullptr;
+      return cell->m_data.pstr;
+    };
+
+    auto fold = [&] (uint32_t slot, uint32_t num, SString result) {
+      auto const cell = make_tv<KindOfPersistentString>(result);
+      auto const ty = from_cell(cell);
+      BytecodeVec bcs{num, bc::PopC {}};
+      if (num > 1) bcs.push_back(gen_constant(cell));
+      if (slot == 0) {
+        reduce(env, std::move(bcs));
+      } else {
+        insert_after_slot(env, slot, num, num > 1 ? 1 : 0, &ty, bcs);
+        reprocess(env);
+      }
+      n -= num - 1;
+      changed = true;
+    };
+
+    for (auto i = 0; i < n; i++) {
+      if (topC(env, i).couldBe(BObj | BArrLike | BRes)) {
+        side_effects = true;
+        break;
+      }
     }
-    auto const cell = eval_cell_value([&] {
-        auto const s = makeStaticString(
-          result ?
-          StringData::Make(tvAsCVarRef(&*v).toString().get(), result) :
-          tvAsCVarRef(&*v).toString().get());
-        return make_tv<KindOfString>(s);
-      });
-    if (!cell) break;
-    result = cell->m_data.pstr;
-    i++;
-  }
-  if (result && i >= 2) {
-    BytecodeVec bcs(i, bc::PopC {});
-    bcs.push_back(gen_constant(make_tv<KindOfString>(result)));
-    if (i < n) {
-      bcs.push_back(bc::ConcatN { n - i + 1 });
+
+    if (!side_effects) {
+      for (auto i = 0; i < n; i++) {
+        auto const tracked = !env.trackedElems.empty() &&
+          env.trackedElems.back().depth + i + 1 == env.state.stack.size();
+        if (tracked) finish_tracked_elems(env, env.trackedElems.back().depth);
+        auto const prev = op_from_slot(env, i);
+        if (!prev) continue;
+        if ((prev->op == Op::Concat && tracked) || prev->op == Op::ConcatN) {
+          auto const extra = kill_by_slot(env, i);
+          changed = true;
+          n += extra;
+          i += extra;
+        }
+      }
     }
-    return reduce(env, std::move(bcs));
+
+    SString result = nullptr;
+    uint32_t i = 0;
+    uint32_t nlit = 0;
+    while (i < n) {
+      // In order to collapse literals, we need to be able to insert
+      // pops, and a constant after the sequence that generated the
+      // literals. We can always insert after the last instruction
+      // though, and we only need to check the first slot of a
+      // sequence.
+      auto const next = !i || result || can_insert_after_slot(env, i) ?
+        litstr(result, i) : nullptr;
+      if (next == staticEmptyString()) {
+        if (n == 1) break;
+        assertx(nlit == 0);
+        fold(i, 1, next);
+        n--;
+        continue;
+      }
+      if (!next) {
+        if (nlit > 1) {
+          fold(i - nlit, nlit, result);
+          i -= nlit - 1;
+        }
+        nlit = 0;
+      } else {
+        nlit++;
+      }
+      result = next;
+      i++;
+    }
+    if (nlit > 1) fold(i - nlit, nlit, result);
   }
-  discard(env, n);
-  push(env, TStr);
+
+  if (!changed) {
+    discard(env, n);
+    if (n == 2 && !side_effects && will_reduce(env)) {
+      env.trackedElems.emplace_back(
+        env.state.stack.size(),
+        env.unchangedBcs + env.replacedBcs.size()
+      );
+    }
+    push(env, TStr);
+    return;
+  }
+
+  if (n == 1) {
+    if (!topC(env).subtypeOf(BStr)) {
+      return reduce(env, bc::CastString {});
+    }
+    return reduce(env);
+  }
+
+  reduce(env);
+  // We can't reduce the emitted concats, or we'll end up with
+  // infinite recursion.
+  env.flags.wasPEI = true;
+  env.flags.effectFree = false;
+  env.flags.canConstProp = false;
+
+  auto concat = [&] (uint32_t num) {
+    discard(env, num);
+    push(env, TStr);
+    if (num == 2) {
+      record(env, bc::Concat {});
+    } else {
+      record(env, bc::ConcatN { num });
+    }
+  };
+
+  while (n >= 4) {
+    concat(4);
+    n -= 3;
+  }
+  if (n > 1) concat(n);
 }
 
 void in(ISS& env, const bc::Concat& /*op*/) {
@@ -744,6 +1452,26 @@ std::pair<Type,bool> resolveSame(ISS& env) {
 
 template<bool Negate>
 void sameImpl(ISS& env) {
+  if (auto const last = last_op(env)) {
+    if (last->op == Op::Null) {
+      rewind(env, 1);
+      reduce(env, bc::IsTypeC { IsTypeOp::Null });
+      if (Negate) reduce(env, bc::Not {});
+      return;
+    }
+    if (auto const prev = last_op(env, 1)) {
+      if (prev->op == Op::Null &&
+          (last->op == Op::CGetL || last->op == Op::CGetL2)) {
+        auto const loc = last->op == Op::CGetL ?
+          last->CGetL.loc1 : last->CGetL2.loc1;
+        rewind(env, 2);
+        reduce(env, bc::IsTypeL { loc, IsTypeOp::Null });
+        if (Negate) reduce(env, bc::Not {});
+        return;
+      }
+    }
+  }
+
   auto pair = resolveSame<Negate>(env);
   discard(env, 2);
 
@@ -755,32 +1483,33 @@ void sameImpl(ISS& env) {
   push(env, std::move(pair.first));
 }
 
-template<class Same, class JmpOp>
-void sameJmpImpl(ISS& env, const Same& same, const JmpOp& jmp) {
-  auto bail = [&] { impl(env, same, jmp); };
+template<class JmpOp>
+bool sameJmpImpl(ISS& env, Op sameOp, const JmpOp& jmp) {
+  const StackElem* elems[2];
+  env.state.stack.peek(2, elems, 1);
 
-  constexpr auto NSame = Same::op == Op::NSame;
-
-  if (resolveSame<NSame>(env).first != TBool) return bail();
-
-  auto const loc0 = topStkEquiv(env, 0);
-  auto const loc1 = topStkEquiv(env, 1);
+  auto const loc0 = elems[1]->equivLoc;
+  auto const loc1 = elems[0]->equivLoc;
   // If loc0 == loc1, either they're both NoLocalId, so there's
   // nothing for us to deduce, or both stack elements are the same
   // value, so the only thing we could deduce is that they are or are
   // not NaN. But we don't track that, so just bail.
-  if (loc0 == loc1 || loc0 == StackDupId) return bail();
+  if (loc0 == loc1 || loc0 == StackDupId) return false;
 
-  auto const ty0 = topC(env, 0);
-  auto const ty1 = topC(env, 1);
+  auto const ty0 = elems[1]->type;
+  auto const ty1 = elems[0]->type;
   auto const val0 = tv(ty0);
   auto const val1 = tv(ty1);
 
-  if ((val0 && val1) ||
-      (loc0 == NoLocalId && !val0 && ty1.subtypeOf(ty0)) ||
+  assertx(!val0 || !val1);
+  if ((loc0 == NoLocalId && !val0 && ty1.subtypeOf(ty0)) ||
       (loc1 == NoLocalId && !val1 && ty0.subtypeOf(ty1))) {
-    return bail();
+    return false;
   }
+
+  // Same currently lies about the distinction between Func/Cls/Str
+  if (ty0.couldBe(BFunc | BCls) && ty1.couldBe(BStr)) return false;
+  if (ty1.couldBe(BFunc | BCls) && ty0.couldBe(BStr)) return false;
 
   // We need to loosen away the d/varray bits here because array comparison does
   // not take into account the difference.
@@ -788,7 +1517,15 @@ void sameJmpImpl(ISS& env, const Same& same, const JmpOp& jmp) {
     loosen_dvarrayness(ty0),
     loosen_dvarrayness(ty1)
   );
-  discard(env, 2);
+
+  // Unfortunately, floating point negative zero and positive zero are
+  // different, but are identical using as far as Same is concerened. We should
+  // avoid refining a value to 0.0 because it compares identically to 0.0
+  if (isect.couldBe(dval(0.0)) || isect.couldBe(dval(-0.0))) {
+    isect = union_of(isect, TDbl);
+  }
+
+  discard(env, 1);
 
   auto handle_same = [&] {
     // Currently dce uses equivalency to prove that something isn't
@@ -801,7 +1538,7 @@ void sameJmpImpl(ISS& env, const Same& same, const JmpOp& jmp) {
          ty1.subtypeOf(BObj | BRes | BPrim) ||
          (ty0.subtypeOf(BUnc) && ty1.subtypeOf(BUnc)))) {
       if (loc1 == StackDupId) {
-        setStkLocal(env, loc0, 1);
+        setStkLocal(env, loc0, 0);
       } else if (loc1 <= MaxLocalId && !locsAreEquiv(env, loc0, loc1)) {
         auto loc = loc0;
         while (true) {
@@ -849,35 +1586,27 @@ void sameJmpImpl(ISS& env, const Same& same, const JmpOp& jmp) {
   };
 
   auto const sameIsJmpTarget =
-    (Same::op == Op::Same) == (JmpOp::op == Op::JmpNZ);
+    (sameOp == Op::Same) == (JmpOp::op == Op::JmpNZ);
 
   auto save = env.state;
   auto const target_reachable = sameIsJmpTarget ?
     handle_same() : handle_differ();
   if (!target_reachable) jmp_nevertaken(env);
   // swap, so we can restore this state if the branch is always taken.
-  std::swap(env.state, save);
+  env.state.swap(save);
   if (!(sameIsJmpTarget ? handle_differ() : handle_same())) {
     jmp_setdest(env, jmp.target1);
-    env.state = std::move(save);
+    env.state.copy_from(std::move(save));
   } else if (target_reachable) {
     env.propagate(jmp.target1, &save);
   }
+
+  return true;
 }
 
 bc::JmpNZ invertJmp(const bc::JmpZ& jmp) { return bc::JmpNZ { jmp.target1 }; }
 bc::JmpZ invertJmp(const bc::JmpNZ& jmp) { return bc::JmpZ { jmp.target1 }; }
 
-}
-
-template<class Same, class JmpOp>
-void group(ISS& env, const Same& same, const JmpOp& jmp) {
-  sameJmpImpl(env, same, jmp);
-}
-
-template<class Same, class JmpOp>
-void group(ISS& env, const Same& same, const bc::Not&, const JmpOp& jmp) {
-  sameJmpImpl(env, same, invertJmp(jmp));
 }
 
 void in(ISS& env, const bc::Same&)  { sameImpl<false>(env); }
@@ -974,14 +1703,14 @@ void in(ISS& env, const bc::Not&) {
 
 void in(ISS& env, const bc::CastBool&) {
   auto const t = topC(env);
-  if (t.subtypeOf(BBool)) return reduce(env, bc::Nop {});
+  if (t.subtypeOf(BBool)) return reduce(env);
   castBoolImpl(env, popC(env), false);
 }
 
 void in(ISS& env, const bc::CastInt&) {
-  constprop(env);
   auto const t = topC(env);
-  if (t.subtypeOf(BInt)) return reduce(env, bc::Nop {});
+  if (t.subtypeOf(BInt)) return reduce(env);
+  constprop(env);
   popC(env);
   // Objects can raise a warning about converting to int.
   if (!t.couldBe(BObj)) nothrow(env);
@@ -1000,7 +1729,7 @@ void in(ISS& env, const bc::CastInt&) {
 // will be optimized away.
 void castImpl(ISS& env, Type target, void(*fn)(TypedValue*)) {
   auto const t = topC(env);
-  if (t.subtypeOf(target)) return reduce(env, bc::Nop {});
+  if (t.subtypeOf(target)) return reduce(env);
   popC(env);
   if (fn) {
     if (auto val = tv(t)) {
@@ -1090,42 +1819,6 @@ void in(ISS& /*env*/, const bc::Jmp&) {
   always_assert(0 && "blocks should not contain Jmp instructions");
 }
 
-template<bool Negate, class JmpOp>
-void jmpImpl(ISS& env, const JmpOp& op) {
-  auto const location = topStkEquiv(env);
-  auto const e = emptiness(popC(env));
-  if (e == (Negate ? Emptiness::NonEmpty : Emptiness::Empty)) {
-    effect_free(env);
-    jmp_setdest(env, op.target1);
-    return;
-  }
-
-  if (e == (Negate ? Emptiness::Empty : Emptiness::NonEmpty)) {
-    effect_free(env);
-    jmp_nevertaken(env);
-    return;
-  }
-
-  if (next_real_block(*env.ctx.func, env.blk.fallthrough) ==
-      next_real_block(*env.ctx.func, op.target1)) {
-    effect_free(env);
-    jmp_nevertaken(env);
-    return;
-  }
-
-  nothrow(env);
-
-  if (location == NoLocalId) return env.propagate(op.target1, &env.state);
-
-  refineLocation(env, location,
-                 Negate ? assert_nonemptiness : assert_emptiness,
-                 op.target1,
-                 Negate ? assert_emptiness : assert_nonemptiness);
-}
-
-void in(ISS& env, const bc::JmpNZ& op) { jmpImpl<true>(env, op); }
-void in(ISS& env, const bc::JmpZ& op)  { jmpImpl<false>(env, op); }
-
 void in(ISS& env, const bc::Select& op) {
   auto const cond = topC(env);
   auto const t = topC(env, 1);
@@ -1151,47 +1844,59 @@ void in(ISS& env, const bc::Select& op) {
 
 namespace {
 
-template<class IsType, class JmpOp>
-void isTypeHelper(ISS& env,
-                  IsTypeOp typeOp, LocalId location,
-                  const IsType& istype, const JmpOp& jmp) {
-  auto bail = [&] { impl(env, istype, jmp); };
+template<class JmpOp>
+bool isTypeHelper(ISS& env,
+                  IsTypeOp typeOp,
+                  LocalId location,
+                  Op op,
+                  const JmpOp& jmp) {
   if (typeOp == IsTypeOp::Scalar || typeOp == IsTypeOp::ArrLike) {
-    return bail();
+    return false;
   }
 
-  auto const val = istype.op == Op::IsTypeC ? topT(env) : locRaw(env, location);
+  auto const val = [&] {
+    if (op != Op::IsTypeC) return locRaw(env, location);
+    const StackElem* elem;
+    env.state.stack.peek(1, &elem, 1);
+    location = elem->equivLoc;
+    return elem->type;
+  }();
+
+  if (location == NoLocalId || !val.subtypeOf(BCell)) return false;
 
   // If the type could be ClsMeth and Arr/Vec, skip location refining.
   // Otherwise, refine location based on the testType.
   auto testTy = type_of_istype(typeOp);
-  if (val.couldBe(BClsMeth)) {
+  if (RuntimeOption::EvalIsCompatibleClsMethType && val.couldBe(BClsMeth)) {
+    assertx(RuntimeOption::EvalEmitClsMethPointers);
     if (RuntimeOption::EvalHackArrDVArrs) {
       if ((typeOp == IsTypeOp::Vec) || (typeOp == IsTypeOp::VArray)) {
-        if (val.couldBe(BVec | BVArr)) return bail();
+        if (val.couldBe(BVec | BVArr)) return false;
         testTy = TClsMeth;
       }
     } else {
       if ((typeOp == IsTypeOp::Arr) || (typeOp == IsTypeOp::VArray)) {
-        if (val.couldBe(BArr | BVArr)) return bail();
+        if (val.couldBe(BArr | BVArr)) return false;
         testTy = TClsMeth;
       }
     }
   }
 
-  if (!val.subtypeOf(BCell) || val.subtypeOf(testTy) || !val.couldBe(testTy)) {
-    return bail();
-  }
+  assertx(val.couldBe(testTy) &&
+          (!val.subtypeOf(testTy) || val.subtypeOf(BObj)));
 
-  if (istype.op == Op::IsTypeC) {
+  discard(env, 1);
+
+  if (op == Op::IsTypeC) {
     if (!is_type_might_raise(testTy, val)) nothrow(env);
-    popT(env);
+  } else if (op == Op::IssetL) {
+    nothrow(env);
   } else if (!locCouldBeUninit(env, location) &&
              !is_type_might_raise(testTy, val)) {
     nothrow(env);
   }
 
-  auto const negate = jmp.op == Op::JmpNZ;
+  auto const negate = (jmp.op == Op::JmpNZ) == (op != Op::IssetL);
   auto const was_true = [&] (Type t) {
     if (testTy.subtypeOf(BNull)) return intersection_of(t, TNull);
     assertx(!testTy.couldBe(BNull));
@@ -1218,25 +1923,7 @@ void isTypeHelper(ISS& env,
   };
 
   refineLocation(env, location, pre, jmp.target1, post);
-}
-
-folly::Optional<Cell> staticLocHelper(ISS& env, LocalId l, Type init) {
-  if (is_volatile_local(env.ctx.func, l)) return folly::none;
-  unbindLocalStatic(env, l);
-  setLocRaw(env, l, TRef);
-  bindLocalStatic(env, l, std::move(init));
-  if (!env.ctx.func->isMemoizeWrapper &&
-      !env.ctx.func->isClosureBody &&
-      env.collect.localStaticTypes.size() > l) {
-    auto t = env.collect.localStaticTypes[l];
-    if (auto v = tv(t)) {
-      useLocalStatic(env, l);
-      setLocRaw(env, l, t);
-      return v;
-    }
-  }
-  useLocalStatic(env, l);
-  return folly::none;
+  return true;
 }
 
 // If the current function is a memoize wrapper, return the inferred return type
@@ -1279,8 +1966,7 @@ std::pair<Type, bool> memoizeImplRetType(ISS& env) {
           selfClsExact(env);
         return clsTy ? *clsTy : TCls;
       } else {
-        auto const s = thisType(env);
-        return s ? *s : TObj;
+        return thisTypeNonNull(env);
       }
     }
     return TBottom;
@@ -1299,106 +1985,30 @@ std::pair<Type, bool> memoizeImplRetType(ISS& env) {
   return { retTy, effectFree };
 }
 
-// After a StaticLocCheck, we know the local is bound on the true path,
-// and not changed on the false path.
 template<class JmpOp>
-void staticLocCheckJmpImpl(ISS& env,
-                           const bc::StaticLocCheck& slc,
-                           const JmpOp& jmp) {
-  auto const takenOnInit = jmp.op == Op::JmpNZ;
-  auto save = env.state;
-
-  if (auto const v = staticLocHelper(env, slc.loc1, TBottom)) {
-    return impl(env, slc, jmp);
-  }
-
-  if (env.collect.localStaticTypes.size() > slc.loc1 &&
-      env.collect.localStaticTypes[slc.loc1].subtypeOf(BBottom)) {
-    env.state = std::move(save);
-    if (takenOnInit) {
-      jmp_nevertaken(env);
-    } else {
-      jmp_setdest(env, jmp.target1);
-    }
-    return;
-  }
-
-  if (takenOnInit) {
-    env.propagate(jmp.target1, &env.state);
-    env.state = std::move(save);
-  } else {
-    env.propagate(jmp.target1, &save);
-  }
-}
-
-}
-
-template<class JmpOp>
-void group(ISS& env, const bc::StaticLocCheck& slc, const JmpOp& jmp) {
-  staticLocCheckJmpImpl(env, slc, jmp);
-}
-
-template<class JmpOp>
-void group(ISS& env, const bc::StaticLocCheck& slc,
-           const bc::Not&, const JmpOp& jmp) {
-  staticLocCheckJmpImpl(env, slc, invertJmp(jmp));
-}
-
-template<class JmpOp>
-void group(ISS& env, const bc::IsTypeL& istype, const JmpOp& jmp) {
-  isTypeHelper(env, istype.subop2, istype.loc1, istype, jmp);
-}
-
-template<class JmpOp>
-void group(ISS& env, const bc::IsTypeL& istype,
-           const bc::Not&, const JmpOp& jmp) {
-  isTypeHelper(env, istype.subop2, istype.loc1, istype, invertJmp(jmp));
-}
-
-// If we duplicate a value, and then test its type and Jmp based on that result,
-// we can narrow the type of the top of the stack. Only do this for null checks
-// right now (because its useful in memoize wrappers).
-template<class JmpOp>
-void group(ISS& env, const bc::IsTypeC& istype, const JmpOp& jmp) {
-  auto const location = topStkEquiv(env);
-  if (location == NoLocalId) return impl(env, istype, jmp);
-  isTypeHelper(env, istype.subop1, location, istype, jmp);
-}
-
-template<class JmpOp>
-void group(ISS& env, const bc::IsTypeC& istype,
-           const bc::Not& negate, const JmpOp& jmp) {
-  auto const location = topStkEquiv(env);
-  if (location == NoLocalId) return impl(env, istype, negate, jmp);
-  isTypeHelper(env, istype.subop1, location, istype, invertJmp(jmp));
-}
-
-namespace {
-
-template<class JmpOp>
-void instanceOfJmpImpl(ISS& env,
+bool instanceOfJmpImpl(ISS& env,
                        const bc::InstanceOfD& inst,
                        const JmpOp& jmp) {
-  auto bail = [&] { impl(env, inst, jmp); };
 
-  auto const locId = topStkEquiv(env);
+  const StackElem* elem;
+  env.state.stack.peek(1, &elem, 1);
+
+  auto const locId = elem->equivLoc;
   if (locId == NoLocalId || interface_supports_non_objects(inst.str1)) {
-    return bail();
+    return false;
   }
   auto const rcls = env.index.resolve_class(env.ctx, inst.str1);
-  if (!rcls) return bail();
+  if (!rcls) return false;
 
-  auto const val = topC(env);
+  auto const val = elem->type;
   auto const instTy = subObj(*rcls);
-  if (val.subtypeOf(instTy) || !val.couldBe(instTy)) {
-    return bail();
-  }
+  assertx(!val.subtypeOf(instTy) && val.couldBe(instTy));
 
   // If we have an optional type, whose unopt is guaranteed to pass
   // the instanceof check, then failing to pass implies it was null.
   auto const fail_implies_null = is_opt(val) && unopt(val).subtypeOf(instTy);
 
-  popC(env);
+  discard(env, 1);
   auto const negate = jmp.op == Op::JmpNZ;
   auto const result = [&] (Type t, bool pass) {
     return pass ? instTy : fail_implies_null ? TNull : t;
@@ -1406,34 +2016,24 @@ void instanceOfJmpImpl(ISS& env,
   auto const pre  = [&] (Type t) { return result(t, negate); };
   auto const post = [&] (Type t) { return result(t, !negate); };
   refineLocation(env, locId, pre, jmp.target1, post);
-}
-
-}
-
-template<class JmpOp>
-void group(ISS& env,
-           const bc::InstanceOfD& inst,
-           const JmpOp& jmp) {
-  instanceOfJmpImpl(env, inst, jmp);
+  return true;
 }
 
 template<class JmpOp>
-void group(ISS& env,
-           const bc::InstanceOfD& inst,
-           const bc::Not&,
-           const JmpOp& jmp) {
-  instanceOfJmpImpl(env, inst, invertJmp(jmp));
-}
-
-namespace {
-
-template<class JmpOp>
-void isTypeStructCJmpImpl(ISS& env,
+bool isTypeStructCJmpImpl(ISS& env,
                           const bc::IsTypeStructC& inst,
                           const JmpOp& jmp) {
-  auto bail = [&] { impl(env, inst, jmp); };
-  auto const a = tv(topC(env));
-  if (!a || !isValidTSType(*a, false)) return bail();
+
+  const StackElem* elems[2];
+  env.state.stack.peek(2, elems, 1);
+
+  auto const locId = elems[0]->equivLoc;
+  if (locId == NoLocalId) return false;
+
+  auto const a = tv(elems[1]->type);
+  if (!a) return false;
+  // if it wasn't valid, the JmpOp wouldn't be reachable
+  assertx(isValidTSType(*a, false));
 
   auto const is_nullable_ts = is_ts_nullable(a->m_data.parr);
   auto const ts_kind = get_ts_kind(a->m_data.parr);
@@ -1441,70 +2041,132 @@ void isTypeStructCJmpImpl(ISS& env,
   // do resolve them here, or we may have issues when we reduce the checks to
   // InstanceOfD checks.  This logic performs the same exact refinement as
   // instanceOfD will.
-  if (!is_nullable_ts &&
-      (ts_kind == TypeStructure::Kind::T_class ||
-       ts_kind == TypeStructure::Kind::T_interface ||
-       ts_kind == TypeStructure::Kind::T_xhp ||
-       ts_kind == TypeStructure::Kind::T_unresolved)) {
-    auto const clsName = get_ts_classname(a->m_data.parr);
-    auto const rcls = env.index.resolve_class(env.ctx, clsName);
-    if (!rcls || !rcls->resolved() || rcls->cls()->attrs & AttrEnum) {
-      return bail();
-    }
-
-    auto const locId = topStkEquiv(env, 1);
-    if (locId == NoLocalId || interface_supports_non_objects(clsName)) {
-      return bail();
-    }
-
-    auto const val = topC(env, 1);
-    auto const instTy = subObj(*rcls);
-    if (val.subtypeOf(instTy) || !val.couldBe(instTy)) {
-      return bail();
-    }
-
-    // If we have an optional type, whose unopt is guaranteed to pass
-    // the instanceof check, then failing to pass implies it was null.
-    auto const fail_implies_null = is_opt(val) && unopt(val).subtypeOf(instTy);
-
-    popC(env);
-    popC(env);
-    auto const negate = jmp.op == Op::JmpNZ;
-    auto const result = [&] (Type t, bool pass) {
-      return pass ? instTy : fail_implies_null ? TNull : t;
-    };
-    auto const pre  = [&] (Type t) { return result(t, negate); };
-    auto const post = [&] (Type t) { return result(t, !negate); };
-    refineLocation(env, locId, pre, jmp.target1, post);
-  } else {
-    return bail();
+  if (is_nullable_ts ||
+      (ts_kind != TypeStructure::Kind::T_class &&
+       ts_kind != TypeStructure::Kind::T_interface &&
+       ts_kind != TypeStructure::Kind::T_xhp &&
+       ts_kind != TypeStructure::Kind::T_unresolved)) {
+    return false;
   }
+
+  auto const clsName = get_ts_classname(a->m_data.parr);
+  auto const rcls = env.index.resolve_class(env.ctx, clsName);
+  if (!rcls ||
+      !rcls->resolved() ||
+      rcls->cls()->attrs & AttrEnum ||
+      interface_supports_non_objects(clsName)) {
+    return false;
+  }
+
+  auto const val = elems[0]->type;
+  auto const instTy = subObj(*rcls);
+  if (val.subtypeOf(instTy) || !val.couldBe(instTy)) {
+    return false;
+  }
+
+  // If we have an optional type, whose unopt is guaranteed to pass
+  // the instanceof check, then failing to pass implies it was null.
+  auto const fail_implies_null = is_opt(val) && unopt(val).subtypeOf(instTy);
+
+  discard(env, 1);
+
+  auto const negate = jmp.op == Op::JmpNZ;
+  auto const result = [&] (Type t, bool pass) {
+    return pass ? instTy : fail_implies_null ? TNull : t;
+  };
+  auto const pre  = [&] (Type t) { return result(t, negate); };
+  auto const post = [&] (Type t) { return result(t, !negate); };
+  refineLocation(env, locId, pre, jmp.target1, post);
+  return true;
+}
+
+template<class JmpOp>
+void jmpImpl(ISS& env, const JmpOp& op) {
+  auto const Negate = std::is_same<JmpOp, bc::JmpNZ>::value;
+  auto const location = topStkEquiv(env);
+  auto const e = emptiness(topC(env));
+  if (e == (Negate ? Emptiness::NonEmpty : Emptiness::Empty)) {
+    reduce(env, bc::PopC {});
+    return jmp_setdest(env, op.target1);
+  }
+
+  if (e == (Negate ? Emptiness::Empty : Emptiness::NonEmpty) ||
+      (next_real_block(*env.ctx.func, env.blk.fallthrough) ==
+       next_real_block(*env.ctx.func, op.target1))) {
+    return reduce(env, bc::PopC{});
+  }
+
+  auto fix = [&] {
+    if (env.flags.jmpDest == NoBlockId) return;
+    auto const jmpDest = env.flags.jmpDest;
+    env.flags.jmpDest = NoBlockId;
+    rewind(env, op);
+    reduce(env, bc::PopC {});
+    env.flags.jmpDest = jmpDest;
+  };
+
+  if (auto const last = last_op(env)) {
+    if (last->op == Op::Not) {
+      rewind(env, 1);
+      return reduce(env, invertJmp(op));
+    }
+    if (last->op == Op::Same || last->op == Op::NSame) {
+      if (sameJmpImpl(env, last->op, op)) return fix();
+    } else if (last->op == Op::IssetL) {
+      if (isTypeHelper(env,
+                       IsTypeOp::Null,
+                       last->IsTypeL.loc1,
+                       last->op,
+                       op)) {
+        return fix();
+      }
+    } else if (last->op == Op::IsTypeL) {
+      if (isTypeHelper(env,
+                       last->IsTypeL.subop2,
+                       last->IsTypeL.loc1,
+                       last->op,
+                       op)) {
+        return fix();
+      }
+    } else if (last->op == Op::IsTypeC) {
+      if (isTypeHelper(env,
+                       last->IsTypeC.subop1,
+                       NoLocalId,
+                       last->op,
+                       op)) {
+        return fix();
+      }
+    } else if (last->op == Op::InstanceOfD) {
+      if (instanceOfJmpImpl(env, last->InstanceOfD, op)) return fix();
+    } else if (last->op == Op::IsTypeStructC) {
+      if (isTypeStructCJmpImpl(env, last->IsTypeStructC, op)) return fix();
+    }
+  }
+
+  popC(env);
+  nothrow(env);
+
+  if (location == NoLocalId) return env.propagate(op.target1, &env.state);
+
+  refineLocation(env, location,
+                 Negate ? assert_nonemptiness : assert_emptiness,
+                 op.target1,
+                 Negate ? assert_emptiness : assert_nonemptiness);
+  return fix();
 }
 
 } // namespace
 
-template<class JmpOp>
-void group(ISS& env,
-           const bc::IsTypeStructC& inst,
-           const JmpOp& jmp) {
-  isTypeStructCJmpImpl(env, inst, jmp);
-}
-
-template<class JmpOp>
-void group(ISS& env,
-           const bc::IsTypeStructC& inst,
-           const bc::Not&,
-           const JmpOp& jmp) {
-  isTypeStructCJmpImpl(env, inst, invertJmp(jmp));
-}
+void in(ISS& env, const bc::JmpNZ& op) { jmpImpl(env, op); }
+void in(ISS& env, const bc::JmpZ& op)  { jmpImpl(env, op); }
 
 void in(ISS& env, const bc::Switch& op) {
-  auto v = tv(popC(env));
+  auto v = tv(topC(env));
 
   if (v) {
     auto go = [&] (BlockId blk) {
-      effect_free(env);
-      jmp_setdest(env, blk);
+      reduce(env, bc::PopC {});
+      return jmp_setdest(env, blk);
     };
     auto num_elems = op.targets.size();
     if (op.subop1 == SwitchKind::Unbounded) {
@@ -1530,13 +2192,14 @@ void in(ISS& env, const bc::Switch& op) {
     }
   }
 
+  popC(env);
   forEachTakenEdge(op, [&] (BlockId id) {
       env.propagate(id, &env.state);
   });
 }
 
 void in(ISS& env, const bc::SSwitch& op) {
-  auto v = tv(popC(env));
+  auto v = tv(topC(env));
 
   if (v) {
     for (auto& kv : op.targets) {
@@ -1545,13 +2208,13 @@ void in(ISS& env, const bc::SSwitch& op) {
       });
       if (!match) break;
       if (*match) {
-        effect_free(env);
-        jmp_setdest(env, kv.second);
-        return;
+        reduce(env, bc::PopC {});
+        return jmp_setdest(env, kv.second);
       }
     }
   }
 
+  popC(env);
   forEachTakenEdge(op, [&] (BlockId id) {
       env.propagate(id, &env.state);
   });
@@ -1583,21 +2246,8 @@ void in(ISS& env, const bc::RetCSuspended&) {
   );
 }
 
-void in(ISS& env, const bc::Unwind&) {
-  nothrow(env); // Don't propagate to throw edges
-  for (auto exit : env.blk.unwindExits) {
-    auto const stackLess = without_stacks(env.state);
-    env.propagate(exit, &stackLess);
-  }
-}
-
 void in(ISS& env, const bc::Throw& /*op*/) {
   popC(env);
-}
-
-void in(ISS& env, const bc::Catch&) {
-  nothrow(env);
-  return push(env, subObj(env.index.builtin_class(s_Throwable.get())));
 }
 
 void in(ISS& env, const bc::ChainFaults&) {
@@ -1621,14 +2271,33 @@ void in(ISS& env, const bc::NativeImpl&) {
 
 void in(ISS& env, const bc::CGetL& op) {
   if (locIsThis(env, op.loc1)) {
-    auto const subop = peekLocRaw(env, op.loc1).couldBe(BUninit) ?
-      BareThisOp::Notice : BareThisOp::NoNotice;
-    return reduce(env, bc::BareThis { subop });
+    auto const& ty = peekLocRaw(env, op.loc1);
+    if (!ty.subtypeOf(BInitNull)) {
+      auto const subop = ty.couldBe(BUninit) ?
+        BareThisOp::Notice : ty.couldBe(BNull) ?
+        BareThisOp::NoNotice : BareThisOp::NeverNull;
+      return reduce(env, bc::BareThis { subop });
+    }
   }
-  if (!locCouldBeUninit(env, op.loc1)) {
+  if (auto const last = last_op(env)) {
+    if (!is_pseudomain(env.ctx.func) && last->op == Op::PopL &&
+        op.loc1 == last->PopL.loc1) {
+      reprocess(env);
+      rewind(env, 1);
+      if (!locCouldBeRef(env, op.loc1)) setLocRaw(env, op.loc1, TCell);
+      return reduce(env, bc::SetL { op.loc1 });
+    }
+  }
+  if (!peekLocCouldBeUninit(env, op.loc1)) {
+    auto const minLocEquiv = findMinLocEquiv(env, op.loc1, false);
+    if (minLocEquiv != NoLocalId) {
+      return reduce(env, bc::CGetL { minLocEquiv });
+    }
+
     nothrow(env);
     constprop(env);
   }
+  mayReadLocal(env, op.loc1);
   push(env, locAsCell(env, op.loc1), op.loc1);
 }
 
@@ -1636,8 +2305,14 @@ void in(ISS& env, const bc::CGetQuietL& op) {
   if (locIsThis(env, op.loc1)) {
     return reduce(env, bc::BareThis { BareThisOp::NoNotice });
   }
+  auto const minLocEquiv = findMinLocEquiv(env, op.loc1, true);
+  if (minLocEquiv != NoLocalId) {
+    return reduce(env, bc::CGetQuietL { minLocEquiv });
+  }
+
   nothrow(env);
   constprop(env);
+  mayReadLocal(env, op.loc1);
   push(env, locAsCell(env, op.loc1), op.loc1);
 }
 
@@ -1653,15 +2328,51 @@ void in(ISS& env, const bc::CUGetL& op) {
 }
 
 void in(ISS& env, const bc::PushL& op) {
-  if (auto val = tv(locRaw(env, op.loc1))) {
-    return reduce(env, gen_constant(*val), bc::UnsetL { op.loc1 });
+  if (auto val = tv(peekLocRaw(env, op.loc1))) {
+    return reduce(env, bc::UnsetL { op.loc1 }, gen_constant(*val));
   }
+
+  auto const minLocEquiv = findMinLocEquiv(env, op.loc1, false);
+  if (minLocEquiv != NoLocalId) {
+    return reduce(env, bc::CGetL { minLocEquiv }, bc::UnsetL { op.loc1 });
+  }
+
+  if (auto const last = last_op(env)) {
+    if (last->op == Op::PopL &&
+        last->PopL.loc1 == op.loc1) {
+      // rewind is ok, because we're just going to unset the local
+      // (and note the unset can't be a no-op because the PopL set it
+      // to an InitCell). But its possible that before the PopL, the
+      // local *was* unset, so maybe would have killed the no-op. The
+      // only way to fix that is to reprocess the block with the new
+      // instruction sequence and see what happens.
+      reprocess(env);
+      rewind(env, 1);
+      return reduce(env, bc::UnsetL { op.loc1 });
+    }
+  }
+
   impl(env, bc::CGetL { op.loc1 }, bc::UnsetL { op.loc1 });
 }
 
 void in(ISS& env, const bc::CGetL2& op) {
-  // Can't constprop yet because of no INS_1 support in bc.h
-  if (!locCouldBeUninit(env, op.loc1)) effect_free(env);
+  if (auto const last = last_op(env)) {
+    if ((poppable(last->op) && !numPop(*last)) ||
+        (last->op == Op::CGetL && !peekLocCouldBeUninit(env, op.loc1))) {
+      auto const other = *last;
+      rewind(env, 1);
+      return reduce(env, bc::CGetL { op.loc1 }, other);
+    }
+  }
+
+  if (!peekLocCouldBeUninit(env, op.loc1)) {
+    auto const minLocEquiv = findMinLocEquiv(env, op.loc1, false);
+    if (minLocEquiv != NoLocalId) {
+      return reduce(env, bc::CGetL2 { minLocEquiv });
+    }
+    effect_free(env);
+  }
+  mayReadLocal(env, op.loc1);
   auto loc = locAsCell(env, op.loc1);
   auto topEquiv = topStkLocal(env);
   auto top = popT(env);
@@ -1670,10 +2381,9 @@ void in(ISS& env, const bc::CGetL2& op) {
 }
 
 void in(ISS& env, const bc::CGetG&) { popC(env); push(env, TInitCell); }
-void in(ISS& env, const bc::CGetQuietG&) { popC(env); push(env, TInitCell); }
 
 void in(ISS& env, const bc::CGetS& op) {
-  auto const tcls  = takeClsRefSlot(env, op.slot);
+  auto const tcls  = popC(env);
   auto const tname = popC(env);
   auto const vname = tv(tname);
   auto const self  = selfCls(env);
@@ -1730,49 +2440,35 @@ void in(ISS& env, const bc::VGetL& op) {
   push(env, TRef);
 }
 
-void in(ISS& env, const bc::VGetG&) { popC(env); push(env, TRef); }
+void in(ISS& env, const bc::ClassGetC& op) {
+  auto const t = topC(env);
 
-void in(ISS& env, const bc::VGetS& op) {
-  auto const tcls  = takeClsRefSlot(env, op.slot);
-  auto const tname = popC(env);
-  auto const vname = tv(tname);
-  auto const self  = selfCls(env);
+  if (t.subtypeOf(BCls)) return reduce(env, bc::Nop {});
+  popC(env);
 
-  if (!self || tcls.couldBe(*self)) {
-    if (vname && vname->m_type == KindOfPersistentString) {
-      boxSelfProp(env, vname->m_data.pstr);
-    } else {
-      killSelfProps(env);
+  if (t.subtypeOf(BObj)) {
+    effect_free(env);
+    push(env, objcls(t));
+    return;
+  }
+
+  if (auto const clsname = getNameFromType(t)) {
+    if (auto const rcls = env.index.resolve_class(env.ctx, clsname)) {
+      auto const cls = rcls->cls();
+      if (cls &&
+          ((cls->attrs & AttrPersistent) ||
+           cls == env.ctx.cls)) {
+        effect_free(env);
+      }
+      push(env, clsExact(*rcls));
+      return;
     }
   }
 
-  env.collect.publicSPropMutations.merge(
-    env.index, env.ctx, tcls, tname, TRef
-  );
-
-  push(env, TRef);
+  push(env, TCls);
 }
 
-void clsRefGetImpl(ISS& env, Type t1, ClsRefSlotId slot) {
-  auto cls = [&]{
-    if (auto const clsname = getNameFromType(t1)) {
-      auto const rcls = env.index.resolve_class(env.ctx, clsname);
-      if (rcls) return clsExact(*rcls);
-    }
-    if (t1.subtypeOf(BObj)) {
-      nothrow(env);
-      return objcls(t1);
-    }
-    return TCls;
-  }();
-  putClsRefSlot(env, slot, std::move(cls));
-}
-
-void in(ISS& env, const bc::ClsRefGetC& op) {
-  clsRefGetImpl(env, popC(env), op.slot);
-}
-
-void in(ISS& env, const bc::ClsRefGetTS& op) {
+void in(ISS& env, const bc::ClassGetTS& op) {
   // TODO(T31677864): implement real optimizations
   auto const ts = popC(env);
   auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? BDict : BDArr;
@@ -1780,7 +2476,12 @@ void in(ISS& env, const bc::ClsRefGetTS& op) {
     push(env, TBottom);
     return;
   }
-  clsRefGetImpl(env, TStr, op.slot);
+
+  auto const& genericsType =
+    RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr;
+
+  push(env, TCls);
+  push(env, opt(genericsType));
 }
 
 void in(ISS& env, const bc::AKExists& /*op*/) {
@@ -1893,7 +2594,6 @@ void in(ISS& env, const bc::GetMemoKeyL& op) {
   using MK = MemoKeyConstraint;
   folly::Optional<res::Class> resolvedCls;
   auto const mkc = [&] {
-    if (!RuntimeOption::EvalHardTypeHints) return MK::None;
     if (op.loc1 >= env.ctx.func->params.size()) return MK::None;
     auto tc = env.ctx.func->params[op.loc1].typeConstraint;
     if (tc.type() == AnnotType::Object) {
@@ -1997,18 +2697,19 @@ void in(ISS& env, const bc::GetMemoKeyL& op) {
       // generic mode, which can handle collections or classes which don't
       // implement getInstanceKey.
       if (resolvedCls &&
-          resolvedCls->subtypeOf(rclsIMemoizeParam) &&
+          resolvedCls->mustBeSubtypeOf(rclsIMemoizeParam) &&
           inTy.subtypeOf(tyIMemoizeParam)) {
         return reduce(
           env,
           bc::CGetL { op.loc1 },
-          bc::FPushObjMethodD {
-            0,
-            s_getInstanceKey.get(),
+          bc::NullUninit {},
+          bc::NullUninit {},
+          bc::FCallObjMethodD {
+            FCallArgs(0),
+            staticEmptyString(),
             ObjMethodOp::NullThrows,
-            false
+            s_getInstanceKey.get()
           },
-          bc::FCall { FCallArgs(0), staticEmptyString(), staticEmptyString() },
           bc::CastString {}
         );
       }
@@ -2019,18 +2720,19 @@ void in(ISS& env, const bc::GetMemoKeyL& op) {
       // or the integer 0. This might seem wasteful, but the JIT does a good job
       // inlining away the call in the null case.
       if (resolvedCls &&
-          resolvedCls->subtypeOf(rclsIMemoizeParam) &&
+          resolvedCls->mustBeSubtypeOf(rclsIMemoizeParam) &&
           inTy.subtypeOf(opt(tyIMemoizeParam))) {
         return reduce(
           env,
           bc::CGetL { op.loc1 },
-          bc::FPushObjMethodD {
-            0,
-            s_getInstanceKey.get(),
+          bc::NullUninit {},
+          bc::NullUninit {},
+          bc::FCallObjMethodD {
+            FCallArgs(0),
+            staticEmptyString(),
             ObjMethodOp::NullSafe,
-            false
+            s_getInstanceKey.get()
           },
-          bc::FCall { FCallArgs(0), staticEmptyString(), staticEmptyString() },
           bc::CastString {},
           bc::Int { 0 },
           bc::IsTypeL { op.loc1, IsTypeOp::Null },
@@ -2105,13 +2807,13 @@ void in(ISS& env, const bc::EmptyL& op) {
 }
 
 void in(ISS& env, const bc::EmptyS& op) {
-  takeClsRefSlot(env, op.slot);
+  popC(env);
   popC(env);
   push(env, TBool);
 }
 
 void in(ISS& env, const bc::IssetS& op) {
-  auto const tcls  = takeClsRefSlot(env, op.slot);
+  auto const tcls  = popC(env);
   auto const tname = popC(env);
   auto const vname = tv(tname);
   auto const self  = selfCls(env);
@@ -2182,6 +2884,7 @@ void isTypeArrLike(ISS& env, const Type& ty) {
 
 namespace {
 bool isCompactTypeClsMeth(ISS& env, IsTypeOp op, const Type& t) {
+  assertx(RuntimeOption::EvalEmitClsMethPointers);
   if (t.couldBe(BClsMeth)) {
     if (RuntimeOption::EvalHackArrDVArrs) {
       if (op == IsTypeOp::Vec || op == IsTypeOp::VArray) {
@@ -2221,7 +2924,10 @@ void isTypeLImpl(ISS& env, const Op& op) {
     nothrow(env);
   }
 
-  if (isCompactTypeClsMeth(env, op.subop2, loc)) return;
+  if (RuntimeOption::EvalIsCompatibleClsMethType &&
+      isCompactTypeClsMeth(env, op.subop2, loc)) {
+    return;
+  }
 
   switch (op.subop2) {
   case IsTypeOp::Scalar: return push(env, TBool);
@@ -2239,7 +2945,10 @@ void isTypeCImpl(ISS& env, const Op& op) {
     nothrow(env);
   }
 
-  if (isCompactTypeClsMeth(env, op.subop1, t1)) return;
+  if (RuntimeOption::EvalIsCompatibleClsMethType &&
+      isCompactTypeClsMeth(env, op.subop1, t1)) {
+    return;
+  }
 
   switch (op.subop1) {
   case IsTypeOp::Scalar: return push(env, TBool);
@@ -2331,22 +3040,25 @@ bool isValidTypeOpForIsAs(const IsTypeOp& op) {
 }
 
 template<bool asExpression>
-void isAsTypeStructImpl(ISS& env, SArray ts) {
+void isAsTypeStructImpl(ISS& env, SArray inputTS) {
+  auto const resolvedTS = resolveTSStatically(env, inputTS, env.ctx.cls, true);
+  auto const ts = resolvedTS ? resolvedTS : inputTS;
   auto const t = topC(env, 1); // operand to is/as
 
+  bool may_raise = true;
   auto result = [&] (
     const Type& out,
     const folly::Optional<Type>& test = folly::none
   ) {
     if (asExpression && out.subtypeOf(BTrue)) {
-      constprop(env);
-      return reduce(env, bc::PopC {}, bc::Nop {});
+      return reduce(env, bc::PopC {});
     }
     auto const location = topStkEquiv(env, 1);
     popC(env); // type structure
     popC(env); // operand to is/as
     if (!asExpression) {
       constprop(env);
+      if (!may_raise) nothrow(env);
       return push(env, out);
     }
     if (out.subtypeOf(BFalse)) {
@@ -2374,7 +3086,30 @@ void isAsTypeStructImpl(ISS& env, SArray ts) {
     const folly::Optional<Type> deopt = folly::none
   ) {
     if (!type || is_type_might_raise(*type, t)) return result(TBool);
-    auto const test = type.value();
+    auto test = type.value();
+    if (t.couldBe(BClsMeth)) {
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        if (test == TVec) {
+          if (t.subtypeOf(BClsMeth | BVec)) return result(TTrue);
+          else if (t.couldBe(BVec)) return result(TBool);
+          else test = TClsMeth;
+        } else if (test == TVArr) {
+          if (t.subtypeOf(BClsMeth | BVArr)) return result(TTrue);
+          else if (t.couldBe(BVArr)) return result(TBool);
+          else test = TClsMeth;
+        }
+      } else {
+        if (test == TVArr) {
+          if (t.subtypeOf(BClsMeth | BVArr)) return result(TTrue);
+          else if (t.couldBe(BVArr)) return result(TBool);
+          else test = TClsMeth;
+        } else if (test == TArr) {
+          if (t.subtypeOf(BClsMeth | BArr)) return result(TTrue);
+          else if (t.couldBe(BArr)) return result(TBool);
+          else test = TClsMeth;
+        }
+      }
+    }
     if (t.subtypeOf(test)) return result(TTrue);
     if (!t.couldBe(test) && (!deopt || !t.couldBe(deopt.value()))) {
       return result(TFalse);
@@ -2401,8 +3136,7 @@ void isAsTypeStructImpl(ISS& env, SArray ts) {
   }
 
   if (!asExpression) {
-    if (ts_type && !is_type_might_raise(*ts_type, t)) nothrow(env);
-    constprop(env);
+    if (ts_type && !is_type_might_raise(*ts_type, t)) may_raise = false;
   }
   switch (get_ts_kind(ts)) {
     case TypeStructure::Kind::T_int:
@@ -2427,9 +3161,11 @@ void isAsTypeStructImpl(ISS& env, SArray ts) {
       return check(ts_type, TDArr);
     case TypeStructure::Kind::T_vec:
       return check(ts_type, TVArr);
+    case TypeStructure::Kind::T_nothing:
     case TypeStructure::Kind::T_noreturn:
       return result(TFalse);
     case TypeStructure::Kind::T_mixed:
+    case TypeStructure::Kind::T_dynamic:
       return result(TTrue);
     case TypeStructure::Kind::T_nonnull:
       if (is_definitely_null) return result(TFalse);
@@ -2458,13 +3194,18 @@ void isAsTypeStructImpl(ISS& env, SArray ts) {
     }
     case TypeStructure::Kind::T_unresolved: {
       if (asExpression) return result(TBool);
-      auto const rcls = env.index.resolve_class(env.ctx, get_ts_classname(ts));
+      auto classname = get_ts_classname(ts);
+      auto const has_generics = ts->exists(s_generic_types);
+      if (!has_generics && classname->isame(s_this.get())) {
+        return reduce(env, bc::PopC {}, bc::IsLateBoundCls {});
+      }
+      auto const rcls = env.index.resolve_class(env.ctx, classname);
       // We can only reduce to instance of if we know for sure that this class
       // can be resolved since instanceof undefined class does not throw
       if (!rcls || !rcls->resolved() || rcls->cls()->attrs & AttrEnum) {
         return result(TBool);
       }
-      if (ts->exists(s_generic_types) &&
+      if (has_generics &&
          (rcls->cls()->hasReifiedGenerics || !isTSAllWildcards(ts))) {
           // If it is a reified class or has non wildcard generics,
           // we need to bail
@@ -2495,6 +3236,8 @@ void isAsTypeStructImpl(ISS& env, SArray ts) {
   not_reached();
 }
 
+bool canReduceToDontResolveList(SArray tsList);
+
 bool canReduceToDontResolve(SArray ts) {
   switch (get_ts_kind(ts)) {
     case TypeStructure::Kind::T_int:
@@ -2505,8 +3248,10 @@ bool canReduceToDontResolve(SArray ts) {
     case TypeStructure::Kind::T_arraykey:
     case TypeStructure::Kind::T_void:
     case TypeStructure::Kind::T_null:
+    case TypeStructure::Kind::T_nothing:
     case TypeStructure::Kind::T_noreturn:
     case TypeStructure::Kind::T_mixed:
+    case TypeStructure::Kind::T_dynamic:
     case TypeStructure::Kind::T_nonnull:
     case TypeStructure::Kind::T_resource:
     // Following ones don't reify, so no need to check the generics
@@ -2524,19 +3269,8 @@ bool canReduceToDontResolve(SArray ts) {
       // If it has generics but all of them are wildcards, then we can reduce
       // Otherwise, we can't.
       return isTSAllWildcards(ts);
-    case TypeStructure::Kind::T_tuple: {
-      auto result = true;
-      IterateV(
-        get_ts_elem_types(ts),
-        [&](TypedValue v) {
-          assertx(isArrayLikeType(v.m_type));
-          result &= canReduceToDontResolve(v.m_data.parr);
-           // when result is false, we can short circuit
-          return !result;
-        }
-      );
-      return result;
-    }
+    case TypeStructure::Kind::T_tuple:
+      return canReduceToDontResolveList(get_ts_elem_types(ts));
     case TypeStructure::Kind::T_shape: {
       auto result = true;
       IterateV(
@@ -2548,13 +3282,17 @@ bool canReduceToDontResolve(SArray ts) {
             result = false;
             return true; // short circuit
           }
-          result &= canReduceToDontResolve(get_ts_value_field(arr));
+          result &= canReduceToDontResolve(get_ts_value(arr));
            // when result is false, we can short circuit
           return !result;
         }
       );
       return result;
     }
+    case TypeStructure::Kind::T_fun:
+      // TODO(T46022709): Handle variadic args
+      return canReduceToDontResolve(get_ts_return_type(ts))
+        && canReduceToDontResolveList(get_ts_param_types(ts));
     // Following needs to be resolved
     case TypeStructure::Kind::T_unresolved:
     case TypeStructure::Kind::T_typeaccess:
@@ -2566,7 +3304,6 @@ bool canReduceToDontResolve(SArray ts) {
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
     case TypeStructure::Kind::T_reifiedtype:
-    case TypeStructure::Kind::T_fun:
     case TypeStructure::Kind::T_typevar:
     case TypeStructure::Kind::T_trait:
       return false;
@@ -2574,7 +3311,28 @@ bool canReduceToDontResolve(SArray ts) {
   not_reached();
 }
 
+bool canReduceToDontResolveList(SArray tsList) {
+  auto result = true;
+  IterateV(
+    tsList,
+    [&](TypedValue v) {
+      assertx(isArrayLikeType(v.m_type));
+      result &= canReduceToDontResolve(v.m_data.parr);
+       // when result is false, we can short circuit
+      return !result;
+    }
+  );
+  return result;
+}
+
 } // namespace
+
+void in(ISS& env, const bc::IsLateBoundCls& op) {
+  auto const cls = env.ctx.cls;
+  if (cls && !(cls->attrs & AttrTrait)) effect_free(env);
+  popC(env);
+  return push(env, TBool);
+}
 
 void in(ISS& env, const bc::IsTypeStructC& op) {
   auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? BDict : BDArr;
@@ -2596,31 +3354,54 @@ void in(ISS& env, const bc::IsTypeStructC& op) {
   isAsTypeStructImpl<false>(env, a->m_data.parr);
 }
 
-void in(ISS& env, const bc::AsTypeStructC& op) {
-  auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? BDict : BDArr;
-  if (!topC(env).couldBe(requiredTSType)) {
-    popC(env);
-    popC(env);
-    return unreachable(env);
-  }
-  auto const a = tv(topC(env));
-  if (!a || !isValidTSType(*a, false)) {
-    popC(env);
-    push(env, popC(env));
-    return;
-  }
-  if (op.subop1 == TypeStructResolveOp::Resolve &&
-      canReduceToDontResolve(a->m_data.parr)) {
-    return reduce(env, bc::AsTypeStructC { TypeStructResolveOp::DontResolve });
-  }
-  isAsTypeStructImpl<true>(env, a->m_data.parr);
+void in(ISS& env, const bc::ThrowAsTypeStructException& op) {
+  popC(env);
+  popC(env);
+  unreachable(env);
+  return;
 }
 
 void in(ISS& env, const bc::CombineAndResolveTypeStruct& op) {
-  // TODO(T31677864): implement real optimizations
   assertx(op.arg1 > 0);
   auto valid = true;
   auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? BDict : BDArr;
+  auto const first = tv(topC(env));
+  if (first && isValidTSType(*first, false)) {
+    auto const ts = first->m_data.parr;
+    // Optimize single input that does not need any combination
+    if (op.arg1 == 1) {
+      if (canReduceToDontResolve(ts)) return reduce(env);
+      if (auto const resolved = resolveTSStatically(env, ts, env.ctx.cls,
+                                                    false)) {
+        return RuntimeOption::EvalHackArrDVArrs
+          ? reduce(env, bc::PopC {}, bc::Dict  { resolved })
+          : reduce(env, bc::PopC {}, bc::Array { resolved });
+      }
+    }
+    // Optimize double input that needs a single combination and looks of the
+    // form ?T, @T or ~T
+    if (op.arg1 == 2 && get_ts_kind(ts) == TypeStructure::Kind::T_reifiedtype) {
+      BytecodeVec instrs { bc::PopC {} };
+      auto const tv_true = gen_constant(make_tv<KindOfBoolean>(true));
+      if (ts->exists(s_like.get())) {
+        instrs.push_back(gen_constant(make_tv<KindOfString>(s_like.get())));
+        instrs.push_back(tv_true);
+        instrs.push_back(bc::AddElemC {});
+      }
+      if (ts->exists(s_nullable.get())) {
+        instrs.push_back(gen_constant(make_tv<KindOfString>(s_nullable.get())));
+        instrs.push_back(tv_true);
+        instrs.push_back(bc::AddElemC {});
+      }
+      if (ts->exists(s_soft.get())) {
+        instrs.push_back(gen_constant(make_tv<KindOfString>(s_soft.get())));
+        instrs.push_back(tv_true);
+        instrs.push_back(bc::AddElemC {});
+      }
+      return reduce(env, std::move(instrs));
+    }
+  }
+
   for (int i = 0; i < op.arg1; ++i) {
     auto const t = popC(env);
     valid &= t.couldBe(requiredTSType);
@@ -2632,31 +3413,20 @@ void in(ISS& env, const bc::CombineAndResolveTypeStruct& op) {
 
 void in(ISS& env, const bc::RecordReifiedGeneric& op) {
   // TODO(T31677864): implement real optimizations
-  assertx(op.arg1 > 0);
-  auto valid = true;
-  auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? BDict : BDArr;
-  auto const resultingArray = RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr;
-  for (int i = 0; i < op.arg1; ++i) {
-    auto const t = popC(env);
-    valid &= t.couldBe(requiredTSType);
-  }
-  if (!valid) return unreachable(env);
-  nothrow(env);
-  push(env, resultingArray);
+  auto const t = popC(env);
+  auto const required = RuntimeOption::EvalHackArrDVArrs ? BVec : BVArr;
+  if (!t.couldBe(required)) return unreachable(env);
+  if (t.subtypeOf(required)) nothrow(env);
+  push(env, RuntimeOption::EvalHackArrDVArrs ? TSVec : TSVArr);
 }
 
 void in(ISS& env, const bc::ReifiedName& op) {
   // TODO(T31677864): implement real optimizations
-  assertx(op.arg1 > 0);
-  auto valid = true;
-  auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? BDict : BDArr;
-  for (int i = 0; i < op.arg1; ++i) {
-    auto const t = popC(env);
-    valid &= t.couldBe(requiredTSType);
-  }
-  if (!valid) return unreachable(env);
-  nothrow(env);
-  return push(env, rname(op.str2));
+  auto const t = popC(env);
+  auto const required = RuntimeOption::EvalHackArrDVArrs ? BVec : BVArr;
+  if (!t.couldBe(required)) return unreachable(env);
+  if (t.subtypeOf(required)) nothrow(env);
+  return push(env, rname(op.str1));
 }
 
 void in(ISS& env, const bc::CheckReifiedGenericMismatch& op) {
@@ -2672,10 +3442,19 @@ namespace {
  * state. Otherwise, pop the stack value, perform the set, and return a pair
  * giving the value's type, and any other local its known to be equivalent to.
  */
-template <typename Op>
+template <typename Set>
 folly::Optional<std::pair<Type, LocalId>> moveToLocImpl(ISS& env,
-                                                        const Op& op) {
-  nothrow(env);
+                                                        const Set& op) {
+  if (auto const prev = last_op(env, 1)) {
+    if (prev->op == Op::CGetL2 &&
+        prev->CGetL2.loc1 == op.loc1 &&
+        last_op(env)->op == Op::Concat) {
+      rewind(env, 2);
+      reduce(env, bc::SetOpL { op.loc1, SetOpOp::ConcatEqual });
+      return folly::none;
+    }
+  }
+
   auto equivLoc = topStkEquiv(env);
   // If the local could be a Ref, don't record equality because the stack
   // element and the local won't actually have the same type.
@@ -2701,12 +3480,13 @@ folly::Optional<std::pair<Type, LocalId>> moveToLocImpl(ISS& env,
     } else if (equivLoc == NoLocalId) {
       equivLoc = op.loc1;
     }
-    if (any(env.collect.opts & CollectionOpts::Inlining)) {
+    if (!any(env.collect.opts & CollectionOpts::Speculating)) {
       effect_free(env);
     }
   } else {
     equivLoc = NoLocalId;
   }
+  nothrow(env);
   auto val = popC(env);
   setLoc(env, op.loc1, val);
   if (equivLoc == StackThisId) {
@@ -2736,7 +3516,7 @@ void in(ISS& env, const bc::SetL& op) {
   if (auto p = moveToLocImpl(env, op)) {
     push(env, std::move(p->first), p->second);
   } else {
-    reduce(env, bc::Nop {});
+    reduce(env);
   }
 }
 
@@ -2748,10 +3528,17 @@ void in(ISS& env, const bc::SetG&) {
 
 void in(ISS& env, const bc::SetS& op) {
   auto const t1    = popC(env);
-  auto const tcls  = takeClsRefSlot(env, op.slot);
+  auto const tcls  = popC(env);
   auto const tname = popC(env);
   auto const vname = tv(tname);
   auto const self  = selfCls(env);
+
+  if (vname && vname->m_type == KindOfPersistentString &&
+      canSkipMergeOnConstProp(env, tcls, vname->m_data.pstr)) {
+      unreachable(env);
+      push(env, TBottom);
+      return;
+  }
 
   if (!self || tcls.couldBe(*self)) {
     if (vname && vname->m_type == KindOfPersistentString) {
@@ -2808,10 +3595,17 @@ void in(ISS& env, const bc::SetOpG&) {
 
 void in(ISS& env, const bc::SetOpS& op) {
   popC(env);
-  auto const tcls  = takeClsRefSlot(env, op.slot);
+  auto const tcls  = popC(env);
   auto const tname = popC(env);
   auto const vname = tv(tname);
   auto const self  = selfCls(env);
+
+  if (vname && vname->m_type == KindOfPersistentString &&
+      canSkipMergeOnConstProp(env, tcls, vname->m_data.pstr)) {
+      unreachable(env);
+      push(env, TBottom);
+      return;
+  }
 
   if (!self || tcls.couldBe(*self)) {
     if (vname && vname->m_type == KindOfPersistentString) {
@@ -2847,10 +3641,17 @@ void in(ISS& env, const bc::IncDecL& op) {
 void in(ISS& env, const bc::IncDecG&) { popC(env); push(env, TInitCell); }
 
 void in(ISS& env, const bc::IncDecS& op) {
-  auto const tcls  = takeClsRefSlot(env, op.slot);
+  auto const tcls  = popC(env);
   auto const tname = popC(env);
   auto const vname = tv(tname);
   auto const self  = selfCls(env);
+
+  if (vname && vname->m_type == KindOfPersistentString &&
+      canSkipMergeOnConstProp(env, tcls, vname->m_data.pstr)) {
+      unreachable(env);
+      push(env, TBottom);
+      return;
+  }
 
   if (!self || tcls.couldBe(*self)) {
     if (vname && vname->m_type == KindOfPersistentString) {
@@ -2867,52 +3668,15 @@ void in(ISS& env, const bc::IncDecS& op) {
   push(env, TInitCell);
 }
 
-void in(ISS& env, const bc::BindL& op) {
-  // If the op.loc1 was bound to a local static, its going to be
-  // unbound from it. If the thing its being bound /to/ is a local
-  // static, we've already marked it as modified via the VGetL, so
-  // there's nothing more to track.
-  // Unbind it before any updates.
-  modifyLocalStatic(env, op.loc1, TUninit);
-  nothrow(env);
-  auto t1 = popV(env);
-  setLocRaw(env, op.loc1, t1);
-  push(env, std::move(t1));
-}
-
-void in(ISS& env, const bc::BindG&) {
-  auto t1 = popV(env);
-  popC(env);
-  push(env, std::move(t1));
-}
-
-void in(ISS& env, const bc::BindS& op) {
-  popV(env);
-  auto const tcls  = takeClsRefSlot(env, op.slot);
-  auto const tname = popC(env);
-  auto const vname = tv(tname);
-  auto const self  = selfCls(env);
-
-  if (!self || tcls.couldBe(*self)) {
-    if (vname && vname->m_type == KindOfPersistentString) {
-      boxSelfProp(env, vname->m_data.pstr);
-    } else {
-      killSelfProps(env);
-    }
-  }
-
-  env.collect.publicSPropMutations.merge(
-    env.index, env.ctx, tcls, tname, TRef
-  );
-
-  push(env, TRef);
-}
-
 void in(ISS& env, const bc::UnsetL& op) {
   if (locRaw(env, op.loc1).subtypeOf(TUninit)) {
-    return reduce(env, bc::Nop {});
+    return reduce(env);
   }
-  nothrow(env);
+  if (any(env.collect.opts & CollectionOpts::Speculating)) {
+    nothrow(env);
+  } else {
+    effect_free(env);
+  }
   setLocRaw(env, op.loc1, TUninit);
 }
 
@@ -2921,413 +3685,166 @@ void in(ISS& env, const bc::UnsetG& /*op*/) {
   if (!t1.couldBe(BObj | BRes)) nothrow(env);
 }
 
-void in(ISS& env, const bc::FPushFuncD& op) {
-  auto const rfunc = env.index.resolve_func(env.ctx, op.str2);
-  if (!any(env.collect.opts & CollectionOpts::Speculating)) {
-    if (auto const func = rfunc.exactFunc()) {
-      if (can_emit_builtin(func, op.arg1, op.has_unpack)) {
-        fpiPushNoFold(
+template<class FCallWithFCA>
+bool fcallOptimizeChecks(
+  ISS& env,
+  const FCallArgs& fca,
+  const res::Func& func,
+  FCallWithFCA fcallWithFCA,
+  const ActRec* legacyAR = nullptr
+) {
+  if (fca.enforceReffiness()) {
+    bool match = true;
+    for (auto i = 0; i < fca.numArgs; ++i) {
+      auto const kind = env.index.lookup_param_prep(env.ctx, func, i);
+      if (legacyAR && legacyAR->foldable && kind != PrepKind::Val) {
+        fpiNotFoldable(env);
+        fpiPop(env);
+        discard(env, fca.numArgsInclUnpack());
+        for (auto j = uint32_t{0}; j < fca.numRets; ++j) push(env, TBottom);
+        return true;
+      }
+
+      if (kind == PrepKind::Unknown) {
+        match = false;
+        break;
+      }
+
+      if (kind != (fca.byRef(i) ? PrepKind::Ref : PrepKind::Val)) {
+        // Reffiness mismatch
+        auto const exCls = makeStaticString("InvalidArgumentException");
+        auto const err = makeStaticString(formatParamRefMismatch(
+          func.name()->data(), i, !fca.byRef(i)));
+
+        reduce(
           env,
-          ActRec { FPIKind::Builtin, TBottom, folly::none, rfunc }
+          bc::NewObjD { exCls },
+          bc::Dup {},
+          bc::NullUninit {},
+          bc::NullUninit {},
+          bc::String { err },
+          bc::FCallCtor { FCallArgs(1), staticEmptyString() },
+          bc::PopC {},
+          bc::LockObj {},
+          bc::Throw {}
         );
-        return reduce(env, bc::Nop {});
+        return true;
       }
     }
-  }
-  if (fpiPush(env, ActRec { FPIKind::Func, TBottom, folly::none, rfunc },
-              op.arg1, false)) {
-    return reduce(env, bc::Nop {});
-  }
-}
 
-void in(ISS& env, const bc::FPushFunc& op) {
-  auto const t1 = topC(env);
-  folly::Optional<res::Func> rfunc;
-  // FPushFuncD and FPushFuncU require that the names of inout functions be
-  // mangled, so skip those for now.
-  auto const name = getNameFromType(t1);
-  if (name && op.argv.size() == 0) {
-    auto const nname = normalizeNS(name);
-    // FPushFuncD doesn't support class-method pair strings yet.
-    if (isNSNormalized(nname) && notClassMethodPair(nname)) {
-      rfunc = env.index.resolve_func(env.ctx, nname);
-      // If the function might distinguish being called dynamically from not,
-      // don't turn a dynamic call into a static one.
-      if (rfunc && !rfunc->mightCareAboutDynCalls() &&
-          !rfunc->couldHaveReifiedGenerics()) {
-        return reduce(env, bc::PopC {},
-                      bc::FPushFuncD { op.arg1, nname, op.has_unpack });
+    if (match) {
+      // Optimize away the runtime reffiness check.
+      reduce(env, fcallWithFCA(FCallArgs(
+        fca.flags, fca.numArgs, fca.numRets, nullptr, fca.asyncEagerTarget,
+        fca.lockWhileUnwinding)));
+      return true;
+    }
+  }
+
+  // Infer whether the callee supports async eager return.
+  if (fca.asyncEagerTarget != NoBlockId &&
+      !fca.supportsAsyncEagerReturn()) {
+    auto const status = env.index.supports_async_eager_return(func);
+    if (status) {
+      auto newFCA = fca;
+      if (*status) {
+        // Callee supports async eager return.
+        newFCA.flags = static_cast<FCallArgs::Flags>(
+          newFCA.flags | FCallArgs::SupportsAsyncEagerReturn);
+      } else {
+        // Callee doesn't support async eager return.
+        newFCA.asyncEagerTarget = NoBlockId;
       }
-    }
-  }
-  popC(env);
-  if (t1.subtypeOf(BObj)) {
-    fpiPushNoFold(env, ActRec { FPIKind::ObjInvoke, t1 });
-  } else if (t1.subtypeOf(BArr)) {
-    fpiPushNoFold(env, ActRec { FPIKind::CallableArr, TTop });
-  } else if (t1.subtypeOf(BStr)) {
-    fpiPushNoFold(env, ActRec { FPIKind::Func, TTop, folly::none, rfunc });
-  } else {
-    fpiPushNoFold(env, ActRec { FPIKind::Unknown, TTop });
-  }
-}
-
-void in(ISS& env, const bc::FPushFuncU& op) {
-  auto const rfuncPair =
-    env.index.resolve_func_fallback(env.ctx, op.str2, op.str3);
-  if (options.ElideAutoloadInvokes) {
-    auto const fpushfuncd = [&](auto const& fn) {
-      return reduce(env, bc::FPushFuncD { op.arg1, fn->name(), op.has_unpack });
-    };
-    if (rfuncPair.first && !rfuncPair.second) {
-      return fpushfuncd(rfuncPair.first);
-    }
-    if (!rfuncPair.first && rfuncPair.second &&
-        RuntimeOption::UndefinedFunctionFallback == 0) {
-      return fpushfuncd(rfuncPair.second);
-    }
-  }
-  fpiPushNoFold(
-    env,
-    ActRec {
-      FPIKind::Func,
-      TBottom,
-      folly::none,
-      rfuncPair.first,
-      rfuncPair.second
-    }
-  );
-}
-
-void in(ISS& env, const bc::ResolveFunc& op) {
-  // TODO (T29639296)
-  push(env, TFunc);
-}
-
-void in(ISS& env, const bc::ResolveObjMethod& op) {
-  // TODO (T29639296)
-  popC(env);
-  popC(env);
-  if (RuntimeOption::EvalHackArrDVArrs) {
-    push(env, TVec);
-  } else {
-    push(env, TVArr);
-  }
-}
-
-void in(ISS& env, const bc::ResolveClsMethod& op) {
-  popC(env);
-  popC(env);
-  push(env, TClsMeth);
-}
-
-const StaticString s_nullFunc { "__SystemLib\\__86null" };
-
-void in(ISS& env, const bc::FPushObjMethodD& op) {
-  auto const nullThrows = op.subop3 == ObjMethodOp::NullThrows;
-  auto const input = topC(env);
-  auto const mayCallMethod = input.couldBe(BObj);
-  auto const mayCallNullsafe = !nullThrows && input.couldBe(BNull);
-  auto const mayThrowNonObj = !input.subtypeOf(nullThrows ? BObj : BOptObj);
-
-  if (!mayCallMethod && !mayCallNullsafe) {
-    // This FPush may only throw, make sure it's not optimized away.
-    fpiPushNoFold(env, ActRec { FPIKind::ObjMeth, TBottom });
-    popC(env);
-    return unreachable(env);
-  }
-
-  if (!mayCallMethod && !mayThrowNonObj) {
-    // Null input, this may only call the nullsafe helper, so do that.
-    return reduce(
-      env,
-      bc::PopC {},
-      bc::FPushFuncD { op.arg1, s_nullFunc.get(), op.has_unpack }
-    );
-  }
-
-  auto const ar = [&] {
-    assertx(mayCallMethod);
-    auto const kind = mayCallNullsafe ? FPIKind::ObjMethNS : FPIKind::ObjMeth;
-    auto const ctxTy = intersection_of(input, TObj);
-    auto const clsTy = objcls(ctxTy);
-    auto const rcls = is_specialized_cls(clsTy)
-      ? folly::Optional<res::Class>(dcls_of(clsTy).cls)
-      : folly::none;
-    auto const func = env.index.resolve_method(env.ctx, clsTy, op.str2);
-    return ActRec { kind, ctxTy, rcls, func };
-  };
-
-  if (!mayCallMethod) {
-    // Calls nullsafe helper, but can't fold as we may still throw.
-    assertx(mayCallNullsafe && mayThrowNonObj);
-    auto const func = env.index.resolve_func(env.ctx, s_nullFunc.get());
-    assertx(func.exactFunc());
-    fpiPushNoFold(env, ActRec { FPIKind::Func, TBottom, folly::none, func });
-  } else if (mayCallNullsafe || mayThrowNonObj) {
-    // Can't optimize away as FCall may push null instead of the folded value
-    // or FCall may throw.
-    fpiPushNoFold(env, ar());
-  } else if (fpiPush(env, ar(), op.arg1, false)) {
-    return reduce(env, bc::PopC {});
-  }
-
-  auto const location = topStkEquiv(env);
-  if (location != NoLocalId) {
-    if (!refineLocation(env, location, [&] (Type t) {
-      if (nullThrows) return intersection_of(t, TObj);
-      if (!t.couldBe(BUninit)) return intersection_of(t, TOptObj);
-      if (!t.couldBe(BObj)) return intersection_of(t, TNull);
-      return t;
-    })) {
-      unreachable(env);
+      reduce(env, fcallWithFCA(std::move(newFCA)));
+      return true;
     }
   }
 
-  popC(env);
+  return false;
 }
 
-void in(ISS& env, const bc::FPushObjMethod& op) {
-  auto const t1 = topC(env); // meth name
-  auto const t2 = topC(env, 1); // object
-  auto const clsTy = objcls(t2);
-  folly::Optional<res::Func> rfunc;
-  auto const name = getNameFromType(t1);
-  if (name && op.argv.size() == 0) {
-    rfunc = env.index.resolve_method(env.ctx, clsTy, name);
-    if (rfunc && !rfunc->mightCareAboutDynCalls() &&
-        !rfunc->couldHaveReifiedGenerics()) {
-      return reduce(
-        env,
-        bc::PopC {},
-        bc::FPushObjMethodD {
-          op.arg1, name, op.subop2, op.has_unpack
-        }
-      );
-    }
-  }
-  popC(env);
-  fpiPushNoFold(
-    env,
-    ActRec {
-      FPIKind::ObjMeth,
-      popC(env),
-      is_specialized_cls(clsTy)
-        ? folly::Optional<res::Class>(dcls_of(clsTy).cls)
-        : folly::none,
-      rfunc
-    }
-  );
-}
-
-void in(ISS& env, const bc::FPushClsMethodD& op) {
-  auto const rcls = env.index.resolve_class(env.ctx, op.str3);
-  auto clsType = rcls ? clsExact(*rcls) : TCls;
-  auto const rfun = env.index.resolve_method(
-    env.ctx,
-    clsType,
-    op.str2
-  );
-  if (fpiPush(env, ActRec { FPIKind::ClsMeth, clsType, rcls, rfun }, op.arg1,
-              false)) {
-    return reduce(env, bc::Nop {});
-  }
-}
-
-namespace {
-
-Type ctxCls(ISS& env) {
-  auto const s = selfCls(env);
-  return setctx(s ? *s : TCls);
-}
-
-Type specialClsRefToCls(ISS& env, SpecialClsRef ref) {
-  if (!env.ctx.cls) return TCls;
-  auto const op = [&]()-> folly::Optional<Type> {
-    switch (ref) {
-      case SpecialClsRef::Static: return ctxCls(env);
-      case SpecialClsRef::Self:   return selfClsExact(env);
-      case SpecialClsRef::Parent: return parentClsExact(env);
-    }
-    always_assert(false);
-  }();
-  return op ? *op : TCls;
-}
-
-}
-
-void in(ISS& env, const bc::FPushClsMethod& op) {
-  auto const t1 = peekClsRefSlot(env, op.slot);
-  auto const t2 = topC(env);
-  folly::Optional<res::Class> rcls;
-  auto exactCls = false;
-  if (is_specialized_cls(t1)) {
-    auto dcls = dcls_of(t1);
-    rcls = dcls.cls;
-    exactCls = dcls.type == DCls::Exact;
-  }
-  folly::Optional<res::Func> rfunc;
-  auto const name = getNameFromType(t2);
-  if (name && op.argv.size() == 0) {
-    rfunc = env.index.resolve_method(env.ctx, t1, name);
-    if (exactCls && rcls && !rfunc->mightCareAboutDynCalls() &&
-        !rfunc->couldHaveReifiedGenerics()) {
-      return reduce(
-        env,
-        bc::DiscardClsRef { op.slot },
-        bc::PopC {},
-        bc::FPushClsMethodD {
-          op.arg1, name, rcls->name(), op.has_unpack
-        }
-      );
-    }
-  }
-  if (fpiPush(env, ActRec { FPIKind::ClsMeth, t1, rcls, rfunc }, op.arg1,
-              true)) {
-    return reduce(env,
-                  bc::DiscardClsRef { op.slot },
-                  bc::PopC {});
-  }
-  takeClsRefSlot(env, op.slot);
-  popC(env);
-}
-
-void in(ISS& env, const bc::FPushClsMethodS& op) {
-  auto const t1  = topC(env);
-  auto const cls = specialClsRefToCls(env, op.subop2);
-  folly::Optional<res::Func> rfunc;
-  auto const name = getNameFromType(t1);
-  if (name && op.argv.size() == 0) {
-    rfunc = env.index.resolve_method(env.ctx, cls, name);
-    if (!rfunc->mightCareAboutDynCalls() &&
-        !rfunc->couldHaveReifiedGenerics()) {
-      return reduce(
-        env,
-        bc::PopC {},
-        bc::FPushClsMethodSD {
-          op.arg1, op.subop2, name, op.has_unpack
-        }
-      );
-    }
-  }
-  auto const rcls = is_specialized_cls(cls)
-    ? folly::Optional<res::Class>{dcls_of(cls).cls}
-    : folly::none;
-  if (fpiPush(env, ActRec {
-                FPIKind::ClsMeth,
-                ctxCls(env),
-                rcls,
-                rfunc
-              }, op.arg1, true)) {
-    return reduce(env, bc::PopC {});
-  }
-  popC(env);
-}
-
-void in(ISS& env, const bc::FPushClsMethodSD& op) {
-  auto const cls = specialClsRefToCls(env, op.subop2);
-
-  folly::Optional<res::Class> rcls;
-  auto exactCls = false;
-  if (is_specialized_cls(cls)) {
-    auto dcls = dcls_of(cls);
-    rcls = dcls.cls;
-    exactCls = dcls.type == DCls::Exact;
+bool fcallTryFold(
+  ISS& env,
+  const FCallArgs& fca,
+  const res::Func& func,
+  Type context,
+  bool maybeDynamic,
+  uint32_t numExtraInputs,
+  const ActRec* legacyAR = nullptr
+) {
+  auto const foldableFunc = func.exactFunc();
+  if (!foldableFunc) {
+    assertx(!legacyAR || !legacyAR->foldable);
+    return false;
   }
 
-  if (op.subop2 == SpecialClsRef::Static && rcls && exactCls) {
-    return reduce(
-      env,
-      bc::FPushClsMethodD {
-        op.arg1, op.str3, rcls->name(), op.has_unpack
+  if (legacyAR) {
+    if (!legacyAR->foldable) return false;
+  } else if (!canFold(env, foldableFunc, fca.numArgs, context, maybeDynamic)) {
+    return false;
+  }
+
+  auto tried_lookup = false;
+  if (options.ConstantFoldBuiltins &&
+      !fca.hasUnpack() &&
+      fca.numRets == 1) {
+    auto ty = [&] () {
+      if (foldableFunc->attrs & AttrBuiltin &&
+          foldableFunc->attrs & AttrIsFoldable) {
+        auto ret = const_fold(env, fca.numArgs, *foldableFunc);
+        return ret ? *ret : TBottom;
       }
-    );
+      CompactVector<Type> args(fca.numArgs);
+      for (auto i = uint32_t{0}; i < fca.numArgs; ++i) {
+        auto const& arg = topT(env, i);
+        auto const argNum = fca.numArgs - i - 1;
+        auto const isScalar = is_scalar(arg);
+        if (!isScalar &&
+            (env.index.func_depends_on_arg(foldableFunc, argNum) ||
+             !arg.subtypeOf(BInitCell))) {
+          return TBottom;
+        }
+        args[argNum] = isScalar ? scalarize(arg) : arg;
+      }
+
+      tried_lookup = true;
+      return env.index.lookup_foldable_return_type(
+        env.ctx, foldableFunc, context, std::move(args));
+    }();
+
+    if (auto v = tv(ty)) {
+      BytecodeVec repl;
+      for (uint32_t i = 0; i < numExtraInputs; ++i) repl.push_back(bc::PopC {});
+      for (uint32_t i = 0; i < fca.numArgs; ++i) repl.push_back(bc::PopC {});
+      repl.push_back(bc::PopU {});
+      repl.push_back(bc::PopU {});
+      if (topT(env, fca.numArgs + 2 + numExtraInputs).subtypeOf(TInitCell)) {
+        repl.push_back(bc::PopC {});
+      } else {
+        assertx(topT(env, fca.numArgs + 2 + numExtraInputs).subtypeOf(TUninit));
+        repl.push_back(bc::PopU {});
+      }
+      repl.push_back(gen_constant(*v));
+      if (legacyAR) fpiPop(env);
+      reduce(env, std::move(repl));
+      return true;
+    }
   }
 
-  auto const rfun = env.index.resolve_method(env.ctx, cls, op.str3);
-  if (fpiPush(env, ActRec {
-                FPIKind::ClsMeth,
-                ctxCls(env),
-                rcls,
-                rfun
-              }, op.arg1, false)) {
-    return reduce(env, bc::Nop {});
-  }
-}
-
-void newObjHelper(ISS& env, SString name) {
-  auto const rcls = env.index.resolve_class(env.ctx, name);
-  if (!rcls) {
-    push(env, TObj);
-    return;
+  if (legacyAR) {
+    assertx(legacyAR->foldable);
+    assertx(numExtraInputs == 0);
+    fpiNotFoldable(env);
+    fpiPop(env);
+    discard(env, fca.numArgsInclUnpack());
+    for (auto i = uint32_t{0}; i < fca.numRets; ++i) push(env, TBottom);
+    return true;
   }
 
-  auto const isCtx = !rcls->couldBeOverriden() && env.ctx.cls &&
-    rcls->same(env.index.resolve_class(env.ctx.cls));
-  push(env, setctx(objExact(*rcls), isCtx));
-}
-
-void in(ISS& env, const bc::NewObjD& op) {
-  newObjHelper(env, op.str1);
-}
-
-void in(ISS& env, const bc::NewObjI& op) {
-  newObjHelper(env, env.ctx.unit->classes[op.arg1]->name);
-}
-
-void in(ISS& env, const bc::NewObjS& op) {
-  auto const cls = specialClsRefToCls(env, op.subop1);
-  if (!is_specialized_cls(cls)) {
-    push(env, TObj);
-    return;
+  if (tried_lookup) {
+    env.collect.unfoldableFuncs.emplace(foldableFunc, env.bid);
   }
-
-  auto const dcls = dcls_of(cls);
-  auto const exact = dcls.type == DCls::Exact;
-  if (exact && !dcls.cls.couldHaveReifiedGenerics() &&
-      (!dcls.cls.couldBeOverriden() || equivalently_refined(cls, unctx(cls)))) {
-    return reduce(env, bc::NewObjD { dcls.cls.name() });
-  }
-
-  push(env, toobj(cls));
-}
-
-void in(ISS& env, const bc::NewObj& op) {
-  auto const cls = peekClsRefSlot(env, op.slot);
-  if (!is_specialized_cls(cls) || op.subop2 == HasGenericsOp::MaybeGenerics) {
-    takeClsRefSlot(env, op.slot);
-    push(env, TObj);
-    return;
-  }
-
-  auto const dcls = dcls_of(cls);
-  auto const exact = dcls.type == DCls::Exact;
-  if (exact && !dcls.cls.mightCareAboutDynConstructs() &&
-      !dcls.cls.couldHaveReifiedGenerics()) {
-    return reduce(
-      env,
-      bc::DiscardClsRef { op.slot },
-      bc::NewObjD { dcls.cls.name(), }
-    );
-  }
-
-  takeClsRefSlot(env, op.slot);
-  push(env, toobj(cls));
-}
-
-void in(ISS& env, const bc::FPushCtor& op) {
-  auto const obj = popC(env);
-  if (!is_specialized_obj(obj)) {
-    return fpiPushNoFold(env, ActRec { FPIKind::Ctor, TObj });
-  }
-
-  auto const dobj = dobj_of(obj);
-  auto const exact = dobj.type == DObj::Exact;
-  auto const rfunc = env.index.resolve_ctor(env.ctx, dobj.cls, exact);
-  if (!rfunc || !rfunc->exactFunc()) {
-    return fpiPushNoFold(env, ActRec { FPIKind::Ctor, obj });
-  }
-  fpiPushNoFold(env, ActRec { FPIKind::Ctor, obj, dobj.cls, rfunc });
+  return false;
 }
 
 Type typeFromWH(Type t) {
@@ -3378,71 +3895,31 @@ void pushCallReturnType(ISS& env, Type&& ty, const FCallArgs& fca) {
 const StaticString s_defined { "defined" };
 const StaticString s_function_exists { "function_exists" };
 
-folly::Optional<FCallArgs> fcallKnownImpl(ISS& env, const FCallArgs& fca) {
-  auto const ar = fpiTop(env);
-  always_assert(ar.func.hasValue());
-
-  if (options.ConstantFoldBuiltins && ar.foldable) {
-    if (!fca.hasUnpack() && fca.numRets == 1) {
-      auto ty = [&] () {
-        auto const func = ar.func->exactFunc();
-        assertx(func);
-        if (func->attrs & AttrBuiltin && func->attrs & AttrIsFoldable) {
-          auto ret = const_fold(env, fca.numArgs, *ar.func);
-          return ret ? *ret : TBottom;
-        }
-        CompactVector<Type> args(fca.numArgs);
-        for (auto i = uint32_t{0}; i < fca.numArgs; ++i) {
-          auto const& arg = topT(env, i);
-          auto const argNum = fca.numArgs - i - 1;
-          auto const isScalar = is_scalar(arg);
-          if (!isScalar &&
-              (env.index.func_depends_on_arg(func, argNum) ||
-               !arg.subtypeOf(BInitCell))) {
-            return TBottom;
-          }
-          args[argNum] = isScalar ? scalarize(arg) : arg;
-        }
-
-        return env.index.lookup_foldable_return_type(
-          env.ctx, func, ar.context, std::move(args));
-      }();
-      if (auto v = tv(ty)) {
-        BytecodeVec repl { fca.numArgs, bc::PopC {} };
-        repl.push_back(gen_constant(*v));
-        fpiPop(env);
-        reduce(env, std::move(repl));
-        return folly::none;
-      }
-    }
-    fpiNotFoldable(env);
-    fpiPop(env);
-    discard(env, fca.numArgs + (fca.hasUnpack() ? 1 : 0));
-    for (auto i = uint32_t{0}; i < fca.numRets; ++i) push(env, TBottom);
-    return folly::none;
-  }
-
+template<class FCallWithFCA>
+void fcallKnownImpl(
+  ISS& env,
+  const FCallArgs& fca,
+  const res::Func& func,
+  Type context,
+  bool nullsafe,
+  uint32_t numExtraInputs,
+  FCallWithFCA fcallWithFCA,
+  bool legacy = false
+) {
   auto returnType = [&] {
     CompactVector<Type> args(fca.numArgs);
-    auto const firstArgPos = fca.numArgs + (fca.hasUnpack() ? 1 : 0) - 1;
+    auto const firstArgPos = fca.numArgsInclUnpack() - 1;
     for (auto i = uint32_t{0}; i < fca.numArgs; ++i) {
       args[i] = topCV(env, firstArgPos - i);
     }
 
     auto ty = fca.hasUnpack()
-      ? env.index.lookup_return_type(env.ctx, *ar.func)
-      : env.index.lookup_return_type(env.ctx, args, ar.context, *ar.func);
-    if (ar.kind == FPIKind::ObjMethNS) {
+      ? env.index.lookup_return_type(env.ctx, func)
+      : env.index.lookup_return_type(env.ctx, args, context, func);
+    if (nullsafe) {
       ty = union_of(std::move(ty), TInitNull);
     }
-    if (!ar.fallbackFunc) {
-      return ty;
-    }
-    auto ty2 = fca.hasUnpack()
-      ? env.index.lookup_return_type(env.ctx, *ar.fallbackFunc)
-      : env.index.lookup_return_type(env.ctx, args, ar.context,
-                                     *ar.fallbackFunc);
-    return union_of(std::move(ty), std::move(ty2));
+    return ty;
   }();
 
   if (fca.asyncEagerTarget != NoBlockId && typeFromWH(returnType) == TBottom) {
@@ -3451,20 +3928,18 @@ folly::Optional<FCallArgs> fcallKnownImpl(ISS& env, const FCallArgs& fca) {
     newFCA.asyncEagerTarget = NoBlockId;
     newFCA.flags = static_cast<FCallArgs::Flags>(
       newFCA.flags & ~FCallArgs::SupportsAsyncEagerReturn);
-    return newFCA;
+    reduce(env, fcallWithFCA(std::move(newFCA)));
+    return;
   }
 
-  fpiPop(env);
-  specialFunctionEffects(env, ar);
-
-  if (!fca.hasUnpack() && ar.func->name()->isame(s_function_exists.get())) {
+  if (!fca.hasUnpack() && func.name()->isame(s_function_exists.get())) {
     handle_function_exists(env, fca.numArgs, false);
   }
 
   if (options.HardConstProp &&
       fca.numArgs == 1 &&
       !fca.hasUnpack() &&
-      ar.func->name()->isame(s_defined.get())) {
+      func.name()->isame(s_defined.get())) {
     // If someone calls defined('foo') they probably want foo to be
     // defined normally; ie not a persistent constant.
     if (auto const v = tv(topCV(env))) {
@@ -3475,79 +3950,680 @@ folly::Optional<FCallArgs> fcallKnownImpl(ISS& env, const FCallArgs& fca) {
     }
   }
 
+  for (auto i = uint32_t{0}; i < numExtraInputs; ++i) popC(env);
   if (fca.hasUnpack()) popC(env);
   for (auto i = uint32_t{0}; i < fca.numArgs; ++i) popCV(env);
+  if (legacy) {
+    fpiPop(env);
+  } else {
+    popU(env);
+    popU(env);
+    popCU(env);
+  }
   pushCallReturnType(env, std::move(returnType), fca);
-  return folly::none;
+}
+
+void fcallUnknownImpl(ISS& env, const FCallArgs& fca, bool legacy = false) {
+  if (fca.hasUnpack()) popC(env);
+  for (auto i = uint32_t{0}; i < fca.numArgs; ++i) popCV(env);
+  if (legacy) {
+    fpiPop(env);
+  } else {
+    popU(env);
+    popU(env);
+    popCU(env);
+  }
+  if (fca.asyncEagerTarget != NoBlockId) {
+    assertx(fca.numRets == 1);
+    push(env, TInitCell);
+    env.propagate(fca.asyncEagerTarget, &env.state);
+    popC(env);
+  }
+  for (auto i = uint32_t{0}; i < fca.numRets - 1; ++i) popU(env);
+  for (auto i = uint32_t{0}; i < fca.numRets; ++i) push(env, TInitCell);
+}
+
+namespace {
+
+void fPushFuncDImpl(ISS& env, const res::Func& rfunc, int32_t nArgs,
+                    bool has_unpack, bool extra_arg) {
+  if (!any(env.collect.opts & CollectionOpts::Speculating)) {
+    if (auto const func = rfunc.exactFunc()) {
+      if (will_reduce(env) && can_emit_builtin(func, nArgs, has_unpack)) {
+        fpiPushNoFold(
+          env,
+          ActRec { FPIKind::Builtin, TBottom, folly::none, rfunc }
+        );
+        if (extra_arg) return reduce(env, bc::PopC {});
+        return reduce(env);
+      }
+    }
+  }
+  if (fpiPush(env, ActRec { FPIKind::Func, TBottom, folly::none, rfunc },
+              nArgs, false)) {
+    if (extra_arg) return reduce(env, bc::PopC {});
+    return reduce(env);
+  }
+  if (extra_arg) popC(env);
+  discardAR(env, nArgs);
+}
+
+} // namespace
+
+void in(ISS& env, const bc::FPushFuncD& op) {
+  auto const rfunc = env.index.resolve_func(env.ctx, op.str2);
+  fPushFuncDImpl(env, rfunc, op.arg1, op.has_unpack, false);
+}
+
+void in(ISS& env, const bc::FPushFuncRD& op) {
+  auto const tsList = topC(env);
+  if (!tsList.couldBe(RuntimeOption::EvalHackArrDVArrs ? BVec : BVArr)) {
+    return unreachable(env);
+  }
+  auto const rfunc = env.index.resolve_func(env.ctx, op.str2);
+  if (!rfunc.couldHaveReifiedGenerics()) {
+    return reduce(
+      env,
+      bc::PopC {},
+      bc::FPushFuncD { op.arg1, op.str2, op.has_unpack }
+    );
+  }
+  fPushFuncDImpl(env, rfunc, op.arg1, op.has_unpack, true);
+}
+
+void in(ISS& env, const bc::FPushFunc& op) {
+  auto const t1 = topC(env);
+  folly::Optional<res::Func> rfunc;
+  // FPushFuncD requires that the names of inout functions be
+  // mangled, so skip those for now.
+  auto const name = getNameFromType(t1);
+  if (name && op.argv.size() == 0) {
+    auto const nname = normalizeNS(name);
+    // FPushFuncD doesn't support class-method pair strings yet.
+    if (isNSNormalized(nname) && notClassMethodPair(nname)) {
+      rfunc = env.index.resolve_func(env.ctx, nname);
+      // If the function might distinguish being called dynamically from not,
+      // don't turn a dynamic call into a static one.
+      if (rfunc && !rfunc->mightCareAboutDynCalls() &&
+          !rfunc->couldHaveReifiedGenerics()) {
+        return reduce(env, bc::PopC {},
+                      bc::FPushFuncD { op.arg1, nname, op.has_unpack });
+      }
+    }
+  }
+  popC(env);
+  discardAR(env, op.arg1);
+  if (t1.subtypeOf(BObj)) {
+    fpiPushNoFold(env, ActRec { FPIKind::ObjInvoke, t1 });
+  } else if (t1.subtypeOf(BArr)) {
+    fpiPushNoFold(env, ActRec { FPIKind::CallableArr, TTop });
+  } else if (t1.subtypeOf(BStr)) {
+    fpiPushNoFold(env, ActRec { FPIKind::Func, TTop, folly::none, rfunc });
+  } else {
+    fpiPushNoFold(env, ActRec { FPIKind::Unknown, TTop });
+  }
+}
+
+void in(ISS& env, const bc::ResolveFunc& op) {
+  // TODO (T29639296)
+  push(env, TFunc);
+}
+
+void in(ISS& env, const bc::ResolveObjMethod& op) {
+  // TODO (T29639296)
+  popC(env);
+  popC(env);
+  if (RuntimeOption::EvalHackArrDVArrs) {
+    push(env, TVec);
+  } else {
+    push(env, TVArr);
+  }
+}
+
+void in(ISS& env, const bc::ResolveClsMethod& op) {
+  popC(env);
+  popC(env);
+  push(env, TClsMeth);
+}
+
+namespace {
+
+void fcallObjMethodNullsafe(ISS& env, const FCallArgs& fca, bool extraInput) {
+  BytecodeVec repl;
+  if (extraInput) repl.push_back(bc::PopC {});
+  if (fca.hasUnpack()) repl.push_back(bc::PopC {});
+  for (uint32_t i = 0; i < fca.numArgs; ++i) {
+    if (topC(env, repl.size()).subtypeOf(BRef)) {
+      repl.push_back(bc::PopV {});
+    } else {
+      assertx(topC(env, repl.size()).subtypeOf(BInitCell));
+      repl.push_back(bc::PopC {});
+    }
+  }
+  repl.push_back(bc::PopU {});
+  repl.push_back(bc::PopU {});
+  repl.push_back(bc::PopC {});
+  for (uint32_t i = 0; i < fca.numRets - 1; ++i) {
+    repl.push_back(bc::PopU {});
+  }
+  repl.push_back(bc::Null {});
+
+  reduce(env, std::move(repl));
+}
+
+template <typename Op, class UpdateBC>
+void fcallObjMethodImpl(ISS& env, const Op& op, SString methName, bool dynamic,
+                        bool extraInput, UpdateBC updateBC) {
+  auto const nullThrows = op.subop3 == ObjMethodOp::NullThrows;
+  auto const inputPos = op.fca.numArgsInclUnpack() + (extraInput ? 3 : 2);
+  auto const input = topC(env, inputPos);
+  auto const location = topStkEquiv(env, inputPos);
+  auto const mayCallMethod = input.couldBe(BObj);
+  auto const mayUseNullsafe = !nullThrows && input.couldBe(BNull);
+  auto const mayThrowNonObj = !input.subtypeOf(nullThrows ? BObj : BOptObj);
+
+  auto const refineLoc = [&] {
+    if (location == NoLocalId) return;
+    if (!refineLocation(env, location, [&] (Type t) {
+      if (nullThrows) return intersection_of(t, TObj);
+      if (!t.couldBe(BUninit)) return intersection_of(t, TOptObj);
+      if (!t.couldBe(BObj)) return intersection_of(t, TNull);
+      return t;
+    })) {
+      unreachable(env);
+    }
+  };
+
+  auto const unknown = [&] {
+    if (extraInput) popC(env);
+    fcallUnknownImpl(env, op.fca);
+    refineLoc();
+  };
+
+  if (!mayCallMethod && !mayUseNullsafe) {
+    // This FCallObjMethodD may only throw, make sure it's not optimized away.
+    unknown();
+    unreachable(env);
+    return;
+  }
+
+  if (!mayCallMethod && !mayThrowNonObj) {
+    // Null input, this may only return null, so do that.
+    return fcallObjMethodNullsafe(env, op.fca, extraInput);
+  }
+
+  if (!mayCallMethod) {
+    // May only return null, but can't fold as we may still throw.
+    assertx(mayUseNullsafe && mayThrowNonObj);
+    return unknown();
+  }
+
+  auto const ctxTy = intersection_of(input, TObj);
+  auto const clsTy = objcls(ctxTy);
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, methName);
+
+  auto const canFold = !mayUseNullsafe && !mayThrowNonObj;
+  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC) ||
+      (canFold && fcallTryFold(env, op.fca, rfunc, ctxTy, dynamic,
+                               extraInput ? 1 : 0))) {
+    return;
+  }
+
+  if (rfunc.exactFunc() && rfunc.cantBeMagicCall() && op.str2->empty()) {
+    return reduce(env, updateBC(op.fca, rfunc.exactFunc()->cls->name));
+  }
+
+  fcallKnownImpl(env, op.fca, rfunc, ctxTy, mayUseNullsafe, extraInput ? 1 : 0,
+                 updateBC);
+  refineLoc();
+}
+
+} // namespace
+
+void in(ISS& env, const bc::FCallObjMethodD& op) {
+  auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
+    if (!clsHint) clsHint = op.str2;
+    return bc::FCallObjMethodD { std::move(fca), clsHint, op.subop3, op.str4 };
+  };
+  fcallObjMethodImpl(env, op, op.str4, false, false, updateBC);
+}
+
+void in(ISS& env, const bc::FCallObjMethodRD& op) {
+  auto const tsList = topC(env);
+  if (!tsList.couldBe(RuntimeOption::EvalHackArrDVArrs ? BVec : BVArr)) {
+    return unreachable(env);
+  }
+
+  auto const input = topC(env, op.fca.numArgsInclUnpack() + 3);
+  auto const clsTy = objcls(intersection_of(input, TObj));
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, op.str4);
+  if (!rfunc.couldHaveReifiedGenerics()) {
+    return reduce(
+      env,
+      bc::PopC {},
+      bc::FCallObjMethodD { op.fca, op.str2, op.subop3, op.str4 }
+    );
+  }
+
+  auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
+    if (!clsHint) clsHint = op.str2;
+    return bc::FCallObjMethodRD { std::move(fca), clsHint, op.subop3, op.str4 };
+  };
+  fcallObjMethodImpl(env, op, op.str4, false, true, updateBC);
+}
+
+void in(ISS& env, const bc::FCallObjMethod& op) {
+  auto const methName = getNameFromType(topC(env));
+  if (!methName || op.argv.size() != 0) {
+    popC(env);
+    fcallUnknownImpl(env, op.fca);
+    return;
+  }
+
+  auto const input = topC(env, op.fca.numArgsInclUnpack() + 3);
+  auto const clsTy = objcls(intersection_of(input, TObj));
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, methName);
+  if (!rfunc.mightCareAboutDynCalls()) {
+    return reduce(
+      env,
+      bc::PopC {},
+      bc::FCallObjMethodD { op.fca, op.str2, op.subop3, methName }
+    );
+  }
+
+  auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
+    if (!clsHint) clsHint = op.str2;
+    return bc::FCallObjMethod { std::move(fca), clsHint, op.subop3, op.argv };
+  };
+  fcallObjMethodImpl(env, op, methName, true, true, updateBC);
+}
+
+namespace {
+
+template <typename Op, class UpdateBC>
+void fcallClsMethodImpl(ISS& env, const Op& op, Type clsTy, SString methName,
+                        bool dynamic, uint32_t numExtraInputs, bool foldable,
+                        UpdateBC updateBC) {
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, methName);
+
+  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC) ||
+      (foldable && fcallTryFold(env, op.fca, rfunc, clsTy, dynamic,
+                                numExtraInputs))) {
+    return;
+  }
+
+  if (rfunc.exactFunc() && op.str2->empty()) {
+    return reduce(env, updateBC(op.fca, rfunc.exactFunc()->cls->name));
+  }
+
+  fcallKnownImpl(env, op.fca, rfunc, clsTy, false /* nullsafe */,
+                 numExtraInputs, updateBC);
+}
+
+} // namespace
+
+void in(ISS& env, const bc::FCallClsMethodD& op) {
+  auto const rcls = env.index.resolve_class(env.ctx, op.str3);
+  auto const clsTy = rcls ? clsExact(*rcls) : TCls;
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, op.str4);
+  if (auto const func = rfunc.exactFunc()) {
+    assertx(func->cls != nullptr);
+    if (will_reduce(env) &&
+        !any(env.collect.opts & CollectionOpts::Speculating) &&
+        func->cls->name->same(op.str3) &&
+        can_emit_builtin(func, op.fca.numArgsInclUnpack(), op.fca.hasUnpack())) {
+      // When we use FCallBuiltin to call a static method, the litstr method
+      // name will be a fully qualified cls::fn (e.g. "HH\Map::fromItems").
+      //
+      // As a result, we can only do this optimization if the name of the
+      // builtin function's class matches this op's class name immediate.
+      return finish_builtin(
+        env, func, op.fca.numArgs, op.fca.numRets - 1, op.fca.hasUnpack());
+    }
+  }
+
+  auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
+    if (!clsHint) clsHint = op.str2;
+    return bc::FCallClsMethodD { std::move(fca), clsHint, op.str3, op.str4 };
+  };
+  fcallClsMethodImpl(env, op, clsTy, op.str4, false, 0, true, updateBC);
+}
+
+void in(ISS& env, const bc::FCallClsMethodRD& op) {
+  auto const rcls = env.index.resolve_class(env.ctx, op.str3);
+  auto const clsTy = rcls ? clsExact(*rcls) : TCls;
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, op.str4);
+  if (!rfunc.couldHaveReifiedGenerics()) {
+    return reduce(
+      env,
+      bc::PopC {},
+      bc::FCallClsMethodD { op.fca, op.str2, op.str3, op.str4 }
+    );
+  }
+
+  // Builtins do not support reified generics.
+  assertx(!rfunc.exactFunc() || !rfunc.exactFunc()->nativeInfo);
+
+  auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
+    if (!clsHint) clsHint = op.str2;
+    return bc::FCallClsMethodRD { std::move(fca), clsHint, op.str3, op.str4 };
+  };
+  fcallClsMethodImpl(env, op, clsTy, op.str4, false, 1, false, updateBC);
+}
+
+void in(ISS& env, const bc::FCallClsMethod& op) {
+  auto const methName = getNameFromType(topC(env, 1));
+  if (!methName || op.argv.size() != 0) {
+    popC(env);
+    popC(env);
+    fcallUnknownImpl(env, op.fca);
+    return;
+  }
+
+  auto const clsTy = topC(env);
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, methName);
+  if (is_specialized_cls(clsTy) && dcls_of(clsTy).type == DCls::Exact &&
+      !rfunc.mightCareAboutDynCalls()) {
+    auto const clsName = dcls_of(clsTy).cls.name();
+    return reduce(
+      env,
+      bc::PopC {},
+      bc::PopC {},
+      bc::FCallClsMethodD { op.fca, op.str2, clsName, methName }
+    );
+  }
+
+  auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
+    if (!clsHint) clsHint = op.str2;
+    return bc::FCallClsMethod { std::move(fca), clsHint, op.argv };
+  };
+  fcallClsMethodImpl(env, op, clsTy, methName, true, 2, true, updateBC);
+}
+
+namespace {
+
+Type ctxCls(ISS& env) {
+  auto const s = selfCls(env);
+  return setctx(s ? *s : TCls);
+}
+
+Type specialClsRefToCls(ISS& env, SpecialClsRef ref) {
+  if (!env.ctx.cls) return TCls;
+  auto const op = [&]()-> folly::Optional<Type> {
+    switch (ref) {
+      case SpecialClsRef::Static: return ctxCls(env);
+      case SpecialClsRef::Self:   return selfClsExact(env);
+      case SpecialClsRef::Parent: return parentClsExact(env);
+    }
+    always_assert(false);
+  }();
+  return op ? *op : TCls;
+}
+
+template <typename Op, class UpdateBC>
+void fcallClsMethodSImpl(ISS& env, const Op& op, SString methName, bool dynamic,
+                         bool extraInput, bool isRFlavor, UpdateBC updateBC) {
+  auto const clsTy = specialClsRefToCls(env, op.subop3);
+  if (is_specialized_cls(clsTy) && dcls_of(clsTy).type == DCls::Exact &&
+      !dynamic && op.subop3 == SpecialClsRef::Static) {
+    auto const clsName = dcls_of(clsTy).cls.name();
+    if (isRFlavor) {
+      reduce(env, bc::FCallClsMethodRD { op.fca, op.str2, clsName, methName });
+    } else {
+      reduce(env, bc::FCallClsMethodD { op.fca, op.str2, clsName, methName });
+    }
+    return;
+  }
+
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, methName);
+
+  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC) ||
+      fcallTryFold(env, op.fca, rfunc, ctxCls(env), dynamic,
+                   extraInput ? 1 : 0)) {
+    return;
+  }
+
+  if (rfunc.exactFunc() && op.str2->empty()) {
+    return reduce(env, updateBC(op.fca, rfunc.exactFunc()->cls->name));
+  }
+
+  fcallKnownImpl(env, op.fca, rfunc, ctxCls(env), false /* nullsafe */,
+                 extraInput ? 1 : 0, updateBC);
+}
+
+} // namespace
+
+void in(ISS& env, const bc::FCallClsMethodSD& op) {
+  auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
+    if (!clsHint) clsHint = op.str2;
+    return bc::FCallClsMethodSD { std::move(fca), clsHint, op.subop3, op.str4 };
+  };
+  fcallClsMethodSImpl(env, op, op.str4, false, false, false, updateBC);
+}
+
+void in(ISS& env, const bc::FCallClsMethodSRD& op) {
+  auto const clsTy = specialClsRefToCls(env, op.subop3);
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, op.str4);
+  if (!rfunc.couldHaveReifiedGenerics()) {
+    return reduce(
+      env,
+      bc::PopC {},
+      bc::FCallClsMethodSD { op.fca, op.str2, op.subop3, op.str4  }
+    );
+  }
+
+  auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
+    if (!clsHint) clsHint = op.str2;
+    return bc::FCallClsMethodSRD { std::move(fca), clsHint, op.subop3, op.str4};
+  };
+  fcallClsMethodSImpl(env, op, op.str4, false, true, true, updateBC);
+}
+
+void in(ISS& env, const bc::FCallClsMethodS& op) {
+  auto const methName = getNameFromType(topC(env));
+  if (!methName || op.argv.size() != 0) {
+    popC(env);
+    fcallUnknownImpl(env, op.fca);
+    return;
+  }
+
+  auto const clsTy = specialClsRefToCls(env, op.subop3);
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, methName);
+  if (!rfunc.mightCareAboutDynCalls() && !rfunc.couldHaveReifiedGenerics()) {
+    return reduce(
+      env,
+      bc::PopC {},
+      bc::FCallClsMethodSD { op.fca, op.str2, op.subop3, methName }
+    );
+  }
+
+  auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
+    if (!clsHint) clsHint = op.str2;
+    return bc::FCallClsMethodS { std::move(fca), clsHint, op.subop3, op.argv };
+  };
+  fcallClsMethodSImpl(env, op, methName, true, true, false, updateBC);
+}
+
+namespace {
+
+void newObjDImpl(ISS& env, const StringData* className, bool rflavor) {
+  auto const rcls = env.index.resolve_class(env.ctx, className);
+  if (!rcls) {
+    if (rflavor) popC(env);
+    push(env, TObj);
+    return;
+  }
+  if (rflavor && !rcls->couldHaveReifiedGenerics()) {
+    return reduce(env, bc::PopC {}, bc::NewObjD { className });
+  }
+  auto const isCtx = !rcls->couldBeOverriden() && env.ctx.cls &&
+    rcls->same(env.index.resolve_class(env.ctx.cls));
+  if (rflavor) popC(env);
+  push(env, setctx(objExact(*rcls), isCtx));
+}
+
+} // namespace
+
+void in(ISS& env, const bc::NewObjD& op)  { newObjDImpl(env, op.str1, false); }
+void in(ISS& env, const bc::NewObjRD& op) { newObjDImpl(env, op.str1, true);  }
+
+void in(ISS& env, const bc::NewObjS& op) {
+  auto const cls = specialClsRefToCls(env, op.subop1);
+  if (!is_specialized_cls(cls)) {
+    push(env, TObj);
+    return;
+  }
+
+  auto const dcls = dcls_of(cls);
+  auto const exact = dcls.type == DCls::Exact;
+  if (exact && !dcls.cls.couldHaveReifiedGenerics() &&
+      (!dcls.cls.couldBeOverriden() || equivalently_refined(cls, unctx(cls)))) {
+    return reduce(env, bc::NewObjD { dcls.cls.name() });
+  }
+
+  push(env, toobj(cls));
+}
+
+void in(ISS& env, const bc::NewObj& op) {
+  auto const cls = topC(env);
+  if (!is_specialized_cls(cls)) {
+    popC(env);
+    push(env, TObj);
+    return;
+  }
+
+  auto const dcls = dcls_of(cls);
+  auto const exact = dcls.type == DCls::Exact;
+  if (exact && !dcls.cls.mightCareAboutDynConstructs()) {
+    return reduce(
+      env,
+      bc::PopC {},
+      bc::NewObjD { dcls.cls.name() }
+    );
+  }
+
+  popC(env);
+  push(env, toobj(cls));
+}
+
+void in(ISS& env, const bc::NewObjR& op) {
+  auto const generics = topC(env);
+  auto const cls = topC(env, 1);
+
+  if (generics.subtypeOf(BInitNull)) {
+    return reduce(
+      env,
+      bc::PopC {},
+      bc::NewObj {}
+    );
+  }
+
+  if (!is_specialized_cls(cls)) {
+    popC(env);
+    popC(env);
+    push(env, TObj);
+    return;
+  }
+
+  auto const dcls = dcls_of(cls);
+  auto const exact = dcls.type == DCls::Exact;
+  if (exact && !dcls.cls.couldHaveReifiedGenerics()) {
+    return reduce(
+      env,
+      bc::PopC {},
+      bc::NewObj {}
+    );
+  }
+
+  popC(env);
+  popC(env);
+  push(env, toobj(cls));
+}
+
+namespace {
+
+bool objMightHaveConstProps(const Type& t) {
+  assertx(t.subtypeOf(BObj));
+  assertx(is_specialized_obj(t));
+  auto const dobj = dobj_of(t);
+  switch (dobj.type) {
+    case DObj::Exact:
+      return dobj.cls.couldHaveConstProp();
+    case DObj::Sub:
+      return dobj.cls.derivedCouldHaveConstProp();
+  }
+  not_reached();
+}
+
+}
+
+void in(ISS& env, const bc::FCallCtor& op) {
+  auto const obj = topC(env, op.fca.numArgsInclUnpack() + 2);
+  assertx(op.fca.numRets == 1);
+
+  if (!is_specialized_obj(obj)) {
+    return fcallUnknownImpl(env, op.fca);
+  }
+
+  if (op.fca.lockWhileUnwinding && !objMightHaveConstProps(obj)) {
+    auto newFca = folly::copy(op.fca);
+    newFca.lockWhileUnwinding = false;
+    return reduce(env, bc::FCallCtor { std::move(newFca), op.str2 });
+  }
+
+  auto const dobj = dobj_of(obj);
+  auto const exact = dobj.type == DObj::Exact;
+  auto const rfunc = env.index.resolve_ctor(env.ctx, dobj.cls, exact);
+  if (!rfunc) {
+    return fcallUnknownImpl(env, op.fca);
+  }
+
+  auto const updateFCA = [&] (FCallArgs&& fca) {
+    return bc::FCallCtor { std::move(fca), op.str2 };
+  };
+
+  auto const canFold = obj.subtypeOf(BObj);
+  if (fcallOptimizeChecks(env, op.fca, *rfunc, updateFCA) ||
+      (canFold && fcallTryFold(env, op.fca, *rfunc,
+                               obj, false /* dynamic */, 0))) {
+    return;
+  }
+
+  if (rfunc->exactFunc() && op.str2->empty()) {
+    // We've found the exact func that will be called, set the hint.
+    return reduce(env, bc::FCallCtor { op.fca, rfunc->exactFunc()->cls->name });
+  }
+
+  fcallKnownImpl(env, op.fca, *rfunc, obj, false /* nullsafe */, 0,
+                 updateFCA);
+}
+
+void in(ISS& env, const bc::LockObj& op) {
+  auto const t = topC(env);
+  auto bail = [&]() {
+    discard(env, 1);
+    return push(env, t);
+  };
+  if (!t.subtypeOf(BObj)) return bail();
+  if (!is_specialized_obj(t) || objMightHaveConstProps(t)) {
+    nothrow(env);
+    return bail();
+  }
+  reduce(env);
 }
 
 void in(ISS& env, const bc::FCall& op) {
   auto const fca = op.fca;
   auto const ar = fpiTop(env);
-  if (ar.func && !ar.fallbackFunc) {
-    if (fca.enforceReffiness()) {
-      bool match = true;
-      for (auto i = 0; i < fca.numArgs; ++i) {
-        auto const kind = env.index.lookup_param_prep(env.ctx, *ar.func, i);
-        if (ar.foldable && kind != PrepKind::Val) {
-          fpiNotFoldable(env);
-          fpiPop(env);
-          discard(env, fca.numArgs + (fca.hasUnpack() ? 1 : 0));
-          for (auto j = uint32_t{0}; j < fca.numRets; ++j) push(env, TBottom);
-          return;
-        }
+  if (ar.func) {
+    auto const updateFCA = [&] (FCallArgs&& fca) {
+      return bc::FCall { std::move(fca), op.str2, op.str3 };
+    };
 
-        if (kind == PrepKind::Unknown) {
-          match = false;
-          break;
-        }
-
-        if (kind != (fca.byRef(i) ? PrepKind::Ref : PrepKind::Val)) {
-          // Reffiness mismatch
-          auto const exCls = makeStaticString("InvalidArgumentException");
-          auto const err = makeStaticString(formatParamRefMismatch(
-            ar.func->name()->data(), i, !fca.byRef(i)));
-
-          return reduce(
-            env,
-            bc::NewObjD { exCls },
-            bc::Dup {},
-            bc::FPushCtor { 1, false },
-            bc::String { err },
-            bc::FCall {
-              FCallArgs(1), staticEmptyString(), staticEmptyString() },
-            bc::PopC {},
-            bc::Throw {}
-          );
-        }
-      }
-
-      if (match) {
-        // Optimize away the runtime reffiness check.
-        return reduce(env, bc::FCall {
-          FCallArgs(fca.flags, fca.numArgs, fca.numRets, nullptr,
-                    fca.asyncEagerTarget),
-          op.str2, op.str3
-        });
-      }
-    }
-
-    // Infer whether the callee supports async eager return.
-    if (fca.asyncEagerTarget != NoBlockId &&
-        !fca.supportsAsyncEagerReturn()) {
-      auto const status = env.index.supports_async_eager_return(*ar.func);
-      if (status) {
-        auto newFCA = fca;
-        if (*status) {
-          // Callee supports async eager return.
-          newFCA.flags = static_cast<FCallArgs::Flags>(
-            newFCA.flags | FCallArgs::SupportsAsyncEagerReturn);
-        } else {
-          // Callee doesn't support async eager return.
-          newFCA.asyncEagerTarget = NoBlockId;
-        }
-        return reduce(env, bc::FCall { newFCA, op.str2, op.str3 });
-      }
+    if (fcallOptimizeChecks(env, fca, *ar.func, updateFCA, &ar) ||
+        fcallTryFold(env, fca, *ar.func, ar.context, false /* unused */, 0,
+                     &ar)) {
+      return;
     }
 
     switch (ar.kind) {
@@ -3562,117 +4638,81 @@ void in(ISS& env, const bc::FCall& op) {
         return reduce(env, bc::FCall {
           fca, staticEmptyString(), ar.func->name() });
       }
-      if (auto const newFCA = fcallKnownImpl(env, fca)) {
-        return reduce(env, bc::FCall { *newFCA, op.str2, op.str3 });
-      }
+      fcallKnownImpl(env, fca, *ar.func, ar.context, false /* nullsafe */, 0,
+                     updateFCA, true /* legacy */);
       return;
     case FPIKind::Builtin:
-      assertx(fca.numRets == 1);
-      return finish_builtin(
-        env, ar.func->exactFunc(), fca.numArgs, fca.hasUnpack());
-    case FPIKind::Ctor:
-      assertx(fca.numRets == 1);
-      /*
-       * Need to be wary of old-style ctors. We could get into the situation
-       * where we're constructing class D extends B, and B has an old-style
-       * ctor but D::B also exists.  (So in this case we'll skip the
-       * fcallKnownImpl stuff.)
-       */
-      if (!ar.func->name()->isame(s_construct.get())) {
-        break;
-      }
-      // fallthrough
-    case FPIKind::ObjMeth:
-    case FPIKind::ClsMeth:
-      assertx(op.str2->empty() == op.str3->empty());
-      if (ar.cls.hasValue() && ar.func->cantBeMagicCall() &&
-          (ar.cls->name() != op.str2 || ar.func->name() != op.str3)) {
-        // We've found a more precise type for the call, so update it
-        return reduce(env, bc::FCall {
-          fca, ar.cls->name(), ar.func->name() });
-      }
-      // fallthrough
-    case FPIKind::ObjMethNS:
-      // If we didn't return a reduce above, we still can compute a
-      // partially-known FCall effect with our res::Func.
-      if (auto const newFCA = fcallKnownImpl(env, fca)) {
-        return reduce(env, bc::FCall { *newFCA, op.str2, op.str3 });
-      }
+      finish_builtin(
+        env, ar.func->exactFunc(), fca.numArgs, fca.numRets - 1, fca.hasUnpack()
+      );
+      fpiPop(env);
       return;
     }
   }
 
-  if (fca.hasUnpack()) popC(env);
-  for (auto i = uint32_t{0}; i < fca.numArgs; ++i) popCV(env);
-  fpiPop(env);
-  specialFunctionEffects(env, ar);
-  if (fca.asyncEagerTarget != NoBlockId) {
-    assertx(fca.numRets == 1);
-    push(env, TInitCell);
-    env.propagate(fca.asyncEagerTarget, &env.state);
-    popC(env);
-  }
-  for (auto i = uint32_t{0}; i < fca.numRets - 1; ++i) popU(env);
-  for (auto i = uint32_t{0}; i < fca.numRets; ++i) push(env, TInitCell);
+  fcallUnknownImpl(env, fca, /* legacy */ true);
 }
 
 namespace {
 
 void iterInitImpl(ISS& env, IterId iter, LocalId valueLoc,
-                  BlockId target, const Type& base, LocalId baseLoc) {
-  assert(iterIsDead(env, iter));
-
+                  BlockId target, const Type& base, LocalId baseLoc,
+                  bool needsPop) {
   auto ity = iter_types(base);
-  if (!ity.mayThrowOnInit) nothrow(env);
 
-  auto const taken = [&]{
-    // Take the branch before setting locals if the iter is already
-    // empty, but after popping.  Similar for the other IterInits
-    // below.
-    freeIter(env, iter);
-    env.propagate(target, &env.state);
-  };
-
-  auto const fallthrough = [&]{
-    setIter(env, iter, LiveIter { ity, baseLoc, NoLocalId, env.blk.id });
+  auto const fallthrough = [&] {
+    setIter(env, iter, LiveIter { ity, baseLoc, NoLocalId, env.bid });
     // Do this after setting the iterator, in case it clobbers the base local
     // equivalency.
     setLoc(env, valueLoc, std::move(ity.value));
   };
 
+  assert(iterIsDead(env, iter));
+
+  if (!ity.mayThrowOnInit) {
+    if (ity.count == IterTypes::Count::Empty && will_reduce(env)) {
+      if (needsPop) {
+        reduce(env, bc::PopC{});
+      } else {
+        reduce(env);
+      }
+      return jmp_setdest(env, target);
+    }
+    nothrow(env);
+  }
+
+  if (needsPop) {
+    popC(env);
+  }
+
   switch (ity.count) {
     case IterTypes::Count::Empty:
-      freeIter(env, iter);
       mayReadLocal(env, valueLoc);
       jmp_setdest(env, target);
-      break;
+      return;
     case IterTypes::Count::Single:
     case IterTypes::Count::NonEmpty:
       fallthrough();
-      jmp_nevertaken(env);
-      break;
+      return jmp_nevertaken(env);
     case IterTypes::Count::ZeroOrOne:
     case IterTypes::Count::Any:
-      taken();
+      // Take the branch before setting locals if the iter is already
+      // empty, but after popping.  Similar for the other IterInits
+      // below.
+      env.propagate(target, &env.state);
       fallthrough();
-      break;
+      return;
   }
+  always_assert(false);
 }
 
 void iterInitKImpl(ISS& env, IterId iter, LocalId valueLoc, LocalId keyLoc,
-                   BlockId target, const Type& base, LocalId baseLoc) {
-  assert(iterIsDead(env, iter));
-
+                   BlockId target, const Type& base, LocalId baseLoc,
+                   bool needsPop) {
   auto ity = iter_types(base);
-  if (!ity.mayThrowOnInit) nothrow(env);
-
-  auto const taken = [&]{
-    freeIter(env, iter);
-    env.propagate(target, &env.state);
-  };
 
   auto const fallthrough = [&]{
-    setIter(env, iter, LiveIter { ity, baseLoc, NoLocalId, env.blk.id });
+    setIter(env, iter, LiveIter { ity, baseLoc, NoLocalId, env.bid });
     // Do this after setting the iterator, in case it clobbers the base local
     // equivalency.
     setLoc(env, valueLoc, std::move(ity.value));
@@ -3680,29 +4720,48 @@ void iterInitKImpl(ISS& env, IterId iter, LocalId valueLoc, LocalId keyLoc,
     if (!locCouldBeRef(env, keyLoc)) setIterKey(env, iter, keyLoc);
   };
 
+  assert(iterIsDead(env, iter));
+
+  if (!ity.mayThrowOnInit) {
+    if (ity.count == IterTypes::Count::Empty && will_reduce(env)) {
+      if (needsPop) {
+        reduce(env, bc::PopC{});
+      } else {
+        reduce(env);
+      }
+      return jmp_setdest(env, target);
+    }
+    nothrow(env);
+  }
+
+  if (needsPop) {
+    popC(env);
+  }
+
   switch (ity.count) {
     case IterTypes::Count::Empty:
-      freeIter(env, iter);
       mayReadLocal(env, valueLoc);
       mayReadLocal(env, keyLoc);
-      jmp_setdest(env, target);
-      break;
+      return jmp_setdest(env, target);
     case IterTypes::Count::Single:
     case IterTypes::Count::NonEmpty:
       fallthrough();
-      jmp_nevertaken(env);
-      break;
+      return jmp_nevertaken(env);
     case IterTypes::Count::ZeroOrOne:
     case IterTypes::Count::Any:
-      taken();
+      env.propagate(target, &env.state);
       fallthrough();
-      break;
+      return;
   }
+
+  always_assert(false);
 }
 
-void iterNextImpl(ISS& env, IterId iter, LocalId valueLoc, BlockId target) {
-  auto const curLoc = locRaw(env, valueLoc);
-
+void iterNextImpl(ISS& env,
+                  IterId iter, LocalId valueLoc, BlockId target,
+                  LocalId baseLoc) {
+  auto const curLoc = peekLocRaw(env, valueLoc);
+  auto noThrow = false;
   auto const noTaken = match<bool>(
     env.state.iters[iter],
     [&] (DeadIter)           {
@@ -3710,7 +4769,7 @@ void iterNextImpl(ISS& env, IterId iter, LocalId valueLoc, BlockId target) {
       return false;
     },
     [&] (const LiveIter& ti) {
-      if (!ti.types.mayThrowOnNext) nothrow(env);
+      if (!ti.types.mayThrowOnNext) noThrow = true;
       if (ti.baseLocal != NoLocalId) hasInvariantIterBase(env);
       switch (ti.types.count) {
         case IterTypes::Count::Single:
@@ -3726,6 +4785,19 @@ void iterNextImpl(ISS& env, IterId iter, LocalId valueLoc, BlockId target) {
       not_reached();
     }
   );
+
+  if (noTaken && noThrow && will_reduce(env)) {
+    if (baseLoc != NoLocalId) {
+      return reduce(env, bc::LIterFree { iter, baseLoc });
+    }
+    return reduce(env, bc::IterFree { iter });
+  }
+
+  mayReadLocal(env, valueLoc);
+  mayReadLocal(env, baseLoc);
+
+  if (noThrow) nothrow(env);
+
   if (noTaken) {
     jmp_nevertaken(env);
     freeIter(env, iter);
@@ -3739,10 +4811,10 @@ void iterNextImpl(ISS& env, IterId iter, LocalId valueLoc, BlockId target) {
 }
 
 void iterNextKImpl(ISS& env, IterId iter, LocalId valueLoc,
-                   LocalId keyLoc, BlockId target) {
-  auto const curValue = locRaw(env, valueLoc);
-  auto const curKey = locRaw(env, keyLoc);
-
+                   LocalId keyLoc, BlockId target, LocalId baseLoc) {
+  auto const curValue = peekLocRaw(env, valueLoc);
+  auto const curKey = peekLocRaw(env, keyLoc);
+  auto noThrow = false;
   auto const noTaken = match<bool>(
     env.state.iters[iter],
     [&] (DeadIter)           {
@@ -3750,7 +4822,7 @@ void iterNextKImpl(ISS& env, IterId iter, LocalId valueLoc,
       return false;
     },
     [&] (const LiveIter& ti) {
-      if (!ti.types.mayThrowOnNext) nothrow(env);
+      if (!ti.types.mayThrowOnNext) noThrow = true;
       if (ti.baseLocal != NoLocalId) hasInvariantIterBase(env);
       switch (ti.types.count) {
         case IterTypes::Count::Single:
@@ -3768,6 +4840,20 @@ void iterNextKImpl(ISS& env, IterId iter, LocalId valueLoc,
       not_reached();
     }
   );
+
+  if (noTaken && noThrow && will_reduce(env)) {
+    if (baseLoc != NoLocalId) {
+      return reduce(env, bc::LIterFree { iter, baseLoc });
+    }
+    return reduce(env, bc::IterFree { iter });
+  }
+
+  mayReadLocal(env, valueLoc);
+  mayReadLocal(env, keyLoc);
+  mayReadLocal(env, baseLoc);
+
+  if (noThrow) nothrow(env);
+
   if (noTaken) {
     jmp_nevertaken(env);
     freeIter(env, iter);
@@ -3784,9 +4870,16 @@ void iterNextKImpl(ISS& env, IterId iter, LocalId valueLoc,
 }
 
 void in(ISS& env, const bc::IterInit& op) {
-  auto const baseLoc = topStkLocal(env);
-  auto base = popC(env);
-  iterInitImpl(env, op.iter1, op.loc3, op.target2, std::move(base), baseLoc);
+  auto base = topC(env);
+  iterInitImpl(
+    env,
+    op.iter1,
+    op.loc3,
+    op.target2,
+    std::move(base),
+    topStkLocal(env),
+    true
+  );
 }
 
 void in(ISS& env, const bc::LIterInit& op) {
@@ -3796,13 +4889,13 @@ void in(ISS& env, const bc::LIterInit& op) {
     op.loc4,
     op.target3,
     locAsCell(env, op.loc2),
-    op.loc2
+    op.loc2,
+    false
   );
 }
 
 void in(ISS& env, const bc::IterInitK& op) {
-  auto const baseLoc = topStkLocal(env);
-  auto base = popC(env);
+  auto base = topC(env);
   iterInitKImpl(
     env,
     op.iter1,
@@ -3810,7 +4903,8 @@ void in(ISS& env, const bc::IterInitK& op) {
     op.loc4,
     op.target2,
     std::move(base),
-    baseLoc
+    topStkLocal(env),
+    true
   );
 }
 
@@ -3822,42 +4916,46 @@ void in(ISS& env, const bc::LIterInitK& op) {
     op.loc5,
     op.target3,
     locAsCell(env, op.loc2),
-    op.loc2
+    op.loc2,
+    false
   );
 }
 
 void in(ISS& env, const bc::IterNext& op) {
-  iterNextImpl(env, op.iter1, op.loc3, op.target2);
+  iterNextImpl(env, op.iter1, op.loc3, op.target2, NoLocalId);
 }
 
 void in(ISS& env, const bc::LIterNext& op) {
-  mayReadLocal(env, op.loc2);
-  iterNextImpl(env, op.iter1, op.loc4, op.target3);
+  iterNextImpl(env, op.iter1, op.loc4, op.target3, op.loc2);
 }
 
 void in(ISS& env, const bc::IterNextK& op) {
-  iterNextKImpl(env, op.iter1, op.loc3, op.loc4, op.target2);
+  iterNextKImpl(env, op.iter1, op.loc3, op.loc4, op.target2, NoLocalId);
 }
 
 void in(ISS& env, const bc::LIterNextK& op) {
-  mayReadLocal(env, op.loc2);
-  iterNextKImpl(env, op.iter1, op.loc4, op.loc5, op.target3);
+  iterNextKImpl(env, op.iter1, op.loc4, op.loc5, op.target3, op.loc2);
 }
 
 void in(ISS& env, const bc::IterFree& op) {
   // IterFree is used for weak iterators too, so we can't assert !iterIsDead.
-  nothrow(env);
-
-  match<void>(
+  auto const isNop = match<bool>(
     env.state.iters[op.iter1],
-    []  (DeadIter) {},
+    []  (DeadIter) {
+      return true;
+    },
     [&] (const LiveIter& ti) {
       if (ti.baseLocal != NoLocalId) hasInvariantIterBase(env);
+      return false;
     }
   );
 
+  if (isNop && will_reduce(env)) return reduce(env);
+
+  nothrow(env);
   freeIter(env, op.iter1);
 }
+
 void in(ISS& env, const bc::LIterFree& op) {
   nothrow(env);
   mayReadLocal(env, op.loc2);
@@ -3904,6 +5002,7 @@ void in(ISS& env, const bc::ReqDoc&)    { inclOpImpl(env); }
 void in(ISS& env, const bc::Eval&)      { inclOpImpl(env); }
 
 void in(ISS& /*env*/, const bc::DefCls&) {}
+void in(ISS& /*env*/, const bc::DefRecord&) {}
 void in(ISS& /*env*/, const bc::DefClsNop&) {}
 void in(ISS& env, const bc::AliasCls&) {
   popC(env);
@@ -3936,20 +5035,21 @@ void in(ISS& env, const bc::This&) {
   if (thisAvailable(env)) {
     return reduce(env, bc::BareThis { BareThisOp::NeverNull });
   }
-  auto const ty = thisType(env);
-  push(env, ty ? *ty : TObj, StackThisId);
+  auto const ty = thisTypeNonNull(env);
+  push(env, ty, StackThisId);
   setThisAvailable(env);
+  if (ty.subtypeOf(BBottom)) unreachable(env);
 }
 
 void in(ISS& env, const bc::LateBoundCls& op) {
   if (env.ctx.cls) effect_free(env);
   auto const ty = selfCls(env);
-  putClsRefSlot(env, op.slot, setctx(ty ? *ty : TCls));
+  push(env, setctx(ty ? *ty : TCls));
 }
 
 void in(ISS& env, const bc::CheckThis&) {
   if (thisAvailable(env)) {
-    return reduce(env, bc::Nop {});
+    return reduce(env);
   }
   setThisAvailable(env);
 }
@@ -3971,49 +5071,17 @@ void in(ISS& env, const bc::BareThis& op) {
     case BareThisOp::NeverNull:
       setThisAvailable(env);
       if (!env.state.unreachable) effect_free(env);
-      return push(env, ty ? *ty : TObj, StackThisId);
+      return push(env, ty, StackThisId);
   }
 
-  push(env, ty ? opt(*ty) : TOptObj, StackThisId);
+  push(env, ty, StackThisId);
 }
 
 void in(ISS& env, const bc::InitThisLoc& op) {
-  setLocRaw(env, op.loc1, TCell);
-  env.state.thisLoc = op.loc1;
-}
-
-void in(ISS& env, const bc::StaticLocDef& op) {
-  if (staticLocHelper(env, op.loc1, topC(env))) {
-    return reduce(env, bc::SetL { op.loc1 }, bc::PopC {});
+  if (!is_volatile_local(env.ctx.func, op.loc1)) {
+    setLocRaw(env, op.loc1, TCell);
+    env.state.thisLoc = op.loc1;
   }
-  popC(env);
-}
-
-void in(ISS& env, const bc::StaticLocCheck& op) {
-  auto const l = op.loc1;
-  if (!env.ctx.func->isMemoizeWrapper &&
-      !env.ctx.func->isClosureBody &&
-      env.collect.localStaticTypes.size() > l) {
-    auto t = env.collect.localStaticTypes[l];
-    if (auto v = tv(t)) {
-      useLocalStatic(env, l);
-      setLocRaw(env, l, t);
-      return reduce(env,
-                    gen_constant(*v),
-                    bc::SetL { op.loc1 }, bc::PopC {},
-                    bc::True {});
-    }
-  }
-  setLocRaw(env, l, TGen);
-  maybeBindLocalStatic(env, l);
-  push(env, TBool);
-}
-
-void in(ISS& env, const bc::StaticLocInit& op) {
-  if (staticLocHelper(env, op.loc1, topC(env))) {
-    return reduce(env, bc::SetL { op.loc1 }, bc::PopC {});
-  }
-  popC(env);
 }
 
 /*
@@ -4047,7 +5115,7 @@ void in(ISS& env, const bc::OODeclExists& op) {
         if (is_systemlib_part(*unit)) return true;
         if (!env.ctx.cls) return false;
         auto thisClass = env.index.resolve_class(env.ctx.cls);
-        return thisClass.subtypeOf(*rcls);
+        return thisClass.mustBeSubtypeOf(*rcls);
       };
       if (canConstProp()) {
         constprop(env);
@@ -4079,11 +5147,9 @@ bool couldBeMocked(const Type& t) {
 void in(ISS& env, const bc::VerifyParamType& op) {
   IgnoreUsedParams _{env};
 
-  if (env.ctx.func->isMemoizeImpl &&
-      !locCouldBeRef(env, op.loc1) &&
-      RuntimeOption::EvalHardTypeHints) {
+  if (env.ctx.func->isMemoizeImpl && !locCouldBeRef(env, op.loc1)) {
     // a MemoizeImpl's params have already been checked by the wrapper
-    return reduce(env, bc::Nop {});
+    return reduce(env);
   }
 
   // Generally we won't know anything about the params, but
@@ -4093,23 +5159,20 @@ void in(ISS& env, const bc::VerifyParamType& op) {
                                      locAsCell(env, op.loc1),
                                      constraint)) {
     if (!locAsCell(env, op.loc1).couldBe(BFunc | BCls)) {
-      return reduce(env, bc::Nop {});
+      return reduce(env);
     }
   }
 
-  if (!RuntimeOption::EvalHardTypeHints) return;
-
   /*
-   * In HardTypeHints mode, we assume that if this opcode doesn't
-   * throw, the parameter was of the specified type (although it may
-   * have been a Ref if the parameter was by reference).
+   * We assume that if this opcode doesn't throw, the parameter was of the
+   * specified type (although it may have been a Ref if the parameter was
+   * by reference).
    *
    * The env.setLoc here handles dealing with a parameter that was
    * already known to be a reference.
    *
-   * NB: VerifyParamType of a reference parameter can kill any
-   * references if it re-enters, even if Option::HardTypeHints is
-   * on.
+   * NB: VerifyParamType of a reference parameter can kill any references
+   * if it re-enters.
    */
   if (RuntimeOption::EvalThisTypeHintLevel != 3 && constraint.isThis()) {
     return;
@@ -4139,8 +5202,25 @@ void in(ISS& env, const bc::VerifyParamTypeTS& op) {
   // TODO(T31677864): We are being extremely pessimistic here, relax it
   if (!env.ctx.func->isReified &&
       (!env.ctx.cls || !env.ctx.cls->hasReifiedGenerics) &&
-      !env.index.could_have_reified_type(constraint)) {
+      !env.index.could_have_reified_type(env.ctx, constraint)) {
     return reduce(env, bc::PopC {}, bc::VerifyParamType { op.loc1 });
+  }
+
+  if (auto const inputTS = tv(a)) {
+    if (!isValidTSType(*inputTS, false)) {
+      unreachable(env);
+      popC(env);
+      return;
+    }
+    auto const resolvedTS =
+      resolveTSStatically(env, inputTS->m_data.parr, env.ctx.cls, true);
+    if (resolvedTS && resolvedTS != inputTS->m_data.parr) {
+      reduce(env, bc::PopC {});
+      RuntimeOption::EvalHackArrDVArrs ? reduce(env, bc::Dict { resolvedTS })
+                                       : reduce(env, bc::Array { resolvedTS });
+      reduce(env, bc::VerifyParamTypeTS { op.loc1 });
+      return;
+    }
   }
   popC(env);
 }
@@ -4149,18 +5229,22 @@ void verifyRetImpl(ISS& env, const TypeConstraint& constraint,
                    bool reduce_this, bool ts_flavor) {
   // If it is the ts flavor, then second thing on the stack, otherwise first
   auto stackT = topC(env, (int)ts_flavor);
+  auto const stackEquiv = topStkEquiv(env, (int)ts_flavor);
 
   // If there is no return type constraint, or if the return type
-  // constraint is a typevar, or if the top of stack is the same
-  // or a subtype of the type constraint, then this is a no-op.
+  // constraint is a typevar, or if the top of stack is the same or a
+  // subtype of the type constraint, then this is a no-op, unless
+  // reified types could be involved.
   if (env.index.satisfies_constraint(env.ctx, stackT, constraint)) {
     if (ts_flavor) {
-      // this is handled differently in ts flavor
+      // we wouldn't get here if reified types were definitely not
+      // involved, so just bail.
       popC(env);
+      popC(env);
+      push(env, std::move(stackT), stackEquiv);
       return;
     }
-    reduce(env, bc::Nop {});
-    return;
+    return reduce(env);
   }
 
   // For CheckReturnTypeHints >= 3 AND the constraint is not soft.
@@ -4184,23 +5268,30 @@ void verifyRetImpl(ISS& env, const TypeConstraint& constraint,
     tcT = is_opt(tcT) ? TOptObj : TObj;
   }
 
+  // In some circumstances, verifyRetType can modify the type. If it
+  // does that we can't reduce even when we know it succeeds.
+  auto dont_reduce = false;
   if (!constraint.isSoft()) {
     // VerifyRetType will convert a TFunc to a TStr implicitly
     // (and possibly warn)
     if (tcT.subtypeOf(TStr) && stackT.couldBe(BFunc | BCls)) {
-      topC(env, (int)ts_flavor) = stackT |= TStr;
+      stackT |= TStr;
+      dont_reduce = true;
     }
 
     // VerifyRetType will convert TClsMeth to TVec/TVArr/TArr implicitly
     if (stackT.couldBe(BClsMeth)) {
       if (tcT.couldBe(BVec)) {
-        topC(env, (int)ts_flavor) = stackT |= TVec;
+        stackT |= TVec;
+        dont_reduce = true;
       }
       if (tcT.couldBe(BVArr)) {
-        topC(env, (int)ts_flavor) = stackT |= TVArr;
+        stackT |= TVArr;
+        dont_reduce = true;
       }
       if (tcT.couldBe(TArr)) {
-        topC(env, (int)ts_flavor) = stackT |= TArr;
+        stackT |= TArr;
+        dont_reduce = true;
       }
     }
   }
@@ -4208,9 +5299,11 @@ void verifyRetImpl(ISS& env, const TypeConstraint& constraint,
   // If CheckReturnTypeHints < 3 OR if the constraint is soft,
   // then there are no optimizations we can safely do here, so
   // just leave the top of stack as is.
-  if (RuntimeOption::EvalCheckReturnTypeHints < 3 || constraint.isSoft()
-      || (RuntimeOption::EvalThisTypeHintLevel != 3 && constraint.isThis())) {
+  if (RuntimeOption::EvalCheckReturnTypeHints < 3 || constraint.isSoft() ||
+      (RuntimeOption::EvalThisTypeHintLevel != 3 && constraint.isThis())) {
     if (ts_flavor) popC(env);
+    popC(env);
+    push(env, std::move(stackT), stackEquiv);
     return;
   }
 
@@ -4218,16 +5311,16 @@ void verifyRetImpl(ISS& env, const TypeConstraint& constraint,
   // be this, we can replace the check with a non null check.  These cases are
   // likely from a BareThis that could return Null.  Since the runtime will
   // split these translations, it will rarely in practice return null.
-  if (constraint.isThis() && !constraint.isNullable() && is_opt(stackT) &&
+  if (reduce_this &&
+      !dont_reduce &&
+      constraint.isThis() &&
+      !constraint.isNullable() &&
+      is_opt(stackT) &&
       env.index.satisfies_constraint(env.ctx, unopt(stackT), constraint)) {
-    if (reduce_this) {
-      if (ts_flavor) {
-        reduce(env, bc::PopC {}, bc::VerifyRetNonNullC {});
-        return;
-      }
-      reduce(env, bc::VerifyRetNonNullC {});
-      return;
+    if (ts_flavor) {
+      return reduce(env, bc::PopC {}, bc::VerifyRetNonNullC {});
     }
+    return reduce(env, bc::VerifyRetNonNullC {});
   }
 
   auto retT = intersection_of(std::move(tcT), std::move(stackT));
@@ -4243,6 +5336,12 @@ void verifyRetImpl(ISS& env, const TypeConstraint& constraint,
 }
 
 void in(ISS& env, const bc::VerifyOutType& op) {
+  // We reuse VerifyOutType bytecode for log typehint violations on
+  // byref parameters. Do not perform any optimizations for byref parameters,
+  // as we do not enforce those.
+  if (env.ctx.func->params[op.arg1].byRef) {
+    return;
+  }
   verifyRetImpl(env, env.ctx.func->params[op.arg1].typeConstraint,
                 false, false);
 }
@@ -4263,8 +5362,24 @@ void in(ISS& env, const bc::VerifyRetTypeTS& /*op*/) {
   // TODO(T31677864): We are being extremely pessimistic here, relax it
   if (!env.ctx.func->isReified &&
       (!env.ctx.cls || !env.ctx.cls->hasReifiedGenerics) &&
-      !env.index.could_have_reified_type(constraint)) {
+      !env.index.could_have_reified_type(env.ctx, constraint)) {
     return reduce(env, bc::PopC {}, bc::VerifyRetTypeC {});
+  }
+  if (auto const inputTS = tv(a)) {
+    if (!isValidTSType(*inputTS, false)) {
+      unreachable(env);
+      popC(env);
+      return;
+    }
+    auto const resolvedTS =
+      resolveTSStatically(env, inputTS->m_data.parr, env.ctx.cls, true);
+    if (resolvedTS && resolvedTS != inputTS->m_data.parr) {
+      reduce(env, bc::PopC {});
+      RuntimeOption::EvalHackArrDVArrs ? reduce(env, bc::Dict { resolvedTS })
+                                       : reduce(env, bc::Array { resolvedTS });
+      reduce(env, bc::VerifyRetTypeTS {});
+      return;
+    }
   }
   verifyRetImpl(env, constraint, true, true);
 }
@@ -4279,7 +5394,7 @@ void in(ISS& env, const bc::VerifyRetNonNullC& /*op*/) {
   auto stackT = topC(env);
 
   if (!stackT.couldBe(BInitNull)) {
-    reduce(env, bc::Nop {});
+    reduce(env);
     return;
   }
 
@@ -4294,13 +5409,23 @@ void in(ISS& env, const bc::VerifyRetNonNullC& /*op*/) {
 }
 
 void in(ISS& env, const bc::Self& op) {
-  auto self = selfClsExact(env);
-  putClsRefSlot(env, op.slot, self ? *self : TCls);
+  auto const self = selfClsExact(env);
+  if (self) {
+    effect_free(env);
+    push(env, *self);
+  } else {
+    push(env, TCls);
+  }
 }
 
 void in(ISS& env, const bc::Parent& op) {
-  auto parent = parentClsExact(env);
-  putClsRefSlot(env, op.slot, parent ? *parent : TCls);
+  auto const parent = parentClsExact(env);
+  if (parent) {
+    effect_free(env);
+    push(env, *parent);
+  } else {
+    push(env, TCls);
+  }
 }
 
 void in(ISS& env, const bc::CreateCl& op) {
@@ -4317,7 +5442,7 @@ void in(ISS& env, const bc::CreateCl& op) {
   if (nargs) {
     CompactVector<Type> usedVars(nargs);
     for (auto i = uint32_t{0}; i < nargs; ++i) {
-      usedVars[nargs - i - 1] = unctx(popT(env));
+      usedVars[nargs - i - 1] = unctx(popCU(env));
     }
     merge_closure_use_vars_into(
       env.collect.closureUseTypes,
@@ -4361,8 +5486,9 @@ void in(ISS& env, const bc::ContEnterDelegate&) {
   popC(env);
 }
 
-void in(ISS& env, const bc::YieldFromDelegate&) {
+void in(ISS& env, const bc::YieldFromDelegate& op) {
   push(env, TInitCell);
+  env.propagate(op.target2, &env.state);
 }
 
 void in(ISS& /*env*/, const bc::ContUnsetDelegate&) {}
@@ -4549,7 +5675,7 @@ void in(ISS& env, const bc::InitProp& op) {
     case InitPropOp::Static:
       mergeSelfProp(env, op.str1, t);
       env.collect.publicSPropMutations.merge(
-        env.index, env.ctx, *env.ctx.cls, sval(op.str1), t
+        env.index, env.ctx, *env.ctx.cls, sval(op.str1), t, true
       );
       break;
     case InitPropOp::NonStatic:
@@ -4574,6 +5700,7 @@ void in(ISS& env, const bc::InitProp& op) {
       prop.attrs = (Attr)(prop.attrs & ~AttrDeepInit);
       if (!v) break;
       prop.val = *v;
+      env.index.update_static_prop_init_val(env.ctx.func->cls, op.str1);
       return reduce(env, bc::PopC {});
     }
   }
@@ -4600,15 +5727,16 @@ bool memoGetImpl(ISS& env, const Op& op, Rebind&& rebind) {
   always_assert(op.locrange.first + op.locrange.count
                 <= env.ctx.func->locals.size());
 
-  // If we can use an equivalent, earlier range, then use that instead.
-  auto const equiv = equivLocalRange(env, op.locrange);
-  if (equiv != op.locrange.first) {
-    reduce(env, rebind(LocalRange { equiv, op.locrange.count }));
-    return true;
+  if (will_reduce(env)) {
+    // If we can use an equivalent, earlier range, then use that instead.
+    auto const equiv = equivLocalRange(env, op.locrange);
+    if (equiv != op.locrange.first) {
+      reduce(env, rebind(LocalRange { equiv, op.locrange.count }));
+      return true;
+    }
   }
 
   auto retTy = memoizeImplRetType(env);
-  if (retTy.second) constprop(env);
 
   // MemoGet can raise if we give a non arr-key local, or if we're in a method
   // and $this isn't available.
@@ -4620,6 +5748,21 @@ bool memoGetImpl(ISS& env, const Op& op, Rebind&& rebind) {
       (!env.ctx.func->cls ||
        (env.ctx.func->attrs & AttrStatic) ||
        thisAvailable(env))) {
+    if (will_reduce(env)) {
+      if (retTy.first.subtypeOf(BBottom)) {
+        reduce(env);
+        jmp_setdest(env, op.target1);
+        return true;
+      }
+      // deal with constprop manually; otherwise we will propagate the
+      // taken edge and *then* replace the MemoGet with a constant.
+      if (retTy.second) {
+        if (auto v = tv(retTy.first)) {
+          reduce(env, gen_constant(*v));
+          return true;
+        }
+      }
+    }
     nothrow(env);
   }
 
@@ -4706,6 +5849,8 @@ void in(ISS& env, const bc::MemoSetEager& op) {
 
 }
 
+namespace {
+
 //////////////////////////////////////////////////////////////////////
 
 void dispatch(ISS& env, const Bytecode& op) {
@@ -4717,132 +5862,101 @@ void dispatch(ISS& env, const Bytecode& op) {
 
 //////////////////////////////////////////////////////////////////////
 
-template<class Iterator, class... Args>
-void group(ISS& env, Iterator& it, Args&&... args) {
-  FTRACE(2, " {}\n", [&]() -> std::string {
-    auto ret = std::string{};
-    for (auto i = size_t{0}; i < sizeof...(Args); ++i) {
-      ret += " " + show(env.ctx.func, it[i]);
-      if (i != sizeof...(Args) - 1) ret += ';';
-    }
-    return ret;
-  }());
-  it += sizeof...(Args);
-  return interp_step::group(env, std::forward<Args>(args)...);
-}
-
-template<class Iterator>
-void interpStep(ISS& env, Iterator& it, Iterator stop) {
-  /*
-   * During the analysis phase, we analyze some common bytecode
-   * patterns involving conditional jumps as groups to be able to
-   * add additional information to the type environment depending on
-   * whether the branch is taken or not.
-   */
-  auto const o1 = it->op;
-  auto const o2 = it + 1 != stop ? it[1].op : Op::Nop;
-  auto const o3 = it + 1 != stop &&
-                  it + 2 != stop ? it[2].op : Op::Nop;
-
-#define X(y)                                                             \
-  case Op::y:                                                            \
-    switch (o2) {                                                        \
-    case Op::Not:                                                        \
-      switch (o3) {                                                      \
-      case Op::JmpZ:                                                     \
-        return group(env, it, it[0].y, it[1].Not, it[2].JmpZ);           \
-      case Op::JmpNZ:                                                    \
-        return group(env, it, it[0].y, it[1].Not, it[2].JmpNZ);          \
-      default: break;                                                    \
-      }                                                                  \
-      break;                                                             \
-    case Op::JmpZ:                                                       \
-      return group(env, it, it[0].y, it[1].JmpZ);                        \
-    case Op::JmpNZ:                                                      \
-      return group(env, it, it[0].y, it[1].JmpNZ);                       \
-    default: break;                                                      \
-    }                                                                    \
-    break;
-
-  switch (o1) {
-  X(InstanceOfD)
-  X(IsTypeStructC)
-  X(IsTypeL)
-  X(IsTypeC)
-  X(StaticLocCheck)
-  X(Same)
-  X(NSame)
-  default: break;
-  }
-#undef X
-
-  FTRACE(2, "  {}\n", show(env.ctx.func, *it));
-  dispatch(env, *it++);
-}
-
-template<class Iterator>
-StepFlags interpOps(Interp& interp,
-                    Iterator& iter, Iterator stop,
-                    PropagateFn propagate) {
-  auto flags = StepFlags{};
-  ISS env { interp, flags, propagate };
+void interpStep(ISS& env, const Bytecode& bc) {
+  ITRACE(2, "  {} ({})\n",
+         show(env.ctx.func, bc),
+         env.unchangedBcs + env.replacedBcs.size());
+  Trace::Indent _;
 
   // If there are throw exit edges, make a copy of the state (except
   // stacks) in case we need to propagate across throw exits (if
   // it's a PEI).
-  auto const stateBefore = interp.blk->throwExits.empty()
-    ? State{}
-    : without_stacks(interp.state);
+  if (!env.stateBefore && env.blk.throwExit != NoBlockId) {
+    env.stateBefore.emplace(with_throwable_only(env.index, env.state));
+  }
 
-  auto const numPushed   = iter->numPush();
-  interpStep(env, iter, stop);
+  env.flags = {};
 
-  auto fix_const_outputs = [&] {
-    auto elems = &interp.state.stack.back();
-    constexpr auto numCells = 4;
-    Cell cells[numCells];
+  default_dispatch(env, bc);
+
+  if (env.flags.reduced) return;
+
+  auto const_prop = [&] {
+    if (!options.ConstantProp || !env.flags.canConstProp) return false;
+
+    auto const numPushed   = bc.numPush();
+    TinyVector<Cell> cells;
 
     auto i = size_t{0};
     while (i < numPushed) {
-      if (i < numCells) {
-        auto const v = tv(elems->type);
-        if (!v) return false;
-        cells[i] = *v;
-      } else if (!is_scalar(elems->type)) {
-        return false;
-      }
+      auto const v = tv(topT(env, i));
+      if (!v) return false;
+      cells.push_back(*v);
       ++i;
-      --elems;
     }
-    while (++elems, i--) {
-      elems->type = from_cell(i < numCells ?
-                              cells[i] : *tv(elems->type));
+
+    if (env.flags.wasPEI) {
+      ITRACE(2, "   nothrow (due to constprop)\n");
+      env.flags.wasPEI = false;
+    }
+    if (!env.flags.effectFree) {
+      ITRACE(2, "   effect_free (due to constprop)\n");
+      env.flags.effectFree = true;
+    }
+
+    rewind(env, bc);
+
+    auto const numPop = bc.numPop();
+    for (auto j = 0; j < numPop; j++) {
+      switch (bc.popFlavor(j)) {
+        case Flavor::CVU:
+          // Note that we only support C's for CVU so far (this only
+          // comes up with FCallBuiltin)---we'll fail the verifier if
+          // something changes to send V's or U's through here.
+          interpStep(env, bc::PopC {});
+          break;
+        case Flavor::CU:
+          // We only support C's for CU right now.
+          interpStep(env, bc::PopC {});
+          break;
+        case Flavor::C:
+          interpStep(env, bc::PopC {});
+          break;
+        case Flavor::V:
+          interpStep(env, bc::PopV {});
+          break;
+        case Flavor::U:  not_reached();
+        case Flavor::CV: not_reached();
+      }
+    }
+
+    while (i--) {
+      push(env, from_cell(cells[i]));
+      record(env, gen_constant(cells[i]));
     }
     return true;
   };
 
-  if (options.ConstantProp && flags.canConstProp && fix_const_outputs()) {
-    if (flags.wasPEI) {
-      FTRACE(2, "   nothrow (due to constprop)\n");
-      flags.wasPEI = false;
-    }
-    if (!flags.effectFree) {
-      FTRACE(2, "   effect_free (due to constprop)\n");
-      flags.effectFree = true;
-    }
+  if (const_prop()) {
+    return;
   }
 
-  assertx(!flags.effectFree || !flags.wasPEI);
-  if (flags.wasPEI) {
-    FTRACE(2, "   PEI.\n");
-    for (auto exit : interp.blk->throwExits) {
-      propagate(exit, &stateBefore);
+  assertx(!env.flags.effectFree || !env.flags.wasPEI);
+  if (env.flags.wasPEI) {
+    ITRACE(2, "   PEI.\n");
+    if (env.stateBefore) {
+      env.propagate(env.blk.throwExit, &*env.stateBefore);
     }
   }
-  return flags;
+  env.stateBefore.clear();
+
+  record(env, bc);
 }
 
-namespace {
+void interpOne(ISS& env, const Bytecode& bc) {
+  env.srcLoc = bc.srcLoc;
+  interpStep(env, bc);
+}
 
 BlockId speculate(Interp& interp) {
   auto low_water = interp.state.stack.size();
@@ -4852,82 +5966,132 @@ BlockId speculate(Interp& interp) {
     interp.collect.opts = interp.collect.opts - CollectionOpts::Speculating;
   };
 
-  FTRACE(4, "  Speculate B{}\n", interp.blk->id);
-  auto const stop = end(interp.blk->hhbcs);
-  auto iter       = begin(interp.blk->hhbcs);
-  while (iter != stop) {
-    auto const numPop = iter->numPop() +
-      (iter->op == Op::CGetL2 ? 1 :
-       iter->op == Op::Dup ? -1 : 0);
+  auto failed = false;
+  ISS env { interp, [&] (BlockId, const State*) { failed = true; } };
+
+  FTRACE(4, "  Speculate B{}\n", interp.bid);
+  for (auto const& bc : interp.blk->hhbcs) {
+    assertx(!interp.state.unreachable);
+    auto const numPop = bc.numPop() +
+      (bc.op == Op::CGetL2 ? 1 :
+       bc.op == Op::Dup ? -1 : 0);
     if (interp.state.stack.size() - numPop < low_water) {
       low_water = interp.state.stack.size() - numPop;
     }
 
-    auto const flags = interpOps(interp, iter, stop,
-                                 [] (BlockId, const State*) {});
+    interpOne(env, bc);
+    if (failed) {
+      env.collect.mInstrState.clear();
+      FTRACE(3, "  Bailing from speculate because propagate was called\n");
+      return NoBlockId;
+    }
+
+    auto const& flags = env.flags;
     if (!flags.effectFree) {
+      env.collect.mInstrState.clear();
       FTRACE(3, "  Bailing from speculate because not effect free\n");
       return NoBlockId;
     }
 
-    if (flags.usedLocalStatics) {
-      FTRACE(3, "  Bailing from speculate because local statics were used\n");
-      return NoBlockId;
-    }
-
     assertx(!flags.returned);
-    assertx(!interp.state.unreachable);
 
     if (flags.jmpDest != NoBlockId && interp.state.stack.size() == low_water) {
-      FTRACE(2, "  Speculate found destination block {}\n", flags.jmpDest);
+      FTRACE(2, "  Speculate found target block {}\n", flags.jmpDest);
       return flags.jmpDest;
     }
   }
 
-  return NoBlockId;
+  if (interp.state.stack.size() != low_water) {
+    FTRACE(3,
+           "  Bailing from speculate because the speculated block "
+           "left items on the stack\n");
+    return NoBlockId;
+  }
+
+  if (interp.blk->fallthrough == NoBlockId) {
+    FTRACE(3,
+           "  Bailing from speculate because there was no fallthrough");
+    return NoBlockId;
+  }
+
+  FTRACE(2, "  Speculate found fallthrough block {}\n",
+         interp.blk->fallthrough);
+
+  return interp.blk->fallthrough;
 }
 
-BlockId speculateHelper(Interp& interpIn, BlockId target, bool unconditional) {
-  if (target == NoBlockId || !options.RemoveDeadBlocks) return target;
+BlockId speculateHelper(ISS& env, BlockId orig, bool updateTaken) {
+  assertx(orig != NoBlockId);
 
-  int pops = 0;
-  auto const fallthrough = target == interpIn.blk->fallthrough;
+  if (!will_reduce(env)) return orig;
 
-  folly::Optional<State> state;
-  while (true) {
-    auto const func = interpIn.ctx.func;
-    auto const targetBlk = func->blocks[target].get();
-    if (!targetBlk->multiPred) return target;
-    switch (targetBlk->hhbcs.back().op) {
-      case Op::JmpZ:
-      case Op::JmpNZ:
-      case Op::SSwitch:
-      case Op::Switch:
-        break;
-      default:
-        return target;
+  auto const last = last_op(env);
+  bool endsInControlFlow = last && instrIsNonCallControlFlow(last->op);
+  auto target = orig;
+  auto pops = 0;
+
+  if (options.RemoveDeadBlocks) {
+    State temp{env.state, State::Compact{}};
+    while (true) {
+      auto const func = env.ctx.func;
+      auto const targetBlk = func->blocks[target].get();
+      if (!targetBlk->multiPred) break;
+      auto const ok = [&] {
+        switch (targetBlk->hhbcs.back().op) {
+          case Op::JmpZ:
+          case Op::JmpNZ:
+          case Op::SSwitch:
+          case Op::Switch:
+          return true;
+          default:
+          return false;
+        }
+      }();
+
+      if (!ok) break;
+
+      Interp interp {
+        env.index, env.ctx, env.collect, target, targetBlk, temp
+      };
+
+      auto const old_size = temp.stack.size();
+      auto const new_target = speculate(interp);
+      if (new_target == NoBlockId) break;
+
+      const ssize_t delta = old_size - temp.stack.size();
+      assertx(delta >= 0);
+      if (delta && endsInControlFlow) break;
+
+      pops += delta;
+      target = new_target;
+      temp.stack.compact();
     }
+  }
 
-    if (!state) state.emplace(interpIn.state);
-
-    Interp interp {
-      interpIn.index, interpIn.ctx, interpIn.collect, targetBlk, *state
-    };
-
-    auto const new_target = speculate(interp);
-    if (new_target == NoBlockId) return target;
-
-    pops += interpIn.state.stack.size() - state->stack.size();
-    if (pops > std::numeric_limits<decltype(
-          interpIn.state.speculatedPops)>::max()) {
-      return target;
+  if (endsInControlFlow && updateTaken) {
+    assertx(!pops);
+    auto needsUpdate = target != orig;
+    if (!needsUpdate) {
+      forEachTakenEdge(
+        *last,
+        [&] (BlockId bid) {
+          if (bid != orig) needsUpdate = true;
+        }
+      );
     }
-    target = new_target;
-    interpIn.state = *state;
-    interpIn.state.speculated = target;
-    interpIn.state.speculatedPops = pops;
-    interpIn.state.speculatedIsUnconditional = unconditional;
-    interpIn.state.speculatedIsFallThrough = fallthrough;
+    if (needsUpdate) {
+      auto& bc = mutate_last_op(env);
+      forEachTakenEdge(
+        bc,
+        [&] (BlockId& bid) {
+          bid = bid == orig ? target : NoBlockId;
+        }
+      );
+    }
+  }
+
+  while (pops--) {
+    interpStep(env, bc::PopC {});
   }
 
   return target;
@@ -4937,87 +6101,146 @@ BlockId speculateHelper(Interp& interpIn, BlockId target, bool unconditional) {
 
 //////////////////////////////////////////////////////////////////////
 
-RunFlags run(Interp& interp, PropagateFn propagate) {
+RunFlags run(Interp& interp, const State& in, PropagateFn propagate) {
   SCOPE_EXIT {
     FTRACE(2, "out {}{}\n",
            state_string(*interp.ctx.func, interp.state, interp.collect),
            property_state_string(interp.collect.props));
   };
 
-  interp.state.speculated = NoBlockId;
-  interp.state.speculatedPops = 0;
-  interp.state.speculatedIsFallThrough = false;
-  interp.state.speculatedIsUnconditional = false;
-
+  auto env = ISS { interp, propagate };
   auto ret = RunFlags {};
-  auto const stop = end(interp.blk->hhbcs);
-  auto iter       = begin(interp.blk->hhbcs);
-  while (iter != stop) {
-    auto const flags = interpOps(interp, iter, stop, propagate);
+  auto finish = [&] (BlockId fallthrough) {
+    ret.updateInfo.fallthrough = fallthrough;
+    ret.updateInfo.unchangedBcs = env.unchangedBcs;
+    ret.updateInfo.replacedBcs = std::move(env.replacedBcs);
+    return ret;
+  };
+
+  BytecodeVec retryBcs;
+  auto retryOffset = interp.blk->hhbcs.size();
+  auto size = retryOffset;
+  BlockId retryFallthrough = interp.blk->fallthrough;
+  size_t idx = 0;
+
+  while (true) {
+    if (idx == size) {
+      finish_tracked_elems(env, 0);
+      if (!env.reprocess) break;
+      FTRACE(2, "  Reprocess mutated block {}\n", interp.bid);
+      assertx(env.unchangedBcs < retryOffset || env.replacedBcs.size());
+      retryOffset = env.unchangedBcs;
+      retryBcs = std::move(env.replacedBcs);
+      env.unchangedBcs = 0;
+      env.state.copy_from(in);
+      env.reprocess = false;
+      env.replacedBcs.clear();
+      size = retryOffset + retryBcs.size();
+      idx = 0;
+      continue;
+    }
+
+    auto const& bc = idx < retryOffset ?
+      interp.blk->hhbcs[idx] : retryBcs[idx - retryOffset];
+    ++idx;
+
+    interpOne(env, bc);
+    auto const& flags = env.flags;
     if (interp.collect.effectFree && !flags.effectFree) {
       interp.collect.effectFree = false;
       if (any(interp.collect.opts & CollectionOpts::EffectFreeOnly)) {
+        env.collect.mInstrState.clear();
         FTRACE(2, "  Bailing because not effect free\n");
-        return ret;
+        return finish(NoBlockId);
       }
-    }
-
-    if (flags.usedLocalStatics) {
-      if (!ret.usedLocalStatics) {
-        ret.usedLocalStatics = std::move(flags.usedLocalStatics);
-      } else {
-        for (auto& elm : *flags.usedLocalStatics) {
-          ret.usedLocalStatics->insert(std::move(elm));
-        }
-      }
-    }
-
-    if (interp.state.unreachable) {
-      FTRACE(2, "  <bytecode fallthrough is unreachable>\n");
-      return ret;
-    }
-
-    if (flags.jmpDest != NoBlockId) {
-      if (flags.jmpDest != interp.blk->fallthrough) {
-        FTRACE(2, "  <took branch; no fallthrough>\n");
-      } else {
-        FTRACE(2, "  <branch never taken>\n");
-      }
-      propagate(speculateHelper(interp, flags.jmpDest, true), &interp.state);
-      return ret;
     }
 
     if (flags.returned) {
-      FTRACE(2, "  returned {}\n", show(*flags.returned));
-      always_assert(iter == stop);
+      always_assert(idx == size);
+      if (env.reprocess) continue;
+
       always_assert(interp.blk->fallthrough == NoBlockId);
-      if (!ret.returned) {
-        ret.retParam = flags.retParam;
-      } else if (ret.retParam != flags.retParam) {
-        ret.retParam = NoLocalId;
-      }
+      assertx(!ret.returned);
+      FTRACE(2, "  returned {}\n", show(*flags.returned));
+      ret.retParam = flags.retParam;
       ret.returned = flags.returned;
-      return ret;
+      return finish(NoBlockId);
+    }
+
+    if (flags.jmpDest != NoBlockId) {
+      always_assert(idx == size);
+      auto const hasFallthrough = [&] {
+        if (flags.jmpDest != interp.blk->fallthrough) {
+          FTRACE(2, "  <took branch; no fallthrough>\n");
+          auto const last = last_op(env);
+          return !last || !instrIsNonCallControlFlow(last->op);
+        } else {
+          FTRACE(2, "  <branch never taken>\n");
+          return true;
+        }
+      }();
+      if (hasFallthrough) retryFallthrough = flags.jmpDest;
+      if (env.reprocess) continue;
+      finish_tracked_elems(env, 0);
+      auto const newDest = speculateHelper(env, flags.jmpDest, true);
+      propagate(newDest, &interp.state);
+      return finish(hasFallthrough ? newDest : NoBlockId);
+    }
+
+    if (interp.state.unreachable) {
+      if (env.reprocess) {
+        idx = size;
+        continue;
+      }
+      FTRACE(2, "  <bytecode fallthrough is unreachable>\n");
+      finish_tracked_elems(env, 0);
+      return finish(NoBlockId);
     }
   }
 
   FTRACE(2, "  <end block>\n");
-  if (interp.blk->fallthrough != NoBlockId) {
-    propagate(speculateHelper(interp, interp.blk->fallthrough, false), &interp.state);
+  if (retryFallthrough != NoBlockId) {
+    retryFallthrough = speculateHelper(env, retryFallthrough, false);
+    propagate(retryFallthrough, &interp.state);
   }
-  return ret;
+  return finish(retryFallthrough);
 }
 
 StepFlags step(Interp& interp, const Bytecode& op) {
-  auto flags   = StepFlags{};
   auto noop    = [] (BlockId, const State*) {};
-  ISS env { interp, flags, noop };
+  ISS env { interp, noop };
+  env.analyzeDepth++;
   dispatch(env, op);
-  return flags;
+  if (env.state.unreachable) {
+    env.collect.mInstrState.clear();
+  }
+  assertx(env.trackedElems.empty());
+  return env.flags;
 }
 
 void default_dispatch(ISS& env, const Bytecode& op) {
+  if (!env.trackedElems.empty()) {
+    auto const pops = [&] () -> uint32_t {
+      switch (op.op) {
+        case Op::AddElemC:
+        case Op::AddNewElemC:
+          return numPop(op) - 1;
+        case Op::Concat:
+        case Op::ConcatN:
+          return 0;
+        default:
+          return numPop(op);
+      }
+    }();
+
+    finish_tracked_elems(env, env.state.stack.size() - pops);
+  }
   dispatch(env, op);
+  if (instrFlags(op.op) & TF && env.flags.jmpDest == NoBlockId) {
+    unreachable(env);
+  } else if (env.state.unreachable) {
+    env.collect.mInstrState.clear();
+  }
 }
 
 folly::Optional<Type> thisType(const Index& index, Context ctx) {

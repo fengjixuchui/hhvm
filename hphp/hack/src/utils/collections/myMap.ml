@@ -67,7 +67,8 @@ module Make(Ord: Map.OrderedType) : S with type key = Ord.t = struct
       | Some v1, Some v2 -> combine env key v1 v2 in
     merge_env env s1 s2 ~combine:f
 
-  let compare x y = compare Pervasives.compare x y
+  let compare ?(cmp=Pervasives.compare) x y =
+    compare cmp x y
   let equal x y = compare x y = 0
 
   let keys m = fold (fun k _ acc -> k :: acc) m []
@@ -101,6 +102,11 @@ module Make(Ord: Map.OrderedType) : S with type key = Ord.t = struct
     List.fold_left begin fun acc (key, value) ->
       add key value acc
     end empty elts
+
+  let of_function domain f =
+    List.fold_left begin fun acc key ->
+      add key (f key) acc
+    end empty domain
 
   let add ?combine key new_value map =
     match combine with

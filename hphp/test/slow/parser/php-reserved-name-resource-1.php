@@ -1,9 +1,9 @@
-<?php
+<?hh
 
-<<__EntryPoint>>
-function main_php_reserved_name_resource_1() {
-if (false) {
-  class Resource {}
-}
+
+
+
+class Resource {}
+<<__EntryPoint>> function main(): void {
 echo "Done\n";
 }

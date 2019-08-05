@@ -24,6 +24,7 @@
 #include "hphp/runtime/vm/srckey.h"
 
 #include "hphp/runtime/vm/jit/bc-marker.h"
+#include "hphp/runtime/vm/jit/inline-state.h"
 #include "hphp/runtime/vm/jit/ir-builder.h"
 #include "hphp/runtime/vm/jit/ir-opcode.h"
 #include "hphp/runtime/vm/jit/ir-unit.h"
@@ -158,24 +159,11 @@ void ringbufferMsg(IRGS&, Trace::RingBufferType, const StringData*,
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
- * For handling PUNT-based interpOnes.  When we PUNT, an exception is thrown
- * and the whole region is retried, with a bit set to interp the instruction
- * that failed.
- */
-void interpOne(IRGS&, const NormalizedInstruction&);
-
-///////////////////////////////////////////////////////////////////////////////
-
-/*
  * Before translating/processing each bytecode instruction, the driver
  * of the irgen module calls this function to move to the next
  * bytecode instruction (`newSk') to translate.
- *
- * The flag `lastBcInst' should be set if this is the last bytecode in
- * a region that's being translated.
  */
-void prepareForNextHHBC(IRGS&, const NormalizedInstruction*,
-                        SrcKey newSk, bool lastBcInst);
+void prepareForNextHHBC(IRGS&, const NormalizedInstruction*, SrcKey newSk);
 
 /*
  * After translating each bytecode instruction, the driver of the
@@ -206,7 +194,12 @@ void sealUnit(IRGS&);
 bool isInlining(const IRGS& env);
 
 /*
- * Attempt to begin inlining, and return whether or not we succeeded.
+ * Returns the current depth of inlining in `env`.
+ */
+uint16_t inlineDepth(const IRGS& env);
+
+/*
+ * Begin inlining. Always succeeds.
  *
  * When doing gen-time inlining, we set up a series of IR instructions that
  * looks like this:
@@ -229,12 +222,15 @@ bool isInlining(const IRGS& env);
  * In DCE we attempt to remove the InlineReturn and DefInlineFP instructions if
  * they aren't needed.
  */
-bool beginInlining(IRGS& env,
-                   unsigned numParams,
+void beginInlining(IRGS& env,
                    const Func* target,
+                   const FCallArgs& fca,
+                   SSATmp* ctx,
+                   Type ctxType,
+                   Op writeArOpc,
                    SrcKey startSk,
                    Offset callBcOffset,
-                   ReturnTarget returnTarget,
+                   InlineReturnTarget returnTarget,
                    int cost,
                    bool conjure);
 
@@ -253,15 +249,13 @@ bool endInlining(IRGS& env, const RegionDesc& calleeRegion);
  *
  * Simulating the inlining measures the cost of pushing a dummy frame (or not if
  * we are able to elide it) and any effects that may have on alias analysis.
- *
- * Returns false if the inlined region would be invalid for inlining
  */
-bool conjureBeginInlining(IRGS& env,
+void conjureBeginInlining(IRGS& env,
                           const Func* func,
                           SrcKey startSk,
                           Type thisType,
                           const std::vector<Type>& args,
-                          ReturnTarget returnTarget);
+                          InlineReturnTarget returnTarget);
 
 /*
  * Close an inlined function inserted using conjureBeginInlining; returns false
@@ -272,40 +266,6 @@ bool conjureBeginInlining(IRGS& env,
 bool conjureEndInlining(IRGS& env,
                         const RegionDesc& calleeRegion,
                         bool builtin);
-
-/*
- * We do two special-case optimizations to partially inline 'singleton'
- * accessor functions (functions that just return a static local or static
- * property if it's not null).
- *
- * This is exposed publically because the region translator drives inlining
- * decisions.
- */
-void inlSingletonSProp(IRGS&, const Func*, PC clsOp, PC propOp);
-void inlSingletonSLoc(IRGS&, const Func*, PC op);
-
-/*
- * In PGO mode, we use profiling to try to determine the most likely target
- * function at each call site.  profiledCalledFunc() returns the most likely
- * called function based on profiling, as long as it was seen at least
- * Eval.JitPGOCalledFuncThreshold percent of the times during profiling.  When a
- * callee satisfies this condition, profiledCalledFunc() returns such callee and
- * it also returns in checkInst a pointer to the runtime check that is inserted
- * in HHIR.  The following code sequence is emitted in the HHIR unit:
- *
- *   t1 = LdARFuncPtr <CalleeFrame>
- *   t2 = EqFunc t1, <ProfiledFunc>
- *   JmpZero t2, <SideExit>               <== checkInst points here
- *   AssertARFunc <CalleeFrame>, <ProfiledFunc>
- *
- * If this check is later regarded as not profitable, because it didn't enable
- * inlining the callee, it can be removed by calling dropCalledFuncCheck()
- * passing that same checkInst.
- */
-const Func* profiledCalledFunc(IRGS& env, uint32_t numArgs,
-                               IRInstruction*& checkInst);
-
-void dropCalledFuncCheck(IRGS& env, IRInstruction* checkInst);
 
 ///////////////////////////////////////////////////////////////////////////////
 /*
@@ -343,8 +303,6 @@ Type predictedType(const IRGS&, const Location&);
 #define IMM_I64A       int64_t
 #define IMM_LA         int32_t
 #define IMM_IA         int32_t
-#define IMM_CAR        uint32_t
-#define IMM_CAW        uint32_t
 #define IMM_DA         double
 #define IMM_SA         const StringData*
 #define IMM_RATA       RepoAuthType
@@ -383,8 +341,6 @@ Type predictedType(const IRGS&, const Location&);
 #undef IMM_I64A
 #undef IMM_LA
 #undef IMM_IA
-#undef IMM_CAR
-#undef IMM_CAW
 #undef IMM_DA
 #undef IMM_SA
 #undef IMM_RATA

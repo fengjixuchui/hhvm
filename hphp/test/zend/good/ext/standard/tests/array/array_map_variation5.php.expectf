@@ -4,12 +4,12 @@ array(0) {
 }
 -- Iteration 2 --
 array(1) {
-  [0]=>
+  ["0"]=>
   int(0)
 }
 -- Iteration 3 --
 array(1) {
-  [1]=>
+  ["1"]=>
   int(1)
 }
 -- Iteration 4 --
@@ -72,7 +72,7 @@ array(2) {
 -- Iteration 10 --
 array(3) {
   [11]=>
-  object(classA)#%d (0) {
+  object(classA) (0) {
   }
   ["unset"]=>
   NULL
@@ -84,7 +84,7 @@ array(8) {
   [1]=>
   string(5) "hello"
   [2]=>
-  object(classA)#%d (0) {
+  object(classA) (0) {
   }
   [222]=>
   string(5) "fruit"

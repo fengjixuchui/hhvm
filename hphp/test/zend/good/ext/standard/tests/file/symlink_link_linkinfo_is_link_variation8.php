@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool symlink ( string $target, string $link );
    Description: creates a symbolic link to the existing target with the specified name link
 
@@ -13,8 +13,8 @@
 */
 
 /* Variation 8 : Create soft/hard link to different directory */
-
 /* creating link to a file in different dir with the same name as the file */
+<<__EntryPoint>> function main(): void {
 echo "\n*** Create hard link in different directory with same filename ***\n";
 // temp file used
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
@@ -58,4 +58,4 @@ unlink($filename);
 rmdir($dirname);
 
 echo "Done\n";
-?>
+}

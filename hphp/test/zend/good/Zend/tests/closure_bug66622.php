@@ -1,4 +1,4 @@
-<?php
+<?hh
 class A {
     static function name() { return 'A'; }
     function foo() {
@@ -18,11 +18,8 @@ class B extends A {
     static function name() { return 'B'; }
 }
 
-function test() {
+<<__EntryPoint>> function test() {
     (new B)->foo();
     (new B)->bar();
-    (new B)->baz();
     B::baz();
 }
-test();
-

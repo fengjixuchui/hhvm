@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : array array_pad(array $input, int $pad_size, mixed $pad_value)
  * Description: Returns a copy of input array padded with pad_value to size pad_size 
  * Source code: ext/standard/array.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_pad() : error conditions ***\n";
 
 // Zero arguments
@@ -26,4 +26,4 @@ try { var_dump( array_pad($input, $pad_size) ); } catch (Exception $e) { echo "\
 try { var_dump( array_pad($input) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

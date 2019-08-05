@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype:  string tempnam ( string $dir, string $prefix );
    Description: Create file with unique file name.
 */
 
 /* Creating unique files in various dirs by passing relative paths to $dir arg */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing tempnam() with absolute and relative paths ***\n";
 $dir_name = dirname(__FILE__)."/tempnam_variation2";
 mkdir($dir_name);
@@ -78,4 +78,4 @@ rmdir($dir_path);
 rmdir($dir_name);
 
 echo "\n*** Done ***\n";
-?>
+}

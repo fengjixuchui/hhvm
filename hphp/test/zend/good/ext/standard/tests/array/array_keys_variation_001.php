@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 echo "\n*** Testing array_keys() on various arrays ***";
 $arrays = array(
   array(), 
@@ -25,4 +25,4 @@ foreach ($arrays as $array) {
 }
 
 echo "Done\n";
-?>
+}

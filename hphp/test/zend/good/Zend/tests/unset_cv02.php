@@ -1,6 +1,5 @@
-<?php
+<?hh
 $x = "ok\n";
 echo $x;
 unset($GLOBALS["x"]);
 echo $x;
-?>

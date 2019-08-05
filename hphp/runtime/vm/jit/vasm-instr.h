@@ -77,6 +77,7 @@ struct Vunit;
   O(ldimmw, I(s), Un, D(d))\
   O(ldimml, I(s), Un, D(d))\
   O(ldimmq, I(s), Un, D(d))\
+  O(movqs, I(s) I(addr), Un, D(d))\
   O(load, Inone, U(s), D(d))\
   O(store, Inone, U(s) UW(d), Dn)\
   O(mcprep, Inone, Un, D(d))\
@@ -91,12 +92,6 @@ struct Vunit;
   O(pushframe, Inone, Un, Dn)\
   O(popframe, Inone, Un, Dn)\
   O(recordstack, Inone, Un, Dn)\
-  O(pseudojmp, Inone, U(uses) U(uses64) UA(across), D(defs))\
-  O(pseudocall, Inone, U(uses) U(uses64) UA(across), D(defs))\
-  O(pseudojcc, Inone, U(uses) U(sf) UA(across), D(defs))\
-  O(pseudodiv, Inone, U(uses) U(uses64) UA(across), D(defs) D(sf))\
-  O(pseudocallphp, Inone, U(uses) U(uses64) UA(across), D(defs))\
-  O(pseudoshift, Inone, UH(s,d) U(uses) UA(across), DH(d,s) D(defs) D(sf))\
   O(spill, Inone, U(s), D(d))\
   O(reload, Inone, U(s), D(d))\
   O(ssaalias, Inone, U(s), D(d))\
@@ -162,6 +157,8 @@ struct Vunit;
   O(andb, I(fl), U(s0) U(s1), D(d) D(sf)) \
   O(andbi, I(s0) I(fl), UH(s1,d), DH(d,s1) D(sf)) \
   O(andbim, I(s) I(fl), UM(m), D(sf)) \
+  O(andw, I(fl), U(s0) U(s1), D(d) D(sf)) \
+  O(andwi, I(s0) I(fl), UH(s1,d), DH(d,s1) D(sf)) \
   O(andl, I(fl), U(s0) U(s1), D(d) D(sf)) \
   O(andli, I(s0) I(fl), UH(s1,d), DH(d,s1) D(sf)) \
   O(andq, I(fl), U(s0) U(s1), D(d) D(sf)) \
@@ -184,8 +181,11 @@ struct Vunit;
   O(neg, I(fl), UH(s,d), DH(d,s) D(sf))\
   O(notb, Inone, UH(s,d), DH(d,s))\
   O(not, Inone, UH(s,d), DH(d,s))\
+  O(orbi, I(s0) I(fl), UH(s1,d), DH(d,s1) D(sf)) \
   O(orbim, I(s0) I(fl), UM(m), D(sf))\
   O(orwim, I(s0) I(fl), UM(m), D(sf))\
+  O(orwi, I(s0) I(fl), UH(s1,d), DH(d,s1) D(sf))\
+  O(orli, I(s0) I(fl), UH(s1,d), DH(d,s1) D(sf))\
   O(orlim, I(s0) I(fl), UM(m), D(sf))\
   O(orq, I(fl), U(s0) U(s1), D(d) D(sf))\
   O(orqi, I(s0) I(fl), UH(s1,d), DH(d,s1) D(sf)) \
@@ -253,6 +253,7 @@ struct Vunit;
   /* load effective address */\
   O(lea, Inone, U(s), D(d))\
   O(leap, I(s), Un, D(d))\
+  O(leav, I(s), Un, D(d))\
   O(lead, I(s), Un, D(d))\
   /* copies */\
   O(movb, Inone, UH(s,d), DH(d,s))\
@@ -302,6 +303,7 @@ struct Vunit;
   O(jcc, I(cc), U(sf), Dn)\
   O(jcci, I(cc), U(sf), Dn)\
   O(jmp, Inone, Un, Dn)\
+  O(jmps, I(jmp_addr) I(taken_addr), Un, Dn)\
   O(jmpr, Inone, U(target) U(args), Dn)\
   O(jmpm, Inone, U(target) U(args), Dn)\
   O(jmpi, I(target), U(args), Dn)\
@@ -521,6 +523,11 @@ struct ldimml { Immed s; Vreg d; };
 struct ldimmq { Immed64 s; Vreg d; };
 
 /*
+ * Load a smashable immediate value without mutating status flags.
+ */
+struct movqs { Immed64 s; Vreg64 d; Vaddr addr; };
+
+/*
  * Memory operand load and store.
  */
 struct load { Vptr64 s; Vreg d; };
@@ -529,7 +536,7 @@ struct store { Vreg s; Vptr64 d; };
 /*
  * Method cache smashable prime data.
  *
- * @see: cgLdObjMethod()
+ * @see: cgLdSmashable()
  */
 struct mcprep { Vreg64 d; };
 
@@ -547,22 +554,6 @@ struct phijmp { Vlabel target; Vtuple uses; };
  */
 struct conjure { Vreg c; };
 struct conjureuse { Vreg c; };
-
-/*
- * "Pseudo" instructions used by the graph-color register
- * allocator. These are used as stand-ins for instructions which have
- * RegSet uses or defs, or implicit register effects. These make those
- * physical register dependencies explicit as Vregs, which allow them
- * to be rewritten into SSA form and manipulated like any other
- * instruction. Once register allocation is done, they are converted
- * back into their original instructions.
- */
-struct pseudojmp { Vtuple defs; Vtuple uses; Vtuple uses64; Vtuple across; };
-struct pseudocall { Vtuple defs; Vtuple uses; Vtuple uses64; Vtuple across; };
-struct pseudojcc { Vtuple defs; Vtuple uses; Vtuple across; VregSF sf; };
-struct pseudodiv { Vtuple defs; Vtuple uses; Vtuple uses64; Vtuple across; VregSF sf; };
-struct pseudocallphp { Vtuple defs; Vtuple uses; Vtuple uses64; Vtuple across; Vlabel targets[2]; };
-struct pseudoshift { Vreg64 d; Vreg64 s; Vtuple defs; Vtuple uses; Vtuple across; VregSF sf; };
 
 /*
  * Pseudo-instructions used to represent where Vregs are moved to/from
@@ -584,12 +575,14 @@ struct ssaalias { Vreg s; Vreg d; };
 
 /*
  * Emit a function prologue guard.
+ *
  * *watch will be set to the address following the guard.
  */
 struct funcguard { const Func* func; TCA* watch; };
 
 /*
  * Emit a smashable jmp to realCode.
+ *
  * *watch will be set to the address of the smashable.
  */
 struct debugguardjmp { TCA realCode; TCA* watch; };
@@ -1013,6 +1006,8 @@ struct addsd  { VregDbl s0, s1, d; };
 struct andb  { Vreg8 s0, s1, d; VregSF sf; Vflags fl; };
 struct andbi { Immed s0; Vreg8 s1, d; VregSF sf; Vflags fl; };
 struct andbim { Immed s; Vptr8 m; VregSF sf; Vflags fl; };
+struct andw  { Vreg16 s0, s1, d; VregSF sf; Vflags fl; };
+struct andwi { Immed s0; Vreg16 s1, d; VregSF sf; Vflags fl; };
 struct andl  { Vreg32 s0, s1, d; VregSF sf; Vflags fl; };
 struct andli { Immed s0; Vreg32 s1, d; VregSF sf; Vflags fl; };
 struct andq  { Vreg64 s0, s1, d; VregSF sf; Vflags fl; };
@@ -1041,8 +1036,11 @@ struct neg { Vreg64 s, d; VregSF sf; Vflags fl; };
 struct notb { Vreg8 s, d; };
 struct not { Vreg64 s, d; };
 // or: s0 | {s1|m} => {d|m}, sf
+struct orbi { Immed s0; Vreg8 s1, d; VregSF sf; Vflags fl; };
 struct orbim { Immed s0; Vptr8 m; VregSF sf; Vflags fl; };
 struct orwim { Immed s0; Vptr16 m; VregSF sf; Vflags fl; };
+struct orwi { Immed s0; Vreg16 s1, d; VregSF sf; Vflags fl; };
+struct orli { Immed s0; Vreg32 s1, d; VregSF sf; Vflags fl; };
 struct orlim { Immed s0; Vptr32 m; VregSF sf; Vflags fl; };
 struct orq { Vreg64 s0, s1, d; VregSF sf; Vflags fl; };
 struct orqi { Immed s0; Vreg64 s1, d; VregSF sf; Vflags fl; };
@@ -1127,6 +1125,8 @@ struct setcc { ConditionCode cc; VregSF sf; Vreg8 d; };
  */
 struct lea { Vptr s; Vreg64 d; };
 struct leap { RIPRelativeRef s; Vreg64 d; };
+// rip-relative lea of a Vaddr
+struct leav { Vaddr s; Vreg64 d; };
 struct lead { VdataPtr<void> s; Vreg64 d; };
 
 /*
@@ -1196,6 +1196,10 @@ struct storesd { VregDbl s; Vptr64 m; };
 struct jcc { ConditionCode cc; VregSF sf; Vlabel targets[2]; StringTag tag; };
 struct jcci { ConditionCode cc; VregSF sf; Vlabel target; TCA taken; };
 struct jmp { Vlabel target; };
+// jmps{} is a smashable jump to target[0].  It admits a second target which
+// represents an in-Vunit smash target.  All possible such targets need to be
+// accounted for here so that vasm optimizations are aware of control flow.
+struct jmps { Vlabel targets[2]; Vaddr jmp_addr; Vaddr taken_addr; };
 struct jmpr { Vreg64 target; RegSet args; };
 struct jmpm { Vptr target; RegSet args; };
 struct jmpi { TCA target; RegSet args; };
@@ -1358,9 +1362,11 @@ struct Vinstr {
   // 2-byte hole here.
 
   /*
-   * Instruction position, currently used only in vasm-xls.
+   * Private data usable by passes. Any pass can do what it wants with
+   * it. The only guarantee is that its always initialized to zero by
+   * default.
    */
-  unsigned pos;
+  VinstrId id = 0;
 
   /*
    * If present, the IRInstruction this Vinstr was originally created from.

@@ -1,9 +1,9 @@
-<?php
+<?hh
 
 function main() {
   date_default_timezone_set('UTC');
   $tz = new DateTimeZone(date_default_timezone_get());
-  $now = new DateTime(null, $tz);
+  $now = new DateTime('', $tz);
   $tests = array(
     new DateTime('-1day', $tz),
     new DateTime('+1day', $tz),

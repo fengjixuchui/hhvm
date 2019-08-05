@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $paths = array (
 
 	"foo",
@@ -37,5 +37,4 @@ foreach ($paths as $path) {
 }
 
 echo "\ndone\n";
-
-?>
+}

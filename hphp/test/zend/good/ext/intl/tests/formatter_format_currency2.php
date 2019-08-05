@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /*
  * Format a number using misc currencies/locales.
@@ -35,4 +35,3 @@ include_once( 'ut_common.inc' );
 // Run the test
 ut_run();
 
-?>

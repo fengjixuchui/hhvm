@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 echo "*** Testing get_html_translation_table() : basic functionality/XHTML 1.0 ***\n";
 
 echo "-- with table = HTML_ENTITIES, ENT_QUOTES --\n";
@@ -40,4 +40,4 @@ var_dump( $tt );
 
 
 echo "Done\n";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function getFiles(&$rdi,$depth=0) {
   if (!is_object($rdi)) return;
@@ -10,7 +10,10 @@ function getFiles(&$rdi,$depth=0) {
       $indent = '';
       for ($i = 0; $i<=$depth; ++$i) $indent .= " ";
       $files[] = $indent.$rdi->current()."\n";
-      if ($rdi->hasChildren()) getFiles(&$rdi->getChildren(),1+$depth);
+      if ($rdi->hasChildren()) {
+        $children = $rdi->getChildren();
+        getFiles(&$children, 1+$depth);
+      }
     }
   }
   asort(&$files);
@@ -19,5 +22,6 @@ function getFiles(&$rdi,$depth=0) {
 
 <<__EntryPoint>>
 function main_1804() {
-getFiles(&new RecursiveDirectoryIterator(__DIR__.'/../../sample_dir'));
+  $rdi = new RecursiveDirectoryIterator(__DIR__.'/../../sample_dir');
+  getFiles(&$rdi);
 }

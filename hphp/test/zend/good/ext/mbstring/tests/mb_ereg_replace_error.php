@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto string mb_ereg_replace(string pattern, string replacement, string string [, string option])
  * Description: Replace regular expression for multibyte string 
  * Source code: ext/mbstring/php_mbregex.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mb_ereg_replace() : error conditions ***\n";
 
 //Test mb_ereg_replace with one more than the expected number of arguments
@@ -23,4 +23,4 @@ $replacement = b'string_val';
 try { var_dump( mb_ereg_replace($pattern, $replacement) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

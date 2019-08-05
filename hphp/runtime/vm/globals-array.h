@@ -40,7 +40,7 @@ namespace HPHP {
  *   - Non-string keys are not really supported.  (Integers are converted to
  *     strings.)
  *
- *   - size() is an O(N) operation.  (This is because of kNamedLocalDataType
+ *   - keys(),size() are O(N) operation. (This is because of kNamedLocalDataType
  *     support in the underlying NameValueTable.)
  *
  *   - Append/prepend operations are not supported.
@@ -58,13 +58,10 @@ struct GlobalsArray final : ArrayData,
   explicit GlobalsArray(NameValueTable* tab);
   ~GlobalsArray() = delete;
 
-  // We only allow explicit conversions to ArrayData.  Generally you
-  // should not be talking to the GlobalsArray directly (see
-  // php-globals.h).
-  ArrayData* asArrayData() { return this; }
-  const ArrayData* asArrayData() const { return this; }
-
 public:
+  ArrayData* keys();
+  bool keyExists(const StringData*);
+
   static void Release(ArrayData*) {}
   static ArrayData* Copy(const ArrayData* ad) {
     return const_cast<ArrayData*>(ad);
@@ -81,12 +78,12 @@ public:
   static tv_rval NvGetStr(const ArrayData*, const StringData* k);
   static constexpr auto NvTryGetStr = &NvGetStr;
 
+  static ssize_t NvGetIntPos(const ArrayData*, int64_t k);
+  static ssize_t NvGetStrPos(const ArrayData*, const StringData* k);
+
   static arr_lval LvalInt(ArrayData*, int64_t k, bool copy);
-  static constexpr auto LvalIntRef = &LvalInt;
   static arr_lval LvalStr(ArrayData*, StringData* k, bool copy);
-  static constexpr auto LvalStrRef = &LvalStr;
   static arr_lval LvalNew(ArrayData*, bool copy);
-  static constexpr auto LvalNewRef = &LvalNew;
 
   static ArrayData* SetIntInPlace(ArrayData*, int64_t k, Cell v);
   static constexpr auto SetInt = &SetIntInPlace;
@@ -96,10 +93,6 @@ public:
   static constexpr auto SetWithRefInt = &SetWithRefIntInPlace;
   static ArrayData* SetWithRefStrInPlace(ArrayData*, StringData*, TypedValue);
   static constexpr auto SetWithRefStr = &SetWithRefStrInPlace;
-  static ArrayData* SetRefIntInPlace(ArrayData*, int64_t k, tv_lval v);
-  static constexpr auto SetRefInt = &SetRefIntInPlace;
-  static ArrayData* SetRefStrInPlace(ArrayData*, StringData* k, tv_lval v);
-  static constexpr auto SetRefStr = &SetRefStrInPlace;
   static ArrayData* RemoveIntInPlace(ArrayData*, int64_t k);
   static constexpr auto RemoveInt = &RemoveIntInPlace;
   static ArrayData* RemoveStrInPlace(ArrayData*, const StringData* k);
@@ -107,8 +100,6 @@ public:
 
   static ArrayData* AppendInPlace(ArrayData*, Cell v);
   static constexpr auto Append = &AppendInPlace;
-  static ArrayData* AppendRefInPlace(ArrayData*, tv_lval v);
-  static constexpr auto AppendRef = &AppendRefInPlace;
   static ArrayData* AppendWithRefInPlace(ArrayData*, TypedValue v);
   static constexpr auto AppendWithRef = &AppendWithRefInPlace;
 

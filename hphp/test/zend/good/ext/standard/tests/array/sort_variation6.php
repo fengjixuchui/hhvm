@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool sort ( array &$array [, int $sort_flags] )
  * Description: This function sorts an array. 
                 Elements will be arranged from lowest to highest when this function has completed.
@@ -11,7 +11,7 @@
  * SORT_REGULAR - compare items normally
  * SORT_NUMERIC - compare items numerically
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sort() : usage variations ***\n";
 
 // an array contains unsorted hexadecimal values  
@@ -33,4 +33,4 @@ var_dump(sort(&$temp_array, SORT_NUMERIC) ); // expecting : bool(true)
 var_dump($temp_array);
 
 echo "Done\n";
-?>
+}

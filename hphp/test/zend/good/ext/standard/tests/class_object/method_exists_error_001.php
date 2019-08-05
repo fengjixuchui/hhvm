@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto bool method_exists(object object, string method)
  * Description: Checks if the class method exists 
  * Source code: Zend/zend_builtin_functions.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing method_exists() : error conditions ***\n";
 
 
@@ -21,4 +21,4 @@ $object = new stdclass();
 try { var_dump( method_exists($object) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

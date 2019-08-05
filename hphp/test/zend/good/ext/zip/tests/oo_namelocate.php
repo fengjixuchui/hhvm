@@ -1,4 +1,4 @@
-<?php
+<?hh
 $dirname = dirname(__FILE__) . '/';
 include $dirname . 'utils.inc';
 $file = $dirname . '__tmp_oo_rename3.zip';
@@ -31,4 +31,3 @@ var_dump($zip->locateName('enTRy2d.txt', ZIPARCHIVE::FL_NOCASE|ZIPARCHIVE::FL_NO
 $zip->close();
 
 @unlink($file);
-?>

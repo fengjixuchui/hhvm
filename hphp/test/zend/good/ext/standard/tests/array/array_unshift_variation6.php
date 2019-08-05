@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int array_unshift(array $array, mixed $var [, mixed ...])
  * Description: Pushes elements onto the beginning of the array
  * Source code: ext/standard/array.c
@@ -9,7 +9,7 @@
  * arrays and also sub-arrays within the two-dimensional array for $array argument.
  * The $var argument passed is a fixed value
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_unshift() : two dimensional arrays for \$array argument ***\n";
 
 // initializing $var argument
@@ -69,4 +69,4 @@ var_dump( array_unshift(&$temp_array, $var, "hello", 'world') );  // sub array
 var_dump($temp_array);
 
 echo "Done";
-?>
+}

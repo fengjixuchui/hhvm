@@ -51,9 +51,9 @@ function quotemeta(string $str);
 function str_shuffle(string $str);
 <<__PHPStdLib, __Rx>>
 function strrev(string $str);
-<<__PHPStdLib>>
+<<__PHPStdLib, __Rx>>
 function strtolower(string $str);
-<<__PHPStdLib>>
+<<__PHPStdLib, __Rx>>
 function strtoupper(string $str);
 <<__PHPStdLib>>
 function ucfirst(string $str);
@@ -94,7 +94,11 @@ function str_getcsv(string $input, string $delimiter = ",", string $enclosure = 
 <<__PHPStdLib>>
 function str_replace($search, $replace, $subject, &$count = null);
 <<__PHPStdLib>>
+function str_replace_with_count($search, $replace, $subject, &$count);
+<<__PHPStdLib>>
 function str_ireplace($search, $replace, $subject, &$count = null);
+<<__PHPStdLib>>
+function str_ireplace_with_count($search, $replace, $subject, &$count);
 <<__PHPStdLib, __Rx>>
 function substr_replace($str, $replacement, $start, $length = 0x7FFFFFFF);
 <<__PHPStdLib, __Rx>>
@@ -142,7 +146,7 @@ function hebrev(string $hebrew_text, int $max_chars_per_line = 0);
 <<__PHPStdLib>>
 function hebrevc(string $hebrew_text, int $max_chars_per_line = 0);
 <<__PHPStdLib>>
-function setlocale(int $category, $locale, ...);
+function setlocale(int $category, $locale, ...$args);
 <<__PHPStdLib>>
 function localeconv();
 <<__PHPStdLib>>
@@ -151,8 +155,8 @@ function nl_langinfo(int $item);
 function vprintf($format, $args);
 <<__PHPStdLib, __Rx>>
 function vsprintf($format, $args);
-/* HH_IGNORE_ERROR[3068] this is a builtin */
-function sscanf(string $str, string $format, &...$vars);
+<<__Rx>>
+function sscanf(string $str, string $format);
 <<__PHPStdLib>>
 function money_format(string $format, float $number);
 <<__PHPStdLib, __Rx>>

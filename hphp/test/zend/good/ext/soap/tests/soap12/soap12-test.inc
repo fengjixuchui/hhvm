@@ -1,4 +1,4 @@
-<?php
+<?hh
 class Soap12test {
 	public $header;
 
@@ -128,4 +128,3 @@ $server->setClass("Soap12test");
 
 $server->handle($HTTP_RAW_POST_DATA);
 echo "ok\n";
-?>

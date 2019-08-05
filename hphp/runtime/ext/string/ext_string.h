@@ -173,9 +173,9 @@ String HHVM_FUNCTION(htmlspecialchars,
                      bool double_encode = true);
 String HHVM_FUNCTION(fb_htmlspecialchars,
                      const String& str,
-                     int quote_style = k_ENT_HTML_QUOTE_DOUBLE,
-                     const String& charset = "ISO-8859-1",
-                     const Variant& extra = empty_array_ref);
+                     int quote_style,
+                     const String& charset,
+                     const Variant& extra);
 String HHVM_FUNCTION(quoted_printable_encode,
                      const String& str);
 String HHVM_FUNCTION(quoted_printable_decode,
@@ -235,10 +235,9 @@ Variant f_vsprintf(const String& format,
                    const Array& args);
 
 
-Variant sscanfImpl(const String& str,
-                   const String& format,
-                   const req::vector<Variant*>& args);
-TypedValue* HHVM_FN(sscanf)(ActRec* ar);
+Variant HHVM_FUNCTION(sscanf,
+                      const String& str,
+                      const String& format);
 String HHVM_FUNCTION(chr, const Variant& ascii);
 int64_t HHVM_FUNCTION(ord,
                       const String& str);

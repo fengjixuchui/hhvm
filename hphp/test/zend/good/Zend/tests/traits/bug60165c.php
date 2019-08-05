@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 trait A {
     public function bar() {}
@@ -15,3 +15,4 @@ class MyClass {
     }
 }
 
+<<__EntryPoint>> function main(): void {}

@@ -1,30 +1,30 @@
-<?php
+<?hh
 class UsesMagic {
-	public $a = 1;
-	public $b = 2;
-	public $c = 3;
+    public $a = 1;
+    public $b = 2;
+    public $c = 3;
 
-	private $priv = 'secret';
-	
-	function __get($name) { 
-		$args = func_get_args();
-		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
-	}
-	function __set($name, $value) { 
-		$args = func_get_args();
-		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
-	}
-	function __isset($name) { 
-		$args = func_get_args();
-		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
-	}
-	function __unset($name) { 
-		$args = func_get_args();
-		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
-	}
-	
+    private $priv = 'secret';
+
+    function __get($name) {
+        $args = func_get_args();
+        echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
+    }
+    function __set($name, $value) {
+        $args = func_get_args();
+        echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
+    }
+    function __isset($name) {
+        $args = func_get_args();
+        echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
+    }
+    function __unset($name) {
+        $args = func_get_args();
+        echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
+    }
+
 }
-
+<<__EntryPoint>> function main(): void {
 $obj = new UsesMagic;
 
 $ao = new ArrayObject($obj);
@@ -63,4 +63,4 @@ echo "  Original wrapped object:\n";
 var_dump($obj);
 echo "  Wrapping ArrayObject:\n";
 var_dump($ao);
-?>
+}

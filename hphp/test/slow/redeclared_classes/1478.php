@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class A {
   static function bar(&$a) {
@@ -17,16 +17,13 @@ class A2 extends C {
 
 <<__EntryPoint>>
 function main_1478() {
-$a = 'failed';
-A::bar(&$a);
-var_dump($a);
-if (false) {
-  class A{
-}
-  class A2{
-}
-}
-$a = 'failed';
-A2::bar(&$a);
-var_dump($a);
+  $a = 'failed';
+  A::bar(&$a);
+  var_dump($a);
+  if (__hhvm_intrinsics\launder_value(false)) {
+    include '1478.inc';
+  }
+  $a = 'failed';
+  A2::bar(&$a);
+  var_dump($a);
 }

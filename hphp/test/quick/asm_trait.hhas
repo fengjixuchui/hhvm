@@ -1,3 +1,4 @@
+.hh_file 1;
 #
 # Try making some traits
 #
@@ -10,6 +11,9 @@
   DefCls 4
   DefCls 5
   DefCls 6
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
   FCall <> 0 1 "" - "" ""
   RetC
@@ -70,59 +74,72 @@
 .function main() {
   NewObjD "UseFrob"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $obj
   PopC
 
   CGetL $obj
-  FPushObjMethodD 0 "frob" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "frob"
   PopC
 
   NewObjD "AliasFrob"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $obj
   PopC
 
   CGetL $obj
-  FPushObjMethodD 0 "heh" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "heh"
   PopC
 
   NewObjD "Publicize"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $obj
   PopC
 
   CGetL $obj
-  FPushObjMethodD 0 "foo" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "foo"
   PopC
 
   NewObjD "Resolution"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $obj
   PopC
 
   CGetL $obj
-  FPushObjMethodD 0 "frob" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "frob"
   PopC
 
   CGetL $obj
-  FPushObjMethodD 0 "yo" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "yo"
   PopC
 
   Int 1

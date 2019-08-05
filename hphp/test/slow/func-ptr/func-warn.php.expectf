@@ -11,7 +11,7 @@ int(5)
 function(bar)
 notice(bar): Func used in is_string
 bool(true)
-notice(%s): Func to string conversion
+notice(%s): Implicit Func to string conversion for type-hint
 int(3)
 notice(baz): Implicit Func to string conversion for type-hint
 notice(baz): Implicit Func to string conversion for type-hint
@@ -28,9 +28,7 @@ function(buz)
 bool(true)
 bool(true)
 function(buz)
-notice(Closure$main): Implicit Func to string conversion for type-hint
 caught: Property 'Props::a' declared as type string, func assigned
-notice(Closure$main#2): Implicit Func to string conversion for type-hint
 caught: Static property 'Props::b' declared as type string, func assigned
 notice(io): Implicit Func to string conversion for type-hint
 string(3) "foo"
@@ -65,7 +63,7 @@ int(5)
 function(bar)
 notice(bar): Func used in is_string
 bool(true)
-notice(%s): Func to string conversion
+notice(%s): Implicit Func to string conversion for type-hint
 int(3)
 notice(baz): Implicit Func to string conversion for type-hint
 notice(baz): Implicit Func to string conversion for type-hint
@@ -82,9 +80,7 @@ function(buz)
 bool(true)
 bool(true)
 function(buz)
-notice(Closure$main): Implicit Func to string conversion for type-hint
 caught: Property 'Props::a' declared as type string, func assigned
-notice(Closure$main#2): Implicit Func to string conversion for type-hint
 caught: Static property 'Props::b' declared as type string, func assigned
 notice(io): Implicit Func to string conversion for type-hint
 string(3) "foo"
@@ -119,7 +115,7 @@ int(5)
 function(bar)
 notice(bar): Func used in is_string
 bool(true)
-notice(%s): Func to string conversion
+notice(%s): Implicit Func to string conversion for type-hint
 int(3)
 notice(baz): Implicit Func to string conversion for type-hint
 notice(baz): Implicit Func to string conversion for type-hint
@@ -136,9 +132,7 @@ function(buz)
 bool(true)
 bool(true)
 function(buz)
-notice(Closure$main): Implicit Func to string conversion for type-hint
 caught: Property 'Props::a' declared as type string, func assigned
-notice(Closure$main#2): Implicit Func to string conversion for type-hint
 caught: Static property 'Props::b' declared as type string, func assigned
 notice(io): Implicit Func to string conversion for type-hint
 string(3) "foo"
@@ -173,7 +167,7 @@ int(5)
 function(bar)
 notice(bar): Func used in is_string
 bool(true)
-notice(%s): Func to string conversion
+notice(%s): Implicit Func to string conversion for type-hint
 int(3)
 notice(baz): Implicit Func to string conversion for type-hint
 notice(baz): Implicit Func to string conversion for type-hint
@@ -190,9 +184,7 @@ function(buz)
 bool(true)
 bool(true)
 function(buz)
-notice(Closure$main): Implicit Func to string conversion for type-hint
 caught: Property 'Props::a' declared as type string, func assigned
-notice(Closure$main#2): Implicit Func to string conversion for type-hint
 caught: Static property 'Props::b' declared as type string, func assigned
 notice(io): Implicit Func to string conversion for type-hint
 string(3) "foo"
@@ -227,7 +219,7 @@ int(5)
 function(bar)
 notice(bar): Func used in is_string
 bool(true)
-notice(%s): Func to string conversion
+notice(%s): Implicit Func to string conversion for type-hint
 int(3)
 notice(baz): Implicit Func to string conversion for type-hint
 notice(baz): Implicit Func to string conversion for type-hint
@@ -244,9 +236,7 @@ function(buz)
 bool(true)
 bool(true)
 function(buz)
-notice(Closure$main): Implicit Func to string conversion for type-hint
 caught: Property 'Props::a' declared as type string, func assigned
-notice(Closure$main#2): Implicit Func to string conversion for type-hint
 caught: Static property 'Props::b' declared as type string, func assigned
 notice(io): Implicit Func to string conversion for type-hint
 string(3) "foo"
@@ -281,7 +271,7 @@ int(5)
 function(bar)
 notice(bar): Func used in is_string
 bool(true)
-notice(%s): Func to string conversion
+notice(%s): Implicit Func to string conversion for type-hint
 int(3)
 notice(baz): Implicit Func to string conversion for type-hint
 notice(baz): Implicit Func to string conversion for type-hint
@@ -298,9 +288,7 @@ function(buz)
 bool(true)
 bool(true)
 function(buz)
-notice(Closure$main): Implicit Func to string conversion for type-hint
 caught: Property 'Props::a' declared as type string, func assigned
-notice(Closure$main#2): Implicit Func to string conversion for type-hint
 caught: Static property 'Props::b' declared as type string, func assigned
 notice(io): Implicit Func to string conversion for type-hint
 string(3) "foo"
@@ -335,7 +323,7 @@ int(5)
 function(bar)
 notice(bar): Func used in is_string
 bool(true)
-notice(%s): Func to string conversion
+notice(%s): Implicit Func to string conversion for type-hint
 int(3)
 notice(baz): Implicit Func to string conversion for type-hint
 notice(baz): Implicit Func to string conversion for type-hint
@@ -352,9 +340,7 @@ function(buz)
 bool(true)
 bool(true)
 function(buz)
-notice(Closure$main): Implicit Func to string conversion for type-hint
 caught: Property 'Props::a' declared as type string, func assigned
-notice(Closure$main#2): Implicit Func to string conversion for type-hint
 caught: Static property 'Props::b' declared as type string, func assigned
 notice(io): Implicit Func to string conversion for type-hint
 string(3) "foo"
@@ -389,7 +375,7 @@ int(5)
 function(bar)
 notice(bar): Func used in is_string
 bool(true)
-notice(%s): Func to string conversion
+notice(%s): Implicit Func to string conversion for type-hint
 int(3)
 notice(baz): Implicit Func to string conversion for type-hint
 notice(baz): Implicit Func to string conversion for type-hint
@@ -406,9 +392,7 @@ function(buz)
 bool(true)
 bool(true)
 function(buz)
-notice(Closure$main): Implicit Func to string conversion for type-hint
 caught: Property 'Props::a' declared as type string, func assigned
-notice(Closure$main#2): Implicit Func to string conversion for type-hint
 caught: Static property 'Props::b' declared as type string, func assigned
 notice(io): Implicit Func to string conversion for type-hint
 string(3) "foo"
@@ -443,7 +427,7 @@ int(5)
 function(bar)
 notice(bar): Func used in is_string
 bool(true)
-notice(%s): Func to string conversion
+notice(%s): Implicit Func to string conversion for type-hint
 int(3)
 notice(baz): Implicit Func to string conversion for type-hint
 notice(baz): Implicit Func to string conversion for type-hint
@@ -460,9 +444,7 @@ function(buz)
 bool(true)
 bool(true)
 function(buz)
-notice(Closure$main): Implicit Func to string conversion for type-hint
 caught: Property 'Props::a' declared as type string, func assigned
-notice(Closure$main#2): Implicit Func to string conversion for type-hint
 caught: Static property 'Props::b' declared as type string, func assigned
 notice(io): Implicit Func to string conversion for type-hint
 string(3) "foo"
@@ -497,7 +479,7 @@ int(5)
 function(bar)
 notice(bar): Func used in is_string
 bool(true)
-notice(%s): Func to string conversion
+notice(%s): Implicit Func to string conversion for type-hint
 int(3)
 notice(baz): Implicit Func to string conversion for type-hint
 notice(baz): Implicit Func to string conversion for type-hint
@@ -514,9 +496,7 @@ function(buz)
 bool(true)
 bool(true)
 function(buz)
-notice(Closure$main): Implicit Func to string conversion for type-hint
 caught: Property 'Props::a' declared as type string, func assigned
-notice(Closure$main#2): Implicit Func to string conversion for type-hint
 caught: Static property 'Props::b' declared as type string, func assigned
 notice(io): Implicit Func to string conversion for type-hint
 string(3) "foo"

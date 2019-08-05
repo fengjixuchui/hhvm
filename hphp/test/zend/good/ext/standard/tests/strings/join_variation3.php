@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string join( string $glue, array $pieces )
  * Description: Join array elements with a string
  * Source code: ext/standard/string.c
@@ -8,7 +8,7 @@
 /*
  * test join() by giving different pieces values 
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing join() : usage variations ***\n";
 
 $pieces_arrays = array (
@@ -50,4 +50,4 @@ for($index = 0; $index < count($pieces_arrays); $index ++) {
 }
  
 echo "Done\n";
-?>
+}

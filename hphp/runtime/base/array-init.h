@@ -34,8 +34,6 @@ namespace HPHP {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#define LV(v) tv_lval{v.asTypedValue()}
-
 /*
  * Flag indicating whether an array allocation should be pre-checked for OOM.
  */
@@ -297,9 +295,9 @@ struct MixedPHPArrayInitBase : ArrayInitBase<TArray, KindOfArray> {
    * (not-integer-like) or not when using MixedPHPArrayInitBase, and if not you
    * should probably use toKey yourself.
    */
-  template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+  template <IntishCast IC = IntishCast::None>
   MixedPHPArrayInitBase& setUnknownKey(const Variant& name, const Variant& v) {
-    auto const k = name.toKey<intishCast>(this->m_arr).tv();
+    auto const k = name.toKey<IC>(this->m_arr).tv();
     if (LIKELY(!isNullType(k.m_type))) {
       this->performOp([&]{
         return this->m_arr->setInPlace(k, v.asInitCellTmp());
@@ -313,13 +311,13 @@ struct MixedPHPArrayInitBase : ArrayInitBase<TArray, KindOfArray> {
    */
   MixedPHPArrayInitBase& setWithRef(int64_t name, TypedValue tv) {
     this->performOp([&]{
-      return MixedArray::SetWithRefInt(this->m_arr, name, tv, false);
+      return MixedArray::SetWithRefInt(this->m_arr, name, tv);
     });
     return *this;
   }
   MixedPHPArrayInitBase& setWithRef(const String& name, TypedValue tv) {
     this->performOp([&]{
-      return MixedArray::SetWithRefStr(this->m_arr, name.get(), tv, false);
+      return MixedArray::SetWithRefStr(this->m_arr, name.get(), tv);
     });
     return *this;
   }
@@ -407,74 +405,6 @@ struct MixedPHPArrayInitBase : ArrayInitBase<TArray, KindOfArray> {
   template<typename T> IMPL_ADD(const T&)
 
 #undef IMPL_ADD
-
-  /*
-   * Call appendRef() on the underlying array.
-   */
-  MixedPHPArrayInitBase& appendRef(Variant& v) {
-    this->performOp([&]{
-      return MixedArray::AppendRefInPlace(this->m_arr, LV(v));
-    });
-    return *this;
-  }
-
-  /*
-   * Call setRef() on the underlying array.
-   */
-  MixedPHPArrayInitBase& setRef(int64_t name, tv_lval v,
-                                bool /*keyConverted*/ = false) {
-    this->performOp([&]{
-      return MixedArray::SetRefInt(this->m_arr, name, v, false);
-    });
-    return *this;
-  }
-
-  MixedPHPArrayInitBase& setRef(const String& name, tv_lval v,
-                             bool keyConverted = false) {
-    if (keyConverted) {
-      this->performOp([&]{
-        return MixedArray::SetRefStr(this->m_arr, name.get(), v, false);
-      });
-    } else {
-      this->performOp([&]{
-        return this->m_arr->setRefInPlace(VarNR::MakeKey(name).tv(), v);
-      });
-    }
-    return *this;
-  }
-
-  MixedPHPArrayInitBase& setRef(TypedValue name, tv_lval v,
-                                bool keyConverted = false) {
-    if (keyConverted) {
-      this->performOp([&]{
-        return this->m_arr->setRefInPlace(tvToCell(name), v);
-      });
-    } else {
-      auto const k = tvToKey(name, this->m_arr);
-      if (!isNullType(k.m_type)) {
-        this->performOp([&]{ return this->m_arr->setRefInPlace(k, v); });
-      }
-    }
-    return *this;
-  }
-  MixedPHPArrayInitBase& setRef(const Variant& name, tv_lval v,
-                                bool keyConverted = false) {
-    return setRef(*name.asTypedValue(), v, keyConverted);
-  }
-
-  template<typename T>
-  MixedPHPArrayInitBase& setRef(const T& name, tv_lval v,
-                                bool keyConverted = false) {
-    if (keyConverted) {
-      this->performOp([&]{ return this->m_arr->setRefInPlace(name, v); });
-    } else {
-      auto const k = Variant(name).toKey(this->m_arr).tv();
-      if (!isNullType(k.m_type)) {
-        this->performOp([&]{ return this->m_arr->setRefInPlace(k, v); });
-      }
-    }
-    return *this;
-  }
 };
 
 using ArrayInit = MixedPHPArrayInitBase<MixedArray>;
@@ -600,13 +530,6 @@ struct PackedPHPArrayInitBase : PackedArrayInitBase<TArray, KindOfArray> {
   }
   PackedPHPArrayInitBase& append(const Variant& v) {
     return append(*v.asTypedValue());
-  }
-
-  PackedPHPArrayInitBase& appendRef(Variant& v) {
-    this->performOp([&]{
-      return PackedArray::AppendRefInPlace(this->m_arr, LV(v));
-    });
-    return *this;
   }
 
   PackedPHPArrayInitBase& appendWithRef(TypedValue v) {
@@ -897,9 +820,9 @@ struct DArrayInit {
     return setValidKey(*name.asTypedValue(), *v.asTypedValue());
   }
 
-  template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+  template <IntishCast IC = IntishCast::None>
   DArrayInit& setUnknownKey(const Variant& name, const Variant& v) {
-    auto const k = name.toKey<intishCast>(m_arr).tv();
+    auto const k = name.toKey<IC>(m_arr).tv();
     if (LIKELY(!isNullType(k.m_type))) {
       performOp([&]{ return m_arr->setInPlace(k, v.asInitCellTmp()); });
     }
@@ -1202,8 +1125,6 @@ Array make_keyset_array(Vals&&... vals) {
   make_array_detail::keyset_impl(init, std::forward<Vals>(vals)...);
   return init.toArray();
 }
-
-#undef LV
 
 ///////////////////////////////////////////////////////////////////////////////
 

@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $b = 10;
 $a = new SplFixedArray($b);
 
@@ -16,5 +16,4 @@ foreach ($a as $c) {
 }
 
 print "ok\n";
-
-?>
+}

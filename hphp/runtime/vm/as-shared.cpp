@@ -56,17 +56,15 @@ constexpr bool supported(ContextMask mask, AttrContext a) {
   X(AttrUnique,                   C|F,     "unique");               \
   X(AttrBuiltin,                  C|F,     "builtin");              \
   X(AttrPersistent,               C|F|A,   "persistent");           \
-  X(AttrIsImmutable,              C|P,     "is_immutable");         \
-  X(AttrHasImmutable,             C,       "has_immutable");        \
+  X(AttrIsConst,                  C|P,     "is_const");             \
   X(AttrForbidDynamicProps,       C,       "no_dynamic_props");     \
   X(AttrNoOverrideMagicGet,       C,       "nov_get");              \
   X(AttrNoOverrideMagicSet,       C,       "nov_set");              \
   X(AttrNoOverrideMagicIsset,     C,       "nov_isset");            \
   X(AttrNoOverrideMagicUnset,     C,       "nov_unset");            \
   X(AttrDynamicallyConstructible, C,       "dyn_constructible");    \
-  X(AttrSkipFrame,                F,       "skip_frame");           \
+  X(AttrProvenanceSkipFrame,      F,       "prov_skip_frame");      \
   X(AttrIsFoldable,               F,       "foldable");             \
-  X(AttrReadsCallerFrame,         F,       "reads_frame");          \
   X(AttrNoInjection,              F,       "no_injection");         \
   X(AttrIsInOutWrapper,           F,       "inout_wrapper");        \
   X(AttrInterceptable,            F,       "interceptable");        \
@@ -78,7 +76,8 @@ constexpr bool supported(ContextMask mask, AttrContext a) {
   X(AttrInitialSatisfiesTC,       P,       "initial_satisfies_tc"); \
   X(AttrLateInit,                 P,       "late_init");            \
   X(AttrLateInitSoft,             P,       "late_init_soft");       \
-  X(AttrNoReifiedInit,            C,       "noreifiedinit");
+  X(AttrNoReifiedInit,            C,       "noreifiedinit");        \
+  X(AttrIsMethCaller,             F,       "is_meth_caller");
   /* */
 
 #define HHAS_TYPE_FLAGS                                     \
@@ -87,8 +86,9 @@ constexpr bool supported(ContextMask mask, AttrContext a) {
   X(ExtendedHint,    "extended_hint");                      \
   X(TypeVar,         "type_var");                           \
   X(Soft,            "soft");                               \
-  X(TypeConstant,    "type_constant")
-
+  X(TypeConstant,    "type_constant")                       \
+  X(Resolved,        "resolved")                            \
+  X(DisplayNullable, "display_nullable")
 }
 
 //////////////////////////////////////////////////////////////////////

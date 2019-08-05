@@ -51,7 +51,7 @@ function main($v) {
   var_dump(count($v));
 
   echo "empty: ";
-  var_dump(empty($v));
+  var_dump(!($v ?? false));
 
   echo "in_array (3): ";
   var_dump(in_array(3, $v));
@@ -98,6 +98,7 @@ function main($v) {
   echo "array_slice (1): ";
   var_dump(array_slice($v, 1));
 }
-
+<<__EntryPoint>> function main_entry(): void {
 main(dict[]);
 main(dict[0 => 1, 1 => 2, 2 => 3, 3 => 4, 4 => 5]);
+}

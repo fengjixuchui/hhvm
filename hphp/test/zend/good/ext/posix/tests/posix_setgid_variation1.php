@@ -1,6 +1,6 @@
-<?php
+<?hh
 
-
+<<__EntryPoint>> function main(): void {
 echo "*** Test substituting argument 1 with array values ***\n";
 
 $index_array = array(1, 2, 3);
@@ -17,5 +17,5 @@ $variation_array = array(
 foreach ( $variation_array as $var ) {
   try { var_dump(posix_setgid( $var  ) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 }
-?>
-===DONE===
+echo "===DONE===\n";
+}

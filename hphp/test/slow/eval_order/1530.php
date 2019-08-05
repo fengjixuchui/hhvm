@@ -1,11 +1,10 @@
-<?php
+<?hh
 
 interface I {
 }
 function __autoload($c) {
   var_dump($c);
-  class A implements I {
-}
+  include '1530.inc';
 }
 
 <<__EntryPoint>>

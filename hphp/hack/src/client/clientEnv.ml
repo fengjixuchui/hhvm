@@ -10,12 +10,14 @@
 type client_mode =
 | MODE_AI_QUERY of string
 | MODE_AUTO_COMPLETE
+| MODE_BIGCODE of string
 | MODE_COLORING of string
 | MODE_COVERAGE of string
 | MODE_CREATE_CHECKPOINT of string
 | MODE_CST_SEARCH of string list option
 | MODE_DELETE_CHECKPOINT of string
 | MODE_DUMP_SYMBOL_INFO of string
+| MODE_EXTRACT_STANDALONE of string
 | MODE_FIND_CLASS_REFS of string
 | MODE_FIND_REFS of string
 | MODE_FORMAT of int * int
@@ -29,7 +31,6 @@ type client_mode =
 | MODE_IDENTIFY_SYMBOL2 of string
 | MODE_IDENTIFY_SYMBOL3 of string
 | MODE_IN_MEMORY_DEP_TABLE_SIZE
-| MODE_INFER_RETURN_TYPE of string
 | MODE_LINT
 | MODE_LINT_ALL of int
 | MODE_LINT_STDIN of string
@@ -40,9 +41,12 @@ type client_mode =
 | MODE_METHOD_JUMP_CHILDREN of string
 | MODE_OUTLINE
 | MODE_OUTLINE2
+| MODE_PAUSE of bool
 | MODE_REFACTOR of string * string * string
 | MODE_REMOVE_DEAD_FIXMES of int list
+| MODE_REWRITE_LAMBDA_PARAMETERS of string list
 | MODE_RETRIEVE_CHECKPOINT of string
+| MODE_SAVE_NAMING of string
 | MODE_SAVE_STATE of string
 (* TODO figure out why we can't reference FuzzySearchService from here *)
 | MODE_SEARCH of string * string
@@ -54,42 +58,46 @@ type client_mode =
 | MODE_TYPED_FULL_FIDELITY_PARSE of string (* filename *)
 | MODE_FUN_DEPS_AT_POS_BATCH of string list
 | MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH of string list
+| MODE_FILE_DEPENDENTS
 
 type client_check_env = {
   ai_mode: string option;
   autostart: bool;
   config : (string * string) list;
   dynamic_view: bool;
-  file_info_on_disk: bool;
+  error_format: Errors.format;
   force_dormant_start: bool;
   from: string;
   gen_saved_ignore_type_errors: bool;
   ignore_hh_version: bool;
   saved_state_ignore_hhconfig: bool;
-  lint_paths: string list;
+  paths: string list;
   log_inference_constraints: bool;
+  max_errors: int option;
   mode: client_mode;
   no_load: bool;
   output_json: bool;
   prechecked : bool option;
   profile_log: bool;
   replace_state_after_saving: bool;
-  retries: int;
   root: Path.t;
   sort_results: bool;
-  timeout: float option;
+  deadline: float option;
   watchman_debug_logging: bool;
+  allow_non_opt_build : bool;
 }
 
 let mode_to_string = function
   | MODE_AI_QUERY _ -> "MODE_AI_QUERY"
   | MODE_AUTO_COMPLETE -> "MODE_AUTO_COMPLETE"
+  | MODE_BIGCODE _ -> "MODE_BIGCODE"
   | MODE_COLORING _ -> "MODE_COLORING"
   | MODE_COVERAGE _ -> "MODE_COVERAGE"
   | MODE_CREATE_CHECKPOINT _ -> "MODE_CREATE_CHECKPOINT"
   | MODE_CST_SEARCH _ -> "MODE_CST_SEARCH"
   | MODE_DELETE_CHECKPOINT _ -> "MODE_DELETE_CHECKPOINT"
   | MODE_DUMP_SYMBOL_INFO _ -> "MODE_DUMP_SYMBOL_INFO"
+  | MODE_EXTRACT_STANDALONE _ -> "MODE_EXTRACT_STANDALONE"
   | MODE_FIND_CLASS_REFS _ -> "MODE_FIND_CLASS_REFS"
   | MODE_FIND_REFS _ -> "MODE_FIND_REFS"
   | MODE_FORMAT _ -> "MODE_FORMAT"
@@ -103,7 +111,6 @@ let mode_to_string = function
   | MODE_IDENTIFY_SYMBOL2 _ -> "MODE_IDENTIFY_SYMBOL2"
   | MODE_IDENTIFY_SYMBOL3 _ -> "MODE_IDENTIFY_SYMBOL3"
   | MODE_IN_MEMORY_DEP_TABLE_SIZE -> "MODE_IN_MEMORY_DEP_TABLE_SIZE"
-  | MODE_INFER_RETURN_TYPE _ -> "MODE_INFER_RETURN_TYPE"
   | MODE_LINT -> "MODE_LINT"
   | MODE_LINT_ALL _ -> "MODE_LINT_ALL"
   | MODE_LINT_STDIN _ -> "MODE_LINT_STDIN"
@@ -114,9 +121,12 @@ let mode_to_string = function
   | MODE_METHOD_JUMP_CHILDREN _ -> "MODE_METHOD_JUMP_CHILDREN"
   | MODE_OUTLINE -> "MODE_OUTLINE"
   | MODE_OUTLINE2 -> "MODE_OUTLINE2"
+  | MODE_PAUSE _ -> "MODE_PAUSE"
   | MODE_REFACTOR _ -> "MODE_REFACTOR"
   | MODE_REMOVE_DEAD_FIXMES _ -> "MODE_REMOVE_DEAD_FIXMES"
+  | MODE_REWRITE_LAMBDA_PARAMETERS _ -> "MODE_REWRITE_LAMBDA_PARAMETERS"
   | MODE_RETRIEVE_CHECKPOINT _ -> "MODE_RETRIEVE_CHECKPOINT"
+  | MODE_SAVE_NAMING _ -> "MODE_SAVE_NAMING"
   | MODE_SAVE_STATE _ -> "MODE_SAVE_STATE"
   | MODE_SEARCH _ -> "MODE_SEARCH"
   | MODE_STATS -> "MODE_STATS"
@@ -127,3 +137,4 @@ let mode_to_string = function
   | MODE_TYPED_FULL_FIDELITY_PARSE _ -> "MODE_TYPED_FULL_FIDELITY_PARSE"
   | MODE_FUN_DEPS_AT_POS_BATCH _ -> "MODE_FUN_DEPS_AT_POS_BATCH"
   | MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH _ -> "MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH"
+  | MODE_FILE_DEPENDENTS -> "MODE_FILE_LEVEL_DEPENDENCIES"

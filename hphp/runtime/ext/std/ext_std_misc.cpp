@@ -18,8 +18,8 @@
 #include "hphp/runtime/ext/std/ext_std_misc.h"
 #include <limits>
 
-#include "hphp/runtime/base/actrec-args.h"
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/exceptions.h"
@@ -122,6 +122,14 @@ String HHVM_FUNCTION(execution_context) {
   return RuntimeOption::ServerExecutionMode() ? s_worker : s_cli;
 }
 
+TypedValue HHVM_FUNCTION(sequence, const Array& args) {
+  if (args.empty()) return make_tv<KindOfNull>();
+  int64_t idx = args.size() - 1;
+  auto ret = args.rvalAt(idx).tv();
+  tvIncRefGen(ret);
+  return ret;
+}
+
 }
 
 void StandardExtension::threadInitMisc() {
@@ -152,7 +160,7 @@ void StandardExtension::threadInitMisc() {
     );
     IniSetting::Bind(
       this, IniSetting::PHP_INI_ALL,
-      "display_errors", RuntimeOption::EnableHipHopSyntax ? "stderr" : "1",
+      "display_errors", "stderr",
       IniSetting::SetAndGet<std::string>(
         [](const std::string& value) {
           *s_misc_display_errors = value;
@@ -197,6 +205,7 @@ void StandardExtension::initMisc() {
     HHVM_FALIAS(HH\\server_warmup_status_monotonic,
                 server_warmup_status_monotonic);
     HHVM_FALIAS(HH\\execution_context, execution_context);
+    HHVM_FALIAS(HH\\sequence, sequence);
     HHVM_FE(connection_aborted);
     HHVM_FE(connection_status);
     HHVM_FE(connection_timeout);
@@ -346,37 +355,8 @@ int64_t HHVM_FUNCTION(connection_timeout) {
 }
 
 static Class* getClassByName(const char* name, int len) {
-  Class* cls = nullptr;
-  // translate "self" or "parent"
-  if (len == 4 && !memcmp(name, "self", 4)) {
-    cls = g_context->getContextClass();
-    if (!cls) {
-      raise_fatal_error("Cannot access self:: "
-                                "when no class scope is active");
-    }
-  } else if (len == 6 && !memcmp(name, "parent", 6)) {
-    cls = g_context->getParentContextClass();
-    if (!cls) {
-      raise_fatal_error("Cannot access parent");
-    }
-  } else if (len == 6 && !memcmp(name, "static", 6)) {
-    auto const ar = GetCallerFrame();
-    if (ar && ar->func()->cls()) {
-      if (ar->hasThis()) {
-        cls = ar->getThis()->getVMClass();
-      } else {
-        cls = ar->getClass();
-      }
-    }
-    if (!cls) {
-      raise_fatal_error("Cannot access static:: "
-                                "when no class scope is active");
-    }
-  } else {
-    String className(name, len, CopyString);
-    cls = Unit::loadClass(className.get());
-  }
-  return cls;
+  String className(name, len, CopyString);
+  return Unit::loadClass(className.get());
 }
 
 Variant HHVM_FUNCTION(constant, const String& name) {

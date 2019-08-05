@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function gen() {
     yield [1, 2, 3] => [4, 5, 6];
@@ -8,9 +8,8 @@ function gen() {
     yield true => false;
     yield null => null;
 }
-
+<<__EntryPoint>> function main(): void {
 foreach (gen() as $k => $v) {
     var_dump($k, $v);
 }
-
-?>
+}

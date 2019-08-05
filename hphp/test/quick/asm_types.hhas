@@ -1,9 +1,13 @@
+.hh_file 1;
 # Test type annotations for hhas
 
 .adata A_0 = """a:0:{}""";
 
 .main {
   DefCls 0
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "test"
   FCall <> 0 1 "" - "" ""
   PopC
@@ -41,57 +45,89 @@
 }
 
 .function test() {
-  FPushFuncD 1 "use_class"
+  NullUninit
+  NullUninit
+  NullUninit
   NewObjD "C"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
-  FCall <> 1 1 "" - "" ""
-  PopC
-
+  LockObj
   FPushFuncD 1 "use_class"
-  Null
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "use_int_soft"
+  NullUninit
+  NullUninit
+  NullUninit
+  Null
+  FPushFuncD 1 "use_class"
+  FCall <> 1 1 "" - "" ""
+  PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
   Int 5
+  FPushFuncD 1 "use_int_soft"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "use_int_soft"
+  NullUninit
+  NullUninit
+  NullUninit
   Array @A_0
-  FCall <> 1 1 "" - "" ""
-  PopC
-
   FPushFuncD 1 "use_int_soft"
-  Null
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "use_int_nullable"
+  NullUninit
+  NullUninit
+  NullUninit
+  Null
+  FPushFuncD 1 "use_int_soft"
+  FCall <> 1 1 "" - "" ""
+  PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
   Int 6
-  FCall <> 1 1 "" - "" ""
-  PopC
-
   FPushFuncD 1 "use_int_nullable"
+  FCall <> 1 1 "" - "" ""
+  PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
   Null
+  FPushFuncD 1 "use_int_nullable"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "use_int"
+  NullUninit
+  NullUninit
+  NullUninit
   Int 5
-  FCall <> 1 1 "" - "" ""
-  PopC
-
-  FPushFuncD 1 "use_mixed"
-  Array @A_0
-  FCall <> 1 1 "" - "" ""
-  PopC
-
   FPushFuncD 1 "use_int"
+  FCall <> 1 1 "" - "" ""
+  PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
   Array @A_0
+  FPushFuncD 1 "use_mixed"
+  FCall <> 1 1 "" - "" ""
+  PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
+  Array @A_0
+  FPushFuncD 1 "use_int"
   FCall <> 1 1 "" - "" ""
   PopC
 

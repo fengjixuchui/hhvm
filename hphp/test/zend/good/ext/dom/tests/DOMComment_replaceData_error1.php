@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 //Negative offset
 $dom = new DomDocument();
@@ -11,4 +11,3 @@ try {
   }
 }
 
-?>

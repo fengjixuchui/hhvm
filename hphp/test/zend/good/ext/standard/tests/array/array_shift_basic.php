@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : mixed array_shift(&array &$stack)
  * Description: Pops an element off the beginning of the array
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Test basic functionality of array_shift()
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_shift() : basic functionality ***\n";
 
 $array = array('zero', 'one', '3' => 'three', 'four' => 4);
@@ -21,4 +21,4 @@ echo "New array:\n";
 var_dump($array);
 
 echo "Done";
-?>
+}

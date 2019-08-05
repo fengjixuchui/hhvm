@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : string vprintf(string $format , array $args)
  * Description: Output a formatted string 
  * Source code: ext/standard/formatted_print.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vprintf() : basic functionality - using char format ***\n";
 
 // Initialise all required variables
@@ -27,5 +27,5 @@ $result = vprintf($format3,$arg3);
 echo "\n";
 var_dump($result);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

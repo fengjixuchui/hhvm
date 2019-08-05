@@ -1,7 +1,7 @@
-<?php
+<?hh
 
 class X {
-  function bar(X $x) {
+  static function bar(X $x) {
     $x->foo();
     $x->foo();
   }

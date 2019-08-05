@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 /* Prototype  : int exif_imagetype  ( string $filename  )
  * Description: Determine the type of an image
  * Source code: ext/exif/exif.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing exif_imagetype() : error conditions ***\n";
 
 echo "\n-- Testing exif_imagetype() function with no arguments --\n";
@@ -16,7 +16,5 @@ try { var_dump( exif_imagetype(dirname(__FILE__).'/test2.jpg', $extra_arg) ); } 
 
 echo "\n-- Testing exif_imagetype() function with an unknown file  --\n";
 var_dump( exif_imagetype(dirname(__FILE__).'/foo.jpg') );
-
-
-?>
-===Done===
+echo "===Done===";
+}

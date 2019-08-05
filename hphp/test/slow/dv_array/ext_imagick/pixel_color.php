@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 // hphp doesn't support this at this moment
 // ini_set('precision', 3);
@@ -14,7 +14,7 @@ function dump($exp) {
   );
   echo "$ret\n";
 }
-
+<<__EntryPoint>> function main(): void {
 $pixel = new ImagickPixel;
 $pixel->setColor('yellow');
 dump($pixel->getHSL());
@@ -52,5 +52,6 @@ foreach ($colors as $color) {
 }
 dump($pixel->getHSL());
 dump($pixel->getColor());
-?>
-==DONE==
+
+echo "==DONE==\n";
+}

@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype  : int strncmp ( string $str1, string $str2, int $len );
  * Description: Binary safe case-sensitive string comparison of the first n characters
  * Source code: Zend/zend_builtin_functions.c
 */
 
 /* Test strncmp() function with different strings for 'str1', 'str2' and considering case sensitive */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Test strncmp() function: with different input strings ***\n";
 
 /* heredoc string */
@@ -48,4 +48,4 @@ for($index1 = 0; $index1 < count($strings); $index1++) {
   $count ++;
 }
 echo "*** Done ***\n";
-?>
+}

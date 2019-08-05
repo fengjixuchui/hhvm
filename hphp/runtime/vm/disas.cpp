@@ -134,13 +134,9 @@ std::string opt_escaped_long(const StringData* sd) {
 
 //////////////////////////////////////////////////////////////////////
 
-struct EHFault { std::string label; };
 struct EHCatchLegacy { std::string label; };
 struct EHCatch { Offset end; };
-using EHInfo = boost::variant< EHFault
-                             , EHCatchLegacy
-                             , EHCatch
-                             >;
+using EHInfo = boost::variant<EHCatchLegacy, EHCatch>;
 
 struct FuncInfo {
   FuncInfo(const Unit* u, const Func* f) : unit(u), func(f) {}
@@ -155,7 +151,7 @@ struct FuncInfo {
   // names we chose for its handlers).
   std::unordered_map<const EHEnt*,EHInfo> ehInfo;
 
-  // Fault and catch protected region starts in order.
+  // Try/catch protected region starts in order.
   std::vector<std::pair<Offset,const EHEnt*>> ehStarts;
 };
 
@@ -192,14 +188,8 @@ FuncInfo find_func_info(const Func* func) {
   auto find_eh_entries = [&] {
     for (auto& eh : func->ehtab()) {
       finfo.ehInfo[&eh] = [&]() -> EHInfo {
-        switch (eh.m_type) {
-        case EHEnt::Type::Catch:
-          if (eh.m_end != kInvalidOffset) return EHCatch { eh.m_end };
-          return EHCatchLegacy { add_target("C", eh.m_handler) };
-        case EHEnt::Type::Fault:
-          return EHFault { add_target("F", eh.m_handler) };
-        }
-        not_reached();
+        if (eh.m_end != kInvalidOffset) return EHCatch { eh.m_end };
+        return EHCatchLegacy { add_target("C", eh.m_handler) };
       }();
       finfo.ehStarts.emplace_back(eh.m_base, &eh);
     }
@@ -347,8 +337,6 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
 #define IMM_I64A   out.fmt(" {}", decode<int64_t>(pc));
 #define IMM_LA     out.fmt(" {}", loc_name(finfo, decode_iva(pc)));
 #define IMM_IA     out.fmt(" {}", decode_iva(pc));
-#define IMM_CAR    out.fmt(" {}", decode_iva(pc));
-#define IMM_CAW    out.fmt(" {}", decode_iva(pc));
 #define IMM_DA     out.fmt(" {}", decode<double>(pc));
 #define IMM_SA     out.fmt(" {}", \
                            escaped(finfo.unit->lookupLitstrId(decode<Id>(pc))));
@@ -360,7 +348,7 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
 #define IMM_VSA    print_stringvec();
 #define IMM_KA     out.fmt(" {}", print_mk(decode_member_key(pc, finfo.unit)));
 #define IMM_LAR    out.fmt(" {}", show(decodeLocalRange(pc)));
-#define IMM_FCA    out.fmt(" {}", print_fca(decodeFCallArgs(pc)));
+#define IMM_FCA    out.fmt(" {}", print_fca(decodeFCallArgs(thisOpcode, pc)));
 
 #define IMM_NA
 #define IMM_ONE(x)           IMM_##x
@@ -371,11 +359,13 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
 
   out.indent();
 #define O(opcode, imms, ...)                              \
-  case Op::opcode:                                        \
+  case Op::opcode: {                                      \
+    UNUSED auto const thisOpcode = Op::opcode;            \
     pc += encoded_op_size(Op::opcode);                    \
     out.fmt("{}", #opcode);                               \
     IMM_##imms                                            \
-    break;
+    break;                                                \
+  }
   switch (peek_op(pc)) { OPCODES }
 #undef O
 
@@ -396,8 +386,6 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
 #undef IMM_I64A
 #undef IMM_LA
 #undef IMM_IA
-#undef IMM_CAR
-#undef IMM_CAW
 #undef IMM_DA
 #undef IMM_SA
 #undef IMM_RATA
@@ -428,9 +416,6 @@ void print_func_directives(Output& out, const FuncInfo& finfo) {
   if (auto const niters = func->numIterators()) {
     out.fmtln(".numiters {};", niters);
   }
-  if (auto const nslots = func->numClsRefSlots()) {
-    out.fmtln(".numclsrefslots {};", nslots);
-  }
   if (func->numNamedLocals() > func->numParams()) {
     std::vector<std::string> locals;
     for (int i = func->numParams(); i < func->numNamedLocals(); i++) {
@@ -441,9 +426,6 @@ void print_func_directives(Output& out, const FuncInfo& finfo) {
       locals.push_back(local);
     }
     out.fmtln(".declvars {};", folly::join(" ", locals));
-  }
-  for (auto& info : func->staticVars()) {
-    out.fmtln(".static ${};", info.name);
   }
 }
 
@@ -491,10 +473,6 @@ void print_func_body(Output& out, const FuncInfo& finfo) {
 
       // You can't have multiple handlers at the same location.
       assertx(ehHandlers.empty() || ehHandlers.top() != off);
-
-      // Skip the implicitly defined Catch opcode by .catch {} directive.
-      assertx(peek_op(bcIter) == OpCatch);
-      bcIter += instrLen(bcIter);
       continue;
     }
 
@@ -512,10 +490,6 @@ void print_func_body(Output& out, const FuncInfo& finfo) {
         },
         [&] (const EHCatchLegacy& ehCatch) {
           out.fmtln(".try_catch {} {{", ehCatch.label);
-          ehEnds.push(ehIter->second->m_past);
-        },
-        [&] (const EHFault& fault) {
-          out.fmtln(".try_fault {} {{", fault.label);
           ehEnds.push(ehIter->second->m_past);
         }
       );
@@ -665,18 +639,27 @@ void print_constant(Output& out, const PreClass::Const* cns) {
     member_tv_initializer(cns->val()));
 }
 
-void print_property(Output& out, const PreClass::Prop* prop) {
+template<class T>
+void print_prop_or_field_impl(Output& out, const T& f) {
   out.fmtln(".property{}{} {}{} =",
-    opt_attrs(AttrContext::Prop, prop->attrs(), &prop->userAttributes()),
+    opt_attrs(AttrContext::Prop, f.attrs(), &f.userAttributes()),
     RuntimeOption::EvalDisassemblerDocComments &&
     RuntimeOption::EvalDisassemblerPropDocComments
-      ? opt_escaped_long(prop->docComment())
+      ? opt_escaped_long(f.docComment())
       : std::string(""),
-    opt_type_info(prop->userType(), prop->typeConstraint()),
-    prop->name()->data());
+    opt_type_info(f.userType(), f.typeConstraint()),
+    f.name()->data());
   indented(out, [&] {
-    out.fmtln("{};", member_tv_initializer(prop->val()));
+      out.fmtln("{};", member_tv_initializer(f.val()));
   });
+}
+
+void print_field(Output& out, const PreRecordDesc::Field& field) {
+  print_prop_or_field_impl(out, field);
+}
+
+void print_property(Output& out, const PreClass::Prop* prop) {
+  print_prop_or_field_impl(out, *prop);
 }
 
 void print_method(Output& out, const Func* func) {
@@ -791,6 +774,30 @@ void print_cls_directives(Output& out, const PreClass* cls) {
   for (auto* m : cls->allMethods())    print_method(out, m);
 }
 
+void print_rec_fields(Output& out, const PreRecordDesc* rec) {
+  for (auto& f : rec->allFields()) print_field(out, f);
+}
+
+void print_rec(Output& out, const PreRecordDesc* rec) {
+  out.indent();
+  out.fmt(".record {} {}",
+      opt_attrs(AttrContext::Class, rec->attrs()),
+      rec->name()->toCppString());
+  if (!rec->parentName()->empty()) {
+    out.fmt(" extends {}", rec->parentName());
+  }
+  out.fmt(" {{");
+  out.nl();
+  if (RuntimeOption::EvalDisassemblerDocComments) {
+    if (rec->docComment() && !rec->docComment()->empty()) {
+      out.fmtln(".doc {};", escaped_long(rec->docComment()));
+    }
+  }
+  indented(out, [&] { print_rec_fields(out, rec); });
+  out.fmt("}}");
+  out.nl();
+}
+
 void print_cls(Output& out, const PreClass* cls) {
   out.indent();
   auto name = cls->name()->toCppString();
@@ -823,12 +830,6 @@ void print_alias(Output& out, const TypeAlias& alias) {
             (const StringData*)alias.name,
             type_constraint(constraint),
             escaped_long(alias.typeStructure.get()));
-}
-
-void print_unit_strict_types(Output& out, const Unit* unit) {
-  if (!RuntimeOption::PHP7_ScalarTypes) return;
-  if (unit->useStrictTypesForBuiltins()) out.fmtln(".strict 1;");
-  else out.fmtln(".strict 0;");
 }
 
 void print_hh_file(Output& out, const Unit* unit) {
@@ -868,10 +869,10 @@ void print_unit_metadata(Output& out, const Unit* unit) {
 void print_unit(Output& out, const Unit* unit) {
   out.fmtln("# {} starts here", unit->filepath());
   out.nl();
-  print_unit_strict_types(out, unit);
   print_unit_metadata(out, unit);
   for (auto* func : unit->funcs())        print_func(out, func);
   for (auto& cls : unit->preclasses())    print_cls(out, cls.get());
+  for (auto& rec : unit->prerecords())    print_rec(out, rec.get());
   for (auto& alias : unit->typeAliases()) print_alias(out, alias);
   out.fmtln("# {} ends here", unit->filepath());
 }
@@ -885,8 +886,6 @@ void print_unit(Output& out, const Unit* unit) {
  * conjunction with as.cpp):
  *
  * - .line/.srcpos directives
- *
- * - Static locals.
  */
 
 std::string disassemble(const Unit* unit) {

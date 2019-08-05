@@ -1,6 +1,6 @@
-<?php
+<?hh
 
-$a = 'self';
+$a = 'A';
 class A {
   public static function f($value) {
     $filter = 'g';

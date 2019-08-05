@@ -49,22 +49,14 @@ void print_boolean(bool val);
 
 void raiseWarning(const StringData* sd);
 void raiseNotice(const StringData* sd);
-void raiseArrayIndexNotice(int64_t index, bool isInOut);
-void raiseArrayKeyNotice(const StringData* key, bool isInOut);
+[[noreturn]] void throwArrayIndexException(int64_t index, bool isInOut);
+[[noreturn]] void throwArrayKeyException(const StringData* key, bool isInOut);
 std::string formatParamRefMismatch(const char* fname, uint32_t index,
                                    bool funcByRef);
-void raiseParamRefMismatchForFunc(const Func* func, uint32_t index);
-
-inline intptr_t frame_clsref_offset(const Func* f, uint32_t slot) {
-  return
-    -((f->numLocals() + f->numIterators() * kNumIterCells) * sizeof(Cell) +
-      (slot + 1) * sizeof(cls_ref));
-}
-
-inline cls_ref*
-frame_clsref_slot(const ActRec* fp, uint32_t slot) {
-  return (cls_ref*)(uintptr_t(fp) + frame_clsref_offset(fp->m_func, slot));
-}
+void throwParamRefMismatch(const Func* func, uint32_t index);
+void throwParamRefMismatchRange(const Func* func, unsigned firstBit,
+                                uint64_t mask, uint64_t vals);
+void raiseRxCallViolation(const ActRec* caller, const Func* callee);
 
 inline Iter*
 frame_iter(const ActRec* fp, int i) {
@@ -152,15 +144,6 @@ frame_free_locals_inl(ActRec* fp, int numLocals, TypedValue* rv) {
 }
 
 void ALWAYS_INLINE
-frame_free_inl(ActRec* fp, TypedValue* rv) { // For frames with no locals
-  assertx(0 == fp->m_func->numLocals());
-  assertx(fp->m_varEnv == nullptr);
-  assertx(fp->hasThis());
-  decRefObj(fp->getThis());
-  EventHook::FunctionReturn(fp, *rv);
-}
-
-void ALWAYS_INLINE
 frame_free_locals_unwind(ActRec* fp, int numLocals, ObjectData* phpException) {
   fp->setLocalsDecRefd();
   frame_free_locals_inl_no_hook(fp, numLocals);
@@ -180,57 +163,6 @@ void ALWAYS_INLINE
 frame_free_args(TypedValue* args, int count) {
   for (auto i = count; i--; ) tvDecRefGen(*(args - i));
 }
-
-extern const StaticString s_86reifiedinit;
-
-namespace {
-
-inline void setReifiedGenerics(
-  ObjectData* inst, Class* cls, ArrayData* reifiedTypes
-) {
-  auto const arg = RuntimeOption::EvalHackArrDVArrs
-    ? make_tv<KindOfVec>(reifiedTypes) : make_tv<KindOfArray>(reifiedTypes);
-  auto const meth = cls->lookupMethod(s_86reifiedinit.get());
-  assertx(meth != nullptr);
-  g_context->invokeMethod(inst, meth, InvokeArgs(&arg, 1));
-}
-
-inline ObjectData* newInstanceImpl(Class* cls) {
-  assertx(cls);
-  auto* inst = ObjectData::newInstance(cls);
-  assertx(inst->checkCount());
-  return inst;
-}
-
-} // namespace
-
-// Create a new class instance, and register it in the live object table if
-// necessary. The initial ref-count of the instance will be greater than zero.
-inline ObjectData* newInstance(Class* cls) {
-  auto* inst = newInstanceImpl(cls);
-  if (cls->hasReifiedGenerics()) {
-    raise_error("Cannot create a new instance of a reified class without "
-                "the reified generics");
-  }
-  if (cls->hasReifiedParent()) {
-    setReifiedGenerics(inst, cls, ArrayData::CreateVArray());
-  }
-  return inst;
-}
-
-// Does the same work as newInstance but also sets the reified generics on the
-// class denoted as `cls`.
-inline ObjectData* newInstanceReified(Class* cls, ArrayData* reifiedTypes) {
-  if (!cls->hasReifiedGenerics()) return newInstance(cls);
-  auto* inst = newInstanceImpl(cls);
-  assertx(reifiedTypes != nullptr);
-  checkClassReifiedGenericMismatch(cls, reifiedTypes);
-  setReifiedGenerics(inst, cls, reifiedTypes);
-  return inst;
-}
-
-// returns the number of things it put on sp
-int init_closure(ActRec* ar, TypedValue* sp);
 
 int64_t zero_error_level();
 void restore_error_level(int64_t oldLevel);

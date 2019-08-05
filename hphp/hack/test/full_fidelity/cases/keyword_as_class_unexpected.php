@@ -2,7 +2,6 @@
 
 // Raise "Unexpected token"
 class abstract {}
-class and {}
 class array {}
 class as {}
 class break {}
@@ -12,7 +11,6 @@ class class {}
 class clone {}
 class const {}
 class continue {}
-class declare {}
 class default {}
 class do {}
 class echo {}
@@ -21,7 +19,6 @@ class elseif {}
 class empty {}
 class endfor {}
 class endforeach {}
-class enddeclare {}
 class endif {}
 class endswitch {}
 class endwhile {}
@@ -46,7 +43,6 @@ class isset {}
 class list {}
 class namespace {}
 class new {}
-class or {}
 class print {}
 class private {}
 class protected {}
@@ -65,17 +61,14 @@ class use {}
 class using {}
 class var {}
 class while {}
-class xor {}
 class yield {}
 
 new abstract();
-new and();
 new array();
 new as();
 new break();
 new case();
 new catch();
-new class();
 new clone();
 new const();
 new continue();
@@ -113,7 +106,6 @@ new isset();
 new list();
 new namespace();
 new new();
-new or();
 new print();
 new private();
 new protected();
@@ -132,5 +124,4 @@ new use();
 new using();
 new var();
 new while();
-new xor();
 new yield();

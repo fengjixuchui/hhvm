@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : string vsprintf(string $format , array $args)
  * Description: Return a formatted string 
  * Source code: ext/standard/formatted_print.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vsprintf() : basic functionality - using float format ***\n";
 
 // Initialise all required variables
@@ -30,4 +30,4 @@ var_dump( vsprintf($format3,$arg3) );
 var_dump( vsprintf($format33,$arg3) );
 
 echo "Done";
-?>
+}

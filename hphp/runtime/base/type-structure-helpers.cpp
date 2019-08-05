@@ -19,6 +19,7 @@
 
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/enum-util.h"
+#include "hphp/runtime/base/tv-comparisons.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/base/type-structure.h"
 #include "hphp/runtime/base/unit-cache.h"
@@ -34,91 +35,115 @@ namespace HPHP {
 
 const StaticString s_unresolved("[unresolved]");
 
-bool cellInstanceOf(const Cell* tv, const NamedEntity* ne) {
+namespace {
+
+template<typename F>
+bool cellInstanceOfImpl(const Cell* tv, F lookupClass) {
   assertx(!isRefType(tv->m_type));
-  Class* cls = nullptr;
   switch (tv->m_type) {
     case KindOfUninit:
     case KindOfNull:
     case KindOfBoolean:
     case KindOfResource:
+    case KindOfRecord:
       return false;
 
-    case KindOfClass:
-      cls = Unit::lookupClass(ne);
+    case KindOfClass: {
+      auto const cls = lookupClass();
       if (cls && interface_supports_string(cls->name())) {
         classToStringHelper(tv->m_data.pclass); // maybe raise a warning
         return true;
       }
       return false;
+    }
 
-    case KindOfFunc:
-      cls = Unit::lookupClass(ne);
+    case KindOfFunc: {
+      auto const cls = lookupClass();
       if (cls && interface_supports_string(cls->name())) {
         funcToStringHelper(tv->m_data.pfunc); // maybe raise a warning
         return true;
       }
       return false;
+    }
 
-    case KindOfInt64:
-      cls = Unit::lookupClass(ne);
+    case KindOfInt64: {
+      auto const cls = lookupClass();
       return cls && interface_supports_int(cls->name());
+    }
 
-    case KindOfDouble:
-      cls = Unit::lookupClass(ne);
+    case KindOfDouble: {
+      auto const cls = lookupClass();
       return cls && interface_supports_double(cls->name());
+    }
 
     case KindOfPersistentString:
-    case KindOfString:
-      cls = Unit::lookupClass(ne);
+    case KindOfString: {
+      auto const cls = lookupClass();
       return cls && interface_supports_string(cls->name());
+    }
 
     case KindOfPersistentVec:
-    case KindOfVec:
-      cls = Unit::lookupClass(ne);
+    case KindOfVec: {
+      auto const cls = lookupClass();
       return cls && interface_supports_vec(cls->name());
+    }
 
     case KindOfPersistentDict:
-    case KindOfDict:
-      cls = Unit::lookupClass(ne);
+    case KindOfDict: {
+      auto const cls = lookupClass();
       return cls && interface_supports_dict(cls->name());
+    }
 
     case KindOfPersistentKeyset:
-    case KindOfKeyset:
-      cls = Unit::lookupClass(ne);
+    case KindOfKeyset: {
+      auto const cls = lookupClass();
       return cls && interface_supports_keyset(cls->name());
+    }
 
     case KindOfPersistentShape:
-    case KindOfShape:
+    case KindOfShape: {
+      auto const cls = lookupClass();
       if (RuntimeOption::EvalHackArrDVArrs) {
-        cls = Unit::lookupClass(ne);
         return cls && interface_supports_dict(cls->name());
       }
-      cls = Unit::lookupClass(ne);
       return cls && interface_supports_array(cls->name());
+    }
 
     case KindOfPersistentArray:
-    case KindOfArray:
-      cls = Unit::lookupClass(ne);
+    case KindOfArray: {
+      auto const cls = lookupClass();
       return cls && interface_supports_array(cls->name());
+    }
 
-    case KindOfObject:
-      cls = Unit::lookupClass(ne);
+    case KindOfObject: {
+      auto const cls = lookupClass();
       return cls && tv->m_data.pobj->instanceof(cls);
+    }
 
-    case KindOfClsMeth:
-      cls = Unit::lookupClass(ne);
+    case KindOfClsMeth: {
+      auto const cls = lookupClass();
       if (cls && (RuntimeOption::EvalHackArrDVArrs ?
         interface_supports_vec(cls->name()) :
         interface_supports_array(cls->name()))) {
         return true;
       }
       return false;
+    }
 
     case KindOfRef:
       break;
   }
   not_reached();
+}
+
+} // namespace
+
+bool cellInstanceOf(const Cell* tv, const NamedEntity* ne) {
+  return cellInstanceOfImpl(tv, [ne]() { return Unit::lookupClass(ne); });
+}
+
+bool cellInstanceOf(const Cell* tv, const Class* cls) {
+  return cellInstanceOfImpl(tv, [cls]() { return cls; });
 }
 
 namespace {
@@ -152,13 +177,6 @@ folly::Optional<ArrayData*> getGenericTypesOpt(const ArrayData* ts) {
   if (!generics_field.is_set()) return folly::none;
   assertx(isArrayType(generics_field.type()));
   return generics_field.val().parr;
-}
-
-ALWAYS_INLINE
-bool isWildCard(const ArrayData* ts) {
-  return get_ts_kind(ts) == TypeStructure::Kind::T_typevar &&
-         ts->exists(s_name.get()) &&
-         get_ts_name(ts)->equal(s_wildcard.get());
 }
 
 bool typeStructureIsTypeList(
@@ -208,28 +226,40 @@ bool typeStructureIsType(
     case TypeStructure::Kind::T_enum:
     case TypeStructure::Kind::T_null:
     case TypeStructure::Kind::T_void:
+    case TypeStructure::Kind::T_nothing:
     case TypeStructure::Kind::T_noreturn:
     case TypeStructure::Kind::T_mixed:
+    case TypeStructure::Kind::T_dynamic:
     case TypeStructure::Kind::T_nonnull:
     case TypeStructure::Kind::T_dict:
     case TypeStructure::Kind::T_vec:
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
-    case TypeStructure::Kind::T_arraylike:
+    case TypeStructure::Kind::T_arraylike: {
       if (is_ts_nullable(type)) {
         auto const inputT = get_ts_kind(input);
         return inputT == tsKind || inputT == TypeStructure::Kind::T_null;
       }
-      if (!type->equal(input, true)) {
-        if (is_ts_soft(type)) {
-          auto ts = type->copy();
-          // Let's try once again without the soft annotation
-          auto const newType = ts->remove(s_soft.get());
-          return newType->equal(input, true);
-        }
+      auto const soft = is_ts_soft(type);
+      auto const aliasInType = type->exists(s_alias);
+      auto const aliasInInput = input->exists(s_alias);
+      if (type->size() + aliasInInput != input->size() + soft + aliasInType) {
         return false;
       }
-      return true;
+      bool result = true;
+      IterateKV(
+        input,
+        [&](Cell k, TypedValue v1) {
+          assertx(tvIsString(k));
+          if (k.m_data.pstr->isame(s_alias.get())) return false;
+          auto const v2 = type->rval(k.m_data.pstr);
+          if (v2.is_set() && cellEqual(v1, v2.tv())) return false;
+          result = false;
+          return true; // short circuit
+        }
+      );
+      return result;
+    }
     case TypeStructure::Kind::T_class:
     case TypeStructure::Kind::T_interface:
     case TypeStructure::Kind::T_xhp: {
@@ -286,7 +316,11 @@ bool typeStructureIsType(
             return true; // short circuit
           }
           auto inputField = getShapeFieldElement(inputFields->at(k));
-          if (!typeStructureIsType(inputField, typeField, strict, warn)) {
+          // If this field is associated with the value, kill it
+          // This is safe since we already checked this above
+          auto cleanedInput = inputField->remove(s_optional_shape_field.get());
+          auto cleanedType = typeField->remove(s_optional_shape_field.get());
+          if (!typeStructureIsType(cleanedInput, cleanedType, strict, warn)) {
             if (warn || is_ts_soft(typeField)) {
               willWarn = true;
               warn = false;
@@ -308,12 +342,25 @@ bool typeStructureIsType(
       // Only true if the typevar is a wildcard
       return type->exists(s_name.get()) &&
         get_ts_name(type)->equal(s_wildcard.get());
+    case TypeStructure::Kind::T_fun:
+      // TODO(T46022709): Handle variadic args
+      return typeStructureIsType(
+        get_ts_return_type(input),
+        get_ts_return_type(type),
+        warn,
+        strict
+      ) && typeStructureIsTypeList(
+        get_ts_param_types(input),
+        get_ts_param_types(type),
+        nullptr,
+        warn,
+        strict
+      );
     case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
     case TypeStructure::Kind::T_typeaccess:
-    case TypeStructure::Kind::T_fun:
     case TypeStructure::Kind::T_trait:
     case TypeStructure::Kind::T_reifiedtype:
     case TypeStructure::Kind::T_unresolved:
@@ -440,57 +487,74 @@ bool isTSAllWildcards(const ArrayData* ts) {
   return allWildcard;
 }
 
+// This function will always be called after `VerifyParamType` instruction, so
+// we can make the assumption that if `param` is an object, outermost type in
+// `type_` is correct.
+// This function will only be called when either `param` is an object or `type_`
+// is a primitive reified type parameter
 bool verifyReifiedLocalType(
   const ArrayData* type_,
   const TypedValue* param,
+  bool isTypeVar,
   bool& warn
 ) {
   if (tvIsNull(param) && is_ts_nullable(type_)) return true;
-  // If it is not an object, it can't be reified, type annotation check should
-  // have failed already if we are checking for something reified
-  if (!tvIsObject(param)) return true;
-  auto const obj = param->m_data.pobj;
-  auto const objcls = obj->getVMClass();
-  // Since we already checked from the type annotation that the class matches
-  if (!objcls->hasReifiedGenerics() && !objcls->hasReifiedParent()) return true;
-  Array type;
-  try {
-    bool persistent = true;
-    type = TypeStructure::resolve(ArrNR(type_), nullptr, nullptr,
-                                  req::vector<Array>(), persistent);
-  } catch (Exception& e) {
-    return false;
-  } catch (Object& e) {
-    return false;
-  }
-  assertx(type.exists(s_kind));
-  auto const ts_kind =
-    static_cast<TypeStructure::Kind>(type[s_kind].toInt64Val());
-  switch (ts_kind) {
-    case TypeStructure::Kind::T_unresolved:
-    case TypeStructure::Kind::T_class:
-    case TypeStructure::Kind::T_interface:
-    case TypeStructure::Kind::T_xhp: {
-      assertx(type.exists(s_classname));
-      auto const classname = type[s_classname].asStrRef().get();
-      auto const ne = NamedEntity::get(classname);
-      auto const cls = Unit::lookupClass(ne);
-      if (!cls || !obj->instanceof(cls)) return false;
-      return
-        checkReifiedGenericsMatch(type, *tvToCell(param), ne, warn, false);
+  Array type = ArrNR(type_);
+  auto const isObj = tvIsObject(param);
+  // If it is not coming from a reified type variable and it is an object,
+  // we do not need to run the check if the object in question does not have
+  // reified generics since `VerifyParamType` should have taken care of it
+  if (!isTypeVar && isObj) {
+    auto const obj = param->m_data.pobj;
+    auto const objcls = obj->getVMClass();
+    // Since we already checked that the class matches in VerifyParamType using
+    // the type annotation
+    if (!objcls->hasReifiedGenerics() && !objcls->hasReifiedParent()) {
+      return true;
     }
-    default: return true;
   }
-  not_reached();
+  // We only need to resolve the type structure if the param is an object and
+  // outmost type is unresolved, since there is no way for the outmost type to
+  // be resolved but not the inner types due to assumption above.
+  assertx(get_ts_kind(type_) != TypeStructure::Kind::T_unresolved || isObj);
+  if (isObj && get_ts_kind(type_) == TypeStructure::Kind::T_unresolved) {
+    try {
+      bool persistent = true;
+      type = TypeStructure::resolve(type, nullptr, nullptr,
+                                    req::vector<Array>(), persistent);
+    } catch (Exception& e) {
+      if (is_ts_soft(type_)) warn = true;
+      return false;
+    } catch (Object& e) {
+      if (is_ts_soft(type_)) warn = true;
+      return false;
+    }
+  }
+  return checkTypeStructureMatchesCell(type, *param, warn);
 }
 
+/*
+ * Sets the warn flag if the type parameter is denoted as soft either through
+ * an annotation at the declaration site or by soft type hint at the generic
+ * level
+ * If isOrAsOp flag is set, this means we are running this check for is
+ * type testing or as type assertion operations. For these operations,
+ * we reject comparisons over {v,d,}array since we do want not users to be able
+ * distinguish {v,d,}arrays while HackArrayMigration is in progress.
+ * Being able to tell between them cripples the ability to transparently
+ * switch between them in userland.
+ * When isOrAsOp is not set, we only allow being able to check {v,d,}arrays as
+ * an ArrLike, i.e. we do not allow finer checks.
+ */
 template <bool genErrorMessage>
 bool checkTypeStructureMatchesCellImpl(
   const Array& ts,
   Cell c1,
   std::string& givenType,
   std::string& expectedType,
-  std::string& errorKey
+  std::string& errorKey,
+  bool& warn,
+  bool isOrAsOp
 ) {
   auto errOnLen = [&givenType](auto cell, auto len) {
     if (genErrorMessage) {
@@ -567,6 +631,9 @@ bool checkTypeStructureMatchesCellImpl(
         }
       }
       result = isDictOrShapeType(type);
+      if (result && UNLIKELY(RuntimeOption::EvalLogArrayProvenance)) {
+        raise_array_serialization_notice("is_dict", data.parr);
+      }
       break;
     case TypeStructure::Kind::T_vec:
       if (UNLIKELY(RuntimeOption::EvalHackArrCompatIsVecDictNotices)) {
@@ -586,6 +653,9 @@ bool checkTypeStructureMatchesCellImpl(
         break;
       }
       result = isVecType(type);
+      if (result && UNLIKELY(RuntimeOption::EvalLogArrayProvenance)) {
+        raise_array_serialization_notice("is_vec", data.parr);
+      }
       break;
     case TypeStructure::Kind::T_keyset:
       result = isKeysetType(type);
@@ -603,6 +673,10 @@ bool checkTypeStructureMatchesCellImpl(
         break;
       }
       result = isVecType(type) || isDictOrShapeType(type);
+      if (result && UNLIKELY(RuntimeOption::EvalLogArrayProvenance)) {
+        raise_array_serialization_notice(isVecType(type) ? "is_vec" : "is_dict",
+                                         data.parr);
+      }
       break;
     case TypeStructure::Kind::T_arraylike:
       if (isClsMethType(type)) {
@@ -627,18 +701,20 @@ bool checkTypeStructureMatchesCellImpl(
       assertx(ts.exists(s_classname));
       auto const ne = NamedEntity::get(ts[s_classname].asStrRef().get());
       result = cellInstanceOf(&c1, ne);
-      bool warn = false;
-      if (result) result &= checkReifiedGenericsMatch(ts, c1, ne, warn, true);
+      if (result) result &= checkReifiedGenericsMatch(ts, c1, ne, warn,
+                                                      isOrAsOp);
       break;
     }
     case TypeStructure::Kind::T_null:
     case TypeStructure::Kind::T_void:
       result = isNullType(type);
       break;
+    case TypeStructure::Kind::T_nothing:
     case TypeStructure::Kind::T_noreturn:
       result = false;
       break;
     case TypeStructure::Kind::T_mixed:
+    case TypeStructure::Kind::T_dynamic:
       return true;
     case TypeStructure::Kind::T_nonnull:
       result = !isNullType(type);
@@ -677,19 +753,28 @@ bool checkTypeStructureMatchesCellImpl(
             return true;
           }
           auto const& ts2 = asCArrRef(tsElems->rval(k.m_data.num));
+          auto thisElemWarns = false;
           if (!checkTypeStructureMatchesCellImpl<genErrorMessage>(
-              ts2, tvToCell(elem), givenType, expectedType, errorKey)) {
-            elemsDidMatch = false;
+              ts2, tvToCell(elem), givenType, expectedType,
+              errorKey, thisElemWarns, isOrAsOp)) {
             errOnKey(k);
+            if (thisElemWarns) {
+              warn = true;
+              return false;
+            }
+            elemsDidMatch = false;
             return true;
           }
           return false;
         }
       );
+      // If there is an error, ignore warn
+      if (!elemsDidMatch || !keysDidMatch) warn = false;
       if (!keysDidMatch) {
         result = false;
         break;
       }
+      if (elemsDidMatch && warn) elemsDidMatch = false;
       if (UNLIKELY(
         RuntimeOption::EvalHackArrCompatIsArrayNotices &&
         elemsDidMatch &&
@@ -701,7 +786,8 @@ bool checkTypeStructureMatchesCellImpl(
           raise_hackarr_compat_is_operator("array", "tuple");
         }
       }
-      return elemsDidMatch;
+      result = elemsDidMatch;
+      break;
     }
     case TypeStructure::Kind::T_shape: {
       if (!isArrayLikeType(type)) {
@@ -759,25 +845,31 @@ bool checkTypeStructureMatchesCellImpl(
           }
           auto const tsField = getShapeFieldElement(v);
           auto const field = fields->at(k);
+          bool thisFieldWarns = false;
+          numExpectedFields++;
           if (!checkTypeStructureMatchesCellImpl<genErrorMessage>(
               ArrNR(tsField), tvToCell(field), givenType,
-              expectedType, errorKey)) {
-            fieldsDidMatch = false;
+              expectedType, errorKey, thisFieldWarns, isOrAsOp)) {
             errOnKey(k);
+            if (thisFieldWarns) {
+              warn = true;
+              return false;
+            }
+            fieldsDidMatch = false;
             return true;
           }
-          numExpectedFields++;
           return false;
         }
       );
-      if (!fieldsDidMatch) {
+      if (!fieldsDidMatch ||
+          !(allowsUnknownFields || numFields == numExpectedFields)) {
+        warn = false;
         result = false;
         break;
       }
-      bool didSucceed = allowsUnknownFields || numFields == numExpectedFields;
       if (UNLIKELY(
         RuntimeOption::EvalHackArrCompatIsArrayNotices &&
-        didSucceed &&
+        !warn &&
         fields->isPHPArray()
       )) {
         if (fields->isVArray()) {
@@ -786,12 +878,15 @@ bool checkTypeStructureMatchesCellImpl(
           raise_hackarr_compat_is_operator("array", "shape");
         }
       }
-      return didSucceed;
+      result = !warn;
+      break;
     }
     case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
+      result = !isOrAsOp && isArrayType(type);
+      break;
     case TypeStructure::Kind::T_unresolved:
     case TypeStructure::Kind::T_typeaccess:
       result = false;
@@ -804,6 +899,7 @@ bool checkTypeStructureMatchesCellImpl(
       // on these during resolution
       always_assert(false);
   }
+  if (!warn && is_ts_soft(ts.get())) warn = true;
   if (genErrorMessage && !result) {
     if (givenType.empty()) givenType = describe_actual_type(&c1, true);
     if (expectedType.empty()) {
@@ -815,8 +911,9 @@ bool checkTypeStructureMatchesCellImpl(
 
 bool checkTypeStructureMatchesCell(const Array& ts, Cell c1) {
   std::string givenType, expectedType, errorKey;
+  bool warn = false;
   return checkTypeStructureMatchesCellImpl<false>(
-    ts, c1, givenType, expectedType, errorKey);
+    ts, c1, givenType, expectedType, errorKey, warn, true);
 }
 
 bool checkTypeStructureMatchesCell(
@@ -826,12 +923,25 @@ bool checkTypeStructureMatchesCell(
   std::string& expectedType,
   std::string& errorKey
 ) {
+  bool warn = false;
   return checkTypeStructureMatchesCellImpl<true>(
-    ts, c1, givenType, expectedType, errorKey);
+    ts, c1, givenType, expectedType, errorKey, warn, true);
+}
+
+bool checkTypeStructureMatchesCell(
+  const Array& ts,
+  Cell c1,
+  bool& warn
+) {
+  std::string givenType, expectedType, errorKey;
+  return checkTypeStructureMatchesCellImpl<false>(
+    ts, c1, givenType, expectedType, errorKey, warn, false);
 }
 
 ALWAYS_INLINE
-void errorOnIsAsExpressionInvalidTypesList(const ArrayData* tsFields) {
+bool errorOnIsAsExpressionInvalidTypesList(const ArrayData* tsFields,
+                                           bool dryrun, bool allowWildcard) {
+  bool willError = false;
   IterateV(
     tsFields,
     [&](TypedValue v) {
@@ -842,12 +952,23 @@ void errorOnIsAsExpressionInvalidTypesList(const ArrayData* tsFields) {
         assertx(isArrayType(value_field.type()));
         arr = value_field.val().parr;
       }
-      errorOnIsAsExpressionInvalidTypes(ArrNR(arr));
+      if (!errorOnIsAsExpressionInvalidTypes(ArrNR(arr), dryrun,
+                                             allowWildcard)) {
+        return false;
+      }
+      willError = true;
+      return true; // short-circuit
     }
   );
+  return willError;
 }
 
-void errorOnIsAsExpressionInvalidTypes(const Array& ts) {
+bool errorOnIsAsExpressionInvalidTypes(const Array& ts, bool dryrun,
+                                       bool allowWildcard) {
+  auto const err = [&](const char* errMsg) {
+    if (dryrun) return true;
+    raise_error("\"is\" and \"as\" operators cannot be used with %s", errMsg);
+  };
   assertx(ts.exists(s_kind));
   auto ts_kind = static_cast<TypeStructure::Kind>(ts[s_kind].toInt64Val());
   switch (ts_kind) {
@@ -863,44 +984,51 @@ void errorOnIsAsExpressionInvalidTypes(const Array& ts) {
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
     case TypeStructure::Kind::T_arraylike:
-    case TypeStructure::Kind::T_enum:
-    case TypeStructure::Kind::T_class:
-    case TypeStructure::Kind::T_interface:
     case TypeStructure::Kind::T_null:
     case TypeStructure::Kind::T_void:
+    case TypeStructure::Kind::T_nothing:
     case TypeStructure::Kind::T_noreturn:
     case TypeStructure::Kind::T_mixed:
+    case TypeStructure::Kind::T_dynamic:
     case TypeStructure::Kind::T_unresolved:
     case TypeStructure::Kind::T_typeaccess:
     case TypeStructure::Kind::T_nonnull:
     case TypeStructure::Kind::T_xhp:
-      return;
+      return false;
+    case TypeStructure::Kind::T_enum:
+    case TypeStructure::Kind::T_class:
+    case TypeStructure::Kind::T_interface:
+      if (ts.exists(s_generic_types)) {
+        auto genericsArr = ts[s_generic_types].getArrayData();
+        return errorOnIsAsExpressionInvalidTypesList(genericsArr, dryrun,
+                                                     true);
+      }
+      return false;
     case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
-      raise_error("\"is\" and \"as\" operators cannot be used with an array");
+      return err("an array");
     case TypeStructure::Kind::T_fun:
-      raise_error("\"is\" and \"as\" operators cannot be used with a function");
+      return err("a function");
     case TypeStructure::Kind::T_typevar:
-      raise_error(
-        "\"is\" and \"as\" operators cannot be used with a generic type");
+      if (allowWildcard && isWildCard(ts.get())) return false;
+      return err("a generic type");
     case TypeStructure::Kind::T_trait:
-      raise_error("\"is\" and \"as\" operators cannot be used with a trait");
+      return err("a trait");
     case TypeStructure::Kind::T_reifiedtype:
-      raise_error("\"is\" and \"as\" operators cannot be used with "
-                  "incomplete type structures");
+      return err("incomplete type structures");
     case TypeStructure::Kind::T_tuple: {
       assertx(ts.exists(s_elem_types));
       auto const elemsArr = ts[s_elem_types].getArrayData();
-      errorOnIsAsExpressionInvalidTypesList(elemsArr);
-      return;
+      return errorOnIsAsExpressionInvalidTypesList(elemsArr, dryrun,
+                                                   allowWildcard);
     }
     case TypeStructure::Kind::T_shape: {
       assertx(ts.exists(s_fields));
       auto const tsFields = ts[s_fields].getArrayData();
-      errorOnIsAsExpressionInvalidTypesList(tsFields);
-      return;
+      return errorOnIsAsExpressionInvalidTypesList(tsFields, dryrun,
+                                                   allowWildcard);
     }
   }
   not_reached();
@@ -910,9 +1038,8 @@ void errorOnIsAsExpressionInvalidTypes(const Array& ts) {
  * Returns whether the type structure may not be able to be resolved statically,
  * i.e. if it contains `this` references.
  */
-bool typeStructureCouldBeNonStatic(const Array& ts) {
-  assertx(ts.exists(s_kind));
-  switch (static_cast<TypeStructure::Kind>(ts[s_kind].toInt64Val())) {
+bool typeStructureCouldBeNonStatic(const ArrayData* ts) {
+  switch (get_ts_kind(ts)) {
     case TypeStructure::Kind::T_tuple:
     case TypeStructure::Kind::T_fun:
     case TypeStructure::Kind::T_array:
@@ -928,10 +1055,28 @@ bool typeStructureCouldBeNonStatic(const Array& ts) {
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
     case TypeStructure::Kind::T_arraylike:
-    case TypeStructure::Kind::T_unresolved:
     case TypeStructure::Kind::T_typeaccess:
     case TypeStructure::Kind::T_reifiedtype:
       return true;
+    case TypeStructure::Kind::T_unresolved: {
+      if (get_ts_classname(ts)->isame(s_hh_this.get())) return true;
+      bool genericsCouldBeNonStatic = false;
+      auto const generics = ts->rval(s_generic_types.get());
+      if (generics.is_set()) {
+        assertx(isArrayLikeType(generics.type()));
+        IterateV(
+          generics.val().parr,
+          [&](TypedValue v) {
+            assertx(isArrayLikeType(v.m_type));
+            genericsCouldBeNonStatic |=
+              typeStructureCouldBeNonStatic(v.m_data.parr);
+            // If at least one generic could be non-static, short circuit
+            return genericsCouldBeNonStatic;
+          }
+        );
+      }
+      return genericsCouldBeNonStatic;
+    }
     case TypeStructure::Kind::T_null:
     case TypeStructure::Kind::T_void:
     case TypeStructure::Kind::T_int:
@@ -941,8 +1086,10 @@ bool typeStructureCouldBeNonStatic(const Array& ts) {
     case TypeStructure::Kind::T_resource:
     case TypeStructure::Kind::T_num:
     case TypeStructure::Kind::T_arraykey:
+    case TypeStructure::Kind::T_nothing:
     case TypeStructure::Kind::T_noreturn:
     case TypeStructure::Kind::T_mixed:
+    case TypeStructure::Kind::T_dynamic:
     case TypeStructure::Kind::T_typevar:
     case TypeStructure::Kind::T_enum:
     case TypeStructure::Kind::T_nonnull:
@@ -987,7 +1134,7 @@ Array resolveAndVerifyTypeStructure(
   }
   assertx(!resolved.empty());
   assertx(resolved.isDictOrDArray());
-  if (IsOrAsOp) errorOnIsAsExpressionInvalidTypes(resolved);
+  if (IsOrAsOp) errorOnIsAsExpressionInvalidTypes(resolved, false);
   return resolved;
 }
 

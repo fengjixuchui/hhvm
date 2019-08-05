@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 print "key               plain             crypt             guess             stat\n";
 $null = "\0\0\0\0\0\0\0\0";
 $vectors = file(dirname(__FILE__) . "/vectors.txt");
@@ -40,4 +40,4 @@ mcrypt_generic_init( $td, $key, $iv );
 $guess = bin2hex( mcrypt_generic( $td, $plain ) );
 
 echo "\n", $guess, "\n";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_map  ( callback $callback  , array $arr1  [, array $...  ] )
  * Description: Applies the callback to the elements of the given arrays
  * Source code: ext/standard/array.c
@@ -8,12 +8,12 @@
  * Test array_map() by passing different arrays for $arr1 argument
  */
 
-echo "*** Testing array_map() : different arrays for 'arr1' argument ***\n";
-
 function callback($a)
 {
   return ($a);
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing array_map() : different arrays for 'arr1' argument ***\n";
 
 // different arrays
 $arrays = array (
@@ -52,4 +52,4 @@ foreach($arrays as $arr1) {
 }
 
 echo "Done";
-?>
+}

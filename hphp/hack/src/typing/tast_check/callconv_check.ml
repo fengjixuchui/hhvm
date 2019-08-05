@@ -8,7 +8,7 @@
  *)
 
 open Core_kernel
-open Tast
+open Aast
 open Typing_defs
 
 module Env = Tast_env
@@ -20,13 +20,14 @@ let check_types env ((p, _), te) =
       let rec iter ty1 =
         let _, ety1 = Env.expand_type env ty1 in
         match ety1 with
-        | _, Tany -> true
+        | _, Tany
+        | _, Terr -> true
         | _, (Tarraykind _ | Ttuple _ | Tshape _) -> true
         | _, Tclass ((_, cn), _, _)
           when cn = SN.Collections.cDict
             || cn = SN.Collections.cKeyset
             || cn = SN.Collections.cVec -> true
-        | _, Tunresolved tyl -> List.for_all ~f:iter tyl
+        | _, Tunion tyl -> List.for_all ~f:iter tyl
         | _, Tabstract _ ->
           let _, tyl = Env.get_concrete_supertypes env ety1 in
           List.exists ~f:iter tyl

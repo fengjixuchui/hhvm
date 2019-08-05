@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 //Set the default time zone 
 date_default_timezone_set("Europe/London");
@@ -19,5 +19,4 @@ $d = new DateTimeZoneExt("America/Los_Angeles");
 echo "\n-- Invoke __toString --\n";
 echo $d . "\n";
 
-?>
-===DONE===
+echo "===DONE===\n";

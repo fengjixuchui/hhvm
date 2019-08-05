@@ -2,7 +2,7 @@
 
 class C {
   public function f<reify T>() {
-    var_dump(HH\ReifiedGenerics\getType<T>());
+    var_dump(HH\ReifiedGenerics\get_type_structure<T>());
     echo "yep\n";
   }
 }
@@ -18,6 +18,7 @@ class D<reify T1> {
     T2::$f<reify C>();
   }
 }
-
+<<__EntryPoint>> function main(): void {
 $c = new D<C>();
 $c->f<C>();
+}

@@ -1,6 +1,6 @@
-<?php
+<?hh
 
-
+<<__EntryPoint>> function main(): void {
 $filename = dirname(__FILE__)."/touch_variation2.dat";
 $fp=fopen($filename,"w");
 fwrite ($fp,"mydata");
@@ -11,5 +11,4 @@ var_dump(file_get_contents($filename));
 
 @unlink($filename);
 echo "Done\n";
-
-?>
+}

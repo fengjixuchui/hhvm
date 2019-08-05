@@ -1,15 +1,12 @@
-<?php
+<?hh
 
 class A {
   public static function sgen() {
-    $class = get_called_class();
+    $class = static::class;
     yield $class;
   }
-  public static function sfoo() {
-    return self::gen();
-  }
   public function gen() {
-    $class = get_called_class();
+    $class = static::class;
     yield $class;
   }
   public function foo() {
@@ -27,13 +24,7 @@ function t($x) {
 <<__EntryPoint>>
 function main_2173() {
 t(B::sgen());
-t(B::sfoo());
 t(A::sgen());
-t(A::sfoo());
-t(B::gen());
-t(B::foo());
-t(A::gen());
-t(A::foo());
 $b = new B;
 t($b->gen());
 t($b->foo());

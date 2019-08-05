@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : bool syslog(int priority, string message)
  * Description: Generate a system log message 
  * Source code: ext/standard/syslog.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing syslog() : error conditions ***\n";
 
 
@@ -20,5 +20,5 @@ echo "\n-- Testing syslog() function with less than expected no. of arguments --
 $priority = 10;
 try { var_dump( syslog($priority) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

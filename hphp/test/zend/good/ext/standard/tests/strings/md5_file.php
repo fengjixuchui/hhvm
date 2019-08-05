@@ -1,18 +1,18 @@
-<?php
+<?hh
 
 /* Prototype: string md5_file( string filename[, bool raw_output] )
  * Description: Calculate the MD5 hash of a given file
  */
 
 /* Creating an empty file */
-if (($handle = fopen( "md5_EmptyFile.txt", "w+")) == FALSE)
+<<__EntryPoint>> function main(): void { if (($handle = fopen( "md5_EmptyFile.txt", "w+")) == FALSE)
 return false;
 
 /* Creating a data file */
 if (($handle2 = fopen( "md5_DataFile.txt", "w+")) == FALSE)
 return false;
 
-/* Writing into file */ 
+/* Writing into file */
 $filename = "md5_DataFile.txt";
 $content = "Add this to the file\n";
 if (is_writable($filename)) {
@@ -22,7 +22,7 @@ if (is_writable($filename)) {
   }
 }
 
-// close the files 
+// close the files
 fclose($handle);
 fclose($handle2);
 
@@ -34,12 +34,6 @@ var_dump( md5_file("") );
 
 /* invalid filename */
 var_dump( md5_file("aZrq16u") );
-
-/* Scalar value as filename  */
-var_dump( md5_file(12) );
-
-/* NULL as filename */
-var_dump( md5_file(NULL) );
 
 /* Zero arguments */
  try { var_dump ( md5_file() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
@@ -68,4 +62,4 @@ unlink("md5_DataFile.txt");
 unlink("md5_EmptyFile.txt");
 
 echo "\nDone";
-?>
+}

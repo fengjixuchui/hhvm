@@ -1,6 +1,6 @@
-<?php
+<?hh
+class mystring { function __toString() { return "hello, world"; } }
 /* Make a string's first character uppercase */
-
 echo "#### Basic and Various operations ####\n";
 $str_array = array(
 		    "testing ucfirst.",
@@ -37,7 +37,7 @@ $str_array = array(
 	     	  );
 /* loop to test working of ucfirst with different values */
 foreach ($str_array as $string) {
-  var_dump( ucfirst($string) );
+  try { var_dump( ucfirst($string) ); } catch (Exception $e) { var_dump($e->getMessage()); }
 }
 
 
@@ -49,16 +49,11 @@ $str_arr = array("hello", "?world", "!$%**()%**[][[[&@#~!", array());
 try { var_dump( ucfirst($str_arr) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "\n--- Testing objects ---\n";
-/* we get "Catchable fatal error: saying Object of class could not be converted
-        to string" by default when an object is passed instead of string:
-The error can be  avoided by choosing the __toString magix method as follows: */
+// we get "Catchable fatal error: saying Object of class could not be converted
+// to string" by default when an object is passed instead of string:
+// The error can be  avoided by choosing the __toString magix method as follows:
 
-class string {
-  function __toString() {
-    return "hello, world";
-  }
-}
-$obj_string = new string;
+$obj_string = new mystring;
 
 var_dump(ucfirst("$obj_string"));
 
@@ -73,9 +68,6 @@ $string2 = (int)get_resource_type($file1);      // converting stream type to int
 
 /* $string1 is of "stream" type */
 var_dump(ucfirst($string1));
-
-/* $string2 holds a value of "int(0)" */
-var_dump(ucfirst($string2));
 
 fclose($file1);                                 // closing the file "dummy-ucfirst.txt"
 unlink("$filename1");                           // deletes "dummy-ucfirst.txt"
@@ -101,6 +93,11 @@ EOD;
 var_dump(ucfirst($str));
 
 
+
+
+
+
+
 echo "\n--- Testing simple and complex syntax strings ---\n";
 $str = 'world';
 
@@ -109,8 +106,8 @@ var_dump(ucfirst("$str"));
 var_dump(ucfirst("$str'S"));
 var_dump(ucfirst("$strS"));
 
+
 /* String with curly braces, complex syntax */
-var_dump(ucfirst("${str}S"));
 var_dump(ucfirst("{$str}S"));
 
 echo "\n--- Nested ucfirst() ---\n";
@@ -125,4 +122,3 @@ try { ucfirst($str_array[0], $str_array[1]); } catch (Exception $e) { echo "\n".
 try { ucfirst((int)10, (int)20); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done\n";
-?>

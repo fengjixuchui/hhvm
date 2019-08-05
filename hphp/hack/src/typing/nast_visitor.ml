@@ -8,14 +8,14 @@
  *)
 
 open Core_kernel
-open Nast
+open Aast
 open Nast_check_env
 
 class virtual iter = object (self)
-  inherit [_] Nast.iter as super
+  inherit [_] Aast.iter as super
 
   (* Entry point *)
-  method go program = self#on_list (fun () -> self#go_def) () program
+  method go (program : Nast.program) = self#on_list (fun () -> self#go_def) () program
 
   method go_def x = self#on_def (def_env x) x
 
@@ -33,22 +33,40 @@ class virtual iter = object (self)
   method! on_Switch env = super#on_Switch ({ env with control_context = SwitchContext })
   method! on_Efun env = super#on_Efun ({ env with is_finally = false; control_context = Toplevel })
   method! on_Lfun env = super#on_Lfun ({ env with is_finally = false; control_context = Toplevel })
+  method! on_Obj_get env = super#on_Obj_get ({ env with array_append_allowed = false })
+  method! on_Array_get env = super#on_Array_get ({ env with array_append_allowed = false })
+  method! on_Binop env op e1 e2=
+    match op with
+    | Ast_defs.Eq _ ->
+      self#on_expr { env with array_append_allowed = true } e1;
+      self#on_expr env e2
+    | _ -> super#on_Binop env op e1 e2
 
   method! on_func_body env fb =
     match fb.fb_ast with
-    | [If ((_, Id (_, c) as id), then_stmt, else_stmt)] ->
+    | [_, If ((_, Id (_, c) as id), then_stmt, else_stmt)] ->
       super#on_expr { env with rx_is_enabled_allowed = (c = SN.Rx.is_enabled) } id;
       self#on_block env then_stmt;
       self#on_block env else_stmt
     | _ -> super#on_func_body env fb
 
+  method! on_expr env e =
+    match e with
+    | (_, Call (ct, e1, ta, el, uel)) when Nast_check_env.is_rx_move e1 ->
+      self#on_Call {env with rx_move_allowed = false} ct e1 ta el uel
+    | (_, Call (ct, e1, ta, el, uel)) ->
+      self#on_Call {env with rx_move_allowed = true} ct e1 ta el uel
+    | (_, Binop (Ast_defs.Eq None, e1, rhs)) ->
+      self#on_Binop {env with rx_move_allowed = true} (Ast_defs.Eq None) e1 rhs
+    | _ -> super#on_expr { env with rx_move_allowed = false } e
+
 end
 
 class virtual ['state] iter_with_state = object (self)
-  inherit [_] Nast.iter as super
+  inherit [_] Aast.iter as super
 
   (* Entry point *)
-  method go (state: 'state) program =
+  method go (state: 'state) (program : Nast.program) =
     self#on_list (fun () -> self#go_def state) () program
 
   method go_def state x = self#on_def (def_env x, state) x
@@ -65,7 +83,7 @@ class type handler = object
   method at_method_ : env -> Nast.method_ -> unit
   method at_expr : env -> Nast.expr -> unit
   method at_stmt : env -> Nast.stmt -> unit
-  method at_hint : env -> Nast.hint -> unit
+  method at_hint : env -> hint -> unit
 end
 
 class virtual handler_base : handler = object

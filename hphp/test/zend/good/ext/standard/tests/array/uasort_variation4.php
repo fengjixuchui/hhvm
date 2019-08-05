@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool uasort(array $array_arg, string $cmp_function)
  * Description: Sort an array with a user-defined comparison function and maintain index association
  * Source code: ext/standard/array.c
@@ -29,7 +29,7 @@ function cmp_function($value1, $value2)
     return -1;
   }
 }
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing uasort() : different numeric arrays as 'array_arg' ***\n";
 
 // Int array
@@ -62,5 +62,5 @@ echo "-- Sorting empty array --\n";
 var_dump( uasort(&$empty_array, 'cmp_function') );  // expecting: bool(true)
 var_dump($empty_array);
 
-echo "Done"
-?>
+echo "Done";
+}

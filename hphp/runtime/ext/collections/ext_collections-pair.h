@@ -13,7 +13,7 @@ struct BaseMap;
 struct c_Vector;
 
 namespace collections {
-void deepCopy(TypedValue*);
+void deepCopy(tv_lval);
 struct PairIterator;
 }
 
@@ -28,7 +28,7 @@ struct c_Pair : ObjectData {
 
   c_Pair() = delete;
   explicit c_Pair(const TypedValue& e0, const TypedValue& e1)
-    : ObjectData(c_Pair::classof(), NoInit{}, collections::objectFlags,
+    : ObjectData(c_Pair::classof(), NoInit{}, ObjectData::NoAttrs,
                  HeaderKind::Pair)
     , m_size(2)
   {
@@ -37,7 +37,7 @@ struct c_Pair : ObjectData {
   }
   enum class NoIncRef {};
   explicit c_Pair(const TypedValue& e0, const TypedValue& e1, NoIncRef)
-    : ObjectData(c_Pair::classof(), NoInit{}, collections::objectFlags,
+    : ObjectData(c_Pair::classof(), NoInit{}, ObjectData::NoAttrs,
                  HeaderKind::Pair)
     , m_size(2)
   {
@@ -78,7 +78,7 @@ struct c_Pair : ObjectData {
     assertx(obj->getVMClass() == c_Pair::classof());
     return true;
   }
-  template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+  template <IntishCast intishCast = IntishCast::None>
   static Array ToArray(const ObjectData* obj) {
     auto pair = static_cast<const c_Pair*>(obj);
     check_collection_cast_to_array();
@@ -148,7 +148,7 @@ struct c_Pair : ObjectData {
   TypedValue elm0;
   TypedValue elm1;
 
-  friend void collections::deepCopy(TypedValue*);
+  friend void collections::deepCopy(tv_lval);
   friend struct collections::PairIterator;
   friend struct collections::CollectionsExtension;
   friend struct c_Vector;

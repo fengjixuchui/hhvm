@@ -1,4 +1,4 @@
-<?php /* $Id$ */
+<?hh /* $Id$ */
 $original = str_repeat("hallo php",4096);
 $packed=gzcompress($original);
 echo strlen($packed)." ".strlen($original)."\n";
@@ -11,4 +11,3 @@ $packed=gzcompress($original, 9);
 echo strlen($packed)." ".strlen($original)."\n";
 $unpacked=gzuncompress($packed, 40000);
 if (strcmp($original,$unpacked)==0) echo "Strings are equal\n";
-?>

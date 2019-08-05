@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 $var = 7;
 $var2 = NULL;
@@ -47,4 +47,3 @@ function f($x)
 }
 
 $a = f(null) ?? f(1) ?? f(2);
-?>

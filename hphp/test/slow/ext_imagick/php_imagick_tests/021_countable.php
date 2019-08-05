@@ -1,6 +1,6 @@
-<?php
+<?hh
 
-
+<<__EntryPoint>> function main(): void {
 $imagick = new Imagick(array (
             'magick:rose',
             'magick:rose',
@@ -9,4 +9,4 @@ $imagick = new Imagick(array (
 
 echo count ($imagick) . PHP_EOL;
 echo 'done' . PHP_EOL;
-?>
+}

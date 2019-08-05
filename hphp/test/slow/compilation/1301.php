@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function bar($g) {
  return $g;
@@ -8,3 +8,4 @@ class X {
     echo $this->baz(bar(1), bar(''));
   }
 }
+<<__EntryPoint>> function main(): void {}

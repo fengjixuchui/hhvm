@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $s = new SplObjectStorage();
 
 $o1 = new StdClass;
@@ -14,4 +14,4 @@ $s2 = new SplObjectStorage();
 $s2->unserialize($serialized);
 
 var_dump($s == $s2);
-?>
+}

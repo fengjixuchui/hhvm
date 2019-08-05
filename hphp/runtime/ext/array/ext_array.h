@@ -249,7 +249,16 @@ TypedValue HHVM_FUNCTION(hphp_array_idx,
                          const Variant& search,
                          const Variant& key,
                          const Variant& def);
-TypedValue* HHVM_FN(array_multisort)(ActRec* ar);
+bool HHVM_FUNCTION(array_multisort,
+                   VRefParam arg1,
+                   VRefParam arg2 = uninit_null(),
+                   VRefParam arg3 = uninit_null(),
+                   VRefParam arg4 = uninit_null(),
+                   VRefParam arg5 = uninit_null(),
+                   VRefParam arg6 = uninit_null(),
+                   VRefParam arg7 = uninit_null(),
+                   VRefParam arg8 = uninit_null(),
+                   VRefParam arg9 = uninit_null());
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -278,11 +287,11 @@ inline int64_t countHelper(TypedValue tv) {
     return make_tv<KindOfNull>();                                        \
   }                                                                      \
   Variant var_##input(input);                                            \
-  tvCastToArrayInPlace<TypedValue*, IntishCast::CastSilently>(           \
+  tvCastToArrayInPlace<TypedValue*, IntishCast::Cast>(           \
     var_##input.asTypedValue()                                           \
   );                                                                     \
   assertx(var_##input.isArray());                                        \
-  auto arr_##input = var_##input.toArray<IntishCast::CastSilently>();
+  auto arr_##input = var_##input.toArray<IntishCast::Cast>();
 
 #define getCheckedArray(input)        \
   getCheckedArrayRet(input, make_tv<KindOfNull>())

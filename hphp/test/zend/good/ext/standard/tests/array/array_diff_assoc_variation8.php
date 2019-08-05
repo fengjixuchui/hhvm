@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_diff_assoc(array $arr1, array $arr2 [, array ...])
  * Description: Returns the entries of $arr1 that have values which are not 
  * present in any of the others arguments but do additional checks whether 
@@ -12,7 +12,7 @@
  * 2. duplicate values
  * 3. duplicate key names
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_diff_assoc() : variation ***\n";
 
 $array_index = array('a', 'b', 'c', 0 => 'd', 'b');   //duplicate key (0), duplicate value (b)
@@ -26,4 +26,4 @@ var_dump(array_diff_assoc($array_index, $array_assoc));
 var_dump(array_diff_assoc($array_assoc, $array_index));
 
 echo "Done";
-?>
+}

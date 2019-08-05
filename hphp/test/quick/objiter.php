@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Base {
   public $basePub = 10;
@@ -26,7 +26,7 @@ class Child extends Base {
     }
   }
 }
-
+<<__EntryPoint>> function main(): void {
 $b = new Base();
 $b->baseDynamic = "base dynamic";
 echo "\nBase context, Base object\n";
@@ -54,4 +54,5 @@ foreach ($c as $k => $v) {
 $c = new stdclass();
 foreach ($c as $k => $v) {
   echo "empty object has properties, oh no\n";
+}
 }

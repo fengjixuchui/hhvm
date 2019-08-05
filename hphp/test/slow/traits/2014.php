@@ -1,6 +1,4 @@
-<?php
-
-error_reporting(E_ALL);
+<?hh
 
 trait Counter {
 
@@ -12,13 +10,13 @@ trait Counter {
    }
 }
 
-
 class C1 {
    use Counter;
 }
 
+<<__EntryPoint>> function main(): void {
+error_reporting(E_ALL);
 $o = new C1();
 $o->inc();
 $o->inc();
-
-?>
+}

@@ -1,39 +1,46 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
+# pyre-strict
+
+from __future__ import absolute_import, division, print_function, unicode_literals
+
+import contextlib
+import pprint
+import subprocess
+import uuid
 from typing import (
-    Any,
+    BinaryIO,
     Callable,
     Iterator,
     Mapping,
     NamedTuple,
     Optional,
     Sequence,
+    Tuple,
     Type,
     TypeVar,
 )
-import contextlib
-import subprocess
-import uuid
+
 from hh_paths import hh_client
 from jsonrpc_stream import JsonRpcStreamReader, JsonRpcStreamWriter
-
-
-Json = Mapping[str, Any]
+from utils import Json
 
 
 class TranscriptEntry(NamedTuple):
     sent: Optional[Json]
     received: Optional[Json]
 
+    def __repr__(self) -> str:
+        return (
+            "TranscriptEntry"
+            + pprint.pformat({"sent": self.sent, "received": self.received})
+            + "\n"
+        )
+
 
 Transcript = Mapping[str, TranscriptEntry]
+U = TypeVar("U", bound="LspCommandProcessor")
 
 
 class LspCommandProcessor:
-    U = TypeVar("U", bound="LspCommandProcessor")
-
     def __init__(
         self,
         proc: subprocess.Popen,
@@ -46,17 +53,24 @@ class LspCommandProcessor:
 
     @classmethod
     @contextlib.contextmanager
-    def create(cls: Type[U], env: Mapping[str, str]) -> Iterator[U]:
+    def create(
+        cls: Type[U], env: Mapping[str, str], use_serverless_ide: bool
+    ) -> Iterator[U]:
+        args = ["--enhanced-hover"]
+        if use_serverless_ide:
+            args.append("--serverless-ide")
         proc = subprocess.Popen(
-            [hh_client, "lsp", "--enhanced-hover"],
+            [hh_client, "lsp"] + args,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
         )
         try:
-            reader = JsonRpcStreamReader(proc.stdout)
-            writer = JsonRpcStreamWriter(proc.stdin)
+            stdout: BinaryIO = proc.stdout  # pyre-ignore
+            stdin: BinaryIO = proc.stdin  # pyre-ignore
+            reader = JsonRpcStreamReader(stdout)
+            writer = JsonRpcStreamWriter(stdin)
             yield cls(proc, reader, writer)
         finally:
             proc.stdin.close()
@@ -77,12 +91,7 @@ class LspCommandProcessor:
         notify_timeout: float = 1,
     ) -> Transcript:
         transcript = self._send_commands({}, json_commands)
-
-        # we are expecting at least one response per request sent so
-        # we read these giving the server more time to respond with them.
-        transcript = self._read_request_responses(
-            transcript, json_commands, request_timeout
-        )
+        transcript = self._wait_for_shutdown(transcript)
 
         # because it's possible the server sent us notifications
         # along with responses we need to try to keep reading
@@ -95,12 +104,21 @@ class LspCommandProcessor:
         self, transcript: Transcript, commands: Sequence[Json]
     ) -> Transcript:
         for command in commands:
-            self.writer.write(command)
-            transcript = self._scribe(transcript, sent=command, received=None)
-            # Hack: HackLSP server only connects to hh_server asynchronously.
-            # We want to delay until after it's connected before testing more.
-            if command["method"] == "initialize":
+            if command["method"] == "$test/waitForRequest":
+                transcript = self._wait_for_request(transcript, command)
+            elif command["method"] == "$test/waitForResponse":
+                transcript = self._wait_for_response(
+                    transcript, command["params"]["id"]
+                )
+            elif command["method"] == "$test/waitForNotification":
+                transcript = self._wait_for_notification(transcript, command)
+            elif command["method"] == "$test/waitForHhServerReady":
+                # Hack: HackLSP server only connects to hh_server asynchronously.
+                # We want to delay until after it's connected before testing more.
                 transcript = self._wait_for_initialized(transcript)
+            else:
+                self.writer.write(command)
+                transcript = self._scribe(transcript, sent=command, received=None)
 
         return transcript
 
@@ -111,7 +129,7 @@ class LspCommandProcessor:
             "id": -1,
             "params": {"query": "my test query"},
         }
-        id = self._client_request_id(dummy_command)
+        id = self._client_request_id(dummy_command["id"])
 
         def has_error_message(entry: TranscriptEntry, message: str) -> bool:
             if (
@@ -142,6 +160,88 @@ class LspCommandProcessor:
                 and transcript[id].received is not None
             ):
                 return transcript
+
+    def _wait_for_shutdown(self, transcript: Transcript) -> Transcript:
+        shutdown_commands = [
+            v.sent
+            for v in transcript.values()
+            if v.sent is not None and v.sent.get("method") == "shutdown"
+        ]
+        num_shutdown_commands = len(shutdown_commands)
+        assert num_shutdown_commands == 1, (
+            "Expected this test case to have sent "
+            + "exactly 1 shutdown command to wait for, "
+            + f"but instead got {num_shutdown_commands}. "
+            + "If you are writing an LSP test, "
+            + "make sure that you have exactly one `shutdown` command at the end, "
+            + "as we wait for that `shutdown` command to return "
+            + "to know when the test is done running. "
+            + f"Here are the shutdown commands I saw: {shutdown_commands}"
+        )
+        [shutdown_command] = shutdown_commands
+        return self._wait_for_response(transcript, shutdown_command["id"])
+
+    def _wait_for_response(
+        self, transcript: Transcript, request_id: Json
+    ) -> Transcript:
+        transcript_id = self._client_request_id(request_id)
+        request = transcript[transcript_id].sent
+        requests = [request]
+
+        while transcript[transcript_id].received is None:
+            transcript = self._read_request_responses(
+                transcript, commands=requests, timeout_seconds=5
+            )
+        return transcript
+
+    def _wait_for_message_from_server(
+        self, transcript: Transcript, method: str, params: Json
+    ) -> Tuple[Transcript, Json]:
+        while True:
+            message = self._try_read_logged(timeout_seconds=5)
+            params_pretty = pprint.pformat(params)
+            assert (
+                message is not None
+            ), f"""\
+Timed out while waiting for a {method!r} message to be sent from the server.
+The message was expected to have params:
+
+{params_pretty}
+
+Transcript of all the messages we saw:
+
+{transcript}"""
+            transcript = self._scribe(transcript, sent=None, received=message)
+
+            if message.get("id") == -1:
+                # Dummy method from `_wait_for_initialize`, ignore.
+                continue
+
+            if message.get("method") == method and message["params"] == params:
+                return (transcript, message)
+
+    def _wait_for_request(self, transcript: Transcript, command: Json) -> Transcript:
+        method = command["params"]["method"]
+        params = command["params"]["params"]
+        result = command["params"]["result"]
+        (transcript, message) = self._wait_for_message_from_server(
+            transcript, method=method, params=params
+        )
+
+        response = {"jsonrpc": 2.0, "id": message["id"], "result": result}
+        self.writer.write(response)
+        transcript = self._scribe(transcript, sent=response, received=None)
+        return transcript
+
+    def _wait_for_notification(
+        self, transcript: Transcript, command: Json
+    ) -> Transcript:
+        method = command["params"]["method"]
+        params = command["params"]["params"]
+        (transcript, _message) = self._wait_for_message_from_server(
+            transcript, method=method, params=params
+        )
+        return transcript
 
     def _read_request_responses(
         self, transcript: Transcript, commands: Sequence[Json], timeout_seconds: float
@@ -181,21 +281,27 @@ class LspCommandProcessor:
     def _transcript_id(self, sent: Optional[Json], received: Optional[Json]) -> str:
         assert sent is not None or received is not None
 
-        def make_id(json: Json, is_client_request: bool, idgen: Callable[[], str]) -> str:
+        def make_id(
+            json: Json, is_client_request: bool, idgen: Callable[[], str]
+        ) -> str:
             if LspCommandProcessor._has_id(json):
                 if is_client_request:
-                    return LspCommandProcessor._client_request_id(json)
+                    return LspCommandProcessor._client_request_id(json["id"])
                 else:
-                    return LspCommandProcessor._server_request_id(json)
+                    return LspCommandProcessor._server_request_id(json["id"])
             else:
                 return idgen()
 
         if sent:
             is_client_request = LspCommandProcessor._is_request(sent)
-            return make_id(sent, is_client_request, LspCommandProcessor._client_notify_id)
+            return make_id(
+                sent, is_client_request, LspCommandProcessor._client_notify_id
+            )
         elif received:
             is_client_request = not LspCommandProcessor._is_request(received)
-            return make_id(received, is_client_request, LspCommandProcessor._server_notify_id)
+            return make_id(
+                received, is_client_request, LspCommandProcessor._server_notify_id
+            )
         else:
             raise Exception("This should have failed up above in the assert")
 
@@ -203,7 +309,7 @@ class LspCommandProcessor:
         return [c for c in commands if LspCommandProcessor._has_id(c)]
 
     def _try_read_logged(self, timeout_seconds: float) -> Optional[Json]:
-        response = self.reader.try_read(timeout_seconds)
+        response = self.reader.read(timeout_seconds)
         return response
 
     @staticmethod
@@ -227,14 +333,13 @@ class LspCommandProcessor:
         return prefix + str(uuid.uuid4())
 
     @staticmethod
-    def _client_request_id(json_command: Json) -> str:
-        return "REQUEST_CLIENT_TO_SERVER_" + str(json_command["id"])
+    def _client_request_id(id: Json) -> str:
+        return "REQUEST_CLIENT_TO_SERVER_" + str(id)
 
     @staticmethod
-    def _server_request_id(json_command: Json) -> str:
-        return "REQUEST_SERVER_TO_CLIENT_" + str(json_command["id"])
+    def _server_request_id(id: Json) -> str:
+        return "REQUEST_SERVER_TO_CLIENT_" + str(id)
 
     @staticmethod
     def dummy_request_id() -> str:
-        return LspCommandProcessor._client_request_id({"id": -1})
-
+        return LspCommandProcessor._client_request_id(-1)

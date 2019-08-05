@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
 if (!$socket) {
         die('Unable to create AF_INET socket [socket]');
@@ -16,5 +16,4 @@ $retval_3 = socket_get_option( $socket, SOL_SOCKET, SO_RCVTIMEO);
 var_dump($retval_2);
 var_dump($retval_3 === $options);
 socket_close($socket);
-?>
-
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 $dirname = dirname(__FILE__) . '/';
 $file = $dirname . 'test_with_comment.zip';
 include $dirname . 'utils.inc';
@@ -58,4 +58,3 @@ if (!file_exists($dirname . '__oo_extract_tmp/foo')) {
 }
 
 rmdir_rf($dirname . '__oo_extract_tmp');
-?>

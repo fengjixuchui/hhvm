@@ -1,4 +1,4 @@
-<?php
+<?hh
 require_once("dom_test.inc");
 
 $dom = new DOMDocument;
@@ -28,4 +28,3 @@ $top_element = $node->cloneNode();
 print $dom->saveXML($top_element);
 
 
-?>

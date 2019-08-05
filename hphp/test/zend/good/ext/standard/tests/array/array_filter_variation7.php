@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_filter(array $input [, callback $callback])
  * Description: Filters elements from the array via the callback.
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
 * Passing different anonymous callback functions with passed by value and reference arguments
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_filter() : usage variations - Anonymous callback functions ***\n";
 
 $input = array(0, 1, -1, 10, 100, 1000, 'Hello', null);
@@ -24,5 +24,5 @@ var_dump( array_filter($input, () ==> true) );
 echo "Anonymous callback function with regular argument and null statement\n";
 var_dump( array_filter($input, $i ==> {} ) );
 
-echo "Done"
-?>
+echo "Done";
+}

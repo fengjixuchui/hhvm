@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto array posix_getgrgid(long gid)
- * Description: Group database access (POSIX.1, 9.2.1) 
+ * Description: Group database access (POSIX.1, 9.2.1)
  * Source code: ext/posix/posix.c
- * Alias to functions: 
+ * Alias to functions:
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing posix_getgrgid() : usage variations ***\n";
 
 // Initialise function arguments not being substituted (if any)
@@ -61,16 +61,17 @@ $values = array(
 // loop through each element of the array for gid
 
 foreach($values as $value) {
-      echo "\nArg value $value \n";
-      try { $result = posix_getgrgid($value); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
-      if ((is_array($result) && (count($result) == 4)) 
-          || 
-          ($result === false)) {
-          echo "valid output\n";
-      } else {
-          var_dump($result);
-      }
+  echo "\nArg value $value\n";
+  try { $result = posix_getgrgid($value);
+  if ((is_array($result) && (count($result) == 4))
+      ||
+      ($result === false)) {
+      echo "valid output\n";
+  } else {
+      var_dump($result);
+  }
+  } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
 
 echo "Done";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* 
  Prototype: array fgetcsv ( resource $handle [, int $length [, string $delimiter [, string $enclosure]]] );
  Description: Gets line from file pointer and parse for CSV fields
@@ -8,7 +8,7 @@
    Testing fgetcsv() to read a file whose file pointer is pointing to end of file
    and fgetcsv() provided with enclosure argument
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing fgetcsv() : with enclosure argument, file pointer pointing at end of file ***\n";
 
 /* the array is with two elements in it. Each element should be read as 
@@ -82,4 +82,4 @@ foreach ($csv_lists as $csv_list) {
 } // end of foreach
 
 echo "Done\n";
-?>
+}

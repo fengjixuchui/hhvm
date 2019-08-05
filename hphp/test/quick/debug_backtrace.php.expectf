@@ -26,7 +26,7 @@ array(6) {
     ["class"]=>
     string(1) "A"
     ["object"]=>
-    object(A)#1 (0) {
+    object(A) (0) {
     }
     ["type"]=>
     string(2) "->"
@@ -118,16 +118,18 @@ array(6) {
     ["class"]=>
     string(1) "A"
     ["object"]=>
-    object(A)#1 (0) {
+    object(A) (0) {
     }
     ["type"]=>
     string(2) "->"
     ["args"]=>
-    array(2) {
+    array(3) {
       [0]=>
       int(1)
       [1]=>
       int(2)
+      [2]=>
+      NULL
     }
   }
   [2]=>
@@ -201,16 +203,18 @@ array(6) {
     ["class"]=>
     string(1) "A"
     ["object"]=>
-    object(A)#1 (0) {
+    object(A) (0) {
     }
     ["type"]=>
     string(2) "->"
     ["args"]=>
-    array(2) {
+    array(3) {
       [0]=>
       int(1)
       [1]=>
       int(2)
+      [2]=>
+      NULL
     }
   }
   [2]=>

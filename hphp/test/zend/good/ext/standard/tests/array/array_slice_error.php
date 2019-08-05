@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_slice(array $input, int $offset [, int $length [, bool $preserve_keys]])
  * Description: Returns elements specified by offset and length 
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass an incorrect number of arguments to array_slice() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_slice() : error conditions ***\n";
 
 //Test array_slice with one more than the expected number of arguments
@@ -24,4 +24,4 @@ echo "\n-- Testing array_slice() function with less than expected no. of argumen
 try { var_dump( array_slice($input) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

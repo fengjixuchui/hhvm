@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto bool method_exists(object object, string method)
  * Description: Checks if the class method exists
  * Source code: Zend/zend_builtin_functions.c
@@ -6,14 +6,14 @@
  */
 
 function __autoload($className) {
-	echo "In __autoload($className)\n";
+    echo "In __autoload($className)\n";
 }
 
 function test_error_handler($err_no, $err_msg, $filename, $linenum, $vars) {
-	echo "Error: $err_no - $err_msg, $filename($linenum)\n";
+    echo "Error: $err_no - $err_msg, $filename($linenum)\n";
 }
+<<__EntryPoint>> function main(): void {
 set_error_handler('test_error_handler');
-
 echo "*** Testing method_exists() : usage variations ***\n";
 
 // Initialise function arguments not being substituted (if any)
@@ -78,4 +78,4 @@ foreach($values as $value) {
 };
 
 echo "Done";
-?>
+}

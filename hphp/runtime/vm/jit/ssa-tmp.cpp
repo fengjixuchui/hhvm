@@ -20,6 +20,7 @@
 
 #include "hphp/runtime/vm/jit/ir-instruction.h"
 #include "hphp/runtime/vm/jit/print.h"
+#include "hphp/util/low-ptr.h"
 
 namespace HPHP { namespace jit {
 
@@ -36,6 +37,8 @@ void SSATmp::setInstruction(IRInstruction* inst, int dstId) {
 
 namespace {
 int typeNeededWords(Type t) {
+  // Although we say we have zero registers, we always allocate 1 in
+  // reg-alloc.cpp.  In practice this doesn't mean much.
   if (t.subtypeOfAny(TUninit,
                      TInitNull,
                      TNullptr)) {
@@ -45,8 +48,8 @@ int typeNeededWords(Type t) {
   if (t.maybe(TNullptr)) {
     return typeNeededWords(t - TNullptr);
   }
-  if (t <= TCtx || t <= TPtrToGen) {
-    // Ctx and PtrTo* may be statically unknown but always need just one
+  if (t <= TCtx || t <= TFuncMM || t <= TPtrToGen) {
+    // Ctx, FuncMM and PtrTo* may be statically unknown but always need just one
     // register.
     return 1;
   }
@@ -111,6 +114,8 @@ Variant SSATmp::variantVal() const {
     case KindOfFunc:
       return Variant{funcVal()};
     case KindOfClsMeth:
+      if (use_lowptr) return Variant{clsmethVal()};
+      // fallthrough
     case KindOfString:
     case KindOfVec:
     case KindOfDict:
@@ -120,6 +125,7 @@ Variant SSATmp::variantVal() const {
     case KindOfObject:
     case KindOfResource:
     case KindOfRef:
+    case KindOfRecord:
       break;
   }
   always_assert(false);

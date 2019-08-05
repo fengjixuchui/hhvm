@@ -1,3 +1,4 @@
+.hh_file 1;
 # Test that B *doesn't* get marked AlwaysHoistable and so
 # DefClsNop won't actually define it
 
@@ -5,8 +6,10 @@
   DefClsNop 0
   DefClsNop 1
 
-  FPushClsMethodD 0 "print" "B"
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
+  FCallClsMethodD <> 0 1 "" - "" "B" "print"
   PopC
 
   Int 1

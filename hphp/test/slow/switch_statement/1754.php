@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function f_str($x) {
   var_dump($x);
@@ -176,7 +176,7 @@ f_dbl(5000000.3920);
 f_dbl(5000000.5);
 f_dbl(5000000.5001);
 f_dbl(5000000.0);
-f_dbl(log(0));
+f_dbl(log(0.0));
 f_dbl_notpe('5000000.3920');
 f_dbl_notpe('5000000.5');
 f_dbl_notpe('5000000.5001');

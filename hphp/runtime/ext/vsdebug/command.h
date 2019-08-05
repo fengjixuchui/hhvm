@@ -20,6 +20,7 @@
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/type-string.h"
 #include "hphp/runtime/ext/vsdebug/server_object.h"
+#include "hphp/runtime/vm/bytecode.h"
 
 #include <folly/dynamic.h>
 #include <folly/json.h>
@@ -580,6 +581,7 @@ private:
 
   FrameObject* getFrameObject(DebuggerSession* session);
   unsigned int m_frameId;
+  bool m_returnHhvmSerialization;
   FrameObject* m_frameObj {nullptr};
 };
 
@@ -616,7 +618,7 @@ private:
 
 //////  Handles completions requests from the client                //////
 struct CompletionsCommand : public VSCommand {
-  VS_COMMAND_COMMON_IMPL(CompletionsCommand, CommandTarget::Request, true);
+  VS_COMMAND_COMMON_IMPL(CompletionsCommand, CommandTarget::Request, false);
   request_id_t targetThreadId(DebuggerSession* session) override;
 
 private:

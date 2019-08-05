@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype: bool is_executable ( string $filename );
    Description: Tells whether the filename is executable
 */
 
 /* test is_executable() with invalid arguments */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing is_executable(): usage variations ***\n";
 
 $file_handle = fopen(__FILE__, "r");
@@ -30,4 +30,4 @@ foreach( $invalid_files as $invalid_file ) {
 }
 
 echo "Done\n";
-?>
+}

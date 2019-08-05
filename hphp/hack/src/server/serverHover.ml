@@ -10,26 +10,6 @@
 open Core_kernel
 open HoverService
 
-let symbols_at (file, line, char) tcopt =
-  let contents = match file with
-    | ServerCommandTypes.FileName file_name ->
-      let relative_path = Relative_path.(create Root file_name) in
-      File_heap.get_contents relative_path
-    | ServerCommandTypes.FileContent content -> Some content
-  in
-  match contents with
-  | None -> []
-  | Some contents -> ServerIdentifyFunction.go contents line char tcopt
-
-let type_at (file, line, char) tcopt files_info =
-  let tcopt = {
-    tcopt with
-    GlobalOptions.tco_dynamic_view = ServerDynamicView.dynamic_view_on ();
-  } in
-  let _, tast = ServerIdeUtils.check_file_input tcopt files_info file in
-  let env_ty_opt = ServerInferType.type_at_pos tast line char in
-  Option.map env_ty_opt ~f:(fun (env, ty) -> env, Tast_expand.expand_ty env ty)
-
 (** When we get a Class occurrence and a Method occurrence, that means that the
 user is hovering over an invocation of the constructor, and would therefore only
 want to see information about the constructor, rather than getting both the
@@ -45,11 +25,11 @@ let filter_class_and_constructor results =
   then List.filter results ~f:result_is_constructor
   else results
 
-let make_hover_doc_block ~basic_only file occurrence def_opt =
+let make_hover_doc_block file occurrence def_opt =
   match def_opt with
   | Some def ->
     let base_class_name = SymbolOccurrence.enclosing_class occurrence in
-    ServerDocblockAt.go_def def ~base_class_name ~file ~basic_only
+    ServerDocblockAt.go_comments_for_symbol ~def ~base_class_name ~file
     |> Option.to_list
   | None -> []
 
@@ -74,7 +54,7 @@ let make_hover_full_name env_and_ty occurrence def_opt =
     [Printf.sprintf "Full name: `%s`" (Utils.strip_ns name)]
   | _ -> []
 
-let make_hover_info env_and_ty file (occurrence, def_opt) ~basic_only =
+let make_hover_info env_and_ty file (occurrence, def_opt) =
   let open SymbolOccurrence in
   let open Typing_defs in
   let snippet = match occurrence, env_and_ty with
@@ -83,8 +63,8 @@ let make_hover_info env_and_ty file (occurrence, def_opt) ~basic_only =
       when name = Naming_special_names.Members.__construct ->
         let snippet_opt =
           let open Option.Monad_infix in
-          Typing_lazy_heap.get_class classname
-          >>= fun c -> fst (Typing_classes_heap.construct c)
+          Decl_provider.get_class classname
+          >>= fun c -> fst (Decl_provider.Class.construct c)
           >>| fun elt ->
             let ty = Lazy.force_val elt.ce_type in
             Tast_env.print_ty_with_identity env ty occurrence def_opt
@@ -96,18 +76,27 @@ let make_hover_info env_and_ty file (occurrence, def_opt) ~basic_only =
     | occurrence, Some (env, ty) -> Tast_env.print_ty_with_identity env ty occurrence def_opt
   in
   let addendum = List.concat [
-    make_hover_doc_block file occurrence def_opt ~basic_only;
+    make_hover_doc_block file occurrence def_opt;
     make_hover_return_type env_and_ty occurrence;
     make_hover_full_name env_and_ty occurrence def_opt;
   ]
   in
   HoverService.{ snippet; addendum; pos = Some occurrence.SymbolOccurrence.pos }
 
-let go env (file, line, char) ~basic_only =
-  let position = (file, line, char) in
-  let ServerEnv.{ tcopt; files_info; _ } = env in
-  let identities = symbols_at position tcopt in
-  let env_and_ty = type_at position tcopt files_info in
+let go_ctx
+    ~(ctx: ServerIdeContext.t)
+    ~(entry: ServerIdeContext.entry)
+    ~(line: int)
+    ~(column: int)
+    : HoverService.result =
+  let tast = ServerIdeContext.get_tast entry in
+  let identities =
+    ServerIdentifyFunction.go_ctx
+      ~entry
+      ~line
+      ~column in
+  let env_and_ty = ServerInferType.type_at_pos tast line column
+    |> Option.map ~f:(fun (env, ty) -> (env, Tast_expand.expand_ty env ty)) in
   (* There are legitimate cases where we expect to have no identities returned,
      so just format the type. *)
   match identities with
@@ -120,5 +109,13 @@ let go env (file, line, char) ~basic_only =
   | identities ->
     identities
     |> filter_class_and_constructor
-    |> List.map ~f:(make_hover_info env_and_ty file ~basic_only)
+    |> List.map ~f:(fun (occurrence, def_opt) ->
+      let path = def_opt
+        |> Option.map ~f:(fun def -> def.SymbolDefinition.pos)
+        |> Option.map ~f:Pos.filename
+        |> Option.value ~default:(ServerIdeContext.get_path entry)
+      in
+      let file_input = ServerIdeContext.get_file_input ~ctx ~path in
+      make_hover_info env_and_ty file_input (occurrence, def_opt)
+    )
     |> List.remove_consecutive_duplicates ~equal:(=)

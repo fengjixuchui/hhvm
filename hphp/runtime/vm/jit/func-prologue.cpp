@@ -76,14 +76,15 @@ TCA genFuncPrologue(TransID transID, TransKind kind, Func* func, int argc,
   auto context = prologue_context(transID, kind, func,
                                   func->getEntryForNumArgs(argc));
   IRUnit unit{context};
-  irgen::IRGS env{unit, nullptr};
+  irgen::IRGS env{unit, nullptr, 0, nullptr};
 
   irgen::emitFuncPrologue(env, argc, transID);
   irgen::sealUnit(env);
 
   printUnit(2, unit, "After initial prologue generation");
 
-  auto vunit = irlower::lowerUnit(env.unit, CodeKind::Prologue);
+  auto vunit = irlower::lowerUnit(env.unit, nullptr /* annotations */,
+                                  CodeKind::Prologue);
   emitVunit(*vunit, env.unit, code, fixups);
 
   // In order to find the start of the (post guard) prologue after
@@ -105,13 +106,14 @@ TCA genFuncBodyDispatch(Func* func, const DVFuncletsVec& dvs,
                         TransKind kind, CodeCache::View code) {
   auto context = prologue_context(kInvalidTransID, kind, func, func->base());
   IRUnit unit{context};
-  irgen::IRGS env{unit, nullptr};
+  irgen::IRGS env{unit, nullptr, 0, nullptr};
 
   irgen::emitFuncBodyDispatch(env, dvs);
   irgen::sealUnit(env);
 
   CGMeta fixups;
-  auto vunit = irlower::lowerUnit(env.unit, CodeKind::Prologue);
+  auto vunit = irlower::lowerUnit(env.unit, nullptr /* annotations */,
+                                  CodeKind::Prologue);
 
   auto& main = code.main();
   auto const start = main.frontier();

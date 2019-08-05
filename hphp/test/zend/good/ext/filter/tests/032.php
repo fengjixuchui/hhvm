@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $data = array(
     'product_id'    => 'libgd<script>',
     'component'     => '10dhsajkkdhk <do>',
@@ -28,4 +28,4 @@ $args = array(
 
 $myinputs = filter_var_array($data, $args);
 var_dump($myinputs);
-?>
+}

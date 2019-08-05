@@ -1,33 +1,33 @@
-<?php
+<?hh
 /* Prototype  : array array_uintersect(array arr1, array arr2 [, array ...], callback data_compare_func)
- * Description: Returns the entries of arr1 that have values which are present in all the other arguments. Data is compared by using an user-supplied callback. 
+ * Description: Returns the entries of arr1 that have values which are present in all the other arguments. Data is compared by using an user-supplied callback.
  * Source code: ext/standard/array.c
- * Alias to functions: 
+ * Alias to functions:
  */
-
-echo "*** Testing array_uintersect() : usage variation ***\n";
-
-// Initialise function arguments not being substituted (if any)
-$arr1 = array(1, 2);
-
-include('compare_function.inc');
-$data_compare_function = 'compare_function';
-
-//get an unset variable
-$unset_var = 10;
-unset ($unset_var);
 
 // define some classes
 class classWithToString
 {
-	public function __toString() {
-		return "Class A object";
-	}
+    public function __toString() {
+        return "Class A object";
+    }
 }
 
 class classWithoutToString
 {
 }
+include('compare_function.inc');
+<<__EntryPoint>> function main(): void {
+echo "*** Testing array_uintersect() : usage variation ***\n";
+
+// Initialise function arguments not being substituted (if any)
+$arr1 = array(1, 2);
+
+$data_compare_function = 'compare_function';
+
+//get an unset variable
+$unset_var = 10;
+unset ($unset_var);
 
 // heredoc string
 $heredoc = <<<EOT
@@ -92,5 +92,5 @@ foreach($inputs as $key =>$value) {
       var_dump( array_uintersect($arr1, $value, $data_compare_function) );
 };
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -16,17 +16,15 @@ module SLC = ServerLocalConfig
 
 include ServerInitTypes
 
-let tls_bug_re = Str.regexp_string "fburl.com/tls_debug"
-
-let matches_re re s =
-  let pos = try Str.search_forward re s 0 with Caml.Not_found -> -1 in
-  pos > -1
-
-let run_search (genv: ServerEnv.genv) (t: float) : unit =
+let run_search
+    (genv: ServerEnv.genv)
+    (t: float)
+    (sienv: SearchUtils.si_env ref): unit =
   if SearchServiceRunner.should_run_completely genv
+    !sienv.SearchUtils.sie_provider
   then begin
     (* The duration is already logged by SearchServiceRunner *)
-    SearchServiceRunner.run_completely genv;
+    SearchServiceRunner.run_completely genv sienv;
     HackEventLogger.update_search_end t
   end
   else ()
@@ -34,8 +32,12 @@ let run_search (genv: ServerEnv.genv) (t: float) : unit =
 let save_state
     (genv: ServerEnv.genv)
     (env: ServerEnv.env)
-    (output_filename: string) : int option =
-  let ignore_errors =
+    (output_filename: string) : SaveStateServiceTypes.save_state_result option =
+  let ignore_errors = match (ServerArgs.save_with_spec genv.ServerEnv.options) with
+  | None -> false
+  | Some (spec: ServerArgs.save_state_spec_info) -> spec.ServerArgs.gen_with_errors
+  in
+  let ignore_errors = ignore_errors ||
     ServerArgs.gen_saved_ignore_type_errors genv.ServerEnv.options in
   let has_errors = not (Errors.is_empty env.errorl) in
   let do_save_state =
@@ -57,17 +59,19 @@ let save_state
 
   if not do_save_state then None
   else begin
-    let file_info_on_disk = ServerArgs.file_info_on_disk genv.ServerEnv.options in
     let save_decls = genv.local_config.ServerLocalConfig.store_decls_in_saved_state in
+    let dep_table_as_blob = match (ServerArgs.save_with_spec genv.ServerEnv.options) with
+    | None -> false
+    | Some _ -> true
+    in
     let replace_state_after_saving = ServerArgs.replace_state_after_saving genv.ServerEnv.options in
-    let edges_added: int = SaveStateService.save_state
-        ~file_info_on_disk
+    let result = SaveStateService.save_state
+        ~dep_table_as_blob
         ~save_decls
-        env.ServerEnv.files_info
-        env.errorl
+        env
         output_filename
         ~replace_state_after_saving in
-    Some edges_added
+    Some result
   end
 
 let get_lazy_level (genv: ServerEnv.genv) : lazy_level =
@@ -82,56 +86,109 @@ let get_lazy_level (genv: ServerEnv.genv) : lazy_level =
 
 (* entry point *)
 let init
-    ?(load_state_approach: load_state_approach option)
+    ~(init_approach: init_approach)
     (genv: ServerEnv.genv)
+    (env: ServerEnv.env)
   : ServerEnv.env * init_result =
   let lazy_lev = get_lazy_level genv in
-  let env = ServerEnvBuild.make_env genv.config in
   (* Save the global settings for parsing, naming, and declaration.
      These settings cannot be changed during the lifetime of the server. *)
   GlobalParserOptions.set env.popt;
   GlobalNamingOptions.set env.tcopt;
   let root = ServerArgs.root genv.options in
-  let (env, t), init_result = match lazy_lev, load_state_approach with
-    | Init, None ->
-      ServerLazyInit.full_init genv env,
-      Load_state_declined "No saved-state requested (for lazy init)"
+  let (env, t), init_result, skip_post_init = match lazy_lev, init_approach with
+    | _, Remote_init { worker_key; check_id; } ->
+      if not (ServerArgs.check_mode genv.options) then
+        failwith "Remote init is only supported in check (run once) mode";
+      let bin_root = Path.make(Filename.dirname Sys.argv.(0)) in
+      let (errorl, t) = ServerRemoteInit.init
+        genv.workers
+        env.tcopt
+        ~worker_key
+        ~check_id
+        ~bin_root
+        ~root
+      in
+      ({ env with errorl }, t),
+      Load_state_declined "Out-of-band naming table initialization only",
+      true
 
-    | Init, Some load_state_approach -> begin
+    | Init, Full_init ->
+      ServerLazyInit.full_init genv env,
+      Load_state_declined "No saved-state requested (for lazy init)",
+      false
+
+    | Init, Parse_only_init ->
+      ServerLazyInit.parse_only_init genv env,
+      Load_state_declined "No saved-state requested (for lazy parse-only init)",
+      true
+
+    | Init, Saved_state_init load_state_approach -> begin
       let result = ServerLazyInit.saved_state_init ~load_state_approach genv env root in
       (* Saved-state init is the only kind of init that might error... *)
       match result with
-      | Ok ((env, t), ({state_distance; _}, _)) -> (env, t), Load_state_succeeded state_distance
+      | Ok ((env, t), ({state_distance; _}, _)) ->
+        (env, t), Load_state_succeeded state_distance, false
       | Error err ->
-        let (msg, _retry, Utils.Callstack stack) = load_state_error_to_verbose_string err in
-        let err_str = msg ^ "\n" ^ stack in
-        HackEventLogger.load_state_exn err_str;
-        Hh_logger.log "Could not load saved state: %s" err_str;
-        let warning = if matches_re tls_bug_re err_str
-          then ClientMessages.tls_bug_msg
-          else ClientMessages.load_state_not_found_msg
-        in
-        ServerProgress.send_to_monitor (MonitorRpc.PROGRESS_WARNING (Some warning));
-        (* Fall back to type-checking everything *)
-        ServerLazyInit.full_init genv env, Load_state_failed err_str
+        let (msg, retry, Utils.Callstack stack) = load_state_error_to_verbose_string err in
+        let next_step_descr, next_step =
+          match genv.local_config.SLC.require_saved_state, retry with
+          | true, true -> "retry", Exit_status.Failed_to_load_should_retry
+          | true, false -> "fatal", Exit_status.Failed_to_load_should_abort
+          | false, _ -> "fallback", Exit_status.No_error in
+        let msg = Printf.sprintf "%s [%s]" msg next_step_descr in
+        let msg_verbose = Printf.sprintf "%s\n%s" msg stack in
+        HackEventLogger.load_state_exn msg_verbose;
+        Hh_logger.log "Could not load saved state: %s" msg_verbose;
+        if next_step = Exit_status.No_error then begin
+          ServerProgress.send_to_monitor (MonitorRpc.PROGRESS_WARNING (Some msg));
+          ServerLazyInit.full_init genv env, Load_state_failed msg_verbose, false
+        end else begin
+          let finale_data = { ServerCommandTypes.
+            exit_status = next_step;
+            msg;
+            stack = Utils.Callstack stack;
+          } in
+          let finale_file = ServerFiles.server_finale_file (Unix.getpid ()) in
+          begin try
+            let oc = Pervasives.open_out_bin finale_file in
+            Marshal.to_channel oc finale_data [];
+            Pervasives.close_out oc
+          with _ -> () end;
+          Exit_status.exit next_step
+        end
       end
-
-    | Off, Some _
-    | Decl, Some _
-    | Parse, Some _ ->
+    | Off, Full_init
+    | Decl, Full_init
+    | Parse, Full_init ->
+      ServerEagerInit.init genv lazy_lev env,
+      Load_state_declined "No saved-state requested",
+      false
+    | Off, _
+    | Decl, _
+    | Parse, _ ->
       Hh_logger.log "Saved-state requested, but overridden by eager init";
       ServerEagerInit.init genv lazy_lev env,
-      Load_state_declined "Saved-state requested, but overridden by eager init"
-
-    | Off, None
-    | Decl, None
-    | Parse, None ->
-      ServerEagerInit.init genv lazy_lev env,
-      Load_state_declined "No saved-state requested"
+      Load_state_declined "Saved-state requested, but overridden by eager init",
+      false
+    | _, Write_symbol_info ->
+      ServerLazyInit.write_symbol_info_init genv env,
+      Load_state_declined "Write Symobl info state", false
 
   in
-  let env, t = ServerAiInit.ai_check genv env.files_info env t in
-  run_search genv t;
+  if skip_post_init then env, init_result else
+  let env, t = ServerAiInit.ai_check genv env.naming_table env t in
+
+  (* Configure symbol index settings *)
+  let namespace_map = GlobalOptions.po_auto_namespace_map env.tcopt in
+  env.local_symbol_table := (SymbolIndex.initialize
+      ~globalrev_opt:None
+      ~namespace_map
+      ~provider_name:genv.local_config.ServerLocalConfig.symbolindex_search_provider
+      ~quiet:genv.local_config.ServerLocalConfig.symbolindex_quiet
+      ~savedstate_file_opt:genv.local_config.ServerLocalConfig.symbolindex_file
+      ~workers:genv.workers);
+  run_search genv t env.ServerEnv.local_symbol_table;
   SharedMem.init_done ();
   ServerUtils.print_hash_stats ();
   env, init_result

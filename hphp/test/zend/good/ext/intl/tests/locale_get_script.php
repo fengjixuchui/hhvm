@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /*
  * Try getting the prmary language for different locales
@@ -76,4 +76,3 @@ function ut_main()
 include_once( 'ut_common.inc' );
 ut_run();
 
-?>

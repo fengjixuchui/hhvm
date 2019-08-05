@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 namespace {
 /**
@@ -59,15 +59,6 @@ function class_alias(string $original,
 <<__Native>>
 function class_exists(string $class_name,
                       bool $autoload = true): bool;
-
-/**
- * the "Late Static Binding" class name
- *
- * @return string - Returns the class name. Returns FALSE if called from
- *   outside a class.
- */
-<<__Native, __Rx>>
-function get_called_class(): mixed;
 
 /**
  * Get the constants of the given class.
@@ -294,4 +285,19 @@ function class_meth_get_class(mixed $class_meth): string;
 <<__Native,  __Rx>>
 function class_meth_get_method(mixed $class_meth): string;
 
+/**
+ * Get class name from meth_caller
+ * @param mixed $meth_caller
+ * @return class name
+ */
+<<__Native, __IsFoldable, __Rx>>
+function meth_caller_get_class(mixed $meth_caller): string;
+
+/**
+ * Get method name from meth_caller
+ * @param mixed $meth_caller
+ * @return method name
+ */
+<<__Native, __IsFoldable, __Rx>>
+function meth_caller_get_method(mixed $meth_caller): string;
 }

@@ -19,14 +19,11 @@
 #endif
 
 #include "hphp/runtime/base/exceptions.h"
+#include "hphp/runtime/vm/reified-generics.h"
 #include "hphp/system/systemlib.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
-
-inline void ObjectData::resetMaxId() {
-  os_max_id = 0;
-}
 
 inline ObjectData::ObjectData(Class* cls, uint8_t flags, HeaderKind kind)
   : m_cls(cls)
@@ -35,7 +32,6 @@ inline ObjectData::ObjectData(Class* cls, uint8_t flags, HeaderKind kind)
   assertx(isObjectKind(m_kind));
   assertx(!cls->needInitialization() || cls->initialized());
   assertx(!isCollection()); // collections use NoInit{}
-  o_id = ++os_max_id;
   instanceInit(cls);
 }
 
@@ -46,7 +42,6 @@ inline ObjectData::ObjectData(Class* cls, InitRaw, uint8_t flags,
   initHeader_16(kind, OneReference, flags);
   assertx(isObjectKind(m_kind));
   assertx(!cls->needInitialization() || cls->initialized());
-  o_id = ++os_max_id;
 }
 
 inline ObjectData::ObjectData(Class* cls, NoInit, uint8_t flags,
@@ -61,23 +56,22 @@ inline size_t ObjectData::heapSize() const {
   return sizeForNProps(m_cls->numDeclProperties());
 }
 
-inline ObjectData* ObjectData::newInstance(Class* cls) {
-  Attr attrs = cls->attrs();
-  if (UNLIKELY(attrs &
-               (AttrAbstract | AttrInterface | AttrTrait | AttrEnum))) {
-    raiseAbstractClassError(cls);
-  }
-  if (cls->needInitialization()) {
-    cls->initialize();
-  }
+template <bool Unlocked, typename Init>
+ALWAYS_INLINE
+ObjectData* ObjectData::newInstanceImpl(Class* cls, Init objConstruct) {
+  if (cls->needInitialization()) cls->initialize();
 
-  ObjectData* obj;
-  if (auto const ctor = cls->instanceCtor()) {
-    obj = ctor(cls);
+  if (auto const ctor = cls->instanceCtor<Unlocked>()) {
+    auto obj = ctor(cls);
     assertx(obj->checkCount());
     assertx(obj->hasInstanceDtor());
-  } else if (cls->hasMemoSlots()) {
+    return obj;
+  }
+
+  auto mem = [&](){
     auto const size = sizeForNProps(cls->numDeclProperties());
+    if (!cls->hasMemoSlots()) return tl_heap->objMalloc(size);
+
     auto const objOff = objOffFromMemoNode(cls);
     auto mem = tl_heap->objMalloc(size + objOff);
     new (NotNull{}, mem) MemoNode(objOff);
@@ -86,53 +80,78 @@ inline ObjectData* ObjectData::newInstance(Class* cls) {
       0,
       objOff - sizeof(MemoNode)
     );
-    obj = new (NotNull{}, reinterpret_cast<char*>(mem) + objOff)
-      ObjectData(cls);
-    assertx(obj->hasExactlyOneRef());
-    assertx(!obj->hasInstanceDtor());
-  } else {
-    auto const size = sizeForNProps(cls->numDeclProperties());
-    auto& mm = *tl_heap;
-    obj = new (NotNull{}, mm.objMalloc(size)) ObjectData(cls);
-    assertx(obj->hasExactlyOneRef());
-    assertx(!obj->hasInstanceDtor());
-  }
+    return reinterpret_cast<void*>(reinterpret_cast<char*>(mem) + objOff);
+  }();
 
+  auto obj = objConstruct(mem);
+  assertx(obj->hasExactlyOneRef());
+  assertx(!obj->hasInstanceDtor());
+  return obj;
+}
+
+template <bool Unlocked>
+inline ObjectData* ObjectData::newInstance(Class* cls) {
+  assertx(cls);
+  if (UNLIKELY(cls->attrs() &
+               (AttrAbstract | AttrInterface | AttrTrait | AttrEnum))) {
+    raiseAbstractClassError(cls);
+  }
+  if (cls->hasReifiedGenerics()) {
+    raise_error("Cannot create a new instance of a reified class without "
+                "the reified generics");
+  }
+  auto obj = ObjectData::newInstanceImpl<Unlocked>(cls, [&](void* mem) {
+    return new (NotNull{}, mem)
+      ObjectData(cls, Unlocked ? IsBeingConstructed : NoAttrs);
+  });
   if (UNLIKELY(cls->needsInitThrowable())) {
     // may incref obj
     throwable_init(obj);
     assertx(obj->checkCount());
   }
+  if (cls->hasReifiedParent()) {
+    obj->setReifiedGenerics(cls, ArrayData::CreateVArray());
+  }
+  return obj;
+}
 
+template <bool Unlocked>
+inline ObjectData* ObjectData::newInstanceReified(Class* cls,
+                                                  ArrayData* reifiedTypes) {
+  assertx(cls);
+  if (UNLIKELY(cls->attrs() &
+               (AttrAbstract | AttrInterface | AttrTrait | AttrEnum))) {
+    raiseAbstractClassError(cls);
+  }
+  if (cls->hasReifiedGenerics()) {
+    assertx(reifiedTypes);
+    checkClassReifiedGenericMismatch(cls, reifiedTypes);
+  }
+  auto obj = ObjectData::newInstanceImpl<Unlocked>(cls, [&](void* mem) {
+    return new (NotNull{}, mem)
+      ObjectData(cls, Unlocked ? IsBeingConstructed : NoAttrs);
+  });
+  if (UNLIKELY(cls->needsInitThrowable())) {
+    // may incref obj
+    throwable_init(obj);
+    assertx(obj->checkCount());
+  }
+  if (cls->hasReifiedGenerics()) {
+    obj->setReifiedGenerics(cls, reifiedTypes);
+    return obj;
+  }
+  if (cls->hasReifiedParent()) {
+    obj->setReifiedGenerics(cls, ArrayData::CreateVArray());
+  }
   return obj;
 }
 
 inline ObjectData* ObjectData::newInstanceNoPropInit(Class* cls) {
-  if (cls->needInitialization()) cls->initialize();
-
-  assertx(!cls->instanceCtor() &&
-         !(cls->attrs() &
-           (AttrAbstract | AttrInterface | AttrTrait | AttrEnum)));
-
-  ObjectData* obj;
-  auto const size = sizeForNProps(cls->numDeclProperties());
-  if (cls->hasMemoSlots()) {
-    auto const objOff = objOffFromMemoNode(cls);
-    auto mem = tl_heap->objMalloc(size + objOff);
-    new (NotNull{}, mem) MemoNode(objOff);
-    std::memset(
-      reinterpret_cast<char*>(mem) + sizeof(MemoNode),
-      0,
-      objOff - sizeof(MemoNode)
-    );
-    obj = new (NotNull{}, reinterpret_cast<char*>(mem) + objOff)
-      ObjectData(cls, InitRaw{}, ObjectData::NoAttrs);
-  } else {
-    obj = new (NotNull{}, tl_heap->objMalloc(size))
-      ObjectData(cls, InitRaw{}, ObjectData::NoAttrs);
-  }
-  assertx(obj->hasExactlyOneRef());
-  return obj;
+  assertx(!(cls->attrs() &
+            (AttrAbstract | AttrInterface | AttrTrait | AttrEnum)));
+  return ObjectData::newInstanceImpl<false>(cls, [&](void* mem) {
+    return new (NotNull{}, mem) ObjectData(cls, InitRaw{}, ObjectData::NoAttrs);
+  });
 }
 
 inline void ObjectData::instanceInit(Class* cls) {
@@ -169,7 +188,6 @@ inline void ObjectData::verifyPropTypeHintImpl(tv_rval val,
     raise_property_typehint_binding_error(
       prop.cls,
       prop.name,
-      false,
       tc.isSoft()
     );
     return;
@@ -241,7 +259,15 @@ inline bool ObjectData::instanceof(const Class* c) const {
 }
 
 inline bool ObjectData::isBeingConstructed() const {
-  return getAttribute(Attribute::IsBeingConstructed);
+  return getAttribute(IsBeingConstructed);
+}
+
+inline void ObjectData::lockObject() {
+  m_aux16 &= ~IsBeingConstructed;
+}
+
+inline void ObjectData::unlockObject() {
+   m_aux16 |= IsBeingConstructed;
 }
 
 inline bool ObjectData::hasUninitProps() const {
@@ -305,10 +331,6 @@ inline bool ObjectData::hasNativeData() const {
   return m_kind == HeaderKind::NativeObject;
 }
 
-inline uint32_t ObjectData::getId() const {
-  return o_id;
-}
-
 inline bool ObjectData::toBoolean() const {
   if (UNLIKELY(m_cls->rtAttribute(Class::CallToImpl))) {
     return toBooleanImpl();
@@ -336,14 +358,7 @@ inline const Func* ObjectData::methodNamed(const StringData* sd) const {
   return getVMClass()->lookupMethod(sd);
 }
 
-[[noreturn]] void throw_cannot_modify_immutable_object(const char* className);
-
-inline TypedValue* ObjectData::propVecForWrite() {
-  if (UNLIKELY(m_cls->hasImmutableProps()) && !isBeingConstructed()) {
-    throw_cannot_modify_immutable_object(getClassName().data());
-  }
-  return const_cast<TypedValue*>(propVec());
-}
+[[noreturn]] void throw_cannot_modify_const_object(const char* className);
 
 inline TypedValue* ObjectData::propVecForConstruct() {
   return const_cast<TypedValue*>(propVec());
@@ -355,7 +370,7 @@ inline const TypedValue* ObjectData::propVec() const {
 
 inline tv_lval ObjectData::propLvalAtOffset(Slot idx) {
   assertx(idx < m_cls->numDeclProperties());
-  assertx(!(m_cls->declProperties()[idx].attrs & AttrIsImmutable));
+  assertx(!(m_cls->declProperties()[idx].attrs & AttrIsConst));
   return tv_lval { const_cast<TypedValue*>(&propVec()[idx]) };
 }
 

@@ -103,7 +103,7 @@ size_t relocateImpl(RelocationInfo& rel,
               // Offset to 1 past end of cache line.
               size_t offset = ALIGN_OFFSET((~(uint64_t)nextDest) + 2,
                                            x64::cache_line_size());
-              X64Assembler a { destBlock };
+              NEW_X64_ASM(a, destBlock);
               a.emitNop(offset);
               destRange += offset;
               internalRefsNeedUpdating = true;
@@ -177,7 +177,7 @@ size_t relocateImpl(RelocationInfo& rel,
           }
         } else {
           if (fixups.addressImmediates.count((TCA)~uintptr_t(src))) {
-            // Handle weird, encoded offset, used by cgLdObjMethod
+            // Handle weird, encoded offset, used by LdSmashable
             always_assert(di.immediate() == ((uintptr_t(src) << 1) | 1));
             bool DEBUG_ONLY success =
               d2.setImmediate(((uintptr_t)dest << 1) | 1);

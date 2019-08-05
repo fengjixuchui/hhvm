@@ -1,6 +1,6 @@
-<?php
+<?hh
 // TODO: Add more encoding, strings.....
-//$debug = true;
+
 ini_set('include_path', dirname(__FILE__));
 include_once('common.inc');
 
@@ -21,5 +21,3 @@ $str = mb_strwidth($euc_jp, 100, -10,'...','EUC-JP');
 $str = mb_strwidth($euc_jp, -100, 10,'...','EUC-JP');
 ($str !== "") ?	print "6 OK: $str\n" : print "NG: $str\n";
 */
-?>
-

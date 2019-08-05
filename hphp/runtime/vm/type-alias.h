@@ -31,6 +31,7 @@ namespace HPHP {
 
 struct ArrayData;
 struct Class;
+struct RecordDesc;
 struct StringData;
 struct Unit;
 
@@ -58,8 +59,7 @@ struct TypeAlias {
   template<class SerDe>
   typename std::enable_if<!SerDe::deserializing>::type
   serde(SerDe& sd) {
-    sd(name)
-      (value)
+    sd(value)
       (type)
       (nullable)
       (userAttrs)
@@ -75,8 +75,7 @@ struct TypeAlias {
   template<class SerDe>
   typename std::enable_if<SerDe::deserializing>::type
   serde(SerDe& sd) {
-    sd(name)
-      (value)
+    sd(value)
       (type)
       (nullable)
       (userAttrs)
@@ -133,6 +132,8 @@ struct TypeAliasReq {
   bool nullable{false};
   // Aliased Class; nullptr if type != Object.
   LowPtr<Class> klass{nullptr};
+  // Aliased RecordDesc; nullptr if type != Record.
+  LowPtr<RecordDesc> rec{nullptr};
   // Needed for error messages; nullptr if not defined.
   LowStringPtr name{nullptr};
   Array typeStructure{Array::CreateDArray()};

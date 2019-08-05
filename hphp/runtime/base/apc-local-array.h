@@ -49,11 +49,8 @@ struct APCLocalArray final : ArrayData,
   static bool ExistsInt(const ArrayData* ad, int64_t k);
   static bool ExistsStr(const ArrayData* ad, const StringData* k);
   static arr_lval LvalInt(ArrayData*, int64_t k, bool copy);
-  static arr_lval LvalIntRef(ArrayData*, int64_t k, bool copy);
   static arr_lval LvalStr(ArrayData*, StringData* k, bool copy);
-  static arr_lval LvalStrRef(ArrayData*, StringData* k, bool copy);
   static arr_lval LvalNew(ArrayData*, bool copy);
-  static arr_lval LvalNewRef(ArrayData*, bool copy);
   static ArrayData* SetInt(ArrayData*, int64_t k, Cell v);
   static constexpr auto SetIntInPlace = &SetInt;
   static ArrayData* SetStr(ArrayData*, StringData* k, Cell v);
@@ -62,10 +59,6 @@ struct APCLocalArray final : ArrayData,
   static constexpr auto SetWithRefIntInPlace = &SetWithRefInt;
   static ArrayData* SetWithRefStr(ArrayData*, StringData* k, TypedValue v);
   static constexpr auto SetWithRefStrInPlace = &SetWithRefStr;
-  static ArrayData* SetRefInt(ArrayData*, int64_t k, tv_lval v);
-  static constexpr auto SetRefIntInPlace = &SetRefInt;
-  static ArrayData* SetRefStr(ArrayData*, StringData* k, tv_lval v);
-  static constexpr auto SetRefStrInPlace = &SetRefStr;
   static ArrayData *RemoveInt(ArrayData* ad, int64_t k);
   static constexpr auto RemoveIntInPlace = &RemoveInt;
   static ArrayData *RemoveStr(ArrayData* ad, const StringData* k);
@@ -73,8 +66,6 @@ struct APCLocalArray final : ArrayData,
   static ArrayData* Copy(const ArrayData*);
   static ArrayData* Append(ArrayData* a, Cell v);
   static constexpr auto AppendInPlace = &Append;
-  static ArrayData* AppendRef(ArrayData*, tv_lval v);
-  static constexpr auto AppendRefInPlace = &AppendRef;
   static ArrayData* AppendWithRef(ArrayData*, TypedValue v);
   static constexpr auto AppendWithRefInPlace = &AppendWithRef;
   static ArrayData* PlusEq(ArrayData*, const ArrayData *elems);
@@ -84,6 +75,8 @@ struct APCLocalArray final : ArrayData,
   static constexpr auto NvTryGetInt = &NvGetInt;
   static tv_rval NvGetStr(const ArrayData*, const StringData* k);
   static constexpr auto NvTryGetStr = &NvGetStr;
+  static ssize_t NvGetIntPos(const ArrayData* ad, int64_t k);
+  static ssize_t NvGetStrPos(const ArrayData* ad, const StringData* k);
   static tv_rval RvalInt(const ArrayData* ad, int64_t k) {
     return NvGetInt(ad, k);
   }

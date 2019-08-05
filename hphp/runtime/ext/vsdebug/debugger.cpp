@@ -102,13 +102,15 @@ void Debugger::setDebuggerOptions(DebuggerOptions options) {
       "showDummyOnAsyncPause: %s\n"
       "warnOnInterceptedFunctions: %s\n"
       "notifyOnBpCalibration: %s\n"
-      "disableUniqueVarRef: %s\n",
-      "disableDummyPsPs: %s\n",
+      "disableUniqueVarRef: %s\n"
+      "disableDummyPsPs: %s\n"
+      "maxReturnedStringLength: %d\n",
     options.showDummyOnAsyncPause ? "YES" : "NO",
     options.warnOnInterceptedFunctions ? "YES" : "NO",
     options.notifyOnBpCalibration ? "YES" : "NO",
     options.disableUniqueVarRef ? "YES" : "NO",
-    options.disableDummyPsPs ? "YES" : "NO"
+    options.disableDummyPsPs ? "YES" : "NO",
+    options.maxReturnedStringLength
   );
 }
 
@@ -292,6 +294,7 @@ void Debugger::setClientConnected(
         m_connectionNotifyCondition.notify_all();
       }
     } else {
+      // disconnected case
       auto logger = Eval::Debugger::GetUsageLogger();
       if (logger != nullptr) {
         VSDebugLogger::Log(
@@ -594,7 +597,9 @@ void Debugger::sendUserMessage(const char* message, const char* level) {
   }
 
   if (m_transport != nullptr) {
-    m_transport->enqueueOutgoingUserMessage(message, level);
+    m_transport->enqueueOutgoingUserMessage(
+      getCurrentThreadId(), message, level
+    );
   }
 }
 
@@ -818,7 +823,7 @@ DebuggerRequestInfo* Debugger::createRequestInfo() {
     return nullptr;
   }
 
-  assert(requestInfo->m_allFlags == 0);
+  assertx(requestInfo->m_allFlags == 0);
 
   requestInfo->m_breakpointInfo = new RequestBreakpointInfo();
   if (requestInfo->m_breakpointInfo == nullptr) {
@@ -919,6 +924,7 @@ DebuggerRequestInfo* Debugger::attachToRequest(RequestInfo* ti) {
       }
     } else {
       m_transport->enqueueOutgoingUserMessage(
+        kDummyTheadId,
         "Failed to attach to new HHVM request: another debugger is already "
           "attached.",
         DebugTransport::OutputLevelError
@@ -1111,8 +1117,7 @@ void Debugger::reportClientMessageError(
       DebugTransport::MessageTypeResponse
     );
 
-    // Print an error to the debugger console to inform the user as well.
-    sendUserMessage(errorMessage, DebugTransport::OutputLevelError);
+
   } catch (...) {
     // We tried.
     VSDebugLogger::Log(
@@ -1253,7 +1258,7 @@ void Debugger::dispatchCommandToRequest(
     auto it = m_requestIdMap.find(requestId);
     if (it != m_requestIdMap.end()) {
       const auto request = m_requests.find(it->second);
-      assert(request != m_requests.end());
+      assertx(request != m_requests.end());
       ri = request->second;
     }
   }
@@ -1569,7 +1574,7 @@ void Debugger::tryInstallBreakpoints(DebuggerRequestInfo* ri) {
         // to force a pre-load and compile of the unit and place the bp.
         HPHP::String unitPath(bp->m_path.c_str());
         const auto compilationUnit = lookupUnit(unitPath.get(), "", nullptr,
-                                                Native::s_noNativeFuncs);
+                                                Native::s_noNativeFuncs, false);
 
         if (compilationUnit != nullptr) {
           ri->m_breakpointInfo->m_loadedUnits[bp->m_path] = compilationUnit;
@@ -1639,7 +1644,7 @@ bool Debugger::tryResolveBreakpoint(
       }
     }
   } else {
-    assert(bp->m_type == BreakpointType::Function);
+    assertx(bp->m_type == BreakpointType::Function);
 
     const HPHP::String functionName(bp->m_function);
     Func* func = Unit::lookupFunc(functionName.get());
@@ -1836,6 +1841,12 @@ void Debugger::onFunctionDefined(
   for (auto it = unresolvedBps.begin(); it != unresolvedBps.end(); ) {
     const int bpId = *it;
     const Breakpoint* bp = bpMgr->getBreakpointById(bpId);
+    if (bp == nullptr) {
+        // Breakpoint has been removed by the client.
+        it = unresolvedBps.erase(it);
+        continue;
+    }
+
     if (bp->m_type == BreakpointType::Function && funcName == bp->m_function) {
         // Found a matching function!
         phpAddBreakPointFuncEntry(func);
@@ -1968,8 +1979,8 @@ void Debugger::onBreakpointHit(
       if (type == BreakpointType::Source) {
         phpRemoveBreakPointLine(compilationUnit, line);
       } else {
-        assert(type == BreakpointType::Function);
-        assert(func != nullptr);
+        assertx(type == BreakpointType::Function);
+        assertx(func != nullptr);
         phpRemoveBreakPointFuncEntry(func);
       }
     };
@@ -1978,6 +1989,9 @@ void Debugger::onBreakpointHit(
   for (auto it = bps.begin(); it != bps.end(); it++) {
     const int bpId = *it;
     Breakpoint* bp = bpMgr->getBreakpointById(bpId);
+    if (bp == nullptr) {
+      continue;
+    }
 
     const auto resolvedLocation = bpMgr->bpResolvedInfoForFile(bp, filePath);
     bool lineInRange = line >= resolvedLocation.m_startLine &&
@@ -2031,7 +2045,7 @@ void Debugger::onBreakpointHit(
     const auto bpIds = bpMgr->getBreakpointIdsForPath(filePath);
     for (auto it = bpIds.begin(); it != bpIds.end(); it++) {
       Breakpoint* bp = bpMgr->getBreakpointById(*it);
-      if (bp->m_line == line) {
+      if (bp != nullptr && bp->m_line == line) {
         realBp = true;
         break;
       }

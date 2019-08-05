@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array each(&array $arr)
  * Description: Return the currently pointed key..value pair in the passed array,
  * and advance the pointer to the next element 
@@ -8,7 +8,7 @@
 /*
  * Pass each() arrays where the keys are different data types to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing each() : usage variations ***\n";
 
 //get an unset variable
@@ -99,5 +99,4 @@ foreach($inputs as $key => $input) {
 };
 
 echo "Done";
-?>
-
+}

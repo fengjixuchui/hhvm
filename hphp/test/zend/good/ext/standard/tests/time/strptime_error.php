@@ -1,13 +1,13 @@
-<?php
+<?hh
 /* Prototype  : array strptime  ( string $date  , string $format  )
  * Description: Parse a time/date generated with strftime()
  * Source code: ext/standard/datetime.c
- * Alias to functions: 
+ * Alias to functions:
  */
 
-//Set the default time zone 
+//Set the default time zone
+<<__EntryPoint>> function main(): void {
 date_default_timezone_set("Europe/London");
-
 echo "*** Testing strptime() : error conditions ***\n";
 
 echo "\n-- Testing strptime() function with Zero arguments --\n";
@@ -23,5 +23,5 @@ echo "\n-- Testing strptime() function with more than expected no. of arguments 
 $extra_arg = 10;
 try { var_dump( strptime($date, $format, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

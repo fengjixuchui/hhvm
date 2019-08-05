@@ -74,13 +74,14 @@ struct Env {
     // translation will use.
     , unit(TransContext{kInvalidTransID, kind, TransFlags{},
                         sk, ctx.spOffset, 0})
-    , irgs(unit, nullptr)
+    , irgs(unit, nullptr, 0, nullptr)
     , arState()
     , numJmps(0)
     , numBCInstrs(maxBCInstrs)
     , profiling(kind == TransKind::Profile)
     , inlining(inlining)
   {
+    irgs.formingRegion = true;
     if (RuntimeOption::EvalRegionRelaxGuards) {
       irgs.irb->enableConstrainGuards();
     }
@@ -217,7 +218,7 @@ bool prepareInstruction(Env& env) {
   env.inst.endsRegion = breaksBB ||
     (dontGuardAnyInputs(env.inst) && opcodeChangesPC(env.inst.op()));
   env.inst.funcd = env.arState.knownFunc();
-  irgen::prepareForNextHHBC(env.irgs, &env.inst, env.sk, false);
+  irgen::prepareForNextHHBC(env.irgs, &env.inst, env.sk);
 
   auto const inputInfos = getInputs(env.inst, env.irgs.irb->fs().bcSPOff());
 
@@ -236,8 +237,8 @@ bool prepareInstruction(Env& env) {
 
   addInstruction(env);
 
-  if (isFPush(env.inst.op())) env.arState.pushFunc(env.inst);
-  if (isFCallStar(env.inst.op())) {
+  if (isLegacyFPush(env.inst.op())) env.arState.pushFunc(env.inst);
+  if (hasFCallEffects(env.inst.op())) {
     auto const asyncEagerOffset = env.inst.imm[0].u_FCA.asyncEagerOffset;
     if (asyncEagerOffset != kInvalidOffset) {
       // Note that the arc between the block containing asyncEagerOffset and
@@ -608,7 +609,7 @@ RegionDescPtr form_region(Env& env) {
       break;
     }
 
-    if (isFCallStar(env.inst.op())) env.arState.pop();
+    if (isLegacyFCall(env.inst.op())) env.arState.pop();
   }
 
   if (env.region && !env.region->empty()) {

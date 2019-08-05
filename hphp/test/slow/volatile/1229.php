@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function autoload_first($name) {
   echo __METHOD__ . "\n";
@@ -15,30 +15,21 @@ function __autoload($name) {
 
 <<__EntryPoint>>
 function main_1229() {
-spl_autoload_register('autoload_first');
-spl_autoload_register('autoload_second');
-try {
-  var_dump(class_exists('A'));
-}
- catch(Exception $e) {
-  do {
-    echo $e->getMessage() . "\n";
+  spl_autoload_register('autoload_first');
+  spl_autoload_register('autoload_second');
+  try {
+    var_dump(class_exists('A'));
+  } catch(Exception $e) {
+    do {
+      echo $e->getMessage() . "\n";
+    } while($e = $e->getPrevious());
   }
- while($e = $e->getPrevious());
-}
-try {
-  $obj = new A();
-}
- catch(Exception $e) {
-  do {
-    echo $e->getMessage() . "\n";
+  try {
+    $obj = new A();
   }
- while($e = $e->getPrevious());
-}
-// hphpc won't call the autoloader unless there exists a 
-// definition for the class somewhere
-if (true) {
-  class A {
-}
-}
+  catch(Exception $e) {
+    do {
+      echo $e->getMessage() . "\n";
+    } while($e = $e->getPrevious());
+  }
 }

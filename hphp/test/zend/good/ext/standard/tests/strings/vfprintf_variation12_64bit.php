@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int vfprintf  ( resource $handle  , string $format , array $args  )
  * Description: Write a formatted string to a stream
  * Source code: ext/standard/formatted_print.c
@@ -8,7 +8,7 @@
  * Test vfprintf() when different octal formats and non-octal values are passed to
  * the '$format' and '$args' arguments of the function
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vfprintf() : octal formats and non-octal values ***\n";
 
 // defining array of octal formats
@@ -80,5 +80,5 @@ echo "\n";
 
 unlink($data_file);
  
-?>
-===DONE===
+echo "===DONE===\n";
+}

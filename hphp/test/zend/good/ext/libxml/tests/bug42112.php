@@ -1,4 +1,4 @@
-<?php
+<?hh
 $xml = <<<EOXML
 <root><child xml:id="id1">baz</child></root>
 EOXML;
@@ -20,4 +20,3 @@ if ($node) {
 }
 $root = $doc->documentElement;
 print 'Root Node: '.$root->nodeName."\n";
-?>

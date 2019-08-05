@@ -15,36 +15,44 @@
 * TODO: c_xhp_category ?
 *)
 
+module T = Tast
+
+type trait_req_kind =
+  | MustExtend
+  | MustImplement
+
 type t = {
-  class_attributes   : Hhas_attribute.t list;
-  class_base         : Hhbc_id.Class.t option;
-  class_implements   : Hhbc_id.Class.t list;
-  class_name         : Hhbc_id.Class.t;
-  class_span         : Hhas_pos.span;
-  class_is_final     : bool;
-  class_is_sealed    : bool;
-  class_is_abstract  : bool;
-  class_is_interface : bool;
-  class_is_trait     : bool;
-  class_is_xhp       : bool;
-  class_hoisted      : Closure_convert.hoist_kind;
-  class_is_immutable : bool;
-  class_has_immutable : bool;
-  class_no_dynamic_props : bool;
-  class_needs_no_reifiedinit : bool;
-  class_uses         : string list;
-  class_use_aliases  :
-    (string option * string * string option * Ast.kind list) list;
-  class_use_precedences : (string * string * string list) list;
-  class_method_trait_resolutions:
-    (string * string * string * Ast.kind list * Ast.fun_kind) list;
-  class_enum_type    : Hhas_type_info.t option;
-  class_methods      : Hhas_method.t list;
-  class_properties   : Hhas_property.t list;
-  class_constants    : Hhas_constant.t list;
-  class_type_constants : Hhas_type_constant.t list;
-  class_requirements : (Ast.trait_req_kind * string) list;
-  class_doc_comment : string option;
+  class_attributes               : Hhas_attribute.t list;
+  class_base                     : Hhbc_id.Class.t option;
+  class_implements               : Hhbc_id.Class.t list;
+  class_name                     : Hhbc_id.Class.t;
+  class_span                     : Hhas_pos.span;
+  class_is_final                 : bool;
+  class_is_sealed                : bool;
+  class_is_abstract              : bool;
+  class_is_interface             : bool;
+  class_is_trait                 : bool;
+  class_is_record                : bool;
+  class_is_xhp                   : bool;
+  class_hoisted                  : Closure_convert.hoist_kind;
+  class_is_const                 : bool;
+  class_no_dynamic_props         : bool;
+  class_needs_no_reifiedinit     : bool;
+  class_uses                     : string list;
+  (* Deprecated - kill please *)
+  class_use_aliases              :
+    (string option * string * string option * T.use_as_visibility list) list;
+  (* Deprecated - kill please *)
+  class_use_precedences          :
+    (string * string * string list) list;
+  class_method_trait_resolutions : (T.method_redeclaration * string) list;
+  class_enum_type                : Hhas_type_info.t option;
+  class_methods                  : Hhas_method.t list;
+  class_properties               : Hhas_property.t list;
+  class_constants                : Hhas_constant.t list;
+  class_type_constants           : Hhas_type_constant.t list;
+  class_requirements             : (trait_req_kind * string) list;
+  class_doc_comment              : string option;
 }
 
 let make
@@ -58,10 +66,10 @@ let make
   class_is_abstract
   class_is_interface
   class_is_trait
+  class_is_record
   class_is_xhp
   class_hoisted
-  class_is_immutable
-  class_has_immutable
+  class_is_const
   class_no_dynamic_props
   class_needs_no_reifiedinit
   class_uses
@@ -86,10 +94,10 @@ let make
     class_is_abstract;
     class_is_interface;
     class_is_trait;
+    class_is_record;
     class_is_xhp;
     class_hoisted;
-    class_is_immutable;
-    class_has_immutable;
+    class_is_const;
     class_no_dynamic_props;
     class_needs_no_reifiedinit;
     class_uses;
@@ -115,13 +123,13 @@ let is_sealed hhas_class = hhas_class.class_is_sealed
 let is_abstract hhas_class = hhas_class.class_is_abstract
 let is_interface hhas_class = hhas_class.class_is_interface
 let is_trait hhas_class = hhas_class.class_is_trait
+let is_record hhas_class = hhas_class.class_is_record
 let is_xhp hhas_class = hhas_class.class_is_xhp
 let is_top hhas_class =
   match hhas_class.class_hoisted with
   | Closure_convert.TopLevel -> true
   | Closure_convert.Hoisted -> false
-let is_immutable hhas_class = hhas_class.class_is_immutable
-let has_immutable hhas_class = hhas_class.class_has_immutable
+let is_const hhas_class = hhas_class.class_is_const
 let no_dynamic_props hhas_class = hhas_class.class_no_dynamic_props
 let needs_no_reifiedinit hhas_class = hhas_class.class_needs_no_reifiedinit
 let class_uses hhas_class = hhas_class.class_uses

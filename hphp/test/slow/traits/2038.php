@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 error_reporting(E_ALL);
 
@@ -29,4 +29,3 @@ $p = new C2();
 $p->inc();
 $p->inc();
 
-?>

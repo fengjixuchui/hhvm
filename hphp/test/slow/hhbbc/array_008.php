@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function get() {
   return array(
@@ -19,8 +19,8 @@ function main() {
   var_dump(a() === 'bar');
   var_dump(b() === 24);
   var_dump(c() === 42);
-  var_dump(d() === 42);
-  var_dump(e() === null);
+  try { var_dump(d() === null); } catch (Exception $e) { echo $e->getMessage()."\n"; }
+  try { var_dump(e() === null); } catch (Exception $e) { echo $e->getMessage()."\n"; }
 }
 
 <<__EntryPoint>>

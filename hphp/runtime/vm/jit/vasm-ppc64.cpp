@@ -97,13 +97,17 @@ struct Vgen {
   static void emitVeneers(Venv& env) {}
   static void handleLiterals(Venv& env) {}
   static void patch(Venv& env) {
-    for (auto& p : env.jmps) {
+    for (auto const& p : env.jmps) {
       assertx(env.addrs[p.target]);
       Assembler::patchBranch(toReal(env, p.instr), env.addrs[p.target]);
     }
-    for (auto& p : env.jccs) {
+    for (auto const& p : env.jccs) {
       assertx(env.addrs[p.target]);
       Assembler::patchBranch(toReal(env, p.instr), env.addrs[p.target]);
+    }
+    for (auto const& p : env.leas) {
+      (void)p;
+      not_implemented();
     }
   }
 
@@ -187,6 +191,10 @@ struct Vgen {
   }
   void emit(const addsd& i) { a.fadd(i.d, i.s0, i.s1); }
   void emit(const andb& i) {
+    a.and(Reg64(i.d), Reg64(i.s0), Reg64(i.s1), true);
+    copyCR0toCR1(a, rAsm);
+  }
+  void emit(const andw& i) {
     a.and(Reg64(i.d), Reg64(i.s0), Reg64(i.s1), true);
     copyCR0toCR1(a, rAsm);
   }
@@ -377,6 +385,16 @@ struct Vgen {
   void emit(const movzwl& i) { a.rlwinm(Reg64(i.d), Reg64(i.s), 0, 16, 31); }
   void emit(const movzwq& i) { a.rlwinm(i.d, Reg64(i.s), 0, 16, 31); }
   void emit(const movzlq& i) { a.rlwinm(i.d, Reg64(i.s), 0, 0, 31); }
+  void emit(const orwi& i) {
+    a.limmediate(rAsm, i.s0.uw());
+    a.or(Reg64(i.d), Reg64(i.s1), rAsm, true /** or. implies Rc = 1 **/);
+    copyCR0toCR1(a, rAsm);
+  }
+  void emit(const orli& i) {
+    a.limmediate(rAsm, i.s0.l());
+    a.or(Reg64(i.d), Reg64(i.s1), rAsm, true /** or. implies Rc = 1 **/);
+    copyCR0toCR1(a, rAsm);
+  }
   void emit(const orqi& i) {
     a.limmediate(rAsm, i.s0.l());
     a.or(i.d, i.s1, rAsm, true /** or. implies Rc = 1 **/);
@@ -461,6 +479,7 @@ struct Vgen {
   void emit(const ldimml& i);
   void emit(const ldimmq& i);
   void emit(const lea&);
+  void emit(const leav&);
   void emit(const leavetc&);
   void emit(const load& i);
   void emit(const loadqd& i);
@@ -713,7 +732,7 @@ void Vgen::emit(const mcprep& i) {
    *
    * We set the low bit for two reasons: the Class* will never be a valid
    * Class*, so we'll always miss the inline check before it's smashed, and
-   * handlePrimeCacheInit can tell it's not been smashed yet
+   * MethodCache::handleStaticCall can tell it's not been smashed yet
    */
   auto const mov_addr = emitSmashableMovq(a.code(), env.meta, 0, r64(i.d));
   auto const imm = reinterpret_cast<uint64_t>(mov_addr);
@@ -794,6 +813,12 @@ void Vgen::emit(const lea& i) {
   }
 }
 
+void Vgen::emit(const leav& i) {
+  auto const addr = a.frontier();
+  emit(leap{reg::rip[0xdeadbeef], i.d});
+  env.leas.push_back({addr, i.s});
+}
+
 void Vgen::emit(const testqi& i) {
   if (i.s0.fits(sz::word)) {
     a.li(rAsm, i.s0);
@@ -828,8 +853,8 @@ void Vgen::emit(const callr& i) {
 }
 
 void Vgen::emit(const calls& i) {
-  // calls is used to call c++ function like handlePrimeCacheInit so setup the
-  // r1 pointer to a valid frame in order to allow LR save by callee's
+  // calls is used to call c++ function like MethodCache::handleStaticCall so
+  // setup the r1 pointer to a valid frame in order to allow LR save by callee's
   // prologue.
   emitCallPrologue();
   a.std(rtoc(), rsfp()[AROFF(SAVED_TOC())]);
@@ -1177,7 +1202,17 @@ void lowerForPPC64(const VLS& e, Vout& v, vasm_src& inst) {             \
 }
 
 X(andbi,  andqi,  ONE_R64(d))
+X(andwi,  andqi,  ONE_R64(d))
 X(andli,  andqi,  ONE_R64(d))
+
+#undef X
+
+#define X(vasm_src, vasm_dst, operands)                                 \
+void lowerForPPC64(const VLS& e, Vout& v, vasm_src& inst) {             \
+  v << vasm_dst{inst.s0, Reg64(inst.s1), operands inst.sf};             \
+}
+
+X(orbi, orqi, ONE_R64(d))
 
 #undef X
 

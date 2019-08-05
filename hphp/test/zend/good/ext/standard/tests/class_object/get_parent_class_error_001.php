@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto string get_parent_class([mixed object])
  * Description: Retrieves the parent class name for object or class or current scope. 
  * Source code: Zend/zend_builtin_functions.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing get_parent_class() : error conditions ***\n";
 
 
@@ -15,4 +15,4 @@ $extra_arg = 10;
 try { var_dump( get_parent_class($object, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

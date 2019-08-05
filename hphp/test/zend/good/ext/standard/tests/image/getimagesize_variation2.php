@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto array getimagesize(string imagefile [, array info])
  * Description: Get the size of an image as 4-element array
  * Source code: ext/standard/image.c
@@ -6,10 +6,10 @@
  */
 
 function test_error_handler($err_no, $err_msg, $filename, $linenum, $vars) {
-	echo "Error: $err_no - $err_msg, $filename($linenum)\n";
+    echo "Error: $err_no - $err_msg, $filename($linenum)\n";
 }
+<<__EntryPoint>> function main(): void {
 set_error_handler('test_error_handler');
-
 echo "*** Testing getimagesize() : usage variations ***\n";
 
 // Initialise function arguments not being substituted (if any)
@@ -74,5 +74,5 @@ foreach($values as $key => $value) {
       var_dump(bin2hex($value["APP0"]));
 };
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

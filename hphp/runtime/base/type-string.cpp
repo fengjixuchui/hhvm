@@ -100,7 +100,7 @@ String::String(int n) : String(static_cast<int64_t>(n)) {}
 String::String(int64_t n) : m_str(buildStringData(n), NoIncRef{}) {}
 
 void formatPhpDblStr(char **pbuf, double n) {
-  if (RuntimeOption::EnableHipHopSyntax && n == 0.0) {
+  if (n == 0.0) {
     n = 0.0; // so to avoid "-0" output
   }
   vspprintf(pbuf, 0, "%.*G", 14, n);
@@ -277,10 +277,6 @@ String operator+(String&& lhs, const String & rhs) {
   return std::move(lhs += rhs);
 }
 
-String operator+(const String & lhs, String&& rhs) {
-  return String::attach(StringData::Make(lhs.slice(), rhs.slice()));
-}
-
 String operator+(const String & lhs, const String & rhs) {
   if (lhs.empty()) return rhs;
   if (rhs.empty()) return lhs;
@@ -404,7 +400,8 @@ const StaticString
   s_ref("reference"),
   s_func("function"),
   s_class("class"),
-  s_clsmeth("clsmeth");
+  s_clsmeth("clsmeth"),
+  s_record("record");
 
 StaticString getDataTypeString(DataType t) {
   switch (t) {
@@ -432,6 +429,7 @@ StaticString getDataTypeString(DataType t) {
     case KindOfFunc:       return s_func;
     case KindOfClass:      return s_class;
     case KindOfClsMeth:    return s_clsmeth;
+    case KindOfRecord:     return s_record;
   }
   not_reached();
 }

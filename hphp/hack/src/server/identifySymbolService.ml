@@ -10,6 +10,7 @@
 open Core_kernel
 open SymbolOccurrence
 open Typing_defs
+module Tast = Aast
 
 module Result_set = Caml.Set.Make(struct
   type t = Relative_path.t SymbolOccurrence.t
@@ -79,21 +80,22 @@ let process_typeconst ?(is_declaration=false) (class_name, tconst_name, pos) =
 let process_class class_ =
   let acc = process_class_id ~is_declaration:true class_.Tast.c_name in
   let c_name = snd class_.Tast.c_name in
-  let all_methods = class_.Tast.c_methods @ class_.Tast.c_static_methods in
+  let constructor, static_methods, methods = Tast.split_methods class_ in
+  let all_methods = static_methods @ methods in
   let acc = List.fold all_methods ~init:acc ~f:begin fun acc method_ ->
     Result_set.union acc @@
       process_member c_name method_.Tast.m_name
         ~is_declaration:true ~is_method:true ~is_const:false
   end in
-  let all_props = class_.Tast.c_vars @ class_.Tast.c_static_vars in
+  let all_props = class_.Tast.c_vars in
   let acc = List.fold all_props ~init:acc ~f:begin fun acc prop ->
     Result_set.union acc @@
       process_member c_name prop.Tast.cv_id
         ~is_declaration:true ~is_method:false ~is_const:false
   end in
-  let acc = List.fold class_.Tast.c_consts ~init:acc ~f:begin fun acc (_, const_id, _) ->
+  let acc = List.fold class_.Tast.c_consts ~init:acc ~f:begin fun acc const ->
     Result_set.union acc @@
-      process_member c_name const_id
+      process_member c_name const.Tast.cc_id
         ~is_declaration:true ~is_method:false ~is_const:true
   end in
   let acc = List.fold class_.Tast.c_typeconsts ~init:acc ~f:begin fun acc typeconst ->
@@ -110,7 +112,7 @@ let process_class class_ =
         process_class_id cid
     | _ -> acc
   end in
-  match class_.Tast.c_constructor with
+  match constructor with
     | Some method_ ->
       let id = fst method_.Tast.m_name, SN.Members.__construct in
       Result_set.union acc @@
@@ -168,18 +170,18 @@ let visitor = object (self)
       | Tast.Xml (cid, _, _) ->
         process_class_id cid
       | Tast.Fun_id id ->
-        process_fun_id (pos, "\\"^SN.SpecialFunctions.fun_) +
+        process_fun_id (pos, "\\HH\\"^SN.SpecialFunctions.fun_) +
         process_fun_id (remove_apostrophes_from_function_eval id)
       | Tast.Method_id (((_, ty), _), mid) ->
-        process_fun_id (pos, "\\"^SN.SpecialFunctions.inst_meth) +
+        process_fun_id (pos, "\\HH\\"^SN.SpecialFunctions.inst_meth) +
         typed_method env ty (remove_apostrophes_from_function_eval mid)
       | Tast.Smethod_id ((_, cid) as pcid, mid) ->
-        process_fun_id (pos, "\\"^SN.SpecialFunctions.class_meth) +
+        process_fun_id (pos, "\\HH\\"^SN.SpecialFunctions.class_meth) +
         process_class_id pcid +
         process_member cid (remove_apostrophes_from_function_eval mid)
         ~is_method:true ~is_const:false
       | Tast.Method_caller ((_, cid) as pcid, mid) ->
-        process_fun_id (pos, "\\"^SN.SpecialFunctions.meth_caller) +
+        process_fun_id (pos, "\\HH\\"^SN.SpecialFunctions.meth_caller) +
         process_class_id pcid +
         process_member cid (remove_apostrophes_from_function_eval mid)
         ~is_method:true ~is_const:false
@@ -246,7 +248,6 @@ let visitor = object (self)
     self#plus acc (super#on_catch env (sid, lid, block))
 
   method! on_class_ env class_ =
-    let open Tast in
     let open Aast in
     let acc = process_class class_ in
     (*

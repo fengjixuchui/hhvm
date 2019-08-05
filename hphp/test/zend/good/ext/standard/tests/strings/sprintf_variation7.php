@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : string sprintf(string $format [, mixed $arg1 [, mixed ...]])
  * Description: Return a formatted string 
  * Source code: ext/standard/formatted_print.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sprintf() : integer formats with boolean values ***\n";
 
 // array of boolean type values
@@ -33,4 +33,4 @@ foreach($boolean_values as $boolean_value) {
 };
 
 echo "Done";
-?>
+}

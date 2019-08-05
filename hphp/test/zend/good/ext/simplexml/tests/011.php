@@ -1,5 +1,5 @@
-<?php 
-
+<?hh 
+<<__EntryPoint>> function main(): void {
 $xml =<<<EOF
 <?xml version="1.0" encoding="ISO-8859-1" ?>
 <foo>
@@ -26,5 +26,5 @@ echo "\n";
 echo "===BAZ1===\n";
 print $sxe->baz[1];
 echo "\n";
-?>
-===DONE===
+echo "===DONE===\n";
+}

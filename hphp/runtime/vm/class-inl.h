@@ -168,6 +168,10 @@ inline void Class::initRTAttributes(uint8_t a) {
   m_RTAttrs |= a;
 }
 
+inline bool Class::isUnique() const {
+  return attrs() & AttrUnique;
+}
+
 inline bool Class::isPersistent() const {
   return attrs() & AttrPersistent;
 }
@@ -206,12 +210,20 @@ inline bool Class::isBuiltin() const {
   return attrs() & AttrBuiltin;
 }
 
+template <bool Unlocked>
 inline BuiltinCtorFunction Class::instanceCtor() const {
-  return m_extra->m_instanceCtor;
+  return Unlocked ? m_extra->m_instanceCtorUnlocked : m_extra->m_instanceCtor;
 }
 
 inline BuiltinDtorFunction Class::instanceDtor() const {
   return m_extra->m_instanceDtor;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Object release.
+
+inline ObjReleaseFunc Class::releaseFunc() const {
+  return m_release;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -268,10 +280,16 @@ inline Slot Class::lookupSProp(const StringData* sPropName) const {
   return m_staticProperties.findIndex(sPropName);
 }
 
-extern const StaticString s_86reified_prop;
-
 inline Slot Class::lookupReifiedInitProp() const {
   return m_declProperties.findIndex(s_86reified_prop.get());
+}
+
+inline bool Class::hasReifiedGenerics() const {
+  return m_hasReifiedGenerics;
+}
+
+inline bool Class::hasReifiedParent() const {
+  return m_hasReifiedParent;
 }
 
 inline RepoAuthType Class::declPropRepoAuthType(Slot index) const {
@@ -296,10 +314,6 @@ inline bool Class::hasDeepInitProps() const {
 
 inline bool Class::forbidsDynamicProps() const {
   return attrs() & AttrForbidDynamicProps;
-}
-
-inline bool Class::hasImmutableProps() const {
-  return attrs() & AttrHasImmutable;
 }
 
 inline bool Class::serialize() const {

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_intersect_assoc(array $arr1, array $arr2 [, array $...])
  * Description: Returns the entries of arr1 that have values which are present in all the other arguments.
  * Keys are used to do more restrictive check
@@ -10,7 +10,7 @@
  * associative arrays having different possible keys to $arr1 argument.
  * The $arr2 argument passed is a fixed array
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_intersect_assoc() : assoc array with diff keys to \$arr1 argument ***\n";
 
 // get an unset variable
@@ -75,4 +75,4 @@ foreach($arrays as $arr1) {
 }
 
 echo "Done";
-?>
+}

@@ -1,5 +1,5 @@
-<?php 
-
+<?hh 
+<<__EntryPoint>> function main(): void {
 $xml =<<<EOF
 <?xml version='1.0'?>
 <pres><content><file glob="slide_*.xml"/></content></pres>
@@ -20,5 +20,5 @@ foreach($sxe->content->file as $file)
 	var_dump($file['glob']);
 }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

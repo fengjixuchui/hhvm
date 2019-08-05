@@ -9,18 +9,15 @@
 
 open Core_kernel
 open Instruction_sequence
-open Emit_expression
 
 module H = Hhbc_ast
 module SU = Hhbc_string_utils
 module SN = Naming_special_names
 module TV = Typed_value
+module A = Aast
 
 let hack_arr_dv_arrs () =
   Hhbc_options.hack_arr_dv_arrs !Hhbc_options.compiler_options
-
-let ast_is_interface ast_class =
-  ast_class.A.c_kind = Ast.Cinterface
 
 let add_symbol_refs
     class_base class_implements class_uses class_requirements =
@@ -39,16 +36,12 @@ let add_symbol_refs
   end
 
 let make_86method
-  ~name ~params ~is_static ~is_private ~is_abstract ~span ~is_protected instrs =
-  if is_private && is_protected
-  then failwith "Invalid visibility modifier combination";
+  ~name ~params ~is_static ~visibility ~is_abstract ~span instrs =
   let method_attributes = [] in
   (* TODO: move this. We just know that there are no iterators in 86methods *)
   Iterator.reset_iterator ();
   let method_is_final = false in
-  let method_is_private = is_private in
-  let method_is_protected = is_protected in
-  let method_is_public = not is_private && not is_protected in
+  let method_visibility = visibility in
   let method_return_type = None in
   let method_decl_vars = [] in
   let method_is_async = false in
@@ -59,7 +52,6 @@ let make_86method
   let method_is_memoize_wrapper_lsb = false in
   let method_no_injection = true in
   let method_inout_wrapper = false in
-  let method_static_inits = [] in
   let method_doc_comment = None in
   let method_is_interceptable = false in
   let method_is_memoize_impl = false in
@@ -71,14 +63,11 @@ let make_86method
     method_is_memoize_wrapper_lsb
     params
     method_return_type
-    method_static_inits
     method_doc_comment
     method_env in
   Hhas_method.make
     method_attributes
-    method_is_protected
-    method_is_public
-    method_is_private
+    method_visibility
     is_static
     method_is_final
     is_abstract
@@ -106,28 +95,29 @@ let from_extends ~namespace ~is_enum _tparams extends =
 let from_implements ~namespace implements =
   List.map implements (Emit_type_hint.hint_to_class ~namespace)
 
-let from_constant env (_hint, name, const_init) =
-  (* The type hint is omitted. *)
-  let constant_name = snd name in
-  match const_init with
-  | None -> Hhas_constant.make constant_name None None
-  | Some init ->
-    let constant_value, initializer_instrs =
+let from_constant env visibility (_, name) expr =
+  let value, init_instrs =
+    match expr with
+    | None -> None, None
+    | Some init ->
       match Ast_constant_folder.expr_to_opt_typed_value
         (Emit_env.get_namespace env) init with
       | Some v ->
         Some v, None
       | None ->
         Some Typed_value.Uninit,
-        Some (Emit_expression.emit_expr ~need_ref:false env init) in
-    Hhas_constant.make constant_name constant_value initializer_instrs
-
-let from_type_constant ~namespace ast_type_constant =
-  let type_constant_name = snd ast_type_constant.A.tconst_name
+        Some (Emit_expression.emit_expr env init)
   in
-  match ast_type_constant.A.tconst_type with
-  | None -> Hhas_type_constant.make type_constant_name None
-  | Some init ->
+  Hhas_constant.make name value visibility init_instrs
+
+let from_type_constant namespace tc =
+  let type_constant_name = snd tc.A.c_tconst_name in
+  match tc.A.c_tconst_abstract, tc.A.c_tconst_type with
+  | A.TCAbstract None, _
+  | (A.TCPartiallyAbstract | A.TCConcrete), None ->
+    Hhas_type_constant.make type_constant_name None
+  | A.TCAbstract (Some init), _
+  | (A.TCPartiallyAbstract | A.TCConcrete), Some init ->
     (* TODO: Deal with the constraint *)
     let type_constant_initializer =
       (* Type constants do not take type vars hence tparams:[] *)
@@ -136,56 +126,47 @@ let from_type_constant ~namespace ast_type_constant =
     in
     Hhas_type_constant.make type_constant_name type_constant_initializer
 
-let ast_methods ast_class_body =
-  let mapper elt =
-    match elt with
-    | A.Method m -> Some m
-    | _ -> None in
-  List.filter_map ast_class_body mapper
-
 let from_class_elt_classvars
-  ast_class class_is_immutable tparams namespace elt =
-  match elt with
-  | A.ClassVars cv ->
-    (* TODO: we need to emit doc comments for each property,
-     * not one per all properties on the same line *)
-    let hint =
-      if cv.A.cv_is_promoted_variadic then None else cv.A.cv_hint
-    in
-    let emit_prop = Emit_property.from_ast
+  ast_class class_is_const tparams =
+  (* TODO: we need to emit doc comments for each property,
+   * not one per all properties on the same line *)
+  (* The doc comment is only for the first name in the list.
+   * Currently this is organized in the ast_to_nast module*)
+  let mapping_aux cv =
+    let hint = if cv.A.cv_is_promoted_variadic then None else cv.A.cv_type in
+    Emit_property.from_ast
       ast_class
       cv.A.cv_user_attributes
-      cv.A.cv_kinds
-      class_is_immutable
+      cv.A.cv_is_static
+      cv.A.cv_visibility (* This used to be cv_kinds *)
+      class_is_const
       hint
       tparams
-      namespace in
-    (* The doc comment is only for the first name in the list *)
-    begin match cv.A.cv_names with
-    | x::xs ->
-        (emit_prop cv.A.cv_doc_comment x) ::
-        List.map xs (emit_prop None)
-    | [] -> []
-    end
-  | _ -> []
+      ast_class.A.c_namespace
+      cv.A.cv_doc_comment (* Doc comments are weird. T40098274 *)
+      ((), cv.A.cv_id, cv.A.cv_expr) in
+  List.map ~f:mapping_aux ast_class.A.c_vars
 
-let from_class_elt_constants ns elt =
-  match elt with
-  | A.Const(hint_opt, l) ->
-    List.map l (fun (id, e) -> from_constant ns (hint_opt, id, Some e))
-  | A.AbsConst(hint_opt, id) -> [from_constant ns (hint_opt, id, None)]
-  | _ -> []
+let from_class_elt_constants env class_ =
+  let map_aux (c : Tast.class_const) =
+    from_constant
+      env
+      c.A.cc_visibility
+      c.A.cc_id
+      c.A.cc_expr
+  in
+  List.map ~f:map_aux class_.A.c_consts
 
-let from_class_elt_requirements ns elt =
-  match elt with
-  | A.ClassTraitRequire (kind, h) ->
-      Some (kind, (Hhbc_id.Class.to_raw_string (Emit_type_hint.hint_to_class ns h)))
-  | _ -> None
+let from_class_elt_requirements class_ =
+  let ns = class_.A.c_namespace in
+  List.map
+    ~f:(fun (h, is_extends) ->
+      let kind = if is_extends then Hhas_class.MustExtend else Hhas_class.MustImplement in
+      (kind, (Hhbc_id.Class.to_raw_string (Emit_type_hint.hint_to_class ns h))))
+    class_.A.c_reqs
 
-let from_class_elt_typeconsts ~namespace elt =
-  match elt with
-  | A.TypeConst tc -> Some (from_type_constant ~namespace tc)
-  | _ -> None
+let from_class_elt_typeconsts class_ =
+  List.map ~f:(from_type_constant class_.A.c_namespace) class_.A.c_typeconsts
 
 let from_enum_type ~namespace opt =
   match opt with
@@ -213,14 +194,11 @@ let validate_class_name ns (p, class_name) =
   (* per Parser::checkClassDeclName:
      global names are always reserved in any namespace.
      hh_reserved names are checked either if
-     - containing file is hack file and class is in global namespace
+     - class is in global namespace
      - class is in HH namespace *)
   let is_special_class =
     String_utils.is_substring "$" class_name in
-  let check_hh_name =
-    (Emit_env.is_hh_syntax_enabled () && is_global_namespace ns) ||
-    is_hh_namespace ns ||
-    Hhbc_options.php7_scalar_types !Hhbc_options.compiler_options in
+  let check_hh_name = is_global_namespace ns || is_hh_namespace ns in
   let name = SU.strip_ns class_name in
   let is_reserved_global_name = SN.Typehints.is_reserved_global_name name in
   let name_is_reserved =
@@ -234,21 +212,22 @@ let validate_class_name ns (p, class_name) =
         (if is_reserved_global_name then name else Utils.strip_ns class_name) in
     Emit_fatal.raise_fatal_parse p message
 
-let emit_reified_extends_params env ast_class =
-  let type_params = match ast_class.Ast.c_extends with
-    | (_, Ast.Happly (_, l)) :: _ -> l
+let emit_reified_extends_params env class_ =
+  let type_params =
+    match class_.A.c_extends with
+    | (_, Aast.Happly (_, l)):: _ -> l
     | _ -> [] in
-  if List.is_empty type_params then
+  if List.is_empty type_params
+  then
     let tv = if hack_arr_dv_arrs () then TV.Vec [] else TV.VArray [] in
     instr (H.ILitConst (H.TypedValue tv))
   else
     gather [
-      gather @@
-        Emit_expression.emit_reified_targs env ast_class.A.c_span type_params;
-      instr_record_reified_generic (List.length type_params);
+      Emit_expression.emit_reified_targs env class_.A.c_span type_params;
+      instr_record_reified_generic;
     ]
 
-let emit_reified_init_body env num_reified ast_class =
+let emit_reified_init_body env num_reified class_ =
   let check_length =
     gather [
       instr_cgetl (Local.Named SU.Reified.reified_init_method_param_name);
@@ -266,15 +245,17 @@ let emit_reified_init_body env num_reified ast_class =
       instr_popc;
     ] in
   let return = gather [ instr_null; instr_retc; ] in
-  if ast_class.Ast.c_extends = [] then gather [ set_prop; return ] else begin
-    let generic_arr = emit_reified_extends_params env ast_class in
+  if class_.A.c_extends = []
+  then gather [ set_prop; return ]
+  else
+    let generic_arr = emit_reified_extends_params env class_ in
     (* parent::86reifiedinit($generic_arr) *)
     let call_parent =
       gather [
-        instr_fpushclsmethodsd 1 Hhbc_ast.SpecialClsRef.Parent
-          (Hhbc_id.Method.from_raw_string SU.Reified.reified_init_method_name);
+        instr_nulluninit; instr_nulluninit; instr_nulluninit;
         generic_arr;
-        instr_fcall (make_fcall_args 1);
+        instr_fcallclsmethodsd (make_fcall_args 1) Hhbc_ast.SpecialClsRef.Parent
+          (Hhbc_id.Method.from_raw_string SU.Reified.reified_init_method_name);
         instr_popc;
       ] in
     gather [
@@ -282,144 +263,138 @@ let emit_reified_init_body env num_reified ast_class =
       call_parent;
       return;
     ]
-  end
 
 let emit_reified_init_method env ast_class =
   let num_reified =
-    List.count ast_class.Ast.c_tparams ~f:(fun t -> t.Ast.tp_reified) in
-  let maybe_has_reified_parents = match ast_class.Ast.c_extends with
-    | (_, Ast.Happly (_, l)) :: _ -> not @@ List.is_empty l
-    | _ -> false in
-  if num_reified = 0 && not maybe_has_reified_parents then [] else
-  let tc = Hhas_type_constraint.make (Some "HH\\varray") [] in
-  let params =
-    [ Hhas_param.make
-      SU.Reified.reified_init_method_param_name
-      false (* reference *)
-      false (* variadic *)
-      false (* inout *)
-      [] (* uattrs *)
-      (Some (Hhas_type_info.make (Some "HH\\varray") tc))
-      None (* default value *)
-    ] in
-  let instrs = emit_reified_init_body env num_reified ast_class in
-  [make_86method
-    ~name:SU.Reified.reified_init_method_name
-    ~params
-    ~is_static:false
-    ~is_private:false
-    ~is_protected:true
-    ~is_abstract:false
-    ~span:(Hhas_pos.pos_to_span ast_class.Ast.c_span)
-    instrs]
+    List.count ast_class.A.c_tparams.A.c_tparam_list ~f:(fun t -> not (t.A.tp_reified = A.Erased)) in
+  let maybe_has_reified_parents =
+    match ast_class.A.c_extends with
+    | (_, Aast.Happly (_, l)) :: _ -> not @@ List.is_empty l
+    | _ -> (* Hack classes can only extend a single parent *) false in
+  if num_reified = 0 && not maybe_has_reified_parents
+  then []
+  else
+    let tc = Hhas_type_constraint.make (Some "HH\\varray") [] in
+    let params =
+      [ Hhas_param.make
+        SU.Reified.reified_init_method_param_name
+        false (* reference *)
+        false (* variadic *)
+        false (* inout *)
+        [] (* uattrs *)
+        (Some (Hhas_type_info.make (Some "HH\\varray") tc))
+        None (* default value *)
+      ] in
+    let instrs = emit_reified_init_body env num_reified ast_class in
+    [make_86method
+      ~name:SU.Reified.reified_init_method_name
+      ~params
+      ~is_static:false
+      ~visibility:Aast.Protected
+      ~is_abstract:false
+      ~span:(Hhas_pos.pos_to_span ast_class.A.c_span)
+      instrs]
 
-let emit_class : A.class_ * Closure_convert.hoist_kind -> Hhas_class.t =
-  fun (ast_class, hoisted) ->
-  let namespace = ast_class.Ast.c_namespace in
-  validate_class_name namespace ast_class.Ast.c_name;
+let emit_class (ast_class, hoisted) =
+  let namespace = ast_class.A.c_namespace in
+  validate_class_name namespace ast_class.A.c_name;
   let env = Emit_env.make_class_env ast_class in
   (* TODO: communicate this without looking at the name *)
   let is_closure_class =
     String.is_prefix ~prefix:"Closure$" (snd ast_class.A.c_name) in
 
   let class_attributes =
-    Emit_attribute.from_asts namespace ast_class.Ast.c_user_attributes in
+    Emit_attribute.from_asts namespace ast_class.A.c_user_attributes in
   let class_attributes = if is_closure_class then class_attributes else
-    Emit_attribute.add_reified_attribute
-      class_attributes ast_class.Ast.c_tparams in
+      Emit_attribute.add_reified_attribute
+        class_attributes ast_class.A.c_tparams.A.c_tparam_list in
   let class_attributes = if is_closure_class then class_attributes else
-    Emit_attribute.add_reified_parent_attribute env
-      class_attributes ast_class.Ast.c_extends in
-  let class_is_immutable = Hhas_attribute.has_const class_attributes in
+      Emit_attribute.add_reified_parent_attribute env
+        class_attributes ast_class.A.c_extends in
+  let class_is_const = Hhas_attribute.has_const class_attributes in
   (* In the future, we intend to set class_no_dynamic_props independently from
-   * class_is_immutable, but for now class_is_immutable is the only thing that
-   * turns it on. *)
-  let class_no_dynamic_props = class_is_immutable in
-  let class_id, _ =
-    Hhbc_id.Class.elaborate_id namespace ast_class.Ast.c_name in
-  let class_is_trait = ast_class.A.c_kind = Ast.Ctrait in
-  let class_is_interface = ast_is_interface ast_class in
+   * class_is_const, but for now class_is_const is the only thing that turns
+   * it on. *)
+  let class_no_dynamic_props = class_is_const in
+  let class_id =
+    Hhbc_id.Class.elaborate_id namespace ast_class.A.c_name in
+  let class_is_trait = ast_class.A.c_kind = Ast_defs.Ctrait in
+  let class_is_record = ast_class.A.c_kind = Ast_defs.Crecord in
+  let class_is_interface = ast_class.A.c_kind = Ast_defs.Cinterface in
   let class_uses =
     List.filter_map
-      ast_class.A.c_body
-      (function
-        | A.ClassUse (pos, (A.Happly ((_, name), _))) ->
+      ast_class.A.c_uses
+      (fun (p, h) ->
+        match h with
+        | Aast.Happly ((_, name), _) ->
           if class_is_interface
-          then Emit_fatal.raise_fatal_parse pos "Interfaces cannot use traits"
+          then Emit_fatal.raise_fatal_parse p "Interfaces cannot use traits"
           else Some name
         | _ -> None)
   in
   let elaborate_namespace_id namespace id =
-    let id, _ = Hhbc_id.Class.elaborate_id namespace id in
+    let id = Hhbc_id.Class.elaborate_id namespace id in
     Hhbc_id.Class.to_raw_string id in
   let class_use_aliases =
-    List.filter_map
-      ast_class.A.c_body
-      (function
-        | A.ClassUseAlias (ido1, id, ido2, kindo) ->
-          let id1 = Option.map ido1 ~f:(elaborate_namespace_id namespace) in
-          let id2 = Option.map ido2 ~f:snd in
-          Some (id1, snd id, id2, kindo)
-        | _ -> None)
-  in
+    List.map
+      ~f:(fun (ido1, id, ido2, vis) ->
+        let id1 = Option.map ido1 ~f:(elaborate_namespace_id namespace) in
+        let id2 = Option.map ido2 ~f:snd in
+        (id1, snd id, id2, vis))
+      ast_class.A.c_use_as_alias in
   let class_use_precedences =
-    List.filter_map
-      ast_class.A.c_body
-      (function
-        | A.ClassUsePrecedence (id1, id2, ids) ->
-          let id1 = elaborate_namespace_id namespace id1 in
-          let ids = List.map ids ~f:(elaborate_namespace_id namespace) in
-          Some (id1, snd id2, ids)
-        | _ -> None)
-  in
+    List.map
+      ~f:(fun (id1, id2, ids) ->
+        let id1 = elaborate_namespace_id namespace id1 in
+        let id2 = snd id2 in
+        let ids = List.map ids ~f:(elaborate_namespace_id namespace) in
+        (id1, id2, ids))
+    ast_class.A.c_insteadof_alias in
   let class_method_trait_resolutions =
-    List.filter_map
-      ast_class.A.c_body
-      (function
-        | A.MethodTraitResolution {
-            A.mt_kind = kinds;
-            A.mt_name = new_id;
-            A.mt_trait = (_, (A.Happly ((_, trait), _)));
-            A.mt_method = id;
-            A.mt_fun_kind = fun_kind; _
-          } ->
-          Some (trait, snd id, snd new_id, kinds, fun_kind)
-        | _ -> None)
-  in
+    let string_of_trait trait =
+      match snd trait with
+      | Aast.Happly ((_, trait), _) -> trait
+      (* Happly converted from naming *)
+      | Aast.Hprim p -> Emit_type_hint.prim_to_string p
+      | Aast.Hany -> failwith "I'm convinced that this should be an error caught in naming"
+      | Aast.Hmixed -> SN.Typehints.mixed
+      | Aast.Hnonnull -> SN.Typehints.nonnull
+      | Aast.Habstr s -> s
+      | Aast.Harray _ -> SN.Typehints.array
+      | Aast.Hdarray _ -> SN.Typehints.darray
+      | Aast.Hvarray _ -> SN.Typehints.varray
+      | Aast.Hvarray_or_darray _ -> SN.Typehints.varray_or_darray
+      | Aast.Hthis -> SN.Typehints.this
+      | Aast.Hdynamic -> SN.Typehints.dynamic
+      | _ -> failwith "TODO Fail gracefully here" in
+    List.map
+      ast_class.A.c_method_redeclarations
+      ~f:(fun mtr -> mtr, string_of_trait mtr.A.mt_trait) in
   let class_enum_type =
-    if ast_class.A.c_kind = Ast.Cenum
-    then from_enum_type ast_class.A.c_namespace ast_class.A.c_enum
+    if ast_class.A.c_kind = Ast_defs.Cenum
+    then from_enum_type ~namespace:ast_class.A.c_namespace ast_class.A.c_enum
     else None
   in
   let class_xhp_attributes =
-    List.filter_map
-      ast_class.A.c_body
-      (function
-        | A.XhpAttr (ho, cv, b, eo) -> Some (Hhas_xhp_attribute.make ho cv b eo)
-        | _ -> None)
-  in
-  let class_xhp_use_attributes =
-    List.filter_map
-      ast_class.A.c_body
-      (function
-        | A.XhpAttrUse h -> Some h
-        | _ -> None)
+    List.map
+      ~f:(fun (ho, cv, b, eo) -> Hhas_xhp_attribute.make ho cv b eo)
+      ast_class.A.c_xhp_attrs
   in
   let class_xhp_children =
-    List.find_map ast_class.A.c_body (function
-      | A.XhpChild (p, sl) -> Some (p, [sl])
-      | _ -> None)
+    match ast_class.A.c_xhp_children with
+    | (p, sl) :: _ -> Some (p, [sl])
+    | [] -> None
   in
+  (* Find map instead of filter map. T40102763 *)
   let class_xhp_categories =
-    List.find_map ast_class.A.c_body (function
-      | A.XhpCategory (p, c) -> Some (p, List.map c ~f:snd)
-      | _ -> None)
+    match ast_class.A.c_xhp_category with
+    | Some (p, c) -> Some (p, List.map c ~f:snd)
+    | None -> None
   in
-  let class_is_abstract = ast_class.A.c_kind = Ast.Cabstract in
-  let class_is_final =
-    ast_class.A.c_final || class_is_trait || (class_enum_type <> None) in
+  let class_is_abstract = ast_class.A.c_kind = Ast_defs.Cabstract in
+  let class_is_final = ast_class.A.c_final || class_is_trait || (class_enum_type <> None) in
   let class_is_sealed = Hhas_attribute.has_sealed class_attributes in
-  let tparams = Emit_body.tparams_to_strings ast_class.A.c_tparams in
+  let tparams = Emit_body.tparams_to_strings ast_class.A.c_tparams.A.c_tparam_list in
   let class_base =
     if class_is_interface then None
     else let base = from_extends
@@ -428,17 +403,18 @@ let emit_class : A.class_ * Closure_convert.hoist_kind -> Hhas_class.t =
                     tparams
                     ast_class.A.c_extends in
          match base with
-         | Some cls when Hhbc_id.Class.to_raw_string cls = "Closure" &&
-                         not is_closure_class ->
-            Emit_fatal.raise_fatal_runtime (fst ast_class.A.c_name) "Class cannot extend Closure"
+         | Some cls when
+             String.lowercase (Hhbc_id.Class.to_raw_string cls) = "closure" &&
+             not is_closure_class ->
+           Emit_fatal.raise_fatal_runtime (fst ast_class.A.c_name)
+             "Class cannot extend Closure"
          | _ -> base
   in
   let implements =
     if class_is_interface then ast_class.A.c_extends
     else ast_class.A.c_implements in
   let class_implements = from_implements ~namespace implements in
-  let class_body = ast_class.A.c_body in
-  let class_span = Hhas_pos.pos_to_span ast_class.Ast.c_span in
+  let class_span = Hhas_pos.pos_to_span ast_class.A.c_span in
   (* TODO: communicate this without looking at the name *)
   let additional_methods = [] in
   let additional_methods =
@@ -448,12 +424,12 @@ let emit_class : A.class_ * Closure_convert.hoist_kind -> Hhas_class.t =
       @ Emit_xhp.from_category_declaration ast_class cats
   in
   let additional_methods =
-  match class_xhp_children with
-  | None -> additional_methods
-  | Some children -> additional_methods
-      @ Emit_xhp.from_children_declaration ast_class children
+    match class_xhp_children with
+    | None -> additional_methods
+    | Some children -> additional_methods
+        @ Emit_xhp.from_children_declaration ast_class children
   in
-  let no_xhp_attributes = class_xhp_attributes = [] && class_xhp_use_attributes = [] in
+  let no_xhp_attributes = class_xhp_attributes = [] && ast_class.A.c_xhp_attr_uses = [] in
   let additional_methods =
     if no_xhp_attributes
     then additional_methods
@@ -462,19 +438,16 @@ let emit_class : A.class_ * Closure_convert.hoist_kind -> Hhas_class.t =
           ~ns:namespace
           ast_class
           class_xhp_attributes
-          class_xhp_use_attributes
+          ast_class.A.c_xhp_attr_uses
   in
   Label.reset_label ();
   let class_properties =
-    List.concat_map class_body
-    (from_class_elt_classvars ast_class class_is_immutable tparams namespace) in
-  let class_has_immutable = class_is_immutable ||
-    List.exists class_properties (fun p -> Hhas_property.is_immutable p) in
+    from_class_elt_classvars ast_class class_is_const tparams in
+  let env = Emit_env.make_class_env ast_class in
   let class_constants =
-    List.concat_map class_body (from_class_elt_constants env) in
+    from_class_elt_constants env ast_class in
   let class_requirements =
-    List.filter_map class_body
-      (from_class_elt_requirements namespace) in
+    from_class_elt_requirements ast_class in
   let make_init_methods filter ~name =
     if List.exists class_properties
       (fun p -> Option.is_some (Hhas_property.initializer_instrs p)
@@ -488,8 +461,7 @@ let emit_class : A.class_ * Closure_convert.hoist_kind -> Hhas_class.t =
         ~name:name
         ~params:[]
         ~is_static:true
-        ~is_private:true
-        ~is_protected:false
+        ~visibility:Aast.Private
         ~is_abstract:false
         ~span:class_span
         instrs]
@@ -513,7 +485,7 @@ let emit_class : A.class_ * Closure_convert.hoist_kind -> Hhas_class.t =
       let rec make_cinit_instrs cs =
         match cs with
         | [] ->
-          Emit_pos.emit_pos_then ast_class.Ast.c_span @@ instr_retc
+          Emit_pos.emit_pos_then ast_class.A.c_span @@ instr_retc
         | (name, instrs) :: cs ->
           if List.is_empty cs
           then
@@ -530,13 +502,13 @@ let emit_class : A.class_ * Closure_convert.hoist_kind -> Hhas_class.t =
               instr_eq;
               instr_jmpz label;
               instrs;
-              Emit_pos.emit_pos ast_class.Ast.c_span;
+              Emit_pos.emit_pos ast_class.A.c_span;
               instr_jmp return_label;
               instr_label label;
               make_cinit_instrs cs;
             ] in
       let instrs =
-        Emit_pos.emit_pos_then ast_class.Ast.c_span @@
+        Emit_pos.emit_pos_then ast_class.A.c_span @@
         make_cinit_instrs initialized_class_constants in
       let params =
         [Hhas_param.make "$constName" false false false [] None None] in
@@ -544,38 +516,34 @@ let emit_class : A.class_ * Closure_convert.hoist_kind -> Hhas_class.t =
         ~name:"86cinit"
         ~params
         ~is_static:true
-        ~is_private:true
-        ~is_protected:false
+        ~visibility:Aast.Private
         ~is_abstract:class_is_interface
         ~span:class_span
         instrs] in
   let should_emit_reified_init = not (
-    Emit_env.is_systemlib () || class_is_abstract ||
+    Emit_env.is_systemlib () ||
     is_closure_class || class_is_interface || class_is_trait) in
   let reified_init_method = if not should_emit_reified_init then [] else
     emit_reified_init_method env ast_class in
   let no_reifiedinit_needed =
     not (List.is_empty reified_init_method)
-      && List.is_empty ast_class.Ast.c_extends in
+      && List.is_empty ast_class.A.c_extends in
   let additional_methods =
     additional_methods @ reified_init_method @
     pinit_methods @ sinit_methods @ linit_methods @ cinit_methods in
-  let methods = ast_methods class_body in
-  let class_methods = Emit_method.from_asts ast_class methods in
+  let class_methods = Emit_method.from_asts ast_class ast_class.A.c_methods in
   let class_methods = class_methods @ additional_methods in
-  let class_type_constants =
-    List.filter_map class_body (from_class_elt_typeconsts ~namespace) in
-  let info = Emit_memoize_method.make_info ast_class class_id methods in
+  let class_type_constants = from_class_elt_typeconsts ast_class in
+  let info = Emit_memoize_method.make_info ast_class class_id ast_class.A.c_methods in
   let additional_properties =
     if no_xhp_attributes then []
     else
       Emit_xhp.properties_for_cache
         ~ns:namespace
         ast_class
-        class_is_immutable in
+        class_is_const in
   let additional_methods =
-    Emit_memoize_method.emit_wrapper_methods env info ast_class methods in
-  let doc_comment = ast_class.A.c_doc_comment in
+    Emit_memoize_method.emit_wrapper_methods env info ast_class ast_class.A.c_methods in
   add_symbol_refs
     class_base class_implements class_uses class_requirements;
   Hhas_class.make
@@ -589,15 +557,15 @@ let emit_class : A.class_ * Closure_convert.hoist_kind -> Hhas_class.t =
     class_is_abstract
     class_is_interface
     class_is_trait
+    class_is_record
     ast_class.A.c_is_xhp
     hoisted
-    class_is_immutable
-    class_has_immutable
+    class_is_const
     class_no_dynamic_props
     no_reifiedinit_needed
     class_uses
-    class_use_aliases
-    class_use_precedences
+    class_use_aliases (* Killing class_use_aliases T40098428 *)
+    class_use_precedences (* Killing class_use_precedences as well T40098428 *)
     class_method_trait_resolutions
     class_enum_type
     (class_methods @ List.rev additional_methods)
@@ -605,10 +573,11 @@ let emit_class : A.class_ * Closure_convert.hoist_kind -> Hhas_class.t =
     class_constants
     class_type_constants
     class_requirements
-    doc_comment
+    ast_class.A.c_doc_comment
 
-let emit_classes_from_program ast =
-  List.filter_map ast
-      (fun (is_top, d) -> match d with
-        | Ast.Class cd -> Some (emit_class (cd, is_top))
-        | _ -> None)
+let emit_classes_from_program (ast : (Closure_convert.hoist_kind * Tast.def) list) =
+  let aux (is_top, d) =
+    match d with
+    | A.Class cd -> Some (emit_class (cd, is_top))
+    | _ -> None in
+  List.filter_map ~f:aux ast

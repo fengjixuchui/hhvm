@@ -1,9 +1,9 @@
-<?php
+<?hh
 
 class A {
   private $a = array('apple');
   private $b = 'banana';
-  function foo() {
+  static function foo() {
     $b = new A();
     unset($b->b);
     var_dump($b);

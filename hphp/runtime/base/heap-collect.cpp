@@ -20,13 +20,12 @@
 #include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/heap-graph.h"
 #include "hphp/runtime/base/weakref-data.h"
-#include "hphp/runtime/base/rds-local.h"
-#include "hphp/runtime/ext/weakref/weakref-data-handle.h"
 #include "hphp/runtime/vm/vm-regs.h"
 #include "hphp/util/alloc.h"
 #include "hphp/util/cycles.h"
 #include "hphp/util/process.h"
 #include "hphp/util/ptr-map.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/struct-log.h"
 #include "hphp/util/timer.h"
 #include "hphp/util/trace.h"
@@ -172,6 +171,7 @@ DEBUG_ONLY bool checkEnqueuedKind(const HeapObject* h) {
     case HeaderKind::SmallMalloc:
     case HeaderKind::BigMalloc:
     case HeaderKind::String:
+    case HeaderKind::Record:
       break;
     case HeaderKind::Free:
     case HeaderKind::Hole:
@@ -308,7 +308,7 @@ inline int64_t cpu_ns() {
 NEVER_INLINE void Collector::init() {
   auto const t0 = cpu_ns();
   SCOPE_EXIT { init_ns_ = cpu_ns() - t0; };
-  tl_heap->initFree(); // calls HeapImpl::sort(), required below
+  tl_heap->initFree();
   initfree_ns_ = cpu_ns() - t0;
 
   slabs_range_ = heap_.slab_range();
@@ -484,14 +484,16 @@ NEVER_INLINE void Collector::sweep() {
 
   // Clear weak references as needed.
   for (auto w : type_scanner_.m_weak) {
-    auto wref = static_cast<const WeakRefDataHandle*>(w);
-    assertx(wref->acquire_count == 0);
-    assertx(wref->wr_data);
-    auto type = wref->wr_data->pointee.m_type;
+    auto wr_data = static_cast<const WeakRefData*>(w);
+    auto type = wr_data->pointee.m_type;
     if (type == KindOfObject) {
-      auto h = find(wref->wr_data->pointee.m_data.pobj);
+      auto h = find(wr_data->pointee.m_data.pobj);
       if (!marked(h)) {
-        WeakRefData::invalidateWeakRef(uintptr_t(h));
+        // Its important we invalidate the pointer stored in the weakref, and
+        // not the start of the allocation.  In the case of objects with
+        // native datas, the start of allocation may not be the start of the
+        // ObjectData*.
+        WeakRefData::invalidateWeakRef(uintptr_t(wr_data->pointee.m_data.pobj));
         mm.reinitFree();
       }
       continue;

@@ -1,4 +1,4 @@
-<?php
+<?hh
   try {
   } finally {
     try {
@@ -7,4 +7,3 @@
     finally {}
     foo:
   }
-?>

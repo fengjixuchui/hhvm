@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : bool chmod(string filename, int mode)
  * Description: Change file mode 
  * Source code: ext/standard/filestat.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing chmod() : error conditions ***\n";
 
 
@@ -24,5 +24,5 @@ try { var_dump( chmod($filename) ); } catch (Exception $e) { echo "\n".'Warning:
 $filename = "___nonExisitingFile___";
 var_dump(chmod($filename, 0777));
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

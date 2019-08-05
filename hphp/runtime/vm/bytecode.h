@@ -20,15 +20,16 @@
 #include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/base/rds-util.h"
+#include "hphp/runtime/base/record-data.h"
 #include "hphp/runtime/base/tv-arith.h"
 #include "hphp/runtime/base/tv-conversions.h"
 #include "hphp/runtime/base/tv-mutate.h"
 #include "hphp/runtime/base/tv-variant.h"
 #include "hphp/runtime/base/tv-refcount.h"
+
 #include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/class-meth-data-ref.h"
-#include "hphp/runtime/vm/cls-ref.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/name-value-table.h"
 #include "hphp/runtime/vm/unit.h"
@@ -179,8 +180,6 @@ struct VarEnv {
   void exitFP(ActRec* fp);
 
   void set(const StringData* name, tv_rval tv);
-  void bind(const StringData* name, tv_lval tv);
-  void setWithRef(const StringData* name, TypedValue* tv);
   TypedValue* lookup(const StringData* name);
   TypedValue* lookupAdd(const StringData* name);
   bool unset(const StringData* name);
@@ -259,16 +258,6 @@ inline ActRec* arAtOffset(const ActRec* ar, int32_t offset) {
 
 void frame_free_locals_no_hook(ActRec* fp);
 
-#define arReturn(a, x)                          \
-  ([&] {                                        \
-    ActRec* ar_ = (a);                          \
-    TypedValue val_;                            \
-    new (&val_) Variant(x);                     \
-    frame_free_locals_no_hook(ar_);             \
-    tvCopy(val_, *ar_->retSlot());              \
-    return ar_->retSlot();                      \
-  }())
-
 #define tvReturn(x)                                                     \
   ([&] {                                                                \
     TypedValue val_;                                                    \
@@ -277,15 +266,7 @@ void frame_free_locals_no_hook(ActRec* fp);
     return val_;                                                        \
   }())
 
-template <bool crossBuiltin> Class* arGetContextClassImpl(const ActRec* ar);
-template <> Class* arGetContextClassImpl<true>(const ActRec* ar);
-template <> Class* arGetContextClassImpl<false>(const ActRec* ar);
-inline Class* arGetContextClass(const ActRec* ar) {
-  return arGetContextClassImpl<false>(ar);
-}
-inline Class* arGetContextClassFromBuiltin(const ActRec* ar) {
-  return arGetContextClassImpl<true>(ar);
-}
+Class* arGetContextClass(const ActRec* ar);
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -298,14 +279,11 @@ struct CallCtx {
   Class* cls;
   StringData* invName;
   bool dynamic;
+  ArrayData* reifiedGenerics;
 };
 
 constexpr size_t kNumIterCells = sizeof(Iter) / sizeof(Cell);
 constexpr size_t kNumActRecCells = sizeof(ActRec) / sizeof(Cell);
-
-constexpr size_t clsRefCountToCells(size_t n) {
-  return (n * sizeof(cls_ref) + sizeof(Cell) - 1) / sizeof(Cell);
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -320,41 +298,10 @@ constexpr size_t clsRefCountToCells(size_t n) {
  *
  *   - delaying stack overflow checks on reentry
  */
-constexpr int kStackCheckLeafPadding = 20;
+constexpr int kStackCheckLeafPadding = 100;
 constexpr int kStackCheckReenterPadding = 9;
 constexpr int kStackCheckPadding = kStackCheckLeafPadding +
   kStackCheckReenterPadding;
-
-constexpr int kInvalidRaiseLevel = -1;
-constexpr int kInvalidNesting = -1;
-
-struct Fault {
-  explicit Fault()
-    : m_raiseNesting(kInvalidNesting),
-      m_raiseFrame(nullptr),
-      m_raiseOffset(kInvalidOffset),
-      m_handledCount(0) {}
-
-  ObjectData* m_userException;
-
-  // The VM nesting at the moment where the exception was thrown.
-  int m_raiseNesting;
-  // The frame where the exception was thrown.
-  ActRec* m_raiseFrame;
-  // The offset within the frame where the exception was thrown.
-  // This value is updated when a fault is updated when exception
-  // chaining takes place. In this case the raise offset of the newly
-  // thrown exception is set to the offset of the previously thrown
-  // exception. The offset is also updated when the exception
-  // propagates outside its current frame.
-  Offset m_raiseOffset;
-  // The number of EHs that were already examined for this exception.
-  // This is used to ensure that the same exception handler is not
-  // run twice for the same exception. The unwinder may be entered
-  // multiple times for the same fault as a result of calling Unwind.
-  // The field is used to skip through the EHs that were already run.
-  int m_handledCount;
-};
 
 // Interpreter evaluation stack.
 struct Stack {
@@ -533,19 +480,6 @@ public:
   }
 
   ALWAYS_INLINE
-  void box() {
-    assertx(m_top != m_base);
-    assertx(!isRefType(m_top->m_type));
-    tvBox(*m_top);
-  }
-
-  ALWAYS_INLINE
-  void unbox() {
-    assertx(m_top != m_base);
-    tvUnbox(*m_top);
-  }
-
-  ALWAYS_INLINE
   void pushUninit() {
     assertx(m_top != m_elms);
     m_top--;
@@ -575,6 +509,7 @@ public:
   ALWAYS_INLINE void pushBool(bool v) { pushVal<KindOfBoolean>(v); }
   ALWAYS_INLINE void pushInt(int64_t v) { pushVal<KindOfInt64>(v); }
   ALWAYS_INLINE void pushDouble(double v) { pushVal<KindOfDouble>(v); }
+  ALWAYS_INLINE void pushClass(Class* v) { pushVal<KindOfClass>(v); }
 
   // This should only be called directly when the caller has
   // already adjusted the refcount appropriately
@@ -707,6 +642,13 @@ public:
   }
 
   ALWAYS_INLINE
+  void pushRecordNoRc(RecordData* r) {
+    assertx(m_top != m_elms);
+    m_top--;
+    *m_top = make_tv<KindOfRecord>(r);
+  }
+
+  ALWAYS_INLINE
   void pushFunc(Func* f) {
     m_top--;
     *m_top = make_tv<KindOfFunc>(f);
@@ -758,15 +700,6 @@ public:
     assertx(kNumIterCells * sizeof(Cell) == sizeof(Iter));
     assertx((uintptr_t)(m_top - kNumIterCells) >= (uintptr_t)m_elms);
     m_top -= kNumIterCells;
-  }
-
-  ALWAYS_INLINE
-  void allocClsRefSlots(size_t n) {
-    assertx((uintptr_t)(m_top - clsRefCountToCells(n)) >= (uintptr_t)m_elms);
-    m_top -= clsRefCountToCells(n);
-    if (debug) {
-      memset(m_top, kTrashClsRef, clsRefCountToCells(n) * sizeof(Cell));
-    }
   }
 
   ALWAYS_INLINE
@@ -838,6 +771,13 @@ public:
   }
 
   ALWAYS_INLINE
+  ActRec* indA(size_t ind) {
+    assertx(m_top != m_base);
+    assertx(count() > ind + kNumActRecCells);
+    return (ActRec*)&m_top[ind];
+  }
+
+  ALWAYS_INLINE
   Cell* indC(size_t ind) {
     assertx(m_top != m_base);
     assertx(!isRefType(m_top[ind].m_type));
@@ -892,13 +832,16 @@ visitStackElems(const ActRec* const fp,
         ar = arAtOffset(fakePrevFP, -fe->m_fpOff);
       }
 
-      assertx(cursor <= reinterpret_cast<TypedValue*>(ar));
       while (cursor < reinterpret_cast<TypedValue*>(ar)) {
         tvFun(cursor++);
       }
-      arFun(ar, fe->m_fpushOff);
 
-      cursor += kNumActRecCells;
+      if (cursor == reinterpret_cast<TypedValue*>(ar)) {
+        arFun(ar);
+        cursor += kNumActRecCells;
+      }
+
+      assertx(cursor >= reinterpret_cast<TypedValue*>(ar) + kNumActRecCells);
       if (fe->m_parentIndex == -1) break;
       fe = &fp->m_func->fpitab()[fe->m_parentIndex];
     }
@@ -930,8 +873,8 @@ enum class StackArgsState { // tells prepareFuncEntry how much work to do
 };
 void enterVMAtFunc(ActRec* enterFnAr, StackArgsState stk, VarEnv* varEnv);
 void enterVMAtCurPC();
-bool prepareArrayArgs(ActRec* ar, const Cell args, Stack& stack,
-                      int nregular, TypedValue* retval, bool checkRefAnnot);
+void prepareArrayArgs(ActRec* ar, const Cell args, Stack& stack,
+                      int nregular, bool checkRefAnnot);
 
 ///////////////////////////////////////////////////////////////////////////////
 

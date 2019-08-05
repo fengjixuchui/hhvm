@@ -1,10 +1,8 @@
-<?php
+<?hh
 
 function foo() { mt_rand(); mt_rand(); mt_rand(); return new stdclass(); }
 
-function bar() {
-  $k = "asd";
-  $z =& $k;
+function bar(&$k, &$z) {
   $y = foo();
   echo $z;
 }
@@ -12,5 +10,6 @@ function bar() {
 
 <<__EntryPoint>>
 function main_refcount002() {
-bar();
+  $k = "asd";
+  bar(&$k, &$k);
 }

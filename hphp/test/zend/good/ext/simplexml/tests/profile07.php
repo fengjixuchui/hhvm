@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 error_reporting(E_ALL & ~E_NOTICE);
 $root = simplexml_load_string('<?xml version="1.0"?>
 <root xmlns:reserved="reserved-ns">
@@ -12,4 +12,4 @@ $myattr = $root->child->attributes('reserved-ns');
 echo $rsattr['attribute'];
 echo $myattr['attribute'];
 echo "\n---Done---\n";
-?>
+}

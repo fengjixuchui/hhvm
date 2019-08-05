@@ -1,4 +1,4 @@
-<?php
+<?hh
 require_once __DIR__."/../utils/server.inc";
 
 MongoLog::setModule( MongoLog::PARSE );
@@ -9,4 +9,3 @@ new MongoClient("mongodb://localhost", array( 'connect' => false ));
 new MongoClient("mongodb://localhost/", array( 'connect' => false ));
 new MongoClient("mongodb://localhost/x", array( 'connect' => false ));
 new MongoClient("mongodb://localhost/?readPreference=PRIMARY", array( 'connect' => false ));
-?>

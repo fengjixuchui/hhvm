@@ -1,0 +1,2 @@
+File "globals_by_ref.php", line 5, characters 5-12:
+Superglobals may not be taken by reference. (Parsing[1002])

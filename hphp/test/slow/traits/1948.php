@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 trait SayWorld {
   public function sayHello() {
@@ -11,6 +11,7 @@ class MyHelloWorld {
   }
   use SayWorld;
 }
+<<__EntryPoint>> function main(): void {
 $o = new MyHelloWorld();
 $o->sayHello();
-?>
+}

@@ -20,9 +20,9 @@
 
 #include "hphp/runtime/vm/hhbc.h"
 #include "hphp/util/data-block.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/trace.h"
 
-#include "hphp/runtime/base/rds-local.h"
 
 namespace HPHP {
 namespace Stats {
@@ -72,9 +72,6 @@ namespace Stats {
   /* stub reuse stats */ \
   STAT(Astub_New) \
   STAT(Astub_Reused) \
-  /* ObjectData construction */ \
-  STAT(ObjectData_new_dtor_yes) \
-  STAT(ObjectData_new_dtor_no) \
   STAT(ObjMethod_total) \
   STAT(ObjMethod_known) \
   STAT(ObjMethod_methodslot) \

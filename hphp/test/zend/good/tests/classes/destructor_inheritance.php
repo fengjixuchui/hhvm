@@ -1,4 +1,4 @@
-<?php
+<?hh
 class base {
    function __construct() {
       echo __METHOD__ . "\n";
@@ -7,10 +7,10 @@ class base {
 
 class derived extends base {
 }
-
+<<__EntryPoint>> function main(): void {
 $obj = new derived;
 
 unset($obj);
 
 echo 'Done';
-?>
+}

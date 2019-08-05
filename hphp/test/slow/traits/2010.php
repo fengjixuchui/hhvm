@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 trait Singleton {
   protected static $instances=array();
@@ -19,11 +19,10 @@ class MyHelloWorld {
   }
 }
 
-
+<<__EntryPoint>> function main(): void {
 $o= myHelloWorld::getInstance(1);
 $o= myHelloWorld::getInstance(1);
 $o= myHelloWorld::getInstance(2);
 $o= myHelloWorld::getInstance(array(1=>2));
 $o= myHelloWorld::getInstance(array(1=>2));
-
-?>
+}

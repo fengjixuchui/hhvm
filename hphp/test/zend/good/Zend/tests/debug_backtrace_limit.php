@@ -1,4 +1,4 @@
-<?php
+<?hh
 function a() {
     b();
 }
@@ -15,4 +15,3 @@ function c() {
 }
 
 a();
-?>

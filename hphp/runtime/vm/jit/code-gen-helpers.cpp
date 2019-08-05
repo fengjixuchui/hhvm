@@ -153,8 +153,9 @@ void storeTVVal(Vout& v, Type type, Vloc srcLoc, Vptr valPtr) {
 
 }
 
-void storeTV(Vout& v, Vptr dst, Vloc srcLoc, const SSATmp* src) {
-  storeTV(v, src->type(), srcLoc, dst + TVOFF(m_type), dst + TVOFF(m_data));
+void storeTV(Vout& v, Vptr dst, Vloc srcLoc, const SSATmp* src, Type ty) {
+  if (ty == TBottom) ty = src->type();
+  storeTV(v, ty, srcLoc, dst + TVOFF(m_type), dst + TVOFF(m_data));
 }
 
 void storeTV(Vout& v, Type type, Vloc srcLoc, Vptr typePtr, Vptr valPtr) {
@@ -387,8 +388,9 @@ void emitDecRefWorkObj(Vout& v, Vreg obj, Reason reason) {
     v, CC_E, shouldRelease,
     [&] (Vout& v) {
       // Put fn inside vcall{} triggers a compiler internal error (gcc 4.4.7)
-      auto const fn = CallSpec::method(&ObjectData::release);
-      v << vcall{fn, v.makeVcallArgs({{obj}}), v.makeTuple({})};
+      auto const cls = emitLdObjClass(v, obj, v.makeReg());
+      auto const fn = CallSpec::objDestruct(cls);
+      v << vcall{fn, v.makeVcallArgs({{obj, cls}}), v.makeTuple({})};
     },
     [&] (Vout& v) {
       emitDecRef(v, obj, reason);
@@ -431,6 +433,17 @@ void emitCall(Vout& v, CallSpec target, RegSet args) {
       v << callm{dtor, args};
     } return;
 
+    case K::ObjDestructor: {
+      auto const func = v.makeReg();
+      emitLdLowPtr(
+        v,
+        target.reg()[Class::releaseOff()],
+        func,
+        sizeof(ObjReleaseFunc)
+      );
+      v << callr{func, args};
+    } return;
+
     case K::Stub:
       v << callstub{target.stubAddr(), args};
       return;
@@ -459,6 +472,11 @@ Vptr lookupDestructor(Vout& v, Vreg type, bool typeIsQuad) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+Vreg emitLdRecDesc(Vout& v, Vreg val, Vreg d) {
+  emitLdLowPtr(v, val[RecordData::getVMRecordOffset()], d,
+               sizeof(LowPtr<RecordDesc>));
+  return d;
+}
 
 Vreg emitLdObjClass(Vout& v, Vreg obj, Vreg d) {
   emitLdLowPtr(v, obj[ObjectData::getVMClassOffset()], d,

@@ -1,4 +1,4 @@
-<?php
+<?hh
 ini_set("soap.wsdl_cache_enabled", 0);
 
 class foo {
@@ -37,4 +37,3 @@ $x = new LocalSoapClient(dirname(__FILE__)."/bug30928.wsdl",
 var_dump($x->test(new foo()));
 
 echo "ok\n";
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 require dirname(__FILE__) . '/../../../ext/pdo/tests/pdo_test.inc';
 $db = PDOTest::test_factory(dirname(__FILE__) . '/common.phpt');
@@ -25,4 +25,3 @@ $stmt->setFetchMode(PDO::FETCH_CLASS | PDO::FETCH_PROPS_LATE, 'Person');
 $r1 = $stmt->fetch(PDO::FETCH_CLASS | PDO::FETCH_PROPS_LATE);
 printf("'%s'\n", $r1->test);
 
-?>

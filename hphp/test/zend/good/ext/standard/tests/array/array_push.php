@@ -1,20 +1,22 @@
-<?php
+<?hh
 
 /* Prototype: int array_push(& array &array );
  * Description: Push one or more elements onto the end of array
  and returns the new number of elements in the array.
  */
-
+<<__EntryPoint>> function main(): void {
 $empty_array = array();
 $number = 5;
 $str = "abc";
 
 
 /* Various combinations of arrays to be used for the test */
+$mixed_array1 = array( 1,2,3,4,5,6,7,8,9 );
+$mixed_array2 = array( "One", "_Two", "Three", "Four", "Five" );
 $mixed_array = array(
   array(),
-  array( 1,2,3,4,5,6,7,8,9 ),
-  array( "One", "_Two", "Three", "Four", "Five" ),
+  $mixed_array1,
+  $mixed_array2,
   array( 6, "six", 7, "seven", 8, "eight", 9, "nine" ),
   array( "a" => "aaa", "A" => "AAA", "c" => "ccc", "d" => "ddd", "e" => "eee" ),
   array( "1" => "one", "2" => "two", "3" => "three", "4" => "four", "5" => "five" ),
@@ -40,11 +42,13 @@ var_dump( array_push(&$number, 22) );
 var_dump( array_push(&$str, 22) );
 
 /* Invalid Number of arguments */
-var_dump( array_push(&$mixed_array[1],1,2) );
+var_dump( array_push(&$mixed_array1,1,2) );
 
 /* Empty Array as argument */
 var_dump( array_push(&$empty_array, 2) );
 
+$mixed_array[1] = $mixed_array1;
+$mixed_array[2] = $mixed_array2;
 
 /* Loop to test normal functionality with different arrays inputs */
 echo "\n*** Testing with various array inputs ***\n";
@@ -61,8 +65,8 @@ foreach( $mixed_array as $sub_array )
 
 /* Checking for return value and the new array formed from push operation */
 echo "\n*** Checking for return value and the new array formed from push operation ***\n";
-var_dump( array_push(&$mixed_array[2], 22, 33, "44") );
-var_dump( $mixed_array[2] );
+var_dump( array_push(&$mixed_array2, 22, 33, "44") );
+var_dump( $mixed_array2 );
 
 echo"\nDone";
-?>
+}

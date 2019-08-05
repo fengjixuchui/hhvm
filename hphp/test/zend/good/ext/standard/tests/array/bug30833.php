@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $foo = array('abc', '0000');
 var_dump($foo);
 
@@ -9,4 +9,4 @@ var_dump($count);
 var_dump($foo);
 
 echo "Done\n";
-?>
+}

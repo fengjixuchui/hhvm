@@ -1,4 +1,4 @@
-<?php
+<?hh
 class A extends SplFixedArray {
 
     public function current() {
@@ -22,7 +22,7 @@ class A extends SplFixedArray {
         return parent::next();
     }
 }
-
+<<__EntryPoint>> function main(): void {
 echo "==Direct instance==\n";
 $a = new SplFixedArray(5);
 $a[0] = "a";
@@ -43,5 +43,5 @@ $a[4] = "f";
 foreach ($a as $k => $v) {
     echo "$k => $v\n";
 }
-?>
-===DONE===
+echo "===DONE===\n";
+}

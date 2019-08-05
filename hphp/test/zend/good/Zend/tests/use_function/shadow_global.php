@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 namespace {
     require 'includes/global_bar.php';
@@ -14,5 +14,3 @@ namespace {
     var_dump(bar());
     echo "Done\n";
 }
-
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_diff(array $arr1, array $arr2 [, array ...])
  * Description: Returns the entries of $arr1 that have values which are not 
  * present in any of the others arguments. 
@@ -11,7 +11,7 @@
  * 2. duplicate values
  * 3. duplicate key names
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_diff() : usage variations ***\n";
 
 $array_index = array('a', 'b', 'c', 0 => 'd', 'b');   //duplicate key (0), duplicate value (b)
@@ -25,4 +25,4 @@ var_dump(array_diff($array_index, $array_assoc));
 var_dump(array_diff($array_assoc, $array_index));
 
 echo "Done";
-?>
+}

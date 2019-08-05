@@ -1,13 +1,8 @@
-<?php
+<?hh
 
 function wrapper($a) {
   if ($a) {
-    class C {
-      private static $v;
-      public static function f() {
-        return self::$v;
-      }
-    }
+    include '1227.inc';
   }
 }
 class C2 {
@@ -17,8 +12,8 @@ class C2 {
   }
 }
 function foo($a) {
-  if ($a == 0) return is_callable(array('C', 'f'), null);
-  return is_callable(array('C2', 'f'), null);
+  if ($a == 0) return is_callable(array('C', 'f'), false);
+  return is_callable(array('C2', 'f'), false);
 }
 
 <<__EntryPoint>>

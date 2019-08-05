@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array get_html_translation_table ( [int $table [, int $quote_style [, string charset_hint]]] )
  * Description: Returns the internal translation table used by htmlspecialchars and htmlentities
  * Source code: ext/standard/html.c
@@ -7,7 +7,7 @@
 /*
  * test get_html_translation_table() with unexpected value for argument $table
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing get_html_translation_table() : usage variations ***\n";
 // initialize all required variables
 $quote_style = ENT_COMPAT;
@@ -98,4 +98,4 @@ for($index = 0; $index < count($values); $index ++) {
 fclose($fp);
 
 echo "Done\n";
-?>
+}

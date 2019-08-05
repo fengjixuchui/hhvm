@@ -1,4 +1,4 @@
-<?php
+<?hh
 include_once( 'ut_common.inc' );
 $GLOBALS['oo-mode'] = true;
 $res_str = '';
@@ -18,4 +18,3 @@ $res_str .= "Formatted number: " . ut_nfmt_format( $fmt, $test_value ) . "\n";
 $res_str .= "Formatted(clone) number: " . ut_nfmt_format( $fmt_clone, $test_value ) . "\n";
 echo $res_str;
 
-?>

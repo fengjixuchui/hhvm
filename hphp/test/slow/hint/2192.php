@@ -1,28 +1,18 @@
-<?php
+<?hh
 function decide() {
-  global $WHICH;
-  return $WHICH;
+
+  return mt_rand(0, 0);
 }
 
 
 <<__EntryPoint>>
 function main_2192() {
-$WHICH = 0;
+
 if (decide()) {
-  class X {
-    public function generator() {
-      yield 0;
-      yield 1;
-    }
-  }
+  include '2192-1.inc';
 }
  else {
-  class X {
-    public function generator() {
-      yield 1;
-      yield 2;
-    }
-  }
+  include '2192-2.inc';
 }
 $x = new X;
 foreach ($x->generator() as $v) {

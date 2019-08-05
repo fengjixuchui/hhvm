@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool usort(&array $array_arg, string $cmp_function)
  * Description: Sort an array by values using a user-defined comparison function 
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass an anonymous comparison function as $cmp_function argument to test behaviour()
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing usort() : usage variation ***\n";
 
 $cmp_function = ($value1, $value2) ==> { if($value1 == $value2) {return 0;} else if($value1 > $value2) {return 1;} else{return -1;} };
@@ -24,5 +24,5 @@ $array_arg = array("b" => "Banana", "m" => "Mango", "a" => "Apple", "p" => "Pine
 echo "\n-- Anonymous 'cmp_function' with parameters passed by reference --\n";
 var_dump( usort(&$array_arg, $cmp_function_ref) );
 var_dump($array_arg);
-?>
-===DONE===
+echo "===DONE===\n";
+}

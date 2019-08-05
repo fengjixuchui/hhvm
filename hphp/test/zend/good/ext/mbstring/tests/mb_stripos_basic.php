@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int mb_stripos(string haystack, string needle [, int offset [, string encoding]])
  * Description: Finds position of first occurrence of a string within another, case insensitive 
  * Source code: ext/mbstring/mbstring.c
@@ -8,7 +8,7 @@
 /*
  * Test basic functionality of mb_stripos with ASCII and multibyte characters
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mb_stripos() : basic functionality***\n";
 
 mb_internal_encoding('UTF-8');
@@ -88,4 +88,4 @@ foreach ($greek_needles as $needle) {
 }
 
 echo "Done";
-?>
+}

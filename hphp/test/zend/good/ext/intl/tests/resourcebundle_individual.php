@@ -1,4 +1,4 @@
-<?php
+<?hh
 	include "resourcebundle.inc";
 
 function ut_main($bundle) {
@@ -54,4 +54,3 @@ function ut_run2($bundle) {
 			echo $proc_result;
 }
 ut_run2($bundle);
-?>

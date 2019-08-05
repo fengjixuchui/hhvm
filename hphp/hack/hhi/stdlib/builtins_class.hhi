@@ -28,7 +28,7 @@ function get_class_methods($class_or_object): ?array<string>;
 <<__PHPStdLib>>
 function get_class_vars(string $class_name);
 <<__Rx>>
-function get_class(<<__MaybeMutable>> $object = null);
+function get_class(<<__MaybeMutable>> $object);
 <<__Rx>>
 function get_parent_class(<<__MaybeMutable>> $object = null);
 <<__PHPStdLib, __Rx>>
@@ -44,7 +44,7 @@ function get_object_vars(<<__MaybeMutable>> $object): ?darray;
 <<__PHPStdLib>>
 function call_user_method_array(string $method_name, &$obj, array $paramarr);
 <<__PHPStdLib>>
-function call_user_method(string $method_name, &$obj, ...);
+function call_user_method(string $method_name, &$obj, ...$args);
 }
 
 namespace HH {
@@ -52,4 +52,8 @@ namespace HH {
 function class_meth_get_class(mixed $class_meth): string;
 <<__Rx>>
 function class_meth_get_method(mixed $class_meth): string;
+<<__Rx>>
+function meth_caller_get_class(mixed $meth_caller): string;
+<<__Rx>>
+function meth_caller_get_method(mixed $meth_caller): string;
 }

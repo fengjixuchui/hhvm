@@ -9,16 +9,7 @@
 
 open Core_kernel
 open Typing_defs
-module T = Tast
-
-module ExpandedTypeAnnotations = struct
-  module ExprAnnotation = T.Annotations.ExprAnnotation
-  module EnvAnnotation = Nast.UnitAnnotation
-  module FuncBodyAnnotation = T.Annotations.FuncBodyAnnotation
-end
-
-module ExpandedTypeAnnotatedAST = Nast.AnnotatedAST(ExpandedTypeAnnotations)
-module ETast = ExpandedTypeAnnotatedAST
+module T = Aast
 
 (* Eliminate residue of type inference:
  *   1. Tvars are replaced (deep) by the expanded type
@@ -28,24 +19,29 @@ module ETast = ExpandedTypeAnnotatedAST
  *   Transform completely unconstrained types to Tmixed
  *   Consider using a fresh datatype for TAST types.
  *)
-let expand_ty env ty =
+let expand_ty ?pos env ty =
   let rec exp_ty ty =
     let _, ety = Tast_env.expand_type env ty in
     let ety = match ety with
       | (_, (Tany | Tnonnull | Tprim _ | Tobject | Tdynamic)) -> ety
       | (p, Tclass(n, e, tyl)) -> (p, Tclass(n, e, exp_tys tyl))
-      | (p, Tunresolved tyl) -> (p, Tunresolved (exp_tys tyl))
+      | (p, Tunion tyl) -> (p, Tunion (exp_tys tyl))
+      | (p, Tintersection tyl) -> (p, Tintersection (exp_tys tyl))
       | (p, Toption ty) -> (p, Toption (exp_ty ty))
       | (p, Ttuple tyl) -> (p, Ttuple (exp_tys tyl))
+      | (p, Tdestructure tyl) -> (p, Tdestructure (exp_tys tyl))
       | (p, Tfun ft) -> (p, Tfun (exp_fun_type ft))
       | (p, Tabstract (ak, tyopt)) ->
         (p, Tabstract (exp_abstract_kind ak, Option.map tyopt exp_ty))
-      | (p, Tshape (fk, fields)) ->
-        (p, Tshape (fk, Nast.ShapeMap.map exp_sft fields))
+      | (p, Tshape (shape_kind, fields)) ->
+        (p, Tshape (shape_kind, Nast.ShapeMap.map exp_sft fields))
       | (p, Tarraykind ak) ->
         (p, Tarraykind (exp_array_kind ak))
-        (* TODO TAST: replace with a user error *)
-      | (p, Tvar v) -> (p, Tvar v)
+      | (p, Tvar v) -> (match pos with
+                      | None -> (p, Tvar v)
+                      | Some pos -> if TypecheckerOptions.disallow_unresolved_type_variables (Tast_env.get_tcopt env)
+                                then Errors.unresolved_type_variable pos;
+                                (p, Tvar v))
         (* TODO TAST: replace with Tfun type *)
       | (p, Tanon(x, y)) -> (p, Tanon(x,y))
       | (p, Terr) -> (p, Terr) in
@@ -55,12 +51,12 @@ let expand_ty env ty =
   and exp_tys tyl = List.map ~f:exp_ty tyl
 
   and exp_fun_type { ft_pos; ft_deprecated; ft_arity; ft_abstract; ft_tparams;
-                     ft_where_constraints; ft_ret; ft_params;
+                     ft_where_constraints; ft_ret; ft_fun_kind; ft_params;
                      ft_reactive; ft_return_disposable;
                      ft_mutability; ft_returns_mutable;
                      ft_is_coroutine; ft_decl_errors;
                      ft_returns_void_to_rx } =
-  { ft_pos; ft_deprecated; ft_arity; ft_abstract; ft_reactive; ft_is_coroutine;
+  { ft_pos; ft_deprecated; ft_arity; ft_abstract; ft_fun_kind; ft_reactive; ft_is_coroutine;
     ft_return_disposable; ft_mutability; ft_returns_mutable;
     ft_tparams = Tuple.T2.map_fst ~f:(List.map ~f:exp_tparam) ft_tparams;
     ft_where_constraints = List.map ~f:exp_where_constraint ft_where_constraints;
@@ -93,7 +89,7 @@ let expand_ty env ty =
   and exp_abstract_kind ak =
     match ak with
     | AKnewtype(n, tyl) -> AKnewtype(n, exp_tys tyl)
-    | AKenum _ | AKgeneric _ | AKdependent _ -> ak
+    | AKgeneric _ | AKdependent _ -> ak
 
   and exp_tparam t =
   { t with
@@ -105,16 +101,8 @@ let expand_ty env ty =
 
 let expander = object
   inherit Tast_visitor.endo
-  method! on_expr_annotation env (pos, ty) = (pos, expand_ty env ty)
+  method! on_'ex env (pos, ty) = (pos, expand_ty ~pos env ty)
 end
 
-module ExpandAST =
-  Aast_mapper.MapAnnotatedAST(Tast.Annotations)(ExpandedTypeAnnotations)
-
 (* Replace all types in a program AST by their expansions *)
-let expand_program tast =
-  let tast = expander#go tast in
-  ExpandAST.map_program tast
-    ~map_env_annotation:(fun _ -> ())
-    ~map_expr_annotation:(fun x -> x)
-    ~map_funcbody_annotation:(fun x -> x)
+let expand_program tast = expander#go tast

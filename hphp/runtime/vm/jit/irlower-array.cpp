@@ -17,10 +17,12 @@
 #include "hphp/runtime/vm/jit/irlower-internal.h"
 
 #include "hphp/runtime/base/array-data.h"
+#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/object-data.h"
 #include "hphp/runtime/base/packed-array.h"
+#include "hphp/runtime/base/record-data.h"
 #include "hphp/runtime/base/set-array.h"
 #include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/type-array.h"
@@ -34,7 +36,6 @@
 #include "hphp/runtime/vm/jit/call-spec.h"
 #include "hphp/runtime/vm/jit/code-gen-cf.h"
 #include "hphp/runtime/vm/jit/code-gen-helpers.h"
-#include "hphp/runtime/vm/jit/code-gen-internal.h"
 #include "hphp/runtime/vm/jit/ir-instruction.h"
 #include "hphp/runtime/vm/jit/ir-opcode.h"
 #include "hphp/runtime/vm/jit/ssa-tmp.h"
@@ -163,24 +164,6 @@ void cgCountKeyset(IRLS& env, const IRInstruction* inst) {
 ///////////////////////////////////////////////////////////////////////////////
 // AKExists.
 
-namespace {
-
-template <ICMode intishCast>
-ALWAYS_INLINE
-bool ak_exist_string_impl(const ArrayData* arr, const StringData* key) {
-  if (auto const intish = tryIntishCast<intishCast>(key, arr)) {
-    return arr->exists(*intish);
-  }
-  return arr->exists(key);
-}
-
-}
-
-template <ICMode intishCast>
-bool ak_exist_string(const ArrayData* arr, const StringData* key) {
-  return ak_exist_string_impl<intishCast>(arr, key);
-}
-
 bool ak_exist_int_obj(ObjectData* obj, int64_t key) {
   if (obj->isCollection()) {
     return collections::contains(obj, key);
@@ -198,56 +181,19 @@ bool ak_exist_string_obj(ObjectData* obj, StringData* key) {
     return false;
   }
   auto const arr = obj->toArray(false, true);
-  switch (intishCastMode()) {
-    case ICMode::Warn:
-      return ak_exist_string_impl<ICMode::Warn>(arr.get(), key);
-    case ICMode::Cast:
-      return ak_exist_string_impl<ICMode::Cast>(arr.get(), key);
-    case ICMode::Ignore:
-      return ak_exist_string_impl<ICMode::Ignore>(arr.get(), key);
-    default:
-      not_reached();
-  }
+  return arr.get()->exists(key);
 }
 
 void cgAKExistsArr(IRLS& env, const IRInstruction* inst) {
-  auto const arrTy = inst->src(0)->type();
   auto const keyTy = inst->src(1)->type();
   auto& v = vmain(env);
 
-  auto const keyInfo = checkStrictlyInteger(arrTy, keyTy);
-  auto const target = ([&]{
-    if (keyInfo.checkForInt) {
-      switch (intishCastMode()) {
-        case ICMode::Warn:
-          return CallSpec::direct(ak_exist_string<ICMode::Warn>);
-        case ICMode::Cast:
-          return CallSpec::direct(ak_exist_string<ICMode::Cast>);
-        case ICMode::Ignore:
-          return CallSpec::direct(ak_exist_string<ICMode::Ignore>);
-        default:
-          not_reached();
-      }
-    } else {
-      return keyInfo.type == KeyType::Int
-        ? CallSpec::array(&g_array_funcs.existsInt)
-        : CallSpec::array(&g_array_funcs.existsStr);
-    }
-  })();
+  auto const target = (keyTy <= TInt)
+    ? CallSpec::array(&g_array_funcs.existsInt)
+    : CallSpec::array(&g_array_funcs.existsStr);
 
-  auto args = argGroup(env, inst).ssa(0);
-  if (keyInfo.converted) {
-    args.imm(keyInfo.convertedInt);
-  } else {
-    args.ssa(1);
-  }
-
-  cgCallHelper(
-    v, env, target, callDest(env, inst),
-    RuntimeOption::EvalHackArrCompatNotices
-      ? SyncOptions::Sync : SyncOptions::None,
-    args
-  );
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::None,
+               argGroup(env, inst).ssa(0).ssa(1));
 }
 
 void cgAKExistsDict(IRLS& env, const IRInstruction* inst) {
@@ -289,34 +235,75 @@ void cgAKExistsObj(IRLS& env, const IRInstruction* inst) {
 ///////////////////////////////////////////////////////////////////////////////
 // Array creation.
 
-IMPL_OPCODE_CALL(NewArray)
-IMPL_OPCODE_CALL(NewMixedArray)
-IMPL_OPCODE_CALL(NewLikeArray)
-IMPL_OPCODE_CALL(NewDictArray)
-IMPL_OPCODE_CALL(AllocPackedArray)
-IMPL_OPCODE_CALL(AllocVecArray)
+namespace {
 
-void cgNewDArray(IRLS& env, const IRInstruction* inst) {
-  cgCallHelper(
-    vmain(env),
-    env,
-    CallSpec::direct(MixedArray::MakeReserveDArray),
-    callDest(env, inst),
-    SyncOptions::None,
-    argGroup(env, inst).ssa(0)
-  );
+using MakeArrayFn = ArrayData*(uint32_t);
+
+void implNewArray(IRLS& env, const IRInstruction* inst, MakeArrayFn target,
+                  SyncOptions sync = SyncOptions::None) {
+  cgCallHelper(vmain(env), env, CallSpec::direct(target), callDest(env, inst),
+               sync, argGroup(env, inst).ssa(0));
 }
 
-void cgAllocVArray(IRLS& env, const IRInstruction* inst) {
+void implAllocArray(IRLS& env, const IRInstruction* inst, MakeArrayFn target,
+                    SyncOptions sync = SyncOptions::None) {
   auto const extra = inst->extra<PackedArrayData>();
-  cgCallHelper(
-    vmain(env),
-    env,
-    CallSpec::direct(PackedArray::MakeUninitializedVArray),
-    callDest(env, inst),
-    SyncOptions::None,
-    argGroup(env, inst).imm(extra->size)
-  );
+  cgCallHelper(vmain(env), env, CallSpec::direct(target), callDest(env, inst),
+               sync, argGroup(env, inst).imm(extra->size));
+}
+
+}
+
+template<MakeArrayFn make>
+ArrayData* with_prov(uint32_t size) {
+  using namespace arrprov;
+  assertx(RuntimeOption::EvalArrayProvenance);
+
+  auto ad = make(size);
+  assertx(ad->hasExactlyOneRef());
+  assertx(arrayWantsTag(ad));
+
+  setTag(ad, tagFromProgramCounter());
+  return ad;
+}
+
+void cgNewArray(IRLS& env, const IRInstruction* inst) {
+  implNewArray(env, inst, PackedArray::MakeReserve);
+}
+void cgNewMixedArray(IRLS& env, const IRInstruction* inst) {
+  implNewArray(env, inst, MixedArray::MakeReserveMixed);
+}
+void cgNewDictArray(IRLS& env, const IRInstruction* inst) {
+  if (RuntimeOption::EvalArrayProvenance) {
+    implNewArray(env, inst, with_prov<MixedArray::MakeReserveDict>,
+                 SyncOptions::Sync);
+  } else {
+    implNewArray(env, inst, MixedArray::MakeReserveDict);
+  }
+}
+void cgNewDArray(IRLS& env, const IRInstruction* inst) {
+  implNewArray(env, inst, MixedArray::MakeReserveDArray);
+}
+
+void cgAllocPackedArray(IRLS& env, const IRInstruction* inst) {
+  implAllocArray(env, inst, PackedArray::MakeUninitialized);
+}
+void cgAllocVecArray(IRLS& env, const IRInstruction* inst) {
+  if (RuntimeOption::EvalArrayProvenance) {
+    implAllocArray(env, inst, with_prov<PackedArray::MakeUninitializedVec>,
+                   SyncOptions::Sync);
+  } else {
+    implAllocArray(env, inst, PackedArray::MakeUninitializedVec);
+  }
+}
+void cgAllocVArray(IRLS& env, const IRInstruction* inst) {
+  implAllocArray(env, inst, PackedArray::MakeUninitializedVArray);
+}
+
+void cgNewLikeArray(IRLS& env, const IRInstruction* inst) {
+  cgCallHelper(vmain(env), env, CallSpec::direct(MixedArray::MakeReserveLike),
+               callDest(env, inst), SyncOptions::None,
+               argGroup(env, inst).ssa(0).ssa(1));
 }
 
 namespace {
@@ -343,6 +330,26 @@ void newStructImpl(IRLS& env,
                SyncOptions::None, args);
 }
 
+}
+
+void cgNewRecord(IRLS& env, const IRInstruction* inst) {
+  auto const rec = srcLoc(env, inst, 0).reg();
+  auto const sp = srcLoc(env, inst, 1).reg();
+  auto const extra = inst->extra<NewStructData>();
+  auto& v = vmain(env);
+
+  auto table = v.allocData<const StringData*>(extra->numKeys);
+  memcpy(table, extra->keys, extra->numKeys * sizeof(*extra->keys));
+
+  auto const args = argGroup(env, inst)
+    .reg(rec)
+    .imm(extra->numKeys)
+    .dataPtr(table)
+    .addr(sp, cellsToBytes(extra->offset.offset));
+
+  cgCallHelper(v, env, CallSpec::direct(RecordData::newRecord),
+               callDest(env, inst),
+               SyncOptions::Sync, args);
 }
 
 void cgNewStructArray(IRLS& env, const IRInstruction* inst) {

@@ -21,7 +21,6 @@
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/memory-manager.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/system-profiler.h"
 #include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/base/zend-math.h"
@@ -32,6 +31,7 @@
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/util/alloc.h"
 #include "hphp/util/cycles.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/timer.h"
 
 #include <iostream>
@@ -1147,7 +1147,6 @@ struct MemoProfiler final : Profiler {
     ActRec *ar = vmfp();
     // Lots of random cases to skip just to keep this simple for
     // now. There's no reason not to do more later.
-    if (!g_context->m_faults.empty()) return;
     if (ar->m_func->isCPPBuiltin() || ar->resumed()) return;
     auto ret = tvAsCVarRef(retval);
     if (ret.isNull()) return;
@@ -1395,7 +1394,7 @@ void end_profiler_frame(Profiler *p,
 ///////////////////////////////////////////////////////////////////////////////
 
 static struct HotProfilerExtension : Extension {
-  HotProfilerExtension(): Extension("hotprofiler", get_PHP_VERSION().data()) {}
+  HotProfilerExtension(): Extension("hotprofiler") {}
 
   void moduleInit() override {
 #ifdef CLOCK_REALTIME

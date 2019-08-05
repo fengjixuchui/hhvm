@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 /**
  * my doc comment
  */
 function foo () {
-	$d = 5;
+    $d = 5;
 }
 
 /***
@@ -14,12 +14,11 @@ function bar () {}
 
 
 function dumpFuncInfo($name) {
-	$funcInfo = new ReflectionFunction($name);
-	var_dump($funcInfo->getFileName());
+    $funcInfo = new ReflectionFunction($name);
+    var_dump($funcInfo->getFileName());
 }
-
+<<__EntryPoint>> function main(): void {
 dumpFuncInfo('foo');
 dumpFuncInfo('bar');
 dumpFuncInfo('array_pop');
-
-?>
+}

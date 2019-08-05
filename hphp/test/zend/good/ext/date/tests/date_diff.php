@@ -1,7 +1,8 @@
-<?php
+<?hh
 $ok = 0;
 const COUNT = 120;
 $d0 = new DateTime('2009-11-20');
+$dates = array();
 for ( $i = 0; $i < COUNT * 12; $i++ )
 {
 	$d = clone $d0;
@@ -49,4 +50,3 @@ for ( $i = 0; $i < COUNT; $i++)
 }
 
 echo $ok, "\n";
-?>

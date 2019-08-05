@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL);
 
 trait HelloWorld {
@@ -21,4 +21,3 @@ $o->callPrivateAlias();
 $o->sayHelloWorld();
 
 
-?>

@@ -4,12 +4,19 @@
       t_kind =
       ([3:14-44],
        (Hshape
-          { nsi_allows_unknown_fields = false; nsi_field_map = [ShapeMap] }));
+          { nsi_allows_unknown_fields = false;
+            nsi_field_map =
+            [{ sfi_optional = false; sfi_hint = ([3:27-30], (Hprim Tint));
+               sfi_name = (SFlit_str ([3:20-23], "x")) };
+              { sfi_optional = true; sfi_hint = ([3:40-43], (Hprim Tint));
+                sfi_name = (SFlit_str ([3:33-36], "y")) }
+              ]
+            }));
       t_user_attributes = []; t_mode = <opaque>; t_vis = Transparent;
       t_namespace = <opaque> });
   (Fun
      { f_span = [5:1-11:2]; f_annotation = (); f_mode = <opaque>;
-       f_ret = (Some ([5:26-30], (Hprim Tvoid)));
+       f_ret = (([Pos.none], _), (Some ([5:26-30], (Hprim Tvoid))));
        f_name = ([5:10-14], "\\test"); f_tparams = [];
        f_where_constraints = []; f_variadic = FVnonVariadic;
        f_params =
@@ -22,69 +29,74 @@
          ];
        f_body =
        { fb_ast =
-         [(Expr
-             (([6:3-23], int),
-              (Call (Cnormal,
-                 (([6:3-14], (function<T as shape(...)>(shape('x' => int, ?'y' => int) $shape, arraykey $index, $default): int)),
-                  (Class_const (
-                     (([6:3-9], Shapes), (CI ([6:3-9], "\\Shapes"))),
-                     ([6:11-14], "idx")))),
-                 [],
-                 [(([6:15-17], shape('x' => int, ?'y' => int)),
-                   (Lvar ([6:15-17], $p)));
-                   (([6:19-22], string), (String "x"))],
-                 []))));
+         [([6:3-24],
            (Expr
-              (([7:3-26], int),
+              (([6:3-23], int),
                (Call (Cnormal,
-                  (([7:3-14], (function<T as shape(...)>(shape('x' => int, ?'y' => int) $shape, arraykey $index, $default): int)),
+                  (([6:3-14], (function<T as shape(...)>(shape('x' => int, ?'y' => int) $shape, arraykey $index, $default): int)),
                    (Class_const (
-                      (([7:3-9], Shapes), (CI ([7:3-9], "\\Shapes"))),
-                      ([7:11-14], "idx")))),
+                      (([6:3-9], Shapes), (CI ([6:3-9], "\\Shapes"))),
+                      ([6:11-14], "idx")))),
                   [],
-                  [(([7:15-17], shape('x' => int, ?'y' => int)),
-                    (Lvar ([7:15-17], $p)));
-                    (([7:19-22], string), (String "x"));
-                    (([7:24-25], int), (Int "3"))],
-                  []))));
-           (Expr
-              (([8:3-29], bool),
-               (Call (Cnormal,
-                  (([8:3-20], (function<T as shape(...)>(shape('x' => int, ?'y' => int) $shape, arraykey $index): bool)),
-                   (Class_const (
-                      (([8:3-9], Shapes), (CI ([8:3-9], "\\Shapes"))),
-                      ([8:11-20], "keyExists")))),
-                  [],
-                  [(([8:21-23], shape('x' => int, ?'y' => int)),
-                    (Lvar ([8:21-23], $p)));
-                    (([8:25-28], string), (String "y"))],
-                  []))));
-           (Expr
-              (([9:3-30], void),
-               (Call (Cnormal,
-                  (([9:3-20], (function<T as shape(...)>(inout shape('x' => int, ?'y' => int) $shape, arraykey $index): void)),
-                   (Class_const (
-                      (([9:3-9], Shapes), (CI ([9:3-9], "\\Shapes"))),
-                      ([9:11-20], "removeKey")))),
-                  [],
-                  [(([9:21-24], shape('x' => int, ?'y' => int)),
-                    (Unop (Uref,
-                       (([9:22-24], shape('x' => int, ?'y' => int)),
-                        (Lvar ([9:22-24], $p)))
-                       )));
-                    (([9:26-29], string), (String "y"))],
-                  []))));
-           (Expr
-              (([10:3-22], array<string, int>),
-               (Call (Cnormal,
-                  (([10:3-18], (function<T as shape(...)>(shape('x' => int) $shape): array<string, int>)),
-                   (Class_const (
-                      (([10:3-9], Shapes), (CI ([10:3-9], "\\Shapes"))),
-                      ([10:11-18], "toArray")))),
-                  [],
-                  [(([10:19-21], shape('x' => int)), (Lvar ([10:19-21], $p)))
-                    ],
-                  []))))
+                  [(([6:15-17], shape('x' => int, ?'y' => int)),
+                    (Lvar ([6:15-17], $p)));
+                    (([6:19-22], string), (String "x"))],
+                  [])))));
+           ([7:3-27],
+            (Expr
+               (([7:3-26], int),
+                (Call (Cnormal,
+                   (([7:3-14], (function<T as shape(...)>(shape('x' => int, ?'y' => int) $shape, arraykey $index, $default): int)),
+                    (Class_const (
+                       (([7:3-9], Shapes), (CI ([7:3-9], "\\Shapes"))),
+                       ([7:11-14], "idx")))),
+                   [],
+                   [(([7:15-17], shape('x' => int, ?'y' => int)),
+                     (Lvar ([7:15-17], $p)));
+                     (([7:19-22], string), (String "x"));
+                     (([7:24-25], int), (Int "3"))],
+                   [])))));
+           ([8:3-30],
+            (Expr
+               (([8:3-29], bool),
+                (Call (Cnormal,
+                   (([8:3-20], (function<T as shape(...)>(shape('x' => int, ?'y' => int) $shape, arraykey $index): bool)),
+                    (Class_const (
+                       (([8:3-9], Shapes), (CI ([8:3-9], "\\Shapes"))),
+                       ([8:11-20], "keyExists")))),
+                   [],
+                   [(([8:21-23], shape('x' => int, ?'y' => int)),
+                     (Lvar ([8:21-23], $p)));
+                     (([8:25-28], string), (String "y"))],
+                   [])))));
+           ([9:3-31],
+            (Expr
+               (([9:3-30], void),
+                (Call (Cnormal,
+                   (([9:3-20], (function<T as shape(...)>(inout shape('x' => int, ?'y' => int) $shape, arraykey $index): void)),
+                    (Class_const (
+                       (([9:3-9], Shapes), (CI ([9:3-9], "\\Shapes"))),
+                       ([9:11-20], "removeKey")))),
+                   [],
+                   [(([9:21-24], shape('x' => int, ?'y' => int)),
+                     (Unop (Uref,
+                        (([9:22-24], shape('x' => int, ?'y' => int)),
+                         (Lvar ([9:22-24], $p)))
+                        )));
+                     (([9:26-29], string), (String "y"))],
+                   [])))));
+           ([10:3-23],
+            (Expr
+               (([10:3-22], array<string, int>),
+                (Call (Cnormal,
+                   (([10:3-18], (function<T as shape(...)>(shape('x' => int) $shape): array<string, int>)),
+                    (Class_const (
+                       (([10:3-9], Shapes), (CI ([10:3-9], "\\Shapes"))),
+                       ([10:11-18], "toArray")))),
+                   [],
+                   [(([10:19-21], shape('x' => int)), (Lvar ([10:19-21], $p)))
+                     ],
+                   [])))))
            ];
          fb_annotation = No unsafe blocks };
        f_fun_kind = FSync; f_user_attributes = []; f_file_attributes = [];

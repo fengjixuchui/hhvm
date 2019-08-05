@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* 
  * proto mixed max(mixed arg1 [, mixed arg2 [, mixed ...]])
  * Function is implemented in ext/standard/array.c
 */ 
-
+<<__EntryPoint>> function main(): void {
 echo "\n*** Testing arrays  ***\n";
 
 var_dump(max(array(2,1,2)));
@@ -23,5 +23,4 @@ var_dump(max(array(-2147483648, -2147483647)));
 var_dump(max(array(-2147483649, -2147483647)));
 
 echo "\nDone\n";
-
-?>
+}

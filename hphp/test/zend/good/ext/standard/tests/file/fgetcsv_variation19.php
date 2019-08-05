@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* 
  Prototype: array fgetcsv ( resource $handle [, int $length [, string $delimiter [, string $enclosure]]] );
  Description: Gets line from file pointer and parse for CSV fields
@@ -8,7 +8,7 @@
    Testing fgetcsv() to read a file when provided with default enclosure character 
    and with delimiter of two characters 
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing fgetcsv() : with default enclosure & delimiter of two chars ***\n";
 
 /* the array is with two elements in it. Each element should be read as 
@@ -82,4 +82,4 @@ foreach ($csv_lists as $csv_list) {
 } // end of foreach
 
 echo "Done\n";
-?>
+}

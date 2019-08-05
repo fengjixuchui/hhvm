@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string strftime(string format [, int timestamp])
  * Description: Format a local time/date according to locale settings 
  * Source code: ext/date/php_date.c
@@ -26,5 +26,4 @@ foreach($inputs as $key =>$value) {
 	  var_dump( strftime($value, $timestamp) );
 }	  
 
-?>
-===DONE===
+echo "===DONE===\n";

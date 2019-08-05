@@ -1,4 +1,4 @@
-<?php
+<?hh
 class C1 {
 	private   $p1 = 1;
 	protected $p2 = 2;
@@ -11,4 +11,3 @@ class C2 extends C1 {
 }
 $class = new ReflectionClass("C2");
 var_dump($class->getDefaultProperties());
-?>

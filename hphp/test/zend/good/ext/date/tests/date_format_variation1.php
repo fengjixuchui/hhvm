@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string date_format  ( DateTimeInterface $object  , string $format  )
  * Description: Returns date formatted according to given format
  * Source code: ext/date/php_date.c
@@ -102,5 +102,4 @@ foreach($inputs as $variation =>$object) {
 // closing the resource
 fclose( $file_handle );
 
-?>
-===DONE===
+echo "===DONE===\n";

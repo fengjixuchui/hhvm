@@ -20,6 +20,7 @@
 #include "hphp/runtime/base/types.h"
 #include "hphp/runtime/vm/treadmill.h"
 #include <boost/program_options/parsers.hpp>
+#include <folly/Optional.h>
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -45,11 +46,13 @@ void execute_command_line_begin(int argc, char **argv, int xhprof);
 void execute_command_line_end(int xhprof, bool coverage, const char *program);
 
 void init_command_line_session(int arc, char** argv);
-void
-init_command_line_globals(int argc, char** argv, char** envp,
-                          int xhprof,
-                          std::map<std::string, std::string>& serverVariables,
-                          std::map<std::string, std::string>& envVariables);
+void init_command_line_globals(
+  int argc, char** argv, char** envp,
+  int xhprof,
+  const std::map<std::string, std::string>& serverVariables,
+  const std::map<std::string, std::string>& envVariables
+);
+
 /**
  * Setting up environment variables.
  */
@@ -140,9 +143,32 @@ std::string get_systemlib(std::string* hhas = nullptr,
 // Helper function for stats tracking with exceptions.
 void bump_counter_and_rethrow(bool isPsp);
 
+struct HphpSession {
+  explicit HphpSession(Treadmill::SessionKind sk) {
+    hphp_session_init(sk);
+  }
+  ~HphpSession() {
+    hphp_context_exit();
+    hphp_session_exit();
+  }
+  HphpSession(const HphpSession&) = delete;
+  HphpSession& operator=(const HphpSession&) = delete;
+};
 
-// Log the first time a unit is loaded
-void log_loaded_unit(const Unit* u);
+struct HphpSessionAndThread {
+  explicit HphpSessionAndThread(Treadmill::SessionKind sk) {
+    hphp_thread_init();
+    session.emplace(sk);
+  }
+  ~HphpSessionAndThread() {
+    session.clear();
+    hphp_thread_exit();
+  }
+  HphpSessionAndThread(const HphpSessionAndThread&) = delete;
+  HphpSessionAndThread& operator=(const HphpSessionAndThread&) = delete;
+ private:
+  folly::Optional<HphpSession> session;
+};
 
 ///////////////////////////////////////////////////////////////////////////////
 }

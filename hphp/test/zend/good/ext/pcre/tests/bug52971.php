@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 $message = 'Der ist ein Süßwasserpool Süsswasserpool ... verschiedene Wassersportmöglichkeiten bei ...';
 
@@ -10,4 +10,3 @@ $pattern = '/[^\w]wasser/iu';
 preg_match_all($pattern, $message, &$match, PREG_OFFSET_CAPTURE);
 var_dump($match);
 
-?>

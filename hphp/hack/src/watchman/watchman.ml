@@ -25,7 +25,7 @@ module Testing_common = struct
   open Watchman_sig.Types
   let test_settings = {
     subscribe_mode = Some Defer_changes;
-    init_timeout = 0;
+    init_timeout = Watchman_sig.Types.No_timeout;
     expression_terms = [];
     debug_logging = false;
     roots = [Path.dummy_path];
@@ -36,6 +36,11 @@ end
 module Watchman_process_helpers = struct
   include Watchman_sig.Types
   module J = Hh_json_helpers.AdhocJsonHelpers
+
+  let timeout_to_secs = function
+  | No_timeout -> None
+  | Default_timeout -> Some 120.
+  | Explicit_timeout timeout -> Some timeout
 
   let debug = false
 
@@ -69,10 +74,11 @@ module Watchman_process_helpers = struct
     let response =
     try Hh_json.json_of_string output
     with e ->
-      let stack = Printexc.get_backtrace () in
+      let raw_stack = Caml.Printexc.get_raw_backtrace () in
+      let stack = Caml.Printexc.raw_backtrace_to_string raw_stack in
       Hh_logger.error "Failed to parse string as JSON: %s\nEXCEPTION:%s\nSTACK:%s\n"
         output (Exn.to_string e) stack;
-      raise e
+      Caml.Printexc.raise_with_backtrace e raw_stack
     in
     assert_no_error response;
     response
@@ -117,6 +123,8 @@ end = struct
     if Buffered_line_reader.has_buffered_content reader
     then true
     else
+      (* Negative means "no timeout" to select *)
+      let timeout = Option.value (timeout_to_secs timeout) ~default:~-.1. in
       match Sys_utils.select_non_intr [Buffered_line_reader.get_fd reader] [] [] timeout with
       | [], _, _ -> false
       | _ -> true
@@ -127,16 +135,20 @@ end = struct
     then
       raise Timeout
     else
-      let remaining = start_t +. timeout -. Unix.time () in
-      let timeout = int_of_float remaining in
-      let timeout = max timeout 10 in
-      Timeout.with_timeout
-        ~do_: (fun _ -> Buffered_line_reader.get_next_line reader)
-        ~timeout
-        ~on_timeout:(fun () ->
-          let () = EventLogger.watchman_timeout () in
-          raise Read_payload_too_long
-        )
+      match timeout_to_secs timeout with
+      | None ->
+        Buffered_line_reader.get_next_line reader
+      | Some timeout ->
+        let remaining = start_t +. timeout -. Unix.time () in
+        let timeout = int_of_float remaining in
+        let timeout = max timeout 10 in
+        Timeout.with_timeout
+          ~do_: (fun _ -> Buffered_line_reader.get_next_line reader)
+          ~timeout
+          ~on_timeout:(fun () ->
+            let () = EventLogger.watchman_timeout () in
+            raise Read_payload_too_long
+          )
 
   (* Asks watchman for the path to the socket file *)
   let get_sockname timeout =
@@ -168,15 +180,16 @@ end = struct
     let conn = open_connection ~timeout in
     let result = try f conn with
       | e ->
+        let stack = Caml.Printexc.get_raw_backtrace () in
         Unix.close @@ Buffered_line_reader.get_fd @@ fst conn;
-        raise e
+        Caml.Printexc.raise_with_backtrace e stack
     in
     Unix.close @@ Buffered_line_reader.get_fd @@ fst conn;
     result
 
   (* Sends a request to watchman and returns the response. If we don't have a connection,
    * a new connection will be created before the request and destroyed after the response *)
-  let rec request ~debug_logging ?conn ?(timeout=120.0) json =
+  let rec request ~debug_logging ?conn ?(timeout=Default_timeout) json =
     match conn with
     | None ->
       with_watchman_conn ~timeout (fun conn -> request ~debug_logging ~conn ~timeout json)
@@ -188,12 +201,13 @@ end = struct
   let send_request_and_do_not_wait_for_response ~debug_logging ~conn:(_, oc) json =
     send_request ~debug_logging oc json
 
-  let blocking_read ~debug_logging ?timeout ~conn =
-    let timeout = Option.value timeout ~default:0.0 in
+  let blocking_read ~debug_logging ?(timeout=Explicit_timeout 0.) ~conn =
     let ready = has_input timeout @@ fst conn in
     if not ready then
-      if timeout = 0.0 then None
-      else raise Timeout
+      match timeout with
+      | No_timeout -> None
+      | Explicit_timeout timeout when timeout = 0. -> None
+      | _ -> raise Timeout
     else
       (* Use the timeout mechanism to limit maximum time to read payload (cap
        * data size) so we don't freeze if watchman sends an inordinate amount of
@@ -430,7 +444,14 @@ struct
   let with_crash_record_opt source f =
     Watchman_process.catch
       ~f:(fun () -> with_crash_record_exn source f >|= fun v -> Some v)
-      ~catch:(fun ~stack:_ _exn -> Watchman_process.return None)
+      ~catch:(fun ~stack:_ e ->
+        let exn = Exception.wrap e in
+        match e with
+        (* Avoid swallowing these *)
+        | Exit_status.Exit_with _
+        | Watchman_restarted -> Exception.reraise exn
+        | _ -> Watchman_process.return None
+      )
 
   let has_capability name capabilities =
     (** Projects down from the boolean error monad into booleans.
@@ -447,12 +468,62 @@ struct
       >>= get_bool name
       |> project_bool
 
+  (* When we re-init our connection to Watchman, we use the old clockspec to get all the changes
+   * since our last response. However, if Watchman has restarted and the old clockspec pre-dates
+   * the new Watchman, then we may miss updates. It is important for Flow and Hack to restart
+   * in that case.
+   *
+   * Unfortunately, the response to "subscribe" doesn't have the "is_fresh_instance" field. So
+   * we'll instead send a small "query" request. It should always return 0 files, but it should
+   * tell us whether the Watchman service has restarted since clockspec.
+   *)
+  let assert_watchman_has_not_restarted_since ~debug_logging ~conn ~watch_root ~clockspec =
+    let hard_to_match_name = "irrelevant.potato" in
+    let query = Hh_json.(JSON_Array [
+      JSON_String "query";
+      JSON_String watch_root;
+      JSON_Object [
+        "since", JSON_String clockspec;
+        "empty_on_fresh_instance", JSON_Bool true;
+        "expression", JSON_Array [ JSON_String "name"; JSON_String hard_to_match_name ]
+      ]
+    ]) in
+    Watchman_process.request ~debug_logging ~conn query
+    >>= fun response ->
+      match Hh_json_helpers.Jget.bool_opt (Some response) "is_fresh_instance" with
+      | Some false -> Watchman_process.return ()
+      | Some true ->
+        Hh_logger.error "Watchman server restarted so we may have missed some updates";
+        raise Watchman_restarted
+      | None ->
+        (* The response to this query **always** should include the `is_fresh_instance` boolean
+         * property. If it is missing then something has gone wrong with Watchman. Since we can't
+         * prove that Watchman has not restarted, we must treat this as an error. *)
+         Hh_logger.error "Invalid Watchman response to `empty_on_fresh_instance` query:\n%s"
+          (Hh_json.json_to_string ~pretty:true response);
+         raise Exit_status.(Exit_with Watchman_failed)
+
+  let prepend_relative_path_term ~relative_path ~terms =
+    match terms with
+    | None -> None
+    | Some _ when relative_path = "" ->
+      (* If we're watching the watch root directory, then there's no point in specifying a list of
+       * files and directories to watch. We're already subscribed to any change in this watch root
+       * anyway *)
+      None
+    | Some terms ->
+      (* So lets say we're being told to watch foo/bar. Is foo/bar a directory? Is it a file? If it
+       * is a file now, might it become a directory later? I'm not aware of aterm which will watch for either a file or a directory, so let's add two terms *)
+      Some (
+        J.strlist ["dirname"; relative_path] :: J.strlist ["name"; relative_path] :: terms
+      )
+
   let re_init ?prior_clockspec
     { init_timeout; subscribe_mode; expression_terms; debug_logging; roots; subscription_prefix } =
 
     with_crash_record_opt "init" @@ fun () ->
-    Watchman_process.open_connection ~timeout:(float_of_int init_timeout) >>= fun conn ->
-    Watchman_process.request ~debug_logging ~conn
+    Watchman_process.open_connection ~timeout:init_timeout >>= fun conn ->
+    Watchman_process.request ~debug_logging ~conn ~timeout:Default_timeout
       (capability_check ~optional:[ flush_subscriptions_cmd ]
       ["relative_root"]) >>= fun capabilities ->
     let supports_flush = has_capability flush_subscriptions_cmd capabilities in
@@ -460,32 +531,43 @@ struct
     let subscribe_mode = if supports_flush then subscribe_mode else None in
 
     Watchman_process.list_fold_values roots
-      ~init:(Some [], SSet.empty)
-      ~f: (fun (terms, watch_roots) path ->
-        (* Watch this root *)
-        Watchman_process.request
-          ~debug_logging ~conn (watch_project (Path.to_string path)) >|= fun response ->
-        let watch_root = J.get_string_val "watch" response in
-        let relative_path = J.get_string_val "relative_path" ~default:"" response in
+      ~init:(Some [], SSet.empty, SSet.empty)
+      ~f: (fun (terms, watch_roots, failed_paths) path ->
+        (* Watch this root. If the path doesn't exist, watch_project will throw. In that case catch
+         * the error and continue for now. *)
+        Watchman_process.catch
+          ~f:(fun () ->
+            Watchman_process.request
+              ~debug_logging ~conn (watch_project (Path.to_string path))
+            >|= fun response -> Some response)
+          ~catch:(fun ~stack:_ _ -> Watchman_process.return None)
+        >|= fun response ->
+          match response with
+          | None ->
+            terms, watch_roots, SSet.add (Path.to_string path) failed_paths
+          | Some response ->
+            let watch_root = J.get_string_val "watch" response in
+            let relative_path = J.get_string_val "relative_path" ~default:"" response in
 
-        let terms = match terms with
-        | None -> None
-        | Some _ when relative_path = "" ->
-          (* If we're watching the watch root directory, then there's no point in specifying a list
-           * of files and directories to watch. We're already subscribed to any change in this
-           * watch root anyway *)
-          None
-        | Some terms ->
-          (* So lets say we're being told to watch foo/bar. Is foo/bar a directory? Is it a file?
-           * If it is a file now, might it become a directory later? I'm not aware of a term which
-           * will watch for either a file or a directory, so let's add two terms *)
-          Some (J.strlist ["dirname"; relative_path] :: J.strlist ["name"; relative_path] :: terms)
-        in
+            let terms = prepend_relative_path_term ~relative_path ~terms in
 
-        let watch_roots = SSet.add watch_root watch_roots in
-        terms, watch_roots
+            let watch_roots = SSet.add watch_root watch_roots in
+            terms, watch_roots, failed_paths
       )
-    >>= fun (watched_path_expression_terms, watch_roots) ->
+    >>= fun (watched_path_expression_terms, watch_roots, failed_paths) ->
+
+    (* The failed_paths are likely includes which don't exist on the filesystem, so watch_project
+     * returned an error. Let's do a best effort attempt to infer the watch root and relative
+     * path for each bad include *)
+    let watched_path_expression_terms = SSet.fold (fun path terms ->
+      let open String_utils in
+      match SSet.find_first_opt (fun root -> string_starts_with path root) watch_roots with
+      | None ->
+        failwith (spf "Cannot deduce watch root for path %s" path)
+      | Some root ->
+        let relative_path = lstrip (lstrip path root) Filename.dir_sep in
+        prepend_relative_path_term ~relative_path ~terms
+    ) failed_paths watched_path_expression_terms in
 
     (* All of our watched paths should have the same watch root. Let's assert that *)
     let watch_root = match SSet.elements watch_roots with
@@ -500,7 +582,9 @@ struct
 
     (* If we don't have a prior clockspec, grab the current clock *)
     (match prior_clockspec with
-      | Some s -> Watchman_process.return s
+      | Some clockspec ->
+        assert_watchman_has_not_restarted_since ~debug_logging ~conn ~watch_root ~clockspec
+        >>= fun () -> Watchman_process.return clockspec
       | None ->
         Watchman_process.request ~debug_logging ~conn (clock watch_root)
         >|= J.get_string_val "clock"
@@ -528,7 +612,8 @@ struct
     (match subscribe_mode with
     | None -> Watchman_process.return ()
     | Some mode ->
-      Watchman_process.request ~debug_logging ~conn (subscribe ~mode env) >|= ignore
+      Watchman_process.request ~debug_logging ~conn (subscribe ~mode env)
+      >|= ignore
     ) >|= fun () ->
     env
 
@@ -664,6 +749,7 @@ struct
         with_crash_record_exn "get_all_files" @@ fun () ->
           Watchman_process.request
             ~debug_logging:env.settings.debug_logging
+            ~timeout:Default_timeout
             (all_query env)
           >|= fun response ->
           env.clockspec <- J.get_string_val "clock" response;
@@ -724,11 +810,11 @@ struct
     end
 
   let get_changes ?deadline instance =
-    let timeout = Option.map deadline ~f:(fun deadline ->
-      let timeout = deadline -. (Unix.time ()) in
-      max timeout 0.0
-    ) in
     call_on_instance instance "get_changes" @@ fun env ->
+      let timeout = Option.map deadline (fun deadline ->
+        let timeout = deadline -. (Unix.time ()) in
+        Explicit_timeout (max timeout 0.0)
+      ) in
       let debug_logging = env.settings.debug_logging in
       if env.settings.subscribe_mode <> None
       then
@@ -788,8 +874,12 @@ struct
         Lazy.force is_synced || Lazy.force is_not_needed
       end
     in
-    let timeout = deadline -. Unix.time () in
-    if timeout < 0.0 then raise Timeout else ();
+    let timeout =
+      let timeout = deadline -. Unix.time () in
+      if timeout <= 0.0
+      then raise Timeout
+      else Explicit_timeout timeout
+    in
 
     let debug_logging = env.settings.debug_logging in
     Watchman_process.blocking_read ~debug_logging ~timeout ~conn:env.conn >>= fun json ->
@@ -813,7 +903,7 @@ struct
       @@ (fun env ->
         if env.settings.subscribe_mode = None
         then
-          let timeout = float_of_int timeout in
+          let timeout = Explicit_timeout (float timeout) in
           let query = since_query env in
           Watchman_process.request
             ~debug_logging:env.settings.debug_logging

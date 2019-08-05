@@ -17,6 +17,7 @@
 #ifndef incl_HPHP_ARRAY_DATA_H_
 #define incl_HPHP_ARRAY_DATA_H_
 
+#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/countable.h"
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/header-kind.h"
@@ -24,8 +25,6 @@
 #include "hphp/runtime/base/sort-flags.h"
 #include "hphp/runtime/base/tv-val.h"
 #include "hphp/runtime/base/typed-value.h"
-
-#include "hphp/util/md5.h"
 
 #include <folly/Likely.h>
 
@@ -65,22 +64,9 @@ struct arr_lval : tv_lval {
 
 /*
  * We use this enum as a template parameter in a few key places to determine
- * whether or not a check for intish cast should occur and if a warning should
- * be logged.
- *
- * Currently, there a few spots in extensions where we cast explicitly and do
- * not log (CastSilently) In the JIT and the rest of the runtime, whether we
- * [cast and possibly warn] or [don't cast at all] is controlled by a runtime
- * flag. Whether the warning is emitted or not is controlled by another flag.
-
- * Eventually, the flag will go away and we will default to not checking/casting
- * at all, except where the cast was made explicit (CastSilently)
+ * whether we should explicitly perform legacy PHP intish key cast.
  */
-enum class IntishCast : int8_t {
-  AllowCastAndWarn, /* Cast if EnableIntishCast allows it,
-                       Log if CheckIntishCast is on and we casted */
-  CastSilently,     /* Unconditionally do cast, never log */
-};
+enum class IntishCast : int8_t { None, Cast };
 
 struct ArrayData : MaybeCountable {
   /*
@@ -134,6 +120,12 @@ struct ArrayData : MaybeCountable {
    */
   static auto constexpr kLegacyArray = 8;
 
+  /*
+   * Indicates that this array has provenance data available in a side table
+   * See array-provenance.h
+   */
+  static auto constexpr kHasProvenanceData = 16;
+
   /////////////////////////////////////////////////////////////////////////////
   // Creation and destruction.
 
@@ -174,21 +166,6 @@ public:
   static ArrayData* Create(TypedValue name, TypedValue value);
   static ArrayData* Create(const Variant& name, TypedValue value);
   static ArrayData* Create(const Variant& name, const Variant& value);
-
-  /*
-   * Like Create(name, value), but preserves reffiness unless `value' is
-   * singly-referenced.
-   */
-  static ArrayData* CreateWithRef(TypedValue name, TypedValue value);
-  static ArrayData* CreateWithRef(const Variant& name, TypedValue value);
-
-  /*
-   * Like Create(value) or Create(name, value), except `value' is boxed before
-   * insertion.
-   */
-  static ArrayData* CreateRef(Variant& value);
-  static ArrayData* CreateRef(TypedValue name, tv_lval value);
-  static ArrayData* CreateRef(const Variant& name, tv_lval value);
 
   /*
    * Make a copy of the array.
@@ -327,6 +304,16 @@ public:
   bool hasApcTv() const;
 
   /*
+   * Whether this ArrayData has provenance data stored in the
+   * side table--see array-provenance.h
+   */
+  bool hasProvenanceData() const;
+  /*
+   * Latches the provenance data bit to true
+   */
+  void markHasProvenanceData();
+
+  /*
    * Whether the array has legacy behaviors enabled (this bit can only be set
    * for vecs and dicts).
    */
@@ -403,20 +390,12 @@ public:
 
   /*
    * Get an lval for the element at key `k'.
-   *
-   * The lvalRef() variant should be used when the caller might box the
-   * returned lval.
    */
   arr_lval lval(int64_t k, bool copy);
   arr_lval lval(StringData* k, bool copy);
   arr_lval lval(Cell k, bool copy);
   arr_lval lval(const String& k, bool copy);
   arr_lval lval(const Variant& k, bool copy);
-  arr_lval lvalRef(int64_t k, bool copy);
-  arr_lval lvalRef(StringData* k, bool copy);
-  arr_lval lvalRef(Cell k, bool copy);
-  arr_lval lvalRef(const String& k, bool copy);
-  arr_lval lvalRef(const Variant& k, bool copy);
 
   /*
    * Get an lval for a new element at the next available integer key.
@@ -426,7 +405,6 @@ public:
    * details).
    */
   arr_lval lvalNew(bool copy);
-  arr_lval lvalNewRef(bool copy);
 
   /*
    * Get an rval for the element at key `k'.
@@ -458,6 +436,16 @@ public:
   TypedValue at(int64_t k) const;
   TypedValue at(const StringData* k) const;
   TypedValue at(Cell k) const;
+
+  /*
+   * Get the internal position for element with key `k', if it exists.
+   * If the key is not present then these return the canonical invalid position
+   * (i.e. iter_end()).
+   * The returned values can be passed to atPos or nvGetKey (if they're not the
+   * canonical invalid position).
+   */
+  ssize_t nvGetIntPos(int64_t k) const;
+  ssize_t nvGetStrPos(const StringData* k) const;
 
   /*
    * Get the value or key for the element at raw position `pos'.
@@ -534,28 +522,7 @@ public:
   ArrayData* setWithRefInPlace(int64_t k, TypedValue v);
 
   /*
-   * Like set(), except `v' is first boxed if it's not already a ref.
-   */
-  ArrayData* setRef(int64_t k, tv_lval v);
-  ArrayData* setRef(StringData* k, tv_lval v);
-  ArrayData* setRef(Cell k, tv_lval v);
-  ArrayData* setRef(const String& k, tv_lval v);
-  ArrayData* setRef(const Variant& k, tv_lval v);
-  ArrayData* setRefInPlace(StringData* k, tv_lval v);
-  ArrayData* setRefInPlace(int64_t k, tv_lval v);
-  ArrayData* setRefInPlace(Cell k, tv_lval v);
-
-  ArrayData* setRef(int64_t k, Variant& v);
-  ArrayData* setRef(StringData* k, Variant& v);
-  ArrayData* setRef(Cell k, Variant& v);
-  ArrayData* setRef(const String& k, Variant& v);
-  ArrayData* setRef(const Variant& k, Variant& v);
-
-  ArrayData* setRef(const StringData*, tv_lval) = delete;
-  ArrayData* setRef(const StringData*, Variant&) = delete;
-
-  /*
-   * Remove the value at key `k'. remove() will make a copy first if necesary;
+   * Remove the value at key `k'. remove() will make a copy first if necessary;
    * removeInPlace() will never copy, but may escalate.
    *
    * Return `this' if copy/escalation are not needed, or a copied/escalated
@@ -586,13 +553,6 @@ public:
   ArrayData* appendWithRef(TypedValue v);
   ArrayData* appendWithRefInPlace(TypedValue v);
   ArrayData* appendWithRef(const Variant& v);
-
-  /*
-   * Like append(), except `v' is first boxed if it's not already a ref.
-   */
-  ArrayData* appendRef(tv_lval v);
-  ArrayData* appendRefInPlace(tv_lval v);
-  ArrayData* appendRef(Variant& v);
 
   /////////////////////////////////////////////////////////////////////////////
   // Iteration.
@@ -768,7 +728,7 @@ public:
    * (which may depend on the array kind, e.g.).  If true, `i' is set to the
    * intish value of `key'.
    */
-  template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+  template <IntishCast IC = IntishCast::None>
   bool convertKey(const StringData* key, int64_t& i) const;
 
   /*
@@ -826,10 +786,10 @@ public:
 
 protected:
   /*
-   * Raise a notice that `k' is undefined, and return an Uninit.
+   * Throw an out of bounds exception if 'k' is undefined
    */
-  static tv_rval getNotFound(int64_t k);
-  static tv_rval getNotFound(const StringData* k);
+  [[noreturn]] static void getNotFound(int64_t k);
+  [[noreturn]] static void getNotFound(const StringData* k);
 
   /*
    * Raise a notice that `k' is undefined if `error' is set (and if this is not
@@ -949,6 +909,8 @@ struct ArrayFunctions {
   tv_rval (*nvTryGetInt[NK])(const ArrayData*, int64_t k);
   tv_rval (*nvGetStr[NK])(const ArrayData*, const StringData* k);
   tv_rval (*nvTryGetStr[NK])(const ArrayData*, const StringData* k);
+  ssize_t (*nvGetIntPos[NK])(const ArrayData*, int64_t k);
+  ssize_t (*nvGetStrPos[NK])(const ArrayData*, const StringData* k);
   Cell (*nvGetKey[NK])(const ArrayData*, ssize_t pos);
   ArrayData* (*setInt[NK])(ArrayData*, int64_t k, Cell v);
   ArrayData* (*setIntInPlace[NK])(ArrayData*, int64_t k, Cell v);
@@ -965,15 +927,8 @@ struct ArrayFunctions {
   bool (*existsInt[NK])(const ArrayData*, int64_t k);
   bool (*existsStr[NK])(const ArrayData*, const StringData* k);
   arr_lval (*lvalInt[NK])(ArrayData*, int64_t k, bool copy);
-  arr_lval (*lvalIntRef[NK])(ArrayData*, int64_t k, bool copy);
   arr_lval (*lvalStr[NK])(ArrayData*, StringData* k, bool copy);
-  arr_lval (*lvalStrRef[NK])(ArrayData*, StringData* k, bool copy);
   arr_lval (*lvalNew[NK])(ArrayData*, bool copy);
-  arr_lval (*lvalNewRef[NK])(ArrayData*, bool copy);
-  ArrayData* (*setRefInt[NK])(ArrayData*, int64_t k, tv_lval v);
-  ArrayData* (*setRefIntInPlace[NK])(ArrayData*, int64_t k, tv_lval v);
-  ArrayData* (*setRefStr[NK])(ArrayData*, StringData* k, tv_lval v);
-  ArrayData* (*setRefStrInPlace[NK])(ArrayData*, StringData* k, tv_lval v);
   ArrayData* (*removeInt[NK])(ArrayData*, int64_t k);
   ArrayData* (*removeIntInPlace[NK])(ArrayData*, int64_t k);
   ArrayData* (*removeStr[NK])(ArrayData*, const StringData* k);
@@ -994,8 +949,6 @@ struct ArrayFunctions {
   ArrayData* (*copyStatic[NK])(const ArrayData*);
   ArrayData* (*append[NK])(ArrayData*, Cell v);
   ArrayData* (*appendInPlace[NK])(ArrayData*, Cell v);
-  ArrayData* (*appendRef[NK])(ArrayData*, tv_lval v);
-  ArrayData* (*appendRefInPlace[NK])(ArrayData*, tv_lval v);
   ArrayData* (*appendWithRef[NK])(ArrayData*, TypedValue v);
   ArrayData* (*appendWithRefInPlace[NK])(ArrayData*, TypedValue v);
   ArrayData* (*plusEq[NK])(ArrayData*, const ArrayData* elems);
@@ -1056,7 +1009,6 @@ void raiseHackArrCompatMissingSetOp();
 std::string makeHackArrCompatImplicitArrayKeyMsg(const TypedValue* key);
 void raiseHackArrCompatImplicitArrayKey(const TypedValue* key);
 
-bool checkHACIntishCast();
 bool checkHACRefBind();
 bool checkHACFalseyPromote();
 bool checkHACEmptyStringPromote();
@@ -1064,7 +1016,10 @@ bool checkHACCompare();
 bool checkHACArrayPlus();
 bool checkHACArrayKeyCast();
 
-template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+/*
+ * Like isStrictlyInteger() but changes behavior with the value of `ic'.
+ */
+template <IntishCast IC = IntishCast::None>
 folly::Optional<int64_t> tryIntishCast(const StringData* key);
 
 ///////////////////////////////////////////////////////////////////////////////

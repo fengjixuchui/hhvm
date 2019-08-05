@@ -29,6 +29,7 @@
 #include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/http-client.h"
+#include "hphp/runtime/base/php-globals.h"
 #include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/base/request-injection-data.h"
 #include "hphp/runtime/base/runtime-option.h"
@@ -73,7 +74,7 @@ static void CopyParams(Array& dest, const Array& src) {
     src.get(),
     [&](Cell k, TypedValue v) {
       const auto arraykey =
-        dest.convertKey<IntishCast::CastSilently>(k);
+        dest.convertKey<IntishCast::Cast>(k);
       dest.set(arraykey, v, true);
     }
   );
@@ -121,7 +122,6 @@ const StaticString
   s__GET("_GET"),
   s__POST("_POST"),
   s__REQUEST("_REQUEST"),
-  s__SESSION("_SESSION"),
   s__ENV("_ENV"),
   s__COOKIE("_COOKIE"),
   s_HTTP_RAW_POST_DATA("HTTP_RAW_POST_DATA"),
@@ -153,20 +153,6 @@ const StaticString
   s_underscore("_"),
   s_HTTP_("HTTP_"),
   s_forwardslash("/");
-
-static auto const s_arraysToClear = {
-  s__SERVER,
-  s__GET,
-  s__POST,
-  s__FILES,
-  s__REQUEST,
-  s__ENV,
-  s__COOKIE,
-};
-
-static auto const s_arraysToUnset = {
-  s__SESSION,
-};
 
 static void PrepareEnv(Array& env, Transport *transport) {
   // $_ENV
@@ -202,7 +188,7 @@ static void PrepareEnv(Array& env, Transport *transport) {
     String key(header.first);
     String value(header.second.back());
     g_context->setenv(key, value);
-    env.set(env.convertKey<IntishCast::CastSilently>(key),
+    env.set(env.convertKey<IntishCast::Cast>(key),
             make_tv<KindOfString>(value.get()));
   }
 }
@@ -232,15 +218,14 @@ void HttpProtocol::PrepareSystemVariables(Transport *transport,
                                           const RequestURI &r,
                                           const SourceRootInfo &sri) {
   auto const vhost = VirtualHost::GetCurrent();
-  auto const g = get_global_variables()->asArrayData();
-  Variant emptyArr(staticEmptyArray());
-  for (auto& key : s_arraysToClear) {
-    g->removeInPlace(key.get());
-    g->setInPlace(key.get(), emptyArr);
-  }
-  for (auto& key : s_arraysToUnset) {
-    g->removeInPlace(key.get());
-  }
+  auto const emptyArr = empty_darray();
+  php_global_set(s__SERVER, emptyArr);
+  php_global_set(s__GET, emptyArr);
+  php_global_set(s__POST, emptyArr);
+  php_global_set(s__FILES, emptyArr);
+  php_global_set(s__REQUEST, emptyArr);
+  php_global_set(s__ENV, emptyArr);
+  php_global_set(s__COOKIE, emptyArr);
 
   // according to doc if content type is multipart/form-data
   // $HTTP_RAW_POST_DATA should always not available
@@ -253,12 +238,12 @@ void HttpProtocol::PrepareSystemVariables(Transport *transport,
   }
 
   if (shouldSetHttpRawPostData) {
-    g->setInPlace(s_HTTP_RAW_POST_DATA, empty_string_variant_ref);
+    php_global_set(s_HTTP_RAW_POST_DATA, empty_string());
   }
 
 #define X(name)                                       \
-  Array name##arr(Array::Create());                   \
-  SCOPE_EXIT { g->setInPlace(s__##name, name##arr); };
+  auto name##arr = empty_darray();                    \
+  SCOPE_EXIT { php_global_set(s__##name, name##arr); };
 
   X(ENV)
   X(GET)
@@ -273,7 +258,7 @@ void HttpProtocol::PrepareSystemVariables(Transport *transport,
   Variant HTTP_RAW_POST_DATA;
   SCOPE_EXIT {
     if (shouldSetHttpRawPostData) {
-      g->setInPlace(s_HTTP_RAW_POST_DATA.get(), HTTP_RAW_POST_DATA);
+      php_global_set(s_HTTP_RAW_POST_DATA, std::move(HTTP_RAW_POST_DATA));
     }
   };
 
@@ -325,8 +310,8 @@ void HttpProtocol::PrepareSystemVariables(Transport *transport,
 
   if (!postPopulated && shouldSetHttpRawPostData) {
     // Always try to populate $HTTP_RAW_POST_DATA if not populated
-    Array dummyPost(Array::Create());
-    Array dummyFiles(Array::Create());
+    auto dummyPost = empty_darray();
+    auto dummyFiles = empty_darray();
     PreparePostVariables(dummyPost, HTTP_RAW_POST_DATA,
                          dummyFiles, transport, r);
   }
@@ -595,8 +580,8 @@ static void CopyServerInfo(Array& server,
   server.set(s_SERVER_PORT, transport->getServerPort());
   server.set(s_SERVER_SOFTWARE, transport->getServerSoftware());
   server.set(s_SERVER_PROTOCOL, "HTTP/" + transport->getHTTPVersion());
-  server.set(s_SERVER_ADMIN, empty_string_variant_ref);
-  server.set(s_SERVER_SIGNATURE, empty_string_variant_ref);
+  server.set(s_SERVER_ADMIN, empty_string_tv());
+  server.set(s_SERVER_SIGNATURE, empty_string_tv());
 }
 
 static void CopyRemoteInfo(Array& server, Transport *transport) {
@@ -747,13 +732,16 @@ static void CopyPathInfo(Array& server,
     }
     break;
   default:
-    server.set(s_REQUEST_METHOD, empty_string_variant_ref); break;
+    server.set(s_REQUEST_METHOD, empty_string_tv()); break;
   }
-  server.set(s_HTTPS, transport->isSSL() ? Variant(s_on) :
-                                           empty_string_variant_ref);
+  if (transport->isSSL()) {
+    server.set(s_HTTPS, s_on);
+  } else {
+    server.set(s_HTTPS, empty_string_tv());
+  }
   server.set(s_QUERY_STRING, r.queryString());
 
-  server.set(s_argv, make_packed_array(r.queryString()));
+  server.set(s_argv, make_varray(r.queryString()));
   server.set(s_argc, 1);
 }
 
@@ -791,14 +779,14 @@ void HttpProtocol::PrepareServerVariable(Array& server,
   for (auto& kv : RuntimeOption::ServerVariables) {
     String idx(kv.first);
     const auto arrkey =
-      server.convertKey<IntishCast::CastSilently>(idx);
+      server.convertKey<IntishCast::Cast>(idx);
     String str(kv.second);
     server.set(arrkey, make_tv<KindOfString>(str.get()), true);
   }
   for (auto& kv : vhost->getServerVars()) {
     String idx(kv.first);
     const auto arrkey =
-      server.convertKey<IntishCast::CastSilently>(idx);
+      server.convertKey<IntishCast::Cast>(idx);
     String str(kv.second);
     server.set(arrkey, make_tv<KindOfString>(str.get()), true);
   }
@@ -853,8 +841,7 @@ void HttpProtocol::DecodeParameters(Array& variables, const char *data,
       register_variable(variables, (char*)sname.data(), value);
     } else if (!post) {
       String sname = url_decode(s, p - s);
-      register_variable(variables, (char*)sname.data(),
-                        empty_string_variant_ref);
+      register_variable(variables, (char*)sname.data(), empty_string());
     }
     s = p + 1;
   }
@@ -890,7 +877,7 @@ void HttpProtocol::DecodeCookies(Array& variables, char *data) {
         String sname = url_decode(var, strlen(var));
 
         register_variable(variables, (char*)sname.data(),
-                          empty_string_variant_ref, false);
+                          empty_string(), false);
       }
     }
 

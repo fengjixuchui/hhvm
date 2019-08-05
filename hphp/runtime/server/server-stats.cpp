@@ -626,10 +626,10 @@ void ServerStats::setThreadIOStatus(const char* name, const char* addr,
 
 Array ServerStats::getThreadIOStatuses() {
   IOStatusMap& status = m_threadStatus.m_ioStatuses;
-  ArrayInit ret(status.size(), ArrayInit::Map{});
+  DArrayInit ret(status.size());
   for (auto const& iter : status) {
     ret.set(String(iter.first),
-            make_map_array(s_ct, iter.second.count,
+            make_darray(s_ct, iter.second.count,
                            s_wt, iter.second.wall_time));
   }
   status.clear();

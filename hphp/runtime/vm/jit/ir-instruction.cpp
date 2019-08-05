@@ -40,6 +40,7 @@
 #include "hphp/runtime/ext/asio/ext_async-generator-wait-handle.h"
 #include "hphp/runtime/ext/asio/ext_await-all-wait-handle.h"
 #include "hphp/runtime/ext/asio/ext_static-wait-handle.h"
+#include "hphp/runtime/ext/functioncredential/ext_functioncredential.h"
 #include "hphp/runtime/ext/generator/ext_generator.h"
 
 #include "hphp/util/arena.h"
@@ -126,7 +127,13 @@ void IRInstruction::become(IRUnit& unit, const IRInstruction* other) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-template<bool move>
+enum MoveKind {
+  Consume,
+  MustMove,
+  MayMove,
+};
+
+template<MoveKind move>
 bool consumesRefImpl(const IRInstruction* inst, int srcNo) {
   if (!inst->consumesReferences()) {
     return false;
@@ -138,12 +145,16 @@ bool consumesRefImpl(const IRInstruction* inst, int srcNo) {
     case ConcatStr3:
     case ConcatStr4:
       // Call a helper that decrefs the first argument
-      return !move && srcNo == 0;
+      return move == Consume && srcNo == 0;
 
     case StClosureArg:
     case StClosureCtx:
     case StContArValue:
     case StContArKey:
+      return srcNo == 1;
+
+    case StARInvName:
+    case InitCtx:
       return srcNo == 1;
 
     case AFWHBlockOn:
@@ -160,14 +171,29 @@ bool consumesRefImpl(const IRInstruction* inst, int srcNo) {
     case AddNewElemKeyset:
     case AddNewElemVec:
       // Only consumes the reference to its input array
-      return !move && srcNo == 0;
+      return move == Consume && srcNo == 0;
+
+    case AddElemStrKey:
+    case AddElemIntKey:
+    case DictAddElemStrKey:
+    case DictAddElemIntKey:
+      // Consumes the reference to its input array, and moves input value
+      return srcNo != 0 || move == Consume;
+
+    case LdSwitchStrIndex:
+    case LdSwitchObjIndex:
+      // consumes the switch input
+      return move == Consume && srcNo == 0;
 
     case CreateAFWH:
     case CreateAFWHNoVV:
-      return !move && srcNo == 4;
+      return srcNo == 4;
 
     case CreateAGWH:
-      return !move && srcNo == 3;
+      return srcNo == 3;
+
+    case CreateSSWH:
+      return srcNo == 0;
 
     case InitPackedLayoutArray:
       return srcNo == 1;
@@ -180,16 +206,20 @@ bool consumesRefImpl(const IRInstruction* inst, int srcNo) {
       return true;
 
     default:
-      return !move;
+      return move != MustMove;
   }
 }
 
 bool IRInstruction::consumesReference(int srcNo) const {
-  return consumesRefImpl<false>(this, srcNo);
+  return consumesRefImpl<Consume>(this, srcNo);
 }
 
 bool IRInstruction::movesReference(int srcNo) const {
-  return consumesRefImpl<true>(this, srcNo);
+  return consumesRefImpl<MustMove>(this, srcNo);
+}
+
+bool IRInstruction::mayMoveReference(int srcNo) const {
+  return consumesRefImpl<MayMove>(this, srcNo);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -239,8 +269,9 @@ Type boxPtr(Type t) {
 
 Type allocObjReturn(const IRInstruction* inst) {
   switch (inst->op()) {
+    case ConstructClosure:
     case ConstructInstance:
-      return Type::ExactObj(inst->extra<ConstructInstance>()->cls);
+      return Type::ExactObj(inst->extra<ClassData>()->cls);
 
     case NewInstanceRaw:
       return Type::ExactObj(inst->extra<NewInstanceRaw>()->cls);
@@ -269,6 +300,9 @@ Type allocObjReturn(const IRInstruction* inst) {
 
     case CreateSSWH:
       return Type::ExactObj(c_StaticWaitHandle::classof());
+
+    case FuncCred:
+      return Type::ExactObj(FunctionCredential::classof());
 
     default:
       always_assert(false && "Invalid opcode returning AllocObj");

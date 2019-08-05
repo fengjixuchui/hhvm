@@ -10,7 +10,7 @@ function serde($x) {
   thrift_protocol_read_binary($p, get_class($x), true);
   echo "=============================================================\n";
 
-  if (!($x instanceof TestStruct3)) {
+  if (!($x is TestStruct3)) {
     $p = new DummyProtocol();
     thrift_protocol_write_compact($p, 'blah', 1, $x, 20, true);
     $p->getTransport()->buff[1] = pack('C', 0x42);
@@ -20,6 +20,7 @@ function serde($x) {
   }
 }
 
+<<__EntryPoint>>
 function test() {
   serde(@new TestStruct1());
   serde(@new TestStruct2());
@@ -29,4 +30,3 @@ function test() {
   serde(@new TestStruct6());
   serde(@new TestStruct7());
 }
-test();

@@ -14,37 +14,59 @@
 open Core_kernel
 open Utils
 
+let get_save_state_result_props_json
+    (save_state_result: SaveStateServiceTypes.save_state_result)
+    : (string * Hh_json.json) list =
+  let open SaveStateServiceTypes in
+  [
+    "dep_table_edges_added", Hh_json.int_ save_state_result.dep_table_edges_added;
+  ]
+
+let get_save_state_result_json
+    (save_state_result: SaveStateServiceTypes.save_state_result)
+    : (string * Hh_json.json) =
+  "save_state_result", Hh_json.JSON_Object (get_save_state_result_props_json save_state_result)
+
 let get_error_list_json
     (error_list: (Pos.absolute Errors.error_ list))
-    ~(edges_added: int option) =
+    ~(save_state_result: SaveStateServiceTypes.save_state_result option)
+    (recheck_stats: ServerCommandTypes.Recheck_stats.t option) =
   let error_list, did_pass = match error_list with
   | [] -> [], true
   | error_list -> (List.map ~f:Errors.to_json error_list), false
   in
   let (properties: (string * Hh_json.json) list) =
-    [ "passed", Hh_json.JSON_Bool did_pass;
+    [
+      "passed", Hh_json.JSON_Bool did_pass;
       "errors", Hh_json.JSON_Array error_list;
-      "version", Hh_json.JSON_String Build_id.build_id_ohai;
+      "version", Hh_version.version_json;
     ]
   in
-  let properties = match edges_added with
+  let properties = match save_state_result with
   | None -> properties
-  | Some edges_added ->
-    let saved_state_result =
-      "saved_state_result", Hh_json.JSON_Object
-        [
-          "edges_added", Hh_json.int_ edges_added
-        ]
+  | Some save_state_result ->
+    let save_state_result_json = get_save_state_result_json save_state_result in
+    save_state_result_json :: properties in
+  let open ServerCommandTypes.Recheck_stats in
+  let properties = match recheck_stats with
+  | None -> properties
+  | Some stats ->
+    let last_recheck_result =
+      "last_recheck", Hh_json.JSON_Object [
+        "id", Hh_json.JSON_String stats.id;
+        "time", Hh_json.JSON_Number (string_of_float stats.time);
+      ]
     in
-    saved_state_result :: properties in
+    last_recheck_result :: properties in
 
   Hh_json.JSON_Object properties
 
 let print_error_list_json
     (oc: Out_channel.t)
     (error_list: (Pos.absolute Errors.error_ list))
-    (edges_added: int option) =
-  let res = get_error_list_json error_list ~edges_added in
+    (save_state_result: SaveStateServiceTypes.save_state_result option)
+    (recheck_stats: ServerCommandTypes.Recheck_stats.t option) =
+  let res = get_error_list_json error_list ~save_state_result recheck_stats in
   Hh_json.json_to_output oc res;
   Out_channel.flush oc
 
@@ -53,9 +75,10 @@ let print_error_list
     ~(stale_msg: string option)
     ~(output_json: bool)
     ~(error_list: (Pos.absolute Errors.error_ list))
-    ~(edges_added: int option) =
+    ~(save_state_result: SaveStateServiceTypes.save_state_result option)
+    ~(recheck_stats: ServerCommandTypes.Recheck_stats.t option) =
   if output_json then
-    print_error_list_json oc error_list edges_added
+    print_error_list_json oc error_list save_state_result recheck_stats
   else begin
     if error_list = []
     then Out_channel.output_string oc "No errors!\n"

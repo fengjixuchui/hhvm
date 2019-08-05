@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* 
  Prototype   : int filesize ( string $filename );
  Description : Returns the size of the file in bytes, or FALSE 
@@ -6,7 +6,7 @@
 */
 
 /* Testing filesize() with data written using different file modes and by creating holes in file */
-
+<<__EntryPoint>> function main(): void {
 $file_path = dirname(__FILE__);
 
 echo "*** Testing filesize(): usage variations ***\n"; 
@@ -70,10 +70,8 @@ fclose( fopen($filename, "w") );
 var_dump( filesize($filename) );  //0 bytes
 
 echo "*** Done ***\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = dirname(__FILE__);
 unlink($file_path."/filesize_variation4.tmp");
 unlink($file_path."/filesize_variation4_empty.tmp");
-?>
+}

@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 namespace HH {
 
@@ -75,7 +75,7 @@ function ffp_parse_string_native(string $program): string;
 function ffp_parse_string(string $program): array {
   $json = ffp_parse_string_native($program);
   // 2048 is MAX_JSON_DEPTH to avoid making a global constant
-  return json_decode($json, true, 2048);
+  return \json_decode($json, true, 2048);
 }
 
 /**
@@ -101,6 +101,37 @@ function clear_instance_memoization(object $obj) : bool;
  */
  <<__Native>>
 function set_frame_metadata(mixed $metadata): void;
+
+/**
+ * Get the total number of requests dispatched since the server started.
+ */
+<<__Native>>
+function get_request_count(): int;
+
+/**
+ * Get the number of units that were loaded for this request, filtering for
+ * units which ($kind = 0) were compiled in this request, ($kind = 1) were
+ * compiled or loaded from the bytecode cache in this request, or ($kind = 2)
+ * were compiled, loaded from disk cache, or caused the request to stall waiting
+ * for loading to complete in another request. If $kind < 0, only return units
+ * which weren't shown to be identical at the bytecode level.
+ */
+<<__Native>>
+function get_compiled_units(int $kind = 0): keyset;
+
+/**
+ * Construct a function pointer for the function with $name. The function should
+ * be marked __DynamicallyCallable.
+ */
+<<__Native>>
+function dynamic_fun(string $name): mixed;
+
+/**
+ * Construct a cls_meth pointer for the method $cls::$meth. The method should be
+ * a static method marked __DynamicallyCallable.
+ */
+<<__Native>>
+function dynamic_class_meth(string $cls, string $meth): mixed;
 
 // class-like
 interface ClassLikeAttribute {}
@@ -196,16 +227,22 @@ namespace HH\ReifiedGenerics {
   /**
    * Returns the type structure representation of the reified type
    */
-  function getType<reify T>(): mixed {
+  function get_type_structure<reify T>(): mixed {
     return ${'0ReifiedGenerics'}[0];
+  }
+
+  // Old API for get_type_structure()
+  // TODO(T46695073): Kill after next HHVM release
+  function getTypeStructure<reify T>(): mixed {
+    return namespace\get_type_structure<T>();
   }
 
   /**
    * Returns the name of the class represented by this reified type.
    * If this type does not represent a class, throws an exception
    */
-  function getClassname<reify T>(): classname<T> {
-    $clsname = idx(getType<T>(), 'classname', null);
+  function get_classname<reify T>(): classname<T> {
+    $clsname = idx(namespace\get_type_structure<T>(), 'classname', null);
     if ($clsname is null) {
       throw new \Exception('Trying to get the classname out of a reified type'.
                            ' that does not represent a class');
@@ -213,4 +250,9 @@ namespace HH\ReifiedGenerics {
     return $clsname;
   }
 
+  // Old API for get_classname
+  // TODO(T46695073): Kill after next HHVM release
+  function getClassname<reify T>(): classname<T> {
+    return namespace\get_classname<T>();
+  }
 }

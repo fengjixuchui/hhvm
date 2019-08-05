@@ -291,7 +291,6 @@ public:
   friend String&& operator+(String&& lhs, const char* rhs);
   friend String&& operator+(String&& lhs, String&& rhs);
   friend String operator+(String&& lhs, const String & rhs);
-  friend String operator+(const String & lhs, String&& rhs);
   friend String operator+(const String& lhs, const char* rhs);
   friend String operator+(const String & lhs, const String & rhs);
   String& operator += (const char* v);
@@ -516,6 +515,10 @@ ALWAYS_INLINE String empty_string() {
   return String::attach(staticEmptyString());
 }
 
+ALWAYS_INLINE TypedValue empty_string_tv() {
+  return make_tv<KindOfPersistentString>(staticEmptyString());
+}
+
 //////////////////////////////////////////////////////////////////////
 
 ALWAYS_INLINE String& asStrRef(tv_lval tv) {
@@ -526,7 +529,7 @@ ALWAYS_INLINE String& asStrRef(tv_lval tv) {
 }
 
 ALWAYS_INLINE const String& asCStrRef(tv_rval tv) {
-  assert(cellIsPlausible(*tv));
+  assertx(cellIsPlausible(*tv));
   assertx(isStringType(type(tv)));
   return reinterpret_cast<const String&>(val(tv).pstr);
 }

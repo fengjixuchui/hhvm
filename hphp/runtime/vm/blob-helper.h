@@ -37,6 +37,8 @@
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-global-data.h"
 
+#include "hphp/util/compact-vector.h"
+
 /*
  * This module contains helpers for serializing and deserializing
  * metadata into blobs suitable for insertion into the hhbc repo.
@@ -98,7 +100,7 @@ public:
 
 struct BlobEncoder {
   static const bool deserializing = false;
-
+  explicit BlobEncoder(bool l) : m_useGlobalIds{l} {}
   /*
    * Currently the most basic encoder/decode only works for integral
    * types.  (We don't want this to accidentally get used for things
@@ -142,6 +144,10 @@ struct BlobEncoder {
     encode(b ? 1 : 0);
   }
 
+  void encode(const SHA1& sha1) {
+    for (auto w : sha1.q) encode(w);
+  }
+
   void encode(DataType t) {
     // always encode DataType as int8 even if it's a bigger size.
     assertx(DataType(int8_t(t)) == t);
@@ -150,7 +156,7 @@ struct BlobEncoder {
 
   void encode(const LowStringPtr& s) {
     const StringData* sd = s;
-    if (Option::WholeProgram) {
+    if (m_useGlobalIds) {
       Id id = LitstrTable::get().mergeLitstr(sd);
       encode(id);
       return;
@@ -234,6 +240,11 @@ struct BlobEncoder {
   }
 
   template<class T>
+  void encode(const CompactVector<T>& vec) {
+    encodeContainer(vec, "CompactVector");
+  }
+
+  template<class T>
   typename std::enable_if<
     std::is_same<typename T::value_type,
                  std::pair<typename T::key_type const,
@@ -289,6 +300,7 @@ private:
 
 private:
   std::vector<char> m_blob;
+  bool m_useGlobalIds;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -296,9 +308,10 @@ private:
 struct BlobDecoder {
   static const bool deserializing = true;
 
-  explicit BlobDecoder(const void* vp, size_t sz)
+  BlobDecoder(const void* vp, size_t sz, bool l)
     : m_p(static_cast<const unsigned char*>(vp))
     , m_last(m_p + sz)
+    , m_useGlobalIds{l}
   {}
 
   void assertDone() {
@@ -335,6 +348,10 @@ struct BlobDecoder {
     t.serde(*this);
   }
 
+  void decode(SHA1& sha1) {
+    for (auto& w : sha1.q) decode(w);
+  }
+
   void decode(DataType& t) {
     // always decode DataType as int8 even if it's a bigger size.
     int8_t t2;
@@ -348,7 +365,7 @@ struct BlobDecoder {
   }
 
   void decode(LowStringPtr& s) {
-    if (RuntimeOption::RepoAuthoritative) {
+    if (m_useGlobalIds) {
       Id id;
       decode(id);
       s = LitstrTable::get().lookupLitstrId(id);
@@ -409,12 +426,13 @@ struct BlobDecoder {
     decode(val.second);
   }
 
-  template<class T>
-  void decode(std::vector<T>& vec) {
+  template<typename Cont>
+  auto decode(Cont& vec) -> decltype(vec.emplace_back(), void()) {
     uint32_t size;
     decode(size);
+    if (size) vec.reserve(vec.size() + size);
     for (uint32_t i = 0; i < size; ++i) {
-      vec.push_back(T());
+      vec.emplace_back();
       decode(vec.back());
     }
   }
@@ -505,6 +523,7 @@ private:
 private:
   const unsigned char* m_p;
   const unsigned char* const m_last;
+  bool m_useGlobalIds;
 };
 
 //////////////////////////////////////////////////////////////////////

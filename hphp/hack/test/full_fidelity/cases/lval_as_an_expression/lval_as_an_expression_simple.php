@@ -31,14 +31,14 @@ function foo(): void {
   using $x = new MyDisposable();
   using ($x = new MyDisposable(), $y = new MyDisposable()) {}
   my_inout1(inout $x);
+  @my_inout1(inout $x);
+  $y = @my_inout1(inout $x);
   my_inout1<int>(inout $x);
   $y = my_inout2(inout $x);
   $y = my_inout2<int>(inout $x);
-  $y = await my_inout2(inout $x);
   my_inout1(&$x);
   my_inout1<int>(&$x);
   $y = my_inout2(&$x);
   $y = my_inout2<int>(&$x);
-  $y = await my_inout2(&$x);
   list($x1, $x2, list($x3, $x4)) = tuple(1, 2, tuple(3, 4));
 }

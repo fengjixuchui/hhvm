@@ -292,7 +292,6 @@ bool refinable_load_eligible(const IRInstruction& inst) {
     case LdLoc:
     case LdStk:
     case LdMBase:
-    case LdClsRefCls:
     case LdMem:
     case LdARFuncPtr:
     case LdARCtx:
@@ -450,35 +449,6 @@ Flags handle_general_effects(Local& env,
     if (auto flags = handleCheck(TInitGen)) return *flags;
     break;
 
-  case CastStk:
-  case CoerceStk:
-    {
-      auto const stkOffset = [&]{
-        if (inst.is(CastStk)) return inst.extra<CastStk>()->offset;
-        if (inst.is(CoerceStk)) return inst.extra<CoerceStk>()->offset;
-        always_assert(false);
-      }();
-      auto const stk =
-        canonicalize(AliasClass { AStack { inst.src(0), stkOffset, 1 } });
-      always_assert(stk <= canonicalize(m.loads));
-
-      auto const meta = env.global.ainfo.find(stk);
-      auto const tloc = find_tracked(env, meta);
-      if (!tloc) break;
-      if (inst.op() == CastStk &&
-          inst.typeParam() == TNullableObj &&
-          tloc->knownType <= TNull) {
-        // If we're casting Null to NullableObj, we still need to call
-        // tvCastToNullableObjectInPlace.  See comment there and t3879280 for
-        // details.
-        break;
-      }
-      if (tloc->knownType <= inst.typeParam()) {
-        return FJmpNext{};
-      }
-    }
-    break;
-
   case InitSProps: {
     auto const handle = inst.extra<ClassData>()->cls->sPropInitHandle();
     if (env.state.initRDS.count(handle) > 0) return FJmpNext{};
@@ -545,14 +515,12 @@ Flags handle_call_effects(Local& env,
   }
 
   /*
-   * Keep types for stack, locals, class-ref slots, and iterators, and throw
-   * away the values.  We are just doing this to avoid extending lifetimes
+   * Keep types for stack, locals, and iterators, and throw away the
+   * values.  We are just doing this to avoid extending lifetimes
    * across php calls, which currently always leads to spilling.
    */
   auto const keep = env.global.ainfo.all_stack          |
-                    env.global.ainfo.all_frame          |
-                    env.global.ainfo.all_clsRefClsSlot  |
-                    env.global.ainfo.all_clsRefTSSlot;
+                    env.global.ainfo.all_frame;
   env.state.avail &= keep;
   for (auto aloc = uint32_t{0};
       aloc < env.global.ainfo.locations.size();
@@ -641,6 +609,10 @@ Flags analyze_inst(Local& env, const IRInstruction& inst) {
 
     [&] (PureLoad m)        { flags = load(env, inst, m.src); },
 
+    [&] (InlineEnterEffects m) { store(env, m.inlFrame, nullptr);
+                                 store(env, m.inlStack, nullptr); },
+    [&] (InlineExitEffects m) { store(env, m.inlFrame, nullptr);
+                                store(env, m.inlMeta, nullptr); },
     [&] (GeneralEffects m)  { flags = handle_general_effects(env, inst, m); },
     [&] (CallEffects x)     { flags = handle_call_effects(env, inst, x); }
   );
@@ -884,8 +856,6 @@ void resolve_call(Global& env,
     auto& extra = *inst.extra<Call>();
     assertx(extra.callee == nullptr);
     extra.callee = flags.callee;
-    extra.readLocals = funcReadsLocals(flags.callee);
-    extra.needsCallerFrame = funcNeedsCallerFrame(flags.callee);
     retypeDests(&inst, &env.unit);
     ++env.callsResolved;
     return;
@@ -895,7 +865,6 @@ void resolve_call(Global& env,
     auto& extra = *inst.extra<CallUnpack>();
     assertx(extra.callee == nullptr);
     extra.callee = flags.callee;
-    extra.readLocals = funcReadsLocals(flags.callee);
     retypeDests(&inst, &env.unit);
     ++env.callsResolved;
     return;

@@ -1,6 +1,4 @@
-<?php
-
-echo "Test\n";
+<?hh
 
 class A
 {
@@ -42,11 +40,12 @@ class C
         $this->c = $c;
     }
 }
+<<__EntryPoint>> function main(): void {
+echo "Test\n";
 
 $a = unserialize(serialize(new A()));
 
 print $a->a[0]->b->c . "\n";
 print $a->a[1]->b->c . "\n";
-
-?>
-Done
+echo "Done";
+}

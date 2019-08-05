@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class C {
 }
@@ -9,7 +9,8 @@ function foo() {
     echo "Error\n";
   }
 }
-
+<<__EntryPoint>> function main(): void {
 foo();
 
 echo "End\n";
+}

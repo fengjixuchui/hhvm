@@ -96,7 +96,7 @@ bool argTypeIsVector(ArgType type) {
     type == BLA || type == SLA || type == VSA || type == I32LA;
 }
 
-int immSize(ArgType type, PC immPC) {
+int immSize(Op op, ArgType type, PC immPC) {
   auto pc = immPC;
   static const int8_t argTypeToSizes[] = {
 #define ARGTYPE(nm, type) sizeof(type),
@@ -106,7 +106,7 @@ int immSize(ArgType type, PC immPC) {
 #undef ARGTYPEVEC
   };
 
-  if (type == IVA || type == LA || type == IA || type == CAR || type == CAW) {
+  if (type == IVA || type == LA || type == IA) {
     return encoded_iva_size(decode_raw<uint8_t>(pc));
   }
 
@@ -135,7 +135,7 @@ int immSize(ArgType type, PC immPC) {
   }
 
   if (type == FCA) {
-    decodeFCallArgs(pc);
+    decodeFCallArgs(op, pc);
     return pc - immPC;
   }
 
@@ -193,12 +193,11 @@ ArgUnion getImm(const PC origPC, int idx, const Unit* unit) {
   int cursor = 0;
   for (cursor = 0; cursor < idx; cursor++) {
     // Advance over this immediate.
-    pc += immSize(immType(op, cursor), pc);
+    pc += immSize(op, immType(op, cursor), pc);
   }
   always_assert(cursor == idx);
   auto const type = immType(op, idx);
-  if (type == IVA || type == LA || type == IA ||
-      type == CAR || type == CAW) {
+  if (type == IVA || type == LA || type == IA) {
     retval.u_IVA = decode_iva(pc);
   } else if (type == KA) {
     assertx(unit != nullptr);
@@ -206,12 +205,12 @@ ArgUnion getImm(const PC origPC, int idx, const Unit* unit) {
   } else if (type == LAR) {
     retval.u_LAR = decodeLocalRange(pc);
   } else if (type == FCA) {
-    retval.u_FCA = decodeFCallArgs(pc);
+    retval.u_FCA = decodeFCallArgs(op, pc);
   } else if (type == RATA) {
     assertx(unit != nullptr);
     retval.u_RATA = decodeRAT(unit, pc);
   } else if (!argTypeIsVector(type)) {
-    memcpy(&retval.bytes, pc, immSize(type, pc));
+    memcpy(&retval.bytes, pc, immSize(op, type, pc));
   }
   always_assert(numImmediates(op) > idx);
   return retval;
@@ -223,11 +222,9 @@ ArgUnion* getImmPtr(const PC origPC, int idx) {
   assertx(immType(op, idx) != IVA);
   assertx(immType(op, idx) != LA);
   assertx(immType(op, idx) != IA);
-  assertx(immType(op, idx) != CAR);
-  assertx(immType(op, idx) != CAW);
   assertx(immType(op, idx) != RATA);
   for (int i = 0; i < idx; i++) {
-    pc += immSize(immType(op, i), pc);
+    pc += immSize(op, immType(op, i), pc);
   }
   return (ArgUnion*)pc;
 }
@@ -244,7 +241,7 @@ int instrLen(const PC origPC) {
   auto op = decode_op(pc);
   int nImm = numImmediates(op);
   for (int i = 0; i < nImm; i++) {
-    pc += immSize(immType(op, i), pc);
+    pc += immSize(op, immType(op, i), pc);
   }
   return pc - origPC;
 }
@@ -265,8 +262,6 @@ OffsetList instrJumpOffsets(const PC origPC) {
 #define IMM_SLA 3
 #define IMM_LA 0
 #define IMM_IA 0
-#define IMM_CAR 0
-#define IMM_CAW 0
 #define IMM_OA(x) 0
 #define IMM_VSA 0
 #define IMM_KA 0
@@ -290,8 +285,6 @@ OffsetList instrJumpOffsets(const PC origPC) {
 #undef IMM_RATA
 #undef IMM_LA
 #undef IMM_IA
-#undef IMM_CAR
-#undef IMM_CAW
 #undef IMM_BA
 #undef IMM_BLA
 #undef IMM_ILA
@@ -316,8 +309,8 @@ OffsetList instrJumpOffsets(const PC origPC) {
   auto const op = decode_op(pc);
 
   OffsetList targets;
-  if (isFCallStar(op)) {
-    auto const offset = decodeFCallArgs(pc).asyncEagerOffset;
+  if (hasFCallEffects(op)) {
+    auto const offset = decodeFCallArgs(op, pc).asyncEagerOffset;
     if (offset != kInvalidOffset) targets.emplace_back(offset);
     return targets;
   }
@@ -408,10 +401,12 @@ int instrNumPops(PC pc) {
 #define FOUR(...) 4
 #define FIVE(...) 5
 #define MFINAL -3
-#define C_MFINAL(n) -10 - n
-#define V_MFINAL C_MFINAL(1)
-#define CVUMANY -3
-#define FCALL -4
+#define C_MFINAL(n) -10 - (n)
+#define CUMANY -3
+#define CALLNATIVE -5
+#define FPUSH(nin, nobj) C_MFINAL(nin + 3)
+#define FCALL(nin, nobj) -20 - (nin)
+#define FCALLO -4
 #define CMANY -3
 #define SMANY -1
 #define O(name, imm, pop, push, flags) pop,
@@ -424,9 +419,11 @@ int instrNumPops(PC pc) {
 #undef FIVE
 #undef MFINAL
 #undef C_MFINAL
-#undef V_MFINAL
-#undef CVUMANY
+#undef CUMANY
+#undef CALLNATIVE
+#undef FPUSH
 #undef FCALL
+#undef FCALLO
 #undef CMANY
 #undef SMANY
 #undef O
@@ -442,7 +439,18 @@ int instrNumPops(PC pc) {
   // FCall pops numArgs, unpack and (numRets - 1) uninit values
   if (n == -4) {
     auto const fca = getImm(pc, 0).u_FCA;
-    return fca.numArgs + (fca.hasUnpack() ? 1 : 0) + fca.numRets - 1;
+    return fca.numArgsInclUnpack() + fca.numRets - 1;
+  }
+  // FCallBuiltin pops numArgs and numOut uninit values
+  if (n == -5) {
+    return getImm(pc, 0).u_IVA + getImm(pc, 2).u_IVA;
+  }
+  // FCall* opcodes pop number of opcode specific inputs, unpack, numArgs,
+  // 3 cells/uninits reserved for ActRec and (numRets - 1) uninit values.
+  if (n <= -20) {
+    auto const fca = getImm(pc, 0).u_FCA;
+    auto const nin = -n - 20;
+    return nin + fca.numArgsInclUnpack() + 2 + fca.numRets;
   }
   // Other final member operations pop their first immediate + n
   if (n <= -10) return getImm(pc, 0).u_IVA - n - 10;
@@ -468,8 +476,9 @@ int instrNumPushes(PC pc) {
 #define THREE(...) 3
 #define FOUR(...) 4
 #define FIVE(...) 5
-#define INS_1(...) 0
+#define FPUSH -2
 #define FCALL -1
+#define CALLNATIVE -3
 #define O(name, imm, pop, push, flags) push,
     OPCODES
 #undef NOV
@@ -478,14 +487,19 @@ int instrNumPushes(PC pc) {
 #undef THREE
 #undef FOUR
 #undef FIVE
-#undef INS_1
+#undef FPUSH
 #undef FCALL
+#undef CALLNATIVE
 #undef O
   };
   auto const op = peek_op(pc);
   int n = numberOfPushes[size_t(op)];
 
-  // The FCall call flavors push a tuple of arguments onto the stack
+  // FCallBuiltin pushes numOut + 1 return values
+  if (n == -3) return getImm(pc, 2).u_IVA + 1;
+  // The FPush* opcodes push all arguments onto the stack
+  if (n == -2) return getImm(pc, 0).u_IVA;
+  // The FCall opcode pushes all return values onto the stack
   if (n == -1) return getImm(pc, 0).u_FCA.numRets;
 
   return n;
@@ -505,11 +519,43 @@ FlavorDesc manyFlavor(PC op, uint32_t i, FlavorDesc flavor) {
   return flavor;
 }
 
+template<int nin, int nobj>
+FlavorDesc fpushFlavor(PC op, uint32_t i) {
+  always_assert(i < uint32_t(instrNumPops(op)));
+  if (i < nin) return CV;
+  i -= nin;
+  auto const numArgs = getImm(op, 0).u_IVA;
+  if (i < numArgs) return CVV;
+  i -= numArgs;
+  if (i < 2) return UV;
+  return nobj ? CV : UV;
+}
+
+template<int nin, int nobj>
 FlavorDesc fcallFlavor(PC op, uint32_t i) {
   always_assert(i < uint32_t(instrNumPops(op)));
   auto const fca = getImm(op, 0).u_FCA;
+  if (i < nin) return CV;
+  i -= nin;
   if (i == 0 && fca.hasUnpack()) return CV;
-  return i < fca.numArgs + fca.hasUnpack() ? CVV : UV;
+  if (i < fca.numArgsInclUnpack()) return CVV;
+  i -= fca.numArgsInclUnpack();
+  if (i == 2 && nobj) return CV;
+  return UV;
+}
+
+FlavorDesc fcallOldFlavor(PC op, uint32_t i) {
+  always_assert(i < uint32_t(instrNumPops(op)));
+  auto const fca = getImm(op, 0).u_FCA;
+  if (i == 0 && fca.hasUnpack()) return CV;
+  return i < fca.numArgsInclUnpack() ? CVV : UV;
+}
+
+FlavorDesc fcallBuiltinFlavor(PC op, uint32_t i) {
+  assertx(i < getImm(op, 0).u_IVA + getImm(op, 2).u_IVA);
+  auto const nargs = getImm(op, 0).u_IVA;
+  if (i < nargs) return CVUV;
+  return UV;
 }
 
 }
@@ -526,9 +572,11 @@ FlavorDesc instrInputFlavor(PC op, uint32_t idx) {
 #define FIVE(f1, f2, f3, f4, f5) return doFlavor(idx, f1, f2, f3, f4, f5);
 #define MFINAL return manyFlavor(op, idx, CV);
 #define C_MFINAL(n) return manyFlavor(op, idx, CV);
-#define V_MFINAL return idx == 0 ? VV : CV;
-#define CVUMANY return manyFlavor(op, idx, CVUV);
-#define FCALL return fcallFlavor(op, idx);
+#define CUMANY return manyFlavor(op, idx, CUV);
+#define CALLNATIVE return fcallBuiltinFlavor(op, idx);
+#define FPUSH(nin, nobj) return fpushFlavor<nin, nobj>(op, idx);
+#define FCALL(nin, nobj) return fcallFlavor<nin, nobj>(op, idx);
+#define FCALLO return fcallOldFlavor(op, idx);
 #define CMANY return manyFlavor(op, idx, CV);
 #define SMANY return manyFlavor(op, idx, CV);
 #define O(name, imm, pop, push, flags) case Op::name: pop
@@ -544,91 +592,14 @@ FlavorDesc instrInputFlavor(PC op, uint32_t idx) {
 #undef FIVE
 #undef MFINAL
 #undef C_MFINAL
-#undef V_MFINAL
-#undef CVUMANY
+#undef CUMANY
+#undef CALLNATIVE
+#undef FPUSH
 #undef FCALL
+#undef FCALLO
 #undef CMANY
 #undef SMANY
 #undef O
-}
-
-StackTransInfo instrStackTransInfo(PC opcode) {
-  static const StackTransInfo::Kind transKind[] = {
-#define NOV StackTransInfo::Kind::PushPop
-#define ONE(...) StackTransInfo::Kind::PushPop
-#define TWO(...) StackTransInfo::Kind::PushPop
-#define THREE(...) StackTransInfo::Kind::PushPop
-#define FOUR(...) StackTransInfo::Kind::PushPop
-#define FIVE(...) StackTransInfo::Kind::PushPop
-#define FCALL StackTransInfo::Kind::PushPop
-#define INS_1(...) StackTransInfo::Kind::InsertMid
-#define O(name, imm, pop, push, flags) push,
-    OPCODES
-#undef NOV
-#undef ONE
-#undef TWO
-#undef THREE
-#undef FOUR
-#undef FIVE
-#undef INS_1
-#undef FCALL
-#undef O
-  };
-  static const int8_t peekPokeType[] = {
-#define NOV -1
-#define ONE(...) -1
-#define TWO(...) -1
-#define THREE(...) -1
-#define FOUR(...) -1
-#define FIVE(...) -1
-#define FCALL -1
-#define INS_1(...) 0
-#define O(name, imm, pop, push, flags) push,
-    OPCODES
-#undef NOV
-#undef ONE
-#undef TWO
-#undef THREE
-#undef FOUR
-#undef FIVE
-#undef INS_1
-#undef FCALL
-#undef O
-  };
-  StackTransInfo ret;
-  auto const op = peek_op(opcode);
-  ret.kind = transKind[size_t(op)];
-  switch (ret.kind) {
-  case StackTransInfo::Kind::PushPop:
-    ret.pos = 0;
-    ret.numPushes = instrNumPushes(opcode);
-    ret.numPops = instrNumPops(opcode);
-    return ret;
-  case StackTransInfo::Kind::InsertMid:
-    ret.numPops = 0;
-    ret.numPushes = 0;
-    ret.pos = peekPokeType[size_t(op)];
-    return ret;
-  }
-  not_reached();
-}
-
-bool pushesActRec(Op opcode) {
-  switch (opcode) {
-    case OpFPushFunc:
-    case OpFPushFuncD:
-    case OpFPushFuncU:
-    case OpFPushObjMethod:
-    case OpFPushObjMethodD:
-    case OpFPushClsMethod:
-    case OpFPushClsMethodS:
-    case OpFPushClsMethodSD:
-    case OpFPushClsMethodD:
-    case OpFPushCtor:
-      return true;
-    default:
-      return false;
-  }
 }
 
 void staticArrayStreamer(const ArrayData* ad, std::string& out) {
@@ -705,6 +676,7 @@ void staticStreamer(const TypedValue* tv, std::string& out) {
     case KindOfRef:
     case KindOfFunc:
     case KindOfClass:
+    case KindOfRecord:
       break;
   }
   not_reached();
@@ -850,8 +822,6 @@ std::string instrToString(PC it, Either<const Unit*, const UnitEmitter*> u) {
 #define H_I64A READ(int64_t)
 #define H_LA READLA()
 #define H_IA READV()
-#define H_CAR READV()
-#define H_CAW READV()
 #define H_DA READ(double)
 #define H_BA (out += ' ', out += showOffset(decode_ba(it)))
 #define H_OA(type) READOA(type)
@@ -872,7 +842,7 @@ std::string instrToString(PC it, Either<const Unit*, const UnitEmitter*> u) {
 #define H_KA (out += ' ', out += show(decode_member_key(it, u)))
 #define H_LAR (out += ' ', out += show(decodeLocalRange(it)))
 #define H_FCA do {                                               \
-  auto const fca = decodeFCallArgs(it);                          \
+  auto const fca = decodeFCallArgs(thisOpcode, it);              \
   auto const aeOffset = fca.asyncEagerOffset != kInvalidOffset   \
     ? showOffset(fca.asyncEagerOffset)                           \
     : "-";                                                       \
@@ -880,12 +850,13 @@ std::string instrToString(PC it, Either<const Unit*, const UnitEmitter*> u) {
   out += show(fca, fca.byRefs, aeOffset);                        \
 } while (false)
 
-#define O(name, imm, push, pop, flags)    \
-  case Op##name: {                        \
-    out += #name;                         \
-    UNUSED unsigned immIdx = 0;           \
-    imm;                                  \
-    break;                                \
+#define O(name, imm, push, pop, flags)       \
+  case Op##name: {                           \
+    out += #name;                            \
+    UNUSED auto const thisOpcode = Op##name; \
+    UNUSED unsigned immIdx = 0;              \
+    imm;                                     \
+    break;                                   \
   }
 OPCODES
 #undef O
@@ -906,8 +877,6 @@ OPCODES
 #undef H_I64A
 #undef H_LA
 #undef H_IA
-#undef H_CAR
-#undef H_CAW
 #undef H_DA
 #undef H_BA
 #undef H_OA
@@ -1021,12 +990,6 @@ static const char* TypeStructResolveOp_names[] = {
 #undef OP
 };
 
-static const char* HasGenericsOp_names[] = {
-#define OP(x) #x,
-  HAS_GENERICS_OPS
-#undef OP
-};
-
 static const char* MOpMode_names[] = {
 #define MODE(x) #x,
   M_OP_MODES
@@ -1118,7 +1081,6 @@ X(QueryMOp,       static_cast<int>(QueryMOp::CGet))
 X(SetRangeOp,     static_cast<int>(SetRangeOp::Forward))
 X(TypeStructResolveOp,
                   static_cast<int>(TypeStructResolveOp::Resolve))
-X(HasGenericsOp,  static_cast<int>(HasGenericsOp::NoGenerics))
 X(MOpMode,        static_cast<int>(MOpMode::None))
 X(ContCheckOp,    static_cast<int>(ContCheckOp::IgnoreStarted))
 X(CudOp,          static_cast<int>(CudOp::IgnoreIter))
@@ -1130,12 +1092,12 @@ X(SpecialClsRef,  static_cast<int>(SpecialClsRef::Self))
 namespace {
 
 bool instrIsVMCall(Op opcode) {
+  if (hasFCallEffects(opcode)) return true;
   switch (opcode) {
     case OpContEnter:
     case OpContEnterDelegate:
     case OpContRaise:
     case OpEval:
-    case OpFCall:
     case OpIncl:
     case OpInclOnce:
     case OpReq:
@@ -1162,7 +1124,6 @@ bool instrIsNonCallControlFlow(Op opcode) {
     case OpAwaitAll:
     case OpYield:
     case OpYieldK:
-    case OpYieldFromDelegate:
     case OpFCallBuiltin:
       return false;
 
@@ -1247,6 +1208,7 @@ std::string show(const FCallArgsBase& fca, const uint8_t* byRefsRaw,
   std::vector<std::string> flags;
   if (fca.hasUnpack()) flags.push_back("Unpack");
   if (fca.supportsAsyncEagerReturn()) flags.push_back("SupportsAER");
+  if (fca.lockWhileUnwinding) flags.push_back("LockWhileUnwinding");
   return folly::sformat(
     "<{}> {} {} {} {}",
     folly::join(' ', flags), fca.numArgs, fca.numRets, byRefs, asyncEagerLabel

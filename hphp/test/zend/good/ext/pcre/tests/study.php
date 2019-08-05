@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 var_dump(preg_match('/(?:(?:(?:(?:(?:(.))))))/  S', 'aeiou', &$dump));
 var_dump($dump[1]);
 var_dump(preg_match('/(?:(?:(?:(?:(?:(.))))))/', 'aeiou', &$dump));
@@ -13,5 +13,4 @@ var_dump(preg_match('/^aeiou$/S', 'aeiou', &$dump));
 var_dump($dump[0]);
 var_dump(preg_match('/aeiou/S', 'aeiou', &$dump));
 var_dump($dump[0]);
-
-?>
+}

@@ -78,7 +78,10 @@ module Dep = struct
 
 end
 
-module DepSet = Reordered_argument_set(Set.Make (Dep))
+module DepSet = struct
+  include Reordered_argument_set(Set.Make (Dep))
+  let pp = make_pp (fun fmt -> Format.fprintf fmt "%d")
+end
 
 (****************************************************************************)
 (* Module for a compact graph. *)
@@ -128,64 +131,16 @@ let get_ideps x =
 
 let trace = ref true
 
-(* When debug_trace is enabled, in addition to actually recording the
-   dependencies in shared memory, we build a non-hashed representation of the
-   dependency graph for printing. *)
-let debug_trace = ref false
-let dbg_deps = Hashtbl.create 0
+let dependency_callbacks = Caml.Hashtbl.create 0
+
+let add_dependency_callback cb_name cb =
+  Caml.Hashtbl.replace dependency_callbacks cb_name cb
 
 let add_idep root obj =
   if root = obj then () else begin
+    Caml.Hashtbl.iter (fun _ f -> f root obj) dependency_callbacks;
     if !trace then Graph.add (Dep.make obj) (Dep.make root);
-    if !debug_trace then
-      let root = Dep.to_string root in
-      let obj = Dep.to_string obj in
-      match Hashtbl.find_opt dbg_deps obj with
-      | Some set -> HashSet.add set root
-      | None ->
-        let set = HashSet.create 1 in
-        HashSet.add set root;
-        Hashtbl.replace dbg_deps obj set
   end
-
-let sort_debug_deps deps =
-  Hashtbl.fold (fun obj set acc -> (obj,set)::acc) deps []
-  |> List.sort ~cmp:(fun (a, _) (b, _) -> String.compare a b)
-  |> List.map ~f:begin fun (obj, roots) ->
-    let roots =
-      HashSet.fold List.cons roots []
-      |> List.sort ~cmp:String.compare
-    in
-    obj, roots
-  end
-
-let pp_debug_deps fmt entries =
-  Format.fprintf fmt "@[<v>";
-  ignore @@ List.fold_left entries ~init:false ~f:begin fun sep (obj, roots) ->
-    if sep then Format.fprintf fmt "@;";
-    Format.fprintf fmt "%s -> " obj;
-    Format.fprintf fmt "@[<hv>";
-    ignore @@ List.fold_left roots ~init:false ~f:begin fun sep root ->
-      if sep then Format.fprintf fmt ",@ ";
-      Format.pp_print_string fmt root;
-      true
-    end;
-    Format.fprintf fmt "@]";
-    true
-  end;
-  Format.fprintf fmt "@]"
-
-let show_debug_deps = Format.asprintf "%a" pp_debug_deps
-
-(* Note: this prints dependency graph edges in the same direction as the mapping
-   which is actually stored in the shared memory table. The line "X -> Y" can be
-   read, "X is used by Y", or "X is a dependency of Y", or "when X changes, Y
-   must be rechecked". *)
-let dump_debug_deps () =
-  dbg_deps
-  |> sort_debug_deps
-  |> show_debug_deps
-  |> Printf.printf "%s\n"
 
 (*****************************************************************************)
 (* Module keeping track which files contain the toplevel definitions. *)
@@ -201,36 +156,34 @@ let get_files deps =
     with Not_found -> acc
   end deps ~init:Relative_path.Set.empty
 
-let update_files fileInfo =
+let update_file filename info =
   (* TODO: Figure out if we need GConstName and FunName as well here *)
-  Relative_path.Map.iter fileInfo begin fun filename info ->
-    let {FileInfo.funs; classes; typedefs;
-         consts;
-         comments = _;
-         file_mode = _;
-         hash = _;
-        } = info in
-    let consts = List.fold_left consts ~f: begin fun acc (_, const_id) ->
-      DepSet.add acc (Dep.make (Dep.GConst const_id))
-    end ~init:DepSet.empty in
-    let funs = List.fold_left funs ~f:begin fun acc (_, fun_id) ->
-      DepSet.add acc (Dep.make (Dep.Fun fun_id))
-    end ~init:DepSet.empty in
-    let classes = List.fold_left classes ~f:begin fun acc (_, class_id) ->
-      DepSet.add acc (Dep.make (Dep.Class class_id))
-    end ~init:DepSet.empty in
-    let classes = List.fold_left typedefs ~f:begin fun acc (_, type_id) ->
-      DepSet.add acc (Dep.make (Dep.Class type_id))
-    end ~init:classes in
-    let defs = DepSet.union funs classes in
-    let defs = DepSet.union defs consts in
-    DepSet.iter ~f:begin fun def ->
-      let previous =
-        try Hashtbl.find !ifiles def with Not_found -> Relative_path.Set.empty
-      in
-      Hashtbl.replace !ifiles def (Relative_path.Set.add previous filename)
-    end defs
-  end
+  let {FileInfo.funs; classes; typedefs;
+       consts;
+       comments = _;
+       file_mode = _;
+       hash = _;
+      } = info in
+  let consts = List.fold_left consts ~f: begin fun acc (_, const_id) ->
+    DepSet.add acc (Dep.make (Dep.GConst const_id))
+  end ~init:DepSet.empty in
+  let funs = List.fold_left funs ~f:begin fun acc (_, fun_id) ->
+    DepSet.add acc (Dep.make (Dep.Fun fun_id))
+  end ~init:DepSet.empty in
+  let classes = List.fold_left classes ~f:begin fun acc (_, class_id) ->
+    DepSet.add acc (Dep.make (Dep.Class class_id))
+  end ~init:DepSet.empty in
+  let classes = List.fold_left typedefs ~f:begin fun acc (_, type_id) ->
+    DepSet.add acc (Dep.make (Dep.Class type_id))
+  end ~init:classes in
+  let defs = DepSet.union funs classes in
+  let defs = DepSet.union defs consts in
+  DepSet.iter ~f:begin fun def ->
+    let previous =
+      try Hashtbl.find !ifiles def with Not_found -> Relative_path.Set.empty
+    in
+    Hashtbl.replace !ifiles def (Relative_path.Set.add previous filename)
+  end defs
 
 let rec get_extend_deps ~visited ~source_class ~acc =
   if DepSet.mem !visited source_class

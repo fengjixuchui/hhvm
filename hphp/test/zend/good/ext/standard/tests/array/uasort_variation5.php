@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool uasort(array $array_arg, string $cmp_function)
  * Description: Sort an array with a user-defined comparison function and maintain index association
  * Source code: ext/standard/array.c
@@ -31,6 +31,7 @@ function cmp_function($value1, $value2)
 }
 
 // Different heredoc strings to be sorted
+<<__EntryPoint>> function main(): void {
 $empty_heredoc =<<<EOT
 EOT;
 
@@ -74,5 +75,5 @@ echo "-- Sorting Heredoc String values --\n";
 var_dump( uasort(&$heredoc_values, 'cmp_function') );  // expecting: bool(true)
 var_dump($heredoc_values);
 
-echo "Done"
-?>
+echo "Done";
+}

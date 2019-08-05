@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL);
 
 trait Hello {
@@ -22,4 +22,3 @@ $o = new MyClass();
 $o->sayHello();
 $o->sayWorld();
 
-?>

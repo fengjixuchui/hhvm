@@ -1,4 +1,4 @@
-<?php
+<?hh
 $dirname = dirname(__FILE__) . '/';
 include $dirname . 'utils.inc';
 $file = $dirname . '__tmp_oo_rename2.zip';
@@ -32,4 +32,3 @@ var_dump($zip->getNameIndex(3));
 
 $zip->close();
 
-?>

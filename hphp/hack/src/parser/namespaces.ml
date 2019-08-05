@@ -11,7 +11,27 @@ open Core_kernel
 open Ast
 open Namespace_env
 
+module Nast = Aast
 module SN = Naming_special_names
+
+(* The typechecker has a different view of HH autoimporting than the compiler.
+ * This type exists to track the unification of HH autoimporting between the
+ * typechecker and the compiler, after which it will be deleted. *)
+type autoimport_ns =
+  | Global
+  | HH
+
+type elaborate_kind =
+  | ElaborateFun
+  | ElaborateClass
+  | ElaborateConst
+
+(**
+ * Convenience function for maps that have been completely unified to autoimport
+ * into the HH namespace.
+ *)
+let autoimport_map_of_list ids =
+  List.fold_left ids ~init:SMap.empty ~f:(fun map id -> SMap.add id HH map)
 
 (* When dealing with an <?hh file, HHVM automatically imports a few
  * "core" classes into every namespace, mostly collections. Their
@@ -22,118 +42,134 @@ module SN = Naming_special_names
  * namespace. This is a tiny bit weird, but since Facebook www all runs
  * in the global namespace relying on this autoimport, this makes the
  * most sense there.
- *
- * See hhvm/compiler/parser/parser.cpp Parser::getAutoAliasedClasses
- * for the canonical list of classes and Parser::onCall for the
- * canonical list of functions. *)
-let autoimport_classes = [
-  "Traversable";
-  "KeyedTraversable";
-  "Container";
-  "KeyedContainer";
-  "Iterator";
-  "KeyedIterator";
-  "Iterable";
-  "KeyedIterable";
-  "Collection";
-  "Vector";
-  "ImmVector";
-  "vec";
-  "dict";
-  "keyset";
-  "Map";
-  "ImmMap";
-  "StableMap";
-  "Set";
-  "ImmSet";
-  "Pair";
-  "Awaitable";
-  "AsyncIterator";
-  "IMemoizeParam";
-  "AsyncKeyedIterator";
-  "InvariantException";
-  "AsyncGenerator";
-  "StaticWaitHandle";
-  "WaitableWaitHandle";
-  "ResumableWaitHandle";
-  "AsyncFunctionWaitHandle";
-  "AsyncGeneratorWaitHandle";
-  "AwaitAllWaitHandle";
-  "ConditionWaitHandle";
-  "RescheduleWaitHandle";
-  "SleepWaitHandle";
-  "ExternalThreadEventWaitHandle";
-  "Shapes";
-  "TypeStructureKind";
+ *)
+let autoimport_types = SMap.of_list [
+  "AsyncFunctionWaitHandle", Global;
+  "AsyncGenerator", Global;
+  "AsyncGeneratorWaitHandle", Global;
+  "AsyncIterator", Global;
+  "AsyncKeyedIterator", Global;
+  "Awaitable", Global;
+  "AwaitAllWaitHandle", Global;
+  "classname", Global;
+  "Collection", Global;
+  "ConditionWaitHandle", Global;
+  "Container", Global;
+  "dict", Global;
+  "ExternalThreadEventWaitHandle", Global;
+  "IMemoizeParam", Global;
+  "ImmMap", Global;
+  "ImmSet", Global;
+  "ImmVector", Global;
+  "InvariantException", Global;
+  "Iterable", Global;
+  "Iterator", Global;
+  "KeyedContainer", Global;
+  "KeyedIterable", Global;
+  "KeyedIterator", Global;
+  "KeyedTraversable", Global;
+  "keyset", Global;
+  "Map", Global;
+  "ObjprofObjectStats", HH;
+  "ObjprofPathsStats", HH;
+  "ObjprofStringStats", HH;
+  "Pair", Global;
+  "RescheduleWaitHandle", Global;
+  "ResumableWaitHandle", Global;
+  "Set", Global;
+  "Shapes", Global;
+  "SleepWaitHandle", Global;
+  "StableMap", Global;
+  "StaticWaitHandle", Global;
+  "Traversable", Global;
+  "typename", Global;
+  "TypeStructure", HH;
+  "TypeStructureKind", HH;
+  "vec", Global;
+  "Vector", Global;
+  "WaitableWaitHandle", Global;
+  "XenonSample", HH;
 ]
-let autoimport_funcs = [
-  "invariant";
-  "invariant_violation";
-  "type_structure";
-  "idx";
-  "vec";
+let autoimport_funcs = autoimport_map_of_list [
+  "asio_get_current_context_idx";
+  "asio_get_running_in_context";
+  "asio_get_running";
+  "class_meth";
+  "darray";
   "dict";
-  "keyset";
-  (* should be replaced by is/as, but for now, import them so they're internally
-   * consistent - no need for \is_array vs \HH\is_vec *)
-  "is_bool";
-  "is_int";
-  "is_integer";
-  "is_long";
-  "is_float";
-  "is_double";
-  "is_real";
-  "is_numeric";
-  "is_string";
-  "is_object";
-  "is_resource";
-  "is_array";
+  "fun";
+  "heapgraph_create";
+  "heapgraph_dfs_edges";
+  "heapgraph_dfs_nodes";
+  "heapgraph_edge";
+  "heapgraph_foreach_edge";
+  "heapgraph_foreach_node";
+  "heapgraph_foreach_root";
+  "heapgraph_node_in_edges";
+  "heapgraph_node_out_edges";
+  "heapgraph_node";
+  "heapgraph_stats";
+  "idx";
+  "inst_meth";
+  "invariant_callback_register";
+  "invariant_violation";
+  "invariant";
   "is_darray";
-  "is_vec";
   "is_dict";
   "is_keyset";
   "is_varray";
-  (* typechecker debugging/test functions *)
-  "hh_show";
-  "hh_show_env";
-  (* these are operators, not functions:
-   * foo() !== \foo(), even in the root namespace *)
-  "empty";
-  "isset";
-  "unset";
-  "exit";
-  "die";
+  "is_vec";
+  "keyset";
+  "meth_caller";
+  "objprof_get_data";
+  "objprof_get_paths";
+  "objprof_get_strings";
+  "server_warmup_status";
+  "thread_mark_stack";
+  "thread_memory_stats";
+  "type_structure";
+  "varray";
+  "vec";
+  "xenon_get_data";
 ]
-let autoimport_types = [
-  "typename";
-  "classname";
-  "TypeStructure";
-]
-let autoimport_consts = [
+let autoimport_consts = autoimport_map_of_list [
   "Rx\\IS_ENABLED";
 ]
 
-let autoimport_set =
-  let autoimport_list
-    = autoimport_classes @ autoimport_funcs @ autoimport_types @ autoimport_consts in
-  List.fold_left autoimport_list ~init:SSet.empty ~f:(fun s e -> SSet.add e s)
-
-(* Return the namespace (or None if the global one) into which id is auto imported.
- * Return false as first value if it is not auto imported
+(**
+ * Return the namespace into which id is auto imported for the typechecker and
+ * compiler, respectively. Return None if it is not auto imported.
  *)
-let get_autoimport_name_namespace id =
-  if SN.Typehints.is_reserved_global_name id
-  then (true, None)
-  else
-  if SN.Typehints.is_reserved_hh_name id ||
-     SSet.mem id autoimport_set
-  then (true, Some "HH")
-  else (false, None)
+let get_autoimport_name_namespace id kind =
+  let lookup_name map =
+    Option.map (SMap.get id map) (fun ns -> ns, HH)
+  in
+  match kind with
+  | ElaborateClass ->
+    if SN.Typehints.is_reserved_global_name id then
+      Some (Global, Global)
+    else if SN.Typehints.is_reserved_hh_name id then
+      Some (Global, HH)
+    else
+      lookup_name autoimport_types
+  | ElaborateFun ->
+    lookup_name autoimport_funcs
+  | ElaborateConst ->
+    lookup_name autoimport_consts
 
-(* NOTE that the runtime is able to distinguish between class and
-   function names when auto-importing *)
-let is_autoimport_name id =
-  fst (get_autoimport_name_namespace id)
+let is_autoimport_name id kind =
+  get_autoimport_name_namespace id kind <> None
+
+let is_always_global_function =
+  let funcs = SN.PseudoFunctions.all_pseudo_functions @ [
+    "\\assert";
+    "\\echo";
+    "\\exit";
+    "\\die";
+  ] in
+  let h = HashSet.create (List.length funcs) in
+  List.iter funcs (HashSet.add h);
+  fun x -> HashSet.mem h x
 
 let elaborate_into_ns ns_name id =
 match ns_name with
@@ -168,18 +204,13 @@ let rec translate_id ~reverse ns_map id =
 let aliased_to_fully_qualified_id alias_map id =
   translate_id ~reverse:true alias_map id
 
-type elaborate_kind =
-  | ElaborateFun
-  | ElaborateClass
-  | ElaborateConst
-
 (* Elaborate a defined identifier in a given namespace environment. For example,
  * a class might be defined inside a namespace. Return new environment if
  * ID is auto imported (e.g. Map) and so must be mapped when used.
  *)
 let elaborate_defined_id nsenv kind (p, id) =
   let newid = elaborate_into_current_ns nsenv id in
-  let update_nsenv = kind = ElaborateClass && is_autoimport_name id in
+  let update_nsenv = kind = ElaborateClass && is_autoimport_name id kind in
   let nsenv =
     if update_nsenv
     then {nsenv with ns_class_uses = SMap.add id newid nsenv.ns_class_uses}
@@ -202,7 +233,7 @@ let elaborate_defined_id nsenv kind (p, id) =
  * works out. (Fully qualifying identifiers is of course idempotent, but there
  * used to be other schemes here.)
  *)
-let elaborate_id_impl ~autoimport nsenv kind id =
+let elaborate_id_impl nsenv kind id =
   if id <> "" && id.[0] = '\\' then
     false, id (* The name is already fully-qualified. *)
   else
@@ -210,6 +241,8 @@ let elaborate_id_impl ~autoimport nsenv kind id =
   let global_id = Utils.add_ns id in
   if kind = ElaborateConst && SN.PseudoConsts.is_pseudo_const global_id then
     false, global_id (* Pseudo-constants are always global. *)
+  else if kind = ElaborateFun && is_always_global_function global_id then
+    false, global_id
   else
 
   let bslash_loc, has_bslash =
@@ -239,22 +272,25 @@ let elaborate_id_impl ~autoimport nsenv kind id =
         (ParserOptions.auto_namespace_map nsenv.ns_popt) id in
       if unaliased_id <> id then
         "\\" ^ unaliased_id
-      else if not autoimport then
-        elaborate_into_current_ns nsenv id
       else
-        match get_autoimport_name_namespace id with
-        | false, _ ->
+        match get_autoimport_name_namespace id kind with
+        | None ->
           elaborate_into_current_ns nsenv id
-        | true, ns_name ->
-          if ParserOptions.enable_hh_syntax_for_hhvm nsenv.ns_popt
-            && (kind = ElaborateClass || kind = ElaborateConst)
-          then elaborate_into_ns ns_name id
-          else global_id
+        | Some (typechecker_ns, compiler_ns) ->
+          let ns =
+            if ParserOptions.codegen nsenv.ns_popt
+            then compiler_ns
+            else typechecker_ns
+          in
+          begin match ns with
+          | Global -> elaborate_into_ns None id
+          | HH -> elaborate_into_ns (Some "HH") id
+          end
     in
     false, fq_id
 
-let elaborate_id ?(autoimport=true) nsenv kind (p, id) =
-  let _, newid = elaborate_id_impl ~autoimport nsenv kind id in
+let elaborate_id nsenv kind (p, id) =
+  let _, newid = elaborate_id_impl nsenv kind id in
   p, newid
 
 (* First pass of flattening namespaces, run super early in the pipeline, right
@@ -271,14 +307,14 @@ let elaborate_id ?(autoimport=true) nsenv kind (p, id) =
  * allow us to fix those up during a second pass during naming.
  *)
 module ElaborateDefs = struct
-  let hint ~autoimport nsenv = function
+  let hint nsenv = function
     | p, Happly (id, args) ->
-        p, Happly (elaborate_id ~autoimport nsenv ElaborateClass id, args)
+        p, Happly (elaborate_id nsenv ElaborateClass id, args)
     | other -> other
 
-  let class_def ~autoimport nsenv = function
-    | ClassUse h -> ClassUse (hint ~autoimport nsenv h)
-    | XhpAttrUse h -> XhpAttrUse (hint ~autoimport nsenv h)
+  let class_def nsenv = function
+    | ClassUse h -> ClassUse (hint nsenv h)
+    | XhpAttrUse h -> XhpAttrUse (hint nsenv h)
     | other -> other
 
   let finish nsenv updated_nsenv stmt =
@@ -286,7 +322,7 @@ module ElaborateDefs = struct
     then nsenv, [stmt; SetNamespaceEnv nsenv]
     else nsenv, [stmt]
 
-  let rec def ~autoimport map_def nsenv = function
+  let rec def nsenv = function
     (*
       The default namespace in php is the global namespace specified by
       the empty string. In the case of an empty string, we model it as
@@ -304,7 +340,7 @@ module ElaborateDefs = struct
           | "" -> None
           | _ -> Some (parent_nsname ^ nsname) in
         let new_nsenv = {nsenv with ns_name = nsname} in
-        nsenv, SetNamespaceEnv new_nsenv :: program ~autoimport map_def new_nsenv prog
+        nsenv, SetNamespaceEnv new_nsenv :: program new_nsenv prog
       end
     | NamespaceUse l -> begin
         let nsenv =
@@ -337,28 +373,28 @@ module ElaborateDefs = struct
     | Class c ->
       let name, nsenv, updated_nsenv =
         elaborate_defined_id nsenv ElaborateClass c.c_name in
-      finish nsenv updated_nsenv @@ map_def nsenv (Class {c with
+      finish nsenv updated_nsenv (Class {c with
         c_name = name;
-        c_extends = List.map c.c_extends (hint ~autoimport nsenv);
-        c_implements = List.map c.c_implements (hint ~autoimport nsenv);
-        c_body = List.map c.c_body (class_def ~autoimport nsenv);
+        c_extends = List.map c.c_extends (hint nsenv);
+        c_implements = List.map c.c_implements (hint nsenv);
+        c_body = List.map c.c_body (class_def nsenv);
         c_namespace = nsenv;
       })
     | Fun f ->
       let name, nsenv, updated_nsenv =
         elaborate_defined_id nsenv ElaborateFun f.f_name in
-      finish nsenv updated_nsenv @@ map_def nsenv (Fun {f with
+      finish nsenv updated_nsenv (Fun {f with
         f_name = name;
         f_namespace = nsenv;
       })
     | Typedef t ->
       let name, nsenv, updated_nsenv =
         elaborate_defined_id nsenv ElaborateClass t.t_id in
-      finish nsenv updated_nsenv @@ map_def nsenv (Typedef {t with
+      finish nsenv updated_nsenv (Typedef {t with
         t_id = name;
         t_namespace = nsenv;
       })
-    | Constant cst -> nsenv, [map_def nsenv @@ Constant {cst with
+    | Constant cst -> nsenv, [Constant {cst with
         cst_name =
           (let name, _, _ =
             elaborate_defined_id nsenv ElaborateConst cst.cst_name
@@ -366,10 +402,10 @@ module ElaborateDefs = struct
         cst_namespace = nsenv;
       }]
     | FileAttributes fa ->
-      finish nsenv false @@ map_def nsenv (FileAttributes {fa with
+      finish nsenv false (FileAttributes {fa with
         fa_namespace = nsenv;
       })
-    | other -> nsenv, [map_def nsenv other]
+    | other -> nsenv, [other]
 
   and attach_file_attributes p =
     let file_attributes =
@@ -383,25 +419,138 @@ module ElaborateDefs = struct
       | x -> x
     end
 
-  and program ~autoimport f nsenv p =
+  and program nsenv p =
     let _, p =
       List.fold_left p ~init:(nsenv, []) ~f:begin fun (nsenv, acc) item ->
-        let nsenv, item = def ~autoimport f nsenv item in
+        let nsenv, item = def nsenv item in
         nsenv, item :: acc
       end in
     p |> List.rev |> List.concat |> attach_file_attributes
 end
 
-let noop _ x = x
-
-let elaborate_toplevel_defs_ ~autoimport ?(map_def = noop) popt ast  =
-  ElaborateDefs.program ~autoimport map_def (Namespace_env.empty popt) ast
-
-let elaborate_toplevel_defs ~autoimport popt ast =
-  elaborate_toplevel_defs_ ~autoimport popt ast
-
-let elaborate_map_toplevel_defs ~autoimport popt ast map_def =
-  elaborate_toplevel_defs_ ~autoimport ~map_def popt ast
+let elaborate_toplevel_defs popt ast  =
+  ElaborateDefs.program (Namespace_env.empty popt) ast
 
 let elaborate_def nsenv def =
-  ElaborateDefs.def ~autoimport:true noop nsenv def
+  ElaborateDefs.def nsenv def
+
+module ElaborateDefsNast = struct
+  let hint nsenv = function
+    | p, Nast.Happly (id, args) ->
+        p, Nast.Happly (elaborate_id nsenv ElaborateClass id, args)
+    | other -> other
+
+  let finish nsenv updated_nsenv stmt =
+    if updated_nsenv
+    then nsenv, [stmt; Nast.SetNamespaceEnv nsenv]
+    else nsenv, [stmt]
+
+  let rec def nsenv = function
+    (*
+      The default namespace in php is the global namespace specified by
+      the empty string. In the case of an empty string, we model it as
+      the global namespace.
+
+      We remove namespace and use nodes and replace them with
+      SetNamespaceEnv nodes that contain the namespace environment
+    *)
+    | Nast.Namespace ((_, nsname), prog) -> begin
+        let parent_nsname =
+          Option.value_map nsenv.ns_name
+            ~default:""
+            ~f:(fun n -> n ^ "\\") in
+        let nsname = match nsname with
+          | "" -> None
+          | _ -> Some (parent_nsname ^ nsname) in
+        let new_nsenv = {nsenv with ns_name = nsname} in
+        nsenv, Nast.SetNamespaceEnv new_nsenv :: program new_nsenv prog
+      end
+    | Nast.NamespaceUse l -> begin
+        let nsenv =
+          List.fold_left l ~init:nsenv ~f:begin fun nsenv (kind, id1, id2) ->
+            match kind with
+              | Nast.NSNamespace -> begin
+                let m = SMap.add (snd id2) (snd id1) nsenv.ns_ns_uses in
+                {nsenv with ns_ns_uses = m}
+              end
+              | Nast.NSClass -> begin
+                let m = SMap.add (snd id2) (snd id1) nsenv.ns_class_uses in
+                {nsenv with ns_class_uses = m}
+              end
+              | Nast.NSClassAndNamespace -> begin
+                let m = SMap.add (snd id2) (snd id1) nsenv.ns_class_uses in
+                let n = SMap.add (snd id2) (snd id1) nsenv.ns_ns_uses in
+                {nsenv with ns_class_uses = m; ns_ns_uses = n}
+              end
+              | Nast.NSFun -> begin
+                let m = SMap.add (snd id2) (snd id1) nsenv.ns_fun_uses in
+                {nsenv with ns_fun_uses = m}
+              end
+              | Nast.NSConst -> begin
+                let m = SMap.add (snd id2) (snd id1) nsenv.ns_const_uses in
+                {nsenv with ns_const_uses = m}
+              end
+          end in
+        nsenv, [Nast.SetNamespaceEnv nsenv]
+      end
+    | Nast.Class c ->
+      let name, nsenv, updated_nsenv =
+        elaborate_defined_id nsenv ElaborateClass c.Nast.c_name in
+      finish nsenv updated_nsenv (Nast.Class Nast.{c with
+        c_name = name;
+        c_extends = List.map c.Nast.c_extends (hint nsenv);
+        c_implements = List.map c.Nast.c_implements (hint nsenv);
+        c_uses = List.map c.Nast.c_uses (hint nsenv);
+        c_xhp_attr_uses = List.map c.Nast.c_xhp_attr_uses (hint nsenv);
+        c_namespace = nsenv;
+      })
+    | Nast.Fun f ->
+      let name, nsenv, updated_nsenv =
+        elaborate_defined_id nsenv ElaborateFun f.Nast.f_name in
+      finish nsenv updated_nsenv (Nast.Fun Nast.{f with
+        f_name = name;
+        f_namespace = nsenv;
+      })
+    | Nast.Typedef t ->
+      let name, nsenv, updated_nsenv =
+        elaborate_defined_id nsenv ElaborateClass t.Nast.t_name in
+      finish nsenv updated_nsenv (Nast.Typedef Nast.{t with
+        t_name = name;
+        t_namespace = nsenv;
+      })
+    | Nast.Constant cst -> nsenv, [Nast.Constant Nast.{cst with
+        cst_name =
+          (let name, _, _ =
+            elaborate_defined_id nsenv ElaborateConst cst.Nast.cst_name
+          in name);
+        cst_namespace = nsenv;
+      }]
+    | Nast.FileAttributes fa ->
+      finish nsenv false (Nast.FileAttributes Nast.{fa with
+        fa_namespace = nsenv;
+      })
+    | other -> nsenv, [other]
+
+  and attach_file_attributes p =
+    let file_attributes =
+      List.filter_map p ~f:begin function
+      | Nast.FileAttributes fa -> Some fa
+      | _ -> None
+    end in
+    List.map p ~f:begin function
+      | Nast.Class c -> Nast.Class Nast.{ c with c_file_attributes = file_attributes }
+      | Nast.Fun f -> Nast.Fun Nast.{ f with f_file_attributes = file_attributes }
+      | x -> x
+    end
+
+  and program nsenv p =
+    let _, p =
+      List.fold_left p ~init:(nsenv, []) ~f:begin fun (nsenv, acc) item ->
+        let nsenv, item = def nsenv item in
+        nsenv, item :: acc
+      end in
+    p |> List.rev |> List.concat |> attach_file_attributes
+end
+
+let elaborate_toplevel_defs_nast popt ast  =
+  ElaborateDefsNast.program (Namespace_env.empty popt) ast

@@ -164,6 +164,8 @@ bool effectsImpl(const Vinstr& inst, bool pure) {
     case Vinstr::addsd:
     case Vinstr::andb:
     case Vinstr::andbi:
+    case Vinstr::andw:
+    case Vinstr::andwi:
     case Vinstr::andl:
     case Vinstr::andli:
     case Vinstr::andq:
@@ -233,6 +235,9 @@ bool effectsImpl(const Vinstr& inst, bool pure) {
     case Vinstr::nop:
     case Vinstr::not:
     case Vinstr::notb:
+    case Vinstr::orbi:
+    case Vinstr::orwi:
+    case Vinstr::orli:
     case Vinstr::orq:
     case Vinstr::orqi:
     case Vinstr::reload:
@@ -292,6 +297,7 @@ bool effectsImpl(const Vinstr& inst, bool pure) {
     case Vinstr::defvmrettype:
     case Vinstr::defvmsp:
     case Vinstr::leap:
+    case Vinstr::leav:
     case Vinstr::load:
     case Vinstr::loadb:
     case Vinstr::loadl:
@@ -364,6 +370,7 @@ bool effectsImpl(const Vinstr& inst, bool pure) {
     case Vinstr::jcc:
     case Vinstr::jcci:
     case Vinstr::jmp:
+    case Vinstr::jmps:
     case Vinstr::jmpi:
     case Vinstr::jmpm:
     case Vinstr::jmpr:
@@ -371,6 +378,7 @@ bool effectsImpl(const Vinstr& inst, bool pure) {
     case Vinstr::leavetc:
     case Vinstr::loadstubret:
     case Vinstr::mcprep:
+    case Vinstr::movqs:
     case Vinstr::msr:
     case Vinstr::mtlr:
     case Vinstr::nothrow:
@@ -388,12 +396,6 @@ bool effectsImpl(const Vinstr& inst, bool pure) {
     case Vinstr::popm:
     case Vinstr::popp:
     case Vinstr::poppm:
-    case Vinstr::pseudojmp:
-    case Vinstr::pseudocall:
-    case Vinstr::pseudojcc:
-    case Vinstr::pseudodiv:
-    case Vinstr::pseudocallphp:
-    case Vinstr::pseudoshift:
     case Vinstr::push:
     case Vinstr::pushf:
     case Vinstr::pushframe:

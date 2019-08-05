@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $n = gmp_init("34293864345");
 $n1 = gmp_init("23434293864345");
 
@@ -30,4 +30,4 @@ try { var_dump(gmp_gcdext(array())); } catch (Exception $e) { echo "\n".'Warning
 try { var_dump(gmp_gcdext()); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done\n";
-?>
+}

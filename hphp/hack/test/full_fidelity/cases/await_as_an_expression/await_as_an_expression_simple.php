@@ -8,11 +8,9 @@ async function foo(): Awaitable<void> {
   $x = (await genx())->foo;
   $x = Foo::FOO;
   $x = Foo::foo(await geny());
-  $x = (await genx()) instanceof (await geny());
   $x = (await genx()) is int;
   $x = (await genx()) as int;
   $x = (await genx()) ?as int;
-  $x = empty(await genx());
   $x = isset(array()[await genx()]);
   $x = Map { (await genx()) => (await geny()) };
   $x = Vector { (await genx()) };
@@ -28,8 +26,6 @@ async function foo(): Awaitable<void> {
   $x = vec[(await genx()), (await geny())];
   $x = keyset[(await genx()), (await geny())];
   $x = (await genx())[(await geny())];
-  $x = ((await genx()) and true);
-  $x = ((await genx()) or true);
   $x = (await genx()) && true;
   $x = (await genx()) || true;
   $x = (await genx()) ?: 42;
@@ -58,7 +54,6 @@ async function foo(): Awaitable<void> {
   $x = (await genx()) >= (await geny());
   $x = (await genx()) < (await geny());
   $x = (await genx()) > (await geny());
-  $x = (await genx()) <> (await geny());
   $x = (await genx()) <=> (await geny());
   $x = (await genx()) != (await geny());
   $x = (await genx()) !== (await geny());
@@ -69,8 +64,9 @@ async function foo(): Awaitable<void> {
   $x = (await genx()) % (await geny());
   $x = (await genx()) ^ (await geny());
   $x = (await genx()) |> f($$);
-  $x = 42 |> f(await $$);
-  $x = (await genx()) |> (await f(42)) + $$;
+
+  <div attr={await genx()} {...(await genx())}/>;
+  <div attr={await genx()} {...(await genx())}>{await genx()}</div>;
 
   +(await genx());
   -(await genx());

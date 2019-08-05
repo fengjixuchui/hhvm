@@ -7,8 +7,6 @@
  *
  *)
 
-val is_check_mode : ServerArgs.options -> bool
-
 val indexing : ServerEnv.genv -> Relative_path.t list Bucket.next * float
 
 val parsing :
@@ -23,7 +21,7 @@ val parsing :
 
 val update_files :
   ServerEnv.genv ->
-  FileInfo.t Relative_path.Map.t ->
+  Naming_table.t ->
   float ->
   float
 

@@ -1,8 +1,8 @@
-<?php
+<?hh
 /* Prototype: bool is_scalar ( mixed $var );
  * Description: Finds whether a variable is a scalar (i.e integer, float, string or boolean)
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing basic operations ***\n";
 $scalar_variables = array(
   0,  // integers
@@ -115,5 +115,4 @@ echo "Done\n";
 // close the resources used
 fclose($fp);
 closedir($dfp);
-
-?>
+}

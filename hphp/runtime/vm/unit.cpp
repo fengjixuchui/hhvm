@@ -43,6 +43,7 @@
 #include "hphp/util/struct-log.h"
 
 #include "hphp/runtime/base/attr.h"
+#include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/file-util.h"
@@ -74,6 +75,7 @@
 #include "hphp/runtime/vm/named-entity.h"
 #include "hphp/runtime/vm/named-entity-defs.h"
 #include "hphp/runtime/vm/preclass.h"
+#include "hphp/runtime/vm/record.h"
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/reverse-data-map.h"
 #include "hphp/runtime/vm/treadmill.h"
@@ -230,8 +232,19 @@ Unit::~Unit() {
     Class* cls = pcls->namedEntity()->clsList();
     while (cls) {
       Class* cur = cls;
-      cls = cls->m_nextClass;
+      cls = cls->m_next;
       if (cur->preClass() == pcls.get()) {
+        cur->destroy();
+      }
+    }
+  }
+
+  for (auto const& rec : m_preRecords) {
+    RecordDesc* recList = rec->namedEntity()->recordList();
+    while (recList) {
+      RecordDesc* cur = recList;
+      recList = recList->m_next;
+      if (cur->preRecordDesc() == rec.get()) {
         cur->destroy();
       }
     }
@@ -491,9 +504,9 @@ int Unit::getLineNumber(Offset pc) const {
     if (lineMap->empty()) return INT_MIN;
     auto const it = std::upper_bound(
       lineMap->begin(), lineMap->end(),
-      *lineMap->begin(), // Will be the first (ignored) param to our predicate
-      [&] (const LineInfo&, const LineInfo& elm) {
-        return pc < elm.first.past;
+      pc,
+      [] (Offset info, const LineInfo& elm) {
+        return info < elm.first.past;
       }
     );
     if (it != lineMap->end() && it->first.base <= pc) return it->second;
@@ -653,6 +666,10 @@ void Unit::defFunc(Func* func, bool debugger) {
       rds::initHandle(handle);
     } else {
       if (funcAddr.get() == func) return;
+      if (func->attrs() & AttrIsMethCaller) {
+        // emit the duplicated meth_caller directly
+        return;
+      }
       raise_error(Strings::FUNCTION_ALREADY_DEFINED, func->name()->data());
     }
     funcAddr = func;
@@ -695,11 +712,23 @@ Func* Unit::loadFunc(const NamedEntity* ne, const StringData* name) {
 Func* Unit::loadFunc(const StringData* name) {
   String normStr;
   auto ne = NamedEntity::get(name, true, &normStr);
+
+  // Try to fetch from cache
+  Func* func_ = ne->getCachedFunc();
+  if (LIKELY(func_ != nullptr)) return func_;
+
+  // Normalize the namespace
   if (normStr) {
     name = normStr.get();
   }
-  auto func_ = loadFunc(ne, name);
-  if (LIKELY(func_ != nullptr) || !isReifiedName(name)) return func_;
+
+  // Autoload the function if not reified
+  if (LIKELY(!isReifiedName(name))) {
+    return AutoloadHandler::s_instance->autoloadFunc(
+        const_cast<StringData*>(name))
+      ? ne->getCachedFunc() : nullptr;
+  }
+
   // We are loading a reified function for the first time
   name = stripTypeFromReifiedName(name);
   auto generic_ne = NamedEntity::get(name, true, &normStr);
@@ -817,12 +846,36 @@ struct FrameRestore : private VMRegAnchor {
   PC      m_pc;
 };
 
+template<class T>
+const char* checkSameName(NamedEntity* nameList) {
+  if (!std::is_same<T, TypeAlias>::value && nameList->getCachedTypeAlias()) {
+    return "type";
+  } else if (!std::is_same<T, RecordDesc>::value &&
+             nameList->getCachedRecordDesc()) {
+    return "record";
+  } else if (!std::is_same<T, PreClass>::value && nameList->getCachedClass()) {
+    return "class";
+  }
+  return nullptr;
+}
+
 void setupClass(Class* newClass, NamedEntity* nameList) {
   bool const isPersistent =
     (!SystemLib::s_inited || RuntimeOption::RepoAuthoritative) &&
     newClass->verifyPersistent();
   nameList->m_cachedClass.bind(
     isPersistent ? rds::Mode::Persistent : rds::Mode::Normal);
+
+  if (newClass->isBuiltin()) {
+    assertx(newClass->isUnique());
+    for (auto i = newClass->numMethods(); i--;) {
+      auto const func = newClass->getMethod(i);
+      if (func->isCPPBuiltin() && func->isStatic()) {
+        assertx(func->isUnique());
+        NamedEntity::get(func->fullName())->setUniqueFunc(func);
+      }
+    }
+  }
 
   newClass->setClassHandle(nameList->m_cachedClass);
   newClass->incAtomicCount();
@@ -855,10 +908,11 @@ Class* Unit::defClass(const PreClass* preClass,
    * Raise a fatal unless the existing class definition is identical to the
    * one this invocation would create.
    */
-  if (auto current = nameList->getCachedTypeAlias()) {
+  auto existingKind = checkSameName<PreClass>(nameList);
+  if (existingKind) {
     FrameRestore fr(preClass);
     raise_error("Cannot declare class with the same name (%s) as an "
-                "existing type", current->name->data());
+                "existing %s", preClass->name()->data(), existingKind);
     return nullptr;
   }
 
@@ -883,7 +937,7 @@ Class* Unit::defClass(const PreClass* preClass,
     // In addition, its the only simple way to make this work lock free...
     for (Class* class_ = top; class_ != nullptr; ) {
       Class* cur = class_;
-      class_ = class_->m_nextClass;
+      class_ = class_->m_next;
       if (cur->preClass() != preClass) continue;
       Class::Avail avail = cur->avail(parent, failIsFatal /*tryAutoload*/);
       if (LIKELY(avail == Class::Avail::True)) {
@@ -962,22 +1016,8 @@ Class* Unit::defClosure(const PreClass* preClass) {
   return newClass.get();
 }
 
-namespace {
-bool isPHP7ReservedType(const StringData* alias) {
-  return
-    !strcmp("int",    alias->data()) ||
-    !strcmp("bool",   alias->data()) ||
-    !strcmp("float",  alias->data()) ||
-    !strcmp("string", alias->data());
-}
-}
-
 bool Unit::aliasClass(const StringData* original, const StringData* alias,
                       bool autoload) {
-  if (RuntimeOption::PHP7_ScalarTypes && isPHP7ReservedType(alias)) {
-    raise_error("Fatal error: Cannot use '%s' as class name as it is reserved",
-                alias->data());
-  }
   auto const origClass =
     autoload ? Unit::loadClass(original)
              : Unit::lookupClass(original);
@@ -1037,6 +1077,122 @@ bool Unit::classExists(const StringData* name, bool autoload, ClassKind kind) {
     (cls->attrs() & (AttrInterface | AttrTrait)) == classKindAsAttr(kind);
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// RecordDesc lookup.
+
+RecordDesc* Unit::defRecordDesc(PreRecordDesc* preRecord,
+                                bool failIsFatal /* = true */) {
+  auto const nameList = preRecord->namedEntity();
+
+  // Error out if there is already a different type
+  // with the same name in the request
+  auto existingKind = checkSameName<RecordDesc>(nameList);
+  if (existingKind) {
+    FrameRestore fr(preRecord->unit(), Op::DefRecord, preRecord->id());
+    raise_error("Cannot declare record with the same (%s) as an "
+                "existing %s", preRecord->name()->data(), existingKind);
+    return nullptr;
+  }
+
+  // If there was already a record declared with DefRecordDesc, check if it's
+  // compatible.
+  if (auto cachedRec = nameList->getCachedRecordDesc()) {
+    if (cachedRec->preRecordDesc() != preRecord) {
+      if (failIsFatal) {
+        FrameRestore fr(preRecord->unit(), Op::DefRecord, preRecord->id());
+        raise_error("Record already declared: %s", preRecord->name()->data());
+      }
+      return nullptr;
+    }
+    return cachedRec;
+  }
+
+  // Get a compatible predefined record, if one exists. Otherwise, add the
+  // current one to the list of defined records.
+  // Set the cached record in either case.
+  RecordDesc* parent = nullptr;
+  auto top = nameList->recordList();
+  for (;;) {
+    for (auto rec = top; rec != nullptr; rec = rec->m_next) {
+      if (rec->preRecordDesc() != preRecord) continue;
+      auto avail = rec->availWithParent(parent, failIsFatal /*tryAutoload*/);
+      if (LIKELY(avail == RecordDesc::Avail::True)) {
+        rec->setCached();
+        return rec;
+      }
+      if (avail == RecordDesc::Avail::Fail) {
+        // parent is not available and cannot be autoloaded
+        if (failIsFatal) {
+          FrameRestore fr(preRecord->unit(), Op::DefRecord, preRecord->id());
+          raise_error("unknown record %s", parent->name()->data());
+        }
+        return nullptr;
+      }
+      assertx(avail == RecordDesc::Avail::False);
+    }
+
+    // Create a new record.
+    if (!parent && preRecord->parentName()->size() != 0) {
+      // Load the parent
+      parent = Unit::getRecordDesc(preRecord->parentName(), failIsFatal);
+      if (parent == nullptr) {
+        if (failIsFatal) {
+          FrameRestore fr(preRecord->unit(), Op::DefRecord, preRecord->id());
+          raise_error("unknown record %s", preRecord->parentName()->data());
+        }
+        return nullptr;
+      }
+    }
+
+    RecordDescPtr newRecord;
+    {
+      FrameRestore fr(preRecord->unit(), Op::DefRecord, preRecord->id());
+      newRecord = RecordDesc::newRecordDesc(
+          const_cast<PreRecordDesc*>(preRecord), parent);
+    }
+
+    Lock l(g_recordsMutex);
+
+    if (UNLIKELY(top != nameList->recordList())) {
+      top = nameList->recordList();
+      continue;
+    }
+    nameList->m_cachedRecordDesc.bind(rds::Mode::Normal);
+    newRecord->setRecordDescHandle(nameList->m_cachedRecordDesc);
+    newRecord->incAtomicCount();
+    nameList->pushRecordDesc(newRecord.get());
+    newRecord->setCached();
+    return newRecord.get();
+  }
+}
+
+RecordDesc* Unit::loadMissingRecordDesc(const NamedEntity* ne,
+                                        const StringData* name) {
+  VMRegAnchor _;
+  AutoloadHandler::s_instance->autoloadRecordDesc(
+    StrNR(const_cast<StringData*>(name)));
+  return Unit::lookupRecordDesc(ne);
+}
+
+RecordDesc* Unit::getRecordDesc(const StringData* name, bool tryAutoload) {
+  String normStr;
+  auto ne = NamedEntity::get(name, true, &normStr);
+  if (normStr) {
+    name = normStr.get();
+  }
+  return getRecordDesc(ne, name, tryAutoload);
+}
+
+RecordDesc* Unit::getRecordDesc(const NamedEntity* ne,
+                                const StringData *name, bool tryAutoload) {
+  RecordDesc *rec = lookupRecordDesc(ne);
+  if (UNLIKELY(!rec)) {
+    if (tryAutoload) {
+      return loadMissingRecordDesc(ne, name);
+    }
+  }
+  return rec;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Constant lookup.
@@ -1165,6 +1321,21 @@ bool Unit::defNativeConstantCallback(const StringData* cnsName,
 
 namespace {
 
+TypeAliasReq typeAliasFromRecordDesc(Unit* unit, const TypeAlias* thisType,
+                                     RecordDesc* rec) {
+  assertx(unit);
+  TypeAliasReq req;
+  req.unit = unit;
+  req.name = thisType->name;
+  req.nullable = thisType->nullable;
+  req.type = AnnotType::Record;
+  req.rec = rec;
+  req.userAttrs = thisType->userAttrs;
+  assertx(thisType->typeStructure.isDictOrDArray());
+  req.typeStructure = thisType->typeStructure;
+  return req;
+}
+
 TypeAliasReq typeAliasFromClass(Unit* unit, const TypeAlias* thisType,
                                 Class *klass) {
   assertx(unit);
@@ -1230,7 +1401,11 @@ TypeAliasReq resolveTypeAlias(Unit* unit, const TypeAlias* thisType) {
     return TypeAliasReq::From(unit, *targetTd, *thisType);
   }
 
-  if (AutoloadHandler::s_instance->autoloadClassOrType(
+  if (auto rec = Unit::lookupRecordDesc(targetNE)) {
+    return typeAliasFromRecordDesc(unit, thisType, rec);
+  }
+
+  if (AutoloadHandler::s_instance->autoloadNamedType(
         StrNR(const_cast<StringData*>(typeName))
       )) {
     if (auto klass = Unit::lookupClass(targetNE)) {
@@ -1238,6 +1413,9 @@ TypeAliasReq resolveTypeAlias(Unit* unit, const TypeAlias* thisType) {
     }
     if (auto targetTd = targetNE->getCachedTypeAlias()) {
       return TypeAliasReq::From(unit, *targetTd, *thisType);
+    }
+    if (auto rec = Unit::lookupRecordDesc(targetNE)) {
+      return typeAliasFromRecordDesc(unit, thisType, rec);
     }
   }
 
@@ -1260,7 +1438,7 @@ const TypeAliasReq* Unit::loadTypeAlias(const StringData* name,
   auto ne = NamedEntity::get(name);
   auto target = ne->getCachedTypeAlias();
   if (!target) {
-    if (AutoloadHandler::s_instance->autoloadClassOrType(
+    if (AutoloadHandler::s_instance->autoloadNamedType(
           StrNR(const_cast<StringData*>(name))
         )) {
       target = ne->getCachedTypeAlias();
@@ -1302,11 +1480,12 @@ bool Unit::defTypeAlias(Id id) {
     return false;
   }
 
-  // There might also be a class with this name already.
-  if (nameList->getCachedClass()) {
+  // There might also be a class or record with this name already.
+  auto existingKind = checkSameName<TypeAlias>(nameList);
+  if (existingKind) {
     FrameRestore _(this, Op::DefTypeAlias, id);
-    raise_error("The name %s is already defined as a class",
-                thisType->name->data());
+    raise_error("The name %s is already defined as a %s",
+                thisType->name->data(), existingKind);
     not_reached();
   }
 
@@ -1346,6 +1525,7 @@ namespace {
 ///////////////////////////////////////////////////////////////////////////////
 
 SimpleMutex unitInitLock(false /* reentrant */, RankUnitInit);
+std::atomic<uint64_t> s_loadedUnits{0};
 
 void setGlobal(StringData* name, TypedValue *value) {
   g_context->m_globalVarEnv->set(name, value);
@@ -1392,17 +1572,21 @@ void Unit::initialMerge() {
     return;
   }
 
+  auto const nrecord = RuntimeOption::EvalRecordFirstUnits;
+  if (s_loadedUnits.load(std::memory_order_relaxed) < nrecord) {
+    auto const index = s_loadedUnits.fetch_add(1, std::memory_order_relaxed);
+    if (index < nrecord) {
+      StructuredLogEntry ent;
+      ent.setStr("path", m_filepath->data());
+      ent.setInt("index", index);
+      StructuredLog::log("hhvm_first_units", ent);
+    }
+  }
+
   this->m_cachedEntryPoint = findEntryPoint(this);
 
   if (RuntimeOption::EvalEnableReverseDataMap) {
     data_map::register_start(this);
-  }
-
-  if (RuntimeOption::EvalLogLoadedUnitsRate > 0.0) {
-    auto const is_system = FileUtil::isSystemName(m_filepath->slice());
-    if (!is_system && !isEvalName(m_filepath)) {
-      log_loaded_unit(this);
-    }
   }
 
   int state = 0;
@@ -1478,7 +1662,8 @@ void Unit::initialMerge() {
               SourceRootInfo::RelativeToPhpRoot(StrNR(s)).get(),
               "",
               nullptr /* initial_opt */,
-              Native::s_noNativeFuncs
+              Native::s_noNativeFuncs,
+              false
             );
             unit->initialMerge();
             mi->mergeableObj(ix) = (void*)((char*)unit + (int)k);
@@ -1522,6 +1707,10 @@ void Unit::merge() {
     mergeImpl<true>(mergeInfo());
   } else {
     mergeImpl<false>(mergeInfo());
+  }
+
+  for (auto& r : prerecords()) {
+    defRecordDesc(r.get());
   }
 }
 
@@ -1582,7 +1771,7 @@ static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out,
     PreClass* pre = (PreClass*)obj;
     if (pre->attrs() & AttrUnique) {
       Class* cls = pre->namedEntity()->clsList();
-      assertx(cls && !cls->m_nextClass);
+      assertx(cls && !cls->m_next);
       assertx(cls->preClass() == pre);
       if (rds::isPersistentHandle(cls->classHandle())) {
         delta++;
@@ -1607,7 +1796,7 @@ static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out,
         PreClass* pre = (PreClass*)obj;
         if (pre->attrs() & AttrUnique) {
           Class* cls = pre->namedEntity()->clsList();
-          assertx(cls && !cls->m_nextClass);
+          assertx(cls && !cls->m_next);
           assertx(cls->preClass() == pre);
           if (rds::isPersistentHandle(cls->classHandle())) {
             delta++;
@@ -1702,7 +1891,14 @@ void Unit::mergeImpl(MergeInfo* mi) {
           assertx(rds::isPersistentHandle(handle));
           rds::handleToRef<LowPtr<Func>, rds::Mode::Persistent>(handle) = func;
         }
-        func->getNamedEntity()->setUniqueFunc(func);
+
+        auto const ne = func->getNamedEntity();
+        auto const f = ne->uniqueFunc();
+        if (f && f->attrs() & AttrIsMethCaller) {
+          // Skip the duplicated meth_caller
+          continue;
+        }
+        ne->setUniqueFunc(func);
         if (debugger) phpDebuggerDefFuncHook(func);
       } while (++it != fend);
     } else {
@@ -2176,4 +2372,20 @@ bool Unit::parseFatal(const StringData*& msg, int& line) const {
   auto kind_char = *pc;
   return kind_char == static_cast<uint8_t>(FatalOp::Parse);
 }
+
+std::string mangleReifiedGenericsName(const ArrayData* tsList) {
+  std::vector<std::string> l;
+  IterateV(
+    tsList,
+    [&](TypedValue v) {
+      assertx(tvIsDictOrDArray(v));
+      auto str =
+        TypeStructure::toStringForDisplay(ArrNR(v.m_data.parr)).toCppString();
+      str.erase(remove_if(str.begin(), str.end(), isspace), str.end());
+      l.emplace_back(str);
+    }
+  );
+  return folly::sformat("<{}>", folly::join(",", l));
+}
+
 }

@@ -1,11 +1,18 @@
-<?php
+<?hh
 /* Prototype  : proto int strspn(string str, string mask [, int start [, int len]])
  * Description: Finds length of initial segment consisting entirely of characters found in mask.
-		If start or/and length is provided works like strspn(substr($s,$start,$len),$good_chars)
+        If start or/and length is provided works like strspn(substr($s,$start,$len),$good_chars)
  * Source code: ext/standard/string.c
  * Alias to functions: none
 */
 
+// declaring class
+class sample  {
+  public function __toString() {
+    return "object";
+  }
+}
+<<__EntryPoint>> function main(): void {
 error_reporting(E_ALL & ~E_NOTICE);
 
 /*
@@ -22,13 +29,6 @@ $len = 10;
 //get an unset variable
 $unset_var = 10;
 unset ($unset_var);
-
-// declaring class
-class sample  {
-  public function __toString() {
-    return "object";
-  }
-}
 
 // creating a file resource
 $file_handle = fopen(__FILE__, 'r');
@@ -96,5 +96,5 @@ foreach($values as $value) {
 // close the resource
 fclose($file_handle);
 
-echo "Done"
-?>
+echo "Done";
+}

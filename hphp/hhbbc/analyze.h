@@ -119,11 +119,6 @@ struct FuncAnalysisResult {
     unfoldableFuncs;
 
   /*
-   * Known types of local statics.
-   */
-  CompactVector<Type> localStaticTypes;
-
-  /*
    * Bitset representing which parameters may affect the result of the
    * function, assuming it produces one. Note that VerifyParamType
    * does not count as a use in this context.
@@ -140,6 +135,11 @@ struct FuncAnalysisResult {
    * Public static property mutations in this function.
    */
   PublicSPropMutations publicSPropMutations;
+
+  /*
+   * Vector of block updates
+   */
+  CompactVector<std::pair<BlockId, BlockUpdateInfo>> blockUpdates;
 };
 
 struct FuncAnalysis : FuncAnalysisResult {
@@ -217,8 +217,7 @@ FuncAnalysis analyze_func_inline(const Index&,
                                  Context,
                                  const Type& thisType,
                                  const CompactVector<Type>& args,
-                                 CollectionOpts opts =
-                                 CollectionOpts::TrackConstantArrays);
+                                 CollectionOpts opts = {});
 
 /*
  * Perform an analysis for a whole php::Class at a time.
@@ -244,7 +243,7 @@ std::vector<std::pair<State,StepFlags>>
 locally_propagated_states(const Index&,
                           const FuncAnalysis&,
                           CollectedInfo& collect,
-                          const php::Block*,
+                          BlockId bid,
                           State stateIn);
 
 //////////////////////////////////////////////////////////////////////

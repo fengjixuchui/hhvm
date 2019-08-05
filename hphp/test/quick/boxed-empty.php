@@ -1,10 +1,10 @@
 <?hh
 
 
-function main($a) {
-  $x =& $y;
+function main($a, &$x) {
   $x = $a[0];
-  return empty($x) ? true : false;
+  return (!($x ?? false)) ? true : false;
 }
-
-echo main(array(array()))."\n";
+<<__EntryPoint>> function main_entry(): void {
+echo main(array(array()), &$y)."\n";
+}

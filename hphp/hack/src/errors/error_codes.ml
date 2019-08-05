@@ -37,9 +37,9 @@ module Parsing = struct
   type t =
   | FixmeFormat [@value 1001]
   | ParsingError
-  | UnexpectedEof
-  | UnterminatedComment
-  | UnterminatedXhpComment
+  | UnexpectedEofDEPRECATED
+  | UnterminatedCommentDEPRECATED
+  | UnterminatedXhpCommentDEPRECATED
   | CallTimePassByReferenceDEPRECATED
   (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@ deriving enum, show { with_path = false } ]
@@ -49,24 +49,24 @@ end
 module Naming                               = struct
   type t =
   | AddATypehint [@value 2001]
-  | TypeparamAlok
+  | TypeparamAlokDEPRECATED
   | AssertArity
   | PrimitiveInvalidAlias
   | CyclicConstraintDEPRECATED
   | DidYouMeanNaming
-  | DifferentScope
+  | DifferentScopeDEPRECATED
   | DisallowedXhpType
   | DoubleInsteadOfFloatDEPRECATED
   | DynamicClassDEPRECATED
-  | DynamicMethodCall
+  | LvarInObjGet
   | ErrorNameAlreadyBound
   | ExpectedCollection
   | ExpectedVariable
   | FdNameAlreadyBound
-  | GenArrayRecArity
+  | GenArrayRecArityDEPRECATED
   | GenArrayVaRecArityDEPRECATED
-  | GenaArity
-  | GenericClassVar
+  | GenaArityDEPRECATED
+  | GenericClassVarDEPRECATED
   | GenvaArity
   | IllegalClass
   | IllegalClassMeth
@@ -78,7 +78,7 @@ module Naming                               = struct
   | IntegerInsteadOfIntDEPRECATED
   | InvalidReqExtends
   | InvalidReqImplements
-  | LocalConst
+  | LocalConstDEPRECATED
   | LowercaseThis
   | MethodNameAlreadyBound
   | MissingArrow
@@ -95,7 +95,7 @@ module Naming                               = struct
   | ThisHintOutsideClass
   | ThisReserved
   | TparamWithTparam
-  | TypedefConstraint
+  | TypedefConstraintDEPRECATED
   | UnboundName
   | Undefined
   | UnexpectedArrow
@@ -114,7 +114,7 @@ module Naming                               = struct
   | UnexpectedTypeArguments
   | TooManyTypeArguments
   | ClassnameParam
-  | InvalidInstanceof
+  | InvalidInstanceofDEPRECATED
   | NameIsReserved
   | DollardollarUnused
   | IllegalMemberVariableClass
@@ -123,7 +123,7 @@ module Naming                               = struct
   | GotoLabelUndefined
   | GotoLabelDefinedInFinally
   | GotoInvokedInFinally
-  | DynamicClassPropertyNameInStrictMode
+  | DynamicClassPropertyNameInStrictModeDEPRECATED
   | ThisAsLexicalVariable
   | DynamicClassNameInStrictMode
   | XhpOptionalRequiredAttr
@@ -136,18 +136,24 @@ module Naming                               = struct
   | MethodNeedsVisibility
   | ReferenceInStrictMode
   | ReferenceInRx
-  | DeclareStatement
-  | MisplacedRxOfScope
-  | RxOfScopeAndExplicitRx
-  | UnsupportedFeature
-  | TraitInterfaceConstructorPromo
+  | DeclareStatementDEPRECATED
+  | MisplacedRxOfScopeDEPRECATED
+  | RxOfScopeAndExplicitRxDEPRECATED
+  | UnsupportedFeatureDEPRECATED
+  | TraitInterfaceConstructorPromoDEPRECATED
   | NonstaticPropertyWithLSB
-  | ReferenceInAnonUseClause
+  | ReferenceInAnonUseClauseDEPRECATED
   | RxMoveInvalidLocation
   | MisplacedMutabilityHint
   | MutabilityHintInNonRx
   | InvalidReturnMutableHint
-  | NoTparamsOnTypeConsts
+  | NoTparamsOnTypeConstsDEPRECATED
+  | PocketUniversesDuplication
+  | UnsupportedTraitUseAs
+  | UnsupportedInsteadOf
+  | InvalidTraitUseAsVisibility
+  | InvalidFunPointer
+  | IllegalUseOfDynamicallyCallable
   (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@ deriving enum, show { with_path = false } ]
   let err_code = to_enum
@@ -182,14 +188,14 @@ module NastCheck                            = struct
   | IllegalFunctionName
   | NotAbstractWithoutTypeconst
   | TypeconstDependsOnExternalTparam
-  | TypeconstAssignedTparam
-  | AbstractWithTypeconst
+  | TypeconstAssignedTparamDEPRECATED
+  | AbstractWithTypeconstDEPRECATED
   | ConstructorRequired
   | InterfaceWithPartialTypeconst
   | MultipleXhpCategory
   | OptionalShapeFieldsNotSupportedDEPRECATED
-  | AwaitNotAllowed
-  | AsyncInInterface
+  | AwaitNotAllowedDEPRECATED
+  | AsyncInInterfaceDEPRECATED
   | AwaitInCoroutine
   | YieldInCoroutine
   | SuspendOutsideOfCoroutine
@@ -200,13 +206,13 @@ module NastCheck                            = struct
   | InoutParamsSpecial
   | InoutParamsMixByref
   | InoutParamsMemoize
-  | InoutParamsRetByRef
+  | InoutParamsRetByRefDEPRECATED
   | ReadingFromAppend
-  | ConstAttributeProhibited
+  | ConstAttributeProhibitedDEPRECATED
   | RetiredError3049DEPRECATED
   | InoutArgumentBadExpr
-  | MutableParamsOutsideOfSync
-  | MutableAsyncMethod
+  | MutableParamsOutsideOfSyncDEPRECATED
+  | MutableAsyncMethodDEPRECATED
   | MutableMethodsMustBeReactive
   | MutableAttributeOnFunction
   | MutableReturnAnnotatedDeclsMustBeReactive
@@ -220,7 +226,7 @@ module NastCheck                            = struct
   | MaybeRxInvalidLocation
   | NoOnlyrxIfRxfuncForRxIfArgs
   | CoroutineInConstructor
-  | IllegalReturnByRef
+  | IllegalReturnByRefDEPRECATED
   | IllegalByRefExpr
   | VariadicByRefParam
   | MaybeMutableAttributeOnFunction
@@ -230,8 +236,11 @@ module NastCheck                            = struct
   | InterfaceUsesTrait
   | NonstaticMethodInAbstractFinalClass
   | MutableOnStaticDEPRECATED
-  | ClassnameConstInstanceOf
+  | ClassnameConstInstanceOfDEPRECATED
   | ByRefParamOnConstruct
+  | ByRefDynamicCall
+  | ByRefProperty
+  | ByRefCall
   (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@ deriving enum, show { with_path = false } ]
   let err_code = to_enum
@@ -248,7 +257,7 @@ module Typing                               = struct
   | ArrayCast
   | ArrayGetArity
   | BadCall
-  | ClassArity
+  | ClassArityDEPRECATED
   | ConstMutation
   | ConstructorNoArgs
   | CyclicClassDef
@@ -282,7 +291,7 @@ module Typing                               = struct
   | FunTooManyArgs
   | FunUnexpectedNonvariadic
   | FunVariadicityHhVsPhp56
-  | GenaExpectsArray
+  | GenaExpectsArrayDEPRECATED
   | GenericArrayStrict
   | GenericStatic
   | ImplementAbstract
@@ -307,10 +316,10 @@ module Typing                               = struct
   | OptionReturnOnlyTypehint
   | ObjectString
   | OptionMixed
-  | Overflow
+  | OverflowDEPRECATED
   | OverrideFinal
   | OverridePerTrait
-  | PairArity
+  | PairArityDEPRECATED
   | AbstractCall
   | ParentInTrait
   | ParentOutsideClass
@@ -326,21 +335,21 @@ module Typing                               = struct
   | ShapeFieldClassMismatch
   | ShapeFieldTypeMismatch
   | ShouldBeOverride
-  | SketchyNullCheck
-  | SketchyNullCheckPrimitive
+  | SketchyNullCheckDEPRECATED
+  | SketchyNullCheckPrimitiveDEPRECATED
   | SmemberNotFound
   | StaticDynamic
   | StaticOverflowDEPRECATED
   | RetiredError4093DEPRECATED
-  | ThisInStatic
+  | ThisInStaticDEPRECATED
   | ThisVarOutsideClass
   | TraitFinal
-  | TupleArity
-  | TupleArityMismatch
+  | TupleArityDEPRECATED
+  | TupleArityMismatchDEPRECATED
   | TupleIndexTooLargeDEPRECATED
   | TupleSyntax
   | TypeArityMismatch
-  | TypeParamArity
+  | TypeParamArityDEPRECATED
   | RetiredError4103DEPRECATED
   | TypingTooFewArgs
   | TypingTooManyArgs
@@ -372,10 +381,10 @@ module Typing                               = struct
   | CyclicTypeconst
   | NullsafePropertyWriteContext
   | NoreturnUsage
-  | ThisLvalue
+  | ThisLvalueDEPRECATED
   | UnsetNonidxInStrict
   | InvalidShapeFieldNameEmpty
-  | InvalidShapeFieldNameNumber
+  | InvalidShapeFieldNameNumberDEPRECATED
   | ShapeFieldsUnknown
   | InvalidShapeRemoveKey
   | MissingOptionalFieldDEPRECATED
@@ -400,7 +409,7 @@ module Typing                               = struct
   | InstanceofAlwaysFalseDEPRECATED
   | InstanceofAlwaysTrueDEPRECATED
   | AmbiguousMember
-  | InstanceofGenericClassname
+  | InstanceofGenericClassnameDEPRECATED
   | RequiredFieldIsOptional
   | FinalProperty
   | ArrayGetWithOptionalField
@@ -436,8 +445,8 @@ module Typing                               = struct
   | InvalidIsAsExpressionHint
   | AssigningToConst
   | SelfConstParentNot
-  | ParentConstSelfNot
-  | PartiallyValidIsAsExpressionHint
+  | ParentConstSelfNotDEPRECATED
+  | PartiallyValidIsAsExpressionHintDEPRECATED
   | NonreactiveFunctionCall
   | NonreactiveIndexing
   | ObjSetReactive
@@ -447,7 +456,7 @@ module Typing                               = struct
   | InvalidDisposableReturnHint
   | ReturnDisposableMismatch
   | InoutArgumentBadType
-  | InconsistentUnset
+  | InconsistentUnsetDEPRECATED
   | ReassignMutableVar
   | InvalidFreezeTarget
   | InvalidFreezeUse
@@ -459,7 +468,7 @@ module Typing                               = struct
   | NonreactiveCallFromShallow
   | EnumTypeTypedefNonnull
   | RxEnabledInNonRxContext
-  | RxEnabledInLambdas
+  | RxEnabledInLambdasDEPRECATED
   | AmbiguousLambda
   | EllipsisStrictMode
   | UntypedLambdaStrictMode
@@ -467,10 +476,10 @@ module Typing                               = struct
   | EchoInReactiveContext
   | SuperglobalInReactiveContext
   | StaticPropertyInReactiveContext
-  | StaticInReactiveContext
-  | GlobalInReactiveContext
+  | StaticInReactiveContextDEPRECATED
+  | GlobalInReactiveContextDEPRECATED
   | WrongExpressionKindAttribute
-  | AttributeClassNoConstructorArgs
+  | AttributeClassNoConstructorArgsDEPRECATED
   | InvalidTypeForOnlyrxIfRxfuncParameter
   | MissingAnnotationForOnlyrxIfRxfuncParameter
   | CannotReturnBorrowedValueAsImmutable
@@ -489,7 +498,7 @@ module Typing                               = struct
   | NonawaitedAwaitableInReactiveContext
   | ShapesKeyExistsAlwaysTrue
   | ShapesKeyExistsAlwaysFalse
-  | ShapesIdxWithNonExistentField
+  | ShapesMethodAccessWithNonExistentField
   | NonClassMember
   | PassingArrayCellByRef
   | CallSiteReactivityMismatch
@@ -504,17 +513,17 @@ module Typing                               = struct
   | MutabilityMismatch
   | InvalidPPLCall
   | InvalidPPLStaticCall
-  | TypeTestInLambda
+  | TypeTestInLambdaDEPRECATED
   | InvalidTraversableInRx
   | ReassignMutableThis
   | MutableExpressionAsMultipleMutableArguments
   | InvalidUnsetTargetInRx
   | CoroutineOutsideExperimental
   | PPLMethPointer
-  | InvalidTruthinessTest
+  | InvalidTruthinessTestDEPRECATED
   | RePrefixedNonString
   | BadRegexPattern
-  | SketchyTruthinessTest
+  | SketchyTruthinessTestDEPRECATED
   | LateInitWithDefault
   | OverrideMemoizeLSB
   | ClassVarTypeGenericParam
@@ -527,8 +536,8 @@ module Typing                               = struct
   | MoveInNonreactiveContext
   | InvalidMoveUse
   | InvalidMoveTarget
-  | IgnoredResultOfFreeze
-  | IgnoredResultOfMove
+  | IgnoredResultOfFreezeDEPRECATED
+  | IgnoredResultOfMoveDEPRECATED
   | UnexpectedTy
   | UnserializableType
   | InconsistentMutability
@@ -543,11 +552,48 @@ module Typing                               = struct
   | InvalidEnforceableTypeArgument
   | RequireArgsReify
   | TypecheckerTimeout
-  | ErasedGenericPassedToReified
+  | InvalidReifiedArgument
   | GenericsNotAllowed
   | InvalidNewableTypeArgument
   | InvalidNewableTypeParamConstraints
   | NewWithoutNewable
+  | NewStaticClassReified
+  | MemoizeReified
+  | ConsistentConstructReified
+  | MethodVariance
+  | MissingXhpRequiredAttr
+  | BadXhpAttrRequiredOverride
+  | ReifiedTparamVariadicDEPRECATED
+  | UnresolvedTypeVariable
+  | InvalidSubString
+  | InvalidArrayKeyConstraint
+  | OverrideNoDefaultTypeconst
+  | ShapeAccessWithNonExistentField
+  | DisallowPHPArraysAttr
+  | TypeConstraintViolation
+  | IndexTypeMismatch
+  | ExpectedStringlike
+  | TypeConstantMismatch
+  | TypeConstantRedeclaration
+  | ConstantDoesNotMatchEnumType
+  | EnumConstraintMustBeArraykey
+  | EnumSubtypeMustHaveCompatibleConstraint
+  | ParameterDefaultValueWrongType
+  | NewtypeAliasMustSatisfyConstraint
+  | BadFunctionTypevar
+  | BadClassTypevar
+  | BadMethodTypevar
+  | MissingReturnInNonVoidFunction
+  | InoutReturnTypeMismatch
+  | ClassConstantValueDoesNotMatchHint
+  | ClassPropertyInitializerTypeDoesNotMatchHint
+  | BadDeclOverride
+  | BadMethodOverride
+  | BadEnumExtends
+  | XhpAttributeValueDoesNotMatchHint
+  | TraitPropConstClass
+  | EnumUnderlyingTypeMustBeArraykey
+  | ClassGetReified
   (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@ deriving enum, show { with_path = false } ]
   let err_code = to_enum

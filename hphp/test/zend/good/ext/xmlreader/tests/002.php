@@ -1,4 +1,4 @@
-<?php 
+<?hh 
 /* $Id$ */
 $filename = dirname(__FILE__) . '/_002.xml';
 $xmlstring = '<?xml version="1.0" encoding="UTF-8"?>
@@ -26,5 +26,4 @@ $reader->open($filename);
 $reader->close();
 unlink($filename);
 
-?>
-===DONE===
+echo "===DONE===\n";

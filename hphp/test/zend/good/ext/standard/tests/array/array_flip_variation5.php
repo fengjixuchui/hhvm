@@ -1,13 +1,13 @@
-<?php
+<?hh
 /* Prototype  : array array_flip(array $input)
- * Description: Return array with key <-> value flipped 
+ * Description: Return array with key <-> value flipped
  * Source code: ext/standard/array.c
 */
 
 /*
 * Using different types of repeatitive keys as well as values for 'input' array
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_flip() : 'input' array with repeatitive keys/values ***\n";
 
 // array with numeric key repeatition
@@ -34,5 +34,5 @@ var_dump( array_flip($input) );
 $input = array('key1' => "value1", "key2" => '2', 'key3' => 'value1');
 var_dump( array_flip($input) );
 
-echo "Done"
-?>
+echo "Done";
+}

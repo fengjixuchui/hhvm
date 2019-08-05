@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $string = '<?xml version="1.0"?>
 <foo><bar>
    <p>Blah 1</p>
@@ -12,4 +12,4 @@ $p = $foo->bar->p;
 echo count($p);
 $p = (array)$foo->bar->p;
 echo count($p);
-?>
+}

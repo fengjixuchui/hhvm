@@ -48,7 +48,8 @@ enum class AnnotMetaType : uint8_t {
   VecOrDict = 11,
   ArrayLike = 12,
   Nonnull = 13,
-  NoReturn = 14
+  NoReturn = 14,
+  Nothing = 15
 };
 
 enum class AnnotType : uint16_t {
@@ -63,6 +64,7 @@ enum class AnnotType : uint16_t {
   Dict     = (uint8_t)KindOfDict     | (uint16_t)AnnotMetaType::Precise << 8,
   Vec      = (uint8_t)KindOfVec      | (uint16_t)AnnotMetaType::Precise << 8,
   Keyset   = (uint8_t)KindOfKeyset   | (uint16_t)AnnotMetaType::Precise << 8,
+  Record   = (uint8_t)KindOfRecord   | (uint16_t)AnnotMetaType::Precise << 8,
   // Precise is intentionally excluded
   Mixed    = (uint16_t)AnnotMetaType::Mixed << 8        | (uint8_t)KindOfUninit,
   Nonnull  = (uint16_t)AnnotMetaType::Nonnull << 8      | (uint8_t)KindOfUninit,
@@ -77,7 +79,8 @@ enum class AnnotType : uint16_t {
   VArrOrDArr = (uint16_t)AnnotMetaType::VArrOrDArr << 8 | (uint8_t)KindOfUninit,
   VecOrDict  = (uint16_t)AnnotMetaType::VecOrDict << 8  | (uint8_t)KindOfUninit,
   ArrayLike  = (uint16_t)AnnotMetaType::ArrayLike << 8  | (uint8_t)KindOfUninit,
-  NoReturn   = (uint16_t)AnnotMetaType::NoReturn << 8   | (uint8_t)KindOfUninit
+  NoReturn   = (uint16_t)AnnotMetaType::NoReturn << 8   | (uint8_t)KindOfUninit,
+  Nothing    = (uint16_t)AnnotMetaType::Nothing << 8    | (uint8_t)KindOfUninit
 };
 
 inline AnnotMetaType getAnnotMetaType(AnnotType at) {
@@ -142,6 +145,7 @@ enum class AnnotAction {
   WarnClass,
   ConvertClass,
   ClsMethCheck,
+  RecordCheck,
 };
 
 /*
@@ -186,6 +190,9 @@ enum class AnnotAction {
  *
  * NonVArrayOrDArrayCheck: `dt' is an array on which the caller needs to check
  * for non-dvarray-ness.
+ *
+ * RecordCheck: 'at' and 'dt' are both records and the caller needs to check
+ * if the record in the value matches annotation.
  *
  */
 inline AnnotAction
@@ -261,6 +268,7 @@ annotCompat(DataType dt, AnnotType at, const StringData* annotClsName) {
               isDictType(dt) || isKeysetType(dt))
         ? AnnotAction::Pass
         : AnnotAction::Fail;
+    case AnnotMetaType::Nothing:
     case AnnotMetaType::NoReturn:
       return AnnotAction::Fail;
     case AnnotMetaType::Precise:
@@ -290,6 +298,10 @@ annotCompat(DataType dt, AnnotType at, const StringData* annotClsName) {
       return !RuntimeOption::EvalHackArrDVArrs ?
         AnnotAction::Fail : AnnotAction::ClsMethCheck ;
     }
+  }
+
+  if (at == AnnotType::Record) {
+    return dt == KindOfRecord ? AnnotAction::RecordCheck : AnnotAction::Fail;
   }
 
   if (at != AnnotType::Object) {
@@ -359,6 +371,7 @@ annotCompat(DataType dt, AnnotType at, const StringData* annotClsName) {
       case KindOfNull:
       case KindOfBoolean:
       case KindOfResource:
+      case KindOfRecord:
         return AnnotAction::Fail;
       case KindOfObject:
       case KindOfRef:

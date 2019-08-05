@@ -1,4 +1,4 @@
-<?php
+<?hh
 $a = array();
 $a[0] = $a;
 var_dump($a);
@@ -15,4 +15,3 @@ function f() {
 	var_dump($b);
 }
 f();
-?>

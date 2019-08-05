@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool ctype_xdigit(mixed $c)
  * Description: Checks for character(s) representing a hexadecimal digit 
  * Source code: ext/ctype/ctype.c
@@ -8,7 +8,7 @@
  * Pass strings containing different character types to ctype_xdigit() to test
  * which are considered valid hexadecimal 'digit' only strings
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing ctype_xdigit() : usage variations ***\n";
 
 $orig = setlocale(LC_CTYPE, "C"); 
@@ -50,5 +50,5 @@ foreach($values as $value) {
 };
 
 setlocale(LC_CTYPE, $orig); 
-?>
-===DONE===
+echo "===DONE===\n";
+}

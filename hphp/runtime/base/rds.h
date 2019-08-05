@@ -48,8 +48,8 @@ struct StringData;
 struct Class;
 
 namespace jit {
+struct ArrayAccessProfile;
 struct ArrayKindProfile;
-struct ArrayOffsetProfile;
 struct CallTargetProfile;
 struct ClsCnsProfile;
 struct DecRefProfile;
@@ -86,7 +86,7 @@ namespace HPHP { namespace rds {
  * within [1G, 4G) offset from the persistent
  * base (0 if RDS_FIXED_PERSISTENT_BASE is       +-------------+ <-- tl_base
  * defined as 1, which is safe if address from   |  Header     |
- * low_malloc() is below 4G).                    +-------------+
+ * lower_malloc() is below 4G).                  +-------------+
  *                                               |             |
  * The normal region is perhaps analogous to     |  Normal     |
  * .bss, while the persistent region is          |    region   |
@@ -186,13 +186,6 @@ extern __thread void* tl_base;
  */
 
 /*
- * Symbol for function static locals.  These are RefData's allocated
- * in RDS.
- */
-struct StaticLocal { FuncId funcId;
-                     LowStringPtr name; };
-
-/*
  * Class constant values are TypedValue's stored in RDS.
  */
 struct ClsConstant { LowStringPtr clsName;
@@ -238,12 +231,11 @@ struct LSBMemoCache {
 };
 
 
-using Symbol = boost::variant< StaticLocal
-                             , ClsConstant
+using Symbol = boost::variant< ClsConstant
                              , StaticMethod
                              , StaticMethodF
+                             , Profile<jit::ArrayAccessProfile>
                              , Profile<jit::ArrayKindProfile>
-                             , Profile<jit::ArrayOffsetProfile>
                              , Profile<jit::CallTargetProfile>
                              , Profile<jit::ClsCnsProfile>
                              , Profile<jit::DecRefProfile>
@@ -632,7 +624,7 @@ void uninitHandle(Handle handle);
 /*
  * Used to record information about the rds handle h in the
  * perf-data-pid.map (if enabled).
- * The type indicates the type of entry (eg StaticLocal), and the
+ * The type indicates the type of entry (eg ClsConstant), and the
  * msg identifies this particular entry (eg function-name:local-name)
  */
 void recordRds(Handle h, size_t size,

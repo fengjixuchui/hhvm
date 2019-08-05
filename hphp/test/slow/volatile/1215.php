@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 
 <<__EntryPoint>>
@@ -17,11 +17,7 @@ for ($i = 0;
  $i < 4;
  $i++) {
   if ($i > 1 && !class_exists('bar')) {
-    class bar {
-      function bar() {
- echo "bar called\n";
- }
-    }
+    include '1215.inc';
   }
   if (class_exists('bar')) {
     $a = new bar;

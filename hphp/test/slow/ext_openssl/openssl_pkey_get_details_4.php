@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 $key = <<<EOF
 -----BEGIN DSA PRIVATE KEY-----
@@ -42,4 +42,3 @@ EOF;
 $res = openssl_pkey_get_private($key);
 include __DIR__.'/recursive.inc';
 var_dump(openssl_pkey_get_bin2hex_details($res));
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string date  ( string $format  [, int $timestamp  ] )
  * Description: Format a local time/date.
  * Source code: ext/date/php_date.c
@@ -101,5 +101,4 @@ foreach($inputs as $variation =>$format) {
 // closing the resource
 fclose( $file_handle );
 
-?>
-===DONE===
+echo "===DONE===\n";

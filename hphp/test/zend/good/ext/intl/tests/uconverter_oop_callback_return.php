@@ -1,4 +1,4 @@
-<?php
+<?hh
 class MyConverter extends UConverter {
   public function toUCallback($reason, $source, $codeUnits, &$error) {
     $error = U_ZERO_ERROR;
@@ -24,9 +24,10 @@ class MyConverter extends UConverter {
   }
 
 }
-
+<<__EntryPoint>> function main(): void {
 $c = new MyConverter('ascii', 'utf-8');
 // This line will trigger toUCallback
 var_dump($c->convert("\x80\x81\x82\x83"));
 // This line will trigger fromUCallback
 var_dump($c->convert("\xC3\xB1\xC3\xB2\xC3\xB3\xC3\xB4"));
+}

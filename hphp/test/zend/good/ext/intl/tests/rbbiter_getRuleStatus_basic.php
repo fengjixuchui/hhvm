@@ -1,4 +1,4 @@
-<?php
+<?hh
 ini_set("intl.error_level", E_WARNING);
 ini_set("intl.default_locale", "pt_PT");
 
@@ -22,6 +22,4 @@ do {
 	echo "pos        : {$rbbi->current()}\n",
 		 "rule status: {$rbbi->getRuleStatus()}\n";
 } while ($rbbi->next() != IntlBreakIterator::DONE);
-
-?>
-==DONE==
+echo "==DONE==";

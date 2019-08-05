@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool is_callable ( mixed $var [, bool $syntax_only [, string &$callable_name]] );
  * Description: Verify that the contents of a variable can be called as a function
  * Source code: ext/imap/php_imap.c
@@ -23,7 +23,6 @@ function check_iscallable( $functions ) {
   }
 }
 
-echo "\n*** Testing is_callable() on defined functions ***\n";
 /* function name with simple string */
 function someFunction() {
 }
@@ -43,7 +42,8 @@ function false() {
 /* function name with string and special character */
 function Hello_World() {
 }
-
+<<__EntryPoint>> function main(): void {
+echo "\n*** Testing is_callable() on defined functions ***\n";
 $defined_functions = array (
   $functionVar1 = 'someFunction',
   $functionVar2 = 'x123',
@@ -56,5 +56,5 @@ $defined_functions = array (
  */
 check_iscallable($defined_functions);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

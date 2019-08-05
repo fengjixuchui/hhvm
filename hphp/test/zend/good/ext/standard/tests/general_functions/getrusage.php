@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 var_dump(gettype(getrusage()));
 var_dump(gettype(getrusage(1)));
 var_dump(gettype(getrusage(-1)));
@@ -7,4 +7,4 @@ try { var_dump(getrusage(array())); } catch (Exception $e) { echo "\n".'Warning:
 
 
 echo "Done\n";
-?>
+}

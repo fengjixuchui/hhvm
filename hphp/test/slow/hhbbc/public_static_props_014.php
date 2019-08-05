@@ -1,8 +1,9 @@
-<?php
+<?hh
 
 class X {
   static $x = null;
-  static function a() {
+  function a() {
+    self::$x = new stdClass();
     self::$x->foo = 2;
     return self::$x;
   }

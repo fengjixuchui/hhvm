@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 interface if_a {
 	function f_a();
@@ -80,4 +80,3 @@ $t->test();
 
 
 
-?>

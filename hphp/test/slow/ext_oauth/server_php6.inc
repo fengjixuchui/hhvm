@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 require __DIR__."/random_port.inc";
 
@@ -79,4 +79,3 @@ function http_server_kill($pid) {
 	pcntl_waitpid($pid, $status);
 }
 
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto array get_class_methods(mixed class)
  * Description: Returns an array of method names for class or class instance. 
  * Source code: Zend/zend_builtin_functions.c
@@ -8,7 +8,7 @@
 /*
  * Test wrong number of arguments.
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing get_class_methods() : error conditions ***\n";
 
 // Zero arguments
@@ -22,4 +22,4 @@ $extra_arg = 10;
 try { var_dump( get_class_methods($class, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

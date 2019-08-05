@@ -1,4 +1,4 @@
-<?php
+<?hh
 $a = 'oops';
 echo $a;
 namespace foo {
@@ -6,4 +6,3 @@ namespace foo {
 namespace ok {
 echo "ok\n";
 }
-?>

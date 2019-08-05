@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto int xml_parser_get_option(resource parser, int option)
  * Description: Get options from an XML parser 
  * Source code: ext/xml/xml.c
@@ -84,4 +84,3 @@ foreach($values as $value) {
 fclose($fp);
 xml_parser_free($parser);
 echo "Done";
-?>

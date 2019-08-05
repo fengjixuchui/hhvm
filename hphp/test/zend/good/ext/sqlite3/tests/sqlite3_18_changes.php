@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 require_once(dirname(__FILE__) . '/new_db.inc');
 $timenow = time();
@@ -19,4 +19,3 @@ var_dump($db->changes());
 echo "Closing database\n";
 var_dump($db->close());
 echo "Done\n";
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 require 'server.inc';
 
 $x = new OAuth('1234','1234');
@@ -33,4 +33,3 @@ foreach ($requests as $cur_request) {
 
 http_server_kill($pid);
 
-?>

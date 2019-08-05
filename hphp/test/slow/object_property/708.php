@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function test($x, $v) {
  var_dump($x->$v++);
@@ -6,5 +6,5 @@ function test($x, $v) {
 
 <<__EntryPoint>>
 function main_708() {
-test(false, "\0foo");
+  test(new stdClass(), "\0foo");
 }

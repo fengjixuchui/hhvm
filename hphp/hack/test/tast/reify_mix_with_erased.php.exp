@@ -1,16 +1,17 @@
 Errors:
   [8:18-20] Invalid argument
-  [8:10-16] This is a string
+  [8:10-16] Expected string
   [3:25-27]   via this generic Tu
-  [8:18-20] It is incompatible with an int
+  [8:18-20] But got int
 [(Fun
     { f_span = [3:1-5:2]; f_annotation = (); f_mode = <opaque>;
-      f_ret = (Some ([3:33-35], (Habstr "Tu"))); f_name = ([3:10-11], "\\f");
+      f_ret = (([Pos.none], _), (Some ([3:33-35], (Habstr "Tu"))));
+      f_name = ([3:10-11], "\\f");
       f_tparams =
       [{ tp_variance = Invariant; tp_name = ([3:18-19], "T");
-         tp_constraints = []; tp_reified = true; tp_user_attributes = [] };
+         tp_constraints = []; tp_reified = Reified; tp_user_attributes = [] };
         { tp_variance = Invariant; tp_name = ([3:21-23], "Tu");
-          tp_constraints = []; tp_reified = false; tp_user_attributes = [] }
+          tp_constraints = []; tp_reified = Erased; tp_user_attributes = [] }
         ];
       f_where_constraints = []; f_variadic = FVnonVariadic;
       f_params =
@@ -22,8 +23,7 @@ Errors:
         ];
       f_body =
       { fb_ast =
-        [(Return ([4:3-13], (Some (([4:10-12], Tu), (Lvar ([4:10-12], $f))))
-            ))
+        [([4:3-13], (Return (Some (([4:10-12], Tu), (Lvar ([4:10-12], $f))))))
           ];
         fb_annotation = No unsafe blocks };
       f_fun_kind = FSync; f_user_attributes = []; f_file_attributes = [];
@@ -31,18 +31,19 @@ Errors:
       f_static = false });
   (Fun
      { f_span = [7:1-9:2]; f_annotation = (); f_mode = <opaque>;
-       f_ret = (Some ([7:15-19], (Hprim Tvoid)));
+       f_ret = (([Pos.none], _), (Some ([7:15-19], (Hprim Tvoid))));
        f_name = ([7:10-11], "\\g"); f_tparams = []; f_where_constraints = [];
        f_variadic = FVnonVariadic; f_params = [];
        f_body =
        { fb_ast =
-         [(Expr
-             (([8:3-21], string),
-              (Call (Cnormal,
-                 (([8:3-4], (function<reify T, Tu>(string $f): string)),
-                  (Id ([8:3-4], "\\f"))),
-                 [([8:5-8], (Hprim Tint)); ([8:10-16], (Hprim Tstring))],
-                 [(([8:18-20], int), (Int "42"))], []))))
+         [([8:3-22],
+           (Expr
+              (([8:3-21], string),
+               (Call (Cnormal,
+                  (([8:3-4], (function<reify T, Tu>(string $f): string)),
+                   (Id ([8:3-4], "\\f"))),
+                  [([8:5-8], (Hprim Tint)); ([8:10-16], (Hprim Tstring))],
+                  [(([8:18-20], int), (Int "42"))], [])))))
            ];
          fb_annotation = No unsafe blocks };
        f_fun_kind = FSync; f_user_attributes = []; f_file_attributes = [];

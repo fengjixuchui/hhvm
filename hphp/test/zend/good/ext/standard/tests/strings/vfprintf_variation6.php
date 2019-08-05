@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int vfprintf  ( resource $handle  , string $format , array $args  )
  * Description: Write a formatted string to a stream
  * Source code: ext/standard/formatted_print.c
@@ -8,7 +8,7 @@
  * Test vfprintf() when different float formats and non-float values are passed to
  * the '$format' and '$args' arguments of the function
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vfprintf() : float formats and non-float values ***\n";
 
 // defining array of float formats
@@ -73,5 +73,5 @@ echo "\n";
 
 unlink($data_file);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

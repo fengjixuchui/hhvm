@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool ctype_alnum(mixed $c)
  * Description: Checks for alphanumeric character(s) 
  * Source code: ext/ctype/ctype.c
@@ -7,7 +7,7 @@
 /*
  * Pass different strings to ctype_alnum to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing ctype_alnum() : usage variations ***\n";
 
 $orig = setlocale(LC_CTYPE, "C"); 
@@ -48,5 +48,5 @@ foreach($values as $value) {
 };
 
 setlocale(LC_CTYPE, $orig);
-?>
-===DONE===
+echo "===DONE===\n";
+}

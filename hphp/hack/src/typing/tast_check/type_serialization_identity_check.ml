@@ -9,7 +9,7 @@
 open Core_kernel
 open Typing_defs
 
-(* Replace unserialized information from the with dummy information.
+(* Replace unserialized information from the type with dummy information.
 
 For example, we don't currently serialize the arity of function types, so update
 the input type to set it to a default arity value. *)
@@ -67,20 +67,25 @@ let rec strip_ty : type a. a ty -> a ty = fun ty ->
 
     | Ttuple tyl ->
       Ttuple (strip_tyl tyl)
+    | Tdestructure tyl ->
+      Tdestructure (strip_tyl tyl)
 
     | Toption ty ->
       Toption (strip_ty ty)
+    | Tlike ty ->
+      Tlike (strip_ty ty)
     | Tabstract (abstract_kind, ty_opt) ->
       let abstract_kind = match abstract_kind with
         | AKnewtype (name, tparams) ->
           AKnewtype (name, strip_tyl tparams)
-        | AKenum _
         | AKgeneric _
         | AKdependent _ -> abstract_kind
       in
       Tabstract (abstract_kind, strip_opt ty_opt)
-    | Tunresolved tyl ->
-      Tunresolved (strip_tyl tyl)
+    | Tunion tyl ->
+      Tunion (strip_tyl tyl)
+    | Tintersection tyl ->
+      Tintersection (strip_tyl tyl)
     | Tclass (sid, exact, tyl) ->
       Tclass (sid, exact, strip_tyl tyl)
 
@@ -117,6 +122,7 @@ let rec strip_ty : type a. a ty -> a ty = fun ty ->
         ft_arity = Fstandard (0, 0);
         ft_tparams = ([], FTKtparams);
         ft_where_constraints = [];
+        ft_fun_kind = Ast_defs.FSync;
         ft_reactive = Nonreactive;
         ft_return_disposable = false;
         ft_mutability = None;
@@ -125,20 +131,13 @@ let rec strip_ty : type a. a ty -> a ty = fun ty ->
         ft_returns_void_to_rx = false;
       }
 
-    | Tshape (shape_fields_known, shape_fields) ->
-      let shape_fields_known = match shape_fields_known with
-        | FieldsFullyKnown -> FieldsFullyKnown
-        | FieldsPartiallyKnown _fields ->
-          (* Dummy value; the partially-known fields aren't currently
-          serialized. *)
-          FieldsPartiallyKnown (Nast.ShapeMap.empty)
-      in
+    | Tshape (shape_kind, shape_fields) ->
       let strip_field { sft_optional; sft_ty } =
         let sft_ty = strip_ty sft_ty in
         { sft_optional; sft_ty }
       in
       let shape_fields = Nast.ShapeMap.map strip_field shape_fields in
-      Tshape (shape_fields_known, shape_fields)
+      Tshape (shape_kind, shape_fields)
   in
   (reason, ty)
 
@@ -156,7 +155,7 @@ let handler = object
 
   method! at_expr env ((p, ty), _) =
     try
-      let ty = Tast_expand.expand_ty env ty in
+      let ty = Tast_expand.expand_ty env ~pos:p ty in
       let serialized_ty = Tast_env.ty_to_json env ty in
       let deserialized_ty = Tast_env.json_to_locl_ty serialized_ty in
       match deserialized_ty with

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function bar(bool $k) {
   $x = null;
@@ -7,3 +7,4 @@ function bar(bool $k) {
     if ($k) return $x;
   }
 }
+<<__EntryPoint>> function main(): void {}

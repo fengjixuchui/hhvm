@@ -10,22 +10,23 @@
 open Hh_core
 
 open Delta
-open Tast_expand
 open Typing_defs
-open ETast
+open Aast
 
+module ETast = Tast
+module Nast = Aast
 module C = Typing_continuations
-module Cont = Typing_lenv_cont
 module Env = Typing_env
 module Phase = Typing_phase
+module Partial = Partial_provider
 
-(** This happens, for example, when there are unsafe blocks, or gotos *)
+(** This happens, for example, when there are gotos *)
 exception Cant_check
 exception Not_implemented
 
 let expect_ty_equal env (pos, ty:Pos.t * locl ty) (expected_ty:locl ty_) =
   let expected_ty = (Reason.none, expected_ty) in
-  if not @@ ty_equal ~normalize_unresolved:true ty expected_ty then
+  if not @@ ty_equal ~normalize_lists:true ty expected_ty then
     let actual_ty = Typing_print.debug env ty in
     let expected_ty = Typing_print.debug env expected_ty in
     Errors.unexpected_ty_in_tast pos ~actual_ty ~expected_ty
@@ -47,7 +48,6 @@ let refine ((_p, (_r, cond_ty)), cond_expr) _cond_is_true gamma =
       _,
       _) ->
     raise Not_implemented
-  | InstanceOf _
   | Is _
   | As _
   | Binop _
@@ -79,7 +79,7 @@ let check_assign (_lty, lvalue) ty gamma =
 let check_expr env (expr:ETast.expr) (gamma:gamma) : gamma =
   let expect_ty_equal = expect_ty_equal env in
   let expr_checker = object (self)
-    inherit [_] ETast.iter as super
+    inherit [_] Aast.iter as super
 
     val mutable gamma = gamma
 
@@ -96,7 +96,7 @@ let check_expr env (expr:ETast.expr) (gamma:gamma) : gamma =
       | String _ ->
         expect_ty_equal ty (Tprim Nast.Tstring)
       | Lvar (_, lid) ->
-        let expected_ty = match lookup lid gamma with
+        let expected_ty = match lookup lid (gamma.Typing_per_cont_env.local_types) with
         | None -> Tany
         | Some (_p, (_r, ty)) -> ty
         in
@@ -105,21 +105,22 @@ let check_expr env (expr:ETast.expr) (gamma:gamma) : gamma =
 
     method! on_Binop env bop expr1 (ty2, _ as expr2) =
       match bop with
-      | Ast.Eq None ->
+      | Ast_defs.Eq None ->
         let gamma_, updates = check_assign expr1 ty2 gamma in
         gamma <- gamma_;
         self#on_expr env expr2;
         gamma <- update_gamma gamma updates
-      | Ast.Eq _ -> raise Not_implemented
-      | Ast.Ampamp | Ast.Barbar ->
+      | Ast_defs.Eq _ -> raise Not_implemented
+      | Ast_defs.Ampamp | Ast_defs.Barbar ->
         self#on_expr env expr1;
         let gamma_ = gamma in
-        gamma <- refine expr1 (bop = Ast.Ampamp) gamma;
+        gamma <- refine expr1 (bop = Ast_defs.Ampamp) gamma;
         self#on_expr env expr2;
         gamma <- gamma_
       | _ -> (* TODO *) super#on_Binop env bop expr1 expr2
 
     method! on_Efun _env _fun _id_list = raise Not_implemented
+    method! on_Lfun _env _fun _id_list = raise Not_implemented
 
     method! on_Class_const env class_id const_name =
       match class_id, const_name with
@@ -134,14 +135,14 @@ let check_expr env (expr:ETast.expr) (gamma:gamma) : gamma =
 
     method! on_Callconv _env param_kind _expr =
       match param_kind with
-      | Ast.Pinout -> raise Not_implemented
+      | Ast_defs.Pinout -> raise Not_implemented
   end in
   expr_checker#on_expr env expr;
   expr_checker#gamma ()
 
 let rec check_stmt env (stmt:ETast.stmt) (gamma:gamma) : delta =
   let check_expr = check_expr env in
-  match stmt with
+  match snd stmt with
   | Noop ->
     empty_delta_with_next_cont gamma
   | Expr expr ->
@@ -149,14 +150,20 @@ let rec check_stmt env (stmt:ETast.stmt) (gamma:gamma) : delta =
     empty_delta_with_next_cont gamma
   | Fallthrough ->
     empty_delta_with_cont C.Fallthrough gamma
-  | Break _ ->
+  | Break ->
     empty_delta_with_cont C.Break gamma
-  | Continue _ ->
+  (* TempBreak is caught as a naming error in naming.ml *)
+  | TempBreak _ ->
+    empty_delta_with_cont C.Break gamma
+  | Continue ->
     empty_delta_with_cont C.Continue gamma
-  | Throw (_is_terminal, expr) ->
+  (* TempContinue is caught as a naming error in naming.ml *)
+  | TempContinue _ ->
+    empty_delta_with_cont C.Continue gamma
+  | Throw expr ->
     let gamma = check_expr expr gamma in
     empty_delta_with_cont C.Catch gamma
-  | Return (_, expropt) ->
+  | Return expropt ->
     let gamma = match expropt with
     | None -> gamma
     | Some expr ->
@@ -179,16 +186,12 @@ let rec check_stmt env (stmt:ETast.stmt) (gamma:gamma) : delta =
   | Using _
   | Def_inline _
   | Let _
-  | Static_var _
-  | Global_var _
   | Awaitall _ ->
     raise Not_implemented
   | Goto _
   | GotoLabel _
-  | Unsafe_block _
   | Block _
-  | Markup _
-  | Declare _ ->
+  | Markup _ ->
     raise Cant_check
 
 
@@ -208,7 +211,7 @@ and check_block env (block:ETast.block) gamma =
   go block gamma (empty_delta_with_next_cont gamma)
 
 let check_func_body env (body:ETast.func_body) gamma =
-  if body.fb_annotation = Tast.Annotations.FuncBodyAnnotation.HasUnsafeBlocks
+  if body.fb_annotation = Tast.HasUnsafeBlocks
   then raise Cant_check
   else
     let _ = check_block env body.fb_ast gamma in
@@ -236,7 +239,7 @@ let gamma_from_params env (params:ETast.fun_param list) =
   List.fold ~init:empty_gamma ~f:add_param_to_gamma params
 
 let check_fun env (f:ETast.fun_def) =
-  if not (FileInfo.is_strict f.f_mode) then () else
+  if not (Partial.should_check_error f.f_mode 4291) then () else
   let gamma = gamma_from_params env f.f_params in
   if f.f_tparams <> []
     || f.f_where_constraints <> []

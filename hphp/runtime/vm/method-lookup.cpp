@@ -18,6 +18,7 @@
 
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/class.h"
+#include "hphp/runtime/vm/named-entity.h"
 
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/string-data.h"
@@ -28,9 +29,35 @@
 
 namespace HPHP {
 
-const StaticString s___construct("__construct");
-const StaticString s___call("__call");
-const StaticString s___callStatic("__callStatic");
+namespace {
+
+/*
+ * Looks for a Func named methodName in any of the interfaces cls implements,
+ * including cls if it is an interface. Returns nullptr if none was found,
+ * or if its interface's vtableSlot is kInvalidSlot.
+ */
+const Func* lookupIfaceMethod(const Class* cls, const StringData* methodName) {
+
+  auto checkOneInterface = [methodName](const Class* iface) -> const Func* {
+    if (iface->preClass()->ifaceVtableSlot() == kInvalidSlot) return nullptr;
+
+    const Func* func = iface->lookupMethod(methodName);
+    always_assert(!func || func->cls() == iface);
+    return func;
+  };
+
+  if (isInterface(cls)) {
+    if (auto const func = checkOneInterface(cls)) return func;
+  }
+
+  for (auto pface : cls->allInterfaces().range()) {
+    if (auto const func = checkOneInterface(pface)) return func;
+  }
+
+  return nullptr;
+}
+
+} // namespace
 
 // Look up the method specified by methodName from the class specified by cls
 // and enforce accessibility. Accessibility checks depend on the relationship
@@ -69,13 +96,7 @@ const Func* lookupMethodCtx(const Class* cls,
       methodName = stripTypeFromReifiedName(methodName);
     }
     method = cls->lookupMethod(methodName);
-    while (!method) {
-      if (UNLIKELY(methodName->isame(s___construct.get()))) {
-        // We were looking up __construct and failed to find it. Fall back
-        // to old-style constructor: same as class name.
-        method = cls->getCtor();
-        if (!Func::isSpecial(method->name())) break;
-      }
+    if (!method) {
       // We didn't find any methods with the specified name in cls's method
       // table, handle the failure as appropriate.
       if (raise) {
@@ -195,6 +216,51 @@ LookupResult lookupObjMethod(const Func*& f,
   return LookupResult::MethodFoundWithThis;
 }
 
+ImmutableObjMethodLookup
+lookupImmutableObjMethod(const Class* cls, const StringData* name,
+                         const Func* ctxFunc, bool exactClass) {
+  auto constexpr notFound = ImmutableObjMethodLookup {
+    ImmutableObjMethodLookup::Type::NotFound,
+    nullptr
+  };
+  if (!cls) return notFound;
+  exactClass |= cls->attrs() & AttrNoOverride;
+
+  if (isInterface(cls)) {
+    if (auto const func = lookupIfaceMethod(cls, name)) {
+      return { ImmutableObjMethodLookup::Type::Interface, func };
+    }
+    return notFound;
+  }
+
+  const Func* func;
+  LookupResult res = lookupObjMethod(func, cls, name, ctxFunc->cls(), false);
+  if (res == LookupResult::MethodNotFound) {
+    if (exactClass) return notFound;
+    if (auto const func = lookupIfaceMethod(cls, name)) {
+      return { ImmutableObjMethodLookup::Type::Interface, func };
+    }
+    return notFound;
+  }
+
+  if (func->isAbstract() && exactClass) return notFound;
+
+  assertx(res == LookupResult::MethodFoundWithThis ||
+          res == LookupResult::MethodFoundNoThis ||
+          res == LookupResult::MagicCallFound);
+
+  if (res == LookupResult::MagicCallFound) {
+    if (exactClass) return { ImmutableObjMethodLookup::Type::MagicFunc, func };
+    return notFound;
+  }
+
+  if (exactClass || func->attrs() & AttrPrivate || func->isImmutableFrom(cls)) {
+    return { ImmutableObjMethodLookup::Type::Func, func };
+  }
+
+  return { ImmutableObjMethodLookup::Type::Class, func };
+}
+
 LookupResult lookupClsMethod(const Func*& f,
                              const Class* cls,
                              const StringData* methodName,
@@ -207,18 +273,11 @@ LookupResult lookupClsMethod(const Func*& f,
       f = obj->getVMClass()->lookupMethod(s___call.get());
     }
     if (!f) {
-      f = cls->lookupMethod(s___callStatic.get());
-      if (!f) {
-        if (raise) {
-          // Throw a fatal error
-          lookupMethodCtx(cls, methodName, ctx, CallType::ClsMethod, true);
-        }
-        return LookupResult::MethodNotFound;
+      if (raise) {
+        // Throw a fatal error
+        lookupMethodCtx(cls, methodName, ctx, CallType::ClsMethod, true);
       }
-      f->validate();
-      assertx(f);
-      assertx(f->attrs() & AttrStatic);
-      return LookupResult::MagicCallStaticFound;
+      return LookupResult::MethodNotFound;
     }
     assertx(f);
     assertx(obj);
@@ -231,6 +290,21 @@ LookupResult lookupClsMethod(const Func*& f,
     return LookupResult::MethodFoundWithThis;
   }
   return LookupResult::MethodFoundNoThis;
+}
+
+const Func* lookupImmutableClsMethod(const Class* cls, const StringData* name,
+                                     const Func* ctxFunc, bool exactClass) {
+  if (!cls) return nullptr;
+  if (cls->attrs() & AttrInterface) return nullptr;
+  auto ctx = ctxFunc->cls();
+  const Func* func;
+  LookupResult res = lookupClsMethod(func, cls, name, nullptr, ctx, false);
+  if (res == LookupResult::MethodNotFound) return nullptr;
+  if (func->isAbstract() && exactClass) return nullptr;
+
+  assertx(res == LookupResult::MethodFoundWithThis ||
+          res == LookupResult::MethodFoundNoThis);
+  return func;
 }
 
 LookupResult lookupCtorMethod(const Func*& f,
@@ -248,6 +322,68 @@ LookupResult lookupCtorMethod(const Func*& f,
     }
   }
   return LookupResult::MethodFoundWithThis;
+}
+
+const Func* lookupImmutableCtor(const Class* cls, const Class* ctx) {
+  if (!cls) return nullptr;
+
+  auto const func = cls->getCtor();
+  if (func && !(func->attrs() & AttrPublic)) {
+    auto fcls = func->cls();
+    if (fcls != ctx) {
+      if (!ctx) return nullptr;
+      if ((func->attrs() & AttrPrivate) ||
+          !(ctx->classof(fcls) || fcls->classof(ctx))) {
+        return nullptr;
+      }
+    }
+  }
+
+  return func;
+}
+
+ImmutableFuncLookup lookupImmutableFunc(const Unit* unit,
+                                        const StringData* name) {
+  // Trust nothing if we can rename functions
+  if (RuntimeOption::EvalJitEnableRenameFunction) return {nullptr, true};
+
+  auto const ne = NamedEntity::get(name);
+  if (auto const f = ne->uniqueFunc()) {
+    // We have an unique function. However, it may be conditionally defined
+    // (!f->top()) or interceptable, which means we can't use it directly.
+    if (!f->top() || f->isInterceptable()) return {nullptr, true};
+    // We can use this function. If its persistent (which means its unit's
+    // pseudo-main is trivial), its safe to use unconditionally. If its defined
+    // in the same unit as the caller, its also safe to use unconditionally. By
+    // virtue of the fact that we're already in the unit, we know its already
+    // defined.
+    if (f->isPersistent() || f->unit() == unit) return {f, false};
+    // Use the function, but ensure its unit is loaded.
+    return {f, true};
+  }
+
+  // There's no unique function currently known for this name. However, if the
+  // current unit defines a single top-level function with this name, we can use
+  // it. Why? When this unit is loaded, either it successfully defined the
+  // function, in which case its the correct function, or it fataled, which
+  // means this code won't run anyways.
+
+  Func* found = nullptr;
+  for (auto& f : unit->funcs()) {
+    if (f->isPseudoMain()) continue;
+    if (!f->name()->isame(name)) continue;
+    if (found) {
+      // Function with duplicate name
+      found = nullptr;
+      break;
+    }
+    found = f;
+  }
+
+  if (found && found->top() && !found->isInterceptable()) {
+    return {found, false};
+  }
+  return {nullptr, true};
 }
 
 }

@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 echo "\n*** Testing array_keys() on range of values ***\n";
 $arr_range = array(
   2147483647 => 1,
@@ -17,4 +17,4 @@ var_dump(array_keys(array("a" => 1, "b" => 2, "c" => 3)));
 var_dump(array_keys(array()));  // null array
 
 echo "Done\n";
-?>
+}

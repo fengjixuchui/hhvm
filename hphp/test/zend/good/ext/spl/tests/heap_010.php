@@ -1,4 +1,4 @@
-<?php
+<?hh
 $obj = new SplMaxHeap();
 $obj->insert(1);
 $obj->insert(2);
@@ -12,4 +12,3 @@ $obj = new SplMaxHeap2();
 $obj->insert(1);
 $obj->insert(2);
 var_dump(count($obj));
-?>

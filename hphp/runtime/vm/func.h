@@ -33,6 +33,7 @@
 #include "hphp/runtime/vm/unit.h"
 
 #include "hphp/util/fixed-vector.h"
+#include "hphp/util/low-ptr.h"
 
 #include <atomic>
 #include <utility>
@@ -40,6 +41,8 @@
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
+
+extern const StaticString s___call;
 
 struct ActRec;
 struct Class;
@@ -86,12 +89,6 @@ enum class ParamMode : uint8_t {
  * Exception handler table entry.
  */
 struct EHEnt {
-  enum class Type : uint8_t {
-    Catch,
-    Fault
-  };
-
-  Type m_type;
   Offset m_base;
   Offset m_past;
   int m_iterId;
@@ -116,7 +113,6 @@ struct FPIEnt {
 };
 
 ///////////////////////////////////////////////////////////////////////////////
-
 /*
  * Metadata about a PHP function or method.
  *
@@ -193,6 +189,8 @@ struct Func final {
   // Creation and destruction.
 
   Func(Unit& unit, const StringData* name, Attr attrs);
+  Func(Unit& unit, const StringData* name, Attr attrs,
+    const StringData *methCallerCls, const StringData *methCallerMeth);
   ~Func();
 
   /*
@@ -219,9 +217,7 @@ struct Func final {
    * PreClasses.
    *
    * We also clone methods from traits when we transclude the trait in its user
-   * Classes in repo mode.  Finally, we clone inherited methods that define
-   * static locals in order to instantiate new static locals for the child
-   * class's copy of the method.
+   * Classes in repo mode.
    */
   Func* clone(Class* cls, const StringData* name = nullptr) const;
 
@@ -230,7 +226,7 @@ struct Func final {
    *
    * Used to change the Class scope of a closure method.
    */
-  void rescope(Class* ctx, Attr attrs);
+  void rescope(Class* ctx);
 
   /*
    * Free up a PreFunc for re-use as a cloned Func.
@@ -335,6 +331,7 @@ struct Func final {
    */
   Class* cls() const;
   PreClass* preClass() const;
+  bool hasBaseCls() const;
   Class* baseCls() const;
   Class* implCls() const;
 
@@ -370,6 +367,12 @@ struct Func final {
    */
   NamedEntity* getNamedEntity();
   const NamedEntity* getNamedEntity() const;
+
+  /**
+   * meth_caller
+   */
+  const StringData* methCallerClsName() const;
+  const StringData* methCallerMethName() const;
 
   /////////////////////////////////////////////////////////////////////////////
   // File info.                                                         [const]
@@ -569,11 +572,10 @@ struct Func final {
   // Locals, iterators, and stack.                                      [const]
 
   /*
-   * Number of locals, iterators, class-ref slots, or named locals.
+   * Number of locals, iterators, or named locals.
    */
   int numLocals() const;
   int numIterators() const;
-  int numClsRefSlots() const;
   Id numNamedLocals() const;
 
   /*
@@ -622,26 +624,6 @@ struct Func final {
   bool hasForeignThis() const;
 
   void setHasForeignThis(bool);
-
-  /////////////////////////////////////////////////////////////////////////////
-  // Static locals.                                                     [const]
-
-  /*
-   * Const reference to the static variable info table.
-   *
-   * SVInfo objects pulled from the table will also be const.
-   */
-  const SVInfoVec& staticVars() const;
-
-  /*
-   * Whether the function has any static locals.
-   */
-  bool hasStaticLocals() const;
-
-  /*
-   * Number of static locals declared in the function.
-   */
-  int numStaticLocals() const;
 
   /////////////////////////////////////////////////////////////////////////////
   // Definition context.                                                [const]
@@ -750,6 +732,12 @@ struct Func final {
    */
   static const StringData* genMemoizeImplName(const StringData*);
 
+  /*
+   * Given a meth_caller, return the class name or method name
+   */
+   static std::pair<const StringData*, const StringData*> getMethCallerNames(
+     const StringData* name);
+
   /////////////////////////////////////////////////////////////////////////////
   // Builtins.                                                          [const]
 
@@ -764,19 +752,6 @@ struct Func final {
    * @implies: isBuiltin()
    */
   bool isCPPBuiltin() const;
-
-  /*
-   * Can this function potentially read from the caller's frame?
-   *
-   * @implies: isBuiltin() && !isMethod()
-   */
-  bool readsCallerFrame() const;
-
-  /*
-   * This HNI method takes an additional "func_num_args()" value at the
-   * beginning of its signature (after Class* / ObjectData* for methods)
-   */
-  bool takesNumArgs() const;
 
   /*
    * The function returned by arFuncPtr() takes an ActRec*, unpacks it,
@@ -898,24 +873,9 @@ struct Func final {
   bool isGenerated() const;
 
   /*
-   * Is this function __destruct()?
-   */
-  bool isDestructor() const;
-
-  /*
    * Is this function __call()?
    */
   bool isMagicCallMethod() const;
-
-  /*
-   * Is this function __callStatic()?
-   */
-  bool isMagicCallStaticMethod() const;
-
-  /*
-   * Is this function any __call*()?
-   */
-  bool isMagic() const;
 
   /*
    * Is `name' the name of a special initializer function?
@@ -979,17 +939,16 @@ struct Func final {
   bool isSkipFrame() const;
 
   /*
+   * Whether this function's frame should be skipped with searching for a
+   * context for array provenance
+   */
+  bool isProvenanceSkipFrame() const;
+
+  /*
    * Whether the function can be constant-folded at callsites where it is
    * passed constant arguments.
    */
   bool isFoldable() const;
-
-  /*
-   * Whether the function's return is coerced to the correct type.  If so, it
-   * may also return null or bool if coercion fails, depending on the coercion
-   * kind.
-   */
-  bool isParamCoerceMode() const;
 
   /*
    * Supports async eager return optimization?
@@ -1002,16 +961,14 @@ struct Func final {
   bool isDynamicallyCallable() const;
 
   /*
-   * Has this function been determined to be hot by profiling?
+   * Is this a meth_caller func?
    */
-  bool isHot() const;
-  void setHot();
+  bool isMethCaller() const;
 
   /*
    * Indicates that a function does not make any explicit calls to other PHP
    * functions.  It may still call other user-level functions via re-entry
-   * (e.g., for destructors and autoload), and it may make calls to builtins
-   * using FCallBuiltin.
+   * (e.g., for autoload), and it may make calls to builtins using FCallBuiltin.
    */
   bool isPhpLeafFn() const;
 
@@ -1038,25 +995,12 @@ struct Func final {
   const EHEnt* findEH(Offset o) const;
 
   /*
-   * Find the first EHEnt that covers a given handler, or return null.
-   */
-  const EHEnt* findEHbyHandler(Offset o) const;
-
-  /*
    * Same as non-static findEH(), but takes as an operand any ehtab-like
    * container.
    */
   template<class Container>
   static const typename Container::value_type*
   findEH(const Container& ehtab, Offset o);
-
-  /*
-   * Same as non-static findEHbyHandler(), but takes as an operand any
-   * ehtab-like container.
-   */
-  template<class Container>
-  static const typename Container::value_type*
-  findEHbyHandler(const Container& ehtab, Offset o);
 
   /*
    * Locate FPI regions by offset.
@@ -1187,8 +1131,6 @@ struct Func final {
     return offsetof(Func, m_##f);       \
   }
   OFF(attrs)
-  OFF(cls)
-  OFF(fullName)
   OFF(name)
   OFF(funcBody)
   OFF(maxStackCells)
@@ -1198,7 +1140,16 @@ struct Func final {
   OFF(refBitVal)
   OFF(shared)
   OFF(unit)
+  OFF(methCallerMethName)
 #undef OFF
+
+  static constexpr ptrdiff_t clsOff() {
+    return offsetof(Func, m_u);
+  }
+
+  static constexpr ptrdiff_t methCallerClsNameOff() {
+    return offsetof(Func, m_u);
+  }
 
   static constexpr ptrdiff_t sharedBaseOff() {
     return offsetof(SharedData, m_base);
@@ -1250,7 +1201,6 @@ private:
     uint64_t* m_refBitPtr;
     ParamInfoVec m_params;
     NamedLocalsMap m_localNames;
-    SVInfoVec m_staticVars;
     EHEntVec m_ehtab;
     FPIEntVec m_fpitab;
 
@@ -1268,13 +1218,8 @@ private:
     bool m_isMemoizeWrapper : 1;
     bool m_isMemoizeWrapperLSB : 1;
     bool m_isPhpLeafFn : 1;
-    bool m_takesNumArgs : 1;
     bool m_hasReifiedGenerics : 1;
     bool m_isRxDisabled : 1;
-    // Needing more than 2 class ref slots basically doesn't happen, so just use
-    // two bits normally. If we actually need more than that, we'll store the
-    // count in ExtendedSharedData.
-    unsigned int m_numClsRefSlots : 2;
 
     // 16 bits of padding here in LOWPTR builds
 
@@ -1323,7 +1268,6 @@ private:
     ReifiedGenericsInfo m_reifiedGenericsInfo;
     Offset m_past;  // Only read if SharedData::m_pastDelta is kSmallDeltaLimit
     int m_line2;    // Only read if SharedData::m_line2 is kSmallDeltaLimit
-    Id m_actualNumClsRefSlots;
   };
 
   /*
@@ -1395,19 +1339,93 @@ private:
     std::atomic<Attr> m_attrs;
   };
 
+public:
+#ifdef USE_LOWPTR
+  using low_storage_t = uint32_t;
+#else
+  using low_storage_t = uintptr_t;
+#endif
+
+private:
+  /*
+   * Lowptr wrapper around std::atomic<Union> for Class* or StringData*
+   */
+  struct UnionWrapper {
+    union U {
+     low_storage_t m_cls;
+     low_storage_t m_methCallerClsName;
+    };
+    std::atomic<U> m_u;
+
+    // constructors
+    explicit UnionWrapper(Class *cls)
+      : m_u([](Class *cls){
+        U u;
+        u.m_cls = to_low(cls);
+        return u; }(cls)) {}
+    explicit UnionWrapper(const StringData *name)
+      : m_u([](const StringData *n){
+        U u;
+        u.m_methCallerClsName = to_low(n, kMethCallerBit);
+        return u; }(name)) {}
+    /* implicit */ UnionWrapper(std::nullptr_t /*px*/)
+      : m_u([](){
+        U u;
+        u.m_cls = 0;
+        return u; }()) {}
+    UnionWrapper(const UnionWrapper& r) :
+      m_u(r.m_u.load()) {
+    }
+
+    // Assignments
+    UnionWrapper& operator=(UnionWrapper r) {
+      m_u.store(r.m_u, std::memory_order_relaxed);
+      return *this;
+    }
+
+    // setter & getter
+    void setCls(Class *cls) {
+      U u;
+      u.m_cls = to_low(cls);
+      m_u.store(u, std::memory_order_relaxed);
+    }
+    Class* cls() const {
+      auto cls = m_u.load(std::memory_order_relaxed).m_cls;
+      assertx(!(cls & kMethCallerBit));
+      return reinterpret_cast<Class*>(cls);
+    }
+    StringData* name() const {
+     auto n = m_u.load(std::memory_order_relaxed).m_methCallerClsName;
+     assertx(n & kMethCallerBit);
+     return reinterpret_cast<StringData*>(n - kMethCallerBit);
+    }
+  };
+
+  template <class T>
+  static Func::low_storage_t to_low(T* px, Func::low_storage_t bit = 0) {
+    Func::low_storage_t ones = ~0;
+    auto ptr = reinterpret_cast<uintptr_t>(px) | bit;
+    always_assert((ptr & ones) == ptr);
+    return (Func::low_storage_t)(ptr);
+  }
+
   /////////////////////////////////////////////////////////////////////////////
   // Constants.
 
 private:
+  static constexpr int argToQword(int32_t arg) {
+    return static_cast<uint32_t>(arg) / kBitsPerQword - 1;
+  }
   static constexpr int kBitsPerQword = 64;
-  static const StringData* s___call;
-  static const StringData* s___callStatic;
   static constexpr int kMagic = 0xba5eba11;
+  static constexpr intptr_t kNeedsFullName = 0x1;
 
 public:
   static std::atomic<bool>     s_treadmill;
   static std::atomic<uint32_t> s_totalClonedClosures;
 
+  // To conserve space, we use unions for pairs of mutually exclusive fields
+  static auto constexpr kMethCallerBit = 0x1;  // set for m_methCaller
   /////////////////////////////////////////////////////////////////////////////
   // Data members.
   //
@@ -1422,14 +1440,22 @@ private:
   AtomicLowPtr<uint8_t> m_funcBody;
   mutable rds::Link<LowPtr<Func>, rds::Mode::NonLocal> m_cachedFunc;
   FuncId m_funcId{InvalidFuncId};
-  LowStringPtr m_fullName{nullptr};
+  mutable AtomicLowPtr<const StringData> m_fullName{nullptr};
   LowStringPtr m_name{nullptr};
-  // The first Class in the inheritance hierarchy that declared this method.
-  // Note that this may be an abstract class that did not provide an
-  // implementation.
-  LowPtr<Class> m_baseCls{nullptr};
-  // The Class that provided this method implementation.
-  AtomicLowPtr<Class> m_cls{nullptr};
+
+  union {
+    // The first Class in the inheritance hierarchy that declared this method.
+    // Note that this may be an abstract class that did not provide an
+    // implementation.
+    low_storage_t m_baseCls{0};
+    // m_methCallerMethName can be accessed by meth_caller() only
+    low_storage_t m_methCallerMethName;
+  };
+
+  // m_u is used to represent
+  // the Class that provided this method implementation, or
+  // the class name provided by meth_caller()
+  UnionWrapper m_u{nullptr};
   union {
     Slot m_methodSlot{0};
     LowPtr<const NamedEntity>::storage_type m_namedEntity;
@@ -1441,7 +1467,6 @@ private:
   bool m_isPreFunc : 1;
   bool m_hasPrivateAncestor : 1;
   bool m_shouldSampleJit : 1;
-  bool m_hot : 1;
   bool m_serialized : 1;
   bool m_hasForeignThis : 1;
   int m_maxStackCells{0};
@@ -1498,27 +1523,6 @@ struct PrologueID {
 };
 
 ///////////////////////////////////////////////////////////////////////////////
-
-/*
- * Whether dynamic calls to builtin functions that touch the caller's frame are
- * forbidden.
- */
-bool disallowDynamicVarEnvFuncs();
-
-/*
- * Could the function write or read to the locals in the environment of
- * its caller?
- *
- * This occurs, e.g., if `func' is extract().
- */
-bool funcReadsLocals(const Func*);
-
-/*
- * Could the function `callee` attempt to read the caller frame?
- *
- * This occurs, e.g., if `func' is is_callable().
- */
-bool funcNeedsCallerFrame(const Func*);
 
 /*
  * Log meta-information about func. Records attributes, number of locals,

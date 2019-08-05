@@ -1,11 +1,11 @@
-<?php
+<?hh
 
 /* Prototype  : string rtrim  ( string $str  [, string $charlist  ] )
  * Description: Strip whitespace (or other characters) from the end of a string.
  * Source code: ext/standard/string.c
 */
 
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing rtrim() : error conditions ***\n";
 
 echo "\n-- Testing rtrim() function with no arguments --\n";
@@ -23,5 +23,5 @@ var_dump(rtrim($hello, "a.."));
 var_dump(rtrim($hello, "z..a"));
 var_dump(rtrim($hello, "a..b..c"));
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $int_numbers = array( 0, 1, -1, 2.7, -2.7, 23333333, -23333333, "1234" );
 
 /* creating dumping file */
@@ -20,5 +20,4 @@ print_r(file_get_contents($data_file));
 echo "\nDone";
 
 unlink($data_file);
-
-?>
+}

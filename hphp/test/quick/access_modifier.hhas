@@ -1,3 +1,4 @@
+.hh_file 1;
 #tests that fields and methods with != 1 access modifier fail verification
 
 .main {
@@ -5,21 +6,28 @@
   DefCls 0
   NewObjD "A"
   Dup
-  FPushCtor 1
+  NullUninit
+  NullUninit
   String "foo"
-  FCall <> 1 1 "" - "" ""
+  FCallCtor <LockWhileUnwinding> 1 1 "" - ""
   PopC
+  LockObj
   SetL $x
   PopC
   CGetL $x
-  FPushObjMethodD 1 "set" NullThrows
+  NullUninit
+  NullUninit
   String "bar"
-  FCall <> 1 1 "" - "" ""
+  FCallObjMethodD <> 1 1 "" - "" NullThrows "set"
   PopC
-  FPushFuncD 1 "var_dump"
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $x
-  FPushObjMethodD 0 "get" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "get"
+  FPushFuncD 1 "var_dump"
   FCall <> 1 1 "" - "" ""
   PopC
   Int 1

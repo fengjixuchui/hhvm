@@ -16,9 +16,25 @@ type load_state_approach =
   (* Use the supplied saved state target to skip lookup in XDB. *)
   | Load_state_natively_with_target of ServerMonitorUtils.target_saved_state
 
+type remote_init = {
+  worker_key: string;
+  check_id: string;
+}
+
+type init_approach =
+  | Full_init
+  | Parse_only_init
+  | Saved_state_init of load_state_approach
+  | Remote_init of remote_init
+  | Write_symbol_info
+
 (* Saves the state that is used by init below and returns the number of
   edges added to the saved state dependency table. *)
-val save_state: ServerEnv.genv -> ServerEnv.env -> string -> int option
+val save_state:
+  ServerEnv.genv ->
+  ServerEnv.env ->
+  string ->
+  SaveStateServiceTypes.save_state_result option
 
 type init_result =
   (** Loaded a saved saved state of this distance. Note: for older load scripts
@@ -32,5 +48,5 @@ type init_result =
 (* will parse, name, typecheck, the next set of files
  * and refresh the environment and update the many shared heaps
  *)
-val init: ?load_state_approach:load_state_approach -> ServerEnv.genv
+val init: init_approach:init_approach -> ServerEnv.genv -> ServerEnv.env
   -> ServerEnv.env * init_result (* If the script failed, the error message *)

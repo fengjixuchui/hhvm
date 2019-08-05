@@ -1,8 +1,8 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $strings = array("foo = bar", "bar = foo");
 foreach( $strings as $string )
 {
-	sscanf( $string, "%s = %[^[]]", &$var, &$val );
-	echo "$var = $val\n";
+    list($var, $val) = sscanf( $string, "%s = %[^[]]");
+    echo "$var = $val\n";
 }
-?>
+}

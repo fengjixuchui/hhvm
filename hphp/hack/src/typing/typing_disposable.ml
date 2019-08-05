@@ -14,7 +14,7 @@ open Typing_defs
 
 module Env = Typing_env
 module MakeType = Typing_make_type
-module Cls = Typing_classes_heap
+module Cls = Decl_provider.Class
 
 let is_disposable_visitor env =
   object(this)
@@ -46,11 +46,11 @@ let is_disposable_type env ty =
 
 let enforce_is_disposable env hint =
   match hint with
-    | (_, Nast.Happly ((p, c), _)) ->
-      begin match Decl_env.get_class_dep env.Env.decl_env c with
+    | (_, Aast.Happly ((p, c), _)) ->
+      begin match Env.get_class_dep env c with
       | None -> ()
       | Some c ->
-        if not c.Decl_defs.dc_is_disposable
+        if not (Cls.is_disposable c)
         then Errors.must_extend_disposable p
       end
     | _ -> ()
@@ -64,4 +64,4 @@ let enforce_is_disposable_type env has_await pos ty =
     then SN.Classes.cIAsyncDisposable
     else SN.Classes.cIDisposable in
   let disposable_ty = MakeType.class_type (Reason.Rusing pos) class_name [] in
-  Typing_ops.sub_type pos Reason.URusing env ty disposable_ty
+  Typing_ops.sub_type pos Reason.URusing env ty disposable_ty Errors.unify_error

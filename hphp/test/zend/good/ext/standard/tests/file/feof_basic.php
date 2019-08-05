@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto bool feof(resource fp)
  * Description: Test for end-of-file on a file pointer 
  * Source code: ext/standard/file.c
  * Alias to functions: gzeof
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing feof() : basic functionality ***\n";
 $tmpFile1 = __FILE__.".tmp1";
 $h = fopen($tmpFile1, 'wb');
@@ -64,4 +64,4 @@ unlink($tmpFile1);
 unlink($tmpFile2);
 
 echo "Done";
-?>
+}

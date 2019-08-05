@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int strncmp ( string $str1, string $str2, int $len );
  * Description: Binary safe case-sensitive string comparison of the first n characters
  * Source code: Zend/zend_builtin_functions.c
@@ -6,6 +6,13 @@
 
 /* Test strncmp() function with the length as all types, and giving the same strings for 'str1' and 'str2' */
 
+/* declaring a class */
+class sample  {
+  public function __toString() {
+  return "object";
+  }
+}
+<<__EntryPoint>> function main(): void {
 echo "*** Test strncmp() function: by supplying all types for 'len' ***\n";
 
 /* definition of required variables */
@@ -18,13 +25,6 @@ unset($unset_var);
 
 /* get resource handle */
 $file_handle = fopen(__FILE__, "r");
-
-/* declaring a class */
-class sample  {
-  public function __toString() {
-  return "object";
-  }
-}
 
 
 /* array with different values */
@@ -92,4 +92,4 @@ for($index = 0; $index < count($lengths); $index ++) {
 fclose($file_handle);
 
 echo "*** Done ***\n";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 //bogus
 var_dump(date_default_timezone_set('AAA'));
@@ -11,4 +11,3 @@ var_dump(date_default_timezone_set("Zulu"));
 
 echo "done\n";
 
-?>

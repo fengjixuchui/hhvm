@@ -43,6 +43,11 @@ namespace HPHP { namespace jit { namespace irlower {
 TRACE_SET_MOD(irlower);
 
 ///////////////////////////////////////////////////////////////////////////////
+void cgLdRecDesc(IRLS& env, const IRInstruction* inst) {
+  auto dst = dstLoc(env, inst, 0).reg();
+  auto val = srcLoc(env, inst, 0).reg();
+  emitLdRecDesc(vmain(env), val, dst);
+}
 
 void cgLdObjClass(IRLS& env, const IRInstruction* inst) {
   auto dst = dstLoc(env, inst, 0).reg();
@@ -98,11 +103,25 @@ void cgConstructInstance(IRLS& env, const IRInstruction* inst) {
   auto const cls = inst->extra<ConstructInstance>()->cls;
 
   auto const args = argGroup(env, inst).immPtr(cls);
-  cgCallHelper(vmain(env), env, CallSpec::direct(cls->instanceCtor().get()),
+  cgCallHelper(vmain(env), env,
+               CallSpec::direct(cls->instanceCtor<true>().get()),
                callDest(dst), SyncOptions::Sync, args);
 }
 
+void cgConstructClosure(IRLS& env, const IRInstruction* inst) {
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto const cls = inst->extra<ConstructClosure>()->cls;
+
+  auto const args = argGroup(env, inst).immPtr(cls);
+  cgCallHelper(vmain(env), env,
+               CallSpec::direct(RuntimeOption::RepoAuthoritative
+                 ? createClosureRepoAuth : createClosure),
+               callDest(dst), SyncOptions::None, args);
+}
+
 IMPL_OPCODE_CALL(Clone)
+
+IMPL_OPCODE_CALL(FuncCred);
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -192,6 +211,13 @@ void cgInitObjProps(IRLS& env, const IRInstruction* inst) {
       }
     }
   }
+}
+
+void cgLockObj(IRLS& env, const IRInstruction* inst) {
+  auto const obj = srcLoc(env, inst, 0).reg();
+  auto& v = vmain(env);
+  auto const mask = ~static_cast<int8_t>(ObjectData::IsBeingConstructed);
+  v << andbim{mask, obj[HeaderAuxOffset], v.makeReg()};
 }
 
 ///////////////////////////////////////////////////////////////////////////////

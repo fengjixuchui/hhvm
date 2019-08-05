@@ -100,10 +100,6 @@ SSATmp* emitLdARReifiedGenericsSafe(IRGS& env) {
   );
 }
 
-const StaticString s_reified_generics_not_given(
-  Strings::REIFIED_GENERICS_NOT_GIVEN
-);
-
 // Check whether HasReifiedGenerics is set on the ActRec
 void emitARHasReifiedGenericsCheck(IRGS& env) {
   auto const func = curFunc(env);
@@ -126,9 +122,13 @@ void emitARHasReifiedGenericsCheck(IRGS& env) {
     },
     [&] {
       if (!func->hasReifiedGenerics()) return;
-      // null out VarEnv before raising error
       hint(env, Block::Hint::Unlikely);
-      gen(env, RaiseError, cns(env, s_reified_generics_not_given.get()));
+      auto const msg = folly::sformat(
+        "Cannot call the reified function '{}' without the reified generics",
+        func->fullName());
+      updateMarker(env);
+      env.irb->exceptionStackBoundary();
+      gen(env, RaiseError, cns(env, makeStaticString(msg)));
     }
   );
   // Now that we know that first local is not Tuninit,
@@ -143,19 +143,31 @@ void emitARHasReifiedGenericsCheck(IRGS& env) {
 }
 
 // Checks whether the reified generics matches the one we expect
-void emitCorrectNumOfReifiedGenericsCheck(IRGS& env) {
+void emitCorrectNumOfReifiedGenericsCheck(
+  IRGS& env, SSATmp* doesReifiedGenericsMatch
+) {
   auto const func = curFunc(env);
   if (!func->hasReifiedGenerics()) return;
-  // First local contains the reified generics
-  auto const reified_generics =
-    gen(
-      env,
-      LdLoc,
-      RuntimeOption::EvalHackArrDVArrs ? TVec : TArr,
-      LocalId{func->numParams()},
-      fp(env)
-    );
-  gen(env, CheckFunReifiedGenericMismatch, FuncData{func}, reified_generics);
+  auto const finish = [&] {
+    // First local contains the reified generics
+    auto const reified_generics =
+      gen(
+        env,
+        LdLoc,
+        RuntimeOption::EvalHackArrDVArrs ? TVec : TArr,
+        LocalId{func->numParams()},
+        fp(env)
+      );
+    updateMarker(env);
+    env.irb->exceptionStackBoundary();
+    gen(env, CheckFunReifiedGenericMismatch, FuncData{func}, reified_generics);
+  };
+  if (!doesReifiedGenericsMatch) return finish();
+  ifThen(
+    env,
+    [&] (Block* taken) { gen(env, JmpZero, taken, doesReifiedGenericsMatch); },
+    [&] { finish(); }
+  );
 }
 
 /*
@@ -171,19 +183,24 @@ void init_params(IRGS& env, const Func* func, uint32_t argc) {
   constexpr auto kMaxParamsInitUnroll = 5;
 
   auto const nparams = func->numNonVariadicParams();
+  SSATmp* doesReifiedGenericsMatch = nullptr;
 
   if (func->hasReifiedGenerics()) {
     // Currently does not work with closures
     assertx(!func->isClosureBody());
     auto const reified_generics = emitLdARReifiedGenericsSafe(env);
-    gen(env, KillARReifiedGenerics, fp(env));
-    // $0ReifiedGenerics is the first local
-    gen(env, StLoc, LocalId{func->numParams()}, fp(env), reified_generics);
+    doesReifiedGenericsMatch =
+      gen(env, IsFunReifiedGenericsMatched, FuncData { func }, fp(env));
+    if (argc <= nparams) {
+      gen(env, KillARReifiedGenerics, fp(env));
+      // $0ReifiedGenerics is the first local
+      gen(env, StLoc, LocalId{func->numParams()}, fp(env), reified_generics);
+    }
   }
 
   if (argc < nparams) {
     // Too few arguments; set everything else to Uninit.
-    if (nparams - argc <= kMaxParamsInitUnroll || env.inlineLevel) {
+    if (nparams - argc <= kMaxParamsInitUnroll || isInlining(env)) {
       for (auto i = argc; i < nparams; ++i) {
         gen(env, StLoc, LocalId{i}, fp(env), cns(env, TUninit));
       }
@@ -199,11 +216,14 @@ void init_params(IRGS& env, const Func* func, uint32_t argc) {
         cns(env, staticEmptyVArray()));
   }
 
-  if (!env.inlineLevel) {
+  if (!isInlining(env)) {
     // Null out or initialize the frame's ExtraArgs.
     env.irb->exceptionStackBoundary();
     gen(env, InitExtraArgs, FuncEntryData{func, argc}, fp(env));
   }
+
+  emitARHasReifiedGenericsCheck(env);
+  emitCorrectNumOfReifiedGenericsCheck(env, doesReifiedGenericsMatch);
 }
 
 /*
@@ -252,13 +272,13 @@ void init_use_vars(IRGS& env, const Func* func, SSATmp* closure) {
 
   assertx(func->isClosureBody());
 
-  // Closure object properties are the use vars followed by the static locals
-  // (which are per-instance).
-  auto const nuse = cls->numDeclProperties() - func->numStaticLocals();
+  // Closure object properties are the use vars.
+  auto const nuse = cls->numDeclProperties();
   ptrdiff_t use_var_off = sizeof(ObjectData);
 
   for (auto i = 0; i < nuse; ++i, use_var_off += sizeof(Cell)) {
-    auto const ty = typeFromRAT(cls->declPropRepoAuthType(i), func->cls());
+    auto const ty =
+      typeFromRAT(cls->declPropRepoAuthType(i), func->cls()) & TCell;
     auto const addr = gen(
       env,
       LdPropAddr,
@@ -290,8 +310,7 @@ void init_locals(IRGS& env, const Func* func) {
   auto num_inited = func->numParams();
 
   if (func->isClosureBody()) {
-    auto const nuse = func->implCls()->numDeclProperties() -
-                      func->numStaticLocals();
+    auto const nuse = func->implCls()->numDeclProperties();
     num_inited += 1 + nuse;
   }
 
@@ -385,7 +404,7 @@ void emitPrologueEntry(IRGS& env, uint32_t argc) {
   auto const func = env.context.func;
 
   // Emit debug code.
-  if (Trace::moduleEnabled(Trace::ringbuffer) && !func->isMagic()) {
+  if (Trace::moduleEnabled(Trace::ringbuffer) && !func->isMagicCallMethod()) {
     auto msg = RBMsgData { Trace::RBTypeFuncPrologue, func->fullName() };
     gen(env, RBTraceMsg, msg);
   }
@@ -411,12 +430,7 @@ void emitPrologueBody(IRGS& env, uint32_t argc, TransID transID) {
   // Initialize params, locals, and---if we have a closure---the closure's
   // bound class context and use vars.
   emitPrologueLocals(env, argc, func, nullptr);
-  // "Kill" all the class-ref slots initially. This normally won't do anything
-  // (the class-ref slots should be unoccupied at this point), but in debugging
-  // builds it will write poison values to them.
-  for (uint32_t slot = 0; slot < func->numClsRefSlots(); ++slot) {
-    killClsRef(env, slot);
-  }
+
   warn_argument_arity(env, argc);
 
   // Check surprise flags in the same place as the interpreter: after setting
@@ -428,8 +442,6 @@ void emitPrologueBody(IRGS& env, uint32_t argc, TransID transID) {
     gen(env, CheckSurpriseFlagsEnter, FuncEntryData { func, argc }, fp(env));
   }
 
-  emitARHasReifiedGenericsCheck(env);
-  emitCorrectNumOfReifiedGenericsCheck(env);
   emitCalleeDynamicCallCheck(env);
   emitCallMCheck(env);
 
@@ -458,7 +470,7 @@ void emitPrologueBody(IRGS& env, uint32_t argc, TransID transID) {
 
 void emitMagicFuncPrologue(IRGS& env, uint32_t argc, TransID transID) {
   DEBUG_ONLY auto const func = env.context.func;
-  assertx(func->isMagic());
+  assertx(func->isMagicCallMethod());
   assertx(func->numParams() == 2);
   assertx(!func->hasVariadicCaptureParam());
 
@@ -466,8 +478,8 @@ void emitMagicFuncPrologue(IRGS& env, uint32_t argc, TransID transID) {
 
   emitPrologueEntry(env, argc);
 
-  // If someone just called __call() or __callStatic() directly, branch to a
-  // normal non-magic prologue.
+  // If someone just called __call() directly, branch to a normal non-magic
+  // prologue.
   ifThen(
     env,
     [&] (Block* taken) {
@@ -533,7 +545,7 @@ void emitPrologueLocals(IRGS& env, uint32_t argc,
 }
 
 void emitFuncPrologue(IRGS& env, uint32_t argc, TransID transID) {
-  if (env.context.func->isMagic()) {
+  if (env.context.func->isMagicCallMethod()) {
     return emitMagicFuncPrologue(env, argc, transID);
   }
   emitPrologueEntry(env, argc);
@@ -594,8 +606,7 @@ void emitFuncBodyDispatch(IRGS& env, const DVFuncletsVec& dvs) {
 void emitCalleeDynamicCallCheck(IRGS& env) {
   auto const func = curFunc(env);
 
-  if (!(RuntimeOption::EvalNoticeOnBuiltinDynamicCalls && func->isBuiltin()) &&
-      !func->readsCallerFrame()) {
+  if (!(RuntimeOption::EvalNoticeOnBuiltinDynamicCalls && func->isBuiltin())) {
     return;
   }
 
@@ -611,10 +622,6 @@ void emitCalleeDynamicCallCheck(IRGS& env) {
     },
     [&] {
       hint(env, Block::Hint::Unlikely);
-
-      if (func->readsCallerFrame()) {
-        gen(env, RaiseVarEnvDynCall, cns(env, func));
-      }
 
       std::string str;
       string_printf(

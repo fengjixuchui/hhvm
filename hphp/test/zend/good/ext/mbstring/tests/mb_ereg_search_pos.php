@@ -1,4 +1,4 @@
-<?php
+<?hh
 mb_regex_encoding('iso-8859-1');
 $test_str = 'Iñtërnâtiônàlizætiøn';
 
@@ -12,4 +12,3 @@ if(mb_ereg_search_init($test_str))
 else{
 	var_dump("false");
 }
-?>

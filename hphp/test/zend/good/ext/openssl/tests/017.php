@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $data = "Testing openssl_public_decrypt()";
 $privkey = "file://" . dirname(__FILE__) . "/private.key";
 $pubkey = "file://" . dirname(__FILE__) . "/public.key";
@@ -15,4 +15,4 @@ var_dump(openssl_private_decrypt($encrypted, &$output4, array($privkey)));
 var_dump($output4);
 var_dump(openssl_private_decrypt($encrypted, &$output5, array($privkey, "")));
 var_dump($output5);
-?>
+}

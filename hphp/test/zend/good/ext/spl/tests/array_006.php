@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 echo "==Normal==\n";
 
 $arr = array(0=>0, 1=>1, 2=>2);
@@ -14,6 +14,5 @@ foreach($obj as $ak=>$av) {
 	}
 }
 
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

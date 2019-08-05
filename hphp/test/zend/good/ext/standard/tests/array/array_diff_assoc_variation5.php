@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_diff_assoc(array $arr1, array $arr2 [, array ...])
  * Description: Returns the entries of arr1 that have values which are not present 
  * in any of the others arguments but do additional checks whether the keys are equal 
@@ -8,7 +8,7 @@
 /*
  * Test how array_diff_assoc compares integers, floats and string
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_diff_assoc() : usage variations ***\n";
 $arr_default_int = array(1, 2, 3, 'a');
 $arr_float = array(0 => 1.00, 1.00 => 2.00, 2.00 => 3.00, 'b');
@@ -43,4 +43,4 @@ echo "-- Result of comparing more than two arrays: --\n";
 var_dump(array_diff_assoc($arr_default_int, $arr_float, $arr_string, $arr_string_float));
 
 echo "Done";
-?>
+}

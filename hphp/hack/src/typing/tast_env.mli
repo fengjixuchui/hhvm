@@ -56,7 +56,11 @@ val get_self : env -> Tast.ty option
 val fresh_type : env -> Pos.t -> env * Tast.ty
 (** Return a type consisting of a fresh type variable *)
 
-val get_class : env -> Typing_heap.Classes.key -> Typing_heap.Classes.t option
+val open_tyvars : env -> Pos.t -> env
+val close_tyvars_and_solve : env -> Errors.typing_error_callback -> env
+val set_tyvar_variance : env -> Tast.ty -> env
+
+val get_class : env -> Decl_provider.class_key -> Decl_provider.class_decl option
 (** Return the info of the given class from the typing heap. *)
 
 val is_static : env -> bool
@@ -64,6 +68,9 @@ val is_static : env -> bool
 
 val is_strict : env -> bool
 (** Return {true} if the containing file was checked in strict mode. *)
+
+val get_mode : env -> FileInfo.mode
+(** Return the mode of the containing file *)
 
 val get_tcopt : env -> TypecheckerOptions.t
 (** Return the {!TypecheckerOptions.t} with which this TAST was checked. *)
@@ -103,19 +110,19 @@ val is_visible :
   env ->
   Typing_defs.visibility * bool ->
   Nast.class_id_ option ->
-  Typing_classes_heap.t ->
+  Decl_provider.class_decl ->
   bool
-(** Return {true} if the given {Typing_classes_heap.t} (referred to by the given
+(** Return {true} if the given {Decl_provider.class_decl} (referred to by the given
     {class_id_}, if provided) allows the current class (the one returned by
     {!get_self}) to access its members with the given {visibility}. *)
 
-val assert_nontrivial : Pos.t -> Ast.bop -> env -> Tast.ty -> Tast.ty -> unit
+val assert_nontrivial : Pos.t -> Ast_defs.bop -> env -> Tast.ty -> Tast.ty -> unit
 (** Assert that the types of values involved in a strict (non-)equality
     comparison are compatible; e.g., that the types are not statically
     known to be disjoint, in which case the comparison will always return
     true or false. *)
 
-val assert_nullable : Pos.t -> Ast.bop -> env -> Tast.ty -> unit
+val assert_nullable : Pos.t -> Ast_defs.bop -> env -> Tast.ty -> unit
 (** Assert that the type of a value involved in a strict (non-)equality
     comparsion to null is nullable (otherwise it is known to always
     return true or false). *)
@@ -123,6 +130,7 @@ val assert_nullable : Pos.t -> Ast.bop -> env -> Tast.ty -> unit
 val hint_to_ty : env -> Aast.hint -> Typing_defs.decl Typing_defs.ty
 (** Return the declaration-phase type the given hint represents. *)
 
+val localize : env -> Typing_defs.expand_env -> Typing_defs.decl Typing_defs.ty -> env * Tast.ty
 val localize_with_self : env -> Typing_defs.decl Typing_defs.ty -> env * Tast.ty
 (** Transforms a declaration phase type ({!Typing_defs.decl Typing_defs.ty})
     into a localized type ({!Typing_defs.locl Typing_defs.ty} = {!Tast.ty}).
@@ -137,7 +145,7 @@ val localize_with_self : env -> Typing_defs.decl Typing_defs.ty -> env * Tast.ty
 val localize_with_dty_validator:
   env ->
   Typing_defs.decl Typing_defs.ty ->
-  (Typing_defs.decl Typing_defs.ty -> unit) ->
+  (Typing_defs.expand_env -> Typing_defs.decl Typing_defs.ty -> unit) ->
   env * Tast.ty
 (** Identical to localize_with_self, but also takes a validator that is applied
     to every expanded decl type on the way to becoming a locl type. *)
@@ -145,7 +153,7 @@ val localize_with_dty_validator:
 val get_upper_bounds: env -> string -> Type_parameter_env.tparam_bounds
 (** Get the upper bounds of the type parameter with the given name. *)
 
-val get_reified: env -> string -> bool
+val get_reified: env -> string -> Aast.reify_kind
 (** Get the reification of the type parameter with the given name. *)
 
 val get_enforceable: env -> string -> bool
@@ -159,27 +167,27 @@ val is_fresh_generic_parameter: string -> bool
     as part of an `instanceof`, `is`, or `as` expression (instead of being
     explicitly declared in code by the user). *)
 
-val is_untyped: env -> Tast.ty -> bool
-(** Return {true} when the given type is {Tany}, {Tdynamic}, etc. See:
-    {Typing_utils.is_any} and {Typing_utils.is_dynamic}. *)
+val assert_subtype: Pos.t -> Typing_reason.ureason -> env -> Tast.ty -> Tast.ty ->
+  Errors.typing_error_callback -> env
+(** Assert that one type is a subtype of another, resolving unbound type
+    variables in both types (if any), with {!env} reflecting the new state of
+    these type variables. Produce an error if they cannot be subtypes. *)
 
-val subtype: env -> Tast.ty -> Tast.ty -> env * bool
-(** Return {true} when the first type can be considered a subtype of the second
-    type after resolving unbound type variables in both types (if any), and an
-    {!env} reflecting the new state of these type variables. *)
+val is_sub_type: env -> Tast.ty -> Tast.ty -> bool
+(** Return {true} when the first type is a subtype of the second type
+    regardless of the values of unbound type variables in both types (if any). *)
 
 val can_subtype: env -> Tast.ty -> Tast.ty -> bool
 (** Return {true} when the first type can be considered a subtype of the second
     type after resolving unbound type variables in both types (if any). *)
 
+val is_sub_type_for_union: env -> Tast.ty -> Tast.ty -> bool
+(** Return {true} when the first type is a subtype of the second type. There is
+    no type T such that for all T', T <: T' and T' <: T (which is the case for Tany
+    and Terr in `can_subtype`) *)
+
 val simplify_unions: env -> Tast.ty -> env * Tast.ty
 (** Simplify unions in a type. *)
-
-val is_stringish: ?allow_mixed:bool -> env -> Tast.ty -> bool
-(** Return {true} when the given type can be used in a context where string is
-    required after resolving unbound type variables in the type (if any).
-    If {allow_mixed} is {true}, then mixed, nonnull, and abstract types with no
-    known concrete supertypes are considered valid. *)
 
 val referenced_typeconsts :
   env -> Aast.hint -> Aast.sid list -> (string * string * Pos.t) list
@@ -189,6 +197,12 @@ val referenced_typeconsts :
 val set_static : env -> env
 (** Return an {!env} for which {!is_static} will return {true}.
     If you are using {!Tast_visitor}, you should have no need of this. *)
+
+val set_val_kind : env -> Typing_defs.val_kind -> env
+(** Return an {!env} for which {!val_kind} is set to the second argument. *)
+
+val get_val_kind : env -> Typing_defs.val_kind
+(** Returns the val_kind of the typing environment *)
 
 val set_inside_constructor : env -> env
 (** Returns an {!env} for which {!inside_constructor} is set to {true}.
@@ -230,7 +244,8 @@ val get_anonymous_lambda_types : env -> int -> Tast.ty list
 val typing_env_as_tast_env : Typing_env.env -> env
 val tast_env_as_typing_env : env -> Typing_env.env
 
-val can_coerce : env -> Tast.ty -> Tast.ty -> env option
+val can_coerce : Pos.t -> env -> Tast.ty ->
+  ?ty_expect_decl: Typing_defs.decl Typing_defs.ty -> Tast.ty -> Errors.typing_error_callback -> env option
 (** Return None when coercion cannot occur from the second arg to the third,
     otherwise return Some env where env is the first arg updated with coercion
     constraints. *)
@@ -238,10 +253,16 @@ val can_coerce : env -> Tast.ty -> Tast.ty -> env option
 val is_xhp_child : env -> Pos.t -> Tast.ty -> bool
 (** Verify that an XHP body expression is legal. *)
 
-val get_enum : env -> string -> Typing_classes_heap.t option
+val get_enum : env -> string -> Decl_provider.class_decl option
+val is_enum : env -> string -> bool
 val env_reactivity: env -> Typing_defs.reactivity
 val function_is_mutable: env -> Tast.type_param_mutability option
 val local_is_mutable: include_borrowed: bool -> env -> Local_id.t -> bool
 val get_env_mutability: env -> Typing_mutability_env.mutability_env
-val get_fun: env -> Typing_heap.Funs.key -> Typing_heap.Funs.t option
+val get_fun: env -> Decl_provider.fun_key -> Decl_provider.fun_decl option
 val set_env_reactive: env -> Typing_defs.reactivity -> env
+
+val set_allow_wildcards: env -> env
+val get_allow_wildcards: env -> bool
+
+val condition_type_matches: is_self:bool -> env -> Tast.ty -> Tast.ty -> bool

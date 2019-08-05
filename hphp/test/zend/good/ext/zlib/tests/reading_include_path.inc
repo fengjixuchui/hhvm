@@ -1,4 +1,4 @@
-<?php
+<?hh
 $thisTestDir = "zlibVariation.dir";
 mkdir($thisTestDir);
 chdir($thisTestDir);
@@ -24,4 +24,3 @@ foreach($newdirs as $newdir) {
 }
 mkdir($workingDir);
 chdir($workingDir);
-?>

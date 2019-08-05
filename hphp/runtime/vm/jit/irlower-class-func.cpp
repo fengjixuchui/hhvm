@@ -36,6 +36,7 @@
 #include "hphp/runtime/vm/jit/vasm-reg.h"
 
 #include "hphp/util/trace.h"
+#include "hphp/util/low-ptr.h"
 
 namespace HPHP { namespace jit { namespace irlower {
 
@@ -189,35 +190,38 @@ void cgLdFuncName(IRLS& env, const IRInstruction* inst) {
   auto const dst = dstLoc(env, inst, 0).reg();
   auto const func = srcLoc(env, inst, 0).reg();
   auto& v = vmain(env);
-
-  v << loadzlq{func[Func::nameOff()], dst};
+  emitLdLowPtr(v, func[Func::nameOff()], dst, sizeof(LowStringPtr));
 }
 
-void cgFuncSupportsAsyncEagerReturn(IRLS& env, const IRInstruction* inst) {
+void cgLdMethCallerName(IRLS& env, const IRInstruction* inst) {
+  static_assert(Func::kMethCallerBit == 1,
+                "Fix the decq if you change kMethCallerBit");
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto const func = srcLoc(env, inst, 0).reg();
+  auto const isCls = inst->extra<MethCallerData>()->isCls;
+  auto& v = vmain(env);
+  auto const off = isCls ?
+    Func::methCallerClsNameOff() : Func::methCallerMethNameOff();
+  auto const tmp = v.makeReg();
+  emitLdLowPtr(v, func[off], tmp, sizeof(Func::low_storage_t));
+  v << decq{tmp, dst, v.makeReg()};
+}
+
+void cgLdFuncCls(IRLS& env, const IRInstruction* inst) {
   auto const func = srcLoc(env, inst, 0).reg();
   auto const dst = dstLoc(env, inst, 0).reg();
   auto& v = vmain(env);
-
-  auto const sf = v.makeReg();
-  v << testlim{
-    static_cast<int32_t>(AttrSupportsAsyncEagerReturn),
-    func[Func::attrsOff()],
-    sf
-  };
-  v << setcc{CC_NZ, sf, dst};
+  emitLdLowPtr(v, func[Func::clsOff()], dst, sizeof(Func::low_storage_t));
 }
 
-void cgIsFuncDynCallable(IRLS& env, const IRInstruction* inst) {
+void cgFuncHasAttr(IRLS& env, const IRInstruction* inst) {
   auto const func = srcLoc(env, inst, 0).reg();
   auto const dst = dstLoc(env, inst, 0).reg();
-  auto& v = vmain(env);
+  auto const attr = inst->extra<AttrData>()->attr;
 
+  auto& v = vmain(env);
   auto const sf = v.makeReg();
-  v << testlim{
-    static_cast<int32_t>(AttrDynamicallyCallable),
-    func[Func::attrsOff()],
-    sf
-  };
+  v << testlim{attr, func[Func::attrsOff()], sf};
   v << setcc{CC_NZ, sf, dst};
 }
 
@@ -252,17 +256,31 @@ void cgLdFuncRxLevel(IRLS& env, const IRInstruction* inst) {
 ///////////////////////////////////////////////////////////////////////////////
 
 void cgLdClsFromClsMeth(IRLS& env, const IRInstruction* inst) {
-  auto const clsMeth = srcLoc(env, inst, 0).reg();
+  auto const clsMethDataRef = srcLoc(env, inst, 0).reg();
   auto const dst = dstLoc(env, inst, 0).reg();
-  emitLdLowPtr(
-    vmain(env), clsMeth[ClsMethData::clsOffset()], dst, sizeof(LowPtr<Class>));
+  auto& v = vmain(env);
+  if (use_lowptr) {
+#ifdef USE_LOWPTR
+    static_assert(ClsMethData::clsOffset() == 0, "Class offset must be 0");
+#endif
+    v << movzlq{clsMethDataRef, dst};
+  } else {
+    v << load{clsMethDataRef[ClsMethData::clsOffset()], dst};
+  }
 }
 
 void cgLdFuncFromClsMeth(IRLS& env, const IRInstruction* inst) {
-  auto const clsMeth = srcLoc(env, inst, 0).reg();
+  auto const clsMethDataRef = srcLoc(env, inst, 0).reg();
   auto const dst = dstLoc(env, inst, 0).reg();
-  emitLdLowPtr(
-    vmain(env), clsMeth[ClsMethData::funcOffset()], dst, sizeof(LowPtr<Func>));
+  auto& v = vmain(env);
+  if (use_lowptr) {
+#ifdef USE_LOWPTR
+    static_assert(ClsMethData::funcOffset() == 4, "Func offset must be 4");
+#endif
+    v << shrqi{32, clsMethDataRef, dst, v.makeReg()};
+  } else {
+    v << load{clsMethDataRef[ClsMethData::funcOffset()], dst};
+  }
 }
 
 void cgNewClsMeth(IRLS& env, const IRInstruction* inst) {

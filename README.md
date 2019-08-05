@@ -21,14 +21,14 @@ You can install a [prebuilt package](https://docs.hhvm.com/hhvm/installation/int
 
 ## Running
 
-You can run standalone programs just by passing them to hhvm: `hhvm my_script.php`.
+You can run standalone programs just by passing them to hhvm: `hhvm example.hack`.
 
 If you want to host a website:
 * Install your favorite webserver. [Proxygen](https://docs.hhvm.com/hhvm/basic-usage/proxygen) is built in to HHVM, fast and easy to deploy.
 * Install our [package](https://docs.hhvm.com/hhvm/installation/introduction#prebuilt-packages)
 * Start your webserver
 * Run `sudo /etc/init.d/hhvm start`
-* Visit your site at `http://.../index.php`
+* Visit your site at `http://.../main.hack`
 
 Our [getting started guide](https://docs.hhvm.com/hhvm/getting-started/getting-started) provides a slightly more detailed introduction as well as links to more information.
 
@@ -46,16 +46,9 @@ The [Hack typechecker](hphp/hack) is licensed under the MIT [License](hphp/hack/
 
 See [Reporting Crashes](https://github.com/facebook/hhvm/wiki/Reporting-Crashes) for helpful tips on how to report crashes in an actionable manner.
 
-## Reporting and Fixing Security Issues
+## Security
 
-Please do not open GitHub issues or pull requests - this makes the problem
-immediately visible to everyone, including malicious actors. Security issues in
-HHVM can be safely reported via HHVM's Whitehat Bug Bounty program:
-
-[https://www.facebook.com/whitehat](https://www.facebook.com/whitehat)
-
-Facebook's security team will triage your report and determine whether or not
-is it eligible for a bounty under our program.
+For information on reporting security vulnerabilities in HHVM, see [SECURITY.md](SECURITY.md).
 
 ## FAQ
 

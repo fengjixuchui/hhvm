@@ -1,4 +1,2 @@
 -vRuntime.Eval.HackArrCompatTypeHintNotices=1
--vEnableHipHopSyntax=1
 -vHackArrDVArrs=true
--vEval.EnablePHP=1

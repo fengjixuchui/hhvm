@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $arrObj = new ArrayObject();
 $arrObj->append('foo');
 $arrObj->append('bar');
@@ -9,4 +9,4 @@ $arr = array_unique($arrObj);
 var_dump($arr);
 
 echo "Done\n";
-?>
+}

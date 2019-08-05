@@ -1,8 +1,8 @@
-<?php
+<?hh
 /*
 * proto string preg_replace(mixed regex, mixed replace, mixed subject [, int limit [, count]])
-* Function is implemented in ext/pcre/php_pcre.c
-*/
+* Function is implemented in ext/pcre/php_pcre.c */
+<<__EntryPoint>> function main(): void {
 echo "*** Testing preg_replace() : error conditions ***\n";
 //Zero arguments
 echo "\n-- Testing preg_replace() function with zero arguments --\n";
@@ -20,5 +20,5 @@ echo "\n-- Testing preg_replace() function with less than expected no. of argume
 $regex = '/\w/';
 $replace = '1';
 try { var_dump(preg_replace($regex, $replace)); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
-echo "Done"
-?>
+echo "Done";
+}

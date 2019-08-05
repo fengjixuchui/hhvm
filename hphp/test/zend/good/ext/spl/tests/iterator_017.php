@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 echo "===EmptyIterator===\n";
 
 foreach(new LimitIterator(new EmptyIterator(), 0, 3) as $key => $val)
@@ -7,6 +7,5 @@ foreach(new LimitIterator(new EmptyIterator(), 0, 3) as $key => $val)
 	echo "$key=>$val\n";
 }
 
-?>
-===DONE===
-<?php exit(0);
+echo "===DONE===\n";
+}

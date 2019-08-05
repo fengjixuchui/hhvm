@@ -1,9 +1,9 @@
-<?php
+<?hh
 
 
 class someclass {
   static public function yo() {
-    return !empty($_ENV['hey']);
+    return $_ENV['hey'] ?? false;
   }
 }
 

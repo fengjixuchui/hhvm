@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $array = array('cat', 'hat', 'sat');
 $iterator = new ArrayIterator($array);
 
@@ -14,7 +14,4 @@ var_dump($regexIterator->getRegex());
 # "Complex" email regular expression
 $regexIterator = new RegexIterator($iterator, '|\b[A-Z0-9._%-]+@[A-Z0-9.-]+\.[A-Z]{2,4}\b|');
 var_dump($regexIterator->getRegex());
-
-
-
-?>
+}

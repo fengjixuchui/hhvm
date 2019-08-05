@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 @unlink("bz_open_002.txt");
 
 $fp = fopen("bz_open_002.txt", "w");
@@ -67,4 +67,4 @@ var_dump(bzopen($fp, "w"));
 @unlink("bz_open_002.txt");
 
 echo "Done\n";
-?>
+}

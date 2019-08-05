@@ -1,9 +1,21 @@
-<?php
+<?hh
 /* Prototype  : array array_intersect_key(array arr1, array arr2 [, array ...])
- * Description: Returns the entries of arr1 that have keys which are present in all the other arguments. 
+ * Description: Returns the entries of arr1 that have keys which are present in all the other arguments.
  * Source code: ext/standard/array.c
  */
 
+// define some classes
+class classWithToString
+{
+    public function __toString() {
+        return "Class A object";
+    }
+}
+
+class classWithoutToString
+{
+}
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_intersect_key() : usage variation ***\n";
 
 // Initialise function arguments not being substituted (if any)
@@ -16,18 +28,6 @@ unset ($unset_var);
 
 //resource variable
 $fp = fopen(__FILE__, "r");
-
-// define some classes
-class classWithToString
-{
-	public function __toString() {
-		return "Class A object";
-	}
-}
-
-class classWithoutToString
-{
-}
 
 // heredoc string
 $heredoc = <<<EOT
@@ -96,5 +96,5 @@ foreach($inputs as $key =>$value) {
 }
 
 fclose($fp);
-?>
-===DONE===
+echo "===DONE===\n";
+}

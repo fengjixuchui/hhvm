@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL);
 
 trait A {
@@ -32,4 +32,3 @@ $t->smallTalk();
 $t->bigTalk();
 $t->talk();
 
-?>

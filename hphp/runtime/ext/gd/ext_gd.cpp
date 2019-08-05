@@ -23,7 +23,6 @@
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/plain-file.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/request-event-handler.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/string-util.h"
@@ -31,6 +30,8 @@
 #include "hphp/runtime/base/zend-string.h"
 #include "hphp/runtime/ext/std/ext_std_file.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
+#include "hphp/util/alloc.h"
+#include "hphp/util/rds-local.h"
 
 #include "hphp/runtime/ext/gd/libgd/gd.h"
 #include "hphp/runtime/ext/gd/libgd/gdfontt.h"  /* 1 Tiny font */
@@ -143,7 +144,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
     assertx(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
     if (m_mallocSize + size < (size_t)RuntimeOption::ImageMemoryMaxBytes) {
 #ifdef IM_MEMORY_CHECK
-      void *ptr = malloc(sizeof(ln) + sizeof(size) + size);
+      void *ptr = local_malloc(sizeof(ln) + sizeof(size) + size);
       if (!ptr) return nullptr;
       memcpy(ptr, &ln, sizeof(ln));
       memcpy((char*)ptr + sizeof(ln), &size, sizeof(size));
@@ -151,7 +152,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
       m_alloced.insert(ptr);
       return ((char *)ptr + sizeof(ln) + sizeof(size));
 #else
-      void *ptr = malloc(sizeof(size) + size);
+      void *ptr = local_malloc(sizeof(size) + size);
       if (!ptr) return nullptr;
       memcpy(ptr, &size, sizeof(size));
       m_mallocSize += size;
@@ -169,7 +170,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
     size_t bytes = nmemb * size;
     if (m_mallocSize + bytes < (size_t)RuntimeOption::ImageMemoryMaxBytes) {
 #ifdef IM_MEMORY_CHECK
-      void *ptr = malloc(sizeof(ln) + sizeof(size) + bytes);
+      void *ptr = local_malloc(sizeof(ln) + sizeof(size) + bytes);
       if (!ptr) return nullptr;
       memset(ptr, 0, sizeof(ln) + sizeof(size) + bytes);
       memcpy(ptr, &ln, sizeof(ln));
@@ -178,7 +179,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
       m_alloced.insert(ptr);
       return ((char *)ptr + sizeof(ln) + sizeof(size));
 #else
-      void *ptr = malloc(sizeof(size) + bytes);
+      void *ptr = local_malloc(sizeof(size) + bytes);
       if (!ptr) return nullptr;
       memcpy(ptr, &bytes, sizeof(bytes));
       memset((char *)ptr + sizeof(size), 0, bytes);
@@ -202,10 +203,10 @@ struct ImageMemoryAlloc final : RequestEventHandler {
     int count = m_alloced.erase((char*)sizePtr - sizeof(ln));
     assertx(count == 1); // double free on failure
     assertx(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
-    free(lnPtr);
+    local_free(lnPtr);
 #else
     assertx(m_mallocSize < (size_t)RuntimeOption::ImageMemoryMaxBytes);
-    free(sizePtr);
+    local_free(sizePtr);
 #endif
   }
 
@@ -239,10 +240,10 @@ struct ImageMemoryAlloc final : RequestEventHandler {
 #ifdef IM_MEMORY_CHECK
     void *lnPtr = (char *)sizePtr - sizeof(ln);
     if (m_mallocSize + diff > (size_t)RuntimeOption::ImageMemoryMaxBytes ||
-        !(tmp = realloc(lnPtr, sizeof(ln) + sizeof(size) + size))) {
+        !(tmp = local_realloc(lnPtr, sizeof(ln) + sizeof(size) + size))) {
       int count = m_alloced.erase(ptr);
       assertx(count == 1); // double free on failure
-      free(lnPtr);
+      local_free(lnPtr);
       return nullptr;
     }
     memcpy(tmp, &ln, sizeof(ln));
@@ -256,8 +257,8 @@ struct ImageMemoryAlloc final : RequestEventHandler {
     return ((char *)tmp + sizeof(ln) + sizeof(size));
 #else
     if (m_mallocSize + diff > (size_t)RuntimeOption::ImageMemoryMaxBytes ||
-        !(tmp = realloc(sizePtr, sizeof(size) + size))) {
-      free(sizePtr);
+        !(tmp = local_realloc(sizePtr, sizeof(size) + size))) {
+      local_free(sizePtr);
       return nullptr;
     }
     memcpy(tmp, &size, sizeof(size));
@@ -269,8 +270,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
 #ifdef IM_MEMORY_CHECK
   void imDump(void *ptrs[], int &n) {
     int i = 0;
-    for (std::set<void*>::iterator iter = m_alloced.begin();
-         iter != m_alloced.end(); ++i, ++iter) {
+    for (auto iter = m_alloced.begin(); iter != m_alloced.end(); ++i, ++iter) {
       void *p = *iter;
       assertx(p);
       if (i < n) ptrs[i] = p;
@@ -4037,15 +4037,15 @@ Variant HHVM_FUNCTION(imagecolortransparent, const Resource& image,
   return gdImageGetTransparent(im);
 }
 
-Variant HHVM_FUNCTION(imageinterlace, int64_t argc, const Resource& image,
-    int64_t interlace /* = 0 */) {
+TypedValue HHVM_FUNCTION(imageinterlace, const Resource& image,
+                         TypedValue interlace /* = 0 */) {
   gdImagePtr im = get_valid_image_resource(image);
-  if (!im) return false;
-  if (argc > 1) {
+  if (!im) return make_tv<KindOfBoolean>(false);
+  if (!tvIsNull(interlace)) {
     // has interlace argument
-    gdImageInterlace(im, interlace);
+    gdImageInterlace(im, tvAssertInt(interlace));
   }
-  return gdImageGetInterlaced(im);
+  return make_tv<KindOfInt64>(gdImageGetInterlaced(im));
 }
 
 bool HHVM_FUNCTION(imagepolygon, const Resource& image,

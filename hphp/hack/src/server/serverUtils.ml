@@ -19,8 +19,9 @@ type 'env handle_command_result =
   | Needs_full_recheck of 'env * ('env -> 'env) * string
   (* Commands that want to modify global state, by modifying file contents.
    * The boolean indicates whether current recheck should be automatically
-   * restarted after applying the writes *)
-  | Needs_writes of 'env * ('env -> 'env) * bool
+   * restarted after applying the writes. The string specifies a reason why this
+   * command needs writes (for logging/debugging purposes) *)
+  | Needs_writes of 'env * ('env -> 'env) * bool * string
 
 let wrap try_ f = fun env -> try_ env (fun () -> f env)
 
@@ -29,7 +30,7 @@ let wrap try_ = function
   | Done env -> Done env
   | Needs_full_recheck (env, f, reason) ->
     Needs_full_recheck (env, wrap try_ f, reason)
-  | Needs_writes (env, f, reason) -> Needs_writes (env, wrap try_ f, reason)
+  | Needs_writes (env, f, restart, reason) -> Needs_writes (env, wrap try_ f, restart, reason)
 
 let shutdown_client (_ic, oc) =
   let cli = Unix.descr_of_out_channel oc in
@@ -139,8 +140,8 @@ let exit_on_exception (exn: exn) ~(stack: Utils.callstack) =
   | WorkerController.Worker_failed_to_send_job _ as e->
     Hh_logger.exc ~stack e;
     Exit_status.(exit Worker_failed_to_send_job)
-  | File_heap.File_heap_stale ->
-    Exit_status.(exit File_heap_stale)
+  | File_provider.File_provider_stale ->
+    Exit_status.(exit File_provider_stale)
   | Decl_class.Decl_heap_elems_bug ->
     Exit_status.(exit Decl_heap_elems_bug)
   | Decl_defs.Decl_not_found _->

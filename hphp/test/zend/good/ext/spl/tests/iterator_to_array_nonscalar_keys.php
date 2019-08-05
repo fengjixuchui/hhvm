@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function gen() {
     yield "foo" => 0;
@@ -8,7 +8,6 @@ function gen() {
     yield []    => 4;
     yield new stdClass => 5;
 }
-
+<<__EntryPoint>> function main(): void {
 var_dump(iterator_to_array(gen()));
-
-?>
+}

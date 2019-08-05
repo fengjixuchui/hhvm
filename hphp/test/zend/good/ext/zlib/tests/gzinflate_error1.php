@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string gzinflate(string data [, int length])
  * Description: Unzip a gzip-compressed string 
  * Source code: ext/zlib/zlib.c
@@ -36,5 +36,4 @@ $testclass = new Tester();
 try { var_dump(gzinflate($testclass)); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 try { var_dump(gzinflate($data, $testclass)); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";

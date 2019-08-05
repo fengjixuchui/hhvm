@@ -1,24 +1,24 @@
-<?php
-
-$values = Array(
-'http://example.com/index.html',	
-'http://www.example.com/index.php',	
-'http://www.example/img/test.png',	
-'http://www.example/img/dir/',	
-'http://www.example/img/dir',	
-'http//www.example/wrong/url/',	
-'http:/www.example',	
-'file:///tmp/test.c',	
-'ftp://ftp.example.com/tmp/',	
-'/tmp/test.c',	
-'/',	
-'http://',	
-'http:/',	
-'http:',	
-'http',	
-'',	
--1,	
-array(),	
+<?hh
+<<__EntryPoint>> function main(): void {
+$values = array(
+'http://example.com/index.html',
+'http://www.example.com/index.php',
+'http://www.example/img/test.png',
+'http://www.example/img/dir/',
+'http://www.example/img/dir',
+'http//www.example/wrong/url/',
+'http:/www.example',
+'file:///tmp/test.c',
+'ftp://ftp.example.com/tmp/',
+'/tmp/test.c',
+'/',
+'http://',
+'http:/',
+'http:',
+'http',
+'',
+-1,
+array(),
 'mailto:foo@bar.com',
 'news:news.php.net',
 'file://foo/bar',
@@ -44,4 +44,4 @@ var_dump(filter_var("http://www.example.com/index.html", FILTER_VALIDATE_URL, FI
 var_dump(filter_var("http://www.example.com/index.php?a=b&c=d", FILTER_VALIDATE_URL, FILTER_FLAG_QUERY_REQUIRED));
 
 echo "Done\n";
-?>
+}

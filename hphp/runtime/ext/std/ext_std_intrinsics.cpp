@@ -14,6 +14,7 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/request-tracing.h"
 #include "hphp/runtime/base/surprise-flags.h"
@@ -62,6 +63,11 @@ TypedValue HHVM_FUNCTION(dummy_arraylike_builtin, const Variant& var) {
 Array HHVM_FUNCTION(dummy_array_builtin, const Array& arr) {
   if (!arr.isVecOrVArray() && !arr.isDictOrDArray()) return arr;
   return Array::Create();
+}
+
+Array HHVM_FUNCTION(dummy_dict_builtin, const Array& arr) {
+  if (arr.isDict()) return arr;
+  return Array::CreateDict();
 }
 
 String HHVM_FUNCTION(serialize_with_format, const Variant& thing,
@@ -152,14 +158,79 @@ void HHVM_FUNCTION(
   g.finish(from_micros(end_us));
 }
 
+static String HHVM_STATIC_METHOD(ReffyNativeMeth, meth, VRefParam& i) {
+  String ret = "Got: ";
+  ret += i.toInt64();
+  i.assignIfRef(i.toInt64() * i.toInt64());
+  return ret;
+}
+
 void HHVM_FUNCTION(hhbbc_fail_verification) {
   g_context->write("PASS\n", 5);
+}
+
+/*
+ * function builtin_io(
+ *   string $s,
+ *   inout string $str,
+ *   inout int $num,
+ *   int $i,
+ *   inout object $obj
+ *   object $o,
+ *   mixed $m,
+ *   inout mixed $mix,
+ *   bool retOrig,
+ *   <<__OutOnly("KindOfBoolean")>> inout mixed $out1,
+ *   <<__OutOnly("KindOfArray")>> inout mixed $out2,
+ *   <<__OutOnly("KindOfObject")>> inout mixed $out3,
+ * ): array;
+ */
+Array HHVM_FUNCTION(
+  builtin_io,
+  StringArg s,
+  String& str,
+  int64_t& num,
+  int i,
+  Object& obj,
+  ObjectArg o,
+  const Variant& m,
+  Variant& mix,
+  bool retOrig,
+  bool& outBool,
+  Array& outArr,
+  Variant& outObj
+) {
+  auto const orig = retOrig
+    ? make_packed_array(s.get(), str, num, i, obj, o.get(), m, mix)
+    : Array::Create();
+
+  str += ";; IN =\"";
+  str += StrNR{s.get()};
+  str += "\"";
+
+  num = num + i * i;
+
+  if (retOrig) mix = obj;
+  else         mix = m;
+
+  obj = Object{o.get()};
+
+  outArr = retOrig
+    ? make_packed_array(outBool, outArr, outObj)
+    : Array::Create();
+  outBool = true;
+  outObj = SystemLib::AllocStdClassObject();
+
+  return orig;
 }
 
 }
 
 void StandardExtension::initIntrinsics() {
   if (!RuntimeOption::EnableIntrinsicsExtension) return;
+
+  HHVM_FALIAS(__hhvm_intrinsics\\builtin_io, builtin_io);
+  HHVM_FALIAS(__hhvm_intrinsics\\builtin_io_no_fca, builtin_io);
 
   HHVM_FALIAS(__hhvm_intrinsics\\trigger_oom, trigger_oom);
   HHVM_FALIAS(__hhvm_intrinsics\\launder_value, launder_value);
@@ -171,6 +242,7 @@ void StandardExtension::initIntrinsics() {
   HHVM_FALIAS(__hhvm_intrinsics\\dummy_arraylike_builtin,
               dummy_arraylike_builtin);
   HHVM_FALIAS(__hhvm_intrinsics\\dummy_array_builtin, dummy_array_builtin);
+  HHVM_FALIAS(__hhvm_intrinsics\\dummy_dict_builtin, dummy_dict_builtin);
 
   HHVM_FALIAS(__hhvm_intrinsics\\serialize_with_format, serialize_with_format);
 
@@ -181,6 +253,9 @@ void StandardExtension::initIntrinsics() {
 
   HHVM_FALIAS(__hhvm_intrinsics\\hhbbc_fail_verification,
               hhbbc_fail_verification);
+
+  HHVM_STATIC_MALIAS(__hhvm_intrinsics\\ReffyNativeMeth, meth,
+                     ReffyNativeMeth, meth);
 
   loadSystemlib("std_intrinsics");
 }

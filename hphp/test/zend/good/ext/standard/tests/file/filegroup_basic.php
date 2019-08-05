@@ -1,8 +1,8 @@
-<?php
+<?hh
 /* Prototype: int filegroup ( string $filename )
  * Description: Returns the group ID of the file, or FALSE in case of an error.
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing filegroup(): basic functionality ***\n"; 
 
 echo "-- Testing with the file or directory created by owner --\n";
@@ -31,14 +31,10 @@ var_dump( filegroup("/etc") );
 var_dump( filegroup("/") );
 
 echo "\n*** Done ***\n";
-?>
-
-<?php error_reporting(0); ?>
-<?php
-
+error_reporting(0);
 $file_path = dirname(__FILE__);
 $file_name = $file_path."/filegroup_basic.tmp";
 $dir_name  = $file_path."/filegroup_basic";
 unlink($file_name);
 rmdir($dir_name);
-?>
+}

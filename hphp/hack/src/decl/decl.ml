@@ -16,7 +16,7 @@
 open Core_kernel
 open Decl_defs
 open Decl_fun_utils
-open Nast
+open Aast
 open Shallow_decl_defs
 open Typing_defs
 open Typing_deps
@@ -24,6 +24,7 @@ open Typing_deps
 module Reason = Typing_reason
 module Inst = Decl_instantiate
 module Attrs = Attributes
+module Partial = Partial_provider
 
 module SN = Naming_special_names
 
@@ -76,15 +77,15 @@ let stop_tracking () =
 let check_extend_kind parent_pos parent_kind child_pos child_kind =
   match parent_kind, child_kind with
     (* What is allowed *)
-  | (Ast.Cabstract | Ast.Cnormal), (Ast.Cabstract | Ast.Cnormal)
-  | Ast.Cabstract, Ast.Cenum (* enums extend BuiltinEnum under the hood *)
-  | Ast.Ctrait, Ast.Ctrait
-  | Ast.Cinterface, Ast.Cinterface ->
+  | (Ast_defs.Cabstract | Ast_defs.Cnormal), (Ast_defs.Cabstract | Ast_defs.Cnormal)
+  | Ast_defs.Cabstract, Ast_defs.Cenum (* enums extend BuiltinEnum under the hood *)
+  | Ast_defs.Ctrait, Ast_defs.Ctrait
+  | Ast_defs.Cinterface, Ast_defs.Cinterface ->
       ()
   | _ ->
       (* What is disallowed *)
-      let parent = Ast.string_of_class_kind parent_kind in
-      let child  = Ast.string_of_class_kind child_kind in
+      let parent = Ast_defs.string_of_class_kind parent_kind in
+      let child  = Ast_defs.string_of_class_kind child_kind in
       Errors.wrong_extend_kind child_pos child parent_pos parent
 
 (*****************************************************************************)
@@ -153,7 +154,7 @@ let add_grand_parents_or_traits no_trait_reuse parent_pos shallow_class acc pare
 let get_class_parent_or_trait env shallow_class (parents, is_complete, pass) ty =
   (* See comment on check_no_duplicate_traits for reasoning here *)
   let no_trait_reuse = experimental_no_trait_reuse_enabled env
-    && pass <> `Xhp_pass && shallow_class.sc_kind <> Ast.Cinterface
+    && pass <> `Xhp_pass && shallow_class.sc_kind <> Ast_defs.Cinterface
   in
   let _, (parent_pos, parent), _ = Decl_utils.unwrap_class_type ty in
   (* If we already had this exact trait, we need to flag trait reuse *)
@@ -194,10 +195,9 @@ let get_class_parents_and_traits env shallow_class =
 (* Section declaring the type of a function *)
 (*****************************************************************************)
 
-let rec ifun_decl (f: Ast.fun_) =
+let rec ifun_decl (f: Nast.fun_) =
   let f = Errors.ignore_ (fun () -> Naming.fun_ f) in
-  fun_decl f;
-  ()
+  fun_decl f
 
 and fun_decl f =
   let errors, ft = Errors.do_ begin fun () ->
@@ -212,7 +212,7 @@ and fun_decl f =
   let ft = { ft with ft_decl_errors = Some errors } in
   record_fun (snd f.f_name);
   Decl_heap.Funs.add (snd f.f_name) ft;
-  ()
+  ft
 
 and fun_decl_in_env env f =
   check_params env f.f_params;
@@ -222,7 +222,7 @@ and fun_decl_in_env env f =
   let return_disposable = has_return_disposable_attribute f.f_user_attributes in
   let arity_min = minimum_arity f.f_params in
   let params = make_params env f.f_params in
-  let ret_ty = match f.f_ret with
+  let ret_ty = match hint_of_type_hint f.f_ret with
     | None -> ret_from_fun_kind (fst f.f_name) f.f_fun_kind
     | Some ty -> Decl_hint.hint env ty in
   let arity = match f.f_variadic with
@@ -239,13 +239,14 @@ and fun_decl_in_env env f =
     ft_pos         = fst f.f_name;
     ft_deprecated  =
       Attributes.deprecated ~kind:"function" f.f_name f.f_user_attributes;
-    ft_is_coroutine = f.f_fun_kind = Ast.FCoroutine;
+    ft_is_coroutine = f.f_fun_kind = Ast_defs.FCoroutine;
     ft_abstract    = false;
     ft_arity       = arity;
     ft_tparams     = (tparams, FTKtparams);
     ft_where_constraints = where_constraints;
     ft_params      = params;
     ft_ret         = ret_ty;
+    ft_fun_kind    = f.f_fun_kind;
     ft_reactive    = reactivity;
     ft_mutability     = None; (* Functions can't be mutable because they don't have "this" *)
     ft_returns_mutable = returns_mutable;
@@ -270,16 +271,35 @@ let check_if_cyclic class_env (pos, cid) =
   then Errors.cyclic_class_def stack pos;
   is_cyclic
 
-let rec class_decl_if_missing class_env c =
-  let _, cid as c_name = c.Ast.c_name in
+let shallow_decl_enabled () =
+  TypecheckerOptions.shallow_class_decl (GlobalNamingOptions.get ())
+
+let rec class_decl_if_missing class_env (c: Nast.class_) =
+  let _, cid as c_name = c.c_name in
   if check_if_cyclic class_env c_name
-  then ()
+  then None
   else begin
-    if Decl_heap.Classes.mem cid then () else
-      (* Class elements are in memory if and only if the class itself is there.
-       * Exiting before class declaration is ready would break this invariant *)
-      WorkerCancel.with_no_cancellations @@ fun () ->
-      class_naming_and_decl class_env cid c
+    if shallow_decl_enabled ()
+    then
+      (* This function is often called for its side effect of ensuring that the
+         class is declared. When shallow-decl is enabled, we still want this
+         side effect (for use cases like on-the-fly declaring entire files in
+         Decl_redecl_service for incremental typechecking), but since we are not
+         producing a folded class declaration, there is nothing we can return.
+         This is a code smell--we should use a function with a different
+         signature when we only want this side effect. *)
+      let _ : shallow_class = Shallow_classes_heap.class_decl_if_missing c in
+      None
+    else
+      match Decl_heap.Classes.get cid with
+      | Some _ as class_ ->
+        class_
+      | None ->
+        (* Class elements are in memory if and only if the class itself is there.
+         * Exiting before class declaration is ready would break this invariant *)
+        WorkerCancel.with_no_cancellations @@ fun () ->
+        let class_ = class_naming_and_decl class_env cid c in
+        Some class_
   end
 
 and class_naming_and_decl (class_env:class_env) cid c =
@@ -293,11 +313,15 @@ and class_naming_and_decl (class_env:class_env) cid c =
   let errors = Errors.merge shallow_class.sc_decl_errors errors in
   let name = snd shallow_class.sc_name in
   record_class name;
-  Decl_heap.Classes.add name { tc with dc_decl_errors = Some errors };
-  ()
+  let class_ = { tc with dc_decl_errors = Some errors } in
+  Decl_heap.Classes.add name class_;
+  class_
 
 and class_parents_decl class_env c =
-  let class_type = class_type_decl class_env in
+  let class_type class_ =
+    let _: class_type option = class_type_decl class_env class_ in
+    ()
+  in
   List.iter c.sc_extends class_type;
   List.iter c.sc_implements class_type;
   List.iter c.sc_uses class_type;
@@ -318,24 +342,45 @@ and is_disposable_type env hint =
 and class_type_decl class_env hint =
   match hint with
   | _, Tapply ((_, cid), _) ->
-    begin match Naming_heap.TypeIdHeap.get cid with
-      | Some (pos, `Class) when not (Decl_heap.Classes.mem cid) ->
+    begin match Naming_table.Types.get_pos cid with
+      | Some (pos, Naming_table.TClass) when not (Decl_heap.Classes.mem cid) ->
         let fn = FileInfo.get_pos_filename pos in
         (* We are supposed to redeclare the class *)
-        let class_opt = Parser_heap.find_class_in_file fn cid in
+        let class_opt = Ast_provider.find_class_in_file_nast fn cid in
         Errors.run_in_context fn Errors.Decl begin fun () ->
-          Option.iter class_opt (class_decl_if_missing class_env)
+          let open Option.Monad_infix in
+          class_opt
+          >>= class_decl_if_missing class_env
+          >>| Decl_class.to_class_type
         end
-      | _ -> ()
+      | _ -> None
     end
   | _ ->
     (* This class lives in PHP land *)
-    ()
+    None
 
 and class_is_abstract c =
   match c.sc_kind with
-    | Ast.Cabstract | Ast.Cinterface | Ast.Ctrait | Ast.Cenum -> true
+    | Ast_defs.Cabstract | Ast_defs.Cinterface | Ast_defs.Ctrait | Ast_defs.Cenum -> true
     | _ -> false
+
+(* When all type constants have been inherited and declared, this step synthesizes
+ * the defaults of abstract type constants into concrete type constants. *)
+and synthesize_defaults k tc (typeconsts, consts) =
+  match tc.ttc_abstract with
+  | TCAbstract (Some default) ->
+    let concrete = { tc with
+      ttc_abstract = TCConcrete;
+      ttc_constraint = None;
+      ttc_type = Some default;
+    } in
+    let typeconsts = SMap.add k concrete typeconsts in
+    (* OCaml 4.06 has an update method that makes this operation much more ergonomic *)
+    let constant = SMap.find_opt k consts in
+    let consts = Option.value_map constant ~default:consts
+      ~f:(fun c -> SMap.add k { c with cc_abstract = false } consts) in
+    typeconsts, consts
+  | _ -> typeconsts, consts
 
 and class_decl c =
   let is_abstract = class_is_abstract c in
@@ -355,9 +400,9 @@ and class_decl c =
     List.partition_tf ~f:(fun x -> x.smr_static) c.sc_method_redeclarations in
   let m = inherited.Decl_inherit.ih_methods in
   let m = List.fold_left ~f:(method_redecl_acc c) ~init:m redecl_methods in
-  let m = List.fold_left
+  let m, condition_types = List.fold_left
       ~f:(method_decl_acc ~is_static:false c )
-      ~init:m c.sc_methods in
+      ~init:(m, SSet.empty) c.sc_methods in
   let consts = inherited.Decl_inherit.ih_consts in
   let consts = List.fold_left ~f:(class_const_fold c)
     ~init:consts c.sc_consts in
@@ -365,14 +410,18 @@ and class_decl c =
   let typeconsts = inherited.Decl_inherit.ih_typeconsts in
   let typeconsts, consts = List.fold_left c.sc_typeconsts
       ~f:(typeconst_fold c) ~init:(typeconsts, consts) in
+  let typeconsts, consts =
+    if c.sc_kind = Ast_defs.Cnormal
+    then SMap.fold synthesize_defaults typeconsts (typeconsts, consts)
+    else typeconsts, consts in
   let sclass_var = static_prop_decl c in
   let sprops = inherited.Decl_inherit.ih_sprops in
   let sprops = List.fold_left c.sc_sprops ~f:sclass_var ~init:sprops in
   let sm = inherited.Decl_inherit.ih_smethods in
   let sm = List.fold_left ~f:(method_redecl_acc c) ~init:sm redecl_smethods in
-  let sm = List.fold_left c.sc_static_methods
+  let sm, condition_types = List.fold_left c.sc_static_methods
       ~f:(method_decl_acc ~is_static:true c )
-      ~init:sm in
+      ~init:(sm, condition_types) in
   let parent_cstr = inherited.Decl_inherit.ih_cstr in
   let cstr = constructor_decl parent_cstr c in
   let has_concrete_cstr = match (fst cstr) with
@@ -380,15 +429,15 @@ and class_decl c =
     | Some {elt_abstract = true; _} -> false
     | _ -> true in
   let impl = c.sc_extends @ c.sc_implements @ c.sc_uses in
-  let impl = match SMap.get SN.Members.__toString m with
-    | Some { elt_origin = cls; _} when cls_name <> SN.Classes.cStringish ->
+  let impl = match List.find c.sc_methods ~f:(fun sm ->
+    (snd sm.sm_name) = SN.Members.__toString) with
+    | Some { sm_name = (pos, _); _ } when cls_name <> SN.Classes.cStringish ->
       (* HHVM implicitly adds Stringish interface for every class/iface/trait
        * with a __toString method; "string" also implements this interface *)
-      let pos = method_pos ~is_static:false cls SN.Members.__toString  in
       (* Declare Stringish and parents if not already declared *)
       let class_env = { stack = SSet.empty } in
       let ty = (Reason.Rhint pos, Tapply ((pos, SN.Classes.cStringish), [])) in
-      class_type_decl class_env ty;
+      let _: Typing_defs.class_type option = class_type_decl class_env ty in
       ty :: impl
     | _ -> impl
   in
@@ -416,7 +465,7 @@ and class_decl c =
   let ext_strict = List.fold_left c.sc_uses
     ~f:(trait_exists env) ~init:ext_strict in
   if not ext_strict &&
-     (FileInfo.is_strict env.Decl_env.mode) then
+     (Partial.should_check_error env.Decl_env.mode 4117) then
     let p, name = c.sc_name in
     Errors.strict_members_not_known p name
   else ();
@@ -424,17 +473,12 @@ and class_decl c =
   let consts =
     Decl_enum.rewrite_class c.sc_name enum (fun x -> SMap.get x impl) consts in
   let has_own_cstr = has_concrete_cstr && (None <> c.sc_constructor) in
-  let deferred_members = Decl_init_check.class_ ~has_own_cstr env c in
-  let sealed_whitelist = get_sealed_whitelist c in
-  let condition_types =
-    SSet.empty
-    |> Shallow_decl.add_condition_types c
-    |> SMap.fold begin fun ancestor _ acc ->
-      match Shallow_classes_heap.get ancestor with
-      | None -> acc
-      | Some cls -> Shallow_decl.add_condition_types cls acc
-    end impl
+  let deferred_members =
+    if shallow_decl_enabled ()
+    then SSet.empty
+    else Decl_init_check.class_ ~has_own_cstr env c
   in
+  let sealed_whitelist = get_sealed_whitelist c in
   let tc = {
     dc_final = c.sc_final;
     dc_const = const;
@@ -449,6 +493,7 @@ and class_decl c =
     dc_name = snd c.sc_name;
     dc_pos = fst c.sc_name;
     dc_tparams = c.sc_tparams;
+    dc_where_constraints = c.sc_where_constraints;
     dc_substs = inherited.Decl_inherit.ih_substs;
     dc_consts = consts;
     dc_typeconsts = typeconsts;
@@ -467,16 +512,6 @@ and class_decl c =
     dc_decl_errors = None;
     dc_condition_types = condition_types;
   } in
-  if Ast.Cnormal = c.sc_kind then
-    begin
-      SMap.iter (
-        method_check_trait_overrides ~is_static:false c
-      ) m;
-      SMap.iter (
-        method_check_trait_overrides ~is_static:true c
-      ) sm;
-    end
-  else ();
   SMap.iter begin fun x _ ->
     Typing_deps.add_idep class_dep (Dep.Class x)
   end impl;
@@ -522,56 +557,52 @@ and trait_exists env acc trait =
 
 and constructor_decl (pcstr, pconsist) class_ =
   (* constructors in children of class_ must be consistent? *)
-  let cconsist = class_.sc_final ||
-    Attrs.mem
-      SN.UserAttributes.uaConsistentConstruct
-      class_.sc_user_attributes in
-  match class_.sc_constructor, pcstr with
-  | None, _ -> pcstr, cconsist || pconsist
-  | Some method_, Some {elt_final = true; elt_origin; _ } ->
-    let ft = Decl_heap.Constructors.find_unsafe elt_origin in
-    Errors.override_final ~parent:(ft.ft_pos) ~child:(fst method_.sm_name);
-    let cstr, mconsist = build_constructor class_ method_ in
-    cstr, cconsist || mconsist || pconsist
-  | Some method_, _ ->
-    let cstr, mconsist = build_constructor class_ method_ in
-    cstr, cconsist || mconsist || pconsist
+  let cconsist =
+    if class_.sc_final
+    then FinalClass
+    else if Attrs.mem SN.UserAttributes.uaConsistentConstruct class_.sc_user_attributes
+      then ConsistentConstruct
+      else Inconsistent in
+
+  let cstr = match class_.sc_constructor, pcstr with
+    | None, _ -> pcstr
+    | Some method_, Some {elt_final = true; elt_origin; _ } ->
+      let ft = Decl_heap.Constructors.find_unsafe elt_origin in
+      Errors.override_final ~parent:(ft.ft_pos) ~child:(fst method_.sm_name);
+      let cstr = build_constructor class_ method_ in
+      cstr
+    | Some method_, _ ->
+      let cstr = build_constructor class_ method_ in
+      cstr in
+  cstr, Decl_utils.coalesce_consistent pconsist cconsist
 
 and build_constructor class_ method_ =
   let ft = method_.sm_type in
   let _, class_name = class_.sc_name in
   let vis = visibility class_name method_.sm_visibility in
-  let mconsist = method_.sm_final || class_.sc_kind = Ast.Cinterface in
-  (* due to the requirement of calling parent::__construct, a private
-   * constructor cannot be overridden *)
-  let mconsist = mconsist || method_.sm_visibility = Private in
-  let mconsist = mconsist || ft.ft_abstract in
-  (* the alternative to overriding
-   * UserAttributes.uaConsistentConstruct is marking the corresponding
-   * 'new static()' UNSAFE, potentially impacting the safety of a large
-   * type hierarchy. *)
-  let consist_override = method_.sm_unsafecstr in
   let cstr = {
     elt_final = method_.sm_final;
     elt_abstract = ft.ft_abstract;
-    elt_is_xhp_attr = false;
+    elt_xhp_attr = None;
     elt_const = false;
     elt_lateinit = false;
     elt_lsb = false;
-    elt_override = consist_override;
+    elt_override = false;
     elt_memoizelsb = false;
     elt_synthesized = false;
     elt_visibility = vis;
     elt_origin = class_name;
     elt_reactivity = None;
+    elt_fixme_codes = method_.sm_fixme_codes;
   } in
   Decl_heap.Constructors.add class_name ft;
-  Some cstr, mconsist
+  Some cstr
 
 and class_const_fold c acc scc =
   let c_name = (snd c.sc_name) in
   let cc = {
     cc_synthesized = false;
+    cc_visibility = visibility (snd c.sc_name) scc.scc_visibility;
     cc_abstract = scc.scc_abstract;
     cc_pos = fst scc.scc_name;
     cc_type = scc.scc_type;
@@ -590,6 +621,7 @@ and class_class_decl class_id =
     reason, Tapply ((pos, SN.Classes.cClassname), [reason, Tthis]) in
   {
     cc_abstract    = false;
+    cc_visibility  = Vpublic;
     cc_pos         = pos;
     cc_synthesized = true;
     cc_type        = classname_ty;
@@ -606,7 +638,7 @@ and prop_decl c acc sp =
   let vis = visibility (snd c.sc_name) sp.sp_visibility in
   let elt = {
     elt_final = true;
-    elt_is_xhp_attr = sp.sp_is_xhp_attr;
+    elt_xhp_attr = sp.sp_xhp_attr;
     elt_const = sp.sp_const;
     elt_lateinit = sp.sp_lateinit;
     elt_lsb = false;
@@ -617,6 +649,7 @@ and prop_decl c acc sp =
     elt_visibility = vis;
     elt_origin = (snd c.sc_name);
     elt_reactivity = None;
+    elt_fixme_codes = sp.sp_fixme_codes;
   } in
   Decl_heap.Props.add (elt.elt_origin, sp_name) ty;
   let acc = SMap.add sp_name elt acc in
@@ -631,10 +664,10 @@ and static_prop_decl c acc sp =
   let vis = visibility (snd c.sc_name) sp.sp_visibility in
   let elt = {
     elt_final = true;
-    elt_const = false; (* unsupported for static properties *)
+    elt_const = sp.sp_const;
     elt_lateinit = sp.sp_lateinit;
     elt_lsb = sp.sp_lsb;
-    elt_is_xhp_attr = sp.sp_is_xhp_attr;
+    elt_xhp_attr = sp.sp_xhp_attr;
     elt_override = false;
     elt_memoizelsb = false;
     elt_abstract = false;
@@ -642,6 +675,7 @@ and static_prop_decl c acc sp =
     elt_visibility = vis;
     elt_origin = (snd c.sc_name);
     elt_reactivity = None;
+    elt_fixme_codes = sp.sp_fixme_codes;
   } in
   Decl_heap.StaticProps.add (elt.elt_origin, sp_name) ty;
   let acc = SMap.add sp_name elt acc in
@@ -659,8 +693,12 @@ and typeconst_structure c stc =
   let r = Reason.Rwitness pos in
   let tsid = pos, SN.FB.cTypeStructure in
   let ts_ty = r, Tapply (tsid, [r, Taccess ((r, Tthis), [stc.stc_name])]) in
+  let abstract = match stc.stc_abstract with
+  | TCAbstract _ -> true
+  | _ -> false in
   {
-    cc_abstract    = Option.is_none stc.stc_type;
+    cc_abstract    = abstract;
+    cc_visibility  = Vpublic;
     cc_pos         = pos;
     cc_synthesized = true;
     cc_type        = ts_ty;
@@ -670,37 +708,47 @@ and typeconst_structure c stc =
 
 and typeconst_fold c ((typeconsts, consts) as acc) stc =
   match c.sc_kind with
-  | Ast.Ctrait | Ast.Cenum -> acc
-  | Ast.Cinterface | Ast.Cabstract | Ast.Cnormal ->
+  | Ast_defs.Ctrait | Ast_defs.Cenum | Ast_defs.Crecord -> acc
+  | Ast_defs.Cinterface | Ast_defs.Cabstract | Ast_defs.Cnormal ->
     let name = (snd stc.stc_name) in
     let c_name = (snd c.sc_name) in
     let ts = typeconst_structure c stc in
     let consts = SMap.add name ts consts in
+    let vis = visibility (snd c.sc_name) stc.stc_visibility in
+    let ptc_opt = SMap.get name typeconsts in
     let enforceable =
       (* Without the positions, this is a simple OR, but this way allows us to
        * report the position of the <<__Enforceable>> attribute to the user *)
       if snd stc.stc_enforceable
       then stc.stc_enforceable
-      else match SMap.get name typeconsts with
+      else match ptc_opt with
         | Some ptc -> ptc.ttc_enforceable
         | None -> Pos.none, false in
+    let disallow_php_arrays =
+      if stc.stc_disallow_php_arrays <> None
+      then stc.stc_disallow_php_arrays
+      else Option.bind ptc_opt (fun ptc -> ptc.ttc_disallow_php_arrays)
+    in
     let tc = {
+      ttc_abstract = stc.stc_abstract;
       ttc_name = stc.stc_name;
       ttc_constraint = stc.stc_constraint;
       ttc_type = stc.stc_type;
       ttc_origin = c_name;
       ttc_enforceable = enforceable;
+      ttc_visibility = vis;
+      ttc_disallow_php_arrays = disallow_php_arrays;
     } in
     let typeconsts = SMap.add (snd stc.stc_name) tc typeconsts in
     typeconsts, consts
 
-and method_check_override c m acc  =
+and method_check_override c m acc =
   let pos, id = m.sm_name in
   let _, class_id = c.sc_name in
   let override = m.sm_override in
   match SMap.get id acc with
   | Some _ -> false (* overriding final methods is handled in typing *)
-  | None when override && c.sc_kind = Ast.Ctrait -> true
+  | None when override && c.sc_kind = Ast_defs.Ctrait -> true
   | None when override ->
     Errors.should_be_override pos class_id id;
     false
@@ -717,7 +765,7 @@ and method_redecl_acc c acc m =
   in
   let elt = {
     elt_final = m.smr_final;
-    elt_is_xhp_attr = false;
+    elt_xhp_attr = None;
     elt_const = false;
     elt_lateinit = false;
     elt_lsb = false;
@@ -728,6 +776,7 @@ and method_redecl_acc c acc m =
     elt_visibility = vis;
     elt_origin = snd (c.sc_name);
     elt_reactivity = None;
+    elt_fixme_codes = m.smr_fixme_codes;
   } in
   let add_meth = if m.smr_static
     then Decl_heap.StaticMethods.add
@@ -736,11 +785,27 @@ and method_redecl_acc c acc m =
   add_meth (elt.elt_origin, id) ft;
   SMap.add id elt acc
 
-and method_decl_acc ~is_static c acc m  =
+and method_decl_acc ~is_static c (acc, condition_types) m  =
   let check_override = method_check_override c m acc in
   let has_memoizelsb = m.sm_memoizelsb in
   let ft = m.sm_type in
   let _, id = m.sm_name in
+  let condition_types =
+    match ft.ft_reactive with
+    | Reactive (Some (_, Tapply ((_, cls), []))) ->
+      SSet.add cls condition_types
+    | Reactive None ->
+      condition_types
+    | Shallow (Some (_, Tapply ((_, cls), []))) ->
+      SSet.add cls condition_types
+    | Shallow None ->
+      condition_types
+    | Local (Some (_, Tapply ((_, cls), [])))  ->
+      SSet.add cls condition_types
+    | Local None ->
+      condition_types
+    | _ -> condition_types
+  in
   let vis =
     match SMap.get id acc, m.sm_visibility with
     | Some { elt_visibility = Vprotected _ as parent_vis; _ }, Protected ->
@@ -749,7 +814,7 @@ and method_decl_acc ~is_static c acc m  =
   in
   let elt = {
     elt_final = m.sm_final;
-    elt_is_xhp_attr = false;
+    elt_xhp_attr = None;
     elt_const = false;
     elt_lateinit = false;
     elt_lsb = false;
@@ -760,6 +825,7 @@ and method_decl_acc ~is_static c acc m  =
     elt_visibility = vis;
     elt_origin = snd (c.sc_name);
     elt_reactivity = m.sm_reactivity;
+    elt_fixme_codes = m.sm_fixme_codes;
   } in
   let add_meth = if is_static
     then Decl_heap.StaticMethods.add
@@ -767,62 +833,17 @@ and method_decl_acc ~is_static c acc m  =
   in
   add_meth (elt.elt_origin, id) ft;
   let acc = SMap.add id elt acc in
-  acc
-
-and method_check_trait_overrides ~is_static c id meth =
-  if meth.elt_override then begin
-    let pos = method_pos ~is_static meth.elt_origin id in
-    Errors.override_per_trait c.sc_name id pos
-  end
-
-(* For the most part the declaration phase does not care about the position of
- * methods. There are a few places that do mainly for error reporting. There
- * are cases when the method has not been added to the Decl_heap yet, in which
- * case we fallback to retrieving the position from the parsing AST.
- *)
-and method_pos ~is_static class_id meth  =
-  let get_meth = if is_static then
-      Decl_heap.StaticMethods.get
-    else
-    Decl_heap.Methods.get in
-  match get_meth (class_id, meth) with
-  | Some { ft_pos; _ } -> ft_pos
-  | None ->
-    try
-      match Naming_heap.TypeIdHeap.get class_id with
-      | Some (pos, `Class) ->
-        let fn = FileInfo.get_pos_filename pos in
-        begin match Parser_heap.find_class_in_file fn class_id with
-          | None -> raise Caml.Not_found
-          | Some { Ast.c_body; _ } ->
-            let elt = List.find ~f:begin fun x ->
-              match x with
-              | Ast.Method {Ast.m_name = (_, name); m_kind; _ }
-                when name = meth && is_static = List.mem m_kind Ast.Static ~equal:(=) ->
-                true
-              | _ -> false
-            end c_body
-            in
-            begin match elt with
-              | Some (Ast.Method { Ast.m_name = (pos, _); _ }) -> pos
-              | _ -> raise Caml.Not_found
-            end
-        end
-      | _ -> raise Caml.Not_found
-    with
-    | Caml.Not_found -> Pos.none
-
+  acc, condition_types
 
 (*****************************************************************************)
 (* Dealing with typedefs *)
 (*****************************************************************************)
 
 let rec type_typedef_decl_if_missing typedef =
-  let _, tid = typedef.Ast.t_id in
-  if Decl_heap.Typedefs.mem tid
-  then ()
-  else
-    type_typedef_naming_and_decl typedef
+  let (_, name) = typedef.t_name in
+  if not (Decl_heap.Typedefs.mem name) then
+    let _: typedef_type = type_typedef_naming_and_decl typedef in
+    ()
 
 and typedef_decl tdef =
   let {
@@ -854,16 +875,15 @@ and type_typedef_naming_and_decl tdef =
   let tdef = Errors.ignore_ (fun () -> Naming.typedef tdef) in
   let errors, tdecl = Errors.do_ (fun () -> typedef_decl tdef) in
   record_typedef (snd tdef.t_name);
-  Decl_heap.Typedefs.add (snd tdef.t_name)
-    { tdecl with td_decl_errors = Some errors};
-  ()
+  let tdecl = { tdecl with td_decl_errors = Some errors} in
+  Decl_heap.Typedefs.add (snd tdef.t_name) tdecl;
+  tdecl
 
 (*****************************************************************************)
 (* Global constants *)
 (*****************************************************************************)
 
 let const_decl cst =
-  let open Option.Monad_infix in
   let cst_pos, _cst_name = cst.cst_name in
   let dep = Dep.GConst (snd cst.cst_name) in
   let env = {Decl_env.
@@ -874,11 +894,11 @@ let const_decl cst =
   match cst.cst_type with
   | Some h -> Decl_hint.hint env h
   | None ->
-    match cst.cst_value >>= Decl_utils.infer_const with
+    match Decl_utils.infer_const cst.cst_value with
     | Some ty -> ty
-    | None when FileInfo.is_strict cst.cst_mode ->
+    | None when Partial.should_check_error cst.cst_mode 2035 ->
       Errors.missing_typehint cst_pos;
-      Reason.Rwitness cst_pos, Tany
+      Reason.Rwitness cst_pos, Terr
     | None ->
       Reason.Rwitness cst_pos, Tany
 
@@ -887,29 +907,34 @@ let iconst_decl cst =
   let errors, hint_ty = Errors.do_ (fun() -> const_decl cst) in
   record_const (snd cst.cst_name);
   Decl_heap.GConsts.add (snd cst.cst_name) (hint_ty, errors);
-  ()
+  (hint_ty, errors)
 
 (*****************************************************************************)
-
 let rec name_and_declare_types_program prog =
   List.iter prog begin fun def ->
     match def with
-    | Ast.Namespace (_, prog) -> name_and_declare_types_program prog
-    | Ast.NamespaceUse _ -> ()
-    | Ast.SetNamespaceEnv _ -> ()
-    | Ast.FileAttributes _ -> ()
-    | Ast.Fun f -> ifun_decl f
-    | Ast.Class c ->
+    | Namespace (_, prog) -> name_and_declare_types_program prog
+    | NamespaceUse _ -> ()
+    | SetNamespaceEnv _ -> ()
+    | FileAttributes _ -> ()
+    | Fun f ->
+      let _: decl fun_type = ifun_decl f in
+      ()
+    | Class c ->
       let class_env = { stack = SSet.empty; } in
-      class_decl_if_missing class_env c
-    | Ast.Typedef typedef ->
+      let _: decl_class_type option = class_decl_if_missing class_env c in
+      ()
+    | Typedef typedef ->
       type_typedef_decl_if_missing typedef
-    | Ast.Stmt _ -> ()
-    | Ast.Constant cst -> iconst_decl cst
+    | Stmt _ -> ()
+    | Constant cst ->
+      let _: decl ty * Errors.t = iconst_decl cst in
+      ()
   end
 
+
 let make_env fn =
-  let ast = Parser_heap.get_from_parser_heap fn in
+  let ast = Ast_provider.get_nast fn in
   name_and_declare_types_program ast
 
 let err_not_found file name =
@@ -918,7 +943,7 @@ let err_not_found file name =
 raise (Decl_not_found err_str)
 
 let declare_class_in_file file name =
-  match Parser_heap.find_class_in_file file name with
+  match Ast_provider.find_class_in_file_nast file name with
   | Some cls ->
     let class_env = { stack = SSet.empty; } in
     class_decl_if_missing class_env cls
@@ -926,19 +951,19 @@ let declare_class_in_file file name =
     err_not_found file name
 
 let declare_fun_in_file file name =
-  match Parser_heap.find_fun_in_file file name with
+  match Ast_provider.find_fun_in_file_nast file name with
   | Some f -> ifun_decl f
   | None ->
     err_not_found file name
 
 let declare_typedef_in_file file name =
-  match Parser_heap.find_typedef_in_file file name with
+  match Ast_provider.find_typedef_in_file_nast file name with
   | Some t -> type_typedef_naming_and_decl t
   | None ->
     err_not_found file name
 
 let declare_const_in_file file name =
-  match Parser_heap.find_const_in_file file name with
+  match Ast_provider.find_gconst_in_file_nast file name with
   | Some cst -> iconst_decl cst
   | None ->
     err_not_found file name

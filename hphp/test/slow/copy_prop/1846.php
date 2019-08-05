@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /* Compile only test. Used to crash hphp */ class X {
   protected $map;
@@ -8,3 +8,4 @@
     $this->parents = $parents;
   }
 }
+<<__EntryPoint>> function main(): void {}

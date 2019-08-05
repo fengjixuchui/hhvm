@@ -99,11 +99,10 @@ const StaticString
 
 // Extra information about a HeapGraph::Node.
 union CapturedNode {
-  CapturedNode() : static_local() {}
+  CapturedNode()  {}
   CapturedNode(const CapturedNode& other) {
     memcpy(this, &other, sizeof other);
   }
-  rds::StaticLocal static_local; // only for rds::StaticLocalData
   rds::SPropCache sprop_cache; // only for HPHP::SPropCache
   struct {
     HeaderKind kind;
@@ -315,6 +314,8 @@ CapturedPtr getEdgeInfo(const HeapGraph& g, int ptr) {
       case HeaderKind::Slab:
         // just provide raw prop_offset
         break;
+      case HeaderKind::Record:  // TODO(T41026982)
+        raise_error(Strings::RECORD_NOT_SUPPORTED);
     }
   }
 
@@ -331,11 +332,6 @@ void heapgraphCallback(Array fields, Array fields2, const Variant& callback) {
   VMRegAnchor _;
   auto params = make_vec_array(fields, fields2);
   vm_call_user_func(callback, params);
-}
-
-static bool isStaticLocal(const HeapGraph::Node& node) {
-  return node.tyindex == type_scan::getIndexForScan<rds::StaticLocalData>() &&
-         type_scan::hasNonConservative();
 }
 
 static bool isStaticProp(const HeapGraph::Node& node) {
@@ -377,17 +373,6 @@ Array createPhpNode(HeapGraphContextPtr hgptr, int index) {
   if (!node.is_root) {
     if (auto cls = cnode.heap_object.cls) {
       node_arr.set(s_class, make_tv<KindOfPersistentString>(cls->name()));
-    }
-  } else if (isStaticLocal(node)) {
-    node_arr.set(s_local,
-                 make_tv<KindOfPersistentString>(cnode.static_local.name));
-    auto func_id = cnode.static_local.funcId;
-    if (func_id != InvalidFuncId) {
-      auto func = Func::fromFuncId(cnode.static_local.funcId);
-      node_arr.set(s_func, make_tv<KindOfPersistentString>(func->name()));
-      if (auto cls = func->cls()) {
-        node_arr.set(s_class, make_tv<KindOfPersistentString>(cls->name()));
-      }
     }
   } else if (isStaticProp(node)) {
     if (auto cls = cnode.sprop_cache.cls) {
@@ -469,14 +454,6 @@ Resource HHVM_FUNCTION(heapgraph_create, void) {
       auto obj = innerObj(node.h);
       cnode.heap_object.kind = node.h->kind();
       cnode.heap_object.cls = obj ? obj->getVMClass() : nullptr;
-    } else if (isStaticLocal(node)) {
-      rds::Handle handle = rds::ptrToHandle<rds::Mode::Any>(node.ptr);
-      auto sym = rds::reverseLink(handle);
-      if (sym) {
-        cnode.static_local = boost::get<rds::StaticLocal>(sym.value());
-      } else {
-        cnode.static_local = {InvalidFuncId, nullptr};
-      }
     } else if (isStaticProp(node)) {
       rds::Handle handle = rds::ptrToHandle<rds::Mode::Any>(node.ptr);
       auto sym = rds::reverseLink(handle);

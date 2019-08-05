@@ -1,4 +1,4 @@
-<?php
+<?hh
 include "connect.inc";
 
 $tmp    = NULL;
@@ -15,4 +15,3 @@ var_dump(@mysql_escape_string("\r"));
 var_dump(@mysql_escape_string("foo" . chr(0) . "bar"));
 
 print "done!";
-?>

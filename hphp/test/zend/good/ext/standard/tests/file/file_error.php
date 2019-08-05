@@ -1,9 +1,9 @@
-<?php
+<?hh
 /*
    Prototype: array file ( string filename [,int use-include_path [,resource context]] );
    Description: Reads entire file into an array
-                Returns the  file in an array
-*/
+                Returns the  file in an array */
+<<__EntryPoint>> function main(): void {
 $file_path = dirname(__FILE__);
 echo "\n*** Testing error conditions ***";
 $file_handle = fopen($file_path."/file.tmp", "w");
@@ -19,9 +19,7 @@ var_dump( file("temp.tmp") );  // non existing filename
 fclose($file_handle);
 
 echo "\n--- Done ---";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = dirname(__FILE__);
 unlink($file_path."/file.tmp");
-?>
+}

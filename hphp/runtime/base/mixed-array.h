@@ -329,7 +329,6 @@ private:
   using ArrayData::lval;
   using ArrayData::lvalNew;
   using ArrayData::set;
-  using ArrayData::setRef;
   using ArrayData::remove;
   using ArrayData::release;
 
@@ -357,11 +356,8 @@ public:
   static bool ExistsInt(const ArrayData*, int64_t k);
   static bool ExistsStr(const ArrayData*, const StringData* k);
   static arr_lval LvalInt(ArrayData* ad, int64_t k, bool copy);
-  static arr_lval LvalIntRef(ArrayData* ad, int64_t k, bool copy);
   static arr_lval LvalStr(ArrayData* ad, StringData* k, bool copy);
-  static arr_lval LvalStrRef(ArrayData* ad, StringData* k, bool copy);
   static arr_lval LvalNew(ArrayData*, bool copy);
-  static arr_lval LvalNewRef(ArrayData*, bool copy);
   static ArrayData* SetInt(ArrayData*, int64_t k, Cell v);
   static ArrayData* SetIntInPlace(ArrayData*, int64_t k, Cell v);
   static ArrayData* SetStr(ArrayData*, StringData* k, Cell v);
@@ -370,10 +366,6 @@ public:
   static ArrayData* SetWithRefIntInPlace(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetWithRefStr(ArrayData*, StringData* k, TypedValue v);
   static ArrayData* SetWithRefStrInPlace(ArrayData*, StringData*, TypedValue);
-  static ArrayData* SetRefInt(ArrayData* ad, int64_t k, tv_lval v);
-  static ArrayData* SetRefIntInPlace(ArrayData* ad, int64_t k, tv_lval v);
-  static ArrayData* SetRefStr(ArrayData* ad, StringData* k, tv_lval v);
-  static ArrayData* SetRefStrInPlace(ArrayData* ad, StringData* k, tv_lval v);
   static ArrayData* AddInt(ArrayData*, int64_t k, Cell v, bool copy);
   static ArrayData* AddStr(ArrayData*, StringData* k, Cell v, bool copy);
   static ArrayData* RemoveInt(ArrayData*, int64_t k);
@@ -384,8 +376,6 @@ public:
   static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* Append(ArrayData*, Cell v);
   static ArrayData* AppendInPlace(ArrayData*, Cell v);
-  static ArrayData* AppendRef(ArrayData*, tv_lval v);
-  static ArrayData* AppendRefInPlace(ArrayData*, tv_lval v);
   static ArrayData* AppendWithRef(ArrayData*, TypedValue v);
   static ArrayData* AppendWithRefInPlace(ArrayData*, TypedValue v);
   static ArrayData* PlusEq(ArrayData*, const ArrayData* elems);
@@ -426,6 +416,8 @@ public:
   static tv_rval NvTryGetStrDict(const ArrayData*,
                                             const StringData*);
   static constexpr auto NvGetStrDict = &NvGetStr;
+  static constexpr auto NvGetIntPosDict = &NvGetIntPos;
+  static constexpr auto NvGetStrPosDict = &NvGetStrPos;
   static tv_rval RvalIntDict(const ArrayData* ad, int64_t k) {
     assertx(ad->isDictOrShape());
     return NvGetIntDict(ad, k);
@@ -479,20 +471,11 @@ public:
   static constexpr auto CopyStaticDict = &CopyStatic;
   static constexpr auto AppendDict = &Append;
   static constexpr auto AppendInPlaceDict = &AppendInPlace;
-  static arr_lval LvalIntRefDict(ArrayData*, int64_t, bool);
-  static arr_lval LvalStrRefDict(ArrayData*, StringData*, bool);
-  static arr_lval LvalNewRefDict(ArrayData*, bool);
   static ArrayData* SetWithRefIntDict(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetWithRefIntInPlaceDict(ArrayData*, int64_t, TypedValue);
   static ArrayData* SetWithRefStrDict(ArrayData*, StringData* k, TypedValue v);
   static ArrayData* SetWithRefStrInPlaceDict(ArrayData*, StringData* k,
                                              TypedValue v);
-  static ArrayData* SetRefIntDict(ArrayData*, int64_t, tv_lval);
-  static constexpr auto SetRefIntInPlaceDict = &SetRefIntDict;
-  static ArrayData* SetRefStrDict(ArrayData*, StringData*, tv_lval);
-  static constexpr auto SetRefStrInPlaceDict = &SetRefStrDict;
-  static ArrayData* AppendRefDict(ArrayData*, tv_lval);
-  static constexpr auto AppendRefInPlaceDict = &AppendRefDict;
   static ArrayData* AppendWithRefDict(ArrayData*, TypedValue);
   static ArrayData* AppendWithRefInPlaceDict(ArrayData*, TypedValue);
   static constexpr auto PlusEqDict = &PlusEq;
@@ -529,6 +512,8 @@ public:
   static tv_rval NvTryGetStrShape(const ArrayData*,
                                   const StringData*);
   static constexpr auto NvGetStrShape = &NvGetStr;
+  static constexpr auto NvGetIntPosShape = &NvGetIntPos;
+  static constexpr auto NvGetStrPosShape = &NvGetStrPos;
   static tv_rval RvalIntShape(const ArrayData* ad, int64_t k) {
     assertx(ad->isShape());
     return NvGetIntShape(ad, k);
@@ -582,21 +567,12 @@ public:
   static constexpr auto CopyStaticShape = &CopyStatic;
   static constexpr auto AppendShape = &Append;
   static constexpr auto AppendInPlaceShape = &AppendInPlace;
-  static arr_lval LvalIntRefShape(ArrayData*, int64_t, bool);
-  static arr_lval LvalStrRefShape(ArrayData*, StringData*, bool);
-  static arr_lval LvalNewRefShape(ArrayData*, bool);
   static ArrayData* SetWithRefIntShape(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetWithRefIntInPlaceShape(ArrayData*, int64_t k,
                                               TypedValue v);
   static ArrayData* SetWithRefStrShape(ArrayData*, StringData* k, TypedValue);
   static ArrayData* SetWithRefStrInPlaceShape(ArrayData*, StringData* k,
                                               TypedValue);
-  static ArrayData* SetRefIntShape(ArrayData*, int64_t, tv_lval);
-  static ArrayData* SetRefIntInPlaceShape(ArrayData*, int64_t, tv_lval);
-  static ArrayData* SetRefStrShape(ArrayData*, StringData*, tv_lval);
-  static ArrayData* SetRefStrInPlaceShape(ArrayData*, StringData*, tv_lval);
-  static ArrayData* AppendRefShape(ArrayData*, tv_lval);
-  static ArrayData* AppendRefInPlaceShape(ArrayData*, tv_lval);
   static ArrayData* AppendWithRefShape(ArrayData*, TypedValue);
   static ArrayData* AppendWithRefInPlaceShape(ArrayData*, TypedValue);
   static constexpr auto PlusEqShape = &PlusEq;
@@ -630,7 +606,7 @@ private:
                                     ArrayData::DVArray);
 
 
-  template <IntishCast intishCast>
+  template <IntishCast IC>
   static ArrayData* FromDictImpl(ArrayData*, bool, bool);
 
   static bool DictEqualHelper(const ArrayData*, const ArrayData*, bool);
@@ -747,7 +723,7 @@ private:
    * Copy this from adIn, intish casting all the intish string keys in
    * accordance with the value of the intishCast template parameter
    */
-  template <IntishCast intishCast>
+  template <IntishCast IC>
   static ArrayData* copyWithIntishCast(MixedArray* adIn, bool asDArray = false);
 
   template <typename AccessorT>
@@ -780,23 +756,18 @@ private:
   static ArrayData* RemoveIntImpl(ArrayData*, int64_t, bool);
   static ArrayData* RemoveStrImpl(ArrayData*, const StringData*, bool);
   static ArrayData* AppendImpl(ArrayData*, Cell v, bool copy);
-  static ArrayData* AppendRefImpl(ArrayData*, tv_lval v, bool copy);
   static ArrayData* AppendWithRefImpl(ArrayData*, TypedValue v, bool copy);
 
   void nextInsert(Cell);
-  ArrayData* nextInsertRef(tv_lval data);
   ArrayData* nextInsertWithRef(TypedValue data);
   ArrayData* nextInsertWithRef(const Variant& data);
   ArrayData* addVal(int64_t ki, Cell data);
   ArrayData* addVal(StringData* key, Cell data);
   ArrayData* addValNoAsserts(StringData* key, Cell data);
 
-  Elm& addKeyAndGetElem(StringData* key);
-
   template <bool warn, class K> arr_lval addLvalImpl(K k);
   template <class K> ArrayData* update(K k, Cell data);
   template <class K> ArrayData* updateWithRef(K k, TypedValue data);
-  template <class K> ArrayData* updateRef(K k, tv_lval data);
 
   void eraseNoCompact(ssize_t pos);
   void erase(ssize_t pos) {
@@ -811,7 +782,6 @@ private:
 
   bool hasIntishKeys() const;
 
-  MixedArray* initRef(TypedValue& tv, tv_lval v);
   MixedArray* initWithRef(TypedValue& tv, TypedValue v);
   MixedArray* initWithRef(TypedValue& tv, const Variant& v);
   MixedArray* moveVal(TypedValue& tv, TypedValue v);

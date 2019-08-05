@@ -34,7 +34,7 @@ function main() {
 
 class base {
   public function __call($x, $y) {
-    echo "base::__call: $x, $y: " . get_called_class() . "\n";
+    echo "base::__call: $x, $y: " . static::class . "\n";
   }
 }
 
@@ -54,6 +54,7 @@ function main2() {
     $go->go($two);
   }
 }
-
+<<__EntryPoint>> function main_entry(): void {
 main();
 main2();
+}

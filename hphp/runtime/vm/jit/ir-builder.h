@@ -117,8 +117,6 @@ struct IRBuilder {
    */
   const LocalState& local(uint32_t id, GuardConstraint gc);
   const StackState& stack(IRSPRelOffset offset, GuardConstraint gc);
-  const CSlotClsState& clsRefClsSlot(uint32_t slot);
-  const CSlotTSState& clsRefTSSlot(uint32_t slot);
   SSATmp* valueOf(Location l, GuardConstraint gc);
   Type     typeOf(Location l, GuardConstraint gc);
 
@@ -216,9 +214,10 @@ struct IRBuilder {
   void setBlock(SrcKey sk, Block* block);
 
   /*
-   * Clear the SrcKey-to-block map.
+   * Clear the instructions in `block' and reset its start to the out state of
+   * `pred', which must have been saved.
    */
-  void resetOffsetMapping();
+  void resetBlock(Block* block, Block* pred);
 
   /*
    * Append `block' to the unit.
@@ -233,6 +232,17 @@ struct IRBuilder {
    * `pred' is ignored.
    */
   void appendBlock(Block* block, Block* pred = nullptr);
+
+  /*
+   * Clear the SrcKey-to-block map.
+   */
+  void resetOffsetMapping();
+
+  /*
+   * Save and restore the SrcKey-to-block map.
+   */
+  jit::flat_map<SrcKey, Block*> saveAndClearOffsetMapping();
+  void restoreOffsetMapping(jit::flat_map<SrcKey, Block*>&& offsetMapping);
 
   /*
    * Get, set, or null out the block to branch to in case of a guard failure.
@@ -289,8 +299,6 @@ private:
    */
   Location loc(uint32_t) const;
   Location stk(IRSPRelOffset) const;
-  Location cslotcls(uint32_t) const;
-  Location cslotts(uint32_t) const;
 
   /*
    * preOptimize() and helpers.
@@ -310,8 +318,6 @@ private:
   SSATmp* preOptimizeAssertLocation(IRInstruction*, Location);
   SSATmp* preOptimizeAssertLoc(IRInstruction*);
   SSATmp* preOptimizeAssertStk(IRInstruction*);
-  SSATmp* preOptimizeLdARFuncPtr(IRInstruction*);
-  SSATmp* preOptimizeLdARIsDynamic(IRInstruction*);
   SSATmp* preOptimizeCheckCtxThis(IRInstruction*);
   SSATmp* preOptimizeLdCtxHelper(IRInstruction*);
   SSATmp* preOptimizeLdCtx(IRInstruction* i) {
@@ -323,9 +329,6 @@ private:
   SSATmp* preOptimizeLdLocation(IRInstruction*, Location);
   SSATmp* preOptimizeLdLoc(IRInstruction*);
   SSATmp* preOptimizeLdStk(IRInstruction*);
-  SSATmp* preOptimizeLdClsRefCls(IRInstruction*);
-  SSATmp* preOptimizeCastStk(IRInstruction*);
-  SSATmp* preOptimizeCoerceStk(IRInstruction*);
   SSATmp* preOptimizeLdMBase(IRInstruction*);
   SSATmp* preOptimize(IRInstruction*);
 

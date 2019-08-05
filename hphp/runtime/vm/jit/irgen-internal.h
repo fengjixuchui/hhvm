@@ -47,19 +47,19 @@ inline SSATmp* fp(const IRGS& env) { return env.irb->fs().fp(); }
 inline SSATmp* sp(const IRGS& env) { return env.irb->fs().sp(); }
 
 inline Offset bcOff(const IRGS& env) {
-  return env.bcStateStack.back().offset();
+  return env.bcState.offset();
 }
 
 inline bool hasThis(const IRGS& env) {
-  return env.bcStateStack.back().hasThis();
+  return env.bcState.hasThis();
 }
 
 inline ResumeMode resumeMode(const IRGS& env) {
-  return env.bcStateStack.back().resumeMode();
+  return env.bcState.resumeMode();
 }
 
 inline const Func* curFunc(const IRGS& env) {
-  return env.bcStateStack.back().func();
+  return env.bcState.func();
 }
 
 inline const Unit* curUnit(const IRGS& env) {
@@ -71,7 +71,7 @@ inline const Class* curClass(const IRGS& env) {
 }
 
 inline SrcKey curSrcKey(const IRGS& env) {
-  return env.bcStateStack.back();
+  return env.bcState;
 }
 
 inline SrcKey nextSrcKey(const IRGS& env) {
@@ -414,11 +414,12 @@ inline SSATmp* popC(IRGS& env, GuardConstraint gc = DataTypeSpecific) {
   return assertType(pop(env, gc), TCell);
 }
 
+inline SSATmp* popCU(IRGS& env) { return assertType(pop(env), TCell); }
 inline SSATmp* popV(IRGS& env) { return assertType(pop(env), TBoxedInitCell); }
 inline SSATmp* popF(IRGS& env) { return assertType(pop(env), TGen); }
 inline SSATmp* popU(IRGS& env) { return assertType(pop(env), TUninit); }
 
-inline void discard(IRGS& env, uint32_t n) {
+inline void discard(IRGS& env, uint32_t n = 1) {
   env.irb->fs().decBCSPDepth(n);
 }
 
@@ -444,6 +445,10 @@ inline SSATmp* pushIncRef(IRGS& env, SSATmp* tmp,
   env.irb->constrainValue(tmp, gc);
   gen(env, IncRef, tmp);
   return push(env, tmp);
+}
+
+inline void allocActRec(IRGS& env) {
+  env.irb->fs().incBCSPDepth(kNumActRecCells);
 }
 
 inline Type topType(IRGS& env, BCSPRelOffset idx = BCSPRelOffset{0},
@@ -552,7 +557,7 @@ inline SSATmp* unbox(IRGS& env, SSATmp* val, Block* exit) {
 // Other common helpers
 
 inline bool classIsUnique(const Class* cls) {
-  return cls && (cls->attrs() & AttrUnique);
+  return cls && cls->isUnique();
 }
 
 inline bool classIsUniqueNormalClass(const Class* cls) {
@@ -939,63 +944,14 @@ SSATmp* boxHelper(IRGS& env, SSATmp* value, F rewrite) {
 }
 
 //////////////////////////////////////////////////////////////////////
-// Class-ref slots
-
-inline void killClsRefTS(IRGS& env, uint32_t slot) {
-  gen(env, KillClsRefTS, ClsRefSlotData{slot}, fp(env));
-}
-
-inline void killClsRef(IRGS& env, uint32_t slot) {
-  killClsRefTS(env, slot);
-  gen(env, KillClsRefCls, ClsRefSlotData{slot}, fp(env));
-}
-
-inline SSATmp* peekClsRefCls(IRGS& env, uint32_t slot) {
-  auto const knownType = env.irb->clsRefClsSlot(slot).type;
-  return gen(env, LdClsRefCls, knownType, ClsRefSlotData{slot}, fp(env));
-}
-
-inline SSATmp* peekClsRefTS(IRGS& env, uint32_t slot) {
-  return gen(env, LdClsRefTS, ClsRefSlotData{slot}, fp(env));
-}
-
-inline SSATmp* takeClsRefCls(IRGS& env, uint32_t slot) {
-  auto const cls = peekClsRefCls(env, slot);
-  killClsRef(env, slot);
-  return cls;
-}
-
-inline std::pair<SSATmp*, SSATmp*> takeClsRef(
-  IRGS& env,
-  uint32_t slot,
-  bool assertNonNullTS = true
-) {
-  auto ts = peekClsRefTS(env, slot);
-  if (assertNonNullTS) ts = gen(env, AssertNonNull, ts);
-  auto const cls = peekClsRefCls(env, slot);
-  killClsRef(env, slot);
-  return std::make_pair(ts, cls);
-}
-
-inline void putClsRef(
-  IRGS& env, uint32_t slot, SSATmp* cls, SSATmp* reified_generic = nullptr
-) {
-  if (!reified_generic) {
-    gen(env, StClsRefCls, ClsRefSlotData{slot}, fp(env), cls);
-    killClsRefTS(env, slot);
-    return;
-  }
-  gen(env, StClsRefCls, ClsRefSlotData{slot}, fp(env), cls);
-  gen(env, StClsRefTS, ClsRefSlotData{slot}, fp(env), reified_generic);
-}
-
-//////////////////////////////////////////////////////////////////////
 
 /*
  * Creates a catch block and calls body immediately as the catch block begins
  */
 template<class Body>
-Block* create_catch_block(IRGS& env, Body body) {
+Block* create_catch_block(
+    IRGS& env, Body body,
+    EndCatchData::CatchMode mode = EndCatchData::UnwindOnly) {
  auto const catchBlock = defBlock(env, Block::Hint::Unused);
  BlockPusher bp(*env.irb, env.irb->curMarker(), catchBlock);
 
@@ -1004,7 +960,7 @@ Block* create_catch_block(IRGS& env, Body body) {
 
  gen(env, BeginCatch);
  body();
- gen(env, EndCatch, IRSPRelOffsetData { spOffBCFromIRSP(env) },
+ gen(env, EndCatch, EndCatchData { spOffBCFromIRSP(env), mode },
      fp(env), sp(env));
  return catchBlock;
 }

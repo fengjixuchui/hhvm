@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : string mb_decode_mimeheader(string string)
  * Description: Decodes the MIME "encoded-word" in the string 
  * Source code: ext/mbstring/mbstring.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mb_decode_mimeheader() : variation ***\n";
 mb_internal_encoding('utf-8');
 
@@ -30,5 +30,5 @@ $encoded_words = array(
     var_dump(bin2hex(mb_decode_mimeheader($word)));
 }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

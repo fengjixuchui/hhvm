@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string gzuncompress(string data [, int length])
  * Description: Unzip a gzip-compressed string 
  * Source code: ext/zlib/zlib.c
@@ -21,5 +21,4 @@ $length = 3547;
 echo "\n-- Calling gzuncompress() with max length of $length --\n";
 echo "Result length is ".  strlen(gzuncompress($compressed, $length)) .  "\n";
 
-?>
-===DONE===
+echo "===DONE===\n";

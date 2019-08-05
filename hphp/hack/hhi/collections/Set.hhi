@@ -338,6 +338,7 @@ final class Set<Tv as arraykey> implements MutableSet<Tv> {
   public function zip<Tu>(
     <<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\Traversable::class)>> Traversable<Tu> $traversable
   /* HH_FIXME[4110] need bottom type as generic */
+  /* HH_FIXME[4322] */
   ): Set<Pair<Tv, Tu>>;
 
   /**
@@ -518,7 +519,7 @@ final class Set<Tv as arraykey> implements MutableSet<Tv> {
    *           `false` otherwise.
    */
   <<__Rx, __MaybeMutable>>
-  public function contains<Tu super Tv>(Tu $v): bool;
+  public function contains(mixed $v): bool;
 
   /**
    * Add the value to the current `Set`.
@@ -563,8 +564,8 @@ final class Set<Tv as arraykey> implements MutableSet<Tv> {
    * @return - Returns itself.
    */
   <<__Rx, __Mutable, __ReturnsVoidToRx>>
-  public function addAllKeysOf<Tv2>(
-    ?KeyedContainer<Tv,Tv2> $container,
+  public function addAllKeysOf(
+    ?KeyedContainer<Tv,mixed> $container,
   ): Set<Tv>;
 
   /**
@@ -626,17 +627,17 @@ final class Set<Tv as arraykey> implements MutableSet<Tv> {
    * @return - A `Set` with the values from the provided `array`.
    */
   <<__Deprecated('Use `new Set($arr)` instead.')>>
-  public static function fromArray<T>(darray<T, Tv> $arr): Set<Tv>;
+  public static function fromArray(darray<arraykey, Tv> $arr): Set<Tv>;
 
   /**
    * Returns a `Set` containing all the values from the specified `array`(s).
    *
-   * @param ... - The `array`s to convert to a `Set`.
+   * @param ...$argv - The `array`s to convert to a `Set`.
    *
    * @return - A `Set` with the values from the passed `array`(s).
    */
   <<__Rx, __MutableReturn>>
-  public static function fromArrays(...): Set<Tv>;
+  public static function fromArrays(...$argv): Set<Tv>;
 
   /**
    * Creates a `Set` from the given `Traversable`, or an empty `Set` if `null`
@@ -663,8 +664,8 @@ final class Set<Tv as arraykey> implements MutableSet<Tv> {
    * @return - A `Set` built from the keys of the specified container.
    */
   <<__Rx, __MutableReturn>>
-  public static function fromKeysOf<Tk as arraykey, Tv2>(
-    ?KeyedContainer<Tk,Tv2> $container,
+  public static function fromKeysOf<Tk as arraykey>(
+    ?KeyedContainer<Tk,mixed> $container,
   ): Set<Tk>;
 
   /**

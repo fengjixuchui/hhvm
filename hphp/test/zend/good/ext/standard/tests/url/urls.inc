@@ -1,4 +1,4 @@
-<?php
+<?hh
 $urls = array(
 // Parsable URLs:
 '64.246.30.37',
@@ -110,4 +110,3 @@ $urls = array(
 );
 
 
-?>

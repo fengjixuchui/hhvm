@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool ksort ( array &$array [, int $sort_flags] )
  * Description: Sort an array by key, maintaining key to data correlation. 
  * Source code: ext/standard/array.c
@@ -10,7 +10,7 @@
  *  2.SORT_REGULAR - compare items normally
  *  3.SORT_NUMERIC - compare items numerically
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing ksort() : usage variations ***\n";
 
 // an array containing unsorted octal values
@@ -35,4 +35,4 @@ var_dump( ksort(&$temp_array, SORT_NUMERIC) ); // expecting : bool(true)
 var_dump($temp_array);
 
 echo "Done\n";
-?>
+}

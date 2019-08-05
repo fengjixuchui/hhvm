@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : array array_flip(array $input)
  * Description: Return array with key <-> value flipped 
  * Source code: ext/standard/array.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_flip() : basic functionality ***\n";
 
 // array with default keys - numeric values
@@ -25,5 +25,5 @@ var_dump( array_flip($input) );
 // combination of associative and non-associative array
 $input = array(1 => 'one','two', 3 => 'three', 4, "five" => 5);
 var_dump( array_flip($input) );
-echo "Done"
-?>
+echo "Done";
+}

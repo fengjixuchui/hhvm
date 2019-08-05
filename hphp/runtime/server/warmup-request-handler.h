@@ -21,6 +21,7 @@
 
 #include "hphp/runtime/server/server.h"
 #include "hphp/runtime/server/http-request-handler.h"
+#include "hphp/util/job-queue.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -72,17 +73,29 @@ private:
   Server *m_server;
 };
 
-// Play an internal warmup request.
-struct InternalWarmupWorker {
-  InternalWarmupWorker(const std::string& file, unsigned index)
-    : m_hdfFile(file)
-    , m_index(index) {}
-  void run();
- private:
-  const std::string m_hdfFile;
-  const unsigned m_index;
+struct WarmupJob {
+  const std::string hdfFile;
+  unsigned index;
 };
 
+struct InternalWarmupWorker : JobQueueWorker<WarmupJob> {
+  void doJob(WarmupJob job) override;
+};
+
+struct InternalWarmupRequestPlayer : JobQueueDispatcher<InternalWarmupWorker> {
+  // Don't inline into header file without testing performance on MacOS:
+  // https://github.com/facebook/hhvm/issues/8515
+  // Problem tested on 2019-06-11 on MacOS High Sierra and Mojave
+  // Apple LLVM version 10.0.1 (clang-1001.0.46.4)
+  // Target: x86_64-apple-darwin18.5.0
+  explicit InternalWarmupRequestPlayer(int threadCount);
+  ~InternalWarmupRequestPlayer();
+
+  // Start running after an optional delay.
+  void runAfterDelay(const std::vector<std::string>& files,
+                     unsigned nTimes = 1,
+                     unsigned delaySeconds = 0);
+};
 
 ///////////////////////////////////////////////////////////////////////////////
 }

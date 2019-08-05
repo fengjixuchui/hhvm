@@ -344,10 +344,11 @@ void emitCreateCl(IRGS& env, uint32_t numParams, uint32_t clsIx) {
   assertx(cls->attrs() & AttrUnique);
 
   cls = cls->rescope(const_cast<Class*>(curClass(env)));
+  assertx(!cls->needInitialization());
 
   auto const func = cls->getCachedInvoke();
 
-  auto const closure = allocObjFast(env, cls);
+  auto const closure = gen(env, ConstructClosure, ClassData(cls));
 
   auto const live_ctx = [&] {
     auto const ldctx = ldCtx(env);
@@ -365,7 +366,7 @@ void emitCreateCl(IRGS& env, uint32_t numParams, uint32_t clsIx) {
 
   SSATmp** args = (SSATmp**)alloca(sizeof(SSATmp*) * numParams);
   for (int32_t i = 0; i < numParams; ++i) {
-    args[numParams - i - 1] = popF(env);
+    args[numParams - i - 1] = popCU(env);
   }
 
   int32_t propId = 0;
@@ -379,22 +380,7 @@ void emitCreateCl(IRGS& env, uint32_t numParams, uint32_t clsIx) {
     );
   }
 
-  assertx(cls->numDeclProperties() == func->numStaticLocals() + numParams);
-
-  // Closure static variables are per instance, and need to start
-  // uninitialized.  After numParams use vars, the remaining instance
-  // properties hold any static locals.
-  for (int32_t numDeclProperties = cls->numDeclProperties();
-      propId < numDeclProperties;
-      ++propId) {
-    gen(
-      env,
-      StClosureArg,
-      ByteOffsetData { safe_cast<ptrdiff_t>(cls->declPropOffset(propId)) },
-      closure,
-      cns(env, TUninit)
-    );
-  }
+  assertx(cls->numDeclProperties() == numParams);
 
   push(env, closure);
 }
@@ -524,8 +510,9 @@ void newStructImpl(IRGS& env, const ImmVector& immVec, Opcode op) {
     extra.keys[i] = curUnit(env)->lookupLitstrId(ids[i]);
   }
 
+  auto const structData = gen(env, op, extra, sp(env));
   discard(env, numArgs);
-  push(env, gen(env, op, extra, sp(env)));
+  push(env, structData);
 }
 
 }
@@ -584,7 +571,7 @@ void emitAddElemC(IRGS& env) {
 void emitAddNewElemC(IRGS& env) {
   auto const arrType = topC(env, BCSPRelOffset{1})->type();
   if (!arrType.subtypeOfAny(TArr, TKeyset, TVec)) {
-    return interpOne(env, *env.currentNormalizedInstruction);
+    return interpOne(env);
   }
   auto const val = popC(env, DataTypeCountness);
   auto const arr = popC(env);
@@ -618,6 +605,22 @@ void emitNewPair(IRGS& env) {
   push(env, gen(env, NewPair, c2, c1));
 }
 
+void emitNewRecord(IRGS& env, const StringData* name, const ImmVector& immVec) {
+  auto const cachedRec = gen(env, LdRecDescCached, RecNameData{name});
+  auto const numArgs = immVec.size();
+  auto const ids = immVec.vec32();
+  NewStructData extra;
+  extra.offset = spOffBCFromIRSP(env);
+  extra.numKeys = numArgs;
+  extra.keys = new (env.unit.arena()) StringData*[numArgs];
+  for (auto i = size_t{0}; i < numArgs; ++i) {
+    extra.keys[i] = curUnit(env)->lookupLitstrId(ids[i]);
+  }
+  auto const recData = gen(env, NewRecord, extra, cachedRec, sp(env));
+  discard(env, numArgs);
+  push(env, recData);
+}
+
 void emitColFromArray(IRGS& env, CollectionType type) {
   assertx(type != CollectionType::Pair);
   auto const arr = popC(env);
@@ -635,204 +638,18 @@ void emitColFromArray(IRGS& env, CollectionType type) {
   push(env, gen(env, NewColFromArray, NewColData{type}, arr));
 }
 
-void emitStaticLocInit(IRGS& env, int32_t locId, const StringData* name) {
-  auto const func = curFunc(env);
-  if (func->isPseudoMain()) PUNT(StaticLocInit);
-
-  auto const value = popC(env);
-
-  // Closures and generators from closures don't satisfy the "one static per
-  // source location" rule that the inline fastpath requires
-  auto const box = [&]{
-    if (func->isClosureBody()) {
-      assertx(func->isClosureBody());
-      assertx(!func->hasVariadicCaptureParam());
-      auto const obj = gen(
-        env, LdLoc, TObj, LocalId(func->numParams()), fp(env));
-
-      auto const theStatic = gen(env,
-                                 LdClosureStaticLoc,
-                                 StaticLocName { func, name },
-                                 obj);
-      ifThen(
-        env,
-        [&] (Block* taken) {
-          gen(env, CheckTypeMem, TBoxedCell, taken, theStatic);
-        },
-        [&] {
-          hint(env, Block::Hint::Unlikely);
-          gen(env, StMem, theStatic, value);
-          gen(env, BoxPtr, theStatic);
-        }
-      );
-      return gen(env, LdMem, TBoxedCell, theStatic);
-    }
-
-    ifThen(
-      env,
-      [&] (Block* taken) {
-        gen(
-          env,
-          CheckStaticLoc,
-          StaticLocName { func, name },
-          taken
-        );
-      },
-      [&] {
-        hint(env, Block::Hint::Unlikely);
-        gen(
-          env,
-          InitStaticLoc,
-          StaticLocName { func, name },
-          value
-        );
-      }
-    );
-    return gen(env, LdStaticLoc, StaticLocName { func, name });
-  }();
-
-  gen(env, IncRef, box);
-  auto const oldValue = ldLoc(env, locId, nullptr, DataTypeSpecific);
-  stLocRaw(env, locId, fp(env), box);
-  decRef(env, oldValue);
-  // We don't need to decref value---it's a bytecode invariant that
-  // our Cell was not ref-counted.
-}
-
-void emitStaticLocCheck(IRGS& env, int32_t locId, const StringData* name) {
-  auto const func = curFunc(env);
-  if (func->isPseudoMain()) PUNT(StaticLocCheck);
-
-  auto bindLocal = [&] (SSATmp* box) {
-    gen(env, IncRef, box);
-    auto const oldValue = ldLoc(env, locId, nullptr, DataTypeGeneric);
-    stLocRaw(env, locId, fp(env), box);
-    decRef(env, oldValue);
-    return cns(env, true);
-  };
-
-  auto const inited = [&] {
-    if (func->isClosureBody()) {
-      auto const obj = gen(
-        env, LdLoc, TObj, LocalId(func->numParams()), fp(env));
-      auto const theStatic = gen(env,
-                                 LdClosureStaticLoc,
-                                 StaticLocName { func, name },
-                                 obj);
-      return cond(
-        env,
-        [&] (Block* taken) {
-          gen(env, CheckTypeMem, TBoxedCell, taken, theStatic);
-        },
-        [&] {
-          return bindLocal(gen(env, LdMem, TInitCell, theStatic));
-        },
-        [&] {
-          hint(env, Block::Hint::Unlikely);
-          return cns(env, false);
-        }
-      );
-    }
-
-    return cond(
-      env,
-      [&] (Block* taken) {
-        gen(
-          env,
-          CheckStaticLoc,
-          StaticLocName { func, name },
-          taken
-        );
-      },
-      [&] {
-        // Next: the static local is already initialized
-        return bindLocal(gen(env, LdStaticLoc, StaticLocName { func, name }));
-      },
-      [&] { // Taken: need to initialize the static local
-        return cns(env, false);
-      }
-    );
-  }();
-
-  push(env, inited);
-}
-
-void emitStaticLocDef(IRGS& env, int32_t locId, const StringData* name) {
-  auto const func = curFunc(env);
-  if (func->isPseudoMain()) PUNT(StaticLocDef);
-
-  auto const value = popC(env);
-
-  auto const box = [&] {
-    if (func->isClosureBody()) {
-      auto const obj = gen(
-        env, LdLoc, TObj, LocalId(func->numParams()), fp(env));
-      auto const theStatic = gen(env,
-                                 LdClosureStaticLoc,
-                                 StaticLocName { func, name },
-                                 obj);
-      gen(env, StMem, theStatic, value);
-      auto const boxedStatic = gen(env, BoxPtr, theStatic);
-      return gen(env, LdMem, TBoxedInitCell, boxedStatic);
-    }
-
-    auto init = [&] {
-      gen(
-        env,
-        InitStaticLoc,
-        StaticLocName { func, name },
-        value
-      );
-    };
-
-    if (func->isMemoizeWrapper() && !func->numParams()) {
-      ifThenElse(
-        env,
-        [&] (Block* taken) {
-          gen(
-            env,
-            CheckStaticLoc,
-            StaticLocName { func, name },
-            taken
-          );
-        },
-        [&] {
-          hint(env, Block::Hint::Unlikely);
-          auto oldBox = gen(env, LdStaticLoc, StaticLocName { func, name });
-          auto oldVal = gen(env, LdRef, TInitCell, oldBox);
-          init();
-          decRef(env, oldVal);
-        },
-        [&] {
-          init();
-        }
-      );
-    } else {
-      init();
-    }
-
-    return gen(
-      env,
-      LdStaticLoc,
-      StaticLocName { func, name }
-    );
-  }();
-
-  gen(env, IncRef, box);
-  auto const oldValue = ldLoc(env, locId, nullptr, DataTypeGeneric);
-  stLocRaw(env, locId, fp(env), box);
-  decRef(env, oldValue);
-}
-
 void emitCheckReifiedGenericMismatch(IRGS& env) {
   auto const cls = curClass(env);
   if (!cls) {
     // no static context class, so this will raise an error
-    interpOne(env, *env.currentNormalizedInstruction);
+    interpOne(env);
     return;
   }
-  auto const reified_generics = popC(env);
-  gen(env, CheckClsReifiedGenericMismatch, ClassData{cls}, reified_generics);
+  auto const reified = popC(env);
+  if (!reified->isA(RuntimeOption::EvalHackArrDVArrs ? TVec : TArr)) {
+    PUNT(CheckReifiedGenericMismatch-InvalidTS);
+  }
+  gen(env, CheckClsReifiedGenericMismatch, ClassData{cls}, reified);
 }
 
 //////////////////////////////////////////////////////////////////////

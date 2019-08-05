@@ -1,11 +1,11 @@
-<?php
+<?hh
 
 class foo {
-	static public function a() {
-		print "ok\n";
-	}
+    static public function a() {
+        print "ok\n";
+    }
 }
-
+<<__EntryPoint>> function main(): void {
 $a = 'a';
 $b = 'a';
 
@@ -16,5 +16,4 @@ foo::$a();
 
 $class::a();
 $class::$a();
-
-?>
+}

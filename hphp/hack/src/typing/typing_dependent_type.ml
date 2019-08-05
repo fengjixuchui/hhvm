@@ -11,11 +11,9 @@ open Core_kernel
 open Typing_defs
 
 module ExprDepTy = struct
-  module N = Nast
+  module N = Aast
   module Env = Typing_env
   module TUtils = Typing_utils
-
-  let to_string dt = AbstractKind.to_string (AKdependent dt)
 
   let new_() =
     let eid = Ident.tmp() in
@@ -62,63 +60,36 @@ module ExprDepTy = struct
       | N.CIexpr (p, _) ->
           let ereason, dep = new_() in
           p, ereason, dep in
-    (Reason.Rexpr_dep_type (reason, pos, expr_dep_reason), (dep, []))
+    (Reason.Rexpr_dep_type (reason, pos, expr_dep_reason), dep)
 
   (* Takes the given list of dependent types and applies it to the given
    * locl ty to create a new locl ty
    *)
-  let apply env dep_tys ty =
-    let apply_single env dep_tys ty =
-      List.fold_left dep_tys ~f:begin fun (env, ty) (r, dep_ty) ->
-          match dep_ty, ty with
-          (* Always represent exact types without an access path as Tclass(_,Exact,_) *)
-        | (`cls _, []), (_, Tclass (c, _, tyl)) ->
-          env, (r, Tclass (c, Exact, tyl))
-        | (_, []), _ ->
-          env, (r, Tabstract (AKdependent dep_ty, Some ty))
-        | _ ->
-          begin match ty with
-          (* If the generic in question is exactly equal to something, the
-          expression dependent type collapses to that given type, since
-          all constraints of the expression dependent type will get
-          transferred to the lower type. *)
-          (* For example, if we have the following
-            abstract class Box {
-              abstract const type T;
-            }
-            class IntBox { const type T = int; }
-            function addFiveToValue<T1 as Box>(T1 $x) : int where T1::T = int {
-                return $x->get() + 5;
-            }
-            Here, $x->get() has type expr#1::T as T1::T as Box::T.
-            But T1::T is exactly equal to int, so $x->get() no longer needs
-            to be expression dependent. Thus, $x->get() typechecks.
-          *)
-            | (_, Tabstract (AKgeneric s, _)) when
-            not (Typing_set.is_empty (Env.get_equal_bounds env s)) ->
-            (env, ty)
-            | _ ->
-             let ty_name = to_string dep_ty in
-             let new_ty = (r, Tabstract(AKgeneric ty_name, None)) in
-              let env = Env.add_upper_bound_global env ty_name ty in
-              (env, new_ty)
-          end
-      end ~init:(env, ty) in
+  let rec apply env ~dep_ty ty =
     let env, ety = Env.expand_type env ty in
     match ety with
-    | _, Tunresolved [x] when dep_tys = [] ->
-       env, x
-    | r, Tunresolved tyl ->
-      let env, tyl = List.fold tyl ~f:(fun (env, acc) ty ->
-        let env, ty = apply_single env dep_tys ty in
-        env, ty::acc) ~init:(env, []) in
-      env, (r, Tunresolved tyl)
+    | r, Toption ty ->
+      let env, ty = apply env ~dep_ty ty in
+      env, (r, Toption ty)
+    | r, Tunion tyl ->
+      let env, tyl = List.fold_map tyl ~init:env ~f:(apply ~dep_ty) in
+      Typing_union.union_list env r tyl
+    | r, Tintersection tyl ->
+      let env, tyl = List.fold_map tyl ~init:env ~f:(apply ~dep_ty) in
+      Typing_intersection.intersect_list env r tyl
     | _, Tvar _ -> env, ty
-    | _ -> apply_single env dep_tys ety
+    | _ ->
+      let (r, dep_ty) = dep_ty in
+      match dep_ty, ety with
+        (* Always represent exact types without an access path as Tclass(_,Exact,_) *)
+      | `cls n, (_, Tclass (c, _, tyl)) when n = snd c ->
+        env, (r, Tclass (c, Exact, tyl))
+      | dep_ty, _ ->
+        env, (r, Tabstract (AKdependent dep_ty, Some ety))
 
 
   (* We do not want to create a new expression dependent type if the type is
-   * already expression dependent. However if the type is Tunresolved that
+   * already expression dependent. However if the type is Tunion that
    * contains different expression dependent types then we will want to
    * generate a new dependent type. For example:
    *
@@ -127,7 +98,7 @@ module ExprDepTy = struct
    *  } else {
    *    $x = new B(); // Dependent type (`cls '\B')
    *  }
-   *  $x; // Tunresolved[(`cls '\A', `cls '\B')]
+   *  $x; // Tunion[(`cls '\A', `cls '\B')]
    *
    *  // When we call the function below, we need to generate
    *  // A new expression dependent type since
@@ -145,12 +116,13 @@ module ExprDepTy = struct
     | Toption ty
     | Tabstract (
         ( AKnewtype _
-        | AKenum _
         ), Some ty) ->
         should_apply env ty
     | Tabstract (AKdependent _, Some _) ->
         false
-    | Tunresolved tyl ->
+    | Tunion tyl ->
+        List.exists tyl (should_apply env)
+    | Tintersection tyl ->
         List.exists tyl (should_apply env)
     | Tclass (_, Exact, _) ->
         false
@@ -165,7 +137,7 @@ module ExprDepTy = struct
           ~f:(fun class_ty ->
               not (TUtils.class_is_final_and_not_contravariant class_ty))
     | Tanon _ | Tobject | Tnonnull | Tprim _ | Tshape _ | Ttuple _ | Tdynamic
-    | Tarraykind _ | Tfun _ | Tabstract (_, None) | Tany | Tvar _ | Terr ->
+    | Tarraykind _ | Tfun _ | Tabstract (_, None) | Tany | Tvar _ | Terr | Tdestructure _ ->
         false
 
   (****************************************************************************)
@@ -187,9 +159,15 @@ module ExprDepTy = struct
    * More specific details are explained inline
    *)
   (****************************************************************************)
-  let make env cid cid_ty =
-    if should_apply env cid_ty then
-      apply env [from_cid env (fst cid_ty) cid] cid_ty
-    else
-      env, cid_ty
+  let rec make env ~cid cid_ty =
+    let env, cid_ty = Env.expand_type env cid_ty in
+    match cid_ty with
+    | r, Tintersection tyl ->
+      let env, tyl = List.fold_map tyl ~init:env ~f:(make ~cid) in
+      env, (r, Tintersection tyl)
+    | _ ->
+      if should_apply env cid_ty then
+        apply env (from_cid env (fst cid_ty) cid) cid_ty
+      else
+        env, cid_ty
 end

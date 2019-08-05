@@ -54,7 +54,6 @@ namespace {
 //////////////////////////////////////////////////////////////////////
 
 const StaticString s_Awaitable("HH\\Awaitable");
-const StaticString s_empty("");
 
 //////////////////////////////////////////////////////////////////////
 
@@ -70,8 +69,8 @@ bool mayHaveData(trep bits) {
   switch (bits) {
   case BSStr:    case BStr:
   case BOptSStr: case BOptStr:
-  case BObj:     case BInt:    case BDbl:
-  case BOptObj:  case BOptInt: case BOptDbl:
+  case BObj:     case BInt:    case BDbl:     case BRecord:
+  case BOptObj:  case BOptInt: case BOptDbl:  case BOptRecord:
   case BCls:
   case BArr:     case BSArr:     case BCArr:
   case BArrN:    case BSArrN:    case BCArrN:
@@ -220,6 +219,7 @@ bool canBeOptional(trep bits) {
   case BFunc:
   case BCls:
   case BClsMeth:
+  case BRecord:
     return true;
 
   case BSPArrE:
@@ -329,6 +329,7 @@ bool canBeOptional(trep bits) {
   case BOptFunc:
   case BOptCls:
   case BOptClsMeth:
+  case BOptRecord:
     return false;
 
   case BInitPrim:
@@ -795,9 +796,7 @@ struct DualDispatchEqImpl {
     return false;
   }
   bool operator()(const DReifiedName& a, const SString b) const {
-    if (!isReifiedName(b)) return false;
-    auto const name = stripTypeFromReifiedName(b);
-    return name->isame(a.name);
+    return false;
   }
 };
 
@@ -1757,7 +1756,7 @@ bool Type::subtypeData(const Type& o) const {
         return true;
       }
       if (o.m_data.dobj.type == DObj::Sub) {
-        return m_data.dobj.cls.subtypeOf(o.m_data.dobj.cls);
+        return m_data.dobj.cls.mustBeSubtypeOf(o.m_data.dobj.cls);
       }
       return false;
     }();
@@ -1774,7 +1773,7 @@ bool Type::subtypeData(const Type& o) const {
       return true;
     }
     if (o.m_data.dcls.type == DCls::Sub) {
-      return m_data.dcls.cls.subtypeOf(o.m_data.dcls.cls);
+      return m_data.dcls.cls.mustBeSubtypeOf(o.m_data.dcls.cls);
     }
     return false;
   case DataTag::Str:
@@ -1821,10 +1820,10 @@ bool Type::couldBeData(const Type& o) const {
         if (o.m_data.dobj.type == DObj::Sub) {
           return o.m_data.dobj.cls.couldBe(m_data.dobj.cls);
         }
-        return o.m_data.dobj.cls.subtypeOf(m_data.dobj.cls);
+        return o.m_data.dobj.cls.maybeSubtypeOf(m_data.dobj.cls);
       }
       if (o.m_data.dobj.type == DObj::Sub) {
-        return m_data.dobj.cls.subtypeOf(o.m_data.dobj.cls);
+        return m_data.dobj.cls.maybeSubtypeOf(o.m_data.dobj.cls);
       }
       return false;
     }();
@@ -1869,6 +1868,7 @@ bool Type::equivImpl(const Type& o) const {
 
   if (m_bits != o.m_bits) return false;
   if (hasData() != o.hasData()) return false;
+  //if (m_bits & BRecord) return false;
   if (!hasData()) return true;
 
   return equivData<contextSensitive>(o);
@@ -1887,7 +1887,41 @@ size_t Type::hash() const {
   using U2 = std::underlying_type<decltype(m_dataTag)>::type;
   auto const rawBits = U1{m_bits};
   auto const rawTag  = static_cast<U2>(m_dataTag);
-  return folly::hash::hash_combine(rawBits, rawTag);
+
+  auto const data =
+    [&] () -> uintptr_t {
+      switch (m_dataTag) {
+        case DataTag::None:
+          return 0;
+        case DataTag::Obj:
+          return (uintptr_t)m_data.dobj.cls.name();
+        case DataTag::Cls:
+          return (uintptr_t)m_data.dcls.cls.name();
+        case DataTag::RefInner:
+          return 0;
+        case DataTag::Str:
+          return (uintptr_t)m_data.sval;
+        case DataTag::Int:
+          return m_data.ival;
+        case DataTag::Dbl:
+          return m_data.dval;
+        case DataTag::ArrLikeVal:
+          return (uintptr_t)m_data.aval;
+        case DataTag::ReifiedName:
+          return (uintptr_t)m_data.rname.name;
+        case DataTag::ArrLikePacked:
+          return m_data.packed->elems.size();
+        case DataTag::ArrLikePackedN:
+          return 0;
+        case DataTag::ArrLikeMap:
+          return m_data.map->map.size();
+        case DataTag::ArrLikeMapN:
+          return 0;
+      }
+      not_reached();
+    }();
+
+  return folly::hash::hash_combine(rawBits, rawTag, data);
 }
 
 template<bool contextSensitive>
@@ -2150,7 +2184,7 @@ Type aempty_darray()  {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
   return Type { BSDArrE };
 }
-Type sempty()         { return sval(s_empty.get()); }
+Type sempty()         { return sval(staticEmptyString()); }
 Type some_aempty()    { return Type { BPArrE }; }
 Type some_aempty_darray() {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
@@ -2530,15 +2564,19 @@ Type unnullish(Type t) {
 
 Type return_with_context(Type t, Type context) {
   assertx(t.subtypeOf(BInitGen));
-  // We don't assert the context is a TCls of TObj because sometimes we set it
+  // We don't assert the context is a TCls or TObj because sometimes we set it
   // to TTop when handling dynamic calls.
   if (((is_specialized_obj(t) && t.m_data.dobj.isCtx) ||
         (is_specialized_cls(t) && t.m_data.dcls.isCtx)) &&
       context.subtypeOfAny(TCls, TObj) && context != TBottom) {
-    context = toobj(context);
+    context = is_specialized_obj(t) ? toobj(context) : objcls(context);
     if (is_specialized_obj(context) && dobj_of(context).type == DObj::Exact &&
         dobj_of(context).cls.couldBeMocked()) {
       context = subObj(dobj_of(context).cls);
+    }
+    if (is_specialized_cls(context) && dcls_of(context).type == DCls::Exact &&
+        dcls_of(context).cls.couldBeMocked()) {
+      context = subCls(dcls_of(context).cls);
     }
     bool o = is_opt(t);
     t = intersection_of(unctx(std::move(t)), context);
@@ -2799,6 +2837,9 @@ R tvImpl(const Type& t) {
   case BKeysetE:
   case BSKeysetE:
     return H::template make<KindOfPersistentKeyset>(staticEmptyKeysetArray());
+
+  case BRecord:
+    break;
 
   case BCStr:
   case BCArrE:
@@ -3124,7 +3165,7 @@ folly::Optional<Type> type_of_type_structure(SArray ts) {
         auto const wrapper = fields->getValue(i).getArrayData();
         // Optional fields are hard to represent as a type
         if (is_optional_ts_shape_field(wrapper)) return folly::none;
-        auto t = type_of_type_structure(get_ts_value_field(wrapper));
+        auto t = type_of_type_structure(get_ts_value(wrapper));
         if (!t) return folly::none;
         map.emplace_back(
           make_tv<KindOfPersistentString>(key), std::move(t.value()));
@@ -3149,8 +3190,10 @@ folly::Optional<Type> type_of_type_structure(SArray ts) {
       //  : union_of(union_of(union_of(TArr, TVec), TDict), TKeyset);
       return folly::none;
 
+    case TypeStructure::Kind::T_nothing:
     case TypeStructure::Kind::T_noreturn:
     case TypeStructure::Kind::T_mixed:
+    case TypeStructure::Kind::T_dynamic:
     case TypeStructure::Kind::T_nonnull:
     case TypeStructure::Kind::T_class:
     case TypeStructure::Kind::T_interface:
@@ -3231,6 +3274,7 @@ Type from_cell(Cell cell) {
 
   case KindOfPersistentShape:
   case KindOfShape:
+  case KindOfRecord: // TODO(arnabde)
     not_implemented();
 
   case KindOfPersistentArray:
@@ -3265,6 +3309,7 @@ Type from_DataType(DataType dt) {
   case KindOfDict:     return TDict;
   case KindOfPersistentKeyset:
   case KindOfKeyset:   return TKeyset;
+  case KindOfRecord:   return TRecord;
   case KindOfPersistentShape:
   case KindOfShape:    not_implemented();
   case KindOfPersistentArray:
@@ -3369,11 +3414,11 @@ Type intersection_of(Type a, Type b) {
             return fixWh(a);
           }
           if (b.m_data.dobj.type == DObj::Sub &&
-              a.m_data.dobj.cls.subtypeOf(b.m_data.dobj.cls)) {
+              a.m_data.dobj.cls.mustBeSubtypeOf(b.m_data.dobj.cls)) {
             return fixWh(a);
           }
           if (a.m_data.dobj.type == DObj::Sub &&
-              b.m_data.dobj.cls.subtypeOf(a.m_data.dobj.cls)) {
+              b.m_data.dobj.cls.mustBeSubtypeOf(a.m_data.dobj.cls)) {
             return fixWh(b);
           }
           if (a.m_data.dobj.type == DObj::Sub &&
@@ -4058,6 +4103,32 @@ Type assert_nonemptiness(Type t) {
 
 //////////////////////////////////////////////////////////////////////
 
+folly::Optional<ArrKey> maybe_class_func_key(const Type& keyTy, bool strict) {
+  if (keyTy.subtypeOf(TNull)) return {};
+
+  auto ret = ArrKey{};
+
+  if (keyTy.subtypeOf(BOptCls | BOptFunc)) {
+    ret.mayThrow = true;
+    if (keyTy.subtypeOf(BCls | BFunc)) {
+      ret.type = TStr;
+      if (keyTy.strictSubtypeOf(TCls)) {
+        ret.s = dcls_of(keyTy).cls.name();
+      }
+      return ret;
+    }
+    ret.type = TUncArrKey;
+    return ret;
+  } else if (keyTy.couldBe(BOptCls | BOptFunc)) {
+    ret.mayThrow = true;
+    if (strict) ret.type = keyTy.couldBe(BCStr) ? TArrKey : TUncArrKey;
+    else        ret.type = TInitCell;
+    return ret;
+  }
+
+  return {};
+}
+
 /*
  * For known strings that are strictly integers, we'll set both the known
  * integer and string keys, so generally the int case should be checked first
@@ -4078,6 +4149,8 @@ Type assert_nonemptiness(Type t) {
 ArrKey disect_array_key(const Type& keyTy) {
   auto ret = ArrKey{};
 
+  if (auto const r = maybe_class_func_key(keyTy, false)) return *r;
+
   if (keyTy.subtypeOf(BOptInt)) {
     if (keyTy.subtypeOf(BInt)) {
       if (keyTy.strictSubtypeOf(TInt)) {
@@ -4095,62 +4168,20 @@ ArrKey disect_array_key(const Type& keyTy) {
     return ret;
   }
 
-  auto const intishCast = RuntimeOption::EvalEnableIntishCast;
-
   if (keyTy.subtypeOf(BOptStr)) {
     if (keyTy.subtypeOf(BStr)) {
       if (keyTy.strictSubtypeOf(TStr) && keyTy.m_dataTag == DataTag::Str) {
-        int64_t i;
-        if (intishCast && keyTy.m_data.sval->isStrictlyInteger(i)) {
-          ret.i = i;
-          ret.type = ival(i);
-          ret.mayThrow = RuntimeOption::EvalHackArrCompatNotices;
-        } else {
-          ret.s = keyTy.m_data.sval;
-          ret.type = keyTy;
-        }
-        return ret;
-      }
-      // Might stay a string or become an integer. The effective type is
-      // uncounted if the string is static.
-      if (intishCast) {
-        ret.type = keyTy.subtypeOf(BSStr) ? TUncArrKey : TArrKey;
-        ret.mayThrow = RuntimeOption::EvalHackArrCompatNotices;
-        return ret;
+        ret.s = keyTy.m_data.sval;
       } else {
-        // if intish cast is disabled, a non-null string remains a string
-        ret.type = keyTy;
         ret.mayThrow = RuntimeOption::EvalHackArrCompatNotices;
-        return ret;
       }
-    }
-
-    // if intish cast is disabled, the key will remain a str, but since it is
-    // optional, we cannot include the value itself, as explained below
-    if (!intishCast) {
-      ret.type = keyTy.subtypeOf(BOptSStr) ? TSStr : TStr;
-      ret.mayThrow = RuntimeOption::EvalHackArrCompatNotices;
+      ret.type = keyTy;
       return ret;
     }
 
-    // If we have an OptStr with a value, we can at least exclude the
-    // possibility of integer-like strings by looking at that value.
-    // But we can't use the value itself, because if it is null the key
-    // will act like the empty string.  In that case, the code uses the
-    // static empty string, so if it was an OptCStr it needs to
-    // incorporate SStr, but an OptSStr can stay as SStr.
-    if (keyTy.subtypeOf(BOptStr) && keyTy.m_dataTag == DataTag::Str) {
-      int64_t ignore;
-      if (!keyTy.m_data.sval->isStrictlyInteger(ignore)) {
-        ret.type = keyTy.subtypeOf(BOptSStr) ? TSStr : TStr;
-        ret.mayThrow = RuntimeOption::EvalHackArrCompatNotices;
-        return ret;
-      }
-    }
-    // An optional string is fine because a null will just become the empty
-    // string. So, if the string is static, the effective type is uncounted
-    // still. The effective type is ArrKey because it might become an integer.
-    ret.type = keyTy.subtypeOf(BOptSStr) ? TUncArrKey : TArrKey;
+    // Since the key is optional, we cannot include the value itself, as
+    // explained below.
+    ret.type = keyTy.subtypeOf(BOptSStr) ? TSStr : TStr;
     ret.mayThrow = RuntimeOption::EvalHackArrCompatNotices;
     return ret;
   }
@@ -4174,7 +4205,7 @@ ArrKey disect_array_key(const Type& keyTy) {
     return ret;
   }
   if (keyTy.subtypeOf(BNull)) {
-    ret.s = s_empty.get();
+    ret.s = staticEmptyString();
     ret.type = sempty();
     ret.mayThrow = RuntimeOption::EvalHackArrCompatNotices;
     return ret;
@@ -5259,6 +5290,8 @@ std::pair<Type,Type> vec_newelem(Type vec, const Type& val) {
 ArrKey disect_strict_key(const Type& keyTy) {
   auto ret = ArrKey{};
 
+  if (auto const r = maybe_class_func_key(keyTy, true)) return *r;
+
   if (!keyTy.couldBe(BArrKey)) {
     ret.type = TBottom;
     ret.mayThrow = true;
@@ -5417,6 +5450,15 @@ RepoAuthType make_repo_type(ArrayTypeTable::Builder& arrTable, const Type& t) {
         ? (dobj.type == DObj::Exact ? T::OptExactObj : T::OptSubObj)
         : (dobj.type == DObj::Exact ? T::ExactObj    : T::SubObj);
     return RepoAuthType { tag, dobj.cls.name() };
+  }
+
+  if (is_specialized_cls(t) && t.subtypeOf(TOptCls)) {
+    auto const dcls = dcls_of(t);
+    auto const tag =
+      is_opt(t)
+        ? (dcls.type == DCls::Exact ? T::OptExactCls : T::OptSubCls)
+        : (dcls.type == DCls::Exact ? T::ExactCls : T::SubCls);
+    return RepoAuthType { tag, dcls.cls.name() };
   }
 
   if ((is_specialized_array(t) && t.subtypeOf(TOptArr)) ||

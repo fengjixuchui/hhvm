@@ -27,22 +27,10 @@ namespace {
 
 /*
  * Note: Our style is generally to use lambdas, rather than helper
- * classes. postOrderWalk was originall written as:
- *
- * void postorderWalk(const php::Func& func,
- *                    std::vector<php::Block*>& out,
- *                    boost::dynamic_bitset<>& visited,
- *                    php::Block& blk) {
- *   if (visited[blk.id]) return;
- *   visited[blk.id] = true;
- *   forEachSuccessor(blk, [&] (BlockId next) {
- *     postorderWalk(func, out, visited, *func.blocks[next]);
- *   });
- *   out.push_back(&blk);
- * }
- *
- * but that ends up taking nearly 1k per recursive call, which means
- * it only takes about 10000 blocks to overflow the stack.
+ * classes. postOrderWalk was originally written using a lambda,
+ * rather than a helper class, but that ended up taking nearly 1k per
+ * recursive call, which means it only takes about 10000 blocks to
+ * overflow the stack.
  *
  * By putting everything in a helper class, we get that down to ~128
  * bytes per recursive call, which is a lot less likely to hit issues.
@@ -140,7 +128,7 @@ computeNonThrowPreds(const php::Func& func,
       if (preds.size() < blkId + 1) {
         preds.resize(blkId + 1);
       }
-      preds[blkId].insert(b);
+      preds[blkId].insert(bid);
     });
   }
   return preds;
@@ -156,11 +144,11 @@ computeThrowPreds(const php::Func& func,
       preds.resize(bid + 1);
     }
     auto const b = func.blocks[bid].get();
-    for (auto& ex : b->throwExits) {
-      if (preds.size() < ex + 1) {
-        preds.resize(ex + 1);
+    if (b->throwExit != NoBlockId) {
+      if (preds.size() < b->throwExit + 1) {
+        preds.resize(b->throwExit + 1);
       }
-      preds[ex].insert(b);
+      preds[b->throwExit].insert(bid);
     }
   }
   return preds;

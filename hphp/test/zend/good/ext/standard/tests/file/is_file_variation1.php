@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool is_file ( string $filename );
    Description: Tells whether the filename is a regular file
      Returns TRUE if the filename exists and is a regular file
@@ -6,7 +6,7 @@
 
 /* Testing is_file() with file containing data, truncating its size 
      and the file created by touch() */
-
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 echo "-- Testing is_file() with file containing data --\n";
@@ -39,4 +39,4 @@ clearstatcache();
 unlink($file_path."/is_file_variation1.tmp");
 
 echo "\n*** Done ***";
-?>
+}

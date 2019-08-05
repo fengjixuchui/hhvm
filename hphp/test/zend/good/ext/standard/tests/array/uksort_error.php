@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : bool uksort(array array_arg, string cmp_function)
  * Description: Sort an array by keys using a user-defined comparison function
  * Source code: ext/standard/array.c
  * Alias to functions:
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing uksort() : error conditions ***\n";
 
 echo "\n-- Testing uksort() function with more than expected no. of arguments --\n";
@@ -20,5 +20,5 @@ try { var_dump( uksort(&$array_arg) ); } catch (Exception $e) { echo "\n".'Warni
 echo "\n-- Testing uksort() function with zero arguments --\n";
 try { var_dump( uksort() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

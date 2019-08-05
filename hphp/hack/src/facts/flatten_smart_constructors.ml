@@ -66,6 +66,12 @@ module WithOp(Op : Op_S) = struct
   let make_enumerator arg0 arg1 arg2 arg3 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3]
+  let make_record_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 && Op.is_zero arg6 && Op.is_zero arg7 && Op.is_zero arg8 then state, Op.zero
+    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8]
+  let make_record_field arg0 arg1 arg2 arg3 arg4 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 then state, Op.zero
+    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4]
   let make_alias_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 && Op.is_zero arg6 && Op.is_zero arg7 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7]
@@ -111,9 +117,9 @@ module WithOp(Op : Op_S) = struct
   let make_methodish_trait_resolution arg0 arg1 arg2 arg3 arg4 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3; arg4]
-  let make_classish_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 && Op.is_zero arg6 && Op.is_zero arg7 && Op.is_zero arg8 && Op.is_zero arg9 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9]
+  let make_classish_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 && Op.is_zero arg6 && Op.is_zero arg7 && Op.is_zero arg8 && Op.is_zero arg9 && Op.is_zero arg10 then state, Op.zero
+    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9; arg10]
   let make_classish_body arg0 arg1 arg2 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2]
@@ -132,9 +138,9 @@ module WithOp(Op : Op_S) = struct
   let make_require_clause arg0 arg1 arg2 arg3 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3]
-  let make_const_declaration arg0 arg1 arg2 arg3 arg4 arg5 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5]
+  let make_const_declaration arg0 arg1 arg2 arg3 arg4 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 then state, Op.zero
+    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4]
   let make_constant_declarator arg0 arg1 state =
     if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
     else state, Op.flatten [arg0; arg1]
@@ -150,9 +156,15 @@ module WithOp(Op : Op_S) = struct
   let make_variadic_parameter arg0 arg1 arg2 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2]
-  let make_attribute_specification arg0 arg1 arg2 state =
+  let make_old_attribute_specification arg0 arg1 arg2 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2]
+  let make_attribute_specification arg0 state =
+    if Op.is_zero arg0 then state, Op.zero
+    else state, Op.flatten [arg0]
+  let make_attribute arg0 arg1 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
+    else state, Op.flatten [arg0; arg1]
   let make_inclusion_expression arg0 arg1 state =
     if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
     else state, Op.flatten [arg0; arg1]
@@ -162,9 +174,6 @@ module WithOp(Op : Op_S) = struct
   let make_compound_statement arg0 arg1 arg2 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2]
-  let make_alternate_loop_statement arg0 arg1 arg2 arg3 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3]
   let make_expression_statement arg0 arg1 state =
     if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
     else state, Op.flatten [arg0; arg1]
@@ -186,12 +195,6 @@ module WithOp(Op : Op_S) = struct
   let make_using_statement_function_scoped arg0 arg1 arg2 arg3 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3]
-  let make_declare_directive_statement arg0 arg1 arg2 arg3 arg4 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4]
-  let make_declare_block_statement arg0 arg1 arg2 arg3 arg4 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4]
   let make_while_statement arg0 arg1 arg2 arg3 arg4 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3; arg4]
@@ -204,15 +207,6 @@ module WithOp(Op : Op_S) = struct
   let make_else_clause arg0 arg1 state =
     if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
     else state, Op.flatten [arg0; arg1]
-  let make_alternate_if_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 && Op.is_zero arg6 && Op.is_zero arg7 && Op.is_zero arg8 && Op.is_zero arg9 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9]
-  let make_alternate_elseif_clause arg0 arg1 arg2 arg3 arg4 arg5 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5]
-  let make_alternate_else_clause arg0 arg1 arg2 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2]
   let make_try_statement arg0 arg1 arg2 arg3 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3]
@@ -234,9 +228,6 @@ module WithOp(Op : Op_S) = struct
   let make_switch_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 && Op.is_zero arg6 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5; arg6]
-  let make_alternate_switch_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 && Op.is_zero arg6 && Op.is_zero arg7 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7]
   let make_switch_section arg0 arg1 arg2 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2]
@@ -267,16 +258,7 @@ module WithOp(Op : Op_S) = struct
   let make_continue_statement arg0 arg1 arg2 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2]
-  let make_function_static_statement arg0 arg1 arg2 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2]
-  let make_static_declarator arg0 arg1 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
-    else state, Op.flatten [arg0; arg1]
   let make_echo_statement arg0 arg1 arg2 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2]
-  let make_global_statement arg0 arg1 arg2 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2]
   let make_concurrent_statement arg0 arg1 state =
@@ -289,9 +271,6 @@ module WithOp(Op : Op_S) = struct
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 && Op.is_zero arg6 && Op.is_zero arg7 && Op.is_zero arg8 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8]
   let make_anonymous_function arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 && Op.is_zero arg6 && Op.is_zero arg7 && Op.is_zero arg8 && Op.is_zero arg9 && Op.is_zero arg10 && Op.is_zero arg11 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9; arg10; arg11]
-  let make_php7_anonymous_function arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 && Op.is_zero arg6 && Op.is_zero arg7 && Op.is_zero arg8 && Op.is_zero arg9 && Op.is_zero arg10 && Op.is_zero arg11 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9; arg10; arg11]
   let make_anonymous_function_use_clause arg0 arg1 arg2 arg3 state =
@@ -333,9 +312,6 @@ module WithOp(Op : Op_S) = struct
   let make_binary_expression arg0 arg1 arg2 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2]
-  let make_instanceof_expression arg0 arg1 arg2 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2]
   let make_is_expression arg0 arg1 arg2 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2]
@@ -351,9 +327,6 @@ module WithOp(Op : Op_S) = struct
   let make_eval_expression arg0 arg1 arg2 arg3 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3]
-  let make_empty_expression arg0 arg1 arg2 arg3 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3]
   let make_define_expression arg0 arg1 arg2 arg3 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3]
@@ -363,10 +336,7 @@ module WithOp(Op : Op_S) = struct
   let make_isset_expression arg0 arg1 arg2 arg3 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3]
-  let make_function_call_expression arg0 arg1 arg2 arg3 state =
-    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
-    else state, Op.flatten [arg0; arg1; arg2; arg3]
-  let make_function_call_with_type_arguments_expression arg0 arg1 arg2 arg3 arg4 state =
+  let make_function_call_expression arg0 arg1 arg2 arg3 arg4 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3; arg4]
   let make_parenthesized_expression arg0 arg1 arg2 state =
@@ -390,6 +360,9 @@ module WithOp(Op : Op_S) = struct
   let make_constructor_call arg0 arg1 arg2 arg3 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3]
+  let make_record_creation_expression arg0 arg1 arg2 arg3 arg4 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 then state, Op.zero
+    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4]
   let make_array_creation_expression arg0 arg1 arg2 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2]
@@ -435,6 +408,9 @@ module WithOp(Op : Op_S) = struct
   let make_xhp_enum_type arg0 arg1 arg2 arg3 arg4 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3; arg4]
+  let make_xhp_lateinit arg0 arg1 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
+    else state, Op.flatten [arg0; arg1]
   let make_xhp_required arg0 arg1 state =
     if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
     else state, Op.flatten [arg0; arg1]
@@ -525,7 +501,13 @@ module WithOp(Op : Op_S) = struct
   let make_nullable_type_specifier arg0 arg1 state =
     if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
     else state, Op.flatten [arg0; arg1]
+  let make_like_type_specifier arg0 arg1 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
+    else state, Op.flatten [arg0; arg1]
   let make_soft_type_specifier arg0 arg1 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
+    else state, Op.flatten [arg0; arg1]
+  let make_attributized_specifier arg0 arg1 state =
     if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
     else state, Op.flatten [arg0; arg1]
   let make_reified_type_argument arg0 arg1 state =
@@ -546,12 +528,15 @@ module WithOp(Op : Op_S) = struct
   let make_list_item arg0 arg1 state =
     if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
     else state, Op.flatten [arg0; arg1]
-  let make_pocket_atom_expression arg0 state =
-    if Op.is_zero arg0 then state, Op.zero
-    else state, Op.flatten [arg0]
-  let make_pocket_atom_mapping_declaration arg0 arg1 arg2 arg3 arg4 state =
+  let make_pocket_atom_expression arg0 arg1 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 then state, Op.zero
+    else state, Op.flatten [arg0; arg1]
+  let make_pocket_identifier_expression arg0 arg1 arg2 arg3 arg4 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3; arg4]
+  let make_pocket_atom_mapping_declaration arg0 arg1 arg2 arg3 arg4 arg5 state =
+    if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 then state, Op.zero
+    else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5]
   let make_pocket_enum_declaration arg0 arg1 arg2 arg3 arg4 arg5 state =
     if Op.is_zero arg0 && Op.is_zero arg1 && Op.is_zero arg2 && Op.is_zero arg3 && Op.is_zero arg4 && Op.is_zero arg5 then state, Op.zero
     else state, Op.flatten [arg0; arg1; arg2; arg3; arg4; arg5]

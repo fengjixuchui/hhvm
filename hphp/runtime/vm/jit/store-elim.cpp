@@ -325,6 +325,22 @@ struct Global {
   BlockList poBlockList;
   AliasAnalysis ainfo;
 
+  /*
+   * Keep a mapping from ssaTmps to ALocs that might depend on them.
+   * Normally we don't need to worry about this, because ssa
+   * guarantees that a store is dominated by the def of its
+   * address. But in a loop, a store might be partially available at
+   * the point where its address is defined.
+   *
+   * Note that we can generate this table lazily, because we will see
+   * the def for the first time before we see the store for the first
+   * time (and until we see the store for the first time, it can't be
+   * partially available anywhere). So its sufficient to populate the
+   * table as we see the stores, and it will be used if we ever
+   * revisit the def.
+   */
+  hphp_fast_map<SSATmp*,ALocBits> ssa2Aloc;
+
   // We keep an entry for each tracked SpillFrame in this map, so we
   // can check its ALocBits
   SpillFrameMap spillFrameMap;
@@ -533,9 +549,16 @@ folly::Optional<uint32_t> pure_store_bit(Local& env, AliasClass acls) {
 void visit(Local& env, IRInstruction& inst) {
   auto const effects = memory_effects(inst);
   FTRACE(3, "    {}\n"
-            "      {}\n",
-            inst.toString(),
-            show(effects));
+         "      {}\n",
+         inst.toString(),
+         show(effects));
+
+  for (auto dst : inst.dsts()) {
+    auto const it = env.global.ssa2Aloc.find(dst);
+    if (it != env.global.ssa2Aloc.end()) {
+      addLoadSet(env, it->second);
+    }
+  }
 
   match<void>(
     effects,
@@ -580,14 +603,53 @@ void visit(Local& env, IRInstruction& inst) {
       // things.
       addAllLoad(env);
       killSet(env, env.global.ainfo.all_frame);
-      killSet(env, env.global.ainfo.all_clsRefClsSlot);
-      killSet(env, env.global.ainfo.all_clsRefTSSlot);
       kill(env, l.kills);
     },
 
     [&] (ExitEffects l) {
       load(env, l.live);
       kill(env, l.kills);
+    },
+
+    [&] (InlineEnterEffects l) {
+      load(env, l.inlStack);
+      load(env, l.actrec);
+
+      // This is a lie, but we can't push StLoc instructions from the parent
+      // frame into the callee as the frame pointer has been updated. Ideally
+      // this wouldn't be an issue but the TFramePtr is still stored in a
+      // reserved register.
+      mayStore(env, AFrameAny);
+    },
+
+    [&] (InlineExitEffects l) {
+      // These locations are dead, but it's unsafe to sync stores
+      // passed InlineReturn as they reference the callee safe. Kill
+      // sets are conservative so we must also indicate mayStore. In
+      // practice this value will generally be AMIStateAny so this is
+      // fine.
+      mayStore(env, l.inlMeta);
+
+      // The same applies to the frame, but we're more likely to end up with
+      // sub-optimal code in the case that the kill-set cannot be expaneded so
+      // below we attempt to iterate the locals in the frame and kill them
+      // individually.
+      //
+      // Even if we're processing an InlineSuspend we've already created the
+      // AFWH and moved the frame to the heap.
+      if (auto const frame = l.inlFrame.is_frame()) {
+        auto const callee = inst.marker().func();
+        for (uint32_t id = 0; id < callee->numLocals(); id++) {
+          auto const acls = AFrame { frame->base, id };
+          if (frame->ids.test(id)) kill(env, canonicalize(acls));
+        }
+      } else {
+        mayStore(env, l.inlFrame);
+        kill(env, l.inlFrame);
+      }
+
+      kill(env, l.inlStack);
+      kill(env, l.inlMeta);
     },
 
     /*
@@ -605,6 +667,7 @@ void visit(Local& env, IRInstruction& inst) {
 
     [&] (PureStore l) {
       if (auto bit = pure_store_bit(env, l.dst)) {
+        if (l.dep) env.global.ssa2Aloc[l.dep][*bit] = 1;
         if (isDead(env, *bit)) {
           if (!removeDead(env, inst, true)) {
             mayStore(env, l.dst);

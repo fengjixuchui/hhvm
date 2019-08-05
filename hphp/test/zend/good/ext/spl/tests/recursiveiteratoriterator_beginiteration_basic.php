@@ -1,4 +1,4 @@
-<?php
+<?hh
 $sample_array = array(1, 2);
 $sub_iterator = new RecursiveArrayIterator($sample_array);
 
@@ -17,4 +17,3 @@ $iterator = new SkipsFirstElementRecursiveIteratorIterator($sub_iterator);
 foreach ($iterator as $element) {
   var_dump($element);
 }
-?>

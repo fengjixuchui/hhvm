@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class A {
   public function gen($a, $b) {
@@ -16,6 +16,6 @@ foreach ($x->cache_gen as $v) {
  var_dump($v);
  }
 apc_store('key', $x);
-$y = apc_fetch('key');
+$y = __hhvm_intrinsics\apc_fetch_no_check('key');
 var_dump($y->cache_gen);
 }

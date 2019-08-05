@@ -278,22 +278,19 @@ AGGREGATE_VALIDATORS
 VALIDATE_FUNCTIONS
 end (* Make *)
 "
-  let full_fidelity_validated_syntax =
-  {
-    filename = full_fidelity_path_prefix ^ "full_fidelity_validated_syntax.ml";
-    template = full_fidelity_validated_syntax_template;
-    transformations = [
+  let full_fidelity_validated_syntax = Full_fidelity_schema.make_template_file
+    ~transformations: [
       { pattern = "VALIDATE_FUNCTIONS"; func = to_validate_functions };
-    ];
-    token_no_text_transformations = [];
-    token_given_text_transformations = [];
-    token_variable_text_transformations = [];
-    trivia_transformations = [];
-    aggregate_transformations = [
-      { aggregate_pattern = "AGGREGATE_VALIDATORS"; aggregate_func = to_aggregate_validation };
-    ];
-  }
-
+    ]
+    ~aggregate_transformations: [
+      {
+        aggregate_pattern = "AGGREGATE_VALIDATORS";
+        aggregate_func = to_aggregate_validation
+      };
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "full_fidelity_validated_syntax.ml")
+    ~template: full_fidelity_validated_syntax_template
+    ()
 end (* ValidatedSyntax *)
 
 module GenerateFFSyntaxType = struct
@@ -444,24 +441,193 @@ AGGREGATE_TYPESVALIDATED_SYNTAX
 end (* MakeValidated *)
 "
 
-  let full_fidelity_syntax_type =
-  {
-    filename = full_fidelity_path_prefix ^ "full_fidelity_syntax_type.ml";
-    template = full_fidelity_syntax_template;
-    transformations = [
+  let full_fidelity_syntax_type = Full_fidelity_schema.make_template_file
+    ~transformations: [
       { pattern = "PARSE_TREE"; func = to_parse_tree };
       { pattern = "SYNTAX"; func = to_syntax };
-      { pattern = "VALIDATED_SYNTAX"; func = to_validated_syntax };
-    ];
-    token_no_text_transformations = [];
-    token_given_text_transformations = [];
-    token_variable_text_transformations = [];
-    trivia_transformations = [];
-    aggregate_transformations = [
-      { aggregate_pattern = "AGGREGATE_TYPES"; aggregate_func = to_aggregate_type };
-    ];
-  }
+      { pattern = "VALIDATED_SYNTAX"; func = to_validated_syntax };]
+    ~aggregate_transformations: [
+      { aggregate_pattern = "AGGREGATE_TYPES";
+      aggregate_func = to_aggregate_type };]
+    ~filename: (full_fidelity_path_prefix ^ "full_fidelity_syntax_type.ml")
+    ~template: full_fidelity_syntax_template
+    ()
 end (* GenerateFFSyntaxType *)
+
+
+module GenerateFFRustSyntax = struct
+
+  let from_children x =
+    let mapper prefix (f,_) = sprintf "%s_%s : (Box::new(ts.pop().unwrap()))" prefix f in
+    let fields = map_and_concat_separated ",\n       " (mapper x.prefix) x.fields in
+    sprintf("SyntaxKind::%s => SyntaxVariant::%s {
+        %s
+    },")
+    x.kind_name x.kind_name fields
+
+  let to_kind x =
+    sprintf ("            SyntaxVariant::%s {..} => SyntaxKind::%s,\n") x.kind_name x.kind_name
+
+  let to_children x =
+    let mapper prefix (f,_) = sprintf "&*%s_%s" prefix f in
+    let fields2 = map_and_concat_separated ",\n       " (mapper x.prefix) x.fields in
+    let mapper prefix (f,_) = sprintf "ref %s_%s" prefix f in
+    let fields = map_and_concat_separated ",\n       " (mapper x.prefix) x.fields in
+    sprintf("SyntaxVariant::%s {
+        %s
+    } => vec![%s],")
+    x.kind_name fields fields2
+
+  let fold_over x =
+    let mapper prefix (f,_) = sprintf "let acc = f(&x.%s_%s, acc)" prefix f in
+    let fields = map_and_concat_separated ";\n                " (mapper x.prefix) x.fields in
+    sprintf("            SyntaxVariant::%s(x) => {
+                %s;
+                acc
+            },\n")
+    x.kind_name fields
+
+  let to_syntax_variant x =
+    sprintf ("    %s(Box<%sChildren<T, V>>),\n") x.kind_name x.kind_name
+
+  let to_syntax_variant_children x =
+    let mapper prefix (f,_) = sprintf "    pub %s_%s: Syntax<T, V>," prefix f in
+    let fields = map_and_concat_separated "\n" (mapper x.prefix) x.fields in
+    sprintf ("#[derive(Debug, Clone)]\npub struct %sChildren<T, V> {\n%s\n}\n\n") x.kind_name fields
+
+  let to_syntax_constructors x =
+    let mapper prefix (f,_) = sprintf "%s_%s: Self" prefix f in
+    let args = map_and_concat_separated ", " (mapper x.prefix) x.fields in
+    let mapper prefix (f,_) = sprintf "%s_%s" prefix f in
+    let fields = map_and_concat_separated ",\n            " (mapper x.prefix) x.fields in
+    sprintf("    fn make_%s(_: &C, %s) -> Self {
+        let syntax = SyntaxVariant::%s(Box::new(%sChildren {
+            %s,
+        }));
+        let value = V::from_syntax(&syntax);
+        Self::make(syntax, value)
+    }\n\n")
+    x.type_name args x.kind_name x.kind_name fields
+
+  let full_fidelity_syntax_template = make_header CStyle "" ^ "
+use crate::lexable_token::LexableToken;
+use crate::syntax::*;
+use crate::syntax_kind::SyntaxKind;
+
+impl<T, V, C> SyntaxType<C> for Syntax<T, V>
+where
+    T: LexableToken,
+    V: SyntaxValueType<T>,
+{
+SYNTAX_CONSTRUCTORS }
+
+impl<T, V> Syntax<T, V>
+where
+    T: LexableToken,
+{
+    pub fn fold_over_children<'a, U>(
+        f: &dyn Fn(&'a Self, U) -> U,
+        acc: U,
+        syntax: &'a SyntaxVariant<T, V>,
+    ) -> U {
+        match syntax {
+            SyntaxVariant::Missing => acc,
+            SyntaxVariant::Token (_) => acc,
+            SyntaxVariant::SyntaxList(elems) => {
+                let mut acc = acc;
+                for item in elems.iter() {
+                    acc = f(item, acc)
+                }
+                acc
+            },
+FOLD_OVER_CHILDREN
+        }
+    }
+
+    pub fn kind(&self) -> SyntaxKind {
+        match &self.syntax {
+            SyntaxVariant::Missing => SyntaxKind::Missing,
+            SyntaxVariant::Token (t) => SyntaxKind::Token(t.kind()),
+            SyntaxVariant::SyntaxList (_) => SyntaxKind::SyntaxList,
+TO_KIND        }
+    }
+}
+
+SYNTAX_CHILDREN
+#[derive(Debug, Clone)]
+pub enum SyntaxVariant<T, V> {
+    Token(Box<T>),
+    Missing,
+    SyntaxList(Vec<Syntax<T, V>>),
+SYNTAX_VARIANT}
+"
+  let full_fidelity_syntax = Full_fidelity_schema.make_template_file
+    ~transformations: [
+      { pattern = "SYNTAX_VARIANT"; func = to_syntax_variant };
+      { pattern = "SYNTAX_CHILDREN"; func = to_syntax_variant_children };
+      { pattern = "SYNTAX_CONSTRUCTORS"; func = to_syntax_constructors };
+      { pattern = "FOLD_OVER_CHILDREN"; func = fold_over};
+      { pattern = "TO_KIND"; func = to_kind };
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "syntax_generated.rs")
+    ~template: full_fidelity_syntax_template
+    ()
+end (* GenerateFFRustSyntax *)
+
+module GenerateFFRustSyntaxType = struct
+
+  let to_kind x =
+    sprintf ("            SyntaxVariant::%s {..} => SyntaxKind::%s,\n") x.kind_name x.kind_name
+
+  let to_children x =
+    let mapper prefix (f,_) = sprintf "&*%s_%s" prefix f in
+    let fields2 = map_and_concat_separated ",\n       " (mapper x.prefix) x.fields in
+    let mapper prefix (f,_) = sprintf "ref %s_%s" prefix f in
+    let fields = map_and_concat_separated ",\n       " (mapper x.prefix) x.fields in
+    sprintf("SyntaxVariant::%s {
+        %s
+    } => vec![%s],")
+    x.kind_name fields fields2
+
+  let into_children x =
+    let mapper prefix (f,_) = sprintf "x.%s_%s" prefix f in
+    let fields = map_and_concat_separated ",\n                " (mapper x.prefix) x.fields in
+    sprintf("            SyntaxVariant::%s (x) => { vec!(
+                %s
+            )},\n")
+    x.kind_name fields
+
+  let fold_over x =
+    let mapper prefix (f,_) = sprintf "let acc = f(&x.%s_%s, acc)" prefix f in
+    let fields = map_and_concat_separated ";\n                " (mapper x.prefix) x.fields in
+    sprintf("            SyntaxVariant::%s(x) => {
+                %s;
+                acc
+            },\n")
+    x.kind_name fields
+
+  let to_syntax_constructors x =
+    let mapper prefix (f,_) = sprintf "%s_%s: Self" prefix f in
+    let args = map_and_concat_separated ", " (mapper x.prefix) x.fields in
+    sprintf("    fn make_%s(ctx: &C, %s) -> Self;\n")
+    x.type_name args
+
+  let full_fidelity_syntax_template = make_header CStyle "" ^ "
+use crate::syntax::*;
+
+pub trait SyntaxType<C>: SyntaxTypeBase<C>
+{
+SYNTAX_CONSTRUCTORS
+}
+"
+  let full_fidelity_syntax = Full_fidelity_schema.make_template_file
+    ~transformations: [
+      { pattern = "SYNTAX_CONSTRUCTORS"; func = to_syntax_constructors };
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "syntax_type.rs")
+    ~template: full_fidelity_syntax_template
+    ()
+end (* GenerateFFRustSyntaxType *)
 
 module GenerateFFSyntaxSig = struct
 
@@ -485,7 +651,7 @@ module GenerateFFSyntaxSig = struct
   let full_fidelity_syntax_template : string = (make_header MLStyle "
 * This module contains a signature which can be used to describe the public
 * surface area of a constructable syntax tree.
-  ") ^ "
+") ^ "
 
 module TriviaKind = Full_fidelity_trivia_kind
 module TokenKind = Full_fidelity_token_kind
@@ -500,6 +666,18 @@ module type Syntax_S = sig
   | SyntaxList                        of t list
 SYNTAX
 
+  val rust_parse :
+    Full_fidelity_source_text.t ->
+    Full_fidelity_parser_env.t ->
+    unit * t * Full_fidelity_syntax_error.t list
+  val rust_parse_with_coroutine_sc :
+    Full_fidelity_source_text.t ->
+    Full_fidelity_parser_env.t ->
+    bool * t * Full_fidelity_syntax_error.t list
+  val rust_parse_with_decl_mode_sc :
+    Full_fidelity_source_text.t ->
+    Full_fidelity_parser_env.t ->
+    bool list * t * Full_fidelity_syntax_error.t list
   val has_leading_trivia : TriviaKind.t -> Token.t -> bool
   val to_json : ?with_value:bool -> t -> Hh_json.json
   val extract_text : t -> string option
@@ -531,10 +709,9 @@ TYPE_TESTS
 
   val is_specific_token : TokenKind.t -> t -> bool
   val is_loop_statement : t -> bool
-  val is_semicolon      : t -> bool
+  val is_external       : t -> bool
   val is_name           : t -> bool
   val is_construct      : t -> bool
-  val is_destruct       : t -> bool
   val is_static         : t -> bool
   val is_private        : t -> bool
   val is_public         : t -> bool
@@ -556,21 +733,15 @@ TYPE_TESTS
 end (* Syntax_S *)
 "
 
-  let full_fidelity_syntax_sig =
-  {
-    filename = full_fidelity_path_prefix ^ "syntax_sig.ml";
-    template = full_fidelity_syntax_template;
-    transformations = [
+  let full_fidelity_syntax_sig = Full_fidelity_schema.make_template_file
+    ~transformations: [
       { pattern = "SYNTAX"; func = to_syntax };
       { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods };
       { pattern = "TYPE_TESTS"; func = to_type_tests };
-    ];
-    token_no_text_transformations = [];
-    token_given_text_transformations = [];
-    token_variable_text_transformations = [];
-    trivia_transformations = [];
-    aggregate_transformations = [];
-  }
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "syntax_sig.ml")
+    ~template: full_fidelity_syntax_template
+    ()
 end (* GenerateFFSyntaxSig *)
 
 module GenerateFFSmartConstructors = struct
@@ -599,6 +770,11 @@ module type SmartConstructors_S = sig
   type t (* state *) [@@deriving show]
   type r (* smart constructor return type *) [@@deriving show]
 
+  val rust_parse :
+    Full_fidelity_source_text.t ->
+    ParserEnv.t ->
+    t * r * Full_fidelity_syntax_error.t list
+
   val initial_state : ParserEnv.t -> t
   val make_token : Token.t -> t -> t * r
   val make_missing : Full_fidelity_source_text.pos -> t -> t * r
@@ -607,7 +783,7 @@ CONSTRUCTOR_METHODS
 end (* SmartConstructors_S *)
 
 module ParserWrapper (Parser : sig
-  type parser_type [@@deriving show]
+  type parser_type
   module SCI : SmartConstructors_S
   val call : parser_type -> (SCI.t -> SCI.t * SCI.r) -> parser_type * SCI.r
 end) = struct
@@ -623,22 +799,247 @@ MAKE_METHODS
 end (* ParserWrapper *)
 "
 
-  let full_fidelity_smart_constructors =
-  {
-    filename = full_fidelity_path_prefix ^
-      "smart_constructors/smartConstructors.ml";
-    template = full_fidelity_smart_constructors_template;
-    transformations = [
+  let full_fidelity_smart_constructors = Full_fidelity_schema.make_template_file
+    ~transformations: [
       { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods };
       { pattern = "MAKE_METHODS"; func = to_make_methods }
-    ];
-    token_no_text_transformations = [];
-    token_given_text_transformations = [];
-    token_variable_text_transformations = [];
-    trivia_transformations = [];
-    aggregate_transformations = [];
-  }
+    ]
+    ~filename: (full_fidelity_path_prefix ^
+       "smart_constructors/smartConstructors.ml")
+    ~template: full_fidelity_smart_constructors_template
+    ()
 end (* GenerateFFSmartConstructors *)
+
+module GenerateFFRustSmartConstructors = struct
+  let to_make_methods x =
+    let fields = List.mapi x.fields ~f:(fun i _ -> "arg" ^ string_of_int i ^ " : Self::R") in
+    let stack = String.concat ~sep:", " fields in
+    sprintf "    fn make_%s(&mut self, %s) -> Self::R;\n" x.type_name stack
+
+  let full_fidelity_smart_constructors_template: string = make_header CStyle "" ^ "
+use crate::lexable_token::LexableToken;
+use crate::parser_env::ParserEnv;
+use crate::source_text::SourceText;
+
+pub trait SmartConstructors<'src, State>: Clone {
+    type Token: LexableToken;
+    type R;
+
+    fn new(env: &ParserEnv, src: &SourceText<'src>) -> Self;
+    fn state_mut(&mut self) -> &mut State;
+
+    fn make_missing(&mut self, offset : usize) -> Self::R;
+    fn make_token(&mut self, arg0: Self::Token) -> Self::R;
+    fn make_list(&mut self, arg0: Vec<Self::R>, offset: usize) -> Self::R;
+MAKE_METHODS
+}
+"
+  let full_fidelity_smart_constructors = Full_fidelity_schema.make_template_file
+    ~transformations: [
+      { pattern = "MAKE_METHODS"; func = to_make_methods }
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "smart_constructors_generated.rs")
+    ~template: full_fidelity_smart_constructors_template
+    ()
+end (* GenerateFFRustSmartConstructors *)
+
+module GenerateFFRustMinimalSmartConstructors = struct
+  let to_constructor_methods x =
+    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d: Self::R" i)in
+    let args = String.concat ~sep:", " args in
+    let fwd_args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d" i) in
+    let fwd_args = String.concat ~sep:", " fwd_args in
+    sprintf "    fn make_%s(&mut self, %s) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, MinimalSyntax, NoState>>::make_%s(self, %s)
+    }\n\n"
+      x.type_name args x.type_name fwd_args
+
+  let minimal_smart_constructors_template: string = (make_header CStyle "") ^ "
+use crate::minimal_syntax::MinimalSyntax;
+use crate::minimal_token::MinimalToken;
+use crate::parser_env::ParserEnv;
+use crate::smart_constructors::{NoState, SmartConstructors};
+use crate::source_text::SourceText;
+use crate::syntax_smart_constructors::SyntaxSmartConstructors;
+
+#[derive(Clone)]
+pub struct MinimalSmartConstructors {
+  dummy_state: NoState,
+}
+impl<'src> SyntaxSmartConstructors<'src, MinimalSyntax, NoState>
+    for MinimalSmartConstructors
+{
+    fn new(_env: &ParserEnv, _src: &SourceText<'src>) -> Self {
+        MinimalSmartConstructors { dummy_state: NoState{} }
+    }
+}
+impl<'src> SmartConstructors<'src, NoState> for MinimalSmartConstructors {
+    type Token = MinimalToken;
+    type R = MinimalSyntax;
+
+    fn new(env: &ParserEnv, src: &SourceText<'src>) -> Self {
+        <Self as SyntaxSmartConstructors<'src, MinimalSyntax, NoState>>::new(env, src)
+    }
+
+    fn state_mut(&mut self) -> &mut NoState {
+        &mut self.dummy_state
+    }
+
+    fn make_missing(&mut self, offset: usize) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, MinimalSyntax, NoState>>::make_missing(self, offset)
+    }
+
+    fn make_token(&mut self, offset: Self::Token) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, MinimalSyntax, NoState>>::make_token(self, offset)
+    }
+
+    fn make_list(&mut self, lst: Vec<Self::R>, offset: usize) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, MinimalSyntax, NoState>>::make_list(self, lst, offset)
+    }
+
+CONSTRUCTOR_METHODS}
+"
+  let minimal_smart_constructors = Full_fidelity_schema.make_template_file
+    ~transformations: [
+      { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "minimal_smart_constructors.rs")
+    ~template: minimal_smart_constructors_template
+    ()
+end (* GenerateFFRustMinimalSmartConstructors *)
+
+module GenerateFFRustPositionedSmartConstructors = struct
+  let to_constructor_methods x =
+    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d: Self::R" i)in
+    let args = String.concat ~sep:", " args in
+    let fwd_args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d" i) in
+    let fwd_args = String.concat ~sep:", " fwd_args in
+    sprintf "    fn make_%s(&mut self, %s) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, PositionedSyntax, State>>::make_%s(self, %s)
+    }\n\n"
+      x.type_name args x.type_name fwd_args
+
+  let positioned_smart_constructors_template: string = (make_header CStyle "") ^ "
+use crate::parser_env::ParserEnv;
+use crate::positioned_syntax::PositionedSyntax;
+use crate::positioned_token::PositionedToken;
+use crate::smart_constructors::{NoState, SmartConstructors};
+use crate::source_text::SourceText;
+use crate::syntax_smart_constructors::{SyntaxSmartConstructors, StateType};
+
+#[derive(Clone)]
+pub struct PositionedSmartConstructors<State: Clone = NoState> {
+    pub state: State,
+}
+
+impl<'src, State: StateType<'src, PositionedSyntax>>
+SyntaxSmartConstructors<'src, PositionedSyntax, State>
+    for PositionedSmartConstructors<State>
+{
+    fn new(env: &ParserEnv, src: &SourceText<'src>) -> Self {
+        Self { state: <State as StateType<PositionedSyntax>>::initial(env, src) }
+    }
+}
+
+impl<'src, State: StateType<'src, PositionedSyntax>> SmartConstructors<'src, State>
+    for PositionedSmartConstructors<State>
+{
+    type Token = PositionedToken;
+    type R = PositionedSyntax;
+
+    fn new(env: &ParserEnv, src: &SourceText<'src>) -> Self {
+        <Self as SyntaxSmartConstructors<'src, PositionedSyntax, State>>::new(env, src)
+    }
+
+    fn state_mut(&mut self) -> &mut State {
+       &mut self.state
+    }
+
+    fn make_missing(&mut self, offset: usize) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, PositionedSyntax, State>>::make_missing(self, offset)
+    }
+
+    fn make_token(&mut self, offset: Self::Token) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, PositionedSyntax, State>>::make_token(self, offset)
+    }
+
+    fn make_list(&mut self, lst: Vec<Self::R>, offset: usize) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, PositionedSyntax, State>>::make_list(self, lst, offset)
+    }
+
+CONSTRUCTOR_METHODS}
+"
+  let positioned_smart_constructors = Full_fidelity_schema.make_template_file
+    ~transformations: [
+      { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "positioned_smart_constructors.rs")
+    ~template: positioned_smart_constructors_template
+    ()
+end (* GenerateFFRustPositionedSmartConstructors *)
+
+module GenerateFFRustCoroutineSmartConstructors = struct
+  let to_constructor_methods x =
+    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d: Self::R" i)in
+    let args = String.concat ~sep:", " args in
+    let fwd_args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d" i) in
+    let fwd_args = String.concat ~sep:", " fwd_args in
+    sprintf "    fn make_%s(&mut self, %s) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, T>>::make_%s(self, %s)
+    }\n\n"
+      x.type_name args x.type_name fwd_args
+
+  let coroutine_smart_constructors_template: string = (make_header CStyle "") ^ "
+use crate::coroutine_smart_constructors::*;
+use crate::lexable_token::LexableToken;
+use crate::parser_env::ParserEnv;
+use crate::smart_constructors::SmartConstructors;
+use crate::source_text::SourceText;
+use crate::syntax::*;
+use crate::syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
+
+impl<'src, S, T, Token, Value> SmartConstructors<'src, T>
+    for CoroutineSmartConstructors<'src, S, T>
+where
+    Token: LexableToken,
+    Value: SyntaxValueType<Token> + SyntaxValueWithKind,
+    S: SyntaxType<T, Token=Token, Value=Value>,
+    T: StateType<'src, S> + CoroutineStateType,
+{
+    type Token = Token;
+    type R = S;
+
+    fn new(env: &ParserEnv, src: &SourceText<'src>) -> Self {
+        <Self as SyntaxSmartConstructors<'src, Self::R, T>>::new(env, src)
+    }
+
+    fn state_mut(&mut self) -> &mut T {
+        &mut self.state
+    }
+
+    fn make_missing(&mut self, offset: usize) -> Self::R {
+       <Self as SyntaxSmartConstructors<'src, Self::R, T>>::make_missing(self, offset)
+    }
+
+    fn make_token(&mut self, offset: Self::Token) -> Self::R {
+       <Self as SyntaxSmartConstructors<'src, Self::R, T>>::make_token(self, offset)
+    }
+
+    fn make_list(&mut self, lst: Vec<Self::R>, offset: usize) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, Self::R, T>>::make_list(self, lst, offset)
+    }
+
+CONSTRUCTOR_METHODS}
+"
+  let coroutine_smart_constructors = Full_fidelity_schema.make_template_file
+    ~transformations: [
+      { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
+    ]
+    ~filename: (full_fidelity_path_prefix ^
+      "coroutine_smart_constructors_generated.rs")
+    ~template: coroutine_smart_constructors_template
+    ()
+end (* GenerateFFRustCoroutineSmartConstructors *)
 
 module GenerateFFParserSig = struct
   let to_make_methods x =
@@ -688,19 +1089,13 @@ MAKE_METHODS
 end (* WithSyntax *)
 "
 
-  let full_fidelity_parser_sig =
-  {
-    filename = full_fidelity_path_prefix ^ "parserSig.ml";
-    template = full_fidelity_parser_sig_template;
-    transformations = [
+  let full_fidelity_parser_sig = Full_fidelity_schema.make_template_file
+    ~transformations: [
       { pattern = "MAKE_METHODS"; func = to_make_methods }
-    ];
-    token_no_text_transformations = [];
-    token_given_text_transformations = [];
-    token_variable_text_transformations = [];
-    trivia_transformations = [];
-    aggregate_transformations = [];
-  }
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "parserSig.ml")
+    ~template: full_fidelity_parser_sig_template
+    ()
 end (* GenerateFFParserSig *)
 
 module GenerateFFVerifySmartConstructors = struct
@@ -715,7 +1110,7 @@ module GenerateFFVerifySmartConstructors = struct
       let node = Syntax.make_%s %s in
       node :: rem, node
     | _ -> failwith \"Unexpected stack state\"
-    "
+"
     x.type_name
     (String.concat ~sep:" " params)
     (String.concat ~sep:" :: " (List.rev args))
@@ -729,7 +1124,7 @@ module GenerateFFVerifySmartConstructors = struct
     (make_header MLStyle "
  * This module contains smart constructors implementation that can be used to
  * build AST.
- ") ^ "
+") ^ "
 
 open Core_kernel
 
@@ -764,6 +1159,8 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     in
     List.iter2_exn ~f:equals params args
 
+  let rust_parse _ _ = failwith \"not implemented\"
+
   let initial_state _ = []
 
   let make_token token stack =
@@ -786,19 +1183,14 @@ end (* WithSyntax *)
 "
 
   let full_fidelity_verify_smart_constructors =
-  {
-    filename = full_fidelity_path_prefix ^
-      "smart_constructors/verifySmartConstructors.ml";
-    template = full_fidelity_verify_smart_constructors_template;
-    transformations = [
-      { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
-    ];
-    token_no_text_transformations = [];
-    token_given_text_transformations = [];
-    token_variable_text_transformations = [];
-    trivia_transformations = [];
-    aggregate_transformations = [];
-  }
+    Full_fidelity_schema.make_template_file
+      ~transformations: [
+        { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
+      ]
+      ~filename: (full_fidelity_path_prefix ^
+        "smart_constructors/verifySmartConstructors.ml")
+      ~template: full_fidelity_verify_smart_constructors_template
+      ()
 end (* GenerateFFVerifySmartConstructors *)
 
 module GenerateFFSyntaxSmartConstructors = struct
@@ -828,11 +1220,26 @@ module type State_S = sig
   val next : t -> r list -> t
 end
 
+module type RustParser_S = sig
+  type t
+  type r
+  val rust_parse :
+    Full_fidelity_source_text.t ->
+    ParserEnv.t ->
+    t * r * Full_fidelity_syntax_error.t list
+end
+
 module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
   module WithState(State : State_S with type r = Syntax.t) = struct
+  module WithRustParser(RustParser : RustParser_S
+   with type t = State.t
+   with type r = Syntax.t
+  ) = struct
     module Token = Syntax.Token
     type t = State.t [@@deriving show]
     type r = Syntax.t [@@deriving show]
+
+    let rust_parse = RustParser.rust_parse
 
     let initial_state = State.initial
     let make_token token state = State.next state [], Syntax.make_token token
@@ -842,6 +1249,7 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
       then State.next state items, Syntax.make_list s o items
       else make_missing (s, o) state
 CONSTRUCTOR_METHODS
+  end (* WithRustParser *)
   end (* WithState *)
 
   include WithState(
@@ -852,24 +1260,207 @@ CONSTRUCTOR_METHODS
       let next () _ = ()
     end
   )
+
+  include WithRustParser(
+    struct
+      type r = Syntax.t
+      type t = unit
+      let rust_parse = Syntax.rust_parse
+    end
+  )
+
 end (* WithSyntax *)
 "
 
   let full_fidelity_syntax_smart_constructors =
-  {
-    filename = full_fidelity_path_prefix ^
-      "smart_constructors/syntaxSmartConstructors.ml";
-    template = full_fidelity_syntax_smart_constructors_template;
-    transformations = [
+  Full_fidelity_schema.make_template_file
+    ~transformations: [
       { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
-    ];
-    token_no_text_transformations = [];
-    token_given_text_transformations = [];
-    token_variable_text_transformations = [];
-    trivia_transformations = [];
-    aggregate_transformations = [];
-  }
+    ]
+    ~filename: (full_fidelity_path_prefix ^
+      "smart_constructors/syntaxSmartConstructors.ml")
+    ~template: full_fidelity_syntax_smart_constructors_template
+    ()
 end (* GenerateFFSyntaxSmartConstructors *)
+
+module GenerateFFRustSyntaxSmartConstructors = struct
+  let to_constructor_methods x =
+    let params = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d : Self::R" i)in
+    let params = String.concat ~sep:", " params in
+    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d" i) in
+    let args = String.concat ~sep:", " args in
+    let next_args = List.mapi x.fields ~f:(fun i _ -> sprintf "&arg%d" i) in
+    let next_args = String.concat ~sep:", " next_args in
+
+    sprintf "    fn make_%s(&mut self, %s) -> Self::R {
+        self.state_mut().next(&[%s]);
+        Self::R::make_%s(self.state_mut(), %s)
+    }\n\n"
+      x.type_name params next_args x.type_name args
+
+  let full_fidelity_syntax_smart_constructors_template: string = (make_header CStyle "") ^ "
+use crate::parser_env::ParserEnv;
+use crate::smart_constructors::{NoState, SmartConstructors};
+use crate::syntax_smart_constructors::StateType;
+use crate::source_text::SourceText;
+use crate::syntax::*;
+
+pub trait SyntaxSmartConstructors<'src, S: SyntaxType<State>, State = NoState>:
+    SmartConstructors<'src, State, R=S, Token=S::Token>
+where
+    State: StateType<'src, S>,
+{
+    fn new(env: &ParserEnv, src: &SourceText<'src>) -> Self;
+
+    fn make_missing(&mut self, offset: usize) -> Self::R {
+        let r = Self::R::make_missing(self.state_mut(), offset);
+        self.state_mut().next(&[]);
+        r
+    }
+
+    fn make_token(&mut self, arg: Self::Token) -> Self::R {
+        let r = Self::R::make_token(self.state_mut(), arg);
+        self.state_mut().next(&[]);
+        r
+    }
+
+    fn make_list(&mut self, items: Vec<Self::R>, offset: usize) -> Self::R {
+        if items.is_empty() {
+            <Self as SyntaxSmartConstructors<'src, S, State>>::make_missing(self, offset)
+        } else {
+            let item_refs: Vec<_> = items.iter().collect();
+            self.state_mut().next(&item_refs);
+            Self::R::make_list(self.state_mut(), items, offset)
+        }
+    }
+
+CONSTRUCTOR_METHODS}
+"
+  let full_fidelity_syntax_smart_constructors =
+    Full_fidelity_schema.make_template_file
+      ~transformations: [
+        { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
+      ]
+      ~filename: (full_fidelity_path_prefix ^ "syntax_smart_constructors_generated.rs")
+      ~template: full_fidelity_syntax_smart_constructors_template
+      ()
+end (* GenerateFFRustSyntaxSmartConstructors *)
+
+module GenerateOcamlSyntax = struct
+  let to_constructor_methods x =
+    let sep s = String.concat ~sep:s in
+    let comma_sep = sep ", " in
+    let newline_sep spaces = sep (", \n" ^ spaces) in
+    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d: Self" i)in
+    let args = comma_sep args in
+    let params f = List.mapi x.fields ~f:(fun i _ -> f (sprintf "arg%d" i)) in
+    let param_values = newline_sep "          " (params (sprintf "&%s.value")) in
+    let param_nodes = newline_sep "              " (params (sprintf "%s.syntax")) in
+    sprintf "    fn make_%s(ctx: &C, %s) -> Self {
+      let children = [
+          %s
+      ];
+      let value = V::from_values(&children);
+      let syntax = Self::make(
+          ctx,
+          SyntaxKind::%s,
+          &value,
+          &[
+              %s
+          ],
+      );
+      Self { syntax, value }
+    }\n\n"
+      x.type_name args param_values x.kind_name param_nodes
+
+  let template: string = (make_header CStyle "") ^ "
+use crate::ocaml_syntax::{OcamlSyntax, Context};
+use crate::rust_to_ocaml::*;
+
+use parser_rust as parser;
+use parser::syntax_kind::SyntaxKind;
+use parser::syntax::{SyntaxType, SyntaxValueType};
+use parser::positioned_token::PositionedToken;
+
+impl<V, C> SyntaxType<C> for OcamlSyntax<V>
+where
+    C: Context,
+    V: SyntaxValueType<PositionedToken> + ToOcaml,
+{
+CONSTRUCTOR_METHODS}
+  "
+  let ocaml_syntax = Full_fidelity_schema.make_template_file
+    ~transformations: [
+      { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
+    ]
+    ~filename: (full_fidelity_path_prefix ^
+      "ocaml_syntax_generated.rs")
+    ~template: template
+    ()
+end
+
+module GenerateFFRustDeclModeSmartConstructors = struct
+  let to_constructor_methods x =
+    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d: Self::R" i)in
+    let args = String.concat ~sep:", " args in
+    let fwd_args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d" i) in
+    let fwd_args = String.concat ~sep:", " fwd_args in
+    sprintf "    fn make_%s(&mut self, %s) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, Self::R, State<Self::R>>>::make_%s(self, %s)
+    }\n\n"
+      x.type_name args x.type_name fwd_args
+
+  let decl_mode_smart_constructors_template: string = (make_header CStyle "") ^ "
+use crate::decl_mode_smart_constructors::*;
+use crate::lexable_token::LexableToken;
+use crate::parser_env::ParserEnv;
+use crate::smart_constructors::SmartConstructors;
+use crate::source_text::SourceText;
+use crate::syntax::Syntax;
+use crate::syntax_smart_constructors::SyntaxSmartConstructors;
+use crate::syntax::SyntaxValueType;
+
+impl<'src, Token, Value>
+SmartConstructors<'src, State<Syntax<Token, Value>>>
+    for DeclModeSmartConstructors<Syntax<Token, Value>, Token, Value>
+where
+    Token: LexableToken,
+    Value: SyntaxValueType<Token>,
+{
+    type Token = Token;
+    type R = Syntax<Token, Value>;
+
+    fn new(env: &ParserEnv, src: &SourceText<'src>) -> Self {
+        <Self as SyntaxSmartConstructors<'src, Self::R, State<Self::R>>>::new(env, src)
+    }
+
+    fn state_mut(&mut self) -> &mut State<Syntax<Token, Value>> {
+        &mut self.state
+    }
+
+    fn make_missing(&mut self, o: usize) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, Self::R, State<Self::R>>>::make_missing(self, o)
+    }
+
+    fn make_token(&mut self, token: Self::Token) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, Self::R, State<Self::R>>>::make_token(self, token)
+    }
+
+    fn make_list(&mut self, items: Vec<Self::R>, offset: usize) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, Self::R, State<Self::R>>>::make_list(self, items, offset)
+    }
+
+CONSTRUCTOR_METHODS}
+"
+  let decl_mode_smart_constructors = Full_fidelity_schema.make_template_file
+    ~transformations: [
+      { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
+    ]
+    ~filename: (full_fidelity_path_prefix ^
+      "decl_mode_smart_constructors_generated.rs")
+    ~template: decl_mode_smart_constructors_template
+    ()
+end (* GenerateFFRustDeclModeSmartConstructors *)
 
 module GenerateFlattenSmartConstructors = struct
   let to_constructor_methods x =
@@ -909,20 +1500,128 @@ CONSTRUCTOR_METHODS
 end (* WithSyntax *)
 "
 
-  let flatten_smart_constructors =
-  {
-    filename = facts_path_prefix ^ "flatten_smart_constructors.ml";
-    template = flatten_smart_constructors_template;
-    transformations = [
+  let flatten_smart_constructors = Full_fidelity_schema.make_template_file
+    ~transformations: [
       { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
-    ];
-    token_no_text_transformations = [];
-    token_given_text_transformations = [];
-    token_variable_text_transformations = [];
-    trivia_transformations = [];
-    aggregate_transformations = [];
-  }
-end (* GenerateFFSyntaxSmartConstructors *)
+    ]
+    ~filename: (facts_path_prefix ^ "flatten_smart_constructors.ml")
+    ~template: flatten_smart_constructors_template
+    ()
+end (* GenerateFlattenSmartConstructors *)
+
+module GenerateRustFlattenSmartConstructors = struct
+  let to_constructor_methods x =
+    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d: Self::R" i)in
+    let args = String.concat ~sep:", " args in
+    let if_cond = List.mapi x.fields ~f:(fun i _ -> sprintf "Self::is_zero(&arg%d)" i) in
+    let if_cond = String.concat ~sep:" && " if_cond in
+    let flatten_args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d" i) in
+    let flatten_args = String.concat ~sep:", " flatten_args in
+    sprintf "    fn make_%s(&mut self, %s) -> Self::R {
+        if %s {
+          Self::zero()
+        } else {
+          Self::flatten(vec!(%s))
+        }
+    }\n\n"
+      x.type_name args if_cond flatten_args
+
+  let flatten_smart_constructors_template: string = (make_header CStyle "") ^ "
+use crate::smart_constructors_generated::SmartConstructors;
+
+pub trait FlattenOp {
+    type S;
+    fn is_zero(s: &Self::S) -> bool;
+    fn zero() -> Self::S;
+    fn flatten(lst: Vec<Self::S>) -> Self::S;
+}
+
+pub trait FlattenSmartConstructors<'src, State>
+: SmartConstructors<'src, State> + FlattenOp<S=<Self as SmartConstructors<'src, State>>::R>
+{
+    fn make_missing(&mut self, _: usize) -> Self::R {
+       Self::zero()
+    }
+
+    fn make_token(&mut self, _: Self::Token) -> Self::R {
+        Self::zero()
+    }
+
+    fn make_list(&mut self, _: Vec<Self::R>, _: usize) -> Self::R {
+        Self::zero()
+    }
+
+CONSTRUCTOR_METHODS}
+"
+  let flatten_smart_constructors = Full_fidelity_schema.make_template_file
+    ~transformations: [
+      { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "flatten_smart_constructors.rs")
+    ~template: flatten_smart_constructors_template
+    ()
+end (* GenerateRustFlattenSmartConstructors *)
+
+module GenerateRustFactsSmartConstructors = struct
+  let to_constructor_methods x =
+    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d: Self::R" i)in
+    let args = String.concat ~sep:", " args in
+    let fwd_args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d" i) in
+    let fwd_args = String.concat ~sep:", " fwd_args in
+    sprintf "    fn make_%s(&mut self, %s) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_%s(self, %s)
+    }\n\n"
+      x.type_name args x.type_name fwd_args
+
+  let facts_smart_constructors_template: string = (make_header CStyle "") ^ "
+use parser_rust as parser;
+use parser::flatten_smart_constructors::*;
+use parser::smart_constructors::SmartConstructors;
+use parser::source_text::SourceText;
+use parser::parser_env::ParserEnv;
+use parser::positioned_token::PositionedToken;
+
+use crate::facts_smart_constructors::*;
+
+#[derive(Clone)]
+pub struct FactsSmartConstructors<'src> {
+    pub state: HasScriptContent<'src>,
+}
+impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstructors<'src> {
+    type Token = PositionedToken;
+    type R = Node;
+
+    fn new(_: &ParserEnv, src: &SourceText<'src>) -> Self {
+        Self { state: (false, *src) }
+    }
+
+    fn state_mut(&mut self) -> &mut HasScriptContent<'src> {
+        &mut self.state
+    }
+
+    fn make_missing(&mut self, offset: usize) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_missing(self, offset)
+    }
+
+    fn make_token(&mut self, token: Self::Token) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_token(self, token)
+    }
+
+    fn make_list(&mut self, items: Vec<Self::R>, offset: usize) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_list(self, items, offset)
+    }
+
+CONSTRUCTOR_METHODS}
+"
+  let facts_smart_constructors = Full_fidelity_schema.make_template_file
+    ~transformations: [
+      { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
+    ]
+    ~filename: (full_fidelity_path_prefix ^
+      "../facts/facts_smart_constructors_generated.rs")
+    ~template: facts_smart_constructors_template
+    ()
+end (* GenerateRustFactsSmartConstructors *)
 
 module GenerateFFSmartConstructorsWrappers = struct
   let to_constructor_methods x =
@@ -981,6 +1680,12 @@ module SyntaxKind(SC : SC_S)
   let kind_of (kind, _) = kind
   let compose : SK.t -> t * SC.r -> t * r = fun kind (state, res) ->
     state, (kind, res)
+
+  let rust_parse text env =
+    let state, res, errors = SC.rust_parse text env in
+    let state, res = compose SK.Script (state, res) in
+    state, res, errors
+
   let initial_state = SC.initial_state
 
   let make_token token state = compose (SK.Token (SC.Token.kind token)) (SC.make_token token state)
@@ -1001,22 +1706,97 @@ end (* SyntaxKind *)
 "
 
   let full_fidelity_smart_constructors_wrappers =
-  {
-    filename = full_fidelity_path_prefix ^
-      "smart_constructors/smartConstructorsWrappers.ml";
-    template = full_fidelity_smart_constructors_wrappers_template;
-    transformations = [
-      { pattern = "TYPE_TESTS_SIG"; func = to_type_tests_sig };
-      { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods };
-      { pattern = "TYPE_TESTS"; func = to_type_tests }
-    ];
-    token_no_text_transformations = [];
-    token_given_text_transformations = [];
-    token_variable_text_transformations = [];
-    trivia_transformations = [];
-    aggregate_transformations = [];
-  }
+    Full_fidelity_schema.make_template_file
+      ~transformations: [
+        { pattern = "TYPE_TESTS_SIG"; func = to_type_tests_sig };
+        { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods };
+        { pattern = "TYPE_TESTS"; func = to_type_tests }
+      ]
+      ~filename: (full_fidelity_path_prefix ^
+        "smart_constructors/smartConstructorsWrappers.ml")
+      ~template: full_fidelity_smart_constructors_wrappers_template
+      ()
 end (* GenerateFFSmartConstructorsWrappers *)
+
+module GenerateFFRustSmartConstructorsWrappers = struct
+  let to_constructor_methods x =
+    let params =
+      List.mapi x.fields ~f:(fun i _ -> "arg" ^ string_of_int i ^ " : Self::R")
+    in
+    let params = String.concat ~sep:", " params in
+    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d" i) in
+    let raw_args =
+      map_and_concat_separated ", " (fun x -> x ^ ".1") args
+    in
+    sprintf "    fn make_%s(&mut self, %s) -> Self::R {
+        compose(SyntaxKind::%s, self.s.make_%s(%s))
+    }\n"
+      x.type_name params x.kind_name x.type_name raw_args
+
+  let full_fidelity_smart_constructors_wrappers_template: string =
+  (make_header CStyle "") ^ "
+ // This module contains smart constructors implementation that can be used to
+ // build AST.
+" ^ "
+
+use crate::lexable_token::LexableToken;
+use crate::parser_env::ParserEnv;
+use crate::smart_constructors::SmartConstructors;
+use crate::source_text::SourceText;
+use crate::syntax_kind::SyntaxKind;
+
+#[derive(Clone)]
+pub struct WithKind<S> {
+    s: S,
+}
+impl<'src, S, State> SmartConstructors<'src, State> for WithKind<S>
+where S: SmartConstructors<'src, State> {
+    type Token = S::Token;
+    type R = (SyntaxKind, S::R);
+
+    fn new(env: &ParserEnv, src: &SourceText<'src>) -> Self {
+        Self { s: S::new(env, src) }
+    }
+
+    fn state_mut(&mut self) -> &mut State {
+        self.s.state_mut()
+    }
+
+    fn make_token(&mut self, token: Self::Token) -> Self::R {
+        compose(SyntaxKind::Token(token.kind()), self.s.make_token(token))
+    }
+
+    fn make_missing(&mut self, p: usize) -> Self::R {
+        compose(SyntaxKind::Missing, self.s.make_missing(p))
+    }
+
+    fn make_list(&mut self, items: Vec<Self::R>, p: usize) -> Self::R {
+        let kind = if items.is_empty() {
+            SyntaxKind::Missing
+        } else {
+            SyntaxKind::SyntaxList
+        };
+        compose(kind, self.s.make_list(items.into_iter().map(|x| x.1).collect(), p))
+    }
+
+CONSTRUCTOR_METHODS
+}
+
+#[inline(always)]
+fn compose<R>(kind: SyntaxKind, r: R) -> (SyntaxKind, R) {
+    (kind, r)
+}
+"
+
+  let full_fidelity_smart_constructors_wrappers =
+    Full_fidelity_schema.make_template_file
+      ~transformations: [
+        { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }
+      ]
+      ~filename: (full_fidelity_path_prefix ^ "smart_constructors_wrappers.rs")
+      ~template: full_fidelity_smart_constructors_wrappers_template
+      ()
+end (* GenerateFFRustSmartConstructorsWrappers *)
 
 module GenerateFFSyntax = struct
   let to_to_kind x =
@@ -1195,10 +1975,11 @@ TYPE_TESTS
       List.exists (Token.leading token)
         ~f:(fun trivia ->  Token.Trivia.kind trivia = kind)
 
-    let is_semicolon  = is_specific_token TokenKind.Semicolon
+    let is_external e =
+      is_specific_token TokenKind.Semicolon e || is_missing e
+
     let is_name       = is_specific_token TokenKind.Name
     let is_construct  = is_specific_token TokenKind.Construct
-    let is_destruct   = is_specific_token TokenKind.Destruct
     let is_static     = is_specific_token TokenKind.Static
     let is_private    = is_specific_token TokenKind.Private
     let is_public     = is_specific_token TokenKind.Public
@@ -1379,11 +2160,8 @@ GET_METHODS
 end (* WithToken *)
 "
 
-  let full_fidelity_syntax =
-  {
-    filename = full_fidelity_path_prefix ^ "full_fidelity_syntax.ml";
-    template = full_fidelity_syntax_template;
-    transformations = [
+  let full_fidelity_syntax = Full_fidelity_schema.make_template_file
+    ~transformations: [
       { pattern = "TO_KIND"; func = to_to_kind };
       { pattern = "TYPE_TESTS"; func = to_type_tests };
       { pattern = "CHILDREN"; func = to_children };
@@ -1393,14 +2171,10 @@ end (* WithToken *)
       { pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods };
       { pattern = "FROM_METHODS"; func = to_from_methods };
       { pattern = "GET_METHODS"; func = to_get_methods };
-    ];
-    token_no_text_transformations = [];
-    token_given_text_transformations = [];
-    token_variable_text_transformations = [];
-    trivia_transformations = [];
-    aggregate_transformations = [];
-  }
-
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "full_fidelity_syntax.ml")
+    ~template: full_fidelity_syntax_template
+    ()
 end (* GenerateFFSyntax *)
 
 module GenerateFFTriviaKind = struct
@@ -1422,23 +2196,64 @@ let to_string kind =
   match kind with
 TO_STRING"
 
-let full_fidelity_trivia_kind =
-{
-  filename = full_fidelity_path_prefix ^ "/full_fidelity_trivia_kind.ml";
-  template = full_fidelity_trivia_kind_template;
-  transformations = [];
-  token_no_text_transformations = [];
-  token_given_text_transformations = [];
-  token_variable_text_transformations = [];
-  trivia_transformations = [
+let full_fidelity_trivia_kind = Full_fidelity_schema.make_template_file
+  ~trivia_transformations: [
     { trivia_pattern = "TRIVIA";
       trivia_func = map_and_concat to_trivia };
     { trivia_pattern = "TO_STRING";
-      trivia_func = map_and_concat to_to_string }];
-  aggregate_transformations = [];
-}
-
+      trivia_func = map_and_concat to_to_string }
+    ]
+  ~filename: (full_fidelity_path_prefix ^ "/full_fidelity_trivia_kind.ml")
+  ~template: full_fidelity_trivia_kind_template
+  ()
 end (* GenerateFFSyntaxKind *)
+
+module GenerateFFRustTriviaKind = struct
+
+  let to_trivia { trivia_kind; trivia_text = _; } =
+    sprintf "    %s,\n" trivia_kind
+
+  let to_to_string { trivia_kind; trivia_text } =
+    sprintf ("            TriviaKind::%s => \"%s\",\n")
+      trivia_kind trivia_text
+
+  let ocaml_tag = ref (-1)
+  let to_ocaml_tag { trivia_kind; trivia_text = _ } =
+    incr ocaml_tag;
+    sprintf ("            TriviaKind::%s => %d,\n")
+      trivia_kind !ocaml_tag
+
+  let full_fidelity_trivia_kind_template = make_header CStyle "" ^ "
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum TriviaKind {
+TRIVIA}
+
+impl TriviaKind {
+    pub fn to_string(&self) -> &str {
+        match self {
+TO_STRING        }
+    }
+
+    pub fn ocaml_tag(self) -> u8 {
+        match self {
+OCAML_TAG        }
+    }
+}
+"
+  let full_fidelity_trivia_kind = Full_fidelity_schema.make_template_file
+    ~trivia_transformations: [
+      { trivia_pattern = "TRIVIA";
+        trivia_func = map_and_concat to_trivia };
+      { trivia_pattern = "TO_STRING";
+        trivia_func = map_and_concat to_to_string };
+      { trivia_pattern = "OCAML_TAG";
+        trivia_func = map_and_concat to_ocaml_tag };
+      ]
+    ~filename: (full_fidelity_path_prefix ^ "trivia_kind.rs")
+    ~template: full_fidelity_trivia_kind_template
+    ()
+end (* GenerateFFRustTriviaKind *)
 
 module GenerateFFSyntaxKind = struct
 
@@ -1465,22 +2280,71 @@ let to_string kind =
   | SyntaxList                        -> \"list\"
 TO_STRING"
 
-let full_fidelity_syntax_kind =
-{
-  filename = full_fidelity_path_prefix ^ "full_fidelity_syntax_kind.ml";
-  template = full_fidelity_syntax_kind_template;
-  transformations = [
+let full_fidelity_syntax_kind = Full_fidelity_schema.make_template_file
+  ~transformations: [
     { pattern = "TOKENS"; func = to_tokens };
     { pattern = "TO_STRING"; func = to_to_string };
-  ];
-  token_no_text_transformations = [];
-  token_given_text_transformations = [];
-  token_variable_text_transformations = [];
-  trivia_transformations = [];
-  aggregate_transformations = [];
+  ]
+  ~filename: (full_fidelity_path_prefix ^ "full_fidelity_syntax_kind.ml")
+  ~template: full_fidelity_syntax_kind_template
+  ()
+end (* GenerateFFTriviaKind *)
+
+module GenerateFFRustSyntaxKind = struct
+  let to_tokens x =
+    sprintf "    %s,\n" x.kind_name
+
+  let to_to_string x =
+    sprintf ("            SyntaxKind::" ^^ kind_name_fmt ^^ " => \"%s\",\n")
+      x.kind_name x.description
+
+  let tag = ref 1
+  let to_ocaml_tag x =
+    incr tag;
+    sprintf ("            SyntaxKind::%s => %d,\n")
+      x.kind_name !tag
+
+  let full_fidelity_syntax_kind_template = make_header CStyle "" ^ "
+use crate::token_kind::TokenKind;
+
+#[derive(Debug, Copy, Clone)]
+pub enum SyntaxKind {
+    Missing,
+    Token(TokenKind),
+    SyntaxList,
+TOKENS
 }
 
-end (* GenerateFFTriviaKind *)
+impl SyntaxKind {
+    pub fn to_string(&self) -> &str {
+        match self {
+            SyntaxKind::SyntaxList => \"list\",
+            SyntaxKind::Missing => \"missing\",
+            SyntaxKind::Token(_) => \"token\",
+TO_STRING        }
+    }
+
+    pub fn ocaml_tag(self) -> u8 {
+        match self {
+            SyntaxKind::Missing => 0,
+            SyntaxKind::Token(_) => 0,
+            SyntaxKind::SyntaxList => 1,
+OCAML_TAG        }
+    }
+}
+"
+
+let full_fidelity_syntax_kind = Full_fidelity_schema.make_template_file
+  ~transformations: [
+    { pattern = "TOKENS"; func = to_tokens };
+    { pattern = "TO_STRING"; func = to_to_string };
+    { pattern = "OCAML_TAG"; func = to_ocaml_tag };
+  ]
+  ~filename: (full_fidelity_path_prefix ^ "syntax_kind.rs")
+  ~template: full_fidelity_syntax_kind_template
+  ()
+end (* GenerateFFRustSyntaxKind *)
+
 
 module GenerateFFJavaScript = struct
 
@@ -2120,37 +2984,37 @@ exports.EditableTrivia = EditableTrivia;
 EXPORTS_TRIVIA
 EXPORTS_SYNTAX"
 
-  let full_fidelity_javascript =
-  {
-    filename = full_fidelity_path_prefix ^ "js/full_fidelity_editable.js";
-    template = full_fidelity_javascript_template;
-    transformations = [
+  let full_fidelity_javascript = Full_fidelity_schema.make_template_file
+    ~transformations: [
       { pattern = "FROM_JSON_SYNTAX"; func = to_from_json };
       { pattern = "EDITABLE_SYNTAX"; func = to_editable_syntax };
       { pattern = "EXPORTS_SYNTAX"; func = to_exports_syntax };
-    ];
-    token_no_text_transformations = [
+    ]
+    ~token_no_text_transformations: [
       { token_pattern = "EDITABLE_NO_TEXT_TOKENS";
         token_func = map_and_concat to_editable_no_text };
       { token_pattern = "FACTORY_NO_TEXT_TOKENS";
         token_func = map_and_concat to_factory_no_text };
       { token_pattern = "EXPORTS_NO_TEXT_TOKENS";
-        token_func = map_and_concat to_export_token }];
-    token_given_text_transformations = [
+        token_func = map_and_concat to_export_token }
+      ]
+    ~token_given_text_transformations: [
       { token_pattern = "EDITABLE_GIVEN_TEXT_TOKENS";
         token_func = map_and_concat to_editable_given_text };
       { token_pattern = "FACTORY_GIVEN_TEXT_TOKENS";
         token_func = map_and_concat to_factory_given_text };
       { token_pattern = "EXPORTS_GIVEN_TEXT_TOKENS";
-        token_func = map_and_concat to_export_token }];
-    token_variable_text_transformations = [
+        token_func = map_and_concat to_export_token }
+      ]
+    ~token_variable_text_transformations: [
       { token_pattern = "EDITABLE_VARIABLE_TEXT_TOKENS";
         token_func = map_and_concat to_editable_variable_text };
       { token_pattern = "FACTORY_VARIABLE_TEXT_TOKENS";
         token_func = map_and_concat to_factory_variable_text };
       { token_pattern = "EXPORTS_VARIABLE_TEXT_TOKENS";
-        token_func = map_and_concat to_export_token }];
-    trivia_transformations = [
+        token_func = map_and_concat to_export_token }
+      ]
+    ~trivia_transformations: [
       { trivia_pattern = "FROM_JSON_TRIVIA";
         trivia_func = map_and_concat trivia_from_json };
       { trivia_pattern = "STATIC_FROM_JSON_TRIVIA";
@@ -2159,10 +3023,10 @@ EXPORTS_SYNTAX"
         trivia_func = map_and_concat trivia_classes };
       { trivia_pattern = "EXPORTS_TRIVIA";
         trivia_func = map_and_concat to_export_trivia }
-    ];
-    aggregate_transformations = [];
-  }
-
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "js/full_fidelity_editable.js")
+    ~template: full_fidelity_javascript_template
+    ()
 end (* GenerateFFJavaScript *)
 
 
@@ -2203,9 +3067,6 @@ module GenerateFFTokenKind = struct
     let spacer_width = given_text_width - String.length token_text in
     let spacer = String.make spacer_width ' ' in
     let guards = add_guard_or_pad ""
-      ~cond:(x.is_xhp, "(is_hack || allow_xhp)")
-      ~else_cond:(x.hack_only, "is_hack") in
-    let guards = add_guard_or_pad guards
       ~cond:(x.allowed_as_identifier, "not only_reserved") in
     sprintf "  | \"%s\"%s %s-> Some %s\n" token_text spacer guards x.token_kind
 
@@ -2226,10 +3087,10 @@ KIND_DECLARATIONS_GIVEN_TEXT  (* Variable text tokens *)
 KIND_DECLARATIONS_VARIABLE_TEXT
   [@@deriving show]
 
-let from_string keyword ~is_hack ~allow_xhp ~only_reserved =
+let from_string keyword ~only_reserved =
   match keyword with
-  | \"true\"                                        when not only_reserved -> Some BooleanLiteral
-  | \"false\"                                       when not only_reserved -> Some BooleanLiteral
+  | \"true\"            when not only_reserved -> Some BooleanLiteral
+  | \"false\"           when not only_reserved -> Some BooleanLiteral
 FROM_STRING_GIVEN_TEXT  | _              -> None
 
 let to_string kind =
@@ -2243,56 +3104,226 @@ let is_variable_text kind =
   match kind with
 IS_VARIABLE_TEXT_VARIABLE_TEXT  | _ -> false
 "
-  let full_fidelity_token_kind =
-  {
-    filename = full_fidelity_path_prefix ^ "full_fidelity_token_kind.ml";
-    template = full_fidelity_token_kind_template;
-    transformations = [];
-    token_no_text_transformations = [
+  let full_fidelity_token_kind = Full_fidelity_schema.make_template_file
+    ~token_no_text_transformations: [
       { token_pattern = "KIND_DECLARATIONS_NO_TEXT";
         token_func = map_and_concat to_kind_declaration };
       { token_pattern = "TO_STRING_NO_TEXT";
-        token_func = map_and_concat to_to_string }];
-    token_given_text_transformations = [
+        token_func = map_and_concat to_to_string };
+      ]
+    ~token_given_text_transformations: [
       { token_pattern = "KIND_DECLARATIONS_GIVEN_TEXT";
         token_func = map_and_concat to_kind_declaration };
       { token_pattern = "FROM_STRING_GIVEN_TEXT";
         token_func = map_and_concat to_from_string };
       { token_pattern = "TO_STRING_GIVEN_TEXT";
-        token_func = map_and_concat to_to_string }];
-    token_variable_text_transformations = [
+        token_func = map_and_concat to_to_string };
+      ]
+    ~token_variable_text_transformations: [
       { token_pattern = "KIND_DECLARATIONS_VARIABLE_TEXT";
         token_func = map_and_concat to_kind_declaration };
       { token_pattern = "TO_STRING_VARIABLE_TEXT";
         token_func = map_and_concat to_to_string };
       { token_pattern = "IS_VARIABLE_TEXT_VARIABLE_TEXT";
-        token_func = map_and_concat to_is_variable_text }];
-    trivia_transformations = [];
-    aggregate_transformations = [];
-  }
-
+        token_func = map_and_concat to_is_variable_text };
+      ]
+    ~filename: (full_fidelity_path_prefix ^ "full_fidelity_token_kind.ml")
+    ~template: full_fidelity_token_kind_template
+    ()
 end (* GenerateFFTokenKind *)
 
+module GenerateFFRustTokenKind = struct
+
+  let token_kind x =
+    match x.token_kind with
+    | "Self" -> "SelfToken"
+    | x -> x
+
+  let to_from_string x =
+    let token_text = escape_token_text x.token_text in
+    let guard = if x.allowed_as_identifier then "!only_reserved" else "" in
+    let guard = if guard = "" then "" else " if "  ^ guard in
+    sprintf "            \"%s\"%s => Some(TokenKind::%s),\n" token_text guard (token_kind x)
+
+  let to_kind_declaration x =
+    sprintf "    %s,\n" (token_kind x)
+
+  let token_text x =
+    escape_token_text x.token_text
+
+  let to_to_string x =
+    sprintf "            TokenKind::%s => \"%s\",\n" (token_kind x) (token_text x)
+
+  let ocaml_tag =  ref (-1)
+  let to_ocaml_tag x =
+    incr ocaml_tag;
+    sprintf "            TokenKind::%s => %d,\n" (token_kind x) !ocaml_tag
+
+let full_fidelity_rust_token_kind_template = make_header CStyle "" ^ "
+
+#[allow(non_camel_case_types)] // allow Include_once and Require_once
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum TokenKind {
+    // No text tokens
+KIND_DECLARATIONS_NO_TEXT    // Given text tokens
+KIND_DECLARATIONS_GIVEN_TEXT    // Variable text tokens
+KIND_DECLARATIONS_VARIABLE_TEXT}
+
+impl TokenKind {
+    pub fn to_string(&self) -> &str {
+        match self {
+            // No text tokens
+TO_STRING_NO_TEXT            // Given text tokens
+TO_STRING_GIVEN_TEXT            // Variable text tokes
+TO_STRING_VARIABLE_TEXT        }
+    }
+
+    pub fn from_string(
+        keyword: &[u8],
+        only_reserved: bool,
+    ) -> Option<Self> {
+        let keyword = unsafe { std::str::from_utf8_unchecked(keyword) };
+        match keyword {
+            \"true\" if !only_reserved => Some(TokenKind::BooleanLiteral),
+            \"false\" if !only_reserved => Some(TokenKind::BooleanLiteral),
+FROM_STRING_GIVEN_TEXT            _ => None,
+        }
+    }
+
+    pub fn ocaml_tag(self) -> u8 {
+        match self {
+OCAML_TAG_NO_TEXTOCAML_TAG_GIVEN_TEXTOCAML_TAG_VARIABLE_TEXT        }
+    }
+}
+"
+
+  let full_fidelity_token_kind = Full_fidelity_schema.make_template_file
+    ~token_no_text_transformations: [
+      { token_pattern = "KIND_DECLARATIONS_NO_TEXT";
+        token_func = map_and_concat to_kind_declaration };
+      { token_pattern = "TO_STRING_NO_TEXT";
+        token_func = map_and_concat to_to_string };
+      { token_pattern = "OCAML_TAG_NO_TEXT";
+        token_func = map_and_concat to_ocaml_tag };
+    ]
+    ~token_given_text_transformations: [
+      { token_pattern = "KIND_DECLARATIONS_GIVEN_TEXT";
+        token_func = map_and_concat to_kind_declaration };
+      { token_pattern = "FROM_STRING_GIVEN_TEXT";
+        token_func = map_and_concat to_from_string };
+      { token_pattern = "TO_STRING_GIVEN_TEXT";
+        token_func = map_and_concat to_to_string };
+      { token_pattern = "OCAML_TAG_GIVEN_TEXT";
+        token_func = map_and_concat to_ocaml_tag };
+    ]
+    ~token_variable_text_transformations: [
+      { token_pattern = "KIND_DECLARATIONS_VARIABLE_TEXT";
+        token_func = map_and_concat to_kind_declaration };
+      { token_pattern = "TO_STRING_VARIABLE_TEXT";
+        token_func = map_and_concat to_to_string };
+      { token_pattern = "OCAML_TAG_VARIABLE_TEXT";
+        token_func = map_and_concat to_ocaml_tag };
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "token_kind.rs")
+    ~template: full_fidelity_rust_token_kind_template
+    ()
+end (* GenerateFFTRustTokenKind *)
+
+module GenerateFFOperatorRust = struct
+  let template = make_header CStyle "" ^ "
+pub enum Operator {
+OPERATORS}
+"
+  let full_fidelity_operators = Full_fidelity_schema.make_template_file
+    ~operator_transformations: [
+      { operator_pattern = "OPERATORS";
+        operator_func = map_and_concat
+          (fun op -> sprintf "    %sOperator,\n" op.name);
+      };
+    ]
+    ~filename: (full_fidelity_path_prefix ^ "operator_generated.rs")
+    ~template: template
+    ()
+end (* GenerateFFOperatorRust *)
+
+module GenerateFFOperator = struct
+
+  let template = make_header MLStyle "" ^ "
+module type Sig = sig
+  type t =
+OPERATOR_DECL_SIGend
+
+module Impl : Sig = struct
+  type t =
+OPERATOR_DECL_IMPLend
+"
+
+  let op_pattern prefix op = sprintf "%s| %sOperator\n" prefix op.name
+
+  let transform pattern = {
+    operator_pattern = pattern;
+    operator_func = map_and_concat (op_pattern "  ");
+  }
+
+  let full_fidelity_operator = Full_fidelity_schema.make_template_file
+    ~operator_transformations: [
+      transform "OPERATOR_DECL_SIG";
+      transform "OPERATOR_DECL_IMPL";
+    ]
+    ~filename: (full_fidelity_path_prefix ^
+      "full_fidelity_operator_generated.ml")
+    ~template: template
+    ()
+end
+
 let () =
+  generate_file GenerateFFOperatorRust.full_fidelity_operators;
+  generate_file GenerateFFOperator.full_fidelity_operator;
   generate_file GenerateFFSyntaxType.full_fidelity_syntax_type;
   generate_file GenerateFFSyntaxSig.full_fidelity_syntax_sig;
   generate_file GenerateFFValidatedSyntax.full_fidelity_validated_syntax;
   generate_file GenerateFFTriviaKind.full_fidelity_trivia_kind;
+  generate_file GenerateFFRustTriviaKind.full_fidelity_trivia_kind;
   generate_file GenerateFFSyntax.full_fidelity_syntax;
+  generate_file GenerateFFRustSyntax.full_fidelity_syntax;
+  generate_file GenerateFFRustSyntaxType.full_fidelity_syntax;
   generate_file GenerateFFSyntaxKind.full_fidelity_syntax_kind;
+  generate_file GenerateFFRustSyntaxKind.full_fidelity_syntax_kind;
   generate_file GenerateFFJavaScript.full_fidelity_javascript;
   generate_file GenerateFFTokenKind.full_fidelity_token_kind;
+  generate_file GenerateFFRustTokenKind.full_fidelity_token_kind;
   generate_file GenerateFFJSONSchema.full_fidelity_json_schema;
   generate_file
     GenerateFFSmartConstructors.full_fidelity_smart_constructors;
+  generate_file
+    GenerateFFRustSmartConstructors.full_fidelity_smart_constructors;
+  generate_file
+    GenerateFFRustMinimalSmartConstructors.minimal_smart_constructors;
+  generate_file
+    GenerateFFRustPositionedSmartConstructors.positioned_smart_constructors;
   generate_file
     GenerateFFVerifySmartConstructors.full_fidelity_verify_smart_constructors;
   generate_file
     GenerateFFSyntaxSmartConstructors.full_fidelity_syntax_smart_constructors;
   generate_file
+    GenerateFFRustSyntaxSmartConstructors.full_fidelity_syntax_smart_constructors;
+  generate_file
+    GenerateFFRustCoroutineSmartConstructors.coroutine_smart_constructors;
+  generate_file
+    GenerateFFRustDeclModeSmartConstructors.decl_mode_smart_constructors;
+  generate_file
     GenerateFlattenSmartConstructors.flatten_smart_constructors;
+  generate_file
+    GenerateRustFlattenSmartConstructors.flatten_smart_constructors;
+  generate_file
+    GenerateRustFactsSmartConstructors.facts_smart_constructors;
   generate_file
     GenerateFFParserSig.full_fidelity_parser_sig;
   generate_file
     GenerateFFSmartConstructorsWrappers
-      .full_fidelity_smart_constructors_wrappers
+      .full_fidelity_smart_constructors_wrappers;
+  generate_file
+    GenerateFFRustSmartConstructorsWrappers
+      .full_fidelity_smart_constructors_wrappers;
+  generate_file
+    GenerateOcamlSyntax.ocaml_syntax

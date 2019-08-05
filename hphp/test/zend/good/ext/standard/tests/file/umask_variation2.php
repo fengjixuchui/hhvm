@@ -1,8 +1,8 @@
-<?php
+<?hh
 /* Prototype: int umask ( [int $mask] );
    Description: Changes the current umask
 */
-
+<<__EntryPoint>> function main(): void {
 $file_path = dirname(__FILE__);
 
 /* Check umask() on file/dir */
@@ -47,4 +47,4 @@ for($mask = 0351; $mask <= 0777; $mask++) {
 }
 
 echo "Done\n";
-?>
+}

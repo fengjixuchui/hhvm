@@ -1,4 +1,4 @@
-<?php 
+<?hh 
 
 setlocale(LC_ALL,"C");
 print "LOCALE is '" . setlocale(LC_ALL,0) . "'\n";
@@ -27,4 +27,3 @@ ctype_test_002("ctype_punct");
 ctype_test_002("ctype_space");
 ctype_test_002("ctype_xdigit");
 
-?>

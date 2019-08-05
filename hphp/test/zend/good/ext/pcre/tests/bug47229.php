@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 var_dump(preg_quote('-oh really?'));
 
 // make sure there's no regression in matching
@@ -14,5 +14,4 @@ var_dump($m);
 
 preg_match("/a\-{1,}/", 'a\----a', &$m);
 var_dump($m);
-
-?>
+}

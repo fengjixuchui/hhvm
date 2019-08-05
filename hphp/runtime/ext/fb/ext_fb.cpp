@@ -557,10 +557,11 @@ static int fb_compact_serialize_variant(
     case KindOfObject:
     case KindOfResource:
     case KindOfRef:
+    case KindOfRecord: // TODO(T41025646)
       fb_compact_serialize_code(sb, FB_CS_NULL);
       raise_warning(
         "fb_compact_serialize(): unable to serialize "
-        "object/resource/ref/func/class"
+        "object/resource/ref/func/class/record"
       );
       break;
   }
@@ -811,8 +812,8 @@ int fb_compact_unserialize_from_buffer(
           arr.set(key.toInt64(), value);
         } else if (key.getType() == KindOfString ||
                    key.getType() == KindOfPersistentString) {
-          const auto arrkey = arr.convertKey<IntishCast::CastSilently>(key);
-          arr.set(arrkey, *value.asTypedValue());
+          mapSetAndConvertStaticKeys(
+            arr, key.asStrRef().get(), std::move(value));
         } else {
           return FB_UNSERIALIZE_UNEXPECTED_ARRAY_KEY_TYPE;
         }
@@ -1084,12 +1085,6 @@ bool HHVM_FUNCTION(fb_intercept, const String& name, const Variant& handler,
   return register_intercept(name, handler, data, true);
 }
 
-bool is_dangerous_varenv_function(const StringData* name) {
-  auto const f = Unit::lookupBuiltin(name);
-  // Functions can which can access the caller's frame are always builtin.
-  return f && f->readsCallerFrame();
-}
-
 bool HHVM_FUNCTION(fb_rename_function, const String& orig_func_name,
                                        const String& new_func_name) {
   if (orig_func_name.empty() || new_func_name.empty() ||
@@ -1102,14 +1097,6 @@ bool HHVM_FUNCTION(fb_rename_function, const String& orig_func_name,
     raise_warning("fb_rename_function(%s, %s) failed: %s does not exist!",
                   orig_func_name.data(), new_func_name.data(),
                   orig_func_name.data());
-    return false;
-  }
-
-  if (is_dangerous_varenv_function(orig_func_name.get())) {
-    raise_warning(
-      "fb_rename_function(%s, %s) failed: rename of functions that "
-      "affect variable environments is not allowed",
-      orig_func_name.data(), new_func_name.data());
     return false;
   }
 
@@ -1247,6 +1234,29 @@ int64_t HHVM_FUNCTION(HH_non_crypto_md5_lower, StringArg str) {
   return folly::Endian::big(pre_decode);
 }
 
+int64_t HHVM_FUNCTION(HH_int_mul_overflow, int64_t a, int64_t b) {
+  // On x86_64, this compiles down to mov+mul+mov+retq
+  uint64_t ua = a;
+  uint64_t ub = b;
+  __uint128_t full_product =
+    static_cast<__uint128_t>(ua) * static_cast<__uint128_t>(ub);
+  // Return only the part that would overflow 64-bit multiplication.
+  return static_cast<int64_t>(full_product >> 64);
+}
+
+int64_t HHVM_FUNCTION(HH_int_mul_add_overflow,
+                      int64_t a, int64_t b, int64_t bias) {
+  uint64_t ua = a;
+  uint64_t ub = b;
+  uint64_t umbias = static_cast<uint64_t>(-1 - bias);
+  __uint128_t full =
+    static_cast<__uint128_t>(ua) * static_cast<__uint128_t>(ub);
+  // The assembly for this looks faster than 128-bit add to 'full'
+  // (8 instructions vs. 11)
+  uint64_t full_lower = static_cast<uint64_t>(full);
+  return static_cast<int64_t>(full >> 64) + (full_lower > umbias);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 EXTERNALLY_VISIBLE
@@ -1293,6 +1303,8 @@ struct FBExtension : Extension {
                 HH_disable_code_coverage_with_frequency);
     HHVM_FALIAS(HH\\non_crypto_md5_upper, HH_non_crypto_md5_upper);
     HHVM_FALIAS(HH\\non_crypto_md5_lower, HH_non_crypto_md5_lower);
+    HHVM_FALIAS(HH\\int_mul_overflow, HH_int_mul_overflow);
+    HHVM_FALIAS(HH\\int_mul_add_overflow, HH_int_mul_add_overflow);
 
     loadSystemlib();
   }

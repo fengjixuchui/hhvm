@@ -59,6 +59,7 @@ struct TSEnv {
 const StaticString
   s_nullable("nullable"),
   s_exact("exact"),
+  s_like("like"),
   s_name("name"),
   s_classname("classname"),
   s_kind("kind"),
@@ -94,8 +95,10 @@ const std::string
   s_resource("resource"),
   s_num("num"),
   s_arraykey("arraykey"),
+  s_nothing("nothing"),
   s_noreturn("noreturn"),
   s_mixed("mixed"),
+  s_dynamic("dynamic"),
   s_nonnull("nonnull"),
   s_array("array"),
   s_darray("HH\\darray"),
@@ -237,6 +240,12 @@ void shapeTypeName(const Array& arr, std::string& name, bool forDisplay) {
 
 std::string fullName(const Array& arr, bool forDisplay) {
   std::string name;
+
+  if (arr.exists(s_like)) {
+    assertx(arr[s_like].toBoolean());
+    name += '~';
+  }
+
   if (arr.exists(s_nullable)) {
     assertx(arr[s_nullable].toBoolean());
     name += '?';
@@ -279,11 +288,17 @@ std::string fullName(const Array& arr, bool forDisplay) {
     case TypeStructure::Kind::T_arraykey:
       name += forDisplay ? s_arraykey : s_hh + s_arraykey;
       break;
+    case TypeStructure::Kind::T_nothing:
+      name += forDisplay ? s_nothing : s_hh + s_nothing;
+      break;
     case TypeStructure::Kind::T_noreturn:
       name += forDisplay ? s_noreturn : s_hh + s_noreturn;
       break;
     case TypeStructure::Kind::T_mixed:
       name += forDisplay ? s_mixed : s_hh + s_mixed;
+      break;
+    case TypeStructure::Kind::T_dynamic:
+      name += forDisplay ? s_dynamic : s_hh + s_dynamic;
       break;
     case TypeStructure::Kind::T_nonnull:
       name += forDisplay ? s_nonnull : s_hh + s_nonnull;
@@ -545,12 +560,15 @@ Array resolveShape(TSEnv& env,
           clsName.c_str(), cnsName.c_str());
       }
     }
-    assertx(wrapper.exists(s_value));
-    auto valueArr = wrapper[s_value].toArray();
+
+    // If the TS was resolved before then value field no longer exists, the
+    // value is instead flattened.
+    auto valueArr =
+      wrapper.exists(s_value) ? wrapper[s_value].toArray() : wrapper;
     auto value = resolveTS(env, valueArr, typeCns, typeCnsCls, generics);
 
     if (wrapper.exists(s_optional_shape_field)) {
-      value.set(s_optional_shape_field, true_varNR.tv());
+      value.set(s_optional_shape_field, make_tv<KindOfBoolean>(true));
     }
 
     newfields.set(key, Variant(value));
@@ -583,7 +601,7 @@ bool resolveClass(TSEnv& env,
 
   ret.set(s_kind, Variant(static_cast<uint8_t>(resolvedKind)));
   ret.set(s_classname, Variant(makeStaticString(cls->name())));
-  if (clsName.same(s_this)) ret.set(s_exact, true_varNR.tv());
+  if (clsName.same(s_this)) ret.set(s_exact, make_tv<KindOfBoolean>(true));
 
   return true;
 }
@@ -597,6 +615,15 @@ Array resolveGenerics(TSEnv& env,
   return resolveList(env, genericsArr, typeCns, typeCnsCls, generics);
 }
 
+/**
+ * Copy modifiers, i.e. whether the type is nullable, soft, or a like-type.
+ */
+void copyTypeModifiers(const Array& from, Array& to) {
+  if (from.exists(s_like))     to.set(s_like, make_tv<KindOfBoolean>(true));
+  if (from.exists(s_nullable)) to.set(s_nullable, make_tv<KindOfBoolean>(true));
+  if (from.exists(s_soft))     to.set(s_soft, make_tv<KindOfBoolean>(true));
+}
+
 Array resolveTS(TSEnv& env,
                 const Array& arr,
                 const Class::Const& typeCns,
@@ -607,12 +634,11 @@ Array resolveTS(TSEnv& env,
     arr[s_kind].toInt64Val());
 
   auto newarr = Array::CreateDArray();
-  if (arr.exists(s_nullable)) newarr.set(s_nullable, true_varNR.tv());
-  if (arr.exists(s_soft)) newarr.set(s_soft, true_varNR.tv());
+  copyTypeModifiers(arr, newarr);
   newarr.set(s_kind, Variant(static_cast<uint8_t>(kind)));
 
   if (arr.exists(s_allows_unknown_fields)) {
-    newarr.set(s_allows_unknown_fields, true_varNR.tv());
+    newarr.set(s_allows_unknown_fields, make_tv<KindOfBoolean>(true));
   }
 
   switch (kind) {
@@ -701,13 +727,7 @@ Array resolveTS(TSEnv& env,
         } else {
           ts = resolve();
         }
-        if (arr.exists(s_nullable)) {
-          ts.set(s_nullable, true_varNR.tv());
-        }
-        if (arr.exists(s_soft)) {
-          ts.set(s_soft, true_varNR.tv());
-        }
-
+        copyTypeModifiers(arr, ts);
         return ts;
       }
 
@@ -760,7 +780,17 @@ Array resolveTS(TSEnv& env,
             clsName.data(),
             cnsName.data());
         }
-        auto tv = cls->clsCnsGet(cnsName.get(), /* includeTypeCns = */ true);
+        auto tv = cls->clsCnsGet(
+          cnsName.get(),
+          env.allow_partial ?
+          ClsCnsLookup::IncludeTypesPartial : ClsCnsLookup::IncludeTypes);
+        if (tv.m_type == KindOfUninit) {
+          assertx(env.allow_partial);
+          throw Exception(
+            "Failed to resolve a type constant: %s::%s",
+            cls->name()->data(), cnsName.get()->data()
+          );
+        }
         assertx(isArrayLikeType(tv.m_type));
         typeCnsVal = Array(tv.m_data.parr);
         assertx(typeCnsVal.isDictOrDArray());
@@ -783,15 +813,7 @@ Array resolveTS(TSEnv& env,
         assertx(typeCnsVal.exists(s_classname));
         clsName = typeCnsVal[s_classname].toCStrRef();
       }
-
-      if (arr.exists(s_nullable)) {
-        typeCnsVal.set(s_nullable, true_varNR.tv());
-      }
-
-      if (arr.exists(s_soft)) {
-        typeCnsVal.set(s_soft, true_varNR.tv());
-      }
-
+      copyTypeModifiers(arr, typeCnsVal);
       return typeCnsVal;
     }
     case TypeStructure::Kind::T_typevar: {
@@ -805,7 +827,10 @@ Array resolveTS(TSEnv& env,
       assertx(arr.exists(s_id));
       auto id = arr[s_id].toInt64Val();
       assertx(id < env.tsList->size());
-      return env.tsList->at(id);
+      // We want the data in the reified generic array to write over the data
+      // in newarr hence using merge
+      newarr = newarr.merge(env.tsList->at(id)).toDArray();
+      break;
     }
     case TypeStructure::Kind::T_xhp:
     default:
@@ -907,6 +932,125 @@ Array TypeStructure::resolvePartial(const Array& ts,
   partial = env.partial;
   invalidType = env.invalidType;
   return resolved;
+}
+
+bool TypeStructure::isValidResolvedTypeStructureList(const Array& arr,
+                                                     bool isShape /*= false*/) {
+  if (!(RuntimeOption::EvalHackArrDVArrs
+          ? arr.isVecArray() : (arr.isPHPArray() || !arr.isNull()))) {
+    return false;
+  }
+  bool valid = true;
+  IterateV(
+    arr.get(),
+    [&](TypedValue v) {
+      if (!tvIsDictOrDArray(v)) {
+        valid = false;
+        return true;
+      }
+      auto const parr = [&] {
+        if (isShape) {
+          auto const value = arr.rvalAt(s_value);
+          if (value.is_set()) {
+            if (!isDictOrArrayType(value.type())) {
+              valid = false;
+            } else {
+              return value.val().parr;
+            }
+          }
+        }
+        return v.m_data.parr;
+      }();
+      if (!valid) return true;
+      valid &= TypeStructure::isValidResolvedTypeStructure(ArrNR(parr));
+      return !valid; // if valid is false, let's short circuit
+    }
+  );
+  return valid;
+}
+
+bool TypeStructure::isValidResolvedTypeStructure(const Array& arr) {
+  if (!(RuntimeOption::EvalHackArrDVArrs
+          ? arr.isDict() : (arr.isPHPArray() && !arr.isNull()))) {
+    return false;
+  }
+  auto const kindfield = arr.rvalAt(s_kind);
+  if (!kindfield.is_set() || !isIntType(kindfield.type()) ||
+      kindfield.val().num > TypeStructure::kMaxResolvedKind) {
+    return false;
+  }
+  auto const kind = static_cast<TypeStructure::Kind>(kindfield.val().num);
+  switch (kind) {
+    case TypeStructure::Kind::T_array:
+    case TypeStructure::Kind::T_darray:
+    case TypeStructure::Kind::T_varray:
+    case TypeStructure::Kind::T_varray_or_darray:
+    case TypeStructure::Kind::T_dict:
+    case TypeStructure::Kind::T_vec:
+    case TypeStructure::Kind::T_keyset:
+    case TypeStructure::Kind::T_vec_or_dict:
+    case TypeStructure::Kind::T_arraylike:
+    case TypeStructure::Kind::T_null:
+    case TypeStructure::Kind::T_void:
+    case TypeStructure::Kind::T_int:
+    case TypeStructure::Kind::T_bool:
+    case TypeStructure::Kind::T_float:
+    case TypeStructure::Kind::T_string:
+    case TypeStructure::Kind::T_resource:
+    case TypeStructure::Kind::T_num:
+    case TypeStructure::Kind::T_arraykey:
+    case TypeStructure::Kind::T_nothing:
+    case TypeStructure::Kind::T_noreturn:
+    case TypeStructure::Kind::T_mixed:
+    case TypeStructure::Kind::T_dynamic:
+    case TypeStructure::Kind::T_nonnull:
+      return true;
+    case TypeStructure::Kind::T_fun: {
+      auto const rtype = arr.rvalAt(s_return_type);
+      if (!rtype.is_set() || !isDictOrArrayType(rtype.type())) return false;
+      if (!TypeStructure::isValidResolvedTypeStructure(
+            ArrNR(rtype.val().parr))) {
+        return false;
+      }
+      auto const ptypes = arr.rvalAt(s_param_types);
+      if (!ptypes.is_set() || !isVecOrArrayType(ptypes.type())) return false;
+      return isValidResolvedTypeStructureList(ArrNR(ptypes.val().parr));
+    }
+    case TypeStructure::Kind::T_typevar: {
+      auto const name = arr.rvalAt(s_name);
+      return name.is_set() && isStringType(name.type());
+    }
+    case TypeStructure::Kind::T_shape: {
+      auto const fields = arr.rvalAt(s_fields);
+      if (!fields.is_set() || !isVecOrArrayType(fields.type())) return false;
+      return isValidResolvedTypeStructureList(ArrNR(fields.val().parr), true);
+    }
+    case TypeStructure::Kind::T_tuple: {
+      auto const elems = arr.rvalAt(s_elem_types);
+      if (!elems.is_set() || !isVecOrArrayType(elems.type())) return false;
+      return isValidResolvedTypeStructureList(ArrNR(elems.val().parr));
+    }
+    case TypeStructure::Kind::T_class:
+    case TypeStructure::Kind::T_interface:
+    case TypeStructure::Kind::T_trait:
+    case TypeStructure::Kind::T_enum: {
+      auto const clsname = arr.rvalAt(s_classname);
+      if (!clsname.is_set() || !isStringType(clsname.type())) return false;
+      auto const generics = arr.rvalAt(s_generic_types);
+      if (generics.is_set()) {
+        if (!isVecOrArrayType(generics.type())) return false;
+        return isValidResolvedTypeStructureList(ArrNR(generics.val().parr));
+      }
+      return true;
+    }
+    case TypeStructure::Kind::T_unresolved:
+    case TypeStructure::Kind::T_typeaccess:
+    case TypeStructure::Kind::T_xhp:
+    case TypeStructure::Kind::T_reifiedtype:
+      // Kinds denoting unresolved types should not appear
+      return false;
+  }
+  return false;
 }
 
 } // namespace HPHP

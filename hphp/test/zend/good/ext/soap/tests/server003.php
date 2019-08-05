@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $server = new soapserver(null,array('uri'=>"http://testuri.org"));
 $server->addfunction(SOAP_FUNCTIONS_ALL);
 
@@ -20,4 +20,4 @@ EOF;
 
 $server->handle($HTTP_RAW_POST_DATA);
 echo "ok\n";
-?>
+}

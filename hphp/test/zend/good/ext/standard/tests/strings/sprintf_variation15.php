@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : string sprintf(string $format [, mixed $arg1 [, mixed ...]])
  * Description: Return a formatted string 
  * Source code: ext/standard/formatted_print.c
 */
 
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sprintf() : string formats with string values ***\n";
 
 // defining different heredoc strings
@@ -72,4 +72,4 @@ foreach($string_values as $string_value) {
 };
 
 echo "Done";
-?>
+}

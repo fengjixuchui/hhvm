@@ -1,20 +1,6 @@
-<?php
+<?hh
 // Similar case, but for a builtin (array_multisort).
 function blarg2(&$a1, &$a2) {}
-function do_call2($fn) {
-  $a2 = array();
-  $fn(&$a1, &$a2[0]);
-  var_dump($a2);
-}
-function main2() {
-  do_call2('blarg2');
-}
-
-// sscanf is a builtin that takes all additional args by ref.
-function main3() {
-  sscanf("foo 12 bar", "%s %d %s", &$a, &$b, &$c);
-  echo "Foo: $a $b $c\n";
-}
 
 // array_multisort is weird.  Some arguments are literals.
 function main4() {
@@ -30,7 +16,7 @@ function main4() {
 
 function main5() {
   $params = array(array(3,2,1),array(4,6,5),array(7,9,8));
-  call_user_func_array('array_multisort', $params);
+  array_multisort(...$params);
   var_dump($params);
 }
 
@@ -41,8 +27,6 @@ function main5() {
 <<__EntryPoint>>
 function main_ref_args() {
 error_reporting(0);
-main2();
-main3();
 main4();
 main5();
 }

@@ -1,9 +1,10 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $a = array();
-$a[0][0] = $a;
+$a[0] = array($a);
 var_dump($a);
-$b[0][0] = $b;
+$b = array(array($b));
 var_dump($b);
-$c[0] = $c;
+$c = array($c);
 var_dump($c);
+}

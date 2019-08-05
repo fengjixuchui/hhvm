@@ -1,15 +1,25 @@
+.hh_file 1;
 .main {
-  FPushFuncD 2 "var_dump"
-  FPushFuncD 3 "test"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   String "a"
   String "b"
   String "c"
-  FCall <> 3 1 "" - "" ""
   FPushFuncD 3 "test"
+  FCall <> 3 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   Null
   String "b"
   String "c"
+  FPushFuncD 3 "test"
   FCall <> 3 1 "" - "" ""
+  FPushFuncD 2 "var_dump"
   FCall <> 2 1 "" - "" ""
   PopC
   Int 1

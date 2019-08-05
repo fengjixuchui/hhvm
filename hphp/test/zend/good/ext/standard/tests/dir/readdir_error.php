@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string readdir([resource $dir_handle])
  * Description: Read directory entry from dir_handle 
  * Source code: ext/standard/dir.c
@@ -7,7 +7,7 @@
 /*
  * Pass incorrect number of arguments to readdir() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing readdir() : error conditions ***\n";
 
 
@@ -23,10 +23,8 @@ try { var_dump( readdir($dir_handle, $extra_arg) ); } catch (Exception $e) { ech
 
 // close the handle so can remove dir in CLEAN section
 closedir($dir_handle);
-?>
-===DONE===
-<?php error_reporting(0); ?>
-<?php
+echo "===DONE===\n";
+error_reporting(0);
 $path = dirname(__FILE__) . "/readdir_error";
 rmdir($path);
-?> 
+}

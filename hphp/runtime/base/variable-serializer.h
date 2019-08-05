@@ -25,9 +25,10 @@
 #include "hphp/runtime/base/tv-mutate.h"
 #include "hphp/runtime/base/tv-variant.h"
 #include "hphp/runtime/base/type-variant.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/class-meth-data-ref.h"
+
+#include "hphp/util/rds-local.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -54,6 +55,12 @@ struct VariableSerializer {
     PHPOutput, //used by compiler to output scalar values into byte code
     Last = PHPOutput,
   };
+
+  /*
+   * Set in m_option for APCSerialize to disable serializing static
+   * datastructures as their address
+   */
+  static constexpr auto kAPC_PRIME_SERIALIZE = 1;
 
   /**
    * Constructor and destructor.
@@ -103,6 +110,9 @@ struct VariableSerializer {
   void setEmptyDArrayWarn()    { m_edWarn = true; }
   void setVecLikeDArrayWarn()  { m_vdWarn = true; }
   void setDictLikeDArrayWarn() { m_ddWarn = true; }
+
+  // ignore uninitialized late init props and do not attempt to serialize them
+  void setIgnoreLateInit() { m_ignoreLateInit = true; }
 
   enum class ArrayKind { PHP, Dict, Shape, Vec, Keyset, VArray, DArray };
 
@@ -158,7 +168,7 @@ private:
   void setRefCount(int count) { m_refCount = count;}
   bool incNestedLevel(tv_rval tv);
   void decNestedLevel(tv_rval tv);
-  void pushObjectInfo(const String& objClass, int objId, char objCode);
+  void pushObjectInfo(const String& objClass, char objCode);
   void popObjectInfo();
   void pushResourceInfo(const String& rsrcName, int rsrcId);
   void popResourceInfo();
@@ -250,6 +260,7 @@ private:
   bool m_edWarn{false};          // warn when attempting on empty darrays
   bool m_vdWarn{false};          // warn when attempting on vec-like darrays
   bool m_ddWarn{false};          // warn when attempting on non-vec-like darrays
+  bool m_ignoreLateInit{false};  // ignore uninitalized late init props
   bool m_hasHackWarned{false};   // have we already warned on Hack arrays?
   bool m_hasDictWarned{false};   // have we already warned on dicts?
   bool m_hasPHPWarned{false};    // have we already warned on PHP arrays?
@@ -258,7 +269,6 @@ private:
   bool m_hasDDWarned{false};  // have we already warned on non-vec-like darrays?
   int m_refCount{1};             // current variable's reference count
   String m_objClass;             // for object serialization
-  int m_objId{0};                // for object serialization
   char m_objCode{0};             // for object serialization
   String m_rsrcName;             // for resource serialization
   int m_rsrcId{0};               // for resource serialization
@@ -280,7 +290,6 @@ private:
 
   struct ObjectInfo {
     String objClass;
-    int    objId;
     char   objCode;
     String rsrcName;
     int    rsrcId;

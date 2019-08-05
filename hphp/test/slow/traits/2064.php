@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 trait T {
-  public function goo() {
-    return get_called_class();
+  public static function goo() {
+    return static::class;
   }
-  public function foo() {
+  public static function foo() {
      return self::goo();
   }
 }

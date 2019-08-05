@@ -1,8 +1,8 @@
-<?php
+<?hh
 
 function test() {
 $abc = 'abc';
- var_dump($abc instanceof Nothing);
+ var_dump($abc is Nothing);
  }
 
 <<__EntryPoint>>

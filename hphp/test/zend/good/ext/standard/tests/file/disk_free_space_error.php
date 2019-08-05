@@ -1,11 +1,11 @@
-<?php
+<?hh
 /*
  *  Prototype: float disk_free_space( string directory )
  *  Description: Given a string containing a directory, this function will
  *               return the number of bytes available on the corresponding
  *               filesystem or disk partition
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing error conditions ***\n";
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 try { var_dump( disk_free_space() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; } // Zero Arguments
@@ -25,10 +25,7 @@ var_dump( diskfreespace( $file_path."/disk_free_space.tmp" ));
 fclose($fh);
 
 echo"\n-- Done --";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 unlink($file_path."/disk_free_space.tmp");
-
-?>
+}

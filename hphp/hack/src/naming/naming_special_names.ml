@@ -21,9 +21,9 @@ module Classes = struct
   let cAwaitable = "\\Awaitable"
   let cGenerator = "\\Generator"
   let cAsyncGenerator = "\\AsyncGenerator"
-  let is_format_string x = match x with
-    "\\FormatString" | "\\HH\\FormatString" -> true
-    | _ -> false
+  let cFormatString = "\\FormatString"
+  let cHHFormatString = "\\HH\\FormatString"
+  let is_format_string x = x = cFormatString || x = cHHFormatString
 
   let cHH_BuiltinEnum = "\\HH\\BuiltinEnum"
 
@@ -113,47 +113,50 @@ end
 
 module UserAttributes = struct
 
-  let uaOverride            = "__Override"
-  let uaConsistentConstruct = "__ConsistentConstruct"
-  let uaConst               = "__Const"
-  let uaUnsafeConstruct     = "__UNSAFE_Construct"
-  let uaDeprecated          = "__Deprecated"
-  let uaEntryPoint          = "__EntryPoint"
-  let uaMemoize             = "__Memoize"
-  let uaMemoizeLSB          = "__MemoizeLSB"
-  let uaPHPStdLib           = "__PHPStdLib"
-  let uaHipHopSpecific      = "__HipHopSpecific"
-  let uaAcceptDisposable    = "__AcceptDisposable"
-  let uaReturnDisposable    = "__ReturnDisposable"
-  let uaReactive            = "__Rx"
-  let uaLocalReactive       = "__RxLocal"
-  let uaShallowReactive     = "__RxShallow"
-  let uaMutable             = "__Mutable"
-  let uaMutableReturn       = "__MutableReturn"
-  let uaOptionalDestruct    = "__OptionalDestruct"
-  let uaOnlyRxIfImpl        = "__OnlyRxIfImpl"
-  let uaProbabilisticModel  = "__PPL"
-  let uaLSB                 = "__LSB"
-  let uaAtMostRxAsFunc      = "__AtMostRxAsFunc"
-  let uaAtMostRxAsArgs      = "__AtMostRxAsArgs"
-  let uaSealed              = "__Sealed"
-  let uaReturnsVoidToRx     = "__ReturnsVoidToRx"
-  let uaMaybeMutable        = "__MaybeMutable"
-  let uaLateInit            = "__LateInit"
-  let uaSoftLateInit        = "__SoftLateInit"
-  let uaOwnedMutable        = "__OwnedMutable"
-  let uaNonRx               = "__NonRx"
-  let uaNewable             = "__Newable"
-  let uaEnforceable         = "__Enforceable"
-  let uaSoft                = "__Soft"
-  let uaMockClass           = "__MockClass"
+  let uaOverride                 = "__Override"
+  let uaConsistentConstruct      = "__ConsistentConstruct"
+  let uaConst                    = "__Const"
+  let uaDeprecated               = "__Deprecated"
+  let uaEntryPoint               = "__EntryPoint"
+  let uaMemoize                  = "__Memoize"
+  let uaMemoizeLSB               = "__MemoizeLSB"
+  let uaPHPStdLib                = "__PHPStdLib"
+  let uaHipHopSpecific           = "__HipHopSpecific"
+  let uaAcceptDisposable         = "__AcceptDisposable"
+  let uaReturnDisposable         = "__ReturnDisposable"
+  let uaReactive                 = "__Rx"
+  let uaLocalReactive            = "__RxLocal"
+  let uaShallowReactive          = "__RxShallow"
+  let uaMutable                  = "__Mutable"
+  let uaMutableReturn            = "__MutableReturn"
+  let uaOnlyRxIfImpl             = "__OnlyRxIfImpl"
+  let uaProbabilisticModel       = "__PPL"
+  let uaLSB                      = "__LSB"
+  let uaAtMostRxAsFunc           = "__AtMostRxAsFunc"
+  let uaAtMostRxAsArgs           = "__AtMostRxAsArgs"
+  let uaSealed                   = "__Sealed"
+  let uaReturnsVoidToRx          = "__ReturnsVoidToRx"
+  let uaMaybeMutable             = "__MaybeMutable"
+  let uaLateInit                 = "__LateInit"
+  let uaSoftLateInit             = "__SoftLateInit"
+  let uaOwnedMutable             = "__OwnedMutable"
+  let uaNonRx                    = "__NonRx"
+  let uaNewable                  = "__Newable"
+  let uaEnforceable              = "__Enforceable"
+  let uaSoft                     = "__Soft"
+  let uaWarn                     = "__Warn"
+  let uaMockClass                = "__MockClass"
+  let uaProvenanceSkipFrame      = "__ProvenanceSkipFrame"
+  let uaDynamicallyCallable      = "__DynamicallyCallable"
+  let uaDynamicallyConstructible = "__DynamicallyConstructible"
+  let uaDisallowPHPArrays        = "__DisallowPHPArrays"
+  let uaNeverInline              = "__NEVER_INLINE"
 
   let as_set = List.fold_right ~f:SSet.add ~init:SSet.empty
     [
       uaOverride;
       uaConsistentConstruct;
       uaConst;
-      uaUnsafeConstruct;
       uaDeprecated;
       uaEntryPoint;
       uaMemoize;
@@ -167,7 +170,6 @@ module UserAttributes = struct
       uaMutable;
       uaMutableReturn;
       uaShallowReactive;
-      uaOptionalDestruct;
       uaOnlyRxIfImpl;
       uaProbabilisticModel;
       uaLSB;
@@ -183,7 +185,13 @@ module UserAttributes = struct
       uaNewable;
       uaEnforceable;
       uaSoft;
+      uaWarn;
       uaMockClass;
+      uaProvenanceSkipFrame;
+      uaDynamicallyCallable;
+      uaDynamicallyConstructible;
+      uaDisallowPHPArrays;
+      uaNeverInline;
     ]
 end
 
@@ -253,17 +261,30 @@ module SpecialIdents = struct
     String.length name > 6 &&
     String.sub name 0 6 = tmp_var_prefix
 
+  let assert_tmp_var name =
+    assert (is_tmp_var name)
+
 end
 
 module PseudoFunctions = struct
 
-  let empty = "\\empty"
   let isset = "\\isset"
   let unset = "\\unset"
   let hh_show = "\\hh_show"
   let hh_show_env = "\\hh_show_env"
   let hh_log_level = "\\hh_log_level"
+  let hh_force_solve = "\\hh_force_solve"
   let hh_loop_forever = "\\hh_loop_forever"
+
+  let all_pseudo_functions = [
+    isset;
+    unset;
+    hh_show;
+    hh_show_env;
+    hh_log_level;
+    hh_force_solve;
+    hh_loop_forever;
+  ]
 
 end
 
@@ -273,12 +294,11 @@ module StdlibFunctions = struct
   let is_null     = "\\is_null"
 
   let get_class = "\\get_class"
-  let get_called_class = "\\get_called_class" (* treated as static::class *)
 
   let array_filter = "\\array_filter"
   let array_map = "\\array_map"
 
-  let type_structure = "\\type_structure"
+  let type_structure = "\\HH\\type_structure"
 end
 
 module Typehints = struct
@@ -306,7 +326,6 @@ module Typehints = struct
   let integer = "integer"
   let boolean = "boolean"
   let double  = "double"
-  let real    = "real"
   let callable = "callable"
 
   let object_cast = "object"
@@ -322,7 +341,7 @@ module Typehints = struct
     let x = String.lowercase x in
     x = void     || x = noreturn || x = int      || x = bool     || x = float ||
     x = num      || x = string   || x = resource || x = mixed    || x = array ||
-    x = arraykey || x = integer  || x = boolean  || x = double   || x = real  ||
+    x = arraykey || x = integer  || x = boolean  || x = double   ||
     x = dynamic  || x = wildcard || x = nonnull  || x = nothing
 
   let is_namespace_with_reserved_hh_name x =
@@ -354,10 +373,12 @@ module PseudoConsts = struct
   let g__METHOD__    = "\\__METHOD__"
   let g__NAMESPACE__ = "\\__NAMESPACE__"
   let g__COMPILER_FRONTEND__ = "\\__COMPILER_FRONTEND__"
+  let g__FUNCTION_CREDENTIAL__ = "\\__FUNCTION_CREDENTIAL__"
 
   let all_pseudo_consts = [
     g__LINE__; g__CLASS__; g__TRAIT__; g__FILE__; g__DIR__;
-    g__FUNCTION__; g__METHOD__; g__NAMESPACE__; g__COMPILER_FRONTEND__
+    g__FUNCTION__; g__METHOD__; g__NAMESPACE__; g__COMPILER_FRONTEND__;
+    g__FUNCTION_CREDENTIAL__
   ]
   let is_pseudo_const =
     let h = HashSet.create 23 in
@@ -371,13 +392,9 @@ module FB = struct
   let cEnum                  = "\\Enum"
   let cUncheckedEnum         = "\\UncheckedEnum"
 
-  let fgena                  = "\\gena"
-  let fgenva                 = "\\genva"
-  let fgen_array_rec         = "\\gen_array_rec"
+  let idx                    = "\\HH\\idx"
 
-  let idx                    = "\\idx"
-
-  let cTypeStructure         = "\\TypeStructure"
+  let cTypeStructure         = "\\HH\\TypeStructure"
 
 end
 
@@ -405,6 +422,7 @@ end
 module Shapes = struct
   let cShapes                = "\\Shapes"
   let idx                    = "idx"
+  let at                     = "at"
   let keyExists              = "keyExists"
   let removeKey              = "removeKey"
   let toArray                = "toArray"
@@ -414,14 +432,13 @@ end
 module Superglobals = struct
   let globals = "$GLOBALS"
 
-  let all_superglobals =
-    [globals ; "$_SERVER"; "$_GET"; "$_POST"; "$_FILES";
-     "$_COOKIE"; "$_SESSION"; "$_REQUEST"; "$_ENV"
-    ]
-
   let is_superglobal =
-    let h = HashSet.create 23 in
-    List.iter all_superglobals (HashSet.add h);
+    let superglobals =
+      ["$_SERVER"; "$_GET"; "$_POST"; "$_FILES";
+       "$_COOKIE"; "$_REQUEST"; "$_ENV"
+      ] in
+    let h = HashSet.create (List.length superglobals) in
+    List.iter superglobals (HashSet.add h);
     fun x -> HashSet.mem h x
 end
 
@@ -429,8 +446,7 @@ module PPLFunctions = struct
   let all_reserved =
     [ "sample"; "\\sample"; "factor"; "\\factor";
       "observe"; "\\observe"; "condition"; "\\condition";
-      "sample_model"; "\\sample_model"; "sampleiid"; "\\sampleiid";
-      "observeiid"; "\\observeiid";
+      "sample_model"; "\\sample_model";
     ]
 
   let is_reserved =

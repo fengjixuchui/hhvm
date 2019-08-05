@@ -27,6 +27,7 @@
 #include "hphp/hhbbc/func-util.h"
 #include "hphp/hhbbc/interp-state.h"
 #include "hphp/hhbbc/interp.h"
+#include "hphp/hhbbc/options.h"
 #include "hphp/hhbbc/representation.h"
 #include "hphp/hhbbc/type-system.h"
 
@@ -38,12 +39,15 @@ struct LocalRange;
 
 TRACE_SET_MOD(hhbbc);
 
-const StaticString s_func_num_args("func_num_args");
-const StaticString s_func_get_args("func_get_args");
-const StaticString s_func_get_arg("func_get_arg");
-const StaticString s_func_slice_args("__SystemLib\\func_slice_args");
-
 //////////////////////////////////////////////////////////////////////
+
+struct TrackedElemInfo {
+  TrackedElemInfo(uint32_t d, uint32_t i) : depth{d}, idx{i} {}
+  // stack depth of the AddElem we're tracking
+  uint32_t depth;
+  // bytecode index of the previous AddElem
+  uint32_t idx;
+};
 
 /*
  * Interpreter Step State.
@@ -55,28 +59,53 @@ const StaticString s_func_slice_args("__SystemLib\\func_slice_args");
  */
 struct ISS {
   explicit ISS(Interp& bag,
-               StepFlags& flags,
                PropagateFn propagate)
     : index(bag.index)
     , ctx(bag.ctx)
     , collect(bag.collect)
+    , bid(bag.bid)
     , blk(*bag.blk)
     , state(bag.state)
-    , flags(flags)
     , propagate(propagate)
+    , analyzeDepth(options.StrengthReduce ? 0 : 1)
   {}
 
   const Index& index;
   const Context ctx;
   CollectedInfo& collect;
+  const BlockId bid;
   const php::Block& blk;
   State& state;
-  StepFlags& flags;
+  StepFlags flags;
   PropagateFn propagate;
   bool recordUsedParams{true};
+
+  folly::Optional<State> stateBefore;
+
+  // If we're inside an impl (as opposed to reduce) this will be > 0
+  uint32_t analyzeDepth{0};
+  int32_t srcLoc{-1};
+  bool reprocess{false};
+  // As we process the block, we keep track of the optimized bytecode
+  // stream. We expect that in steady state, there will be no changes;
+  // so as we process the block, if the initial bytecodes are the
+  // same, we just keep track of how many are the same in
+  // unchangedBcs. Once things diverge, the replacements are stored in
+  // replacedBcs.
+
+  // number of unchanged bcs to take from blk.hhbcs
+  uint32_t unchangedBcs{0};
+  // new bytecodes
+  BytecodeVec replacedBcs;
+  CompactVector<TrackedElemInfo> trackedElems;
 };
 
 void impl_vec(ISS& env, bool reduce, BytecodeVec&& bcs);
+void rewind(ISS& env, const Bytecode&);
+void rewind(ISS& env, int);
+const Bytecode* last_op(ISS& env, int idx = 0);
+const Bytecode* op_from_slot(ISS& env, int, int prev = 0);
+ArrayData* resolveTSStatically(ISS& env, SArray, const php::Class*, bool);
 
 //////////////////////////////////////////////////////////////////////
 
@@ -103,6 +132,7 @@ LocalId equivLocalRange(ISS& env, const LocalRange& range);
 namespace {
 
 Type peekLocRaw(ISS& env, LocalId l);
+bool peekLocCouldBeUninit(ISS& env, LocalId l);
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -145,6 +175,8 @@ template<class... Bytecodes>
 void reduce(ISS& env, Bytecodes&&... hhbc) {
   reduce(env, { std::forward<Bytecodes>(hhbc)... });
 }
+
+bool will_reduce(ISS& env) { return env.analyzeDepth == 0; }
 
 void nothrow(ISS& env) {
   FTRACE(2, "    nothrow\n");
@@ -212,53 +244,6 @@ void readAllLocals(ISS& env) {
   if (env.recordUsedParams) env.collect.usedParams.set();
 }
 
-void modifyLocalStatic(ISS& env, LocalId id, const Type& t) {
-  auto modifyOne = [&] (LocalId lid) {
-    if (is_volatile_local(env.ctx.func, lid)) return;
-    if (env.state.localStaticBindings.size() <= lid) return;
-    if (env.state.localStaticBindings[lid] == LocalStaticBinding::None) return;
-    if (t.subtypeOf(BUninit) && !t.subtypeOf(BBottom)) {
-      // Uninit means we are unbinding.
-      env.state.localStaticBindings[lid] = id == NoLocalId ?
-        LocalStaticBinding::None : LocalStaticBinding::Maybe;
-      return;
-    }
-    if (lid >= env.collect.localStaticTypes.size()) {
-      env.collect.localStaticTypes.resize(lid + 1, TBottom);
-    }
-    env.collect.localStaticTypes[lid] = t.subtypeOf(BCell) ?
-      union_of(std::move(env.collect.localStaticTypes[lid]), t) :
-      TGen;
-  };
-  if (id != NoLocalId) {
-    return modifyOne(id);
-  }
-  for (LocalId i = 0; i < env.state.localStaticBindings.size(); i++) {
-    modifyOne(i);
-  }
-}
-
-void maybeBindLocalStatic(ISS& env, LocalId id) {
-  if (is_volatile_local(env.ctx.func, id)) return;
-  if (env.state.localStaticBindings.size() <= id) return;
-  if (env.state.localStaticBindings[id] != LocalStaticBinding::None) return;
-  env.state.localStaticBindings[id] = LocalStaticBinding::Maybe;
-  return;
-}
-
-void unbindLocalStatic(ISS& env, LocalId id) {
-  modifyLocalStatic(env, id, TUninit);
-}
-
-void bindLocalStatic(ISS& env, LocalId id, const Type& t) {
-  if (is_volatile_local(env.ctx.func, id)) return;
-  if (env.state.localStaticBindings.size() <= id) {
-    env.state.localStaticBindings.resize(id + 1);
-  }
-  env.state.localStaticBindings[id] = LocalStaticBinding::Bound;
-  modifyLocalStatic(env, id, t);
-}
-
 void doRet(ISS& env, Type t, bool hasEffects) {
   IgnoreUsedParams _{env};
 
@@ -284,10 +269,10 @@ void hasInvariantIterBase(ISS& env) {
 
 Type popT(ISS& env) {
   assert(!env.state.stack.empty());
-  auto const ret = std::move(env.state.stack.back().type);
+  auto const ret = env.state.stack.back().type;
   FTRACE(2, "    pop:  {}\n", show(ret));
   assert(ret.subtypeOf(BGen));
-  env.state.stack.pop_back();
+  env.state.stack.pop_elem();
   return ret;
 }
 
@@ -323,26 +308,27 @@ void discard(ISS& env, int n) {
   }
 }
 
-Type& topT(ISS& env, uint32_t idx = 0) {
+const Type& topT(ISS& env, uint32_t idx = 0) {
   assert(idx < env.state.stack.size());
   return env.state.stack[env.state.stack.size() - idx - 1].type;
 }
 
-Type& topC(ISS& env, uint32_t i = 0) {
+const Type& topC(ISS& env, uint32_t i = 0) {
   assert(topT(env, i).subtypeOf(BInitCell));
   return topT(env, i);
 }
 
-Type& topCV(ISS& env, uint32_t i = 0) { return topT(env, i); }
+const Type& topCV(ISS& env, uint32_t i = 0) { return topT(env, i); }
 
-Type& topV(ISS& env, uint32_t i = 0) {
+const Type& topV(ISS& env, uint32_t i = 0) {
   assert(topT(env, i).subtypeOf(BRef));
   return topT(env, i);
 }
 
 void push(ISS& env, Type t) {
   FTRACE(2, "    push: {}\n", show(t));
-  env.state.stack.push_back(StackElem {std::move(t), NoLocalId});
+  env.state.stack.push_elem(std::move(t), NoLocalId,
+                            env.unchangedBcs + env.replacedBcs.size());
 }
 
 void push(ISS& env, Type t, LocalId l) {
@@ -354,7 +340,19 @@ void push(ISS& env, Type t, LocalId l) {
     assertx(!is_volatile_local(env.ctx.func, l)); // volatiles are TGen
   }
   FTRACE(2, "    push: {} (={})\n", show(t), local_string(*env.ctx.func, l));
-  env.state.stack.push_back(StackElem {std::move(t), l});
+  env.state.stack.push_elem(std::move(t), l,
+                            env.unchangedBcs + env.replacedBcs.size());
+}
+
+void discardAR(ISS& env, uint32_t idx) {
+  assert(topT(env, idx).subtypeOf(BUninit));
+  assert(topT(env, idx + 1).subtypeOf(BUninit));
+  assert(topT(env, idx + 2).subtypeOf(BCell));
+  auto& stack = env.state.stack;
+  stack.erase(stack.end() - idx - 3, stack.end() - idx);
+  if (idx && stack[stack.size() - idx].equivLoc == StackDupId) {
+    stack[stack.size() - idx].equivLoc = NoLocalId;
+  }
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -385,19 +383,18 @@ bool thisAvailable(ISS& env) {
 // you have to check thisAvailable() before assuming it can't be
 // null.
 folly::Optional<Type> thisTypeFromContext(const Index& index, Context ctx) {
-  // Due to `bindTo`, we can't conclude the type of $this.
-  if (RuntimeOption::EvalAllowScopeBinding && ctx.func->isClosureBody) {
-    return folly::none;
-  }
-
   if (auto rcls = index.selfCls(ctx)) return setctx(subObj(*rcls));
   return folly::none;
 }
 
-folly::Optional<Type> thisType(ISS& env) {
-  if (!is_specialized_obj(env.state.thisType)) return folly::none;
-  return is_opt(env.state.thisType) ?
-    unopt(env.state.thisType) : env.state.thisType;
+Type thisType(ISS& env) {
+  return env.state.thisType;
+}
+
+Type thisTypeNonNull(ISS& env) {
+  if (!env.state.thisType.couldBe(TObj)) return TBottom;
+  if (is_opt(env.state.thisType)) return unopt(env.state.thisType);
+  return env.state.thisType;
 }
 
 folly::Optional<Type> selfCls(ISS& env) {
@@ -423,6 +420,81 @@ folly::Optional<Type> parentClsExact(ISS& env) {
 //////////////////////////////////////////////////////////////////////
 // fpi
 
+bool canFold(ISS& env, const php::Func* func, int32_t nArgs,
+             Type context, bool maybeDynamic) {
+  if (!func ||
+      !options.ConstantFoldBuiltins ||
+      !will_reduce(env) ||
+      any(env.collect.opts & CollectionOpts::Speculating) ||
+      (!env.collect.propagate_constants &&
+       any(env.collect.opts & CollectionOpts::Optimizing))) {
+    return false;
+  }
+
+  if (env.collect.unfoldableFuncs.count(std::make_pair(func, env.bid))) {
+    return false;
+  }
+  if (maybeDynamic && (
+      (RuntimeOption::EvalNoticeOnBuiltinDynamicCalls &&
+       (func->attrs & AttrBuiltin)) ||
+      (dyn_call_error_level(func) > 0))) {
+    return false;
+  }
+
+  // Reified functions may have a mismatch of arity or reified generics
+  // so we cannot fold them
+  // TODO(T31677864): Detect the arity mismatch at HHBBC and enable them to
+  // be foldable
+  if (func->isReified) return false;
+  if (func->attrs & AttrTakesInOutParams) return false;
+
+  // Foldable builtins are always worth trying
+  if (func->attrs & AttrIsFoldable) return true;
+
+  // Any native functions at this point are known to be
+  // non-foldable, but other builtins might be, even if they
+  // don't have the __Foldable attribute.
+  if (func->nativeInfo) return false;
+
+  // Don't try to fold functions which aren't guaranteed to be accessible at
+  // this call site.
+  if (func->attrs & AttrPrivate) {
+    if (env.ctx.cls != func->cls) return false;
+  } else if (func->attrs & AttrProtected) {
+    if (!env.ctx.cls) return false;
+    if (!env.index.must_be_derived_from(env.ctx.cls, func->cls) &&
+        !env.index.must_be_derived_from(func->cls, env.ctx.cls)) return false;
+  }
+
+  if (func->params.size()) {
+    // Not worth trying if we're going to warn due to missing args
+    return check_nargs_in_range(func, nArgs);
+  }
+
+  // The function has no args. Check if it's effect free and returns
+  // a literal.
+  if (env.index.is_effect_free(func) &&
+      is_scalar(env.index.lookup_return_type_raw(func))) {
+    return true;
+  }
+
+  if (!(func->attrs & AttrStatic) && func->cls) {
+    // May be worth trying to fold if the method returns a scalar,
+    // assuming its only "effect" is checking for existence of $this.
+    if (is_scalar(env.index.lookup_return_type_raw(func))) return true;
+
+    // The method may be foldable if we know more about $this.
+    if (is_specialized_obj(context)) {
+      auto const dobj = dobj_of(context);
+      if (dobj.type == DObj::Exact || dobj.cls.cls() != func->cls) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /*
  * Push an ActRec.
  *
@@ -434,92 +506,29 @@ folly::Optional<Type> parentClsExact(ISS& env) {
  * returns the foldable flag as a convenience.
  */
 bool fpiPush(ISS& env, ActRec ar, int32_t nArgs, bool maybeDynamic) {
-  auto foldable = [&] {
-    if (!options.ConstantFoldBuiltins) return false;
-    if (any(env.collect.opts & CollectionOpts::Speculating)) return false;
-    if (!env.collect.propagate_constants &&
-        any(env.collect.opts & CollectionOpts::Optimizing)) {
-      // we're in the optimization phase, but we're not folding constants
-      return false;
-    }
-    if (nArgs < 0 ||
-        ar.kind == FPIKind::Ctor ||
-        ar.kind == FPIKind::Builtin ||
-        !ar.func || ar.fallbackFunc) {
-      return false;
-    }
-    if (maybeDynamic && ar.func->mightCareAboutDynCalls()) return false;
-    // Reified functions may have a mismatch of arity or reified generics
-    // so we cannot fold them
-    // TODO(T31677864): Detect the arity mismatch at HHBBC and enable them to
-    // be foldable
-    if (ar.func->couldHaveReifiedGenerics()) return false;
-    auto const func = ar.func->exactFunc();
-    if (!func) return false;
-    if (func->attrs & AttrTakesInOutParams) return false;
-    if (env.collect.unfoldableFuncs.count(std::make_pair(func, env.blk.id))) {
-      return false;
-    }
-    // Foldable builtins are always worth trying
-    if (ar.func->isFoldable()) return true;
-    // Any native functions at this point are known to be
-    // non-foldable, but other builtins might be, even if they
-    // don't have the __Foldable attribute.
-    if (func->nativeInfo) return false;
-
-    // Don't try to fold functions which aren't guaranteed to be accessible at
-    // this call site.
-    if (func->attrs & AttrPrivate) {
-      if (env.ctx.cls != func->cls) return false;
-    } else if (func->attrs & AttrProtected) {
-      if (!env.ctx.cls) return false;
-      if (!env.index.must_be_derived_from(env.ctx.cls, func->cls) &&
-          !env.index.must_be_derived_from(func->cls, env.ctx.cls)) return false;
-    }
-
-    if (func->params.size()) {
-      // Not worth trying if we're going to warn due to missing args
-      return check_nargs_in_range(func, nArgs);
-    }
-
-    auto has_better_this = [&] {
-      if (!is_specialized_obj(env.state.thisType)) return false;
-      auto const dobj = dobj_of(env.state.thisType);
-      return dobj.type == DObj::Exact || dobj.cls.cls() != func->cls;
-    };
-
-    if (!(func->attrs & AttrStatic) && func->cls) {
-      return thisAvailable(env) &&
-        (has_better_this() ||
-         is_scalar(env.index.lookup_return_type_raw(func)));
-    }
-
-    // The function has no args. Just check that it's effect free
-    // and returns a literal.
-    return env.index.is_effect_free(*ar.func) &&
-      is_scalar(env.index.lookup_return_type_raw(func));
-  }();
-  if (foldable) effect_free(env);
-  ar.foldable = foldable;
-  ar.pushBlk = env.blk.id;
-
-  FTRACE(2, "    fpi+: {}\n", show(ar));
+  ar.foldable =
+    nArgs >= 0 &&
+    ar.kind != FPIKind::Builtin &&
+    ar.func &&
+    canFold(env, ar.func->exactFunc(), nArgs, ar.context, maybeDynamic);
+  ar.pushBlk = env.bid;
+  FTRACE(2, "    fpi+: {} {}\n", env.state.fpiStack.size(), show(ar));
   env.state.fpiStack.push_back(std::move(ar));
-  return foldable;
+  return ar.foldable;
 }
 
 void fpiPushNoFold(ISS& env, ActRec ar) {
   ar.foldable = false;
-  ar.pushBlk = env.blk.id;
+  ar.pushBlk = env.bid;
 
-  FTRACE(2, "    fpi+: {}\n", show(ar));
+  FTRACE(2, "    fpi+: {} {}\n", env.state.fpiStack.size(), show(ar));
   env.state.fpiStack.push_back(std::move(ar));
 }
 
 ActRec fpiPop(ISS& env) {
   assert(!env.state.fpiStack.empty());
   auto const ret = env.state.fpiStack.back();
-  FTRACE(2, "    fpi-: {}\n", show(ret));
+  FTRACE(2, "    fpi-: {} {}\n", env.state.fpiStack.size() - 1, show(ret));
   env.state.fpiStack.pop_back();
   return ret;
 }
@@ -527,6 +536,20 @@ ActRec fpiPop(ISS& env) {
 ActRec& fpiTop(ISS& env) {
   assert(!env.state.fpiStack.empty());
   return env.state.fpiStack.back();
+}
+
+void unfoldable(ISS& env, ActRec& ar) {
+  env.propagate(ar.pushBlk, nullptr);
+  ar.foldable = false;
+  // we're going to reprocess the whole fpi region; any results we've
+  // got so far are bogus, so stop prevent further useless work by
+  // marking the next bytecode unreachable
+  unreachable(env);
+  // This also means we shouldn't reprocess any changes to the
+  // bytecode, since we're pretending the block ends here, and we may
+  // have already thrown away the FPush.
+  env.reprocess = false;
+  FTRACE(2, "     fpi: not foldable\n");
 }
 
 void fpiNotFoldable(ISS& env) {
@@ -540,28 +563,11 @@ void fpiNotFoldable(ISS& env) {
   auto const func = ar.func->exactFunc();
   assertx(func);
   env.collect.unfoldableFuncs.emplace(func, ar.pushBlk);
-  env.propagate(ar.pushBlk, nullptr);
-  ar.foldable = false;
-  // we're going to reprocess the whole fpi region; any results we've
-  // got so far are bogus, so stop prevent further useless work by
-  // marking the next bytecode unreachable
-  unreachable(env);
-  FTRACE(2, "     fpi: not foldable\n");
+  unfoldable(env, ar);
 }
 
 //////////////////////////////////////////////////////////////////////
 // locals
-
-void useLocalStatic(ISS& env, LocalId l) {
-  assert(env.collect.localStaticTypes.size() > l);
-  if (!env.flags.usedLocalStatics) {
-    env.flags.usedLocalStatics =
-      std::make_shared<hphp_fast_map<LocalId,Type>>();
-  }
-  // Ignore the return value, since we only want the first type used,
-  // as that will be the narrowest.
-  env.flags.usedLocalStatics->emplace(l, env.collect.localStaticTypes[l]);
-}
 
 void mayReadLocal(ISS& env, uint32_t id) {
   if (id < env.flags.mayReadLocalSet.size()) {
@@ -578,6 +584,24 @@ LocalId findLocEquiv(ISS& env, LocalId l) {
   assert(env.state.equivLocals[l] == NoLocalId ||
          !is_volatile_local(env.ctx.func, l));
   return env.state.equivLocals[l];
+}
+
+// Find an equivalent local with minimum id
+LocalId findMinLocEquiv(ISS& env, LocalId l, bool allowUninit) {
+  if (l >= env.state.equivLocals.size() ||
+      env.state.equivLocals[l] == NoLocalId) {
+    return NoLocalId;
+  }
+
+  auto min = l;
+  auto cur = env.state.equivLocals[l];
+  while (cur != l) {
+    if (cur < min && (allowUninit || !peekLocCouldBeUninit(env, cur))) {
+      min = cur;
+    }
+    cur = env.state.equivLocals[cur];
+  }
+  return min != l ? min : NoLocalId;
 }
 
 // Determine whether two locals are equivalent
@@ -769,44 +793,26 @@ void setLocRaw(ISS& env, LocalId l, Type t) {
     always_assert_flog(current == TGen, "volatile local was not TGen");
     return;
   }
-  modifyLocalStatic(env, l, t);
   env.state.locals[l] = std::move(t);
-}
-
-folly::Optional<Type> staticLocType(ISS& env, LocalId l, const Type& super) {
-  mayReadLocal(env, l);
-  if (env.state.localStaticBindings.size() > l &&
-      env.state.localStaticBindings[l] == LocalStaticBinding::Bound) {
-    assert(env.collect.localStaticTypes.size() > l);
-    auto t = env.collect.localStaticTypes[l];
-    if (t.subtypeOf(super)) {
-      useLocalStatic(env, l);
-      if (t.subtypeOf(BBottom)) t = TInitNull;
-      return std::move(t);
-    }
-  }
-  return folly::none;
 }
 
 // Read a local type in the sense of CGetL.  (TUninits turn into
 // TInitNull, and potentially reffy types return the "inner" type,
 // which is always a subtype of InitCell.)
 Type locAsCell(ISS& env, LocalId l) {
-  if (auto s = staticLocType(env, l, TInitCell)) {
-    return std::move(*s);
-  }
   return to_cell(locRaw(env, l));
 }
 
 // Read a local type, dereferencing refs, but without converting
 // potential TUninits to TInitNull.
 Type derefLoc(ISS& env, LocalId l) {
-  if (auto s = staticLocType(env, l, TCell)) {
-    return std::move(*s);
-  }
   auto v = locRaw(env, l);
   if (v.subtypeOf(BCell)) return v;
   return v.couldBe(BUninit) ? TCell : TInitCell;
+}
+
+bool peekLocCouldBeUninit(ISS& env, LocalId l) {
+  return peekLocRaw(env, l).couldBe(BUninit);
 }
 
 bool locCouldBeUninit(ISS& env, LocalId l) {
@@ -845,12 +851,12 @@ bool refineLocation(ISS& env, LocalId l, F fun) {
     return r1;
   };
   if (l == StackDupId) {
-    auto stk = &env.state.stack.back();
+    auto stk = env.state.stack.end();
     while (true) {
+      --stk;
       stk->type = refine(std::move(stk->type));
       if (stk->equivLoc != StackDupId) break;
-      assertx(stk != &env.state.stack.front());
-      --stk;
+      assertx(stk != env.state.stack.begin());
     }
     l = stk->equivLoc;
   }
@@ -860,12 +866,17 @@ bool refineLocation(ISS& env, LocalId l, F fun) {
     }
   }
   if (l > MaxLocalId) return ok;
+  auto fixThis = false;
   auto equiv = findLocEquiv(env, l);
   if (equiv != NoLocalId) {
     do {
+      if (equiv == env.state.thisLoc) fixThis = true;
       refineLocHelper(env, equiv, refine(peekLocRaw(env, equiv)));
       equiv = findLocEquiv(env, equiv);
     } while (equiv != l);
+  }
+  if (fixThis || l == env.state.thisLoc) {
+    env.state.thisType = refine(env.state.thisType);
   }
   refineLocHelper(env, l, refine(peekLocRaw(env, l)));
   return ok;
@@ -878,10 +889,10 @@ void refineLocation(ISS& env, LocalId l,
   auto const target_reachable = refineLocation(env, l, pre);
   if (!target_reachable) jmp_nevertaken(env);
   // swap, so we can restore this state if the branch is always taken.
-  std::swap(env.state, state);
+  env.state.swap(state);
   if (!refineLocation(env, l, post)) {
     jmp_setdest(env, target);
-    env.state = std::move(state);
+    env.state.copy_from(std::move(state));
   } else if (target_reachable) {
     env.propagate(target, &state);
   }
@@ -897,7 +908,6 @@ void setLoc(ISS& env, LocalId l, Type t, LocalId key = NoLocalId) {
   killLocEquiv(env, l);
   killIterEquivs(env, l, key);
   killThisLoc(env, l);
-  modifyLocalStatic(env, l, t);
   mayReadLocal(env, l);
   refineLocHelper(env, l, std::move(t));
 }
@@ -924,109 +934,16 @@ void loseNonRefLocalTypes(ISS& env) {
   killAllStkEquiv(env);
   killAllIterEquivs(env);
   killThisLoc(env, NoLocalId);
-  modifyLocalStatic(env, NoLocalId, TCell);
 }
 
 void killLocals(ISS& env) {
   FTRACE(2, "    killLocals\n");
   readUnknownLocals(env);
-  modifyLocalStatic(env, NoLocalId, TGen);
   for (auto& l : env.state.locals) l = TGen;
   killAllLocEquiv(env);
   killAllStkEquiv(env);
   killAllIterEquivs(env);
   killThisLoc(env, NoLocalId);
-}
-
-//////////////////////////////////////////////////////////////////////
-// Special functions
-
-void specialFunctionEffects(ISS& env, const res::Func& func) {
-  /*
-   * Skip-frame functions won't read from the caller's frame, but they might
-   * dynamically call a function which can. So, skip-frame functions read our
-   * locals unless they can't call such functions.
-   */
-  if ((RuntimeOption::DisallowDynamicVarEnvFuncs != HackStrictOption::ON &&
-       func.mightBeSkipFrame())) {
-    readUnknownLocals(env);
-  }
-
-  if (func.mightReadCallerFrame()) {
-    if (func.name()->isame(s_func_get_args.get()) ||
-        func.name()->isame(s_func_get_arg.get()) ||
-        func.name()->isame(s_func_slice_args.get())) {
-      readUnknownParams(env);
-    } else if (!func.name()->isame(s_func_num_args.get())) {
-      readUnknownLocals(env);
-    }
-    mayUseVV(env);
-  }
-}
-
-void specialFunctionEffects(ISS& env, ActRec ar) {
-  switch (ar.kind) {
-  case FPIKind::Unknown:
-    // fallthrough
-  case FPIKind::Func:
-    if (!ar.func) {
-      if (RuntimeOption::DisallowDynamicVarEnvFuncs != HackStrictOption::ON) {
-        readUnknownLocals(env);
-      }
-      return;
-    }
-  case FPIKind::Builtin:
-    specialFunctionEffects(env, *ar.func);
-    if (ar.fallbackFunc) specialFunctionEffects(env, *ar.fallbackFunc);
-    break;
-  case FPIKind::Ctor:
-  case FPIKind::ObjMeth:
-  case FPIKind::ObjMethNS:
-  case FPIKind::ClsMeth:
-  case FPIKind::ObjInvoke:
-  case FPIKind::CallableArr:
-    /*
-     * Methods cannot read or write to the caller's frame, but they can be
-     * skip-frame (if they're a builtin). So, its possible they'll dynamically
-     * call a function which reads from the caller's frame. If we don't
-     * forbid this, we have to be pessimistic. Imagine something like
-     * Vector::map calling assert.
-     */
-    if (RuntimeOption::DisallowDynamicVarEnvFuncs != HackStrictOption::ON &&
-        (!ar.func || ar.func->mightBeSkipFrame())) {
-      readUnknownLocals(env);
-    }
-    break;
-  }
-}
-
-//////////////////////////////////////////////////////////////////////
-// class-ref slots
-
-// Read the specified class-ref slot without discarding the stored value.
-const Type& peekClsRefSlot(ISS& env, ClsRefSlotId slot) {
-  assert(slot != NoClsRefSlotId);
-  always_assert_flog(env.state.clsRefSlots[slot].subtypeOf(BCls),
-                     "class-ref slot contained non-TCls");
-  return env.state.clsRefSlots[slot];
-}
-
-// Read the specified class-ref slot and discard the stored value.
-Type takeClsRefSlot(ISS& env, ClsRefSlotId slot) {
-  assert(slot != NoClsRefSlotId);
-  auto ret = std::move(env.state.clsRefSlots[slot]);
-  FTRACE(2, "    read class-ref: {} -> {}\n", slot, show(ret));
-  always_assert_flog(ret.subtypeOf(BCls), "class-ref slot contained non-TCls");
-  env.state.clsRefSlots[slot] = TCls;
-  return ret;
-}
-
-void putClsRefSlot(ISS& env, ClsRefSlotId slot, Type ty) {
-  assert(slot != NoClsRefSlotId);
-  always_assert_flog(ty.subtypeOf(BCls),
-                     "attempted to set class-ref slot to non-TCls");
-  FTRACE(2, "    write class-ref: {} -> {}\n", slot, show(ty));
-  env.state.clsRefSlots[slot] = std::move(ty);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -1107,7 +1024,7 @@ folly::Optional<Type> thisPropAsCell(ISS& env, SString name) {
   if (!elem) return folly::none;
   if (elem->ty.couldBe(BUninit)) {
     auto const rthis = thisType(env);
-    if (!rthis || dobj_of(*rthis).cls.couldHaveMagicGet()) {
+    if (!is_specialized_obj(rthis) || dobj_of(rthis).cls.couldHaveMagicGet()) {
       return TInitCell;
     }
   }
@@ -1154,13 +1071,6 @@ void unsetUnknownThisProp(ISS& env) {
   for (auto& kv : env.collect.props.privateProperties()) {
     mergeThisProp(env, kv.first, TUninit);
   }
-}
-
-void boxThisProp(ISS& env, SString name) {
-  auto const elem = thisPropRaw(env, name);
-  if (!elem) return;
-  elem->ty |=
-    adjust_type_for_prop(env.index, *env.ctx.cls, elem->tc, TRef);
 }
 
 /*
@@ -1240,10 +1150,6 @@ void mergeEachSelfPropRaw(ISS& env, MapFn fn) {
   }
 }
 
-void boxSelfProp(ISS& env, SString name) {
-  mergeSelfProp(env, name, TRef);
-}
-
 /*
  * Forces non-ref static properties up to TCell.  This is used when
  * an operation affects an unknown static property on self::, but
@@ -1275,6 +1181,27 @@ bool isMaybeLateInitSelfProp(ISS& env, SString name) {
   }
   // Prop either doesn't exist, or is on an unflattened trait. Be conservative.
   return true;
+}
+
+/*
+ * Determines whether we can skip expanding the type of a
+ * const property.
+ * Requires propName is the value of a TypedValue with type
+ * KindOfPersistentString
+ */
+bool canSkipMergeOnConstProp(ISS&env, Type tcls, SString propName) {
+    if (is_specialized_cls(tcls)) {
+      DCls cls = dcls_of(tcls);
+      if (cls.type == DCls::Exact && cls.cls.resolved()) {
+          for (auto& prop : cls.cls.cls()->properties) {
+            if (prop.name == propName &&
+               (prop.attrs & AttrIsConst)) {
+                 return true;
+            }
+          }
+       }
+    }
+    return false;
 }
 
 //////////////////////////////////////////////////////////////////////

@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL);
 
 trait A {
@@ -28,4 +28,3 @@ class MyClass {
 $t = new MyClass;
 $t->foo();
 
-?>

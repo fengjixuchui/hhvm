@@ -1,10 +1,10 @@
-<?php
+<?hh
 
-interface abc { 
+interface abc {
 }
 
 class A {
-	use abc;
+    use abc;
 }
 
-?>
+<<__EntryPoint>> function main(): void {}

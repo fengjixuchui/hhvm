@@ -1,8 +1,8 @@
-<?php
+<?hh
 
 function test($x) {
   apc_store('foo', array('a'.$x, array($x)));
-  $a = apc_fetch('foo');
+  $a = __hhvm_intrinsics\apc_fetch_no_check('foo');
   $x = array_intersect($a, $a);
   var_dump($x);
 }

@@ -400,6 +400,7 @@ let make_function_call_expression_syntax receiver_syntax argument_list =
   let argument_list_syntax = make_comma_list argument_list in
   make_function_call_expression
     receiver_syntax
+    (make_missing ())
     left_paren_syntax
     argument_list_syntax
     right_paren_syntax
@@ -557,7 +558,7 @@ let make_classish_declaration_syntax
       right_brace_syntax in
   make_classish_declaration
     (* classish_attribute *) (make_missing ())
-    (* classish_modifiers *) (make_missing ())
+    (* classish_modifiers *) (make_list [final_syntax])
     class_keyword_syntax
     classname_syntax
     (make_type_parameters_syntax type_parameter_list)
@@ -568,6 +569,7 @@ let make_classish_declaration_syntax
     extends_list_syntax
     (* classish_implements_keyword *) (make_missing ())
     (* classish_implements_list *) (make_missing ())
+    (* classish_where_clause *) (make_missing ())
     classish_body
 
 let make_lambda_signature_from_method_syntax

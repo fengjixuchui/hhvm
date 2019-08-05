@@ -24,8 +24,8 @@ module Class : sig
   (* Given a namespace environment and a possibly-qualified identifier,
    * determine the HHAS representation of the identifier, with
    * namespace qualification but no initial backslash, and XHP
-   * mangling. Also return the unqualified form as a string *)
-  val elaborate_id : Namespace_env.env -> Ast.id -> t * string option
+   * mangling. *)
+  val elaborate_id : Namespace_env.env -> Ast_defs.id -> t
 end
 
 module Function : sig
@@ -36,9 +36,7 @@ module Function : sig
   val to_raw_string : t -> string
   (* Used to add suffixes for memoized functions *)
   val add_suffix : t -> string -> t
-  val elaborate_id : Namespace_env.env -> Ast.id -> t * string option
-  val elaborate_id_with_builtins : Namespace_env.env -> Ast.id -> t * string option
-
+  val elaborate_id : Namespace_env.env -> Ast_defs.id -> t
 end
 
 module Prop : sig
@@ -64,5 +62,5 @@ module Const : sig
   (* As used in `define('name')` and the assembler *)
   val from_raw_string : string -> t
   val to_raw_string : t -> string
-  val elaborate_id : Namespace_env.env -> Ast.id -> t * string option * bool
+  val elaborate_id : Namespace_env.env -> Ast_defs.id -> t
 end

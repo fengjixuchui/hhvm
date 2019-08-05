@@ -24,36 +24,21 @@
 #include <functional>
 
 #include "hphp/runtime/vm/jit/bc-marker.h"
+#include "hphp/runtime/vm/jit/inline-state.h"
 #include "hphp/runtime/vm/jit/ir-builder.h"
 #include "hphp/runtime/vm/jit/ir-unit.h"
 #include "hphp/runtime/vm/jit/translator.h"
+#include "hphp/runtime/vm/jit/types.h"
 
 namespace HPHP { namespace jit {
 
 struct NormalizedInstruction;
 struct SSATmp;
+struct TranslateRetryContext;
 
 namespace irgen {
 
 //////////////////////////////////////////////////////////////////////
-
-struct ReturnTarget {
-  /*
-   * Block that will serve as a branch target for returning to the caller.
-   */
-  Block* callerTarget;
-
-  /*
-   * Block that will suspend the inlined frame and optionally contain the
-   * InlineSuspend instruction.
-   */
-  Block* suspendTarget;
-
-  /*
-   * Offset from FCall to return control to if the callee finished eagerly.
-   */
-  Offset asyncEagerOffset;
-};
 
 /*
  * IR-Generation State.
@@ -66,7 +51,8 @@ struct ReturnTarget {
  * required to determine high-level compilation strategy.
  */
 struct IRGS {
-  explicit IRGS(IRUnit& unit, const RegionDesc* region);
+  explicit IRGS(IRUnit& unit, const RegionDesc* region, int32_t budgetBCInstrs,
+                TranslateRetryContext* retryContext);
 
   TransContext context;
   TransFlags transFlags;
@@ -76,20 +62,14 @@ struct IRGS {
 
   /*
    * Tracks information about the current bytecode offset and which function we
-   * are in. We push and pop as we deal with inlined calls.
+   * are in.
    */
-  std::vector<SrcKey> bcStateStack;
+  SrcKey bcState;
 
   /*
-   * The current inlining level.  0 means we're not inlining.
+   * Tracks information about the state of inlining.
    */
-  uint16_t inlineLevel{0};
-
-  /*
-   * Return-to-caller block targets for inlined functions.  The last target is
-   * for the current inlining frame.
-   */
-  std::vector<ReturnTarget> inlineReturnTarget;
+  InlineState inlineState;
 
   /*
    * The id of the profiling translation for the code we're currently
@@ -114,16 +94,32 @@ struct IRGS {
   bool firstBcInst{true};
 
   /*
-   * True if we're on the last HHBC instruction that will be emitted
-   * for this region.
+   * True if we are just forming a region. Used to pessimize return values of
+   * function calls that may have been inferred based on specialized type
+   * information that won't be available when the region is translated.
    */
-  bool lastBcInst{false};
+  bool formingRegion{false};
 
   /*
    * Profile-weight factor, to be multiplied by the region blocks'
    * profile-translation counters in PGO mode.
    */
   double profFactor{1};
+
+  /*
+   * The remaining bytecode instruction budget for this region translation.
+   */
+  int32_t budgetBCInstrs{0};
+
+  /*
+   * Context for translation retries.
+   */
+  TranslateRetryContext* retryContext;
+
+  /*
+   * Annotations.
+   */
+  Annotations annotations;
 };
 
 //////////////////////////////////////////////////////////////////////

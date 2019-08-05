@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : string sprintf(string $format [, mixed $arg1 [, mixed ...]])
  * Description: Return a formatted string 
  * Source code: ext/standard/formatted_print.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sprintf() : char formats with resource values ***\n";
 
 // resource type variable
@@ -38,5 +38,5 @@ foreach($resource_values as $resource_value) {
 fclose($fp);
 closedir($dfp);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

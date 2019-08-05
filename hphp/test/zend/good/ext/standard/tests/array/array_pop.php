@@ -1,7 +1,5 @@
-<?php
-
-array_pop(&$GLOBALS);
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $empty_array = array();
 $number = 5;
 $str = "abc";
@@ -38,4 +36,4 @@ foreach( $mixed_array as $sub_array )
 }
 
 echo"\nDone";
-?>
+}

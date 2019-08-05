@@ -1,9 +1,9 @@
-<?php
+<?hh
 
 class A {
   const C = 123;
   static public $foo = 456;
-  public function bar() {
+  public static function bar() {
     return 789;
   }
 }

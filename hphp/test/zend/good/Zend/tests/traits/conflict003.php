@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL);
 
 trait A {
@@ -23,4 +23,3 @@ class Talker {
    use A, B;
 }
 
-?>

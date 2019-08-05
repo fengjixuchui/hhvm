@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class C {
   const X = 1;
@@ -9,3 +9,5 @@ class C {
 
   const Y = C::f()::X;
 }
+
+<<__EntryPoint>> function main(): void {}

@@ -1,2 +1,3 @@
 #!/usr/bin/php
-<?php
+<?hh
+<<__EntryPoint>> function main(): void {}

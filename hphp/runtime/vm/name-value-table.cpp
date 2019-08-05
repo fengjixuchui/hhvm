@@ -155,12 +155,6 @@ TypedValue* NameValueTable::set(const StringData* name, tv_rval val) {
   return target;
 }
 
-TypedValue* NameValueTable::bind(const StringData* name, tv_lval val) {
-  TypedValue* target = findTypedValue(name);
-  tvSetRef(val, target);
-  return target;
-}
-
 void NameValueTable::unset(const StringData* name) {
   Elm* elm = findElm(name);
   if (!elm) return;
@@ -180,6 +174,11 @@ TypedValue* NameValueTable::lookupAdd(const StringData* name) {
     tvWriteNull(*tv);
   }
   return tv;
+}
+
+ssize_t NameValueTable::lookupPos(const StringData* name) {
+  Elm* e = findElm(name);
+  return e ? e - m_table : (m_tabMask + 1);
 }
 
 void NameValueTable::reserve(size_t desiredSize) {

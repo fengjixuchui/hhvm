@@ -1,4 +1,4 @@
-<?php
+<?hh
 // Create a blank image and add some text
 $im = imagecreatetruecolor(120, 20);
 $text_color = imagecolorallocate($im, 255, 255, 255);
@@ -15,9 +15,6 @@ imagedestroy($im);
 
 png2wbmp($file, $file2, 20, 120, 9);
 png2wbmp($file, $file2, 20, 120, -1);
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 unlink(dirname(__FILE__) .'/simpletext.png');
 unlink(dirname(__FILE__) .'/simpletext.wbmp');
-?>

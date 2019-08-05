@@ -64,9 +64,6 @@ struct c_Closure final : ObjectData {
     return reinterpret_cast<c_Closure*>(obj);
   }
 
-  /* closureInstanceCtor() skips this constructor call in debug mode.
-   * Update that method if this assumption changes.
-   */
   explicit c_Closure(Class* cls)
     : ObjectData(cls, 0, HeaderKind::Closure) {
     // hdr()->ctx must be initialized by init() or the TC.
@@ -88,6 +85,14 @@ struct c_Closure final : ObjectData {
    */
   void init(int numArgs, ActRec* ar, TypedValue* sp);
 
+  /*
+   * Initialization function used by the interpreter. The JIT inlines these
+   * operations in the TC.
+   *
+   * Returns the number of cells copied to the stack.
+   */
+  static int initActRecFromClosure(ActRec* ar, TypedValue* sp);
+
   /////////////////////////////////////////////////////////////////////////////
 
   /*
@@ -100,25 +105,8 @@ struct c_Closure final : ObjectData {
    */
   Class* getScope() { return getInvokeFunc()->cls(); }
 
-  /*
-   * Use and static local variables.
-   *
-   * Returns obj->propVecForWrite()
-   * but with runtime generalized checks replaced with assertions
-   *
-   * NB: Closure properties can't have type-hints, so no checking is necessary
-   * for writes.
-   */
-  TypedValue* getUseVars() { return propVecForWrite(); }
-
-  TypedValue* getStaticVar(Slot s) {
-    assertx(getVMClass()->numDeclProperties() > s);
-    return getUseVars() + s;
-  }
-
   int32_t getNumUseVars() const {
-    return getVMClass()->numDeclProperties() -
-           getInvokeFunc()->numStaticLocals();
+    return getVMClass()->numDeclProperties();
   }
 
   /*
@@ -167,9 +155,8 @@ private:
   static void setAllocators(Class* cls);
 };
 
-TypedValue* lookupStaticTvFromClosure(ObjectData* closure,
-                                      const StringData* name);
-Slot lookupStaticSlotFromClosure(const Class* cls, const StringData* name);
+ObjectData* createClosureRepoAuth(Class* cls);
+ObjectData* createClosure(Class* cls);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

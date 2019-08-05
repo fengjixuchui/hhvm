@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function foo() { return array(1,2,3); }
 function bar() { return array(); }
@@ -6,12 +6,8 @@ function test($x) {
   $y = $x ? foo() : bar();
   return $y[0];
 }
-function main() {
-  var_dump(test(true));
-  var_dump(test(false));
-}
-
 <<__EntryPoint>>
-function main_array_007() {
-main();
+function main() {
+  try { var_dump(test(true)); } catch (Exception $e) { echo $e->getMessage()."\n"; }
+  try { var_dump(test(false)); } catch (Exception $e) { echo $e->getMessage()."\n"; }
 }

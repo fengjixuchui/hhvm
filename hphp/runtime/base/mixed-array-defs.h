@@ -155,14 +155,6 @@ inline ArrayData* MixedArray::addValNoAsserts(StringData* key, Cell data) {
   return this;
 }
 
-inline MixedArray::Elm& MixedArray::addKeyAndGetElem(StringData* key) {
-  strhash_t h = key->hash();
-  auto ei = findForNewInsert(h);
-  auto e = allocElm(ei);
-  e->setStrKey(key, h);
-  return *e;
-}
-
 template <class K>
 ArrayData* MixedArray::updateWithRef(K k, TypedValue data) {
   assertx(!isFull());
@@ -177,21 +169,6 @@ ArrayData* MixedArray::updateWithRef(K k, TypedValue data) {
   // KindOfUninit here.
   tvDupWithRef(data, p.tv);
   if (p.tv.m_type == KindOfUninit) p.tv.m_type = KindOfNull;
-  return this;
-}
-
-template <class K>
-ArrayData* MixedArray::updateRef(K k, tv_lval data) {
-  assertx(!isFull());
-
-  auto p = insert(k);
-
-  tvBoxIfNeeded(data);
-  if (p.found) {
-    tvBind(data.tv(), p.tv);
-    return this;
-  }
-  refDup(data.tv(), p.tv);
   return this;
 }
 
@@ -288,12 +265,14 @@ private:
 // any reference to refcounted values.
 ALWAYS_INLINE
 void ConvertTvToUncounted(
-    TypedValue* source,
+    tv_lval source,
     DataWalker::PointerMap* seen = nullptr) {
-  if (isRefType(source->m_type)) {
+  auto& data = source.val();
+  auto& type = source.type();
+  if (isRefType(type)) {
     // unbox
-    auto const inner = source->m_data.pref->cell();
-    tvCopy(*inner, *source);
+    auto const inner = data.pref->cell();
+    tvCopy(*inner, source);
   }
 
   auto const handlePersistent = [&] (MaybeCountable* elm) {
@@ -304,22 +283,21 @@ void ConvertTvToUncounted(
     return false;
   };
 
-  auto type = source->m_type;
   // `source' cannot be Ref here as we already did an unbox.  It won't be
   // Object or Resource, as these should never appear in an uncounted array.
   // Thus we only need to deal with strings/arrays.
   switch (type) {
     case KindOfFunc:
     case KindOfClass:
-      source->m_data.pstr = isFuncType(type)
-        ? const_cast<StringData*>(funcToStringHelper(source->m_data.pfunc))
-        : const_cast<StringData*>(classToStringHelper(source->m_data.pclass));
+      data.pstr = isFuncType(type)
+        ? const_cast<StringData*>(funcToStringHelper(data.pfunc))
+        : const_cast<StringData*>(classToStringHelper(data.pclass));
       // Fall-through
     case KindOfString:
-      source->m_type = KindOfPersistentString;
+      type = KindOfPersistentString;
       // Fall-through.
     case KindOfPersistentString: {
-      auto& str = source->m_data.pstr;
+      auto& str = data.pstr;
       if (handlePersistent(str)) break;
       if (str->empty()) str = staticEmptyString();
       else if (auto const st = lookupStaticString(str)) str = st;
@@ -340,10 +318,10 @@ void ConvertTvToUncounted(
       break;
     }
     case KindOfVec:
-      source->m_type = KindOfPersistentVec;
+      type = KindOfPersistentVec;
       // Fall-through.
     case KindOfPersistentVec: {
-      auto& ad = source->m_data.parr;
+      auto& ad = data.parr;
       assertx(ad->isVecArray());
       if (handlePersistent(ad)) break;
       if (ad->empty()) ad = staticEmptyVecArray();
@@ -352,10 +330,10 @@ void ConvertTvToUncounted(
     }
 
     case KindOfDict:
-      source->m_type = KindOfPersistentDict;
+      type = KindOfPersistentDict;
       // Fall-through.
     case KindOfPersistentDict: {
-      auto& ad = source->m_data.parr;
+      auto& ad = data.parr;
       assertx(ad->isDict());
       if (handlePersistent(ad)) break;
       if (ad->empty()) ad = staticEmptyDictArray();
@@ -364,10 +342,10 @@ void ConvertTvToUncounted(
     }
 
     case KindOfKeyset:
-      source->m_type = KindOfPersistentKeyset;
+      type = KindOfPersistentKeyset;
       // Fall-through.
     case KindOfPersistentKeyset: {
-      auto& ad = source->m_data.parr;
+      auto& ad = data.parr;
       assertx(ad->isKeyset());
       if (handlePersistent(ad)) break;
       if (ad->empty()) ad = staticEmptyKeysetArray();
@@ -377,7 +355,7 @@ void ConvertTvToUncounted(
 
     case KindOfShape:
     case KindOfPersistentShape: {
-      auto& ad = source->m_data.parr;
+      auto& ad = data.parr;
       assertx(ad->isShape());
       if (handlePersistent(ad)) break;
       if (ad->empty()) {
@@ -389,10 +367,10 @@ void ConvertTvToUncounted(
     }
 
     case KindOfArray:
-      source->m_type = KindOfPersistentArray;
+      type = KindOfPersistentArray;
       // Fall-through.
     case KindOfPersistentArray: {
-      auto& ad = source->m_data.parr;
+      auto& ad = data.parr;
       assertx(ad->isPHPArray());
       assertx(!RuntimeOption::EvalHackArrDVArrs || ad->isNotDVArray());
       if (handlePersistent(ad)) break;
@@ -408,22 +386,22 @@ void ConvertTvToUncounted(
       break;
     }
     case KindOfUninit: {
-      source->m_type = KindOfNull;
+      type = KindOfNull;
       break;
     }
     case KindOfClsMeth: {
       if (RuntimeOption::EvalHackArrDVArrs) {
         tvCastToVecInPlace(source);
-        source->m_type = KindOfPersistentVec;
-        auto& ad = source->m_data.parr;
+        type = KindOfPersistentVec;
+        auto& ad = data.parr;
         if (handlePersistent(ad)) break;
         assertx(!ad->empty());
         ad = PackedArray::MakeUncounted(ad, false, seen);
         break;
       } else {
         tvCastToVArrayInPlace(source);
-        source->m_type = KindOfPersistentArray;
-        auto& ad = source->m_data.parr;
+        type = KindOfPersistentArray;
+        auto& ad = data.parr;
         if (handlePersistent(ad)) break;
         assertx(!ad->empty());
         ad = PackedArray::MakeUncounted(ad, false, seen);
@@ -436,6 +414,8 @@ void ConvertTvToUncounted(
     case KindOfDouble: {
       break;
     }
+    case KindOfRecord:
+      raise_error(Strings::RECORD_NOT_SUPPORTED);
     case KindOfObject:
     case KindOfResource:
     case KindOfRef:
@@ -444,16 +424,17 @@ void ConvertTvToUncounted(
 }
 
 ALWAYS_INLINE
-void ReleaseUncountedTv(TypedValue& tv) {
-  if (isStringType(tv.m_type)) {
-    assertx(!tv.m_data.pstr->isRefCounted());
-    if (tv.m_data.pstr->isUncounted()) {
-      StringData::ReleaseUncounted(tv.m_data.pstr);
+void ReleaseUncountedTv(tv_lval lval) {
+  if (isStringType(type(lval))) {
+    auto const str = val(lval).pstr;
+    assertx(!str->isRefCounted());
+    if (str->isUncounted()) {
+      StringData::ReleaseUncounted(str);
     }
     return;
   }
-  if (isArrayLikeType(tv.m_type)) {
-    auto arr = tv.m_data.parr;
+  if (isArrayLikeType(type(lval))) {
+    auto const arr = val(lval).parr;
     assertx(!arr->isRefCounted());
     if (!arr->isStatic()) {
       if (arr->hasPackedLayout()) PackedArray::ReleaseUncounted(arr);
@@ -462,7 +443,7 @@ void ReleaseUncountedTv(TypedValue& tv) {
     }
     return;
   }
-  assertx(!isRefcountedType(tv.m_type));
+  assertx(!isRefcountedType(type(lval)));
 }
 
 //////////////////////////////////////////////////////////////////////

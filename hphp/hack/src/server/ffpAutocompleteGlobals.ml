@@ -68,7 +68,8 @@ let make_class_completion (context:context) (replace_pos:Ide_api_types.range) (n
       res_base_class = None;
       res_ty = "class";
       res_name = name;
-      res_kind = Class_kind;
+      res_fullname = name;
+      res_kind = SearchUtils.SI_Class;
       func_details = None;
     })
   else
@@ -82,7 +83,8 @@ let make_interface_completion (context:context) (replace_pos:Ide_api_types.range
       res_base_class = None;
       res_ty = "interface";
       res_name = name;
-      res_kind = Interface_kind;
+      res_fullname = name;
+      res_kind = SearchUtils.SI_Interface;
       func_details = None;
     })
   else
@@ -96,7 +98,8 @@ let make_trait_completion (context:context) (replace_pos:Ide_api_types.range) (n
       res_base_class = None;
       res_ty = "trait";
       res_name = name;
-      res_kind = Trait_kind;
+      res_fullname = name;
+      res_kind = SearchUtils.SI_Trait;
       func_details = None;
     })
   else
@@ -144,15 +147,16 @@ let get_globals
     ]
     in
     let {value; _} =
-      HackSearchService.MasterApi.query_autocomplete input ~limit:(Some 100)
+      SymbolIndex.query_for_autocomplete input ~limit:(Some 100)
         ~filter_map:begin fun _ _ res ->
           let name = Utils.strip_ns res.SearchUtils.name in
           match res.SearchUtils.result_type with
-          | HackSearchService.Class (Some Ast.Ctrait) ->
+          | SearchUtils.SI_Trait ->
             make_trait_completion context replace_pos name
-          | HackSearchService.Class (Some Ast.Cinterface) ->
+          | SearchUtils.SI_Interface ->
             make_interface_completion context replace_pos name
-          | HackSearchService.Class _ ->
+          | SearchUtils.SI_Enum
+          | SearchUtils.SI_Class ->
             make_class_completion context replace_pos name
           | _ -> None
         end

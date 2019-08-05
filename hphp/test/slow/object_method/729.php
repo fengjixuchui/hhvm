@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class A {
   var $a;
@@ -10,3 +10,4 @@ class A {
     call_user_func(array('self', 'f'));
   }
 }
+<<__EntryPoint>> function main(): void {}

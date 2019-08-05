@@ -59,6 +59,7 @@ CASE(Ref)
 CASE(Func)
 CASE(Class)
 CASE(ClsMeth)
+CASE(Record)
 
 #undef CASE
 
@@ -75,6 +76,18 @@ ALWAYS_INLINE bool tvIsVecOrVArray(T&& tv) {
 template<typename T>
 ALWAYS_INLINE bool tvIsDictOrDArray(T&& tv) {
   return RuntimeOption::EvalHackArrDVArrs ? tvIsDict(tv) : tvIsArray(tv);
+}
+
+template<typename T>
+ALWAYS_INLINE int64_t tvAssertInt(T&& tv) {
+  assertx(isIntType(type(tv)));
+  return val(tv).num;
+}
+
+template<typename T>
+ALWAYS_INLINE double tvAssertDouble(T&& tv) {
+  assertx(isDoubleType(type(tv)));
+  return val(tv).dbl;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

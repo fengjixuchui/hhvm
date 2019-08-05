@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype: bool is_readable ( string $filename );
    Description: Tells whether the filename is readable.
 */
 
 /* test is_executable() with invalid arguments */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing is_readable(): usage variations ***\n";
 
 $file_handle = fopen(__FILE__, "r");
@@ -30,4 +30,4 @@ foreach( $misc_files as $misc_file ) {
 }
 
 echo "Done\n";
-?>
+}

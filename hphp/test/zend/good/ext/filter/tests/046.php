@@ -1,4 +1,4 @@
-<?php
+<?hh
 $max = sprintf("%d", PHP_INT_MAX);
 switch($max) {
 case "2147483647": /* 32-bit systems */
@@ -28,4 +28,3 @@ test_validation($max, "max");
 test_validation($overflow, "overflow");
 test_validation($min, "min");
 test_validation($underflow, "underflow");
-?>

@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 namespace __SystemLib\HH\Client {
 
@@ -90,7 +90,7 @@ function typecheck_impl(string $input_client_name): TypecheckResult {
     // same exit code as "type error". See above about fixing this.
     return new TypecheckResult(
       TypecheckStatus::OTHER_ERROR,
-      implode(' ', $output_arr)
+      \implode(' ', $output_arr)
     );
   }
 
@@ -210,16 +210,25 @@ function typecheck(string $client_name = 'hh_client'): TypecheckResult {
   // Fetch times from cache and from the stamp file. Both will return "false" on
   // error (no cached time or the stamp doesn't exist). The latter will also
   // emit a warning, which we don't care about, so suppress it.
-  $cached_time = \apc_fetch(CacheKeys::TIME_CACHE_KEY);
-  $time = (int)@\filemtime('/tmp/hh_server/stamp');
-
+  $success = false;
+  $cached_time = \apc_fetch(CacheKeys::TIME_CACHE_KEY, inout $success);
+  $old = \error_reporting();
+  try {
+    \error_reporting(0);
+    $file_time = \filemtime('/tmp/hh_server/stamp');
+  } finally {
+    if (\error_reporting() === 0) {
+      \error_reporting($old);
+    }
+  }
+  $time = (int)$file_time;
   // If we actually have something in cache, and the times match, use it. Note
   // that we still don't care if the stamp file actually exists -- we just treat
   // that as "time 0" (cast bool to int); it will stay zero as long as the file
   // doesn't exist and become nonzero when hh_server starts up and creates it,
   // which is what we want.
   if ($cached_time !== false && (int)$cached_time === $time) {
-    $result = \apc_fetch(CacheKeys::RESULT_CACHE_KEY);
+    $result = \apc_fetch(CacheKeys::RESULT_CACHE_KEY, inout $success);
   } else {
     $result = \__SystemLib\HH\Client\typecheck_impl($client_name);
 

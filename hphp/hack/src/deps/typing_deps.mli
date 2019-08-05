@@ -31,13 +31,14 @@ module Dep :
     val to_string : variant -> string
   end
 
-module DepSet : module type of
-  Reordered_argument_collections.Reordered_argument_set(Set.Make (Dep))
+module DepSet : sig
+  include module type of Reordered_argument_collections.Reordered_argument_set(Set.Make (Dep))
+  val pp : Format.formatter -> t -> unit
+end
 
 val trace : bool ref
 
-val debug_trace : bool ref
-val dump_debug_deps : unit -> unit
+val add_dependency_callback : string -> (Dep.variant -> Dep.variant -> unit) -> unit
 
 (* returns the previous value of the flag *)
 val allow_dependency_table_reads: bool -> bool
@@ -46,7 +47,7 @@ val add_idep : Dep.variant -> Dep.variant -> unit
 val get_ideps_from_hash : Dep.t -> DepSet.t
 val get_ideps : Dep.variant -> DepSet.t
 val get_files : DepSet.t -> Relative_path.Set.t
-val update_files : FileInfo.t Relative_path.Map.t -> unit
+val update_file : Relative_path.t -> FileInfo.t -> unit
 
 (* Add to accumulator all extend dependencies of source_class. Visited is used
  * to avoid processing nodes reachable in multiple ways more than once. In other
@@ -58,9 +59,5 @@ val get_extend_deps:
   acc:DepSet.t ->
   DepSet.t
 
-(* Grow input set by adding all its extend dependencies (including recursive) *)
-val add_extend_deps : DepSet.t -> DepSet.t
-(* Grow input set by adding all its typing dependencies (direct only) *)
-val add_typing_deps : DepSet.t -> DepSet.t
 (* add_extend_deps and add_typing_deps chained together *)
 val add_all_deps : DepSet.t -> DepSet.t

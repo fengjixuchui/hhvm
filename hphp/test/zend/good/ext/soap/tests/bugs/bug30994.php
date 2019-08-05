@@ -1,4 +1,4 @@
-<?php
+<?hh
 $HTTP_RAW_POST_DATA = <<<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
@@ -36,4 +36,3 @@ function bassCall() {
 $x = new SoapServer(NULL, array("uri"=>"http://spock/kunta/kunta"));
 $x->addFunction("bassCall");
 $x->handle($HTTP_RAW_POST_DATA);
-?>

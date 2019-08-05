@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : mixed array_product(array input)
  * Description: Returns the product of the array entries 
  * Source code: ext/standard/array.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_product() : error conditions ***\n";
 
 // Zero arguments
@@ -20,5 +20,5 @@ try { var_dump( array_product($input, $extra_arg) ); } catch (Exception $e) { ec
 echo "\n-- Testing array_product() function incorrect argument type --\n";
 var_dump( array_product("bob") );
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

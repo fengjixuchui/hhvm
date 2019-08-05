@@ -30,14 +30,17 @@
 namespace HPHP { namespace jit {
 
 RepoWrapper::RepoWrapper(const char* repoSchema,
-                         const std::string& configFile) {
+                         const std::string& configFile,
+                         const bool shouldPrint) {
   if (setenv("HHVM_RUNTIME_REPO_SCHEMA", repoSchema, 1 /* overwrite */)) {
     fprintf(stderr, "Could not set repo schema");
     exit(EXIT_FAILURE);
   }
 
-  printf("# Config file: %s\n", configFile.c_str());
-  printf("# Repo schema: %s\n", repoSchemaId().begin());
+  if (shouldPrint) {
+    printf("# Config file: %s\n", configFile.c_str());
+    printf("# Repo schema: %s\n", repoSchemaId().begin());
+  }
 
   register_process_init();
   initialize_repo();
@@ -92,15 +95,15 @@ RepoWrapper::~RepoWrapper() {
 }
 
 void RepoWrapper::addUnit(Unit* unit) {
-  unitCache.insert({unit->md5(), unit});
+  unitCache.insert({unit->sha1(), unit});
 }
 
-Unit* RepoWrapper::getUnit(MD5 md5) {
-  CacheType::const_iterator it = unitCache.find(md5);
+Unit* RepoWrapper::getUnit(SHA1 sha1) {
+  CacheType::const_iterator it = unitCache.find(sha1);
   if (it != unitCache.end()) return it->second;
-  auto unit = repo->loadUnit("", md5, Native::s_noNativeFuncs).release();
+  auto unit = repo->loadUnit("", sha1, Native::s_noNativeFuncs).release();
 
-  if (unit) unitCache.insert({md5, unit});
+  if (unit) unitCache.insert({sha1, unit});
   return unit;
 }
 

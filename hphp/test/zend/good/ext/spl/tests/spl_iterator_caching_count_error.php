@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $i = new ArrayIterator(array(1,1,1,1,1));
 $i = new CachingIterator($i);
 try {
@@ -8,5 +8,5 @@ try {
   echo "Exception raised\n";
 }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 class test_class
 {
     public function __get($name)
@@ -11,8 +11,7 @@ class test_class
         echo "ok\n";
     }
 }
-
-global $test3;
+<<__EntryPoint>> function main(): void {
 $test3 = new test_class();
 $test3->a->b();
-?>
+}

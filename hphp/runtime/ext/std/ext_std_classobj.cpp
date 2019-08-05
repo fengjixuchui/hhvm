@@ -18,6 +18,8 @@
 #include "hphp/runtime/ext/std/ext_std_classobj.h"
 
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/backtrace.h"
+#include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/ext/array/ext_array.h"
 #include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
@@ -29,8 +31,20 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 // helpers
 
-static inline StrNR ctxClassName() {
-  Class* ctx = g_context->getContextClass();
+static const Class* clsFromCallerSkipBuiltins() {
+  return fromCaller(
+    [] (const ActRec* fp, Offset) { return fp->func()->cls(); },
+    [] (const ActRec* fp) {
+      return !fp->func()->isBuiltin() && !fp->func()->isPseudoMain();
+    }
+  );
+}
+
+static StrNR ctxClassName() {
+  auto const ctx = fromCaller(
+    [] (const ActRec* fp, Offset) { return fp->func()->cls(); },
+    [] (const ActRec* fp) { return !fp->func()->isSkipFrame(); }
+  );
   return ctx ? ctx->nameStr() : StrNR(staticEmptyString());
 }
 
@@ -96,14 +110,9 @@ bool HHVM_FUNCTION(enum_exists, const String& enum_name,
 Variant HHVM_FUNCTION(get_class_methods, const Variant& class_or_object) {
   auto const cls = get_cls(class_or_object);
   if (!cls) return init_null();
-  VMRegAnchor _;
 
   auto retVal = Array::attach(PackedArray::MakeReserve(cls->numMethods()));
-  Class::getMethodNames(
-    cls,
-    arGetContextClassFromBuiltin(vmfp()),
-    retVal
-  );
+  Class::getMethodNames(cls, clsFromCallerSkipBuiltins(), retVal);
   return Variant::attach(HHVM_FN(array_values)(retVal)).toArray();
 }
 
@@ -161,7 +170,9 @@ Variant HHVM_FUNCTION(get_class_vars, const String& className) {
   assertx(propVals->size() == numDeclProps);
 
   // For visibility checks
-  auto ctx = arGetContextClass(GetCallerFrame());
+  auto const ctx = fromCaller(
+    [] (const ActRec* fp, Offset) { return fp->func()->cls(); }
+  );
 
   ArrayInit arr(numDeclProps + numSProps, ArrayInit::Map{});
 
@@ -191,40 +202,55 @@ Variant HHVM_FUNCTION(get_class_vars, const String& className) {
 ///////////////////////////////////////////////////////////////////////////////
 
 Variant HHVM_FUNCTION(get_class, const Variant& object /* = uninit_variant */) {
+  auto logOrThrow = [&](const Variant& object) {
+    if (RuntimeOption::EvalGetClassBadArgument == 0) return;
+    auto msg = folly::sformat("get_class() was called with {}, expected object",
+                              getDataTypeString(object.getType()));
+    if (RuntimeOption::EvalGetClassBadArgument == 1) {
+      raise_warning(msg);
+    } else {
+      SystemLib::throwRuntimeExceptionObject(msg);
+    }
+  };
   if (object.isNull()) {
     // No arg passed.
-    auto cls = arGetContextClassImpl<true>(GetCallerFrame());
-    if (cls) {
+    logOrThrow(object);
+
+    if (auto const cls = clsFromCallerSkipBuiltins()) {
       return Variant{cls->name(), Variant::PersistentStrInit{}};
     }
 
     raise_warning("get_class() called without object from outside a class");
     return false;
   }
-  if (!object.isObject()) return false;
+  if (!object.isObject()) {
+    logOrThrow(object);
+    return false;
+  }
   return Variant{object.toCObjRef()->getVMClass()->name(),
                  Variant::PersistentStrInit{}};
 }
 
-Variant HHVM_FUNCTION(get_called_class) {
-  EagerCallerFrame cf;
-  ActRec* ar = cf();
-  if (ar && ar->func()->cls()) {
-    auto const cls = ar->hasThis() ?
-      ar->getThis()->getVMClass() : ar->getClass();
-
-    return Variant{cls->name(), Variant::PersistentStrInit{}};
-  }
-
-  raise_warning("get_called_class() called from outside a class");
-  return false;
-}
-
 Variant HHVM_FUNCTION(get_parent_class,
                       const Variant& object /* = uninit_variant */) {
+  auto logOrThrow = [&](const Variant& object) {
+    if (RuntimeOption::EvalGetClassBadArgument == 0) return;
+    auto msg = folly::sformat(
+      "get_parent_class() was called with {}, expected object or string",
+      getDataTypeString(object.getType()));
+    if (RuntimeOption::EvalGetClassBadArgument == 1) {
+      raise_warning(msg);
+    } else {
+      SystemLib::throwRuntimeExceptionObject(msg);
+    }
+  };
+
   const Class* cls;
   if (object.isNull()) {
-    cls = arGetContextClass(GetCallerFrame());
+    logOrThrow(object);
+    cls = fromCaller(
+      [] (const ActRec* fp, Offset) { return fp->func()->cls(); }
+    );
     if (!cls) return false;
   } else {
     if (object.isObject()) {
@@ -233,6 +259,7 @@ Variant HHVM_FUNCTION(get_parent_class,
       cls = Unit::loadClass(object.toCStrRef().get());
       if (!cls) return false;
     } else {
+      logOrThrow(object);
       return false;
     }
   }
@@ -355,6 +382,57 @@ String HHVM_FUNCTION(HH_class_meth_get_method, TypedValue v) {
   return String::attach(const_cast<StringData*>(funcToStringHelper(c)));
 }
 
+namespace {
+const StaticString
+  s_meth_caller_cls("__SystemLib\\MethCallerHelper"),
+  s_cls_prop("class"),
+  s_meth_prop("method");
+const Slot s_cls_idx{0};
+const Slot s_meth_idx{1};
+
+DEBUG_ONLY bool meth_caller_has_expected_prop(const Class* cls) {
+  return cls->lookupDeclProp(s_cls_prop.get()) == s_cls_idx &&
+        cls->lookupDeclProp(s_meth_prop.get()) == s_meth_idx &&
+        cls->declPropTypeConstraint(s_cls_idx).isString() &&
+        cls->declPropTypeConstraint(s_meth_idx).isString();
+}
+
+template<bool isGetClass>
+String getMethCallerClsOrMethNameHelper(const char* fn, TypedValue v) {
+  if (tvIsFunc(v)) {
+    if (val(v).pfunc->isMethCaller()) {
+      return String::attach(const_cast<StringData*>(isGetClass ?
+        val(v).pfunc->methCallerClsName() :
+        val(v).pfunc->methCallerMethName()));
+    }
+  } else if (tvIsObject(v)) {
+    auto const mcCls = Unit::lookupClass(s_meth_caller_cls.get());
+    assertx(mcCls);
+    if (mcCls == val(v).pobj->getVMClass()) {
+      auto const obj = val(v).pobj;
+      assertx(meth_caller_has_expected_prop(obj->getVMClass()));
+      if (RuntimeOption::EvalEmitMethCallerFuncPointers &&
+          RuntimeOption::EvalNoticeOnMethCallerHelperUse) {
+        raise_notice("MethCallerHelper is used on %s()", fn);
+      }
+      auto const tv = obj->propRvalAtOffset(
+        isGetClass ? s_cls_idx : s_meth_idx).tv();
+      assertx(isStringType(type(tv)));
+      return String(val(tv).pstr);
+    }
+  }
+  raise_error("Argument 1 passed to %s() must be a MethCaller", fn);
+}
+}
+
+String HHVM_FUNCTION(HH_meth_caller_get_class, TypedValue v) {
+  return getMethCallerClsOrMethNameHelper<true>(__FUNCTION__+5, v);
+}
+
+String HHVM_FUNCTION(HH_meth_caller_get_method, TypedValue v) {
+  return getMethCallerClsOrMethNameHelper<false>(__FUNCTION__+5, v);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 void StandardExtension::initClassobj() {
@@ -370,7 +448,6 @@ void StandardExtension::initClassobj() {
   HHVM_FE(get_class_constants);
   HHVM_FE(get_class_vars);
   HHVM_FE(get_class);
-  HHVM_FE(get_called_class);
   HHVM_FE(get_parent_class);
   HHVM_FE(is_a);
   HHVM_FE(is_subclass_of);
@@ -380,6 +457,8 @@ void StandardExtension::initClassobj() {
   HHVM_FE(call_user_method_array);
   HHVM_FALIAS(HH\\class_meth_get_class, HH_class_meth_get_class);
   HHVM_FALIAS(HH\\class_meth_get_method, HH_class_meth_get_method);
+  HHVM_FALIAS(HH\\meth_caller_get_class, HH_meth_caller_get_class);
+  HHVM_FALIAS(HH\\meth_caller_get_method, HH_meth_caller_get_method);
 
   loadSystemlib("std_classobj");
 }

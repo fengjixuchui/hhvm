@@ -10,7 +10,7 @@ function testApc($before) {
   }
 
   # fetch.
-  $after = apc_fetch("indep");
+  $after = __hhvm_intrinsics\apc_fetch_no_check("indep");
   var_dump($after);
   if (!$after) {
     echo "fetch failure. surprising.\n";
@@ -55,24 +55,22 @@ function testApc($before) {
 
 function testKeyTypes() {
   apc_add("keysarray", array(2 => 'two', '3' => 'three'));
-  $arr = apc_fetch("keysarray");
+  $arr = __hhvm_intrinsics\apc_fetch_no_check("keysarray");
   foreach (array(2, 3, '2', '3') as $k) {
-    var_dump($arr[$k]);
+    try { var_dump($arr[$k]); } catch (Exception $e) { echo $e->getMessage()."\n"; }
   }
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   testApc(array(7, 4, 1776));
   testApc(array("sv0", "sv1"));
   testApc(array("sk0" => "sv0", "sk1" => "sv1"));
 
   // Also check that foreign arrays work for indirect calls
   apc_store('foo', array("a"));
-  $a = apc_fetch('foo');
+  $a = __hhvm_intrinsics\apc_fetch_no_check('foo');
   $b = call_user_func_array("strtoupper", $a);
   var_dump($b);
 
   testKeyTypes();
 }
-
-main();

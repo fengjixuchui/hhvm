@@ -192,6 +192,8 @@ struct TransRelocInfoHelper {
   std::vector<uint32_t> addressImmediates;
   std::vector<uint64_t> codePointers;
   std::vector<std::pair<uint32_t,std::pair<Alignment,AlignContext>>> alignments;
+  std::vector<std::tuple<FuncId, int32_t, IFrameID>> inlineFrames;
+  std::vector<std::pair<uint32_t, IStack>> inlineStacks;
 
   template<class SerDe> void serde(SerDe& sd) {
     sd
@@ -202,6 +204,8 @@ struct TransRelocInfoHelper {
       (addressImmediates)
       (codePointers)
       (alignments)
+      (inlineFrames)
+      (inlineStacks)
       ;
   }
 
@@ -223,6 +227,18 @@ struct TransRelocInfoHelper {
     }
     for (auto v : alignments) {
       tri.fixups.alignments.emplace(v.first + code.base(), v.second);
+    }
+    for (auto s : inlineFrames) {
+      auto const func = Func::fromFuncId(std::get<0>(s));
+      tri.fixups.inlineFrames.emplace_back(IFrame{
+        func, std::get<1>(s), std::get<2>(s)
+      });
+    }
+    for (auto s : inlineStacks) {
+      tri.fixups.inlineStacks.emplace_back(std::make_pair(
+        s.first + code.base(),
+        s.second
+      ));
     }
     return tri;
   }
@@ -286,7 +302,7 @@ void readRelocations(
       auto b64 = line.substr(pos + 1);
       auto decoded = base64_decode(b64.c_str(), b64.size(), true);
 
-      BlobDecoder blob(decoded.data(), decoded.size());
+      BlobDecoder blob(decoded.data(), decoded.size(), false);
       TransRelocInfoHelper trih;
       blob(trih);
 
@@ -706,10 +722,18 @@ perfRelocMapInfo(TCA start, TCA /*end*/, TCA coldStart, TCA coldEnd, SrcKey sk,
     trih.alignments.emplace_back(v.first - code().base(), v.second);
   }
 
+  for (auto f : fixups.inlineFrames) {
+    trih.inlineFrames.emplace_back(f.func->getFuncId(), f.callOff, f.parent);
+  }
+
+  for (auto s : fixups.inlineStacks) {
+    trih.inlineStacks.emplace_back(s.first - code().base(), s.second);
+  }
+
   trih.coldRange = std::make_pair(uint32_t(coldStart - code().base()),
                                   uint32_t(coldEnd - code().base()));
 
-  BlobEncoder blob;
+  BlobEncoder blob{false};
   blob(trih);
 
   auto data = base64_encode(static_cast<const char*>(blob.data()), blob.size());
@@ -743,7 +767,7 @@ void relocateTranslation(
     TRACE(1, "bcmaps before relocation\n");
     for (UNUSED auto const& map : bc_map) {
       TRACE(1, "%s %-6d %p %p %p\n",
-            map.md5.toString().c_str(),
+            map.sha1.toString().c_str(),
             map.bcStart,
             map.aStart,
             map.acoldStart,

@@ -9,10 +9,10 @@ class A {
     };
     $a();
 
-    $a = static function () {
-      var_dump($this);
-    };
-    $a();
+
+
+
+
   }
 
   static function c() {
@@ -30,10 +30,8 @@ class A {
     var_dump(array_map(function($a) { return $a; }, array(1,2,3)));
   }
 }
-
+<<__EntryPoint>> function main(): void {
 (new A)->b();
-A::b();
-(new A)->c();
 A::c();
-(new A)->d();
 A::d();
+}

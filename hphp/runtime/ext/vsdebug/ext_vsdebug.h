@@ -38,8 +38,12 @@ struct VSDebugExtension final : Extension {
   void threadShutdown() override;
   bool moduleEnabled() const override { return m_enabled; }
 
-  static Debugger* getDebugger() { return s_debugger; }
+  static Debugger* getDebugger() {
+    std::atomic_thread_fence(std::memory_order_acquire);
+    return s_debugger;
+  }
   static bool s_launchMode;
+  static std::string getDomainSocketGroup();
 
 private:
 
@@ -51,6 +55,7 @@ private:
   static constexpr int DefaultListenPort = 8999;
   static bool s_configEnabled;
   static std::string s_logFilePath;
+  static std::string s_domainSocketGroup;
   static int s_attachListenPort;
 
   // If specified and nonempty, the debugger will listen locally on a

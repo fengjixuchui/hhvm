@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function handler($name, $obj, $args, $data, &$done) {
   echo "----HANDLER----\n";
@@ -88,7 +88,7 @@ function test_variadic_function() {
 
 class Blark {
   public static function sfrap() {
-    echo "static frap " . get_called_class() . "\n";
+    echo "static frap " . static::class . "\n";
   }
   public function frap() {
     echo "non-static frap\n";
@@ -159,10 +159,8 @@ function test_methods() {
   $mc->blark('ho');
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   test_standard_function();
   test_variadic_function();
   test_methods();
 }
-
-main();

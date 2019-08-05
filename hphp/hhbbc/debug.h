@@ -31,6 +31,9 @@ namespace HPHP { namespace HHBBC {
  * temporary directory as readable text.
  */
 void debug_dump_program(const Index&, const php::Program&);
+std::string debug_dump_to();
+void dump_representation(const std::string& dir, const php::Unit*);
+void dump_index(const std::string&, const Index&, const php::Unit*);
 
 /*
  * Utilities for printing the state of the program after various
@@ -40,6 +43,12 @@ void debug_dump_program(const Index&, const php::Program&);
 inline void banner(const char* what) {
   TRACE_SET_MOD(hhbbc);
   FTRACE(2, "{:-^70}\n", what);
+}
+
+inline void state_after(const char* when, const php::Unit& u) {
+  TRACE_SET_MOD(hhbbc);
+  Trace::Bump bumper{Trace::hhbbc, kSystemLibBump, is_systemlib_part(u)};
+  FTRACE(4, "{:-^70}\n{}{:-^70}\n", when, show(u), "");
 }
 
 inline void state_after(const char* when, const php::Program& program) {

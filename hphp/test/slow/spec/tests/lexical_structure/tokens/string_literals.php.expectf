@@ -12,7 +12,8 @@ string(0) ""
 ><
 > a B c <
 >\'.".\.$.XXX..
-..	..A.A.A.\F.\Q.\S<
+.
+.	..A.A.A.\F.\Q.\S<
 >$x.123<
 >xxx    // this comment-like thingy really is part of the string literal
 yyy
@@ -62,20 +63,14 @@ string(9) "5.67E+14+"
 
 Notice: Array to string conversion in %s/lexical_structure/tokens/string_literals.php on line 103
 \colors contains >Array<
-\colors[1] contains >white<
+Undefined index: 1
 
 Notice: Array to string conversion in %s/lexical_structure/tokens/string_literals.php on line 105
 \colors[1] contains >Array [1]<
-string(5) "white"
-
-Notice: Undefined index: 01 in %s/lexical_structure/tokens/string_literals.php on line 109
-string(0) ""
-
-Notice: Undefined index: 0x1 in %s/lexical_structure/tokens/string_literals.php on line 110
-string(0) ""
-
-Notice: Undefined index: 0X1 in %s/lexical_structure/tokens/string_literals.php on line 111
-string(0) ""
+Undefined index: 1
+Undefined index: 01
+Undefined index: 0x1
+Undefined index: 0X1
 $colors[2] contains >blue<
 
 Notice: Array to string conversion in %s/lexical_structure/tokens/string_literals.php on line 123

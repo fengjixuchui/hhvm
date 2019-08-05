@@ -1,8 +1,8 @@
-<?php
+<?hh
 namespace test;
 
 function a(\Throwable $t) {
-  var_dump(get_class($t));
+  \var_dump(\get_class($t));
 }
 
 

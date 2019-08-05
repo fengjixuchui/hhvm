@@ -1,6 +1,10 @@
-<?php
+<?hh
 
 /* conformance to Unicode 5.2, section 3.9, D92 */
+
+abstract final class ZendGoodExtStandardTestsStringsHtmlentitiesUtf3 {
+  public static $val_ranges;
+}
 
 ZendGoodExtStandardTestsStringsHtmlentitiesUtf3::$val_ranges = array(
 	array(array(0x00, 0x7F)),
@@ -76,7 +80,3 @@ for ($b1 = 0xF0; $b1 < 0xFF; $b1++) {
 	}
 }
 echo "Done.\n";
-
-abstract final class ZendGoodExtStandardTestsStringsHtmlentitiesUtf3 {
-  public static $val_ranges;
-}

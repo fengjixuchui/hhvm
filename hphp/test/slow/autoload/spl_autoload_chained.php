@@ -1,25 +1,19 @@
-<?php
+<?hh
 
 function my_autoload($class) {
   var_dump($class);
   if ($class != 'A')
     $test = class_exists('A');
   if ($class == 'A') {
-    class A {
-      public $var = 'class A';
-    };
+    include 'spl_autoload_chained_A.inc';
     $b = new B();
   }
   if ($class == 'B') {
-    class B {
-      public $var = 'class B';
-    };
+    include 'spl_autoload_chained_B.inc';
     $c = new C();
   }
   if ($class == 'C') {
-    class C {
-      public $var = 'class C';
-    };
+    include 'spl_autoload_chained_C.inc';
   }
 }
 

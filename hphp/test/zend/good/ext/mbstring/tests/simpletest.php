@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
  * Test basic PHP functions to check if it works with multi-byte chars
  */
@@ -17,4 +17,3 @@ echo sprintf("sprintf: %s%s\n",$s1, $s2);
 $s3 = $s1.$s2."\n";
 echo "echo: ".$s3;
 
-?>

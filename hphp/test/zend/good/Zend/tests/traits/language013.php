@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL);
 
 trait Counter {
@@ -28,4 +28,3 @@ $p = new C2();
 $p->inc();
 $p->inc();
 
-?>

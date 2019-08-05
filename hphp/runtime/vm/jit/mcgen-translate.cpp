@@ -265,6 +265,13 @@ void retranslateAll() {
       for (auto i = 0u; i < nFuncs; ++i, bufp += initialSize) {
         auto const fid = sortedFuncs[i];
         auto const func = const_cast<Func*>(Func::fromFuncId(fid));
+        if (!RuntimeOption::EvalJitSerdesDebugFunctions.empty()) {
+          // Only run specified functions
+          if (!RuntimeOption::EvalJitSerdesDebugFunctions.
+              count(func->fullName()->toCppString())) {
+            continue;
+          }
+        }
         jobs.emplace_back(
           tc::FuncMetaInfo(func, tc::LocalTCBuffer(bufp, initialSize))
         );
@@ -325,7 +332,7 @@ translate(TransArgs args, FPInvOffset spOff,
   INC_TPC(translate);
   assertx(args.kind != TransKind::Invalid);
 
-  if (!tc::shouldTranslate(args.sk.func(), args.kind)) return folly::none;
+  if (!tc::shouldTranslate(args.sk, args.kind)) return folly::none;
 
   Timer timer(Timer::mcg_translate);
   WorkloadStats guard(WorkloadStats::InTrans);
@@ -358,7 +365,7 @@ translate(TransArgs args, FPInvOffset spOff,
     env.unit = irGenRegion(*args.region, transContext,
                            env.pconds, env.annotations);
     if (env.unit) {
-      env.vunit = irlower::lowerUnit(*env.unit);
+      env.vunit = irlower::lowerUnit(*env.unit, &env.annotations);
     }
   }
 
@@ -417,7 +424,7 @@ TCA retranslate(TransArgs args, const RegionContext& ctx) {
   }
 
   LeaseHolder writer(args.sk.func(), args.kind);
-  if (!writer || !tc::shouldTranslate(args.sk.func(), kind())) {
+  if (!writer || !tc::shouldTranslate(args.sk, kind())) {
     return nullptr;
   }
 

@@ -19,17 +19,6 @@ module StringAnnotation = struct
   let pp fmt str = Format.pp_print_string fmt str
 end
 
-module StringNASTAnnotations = struct
-  module ExprAnnotation = StringAnnotation
-  module EnvAnnotation = Nast.UnitAnnotation
-  module FuncBodyAnnotation = StringAnnotation
-end
-
-module StringNAST = Nast.AnnotatedAST(StringNASTAnnotations)
-
-module TASTStringMapper =
-  Aast_mapper.MapAnnotatedAST(Tast_expand.ExpandedTypeAnnotations)(StringNASTAnnotations)
-
 module PS = Full_fidelity_positioned_syntax
 module PositionedTree = Full_fidelity_syntax_tree
   .WithSyntax(PS)
@@ -67,17 +56,17 @@ type mode =
   | Find_refs of int * int
   | Highlight_refs of int * int
   | Decl_compare
-  | Infer_return_types
-  | Least_upper_bound
   | Linearization
 
 type options = {
   files : string list;
   mode : mode;
+  error_format : Errors.format;
   no_builtins : bool;
-  all_errors : bool;
+  max_errors : int option;
   tcopt : GlobalOptions.t;
   batch_mode : bool;
+  out_extension : string;
 }
 
 (* Canonical builtins from our hhi library *)
@@ -90,12 +79,13 @@ let magic_builtins = [|
     "hh_single_type_check_magic.hhi",
     "<?hh\n" ^
     "namespace {\n" ^
-    "function gena();\n" ^
-    "function genva();\n" ^
-    "function gen_array_rec();\n" ^
+    "async function gena<Tk as arraykey, Tv>(
+  KeyedTraversable<Tk, Awaitable<Tv>> $awaitables,
+): Awaitable<darray<Tk, Tv>>;\n" ^
     "function hh_show(<<__AcceptDisposable>> $val) {}\n" ^
     "function hh_show_env() {}\n" ^
     "function hh_log_level($key, $level) {}\n" ^
+    "function hh_force_solve () {}" ^
     "}\n" ^
     "namespace HH\\Lib\\Tuple{\n" ^
     "function gen();\n" ^
@@ -103,13 +93,6 @@ let magic_builtins = [|
     "}\n"
   )
 |]
-
-(* Take the builtins (file, contents) array and create relative paths *)
-let builtins = Caml.Array.fold_left begin fun acc (f, src) ->
-  Relative_path.Map.add acc
-    ~key:(Relative_path.create Relative_path.Dummy f)
-    ~data:src
-end Relative_path.Map.empty (Array.append magic_builtins hhi_builtins)
 
 (*****************************************************************************)
 (* Helpers *)
@@ -124,33 +107,42 @@ let die str =
   exit 2
 
 
-let print_error ?(oc = stderr) ?(indent=false) l =
-  Out_channel.output_string oc (Errors.to_string ~indent (Errors.to_absolute l))
+let print_error format ?(oc = stderr) l =
+  let formatter = match format with
+    | Errors.Context -> Errors.to_contextual_string
+    | Errors.Raw -> (fun e -> Errors.to_string ~indent:false e)
+  in
+  Out_channel.output_string oc (formatter (Errors.to_absolute_for_test l))
 
-let write_error_list errors oc =
+let write_error_list format errors oc max_errors =
+  let shown_errors = match max_errors with
+    | Some max_errors -> List.take errors max_errors
+    | None -> errors
+  in
   (if errors <> []
-  then List.iter ~f:(print_error ~oc ~indent:true) errors
+   then
+     (List.iter ~f:(print_error format ~oc) shown_errors;
+      match Errors.format_summary format errors max_errors with
+      | Some summary -> Out_channel.output_string oc summary
+      | None -> ())
   else Out_channel.output_string oc "No errors\n");
   Out_channel.close oc
 
-let write_first_error errors oc =
-  (if errors <> []
-  then print_error ~oc (List.hd_exn errors)
-  else Out_channel.output_string oc "No errors\n");
-  Out_channel.close oc
-
-let print_error_list errors =
+let print_error_list format errors max_errors =
+  let shown_errors = match max_errors with
+    | Some max_errors -> List.take errors max_errors
+    | None -> errors
+  in
   if errors <> []
-  then List.iter ~f:(print_error ~indent:true) errors
+  then
+    (List.iter ~f:(print_error format) shown_errors;
+     match Errors.format_summary format errors max_errors with
+     | Some summary -> Out_channel.output_string stderr summary
+     | None -> ())
   else Printf.printf "No errors\n"
 
-let print_first_error errors =
-  if errors <> []
-  then print_error (List.hd_exn errors)
-  else Printf.printf "No errors\n"
-
-let print_errors (errors:Errors.t) =
-  print_error_list (Errors.get_error_list errors)
+let print_errors format (errors:Errors.t) max_errors : unit =
+  print_error_list format (Errors.get_error_list errors) max_errors
 
 let parse_options () =
   let fn_ref = ref [] in
@@ -160,54 +152,69 @@ let parse_options () =
   let line = ref 0 in
   let log_key = ref "" in
   let log_levels = ref SMap.empty in
-  let all_errors = ref false in
+  let max_errors = ref None in
   let batch_mode = ref false in
   let set_mode x () =
     if !mode <> Errors
     then raise (Arg.Bad "only a single mode should be specified")
     else mode := x in
   let set_ai x = set_mode (Ai (Ai_options.prepare ~server:false x)) () in
+  let error_format = ref Errors.Context in
   let safe_array = ref (Some false) in
   let safe_vector_array = ref (Some false) in
   let forbid_nullable_cast = ref false in
   let deregister_attributes = ref None in
-  let disable_optional_and_unknown_shape_fields = ref false in
   let disallow_ambiguous_lambda = ref None in
   let disallow_array_typehint = ref None in
   let disallow_array_literal = ref None in
-  let disallow_reified_generics = ref false in
-  let untyped_nonstrict_lambda_parameters = ref None in
   let no_fallback_in_namespaces = ref None in
   let dynamic_view = ref None in
   let allow_array_as_tuple = ref (Some false) in
-  let allow_anon_use_capture_by_ref = ref (Some false) in
   let allow_user_attributes = ref None in
   let disallow_unset_on_varray = ref None in
   let auto_namespace_map = ref None in
   let unsafe_rx = ref (Some false) in
-  let enable_concurrent = ref None in
-  let enable_await_as_an_expression = ref None in
   let disallow_stringish_magic = ref None in
   let log_inference_constraints = ref None in
-  let new_inference = ref None in
-  let new_inference_no_eager_solve = ref None in
+  let new_inference_lambda = ref (Some false) in
   let timeout = ref None in
   let disallow_invalid_arraykey = ref None in
-  let enable_stronger_await_binding = ref None in
   let typecheck_xhp_cvars = ref (Some false) in
   let ignore_collection_expr_type_arguments = ref (Some false) in
   let allow_ref_param_on_constructor = ref (Some false) in
+  let disallow_byref_dynamic_calls = ref (Some false) in
+  let disallow_byref_calls = ref (Some false) in
   let set_bool x () = x := Some true in
-  let disable_unsafe_expr = ref None in
-  let disable_unsafe_block = ref None in
   let pocket_universes = ref false in
+  let shallow_class_decl = ref false in
+  let out_extension = ref ".out" in
+  let like_types = ref false in
+  let pessimize_types = ref false in
+  let coercion_from_dynamic = ref false in
+  let disable_partially_abstract_typeconsts = ref false in
+  let search_provider = ref "TrieIndex" in
+  let rust = ref false in
+  let symbolindex_file = ref None in
+  let check_xhp_attribute = ref false in
+  let disallow_invalid_arraykey_constraint = ref None in
+  let enable_class_level_where_clauses = ref false in
+  let enable_constant_visibility_modifiers = ref false in
+  let disable_legacy_soft_typehints = ref false in
+  let use_new_type_errors = ref false in
+  let disable_outside_dollar_str_interp = ref true in
+  let disable_linter_fixmes = ref false in
+  let allow_new_attribute_syntax = ref false in
+  let allow_toplevel_requires = ref false in
+  let global_inference = ref false in
+  let enable_const_static_props = ref false in
+  let disable_legacy_attribute_syntax = ref false in
+  let const_attribute = ref false in
+  let disallow_goto = ref false in
+  let const_default_func_args = ref false in
   let options = [
     "--ai",
       Arg.String (set_ai),
-    " Run the abstract interpreter";
-    "--all-errors",
-      Arg.Set all_errors,
-      " List all errors not just the first one";
+    " Run the abstract interpreter (Zoncolan)";
     "--allow-user-attributes",
       Arg.Unit (set_bool allow_user_attributes),
       " Allow all user attributes";
@@ -241,18 +248,25 @@ let parse_options () =
         " Search the concrete syntax tree of the given file using the pattern"^
         " given on stdin."^
         " (The pattern is a JSON object adhering to the search DSL.)";
-    "--disable_optional_and_unknown_shape_fields",
-      Arg.Set disable_optional_and_unknown_shape_fields,
-      "Disables optional and unknown shape fields syntax and typechecking.";
     "--dump-symbol-info",
       Arg.Unit (set_mode Dump_symbol_info),
       " Dump all symbol information";
+    "--error-format",
+    Arg.String (fun s ->
+        match s with
+        | "raw" -> error_format := Errors.Raw
+        | "context" -> error_format := Errors.Context
+        | _ -> print_string "Warning: unrecognized error format.\n"),
+    "<raw|context> Error formatting style";
     "--lint",
       Arg.Unit (set_mode Lint),
       " Produce lint errors";
     "--no-builtins",
       Arg.Set no_builtins,
       " Don't use builtins (e.g. ConstSet)";
+    "--out-extension",
+      Arg.String (fun s -> out_extension := s),
+      "output file extension (default .out)";
     "--dump-deps",
       Arg.Unit (set_mode Dump_deps),
       " Print dependencies";
@@ -271,6 +285,9 @@ let parse_options () =
         Arg.Int (fun column -> set_mode (Find_local (!line, column)) ());
       ]),
       "<pos> Find all usages of local at given line and column";
+    "--max-errors",
+      Arg.Int (fun num_errors -> max_errors := Some num_errors),
+      " Maximum number of errors to display";
     "--outline",
       Arg.Unit (set_mode Outline),
       " Print file outline";
@@ -320,45 +337,24 @@ let parse_options () =
     "--disallow-ambiguous-lambda",
       Arg.Unit (set_bool disallow_ambiguous_lambda),
       " Disallow definition of lambdas that require use-site checking.";
-    "--untyped-nonstrict-lambda-parameters",
-      Arg.Unit (set_bool untyped_nonstrict_lambda_parameters),
-      " In non-strict files treat lambda parameters without a type hint as untyped.";
     "--disallow-array-typehint",
       Arg.Unit (set_bool disallow_array_typehint),
       " Disallow usage of array typehints.";
     "--disallow-array-literal",
       Arg.Unit (set_bool disallow_array_literal),
       " Disallow usage of array literals.";
-    "--disallow-reified-generics",
-      Arg.Set disallow_reified_generics,
-      " Disallow usage of reified generics.";
     "--no-fallback-in-namespaces",
       Arg.Unit (set_bool no_fallback_in_namespaces),
       " Treat foo() as namespace\\foo() and MY_CONST as namespace\\MY_CONST.";
-    "--infer-return-types",
-      Arg.Unit (set_mode Infer_return_types),
-      " Infers return types of functions and methods.";
-    "--least-upper-bound",
-        Arg.Unit (set_mode Least_upper_bound),
-        " Gets the least upper bound of a list of types.";
     "--dynamic-view",
         Arg.Unit (set_bool dynamic_view),
         " Turns on dynamic view, replacing Tany with dynamic";
     "--allow-array-as-tuple",
         Arg.Unit (set_bool allow_array_as_tuple),
         " Allow tuples to be passed as untyped arrays and vice versa";
-    "--allow-anon-use-capture-by-ref",
-        Arg.Unit (set_bool allow_anon_use_capture_by_ref),
-        " Allow binding of local variables by reference in anonymous function use clauses";
     "--disallow-unset-on-varray",
         Arg.Unit (set_bool disallow_unset_on_varray),
         " Disallow unsetting indices from varrays";
-    "--enable-concurrent",
-      Arg.Unit (set_bool enable_concurrent),
-      " Enable the concurrent feature";
-    "--enable-await-as-an-expression",
-      Arg.Unit (set_bool enable_await_as_an_expression),
-      " Enable the await-as-an-expression feature";
     "--unsafe-rx",
         Arg.Unit (set_bool unsafe_rx),
         " Disables reactivity related errors";
@@ -371,12 +367,9 @@ let parse_options () =
     "--log-inference-constraints",
         Arg.Unit (set_bool log_inference_constraints),
         " Log inference constraints to Scuba.";
-    "--new-inference",
-        Arg.Unit (fun () -> new_inference := Some 1.0),
-        " Type inference by constraint generation.";
-    "--new-inference-no-eager-solve",
-        Arg.Unit (set_bool new_inference_no_eager_solve),
-        " Do not eagerly solve invariant type variable constraints.";
+    "--new-inference-lambda",
+        Arg.Unit (set_bool new_inference_lambda),
+        " Type inference of unannotated lambdas by constraint generation.";
     "--timeout",
         Arg.Int (fun secs -> timeout := Some secs),
         " Timeout in seconds for checking a function or a class.";
@@ -392,27 +385,99 @@ let parse_options () =
     "--disallow-invalid-arraykey",
       Arg.Unit (set_bool disallow_invalid_arraykey),
         " Disallow using values that get casted to arraykey at runtime as array keys";
-    "--stronger-await-binding",
-      Arg.Unit (set_bool enable_stronger_await_binding),
-      "Increases precedence of await during parsing.";
-    "--disable-unsafe-expr",
-      Arg.Unit (set_bool disable_unsafe_expr),
-      "Treat UNSAFE_EXPR comments as just comments, the typechecker will ignore them";
-    "--disable-unsafe-block",
-      Arg.Unit (set_bool disable_unsafe_block),
-      "Treat UNSAFE block comments as just comments, the typecheker will ignore them";
+    "--disallow-invalid-arraykey-constraint",
+      Arg.Unit (set_bool disallow_invalid_arraykey_constraint),
+        " Disallow using non-string, non-int types as array key constraints";
     "--check-xhp-cvar-arity",
       Arg.Unit (set_bool typecheck_xhp_cvars),
       "Typechecks xhp cvar arity";
+    "--check-xhp-attribute",
+      Arg.Set check_xhp_attribute,
+      "Typechecks xhp required attributes";
     "--ignore-collection-expr-type-arguments",
       Arg.Unit (set_bool ignore_collection_expr_type_arguments),
       "Typechecker ignores type arguments to vec<T>[...] style expressions";
     "--allow-ref-param-on-constructor",
       Arg.Unit (set_bool allow_ref_param_on_constructor),
-      " Allow class constructors to take reference parameters";
+      "Allow class constructors to take reference parameters";
+    "--disallow-byref-dynamic-calls",
+      Arg.Unit (set_bool disallow_byref_dynamic_calls),
+      "Disallow passing arguments by reference to dynamically called functions \
+       [e.g. $foo(&$bar)]";
+    "--disallow-byref-calls",
+      Arg.Unit (set_bool disallow_byref_calls),
+      "Disallow passing arguments by reference in any form \
+       [e.g. foo(&$bar)]";
     "--pocket-universes",
       Arg.Set pocket_universes,
       "Enables support for Pocket Universes";
+    "--shallow-class-decl",
+      Arg.Set shallow_class_decl,
+      "Look up class members lazily from shallow declarations";
+    "--like-types",
+      Arg.Set like_types,
+      "Allows deeper like types features like inferring trust";
+    "--pessimize-types",
+      Arg.Set pessimize_types,
+      "When unenforceable types are encountered, convert them to like types";
+    "--coercion-from-dynamic",
+      Arg.Set coercion_from_dynamic,
+      "Allows coercion from dynamic and like types to enforceable types at positions that \
+       HHVM enforces";
+    "--disable-partially-abstract-typeconsts",
+      Arg.Set disable_partially_abstract_typeconsts,
+      "Treat partially abstract type constants as concrete type constants";
+    "--search-provider",
+      Arg.String (fun str -> search_provider := str),
+      "Configure the symbol index search provider";
+    "--rust",
+      Arg.Set rust,
+      "Use rust parser";
+    "--symbolindex-file",
+      Arg.String (fun str -> symbolindex_file := Some str),
+      "Load the symbol index from this file";
+    "--enable-class-level-where-clauses",
+      Arg.Set enable_class_level_where_clauses,
+      "Enables support for class-level where clauses";
+    "--enable-constant-visibility-modifiers",
+      Arg.Set enable_constant_visibility_modifiers,
+      "Enable constant visibility modifiers";
+    "--disable-legacy-soft-typehints",
+      Arg.Set disable_legacy_soft_typehints,
+      "Disables the legacy @ syntax for soft typehints (use __Soft instead)";
+    "--use-new-type-errors",
+      Arg.Set use_new_type_errors,
+      "Splits off some categories of type errors into new error codes";
+    "--disable-outside-dollar-str-interp",
+      Arg.Set disable_outside_dollar_str_interp,
+      "Disables ${x} syntax for string interpolation (use {$x} instead)";
+    "--disable-linter-fixmes",
+      Arg.Set disable_linter_fixmes,
+      "Disables HH_FIXME and HH_IGNORE_ERROR for 5000-5999 error codes";
+    "--allow-new-attribute-syntax",
+      Arg.Set allow_new_attribute_syntax,
+      "Allow the new @ attribute syntax (disables legacy soft typehints)";
+    "--allow-toplevel-requires",
+      Arg.Set allow_toplevel_requires,
+      "Allow `require()` and similar at the top-level";
+    "--global-inference",
+      Arg.Set global_inference,
+      "Use inference results as the types of unannotated parameters / functions in the tast";
+    "--enable-const-static-props",
+      Arg.Set enable_const_static_props,
+      "Enable const props to be static";
+    "--disable-legacy-attribute-syntax",
+      Arg.Set disable_legacy_attribute_syntax,
+      "Disable the legacy <<...>> user attribute syntax";
+    "--const-attribute",
+      Arg.Set const_attribute,
+      "Allow __Const attribute";
+    "--disallow-goto",
+      Arg.Set disallow_goto,
+      "Forbid the goto operator and goto labels in the parser";
+    "--const-default-func-args",
+      Arg.Set const_default_func_args,
+      "Statically check default function arguments are constant initializers";
   ] in
   let options = Arg.align ~limit:25 options in
   Arg.parse options (fun fn -> fn_ref := fn::(!fn_ref)) usage;
@@ -426,28 +491,44 @@ let parse_options () =
     ?tco_safe_vector_array:(!safe_vector_array)
     ?po_deregister_php_stdlib:(!deregister_attributes)
     ?tco_disallow_ambiguous_lambda:(!disallow_ambiguous_lambda)
-    ?tco_untyped_nonstrict_lambda_parameters:(!untyped_nonstrict_lambda_parameters)
     ?tco_disallow_array_typehint:(!disallow_array_typehint)
     ?tco_disallow_array_literal:(!disallow_array_literal)
     ?tco_dynamic_view:(!dynamic_view)
     ?tco_disallow_array_as_tuple:(not_ !allow_array_as_tuple)
-    ?tco_disallow_anon_use_capture_by_ref:(not_ !allow_anon_use_capture_by_ref)
     ?tco_disallow_unset_on_varray:(!disallow_unset_on_varray)
     ?tco_disallow_stringish_magic:(!disallow_stringish_magic)
     ?tco_log_inference_constraints:(!log_inference_constraints)
-    ?tco_new_inference:(!new_inference)
-    ?tco_new_inference_no_eager_solve:(!new_inference_no_eager_solve)
+    ?tco_new_inference_lambda:(!new_inference_lambda)
+    ?tco_timeout:(!timeout)
     ?tco_disallow_invalid_arraykey:(!disallow_invalid_arraykey)
     ?po_auto_namespace_map:(!auto_namespace_map)
-    ?po_enable_concurrent:(!enable_concurrent)
-    ?po_enable_await_as_an_expression:(!enable_await_as_an_expression)
-    ?po_enable_stronger_await_binding:(!enable_stronger_await_binding)
-    ?po_disable_unsafe_expr:(!disable_unsafe_expr)
-    ?po_disable_unsafe_block:(!disable_unsafe_block)
     ?tco_typecheck_xhp_cvars:(!typecheck_xhp_cvars)
     ?tco_ignore_collection_expr_type_arguments:(!ignore_collection_expr_type_arguments)
-    ?tco_disallow_ref_param_on_constructor:(not_ !allow_ref_param_on_constructor)
+    ?tco_disallow_byref_dynamic_calls:(!disallow_byref_dynamic_calls)
+    ?tco_disallow_byref_calls:(!disallow_byref_calls)
+    ?tco_disallow_invalid_arraykey_constraint:(!disallow_invalid_arraykey_constraint)
+    ~tco_check_xhp_attribute:(!check_xhp_attribute)
+    ~tco_shallow_class_decl:(!shallow_class_decl)
+    ~tco_like_types:(!like_types)
+    ~tco_pessimize_types:(!pessimize_types)
+    ~tco_coercion_from_dynamic:(!coercion_from_dynamic)
+    ~tco_disable_partially_abstract_typeconsts:(!disable_partially_abstract_typeconsts)
     ~log_levels:(!log_levels)
+    ~po_rust:!rust
+    ~po_enable_class_level_where_clauses:!enable_class_level_where_clauses
+    ~po_enable_constant_visibility_modifiers:!enable_constant_visibility_modifiers
+    ~po_disable_legacy_soft_typehints:!disable_legacy_soft_typehints
+    ~use_new_type_errors:!use_new_type_errors
+    ~po_disable_outside_dollar_str_interp:!disable_outside_dollar_str_interp
+    ~disable_linter_fixmes:!disable_linter_fixmes
+    ~po_allow_new_attribute_syntax:!allow_new_attribute_syntax
+    ~po_disallow_toplevel_requires:(not !allow_toplevel_requires)
+    ~tco_global_inference:!global_inference
+    ~tco_enable_const_static_props:!enable_const_static_props
+    ~po_disable_legacy_attribute_syntax:!disable_legacy_attribute_syntax
+    ~tco_const_attribute:!const_attribute
+    ~po_allow_goto:(not !disallow_goto)
+    ~po_const_default_func_args:!const_default_func_args
     ()
   in
   let tcopt = {
@@ -455,114 +536,33 @@ let parse_options () =
       GlobalOptions.tco_experimental_features = SSet.filter begin fun x ->
         if x = GlobalOptions.tco_experimental_forbid_nullable_cast
         then !forbid_nullable_cast
-        else if x = GlobalOptions.tco_experimental_disable_optional_and_unknown_shape_fields
-        then !disable_optional_and_unknown_shape_fields
-        else if x = GlobalOptions.tco_experimental_reified_generics
-        then not (!disallow_reified_generics)
         else true
       end tcopt.GlobalOptions.tco_experimental_features;
   } in
   let tcopt = GlobalOptions.setup_pocket_universes tcopt !pocket_universes in
-  { files = fns;
+
+  (* Configure symbol index settings *)
+  let namespace_map = GlobalOptions.po_auto_namespace_map tcopt in
+  let sienv = SymbolIndex.initialize
+    ~globalrev_opt:None
+    ~namespace_map
+    ~provider_name:!search_provider
+    ~quiet:true
+    ~savedstate_file_opt:!symbolindex_file
+    ~workers:None in
+
+  Errors.use_new_type_errors := !use_new_type_errors;
+  Errors.disable_linter_fixmes := !disable_linter_fixmes;
+
+  ({ files = fns;
     mode = !mode;
     no_builtins = !no_builtins;
-    all_errors = !all_errors;
+    max_errors = !max_errors;
+    error_format = !error_format;
     tcopt;
     batch_mode = !batch_mode;
-  }
-
-let compute_least_type tcopt fn =
-  let tenv = Typing_infer_return.typing_env_from_file tcopt fn in
-  Option.iter (Parser_heap.find_fun_in_file fn "\\test")
-    ~f:begin fun f ->
-      let f = Naming.fun_ f in
-      let { Nast.fb_ast; _} = Typing_naming_body.func_body f in
-      let types =
-        Nast.(List.fold fb_ast ~init:[]
-          ~f:begin fun acc stmt ->
-            match stmt with
-            | Expr (_, New ((_, CI (_, "\\least_upper_bound")), tal, _, _, _)) ->
-              (List.map tal
-                (fun h -> snd (Typing_infer_return.type_from_hint tcopt fn h)))
-              :: acc
-            | _ -> acc
-          end)
-      in
-      let types = List.rev types in
-      List.iter types
-        ~f:(begin fun tys ->
-          let tyop = Typing_ops.LeastUpperBound.full tenv tys in
-          let least_ty =
-            Option.value_map tyop ~default:""
-              ~f:(Typing_infer_return.print_type_locl tenv)
-          in
-          let str_tys =
-            Typing_infer_return.(print_list ~f:(print_type_locl tenv) tys)
-          in
-          Printf.printf "Least upper bound of %s is %s \n" str_tys least_ty
-        end)
-      end
-
-let infer_return tcopt fn info  =
-  let names = FileInfo.simplify info in
-  let fast = Relative_path.Map.singleton fn names in
-  let keys map = Relative_path.Map.fold map ~init:[] ~f:(fun x _ y -> x :: y) in
-  let files = keys fast in
-  Typing_infer_return.(get_inferred_types tcopt files ~process:format_types)
-
-(* This allows one to fake having multiple files in one file. This
- * is used only in unit test files.
- * Indeed, there are some features that require mutliple files to be tested.
- * For example, newtype has a different meaning depending on the file.
- *)
-let rec make_files = function
-  | [] -> []
-  | Str.Delim header :: Str.Text content :: rl ->
-      let pattern = Str.regexp "////" in
-      let header = Str.global_replace pattern "" header in
-      let pattern = Str.regexp "[ ]*" in
-      let filename = Str.global_replace pattern "" header in
-      (filename, content) :: make_files rl
-  | _ -> assert false
-
-(* We have some hacky "syntax extensions" to have one file contain multiple
- * files, which can be located at arbitrary paths. This is useful e.g. for
- * testing lint rules, some of which activate only on certain paths. It's also
- * useful for testing abstract types, since the abstraction is enforced at the
- * file boundary.
- * Takes the path to a single file, returns a map of filenames to file contents.
- *)
-let file_to_files file =
-  let abs_fn = Relative_path.to_absolute file in
-  let content = cat abs_fn in
-  let delim = Str.regexp "////.*\n" in
-  if Str.string_match delim content 0
-  then
-    let contentl = Str.full_split delim content in
-    let files = make_files contentl in
-    List.fold_left ~f: begin fun acc (sub_fn, content) ->
-      let file =
-        Relative_path.create Relative_path.Dummy (abs_fn^"--"^sub_fn) in
-      Relative_path.Map.add acc ~key:file ~data:content
-    end ~init: Relative_path.Map.empty files
-  else if string_starts_with content "// @directory " then
-    let contentl = Str.split (Str.regexp "\n") content in
-    let first_line = List.hd_exn contentl in
-    let regexp = Str.regexp ("^// @directory *\\([^ ]*\\) \
-      *\\(@file *\\([^ ]*\\)*\\)?") in
-    let has_match = Str.string_match regexp first_line 0 in
-    assert has_match;
-    let dir = Str.matched_group 1 first_line in
-    let file_name =
-      try
-        Str.matched_group 3 first_line
-      with
-        Caml.Not_found -> abs_fn in
-    let file = Relative_path.create Relative_path.Dummy (dir ^ file_name) in
-    let content = String.concat ~sep:"\n" (List.tl_exn contentl) in
-    Relative_path.Map.singleton file content
-  else
-    Relative_path.Map.singleton file content
+    out_extension = !out_extension;
+  }, sienv)
 
 (* Make readable test output *)
 let replace_color input =
@@ -581,7 +581,7 @@ let print_colored fn type_acc =
   else print_string (List.map ~f: replace_color results |> String.concat ~sep:"")
 
 let print_coverage type_acc =
-  ClientCoverageMetric.go ~json:false (Some (Coverage_level.Leaf type_acc))
+  ClientCoverageMetric.go ~json:false (Some (Coverage_level_defs.Leaf type_acc))
 
 let check_file opts errors files_info =
   Relative_path.Map.fold files_info ~f:begin fun fn fileinfo errors ->
@@ -591,8 +591,8 @@ let check_file opts errors files_info =
 
 let create_nasts files_info =
   let build_nast fn _ =
-    let ast = Parser_heap.get_from_parser_heap ~full:true fn in
-    Naming.program ast
+    let ast = Ast_provider.get_ast ~full:true fn in
+    Naming.program (Ast_to_nast.convert ast)
   in Relative_path.Map.mapi ~f:(build_nast) files_info
 
 let parse_name_and_decl popt files_contents =
@@ -600,17 +600,23 @@ let parse_name_and_decl popt files_contents =
     let parsed_files =
       Relative_path.Map.mapi files_contents ~f:begin fun fn contents ->
         Errors.run_in_context fn Errors.Parsing begin fun () ->
-          Full_fidelity_ast.defensive_program popt fn contents
+          let parsed_file =
+            Full_fidelity_ast.defensive_program popt fn contents in
+
+          let ast =
+            let { Parser_return.ast; _ } = parsed_file in
+            if ParserOptions.deregister_php_stdlib popt
+            then Ast_utils.deregister_ignored_attributes ast
+            else ast
+          in
+          Ast_provider.provide_ast_hint fn ast Ast_provider.Full;
+          { parsed_file with Parser_return.ast }
         end
       end
     in
     let files_info =
-      Relative_path.Map.mapi ~f:begin fun fn parsed_file ->
+      Relative_path.Map.mapi ~f:begin fun _fn parsed_file ->
         let {Parser_return.file_mode; comments; ast; _} = parsed_file in
-        let ast = if ParserOptions.deregister_php_stdlib popt then
-          Ast_utils.deregister_ignored_attributes ast else ast in
-
-        Parser_heap.ParserHeap.add fn (ast, Parser_heap.Full);
         (* If the feature is turned on, deregister functions with attribute
         __PHPStdLib. This does it for all functions, not just hhi files *)
         let funs, classes, typedefs, consts = Ast_utils.get_defs ast in
@@ -627,9 +633,9 @@ let parse_name_and_decl popt files_contents =
       end
     end;
 
-    Relative_path.Map.iter files_info begin fun fn _ ->
+    Relative_path.Map.iter parsed_files begin fun fn parsed_file ->
       Errors.run_in_context fn Errors.Decl begin fun () ->
-        Decl.make_env fn
+        Decl.name_and_declare_types_program (Ast_to_nast.convert parsed_file.Parser_return.ast)
       end
     end;
 
@@ -637,8 +643,25 @@ let parse_name_and_decl popt files_contents =
   end
 
 let add_newline contents =
-  let x = String.index_exn contents '\n' in
-  String.((sub contents 0 x) ^ "\n" ^ (sub contents x ((length contents) - x)))
+  (* this is used for incremental mode to change all the positions, so we
+     basically want a prepend; there's a few cases we need to handle:
+     - empty file
+     - header line: apppend after header
+     - shebang and header: append after header
+     - shebang only, no header (e.g. .hack file): append after shebang
+     - no header or shebang (e.g. .hack file): prepend
+  *)
+  let after_shebang = if string_starts_with contents "#!"
+    then String.index_exn contents '\n' + 1
+    else 0
+  in
+  let after_header =
+    if String.length contents > (after_shebang + 2) && String.sub contents after_shebang 2 = "<?"
+    then (String.index_from_exn contents after_shebang '\n') + 1
+    else after_shebang
+  in
+  (String.sub contents 0 after_header) ^ "\n" ^ (String.sub contents after_header
+    (String.length contents - after_header))
 
 let get_decls defs =
   SSet.fold (fun x acc -> (Decl_heap.Typedefs.find_unsafe x)::acc)
@@ -680,7 +703,7 @@ let compare_classes c1 c2 =
   let _, is_unchanged = Decl_compare.ClassEltDiff.compare c1 c2 in
   if is_unchanged = `Changed then fail_comparison "ClassEltDiff"
 
-let test_decl_compare filenames popt files_contents files_info =
+let test_decl_compare filenames popt builtins files_contents files_info =
   (* skip some edge cases that we don't handle now... ugly! *)
   if (Relative_path.suffix filenames) = "capitalization3.php" then () else
   if (Relative_path.suffix filenames) = "capitalization4.php" then () else
@@ -702,7 +725,7 @@ let test_decl_compare filenames popt files_contents files_info =
 
   let typedefs1, funs1, classes1 = get_decls defs in
   (* For the purpose of this test, we can ignore other heaps *)
-  Parser_heap.ParserHeap.remove_batch files;
+  Ast_provider.remove_batch files;
 
   let get_classes path =
     match Relative_path.Map.get files_info path with
@@ -755,17 +778,23 @@ let compute_tasts_expand_types opts files_info interesting_files =
 let print_tasts tasts tcopt =
   let dummy_filename = Relative_path.default in
   let env = Typing_env.empty tcopt dummy_filename ~droot:None in
-  let stringify_types tast =
-    let print_pos_and_ty (pos, ty) =
-      Format.asprintf "(%a, %s)" Pos.pp pos (Typing_print.full_strip_ns env ty)
+
+  let print_pos_and_ty (pos, ty) =
+    Format.asprintf "(%a, %s)" Pos.pp pos (Typing_print.full_strip_ns env ty)
+  in
+
+  let pp_fb fmt fb =
+    let s = match fb with
+    | Tast.HasUnsafeBlocks -> "Has unsafe blocks"
+    | Tast.NoUnsafeBlocks -> "No unsafe blocks"
     in
-    TASTStringMapper.map_program tast
-      ~map_env_annotation:(fun () -> ())
-      ~map_expr_annotation:print_pos_and_ty
-      ~map_funcbody_annotation:(fun b -> Tast.annotation_to_string b) in
-  Relative_path.Map.iter tasts (fun _k tast ->
-    let string_ast = stringify_types tast in
-    Printf.printf "%s\n" (StringNAST.show_program string_ast))
+    Format.pp_print_string fmt s
+  in
+  let pp_en fmt _ = Format.pp_print_string fmt "()" in
+  let pp_ex fmt ex = Format.pp_print_string fmt (print_pos_and_ty ex) in
+
+  Relative_path.Map.iter tasts (fun _k (tast : Tast.program) ->
+    Printf.printf "%s\n" (Aast.show_program pp_ex pp_fb pp_en tast))
 
 let typecheck_tasts tasts tcopt (filename:Relative_path.t) =
   let env = Typing_env.empty tcopt filename ~droot:None in
@@ -773,9 +802,49 @@ let typecheck_tasts tasts tcopt (filename:Relative_path.t) =
   let typecheck_tast tast = Errors.get_error_list (Tast_typecheck.check env tast) in
   List.concat_map tasts ~f:typecheck_tast
 
+
+let pp_debug_deps fmt entries =
+  Format.fprintf fmt "@[<v>";
+  ignore @@ List.fold_left entries ~init:false ~f:begin fun sep (obj, roots) ->
+    if sep then Format.fprintf fmt "@;";
+    Format.fprintf fmt "%s -> " obj;
+    Format.fprintf fmt "@[<hv>";
+    ignore @@ List.fold_left roots ~init:false ~f:begin fun sep root ->
+      if sep then Format.fprintf fmt ",@ ";
+      Format.pp_print_string fmt root;
+      true
+    end;
+    Format.fprintf fmt "@]";
+    true
+  end;
+  Format.fprintf fmt "@]"
+
+let show_debug_deps = Format.asprintf "%a" pp_debug_deps
+
+let sort_debug_deps deps =
+  Caml.Hashtbl.fold (fun obj set acc -> (obj,set)::acc) deps []
+  |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  |> List.map ~f:begin fun (obj, roots) ->
+    let roots =
+      HashSet.fold List.cons roots []
+      |> List.sort ~compare:String.compare
+    in
+    obj, roots
+  end
+
+(* Note: this prints dependency graph edges in the same direction as the mapping
+   which is actually stored in the shared memory table. The line "X -> Y" can be
+   read, "X is used by Y", or "X is a dependency of Y", or "when X changes, Y
+   must be rechecked". *)
+let dump_debug_deps dbg_deps =
+  dbg_deps
+  |> sort_debug_deps
+  |> show_debug_deps
+  |> Printf.printf "%s\n"
+
 let handle_mode
-  mode filenames tcopt popt files_contents files_info parse_errors
-  all_errors batch_mode =
+  mode filenames tcopt popt builtins files_contents files_info parse_errors
+  max_errors error_format batch_mode out_extension dbg_deps (sienv: SearchUtils.si_env) =
   let expect_single_file () : Relative_path.t =
     match filenames with
     | [x] -> x
@@ -798,8 +867,8 @@ let handle_mode
       let is_manually_invoked = mode = Autocomplete_manually_invoked in
 
       let result = ServerAutoComplete.auto_complete_at_position
-        ~tcopt ~pos ~is_manually_invoked ~delimit_on_namespaces:false ~file_content:file
-        ~basic_only:false
+        ~tcopt ~pos ~is_manually_invoked ~file_content:file
+        ~sienv
       in
       List.iter ~f: begin fun r ->
         let open AutocompleteTypes in
@@ -824,7 +893,7 @@ let handle_mode
           let result =
             FfpAutocompleteService.auto_complete tcopt file_text position
             ~filter_by_token:true
-            ~basic_only:false
+            ~sienv
           in
           match result with
           | [] -> Printf.printf "No result found\n"
@@ -904,7 +973,7 @@ let handle_mode
           Pos.compare (Lint.get_pos x) (Lint.get_pos y)
         end lint_errors in
         let lint_errors = List.map ~f: Lint.to_absolute lint_errors in
-        ServerLint.output_text stdout lint_errors;
+        ServerLint.output_text stdout lint_errors error_format;
         exit 2
       end
       else Printf.printf "No lint errors\n"
@@ -915,20 +984,20 @@ let handle_mode
       ~init:files_info
     in
     Relative_path.Map.iter files_info begin fun fn fileinfo ->
-      ignore @@ Typing_check_utils.check_defs tcopt fn fileinfo
-    end;
-    Typing_deps.dump_debug_deps ()
+      ignore @@ Typing_check_utils.check_defs tcopt fn fileinfo end;
+    if Caml.Hashtbl.length dbg_deps > 0 then dump_debug_deps dbg_deps
 
   | Dump_inheritance ->
     let open ServerCommandTypes.Method_jumps in
-    Typing_deps.update_files files_info;
-    Relative_path.Map.iter files_info begin fun fn fileinfo ->
+    let naming_table = Naming_table.create files_info in
+    Naming_table.iter naming_table Typing_deps.update_file;
+    Naming_table.iter naming_table begin fun fn fileinfo ->
       if Relative_path.Map.mem builtins fn then () else begin
         List.iter fileinfo.FileInfo.classes begin fun (_p, class_) ->
           Printf.printf "Ancestors of %s and their overridden methods:\n"
             class_;
           let ancestors = MethodJumps.get_inheritance class_
-            ~filter:No_filter ~find_children:false files_info
+            ~filter:No_filter ~find_children:false naming_table
             None in
           ClientMethodJumps.print_readable ancestors ~find_children:false;
           Printf.printf "\n";
@@ -938,16 +1007,29 @@ let handle_mode
           Printf.printf "Children of %s and the methods they override:\n"
             class_;
           let children = MethodJumps.get_inheritance class_
-            ~filter:No_filter ~find_children:true files_info None in
+            ~filter:No_filter ~find_children:true naming_table None in
           ClientMethodJumps.print_readable children ~find_children:true;
           Printf.printf "\n";
         end;
       end
     end;
   | Identify_symbol (line, column) ->
-    let filename = expect_single_file () in
-    let file = cat (Relative_path.to_absolute filename) in
-    begin match ServerIdentifyFunction.go_absolute file line column tcopt with
+    let path = expect_single_file () in
+    let file_input =
+      ServerCommandTypes.FileName (Relative_path.to_absolute path) in
+    let (ctx, entry) = ServerIdeContext.update
+      ~tcopt
+      ~ctx:ServerIdeContext.empty
+      ~path
+      ~file_input
+    in
+    let result = ServerIdeContext.with_context ~ctx ~f:(fun () ->
+      ServerIdentifyFunction.go_ctx_absolute
+        ~entry
+        ~line
+        ~column
+    ) in
+    begin match result with
       | [] -> print_endline "None"
       | result -> ClientGetDefinition.print_readable ~short_pos:true result
     end
@@ -972,7 +1054,7 @@ let handle_mode
   | Dump_tast ->
     let errors, tasts = compute_tasts_expand_types tcopt files_info
       files_contents in
-    (match Errors.get_error_list errors with
+    (match parse_errors @ Errors.get_error_list errors with
     | [] -> ()
     | errors ->
       Printf.printf "Errors:\n";
@@ -990,12 +1072,12 @@ let handle_mode
       files_contents in
     print_tasts tasts tcopt;
     if not @@ Errors.is_empty errors then begin
-      print_errors errors;
+      print_errors error_format errors max_errors;
       Printf.printf "Did not typecheck the TAST as there are typing errors.";
       exit 2
     end else
       let tast_check_errors = typecheck_tasts tasts tcopt filename in
-      print_error_list tast_check_errors;
+      print_error_list error_format tast_check_errors max_errors;
       if tast_check_errors <> [] then exit 2
     )
   | Dump_typed_full_fidelity_json ->
@@ -1030,13 +1112,11 @@ let handle_mode
     )
   | Find_refs (line, column) ->
     let filename = expect_single_file () in
-    Typing_deps.update_files files_info;
-    Relative_path.set_path_prefix Relative_path.Root (Path.make "/");
-    Relative_path.set_path_prefix Relative_path.Hhi (Path.make "hhi");
-    Relative_path.set_path_prefix Relative_path.Tmp (Path.make "tmp");
+    let naming_table = Naming_table.create files_info in
+    Naming_table.iter naming_table Typing_deps.update_file;
     let genv = ServerEnvBuild.default_genv in
     let env = {(ServerEnvBuild.make_env genv.ServerEnv.config) with
-      ServerEnv.files_info;
+      ServerEnv.naming_table;
       ServerEnv.tcopt = tcopt;
     } in
     let filename = Relative_path.to_absolute filename in
@@ -1064,22 +1144,20 @@ let handle_mode
     (* For each file in our batch, run typechecking serially.
       Reset the heaps every time in between. *)
     iter_over_files (fun filename ->
-      let oc = Out_channel.create ((Relative_path.to_absolute filename) ^ ".out") in
+      let oc = Out_channel.create ((Relative_path.to_absolute filename) ^ out_extension) in
       (* This means builtins had errors, so lets just print those if we see them *)
       if parse_errors <> []
       then
         (* This closes the out channel *)
-        (if all_errors then write_error_list parse_errors oc
-        else write_first_error parse_errors oc)
+        write_error_list error_format parse_errors oc max_errors
       else
         begin
         Typing_log.out_channel := oc;
         ServerIdeUtils.make_local_changes ();
-        let files_contents = file_to_files filename in
+        let files_contents = Multifile.file_to_files filename in
         let parse_errors, individual_file_info = parse_name_and_decl popt files_contents in
         let errors = check_file tcopt (Errors.get_error_list parse_errors) individual_file_info in
-        (if all_errors then write_error_list errors oc
-        else write_first_error errors oc);
+        write_error_list error_format errors oc max_errors;
         ServerIdeUtils.revert_local_changes ()
         end
     )
@@ -1093,7 +1171,8 @@ let handle_mode
           k = filename) in
       let _, individual_file_info = parse_name_and_decl popt files_contents in
       (try
-        test_decl_compare filename popt files_contents individual_file_info;
+        test_decl_compare
+          filename popt builtins files_contents individual_file_info;
         Out_channel.output_string oc ""
       with e ->
         let msg = Exn.to_string e in
@@ -1101,34 +1180,16 @@ let handle_mode
       ServerIdeUtils.revert_local_changes ();
       Out_channel.close oc
     )
-  | Infer_return_types
   | Errors ->
       (* Don't typecheck builtins *)
-      let files_info = if all_errors then files_info else
-      Relative_path.Map.fold builtins
-        ~f:begin fun k _ acc -> Relative_path.Map.remove acc k end
-        ~init:files_info in
       let errors = check_file tcopt parse_errors files_info in
-      if mode = Infer_return_types
-      then
-        iter_over_files (fun filename ->
-        Option.iter ~f:(infer_return tcopt filename)
-          (Relative_path.Map.get files_info filename)
-        );
-      (if all_errors then
-        print_error_list errors
-      else
-        print_first_error errors);
+      print_error_list error_format errors max_errors;
       if errors <> [] then exit 2
   | Decl_compare ->
     let filename = expect_single_file () in
-    test_decl_compare filename popt files_contents files_info
-  | Least_upper_bound ->
-    iter_over_files (fun filename ->
-      compute_least_type tcopt filename
-    )
+    test_decl_compare filename popt builtins files_contents files_info
   | Linearization ->
-    if parse_errors <> [] then (print_error (List.hd_exn parse_errors); exit 2);
+    if parse_errors <> [] then (print_error error_format (List.hd_exn parse_errors); exit 2);
     let files_info = Relative_path.Map.fold builtins
       ~f:begin fun k _ acc -> Relative_path.Map.remove acc k end
       ~init:files_info
@@ -1147,10 +1208,14 @@ let handle_mode
           let targs = if targs = [] then "" else "<"^(String.concat ~sep:"," targs)^">" in
           let open Decl_defs in
           let modifiers =
-            [ if mro.mro_synthesized    then Some "synthesized"    else None
+            [ if Option.is_some mro.mro_required_at
+              then Some "requirement"
+              else if mro.mro_via_req_extends || mro.mro_via_req_impl then Some "synthesized" else None
             ; if mro.mro_xhp_attrs_only then Some "xhp_attrs_only" else None
             ; if mro.mro_consts_only    then Some "consts_only"    else None
             ; if mro.mro_copy_private_members then Some "copy_private_members" else None
+            ; if mro.mro_passthrough_abstract_typeconst then Some "PAT" else None
+            ; Option.map mro.mro_trait_reuse ~f:(fun c -> "trait reuse via "^c)
             ]
             |> List.filter_map ~f:(fun x -> x)
             |> String.concat ~sep:", "
@@ -1170,14 +1235,46 @@ let handle_mode
 (* Main entry point *)
 (*****************************************************************************)
 
-let decl_and_run_mode {files; mode; no_builtins; tcopt; all_errors; batch_mode } popt =
-  if mode = Dump_deps then Typing_deps.debug_trace := true;
+let decl_and_run_mode
+  {
+    files;
+    mode;
+    error_format;
+    no_builtins;
+    tcopt;
+    max_errors;
+    batch_mode;
+    out_extension;
+  }
+  (popt: TypecheckerOptions.t)
+  (hhi_root: Path.t)
+  (sienv: SearchUtils.si_env): unit =
   Ident.track_names := true;
-  let builtins = if no_builtins then Relative_path.Map.empty else builtins in
+  let builtins =
+    if no_builtins
+    then Relative_path.Map.empty
+    else begin
+      (* Note that the regular `.hhi` files have already been written to disk
+      with `Hhi.get_root ()` *)
+      Array.iter magic_builtins ~f:(fun (file_name, file_contents) ->
+        let file_path = Path.concat hhi_root file_name in
+        let file = Path.to_string file_path in
+        Sys_utils.try_touch ~follow_symlinks:true file;
+        Sys_utils.write_file ~file file_contents
+      );
+      (* Take the builtins (file, contents) array and create relative paths *)
+      Caml.Array.fold_left begin fun acc (f, src) ->
+        let f = Path.concat hhi_root f |> Path.to_string in
+        Relative_path.Map.add acc
+          ~key:(Relative_path.create Relative_path.Hhi f)
+          ~data:src
+      end Relative_path.Map.empty (Array.append magic_builtins hhi_builtins)
+    end
+  in
   let files = List.map ~f:(Relative_path.create Relative_path.Dummy) files in
   let files_contents = List.fold files
   ~f:(fun acc filename ->
-    let files_contents = file_to_files filename in
+    let files_contents = Multifile.file_to_files filename in
     Relative_path.Map.union acc files_contents
   ) ~init:Relative_path.Map.empty in
   (* Merge in builtins *)
@@ -1187,37 +1284,60 @@ let decl_and_run_mode {files; mode; no_builtins; tcopt; all_errors; batch_mode }
   in
   (* Don't declare all the filenames in batch_errors mode *)
   let to_decl = if batch_mode then builtins else files_contents_with_builtins in
+  let dbg_deps = Caml.Hashtbl.create 0 in
+  if mode = Dump_deps then begin
+    (* In addition to actually recording the dependencies in shared memory,
+     we build a non-hashed respresentation of the dependency graph
+     for printing. *)
+    let get_debug_trace root obj =
+       let root = Typing_deps.Dep.to_string root in
+       let obj = Typing_deps.Dep.to_string obj in
+       match Caml.Hashtbl.find_opt dbg_deps obj with
+       | Some set -> HashSet.add set root
+       | None ->
+         let set = HashSet.create 1 in
+         HashSet.add set root;
+         Caml.Hashtbl.replace dbg_deps obj set in
+    Typing_deps.add_dependency_callback "get_debug_trace" get_debug_trace
+    end;
   let errors, files_info =
     parse_name_and_decl popt to_decl in
 
-  handle_mode mode files tcopt popt files_contents files_info
-    (Errors.get_error_list errors) all_errors batch_mode
+  handle_mode mode files tcopt popt builtins files_contents files_info
+    (Errors.get_error_list errors) max_errors error_format batch_mode out_extension
+    dbg_deps sienv
 
-let main_hack ({files; mode; tcopt; _} as opts) =
+let main_hack ({files; mode; tcopt; _} as opts) (sienv: SearchUtils.si_env): unit =
   (* TODO: We should have a per file config *)
   Sys_utils.signal Sys.sigusr1
     (Sys.Signal_handle Typing.debug_print_last_pos);
   EventLogger.init ~exit_on_parent_exit EventLogger.Event_logger_fake 0.0;
-  let handle = SharedMem.init ~num_workers:0 GlobalConfig.default_sharedmem_config in
-  ignore (handle: SharedMem.handle);
-  let tmp_hhi = Path.concat (Path.make Sys_utils.temp_dir_name) "hhi" in
-  Hhi.set_hhi_root_for_unit_test tmp_hhi;
-  GlobalParserOptions.set tcopt;
-  GlobalNamingOptions.set tcopt;
-  match mode with
-  | Ai ai_options ->
-    begin match files with
-    | [filename] ->
-      let filecontents = filename |> Relative_path.create Relative_path.Dummy |> file_to_files in
-      Ai.do_ Typing_check_utils.type_file filecontents ai_options tcopt
-    | _ -> die "Ai mode does not support multiple files"
-    end
-  | _ ->
-    decl_and_run_mode opts tcopt;
-  TypingLogger.flush_buffers ()
+
+  let (_handle: SharedMem.handle) =
+    SharedMem.init ~num_workers:0 GlobalConfig.default_sharedmem_config in
+
+  Tempfile.with_tempdir (fun hhi_root ->
+    Hhi.set_hhi_root_for_unit_test hhi_root;
+    Relative_path.set_path_prefix Relative_path.Root (Path.make "/");
+    Relative_path.set_path_prefix Relative_path.Hhi hhi_root;
+    Relative_path.set_path_prefix Relative_path.Tmp (Path.make "tmp");
+    GlobalParserOptions.set tcopt;
+    GlobalNamingOptions.set tcopt;
+    match mode with
+    | Ai ai_options ->
+      begin match files with
+      | [filename] ->
+        let filecontents = filename |> Relative_path.create Relative_path.Dummy |> Multifile.file_to_files in
+        Ai.do_ Typing_check_utils.type_file filecontents ai_options tcopt
+      | _ -> die "Ai mode does not support multiple files"
+      end
+    | _ ->
+      decl_and_run_mode opts tcopt hhi_root sienv;
+    TypingLogger.flush_buffers ()
+  )
 
 (* command line driver *)
-let _ =
+let () =
   if ! Sys.interactive
   then ()
   else (
@@ -1227,5 +1347,5 @@ let _ =
        expected one (i.e. in given file without CRLF). *)
     Out_channel.set_binary_mode stdout true
   );
-  let options = parse_options () in
-  Unix.handle_unix_error main_hack options
+  let (options, sienv) = parse_options () in
+  Unix.handle_unix_error main_hack options sienv

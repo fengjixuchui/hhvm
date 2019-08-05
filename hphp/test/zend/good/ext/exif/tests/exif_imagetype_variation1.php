@@ -1,23 +1,23 @@
-<?php
+<?hh
 
 /* Prototype  : int exif_imagetype  ( string $filename  )
  * Description: Determine the type of an image
  * Source code: ext/exif/exif.c
 */
 
+// declaring a class
+class sample  {
+  public function __toString() {
+  return "obj'ct";
+  }
+}
+<<__EntryPoint>> function main(): void {
 echo "*** Testing exif_imagetype() : different types for filename argument ***\n";
 // initialize all required variables
 
 // get an unset variable
 $unset_var = 'string_val';
 unset($unset_var);
-
-// declaring a class
-class sample  {
-  public function __toString() {
-  return "obj'ct";
-  } 
-}
 
 // Defining resource
 $file_handle = fopen(__FILE__, 'r');
@@ -60,13 +60,13 @@ $values =  array (
 
   // unset variable
   $unset_var,
-  
+
   // objects
   new sample(),
 
   // resource
   $file_handle,
- 
+
   NULL,
   null
 );
@@ -87,7 +87,5 @@ foreach($values as $filename) {
 fclose($file_handle);
 
 echo "Done\n";
-?>
-
-?>
-===Done===
+echo "===Done===\n";
+}

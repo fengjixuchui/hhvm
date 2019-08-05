@@ -3,12 +3,13 @@ Errors:
   [4:3-17] Unbound global constant (Typing)
 [(Fun
     { f_span = [3:1-5:2]; f_annotation = (); f_mode = <opaque>;
-      f_ret = (Some ([3:18-22], (Hprim Tvoid)));
+      f_ret = (([Pos.none], _), (Some ([3:18-22], (Hprim Tvoid))));
       f_name = ([3:10-14], "\\test"); f_tparams = [];
       f_where_constraints = []; f_variadic = FVnonVariadic; f_params = [];
       f_body =
       { fb_ast =
-        [(Expr (([4:3-17], _), (Id ([4:3-17], "\\unbound_global"))))];
+        [([4:3-18],
+          (Expr (([4:3-17], _), (Id ([4:3-17], "\\unbound_global")))))];
         fb_annotation = No unsafe blocks };
       f_fun_kind = FSync; f_user_attributes = []; f_file_attributes = [];
       f_external = false; f_namespace = <opaque>; f_doc_comment = None;

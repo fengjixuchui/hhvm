@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $inputFileName = dirname(__FILE__)."/004.txt.gz";
 $outputFileName = __FILE__.'.tmp';
 
@@ -22,5 +22,5 @@ else {
    echo "FAILED: Copy not identical";
 }
 unlink($outputFileName);
-?>
-===DONE===
+echo "===DONE===\n";
+}

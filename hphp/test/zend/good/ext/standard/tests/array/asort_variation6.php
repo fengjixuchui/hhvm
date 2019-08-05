@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool asort ( array &$array [, int $asort_flags] )
  * Description: Sort an array and maintain index association.
                 Elements will be arranged from lowest to highest when this function has completed.
@@ -11,7 +11,7 @@
  * SORT_REGULAR - compare items normally
  * SORT_NUMERIC - compare items numerically
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing asort() : usage variations ***\n";
 
 // an array contains unsorted hexadecimal values
@@ -36,4 +36,4 @@ var_dump(asort(&$temp_array, SORT_NUMERIC) ); // expecting : bool(true)
 var_dump($temp_array);
 
 echo "Done\n";
-?>
+}

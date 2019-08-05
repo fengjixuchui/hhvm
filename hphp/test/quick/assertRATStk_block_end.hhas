@@ -1,12 +1,17 @@
+.hh_file 1;
 # tests that AssertRATStk cannot appear at the end of a block
 
 .main {
   Int 1
+  NullUninit
+  NullUninit
+  NullUninit
   Int 2
   JmpNZ target_label
-  AssertRATStk 0 Cell
-  target_label: FPushFuncD 1 "var_dump"
+  AssertRATStk 3 Cell
+target_label:
   Int 42
+  FPushFuncD 1 "var_dump"
   FCall <> 1 1 "" - "" ""
   PopC
   PopC

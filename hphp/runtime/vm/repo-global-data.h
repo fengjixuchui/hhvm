@@ -32,16 +32,6 @@ struct Repo::GlobalData {
   GlobalData() {}
 
   /*
-   * Indicates whether a repo was compiled using HHBBC.
-   */
-  bool UsedHHBBC = false;
-
-  /*
-   * Was the repo compiled with EnableHipHopSyntax.
-   */
-  bool EnableHipHopSyntax = false;
-
-  /*
    * Copy of InitialNamedEntityTableSize for hhbbc to use.
    */
   uint32_t InitialNamedEntityTableSize = 0;
@@ -50,15 +40,6 @@ struct Repo::GlobalData {
    * Copy of InitialStaticStringTableSize for hhbbc to use.
    */
   uint32_t InitialStaticStringTableSize = 0;
-
-  /*
-   * Indicates whether a repo was compiled with HardTypeHints.
-   *
-   * If so, we disallow recovering from the E_RECOVERABLE_ERROR we
-   * raise if you violate a parameter typehint, because doing so
-   * would allow violating assumptions from the optimizer.
-   */
-  bool HardTypeHints = false;
 
   /*
    * Indicates whether a repo was compiled with HardReturnTypeHints.
@@ -89,20 +70,6 @@ struct Repo::GlobalData {
   bool HardPrivatePropInference = false;
 
   /*
-   * Indicates whether the repo was compiled with DisallowDynamicVarEnvFuncs. If
-   * so, we assume that '$f()' doesn't read or write over locals (that
-   * haven't been passed).
-   */
-  HackStrictOption DisallowDynamicVarEnvFuncs = HackStrictOption::OFF;
-
-  /*
-   * Indicates whether the repo was compiled with ElideAutoloadInvokes. If so,
-   * potential invocations of the autoloader may have been optimized away if it
-   * could be proven the invocation would not find a viable function.
-   */
-  bool ElideAutoloadInvokes = true;
-
-  /*
    * Indicates whether the repo was compiled with PHP7 integer semantics. This
    * slightly changes the way certain arithmetic operations are evaluated, in
    * small enough ways that don't warrant new bytecodes, but in ways that do
@@ -116,13 +83,6 @@ struct Repo::GlobalData {
    * operations, e.g. ("0x20" + 1)
    */
   bool PHP7_NoHexNumerics = false;
-
-  /*
-   * Indicates whether the repo was compiled with PHP7 scalar type hint support.
-   * In this mode non hh units will default to weak types and scalar types will
-   * be available outside the HH namespace.
-   */
-  bool PHP7_ScalarTypes = false;
 
   /*
    * Indicates whether the repo was compiled with PHP7 builtins enabled.
@@ -163,11 +123,6 @@ struct Repo::GlobalData {
   bool HackArrDVArrs = false;
 
   /*
-   * Is intish cast enabled?
-   */
-  bool EnableIntishCast = true;
-
-  /*
    * Should the extension containing HHVM intrinsics be enabled?
    */
   bool EnableIntrinsicsExtension = false;
@@ -176,7 +131,10 @@ struct Repo::GlobalData {
    * Should the runtime emit notices or throw whenever a function is called
    * dynamically and that function has not been marked as allowing that?
    */
-  int32_t ForbidDynamicCalls = 0;
+  int32_t ForbidDynamicCallsToFunc = 0;
+  int32_t ForbidDynamicCallsToClsMeth = 0;
+  int32_t ForbidDynamicCallsToInstMeth = 0;
+  int32_t ForbidDynamicConstructs = 0;
 
   /*
    * Should the runtime emit notices whenever a builtin is called dynamically?
@@ -187,7 +145,7 @@ struct Repo::GlobalData {
    * Should we enforce that reffiness annotations are invaraint in overridden
    * methods?
    */
-  bool ReffinessInvariance = false;
+  uint32_t ReffinessInvariance = 0;
 
   /*
    * Should HHBBC do build time verification?
@@ -195,41 +153,47 @@ struct Repo::GlobalData {
   bool AbortBuildOnVerifyError = false;
 
   /*
-   * Controls PHP's behavior of falling back to the default namespace for
-   * undefined constants.
+   * Should we display function arguments in backtraces?
    */
-  uint64_t UndefinedConstFallback = 0;
-
-  /*
-   * Controls PHP's behavior of falling back to the default namespace for
-   * undefined functions.
-   */
-  uint64_t UndefinedFunctionFallback = 0;
+  bool EnableArgsInBacktraces = false;
 
   /*
    * A more-or-less unique identifier for the repo
    */
   uint64_t Signature = 0;
 
+  bool EmitClsMethPointers = false;
+
+  /*
+   * If clsmeth type may raise,
+   * hhbbc IsTypeX optimization may be disabled.
+   */
+  bool IsVecNotices = false;
+
+  /* Skip ClsMeth type refinement when this is true. */
+  bool IsCompatibleClsMethType = false;
+
+  /* Avoid optimizations that interfere with array provenance */
+  bool ArrayProvenance = false;
+
+  /*
+   * The Hack.Lang.StrictArrayFillKeys option the repo was compiled with.
+   */
+  HackStrictOption StrictArrayFillKeys = HackStrictOption::OFF;
+
   std::vector<const StringData*> APCProfile;
 
   std::vector<std::pair<std::string,Cell>> ConstantFunctions;
 
   template<class SerDe> void serde(SerDe& sd) {
-    sd(UsedHHBBC)
-      (EnableHipHopSyntax)
-      (InitialNamedEntityTableSize)
+    sd(InitialNamedEntityTableSize)
       (InitialStaticStringTableSize)
-      (HardTypeHints)
       (ThisTypeHintLevel)
       (HardReturnTypeHints)
       (CheckPropTypeHints)
       (HardPrivatePropInference)
-      (DisallowDynamicVarEnvFuncs)
-      (ElideAutoloadInvokes)
       (PHP7_IntSemantics)
       (PHP7_NoHexNumerics)
-      (PHP7_ScalarTypes)
       (PHP7_Substr)
       (PHP7_Builtins)
       (PromoteEmptyObject)
@@ -241,15 +205,21 @@ struct Repo::GlobalData {
       (HackArrCompatDVCmpNotices)
       (HackArrCompatSerializeNotices)
       (HackArrDVArrs)
-      (EnableIntishCast)
       (EnableIntrinsicsExtension)
       (ReffinessInvariance)
-      (ForbidDynamicCalls)
+      (ForbidDynamicCallsToFunc)
+      (ForbidDynamicCallsToClsMeth)
+      (ForbidDynamicCallsToInstMeth)
+      (ForbidDynamicConstructs)
       (NoticeOnBuiltinDynamicCalls)
       (Signature)
       (AbortBuildOnVerifyError)
-      (UndefinedConstFallback)
-      (UndefinedFunctionFallback)
+      (EnableArgsInBacktraces)
+      (EmitClsMethPointers)
+      (IsVecNotices)
+      (IsCompatibleClsMethType)
+      (ArrayProvenance)
+      (StrictArrayFillKeys)
       ;
   }
 };

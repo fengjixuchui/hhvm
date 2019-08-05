@@ -25,7 +25,8 @@ let make_keyword_completion (replace_pos:Ide_api_types.range) (keyword_name:stri
     res_base_class = None;
     res_ty = "keyword";
     res_name = keyword_name;
-    res_kind = Keyword_kind;
+    res_fullname = keyword_name;
+    res_kind = SearchUtils.SI_Keyword;
     func_details = None;
   }
 
@@ -45,8 +46,8 @@ let auto_complete
   (tcopt:TypecheckerOptions.t)
   (file_content:string)
   (pos:File_content.position)
-  ~(basic_only:bool)
-  ~(filter_by_token:bool) : result =
+  ~(filter_by_token:bool)
+  ~(sienv: SearchUtils.si_env): result =
   let open File_content in
   (* The part of the line from the far left end to the point where the caret is. *)
   let new_file_content = handle_empty_autocomplete pos file_content in
@@ -95,7 +96,7 @@ let auto_complete
     |> List.map ~f:(make_keyword_completion replace_pos)
   in
   let type_based_completions =
-    FfpAutocompleteTypeCheck.run ~context ~file_content ~stub ~pos ~tcopt ~basic_only
+    FfpAutocompleteTypeCheck.run ~context ~file_content ~stub ~pos ~tcopt ~sienv
   in
   let global_completions =
     FfpAutocompleteGlobals.get_globals context stub positioned_tree replace_pos

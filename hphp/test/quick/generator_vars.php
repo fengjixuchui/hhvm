@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class logger {
   static $x = 0;
@@ -36,10 +36,10 @@ function dumpgen($g) {
   }
 }
 
-function getargs($foo) {
+function getargs(...$args) {
   yield 0xdeadbeef;
-  yield func_get_args();
-  yield func_get_arg(3);
+  yield $args;
+  yield $args[3];
 }
 
 function genthrow() {
@@ -67,7 +67,7 @@ function manylocals() {
   yield array('a' => $a, 'b' => $b, 'c' => $c, 'd' => $d, 'e' => $e, 'f' => $f, 'g' => $g, 'h' => $h, 'i' => $i, 'j' => $j, 'k' => $k, 'l' => $l);
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   dumpgen(create());
   dumpgen(unusedarg(new logger(), 5));
   dumpgen(getargs(1, 2, 3, 4, 5));
@@ -92,4 +92,3 @@ function main() {
   var_dump($g->current());
   var_dump($g->valid());
 }
-main();

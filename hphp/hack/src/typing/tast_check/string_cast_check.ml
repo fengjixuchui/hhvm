@@ -7,7 +7,9 @@
  *
 *)
 
-open Tast
+open Core_kernel
+open Aast
+open Typing_defs
 
 module Env = Tast_env
 module TCO = TypecheckerOptions
@@ -21,17 +23,33 @@ let should_enforce env =
     (string) casts of objects will be banned in the future. Eventually,
     __toString/(string) casts of objects will be removed from HHVM entirely. *)
 
-let check__toString m is_static =
+let check__toString m =
   let (pos, name) = m.m_name in
   if name = SN.Members.__toString
   then begin
-    if m.m_visibility <> Public || is_static
+    if m.m_visibility <> Public || m.m_static
     then Errors.toString_visibility pos;
-    match m.m_ret with
+    match hint_of_type_hint m.m_ret with
     | Some (_, Hprim Tstring) -> ()
     | Some (p, _) -> Errors.toString_returns_string p
     | None -> ()
   end
+
+let rec is_stringish env ty =
+  let env, ety = Env.expand_type env ty in
+  match snd ety with
+  | Toption ty' -> is_stringish env ty'
+  | Tunion tyl -> List.for_all ~f:(is_stringish env) tyl
+  | Tintersection tyl -> List.exists ~f:(is_stringish env) tyl
+  | Tabstract _ ->
+    let env, tyl = Env.get_concrete_supertypes env ty in
+    List.for_all ~f:(is_stringish env) tyl
+  | Tclass (x, _, _) ->
+    Option.is_none (Env.get_class env (snd x))
+  | Tany | Terr | Tdynamic | Tobject | Tnonnull | Tprim _ ->
+    true
+  | Tarraykind _ | Tvar _ | Ttuple _ | Tanon (_, _) | Tfun _ | Tshape _ | Tdestructure _ ->
+    false
 
 let handler = object
   inherit Tast_visitor.handler_base
@@ -40,14 +58,9 @@ let handler = object
     match expr with
     | Cast ((_, Hprim Tstring), te) when should_enforce env ->
       let ((_, ty), _) = te in
-      (* Whitelist mixed/nonnull *)
-      if not (Env.is_stringish env ty ~allow_mixed:true)
+      if not (is_stringish env ty)
       then Errors.string_cast p (Env.print_ty env ty)
     | _ -> ()
 
-  method! at_static_method _ m = check__toString m true
-
-  method! at_method_ _ m = check__toString m false
-
-  method! at_constructor _ m = check__toString m true
+  method! at_method_ _ m = check__toString m
 end

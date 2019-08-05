@@ -8,17 +8,17 @@
  *
  */
 
-const DATE_ATOM    = "Y-m-d\\TH:i:sP";
-const DATE_COOKIE  = "l, d-M-y H:i:s T";
-const DATE_ISO8601 = "Y-m-d\\TH:i:sO";
-const DATE_RFC1036 = "D, d M y H:i:s O";
-const DATE_RFC1123 = "D, d M Y H:i:s O";
-const DATE_RFC2822 = "D, d M Y H:i:s O";
-const DATE_RFC3339 = "Y-m-d\\TH:i:sP";
-const DATE_RFC822  = "D, d M y H:i:s O";
-const DATE_RFC850  = "l, d-M-y H:i:s T";
-const DATE_RSS     = "D, d M Y H:i:s O";
-const DATE_W3C     = "Y-m-d\\TH:i:sP";
+const DATE_ATOM    = "";
+const DATE_COOKIE  = "";
+const DATE_ISO8601 = "";
+const DATE_RFC1036 = "";
+const DATE_RFC1123 = "";
+const DATE_RFC2822 = "";
+const DATE_RFC3339 = "";
+const DATE_RFC822  = "";
+const DATE_RFC850  = "";
+const DATE_RSS     = "";
+const DATE_W3C     = "";
 
 const DAY_1 = 131079;
 const DAY_2 = 131080;
@@ -65,9 +65,9 @@ function date_sub($datetime, $interval);
 <<__PHPStdLib>>
 function date_sun_info(int $ts, float $latitude, float $longitude);
 <<__PHPStdLib>>
-function date_sunrise(int $timestamp, int $format = 0, float $latitude = 0.0, float $longitude = 0.0, float $zenith = 0.0, float $gmt_offset = 99999.0);
+function date_sunrise(int $timestamp, int $format = 0, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $gmt_offset = null);
 <<__PHPStdLib>>
-function date_sunset(int $timestamp, int $format = 0, float $latitude = 0.0, float $longitude = 0.0, float $zenith = 0.0, float $gmt_offset = 99999.0);
+function date_sunset(int $timestamp, int $format = 0, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $gmt_offset = null);
 <<__PHPStdLib>>
 function date_time_set($object, int $hour, int $minute, int $second = 0);
 <<__PHPStdLib>>
@@ -79,31 +79,31 @@ function date_timezone_get($object);
 <<__PHPStdLib>>
 function date_timezone_set($object, $timezone);
 <<__PHPStdLib>>
-function date(string $format, int $timestamp = -1)/*: string*/ { }
+function date(string $format, ?int $timestamp = null)/*: string*/ { }
 <<__PHPStdLib>>
-function getdate(int $timestamp = -1);
+function getdate(?int $timestamp = null);
 <<__PHPStdLib>>
 function gettimeofday(bool $return_float = false);
 <<__PHPStdLib>>
-function gmdate(string $format, int $timestamp = -1);
+function gmdate(string $format, ?int $timestamp = null);
 <<__PHPStdLib>>
 function gmmktime(int $hour = PHP_INT_MAX, int $minute = PHP_INT_MAX, int $second = PHP_INT_MAX, int $month = PHP_INT_MAX, int $day = PHP_INT_MAX, int $year = PHP_INT_MAX);
 <<__PHPStdLib>>
-function gmstrftime(string $format, int $timestamp = -1);
+function gmstrftime(string $format, ?int $timestamp = null);
 <<__PHPStdLib>>
-function idate(string $format, int $timestamp = -1);
+function idate(string $format, ?int $timestamp = null);
 <<__PHPStdLib>>
-function localtime(int $timestamp = -1, bool $is_associative = false);
+function localtime(?int $timestamp = null, bool $is_associative = false);
 <<__PHPStdLib>>
 function microtime(bool $get_as_float = false);
 <<__PHPStdLib>>
 function mktime(int $hour = PHP_INT_MAX, int $minute = PHP_INT_MAX, int $second = PHP_INT_MAX, int $month = PHP_INT_MAX, int $day = PHP_INT_MAX, int $year = PHP_INT_MAX);
 <<__PHPStdLib>>
-function strftime(string $format, int $timestamp = -1);
+function strftime(string $format, ?int $timestamp = null);
 <<__PHPStdLib>>
 function strptime(string $date, string $format);
 <<__PHPStdLib>>
-function strtotime(string $input, int $timestamp = -1);
+function strtotime(string $input, ?int $timestamp = null);
 <<__PHPStdLib>>
 function time(): int { }
 <<__PHPStdLib>>

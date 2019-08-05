@@ -40,6 +40,7 @@ struct StringData;
 struct MemoCacheBase;
 struct Func;
 struct Class;
+struct RecordData;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -62,13 +63,28 @@ union Value {
   const Func*   pfunc;  // KindOfFunc
   Class*        pclass; // KindOfClass
   ClsMethDataRef pclsmeth; // KindOfClsMeth
+  RecordData*   prec;   // KindOfRecord
 };
 
 enum VarNrFlag { NR_FLAG = 1 << 29 };
 
 struct ConstModifiers {
-  bool isAbstract;
-  bool isType;
+  uint32_t rawData;
+
+  static uint32_t constexpr kMask = (uint32_t)-1UL << 2;
+
+  StringData* getPointedClsName() const {
+    return (StringData*)(uintptr_t)(rawData & kMask);
+  }
+  bool isAbstract()      const { return rawData & 2; }
+  bool isType()          const { return rawData & 1; }
+
+  void setPointedClsName (StringData* clsName) {
+    assertx(!clsName || use_lowptr);
+    rawData = (use_lowptr ? 0 : (uintptr_t)clsName) | (rawData & ~kMask);
+  }
+  void setIsAbstract(bool isAbstract) { rawData |= (isAbstract ? 2 : 0); }
+  void setIsType    (bool isType)     { rawData |= (isType ? 1 : 0); }
 };
 
 /*
@@ -241,12 +257,14 @@ using enable_if_tv_val_t = typename std::enable_if<
   Ret
 >::type;
 
-/*
- * TV-lval API for TypedValue.
- */
+// TV-lval / -rval API for TypedValue& / const TypedValue&, respectively.
 ALWAYS_INLINE DataType& type(TypedValue& tv) { return tv.m_type; }
 ALWAYS_INLINE Value& val(TypedValue& tv) { return tv.m_data; }
-ALWAYS_INLINE TypedValue as_tv(TypedValue& tv) { return tv; }
+ALWAYS_INLINE const DataType& type(const TypedValue& tv) { return tv.m_type; }
+ALWAYS_INLINE const Value& val(const TypedValue& tv) { return tv.m_data; }
+ALWAYS_INLINE TypedValue as_tv(const TypedValue& tv) { return tv; }
+
+// TV-lval / -rval API for TypedValue* / const TypedValue*, respectively.
 ALWAYS_INLINE DataType& type(TypedValue* tv) { return tv->m_type; }
 ALWAYS_INLINE Value& val(TypedValue* tv) { return tv->m_data; }
 ALWAYS_INLINE const DataType& type(const TypedValue* tv) { return tv->m_type; }
@@ -283,6 +301,7 @@ X(KindOfPersistentString, const StringData*);
 X(KindOfFunc,         Func*);
 X(KindOfClass,        Class*);
 X(KindOfClsMeth,      ClsMethDataRef);
+X(KindOfRecord,       RecordData*);
 
 #undef X
 

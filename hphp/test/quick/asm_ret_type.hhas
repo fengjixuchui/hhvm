@@ -1,8 +1,12 @@
+.hh_file 1;
 # Test for hhas return types
 
 .adata A_0 = """a:0:{}""";
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "fail"
   FCall <> 0 1 "" - "" ""
   PopC

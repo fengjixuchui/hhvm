@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 var_dump(gmp_strval(gmp_com(0)));
 var_dump(gmp_strval(gmp_com("0")));
 var_dump(gmp_strval(gmp_com("test")));
@@ -17,4 +17,4 @@ var_dump(gmp_strval(gmp_com(array())));
 try { var_dump(gmp_strval(gmp_com())); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done\n";
-?>
+}

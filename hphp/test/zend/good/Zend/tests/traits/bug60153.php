@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 interface IFoo {
     public function oneArgument($a);
@@ -12,3 +12,4 @@ class C implements IFoo {
   use TFoo;
 }
 
+<<__EntryPoint>> function main(): void {}

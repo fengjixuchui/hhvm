@@ -1,4 +1,4 @@
-<?php
+<?hh
 $tmp = pow(2,24);
 $data = array( 
 	'PHP',
@@ -10,4 +10,3 @@ $data = array(
 	'monkey',
 	$tmp=>-1/3
 );
-?>

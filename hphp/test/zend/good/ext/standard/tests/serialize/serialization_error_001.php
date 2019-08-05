@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto string serialize(mixed variable)
  * Description: Returns a string representation of variable (which can later be unserialized) 
  * Source code: ext/standard/var.c
@@ -9,7 +9,7 @@
  * Source code: ext/standard/var.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing serialize()/unserialize() : error conditions ***\n";
 
 // Zero arguments
@@ -21,4 +21,4 @@ try { var_dump( serialize(1,2) ); } catch (Exception $e) { echo "\n".'Warning: '
 try { var_dump( unserialize(1,2) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

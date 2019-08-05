@@ -33,10 +33,9 @@ auto constexpr MODULO_BY_ZERO = "Modulo by zero";
 auto constexpr DIVISION_BY_ZERO =
   "Division by zero";
 auto constexpr NEGATIVE_SHIFT = "Bit shift by negative number";
-auto constexpr UNDEFINED_CONSTANT =
-  "Use of undefined constant %s - assumed '%s'";
 auto constexpr UNDEFINED_VARIABLE = "Undefined variable: %s";
 auto constexpr UNKNOWN_CLASS = "Class undefined: %s";
+auto constexpr UNKNOWN_RECORD = "Record undefined: %s";
 auto constexpr CANT_ACCESS_SELF =
   "Cannot access self:: when no class scope is active";
 auto constexpr CANT_ACCESS_PARENT_WHEN_NO_CLASS =
@@ -45,8 +44,8 @@ auto constexpr CANT_ACCESS_PARENT_WHEN_NO_PARENT =
   "Cannot access parent:: when current class scope has no parent";
 auto constexpr CANT_ACCESS_STATIC =
   "Cannot access static:: when no class scope is active";
-auto constexpr UNDEFINED_INDEX =
-  "Undefined index: %s";
+auto constexpr THIS_OUTSIDE_CLASS =
+  "Cannot use 'this' outside of a class";
 auto constexpr CANNOT_USE_SCALAR_AS_ARRAY =
   "Cannot use a scalar value as an array";
 auto constexpr CREATING_DEFAULT_OBJECT =
@@ -62,10 +61,14 @@ auto constexpr METHOD_NAME_MUST_BE_STRING =
   "Method name must be a string";
 auto constexpr CANT_UNSET_STRING =
   "Cannot unset string offsets";
+auto constexpr CANT_UNSET_RECORD =
+  "Cannot unset record fields";
 auto constexpr OP_NOT_SUPPORTED_STRING =
   "Operator not supported for strings";
 auto constexpr OP_NOT_SUPPORTED_FUNC =
   "Operator not supported for funcs";
+auto constexpr OP_NOT_SUPPORTED_RECORD =
+  "Operator not supported for records";
 auto constexpr OP_NOT_SUPPORTED_CLASS =
   "Operator not supported for classes";
 auto constexpr ASYNC_WITHOUT_BODY =
@@ -78,7 +81,7 @@ auto constexpr TRAITS_UNKNOWN_TRAIT =
 auto constexpr TRAITS_UNKNOWN_TRAIT_METHOD =
   "Unknown trait method '%s'";
 auto constexpr METHOD_IN_MULTIPLE_TRAITS =
-  "Method '%s' declared in multiple traits";
+  "Method '%s' declared in multiple traits (%s)";
 auto constexpr TRAIT_REDECLARED_METHOD_INCONSISTENT_ATTRIBUTES =
   "Redeclaration of trait method '%s::%s' is inconsistent about '%s'";
 auto constexpr TRAIT_REDECLARED_FINAL_METHOD=
@@ -117,9 +120,14 @@ auto constexpr HACKARR_COMPAT_DICT_IS_DARR = "is_darray() called on dict";
 auto constexpr FUNCTION_CALLED_DYNAMICALLY = "'%s' called dynamically";
 auto constexpr CLASS_CONSTRUCTED_DYNAMICALLY = "'%s' constructed dynamically";
 auto constexpr REIFIED_GENERICS_NOT_GIVEN =
-  "Cannot call a reified function without the reified generics";
+  "Cannot call the reified function '%s' without the reified generics";
 auto constexpr NEW_STATIC_ON_REIFIED_CLASS =
   "Cannot call new static since class %s has reified generics";
+auto constexpr RECORD_NOT_SUPPORTED =
+  "Records are not supported here";
+auto constexpr CALL_ILLFORMED_FUNC =
+  "calling an ill-formed function pointer without resolved "
+  "class/object pointer";
 
 auto constexpr CLSMETH_COMPAT_IS_ARR = "is_array() called on clsmeth";
 auto constexpr CLSMETH_COMPAT_IS_VEC = "is_vec() called on clsmeth";

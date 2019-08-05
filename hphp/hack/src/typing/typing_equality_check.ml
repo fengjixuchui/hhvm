@@ -12,8 +12,7 @@ open Typing_defs
 
 module Env = Typing_env
 module TDef = Typing_tdef
-module N = Nast
-module TAccess = Typing_taccess
+module N = Aast
 module Phase = Typing_phase
 
 (*****************************************************************************)
@@ -22,8 +21,8 @@ module Phase = Typing_phase
 
 let trivial_result_str bop =
   match bop with
-    | Ast.Eqeqeq -> "false"
-    | Ast.Diff2 -> "true"
+    | Ast_defs.Eqeqeq -> "false"
+    | Ast_defs.Diff2 -> "true"
     | _ -> assert false
 
 let trivial_comparison_error env p bop ty1 ty2 trail1 trail2 =
@@ -51,9 +50,11 @@ let rec assert_nontrivial p bop env ty1 ty2 =
   match ty1, ty2 with
   (* Disallow `===` on distinct abstract enum types. *)
   (* Future: consider putting this in typed lint not type checking *)
-  | (_, Tabstract (AKenum e1, None)), (_, Tabstract (AKenum e2, None)) ->
-    if e1=e2 then ()
-    else eq_incompatible_types env p ety1 ety2
+  | (_, Tabstract (AKnewtype (e1, _), Some (_, Tprim N.Tarraykey))),
+    (_, Tabstract (AKnewtype (e2, _), Some (_, Tprim N.Tarraykey)))
+    when Env.is_enum env e1 && Env.is_enum env e2 ->
+     if e1=e2 then ()
+     else eq_incompatible_types env p ety1 ety2
   | _ ->
   match ety1, ety2 with
   | (_, Tprim N.Tnum),               (_, Tprim (N.Tint | N.Tfloat))
@@ -76,7 +77,7 @@ let rec assert_nontrivial p bop env ty1 ty2 =
       assert_nontrivial p bop env ty1 ty2
   | (_, (Terr | Tany | Tnonnull | Tarraykind _ | Tprim _ | Toption _ | Tdynamic
     | Tvar _ | Tfun _ | Tabstract _ | Tclass _ | Ttuple _
-    | Tanon (_, _) | Tunresolved _ | Tobject | Tshape _)
+    | Tanon (_, _) | Tunion _ | Tintersection _ | Tobject | Tshape _ | Tdestructure _)
     ), _ -> ()
 
 let assert_nullable p bop env ty =

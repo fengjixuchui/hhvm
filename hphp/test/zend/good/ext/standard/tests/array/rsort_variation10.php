@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool rsort(array &$array_arg [, int $sort_flags])
  * Description: Sort an array in reverse order
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass rsort() an array containing octal values to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing rsort() : variation ***\n";
 
 // an array containing unsorted octal values
@@ -29,5 +29,4 @@ var_dump(rsort(&$temp_array, SORT_NUMERIC) );
 var_dump($temp_array);
 
 echo "Done";
-?>
-
+}

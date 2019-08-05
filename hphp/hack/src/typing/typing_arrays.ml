@@ -15,14 +15,13 @@ open Type_mapper
 module Env = Typing_env
 module TUtils = Typing_utils
 module Reason = Typing_reason
-module ShapeMap = Nast.ShapeMap
 
-(* Mapper used by update_array* functions. It traverses Tunresolved and
+(* Mapper used by update_array* functions. It traverses Tunion and
  * modifies the type "inside" the Tvars - so it has side effects on the input
  * type (the type variables inside env change)! *)
 class update_array_type_mapper: type_mapper_type = object
   inherit shallow_type_mapper
-  inherit! tunresolved_type_mapper
+  inherit! tunion_type_mapper
   inherit! tvar_substituting_type_mapper
 end
 
@@ -52,7 +51,7 @@ class virtual downcast_tabstract_to_array_type_mapper = object(this)
 end
 
 let union env tyl = match tyl with
-  | [] -> Env.fresh_unresolved_type env Pos.none (* TODO: position *)
+  | [] -> Env.fresh_type env Pos.none (* TODO: position *)
   | ty::tyl' -> List.fold_left_env env tyl' ~init:ty ~f:TUtils.union
 
 let union_keys = union
@@ -74,11 +73,11 @@ let update_array_type p ~is_map env ty =
     method! on_tarraykind_akempty env _ =
       if is_map
       then
-        let env, tk = Env.fresh_unresolved_type env p in
-        let env, tv = Env.fresh_unresolved_type env p in
+        let env, tk = Env.fresh_type env p in
+        let env, tv = Env.fresh_type env p in
         env, (Reason.Rused_as_map p, Tarraykind (AKmap (tk, tv)))
       else
-        let env, tv = Env.fresh_unresolved_type env p in
+        let env, tv = Env.fresh_type env p in
         env, (Reason.Rappend p, Tarraykind (AKvec tv))
 
   end in

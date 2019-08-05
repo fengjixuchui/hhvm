@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool rsort(array &$array_arg [, int $sort_flags])
  * Description: Sort an array in reverse order
  * Source code: ext/standard/array.c
@@ -8,43 +8,43 @@
  * Test functionality of rsort() with objects where properties have different visibilities
  */
 
-echo "*** Testing rsort() : object functionality ***\n";
-
 // class declaration for integer objects
 class for_integer_rsort
 {
-	public $public_class_value;
-	private $private_class_value;
-	protected $protected_class_value;
+    public $public_class_value;
+    private $private_class_value;
+    protected $protected_class_value;
 
-	// initializing object member value
-	function __construct($value1, $value2,$value3){
-		$this->public_class_value = $value1;
-		$this->private_class_value = $value2;
-		$this->protected_class_value = $value3;
-	}
+    // initializing object member value
+    function __construct($value1, $value2,$value3){
+        $this->public_class_value = $value1;
+        $this->private_class_value = $value2;
+        $this->protected_class_value = $value3;
+    }
 
 }
 
 // class declaration for string objects
 class for_string_rsort
 {
-	public $public_class_value;
-	private $private_class_value;
-	protected $protected_class_value;
-	// initializing object member value
-	function __construct($value1, $value2,$value3){
-		$this->public_class_value = $value1;
-		$this->private_class_value = $value2;
-		$this->protected_class_value = $value3;
-	}
+    public $public_class_value;
+    private $private_class_value;
+    protected $protected_class_value;
+    // initializing object member value
+    function __construct($value1, $value2,$value3){
+        $this->public_class_value = $value1;
+        $this->private_class_value = $value2;
+        $this->protected_class_value = $value3;
+    }
 
-	// return string value
-	function __tostring() {
-		return (string)$this->value;
-	}
+    // return string value
+    function __tostring() {
+        return (string)$this->value;
+    }
 
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing rsort() : object functionality ***\n";
 
 // array of integer objects
 
@@ -88,5 +88,4 @@ var_dump(rsort(&$temp_array, SORT_REGULAR) );
 var_dump($temp_array);
 
 echo "Done";
-?>
-
+}

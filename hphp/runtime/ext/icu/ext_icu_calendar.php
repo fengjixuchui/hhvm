@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 <<__NativeData("IntlCalendar")>>
 class IntlCalendar {
@@ -38,7 +38,7 @@ class IntlCalendar {
    *   intl_get_error_code() to detect error conditions.
    */
   <<__Native>>
-  function before(IntlCalendar $other): bool;
+  public function before(IntlCalendar $other): bool;
 
   /**
    * Clear a field or all fields
@@ -112,7 +112,7 @@ class IntlCalendar {
     if (!($dateTime is DateTime)) {
       $dateTime = new DateTime($dateTime);
     }
-    if (empty($locale)) {
+    if (!($locale ?? false)) {
       $locale = ini_get("intl.default_locale");
     }
     $cal = IntlCalendar::createInstance($dateTime->getTimeZone(), $locale);

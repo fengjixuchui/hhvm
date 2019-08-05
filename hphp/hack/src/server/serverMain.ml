@@ -30,22 +30,21 @@ module MainInit : sig
   val go:
     genv ->
     ServerArgs.options ->
-    string ->
     (unit -> env) ->    (* init function to run while we have init lock *)
     env
 end = struct
   (* This code is only executed when the options --check is NOT present *)
-  let go genv options init_id init_fun =
+  let go genv options init_fun =
     let root = ServerArgs.root options in
     let t = Unix.gettimeofday () in
     Hh_logger.log "Initializing Server (This might take some time)";
     (* note: we only run periodical tasks on the root, not extras *)
-    ServerIdle.init genv root;
-    Hh_logger.log "Init id: %s" init_id;
-    let env = HackEventLogger.with_id ~stage:`Init init_id init_fun in
+    let env = init_fun () in
     Hh_logger.log "Server is partially ready";
+    ServerIdle.init genv env.local_symbol_table root;
     let t' = Unix.gettimeofday () in
     Hh_logger.log "Took %f seconds." (t' -. t);
+    HackEventLogger.server_is_partially_ready ();
 
     env
 end
@@ -65,13 +64,26 @@ module Program =
              Exit_status.exit Exit_status.Server_shutting_down
            )))
 
-    let run_once_and_exit genv env (edges_added: int option) =
+    let run_once_and_exit
+      genv
+      env
+      (save_state_result: SaveStateServiceTypes.save_state_result option)
+    =
+      let last_recheck_info = env.ServerEnv.last_recheck_info in
+      let recheck_stats = match last_recheck_info with
+        | None -> None
+        | Some info -> Some { ServerCommandTypes.Recheck_stats.
+          id = info.recheck_id;
+          time = info.recheck_time;
+        }
+      in
       ServerError.print_error_list
         stdout
         ~stale_msg:None
         ~output_json:(ServerArgs.json_mode genv.options)
         ~error_list:(List.map (Errors.get_error_list env.errorl) Errors.to_absolute)
-        ~edges_added;
+        ~save_state_result
+        ~recheck_stats;
 
       WorkerController.killall ();
 
@@ -121,6 +133,7 @@ let finalize_init init_env =
   Hh_logger.log "Heap size: %d" (SharedMem.heap_size ());
   Hh_logger.log "Server is READY";
   Hh_logger.log "Took %f seconds to initialize." (t' -. init_env.init_start_t);
+  HackEventLogger.server_is_ready ();
   ServerProgress.send_to_monitor (MonitorRpc.PROGRESS_WARNING None)
 
 let shutdown_persistent_client client env  =
@@ -210,7 +223,7 @@ let handle_connection_ genv env client =
       if Option.is_some env.persistent_client
         (* Cleaning up after existing client (in shutdown_persistent_client)
          * will attempt to write to shared memory *)
-        then ServerUtils.Needs_writes (env, f, true)
+        then ServerUtils.Needs_writes (env, f, true, "Cleaning up persistent client")
         else ServerUtils.Done (f env)
     | Non_persistent ->
       ServerCommand.handle genv env client
@@ -239,20 +252,22 @@ let handle_persistent_connection_try return client env f =
   | Sys_error("Broken pipe")
   | ServerCommandTypes.Read_command_timeout
   | ServerClientProvider.Client_went_away ->
-    return env (shutdown_persistent_client client) ~needs_writes:true
+    return env (shutdown_persistent_client client) ~needs_writes:(Some "Client_went_away")
   | ServerCommand.Nonfatal_rpc_exception (e, stack, env) ->
     report_persistent_exception ~e ~stack ~client ~is_fatal:false;
-    return env (fun env -> env) ~needs_writes:false
+    return env (fun env -> env) ~needs_writes:None
   | e ->
     let stack = Printexc.get_backtrace () in
     report_persistent_exception ~e ~stack ~client ~is_fatal:true;
-    return env (shutdown_persistent_client client) ~needs_writes:true
+    let needs_writes = (Some (Caml.Printexc.to_string e ^ "\n" ^ stack)) in
+    return env (shutdown_persistent_client client) ~needs_writes
 [@@@warning "+52"] (* CARE! scope of suppression should be only handle_persistent_connection_try *)
 
 let handle_persistent_connection_ genv env client =
   let return env f ~needs_writes =
-    if needs_writes then ServerUtils.Needs_writes (env, f, true)
-    else ServerUtils.Done (f env)
+    match needs_writes with
+    | Some reason -> ServerUtils.Needs_writes (env, f, true, reason)
+    | None -> ServerUtils.Done (f env)
   in
   handle_persistent_connection_try return client env
       @@ fun () ->
@@ -363,11 +378,17 @@ let rec recheck_loop acc genv env new_client has_persistent_connection_request =
       * 60/200 = 0.3 *)
      t -. env.last_command_time > 0.3 in
 
-  let env = if Relative_path.Set.is_empty updates then env else { env with
-    disk_needs_parsing = Relative_path.Set.union updates env.disk_needs_parsing;
-    (* saving any file is our trigger to start full recheck *)
-    full_check = Full_check_started;
-  } in
+  (* saving any file is our trigger to start full recheck *)
+  let env = if Relative_path.Set.is_empty updates then
+    env
+  else begin
+    let disk_needs_parsing = Relative_path.Set.union updates env.disk_needs_parsing in
+    if env.paused then
+      let () = Hh_logger.log "Skipping full check due to `hh --pause`" in
+      { env with disk_needs_parsing; full_check = Full_check_needed; }
+    else
+      { env with disk_needs_parsing; full_check = Full_check_started; }
+  end in
 
   let env = match env.default_client_pending_command_needs_full_check with
     (* We need to auto-restart the recheck to make progress towards handling
@@ -418,8 +439,7 @@ let rec recheck_loop acc genv env new_client has_persistent_connection_request =
     in
     let env, res = recheck genv env check_kind in
 
-    let acc = {
-      updates_stale = acc.updates_stale;
+    let acc = { acc with
       rechecked_batches = acc.rechecked_batches + 1;
       rechecked_count = acc.rechecked_count + res.ServerTypeCheck.reparse_count;
       total_rechecked_count = acc.total_rechecked_count + res.ServerTypeCheck.total_rechecked_count;
@@ -439,9 +459,9 @@ let rec recheck_loop acc genv env new_client has_persistent_connection_request =
   end
 
 let recheck_loop genv env client has_persistent_connection_request =
-    let stats, env = recheck_loop empty_recheck_loop_stats genv env client
-      has_persistent_connection_request in
-    { env with recent_recheck_loop_stats = stats }
+  let stats, env = recheck_loop empty_recheck_loop_stats genv env client
+    has_persistent_connection_request in
+  { env with recent_recheck_loop_stats = stats }
 
 let new_serve_iteration_id () =
   Random_id.short_string ()
@@ -470,15 +490,43 @@ let main_loop_command_handler client_kind client result  =
         persistent_client_pending_command_needs_full_check = Some (f, reason)
       }
     end
-  | ServerUtils.Needs_writes (env, f, _) -> f env
+  | ServerUtils.Needs_writes (env, f, _, _) -> f env
 
 let has_pending_disk_changes genv =
   match genv.notifier_async_reader () with
   | Some reader when Buffered_line_reader.is_readable reader -> true
   | _ -> false
 
+let update_recheck_values env start_t recheck_id =
+  let end_t = Unix.gettimeofday () in
+  let recheck_time = end_t -. start_t in
+  let stats = env.recent_recheck_loop_stats in
+
+  match stats.total_rechecked_count with
+  | 0 -> env
+  | _ ->
+    HackEventLogger.recheck_end recheck_time
+      stats.rechecked_batches
+      stats.rechecked_count
+      stats.total_rechecked_count;
+
+    Hh_logger.log "Recheck id: %s" recheck_id;
+    { env with
+      last_recheck_info = Some {
+        stats;
+        recheck_id;
+        recheck_time;
+      };
+    }
+
 let serve_one_iteration genv env client_provider =
   let recheck_id = new_serve_iteration_id () in
+  let env = { env with
+    ServerEnv.init_env = { env.ServerEnv.init_env with
+      ServerEnv.recheck_id = Some recheck_id;
+    }
+  }
+  in
   ServerMonitorUtils.exit_if_parent_dead ();
   ServerProgress.send_to_monitor (MonitorRpc.PROGRESS None);
   let has_default_client_pending =
@@ -534,40 +582,47 @@ let serve_one_iteration genv env client_provider =
   (* We'll first do "recheck_loop" to handle all outstanding changes, so that *)
   (* after that we'll be able to give an up-to-date answer to the client. *)
   let env = recheck_loop genv env client has_persistent_connection_request in
-  let stats = env.recent_recheck_loop_stats in
-  if stats.total_rechecked_count > 0 then begin
-    HackEventLogger.recheck_end start_t
-      stats.rechecked_batches
-      stats.rechecked_count
-      stats.total_rechecked_count;
-    Hh_logger.log "Recheck id: %s" recheck_id;
-  end;
+  let env = update_recheck_values env start_t recheck_id in
 
-  let env = Option.value_map env.diag_subscribe
-      ~default:env
-      ~f:begin fun sub ->
+  (* if actual work was done, log whether anything got communicated to client *)
+  let log_diagnostics = env.recent_recheck_loop_stats.total_rechecked_count > 0 in
 
+  let env = match env.diag_subscribe with
+  | None ->
+    if log_diagnostics then Hh_logger.log "Finished recheck_loop; no diag subscriptions";
+    env
+  | Some sub -> begin
     let client = Utils.unsafe_opt env.persistent_client in
     (* We possibly just did a lot of work. Check the client again to see
      * that we are still idle before proceeding to send diagnostics *)
-    if ClientProvider.client_has_message client then env else
-    (* We processed some edits but didn't recheck them yet. *)
-    if not @@ Relative_path.Set.is_empty env.ide_needs_parsing then env else
-    if has_pending_disk_changes genv then env else
-
-    let sub, errors = Diagnostic_subscription.pop_errors sub env.errorl in
-
-    if not @@ SMap.is_empty errors then begin
-      let id = Diagnostic_subscription.get_id sub in
-      let res = ServerCommandTypes.DIAGNOSTIC (id, errors) in
-      try
-        ClientProvider.send_push_message_to_client client res
-      with ClientProvider.Client_went_away ->
-        (* Leaving cleanup of this condition to handled_connection function *)
-        ()
-    end;
-    { env with diag_subscribe = Some sub }
-  end in
+    if ClientProvider.client_has_message client then begin
+      if log_diagnostics then Hh_logger.log "Finished recheck_loop; client has message";
+      env
+    end else if not @@ Relative_path.Set.is_empty env.ide_needs_parsing then begin
+      (* We processed some edits but didn't recheck them yet. *)
+      if log_diagnostics then Hh_logger.log "Finished recheck_loop; ide_needs_parsing";
+      env
+    end else if has_pending_disk_changes genv then begin
+      if log_diagnostics then Hh_logger.log "Finished recheck_loop; has_pending_disk_changes";
+      env
+    end else begin
+      let sub, errors = Diagnostic_subscription.pop_errors sub env.errorl in
+      if SMap.is_empty errors then begin
+        if log_diagnostics then Hh_logger.log "Finished recheck_loop; is_empty errors";
+      end else begin
+        let id = Diagnostic_subscription.get_id sub in
+        let res = ServerCommandTypes.DIAGNOSTIC (id, errors) in
+        try
+          Hh_logger.log "Finished recheck_loop; sending push message";
+          ClientProvider.send_push_message_to_client client res
+        with ClientProvider.Client_went_away ->
+          (* Leaving cleanup of this condition to handled_connection function *)
+          Hh_logger.log "Finished recheck_loop; Client_went_away"
+      end;
+      { env with diag_subscribe = Some sub }
+      end
+    end
+  in
 
   let env = match client with
   | None -> env
@@ -694,10 +749,10 @@ let priority_client_interrupt_handler genv client_provider env =
      * sleep_and_check. *)
     | None -> env
     | Some client -> match handle_connection genv env client `Non_persistent with
-      | ServerUtils.Needs_full_recheck _ ->
-        failwith "unexpected command needing full recheck in priority channel"
-      | ServerUtils.Needs_writes _ ->
-        failwith "unexpected command needing writes in priority channel"
+      | ServerUtils.Needs_full_recheck (_, _, reason) ->
+        failwith ("unexpected command needing full recheck in priority channel: " ^ reason)
+      | ServerUtils.Needs_writes (_, _, _, reason) ->
+        failwith ("unexpected command needing writes in priority channel: " ^ reason)
       | ServerUtils.Done env -> env
   in
   env, MultiThreadedCall.Continue
@@ -717,7 +772,7 @@ let persistent_client_interrupt_handler genv env =
         persistent_client_pending_command_needs_full_check = Some (f, reason)
       },
       MultiThreadedCall.Continue
-    | ServerUtils.Needs_writes (env, f, should_restart_recheck) ->
+    | ServerUtils.Needs_writes (env, f, should_restart_recheck, _) ->
       let full_check = match env.full_check with
         | Full_check_started when not should_restart_recheck ->
             Full_check_needed
@@ -789,40 +844,66 @@ let serve genv env in_fds =
  * 7. If "hh_server --load_state_canary", then load it! but by commit hash rather than public svn
  * 8. Otherwise, load it normally!
  *)
-let resolve_init_approach genv =
-  if not genv.local_config.ServerLocalConfig.use_saved_state then
-    None, "Local_config_saved_state_disabled"
+let resolve_init_approach genv: ServerInit.init_approach * string =
+  match genv.local_config.ServerLocalConfig.remote_worker_key,
+        genv.local_config.ServerLocalConfig.remote_check_id with
+  | Some worker_key, Some check_id ->
+    let remote_init = ServerInit.{ worker_key; check_id; } in
+    (ServerInit.Remote_init remote_init), "Server_args_remote_worker"
+  | Some worker_key, None ->
+    let check_id = Random_id.short_string () in
+    let remote_init = ServerInit.{ worker_key; check_id; } in
+    (ServerInit.Remote_init remote_init), "Server_args_remote_worker"
+  | None, Some check_id ->
+    failwith (Printf.sprintf
+      "Remote check ID is specified (%s), but the remote worker ID is not"
+      check_id)
+  | None, None -> begin
+  if ServerArgs.save_naming_filename genv.options <> None
+      && ServerArgs.save_filename genv.options = None then
+    ServerInit.Parse_only_init, "Server_args_saving_naming"
+  else if not genv.local_config.ServerLocalConfig.use_saved_state then
+    ServerInit.Full_init, "Local_config_saved_state_disabled"
   else if ServerArgs.no_load genv.options then
-    None, "Server_args_no_load"
+    ServerInit.Full_init, "Server_args_no_load"
   else if ServerArgs.save_filename genv.options <> None then
-    None, "Server_args_saving_state"
+    ServerInit.Full_init, "Server_args_saving_state"
+  else if ServerArgs.write_symbol_info genv.options <> None then
+    ServerInit.Write_symbol_info, "Server_args_writing_symbol_info"
   else
     match
       (genv.local_config.ServerLocalConfig.load_state_natively),
       (ServerArgs.with_saved_state genv.options) with
       | _, Some (ServerArgs.Informant_induced_saved_state_target target) ->
-        Some (ServerInit.Load_state_natively_with_target target), "Load_state_natively_with_target"
+        ServerInit.Saved_state_init (ServerInit.Load_state_natively_with_target target),
+        "Load_state_natively_with_target"
       | _, Some (ServerArgs.Saved_state_target_info target) ->
-        Some (ServerInit.Precomputed target), "Precomputed"
+        ServerInit.Saved_state_init (ServerInit.Precomputed target),
+        "Precomputed"
       | false, None ->
-        None, "No_native_loading_or_precomputed"
+        ServerInit.Full_init,
+        "No_native_loading_or_precomputed"
       | true, None ->
         (** Use native loading only if the config specifies a load script,
          * and the local config prefers native. *)
         let use_canary = ServerArgs.load_state_canary genv.options in
-        Some (ServerInit.Load_state_natively use_canary), "Load_state_natively"
+        ServerInit.Saved_state_init (ServerInit.Load_state_natively use_canary),
+        "Load_state_natively"
+  end
 
-let program_init genv =
-  let load_state_approach, approach_name = resolve_init_approach genv in
+let program_init genv env =
+  Hh_logger.log "Init id: %s" env.init_env.init_id;
+  let init_approach, approach_name = resolve_init_approach genv in
   Hh_logger.log "Initing with approach: %s" approach_name;
   let env, init_type, init_error, state_distance =
-    match load_state_approach with
-    | None ->
-      let env, _ = ServerInit.init genv in
-      env, "fresh", None, None
-    | Some load_state_approach ->
-      let env, init_result = ServerInit.init ~load_state_approach genv in
-      begin match init_result with
+    let env, init_result = ServerInit.init ~init_approach genv env in
+    match init_approach with
+    | ServerInit.Remote_init _ -> env, "remote", None, None
+    | ServerInit.Write_symbol_info
+    | ServerInit.Full_init -> env, "fresh", None, None
+    | ServerInit.Parse_only_init -> env, "parse-only", None, None
+    | ServerInit.Saved_state_init _ -> begin
+      match init_result with
         | ServerInit.Load_state_succeeded distance -> env, "state_load", None, distance
         | ServerInit.Load_state_failed err -> env, "state_load_failed", Some err, None
         | ServerInit.Load_state_declined reason -> env, "state_load_declined", Some reason, None
@@ -869,10 +950,12 @@ let num_workers options local_config =
     end
 
 let setup_server ~informant_managed ~monitor_pid options config local_config =
-  let num_workers = num_workers options local_config in
+  let num_workers =
+    num_workers options local_config |> Ai.modify_worker_count
+  in
   let handle = SharedMem.init ~num_workers (ServerConfig.sharedmem_config config) in
   let init_id = Random_id.short_string () in
-  Hh_logger.log "Version: %s" Build_id.build_id_ohai;
+  Hh_logger.log "Version: %s" Hh_version.version;
   Hh_logger.log "Hostname: %s" (Unix.gethostname ());
   let root = ServerArgs.root options in
   ServerDynamicView.toggle := ServerArgs.dynamic_view options;
@@ -891,38 +974,67 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
     interrupt_on_client;
     predeclare_ide;
     max_typechecker_worker_memory_mb;
+    rust;
     _
   } = local_config in
   List.iter (ServerConfig.ignored_paths config) ~f:FilesToIgnore.ignore_path;
   List.iter (ServerConfig.coroutine_whitelist_paths config)
     ~f:Coroutine_check.whitelist_path;
   let prechecked_files = ServerPrecheckedFiles.should_use options local_config in
-  let logging_init init_id =
+  let logging_init init_id ~is_worker =
+    (* It's OK to unconditionally initialize profile logging; actual logging to
+        Scuba will only occur if we were started with --profile-log *)
+    let profile_threshold =
+      local_config.ServerLocalConfig.profile_type_check_duration_threshold
+    in
+    TypingLogger.ProfileTypeCheck.init ~threshold:profile_threshold ~root:(Path.to_string root);
     if Sys_utils.is_test_mode ()
     then EventLogger.init ~exit_on_parent_exit EventLogger.Event_logger_fake 0.0
-    else HackEventLogger.init
-      ~exit_on_parent_exit
-      ~root
-      ~init_id
-      ~informant_managed
-      ~time:(Unix.gettimeofday ())
-      ~search_chunk_size
-      ~max_workers:num_workers
-      ~max_bucket_size
-      ~use_full_fidelity_parser
-      ~interrupt_on_watchman
-      ~interrupt_on_client
-      ~prechecked_files
-      ~predeclare_ide
-      ~max_typechecker_worker_memory_mb
+    else begin
+      if is_worker then HackEventLogger.init_worker
+        ~exit_on_parent_exit ~root ~init_id ~time:(Unix.gettimeofday ())
+      else HackEventLogger.init
+        ~exit_on_parent_exit
+        ~root
+        ~init_id
+        ~informant_managed
+        ~time:(Unix.gettimeofday ())
+        ~search_chunk_size
+        ~max_workers:num_workers
+        ~max_bucket_size
+        ~use_full_fidelity_parser
+        ~interrupt_on_watchman
+        ~interrupt_on_client
+        ~prechecked_files
+        ~predeclare_ide
+        ~max_typechecker_worker_memory_mb
+    end
   in
-  logging_init init_id;
+  logging_init init_id ~is_worker:false;
+  HackEventLogger.init_start ();
   let root_s = Path.to_string root in
   let check_mode = ServerArgs.check_mode options in
   if not check_mode && Sys_utils.is_nfs root_s && not enable_on_nfs then begin
     Hh_logger.log "Refusing to run on %s: root is on NFS!" root_s;
     HackEventLogger.nfs_root ();
     Exit_status.(exit Nfs_root);
+  end;
+
+  if rust && ServerConfig.warn_on_non_opt_build config && (not Build_id.is_build_optimized) then
+  begin
+    let msg = (Printf.sprintf
+      "hh_server binary was built in \"%s\" mode, " Build_id.build_mode) ^
+      "is running with Rust version of parser enabled, " ^
+      "and this repository's .hhconfig specifies warn_on_non_opt_build option. " ^
+      "Parsing with non-opt build will take significantly longer"
+    in
+    if ServerArgs.allow_non_opt_build options then begin
+      Hh_logger.log "Warning: %s. Initializing anyway due to --allow-non-opt-build option." msg
+    end else begin
+      Hh_logger.log "Error: %s. Recompile the server in opt or dbgo mode, or pass \
+      --allow-non-opt-build to continue anyway." msg;
+      Exit_status.(exit Build_error);
+    end
   end;
 
   Program.preinit ();
@@ -937,35 +1049,65 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
   (* Make a sub-init_id because we use it to name temporary files for piping to
      scuba logging processes. *)
   let worker_logging_init =
-    if (ServerConfig.sharedmem_config config).SharedMem.sample_rate = 0.0
-    then fun () -> ()
-    else fun () -> logging_init (init_id ^ "." ^ Random_id.short_string ()) in
+    fun () -> logging_init (init_id ^ "." ^ Random_id.short_string ()) ~is_worker:true
+  in
   let workers =
     let gc_control = ServerConfig.gc_control config in
     ServerWorker.make ~nbr_procs:num_workers gc_control handle ~logging_init:worker_logging_init
+  in
+  let lru_cache_directory = ServerArgs.lru_cache_directory options in
+  let lru_host_env =
+    match lru_cache_directory with
+    | Some cache_dir_path ->
+      Provider_config.set_lru_shared_memory_backend();
+      let host_env =
+        Shared_lru.init
+          ~cache_name:"hack_server_lru"
+          ~cache_size_in_bytes:(10 * 1024 * 1024 * 1024) (* 10 GBs *)
+          ~cache_dir_path
+          ~num_workers
+          ~shm_handle:(Some handle)
+      in
+      Some(host_env)
+    | None -> None
   in
   let genv = ServerEnvBuild.make_genv
     options
     config
     local_config
     workers
+    lru_host_env
   in
-  genv, init_id
+  genv, (ServerEnvBuild.make_env genv.config ~init_id)
 
 let run_once options config local_config =
-  let genv, _ = setup_server options config local_config
+  let genv, env = setup_server options config local_config
     ~informant_managed:false ~monitor_pid:None in
   if not (ServerArgs.check_mode genv.options) then
     (Hh_logger.log "ServerMain run_once only supported in check mode.";
     Exit_status.(exit Input_error));
-  let env = program_init genv in
-  let edges_added =
-    match (ServerArgs.save_filename genv.options) with
-    | None -> None
-    | Some filename -> ServerInit.save_state genv env filename
+
+  (* The type-checking happens here *)
+  let env = program_init genv env in
+
+  (* All of saving state happens here *)
+  let env, save_state_results =
+    match (ServerArgs.save_filename genv.options), (ServerArgs.save_with_spec genv.options) with
+    | None, None -> env, None
+    | Some filename, None -> env, ServerInit.save_state genv env filename
+    | None, Some (spec: ServerArgs.save_state_spec_info) ->
+      env, ServerInit.save_state genv env spec.ServerArgs.filename
+    | Some _, Some _ -> failwith "Saved state file name is specified in two different ways!"
   in
+  let _naming_table_rows_changed =
+    match (ServerArgs.save_naming_filename genv.options) with
+    | None -> None
+    | Some filename -> Some (Naming_table.save env.naming_table filename)
+  in
+
+  (* Finish up by generating the output and the exit code *)
   Hh_logger.log "Running in check mode";
-  Program.run_once_and_exit genv env edges_added
+  Program.run_once_and_exit genv env save_state_results
 
 (*
  * The server monitor will pass client connections to this process
@@ -974,12 +1116,13 @@ let run_once options config local_config =
 let daemon_main_exn ~informant_managed options monitor_pid in_fds =
   Printexc.record_backtrace true;
   let config, local_config = ServerConfig.(load filename options) in
-  let genv, init_id = setup_server options config local_config
+  let genv, env = setup_server options config local_config
     ~informant_managed ~monitor_pid:(Some monitor_pid) in
   if ServerArgs.check_mode genv.options then
     (Hh_logger.log "Invalid program args - can't run daemon in check mode.";
     Exit_status.(exit Input_error));
-  let env = MainInit.go genv options init_id (fun () -> program_init genv) in
+  HackEventLogger.with_id ~stage:`Init env.init_env.init_id @@ fun () ->
+  let env = MainInit.go genv options (fun () -> program_init genv env) in
   serve genv env in_fds
 
 let daemon_main
@@ -1001,7 +1144,6 @@ let daemon_main
   ServerUtils.with_exit_on_exception @@ fun () ->
   daemon_main_exn ~informant_managed options monitor_pid
     (default_in_fd, priority_in_fd, force_dormant_start_only_in_fd)
-
 
 let entry =
   Daemon.register_entry_point "ServerMain.daemon_main" daemon_main

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 try {
   $pixel = new ImagickPixel('the-best-color-in-the-world');
@@ -23,15 +23,15 @@ try {
 }
 
 try {
-  $pixel->setColorValue(IMAGICK_COLOR_INVALID, 0);
+  $pixel->setColorValue(IMAGICK_COLOR_INVALID, 0.0);
 } catch (ImagickPixelException $ex) {
   echo "setColorValue\n";
 }
 
 try {
-  $pixel->isPixelSimilar(new ImagickPixelException, 0);
+  $pixel->isPixelSimilar(new ImagickPixelException, 0.0);
 } catch (ImagickPixelException $ex) {
   echo "isPixelSimilar\n";
 }
-?>
-==DONE==
+
+echo "==DONE==\n";

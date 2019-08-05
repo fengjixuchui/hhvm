@@ -1,15 +1,8 @@
 <?hh
 
-if (!apc_fetch('foo')) {
+if (!__hhvm_intrinsics\apc_fetch_no_check('foo')) {
   apc_store('foo', 1);
-  class X {
-    static function foo($i) {
-      $t = new static;
-      $t->bar($i);
-    }
-    function bar($i) { if (!$i) var_dump('here'); }
-  }
-  class Y extends X {}
+  include 'fpushclsmethod-unique-volatile.inc';
 } else {
   apc_store('foo', 0);
 }

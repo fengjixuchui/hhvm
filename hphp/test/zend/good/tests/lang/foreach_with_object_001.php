@@ -1,4 +1,4 @@
-<?php
+<?hh
 class Test {
    public $a = array(1,2,3,4,5); // removed, crash too
    function c() {
@@ -6,10 +6,11 @@ class Test {
    }
 
 }
+<<__EntryPoint>> function main(): void {
 $obj = new Test();
 foreach ($obj->c()->a as $value) {
     print "$value\n";
 }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

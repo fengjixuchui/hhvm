@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $item = array ("one" => 1, "two" => 2, "THREE" => 3, "FOUR" => "four");
 
 /* use 'case' argument other than CASE_LOWER & CASE_UPPER */
@@ -16,4 +16,4 @@ var_dump( array_change_key_case( array("ONE" => 1, "one" => 2, "One" => 3), CASE
 var_dump( array_change_key_case( array("ONE" => 1, "one" => 1, "One" => 2), 5 ) ); 
 
 echo "end\n";
-?>
+}

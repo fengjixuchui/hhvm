@@ -1,4 +1,4 @@
-<?php
+<?hh
 function do_translit($st) {
     $replacement = array(
         "й"=>"i","ц"=>"c","у"=>"u","к"=>"k","е"=>"e","н"=>"n",
@@ -23,4 +23,3 @@ function do_translit($st) {
 
 mb_regex_encoding('ISO-8859-1');
 echo do_translit("Пеар");
-?>

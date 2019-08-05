@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : array array_chunk(array $array, int $size [, bool $preserve_keys])
  * Description: Split array into chunks
  *              Chunks an array into size  large chunks.
  * Source code: ext/standard/array.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_chunk() : basic functionality ***\n";
 $size = 2;
 
@@ -34,5 +34,5 @@ foreach ($input_arrays as $input_array){
   $count++;
 }
 
-echo "Done"
-?>
+echo "Done";
+}

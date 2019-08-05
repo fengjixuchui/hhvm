@@ -19,6 +19,8 @@
 #include "hphp/runtime/vm/jit/vasm.h"
 #include "hphp/runtime/vm/jit/irlower.h"
 
+#include "hphp/runtime/base/runtime-option.h"
+
 namespace HPHP { namespace jit {
 namespace {
 
@@ -51,13 +53,33 @@ Vcost instrSize(const Vunit& u, AreaIndex area, Vinstr inst) {
 Vcost computeVunitCost(const Vunit& unit) {
   int cost = 0;
   bool incomplete = false;
-  for (auto const& block : unit.blocks) {
+
+  auto const process = [&] (const Vblock& block) {
+    auto const factor = [&] {
+      switch (block.area_idx) {
+        case AreaIndex::Main:
+          return RuntimeOption::EvalHHIRInliningCostFactorMain;
+        case AreaIndex::Cold:
+          return RuntimeOption::EvalHHIRInliningCostFactorCold;
+        case AreaIndex::Frozen:
+          return RuntimeOption::EvalHHIRInliningCostFactorFrozen;
+      }
+      not_reached();
+    }();
+
     for (auto const& instr : block.code) {
       auto info = instrSize(unit, block.area_idx, instr);
-      cost += info.cost;
+      cost += info.cost * factor;
       incomplete |= info.incomplete;
     }
+  };
+
+  if (RuntimeOption::EvalHHIRInliningUseReachableCost) {
+    for (auto const b : sortBlocks(unit)) process(unit.blocks[b]);
+  } else {
+    for (auto const& b : unit.blocks) process(b);
   }
+
   return {cost, incomplete};
 }
 

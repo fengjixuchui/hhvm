@@ -17,8 +17,8 @@ function no_warn() {
   var_dump((Set {13, '013'})->toArray());
 }
 
-function main() {
-  echo "WARN\n";
+<<__EntryPoint>> function main(): void {
+  echo "ALSO DON'T WARN\n";
   echo "-------------\n\n";
   should_warn();
   echo "\n";
@@ -26,5 +26,3 @@ function main() {
   echo "-------------\n\n";
   no_warn();
 }
-
-main();

@@ -1,13 +1,13 @@
-<?php
+<?hh
 
 class ExampleClass {}
 
 abstract class TestInterface {
-	abstract public function __construct(ExampleClass $var);
+    abstract public function __construct(ExampleClass $var);
 }
 
 class Test extends TestInterface {
-	public function __construct() {}
+    public function __construct() {}
 }
 
-?>
+<<__EntryPoint>> function main(): void {}

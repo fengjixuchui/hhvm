@@ -1,15 +1,11 @@
-<?php
+<?hh
 class Test{
-    public static function __callStatic($method, $arguments)
-	{
-        echo $method . PHP_EOL;
-    }
-    public function __call($method, $arguments) 
-	{
+    public function __call($method, $arguments)
+    {
         echo $method . PHP_EOL;
     }
 }
-
+<<__EntryPoint>> function main(): void {
 $method = 'method';
 
 $test = new Test();
@@ -17,7 +13,4 @@ $test = new Test();
 $test->method();
 $test->$method();
 $test->{'method'}();
-
-Test::method();
-Test::$method();
-Test::{'method'}();
+}

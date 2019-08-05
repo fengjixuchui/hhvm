@@ -1,10 +1,10 @@
-<?php
+<?hh
 
-abstract class abc { 
+abstract class abc {
 }
 
 class A {
-	use abc;
+    use abc;
 }
 
-?>
+<<__EntryPoint>> function main(): void {}

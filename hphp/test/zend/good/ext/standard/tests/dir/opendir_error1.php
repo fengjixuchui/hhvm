@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : mixed opendir(string $path[, resource $context])
  * Description: Open a directory and return a dir_handle 
  * Source code: ext/standard/dir.c
@@ -7,7 +7,7 @@
 /*
  * Pass incorrect number of arguments to opendir() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing opendir() : error conditions ***\n";
 
 // Zero arguments
@@ -22,10 +22,8 @@ $context = stream_context_create();
 
 $extra_arg = 10;
 try { var_dump( opendir($path, $context, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
-?>
-===DONE===
-<?php error_reporting(0); ?>
-<?php
+echo "===DONE===\n";
+error_reporting(0);
 $path = dirname(__FILE__) . "/opendir_error";
 rmdir($path);
-?>
+}

@@ -1,11 +1,11 @@
-<?php
+<?hh
 function test($magick) {
   print count($magick)."\n";
   foreach ($magick as $k => $v) {
     printf("[%s] %sx%s.%s\n", $k, $v->width, $v->height, $v->format);
   }
 }
-
+<<__EntryPoint>> function main(): void {
 $img = varray[
   'magick:logo',
   __DIR__.'/facebook.png',
@@ -30,3 +30,4 @@ test($magick);
 $magick->setIteratorIndex(4);
 $magick->removeImage();
 test($magick);
+}

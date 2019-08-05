@@ -1,4 +1,4 @@
-<?php 
+<?hh 
 $textascii = 'This is an "example" of using DOM splitText';
 $text = 'This is an ‘example’ of using DOM splitText';
 $start = 30;
@@ -22,4 +22,3 @@ print "Text: $node->textContent\n";
 $matched = $node->splitText($start);
 $matched->splitText($length);
 print "splitText (UTF-8): $matched->textContent\n";
-?>

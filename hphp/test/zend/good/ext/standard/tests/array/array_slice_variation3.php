@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_slice(array $input, int $offset [, int $length [, bool $preserve_keys]])
  * Description: Returns elements specified by offset and length 
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass different data types as $length argument to array_slice to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_slice() : usage variations ***\n";
 
 // Initialise function arguments not being substituted
@@ -75,5 +75,4 @@ foreach($inputs as $input) {
 };
 
 echo "Done";
-?>
-
+}

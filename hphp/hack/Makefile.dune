@@ -1,9 +1,13 @@
 EXTRA_INCLUDE_PATHS=
 EXTRA_LIB_PATHS=
+EXTRA_LINK_OPTS=
 EXTRA_NATIVE_LIBRARIES=
 BYTECODE=
+DUNE_BUILD_DIR=
+CMAKE_BINARY_DIR=
 
 ROOT=$(shell pwd)
+HACK_BIN_DIR="$(CMAKE_BINARY_DIR)/hphp/hack/bin"
 
 ################################################################################
 #                                    Rules                                     #
@@ -13,46 +17,51 @@ ROOT=$(shell pwd)
 
 all: build-hack copy-hack-files
 
+debug: build-hack-debug copy-hack-debug-files
+
 clean:
 	find ./bin -mindepth 1 -not -path ./bin/README -delete
-	rm -f $(ROOT)/src/utils/get_build_id.gen.c
-	rm -f $(ROOT)/src/options/default_buildOptions.ml
 	dune clean
 
-build-hack: _build/default/src/utils/get_build_id.gen.c
+# First argument is the extension to use.
+# Second argument is a suffix for the rules name. Optional
+#
+# The only supported configuration are:
+# 1=exe 2=        (literaly nothing, not even a space)
+# 1=bc 2=-debug
+define build_hack
+$(eval ext := $(if $(filter $(2),-debug),".bc",""))
+build-hack$(2):
 	dune build \
-		src/hh_server.exe \
-		src/hh_client.exe \
-		src/hh_single_type_check.exe \
-		src/hackfmt.exe \
-		src/hh_parse.exe \
-		src/hh_single_compile.exe \
-		src/hh_single_parse.exe
+		src/hh_server.$(1) \
+		src/hh_client.$(1) \
+		src/hh_single_type_check.$(1) \
+		src/hackfmt.$(1) \
+		src/hh_parse.$(1) \
+		src/hh_single_compile.$(1) \
+		src/hh_single_parse.$(1)
 
-_build/default/src/utils/get_build_id.gen.c:
-	cd $(ROOT) && \
-        $(OCAML) -I scripts -w -3 -unsafe-string unix.cma scripts/gen_build_id.ml src/utils/get_build_id.gen.c
+copy-hack$(2)-files: build-hack$(2)
+	mkdir -p "$(HACK_BIN_DIR)"
+	cp "$(DUNE_BUILD_DIR)/default/src/hh_server.$(1)" "$(HACK_BIN_DIR)/hh_server$(ext)"
+	cp "$(DUNE_BUILD_DIR)/default/src/hh_client.$(1)" "$(HACK_BIN_DIR)/hh_client$(ext)"
+	cp "$(DUNE_BUILD_DIR)/default/src/hh_single_type_check.$(1)" "$(HACK_BIN_DIR)/hh_single_type_check$(ext)"
+	cp "$(DUNE_BUILD_DIR)/default/src/hackfmt.$(1)" "$(HACK_BIN_DIR)/hackfmt$(ext)"
+	cp "$(DUNE_BUILD_DIR)/default/src/hh_parse.$(1)" "$(HACK_BIN_DIR)/hh_parse$(ext)"
+	cp "$(DUNE_BUILD_DIR)/default/src/hh_single_compile.$(1)" "$(HACK_BIN_DIR)/hh_single_compile$(ext)"
+	cp "$(DUNE_BUILD_DIR)/default/src/hh_single_parse.$(1)" "$(HACK_BIN_DIR)/hh_single_parse$(ext)"
+endef
 
-copy-hack-files: build-hack
-	mkdir -p bin
-	cp _build/default/src/hh_server.exe ./bin/hh_server
-	cp _build/default/src/hh_client.exe ./bin/hh_client
-	cp _build/default/src/hh_single_type_check.exe ./bin/hh_single_type_check
-	cp _build/default/src/hackfmt.exe ./bin/hackfmt
-	cp _build/default/src/hh_parse.exe ./bin/hh_parse
-	cp _build/default/src/hh_single_compile.exe ./bin/hh_single_compile
-	cp _build/default/src/hh_single_parse.exe ./bin/hh_single_parse
+# Define rules for normal build / debug build
+# The name of the rules is important as it matches what is expected by cmake
+$(eval $(call build_hack,exe,))
+$(eval $(call build_hack,bc,-debug))
+
 
 .PHONY: test do-test
 test: build-hack copy-hack-files
-	${MAKE} do-test
+	$(MAKE) -f Makefile.dune do-test
 
 do-test:
-	python3 ./test/verify.py --program ./bin/hh_single_type_check ./test/autocomplete
-	python3 ./test/verify.py --program ./bin/hh_single_type_check ./test/color
-	python3 ./test/verify.py --program ./bin/hh_single_type_check ./test/colour
-	python3 ./test/verify.py --program ./bin/hh_single_type_check ./test/coverage
-	python3 ./test/verify.py --program ./bin/hh_single_type_check ./test/dumpsymbolinfo
-	python3 ./test/verify.py --program ./bin/hh_single_type_check ./test/dump_inheritance
-	python3 ./test/verify.py --program ./bin/hh_single_type_check ./test/typecheck
-	python3 ./test/integration/runner.py ./bin/hh_server ./bin/hh_client
+	dune runtest
+	# python3 ./test/integration/runner.py ./bin/hh_server ./bin/hh_client

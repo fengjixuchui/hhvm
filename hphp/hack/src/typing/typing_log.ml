@@ -10,8 +10,11 @@
 open Core_kernel
 open Typing_defs
 module Env = Typing_env
-
+module Pr = Typing_print
+module TySet = Typing_set
+open Env
 open Tty
+open Typing_log_value
 
 (*****************************************************************************)
 (* Logging type inference environment                                        *)
@@ -30,7 +33,8 @@ let lnewline () =
       cprint ~out_channel:!out_channel ~color_mode:Color_Auto
         ((Normal White, String.make (2 * !indentLevel) ' ') ::
            List.rev ((Normal White, "\n") :: !logBuffer));
-       accumulatedLength := 0;
+      Out_channel.flush !out_channel;
+      accumulatedLength := 0;
       logBuffer := []
     end
 
@@ -42,192 +46,240 @@ let lprintf c =
     then lnewline ()
     else accumulatedLength := !accumulatedLength + len)
 
+let lnewline_open () =
+  lnewline ();
+  indentLevel := !indentLevel + 1
+
+let lnewline_close () =
+  lnewline ();
+  indentLevel := !indentLevel - 1
+
 let indentEnv ?(color=Normal Yellow) message f =
   lnewline ();
   lprintf color "%s" message;
-  lnewline ();
-  indentLevel := !indentLevel + 1;
+  lnewline_open ();
   f ();
-  lnewline ();
-  indentLevel := !indentLevel - 1
+  lnewline_close ()
 
 (* Most recent environment. We only display diffs *)
 let lastenv =ref (Env.empty TypecheckerOptions.default
   Relative_path.default None)
 let iterations: int Pos.Map.t ref = ref Pos.Map.empty
 
-(* Log all changes to subst *)
-let log_subst_diff oldSubst newSubst =
-  indentEnv (Printf.sprintf
-    "subst(changes; old size = %d; new size = %d; size change = %d)"
-    (IMap.cardinal oldSubst) (IMap.cardinal newSubst)
-    (IMap.cardinal newSubst - IMap.cardinal oldSubst))
-    (fun () ->
-  begin
-    IMap.iter (fun n n' ->
-      match IMap.get n oldSubst with
-      | None ->
-        begin
-          lprintf (Bold Green) "#%d: " n;
-          lprintf (Normal Green) "#%d; " n'
-        end
-      | Some n'' ->
-        if n'=n''
-        then ()
-        else
-          begin
-            lprintf (Bold Green) "#%d: " n';
-            lprintf (Normal Green) "#%d; " n'
-          end
-    ) newSubst;
-    IMap.iter (fun n _n' ->
-      if IMap.mem n newSubst then ()
-      else lprintf (Normal Red) "#%d deleted; " n) oldSubst
-  end)
+let filter_missing l =
+  List.filter_map l
+    (fun (k,v) -> match v with None -> None | Some v -> Some(k,v))
 
-(* Log all changes to tenv *)
-let log_tenv_diff oldEnv newEnv =
-  indentEnv (Printf.sprintf
-    "tenv(changes; old size = %d; new size = %d; size change = %d)"
-    (IMap.cardinal oldEnv.Env.tenv) (IMap.cardinal newEnv.Env.tenv)
-    (IMap.cardinal newEnv.Env.tenv - IMap.cardinal oldEnv.Env.tenv))
-    (fun () ->
-  begin
-    IMap.iter (fun n t ->
-      match IMap.get n oldEnv.Env.tenv with
-      | None ->
-        begin
-          lprintf (Bold Green) "#%d: " n;
-          lprintf (Normal Green) "%s; " (Typing_print.full newEnv t)
-        end
-      | Some t' ->
-        if t=t'
-        then ()
-        else
-          begin
-            lprintf (Bold Green) "#%d: " n;
-            lprintf (Normal Green) "%s; " (Typing_print.full newEnv t')
-          end
-    ) newEnv.Env.tenv;
-    IMap.iter (fun n _ ->
-      if IMap.mem n newEnv.Env.tenv then ()
-      else lprintf (Normal Red) "#%d deleted; " n) oldEnv.Env.tenv
-  end)
+(* Universal representation of a delta between values
+ *)
+type delta =
+| Updated of value (* For bools, atoms, lists, replaced sets, replaced maps *)
+| Unchanged
+(* Set has had some elements removed, some added *)
+| Set_delta of { added: SSet.t; removed: SSet.t }
+(* Map has some new keys, some removed keys, and deltas to existing keys.
+ * All other keys assumed to be unchanged.
+ *)
+| Map_delta of { added: value SMap.t; removed: SSet.t; changed: delta SMap.t }
 
-(* Dump the diff between oldEnv and newEnv. TODO: lenv component *)
-let log_env_diff oldEnv newEnv =
-  begin
-    log_subst_diff oldEnv.Env.subst newEnv.Env.subst;
-    log_tenv_diff oldEnv newEnv;
+let rec compute_value_delta (oldval: value) (newval: value): delta =
+  match oldval, newval with
+  | Bool b1, Bool b2 -> if b1=b2 then Unchanged else Updated newval
+  | Atom s1, Atom s2 -> if s1=s2 then Unchanged else Updated newval
+  | Set s1, Set s2 ->
+    let added = SSet.diff s2 s1 in
+    let removed = SSet.diff s1 s2 in
+    if SSet.is_empty added && SSet.is_empty removed
+    then Unchanged
+    else Set_delta {added; removed }
+  | List l1, List l2 ->
+    if l1 = l2 then Unchanged else Updated newval
+  | Map m1, Map m2 ->
+    let removed =
+      SMap.fold (fun i _ s ->
+        match SMap.get i m2 with
+        | None -> SSet.add i s
+        | Some _ -> s) m1 SSet.empty in
+    let added =
+      SMap.fold (fun i v m ->
+        match SMap.get i m1 with
+        | None -> SMap.add i v m
+        | _ -> m) m2 SMap.empty in
+    let changed =
+      SMap.fold (fun i oldx m ->
+        match SMap.get i m2 with
+        | None -> m
+        | Some newx ->
+          match compute_value_delta oldx newx with
+          | Unchanged -> m
+          | d -> SMap.add i d m)
+        m1 SMap.empty in
+    if SSet.is_empty removed && SMap.is_empty added && SMap.is_empty changed
+    then Unchanged
+    else Map_delta { removed; added; changed; }
+    (* Type has changed! *)
+  | _, _ ->
+    Updated newval
+
+let is_leaf_value v =
+  match v with
+  | Atom _ | Bool _ | List _ -> true
+  | Map m when SMap.is_empty m -> true
+  | Set _ -> true
+  | _ -> false
+
+let log_key key =
+  lprintf (Normal Yellow) "%s" key
+
+let log_sset s =
+  match SSet.elements s with
+  | [] -> lprintf (Normal Green) "{}"
+  | [s] -> lprintf (Normal Green) "{%s}" s
+  | s::ss ->
+    lprintf (Normal Green) "{";
+    lprintf (Normal Green) "%s" s;
+    List.iter ss (fun s -> lprintf (Normal Green) ",%s" s);
+    lprintf (Normal Green) "}"
+
+let rec log_value value =
+  match value with
+  | Atom s -> lprintf (Normal Green) "%s" s
+  | Bool b -> lprintf (Normal Green) "%s" (if b then "true" else "false")
+  | List [] -> lprintf (Normal Green) "[]"
+  | List (v::vs) ->
+    lprintf (Normal Green) "[";
+    log_value v;
+    List.iter vs (fun v -> lprintf (Normal Green) ","; log_value v);
+    lprintf (Normal Green) "]"
+  | Map m ->
+    if SMap.is_empty m then lprintf (Normal Green) "{}"
+    else SMap.iter (log_key_value "") m
+  | Set s ->
+    log_sset s
+
+and log_key_value prefix k v =
+  if is_leaf_value v
+  then begin
+    lprintf (Normal Green) "%s" prefix;
+    log_key k;
+    lprintf (Normal Yellow) " ";
+    log_value v;
     lnewline ()
   end
-
-let rec log_type_list env tyl =
-  match tyl with
-    | [] -> ()
-    | [ty] ->
-      lprintf (Normal Green) "%s" (Typing_print.debug env ty)
-    | ty::tyl ->
-      lprintf (Normal Green) "%s, " (Typing_print.debug env ty);
-      log_type_list env tyl
-
-let log_continuation env name cont =
-  indentEnv (Typing_continuations.to_string name) (fun () ->
-    Local_id.Map.iter begin fun id (type_, expr_id) ->
-      lnewline();
-      lprintf (Bold Green) "%s[#%d]: "
-        (Local_id.get_name id) (Local_id.to_int id);
-      lprintf (Normal Green) "%s" (Typing_print.debug env type_);
-      lprintf (Normal Green) " [eid: %s]" (Ident.debug expr_id) end
-    cont)
-
-let log_local_types env =
-  indentEnv "local_types" (fun () ->
-    Typing_continuations.Map.iter
-      (log_continuation env)
-      env.Env.lenv.Env.local_types)
-
-let log_using_vars env =
-  let using_vars = env.Env.lenv.Env.local_using_vars in
-  if not (Local_id.Set.is_empty using_vars) then
-  indentEnv "using_vars" (fun () ->
-    Local_id.Set.iter (fun lvar ->
-      lprintf (Normal Green) "%s " (Local_id.get_name lvar))
-      using_vars)
-
-let log_return_type env =
-  indentEnv "return_type" (fun () ->
-    let Typing_env_return_info.
-      {return_type; return_disposable; return_mutable; return_explicit;
-       return_void_to_rx; } = Env.get_return env in
-    lprintf (Normal Green) "%s%s%s%s%s"
-      (Typing_print.debug env return_type)
-      (if return_disposable then " (disposable)" else "")
-      (if return_mutable then " (mutable_return)" else "")
-      (if return_explicit then " (explicit)" else "")
-      (if return_void_to_rx then " (void_to_rx)" else "")
-  )
-
-let log_tpenv env =
-  let tparams = Env.get_generic_parameters env in
-  if not (List.is_empty tparams) then
-  indentEnv "tpenv" (fun () ->
-    List.iter tparams ~f:begin fun tparam ->
-      let lower = Typing_set.elements (Env.get_lower_bounds env tparam) in
-      let upper = Typing_set.elements (Env.get_upper_bounds env tparam) in
-      lnewline ();
-      (if not (List.is_empty lower)
-      then (log_type_list env lower; lprintf (Normal Green) " <: "));
-      lprintf (Bold Green) "%s" tparam;
-      (if not (List.is_empty upper)
-      then (lprintf (Normal Green) " <: "; log_type_list env upper))
-        end)
-
-let log_tvenv env =
-  indentEnv "tvenv" (fun () ->
-    IMap.iter begin fun var
-      Env.{ lower_bounds; upper_bounds;
-        appears_covariantly; appears_contravariantly; eager_solve_fail; _ } ->
-      let lower = Typing_set.elements lower_bounds in
-      let upper = Typing_set.elements upper_bounds in
-      lnewline ();
-      (if not (List.is_empty lower)
-      then (log_type_list env lower; lprintf (Normal Green) " <: "));
-      lprintf (Bold Green) "%s%s%s#%d"
-        (if eager_solve_fail then "(solve_fail) " else "")
-        (if appears_covariantly then "+" else "")
-        (if appears_contravariantly then "-" else "")
-        var;
-      (if not (List.is_empty upper)
-      then (lprintf (Normal Green) " <: "; log_type_list env upper))
-      end env.Env.tvenv)
-
-let log_tyvars env =
-  indentEnv "tyvars_stack" (fun () ->
-    lprintf (Normal Green) "%s"
-      (String.concat ~sep:"/" (List.map ~f:(fun vars -> "{" ^ String.concat ~sep:","
-        (List.map ~f:(fun i -> Printf.sprintf "#%d" i) vars) ^ "}")
-        env.Env.tyvars_stack)))
-
-let log_fake_members env =
-  let lenv = env.Env.lenv in
-  let fakes = lenv.Env.fake_members in
-  indentEnv "fake_members" (fun () ->
-    (match fakes.Env.last_call with
-    | None -> ()
-    | Some p ->
-      begin
-        lprintf (Normal Green) "last_call: %s" (Pos.string (Pos.to_absolute p));
-        lnewline ()
-      end);
-    lprintf (Normal Green) "invalid:";
-    SSet.iter (lprintf (Normal Green) " %s") fakes.Env.invalid ;
+  else begin
     lnewline ();
-    lprintf (Normal Green) "valid:";
-    SSet.iter (lprintf (Normal Green) " %s") fakes.Env.valid;
-    lnewline ())
+    lprintf (Normal Green) "%s" prefix;
+    log_key k;
+    lnewline_open ();
+    log_value v;
+    lnewline_close ()
+  end
 
-let log_position p f =
+let is_leaf_delta d =
+  match d with
+  | Updated v -> is_leaf_value v
+  (* | Added d | Removed d | Updated d -> is_leaf_delta d*)
+  | _ -> false
+
+let rec log_delta delta =
+  match delta with
+  | Updated v -> log_value v
+  | Unchanged -> ()
+  | Set_delta { added; removed } ->
+    if not (SSet.is_empty added)
+    then begin lprintf (Bold Green) " += "; log_sset added end;
+    if not (SSet.is_empty removed)
+    then begin lprintf (Bold Red) " -= "; log_sset removed end
+  | Map_delta { added; removed; changed } ->
+    SSet.iter (fun k -> lprintf (Bold Red) "-"; log_key k; lnewline ()) removed;
+    SMap.iter (log_key_value "+") added;
+    SMap.iter log_key_delta changed
+
+and log_key_delta k d =
+  if is_leaf_delta d
+  then begin
+    log_key k;
+    lprintf (Normal Yellow) " ";
+    log_delta d;
+    lnewline ()
+  end
+  else begin
+    lnewline ();
+    log_key k;
+    lprintf (Normal Yellow) " ";
+    lnewline_open ();
+    log_delta d;
+    lnewline_close ()
+  end
+
+let type_as_value env ty = Atom (Typing_print.debug env ty)
+
+let return_info_as_value env return_info =
+    let Typing_env_return_info.
+      {return_type; return_type_decl; return_disposable; return_mutable; return_explicit;
+       return_void_to_rx; } = return_info in
+    make_map [
+      "return_type", type_as_value env return_type;
+      "return_type_decl", Option.value_map ~f:(type_as_value env)
+        ~default:(Atom "") return_type_decl;
+      "return_disposable", Bool return_disposable;
+      "return_mutable", Bool return_mutable;
+      "return_explicit", Bool return_explicit;
+      "return_void_to_rx", Bool return_void_to_rx
+    ]
+
+let local_id_map_as_value f m =
+  Map (Local_id.Map.fold (fun id x m ->
+    SMap.add (local_id_as_string id) (f x) m) m SMap.empty)
+
+let reify_kind_as_value k =
+  string_as_value (
+    match k with
+    | Aast.Erased -> "erased"
+    | Aast.SoftReified -> "soft_reified"
+    | Aast.Reified -> "reified")
+
+let tyset_as_value env tys =
+  Set (TySet.fold (fun t s -> SSet.add (Typing_print.debug env t) s) tys SSet.empty)
+
+let tparam_info_as_value env tpinfo =
+  let Type_parameter_env.{
+    lower_bounds;
+    upper_bounds;
+    reified;
+    enforceable;
+    newable;
+  } = tpinfo in
+  make_map [
+    "lower_bounds", tyset_as_value env lower_bounds;
+    "upper_bounds", tyset_as_value env upper_bounds;
+    "reified", reify_kind_as_value reified;
+    "enforceable", bool_as_value enforceable;
+    "newable", bool_as_value newable;
+  ]
+
+let tpenv_as_value env tpenv =
+  Map (SMap.fold (fun name tpinfo m ->
+    SMap.add name (tparam_info_as_value env tpinfo) m) tpenv SMap.empty)
+
+let per_cont_entry_as_value env f entry =
+make_map [
+  "local_types", local_id_map_as_value f (entry.Typing_per_cont_env.local_types);
+  "fake_members", Typing_fake_members.as_log_value entry.Typing_per_cont_env.fake_members;
+  "tpenv", tpenv_as_value env entry.Typing_per_cont_env.tpenv;
+  ]
+
+let continuations_map_as_value f m =
+  Map (Typing_continuations.Map.fold (fun k x m ->
+    SMap.add (Typing_continuations.to_string k) (f x) m) m SMap.empty)
+
+let local_as_value env (ty, _expr_id) =
+  type_as_value env ty
+
+let per_cont_env_as_value env per_cont_env =
+  continuations_map_as_value (per_cont_entry_as_value env (local_as_value env)) per_cont_env
+
+let log_position p ?function_name f =
   let n =
     match Pos.Map.get p !iterations with
     | None -> iterations := Pos.Map.add p 1 !iterations; 1
@@ -236,33 +288,200 @@ let log_position p f =
    * so let's not bother spewing to the log *)
   if n > 10000 then ()
   else
-    indentEnv (Pos.string (Pos.to_absolute p)
-      ^ (if n = 1 then "" else "[" ^ string_of_int n ^ "]")) f
+    indentEnv ~color:(Bold Yellow) (Pos.string (Pos.to_absolute p)
+      ^ (if n = 1 then "" else "[" ^ string_of_int n ^ "]")
+      ^ (match function_name with None -> "" | Some n -> " {" ^ n ^ "}")) f
 
-let log_subtype_prop ?(do_normalize = false) env message prop =
+let log_subtype_prop env message prop =
   lprintf (Tty.Bold Tty.Green) "%s: " message;
   lprintf (Tty.Normal Tty.Green) "%s"
-    (Typing_print.subtype_prop ~do_normalize env prop);
+    (Typing_print.subtype_prop env prop);
   lnewline ()
+
+let tenv_as_value env tenv =
+  Map (IMap.fold (fun i x m ->
+    SMap.add (Printf.sprintf "#%d" i) (Atom (Typing_print.debug env x)) m) tenv SMap.empty)
+
+let subst_as_value subst =
+  Map (IMap.fold (fun i x m ->
+    SMap.add (Printf.sprintf "#%d" i) (Atom (Printf.sprintf "#%d" x)) m) subst SMap.empty)
+
+let tyvar_info_as_value env tvinfo =
+  let {
+    tyvar_pos;
+    eager_solve_fail;
+    appears_covariantly;
+    appears_contravariantly;
+    type_constants;
+    lower_bounds;
+    upper_bounds } = tvinfo in
+  make_map [
+    "tyvar_pos", pos_as_value tyvar_pos;
+    "eager_solve_fail", bool_as_value eager_solve_fail;
+    "appears_covariantly", bool_as_value appears_covariantly;
+    "appears_contravariantly", bool_as_value appears_contravariantly;
+    "lower_bounds", tyset_as_value env lower_bounds;
+    "upper_bounds", tyset_as_value env upper_bounds;
+    "type_constants", smap_as_value (fun (_, ty) -> type_as_value env ty) type_constants;
+  ]
+let tvenv_as_value env tvenv =
+  Map (IMap.fold (fun i x m ->
+    SMap.add (Printf.sprintf "#%d" i) (tyvar_info_as_value env x) m) tvenv SMap.empty)
+let tyvars_stack_as_value tyvars_stack =
+  List (List.map tyvars_stack (fun (_, l) ->
+  List (List.map l (fun i -> Atom (Printf.sprintf "#%d" i)))))
+
+let local_mutability_as_value local_mutability =
+  local_id_map_as_value
+    (fun m -> Atom (Typing_mutability_env.to_string m)) local_mutability
+
+let fun_kind_to_string k =
+  match k with
+  | Ast_defs.FSync -> "normal"
+  | Ast_defs.FAsync -> "async"
+  | Ast_defs.FGenerator -> "generator"
+  | Ast_defs.FAsyncGenerator -> "async generator"
+  | Ast_defs.FCoroutine -> "coroutine"
+
+let val_kind_to_string k =
+  match k with
+  | Other -> "other"
+  | Lval -> "lval"
+  | LvalSubexpr -> "lval subexpression"
+
+let rec reactivity_to_string env r =
+  match r with
+  | Nonreactive -> "nonreactive"
+  | Local opt_ty ->
+    "local" ^ (match opt_ty with None -> "" | Some ty -> " " ^ Typing_print.debug env ty)
+  | Shallow opt_ty ->
+    "shallow" ^ (match opt_ty with None -> "" | Some ty -> " " ^ Typing_print.debug env ty)
+  | Reactive opt_ty ->
+    "reactive" ^ (match opt_ty with None -> "" | Some ty -> " " ^ Typing_print.debug env ty)
+  | MaybeReactive r ->
+    "maybereactive " ^ reactivity_to_string env r
+  | RxVar opt_r ->
+    "rxvar" ^ (match opt_r with None -> "" | Some r -> " " ^ reactivity_to_string env r)
+let lenv_as_value env lenv =
+  let {
+    per_cont_env;
+    local_using_vars;
+    local_reactive;
+    local_mutability
+    } = lenv in
+  make_map [
+    "per_cont_env", per_cont_env_as_value env per_cont_env;
+    "local_mutability", local_mutability_as_value local_mutability;
+    "local_using_vars", local_id_set_as_value local_using_vars;
+    "local_reactive", string_as_value (reactivity_to_string env local_reactive);
+  ]
+
+let subtype_prop_as_value env prop =
+  Atom (Typing_print.subtype_prop env prop)
+
+let param_as_value env (ty, mode) =
+  let ty_str = Typing_print.debug env ty in
+  match mode with
+  | FPnormal -> Atom ty_str
+  | FPinout -> Atom (Printf.sprintf "[inout]%s" ty_str)
+  | FPref -> Atom (Printf.sprintf "[ref]%s" ty_str)
+
+let genv_as_value env genv =
+  let {
+    tcopt = _;
+    return;
+    params;
+    condition_types;
+    parent_id;
+    parent;
+    self_id;
+    self;
+    static;
+    val_kind;
+    fun_kind;
+    fun_mutable;
+    anons = _;
+    file = _;
+  } = genv in
+  make_map ([
+    "return", return_info_as_value env return;
+    "params", local_id_map_as_value (param_as_value env) params;
+    "condition_types", smap_as_value (type_as_value env) condition_types;
+    "parent_id", string_as_value parent_id;
+    "parent", type_as_value env parent;
+    "self_id", string_as_value self_id;
+    "self", type_as_value env self;
+    "static", bool_as_value static;
+    "val_kind", string_as_value (val_kind_to_string val_kind);
+    "fun_kind", string_as_value (fun_kind_to_string fun_kind);
+  ] @
+  match fun_mutable with
+  | None -> []
+  | Some pm -> ["fun_mutable", string_as_value (Pp_type.show_param_mutability pm)]
+  )
+let env_as_value env =
+  let {
+    function_pos;
+    tenv;
+    subst;
+    fresh_typarams;
+    lenv;
+    genv;
+    decl_env = _;
+    in_loop;
+    in_try;
+    in_case;
+    inside_constructor;
+    inside_ppl_class;
+    global_tpenv;
+    subtype_prop;
+    log_levels = _;
+    tvenv;
+    tyvars_stack;
+    allow_wildcards;
+    big_envs = _;
+  } = env in
+  make_map [
+    "function_pos", pos_as_value function_pos;
+    "tvenv", tvenv_as_value env tvenv;
+    "tenv", tenv_as_value env tenv;
+    "subst", subst_as_value subst;
+    "fresh_typarams", Set fresh_typarams;
+    "tyvars_stack", tyvars_stack_as_value tyvars_stack;
+    "lenv", lenv_as_value env lenv;
+    "genv", genv_as_value env genv;
+    "in_loop", bool_as_value in_loop;
+    "in_try", bool_as_value in_try;
+    "in_case", bool_as_value in_case;
+    "inside_constructor", bool_as_value inside_constructor;
+    "inside_ppl_class", bool_as_value inside_ppl_class;
+    "global_tpenv", tpenv_as_value env global_tpenv;
+    "subtype_prop", subtype_prop_as_value env subtype_prop;
+    "allow_wildcards", bool_as_value allow_wildcards;
+  ]
+
+let log_env_diff p ?function_name old_env new_env =
+  let value = env_as_value new_env in
+  let old_value = env_as_value old_env in
+  let d = compute_value_delta old_value value in
+  match d with
+  | Unchanged -> ()
+  | _ ->
+    log_position p ?function_name (fun () -> log_delta d)
 
 (* Log the environment: local_types, subst, tenv and tpenv *)
 let hh_show_env p env =
-  log_position p
-    (fun () ->
-       log_local_types env;
-       log_using_vars env;
-       log_fake_members env;
-       log_return_type env;
-       log_env_diff (!lastenv) env;
-       log_tpenv env;
-       log_tvenv env;
-       log_tyvars env;
-       log_subtype_prop env "subtype_prop" env.Env.subtype_prop);
-  lastenv := env
+  let old_env = !lastenv in
+  lastenv := env;
+  log_env_diff p old_env env
+
+let _ =
+  Env.set_env_log_function (fun pos name old_env env ->
+    log_env_diff pos ~function_name:name old_env env)
 
 (* Log the type of an expression *)
 let hh_show p env ty =
-  let s1 = Typing_print.debug env ty in
+  let s1 = Pr.with_blank_tyvars (fun () -> Pr.debug env ty) in
   let s2_opt = Typing_print.constraints_for_type env ty in
   log_position p
     (fun () ->
@@ -271,7 +490,6 @@ let hh_show p env ty =
        match s2_opt with
        | None -> ()
        | Some s2 -> (lprintf (Normal Green) "%s" s2; lnewline ()))
-
 
 (* Simple type of possible log data *)
 type log_structure =
@@ -297,9 +515,9 @@ let log_types p env items =
             lnewline ()) in
       go items)
 
-let log_prop ?(do_normalize = false) level p message env prop =
+let log_prop level p message env prop =
   log_with_level env "prop" level (fun () ->
-    log_position p (fun () -> log_subtype_prop ~do_normalize env message prop))
+    log_position p (fun () -> log_subtype_prop env message prop))
 
 let log_new_tvar env p tvar message =
   log_with_level env "prop" 2 (fun () ->
@@ -323,6 +541,14 @@ let log_new_tvar_for_tconst_access env p tvar class_name tconst =
   let message = Printf.sprintf "Creating type var with the same constraints as %s::%s"
     class_name tconst in
   log_new_tvar env p tvar message
+
+let log_intersection ~level env r ty1 ty2 ~inter_ty =
+  log_with_level env "inter" level (fun () ->
+    log_types (Reason.to_pos r) env
+      [ Log_head ("Intersecting",
+        [ Log_type ("ty1", ty1);
+          Log_type ("ty2", ty2);
+          Log_type ("intersection", inter_ty) ]) ])
 
 let increment_feature_count env s =
   if GlobalOptions.tco_language_feature_logging (Env.get_tcopt env)

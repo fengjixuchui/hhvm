@@ -137,7 +137,6 @@ inline Type for_const(const Class*)  { return TCls; }
 inline Type for_const(ClsMethDataRef) { return TClsMeth; }
 inline Type for_const(ConstCctx)     { return TCctx; }
 inline Type for_const(TCA)           { return TTCA; }
-
 ///////////////////////////////////////////////////////////////////////////////
 }
 
@@ -331,6 +330,7 @@ inline Type Type::cns(const TypedValue& tv) {
       case KindOfFunc:
       case KindOfClass:
       case KindOfClsMeth:
+      case KindOfRecord:
         always_assert(false && "Invalid KindOf for constant TypedValue");
     }
     not_reached();

@@ -1,14 +1,14 @@
-<?php /* destructor */
+<?hh /* destructor */
 // Copyright 2004-present Facebook. All Rights Reserved.
 
 class Cls {
   function func() { echo "func called\n"; }
-  function intercept1() { return false; }
-  function intercept2() {
+  static function intercept1() { return false; }
+  static function intercept2($a, $b, $c, $d, $e) {
     var_dump(debug_backtrace());
     return false;
   }
-  function intercept3() { throw new Exception("intercept3"); }
+  static function intercept3() { throw new Exception("intercept3"); }
 }
 
 function getCls() { return new Cls; }

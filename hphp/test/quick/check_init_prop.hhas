@@ -1,15 +1,18 @@
+.hh_file 1;
 
 .main {
   DefCls 0
   NewObjD "C"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
+  PopC
+  LockObj
 
   CheckProp "foo"
   InitProp "bar" NonStatic
 
-  PopC
   RetC
 }
 

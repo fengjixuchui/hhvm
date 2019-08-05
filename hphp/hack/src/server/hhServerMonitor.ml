@@ -28,19 +28,12 @@ let make_tmp_dir () =
   let tmpdir = Path.make (Tmp.temp_dir GlobalConfig.tmp_dir "files") in
   Relative_path.set_path_prefix Relative_path.Tmp tmpdir
 
-(* TODO: uses environment variable as backing store, use something else instead *)
-let set_file_info options =
-  match (ServerArgs.file_info_on_disk options, ServerArgs.save_filename options) with
-  | (true, Some filename) -> SharedMem.set_file_info_on_disk_path filename
-  | _ -> SharedMem.set_file_info_on_disk_path ""
-
 (** Main method of the server monitor daemon. The daemon is responsible for
  * listening to socket requests from hh_client, checking Build ID, and relaying
  * requests to the typechecker process. *)
 let monitor_daemon_main (options: ServerArgs.options) ~(proc_stack: string list) =
   let www_root = (ServerArgs.root options) in
   Relative_path.set_path_prefix Relative_path.Root www_root;
-  let () = set_file_info options in
   let () = ServerLoadFlag.set_no_load (ServerArgs.no_load options) in
   let init_id = Random_id.short_string () in
   let config, local_config  =
@@ -83,7 +76,8 @@ let monitor_daemon_main (options: ServerArgs.options) ~(proc_stack: string list)
   if local_config.ServerLocalConfig.use_full_fidelity_parser then
     HackEventLogger.set_use_full_fidelity_parser true;
 
-  HackSearchService.fuzzy := local_config.ServerLocalConfig.enable_fuzzy_search;
+  SymbolIndex.set_fuzzy_search_enabled
+    local_config.ServerLocalConfig.enable_fuzzy_search;
   if ServerArgs.check_mode options then
     ServerMain.run_once options config local_config
   else
@@ -107,7 +101,7 @@ let monitor_daemon_main (options: ServerArgs.options) ~(proc_stack: string list)
     let max_purgatory_clients =
       local_config.ServerLocalConfig.max_purgatory_clients in
     SM.start_monitoring
-      ?current_version
+      ~current_version
       ~waiting_client
       ~max_purgatory_clients
       options informant_options

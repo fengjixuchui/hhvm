@@ -16,6 +16,7 @@
 #include "hphp/util/alloc.h"
 
 #include <atomic>
+#include <mutex>
 
 #include <stdlib.h>
 #include <errno.h>
@@ -34,6 +35,7 @@
 #include "hphp/util/kernel-version.h"
 #include "hphp/util/managed-arena.h"
 #include "hphp/util/numa.h"
+#include "hphp/util/slab-manager.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -42,54 +44,9 @@ void flush_thread_caches() {
 #ifdef USE_JEMALLOC
   mallctlCall<true>("thread.tcache.flush");
 #if USE_JEMALLOC_EXTENT_HOOKS
-  high_arena_tcache_flush();
+  arenas_thread_flush();
 #endif
 #endif
-#ifdef USE_TCMALLOC
-  if (MallocExtensionInstance) {
-    MallocExtensionInstance()->MarkThreadIdle();
-  }
-#endif
-}
-
-bool purge_all(std::string* errStr) {
-#ifdef USE_JEMALLOC
-  assert(mallctlnametomib && mallctlbymib);
-  unsigned allArenas = 0;
-#ifndef MALLCTL_ARENAS_ALL
-  if (mallctlRead<unsigned, true>("arenas.narenas", &allArenas)) {
-    if (errStr) {
-      *errStr = "arenas.narena";
-    }
-    return false;
-  }
-#else
-  allArenas = MALLCTL_ARENAS_ALL;
-#endif
-
-  size_t mib[3];
-  size_t miblen = 3;
-  if (mallctlnametomib("arena.0.purge", mib, &miblen)) {
-    if (errStr) {
-      *errStr = "mallctlnametomib(arena.0.purge)";
-    }
-    return false;
-  }
-
-  mib[1] = allArenas;
-  if (mallctlbymib(mib, miblen, nullptr, nullptr, nullptr, 0)) {
-    if (errStr) {
-      *errStr = "mallctlbymib(arena.all.purge)";
-    }
-    return false;
-  }
-#endif
-#ifdef USE_TCMALLOC
-  if (MallocExtensionInstance) {
-    MallocExtensionInstance()->ReleaseFreeMemory();
-  }
-#endif
-  return true;
 }
 
 __thread int32_t s_numaNode;
@@ -179,7 +136,7 @@ void flush_thread_stack() {
 }
 
 #if !defined USE_JEMALLOC || !defined HAVE_NUMA
-void enable_numa(bool local) {}
+void enable_numa() {}
 void set_numa_binding(int node) {}
 void* mallocx_on_node(size_t size, int node, size_t align) {
   void* ret = nullptr;
@@ -190,9 +147,18 @@ void* mallocx_on_node(size_t size, int node, size_t align) {
 
 #ifdef USE_JEMALLOC
 unsigned low_arena = 0;
+unsigned lower_arena = 0;
+unsigned low_cold_arena = 0;
 unsigned high_arena = 0;
+unsigned high_cold_arena = 0;
+__thread unsigned local_arena = 0;
+
 int low_arena_flags = 0;
+int lower_arena_flags = 0;
+int low_cold_arena_flags = 0;
+int high_cold_arena_flags = 0;
 __thread int high_arena_flags = 0;
+__thread int local_arena_flags = 0;
 
 #if USE_JEMALLOC_EXTENT_HOOKS
 // Keep track of the size of recently freed memory that might be in the high1g
@@ -216,53 +182,19 @@ static std::atomic<bool> jemallocMetadataCanUseHuge(false);
 static void* a0ReservedBase = nullptr;
 static std::atomic<size_t> a0ReservedLeft(0);
 
-// Explicit per-thread tcache for huge arenas.  -1 means no tcache.
+// Explicit per-thread tcache arenas needing it.
 // In jemalloc/include/jemalloc/jemalloc_macros.h.in, we have
 // #define MALLOCX_TCACHE_NONE MALLOCX_TCACHE(-1)
 __thread int high_arena_tcache = -1;
+__thread int local_arena_tcache = -1;
 #endif
+
+static unsigned base_arena;
 
 #ifdef HAVE_NUMA
-static uint32_t base_arena;
-static bool threads_bind_local = false;
 
-void enable_numa(bool local) {
-  if (local) {
-    threads_bind_local = true;
-
-    unsigned arenas;
-    if (mallctlRead<unsigned, true>("arenas.narenas", &arenas) != 0) {
-      return;
-    }
-
-    base_arena = arenas;
-    for (int i = 0; i < numa_num_nodes; i++) {
-      int arena, ret;
-
-#if USE_JEMALLOC_EXTENT_HOOKS
-      if (jemallocMetadataCanUseHuge.load() && enableNumaArenaMetadata1GPage) {
-        size_t size = sizeof(unsigned);
-        extent_hooks_t *hooks = &huge_page_metadata_hooks;
-        ret = mallctl(JEMALLOC_NEW_ARENA_CMD, &arena, &size, &hooks,
-                      sizeof(hooks));
-      } else
-#endif
-      {
-        ret = mallctlRead<int, true>(JEMALLOC_NEW_ARENA_CMD, &arena);
-      }
-
-      if (ret != 0) {
-        return;
-      }
-      if (arena != arenas) {
-        return;
-      }
-      arenas++;
-    }
-  }
-
+void enable_numa() {
   if (numa_available() < 0) return;
-
   /*
    * libnuma is only partially aware of taskset. If on entry,
    * you have completely disabled a node via taskset, the node
@@ -294,23 +226,18 @@ void enable_numa(bool local) {
 }
 
 void set_numa_binding(int node) {
-  if (node < 0) return;
-
+  if (node < 0) return;                 // thread not created from JobQueue
   s_numaNode = node;
+  unsigned arena = base_arena + node;
+  mallctlWrite("thread.arena", arena);
 
   if (use_numa) {
     numa_sched_setaffinity(0, node_to_cpu_mask[node]);
-    if (threads_bind_local) {
-      numa_set_interleave_mask(numa_no_nodes_ptr);
-      bitmask* nodes = numa_allocate_nodemask();
-      numa_bitmask_setbit(nodes, node);
-      numa_set_membind(nodes);
-      numa_bitmask_free(nodes);
-    }
-  }
-  if (threads_bind_local) {
-    int arena = base_arena + node;
-    mallctlWrite("thread.arena", arena);
+    numa_set_interleave_mask(numa_no_nodes_ptr);
+    bitmask* nodes = numa_allocate_nodemask();
+    numa_bitmask_setbit(nodes, node);
+    numa_set_membind(nodes);
+    numa_bitmask_free(nodes);
   }
 }
 
@@ -330,84 +257,130 @@ void* mallocx_on_node(size_t size, int node, size_t align) {
 #endif // HAVE_NUMA
 
 #if USE_JEMALLOC_EXTENT_HOOKS
-static void set_arena_retain_grow_limit(unsigned id) {
-  size_t mib[3];
-  size_t miblen = sizeof(mib) / sizeof(size_t);
-
-  if (mallctlnametomib("arena.0.retain_grow_limit", mib, &miblen) == 0) {
-    // Limit grow_retained to reduce fragmentation on 1g pages.
-    size_t grow_retained_limit = size2m;
-    mib[1] = id;
-    mallctlbymib(mib, miblen, nullptr, nullptr, &grow_retained_limit,
-                 sizeof(grow_retained_limit));
-  }
-}
-
 using namespace alloc;
-static BumpMapper* getHugeMapperWithFallback(unsigned n1GPages,
-                                             bool use2MFallback,
-                                             short nextNode) {
-#ifdef HAVE_NUMA
-  const int max_node = numa_max_node();
-#else
-  constexpr int max_node = 0;
-#endif
-  BumpMapper* mapper = nullptr;
-  BumpMapper* fallback = nullptr;
-  if (max_node < 1) {
-    // We either don't have libnuma, or run on a single-socket CPU.  In either
-    // case, no need to worry about NUMA.
-    fallback = new Bump4KMapper;
-    if (n1GPages) {
-      mapper = new Bump1GMapper(n1GPages);
-    } else if (use2MFallback) {
-      mapper = new Bump2MMapper;
-    }
-#ifdef HAVE_NUMA
-  } else {
-    fallback = new Bump4KMapper(numa_node_set);
-    if (n1GPages) {
-      mapper = new Bump1GMapper(n1GPages, numa_node_set, nextNode);
-    } else {
-      mapper = new Bump2MMapper(numa_node_set);
-    }
-#endif
+static NEVER_INLINE
+RangeMapper* getMapperChain(RangeState& range, unsigned n1GPages,
+                            bool use2MPages, unsigned n2MPages,
+                            bool useNormalPages,
+                            int numaMask, short nextNode) {
+  RangeMapper* head = nullptr;
+  RangeMapper** ptail = &head;
+  if (n1GPages) {
+    RangeMapper::append(ptail,
+                        new Bump1GMapper(range, n1GPages, numaMask, nextNode));
   }
-  if (mapper) {
-    mapper->append(fallback);
-  } else {
-    mapper = fallback;
+  if (use2MPages) {
+    RangeMapper::append(ptail, new Bump2MMapper(range, n2MPages, numaMask));
   }
-  return mapper;
+  if (useNormalPages) {
+    RangeMapper::append(ptail, new BumpNormalMapper(range, 0, numaMask));
+  }
+  assertx(head);
+  return head;
 }
 
 void setup_low_arena(unsigned n1GPages) {
   assert(reinterpret_cast<uintptr_t>(sbrk(0)) <= kLowArenaMinAddr);
-  auto mapper = getHugeMapperWithFallback(n1GPages, true, 0);
+  // Initialize mappers for the VeryLow and Low address ranges.
+  auto& veryLowRange = getRange(AddrRangeClass::VeryLow);
+  auto& lowRange = getRange(AddrRangeClass::Low);
+  auto veryLowMapper =
+    getMapperChain(veryLowRange,
+                   (n1GPages != 0) ? 1 : 0,
+                   true, 0,                 // 2M
+                   true,                    // 4K
+                   numa_node_set, 0);
+  auto lowMapper =
+    getMapperChain(lowRange,
+                   (n1GPages > 1) ? (n1GPages - 1) : 0,
+                   true, 0,             // 2M
+                   true,                // 4K
+                   numa_node_set, 1);
+  veryLowRange.setLowMapper(veryLowMapper);
+  lowRange.setLowMapper(lowMapper);
   if (n1GPages == 0) {
-    low_2m_mapper = dynamic_cast<Bump2MMapper*>(mapper);
+    low_2m_mapper = dynamic_cast<Bump2MMapper*>(veryLowMapper);
+  } else if (n1GPages == 1) {
+    low_2m_mapper = dynamic_cast<Bump2MMapper*>(lowMapper);
+  } else {
+    low_2m_mapper = dynamic_cast<Bump2MMapper*>(lowMapper->next());
   }
-  auto ma = LowArena::CreateAt(&g_lowArena, kLowArenaMinAddr, kLowArenaMaxCap,
-                               LockPolicy::Blocking, mapper);
-  set_arena_retain_grow_limit(ma->id());
+
+  auto veryLowColdMapper =
+    new BumpNormalMapper<Direction::HighToLow>(veryLowRange, 0, numa_node_set);
+  auto lowColdMapper =
+    new BumpNormalMapper<Direction::HighToLow>(lowRange, 0, numa_node_set);
+  veryLowRange.setHighMapper(veryLowColdMapper);
+  lowRange.setHighMapper(lowColdMapper);
+
+  auto ma = LowArena::CreateAt(&g_lowArena);
+  ma->appendMapper(lowMapper);
+  ma->appendMapper(veryLowMapper);
   low_arena = ma->id();
   low_arena_flags = MALLOCX_ARENA(low_arena) | MALLOCX_TCACHE_NONE;
+
+  ma = LowArena::CreateAt(&g_lowerArena);
+  ma->appendMapper(veryLowMapper);
+  ma->appendMapper(lowMapper);
+  lower_arena = ma->id();
+  lower_arena_flags = MALLOCX_ARENA(lower_arena) | MALLOCX_TCACHE_NONE;
+
+  ma = LowArena::CreateAt(&g_lowColdArena);
+  ma->appendMapper(lowColdMapper);
+  ma->appendMapper(veryLowColdMapper);
+  low_cold_arena = ma->id();
+  low_cold_arena_flags = MALLOCX_ARENA(low_cold_arena) | MALLOCX_TCACHE_NONE;
 }
 
 void setup_high_arena(unsigned n1GPages) {
-  // If we use 1G huge pages on NUMA servers, start grabbing 1G huge pages from
-  // a node different from the one for low arena.
-  auto mapper = getHugeMapperWithFallback(n1GPages, true,
-                                          num_numa_nodes() / 2 + 1);
+  auto& range = getRange(AddrRangeClass::Uncounted);
+  auto mapper = getMapperChain(range, n1GPages,
+                               true, 0, // 2M pages can be added later
+                               true,    // use normal pages
+                               numa_node_set,
+                               num_numa_nodes() / 2 + 1);
+  range.setLowMapper(mapper);
   if (n1GPages == 0) {
     high_2m_mapper = dynamic_cast<Bump2MMapper*>(mapper);
+  } else {
+    high_2m_mapper = dynamic_cast<Bump2MMapper*>(mapper->next());
   }
-  auto ma = HighArena::CreateAt(&g_highArena,
-                                kLowArenaMaxAddr, kHighArenaMaxCap,
-                                LockPolicy::Blocking, mapper);
-  set_arena_retain_grow_limit(ma->id());
-  high_arena = ma->id();
-  high_arena_tcache_create();           // set up high_arena_flags
+  auto coldMapper =
+    new BumpNormalMapper<Direction::HighToLow>(range, 0, numa_node_set);
+  range.setHighMapper(coldMapper);
+
+  auto arena = HighArena::CreateAt(&g_highArena);
+  arena->appendMapper(range.getLowMapper());
+  high_arena = arena->id();
+
+  auto coldArena = HighArena::CreateAt(&g_coldArena);
+  coldArena->appendMapper(range.getHighMapper());
+  high_cold_arena = coldArena->id();
+  high_cold_arena_flags = MALLOCX_ARENA(high_cold_arena) | MALLOCX_TCACHE_NONE;
+}
+
+void setup_arena0(PageSpec s) {
+  size_t size = size1g * s.n1GPages + size2m * s.n2MPages;
+  if (size == 0) return;
+  // Give arena 0 some huge pages, starting at 2TB.
+  auto ret = mmap(reinterpret_cast<void*>(kArena0Base),
+                  size + size1g, PROT_NONE,
+                  MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE,
+                  -1, 0);
+  auto base = reinterpret_cast<uintptr_t>(ret);
+  if (auto r = base % size1g) {         // align to 1G boundary
+    base = base + size1g - r;
+  }
+  assertx(base % size1g == 0);
+
+  auto a0 = PreMappedArena::AttachTo(low_malloc(sizeof(PreMappedArena)), 0,
+                                     base, base + size, Reserved{});
+  auto mapper = getMapperChain(*a0, s.n1GPages,
+                               s.n2MPages, s.n2MPages,
+                               false,
+                               numa_node_set, 0);
+  a0->setLowMapper(mapper);
+  g_arena0 = a0;
 }
 
 // Set up extra arenas for use in non-VM threads, when we have short bursts of
@@ -427,7 +400,7 @@ bool setup_extra_arenas(unsigned count) {
   }
   // `count` needs to be a multiple of `num_numa_nodes()`, if it isn't, we round
   // it up to make it easy to balance across nodes.
-  const unsigned nNodes = std::max(1, num_numa_nodes());
+  auto const nNodes = std::max(1u, num_numa_nodes());
   s_extra_arena_per_node = (count + nNodes - 1) / nNodes;
   assert(s_extra_arena_per_node >= 1);
   s_extra_arenas.resize(nNodes);
@@ -541,31 +514,137 @@ void setup_jemalloc_metadata_extent_hook(bool enable, bool enable_numa_arena,
   jemallocMetadataCanUseHuge.store(true);
 }
 
-void high_arena_tcache_create() {
+void arenas_thread_init() {
   if (high_arena_tcache == -1) {
     mallctlRead<int, true>("tcache.create", &high_arena_tcache);
     high_arena_flags =
       MALLOCX_ARENA(high_arena) | MALLOCX_TCACHE(high_arena_tcache);
   }
+  if (local_arena_tcache == -1) {
+    local_arena = get_local_arena(s_numaNode);
+    if (local_arena) {
+      mallctlRead<int, true>("tcache.create", &local_arena_tcache);
+      local_arena_flags =
+        MALLOCX_ARENA(local_arena) | MALLOCX_TCACHE(local_arena_tcache);
+    }
+  }
 }
 
-void high_arena_tcache_flush() {
+void arenas_thread_flush() {
   // It is OK if flushing fails
   if (high_arena_tcache != -1) {
     mallctlWrite<int, true>("tcache.flush", high_arena_tcache);
   }
+  if (local_arena_tcache != -1) {
+    mallctlWrite<int, true>("tcache.flush", local_arena_tcache);
+  }
 }
 
-void high_arena_tcache_destroy() {
+void arenas_thread_exit() {
   if (high_arena_tcache != -1) {
     mallctlWrite<int, true>("tcache.destroy", high_arena_tcache);
     high_arena_tcache = -1;
     // Ideally we shouldn't read high_arena_flags any more, but just in case.
-    high_arena_flags = MALLOCX_ARENA(high_arena);
+    high_arena_flags = MALLOCX_ARENA(high_arena) | MALLOCX_TCACHE_NONE;
+  }
+  if (local_arena_tcache != -1) {
+    mallctlWrite<int, true>("tcache.destroy", local_arena_tcache);
+    local_arena_tcache = -1;
+    // Ideally we shouldn't read high_arena_flags any more, but just in case.
+    local_arena_flags = MALLOCX_ARENA(local_arena) | MALLOCX_TCACHE_NONE;
   }
 }
 
 #endif // USE_JEMALLOC_EXTENT_HOOKS
+
+std::vector<SlabManager*> s_slab_managers;
+void setup_local_arenas(PageSpec spec, unsigned slabs) {
+  s_slab_managers.reserve(num_numa_nodes());
+  slabs /= num_numa_nodes();
+
+  mallctlRead<unsigned>("arenas.narenas", &base_arena); // throw upon failure
+  // The default one per node.
+  for (int i = 0; i < num_numa_nodes(); i++) {
+    unsigned arena = 0;
+    mallctlRead<unsigned>(JEMALLOC_NEW_ARENA_CMD, &arena);
+    always_assert(arena == base_arena + i);
+    if (slabs) {
+      auto mem = low_malloc(sizeof(SlabManager));
+      s_slab_managers.push_back(new (mem) SlabManager);
+    } else {
+      s_slab_managers.push_back(nullptr);
+    }
+  }
+
+#if USE_JEMALLOC_EXTENT_HOOKS
+  spec.n1GPages = std::min(spec.n1GPages, get_huge1g_info().nr_hugepages);
+  spec.n1GPages /= num_numa_nodes();
+  spec.n2MPages = std::min(spec.n2MPages, get_huge2m_info().nr_hugepages);
+  spec.n2MPages /= num_numa_nodes();
+  const size_t reserveSize =
+    spec.n1GPages * size1g + spec.n2MPages * size2m;
+  if (reserveSize == 0) return;
+
+  g_local_arenas.resize(num_numa_nodes(), 0);
+  for (unsigned i = 0; i < num_numa_nodes(); ++i) {
+    static_assert(kLocalArenaMinAddr % size1g == 0, "");
+    auto const desiredBase = kLocalArenaMinAddr + i * kLocalArenaSizeLimit;
+    // Try to get the desired address range, but don't use MAP_FIXED.
+    auto ret = mmap(reinterpret_cast<void*>(desiredBase),
+                    reserveSize + size1g, PROT_NONE,
+                    MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE,
+                    -1, 0);
+    if (ret == MAP_FAILED) {
+      throw std::runtime_error{"mmap() failed to reserve address range"};
+    }
+    auto base = reinterpret_cast<uintptr_t>(ret);
+    if (base % size1g) {                // adjust to start at 1GB boundary
+      auto const newBase = (base + size1g - 1) & ~(size1g - 1);
+      munmap(reinterpret_cast<void*>(base), newBase - base);
+      base = newBase;
+    }
+    assert(base % size1g == 0);
+    auto arena = PreMappedArena::CreateAt(low_malloc(sizeof(PreMappedArena)),
+                                          base, base + reserveSize, Reserved{});
+    auto mapper = getMapperChain(*arena,
+                                 spec.n1GPages,
+                                 (bool)spec.n2MPages,
+                                 spec.n2MPages,
+                                 false,       // don't use normal pages
+                                 1u << i,
+                                 i);
+    // Allocate some slabs first, which are not given to the arena, but managed
+    // separately by the slab manager.
+    auto const totalSlabSize = std::min(slabs * kSlabSize, reserveSize);
+    if (totalSlabSize) {
+      auto slabRange = mapper->alloc(totalSlabSize, kSlabAlign);
+      if (slabRange) {
+        s_slab_managers[i]->addRange<true>(slabRange, totalSlabSize);
+      }
+    }
+    if (totalSlabSize == reserveSize) continue;
+    arena->setLowMapper(mapper);
+    g_local_arenas[i] = arena;
+  }
+#endif
+}
+
+unsigned get_local_arena(uint32_t node) {
+#if USE_JEMALLOC_EXTENT_HOOKS
+  if (node >= g_local_arenas.size()) return 0;
+  auto const arena = g_local_arenas[node];
+  if (arena == nullptr) return 0;
+  return arena->id();
+#else
+  return 0;
+#endif
+}
+
+SlabManager* get_local_slab_manager(uint32_t node) {
+  if (node >= s_slab_managers.size()) return nullptr;
+  return s_slab_managers[node];
+}
+
 #endif // USE_JEMALLOC
 
 struct JEMallocInitializer {
@@ -577,10 +656,7 @@ struct JEMallocInitializer {
     // one of these variables forces the STL default allocator to call
     // new() or delete() for each allocation or deletion.  Otherwise
     // the STL allocator tries to avoid the high cost of doing
-    // allocations by pooling memory internally.  However, tcmalloc
-    // does allocations really fast, especially for the types of small
-    // items one sees in STL, so it's better off just using us.
-    // TODO: control whether we do this via an environment variable?
+    // allocations by pooling memory internally.
     setenv("GLIBCPP_FORCE_NEW", "1", false /* no overwrite*/);
     setenv("GLIBCXX_FORCE_NEW", "1", false /* no overwrite*/);
 
@@ -616,6 +692,10 @@ struct JEMallocInitializer {
     // Earlier versions of jemalloc do not have MALLOCX_TCACHE_NONE, but will
     // still bypass tcache when arena is specified.
 #endif
+    lower_arena = low_arena;
+    lower_arena_flags = low_arena_flags;
+    low_cold_arena = low_arena;
+    low_cold_arena_flags = low_arena_flags;
 
     // We normally maintain the invariant that the region surrounding the
     // current brk is mapped huge, but we don't know yet whether huge pages
@@ -688,7 +768,11 @@ struct JEMallocInitializer {
               high_1g_pages, origHigh1G);
     }
     setup_high_arena(high_1g_pages);
+    // Make sure high/low arenas are available to the current thread.
+    arenas_thread_init();
 #endif
+    // Initialize global mibs
+    init_mallctl_mibs();
 #endif
   }
 };
@@ -722,34 +806,6 @@ void high_2m_pages(uint32_t pages) {
     high_2m_mapper->setMaxPages(pages);
   }
 #endif
-}
-
-int jemalloc_pprof_enable() {
-  return mallctlWrite<bool, true>("prof.active", true);
-}
-
-int jemalloc_pprof_disable() {
-  return mallctlWrite<bool, true>("prof.active", false);
-}
-
-int jemalloc_pprof_dump(const std::string& prefix, bool force) {
-  if (!force) {
-    bool enabled = false;
-    bool active = false;
-    // Check if profiling is active before trying to dump.
-    int err = mallctlRead<bool, true>("opt.prof", &enabled) ||
-      (enabled && mallctlRead<bool, true>("prof.active", &active));
-    if (err || !active) {
-      return 0; // nothing to do
-    }
-  }
-
-  if (prefix != "") {
-    const char *s = prefix.c_str();
-    return mallctlWrite<const char*, true>("prof.dump", s);
-  } else {
-    return mallctlCall<true>("prof.dump");
-  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -93,7 +93,8 @@ void emitCmpTVType(Vout& v, Vreg sf, DataType s0, Vreg s1);
 /*
  * Store `loc', the registers representing `src', to `dst'.
  */
-void storeTV(Vout& v, Vptr dst, Vloc srcLoc, const SSATmp* src);
+void storeTV(Vout& v, Vptr dst, Vloc srcLoc, const SSATmp* src,
+             Type ty = TBottom);
 void storeTV(Vout& v, Type type, Vloc srcLoc, Vptr typePtr, Vptr dataPtr);
 
 void storeTVWithAux(Vout& v, Vptr dst, Vloc srcLoc,
@@ -202,6 +203,14 @@ void emitCall(Vout& v, CallSpec call, RegSet args);
  * Return a Vptr to the native destructor function for values of type `type'.
  */
 Vptr lookupDestructor(Vout& v, Vreg type, bool typeIsQuad = false);
+
+///////////////////////////////////////////////////////////////////////////////
+// Record metadata
+
+/*
+ * Load the Record type of `val' into `d', then return `d'.
+ */
+Vreg emitLdRecDesc(Vout& v, Vreg val, Vreg d);
 
 ///////////////////////////////////////////////////////////////////////////////
 // Class metadata.

@@ -1,6 +1,6 @@
-<?php
+<?hh
 
-$ar = array(1,3,2);
+const AR = array(1,3,2);
 
 //////////////////////////////////////////////////////////////////////
 // Exception test cases with fault funclets and nested FPI regions of
@@ -13,8 +13,8 @@ function blar() {
 }
 
 function foo() {
-  global $ar;
-  foreach ($ar as $y) {
+
+  foreach (AR as $y) {
     func(blar($y));
     echo "wat\n";
   }
@@ -24,8 +24,8 @@ function foo() {
 function case1() { foo(); }
 
 function foo2() {
-  global $ar;
-  foreach ($ar as $y) {
+
+  foreach (AR as $y) {
     func(12, new stdclass(), mt_rand(), blar($y) ? 1024 : -1);
   }
   try {} catch (Exception $x) { echo "Bad\n"; }
@@ -34,8 +34,8 @@ function foo2() {
 function case2() { foo2(); }
 
 function foo3() {
-  global $ar;
-  foreach ($ar as $y) {
+
+  foreach (AR as $y) {
     func(12, new stdclass(), mt_rand(), func(blar($y)));
   }
   try {} catch (Exception $x) { echo "Bad\n"; }
@@ -45,17 +45,18 @@ function case3() { foo3(); }
 
 
 function foo4() {
-  global $ar;
-  foreach ($ar as $y) {
+
+  foreach (AR as $y) {
     func(12, new stdclass(), mt_rand(), func(mt_rand(), blar($y)));
   }
   try {} catch (Exception $x) { echo "Bad\n"; }
 }
 
 function case4() { foo3(); }
-
+<<__EntryPoint>> function main(): void {
 try { case1(); } catch (Exception $x) { echo "Good1\n"; }
 try { case2(); } catch (Exception $x) { echo "Good2\n"; }
 try { case3(); } catch (Exception $x) { echo "Good3\n"; }
 try { case4(); } catch (Exception $x) { echo "Good4\n"; }
 echo "Done\n";
+}

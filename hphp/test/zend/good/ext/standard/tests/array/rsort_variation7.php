@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool rsort(array &$array_arg [, int $sort_flags])
  * Description: Sort an array in reverse order
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass rsort() arrays of boolean values to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing rsort() : variation ***\n";
 
 // bool value array
@@ -34,5 +34,4 @@ var_dump(rsort(&$temp_array, SORT_STRING) );
 var_dump($temp_array);
 
 echo "Done";
-?>
-
+}

@@ -2,7 +2,6 @@
 
 // Raise "Unexpected token"
 function abstract() {}
-function and() {}
 function array() {}
 function as() {}
 function async() {}
@@ -14,7 +13,6 @@ function class() {}
 function clone() {}
 function const() {}
 function continue() {}
-function declare() {}
 function default() {}
 function do() {}
 function echo() {}
@@ -22,7 +20,6 @@ function else() {}
 function elseif() {}
 function endfor() {}
 function endforeach() {}
-function enddeclare() {}
 function endif() {}
 function endswitch() {}
 function endwhile() {}
@@ -46,7 +43,6 @@ function interface() {}
 function list() {}
 function namespace() {}
 function new() {}
-function or() {}
 function print() {}
 function private() {}
 function protected() {}
@@ -64,11 +60,9 @@ function use() {}
 function using() {}
 function var() {}
 function while() {}
-function xor() {}
 function yield() {}
 
 abstract();
-and();
 array();
 as();
 async();
@@ -112,7 +106,6 @@ interface();
 list();
 namespace();
 new();
-or();
 print();
 private();
 protected();
@@ -130,5 +123,4 @@ use();
 using();
 var();
 while();
-xor();
 yield();

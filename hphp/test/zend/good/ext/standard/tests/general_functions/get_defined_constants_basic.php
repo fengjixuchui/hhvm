@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array get_defined_constants  ([ bool $categorize  ] )
  * Description:  Returns an associative array with the names of all the constants and their values
  * Source code: Zend/zend_builtin_functions.c
@@ -24,5 +24,4 @@ if ($n2 == $n1 + 1 && array_key_exists("USER_CONSTANT", $arr2)) {
 	echo "TEST FAILED\n";
 }
 
-?>
-===DONE===
+echo "===DONE===\n";

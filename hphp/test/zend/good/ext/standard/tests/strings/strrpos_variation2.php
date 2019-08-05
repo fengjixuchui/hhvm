@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype  : int strrpos ( string $haystack, string $needle [, int $offset] );
  * Description: Find position of last occurrence of 'needle' in 'haystack'.
  * Source code: ext/standard/string.c
 */
 
 /* Test strrpos() function by passing single quoted strings to 'haystack' & 'needle' arguments */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing strrpos() function: with single quoted strings ***\n";
 $haystack = 'Hello,\t\n\0\n  $&!#%()*<=>?@hello123456he \x234 \101 ';
 $needle = array(
@@ -69,4 +69,4 @@ for($index=0; $index<count($needle); $index++) {
   $count++;
 }
 echo "*** Done ***";
-?>
+}

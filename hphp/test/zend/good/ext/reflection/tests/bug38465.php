@@ -1,4 +1,4 @@
-<?php
+<?hh
 class Baz {
     const B = 3;
 }
@@ -42,4 +42,3 @@ class Test {
 
 new Test();
 
-?>

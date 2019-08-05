@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 error_reporting(E_ALL);
 
@@ -24,4 +24,3 @@ class MyHelloWorld {
 $o = new MyHelloWorld();
 $o->saySomething();
 $o->sayWorld();
-?>

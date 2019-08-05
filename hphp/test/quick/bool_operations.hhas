@@ -1,8 +1,12 @@
+.hh_file 1;
 #
 # Test boolean binary operations which cannot be generated directly via PHP
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
   FCall <> 0 1 "" - "" ""
   PopC
@@ -34,239 +38,473 @@
 .function main() {
 
 # two registers
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   Add
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   Add
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   Add
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   Add
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   Sub
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   Sub
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   Sub
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   Sub
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   BitOr
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   BitOr
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   BitOr
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   BitOr
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   BitAnd
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   BitAnd
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   BitAnd
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   BitAnd
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   BitXor
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   BitXor
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   BitXor
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   BitXor
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   Mul
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   Mul
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   Mul
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   Mul
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   Div
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
 # exclude divide by zero
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   Div
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
@@ -274,95 +512,149 @@
 
 # try a few cases with one register and one immediate
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
   False
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   Add
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   True
   Sub
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   False
   BitOr
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   True
   BitAnd
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_false"
   FCall <> 0 1 "" - "" ""
   False
   BitXor
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "g_true"
   FCall <> 0 1 "" - "" ""
   True
   Mul
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
 # HHIRSimplification == false to test two immediates
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
   True
   True
   Add
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
   True
   False
   Sub
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
   False
   False
   BitOr
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
   False
   True
   BitAnd
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
   True
   False
   BitXor
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "print_bool_result"
+  NullUninit
+  NullUninit
+  NullUninit
   False
   True
   Mul
+  FPushFuncD 1 "print_bool_result"
   FCall <> 1 1 "" - "" ""
   PopC
 

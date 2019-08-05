@@ -1,4 +1,4 @@
-<?php
+<?hh
 include __DIR__.'/../utils/server.inc';
 
 printlogs(MongoLog::ALL, MongoLog::ALL, '/^- Found option \'w\'/');
@@ -24,4 +24,3 @@ foreach($formats as $format) {
 	}
 	echo "\n";
 }
-?>

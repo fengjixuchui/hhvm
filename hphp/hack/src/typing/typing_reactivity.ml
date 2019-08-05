@@ -30,7 +30,7 @@ let make_call_info ~receiver_is_self ~is_static receiver_type method_name =
 let type_to_str: type a. Env.env -> a ty -> string = fun env ty ->
   (* strip expression dependent types to make error message clearer *)
   let rec unwrap: type a. a ty -> a ty = function
-  | _, Tabstract (AKdependent (`this, []), Some ty) -> unwrap ty
+  | _, Tabstract (AKdependent `this, Some ty) -> unwrap ty
   | ty -> ty in
   Typing_print.full env (unwrap ty)
 
@@ -55,7 +55,7 @@ let get_associated_condition_type env ~is_self ty =
   match ty with
   | _, Tabstract (AKgeneric n, _) ->
     Env.get_condition_type env n
-  | _, Tabstract (AKdependent (`this, []), _) ->
+  | _, Tabstract (AKdependent `this, _) ->
     condition_type_from_reactivity (Env.env_reactivity env)
   | _ when is_self ->
     condition_type_from_reactivity (Env.env_reactivity env)
@@ -77,7 +77,7 @@ let condition_type_matches ~is_self env ty cond_ty =
   get_associated_condition_type ~is_self env ty
   |> Option.value_map ~default:false ~f:(fun arg_cond_ty ->
     let arg_cond_ty = CT.localize_condition_type env arg_cond_ty in
-    SubType.is_sub_type env arg_cond_ty cond_ty)
+    SubType.is_sub_type_LEGACY_DEPRECATED env arg_cond_ty cond_ty)
 
 (* checks if ty matches the criteria specified by argument of __OnlyRxIfImpl *)
 let check_only_rx_if_impl env ~is_receiver ~is_self pos reason ty cond_ty =
@@ -86,7 +86,7 @@ let check_only_rx_if_impl env ~is_receiver ~is_self pos reason ty cond_ty =
     - type has linked condition type which is a subtype of condition type *)
   let cond_ty = CT.localize_condition_type env cond_ty in
   let ok =
-    SubType.is_sub_type env ty cond_ty ||
+    SubType.is_sub_type_LEGACY_DEPRECATED env ty cond_ty ||
     condition_type_matches ~is_self env ty cond_ty in
   if not ok
   then begin
@@ -231,7 +231,12 @@ let check_call env method_info pos reason ft arg_types =
       | None -> false
       | Some l ->
         List.for_all l ~f:begin function
-        | { fp_rx_annotation = Some Param_rx_if_impl ty; _ }, arg_ty ->
+        | { fp_rx_annotation = Some Param_rx_if_impl ty; fp_type; _ }, arg_ty ->
+          let ty =
+            if Typing_utils.is_option env fp_type
+            then fst ty, Toption ty
+            else ty
+          in
           check_only_rx_if_impl env ~is_receiver:false ~is_self:false pos reason arg_ty ty
         (* | { fp_rx_condition = Some Param_rxfunc; fp_type; _ }, arg_ty ->
           check_only_rx_if_rx_func env pos reason caller_reactivity arg_ty fp_type *)
@@ -255,50 +260,26 @@ let check_call env method_info pos reason ft arg_types =
       |> ignore
   end
 
-let rxTraversableType =
-  MakeType.class_type Reason.none Naming_special_names.Rx.cTraversable [(Reason.Rnone, Tany)]
-
-let rxAsyncIteratorType =
-  MakeType.class_type Reason.none Naming_special_names.Rx.cAsyncIterator [(Reason.Rnone, Tany)]
-
-let check_foreach_collection env p t =
-  (* do nothing if unsafe_rx is set *)
-  if TypecheckerOptions.unsafe_rx (Env.get_tcopt env) then ()
-  else
-  match Env.env_reactivity env with
-  | Nonreactive | Local _ -> ()
-  | _ ->
-  let rec check t =
-    let env, t = Env.expand_type env t in
-    match t with
-    | _, Tunresolved l -> List.for_all l ~f:check
-    | t ->
-      (* collection type should be subtype or conditioned to Rx\Traversable *)
-      if not (SubType.is_sub_type env t rxTraversableType ||
-              SubType.is_sub_type env t rxAsyncIteratorType ||
-              condition_type_matches ~is_self:false env t rxTraversableType ||
-              condition_type_matches ~is_self:false env t rxAsyncIteratorType)
-      then begin
-        Errors.invalid_traversable_in_rx p;
-        false
-      end
-      else true in
-  ignore (check t)
-
 let disallow_atmost_rx_as_rxfunc_on_non_functions env param param_ty =
   let module UA = Naming_special_names.UserAttributes in
-  if Attributes.mem UA.uaAtMostRxAsFunc param.Nast.param_user_attributes
+  if Attributes.mem UA.uaAtMostRxAsFunc param.Aast.param_user_attributes
   then begin
-    if param.Nast.param_hint = None
-    then Errors.missing_annotation_for_atmost_rx_as_rxfunc_parameter param.Nast.param_pos
-    else match TU.non_null env param.Nast.param_pos param_ty with
-    (* if parameter has <<__AtMostRxAsFunc>> annotation then:
-       - parameter should be typed as function *)
-    | _, (_, Tfun _) -> ()
-    | _ ->
-      Errors.invalid_type_for_atmost_rx_as_rxfunc_parameter
-        (Reason.to_pos (fst param_ty))
-        (Typing_print.full env param_ty)
+    if param.Aast.param_hint = None
+    then Errors.missing_annotation_for_atmost_rx_as_rxfunc_parameter param.Aast.param_pos
+    else
+      let rec err_if_not_fun ty =
+        match snd ty with
+        (* if parameter has <<__AtMostRxAsFunc>> annotation then:
+           - parameter should be typed as function or a like function *)
+        | Tfun _ -> ()
+        | Tunion [ty; (_, Tdynamic)]
+        | Tunion [(_, Tdynamic); ty]
+        | Toption ty -> err_if_not_fun ty
+        | _ ->
+          Errors.invalid_type_for_atmost_rx_as_rxfunc_parameter
+            (Reason.to_pos (fst param_ty))
+            (Typing_print.full env param_ty) in
+      err_if_not_fun param_ty
   end
 
 (* generate a name that uniquely identifies pair target_type * condition_type *)

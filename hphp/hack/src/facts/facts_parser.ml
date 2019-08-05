@@ -5,7 +5,7 @@
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the "hack" directory of this source tree.
  *
- *)
+*)
 
 open Core_kernel
 open Facts
@@ -14,10 +14,11 @@ module SU = Hhbc_string_utils
 module FSC = Facts_smart_constructors
 
 module FactsParser_ = Full_fidelity_parser
-  .WithSyntax(Full_fidelity_positioned_syntax)
+                      .WithSyntax(Full_fidelity_positioned_syntax)
 module FactsParser = FactsParser_
-  .WithSmartConstructors(FSC.SC)
+                     .WithSmartConstructors(FSC.SC)
 
+let mangle_xhp_mode = ref true
 let flags_default = 0
 let flags_abstract = 1
 let flags_final = 2
@@ -60,7 +61,11 @@ let qualified_name ns name =
     else Some (ns ^ "\\" ^ n)
   | XhpName n ->
     (* xhp names are always unqualified *)
-    Some (SU.Xhp.mangle_id @@ n ())
+    if !mangle_xhp_mode then begin
+      Some (SU.Xhp.mangle_id @@ n ())
+    end else begin
+      Some (n ())
+    end
   | QualifiedName l -> qualified_name_from_parts ns l
   | _ -> None
 
@@ -81,8 +86,8 @@ let flags_from_modifiers modifiers =
   | List l -> aux l 0
   | _ -> 0
 
-let add_or_update_classish_declaration types name kind flags base_types
-  require_extends require_implements =
+let add_or_update_classish_declaration types name kind flags attributes base_types
+    require_extends require_implements =
   match InvSMap.get name types with
   | Some old_tf ->
     let tf =
@@ -100,19 +105,19 @@ let add_or_update_classish_declaration types name kind flags base_types
       then tf
       else {
         tf with base_types =
-          InvSSet.union base_types tf.base_types } in
+                  InvSSet.union base_types tf.base_types } in
     let tf =
       if InvSSet.is_empty require_extends
       then tf
       else {
         tf with require_extends =
-          InvSSet.union require_extends tf.require_extends } in
+                  InvSSet.union require_extends tf.require_extends } in
     let tf =
       if InvSSet.is_empty require_implements
       then tf
       else {
         tf with require_implements =
-          InvSSet.union require_implements tf.require_implements } in
+                  InvSSet.union require_implements tf.require_implements } in
 
     if phys_equal tf old_tf then types
     else InvSMap.add name tf types
@@ -123,7 +128,7 @@ let add_or_update_classish_declaration types name kind flags base_types
       then InvSSet.add "HH\\BuiltinEnum" base_types
       else base_types in
     let tf =
-      { base_types; flags; kind; require_extends; require_implements } in
+      { base_types; flags; kind; require_extends; require_implements; attributes } in
     InvSMap.add name tf types
 
 let typenames_from_list ns init l =
@@ -155,13 +160,13 @@ let type_info_from_class_body facts ns check_require body =
     match n with
     | RequireExtendsClause name when check_require ->
       begin match qualified_name ns name with
-      | Some name -> InvSSet.add name extends, implements, trait_uses, constants
-      | None -> acc
+        | Some name -> InvSSet.add name extends, implements, trait_uses, constants
+        | None -> acc
       end
     | RequireImplementsClause name when check_require ->
       begin match qualified_name ns name with
-      | Some name -> extends, InvSSet.add name implements, trait_uses, constants
-      | None -> acc
+        | Some name -> extends, InvSSet.add name implements, trait_uses, constants
+        | None -> acc
       end
     | TraitUseClause uses ->
       let trait_uses = typenames_from_list ns trait_uses uses in
@@ -182,7 +187,35 @@ let type_info_from_class_body facts ns check_require body =
     else { facts with constants } in
   extends, implements, trait_uses, facts
 
-let facts_from_class_decl facts ns modifiers kind name extends implements body =
+let attributes_from_decl ns attributes =
+  let open FSC in
+  let attributes_value_aux node l =
+    match node with
+    | Name s -> l @ [s()] (* TODO(T47593892) fold constant *)
+    | String s -> l @ [s()] (* TODO(T47593892) fold constant *)
+    | ScopeResolutionExpression (Name name, Class) ->
+      l @ [if ns = "" then name() else ns ^ "\\" ^ name()]
+    | _ -> l in
+    let attributes_values_aux node =
+    match node with
+    | Name s -> [s()]
+    | String s -> [s()]
+    | List l -> List.fold_right ~f:attributes_value_aux ~init:[] l
+    | _ -> [] in
+    let attributes_name_aux acc l2 node =
+    match node with
+    | Name s -> InvSMap.add (s()) (attributes_values_aux l2) acc
+    | String s -> InvSMap.add (s()) (attributes_values_aux l2) acc
+    | _ -> acc in
+    let attributes_aux acc node =
+    match node with
+    | ListItem (l1, l2) -> attributes_name_aux acc l2 l1
+    | _ -> acc in
+    match attributes with
+    | List l -> List.fold_left l ~init:InvSMap.empty ~f:attributes_aux
+    | _ -> InvSMap.empty
+
+let facts_from_class_decl facts ns modifiers attributes kind name extends implements body =
   let open FSC in
   match qualified_name ns name with
   | None -> facts
@@ -198,9 +231,10 @@ let facts_from_class_decl facts ns modifiers kind name extends implements body =
         (kind = TKInterface || kind = TKTrait) body in
     let base_types = typenames_from_list ns trait_uses extends in
     let base_types = typenames_from_list ns base_types implements in
+    let attributes = attributes_from_decl ns attributes in
     let types =
       add_or_update_classish_declaration facts.types name kind flags
-        base_types require_extends require_implements in
+        attributes base_types require_extends require_implements in
     if phys_equal types facts.types
     then facts
     else { facts with types }
@@ -212,43 +246,55 @@ let rec collect (ns, facts as acc) n =
     List.fold_left ~init:acc ~f:collect l
   | ClassDecl decl ->
     let facts = facts_from_class_decl facts ns
-      decl.modifiers decl.kind decl.name
-      decl.extends decl.implements decl.body in
+        decl.modifiers decl.attributes decl.kind decl.name
+        decl.extends decl.implements decl.body in
     ns, facts
-  | EnumDecl name ->
-    begin match qualified_name ns name with
-    | Some name ->
-      let types =
-        add_or_update_classish_declaration facts.types name
-          TKEnum flags_final InvSSet.empty InvSSet.empty InvSSet.empty in
-      let facts =
-        if phys_equal types facts.types
-        then facts
-        else { facts with types } in
-      ns, facts
-    | None -> acc
+  | EnumDecl decl ->
+    begin match qualified_name ns decl.name with
+      | Some name ->
+        let attributes = attributes_from_decl ns decl.attributes in
+        let types =
+          add_or_update_classish_declaration facts.types name TKEnum flags_final
+            attributes InvSSet.empty InvSSet.empty InvSSet.empty in
+        let facts =
+          if phys_equal types facts.types
+          then facts
+          else { facts with types } in
+        ns, facts
+      | None -> acc
     end
   | FunctionDecl name ->
     begin match qualified_name ns name with
-    | Some name -> ns, { facts with functions = name :: facts.functions }
-    | None -> acc
+      | Some name -> ns, { facts with functions = name :: facts.functions }
+      | None -> acc
     end
   | ConstDecl name ->
     begin match qualified_name ns name with
-    | Some name -> ns, { facts with constants = name :: facts.constants }
-    | None -> acc
+      | Some name -> ns, { facts with constants = name :: facts.constants }
+      | None -> acc
     end
-  | TypeAliasDecl name ->
-    begin match qualified_name ns name with
-    | Some name -> ns, { facts with type_aliases = name :: facts.type_aliases }
-    | None -> acc
+  | TypeAliasDecl decl ->
+    begin match qualified_name ns decl.name with
+      | Some name ->
+        let type_aliases = name :: facts.type_aliases in
+        let facts = {facts with type_aliases} in
+        let attributes = attributes_from_decl ns decl.attributes in
+        let types =
+          add_or_update_classish_declaration facts.types name TKTypeAlias
+            flags_default attributes InvSSet.empty InvSSet.empty InvSSet.empty in
+        let facts =
+          if phys_equal types facts.types
+          then facts
+          else { facts with types } in
+          ns, facts
+      | None -> acc
     end
   | Define (String name) when ns = "" ->
     ns, { facts with constants = (define_name name) :: facts.constants }
   | NamespaceDecl (name, FSC.EmptyBody) ->
     begin match qualified_name "" name with
-    | Some name -> name, facts
-    | None -> acc
+      | Some name -> name, facts
+      | None -> acc
     end
   | NamespaceDecl (name, body) ->
     let name =
@@ -256,17 +302,20 @@ let rec collect (ns, facts as acc) n =
       then Some ns
       else qualified_name ns name in
     begin match name with
-    | Some name ->
-      let _, facts = collect (name, facts) body in
-      ns, facts
-    | None -> acc
+      | Some name ->
+        let _, facts = collect (name, facts) body in
+        ns, facts
+      | None -> acc
     end
   | _ -> acc
 
-let from_text php5_compat_mode hhvm_compat_mode force_hh enable_xhp filename s =
-  let env = Full_fidelity_parser_env.make ~codegen:true ~php5_compat_mode ~hhvm_compat_mode
-    ~force_hh ~enable_xhp () in
-  let text = Full_fidelity_source_text.make filename s in
+let from_text
+    ~(php5_compat_mode:bool)
+    ~(hhvm_compat_mode:bool)
+    ~(filename: Relative_path.t)
+    ~(text: string): facts option =
+  let env = Full_fidelity_parser_env.make ~codegen:true ~php5_compat_mode ~hhvm_compat_mode () in
+  let text = Full_fidelity_source_text.make filename text in
   let (parser, root) =
     let p = FactsParser.make env text in
     FactsParser.parse_script p in
@@ -278,9 +327,40 @@ let from_text php5_compat_mode hhvm_compat_mode force_hh enable_xhp filename s =
     let _, facts = collect ("", empty) root in
     Some facts
   end
-let extract_as_json ~php5_compat_mode ~hhvm_compat_mode ~force_hh ~enable_xhp ~filename text =
-  from_text php5_compat_mode hhvm_compat_mode force_hh enable_xhp filename text
+
+let extract_as_json
+    ~(php5_compat_mode:bool)
+    ~(hhvm_compat_mode:bool)
+    ~(filename: Relative_path.t)
+    ~(text: string): Hh_json.json option =
+  from_text php5_compat_mode hhvm_compat_mode filename text
   |> Option.map ~f:(fun facts ->
-    let md5 = OpaqueDigest.to_hex @@ OpaqueDigest.string text in
-    let sha1 = Sha1.digest text in
-    facts_to_json ~md5 ~sha1 facts)
+      let md5 = OpaqueDigest.to_hex @@ OpaqueDigest.string text in
+      let sha1 = Sha1.digest text in
+      facts_to_json ~md5 ~sha1 facts)
+
+let extract_as_json_string
+    ~(php5_compat_mode:bool)
+    ~(hhvm_compat_mode:bool)
+    ~(filename: Relative_path.t)
+    ~(text: string)
+    ~(rust: bool): string option =
+  (* return empty string if file has syntax errors *)
+  if rust then
+  begin
+    let unnormalized = Rust_facts_ffi.extract_as_json_ffi
+      php5_compat_mode
+      hhvm_compat_mode
+      (Relative_path.suffix filename)
+      text
+    in
+    if unnormalized = "" then
+      None
+    else
+      (* make it compact (same line breaks and whitespace) via Hh_json *)
+      (* to avoid differences in output (because many tests rely on it!) *)
+      Some (unnormalized |> Hh_json.json_of_string |> Hh_json.json_to_multiline)
+  end
+  else
+    extract_as_json ~php5_compat_mode ~hhvm_compat_mode ~filename ~text
+    |> Option.map ~f:(Hh_json.json_to_multiline ~sort_keys:true)

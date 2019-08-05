@@ -1,4 +1,4 @@
-<?php
+<?hh
 ini_set('soap.wsdl_cache_enabled','0');
 
 function checkAuth($peid,$auth) {
@@ -29,4 +29,3 @@ try {
 } catch (Exception $e) {
 	echo $e->getMessage();
 }
-?>

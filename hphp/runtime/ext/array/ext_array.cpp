@@ -17,7 +17,7 @@
 
 #include "hphp/runtime/ext/array/ext_array.h"
 
-#include "hphp/runtime/base/actrec-args.h"
+#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/apc-local-array.h"
 #include "hphp/runtime/base/array-data-defs.h"
 #include "hphp/runtime/base/array-init.h"
@@ -28,7 +28,6 @@
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/double-to-int64.h"
 #include "hphp/runtime/base/mixed-array.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/request-event-handler.h"
 #include "hphp/runtime/base/sort-flags.h"
 #include "hphp/runtime/base/request-info.h"
@@ -44,6 +43,7 @@
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/vm/jit/translator.h"
 #include "hphp/util/logger.h"
+#include "hphp/util/rds-local.h"
 
 #include <vector>
 
@@ -84,9 +84,8 @@ TypedValue HHVM_FUNCTION(array_chunk,
     return make_tv<KindOfNull>();
   }
 
-  auto const retSize =
-    (getClsMethCompactContainerSize(cellInput) / chunkSize) + 1;
-  PackedArrayInit ret(retSize);
+  const size_t inputSize = getClsMethCompactContainerSize(cellInput);
+  PackedArrayInit ret((inputSize + chunkSize - 1) / chunkSize);
   Array chunk;
   int current = 0;
   for (ArrayIter iter(cellInput); iter; ++iter) {
@@ -142,7 +141,7 @@ TypedValue HHVM_FUNCTION(array_column,
   for (ArrayIter it(arr_input); it; ++it) {
     Array sub;
     if (UNLIKELY(RuntimeOption::PHP7_Builtins && it.second().isObject())) {
-      sub = it.second().toObject().get()->toArray<IntishCast::CastSilently>();
+      sub = it.second().toObject().get()->toArray<IntishCast::Cast>();
     } else if (it.second().isArray()) {
       sub = it.second().toArray();
     } else {
@@ -153,7 +152,7 @@ TypedValue HHVM_FUNCTION(array_column,
     if (val.isNull()) {
       elem = sub;
     } else {
-      auto const val_key = sub.convertKey<IntishCast::CastSilently>(val);
+      auto const val_key = sub.convertKey<IntishCast::Cast>(val);
       if (sub.exists(val_key)) {
         elem = sub[val_key];
       } else {
@@ -164,14 +163,14 @@ TypedValue HHVM_FUNCTION(array_column,
     if (idx.isNull()) {
       ret.append(elem);
     } else {
-      auto const idx_key = sub.convertKey<IntishCast::CastSilently>(idx);
+      auto const idx_key = sub.convertKey<IntishCast::Cast>(idx);
       if (!sub.exists(idx_key)) {
         ret.append(elem);
       } else if (sub[idx_key].isObject()) {
-        ret.setUnknownKey<IntishCast::CastSilently>(sub[idx_key].toString(),
+        ret.setUnknownKey<IntishCast::Cast>(sub[idx_key].toString(),
                                                     elem);
       } else {
-        ret.setUnknownKey<IntishCast::CastSilently>(sub[idx_key], elem);
+        ret.setUnknownKey<IntishCast::Cast>(sub[idx_key], elem);
       }
     }
   }
@@ -200,10 +199,10 @@ TypedValue HHVM_FUNCTION(array_combine,
        iter1; ++iter1, ++iter2) {
     auto const key = iter1.secondRvalPlus().unboxed();
     if (key.type() == KindOfInt64 || isStringType(key.type())) {
-      ret.setWithRef(ret.convertKey<IntishCast::CastSilently>(key.tv()),
+      ret.setWithRef(ret.convertKey<IntishCast::Cast>(key.tv()),
                      iter2.secondValPlus());
     } else {
-      ret.setWithRef(ret.convertKey<IntishCast::CastSilently>(tvCastToString(key.tv())),
+      ret.setWithRef(ret.convertKey<IntishCast::Cast>(tvCastToString(key.tv())),
                      iter2.secondValPlus());
     }
   }
@@ -224,7 +223,7 @@ TypedValue HHVM_FUNCTION(array_count_values,
         input.asCArrRef()
         // If this isn't exactly an Array, then it must be a hack collection,
         // so it is safe to get the object data
-        : collections::toArray<IntishCast::CastSilently>(
+        : collections::toArray<IntishCast::Cast>(
             input.getObjectData()
           )));
 }
@@ -241,12 +240,12 @@ TypedValue HHVM_FUNCTION(array_fill_keys,
     [&](TypedValue v) {
       auto const inner = tvToCell(v);
       if (isIntType(inner.m_type) || isStringType(inner.m_type)) {
-        ai->setUnknownKey<IntishCast::CastSilently>(VarNR(inner), value);
+        ai->setUnknownKey<IntishCast::Cast>(VarNR(inner), value);
       } else {
         raise_hack_strict(RuntimeOption::StrictArrayFillKeys,
                           "strict_array_fill_keys",
                           "keys must be ints or strings");
-        ai->setUnknownKey<IntishCast::CastSilently>(tvCastToString(v), value);
+        ai->setUnknownKey<IntishCast::Cast>(tvCastToString(v), value);
       }
     },
     [&](ObjectData* coll) {
@@ -306,7 +305,7 @@ TypedValue HHVM_FUNCTION(array_flip,
     auto const inner = iter.secondRvalPlus().unboxed();
     if (inner.type() == KindOfInt64 || isStringType(inner.type()) ||
       isFuncType(inner.type())|| isClassType(inner.type())) {
-      ret.setUnknownKey<IntishCast::CastSilently>(VarNR(inner.tv()),
+      ret.setUnknownKey<IntishCast::Cast>(VarNR(inner.tv()),
                                                   iter.first());
     } else {
       raise_warning("Can only flip STRING and INTEGER values!");
@@ -367,6 +366,7 @@ bool HHVM_FUNCTION(array_key_exists,
     case KindOfArray:
     case KindOfObject:
     case KindOfResource:
+    case KindOfRecord:
       if (!ad->useWeakKeys()) throwInvalidArrayKeyException(cell, ad);
       if (checkHACArrayKeyCast()) {
         raiseHackArrCompatImplicitArrayKey(cell);
@@ -451,13 +451,13 @@ static void php_array_merge_recursive(PointerSet &seen, bool check,
       // There is no need to do toKey() conversion, for a key that is already
       // in the array.
       auto const arrkey =
-        arr1.convertKey<IntishCast::CastSilently>(*key.asTypedValue());
+        arr1.convertKey<IntishCast::Cast>(*key.asTypedValue());
       auto const lval = arr1.lvalAt(arrkey, AccessFlags::Key);
-      auto subarr1 = tvCastToArrayLike<IntishCast::CastSilently>(lval.tv())
+      auto subarr1 = tvCastToArrayLike<IntishCast::Cast>(lval.tv())
         .toPHPArray();
       php_array_merge_recursive(
         seen, couldRecur(lval, subarr1.get()), subarr1,
-        tvCastToArrayLike<IntishCast::CastSilently>(iter.secondVal())
+        tvCastToArrayLike<IntishCast::Cast>(iter.secondVal())
       );
       tvUnset(lval); // avoid contamination of the value that was strongly bound
       tvSet(make_tv<KindOfArray>(subarr1.get()), lval);
@@ -479,8 +479,7 @@ TypedValue HHVM_FUNCTION(array_map,
   CallCtx ctx;
   ctx.func = nullptr;
   if (!callback.isNull()) {
-    CallerFrame cf;
-    vm_decode_function(callback, cf(), false, ctx);
+    vm_decode_function(callback, ctx);
   }
   const auto& cell_arr1 = *arr1.toCell();
   if (UNLIKELY(!isClsMethCompactContainer(cell_arr1))) {
@@ -546,7 +545,7 @@ TypedValue HHVM_FUNCTION(array_map,
     Array params = params_ai.toArray();
     if (ctx.func) {
       auto result = Variant::attach(
-        g_context->invokeFunc(ctx, params, nullptr)
+        g_context->invokeFunc(ctx, params)
       );
       ret_ai.append(result);
     } else {
@@ -644,12 +643,12 @@ static void php_array_replace_recursive(PointerSet &seen, bool check,
 
   for (ArrayIter iter(arr2); iter; ++iter) {
     const auto key =
-      Variant::wrap(arr1.convertKey<IntishCast::CastSilently>(iter.first()));
+      Variant::wrap(arr1.convertKey<IntishCast::Cast>(iter.first()));
     auto const rval = iter.secondRval().unboxed();
     if (arr1.exists(key, true) && isArrayLikeType(rval.type())) {
       auto const lval = arr1.lvalAt(key, AccessFlags::Key);
       if (isArrayLikeType(lval.unboxed().type())) {
-        Array subarr1 = tvCastToArrayLike<IntishCast::CastSilently>(
+        Array subarr1 = tvCastToArrayLike<IntishCast::Cast>(
           lval.tv()
         ).toPHPArrayIntishCast();
         php_array_replace_recursive(seen, couldRecur(lval, subarr1.get()),
@@ -815,6 +814,7 @@ TypedValue HHVM_FUNCTION(array_product,
       case KindOfFunc:
       case KindOfClass:
       case KindOfClsMeth:
+      case KindOfRecord:
         continue;
     }
     not_reached();
@@ -839,6 +839,7 @@ DOUBLE:
       case KindOfClsMeth:
       case KindOfObject:
       case KindOfResource:
+      case KindOfRecord:
         continue;
     }
     not_reached();
@@ -1000,7 +1001,7 @@ TypedValue HHVM_FUNCTION(array_slice,
       return tvReturn(ArrNR{cell_input.m_data.parr}
                         .asArray().toPHPArrayIntishCast());
     }
-    return tvReturn(cell_input.m_data.pobj->toArray<IntishCast::CastSilently>());
+    return tvReturn(cell_input.m_data.pobj->toArray<IntishCast::Cast>());
   }
 
   int pos = 0;
@@ -1108,6 +1109,7 @@ TypedValue HHVM_FUNCTION(array_sum,
       case KindOfFunc:
       case KindOfClass:
       case KindOfClsMeth:
+      case KindOfRecord:
         continue;
     }
     not_reached();
@@ -1132,6 +1134,7 @@ DOUBLE:
       case KindOfClsMeth:
       case KindOfObject:
       case KindOfResource:
+      case KindOfRecord:
         continue;
     }
     not_reached();
@@ -1367,6 +1370,9 @@ int64_t HHVM_FUNCTION(count,
         }
       }
       return 1;
+
+    case KindOfRecord: // TODO (T41258617)
+      raise_error(Strings::RECORD_NOT_SUPPORTED);
 
     case KindOfRef:
       break;
@@ -1735,9 +1741,9 @@ static void containerKeysToSetHelper(const req::ptr<c_Set>& st,
                                      const Variant& container) {
   Variant strHolder(empty_string_variant());
   TypedValue* strTv = strHolder.asTypedValue();
-  bool isKey = isArrayLikeType(container.toCell()->m_type);
+  bool convertIntLikeStrs = !isArrayLikeType(container.toCell()->m_type);
   for (ArrayIter iter(container); iter; ++iter) {
-    addToSetHelper(st, *iter.first().toCell(), strTv, !isKey);
+    addToSetHelper(st, *iter.first().toCell(), strTv, convertIntLikeStrs);
   }
 }
 
@@ -1763,58 +1769,57 @@ static inline bool checkIsClsMethAndRaise(
   return false;
 }
 
-#define ARRAY_DIFF_PRELUDE() \
-  /* Check to make sure all inputs are containers */ \
-  const auto& c1 = *container1.toCell(); \
-  const auto& c2 = *container2.toCell(); \
-  if (isClsMethType(c1.m_type) || isClsMethType(c2.m_type)) {                \
-    raiseIsClsMethWarning(__FUNCTION__+2, isClsMethType(c1.m_type) ? 1 : 2); \
-    return make_tv<KindOfNull>();                                            \
-  }                                                                          \
-  if (UNLIKELY(!isContainer(c1) || !isContainer(c2))) { \
-    raise_warning("%s() expects parameter %d to be an array or collection", \
-                  __FUNCTION__+2, /* remove the "f_" prefix */ \
-                  isContainer(c1) ? 2 : 1); \
-    return make_tv<KindOfNull>(); \
-  } \
-  bool moreThanTwo = !args.empty(); \
-  size_t largestSize = getContainerSize(c2); \
-  if (UNLIKELY(moreThanTwo)) { \
-    int pos = 3; \
-    for (ArrayIter argvIter(args); argvIter; ++argvIter, ++pos) { \
-      auto const c = tvToCell(argvIter.secondVal()); \
-      if (!isContainer(c)) { \
-        raise_warning("%s() expects parameter %d to be an array or collection",\
-                      __FUNCTION__+2, /* remove the "f_" prefix */ \
-                      pos); \
-        return make_tv<KindOfNull>(); \
-      } \
-      size_t sz = getContainerSize(c); \
-      if (sz > largestSize) { \
-        largestSize = sz; \
-      } \
-    } \
-  } \
-  /* If container1 is empty, we can stop here and return the empty array */ \
-  if (!getContainerSize(c1)) { \
-    return make_tv<KindOfPersistentArray>(staticEmptyArray()); \
-  } \
-  /* If all of the containers (except container1) are empty, we can just \
-     return container1 (converting it to an array if needed) */ \
-  if (!largestSize) { \
-    if (isArrayLikeType(c1.m_type)) { \
-      return tvReturn(container1); \
-    } else { \
-      return tvReturn(container1.toArray<IntishCast::CastSilently>());  \
-    } \
-  } \
-  Array ret = Array::Create();
-
 TypedValue HHVM_FUNCTION(array_diff,
                          const Variant& container1,
                          const Variant& container2,
                          const Array& args /* = null array */) {
-  ARRAY_DIFF_PRELUDE()
+
+  /* Check to make sure all inputs are containers */
+  const auto& c1 = *container1.toCell();
+  const auto& c2 = *container2.toCell();
+  if (isClsMethType(c1.m_type) || isClsMethType(c2.m_type)) {
+    raiseIsClsMethWarning(__FUNCTION__+2, isClsMethType(c1.m_type) ? 1 : 2);
+    return make_tv<KindOfNull>();
+  }
+  if (UNLIKELY(!isContainer(c1) || !isContainer(c2))) {
+    raise_warning("%s() expects parameter %d to be an array or collection",
+                  __FUNCTION__+2, /* remove the "f_" prefix */
+                  isContainer(c1) ? 2 : 1);
+    return make_tv<KindOfNull>();
+  }
+  bool moreThanTwo = !args.empty();
+  size_t largestSize = getContainerSize(c2);
+  if (UNLIKELY(moreThanTwo)) {
+    int pos = 3;
+    for (ArrayIter argvIter(args); argvIter; ++argvIter, ++pos) {
+      auto const c = tvToCell(argvIter.secondVal());
+      if (!isContainer(c)) {
+        raise_warning("%s() expects parameter %d to be an array or collection",
+                      __FUNCTION__+2, /* remove the "f_" prefix */
+                      pos);
+        return make_tv<KindOfNull>();
+      }
+      size_t sz = getContainerSize(c);
+      if (sz > largestSize) {
+        largestSize = sz;
+      }
+    }
+  }
+  /* If container1 is empty, we can stop here and return the empty array */
+  if (!getContainerSize(c1)) {
+    return make_tv<KindOfPersistentArray>(staticEmptyArray());
+  }
+  /* If all of the containers (except container1) are empty, we can just
+     return container1 (converting it to an array if needed) */
+  if (!largestSize) {
+    if (isArrayLikeType(c1.m_type)) {
+      return tvReturn(container1);
+    } else {
+      return tvReturn(container1.toArray<IntishCast::Cast>());
+    }
+  }
+  Array ret = Array::Create();
+
   // Put all of the values from all the containers (except container1 into a
   // Set. All types aside from integer and string will be cast to string, and
   // we also convert int-like strings to integers.
@@ -1832,74 +1837,273 @@ TypedValue HHVM_FUNCTION(array_diff,
   // we convert int-like strings to integers.
   Variant strHolder(empty_string_variant());
   TypedValue* strTv = strHolder.asTypedValue();
-  bool isKey = isArrayLikeType(c1.m_type);
+  bool convertIntLikeStrs = !isArrayLikeType(c1.m_type);
   for (ArrayIter iter(container1); iter; ++iter) {
     auto const c = tvToCell(iter.secondValPlus());
     if (checkSetHelper(st, c, strTv, true)) continue;
-    const auto key = isKey
-      ? *iter.first().asTypedValue()
-      : ret.convertKey<IntishCast::CastSilently>(iter.first());
+    auto const key = convertIntLikeStrs
+      ? ret.convertKey<IntishCast::Cast>(iter.first())
+      : *iter.first().asTypedValue();
     ret.setWithRef(key, iter.secondValPlus(), true);
   }
   return tvReturn(std::move(ret));
+}
+
+namespace {
+
+template <typename T>
+ALWAYS_INLINE
+bool array_diff_intersect_key_inputs_ok(const Cell& c1, const Cell& c2,
+                                        const ArrayData* args,
+                                        const char* fname,
+                                        T callback) {
+  if (isClsMethType(c1.m_type) || isClsMethType(c2.m_type)) {
+    raiseIsClsMethWarning(fname, isClsMethType(c1.m_type) ? 1 : 2);
+    return false;
+  }
+  if (!isContainer(c1) || !isContainer(c2)) {
+    raise_warning("%s() expects parameter %d to be an array or collection",
+                  fname, isContainer(c1) ? 2 : 1);
+    return false;
+  }
+  callback(getContainerSize(c2));
+
+  bool ok = true;
+  IterateKVNoInc(args, [&](Cell k, TypedValue v) {
+    assertx(k.m_type == KindOfInt64);
+    if (isClsMethType(v.m_type)) {
+      raiseIsClsMethWarning(fname, k.m_data.num + 3);
+      ok = false;
+      return true;
+    }
+    if (!isContainer(v)) {
+      raise_warning("%s() expects parameter %ld to be an array or collection",
+                    fname, k.m_data.num + 3);
+      ok = false;
+      return true;
+    }
+    callback(getContainerSize(v));
+    return false;
+  });
+
+  return ok;
+}
+
+template <bool diff, bool coerceThis, bool coerceAd, typename SI, typename SS>
+ALWAYS_INLINE
+void array_diff_intersect_key_check_arr(ArrayData* ad, Cell k, TypedValue v,
+                                        SI setInt, SS setStr) {
+  if (k.m_type == KindOfInt64) {
+    if (ad->exists(k.m_data.num)) {
+      if (!diff) setInt(k.m_data.num, v);
+      return;
+    }
+    if (coerceAd) {
+      // Also need to check if ad has a key that will coerce to this int value.
+      auto s = String::attach(buildStringData(k.m_data.num));
+      if (ad->exists(s.get())) {
+        if (!diff) setInt(k.m_data.num, v);
+        return;
+      }
+    }
+    if (diff) setInt(k.m_data.num, v);
+    return;
+  }
+
+  if (coerceThis) {
+    int64_t n;
+    if (k.m_data.pstr->isStrictlyInteger(n)) {
+      if (ad->exists(n)) {
+        if (!diff) setInt(n, v);
+        return;
+      }
+      if (coerceAd) {
+        // Also need to check if ad has a key that will coerce to this int
+        // value (as did this key).
+        if (ad->exists(k.m_data.pstr)) {
+          if (!diff) setInt(n, v);
+          return;
+        }
+      }
+      if (diff) setInt(n, v);
+      return;
+    }
+  } else if (coerceAd) {
+    // We're coercing keys from ad, but not this. If this string key
+    // isStrictlyInteger it can never match a key from ad after that key
+    // is coerced.
+    int64_t n;
+    if (k.m_data.pstr->isStrictlyInteger(n)) {
+      if (diff) setStr(k.m_data.pstr, v);
+      return;
+    }
+  }
+
+  if (ad->exists(k.m_data.pstr)) {
+    if (!diff) setStr(k.m_data.pstr, v);
+  } else {
+    if (diff) setStr(k.m_data.pstr, v);
+  }
+}
+
+template <bool diff, bool coerceThis, typename SI, typename SS>
+ALWAYS_INLINE
+void array_diff_intersect_key_check_pair(Cell k, TypedValue v, SI setInt,
+                                         SS setStr) {
+  if (k.m_type == KindOfInt64) {
+    if (k.m_data.num == 0 || k.m_data.num == 1) {
+      if (!diff) setInt(k.m_data.num, v);
+    } else {
+      if (diff) setInt(k.m_data.num, v);
+    }
+    return;
+  }
+
+  if (coerceThis) {
+    int64_t n;
+    if (k.m_data.pstr->isStrictlyInteger(n)) {
+      if (n == 0 || n == 1) {
+        if (!diff) setInt(n, v);
+      } else {
+        if (diff) setInt(n, v);
+      }
+      return;
+    }
+  }
+
+  if (diff) setStr(k.m_data.pstr, v);
+}
+
+template <bool coerceThis, bool coerceAd, typename SP>
+ALWAYS_INLINE
+void array_intersect_key_check_pos(const ArrayData* ad, Cell k, SP setPos) {
+  if (k.m_type == KindOfInt64) {
+    setPos(ad->nvGetIntPos(k.m_data.num));
+    if (coerceAd) {
+      auto const s = String::attach(buildStringData(k.m_data.num));
+      setPos(ad->nvGetStrPos(s.get()));
+    }
+    return;
+  }
+
+  if (coerceThis || coerceAd) {
+    int64_t n;
+    if (k.m_data.pstr->isStrictlyInteger(n)) {
+      if (coerceThis) setPos(ad->nvGetIntPos(n));
+      // If we're only coercing keys on one side, then this isStrictlyInteger
+      // key can't match as a string.
+      if (coerceThis != coerceAd) return;
+    }
+  }
+
+  setPos(ad->nvGetStrPos(k.m_data.pstr));
+}
+
 }
 
 TypedValue HHVM_FUNCTION(array_diff_key,
                          const Variant& container1,
                          const Variant& container2,
                          const Array& args /* = null array */) {
-  ARRAY_DIFF_PRELUDE()
-  // If we're only dealing with two containers and if they are both arrays,
-  // we can avoid creating an intermediate Set
-  if (!moreThanTwo &&
-      isArrayLikeType(c1.m_type) &&
-      isArrayLikeType(c2.m_type)) {
-    auto ad2 = c2.m_data.parr;
-    for (ArrayIter iter(container1); iter; ++iter) {
-      auto key = iter.first();
-      const auto& c = *key.toCell();
-      if (c.m_type == KindOfInt64) {
-        if (ad2->exists(c.m_data.num)) continue;
-      } else {
-        assertx(isStringType(c.m_type));
-        // this call to ArrayData::exists(const StringData*) doesn't intish cast
-        if (ad2->exists(c.m_data.pstr)) continue;
-      }
-      ret.setWithRef(key, iter.secondValPlus(), true);
-    }
-    return tvReturn(std::move(ret));
-  }
-  // Put all of the keys from all the containers (except container1) into a
-  // Set. All types aside from integer and string will be cast to string, and
-  // we also convert int-like strings to integers.
-  auto st = req::make<c_Set>();
-  st->reserve(largestSize);
-  containerKeysToSetHelper(st, container2);
-  if (UNLIKELY(moreThanTwo)) {
-    for (ArrayIter argvIter(args); argvIter; ++argvIter) {
-      containerKeysToSetHelper(st, VarNR(argvIter.secondVal()));
-    }
-  }
-  // Loop over container1, only copying over key/value pairs where the key is
-  // not present in the Set. When checking if a key is present in the Set, any
-  // key that is not an integer or string is cast to a string, and we convert
-  // int-like strings to integers.
-  Variant strHolder(empty_string_variant());
-  TypedValue* strTv = strHolder.asTypedValue();
-  bool isKey = isArrayLikeType(c1.m_type);
-  for (ArrayIter iter(container1); iter; ++iter) {
-    auto key = iter.first();
-    const auto& c = *key.toCell();
-    if (checkSetHelper(st, c, strTv, !isKey)) continue;
-    const auto arrkey = isKey
-      ? c
-      : ret.convertKey<IntishCast::CastSilently>(key);
-    ret.setWithRef(arrkey, iter.secondValPlus(), true);
-  }
-  return tvReturn(std::move(ret));
-}
+  const auto& c1 = *container1.toCell();
+  const auto& c2 = *container2.toCell();
 
-#undef ARRAY_DIFF_PRELUDE
+  size_t largestSize = 0;
+  auto check_cb = [&] (size_t s) {
+    if (s > largestSize) largestSize = s;
+  };
+  if (!array_diff_intersect_key_inputs_ok(c1, c2, args.get(), "array_diff_key",
+                                          check_cb)) {
+    return make_tv<KindOfNull>();
+  }
+  if (getContainerSize(c1) == 0) {
+    return make_tv<KindOfPersistentArray>(staticEmptyArray());
+  }
+  if (largestSize == 0) {
+    if (isArrayLikeType(c1.m_type)) {
+      return tvReturn(container1);
+    } else {
+      return tvReturn(container1.toArray<IntishCast::Cast>());
+    }
+  }
+
+  auto diff_step = [](TypedValue left, TypedValue right) {
+    auto leftSize = getContainerSize(left);
+    // If we have more than 2 args, the left input could end up empty
+    if (leftSize == 0) return empty_array();
+
+    ArrayInit ret(leftSize, ArrayInit::Map{});
+    auto setInt = [&](int64_t k, TypedValue v) { ret.setWithRef(k, v); };
+    auto setStr = [&](StringData* k, TypedValue v) { ret.setWithRef(k, v); };
+
+    auto iterate_left_with = [&](auto test_key) {
+      IterateKV(
+        left,
+        [](ArrayData*) { return false; },
+        test_key,
+        [](ObjectData*) {}
+      );
+    };
+
+    // rightAd will be the backing ArrayData for right, or nullptr if right
+    // is a Pair
+    auto rightAd = [&](){
+      if (isArrayLikeType(type(right))) return right.m_data.parr;
+      return collections::asArray(right.m_data.pobj);
+    }();
+
+    // For historical reasons, we coerce intish string keys only when they
+    // came from a hack collection. We also need to do the lookup in the right
+    // array differently if right was a Pair (and so rightAd is nullptr)
+    if (!rightAd) {
+      if (isArrayLikeType(type(left))) {
+        iterate_left_with([&](Cell k, TypedValue v) {
+          array_diff_intersect_key_check_pair<true, false>(
+            k, v, setInt, setStr);
+        });
+      } else {
+        iterate_left_with([&](Cell k, TypedValue v) {
+          array_diff_intersect_key_check_pair<true, true>(
+            k, v, setInt, setStr);
+        });
+      }
+    } else {
+      if (isArrayLikeType(type(left))) {
+        if (isArrayLikeType(type(right))) {
+          iterate_left_with([&](Cell k, TypedValue v) {
+            array_diff_intersect_key_check_arr<true, false, false>(
+              rightAd, k, v, setInt, setStr);
+          });
+        } else {
+          iterate_left_with([&](Cell k, TypedValue v) {
+            array_diff_intersect_key_check_arr<true, false, true>(
+              rightAd, k, v, setInt, setStr);
+          });
+        }
+      } else {
+        if (isArrayLikeType(type(right))) {
+          iterate_left_with([&](Cell k, TypedValue v) {
+            array_diff_intersect_key_check_arr<true, true, false>(
+              rightAd, k, v, setInt, setStr);
+          });
+        } else {
+          iterate_left_with([&](Cell k, TypedValue v) {
+            array_diff_intersect_key_check_arr<true, true, true>(
+              rightAd, k, v, setInt, setStr);
+          });
+        }
+      }
+    }
+
+    return ret.toArray();
+  };
+
+  auto ret = diff_step(c1, c2);
+  IterateVNoInc(args.get(), [&](TypedValue v) {
+    ret = diff_step(make_tv<KindOfArray>(ret.get()), v);
+  });
+  return make_tv<KindOfArray>(ret.detach());
+}
 
 TypedValue HHVM_FUNCTION(array_udiff,
                          const Variant& array1,
@@ -2139,7 +2343,7 @@ static void containerKeysIntersectHelper(const req::ptr<c_Set>& st,
   Variant strHolder(empty_string_variant());
   TypedValue* strTv = strHolder.asTypedValue();
   TypedValue intOneTv = make_tv<KindOfInt64>(1);
-  bool isKey = isArrayLikeType(containers[0].m_type);
+  bool convertIntLikeStrs = !isArrayLikeType(containers[0].m_type);
   for (ArrayIter iter(tvAsCVarRef(&containers[0])); iter; ++iter) {
     auto key = iter.first();
     const auto& c = *key.toCell();
@@ -2147,14 +2351,14 @@ static void containerKeysIntersectHelper(const req::ptr<c_Set>& st,
     // to the map. If a key (after various conversions) occurs more than
     // once in the container, we'll simply overwrite the old entry and
     // that's fine.
-    addToIntersectMapHelper(mp, c, &intOneTv, strTv, !isKey);
+    addToIntersectMapHelper(mp, c, &intOneTv, strTv, convertIntLikeStrs);
   }
   for (int pos = 1; pos < count; ++pos) {
-    isKey = isArrayLikeType(containers[pos].m_type);
+    convertIntLikeStrs = !isArrayLikeType(containers[pos].m_type);
     for (ArrayIter iter(tvAsCVarRef(&containers[pos])); iter; ++iter) {
       auto key = iter.first();
       const auto& c = *key.toCell();
-      updateIntersectMapHelper(mp, c, pos, strTv, !isKey);
+      updateIntersectMapHelper(mp, c, pos, strTv, convertIntLikeStrs);
     }
   }
   for (ArrayIter iter(mp.get()); iter; ++iter) {
@@ -2169,54 +2373,53 @@ static void containerKeysIntersectHelper(const req::ptr<c_Set>& st,
   }
 }
 
-#define ARRAY_INTERSECT_PRELUDE() \
-  /* Check to make sure all inputs are containers */ \
-  const auto& c1 = *container1.toCell(); \
-  const auto& c2 = *container2.toCell(); \
-  if (isClsMethType(c1.m_type) || isClsMethType(c2.m_type)) {                \
-    raiseIsClsMethWarning(__FUNCTION__+2, isClsMethType(c1.m_type) ? 1 : 2); \
-    return make_tv<KindOfNull>();                                            \
-  }                                                                          \
-  if (!isContainer(c1) || !isContainer(c2)) { \
-    raise_warning("%s() expects parameter %d to be an array or collection", \
-                  __FUNCTION__+2, /* remove the "f_" prefix */ \
-                  isContainer(c1) ? 2 : 1); \
-    return make_tv<KindOfNull>(); \
-  } \
-  bool moreThanTwo = !args.empty(); \
-  /* Keep track of which input container was the smallest (excluding \
-     container1) */ \
-  int smallestPos = 0; \
-  size_t smallestSize = getContainerSize(c2); \
-  if (UNLIKELY(moreThanTwo)) { \
-    int pos = 1; \
-    for (ArrayIter argvIter(args); argvIter; ++argvIter, ++pos) { \
-      auto const c = tvToCell(argvIter.secondVal()); \
-      if (!isContainer(c)) { \
-        raise_warning("%s() expects parameter %d to be an array or collection",\
-                      __FUNCTION__+2, /* remove the "f_" prefix */ \
-                      pos+2); \
-        return make_tv<KindOfNull>(); \
-      } \
-      size_t sz = getContainerSize(c); \
-      if (sz < smallestSize) { \
-        smallestSize = sz; \
-        smallestPos = pos; \
-      } \
-    } \
-  } \
-  /* If any of the containers were empty, we can stop here and return the \
-     empty array */ \
-  if (!getContainerSize(c1) || !smallestSize) { \
-    return make_tv<KindOfPersistentArray>(staticEmptyArray()); \
-  } \
-  Array ret = Array::Create();
-
 TypedValue HHVM_FUNCTION(array_intersect,
                          const Variant& container1,
                          const Variant& container2,
                          const Array& args /* = null array */) {
-  ARRAY_INTERSECT_PRELUDE()
+
+  /* Check to make sure all inputs are containers */
+  const auto& c1 = *container1.toCell();
+  const auto& c2 = *container2.toCell();
+  if (isClsMethType(c1.m_type) || isClsMethType(c2.m_type)) {
+    raiseIsClsMethWarning(__FUNCTION__+2, isClsMethType(c1.m_type) ? 1 : 2);
+    return make_tv<KindOfNull>();
+  }
+  if (!isContainer(c1) || !isContainer(c2)) {
+    raise_warning("%s() expects parameter %d to be an array or collection",
+                  __FUNCTION__+2, /* remove the "f_" prefix */
+                  isContainer(c1) ? 2 : 1);
+    return make_tv<KindOfNull>();
+  }
+  bool moreThanTwo = !args.empty();
+  /* Keep track of which input container was the smallest (excluding
+     container1) */
+  int smallestPos = 0;
+  size_t smallestSize = getContainerSize(c2);
+  if (UNLIKELY(moreThanTwo)) {
+    int pos = 1;
+    for (ArrayIter argvIter(args); argvIter; ++argvIter, ++pos) {
+      auto const c = tvToCell(argvIter.secondVal());
+      if (!isContainer(c)) {
+        raise_warning("%s() expects parameter %d to be an array or collection",
+                      __FUNCTION__+2, /* remove the "f_" prefix */
+                      pos+2);
+        return make_tv<KindOfNull>();
+      }
+      size_t sz = getContainerSize(c);
+      if (sz < smallestSize) {
+        smallestSize = sz;
+        smallestPos = pos;
+      }
+    }
+  }
+  /* If any of the containers were empty, we can stop here and return the
+     empty array */
+  if (!getContainerSize(c1) || !smallestSize) {
+    return make_tv<KindOfPersistentArray>(staticEmptyArray());
+  }
+
+  Array ret = Array::Create();
   // Build up a Set containing the values that are present in all the
   // containers (except container1)
   auto st = req::make<c_Set>();
@@ -2240,13 +2443,13 @@ TypedValue HHVM_FUNCTION(array_intersect,
   // convert int-like strings to integers.
   Variant strHolder(empty_string_variant());
   TypedValue* strTv = strHolder.asTypedValue();
-  bool isKey = isArrayLikeType(c1.m_type);
+  bool convertIntLikeStrs = !isArrayLikeType(c1.m_type);
   for (ArrayIter iter(container1); iter; ++iter) {
     auto const c = tvToCell(iter.secondValPlus());
     if (!checkSetHelper(st, c, strTv, true)) continue;
-    const auto key = isKey
-      ? iter.first()
-      : Variant::wrap(ret.convertKey<IntishCast::CastSilently>(iter.first()));
+    const auto key = convertIntLikeStrs
+      ? Variant::wrap(ret.convertKey<IntishCast::Cast>(iter.first()))
+      : iter.first();
     ret.setWithRef(key, iter.secondValPlus(), true);
   }
   return tvReturn(std::move(ret));
@@ -2256,65 +2459,198 @@ TypedValue HHVM_FUNCTION(array_intersect_key,
                          const Variant& container1,
                          const Variant& container2,
                          const Array& args /* = null array */) {
-  ARRAY_INTERSECT_PRELUDE()
-  // If we're only dealing with two containers and if they are both arrays,
-  // we can avoid creating an intermediate Set
-  if (!moreThanTwo &&
-      isArrayLikeType(c1.m_type) &&
-      isArrayLikeType(c2.m_type)) {
-    auto ad2 = c2.m_data.parr;
-    for (ArrayIter iter(container1); iter; ++iter) {
-      auto key = iter.first();
-      const auto& c = *key.toCell();
-      if (c.m_type == KindOfInt64) {
-        if (!ad2->exists(c.m_data.num)) continue;
-      } else {
-        assertx(isStringType(c.m_type));
-        // this call to ArrayData::exists(const StringData*) doesn't intish cast
-        if (!ad2->exists(c.m_data.pstr)) continue;
-      }
-      /* This never intish casted */
-      ret.setWithRef(key, iter.secondValPlus(), true);
-    }
-    return tvReturn(std::move(ret));
-  }
-  // Build up a Set containing the keys that are present in all the containers
-  // (except container1)
-  auto st = req::make<c_Set>();
-  if (LIKELY(!moreThanTwo)) {
-    // There is only one container (not counting container1) so we can just
-    // call containerKeysToSetHelper() to build the Set.
-    containerKeysToSetHelper(st, container2);
-  } else {
-    // We're dealing with three or more containers. Copy all of the containers
-    // (except the first) into a TypedValue array.
-    int count = args.size() + 1;
-    TypedValue* containers =
-      makeContainerListHelper(container2, args, count, smallestPos);
-    SCOPE_EXIT { req::free(containers); };
-    // Build a Set of the keys that were present in all of the containers
-    containerKeysIntersectHelper(st, containers, count);
-  }
-  // Loop over container1, only copying over key/value pairs where the key
-  // is present in the Set. When checking if a key is present in the Set,
-  // any value that is not an integer or string is cast to a string, and we
-  // convert int-like strings to integers.
-  Variant strHolder(empty_string_variant());
-  TypedValue* strTv = strHolder.asTypedValue();
-  bool isKey = isArrayLikeType(c1.m_type);
-  for (ArrayIter iter(container1); iter; ++iter) {
-    auto key = iter.first();
-    const auto& c = *key.toCell();
-    if (!checkSetHelper(st, c, strTv, !isKey)) continue;
-    auto arrkey = isKey
-      ? key
-      : Variant::wrap(ret.convertKey<IntishCast::CastSilently>(key));
-    ret.setWithRef(arrkey, iter.secondValPlus(), true);
-  }
-  return tvReturn(std::move(ret));
-}
+  const auto& c1 = *container1.toCell();
+  const auto& c2 = *container2.toCell();
 
-#undef ARRAY_INTERSECT_PRELUDE
+  bool empty_arg = false;
+  auto check_cb = [&] (size_t s) {
+    if (s == 0) empty_arg = true;
+  };
+  if (!array_diff_intersect_key_inputs_ok(c1, c2, args.get(),
+                                          "array_intersect_key", check_cb)) {
+    return make_tv<KindOfNull>();
+  }
+  if ((getContainerSize(c1) == 0) || empty_arg) {
+    return make_tv<KindOfPersistentArray>(staticEmptyArray());
+  }
+
+  auto intersect_step = [](TypedValue left, TypedValue right) {
+    auto leftSize = getContainerSize(left);
+    // If we have more than 2 args, the left input could end up empty
+    if (leftSize == 0) return empty_array();
+    auto rightSize = getContainerSize(right);
+
+    if (leftSize > rightSize + 2) {
+      // left is bigger than right, so try to reduce the number of hash lookups
+      // by iterating right and probing left
+
+      auto leftAd = [&](){
+        if (isArrayLikeType(type(left))) return left.m_data.parr;
+        return collections::asArray(left.m_data.pobj);
+      }();
+      // we can't get a null leftAd because leftSize is at least 3 (which
+      // precludes Pairs)
+      assertx(leftAd);
+      auto const left_end = leftAd->iter_end();
+
+      std::vector<ssize_t> positions;
+      // we can technically end up with up to rightSize*2 entries due to
+      // intish key casting, but that is unlikely
+      positions.reserve(rightSize);
+      auto setPos = [&](ssize_t pos) {
+        if (pos != left_end) positions.push_back(pos);
+      };
+
+      auto iterate_right_with = [&](auto test_key) {
+        IterateKV(
+          right,
+          [](ArrayData*) { return false; },
+          test_key,
+          [](ObjectData*) {}
+        );
+      };
+
+      // For historical reasons, we coerce intish string keys only when they
+      // came from a hack collection.
+      auto coerceLeft = !isArrayLikeType(type(left));
+      auto coerceRight = !isArrayLikeType(type(right));
+
+      if (coerceLeft) {
+        if (coerceRight) {
+          iterate_right_with([&](Cell k, TypedValue) {
+            array_intersect_key_check_pos<true, true>(leftAd, k, setPos);
+          });
+        } else {
+          iterate_right_with([&](Cell k, TypedValue) {
+            array_intersect_key_check_pos<false, true>(leftAd, k, setPos);
+          });
+        }
+      } else {
+        if (coerceRight) {
+          iterate_right_with([&](Cell k, TypedValue) {
+            array_intersect_key_check_pos<true, false>(leftAd, k, setPos);
+          });
+        } else {
+          iterate_right_with([&](Cell k, TypedValue) {
+            array_intersect_key_check_pos<false, false>(leftAd, k, setPos);
+          });
+        }
+      }
+
+      if (positions.empty()) return empty_array();
+
+      std::sort(positions.begin(), positions.end());
+      positions.erase(
+        std::unique(positions.begin(), positions.end()),
+        positions.end()
+      );
+      assertx(positions.size() <= leftSize);
+
+      if (positions.size() == leftSize) {
+        if (coerceLeft) {
+          return Array(leftAd).toPHPArrayIntishCast();
+        } else {
+          return Array(leftAd).toPHPArray();
+        }
+      }
+
+      ArrayInit ret(positions.size(), ArrayInit::Map{});
+
+      if (coerceLeft) {
+        for (auto pos : positions) {
+          auto const k = leftAd->nvGetKey(pos);
+          if (k.m_type == KindOfInt64) {
+            ret.setWithRef(k.m_data.num, leftAd->atPos(pos));
+          } else {
+            int64_t n;
+            if (k.m_data.pstr->isStrictlyInteger(n)) {
+              ret.setWithRef(n, leftAd->atPos(pos));
+            } else {
+              ret.setWithRef(k.m_data.pstr, leftAd->atPos(pos));
+            }
+          }
+        }
+      } else {
+        for (auto pos : positions) {
+          ret.setWithRef(leftAd->nvGetKey(pos), leftAd->atPos(pos));
+        }
+      }
+
+      return ret.toArray();
+    }
+
+    ArrayInit ret(leftSize, ArrayInit::Map{});
+    auto setInt = [&](int64_t k, TypedValue v) { ret.setWithRef(k, v); };
+    auto setStr = [&](StringData* k, TypedValue v) { ret.setWithRef(k, v); };
+
+    auto iterate_left_with = [&](auto test_key) {
+      IterateKV(
+        left,
+        [](ArrayData*) { return false; },
+        test_key,
+        [](ObjectData*) {}
+      );
+    };
+
+    // rightAd will be the backing ArrayData for right, or nullptr if right
+    // is a Pair
+    auto rightAd = [&](){
+      if (isArrayLikeType(type(right))) return right.m_data.parr;
+      return collections::asArray(right.m_data.pobj);
+    }();
+
+    // For historical reasons, we coerce intish string keys only when they
+    // came from a hack collection. We also need to do the lookup in the right
+    // array differently if right was a Pair (and so rightAd is nullptr)
+    if (!rightAd) {
+      if (isArrayLikeType(type(left))) {
+        iterate_left_with([&](Cell k, TypedValue v) {
+          array_diff_intersect_key_check_pair<false, false>(
+            k, v, setInt, setStr);
+        });
+      } else {
+        iterate_left_with([&](Cell k, TypedValue v) {
+          array_diff_intersect_key_check_pair<false, true>(
+            k, v, setInt, setStr);
+        });
+      }
+    } else {
+      if (isArrayLikeType(type(left))) {
+        if (isArrayLikeType(type(right))) {
+          iterate_left_with([&](Cell k, TypedValue v) {
+            array_diff_intersect_key_check_arr<false, false, false>(
+              rightAd, k, v, setInt, setStr);
+          });
+        } else {
+          iterate_left_with([&](Cell k, TypedValue v) {
+            array_diff_intersect_key_check_arr<false, false, true>(
+              rightAd, k, v, setInt, setStr);
+          });
+        }
+      } else {
+        if (isArrayLikeType(type(right))) {
+          iterate_left_with([&](Cell k, TypedValue v) {
+            array_diff_intersect_key_check_arr<false, true, false>(
+              rightAd, k, v, setInt, setStr);
+          });
+        } else {
+          iterate_left_with([&](Cell k, TypedValue v) {
+            array_diff_intersect_key_check_arr<false, true, true>(
+              rightAd, k, v, setInt, setStr);
+          });
+        }
+      }
+    }
+
+    return ret.toArray();
+  };
+
+  auto ret = intersect_step(c1, c2);
+  IterateVNoInc(args.get(), [&](TypedValue v) {
+    ret = intersect_step(make_tv<KindOfArray>(ret.get()), v);
+  });
+  return make_tv<KindOfArray>(ret.detach());
+}
 
 TypedValue HHVM_FUNCTION(array_uintersect,
                          const Variant& array1,
@@ -2866,43 +3202,52 @@ static Array::PFUNC_CMP get_cmp_func(int sort_flags, bool ascending) {
   }
 }
 
-TypedValue* HHVM_FN(array_multisort)(ActRec* ar) {
-  TypedValue* tv = getArg(ar, 0);
-  if (tv == nullptr || !tvAsVariant(tv).isPHPArray()) {
-    if (tvAsVariant(tv).isClsMeth()) {
+bool HHVM_FUNCTION(array_multisort,
+                   VRefParam arg1,
+                   VRefParam arg2 /*= null*/,
+                   VRefParam arg3 /*= null*/,
+                   VRefParam arg4 /*= null*/,
+                   VRefParam arg5 /*= null*/,
+                   VRefParam arg6 /*= null*/,
+                   VRefParam arg7 /*= null*/,
+                   VRefParam arg8 /*= null*/,
+                   VRefParam arg9 /*= null*/) {
+  if (!arg1.isPHPArray()) {
+    if (arg1.isClsMeth()) {
       raiseIsClsMethWarning(__FUNCTION__+2, 1);
-      return arReturn(ar, false);
+      return false;
     }
     throw_expected_array_exception("array_multisort");
-    return arReturn(ar, false);
+    return false;
   }
 
   std::vector<Array::SortData> data;
   std::vector<Array> arrays;
-  arrays.reserve(ar->numArgs()); // so no resize would happen
+  arrays.reserve(9); // so no resize would happen
 
   Array::SortData sd;
-  sd.original = &tvAsVariant(tv);
+  sd.original = &arg1;
   arrays.push_back(Array(sd.original->getArrayData()));
   sd.array = &arrays.back();
   sd.by_key = false;
 
   int sort_flags = SORT_REGULAR;
   bool ascending = true;
-  for (int i = 1; i < ar->numArgs(); i++) {
-    tv = getArg(ar, i);
-    if (tvAsVariant(tv).isArray()) {
+
+  auto const handleArg = [&] (VRefParam& arg) {
+    if (arg.isNull()) return;
+    if (arg.isArray()) {
       sd.cmp_func = get_cmp_func(sort_flags, ascending);
       data.push_back(sd);
 
       sort_flags = SORT_REGULAR;
       ascending = true;
 
-      sd.original = &tvAsVariant(tv);
+      sd.original = &arg;
       arrays.push_back(Array(sd.original->getArrayData()));
       sd.array = &arrays.back();
     } else {
-      int n = getArg<KindOfInt64>(ar, i);
+      int n = arg.toInt64();
       if (n == SORT_ASC) {
       } else if (n == SORT_DESC) {
         ascending = false;
@@ -2910,12 +3255,21 @@ TypedValue* HHVM_FN(array_multisort)(ActRec* ar) {
         sort_flags = n;
       }
     }
-  }
+  };
+
+  handleArg(arg2);
+  handleArg(arg3);
+  handleArg(arg4);
+  handleArg(arg5);
+  handleArg(arg6);
+  handleArg(arg7);
+  handleArg(arg8);
+  handleArg(arg9);
 
   sd.cmp_func = get_cmp_func(sort_flags, ascending);
   data.push_back(sd);
 
-  return arReturn(ar, Array::MultiSort(data, true));
+  return Array::MultiSort(data);
 }
 
 // HH\\dict
@@ -3010,10 +3364,28 @@ TypedValue HHVM_FUNCTION(HH_array_key_cast, const Variant& input) {
       SystemLib::throwInvalidArgumentExceptionObject(
         "Objects cannot be cast to an array-key"
       );
+    case KindOfRecord:
+      SystemLib::throwInvalidArgumentExceptionObject(
+        "Records cannot be cast to an array-key"
+      );
     case KindOfRef:
       break;
   }
   not_reached();
+}
+
+String HHVM_FUNCTION(HH_get_provenance, const Variant& in) {
+  if (!isArrayLikeType(in.getType())) return "";
+  if (!RuntimeOption::EvalArrayProvenance) return "";
+
+  auto const& arr = in.asCArrRef();
+  if (auto const ann = arrprov::getTag(arr.get())) {
+    return folly::sformat("{}:{}",
+                          ann->filename()->slice(),
+                          ann->line());
+  } else {
+    return "<none>";
+  }
 }
 
 Array HHVM_FUNCTION(merge_xhp_attr_declarations,
@@ -3178,6 +3550,7 @@ struct ArrayExtension final : Extension {
     HHVM_FALIAS(HH\\varray, HH_varray);
     HHVM_FALIAS(HH\\darray, HH_darray);
     HHVM_FALIAS(HH\\array_key_cast, HH_array_key_cast);
+    HHVM_FALIAS(HH\\get_provenance, HH_get_provenance);
     HHVM_FALIAS(__SystemLib\\merge_xhp_attr_declarations,
                 merge_xhp_attr_declarations);
 

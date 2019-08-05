@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /* Integer */
 $data = "-123";   var_dump(filter_var($data, FILTER_VALIDATE_INT));
@@ -39,4 +39,3 @@ $data = true;     var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));
 $data = false;    var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));
 $data = "";       var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));
 
-?>

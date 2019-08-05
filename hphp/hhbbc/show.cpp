@@ -194,8 +194,6 @@ std::string show(const Func& func, const Bytecode& bc) {
 #define IMM_I64A(n)    folly::toAppend(" ", data.arg##n, &ret);
 #define IMM_LA(n)      ret += " " + local_string(func, data.loc##n);
 #define IMM_IA(n)      folly::toAppend(" iter:", data.iter##n, &ret);
-#define IMM_CAR(n)     folly::toAppend(" rslot:", data.slot, &ret);
-#define IMM_CAW(n)     folly::toAppend(" wslot:", data.slot, &ret);
 #define IMM_DA(n)      folly::toAppend(" ", data.dbl##n, &ret);
 #define IMM_SA(n)      folly::toAppend(" ", escaped_string(data.str##n), &ret);
 #define IMM_RATA(n)    folly::toAppend(" ", show(data.rat), &ret);
@@ -243,8 +241,6 @@ std::string show(const Func& func, const Bytecode& bc) {
 #undef IMM_I64A
 #undef IMM_LA
 #undef IMM_IA
-#undef IMM_CAR
-#undef IMM_CAW
 #undef IMM_DA
 #undef IMM_SA
 #undef IMM_RATA
@@ -269,10 +265,6 @@ std::string show(const Func& func, const Bytecode& bc) {
 std::string show(const Func& func, const Block& block) {
   std::string ret;
 
-  if (block.section != php::Block::Section::Main) {
-    folly::toAppend("(fault funclet)\n", &ret);
-  }
-
   if (block.exnNodeId != NoExnNodeId) {
     ret += "(exnNode:";
     appendExnTreeString(func, ret, block.exnNodeId);
@@ -290,20 +282,8 @@ std::string show(const Func& func, const Block& block) {
     );
   }
 
-  if (!block.throwExits.empty()) {
-    ret += "(throw:";
-    for (auto ex : block.throwExits) {
-      folly::toAppend(" blk:", ex, &ret);
-    }
-    ret += ")\n";
-  }
-
-  if (!block.unwindExits.empty()) {
-    ret += "(unwind:";
-    for (auto ex : block.unwindExits) {
-      folly::toAppend(" blk:", ex, &ret);
-    }
-    ret += ")\n";
+  if (block.throwExit != NoBlockId) {
+    ret += folly::sformat("(throw: blk:{})\n", block.throwExit);
   }
 
   return ret;
@@ -333,18 +313,9 @@ std::string dot_cfg(const Func& func) {
       outputed = true;
     });
     if (outputed) ret += "\n";
-    outputed = false;
-    if (!is_single_nop(*b)) {
-      for (auto ex : b->throwExits) {
-        ret += folly::sformat("B{} -> B{} [color=red];", bid, ex);
-        outputed = true;
-      }
-      for (auto ex : b->unwindExits) {
-        ret += folly::sformat("B{} -> B{} [color=blue];", bid, ex);
-        outputed = true;
-      }
+    if (!is_single_nop(*b) && b->throwExit != NoBlockId) {
+      ret += folly::sformat("B{} -> B{} [color=red];\n", bid, b->throwExit);
     }
-    if (outputed) ret += "\n";
   }
   return ret;
 }
@@ -365,11 +336,10 @@ std::string show(const Func& func) {
                   func.name, indent(2, dot_cfg(func)));
   }
 
-  for (auto& blk : func.blocks) {
-    if (blk->id == NoBlockId) continue;
-    folly::format(&ret, "block #{} (section {})\n{}",
-                  blk->id, static_cast<size_t>(blk->section),
-                  indent(2, show(func, *blk)));
+  for (auto const bid : func.blockRange()) {
+    auto const blk = func.blocks[bid].get();
+    if (blk->dead) continue;
+    folly::format(&ret, "block #{}\n{}", bid, indent(2, show(func, *blk)));
   }
 
   visitExnLeaves(func, [&] (const php::ExnNode& node) {
@@ -377,15 +347,7 @@ std::string show(const Func& func) {
     if (node.parent != NoExnNodeId) {
       folly::format(&ret, "(^{}) ", node.parent);
     }
-    ret += match<std::string>(
-      node.info,
-      [&] (const FaultRegion& fr) {
-        return folly::to<std::string>("fault->", fr.faultEntry);
-      },
-      [&] (const CatchRegion& cr) {
-        return folly::to<std::string>("catch->", cr.catchEntry);
-      }
-    ) + '\n';
+    ret += folly::to<std::string>("catch->", node.region.catchEntry) + '\n';
   });
 
   return ret;

@@ -8,10 +8,10 @@
  *)
 
 open Core_kernel
-open Tast
+open Aast
 module ShapeMap = Aast.ShapeMap
 module SN = Naming_special_names
-module Cls = Typing_classes_heap
+module Cls = Decl_provider.Class
 
 let validate_classname (pos, hint) =
   match hint with
@@ -24,6 +24,7 @@ let validate_classname (pos, hint) =
     | Aast.Haccess _
     | Aast.Hdynamic
     | Aast.Hsoft _
+    | Aast.Hlike _
     | Aast.Hnothing ->
       ()
     | Aast.Htuple _
@@ -44,7 +45,7 @@ let rec check_hint env (pos, hint) =
     | Some cls when
       let kind = Cls.kind cls in
       let tc_name = Cls.name cls in
-      (kind = Ast.Ctrait || kind = Ast.Cabstract && Cls.final cls)
+      (kind = Ast_defs.Ctrait || kind = Ast_defs.Cabstract && Cls.final cls)
       && tc_name <> SN.Collections.cDict
       && tc_name <> SN.Collections.cKeyset
       && tc_name <> SN.Collections.cVec ->
@@ -69,6 +70,7 @@ let rec check_hint env (pos, hint) =
   | Aast.Hvarray_or_darray h
   | Aast.Hvarray h
   | Aast.Hoption h
+  | Aast.Hlike h
   | Aast.Hsoft h ->
     check_hint env h
   | Aast.Habstr _
@@ -87,7 +89,7 @@ let rec check_hint env (pos, hint) =
     List.iter hl (check_hint env)
 
 and check_shape env Aast.{ nsi_allows_unknown_fields=_; nsi_field_map } =
-  ShapeMap.iter (fun _ v -> check_hint env v.Aast.sfi_hint) nsi_field_map
+  List.iter ~f:(fun v -> check_hint env v.Aast.sfi_hint) nsi_field_map
 
 (* Need to skip the root of the Haccess element *)
 and check_access env h _ =
@@ -120,28 +122,31 @@ let handler = object
     let check_class_vars cvar =
       Option.iter cvar.cv_type (check_hint env) in
     List.iter c.c_vars check_class_vars;
-    List.iter c.c_static_vars check_class_vars;
     check_tparams env c.c_tparams.c_tparam_list
 
   method! at_fun_ env f =
     check_tparams env f.f_tparams;
     List.iter f.f_params (check_param env);
     check_variadic_param env f.f_variadic;
-    Option.iter f.f_ret (check_hint env)
+    Option.iter (hint_of_type_hint f.f_ret) (check_hint env)
 
   method! at_method_ env m =
     check_tparams env m.m_tparams;
     List.iter m.m_params (check_param env);
     check_variadic_param env m.m_variadic;
+    Option.iter (hint_of_type_hint m.m_ret) (check_hint env)
 
   method! at_hint env (_, h) =
     match h with
     | Aast.Hshape hm -> check_shape env hm
     | _ -> ()
 
-  method! at_gconst env cst =
-    match cst.cst_value with
-    | Some _ -> Option.iter cst.cst_type (check_hint env)
+  method! at_gconst env cst = Option.iter cst.cst_type (check_hint env)
+
+  method! at_expr env (_, e) =
+    match e with
+    | Is (_, h) -> check_hint env h
+    | As (_, h, _) -> check_hint env h
     | _ -> ()
 
 end

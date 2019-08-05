@@ -1,3 +1,4 @@
+.hh_file 1;
 # Test declaring type aliases
 
 .main {
@@ -7,66 +8,101 @@
   DefTypeAlias 2
   DefTypeAlias 3
 
-  FPushFuncD 1 "foo"
+  NullUninit
+  NullUninit
+  NullUninit
   Int 0
+  FPushFuncD 1 "foo"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "foo"
+  NullUninit
+  NullUninit
+  NullUninit
   String "hi"
+  FPushFuncD 1 "foo"
   FCall <> 1 1 "" - "" ""
   PopC
 
   NewObjD "C"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $x
   PopC
 
-  FPushFuncD 1 "bar"
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $x
-  FCall <> 1 1 "" - "" ""
-  PopC
-
   FPushFuncD 1 "bar"
-  String "hi"
   FCall <> 1 1 "" - "" ""
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  String "hi"
   FPushFuncD 1 "bar"
-  Null
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "baz"
+  NullUninit
+  NullUninit
+  NullUninit
+  Null
+  FPushFuncD 1 "bar"
+  FCall <> 1 1 "" - "" ""
+  PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $x
+  FPushFuncD 1 "baz"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "baz"
+  NullUninit
+  NullUninit
+  NullUninit
   String "hi"
-  FCall <> 1 1 "" - "" ""
-  PopC
-
   FPushFuncD 1 "baz"
-  Null
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "quux"
+  NullUninit
+  NullUninit
+  NullUninit
+  Null
+  FPushFuncD 1 "baz"
+  FCall <> 1 1 "" - "" ""
+  PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $x
+  FPushFuncD 1 "quux"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "quux"
+  NullUninit
+  NullUninit
+  NullUninit
   String "hi"
+  FPushFuncD 1 "quux"
   FCall <> 1 1 "" - "" ""
   PopC
 
-  FPushFuncD 1 "quux"
+  NullUninit
+  NullUninit
+  NullUninit
   Null
+  FPushFuncD 1 "quux"
   FCall <> 1 1 "" - "" ""
   PopC
 

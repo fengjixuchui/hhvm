@@ -1,4 +1,4 @@
-<?php
+<?hh
 class Constants {
     // Needs to be equal
     const A = 1;
@@ -11,6 +11,6 @@ class ArrayProperty {
         Constants::B => 42,
     );
 }
-
+<<__EntryPoint>> function main(): void {
 var_dump( ArrayProperty::$array );
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto array get_declared_traits()
  * Description: Returns an array of all declared traits. 
  * Source code: Zend/zend_builtin_functions.c
@@ -25,4 +25,3 @@ var_dump(in_array('AutoTrait', get_declared_traits()));
 
 echo "\nDONE\n";
 
-?>

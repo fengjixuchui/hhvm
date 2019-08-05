@@ -1,4 +1,4 @@
-<?php
+<?hh
 $HTTP_RAW_POST_DATA = <<<EOF
 <?xml version='1.0' ?>
 <env:Envelope xmlns:env="http://schemas.xmlsoap.org/soap/envelope/">
@@ -8,4 +8,3 @@ $HTTP_RAW_POST_DATA = <<<EOF
 </env:Envelope>
 EOF;
 include "soap12-test.inc";
-?>

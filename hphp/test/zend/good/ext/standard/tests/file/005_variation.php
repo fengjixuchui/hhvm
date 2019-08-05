@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
    Prototype: int fileatime ( string $filename );
    Description: Returns the time the file was last accessed, or FALSE
@@ -33,7 +33,7 @@ function stat_fn( $filename ) {
   clearstatcache();
 
 }
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing fileattime(), filemtime(), filectime() & touch() : usage variations ***\n";
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 // create files
@@ -123,12 +123,12 @@ stat_fn($file_name2);
 sleep(2);
 
 /* set to access(creation time of the file) time */
-var_dump( touch($file_name2, @date(fileatime($file_name2))) );
+var_dump( touch($file_name2, (int)@date((string)fileatime($file_name2))) );
 stat_fn($file_name2);
 sleep(2);
 
 /* set to access time of $file_name2 */
-var_dump( touch($file_path."/005_variation_touch_fly.tmp", @date(fileatime($file_name2)), time()) );
+var_dump( touch($file_path."/005_variation_touch_fly.tmp", (int)@date((string)fileatime($file_name2)), time()) );
 stat_fn($file_name2);
 sleep(2);
 
@@ -143,9 +143,7 @@ rename($file_name2, "$file_path/005_variation_touch_new.tmp");
 stat_fn("$file_path/005_variation_touch_new.tmp");
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 if(file_exists($file_path."/005_variation_softlink.tmp")) {
   unlink($file_path."/005_variation_softlink.tmp");
@@ -168,4 +166,4 @@ if(file_exists($file_path."/005_variation_touch_fly.tmp")) {
 if(file_exists($file_path."/005_variation_touch_new.tmp")) {
   unlink($file_path."/005_variation_touch_new.tmp");
 }
-?>
+}

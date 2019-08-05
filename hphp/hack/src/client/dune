@@ -5,6 +5,7 @@
     (:standard
       \ clientLogCommand))
   (libraries
+    client_ide_service
     hh_server_monitor
     logging
     lwt
@@ -17,7 +18,9 @@
     server_command_types
     server_monitor
     server_utils
-    sys_utils)
+    sys_utils
+    utils_config_file_lwt
+    version)
   (preprocess
     (pps lwt_ppx)))
 
@@ -26,4 +29,6 @@
   (modules
     clientLogCommand)
   (libraries
-    sys_utils))
+    sys_utils)
+  (preprocess
+    (pps lwt_ppx))) ; See T41851208

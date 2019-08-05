@@ -21,13 +21,13 @@
 
 #include "hphp/system/systemlib.h"
 #include "hphp/util/hphp-config.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/string-vsnprintf.h"
 
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/file.h"
 #include "hphp/runtime/base/ini-setting.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
@@ -610,7 +610,7 @@ static bool pdo_stmt_describe_columns(sp_PDOStatement stmt) {
     }
 
     auto const column_key =
-      stmt->bound_columns.convertKey<IntishCast::CastSilently>(column->name);
+      stmt->bound_columns.convertKey<IntishCast::Cast>(column->name);
     if (stmt->bound_columns.exists(column_key)) {
       auto param = cast<PDOBoundParam>(stmt->bound_columns[column_key]);
       param->paramno = col;
@@ -1896,7 +1896,7 @@ static bool do_fetch(sp_PDOStatement stmt,
     switch (how) {
     case PDO_FETCH_ASSOC: {
       auto const name_key =
-        ret.toArrRef().convertKey<IntishCast::CastSilently>(name);
+        ret.toArrRef().convertKey<IntishCast::Cast>(name);
       ret.toArrRef().set(name_key, *val.asTypedValue());
       break;
     }
@@ -1905,11 +1905,11 @@ static bool do_fetch(sp_PDOStatement stmt,
       fetch_value(stmt, tmp, ++i, NULL);
       if (return_all) {
         auto const val_key_ret =
-          return_all->toArrRef().convertKey<IntishCast::CastSilently>(val);
+          return_all->toArrRef().convertKey<IntishCast::Cast>(val);
         return_all->toArrRef().set(val_key_ret, *tmp.asTypedValue());
       } else {
         auto const val_key =
-          ret.toArrRef().convertKey<IntishCast::CastSilently>(val);
+          ret.toArrRef().convertKey<IntishCast::Cast>(val);
         ret.toArrRef().set(val_key, *tmp.asTypedValue());
       }
       return true;
@@ -1917,7 +1917,7 @@ static bool do_fetch(sp_PDOStatement stmt,
     case PDO_FETCH_USE_DEFAULT:
     case PDO_FETCH_BOTH: {
       auto const name_key =
-        ret.toArrRef().convertKey<IntishCast::CastSilently>(name);
+        ret.toArrRef().convertKey<IntishCast::Cast>(name);
       ret.toArrRef().set(name_key, *val.asTypedValue());
       ret.toArrRef().append(val);
       break;
@@ -1925,7 +1925,7 @@ static bool do_fetch(sp_PDOStatement stmt,
 
     case PDO_FETCH_NAMED: {
       auto const name_key =
-        ret.toArrRef().convertKey<IntishCast::CastSilently>(name);
+        ret.toArrRef().convertKey<IntishCast::Cast>(name);
       /* already have an item with this name? */
       forceToDArray(ret);
       if (ret.toArrRef().exists(name_key)) {
@@ -2005,7 +2005,7 @@ static bool do_fetch(sp_PDOStatement stmt,
 
   if (return_all) {
     auto const grp_key =
-      return_all->toArrRef().convertKey<IntishCast::CastSilently>(grp_val);
+      return_all->toArrRef().convertKey<IntishCast::Cast>(grp_val);
     if ((flags & PDO_FETCH_UNIQUE) == PDO_FETCH_UNIQUE) {
       return_all->toArrRef().set(grp_key, *ret.asTypedValue());
     } else {
@@ -2469,7 +2469,7 @@ safe:
         vparam = params[plc->bindno];
       } else {
         String str(plc->pos, plc->len, CopyString);
-        auto const arrkey = params.convertKey<IntishCast::CastSilently>(str);
+        auto const arrkey = params.convertKey<IntishCast::Cast>(str);
         vparam = params[arrkey];
       }
       if (vparam.isNull()) {
@@ -2533,6 +2533,7 @@ safe:
               case KindOfFunc:
               case KindOfClass:
               case KindOfClsMeth:
+              case KindOfRecord:
                 if (!stmt->dbh->conn()->quoter(
                       param->parameter.toString(),
                       plc->quoted,
@@ -2598,7 +2599,7 @@ rewrite:
       int skip_map = 0;
       String name(plc->pos, plc->len, CopyString);
       auto const name_key =
-        stmt->bound_param_map.convertKey<IntishCast::CastSilently>(name);
+        stmt->bound_param_map.convertKey<IntishCast::Cast>(name);
 
       /* check if bound parameter is already available */
       if (!strcmp(name.c_str(), "?") ||

@@ -17,6 +17,7 @@
 #include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/tv-variant.h"
+#include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/ext/vsdebug/command.h"
 #include "hphp/runtime/ext/vsdebug/debugger.h"
 #include "hphp/runtime/ext/vsdebug/php_executor.h"
@@ -44,7 +45,6 @@ protected:
   std::string m_expr;
   Unit *m_rawUnit;
   int m_frameDepth;
-  bool m_evalSilent;
 
   void callPHPCode() override;
 };
@@ -57,10 +57,9 @@ EvaluatePHPExecutor::EvaluatePHPExecutor(
   const std::string &expr,
   int frameDepth,
   bool evalSilent
-) : PHPExecutor(debugger, session, "Evaluation returned", threadId)
+) : PHPExecutor(debugger, session, "Evaluation returned", threadId, evalSilent)
   , m_expr{expr}
   , m_frameDepth{frameDepth}
-  , m_evalSilent{evalSilent}
 {
 }
 
@@ -90,11 +89,15 @@ EvaluateCommand::EvaluateCommand(
   Debugger* debugger,
   folly::dynamic message
 ) : VSCommand(debugger, message),
-    m_frameId{0} {
+    m_frameId{0},
+    m_returnHhvmSerialization{false} {
 
   const folly::dynamic& args = tryGetObject(message, "arguments", s_emptyArgs);
   const int frameId = tryGetInt(args, "frameId", -1);
+  const bool returnHhvmSerialization = tryGetBool(
+    args, "returnHhvmSerialization", false);
   m_frameId = frameId;
+  m_returnHhvmSerialization = returnHhvmSerialization;
 }
 
 EvaluateCommand::~EvaluateCommand() {
@@ -118,6 +121,8 @@ request_id_t EvaluateCommand::targetThreadId(DebuggerSession* session) {
 
   return frame->m_requestId;
 }
+
+static const StaticString s_varName("_");
 
 bool EvaluateCommand::executeImpl(
   DebuggerSession* session,
@@ -151,10 +156,7 @@ bool EvaluateCommand::executeImpl(
 
   if (result.failed) {
     if (!evalSilent) {
-      m_debugger->sendUserMessage(
-        result.error.c_str(),
-        DebugTransport::OutputLevelError
-      );
+      // Note that the VM will have already sent the message to stderr
       throw DebuggerCommandException("Failed to evaluate expression");
     } else {
       // Return empty response with no type in silent eval context.
@@ -162,6 +164,24 @@ bool EvaluateCommand::executeImpl(
       folly::dynamic& body = (*responseMsg)["body"];
       body["type"] = "";
       return false;
+    }
+  }
+
+  if (evalContext == "repl") {
+    // Note that the execution code, if it succeeded, should have created
+    // a varenv at the frame already.
+    const auto fp =
+      g_context->getFrameAtDepthForDebuggerUnsafe(frameDepth);
+    VarEnv* env = g_context->getVarEnv(fp);
+
+    if (env == nullptr) {
+      env = g_context->m_globalVarEnv;
+    }
+    if (env) {
+      env->set(
+        s_varName.get(),
+        executor.m_result.result.asTypedValue()
+      );
     }
   }
 
@@ -176,6 +196,23 @@ bool EvaluateCommand::executeImpl(
 
   (*responseMsg)["body"] = folly::dynamic::object;
   folly::dynamic& body = (*responseMsg)["body"];
+
+  if (m_returnHhvmSerialization) {
+    try {
+      VariableSerializer vs(
+        VariableSerializer::Type::DebuggerDump,
+        0,
+        2
+      );
+      body["serialized"] = vs.serialize(result.result, true).get()->data();
+    } catch (const StringBufferLimitException& e) {
+      body["serialized"] = "Serialization limit exceeded";
+    } catch (...) {
+      assertx(false);
+      throw;
+    }
+  }
+
   body["result"] = serializedResult["value"];
   body["type"] = serializedResult["type"];
 
@@ -229,6 +266,7 @@ std::string EvaluateCommand::prepareEvalExpression(const std::string& expr) {
 
   return "<?hh " + expression + ";";
 }
+
 
 }
 }

@@ -29,6 +29,7 @@
 #include "hphp/hhbbc/interp-state.h"
 #include "hphp/hhbbc/interp.h"
 #include "hphp/hhbbc/index.h"
+#include "hphp/hhbbc/options.h"
 #include "hphp/hhbbc/representation.h"
 #include "hphp/hhbbc/cfg.h"
 #include "hphp/hhbbc/unit-util.h"
@@ -52,13 +53,7 @@ struct KnownArgs {
 
 //////////////////////////////////////////////////////////////////////
 
-const StaticString s_86cinit("86cinit");
-const StaticString s_86pinit("86pinit");
-const StaticString s_86sinit("86sinit");
-const StaticString s_86linit("86linit");
 const StaticString s_Closure("Closure");
-const StaticString s_86reified_prop("86reified_prop");
-const StaticString s_Reified("__Reified");
 
 //////////////////////////////////////////////////////////////////////
 
@@ -71,7 +66,7 @@ uint32_t rpoId(const FuncAnalysis& ai, BlockId blk) {
 }
 
 Type get_type_of_reified_list(const UserAttributeMap& ua) {
-  auto const it = ua.find(s_Reified.get());
+  auto const it = ua.find(s___Reified.get());
   assertx(it != ua.end());
   auto const tv = it->second;
   assertx(tvIsVecOrVArray(&tv));
@@ -90,9 +85,10 @@ State pseudomain_entry_state(const php::Func* func) {
   ret.thisType = TOptObj;
   ret.locals.resize(func->locals.size());
   ret.iters.resize(func->numIters);
-  ret.clsRefSlots.resize(func->numClsRefSlots);
-  for (auto& l : ret.locals) l = TGen;
-  for (auto& s : ret.clsRefSlots) s = TCls;
+  for (auto i = 0; i < ret.locals.size(); ++i) {
+    // Named pseudomain locals are bound to $GLOBALS.
+    ret.locals[i] = func->locals[i].name ? TGen : TUninit;
+  }
   return ret;
 }
 
@@ -119,7 +115,6 @@ State entry_state(const Index& index, Context const ctx,
   }();
   ret.locals.resize(ctx.func->locals.size());
   ret.iters.resize(ctx.func->numIters);
-  ret.clsRefSlots.resize(ctx.func->numClsRefSlots, TCls);
 
   auto locId = uint32_t{0};
   for (; locId < ctx.func->params.size(); ++locId) {
@@ -145,9 +140,7 @@ State entry_state(const Index& index, Context const ctx,
       continue;
     }
     auto const& param = ctx.func->params[locId];
-    if (ctx.func->isMemoizeImpl &&
-        !param.byRef &&
-        RuntimeOption::EvalHardTypeHints) {
+    if (ctx.func->isMemoizeImpl && !param.byRef) {
       auto const& constraint = param.typeConstraint;
       if (constraint.hasConstraint() && !constraint.isTypeVar() &&
           !constraint.isTypeConstant()) {
@@ -193,17 +186,12 @@ State entry_state(const Index& index, Context const ctx,
   auto afterParamsLocId = uint32_t{0};
   for (; locId < ctx.func->locals.size(); ++locId, ++afterParamsLocId) {
     /*
-     * Some of the closure locals are mapped to used variables or static
-     * locals.  The types of use vars are looked up from the index, but we
-     * don't currently do anything to try to track closure static local types.
+     * Some of the closure locals are mapped to used variables. The types of
+     * use vars are looked up from the index.
      */
     if (ctx.func->isClosureBody) {
       if (afterParamsLocId < useVars.size()) {
         ret.locals[locId] = useVars[afterParamsLocId];
-        continue;
-      }
-      if (afterParamsLocId < ctx.func->staticLocals.size()) {
-        ret.locals[locId] = TGen;
         continue;
       }
     }
@@ -261,7 +249,7 @@ prepare_incompleteQ(const Index& index,
       for (auto i = knownArgs->args.size(); i < numParams; ++i) {
         auto const dv = ctx.func->params[i].dvEntryPoint;
         if (dv != NoBlockId) {
-          ai.bdata[dv].stateIn = entryState;
+          ai.bdata[dv].stateIn.copy_from(entryState);
           incompleteQ.push(rpoId(ai, dv));
           return true;
         }
@@ -270,7 +258,7 @@ prepare_incompleteQ(const Index& index,
     }();
 
     if (!useDvInit) {
-      ai.bdata[ctx.func->mainEntry].stateIn = entryState;
+      ai.bdata[ctx.func->mainEntry].stateIn.copy_from(entryState);
       incompleteQ.push(rpoId(ai, ctx.func->mainEntry));
     }
 
@@ -280,7 +268,7 @@ prepare_incompleteQ(const Index& index,
   for (auto paramId = uint32_t{0}; paramId < numParams; ++paramId) {
     auto const dv = ctx.func->params[paramId].dvEntryPoint;
     if (dv != NoBlockId) {
-      ai.bdata[dv].stateIn = entryState;
+      ai.bdata[dv].stateIn.copy_from(entryState);
       incompleteQ.push(rpoId(ai, dv));
       for (auto locId = paramId; locId < numParams; ++locId) {
         ai.bdata[dv].stateIn.locals[locId] = ctx.func->params[locId].isVariadic
@@ -290,7 +278,7 @@ prepare_incompleteQ(const Index& index,
     }
   }
 
-  ai.bdata[ctx.func->mainEntry].stateIn = entryState;
+  ai.bdata[ctx.func->mainEntry].stateIn.copy_from(entryState);
   incompleteQ.push(rpoId(ai, ctx.func->mainEntry));
 
   return incompleteQ;
@@ -320,12 +308,12 @@ FuncAnalysis do_analyze_collect(const Index& index,
 
   SCOPE_ASSERT_DETAIL("do-analyze-collect-2") {
     std::string ret;
-    for (auto& blk : ctx.func->blocks) {
+    for (auto bid : ctx.func->blockRange()) {
       folly::format(&ret,
                     "block #{}\nin-{}\n{}",
-                    blk->id,
-                    state_string(*ctx.func, ai.bdata[blk->id].stateIn, collect),
-                    show(*ctx.func, *blk)
+                    bid,
+                    state_string(*ctx.func, ai.bdata[bid].stateIn, collect),
+                    show(*ctx.func, *ctx.func->blocks[bid])
                    );
     }
 
@@ -375,15 +363,11 @@ FuncAnalysis do_analyze_collect(const Index& index,
    * chains in the type lattice.
    */
   auto totalVisits = std::vector<uint32_t>(ctx.func->blocks.size());
-  auto totalLoops = uint32_t{0};
 
   // For debugging, count how many times basic blocks get interpreted.
   auto interp_counter = uint32_t{0};
 
-  // Used to force blocks that depended on the types of local statics
-  // to be re-analyzed when the local statics change.
-  hphp_fast_map<BlockId, hphp_fast_map<LocalId, Type>>
-    usedLocalStatics;
+  hphp_fast_map<BlockId, BlockUpdateInfo> blockUpdates;
 
   /*
    * Iterate until a fixed point.
@@ -428,25 +412,22 @@ FuncAnalysis do_analyze_collect(const Index& index,
                state_string(*ctx.func, ai.bdata[target].stateIn, collect));
       };
 
+      auto const blk = ctx.func->blocks[bid].get();
       auto stateOut = ai.bdata[bid].stateIn;
       auto interp   = Interp {
-        index, ctx, collect, ctx.func->blocks[bid].get(), stateOut
+        index, ctx, collect, bid, blk, stateOut
       };
-      auto flags    = run(interp, propagate);
-      auto& stateIn = ai.bdata[bid].stateIn;
-      stateIn.speculated                = stateOut.speculated;
-      stateIn.speculatedPops            = stateOut.speculatedPops;
-      stateIn.speculatedIsUnconditional = stateOut.speculatedIsUnconditional;
-      stateIn.speculatedIsFallThrough   = stateOut.speculatedIsFallThrough;
+      auto flags    = run(interp, ai.bdata[bid].stateIn, propagate);
       if (any(collect.opts & CollectionOpts::EffectFreeOnly) &&
           !collect.effectFree) {
         break;
       }
-      // We only care about the usedLocalStatics from the last visit
-      if (flags.usedLocalStatics) {
-        usedLocalStatics[bid] = std::move(*flags.usedLocalStatics);
+      if (flags.updateInfo.replacedBcs.size() ||
+          flags.updateInfo.unchangedBcs != blk->hhbcs.size() ||
+          flags.updateInfo.fallthrough != blk->fallthrough) {
+        blockUpdates[bid] = flags.updateInfo;
       } else {
-        usedLocalStatics.erase(bid);
+        blockUpdates.erase(bid);
       }
 
       if (flags.returned) {
@@ -467,26 +448,6 @@ FuncAnalysis do_analyze_collect(const Index& index,
         !collect.effectFree) {
       break;
     }
-
-    // maybe some local statics changed type since the last time their
-    // blocks were visited.
-
-    if (totalLoops++ >= options.analyzeFuncWideningLimit) {
-      // If we loop too many times because of static locals, widen them to
-      // ensure termination.
-      for (auto& t : collect.localStaticTypes) {
-        t = widen_type(std::move(t));
-      }
-    }
-
-    for (auto const& elm : usedLocalStatics) {
-      for (auto const& ls : elm.second) {
-        if (collect.localStaticTypes[ls.first] != ls.second) {
-          incompleteQ.push(rpoId(ai, elm.first));
-          break;
-        }
-      }
-    }
   } while (!incompleteQ.empty());
 
   ai.closureUseTypes = std::move(collect.closureUseTypes);
@@ -498,7 +459,9 @@ FuncAnalysis do_analyze_collect(const Index& index,
   ai.unfoldableFuncs = collect.unfoldableFuncs;
   ai.usedParams = collect.usedParams;
   ai.publicSPropMutations = std::move(collect.publicSPropMutations);
-
+  for (auto& elm : blockUpdates) {
+    ai.blockUpdates.emplace_back(elm.first, std::move(elm.second));
+  }
   index.fixup_return_type(ctx.func, ai.inferredReturn);
 
   /*
@@ -536,9 +499,6 @@ FuncAnalysis do_analyze_collect(const Index& index,
     ret += bsep;
     return ret;
   }());
-
-  // Do this after the tracing above
-  ai.localStaticTypes = std::move(collect.localStaticTypes);
   return ai;
 }
 
@@ -589,20 +549,15 @@ void expand_hni_prop_types(ClassAnalysis& clsAnalysis) {
     if (it == end(propState)) return;
 
     /*
-     * When HardTypeHints isn't on, DisallowDynamicVarEnvFuncs isn't on, or any
-     * functions are interceptable, we don't require the constraints to actually
-     * match, and relax all the HNI types to Gen.
+     * When any functions are interceptable, we don't require the constraints to
+     * actually match, and relax all the HNI types to Gen.
      *
-     * This is because extensions may wish to assign to properties
-     * after a typehint guard, which is going to fail without
-     * HardTypeHints.  Or, with any interceptable functions, it's
-     * quite possible that some function calls in systemlib might not
-     * be known to return things matching the property type hints for
+     * This is because with any interceptable functions, it's quite
+     * possible that some function calls in systemlib might not be
+     * known to return things matching the property type hints for
      * some properties, or not to take their arguments by reference.
      */
     auto const hniTy =
-      !RuntimeOption::EvalHardTypeHints ||
-      RuntimeOption::DisallowDynamicVarEnvFuncs != HackStrictOption::ON ||
       clsAnalysis.anyInterceptable
         ? TGen
         : from_hni_constraint(prop.userType);
@@ -756,8 +711,7 @@ ClassAnalysis analyze_class(const Index& index, Context const ctx) {
          *
          * Closures will not have an 86pinit body, but still may have
          * properties of kind KindOfUninit (they will later contain
-         * used variables or static locals for the closure body).  We
-         * don't want to touch those.
+         * used variables).  We don't want to touch those.
          */
         t = TBottom;
       } else if (!(prop.attrs & AttrSystemInitialValue)) {
@@ -771,8 +725,7 @@ ClassAnalysis analyze_class(const Index& index, Context const ctx) {
     } else {
       // Same thing as the above regarding TUninit and TBottom.
       // Static properties don't need to exclude closures for this,
-      // though---we use instance properties for the closure
-      // 86static_* properties.
+      // though---we use instance properties for the closure use vars.
       auto t = cellTy.subtypeOf(BUninit)
         ? TBottom
         : (prop.attrs & AttrSystemInitialValue)
@@ -801,7 +754,7 @@ ClassAnalysis analyze_class(const Index& index, Context const ctx) {
           Context { ctx.unit, f, ctx.cls },
           &clsAnalysis,
           nullptr,
-          CollectionOpts::TrackConstantArrays
+          CollectionOpts{}
         )
       );
     }
@@ -855,7 +808,7 @@ ClassAnalysis analyze_class(const Index& index, Context const ctx) {
           Context { ctx.unit, f.get(), ctx.cls },
           &clsAnalysis,
           nullptr,
-          CollectionOpts::TrackConstantArrays
+          CollectionOpts{}
         )
       );
     }
@@ -869,7 +822,7 @@ ClassAnalysis analyze_class(const Index& index, Context const ctx) {
             Context { ctx.unit, invoke, c },
             &clsAnalysis,
             nullptr,
-            CollectionOpts::TrackConstantArrays
+            CollectionOpts{}
           )
         );
       }
@@ -885,7 +838,7 @@ ClassAnalysis analyze_class(const Index& index, Context const ctx) {
           Context { m->unit, m, ctx.cls },
           &clsAnalysis,
           nullptr,
-          CollectionOpts::TrackConstantArrays
+          CollectionOpts{}
         );
       }
     }
@@ -966,18 +919,21 @@ std::vector<std::pair<State,StepFlags>>
 locally_propagated_states(const Index& index,
                           const FuncAnalysis& fa,
                           CollectedInfo& collect,
-                          const php::Block* blk,
+                          BlockId bid,
                           State state) {
   Trace::Bump bumper{Trace::hhbbc, 10};
 
   std::vector<std::pair<State,StepFlags>> ret;
+
+  auto const blk = fa.ctx.func->blocks[bid].get();
   ret.reserve(blk->hhbcs.size() + 1);
 
-  auto interp = Interp { index, fa.ctx, collect, blk, state };
+  auto interp = Interp { index, fa.ctx, collect, bid, blk, state };
 
   for (auto& op : blk->hhbcs) {
     ret.emplace_back(state, StepFlags{});
     ret.back().second = step(interp, op);
+    state.stack.compact();
   }
 
   ret.emplace_back(std::move(state), StepFlags{});

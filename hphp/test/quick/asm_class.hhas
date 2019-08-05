@@ -1,3 +1,4 @@
+.hh_file 1;
 #
 # Basic test of classes for hip hop assembler.
 #
@@ -8,6 +9,9 @@
   DefCls 2
   DefCls 3
   DefCls 4
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
   FCall <> 0 1 "" - "" ""
   PopC
@@ -62,8 +66,9 @@
 .class Derived extends Base implements(IDunno IDunno2) {
   .method [public] some_junk {
     This
-    FPushObjMethodD 0 "prot_method" NullThrows
-    FCall <> 0 1 "" - "" ""
+    NullUninit
+    NullUninit
+    FCallObjMethodD <> 0 1 "" - "" NullThrows "prot_method"
     PopC
 
     Null
@@ -131,9 +136,11 @@
 .function prop_test {
   NewObjD "WithProps"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $obj
   PopC
 
@@ -144,13 +151,15 @@
   PopC
 
   CGetL $obj
-  FPushObjMethodD 0 "print_funk" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "print_funk"
   PopC
 
   CGetL $obj
-  FPushObjMethodD 0 "print_defaulted" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "print_defaulted"
   PopC
 
   True
@@ -158,52 +167,63 @@
 }
 
 .function main {
-  .numclsrefslots 1;
-
   NewObjD "Base"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $base
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
+  String "printing this string"
   String "print_it"
   String "Base"
-  ClsRefGetC 0
-  FPushClsMethod 1 0
-  String "printing this string"
-  FCall <> 1 1 "" - "" ""
+  ClassGetC
+  FCallClsMethod <> 1 1 "" - ""
   PopC
 
   NewObjD "Derived"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $derived
   PopC
 
   CGetL $derived
-  FPushObjMethodD 0 "some_junk" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "some_junk"
   PopC
 
   CGetL $base
-  FPushObjMethodD 0 "overriden" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "overriden"
   PopC
 
   CGetL $derived
-  FPushObjMethodD 0 "overriden" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "overriden"
   PopC
 
   CGetL $derived
-  FPushObjMethodD 0 "abs_method" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "abs_method"
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "prop_test"
   FCall <> 0 1 "" - "" ""
   PopC

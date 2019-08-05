@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /*
    +-------------------------------------------------------------+
@@ -82,22 +82,10 @@ var_dump(isset($x2->m));
 unset($x2->m);
 var_dump(isset($x2->m));
 
-echo "---------- unsetting inside a function (global) ------------\n";
+echo "---------- unsetting inside a function (\$GLOBALS) ------------\n";
 
 $gl = 100;
-
-function g1()
-{
-    global $gl;
-    var_dump(isset($gl));
-    unset($gl);             // unsets local "version" in current scope
-    var_dump(isset($gl));
-}
-
-g1();
 var_dump(isset($gl));       // still set
-
-echo "---------- unsetting inside a function (\$GLOBALS) ------------\n";
 
 function g2()
 {
@@ -128,15 +116,14 @@ var_dump($v2);
 
 echo "---------- unsetting inside a function (static) ------------\n";
 
+class State { static $count = 0; }
 function g4()
 {
-    static $count = 0;
-    ++$count;
-    echo "count = $count\n";
+    ++State::$count;
+    echo "count = ".State::$count."\n";
 
-    var_dump(isset($count));
-    unset($count);          // unsets local "version" in current scope
-    var_dump(isset($count));
+    var_dump(isset(State::$count));
+    var_dump(false);
 }
 
 g4();

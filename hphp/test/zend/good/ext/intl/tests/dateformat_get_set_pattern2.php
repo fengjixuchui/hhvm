@@ -1,5 +1,4 @@
-
-<?php
+<?hh
 
 /*
  * Test for the datefmt_get_pattern & datefmt_set_pattern function
@@ -48,4 +47,3 @@ include_once( 'ut_common.inc' );
 
 // Run the test
 ut_run();
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* 
  Prototype: array fputcsv ( resource $handle , array $fields [, string $delimiter [, string $enclosure]]] );
  Description: Format line as CSV and write to the file pointer 
@@ -8,7 +8,7 @@
    Testing fputcsv() to write to a file when delimiter is same but enclosure is different from those
    present in the field to be written to the file
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing fputcsv() : with same delimiter and different enclosure ***\n";
 
 /* the array is with three elements in it. Each element should be read as 
@@ -71,4 +71,4 @@ foreach ($csv_lists as $csv_list) {
 } // end of foreach
 
 echo "Done\n";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int mb_ereg(string $pattern, string $string [, array $registers])
  * Description: Regular expression match for multibyte string
  * Source code: ext/mbstring/php_mbregex.c
@@ -7,7 +7,7 @@
 /*
  * Test behaviour of mb_ereg() when passed an incorrcect number of arguments
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mb_ereg() : error conditions ***\n";
 
 
@@ -25,4 +25,4 @@ $pattern = b'string_val';
 try { var_dump( mb_ereg($pattern) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

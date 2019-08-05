@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $outputFileName = __FILE__.'tmp';
 $outFile = "compress.zlib://$outputFileName";
 $data = <<<EOT
@@ -13,5 +13,5 @@ gzpassthru($h);
 gzclose($h);
 echo "\n";
 unlink($outputFileName);
-?>
-===DONE===
+echo "===DONE===\n";
+}

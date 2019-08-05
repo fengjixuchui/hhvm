@@ -1,4 +1,4 @@
-<?php
+<?hh
 class m extends Mongo { function __construct() {} }
 try {
     $m = new m;
@@ -6,5 +6,4 @@ try {
 } catch(Exception $e) {
     var_dump($e->getMessage());
 }
-?>
-===DONE===
+echo "===DONE===\n";

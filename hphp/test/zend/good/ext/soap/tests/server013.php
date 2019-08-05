@@ -1,4 +1,4 @@
-<?php
+<?hh
 function Sum($a) {
   $sum = 0;
   if (is_array($a)) {
@@ -8,7 +8,7 @@ function Sum($a) {
   }
   return $sum;
 }
-
+<<__EntryPoint>> function main(): void {
 $server = new soapserver(null,array('uri'=>"http://testuri.org"));
 $server->addfunction("Sum");
 
@@ -32,4 +32,4 @@ $HTTP_RAW_POST_DATA = <<<EOF
 EOF;
 $server->handle($HTTP_RAW_POST_DATA);
 echo "ok\n";
-?>
+}

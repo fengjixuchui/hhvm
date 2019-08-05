@@ -1,6 +1,6 @@
-<?php
+<?hh
 /* Prototype  : mixed opendir(string $path[, resource $context])
- * Description: Open a directory and return a dir_handle 
+ * Description: Open a directory and return a dir_handle
  * Source code: ext/standard/dir.c
  */
 
@@ -9,7 +9,7 @@
  *   1) remove write & execute permission from the 1st parent and test opendir()
  *   2) remove execute permission from 2nd parent and test opendir()
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing opendir() : usage variations ***\n";
 
 /* create the temporary directory :
@@ -47,15 +47,13 @@ $dir_handle2 = opendir($child_dir_path); // try to open, expected failure
 var_dump( $dir_handle2 ); // dump it
 
 if (is_resource($dir_handle1)) {
-	closedir($dir_handle1);
+    closedir($dir_handle1);
 }
 if (is_resource($dir_handle2)) {
-	closedir($dir_handle2);
+    closedir($dir_handle2);
 }
-?>
-===DONE===
-<?php error_reporting(0); ?>
-<?php
+echo "===DONE===\n";
+error_reporting(0);
 $parent_dir_path = dirname(__FILE__) . "/opendir_variation5";
 $sub_dir_path = $parent_dir_path."/sub_dir";
 $child_dir_path = $sub_dir_path."/child_dir";
@@ -68,4 +66,4 @@ chmod($child_dir_path, 0777);
 rmdir($child_dir_path);
 rmdir($sub_dir_path);
 rmdir($parent_dir_path);
-?>
+}

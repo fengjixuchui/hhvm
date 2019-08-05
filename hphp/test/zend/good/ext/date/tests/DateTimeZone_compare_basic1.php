@@ -1,4 +1,4 @@
-<?php 
+<?hh 
 
 // NB: DateTimeZone class does not define a customized compare class handler so standard object handler will be used  
 
@@ -33,5 +33,4 @@ var_dump($obj2 == $obj3);
 var_dump($obj2 == $obj4);
 var_dump($obj3 == $obj4);
 
-?>
-===DONE===
+echo "===DONE===\n";

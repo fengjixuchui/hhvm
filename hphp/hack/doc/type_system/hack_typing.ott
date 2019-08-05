@@ -115,7 +115,7 @@ field types on the left of $[[\]]$.
 }}
 
 t, u {{ ocaml ty }} :: 'ty_' ::=                           {{ com syntax of types }}
-  | noreturn :: :: noreturn                 {{ com bottom type }}
+  | nothing :: :: nothing                 {{ com bottom type }}
   | mixed  ::   :: mixed                    {{ com top type }}
   | nonnull ::  :: nonnull                  {{ com nonnull type }}
   | null   ::   :: null                     {{ com null type }}
@@ -166,7 +166,7 @@ inst :: '' ::= {{ com vector of type arguments }}
 U {{ ocaml updatel }} {{ tex \Upsilon }} :: U_ ::= {{ com list of context updates }}
   | x1 := t1 , .. , xn := tn ::   :: update_list
   | U1 [ U2 ] ::  :: update_override
-    {{ com update list [[U1]] overridden or extended with [[U2]] }}
+    {{ com update list $[[U1]]$ overridden or extended with $[[U2]]$ }}
 
 Gitem :: 'lenv_' ::= {{ com entry in locals environment }}
   | x : t                           ::   :: lvar {{ com local typing }}
@@ -179,7 +179,7 @@ G {{ ocaml lenv }} {{ coq lenv }}
    | { Gitem1 , .. , Gitemn }        :: :: env
    | G , Gitem                       :: :: add {{ com extend }}
    | G [ U ]                         :: :: update
-     {{ com update environment [[G]] with assignments [[U]] }}
+     {{ com update environment $[[G]]$ with assignments $[[U]]$ }}
 
 Kitem :: 'kenv_' ::= {{ com entry in continuation environment }}
   | contkind : G                          ::   :: make {{ com continuation typing }}
@@ -442,7 +442,7 @@ formula :: 'formula_' ::=
     {{ tex [[formula]] \wedge [[formula']] }}
     {{ ocaml [[formula]] || [[formula']] }}
     {{ coq [[formula]] \/ [[formula']] }}
-  | local N :: :: local {{ com definition of [[N]] is in the current file }}
+  | local N :: :: local {{ com definition of $[[N]]$ is in the current file }}
                         {{ tex \textit{local}([[N]]) }}
                         {{ ocaml true }} % TODO
                         {{ coq True }} % TODO
@@ -457,7 +457,7 @@ TySys :: '' ::=
 
 defn
   t1 <:: t2 :: :: derives ::'derives_'
-  {{ com [[t1]] extends or implements [[t2]] }}
+  {{ com $[[t1]]$ extends or implements $[[t2]]$ }}
 by
 
 {{ com \section*{Inheritance and implementation} }}
@@ -488,7 +488,7 @@ t1 <:: t3
 
 defn
   G |- t1 <: t2 :: :: tysub ::'sub_'
-  {{ com [[t1]] is a subtype of [[t2]] under assumptions [[G]] }}
+  {{ com $[[t1]]$ is a subtype of $[[t2]]$ under assumptions $[[G]]$ }}
 by
 
 {{ com \subsection*{General subtyping rules} }}
@@ -540,6 +540,55 @@ G |- t1 | t2 <: t
 Other properties are consequences of these rules. For example, commutativity
 follows by applying all three.
 }}
+
+{{ com \subsection{Intersection} }}
+
+{{ com
+Hack has intersection types, though at the moment there is no syntax for them.
+In general, they are n-ary, but it's easier to present in binary form.
+}}
+
+{{ com
+Any intersection type can be widened to one of its components. (Intersections are lower bounds.)
+}}
+
+------------------ :: intersect_lower1
+G |- t1 & t2 <: t1
+
+------------------ :: intersect_lower2
+G |- t1 & t2 <: t1
+
+{{ com
+The next rule states that intersection is the \emph{greatest} lower bound.
+}}
+
+G |- t <: t1
+G |- t <: t2
+------------------ :: intersect_greatest
+G |- t <: t1 & t2
+
+{{ com
+Other properties are consequences of these rules. For example, commutativity
+follows by applying all three.
+}}
+
+{{ com
+Intersection distributes over union. One direction of this is the rule below; the other direction is a consequence of other rules.
+Distributivity of union over intersection is also derivable.
+}}
+
+-------------------------------------------- :: intersect_distr_union
+G |- t1 & (t2 | t3) <: (t1 & t2) | (t1 & t3)
+
+{{ com
+Intersection interacts with function types according to the following rules.
+}}
+
+-------------------------------------------------------------------------------------------------------------- :: intersect_distr_function
+G |- (function(t1 , .. , tn) : t) & (function(u1 , .. , un) : u) <: function(t1|u1 , .. , tn | un) : (t & u)
+
+-------------------------------------------------------------------------------------------------------------- :: intersect_distr_variadic_function
+G |- (function(t1 , .. , tn, t vardots) : t) & (function(u1 , .. , un , u vardots) : u) <: function(t1|u1 , .. , tn | un , t0|u0 vardots) : (t & u)
 
 {{ com \subsection{Nullable types} }}
 
@@ -615,7 +664,7 @@ enum N : t asdecl
 ---------------------- :: enum_as_arraykey
 G |- N <: arraykey
 
-{{ com \subsection{Noreturn} }}
+{{ com \subsection{Nothing} }}
 
 {{ com
 
@@ -623,12 +672,12 @@ Hack has a bottom type.
 
 }}
 
------------------- :: noreturn_bottom
-G |- noreturn <: t
+------------------ :: nothing_bottom
+G |- nothing <: t
 
 {{ com
 
-Note that this makes $[[noreturn]]$ a neutral element with respect to union.
+Note that this makes $[[nothing]]$ a neutral element with respect to union.
 
 }}
 
@@ -753,10 +802,10 @@ G |- t1 <: u1 .. G |- tn <: un
 ---------------------------- :: tuple_co
 G |- ( t1,..,tn ) <: (u1,..,un)
 
-{{ com A tuple collapses if any of its types is the bottom type $[[noreturn]]$ }}
+{{ com A tuple collapses if any of its types is the bottom type $[[nothing]]$ }}
 
------------------------------------------------------- :: tuple_noreturn
-G |- (t1 , .. , tm , noreturn , t1', .. , tn') <: noreturn
+------------------------------------------------------ :: tuple_nothing
+G |- (t1 , .. , tm , nothing , t1', .. , tn') <: nothing
 
 {{ com \subsection{Hack arrays} }}
 
@@ -817,11 +866,11 @@ G |- array<> <: array<t1,t2>
 
 {{ com Arrays over the bottom type $[[nonnull]]$ are inhabited by the empty array only. }}
 
-------------------------------- :: vecarray_over_noreturn_as_emptyarray
-G |- array<noreturn> <: array<>
+------------------------------- :: vecarray_over_nothing_as_emptyarray
+G |- array<nothing> <: array<>
 
----------------------------------- :: maparray_over_noreturn_as_emptyarray
-G |- array<t, noreturn> <: array<>
+---------------------------------- :: maparray_over_nothing_as_emptyarray
+G |- array<t, nothing> <: array<>
 
 {{ com \subsection{Functions} }}
 {{ com
@@ -868,15 +917,15 @@ G |- shape ( sft1 , .. , sftn ) <: shape ( sft1' , .. , sftn' )
 -------------------------------------------------- :: closed_shape_widen
 G |- shape ( sft1 , .. , sftm ) <: shape ( sft1 , .. , sftm , ?sfn1' => t1' , .. , ?sfnn' => tn' )
 
-{{ com Width subtyping on closed shapes: optional fields of type $[[noreturn]]$ can be dropped }}
+{{ com Width subtyping on closed shapes: optional fields of type $[[nothing]]$ can be dropped }}
 
 -------------------------------------------------- :: closed_shape_narrow
-G |- shape ( sft1 , .. , sftm , ?sfn1' => noreturn , .. , ?sfnn' => noreturn ) <: shape ( sft1 , .. , sftm )
+G |- shape ( sft1 , .. , sftm , ?sfn1' => nothing , .. , ?sfnn' => nothing ) <: shape ( sft1 , .. , sftm )
 
-{{ com A closed shape collapses if any of its required field types is $[[noreturn]]$ }}
+{{ com A closed shape collapses if any of its required field types is $[[nothing]]$ }}
 
 -------------------------------------------------- :: closed_shape_empty
-G |- shape ( sft1 , .. , sftm , sfn => noreturn , sft1' , .. , sftn') <: noreturn
+G |- shape ( sft1 , .. , sftm , sfn => nothing , sft1' , .. , sftn') <: nothing
 
 {{ com Closed shapes can be opened }}
 
@@ -904,10 +953,10 @@ G |- shape ( sft1 , .. , sfti , vardots \ sfn1 , .. , sfnm ) <: shape (sft1 , ..
 -------------------------------------------------- :: open_shape_set_unset
 G |- shape ( sft1 , .. , sftn , vardots \ sfn1 , .. , sfni , sfn , sfn1' , .. , sfnj' ) <: shape ( sft1 , .. , sftn , vardots \ sfn1 , .. , sfni , sfn1' , .. , sfnj' )
 
-{{ com An open shape collapses if any of its required field types is $[[noreturn]]$ }}
+{{ com An open shape collapses if any of its required field types is $[[nothing]]$ }}
 
 -------------------------------------------------- :: open_shape_empty
-G |- shape ( sft1 , .. , sftm , sfn => noreturn , sft1' , .. , sftn' , vardots \ ) <: noreturn
+G |- shape ( sft1 , .. , sftm , sfn => nothing , sft1' , .. , sftn' , vardots \ ) <: nothing
 
 {{ com \subsection{Class and interface inheritance} }}
 
@@ -966,7 +1015,7 @@ G |- { t1 / T1, .. , tn / Tn } t <: N < t1 , .. , tn >
 
 defn
   G |- sft1 <: sft2 :: ::fssub::'shape_field_'
-  {{ com shape field type [[sft1]] is a subtype of shape field type [[sft2]] under assumptions [[G]] }}
+  {{ com shape field type $[[sft1]]$ is a subtype of shape field type $[[sft2]]$ under assumptions $[[G]]$ }}
 by
 
 {{ com \par Shapes behave covariantly in field types. }}
@@ -986,7 +1035,7 @@ G |- sfn => t1 <: ?sfn => t2
 
 defn
   G |- t1 == t2 :: ::tyeq::''
-  {{ com [[t1]] is equivalent to [[t2]] under assumptions [[G]] }}
+  {{ com $[[t1]]$ is equivalent to $[[t2]]$ under assumptions $[[G]]$ }}
 by
 
 {{ com It's useful to define type equivalence as both-ways subtyping. }}
@@ -1002,7 +1051,7 @@ G |- t1 == t2
 
 defn
   G |- t1 <: var :> t2 :: ::argsub::''
-  {{ com [[t1]] is related to [[t2]] by variance [[var]] under assumptions [[G]] }}
+  {{ com $[[t1]]$ is related to $[[t2]]$ by variance $[[var]]$ under assumptions $[[G]]$ }}
 by
 
 G |- t1 <: t2
@@ -1026,7 +1075,7 @@ So we define a relation that fills in types when they are omitted. It's the type
 
 defn
   lamparam ~> funparam :: :: lambda_param_expand :: 'lambda_param_expand_'
-  {{ com declaration [[lamparam]] rewrites to typed parameter [[funparam]] }}
+  {{ com declaration $[[lamparam]]$ rewrites to typed parameter $[[funparam]]$ }}
 by
 
   -------------------------------------- :: type
@@ -1039,7 +1088,7 @@ by
 
 defn
   lamparams lamreturn ~> funparams lamreturn' :: :: lambda_return_expand :: 'lambda_return_expand_'
-  {{ com declarations [[lamparams]] [[lamreturn]] rewrite to typed declarations [[funparams]] [[lamreturn']] }}
+  {{ com declarations $[[lamparams]]$ $[[lamreturn]]$ rewrite to typed declarations $[[funparams]]$ $[[lamreturn']]$ }}
 by
 
   lamparam1 ~> funparam1 ..  lamparamn ~> funparamn
@@ -1054,7 +1103,7 @@ by
 
 defn
   G |- t1 ~> t2 :: :: coerce :: 'coerce_'
-  {{ com Values of type [[t1]] implicitly coerce to type [[t2]] }}
+  {{ com Values of type $[[t1]]$ implicitly coerce to type $[[t2]]$ }}
 by
 
   ------------------ :: dynamic
@@ -1064,18 +1113,13 @@ by
   -------------------------- :: subtype
   G |- t1 ~> t2
 
-  G |- t1 ~> t2
-  G |- t2 ~> t3
-  ------------------ :: trans
-  G |- t1 ~> t3
-
-  G |- t1 ~> t2
-  ------------------------------------ :: awaitable
-  G |- `Awaitable`<t1> ~> `Awaitable`<t2>
+  G |- t ~> t2
+  ------------------ :: option
+  G |- t ~> ?t2
 
 defn
   G ; K |- e ~ t :: :: exprimplicitty :: 'expr_'
-  {{ com Expression [[e]] has implicit coercion to type [[t]] under locals [[G]] and continuations [[K]] }}
+  {{ com Expression $[[e]]$ has implicit coercion to type $[[t]]$ under locals $[[G]]$ and continuations $[[K]]$ }}
 by
 
     G ; K |- e : t1
@@ -1091,7 +1135,7 @@ for sequencing of updates to the locals. \\ }}
 defn
   G ; K |- < e1 : t1 , ... , en : tn > :: :: exprsty :: 'exprs_'
   {{ com Expressions
-  can be executed in sequence under locals [[G]] and continuations [[K]] }}
+  can be executed in sequence under locals $[[G]]$ and continuations $[[K]]$ }}
 by
 
 G ; K |- e : t
@@ -1105,7 +1149,7 @@ G ; K |- < e : t , e1 : t1 , .. , en : tn >
 
 defn
   G ; K |- < e1 ~ t1 , ... , en ~ tn > :: :: exprsimplicitty :: 'exprsimplicit_'
-  {{ com Expressions can be executed in sequence under locals [[G]] and continuations [[K]] }}
+  {{ com Expressions can be executed in sequence under locals $[[G]]$ and continuations $[[K]]$ }}
 by
 
 G ; K |- e ~ t
@@ -1123,7 +1167,7 @@ G ; K |- < e ~ t , e1 ~ t1 , .. , en ~ tn >
 
 defn
   G ; K |- e : t :: :: exprty :: 'expr_'
-  {{ com Expression [[e]] of type [[t]] can be executed under locals [[G]] and continuations [[K]] }}
+  {{ com Expression $[[e]]$ of type $[[t]]$ can be executed under locals $[[G]]$ and continuations $[[K]]$ }}
 by
 
 {{ com It should also be noted that throughout this section, left rules have
@@ -1490,6 +1534,14 @@ G ; K |- < e1 : shape ( ?sfn => t , vardots \ sfn1 , .., sfnm ) , e2 : t >
 -------------------------------------------------- :: shapes_idx_default
 G ; K |- `Shapes` :: `idx` ( e1 , sfn , e2 ) : t
 
+G ; K |- e : shape ( sfn => t , vardots \ sfn1 , .. , sfnm )
+-------------------------------------------------- :: shapes_at_required
+G ; K |- `Shapes` :: `at` ( e , sfn ) : t
+
+G ; K |- e : shape ( ?sfn => t , vardots \ sfn1 , .. , sfnm )
+-------------------------------------------------- :: shapes_at_optional
+G ; K |- `Shapes` :: `at` ( e , sfn ) : t
+
 G ; K |- e : shape ( sft1 , .. , sfti , ?sfn => t , sft1' , .. , sftj' )
 -------------------------------------------------- :: shapes_remove_key_closed
 G ; K |- `Shapes` :: `removeKey` ( e , sfn ) : shape( sft1 , .. , sfti , sft1' , .. , sftj' )
@@ -1515,7 +1567,7 @@ G ; K |- await e : t'
 
 defn
   t awaits t' :: :: awaits  :: 'awaits_'
-  {{ com awaiting on [[t]] produces a [[t']] }}
+  {{ com awaiting on $[[t]]$ produces a $[[t']]$ }}
 by
 
 ----------------------- :: awaitable
@@ -1535,7 +1587,7 @@ t1 | t2 awaits t1' | t2'
 
 defn
   u declares x : t :: :: declares :: 'declares_'
-  {{ com type [[u]] declares a property [[x]] of type [[t]] }}
+  {{ com type $[[u]]$ declares a property $[[x]]$ of type $[[t]]$ }}
 by
 
 class C < var1 T1 constraint1 , .. , varm Tm constraintm > cextends cimpls { constructor t $ x ; member1 .. membern }
@@ -1544,7 +1596,7 @@ class C < var1 T1 constraint1 , .. , varm Tm constraintm > cextends cimpls { con
 
 defn
   u -> x : t :: :: property :: 'property_'
-  {{ com type [[u]] has a property [[x]] of type [[t]] }}
+  {{ com type $[[u]]$ has a property $[[x]]$ of type $[[t]]$ }}
 by
 
 u declares x : t
@@ -1563,7 +1615,7 @@ u2 -> x : t2
 
 defn
   C declares static x : t :: :: declares_static :: 'declares_static_'
-  {{ com class [[C]] declares a static property [[x]] of type [[x]] }}
+  {{ com class $[[C]]$ declares a static property $[[x]]$ of type $[[t]]$ }}
 by
 
 C' inst' <:: C inst
@@ -1576,8 +1628,8 @@ C' declares static x : t
 
 defn
   G ; K |- u [ e ] : t :: :: indexing :: 'indexing_'
-  {{ com type [[u]] supports indexing at a value [[e]] producing the result of type [[t]]
-  under environment [[G]] and continuations [[K]] }}
+  {{ com type $[[u]]$ supports indexing at a value $[[e]]$ producing the result of type $[[t]]$
+  under environment $[[G]]$ and continuations $[[K]]$ }}
 by
 
 G ; K |- e : t1 | dynamic
@@ -1600,7 +1652,7 @@ G ; K |- ( u1 | u2 ) [ e ] : t1 | t2
 
 defn
   G ; K |- e truthy :: :: truthy  :: 'cond_'
-  {{ com [[e]] evaluating to truthy value is valid under environment [[G]] and continuations [[K]] }}
+  {{ com $[[e]]$ evaluating to truthy value is valid under environment $[[G]]$ and continuations $[[K]]$ }}
 by
 
 {{ com \subsection{Primitive type tests} }}
@@ -1670,8 +1722,8 @@ G ; K |- e truthy
 
 defn
   G ; K |- e := t , U :: :: assign :: 'assign_'
-  {{ com a value of type [[t]] can be assigned to lvalue [[e]] under locals [[G]]
-  and continuations [[K]], yielding new type updates [[U]]}}
+  {{ com a value of type $[[t]]$ can be assigned to lvalue $[[e]]$ under locals $[[G]]$
+  and continuations $[[K]]$, yielding new type updates $[[U]]$}}
 by
 
 ------------------------------------ :: local
@@ -1726,8 +1778,8 @@ the former judgement). }}
 
 defn
   G |- t1 [] := t2 => t1' :: :: array_append :: 'array_append_'
-  {{ com under locals [[G]], a value of type [[t2]] can be appended to
-  an lvalue of type [[t1]] and the result is of type [[t1']] }}
+  {{ com under locals $[[G]]$, a value of type $[[t2]]$ can be appended to
+  an lvalue of type $[[t1]]$ and the result is of type $[[t1']]$ }}
 by
 
 G |- u1 <: t1
@@ -1771,9 +1823,9 @@ G |- (t1 | t2) [] := t => t1' | t2'
 
 defn
   G ; K |- t1 [ e2 ] := t => t1' :: :: array_get :: 'array_get_'
-  {{ com value [[e2]] is a valid index into values of type [[t1]] and assignment
-  of a value of type [[t]] to the element at that index produces a value of type
-  [[t1']] under environment [[G]] and continuations [[K]] }}
+  {{ com value $[[e2]]$ is a valid index into values of type $[[t1]]$ and assignment
+  of a value of type $[[t]]$ to the element at that index produces a value of type
+  $[[t1']]$ under environment $[[G]]$ and continuations $[[K]]$ }}
 by
 
 G |- u1 <: t1
@@ -1840,7 +1892,7 @@ G ; K |- (t1 | t2) [ e ] := t => t1' | t2'
 
 defn
   G |- u -> x := t :: :: property_assignment :: 'property_assignment_'
-  {{ com under locals [[G]], a value of type [[t]] can be assigned to a property [[x]] of a value of type [[u]] }}
+  {{ com under locals $[[G]]$, a value of type $[[t]]$ can be assigned to a property $[[x]]$ of a value of type $[[u]]$ }}
 by
 
 G |- u -> x := t
@@ -1862,7 +1914,7 @@ G |- (u1 | u2) -> x := t
 
 defn
   is_hack_collection t = b :: :: is_hack_collection :: 'is_hack_collection_'
-  {{ com Is type [[t]] a Hack collection? }}
+  {{ com Is type $[[t]]$ a Hack collection? }}
   {{ tex \kwd{is\_hack\_collection}\;[[t]] = [[b]] }}
 by
 
@@ -1917,8 +1969,8 @@ is_hack_collection ( t1 | t2 ) = False
 
 defn
   F ; G ; K |- s :: :: st :: 'st_'
-  {{ com statement [[s]] can be executed under locals [[G]] and continuations [[K]]
-     with enclosing function signature [[F]] }}
+  {{ com statement $[[s]]$ can be executed under locals $[[G]]$ and continuations $[[K]]$
+     with enclosing function signature $[[F]]$ }}
 by
 
 G ; K[skip:=G1] |- e truthy
@@ -2020,7 +2072,7 @@ F ; G ; K |- { s s1 .. sn }
 {{ com \addcontentsline{toc}{section}{Top level declarations} }}
 
 defn
-  |- decl :: :: decl_ok :: 'decl_ok_' {{ com a declaration [[decl]] is valid }}
+  |- decl :: :: decl_ok :: 'decl_ok_' {{ com a declaration $[[decl]]$ is valid }}
 by
 
 {{ com \\\\

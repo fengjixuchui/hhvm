@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_change_key_case(array $input [, int $case])
  * Description: Retuns an array with all string keys lowercased [or uppercased]
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Check the position of the internal array pointer after calling the function
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_change_key_case() : usage variations ***\n";
 
 $input = array ('one' => 'un', 'two' => 'deux', 'three' => 'trois');
@@ -21,5 +21,4 @@ echo "\n-- Position of Internal Pointer in Original Array: --\n";
 echo key(&$input) . " => " . current (&$input) . "\n";
 
 echo "Done";
-?>
-
+}

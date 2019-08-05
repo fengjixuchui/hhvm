@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class X implements ArrayAccess {
   function offsetExists($offset) { return false; }
@@ -8,7 +8,7 @@ class X implements ArrayAccess {
 }
 
 function foo() {
-  $x[0] = new X;
+  $x = [0 => new X];
   try {
     $x[0]['asd'] = 2;
   } catch (Exception $e) {

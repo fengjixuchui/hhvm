@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string vprintf(string format, array args)
  * Description: Output a formatted string 
  * Source code: ext/standard/formatted_print.c
@@ -8,7 +8,7 @@
  * Test vprintf() when different octal formats and octal values are passed to
  * the '$format' and '$args' arguments of the function
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vprintf() : octal formats with octal values ***\n";
 
 // defining array of octal formats
@@ -48,5 +48,5 @@ foreach($formats as $format) {
   $counter++;
 }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

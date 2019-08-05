@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int idate(string format [, int timestamp])
  * Description: Format a local time/date as integer 
  * Source code: ext/date/php_date.c
@@ -91,5 +91,4 @@ foreach($inputs as $key =>$value) {
       try { var_dump( idate($value, $timestamp) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
 
-?>
-===DONE===
+echo "===DONE===\n";

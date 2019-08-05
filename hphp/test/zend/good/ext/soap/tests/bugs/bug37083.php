@@ -1,4 +1,4 @@
-<?php
+<?hh
 class TestSoapClient extends SoapClient {
 	function __doRequest($request, $location, $action, $version, $one_way = 0) {
 		return <<<EOF
@@ -39,6 +39,7 @@ for ($i = 0; $i < 10; $i++) {
                          'cache_wsdl'=>WSDL_CACHE_BOTH));
 	$search=new stdClass();
 	$search->queryString='argo';
+	$search->ranges = array();
 	$search->ranges[]=$r=new stdClass();
 	$r->field='maxDateTime';
 	$r->min='2003-04-01';
@@ -46,4 +47,3 @@ for ($i = 0; $i < 10; $i++) {
 	$res=$ws->search($search,0,10);
 }
 echo "ok\n";
-?>

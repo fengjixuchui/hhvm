@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_intersect(array $arr1, array $arr2 [, array $...])
  * Description: Returns the entries of arr1 that have values which are present in all the other arguments 
  * Source code: ext/standard/array.c
@@ -9,7 +9,7 @@
  * associative arrays having different possible keys to $arr2 argument.
  * The $arr1 argument is a fixed array.
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_intersect() : assoc array with diff keys to \$arr2 argument ***\n";
 
 // get an unset variable
@@ -72,4 +72,4 @@ foreach($arrays as $arr2) {
 }
 
 echo "Done";
-?>
+}

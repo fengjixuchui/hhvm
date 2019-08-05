@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 error_reporting(E_ALL);
 
@@ -34,4 +34,3 @@ $t->smallTalk();
 $t->bigTalk();
 $t->talk();
 
-?>

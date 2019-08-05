@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $filename = dirname(__FILE__)."/touch_variation1.dat";
 
 
@@ -16,5 +16,4 @@ var_dump(fileatime($filename));
 
 @unlink($filename);
 echo "Done\n";
-
-?>
+}

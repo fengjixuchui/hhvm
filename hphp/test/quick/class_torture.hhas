@@ -1,3 +1,4 @@
+.hh_file 1;
 # tests various ways poorly defined classes should fail the verifier
 
 .main {
@@ -6,46 +7,56 @@
   DefCls 0
   NewObjD "A"
   Dup
-  FPushCtor 1
+  NullUninit
+  NullUninit
   String "foo"
-  FCall <> 1 1 "" - "" ""
+  FCallCtor <LockWhileUnwinding> 1 1 "" - ""
   PopC
+  LockObj
   PopC
 
   DefCls 0
   NewObjD "B"
   Dup
-  FPushCtor 1
+  NullUninit
+  NullUninit
   String "foo"
-  FCall <> 1 1 "" - "" ""
+  FCallCtor <LockWhileUnwinding> 1 1 "" - ""
   PopC
+  LockObj
   PopC
 
   DefCls 0
   NewObjD "C"
   Dup
-  FPushCtor 1
+  NullUninit
+  NullUninit
   String "foo"
-  FCall <> 1 1 "" - "" ""
+  FCallCtor <LockWhileUnwinding> 1 1 "" - ""
   PopC
+  LockObj
   PopC
 
   DefCls 0
   NewObjD "E"
   Dup
-  FPushCtor 1
+  NullUninit
+  NullUninit
   String "foo"
-  FCall <> 1 1 "" - "" ""
+  FCallCtor <LockWhileUnwinding> 1 1 "" - ""
   PopC
+  LockObj
   PopC
 
   DefCls 0
   NewObjD "G"
   Dup
-  FPushCtor 1
+  NullUninit
+  NullUninit
   String "foo"
-  FCall <> 1 1 "" - "" ""
+  FCallCtor <LockWhileUnwinding> 1 1 "" - ""
   PopC
+  LockObj
   PopC
 
   Int 1

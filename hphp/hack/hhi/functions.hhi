@@ -14,13 +14,11 @@
  * YOU SHOULD NEVER INCLUDE THIS FILE ANYWHERE!!!
  */
 
-// isset, empty, and unset only look like functions to static analysis, but
+// isset, and unset only look like functions to static analysis, but
 // in fact act as special expression subtypes within the runtime
 namespace {
 <<__Rx>>
 function isset(<<__MaybeMutable>> $x): bool;
-<<__Rx>>
-function empty(<<__MaybeMutable>> $x): bool;
 <<__Rx>>
 function unset(<<__MaybeMutable>> $x): void;
 //
@@ -33,20 +31,24 @@ function chr(int $ascii): string;
 function count(<<__MaybeMutable>> mixed $x, int $mode = COUNT_NORMAL): int; // count takes Countable or array. We'll need to hardcode this...
 <<__PHPStdLib, __Rx>>
 function dechex(int $number): string;
-<<__Deprecated('Will be removed in future version of Hack')>>
-function func_get_args(): varray;
 <<__PHPStdLib, __Rx>>
 function implode(string $glue, <<__MaybeMutable>> $pieces): string; // could be Container<Stringish>
 <<__PHPStdLib, __Rx>>
 function explode(string $delimiter, string $str, int $limit = 0x7FFFFFFF): array; // : array<string> & false for '' delimiter
 <<__Rx>>
 function is_array(<<__MaybeMutable>> mixed $arg): bool;
+}
+
+namespace HH {
 <<__Rx>>
 function is_vec(<<__MaybeMutable>> mixed $arg): bool;
 <<__Rx>>
 function is_dict(<<__MaybeMutable>> mixed $arg): bool;
 <<__Rx>>
 function is_keyset(<<__MaybeMutable>> mixed $arg): bool;
+}
+
+namespace {
 <<__PHPStdLib, __Rx>>
 function ord(string $string): int;
 <<__PHPStdLib>>
@@ -71,6 +73,7 @@ function get_class_constants(string $class_name): array;
 <<__PHPStdLib>>
 function hphp_create_object<T>(string $class_name, varray<mixed> $argv): T;
 }
+
 namespace HH {
   // autoload-map
   function could_include($file): bool;
@@ -88,6 +91,11 @@ namespace HH {
 
   <<__Rx>>
   function is_list_like(<<__MaybeMutable>> mixed $arg): bool;
+  <<__Rx>>
+  function is_class_meth(<<__MaybeMutable>> mixed $arg): bool;
+  <<__Rx>>
+  function is_meth_caller(<<__MaybeMutable>> mixed $arg): bool;
+
   <<__Rx>>
   function set_frame_metadata(mixed $metadata): void;
 }

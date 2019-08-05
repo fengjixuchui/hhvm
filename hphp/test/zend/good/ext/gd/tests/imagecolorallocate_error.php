@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : int imagecolorallocate(resource im, int red, int green, int blue)
  * Description: Allocate a color for an image
  * Source code: ext/gd/gd.c
  */
-
+<<__EntryPoint>> function main(): void {
 $red = 10;
 $green = 10;
 $blue = 10;
@@ -20,5 +20,5 @@ try { var_dump( imagecolorallocate($im, $red, $green, $blue, $extra_arg) ); } ca
 echo "\n-- Testing imagecolorallocate() function with less than expected no. of arguments --\n";
 try { var_dump( imagecolorallocate() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 try { var_dump( imagecolorallocate($im, $red, $green) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
-?>
-===DONE===
+echo "===DONE===\n";
+}

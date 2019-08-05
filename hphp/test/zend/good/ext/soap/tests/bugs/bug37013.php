@@ -1,4 +1,4 @@
-<?php
+<?hh
 $request = <<<REQUEST
 <?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope
 xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
@@ -43,4 +43,3 @@ class MultiRefTest {
 $server = new SoapServer(dirname(__FILE__)."/bug37013.wsdl");
 $server->setClass( "MultiRefTest");
 $server->handle( $request );
-?>

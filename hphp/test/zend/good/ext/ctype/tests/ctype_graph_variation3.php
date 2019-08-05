@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool ctype_graph(mixed $c)
  * Description: Checks for any printable character(s) except space 
  * Source code: ext/ctype/ctype.c 
@@ -8,7 +8,7 @@
  * Pass strings containing different character types to ctype_graph() to test
  * which are considered valid printable character only strings
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing ctype_graph() : usage variations ***\n";
 
 $orig = setlocale(LC_CTYPE, "C");
@@ -52,5 +52,5 @@ foreach($values as $value) {
 };
 
 setlocale(LC_CTYPE, $orig);
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -1,4 +1,1 @@
-string(24) "AutoimportTest\Container"
-string(27) "AutoimportTest\ContainerExt"
-string(26) "AutoimportTest\Traversable"
-string(29) "AutoimportTest\TraversableExt"
+Fatal error: Class AutoimportTest\ContainerExt may not inherit from interface (HH\Container) in %s/test/slow/namespace/autoimport.php on line 7

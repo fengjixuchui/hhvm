@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int array_unshift(array $array, mixed $var [, mixed ...])
  * Description: Pushes elements onto the beginning of the array
  * Source code: ext/standard/array.c
@@ -9,11 +9,6 @@
  * other than array values for $array argument
 */
 
-echo "*** Testing array_unshift() : unexpected values for \$array argument ***\n";
-
-// Initialise $var argument
-$var = 12;
-
 // get a class
 class classA
 {
@@ -21,6 +16,11 @@ class classA
     return "Class A object";
   }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing array_unshift() : unexpected values for \$array argument ***\n";
+
+// Initialise $var argument
+$var = 12;
 
 // heredoc string
 $heredoc = <<<EOT
@@ -111,4 +111,4 @@ foreach($arrays as $array) {
 fclose($fp);
 
 echo "Done";
-?>
+}

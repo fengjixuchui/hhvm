@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $arr1 = array('a','b','c');
 $arr2 = array();
 $arr3 = array('c','key'=>'d');
@@ -14,4 +14,4 @@ var_dump(array_search('e', $arr4));
 var_dump(array_search('d', $arr4));
 
 echo "Done\n";
-?>
+}

@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : string sprintf(string $format [, mixed $arg1 [, mixed ...]])
  * Description: Return a formatted string 
  * Source code: ext/standard/formatted_print.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sprintf() : octal formats with integer values ***\n";
 
 // array of integer values 
@@ -47,4 +47,4 @@ foreach($integer_values as $integer_value) {
 };
 
 echo "Done";
-?>
+}

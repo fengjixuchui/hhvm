@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $image = imagecreatetruecolor(180, 30);
 
 // Writes the text and apply a gaussian blur on the image
@@ -9,5 +9,5 @@ $gaussian = array(
     array(2.0, 4.0, 2.0)
 );
 
-var_dump(imageconvolution($image, $gaussian, 16, 0));
-?>
+var_dump(imageconvolution($image, $gaussian, 16.0, 0.0));
+}

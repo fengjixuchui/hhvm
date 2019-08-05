@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 /**
  * ( excerpt from
@@ -218,19 +218,6 @@ abstract class ReflectionFunctionAbstract implements Reflector {
    */
   <<__Native, __Rx, __MaybeMutable>>
   public function getDocComment(): mixed;
-
-  /**
-   * ( excerpt from
-   * http://php.net/manual/en/reflectionfunctionabstract.getstaticvariables.php
-   * )
-   *
-   * Get the static variables. Warning: This function is currently not
-   * documented; only its argument list is available.
-   *
-   * @return     array<string, mixed>   An array of static variables.
-   */
-  <<__Native>>
-  public function getStaticVariables(): darray<string, mixed>;
 
   /**
    * ( excerpt from
@@ -619,29 +606,6 @@ class ReflectionFunction extends ReflectionFunctionAbstract {
   }
 
   /**
-   * ( excerpt from
-   * http://php.net/manual/en/reflectionfunctionabstract.getstaticvariables.php
-   * )
-   *
-   * Get the static variables. Warning: This function is currently not
-   * documented; only its argument list is available.
-   *
-   * @return     mixed   An array of static variables.
-   */
-  public function getStaticVariables() {
-    $static_vars = parent::getStaticVariables();
-    return !$this->closure
-      ? $static_vars
-      : array_merge( // XXX: which should win in key collision case?
-        $static_vars,
-        $this->getClosureUseVariables($this->closure),
-      );
-  }
-
-  <<__Native, __Rx, __MaybeMutable>>
-  private function getClosureUseVariables(object $closure): array;
-
-  /**
    * ( excerpt from http://php.net/manual/en/reflectionfunction.invoke.php )
    *
    * Invokes a reflected function.
@@ -880,7 +844,7 @@ class ReflectionMethod extends ReflectionFunctionAbstract {
    */
   public function invoke($obj, ...$args): mixed {
     $this->validateInvokeParameters($obj, $args);
-    if ($this->isStatic()) {
+    if ($this->isStaticInPrologue()) {
       // Docs says to pass null, but Zend completely ignores the argument
       $obj = null;
     }
@@ -903,7 +867,7 @@ class ReflectionMethod extends ReflectionFunctionAbstract {
    */
   public function invokeArgs($obj, $args): mixed {
     $this->validateInvokeParameters($obj, $args);
-    if ($this->isStatic()) {
+    if ($this->isStaticInPrologue()) {
       $obj = null;
     }
     return hphp_invoke_method($obj, $this->originalClass, $this->getName(),
@@ -921,7 +885,7 @@ class ReflectionMethod extends ReflectionFunctionAbstract {
       );
     }
 
-    if (!$this->isStatic()) {
+    if (!$this->isStaticInPrologue()) {
       if (!$obj) {
         $name = $this->originalClass.'::'.$this->getName();
         throw new ReflectionException(
@@ -994,6 +958,9 @@ class ReflectionMethod extends ReflectionFunctionAbstract {
   <<__Native, __Rx, __MaybeMutable>>
   public function isStatic(): bool;
 
+  <<__Native, __Rx, __MaybeMutable>>
+  private function isStaticInPrologue(): bool;
+
   /**
    * ( excerpt from
    * http://php.net/manual/en/reflectionmethod.isconstructor.php )
@@ -1054,7 +1021,7 @@ class ReflectionMethod extends ReflectionFunctionAbstract {
    * @return    mixed   Returns Closure. Returns NULL in case of an error.
    */
   public function getClosure($object = null): ?Closure {
-    if ($this->isStatic()) {
+    if ($this->isStaticInPrologue()) {
       $object = null;
     } else {
       if (!$object) {
@@ -1459,11 +1426,6 @@ class ReflectionClass implements Reflector {
   public function isCloneable(): bool {
     return $this->isInstantiable() &&
       (!$this->hasMethod('__clone') || $this->getMethod('__clone')->isPublic());
-  }
-
-  <<__Rx, __MaybeMutable>>
-  public function isAnonymous(): bool {
-    return strpos($this->getName(), 'class@anonymous') === 0;
   }
 
   /**

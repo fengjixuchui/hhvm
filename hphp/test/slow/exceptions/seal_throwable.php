@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class foo implements Throwable {
   function __construct($msg) {
@@ -13,7 +13,7 @@ class foo implements Throwable {
   function getPrevious() {}
   function __toString() {}
 }
-
+<<__EntryPoint>> function main(): void {
 try {
   try {
     throw new foo('try');
@@ -22,4 +22,5 @@ try {
   }
 } catch (Throwable $t) {
   var_dump($t->getMessage());
+}
 }

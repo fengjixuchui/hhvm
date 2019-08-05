@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Object {
 	public function __construct() {
@@ -20,4 +20,3 @@ var_dump($class->newInstanceArgs(array('test')));
 
 
 echo "Done\n";
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array scandir(string $dir [, int $sorting_order [, resource $context]])
  * Description: List files & directories inside the specified path
  * Source code: ext/standard/dir.c
@@ -8,7 +8,7 @@
  * Pass a directory containing files with different types of names to test how scandir()
  * reads them
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing scandir() : usage variations ***\n";
 
 $dir_path = dirname(__FILE__) . "/scandir_variation8/";
@@ -46,11 +46,11 @@ $inputs = array(
 
 $iterator = 1;
 foreach($inputs as $key => $input) {
-	echo "\n-- Iteration $iterator --\n";
-	$handle = "fp{$iterator}";
-	var_dump( $handle = fopen(@"$dir_path$input.tmp", 'w') );
-	fclose($handle);
-	$iterator++;
+    echo "\n-- Iteration $iterator --\n";
+    $handle = "fp{$iterator}";
+    var_dump( $handle = fopen(@"$dir_path$input.tmp", 'w') );
+    fclose($handle);
+    $iterator++;
 };
 
 echo "\n-- Call to scandir() --\n";
@@ -58,13 +58,11 @@ var_dump($content = scandir($dir_path));
 
 // remove all files in directory so can remove directory in CLEAN section
 foreach ($content as $file_name) {
-	// suppress errors as won't be able to remove "." and ".." entries
-	@unlink($dir_path . $file_name);
+    // suppress errors as won't be able to remove "." and ".." entries
+    @unlink($dir_path . $file_name);
 }
-?>
-===DONE===
-<?php error_reporting(0); ?>
-<?php
+echo "===DONE===\n";
+error_reporting(0);
 $dir_path = dirname(__FILE__) . "/scandir_variation8";
 rmdir($dir_path);
-?>
+}

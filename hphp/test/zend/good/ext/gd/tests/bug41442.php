@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $str = file_get_contents(dirname(__FILE__).'/src.gd2');
 $res = imagecreatefromstring($str);
 
@@ -18,4 +18,4 @@ var_dump(imagecreatefromstring($str2));
 @unlink($file);
 
 echo "Done\n";
-?>
+}

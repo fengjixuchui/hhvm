@@ -34,7 +34,6 @@
 #include "hphp/runtime/base/struct-log-util.h"
 #include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/variable-serializer.h"
-#include "hphp/runtime/base/zend-strtod.h"
 
 #include "hphp/runtime/ext/collections/ext_collections-map.h"
 #include "hphp/runtime/ext/collections/ext_collections-pair.h"
@@ -47,6 +46,8 @@
 #include "hphp/runtime/vm/repo.h"
 
 #include "hphp/runtime/vm/jit/perf-counters.h"
+
+#include "hphp/zend/zend-strtod.h"
 
 namespace HPHP {
 
@@ -535,24 +536,37 @@ void VariableUnserializer::addSleepingObject(const Object& o) {
 
 bool VariableUnserializer::matchString(folly::StringPiece str) {
   const char* p = m_buf;
-  const auto ss = str.size();
-  if (ss >= 100) return false;
-  int digs = ss >= 10 ? 2 : 1;
-  int total = 2 + digs + 2 + ss + 2;
-  if (p + total > m_end) return false;
-  if (*p++ != 's') return false;
-  if (*p++ != ':') return false;
-  if (digs == 2) {
-    if (*p++ != '0' + ss/10) return false;
-    if (*p++ != '0' + ss%10) return false;
+  assertx(p <= m_end);
+  int total = 0;
+  if (*p == 'S') {
+    total = 2 + 8 + 1;
+    if (p + total > m_end) return false;
+    p++;
+    if (*p++ != ':') return false;
+    auto const sd = *reinterpret_cast<StringData*const*>(p);
+    assertx(sd->isStatic());
+    if (str.compare(sd->slice()) != 0) return false;
+    p += size_t(8);
   } else {
-    if (*p++ != '0' + ss) return false;
+    const auto ss = str.size();
+    if (ss >= 100) return false;
+    int digits = ss >= 10 ? 2 : 1;
+    total = 2 + digits + 2 + ss + 2;
+    if (p + total > m_end) return false;
+    if (*p++ != 's') return false;
+    if (*p++ != ':') return false;
+    if (digits == 2) {
+      if (*p++ != '0' + ss/10) return false;
+      if (*p++ != '0' + ss%10) return false;
+    } else {
+      if (*p++ != '0' + ss) return false;
+    }
+    if (*p++ != ':') return false;
+    if (*p++ != '\"') return false;
+    if (memcmp(p, str.data(), ss)) return false;
+    p += ss;
+    if (*p++ != '\"') return false;
   }
-  if (*p++ != ':') return false;
-  if (*p++ != '\"') return false;
-  if (memcmp(p, str.data(), ss)) return false;
-  p += ss;
-  if (*p++ != '\"') return false;
   if (*p++ != ';') return false;
   assertx(m_buf + total == p);
   m_buf = p;
@@ -630,6 +644,8 @@ void VariableUnserializer::unserializeRemainingProps(
   int remainingProps,
   Variant& serializedNativeData,
   bool& hasSerializedNativeData) {
+  obj->unlockObject();
+  SCOPE_EXIT { obj->lockObject(); };
   while (remainingProps > 0) {
     /*
       use the number of properties remaining as an estimate for
@@ -885,9 +901,9 @@ void VariableUnserializer::unserializeVariant(
     if (this->type() == VariableUnserializer::Type::APCSerialize) {
       auto str = readStr(8);
       assertx(str.size() == 8);
-      auto sdp = reinterpret_cast<StringData*const*>(&str[0]);
-      assertx((*sdp)->isStatic());
-      tvMove(make_tv<KindOfPersistentString>(*sdp), self);
+      auto const sd = *reinterpret_cast<StringData*const*>(&str[0]);
+      assertx(sd->isStatic());
+      tvMove(make_tv<KindOfPersistentString>(sd), self);
     } else {
       throwUnknownType(type);
     }
@@ -1007,6 +1023,7 @@ void VariableUnserializer::unserializeVariant(
       }
 
       Object obj;
+      auto remainingProps = size;
       if (cls) {
         // Only unserialize CPP extension types which can actually support
         // it. Otherwise, we risk creating a CPP object without having it
@@ -1024,6 +1041,21 @@ void VariableUnserializer::unserializeVariant(
             obj = Object{req::make<c_Pair>(make_tv<KindOfNull>(),
                                            make_tv<KindOfNull>(),
                                            c_Pair::NoIncRef{})};
+          } else if (UNLIKELY(cls->hasReifiedGenerics())) {
+            // First prop on the serialized list is the reified generics prop
+            if (!matchString(s_86reified_prop.slice())) {
+              throwInvalidOFormat(clsName);
+            }
+            TypedValue tv = make_tv<KindOfNull>();
+            auto const t = tv_lval{&tv};
+            unserializePropertyValue(t, remainingProps--);
+            if (!isVecOrArrayType(t.type()) ||
+                (this->type() == VariableUnserializer::Type::Serialize &&
+                 !TypeStructure::isValidResolvedTypeStructureList(
+                   ArrNR(t.val().parr)))) {
+              throwInvalidOFormat(clsName);
+            }
+            obj = Object{cls, t.val().parr};
           } else {
             obj = Object{cls};
           }
@@ -1037,7 +1069,7 @@ void VariableUnserializer::unserializeVariant(
       assertx(!obj.isNull());
       tvSet(make_tv<KindOfObject>(obj.get()), self);
 
-      if (size > 0) {
+      if (remainingProps > 0) {
         // Check stack depth to avoid overflow.
         check_recursion_throw();
 
@@ -1053,9 +1085,9 @@ void VariableUnserializer::unserializeVariant(
             RuntimeOption::RepoAuthoritative &&
             Repo::get().global().HardPrivatePropInference;
           Class* objCls = obj->getVMClass();
-          auto remainingProps = size;
           // Try fast case.
-          if (size >= objCls->numDeclProperties()) {
+          if (remainingProps >= objCls->numDeclProperties() -
+                                (objCls->hasReifiedGenerics() ? 1 : 0)) {
             auto mismatch = false;
             auto const objProps = obj->propVecForConstruct();
 
@@ -1063,7 +1095,7 @@ void VariableUnserializer::unserializeVariant(
             for (auto const& p : declProps) {
               auto slot = p.serializationIdx;
               auto const& prop = declProps[slot];
-
+              if (prop.name == s_86reified_prop.get()) continue;
               if (!matchString(prop.mangledName->slice())) {
                 mismatch = true;
                 break;
@@ -1654,7 +1686,7 @@ void VariableUnserializer::unserializeVector(ObjectData* obj, int64_t sz,
   reserveForAdd(sz);
   for (int64_t i = 0; i < sz; ++i) {
     auto tv = bvec->appendForUnserialize(i);
-    tv->m_type = KindOfNull;
+    HPHP::type(tv) = KindOfNull;
     unserializeVariant(tv, UnserializeMode::ColValue);
   }
 }

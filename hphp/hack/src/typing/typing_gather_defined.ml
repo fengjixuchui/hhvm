@@ -32,16 +32,17 @@ the block.
 *)
 
 open Core_kernel
-open Nast
+open Aast
 
 module C = Typing_continuations
+module LEnvC = Typing_per_cont_env
 module LEnv = Typing_lenv
-module LEnvC = Typing_lenv_cont
+module EnvOps = Typing_per_cont_ops
 module Reason = Typing_reason
 module Utils = Typing_utils
 
 module LocalIdsPerCont = struct
-  type t = Typing_env.local_types
+  type t = Typing_local_types.t
 
   let drop = C.Map.remove
   let drop_list contl m =
@@ -61,7 +62,7 @@ module LocalIdsPerCont = struct
   let empty = C.Map.empty
 
   let union env l1 l2 =
-    let _env, locals = LEnvC.union_by_cont env LEnv.union l1 l2 in
+    let _env, locals = EnvOps.union_by_cont env LEnv.union l1 l2 in
     locals
 
   let union_list env ml =
@@ -75,15 +76,15 @@ module LocalIdsPerCont = struct
   let add_local env lid m =
     match get C.Next m with
     | None -> m
-    | Some lid_set ->
+    | Some e ->
       let tany = ((Reason.none, Utils.tany env), Ident.tmp ()) in
-      add C.Next (Local_id.Map.add lid tany lid_set) m
+      add C.Next { e with LEnvC.local_types = Local_id.Map.add lid tany e.LEnvC.local_types } m
 
 end
 
 module L = LocalIdsPerCont
 
-class gatherer env = object (self) inherit [_] Nast.reduce as parent
+class gatherer env = object (self) inherit [_] Aast.reduce as parent
   val mutable gamma = L.get C.Next (LEnv.get_all_locals env)
 
   method union = L.union env
@@ -118,38 +119,38 @@ class gatherer env = object (self) inherit [_] Nast.reduce as parent
       | _ ->
         delta
 
-  method! on_stmt () s =
+  method! on_stmt () (s : Nast.stmt) =
     self#update_gamma (parent#on_stmt () s)
 
   method! on_Binop () bop e1 e2 =
     let delta = parent#on_Binop () bop e1 e2 in
     match bop with
-    | Ast.Eq None ->
+    | Ast_defs.Eq None ->
       let (_, e1) = e1 in
       begin match e1 with
       | Lvar (_, id) -> self#add_local id delta
       | _ -> delta
       end
-    | Ast.Barbar | Ast.Ampamp -> self#on_expr () e1
+    | Ast_defs.Barbar | Ast_defs.Ampamp -> self#on_expr () e1
     | _ -> delta
 
   method might_throw delta =
     L.set C.Catch gamma delta
 
-  method! on_Break () _ =
+  method! on_Break () =
     L.set C.Break gamma L.empty
 
-  method! on_Continue () _ =
+  method! on_Continue () =
     L.set C.Continue gamma L.empty
 
-  method! on_Throw () x e =
+  method! on_Throw () e =
     self#plus
-      (parent#on_Throw () x e)
+      (parent#on_Throw () e)
       (L.set C.Catch gamma L.empty)
 
-  method! on_Return () p e =
+  method! on_Return () e =
     self#plus
-      (parent#on_Return () p e)
+      (parent#on_Return () e)
       (L.set C.Exit gamma L.empty)
 
   method! on_Yield () a =
@@ -184,7 +185,7 @@ class gatherer env = object (self) inherit [_] Nast.reduce as parent
   method! on_case () c =
     let b = match c with
       | Default b -> b
-      | Case (e, b) -> (Expr e) :: b in
+      | Case ((pos, _ as e), b) -> (pos, Expr e) :: b in
     self#on_branch b
 
   method! on_Switch () e cl =
@@ -199,23 +200,20 @@ class gatherer env = object (self) inherit [_] Nast.reduce as parent
     L.drop_list [C.Continue; C.Break] delta
 
   method! on_While () (p, _ as e) b =
-    self#on_While_True (
-      If (e, [
-        Break p], []) ::
-      b)
+    self#on_While_True ((p, If (e, [p, Break], [])) :: b)
 
   method! on_Do () b (p, _ as e) =
     self#on_While_True (
       b @ [
-      If (e, [
-        Break p], [])])
+      p, If (e, [
+        p, Break], [])])
 
-  method! on_For () e1 e2 e3 b =
+  method! on_For () (p1, _ as e1) e2 (p3, _ as e3) b =
     self#on_block () (
-      Expr e1 :: [
-      While (e2,
+      (p1, Expr e1) :: [
+      Pos.none, While (e2,
         b @ [
-        Expr e3])])
+        (p3, Expr e3)])])
 
   method! on_Foreach () e _ _ =
     (* if the iterable is empty, the block is not executed *)

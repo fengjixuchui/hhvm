@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class z {
   function minArgTest($a1, $a2, $a3, $a4, $a5, $a6, $a7, $a8, $a9, $a10,                      $a11=true, $a12 = true) {
@@ -15,12 +15,12 @@ class z {
     var_dump($a11);
     var_dump($a12);
   }
-  function varArgsTest() {
-    $args = func_get_args();
+  function varArgsTest(...$args) {
     var_dump($args);
   }
-  function varArgsTest2($a1, $a2) {
-    $args = func_get_args();
+  function varArgsTest2($a1, $a2, ...$more_args) {
+    $args = array($a1, $a2);
+    $args = array_merge($args, $more_args);
     var_dump($args);
   }
   function refTestHelper(&$x) {

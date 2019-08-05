@@ -1,4 +1,4 @@
-<?php
+<?hh
 // Copyright 2004-present Facebook. All Rights Reserved.
 
 class NoisyClass {
@@ -53,7 +53,7 @@ function try_unserialize($val) {
   }
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   roundtrip(dict[]);
   roundtrip(dict[1 => 'a', 2 => 'b', 3 => 'c']);
   roundtrip(dict['a' => 1, 'b' => 2, 'c' => 3]);
@@ -100,5 +100,3 @@ function main() {
   try_serialize(dict[1 => new SleepThrow]);
   try_unserialize("D:1:{i:123;O:11:\"WakeupThrow\":0:{}}");
 }
-
-main();

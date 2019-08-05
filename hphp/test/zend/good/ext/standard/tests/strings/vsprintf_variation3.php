@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string vsprintf(string format, array args)
  * Description: Return a formatted string 
  * Source code: ext/standard/formatted_print.c
@@ -8,7 +8,7 @@
  * Test vsprintf() when different int formats and int values are passed to
  * the '$format' and '$args' arguments of the function
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vsprintf() : int formats with int values ***\n";
 
 
@@ -48,5 +48,4 @@ foreach($formats as $format) {
 }
 
 echo "Done";
-?>
-
+}

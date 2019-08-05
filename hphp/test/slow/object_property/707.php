@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function test($x, $v) {
  var_dump($x->$v++);
@@ -8,5 +8,5 @@ function test($x, $v) {
 function main_707() {
 test(true, "");
 test(true, "\0foo");
-test(false, "");
+test(new stdClass(), "");
 }

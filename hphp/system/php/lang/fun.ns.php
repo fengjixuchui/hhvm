@@ -1,4 +1,4 @@
-<?php
+<?hh // partial
 
 namespace __SystemLib {
   // systemlib can't have closures, so we get this...
@@ -11,17 +11,32 @@ namespace __SystemLib {
     }
     public function __invoke($x, ...$args) {
       invariant(
-        $x instanceof $this->class,
+        \is_a($x, $this->class),
         'object must be an instance of ('.$this->class.'), instead it is ('.
         (\is_object($x) ? \get_class($x) : \gettype($x)).')'
       );
       return $x->{$this->method}(...$args);
     }
-    public function getClassName(): string {
+    public function getClassNameImpl(): string {
       return $this->class;
     }
-    public function getMethodName(): string {
+    public function getMethodNameImpl(): string {
       return $this->method;
+    }
+    public function getClassName(): string {
+      if (\ini_get("hhvm.notice_on_meth_caller_helper_use")) {
+        \trigger_error("getClassName() called on __SystemLib\MethCallerHelper",
+          \E_USER_WARNING);
+      }
+      return $this->getClassNameImpl();
+    }
+    public function getMethodName(): string {
+      if (\ini_get("hhvm.notice_on_meth_caller_helper_use")) {
+        \trigger_error(
+          "getMethodName() called on __SystemLib\MethCallerHelper",
+          \E_USER_WARNING);
+      }
+      return $this->getMethodNameImpl();
     }
   };
 }
@@ -39,7 +54,7 @@ namespace HH {
  * For example:
  *
  * ```
- * <?hh
+ * <?hh // partial
  * $v = Vector {
  *   Vector {1, 2, 3},
  *   Vector {1, 2}

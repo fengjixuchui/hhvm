@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : array array_diff_key(array arr1, array arr2 [, array ...])
  * Description: Returns the entries of arr1 that have keys which are not present in any of the others arguments. 
  * Source code: ext/standard/array.c
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_diff_key() : error conditions ***\n";
 
 // Initialise the variables
@@ -16,5 +16,5 @@ try { var_dump( array_diff_key($array1) ); } catch (Exception $e) { echo "\n".'W
 // Testing array_diff_key with no arguments
 echo "\n-- Testing array_diff_key() function with no arguments --\n";
 try { var_dump( array_diff_key() ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
-?>
-===DONE===
+echo "===DONE===\n";
+}

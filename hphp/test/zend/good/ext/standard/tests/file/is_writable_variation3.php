@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool is_writable ( string $filename );
    Description: Tells whether the filename is writable.
 
@@ -6,7 +6,7 @@
 */
 
 /* test is_writable() & is_writeable() with invalid arguments */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing is_writable(): usage variations ***\n";
 
 echo "\n*** Testing is_writable() with invalid filenames ***\n";
@@ -30,4 +30,4 @@ foreach( $misc_files as $misc_file ) {
 }
 
 echo "Done\n";
-?>
+}

@@ -8,94 +8,15 @@
  *)
 
 module TokenKind = Full_fidelity_token_kind
-module Env = Full_fidelity_parser_env
 
-type t =
-| DollarOperator
-(* TODO: Is there a better name? Operators should be named as what they do,
-not how they look on the page. *)
-| IndexingOperator
-| FunctionCallOperator
-| AwaitOperator
-| SuspendOperator
-| PipeOperator
-| ConditionalQuestionOperator
-| ConditionalColonOperator
-| DegenerateConditionalOperator
-| CoalesceOperator
-| CoalesceAssignmentOperator
-| PHPOrOperator
-| PHPExclusiveOrOperator
-| PHPAndOperator
-| PrintOperator
-| LogicalOrOperator
-| ExclusiveOrOperator
-| LogicalAndOperator
-| OrOperator
-| AndOperator
-| EqualOperator
-| StrictEqualOperator
-| NotEqualOperator
-| PhpNotEqualOperator
-| StrictNotEqualOperator
-| SpaceshipOperator
-| LessThanOperator
-| LessThanOrEqualOperator
-| GreaterThanOperator
-| GreaterThanOrEqualOperator
-| LeftShiftOperator
-| RightShiftOperator
-| AdditionOperator
-| SubtractionOperator
-| ConcatenationOperator
-| MultiplicationOperator
-| DivisionOperator
-| RemainderOperator
-| LogicalNotOperator
-| InstanceofOperator
-| IsOperator
-| AsOperator
-| NullableAsOperator
-| NotOperator
-| PrefixIncrementOperator
-| PrefixDecrementOperator
-| PostfixIncrementOperator
-| PostfixDecrementOperator
-| CastOperator
-| ExponentOperator
-| ReferenceOperator
-| ErrorControlOperator
-| NewOperator
-| CloneOperator
-| AssignmentOperator
-| AdditionAssignmentOperator
-| SubtractionAssignmentOperator
-| MultiplicationAssignmentOperator
-| DivisionAssignmentOperator
-| ExponentiationAssignmentOperator
-| ConcatenationAssignmentOperator
-| RemainderAssignmentOperator
-| AndAssignmentOperator
-| OrAssignmentOperator
-| ExclusiveOrAssignmentOperator
-| LeftShiftAssignmentOperator
-| RightShiftAssignmentOperator
-| MemberSelectionOperator
-| NullSafeMemberSelectionOperator
-| ScopeResolutionOperator
-| UnaryPlusOperator
-| UnaryMinusOperator
-| IncludeOperator
-| IncludeOnceOperator
-| RequireOperator
-| RequireOnceOperator
+include Full_fidelity_operator_generated.Impl
 
 type assoc =
 | LeftAssociative
 | RightAssociative
 | NotAssociative
 
-let precedence env operator =
+let precedence _env operator =
   (* TODO: eval *)
   (* TODO: Comma *)
   (* TODO: elseif *)
@@ -105,10 +26,6 @@ let precedence env operator =
   match operator with
   | IncludeOperator | IncludeOnceOperator | RequireOperator
   | RequireOnceOperator -> 1
-  | AwaitOperator when not (Env.enable_stronger_await_binding env) -> 1
-  | PHPOrOperator -> 2
-  | PHPExclusiveOrOperator -> 3
-  | PHPAndOperator -> 4
   | PrintOperator -> 5
   | AssignmentOperator | AdditionAssignmentOperator
   | SubtractionAssignmentOperator | MultiplicationAssignmentOperator
@@ -143,8 +60,7 @@ let precedence env operator =
   | PrefixIncrementOperator | PrefixDecrementOperator
   | ExponentOperator -> 22
   | PostfixIncrementOperator | PostfixDecrementOperator -> 23
-  | AwaitOperator (* implicit: when Env.enable_stronger_await_binding env *)
-    -> 23
+  | AwaitOperator -> 23
   | CloneOperator -> 24
   (* value 25 is reserved for assignment that appear in expressions *)
   | ReferenceOperator -> 26
@@ -157,15 +73,12 @@ let precedence env operator =
 
 let precedence_for_assignment_in_expressions = 25
 
-let associativity env operator =
+let associativity _env operator =
   match operator with
   | EqualOperator | StrictEqualOperator | NotEqualOperator | PhpNotEqualOperator
   | StrictNotEqualOperator | LessThanOperator | LessThanOrEqualOperator
   | GreaterThanOperator | GreaterThanOrEqualOperator | InstanceofOperator
   | NewOperator | CloneOperator | SpaceshipOperator -> NotAssociative
-
-  | AwaitOperator when not (Env.enable_stronger_await_binding env)
-    -> NotAssociative
 
   | DegenerateConditionalOperator
   | PipeOperator | ConditionalQuestionOperator | ConditionalColonOperator
@@ -176,8 +89,7 @@ let associativity env operator =
   | MemberSelectionOperator | NullSafeMemberSelectionOperator
   | ScopeResolutionOperator | FunctionCallOperator | IndexingOperator
   | IncludeOperator | IncludeOnceOperator | RequireOperator
-  | RequireOnceOperator | PHPAndOperator | PHPOrOperator
-  | PHPExclusiveOrOperator | IsOperator | AsOperator | NullableAsOperator
+  | RequireOnceOperator | IsOperator | AsOperator | NullableAsOperator
   (* eval *)
   (* Comma *)
   (* elseif *)
@@ -198,8 +110,7 @@ let associativity env operator =
   | LeftShiftAssignmentOperator | RightShiftAssignmentOperator
   | PrintOperator | SuspendOperator -> RightAssociative
 
-  | AwaitOperator (* implicitly: Env.enable_stronger_await_binding env*)
-    -> RightAssociative
+  | AwaitOperator -> RightAssociative
 
 let prefix_unary_from_token token =
   match token with
@@ -226,9 +137,6 @@ let prefix_unary_from_token token =
 (* Is this a token that can appear after an expression? *)
 let is_trailing_operator_token token =
   match token with
-  | TokenKind.And
-  | TokenKind.Or
-  | TokenKind.Xor
   | TokenKind.PlusPlus
   | TokenKind.MinusMinus
   | TokenKind.LeftParen
@@ -248,7 +156,6 @@ let is_trailing_operator_token token =
   | TokenKind.Bar
   | TokenKind.EqualEqual
   | TokenKind.EqualEqualEqual
-  | TokenKind.LessThanGreaterThan
   | TokenKind.ExclamationEqual
   | TokenKind.ExclamationEqualEqual
   | TokenKind.LessThanEqualGreaterThan
@@ -282,14 +189,12 @@ let is_trailing_operator_token token =
   | TokenKind.GreaterThanGreaterThanEqual
   | TokenKind.MinusGreaterThan
   | TokenKind.QuestionMinusGreaterThan
-  | TokenKind.ColonColon -> true
+  | TokenKind.ColonColon
+  | TokenKind.ColonAt -> true
   | _ -> false
 
 let trailing_from_token token =
   match token with
-  | TokenKind.And -> PHPAndOperator
-  | TokenKind.Or -> PHPOrOperator
-  | TokenKind.Xor -> PHPExclusiveOrOperator
   | TokenKind.BarGreaterThan -> PipeOperator
   | TokenKind.Question -> ConditionalQuestionOperator
   | TokenKind.Colon -> ConditionalColonOperator
@@ -304,7 +209,6 @@ let trailing_from_token token =
   | TokenKind.EqualEqual -> EqualOperator
   | TokenKind.EqualEqualEqual -> StrictEqualOperator
   | TokenKind.ExclamationEqual -> NotEqualOperator
-  | TokenKind.LessThanGreaterThan -> PhpNotEqualOperator
   | TokenKind.ExclamationEqualEqual -> StrictNotEqualOperator
   | TokenKind.LessThan -> LessThanOperator
   | TokenKind.LessThanEqualGreaterThan -> SpaceshipOperator
@@ -345,14 +249,12 @@ let trailing_from_token token =
   | TokenKind.LeftParen -> FunctionCallOperator
   | TokenKind.LeftBracket -> IndexingOperator
   | TokenKind.LeftBrace -> IndexingOperator
+  | TokenKind.ColonAt -> ScopeResolutionOperator
   | _ -> failwith (Printf.sprintf "%s is not a trailing operator"
                     (Full_fidelity_token_kind.to_string token))
 
 let is_binary_operator_token token =
   match token with
-  | TokenKind.And
-  | TokenKind.Or
-  | TokenKind.Xor
   | TokenKind.Plus
   | TokenKind.Minus
   | TokenKind.Ampersand
@@ -367,7 +269,6 @@ let is_binary_operator_token token =
   | TokenKind.EqualEqual
   | TokenKind.EqualEqualEqual
   | TokenKind.ExclamationEqual
-  | TokenKind.LessThanGreaterThan
   | TokenKind.ExclamationEqualEqual
   | TokenKind.LessThanEqualGreaterThan
   | TokenKind.LessThan

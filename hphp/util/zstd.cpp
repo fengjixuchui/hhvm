@@ -17,13 +17,19 @@
 #include "hphp/util/zstd.h"
 
 #include <folly/Format.h>
-#include <folly/ScopeGuard.h>
+#include <folly/Memory.h>
+
+#include "hphp/util/alloc.h"
+#include "hphp/util/compression-ctx-pool.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-ZstdCompressor::ZstdCompressor(int compression_level)
-    : compression_level_(compression_level) {}
+ZstdCompressor::ContextPool ZstdCompressor::streaming_cctx_pool{};
+
+ZstdCompressor::ContextPool ZstdCompressor::single_shot_cctx_pool{};
+
+bool ZstdCompressor::s_useLocalArena = false;
 
 void ZstdCompressor::zstd_cctx_deleter(ZSTD_CCtx* ctx) {
   size_t err = ZSTD_freeCCtx(ctx);
@@ -33,35 +39,49 @@ void ZstdCompressor::zstd_cctx_deleter(ZSTD_CCtx* ctx) {
   }
 }
 
-ZstdCompressor::ZSTD_CCtx_Ptr ZstdCompressor::make_zstd_cctx() {
-  auto ptr = ZSTD_CCtx_Ptr(ZSTD_createCCtx());
+ZstdCompressor::ZstdCompressor(int compression_level)
+    : compression_level_(compression_level) {}
+
+ZstdCompressor::ContextPool::Ref ZstdCompressor::make_zstd_cctx(bool last) {
+  auto ptr = (last ? single_shot_cctx_pool : streaming_cctx_pool).get();
   if (!ptr) {
     throw std::runtime_error("Error allocating ZSTD_CCtx");
   }
   return ptr;
 }
 
-const char* ZstdCompressor::compress(const void* data,
-                                     size_t& len,
-                                     bool last) {
-  auto outSize = ZSTD_compressBound(len);
-  auto out = std::make_unique<char[]>(outSize);
+StringHolder ZstdCompressor::compress(const void* data,
+                                      size_t& len,
+                                      bool last) {
+  auto const outSize = ZSTD_compressBound(len);
+  char* out;
+  StringHolder holder;
+  if (s_useLocalArena) {
+    out = (char*)local_malloc(outSize);
+    holder = StringHolder(out, outSize, FreeType::LocalFree);
+  } else {
+    out = (char*)malloc(outSize);
+    holder = StringHolder(out, outSize, FreeType::Free);
+  }
 
   if (!ctx_) {
+    ctx_ = make_zstd_cctx(last);
     if (last) {
-      // optimize single segment (avoid copying into intermediate buffers)
-      auto ret = ZSTD_compress(out.get(), outSize, data, len, compression_level_);
+      // optimize single segment (avoid copying into intermediate buffers
+      auto ret = ZSTD_compressCCtx(
+          ctx_.get(), out, outSize, data, len, compression_level_);
       if (ZSTD_isError(ret)) return nullptr;
+      ctx_.reset();
       len = ret;
-      return out.release();
+      holder.shrinkTo(len);
+      return holder;
     } else {
-      ctx_ = make_zstd_cctx();
       ZSTD_initCStream(ctx_.get(), compression_level_);
     }
   }
 
   ZSTD_inBuffer inBuf = { data, len, 0 };
-  ZSTD_outBuffer outBuf = { out.get(), outSize, 0 };
+  ZSTD_outBuffer outBuf = { out, outSize, 0 };
 
   size_t ret;
   do {
@@ -84,8 +104,8 @@ const char* ZstdCompressor::compress(const void* data,
   }
 
   len = outBuf.pos;
-
-  return out.release();
+  holder.shrinkTo(len);
+  return holder;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -34,7 +34,6 @@
 #include "hphp/runtime/base/repo-auth-type-array.h"
 #include "hphp/runtime/vm/type-constraint.h"
 
-#include "hphp/hhbbc/hhbbc.h"
 #include "hphp/hhbbc/misc.h"
 
 namespace HPHP { namespace HHBBC {
@@ -53,6 +52,7 @@ extern const Type TTop;
 
 namespace php {
 struct Class;
+struct Const;
 struct Func;
 struct Unit;
 struct Program;
@@ -176,7 +176,15 @@ struct Class {
    * still be a subtype of `o' at runtime, it just may not be known.
    * A typical example is with "non unique" classes.
    */
-  bool subtypeOf(const Class& o) const;
+  bool mustBeSubtypeOf(const Class& o) const;
+
+  /*
+   * Returns false if this class is definitely not going to be a subtype
+   * of `o' at runtime.  If this function returns true, this may
+   * still not be a subtype of `o' at runtime, it just may not be known.
+   * A typical example is with "non unique" classes.
+   */
+  bool maybeSubtypeOf(const Class& o) const;
 
   /*
    * If this function return false, it is known that this class
@@ -245,6 +253,12 @@ struct Class {
   bool mightCareAboutDynConstructs() const;
 
   /*
+   * Whether this class (or clases derived from it) could have const props.
+   */
+  bool couldHaveConstProp() const;
+  bool derivedCouldHaveConstProp() const;
+
+  /*
    * Returns the Class that is the first common ancestor between 'this' and 'o'.
    * If there is no common ancestor folly::none is returned
    */
@@ -271,6 +285,7 @@ struct Class {
 
 private:
   Class(const Index*, Either<SString,ClassInfo*>);
+  template <bool> bool subtypeOfImpl(const Class&) const;
 
 private:
   friend std::string show(const Class&);
@@ -321,21 +336,9 @@ struct Func {
   bool cantBeMagicCall() const;
 
   /*
-   * Returns whether this resolved function could possibly read to the
-   * caller's frame.
-   */
-  bool mightReadCallerFrame() const;
-
-  /*
    * Returns whether this resolved function is definitely safe to constant fold.
    */
   bool isFoldable() const;
-
-  /*
-   * Returns whether this resolved function could possibly be skipped when
-   * looking for a caller's frame.
-   */
-  bool mightBeSkipFrame() const;
 
   /*
    * Whether this function could have reified generics
@@ -463,10 +466,17 @@ struct Index {
   void thaw();
 
   /*
-   * Throw away data structures that won't be needed during the emit
-   * stage (or beyond).
+   * Throw away data structures that won't be needed during or after
+   * the final pass. Currently the dependency map, which can take a
+   * long time to destroy.
    */
-  void cleanup_for_emit(folly::Baton<>* done);
+  void cleanup_for_final();
+
+  /*
+   * Throw away data structures that won't be needed after the emit
+   * stage.
+   */
+  void cleanup_post_emit();
 
   /*
    * The Index contains a Builder for an ArrayTypeTable.
@@ -537,16 +547,18 @@ struct Index {
   folly::Optional<res::Class> selfCls(const Context& ctx) const;
   folly::Optional<res::Class> parentCls(const Context& ctx) const;
 
+  template <typename T>
   struct ResolvedInfo {
     AnnotType                               type;
     bool                                    nullable;
-    Either<SString,ClassInfo*> value;
+    T value;
   };
 
   /*
    * Try to resolve name, looking through TypeAliases and enums.
    */
-  ResolvedInfo resolve_type_name(SString name) const;
+  ResolvedInfo<folly::Optional<res::Class>>
+  resolve_type_name(SString name) const;
 
   /*
    * Resolve a closure class.
@@ -572,23 +584,6 @@ struct Index {
    * fail).
    */
   res::Func resolve_func(Context, SString name) const;
-
-  /*
-   * Try to resolve a function using namespace-style fallback lookup.
-   *
-   * The name `name' is tried first, and `fallback' is used if this
-   * isn't found.  Both names must already be namespace-normalized.
-   * If we don't know which will be called at runtime, both will be
-   * returned.
-   *
-   * Note: the returned function may or may not be defined at the
-   * program point (it could require a function autoload that might
-   * fail).
-   */
-  std::pair<folly::Optional<res::Func>, folly::Optional<res::Func>>
-    resolve_func_fallback(Context,
-                          SString name,
-                          SString fallback) const;
 
   /*
    * Try to resolve a class method named `name' with a given Context
@@ -647,28 +642,29 @@ struct Index {
    * Returns true if the type constraint can contain a reified type
    * Currently, only classes and interfaces are supported
    */
-  bool could_have_reified_type(const TypeConstraint& tc) const;
+  bool could_have_reified_type(Context ctx, const TypeConstraint& tc) const;
 
   /*
    * Lookup what the best known Type for a class constant would be,
    * using a given Index and Context, if a class of that name were
    * loaded.
+   * If allow_tconst is not set, type constants will not be returned.
+   * lookup_class_const_ptr version returns the statically known version
+   * of the const if it can find it, otherwise returns nullptr.
    */
-  Type lookup_class_constant(Context, res::Class, SString cns) const;
+  Type lookup_class_constant(Context, res::Class, SString cns,
+                             bool allow_tconst) const;
+  const php::Const* lookup_class_const_ptr(Context, res::Class, SString cns,
+                                           bool allow_tconst) const;
 
   /*
    * Lookup what the best known Type for a constant would be, using a
    * given Index and Context, if a constant of that name were defined.
    *
-   * If fallbackName is provided, and known to be defined, and cnsName
-   * is known not to be defined, and HardConstProp is set, resolve
-   * fallbackName instead.
-   *
    * Returns folly::none if the constant isn't in the index.
    */
   folly::Optional<Type> lookup_constant(Context ctx,
-                                        SString cnsName,
-                                        SString fallbackName = nullptr) const;
+                                        SString cnsName) const;
 
   /*
    * See if the named constant has a unique scalar definition, and
@@ -718,24 +714,18 @@ struct Index {
   Type lookup_return_type_raw(const php::Func*) const;
 
   /*
-   * As lookup_return_type_raw, but also clean out the FuncInfo struct.
-   * For use during emit, to keep memory usage down.
-   */
-  Type lookup_return_type_and_clear(const php::Func*) const;
-
-  /*
    * Return the best known types of a closure's used variables (on
    * entry to the closure).  The function is the closure body.
    *
    * If move is true, the value will be moved out of the index. This
-   * should only be done at emit time.
+   * should only be done at emit time. (note that the only other user
+   * of this info is analysis, which only uses it when processing the
+   * owning class, so its safe to kill after emitting the owning
+   * unit).
    */
   CompactVector<Type>
     lookup_closure_use_vars(const php::Func*,
                             bool move = false) const;
-
-  CompactVector<Type>
-    lookup_local_static_types(const php::Func* f) const;
 
   /*
    * Return the availability of $this on entry to the provided method.
@@ -760,7 +750,10 @@ struct Index {
    * are guaranteed to hold at any program point.
    *
    * If move is true, the value will be moved out of the index. This
-   * should only be done at emit time.
+   * should only be done at emit time. (note that the only other user
+   * of this info is analysis, which only uses it when processing the
+   * owning class, so its safe to kill after emitting the owning
+   * unit).
    */
   PropState lookup_private_props(const php::Class*,
                                  bool move = false) const;
@@ -774,7 +767,10 @@ struct Index {
    * that are guaranteed to hold at any program point.
    *
    * If move is true, the value will be moved out of the index. This
-   * should only be done at emit time.
+   * should only be done at emit time. (note that the only other user
+   * of this info is analysis, which only uses it when processing the
+   * owning class, so its safe to kill after emitting the owning
+   * unit).
    */
   PropState lookup_private_statics(const php::Class*,
                                    bool move = false) const;
@@ -819,6 +815,13 @@ struct Index {
    */
   Type lookup_public_prop(const Type& cls, const Type& name) const;
   Type lookup_public_prop(const php::Class* cls, SString name) const;
+
+  /*
+   * We compute the interface vtables in a separate thread. It needs
+   * to be joined (in single threaded context) before calling
+   * lookup_iface_vtable_slot.
+   */
+  void join_iface_vtable_thread() const;
 
   /*
    * Returns the computed vtable slot for the given class, if it's an interface
@@ -878,17 +881,6 @@ struct Index {
                         DependencyContextSet& deps);
 
   /*
-   * Refine the types of the local statics owned by the function.
-   */
-  void refine_local_static_types(const php::Func* func,
-                                 const CompactVector<Type>& localStaticTypes);
-
-  /*
-   * Refine the effectFree flag for func.
-   */
-  void refine_effect_free(const php::Func* func, bool flag);
-
-  /*
    * Refine the return type for a function, based on a round of
    * analysis.
    *
@@ -946,6 +938,19 @@ struct Index {
   void record_public_static_mutations(const php::Func& func,
                                       PublicSPropMutations mutations);
 
+
+  /*
+   * If we resolve the intial value of a public property, we need to
+   * tell the refine_public_statics phase about it, because the init
+   * value won't be included in the mutations any more.
+   *
+   * Note that we can't modify the initial value here, because other
+   * threads might be reading it (via loookup_public_static), so we
+   * set a flag to tell us to update it during the next
+   * refine_public_statics pass.
+   */
+  void update_static_prop_init_val(const php::Class* cls,
+                                   SString name) const;
   /*
    * After a round of analysis with all the public static property mutations
    * being recorded with record_public_static_mutations, the types can be
@@ -997,9 +1002,10 @@ struct Index {
   folly::Optional<bool> supports_async_eager_return(res::Func rfunc) const;
 
   /*
-   * Return true if the resolved function is effect free.
+   * Return true if the function is effect free.
    */
   bool is_effect_free(res::Func rfunc) const;
+  bool is_effect_free(const php::Func* func) const;
 
   /*
    * Return true if there are any interceptable functions
@@ -1045,7 +1051,7 @@ private:
   /*
    * Try to resolve name in the given context. Follows TypeAliases.
    */
-  ConstraintResolution resolve_class_or_type_alias(
+  ConstraintResolution resolve_named_type(
       const Context& ctx, SString name, const Type& candidate) const;
 
   ConstraintResolution get_type_for_annotated_type(
@@ -1053,6 +1059,9 @@ private:
     SString name, const Type& candidate) const;
 
   void init_return_type(const php::Func* func);
+
+  ResolvedInfo<Either<SString,ClassInfo*>>
+  resolve_type_name_internal(SString name) const;
 
 private:
   std::unique_ptr<IndexData> const m_data;
@@ -1073,11 +1082,11 @@ struct PublicSPropMutations {
    * give up all information it knows about any public static properties.
    */
   void merge(const Index& index, Context ctx, const Type& cls,
-             const Type& name, const Type& val);
+             const Type& name, const Type& val, bool ignoreConst = false);
   void merge(const Index& index, Context ctx, ClassInfo* cinfo,
-             const Type& name, const Type& val);
+             const Type& name, const Type& val, bool ignoreConst = false);
   void merge(const Index& index, Context ctx, const php::Class& cls,
-             const Type& name, const Type& val);
+             const Type& name, const Type& val, bool ignoreConst = false);
 
 private:
   friend struct Index;

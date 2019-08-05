@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 // This test checks for:
 // - inherited constructors are not called automatically
@@ -6,29 +6,29 @@
 // - base class constructors know the instanciated class name
 
 class base {
-	public $name;
+    public $name;
 
-	function __construct() {
-		echo __CLASS__ . "::" . __FUNCTION__ . "\n";
-		$this->name = 'base';
-		print_r($this);
-	}
+    function __construct() {
+        echo __CLASS__ . "::" . __FUNCTION__ . "\n";
+        $this->name = 'base';
+        print_r($this);
+    }
 }
 
 class derived extends base {
-	public $other;
+    public $other;
 
-	function __construct() {
-		$this->name = 'init';
-		$this->other = 'other';
-		print_r($this);
-		parent::__construct();
-		echo __CLASS__ . "::" . __FUNCTION__ . "\n";
-		$this->name = 'derived';
-		print_r($this);
-	}
+    function __construct() {
+        $this->name = 'init';
+        $this->other = 'other';
+        print_r($this);
+        parent::__construct();
+        echo __CLASS__ . "::" . __FUNCTION__ . "\n";
+        $this->name = 'derived';
+        print_r($this);
+    }
 }
-
+<<__EntryPoint>> function main(): void {
 echo "Testing class base\n";
 $t = new base();
 unset($t);
@@ -37,4 +37,4 @@ $t = new derived();
 unset($t);
 
 echo "Done\n";
-?>
+}

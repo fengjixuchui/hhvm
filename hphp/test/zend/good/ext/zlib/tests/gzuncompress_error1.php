@@ -1,8 +1,8 @@
-<?php
+<?hh
 /* Prototype  : string gzuncompress(string data [, int length])
- * Description: Unzip a gzip-compressed string 
+ * Description: Unzip a gzip-compressed string
  * Source code: ext/zlib/zlib.c
- * Alias to functions: 
+ * Alias to functions:
  */
 
 echo "*** Testing gzuncompress() : error conditions ***\n";
@@ -25,11 +25,11 @@ $compressed = gzcompress($data);
 var_dump(gzuncompress($compressed, $short_len));
 
 echo "\n-- Testing with incorrect arguments --\n";
-var_dump(gzuncompress(123));
+var_dump(gzuncompress('123'));
 
 class Tester {
     function Hello() {
-        echo "Hello\n"; 
+        echo "Hello\n";
     }
 }
 
@@ -38,5 +38,4 @@ try { var_dump(gzuncompress($testclass)); } catch (Exception $e) { echo "\n".'Wa
 
 try { var_dump(gzuncompress($compressed, "this is not a number\n")); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";

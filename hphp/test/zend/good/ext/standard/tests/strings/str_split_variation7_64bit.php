@@ -1,8 +1,8 @@
-<?php
+<?hh
 /* Prototype  : array str_split(string $str [, int $split_length])
- * Description: Convert a string to an array. If split_length is 
-                specified, break the string down into chunks each 
-                split_length characters long. 
+ * Description: Convert a string to an array. If split_length is
+                specified, break the string down into chunks each
+                split_length characters long.
  * Source code: ext/standard/string.c
  * Alias to functions: none
 */
@@ -10,14 +10,14 @@
 /*
 * passing different integer values for 'split_length' and heredoc string as 'str' argument to str_split()
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing str_split() : different intger values for 'split_length' with heredoc 'str' ***\n";
 //Initialise variables
 $str = <<<EOT
 string with 123,escape char \t.
 EOT;
 
-//different values for 'split_length' 
+//different values for 'split_length'
 $values = array (
   0,
   1,
@@ -34,5 +34,5 @@ for($count = 0; $count < count($values); $count++) {
   echo "-- Iteration ".($count + 1)." --\n";
   var_dump( str_split($str, $values[$count]) );
 }
-echo "Done"
-?>
+echo "Done";
+}

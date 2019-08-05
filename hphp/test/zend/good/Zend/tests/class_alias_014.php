@@ -1,10 +1,9 @@
-<?php
+<?hh
 
 namespace foo;
 
 class bar {
 }
-
-class_alias('bar', 'baz');
-
-?>
+<<__EntryPoint>> function main(): void {
+\class_alias('bar', 'baz');
+}

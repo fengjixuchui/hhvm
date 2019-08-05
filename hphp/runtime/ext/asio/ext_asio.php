@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 namespace HH {
 
@@ -9,7 +9,7 @@ abstract class Awaitable {
 
   final private function __construct() {
     throw new \InvalidOperationException(
-      get_class($this) . "s cannot be constructed directly"
+      \get_class($this) . "s cannot be constructed directly"
     );
   }
 
@@ -212,13 +212,13 @@ final class ConditionWaitHandle extends WaitableWaitHandle {
    * @param mixed $result - A result to be set
    */
   <<__Native>>
-  function succeed(mixed $result): void;
+  public function succeed(mixed $result): void;
 
   /* Notify the condition variable and mark the ConditionWaitHandle as failed
    * @param mixed $exception - An exception to be set
    */
   <<__Native>>
-  function fail(\Exception $exception): void;
+  public function fail(\Exception $exception): void;
 }
 
 /* A wait handle that succeeds with null once desired scheduling priority is
@@ -386,7 +386,7 @@ function cancel<T>(Awaitable<T> $awaitable, \Exception $exception): bool;
  */
 <<__Native>>
 function backtrace<T>(Awaitable<T> $awaitable,
-                      int $options = DEBUG_BACKTRACE_PROVIDE_OBJECT,
+                      int $options = \DEBUG_BACKTRACE_PROVIDE_OBJECT,
                       int $limit = 0): varray<darray>;
 
 

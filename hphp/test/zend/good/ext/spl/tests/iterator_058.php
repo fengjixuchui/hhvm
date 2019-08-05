@@ -1,4 +1,4 @@
-<?php
+<?hh
 class myIterator implements Iterator {
 	
 	function current() {}
@@ -14,4 +14,3 @@ try {
 	echo 'InvalidArgumentException thrown';
 }
 echo 'no Exception thrown';
-?>

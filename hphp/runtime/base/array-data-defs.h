@@ -46,15 +46,6 @@ inline ArrayData* ArrayData::Create(const Variant& name, const Variant& value) {
   return Create(*name.asTypedValue(), *value.asTypedValue());
 }
 
-inline ArrayData* ArrayData::CreateWithRef(const Variant& name,
-                                           TypedValue value) {
-  return CreateWithRef(*name.asTypedValue(), value);
-}
-
-inline ArrayData* ArrayData::CreateRef(const Variant& name, tv_lval value) {
-  return CreateRef(*name.asTypedValue(), value);
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // ArrayFunction dispatch.
 
@@ -114,6 +105,9 @@ inline bool ArrayData::isVectorData() const {
 
 inline void ArrayData::release() noexcept {
   assertx(!hasMultipleRefs());
+  if (RuntimeOption::EvalArrayProvenance) {
+    arrprov::clearTag(this);
+  }
   g_array_funcs.release[kind()](this);
   AARCH64_WALKABLE_FRAME();
 }
@@ -134,20 +128,8 @@ inline arr_lval ArrayData::lval(StringData* k, bool copy) {
   return g_array_funcs.lvalStr[kind()](this, k, copy);
 }
 
-inline arr_lval ArrayData::lvalRef(int64_t k, bool copy) {
-  return g_array_funcs.lvalIntRef[kind()](this, k, copy);
-}
-
-inline arr_lval ArrayData::lvalRef(StringData* k, bool copy) {
-  return g_array_funcs.lvalStrRef[kind()](this, k, copy);
-}
-
 inline arr_lval ArrayData::lvalNew(bool copy) {
   return g_array_funcs.lvalNew[kind()](this, copy);
-}
-
-inline arr_lval ArrayData::lvalNewRef(bool copy) {
-  return g_array_funcs.lvalNewRef[kind()](this, copy);
 }
 
 inline tv_rval ArrayData::rval(int64_t k) const {
@@ -164,6 +146,14 @@ inline tv_rval ArrayData::rvalStrict(int64_t k) const {
 
 inline tv_rval ArrayData::rvalStrict(const StringData* k) const {
   return g_array_funcs.nvTryGetStr[kind()](this, k);
+}
+
+inline ssize_t ArrayData::nvGetIntPos(int64_t k) const {
+  return g_array_funcs.nvGetIntPos[kind()](this, k);
+}
+
+inline ssize_t ArrayData::nvGetStrPos(const StringData* k) const {
+  return g_array_funcs.nvGetStrPos[kind()](this, k);
 }
 
 inline tv_rval ArrayData::rvalPos(ssize_t pos) const {
@@ -236,22 +226,6 @@ inline ArrayData* ArrayData::setWithRefInPlace(StringData* k, TypedValue v) {
   return g_array_funcs.setWithRefStrInPlace[kind()](this, k, v);
 }
 
-inline ArrayData* ArrayData::setRef(int64_t k, tv_lval v) {
-  return g_array_funcs.setRefInt[kind()](this, k, v);
-}
-
-inline ArrayData* ArrayData::setRefInPlace(int64_t k, tv_lval v) {
-  return g_array_funcs.setRefIntInPlace[kind()](this, k, v);
-}
-
-inline ArrayData* ArrayData::setRef(StringData* k, tv_lval v) {
-  return g_array_funcs.setRefStr[kind()](this, k, v);
-}
-
-inline ArrayData* ArrayData::setRefInPlace(StringData* k, tv_lval v) {
-  return g_array_funcs.setRefStrInPlace[kind()](this, k, v);
-}
-
 inline ArrayData* ArrayData::remove(int64_t k) {
   return g_array_funcs.removeInt[kind()](this, k);
 }
@@ -290,14 +264,6 @@ inline ArrayData* ArrayData::appendWithRefInPlace(TypedValue v) {
 
 inline ArrayData* ArrayData::appendWithRef(const Variant& v) {
   return g_array_funcs.appendWithRef[kind()](this, *v.asTypedValue());
-}
-
-inline ArrayData* ArrayData::appendRef(tv_lval v) {
-  return g_array_funcs.appendRef[kind()](this, v);
-}
-
-inline ArrayData* ArrayData::appendRefInPlace(tv_lval v) {
-  return g_array_funcs.appendRefInPlace[kind()](this, v);
 }
 
 inline ssize_t ArrayData::iter_begin() const {
@@ -416,12 +382,6 @@ inline arr_lval ArrayData::lval(Cell k, bool copy) {
                              : lval(detail::getStringKey(k), copy);
 }
 
-inline arr_lval ArrayData::lvalRef(Cell k, bool copy) {
-  assertx(IsValidKey(k));
-  return detail::isIntKey(k) ? lvalRef(detail::getIntKey(k), copy)
-                             : lvalRef(detail::getStringKey(k), copy);
-}
-
 inline tv_rval ArrayData::get(int64_t k, bool error) const {
   auto r = error ? rvalStrict(k) : rval(k);
   return r ? r : getNotFound(k, error);
@@ -492,30 +452,6 @@ inline ArrayData* ArrayData::setWithRefInPlace(Cell k, TypedValue v) {
                              : setWithRefInPlace(detail::getStringKey(k), v);
 }
 
-inline ArrayData* ArrayData::setRef(Cell k, tv_lval v) {
-  assertx(IsValidKey(k));
-  return detail::isIntKey(k) ? setRef(detail::getIntKey(k), v)
-                             : setRef(detail::getStringKey(k), v);
-}
-
-inline ArrayData* ArrayData::setRefInPlace(Cell k, tv_lval v) {
-  assertx(IsValidKey(k));
-  return detail::isIntKey(k) ? setRefInPlace(detail::getIntKey(k), v)
-                             : setRefInPlace(detail::getStringKey(k), v);
-}
-
-inline ArrayData* ArrayData::setRef(int64_t k, Variant& v) {
-  return setRef(k, tv_lval{v.asTypedValue()});
-}
-
-inline ArrayData* ArrayData::setRef(StringData* k, Variant& v) {
-  return setRef(k, tv_lval{v.asTypedValue()});
-}
-
-inline ArrayData* ArrayData::setRef(Cell k, Variant& v) {
-  return setRef(k, tv_lval{v.asTypedValue()});
-}
-
 inline ArrayData* ArrayData::remove(Cell k) {
   assertx(IsValidKey(k));
   return detail::isIntKey(k) ? remove(detail::getIntKey(k))
@@ -540,15 +476,6 @@ inline arr_lval ArrayData::lval(const String& k, bool copy) {
 
 inline arr_lval ArrayData::lval(const Variant& k, bool copy) {
   return lval(*k.toCell(), copy);
-}
-
-inline arr_lval ArrayData::lvalRef(const String& k, bool copy) {
-  assertx(IsValidKey(k));
-  return lvalRef(k.get(), copy);
-}
-
-inline arr_lval ArrayData::lvalRef(const Variant& k, bool copy) {
-  return lvalRef(*k.toCell(), copy);
 }
 
 inline tv_rval ArrayData::get(const String& k, bool error) const {
@@ -600,25 +527,6 @@ inline ArrayData* ArrayData::setWithRefInPlace(const String& k, TypedValue v) {
   return setWithRefInPlace(k.get(), v);
 }
 
-inline ArrayData*
-ArrayData::setRef(const String& k, tv_lval v) {
-  assertx(IsValidKey(k));
-  return setRef(k.get(), v);
-}
-
-inline ArrayData*
-ArrayData::setRef(const Variant& k, tv_lval v) {
-  return setRef(*k.toCell(), v);
-}
-
-inline ArrayData* ArrayData::setRef(const String& k, Variant& v) {
-  return setRef(k, tv_lval{v.asTypedValue()});
-}
-
-inline ArrayData* ArrayData::setRef(const Variant& k, Variant& v) {
-  return setRef(k, tv_lval{v.asTypedValue()});
-}
-
 inline ArrayData* ArrayData::remove(const String& k) {
   assertx(IsValidKey(k));
   return remove(k.get());
@@ -626,10 +534,6 @@ inline ArrayData* ArrayData::remove(const String& k) {
 
 inline ArrayData* ArrayData::remove(const Variant& k) {
   return remove(*k.toCell());
-}
-
-inline ArrayData* ArrayData::appendRef(Variant& v) {
-  return appendRef(tv_lval{v.asTypedValue()});
 }
 
 inline Variant ArrayData::getValue(ssize_t pos) const {
@@ -643,35 +547,20 @@ inline Variant ArrayData::getKey(ssize_t pos) const {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-template <IntishCast intishCast>
+template <IntishCast IC>
 ALWAYS_INLINE bool ArrayData::convertKey(const StringData* key,
                                          int64_t& i) const {
-  auto const result = (intishCast == IntishCast::CastSilently ||
-                       RuntimeOption::EvalEnableIntishCast) &&
-                      key->isStrictlyInteger(i) &&
-                      useWeakKeys();
-  if (UNLIKELY(result && intishCast == IntishCast::AllowCastAndWarn &&
-               checkHACIntishCast())) {
-    raise_intish_index_cast();
-  }
-  return result;
+  return IC == IntishCast::Cast &&
+         key->isStrictlyInteger(i) &&
+         useWeakKeys();
 }
 
-/*
- * Like isStrictlyInteger but changes behavior with the value of intishCast
- * and will raise warnings appropriately
- */
-template <IntishCast intishCast>
+template <IntishCast IC>
 ALWAYS_INLINE
 folly::Optional<int64_t> tryIntishCast(const StringData* key) {
   int64_t i;
-  if (UNLIKELY((intishCast == IntishCast::CastSilently ||
-                RuntimeOption::EvalEnableIntishCast) &&
+  if (UNLIKELY(IC == IntishCast::Cast &&
                key->isStrictlyInteger(i))) {
-    if (UNLIKELY(intishCast == IntishCast::AllowCastAndWarn &&
-                 checkHACIntishCast())) {
-      raise_intish_index_cast();
-    }
     return i;
   }
   return {};

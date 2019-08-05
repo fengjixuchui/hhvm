@@ -67,6 +67,8 @@ and instantiate_ subst x =
       | _, Toption _ -> snd ty
       | _ -> Toption ty
       )
+  | Tlike ty ->
+      Tlike (instantiate subst ty)
   | Tfun ft ->
       let tparams, instantiate_tparams = ft.ft_tparams in
       let outer_subst = subst in
@@ -96,9 +98,9 @@ and instantiate_ subst x =
   | Tapply (x, tyl) ->
       let tyl = List.map tyl (instantiate subst) in
       Tapply (x, tyl)
-  | Tshape (fields_known, fdm) ->
+  | Tshape (shape_kind, fdm) ->
       let fdm = ShapeFieldMap.map (instantiate subst) fdm in
-      Tshape (fields_known, fdm)
+      Tshape (shape_kind, fdm)
 
 let instantiate_ce subst ({ ce_type = x; _ } as ce) =
   { ce with ce_type = lazy (instantiate subst (Lazy.force x)) }
@@ -108,7 +110,16 @@ let instantiate_cc subst ({ cc_type = x; _ } as cc) =
   { cc with cc_type = x }
 
 let instantiate_typeconst subst (
-  { ttc_constraint = x; ttc_type = y; _ } as tc) =
+  { ttc_abstract = abs; ttc_constraint = x; ttc_type = y; _ } as tc) =
+    let abs =
+      match abs with
+      | TCAbstract default_opt ->
+        TCAbstract (Option.map default_opt (instantiate subst))
+      | _ -> abs in
     let x = Option.map x (instantiate subst) in
     let y = Option.map y (instantiate subst) in
-    { tc with ttc_constraint = x; ttc_type = y }
+    { tc with
+      ttc_abstract = abs;
+      ttc_constraint = x;
+      ttc_type = y
+    }

@@ -61,44 +61,17 @@ trait TR2 implements I0, I1<int> {
   require implements I2;
 }
 
-# For multiple declarations of the same class we union the possible base types.
-if (rand()) {
-  class CL3 extends CL0 {
-    use TR0;
-  }
-} else {
-  class CL3 implements I0 {
-    use TR0;
-  }
-}
-
 enum E0 : int {
   EV0 = 0;
   EV1 = 1;
 }
 
-if (rand()) {
-  class M0 {
-  }
-} else {
-  interface M0 {
-  }
-}
-
-if (rand()) {
-  final class M1 {
-  }
-} else {
-  abstract class M1 {
-  }
-}
-
 const CO5 = 1;
 function f6() {
 
-  nEw stdclass; // make sure the parser can handle "weird" keywords
-  NeW stdclass;
-  NEW stdclass;
+  new stdclass;
+  new stdclass;
+  new stdclass;
 }
 
 # Does not compile.
@@ -245,11 +218,11 @@ try {
 }
 try {
   HH\facts_parse(null, array(null), null, null);
-} catch (InvalidOperationException $e) {
+} catch (Exception $e) {
   var_dump($e->getMessage());
 }
 try {
   HH\facts_parse(null, array(array()), null, null);
-} catch (InvalidOperationException $e) {
+} catch (Exception $e) {
   var_dump($e->getMessage());
 }

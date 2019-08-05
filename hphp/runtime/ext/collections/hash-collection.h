@@ -17,12 +17,12 @@ ALWAYS_INLINE MixedArray* staticEmptyDictArrayAsMixed() {
 // Common base class for BaseMap/BaseSet collections
 struct HashCollection : ObjectData {
   explicit HashCollection(Class* cls, HeaderKind kind)
-    : ObjectData(cls, NoInit{}, collections::objectFlags, kind)
+    : ObjectData(cls, NoInit{}, ObjectData::NoAttrs, kind)
     , m_unusedAndSize(0)
     , m_arr(staticEmptyDictArrayAsMixed())
   {}
   explicit HashCollection(Class* cls, HeaderKind kind, ArrayData* arr)
-    : ObjectData(cls, NoInit{}, collections::objectFlags, kind)
+    : ObjectData(cls, NoInit{}, ObjectData::NoAttrs, kind)
     , m_unusedAndSize(arr->m_size)
     , m_arr(MixedArray::asMixed(arr))
   {}
@@ -48,16 +48,16 @@ struct HashCollection : ObjectData {
 
   Array toArray() = delete;
 
-  template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+  template <IntishCast intishCast = IntishCast::None>
   Array toPHPArrayImpl() {
     if (!m_size) {
       return empty_array();
     }
 
     ArrayData* ad;
-    if (intishCast == IntishCast::AllowCastAndWarn) {
+    if (intishCast == IntishCast::None) {
       ad = arrayData()->toPHPArray(true);
-    } else if (intishCast == IntishCast::CastSilently) {
+    } else if (intishCast == IntishCast::Cast) {
       ad = arrayData()->toPHPArrayIntishCast(true);
     } else {
       always_assert(false);

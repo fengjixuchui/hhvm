@@ -1,10 +1,38 @@
-<?php
+<?hh
 /* Prototype  : int vfprintf(resource stream, string format, array args)
  * Description: Output a formatted string into a stream
  * Source code: ext/standard/formatted_print.c
  * Alias to functions:
  */
 
+
+
+
+
+
+
+
+
+
+class FooClass
+{
+    public function __toString()
+    {
+        return "Object";
+    }
+}
+
+// Output facilitating function
+function writeAndDump($fp, $format, $args)
+{
+    try { ftruncate( $fp, 0 ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+    $length = vfprintf( $fp, $format, $args );
+    try { rewind( $fp ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+    try { $content = stream_get_contents( $fp ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
+    var_dump( $content );
+    var_dump( $length );
+}
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vfprintf() : variation functionality ***\n";
 
 // Open handle
@@ -13,25 +41,6 @@ $fp = fopen( $file, 'a+' );
 
 $funset = fopen( __FILE__, 'r' );
 unset( $funset );
-
-class FooClass
-{
-	public function __toString()
-	{
-		return "Object";
-	}
-}
-
-// Output facilitating function
-function writeAndDump($fp, $format, $args)
-{
-	try { ftruncate( $fp, 0 ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
-	$length = vfprintf( $fp, $format, $args );
-	try { rewind( $fp ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
-	try { $content = stream_get_contents( $fp ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
-	var_dump( $content );
-	var_dump( $length );
-}
 
 // Test vfprintf()
 writeAndDump( $fp, "format", null );
@@ -47,12 +56,8 @@ writeAndDump( $fp, "Testing %b %d %f %o %s %x %X", array( 9, 6, 2.5502, 24, "foo
 // Close handle
 fclose( $fp );
 
-?>
-===DONE===
-<?php error_reporting(0); ?>
-<?php
-
+echo "===DONE===\n";
+error_reporting(0);
 $file = 'vfprintf_variation1.phpt.txt';
 unlink( $file );
-
-?>
+}

@@ -42,9 +42,6 @@
 open Core_kernel
 module SourceText = Full_fidelity_positioned_syntax.SourceText
 module Token = Full_fidelity_positioned_token
-module Trivia = Full_fidelity_positioned_trivia
-module SyntaxKind = Full_fidelity_syntax_kind
-module TokenKind = Full_fidelity_token_kind
 module SyntaxWithToken = Full_fidelity_syntax.WithToken(Token)
 
 
@@ -258,3 +255,7 @@ let position (_file: Relative_path.t) (node: t) =
   Some (Value.position node.value)
 
 let offset node = Some (start_offset node)
+
+let rust_parse _ _ = failwith "not implemented"
+let rust_parse_with_coroutine_sc _ _ = failwith "not implemented"
+let rust_parse_with_decl_mode_sc _ _ = failwith "not implemented"

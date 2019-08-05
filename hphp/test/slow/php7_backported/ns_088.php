@@ -1,4 +1,4 @@
-<?php
+<?hh
 namespace Fiz\Biz\Buz {
     use Foo\Bar\Baz\{
         A,
@@ -8,5 +8,6 @@ namespace Fiz\Biz\Buz {
             E
         }
     };
+
+    <<__EntryPoint>> function main(): void {}
 }
-?>

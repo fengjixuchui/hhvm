@@ -27,7 +27,9 @@
 #include "hphp/util/string-vsnprintf.h"
 #include "hphp/util/struct-log.h"
 
+#include <folly/AtomicHashMap.h>
 #include <folly/logging/RateLimiter.h>
+#include <folly/Range.h>
 
 #ifdef ERROR
 # undef ERROR
@@ -92,9 +94,7 @@ void raise_typehint_error(const std::string& msg) {
     SystemLib::throwTypeErrorObject(msg);
   }
   raise_recoverable_error_without_first_frame(msg);
-  if (RuntimeOption::EvalHardTypeHints) {
-    raise_error("Error handler tried to recover from typehint violation");
-  }
+  raise_error("Error handler tried to recover from typehint violation");
 }
 
 void raise_reified_typehint_error(const std::string& msg, bool warn) {
@@ -129,14 +129,29 @@ void raise_property_typehint_error(const std::string& msg, bool isSoft) {
   }
 }
 
+void raise_record_field_typehint_error(const std::string& msg, bool isSoft) {
+  if (isSoft) {
+    raise_warning_unsampled(msg);
+    return;
+  }
+  raise_recoverable_error(msg);
+  raise_error("Error handler tried to recover from a record field typehint "
+              "violation");
+}
+
+void raise_record_init_error(const StringData* recName,
+                             const StringData* fieldName) {
+  raise_error(
+    folly::sformat("Record field '{}::{}' not initialized", recName, fieldName)
+  );
+}
+
 void raise_property_typehint_binding_error(const Class* declCls,
                                            const StringData* propName,
-                                           bool isStatic,
                                            bool isSoft) {
   raise_property_typehint_error(
     folly::sformat(
-      "{} '{}::{}' with type annotation binding to ref",
-      isStatic ? "Static property" : "Property",
+      "Property '{}::{}' with type annotation binding to ref",
       declCls->name(),
       propName
     ),
@@ -157,20 +172,12 @@ void raise_property_typehint_unset_error(const Class* declCls,
   );
 }
 
-void raise_disallowed_dynamic_call(const Func* f) {
-  raise_hack_strict(
-    RuntimeOption::DisallowDynamicVarEnvFuncs,
-    "disallow_dynamic_var_env_funcs",
-    Strings::DISALLOWED_DYNCALL, f->fullName()->data()
-  );
-}
-
-void raise_intish_index_cast() {
-  raise_notice("Hack Array Compat: Intish index cast");
-}
-
 void raise_convert_object_to_string(const char* cls_name) {
   raise_error("Cannot convert object to string (got instance of %s)", cls_name);
+}
+
+void raise_convert_record_to_type(const char* typeName) {
+  raise_error("Cannot convert record to %s", typeName);
 }
 
 void raise_hackarr_compat_notice(const std::string& msg) {
@@ -195,38 +202,98 @@ void raise_hack_arr_compat_serialize_notice(const ArrayData* arr) {
   raise_notice("Hack Array Compat: Serializing %s", type);
 }
 
+namespace {
+
+folly::Synchronized<
+  folly::F14FastSet<std::pair<PC, std::string>>,
+  std::mutex
+  > g_previouslyRaisedNotices;
+
+template <typename... Args>
+void raise_dynamically_sampled_notice(folly::StringPiece fmt, Args&& ... args) {
+  /*
+   * We want to dedupe notices, but not so much that we exclude
+   * notices at a new location, so we need to grab the first
+   * not-skipframe saved PC, since this is the first frame that will
+   * be listed in the backtrace
+   */
+  VMRegAnchor _;
+  auto const pc = [&] {
+    if (LIKELY(!vmfp()->skipFrame())) return vmpc();
+    Offset offset;
+    auto ar = g_context->getPrevVMStateSkipFrame(vmfp(), &offset);
+    return ar->func()->unit()->at(offset);
+  }();
+
+  auto const str = folly::sformat(fmt, std::move(args) ...);
+  {
+    auto notices = g_previouslyRaisedNotices.lock();
+    auto const inserted = notices->emplace(pc, str);
+    if (!inserted.second) return;
+  }
+  raise_notice(str);
+}
+
+}
+
+void raise_array_serialization_notice(const char* src, const ArrayData* arr) {
+  static auto const sampl_threshold =
+    RAND_MAX / RuntimeOption::EvalLogArrayProvenanceSampleRatio;
+  if (std::rand() >= sampl_threshold) return;
+  static auto knownCounter = ServiceData::createTimeSeries(
+    "vm.provlogging.known",
+    {ServiceData::StatsType::COUNT}
+  );
+  static decltype(knownCounter) unknownCounters[] = {
+    ServiceData::createTimeSeries("vm.provlogging.unknown.counted.nonempty",
+                                  {ServiceData::StatsType::COUNT}),
+    ServiceData::createTimeSeries("vm.provlogging.unknown.static.nonempty",
+                                  {ServiceData::StatsType::COUNT}),
+    ServiceData::createTimeSeries("vm.provlogging.unknown.counted.empty",
+                                  {ServiceData::StatsType::COUNT}),
+    ServiceData::createTimeSeries("vm.provlogging.unknown.static.empty",
+                                  {ServiceData::StatsType::COUNT}),
+  };
+
+  auto const dvarray = ([&](){
+    if (arr->isVArray()) return "varray";
+    if (arr->isDArray()) return "darray";
+    if (arr->isVecArray()) return "vec";
+    if (arr->isDict()) return "dict";
+    return "<weird array>";
+  })();
+
+  auto const bail = [&]() {
+    auto const isEmpty = arr->empty();
+    auto const isStatic = arr->isStatic();
+    auto const counterIdx = (isEmpty ? 2 : 0) + (isStatic ? 1 : 0);
+    unknownCounters[counterIdx]->addValue(1);
+    raise_dynamically_sampled_notice(
+      "Observing {}{}{} in {} from unknown location",
+      isEmpty ? "empty, " : "",
+      isStatic ? "static, " : "",
+      dvarray,
+      src);
+  };
+
+  assertx(RuntimeOption::EvalLogArrayProvenance);
+  auto const ann = arrprov::getTag(arr);
+  if (!ann) { bail(); return; }
+
+  auto const line = ann->line();
+  auto const name = ann->filename();
+
+  if (!name) { bail(); return; }
+
+  knownCounter->addValue(1);
+  raise_dynamically_sampled_notice("Observing {} in {} from {}:{}",
+                                   dvarray, src, name->slice(), line);
+}
+
 void
 raise_hack_arr_compat_array_producing_func_notice(const std::string& name) {
   raise_notice("Hack Array Compat: Calling array producing function %s",
                name.c_str());
-}
-
-void raise_undefined_const_fallback_notice(const StringData* name,
-                                           const StringData* fallback) {
-  // If the option is set to 2, we won't emit CnsU or CnsUE, meaning this
-  // function should never get called.
-  assertx(RuntimeOption::UndefinedConstFallback < 2);
-  if (RuntimeOption::UndefinedConstFallback == 1) {
-    raise_notice(
-      "Undefined constant '%s', falling back to '%s'",
-      name->data(),
-      fallback->data()
-    );
-  }
-}
-
-void raise_undefined_function_fallback_notice(const StringData* name,
-                                              const StringData* fallback) {
-  // If the option is set to 2, we won't emit FPushFuncU, meaning this
-  // function should never get called.
-  assertx(RuntimeOption::UndefinedFunctionFallback < 2);
-  if (RuntimeOption::UndefinedFunctionFallback == 1) {
-    raise_notice(
-      "Undefined function '%s', falling back to '%s'",
-      name->data(),
-      fallback->data()
-    );
-  }
 }
 
 namespace {
@@ -333,6 +400,22 @@ void raise_hackarr_compat_type_hint_property_notice(const Class* declCls,
     isStatic ? "Static property" : "Property",
     declCls->name()->data(),
     propName->data(),
+    name,
+    given
+  );
+}
+
+void raise_hackarr_compat_type_hint_rec_field_notice(
+    const StringData* recName,
+    const ArrayData* ad,
+    AnnotType at,
+    const StringData* fieldName) {
+  auto const name = arrayAnnotTypeToName(at);
+  auto const given = arrayToName(ad);
+  raise_notice(
+    "Hack Array Compat: Record field '%s::%s' declared as type %s, %s assigned",
+    recName->data(),
+    fieldName->data(),
     name,
     given
   );

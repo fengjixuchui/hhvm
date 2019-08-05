@@ -1,4 +1,4 @@
-<?php
+<?hh
 /**
  * From Docs: Construct a new array iterator from anything that has a hash table. 
  * NULL, NOTHING is not a hash table ;) 
@@ -10,5 +10,4 @@ try {
 } catch (InvalidArgumentException $e) {
 	echo 'InvalidArgumentException thrown';
 }
-echo 'no Exception thrown'
-?>
+echo 'no Exception thrown';

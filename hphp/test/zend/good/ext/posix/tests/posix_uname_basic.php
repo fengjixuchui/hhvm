@@ -1,9 +1,9 @@
-<?php 
-  echo "Basic test of POSIX uname function\n"; 
-  	
-  $uname = posix_uname();  
-  unset($uname['domainname']);  
+<?hh
+  echo "Basic test of POSIX uname function\n";
+
+  $uname = posix_uname();
+  unset($uname['domainname']);
   print_r($uname);
-  
-?>
-===DONE====
+<<__EntryPoint>> function main(): void {
+echo "===DONE====";
+}

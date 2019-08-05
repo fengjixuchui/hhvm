@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 //offset to large
 $dom = new DomDocument();
@@ -11,4 +11,3 @@ try {
   }
 }
 
-?>

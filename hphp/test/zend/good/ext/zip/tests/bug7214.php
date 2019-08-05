@@ -1,4 +1,4 @@
-<?php
+<?hh
 $zip = zip_open(dirname(__FILE__)."/binarynull.zip");
 if (!is_resource($zip)) die("Failure");
 $entries = 0;
@@ -10,4 +10,3 @@ if (strlen($contents) == zip_entry_filesize($entry)) {
 	echo "failed";
 }
 
-?>

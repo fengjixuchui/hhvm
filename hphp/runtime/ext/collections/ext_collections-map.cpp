@@ -249,7 +249,7 @@ Array BaseMap::toPHPArray() {
   if (RuntimeOption::EvalHackArrCompatArrayProducingFuncNotices) {
     raise_hack_arr_compat_array_producing_func_notice("Map::toArray");
   }
-  return toPHPArrayImpl<IntishCast::AllowCastAndWarn>();
+  return toPHPArrayImpl<IntishCast::None>();
 }
 
 template <bool raw>
@@ -427,7 +427,7 @@ BaseMap::php_differenceByKey(const Variant& it) {
 template<bool useKey>
 Object BaseMap::php_retain(const Variant& callback) {
   CallCtx ctx;
-  vm_decode_function(callback, nullptr, false, ctx);
+  vm_decode_function(callback, ctx);
   if (!ctx.func) {
     SystemLib::throwInvalidArgumentExceptionObject(
                "Parameter must be a valid callback");
@@ -585,7 +585,7 @@ typename std::enable_if<
   std::is_base_of<BaseMap, TMap>::value, Object>::type
 BaseMap::php_skipWhile(const Variant& fn) {
   CallCtx ctx;
-  vm_decode_function(fn, nullptr, false, ctx);
+  vm_decode_function(fn, ctx);
   if (!ctx.func) {
     SystemLib::throwInvalidArgumentExceptionObject(
                "Parameter must be a valid callback");
@@ -668,7 +668,7 @@ BaseMap::php_concat(const Variant& iterable) {
     if (isTombstone(i)) {
       continue;
     }
-    cellDup(data()[i].data, vec->data()[j]);
+    cellDup(data()[i].data, vec->dataAt(j));
     ++j;
   }
   for (; iter; ++iter) {

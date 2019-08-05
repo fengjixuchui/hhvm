@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 namespace {
 
@@ -45,5 +45,7 @@ class Exception implements Throwable {
     $this->previous = $previous;
   }
 }
+
+class DivisionByZeroException extends Exception {}
 
 }

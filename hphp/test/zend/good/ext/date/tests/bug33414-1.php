@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 print "TZ=America/Mendoza - wrong day.\n";
 $tStamp = mktime (17, 17, 17, 1, 8327, 1970);
 print "tStamp=". date("l Y-m-d H:i:s T I", $tStamp). "\n";
@@ -191,5 +191,4 @@ print "tStamp=". date("l Y-m-d H:i:s T I", $tStamp). "\n";
 $strtotime_tstamp = strtotime("next Thursday", $tStamp);
 print "result=".date("l Y-m-d H:i:s T I", $strtotime_tstamp)."\n";
 print "wanted=Thursday             00:00:00\n\n";
-
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool chdir(string $directory)
  * Description: Change the current directory 
  * Source code: ext/standard/dir.c
@@ -7,7 +7,7 @@
 /*
  * Test chdir() with variations of relative paths
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing chdir() : usage variations ***\n";
 
 $base_dir_path = dirname(__FILE__);
@@ -55,11 +55,9 @@ var_dump(chdir($level2_two_dir_path));
 var_dump(chdir("../../$level2_one_dir_name"));
 var_dump(getcwd());
 
-?>
-===DONE===
-<?php error_reporting(0); ?>
-<?php
+echo "===DONE===\n";
+error_reporting(0);
 $file_path = dirname(__FILE__);
 rmdir("$file_path/level2_one/level2_two");
 rmdir("$file_path/level2_one");
-?>
+}

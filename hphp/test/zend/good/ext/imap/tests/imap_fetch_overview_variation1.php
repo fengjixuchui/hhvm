@@ -1,22 +1,13 @@
-<?php
+<?hh
 /* Prototype  : array imap_fetch_overview(resource $stream_id, int $msg_no [, int $options])
- * Description: Read an overview of the information in the headers 
- * of the given message sequence 
+ * Description: Read an overview of the information in the headers
+ * of the given message sequence
  * Source code: ext/imap/php_imap.c
  */
 
 /*
  * Pass different data types as $stream_id argument to imap_fetch_overview() to test behaviour
  */
-
-echo "*** Testing imap_fetch_overview() : usage variations ***\n";
-
-// Initialise function arguments not being substituted
-$msg_no = 1;
-
-//get an unset variable
-$unset_var = 10;
-unset ($unset_var);
 
 // get a class
 class classA
@@ -25,6 +16,15 @@ class classA
     return "Class A object";
   }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing imap_fetch_overview() : usage variations ***\n";
+
+// Initialise function arguments not being substituted
+$msg_no = 1;
+
+//get an unset variable
+$unset_var = 10;
+unset ($unset_var);
 
 // heredoc string
 $heredoc = <<<EOT
@@ -56,7 +56,7 @@ $inputs = array(
        false,
        TRUE,
        FALSE,
-       
+
        // empty data
 /*16*/ "",
        '',
@@ -66,7 +66,7 @@ $inputs = array(
 /*19*/ "string",
        'string',
        $heredoc,
-       
+
        // object data
 /*22*/ new classA(),
 
@@ -85,5 +85,5 @@ foreach($inputs as $input) {
   try { var_dump( imap_fetch_overview($input, $msg_no) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
   $iterator++;
 };
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int stripos ( string $haystack, string $needle [, int $offset] );
  * Description: Find position of first occurrence of a case-insensitive string
  * Source code: ext/standard/string.c
@@ -7,7 +7,7 @@
 /* Test stripos() function with null terminated strings for 'haystack' argument 
  *  in order to check the binary safe 
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Test stripos() function: binary safe ***\n";
 $haystacks = array(
   "Hello".chr(0)."World",
@@ -24,4 +24,4 @@ for($index = 0; $index < count($haystacks); $index++ ) {
   var_dump( stripos($haystacks[$index], "\0", $index) );
 }
 echo "*** Done ***";
-?>
+}

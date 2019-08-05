@@ -1,11 +1,17 @@
+.hh_file 1;
 .main {
   NewObjD "Exception"
   Dup
-  FPushCtor 1
+  NullUninit
+  NullUninit
   String "foo"
-  FCall <> 1 1 "" - "" ""
+  FCallCtor <LockWhileUnwinding> 1 1 "" - ""
   PopC
+  LockObj
   Throw
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "bar"
   FCall <> 0 1 "" - "" ""
   PopC

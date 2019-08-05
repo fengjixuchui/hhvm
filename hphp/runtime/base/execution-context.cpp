@@ -37,6 +37,7 @@
 #include "hphp/runtime/base/apc-gc-manager.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/sweepable.h"
+#include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/externals.h"
@@ -436,10 +437,10 @@ const StaticString
   s_default_output_handler("default output handler");
 
 Array ExecutionContext::obGetStatus(bool full) {
-  Array ret = Array::Create();
+  Array ret = Array::CreateVArray();
   int level = 0;
   for (auto& buffer : m_buffers) {
-    Array status;
+    Array status = Array::CreateDArray();
     if (level < m_protectedLevel || buffer.handler.isNull()) {
       status.set(s_name, s_default_output_handler);
       status.set(s_type, 0);
@@ -495,7 +496,7 @@ void ExecutionContext::obSetImplicitFlush(bool on) {
 }
 
 Array ExecutionContext::obGetHandlers() {
-  Array ret;
+  Array ret = Array::CreateVArray();
   for (auto& ob : m_buffers) {
     auto& handler = ob.handler;
     ret.append(handler.isNull() ? s_default_output_handler : handler);
@@ -692,8 +693,6 @@ void ExecutionContext::onShutdownPreSend() {
   executeFunctions(ShutDown);
 }
 
-extern void ext_session_request_shutdown();
-
 void ExecutionContext::debuggerExecutePsps() {
   try {
     executeFunctions(PostSend);
@@ -731,13 +730,6 @@ void ExecutionContext::onShutdownPostSend() {
   } catch (...) {
     Logger::Error("unknown exception was thrown from psp");
   }
-
-  /*
-   * This has to happen before requestEventHandler shutdown hooks,
-   * because it can run user code which may need to access other
-   * RequestLocal objects (such as the stream registry).
-   */
-  ext_session_request_shutdown();
 
   ServerStats::SetThreadMode(ServerStats::ThreadMode::Idling);
 }
@@ -831,9 +823,7 @@ void ExecutionContext::handleError(const std::string& msg,
   {
     ErrorStateHelper esh(this, newErrorState);
     if (callUserHandler) {
-      handled =
-        RuntimeOption::EvalDisableErrorHandler ||
-        callUserErrorHandler(ee, errnum, false);
+      handled = callUserErrorHandler(ee, errnum, false);
     }
 
     if (!handled) {
@@ -989,9 +979,7 @@ bool ExecutionContext::onFatalError(const Exception& e) {
   }
   bool handled = false;
   if (RuntimeOption::CallUserHandlerOnFatals) {
-    handled =
-      RuntimeOption::EvalDisableErrorHandler ||
-      callUserErrorHandler(e, errnum, true);
+    handled = callUserErrorHandler(e, errnum, true);
   }
   if (!handled && !silenced && !RuntimeOption::AlwaysLogUnhandledExceptions) {
     Logger::Log(Logger::LogError, prefix, e, fileAndLine.first.c_str(),
@@ -1045,7 +1033,7 @@ void ExecutionContext::debuggerInfo(
 }
 
 void ExecutionContext::setenv(const String& name, const String& value) {
-  m_envs.set(m_envs.convertKey<IntishCast::CastSilently>(name),
+  m_envs.set(m_envs.convertKey<IntishCast::Cast>(name),
              make_tv<KindOfString>(value.get()));
 }
 
@@ -1115,7 +1103,7 @@ ObjectData* ExecutionContext::createObject(const Class* class_,
                                            const Variant& params,
                                            bool init) {
   callerDynamicConstructChecks(class_);
-  auto o = Object::attach(newInstance(const_cast<Class*>(class_)));
+  auto o = Object::attach(ObjectData::newInstance(const_cast<Class*>(class_)));
   if (init) {
     initObject(class_, params, o.get());
   }
@@ -1165,21 +1153,6 @@ ObjectData* ExecutionContext::getThis() {
   return nullptr;
 }
 
-Class* ExecutionContext::getContextClass() {
-  VMRegAnchor _;
-  ActRec* ar = vmfp();
-  assertx(ar != nullptr);
-  if (ar->skipFrame()) ar = getPrevVMStateSkipFrame(ar);
-  return ar ? ar->m_func->cls() : nullptr;
-}
-
-Class* ExecutionContext::getParentContextClass() {
-  if (Class* ctx = getContextClass()) {
-    return ctx->parent();
-  }
-  return nullptr;
-}
-
 const RepoOptions& ExecutionContext::getRepoOptionsForCurrentFrame() const {
   VMRegAnchor _;
 
@@ -1199,10 +1172,12 @@ void ExecutionContext::onLoadWithOptions(
     return;
   }
   if (m_requestOptions != opts) {
+    auto const path =
+      opts.path().empty() ? "{default options}" : opts.path().data();
     raise_error(
       "Attempting to load file %s with incompatible parser settings from %s, "
       "this request is using parser settings from %s",
-      f, opts.path().data(), m_requestOptions->path().data()
+      f, path, m_requestOptions->path().data()
     );
   }
 }
@@ -1230,82 +1205,21 @@ int ExecutionContext::getLine() {
   return unit->getLineNumber(pc);
 }
 
-const StaticString s___call("__call");
-const StaticString s___callStatic("__callStatic");
-const StaticString s_call_user_func("call_user_func");
-const StaticString s_call_user_func_array("call_user_func_array");
-
-Array ExecutionContext::getCallerInfo() {
-  VMRegAnchor _;
-  auto ar = vmfp();
-  if (ar->skipFrame()) {
-    ar = getPrevVMStateSkipFrame(ar);
-    if (!ar) return empty_array();
-  }
-  while (ar->func()->name()->isame(s_call_user_func.get())
-         || ar->func()->name()->isame(s_call_user_func_array.get())) {
-    ar = getPrevVMState(ar);
-    if (ar == nullptr) {
-      return empty_darray();
-    }
-  }
-
-  Offset pc = 0;
-  ar = getPrevVMState(ar, &pc);
-  while (ar != nullptr) {
-    if (!ar->func()->name()->isame(s_call_user_func.get())
-        && !ar->func()->name()->isame(s_call_user_func_array.get())) {
-      auto const unit = ar->func()->unit();
-      auto const path = ar->func()->originalFilename() ?
-        ar->func()->originalFilename() : unit->filepath();
-      int lineNumber;
-      if ((lineNumber = unit->getLineNumber(pc)) != -1) {
-        auto const cls = ar->func()->cls();
-        if (cls != nullptr && !ar->func()->isClosureBody()) {
-          return make_darray(
-            s_class, const_cast<StringData*>(cls->name()),
-            s_file, const_cast<StringData*>(path),
-            s_function, const_cast<StringData*>(ar->func()->name()),
-            s_line, lineNumber
-          );
-        } else {
-          return make_darray(
-            s_file, const_cast<StringData*>(path),
-            s_function, const_cast<StringData*>(ar->func()->name()),
-            s_line, lineNumber
-          );
-        }
+ActRec* ExecutionContext::getFrameAtDepthForDebuggerUnsafe(int frameDepth) {
+  ActRec* ret = nullptr;
+  walkStack([&] (ActRec* fp, Offset) {
+    if (frameDepth == 0) {
+      if (fp && !fp->localsDecRefd()) {
+        ret = fp;
       }
+      return true;
     }
-    ar = getPrevVMState(ar, &pc);
-  }
-  return empty_darray();
-}
 
-ActRec* ExecutionContext::getFrameAtDepth(int frame) {
-  VMRegAnchor _;
-  auto fp = vmfp();
-  if (UNLIKELY(!fp)) return nullptr;
-  auto pc = fp->func()->unit()->offsetOf(vmpc());
-  while (frame > 0) {
-    fp = getPrevVMState(fp, &pc);
-    if (UNLIKELY(!fp)) return nullptr;
-    if (UNLIKELY(fp->skipFrame())) continue;
-    --frame;
-  }
-  while (fp->skipFrame()) {
-    fp = getPrevVMState(fp, &pc);
-    if (UNLIKELY(!fp)) return nullptr;
-  }
-  if (UNLIKELY(fp->localsDecRefd())) return nullptr;
-  auto const curOp = fp->func()->unit()->getOp(pc);
-  if (UNLIKELY(curOp == Op::RetC || curOp == Op::RetCSuspended ||
-               curOp == Op::RetM || curOp == Op::CreateCont ||
-               curOp == Op::Await)) {
-    return nullptr;
-  }
-  assertx(!fp->magicDispatch());
-  return fp;
+    frameDepth--;
+    return false;
+  });
+  assertx(!ret || !ret->magicDispatch());
+  return ret;
 }
 
 void ExecutionContext::setVar(StringData* name, tv_rval v) {
@@ -1316,21 +1230,8 @@ void ExecutionContext::setVar(StringData* name, tv_rval v) {
   if (fp) fp->getVarEnv()->set(name, v);
 }
 
-void ExecutionContext::bindVar(StringData* name, tv_lval v) {
-  VMRegAnchor _;
-  ActRec *fp = vmfp();
-  if (!fp) return;
-  if (fp->skipFrame()) fp = getPrevVMStateSkipFrame(fp);
-  if (fp) fp->getVarEnv()->bind(name, v);
-}
-
-Array ExecutionContext::getLocalDefinedVariables(int frame) {
-  VMRegAnchor _;
-  ActRec *fp = vmfp();
-  for (; frame > 0; --frame) {
-    if (!fp) break;
-    fp = getPrevVMState(fp);
-  }
+Array ExecutionContext::getLocalDefinedVariablesDebugger(int frame) {
+  const auto fp = getFrameAtDepthForDebuggerUnsafe(frame);
   return getDefinedVariables(fp);
 }
 
@@ -1363,12 +1264,9 @@ bool sideEffect(Op op) {
     case Op::RetCSuspended:
     case Op::Array:
     case Op::Dict:
-    case Op::Cns:
     case Op::CnsE:
     case Op::ClsCnsD:
     case Op::ClsCns:
-    case Op::CnsU:
-    case Op::CnsUE:
     case Op::NewMixedArray:
     case Op::NewLikeArrayL:
     case Op::NewPackedArray:
@@ -1380,6 +1278,7 @@ bool sideEffect(Op op) {
     case Op::NewVArray:
     case Op::NewDArray:
     case Op::NewDictArray:
+    case Op::NewRecord:
     case Op::Nop:
     case Op::EntryNop:
     case Op::AssertRATL:
@@ -1455,13 +1354,14 @@ void pseudomainHelper(const Unit* unit, bool callByHPHPInvoke) {
   }
 }
 
-const static StaticString s_entry_point("__SystemLib\\enter_async_entry_point");
+const static StaticString
+  s_enter_async_entry_point("__SystemLib\\enter_async_entry_point");
 
 TypedValue ExecutionContext::invokeUnit(const Unit* unit,
                                         bool callByHPHPInvoke) {
   checkHHConfig(unit);
 
-  if (UNLIKELY(!RuntimeOption::EnablePHP) && !unit->isHHFile()) {
+  if (!unit->isHHFile()) {
     throw PhpNotSupportedException(unit->filepath()->data());
   }
 
@@ -1475,13 +1375,13 @@ TypedValue ExecutionContext::invokeUnit(const Unit* unit,
   if (callByHPHPInvoke && it != nullptr) {
     if (it->isAsync()) {
       invokeFunc(
-        Unit::lookupFunc(s_entry_point.get()),
-        make_vec_array(VarNR{it->fullDisplayName()}),
-        nullptr, nullptr, nullptr, nullptr, InvokeNormal
+        Unit::lookupFunc(s_enter_async_entry_point.get()),
+        make_vec_array(Variant{it}),
+        nullptr, nullptr, nullptr, nullptr, InvokeNormal, false
       );
     } else {
       invokeFunc(it, init_null_variant, nullptr, nullptr,
-                    nullptr, nullptr, InvokeNormal);
+                    nullptr, nullptr, InvokeNormal, false);
     }
   }
   return ret;
@@ -1592,7 +1492,6 @@ void ExecutionContext::requestInit() {
   initBlackHole();
   VarEnv::createGlobal();
   vmStack().requestInit();
-  ObjectData::resetMaxId();
   ResourceHdr::resetMaxId();
   jit::tc::requestInit();
 
@@ -1669,9 +1568,8 @@ void ExecutionContext::requestExit() {
 /*
  * Shared implementation for invokeFunc{,Few}().
  *
- * The `doCheckStack' and `doInitArgs' callbacks should return truthy in order
- * to short-circuit the rest of invokeFuncImpl() and return early, else they
- * should return falsey.
+ * The `doCheckStack' callback should return truthy in order to short-circuit
+ * the rest of invokeFuncImpl() and return early, else it should return falsey.
  *
  * The `doInitArgs' and `doEnterVM' callbacks take an ActRec* argument
  * corresponding to the reentry frame.
@@ -1692,9 +1590,8 @@ TypedValue ExecutionContext::invokeFuncImpl(const Func* f,
   assertx(IMPLIES(f->preClass(), thiz || cls));
   // If `f' is a static method, thiz must be null.
   assertx(IMPLIES(f->isStaticInPrologue(), !thiz));
-  // invName should only be non-null if we are calling __call or __callStatic.
-  assertx(IMPLIES(invName, f->name()->isame(s___call.get()) ||
-                          f->name()->isame(s___callStatic.get())));
+  // invName should only be non-null if we are calling __call.
+  assertx(IMPLIES(invName, f->name()->isame(s___call.get())));
 
   VMRegAnchor _;
   auto const reentrySP = vmStack().top();
@@ -1747,7 +1644,7 @@ TypedValue ExecutionContext::invokeFuncImpl(const Func* f,
 #endif
 
   try {
-    if (doInitArgs(ar, retval)) return retval;
+    doInitArgs(ar);
   } catch (...) {
     while (vmStack().top() != (void*)ar) {
       vmStack().popTV();
@@ -1787,13 +1684,13 @@ TypedValue ExecutionContext::invokeFuncImpl(const Func* f,
         vmStack().popC();
       }
       auto arr = varr.toArray();
-      retval = make_array_like_tv(arr.detach());
+      return make_array_like_tv(arr.detach());
     } else {
       tvCopy(*vmStack().topTV(), retval);
       vmStack().discard();
+      return retval;
     }
   }
-  return retval;
 }
 
 /**
@@ -1807,10 +1704,6 @@ static inline void enterVMCustomHandler(ActRec* ar, Action action) {
   assertx(!ar->sfp());
   assertx(isReturnHelper(reinterpret_cast<void*>(ar->m_savedRip)));
   assertx(ar->m_callOff == 0);
-
-  auto ec = &*g_context;
-  DEBUG_ONLY int faultDepth = ec->m_faults.size();
-  SCOPE_EXIT { assertx(ec->m_faults.size() == faultDepth); };
 
   vmFirstAR() = ar;
   vmJitCalledFrame() = nullptr;
@@ -1877,19 +1770,13 @@ TypedValue ExecutionContext::invokeFunc(const Func* f,
     return false;
   };
 
-  auto const doInitArgs = [&] (ActRec* ar, TypedValue& retval) {
+  auto const doInitArgs = [&] (ActRec* ar) {
     if (!varEnv) {
       auto const& prepArgs = cellIsNull(&args)
         ? make_array_like_tv(staticEmptyVArray())
         : args;
-      auto prepResult = prepareArrayArgs(ar, prepArgs, vmStack(), 0,
-                                         &retval, checkRefAnnot);
-      if (UNLIKELY(!prepResult)) {
-        assertx(KindOfNull == retval.m_type);
-        return true;
-      }
+      prepareArrayArgs(ar, prepArgs, vmStack(), 0, checkRefAnnot);
     }
-    return false;
   };
 
   auto const doEnterVM = [&] (ActRec* ar) {
@@ -1924,7 +1811,7 @@ TypedValue ExecutionContext::invokeFuncFew(const Func* f,
     return false;
   };
 
-  auto const doInitArgs = [&](ActRec* /*ar*/, TypedValue&) {
+  auto const doInitArgs = [&](ActRec* /*ar*/) {
     for (ssize_t i = 0; i < argc; ++i) {
       const TypedValue *from = &argv[i];
       TypedValue *to = vmStack().allocTV();
@@ -1934,7 +1821,6 @@ TypedValue ExecutionContext::invokeFuncFew(const Func* f,
         refDup(*from, *to);
       }
     }
-    return false;
   };
 
   auto const doEnterVM = [&] (ActRec* ar) {
@@ -2136,6 +2022,7 @@ Variant ExecutionContext::getEvaledArg(const StringData* val,
       key + s_semicolon;
   }
   Unit* unit = compileEvalString(code.get());
+  unit->setInterpretOnly();
   assertx(unit != nullptr);
   // Default arg values are not currently allowed to depend on class context.
   auto v = Variant::attach(
@@ -2263,22 +2150,16 @@ ExecutionContext::evalPHPDebugger(Unit* unit, int frame) {
 
   VMRegAnchor _;
 
-  auto fp = vmfp();
-  if (fp) {
-    if (fp->skipFrame()) fp = getPrevVMStateSkipFrame(fp);
-    for (; frame > 0; --frame) {
-      auto prevFp = getPrevVMStateSkipFrame(fp);
-      if (!prevFp) {
-        // To be safe in case we failed to get prevFp. This would mean we've
-        // been asked to eval in a frame which is beyond the top of the stack.
-        // This suggests the debugger client has made an error.
-        break;
-      }
-      fp = prevFp;
-    }
-    if (!fp->hasVarEnv()) {
-      fp->setVarEnv(VarEnv::createLocal(fp));
-    }
+  auto fp = getFrameAtDepthForDebuggerUnsafe(frame);
+
+  // Continue walking up the stack until we find a frame that can have
+  // a variable environment context attached to it, or we run out out frames.
+  while (fp && (fp->skipFrame() || fp->isInlined())) {
+    fp = getPrevVMStateSkipFrame(fp);
+  }
+
+  if (fp && !fp->hasVarEnv()) {
+    fp->setVarEnv(VarEnv::createLocal(fp));
   }
   ObjectData *this_ = nullptr;
   // NB: the ActRec and function within the AR may have different classes. The

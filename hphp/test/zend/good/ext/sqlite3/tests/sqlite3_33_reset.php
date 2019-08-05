@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $db = new SQLite3(':memory:');
 
 $db->exec('CREATE TABLE foo (id INTEGER, bar STRING)');
@@ -13,4 +13,4 @@ $stmt->reset();
 //var_dump($db);
 //var_dump($db->close());
 echo "Done\n";
-?>
+}

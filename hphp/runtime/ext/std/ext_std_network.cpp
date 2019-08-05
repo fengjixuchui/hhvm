@@ -24,7 +24,6 @@
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/file.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/ext/sockets/ext_sockets.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
@@ -32,6 +31,7 @@
 #include "hphp/runtime/server/server-stats.h"
 #include "hphp/util/lock.h"
 #include "hphp/util/network.h"
+#include "hphp/util/rds-local.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -39,18 +39,20 @@ namespace HPHP {
 
 static Mutex NetworkMutex;
 
-Variant HHVM_FUNCTION(gethostname) {
-  char h_name[HOST_NAME_MAX + 1];
-
-  if (gethostname(h_name, sizeof(h_name)) != 0) {
-    raise_warning(
-        "gethostname() failed with errorno=%d: %s", errno, strerror(errno));
-    return false;
+TypedValue HHVM_FUNCTION(gethostname) {
+  static StringData* hostname = nullptr;
+  if (!hostname) {
+    char h_name[HOST_NAME_MAX + 1];
+    if (gethostname(h_name, sizeof(h_name)) != 0) {
+      raise_warning("gethostname() failed with errorno=%d", errno);
+      return make_tv<KindOfBoolean>(false);
+    }
+    // gethostname may not null-terminate
+    h_name[sizeof(h_name) - 1] = '\0';
+    Lock lock(NetworkMutex);
+    if (!hostname) hostname = makeStaticString(h_name);
   }
-  // gethostname may not null-terminate
-  h_name[sizeof(h_name) - 1] = '\0';
-
-  return String(h_name, CopyString);
+  return make_tv<KindOfPersistentString>(hostname);
 }
 
 Variant HHVM_FUNCTION(gethostbyaddr, const String& ip_address) {
@@ -77,8 +79,6 @@ Variant HHVM_FUNCTION(gethostbyaddr, const String& ip_address) {
   freeaddrinfo(res0);
   return ip_address;
 }
-
-const StaticString s_empty("");
 
 String HHVM_FUNCTION(gethostbyname, const String& hostname) {
   IOStatusHelper io("gethostbyname", hostname.data());
@@ -210,7 +210,7 @@ String HHVM_FUNCTION(long2ip, const String& proper_address) {
   try {
     return folly::IPAddress::fromLongHBO(ul).str();
   } catch (folly::IPAddressFormatException& e) {
-    return s_empty;
+    return empty_string();
   }
 }
 

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool is_dir ( string $dirname );
    Description: Tells whether the dirname is a directory
      Returns TRUE if the dirname exists and is a directory, FALSE  otherwise.
@@ -6,7 +6,7 @@
 
 /* Testing is_dir() with dir, soft & hard link to dir,
      and with file, soft & hard link to file */
-
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 echo "*** Testing is_dir() with dir and links to dir ***\n";
@@ -44,9 +44,7 @@ var_dump( is_dir($file_path."/is_dir_variation2_link.tmp") );
 clearstatcache();
 
 echo "\n*** Done ***";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 if(file_exists($file_path."/is_dir_variation2_symlink")) {
   unlink($file_path."/is_dir_variation2_symlink");
@@ -66,4 +64,4 @@ if(file_exists($file_path."/is_dir_variation2.tmp")) {
 if(file_exists($file_path."/is_dir_variation2")) {
   rmdir($file_path."/is_dir_variation2");
 }
-?>
+}

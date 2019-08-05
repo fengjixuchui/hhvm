@@ -1,6 +1,6 @@
-<?php
+<?hh
 class A extends SplObjectStorage { }
-
+<<__EntryPoint>> function main(): void {
 $o1 = new StdClass;
 $o2 = new StdClass;
 $o3 = new StdClass;
@@ -22,6 +22,5 @@ var_dump($a->count());
 
 $a->removeAll($b);
 var_dump($a->count());
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

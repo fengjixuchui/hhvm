@@ -1,80 +1,54 @@
-
-Notice: Undefined index: baz in %s/test/slow/array_cse/534.php on line 5
+Undefined index: baz
 array(1) {
   ["e"]=>
-  array(2) {
+  array(1) {
     ["foo"]=>
     int(30)
-    ["bar"]=>
-    int(50)
-  }
-}
-NULL
-
-Notice: Undefined index: baz in %s/test/slow/array_cse/534.php on line 5
-array(1) {
-  ["e"]=>
-  array(2) {
-    ["foo"]=>
-    int(30)
-    ["bar"]=>
-    int(50)
   }
 }
 NULL
 array(1) {
   ["e"]=>
-  array(3) {
+  array(2) {
     ["baz"]=>
     int(40)
     ["foo"]=>
     int(30)
-    ["bar"]=>
-    int(50)
   }
 }
 int(40)
-
-Notice: Undefined index: baz in %s/test/slow/array_cse/534.php on line 5
+Undefined index: baz
 array(1) {
   ["y"]=>
-  array(2) {
+  array(1) {
     ["foo"]=>
     int(30)
-    ["bar"]=>
-    int(50)
+  }
+}
+NULL
+NULL
+Undefined index: baz
+array(1) {
+  ["y"]=>
+  array(1) {
+    ["foo"]=>
+    int(30)
   }
 }
 NULL
 NULL
 
-Notice: Undefined index: baz in %s/test/slow/array_cse/534.php on line 5
-array(1) {
-  ["y"]=>
-  array(2) {
-    ["foo"]=>
-    int(30)
-    ["bar"]=>
-    int(50)
-  }
-}
-NULL
-NULL
+Warning: Illegal offset type in %s on line 9
 
-Warning: Invalid operand type was used: Invalid type used as key in %s/test/slow/array_cse/534.php on line 4
+Warning: Invalid operand type was used: Invalid type used as key in %s on line 10
 
-Warning: Invalid operand type was used: Invalid type used as key in %s/test/slow/array_cse/534.php on line 5
+Notice: Array to string conversion in %s on line 10
+Undefined index: Array
 
-Notice: Array to string conversion in %s/test/slow/array_cse/534.php on line 5
-
-Notice: Undefined index: Array in %s/test/slow/array_cse/534.php on line 5
-
-Warning: Invalid operand type was used: Invalid type used as key in %s/test/slow/array_cse/534.php on line 6
+Warning: Illegal offset type in %s on line 11
 array(0) {
 }
 NULL
 NULL
-
-Notice: Undefined index: 0 in %s/test/slow/array_cse/534.php on line 24
-NULL
+Undefined index: 0
 int(30)

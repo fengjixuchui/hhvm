@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int mb_ereg(string $pattern, string $string [, array $registers])
  * Description: Regular expression match for multibyte string
  * Source code: ext/mbstring/php_mbregex.c
@@ -64,4 +64,3 @@ function base64_encode_var_dump($regs) {
 }
 echo "Done";
 
-?>

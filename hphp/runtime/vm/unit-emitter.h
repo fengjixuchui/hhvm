@@ -37,13 +37,14 @@
 #include "hphp/util/functional.h"
 #include "hphp/util/hash-map.h"
 #include "hphp/util/hash-set.h"
-#include "hphp/util/md5.h"
+#include "hphp/util/sha1.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 struct FuncEmitter;
 struct PreClassEmitter;
+struct RecordEmitter;
 struct StringData;
 
 namespace Native {
@@ -57,6 +58,13 @@ struct FuncTable;
  */
 size_t hhbc_arena_capacity();
 
+enum class SymbolRef : uint8_t {
+  Include,
+  Class,
+  Function,
+  Constant
+};
+
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
@@ -69,10 +77,14 @@ struct UnitEmitter {
   /////////////////////////////////////////////////////////////////////////////
   // Initialization and execution.
 
-  explicit UnitEmitter(const MD5& md5, const Native::FuncTable&);
+  explicit UnitEmitter(const SHA1& sha1,
+                       const SHA1& bcSha1,
+                       const Native::FuncTable&,
+                       bool useGlobalIds);
   UnitEmitter(UnitEmitter&&) = delete;
   ~UnitEmitter();
 
+  void setSha1(const SHA1& sha1) { m_sha1 = sha1; }
   /*
    * Commit this unit to a repo.
    */
@@ -100,9 +112,14 @@ struct UnitEmitter {
   // Basic data.
 
   /*
-   * The MD5 hash of the Unit.
+   * The SHA1 hash of the source for Unit.
    */
-  const MD5& md5() const;
+  const SHA1& sha1() const;
+
+  /*
+   * The SHA1 hash of the bytecode for Unit.
+   */
+  const SHA1& bcSha1() const;
 
   /*
    * Bytecode pointer and current emit position.
@@ -133,6 +150,7 @@ struct UnitEmitter {
   Id numArrays() const { return m_arrays.size(); }
   Id numLitstrs() const { return m_litstrs.size(); }
 
+  bool useGlobalIds() const { return m_useGlobalIds; }
   /*
    * Merge a literal string into either the global LitstrTable or the table for
    * the Unit.
@@ -250,6 +268,29 @@ struct UnitEmitter {
   PreClassEmitter* newBarePreClassEmitter(const std::string& name,
                                           PreClass::Hoistable hoistable);
 
+  void addRecordEmitter(RecordEmitter* re);
+  RecordEmitter* newRecordEmitter(const std::string& name);
+  /*
+   * Create a new RecordEmitter without adding it to the hoistability
+   * tracking data structures.
+   * It should be added later with addRecordEmitter.
+   */
+  RecordEmitter* newBareRecordEmitter(const std::string& name);
+
+  /////////////////////////////////////////////////////////////////////////////
+  // RecordEmitters.
+
+  /*
+   * Number of RecordEmitters in the Unit.
+   */
+  size_t numRecords() const;
+
+  /*
+   * The RecordEmitter for `recordId'.
+   */
+  const RecordEmitter* re(Id recordId) const;
+  RecordEmitter* re(Id recordId);
+
   /////////////////////////////////////////////////////////////////////////////
   // Type aliases.
 
@@ -333,8 +374,8 @@ struct UnitEmitter {
   /*
    * Add a TypeAlias to the UnitEmitter's list of mergeables.
    */
-  void pushMergeableTypeAlias(Unit::MergeKind kind, const Id id);
-  void insertMergeableTypeAlias(int ix, Unit::MergeKind kind, const Id id);
+  void pushMergeableTypeAlias(const Id id);
+  void insertMergeableTypeAlias(int ix, const Id id);
 
   /////////////////////////////////////////////////////////////////////////////
   // Bytecode emit.
@@ -383,22 +424,22 @@ public:
 
   bool m_mergeOnly{false};
   bool m_isHHFile{false};
-  bool m_useStrictTypes{false};
-  bool m_useStrictTypesForBuiltins{false};
   bool m_returnSeen{false};
   bool m_ICE{false}; // internal compiler error
-  int m_preloadPriority{0};
+  bool m_useGlobalIds{0};
   TypedValue m_mainReturn;
   UserAttributeMap m_metaData;
   UserAttributeMap m_fileAttributes;
-
+  CompactVector<
+    std::pair<SymbolRef, CompactVector<std::string>>> m_symbol_refs;
   /*
    * name=>NativeFuncInfo for native funcs in this unit
    */
   const Native::FuncTable& m_nativeFuncs;
 
 private:
-  MD5 m_md5;
+  SHA1 m_sha1;
+  SHA1 m_bcSha1;
 
   unsigned char* m_bc;
   size_t m_bclen;
@@ -438,6 +479,11 @@ private:
    * PreClassEmitter table.
    */
   std::vector<PreClassEmitter*> m_pceVec;
+
+  /*
+   * RecordEmitter table.
+   */
+  std::vector<RecordEmitter*> m_reVec;
 
   /*
    * Hoistability tables.
@@ -482,10 +528,10 @@ struct UnitRepoProxy : public RepoProxy {
   explicit UnitRepoProxy(Repo& repo);
   ~UnitRepoProxy();
   void createSchema(int repoId, RepoTxn& txn); // throws(RepoExc)
-  std::unique_ptr<Unit> load(const std::string& name, const MD5& md5,
+  std::unique_ptr<Unit> load(const folly::StringPiece name, const SHA1& sha1,
                              const Native::FuncTable&);
-  std::unique_ptr<UnitEmitter> loadEmitter(const std::string& name,
-                                           const MD5& md5,
+  std::unique_ptr<UnitEmitter> loadEmitter(const folly::StringPiece name,
+                                           const SHA1& sha1,
                                            const Native::FuncTable&);
 
   struct InsertUnitLineTableStmt : public RepoProxy::Stmt {
@@ -499,18 +545,31 @@ struct UnitRepoProxy : public RepoProxy {
     void get(int64_t unitSn, LineTable& lineTable);
   };
 
+  struct InsertUnitTypeAliasStmt : public RepoProxy::Stmt {
+    InsertUnitTypeAliasStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
+    void insert(const UnitEmitter& ue,
+                RepoTxn& txn,
+                int64_t unitSn,
+                Id typeAliasId,
+                const TypeAlias& typeAlias); // throws(RepoExc)
+  };
+  struct GetUnitTypeAliasesStmt : public RepoProxy::Stmt {
+    GetUnitTypeAliasesStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
+    void get(UnitEmitter& ue);
+  };
+
   struct InsertUnitStmt : public RepoProxy::Stmt {
     InsertUnitStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
     void insert(const UnitEmitter& ue,
                 RepoTxn& txn,
                 int64_t& unitSn,
-                const MD5& md5,
+                const SHA1& sha1,
                 const unsigned char* bc,
                 size_t bclen); // throws(RepoExc)
   };
   struct GetUnitStmt : public RepoProxy::Stmt {
     GetUnitStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
-    RepoStatus get(UnitEmitter& ue, const MD5& md5);
+    RepoStatus get(UnitEmitter& ue, const SHA1& sha1);
   };
   struct InsertUnitLitstrStmt : public RepoProxy::Stmt {
     InsertUnitLitstrStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
@@ -524,7 +583,7 @@ struct UnitRepoProxy : public RepoProxy {
   struct InsertUnitArrayTypeTableStmt : public RepoProxy::Stmt {
     InsertUnitArrayTypeTableStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
     void insert(RepoTxn& txn, int64_t unitSn,
-                const ArrayTypeTable& att); // throws(RepoExc)
+                const UnitEmitter& ue); // throws(RepoExc)
   };
   struct GetUnitArrayTypeTableStmt : public RepoProxy::Stmt {
     GetUnitArrayTypeTableStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
@@ -533,7 +592,9 @@ struct UnitRepoProxy : public RepoProxy {
   struct InsertUnitArrayStmt : public RepoProxy::Stmt {
     InsertUnitArrayStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
     void insert(RepoTxn& txn, int64_t unitSn, Id arrayId,
-                const std::string& array); // throws(RepoExc)
+                const std::string& array,
+                folly::Optional<int> provenanceLine,
+                const StringData* provenanceFile); // throws(RepoExc)
   };
   struct GetUnitArraysStmt : public RepoProxy::Stmt {
     GetUnitArraysStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
@@ -566,6 +627,8 @@ struct UnitRepoProxy : public RepoProxy {
   URP_GOP(Unit) \
   URP_IOP(UnitLineTable) \
   URP_GOP(UnitLineTable) \
+  URP_IOP(UnitTypeAlias) \
+  URP_GOP(UnitTypeAliases) \
   URP_IOP(UnitLitstr) \
   URP_GOP(UnitLitstrs) \
   URP_IOP(UnitArrayTypeTable) \
@@ -581,14 +644,11 @@ struct UnitRepoProxy : public RepoProxy {
   c##Stmt o[RepoIdCount];
   URP_OPS
 #undef URP_OP
-
-private:
-  RepoStatus loadHelper(UnitEmitter& ue, const std::string&, const MD5&);
 };
 
 std::unique_ptr<UnitEmitter> createFatalUnit(
   StringData* filename,
-  const MD5& md5,
+  const SHA1& sha1,
   FatalOp op,
   StringData* err
 );

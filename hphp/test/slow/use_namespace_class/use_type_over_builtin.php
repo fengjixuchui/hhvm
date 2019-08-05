@@ -6,5 +6,7 @@ namespace foo {
 
 namespace {
   use type foo\MyException as InvariantException;
-  var_dump(InvariantException::class);
+  <<__EntryPoint>> function main(): void {
+  \var_dump(InvariantException::class);
+  }
 }

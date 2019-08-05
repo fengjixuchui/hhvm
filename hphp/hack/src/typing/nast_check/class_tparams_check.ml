@@ -8,9 +8,7 @@
  *)
 
 open Core_kernel
-open Nast
-
-module SN = Naming_special_names
+open Aast
 
 type ctx = { class_tparams: Nast.tparam list }
 

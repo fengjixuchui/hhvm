@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class TestParentClass
 {
@@ -26,4 +26,5 @@ class TestChildClass extends TestParentClass
         TestParentClass::method insteadof TestTrait;
     }
 }
-?>
+
+<<__EntryPoint>> function main(): void {}

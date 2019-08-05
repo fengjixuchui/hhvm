@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function autoload() {
     foo();
@@ -12,4 +12,3 @@ function testGenerator() {
 
 foreach (testGenerator() as $i);
 
-?>

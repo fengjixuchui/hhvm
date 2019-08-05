@@ -40,8 +40,7 @@ module HackGrammarHelper = struct
 
   let is_keyword text =
     let text = String.lowercase_ascii text in
-    match Full_fidelity_token_kind.from_string text ~is_hack:true
-      ~allow_xhp:true ~only_reserved:false with
+    match Full_fidelity_token_kind.from_string text ~only_reserved:false with
     | Some _ -> true
     | _ -> false
 
@@ -156,7 +155,6 @@ module HackGrammarTermSpec = struct
   let extends = Term Extends
   let use = Term Use
   let const = Term Const
-  let destruct = Term Destruct
   let construct = Term Construct
   let term_public = Term Public
   let term_private = Term Private

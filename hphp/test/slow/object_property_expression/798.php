@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Y {
 }
@@ -17,9 +17,8 @@ class X {
 function foo() {
  var_dump('foo');
  return 'foo';
- }
+}
 function test($x, $a, $s) {
-  $t = &$s->t;
   unset($x->bar()->x);
   unset($x->q->r->s->$foo);
   unset($x->y->a->b->c);
@@ -32,5 +31,6 @@ function test($x, $a, $s) {
 
 <<__EntryPoint>>
 function main_798() {
-test(new X, array(), false);
+  $s = false;
+  test(new X, array(), $s);
 }

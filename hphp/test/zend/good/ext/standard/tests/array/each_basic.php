@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array each(array $arr)
  * Description: Return the currently pointed key..value pair in the passed array,
  * and advance the pointer to the next element
@@ -8,7 +8,7 @@
 /*
  * Test basic functionality of each()
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing each() : basic functionality ***\n";
 
 $arr = array ('one' => 1, 'zero', 'two' => 'deux', 20 => 'twenty');
@@ -26,4 +26,4 @@ echo "\n-- Passed the end of array: --\n";
 var_dump(each(&$arr));
 
 echo "Done";
-?>
+}

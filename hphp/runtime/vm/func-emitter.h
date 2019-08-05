@@ -27,6 +27,7 @@
 #include "hphp/runtime/vm/repo-helpers.h"
 #include "hphp/runtime/vm/type-constraint.h"
 #include "hphp/runtime/vm/unit.h"
+#include "hphp/runtime/vm/unit-emitter.h"
 
 #include <utility>
 #include <vector>
@@ -125,7 +126,7 @@ struct FuncEmitter {
    */
   void setIds(int sn, Id id);
 
-
+  bool useGlobalIds() const;
   /////////////////////////////////////////////////////////////////////////////
   // Locals, iterators, and parameters.
 
@@ -136,14 +137,12 @@ struct FuncEmitter {
   Id numNamedLocals() const;
   Id numIterators() const;
   Id numLiveIterators() const;
-  Id numClsRefSlots() const;
 
   /*
    * Set things.
    */
   void setNumIterators(Id numIterators);
   void setNumLiveIterators(Id id);
-  void setNumClsRefSlots(Id num);
 
   /*
    * Check existence of, look up, and allocate named locals.
@@ -210,7 +209,6 @@ public:
   bool isPseudoMain() const;
   bool isMethod() const;
   bool isVariadic() const;
-  bool isVariadicByRef() const;
 
   /*
    * @returns: std::make_pair(line1, line2)
@@ -269,7 +267,6 @@ public:
   Attr attrs;
 
   ParamInfoVec params;
-  SVInfoVec staticVars;
   int maxStackCells;
 
   MaybeDataType hniReturnType;
@@ -315,7 +312,6 @@ private:
   int m_activeUnnamedLocals;
   Id m_numIterators;
   Id m_nextFreeIterator;
-  Id m_numClsRefSlots;
   bool m_ehTabSorted;
 };
 

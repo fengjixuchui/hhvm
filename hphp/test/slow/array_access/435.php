@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class A implements ArrayAccess {
   public $a;
@@ -23,9 +23,6 @@ function main_435() {
 $obj = new A();
 if (!isset($obj['a'])) {
   $obj['a'] = 'test';
-}
-if (!empty($obj['a'])) {
-  $obj['a'] = 'test2';
 }
 var_dump($obj['a']);
 unset($obj['a']);

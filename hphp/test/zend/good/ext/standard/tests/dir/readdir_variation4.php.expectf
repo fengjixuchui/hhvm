@@ -2,59 +2,59 @@
 
 -- Iteration 1 --
 resource(%d) of type (stream)
-int(1)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 2 --
 resource(%d) of type (stream)
-int(1)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 3 --
 resource(%d) of type (stream)
-int(1)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 4 --
 resource(%d) of type (stream)
-int(1)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 5 --
 resource(%d) of type (stream)
-int(1)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 6 --
 resource(%d) of type (stream)
-int(1)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 7 --
 resource(%d) of type (stream)
-int(1)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 8 --
 resource(%d) of type (stream)
-int(1)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 9 --
 resource(%d) of type (stream)
-int(1)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 10 --
 resource(%d) of type (stream)
-int(1)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 11 --
 resource(%d) of type (stream)
-int(2)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 12 --
 resource(%d) of type (stream)
-int(2)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 13 --
 resource(%d) of type (stream)
-int(2)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Iteration 14 --
 resource(%d) of type (stream)
-int(2)
+string(56) "fwrite() expects parameter 2 to be string, integer given"
 
 -- Call to readdir() --
 array(16) {

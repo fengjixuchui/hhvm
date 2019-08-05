@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL | E_STRICT);
 
 class BaseWithPropA {
@@ -37,4 +37,3 @@ var_dump($a);
 $b = new SubclassB;
 var_dump($b);
 
-?>

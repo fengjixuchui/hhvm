@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function throw_exception($msg) {
     throw new Exception($msg);
@@ -25,10 +25,10 @@ function foo (&$ex) {
    }
    return 1;
 }
-
+<<__EntryPoint>> function main(): void {
 var_dump(foo(&$ex));
 
 do {
   var_dump($ex->getMessage());
 } while ($ex = $ex->getPrevious());
-?>
+}

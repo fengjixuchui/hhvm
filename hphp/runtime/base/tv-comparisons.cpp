@@ -156,6 +156,9 @@ typename Op::RetType cellRelOp(Op op, Cell cell, int64_t val) {
         return op(true, false);
       }
 
+    case KindOfRecord:
+      return op.recordVsNonRecord();
+
     case KindOfRef:
       break;
   }
@@ -234,6 +237,9 @@ typename Op::RetType cellRelOp(Op op, Cell cell, double val) {
         }
         return op(true, false);
       }
+
+    case KindOfRecord:
+      return op.recordVsNonRecord();
 
     case KindOfRef:
       break;
@@ -328,6 +334,9 @@ typename Op::RetType cellRelOp(Op op, Cell cell, const StringData* val) {
         }
         return op(true, false);
       }
+
+    case KindOfRecord:
+      return op.recordVsNonRecord();
 
     case KindOfRef:
       break;
@@ -425,6 +434,9 @@ typename Op::RetType cellRelOp(Op op, Cell cell, const ArrayData* ad) {
         return op(clsMethToVecHelper(cell.m_data.pclsmeth).get(), ad);
       }
 
+    case KindOfRecord:
+      return op.recordVsNonRecord();
+
     case KindOfRef:
       break;
   }
@@ -514,10 +526,21 @@ typename Op::RetType cellRelOp(Op op, Cell cell, const ObjectData* od) {
         return od->isCollection() ? op.collectionVsNonObj() : op(false, true);
       }
 
+    case KindOfRecord:
+      return op.recordVsNonRecord();
+
     case KindOfRef:
       break;
   }
   not_reached();
+}
+
+template<class Op>
+typename Op::RetType cellRelOp(Op op, Cell cell, const RecordData* rec) {
+  if (cell.m_type != KindOfRecord) {
+    op.recordVsNonRecord();
+  }
+  return op(cell.m_data.prec, rec);
 }
 
 template<class Op>
@@ -596,6 +619,9 @@ typename Op::RetType cellRelOp(Op op, Cell cell, const ResourceData* rd) {
         }
         return op(true, false);
       }
+
+    case KindOfRecord:
+      return op.recordVsNonRecord();
 
     case KindOfRef:
       break;
@@ -719,8 +745,210 @@ typename Op::RetType cellRelOp(Op op, Cell cell, ClsMethDataRef clsMeth) {
       auto const od = cell.m_data.pobj;
       return od->isCollection() ? op.collectionVsNonObj() : op(true, false);
     }
+    case KindOfRecord:
+      return op.recordVsNonRecord();
 
     case KindOfRef: break;
+  }
+  not_reached();
+}
+
+template<class Op>
+typename Op::RetType cellRelOp(Op op, Cell cell, const Func* val) {
+  assertx(cellIsPlausible(cell));
+  assertx(val != nullptr);
+
+  switch (cell.m_type) {
+    case KindOfUninit:
+    case KindOfNull:
+      return op(staticEmptyString(), funcToStringHelper(val));
+
+    case KindOfInt64: {
+      auto const num = stringToNumeric(funcToStringHelper(val));
+      return num.m_type == KindOfInt64  ? op(cell.m_data.num, num.m_data.num) :
+             num.m_type == KindOfDouble ? op(cell.m_data.num, num.m_data.dbl) :
+             op(cell.m_data.num, 0);
+    }
+    case KindOfBoolean:
+      return op(!!cell.m_data.num, funcToStringHelper(val)->toBoolean());
+
+    case KindOfDouble: {
+      auto const num = stringToNumeric(funcToStringHelper(val));
+      return num.m_type == KindOfInt64  ? op(cell.m_data.dbl, num.m_data.num) :
+             num.m_type == KindOfDouble ? op(cell.m_data.dbl, num.m_data.dbl) :
+             op(cell.m_data.dbl, 0);
+    }
+
+    case KindOfPersistentString:
+    case KindOfString:
+      return op(cell.m_data.pstr, funcToStringHelper(val));
+
+    case KindOfPersistentVec:
+    case KindOfVec:
+      return op.vecVsNonVec();
+
+    case KindOfPersistentDict:
+    case KindOfDict:
+      return op.dictVsNonDict();
+
+    case KindOfPersistentKeyset:
+    case KindOfKeyset:
+      return op.keysetVsNonKeyset();
+
+    case KindOfPersistentShape:
+    case KindOfShape:
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        return op.dictVsNonDict();
+      }
+      // Fallthrough
+
+    case KindOfPersistentArray:
+    case KindOfArray:
+      if (UNLIKELY(op.noticeOnArrNonArr())) {
+        raiseHackArrCompatArrMixedCmp();
+      }
+      funcToStringHelper(val); // warn
+      return op(true, false);
+
+    case KindOfObject: {
+      auto od = cell.m_data.pobj;
+      if (od->isCollection()) return op.collectionVsNonObj();
+      if (od->hasToString()) {
+        String str(od->invokeToString());
+        return op(str.get(), funcToStringHelper(val));
+      }
+      return op(true, false);
+    }
+
+    case KindOfResource: {
+      auto const rd = cell.m_data.pres;
+      return op(rd->data()->o_toDouble(), funcToStringHelper(val)->toDouble());
+    }
+
+    case KindOfFunc:
+      return op(cell.m_data.pfunc, val);
+
+    case KindOfClass:
+      return op(
+        classToStringHelper(cell.m_data.pclass), funcToStringHelper(val));
+
+    case KindOfClsMeth:
+      raiseClsMethToVecWarningHelper();
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        return op.vecVsNonVec();
+      } else {
+        if (UNLIKELY(op.noticeOnArrNonArr())) {
+          raiseHackArrCompatArrMixedCmp();
+        }
+        funcToStringHelper(val); // warn
+        return op(true, false);
+      }
+
+    case KindOfRecord:
+      return op.recordVsNonRecord();
+
+    case KindOfRef:
+      break;
+  }
+  not_reached();
+}
+
+template<class Op>
+typename Op::RetType cellRelOp(Op op, Cell cell, const Class* val) {
+  assertx(cellIsPlausible(cell));
+  assertx(val != nullptr);
+
+  switch (cell.m_type) {
+    case KindOfUninit:
+    case KindOfNull:
+      return op(staticEmptyString(), classToStringHelper(val));
+
+    case KindOfInt64: {
+      auto const num = stringToNumeric(classToStringHelper(val));
+      return num.m_type == KindOfInt64  ? op(cell.m_data.num, num.m_data.num) :
+             num.m_type == KindOfDouble ? op(cell.m_data.num, num.m_data.dbl) :
+             op(cell.m_data.num, 0);
+    }
+    case KindOfBoolean:
+      return op(!!cell.m_data.num, classToStringHelper(val)->toBoolean());
+
+    case KindOfDouble: {
+      auto const num = stringToNumeric(classToStringHelper(val));
+      return num.m_type == KindOfInt64  ? op(cell.m_data.dbl, num.m_data.num) :
+             num.m_type == KindOfDouble ? op(cell.m_data.dbl, num.m_data.dbl) :
+             op(cell.m_data.dbl, 0);
+    }
+
+    case KindOfPersistentString:
+    case KindOfString:
+      return op(cell.m_data.pstr, classToStringHelper(val));
+
+    case KindOfPersistentVec:
+    case KindOfVec:
+      return op.vecVsNonVec();
+
+    case KindOfPersistentDict:
+    case KindOfDict:
+      return op.dictVsNonDict();
+
+    case KindOfPersistentKeyset:
+    case KindOfKeyset:
+      return op.keysetVsNonKeyset();
+
+    case KindOfPersistentShape:
+    case KindOfShape:
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        return op.dictVsNonDict();
+      }
+      // Fallthrough
+
+    case KindOfPersistentArray:
+    case KindOfArray:
+      if (UNLIKELY(op.noticeOnArrNonArr())) {
+        raiseHackArrCompatArrMixedCmp();
+      }
+      classToStringHelper(val); // warn
+      return op(true, false);
+
+    case KindOfObject: {
+      auto od = cell.m_data.pobj;
+      if (od->isCollection()) return op.collectionVsNonObj();
+      if (od->hasToString()) {
+        String str(od->invokeToString());
+        return op(str.get(), classToStringHelper(val));
+      }
+      return op(true, false);
+    }
+
+    case KindOfResource: {
+      auto const rd = cell.m_data.pres;
+      return op(rd->data()->o_toDouble(), classToStringHelper(val)->toDouble());
+    }
+
+    case KindOfFunc:
+      return op(
+        funcToStringHelper(cell.m_data.pfunc), classToStringHelper(val));
+
+    case KindOfClass:
+      return op(cell.m_data.pclass, val);
+
+    case KindOfClsMeth:
+      raiseClsMethToVecWarningHelper();
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        return op.vecVsNonVec();
+      } else {
+        if (UNLIKELY(op.noticeOnArrNonArr())) {
+          raiseHackArrCompatArrMixedCmp();
+        }
+        classToStringHelper(val); // warn
+        return op(true, false);
+      }
+
+    case KindOfRecord:
+      return op.recordVsNonRecord();
+
+    case KindOfRef:
+      break;
   }
   not_reached();
 }
@@ -754,12 +982,10 @@ typename Op::RetType cellRelOp(Op op, Cell c1, Cell c2) {
   case KindOfArray:        return cellRelOp(op, c1, c2.m_data.parr);
   case KindOfObject:       return cellRelOp(op, c1, c2.m_data.pobj);
   case KindOfResource:     return cellRelOp(op, c1, c2.m_data.pres);
-  case KindOfFunc:
-    return cellRelOp(op, c1, funcToStringHelper(c2.m_data.pfunc));
-  case KindOfClass:
-    return cellRelOp(op, c1, classToStringHelper(c2.m_data.pclass));
+  case KindOfFunc:         return cellRelOp(op, c1, c2.m_data.pfunc);
+  case KindOfClass:        return cellRelOp(op, c1, c2.m_data.pclass);
   case KindOfClsMeth:      return cellRelOp(op, c1, c2.m_data.pclsmeth);
-
+  case KindOfRecord:       return cellRelOp(op, c1, c2.m_data.prec);
   case KindOfRef:
     break;
   }
@@ -807,6 +1033,9 @@ struct Eq {
     return ArrayData::Equal(ad1, ad2);
   }
 
+  bool operator()(const Func* f1, const Func* f2) const { return f1 == f2; }
+  bool operator()(const Class* c1, const Class* c2) const { return c1 == c2; }
+
   bool operator()(const ObjectData* od1, const ObjectData* od2) const {
     assertx(od1);
     assertx(od2);
@@ -840,6 +1069,9 @@ struct Eq {
   bool dictVsNonDict() const { return false; }
   bool keysetVsNonKeyset() const { return false; }
   bool collectionVsNonObj() const { return false; }
+  bool recordVsNonRecord() const {
+    throw_rec_non_rec_compare_exception();
+  }
 
   bool noticeOnArrNonArr() const { return false; }
   bool noticeOnArrHackArr() const {
@@ -848,6 +1080,10 @@ struct Eq {
 
   bool operator()(ClsMethDataRef c1, ClsMethDataRef c2) const {
     return c1 == c2;
+  }
+
+  bool operator()(const RecordData* r1, const RecordData* r2) const {
+    return RecordData::equal(r1, r2);
   }
 };
 
@@ -896,12 +1132,23 @@ struct CompareBase {
   RetType collectionVsNonObj() const {
     throw_collection_compare_exception();
   }
+  RetType recordVsNonRecord() const {
+    throw_rec_non_rec_compare_exception();
+  }
 
   bool noticeOnArrNonArr() const {
     return checkHACCompare();
   }
   bool noticeOnArrHackArr() const {
     return checkHACCompare();
+  }
+
+  bool operator()(const Func* f1, const Func* f2) const {
+    return operator()(funcToStringHelper(f1), funcToStringHelper(f2));
+  }
+
+  bool operator()(const Class* c1, const Class* c2) const {
+    return operator()(classToStringHelper(c1), classToStringHelper(c2));
   }
 
   RetType operator()(ClsMethDataRef c1, ClsMethDataRef c2) const {
@@ -914,6 +1161,10 @@ struct CompareBase {
     auto const func1 = funcToStringHelper(c1->getFunc());
     auto const func2 = funcToStringHelper(c2->getFunc());
     return operator()(func1, func2);
+  }
+
+  RetType operator()(const RecordData*, const RecordData*) const {
+    throw_record_compare_exception();
   }
 };
 
@@ -1169,7 +1420,6 @@ bool cellSame(Cell c1, Cell c2) {
       return c2.m_type == KindOfResource &&
         c1.m_data.pres == c2.m_data.pres;
 
-
     case KindOfClsMeth:
       if (RuntimeOption::EvalHackArrDVArrs) {
         if (isVecType(c2.m_type)) {
@@ -1188,6 +1438,10 @@ bool cellSame(Cell c1, Cell c2) {
         return false;
       }
       return c1.m_data.pclsmeth == c2.m_data.pclsmeth;
+
+    case KindOfRecord:
+      return c2.m_type == KindOfRecord &&
+        RecordData::same(c1.m_data.prec, c2.m_data.prec);
 
     case KindOfUninit:
     case KindOfNull:
@@ -1246,12 +1500,6 @@ bool cellEqual(Cell cell, ClsMethDataRef val) {
 }
 
 bool cellEqual(Cell c1, Cell c2) {
-  if (UNLIKELY(isFuncType(c1.m_type) && isFuncType(c2.m_type))) {
-    return c1.m_data.pfunc == c2.m_data.pfunc;
-  }
-  if (UNLIKELY(isClassType(c1.m_type) && isClassType(c2.m_type))) {
-    return c1.m_data.pfunc == c2.m_data.pfunc;
-  }
   return cellRelOp(Eq(), c1, c2);
 }
 

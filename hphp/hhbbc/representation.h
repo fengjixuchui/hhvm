@@ -29,7 +29,7 @@
 #include "hphp/util/atomic-vector.h"
 #include "hphp/util/compact-vector.h"
 #include "hphp/util/copy-ptr.h"
-#include "hphp/util/md5.h"
+#include "hphp/util/sha1.h"
 
 #include "hphp/runtime/base/user-attributes.h"
 #include "hphp/runtime/vm/func.h"
@@ -68,32 +68,14 @@ struct SrcInfo {
  */
 struct Block {
   /*
-   * Blocks in HHBC are each part of a bytecode "section".  The section
-   * is either the "primary function body", or a fault funclet.  We
-   * represent fault funclet sections with unique ids.
-   *
-   * Each section must be a contiguous region of bytecode, with the
-   * primary function body first.  These ids are tracked just to
-   * maintain this invariant at emit time.
+   * The id of this block's ExnNode, or NoExnNodeId if there is none.
    */
-  enum class Section : uint32_t { Main = 0 };
-  Section section;
-
-  /*
-   * Blocks have unique ids within a given function.
-   */
-  uint32_t id;
+  ExnNodeId exnNodeId{NoExnNodeId};
 
   /*
    * Instructions in the block.  Never empty guarantee.
    */
   BytecodeVec hhbcs;
-
-  /*
-   * The pointer for this block's exception region, or nullptr if
-   * there is none.
-   */
-  ExnNodeId exnNodeId;
 
   /*
    * Edges coming out of blocks are repesented in three ways:
@@ -102,24 +84,21 @@ struct Block {
    *    to the named block).  If fallthroughNS is true, this edge
    *    represents a no-surprise jump.
    *
+   *  - throwExit (the edges traversed for exceptions from this block)
+   *
    *  - Taken edges (these are encoded in the last instruction in hhbcs).
-   *
-   *  - throwExits (these represent edges traversed for exceptions mid-block)
-   *
-   *  - unwindExits (these represent edges traversed for block-ending Unwind
-   *                 ops)
    *
    * For the idea behind the factored exit edge thing, see "Efficient
    * and Precise Modeling of Exceptions for the Analysis of Java
    * Programs" (http://dl.acm.org/citation.cfm?id=316171).
    */
   BlockId fallthrough{NoBlockId};
+  BlockId throwExit{NoBlockId};
+  bool catchEntry{false};
   bool fallthroughNS{false};
   bool multiPred{false};
   bool multiSucc{false};
-
-  CompactVector<BlockId> throwExits;
-  CompactVector<BlockId> unwindExits;
+  bool dead{false};
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -133,28 +112,15 @@ struct Block {
  * information is used to construct exception handling regions at emit
  * time.
  *
- * There are two types of regions; CatchRegions and FaultRegions.
- * These correspond to the two types of regions described in
- * bytecode.specification.  Note though that although it's not
- * specified there, in addition to an entry offset, these regions
- * optionally list some information about iterators if the reason the
- * region is there is to free iterator variables.
+ * The catch region is described in bytecode.specification. Note though
+ * that although it's not specified there, in addition to an entry offset,
+ * these regions optionally list some information about iterators if the
+ * reason the region is there is to free iterator variables.
  *
  * Exceptional control flow is also represented more explicitly with
  * factored exit edges (see php::Block).  This tree structure just
  * exists to get the EHEnts right.
- *
- * Note: blocks in fault funclets will have exceptional edges to the
- * blocks listed as handlers in any ExnNode that contained the
- * fault-protected region, since those control flow paths are
- * possible.  Generally they will have nullptr for their exnNode
- * pointers, however, although they may also have other EH-protected
- * regions inside of them (this currently occurs in the case of
- * php-level finally blocks cloned into fault funclets).
  */
-
-struct FaultRegion { BlockId faultEntry;
-                     Id iterId; };
 
 struct CatchRegion { BlockId catchEntry;
                      Id iterId; };
@@ -164,7 +130,7 @@ struct ExnNode {
   uint32_t depth;
   CompactVector<ExnNodeId> children;
   ExnNodeId parent;
-  boost::variant<FaultRegion,CatchRegion> info;
+  CatchRegion region;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -235,6 +201,27 @@ struct Param {
   bool isVariadic: 1;
 };
 
+template <typename T>
+struct IntLikeIterator {
+  explicit IntLikeIterator(T v) : val{v} {}
+  T operator *() const { return val; }
+  T operator ++() { return ++val; }
+  bool operator !=(IntLikeIterator other) { return val != other.val; }
+private:
+  T val;
+};
+
+template <typename T>
+struct IntLikeRange {
+  explicit IntLikeRange(T v) : sz{v} {}
+  template<typename C>
+  explicit IntLikeRange(const C& v) : sz(v.size()) {}
+  IntLikeIterator<T> begin() const { return IntLikeIterator<T>{0}; }
+  IntLikeIterator<T> end() const { return IntLikeIterator<T>{sz}; }
+private:
+    T sz;
+};
+
 /*
  * Metadata about a local variable in a function.  Name may be
  * nullptr, for unnamed locals.
@@ -243,14 +230,6 @@ struct Local {
   LSString  name;
   uint32_t id     : 31;
   uint32_t killed : 1;
-};
-
-/*
- * Static local information.  For each static local, we need to keep
- * the php code around for reflection.
- */
-struct StaticLocalInfo {
-  LSString name;
 };
 
 /*
@@ -282,10 +261,12 @@ struct FuncBase {
    */
   CompactVector<copy_ptr<Block>> blocks;
 
+  auto blockRange() const { return IntLikeRange<BlockId> {blocks}; }
+
   /*
-   * Try and fault regions form a tree structure.  The tree is hanging
+   * Catch regions form a tree structure.  The tree is hanging
    * off the func here, with children ids.  Each block that is
-   * within a try or fault region has the index into this array of the
+   * within a catch region has the index into this array of the
    * inner-most ExnNode protecting it.
    *
    * Note that this is updated during the concurrent analyze pass.
@@ -317,17 +298,15 @@ struct Func : FuncBase {
   Attr attrs;
 
   /*
-   * Parameters, locals, class-refs, and iterators.
+   * Parameters, locals, and iterators.
    *
    * There are at least as many locals as parameters (parameters are
    * also locals---the names of parameters are stored in the locals
    * vector).
    */
   IterId             numIters;
-  ClsRefSlotId       numClsRefSlots;
   CompactVector<Param> params;
   CompactVector<Local> locals;
-  CompactVector<StaticLocalInfo> staticLocals;
 
   /*
    * Which unit defined this function.  If it is a method, the cls
@@ -408,6 +387,8 @@ struct Func : FuncBase {
 
   bool isRxDisabled: 1;
 
+  bool noContextSensitiveAnalysis: 1;
+
   /*
    * Return type specified in the source code (ex. "function foo(): Bar").
    * HHVM checks if the a function's return value matches it's return type
@@ -469,7 +450,8 @@ struct Const {
   LSString phpCode;
   LSString typeConstraint;
 
-  bool isTypeconst;
+  bool isTypeconst  : 1;
+  bool isNoOverride : 1;
 };
 
 /*
@@ -573,6 +555,10 @@ struct Class : ClassBase {
    * This is a reified class.
    */
   bool hasReifiedGenerics : 1;
+  /*
+   * This class has at least one const instance property.
+   */
+  bool hasConstProp : 1;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -580,21 +566,46 @@ struct Class : ClassBase {
 using TypeAlias = ::HPHP::TypeAlias;
 
 //////////////////////////////////////////////////////////////////////
+/*
+ * A record field
+ */
+struct RecordField {
+  LSString name;
+  Attr attrs;
+  LSString userType;
+  LSString docComment;
+  Cell val;
+  TypeConstraint typeConstraint;
+  UserAttributeMap userAttributes;
+};
+/*
+ * Representation of a Hack record
+ */
+struct Record {
+  Unit* unit;
+  SrcInfo srcInfo;
+  LSString name;
+  LSString parentName;
+  Attr attrs;
+  int32_t id;
+  UserAttributeMap userAttributes;
+  CompactVector<RecordField> fields;
+};
 
+//////////////////////////////////////////////////////////////////////
 /*
  * Representation of a php file (normal compilation unit).
  */
 struct Unit {
-  MD5 md5;
+  SHA1 sha1;
   LSString filename;
   bool isHHFile{false};
-  bool useStrictTypes{false};
-  bool useStrictTypesForBuiltins{false};
   std::atomic<bool> persistent{true};
-  int preloadPriority{0};
+  std::atomic<bool> persistent_pseudomain{false};
   std::unique_ptr<Func> pseudomain;
   CompactVector<std::unique_ptr<Func>> funcs;
   CompactVector<std::unique_ptr<Class>> classes;
+  CompactVector<std::unique_ptr<Record>> records;
   CompactVector<std::unique_ptr<TypeAlias>> typeAliases;
   CompactVector<std::pair<SString,SString>> classAliases;
   CompactVector<SrcLoc> srcLocs;
@@ -606,25 +617,16 @@ struct Unit {
  * A php Program is a set of compilation units.
  */
 struct Program {
-  enum CInit {
-    ForAnalyze = 1,
-    ForOptimize = 2,
-    ForAll = ForAnalyze | ForOptimize,
-  };
-
   explicit Program(size_t numUnitsGuess) :
       nextFuncId(0),
       nextConstInit(0),
       constInits(100 + (numUnitsGuess / 4), 0) {
   }
-  static uintptr_t tagged_func(Func* f, CInit ci) {
-    return reinterpret_cast<uintptr_t>(f) | ci;
-  }
 
   std::vector<std::unique_ptr<Unit>> units;
   std::atomic<uint32_t> nextFuncId;
   std::atomic<size_t> nextConstInit;
-  AtomicVector<uintptr_t> constInits;
+  AtomicVector<php::Func*> constInits;
 };
 
 //////////////////////////////////////////////////////////////////////

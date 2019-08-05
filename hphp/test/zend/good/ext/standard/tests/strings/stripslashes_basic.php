@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string stripslashes ( string $str )
  * Description: Un-quotes a quoted string 
  * Source code: ext/standard/string.c
@@ -7,7 +7,7 @@
 /*
  * Testing stripslashes() with quoted strings 
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing stripslashes() : basic functionality ***\n";
 
 // Initialize all required variables
@@ -29,4 +29,4 @@ foreach( $str_array as $str )  {
 }
 
 echo "Done\n";
-?>
+}

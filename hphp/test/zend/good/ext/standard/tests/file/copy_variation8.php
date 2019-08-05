@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool copy ( string $source, string $dest );
    Description: Makes a copy of the file source to dest.
      Returns TRUE on success or FALSE on failure.
@@ -6,7 +6,7 @@
 
 /* Trying to copy the links across dir paths given in various notations
      and dirs having limited access */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing copy() function: copying links across different directories ***\n";
 
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
@@ -66,4 +66,4 @@ rmdir($sub_dir);
 rmdir($base_dir);
 
 echo "*** Done ***\n";
-?>
+}

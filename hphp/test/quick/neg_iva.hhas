@@ -1,3 +1,4 @@
+.hh_file 1;
 #tests that files with negative IVA values fail assembly
 
 .main {
@@ -21,8 +22,11 @@
   Dim Define ET:"q"
   SetM -1 PC:1
   PopC
-  FPushFuncD 1 "var_dump"
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $foo
+  FPushFuncD 1 "var_dump"
   FCall <> 1 1 "" - "" ""
   PopC
   Int 1

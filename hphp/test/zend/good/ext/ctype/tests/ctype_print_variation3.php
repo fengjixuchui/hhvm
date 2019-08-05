@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool ctype_print(mixed $c)
  * Description: Checks for printable character(s) 
  * Source code: ext/ctype/ctype.c
@@ -8,7 +8,7 @@
  * Pass strings containing different character types to ctype_print() to test
  * which are considered valid printable character only strings
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing ctype_print() : usage variations ***\n";
 
 $orig = setlocale(LC_CTYPE, "C");
@@ -47,5 +47,5 @@ foreach($values as $value) {
 };
 
 setlocale(LC_CTYPE, $orig);
-?>
-===DONE===
+echo "===DONE===\n";
+}

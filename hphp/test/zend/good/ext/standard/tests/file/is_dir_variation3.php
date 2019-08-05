@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype: bool is_dir ( string $dirname );
    Description: Tells whether the dirname is a directory
      Returns TRUE if the dirname exists and is a directory, FALSE  otherwise.
 */
 
 /* Passing invalid arguments to is_dir() */
-
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $dir_handle = opendir( $file_path );
 
@@ -31,4 +31,4 @@ foreach($dirnames as $dirname) {
 closedir($dir_handle);
 
 echo "\n*** Done ***";
-?>
+}

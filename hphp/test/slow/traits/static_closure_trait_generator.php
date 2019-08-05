@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Ref {
   public function __construct(public $val) {}
@@ -7,7 +7,7 @@ class Ref {
 class Foo { const Bar = 12; }
 trait Yoyo {
   function cl($k) {
-    $ref = new Ref("asd");
+    $ref = new Ref(42);
     return function() use ($k, $ref) {
       yield $ref->val++ . "2\n";
       yield $ref->val++ . "2\n";

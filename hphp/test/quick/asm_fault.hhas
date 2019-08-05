@@ -1,6 +1,10 @@
+.hh_file 1;
 # Some tests for catch regions.
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
   FCall <> 0 1 "" - "" ""
   PopC
@@ -20,10 +24,12 @@
 
     NewObjD "Exception"
     Dup
-    FPushCtor 1
+    NullUninit
+    NullUninit
     CGetL $msg
-    FCall <> 1 1 "" - "" ""
+    FCallCtor <LockWhileUnwinding> 1 1 "" - ""
     PopC
+    LockObj
     Throw
   } .catch {
     String "throw_stuff's exception handler ...\n"
@@ -43,8 +49,11 @@
     Print
     PopC
 
-    FPushFuncD 1 "throw_stuff"
+    NullUninit
+    NullUninit
+    NullUninit
     String "the message"
+    FPushFuncD 1 "throw_stuff"
     FCall <> 1 1 "" - "" ""
     PopC
 
@@ -80,22 +89,28 @@ repeat:
 
 make_one:    NewObjD "One"
              Dup
-             FPushCtor 0
-             FCall <> 0 1 "" - "" ""
+             NullUninit
+             NullUninit
+             FCallCtor <LockWhileUnwinding> 0 1 "" - ""
              PopC
+             LockObj
              Throw
 make_two:    NewObjD "Two"
              Dup
-             FPushCtor 0
-             FCall <> 0 1 "" - "" ""
+             NullUninit
+             NullUninit
+             FCallCtor <LockWhileUnwinding> 0 1 "" - ""
              PopC
+             LockObj
              Throw
 make_three:  NewObjD "Three"
              Dup
-             FPushCtor 1
+             NullUninit
+             NullUninit
              String "third exception from throw_various"
-             FCall <> 1 1 "" - "" ""
+             FCallCtor <LockWhileUnwinding> 1 1 "" - ""
              PopC
+             LockObj
              Throw
            } .catch {
              Dup
@@ -135,6 +150,9 @@ on_three:    String "three\n"
          False
          SetL $ever_caught
          PopC
+         NullUninit
+         NullUninit
+         NullUninit
          String "foo"
 
 resume:  .try {
@@ -147,8 +165,9 @@ resume:  .try {
            PopC
            String "top-level catch handler got: "
            PushL $ex
-           FPushObjMethodD 0 "getMessage" NullThrows
-           FCall <> 0 1 "" - "" ""
+           NullUninit
+           NullUninit
+           FCallObjMethodD <> 0 1 "" - "" NullThrows "getMessage"
            Concat
            String "\n"
            Concat
@@ -160,6 +179,9 @@ resume:  .try {
            SetL $ever_caught
            PopC
            JmpNZ resume2
+           NullUninit
+           NullUninit
+           NullUninit
            String "throw_various"
            Jmp resume
          }

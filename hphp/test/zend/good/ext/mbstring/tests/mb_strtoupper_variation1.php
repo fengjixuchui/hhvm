@@ -1,21 +1,13 @@
-<?php
+<?hh
 /* Prototype  : string mb_strtoupper(string $sourcestring [, string $encoding]
  * Description: Returns a uppercased version of $sourcestring
  * Source code: ext/mbstring/mbstring.c
  */
 
 /*
- * 
+ *
  * Pass different data types as $sourcestring argument to mb_strtoupper to test behaviour
  */
-
-echo "*** Testing mb_strtoupper() : usage variations ***\n";
-
-// Initialise function arguments not being substituted
-
-//get an unset variable
-$unset_var = 10;
-unset ($unset_var);
 
 // get a class
 class classA
@@ -24,6 +16,14 @@ class classA
     return "Class A object";
   }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing mb_strtoupper() : usage variations ***\n";
+
+// Initialise function arguments not being substituted
+
+//get an unset variable
+$unset_var = 10;
+unset ($unset_var);
 
 // heredoc string
 $heredoc = <<<EOT
@@ -58,7 +58,7 @@ $inputs = array(
        false,
        TRUE,
        FALSE,
-       
+
        // empty data
 /*16*/ "",
        '',
@@ -67,7 +67,7 @@ $inputs = array(
 /*18*/ "String",
        'String',
        $heredoc,
-       
+
        // object data
 /*21*/ new classA(),
 
@@ -92,5 +92,4 @@ foreach($inputs as $input) {
 fclose($fp);
 
 echo "Done";
-?>
-
+}

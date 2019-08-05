@@ -1,4 +1,4 @@
-<?php
+<?hh
 new Attachment("");
 
 function __autoload($class) {
@@ -35,4 +35,3 @@ PHP
     return TRUE;
 }
 echo "okey";
-?>

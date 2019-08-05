@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL);
 
 trait THello1 {
@@ -20,4 +20,3 @@ echo "POST-CLASS-GUARD\n";
 
 $t = new TraitsTest;
 $t->hello = "foo";
-?>

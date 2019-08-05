@@ -457,7 +457,8 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
     return true;
   };
 
-  auto checkArr = [&] (bool is_kv, bool is_const) {
+  auto checkArr = [&] (bool is_kv,
+                       bool is_const) {
     auto t = src()->type();
     auto cond_type = RuntimeOption::EvalHackArrDVArrs
       ? (is_kv ? TDict : TVec) : TArr;
@@ -595,6 +596,7 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
 #undef CStr
 #undef SVar
 #undef SVArr
+#undef SVArrOrNull
 #undef SDArr
 #undef CDArr
 

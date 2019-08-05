@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype : bool unlink ( string $filename [, resource $context] );
    Description : Deletes filename
 */
 
 /* Try deleting a file which is already deleted */
-
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 // temp file used
@@ -23,4 +23,4 @@ var_dump( file_exists($filename) );  // confirm file deleted
 var_dump( unlink($filename) );  // expected: false
 
 echo "Done\n";
-?>
+}

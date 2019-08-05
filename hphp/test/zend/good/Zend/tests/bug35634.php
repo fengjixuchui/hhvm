@@ -1,4 +1,4 @@
-<?php
+<?hh
 const pass3 = 1;
 const pass2 = 1;
 function errorHandler($errorNumber, $errorMessage, $fileName, $lineNumber) {
@@ -6,24 +6,12 @@ function errorHandler($errorNumber, $errorMessage, $fileName, $lineNumber) {
   die("Error: $errorMessage ($fileName:$lineNumber)\n");
 }
 if (defined("pass3")) {
-
-  class ErrorClass {
-  }
-
+  include 'bug35634-1.inc';
 } else if (defined("pass2")) {
-
-  class TestClass {
-    function __construct() {
-    }
-    function TestClass() {
-      $this->__construct();
-    }
-  }
-
+  include 'bug35634-2.inc';
 } else {
   set_error_handler('errorHandler');
   include(__FILE__);
   print "ok\n";
 }
 
-?>

@@ -1,15 +1,9 @@
-<?php
+<?hh
 /* Prototype  : array array_filter(array $input [, callback $callback])
- * Description: Filters elements from the array via the callback. 
+ * Description: Filters elements from the array via the callback.
  * Source code: ext/standard/array.c
 */
 
-
-echo "*** Testing array_filter() : basic functionality ***\n";
-
-
-// Initialise all required variables
-$input = array(1, 2, 3, 0, -1);  // 0 will be considered as FALSE and removed in default callback
 
 /* Callback function
  * Prototype : bool even(array $input)
@@ -22,6 +16,12 @@ function even($input)
 {
   return ($input % 2 == 0);
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing array_filter() : basic functionality ***\n";
+
+
+// Initialise all required variables
+$input = array(1, 2, 3, 0, -1);  // 0 will be considered as FALSE and removed in default callback
 
 // with all possible arguments
 var_dump( array_filter($input,"even") );
@@ -29,5 +29,5 @@ var_dump( array_filter($input,"even") );
 // with default arguments
 var_dump( array_filter($input) );
 
-echo "Done"
-?>
+echo "Done";
+}

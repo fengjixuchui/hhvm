@@ -1,6 +1,8 @@
 <?hh
 // Copyright 2004-present Facebook. All Rights Reserved.
 
+
+
 class A {
   <<__LateInit>> public $p1;
   <<__LateInit>> private $p2;
@@ -44,63 +46,25 @@ class A {
 
   public function get1() { return $this->p1; }
   public function isset1() { return isset($this->p1); }
-  public function empty1() { return empty($this->p1); }
   public function incdec1() { return ++$this->p1; }
   public function setop1() { return $this->p1 += 1000; }
-  public function bind1() {
-    $b = 123;
-    $this->p1 =& $b;
-    return $this->p1;
-  }
-  public function vget1() {
-    $x =& $this->p1;
-    return $x;
-  }
+
 
   public function get2() { return $this->p2; }
   public function isset2() { return isset($this->p2); }
-  public function empty2() { return empty($this->p2); }
   public function incdec2() { return ++$this->p2; }
   public function setop2() { return $this->p2 += 1000; }
-  public function bind2() {
-    $b = 123;
-    $this->p2 =& $b;
-    return $this->p2;
-  }
-  public function vget2() {
-    $x =& $this->p2;
-    return $x;
-  }
+
 
   public function get3() { return A::$p3; }
   public function isset3() { return isset(A::$p3); }
-  public function empty3() { return empty(A::$p3); }
   public function incdec3() { return ++A::$p3; }
   public function setop3() { return A::$p3 += 1000; }
-  public function bind3() {
-    $b = 123;
-    A::$p3 =& $b;
-    return A::$p3;
-  }
-  public function vget3() {
-    $x =& A::$p3;
-    return $x;
-  }
 
   public function get4() { return A::$p4; }
   public function isset4() { return isset(A::$p4); }
-  public function empty4() { return empty(A::$p4); }
   public function incdec4() { return ++A::$p4; }
   public function setop4() { return A::$p4 += 1000; }
-  public function bind4() {
-    $b = 123;
-    A::$p4 =& $b;
-    return A::$p4;
-  }
-  public function vget4() {
-    $x =& A::$p4;
-    return $x;
-  }
 
   public function get5() { return A::$p5->p9->p10; }
   public function get6() { return A::$p6->p9->p10; }
@@ -116,11 +80,6 @@ class A {
   public function isset6() { return isset($this->p12); }
   public function isset7() { return isset(A::$p13); }
   public function isset8() { return isset(A::$p14); }
-
-  public function empty5() { return empty($this->p11); }
-  public function empty6() { return empty($this->p12); }
-  public function empty7() { return empty(A::$p13); }
-  public function empty8() { return empty(A::$p14); }
 }
 
 class B {
@@ -170,63 +129,25 @@ class B {
 
   public function get1() { return $this->{B::prop(1)}; }
   public function isset1() { return isset($this->{B::prop(1)}); }
-  public function empty1() { return empty($this->{B::prop(1)}); }
   public function incdec1() { return ++$this->{B::prop(1)}; }
   public function setop1() { return $this->{B::prop(1)} += 1000; }
-  public function bind1() {
-    $b = 123;
-    $this->{B::prop(1)} =& $b;
-    return $this->{B::prop(1)};
-  }
-  public function vget1() {
-    $x =& $this->{B::prop(1)};
-    return $x;
-  }
+
 
   public function get2() { return $this->{B::prop(2)}; }
   public function isset2() { return isset($this->{B::prop(2)}); }
-  public function empty2() { return empty($this->{B::prop(2)}); }
   public function incdec2() { return ++$this->{B::prop(2)}; }
   public function setop2() { return $this->{B::prop(2)} += 1000; }
-  public function bind2() {
-    $b = 123;
-    $this->{B::prop(2)} =& $b;
-    return $this->{B::prop(2)};
-  }
-  public function vget2() {
-    $x =& $this->{B::prop(2)};
-    return $x;
-  }
+
 
   public function get3() { return B::$p3; }
   public function isset3() { return isset(B::$p3); }
-  public function empty3() { return empty(B::$p3); }
   public function incdec3() { return ++B::$p3; }
   public function setop3() { return B::$p3 += 1000; }
-  public function bind3() {
-    $b = 123;
-    B::$p3 =& $b;
-    return B::$p3;
-  }
-  public function vget3() {
-    $x =& B::$p3;
-    return $x;
-  }
 
   public function get4() { return B::$p4; }
   public function isset4() { return isset(B::$p4); }
-  public function empty4() { return empty(B::$p4); }
   public function incdec4() { return ++B::$p4; }
   public function setop4() { return B::$p4 += 1000; }
-  public function bind4() {
-    $b = 123;
-    B::$p4 =& $b;
-    return B::$p4;
-  }
-  public function vget4() {
-    $x =& B::$p4;
-    return $x;
-  }
 
   public function get5() { return B::$p5->{B::prop(9)}->{B::prop(10)}; }
   public function get6() { return B::$p6->{B::prop(9)}->{B::prop(10)}; }
@@ -242,42 +163,27 @@ class B {
   public function isset6() { return isset($this->{B::prop(12)}); }
   public function isset7() { return isset(B::$p13); }
   public function isset8() { return isset(B::$p14); }
-
-  public function empty5() { return empty($this->{B::prop(11)}); }
-  public function empty6() { return empty($this->{B::prop(12)}); }
-  public function empty7() { return empty(B::$p13); }
-  public function empty8() { return empty(B::$p14); }
 }
 
 const TESTS = vec[
   'get1',
   'isset1',
-  'empty1',
   'incdec1',
   'setop1',
-  'bind1',
-  'vget1',
+
   'get2',
   'isset2',
-  'empty2',
   'incdec2',
   'setop2',
-  'bind2',
-  'vget2',
+
   'get3',
   'isset3',
-  'empty3',
   'incdec3',
   'setop3',
-  'bind3',
-  'vget3',
   'get4',
   'isset4',
-  'empty4',
   'incdec4',
   'setop4',
-  'bind4',
-  'vget4',
   'get5',
   'get6',
   'get7',
@@ -290,10 +196,6 @@ const TESTS = vec[
   'isset6',
   'isset7',
   'isset8',
-  'empty5',
-  'empty6',
-  'empty7',
-  'empty8',
 ];
 
 function run_test($a, $test) {

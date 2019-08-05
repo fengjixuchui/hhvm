@@ -1,4 +1,4 @@
-<?php
+<?hh
 class LocalSoapClient extends SoapClient {
   function __doRequest($request, $location, $action, $version, $one_way = 0) {
     return <<<EOF
@@ -31,4 +31,3 @@ EOF;
 ini_set("soap.wsdl_cache_enabled", 0);
 $SOAPObject = new LocalSoapClient(dirname(__FILE__).'/bug38536.wsdl');
 print_r($SOAPObject->test());
-?>

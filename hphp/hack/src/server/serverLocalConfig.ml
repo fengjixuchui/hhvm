@@ -16,10 +16,12 @@ type t = {
   watchman_subscribe: bool;
   watchman_synchronous_timeout : int; (* in seconds *)
   use_saved_state: bool; (* should we attempt to load saved-state? (subject to further options) *)
+  require_saved_state: bool; (* if attempting saved-state, should we fail upon failure? *)
   load_state_script_timeout: int; (* in seconds *)
   (** Prefer using Ocaml implementation over load script. *)
   load_state_natively: bool;
   type_decl_bucket_size: int;
+  extend_fast_bucket_size: int;
   enable_on_nfs: bool;
   enable_fuzzy_search: bool;
   lazy_parse: bool;
@@ -32,6 +34,7 @@ type t = {
   io_priority: int;
   cpu_priority: int;
   saved_state_cache_limit: int;
+  can_skip_deptable: bool;
   shm_dirs: string list;
   state_loader_timeouts : State_loader_config.timeouts;
   max_workers : int option;
@@ -76,8 +79,40 @@ type t = {
   load_decls_from_saved_state : bool;
   (* Size of Gc.major_slice to be performed when server is idle. 0 to disable *)
   idle_gc_slice : int;
-  (* Global name autocomplete will be missing some features to improve performance *)
-  basic_autocomplete_only : bool;
+  (* Look up class members lazily from shallow declarations instead of eagerly
+     computing folded declarations representing the entire class type. *)
+  shallow_class_decl : bool;
+  (* If set, defers class declarations after N lazy declarations; if not set,
+    always lazily declares classes not already in cache. *)
+  defer_class_declaration_threshold : int option;
+  (* If set, distributes type checking to remote workers if the number of files to
+    type check exceeds the threshold. If not set, then always checks everything locally. *)
+  remote_type_check_threshold : int option;
+  (* Enables remote type check *)
+  remote_type_check : bool;
+  (* If set, uses the key to fetch type checking jobs *)
+  remote_worker_key : string option;
+  (* If set, uses the check ID when logging events in the context of remove init/work *)
+  remote_check_id : string option;
+  (* Indicates the size of the job below which Eden should be used by the remote worker *)
+  remote_worker_eden_checkout_threshold : int;
+  (* Dictates the number of remote type checking workers *)
+  num_remote_workers : int;
+  (* Enables the reverse naming table to fall back to SQLite for queries. *)
+  naming_sqlite_path : string option;
+  enable_naming_table_fallback : bool;
+  (* Selects a search provider for autocomplete and symbol search *)
+  symbolindex_search_provider : string;
+  symbolindex_quiet : bool;
+  symbolindex_file : string option;
+  (* Allows hh_server to invalidate units in hhvm based on local changes *)
+  tico_invalidate_files : bool;
+  tico_invalidate_smart : bool; (* Use finer grain hh_server dependencies *)
+  (* Use rust parser *)
+  rust : bool;
+  profile_type_check_duration_threshold : float;
+  (* Use shared_lru workers *)
+  use_lru_workers : bool;
 }
 
 let default = {
@@ -87,9 +122,11 @@ let default = {
   watchman_subscribe = false;
   watchman_synchronous_timeout = 120;
   use_saved_state = false;
+  require_saved_state = false;
   load_state_script_timeout = 20;
   load_state_natively = false;
   type_decl_bucket_size = 1000;
+  extend_fast_bucket_size = 2000;
   enable_on_nfs = false;
   enable_fuzzy_search = true;
   lazy_parse = false;
@@ -99,6 +136,7 @@ let default = {
   io_priority = 7;
   cpu_priority = 10;
   saved_state_cache_limit = 20;
+  can_skip_deptable = true;
   shm_dirs = [GlobalConfig.shm_dir; GlobalConfig.tmp_dir;];
   max_workers = None;
   max_bucket_size = Bucket.max_size ();
@@ -125,7 +163,24 @@ let default = {
   store_decls_in_saved_state = false;
   load_decls_from_saved_state = false;
   idle_gc_slice = 0;
-  basic_autocomplete_only = false;
+  shallow_class_decl = false;
+  defer_class_declaration_threshold = None;
+  remote_type_check_threshold = None;
+  remote_type_check = true;
+  remote_worker_key = None;
+  remote_check_id = None;
+  num_remote_workers = 4;
+  remote_worker_eden_checkout_threshold = 10000;
+  naming_sqlite_path = None;
+  enable_naming_table_fallback = false;
+  symbolindex_search_provider = "TrieIndex";
+  symbolindex_quiet = false;
+  symbolindex_file = None;
+  tico_invalidate_files = false;
+  tico_invalidate_smart = false;
+  rust = false;
+  profile_type_check_duration_threshold = 0.05; (* seconds *)
+  use_lru_workers = false;
 }
 
 let path =
@@ -157,16 +212,18 @@ let state_loader_timeouts_ ~default config =
     current_base_rev_timeout;
   }
 
-let load_ fn ~silent =
-  (* Print out the contents in our logs so we know what settings this server
-   * was started with *)
-  let contents = Sys_utils.cat fn in
-  if not silent then Printf.eprintf "%s:\n%s\n" fn contents;
-  let config = Config_file.parse_contents contents in
+let load_ fn ~silent ~current_version overrides =
+  let config = Config_file.apply_overrides
+    ~silent
+    ~config:(Config_file.parse_local_config ~silent fn)
+    ~overrides
+  in
   let use_watchman = bool_if_version "use_watchman"
       ~default:default.use_watchman config in
   let use_saved_state = bool_if_version "use_mini_state"
       ~default:default.use_saved_state config in
+  let require_saved_state = bool_if_version "require_saved_state"
+      ~default:default.require_saved_state config in
   let enable_on_nfs = bool_if_version "enable_on_nfs"
       ~default:default.enable_on_nfs config in
   let enable_fuzzy_search = bool_if_version "enable_fuzzy_search"
@@ -193,6 +250,8 @@ let load_ fn ~silent =
       ~default:default.informant_use_xdb config in
   let type_decl_bucket_size = int_ "type_decl_bucket_size"
       ~default:default.type_decl_bucket_size config in
+  let extend_fast_bucket_size = int_ "extend_fast_bucket_size"
+      ~default:default.extend_fast_bucket_size config in
   let watchman_init_timeout = int_ "watchman_init_timeout"
       ~default:default.watchman_init_timeout config in
   let watchman_subscribe = bool_if_version "watchman_subscribe_v2"
@@ -205,6 +264,8 @@ let load_ fn ~silent =
       ~default:default.cpu_priority config in
   let saved_state_cache_limit = int_ "saved_state_cache_limit"
       ~default:default.saved_state_cache_limit config in
+  let can_skip_deptable = bool_if_version "can_skip_deptable"
+      ~default:default.can_skip_deptable config in
   let shm_dirs = string_list
       ~delim:(Str.regexp ",")
       "shm_dirs"
@@ -251,18 +312,59 @@ let load_ fn ~silent =
       ~default:default.ide_tast_cache config in
   let idle_gc_slice = int_ "idle_gc_slice"
       ~default:default.idle_gc_slice config in
-  let basic_autocomplete_only = bool_if_version "basic_autocomplete_only"
-      ~default:default.basic_autocomplete_only config in
+  let shallow_class_decl = bool_if_version "shallow_class_decl"
+      ~default:default.shallow_class_decl config in
+  let defer_class_declaration_threshold =
+    int_opt "defer_class_declaration_threshold" config in
+  let remote_type_check_threshold =
+    int_opt "remote_type_check_threshold" config in
+  let remote_type_check =
+    bool_if_min_version "remote_type_check" ~default:true ~current_version config in
+  let remote_worker_key =
+    string_opt "remote_worker_key" config in
+  let remote_check_id =
+    string_opt "remote_check_id" config in
+  let num_remote_workers = int_ "num_remote_workers"
+    ~default:default.num_remote_workers config in
+  let remote_worker_eden_checkout_threshold = int_
+    "remote_worker_eden_checkout_threshold"
+    ~default:default.remote_worker_eden_checkout_threshold
+    config
+  in
+  let naming_sqlite_path =
+    string_opt "naming_sqlite_path" config in
+  let enable_naming_table_fallback = match naming_sqlite_path with
+    | Some _ -> true
+    | None ->
+      bool_if_version "enable_naming_table_fallback"
+        ~default:default.enable_naming_table_fallback config
+  in
+  let symbolindex_search_provider = string_ "symbolindex_search_provider"
+    ~default:default.symbolindex_search_provider config in
+  let symbolindex_quiet = bool_if_version "symbolindex_quiet"
+    ~default:default.symbolindex_quiet config in
+  let symbolindex_file = string_opt "symbolindex_file" config in
+  let tico_invalidate_files = bool_if_version "tico_invalidate_files"
+    ~default:default.tico_invalidate_files config in
+  let tico_invalidate_smart = bool_if_version "tico_invalidate_smart"
+    ~default:default.tico_invalidate_smart config in
+  let rust = bool_if_version "rust" ~default:default.rust config in
+  let profile_type_check_duration_threshold = float_ "profile_type_check_duration_threshold"
+    ~default:default.profile_type_check_duration_threshold config in
+  let use_lru_workers = bool_if_version "use_lru_workers"
+    ~default:default.use_lru_workers config in
   {
     use_watchman;
     watchman_init_timeout;
     watchman_subscribe;
     watchman_synchronous_timeout;
     use_saved_state;
+    require_saved_state;
     load_state_script_timeout;
     load_state_natively;
     max_purgatory_clients;
     type_decl_bucket_size;
+    extend_fast_bucket_size;
     enable_on_nfs;
     enable_fuzzy_search;
     lazy_parse;
@@ -271,6 +373,7 @@ let load_ fn ~silent =
     io_priority;
     cpu_priority;
     saved_state_cache_limit;
+    can_skip_deptable;
     shm_dirs;
     max_workers;
     max_bucket_size;
@@ -297,13 +400,25 @@ let load_ fn ~silent =
     store_decls_in_saved_state;
     load_decls_from_saved_state;
     idle_gc_slice;
-    basic_autocomplete_only;
+    shallow_class_decl;
+    defer_class_declaration_threshold;
+    remote_worker_eden_checkout_threshold;
+    remote_type_check_threshold;
+    remote_type_check;
+    remote_worker_key;
+    remote_check_id;
+    num_remote_workers;
+    naming_sqlite_path;
+    enable_naming_table_fallback;
+    symbolindex_search_provider;
+    symbolindex_quiet;
+    symbolindex_file;
+    tico_invalidate_files;
+    tico_invalidate_smart;
+    rust;
+    profile_type_check_duration_threshold;
+    use_lru_workers;
   }
 
-let load ~silent =
-  try
-    load_ path ~silent
-  with e ->
-    Hh_logger.log "Loading config exception: %s" (Printexc.to_string e);
-    Hh_logger.log "Could not load config at %s, using defaults" path;
-    default
+let load ~silent ~current_version config_overrides =
+    load_ path ~silent ~current_version config_overrides

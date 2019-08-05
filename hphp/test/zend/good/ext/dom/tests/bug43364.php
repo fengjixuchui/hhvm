@@ -1,9 +1,9 @@
-<?php 
+<?hh
 function loopElements($nodes)
 {
     $count = 0;
     foreach($nodes as $node) {
-        if($node instanceof DOMElement) {
+        if($node is DOMElement) {
             $count++;
             if($node->childNodes->length > 0) {
                 $count += loopElements($node->childNodes);
@@ -12,7 +12,7 @@ function loopElements($nodes)
     }
     return $count;
 }
-
+<<__EntryPoint>> function main(): void {
 $xml = <<<DOC
 <?xml version="1.0" encoding="UTF-8"?>
 <root xmlns:xi="http://www.w3.org/2001/XInclude">
@@ -32,4 +32,4 @@ $doc->xinclude();
 $count = loopElements(array($doc->documentElement));
 
 var_dump($count);
-?>
+}

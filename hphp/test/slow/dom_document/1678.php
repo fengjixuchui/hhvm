@@ -1,6 +1,6 @@
-<?php
+<?hh
 class foo {
-  function foo($a) {
+  function __construct($a) {
     var_dump($a);
   }
 }

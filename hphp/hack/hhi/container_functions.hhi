@@ -14,8 +14,10 @@
  * YOU SHOULD NEVER INCLUDE THIS FILE ANYWHERE!!!
  */
 
+namespace {
+
 <<__PHPStdLib, __Rx>>
-function array_key_exists<Tk as arraykey, Tv>(mixed $key, <<__MaybeMutable>> ?KeyedContainer<Tk, Tv> $search): bool;
+function array_key_exists(mixed $key, <<__MaybeMutable>> ?KeyedContainer<arraykey, mixed> $search): bool;
 
 <<__PHPStdLib, __Rx>>
 function array_sum/*<T>*/(/*Container<T>*/ $input)/*: num*/;
@@ -23,41 +25,55 @@ function array_sum/*<T>*/(/*Container<T>*/ $input)/*: num*/;
 function array_product/*<T>*/(/*Container<T>*/ $input)/*: num*/;
 
 <<__PHPStdLib>>
-function sort<Tv>(Container<Tv> &$arg, int $sort_flags = SORT_REGULAR): bool;
+function sort<T as Container<mixed>>(inout T $arg, int $sort_flags = SORT_REGULAR): bool;
 <<__PHPStdLib>>
-function rsort<Tv>(Container<Tv> &$arg, int $sort_flags = SORT_REGULAR): bool;
+function rsort<T as Container<mixed>>(inout T $arg, int $sort_flags = SORT_REGULAR): bool;
 <<__PHPStdLib>>
-function asort<Tk as arraykey,Tv>(KeyedContainer<Tk, Tv> &$arg, int $sort_flags = SORT_REGULAR): bool;
+function asort<T as KeyedContainer<arraykey, mixed>>(inout T $arg, int $sort_flags = SORT_REGULAR): bool;
 <<__PHPStdLib>>
-function arsort<Tk as arraykey,Tv>(KeyedContainer<Tk, Tv> &$arg, int $sort_flags = SORT_REGULAR): bool;
+function arsort<T as KeyedContainer<arraykey, mixed>>(inout T $arg, int $sort_flags = SORT_REGULAR): bool;
 <<__PHPStdLib>>
-function ksort<Tk as arraykey,Tv>(KeyedContainer<Tk, Tv> &$arg, int $sort_flags = SORT_REGULAR): bool;
+function ksort<T as KeyedContainer<arraykey, mixed>>(inout T $arg, int $sort_flags = SORT_REGULAR): bool;
 <<__PHPStdLib>>
-function krsort<Tk as arraykey,Tv>(KeyedContainer<Tk, Tv> &$arg, int $sort_flags = SORT_REGULAR): bool;
+function krsort<T as KeyedContainer<arraykey, mixed>>(inout T $arg, int $sort_flags = SORT_REGULAR): bool;
 // $c is a callable of type (function(Tv,Tv): bool)
 <<__PHPStdLib>>
-function usort<Tv>(Container<Tv> &$arg, mixed $c): bool;
+function usort<T as KeyedContainer<arraykey, mixed>>(inout T $arg, mixed $c): bool;
 // $c is a callable of type (function(Tv,Tv): bool)
 <<__PHPStdLib>>
-function uasort<Tk as arraykey,Tv>(KeyedContainer<Tk, Tv> &$arg, mixed $c): bool;
+function uasort<T as KeyedContainer<arraykey, mixed>>(inout T $arg, mixed $c): bool;
 // $c is a callable of type (function(Tk,Tk): bool)
 <<__PHPStdLib>>
-function uksort<Tk as arraykey,Tv>(KeyedContainer<Tk, Tv> &$arg, mixed $c): bool;
+function uksort<T as KeyedContainer<arraykey, mixed>>(inout T $arg, mixed $c): bool;
+
+}
+
+namespace HH {
 
 /**
  * Creates a `dict` from a `KeyedTraversable`, preserving keys and order.
  */
 <<__Rx, __AtMostRxAsArgs>>
 function dict<Tk as arraykey, Tv>(<<__OnlyRxIfImpl(\HH\Rx\Traversable::class), __MaybeMutable>> KeyedTraversable<Tk, Tv> $arr): dict<Tk, Tv>;
+
 /**
  * Creates a `vec` from a `Traversable`, preserving order. Keys are not
  * preserved.
  */
 <<__Rx, __AtMostRxAsArgs>>
 function vec<Tv>(<<__OnlyRxIfImpl(\HH\Rx\Traversable::class), __MaybeMutable>> Traversable<Tv> $arr): vec<Tv>;
+
 /**
  * Create a `keyset` from a `Traversable` of strings or ints, preserving order.
  * Keys are not preserved.
  */
 <<__Rx, __AtMostRxAsArgs>>
 function keyset<Tv as arraykey>(<<__OnlyRxIfImpl(\HH\Rx\Traversable::class), __MaybeMutable>> Traversable<Tv> $arr): keyset<Tv>;
+
+<<__Rx>>
+function darray<Tk as arraykey, Tv>(KeyedTraversable<Tk, Tv> $arr): darray<Tk, Tv>;
+
+<<__Rx>>
+function varray<Tv>(Traversable<Tv> $arr): varray<Tv>;
+
+}

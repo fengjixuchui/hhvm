@@ -74,10 +74,10 @@ void IRMetadataUpdater::register_inst(const Vinstr& inst) {
   if (m_bcmap && m_origin) {
     auto const sk = inst.origin->marker().sk();
     if (m_bcmap->empty() ||
-        m_bcmap->back().md5 != sk.unit()->md5() ||
+        m_bcmap->back().sha1 != sk.unit()->sha1() ||
         m_bcmap->back().bcStart != sk.offset()) {
       m_bcmap->push_back(TransBCMapping{
-        sk.unit()->md5(),
+        sk.unit()->sha1(),
         sk.offset(),
         m_env.text.main().code.frontier(),
         m_env.text.cold().code.frontier(),
@@ -237,6 +237,14 @@ bool emit(Venv& env, const retransopt& i) {
   return true;
 }
 
+bool emit(Venv& env, const movqs& i) {
+  auto const mov = emitSmashableMovq(*env.cb, env.meta, i.s.q(), r64(i.d));
+  if (i.addr.isValid()) {
+    env.vaddrs[i.addr] = mov;
+  }
+  return true;
+}
+
 bool emit(Venv& env, const funcguard& i) {
   emitFuncGuard(i.func, *env.cb, env.meta, i.watch);
   return true;
@@ -247,6 +255,18 @@ bool emit(Venv& env, const debugguardjmp& i) {
   if (i.watch) {
     *i.watch = jmp;
     env.meta.watchpoints.push_back(i.watch);
+  }
+  return true;
+}
+
+bool emit(Venv& env, const jmps& i) {
+  auto const jmp = emitSmashableJmp(*env.cb, env.meta, env.cb->frontier());
+  env.jmps.push_back({jmp, i.targets[0]});
+  if (i.jmp_addr.isValid()) {
+    env.vaddrs[i.jmp_addr] = jmp;
+  }
+  if (i.taken_addr.isValid()) {
+    env.pending_vaddrs.push_back({i.taken_addr, i.targets[1]});
   }
   return true;
 }

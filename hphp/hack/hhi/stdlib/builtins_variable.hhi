@@ -40,8 +40,6 @@ function gettype($v);
 <<__PHPStdLib, __Rx>>
 function get_resource_type(resource $handle);
 <<__PHPStdLib>>
-function settype(&$var, string $type);
-<<__PHPStdLib>>
 function print_r($expression, bool $ret = false);
 <<__PHPStdLib>>
 function var_export($expression, bool $ret = false);
@@ -51,7 +49,7 @@ function var_dump(<<__AcceptDisposable>> $expression, <<__AcceptDisposable>> ...
 function debug_zval_dump(<<__AcceptDisposable>> $variable);
 <<__PHPStdLib, __Rx>>
 function serialize($value);
-<<__PHPStdLib>>
+<<__PHPStdLib, __Rx>>
 function unserialize(string $str, darray $options = darray[]);
 <<__PHPStdLib>>
 function import_request_variables(string $types, string $prefix = "");
@@ -65,9 +63,9 @@ namespace HH\Lib\_Private\Native {
   ): ?Tv;
 
   <<__Rx, __AtMostRxAsArgs>>
-  function first_key<Tk as arraykey, Tv>(
+  function first_key<Tk as arraykey>(
     <<__OnlyRxIfImpl(\HH\Rx\Traversable::class), __MaybeMutable>>
-    KeyedContainer<Tk, Tv> $container,
+    KeyedContainer<Tk, mixed> $container,
   ): ?Tk;
 
   <<__Rx, __AtMostRxAsArgs>>
@@ -77,8 +75,8 @@ namespace HH\Lib\_Private\Native {
   ): ?Tv;
 
   <<__Rx, __AtMostRxAsArgs>>
-  function last_key<Tk as arraykey, Tv>(
+  function last_key<Tk as arraykey>(
     <<__OnlyRxIfImpl(\HH\Rx\Traversable::class), __MaybeMutable>>
-    KeyedContainer<Tk, Tv> $container,
+    KeyedContainer<Tk, mixed> $container,
   ): ?Tk;
 }

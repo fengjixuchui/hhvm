@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool asort(array &array_arg [, int sort_flags])
  * Description: Sort an array and maintain index association
                 Elements will be arranged from lowest to highest when this function has completed.
@@ -12,7 +12,7 @@
  * 3. SORT_NUMERIC - compare items numerically
  * 4. SORT_STRING - compare items as strings
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing asort() : usage variations ***\n";
 
 // get an unset variable
@@ -81,4 +81,4 @@ for($index = 0; $index < count($unexpected_values); $index ++) {
 }
 
 echo "Done";
-?>
+}

@@ -13,9 +13,8 @@ open Utils
 
 module Env = Typing_env
 module SN = Naming_special_names
-module TLazyHeap = Typing_lazy_heap
 module TGen = Typing_generic
-module Cls = Typing_classes_heap
+module Cls = Decl_provider.Class
 
 (*****************************************************************************)
 (* Module checking the (co/contra)variance annotations (+/-).
@@ -52,6 +51,7 @@ type position_descr =
   | Rwhere_as
   | Rwhere_super
   | Rwhere_eq
+  | Rfun_inout_parameter of [`Static | `Instance]
 
 type position_variance =
   | Pcovariant
@@ -152,6 +152,8 @@ let reason_to_string ~sign (_, descr, variance) =
     "`where _ = _` constraints are invariant on the left and right"
   | Rwhere_super ->
     "`where _ super _` constraints are contravariant on the left, covariant on the right"
+  | Rfun_inout_parameter _ ->
+    "Inout/ref function parameters are both covariant and contravariant"
 
 let detailed_message variance pos stack =
   match stack with
@@ -168,11 +170,11 @@ let detailed_message variance pos stack =
 (*****************************************************************************)
 
 let make_variance reason pos = function
-  | Ast.Covariant ->
+  | Ast_defs.Covariant ->
       Vcovariant [pos, reason, Pcovariant]
-  | Ast.Contravariant ->
+  | Ast_defs.Contravariant ->
       Vcontravariant [pos, reason, Pcontravariant]
-  | Ast.Invariant ->
+  | Ast_defs.Invariant ->
       Vinvariant ([pos, reason, Pinvariant], [pos, reason, Pinvariant])
 
 (*****************************************************************************)
@@ -251,7 +253,7 @@ let check_final_this_pos_variance env_variance rpos class_ty =
     List.iter (Cls.tparams class_ty)
       begin fun t ->
         match env_variance, t.tp_variance with
-        | Vcontravariant(_), (Ast.Covariant | Ast.Contravariant)  ->
+        | Vcontravariant(_), (Ast_defs.Covariant | Ast_defs.Contravariant)  ->
            (Errors.contravariant_this
              rpos
              (Utils.strip_ns (Cls.name class_ty))
@@ -278,11 +280,11 @@ let get_class_variance root (pos, class_name) =
       let tparams =
         if Env.is_typedef class_name
         then
-          match TLazyHeap.get_typedef class_name with
+          match Decl_provider.get_typedef class_name with
           | Some {td_tparams; _} -> td_tparams
           | None -> []
         else
-          match TLazyHeap.get_class class_name with
+          match Decl_provider.get_class class_name with
           | None -> []
           | Some cls -> Cls.tparams cls
       in
@@ -318,7 +320,7 @@ let rec class_ tcopt class_name class_type impl =
 (*****************************************************************************)
 
 and typedef tcopt type_name =
-  match TLazyHeap.get_typedef type_name with
+  match Decl_provider.get_typedef type_name with
   | Some {td_tparams; td_type; td_pos = _; td_constraint = _; td_vis = _;
       td_decl_errors = _;}  ->
      let root = (Typing_deps.Dep.Class type_name, None) in
@@ -339,13 +341,13 @@ and class_member class_type tcopt root static env (_member_name, member) =
      * Although not strictly speaking a variance check, it fits here because
      * it concerns the presence of generic type parameters in types.
      *)
-    if Cls.kind class_type = Ast.Ctrait
+    if Cls.kind class_type = Ast_defs.Ctrait
     then ()
     else
     let lazy (reason, _ as ty) = member.ce_type in
     let var_type_pos = Reason.to_pos reason in
     let class_pos = Cls.pos class_type in
-    match TGen.IsGeneric.ty tcopt ty with
+    match TGen.IsGeneric.ty ty with
     | None -> ()
     | Some (generic_pos, _generic_name) ->
     Errors.static_property_type_generic_param ~class_pos ~var_type_pos ~generic_pos
@@ -356,7 +358,7 @@ and class_member class_type tcopt root static env (_member_name, member) =
   | _ ->
       let lazy (reason, _ as ty) = member.ce_type in
       let pos = Reason.to_pos reason in
-      let variance = make_variance Rmember pos Ast.Invariant in
+      let variance = make_variance Rmember pos Ast_defs.Invariant in
       type_ tcopt root variance env ty
 
 and class_method tcopt root static env (_method_name, method_) =
@@ -377,17 +379,22 @@ and class_method tcopt root static env (_method_name, method_) =
             ~f:begin fun env t ->
               SMap.remove (snd t.tp_name) env
             end ~init:env in
-          List.iter ft_params ~f:(fun_param tcopt root static env);
+          List.iter ft_params ~f:(fun_param tcopt root (Vcovariant []) static env);
           List.iter tparams ~f:(fun_tparam tcopt root env);
           List.iter ft_where_constraints ~f:(fun_where_constraint tcopt root env);
-          fun_ret tcopt root static env ft_ret
+          fun_ret tcopt root (Vcovariant []) static env ft_ret
       | _ -> assert false
 
-and fun_param tcopt root static env { fp_type = (reason, _ as ty); _ } =
+and fun_param tcopt root variance static env { fp_type = (reason, _ as ty); fp_kind; _ } =
   let pos = Reason.to_pos reason in
-  let reason_contravariant = pos, Rfun_parameter static, Pcontravariant in
-  let variance = Vcontravariant [reason_contravariant] in
-  type_ tcopt root variance env ty
+  match fp_kind with
+  | FPnormal ->
+    let reason = pos, Rfun_parameter static, Pcontravariant in
+    let variance = flip reason variance in
+    type_ tcopt root variance env ty
+  | FPref | FPinout ->
+    let variance = make_variance (Rfun_inout_parameter static) pos Ast_defs.Invariant in
+    type_ tcopt root variance env ty
 
 and fun_tparam tcopt root env t =
   List.iter t.tp_constraints ~f:(constraint_ tcopt root env)
@@ -396,28 +403,32 @@ and fun_where_constraint tcopt root env (ty1, ck, ty2) =
   let pos1 = Reason.to_pos (fst ty1) in
   let pos2 = Reason.to_pos (fst ty2) in
   match ck with
-  | Ast.Constraint_super ->
+  | Ast_defs.Constraint_super ->
     let var1 = Vcontravariant [pos1, Rwhere_super, Pcontravariant] in
     let var2 = Vcovariant [pos2, Rwhere_super, Pcovariant] in
     type_ tcopt root var1 env ty1;
     type_ tcopt root var2 env ty2
-  | Ast.Constraint_eq ->
+  | Ast_defs.Constraint_eq ->
     let reason1 = [pos1, Rwhere_eq, Pinvariant] in
     let reason2 = [pos2, Rwhere_eq, Pinvariant] in
     let var = Vinvariant (reason1, reason2) in
     type_ tcopt root var env ty1;
     type_ tcopt root var env ty2
-  | Ast.Constraint_as ->
+  | Ast_defs.Constraint_as ->
     let var1 = Vcovariant [pos1, Rwhere_as, Pcovariant] in
     let var2 = Vcontravariant [pos2, Rwhere_as, Pcontravariant] in
     type_ tcopt root var1 env ty1;
     type_ tcopt root var2 env ty2
-  | Ast.Constraint_pu_from -> failwith "TODO(T36532263): Pocket Universes"
+  | Ast_defs.Constraint_pu_from -> failwith "TODO(T36532263): Pocket Universes"
 
-and fun_ret tcopt root static env (reason, _ as ty) =
+and fun_ret tcopt root variance static env (reason, _ as ty) =
   let pos = Reason.to_pos reason in
   let reason_covariant = pos, Rfun_return static, Pcovariant in
-  let variance = Vcovariant [reason_covariant] in
+  let variance =
+    match variance with
+    | Vcovariant stack -> Vcovariant (reason_covariant :: stack)
+    | Vcontravariant stack -> Vcontravariant (reason_covariant :: stack)
+    | variance -> variance in
   type_ tcopt root variance env ty
 
 and type_option tcopt root variance env = function
@@ -459,7 +470,7 @@ and type_ tcopt root variance env (reason, ty) =
   | Tvarray_or_darray ty ->
     let tk =
       Typing_reason.Rvarray_or_darray_key (Reason.to_pos reason),
-      Tprim Nast.Tarraykey in
+      Tprim Aast.Tarraykey in
     type_ tcopt root variance env (reason, Tarray (Some tk, Some ty))
   | Tthis ->
     (* Check that 'this' isn't being improperly referenced in a contravariant
@@ -494,23 +505,12 @@ and type_ tcopt root variance env (reason, ty) =
       generic_ env variance name
   | Toption ty ->
       type_ tcopt root variance env ty
+  | Tlike ty ->
+      type_ tcopt root variance env ty
   | Tprim _ -> ()
   | Tfun ft ->
-      List.iter ft.ft_params ~f:begin fun { fp_type = (r, _ as ty); _ } ->
-        let pos = Reason.to_pos r in
-        let reason = pos, Rfun_parameter `Instance, Pcontravariant in
-        let variance = flip reason variance in
-        type_ tcopt root variance env ty
-      end;
-      let ret_pos = Reason.to_pos (fst ft.ft_ret) in
-      let ret_variance = ret_pos, Rfun_return `Instance, Pcovariant in
-      let variance =
-        match variance with
-        | Vcovariant stack -> Vcovariant (ret_variance :: stack)
-        | Vcontravariant stack -> Vcontravariant (ret_variance :: stack)
-        | variance -> variance
-      in
-      type_ tcopt root variance env ft.ft_ret
+      List.iter ft.ft_params ~f:(fun_param tcopt root variance `Instance env);
+      fun_ret tcopt root variance `Instance env ft.ft_ret
   | Tapply (_, []) -> ()
   | Tapply ((_, name as pos_name), tyl) ->
       let variancel = get_class_variance root pos_name in
@@ -599,11 +599,97 @@ and type_ tcopt root variance env (reason, ty) =
 and constraint_ tcopt root env (ck, (r, _ as ty)) =
   let pos = Reason.to_pos r in
   let var = match ck with
-    | Ast.Constraint_as -> Vcontravariant [pos, Rconstraint_as, Pcontravariant]
-    | Ast.Constraint_eq ->
+    | Ast_defs.Constraint_as -> Vcontravariant [pos, Rconstraint_as, Pcontravariant]
+    | Ast_defs.Constraint_eq ->
       let reasons = [pos, Rconstraint_eq, Pinvariant] in
       Vinvariant (reasons, reasons)
-    | Ast.Constraint_super -> Vcovariant [pos, Rconstraint_super, Pcovariant]
-    | Ast.Constraint_pu_from -> failwith "TODO(T36532263): Pocket Universes"
+    | Ast_defs.Constraint_super -> Vcovariant [pos, Rconstraint_super, Pcovariant]
+    | Ast_defs.Constraint_pu_from -> failwith "TODO(T36532263): Pocket Universes"
   in
   type_ tcopt root var env ty
+
+and get_typarams root env (ty: decl ty) =
+  let empty = (SMap.empty, SMap.empty) in
+  let union (pos1, neg1) (pos2, neg2) =
+   (SMap.union ~combine:(fun _ x y -> Some (x@y)) pos1 pos2,
+    SMap.union ~combine:(fun _ x y -> Some (x@y)) neg1 neg2) in
+  let flip (pos, neg) = (neg, pos) in
+  let single id pos = SMap.singleton id [pos], SMap.empty in
+  let get_typarams_union acc ty = union acc (get_typarams root env ty) in
+  match snd ty with
+  | Tgeneric id ->
+    (* If it's in the environment then it's not a generic method parameter *)
+    if Option.is_some (SMap.get id env)
+    then empty
+    else single id (fst ty)
+  | Tnonnull | Tdynamic | Tprim _ | Tnothing | Tany | Terr | Tthis | Tmixed | Taccess _ -> empty
+  | Toption ty | Tlike ty -> get_typarams root env ty
+  | Ttuple tyl -> List.fold_left tyl ~init:empty ~f:get_typarams_union
+  | Tshape (_, m) ->
+    Nast.ShapeMap.fold (fun _ {sft_ty; _} res -> get_typarams_union res sft_ty) m empty
+  | Tfun ft ->
+    let params = List.fold_left ft.ft_params ~init:empty
+      ~f:(fun res {fp_type; fp_kind; _} ->
+        let tp = get_typarams root env fp_type in
+        let tp =
+          match fp_kind with
+          (* Parameters behave contravariantly *)
+          | FPnormal -> flip tp
+          (* Inout/ref parameters behave both co- and contra-variantly *)
+          | FPref | FPinout -> union tp (flip tp) in
+        union res tp) in
+    let ret = get_typarams root env ft.ft_ret in
+    let get_typarams_constraint acc (ck, ty) =
+      union acc (
+      match ck with
+        | Ast_defs.Constraint_as ->
+          get_typarams root env ty
+        | Ast_defs.Constraint_eq ->
+          let tp = get_typarams root env ty in
+          union (flip tp) tp
+        | Ast_defs.Constraint_super ->
+          flip (get_typarams root env ty)
+        | Ast_defs.Constraint_pu_from -> failwith "TODO(T36532263): Pocket Universes"
+      ) in
+    let get_typarams_tparam acc tp =
+      List.fold_left tp.tp_constraints ~init:acc ~f:get_typarams_constraint in
+    let bounds =
+      List.fold_left (fst ft.ft_tparams) ~init:empty ~f:get_typarams_tparam in
+    let get_typarams_where_constraint acc (ty1, ck, ty2) =
+      union acc (match ck with
+      | Ast_defs.Constraint_super ->
+        union (flip (get_typarams root env ty1)) (get_typarams root env ty2)
+      | Ast_defs.Constraint_as ->
+        union (get_typarams root env ty1) (flip (get_typarams root env ty2))
+      | Ast_defs.Constraint_eq ->
+        let tp = union (get_typarams root env ty1) (get_typarams root env ty2) in
+        union tp (flip tp)
+      | Ast_defs.Constraint_pu_from ->
+        empty) in
+    let constrs = List.fold_left ft.ft_where_constraints ~init:empty
+      ~f:get_typarams_where_constraint in
+    union bounds (union constrs (union ret params))
+  | Tapply (pos_name, tyl) ->
+      let rec get_typarams_variance_list acc variancel tyl =
+        match variancel, tyl with
+        | variance::variancel, ty::tyl ->
+          let param = get_typarams root env ty in
+          let param =
+            match variance with
+            | Vcovariant _ -> param
+            | Vcontravariant _ -> flip param
+            | _ -> union param (flip param) in
+          get_typarams_variance_list (union acc param) variancel tyl
+        | _ -> acc in
+    let variancel = get_class_variance root pos_name in
+    get_typarams_variance_list empty variancel tyl
+  | Tarray (ty1, ty2) ->
+    let get_typarams_opt tyopt =
+      match tyopt with
+      | None -> empty
+      | Some ty -> get_typarams root env ty in
+    union (get_typarams_opt ty1) (get_typarams_opt ty2)
+  | Tdarray (ty1, ty2) ->
+    union (get_typarams root env ty1) (get_typarams root env ty2)
+  | Tvarray ty | Tvarray_or_darray ty ->
+    get_typarams root env ty

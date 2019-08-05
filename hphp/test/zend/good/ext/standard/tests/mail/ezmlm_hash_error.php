@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int ezmlm_hash  ( string $addr  )
  * Description: Calculate the hash value needed by EZMLM.
  * Source code: ext/standard/mail.c
@@ -31,5 +31,4 @@ $extra_arg = 10;
 try { var_dump( ezmlm_hash($file_handle) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 fclose($file_handle); 
 
-?>
-===DONE===
+echo "===DONE===\n";

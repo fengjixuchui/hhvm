@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class A {
 	protected $a = 1;
@@ -24,4 +24,3 @@ class D extends B {
 
 new D;
 
-?>

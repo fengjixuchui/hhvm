@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class foo {
     public $value = 42;
@@ -7,3 +7,5 @@ class foo {
         return $this->value;
     }
 }
+
+<<__EntryPoint>> function main(): void {}

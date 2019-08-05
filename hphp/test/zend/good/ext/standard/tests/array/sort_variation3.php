@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool sort ( array &$array [, int $sort_flags] )
  * Description: This function sorts an array. 
                 Elements will be arranged from lowest to highest when this function has completed.
@@ -13,7 +13,7 @@
  * 3. SORT_NUMERIC - compare items numerically
  * 4. SORT_STRING - compare items as strings
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sort() : usage variations ***\n";
 
 // group of various arrays
@@ -57,4 +57,4 @@ foreach ($various_arrays as $array) {
 } 
 
 echo "Done\n";
-?>
+}

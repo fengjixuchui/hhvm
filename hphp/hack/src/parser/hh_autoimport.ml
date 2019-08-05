@@ -18,17 +18,13 @@ type alias =
 | SCALAR_TYPE of string
 | HH_ALIAS of string * string
 
-(* Create map from name to (alias, is_php7_scalar_type) *)
+(* Create map from name to alias *)
 let add_alias m a =
-  let add k v =
-    SMap.add (String.lowercase k) v m in
+  let add k v = SMap.add (String.lowercase k) v m in
   match a with
-  | HH_ONLY_TYPE s ->
-    add s ("HH\\" ^ s, false)
-  | SCALAR_TYPE s ->
-    add s ("HH\\" ^ s, true)
-  | HH_ALIAS (s, alias) ->
-    add s (alias, false)
+  | HH_ONLY_TYPE s
+  | SCALAR_TYPE s -> add s ("HH\\" ^ s)
+  | HH_ALIAS (s, alias) -> add s alias
 
 let alias_map = List.fold_left ~f:add_alias ~init:SMap.empty
 [
@@ -92,6 +88,7 @@ let alias_map = List.fold_left ~f:add_alias ~init:SMap.empty
   HH_ONLY_TYPE("nonnull");
   HH_ONLY_TYPE("null");
   HH_ONLY_TYPE("nothing");
+  HH_ONLY_TYPE("dynamic");
 
   HH_ALIAS("classname", "string");
   HH_ALIAS("typename", "string");
@@ -99,7 +96,6 @@ let alias_map = List.fold_left ~f:add_alias ~init:SMap.empty
   HH_ALIAS("integer", "int");
   HH_ALIAS("double", "float");
   HH_ALIAS("real", "float");
-  HH_ALIAS("dynamic", "mixed");
 
 (*
   PHP7_TYPE("Throwable"; PHP7_EngineExceptions);
@@ -112,50 +108,15 @@ let alias_map = List.fold_left ~f:add_alias ~init:SMap.empty
   *)
 ]
 
-let autoimport_only_for_typechecker = [
-  "is_bool";
-  "is_int";
-  "is_integer";
-  "is_long";
-  "is_float";
-  "is_double";
-  "is_real";
-  "is_numeric";
-  "is_string";
-  "is_object";
-  "is_resource";
-  "is_array";
-  "is_darray";
-  "is_vec";
-  "is_dict";
-  "is_keyset";
-  "is_varray";
-]
-
-let rec normalize ~is_hack ~php7_scalar_types s =
-  if not (is_hack || php7_scalar_types)
-  then s
-  else
+let rec normalize s =
   match SMap.get (String.lowercase s) alias_map with
   | None -> s
-  | Some (a, is_scalar_type) ->
-    if is_hack || is_scalar_type
-    then normalize ~is_hack ~php7_scalar_types a
-    else s
+  | Some a -> normalize a
 
-let opt_normalize ~is_hack ~php7_scalar_types s =
+let opt_normalize s =
   match String.lowercase s with
   | "callable" -> Some "callable"
   | "array" -> Some "array"
-  | s ->
-    if not (is_hack || php7_scalar_types)
-    then None
-    else
-    match SMap.get s alias_map with
-    | None -> None
-    | Some (a, is_scalar_type) ->
-      if is_hack || is_scalar_type
-      then Some (normalize ~is_hack ~php7_scalar_types a)
-      else None
+  | s -> Option.map (SMap.get s alias_map) normalize
 
 let is_hh_autoimport s = SMap.mem (String.lowercase s) alias_map

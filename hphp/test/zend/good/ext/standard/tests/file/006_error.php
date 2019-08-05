@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
   Prototype: int fileperms ( string $filename )
   Description: Returns the permissions on the file, or FALSE in case of an error
@@ -7,7 +7,7 @@
   Description: Attempts to change the mode of the file specified by
     filename to that given in mode
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing error conditions for fileperms(), chmod() ***\n";
 
 /* With standard files and dirs */
@@ -40,8 +40,6 @@ try { var_dump( fileperms(dirname(__FILE__)."/006_error.tmp", 0777) ); } catch (
 try { var_dump( fileperms("nofile", 0777) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "\n*** Done ***\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 unlink( dirname(__FILE__)."/006_error.tmp");
-?>
+}

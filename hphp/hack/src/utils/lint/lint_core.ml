@@ -50,7 +50,8 @@ let add
   message =
   match !lint_list with
     | Some lst ->
-      if !Errors.is_hh_fixme pos code then () else begin
+      if (not !Errors.disable_linter_fixmes) && !Errors.is_hh_fixme pos code
+        then () else begin
         let lint =
           { code; severity; pos; message; bypass_changed_lines; autofix } in
         lint_list := Some (lint :: lst)
@@ -64,6 +65,21 @@ let to_absolute ({pos; _} as lint) =
 let to_string lint =
   let code = Errors.error_code_to_string lint.code in
   Printf.sprintf "%s\n%s (%s)" (Pos.string lint.pos) lint.message code
+
+let to_contextual_string lint =
+  let color = match lint.severity with
+    | Lint_error -> Tty.apply_color (Tty.Bold Tty.Red)
+    | Lint_warning -> Tty.apply_color (Tty.Bold Tty.Yellow)
+    | Lint_advice -> Tty.apply_color (Tty.Bold Tty.White)
+  in
+  let heading =
+    Printf.sprintf "%s %s"
+      (color (Errors.error_code_to_string lint.code))
+      (Tty.apply_color (Tty.Bold Tty.White) lint.message)
+  in
+  let fn = Errors.format_filename lint.pos in
+  let ctx, msg = Errors.format_message "" lint.pos ~is_first:true ~col_width:None in
+  Printf.sprintf "%s\n%s\n%s\n%s\n" heading fn ctx msg
 
 let to_json {pos; code; severity; message; bypass_changed_lines;
     autofix=(original, replacement)} =

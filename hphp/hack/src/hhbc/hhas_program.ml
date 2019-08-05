@@ -16,13 +16,27 @@ type t = {
   hhas_file_attributes : Hhas_attribute.t list;
   hhas_main            : Hhas_body.t;
   hhas_symbol_refs     : Hhas_symbol_refs.t;
-  hhas_strict_types    : bool option;
 }
 
-let make hhas_is_hh hhas_adata hhas_fun hhas_classes hhas_typedefs
-  hhas_file_attributes hhas_main hhas_symbol_refs hhas_strict_types =
-  { hhas_is_hh; hhas_adata; hhas_fun; hhas_classes; hhas_typedefs;
-    hhas_file_attributes; hhas_main; hhas_symbol_refs; hhas_strict_types; }
+let make
+    hhas_is_hh
+    hhas_adata
+    hhas_fun
+    hhas_classes
+    hhas_typedefs
+    hhas_file_attributes
+    hhas_main
+    hhas_symbol_refs =
+  {
+    hhas_is_hh;
+    hhas_adata;
+    hhas_fun;
+    hhas_classes;
+    hhas_typedefs;
+    hhas_file_attributes;
+    hhas_main;
+    hhas_symbol_refs;
+  }
 
 let is_hh hhas_prog =
   hhas_prog.hhas_is_hh
@@ -47,9 +61,6 @@ let adata hhas_prog =
 
 let symbol_refs hhas_prog =
   hhas_prog.hhas_symbol_refs
-
-let strict_types hhas_prog =
-  hhas_prog.hhas_strict_types
 
 let with_main hhas_prog hhas_main =
   {hhas_prog with hhas_main}

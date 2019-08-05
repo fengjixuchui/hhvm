@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $cwd = dirname(__FILE__);
 $ttf = "$cwd/Tuffy.ttf";
 $w = 23;
@@ -19,4 +19,4 @@ for ($j=0; $j<30; $j++) {
     }
 }
 echo "OK\n";
-?>
+}

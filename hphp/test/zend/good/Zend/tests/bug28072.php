@@ -1,4 +1,4 @@
-<?php
+<?hh
 const FIRST_KEY = "a";
 const THIRD_KEY = "c";
 
@@ -24,7 +24,7 @@ function test2()
         );
         print_r($arr);
 }
-
+<<__EntryPoint>> function main(): void {
 test();
 test2();
-?>
+}

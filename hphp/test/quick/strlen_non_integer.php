@@ -1,7 +1,7 @@
 <?hh
 
 function none() {}
-set_error_handler('none');
+
 
 class Foo {
 }
@@ -24,15 +24,37 @@ function main() {
     } catch (Exception $e) {}
   }
 }
-main();
-main();
+
+
 
 function main2() {
-  echo "foo: " .strlen($x)."\n";
-  echo "foo: " .strlen(true)."\n";
-  echo "foo: " .strlen(NULL)."\n";
-  echo "foo: " .strlen(false)."\n";
+  try {
+    echo "foo: " .strlen($x)."\n";
+  } catch (Exception $e) {
+    var_dump($e->getMessage());
+  }
+  try {
+    echo "foo: " .strlen(true)."\n";
+  } catch (Exception $e) {
+    var_dump($e->getMessage());
+  }
+  try {
+    echo "foo: " .strlen(NULL)."\n";
+  } catch (Exception $e) {
+    var_dump($e->getMessage());
+  }
+  try {
+    echo "foo: " .strlen(false)."\n";
+  } catch (Exception $e) {
+    var_dump($e->getMessage());
+  }
 }
+<<__EntryPoint>> function main_entry(): void {
+set_error_handler('none');
+
+main();
+main();
 main2();
 
 echo "done\n";
+}

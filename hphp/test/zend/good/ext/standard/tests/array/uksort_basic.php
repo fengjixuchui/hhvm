@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
 * proto bool uksort ( array &$array, callback $cmp_function )
 * Function is implemented in ext/standard/array.c
@@ -9,9 +9,10 @@ function cmp($a, $b) {
     }
     return ($a < $b) ? -1 : 1;
 }
+<<__EntryPoint>> function main(): void {
 $a = array(3, 2, 5, 6, 1);
 uasort(&$a, "cmp");
 foreach($a as $key => $value) {
     echo "$key: $value\n";
 }
-?>
+}

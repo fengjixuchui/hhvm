@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $xml =<<<EOF
 <people>
 test
@@ -29,5 +29,5 @@ var_dump((array)$people);
 var_dump((object)$foo);
 var_dump((object)$people);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : array file(string filename [, int flags[, resource context]])
  * Description: Read entire file into an array 
  * Source code: ext/standard/file.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing file() : variation ***\n";
 $mainDir = "fileVar8.dir";
 $subDir = "fileVar8Sub";
@@ -53,4 +53,4 @@ rmdir($absSubDir);
 rmdir($absMainDir);
 
 echo "\n*** Done ***\n";
-?>
+}

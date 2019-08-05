@@ -144,39 +144,39 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | Token                             of Token.t
   | Missing
   | SyntaxList                        of t list
-  | EndOfFile                               of
+  | EndOfFile                         of
     { end_of_file_token                                  : t
     }
-  | Script                                  of
+  | Script                            of
     { script_declarations                                : t
     }
-  | QualifiedName                           of
+  | QualifiedName                     of
     { qualified_name_parts                               : t
     }
-  | SimpleTypeSpecifier                     of
+  | SimpleTypeSpecifier               of
     { simple_type_specifier                              : t
     }
-  | LiteralExpression                       of
+  | LiteralExpression                 of
     { literal_expression                                 : t
     }
-  | PrefixedStringExpression                of
+  | PrefixedStringExpression          of
     { prefixed_string_name                               : t
     ; prefixed_string_str                                : t
     }
-  | VariableExpression                      of
+  | VariableExpression                of
     { variable_expression                                : t
     }
-  | PipeVariableExpression                  of
+  | PipeVariableExpression            of
     { pipe_variable_expression                           : t
     }
-  | FileAttributeSpecification              of
+  | FileAttributeSpecification        of
     { file_attribute_specification_left_double_angle     : t
     ; file_attribute_specification_keyword               : t
     ; file_attribute_specification_colon                 : t
     ; file_attribute_specification_attributes            : t
     ; file_attribute_specification_right_double_angle    : t
     }
-  | EnumDeclaration                         of
+  | EnumDeclaration                   of
     { enum_attribute_spec                                : t
     ; enum_keyword                                       : t
     ; enum_name                                          : t
@@ -187,13 +187,31 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; enum_enumerators                                   : t
     ; enum_right_brace                                   : t
     }
-  | Enumerator                              of
+  | Enumerator                        of
     { enumerator_name                                    : t
     ; enumerator_equal                                   : t
     ; enumerator_value                                   : t
     ; enumerator_semicolon                               : t
     }
-  | AliasDeclaration                        of
+  | RecordDeclaration                 of
+    { record_attribute_spec                              : t
+    ; record_modifier                                    : t
+    ; record_keyword                                     : t
+    ; record_name                                        : t
+    ; record_extends_keyword                             : t
+    ; record_extends_list                                : t
+    ; record_left_brace                                  : t
+    ; record_fields                                      : t
+    ; record_right_brace                                 : t
+    }
+  | RecordField                       of
+    { record_field_name                                  : t
+    ; record_field_colon                                 : t
+    ; record_field_type                                  : t
+    ; record_field_init                                  : t
+    ; record_field_comma                                 : t
+    }
+  | AliasDeclaration                  of
     { alias_attribute_spec                               : t
     ; alias_keyword                                      : t
     ; alias_name                                         : t
@@ -203,37 +221,37 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; alias_type                                         : t
     ; alias_semicolon                                    : t
     }
-  | PropertyDeclaration                     of
+  | PropertyDeclaration               of
     { property_attribute_spec                            : t
     ; property_modifiers                                 : t
     ; property_type                                      : t
     ; property_declarators                               : t
     ; property_semicolon                                 : t
     }
-  | PropertyDeclarator                      of
+  | PropertyDeclarator                of
     { property_name                                      : t
     ; property_initializer                               : t
     }
-  | NamespaceDeclaration                    of
+  | NamespaceDeclaration              of
     { namespace_keyword                                  : t
     ; namespace_name                                     : t
     ; namespace_body                                     : t
     }
-  | NamespaceBody                           of
+  | NamespaceBody                     of
     { namespace_left_brace                               : t
     ; namespace_declarations                             : t
     ; namespace_right_brace                              : t
     }
-  | NamespaceEmptyBody                      of
+  | NamespaceEmptyBody                of
     { namespace_semicolon                                : t
     }
-  | NamespaceUseDeclaration                 of
+  | NamespaceUseDeclaration           of
     { namespace_use_keyword                              : t
     ; namespace_use_kind                                 : t
     ; namespace_use_clauses                              : t
     ; namespace_use_semicolon                            : t
     }
-  | NamespaceGroupUseDeclaration            of
+  | NamespaceGroupUseDeclaration      of
     { namespace_group_use_keyword                        : t
     ; namespace_group_use_kind                           : t
     ; namespace_group_use_prefix                         : t
@@ -242,18 +260,18 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; namespace_group_use_right_brace                    : t
     ; namespace_group_use_semicolon                      : t
     }
-  | NamespaceUseClause                      of
+  | NamespaceUseClause                of
     { namespace_use_clause_kind                          : t
     ; namespace_use_name                                 : t
     ; namespace_use_as                                   : t
     ; namespace_use_alias                                : t
     }
-  | FunctionDeclaration                     of
+  | FunctionDeclaration               of
     { function_attribute_spec                            : t
     ; function_declaration_header                        : t
     ; function_body                                      : t
     }
-  | FunctionDeclarationHeader               of
+  | FunctionDeclarationHeader         of
     { function_modifiers                                 : t
     ; function_keyword                                   : t
     ; function_name                                      : t
@@ -265,29 +283,29 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; function_type                                      : t
     ; function_where_clause                              : t
     }
-  | WhereClause                             of
+  | WhereClause                       of
     { where_clause_keyword                               : t
     ; where_clause_constraints                           : t
     }
-  | WhereConstraint                         of
+  | WhereConstraint                   of
     { where_constraint_left_type                         : t
     ; where_constraint_operator                          : t
     ; where_constraint_right_type                        : t
     }
-  | MethodishDeclaration                    of
+  | MethodishDeclaration              of
     { methodish_attribute                                : t
     ; methodish_function_decl_header                     : t
     ; methodish_function_body                            : t
     ; methodish_semicolon                                : t
     }
-  | MethodishTraitResolution                of
+  | MethodishTraitResolution          of
     { methodish_trait_attribute                          : t
     ; methodish_trait_function_decl_header               : t
     ; methodish_trait_equal                              : t
     ; methodish_trait_name                               : t
     ; methodish_trait_semicolon                          : t
     }
-  | ClassishDeclaration                     of
+  | ClassishDeclaration               of
     { classish_attribute                                 : t
     ; classish_modifiers                                 : t
     ; classish_keyword                                   : t
@@ -297,57 +315,57 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; classish_extends_list                              : t
     ; classish_implements_keyword                        : t
     ; classish_implements_list                           : t
+    ; classish_where_clause                              : t
     ; classish_body                                      : t
     }
-  | ClassishBody                            of
+  | ClassishBody                      of
     { classish_body_left_brace                           : t
     ; classish_body_elements                             : t
     ; classish_body_right_brace                          : t
     }
-  | TraitUsePrecedenceItem                  of
+  | TraitUsePrecedenceItem            of
     { trait_use_precedence_item_name                     : t
     ; trait_use_precedence_item_keyword                  : t
     ; trait_use_precedence_item_removed_names            : t
     }
-  | TraitUseAliasItem                       of
+  | TraitUseAliasItem                 of
     { trait_use_alias_item_aliasing_name                 : t
     ; trait_use_alias_item_keyword                       : t
     ; trait_use_alias_item_modifiers                     : t
     ; trait_use_alias_item_aliased_name                  : t
     }
-  | TraitUseConflictResolution              of
+  | TraitUseConflictResolution        of
     { trait_use_conflict_resolution_keyword              : t
     ; trait_use_conflict_resolution_names                : t
     ; trait_use_conflict_resolution_left_brace           : t
     ; trait_use_conflict_resolution_clauses              : t
     ; trait_use_conflict_resolution_right_brace          : t
     }
-  | TraitUse                                of
+  | TraitUse                          of
     { trait_use_keyword                                  : t
     ; trait_use_names                                    : t
     ; trait_use_semicolon                                : t
     }
-  | RequireClause                           of
+  | RequireClause                     of
     { require_keyword                                    : t
     ; require_kind                                       : t
     ; require_name                                       : t
     ; require_semicolon                                  : t
     }
-  | ConstDeclaration                        of
-    { const_visibility                                   : t
-    ; const_abstract                                     : t
+  | ConstDeclaration                  of
+    { const_modifiers                                    : t
     ; const_keyword                                      : t
     ; const_type_specifier                               : t
     ; const_declarators                                  : t
     ; const_semicolon                                    : t
     }
-  | ConstantDeclarator                      of
+  | ConstantDeclarator                of
     { constant_declarator_name                           : t
     ; constant_declarator_initializer                    : t
     }
-  | TypeConstDeclaration                    of
+  | TypeConstDeclaration              of
     { type_const_attribute_spec                          : t
-    ; type_const_abstract                                : t
+    ; type_const_modifiers                               : t
     ; type_const_keyword                                 : t
     ; type_const_type_keyword                            : t
     ; type_const_name                                    : t
@@ -357,11 +375,11 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; type_const_type_specifier                          : t
     ; type_const_semicolon                               : t
     }
-  | DecoratedExpression                     of
+  | DecoratedExpression               of
     { decorated_expression_decorator                     : t
     ; decorated_expression_expression                    : t
     }
-  | ParameterDeclaration                    of
+  | ParameterDeclaration              of
     { parameter_attribute                                : t
     ; parameter_visibility                               : t
     ; parameter_call_convention                          : t
@@ -369,57 +387,58 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; parameter_name                                     : t
     ; parameter_default_value                            : t
     }
-  | VariadicParameter                       of
+  | VariadicParameter                 of
     { variadic_parameter_call_convention                 : t
     ; variadic_parameter_type                            : t
     ; variadic_parameter_ellipsis                        : t
     }
-  | AttributeSpecification                  of
-    { attribute_specification_left_double_angle          : t
-    ; attribute_specification_attributes                 : t
-    ; attribute_specification_right_double_angle         : t
+  | OldAttributeSpecification         of
+    { old_attribute_specification_left_double_angle      : t
+    ; old_attribute_specification_attributes             : t
+    ; old_attribute_specification_right_double_angle     : t
     }
-  | InclusionExpression                     of
+  | AttributeSpecification            of
+    { attribute_specification_attributes                 : t
+    }
+  | Attribute                         of
+    { attribute_at                                       : t
+    ; attribute_attribute_name                           : t
+    }
+  | InclusionExpression               of
     { inclusion_require                                  : t
     ; inclusion_filename                                 : t
     }
-  | InclusionDirective                      of
+  | InclusionDirective                of
     { inclusion_expression                               : t
     ; inclusion_semicolon                                : t
     }
-  | CompoundStatement                       of
+  | CompoundStatement                 of
     { compound_left_brace                                : t
     ; compound_statements                                : t
     ; compound_right_brace                               : t
     }
-  | AlternateLoopStatement                  of
-    { alternate_loop_opening_colon                       : t
-    ; alternate_loop_statements                          : t
-    ; alternate_loop_closing_keyword                     : t
-    ; alternate_loop_closing_semicolon                   : t
-    }
-  | ExpressionStatement                     of
+  | ExpressionStatement               of
     { expression_statement_expression                    : t
     ; expression_statement_semicolon                     : t
     }
-  | MarkupSection                           of
+  | MarkupSection                     of
     { markup_prefix                                      : t
     ; markup_text                                        : t
     ; markup_suffix                                      : t
     ; markup_expression                                  : t
     }
-  | MarkupSuffix                            of
+  | MarkupSuffix                      of
     { markup_suffix_less_than_question                   : t
     ; markup_suffix_name                                 : t
     }
-  | UnsetStatement                          of
+  | UnsetStatement                    of
     { unset_keyword                                      : t
     ; unset_left_paren                                   : t
     ; unset_variables                                    : t
     ; unset_right_paren                                  : t
     ; unset_semicolon                                    : t
     }
-  | LetStatement                            of
+  | LetStatement                      of
     { let_statement_keyword                              : t
     ; let_statement_name                                 : t
     ; let_statement_colon                                : t
@@ -427,7 +446,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; let_statement_initializer                          : t
     ; let_statement_semicolon                            : t
     }
-  | UsingStatementBlockScoped               of
+  | UsingStatementBlockScoped         of
     { using_block_await_keyword                          : t
     ; using_block_using_keyword                          : t
     ; using_block_left_paren                             : t
@@ -435,34 +454,20 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; using_block_right_paren                            : t
     ; using_block_body                                   : t
     }
-  | UsingStatementFunctionScoped            of
+  | UsingStatementFunctionScoped      of
     { using_function_await_keyword                       : t
     ; using_function_using_keyword                       : t
     ; using_function_expression                          : t
     ; using_function_semicolon                           : t
     }
-  | DeclareDirectiveStatement               of
-    { declare_directive_keyword                          : t
-    ; declare_directive_left_paren                       : t
-    ; declare_directive_expression                       : t
-    ; declare_directive_right_paren                      : t
-    ; declare_directive_semicolon                        : t
-    }
-  | DeclareBlockStatement                   of
-    { declare_block_keyword                              : t
-    ; declare_block_left_paren                           : t
-    ; declare_block_expression                           : t
-    ; declare_block_right_paren                          : t
-    ; declare_block_body                                 : t
-    }
-  | WhileStatement                          of
+  | WhileStatement                    of
     { while_keyword                                      : t
     ; while_left_paren                                   : t
     ; while_condition                                    : t
     ; while_right_paren                                  : t
     ; while_body                                         : t
     }
-  | IfStatement                             of
+  | IfStatement                       of
     { if_keyword                                         : t
     ; if_left_paren                                      : t
     ; if_condition                                       : t
@@ -471,49 +476,24 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; if_elseif_clauses                                  : t
     ; if_else_clause                                     : t
     }
-  | ElseifClause                            of
+  | ElseifClause                      of
     { elseif_keyword                                     : t
     ; elseif_left_paren                                  : t
     ; elseif_condition                                   : t
     ; elseif_right_paren                                 : t
     ; elseif_statement                                   : t
     }
-  | ElseClause                              of
+  | ElseClause                        of
     { else_keyword                                       : t
     ; else_statement                                     : t
     }
-  | AlternateIfStatement                    of
-    { alternate_if_keyword                               : t
-    ; alternate_if_left_paren                            : t
-    ; alternate_if_condition                             : t
-    ; alternate_if_right_paren                           : t
-    ; alternate_if_colon                                 : t
-    ; alternate_if_statement                             : t
-    ; alternate_if_elseif_clauses                        : t
-    ; alternate_if_else_clause                           : t
-    ; alternate_if_endif_keyword                         : t
-    ; alternate_if_semicolon                             : t
-    }
-  | AlternateElseifClause                   of
-    { alternate_elseif_keyword                           : t
-    ; alternate_elseif_left_paren                        : t
-    ; alternate_elseif_condition                         : t
-    ; alternate_elseif_right_paren                       : t
-    ; alternate_elseif_colon                             : t
-    ; alternate_elseif_statement                         : t
-    }
-  | AlternateElseClause                     of
-    { alternate_else_keyword                             : t
-    ; alternate_else_colon                               : t
-    ; alternate_else_statement                           : t
-    }
-  | TryStatement                            of
+  | TryStatement                      of
     { try_keyword                                        : t
     ; try_compound_statement                             : t
     ; try_catch_clauses                                  : t
     ; try_finally_clause                                 : t
     }
-  | CatchClause                             of
+  | CatchClause                       of
     { catch_keyword                                      : t
     ; catch_left_paren                                   : t
     ; catch_type                                         : t
@@ -521,11 +501,11 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; catch_right_paren                                  : t
     ; catch_body                                         : t
     }
-  | FinallyClause                           of
+  | FinallyClause                     of
     { finally_keyword                                    : t
     ; finally_body                                       : t
     }
-  | DoStatement                             of
+  | DoStatement                       of
     { do_keyword                                         : t
     ; do_body                                            : t
     ; do_while_keyword                                   : t
@@ -534,7 +514,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; do_right_paren                                     : t
     ; do_semicolon                                       : t
     }
-  | ForStatement                            of
+  | ForStatement                      of
     { for_keyword                                        : t
     ; for_left_paren                                     : t
     ; for_initializer                                    : t
@@ -545,7 +525,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; for_right_paren                                    : t
     ; for_body                                           : t
     }
-  | ForeachStatement                        of
+  | ForeachStatement                  of
     { foreach_keyword                                    : t
     ; foreach_left_paren                                 : t
     ; foreach_collection                                 : t
@@ -557,7 +537,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; foreach_right_paren                                : t
     ; foreach_body                                       : t
     }
-  | SwitchStatement                         of
+  | SwitchStatement                   of
     { switch_keyword                                     : t
     ; switch_left_paren                                  : t
     ; switch_expression                                  : t
@@ -566,91 +546,67 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; switch_sections                                    : t
     ; switch_right_brace                                 : t
     }
-  | AlternateSwitchStatement                of
-    { alternate_switch_keyword                           : t
-    ; alternate_switch_left_paren                        : t
-    ; alternate_switch_expression                        : t
-    ; alternate_switch_right_paren                       : t
-    ; alternate_switch_opening_colon                     : t
-    ; alternate_switch_sections                          : t
-    ; alternate_switch_closing_endswitch                 : t
-    ; alternate_switch_closing_semicolon                 : t
-    }
-  | SwitchSection                           of
+  | SwitchSection                     of
     { switch_section_labels                              : t
     ; switch_section_statements                          : t
     ; switch_section_fallthrough                         : t
     }
-  | SwitchFallthrough                       of
+  | SwitchFallthrough                 of
     { fallthrough_keyword                                : t
     ; fallthrough_semicolon                              : t
     }
-  | CaseLabel                               of
+  | CaseLabel                         of
     { case_keyword                                       : t
     ; case_expression                                    : t
     ; case_colon                                         : t
     }
-  | DefaultLabel                            of
+  | DefaultLabel                      of
     { default_keyword                                    : t
     ; default_colon                                      : t
     }
-  | ReturnStatement                         of
+  | ReturnStatement                   of
     { return_keyword                                     : t
     ; return_expression                                  : t
     ; return_semicolon                                   : t
     }
-  | GotoLabel                               of
+  | GotoLabel                         of
     { goto_label_name                                    : t
     ; goto_label_colon                                   : t
     }
-  | GotoStatement                           of
+  | GotoStatement                     of
     { goto_statement_keyword                             : t
     ; goto_statement_label_name                          : t
     ; goto_statement_semicolon                           : t
     }
-  | ThrowStatement                          of
+  | ThrowStatement                    of
     { throw_keyword                                      : t
     ; throw_expression                                   : t
     ; throw_semicolon                                    : t
     }
-  | BreakStatement                          of
+  | BreakStatement                    of
     { break_keyword                                      : t
     ; break_level                                        : t
     ; break_semicolon                                    : t
     }
-  | ContinueStatement                       of
+  | ContinueStatement                 of
     { continue_keyword                                   : t
     ; continue_level                                     : t
     ; continue_semicolon                                 : t
     }
-  | FunctionStaticStatement                 of
-    { static_static_keyword                              : t
-    ; static_declarations                                : t
-    ; static_semicolon                                   : t
-    }
-  | StaticDeclarator                        of
-    { static_name                                        : t
-    ; static_initializer                                 : t
-    }
-  | EchoStatement                           of
+  | EchoStatement                     of
     { echo_keyword                                       : t
     ; echo_expressions                                   : t
     ; echo_semicolon                                     : t
     }
-  | GlobalStatement                         of
-    { global_keyword                                     : t
-    ; global_variables                                   : t
-    ; global_semicolon                                   : t
-    }
-  | ConcurrentStatement                     of
+  | ConcurrentStatement               of
     { concurrent_keyword                                 : t
     ; concurrent_statement                               : t
     }
-  | SimpleInitializer                       of
+  | SimpleInitializer                 of
     { simple_initializer_equal                           : t
     ; simple_initializer_value                           : t
     }
-  | AnonymousClass                          of
+  | AnonymousClass                    of
     { anonymous_class_class_keyword                      : t
     ; anonymous_class_left_paren                         : t
     ; anonymous_class_argument_list                      : t
@@ -661,7 +617,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; anonymous_class_implements_list                    : t
     ; anonymous_class_body                               : t
     }
-  | AnonymousFunction                       of
+  | AnonymousFunction                 of
     { anonymous_attribute_spec                           : t
     ; anonymous_static_keyword                           : t
     ; anonymous_async_keyword                            : t
@@ -675,27 +631,13 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; anonymous_use                                      : t
     ; anonymous_body                                     : t
     }
-  | Php7AnonymousFunction                   of
-    { php7_anonymous_attribute_spec                      : t
-    ; php7_anonymous_static_keyword                      : t
-    ; php7_anonymous_async_keyword                       : t
-    ; php7_anonymous_coroutine_keyword                   : t
-    ; php7_anonymous_function_keyword                    : t
-    ; php7_anonymous_left_paren                          : t
-    ; php7_anonymous_parameters                          : t
-    ; php7_anonymous_right_paren                         : t
-    ; php7_anonymous_use                                 : t
-    ; php7_anonymous_colon                               : t
-    ; php7_anonymous_type                                : t
-    ; php7_anonymous_body                                : t
-    }
-  | AnonymousFunctionUseClause              of
+  | AnonymousFunctionUseClause        of
     { anonymous_use_keyword                              : t
     ; anonymous_use_left_paren                           : t
     ; anonymous_use_variables                            : t
     ; anonymous_use_right_paren                          : t
     }
-  | LambdaExpression                        of
+  | LambdaExpression                  of
     { lambda_attribute_spec                              : t
     ; lambda_async                                       : t
     ; lambda_coroutine                                   : t
@@ -703,354 +645,348 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; lambda_arrow                                       : t
     ; lambda_body                                        : t
     }
-  | LambdaSignature                         of
+  | LambdaSignature                   of
     { lambda_left_paren                                  : t
     ; lambda_parameters                                  : t
     ; lambda_right_paren                                 : t
     ; lambda_colon                                       : t
     ; lambda_type                                        : t
     }
-  | CastExpression                          of
+  | CastExpression                    of
     { cast_left_paren                                    : t
     ; cast_type                                          : t
     ; cast_right_paren                                   : t
     ; cast_operand                                       : t
     }
-  | ScopeResolutionExpression               of
+  | ScopeResolutionExpression         of
     { scope_resolution_qualifier                         : t
     ; scope_resolution_operator                          : t
     ; scope_resolution_name                              : t
     }
-  | MemberSelectionExpression               of
+  | MemberSelectionExpression         of
     { member_object                                      : t
     ; member_operator                                    : t
     ; member_name                                        : t
     }
-  | SafeMemberSelectionExpression           of
+  | SafeMemberSelectionExpression     of
     { safe_member_object                                 : t
     ; safe_member_operator                               : t
     ; safe_member_name                                   : t
     }
-  | EmbeddedMemberSelectionExpression       of
+  | EmbeddedMemberSelectionExpression of
     { embedded_member_object                             : t
     ; embedded_member_operator                           : t
     ; embedded_member_name                               : t
     }
-  | YieldExpression                         of
+  | YieldExpression                   of
     { yield_keyword                                      : t
     ; yield_operand                                      : t
     }
-  | YieldFromExpression                     of
+  | YieldFromExpression               of
     { yield_from_yield_keyword                           : t
     ; yield_from_from_keyword                            : t
     ; yield_from_operand                                 : t
     }
-  | PrefixUnaryExpression                   of
+  | PrefixUnaryExpression             of
     { prefix_unary_operator                              : t
     ; prefix_unary_operand                               : t
     }
-  | PostfixUnaryExpression                  of
+  | PostfixUnaryExpression            of
     { postfix_unary_operand                              : t
     ; postfix_unary_operator                             : t
     }
-  | BinaryExpression                        of
+  | BinaryExpression                  of
     { binary_left_operand                                : t
     ; binary_operator                                    : t
     ; binary_right_operand                               : t
     }
-  | InstanceofExpression                    of
-    { instanceof_left_operand                            : t
-    ; instanceof_operator                                : t
-    ; instanceof_right_operand                           : t
-    }
-  | IsExpression                            of
+  | IsExpression                      of
     { is_left_operand                                    : t
     ; is_operator                                        : t
     ; is_right_operand                                   : t
     }
-  | AsExpression                            of
+  | AsExpression                      of
     { as_left_operand                                    : t
     ; as_operator                                        : t
     ; as_right_operand                                   : t
     }
-  | NullableAsExpression                    of
+  | NullableAsExpression              of
     { nullable_as_left_operand                           : t
     ; nullable_as_operator                               : t
     ; nullable_as_right_operand                          : t
     }
-  | ConditionalExpression                   of
+  | ConditionalExpression             of
     { conditional_test                                   : t
     ; conditional_question                               : t
     ; conditional_consequence                            : t
     ; conditional_colon                                  : t
     ; conditional_alternative                            : t
     }
-  | EvalExpression                          of
+  | EvalExpression                    of
     { eval_keyword                                       : t
     ; eval_left_paren                                    : t
     ; eval_argument                                      : t
     ; eval_right_paren                                   : t
     }
-  | EmptyExpression                         of
-    { empty_keyword                                      : t
-    ; empty_left_paren                                   : t
-    ; empty_argument                                     : t
-    ; empty_right_paren                                  : t
-    }
-  | DefineExpression                        of
+  | DefineExpression                  of
     { define_keyword                                     : t
     ; define_left_paren                                  : t
     ; define_argument_list                               : t
     ; define_right_paren                                 : t
     }
-  | HaltCompilerExpression                  of
+  | HaltCompilerExpression            of
     { halt_compiler_keyword                              : t
     ; halt_compiler_left_paren                           : t
     ; halt_compiler_argument_list                        : t
     ; halt_compiler_right_paren                          : t
     }
-  | IssetExpression                         of
+  | IssetExpression                   of
     { isset_keyword                                      : t
     ; isset_left_paren                                   : t
     ; isset_argument_list                                : t
     ; isset_right_paren                                  : t
     }
-  | FunctionCallExpression                  of
+  | FunctionCallExpression            of
     { function_call_receiver                             : t
+    ; function_call_type_args                            : t
     ; function_call_left_paren                           : t
     ; function_call_argument_list                        : t
     ; function_call_right_paren                          : t
     }
-  | FunctionCallWithTypeArgumentsExpression of
-    { function_call_with_type_arguments_receiver         : t
-    ; function_call_with_type_arguments_type_args        : t
-    ; function_call_with_type_arguments_left_paren       : t
-    ; function_call_with_type_arguments_argument_list    : t
-    ; function_call_with_type_arguments_right_paren      : t
-    }
-  | ParenthesizedExpression                 of
+  | ParenthesizedExpression           of
     { parenthesized_expression_left_paren                : t
     ; parenthesized_expression_expression                : t
     ; parenthesized_expression_right_paren               : t
     }
-  | BracedExpression                        of
+  | BracedExpression                  of
     { braced_expression_left_brace                       : t
     ; braced_expression_expression                       : t
     ; braced_expression_right_brace                      : t
     }
-  | EmbeddedBracedExpression                of
+  | EmbeddedBracedExpression          of
     { embedded_braced_expression_left_brace              : t
     ; embedded_braced_expression_expression              : t
     ; embedded_braced_expression_right_brace             : t
     }
-  | ListExpression                          of
+  | ListExpression                    of
     { list_keyword                                       : t
     ; list_left_paren                                    : t
     ; list_members                                       : t
     ; list_right_paren                                   : t
     }
-  | CollectionLiteralExpression             of
+  | CollectionLiteralExpression       of
     { collection_literal_name                            : t
     ; collection_literal_left_brace                      : t
     ; collection_literal_initializers                    : t
     ; collection_literal_right_brace                     : t
     }
-  | ObjectCreationExpression                of
+  | ObjectCreationExpression          of
     { object_creation_new_keyword                        : t
     ; object_creation_object                             : t
     }
-  | ConstructorCall                         of
+  | ConstructorCall                   of
     { constructor_call_type                              : t
     ; constructor_call_left_paren                        : t
     ; constructor_call_argument_list                     : t
     ; constructor_call_right_paren                       : t
     }
-  | ArrayCreationExpression                 of
+  | RecordCreationExpression          of
+    { record_creation_type                               : t
+    ; record_creation_array_token                        : t
+    ; record_creation_left_bracket                       : t
+    ; record_creation_members                            : t
+    ; record_creation_right_bracket                      : t
+    }
+  | ArrayCreationExpression           of
     { array_creation_left_bracket                        : t
     ; array_creation_members                             : t
     ; array_creation_right_bracket                       : t
     }
-  | ArrayIntrinsicExpression                of
+  | ArrayIntrinsicExpression          of
     { array_intrinsic_keyword                            : t
     ; array_intrinsic_left_paren                         : t
     ; array_intrinsic_members                            : t
     ; array_intrinsic_right_paren                        : t
     }
-  | DarrayIntrinsicExpression               of
+  | DarrayIntrinsicExpression         of
     { darray_intrinsic_keyword                           : t
     ; darray_intrinsic_explicit_type                     : t
     ; darray_intrinsic_left_bracket                      : t
     ; darray_intrinsic_members                           : t
     ; darray_intrinsic_right_bracket                     : t
     }
-  | DictionaryIntrinsicExpression           of
+  | DictionaryIntrinsicExpression     of
     { dictionary_intrinsic_keyword                       : t
     ; dictionary_intrinsic_explicit_type                 : t
     ; dictionary_intrinsic_left_bracket                  : t
     ; dictionary_intrinsic_members                       : t
     ; dictionary_intrinsic_right_bracket                 : t
     }
-  | KeysetIntrinsicExpression               of
+  | KeysetIntrinsicExpression         of
     { keyset_intrinsic_keyword                           : t
     ; keyset_intrinsic_explicit_type                     : t
     ; keyset_intrinsic_left_bracket                      : t
     ; keyset_intrinsic_members                           : t
     ; keyset_intrinsic_right_bracket                     : t
     }
-  | VarrayIntrinsicExpression               of
+  | VarrayIntrinsicExpression         of
     { varray_intrinsic_keyword                           : t
     ; varray_intrinsic_explicit_type                     : t
     ; varray_intrinsic_left_bracket                      : t
     ; varray_intrinsic_members                           : t
     ; varray_intrinsic_right_bracket                     : t
     }
-  | VectorIntrinsicExpression               of
+  | VectorIntrinsicExpression         of
     { vector_intrinsic_keyword                           : t
     ; vector_intrinsic_explicit_type                     : t
     ; vector_intrinsic_left_bracket                      : t
     ; vector_intrinsic_members                           : t
     ; vector_intrinsic_right_bracket                     : t
     }
-  | ElementInitializer                      of
+  | ElementInitializer                of
     { element_key                                        : t
     ; element_arrow                                      : t
     ; element_value                                      : t
     }
-  | SubscriptExpression                     of
+  | SubscriptExpression               of
     { subscript_receiver                                 : t
     ; subscript_left_bracket                             : t
     ; subscript_index                                    : t
     ; subscript_right_bracket                            : t
     }
-  | EmbeddedSubscriptExpression             of
+  | EmbeddedSubscriptExpression       of
     { embedded_subscript_receiver                        : t
     ; embedded_subscript_left_bracket                    : t
     ; embedded_subscript_index                           : t
     ; embedded_subscript_right_bracket                   : t
     }
-  | AwaitableCreationExpression             of
+  | AwaitableCreationExpression       of
     { awaitable_attribute_spec                           : t
     ; awaitable_async                                    : t
     ; awaitable_coroutine                                : t
     ; awaitable_compound_statement                       : t
     }
-  | XHPChildrenDeclaration                  of
+  | XHPChildrenDeclaration            of
     { xhp_children_keyword                               : t
     ; xhp_children_expression                            : t
     ; xhp_children_semicolon                             : t
     }
-  | XHPChildrenParenthesizedList            of
+  | XHPChildrenParenthesizedList      of
     { xhp_children_list_left_paren                       : t
     ; xhp_children_list_xhp_children                     : t
     ; xhp_children_list_right_paren                      : t
     }
-  | XHPCategoryDeclaration                  of
+  | XHPCategoryDeclaration            of
     { xhp_category_keyword                               : t
     ; xhp_category_categories                            : t
     ; xhp_category_semicolon                             : t
     }
-  | XHPEnumType                             of
+  | XHPEnumType                       of
     { xhp_enum_optional                                  : t
     ; xhp_enum_keyword                                   : t
     ; xhp_enum_left_brace                                : t
     ; xhp_enum_values                                    : t
     ; xhp_enum_right_brace                               : t
     }
-  | XHPRequired                             of
+  | XHPLateinit                       of
+    { xhp_lateinit_at                                    : t
+    ; xhp_lateinit_keyword                               : t
+    }
+  | XHPRequired                       of
     { xhp_required_at                                    : t
     ; xhp_required_keyword                               : t
     }
-  | XHPClassAttributeDeclaration            of
+  | XHPClassAttributeDeclaration      of
     { xhp_attribute_keyword                              : t
     ; xhp_attribute_attributes                           : t
     ; xhp_attribute_semicolon                            : t
     }
-  | XHPClassAttribute                       of
+  | XHPClassAttribute                 of
     { xhp_attribute_decl_type                            : t
     ; xhp_attribute_decl_name                            : t
     ; xhp_attribute_decl_initializer                     : t
     ; xhp_attribute_decl_required                        : t
     }
-  | XHPSimpleClassAttribute                 of
+  | XHPSimpleClassAttribute           of
     { xhp_simple_class_attribute_type                    : t
     }
-  | XHPSimpleAttribute                      of
+  | XHPSimpleAttribute                of
     { xhp_simple_attribute_name                          : t
     ; xhp_simple_attribute_equal                         : t
     ; xhp_simple_attribute_expression                    : t
     }
-  | XHPSpreadAttribute                      of
+  | XHPSpreadAttribute                of
     { xhp_spread_attribute_left_brace                    : t
     ; xhp_spread_attribute_spread_operator               : t
     ; xhp_spread_attribute_expression                    : t
     ; xhp_spread_attribute_right_brace                   : t
     }
-  | XHPOpen                                 of
+  | XHPOpen                           of
     { xhp_open_left_angle                                : t
     ; xhp_open_name                                      : t
     ; xhp_open_attributes                                : t
     ; xhp_open_right_angle                               : t
     }
-  | XHPExpression                           of
+  | XHPExpression                     of
     { xhp_open                                           : t
     ; xhp_body                                           : t
     ; xhp_close                                          : t
     }
-  | XHPClose                                of
+  | XHPClose                          of
     { xhp_close_left_angle                               : t
     ; xhp_close_name                                     : t
     ; xhp_close_right_angle                              : t
     }
-  | TypeConstant                            of
+  | TypeConstant                      of
     { type_constant_left_type                            : t
     ; type_constant_separator                            : t
     ; type_constant_right_type                           : t
     }
-  | VectorTypeSpecifier                     of
+  | VectorTypeSpecifier               of
     { vector_type_keyword                                : t
     ; vector_type_left_angle                             : t
     ; vector_type_type                                   : t
     ; vector_type_trailing_comma                         : t
     ; vector_type_right_angle                            : t
     }
-  | KeysetTypeSpecifier                     of
+  | KeysetTypeSpecifier               of
     { keyset_type_keyword                                : t
     ; keyset_type_left_angle                             : t
     ; keyset_type_type                                   : t
     ; keyset_type_trailing_comma                         : t
     ; keyset_type_right_angle                            : t
     }
-  | TupleTypeExplicitSpecifier              of
+  | TupleTypeExplicitSpecifier        of
     { tuple_type_keyword                                 : t
     ; tuple_type_left_angle                              : t
     ; tuple_type_types                                   : t
     ; tuple_type_right_angle                             : t
     }
-  | VarrayTypeSpecifier                     of
+  | VarrayTypeSpecifier               of
     { varray_keyword                                     : t
     ; varray_left_angle                                  : t
     ; varray_type                                        : t
     ; varray_trailing_comma                              : t
     ; varray_right_angle                                 : t
     }
-  | VectorArrayTypeSpecifier                of
+  | VectorArrayTypeSpecifier          of
     { vector_array_keyword                               : t
     ; vector_array_left_angle                            : t
     ; vector_array_type                                  : t
     ; vector_array_right_angle                           : t
     }
-  | TypeParameter                           of
+  | TypeParameter                     of
     { type_attribute_spec                                : t
     ; type_reified                                       : t
     ; type_variance                                      : t
     ; type_name                                          : t
     ; type_constraints                                   : t
     }
-  | TypeConstraint                          of
+  | TypeConstraint                    of
     { constraint_keyword                                 : t
     ; constraint_type                                    : t
     }
-  | DarrayTypeSpecifier                     of
+  | DarrayTypeSpecifier               of
     { darray_keyword                                     : t
     ; darray_left_angle                                  : t
     ; darray_key                                         : t
@@ -1059,7 +995,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; darray_trailing_comma                              : t
     ; darray_right_angle                                 : t
     }
-  | MapArrayTypeSpecifier                   of
+  | MapArrayTypeSpecifier             of
     { map_array_keyword                                  : t
     ; map_array_left_angle                               : t
     ; map_array_key                                      : t
@@ -1067,13 +1003,13 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; map_array_value                                    : t
     ; map_array_right_angle                              : t
     }
-  | DictionaryTypeSpecifier                 of
+  | DictionaryTypeSpecifier           of
     { dictionary_type_keyword                            : t
     ; dictionary_type_left_angle                         : t
     ; dictionary_type_members                            : t
     ; dictionary_type_right_angle                        : t
     }
-  | ClosureTypeSpecifier                    of
+  | ClosureTypeSpecifier              of
     { closure_outer_left_paren                           : t
     ; closure_coroutine                                  : t
     ; closure_function_keyword                           : t
@@ -1084,96 +1020,113 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; closure_return_type                                : t
     ; closure_outer_right_paren                          : t
     }
-  | ClosureParameterTypeSpecifier           of
+  | ClosureParameterTypeSpecifier     of
     { closure_parameter_call_convention                  : t
     ; closure_parameter_type                             : t
     }
-  | ClassnameTypeSpecifier                  of
+  | ClassnameTypeSpecifier            of
     { classname_keyword                                  : t
     ; classname_left_angle                               : t
     ; classname_type                                     : t
     ; classname_trailing_comma                           : t
     ; classname_right_angle                              : t
     }
-  | FieldSpecifier                          of
+  | FieldSpecifier                    of
     { field_question                                     : t
     ; field_name                                         : t
     ; field_arrow                                        : t
     ; field_type                                         : t
     }
-  | FieldInitializer                        of
+  | FieldInitializer                  of
     { field_initializer_name                             : t
     ; field_initializer_arrow                            : t
     ; field_initializer_value                            : t
     }
-  | ShapeTypeSpecifier                      of
+  | ShapeTypeSpecifier                of
     { shape_type_keyword                                 : t
     ; shape_type_left_paren                              : t
     ; shape_type_fields                                  : t
     ; shape_type_ellipsis                                : t
     ; shape_type_right_paren                             : t
     }
-  | ShapeExpression                         of
+  | ShapeExpression                   of
     { shape_expression_keyword                           : t
     ; shape_expression_left_paren                        : t
     ; shape_expression_fields                            : t
     ; shape_expression_right_paren                       : t
     }
-  | TupleExpression                         of
+  | TupleExpression                   of
     { tuple_expression_keyword                           : t
     ; tuple_expression_left_paren                        : t
     ; tuple_expression_items                             : t
     ; tuple_expression_right_paren                       : t
     }
-  | GenericTypeSpecifier                    of
+  | GenericTypeSpecifier              of
     { generic_class_type                                 : t
     ; generic_argument_list                              : t
     }
-  | NullableTypeSpecifier                   of
+  | NullableTypeSpecifier             of
     { nullable_question                                  : t
     ; nullable_type                                      : t
     }
-  | SoftTypeSpecifier                       of
+  | LikeTypeSpecifier                 of
+    { like_tilde                                         : t
+    ; like_type                                          : t
+    }
+  | SoftTypeSpecifier                 of
     { soft_at                                            : t
     ; soft_type                                          : t
     }
-  | ReifiedTypeArgument                     of
+  | AttributizedSpecifier             of
+    { attributized_specifier_attribute_spec              : t
+    ; attributized_specifier_type                        : t
+    }
+  | ReifiedTypeArgument               of
     { reified_type_argument_reified                      : t
     ; reified_type_argument_type                         : t
     }
-  | TypeArguments                           of
+  | TypeArguments                     of
     { type_arguments_left_angle                          : t
     ; type_arguments_types                               : t
     ; type_arguments_right_angle                         : t
     }
-  | TypeParameters                          of
+  | TypeParameters                    of
     { type_parameters_left_angle                         : t
     ; type_parameters_parameters                         : t
     ; type_parameters_right_angle                        : t
     }
-  | TupleTypeSpecifier                      of
+  | TupleTypeSpecifier                of
     { tuple_left_paren                                   : t
     ; tuple_types                                        : t
     ; tuple_right_paren                                  : t
     }
-  | ErrorSyntax                             of
+  | ErrorSyntax                       of
     { error_error                                        : t
     }
-  | ListItem                                of
+  | ListItem                          of
     { list_item                                          : t
     ; list_separator                                     : t
     }
-  | PocketAtomExpression                    of
-    { pocket_atom_expression                             : t
+  | PocketAtomExpression              of
+    { pocket_atom_glyph                                  : t
+    ; pocket_atom_expression                             : t
     }
-  | PocketAtomMappingDeclaration            of
-    { pocket_atom_mapping_expression                     : t
+  | PocketIdentifierExpression        of
+    { pocket_identifier_qualifier                        : t
+    ; pocket_identifier_pu_operator                      : t
+    ; pocket_identifier_field                            : t
+    ; pocket_identifier_operator                         : t
+    ; pocket_identifier_name                             : t
+    }
+  | PocketAtomMappingDeclaration      of
+    { pocket_atom_mapping_glyph                          : t
+    ; pocket_atom_mapping_name                           : t
     ; pocket_atom_mapping_left_paren                     : t
     ; pocket_atom_mapping_mappings                       : t
     ; pocket_atom_mapping_right_paren                    : t
     ; pocket_atom_mapping_semicolon                      : t
     }
-  | PocketEnumDeclaration                   of
+  | PocketEnumDeclaration             of
     { pocket_enum_modifiers                              : t
     ; pocket_enum_enum                                   : t
     ; pocket_enum_name                                   : t
@@ -1181,23 +1134,23 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; pocket_enum_fields                                 : t
     ; pocket_enum_right_brace                            : t
     }
-  | PocketFieldTypeExprDeclaration          of
+  | PocketFieldTypeExprDeclaration    of
     { pocket_field_type_expr_case                        : t
     ; pocket_field_type_expr_type                        : t
     ; pocket_field_type_expr_name                        : t
     ; pocket_field_type_expr_semicolon                   : t
     }
-  | PocketFieldTypeDeclaration              of
+  | PocketFieldTypeDeclaration        of
     { pocket_field_type_case                             : t
     ; pocket_field_type_type                             : t
     ; pocket_field_type_name                             : t
     ; pocket_field_type_semicolon                        : t
     }
-  | PocketMappingIdDeclaration              of
+  | PocketMappingIdDeclaration        of
     { pocket_mapping_id_name                             : t
     ; pocket_mapping_id_initializer                      : t
     }
-  | PocketMappingTypeDeclaration            of
+  | PocketMappingTypeDeclaration      of
     { pocket_mapping_type_keyword                        : t
     ; pocket_mapping_type_name                           : t
     ; pocket_mapping_type_equal                          : t
@@ -1220,6 +1173,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | TLDEndOfFile                    of end_of_file
   | TLDFileAttributeSpecification   of file_attribute_specification
   | TLDEnum                         of enum_declaration
+  | TLDRecord                       of record_declaration
   | TLDAlias                        of alias_declaration
   | TLDNamespace                    of namespace_declaration
   | TLDNamespaceUse                 of namespace_use_declaration
@@ -1236,11 +1190,8 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | TLDLet                          of let_statement
   | TLDUsingStatementBlockScoped    of using_statement_block_scoped
   | TLDUsingStatementFunctionScoped of using_statement_function_scoped
-  | TLDDeclareDirective             of declare_directive_statement
-  | TLDDeclareBlock                 of declare_block_statement
   | TLDWhile                        of while_statement
   | TLDIf                           of if_statement
-  | TLDAlternateIf                  of alternate_if_statement
   | TLDTry                          of try_statement
   | TLDDo                           of do_statement
   | TLDFor                          of for_statement
@@ -1252,62 +1203,58 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | TLDThrow                        of throw_statement
   | TLDBreak                        of break_statement
   | TLDContinue                     of continue_statement
-  | TLDFunctionStatic               of function_static_statement
   | TLDEcho                         of echo_statement
-  | TLDGlobal                       of global_statement
   and expression =
-  | ExprLiteral                       of literal_expression
-  | ExprPrefixedString                of prefixed_string_expression
-  | ExprVariable                      of variable_expression
-  | ExprPipeVariable                  of pipe_variable_expression
-  | ExprDecorated                     of decorated_expression
-  | ExprInclusion                     of inclusion_expression
-  | ExprAnonymousFunction             of anonymous_function
-  | ExprPhp7AnonymousFunction         of php7_anonymous_function
-  | ExprLambda                        of lambda_expression
-  | ExprCast                          of cast_expression
-  | ExprScopeResolution               of scope_resolution_expression
-  | ExprMemberSelection               of member_selection_expression
-  | ExprSafeMemberSelection           of safe_member_selection_expression
-  | ExprEmbeddedMemberSelection       of embedded_member_selection_expression
-  | ExprYield                         of yield_expression
-  | ExprYieldFrom                     of yield_from_expression
-  | ExprPrefixUnary                   of prefix_unary_expression
-  | ExprPostfixUnary                  of postfix_unary_expression
-  | ExprBinary                        of binary_expression
-  | ExprInstanceof                    of instanceof_expression
-  | ExprIs                            of is_expression
-  | ExprAs                            of as_expression
-  | ExprNullableAs                    of nullable_as_expression
-  | ExprConditional                   of conditional_expression
-  | ExprEval                          of eval_expression
-  | ExprEmpty                         of empty_expression
-  | ExprDefine                        of define_expression
-  | ExprHaltCompiler                  of halt_compiler_expression
-  | ExprIsset                         of isset_expression
-  | ExprFunctionCall                  of function_call_expression
-  | ExprFunctionCallWithTypeArguments of function_call_with_type_arguments_expression
-  | ExprParenthesized                 of parenthesized_expression
-  | ExprBraced                        of braced_expression
-  | ExprEmbeddedBraced                of embedded_braced_expression
-  | ExprList                          of list_expression
-  | ExprCollectionLiteral             of collection_literal_expression
-  | ExprObjectCreation                of object_creation_expression
-  | ExprArrayCreation                 of array_creation_expression
-  | ExprArrayIntrinsic                of array_intrinsic_expression
-  | ExprDarrayIntrinsic               of darray_intrinsic_expression
-  | ExprDictionaryIntrinsic           of dictionary_intrinsic_expression
-  | ExprKeysetIntrinsic               of keyset_intrinsic_expression
-  | ExprVarrayIntrinsic               of varray_intrinsic_expression
-  | ExprVectorIntrinsic               of vector_intrinsic_expression
-  | ExprSubscript                     of subscript_expression
-  | ExprEmbeddedSubscript             of embedded_subscript_expression
-  | ExprAwaitableCreation             of awaitable_creation_expression
-  | ExprXHPChildrenParenthesizedList  of xhp_children_parenthesized_list
-  | ExprXHP                           of xhp_expression
-  | ExprShape                         of shape_expression
-  | ExprTuple                         of tuple_expression
-  | ExprPocketAtom                    of pocket_atom_expression
+  | ExprLiteral                      of literal_expression
+  | ExprPrefixedString               of prefixed_string_expression
+  | ExprVariable                     of variable_expression
+  | ExprPipeVariable                 of pipe_variable_expression
+  | ExprDecorated                    of decorated_expression
+  | ExprInclusion                    of inclusion_expression
+  | ExprAnonymousFunction            of anonymous_function
+  | ExprLambda                       of lambda_expression
+  | ExprCast                         of cast_expression
+  | ExprScopeResolution              of scope_resolution_expression
+  | ExprMemberSelection              of member_selection_expression
+  | ExprSafeMemberSelection          of safe_member_selection_expression
+  | ExprEmbeddedMemberSelection      of embedded_member_selection_expression
+  | ExprYield                        of yield_expression
+  | ExprYieldFrom                    of yield_from_expression
+  | ExprPrefixUnary                  of prefix_unary_expression
+  | ExprPostfixUnary                 of postfix_unary_expression
+  | ExprBinary                       of binary_expression
+  | ExprIs                           of is_expression
+  | ExprAs                           of as_expression
+  | ExprNullableAs                   of nullable_as_expression
+  | ExprConditional                  of conditional_expression
+  | ExprEval                         of eval_expression
+  | ExprDefine                       of define_expression
+  | ExprHaltCompiler                 of halt_compiler_expression
+  | ExprIsset                        of isset_expression
+  | ExprFunctionCall                 of function_call_expression
+  | ExprParenthesized                of parenthesized_expression
+  | ExprBraced                       of braced_expression
+  | ExprEmbeddedBraced               of embedded_braced_expression
+  | ExprList                         of list_expression
+  | ExprCollectionLiteral            of collection_literal_expression
+  | ExprObjectCreation               of object_creation_expression
+  | ExprRecordCreation               of record_creation_expression
+  | ExprArrayCreation                of array_creation_expression
+  | ExprArrayIntrinsic               of array_intrinsic_expression
+  | ExprDarrayIntrinsic              of darray_intrinsic_expression
+  | ExprDictionaryIntrinsic          of dictionary_intrinsic_expression
+  | ExprKeysetIntrinsic              of keyset_intrinsic_expression
+  | ExprVarrayIntrinsic              of varray_intrinsic_expression
+  | ExprVectorIntrinsic              of vector_intrinsic_expression
+  | ExprSubscript                    of subscript_expression
+  | ExprEmbeddedSubscript            of embedded_subscript_expression
+  | ExprAwaitableCreation            of awaitable_creation_expression
+  | ExprXHPChildrenParenthesizedList of xhp_children_parenthesized_list
+  | ExprXHP                          of xhp_expression
+  | ExprShape                        of shape_expression
+  | ExprTuple                        of tuple_expression
+  | ExprPocketAtom                   of pocket_atom_expression
+  | ExprPocketIdentifier             of pocket_identifier_expression
   and specifier =
   | SpecSimple            of simple_type_specifier
   | SpecVariadicParameter of variadic_parameter
@@ -1328,6 +1275,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | SpecShape             of shape_type_specifier
   | SpecGeneric           of generic_type_specifier
   | SpecNullable          of nullable_type_specifier
+  | SpecLike              of like_type_specifier
   | SpecSoft              of soft_type_specifier
   | SpecTuple             of tuple_type_specifier
   and parameter =
@@ -1347,7 +1295,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and statement =
   | StmtInclusionDirective           of inclusion_directive
   | StmtCompound                     of compound_statement
-  | StmtAlternateLoop                of alternate_loop_statement
   | StmtExpression                   of expression_statement
   | StmtMarkupSection                of markup_section
   | StmtMarkupSuffix                 of markup_suffix
@@ -1355,17 +1302,13 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | StmtLet                          of let_statement
   | StmtUsingStatementBlockScoped    of using_statement_block_scoped
   | StmtUsingStatementFunctionScoped of using_statement_function_scoped
-  | StmtDeclareDirective             of declare_directive_statement
-  | StmtDeclareBlock                 of declare_block_statement
   | StmtWhile                        of while_statement
   | StmtIf                           of if_statement
-  | StmtAlternateIf                  of alternate_if_statement
   | StmtTry                          of try_statement
   | StmtDo                           of do_statement
   | StmtFor                          of for_statement
   | StmtForeach                      of foreach_statement
   | StmtSwitch                       of switch_statement
-  | StmtAlternateSwitch              of alternate_switch_statement
   | StmtSwitchFallthrough            of switch_fallthrough
   | StmtReturn                       of return_statement
   | StmtGotoLabel                    of goto_label
@@ -1373,120 +1316,114 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | StmtThrow                        of throw_statement
   | StmtBreak                        of break_statement
   | StmtContinue                     of continue_statement
-  | StmtFunctionStatic               of function_static_statement
   | StmtEcho                         of echo_statement
-  | StmtGlobal                       of global_statement
   | StmtConcurrent                   of concurrent_statement
   | StmtTypeConstant                 of type_constant
   and switch_label =
   | SwitchCase    of case_label
   | SwitchDefault of default_label
   and lambda_body =
-  | LambdaLiteral                       of literal_expression
-  | LambdaPrefixedString                of prefixed_string_expression
-  | LambdaVariable                      of variable_expression
-  | LambdaPipeVariable                  of pipe_variable_expression
-  | LambdaDecorated                     of decorated_expression
-  | LambdaInclusion                     of inclusion_expression
-  | LambdaCompoundStatement             of compound_statement
-  | LambdaAnonymousFunction             of anonymous_function
-  | LambdaPhp7AnonymousFunction         of php7_anonymous_function
-  | LambdaLambda                        of lambda_expression
-  | LambdaCast                          of cast_expression
-  | LambdaScopeResolution               of scope_resolution_expression
-  | LambdaMemberSelection               of member_selection_expression
-  | LambdaSafeMemberSelection           of safe_member_selection_expression
-  | LambdaEmbeddedMemberSelection       of embedded_member_selection_expression
-  | LambdaYield                         of yield_expression
-  | LambdaYieldFrom                     of yield_from_expression
-  | LambdaPrefixUnary                   of prefix_unary_expression
-  | LambdaPostfixUnary                  of postfix_unary_expression
-  | LambdaBinary                        of binary_expression
-  | LambdaInstanceof                    of instanceof_expression
-  | LambdaIs                            of is_expression
-  | LambdaAs                            of as_expression
-  | LambdaNullableAs                    of nullable_as_expression
-  | LambdaConditional                   of conditional_expression
-  | LambdaEval                          of eval_expression
-  | LambdaEmpty                         of empty_expression
-  | LambdaDefine                        of define_expression
-  | LambdaHaltCompiler                  of halt_compiler_expression
-  | LambdaIsset                         of isset_expression
-  | LambdaFunctionCall                  of function_call_expression
-  | LambdaFunctionCallWithTypeArguments of function_call_with_type_arguments_expression
-  | LambdaParenthesized                 of parenthesized_expression
-  | LambdaBraced                        of braced_expression
-  | LambdaEmbeddedBraced                of embedded_braced_expression
-  | LambdaList                          of list_expression
-  | LambdaCollectionLiteral             of collection_literal_expression
-  | LambdaObjectCreation                of object_creation_expression
-  | LambdaArrayCreation                 of array_creation_expression
-  | LambdaArrayIntrinsic                of array_intrinsic_expression
-  | LambdaDarrayIntrinsic               of darray_intrinsic_expression
-  | LambdaDictionaryIntrinsic           of dictionary_intrinsic_expression
-  | LambdaKeysetIntrinsic               of keyset_intrinsic_expression
-  | LambdaVarrayIntrinsic               of varray_intrinsic_expression
-  | LambdaVectorIntrinsic               of vector_intrinsic_expression
-  | LambdaSubscript                     of subscript_expression
-  | LambdaEmbeddedSubscript             of embedded_subscript_expression
-  | LambdaAwaitableCreation             of awaitable_creation_expression
-  | LambdaXHPChildrenParenthesizedList  of xhp_children_parenthesized_list
-  | LambdaXHP                           of xhp_expression
-  | LambdaShape                         of shape_expression
-  | LambdaTuple                         of tuple_expression
+  | LambdaLiteral                      of literal_expression
+  | LambdaPrefixedString               of prefixed_string_expression
+  | LambdaVariable                     of variable_expression
+  | LambdaPipeVariable                 of pipe_variable_expression
+  | LambdaDecorated                    of decorated_expression
+  | LambdaInclusion                    of inclusion_expression
+  | LambdaCompoundStatement            of compound_statement
+  | LambdaAnonymousFunction            of anonymous_function
+  | LambdaLambda                       of lambda_expression
+  | LambdaCast                         of cast_expression
+  | LambdaScopeResolution              of scope_resolution_expression
+  | LambdaMemberSelection              of member_selection_expression
+  | LambdaSafeMemberSelection          of safe_member_selection_expression
+  | LambdaEmbeddedMemberSelection      of embedded_member_selection_expression
+  | LambdaYield                        of yield_expression
+  | LambdaYieldFrom                    of yield_from_expression
+  | LambdaPrefixUnary                  of prefix_unary_expression
+  | LambdaPostfixUnary                 of postfix_unary_expression
+  | LambdaBinary                       of binary_expression
+  | LambdaIs                           of is_expression
+  | LambdaAs                           of as_expression
+  | LambdaNullableAs                   of nullable_as_expression
+  | LambdaConditional                  of conditional_expression
+  | LambdaEval                         of eval_expression
+  | LambdaDefine                       of define_expression
+  | LambdaHaltCompiler                 of halt_compiler_expression
+  | LambdaIsset                        of isset_expression
+  | LambdaFunctionCall                 of function_call_expression
+  | LambdaParenthesized                of parenthesized_expression
+  | LambdaBraced                       of braced_expression
+  | LambdaEmbeddedBraced               of embedded_braced_expression
+  | LambdaList                         of list_expression
+  | LambdaCollectionLiteral            of collection_literal_expression
+  | LambdaObjectCreation               of object_creation_expression
+  | LambdaRecordCreation               of record_creation_expression
+  | LambdaArrayCreation                of array_creation_expression
+  | LambdaArrayIntrinsic               of array_intrinsic_expression
+  | LambdaDarrayIntrinsic              of darray_intrinsic_expression
+  | LambdaDictionaryIntrinsic          of dictionary_intrinsic_expression
+  | LambdaKeysetIntrinsic              of keyset_intrinsic_expression
+  | LambdaVarrayIntrinsic              of varray_intrinsic_expression
+  | LambdaVectorIntrinsic              of vector_intrinsic_expression
+  | LambdaSubscript                    of subscript_expression
+  | LambdaEmbeddedSubscript            of embedded_subscript_expression
+  | LambdaAwaitableCreation            of awaitable_creation_expression
+  | LambdaXHPChildrenParenthesizedList of xhp_children_parenthesized_list
+  | LambdaXHP                          of xhp_expression
+  | LambdaShape                        of shape_expression
+  | LambdaTuple                        of tuple_expression
+  | LambdaPocketIdentifier             of pocket_identifier_expression
   and constructor_expression =
-  | CExprLiteral                       of literal_expression
-  | CExprPrefixedString                of prefixed_string_expression
-  | CExprVariable                      of variable_expression
-  | CExprPipeVariable                  of pipe_variable_expression
-  | CExprDecorated                     of decorated_expression
-  | CExprInclusion                     of inclusion_expression
-  | CExprAnonymousFunction             of anonymous_function
-  | CExprPhp7AnonymousFunction         of php7_anonymous_function
-  | CExprLambda                        of lambda_expression
-  | CExprCast                          of cast_expression
-  | CExprScopeResolution               of scope_resolution_expression
-  | CExprMemberSelection               of member_selection_expression
-  | CExprSafeMemberSelection           of safe_member_selection_expression
-  | CExprEmbeddedMemberSelection       of embedded_member_selection_expression
-  | CExprYield                         of yield_expression
-  | CExprYieldFrom                     of yield_from_expression
-  | CExprPrefixUnary                   of prefix_unary_expression
-  | CExprPostfixUnary                  of postfix_unary_expression
-  | CExprBinary                        of binary_expression
-  | CExprInstanceof                    of instanceof_expression
-  | CExprIs                            of is_expression
-  | CExprAs                            of as_expression
-  | CExprNullableAs                    of nullable_as_expression
-  | CExprConditional                   of conditional_expression
-  | CExprEval                          of eval_expression
-  | CExprEmpty                         of empty_expression
-  | CExprDefine                        of define_expression
-  | CExprHaltCompiler                  of halt_compiler_expression
-  | CExprIsset                         of isset_expression
-  | CExprFunctionCall                  of function_call_expression
-  | CExprFunctionCallWithTypeArguments of function_call_with_type_arguments_expression
-  | CExprParenthesized                 of parenthesized_expression
-  | CExprBraced                        of braced_expression
-  | CExprEmbeddedBraced                of embedded_braced_expression
-  | CExprList                          of list_expression
-  | CExprCollectionLiteral             of collection_literal_expression
-  | CExprObjectCreation                of object_creation_expression
-  | CExprArrayCreation                 of array_creation_expression
-  | CExprArrayIntrinsic                of array_intrinsic_expression
-  | CExprDarrayIntrinsic               of darray_intrinsic_expression
-  | CExprDictionaryIntrinsic           of dictionary_intrinsic_expression
-  | CExprKeysetIntrinsic               of keyset_intrinsic_expression
-  | CExprVarrayIntrinsic               of varray_intrinsic_expression
-  | CExprVectorIntrinsic               of vector_intrinsic_expression
-  | CExprElementInitializer            of element_initializer
-  | CExprSubscript                     of subscript_expression
-  | CExprEmbeddedSubscript             of embedded_subscript_expression
-  | CExprAwaitableCreation             of awaitable_creation_expression
-  | CExprXHPChildrenParenthesizedList  of xhp_children_parenthesized_list
-  | CExprXHP                           of xhp_expression
-  | CExprShape                         of shape_expression
-  | CExprTuple                         of tuple_expression
+  | CExprLiteral                      of literal_expression
+  | CExprPrefixedString               of prefixed_string_expression
+  | CExprVariable                     of variable_expression
+  | CExprPipeVariable                 of pipe_variable_expression
+  | CExprDecorated                    of decorated_expression
+  | CExprInclusion                    of inclusion_expression
+  | CExprAnonymousFunction            of anonymous_function
+  | CExprLambda                       of lambda_expression
+  | CExprCast                         of cast_expression
+  | CExprScopeResolution              of scope_resolution_expression
+  | CExprMemberSelection              of member_selection_expression
+  | CExprSafeMemberSelection          of safe_member_selection_expression
+  | CExprEmbeddedMemberSelection      of embedded_member_selection_expression
+  | CExprYield                        of yield_expression
+  | CExprYieldFrom                    of yield_from_expression
+  | CExprPrefixUnary                  of prefix_unary_expression
+  | CExprPostfixUnary                 of postfix_unary_expression
+  | CExprBinary                       of binary_expression
+  | CExprIs                           of is_expression
+  | CExprAs                           of as_expression
+  | CExprNullableAs                   of nullable_as_expression
+  | CExprConditional                  of conditional_expression
+  | CExprEval                         of eval_expression
+  | CExprDefine                       of define_expression
+  | CExprHaltCompiler                 of halt_compiler_expression
+  | CExprIsset                        of isset_expression
+  | CExprFunctionCall                 of function_call_expression
+  | CExprParenthesized                of parenthesized_expression
+  | CExprBraced                       of braced_expression
+  | CExprEmbeddedBraced               of embedded_braced_expression
+  | CExprList                         of list_expression
+  | CExprCollectionLiteral            of collection_literal_expression
+  | CExprObjectCreation               of object_creation_expression
+  | CExprRecordCreation               of record_creation_expression
+  | CExprArrayCreation                of array_creation_expression
+  | CExprArrayIntrinsic               of array_intrinsic_expression
+  | CExprDarrayIntrinsic              of darray_intrinsic_expression
+  | CExprDictionaryIntrinsic          of dictionary_intrinsic_expression
+  | CExprKeysetIntrinsic              of keyset_intrinsic_expression
+  | CExprVarrayIntrinsic              of varray_intrinsic_expression
+  | CExprVectorIntrinsic              of vector_intrinsic_expression
+  | CExprElementInitializer           of element_initializer
+  | CExprSubscript                    of subscript_expression
+  | CExprEmbeddedSubscript            of embedded_subscript_expression
+  | CExprAwaitableCreation            of awaitable_creation_expression
+  | CExprXHPChildrenParenthesizedList of xhp_children_parenthesized_list
+  | CExprXHP                          of xhp_expression
+  | CExprShape                        of shape_expression
+  | CExprTuple                        of tuple_expression
+  | CExprPocketIdentifier             of pocket_identifier_expression
   and namespace_internals =
   | NSINamespaceBody      of namespace_body
   | NSINamespaceEmptyBody of namespace_empty_body
@@ -1555,6 +1492,24 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; enumerator_equal: Token.t value
     ; enumerator_value: expression value
     ; enumerator_semicolon: Token.t value
+    }
+  and record_declaration =
+    { record_attribute_spec: attribute_specification option value
+    ; record_modifier: Token.t value
+    ; record_keyword: Token.t value
+    ; record_name: Token.t value
+    ; record_extends_keyword: Token.t option value
+    ; record_extends_list: specifier option value
+    ; record_left_brace: Token.t value
+    ; record_fields: record_field listesque value
+    ; record_right_brace: Token.t value
+    }
+  and record_field =
+    { record_field_name: Token.t value
+    ; record_field_colon: Token.t value
+    ; record_field_type: type_constraint value
+    ; record_field_init: simple_initializer option value
+    ; record_field_comma: Token.t value
     }
   and alias_declaration =
     { alias_attribute_spec: attribute_specification option value
@@ -1625,7 +1580,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; function_parameter_list: (parameter option) listesque value
     ; function_right_paren: Token.t value
     ; function_colon: Token.t option value
-    ; function_type: specifier option value
+    ; function_type: attributized_specifier option value
     ; function_where_clause: where_clause option value
     }
   and where_clause =
@@ -1660,6 +1615,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; classish_extends_list: specifier listesque value
     ; classish_implements_keyword: Token.t option value
     ; classish_implements_list: specifier listesque value
+    ; classish_where_clause: where_clause option value
     ; classish_body: classish_body value
     }
   and classish_body =
@@ -1697,8 +1653,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; require_semicolon: Token.t value
     }
   and const_declaration =
-    { const_visibility: Token.t option value
-    ; const_abstract: Token.t option value
+    { const_modifiers: Token.t listesque value
     ; const_keyword: Token.t value
     ; const_type_specifier: specifier option value
     ; const_declarators: constant_declarator listesque value
@@ -1710,7 +1665,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     }
   and type_const_declaration =
     { type_const_attribute_spec: attribute_specification option value
-    ; type_const_abstract: Token.t option value
+    ; type_const_modifiers: Token.t option value
     ; type_const_keyword: Token.t value
     ; type_const_type_keyword: Token.t value
     ; type_const_name: Token.t value
@@ -1737,10 +1692,17 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; variadic_parameter_type: simple_type_specifier option value
     ; variadic_parameter_ellipsis: Token.t value
     }
+  and old_attribute_specification =
+    { old_attribute_specification_left_double_angle: Token.t value
+    ; old_attribute_specification_attributes: constructor_call listesque value
+    ; old_attribute_specification_right_double_angle: Token.t value
+    }
   and attribute_specification =
-    { attribute_specification_left_double_angle: Token.t value
-    ; attribute_specification_attributes: constructor_call listesque value
-    ; attribute_specification_right_double_angle: Token.t value
+    { attribute_specification_attributes: attribute listesque value
+    }
+  and attribute =
+    { attribute_at: Token.t value
+    ; attribute_attribute_name: constructor_call value
     }
   and inclusion_expression =
     { inclusion_require: Token.t value
@@ -1754,12 +1716,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { compound_left_brace: Token.t value
     ; compound_statements: statement listesque value
     ; compound_right_brace: Token.t value
-    }
-  and alternate_loop_statement =
-    { alternate_loop_opening_colon: Token.t value
-    ; alternate_loop_statements: statement listesque value
-    ; alternate_loop_closing_keyword: Token.t value
-    ; alternate_loop_closing_semicolon: Token.t value
     }
   and expression_statement =
     { expression_statement_expression: expression option value
@@ -1804,20 +1760,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; using_function_expression: expression value
     ; using_function_semicolon: Token.t value
     }
-  and declare_directive_statement =
-    { declare_directive_keyword: Token.t value
-    ; declare_directive_left_paren: Token.t value
-    ; declare_directive_expression: expression value
-    ; declare_directive_right_paren: Token.t value
-    ; declare_directive_semicolon: Token.t value
-    }
-  and declare_block_statement =
-    { declare_block_keyword: Token.t value
-    ; declare_block_left_paren: Token.t value
-    ; declare_block_expression: expression value
-    ; declare_block_right_paren: Token.t value
-    ; declare_block_body: statement value
-    }
   and while_statement =
     { while_keyword: Token.t value
     ; while_left_paren: Token.t value
@@ -1844,31 +1786,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and else_clause =
     { else_keyword: Token.t value
     ; else_statement: statement value
-    }
-  and alternate_if_statement =
-    { alternate_if_keyword: Token.t value
-    ; alternate_if_left_paren: Token.t value
-    ; alternate_if_condition: expression value
-    ; alternate_if_right_paren: Token.t value
-    ; alternate_if_colon: Token.t value
-    ; alternate_if_statement: statement listesque value
-    ; alternate_if_elseif_clauses: alternate_elseif_clause listesque value
-    ; alternate_if_else_clause: alternate_else_clause option value
-    ; alternate_if_endif_keyword: Token.t value
-    ; alternate_if_semicolon: Token.t value
-    }
-  and alternate_elseif_clause =
-    { alternate_elseif_keyword: Token.t value
-    ; alternate_elseif_left_paren: Token.t value
-    ; alternate_elseif_condition: expression value
-    ; alternate_elseif_right_paren: Token.t value
-    ; alternate_elseif_colon: Token.t value
-    ; alternate_elseif_statement: statement listesque value
-    }
-  and alternate_else_clause =
-    { alternate_else_keyword: Token.t value
-    ; alternate_else_colon: Token.t value
-    ; alternate_else_statement: statement listesque value
     }
   and try_statement =
     { try_keyword: Token.t value
@@ -1929,16 +1846,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; switch_sections: switch_section listesque value
     ; switch_right_brace: Token.t value
     }
-  and alternate_switch_statement =
-    { alternate_switch_keyword: Token.t value
-    ; alternate_switch_left_paren: Token.t value
-    ; alternate_switch_expression: expression value
-    ; alternate_switch_right_paren: Token.t value
-    ; alternate_switch_opening_colon: Token.t value
-    ; alternate_switch_sections: switch_section listesque value
-    ; alternate_switch_closing_endswitch: Token.t value
-    ; alternate_switch_closing_semicolon: Token.t value
-    }
   and switch_section =
     { switch_section_labels: switch_label listesque value
     ; switch_section_statements: top_level_declaration listesque value
@@ -1986,24 +1893,10 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; continue_level: literal_expression option value
     ; continue_semicolon: Token.t value
     }
-  and function_static_statement =
-    { static_static_keyword: Token.t value
-    ; static_declarations: static_declarator listesque value
-    ; static_semicolon: Token.t value
-    }
-  and static_declarator =
-    { static_name: Token.t value
-    ; static_initializer: simple_initializer option value
-    }
   and echo_statement =
     { echo_keyword: Token.t value
     ; echo_expressions: expression listesque value
     ; echo_semicolon: Token.t value
-    }
-  and global_statement =
-    { global_keyword: Token.t value
-    ; global_variables: Token.t listesque value
-    ; global_semicolon: Token.t value
     }
   and concurrent_statement =
     { concurrent_keyword: Token.t value
@@ -2037,20 +1930,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; anonymous_type: specifier option value
     ; anonymous_use: anonymous_function_use_clause option value
     ; anonymous_body: compound_statement value
-    }
-  and php7_anonymous_function =
-    { php7_anonymous_attribute_spec: attribute_specification option value
-    ; php7_anonymous_static_keyword: Token.t option value
-    ; php7_anonymous_async_keyword: Token.t option value
-    ; php7_anonymous_coroutine_keyword: Token.t option value
-    ; php7_anonymous_function_keyword: Token.t value
-    ; php7_anonymous_left_paren: Token.t value
-    ; php7_anonymous_parameters: parameter listesque value
-    ; php7_anonymous_right_paren: Token.t value
-    ; php7_anonymous_use: anonymous_function_use_clause option value
-    ; php7_anonymous_colon: Token.t option value
-    ; php7_anonymous_type: specifier option value
-    ; php7_anonymous_body: compound_statement value
     }
   and anonymous_function_use_clause =
     { anonymous_use_keyword: Token.t value
@@ -2121,11 +2000,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; binary_operator: Token.t value
     ; binary_right_operand: expression value
     }
-  and instanceof_expression =
-    { instanceof_left_operand: expression value
-    ; instanceof_operator: Token.t value
-    ; instanceof_right_operand: expression value
-    }
   and is_expression =
     { is_left_operand: expression value
     ; is_operator: Token.t value
@@ -2154,12 +2028,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; eval_argument: expression value
     ; eval_right_paren: Token.t value
     }
-  and empty_expression =
-    { empty_keyword: Token.t value
-    ; empty_left_paren: Token.t value
-    ; empty_argument: expression value
-    ; empty_right_paren: Token.t value
-    }
   and define_expression =
     { define_keyword: Token.t value
     ; define_left_paren: Token.t value
@@ -2180,16 +2048,10 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     }
   and function_call_expression =
     { function_call_receiver: expression value
+    ; function_call_type_args: type_arguments option value
     ; function_call_left_paren: Token.t value
     ; function_call_argument_list: expression listesque value
     ; function_call_right_paren: Token.t value
-    }
-  and function_call_with_type_arguments_expression =
-    { function_call_with_type_arguments_receiver: expression value
-    ; function_call_with_type_arguments_type_args: type_arguments value
-    ; function_call_with_type_arguments_left_paren: Token.t value
-    ; function_call_with_type_arguments_argument_list: expression listesque value
-    ; function_call_with_type_arguments_right_paren: Token.t value
     }
   and parenthesized_expression =
     { parenthesized_expression_left_paren: Token.t value
@@ -2227,6 +2089,13 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; constructor_call_left_paren: Token.t option value
     ; constructor_call_argument_list: expression listesque value
     ; constructor_call_right_paren: Token.t option value
+    }
+  and record_creation_expression =
+    { record_creation_type: todo_aggregate value
+    ; record_creation_array_token: Token.t option value
+    ; record_creation_left_bracket: Token.t value
+    ; record_creation_members: element_initializer listesque value
+    ; record_creation_right_bracket: Token.t value
     }
   and array_creation_expression =
     { array_creation_left_bracket: Token.t value
@@ -2318,6 +2187,10 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; xhp_enum_left_brace: Token.t value
     ; xhp_enum_values: literal_expression listesque value
     ; xhp_enum_right_brace: Token.t value
+    }
+  and xhp_lateinit =
+    { xhp_lateinit_at: Token.t value
+    ; xhp_lateinit_keyword: Token.t value
     }
   and xhp_required =
     { xhp_required_at: Token.t value
@@ -2496,9 +2369,17 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { nullable_question: Token.t value
     ; nullable_type: specifier value
     }
+  and like_type_specifier =
+    { like_tilde: Token.t value
+    ; like_type: specifier value
+    }
   and soft_type_specifier =
     { soft_at: Token.t value
     ; soft_type: specifier value
+    }
+  and attributized_specifier =
+    { attributized_specifier_attribute_spec: attribute_specification option value
+    ; attributized_specifier_type: specifier value
     }
   and reified_type_argument =
     { reified_type_argument_reified: Token.t value
@@ -2506,7 +2387,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     }
   and type_arguments =
     { type_arguments_left_angle: Token.t value
-    ; type_arguments_types: specifier listesque value
+    ; type_arguments_types: attributized_specifier listesque value
     ; type_arguments_right_angle: Token.t value
     }
   and type_parameters =
@@ -2520,10 +2401,19 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; tuple_right_paren: Token.t value
     }
   and pocket_atom_expression =
-    { pocket_atom_expression: Token.t value
+    { pocket_atom_glyph: Token.t value
+    ; pocket_atom_expression: Token.t value
+    }
+  and pocket_identifier_expression =
+    { pocket_identifier_qualifier: expression value
+    ; pocket_identifier_pu_operator: Token.t value
+    ; pocket_identifier_field: expression value
+    ; pocket_identifier_operator: Token.t value
+    ; pocket_identifier_name: expression value
     }
   and pocket_atom_mapping_declaration =
-    { pocket_atom_mapping_expression: Token.t value
+    { pocket_atom_mapping_glyph: Token.t value
+    ; pocket_atom_mapping_name: expression value
     ; pocket_atom_mapping_left_paren: Token.t option value
     ; pocket_atom_mapping_mappings: pumapping_aggregate listesque value
     ; pocket_atom_mapping_right_paren: Token.t option value
@@ -2540,22 +2430,22 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and pocket_field_type_expr_declaration =
     { pocket_field_type_expr_case: Token.t value
     ; pocket_field_type_expr_type: specifier value
-    ; pocket_field_type_expr_name: Token.t value
+    ; pocket_field_type_expr_name: expression value
     ; pocket_field_type_expr_semicolon: Token.t value
     }
   and pocket_field_type_declaration =
     { pocket_field_type_case: Token.t value
     ; pocket_field_type_type: Token.t value
-    ; pocket_field_type_name: Token.t value
+    ; pocket_field_type_name: expression value
     ; pocket_field_type_semicolon: Token.t value
     }
   and pocket_mapping_id_declaration =
-    { pocket_mapping_id_name: Token.t value
+    { pocket_mapping_id_name: expression value
     ; pocket_mapping_id_initializer: simple_initializer value
     }
   and pocket_mapping_type_declaration =
     { pocket_mapping_type_keyword: Token.t value
-    ; pocket_mapping_type_name: Token.t value
+    ; pocket_mapping_type_name: expression value
     ; pocket_mapping_type_equal: Token.t value
     ; pocket_mapping_type_type: specifier value
     }

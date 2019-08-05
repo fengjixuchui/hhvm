@@ -1,4 +1,4 @@
-<?php require_once(__DIR__ . '/skipif.inc');
+<?hh require_once(__DIR__ . '/skipif.inc');
 //
 // There's some version specific bug with imagemagick.
 //
@@ -13,4 +13,3 @@
 $v = Imagick::getVersion();
 if ($v['versionNumber'] >= 0x677 && $v['versionNumber] <= 0x685)
   die ('skip too ImageMagick with cacheing bug');
-?>

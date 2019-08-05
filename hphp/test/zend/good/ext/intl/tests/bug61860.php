@@ -1,4 +1,4 @@
-<?php
+<?hh
 $haystack = 'Auf der Straße nach Paris habe ich mit dem Fahrer gesprochen';
 var_dump(
     grapheme_stripos($haystack, 'pariS '),
@@ -6,4 +6,3 @@ var_dump(
     grapheme_substr($haystack, grapheme_stripos($haystack, 'Paris'))
 );
 
-?>

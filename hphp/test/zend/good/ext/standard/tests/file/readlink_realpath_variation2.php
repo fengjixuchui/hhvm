@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype: string readlink ( string $path );
    Description: Returns the target of a symbolic link
 
    Prototype: string realpath ( string $path );
    Description: Returns canonicalized absolute pathname
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing readlink() and realpath() : usage variations ***\n";
 $name_prefix = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 // create temp dir
@@ -48,9 +48,7 @@ unlink($link_arr[0]);
 unlink($link_arr[1]);  
   
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $name_prefix = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $name_prefix .= "/readlink_realpath_variation2";
 unlink("$name_prefix/home/tests/link/readlink_realpath_variation2.tmp");
@@ -58,4 +56,4 @@ rmdir("$name_prefix/home/tests/link/");
 rmdir("$name_prefix/home/tests/");
 rmdir("$name_prefix/home/");
 rmdir("$name_prefix/");
-?>
+}

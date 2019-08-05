@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : mixed current(array $array_arg)
  * Description: Return the element currently pointed to by the internal array pointer
  * Source code: ext/standard/array.c
@@ -9,12 +9,6 @@
  * Pass arrays of different data types as $array_arg to current() to test behaviour
  */
 
-echo "*** Testing current() : usage variations ***\n";
-
-//get an unset variable
-$unset_var = 10;
-unset ($unset_var);
-
 // get a class
 class classA
 {
@@ -22,6 +16,12 @@ class classA
     return "Class A object";
   }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing current() : usage variations ***\n";
+
+//get an unset variable
+$unset_var = 10;
+unset ($unset_var);
 
 // heredoc string
 $heredoc = <<<EOT
@@ -36,7 +36,7 @@ $inputs = array(
 
        // int data
 /*1*/  'int' => array(
-	   0,
+       0,
        1,
        12345,
        -2345,
@@ -111,5 +111,5 @@ foreach($inputs as $key => $input) {
 };
 
 fclose($fp);
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -8,6 +8,7 @@
  *)
 
 open Core_kernel
+open Coverage_level_defs
 open Ide_api_types
 open Typing_defs
 open Utils
@@ -24,46 +25,6 @@ let string_of_level = function
   | Checked   -> "checked"
   | Partial   -> "partial"
   | Unchecked -> "unchecked"
-
-module CLMap = MyMap.Make (struct
-  type t = coverage_level
-  let compare x y = Pervasives.compare x y
-end)
-
-type checked_stats = {
-  unchecked : int;
-  partial : int;
-  checked : int;
-  }
-
-(* result is an association list from absolute position in the code file to the
- * coverage level of the expression at that position, paired with a count of
- * the total instances of each coverage level.
- * Note in usage that the list does not contain every
- * instance, only those which do not themselves contain worse type-level
- * expressions as subexpressions.
- * This way when it is used to show typing information,
- * large chunks of code that are poorly typed do not obscure
- * the root cause of their poor typing, which would be some poorly
- * typed subexpression.
- *)
-type result =
-  (Pos.absolute * coverage_level) list * checked_stats
-
-type pos_stats_entry = {
-  (* How many times this reason position has occured. *)
-  pos_count : int;
-  (* Random sample of expressions where this reason position has occured, for
-   * debugging purposes *)
-  samples : Pos.t list;
-}
-
-type level_stats_entry = {
-  (* Number of expressions of this level *)
-  count : int;
-  (* string of reason -> position of reason -> stats *)
-  reason_stats : (pos_stats_entry Pos.Map.t) SMap.t;
-}
 
 let empty_pos_stats_entry = {
   pos_count = 0;
@@ -146,20 +107,10 @@ let merge_and_sum cs1 cs2 =
     })
   ) cs1 cs2
 
-(* An assoc list that counts the number of expressions at each coverage level,
- * along with stats about their reasons *)
-type level_stats = level_stats_entry CLMap.t
-
-(* There is a trie in utils/, but it is not quite what we need ... *)
-
-type 'a trie =
-  | Leaf of 'a
-  | Node of 'a * 'a trie SMap.t
-
 let rec is_tany ty = match ty with
   | r, (Tany | Terr) -> Some r
-  | _, Tunresolved [] -> None
-  | _, Tunresolved (h::tl) -> begin match is_tany h with
+  | _, Tunion [] -> None
+  | _, Tunion (h::tl) -> begin match is_tany h with
     | Some r when
       List.for_all tl (compose (Option.is_some) (is_tany)) -> Some r
     | _ -> None
@@ -242,7 +193,14 @@ class level_getter fixme_map =
   end
 
 let get_levels tast check =
-  let lg = new level_getter (Fixmes.HH_FIXMES.find_unsafe check) in
+  let fixmes = match Fixme_provider.get_hh_fixmes check with
+    | Some fixmes ->
+      fixmes
+    | None ->
+      failwith
+        ("HH_FIXMEs not found for path " ^ (Relative_path.to_absolute check))
+  in
+  let lg = new level_getter fixmes in
   let pmap, cmap = lg#go tast in
   Pos.Map.fold (fun p ty xs ->
     ((Pos.to_absolute p, ty)) :: xs) pmap []

@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto array posix_getgrgid(long gid)
  * Description: Group database access (POSIX.1, 9.2.1) 
  * Source code: ext/posix/posix.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing posix_getgrgid() : error conditions ***\n";
 
 // Zero arguments
@@ -23,4 +23,4 @@ $gid = -999;
 var_dump( posix_getgrgid($gid));
 
 echo "Done";
-?>
+}

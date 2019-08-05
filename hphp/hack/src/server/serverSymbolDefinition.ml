@@ -16,7 +16,7 @@ module SourceText = Full_fidelity_source_text
 module Syntax = Full_fidelity_positioned_syntax
 module SyntaxKind = Full_fidelity_syntax_kind
 module SyntaxTree = Full_fidelity_syntax_tree.WithSyntax(Full_fidelity_positioned_syntax)
-module Cls = Typing_classes_heap
+module Cls = Decl_provider.Class
 
 (* Element type, class name, element name. Class name refers to "origin" class,
  * we expect to find said element in AST/NAST of this class *)
@@ -31,22 +31,22 @@ and class_element_ =
 | Typeconst
 
 let get_class_by_name x =
-  Naming_heap.TypeIdHeap.get x >>= fun (pos, _) ->
+  Naming_table.Types.get_pos x >>= fun (pos, _) ->
   let fn = FileInfo.get_pos_filename pos in
   Ide_parser_cache.with_ide_cache @@ fun () ->
-    Parser_heap.find_class_in_file fn x
+    Ast_provider.find_class_in_file fn x
 
 let get_function_by_name x =
-  Naming_heap.FunPosHeap.get x >>= fun pos ->
+  Naming_table.Funs.get_pos x >>= fun pos ->
   let fn = FileInfo.get_pos_filename pos in
   Ide_parser_cache.with_ide_cache @@ fun () ->
-    Parser_heap.find_fun_in_file fn x
+    Ast_provider.find_fun_in_file fn x
 
 let get_gconst_by_name x =
-  Naming_heap.ConstPosHeap.get x >>= fun pos ->
+  Naming_table.Consts.get_pos x >>= fun pos ->
   let fn = FileInfo.get_pos_filename pos in
   Ide_parser_cache.with_ide_cache @@ fun () ->
-    Parser_heap.find_const_in_file fn x
+    Ast_provider.find_gconst_in_file fn x
 
 (* Span information is stored only in parsing AST *)
 let get_member_def (x : class_element) =
@@ -77,22 +77,14 @@ let get_member_def (x : class_element) =
     Some (FileOutline.summarize_property member_origin kinds p)
   | Class_const ->
     let consts = List.concat_map c.Ast.c_body begin function
-      | Ast.Const (_, consts) ->
+      | Ast.Const {Ast.cc_names = consts; _ } ->
         List.map consts begin fun (((_, name), _) as const) ->
           (const, name)
         end
       | _ -> []
     end in
-    let res = List.find consts (fun c -> snd c = member_name) >>= fun c ->
-      Some (FileOutline.summarize_const member_origin (fst c))
-    in
-    if Option.is_some res then res else
-    let abs_consts = List.concat_map c.Ast.c_body begin function
-      | Ast.AbsConst (_, id) -> [id]
-      | _ -> []
-    end in
-    List.find abs_consts (fun c -> snd c = member_name) >>= fun c ->
-      Some (FileOutline.summarize_abs_const member_origin c)
+    List.find consts (fun c -> snd c = member_name) >>= fun c ->
+    Some (FileOutline.summarize_const member_origin (fst c))
   | Typeconst ->
     let tconsts = List.filter_map c.Ast.c_body begin function
       | Ast.TypeConst t -> Some t
@@ -109,12 +101,12 @@ let get_local_var_def ast name p =
 
 (* summarize a class or typedef carried with SymbolOccurrence.Class *)
 let summarize_class_typedef x =
-  Naming_heap.TypeIdHeap.get x >>= fun (pos, ct) ->
+  Naming_table.Types.get_pos x >>= fun (pos, ct) ->
     let fn = FileInfo.get_pos_filename pos in
     match ct with
-      | `Class -> (Parser_heap.find_class_in_file fn x >>=
+      | Naming_table.TClass -> (Ast_provider.find_class_in_file fn x >>=
                 fun c -> Some (FileOutline.summarize_class c ~no_children:true))
-      | `Typedef -> (Parser_heap.find_typedef_in_file fn x >>=
+      | Naming_table.TTypedef -> (Ast_provider.find_typedef_in_file fn x >>=
                 fun tdef -> Some (FileOutline.summarize_typedef tdef))
 
 let go ast result =
@@ -123,7 +115,7 @@ let go ast result =
       (* Classes on typing heap have all the methods from inheritance hierarchy
        * folded together, so we will correctly identify them even if method_name
        * is not defined directly in class c_name *)
-      Typing_lazy_heap.get_class c_name >>= fun class_ ->
+      Decl_provider.get_class c_name >>= fun class_ ->
       if method_name = Naming_special_names.Members.__construct then begin
         match fst (Cls.construct class_) with
           | Some m ->
@@ -139,7 +131,7 @@ let go ast result =
           get_member_def (Static_method, m.ce_origin, method_name)
       end
     | SymbolOccurrence.Property (c_name, property_name) ->
-      Typing_lazy_heap.get_class c_name >>= fun class_ ->
+      Decl_provider.get_class c_name >>= fun class_ ->
       let property_name = clean_member_name property_name in
       begin match Cls.get_prop class_ property_name with
       | Some m -> get_member_def (Property, m.ce_origin, property_name)
@@ -149,7 +141,7 @@ let go ast result =
           (Static_property, m.ce_origin, property_name)
       end
     | SymbolOccurrence.ClassConst (c_name, const_name) ->
-      Typing_lazy_heap.get_class c_name >>= fun class_ ->
+      Decl_provider.get_class c_name >>= fun class_ ->
       Cls.get_const class_ const_name >>= fun m ->
       get_member_def (Class_const, m.cc_origin, const_name)
     | SymbolOccurrence.Function ->
@@ -161,12 +153,15 @@ let go ast result =
     | SymbolOccurrence.Class ->
       summarize_class_typedef result.SymbolOccurrence.name
     | SymbolOccurrence.Typeconst (c_name, typeconst_name) ->
-      Typing_lazy_heap.get_class c_name >>= fun class_ ->
+      Decl_provider.get_class c_name >>= fun class_ ->
       Cls.get_typeconst class_ typeconst_name >>= fun m ->
       get_member_def (Typeconst, m.ttc_origin, typeconst_name)
     | SymbolOccurrence.LocalVar ->
-      get_local_var_def
-        ast result.SymbolOccurrence.name result.SymbolOccurrence.pos
+      begin match ast with
+        | None -> None
+        | Some ast -> get_local_var_def
+            ast result.SymbolOccurrence.name result.SymbolOccurrence.pos
+      end
 
 let get_definition_cst_node_from_pos kind source_text pos =
   let tree = if Ide_parser_cache.is_enabled () then
@@ -194,6 +189,15 @@ let get_definition_cst_node_from_pos kind source_text pos =
     | SymbolDefinition.Typedef, SyntaxKind.SimpleTypeSpecifier -> true
     | _ -> false
   end
+
+let get_definition_cst_node_from_file_input
+    (file_input: ServerCommandTypes.file_input)
+    (definition: 'a SymbolDefinition.t)
+    : Full_fidelity_positioned_syntax.t option =
+  let open SymbolDefinition in
+  let source_text =
+    ServerCommandTypesUtils.source_tree_of_file_input file_input in
+  get_definition_cst_node_from_pos definition.kind source_text definition.pos
 
 let get_definition_cst_node fallback_fn definition =
   let open SymbolDefinition in

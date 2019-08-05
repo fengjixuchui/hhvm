@@ -35,14 +35,10 @@ bool HHVM_FUNCTION(is_array, const Variant& v);
 bool HHVM_FUNCTION(HH_is_vec, const Variant& v);
 bool HHVM_FUNCTION(is_object, const Variant& v);
 bool HHVM_FUNCTION(is_resource, const Variant& v);
+bool HHVM_FUNCTION(HH_is_meth_caller, TypedValue v);
 
 String HHVM_FUNCTION(gettype, const Variant& v);
 String HHVM_FUNCTION(get_resource_type, const Resource& handle);
-
-///////////////////////////////////////////////////////////////////////////////
-// type conversion
-
-bool HHVM_FUNCTION(settype, VRefParam var, const String& type);
 
 ///////////////////////////////////////////////////////////////////////////////
 // input/output
@@ -53,8 +49,7 @@ void HHVM_FUNCTION(var_dump,
                    const Variant& v, const Array& _argv = null_array);
 void HHVM_FUNCTION(debug_zval_dump, const Variant& variable);
 String HHVM_FUNCTION(serialize, const Variant& value);
-Variant HHVM_FUNCTION(unserialize, const String& str,
-                      const Array& options = empty_array_ref);
+Variant HHVM_FUNCTION(unserialize, const String& str, const Array& options);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

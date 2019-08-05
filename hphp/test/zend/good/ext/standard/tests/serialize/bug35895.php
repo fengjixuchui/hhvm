@@ -1,4 +1,4 @@
-<?php
+<?hh
 class Parents {
    private $parents;
    public function __sleep() {
@@ -12,8 +12,7 @@ class Child extends Parents {
         return array_merge(array("child"), parent::__sleep());
     }
 }
-
+<<__EntryPoint>> function main(): void {
 $obj = new Child();
 serialize($obj);
-
-?>
+}

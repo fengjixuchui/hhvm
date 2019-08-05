@@ -12,10 +12,15 @@
  * To be more precise, this checks that if the constructor does not throw,
  * it initializes all members. *)
 open Core_kernel
+open Aast
 open Nast
 
 module DICheck = Decl_init_check
+module DeferredMembers = Typing_deferred_members
 module SN = Naming_special_names
+
+let shallow_decl_enabled () =
+  TypecheckerOptions.shallow_class_decl (GlobalNamingOptions.get ())
 
 module SSetWTop = struct
   type t =
@@ -108,18 +113,38 @@ module Env = struct
     let tenv = match parent_id c with
       | None -> tenv
       | Some parent_id -> Typing_env.set_parent_id tenv parent_id in
-    let methods = List.fold_left ~f:method_ ~init:SMap.empty c.c_methods in
-    let decl_env = tenv.Typing_env.decl_env in
+    let _, _, methods = split_methods c in
+    let methods = List.fold_left ~f:method_ ~init:SMap.empty methods in
     let sc = Shallow_decl.class_ c in
-    let class_init_props = DICheck.initialized_props sc SSet.empty in
+    if shallow_decl_enabled () then begin
+      (* Run DeferredMembers.class_ for its error-emitting side effects.
+         When shallow_class_decl is disabled, these are emitted by Decl. *)
+      let _ : SSet.t = DeferredMembers.class_ tenv sc in
+      ()
+    end;
+    let add_initialized_props, add_trait_props, add_parent_props, add_parent =
+      if shallow_decl_enabled ()
+      then
+        DeferredMembers.initialized_props,
+        DeferredMembers.trait_props tenv,
+        DeferredMembers.parent_props tenv,
+        DeferredMembers.parent tenv
+      else
+        let decl_env = tenv.Typing_env.decl_env in
+        DICheck.initialized_props,
+        DICheck.trait_props decl_env,
+        DICheck.parent_props decl_env,
+        DICheck.parent decl_env
+    in
+    let class_init_props = add_initialized_props sc SSet.empty in
     let props = SSet.empty
-      |> DICheck.own_props sc
+      |> DeferredMembers.own_props sc
       (* If we define our own constructor, we need to pretend any traits we use
        * did *not* define a constructor, because they are not reachable through
        * parent::__construct or similar functions. *)
-      |> DICheck.trait_props decl_env sc
-      |> DICheck.parent_props decl_env sc
-      |> DICheck.parent decl_env sc in
+      |> add_trait_props sc
+      |> add_parent_props sc
+      |> add_parent sc in
     { methods; props; tenv; class_init_props }
 
   and method_ acc m =
@@ -145,31 +170,25 @@ let is_whitelisted = function
   | x when x = SN.StdlibFunctions.get_class -> true
   | _ -> false
 
-let save_initialized_members_for_suggest cname initialized_props =
-  let props_to_save = match initialized_props with
-  | S.Top -> SSet.empty (* Constructor always throws *)
-  | S.Set s -> s in
-  Typing_suggest.save_initialized_members cname props_to_save
-
-
 let rec class_ tenv c =
   if c.c_mode = FileInfo.Mdecl then () else
-  match c.c_constructor with
-  | _ when c.c_kind = Ast.Cinterface -> ()
+  let c_constructor, _, _ = split_methods c in
+  match c_constructor with
+  | _ when c.c_kind = Ast_defs.Cinterface -> ()
   | Some { m_body =
-      { fb_annotation = Annotations.FuncBodyAnnotation.NamedWithUnsafeBlocks; _ }; _ } -> ()
+      { fb_annotation = Nast.NamedWithUnsafeBlocks; _ }; _ } -> ()
   | _ -> (
-    let p = match c.c_constructor with
+    let p = match c_constructor with
       | Some m -> fst m.m_name
       | None -> fst c.c_name
     in
     let env = Env.make tenv c in
-    let inits = constructor env c.c_constructor in
+    let inits = constructor env c_constructor in
 
     let check_inits inits =
       let uninit_props = SSet.diff env.props inits in
       if SSet.empty <> uninit_props then begin
-        if SSet.mem DICheck.parent_init_prop uninit_props then
+        if SSet.mem DeferredMembers.parent_init_prop uninit_props then
           Errors.no_construct_parent p
         else
           let class_uninit_props = SSet.filter (fun v
@@ -187,10 +206,9 @@ let rec class_ tenv c =
       | S.Set inits ->
         check_inits inits in
 
-    save_initialized_members_for_suggest (snd c.c_name) inits;
-    if c.c_kind = Ast.Ctrait || c.c_kind = Ast.Cabstract
+    if c.c_kind = Ast_defs.Ctrait || c.c_kind = Ast_defs.Cabstract
     then begin
-      let has_constructor = match c.c_constructor with
+      let has_constructor = match c_constructor with
         | None -> false
         | Some m when m.m_abstract -> false
         | Some _ -> true in
@@ -257,36 +275,39 @@ and stmt env acc st =
   let block = block env in
   let catch = catch env in
   let case = case env in
-  match st with
+  match snd st with
     | Expr (_, Call (Cnormal, (_, Class_const ((_, CIparent), (_, m))), _, el, _uel))
         when m = SN.Members.__construct ->
       let acc = List.fold_left ~f:expr ~init:acc el in
-      assign env acc DICheck.parent_init_prop
+      assign env acc DeferredMembers.parent_init_prop
     | Expr e ->
       if (Typing_func_terminality.expression_exits env.tenv e)
         then S.Top
         else expr acc e
     | GotoLabel _
     | Goto _
-    | Break _ -> acc
-    | Continue _ -> acc
+    (* Naming will catch errors with TempBreak *)
+    | TempBreak _
+    | Break -> acc
+    | Continue
+    (* Naming will catch errors with TempContinue *)
+    | TempContinue _ -> acc
     | Throw _ -> S.Top
-    | Return (_, None) ->
+    | Return None ->
       if are_all_init env acc
       then acc
       else raise (InitReturn acc)
-    | Return (_, Some x) ->
+    | Return (Some x) ->
       let acc = expr acc x in
       if are_all_init env acc
       then acc
       else raise (InitReturn acc)
-    | Static_var el
-    | Global_var el
-       -> List.fold_left ~f:expr ~init:acc el
-    | Awaitall (_, el) ->
-      List.fold_left el ~init:acc ~f:(fun acc (_, e2) ->
+    | Awaitall (el, b) ->
+      let acc = List.fold_left el ~init:acc ~f:(fun acc (_, e2) ->
         expr acc e2
-      )
+      ) in
+      let acc = block acc b in
+      acc
     | If (e1, b1, b2) ->
       let acc = expr acc e1 in
       let b1 = block acc b1 in
@@ -322,7 +343,6 @@ and stmt env acc st =
       S.union acc c
     | Fallthrough -> S.empty
     | Def_inline _
-    | Unsafe_block _
     | Noop -> acc
     | Let (_, _, e) ->
       (* Scoped local variable cannot escape the block *)
@@ -332,9 +352,6 @@ and stmt env acc st =
       | Some e -> expr acc e
       | None -> acc
       )
-    | Declare (_, e, b) ->
-      let acc = expr acc e in
-      block acc b
 
 and toplevel env acc l =
   try List.fold_left ~f:(stmt env) ~init:acc l
@@ -433,8 +450,7 @@ and expr_ env acc p e =
   | Null
   | String _
   | String2 _
-  | PrefixedString _
-  | Unsafe_expr _ -> acc
+  | PrefixedString _ -> acc
   | Assert (AE_assert e) -> expr acc e
   | Yield e -> afield acc e
   | Yield_from e -> expr acc e
@@ -446,23 +462,21 @@ and expr_ env acc p e =
       acc
   | Expr_list el ->
       exprl acc el
-  | Special_func (Gena e)
-  | Special_func (Gen_array_rec e) ->
-      expr acc e
   | Special_func (Genva el) ->
       exprl acc el
   | New (_, _, el, uel, _) ->
       exprl acc (el @ uel)
+  | Record (_, _, fdl) -> List.fold_left ~f:field ~init:acc fdl
   | Pair (e1, e2) ->
     let acc = expr acc e1 in
     expr acc e2
   | Cast (_, e)
   | Unop (_, e) -> expr acc e
-  | Binop (Ast.Eq None, e1, e2) ->
+  | Binop (Ast_defs.Eq None, e1, e2) ->
       let acc = expr acc e2 in
       assign_expr env acc e1
-  | Binop (Ast.Ampamp, e, _)
-  | Binop (Ast.Barbar, e, _) ->
+  | Binop (Ast_defs.Ampamp, e, _)
+  | Binop (Ast_defs.Barbar, e, _) ->
       expr acc e
   | Binop (_, e1, e2) ->
       let acc = expr acc e1 in
@@ -477,10 +491,10 @@ and expr_ env acc p e =
       let acc = expr acc e1 in
       let acc = expr acc e2 in
       expr acc e3
-  | InstanceOf (e, _) -> expr acc e
   | Is (e, _) -> expr acc e
   | As (e, _, _) -> expr acc e
-  | Efun (f, _) ->
+  | Efun (f, _)
+  | Lfun (f, _) ->
       let acc = fun_paraml acc f.f_params in
       (* We don't need to analyze the body of closures *)
       acc
@@ -497,8 +511,6 @@ and expr_ env acc p e =
         ~init:acc
         fdm
   | Omitted -> acc
-  | NewAnonClass _ -> acc
-  | Lfun _ -> acc
   | Import _ -> acc
   | Collection _ -> acc
   | BracedExpr _ -> acc

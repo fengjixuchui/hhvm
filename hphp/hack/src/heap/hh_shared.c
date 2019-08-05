@@ -77,6 +77,10 @@
  */
 /*****************************************************************************/
 
+/* For printing uint64_t
+ * http://jhshi.me/2014/07/11/print-uint64-t-properly-in-c/index.html */
+#define __STDC_FORMAT_MACROS
+
 /* define CAML_NAME_SPACE to ensure all the caml imports are prefixed with
  * 'caml_' */
 #define CAML_NAME_SPACE
@@ -102,12 +106,13 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
-#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
 
+#include <inttypes.h>
 #include <lz4.h>
+#include <sys/time.h>
 #include <time.h>
 
 #ifndef NO_SQLITE3
@@ -124,7 +129,6 @@ static sqlite3_stmt *g_get_dep_select_stmt = NULL;
 
 
 #include "hh_assert.h"
-#include "hh_shared_sqlite.h"
 
 #define UNUSED(x) \
     ((void)(x))
@@ -174,7 +178,7 @@ static sqlite3_stmt *g_get_dep_select_stmt = NULL;
     #elif defined(__aarch64__)
       #define SYS_memfd_create 385
     #else
-      #error "hh_shared.c requires a architecture that supports memfd_create"
+      #error "hh_shared.c requires an architecture that supports memfd_create"
     #endif
   #endif
 
@@ -501,8 +505,6 @@ static size_t allow_hashtable_writes_by_current_process = 1;
 static size_t worker_can_exit = 1;
 
 static char *db_filename = NULL;
-
-#define FILE_INFO_ON_DISK_PATH "FILE_INFO_ON_DISK_PATH"
 
 /* Where the heap started (bottom) */
 static char* heap_init = NULL;
@@ -1275,6 +1277,13 @@ void hh_shared_clear(void) {
 /*****************************************************************************/
 
 static void raise_dep_table_full(void) {
+  fprintf(
+    stderr,
+    "dcounter: %"PRIu64" dep_size: %"PRIu64" \n",
+    *dcounter,
+    dep_size
+  );
+
   static value *exn = NULL;
   if (!exn) exn = caml_named_value("dep_table_full");
   caml_raise_constant(*exn);
@@ -1538,21 +1547,6 @@ CAMLprim value hh_get_dep(value ocaml_key) {
   CAMLreturn(result);
 }
 
-/*****************************************************************************/
-/* Must be called after the hack server is done initializing.
- * We keep the original size of the heap to estimate how often we should
- * garbage collect.
- */
-/*****************************************************************************/
-void hh_call_after_init(void) {
-  CAMLparam0();
-  if (2 * used_heap_size() >= heap_size) {
-    caml_failwith("Heap init size is too close to max heap size; "
-      "GC will never get triggered!");
-  }
-  CAMLreturn0;
-}
-
 value hh_check_heap_overflow(void) {
   if (*heap >= shared_mem + shared_mem_size) {
     return Val_bool(1);
@@ -1773,6 +1767,10 @@ static heap_entry_t* hh_store_ocaml(
 /*****************************************************************************/
 static uint64_t get_hash(value key) {
   return *((uint64_t*)String_val(key));
+}
+
+CAMLprim value get_hash_ocaml(value key) {
+  return caml_copy_int64(*((uint64_t*)String_val(key)));
 }
 
 /*****************************************************************************/
@@ -2075,129 +2073,6 @@ void hh_remove(value key) {
   removed_count += 1;
 }
 
-/*****************************************************************************/
-/* Saved State with SQLite */
-/*****************************************************************************/
-
-// This code is called when we fall back from a saved state to full init,
-// not at the end of saving the state.
-void hh_cleanup_sqlite(void) {
-  CAMLparam0();
-
-  // Reset the SQLite database file name
-  size_t page_size = getpagesize();
-  memset(db_filename, 0, page_size);
-  CAMLreturn0;
-}
-
-#define Val_none Val_int(0)
-
-value Val_some(value v)
-{
-    CAMLparam1(v);
-    CAMLlocal1(some);
-    some = caml_alloc_small(1, 0);
-    Field(some, 0) = v;
-    CAMLreturn(some);
-}
-
-#define Some_val(v) Field(v,0)
-
-#ifndef NO_SQLITE3
-
-// ------------------------ START OF SQLITE3 SECTION --------------------------
-CAMLprim value hh_removed_count(value ml_unit) {
-    CAMLparam1(ml_unit);
-    UNUSED(ml_unit);
-    return Val_long(removed_count);
-}
-
-CAMLprim value get_file_info_on_disk(
-    value ml_unit
-) {
-    CAMLparam1(ml_unit);
-    UNUSED(ml_unit);
-    const char *var = getenv(FILE_INFO_ON_DISK_PATH);
-    assert(var);
-    _Bool nonempty = strlen(var) > 0;
-    value ml_bool = Val_bool(nonempty);
-    CAMLreturn(ml_bool);
-}
-
-CAMLprim value set_file_info_on_disk_path(
-    value ml_str
-) {
-    CAMLparam1(ml_str);
-    assert(Tag_val(ml_str) == String_tag);
-    const char *str = String_val(ml_str);
-    setenv(FILE_INFO_ON_DISK_PATH, str, 1);
-    CAMLreturn(Val_unit);
-}
-
-CAMLprim value get_file_info_on_disk_path(
-    value ml_unit
-) {
-    CAMLparam1(ml_unit);
-    const char *str = getenv(FILE_INFO_ON_DISK_PATH);
-    assert(str);
-    CAMLreturn(caml_copy_string(str));
-}
-
-CAMLprim value open_file_info_db(
-    value ml_unit
-) {
-    CAMLparam1(ml_unit);
-    UNUSED(ml_unit);
-    const char *file_info_on_disk_path = getenv(FILE_INFO_ON_DISK_PATH);
-    assert(file_info_on_disk_path);
-    assert(strlen(file_info_on_disk_path) > 0);
-    if (g_db) {
-        CAMLreturn(Val_unit);
-    }
-    assert_sql(
-        sqlite3_open_v2(
-            file_info_on_disk_path,
-            &g_db,
-            SQLITE_OPEN_READONLY,
-            NULL
-        ),
-    SQLITE_OK);
-    CAMLreturn(Val_unit);
-}
-
-// Expects the database to be open
-static void write_sqlite_header(sqlite3 *db, const char* const buildInfo) {
-  // Insert magic constant and build info
-  sqlite3_stmt *insert_stmt = NULL;
-  const char *sql = \
-    "INSERT OR REPLACE INTO HEADER (MAGIC_CONSTANT, BUILDINFO) VALUES (?,?)";
-  assert_sql(sqlite3_prepare_v2(db, sql, -1, &insert_stmt, NULL), SQLITE_OK);
-  assert_sql(sqlite3_bind_int64(insert_stmt, 1, MAGIC_CONSTANT), SQLITE_OK);
-  assert_sql(sqlite3_bind_text(insert_stmt, 2,
-        buildInfo, -1,
-        SQLITE_TRANSIENT),
-        SQLITE_OK);
-  assert_sql(sqlite3_step(insert_stmt), SQLITE_DONE);
-  assert_sql(sqlite3_finalize(insert_stmt), SQLITE_OK);
-}
-
-// Expects the database to be open
-static void verify_sqlite_header(sqlite3 *db, int ignore_hh_version) {
-  sqlite3_stmt *select_stmt = NULL;
-  const char *sql = "SELECT * FROM HEADER;";
-  assert_sql(sqlite3_prepare_v2(db, sql, -1, &select_stmt, NULL), SQLITE_OK);
-
-  if (sqlite3_step(select_stmt) == SQLITE_ROW) {
-      // Columns are 0 indexed
-      assert(sqlite3_column_int64(select_stmt, 0) == MAGIC_CONSTANT);
-      if (!ignore_hh_version) {
-        assert(strcmp((char *)sqlite3_column_text(select_stmt, 1),
-                      BuildInfo_kRevision) == 0);
-      }
-  }
-  assert_sql(sqlite3_finalize(select_stmt), SQLITE_OK);
-}
-
 size_t deptbl_entry_count_for_slot(size_t slot) {
   assert(slot < dep_size);
 
@@ -2218,6 +2093,332 @@ size_t deptbl_entry_count_for_slot(size_t slot) {
   return count;
 }
 
+/*****************************************************************************/
+/* Saved State as binary */
+/*****************************************************************************/
+
+// TODO: MAGIC_CONSTANT
+// use the same format as what's in the hashtable, but compact
+// Question: is it better to deserialize into hashtbl or an OCaml Hashtable or
+// into SQLite?
+size_t hh_save_dep_table_blob_helper(const char* const out_filename) {
+  struct timeval start_t = { 0 };
+  gettimeofday(&start_t, NULL);
+
+  // Allocate space for all the values
+  FILE* dep_table_blob_file = fopen(out_filename, "wb+");
+
+  // TODO: T38685427 - write MAGIC_CONSTANT
+  // TODO: write the format version
+  size_t slot = 0;
+  size_t count = 0;
+  size_t count_of_values = 0;
+  size_t prev_count = 0;
+  tagged_uint_t *values = NULL;
+  size_t iter = 0;
+  size_t edges_added = 0;
+  size_t new_rows_count = 0;
+  for (slot = 0; slot < dep_size; ++slot) {
+    count_of_values = deptbl_entry_count_for_slot(slot);
+    // 1 key
+    count = count_of_values + 1;
+    if (count_of_values == 0) {
+      continue;
+    }
+    else if (count > prev_count) {
+      // No need to allocate new space if we can just reuse the old one
+      values = realloc(values, count * sizeof(uint32_t));
+      prev_count = count;
+    }
+
+    assert(values != NULL);
+
+    iter = 0;
+
+    deptbl_entry_t slotval = deptbl[slot];
+    if (slotval.raw != 0 && slotval.s.key.tag == TAG_KEY) {
+      // This is the head of a linked list aka KEY VERTEX
+      values[iter] = slotval.s.key;
+      iter++;
+
+      // Then combine each value to VALUE VERTEX
+      while (slotval.s.next.tag == TAG_NEXT) {
+        assert(slotval.s.next.num < dep_size);
+        slotval = deptbl[slotval.s.next.num];
+        values[iter] = slotval.s.key;
+        values[iter].tag = TAG_NEXT;
+        iter++;
+      }
+
+      // The final "next" in the list is always a value, not a next pointer.
+      // NOTE: the tag will be !TAG_NEXT
+      values[iter] = slotval.s.next;
+      iter++;
+
+      new_rows_count += 1;
+
+      fwrite(values, sizeof(uint32_t), iter, dep_table_blob_file);
+    }
+
+    edges_added += iter;
+  }
+
+  if (values != NULL) {
+    free(values);
+  }
+
+  fprintf(stderr, "Wrote %lu new rows\n", new_rows_count);
+  fclose(dep_table_blob_file);
+
+  log_duration("Finished writing the file", start_t);
+
+  return edges_added;
+}
+
+void hh_load_dep_table_blob_helper(const char* const in_filename) {
+  struct timeval start_t = { 0 };
+  gettimeofday(&start_t, NULL);
+
+  // Allocate space for all the values
+  FILE* dep_table_blob_file = fopen(in_filename, "rb");
+  assert(dep_table_blob_file != NULL);
+
+  // TODO: this is an arbitrary buffer size; do something better?
+  size_t buffer_size = 1000;
+  tagged_uint_t buffer[buffer_size];
+
+  // TODO: read MAGIC_CONSTANT
+  // TODO: read the format version
+  uint16_t is_key = 1;
+  tagged_uint_t slot;
+  tagged_uint_t key;
+  tagged_uint_t value;
+  size_t keys_count = 0;
+  size_t values_count = 0;
+
+  // The number of bytes read from the file stream
+  size_t count;
+
+  fprintf(
+    stderr,
+    "Start; dcounter: %"PRIu64" dep_size: %"PRIu64" \n",
+    *dcounter,
+    dep_size
+  );
+
+  do {
+    count = fread(
+      buffer,
+      sizeof(tagged_uint_t),
+      buffer_size,
+      dep_table_blob_file);
+
+    if (count <= 0) {
+      assert(!ferror(dep_table_blob_file));
+    }
+    else {
+      for (int i = 0; i < count; i++) {
+        slot = buffer[i];
+
+        if (is_key) {
+          is_key = 0;
+          keys_count++;
+          key = slot;
+        }
+        else {
+          value = slot;
+          values_count++;
+
+          add_dep(key.num, value.num);
+
+          if (value.tag != TAG_NEXT) {
+            is_key = 1;
+          }
+        }
+      }
+    }
+  } while (!feof(dep_table_blob_file));
+
+  fclose(dep_table_blob_file);
+
+  fprintf(
+    stderr,
+    "End; dcounter: %"PRIu64" dep_size: %"PRIu64" \n",
+    *dcounter,
+    dep_size
+  );
+  fprintf(stderr, "Read %lu keys and %lu values\n", keys_count, values_count);
+
+  log_duration("Finished reading the file", start_t);
+}
+
+/*
+ * Assumption: When we save the dependency table using this function,
+ * we do a fresh load, meaning that there was NO saved state loaded.
+ * From a loaded saved state, we call hh_update_dep_table_sqlite instead.
+ */
+CAMLprim value hh_save_dep_table_blob(
+    value out_filename,
+    value build_revision
+) {
+  CAMLparam2(out_filename, build_revision);
+  char *out_filename_raw = String_val(out_filename);
+
+  // TODO: use build_revision
+  size_t edges_added =
+    hh_save_dep_table_blob_helper(out_filename_raw);
+  CAMLreturn(Val_long(edges_added));
+}
+
+CAMLprim value hh_load_dep_table_blob(
+    value in_filename,
+    value ignore_hh_version
+) {
+  CAMLparam1(in_filename);
+  struct timeval tv = { 0 };
+  struct timeval tv2 = { 0 };
+  gettimeofday(&tv, NULL);
+
+  char *in_filename_raw = String_val(in_filename);
+
+  // TODO: T38685889 - use ignore_hh_version
+  assert(ignore_hh_version);
+
+  hh_load_dep_table_blob_helper(in_filename_raw);
+
+  tv2 = log_duration("Loading the dependency blob file", tv);
+  int secs = tv2.tv_sec - tv.tv_sec;
+  // Reporting only seconds, ignore milli seconds
+  CAMLreturn(Val_long(secs));
+}
+
+/*****************************************************************************/
+/* Saved State with SQLite */
+/*****************************************************************************/
+
+// This code is called when we fall back from a saved state to full init,
+// not at the end of saving the state.
+void hh_cleanup_sqlite(void) {
+  CAMLparam0();
+
+  // Reset the SQLite database file name
+  size_t page_size = getpagesize();
+  memset(db_filename, 0, page_size);
+  CAMLreturn0;
+}
+
+#define ARRAY_SIZE(array) \
+    (sizeof(array) / sizeof((array)[0]))
+
+#define Val_none Val_int(0)
+
+value Val_some(value v)
+{
+    CAMLparam1(v);
+    CAMLlocal1(some);
+    some = caml_alloc_small(1, 0);
+    Field(some, 0) = v;
+    CAMLreturn(some);
+}
+
+#define Some_val(v) Field(v,0)
+
+#ifndef NO_SQLITE3
+
+// ------------------------ START OF SQLITE3 SECTION --------------------------
+
+void assert_sql_with_line(
+  sqlite3 *db,
+  int result,
+  int correct_result,
+  int line_number
+) {
+  if (result == correct_result) {
+    return;
+  }
+
+  fprintf(
+    stderr,
+    "SQL assertion failure: Line: %d -> Expected: %d, Got: %d\n%s%s",
+    line_number,
+    correct_result,
+    result,
+    db == NULL ? "" : sqlite3_errmsg(db),
+    db == NULL ? "" : "\n");
+  static value *exn = NULL;
+  if (!exn) {
+    exn = caml_named_value("sql_assertion_failure");
+  }
+  caml_raise_with_arg(*exn, Val_long(result));
+}
+
+const char *create_tables_sql[] = {
+  "CREATE TABLE IF NOT EXISTS HEADER(" \
+  "    MAGIC_CONSTANT INTEGER PRIMARY KEY NOT NULL," \
+  "    BUILDINFO TEXT NOT NULL" \
+  ");",
+  "CREATE TABLE IF NOT EXISTS DEPTABLE(" \
+  "    KEY_VERTEX INTEGER PRIMARY KEY NOT NULL," \
+  "    VALUE_VERTEX BLOB NOT NULL" \
+  ");",
+};
+
+void make_all_tables(sqlite3 *db) {
+  assert(db);
+  for (int i = 0; i < ARRAY_SIZE(create_tables_sql); ++i) {
+    assert_sql(
+      db,
+      sqlite3_exec(db, create_tables_sql[i], NULL, 0, NULL),
+      SQLITE_OK);
+  }
+  return;
+}
+
+CAMLprim value hh_removed_count(value ml_unit) {
+    CAMLparam1(ml_unit);
+    UNUSED(ml_unit);
+    return Val_long(removed_count);
+}
+
+// Expects the database to be open
+static void write_sqlite_header(sqlite3 *db, const char* const buildInfo) {
+  // Insert magic constant and build info
+  sqlite3_stmt *insert_stmt = NULL;
+  const char *sql = \
+    "INSERT OR REPLACE INTO HEADER (MAGIC_CONSTANT, BUILDINFO) VALUES (?,?)";
+  assert_sql(
+        db,
+        sqlite3_prepare_v2(db, sql, -1, &insert_stmt, NULL),
+        SQLITE_OK);
+  assert_sql(db, sqlite3_bind_int64(insert_stmt, 1, MAGIC_CONSTANT), SQLITE_OK);
+  assert_sql(
+        db,
+        sqlite3_bind_text(insert_stmt, 2, buildInfo, -1, SQLITE_TRANSIENT),
+        SQLITE_OK);
+  assert_sql(db, sqlite3_step(insert_stmt), SQLITE_DONE);
+  assert_sql(db, sqlite3_finalize(insert_stmt), SQLITE_OK);
+}
+
+// Expects the database to be open
+static void verify_sqlite_header(sqlite3 *db, int ignore_hh_version) {
+  sqlite3_stmt *select_stmt = NULL;
+  const char *sql = "SELECT * FROM HEADER;";
+  assert_sql(
+      db,
+      sqlite3_prepare_v2(db, sql, -1, &select_stmt, NULL),
+      SQLITE_OK);
+
+  if (sqlite3_step(select_stmt) == SQLITE_ROW) {
+      // Columns are 0 indexed
+      assert(sqlite3_column_int64(select_stmt, 0) == MAGIC_CONSTANT);
+      if (!ignore_hh_version) {
+        assert(strcmp((char *)sqlite3_column_text(select_stmt, 1),
+                      BuildInfo_kRevision) == 0);
+      }
+  }
+  assert_sql(db, sqlite3_finalize(select_stmt), SQLITE_OK);
+}
+
 static sqlite3 * connect_and_create_dep_table_helper(
     const char* const out_filename
 ) {
@@ -2226,7 +2427,7 @@ static sqlite3 * connect_and_create_dep_table_helper(
 
   sqlite3 *db_out = NULL;
   // sqlite3_open creates the db
-  assert_sql(sqlite3_open(out_filename, &db_out), SQLITE_OK);
+  assert_sql(NULL, sqlite3_open(out_filename, &db_out), SQLITE_OK);
 
   make_all_tables(db_out);
   return db_out;
@@ -2261,9 +2462,12 @@ query_result_t get_dep_sqlite_blob_with_duration(
 
 static void hh_swap_in_db(sqlite3 *db_out) {
   if (g_get_dep_select_stmt != NULL) {
-    assert_sql(sqlite3_clear_bindings(g_get_dep_select_stmt), SQLITE_OK);
-    assert_sql(sqlite3_reset(g_get_dep_select_stmt), SQLITE_OK);
-    assert_sql(sqlite3_finalize(g_get_dep_select_stmt), SQLITE_OK);
+    assert_sql(
+      db_out,
+      sqlite3_clear_bindings(g_get_dep_select_stmt),
+      SQLITE_OK);
+    assert_sql(db_out, sqlite3_reset(g_get_dep_select_stmt), SQLITE_OK);
+    assert_sql(db_out, sqlite3_finalize(g_get_dep_select_stmt), SQLITE_OK);
     g_get_dep_select_stmt = NULL;
   }
 
@@ -2293,14 +2497,19 @@ static size_t hh_save_dep_table_helper(
   write_sqlite_header(db_out, build_info);
   // Hand-off the data to the OS for writing and continue,
   // don't wait for it to complete
-  assert_sql(sqlite3_exec(db_out, "PRAGMA synchronous = OFF", NULL, 0, NULL),
+  assert_sql(
+    db_out,
+    sqlite3_exec(db_out, "PRAGMA synchronous = OFF", NULL, 0, NULL),
     SQLITE_OK);
   // Store the rollback journal in memory
   assert_sql(
+    db_out,
     sqlite3_exec(db_out, "PRAGMA journal_mode = MEMORY", NULL, 0, NULL),
     SQLITE_OK);
   // Use one transaction for all the insertions
-  assert_sql(sqlite3_exec(db_out, "BEGIN TRANSACTION", NULL, 0, NULL),
+  assert_sql(
+    db_out,
+    sqlite3_exec(db_out, "BEGIN TRANSACTION", NULL, 0, NULL),
     SQLITE_OK);
 
   // Create entries in the table
@@ -2313,7 +2522,9 @@ static size_t hh_save_dep_table_helper(
   sqlite3_stmt *select_dep_stmt = NULL;
   const char * sql =
     "INSERT OR REPLACE INTO DEPTABLE (KEY_VERTEX, VALUE_VERTEX) VALUES (?,?)";
-  assert_sql(sqlite3_prepare_v2(db_out, sql, -1, &insert_stmt, NULL),
+  assert_sql(
+    db_out,
+    sqlite3_prepare_v2(db_out, sql, -1, &insert_stmt, NULL),
     SQLITE_OK);
   size_t existing_rows_lookup_duration = 0L;
   size_t existing_rows_updated_count = 0;
@@ -2349,7 +2560,9 @@ static size_t hh_save_dep_table_helper(
 
     if (slotval.raw != 0 && slotval.s.key.tag == TAG_KEY) {
       // This is the head of a linked list aka KEY VERTEX
-      assert_sql(sqlite3_bind_int(insert_stmt, 1, slotval.s.key.num),
+      assert_sql(
+        db_out,
+        sqlite3_bind_int(insert_stmt, 1, slotval.s.key.num),
         SQLITE_OK);
 
       // Then combine each value to VALUE VERTEX
@@ -2376,12 +2589,13 @@ static size_t hh_save_dep_table_helper(
         new_rows_count += 1;
       }
       assert_sql(
+        db_out,
         sqlite3_bind_blob(insert_stmt, 2, values,
                           iter * sizeof(uint32_t), SQLITE_TRANSIENT),
         SQLITE_OK);
-      assert_sql(sqlite3_step(insert_stmt), SQLITE_DONE);
-      assert_sql(sqlite3_clear_bindings(insert_stmt), SQLITE_OK);
-      assert_sql(sqlite3_reset(insert_stmt), SQLITE_OK);
+      assert_sql(db_out, sqlite3_step(insert_stmt), SQLITE_DONE);
+      assert_sql(db_out, sqlite3_clear_bindings(insert_stmt), SQLITE_OK);
+      assert_sql(db_out, sqlite3_reset(insert_stmt), SQLITE_OK);
     }
     edges_added += iter - existing_count;
   }
@@ -2390,8 +2604,11 @@ static size_t hh_save_dep_table_helper(
     free(values);
   }
 
-  assert_sql(sqlite3_finalize(insert_stmt), SQLITE_OK);
-  assert_sql(sqlite3_exec(db_out, "END TRANSACTION", NULL, 0, NULL), SQLITE_OK);
+  assert_sql(db_out, sqlite3_finalize(insert_stmt), SQLITE_OK);
+  assert_sql(
+      db_out,
+      sqlite3_exec(db_out, "END TRANSACTION", NULL, 0, NULL),
+      SQLITE_OK);
   start_t = log_duration("Finished SQL Transaction", start_t);
   fprintf(stderr, "Lookup of existing rows took %lu us\n",
       existing_rows_lookup_duration);
@@ -2402,7 +2619,7 @@ static size_t hh_save_dep_table_helper(
     hh_swap_in_db(db_out);
   } else {
     destroy_prepared_stmt(&select_dep_stmt);
-    assert_sql(sqlite3_close(db_out), SQLITE_OK);
+    assert_sql(NULL, sqlite3_close(db_out), SQLITE_OK);
     log_duration("Finished closing SQL connection", start_t);
   }
 
@@ -2487,7 +2704,7 @@ CAMLprim value hh_update_dep_table_sqlite(
   struct timeval tv2 = { 0 };
   gettimeofday(&tv, NULL);
 
-  assert_sql(sqlite3_open(out_filename_raw, &db_out), SQLITE_OK);
+  assert_sql(NULL, sqlite3_open(out_filename_raw, &db_out), SQLITE_OK);
 
   size_t edges_added = hh_save_dep_table_helper(
     db_out,
@@ -2501,40 +2718,6 @@ CAMLprim value hh_update_dep_table_sqlite(
 
   UNUSED(log_duration("Updated dependency file with sqlite", tv));
   CAMLreturn(Val_long(edges_added));
-}
-
-CAMLprim value hh_save_file_info_init(
-        value ml_path
-) {
-    CAMLparam1(ml_path);
-    const char *path = String_val(ml_path);
-    hhfi_init_db(path);
-    make_all_tables(hhfi_get_db());
-    CAMLreturn(Val_unit);
-}
-
-CAMLprim value hh_save_file_info_free(
-    value ml_unit
-) {
-    CAMLparam1(ml_unit);
-    UNUSED(ml_unit);
-    hhfi_free_db();
-    CAMLreturn(Val_unit);
-}
-
-CAMLprim value hh_save_file_info_sqlite(
-    value ml_hash,
-    value ml_name,
-    value ml_kind,
-    value ml_filespec
-) {
-  CAMLparam4(ml_hash, ml_name, ml_kind, ml_filespec);
-  assert_master();
-  const char *name = String_val(ml_name);
-  int64_t kind = Int_val(ml_kind);
-  const char *filespec = String_val(ml_filespec);
-  hhfi_insert_row(hhfi_get_db(), get_hash(ml_hash), name, kind, filespec);
-  CAMLreturn(Val_unit);
 }
 
 CAMLprim value hh_get_loaded_dep_table_filename() {
@@ -2567,7 +2750,9 @@ CAMLprim value hh_load_dep_table_sqlite(
   set_db_filename(filename);
 
   // SQLITE_OPEN_READONLY makes sure that we throw if the db doesn't exist
-  assert_sql(sqlite3_open_v2(db_filename, &g_db, SQLITE_OPEN_READONLY, NULL),
+  assert_sql(
+    g_db,
+    sqlite3_open_v2(db_filename, &g_db, SQLITE_OPEN_READONLY, NULL),
     SQLITE_OK);
 
   // Verify the header
@@ -2585,9 +2770,9 @@ void destroy_prepared_stmt(sqlite3_stmt ** stmt) {
   if (*stmt == NULL) {
     return;
   }
-  assert_sql(sqlite3_clear_bindings(*stmt), SQLITE_OK);
-  assert_sql(sqlite3_reset(*stmt), SQLITE_OK);
-  assert_sql(sqlite3_finalize(*stmt), SQLITE_OK);
+  assert_sql(g_db, sqlite3_clear_bindings(*stmt), SQLITE_OK);
+  assert_sql(g_db, sqlite3_reset(*stmt), SQLITE_OK);
+  assert_sql(g_db, sqlite3_finalize(*stmt), SQLITE_OK);
   *stmt = NULL;
 }
 
@@ -2614,15 +2799,17 @@ query_result_t get_dep_sqlite_blob(
 
   if (*select_stmt == NULL) {
     const char *sql = "SELECT VALUE_VERTEX FROM DEPTABLE WHERE KEY_VERTEX=?;";
-    assert_sql(sqlite3_prepare_v2(db, sql, -1, select_stmt, NULL),
+    assert_sql(
+      db,
+      sqlite3_prepare_v2(db, sql, -1, select_stmt, NULL),
       SQLITE_OK);
     assert(*select_stmt != NULL);
   } else {
-    assert_sql(sqlite3_clear_bindings(*select_stmt), SQLITE_OK);
-    assert_sql(sqlite3_reset(*select_stmt), SQLITE_OK);
+    assert_sql(db, sqlite3_clear_bindings(*select_stmt), SQLITE_OK);
+    assert_sql(db, sqlite3_reset(*select_stmt), SQLITE_OK);
   }
 
-  assert_sql(sqlite3_bind_int(*select_stmt, 1, key), SQLITE_OK);
+  assert_sql(db, sqlite3_bind_int(*select_stmt, 1, key), SQLITE_OK);
 
   int err_num = sqlite3_step(*select_stmt);
   // err_num is SQLITE_ROW if there is a row to look at,
@@ -2645,7 +2832,7 @@ query_result_t get_dep_sqlite_blob(
     // Remaining cases are SQLITE_BUSY, SQLITE_ERROR, or SQLITE_MISUSE.
     // The first should never happen since we are reading here.
     // Regardless, something went wrong in sqlite3_step, lets crash.
-    assert_sql(err_num, SQLITE_ROW);
+    assert_sql(db, err_num, SQLITE_ROW);
   }
   // Unreachable.
   assert(0);
@@ -2676,7 +2863,9 @@ CAMLprim value hh_get_dep_sqlite(value ocaml_key) {
     // since we are not connected yet, soo.. try to connect
     assert_not_master();
     // SQLITE_OPEN_READONLY makes sure that we throw if the db doesn't exist
-    assert_sql(sqlite3_open_v2(db_filename, &g_db, SQLITE_OPEN_READONLY, NULL),
+    assert_sql(
+      g_db,
+      sqlite3_open_v2(db_filename, &g_db, SQLITE_OPEN_READONLY, NULL),
       SQLITE_OK);
     assert(g_db != NULL);
   }
@@ -2734,16 +2923,6 @@ CAMLprim value hh_update_dep_table_sqlite(
   CAMLreturn(Val_long(0));
 }
 
-CAMLprim value hh_save_file_info_sqlite(
-    value out_filename,
-    value ml_name,
-    value ml_kind,
-    value ml_filespec
-) {
-  CAMLparam0();
-  CAMLreturn(Val_long(0));
-}
-
 CAMLprim value hh_load_dep_table_sqlite(
     value in_filename,
     value ignore_hh_version) {
@@ -2755,51 +2934,6 @@ CAMLprim value hh_get_dep_sqlite(value ocaml_key) {
   // Empty list
   CAMLparam0();
   CAMLreturn(Val_int(0));
-}
-
-CAMLprim value set_file_info_on_disk(value ml_str) {
-  CAMLparam1(ml_str);
-  UNUSED(ml_str);
-  CAMLreturn(Val_long(0));
-}
-
-CAMLprim value get_file_info_on_disk(value ml_str) {
-  CAMLparam1(ml_str);
-  UNUSED(ml_str);
-  CAMLreturn(Val_long(0));
-}
-
-CAMLprim value get_file_info_on_disk_path(value ml_str) {
-  CAMLparam1(ml_str);
-  UNUSED(ml_str);
-  CAMLreturn(caml_copy_string(""));
-}
-
-CAMLprim value set_file_info_on_disk_path(value ml_str) {
-  CAMLparam1(ml_str);
-  UNUSED(ml_str);
-  CAMLreturn(Val_unit);
-}
-
-CAMLprim value open_file_info_db(
-    value ml_unit
-) {
-  UNUSED(ml_unit);
-  return Val_unit;
-}
-
-CAMLprim value hh_save_file_info_init(
-        value ml_path
-) {
-    UNUSED(ml_path);
-    return Val_unit;
-}
-
-CAMLprim value hh_save_file_info_free(
-        value ml_unit
-) {
-    UNUSED(ml_unit);
-    return Val_unit;
 }
 
 CAMLprim value hh_removed_count(value ml_unit) {

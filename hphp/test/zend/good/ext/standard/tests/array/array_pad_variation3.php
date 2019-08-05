@@ -1,15 +1,23 @@
-<?php
+<?hh
 /* Prototype  : array array_pad(array $input, int $pad_size, mixed $pad_value)
- * Description: Returns a copy of input array padded with pad_value to size pad_size 
+ * Description: Returns a copy of input array padded with pad_value to size pad_size
  * Source code: ext/standard/array.c
 */
 
-/* 
+/*
 * Testing array_pad() function for expected behavior by passing
 * different possible values for $pad_value argument.
 * $input and $pad_size arguments take fixed value.
 */
 
+// get a class
+class classA
+{
+  public function __toString() {
+    return "Class A object";
+  }
+}
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_pad() : possible values for \$pad_value argument ***\n";
 
 // Initialise $input and $pad_size argument
@@ -20,14 +28,6 @@ $pad_size = 4;
 $unset_var = 10;
 unset ($unset_var);
 
-// get a class
-class classA
-{
-  public function __toString() {
-    return "Class A object";
-  }
-}
-
 // heredoc string
 $heredoc = <<<EOT
 hello world
@@ -35,10 +35,6 @@ EOT;
 
 // get a resource variable
 $fp = fopen(__FILE__, "r");
-
-// get a reference variable
-$value = "hello";
-$reference = &$value;
 
 // different values to be passed to $pad_value argument
 $pad_values = array(
@@ -94,12 +90,9 @@ $pad_values = array(
 
        // unset data
 /*30*/ @$unset_var,
-  
+
        // resource variable
 /*31*/ $fp,
-
-       // reference variable
-/*32*/ $reference
 );
 
 // loop through each element of $pad_values to check the behavior of array_pad()
@@ -112,4 +105,4 @@ foreach($pad_values as $pad_value) {
 };
 
 echo "Done";
-?>
+}

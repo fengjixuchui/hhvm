@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 interface One {
     public function a();
@@ -13,6 +13,6 @@ interface Two extends One {
     public function b() : array;
     public function d() : int;
 }
-
-?>
-Done
+<<__EntryPoint>> function main(): void {
+echo "Done\n";
+}

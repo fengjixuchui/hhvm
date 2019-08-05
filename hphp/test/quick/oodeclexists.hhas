@@ -1,10 +1,14 @@
+.hh_file 1;
 # tests that OODeclExists with bad argument types properly punts to the interpreter
 
 .main {
-  FPushFuncD 1 "var_dump"
+  NullUninit
+  NullUninit
+  NullUninit
   String "abc"
   String "asdfasdf"
   OODeclExists Interface
+  FPushFuncD 1 "var_dump"
   FCall <> 1 1 "" - "" ""
   PopC
   Int 1

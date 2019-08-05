@@ -1,5 +1,4 @@
-<?php
-
-var_dump(new RecursiveArrayIterator(array()) instanceof Countable);
-
-?>
+<?hh
+<<__EntryPoint>> function main(): void {
+var_dump(new RecursiveArrayIterator(array()) is Countable);
+}

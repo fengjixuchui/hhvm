@@ -50,17 +50,6 @@ namespace {
 
 //////////////////////////////////////////////////////////////////////
 
-bool check_noTTL(const char* key, size_t keyLen) {
-  for (auto& listElem : apcExtension::NoTTLPrefix) {
-    auto const prefix = listElem.c_str();
-    auto const prefixLen = listElem.size();
-    if (keyLen >= prefixLen && memcmp(key, prefix, prefixLen) == 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
 #ifdef HPHP_TRACE
 std::string show(const StoreValue& sval) {
   return sval.data().left() ?
@@ -614,7 +603,9 @@ bool ConcurrentTableSharedStore::get(const String& keyStr, Variant& value) {
   SharedMutex::ReadHolder l(m_lock);
   bool expired = false;
   bool promoteObj = false;
+  bool needsToLocal = false;
   auto tag = tagStringData(keyStr.get());
+
   {
     Map::const_accessor acc;
     if (!m_vars.find(acc, tag)) {
@@ -654,9 +645,13 @@ bool ConcurrentTableSharedStore::get(const String& keyStr, Variant& value) {
           !svar->objAttempted()) {
         // Hold ref here for later promoting the object
         svar->referenceNonRoot();
-        promoteObj = true;
+        needsToLocal = promoteObj = true;
+      } else if (svar->isTypedValue()) {
+        value = svar->toLocal();
+      } else {
+        svar->referenceNonRoot();
+        needsToLocal = true;
       }
-      value = sval->toLocal();
       if (!promoteObj) {
         /*
          * Successful slow-case lookup => add value to cache (if key and kind
@@ -675,11 +670,14 @@ bool ConcurrentTableSharedStore::get(const String& keyStr, Variant& value) {
     return false;
   }
 
-  if (promoteObj)  {
-    handlePromoteObj(keyStr, svar, value);
-    // release the extra ref
-    svar->unreferenceNonRoot();
+  if (needsToLocal) {
+    SCOPE_EXIT { svar->unreferenceNonRoot(); };
+
+    l.unlock(); // toLocal() may reenter the autolaoder
+    value = svar->toLocal();
+    if (promoteObj) handlePromoteObj(keyStr, svar, value);
   }
+
   return true;
 }
 
@@ -738,7 +736,10 @@ bool ConcurrentTableSharedStore::cas(const String& key, int64_t old,
   auto const oldHandle =
     sval.data().match([&](APCHandle* h) { return h; },
                       [&](char* /*file*/) { return unserialize(key, &sval); });
-  if (!oldHandle || oldHandle->toLocal().toInt64() != old) {
+  if (!oldHandle ||
+      (oldHandle->kind() != APCKind::Int &&
+       oldHandle->kind() != APCKind::Double) ||
+      oldHandle->toLocal().toInt64() != old) {
     return false;
   }
 
@@ -895,8 +896,7 @@ bool ConcurrentTableSharedStore::storeImpl(const String& key,
     }
 
     int64_t adjustedTtl = adjust_ttl(ttl, overwritePrime || !limit_ttl);
-    if (adjustedTtl > apcExtension::TTLMaxFinite ||
-        check_noTTL(key.data(), key.size())) {
+    if (adjustedTtl > apcExtension::TTLMaxFinite) {
       adjustedTtl = 0;
     }
 
@@ -986,7 +986,7 @@ bool ConcurrentTableSharedStore::constructPrime(const String& v,
     // TODO: currently we double serialize string for uniform handling later,
     // hopefully the unserialize won't be called often. We could further
     // optimize by storing more type info.
-    String s = apc_serialize(VarNR{v});
+    String s = apc_serialize(VarNR{v}, APCSerializeMode::Prime);
     char *sAddr = s_apc_file_storage.put(s.data(), s.size());
     if (sAddr) {
       item.sAddr = sAddr;
@@ -1007,7 +1007,7 @@ bool ConcurrentTableSharedStore::constructPrime(const Variant& v,
       APCFileStorage::StorageState::Invalid &&
       (isRefcountedType(v.getType()))) {
     // Only do the storage for ref-counted type
-    String s = apc_serialize(v);
+    String s = apc_serialize(v, APCSerializeMode::Prime);
     char *sAddr = s_apc_file_storage.put(s.data(), s.size());
     if (sAddr) {
       item.sAddr = sAddr;

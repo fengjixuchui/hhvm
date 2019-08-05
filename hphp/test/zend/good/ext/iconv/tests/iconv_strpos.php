@@ -1,4 +1,4 @@
-<?php
+<?hh
 function my_error_handler($errno, $errmsg, $filename, $linenum, $vars)
 {
 	echo "$errno: $errmsg\n";
@@ -28,4 +28,3 @@ foo($str, '$', 0, "ISO-2022-JP", "EUC-JP");
 var_dump(iconv_strpos("string", ""));
 var_dump(iconv_strpos("", "string"));
 
-?>

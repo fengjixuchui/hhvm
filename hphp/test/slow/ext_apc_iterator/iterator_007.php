@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL & ~E_USER_NOTICE & ~E_NOTICE);
 
 class foobar extends APCIterator {
@@ -16,4 +16,3 @@ var_dump(
   $obj->getTotalCount(),
   apc_delete($obj)
 );
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 class ancester
 {
 public $ancester = 0;
@@ -22,4 +22,3 @@ foreach ($r->GetProperties() as $p)
 	echo $p->getName(). " ". $p->getDeclaringClass()->getName()."\n";
 }
 
-?>

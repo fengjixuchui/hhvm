@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_map  ( callback $callback  , array $arr1  [, array $...  ] )
  * Description: Applies the callback to the elements of the given arrays
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Test array_map() by passing anoymous callback function with following variations
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_map() : anonymous callback function ***\n";
 
 $array1 = array(1, 2, 3);
@@ -29,4 +29,4 @@ echo "-- passing NULL as 'arr1' --\n";
 var_dump( array_map( $a ==> array($a), NULL));
 
 echo "Done";
-?>
+}

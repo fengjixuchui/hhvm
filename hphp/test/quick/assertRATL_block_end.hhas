@@ -1,8 +1,12 @@
+.hh_file 1;
 # tests that AssertRATL cannot appear at the end of a block
 
 .main {
-    FPushFuncD 1 "foo"
+    NullUninit
+    NullUninit
+    NullUninit
     Int 9
+    FPushFuncD 1 "foo"
     FCall <> 1 1 "" - "" ""
     PopC
     Int 1
@@ -10,11 +14,15 @@
 }
 
 .function foo($x){
+    NullUninit
+    NullUninit
+    NullUninit
     Int 2
     JmpNZ target_label
     AssertRATL $x Int
-    target_label: FPushFuncD 1 "var_dump"
+  target_label:
     Int 42
+    FPushFuncD 1 "var_dump"
     FCall <> 1 1 "" - "" ""
     RetC
 }

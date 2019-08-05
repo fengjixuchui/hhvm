@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Make a string's first character uppercase */
 
 echo "#### Basic and Various operations ####\n";
@@ -37,7 +37,7 @@ $str_array = array(
 	     	  );
 /* loop to test working of lcfirst with different values */
 foreach ($str_array as $string) {
-  var_dump( lcfirst($string) );
+  try { var_dump( lcfirst($string) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 }
 
 
@@ -82,12 +82,12 @@ echo "\n--- Testing objects ---\n";
         to string" by default when an object is passed instead of string:
 The error can be  avoided by choosing the __toString magix method as follows: */
 
-class string {
+class mystring {
   function __toString() {
     return "Hello world";
   }
 }
-$obj_string = new string;
+$obj_string = new mystring;
 
 var_dump(lcfirst("$obj_string"));
 
@@ -104,7 +104,7 @@ $string2 = (int)get_resource_type($file1);      // converting stream type to int
 var_dump(lcfirst($string1));
 
 /* $string2 holds a value of "int(0)" */
-var_dump(lcfirst($string2));
+try { var_dump(lcfirst($string2)); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 fclose($file1);                                 // closing the file "dummy-lcfirst.txt"
 unlink("$filename1");                           // deletes "dummy-lcfirst.txt"
@@ -138,8 +138,8 @@ var_dump(lcfirst("$str"));
 var_dump(lcfirst("$str'S"));
 var_dump(lcfirst("$strS"));
 
+
 /* String with curly braces, complex syntax */
-var_dump(lcfirst("${str}S"));
 var_dump(lcfirst("{$str}S"));
 
 echo "\n--- Nested lcfirst() ---\n";
@@ -154,4 +154,3 @@ try { lcfirst($str_array[0], $str_array[1]); } catch (Exception $e) { echo "\n".
 try { lcfirst((int)10, (int)20); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done\n";
-?>

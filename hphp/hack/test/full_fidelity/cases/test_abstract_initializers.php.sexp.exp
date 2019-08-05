@@ -10,13 +10,12 @@
       ((missing 0 ()) (missing 0 ())
        (((end_of_line 1)) class 5 ((whitespace 1)))
        (() name 13 ((whitespace 1))) (missing 0 ()) (missing 0 ())
-       (missing 0 ()) (missing 0 ()) (missing 0 ())
+       (missing 0 ()) (missing 0 ()) (missing 0 ()) (missing 0 ())
        (classish_body 23
         ((() { 1 ((end_of_line 1)))
          (list 17
           ((const_declaration 17
-            ((missing 0 ()) (missing 0 ())
-             (((whitespace 2)) const 5 ((whitespace 1)))
+            ((missing 0 ()) (((whitespace 2)) const 5 ((whitespace 1)))
              (simple_type_specifier 3 ((() int 3 ((whitespace 1)))))
              (list 6
               ((list_item 6
@@ -32,13 +31,12 @@
       ((missing 0 ()) (missing 0 ())
        (((end_of_line 1)) class 5 ((whitespace 1)))
        (() name 13 ((whitespace 1))) (missing 0 ()) (missing 0 ())
-       (missing 0 ()) (missing 0 ()) (missing 0 ())
+       (missing 0 ()) (missing 0 ()) (missing 0 ()) (missing 0 ())
        (classish_body 19
         ((() { 1 ((end_of_line 1)))
          (list 13
           ((const_declaration 13
-            ((missing 0 ()) (missing 0 ())
-             (((whitespace 2)) const 5 ((whitespace 1)))
+            ((missing 0 ()) (((whitespace 2)) const 5 ((whitespace 1)))
              (simple_type_specifier 3 ((() int 3 ((whitespace 1)))))
              (list 2
               ((list_item 2
@@ -51,12 +49,12 @@
        (list 8 ((((end_of_line 1)) abstract 8 ((whitespace 1)))))
        (() class 5 ((whitespace 1))) (() name 13 ((whitespace 1)))
        (missing 0 ()) (missing 0 ()) (missing 0 ()) (missing 0 ())
-       (missing 0 ())
+       (missing 0 ()) (missing 0 ())
        (classish_body 28
         ((() { 1 ((end_of_line 1)))
          (list 22
           ((const_declaration 22
-            ((missing 0 ()) (((whitespace 2)) abstract 8 ((whitespace 1)))
+            ((list 8 ((((whitespace 2)) abstract 8 ((whitespace 1)))))
              (() const 5 ((whitespace 1)))
              (simple_type_specifier 3 ((() int 3 ((whitespace 1)))))
              (list 2
@@ -70,12 +68,12 @@
        (list 8 ((((end_of_line 1)) abstract 8 ((whitespace 1)))))
        (() class 5 ((whitespace 1))) (() name 13 ((whitespace 1)))
        (missing 0 ()) (missing 0 ()) (missing 0 ()) (missing 0 ())
-       (missing 0 ())
+       (missing 0 ()) (missing 0 ())
        (classish_body 32
         ((() { 1 ((end_of_line 1)))
          (list 26
           ((const_declaration 26
-            ((missing 0 ()) (((whitespace 2)) abstract 8 ((whitespace 1)))
+            ((list 8 ((((whitespace 2)) abstract 8 ((whitespace 1)))))
              (() const 5 ((whitespace 1)))
              (simple_type_specifier 3 ((() int 3 ((whitespace 1)))))
              (list 6
@@ -93,13 +91,12 @@
        (list 8 ((((end_of_line 1)) abstract 8 ((whitespace 1)))))
        (() class 5 ((whitespace 1))) (() name 10 ((whitespace 1)))
        (missing 0 ()) (missing 0 ()) (missing 0 ()) (missing 0 ())
-       (missing 0 ())
+       (missing 0 ()) (missing 0 ())
        (classish_body 23
         ((() { 1 ((end_of_line 1)))
          (list 17
           ((const_declaration 17
-            ((missing 0 ()) (missing 0 ())
-             (((whitespace 2)) const 5 ((whitespace 1)))
+            ((missing 0 ()) (((whitespace 2)) const 5 ((whitespace 1)))
              (simple_type_specifier 3 ((() int 3 ((whitespace 1)))))
              (list 6
               ((list_item 6
@@ -116,13 +113,12 @@
        (list 8 ((((end_of_line 1)) abstract 8 ((whitespace 1)))))
        (() class 5 ((whitespace 1))) (() name 10 ((whitespace 1)))
        (missing 0 ()) (missing 0 ()) (missing 0 ()) (missing 0 ())
-       (missing 0 ())
+       (missing 0 ()) (missing 0 ())
        (classish_body 19
         ((() { 1 ((end_of_line 1)))
          (list 13
           ((const_declaration 13
-            ((missing 0 ()) (missing 0 ())
-             (((whitespace 2)) const 5 ((whitespace 1)))
+            ((missing 0 ()) (((whitespace 2)) const 5 ((whitespace 1)))
              (simple_type_specifier 3 ((() int 3 ((whitespace 1)))))
              (list 2
               ((list_item 2

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /* Prototype  : array get_defined_functions  ( void  )
  * Description: Gets an array of all defined functions.
@@ -12,7 +12,7 @@ function foo() {}
 // mixed case function
 function HelloWorld() {}
 
-Class C {
+class C {
 	function f1() {}
 	static function f2() {}
 }
@@ -26,7 +26,7 @@ if (!is_array($func)) {
 
 if (!is_array($func["internal"])) {
  	echo "TEST FAILED: no element in result array with key 'internal'\n";
-} 	
+}
 
 $internal = $func["internal"];
 
@@ -34,7 +34,7 @@ $internal = $func["internal"];
 if (!in_array("cos", $internal) || !in_array("strlen", $internal)) {
  	echo "TEST FAILED: missing elements from 'internal' array\n";
  	var_dump($internal);
-} 
+}
 
 if (!is_array($func["user"])) {
  	echo "TEST FAILED: no element in result array with key 'user'\n";
@@ -46,7 +46,5 @@ if (count($user) == 2 && in_array("foo", $user) && in_array("helloworld", $user)
 } else {
 	echo "TEST FAILED: missing elements from 'user' array\n";
 	var_dump($user);
-}	
-
-?>
-===Done===
+}
+echo "===Done===";

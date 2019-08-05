@@ -24,28 +24,29 @@ namespace HPHP { namespace HHBBC {
 
 //////////////////////////////////////////////////////////////////////
 
-const StaticString s_86metadata("86metadata");
+const StaticString s_reified_generics_var("0ReifiedGenerics");
 
 //////////////////////////////////////////////////////////////////////
 
 uint32_t closure_num_use_vars(const php::Func* f) {
-  // Properties on the closure object are either use vars, or storage
-  // for static locals.  The first N are the use vars.
-  return f->cls->properties.size() - f->staticLocals.size();
+  // Properties on the closure object are use vars.
+  return f->cls->properties.size();
 }
 
 bool is_pseudomain(const php::Func* f) {
   return f->unit->pseudomain.get() == f;
 }
 
-bool is_volatile_local(const php::Func* func,
-                       LocalId lid) {
-  if (is_pseudomain(func)) return true;
-  // Note: unnamed locals in a pseudomain probably are safe (i.e. can't be
-  // changed through $GLOBALS), but for now we don't bother.
+bool is_volatile_local(const php::Func* func, LocalId lid) {
   auto const& l = func->locals[lid];
   if (!l.name) return false;
-  return l.name->same(s_86metadata.get());
+
+  // Named pseudomain locals are bound to $GLOBALS.
+  if (is_pseudomain(func)) return true;
+
+  return (RuntimeOption::EnableArgsInBacktraces &&
+          l.name->same(s_reified_generics_var.get())) ||
+         l.name->same(s_86metadata.get());
 }
 
 SString memoize_impl_name(const php::Func* func) {
@@ -58,6 +59,20 @@ bool check_nargs_in_range(const php::Func* func, uint32_t nArgs) {
     if (func->dvEntries[nArgs++] == NoBlockId) return false;
   }
   return true;
+}
+
+int dyn_call_error_level(const php::Func* func)  {
+  if (func->attrs & AttrDynamicallyCallable) {
+      return 0;
+  }
+  if (func->cls) {
+    if (func->attrs & AttrStatic)
+      return RuntimeOption::EvalForbidDynamicCallsToClsMeth;
+    else
+      return RuntimeOption::EvalForbidDynamicCallsToInstMeth;
+  }
+  else
+    return RuntimeOption::EvalForbidDynamicCallsToFunc;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -73,24 +88,14 @@ void copy_into(php::FuncBase* dst, const php::FuncBase& other) {
   always_assert(!dst->exnNodes.size() || !other.exnNodes.size());
   dst->exnNodes.reserve(dst->exnNodes.size() + other.exnNodes.size());
   for (auto en : other.exnNodes) {
-    if (delta) {
-      match<void>(en.info,
-                  [&](php::FaultRegion& fr) {
-                    fr.faultEntry += delta;
-                  },
-                  [&](php::CatchRegion& cr) {
-                    cr.catchEntry += delta;
-                  });
-    }
+    en.region.catchEntry += delta;
     dst->exnNodes.push_back(std::move(en));
   }
   for (auto theirs : other.blocks) {
     if (delta) {
       auto const ours = theirs.mutate();
-      ours->id += delta;
       if (ours->fallthrough != NoBlockId) ours->fallthrough += delta;
-      for (auto &id : ours->throwExits) id += delta;
-      for (auto &id : ours->unwindExits) id += delta;
+      if (ours->throwExit != NoBlockId) ours->throwExit += delta;
       for (auto& bc : ours->hhbcs) {
         // When merging functions (used for 86xints) we have to drop
         // the src info, because it might reference a different unit

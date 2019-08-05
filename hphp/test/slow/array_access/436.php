@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function offsetGet($index) {
   echo ("GET0: $index\n");
@@ -13,12 +13,15 @@ class ArrayAccessImpl implements ArrayAccess {
     if(isset($data[$index])) {
         unset($data[$index]);
     }
-    $u = &$this->data[$index];
-    if(is_array($value)) {
-        $u = new ArrayAccessImpl();
-        foreach($value as $idx=>$e)            $u[$idx]=$e;
+    if (is_array($value)) {
+      $u = new ArrayAccessImpl();
+      $this->data[$index] = $u;
+      foreach($value as $idx => $e) {
+        $u[$idx] = $e;
+      }
+    } else {
+      $this->data[$index] = $value;
     }
- else        $u=$value;
   }
   public function offsetGet($index) {
     echo ("GET: $index\n");
@@ -28,7 +31,7 @@ class ArrayAccessImpl implements ArrayAccess {
   public function offsetExists($index) {
     echo ("EXISTS: $index\n");
     if(isset($this->data[$index])) {
-        if($this->data[$index] instanceof ArrayAccessImpl) {
+        if($this->data[$index] is ArrayAccessImpl) {
             if(count($this->data[$index]->data)>0)                return true;
             else                return false;
         }
@@ -46,12 +49,15 @@ class ArrayAccessImpl2 extends ArrayAccessImpl {
     if(isset($data[$index])) {
         unset($data[$index]);
     }
-    $u = &$this->data[$index];
-    if(is_array($value)) {
-        $u = new ArrayAccessImpl();
-        foreach($value as $idx=>$e)            $u[$idx]=$e;
+    if (is_array($value)) {
+      $u = new ArrayAccessImpl();
+      $this->data[$index] = $u;
+      foreach($value as $idx => $e) {
+        $u[$idx]=$e;
+      }
+    } else {
+      $this->data[$index] = $value;
     }
- else        $u=$value;
   }
   public function offsetGet($index) {
     echo ("GET2: $index\n");
@@ -61,7 +67,7 @@ class ArrayAccessImpl2 extends ArrayAccessImpl {
   public function offsetExists($index) {
     echo ("EXISTS2: $index\n");
     if(isset($this->data[$index])) {
-        if($this->data[$index] instanceof ArrayAccessImpl) {
+        if($this->data[$index] is ArrayAccessImpl) {
             if(count($this->data[$index]->data)>0)                return true;
             else                return false;
         }

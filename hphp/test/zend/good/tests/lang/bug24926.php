@@ -1,12 +1,10 @@
-<?php
-
-error_reporting (E_ALL);
+<?hh
 
 class foo {
 
     public $functions = array();
 
-    function foo()
+    function __construct()
     {
         $function = () ==> "FOO\n";
         print($function());
@@ -17,6 +15,8 @@ class foo {
     }
 }
 
-$a = new foo ();
+<<__EntryPoint>> function main(): void {
+error_reporting (E_ALL);
 
-?>
+$a = new foo ();
+}

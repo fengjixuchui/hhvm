@@ -1,14 +1,14 @@
-<?php    
-function custom_readfunction($oCurl, $hReadHandle, $iMaxOut) 
+<?hh
+function custom_readfunction($oCurl, $hReadHandle, $iMaxOut)
 {
   $sData = fread($hReadHandle,$iMaxOut-10); # -10 to have space to add "custom:"
-  if (!empty($sData))
-  { 
+  if ($sData ?? false)
+  {
     $sData = "custom:".$sData;
   }
   return $sData;
 }
-
+<<__EntryPoint>> function main(): void {
 $sFileBase  = dirname(__FILE__).DIRECTORY_SEPARATOR.'curl_opt_CURLOPT_READFUNCTION';
 $sReadFile  = $sFileBase.'_in.tmp';
 $sWriteFile = $sFileBase.'_out.tmp';
@@ -25,17 +25,15 @@ curl_setopt($oCurl, CURLOPT_INFILE,       $hReadHandle );
 curl_exec($oCurl);
 curl_close($oCurl);
 
-fclose ($hReadHandle); 
+fclose ($hReadHandle);
 
-$sOutput = file_get_contents($sWriteFile); 
+$sOutput = file_get_contents($sWriteFile);
 var_dump($sOutput);
-?>
-===DONE===
-<?php error_reporting(0); ?>
-<?php
+echo "===DONE===\n";
+error_reporting(0);
 $sFileBase  = dirname(__FILE__).DIRECTORY_SEPARATOR.'curl_opt_CURLOPT_READFUNCTION';
 $sReadFile  = $sFileBase.'_in.tmp';
 $sWriteFile = $sFileBase.'_out.tmp';
 unlink($sReadFile);
 unlink($sWriteFile);
-?>
+}

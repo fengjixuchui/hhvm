@@ -63,7 +63,6 @@ FuncEmitter::FuncEmitter(UnitEmitter& ue, int sn, Id id, const StringData* n)
   , m_activeUnnamedLocals(0)
   , m_numIterators(0)
   , m_nextFreeIterator(0)
-  , m_numClsRefSlots(0)
   , m_ehTabSorted(false)
 {}
 
@@ -88,7 +87,6 @@ FuncEmitter::FuncEmitter(UnitEmitter& ue, int sn, const StringData* n,
   , m_activeUnnamedLocals(0)
   , m_numIterators(0)
   , m_nextFreeIterator(0)
-  , m_numClsRefSlots(0)
   , m_ehTabSorted(false)
 {}
 
@@ -112,9 +110,6 @@ void FuncEmitter::init(int l1, int l2, Offset base_, Attr attrs_, bool top_,
     if (!SystemLib::s_inited) {
       assertx(attrs & AttrBuiltin);
     }
-    if ((attrs & AttrBuiltin) && !pce()) {
-      attrs |= AttrSkipFrame;
-    }
   }
 }
 
@@ -134,14 +129,15 @@ void FuncEmitter::commit(RepoTxn& txn) const {
      .insert(*this, txn, usn, m_sn, m_pce ? m_pce->id() : -1, name, top);
 }
 
-const StaticString s___Reified("__Reified");
-
 Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
   bool isGenerated = isdigit(name->data()[0]) || needsStripInOut(name);
 
   auto attrs = fix_attrs(this->attrs);
   if (preClass && preClass->attrs() & AttrInterface) {
     attrs |= AttrAbstract;
+  }
+  if (attrs & AttrIsMethCaller && RuntimeOption::RepoAuthoritative) {
+    attrs |= AttrPersistent | AttrUnique;
   }
   if (attrs & AttrPersistent && !preClass) {
     if ((RuntimeOption::EvalJitEnableRenameFunction ||
@@ -153,7 +149,7 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
       attrs = Attr(attrs & ~AttrPersistent);
     }
   } else {
-    assertx(preClass || !(attrs & AttrBuiltin));
+    assertx(preClass || !(attrs & AttrBuiltin) || (attrs & AttrIsMethCaller));
   }
   if (!RuntimeOption::RepoAuthoritative) {
     // In non-RepoAuthoritative mode, any function could get a VarEnv because
@@ -169,9 +165,6 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
   }
   if (isVariadic()) {
     attrs |= AttrVariadicParam;
-    if (isVariadicByRef()) {
-      attrs |= AttrVariadicByRef;
-    }
   }
   if (isAsync && !isGenerator) {
     // Async functions can return results directly.
@@ -190,8 +183,7 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
     isNative ||
     line2 - line1 >= Func::kSmallDeltaLimit ||
     past - base >= Func::kSmallDeltaLimit ||
-    hasReifiedGenerics ||
-    m_numClsRefSlots > 3;
+    hasReifiedGenerics;
 
   f->m_shared.reset(
     needsExtendedSharedData
@@ -212,7 +204,6 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
     ex->m_returnByValue = false;
     ex->m_isMemoizeWrapper = false;
     ex->m_isMemoizeWrapperLSB = false;
-    ex->m_actualNumClsRefSlots = m_numClsRefSlots;
   }
 
   std::vector<Func::ParamInfo> fParams;
@@ -237,7 +228,6 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
   f->shared()->m_numLocals = m_numLocals;
   f->shared()->m_numIterators = m_numIterators;
   f->m_maxStackCells = maxStackCells;
-  f->shared()->m_staticVars = staticVars;
   f->shared()->m_ehtab = ehtab;
   f->shared()->m_fpitab = fpitab;
   f->shared()->m_isClosureBody = isClosureBody;
@@ -253,7 +243,6 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
   f->shared()->m_repoAwaitedReturnType = repoAwaitedReturnType;
   f->shared()->m_isMemoizeWrapper = isMemoizeWrapper;
   f->shared()->m_isMemoizeWrapperLSB = isMemoizeWrapperLSB;
-  f->shared()->m_numClsRefSlots = m_numClsRefSlots;
   f->shared()->m_hasReifiedGenerics = hasReifiedGenerics;
   f->shared()->m_isRxDisabled = isRxDisabled;
 
@@ -279,15 +268,12 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
       ex->m_arFuncPtr,
       ex->m_nativeFuncPtr
     );
-    ex->m_takesNumArgs = !!(nativeAttributes & Native::AttrTakesNumArgs);
 
     if (ex->m_nativeFuncPtr) {
       if (info.sig.ret == Native::NativeSig::Type::MixedTV) {
         ex->m_returnByValue = true;
       }
-      int extra =
-        (nativeAttributes & Native::AttrTakesNumArgs ? 1 : 0) +
-        (isMethod() ? 1 : 0);
+      int extra = isMethod() ? 1 : 0;
       assertx(info.sig.args.size() == params.size() + extra);
       for (auto i = params.size(); i--; ) {
         switch (info.sig.args[extra + i]) {
@@ -318,7 +304,7 @@ String FuncEmitter::nativeFullname() const {
 Native::NativeFunctionInfo FuncEmitter::getNativeInfo() const {
   return Native::getNativeFunction(
       m_ue.m_nativeFuncs,
-      name,
+      stripInOutSuffix(name),
       m_pce ? m_pce->name() : nullptr,
       (attrs & AttrStatic)
     );
@@ -381,17 +367,10 @@ namespace {
  *
  *    a) e1 and e2 do not overlap, and e1 comes first
  *    b) e1 encloses e2
- *    c) e1 and e2 have the same region, but e1 is a Catch funclet and
- *       e2 is a Fault funclet.
  */
 struct EHEntComp {
   bool operator()(const EHEnt& e1, const EHEnt& e2) const {
     if (e1.m_base == e2.m_base) {
-      if (e1.m_past == e2.m_past) {
-        static_assert(!static_cast<uint8_t>(EHEnt::Type::Catch),
-            "Catch should be the smallest type");
-        return e1.m_type < e2.m_type;
-      }
       return e1.m_past > e2.m_past;
     }
     return e1.m_base < e2.m_base;
@@ -443,7 +422,6 @@ void FuncEmitter::sortFPITab(bool load) {
       // the AR itself. Fix it here.
       fpitab[i].m_fpOff += m_numLocals
         + m_numIterators * kNumIterCells
-        + clsRefCountToCells(m_numClsRefSlots)
         + (fpitab[i].m_fpiDepth) * kNumActRecCells;
     }
   }
@@ -479,25 +457,17 @@ void FuncEmitter::setEHTabIsSorted() {
  * to hook internal (C++) implementation of funcs/methods
  *
  * The Native attribute may have the following sub-options
- *  "ActRec": The internal function takes a fixed prototype
- *      TypedValue* funcname(ActRec *ar);
- *      Note that systemlib declaration must still be hack annotated
  *  "NoFCallBuiltin": Prevent FCallBuiltin optimization
  *      Effectively forces functions to generate an ActRec
  *  "NoInjection": Do not include this frame in backtraces
- *  "ReadsCallerFrame": Function might read from the caller's frame
  *
- *  e.g.   <<__Native("ActRec")>> function foo():mixed;
+ *  e.g.   <<__Native("NoFCallBuiltin")>> function foo():mixed;
  */
 static const StaticString
   s_native("__Native"),
-  s_actrec("ActRec"),
   s_nofcallbuiltin("NoFCallBuiltin"),
-  s_variadicbyref("VariadicByRef"),
   s_noinjection("NoInjection"),
-  s_numargs("NumArgs"),
-  s_opcodeimpl("OpCodeImpl"),
-  s_readsCallerFrame("ReadsCallerFrame");
+  s_opcodeimpl("OpCodeImpl");
 
 int FuncEmitter::parseNativeAttributes(Attr& attrs_) const {
   int ret = Native::AttrNone;
@@ -510,21 +480,12 @@ int FuncEmitter::parseNativeAttributes(Attr& attrs_) const {
     Variant userAttrVal = it.second();
     if (userAttrVal.isString()) {
       String userAttrStrVal = userAttrVal.toString();
-      if (userAttrStrVal.get()->isame(s_actrec.get())) {
-        ret |= Native::AttrActRec;
-        attrs_ |= AttrMayUseVV;
-      } else if (userAttrStrVal.get()->isame(s_nofcallbuiltin.get())) {
+      if (userAttrStrVal.get()->isame(s_nofcallbuiltin.get())) {
         attrs_ |= AttrNoFCallBuiltin;
-      } else if (userAttrStrVal.get()->isame(s_variadicbyref.get())) {
-        attrs_ |= AttrVariadicByRef;
       } else if (userAttrStrVal.get()->isame(s_noinjection.get())) {
         attrs_ |= AttrNoInjection;
-      } else if (userAttrStrVal.get()->isame(s_numargs.get())) {
-        ret |= Native::AttrTakesNumArgs;
       } else if (userAttrStrVal.get()->isame(s_opcodeimpl.get())) {
         ret |= Native::AttrOpCodeImpl;
-      } else if (userAttrStrVal.get()->isame(s_readsCallerFrame.get())) {
-        attrs_ |= AttrReadsCallerFrame;
       }
     }
   }
@@ -535,10 +496,6 @@ Attr FuncEmitter::fix_attrs(Attr a) const {
   if (RuntimeOption::RepoAuthoritative) return a;
 
   a = Attr(a & ~AttrInterceptable);
-
-  if (a & AttrReadsCallerFrame) {
-    return a;
-  }
 
   if (RuntimeOption::EvalJitEnableRenameFunction) {
     return a | AttrInterceptable;
@@ -583,13 +540,11 @@ void FuncEmitter::serdeMetaData(SerDe& sd) {
     (docComment)
     (m_numLocals)
     (m_numIterators)
-    (m_numClsRefSlots)
     (maxStackCells)
     (m_repoBoolBitset)
 
     (params)
     (localNames)
-    (staticVars)
     (ehtab)
     (fpitab,
       [&](const FPIEnt& prev, FPIEnt cur) -> FPIEnt {
@@ -652,7 +607,7 @@ void FuncRepoProxy::InsertFuncStmt
     txn.prepare(*this, insertQuery);
   }
 
-  BlobEncoder extraBlob;
+  BlobEncoder extraBlob{fe.useGlobalIds()};
   RepoTxnQuery query(txn, *this);
   query.bindInt64("@unitSn", unitSn);
   query.bindInt("@funcSn", funcSn);
@@ -684,7 +639,7 @@ void FuncRepoProxy::GetFuncsStmt
       Id preClassId;            /**/ query.getId(1, preClassId);
       StringData* name;         /**/ query.getStaticString(2, name);
       bool top;                 /**/ query.getBool(3, top);
-      BlobDecoder extraBlob =   /**/ query.getBlob(4);
+      BlobDecoder extraBlob =   /**/ query.getBlob(4, ue.useGlobalIds());
 
       FuncEmitter* fe;
       if (preClassId < 0) {
@@ -703,7 +658,6 @@ void FuncRepoProxy::GetFuncsStmt
         if (preClassId < 0) {
           assertx(fe->attrs & AttrPersistent);
           assertx(fe->attrs & AttrUnique);
-          assertx(fe->attrs & AttrSkipFrame);
         }
       }
       fe->setEHTabIsSorted();

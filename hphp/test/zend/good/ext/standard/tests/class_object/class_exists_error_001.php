@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto bool class_exists(string classname [, bool autoload])
  * Description: Checks if the class exists 
  * Source code: Zend/zend_builtin_functions.c
@@ -8,7 +8,7 @@
 /**
  * Test wrong number of arguments
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing class_exists() : error conditions ***\n";
 
 // Zero arguments
@@ -23,4 +23,4 @@ $extra_arg = 10;
 try { var_dump( class_exists($classname, $autoload, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

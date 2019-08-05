@@ -1,4 +1,4 @@
-<?php
+<?hh
 $dirname = dirname(__FILE__) . '/';
 $file = $dirname . 'test_with_comment.zip';
 include $dirname . 'utils.inc';
@@ -17,4 +17,3 @@ try { echo $zip->getCommentName() . "\n"; } catch (Exception $e) { echo "\n".'Wa
 
 $zip->close();
 
-?>

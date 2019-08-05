@@ -35,6 +35,9 @@ HPHP::HardwareCounter::s_counter
 HPHP::tl_libxml_trees
 HPHP::AssertDetailImpl::s_head
 HPHP::high_arena_flags
+HPHP::local_arena
+HPHP::local_arena_flags
+HPHP::local_arena_tcache
 HPHP::ImagickExtension::s_ini_setting
 HPHP::RPCRequestHandler::s_accessLogThreadData
 HPHP::HttpRequestHandler::s_accessLogThreadData
@@ -90,6 +93,9 @@ HPHP::s_xbox_prev_req_init_doc
 HPHP::s_note
 HPHP::s_state
 HPHP::s_globals
+HPHP::s_cachedHash
 HPHP::jit::irgen::IRBuilder::optimizeInst(HPHP::jit::IRInstruction*, HPHP::jit::irgen::IRBuilder::CloneFlag, HPHP::jit::Block*)::instNest
 HPHP::Trace::dumpEntry(HPHP::Trace::RingBufferEntry const*)::indentDepth
 HPHP::high_arena_tcache # Only needed in lowptr builds.
+HPHP::(anonymous namespace)::s_localCounters
+HPHP::WatchmanAutoload::t_adb

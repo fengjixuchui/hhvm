@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array date_parse  ( string $date  )
  * Description: Returns associative array with detailed info about given date.
  * Source code: ext/date/php_date.c
@@ -105,5 +105,4 @@ foreach($inputs as $variation =>$date) {
 // closing the resource
 fclose( $file_handle );
 
-?>
-===DONE===
+echo "===DONE===\n";

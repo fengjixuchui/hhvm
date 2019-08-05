@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class TestParentClass
 {
@@ -27,4 +27,4 @@ class TestChildClass extends TestParentClass
     }
 }
 
-?>
+<<__EntryPoint>> function main(): void {}

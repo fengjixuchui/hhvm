@@ -1,5 +1,4 @@
-
-<?php
+<?hh
 
 /*
  * Test for the datefmt_get_lenient & datefmt_set_lenient function
@@ -70,4 +69,3 @@ include_once( 'ut_common.inc' );
 
 // Run the test
 ut_run();
-?>

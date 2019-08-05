@@ -1,4 +1,4 @@
-<?php 
+<?hh 
 
 error_reporting(E_ALL|E_STRICT);
 
@@ -12,4 +12,3 @@ $c = new foo;
 
 $a = clone $c->b[1];
 
-?>

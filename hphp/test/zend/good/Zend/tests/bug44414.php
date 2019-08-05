@@ -1,4 +1,4 @@
-<?php
+<?hh
 abstract class A {
   abstract function foo();
 }
@@ -7,4 +7,5 @@ interface B {
 }
 class C extends A implements B {
 }
-?>
+
+<<__EntryPoint>> function main(): void {}

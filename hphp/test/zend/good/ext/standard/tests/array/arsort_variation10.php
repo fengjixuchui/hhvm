@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool arsort ( array &$array [, int $sort_flags] )
  * Description: Sort an array and maintain index association.
                 Elements will be arranged from highest to lowest when this function has completed.
@@ -11,7 +11,7 @@
  * 2.SORT_REGULAR - compare items normally
  * 3.SORT_NUMERIC - compare items numerically
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing arsort() : usage variations ***\n";
 
 // an array contains unsorted octal values
@@ -36,4 +36,4 @@ var_dump( arsort(&$temp_array, SORT_NUMERIC) ); // expecting : bool(true)
 var_dump($temp_array);
 
 echo "Done\n";
-?>
+}

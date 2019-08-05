@@ -634,7 +634,7 @@ bool SetArray::ExistsInt(const ArrayData* ad, int64_t k) {
 }
 
 bool SetArray::ExistsStr(const ArrayData* ad, const StringData* k) {
-  return asSet(ad)->findForExists(k, k->hash());
+  return NvGetStr(ad, k).is_set();
 }
 
 arr_lval SetArray::LvalInt(ArrayData*, int64_t, bool) {
@@ -643,36 +643,16 @@ arr_lval SetArray::LvalInt(ArrayData*, int64_t, bool) {
   );
 }
 
-arr_lval SetArray::LvalIntRef(ArrayData* ad, int64_t, bool) {
-  throwRefInvalidArrayValueException(ad);
-}
-
 arr_lval SetArray::LvalStr(ArrayData*, StringData*, bool) {
   SystemLib::throwInvalidOperationExceptionObject(
     "Invalid keyset operation (lval string)"
   );
 }
 
-arr_lval SetArray::LvalStrRef(ArrayData* ad, StringData*, bool) {
-  throwRefInvalidArrayValueException(ad);
-}
-
 arr_lval SetArray::LvalNew(ArrayData*, bool) {
   SystemLib::throwInvalidOperationExceptionObject(
     "Invalid keyset operation (lval new)"
   );
-}
-
-arr_lval SetArray::LvalNewRef(ArrayData* ad, bool) {
-  throwRefInvalidArrayValueException(ad);
-}
-
-ArrayData* SetArray::SetRefInt(ArrayData* ad, int64_t, tv_lval) {
-  throwRefInvalidArrayValueException(ad);
-}
-
-ArrayData* SetArray::SetRefStr(ArrayData* ad, StringData*, tv_lval) {
-  throwRefInvalidArrayValueException(ad);
 }
 
 ArrayData* SetArray::SetInt(ArrayData*, int64_t, Cell) {
@@ -778,10 +758,6 @@ ArrayData* SetArray::AppendWithRef(ArrayData* ad, TypedValue v) {
 ArrayData* SetArray::AppendWithRefInPlace(ArrayData* ad, TypedValue v) {
   if (tvIsReferenced(v)) throwRefInvalidArrayValueException(ad);
   return AppendInPlace(ad, tvToInitCell(v));
-}
-
-ArrayData* SetArray::AppendRef(ArrayData* ad, tv_lval) {
-  throwRefInvalidArrayValueException(ad);
 }
 
 ArrayData* SetArray::PlusEq(ArrayData* ad, const ArrayData*) {
@@ -892,7 +868,7 @@ ArrayData* SetArray::Escalate(const ArrayData* ad) {
   return const_cast<ArrayData*>(ad);
 }
 
-template <typename Init, IntishCast intishCast>
+template <typename Init, IntishCast IC>
 ALWAYS_INLINE
 ArrayData* SetArray::ToArrayImpl(ArrayData* ad, bool toDArray) {
   auto a = asSet(ad);
@@ -911,7 +887,7 @@ ArrayData* SetArray::ToArrayImpl(ArrayData* ad, bool toDArray) {
       init.set(elm.intKey(), tvAsCVarRef(&elm.tv));
     } else {
       auto const key = elm.strKey();
-      if (auto const intish = tryIntishCast<intishCast>(key)) {
+      if (auto const intish = tryIntishCast<IC>(key)) {
         init.set(*intish, make_tv<KindOfInt64>(*intish));
       } else {
         init.set(key, tvAsCVarRef(&elm.tv));
@@ -926,20 +902,20 @@ ArrayData* SetArray::ToArrayImpl(ArrayData* ad, bool toDArray) {
 
 ArrayData* SetArray::ToPHPArray(ArrayData* ad, bool) {
   auto out =
-    ToArrayImpl<MixedArrayInit, IntishCast::AllowCastAndWarn>(ad, false);
+    ToArrayImpl<MixedArrayInit, IntishCast::None>(ad, false);
   assertx(out->isNotDVArray());
   return out;
 }
 
 ArrayData* SetArray::ToPHPArrayIntishCast(ArrayData* ad, bool) {
-  auto out = ToArrayImpl<MixedArrayInit, IntishCast::CastSilently>(ad, false);
+  auto out = ToArrayImpl<MixedArrayInit, IntishCast::Cast>(ad, false);
   assertx(out->isNotDVArray());
   return out;
 }
 
 ArrayData* SetArray::ToDArray(ArrayData* ad, bool copy) {
   if (RuntimeOption::EvalHackArrDVArrs) return ToDict(ad, copy);
-  auto out = ToArrayImpl<DArrayInit, IntishCast::AllowCastAndWarn>(ad, true);
+  auto out = ToArrayImpl<DArrayInit, IntishCast::None>(ad, true);
   assertx(out->isDArray());
   return out;
 }

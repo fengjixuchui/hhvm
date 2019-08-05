@@ -1,7 +1,7 @@
-<?php
+<?hh
 
 /* Testing fputcsv() to write to a file when the field has no CSV format */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing fputcsv() : with no CSV format in the field ***\n";
 
 /* the array is with three elements in it. Each element should be read as 
@@ -53,4 +53,4 @@ foreach ($fields as $field) {
 } // end of foreach
 
 echo "Done\n";
-?>
+}

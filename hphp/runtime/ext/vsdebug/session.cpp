@@ -75,7 +75,7 @@ void DebuggerSession::startDummyRequest(
 }
 
 std::string DebuggerSession::getDebuggerSessionAuth() {
-  assert(m_debugger->getCurrentThreadId() == Debugger::kDummyTheadId);
+  assertx(m_debugger->getCurrentThreadId() == Debugger::kDummyTheadId);
   return m_debuggerSessionAuth;
 }
 
@@ -83,7 +83,7 @@ void DebuggerSession::invokeDummyStartupDocument() {
 
   if (m_displayStartupMsg) {
     m_debugger->sendUserMessage(
-      "Preparing your Hack/PHP console. Please wait...",
+      "Preparing your Hack console. Please wait...",
       DebugTransport::OutputLevelWarning
     );
   }
@@ -249,7 +249,7 @@ void DebuggerSession::runDummy() {
   if (!m_sandboxUser.empty()) {
     SourceRootInfo sourceRootInfo(m_sandboxUser, m_sandboxName);
     auto server = php_global_exchange(s__SERVER, init_null());
-    forceToArray(server);
+    forceToDArray(server);
     Array arr = server.toArrRef();
     server.unset();
     php_global_set(

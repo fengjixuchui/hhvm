@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : mixed array_shift(array &$stack)
  * Description: Pops an element off the beginning of the array
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass arrays with different data types as keys to test how array_shift() re-assigns keys
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_shift() : usage variations ***\n";
 
 //get an unset variable
@@ -99,4 +99,4 @@ foreach($inputs as $key => $input) {
 };
 
 echo "Done";
-?>
+}

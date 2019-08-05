@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 abstract final class PushStackStatics {
   public static $index = 0;
@@ -8,14 +8,19 @@ abstract final class PushStackStatics {
 function push_stack(){
 
   $val = PushStackStatics::$index++;
-  array_push(&PushStackStatics::$stack, $val);
+  $stack = PushStackStatics::$stack;
+  array_push(&$stack, $val);
+  PushStackStatics::$stack = $stack;
 }
 function pop_stack(){
 
   if (PushStackStatics::$stack) {
-    array_pop(&PushStackStatics::$stack);
+    $stack = PushStackStatics::$stack;
+    array_pop(&$stack);
+    PushStackStatics::$stack = $stack;
   }
 }
+<<__EntryPoint>> function main(): void {
 push_stack();
 pop_stack();
 pop_stack();
@@ -25,3 +30,4 @@ pop_stack();
 push_stack();
 $info = array(count(PushStackStatics::$stack), PushStackStatics::$stack[count(PushStackStatics::$stack)-1], PushStackStatics::$stack);
 var_dump($info);
+}

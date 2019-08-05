@@ -1,7 +1,3 @@
-array(1) {
-  ["foo"]=>
-  NULL
-}
 array(2) {
   ["A"]=>
   array(2) {
@@ -15,7 +11,7 @@ array(2) {
   }
 }
 
-Deprecated: ReflectionFunctionAbstract::getAttributesRecursive: This function is being removed as it has been broken for some time in %s on line 27
+Deprecated: ReflectionFunctionAbstract::getAttributesRecursive: This function is being removed as it has been broken for some time in %s on line 25
 array(2) {
   ["A"]=>
   array(2) {
@@ -30,7 +26,7 @@ array(2) {
 }
 array(3) {
   [0]=>
-  object(ReflectionParameter)#2 (3) {
+  object(ReflectionParameter) (3) {
     ["info"]=>
     array(10) {
       ["index"]=>
@@ -68,7 +64,7 @@ array(3) {
     }
   }
   [1]=>
-  object(ReflectionParameter)#3 (3) {
+  object(ReflectionParameter) (3) {
     ["info"]=>
     array(12) {
       ["index"]=>
@@ -110,7 +106,7 @@ array(3) {
     }
   }
   [2]=>
-  object(ReflectionParameter)#4 (3) {
+  object(ReflectionParameter) (3) {
     ["info"]=>
     array(12) {
       ["index"]=>
@@ -152,7 +148,7 @@ array(3) {
     }
   }
 }
-object(ReflectionType)#5 (1) {
+object(ReflectionType) (1) {
   ["type_hint_info":"ReflectionType":private]=>
   array(3) {
     ["name"]=>
@@ -167,17 +163,15 @@ array(1) {
   [0]=>
   int(1)
 }
-array(0) {
-}
 array(1) {
   ["Bing"]=>
   array(0) {
   }
 }
 
-Deprecated: ReflectionMethod::getAttributesRecursive: This function is being removed as it has been broken for some time in %s on line 34
+Deprecated: ReflectionMethod::getAttributesRecursive: This function is being removed as it has been broken for some time in %s on line 31
 
-Deprecated: ReflectionMethod::getAttributesRecursive: This function is being removed as it has been broken for some time in %s on line 34
+Deprecated: ReflectionMethod::getAttributesRecursive: This function is being removed as it has been broken for some time in %s on line 31
 array(2) {
   ["Bing"]=>
   array(0) {
@@ -188,7 +182,7 @@ array(2) {
 }
 array(1) {
   [0]=>
-  object(ReflectionParameter)#6 (3) {
+  object(ReflectionParameter) (3) {
     ["info"]=>
     array(11) {
       ["index"]=>

@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : string soundex  ( string $str  )
  * Description: Calculate the soundex key of a string
  * Source code: ext/standard/string.c
 */
-		
+<<__EntryPoint>> function main(): void {
 echo "\n*** Testing soundex error conditions ***";
 
 echo "-- Testing soundex() function with Zero arguments --\n";
@@ -14,5 +14,5 @@ $str = "Euler";
 $extra_arg = 10;
 try { var_dump( soundex( $str, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?> 
-===DONE===
+echo "===DONE===\n";
+}

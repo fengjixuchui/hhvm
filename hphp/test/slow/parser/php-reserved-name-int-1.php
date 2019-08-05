@@ -1,9 +1,9 @@
-<?php
+<?hh
 
-<<__EntryPoint>>
-function main_php_reserved_name_int_1() {
-if (false) {
-  class Int {}
-}
+
+
+
+class Int {}
+<<__EntryPoint>> function main(): void {
 echo "Done\n";
 }

@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : string mcrypt_decrypt(string cipher, string key, string data, string mode, string iv)
  * Description: OFB crypt/decrypt data using key key with cipher cipher starting with iv 
  * Source code: ext/mcrypt/mcrypt.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mcrypt_decrypt() : error conditions ***\n";
 
 
@@ -25,5 +25,5 @@ $key = 'string_val';
 $data = 'string_val';
 try { var_dump( mcrypt_decrypt($cipher, $key, $data) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

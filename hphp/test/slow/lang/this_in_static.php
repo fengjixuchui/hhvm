@@ -3,6 +3,8 @@
 
 class foo {
   static function bar(){
-    var_dump($this)
+    var_dump($this);
   }
 }
+
+<<__EntryPoint>> function main(): void {}

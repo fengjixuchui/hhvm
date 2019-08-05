@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 var_dump(gmp_popcount(-1));
 var_dump(gmp_popcount(0));
 var_dump(gmp_popcount(12123));
@@ -11,4 +11,4 @@ var_dump(gmp_popcount(array()));
 try { var_dump(gmp_popcount()); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done\n";
-?>
+}

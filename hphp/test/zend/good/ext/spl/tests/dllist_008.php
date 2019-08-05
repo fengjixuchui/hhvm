@@ -1,4 +1,4 @@
-<?php
+<?hh
 $obj = new SplDoublyLinkedList();
 $obj[] = 1;
 $obj[] = 2;
@@ -12,4 +12,3 @@ $obj = new SplDoublyLinkedList2();
 $obj[] = 1;
 $obj[] = 2;
 var_dump(count($obj));
-?>

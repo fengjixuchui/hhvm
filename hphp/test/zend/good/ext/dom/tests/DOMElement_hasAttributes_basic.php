@@ -1,4 +1,4 @@
-<?php
+<?hh
 require_once("dom_test.inc");
 
 $dom = new DOMDocument;
@@ -26,4 +26,3 @@ echo "\nElement should have no attributes:\n";
 var_dump($element->hasAttributes());
 
 
-?>

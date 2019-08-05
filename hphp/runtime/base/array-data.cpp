@@ -23,6 +23,7 @@
 #include "hphp/runtime/base/array-common.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/array-iterator.h"
+#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/empty-array.h"
@@ -33,7 +34,6 @@
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/set-array.h"
 #include "hphp/runtime/base/variable-serializer.h"
-#include "hphp/runtime/base/rds-local.h"
 
 #include "hphp/runtime/vm/globals-array.h"
 #include "hphp/runtime/vm/interp-helpers.h"
@@ -50,9 +50,8 @@ const StaticString
   s_VecUnsetMsg{"Vecs do not support unsetting non-end elements"};
 
 ///////////////////////////////////////////////////////////////////////////////
-using ArrayDataHash = rds::local::detail::ArrayDataHash;
-extern DECLARE_RDS_LOCAL_HOTVALUE(ArrayDataHash, s_cachedHash);
-IMPLEMENT_RDS_LOCAL_HOTVALUE(ArrayDataHash, s_cachedHash);
+
+__thread std::pair<const ArrayData*, size_t> s_cachedHash;
 
 namespace {
 static_assert(
@@ -68,8 +67,7 @@ struct ScalarHash {
     return equal(ad1, ad2);
   }
   size_t hash(const ArrayData* arr) const {
-    if (arr == static_cast<ArrayDataHash&>(s_cachedHash).first)
-      return static_cast<ArrayDataHash&>(s_cachedHash).second;
+    if (arr == s_cachedHash.first) return s_cachedHash.second;
     return raw_hash(arr);
   }
   size_t raw_hash(const ArrayData* arr) const {
@@ -80,6 +78,12 @@ struct ScalarHash {
     };
     ret |= (uint64_t{arr->dvArray()} << 32);
 
+    if (RuntimeOption::EvalArrayProvenance) {
+      if (auto const tag = arrprov::getTag(arr)) {
+        ret = folly::hash::hash_combine(ret, tag->line());
+        ret = folly::hash::hash_combine(ret, tag->filename());
+      }
+    }
     IterateKV(
       arr,
       [&](Cell k, TypedValue v) {
@@ -117,6 +121,7 @@ struct ScalarHash {
           case KindOfFunc:
           case KindOfClass:
           case KindOfClsMeth:
+          case KindOfRecord:
             always_assert(false);
         }
       }
@@ -179,7 +184,7 @@ void ArrayData::GetScalarArray(ArrayData** parr) {
   auto replace = [&] (ArrayData* rep) {
     *parr = rep;
     decRefArr(arr);
-    static_cast<ArrayDataHash&>(s_cachedHash).first = nullptr;
+    s_cachedHash.first = nullptr;
   };
 
   if (arr->empty()) {
@@ -195,8 +200,8 @@ void ArrayData::GetScalarArray(ArrayData** parr) {
   checkNativeStack();
   arr->onSetEvalScalar();
 
-  static_cast<ArrayDataHash&>(s_cachedHash).first = arr;
-  static_cast<ArrayDataHash&>(s_cachedHash).second = ScalarHash{}.raw_hash(arr);
+  s_cachedHash.first = arr;
+  s_cachedHash.second = ScalarHash{}.raw_hash(arr);
 
   auto it = s_arrayDataMap.find(arr);
   if (it != s_arrayDataMap.end()) return replace(*it);
@@ -205,7 +210,7 @@ void ArrayData::GetScalarArray(ArrayData** parr) {
 
   std::lock_guard<std::mutex> g {
     s_mutexes[
-      static_cast<ArrayDataHash&>(s_cachedHash).second % s_mutexes.size()
+      s_cachedHash.second % s_mutexes.size()
     ]
   };
   it = s_arrayDataMap.find(arr);
@@ -219,9 +224,8 @@ void ArrayData::GetScalarArray(ArrayData** parr) {
     ad = arr->copyStatic();
   }
   assertx(ad->isStatic());
-  static_cast<ArrayDataHash&>(s_cachedHash).first = ad;
-  assertx(ScalarHash{}.raw_hash(ad) ==
-      static_cast<ArrayDataHash&>(s_cachedHash).second);
+  s_cachedHash.first = ad;
+  assertx(ScalarHash{}.raw_hash(ad) == s_cachedHash.second);
   auto const DEBUG_ONLY inserted = s_arrayDataMap.insert(ad).second;
   assertx(inserted);
   return replace(ad);
@@ -331,6 +335,22 @@ const ArrayFunctions g_array_funcs = {
   DISPATCH(NvTryGetStr)
 
   /*
+   * ssize_t NvGetIntPos(const ArrayData*, int64_t k)
+   *
+   *   Lookup the position of an int key in the array.  Returns the canonical
+   *   invalid position if the key is not in the array.
+   */
+  DISPATCH(NvGetIntPos)
+
+  /*
+   * ssize_t NvGetStrPos(const ArrayData*, const StringData* k)
+   *
+   *   Lookup the position of a string key in the array.  Returns the canonical
+   *   invalid position if the key is not in the array.
+   */
+  DISPATCH(NvGetStrPos)
+
+  /*
    * Cell NvGetKey(const ArrayData*, ssize_t pos)
    *
    *   Look up the key for an array position.  `pos' must be a valid
@@ -426,64 +446,32 @@ const ArrayFunctions g_array_funcs = {
 
   /*
    * arr_lval LvalInt(ArrayData*, int64_t k, bool copy)
-   * arr_lval LvalIntRef(ArrayData*, int64_t k, bool copy)
    *
    *   Look up a value in the array by the supplied integer key, creating it as
-   *   a KindOfNull if it doesn't exist, and return a reference to it.  Use the
-   *   ref variant if the retrieved value will be boxed.  This function has
-   *   copy/grow semantics.
+   *   a KindOfNull if it doesn't exist, and return a reference to it.  This
+   *   function has copy/grow semantics.
    */
   DISPATCH(LvalInt)
-  DISPATCH(LvalIntRef)
 
   /*
    * arr_lval LvalStr(ArrayData*, StringData* key, bool copy)
-   * arr_lval LvalStrRef(ArrayData*, StringData* key, bool copy)
    *
    *   Look up a value in the array by the supplied string key, creating it as
    *   a KindOfNull if it doesn't exist, and return a reference to it.  The
-   *   string `key' may not be an integer-like string.  Use the ref variant if
-   *   the retrieved value will be boxed.  This function has copy/grow
-   *   semantics.
+   *   string `key' may not be an integer-like string.  This function has
+   *   copy/grow semantics.
    */
   DISPATCH(LvalStr)
-  DISPATCH(LvalStrRef)
 
   /*
    * arr_lval LvalNew(ArrayData*, bool copy)
-   * arr_lval LvalNewRef(ArrayData*, bool copy)
    *
    *   Insert a new null value in the array at the next available integer key,
    *   and return a reference to it.  In the case that there is no next
    *   available integer key, this function returns a reference to the
-   *   lvalBlackHole.  Use the ref variant if the retrieved value will be
-   *   boxed.  This function has copy/grow semantics.
+   *   lvalBlackHole.  This function has copy/grow semantics.
    */
   DISPATCH(LvalNew)
-  DISPATCH(LvalNewRef)
-
-  /*
-   * ArrayData* SetRefInt(ArrayData*, int64_t key, tv_lval v)
-   *
-   *   Binding set with an integer key.  Box `v' if it is not already
-   *   boxed, and then insert a KindOfRef that points to v's RefData.
-   *   SetRefInt() has copy/grow semantics; SetRefIntInPlace may only
-   *   grow or escalate.
-   */
-  DISPATCH(SetRefInt)
-  DISPATCH(SetRefIntInPlace)
-
-  /*
-   * ArrayData* SetRefStr(ArrayData*, StringData* key, tv_lval v)
-   *
-   *  Binding set with a string key.  The string `key' must not be an
-   *  integer-like string.  Box `v' if it is not already boxed, and
-   *  then insert a KindOfRef that points to v's RefData. SetRefStr()
-   *  has copy/grow semantics; SetRefStrInPlace() may only grow or
-   *  escalate.
-   */
-  DISPATCH(SetRefStr)
-  DISPATCH(SetRefStrInPlace)
 
   /*
    * ArrayData* RemoveInt(ArrayData*, int64_t key)
@@ -641,19 +629,6 @@ const ArrayFunctions g_array_funcs = {
    */
   DISPATCH(Append)
   DISPATCH(AppendInPlace)
-
-  /*
-   * ArrayData* AppendRef(ArrayData*, tv_lval v)
-   *
-   *   Binding append.  This function appends a new KindOfRef to the
-   *   array with the next available integer key, boxes v if it is not
-   *   already boxed, and points the new value to the same RefData.
-   *   If there is no next available integer key, this function does
-   *   not append a value. AppendRef() has copy/grow semantics;
-   *   AppendRefInPlace() may only escalate or grow.
-   */
-  DISPATCH(AppendRef)
-  DISPATCH(AppendRefInPlace)
 
   /*
    * ArrayData* AppendWithRef(ArrayData*, TypedValue v)
@@ -816,12 +791,7 @@ namespace {
 
 DEBUG_ONLY void assertForCreate(TypedValue name) {
   auto const k = tvToCell(name);
-  always_assert(
-    isIntType(k.m_type) ||
-    (isStringType(k.m_type) && !tryIntishCast(k.m_data.pstr))
-    /* This would raise a HAC notice if we cast but since we will crash anyways
-     * it seems like a somewhat moot point */
-  );
+  always_assert(isIntType(k.m_type) || isStringType(k.m_type));
 }
 
 }
@@ -854,28 +824,6 @@ ArrayData* ArrayData::Create(TypedValue name, TypedValue value) {
 
   ArrayInit init(1, ArrayInit::Map{});
   init.setValidKey(name, value);
-  return init.create();
-}
-
-ArrayData* ArrayData::CreateWithRef(TypedValue name, TypedValue value) {
-  if (debug) assertForCreate(name);
-
-  ArrayInit init(1, ArrayInit::Map{});
-  init.setWithRef(name, value);
-  return init.create();
-}
-
-ArrayData* ArrayData::CreateRef(Variant& value) {
-  PackedArrayInit pai(1);
-  pai.appendRef(value);
-  return pai.create();
-}
-
-ArrayData* ArrayData::CreateRef(TypedValue name, tv_lval value) {
-  if (debug) assertForCreate(name);
-
-  ArrayInit init(1, ArrayInit::Map{});
-  init.setRef(name, value, true);
   return init.create();
 }
 
@@ -1168,24 +1116,22 @@ Variant ArrayData::each() {
 ///////////////////////////////////////////////////////////////////////////////
 // helpers
 
-tv_rval ArrayData::getNotFound(int64_t k) {
-  raise_notice("Undefined index: %" PRId64, k);
-  return tv_rval::dummy();
+void ArrayData::getNotFound(int64_t k) {
+  throwArrayIndexException(k, false);
 }
 
-tv_rval ArrayData::getNotFound(const StringData* k) {
-  raise_notice("Undefined index: %s", k->data());
-  return tv_rval::dummy();
+void ArrayData::getNotFound(const StringData* k) {
+  throwArrayKeyException(k, false);
 }
 
 tv_rval ArrayData::getNotFound(int64_t k, bool error) const {
-  return error && kind() != kGlobalsKind ? getNotFound(k) :
-         tv_rval::dummy();
+  if (error && kind() != kGlobalsKind) getNotFound(k);
+  return tv_rval::dummy();
 }
 
 tv_rval ArrayData::getNotFound(const StringData* k, bool error) const {
-  return error && kind() != kGlobalsKind ? getNotFound(k) :
-         tv_rval::dummy();
+  if (error && kind() != kGlobalsKind) getNotFound(k);
+  return tv_rval::dummy();
 }
 
 const char* ArrayData::kindToString(ArrayKind kind) {
@@ -1234,6 +1180,9 @@ std::string describeKeyType(const TypedValue* tv) {
   case KindOfObject:
     return tv->m_data.pobj->getClassName().get()->toCppString();
 
+  case KindOfRecord:
+    return tv->m_data.prec->record()->name()->toCppString();
+
   case KindOfFunc:            return "func";
   case KindOfClass:           return "class";
   case KindOfClsMeth:         return "clsmeth";
@@ -1271,6 +1220,7 @@ std::string describeKeyValue(TypedValue tv) {
   case KindOfFunc:
   case KindOfClass:
   case KindOfClsMeth:
+  case KindOfRecord:
     return "<invalid key type>";
   }
   not_reached();

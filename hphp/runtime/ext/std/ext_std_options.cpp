@@ -37,7 +37,6 @@
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/php-globals.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/request-event-handler.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
@@ -52,6 +51,7 @@
 #include "hphp/runtime/server/cli-server.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/util/process.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/util/timer.h"
 
 namespace HPHP {
@@ -60,8 +60,6 @@ namespace HPHP {
 // Linux: /tmp
 // MacOS: /var/tmp
 const StaticString s_DEFAULT_TEMP_DIR(P_tmpdir);
-
-const StaticString s_ZEND_VERSION("2.4.99");
 
 const int64_t k_ASSERT_ACTIVE      = 1;
 const int64_t k_ASSERT_BAIL        = 3;
@@ -988,10 +986,6 @@ String HHVM_FUNCTION(sys_get_temp_dir) {
 #endif
 }
 
-static String HHVM_FUNCTION(zend_version) {
-  return s_ZEND_VERSION;
-}
-
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -1242,7 +1236,6 @@ void StandardExtension::initOptions() {
   HHVM_FE(putenv);
   HHVM_FE(set_time_limit);
   HHVM_FE(sys_get_temp_dir);
-  HHVM_FE(zend_version);
   HHVM_FE(version_compare);
 
   HHVM_RC_INT(INFO_GENERAL, 1 << 0);

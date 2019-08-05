@@ -5,9 +5,11 @@ string(3) "foo"
 bool(true)
 int(3)
 string(5) "hello"
+string(5) "hello"
 bool(true)
 int(5)
 class(bar)
+string(3) "bar"
 bool(true)
 int(3)
 string(3) "baz"
@@ -41,9 +43,11 @@ string(3) "foo"
 bool(true)
 int(3)
 string(5) "hello"
+string(5) "hello"
 bool(true)
 int(5)
 class(bar)
+string(3) "bar"
 bool(true)
 int(3)
 string(3) "baz"
@@ -77,9 +81,11 @@ string(3) "foo"
 bool(true)
 int(3)
 string(5) "hello"
+string(5) "hello"
 bool(true)
 int(5)
 class(bar)
+string(3) "bar"
 bool(true)
 int(3)
 string(3) "baz"
@@ -113,9 +119,11 @@ string(3) "foo"
 bool(true)
 int(3)
 string(5) "hello"
+string(5) "hello"
 bool(true)
 int(5)
 class(bar)
+string(3) "bar"
 bool(true)
 int(3)
 string(3) "baz"
@@ -149,9 +157,11 @@ string(3) "foo"
 bool(true)
 int(3)
 string(5) "hello"
+string(5) "hello"
 bool(true)
 int(5)
 class(bar)
+string(3) "bar"
 bool(true)
 int(3)
 string(3) "baz"
@@ -185,9 +195,11 @@ string(3) "foo"
 bool(true)
 int(3)
 string(5) "hello"
+string(5) "hello"
 bool(true)
 int(5)
 class(bar)
+string(3) "bar"
 bool(true)
 int(3)
 string(3) "baz"
@@ -221,9 +233,11 @@ string(3) "foo"
 bool(true)
 int(3)
 string(5) "hello"
+string(5) "hello"
 bool(true)
 int(5)
 class(bar)
+string(3) "bar"
 bool(true)
 int(3)
 string(3) "baz"
@@ -257,9 +271,11 @@ string(3) "foo"
 bool(true)
 int(3)
 string(5) "hello"
+string(5) "hello"
 bool(true)
 int(5)
 class(bar)
+string(3) "bar"
 bool(true)
 int(3)
 string(3) "baz"
@@ -293,9 +309,11 @@ string(3) "foo"
 bool(true)
 int(3)
 string(5) "hello"
+string(5) "hello"
 bool(true)
 int(5)
 class(bar)
+string(3) "bar"
 bool(true)
 int(3)
 string(3) "baz"
@@ -329,9 +347,11 @@ string(3) "foo"
 bool(true)
 int(3)
 string(5) "hello"
+string(5) "hello"
 bool(true)
 int(5)
 class(bar)
+string(3) "bar"
 bool(true)
 int(3)
 string(3) "baz"

@@ -17,10 +17,12 @@
 
 #include "hphp/runtime/ext/std/ext_std_closure.h"
 
-#include "hphp/runtime/ext/std/ext_std.h"
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
+
+#include "hphp/runtime/ext/std/ext_std.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -33,52 +35,32 @@ const StaticString
   s_varprefix("$"),
   s_parameter("parameter"),
   s_required("<required>"),
-  s_optional("<optional>"),
-  s_staticPrefix("86static_");
-
-Slot lookupStaticSlotFromClosure(const Class* cls, const StringData* name) {
-  auto str = String::attach(
-    StringData::Make(s_staticPrefix.slice(), name->slice())
-  );
-  auto const slot = cls->lookupDeclProp(str.get());
-  assertx(slot != kInvalidSlot);
-  return slot;
-}
-
-TypedValue* lookupStaticTvFromClosure(ObjectData* closure,
-                                      const StringData* name) {
-  assertx(closure->instanceof(c_Closure::classof()));
-  auto const slot = lookupStaticSlotFromClosure(closure->getVMClass(), name);
-  return c_Closure::fromObject(closure)->getStaticVar(slot);
-}
+  s_optional("<optional>");
 
 static Array HHVM_METHOD(Closure, __debugInfo) {
   auto closure = c_Closure::fromObject(this_);
 
-  Array ret = Array::Create();
+  Array ret = Array::CreateDArray();
 
   // Serialize 'use' parameters.
-  if (auto useVars = closure->getUseVars()) {
-    Array use;
+  auto cls = this_->getVMClass();
+  if (auto nProps = cls->numDeclProperties()) {
+    DArrayInit useVars(nProps);
 
-    auto cls = this_->getVMClass();
-    auto propsInfo = cls->declProperties();
-    auto nProps = cls->numDeclProperties();
+    auto propsInfos = cls->declProperties();
+    auto props = closure->propVec();
     for (size_t i = 0; i < nProps; ++i) {
-      auto value = &useVars[i];
-      use.setWithRef(Variant(StrNR(propsInfo[i].name)), tvAsCVarRef(value));
+      useVars.set(StrNR(propsInfos[i].name), props[i]);
     }
 
-    if (!use.empty()) {
-      ret.set(s_static, use);
-    }
+    ret.set(s_static, make_tv<KindOfArray>(useVars.toArray().get()));
   }
 
   auto const func = closure->getInvokeFunc();
 
   // Serialize function parameters.
   if (auto nParams = func->numParams()) {
-   Array params;
+   Array params = Array::CreateDArray();
 
    auto lNames = func->localNames();
    for (int i = 0; i < nParams; ++i) {
@@ -123,11 +105,9 @@ void c_Closure::init(int numArgs, ActRec* ar, TypedValue* sp) {
   }
 
   /*
-   * Copy the use vars to instance variables, and initialize any
-   * instance properties that are for static locals to KindOfUninit.
+   * Copy the use vars to instance variables.
    */
-  auto const numDeclProperties = cls->numDeclProperties();
-  assertx(numDeclProperties - numArgs == getInvokeFunc()->numStaticLocals());
+  assertx(cls->numDeclProperties() == numArgs);
 
   if (debug) {
     // Closure properties shouldn't have type-hints nor should they be LateInit.
@@ -138,180 +118,51 @@ void c_Closure::init(int numArgs, ActRec* ar, TypedValue* sp) {
   }
 
   auto beforeCurUseVar = sp + numArgs;
-  auto curProperty = getUseVars();
-  int i = 0;
-  assertx(numArgs <= numDeclProperties);
-  for (; i < numArgs; i++) {
-    // teleport the references in here so we don't incref
-    tvCopy(*--beforeCurUseVar, *curProperty++);
-  }
-  for (; i < numDeclProperties; ++i) {
-    tvWriteUninit(*curProperty++);
-  }
+  auto curProperty = propVecForConstruct();
+  while (beforeCurUseVar != sp) cellCopy(*--beforeCurUseVar, *curProperty++);
 }
 
-static Variant HHVM_METHOD(Closure, bindto,
-                           const Variant& newthis, const Variant& scope) {
-  if (RuntimeOption::RepoAuthoritative &&
-      RuntimeOption::EvalAllowScopeBinding) {
-    raise_warning("Closure binding is not supported in RepoAuthoritative mode");
-    return init_null_variant;
-  }
+int c_Closure::initActRecFromClosure(ActRec* ar, TypedValue* sp) {
+  auto closure = c_Closure::fromObject(ar->getThis());
 
-  auto const cls = this_->getVMClass();
-  auto const invoke = cls->getCachedInvoke();
+  // Put in the correct context
+  ar->m_func = closure->getInvokeFunc();
 
-  ObjectData* od = nullptr;
-  if (newthis.isObject()) {
-    if (invoke->isStatic()) {
-      raise_warning("Cannot bind an instance to a static closure");
-    } else {
-      od = newthis.getObjectData();
+  if (ar->func()->cls()) {
+    // Swap in the $this or late bound class or null if it is from a plain
+    // function or pseudomain
+    ar->setThisOrClass(closure->getThisOrClass());
+
+    if (ar->hasThis()) {
+      ar->getThis()->incRefCount();
     }
-  } else if (!newthis.isNull()) {
-    raise_warning("Closure::bindto() expects parameter 1 to be object");
-    return init_null_variant;
-  }
-
-  auto const curscope = invoke->cls();
-  auto newscope = curscope;
-
-  if (scope.isObject()) {
-    newscope = scope.getObjectData()->getVMClass();
-  } else if (scope.isString()) {
-    auto const className = scope.getStringData();
-
-    if (!className->equal(s_static.get())) {
-      newscope = Unit::loadClass(className);
-      if (!newscope) {
-        raise_warning("Class '%s' not found", className->data());
-        return init_null_variant;
-      }
-    }
-  } else if (scope.isNull()) {
-    newscope = nullptr;
   } else {
-    raise_warning("Closure::bindto() expects parameter 2 "
-                  "to be string or object");
-    return init_null_variant;
+    ar->trashThis();
   }
 
-  if (od && !newscope) {
-    // Bound closures should be scoped.  If no scope is specified, scope it to
-    // the Closure class.
-    newscope = static_cast<Class*>(c_Closure::classof());
+  // The closure is the first local.
+  // Similar to tvWriteObject() but we don't incref because it used to be $this
+  // and now it is a local, so they cancel out
+  TypedValue* firstLocal = --sp;
+  firstLocal->m_type = KindOfObject;
+  firstLocal->m_data.pobj = closure;
+
+  // Copy in all the use vars
+  auto prop = closure->propVec();
+  int n = closure->getNumUseVars();
+  for (int i = 0; i < n; i++) {
+    cellDup(*prop++, *--sp);
   }
 
-  bool thisNotOfCtx = od && !od->getVMClass()->classof(newscope);
-
-  if (!RuntimeOption::EvalAllowScopeBinding) {
-    if (newscope != curscope) {
-      raise_warning("Re-binding closure scopes is disabled");
-      return init_null_variant;
-    }
-
-    if (thisNotOfCtx) {
-      raise_warning("Binding to objects not subclassed from closure "
-                    "context is disabled");
-      return init_null_variant;
-    }
-  }
-
-  auto cloneObj = this_->clone();
-  auto clone = c_Closure::fromObject(cloneObj);
-
-  auto curattrs = Class::CloneAttr::DynamicBind;
-  if (invoke->attrs() & AttrStatic) {
-    curattrs |= Class::CloneAttr::Static;
-  }
-  auto newattrs = curattrs;
-  if (invoke->hasForeignThis()) {
-    curattrs |= Class::CloneAttr::HasForeignThis;
-  }
-
-  if (od) {
-    od->incRefCount();
-    clone->setThis(od);
-
-    if (thisNotOfCtx) {
-      // If the bound $this is not a subclass of the context class, then we
-      // have to pessimize translation.
-      newattrs |= Class::CloneAttr::HasForeignThis;
-    }
-  } else if (newscope) {
-    // If we attach a scope to a function with no bound $this we need to make
-    // the function static.
-    newattrs |= Class::CloneAttr::Static;
-    clone->setClass(newscope);
-  } else {
-    clone->setThis(nullptr);
-  }
-
-  // If we are changing either the scope or the attributes of the closure, we
-  // need to re-scope its Closure subclass.
-  if (newscope != curscope || newattrs != curattrs) {
-    assertx(newattrs != Class::CloneAttr::None);
-
-    auto newcls = cls->rescope(newscope, newattrs);
-    cloneObj->setVMClass(newcls);
-  }
-
-  return Object{cloneObj};
-}
-
-static Variant HHVM_METHOD(Closure, call,
-                           const Variant& newthis,
-                           const Array& params) {
-  if (newthis.isNull() || !newthis.isObject()) {
-    raise_warning(
-      "Closure::call() expects parameter 1 to be object, %s given",
-      getDataTypeString(newthis.getType()).c_str()
-    );
-    return init_null_variant;
-  }
-
-  // So, with bind/bindTo, if we are trying to bind an instance to a static
-  // closure, we just raise a warning and continue on. However, with call
-  // we are supposed to just return null (according to the PHP 7 implementation)
-  // Here is that speciality check, then. Do it here so we don't have to go
-  // through the rigormorale of binding if this is the case.
-  if (this_->getVMClass()->getCachedInvoke()->isStatic()) {
-    raise_warning("Cannot bind an instance to a static closure");
-    return init_null_variant;
-  }
-
-  auto bound = HHVM_MN(Closure, bindto)(this_, newthis, newthis);
-  // If something went wrong in the binding (warning, for example), then
-  // we can get an empty object back. And an empty object is null by
-  // default. Return null if that is the case.
-  if (bound.isNull()) {
-    return init_null_variant;
-  }
-
-  // Could call vm_user_func(bound, params) here which goes through a
-  // whole decode function process to get a Func*. But we know this
-  // is a closure, and we can get a Func* via getInvokeFunc(), so just
-  // bypass all that decode process to save time.
-  return Variant::attach(
-    g_context->invokeFunc(c_Closure::fromObject(this_)->getInvokeFunc(),
-                          params, bound.toObject().get(),
-                          nullptr, nullptr, nullptr,
-                          ExecutionContext::InvokeNormal,
-                          false, false)
-  );
+  return n + 1;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-// Minified versions of nativeDataInstanceCtor/Dtor
-
-static ObjectData* closureInstanceCtorRepoAuth(Class* cls) {
+ObjectData* createClosureRepoAuth(Class* cls) {
   assertx(!(cls->attrs() & (AttrAbstract|AttrInterface|AttrTrait|AttrEnum)));
   assertx(!cls->needInitialization());
   assertx(cls->parent() == c_Closure::classof() || cls == c_Closure::classof());
-  // ensure c_Closure and ClosureHdr ptrs are scanned inside other types
-  (void)type_scan::getIndexForMalloc<c_Closure>();
-  (void)type_scan::getIndexForMalloc<ClosureHdr>();
   auto const nProps = cls->numDeclProperties();
   auto const size = sizeof(ClosureHdr) + ObjectData::sizeForNProps(nProps);
   auto hdr = new (tl_heap->objMalloc(size)) ClosureHdr(size);
@@ -320,7 +171,7 @@ static ObjectData* closureInstanceCtorRepoAuth(Class* cls) {
   return obj;
 }
 
-static ObjectData* closureInstanceCtor(Class* cls) {
+ObjectData* createClosure(Class* cls) {
   /*
    * We call Unit::defClosure while jitting, so its not allowed to
    * mark the class as cached unless its persistent. Do it here
@@ -329,25 +180,34 @@ static ObjectData* closureInstanceCtor(Class* cls) {
   if (!rds::isHandleInit(cls->classHandle())) {
     cls->preClass()->namedEntity()->clsList()->setCached();
   }
-  return closureInstanceCtorRepoAuth(cls);
+  return createClosureRepoAuth(cls);
+}
+
+static ObjectData* closureInstanceCtor(Class* cls) {
+  raise_error("Can't create a Closure directly");
+}
+
+// should never be called
+ATTRIBUTE_USED ATTRIBUTE_UNUSED EXTERNALLY_VISIBLE
+static void closuseInstanceReference(void) {
+  // ensure c_Closure and ClosureHdr ptrs are scanned inside other types
+  (void)type_scan::getIndexForMalloc<c_Closure>();
+  (void)type_scan::getIndexForMalloc<ClosureHdr>();
 }
 
 ObjectData* c_Closure::clone() {
   auto const cls = getVMClass();
-  auto ret = c_Closure::fromObject(closureInstanceCtorRepoAuth(cls));
+  auto ret = c_Closure::fromObject(createClosureRepoAuth(cls));
 
   ret->hdr()->ctx = hdr()->ctx;
   if (auto t = getThis()) {
     t->incRefCount();
   }
 
-  auto src  = getUseVars();
-  auto dest = ret->getUseVars();
-  auto const nProps = cls->numDeclProperties();
-  auto const stop = src + nProps;
-  for (; src != stop; ++src, ++dest) {
-    tvDup(*src, *dest);
-  }
+  auto src  = propVec();
+  auto dest = ret->propVecForConstruct();
+  auto const stop = src + cls->numDeclProperties();
+  while (src != stop) cellDup(*src++, *dest++);
 
   return ret;
 }
@@ -356,24 +216,22 @@ static void closureInstanceDtor(ObjectData* obj, const Class* cls) {
   if (UNLIKELY(obj->getAttribute(ObjectData::IsWeakRefed))) {
     WeakRefData::invalidateWeakRef((uintptr_t)obj);
   }
-  auto const nProps = size_t{cls->numDeclProperties()};
-  auto prop = c_Closure::fromObject(obj)->getUseVars();
-  auto const stop = prop + nProps;
+
   auto closure = c_Closure::fromObject(obj);
-  if (auto t = closure->getThis()) {
-    decRefObj(t);
-  }
-  for (; prop != stop; ++prop) {
-    tvDecRefGen(prop);
-  }
+  if (auto t = closure->getThis()) decRefObj(t);
+
+  // We're destructing, not constructing, but we're unconditionally allowed to
+  // write just the same.
+  auto prop = closure->propVecForConstruct();
+  auto const stop = prop + cls->numDeclProperties();
+  while (prop != stop) tvDecRefGen(prop++);
+
   auto hdr = closure->hdr();
   tl_heap->objFree(hdr, hdr->size());
 }
 
 void StandardExtension::loadClosure() {
   HHVM_SYS_ME(Closure, __debugInfo);
-  HHVM_SYS_ME(Closure, bindto);
-  HHVM_SYS_ME(Closure, call);
 }
 
 void StandardExtension::initClosure() {
@@ -381,10 +239,11 @@ void StandardExtension::initClosure() {
   assertx(c_Closure::cls_Closure);
   assertx(!c_Closure::cls_Closure->hasMemoSlots());
   c_Closure::cls_Closure->allocExtraData();
-  c_Closure::cls_Closure->m_extra.raw()->m_instanceCtor =
-    RuntimeOption::RepoAuthoritative
-      ? closureInstanceCtorRepoAuth : closureInstanceCtor;
-  c_Closure::cls_Closure->m_extra.raw()->m_instanceDtor = closureInstanceDtor;
+  auto& extraData = *c_Closure::cls_Closure->m_extra.raw();
+  extraData.m_instanceCtor = extraData.m_instanceCtorUnlocked =
+    closureInstanceCtor;
+  extraData.m_instanceDtor = closureInstanceDtor;
+  c_Closure::cls_Closure->m_release = closureInstanceDtor;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 error_reporting(E_ALL);
 
@@ -30,4 +30,3 @@ function x() {
 }
 var_dump(x()['two']);
 
-?>

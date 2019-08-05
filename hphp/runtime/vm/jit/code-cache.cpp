@@ -54,6 +54,7 @@ uint32_t CodeCache::AFrozenMaxUsage = 0;
 bool CodeCache::MapTCHuge = false;
 uint32_t CodeCache::AutoTCShift = 0;
 uint32_t CodeCache::TCNumHugeHotMB = 0;
+uint32_t CodeCache::TCNumHugeMainMB = 0;
 uint32_t CodeCache::TCNumHugeColdMB = 0;
 
 static size_t ru(size_t sz) { return sz + (-sz & (kRoundUp - 1)); }
@@ -220,14 +221,18 @@ CodeCache::CodeCache()
   if (kAHotSize) {
     FTRACE(1, "init ahot @{}, size = {}\n", base, kAHotSize);
     m_hot.init(base, kAHotSize, "hot");
-    enhugen(base, kAHotSize >> 20);
+    const uint32_t hugeHotMBs = std::min(CodeCache::TCNumHugeHotMB,
+                                         uint32_t(kAHotSize >> 20));
+    enhugen(base, hugeHotMBs);
     base += kAHotSize;
   }
 
   TRACE(1, "init a @%p\n", base);
 
   m_main.init(base, kASize, "main");
-  enhugen(base, CodeCache::TCNumHugeHotMB);
+  const uint32_t hugeMainMBs = std::min(CodeCache::TCNumHugeMainMB,
+                                        uint32_t(kASize >> 20));
+  enhugen(base, hugeMainMBs);
   base += kASize;
 
   TRACE(1, "init aprof @%p\n", base);
@@ -236,7 +241,9 @@ CodeCache::CodeCache()
 
   TRACE(1, "init acold @%p\n", base);
   m_cold.init(base, kAColdSize, "cold");
-  enhugen(base, CodeCache::TCNumHugeColdMB);
+  const uint32_t hugeColdMBs = std::min(CodeCache::TCNumHugeColdMB,
+                                        uint32_t(kAColdSize >> 20));
+  enhugen(base, hugeColdMBs);
   base += kAColdSize;
 
   TRACE(1, "init thread_local @%p\n", base);
@@ -262,6 +269,11 @@ CodeCache::CodeCache()
     mprotect(m_threadLocalStart, thread_local_size, PROT_NONE);
   }
   m_threadLocalSize = thread_local_size;
+
+  AMaxUsage = maxUsage(ASize);
+  AProfMaxUsage = maxUsage(AProfSize);
+  AColdMaxUsage = maxUsage(AColdSize);
+  AFrozenMaxUsage = maxUsage(AFrozenSize);
 
   assertx(base - m_base <= allocationSize);
   assertx(base - m_base + 2 * kRoundUp > allocationSize);

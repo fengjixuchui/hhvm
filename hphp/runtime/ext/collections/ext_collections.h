@@ -39,8 +39,6 @@ extern const StaticString
     return req::make<c_##name>().detach();                  \
   }
 
-constexpr ObjectData::Attribute objectFlags = ObjectData::NoAttrs;
-
 /**
  * The "materialization" methods have the form "to[CollectionName]()" and
  * allow us to get an instance of a collection type from another.
@@ -57,7 +55,7 @@ Object materialize(ObjectData* obj) {
  * All native collection class have their m_size field at the same
  * offset in the object.
  */
-constexpr ptrdiff_t FAST_SIZE_OFFSET = use_lowptr ? 16 : 24;
+constexpr ptrdiff_t FAST_SIZE_OFFSET = 16;
 inline size_t getSize(const ObjectData* od) {
   assertx(od->isCollection());
   return *reinterpret_cast<const uint32_t*>(
@@ -94,12 +92,15 @@ struct CollectionsExtension : Extension {
     assertx(cls->isCollectionClass());
     assertx(cls->attrs() & AttrFinal);
     assertx(!cls->getNativeDataInfo());
-    assertx(!cls->instanceCtor());
+    assertx(!cls->instanceCtor<false>());
+    assertx(!cls->instanceCtor<true>());
     assertx(!cls->instanceDtor());
     assertx(!cls->hasMemoSlots());
     cls->allocExtraData();
     cls->m_extra.raw()->m_instanceCtor = T::instanceCtor;
+    cls->m_extra.raw()->m_instanceCtorUnlocked = T::instanceCtor;
     cls->m_extra.raw()->m_instanceDtor = T::instanceDtor;
+    cls->m_release = T::instanceDtor;
     cls->initRTAttributes(
         Class::UseGet |
         Class::UseSet |

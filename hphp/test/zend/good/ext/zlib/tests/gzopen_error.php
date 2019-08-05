@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : resource gzopen(string filename, string mode [, int use_include_path])
  * Description: Open a .gz-file and return a .gz-file pointer 
  * Source code: ext/zlib/zlib.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing gzopen() : error conditions ***\n";
 
 
@@ -21,5 +21,5 @@ echo "\n-- Testing gzopen() function with less than expected no. of arguments --
 $filename = 'string_val';
 try { var_dump( gzopen($filename) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

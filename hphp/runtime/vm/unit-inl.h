@@ -141,8 +141,12 @@ inline int64_t Unit::sn() const {
   return m_sn;
 }
 
-inline MD5 Unit::md5() const {
-  return m_md5;
+inline SHA1 Unit::sha1() const {
+  return m_sha1;
+}
+
+inline SHA1 Unit::bcSha1() const {
+  return m_bcSha1;
 }
 
 inline const StringData* Unit::filepath() const {
@@ -244,7 +248,7 @@ inline const RepoAuthType::Array* Unit::lookupArrayTypeId(Id id) const {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// Funcs and PreClasses.
+// Funcs and PreClasses and RecordDescs.
 
 inline Func* Unit::lookupFuncId(Id id) const {
   assertx(id < Id(mergeInfo()->m_firstHoistablePreClass));
@@ -254,6 +258,11 @@ inline Func* Unit::lookupFuncId(Id id) const {
 inline PreClass* Unit::lookupPreClassId(Id id) const {
   assertx(id < Id(m_preClasses.size()));
   return m_preClasses[id].get();
+}
+
+inline PreRecordDesc* Unit::lookupPreRecordId(Id id) const {
+  assertx(id < Id(m_preRecords.size()));
+  return m_preRecords[id].get();
 }
 
 inline Unit::FuncRange Unit::funcs() const {
@@ -266,6 +275,14 @@ inline folly::Range<PreClassPtr*> Unit::preclasses() {
 
 inline folly::Range<const PreClassPtr*> Unit::preclasses() const {
   return { m_preClasses.data(), m_preClasses.size() };
+}
+
+inline folly::Range<PreRecordDescPtr*> Unit::prerecords() {
+  return { m_preRecords.data(), m_preRecords.size() };
+}
+
+inline folly::Range<const PreRecordDescPtr*> Unit::prerecords() const {
+  return { m_preRecords.data(), m_preRecords.size() };
 }
 
 template<class Fn> void Unit::forEachFunc(Fn fn) const {
@@ -299,6 +316,17 @@ inline const UserAttributeMap& Unit::fileAttributes() const {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// RecordDesc lookup.
+
+inline RecordDesc* Unit::lookupRecordDesc(const NamedEntity* ne) {
+  return ne->getCachedRecordDesc();
+}
+
+inline RecordDesc* Unit::lookupRecordDesc(const StringData* name) {
+  return lookupRecordDesc(NamedEntity::get(name));
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // Class lookup.
 
 inline Class* Unit::lookupClass(const NamedEntity* ne) {
@@ -326,11 +354,17 @@ inline const Class* Unit::lookupUniqueClassInContext(const StringData* name,
 inline Class* Unit::loadClass(const StringData* name) {
   String normStr;
   auto ne = NamedEntity::get(name, true, &normStr);
-  if (normStr) {
-    name = normStr.get();
-  }
-  auto class_ = loadClass(ne, name);
-  if (LIKELY(class_ != nullptr) || !isReifiedName(name)) return class_;
+
+  // Try to fetch from cache
+  Class* class_ = ne->getCachedClass();
+  if (LIKELY(class_ != nullptr)) return class_;
+
+  // Normalize the namespace
+  if (normStr) name = normStr.get();
+
+  // Autoload the class if not reified
+  if (LIKELY(!isReifiedName(name))) return loadClass(ne, name);
+
   // We are loading a reified class for the first time
   name = stripTypeFromReifiedName(name);
   auto generic_ne = NamedEntity::get(name, true, &normStr);
@@ -384,14 +418,6 @@ inline void Unit::setInterpretOnly() {
 
 inline bool Unit::isHHFile() const {
   return m_isHHFile;
-}
-
-inline bool Unit::useStrictTypes() const {
-  return m_useStrictTypes;
-}
-
-inline bool Unit::useStrictTypesForBuiltins() const {
-  return m_useStrictTypesForBuiltins;
 }
 
 inline UserAttributeMap Unit::metaData() const {

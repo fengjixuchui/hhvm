@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 const FOO1 = 1;
 const FOO2 = 2;
@@ -14,12 +14,11 @@ class B extends A {
     public $b_var = 'foo';
 
 }
-
+<<__EntryPoint>> function main(): void {
 $a = new A;
 $b = new B;
 
 print_r($a);
 print_r($b->a_var);
 print_r($b->b_var);
-
-?>
+}

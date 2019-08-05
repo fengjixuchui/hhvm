@@ -52,11 +52,11 @@ struct SSATmp;
  *                         Unknown
  *                            |
  *                            |
- *                    +-------+-------+----------+--------------+
- *                    |               |          |              |
- *                 UnknownTV      IterPosAny  IterBaseAny  ClsRefSlotAny
- *                    |               |          |              |
- *                    |              ...        ...            ...
+ *                    +-------+-------+----------+
+ *                    |               |          |
+ *                 UnknownTV      IterPosAny  IterBaseAny
+ *                    |               |          |
+ *                    |              ...        ...
  *                    |
  *      +---------+---+---------------+-------------------------+----+
  *      |         |                   |                         |    |
@@ -94,10 +94,23 @@ struct AliasClass;
 
 //////////////////////////////////////////////////////////////////////
 
+namespace detail {
+FPRelOffset frame_base_offset(SSATmp* fp);
+}
+
+#define FRAME_RELATIVE(Name, T2, name2)                                       \
+  struct Name {                                                               \
+    Name(SSATmp* fp, T2 v) : base{detail::frame_base_offset(fp)}, name2{v} {} \
+    Name(FPRelOffset off, T2 v) : base{off}, name2{v} {}                      \
+    FPRelOffset base;                                                         \
+    T2 name2;                                                                 \
+  }
+
+
 /*
  * Special data for locations known to be a set of locals on the frame `fp'.
  */
-struct AFrame { SSATmp* fp; AliasIdSet ids; };
+FRAME_RELATIVE(AFrame, AliasIdSet, ids);
 
 /*
  * Iterator state. Note that iterator slots can contain different kinds of data
@@ -110,7 +123,7 @@ struct AFrame { SSATmp* fp; AliasIdSet ids; };
 /*
  * A specific php iterator's position value (m_pos).
  */
-struct AIterPos  { SSATmp* fp; uint32_t id; };
+FRAME_RELATIVE(AIterPos, uint32_t, id);
 
 /*
  * A specific php iterator's base and initialization state, for non-mutable
@@ -121,7 +134,7 @@ struct AIterPos  { SSATmp* fp; uint32_t id; };
  * helper)---the reason for this is that nothing may load/store the
  * initialization state if it isn't also going to load/store the base pointer.
  */
-struct AIterBase { SSATmp* fp; uint32_t id; };
+FRAME_RELATIVE(AIterBase, uint32_t, id);
 
 /*
  * A location inside of an object property, with base `obj' and byte offset
@@ -144,10 +157,25 @@ struct AElemS { SSATmp* arr; const StringData* key; };
 /*
  * A range of the stack, starting at `offset' from the outermost frame pointer,
  * and extending `size' slots deeper into the stack (toward lower memory
- * addresses).  The frame pointer is the same for all stack ranges in the IR
- * unit, and thus is not stored here.  The reason ranges extend downward is
- * that it is common to need to refer to the class of all stack locations below
- * some depth (this can be done by putting INT32_MAX in the size).
+ * addresses).  As an example, `acls = AStack { fp, FPRelOffset{-1}, 3 }`
+ * represents the following:
+ *
+ *         ___________________
+ *        | (i am an actrec)  |
+ *  high  |___________________| ___...fp points here        __
+ *    ^   |   local 0         |                               \
+ *    |   |___________________| ___...start counting here: 1  |
+ *    |   |   local 1         |                               | acls
+ *    |   |___________________| ___...2                       |
+ *    |   |   local 2         |                               |
+ *   low  |___________________| ___...3; we're done         __/
+ *        |   local 3         |
+ *        |___________________|
+ *
+ * The frame pointer is the same for all stack ranges in the IR unit, and thus
+ * is not stored here.  The reason ranges extend downward is that it is common
+ * to need to refer to the class of all stack locations below some depth (this
+ * can be done by putting INT32_MAX in the size).
  *
  * Some notes on how the evaluation stack is treated for alias analysis:
  *
@@ -181,13 +209,6 @@ struct AStack {
  */
 struct ARef { SSATmp* boxed; };
 
-
-/*
- * A set of class-ref slots in the given frame.
- */
-struct AClsRefClsSlot { SSATmp* fp; AliasIdSet ids; };
-struct AClsRefTSSlot { SSATmp* fp; AliasIdSet ids; };
-
 /*
  * A TypedValue stored in rds.
  *
@@ -195,6 +216,8 @@ struct AClsRefTSSlot { SSATmp* fp; AliasIdSet ids; };
  * not required that the tv is at the start of the rds storage.
  */
 struct ARds { rds::Handle handle; };
+
+#undef FRAME_RELATIVE
 
 //////////////////////////////////////////////////////////////////////
 
@@ -211,8 +234,6 @@ struct AliasClass {
     BElemS          = 1U << 5,
     BStack          = 1U << 6,
     BRef            = 1U << 7,
-    BClsRefClsSlot  = 1U << 8,
-    BClsRefTSSlot   = 1U << 9,
     BRds            = 1U << 10,
 
     // Have no specialization, put them last.
@@ -229,8 +250,7 @@ struct AliasClass {
 
     BIter      = BIterPos | BIterBase,
 
-    BUnknownTV =
-      ~(BIter | BMIBase | BMIPropS | BClsRefClsSlot | BClsRefTSSlot),
+    BUnknownTV = ~(BIter | BMIBase | BMIPropS),
 
     BUnknown   = static_cast<uint32_t>(-1),
   };
@@ -258,8 +278,6 @@ struct AliasClass {
   /* implicit */ AliasClass(AElemS);
   /* implicit */ AliasClass(AStack);
   /* implicit */ AliasClass(ARef);
-  /* implicit */ AliasClass(AClsRefClsSlot);
-  /* implicit */ AliasClass(AClsRefTSSlot);
   /* implicit */ AliasClass(ARds);
 
   /*
@@ -320,8 +338,6 @@ struct AliasClass {
   folly::Optional<AElemS>          elemS() const;
   folly::Optional<AStack>          stack() const;
   folly::Optional<ARef>            ref() const;
-  folly::Optional<AClsRefClsSlot>  clsRefClsSlot() const;
-  folly::Optional<AClsRefTSSlot>   clsRefTSSlot() const;
   folly::Optional<ARds>            rds() const;
 
   /*
@@ -340,8 +356,6 @@ struct AliasClass {
   folly::Optional<AElemS>          is_elemS() const;
   folly::Optional<AStack>          is_stack() const;
   folly::Optional<ARef>            is_ref() const;
-  folly::Optional<AClsRefClsSlot>  is_clsRefClsSlot() const;
-  folly::Optional<AClsRefTSSlot>   is_clsRefTSSlot() const;
   folly::Optional<ARds>            is_rds() const;
 
   /*
@@ -362,13 +376,11 @@ private:
     ElemS,
     Stack,
     Ref,
-    ClsRefClsSlot,
-    ClsRefTSSlot,
     Rds,
 
     IterBoth,  // A union of base and pos for the same iter.
   };
-  struct UIterBoth   { SSATmp* fp; uint32_t id; };
+  struct UIterBoth   { FPRelOffset base; uint32_t id; };
 private:
   friend std::string show(AliasClass);
   friend AliasClass canonicalize(AliasClass);
@@ -398,8 +410,6 @@ private:
     AElemS          m_elemS;
     AStack          m_stack;
     ARef            m_ref;
-    AClsRefClsSlot  m_clsRefClsSlot;
-    AClsRefTSSlot   m_clsRefTSSlot;
     ARds            m_rds;
 
     UIterBoth       m_iterBoth;
@@ -417,9 +427,6 @@ auto const APropAny           = AliasClass{AliasClass::BProp};
 auto const AHeapAny           = AliasClass{AliasClass::BHeap};
 auto const ARefAny            = AliasClass{AliasClass::BRef};
 auto const AStackAny          = AliasClass{AliasClass::BStack};
-auto const AClsRefClsSlotAny  = AliasClass{AliasClass::BClsRefClsSlot};
-auto const AClsRefTSSlotAny   = AliasClass{AliasClass::BClsRefTSSlot};
-auto const AClsRefSlotAny     = AClsRefClsSlotAny | AClsRefTSSlotAny;
 auto const ARdsAny            = AliasClass{AliasClass::BRds};
 auto const AElemIAny          = AliasClass{AliasClass::BElemI};
 auto const AElemSAny          = AliasClass{AliasClass::BElemS};

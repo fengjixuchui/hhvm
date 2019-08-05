@@ -1,4 +1,4 @@
-<?php
+<?hh
 class testcase {
 	private $encoding;
 	private $bom;
@@ -6,7 +6,7 @@ class testcase {
 	private $tags;
 	private $chunk_size;
 
-	function testcase($enc, $chunk_size = 0, $bom = 0, $omit_prologue = 0) {
+	function __construct($enc, $chunk_size = 0, $bom = 0, $omit_prologue = 0) {
 		$this->encoding = $enc;
 		$this->chunk_size = $chunk_size;
 		$this->bom = $bom;
@@ -90,7 +90,7 @@ HERE;
 		$parser = xml_parser_create(NULL);
 		xml_parser_set_option($parser, XML_OPTION_CASE_FOLDING, 0);
     xml_set_element_handler($parser, "start_element", "end_element");
-    $thiz = &$this;
+    $thiz = $this;
 		xml_set_object($parser, &$thiz);
 
 		if ($this->chunk_size == 0) {
@@ -154,4 +154,3 @@ foreach ($suite as $testcase) {
 }
 
 // vim600: sts=4 sw=4 ts=4 encoding=UTF-8
-?>

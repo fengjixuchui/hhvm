@@ -1,15 +1,15 @@
 <?hh
 
-function main() {
+<<__EntryPoint>> function main(): void {
   // test CGetM
   $a = array();
   $a[0] = "one";
-  echo $a["0"] . "\n";
+  try { echo $a["0"]; } catch (Exception $e) { echo $e->getMessage()."\n"; }
 
- // test SetM
+  // test SetM
   $a = array();
   $a["0"] = "two";
-  echo $a[0] . "\n";
+  try { echo $a[0]; } catch (Exception $e) { echo $e->getMessage()."\n"; }
 
   // test IssetM
   $a = array("narf");
@@ -33,5 +33,3 @@ function main() {
   $a["0 "] = "and this";
   echo $a[0] . "\n";
 }
-
-main();

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto string urlencode(string str)
  * Description: URL-encodes string 
  * Source code: ext/standard/url.c
@@ -6,7 +6,7 @@
  */
 
 // NB: basic functionality tested in tests/strings/001.phpt
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing urlencode() : error conditions ***\n";
 
 // Zero arguments
@@ -20,4 +20,4 @@ $extra_arg = 10;
 try { var_dump( urlencode($str, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

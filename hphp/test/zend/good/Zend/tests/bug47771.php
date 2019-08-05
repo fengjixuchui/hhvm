@@ -1,4 +1,4 @@
-<?php
+<?hh
 function throw_exc() {
   throw new Exception('TEST_EXCEPTION');
 }
@@ -10,7 +10,7 @@ class Test {
   }
 
 }
-
+<<__EntryPoint>> function main(): void {
 try {
 
   $T =new Test(throw_exc());
@@ -18,4 +18,4 @@ try {
 } catch( Exception $e) {
   echo 'Exception: ' . $e->getMessage() . "\n";
 }
-?>
+}

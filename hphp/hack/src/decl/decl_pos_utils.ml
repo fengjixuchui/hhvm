@@ -26,6 +26,8 @@ open Typing_reason
 
 let pos = ImplementPos.pos
 
+let string_id (p, x) = pos p, x
+
 let rec reason = function
   | Rnone                  -> Rnone
   | Rwitness p             -> Rwitness (pos p)
@@ -62,7 +64,7 @@ let rec reason = function
   | Ryield_asyncgen p      -> Ryield_asyncgen (pos p)
   | Ryield_asyncnull p     -> Ryield_asyncnull (pos p)
   | Ryield_send p          -> Ryield_send (pos p)
-  | Rlost_info (s, r1, p2) -> Rlost_info (s, reason r1, pos p2)
+  | Rlost_info (s, r1, p2, l) -> Rlost_info (s, reason r1, pos p2, l)
   | Rcoerced (r1, p2, x)   -> Rcoerced (reason r1, pos p2, x)
   | Rformat (p1, s, r)     -> Rformat (pos p1, s, reason r)
   | Rclass_class (p, s)    -> Rclass_class (pos p, s)
@@ -74,14 +76,15 @@ let rec reason = function
   | Rinout_param p         -> Rinout_param (pos p)
   | Rinstantiate (r1,x,r2) -> Rinstantiate (reason r1, x, reason r2)
   | Rarray_filter (p, r)   -> Rarray_filter (pos p, reason r)
-  | Rtype_access (r1, x, r2) -> Rtype_access (reason r1, x, reason r2)
+  | Rtypeconst (r1, (p, s1), s2, r2) ->
+    Rtypeconst (reason r1, (pos p, s1), s2, reason r2)
+  | Rtype_access (r1, ls) -> Rtype_access (reason r1, List.map ls ~f:(fun (r, s) -> reason r, s))
   | Rexpr_dep_type (r, p, n) -> Rexpr_dep_type (reason r, pos p, n)
   | Rnullsafe_op p           -> Rnullsafe_op (pos p)
   | Rtconst_no_cstr (p, s)   -> Rtconst_no_cstr (pos p, s)
   | Rused_as_map p           -> Rused_as_map (pos p)
   | Rused_as_shape p         -> Rused_as_shape (pos p)
   | Rpredicated (p, f)       -> Rpredicated (pos p, f)
-  | Rinstanceof (p, f)       -> Rinstanceof (pos p, f)
   | Ris p                    -> Ris (pos p)
   | Ras p                    -> Ras (pos p)
   | Rfinal_property p        -> Rfinal_property (pos p)
@@ -90,7 +93,9 @@ let rec reason = function
   | Rdynamic_prop p          -> Rdynamic_prop (pos p)
   | Rdynamic_call p          -> Rdynamic_call (pos p)
   | Ridx_dict p              -> Ridx_dict (pos p)
+  | Rmissing_required_field (p, n) -> Rmissing_required_field (pos p, n)
   | Rmissing_optional_field (p, n) -> Rmissing_optional_field (pos p, n)
+  | Runset_field (p, n) -> Runset_field (pos p, n)
   | Rcontravariant_generic (r1, n) -> Rcontravariant_generic (reason r1, n)
   | Rinvariant_generic (r1, n) -> Rcontravariant_generic (reason r1, n)
   | Rregex p                 -> Rregex (pos p)
@@ -104,9 +109,24 @@ let rec reason = function
   | Rbitwise_dynamic p -> Rbitwise_dynamic (pos p)
   | Rincdec_dynamic p -> Rincdec_dynamic (pos p)
   | Rtype_variable p -> Rtype_variable (pos p)
+  | Rtype_variable_generics (p, t, s) -> Rtype_variable_generics (pos p, t, s)
   | Rsolve_fail p -> Rsolve_fail (pos p)
+  | Rcstr_on_generics (p, sid) -> Rcstr_on_generics (pos p, string_id sid)
+  | Rlambda_param (p, r) -> Rlambda_param (pos p, reason r)
+  | Rshape (p, fun_name) -> Rshape (pos p, fun_name)
+  | Renforceable p -> Renforceable (pos p)
+  | Rdestructure (p, l) -> Rdestructure (pos p, l)
 
-let string_id (p, x) = pos p, x
+let pos_mapper =
+  object
+    inherit [_] Aast.map
+
+    method! on_pos _ p = pos p
+
+    method on_'fb _ fb = fb
+    method on_'en _ en = en
+    method on_'ex _ ex = pos ex
+  end
 
 let rec ty (p, x) =
   reason p, ty_ x
@@ -121,25 +141,20 @@ let rec ty (p, x) =
     | Tgeneric _ as x      -> x
     | Ttuple tyl           -> Ttuple (List.map tyl ty)
     | Toption x            -> Toption (ty x)
+    | Tlike x              -> Tlike (ty x)
     | Tfun ft              -> Tfun (fun_type ft)
     | Tapply (sid, xl)     -> Tapply (string_id sid, List.map xl ty)
     | Taccess (root_ty, ids) ->
         Taccess (ty root_ty, List.map ids string_id)
-    | Tshape (fields_known, fdm) ->
-        Tshape (shape_fields_known fields_known,
-          ShapeFieldMap.map_and_rekey fdm shape_field_name ty)
+    | Tshape (shape_kind, fdm) ->
+        Tshape (shape_kind, ShapeFieldMap.map_and_rekey fdm shape_field_name ty)
 
   and ty_opt x = Option.map x ty
 
-  and shape_fields_known = function
-    | FieldsFullyKnown -> FieldsFullyKnown
-    | FieldsPartiallyKnown m ->
-      FieldsPartiallyKnown (ShapeMap.map_and_rekey m shape_field_name pos)
-
   and shape_field_name = function
-    | Ast.SFlit_int s -> Ast.SFlit_int (string_id s)
-    | Ast.SFlit_str s -> Ast.SFlit_str (string_id s)
-    | Ast.SFclass_const (id, s) -> Ast.SFclass_const (string_id id, string_id s)
+    | Ast_defs.SFlit_int s -> Ast_defs.SFlit_int (string_id s)
+    | Ast_defs.SFlit_str s -> Ast_defs.SFlit_str (string_id s)
+    | Ast_defs.SFclass_const (id, s) -> Ast_defs.SFclass_const (string_id id, string_id s)
 
   and constraint_ x = List.map ~f:(fun (ck, x) -> (ck, ty x)) x
 
@@ -181,24 +196,33 @@ let rec ty (p, x) =
 
   and class_const cc =
     { cc_synthesized = cc.cc_synthesized;
+      cc_visibility = cc.cc_visibility;
       cc_abstract = cc.cc_abstract;
       cc_pos = pos cc.cc_pos;
       cc_type = ty cc.cc_type;
-      cc_expr = Option.map cc.cc_expr (Nast_pos_mapper.expr pos);
+      cc_expr = Option.map ~f:(pos_mapper#on_expr ()) cc.cc_expr;
       cc_origin = cc.cc_origin;
     }
 
+  and typeconst_abstract_kind = function
+    | TCAbstract default -> TCAbstract (ty_opt default)
+    | TCPartiallyAbstract -> TCPartiallyAbstract
+    | TCConcrete -> TCConcrete
+
   and typeconst tc =
-    { ttc_name = string_id tc.ttc_name;
+    { ttc_abstract = typeconst_abstract_kind tc.ttc_abstract;
+      ttc_name = string_id tc.ttc_name;
       ttc_constraint = ty_opt tc.ttc_constraint;
       ttc_type = ty_opt tc.ttc_type;
       ttc_origin = tc.ttc_origin;
       ttc_enforceable = Tuple.T2.map_fst ~f:pos tc.ttc_enforceable;
+      ttc_visibility = tc.ttc_visibility;
+      ttc_disallow_php_arrays = Option.map tc.ttc_disallow_php_arrays pos;
     }
 
   and user_attribute ua =
-    { Nast.ua_name = string_id ua.Nast.ua_name;
-      ua_params = List.map ~f:(Nast_pos_mapper.expr pos) ua.Nast.ua_params;
+    { Aast.ua_name = string_id ua.Aast.ua_name;
+      ua_params = List.map ~f:(pos_mapper#on_expr ()) ua.Aast.ua_params;
     }
 
   and type_param t =
@@ -228,6 +252,7 @@ let rec ty (p, x) =
         requirement                                                   ;
       dc_req_ancestors_extends = dc.dc_req_ancestors_extends          ;
       dc_tparams               = List.map dc.dc_tparams type_param    ;
+      dc_where_constraints     = List.map dc.dc_where_constraints where_constraint;
       dc_substs                = SMap.map begin fun ({ sc_subst; _ } as sc) ->
         {sc with sc_subst = SMap.map ty sc_subst}
       end dc.dc_substs;

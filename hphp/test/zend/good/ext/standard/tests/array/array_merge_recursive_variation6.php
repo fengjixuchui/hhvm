@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_merge_recursive(array $arr1[, array $...])
  * Description: Recursively merges elements from passed arrays into one array
  * Source code: ext/standard/array.c
@@ -8,7 +8,7 @@
  * Testing the functionality of array_merge_recursive() by passing 
  * array having duplicate keys.
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_merge_recursive() : array with duplicate keys for \$arr1 argument ***\n";
 
 /* initialize the array having duplicate keys */
@@ -29,4 +29,4 @@ var_dump( array_merge_recursive($arr1_numeric_key, $arr2) );
 var_dump( array_merge_recursive($arr1_string_key, $arr2) );
 
 echo "Done";
-?>
+}

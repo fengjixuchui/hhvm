@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool symlink ( string $target, string $link );
    Description: creates a symbolic link to the existing target with the specified name link
 
@@ -13,8 +13,8 @@
 */
 
 /* Variation 7 : Create soft/hard link to itself */
-
 // temp file used
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $dir = "$file_path/symlink_link_linkinfo_is_link_variation7";
 $filename = "$dir/symlink_link_linkinfo_is_link_variation7.tmp";
@@ -24,7 +24,7 @@ $linkname = "$dir/symlink_link_linkinfo_is_link_link_variation7.tmp";
 $dirname = "$dir/home/test";
 mkdir($dirname, 0755, true);
 
-// create file 
+// create file
 $fp = fopen($filename, "w");
 fclose($fp);
 
@@ -53,9 +53,7 @@ var_dump( link($linkname, $linkname) );
 unlink($linkname);
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $dir = "$file_path/symlink_link_linkinfo_is_link_variation7";
 $filename = "$dir/symlink_link_linkinfo_is_link_variation7.tmp";
@@ -63,4 +61,4 @@ unlink($filename);
 rmdir("$dir/home/test");
 rmdir("$dir/home");
 rmdir($dir);
-?>
+}

@@ -20,8 +20,7 @@ let main (env : env) : Exit_status.t Lwt.t =
     autostart = true;
     force_dormant_start = false;
     ai_mode = None;
-    retries = Some 800;
-    expiry = None;
+    deadline = None;
     no_load = false;
     watchman_debug_logging = false;
     log_inference_constraints = false;
@@ -33,6 +32,7 @@ let main (env : env) : Exit_status.t Lwt.t =
     use_priority_pipe = false;
     prechecked = None;
     config = [];
+    allow_non_opt_build = false;
   } in
   ServerCommandLwt.connect_debug oc;
   (* Exit this via ctrl-C *)

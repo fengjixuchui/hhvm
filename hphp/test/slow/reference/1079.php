@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function f(&$a) {
  $a = 'ok';
@@ -11,6 +11,8 @@ function f(&$a) {
 function main_1079() {
 $a = new T();
  $a->b = 10;
- f(&$a->b);
+ $__b = $a->b;
+ f(&$__b);
+ $a->b = $__b;
  var_dump($a);
 }

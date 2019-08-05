@@ -1,4 +1,4 @@
-<?php
+<?hh
 require dirname(__FILE__) . '/../../../ext/pdo/tests/pdo_test.inc';
 $db = PDOTest::test_factory(dirname(__FILE__) . '/common.phpt');
 
@@ -9,4 +9,3 @@ for ($i = 0; $i < 10; $i++) {
 
 print "ok\n";
 
-?>

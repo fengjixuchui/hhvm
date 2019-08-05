@@ -10,7 +10,6 @@
 open Core_kernel
 open ClientCommand
 open ClientEnv
-open Utils
 
 (** Arg specs shared across more than 1 arg parser. *)
 module Common_argspecs = struct
@@ -38,16 +37,15 @@ module Common_argspecs = struct
     "--prechecked", Arg.Unit (fun () -> value_ref := Some true),
     " override value of \"prechecked_files\" flag from hh.conf"
 
-  let retries value_ref =
-    ("--retries",
-      Arg.Set_int value_ref,
-      spf (" set the number of retries for connecting to server. " ^^
-        "Roughly 1 retry per second (default: %d)") !value_ref;)
-
   let watchman_debug_logging value_ref =
     ("--watchman-debug-logging",
       Arg.Set value_ref,
       " Enable debug logging on Watchman client. This is very noisy")
+
+  let allow_non_opt_build value_ref =
+    ("--allow-non-opt-build",
+      Arg.Set value_ref,
+      " Override build mode check triggered by warn_on_non_opt_build .hhconfig option")
 end
 
 
@@ -82,7 +80,7 @@ let parse_check_args cmd =
   let autostart = ref true in
   let config = ref [] in
   let dynamic_view = ref false in
-  let file_info_on_disk = ref false in
+  let error_format = ref Errors.Context in
   let force_dormant_start = ref false in
   let format_from = ref 0 in
   let from = ref "" in
@@ -92,8 +90,11 @@ let parse_check_args cmd =
   let saved_state_ignore_hhconfig = ref false in
   let logname = ref false in
   let log_inference_constraints = ref false in
+  let max_errors = ref None in
   let mode = ref None in
   let monitor_logname = ref false in
+  let ide_logname = ref false in
+  let lsp_logname = ref false in
   let no_load = ref false in
   let output_json = ref false in
   let prechecked = ref None in
@@ -101,11 +102,11 @@ let parse_check_args cmd =
   let refactor_before = ref "" in
   let refactor_mode = ref "" in
   let replace_state_after_saving = ref false in
-  let retries = ref 800 in
   let sort_results = ref false in
   let timeout = ref None in
   let version = ref false in
   let watchman_debug_logging = ref false in
+  let allow_non_opt_build = ref false in
 
   (* custom behaviors *)
   let set_from x () = from := x in
@@ -149,19 +150,23 @@ let parse_check_args cmd =
     | _ -> failwith "No other keywords should make it here"
   in
   let options = [
-    (* modes - please keep sorted in the alphabetical order *)
+    (* Please keep these sorted in the alphabetical order *)
     "--ai",
       Arg.String (fun s -> ai_mode :=
          Some (ignore (Ai_options.prepare ~server:true s); s)),
-      " run AI module with provided options\n";
+      " run AI module with provided options";
     "--ai-query", Arg.String (fun x -> set_mode (MODE_AI_QUERY x) ()),
       (* Send an AI query *) "";
+    Common_argspecs.allow_non_opt_build allow_non_opt_build;
     "--auto-complete",
       Arg.Unit (set_mode MODE_AUTO_COMPLETE),
       " (mode) auto-completes the text on stdin";
     "--autostart-server",
       Arg.Bool (fun x -> autostart := x),
       " automatically start hh_server if it's not running (default: true)";
+    "--bigcode",
+      Arg.String (fun filename -> set_mode (MODE_BIGCODE filename) ()),
+      " (mode) source code indexing functionalities for Big Code analysis";
     "--color",
       Arg.String (fun x -> set_mode (MODE_COLORING x) ()),
       " (mode) pretty prints the file content \
@@ -214,10 +219,21 @@ let parse_check_args cmd =
     "--dynamic-view",
       Arg.Set dynamic_view,
       " Replace occurrences of untyped code with dynamic";
-    "--file-info-on-disk",
-      Arg.Set file_info_on_disk,
-      " [experimental] a saved state option to store file info" ^
-      " (the naming table) in SQLite. Only has meaning in --saved-state mode.";
+    "--error-format",
+      Arg.String (fun s ->
+          match s with
+          | "raw" -> error_format := Errors.Raw
+          | "context" -> error_format := Errors.Context
+          | _ -> print_string "Warning: unrecognized error format.\n"),
+      "<raw|context> Error formatting style";
+    "--extract-standalone",
+      Arg.String (fun name -> set_mode (MODE_EXTRACT_STANDALONE name) ()),
+      " extract a given function / method together with its dependencies as a standalone file";
+    "--file-dependents",
+      Arg.Unit (fun () ->
+        let () = prechecked := Some false in
+        set_mode MODE_FILE_DEPENDENTS ()),
+      " (mode) Given a list of filepaths, shows list of (possibly) dependent files";
     "--find-class-refs",
       Arg.String (fun x -> set_mode (MODE_FIND_CLASS_REFS x) ()),
       " (mode) finds references of the provided class name";
@@ -240,11 +256,30 @@ let parse_check_args cmd =
     "--from-emacs", Arg.Unit (set_from "emacs"),
       " (deprecated) equivalent to --from emacs";
     "--from-vim",
-      Arg.Unit (fun () -> from := "vim"; retries := 0),
-      " (deprecated) equivalent to \
-       --from vim --retries 0";
+      Arg.Unit (fun () -> from := "vim"),
+      " (deprecated) equivalent to --from vim";
     "--full-fidelity-schema",
       Arg.Unit (set_mode MODE_FULL_FIDELITY_SCHEMA), "";
+    "--fun-deps-at-pos-batch",
+      Arg.Rest begin fun position ->
+        mode := match !mode with
+          | None -> Some (MODE_FUN_DEPS_AT_POS_BATCH [position])
+          | Some (MODE_FUN_DEPS_AT_POS_BATCH positions) ->
+            Some (MODE_FUN_DEPS_AT_POS_BATCH (position::positions))
+          | _ -> raise (Arg.Bad "only a single mode should be specified")
+        end,
+      " (mode) for each entry in input list get list of function dependencies \
+        [file:line:character list]";
+    "--fun-is-locallable-at-pos-batch",
+      Arg.Rest begin fun position ->
+        mode := match !mode with
+          | None -> Some (MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH [position])
+          | Some (MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH positions) ->
+            Some (MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH (position::positions))
+          | _ -> raise (Arg.Bad "only a single mode should be specified")
+        end,
+      " (mode) for each entry in input list checks if function at position can be \
+        made RxLocal [file:line:character list]";
     "--gen-hot-classes-file",
       Arg.Tuple ([
         Arg.Int (fun x -> hot_classes_threshold := x);
@@ -279,15 +314,9 @@ let parse_check_args cmd =
     "--ignore-hh-version",
       Arg.Set ignore_hh_version,
       " ignore hh_version check when loading saved states (default: false)";
-    "--saved-state-ignore-hhconfig",
-      Arg.Set saved_state_ignore_hhconfig,
-      " ignore hhconfig hash when loading saved states (default: false)";
     "--in-memory-dep-table-size",
       Arg.Unit (set_mode MODE_IN_MEMORY_DEP_TABLE_SIZE),
       " number of entries in the in-memory dependency table";
-    "--infer-return-type",
-      Arg.String (fun s -> set_mode (MODE_INFER_RETURN_TYPE s) ()),
-       " (mode) infers return type of given function or method\n";
     "--inheritance-ancestor-classes",
       Arg.String
       (fun x -> set_mode (MODE_METHOD_JUMP_ANCESTORS (x, "Class")) ()),
@@ -340,7 +369,7 @@ let parse_check_args cmd =
       Arg.Set output_json,
       " output json for machine consumption. (default: false)";
     "--lint",
-    Arg.Unit (set_mode MODE_LINT),
+      Arg.Unit (set_mode MODE_LINT),
       " (mode) lint the given list of files";
     "--lint-all",
       Arg.Int (fun x -> set_mode (MODE_LINT_ALL x) ()),
@@ -362,10 +391,19 @@ let parse_check_args cmd =
       " inference constraints into external logger (e.g. Scuba)";
     "--logname",
       Arg.Set logname,
-      " (mode) show log filename and exit\n";
+      " (mode) show log filename and exit";
+    "--max-errors",
+      Arg.Int (fun num_errors -> max_errors := Some num_errors),
+        " Maximum number of errors to display";
     "--monitor-logname",
       Arg.Set monitor_logname,
-      " (mode) show monitor log filename and exit\n";
+      " (mode) show monitor log filename and exit";
+    "--ide-logname",
+      Arg.Set ide_logname,
+      " (mode) show client ide log filename and exit";
+    "--lsp-logname",
+      Arg.Set lsp_logname,
+      " (mode) show client lsp log filename and exit";
     "--no-load",
       Arg.Set no_load,
       " start from a fresh state";
@@ -374,6 +412,9 @@ let parse_check_args cmd =
       " (mode) prints an outline of the text on stdin";
     Common_argspecs.prechecked prechecked;
     Common_argspecs.no_prechecked prechecked;
+    "--pause",
+      Arg.Unit (set_mode (MODE_PAUSE true)),
+      " (mode) pause recheck-on-file-change [EXPERIMENTAL]";
     "--profile-log",
       Arg.Set profile_log,
       " enable profile logging";
@@ -406,6 +447,12 @@ let parse_check_args cmd =
       " if combined with --save-mini, causes the saved state" ^
       " to replace the program state; otherwise, the state files are not" ^
       " used after being written to disk (default: false)";
+    "--resume",
+      Arg.Unit (set_mode (MODE_PAUSE false)),
+      " (mode) resume recheck-on-file-change [EXPERIMENTAL]";
+    "--retries",
+      Arg.Int (fun n -> timeout := Some (float_of_int (max 5 n))),
+      " (deprecated) same as --timeout";
     (* Retrieve changed files since input checkpoint.
      * Output is separated by newline.
      * Exit code will be non-zero if no checkpoint is found *)
@@ -415,11 +462,28 @@ let parse_check_args cmd =
     "--retry-if-init",
       Arg.Bool (fun _ -> ()),
       " (deprecated and ignored)";
-    Common_argspecs.retries retries;
+    "--rewrite-lambda-parameters",
+       Arg.Rest begin fun fn ->
+         mode := match !mode with
+          | None ->
+            Some (MODE_REWRITE_LAMBDA_PARAMETERS [fn])
+          | Some (MODE_REWRITE_LAMBDA_PARAMETERS fnl) ->
+            Some (MODE_REWRITE_LAMBDA_PARAMETERS (fn :: fnl))
+          | _ -> raise (Arg.Bad "only a single mode should be specified")
+         end,
+      " (mode) rewrite lambdas in the files from the given list" ^
+      " with suggested parameter types";
+    "--save-naming",
+      Arg.String (fun x -> set_mode (MODE_SAVE_NAMING x) ()),
+      (" (mode) Save the naming table to the given file." ^
+      " Returns the number of files and symbols written to disk.");
     "--save-state",
       Arg.String (fun x -> set_mode (MODE_SAVE_STATE x) ()),
       (" (mode) Save a saved state to the given file." ^
       " Returns number of edges dumped from memory to the database.");
+    "--saved-state-ignore-hhconfig",
+      Arg.Set saved_state_ignore_hhconfig,
+      " ignore hhconfig hash when loading saved states (default: false)";
     "--search",
       Arg.String (fun x -> set_mode (MODE_SEARCH (x, "")) ()),
       " (mode) fuzzy search symbol definitions";
@@ -448,7 +512,7 @@ let parse_check_args cmd =
       Arg.Unit (set_mode MODE_STATUS),
       " (mode) show a human readable list of errors (default)";
     "--timeout",
-      Arg.Float (fun x -> timeout := Some (Unix.time() +. x)),
+      Arg.Float (fun x -> timeout := Some (max 5. x)),
       " set the timeout in seconds (default: no timeout)";
     "--type-at-pos",
       Arg.String (fun x -> set_mode (MODE_TYPE_AT_POS x) ()),
@@ -462,55 +526,49 @@ let parse_check_args cmd =
           | _ -> raise (Arg.Bad "only a single mode should be specified")
         end,
       " (mode) show types at multiple positions [file:line:character list]";
-    "--fun-deps-at-pos-batch",
-      Arg.Rest begin fun position ->
-        mode := match !mode with
-          | None -> Some (MODE_FUN_DEPS_AT_POS_BATCH [position])
-          | Some (MODE_FUN_DEPS_AT_POS_BATCH positions) ->
-            Some (MODE_FUN_DEPS_AT_POS_BATCH (position::positions))
-          | _ -> raise (Arg.Bad "only a single mode should be specified")
-        end,
-      " (mode) for each entry in input list get list of function dependencies \
-        [file:line:character list]";
-    "--fun-is-locallable-at-pos-batch",
-      Arg.Rest begin fun position ->
-        mode := match !mode with
-          | None -> Some (MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH [position])
-          | Some (MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH positions) ->
-            Some (MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH (position::positions))
-          | _ -> raise (Arg.Bad "only a single mode should be specified")
-        end,
-      " (mode) for each entry in input list checks if function at position can be \
-        made RxLocal [file:line:character list]";
     "--typed-full-fidelity-json",
       Arg.String (fun filename -> set_mode (MODE_TYPED_FULL_FIDELITY_PARSE filename) ()),
       " (mode) show full fidelity parse tree with types. Implies --json.";
     "--version",
       Arg.Set version,
-      " (mode) show version and exit\n";
+      " (mode) show version and exit";
     Common_argspecs.watchman_debug_logging watchman_debug_logging;
+    (* Please keep these sorted in the alphabetical order *)
   ] in
   let args = parse_without_command options usage "check" in
 
   if !version then begin
     if !output_json then ServerArgs.print_json_version ()
-    else print_endline Build_id.build_id_ohai;
+    else print_endline Hh_version.version;
     exit 0;
   end;
 
   let mode = Option.value !mode ~default:MODE_STATUS in
 
   (* fixups *)
-  let root, lint_paths =
+  let root, paths =
     match mode, args with
-    | MODE_LINT, _ -> ClientArgsUtils.get_root None, args
-    | _, [] -> ClientArgsUtils.get_root None, []
-    | _, [x] -> ClientArgsUtils.get_root (Some x), []
+    | MODE_LINT, _
+    | MODE_FILE_DEPENDENTS, _ -> Wwwroot.get None, args
+    | _, [] -> Wwwroot.get None, []
+    | _, [x] -> Wwwroot.get (Some x), []
     | _, _ ->
            Printf.fprintf stderr
              "Error: please provide at most one www directory\n%!";
            exit 1
   in
+
+  if !ide_logname then begin
+    let ide_log_link = ServerFiles.client_ide_log root in
+    Printf.printf "%s\n%!" ide_log_link;
+    exit 0;
+  end;
+
+  if !lsp_logname then begin
+    let lsp_log_link = ServerFiles.client_lsp_log root in
+    Printf.printf "%s\n%!" lsp_log_link;
+    exit 0;
+  end;
 
   if !monitor_logname then begin
     let monitor_log_link = ServerFiles.monitor_log_link root in
@@ -532,14 +590,15 @@ let parse_check_args cmd =
     autostart = !autostart;
     config = !config;
     dynamic_view = !dynamic_view;
-    file_info_on_disk = !file_info_on_disk;
+    error_format = !error_format;
     force_dormant_start = !force_dormant_start;
     from = !from;
     gen_saved_ignore_type_errors = !gen_saved_ignore_type_errors;
     ignore_hh_version = !ignore_hh_version;
     saved_state_ignore_hhconfig = !saved_state_ignore_hhconfig;
-    lint_paths = lint_paths;
+    paths = paths;
     log_inference_constraints = !log_inference_constraints;
+    max_errors = !max_errors;
     mode = mode;
     no_load = !no_load || (
       match mode with
@@ -549,11 +608,11 @@ let parse_check_args cmd =
     prechecked = !prechecked;
     profile_log = !profile_log;
     replace_state_after_saving = !replace_state_after_saving;
-    retries = !retries;
     root = root;
     sort_results = !sort_results;
-    timeout = !timeout;
+    deadline = Option.map ~f:(fun t -> Unix.time() +. t) !timeout;
     watchman_debug_logging = !watchman_debug_logging;
+    allow_non_opt_build = !allow_non_opt_build;
   }
 
 let parse_start_env command =
@@ -573,36 +632,40 @@ let parse_start_env command =
   let prechecked = ref None in
   let from = ref "" in
   let config = ref [] in
+  let allow_non_opt_build = ref false in
   let wait_deprecation_msg () = Printf.eprintf
     "WARNING: --wait is deprecated, does nothing, and will be going away \
      soon!\n%!" in
   let options = [
-    "--wait", Arg.Unit wait_deprecation_msg,
-    " this flag is deprecated and does nothing!";
-    "--no-load", Arg.Set no_load,
-    " start from a fresh state";
-    Common_argspecs.watchman_debug_logging watchman_debug_logging;
-    Common_argspecs.from from;
-    "--profile-log", Arg.Set profile_log,
-    " enable profile logging";
-    "--log-inference-constraints", Arg.Set log_inference_constraints,
-      "  (for hh debugging purpose only) log type" ^
-      " inference constraints into external logger (e.g. Scuba)";
+    (* Please keep these sorted in the alphabetical order *)
     "--ai", Arg.String (fun x -> ai_mode := Some x),
-    "  run ai with options ";
+      " run ai with options ";
+    Common_argspecs.allow_non_opt_build allow_non_opt_build;
+    Common_argspecs.config config;
+    Common_argspecs.from from;
     "--ignore-hh-version", Arg.Set ignore_hh_version,
       " ignore hh_version check when loading saved states (default: false)";
+    "--log-inference-constraints", Arg.Set log_inference_constraints,
+      " (for hh debugging purpose only) log type" ^
+      " inference constraints into external logger (e.g. Scuba)";
+    "--no-load", Arg.Set no_load,
+      " start from a fresh state";
+    Common_argspecs.no_prechecked prechecked;
+    Common_argspecs.prechecked prechecked;
+    "--profile-log", Arg.Set profile_log,
+      " enable profile logging";
     "--saved-state-ignore-hhconfig", Arg.Set saved_state_ignore_hhconfig,
       " ignore hhconfig hash when loading saved states (default: false)";
-    Common_argspecs.prechecked prechecked;
-    Common_argspecs.no_prechecked prechecked;
-    Common_argspecs.config config;
+    "--wait", Arg.Unit wait_deprecation_msg,
+      " this flag is deprecated and does nothing!";
+    Common_argspecs.watchman_debug_logging watchman_debug_logging;
+    (* Please keep these sorted in the alphabetical order *)
   ] in
   let args = parse_without_command options usage command in
   let root =
     match args with
-    | [] -> ClientArgsUtils.get_root None
-    | [x] -> ClientArgsUtils.get_root (Some x)
+    | [] -> Wwwroot.get None
+    | [x] -> Wwwroot.get (Some x)
     | _ ->
         Printf.fprintf stderr
           "Error: please provide at most one www directory\n%!";
@@ -623,6 +686,7 @@ let parse_start_env command =
     root = root;
     silent = false;
     watchman_debug_logging = !watchman_debug_logging;
+    allow_non_opt_build = !allow_non_opt_build;
   }
 
 let parse_start_args () =
@@ -645,8 +709,8 @@ let parse_stop_args () =
   let args = parse_without_command options usage "stop" in
   let root =
     match args with
-    | [] -> ClientArgsUtils.get_root None
-    | [x] -> ClientArgsUtils.get_root (Some x)
+    | [] -> Wwwroot.get None
+    | [x] -> Wwwroot.get (Some x)
     | _ ->
         Printf.fprintf stderr
           "Error: please provide at most one www directory\n%!";
@@ -660,21 +724,27 @@ let parse_lsp_args () =
     Sys.argv.(0) in
   let from = ref "" in
   let use_ffp_autocomplete = ref false in
-  let noop_enhanced_hover  = ref false in
+  let use_serverless_ide = ref false in
   let options = [
-    Common_argspecs.from from;
+    (* Please keep these sorted in the alphabetical order *)
+    "--enhanced-hover",
+    Arg.Unit (fun () -> ()),
+    " [legacy] no-op";
     "--ffp-autocomplete",
     Arg.Set use_ffp_autocomplete,
-    " [experimental] (mode) use the full-fidelity parser based autocomplete ";
-    "--enhanced-hover",
-    Arg.Set noop_enhanced_hover,
-    " [legacy] no-op";
+    " [experimental] use the full-fidelity parser based autocomplete ";
+    Common_argspecs.from from;
+    "--serverless-ide",
+    Arg.Set use_serverless_ide,
+    " [experimental] provide IDE services from hh_client instead of hh_server";
+    (* Please keep these sorted in the alphabetical order *)
   ] in
   let args = parse_without_command options usage "lsp" in
   match args with
-  | [] -> CLsp {
-      ClientLsp.from = !from;
-      ClientLsp.use_ffp_autocomplete = !use_ffp_autocomplete;
+  | [] -> CLsp { ClientLsp.
+      from = !from;
+      use_ffp_autocomplete = !use_ffp_autocomplete;
+      use_serverless_ide = !use_serverless_ide;
     }
   | _ -> Printf.printf "%s\n" usage; exit 2
 
@@ -688,8 +758,8 @@ let parse_debug_args () =
   let args = parse_without_command options usage "debug" in
   let root =
     match args with
-    | [] -> ClientArgsUtils.get_root None
-    | [x] -> ClientArgsUtils.get_root (Some x)
+    | [] -> Wwwroot.get None
+    | [x] -> Wwwroot.get (Some x)
     | _ -> Printf.printf "%s\n" usage; exit 2 in
   CDebug { ClientDebug.
     root;

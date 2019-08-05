@@ -37,7 +37,6 @@ namespace {
 
 const StaticString s_message("message");
 const StaticString s_code("code");
-const StaticString s_86reifiedinit("86reifiedinit");
 const Slot s_messageIdx{0};
 const Slot s_codeIdx{2};
 
@@ -97,6 +96,7 @@ std::string s_source;
 Unit* s_unit = nullptr;
 Unit* s_hhas_unit = nullptr;
 Func* s_nullFunc = nullptr;
+Func* s_singleArgNullFunc = nullptr;
 Func* s_nullCtor = nullptr;
 
 /////////////////////////////////////////////////////////////////////////////
@@ -178,6 +178,11 @@ Object AllocInvalidOperationExceptionObject(const Variant& message) {
 
 Object AllocDOMExceptionObject(const Variant& message) {
   return createAndConstructThrowable(s_DOMExceptionClass, message);
+}
+
+Object AllocDivisionByZeroExceptionObject() {
+  return createAndConstructThrowable(s_DivisionByZeroExceptionClass,
+                                     Strings::DIVISION_BY_ZERO);
 }
 
 Object AllocSoapFaultObject(const Variant& code,
@@ -269,6 +274,10 @@ void throwDOMExceptionObject(const Variant& message) {
   throw_object(AllocDOMExceptionObject(message));
 }
 
+void throwDivisionByZeroExceptionObject() {
+  throw_object(AllocDivisionByZeroExceptionObject());
+}
+
 void throwSoapFaultObject(const Variant& code,
                           const Variant& message,
                           const Variant& actor /* = uninit_variant */,
@@ -311,31 +320,45 @@ void mergePersistentUnits() {
   }
 }
 
-Func* setupNullClsMethod(Class* cls, StringData* name) {
-  if (!s_nullFunc) {
-    s_nullFunc =
-      Unit::lookupFunc(makeStaticString("__SystemLib\\__86null"));
-    assertx(s_nullFunc);
-    assertx(s_nullFunc->isPhpLeafFn());
-  }
+namespace {
 
-  auto clone = s_nullFunc->clone(cls, name);
+Func* setupNullClsMethod(Func* f, Class* cls, StringData* name) {
+  assertx(f && f->isPhpLeafFn());
+  auto clone = f->clone(cls, name);
   clone->setNewFuncId();
   clone->setAttrs(static_cast<Attr>(
-                    AttrPublic | AttrNoInjection | AttrSkipFrame |
-                    AttrRequiresThis | AttrDynamicallyCallable) |
+                    AttrPublic | AttrNoInjection | AttrRequiresThis |
+                    AttrDynamicallyCallable) |
                     rxMakeAttr(RxLevel::Rx, false));
   return clone;
 }
 
+Func* setup86ctorMethod(Class* cls) {
+  if (!s_nullFunc) {
+    s_nullFunc =
+      Unit::lookupFunc(makeStaticString("__SystemLib\\__86null"));
+  }
+  return setupNullClsMethod(s_nullFunc, cls, s_86ctor.get());
+}
+
+Func* setup86ReifiedInitMethod(Class* cls) {
+  if (!s_singleArgNullFunc) {
+    s_singleArgNullFunc =
+      Unit::lookupFunc(makeStaticString("__SystemLib\\__86single_arg_null"));
+  }
+  return setupNullClsMethod(s_singleArgNullFunc, cls, s_86reifiedinit.get());
+}
+
+} // namespace
+
 void setupNullCtor(Class* cls) {
   assertx(!s_nullCtor);
-  s_nullCtor = setupNullClsMethod(cls, makeStaticString("86ctor"));
+  s_nullCtor = setup86ctorMethod(cls);
   s_nullCtor->setHasForeignThis(true);
 }
 
 Func* getNull86reifiedinit(Class* cls) {
-  auto f = setupNullClsMethod(cls, s_86reifiedinit.get());
+  auto f = setup86ReifiedInitMethod(cls);
   f->setBaseCls(cls);
   f->setGenerated(true);
   return f;

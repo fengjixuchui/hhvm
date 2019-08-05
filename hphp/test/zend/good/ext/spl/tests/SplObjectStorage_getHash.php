@@ -1,4 +1,4 @@
-<?php
+<?hh
 $s = new SplObjectStorage();
 $o1 = new Stdclass;
 $o2 = new Stdclass;
@@ -45,5 +45,4 @@ $s3[$o2] = $o2;
 
 var_dump($s3[$o1] === $s3[$o2]);
 
-?>
-===DONE===
+echo "===DONE===\n";

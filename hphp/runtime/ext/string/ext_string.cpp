@@ -28,9 +28,7 @@
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/container-functions.h"
-#include "hphp/runtime/base/actrec-args.h"
 #include "hphp/runtime/base/plain-file.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/request-event-handler.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/string-util.h"
@@ -42,8 +40,9 @@
 #include "hphp/runtime/ext/std/ext_std_variable.h"
 #include "hphp/runtime/server/http-protocol.h"
 #include "hphp/runtime/server/http-request-handler.h"
-#include "hphp/util/lock.h"
 #include "hphp/util/concurrent-lru-cache.h"
+#include "hphp/util/lock.h"
+#include "hphp/util/rds-local.h"
 #include "hphp/zend/html-table.h"
 #include "hphp/zend/zend-string.h"
 
@@ -741,7 +740,19 @@ TypedValue HHVM_FUNCTION(str_replace,
   return tvReturn(str_replace(search, replace, subject, count));
 }
 
+TypedValue HHVM_FUNCTION(str_replace_with_count,
+                         const Variant& search, const Variant& replace,
+                         const Variant& subject, VRefParam count) {
+  return tvReturn(str_replace(search, replace, subject, count));
+}
+
 TypedValue HHVM_FUNCTION(str_ireplace,
+                         const Variant& search, const Variant& replace,
+                         const Variant& subject, VRefParam count) {
+  return tvReturn(str_ireplace(search, replace, subject, count));
+}
+
+TypedValue HHVM_FUNCTION(str_ireplace_with_count,
                          const Variant& search, const Variant& replace,
                          const Variant& subject, VRefParam count) {
   return tvReturn(str_ireplace(search, replace, subject, count));
@@ -960,54 +971,47 @@ String HHVM_FUNCTION(str_repeat,
 
 ///////////////////////////////////////////////////////////////////////////////
 
-Variant sscanfImpl(const String& str,
-                   const String& format,
-                   const req::vector<Variant*>& args) {
+Variant HHVM_FUNCTION(sscanf, const String& str, const String& format) {
   Variant ret;
   int result;
-  result = string_sscanf(str.c_str(), format.c_str(), args.size(), ret);
+  result = string_sscanf(str.c_str(), format.c_str(), 0, ret);
   if (SCAN_ERROR_WRONG_PARAM_COUNT == result) return init_null();
-  if (args.empty()) return ret;
-
-  if (ret.isArray()) {
-    auto& retArray = ret.toArrRef();
-    for (int i = 0; i < retArray.size(); i++) {
-      auto var = args.at(i);
-      if (var) {
-        *var->getRefData() = retArray[i];
-      }
-    }
-    return retArray.size();
-  }
-  if (ret.isNull()) return 0;
   return ret;
 }
 
-TypedValue* HHVM_FN(sscanf)(ActRec* ar) {
-  String str{getArg<KindOfString>(ar, 0)};
-  if (ar->numArgs() < 1) {
-    return arReturn(ar, init_null());
-  }
-  String format{getArg<KindOfString>(ar, 1)};
-
-  req::vector<Variant*> args;
-  if (ar->numArgs() > 2) args.reserve(ar->numArgs() - 2);
-  for (int i = 2; i < ar->numArgs(); ++i) {
-    args.push_back(getArg<KindOfRef>(ar, i));
-  }
-  return arReturn(ar, sscanfImpl(str, format, args));
-}
-
 String HHVM_FUNCTION(chr, const Variant& ascii) {
-  // This is the only known occurance of ParamCoerceModeNullByte,
-  // so we treat it specially using an explicit tvCoerce call
-  Variant v(ascii);
-  auto tv = v.asTypedValue();
-  char c = 0;
-  if (tvCoerceParamToInt64InPlace(tv, true)) {
-    c = tv->m_data.num & 0xFF;
+  switch (ascii.getType()) {
+    case KindOfBoolean:
+    case KindOfInt64:
+    case KindOfDouble:
+      return String::FromChar(ascii.toInt64() & 0xFF);
+    case KindOfPersistentString:
+    case KindOfString:
+      return String::FromChar(
+        ascii.toString().isNumeric() ? ascii.toInt64() & 0xFF : 0);
+    case KindOfNull:
+    case KindOfUninit:
+    case KindOfPersistentVec:
+    case KindOfPersistentDict:
+    case KindOfPersistentKeyset:
+    case KindOfPersistentShape:
+    case KindOfPersistentArray:
+    case KindOfVec:
+    case KindOfDict:
+    case KindOfKeyset:
+    case KindOfShape:
+    case KindOfArray:
+    case KindOfObject:
+    case KindOfResource:
+    case KindOfFunc:
+    case KindOfClass:
+    case KindOfClsMeth:
+    case KindOfRecord:
+    case KindOfRef:
+      return String::FromChar(0);
   }
-  return String::FromChar(c);
+
+  not_reached();
 }
 
 int64_t HHVM_FUNCTION(ord,
@@ -1737,11 +1741,11 @@ String HHVM_FUNCTION(fb_htmlspecialchars,
                      const String& str,
                      int flags /* = k_ENT_HTML_QUOTE_DOUBLE */,
                      const String& charset /* = "ISO-8859-1" */,
-                     const Variant& extra /* = empty_array_ref */) {
+                     const Variant& extra /* = varray[] */) {
   if (!extra.isNull() && !extra.isArray()) {
     throw_expected_array_exception("fb_htmlspecialchars");
   }
-  const Array& arr_extra = extra.isNull() ? empty_array_ref : extra.toArray();
+  const Array& arr_extra = extra.isNull() ? empty_varray() : extra.toArray();
   return StringUtil::HtmlEncodeExtra(str, StringUtil::toQuoteStyle(flags),
                                      charset.data(), false, arr_extra);
 }
@@ -2023,7 +2027,7 @@ bool strtr_slow(const Array& arr, StringBuffer& result, String& key,
   for (int len = maxlen; len >= minlen; len--) {
     key.setSize(len);
     auto const key_tval = make_tv<KindOfString>(key.get());
-    auto const arrkey = arr.convertKey<IntishCast::CastSilently>(key_tval);
+    auto const arrkey = arr.convertKey<IntishCast::Cast>(key_tval);
     auto const rval = arr->get(arrkey);
     if (!rval.is_dummy()) {
       String replace = tvCastToString(rval.tv());
@@ -2624,7 +2628,9 @@ struct StringExtension final : Extension {
     HHVM_FE(chunk_split);
     HHVM_FE(strtok);
     HHVM_FE(str_replace);
+    HHVM_FE(str_replace_with_count);
     HHVM_FE(str_ireplace);
+    HHVM_FE(str_ireplace_with_count);
     HHVM_FE(substr_replace);
     HHVM_FE(substr);
     HHVM_FE(str_pad);

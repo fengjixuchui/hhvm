@@ -1,4 +1,4 @@
-<?php
+<?hh
 $input = "plain [indent] deep [indent] [abcd]deeper[/abcd] [/indent] deep [/indent] plain"; 
 
 function parseTagsRecursive($input)
@@ -17,4 +17,3 @@ $output = parseTagsRecursive($input);
 
 echo $output, "\n";
 
-?>

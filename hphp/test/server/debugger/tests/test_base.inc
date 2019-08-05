@@ -1,10 +1,13 @@
 <?hh
 
-$LOG_ROOT = '/tmp/hphpd';
 require __DIR__ . '/../../util/server_tests.inc';
+ServerUtilServerTests::$LOG_ROOT = '/tmp/hphpd';
+
 
 function startDebuggerClient($debugPort, $input_path, &$pipes) {
-  global $test_run_id, $LOG_ROOT;
+  $LOG_ROOT = ServerUtilServerTests::$LOG_ROOT;
+  $test_run_id = ServerUtilServerTests::$test_run_id;
+
 
   $home = hphp_home().'/hphp/test/server/debugger';
   $hhvm = PHP_BINARY;
@@ -12,8 +15,8 @@ function startDebuggerClient($debugPort, $input_path, &$pipes) {
   $port = ' --debug-port '.$debugPort;
   $user = ' --user debugger';
   $config = ' --config '.$home.'/config/client.ini';
-  $logFileConfig = ' -vLog.File='."${LOG_ROOT}_test_client$test_run_id.log";
-  $repoConfig = " -vRepo.Central.Path=${LOG_ROOT}_client$test_run_id.hhbc";
+  $logFileConfig = ' -vLog.File='."{$LOG_ROOT}_test_client$test_run_id.log";
+  $repoConfig = " -vRepo.Central.Path={$LOG_ROOT}_client$test_run_id.hhbc";
   $debugConfig = ' --debug-config '.$home.'/config/hphpd.ini';
 
   $cmd = $hhvm.' -m debug' . $host . $port . $user .
@@ -81,7 +84,7 @@ function getClientProcessId($pipe) {
 }
 
 function waitForClientToOutput($pipe, $string1, $retryCount = 20) {
-  global $test_run_id;
+
 
   tlog("reading client output");
   $rc = $retryCount;

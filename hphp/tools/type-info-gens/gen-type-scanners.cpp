@@ -1006,12 +1006,20 @@ T Generator::extractFromMarkers(const C& types, F&& f) const {
   std::sort(objects.begin(), objects.end());
 
   T out;
-  std::transform(
+  auto ins = std::inserter(out, out.end());
+  std::string msg;
+  std::for_each(
     objects.begin(),
     std::unique(objects.begin(), objects.end()),
-    std::inserter(out, out.end()),
-    [&](const Object* o) { return f(*o); }
+    [&](const Object* o) {
+      try {
+        ins = f(*o);
+      } catch (Exception& e) {
+        folly::format(&msg, " => {}\n", e.what());
+      }
+    }
   );
+  if (!msg.empty()) throw Exception(msg);
   return out;
 }
 
@@ -2219,13 +2227,19 @@ const Object& Generator::getObject(const ObjectType& type) const {
     // Otherwise if the type has external linkage, look for any type in any
     // compilation unit (with external linkage) with the same name and having a
     // complete definition.
-    if (type.name.linkage != ObjectTypeName::Linkage::internal) {
-      for (auto const& key : keys) {
-        if (key.object_id == type.key.object_id) continue;
-        auto other = m_parser->getObject(key);
-        if (other.incomplete) continue;
-        return insert(std::move(other));
-      }
+    if (type.name.linkage == ObjectTypeName::Linkage::internal) {
+      // Newer clang seems to split some types into different units,
+      // or at least we are not able to tell that they are the same.
+      std::cerr << "gen-type-scanners: warning: "
+        "No matching type found for internal linkage type " <<
+        type.name.name << " in same compile unit.  "
+        "Trying other compile units." << std::endl;
+    }
+    for (auto const& key : keys) {
+      if (key.object_id == type.key.object_id) continue;
+      auto other = m_parser->getObject(key);
+      if (other.incomplete) continue;
+      return insert(std::move(other));
     }
   }
 
@@ -3365,8 +3379,11 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-#ifdef __clang__
-  /* Doesn't work with Clang at the moment. t10336705 */
+#if defined(__clang__) && !defined(CLANG_STANDALONE_DEBUG)
+    // Doesn't work with older Clang that don't support attribute used
+    // in member functions of template classes.
+    // Fixed in https://reviews.llvm.org/D56928
+    // Doesn't work with Clang without -fstandalone-debug
   auto skip = true;
 #else
   auto skip = vm.count("skip") || getenv("HHVM_DISABLE_TYPE_SCANNERS");

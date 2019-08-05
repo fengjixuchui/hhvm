@@ -1,13 +1,13 @@
-<?php
+<?hh
 /* Prototype  : string vprintf(string format, array args)
- * Description: Output a formatted string 
+ * Description: Output a formatted string
  * Source code: ext/standard/formatted_print.c
 */
 
 /*
 * Test vprintf() for char formats with an array of chars passed to the function
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vprintf() : char formats with char values ***\n";
 
 
@@ -41,12 +41,12 @@ $args_array = array(
 // and with char values from the above $args_array array
 $counter = 1;
 foreach($formats as $format) {
-  echo "\n-- Iteration $counter --\n";   
+  echo "\n-- Iteration $counter --\n";
   $result = vprintf($format, $args_array[$counter-1]);
   echo "\n";
-  var_dump($result); 
+  var_dump($result);
   $counter++;
 }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

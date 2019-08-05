@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $ar = array(1, 2, array(31, 32, array(331)), 4);
 
 $it = new RecursiveArrayIterator($ar);
@@ -47,6 +47,5 @@ var_dump(isset($it[1])); // deleted
 var_dump(isset($it[2])); // unset
 var_dump(isset($it[3])); // deleted
 
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

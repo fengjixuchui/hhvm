@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function test($g) {
   $GLOBALS['g'] = $GLOBALS;
@@ -10,8 +10,7 @@ function test($g) {
 }
 
 function main() {
-  $a = array();
-  $a['g'] = &$a;
+  $a = array('g' => $GLOBALS);
 
   test($a);
   test($GLOBALS);

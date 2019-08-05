@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : mixed array_shift(array &$stack)
  * Description: Pops an element off the beginning of the array
  * Source code: ext/standard/array.c
@@ -8,13 +8,6 @@
  * Pass arrays where values are of one data type to test behaviour of array_shift()
  */
 
-echo "*** Testing array_shift() : usage variations ***\n";
-
-
-//get an unset variable
-$unset_var = 10;
-unset ($unset_var);
-
 // get a class
 class classA
 {
@@ -22,6 +15,13 @@ class classA
     return "Class A object";
   }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing array_shift() : usage variations ***\n";
+
+
+//get an unset variable
+$unset_var = 10;
+unset ($unset_var);
 
 // heredoc string
 $heredoc = <<<EOT
@@ -36,7 +36,7 @@ $inputs = array(
 
        // int data
 /*1*/  'int' => array(
-	   0,
+       0,
        1,
        12345,
        -2345,
@@ -115,4 +115,4 @@ fclose($fp);
 
 
 echo "Done";
-?>
+}

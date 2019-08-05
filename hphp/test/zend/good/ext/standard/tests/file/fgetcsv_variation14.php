@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* 
  Prototype: array fgetcsv ( resource $handle [, int $length [, string $delimiter [, string $enclosure]]] );
  Description: Gets line from file pointer and parse for CSV fields
 */
 
 /* Testing fgetcsv() by reading a file containing a blank line */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing fgetcsv() : reading the blank line ***\n";
 
 
@@ -65,4 +65,4 @@ $loop_counter = 1;
   } //end of mode loop 
 
 echo "Done\n";
-?>
+}

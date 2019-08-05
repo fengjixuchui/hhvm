@@ -23,6 +23,7 @@
 #include <folly/Random.h>
 
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/exceptions.h"
 #include "hphp/runtime/base/execution-context.h"
@@ -33,6 +34,20 @@
 #include "hphp/util/logger.h"
 
 namespace HPHP {
+
+///////////////////////////////////////////////////////////////////////////////
+
+const StaticString
+  s_file("file"),
+  s_line("line"),
+  s_function("function"),
+  s_class("class"),
+  s_type("type"),
+  s_args("args"),
+  s_message("message"),
+  s_call_user_func("call_user_func"),
+  s_call_user_func_array("call_user_func_array");
+
 ///////////////////////////////////////////////////////////////////////////////
 
 const int64_t k_DEBUG_BACKTRACE_PROVIDE_OBJECT = (1 << 0);
@@ -74,7 +89,38 @@ ResourceHdr* debug_backtrace_fast() {
  * class name (if in class context) where the "caller" called the "callee".
  */
 Array HHVM_FUNCTION(hphp_debug_caller_info) {
-  return g_context->getCallerInfo();
+  Array ret = empty_darray();
+  bool skipped = false;
+  walkStack([&] (const ActRec* fp, Offset pc) {
+    if (!skipped && fp->func()->isSkipFrame()) return false;
+    if (!skipped) {
+      skipped = true;
+      return false;
+    }
+    if (fp->func()->name()->isame(s_call_user_func.get())) return false;
+    if (fp->func()->name()->isame(s_call_user_func_array.get())) return false;
+    auto const line = fp->func()->unit()->getLineNumber(pc);
+    if (line == -1) return false;
+    auto const cls = fp->func()->cls();
+    auto const path = fp->func()->originalFilename() ?
+      fp->func()->originalFilename() : fp->func()->unit()->filepath();
+    if (cls && !fp->func()->isClosureBody()) {
+      ret = make_darray(
+        s_class, const_cast<StringData*>(cls->name()),
+        s_file, const_cast<StringData*>(path),
+        s_function, const_cast<StringData*>(fp->func()->name()),
+        s_line, line
+      );
+    } else {
+      ret = make_darray(
+        s_file, const_cast<StringData*>(path),
+        s_function, const_cast<StringData*>(fp->func()->name()),
+        s_line, line
+      );
+    }
+    return true;
+  });
+  return ret;
 }
 
 int64_t HHVM_FUNCTION(hphp_debug_backtrace_hash, int64_t options /* = 0 */) {
@@ -88,15 +134,6 @@ void HHVM_FUNCTION(debug_print_backtrace, int64_t options /* = 0 */,
   bool ignore_args = options & k_DEBUG_BACKTRACE_IGNORE_ARGS;
   g_context->write(debug_string_backtrace(false, ignore_args, limit));
 }
-
-const StaticString
-  s_class("class"),
-  s_type("type"),
-  s_function("function"),
-  s_file("file"),
-  s_line("line"),
-  s_message("message"),
-  s_args("args");
 
 String debug_string_backtrace(bool skip, bool ignore_args /* = false */,
                               int64_t limit /* = 0 */) {
@@ -279,13 +316,11 @@ bool HHVM_FUNCTION(trigger_error, const String& error_msg,
     return true;
   }
 
-  ActRec* fp = g_context->getStackFrame();
+  auto const f = fromCaller(
+    [] (const ActRec* fp, Offset) { return fp->func(); }
+  );
 
-  if (fp->m_func->nativeFuncPtr() ==
-      reinterpret_cast<NativeFunction>(HHVM_FN(trigger_error))) {
-    fp = g_context->getOuterVMFrame(fp);
-  }
-  if (fp && fp->m_func->isBuiltin()) {
+  if (f && f->isBuiltin()) {
     if (error_type == (int)ErrorMode::ERROR) {
       raise_error_without_first_frame(msg);
       return true;

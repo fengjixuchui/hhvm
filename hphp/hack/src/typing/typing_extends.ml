@@ -14,7 +14,6 @@
 
 open Core_kernel
 open Typing_defs
-open Typing_ops
 
 module Env = Typing_env
 module Dep = Typing_deps.Dep
@@ -22,8 +21,9 @@ module TUtils = Typing_utils
 module Inst = Decl_instantiate
 module Phase = Typing_phase
 module SN = Naming_special_names
-module Cls = Typing_classes_heap
+module Cls = Decl_provider.Class
 module MakeType = Typing_make_type
+module SubType = Typing_subtype
 
 (*****************************************************************************)
 (* Helpers *)
@@ -46,13 +46,10 @@ let is_lsb = function
 (*****************************************************************************)
 
 let use_parent_for_known = false
-let check_partially_known_method_returns = true
-let check_partially_known_method_params = false
-let check_partially_known_method_visibility = true
 
 (* Rules for visibility *)
-let check_visibility parent_class_elt class_elt =
-  match parent_class_elt.ce_visibility, class_elt.ce_visibility with
+let check_visibility parent_vis c_vis parent_pos pos =
+  match parent_vis, c_vis with
   | Vprivate _   , _ ->
     (* The only time this case should come into play is when the
      * parent_class_elt comes from a trait *)
@@ -61,13 +58,27 @@ let check_visibility parent_class_elt class_elt =
   | Vprotected _ , Vprotected _
   | Vprotected _ , Vpublic       -> ()
   | _ ->
-    let lazy (parent_pos, _) = parent_class_elt.ce_type in
-    let lazy (elt_pos, _) = class_elt.ce_type in
-    let parent_pos = Reason.to_pos parent_pos in
-    let pos = Reason.to_pos elt_pos in
-    let parent_vis = TUtils.string_of_visibility parent_class_elt.ce_visibility in
-    let vis = TUtils.string_of_visibility class_elt.ce_visibility in
+    let parent_vis = TUtils.string_of_visibility parent_vis in
+    let vis = TUtils.string_of_visibility c_vis in
     Errors.visibility_extends vis pos parent_pos parent_vis
+
+let check_class_elt_visibility parent_class_elt class_elt =
+  let parent_vis = parent_class_elt.ce_visibility in
+  let c_vis = class_elt.ce_visibility in
+  let lazy (parent_pos, _) = parent_class_elt.ce_type in
+  let lazy (elt_pos, _) = class_elt.ce_type in
+  let parent_pos = Reason.to_pos parent_pos in
+  let pos = Reason.to_pos elt_pos in
+  check_visibility parent_vis c_vis parent_pos pos
+
+let check_constant_visibility parent_class_const class_const =
+  let (parent_pos, _) = parent_class_const.cc_type in
+  let (elt_pos, _) = class_const.cc_type in
+  let parent_pos = Reason.to_pos parent_pos in
+  let pos = Reason.to_pos elt_pos in
+  let parent_vis = parent_class_const.cc_visibility in
+  let vis = class_const.cc_visibility in
+  check_visibility parent_vis vis parent_pos pos
 
 (* Check that all the required members are implemented *)
 let check_members_implemented check_private parent_reason reason
@@ -98,10 +109,10 @@ let check_types_for_const env
   match (parent_type, class_type) with
     | fty_parent, fty_child when parent_abstract && class_abstract ->
       (* redeclaration of an abstract constant *)
-      Phase.sub_type_decl env fty_child fty_parent
+      Phase.sub_type_decl env fty_child fty_parent Errors.type_constant_redeclaration
     | fty_parent, _ when parent_abstract ->
       (* const definition constrained by parent abstract const *)
-      Phase.sub_type_decl env class_type fty_parent
+      Phase.sub_type_decl env class_type fty_parent Errors.type_constant_mismatch
     | _, _ when class_abstract ->
       (* Trying to override concrete type with an abstract one *)
       let pos = Reason.to_pos (fst class_type) in
@@ -109,7 +120,7 @@ let check_types_for_const env
       Errors.abstract_concrete_override pos parent_pos `constant
     | (_, _) ->
       (* types should be the same *)
-      Phase.unify_decl env parent_type class_type
+      Phase.unify_decl env parent_type class_type Errors.type_constant_mismatch
 
 (* An abstract member can be declared in multiple ancestors. Sometimes these
  * declarations can be different, but yet compatible depending on which ancestor
@@ -140,11 +151,8 @@ let check_ambiguous_inheritance f parent child pos class_ origin =
         Errors.ambiguous_inheritance pos (Cls.name class_) origin error)
 
 let should_check_params parent_class class_ =
-  let class_known =
-    if use_parent_for_known then (Cls.members_fully_known parent_class)
-    else (Cls.members_fully_known class_) in
-  let check_params = class_known || check_partially_known_method_params in
-  class_known, check_params
+  if use_parent_for_known then (Cls.members_fully_known parent_class)
+  else (Cls.members_fully_known class_)
 
 let check_final_method member_source parent_class_elt class_elt =
   (* we only check for final overrides on methods, not properties *)
@@ -198,6 +206,33 @@ let check_lateinit parent_class_elt class_elt =
     let child_pos = Reason.to_pos child_reason in
     Errors.bad_lateinit_override parent_class_elt.ce_lateinit parent_pos child_pos
 
+let check_xhp_attr_required env parent_class_elt class_elt =
+  if not (TypecheckerOptions.check_xhp_attribute (Env.get_tcopt env)) then ()
+  else
+    let is_less_strict = function
+    | Some Required, _
+    | Some Lateinit, Some Lateinit
+    | Some Lateinit, None
+    | None, None -> false
+    | _, _ -> true
+    in
+    let parent_attr = parent_class_elt.ce_xhp_attr in
+    let attr = class_elt.ce_xhp_attr in
+    match parent_attr, attr with
+    | Some {xa_tag = parent_tag; _}, Some {xa_tag = tag; _}
+      when is_less_strict (tag, parent_tag) ->
+        let lazy (parent_reason, _) = parent_class_elt.ce_type in
+        let lazy (child_reason, _) = class_elt.ce_type in
+        let parent_pos = Reason.to_pos parent_reason in
+        let child_pos = Reason.to_pos child_reason in
+        let show = function
+        | None -> "not required or lateinit"
+        | Some Required -> "required"
+        | Some Lateinit -> "lateinit"
+        in
+        Errors.bad_xhp_attr_required_override (show parent_tag) (show tag) parent_pos child_pos
+    | _, _ -> ()
+
 (* Check that overriding is correct *)
 let check_override env ~check_member_unique member_name mem_source ?(ignore_fun_return = false)
     (parent_class, parent_ty) (class_, class_ty) parent_class_elt class_elt =
@@ -207,9 +242,9 @@ let check_override env ~check_member_unique member_name mem_source ?(ignore_fun_
   (* Verify that we are not overriding an __LSB property *)
   check_lsb_overrides mem_source member_name parent_class_elt class_elt;
   check_lateinit parent_class_elt class_elt;
-  let class_known, check_params = should_check_params parent_class class_ in
-  let check_vis = class_known || check_partially_known_method_visibility in
-  if check_vis then check_visibility parent_class_elt class_elt else ();
+  check_xhp_attr_required env parent_class_elt class_elt;
+  let check_params = should_check_params parent_class class_ in
+  check_class_elt_visibility parent_class_elt class_elt;
   let lazy fty_child = class_elt.ce_type in
   let pos = Reason.to_pos (fst fty_child) in
   if class_elt.ce_const <> parent_class_elt.ce_const then (
@@ -230,8 +265,7 @@ let check_override env ~check_member_unique member_name mem_source ?(ignore_fun_
             parent_class_ty = Some (DeclTy parent_ty)
            })
           ~check_return:(
-          (not ignore_fun_return) &&
-          (class_known || check_partially_known_method_returns)
+          (not ignore_fun_return)
         ) in
       let check (r1, ft1) (r2, ft2) () =
         if check_member_unique then
@@ -246,7 +280,8 @@ let check_override env ~check_member_unique member_name mem_source ?(ignore_fun_
             member_name
             ((Cls.name class_))
         | _ -> () end;
-        ignore(subtype_funs env r2 ft2 r1 ft1) in
+        (* these unify errors are collected into errorl *)
+        ignore(subtype_funs env r2 ft2 r1 ft1 Errors.unify_error) in
       check_ambiguous_inheritance check (r_parent, ft_parent) (r_child, ft_child)
         (Reason.to_pos r_child) class_ class_elt.ce_origin
     | lazy fty_parent, _ ->
@@ -258,7 +293,7 @@ let check_override env ~check_member_unique member_name mem_source ?(ignore_fun_
           Errors.decl_override_missing_hint @@ Reason.to_pos (fst fty_child)
         | _, _ -> ()
       end;
-      unify_decl pos Typing_reason.URnone env fty_parent fty_child
+      Typing_ops.unify_decl pos Typing_reason.URnone env fty_parent fty_child
     )
     (fun errorl ->
       Errors.bad_method_override pos member_name errorl)
@@ -266,7 +301,7 @@ let check_override env ~check_member_unique member_name mem_source ?(ignore_fun_
 
 let check_const_override env
     const_name parent_class class_ parent_class_const class_const =
-  let _class_known, check_params = should_check_params parent_class class_ in
+  let check_params = should_check_params parent_class class_ in
   let member_not_unique =
     (* Similar to should_check_member_unique, we check if there are multiple
       concrete implementations of class constants with no override.
@@ -274,7 +309,7 @@ let check_const_override env
       we should allow it in Hack files)
     *)
     match (Cls.kind parent_class) with
-    | Ast.Cinterface ->
+    | Ast_defs.Cinterface ->
       (* Synthetic  *)
       not class_const.cc_synthesized
       (* The parent we are checking is synthetic, no point in checking *)
@@ -287,7 +322,7 @@ let check_const_override env
       && not class_const.cc_abstract
       && not parent_class_const.cc_abstract
     | _ -> false in
-
+  check_constant_visibility parent_class_const class_const;
   if check_params then
     if member_not_unique then
       Errors.multiple_concrete_defs class_const.cc_pos parent_class_const.cc_pos
@@ -321,7 +356,7 @@ let check_members check_private env removals (parent_class, psubst, parent_ty)
     4. It is abstract, and all other declarations are identical
     *)
     match (Cls.kind parent_class) with
-    | Ast.Cinterface | Ast.Ctrait ->
+    | Ast_defs.Cinterface | Ast_defs.Ctrait ->
       (* Synthetic  *)
       not class_elt.ce_synthesized
       (* The parent we are checking is synthetic, no point in checking *)
@@ -392,6 +427,7 @@ let default_constructor_ce class_ =
              ft_where_constraints = [];
              ft_params   = [];
              ft_ret      = MakeType.void r;
+             ft_fun_kind = Ast_defs.FSync;
              ft_reactive = Nonreactive;
              ft_mutability = None;
              ft_returns_mutable = false;
@@ -399,8 +435,9 @@ let default_constructor_ce class_ =
              ft_decl_errors = None;
              ft_returns_void_to_rx = false;
            }
-  in { ce_final       = false;
-       ce_is_xhp_attr = false;
+  in { ce_abstract    = false;
+       ce_final       = false;
+       ce_xhp_attr    = None;
        ce_const       = false;
        ce_lateinit    = false;
        ce_override    = false;
@@ -414,8 +451,8 @@ let default_constructor_ce class_ =
 
 (* When an interface defines a constructor, we check that they are compatible *)
 let check_constructors env (parent_class, parent_ty) (class_, class_ty) psubst subst =
-  let explicit_consistency = snd (Cls.construct parent_class) in
-  if (Cls.kind parent_class) = Ast.Cinterface || explicit_consistency
+  let consistent = snd (Cls.construct parent_class) <> Inconsistent in
+  if (Cls.kind parent_class) = Ast_defs.Cinterface || consistent
   then (
     match (fst (Cls.construct parent_class)), (fst (Cls.construct class_)) with
       | Some parent_cstr, _  when parent_cstr.ce_synthesized -> ()
@@ -434,7 +471,7 @@ let check_constructors env (parent_class, parent_ty) (class_, class_ty) psubst s
         check_override env ~check_member_unique:false "__construct" `FromMethod
           ~ignore_fun_return:true
           (parent_class, parent_ty) (class_, class_ty) parent_cstr cstr
-      | None, Some cstr when explicit_consistency ->
+      | None, Some cstr when consistent ->
         let parent_cstr = default_constructor_ce parent_class in
         let parent_cstr = Inst.instantiate_ce psubst parent_cstr in
         let cstr = Inst.instantiate_ce subst cstr in
@@ -449,7 +486,8 @@ let check_constructors env (parent_class, parent_ty) (class_, class_ty) psubst s
     match fst (Cls.construct parent_class), fst (Cls.construct class_) with
     | Some parent_cstr, _ when parent_cstr.ce_synthesized -> ()
     | Some parent_cstr, Some child_cstr ->
-      check_visibility parent_cstr child_cstr
+      check_final_method `FromMethod parent_cstr child_cstr;
+      check_class_elt_visibility parent_cstr child_cstr
     | _, _ -> ()
   )
 
@@ -461,10 +499,19 @@ let tconst_subsumption env parent_typeconst child_typeconst =
   let pos, name = child_typeconst.ttc_name in
   let parent_pos = fst parent_typeconst.ttc_name in
   let parent_is_concrete = Option.is_some parent_typeconst.ttc_type in
+  let disable_partially_abstract =
+     TypecheckerOptions.disable_partially_abstract_typeconsts (Env.get_tcopt env) in
   let is_final =
-    Option.is_none parent_typeconst.ttc_constraint &&
-    parent_is_concrete in
+    match parent_typeconst.ttc_abstract with
+    | TCPartiallyAbstract
+    | TCConcrete when disable_partially_abstract ->
+      true
+    | _ -> parent_is_concrete && Option.is_none parent_typeconst.ttc_constraint in
 
+  match parent_typeconst.ttc_abstract, child_typeconst.ttc_abstract with
+  | TCAbstract (Some _), TCAbstract None ->
+    Errors.override_no_default_typeconst pos parent_pos
+  | _ -> ();
   (* Check that the child's constraint is compatible with the parent. If the
    * parent has a constraint then the child must also have a constraint if it
    * is abstract
@@ -485,20 +532,36 @@ let tconst_subsumption env parent_typeconst child_typeconst =
   ignore @@ Option.map2
     child_cstr
     parent_typeconst.ttc_constraint
-    ~f:(sub_type_decl pos Reason.URsubsume_tconst_cstr env);
+    ~f:(Typing_ops.sub_type_decl pos Reason.URsubsume_tconst_cstr env);
 
   (* Check that the child's assigned type satisifies parent constraint *)
   ignore @@ Option.map2
     child_typeconst.ttc_type
     parent_typeconst.ttc_constraint
-    ~f:(sub_type_decl parent_pos Reason.URtypeconst_cstr env);
+    ~f:(Typing_ops.sub_type_decl parent_pos Reason.URtypeconst_cstr env);
+
+  begin match child_typeconst.ttc_abstract, child_typeconst.ttc_type, parent_typeconst.ttc_enforceable with
+  | (TCAbstract (Some ty)), _, (pos, true)
+  | (TCPartiallyAbstract | TCConcrete), Some ty, (pos, true) ->
+    let tast_env = Tast_env.typing_env_as_tast_env env in
+    let emit_error = Errors.invalid_enforceable_type "constant" (pos, name) in
+    Enforceable_hint_check.validator#validate_type tast_env ty emit_error
+  | _ -> ()
+  end;
+
+  begin match parent_typeconst.ttc_disallow_php_arrays with
+  | None -> ()
+  | Some pos ->
+    let tast_env = Tast_env.typing_env_as_tast_env env in
+    Type_const_check.disallow_php_arrays tast_env child_typeconst pos
+  end;
 
   (* If the parent cannot be overridden, we unify the types otherwise we ensure
    * the child's assigned type is compatible with the parent's *)
   let check x y =
     if is_final
-    then unify_decl pos Reason.URsubsume_tconst_assign env x y
-    else sub_type_decl pos Reason.URsubsume_tconst_assign env y x in
+    then Typing_ops.unify_decl pos Reason.URsubsume_tconst_assign env x y
+    else Typing_ops.sub_type_decl pos Reason.URsubsume_tconst_assign env y x in
   ignore @@ Option.map2
     parent_typeconst.ttc_type
     child_typeconst.ttc_type
@@ -515,6 +578,8 @@ let check_typeconsts env parent_class class_ =
   Sequence.iter ptypeconsts begin fun (tconst_name, parent_tconst) ->
     match Cls.get_typeconst class_ tconst_name with
       | Some tconst ->
+          check_visibility parent_tconst.ttc_visibility tconst.ttc_visibility
+            (fst parent_tconst.ttc_name) (fst tconst.ttc_name);
           check_ambiguous_inheritance tconst_check parent_tconst tconst
             (fst tconst.ttc_name) class_ tconst.ttc_origin
       | None ->
@@ -553,7 +618,7 @@ let check_class_implements env removals (parent_class, parent_ty) (class_, class
   check_consts env parent_class class_ psubst subst;
   let memberl = make_all_members ~parent_class ~child_class:class_ in
   check_constructors env (parent_class, parent_ty) (class_, class_ty) psubst subst;
-  let check_privates:bool = Cls.kind parent_class = Ast.Ctrait in
+  let check_privates:bool = Cls.kind parent_class = Ast_defs.Ctrait in
   if not fully_known then () else
     List.iter memberl
       (check_members_implemented check_privates parent_pos pos);

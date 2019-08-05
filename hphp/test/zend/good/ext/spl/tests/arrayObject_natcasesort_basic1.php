@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype  : int ArrayObject::natcasesort()
  * Description: proto int ArrayIterator::natcasesort()
  Sort the entries by values using case insensitive "natural order" algorithm. 
  * Source code: ext/spl/spl_array.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing ArrayObject::natcasesort() : basic functionality ***\n";
 
 $ao1 = new ArrayObject(array('boo10','boo1','boo2','boo22','BOO5'));
@@ -14,5 +14,5 @@ var_dump($ao1->natcasesort());
 var_dump($ao1);
 var_dump($ao2->natcasesort('blah'));
 var_dump($ao2);
-?>
-===DONE===
+echo "===DONE===\n";
+}

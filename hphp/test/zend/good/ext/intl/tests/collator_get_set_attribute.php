@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /*
  * Try to set/get a collation attribute.
@@ -30,4 +30,3 @@ function ut_main()
 
 include( 'ut_common.inc' );
 ut_run();
-?>

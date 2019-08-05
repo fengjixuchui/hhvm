@@ -1,12 +1,11 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $a = array(
 	array(1,2,3),
 	"",
 	1,
 	2.5,
 	0,
-	"string",
 	"123",
 	"2.5",
 	NULL,
@@ -24,4 +23,4 @@ foreach ($a as $var) {
 }
 
 echo "Done\n";
-?>
+}

@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto int xml_set_processing_instruction_handler(resource parser, string hdl)
  * Description: Set up processing instruction (PI) handler 
  * Source code: ext/xml/xml.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing xml_set_processing_instruction_handler() : error conditions ***\n";
 
 
@@ -21,4 +21,4 @@ echo "\n-- Testing xml_set_processing_instruction_handler() function with less t
 try { var_dump( xml_set_processing_instruction_handler(null) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int array_push(&array $stack, mixed $var [, mixed $...])
  * Description: Pushes elements onto the end of the array
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Test basic functionality of array_push with indexed and associative arrays
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_push() : basic functionality ***\n";
 
 $array = array ('zero', 'one', 'two');
@@ -25,5 +25,4 @@ var_dump(array_push(&$array_assoc, $var1, $var2));
 var_dump($array_assoc);
 
 echo "Done";
-?>
-
+}

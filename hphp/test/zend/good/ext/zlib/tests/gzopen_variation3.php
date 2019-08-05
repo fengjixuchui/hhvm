@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : resource gzopen(string filename, string mode [, int use_include_path])
  * Description: Open a .gz-file and return a .gz-file pointer
  * Source code: ext/zlib/zlib.c
@@ -103,5 +103,4 @@ foreach($inputs as $key =>$value) {
 
 fclose($fp);
 
-?>
-===DONE===
+echo "===DONE===\n";

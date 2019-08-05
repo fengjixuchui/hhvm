@@ -8,7 +8,7 @@
  *)
 
 open Core_kernel
-open Tast
+open Aast
 open Typing_defs
 
 module Env = Tast_env
@@ -33,7 +33,7 @@ let check_valid_rvalue p env ty =
           (Reason.to_string "A void function doesn't return a value" r);
         env
 
-      | _, Tunresolved tyl2 ->
+      | _, Tunion tyl2 ->
         iter_over_types env (tyl2 @ tyl)
 
       | _, _ ->
@@ -41,7 +41,7 @@ let check_valid_rvalue p env ty =
   ignore (iter_over_types env [ty])
 
 let visitor = object(this)
-  inherit [_] Tast.iter as super
+  inherit [_] Aast.iter as super
 
   val non_returning_allowed = ref true
 
@@ -58,7 +58,7 @@ let visitor = object(this)
     non_returning_allowed := is_non_returning_allowed
 
   method! on_expr env ((p, ty), e as te) = match e with
-    | Binop (Ast.Eq None, e1, e2) ->
+    | Binop (Ast_defs.Eq None, e1, e2) ->
       this#allow_non_returning (fun () -> this#on_expr env e1);
       this#disallow_non_returning (fun () -> this#on_expr env e2)
     | Eif (e1, e2, e3) ->
@@ -79,10 +79,10 @@ let visitor = object(this)
         check_valid_rvalue p env ty;
       this#disallow_non_returning (fun () -> super#on_expr env te)
 
-  method! on_stmt env stmt = match stmt with
+  method! on_stmt env stmt = match snd stmt with
     | Expr e ->
       this#allow_non_returning (fun () -> this#on_expr env e)
-    | Return (_, Some e) ->
+    | Return (Some e) ->
       this#allow_non_returning (fun () -> this#on_expr env e)
     | For (e1, e2, e3, b) ->
       this#allow_non_returning (fun () -> this#on_expr env e1);

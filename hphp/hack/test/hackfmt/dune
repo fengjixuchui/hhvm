@@ -1,0 +1,31 @@
+(executable
+  (name hackfmt_range_unit_test)
+  (modules hackfmt_range_unit_test)
+  (libraries
+    default_injector_config
+    hackfmt
+    ounit))
+
+(alias
+  (name range)
+  (deps %{exe:hackfmt_range_unit_test.exe})
+  (action (run %{exe:hackfmt_range_unit_test.exe})))
+
+(executable
+  (name hackfmt_node_unit_test)
+  (modules hackfmt_node_unit_test)
+  (libraries
+    default_injector_config
+    hackfmt
+    hackfmt_env
+    ounit
+    full_fidelity))
+
+(alias
+  (name node)
+  (deps %{exe:hackfmt_node_unit_test.exe})
+  (action (run %{exe:hackfmt_node_unit_test.exe})))
+
+(alias
+  (name runtest)
+  (deps (alias range) (alias node)))

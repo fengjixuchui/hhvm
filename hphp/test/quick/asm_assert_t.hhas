@@ -1,34 +1,48 @@
+.hh_file 1;
 #
 # Simple test of AssertRAT opcodes
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
   FCall <> 0 1 "" - "" ""
   PopC
 
   NewObjD "Foo"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $x
   PopC
 
   NewObjD "Bar"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $y
   PopC
 
-  FPushFuncD 2 "obj_type"
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $x
   CGetL $y
+  FPushFuncD 2 "obj_type"
   FCall <> 2 1 "" - "" ""
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "obj_type2"
   FCall <> 0 1 "" - "" ""
   PopC
@@ -68,17 +82,23 @@
 .function make_bar() {
   NewObjD "Bar"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   AssertRATStk 0 InitNull
   AssertRATStk 1 Obj
   AssertRATStk 1 Obj=Bar
   PopC
   AssertRATStk 0 Obj=Bar
+  LockObj
+  AssertRATStk 0 Obj=Bar
   RetC
 }
 
 .function obj_type2() {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "make_bar"
   FCall <> 0 1 "" - "" ""
   AssertRATStk 0 Obj
@@ -100,15 +120,18 @@ out:
 stuff:
   NewObjD "Foo"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $obj
   PopC
 
   CGetL $obj
-  FPushObjMethodD 0 "returns_int" NullThrows
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallObjMethodD <> 0 1 "" - "" NullThrows "returns_int"
   AssertRATStk 0 Int
   Int 0
   Add

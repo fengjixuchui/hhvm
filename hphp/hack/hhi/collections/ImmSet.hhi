@@ -76,7 +76,7 @@ final class ImmSet<+Tv as arraykey> implements ConstSet<Tv> {
    *           `false` otherwise.
    */
   <<__Rx, __MaybeMutable>>
-  public function contains<Tu super Tv>(Tu $k): bool;
+  public function contains(mixed $k): bool;
 
   /**
    * Returns an `array` containing the values from the current `ImmSet`.
@@ -146,12 +146,12 @@ final class ImmSet<+Tv as arraykey> implements ConstSet<Tv> {
    * Returns an `ImmSet` containing all the values from the specified
    * `array`(s).
    *
-   * @param ... - The `array`(s) to convert to an `ImmSet`.
+   * @param ...$argv - The `array`(s) to convert to an `ImmSet`.
    *
    * @return - An `ImmSet` with the values from the passed `array`(s).
    */
   <<__Rx>>
-  public static function fromArrays(...): ImmSet<Tv>;
+  public static function fromArrays(...$argv): ImmSet<Tv>;
 
   /**
    * Creates an `ImmSet` from the keys of the specified container.
@@ -164,8 +164,8 @@ final class ImmSet<+Tv as arraykey> implements ConstSet<Tv> {
    * @return - An `ImmSet` built from the keys of the specified container.
    */
   <<__Rx>>
-  public static function fromKeysOf<Tk as arraykey, Tv2>(
-    ?KeyedContainer<Tk,Tv2> $container
+  public static function fromKeysOf<Tk as arraykey>(
+    ?KeyedContainer<Tk,mixed> $container
   ): ImmSet<Tk>;
 
   /**
@@ -403,6 +403,7 @@ final class ImmSet<+Tv as arraykey> implements ConstSet<Tv> {
   public function zip<Tu>(
     <<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\Traversable::class)>> Traversable<Tu> $traversable
   /* HH_FIXME[4110] need bottom type as generic */
+  /* HH_FIXME[4323] need bottom type as generic */
   ): ImmSet<Pair<Tv, Tu>>;
 
   /**

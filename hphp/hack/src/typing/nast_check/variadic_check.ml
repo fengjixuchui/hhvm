@@ -7,10 +7,9 @@
  *
  *)
 
-open Nast
-open Nast_check_env
+open Aast
 
-module SN = Naming_special_names
+module Partial = Partial_provider
 
 let check_variadic v =
   match v with
@@ -24,11 +23,4 @@ let handler = object
   method! at_fun_ _ f = check_variadic f.f_variadic
 
   method! at_method_ _ m = check_variadic m.m_variadic
-
-  method! at_hint env (p, h) =
-    match h with
-    | Hfun (_, _, _hl, _, _, Hvariadic None, _, _)
-      when FileInfo.is_strict env.file_mode ->
-      Errors.ellipsis_strict_mode ~require:`Type p
-    | _ -> ()
 end

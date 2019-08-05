@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $xml = <<< XML
 <?xml version="1.0" ?>
 <books>
@@ -20,9 +20,7 @@ $node = $doc->getElementsByTagName('title')->item(0);
 var_dump($node->C14NFile($output));
 $content = file_get_contents($output);
 var_dump($content);
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $output = dirname(__FILE__).'/DOMNode_C14NFile_basic.tmp';
 unlink($output);
-?>
+}

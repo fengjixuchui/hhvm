@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Test {
     public function getGenFactory() {
@@ -7,10 +7,9 @@ class Test {
         };
     }
 }
-
+<<__EntryPoint>> function main(): void {
 $genFactory = (new Test)->getGenFactory();
 $gen = $genFactory();
 $gen->next();
 var_dump($gen->current());
-
-?>
+}

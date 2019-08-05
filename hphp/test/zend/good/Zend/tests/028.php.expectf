@@ -1,7 +1,4 @@
 bool(true)
 bool(true)
 bool(true)
-
-Notice: %s
-
-Fatal error: %s
+Undefined index: 2

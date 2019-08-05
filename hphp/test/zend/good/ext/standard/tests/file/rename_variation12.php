@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool rename(string old_name, string new_name[, resource context])
  * Description: Rename a file 
  * Source code: ext/standard/file.c
@@ -6,7 +6,7 @@
  */
 
 /* Creating unique files in various dirs by passing relative paths to $dir arg */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing rename() with absolute and relative paths ***\n";
 $mainDir = "renameVar11";
 $subDir = "renameVar11Sub";
@@ -59,4 +59,4 @@ rmdir($absSubDir);
 rmdir($absMainDir);
 
 echo "\n*** Done ***\n";
-?>
+}

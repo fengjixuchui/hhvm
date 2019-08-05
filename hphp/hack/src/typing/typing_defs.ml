@@ -114,6 +114,8 @@ and _ ty_ =
 
   | Tnothing : decl ty_
 
+  | Tlike : decl ty -> decl ty_
+
   (*========== Following Types Exist in Both Phases ==========*)
   | Tany
   | Tnonnull
@@ -134,7 +136,7 @@ and _ ty_ =
   | Toption : 'phase ty -> 'phase ty_
 
   (* All the primitive types: int, string, void, etc. *)
-  | Tprim : Nast.tprim -> 'phase ty_
+  | Tprim : Aast.tprim -> 'phase ty_
 
   (* A wrapper around fun_type, which contains the full type information for a
    * function, method, lambda, etc. Note that lambdas have an additional layer
@@ -149,15 +151,14 @@ and _ ty_ =
    * known arms.
    *)
   | Tshape
-    : shape_fields_known * ('phase shape_field_type Nast.ShapeMap.t)
+    : shape_kind * ('phase shape_field_type Nast.ShapeMap.t)
       -> 'phase ty_
 
   (*========== Below Are Types That Cannot Be Declared In User Code ==========*)
 
-  (* A type variable (not to be confused with a type parameter). This is the
-   * core of how type inference works. If you aren't familiar with it, a
-   * suitable explanation couldn't possibly fit here; terms to google for
-   * include "Hindley-Milner type inference", "unification", and "algorithm W".
+  (* A type variable (not to be confused with a type parameter).
+   * It represents a type that is "unknown" and must be inferred by Hack's
+   * constraint-based type inference engine.
    *)
   | Tvar : Ident.t -> locl ty_
 
@@ -193,53 +194,17 @@ and _ ty_ =
    * Typing_env.env.genv.anons) *)
   | Tanon : locl fun_arity * Ident.t -> locl ty_
 
-  (* This is a kinda-union-type we use in order to defer picking which common
-   * ancestor for a type we should use until we hit a type annotation.
-   * For example:
-   *
-   * interface I {}
-   * class C implements I {}
-   * class D extends C {}
-   * function f(): I {
-   *   if (...) {
-   *     $x = new C();
-   *   } else {
-   *     $x = new D();
-   *   }
-   *   return $x;
-   * }
-   *
-   * What is the type of $x? We need to pick some common ancestor, but which
-   * one? Both C and I would be acceptable, which do we mean? This is where
-   * Tunresolved comes in -- after the if/else, the type of $x is
-   * Unresolved[C, D] -- it could be *either one*, and we defer the check until
-   * we hit an annotation. In particular, when we hit the "return", we make sure
-   * that it is compatible with both C and D, and then we know we've found the
-   * right supertype. Since we don't do global inference, we'll always either
-   * hit an annotation to check, or hit a place an annotation is missing in
-   * which case we can just throw away the type.
-   *
-   * Note that this is *not* really a union type -- most notably, it's allowed
-   * to grow as inference goes on, which union types don't. For example:
-   *
-   * function f(): Vector<num> {
-   *   $v = Vector {};
-   *   $v[] = 1;
-   *   $v[] = 3.14;
-   *   return $v;
-   * }
-   *
-   * (Eliding some Tvar for clarity) On the first line, $v is
-   * Vector<Unresolved[]>. On the second, Vector<Unresolved[int]>. On the third,
-   * Vector<Unresolved[int,float]> -- it grows! Then when we finally return $v,
-   * we see that int and float are both compatible with num, and we have found
-   * our suitable supertype.
-   *
-   * One final implication of this growing is that if an unresolved is used in
-   * a contravariant position, we must collapse it down to whatever is annotated
-   * right then, in order to be sound.
+  (* Union type.
+   * The values that are members of this type are the union of the values
+   * that are members of the components of the union.
+   * Some examples (writing | for binary union)
+   *   Tunion []  is the "nothing" type, with no values
+   *   Tunion [int;float] is the same as num
+   *   Tunion [null;t] is the same as Toption t
    *)
-  | Tunresolved : locl ty list -> locl ty_
+  | Tunion : locl ty list -> locl ty_
+
+  | Tintersection : locl ty list -> locl ty_
 
   (* Tobject is an object type compatible with all objects. This type is also
    * compatible with some string operations (since a class might implement
@@ -260,6 +225,10 @@ and _ ty_ =
 
   (* Localized version of Tarray *)
   | Tarraykind : array_kind -> locl ty_
+
+  (* The type of a list destructructuring assignment.
+   * Implements valid destructuring operations via subtyping *)
+  | Tdestructure : locl ty list -> locl ty_
 
 and array_kind =
   (* Those three types directly correspond to their decl level counterparts:
@@ -286,10 +255,10 @@ and array_kind =
  * dependent type
  *)
 and abstract_kind =
-    (* newtype foo<T1, T2> ... *)
+    (* newtype foo<T1, T2> ...
+     * or
+     * enum foo ... *)
   | AKnewtype of string * locl ty list
-    (* enum foo ... *)
-  | AKenum of string
     (* <T super C> ; None if 'as' constrained *)
   | AKgeneric of string
     (* see dependent_type *)
@@ -324,39 +293,13 @@ and dependent_type =
    *  The expression $x->foo() would have a different one
    *)
   | `expr of Ident.t
-  ] * string list
+  ]
 
 and taccess_type = decl ty * Nast.sid list
 
-(* Local shape constructed using "shape" keyword has all the fields
- * known:
- *
- *   $s = shape('x' => 4, 'y' => 4);
- *
- * It has fields 'x' and 'y' and definitely no other fields. On the other
- * hand, shape types that come from typehints may (due to structural
- * subtyping of shapes) have some other, unlisted fields:
- *
- *   type s = shape('x' => int);
- *
- *   function f(s $s) {
- *   }
- *
- *   f(shape('x' => 4, 'y' => 5));
- *
- * The call to f is valid because of structural subtyping - shapes are
- * permitted to "forget" fields. But the 'y' field still exists at runtime,
- * and we cannot say inside the body of $f that we know that 'x' is the only
- * field. This is relevant when deciding if it's safe to omit optional fields
- * - if shape fields are not fully known, even optional fields have to be
- * explicitly set/unset.
- *
- * We also track in additional map of FieldsPartiallyKnown names of fields
- * that are known to not exist (because they were explicitly unset).
- *)
-and shape_fields_known =
-  | FieldsFullyKnown
-  | FieldsPartiallyKnown of Pos.t Nast.ShapeMap.t
+and shape_kind =
+  | Closed_shape
+  | Open_shape
 
 (* represents reactivity of function
    - None corresponds to non-reactive function
@@ -377,6 +320,11 @@ and reactivity =
   | Reactive of decl ty option
   | MaybeReactive of reactivity
   | RxVar of reactivity option
+
+and val_kind =
+  | Lval
+  | LvalSubexpr
+  | Other
 
 and param_mutability =
   | Param_owned_mutable
@@ -407,6 +355,8 @@ and 'phase fun_type = {
   ft_where_constraints : 'phase where_constraint list  ;
   ft_params     : 'phase fun_params   ;
   ft_ret        : 'phase ty           ;
+  (* Carries through the sync/async information from the aast *)
+  ft_fun_kind   : Ast_defs.fun_kind        ;
   ft_reactive   : reactivity          ;
   ft_return_disposable : bool         ;
   (* mutability of the receiver *)
@@ -447,9 +397,24 @@ and 'phase fun_param = {
 
 and 'phase fun_params = 'phase fun_param list
 
+and xhp_attr_tag =
+  | Required
+  | Lateinit
+
+and xhp_attr = {
+  xa_tag         : xhp_attr_tag option;
+  xa_has_default : bool;
+}
+
 and class_elt = {
+  ce_abstract    : bool;
   ce_final       : bool;
-  ce_is_xhp_attr : bool;
+  ce_xhp_attr    : xhp_attr option;
+  (* This field has different meanings in shallow mode and eager mode:
+   * In shallow mode, true if this method has attribute __Override.
+   * In eager mode, true if this method is originally defined in a trait,
+   * AND has the override attribute, AND the trait does not inherit any
+   * other method of that name. *)
   ce_override    : bool;
   (* true if this static property has attribute __LSB *)
   ce_lsb         : bool;
@@ -474,6 +439,7 @@ and class_const = {
   cc_abstract    : bool;
   cc_pos         : Pos.t;
   cc_type        : decl ty;
+  cc_visibility  : visibility;
   cc_expr        : Nast.expr option;
   (* identifies the class from which this const originates *)
   cc_origin      : string;
@@ -493,6 +459,16 @@ and class_const = {
  *)
 and requirement = Pos.t * decl ty
 
+(* In the default case, we use Inconsistent. If a class has <<__ConsistentConstruct>>,
+ * or if it inherits a class that has <<__ConsistentConstruct>>, we use inherited.
+ * If we have a new final class that doesn't extend from <<__ConsistentConstruct>>,
+ * then we use Final. Only classes that are Inconsistent or Final can have reified
+ * generics. *)
+and consistent_kind =
+  | Inconsistent
+  | ConsistentConstruct
+  | FinalClass
+
 and class_type = {
   tc_need_init           : bool;
   (* Whether the typechecker knows of all (non-interface) ancestors
@@ -501,15 +477,18 @@ and class_type = {
   tc_abstract            : bool;
   tc_final               : bool;
   tc_const               : bool;
+  (* True when the class is annotated with the __PPL attribute. *)
+  tc_ppl                 : bool;
   (* When a class is abstract (or in a trait) the initialization of
    * a protected member can be delayed *)
   tc_deferred_init_members : SSet.t;
-  tc_kind                : Ast.class_kind;
+  tc_kind                : Ast_defs.class_kind;
   tc_is_xhp              : bool;
   tc_is_disposable       : bool;
   tc_name                : string ;
   tc_pos                 : Pos.t ;
   tc_tparams             : decl tparam list ;
+  tc_where_constraints   : decl where_constraint list;
   tc_consts              : class_const SMap.t;
   tc_typeconsts          : typeconst_type SMap.t;
   tc_props               : class_elt SMap.t;
@@ -517,7 +496,7 @@ and class_type = {
   tc_methods             : class_elt SMap.t;
   tc_smethods            : class_elt SMap.t;
   (* the bool represents final constructor or __ConsistentConstruct *)
-  tc_construct           : class_elt option * bool;
+  tc_construct           : class_elt option * consistent_kind;
   (* This includes all the classes, interfaces and traits this class is
    * using. *)
   tc_ancestors           : decl ty SMap.t ;
@@ -525,15 +504,24 @@ and class_type = {
   tc_req_ancestors_extends : SSet.t; (* the extends of req_ancestors *)
   tc_extends             : SSet.t;
   tc_enum_type           : enum_type option;
+  tc_sealed_whitelist    : SSet.t option;
   tc_decl_errors         : Errors.t option;
 }
 
+and typeconst_abstract_kind =
+  | TCAbstract of decl ty option
+  | TCPartiallyAbstract
+  | TCConcrete
+
 and typeconst_type = {
+  ttc_abstract    : typeconst_abstract_kind;
+  ttc_visibility  : visibility;
   ttc_name        : Nast.sid;
   ttc_constraint  : decl ty option;
   ttc_type        : decl ty option;
   ttc_origin      : string;
   ttc_enforceable : Pos.t * bool;
+  ttc_disallow_php_arrays : Pos.t option;
 }
 
 and enum_type = {
@@ -543,7 +531,7 @@ and enum_type = {
 
 and typedef_type = {
   td_pos: Pos.t;
-  td_vis: Nast.typedef_visibility;
+  td_vis: Aast.typedef_visibility;
   td_tparams: decl tparam list;
   td_constraint: decl ty option;
   td_type: decl ty;
@@ -551,15 +539,15 @@ and typedef_type = {
 }
 
 and 'phase tparam = {
-  tp_variance: Ast.variance;
-  tp_name: Ast.id;
-  tp_constraints: (Ast.constraint_kind * 'phase ty) list;
-  tp_reified: Ast.reified;
+  tp_variance: Ast_defs.variance;
+  tp_name: Ast_defs.id;
+  tp_constraints: (Ast_defs.constraint_kind * 'phase ty) list;
+  tp_reified: Aast.reify_kind;
   tp_user_attributes: Nast.user_attribute list;
 }
 
 and 'phase where_constraint =
-  'phase ty * Ast.constraint_kind * 'phase ty
+  'phase ty * Ast_defs.constraint_kind * 'phase ty
 
 type phase_ty =
   | DeclTy of decl ty
@@ -591,10 +579,11 @@ type expand_env = {
    * dependent types for type constants.
    *)
   from_class : Nast.class_id_ option;
-  validate_dty : (decl ty -> unit) option;
+  validate_dty : (expand_env -> decl ty -> unit) option;
 }
 
-type ety = expand_env * locl ty
+let is_type_no_return ty =
+  ty = Tprim Aast.Tnoreturn
 
 let has_expanded {type_expansions; _} x =
   List.exists type_expansions begin function
@@ -611,7 +600,7 @@ let arity_min ft_arity : int = match ft_arity with
 let get_param_mode ~is_ref callconv =
   (* If a param has both & and inout, this should have errored in parsing. *)
   match callconv with
-  | Some Ast.Pinout -> FPinout
+  | Some Ast_defs.Pinout -> FPinout
   | None when is_ref -> FPref
   | None -> FPnormal
 
@@ -619,8 +608,7 @@ module AbstractKind = struct
   let to_string = function
     | AKnewtype (name, _) -> name
     | AKgeneric name -> name
-    | AKenum name -> Utils.strip_ns name
-    | AKdependent (dt, ids) ->
+    | AKdependent dt ->
        let dt =
          match dt with
          | `this -> SN.Typehints.this
@@ -628,7 +616,7 @@ module AbstractKind = struct
          | `expr i ->
              let display_id = Reason.get_expr_display_id i in
              "<expr#"^string_of_int display_id^">" in
-       String.concat ~sep:"::" (dt::ids)
+       dt
 
   let is_generic_dep_ty s = String_utils.is_substring "::" s
 end
@@ -692,10 +680,12 @@ let ty_con_ordinal ty =
   | Tvar _ -> 9
   | Tabstract _ -> 10
   | Tanon _ -> 11
-  | Tunresolved _ -> 12
-  | Tobject -> 13
-  | Tclass _ -> 14
-  | Tarraykind _ -> 15
+  | Tunion _ -> 12
+  | Tintersection _ -> 13
+  | Tobject -> 14
+  | Tclass _ -> 15
+  | Tarraykind _ -> 16
+  | Tdestructure _ -> 17
 
 let array_kind_con_ordinal ak =
   match ak with
@@ -710,9 +700,8 @@ let array_kind_con_ordinal ak =
 let abstract_kind_con_ordinal ak =
   match ak with
   | AKnewtype _ -> 0
-  | AKenum _ -> 1
-  | AKgeneric _ -> 2
-  | AKdependent _ -> 3
+  | AKgeneric _ -> 1
+  | AKdependent _ -> 2
 
 (* Compare two types syntactically, ignoring reason information and other
  * small differences that do not affect type inference behaviour. This
@@ -723,7 +712,7 @@ let abstract_kind_con_ordinal ak =
  * But if ty_compare ty1 ty2 = 0, then the types must not be distinguishable
  * by any typing rules.
  *)
-let rec ty_compare ?(normalize_unresolved = false) ty1 ty2 =
+let rec ty_compare ?(normalize_lists = false) ty1 ty2 =
   let rec ty_compare ty1 ty2 =
     let ty_1, ty_2 = (snd ty1, snd ty2) in
     match  ty_1, ty_2 with
@@ -733,13 +722,11 @@ let rec ty_compare ?(normalize_unresolved = false) ty1 ty2 =
         ty_compare ty ty2
       | Tfun fty, Tfun fty2 ->
         tfun_compare fty fty2
-      | Tunresolved tyl1, Tunresolved tyl2 ->
-        let (tyl1, tyl2) = if normalize_unresolved
-          then (List.sort ty_compare tyl1, List.sort ty_compare tyl2)
-          else (tyl1, tyl2) in
-        tyl_compare tyl1 tyl2
+      | Tunion tyl1, Tunion tyl2
+      | Tintersection tyl1, Tintersection tyl2 ->
+        tyl_compare ~sort:normalize_lists ~normalize_lists tyl1 tyl2
       | Ttuple tyl1, Ttuple tyl2 ->
-        tyl_compare tyl1 tyl2
+        tyl_compare ~sort:normalize_lists ~normalize_lists tyl1 tyl2
       | Tabstract (ak1, opt_cstr1), Tabstract (ak2, opt_cstr2) ->
         begin match abstract_kind_compare ak1 ak2 with
         | 0 -> opt_ty_compare opt_cstr1 opt_cstr2
@@ -749,7 +736,7 @@ let rec ty_compare ?(normalize_unresolved = false) ty1 ty2 =
       | Tclass (id, exact, tyl), Tclass(id2, exact2, tyl2) ->
         begin match String.compare (snd id) (snd id2) with
         | 0 ->
-          begin match tyl_compare tyl tyl2 with
+          begin match tyl_compare ~sort:false tyl tyl2 with
           | 0 ->
             begin match exact, exact2 with
             | Exact, Exact -> 0
@@ -763,11 +750,11 @@ let rec ty_compare ?(normalize_unresolved = false) ty1 ty2 =
         end
       | Tarraykind ak1, Tarraykind ak2 ->
         array_kind_compare ak1 ak2
-      | Tshape (known1, fields1), Tshape (known2, fields2) ->
-        begin match shape_fields_known_compare known1 known2 with
+      | Tshape (shape_kind1, fields1), Tshape (shape_kind2, fields2) ->
+        begin match shape_kind_compare shape_kind1 shape_kind2 with
         | 0 ->
           List.compare (fun (k1,v1) (k2,v2) ->
-            match Ast.ShapeField.compare k1 k2 with
+            match Ast_defs.ShapeField.compare k1 k2 with
             | 0 -> shape_field_type_compare v1 v2
             | n -> n)
             (Nast.ShapeMap.elements fields1) (Nast.ShapeMap.elements fields2)
@@ -780,14 +767,11 @@ let rec ty_compare ?(normalize_unresolved = false) ty1 ty2 =
       | _ ->
         ty_con_ordinal ty1 - ty_con_ordinal ty2
 
-    and shape_fields_known_compare sfk1 sfk2 =
-      match sfk1, sfk2 with
-      | FieldsFullyKnown, FieldsFullyKnown -> 0
-      | FieldsFullyKnown, FieldsPartiallyKnown _ -> -1
-      | FieldsPartiallyKnown _, FieldsFullyKnown -> 1
-      | FieldsPartiallyKnown f1, FieldsPartiallyKnown f2 ->
-        List.compare Ast.ShapeField.compare
-          (Nast.ShapeMap.keys f1) (Nast.ShapeMap.keys f2)
+    and shape_kind_compare sk1 sk2 =
+      match sk1, sk2 with
+      | Closed_shape, Closed_shape | Open_shape, Open_shape -> 0
+      | Closed_shape, Open_shape -> -1
+      | Open_shape, Closed_shape -> 1
 
     and shape_field_type_compare sft1 sft2 =
       match ty_compare sft1.sft_ty sft2.sft_ty with
@@ -820,7 +804,7 @@ let rec ty_compare ?(normalize_unresolved = false) ty1 ty2 =
       match ak1, ak2 with
       | AKmap (ty1, ty2), AKmap (ty3, ty4)
       | AKdarray (ty1, ty2), AKdarray (ty3, ty4) ->
-        tyl_compare [ty1; ty2] [ty3; ty4]
+        tyl_compare ~sort:false [ty1; ty2] [ty3; ty4]
       | AKvarray ty1, AKvarray ty2
       | AKvarray_or_darray ty1, AKvarray_or_darray ty2
       | AKvec ty1, AKvec ty2 ->
@@ -831,12 +815,14 @@ let rec ty_compare ?(normalize_unresolved = false) ty1 ty2 =
     in
     ty_compare ty1 ty2
 
-and tyl_compare ?(normalize_unresolved = false) tyl1 tyl2 =
-  let ty_compare = ty_compare ~normalize_unresolved in
-  List.compare ty_compare tyl1 tyl2
+and tyl_compare ~sort ?(normalize_lists = false) tyl1 tyl2 =
+  let (tyl1, tyl2) = if sort
+    then (List.sort ty_compare tyl1, List.sort ty_compare tyl2)
+    else (tyl1, tyl2) in
+  List.compare (ty_compare ~normalize_lists) tyl1 tyl2
 
-and ft_params_compare ?(normalize_unresolved = false) params1 params2 =
-  let ty_compare = ty_compare ~normalize_unresolved in
+and ft_params_compare ?(normalize_lists = false) params1 params2 =
+  let ty_compare = ty_compare ~normalize_lists in
 
   let rec ft_params_compare params1 params2 =
     List.compare ft_param_compare params1 params2
@@ -852,24 +838,23 @@ and ft_params_compare ?(normalize_unresolved = false) params1 params2 =
   in
   ft_params_compare params1 params2
 
-and abstract_kind_compare ?(normalize_unresolved = false) t1 t2 =
-  let tyl_compare = tyl_compare ~normalize_unresolved in
+and abstract_kind_compare ?(normalize_lists = false) t1 t2 =
+  let tyl_compare = tyl_compare ~normalize_lists in
   match t1, t2 with
   | AKnewtype (id, tyl), AKnewtype (id2, tyl2) ->
     begin match String.compare id id2 with
-    | 0 -> tyl_compare tyl tyl2
+    | 0 -> tyl_compare ~sort:false tyl tyl2
     | n -> n
     end
-  | AKgeneric id1, AKgeneric id2
-  | AKenum id1, AKenum id2 ->
+  | AKgeneric id1, AKgeneric id2 ->
     String.compare id1 id2
   | AKdependent d1, AKdependent d2 ->
     compare d1 d2
   | _ ->
     abstract_kind_con_ordinal t1 - abstract_kind_con_ordinal t2
 
-let ty_equal ?(normalize_unresolved = false) ty1 ty2 =
-  ty_compare ~normalize_unresolved ty1 ty2 = 0
+let ty_equal ?(normalize_lists = false) ty1 ty2 =
+  ty_compare ~normalize_lists ty1 ty2 = 0
 
 let make_function_type_rxvar param_ty =
   match param_ty with

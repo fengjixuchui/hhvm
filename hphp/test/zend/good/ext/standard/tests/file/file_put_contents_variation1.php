@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : int file_put_contents(string file, mixed data [, int flags [, resource context]])
  * Description: Write/Create a file with contents data and return the number of bytes written 
  * Source code: ext/standard/file.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing file_put_contents() : variation ***\n";
 
 $filename = "FilePutContentsVar1.tmp";
@@ -25,5 +25,5 @@ echo "\n";
 unlink($filename);
  
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

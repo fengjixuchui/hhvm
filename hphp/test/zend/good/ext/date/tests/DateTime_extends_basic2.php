@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 //Set the default time zone 
 date_default_timezone_set("Europe/London");
@@ -20,5 +20,4 @@ class DateTimeExt extends DateTime
 $d = new DateTimeExt("1967-05-01 22:30:41");
 echo $d->format("F j, Y, g:i:s a") . "\n"; 
 
-?>
-===DONE===
+echo "===DONE===\n";

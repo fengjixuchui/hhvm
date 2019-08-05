@@ -1,12 +1,20 @@
-<?php
+<?hh
 
 function add($x, $y, $u) {
   var_dump((int)$u + ($x += $y));
 }
 
 function div($x, $y, $z) {
-  var_dump((int)$z - ($x/$y));
-  var_dump((int)$z - ($x%$y));
+  try {
+    var_dump((int)$z - ($x/$y));
+  } catch (DivisionByZeroException $e) {
+    echo $e->getMessage(), "\n";
+  }
+  try {
+    var_dump((int)$z - ($x%$y));
+  } catch (DivisionByZeroException $e) {
+    echo $e->getMessage(), "\n";
+  }
 }
 
 

@@ -17,6 +17,7 @@
 #ifndef incl_HPHP_UNIT_CACHE_H_
 #define incl_HPHP_UNIT_CACHE_H_
 
+#include <folly/String.h>
 #include <string>
 #include <vector>
 
@@ -61,7 +62,7 @@ struct FuncTable;
  * fatal errors.
  */
 Unit* lookupUnit(StringData* path, const char* currentDir, bool* initial_opt,
-                 const Native::FuncTable&);
+                 const Native::FuncTable&, bool alreadyRealpath);
 
 /*
  * As above, but for system units.
@@ -69,10 +70,12 @@ Unit* lookupUnit(StringData* path, const char* currentDir, bool* initial_opt,
 Unit* lookupSyslibUnit(StringData* path, const Native::FuncTable&);
 
 /*
- * Mangle a file's md5sum with runtime options that affect the Unit output.
+ * Mangle a file's sha1sum with runtime options that affect the Unit output.
  * The parser and this module need to agree on how this is done.
  */
-std::string mangleUnitMd5(const std::string& fileMd5, const RepoOptions&);
+std::string mangleUnitSha1(const std::string& fileSha1,
+                           const folly::StringPiece fileName,
+                           const RepoOptions&);
 
 /*
  * Return the number of php files that are currently loaded in this process.
@@ -105,7 +108,11 @@ String resolveVmInclude(StringData* path,
                         const Native::FuncTable&,
                         bool allow_dir = false);
 
-void preloadRepo();
+/*
+ * Remove the specified unit from the cache, to force HHVM to
+ * recompile the file.
+ */
+void invalidateUnit(StringData* path);
 
 /*
  * Needed to avoid order of destruction issues. Destroying the unit

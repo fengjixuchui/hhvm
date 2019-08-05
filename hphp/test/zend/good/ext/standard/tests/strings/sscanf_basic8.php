@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 /* Prototype  : mixed sscanf  ( string $str  , string $format  [, mixed &$...  ] )
  * Description: Parses input from a string according to a format
  * Source code: ext/standard/string.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sscanf() : basic functionality - - using hexadecimal format ***\n";
 
 $str = "129 12F 123B -123B 01ABC 1G";
@@ -18,12 +18,5 @@ var_dump($arg1, $arg2, $arg3, $arg4, $arg5, $arg6);
 list($arg1, $arg2, $arg3, $arg4, $arg5, $arg6) = sscanf($str, $format2);
 var_dump($arg1, $arg2, $arg3, $arg4, $arg5, $arg6);
 
-echo "\n-- Try sccanf() WITH optional args --\n";
-// extract details using long  format
-$res = sscanf($str, $format1, &$arg1, &$arg2, &$arg3, &$arg4, &$arg5, &$arg6);
-var_dump($res, $arg1, $arg2, $arg3, $arg4, $arg5, $arg6);
-$res = sscanf($str, $format2, &$arg1, &$arg2, &$arg3, &$arg4, &$arg5, &$arg6);
-var_dump($res, $arg1, $arg2, $arg3, $arg4, $arg5, $arg6);
-
-?>
-===DONE===
+echo "===DONE===\n";
+}

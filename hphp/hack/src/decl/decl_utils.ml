@@ -9,7 +9,7 @@
 
 open Core_kernel
 open Reordered_argument_collections
-open Nast
+open Aast
 open Typing_defs
 
 let unwrap_class_hint = function
@@ -65,14 +65,13 @@ let split_defs defs split_if_in_defs =
   r1, r2
 
 let rec infer_const (p, expr_) =
-  let open Nast in
   match expr_ with
   | String _ -> Reason.Rwitness p, Tprim Tstring
   | True
   | False -> Reason.Rwitness p, Tprim Tbool
   | Int _ -> Reason.Rwitness p, Tprim Tint
   | Float _ -> Reason.Rwitness p, Tprim Tfloat
-  | Unop ((Ast.Uminus | Ast.Uplus | Ast.Utild | Ast.Unot), e2) ->
+  | Unop ((Ast_defs.Uminus | Ast_defs.Uplus | Ast_defs.Utild | Ast_defs.Unot), e2) ->
     infer_const e2
   | _ ->
     (* We can't infer the type of everything here. Notably, if you
@@ -86,3 +85,23 @@ let rec infer_const (p, expr_) =
 
 let infer_const expr =
   try Some (infer_const expr) with Exit -> None
+
+let coalesce_consistent parent current =
+  (* If the parent's constructor is consistent via <<__ConsistentConstruct>>, then
+   * we want to carry this forward even if the child is final. Example:
+   *
+   * <<__ConsistentConstruct>>
+   * class C {
+   *   public function f(): void {
+   *     new static();
+   *   }
+   * }
+   * final class D<reify T> {}
+   *
+   * Even though D's consistency locally comes from the final class, calling
+   * new static() will cause a runtime exception because D has reified generics. *)
+  match parent with
+  | Inconsistent -> current
+  | ConsistentConstruct -> parent
+  (* This case is unreachable, because parent would have to be a final class *)
+  | FinalClass -> parent

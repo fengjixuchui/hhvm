@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_merge(array $arr1, array $arr2 [, array $...])
  * Description: Merges elements from passed arrays into one array 
  * Source code: ext/standard/array.c
@@ -8,7 +8,7 @@
  * Pass array_merge() arrays with mixed keys to test how it attaches them to
  * existing arrays
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_merge() : usage variations ***\n";
 
 //mixed keys
@@ -19,5 +19,4 @@ var_dump(array_merge($arr1, $arr2));
 var_dump(array_merge($arr2, $arr1));
 
 echo "Done";
-?>
-
+}

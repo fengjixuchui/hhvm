@@ -1,11 +1,11 @@
-<?php
+<?hh
 
 
 <<__EntryPoint>>
 function main_nzuncompress() {
 mt_srand(0);
 $s = '';
-for ( $i = 0; $i < 1000000; $i++ ) {
+for ( $i = 0; $i < 1000; $i++ ) {
   $s .= chr(mt_rand(0,255));
 }
 $c = nzcompress($s);

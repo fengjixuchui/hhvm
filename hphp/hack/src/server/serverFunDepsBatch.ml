@@ -18,7 +18,7 @@ open Core_kernel
  *)
 
 
-module T = Tast
+module T = Aast
 module S = ServerRxApiShared
 module SN = Naming_special_names
 
@@ -87,16 +87,16 @@ let collect_in_decl = object(self)
     let acc =
       match snd expr with
       | T.Fun_id id ->
-        process_function (fst (fst expr), "\\"^SN.SpecialFunctions.fun_) +
+        process_function (fst (fst expr), "\\HH\\"^SN.SpecialFunctions.fun_) +
         process_function id
       | T.Smethod_id ((p, cid), mid) ->
-        process_function (p, "\\"^SN.SpecialFunctions.class_meth) +
+        process_function (p, "\\HH\\"^SN.SpecialFunctions.class_meth) +
         process_method_cid mid cid
       | T.Method_caller ((p, cid), mid) ->
-        process_function (p, "\\"^SN.SpecialFunctions.meth_caller) +
+        process_function (p, "\\HH\\"^SN.SpecialFunctions.meth_caller) +
         process_method_cid mid cid
       | T.Method_id (((p, ty), _), mid) ->
-        process_function (p, "\\"^SN.SpecialFunctions.inst_meth) +
+        process_function (p, "\\HH\\"^SN.SpecialFunctions.inst_meth) +
         process_method env ty mid
       | _ -> self#zero in
     acc + (super#on_expr env expr)
@@ -159,9 +159,10 @@ let handlers = {
     S.on_fun = collect_in_decl#on_fun_
   };
   S.get_state = begin fun fn ->
-    Parser_heap.get_from_parser_heap ~full:true fn
+    Ast_provider.get_ast ~full:true fn
   end;
   S.map_result = begin fun ast refs ->
+    let ast = Some ast in
     Results.elements refs
     |> List.map ~f:(ServerSymbolDefinition.go ast)
     |> List.sort ~compare

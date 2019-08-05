@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 date_default_timezone_set('Asia/Jerusalem');
 
 $t = mktime(0,0,0, 6, 27, 2006);
@@ -20,4 +20,4 @@ var_dump(gmstrftime("%q", $t));
 var_dump(gmstrftime("blah", $t));
 
 echo "Done\n";
-?>
+}

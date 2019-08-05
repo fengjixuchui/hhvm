@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string gmstrftime(string format [, int timestamp])
  * Description: Format a GMT/UCT time/date according to locale settings 
  * Source code: ext/date/php_date.c
@@ -90,5 +90,4 @@ foreach($inputs as $key =>$value) {
       try { var_dump( gmstrftime($value, $timestamp) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
 
-?>
-===DONE===
+echo "===DONE===\n";

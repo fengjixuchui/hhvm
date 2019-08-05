@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : array array_combine(array $keys, array $values)
  * Description: Creates an array by using the elements of the first parameter as keys 
  *              and the elements of the second as the corresponding values 
  * Source code: ext/standard/array.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_combine() : error conditions specific to array_combine() ***\n";
 
 // Testing array_combine by passing empty arrays to $keys and $values arguments
@@ -24,4 +24,4 @@ echo "\n-- Testing array_combine() function by passing array with unequal number
 var_dump( array_combine(array(1, 2), array(1, 2, 3)) );
 
 echo "Done";
-?>
+}

@@ -1,7 +1,7 @@
-<?php
+<?hh
 class Test {
-	function __set() {
-	}
+    function __set() {
+    }
 }
 
-?>
+<<__EntryPoint>> function main(): void {}

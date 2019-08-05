@@ -1,14 +1,8 @@
-<?php
+<?hh
 
 function __autoload($c)
 {
-	class autoload_class
-	{
-		public function __construct()
-		{
-			print "autoload success\n";
-		}
-	}
+  include 'bug26640.inc';
 }
 
 $a = new ReflectionClass('autoload_class');
@@ -17,4 +11,3 @@ if (is_object($a)) {
 	echo "OK\n";
 }
 
-?>

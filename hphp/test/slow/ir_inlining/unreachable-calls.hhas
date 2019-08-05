@@ -1,4 +1,8 @@
+.hh_file 1;
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
   FCall <> 0 1 "" - "" ""
   PopC
@@ -30,25 +34,27 @@
 
   CGetL $obj
   AssertRATStk 0 Obj=Cls1
-  FPushObjMethodD 5 "foobaz" NullThrows
+  NullUninit
+  NullUninit
   CGetL $x
   CGetL $x
   CGetL $x
   CGetL $x
   CGetL $x
-  FCall <> 5 1 "" - "Cls1" "foobaz"
+  FCallObjMethodD <> 5 1 "" - "Cls1" NullThrows "foobaz"
   Jmp end
 
 cls2:
   CGetL $obj
   AssertRATStk 0 Obj=Cls2
-  FPushObjMethodD 5 "foobaz" NullThrows
+  NullUninit
+  NullUninit
   CGetL $x
   CGetL $x
   CGetL $x
   CGetL $x
   CGetL $x
-  FCall <> 5 1 "" - "Cls2" "foobaz"
+  FCallObjMethodD <> 5 1 "" - "Cls2" NullThrows "foobaz"
   Jmp end
 
 end:
@@ -61,30 +67,40 @@ end:
 
   NewObjD "Cls1"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $obj
   PopC
-  FPushFuncD 3 "test"
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $obj
   CGetL $type
   CGetL $x
+  FPushFuncD 3 "test"
   FCall <> 3 1 "" - "" ""
   RetC
 
 cls2:
   NewObjD "Cls2"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $obj
   PopC
-  FPushFuncD 3 "test"
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $obj
   CGetL $type
   CGetL $x
+  FPushFuncD 3 "test"
   FCall <> 3 1 "" - "" ""
   RetC
 }
@@ -100,9 +116,12 @@ header:
   Lt
   JmpZ end
 
-  FPushFuncD 2 "test_outer"
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $type
   Int 1
+  FPushFuncD 2 "test_outer"
   FCall <> 2 1 "" - "" ""
   PopC
 
@@ -116,15 +135,21 @@ end:
 }
 
 .function main() {
-  FPushFuncD 2 "loop"
+  NullUninit
+  NullUninit
+  NullUninit
   False
   Int 40
+  FPushFuncD 2 "loop"
   FCall <> 2 1 "" - "" ""
   PopC
 
-  FPushFuncD 2 "loop"
+  NullUninit
+  NullUninit
+  NullUninit
   True
   Int 100
+  FPushFuncD 2 "loop"
   FCall <> 2 1 "" - "" ""
   RetC
 }

@@ -25,6 +25,7 @@
 #include <folly/Optional.h>
 
 #include "hphp/util/assertions.h"
+#include "hphp/util/low-ptr.h"
 #include "hphp/util/portability.h"
 
 namespace HPHP {
@@ -55,16 +56,17 @@ namespace HPHP {
  * - Audit jit::emitTypeTest().
  */
 #define DATATYPES \
-  DT(PersistentArray,  -12) \
-  DT(Array,            -11) \
-  DT(PersistentShape,  -10) \
-  DT(Shape,             -9) \
-  DT(PersistentKeyset,  -8) \
-  DT(Keyset,            -7) \
-  DT(PersistentDict,    -6) \
-  DT(Dict,              -5) \
-  DT(PersistentVec,     -4) \
-  DT(Vec,               -3) \
+  DT(PersistentArray,  -14) \
+  DT(Array,            -13) \
+  DT(PersistentShape,  -12) \
+  DT(Shape,            -11) \
+  DT(PersistentKeyset, -10) \
+  DT(Keyset,            -9) \
+  DT(PersistentDict,    -8) \
+  DT(Dict,              -7) \
+  DT(PersistentVec,     -6) \
+  DT(Vec,               -5) \
+  DT(Record,            -3) \
   DT(PersistentString,  -2) \
   DT(String,            -1) \
   DT(Uninit,             0) \
@@ -76,9 +78,9 @@ namespace HPHP {
   DT(Int64,              6) \
   DT(Ref,                7) \
   DT(Double,             8) \
-  DT(ClsMeth,            9) \
   DT(Func,              10) \
   DT(Class,             12) \
+  DT(ClsMeth,           use_lowptr ? 14 : 9)
 
 enum class DataType : int8_t {
 #define DT(name, value) name = value,
@@ -117,14 +119,25 @@ constexpr DataType kExtraInvalidDataType = static_cast<DataType>(-127);
  * DataType limits.
  */
 auto constexpr kMinDataType = dt_t(KindOfPersistentArray);
-auto constexpr kMaxDataType = dt_t(KindOfClass);
+auto constexpr kMaxDataType = dt_t(use_lowptr ? KindOfClsMeth : KindOfClass);
 auto constexpr kMinRefCountedDataType = dt_t(KindOfArray);
-auto constexpr kMaxRefCountedDataType = dt_t(KindOfClsMeth);
+auto constexpr kMaxRefCountedDataType =
+  dt_t(use_lowptr ? KindOfRef : KindOfClsMeth);
 
 /*
  * A DataType is a refcounted type if and only if it has this bit set.
  */
 constexpr int kRefCountedBit = 0x1;
+
+/*
+ * Return `dt` with or without the refcount bit set.
+ */
+constexpr DataType dt_with_rc(DataType dt) {
+  return static_cast<DataType>(dt_t(dt) | kRefCountedBit);
+}
+constexpr DataType dt_with_persistence(DataType dt) {
+  return static_cast<DataType>(dt_t(dt) & ~kRefCountedBit);
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 /*
@@ -323,6 +336,12 @@ inline bool isShapeType(MaybeDataType t) {
  */
 bool isArrayOrShapeType(DataType);
 bool isArrayOrShapeType(MaybeDataType);
+
+/*
+ * Based on EvalHackArrDVArrs checks whether t is vec/dict or array
+ */
+bool isVecOrArrayType(DataType t);
+bool isDictOrArrayType(DataType t);
 /*
  * isDictOrShapeType checks whether DataType is a Dict or a Shape that
  * behaves like a Dict. This is important because this check is often used
@@ -347,6 +366,7 @@ constexpr bool isIntType(DataType t) { return t == KindOfInt64; }
 constexpr bool isBoolType(DataType t) { return t == KindOfBoolean; }
 constexpr bool isDoubleType(DataType t) { return t == KindOfDouble; }
 constexpr bool isObjectType(DataType t) { return t == KindOfObject; }
+constexpr bool isRecordType(DataType t) { return t == KindOfRecord; }
 constexpr bool isResourceType(DataType t) { return t == KindOfResource; }
 constexpr bool isRefType(DataType t) { return t == KindOfRef; }
 constexpr bool isFuncType(DataType t) { return t == KindOfFunc; }

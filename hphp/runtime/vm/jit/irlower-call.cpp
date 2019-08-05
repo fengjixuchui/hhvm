@@ -47,6 +47,7 @@
 #include "hphp/runtime/vm/jit/fixup.h"
 #include "hphp/runtime/vm/jit/ir-instruction.h"
 #include "hphp/runtime/vm/jit/ir-opcode.h"
+#include "hphp/runtime/vm/jit/mcgen.h"
 #include "hphp/runtime/vm/jit/ssa-tmp.h"
 #include "hphp/runtime/vm/jit/target-profile.h"
 #include "hphp/runtime/vm/jit/tc.h"
@@ -88,10 +89,21 @@ TCA getCallTarget(IRLS& env, const IRInstruction* inst, Vreg sp) {
   }
 
   if (profile.optimizing()) {
+    auto const data = profile.data();
+
+    // Dump annotations if requested.
+    if (env.annotations != nullptr && RuntimeOption::EvalDumpCallTargets &&
+        mcgen::dumpTCAnnotation(TransKind::Optimize)) {
+      env.annotations->emplace_back(
+        "CallTargets",
+        folly::sformat("BC={} IR={}: {}\n",
+                       inst->marker().bcOff(), inst->id(), data.toString())
+      );
+    }
+
     // Get the result of the profiling data.  If it's strongly biased towards
     // one function, bind the call.  Otherwise, call funcPrologueRedispatch
     // directly.
-    auto const data = profile.data();
     double bias = 0;
     data.choose(bias);
     if (bias * 100 >= RuntimeOption::EvalJitPGOBindCallThreshold) {
@@ -153,7 +165,6 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
     if (debug) {
       assertx(argc == callee->numLocals());
       assertx(callee->numIterators() == 0);
-      assertx(callee->numClsRefSlots() == 0);
 
       auto addr = callee->getEntry();
       while (peek_op(addr) == Op::AssertRATL) {
@@ -280,8 +291,14 @@ void cgCallBuiltin(IRLS& env, const IRInstruction* inst) {
   auto const funcReturnType = callee->hniReturnType();
   auto const returnByValue = callee->isReturnByValue();
 
+  auto& v = vmain(env);
+
+  // We don't write to the true dst registers until the very end of the
+  // instruction sequence, in case we have to perform option-dependent fixups.
   auto const dstData = dstLoc(env, inst, 0).reg(0);
   auto const dstType = dstLoc(env, inst, 0).reg(1);
+  auto const tmpData = v.makeReg();
+  auto const tmpType = v.makeReg();
 
   auto returnType = inst->dst()->type();
   // Subtract out the null possibility from the return type if it would be a
@@ -293,8 +310,6 @@ void cgCallBuiltin(IRLS& env, const IRInstruction* inst) {
       returnType -= TNull;
     }
   }
-
-  auto& v = vmain(env);
 
   // Whether `t' is passed in/out of C++ as String&/Array&/Object&.
   auto const isReqPtrRef = [] (MaybeDataType t) {
@@ -346,17 +361,6 @@ void cgCallBuiltin(IRLS& env, const IRInstruction* inst) {
     }
   }
 
-  // Add the func_num_args() value if needed.
-  if (callee->takesNumArgs()) {
-    // If `numNonDefault' is negative, this is passed as an src.
-    if (extra->numNonDefault >= 0) {
-      args.imm((int64_t)extra->numNonDefault);
-    } else {
-      args.ssa(srcNum);
-      ++srcNum;
-    }
-  }
-
   // Add the positional arguments.
   for (uint32_t i = 0; i < callee->numParams(); ++i, ++srcNum) {
     auto const& pi = callee->params()[i];
@@ -386,13 +390,50 @@ void cgCallBuiltin(IRLS& env, const IRInstruction* inst) {
     }
     return callDest(env, inst);
   }();
+  if (dest.reg0.isValid()) dest.reg0 = tmpData;
+  if (dest.reg1.isValid()) dest.reg1 = tmpType;
+
+  auto const isInlined = env.unit.context().func != callee;
+  if (isInlined) v << inlinestart{callee, 0};
+
+  // Call epilogue: handle array provenance and inlining accounting.
+  auto const end = [&] (Vout& v) {
+    if (RuntimeOption::EvalArrayProvenance &&
+        !callee->isProvenanceSkipFrame()) {
+      if (dstType.isValid()) {
+        v << vcall{
+          CallSpec::direct(arrprov::tagTV, nullptr),
+          v.makeVcallArgs({{tmpData, tmpType}}),
+          v.makeTuple({dstData, dstType}),
+          makeFixup(inst->marker(), SyncOptions::Sync),
+          DestType::TV
+        };
+      } else {
+        assertx(funcReturnType);
+        v << vcall{
+          CallSpec::direct(arrprov::tagTV, nullptr),
+          v.makeVcallArgs({{
+            tmpData,
+            v.cns(static_cast<int64_t>(*funcReturnType))
+          }}),
+          v.makeTuple({dstData}),
+          makeFixup(inst->marker(), SyncOptions::Sync),
+          DestType::SSA
+        };
+      }
+    } else {
+      v << copy{tmpData, dstData};
+      if (dstType.isValid()) v << copy{tmpType, dstType};
+    }
+    if (isInlined) v << inlineend{};
+  };
 
   cgCallHelper(v, env, CallSpec::direct(callee->nativeFuncPtr(), nullptr),
                dest, SyncOptions::Sync, args);
 
   // For primitive return types (int, bool, double) and returnByValue, the
   // return value is already in dstData/dstType.
-  if (returnType.isSimpleType() || returnByValue) return;
+  if (returnType.isSimpleType() || returnByValue) return end(v);
 
   // For return by reference (String, Object, Array, Variant), the builtin
   // writes the return value into MInstrState::tvBuiltinReturn, from where it
@@ -402,16 +443,16 @@ void cgCallBuiltin(IRLS& env, const IRInstruction* inst) {
     // The return type is String, Array, or Object; fold nullptr to KindOfNull.
     assertx(isBuiltinByRef(funcReturnType) && isReqPtrRef(funcReturnType));
 
-    v << load{rvmtl()[returnOffset], dstData};
+    v << load{rvmtl()[returnOffset], tmpData};
 
     if (dstType.isValid()) {
       auto const sf = v.makeReg();
       auto const rtype = v.cns(returnType.toDataType());
       auto const nulltype = v.cns(KindOfNull);
-      v << testq{dstData, dstData, sf};
-      v << cmovb{CC_Z, sf, rtype, nulltype, dstType};
+      v << testq{tmpData, tmpData, sf};
+      v << cmovb{CC_Z, sf, rtype, nulltype, tmpType};
     }
-    return;
+    return end(v);
   }
 
   if (returnType <= TCell || returnType <= TBoxedCell) {
@@ -420,7 +461,7 @@ void cgCallBuiltin(IRLS& env, const IRInstruction* inst) {
     static_assert(KindOfUninit == static_cast<DataType>(0),
                   "KindOfUninit must be 0 for test");
 
-    v << load{rvmtl()[returnOffset + TVOFF(m_data)], dstData};
+    v << load{rvmtl()[returnOffset + TVOFF(m_data)], tmpData};
 
     if (dstType.isValid()) {
       auto const rtype = v.makeReg();
@@ -431,9 +472,9 @@ void cgCallBuiltin(IRLS& env, const IRInstruction* inst) {
       static_assert(KindOfUninit == static_cast<DataType>(0),
                     "Codegen assumes KindOfUninit == 0");
       v << testb{rtype, rtype, sf};
-      v << cmovb{CC_Z, sf, rtype, nulltype, dstType};
+      v << cmovb{CC_Z, sf, rtype, nulltype, tmpType};
     }
-    return;
+    return end(v);
   }
 
   not_reached();
@@ -446,6 +487,13 @@ void cgNativeImpl(IRLS& env, const IRInstruction* inst) {
 
   auto const func = inst->marker().func();
 
+  auto const arr_prov = RuntimeOption::EvalArrayProvenance &&
+                        !func->isProvenanceSkipFrame();
+
+  auto const next = arr_prov
+    ? Vlabel(v.makeBlock())
+    : label(env, inst->next());
+
   if (FixupMap::eagerRecord(func)) {
     emitEagerSyncPoint(v, func->getEntry(), rvmtl(), fp, sp);
   }
@@ -453,9 +501,33 @@ void cgNativeImpl(IRLS& env, const IRInstruction* inst) {
     CallSpec::direct(func->arFuncPtr(), nullptr),
     v.makeVcallArgs({{fp}}),
     v.makeTuple({}),
-    {label(env, inst->next()), label(env, inst->taken())},
+    {next, label(env, inst->taken())},
     makeFixup(inst->marker(), SyncOptions::Sync)
   };
+  if (arr_prov) {
+    v = next;
+    auto const data_loc = fp[kArRetOff] + TVOFF(m_data);
+    auto const type_loc = fp[kArRetOff] + TVOFF(m_type);
+
+    auto const in_data = v.makeReg();
+    auto const in_type = v.makeReg();
+    v << load{data_loc, in_data};
+    v << load{type_loc, in_type};
+
+    auto const out_data = v.makeReg();
+    auto const out_type = v.makeReg();
+    v << vcall{
+      CallSpec::direct(arrprov::tagTV, nullptr),
+      v.makeVcallArgs({{in_data, in_type}}),
+      v.makeTuple({out_data, out_type}),
+      makeFixup(inst->marker(), SyncOptions::Sync),
+      DestType::TV
+    };
+
+    v << store{out_data, data_loc};
+    v << store{out_type, type_loc};
+    v << jmp{label(env, inst->next())};
+  }
 }
 
 static void traceCallback(ActRec* fp, Cell* sp, Offset bcOff) {
@@ -560,39 +632,15 @@ void cgCheckRefs(IRLS& env, const IRInstruction* inst)  {
     auto const sf = v.makeReg();
     v << cmpqi{extra->firstBit, nparams, sf};
 
-    if (vals64 != 0 && vals64 != mask64) {
-      // If we're beyond nparams, then either all params are refs, or all
-      // params are non-refs, so if vals64 isn't 0 and isnt mask64, there's no
-      // possibility of a match.
+    if (vals64 != 0) {
+      // If we're beyond nparams, then all params are non-refs, so if vals64
+      // isn't 0, there's no possibility of a match.
       fwdJcc(v, env, CC_LE, sf, inst->taken());
       thenBody(v);
     } else {
-      ifThenElse(v, CC_NLE, sf, thenBody, [&] (Vout& v) {
-        // If not special builtin...
-        auto const sf = v.makeReg();
-        v << testlim{
-          static_cast<int32_t>(AttrVariadicByRef),
-          func[Func::attrsOff()],
-          sf
-        };
-        fwdJcc(v, env, vals64 ? CC_Z : CC_NZ, sf, inst->taken());
-      });
+      ifThen(v, CC_NLE, sf, thenBody);
     }
   }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void cgProfileFunc(IRLS& env, const IRInstruction* inst) {
-  auto const extra = inst->extra<ProfileCallTargetData>();
-  auto const sp = srcLoc(env, inst, 0).reg();
-
-  auto const args = argGroup(env, inst)
-    .addr(rvmtl(), safe_cast<int32_t>(extra->handle))
-    .addr(sp, cellsToBytes(extra->bcSPOff.offset));
-
-  cgCallHelper(vmain(env), env, CallSpec::method(&CallTargetProfile::report),
-               kVoidDest, SyncOptions::None, args);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $fp = fopen(dirname(__FILE__) . "/cert.crt","r");
 $a = fread($fp,8192);
 fclose($fp);
@@ -8,11 +8,11 @@ $c = "invalid cert";
 $d = openssl_x509_read($a);
 $e = array();
 
-var_dump(openssl_x509_export($a, &$output));	// read cert as a binary string
-var_dump(openssl_x509_export($b, &$output2));	// read cert from a filename string
-var_dump(openssl_x509_export($c, &$output3));	// read an invalid cert, fails
-var_dump(openssl_x509_export($d, &$output4));	// read cert from a resource
-var_dump(openssl_x509_export($e, &$output5));	// read an array, fails
+var_dump(openssl_x509_export($a, &$output));    // read cert as a binary string
+var_dump(openssl_x509_export($b, &$output2));    // read cert from a filename string
+var_dump(openssl_x509_export($c, &$output3));    // read an invalid cert, fails
+var_dump(openssl_x509_export($d, &$output4));    // read cert from a resource
+var_dump(openssl_x509_export($e, &$output5));    // read an array, fails
 
 $outfilename = tempnam("/tmp", "ssl");
 if ($outfilename === false)
@@ -35,7 +35,7 @@ echo "---\n";
 
 var_dump(strcmp($output, $a));
 var_dump(strcmp($output, $output2));
-var_dump(strcmp($output, $output3));
-var_dump(strcmp($output, $output4));	// different
-var_dump(strcmp($output, $output5));	// different
-?>
+var_dump(strcmp($output, (string)$output3));
+var_dump(strcmp($output, $output4));    // different
+var_dump(strcmp($output, (string)$output5));    // different
+}

@@ -1,8 +1,8 @@
-<?php
+<?hh
 
 /* Generate array of pixels. 2000 pixels per color stripe */
+<<__EntryPoint>> function main(): void {
 $count = 2000 * 3;
-
 $pixels =
    array_merge(array_pad(array(), $count, 0),
                array_pad(array(), $count, 255),
@@ -24,5 +24,4 @@ $im->importImagePixels(0, 0, $width, $height, "RGB", Imagick::PIXEL_CHAR, $pixel
 
 var_dump($width, $height);
 var_dump($im->getImageGeometry());
-
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function foo() {
  return false;
@@ -6,5 +6,5 @@ function foo() {
 
 <<__EntryPoint>>
 function main_1560() {
-foo() or die("foobar");
+foo() || die("foobar");
 }

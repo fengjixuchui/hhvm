@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 /* Prototype  : mixed sscanf  ( string $str  , string $format  [, mixed &$...  ] )
  * Description: Parses input from a string according to a format
  * Source code: ext/standard/string.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sscanf() : basic functionality -using exponential format ***\n";
 
 $str = "10.12345 10.12345E3 10.12345e3 -10.12345e4" ;
@@ -18,13 +18,5 @@ var_dump($arg1, $arg2, $arg3, $arg4);
 list($arg1, $arg2, $arg3, $arg4) = sscanf($str, $format2);
 var_dump($arg1, $arg2, $arg3, $arg4);
 
-echo "\n-- Try sccanf() WITH optional args --\n";
-// extract details using long  format
-$res = sscanf($str, $format1, &$arg1, &$arg2, &$arg3, &$arg4);
-var_dump($res, $arg1, $arg2, $arg3, $arg4);
-$res = sscanf($str, $format2, &$arg1, &$arg2, &$arg3, &$arg4);
-var_dump($res, $arg1, $arg2, $arg3, $arg4);
-
-
-?>
-===DONE===
+echo "===DONE===\n";
+}

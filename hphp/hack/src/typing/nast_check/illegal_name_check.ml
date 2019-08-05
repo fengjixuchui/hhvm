@@ -8,7 +8,7 @@
  *)
 
 open Core_kernel
-open Nast
+open Aast
 open Utils
 open Nast_check_env
 
@@ -26,12 +26,21 @@ let handler = object
 
   method! at_expr env (pos, e) =
     match e with
-    | Unop (Ast.Uref, e) ->
+    | Binop ((Ast_defs.Eq None), e1, e2) ->
+      begin match e1, e2 with
+      | (_, (Lvar (_, x))), (_, Unop (Ast_defs.Uref, _))
+        when Local_id.to_string x |> SN.Superglobals.is_superglobal
+          || SN.Superglobals.globals = Local_id.to_string x ->
+        Errors.illegal_by_ref_expr pos ("Superglobal " ^ Local_id.to_string x) "bound"
+      | _ -> ()
+      end;
+    | Unop (Ast_defs.Uref, e) ->
+      let ref_expr ident = Errors.illegal_by_ref_expr pos ident "passed" in
       begin match snd e with
       | Lvar (_, x) when Local_id.to_string x = SN.SpecialIdents.this ->
-        Errors.illegal_by_ref_expr pos SN.SpecialIdents.this
+        ref_expr SN.SpecialIdents.this
       | Lvar (_, x) when Local_id.to_string x = SN.SpecialIdents.dollardollar ->
-        Errors.illegal_by_ref_expr pos SN.SpecialIdents.dollardollar
+        ref_expr SN.SpecialIdents.dollardollar
       | _ -> ()
       end
     | Id (pos, const) ->
@@ -41,14 +50,8 @@ let handler = object
       then ()
       else if const = SN.PseudoConsts.g__CLASS__ && ck = None
       then Errors.illegal_CLASS pos
-      else if const = SN.PseudoConsts.g__TRAIT__ && ck <> Some Ast.Ctrait
+      else if const = SN.PseudoConsts.g__TRAIT__ && ck <> Some Ast_defs.Ctrait
       then Errors.illegal_TRAIT pos
-    | InstanceOf (_, e) ->
-      begin match snd e with
-      | CIexpr (_, Class_const ((_, CIexpr (_, Id(_, classname))), (p, "class"))) ->
-        Errors.classname_const_instanceof (Utils.strip_ns classname) p;
-      | _ -> ()
-      end;
     | Class_const ((_, CIexpr (_, (Id(_, "parent")))), (_, m_name))
       when env.function_name = Some m_name -> ()
     | Class_const (_, ((_, m_name) as mid))
@@ -65,14 +68,12 @@ let handler = object
 
   method! at_method_ env m =
     let pos, name = m.m_name in
-    if name = SN.Members.__destruct
-      && not (Attributes.mem SN.UserAttributes.uaOptionalDestruct m.m_user_attributes)
-    then Errors.illegal_destructor pos;
+    if name = SN.Members.__destruct then Errors.illegal_destructor pos;
     begin match env.class_name with
     | Some cname ->
         let p, mname = m.m_name in
         if String.lowercase (strip_ns cname) = String.lowercase mname
-            && env.class_kind <> Some Ast.Ctrait
+            && env.class_kind <> Some Ast_defs.Ctrait
         then Errors.dangerous_method_name p
     | None -> assert false
     end

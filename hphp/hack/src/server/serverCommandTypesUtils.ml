@@ -8,6 +8,8 @@ let debug_describe_t : type a. a t -> string = function
   | TYPED_AST                _ -> "TYPED_AST"
   | IDE_HOVER                _ -> "IDE_HOVER"
   | DOCBLOCK_AT              _ -> "DOCBLOCK_AT"
+  | LOCATE_SYMBOL            _ -> "LOCATE_SYMBOL"
+  | DOCBLOCK_FOR_SYMBOL      _ -> "DOCBLOCK_FOR_SYMBOL"
   | IDE_SIGNATURE_HELP       _ -> "SIGNATURE_HELP"
   | COVERAGE_LEVELS          _ -> "COVERAGE_LEVELS"
   | AUTOCOMPLETE             _ -> "AUTOCOMPLETE"
@@ -21,6 +23,7 @@ let debug_describe_t : type a. a t -> string = function
   | IDE_REFACTOR             _ -> "IDE_REFACTOR"
   | DUMP_SYMBOL_INFO         _ -> "DUMP_SYMBOL_INFO"
   | REMOVE_DEAD_FIXMES       _ -> "REMOVE_DEAD_FIXMES"
+  | REWRITE_LAMBDA_PARAMETERS _ -> "REWRITE_LAMBDA_PARAMETERS"
   | SEARCH                   _ -> "SEARCH"
   | COVERAGE_COUNTS          _ -> "COVERAGE_COUNTS"
   | LINT                     _ -> "LINT"
@@ -31,6 +34,7 @@ let debug_describe_t : type a. a t -> string = function
   | RETRIEVE_CHECKPOINT      _ -> "RETRIEVE_CHECKPOINT"
   | DELETE_CHECKPOINT        _ -> "DELETE_CHECKPOINT"
   | IN_MEMORY_DEP_TABLE_SIZE   -> "IN_MEMORY_DEP_TABLE_SIZE"
+  | SAVE_NAMING              _ -> "SAVE_NAMING"
   | SAVE_STATE               _ -> "SAVE_STATE"
   | STATS                      -> "STATS"
   | FORMAT                   _ -> "FORMAT"
@@ -46,7 +50,6 @@ let debug_describe_t : type a. a t -> string = function
   | UNSUBSCRIBE_DIAGNOSTIC   _ -> "UNSUBSCRIBE_DIAGNOSTIC"
   | OUTLINE                  _ -> "OUTLINE"
   | IDE_IDLE                   -> "IDE_IDLE"
-  | INFER_RETURN_TYPE        _ -> "INFER_RETURN_TYPE"
   | RAGE                       -> "RAGE"
   | DYNAMIC_VIEW             _ -> "DYNAMIC_VIEW"
   | CST_SEARCH               _ -> "CST_SEARCH"
@@ -55,6 +58,12 @@ let debug_describe_t : type a. a t -> string = function
   | FUN_DEPS_BATCH           _ -> "FUN_DEPS_BATCH"
   | FUN_IS_LOCALLABLE_BATCH  _ -> "FUN_IS_LOCALLABLE_BATCH"
   | LIST_FILES_WITH_ERRORS     -> "LIST_FILES_WITH_ERRORS"
+  | FILE_DEPENDENCIES        _ -> "FILE_DEPENDENCIES"
+  | IDENTIFY_TYPES           _ -> "IDENTIFY_TYPES"
+  | EXTRACT_STANDALONE     _ -> "EXTRACT_STANDALONE"
+  | GO_TO_DEFINITION         _ -> "GO_TO_DEFINITION"
+  | BIGCODE                  _ -> "BIGCODE"
+  | PAUSE                    _ -> "PAUSE"
 
 let debug_describe_cmd : type a. a command -> string = function
   | Rpc rpc -> debug_describe_t rpc
@@ -66,3 +75,14 @@ let source_tree_of_file_input file_input =
     Full_fidelity_source_text.from_file (Relative_path.create_detect_prefix filename)
   | ServerCommandTypes.FileContent content ->
     Full_fidelity_source_text.make Relative_path.default content
+
+let extract_labelled_file
+    (labelled_file: ServerCommandTypes.labelled_file)
+    : (Relative_path.t * ServerCommandTypes.file_input) =
+  match labelled_file with
+  | ServerCommandTypes.LabelledFileName filename ->
+    let path = Relative_path.create_detect_prefix filename in
+    (path, (ServerCommandTypes.FileName filename))
+  | ServerCommandTypes.LabelledFileContent { filename; content } ->
+    let path = Relative_path.create_detect_prefix filename in
+    (path, (ServerCommandTypes.FileContent content))

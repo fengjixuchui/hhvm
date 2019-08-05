@@ -1,4 +1,4 @@
-<?php
+<?hh
 $tz = new DateTimeZone("Asia/Tokyo");
 $current = "2012-12-27 16:24:08";
 
@@ -92,4 +92,3 @@ $v = date_create($current);
 $z = $v;
 $x = $z->setTimestamp(2012234222);
 dump($v, $z, $x);
-?>

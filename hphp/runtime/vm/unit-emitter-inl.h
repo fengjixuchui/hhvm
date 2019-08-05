@@ -25,8 +25,12 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 // Basic info.
 
-inline const MD5& UnitEmitter::md5() const {
-  return m_md5;
+inline const SHA1& UnitEmitter::sha1() const {
+  return m_sha1;
+}
+
+inline const SHA1& UnitEmitter::bcSha1() const {
+  return m_bcSha1;
 }
 
 inline const unsigned char* UnitEmitter::bc() const {
@@ -65,6 +69,21 @@ inline PreClassEmitter* UnitEmitter::pce(Id preClassId) {
 
 inline const PreClassEmitter* UnitEmitter::pce(Id preClassId) const {
   return m_pceVec[preClassId];
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// RecordEmitters.
+
+inline size_t UnitEmitter::numRecords() const {
+  return m_reVec.size();
+}
+
+inline RecordEmitter* UnitEmitter::re(Id recordId) {
+  return m_reVec[recordId];
+}
+
+inline const RecordEmitter* UnitEmitter::re(Id recordId) const {
+  return m_reVec[recordId];
 }
 
 ///////////////////////////////////////////////////////////////////////////////

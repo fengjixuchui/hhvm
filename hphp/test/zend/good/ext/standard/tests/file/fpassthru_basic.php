@@ -1,10 +1,10 @@
-<?php
-/* 
+<?hh
+/*
 Prototype: int fpassthru ( resource $handle );
 Description: Reads to EOF on the given file pointer from the current position
   and writes the results to the output buffer.
 */
-
+<<__EntryPoint>> function main(): void {
 $file_name = dirname(__FILE__)."/passthru.tmp";
 $write_handle = fopen($file_name, "w");
 
@@ -53,9 +53,6 @@ var_dump( fpassthru($read_handle) );
 fclose($read_handle);
 
 echo "*** Done ***\n";
-
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 unlink(dirname(__FILE__)."/passthru.tmp");
-?>
+}

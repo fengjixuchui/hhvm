@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 var_dump(
   array_map(
     NULL,
@@ -7,4 +7,4 @@ var_dump(
     array(7,8,9)
   )
 );
-?>
+}

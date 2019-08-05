@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto array getimagesize(string imagefile [, array info])
  * Description: Get the size of an image as 4-element array
  * Source code: ext/standard/image.c
  * Alias to functions:
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing getimagesize() : error conditions ***\n";
 
 // Zero arguments
@@ -18,5 +18,5 @@ $info = array(1, 2);
 $extra_arg = 10;
 try { var_dump( getimagesize($imagefile, &$info, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

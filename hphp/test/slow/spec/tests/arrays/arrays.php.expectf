@@ -201,17 +201,13 @@ array(3) {
   int(13)
 }
 123 6 13 
+Undefined index: 1
 
-Notice: Undefined %s: 1 in %s/arrays/arrays.php on line 108
-$v[1] is ><
-
-Notice: Undefined variable: v1 in %s/arrays/arrays.php on line 108
+Notice: Undefined variable: v1 in %s on line 110
 NULL
+Undefined index: 4
 
-Notice: Undefined %s: 4 in %s/arrays/arrays.php on line 109
-$v[4] is ><
-
-Notice: Undefined variable: v1 in %s/arrays/arrays.php on line 109
+Notice: Undefined variable: v1 in %s on line 112
 NULL
 array(5) {
   [7]=>
@@ -244,7 +240,7 @@ array(2) {
 array(5) {
   ["red"]=>
   int(10)
-  [4]=>
+  ["4"]=>
   int(3)
   [9]=>
   int(5)
@@ -347,7 +343,7 @@ array(4) {
 }
 ================= what about int-looking strings? It appears not. =================
 array(4) {
-  [12]=>
+  ["12"]=>
   int(10)
   ["0x10"]=>
   int(16)

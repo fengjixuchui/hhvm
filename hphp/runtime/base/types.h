@@ -27,30 +27,21 @@ struct String;
 struct StaticString;
 struct Array;
 struct Variant;
-struct VarNR;
 
 #define uninit_variant    tvAsCVarRef(&immutable_uninit_base)
 #define init_null_variant tvAsCVarRef(&immutable_null_base)
 
-extern const VarNR null_varNR;
-extern const VarNR true_varNR;
-extern const VarNR false_varNR;
-extern const VarNR INF_varNR;
-extern const VarNR NEGINF_varNR;
-extern const VarNR NAN_varNR;
 extern const String null_string;
 extern const Array null_array;
-extern const Array empty_array_ref;
 extern const StaticString array_string; // String("Array")
 extern const StaticString vec_string; // String("Vec")
 extern const StaticString dict_string; // String("Dict")
 extern const StaticString keyset_string; // String("Keyset")
 
 // Use empty_string() if you're returning String
-// Use empty_string_variant() if you're returning Variant
+// Use empty_string_tv() if you're returning TypedValue
 // Or use these if you need to pass by const reference:
 extern const StaticString empty_string_ref; // const StaticString&
-extern const Variant empty_string_variant_ref; // const Variant&
 
 struct StringData;
 using LowStringPtr = LowPtr<const StringData>;

@@ -27,6 +27,7 @@
 #include "hphp/runtime/vm/named-entity.h"
 #include "hphp/runtime/vm/named-entity-pair-table.h"
 #include "hphp/runtime/vm/preclass.h"
+#include "hphp/runtime/vm/record.h"
 #include "hphp/runtime/vm/type-alias.h"
 
 #include "hphp/util/compact-vector.h"
@@ -34,9 +35,9 @@
 #include "hphp/util/functional.h"
 #include "hphp/util/hash-map.h"
 #include "hphp/util/lock-free-ptr-wrapper.h"
-#include "hphp/util/md5.h"
 #include "hphp/util/mutex.h"
 #include "hphp/util/service-data.h"
+#include "hphp/util/sha1.h"
 
 #include <map>
 #include <ostream>
@@ -343,9 +344,14 @@ public:
   int64_t sn() const;
 
   /*
-   * MD5 of the Unit.
+   * SHA1 of the source code for Unit.
    */
-  MD5 md5() const;
+  SHA1 sha1() const;
+
+  /*
+   * SHA1 of the bytecode for Unit.
+   */
+  SHA1 bcSha1() const;
 
   /*
    * File and directory paths.
@@ -470,20 +476,23 @@ public:
    const RepoAuthType::Array* lookupArrayTypeId(Id id) const;
 
   /////////////////////////////////////////////////////////////////////////////
-  // Funcs and PreClasses.                                              [const]
+  // Funcs, PreClasses, and RecordDescs.                                [const]
 
   /*
-   * Look up a Func or PreClass by ID.
+   * Look up a Func or PreClass or PreRecordDesc by ID.
    */
   Func* lookupFuncId(Id id) const;
   PreClass* lookupPreClassId(Id id) const;
+  PreRecordDesc* lookupPreRecordId(Id id) const;
 
   /*
-   * Range over all Funcs or PreClasses in the Unit.
+   * Range over all Funcs or PreClasses or RecordDescs in the Unit.
    */
   FuncRange funcs() const;
   folly::Range<PreClassPtr*> preclasses();
   folly::Range<const PreClassPtr*> preclasses() const;
+  folly::Range<PreRecordDescPtr*> prerecords();
+  folly::Range<const PreRecordDescPtr*> prerecords() const;
 
   /*
    * Get a pseudomain for the Unit with the context class `cls'.
@@ -623,6 +632,47 @@ public:
    */
   static bool classExists(const StringData* name,
                           bool autoload, ClassKind kind);
+
+  /////////////////////////////////////////////////////////////////////////////
+  // RecordDesc lookup.                                               [static]
+
+  /*
+   * Define a new RecordDesc from `record' for this request.
+   *
+   * Raises a fatal error in various conditions (e.g., RecordDesc already
+   * defined, etc.) if `failIsFatal' is set).
+   *
+   * Also always fatals if a type alias already exists in this request with the
+   * same name as that of `record', regardless of the value of `failIsFatal'.
+   */
+  static RecordDesc* defRecordDesc(PreRecordDesc* record,
+                                   bool failIsFatal = true);
+
+  /*
+   * Look up the RecordDesc in this request with name `name', or with the name
+   * mapped to the NamedEntity `ne'.
+   *
+   * Return nullptr if the record is not yet defined in this request.
+   */
+  static RecordDesc* lookupRecordDesc(const NamedEntity* ne);
+  static RecordDesc* lookupRecordDesc(const StringData* name);
+
+  /*
+   * Autoload the RecordDesc with name `name' and bind it `ne' in this request.
+   *
+   * @requires: NamedEntity::get(name) == ne
+   */
+  static RecordDesc* loadMissingRecordDesc(const NamedEntity* ne,
+                                           const StringData* name);
+
+  /*
+   * Same as lookupRecordDesc(), but if `tryAutoload' is set, call and return
+   * loadMissingRecordDesc().
+   */
+  static RecordDesc* getRecordDesc(const NamedEntity* ne,
+                                   const StringData* name,
+                                   bool tryAutoload);
+  static RecordDesc* getRecordDesc(const StringData* name, bool tryAutoload);
 
   /////////////////////////////////////////////////////////////////////////////
   // Constant lookup.                                                  [static]
@@ -825,25 +875,9 @@ public:
   void* replaceUnit() const;
 
   /*
-   * Does this unit correspond to a file with "<?hh" at the top, irrespective of
-   * EnableHipHopSyntax?
+   * Does this unit correspond to a file with "<?hh" at the top?
    */
   bool isHHFile() const;
-
-  /*
-   * Should calls from this unit use strict types? (This is always true for HH
-   * units).
-   *
-   * With strict types enabled only lossless int->float conversions are allowed
-   */
-  bool useStrictTypes() const;
-
-  /*
-   * Should calls from this unit to builtins use strict types?
-   *
-   * This is true for PHP7 files with declare(strict_types=1), but not for Hack
-   * files or force_hh */
-  bool useStrictTypesForBuiltins() const;
 
   UserAttributeMap metaData() const;
 
@@ -895,8 +929,6 @@ private:
   bool m_mergeOnly: 1;
   bool m_interpretOnly : 1;
   bool m_isHHFile : 1;
-  bool m_useStrictTypes : 1;
-  bool m_useStrictTypesForBuiltins : 1;
   bool m_extended : 1;
   bool m_serialized : 1;
   bool m_ICE : 1; // was this unit the result of an internal compiler error
@@ -905,6 +937,7 @@ private:
   TypedValue m_mainReturn;
   PreClassPtrVec m_preClasses;
   TypeAliasVec m_typeAliases;
+  CompactVector<PreRecordDescPtr> m_preRecords;
   /*
    * Cached the EntryPoint for an unit, since compactMergeInfo() inside of
    * mergeImpl will drop the original EP.
@@ -916,7 +949,8 @@ private:
    */
 
   int64_t m_sn{-1};             // Note: could be 32-bit
-  MD5 m_md5;
+  SHA1 m_sha1;
+  SHA1 m_bcSha1;
   VMFixedVector<const ArrayData*> m_arrays;
   mutable PseudoMainCacheMap* m_pseudoMainCache{nullptr};
   mutable LockFreePtrWrapper<VMCompactVector<LineInfo>> m_lineMap;

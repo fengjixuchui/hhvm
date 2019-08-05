@@ -1,4 +1,4 @@
-<?php
+<?hh
 # PDO test framework utilities
 
 if (getenv('PDOTEST_DSN') === false) {
@@ -29,8 +29,8 @@ class PDOTest {
 			$attr = null;
 		}
 
-		if ($user === false) $user = NULL;
-		if ($pass === false) $pass = NULL;
+		if ($user === false) $user = '';
+		if ($pass === false) $pass = '';
 
 		$db = new $classname($dsn, $user, $pass, $attr);
 
@@ -40,7 +40,7 @@ class PDOTest {
 
 		// clean up any crufty test tables we might have left behind
 		// on a previous run
-		static $test_tables = array(
+		$test_tables = array(
 			'test',
 			'test2',
 			'classtypes'
@@ -81,4 +81,3 @@ class PDOTest {
 		return $config;
 	}
 }
-?>

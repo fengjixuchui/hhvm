@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 /* Prototype: string substr( string str, int start[, int length] )
  * Description: Returns the portion of string specified by the start and length parameters.
  */
 
-$strings_array = array( NULL, "", 12345, "abcdef", "123abc", "_123abc");
+$strings_array = array( "", '12345', "abcdef", "123abc", "_123abc");
 
 
 /* Testing for error conditions */
@@ -73,7 +73,6 @@ var_dump (substr('\xIñtërnâtiônàlizætiøn',3) );
 /* start <0 && -start > length */
 echo "\n*** Start before the first char ***\n";
 var_dump (substr("abcd" , -8) );
- 
+
 echo"\nDone";
 
-?>

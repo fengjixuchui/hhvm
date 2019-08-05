@@ -1,6 +1,6 @@
-<?php 
+<?hh <<__EntryPoint>> function main(): void {
 $vals = array(
-"	
+"
  ",
 " ",
 " 123",
@@ -8,6 +8,6 @@ $vals = array(
 );
 
 foreach ($vals as $var) {
-	var_dump(filter_var($var, FILTER_VALIDATE_FLOAT));
+    var_dump(filter_var($var, FILTER_VALIDATE_FLOAT));
 }
-?>
+}

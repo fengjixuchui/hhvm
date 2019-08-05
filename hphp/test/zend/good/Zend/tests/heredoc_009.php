@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 require_once 'nowdoc.inc';
 
@@ -22,4 +22,3 @@ ENDOFHEREDOC;
 
 print "{$x}";
 
-?>

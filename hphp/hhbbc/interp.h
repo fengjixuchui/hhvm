@@ -46,6 +46,12 @@ constexpr auto kDynamicConstant = kExtraInvalidDataType;
 
 //////////////////////////////////////////////////////////////////////
 
+struct BlockUpdateInfo {
+  BlockId fallthrough{NoBlockId};
+  uint32_t unchangedBcs{0};
+  CompactVector<Bytecode> replacedBcs;
+};
+
 /*
  * RunFlags are information about running an entire block in the
  * interpreter.
@@ -63,19 +69,12 @@ struct RunFlags {
    * NoLocalId.
    */
   LocalId retParam{NoLocalId};
-
-  /*
-   * Map from the local statics whose types were used by this block,
-   * to the type that was used.  This is used to force re-analysis of
-   * the corresponding blocks when the type of the static changes.
-   */
-  std::shared_ptr<hphp_fast_map<LocalId,Type>> usedLocalStatics;
+  BlockUpdateInfo updateInfo;
 };
 
 //////////////////////////////////////////////////////////////////////
 
 constexpr int kMaxTrackedLocals = 512;
-constexpr int kMaxTrackedClsRefSlots = 64;
 
 /*
  * StepFlags are information about the effects of a single opcode.
@@ -94,12 +93,6 @@ struct StepFlags {
    * handle those cases specially.
    */
   bool wasPEI = true;
-
-  /*
-   * If set to something other than NoBlockId, then this block
-   * unconditionally falls through to that block.
-   */
-  BlockId jmpDest = NoBlockId;
 
   /*
    * If an instruction sets this flag, it means that if it pushed a
@@ -121,6 +114,18 @@ struct StepFlags {
   bool effectFree = false;
 
   /*
+   * Set by impl_vec to indicate that this instruction was already
+   * dealt with via reduce.
+   */
+  bool reduced = false;
+
+  /*
+   * If set to something other than NoBlockId, then this block
+   * unconditionally falls through to that block.
+   */
+  BlockId jmpDest = NoBlockId;
+
+  /*
    * If an instruction may read or write to locals, these flags
    * indicate which ones.  We don't track this information for local
    * ids past kMaxTrackedLocals, which are assumed to always be in
@@ -138,12 +143,6 @@ struct StepFlags {
   std::bitset<kMaxTrackedLocals> mayReadLocalSet;
 
   /*
-   * If the instruction on this step could've been replaced with
-   * cheaper bytecode, this is the list of bytecode that can be used.
-   */
-  folly::Optional<BytecodeVec> strengthReduced;
-
-  /*
    * If this is not none, the interpreter executed a return on this
    * step, with this type.
    */
@@ -155,14 +154,6 @@ struct StepFlags {
    * NoLocalId.
    */
   LocalId retParam{NoLocalId};
-
-  /*
-   * Map from the local statics whose types were used by this
-   * instruction, to the type that was used.  This is used to force
-   * re-analysis of the corresponding blocks when the type of the
-   * static changes.
-   */
-  std::shared_ptr<hphp_fast_map<LocalId,Type>> usedLocalStatics;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -175,6 +166,7 @@ struct Interp {
   const Index& index;
   Context ctx;
   CollectedInfo& collect;
+  const BlockId bid;
   const php::Block* blk;
   State& state;
 };
@@ -199,7 +191,7 @@ StepFlags step(Interp&, const Bytecode& op);
  * the given block should be re-processed.
  */
 using PropagateFn = std::function<void (BlockId, const State*)>;
-RunFlags run(Interp&, PropagateFn);
+RunFlags run(Interp&, const State& in, PropagateFn);
 
 /*
  * Dispatch a bytecode to the default interpreter.
@@ -220,12 +212,13 @@ bool can_emit_builtin(const php::Func* func,
 void finish_builtin(ISS& env,
                     const php::Func* func,
                     uint32_t numParams,
+                    uint32_t numOut,
                     bool unpack);
 
 bool handle_function_exists(ISS& env, int numArgs, bool allowConstProp);
 
 folly::Optional<Type>
-const_fold(ISS& env, uint32_t nArgs, const res::Func& rfunc);
+const_fold(ISS& env, uint32_t nArgs, const php::Func& phpFunc);
 
 folly::Optional<Type> thisType(const Index& index, Context ctx);
 

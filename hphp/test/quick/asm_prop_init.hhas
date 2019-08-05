@@ -1,12 +1,19 @@
+.hh_file 1;
 #
 # Some tests of property/constant initializers.
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "init_test"
   FCall <> 0 1 "" - "" ""
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "uninit_test"
   FCall <> 0 1 "" - "" ""
   PopC
@@ -63,11 +70,9 @@
 }
 
 .function do_test($who) {
-  .numclsrefslots 1;
-
   CGetL $who
-  ClsRefGetC 0
-  ClsCns "BAR" 0
+  ClassGetC
+  ClsCns "BAR"
   String "\n"
   Concat
   Print
@@ -75,20 +80,22 @@
 
   String "foo"
   CGetL $who
-  ClsRefGetC 0
-  CGetS 0
+  ClassGetC
+  CGetS
   String "\n"
   Concat
   Print
   PopC
 
   CGetL $who
-  ClsRefGetC 0
-  NewObj 0 NoGenerics
+  ClassGetC
+  NewObj
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $obj
   PopC
 
@@ -105,15 +112,21 @@
 }
 
 .function init_test {
-  FPushFuncD 1 "do_test"
+  NullUninit
+  NullUninit
+  NullUninit
     String "Init"
+  FPushFuncD 1 "do_test"
   FCall <> 1 1 "" - "" ""
   RetC
 }
 
 .function uninit_test {
-  FPushFuncD 1 "do_test"
+  NullUninit
+  NullUninit
+  NullUninit
     String "Uninit"
+  FPushFuncD 1 "do_test"
   FCall <> 1 1 "" - "" ""
   RetC
 }

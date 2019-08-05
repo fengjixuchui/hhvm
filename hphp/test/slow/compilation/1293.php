@@ -1,11 +1,11 @@
-<?php
+<?hh
 class X {
   static $foo;
 }
 function test() {
   $x = new X;
   $foo = 'foo';
-  if (isset($x->$foo) || empty($x->$foo) ||      isset($x->{
+  if (isset($x->$foo) || !($x->$foo ?? false) ||      isset($x->{
 'bar'}
 )) {
     unset($x->$foo);
@@ -21,7 +21,7 @@ function test() {
 function main_1293() {
 $data = new stdclass;
 $type = 'OCI-Lob';
-if ($data instanceof $type) {
+if (is_a($data, $type)) {
   echo 'true';
 }
 ;

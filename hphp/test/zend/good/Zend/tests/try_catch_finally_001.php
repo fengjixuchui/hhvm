@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class AE extends Exception {};
 class BE extends Exception {};
@@ -26,6 +26,6 @@ function foo () {
     }
    return 1;
 }
-
+<<__EntryPoint>> function main(): void {
 var_dump(foo());
-?>
+}

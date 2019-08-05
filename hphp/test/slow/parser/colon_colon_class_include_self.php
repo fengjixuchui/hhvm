@@ -1,7 +1,7 @@
-<?php
+<?hh
 
 class C {
-  function foo() { include 'colon_colon_class_include_self.inc'; }
+  static function foo() { include 'colon_colon_class_include_self.inc'; }
 }
 
 <<__EntryPoint>>

@@ -165,12 +165,6 @@ arr_lval APCLocalArray::LvalInt(ArrayData* ad, int64_t k, bool /*copy*/) {
   return arr_lval { helper.release(lval.arr), lval };
 }
 
-arr_lval APCLocalArray::LvalIntRef(ArrayData* ad, int64_t k, bool /*copy*/) {
-  EscalateHelper helper{ad};
-  auto const lval = helper.escalated->lvalRef(k, false);
-  return arr_lval { helper.release(lval.arr), lval };
-}
-
 arr_lval
 APCLocalArray::LvalStr(ArrayData* ad, StringData* k, bool /*copy*/) {
   EscalateHelper helper{ad};
@@ -178,22 +172,9 @@ APCLocalArray::LvalStr(ArrayData* ad, StringData* k, bool /*copy*/) {
   return arr_lval { helper.release(lval.arr), lval };
 }
 
-arr_lval
-APCLocalArray::LvalStrRef(ArrayData* ad, StringData* k, bool /*copy*/) {
-  EscalateHelper helper{ad};
-  auto const lval = helper.escalated->lvalRef(k, false);
-  return arr_lval { helper.release(lval.arr), lval };
-}
-
 arr_lval APCLocalArray::LvalNew(ArrayData* ad, bool /*copy*/) {
   EscalateHelper helper{ad};
   auto const lval = helper.escalated->lvalNew(false);
-  return arr_lval { helper.release(lval.arr), lval };
-}
-
-arr_lval APCLocalArray::LvalNewRef(ArrayData* ad, bool /*copy*/) {
-  EscalateHelper helper{ad};
-  auto const lval = helper.escalated->lvalNewRef(false);
   return arr_lval { helper.release(lval.arr), lval };
 }
 
@@ -221,18 +202,6 @@ APCLocalArray::SetWithRefStr(ArrayData* ad, StringData* k, TypedValue v) {
   return helper.release(helper.escalated->setWithRefInPlace(k, v));
 }
 
-ArrayData*
-APCLocalArray::SetRefInt(ArrayData* ad, int64_t k, tv_lval v) {
-  EscalateHelper helper{ad};
-  return helper.release(helper.escalated->setRefInPlace(k, v));
-}
-
-ArrayData*
-APCLocalArray::SetRefStr(ArrayData* ad, StringData* k, tv_lval v) {
-  EscalateHelper helper{ad};
-  return helper.release(helper.escalated->setRefInPlace(k, v));
-}
-
 ArrayData* APCLocalArray::RemoveInt(ArrayData* ad, int64_t k) {
   EscalateHelper helper{ad};
   return helper.release(helper.escalated->removeInPlace(k));
@@ -250,11 +219,6 @@ ArrayData* APCLocalArray::Copy(const ArrayData* ad) {
 ArrayData* APCLocalArray::Append(ArrayData* ad, Cell v) {
   EscalateHelper helper{ad};
   return helper.release(helper.escalated->appendInPlace(v));
-}
-
-ArrayData* APCLocalArray::AppendRef(ArrayData* ad, tv_lval v) {
-  EscalateHelper helper{ad};
-  return helper.release(helper.escalated->appendRefInPlace(v));
 }
 
 ArrayData*
@@ -300,6 +264,18 @@ tv_rval APCLocalArray::NvGetStr(const ArrayData* ad,
   auto index = a->getIndex(key);
   if (index == -1) return nullptr;
   return GetValueRef(a, index);
+}
+
+ssize_t APCLocalArray::NvGetIntPos(const ArrayData* ad, int64_t k) {
+  auto a = asApcArray(ad);
+  auto index = a->getIndex(k);
+  return (index == -1) ? a->m_size : index;
+}
+
+ssize_t APCLocalArray::NvGetStrPos(const ArrayData* ad, const StringData* k) {
+  auto a = asApcArray(ad);
+  auto index = a->getIndex(k);
+  return (index == -1) ? a->m_size : index;
 }
 
 Cell APCLocalArray::NvGetKey(const ArrayData* ad, ssize_t pos) {

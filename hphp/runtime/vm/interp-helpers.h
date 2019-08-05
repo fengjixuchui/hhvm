@@ -42,11 +42,22 @@ inline void callerReffinessChecks(const Func* func, const FCallArgs& fca) {
   }
 }
 
-inline void callerDynamicCallChecks(const Func* func) {
-  if (RuntimeOption::EvalForbidDynamicCalls <= 0) return;
-  if (func->isDynamicallyCallable()) return;
+/*
+ * Check if a dynamic call to `func` is allowed. Return true if it is, otherwise
+ * raise a notice and return false or raise an exception.
+ */
+inline bool callerDynamicCallChecks(const Func* func) {
+  int dynCallErrorLevel = func->isMethod() ?
+    (
+      func->isStatic() ?
+        RuntimeOption::EvalForbidDynamicCallsToClsMeth :
+        RuntimeOption::EvalForbidDynamicCallsToInstMeth
+    ) :
+    RuntimeOption::EvalForbidDynamicCallsToFunc;
+  if (dynCallErrorLevel <= 0) return true;
+  if (func->isDynamicallyCallable()) return true;
 
-  if (RuntimeOption::EvalForbidDynamicCalls >= 2) {
+  if (dynCallErrorLevel >= 2) {
     std::string msg;
     string_printf(
       msg,
@@ -59,14 +70,15 @@ inline void callerDynamicCallChecks(const Func* func) {
       Strings::FUNCTION_CALLED_DYNAMICALLY,
       func->fullDisplayName()->data()
     );
+    return false;
   }
 }
 
 inline void callerDynamicConstructChecks(const Class* cls) {
-  if (RuntimeOption::EvalForbidDynamicCalls <= 0) return;
+  if (RuntimeOption::EvalForbidDynamicConstructs <= 0) return;
   if (cls->isDynamicallyConstructible()) return;
 
-  if (RuntimeOption::EvalForbidDynamicCalls >= 2) {
+  if (RuntimeOption::EvalForbidDynamicConstructs >= 2) {
     std::string msg;
     string_printf(
       msg,
@@ -86,10 +98,6 @@ inline void calleeDynamicCallChecks(const ActRec* ar) {
   if (!ar->isDynamicCall()) return;
   auto const func = ar->func();
 
-  if (func->readsCallerFrame()) {
-    raise_disallowed_dynamic_call(func);
-  }
-
   if (RuntimeOption::EvalNoticeOnBuiltinDynamicCalls && func->isBuiltin()) {
     raise_notice(
       Strings::FUNCTION_CALLED_DYNAMICALLY,
@@ -98,25 +106,22 @@ inline void calleeDynamicCallChecks(const ActRec* ar) {
   }
 }
 
-inline void callerRxChecks(const ActRec* caller, const Func* callee) {
-  if (RuntimeOption::EvalRxEnforceCalls <= 0) return;
-  // Conditional reactivity is not tracked yet, so assume the callee has maximum
-  // possible level of reactivity.
-  if (callee->rxLevel() >= rxRequiredCalleeLevel(caller->rxMinLevel())) return;
+/*
+ * Check if a call from `caller` to `callee` satisfies reactivity constraints.
+ * Returns true if yes, otherwise raise a warning and return false or raise
+ * an exception.
+ */
+inline bool callerRxChecks(const ActRec* caller, const Func* callee) {
+  if (RuntimeOption::EvalRxEnforceCalls <= 0) return true;
+  // Conditional reactivity is not tracked yet, so assume the caller has minimum
+  // and the callee has maximum possible level of reactivity.
+  auto const callerLevel = caller->rxMinLevel();
+  if (!rxEnforceCallsInLevel(callerLevel)) return true;
 
-  auto const errMsg = folly::sformat(
-    "Call to {} '{}' from {} '{}' violates reactivity constraints.",
-    rxLevelToString(callee->rxLevel()),
-    callee->fullName()->data(),
-    rxLevelToString(caller->rxMinLevel()),
-    caller->func()->fullName()->data()
-  );
-
-  if (RuntimeOption::EvalRxEnforceCalls >= 2) {
-    SystemLib::throwBadMethodCallExceptionObject(errMsg);
-  } else {
-    raise_warning(errMsg);
-  }
+  auto const minReqCalleeLevel = rxRequiredCalleeLevel(callerLevel);
+  if (LIKELY(callee->rxLevel() >= minReqCalleeLevel)) return true;
+  raiseRxCallViolation(caller, callee);
+  return false;
 }
 
 inline void checkForRequiredCallM(const ActRec* ar) {
@@ -161,6 +166,47 @@ void checkStack(Stack& stk, const Func* f, int32_t extraCells) {
   if (LIKELY(stack_in_bounds() && !stk.wouldOverflow(limit))) return;
   TRACE_MOD(Trace::gc, 1, "Maximum stack depth exceeded.\n");
   raise_error("Stack overflow");
+}
+
+/*
+ * Only use in case of extreme shadiness.
+ *
+ * FCall* opcodes that do not use FPI regions write a pre-live ActRec
+ * on the stack and then call a doFCall() helper that performs various
+ * checks and may throw. In the absence of FPI regions the unwinder does
+ * not expect an ActRec on the stack, so we overwrite it with TypedValues.
+ *
+ * There are also a few cases in the JIT where we allocate a pre-live
+ * ActRec on the stack, and then call a helper that may re-enter the
+ * VM (e.g. for autoload) to do the rest of the work filling it out.
+ * Examples are FuncCache::lookup() or loadArrayFunctionContext().
+ *
+ * In these situations, we set up a "strange marker" by calling
+ * updateMarker() before the instruction is done (but after the
+ * pre-live ActRec is pushed).  This marker will have a lower SP than
+ * the start of the instruction, but the PC will still point at the
+ * instruction.  This is done so that if we need to re-enter from the
+ * C++ helper we don't clobber the pre-live ActRec.
+ *
+ * However, if we throw, the unwinder won't think we're in the FPI
+ * region yet.  So in the case that the helper throws an exception,
+ * the unwinder will believe it has to decref three normal stack slots
+ * (where the pre-live ActRec is).  We need the unwinder to ignore the
+ * half-built ActRec allocated on the stack and certainly to avoid
+ * attempting to decref its contents.  We achieve this by overwriting
+ * the ActRec cells with nulls.
+ *
+ * A TypedValue* is also returned here to allow the CPP helper to
+ * write whatever it needs to be decref'd into one of the eval cells,
+ * to ensure that the unwinder leaves state the same as it was before
+ * the call into FPush bytecode that threw.
+ */
+inline TypedValue* arPreliveOverwriteCells(ActRec *preLiveAR) {
+  auto actRecCell = reinterpret_cast<TypedValue*>(preLiveAR);
+  for (size_t ar_cell = 0; ar_cell < HPHP::kNumActRecCells; ++ar_cell) {
+    tvWriteNull(*(actRecCell + ar_cell));
+  }
+  return actRecCell + HPHP::kNumActRecCells - 1;
 }
 
 }

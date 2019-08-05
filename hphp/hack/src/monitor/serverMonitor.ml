@@ -108,7 +108,7 @@ module Make_monitor (SC : ServerMonitorUtils.Server_config)
     watchman_retries: int;
     max_purgatory_clients: int;
     (** Version of this running server, as specified in the config file. *)
-    current_version: string option;
+    current_version: Config_file.version;
     (** After sending a Server_not_alive_dormant during Prehandoff,
      * clients are put here waiting for a server to come alive, at
      * which point they get pushed through the rest of prehandoff and
@@ -198,16 +198,12 @@ module Make_monitor (SC : ServerMonitorUtils.Server_config)
    * version specified in there matches our currently running version. *)
   let is_config_version_matching env =
     let filename = Relative_path.from_root Config_file.file_path_relative_to_repo_root in
-    let contents = Sys_utils.cat (Relative_path.to_absolute filename) in
-    let config = Config_file.parse_contents contents in
-    let new_version = SMap.get "version" config in
-    match env.current_version, new_version with
-    | None, None -> true
-    | None, Some _
-    | Some _, None ->
-      false
-    | Some cv, Some nv ->
-      String.equal cv nv
+    let _hash, config = Config_file.parse_hhconfig
+      ~silent:true
+      (Relative_path.to_absolute filename)
+    in
+    let new_version = Config_file.parse_version (SMap.get "version" config) in
+    0 = Config_file.compare_versions env.current_version new_version
 
   (** Actually starts a new server. *)
   let start_new_server ?target_saved_state env exit_status =
@@ -351,7 +347,7 @@ module Make_monitor (SC : ServerMonitorUtils.Server_config)
       (** TODO: Send this to client so it is visible. *)
       Hh_logger.log "Got %s request for typechecker. Prior request %.1f seconds ago"
         handoff_options.MonitorRpc.pipe_name since_last_request;
-      msg_to_channel client_fd PH.Sentinel;
+      msg_to_channel client_fd (PH.Sentinel server.finale_file);
       hand_off_client_connection_with_retries server_fd 8 client_fd;
       HackEventLogger.client_connection_sent ();
       server.last_request_handoff := Unix.time ();
@@ -415,9 +411,10 @@ module Make_monitor (SC : ServerMonitorUtils.Server_config)
       )
     with
     | Malformed_build_id as e ->
+      let stack = Caml.Printexc.get_raw_backtrace () in
       HackEventLogger.malformed_build_id ();
       Hh_logger.log "Malformed Build ID";
-      raise e
+      Caml.Printexc.raise_with_backtrace e stack
 
   and push_purgatory_clients env =
     (** We create a queue and transfer all the purgatory clients to it before
@@ -516,7 +513,7 @@ module Make_monitor (SC : ServerMonitorUtils.Server_config)
       | _ -> false in
     let is_heap_stale = match exit_status with
       | Some c
-          when c = Exit_status.(exit_code File_heap_stale) ||
+          when c = Exit_status.(exit_code File_provider_stale) ||
                c = Exit_status.(exit_code Decl_not_found) -> true
       | _ -> false in
     let is_sql_assertion_failure = match exit_status with
@@ -593,7 +590,9 @@ module Make_monitor (SC : ServerMonitorUtils.Server_config)
         let stack = Printexc.get_backtrace () in
         ignore (Hh_logger.log
           "check_and_run_loop_ threw with Unix.ECHILD. Exiting. - %s" stack);
-        Exit_status.exit Exit_status.No_server_running
+        Exit_status.exit Exit_status.No_server_running_should_retry
+      | Watchman.Watchman_restarted ->
+        Exit_status.exit Exit_status.Watchman_fresh_instance
       | Exit_status.Exit_with _ as e -> raise e
       | e ->
         let stack = Printexc.get_backtrace () in
@@ -648,9 +647,13 @@ module Make_monitor (SC : ServerMonitorUtils.Server_config)
     let env = check_and_run_loop_ env monitor_config socket in
     env, monitor_config, socket
 
-  let start_monitor ?current_version ~waiting_client ~max_purgatory_clients
-    server_start_options informant_init_env
-    monitor_config =
+  let start_monitor
+      ~current_version
+      ~waiting_client
+      ~max_purgatory_clients
+      server_start_options
+      informant_init_env
+      monitor_config =
     let socket = Socket.init_unix_socket monitor_config.socket_file in
     (* If the client started the server, it opened an FD before forking, so it
      * can be notified when the monitor socket is ready. The FD number was
@@ -695,11 +698,18 @@ module Make_monitor (SC : ServerMonitorUtils.Server_config)
     } in
     env, monitor_config, socket
 
-  let start_monitoring ?current_version ~waiting_client ~max_purgatory_clients
+  let start_monitoring
+      ~current_version
+      ~waiting_client
+      ~max_purgatory_clients
     server_start_options informant_init_env
     monitor_config =
     let env, monitor_config, socket = start_monitor
-      ?current_version ~waiting_client ~max_purgatory_clients
-      server_start_options informant_init_env monitor_config in
+      ~current_version
+      ~waiting_client
+      ~max_purgatory_clients
+      server_start_options
+      informant_init_env
+      monitor_config in
     check_and_run_loop env monitor_config socket
 end

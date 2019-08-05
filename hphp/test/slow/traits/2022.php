@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function get_declared_user_traits() {
   $ret = array();
@@ -48,4 +48,3 @@ var_dump(in_array( 'MyClass', get_declared_user_traits()));
 
 
 echo "Done\n";
-?>

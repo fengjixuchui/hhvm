@@ -1,4 +1,4 @@
-<?php
+<?hh
 	include "resourcebundle.inc";
 
 	// fall back
@@ -26,4 +26,3 @@
 	foreach ($r as $onekey => $oneval) {
 	   echo "$onekey => $oneval\n";
 	}
-?>

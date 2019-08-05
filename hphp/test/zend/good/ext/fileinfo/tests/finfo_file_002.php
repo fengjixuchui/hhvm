@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $fp = finfo_open(FILEINFO_MIME_TYPE);
 $results = array();
 
@@ -11,4 +11,4 @@ foreach (glob(__DIR__ . "/resources/*") as $filename) {
 ksort(&$results);
 
 var_dump($results);
-?>
+}

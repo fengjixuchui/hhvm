@@ -1,5 +1,5 @@
-<?php 
-
+<?hh 
+<<__EntryPoint>> function main(): void {
 for ($i=0; $i<=5; $i++)
 {
   echo "i=$i\n";
@@ -26,4 +26,4 @@ for ($i=0; $i<=5; $i++)
   }
 }
 echo "hi\n";
-?>
+}

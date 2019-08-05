@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_chunk(array $array, int $size [, bool $preserve_keys])
  * Description: Split array into chunks
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
 * Testing array_chunk() function with unexpected values for 'preserve_keys'
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_chunk() : usage variations ***\n";
 
 // input array
@@ -61,4 +61,4 @@ foreach($values as $value) {
 }
 
 echo "Done";
-?>
+}

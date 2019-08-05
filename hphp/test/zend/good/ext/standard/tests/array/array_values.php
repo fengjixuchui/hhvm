@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype: array array_values ( array $input );
    Discription: array_values() returns all the values from the input array 
                 and indexes numerically the array
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_values() on basic array ***\n"; 
 $basic_arr = array( 1, 2, 2.0, "asdasd", array(1,2,3) );
 var_dump( array_values($basic_arr) );
@@ -38,4 +38,4 @@ foreach ($arrays as $array) {
 }
 
 echo "Done\n";
-?>
+}

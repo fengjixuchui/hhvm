@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int mb_strpos(string $haystack, string $needle [, int $offset [, string $encoding]])
  * Description: Find position of first occurrence of a string within another 
  * Source code: ext/mbstring/mbstring.c
@@ -7,7 +7,7 @@
 /*
  * Test how mb_strpos behaves when passed an incorrect number of arguments
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mb_strpos() : error conditions ***\n";
 
 
@@ -26,4 +26,4 @@ $haystack = 'string_val';
 try { var_dump( mb_strpos($haystack) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 /**
  * A "Locale" is an identifier used to get language, culture, or
@@ -79,7 +79,7 @@ class Locale {
                                        $locale,
                                        $canonicalize = false): bool {
     if ($locale == '*') return true;
-    if (empty($locale)) $locale = self::getDefault();
+    if (!($locale ?? false)) $locale = self::getDefault();
     if ($canonicalize) {
       $locale  = self::canonicalize($locale);
       $langtag = self::canonicalize($langtag);

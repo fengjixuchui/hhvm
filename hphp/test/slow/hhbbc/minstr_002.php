@@ -1,6 +1,7 @@
-<?php
+<?hh
 
 function foo() {
+  $x = new stdClass();
   $x->foo = "heh";
   return $x;
 }

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
   Prototype: int fileperms ( string $filename );
   Description: Returns the permissions on the file, or FALSE in case of an error
@@ -9,7 +9,7 @@
 */
 
 /* Testing with miscellaneous Permission */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing fileperms() & chmod() : usage variations ***\n";
 
 $file_name = dirname(__FILE__)."/006_variation2.tmp";
@@ -60,11 +60,9 @@ foreach($perms_array as $permission) {
   $count++;
 }
 echo "*** Done ***\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 chmod(dirname(__FILE__)."/006_variation2.tmp", 0777);
 chmod(dirname(__FILE__)."/006_variation2", 0777);
 unlink(dirname(__FILE__)."/006_variation2.tmp");
 rmdir(dirname(__FILE__)."/006_variation2");
-?>
+}

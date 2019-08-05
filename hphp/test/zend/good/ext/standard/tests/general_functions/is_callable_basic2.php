@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool is_callable ( mixed $var [, bool $syntax_only [, string &$callable_name]] );
    Description: Verify that the contents of a variable can be called as a function
                 In case of objects, $var = array($SomeObject, 'MethodName')
@@ -25,7 +25,6 @@ function check_iscallable_objects( $methods ) {
   }
 }
 
-echo "\n*** Testing is_callable() on objects ***\n";
 class object_class
 {
   public $value = 100;
@@ -51,10 +50,12 @@ class object_class
   private function foo3() {
   }
 }
+
 /* class with no member */
 class no_member_class {
  // no members
 }
+
 /* class with member as object of other class */
 class contains_object_class
 {
@@ -65,15 +66,21 @@ class contains_object_class
      echo "func() is called \n";
    }
 
-   function contains_object_class () {
+   function __construct () {
      $this->class_object1 = new object_class();
      $this->no_member_class_object = new no_member_class();
    }
 }
+
+abstract final class ZendGoodExtStandardTestsGeneralFunctionsIsCallableBasic2 {
+  public static $loop_counter;
+}
+
+<<__EntryPoint>> function main(): void {
+echo "\n*** Testing is_callable() on objects ***\n";
 /* objects of different classes */
 $obj = new contains_object_class;
 $temp_class_obj = new object_class();
-
 /* object which is unset */
 $unset_obj = new object_class();
 unset($unset_obj);
@@ -120,8 +127,5 @@ foreach($objects as $object) {
   ZendGoodExtStandardTestsGeneralFunctionsIsCallableBasic2::$loop_counter++;
 }
 
-abstract final class ZendGoodExtStandardTestsGeneralFunctionsIsCallableBasic2 {
-  public static $loop_counter;
+echo "===DONE===\n";
 }
-?>
-===DONE===

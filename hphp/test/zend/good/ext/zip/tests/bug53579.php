@@ -1,4 +1,4 @@
-<?php
+<?hh
 $dirname = dirname(__FILE__) . '/';
 $file = $dirname . 'test_with_comment.zip';
 include $dirname . 'utils.inc';
@@ -25,4 +25,3 @@ $contents = stream_get_contents($fp);
 var_dump($contents);
 fclose($fp);
 
-?>

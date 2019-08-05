@@ -38,6 +38,10 @@ inline Id FuncEmitter::id() const {
   return m_id;
 }
 
+inline bool FuncEmitter::useGlobalIds() const {
+  return m_ue.useGlobalIds();
+}
+
 inline void FuncEmitter::setIds(int sn, Id id) {
   m_sn = sn;
   m_id = id;
@@ -59,10 +63,6 @@ inline Id FuncEmitter::numIterators() const {
   return m_numIterators;
 }
 
-inline Id FuncEmitter::numClsRefSlots() const {
-  return m_numClsRefSlots;
-}
-
 inline Id FuncEmitter::numLiveIterators() const {
   return m_nextFreeIterator;
 }
@@ -74,11 +74,6 @@ inline void FuncEmitter::setNumIterators(Id numIterators) {
 
 inline void FuncEmitter::setNumLiveIterators(Id id) {
   m_nextFreeIterator = id;
-}
-
-inline void FuncEmitter::setNumClsRefSlots(Id num) {
-  assertx(m_numClsRefSlots == 0);
-  m_numClsRefSlots = num;
 }
 
 inline bool FuncEmitter::hasVar(const StringData* name) const {
@@ -125,10 +120,6 @@ inline bool FuncEmitter::isMethod() const {
 
 inline bool FuncEmitter::isVariadic() const {
   return params.size() && params[(params.size() - 1)].isVariadic();
-}
-
-inline bool FuncEmitter::isVariadicByRef() const {
-  return isVariadic() && params[(params.size() -1)].byRef;
 }
 
 inline std::pair<int,int> FuncEmitter::getLocation() const {

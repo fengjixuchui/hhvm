@@ -34,6 +34,7 @@
           ]
         },
         "definitionProvider": true,
+        "typeDefinitionProvider": true,
         "referencesProvider": true,
         "documentHighlightProvider": true,
         "documentSymbolProvider": true,
@@ -79,6 +80,7 @@
             "newText": "ab:cd:alpha"
           },
           "data": {
+            "fullname": "ab:cd:alpha",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 9,
             "char": 13,
@@ -105,6 +107,7 @@
             "newText": "ab:cd:text"
           },
           "data": {
+            "fullname": "ab:cd:text",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 4,
             "char": 13,
@@ -140,6 +143,7 @@
             "newText": "ab:cd:alpha"
           },
           "data": {
+            "fullname": "ab:cd:alpha",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 9,
             "char": 13,
@@ -166,6 +170,7 @@
             "newText": "ab:cd:text"
           },
           "data": {
+            "fullname": "ab:cd:text",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 4,
             "char": 13,
@@ -201,6 +206,7 @@
             "newText": "ab:cd:alpha"
           },
           "data": {
+            "fullname": "ab:cd:alpha",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 9,
             "char": 13,
@@ -227,6 +233,7 @@
             "newText": "ab:cd:text"
           },
           "data": {
+            "fullname": "ab:cd:text",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 4,
             "char": 13,
@@ -262,6 +269,7 @@
             "newText": "width"
           },
           "data": {
+            "fullname": "width",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 5,
             "char": 27,
@@ -288,6 +296,7 @@
             "newText": "color"
           },
           "data": {
+            "fullname": "color",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 5,
             "char": 13,
@@ -323,6 +332,7 @@
             "newText": "width"
           },
           "data": {
+            "fullname": "width",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 5,
             "char": 27,
@@ -349,6 +359,7 @@
             "newText": "color"
           },
           "data": {
+            "fullname": "color",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 5,
             "char": 13,
@@ -385,6 +396,7 @@
             "newText": ":ab:cd:alpha"
           },
           "data": {
+            "fullname": ":ab:cd:alpha",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 9,
             "char": 13,
@@ -412,6 +424,7 @@
             "newText": ":ab:cd:text"
           },
           "data": {
+            "fullname": ":ab:cd:text",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 4,
             "char": 13,
@@ -448,6 +461,7 @@
             "newText": ":ab:cd:alpha"
           },
           "data": {
+            "fullname": ":ab:cd:alpha",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 9,
             "char": 13,
@@ -475,6 +489,7 @@
             "newText": ":ab:cd:text"
           },
           "data": {
+            "fullname": ":ab:cd:text",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 4,
             "char": 13,
@@ -493,7 +508,6 @@
       "detail": "function(): :ab:cd:alpha",
       "inlineDetail": "()",
       "itemType": ":ab:cd:alpha",
-      "documentation": ":ab:cd:alpha docblock",
       "insertText": ":ab:cd:alpha",
       "insertTextFormat": 1,
       "data": {
@@ -529,6 +543,7 @@
             "newText": ":width"
           },
           "data": {
+            "fullname": ":width",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 5,
             "char": 27,
@@ -555,6 +570,7 @@
             "newText": ":color"
           },
           "data": {
+            "fullname": ":color",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 5,
             "char": 13,
@@ -590,6 +606,7 @@
             "newText": ":width"
           },
           "data": {
+            "fullname": ":width",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 5,
             "char": 27,
@@ -616,6 +633,7 @@
             "newText": ":color"
           },
           "data": {
+            "fullname": ":color",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 5,
             "char": 13,
@@ -652,6 +670,7 @@
             "newText": "test_function"
           },
           "data": {
+            "fullname": "test_function",
             "filename": "${root_path}${path_sep}completion.php",
             "line": 8,
             "char": 10,
@@ -670,7 +689,10 @@
       "detail": "function(): void",
       "inlineDetail": "()",
       "itemType": "void",
-      "documentation": "test_function docblock.",
+      "documentation": {
+        "kind": "markdown",
+        "value": "test_function docblock."
+      },
       "insertText": "test_function",
       "insertTextFormat": 1,
       "data": {
@@ -696,7 +718,7 @@
       "items": [
         {
           "label": "class",
-          "kind": 12,
+          "kind": 21,
           "detail": "classname<this>",
           "inlineDetail": "classname<this>",
           "insertTextFormat": 1,
@@ -714,6 +736,7 @@
             "newText": "class"
           },
           "data": {
+            "fullname": "class",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 13,
             "char": 6,
@@ -722,7 +745,7 @@
         },
         {
           "label": "Bard",
-          "kind": 12,
+          "kind": 21,
           "detail": "Elsa",
           "inlineDetail": "Elsa",
           "insertTextFormat": 1,
@@ -740,6 +763,7 @@
             "newText": "Bard"
           },
           "data": {
+            "fullname": "Bard",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 13,
             "char": 12,
@@ -748,7 +772,7 @@
         },
         {
           "label": "Alonso",
-          "kind": 12,
+          "kind": 21,
           "detail": "Elsa",
           "inlineDetail": "Elsa",
           "insertTextFormat": 1,
@@ -766,6 +790,7 @@
             "newText": "Alonso"
           },
           "data": {
+            "fullname": "Alonso",
             "filename": "${root_path}${path_sep}completion_extras.php",
             "line": 13,
             "char": 12,
@@ -793,6 +818,7 @@
             "newText": "isValid"
           },
           "data": {
+            "fullname": "isValid",
             "filename": "${hhi_path}${path_sep}BuiltinEnum.hhi",
             "line": 49,
             "char": 32,
@@ -820,6 +846,7 @@
             "newText": "getValues"
           },
           "data": {
+            "fullname": "getValues",
             "filename": "${hhi_path}${path_sep}BuiltinEnum.hhi",
             "line": 34,
             "char": 32,
@@ -847,6 +874,7 @@
             "newText": "getNames"
           },
           "data": {
+            "fullname": "getNames",
             "filename": "${hhi_path}${path_sep}BuiltinEnum.hhi",
             "line": 43,
             "char": 32,
@@ -874,6 +902,7 @@
             "newText": "coerce"
           },
           "data": {
+            "fullname": "coerce",
             "filename": "${hhi_path}${path_sep}BuiltinEnum.hhi",
             "line": 56,
             "char": 32,
@@ -901,6 +930,7 @@
             "newText": "assertAll"
           },
           "data": {
+            "fullname": "assertAll",
             "filename": "${hhi_path}${path_sep}BuiltinEnum.hhi",
             "line": 70,
             "char": 32,
@@ -928,6 +958,7 @@
             "newText": "assert"
           },
           "data": {
+            "fullname": "assert",
             "filename": "${hhi_path}${path_sep}BuiltinEnum.hhi",
             "line": 63,
             "char": 32,
@@ -946,7 +977,10 @@
       "detail": "function(mixed $value): bool",
       "inlineDetail": "(mixed $value)",
       "itemType": "bool",
-      "documentation": "\nReturns whether or not the value is defined as a constant.\n",
+      "documentation": {
+        "kind": "markdown",
+        "value": "Returns whether or not the value is defined as a constant."
+      },
       "insertTextFormat": 1,
       "textEdit": {
         "range": {
@@ -983,7 +1017,7 @@
       "isIncomplete": false,
       "items": [
         {
-          "label": "test_func",
+          "label": "TestNS\\test_func",
           "kind": 3,
           "detail": "function(): void",
           "inlineDetail": "()",
@@ -1000,9 +1034,10 @@
                 "character": 7
               }
             },
-            "newText": "test_func"
+            "newText": "TestNS\\test_func"
           },
           "data": {
+            "fullname": "TestNS\\test_func",
             "filename": "${root_path}${path_sep}completion_extras_namespace.php",
             "line": 5,
             "char": 10,
@@ -1039,6 +1074,7 @@
             "newText": "interfaceDocBlockMethod"
           },
           "data": {
+            "fullname": "interfaceDocBlockMethod",
             "filename": "${root_path}${path_sep}completion.php",
             "line": 18,
             "char": 19,

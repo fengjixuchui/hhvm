@@ -1,4 +1,4 @@
-<?php
+<?hh
 class TestSoapClient extends SoapClient{
   function __doRequest($request, $location, $action, $version, $one_way = 0) {
 		return <<<EOF
@@ -10,13 +10,13 @@ class TestSoapClient extends SoapClient{
 </res>
 </ns1:dotest2Response></SOAP-ENV:Body></SOAP-ENV:Envelope>
 EOF;
-	}	
+	}
 }
 
 class book{
 	public $a="a";
 	public $b="c";
-		
+
 }
 
 function book_from_xml($xml) {
@@ -27,7 +27,7 @@ function book_from_xml($xml) {
 	return $obj;
 }
 
-$options=Array(
+$options=array(
         'uri'      => 'http://schemas.nothing.com',
         'location' => 'test://',
 		'actor'    => 'http://schemas.nothing.com',
@@ -40,4 +40,3 @@ $client = new TestSoapClient(NULL, $options);
 $ret = $client->dotest2("???");
 var_dump($ret);
 echo "ok\n";
-?>

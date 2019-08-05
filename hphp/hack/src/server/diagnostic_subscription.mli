@@ -9,7 +9,7 @@
 
 open Reordered_argument_collections
 
-type t
+type t [@@deriving show]
 
 val of_id : id:int -> init:Errors.t -> t
 
@@ -19,7 +19,7 @@ val update :
   t ->
   priority_files:Relative_path.Set.t ->
   reparsed:Relative_path.Set.t ->
-  rechecked:FileInfo.fast ->
+  rechecked:Naming_table.fast ->
   global_errors:Errors.t ->
   full_check_done:bool ->
   t

@@ -122,11 +122,6 @@ enum Attr {
   // Traits have been flattened on this class.
   AttrNoExpandTrait        = (1u << 12), //    X  |          |         //
                                          //       |          |         //
-  // Indicates that a function is a builtin that takes variadic arguments,
-  // where the arguments are either by ref or optionally by ref.  It is
-  // equivalent to ClassInfo's (RefVariableArguments).
-  AttrVariadicByRef        = (1u << 12), //       |          |    X    //
-                                         //       |          |         //
   // Like AttrLateInit, but instead of throwing, will provide a configurable
   // default value (and have that value from that point on). This can only be
   // set if AttrLateInit is set.
@@ -169,22 +164,13 @@ enum Attr {
   AttrTakesInOutParams     = (1u << 21), //       |          |    X    //
                                          //       |          |         //
   // Set on properties to indicate they can't be changed after construction
-  // and on classes to indicate that all that class' properties are immutable.
-  AttrIsImmutable          = (1u << 21), //    X  |    X     |         //
-                                         //       |          |         //
-  // Set on classes to indicate that they have at least one immutable property.
-  AttrHasImmutable         = (1u << 22), //    X  |          |         //
-                                         //       |          |         //
-  // Indicates that the frame should be ignored when searching for context
-  // (e.g., array_map evalutates its callback in the context of the caller).
-  AttrSkipFrame            = (1u << 22), //       |          |    X    //
+  // and on classes to indicate that all that class' properties are const.
+  AttrIsConst              = (1u << 21), //    X  |    X     |         //
                                          //       |          |         //
   // Set on base classes that do not have any reified classes that extend it.
   AttrNoReifiedInit        = (1u << 23), //    X  |          |         //
                                          //       |          |         //
-  // Indicates that the function might read from the caller's frame. Only
-  // allowed for builtins.
-  AttrReadsCallerFrame     = (1u << 23), //       |          |    X    //
+  AttrIsMethCaller         = (1u << 24), //       |          |    X    //
                                          //       |          |         //
   // Is this a (non-static) method that *must* have a non-null this?   //
   AttrRequiresThis         = (1u << 25), //       |          |    X    //
@@ -199,6 +185,11 @@ enum Attr {
                                          //       |          |         //
   // Does this function have a `...' parameter?   |          |         //
   AttrVariadicParam        = (1u << 28), //       |          |    X    //
+                                         //       |          |         //
+  // Indicates that the frame should be ignored when searching for a context to
+  // store in the provenance tag.  (For HNI builtins, indicates that we should
+  // skip tagging the return value with the builtin's callsite.)
+  AttrProvenanceSkipFrame  = (1u << 29), //       |          |    X    //
                                          //       |          |         //
   // Indicates that this function wraps either a function taking inout or ref
   // parameters.                         //       |          |         //
@@ -218,6 +209,8 @@ inline void attrSetter(Attr& attrs, bool set, Attr what) {
     attrs = Attr(attrs & ~what);
   }
 }
+
+constexpr Attr VisibilityAttrs = AttrPublic|AttrProtected|AttrPrivate;
 
 inline const char* attrToVisibilityStr(Attr attr) {
   return (attr & AttrPrivate)   ? "private"   :

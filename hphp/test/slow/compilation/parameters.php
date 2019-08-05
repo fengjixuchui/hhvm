@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class X {
   function foo(&$a) {
@@ -14,3 +14,5 @@ class Y {
     return $this;
   }
 }
+
+<<__EntryPoint>> function main(): void {}

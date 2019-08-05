@@ -47,7 +47,7 @@ class DummyTransport {
 }
 
 class Mappish {
-  public static darray<int, darray<string, mixed>> $_TSPEC = darray[
+  const darray<int, darray<string, mixed>> SPEC = darray[
     1 => darray[
       'var' => 'extraData',
       'type' => TType::MAP,
@@ -65,7 +65,7 @@ class Mappish {
 }
 
 class Settish {
-  public static darray<int, darray<string, mixed>> $_TSPEC = darray[
+  const darray<int, darray<string, mixed>> SPEC = darray[
     1 => darray[
       'var' => 'extraData',
       'type' => TType::SET,
@@ -79,32 +79,36 @@ class Settish {
 }
 
 class TestStruct {
-  public static $_TSPEC = darray[
-        0 => darray[
-          'var' => 'success',
-          'type' => TType::STRUCT,
-          'class' => 'Config'
-        ],
-      ];
+  const SPEC = darray[
+    0 => darray[
+      'var' => 'success',
+      'type' => TType::STRUCT,
+      'class' => 'Config'
+    ],
+  ];
 
   const int STRUCTURAL_ID = 957977401221134810;
 }
 
 function test() {
-  //var_dump(TestStruct::$_TSPEC);
+  //var_dump(TestStruct::SPEC);
   $p = new DummyProtocol();
   $v1 = new Mappish();
   $v1->extraData = Map{"1" => 2};
   var_dump($v1);
   thrift_protocol_write_binary($p, 'foomethod', 2, $v1, 20, true);
   var_dump(md5($p->getTransport()->buff));
-  var_dump(thrift_protocol_read_binary($p, 'Mappish', true));
+  $mappish_obj = thrift_protocol_read_binary($p, 'Mappish', true);
+  var_dump($mappish_obj);
+  var_dump(is_darray($mappish_obj->extraData));
 
   $p = new DummyProtocol();
   var_dump($v1);
   thrift_protocol_write_compact($p, 'foomethod', 2, $v1, 20, true);
   var_dump(md5($p->getTransport()->buff));
-  var_dump(thrift_protocol_read_compact($p, 'Mappish'));
+  $mappish_obj = thrift_protocol_read_compact($p, 'Mappish');
+  var_dump($mappish_obj);
+  var_dump(is_darray($mappish_obj->extraData));
 
   echo "-------\n\n";
 
@@ -114,13 +118,17 @@ function test() {
   var_dump($v1);
   thrift_protocol_write_binary($p, 'foomethod', 2, $v1, 20, true);
   var_dump(md5($p->getTransport()->buff));
-  var_dump(thrift_protocol_read_binary($p, 'Settish', true));
+  $settish_obj = thrift_protocol_read_binary($p, 'Settish', true);
+  var_dump($settish_obj);
+  var_dump(is_darray($settish_obj->extraData));
 
   $p = new DummyProtocol();
   var_dump($v1);
   thrift_protocol_write_compact($p, 'foomethod', 2, $v1, 20, true);
   var_dump(md5($p->getTransport()->buff));
-  var_dump(thrift_protocol_read_compact($p, 'Settish'));
+  $settish_obj = thrift_protocol_read_compact($p, 'Settish');
+  var_dump($settish_obj);
+  var_dump(is_darray($settish_obj->extraData));
 }
 
 <<__EntryPoint>>

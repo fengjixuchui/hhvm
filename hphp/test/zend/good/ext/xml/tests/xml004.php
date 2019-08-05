@@ -1,4 +1,4 @@
-<?php
+<?hh
 chdir(dirname(__FILE__));
 
 $xp = xml_parser_create();
@@ -33,4 +33,3 @@ function end_element($xp, $elem)
 {
 	print "</$elem>\n";
 }
-?>

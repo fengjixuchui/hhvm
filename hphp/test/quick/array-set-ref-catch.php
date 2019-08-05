@@ -13,6 +13,7 @@ function test(&$a, $b) {
   }
   var_dump($a);
 }
-
-$y = null;
+<<__EntryPoint>> function main(): void {
+$y = array();
 test(&$y, 5);
+}

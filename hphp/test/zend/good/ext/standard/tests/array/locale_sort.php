@@ -1,4 +1,4 @@
-<?php
+<?hh
 setlocale(LC_ALL, 'fr_FR.ISO8859-1', 'fr_FR');
 $table = array("AB" => "Alberta",
 "BC" => "Colombie-Britannique",
@@ -15,4 +15,3 @@ $table = array("AB" => "Alberta",
 "YT" => "Territoire du Yukon");
 asort(&$table, SORT_LOCALE_STRING);
 var_dump($table);
-?>

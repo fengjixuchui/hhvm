@@ -1,13 +1,15 @@
-<?php
-require(dirname(__FILE__) . '/data.inc');
+<?hh
 
 function cmp ($a, $b) {
     is_array ($a)
-        and $a = array_sum ($a);
+        && ($a = array_sum ($a));
     is_array ($b)
-        and $b = array_sum ($b);
-    return strcmp ($a, $b);
+        && ($b = array_sum ($b));
+    return strcmp ((string)$a, (string)$b);
 }
+
+<<__EntryPoint>> function main(): void {
+require(dirname(__FILE__) . '/data.inc');
 
 echo " -- Testing uasort() -- \n";
 uasort (&$data, 'cmp');
@@ -21,4 +23,4 @@ var_dump ($data);
 echo "\n -- Testing usort() -- \n";
 usort (&$data, 'cmp');
 var_dump ($data);
-?>
+}

@@ -1,4 +1,4 @@
-<?hh
+<?hh // partial
 
 /* openssl_csr_export_to_file() takes the Certificate Signing Request
  * represented by csr and saves it as ascii-armoured text into the file named
@@ -576,7 +576,7 @@ function openssl_x509_check_private_key(mixed $cert,
 <<__Native>>
 function openssl_x509_checkpurpose(mixed $x509cert,
                                    int $purpose,
-                                   array $cainfo = [],
+                                   varray $cainfo = varray[],
                                    string $untrustedfile = ""): mixed;
 
 /* openssl_x509_export_to_file() stores x509 into a file named by outfilename

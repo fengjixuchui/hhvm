@@ -176,7 +176,6 @@ let process_changes changes env =
     end);
     { env with update_state = Entering; }
   | Watchman_pushed (State_enter (name, _json)) when name = "hg.transaction" ->
-    Hh_logger.log "State_enter hg.transaction";
     { env with transaction_state = Entering; }
   | Watchman_pushed (State_enter (name, _json))  ->
     Hh_logger.log "Ignoring State_enter %s" name;
@@ -192,7 +191,6 @@ let process_changes changes env =
     let () = notify_waiting_clients env in
     env
   | Watchman_pushed (State_leave (name, _json)) when name = "hg.transaction" ->
-    Hh_logger.log "State_leave hg.transaction";
     { env with transaction_state = Left; }
   | Watchman_pushed (State_leave (name, _json))  ->
     Hh_logger.log "Ignoring State_leave %s" name;
@@ -276,7 +274,7 @@ let rec serve env =
 let init_watchman root =
   Watchman.init {
     Watchman.subscribe_mode = Some Watchman.All_changes;
-    init_timeout = 30;
+    init_timeout = Watchman.Explicit_timeout 30.;
     debug_logging = false;
     expression_terms = watchman_expression_terms;
     subscription_prefix = "hh_event_watcher";
@@ -325,10 +323,11 @@ let main root =
       try
         serve env
       with e ->
-        let stack = Printexc.get_backtrace () in
+        let raw_stack = Caml.Printexc.get_raw_backtrace () in
+        let stack = Caml.Printexc.raw_backtrace_to_string raw_stack in
         let () = Hh_logger.exc
           ~prefix:"WatchmanEventWatcher uncaught exception. exiting." ~stack e in
-        raise e
+        Caml.Printexc.raise_with_backtrace e raw_stack
     end
   | Error Failure_daemon_already_running
   | Error Failure_watchman_init ->

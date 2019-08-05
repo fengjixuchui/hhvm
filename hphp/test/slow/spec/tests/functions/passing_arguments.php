@@ -26,31 +26,31 @@ var_dump($a2);
 f($a1, &$a2);        // variable $a2 is passed by reference
 var_dump($a1);
 var_dump($a2);
-
-$a2 = [10,20,30];
+$twenty = 20;
+$a2 = [10,$twenty,30];
 var_dump($a2);
-f($a1, &$a2[1]); // variable $a2[1] is passed by reference
+f($a1, &$twenty);
 var_dump($a1);
 var_dump($a2);
 
-class C
-{
-    public $member;
-}
-$o = new C;
-$o->member = "Red";
-var_dump($o);
-f($a1, &$o->member);     // variable $o->member is passed by reference
-var_dump($o);
+
+
+
+
+
+
+
+
+
 //*/
 
 // passing by reference explored further
 
 function g(&$p1)
 {
-    echo "g In:  \$p1: $p1\n";
+    echo "g In:  \$p1: $p1.\n";
     $p1 = 200;      // actual argument's value changed
-    echo "g Out: \$p1: $p1\n";
+    echo "g Out: \$p1: $p1.\n";
 }
 
 ///*

@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 
 // A valid json string
 <<__EntryPoint>>
 function main_json_last_error() {
-$json[] = '{"Organization": "PHP Documentation Team"}';
+$json = ['{"Organization": "PHP Documentation Team"}'];
 
 // An invalid json string which will cause an syntax
 // error, in this case we used ' instead of " for quotation

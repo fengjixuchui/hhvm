@@ -1,4 +1,4 @@
-<?php 
+<?hh <<__EntryPoint>> function main(): void {
 $xml =<<<EOF
 <people>
    <person name="Joe"></person>
@@ -23,5 +23,5 @@ echo "---Unsupported---\n";
 var_dump($people->person['age']);
 $people->person['age'] += 5;
 var_dump($people->person['age']);
-?>
-===DONE===
+echo "===DONE===\n";
+}

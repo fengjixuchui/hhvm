@@ -19,18 +19,22 @@ let output_json oc el =
   let res =
     Hh_json.JSON_Object [
         "errors", Hh_json.JSON_Array errors_json;
-        "version", Hh_json.JSON_String Build_id.build_id_ohai;
+        "version", Hh_json.JSON_String Hh_version.version;
     ] in
   Out_channel.output_string oc (Hh_json.json_to_string res);
   Out_channel.flush stderr
 
-let output_text oc el =
+let output_text oc el format =
   (* Essentially the same as type error output, except that we only have one
    * message per error, and no additional 'typing reasons' *)
   if el = []
   then Out_channel.output_string oc "No lint errors!\n"
   else begin
-    let sl = List.map el Lint.to_string in
+    let f = match format with
+      | Errors.Context -> Lint.to_contextual_string
+      | Errors.Raw -> Lint.to_string
+    in
+    let sl = List.map el f in
     List.iter sl begin fun s ->
       Printf.fprintf oc "%s\n%!" s;
     end
@@ -109,8 +113,8 @@ let go_stdin env ~(filename : string) ~(contents : string) =
   |> prepare_errors_for_output
 
 let lint_single_xcontroller tcopt name =
-  let module Cls = Typing_classes_heap in
-  match Typing_lazy_heap.get_class name with
+  let module Cls = Decl_provider.Class in
+  match Decl_provider.get_class name with
   | Some class_ ->
     if Cls.extends class_ "\\XControllerBase" && not (Cls.abstract class_)
     then Linting_service.lint_xcontroller tcopt (Cls.(pos class_, name class_))
@@ -131,7 +135,7 @@ let go_xcontroller genv env (fnl : string list) =
   let open Option.Monad_infix in
   let classes = List.filter_map fnl ~f:begin fun path ->
     Relative_path.create_detect_prefix path |>
-    Relative_path.Map.get env.files_info >>= fun info ->
+    Naming_table.get_file_info env.naming_table >>= fun info ->
     Some (List.map info.FileInfo.classes ~f:snd)
   end |> List.concat in
   MultiWorker.call

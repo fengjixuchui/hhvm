@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $str = str_repeat("test", 3456);
 
 $filename = dirname(__FILE__).'/bug39673.txt';
@@ -24,4 +24,4 @@ foreach ($offsets as $offset) {
 
 @unlink($filename);
 echo "Done\n";
-?>
+}

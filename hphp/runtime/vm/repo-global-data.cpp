@@ -25,25 +25,14 @@ namespace HPHP {
 std::string show(const Repo::GlobalData& gd) {
   std::string out;
 #define SHOW(x) folly::format(&out, "  {}: {}\n", #x, gd.x)
-  SHOW(UsedHHBBC);
-  SHOW(EnableHipHopSyntax);
   SHOW(InitialNamedEntityTableSize);
   SHOW(InitialStaticStringTableSize);
-  SHOW(HardTypeHints);
   SHOW(HardReturnTypeHints);
   SHOW(CheckPropTypeHints);
   SHOW(ThisTypeHintLevel);
   SHOW(HardPrivatePropInference);
-  out += "  DisallowDynamicVarEnvFuncs: ";
-  switch (gd.DisallowDynamicVarEnvFuncs) {
-    case HackStrictOption::OFF:  out += "OFF\n";  break;
-    case HackStrictOption::WARN: out += "WARN\n"; break;
-    case HackStrictOption::ON:   out += "ON\n";   break;
-  }
-  SHOW(ElideAutoloadInvokes);
   SHOW(PHP7_IntSemantics);
   SHOW(PHP7_NoHexNumerics);
-  SHOW(PHP7_ScalarTypes);
   SHOW(PHP7_Builtins);
   SHOW(PHP7_Substr);
   SHOW(PromoteEmptyObject);
@@ -55,15 +44,21 @@ std::string show(const Repo::GlobalData& gd) {
   SHOW(HackArrCompatDVCmpNotices);
   SHOW(HackArrCompatSerializeNotices);
   SHOW(HackArrDVArrs);
-  SHOW(EnableIntishCast);
   SHOW(EnableIntrinsicsExtension);
-  SHOW(ForbidDynamicCalls);
+  SHOW(ForbidDynamicCallsToFunc);
+  SHOW(ForbidDynamicCallsToClsMeth);
+  SHOW(ForbidDynamicCallsToInstMeth);
+  SHOW(ForbidDynamicConstructs);
   SHOW(NoticeOnBuiltinDynamicCalls);
   SHOW(ReffinessInvariance);
   SHOW(AbortBuildOnVerifyError);
-  SHOW(UndefinedConstFallback);
-  SHOW(UndefinedFunctionFallback);
+  SHOW(EnableArgsInBacktraces);
   SHOW(Signature);
+  SHOW(EmitClsMethPointers);
+  SHOW(IsVecNotices);
+  SHOW(IsCompatibleClsMethType);
+  SHOW(ArrayProvenance);
+  SHOW(StrictArrayFillKeys);
 #undef SHOW
   return out;
 }

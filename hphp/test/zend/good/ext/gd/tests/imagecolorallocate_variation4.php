@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int imagecolorallocate(resource im, int red, int green, int blue)
  * Description:  Allocate a color for an image
  * Source code: ext/gd/gd.c
@@ -90,5 +90,4 @@ foreach($values as $key => $value) {
       echo "\n--$key--\n";
       try { var_dump( imagecolorallocate($im, $red, $green, $value) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
-?>
-===DONE===
+echo "===DONE===\n";

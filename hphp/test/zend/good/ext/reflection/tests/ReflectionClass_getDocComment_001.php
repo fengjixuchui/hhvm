@@ -1,4 +1,4 @@
-<?php
+<?hh
 /**
 
 
@@ -46,4 +46,3 @@ foreach ($classes as $class) {
 }
 
 
-?>

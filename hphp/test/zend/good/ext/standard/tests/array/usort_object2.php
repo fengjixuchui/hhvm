@@ -1,18 +1,16 @@
-<?php
+<?hh
 /* Prototype  : bool usort(&array $array_arg, string $cmp_function)
- * Description: Sort an array by values using a user-defined comparison function 
+ * Description: Sort an array by values using a user-defined comparison function
  * Source code: ext/standard/array.c
  */
 
 /*
- * Pass an array of objects which are either: 
+ * Pass an array of objects which are either:
  * 1. Empty
  * 2. Static
  * 2. Inherited
  * to test behaviour of usort()
  */
-
-echo "*** Testing usort() : object functionality ***\n";
 
 function cmp_function($value1, $value2)
 {
@@ -58,6 +56,8 @@ class ChildClass extends AbstractClass
     $this->child_value = $value;
   }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing usort() : object functionality ***\n";
 
 // Testing uasort with StaticClass objects as elements of 'array_arg'
 echo "-- Testing usort() with StaticClass objects --\n";
@@ -91,5 +91,5 @@ $array_arg = array(
 );
 var_dump( usort(&$array_arg, 'cmp_function') );
 var_dump($array_arg);
-?>
-===DONE===
+echo "===DONE===\n";
+}

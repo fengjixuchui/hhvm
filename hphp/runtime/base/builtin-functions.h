@@ -34,6 +34,7 @@ extern const StaticString s_cmpWithCollection;
 extern const StaticString s_cmpWithVec;
 extern const StaticString s_cmpWithDict;
 extern const StaticString s_cmpWithKeyset;
+extern const StaticString s_cmpWithRecord;
 
 ///////////////////////////////////////////////////////////////////////////////
 // operators
@@ -48,12 +49,9 @@ String concat4(const String& s1, const String& s2, const String& s3,
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void NEVER_INLINE raise_missing_this(const Func* f);
-void NEVER_INLINE raise_has_this_need_static(const Func* f);
-bool NEVER_INLINE needs_missing_this_check(const Func* f);
+[[noreturn]] void NEVER_INLINE throw_missing_this(const Func* f);
+[[noreturn]] void NEVER_INLINE throw_has_this_need_static(const Func* f);
 void NEVER_INLINE throw_invalid_property_name(const String& name);
-void NEVER_INLINE throw_null_get_object_prop();
-void NEVER_INLINE raise_null_object_prop();
 
 [[noreturn]]
 void throw_exception(const Object& e);
@@ -190,7 +188,6 @@ enum class DecodeFlags { Warn, NoWarn, LookupOnly };
 const HPHP::Func*
 vm_decode_function(const_variant_ref function,
                    ActRec* ar,
-                   bool forwarding,
                    ObjectData*& this_,
                    HPHP::Class*& cls,
                    StringData*& invName,
@@ -200,24 +197,28 @@ vm_decode_function(const_variant_ref function,
 
 inline void
 vm_decode_function(const_variant_ref function,
-                   ActRec* ar,
-                   bool forwarding,
                    CallCtx& ctx,
                    DecodeFlags flags = DecodeFlags::Warn) {
-  ArrayData* reifiedGenerics = nullptr;
-  ctx.func = vm_decode_function(function, ar, forwarding, ctx.this_, ctx.cls,
-                                ctx.invName, ctx.dynamic, reifiedGenerics,
+  ctx.func = vm_decode_function(function, nullptr, ctx.this_, ctx.cls,
+                                ctx.invName, ctx.dynamic, ctx.reifiedGenerics,
                                 flags);
 }
 
+std::pair<Class*, Func*> decode_for_clsmeth(
+  const String& clsName,
+  const String& funcName,
+  ActRec* ar,
+  StringData*& invName,
+  DecodeFlags flags = DecodeFlags::Warn);
+
 Variant vm_call_user_func(const_variant_ref function, const Variant& params,
-                          bool forwarding = false, bool checkRef = false);
+                          bool checkRef = false);
 template<typename T>
 Variant vm_call_user_func(T&& t, const Variant& params,
-                          bool forwarding = false, bool checkRef = false) {
+                          bool checkRef = false) {
   const Variant function{std::forward<T>(t)};
   return vm_call_user_func(
-    const_variant_ref{function}, params, forwarding, checkRef
+    const_variant_ref{function}, params, checkRef
   );
 }
 
@@ -228,29 +229,37 @@ Variant o_invoke_failed(const char *cls, const char *meth,
                         bool fatal = true);
 
 bool is_constructor_name(const char* func);
-void throw_instance_method_fatal(const char *name);
+[[noreturn]] void throw_instance_method_fatal(const char *name);
 
 [[noreturn]] void throw_invalid_collection_parameter();
 [[noreturn]] void throw_invalid_operation_exception(StringData*);
 [[noreturn]] void throw_arithmetic_error(StringData*);
 [[noreturn]] void throw_division_by_zero_error(StringData*);
+[[noreturn]] void throw_division_by_zero_exception();
 [[noreturn]] void throw_iterator_not_valid();
 [[noreturn]] void throw_collection_property_exception();
 [[noreturn]] void throw_collection_compare_exception();
 [[noreturn]] void throw_vec_compare_exception();
 [[noreturn]] void throw_dict_compare_exception();
 [[noreturn]] void throw_keyset_compare_exception();
+[[noreturn]] void throw_record_compare_exception();
+[[noreturn]] void throw_rec_non_rec_compare_exception();
 [[noreturn]] void throw_param_is_not_container();
 [[noreturn]] void throw_invalid_inout_base();
 [[noreturn]] void throw_cannot_modify_immutable_object(const char* className);
+[[noreturn]] void throw_cannot_modify_const_object(const char* className);
 [[noreturn]] void throw_object_forbids_dynamic_props(const char* className);
-[[noreturn]] void throw_cannot_modify_immutable_prop(const char* className,
-                                                     const char* propName);
-[[noreturn]] void throw_cannot_bind_immutable_prop(const char* className,
-                                                   const char* propName);
+[[noreturn]] void throw_cannot_modify_const_prop(const char* className,
+                                                 const char* propName);
+[[noreturn]] void throw_cannot_modify_static_const_prop(const char* className,
+                                                        const char* propName);
 [[noreturn]] void throw_late_init_prop(const Class* cls,
                                        const StringData* propName,
                                        bool isSProp);
+[[noreturn]] void throw_parameter_wrong_type(TypedValue tv,
+                                             const Func* callee,
+                                             unsigned int arg_num,
+                                             DataType type);
 
 void raise_soft_late_init_prop(const Class* cls,
                                const StringData* propName,

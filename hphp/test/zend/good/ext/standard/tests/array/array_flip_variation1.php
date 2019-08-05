@@ -1,14 +1,8 @@
-<?php
+<?hh
 /* Prototype  : array array_flip(array $input)
- * Description: Return array with key <-> value flipped 
+ * Description: Return array with key <-> value flipped
  * Source code: ext/standard/array.c
 */
-
-echo "*** Testing array_flip() : usage variations - unexpected values for 'input' ***\n";
-
-//get an unset variable
-$unset_var = 10;
-unset ($unset_var);
 
 //class definition for object variable
 class MyClass
@@ -18,10 +12,16 @@ class MyClass
      return 'object';
   }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing array_flip() : usage variations - unexpected values for 'input' ***\n";
+
+//get an unset variable
+$unset_var = 10;
+unset ($unset_var);
 
 //resource variable
 $fp = fopen(__FILE__,'r');
-    
+
 //array of values for 'input' argument
 $values = array(
           // int data
@@ -77,5 +77,5 @@ for($count = 0; $count < count($values); $count++) {
 //closing resource
 fclose($fp);
 
-echo "Done"
-?>
+echo "Done";
+}

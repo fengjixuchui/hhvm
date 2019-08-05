@@ -90,14 +90,12 @@ void pretty_print(const FuncEmitter* fe, std::ostream& out) {
   }
   out << "maxStackCells: " << fe->maxStackCells << '\n'
       << "numLocals: " << fe->numLocals() << '\n'
-      << "numIterators: " << fe->numIterators() << '\n'
-      << "numClsRefSlots: " << fe->numClsRefSlots() << '\n';
+      << "numIterators: " << fe->numIterators() << '\n';
 
   auto const& ehtab = fe->ehtab;
   size_t ehId = 0;
   for (auto it = ehtab.begin(); it != ehtab.end(); ++it, ++ehId) {
-    bool catcher = it->m_type == EHEnt::Type::Catch;
-    out << " EH " << ehId << " " << (catcher ? "Catch" : "Fault") << " for " <<
+    out << " EH " << ehId << " Catch for " <<
       it->m_base << ":" << it->m_past;
     if (it->m_parentIndex != -1) {
       out << " outer EH " << it->m_parentIndex;
@@ -219,7 +217,7 @@ void printBlocks(const FuncEmitter* func, const Graph* g) {
 }
 
 void printGml(const UnitEmitter* unit) {
-  std::string filename = unit->md5().toString() + ".gml";
+  std::string filename = unit->sha1().toString() + ".gml";
   FILE* file = fopen(filename.c_str(), "w");
   if (!file) {
     std::cerr << "Couldn't open GML output file " << filename << std::endl;

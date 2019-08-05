@@ -113,6 +113,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.EndOfFile _ -> tag validate_end_of_file (fun x -> TLDEndOfFile x) x
     | Syntax.FileAttributeSpecification _ -> tag validate_file_attribute_specification (fun x -> TLDFileAttributeSpecification x) x
     | Syntax.EnumDeclaration _ -> tag validate_enum_declaration (fun x -> TLDEnum x) x
+    | Syntax.RecordDeclaration _ -> tag validate_record_declaration (fun x -> TLDRecord x) x
     | Syntax.AliasDeclaration _ -> tag validate_alias_declaration (fun x -> TLDAlias x) x
     | Syntax.NamespaceDeclaration _ -> tag validate_namespace_declaration (fun x -> TLDNamespace x) x
     | Syntax.NamespaceUseDeclaration _ -> tag validate_namespace_use_declaration (fun x -> TLDNamespaceUse x) x
@@ -129,11 +130,8 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.LetStatement _ -> tag validate_let_statement (fun x -> TLDLet x) x
     | Syntax.UsingStatementBlockScoped _ -> tag validate_using_statement_block_scoped (fun x -> TLDUsingStatementBlockScoped x) x
     | Syntax.UsingStatementFunctionScoped _ -> tag validate_using_statement_function_scoped (fun x -> TLDUsingStatementFunctionScoped x) x
-    | Syntax.DeclareDirectiveStatement _ -> tag validate_declare_directive_statement (fun x -> TLDDeclareDirective x) x
-    | Syntax.DeclareBlockStatement _ -> tag validate_declare_block_statement (fun x -> TLDDeclareBlock x) x
     | Syntax.WhileStatement _ -> tag validate_while_statement (fun x -> TLDWhile x) x
     | Syntax.IfStatement _ -> tag validate_if_statement (fun x -> TLDIf x) x
-    | Syntax.AlternateIfStatement _ -> tag validate_alternate_if_statement (fun x -> TLDAlternateIf x) x
     | Syntax.TryStatement _ -> tag validate_try_statement (fun x -> TLDTry x) x
     | Syntax.DoStatement _ -> tag validate_do_statement (fun x -> TLDDo x) x
     | Syntax.ForStatement _ -> tag validate_for_statement (fun x -> TLDFor x) x
@@ -145,15 +143,14 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.ThrowStatement _ -> tag validate_throw_statement (fun x -> TLDThrow x) x
     | Syntax.BreakStatement _ -> tag validate_break_statement (fun x -> TLDBreak x) x
     | Syntax.ContinueStatement _ -> tag validate_continue_statement (fun x -> TLDContinue x) x
-    | Syntax.FunctionStaticStatement _ -> tag validate_function_static_statement (fun x -> TLDFunctionStatic x) x
     | Syntax.EchoStatement _ -> tag validate_echo_statement (fun x -> TLDEcho x) x
-    | Syntax.GlobalStatement _ -> tag validate_global_statement (fun x -> TLDGlobal x) x
     | s -> aggregation_fail Def.TopLevelDeclaration s
   and invalidate_top_level_declaration : top_level_declaration invalidator = fun (value, thing) ->
     match thing with
     | TLDEndOfFile                    thing -> invalidate_end_of_file                    (value, thing)
     | TLDFileAttributeSpecification   thing -> invalidate_file_attribute_specification   (value, thing)
     | TLDEnum                         thing -> invalidate_enum_declaration               (value, thing)
+    | TLDRecord                       thing -> invalidate_record_declaration             (value, thing)
     | TLDAlias                        thing -> invalidate_alias_declaration              (value, thing)
     | TLDNamespace                    thing -> invalidate_namespace_declaration          (value, thing)
     | TLDNamespaceUse                 thing -> invalidate_namespace_use_declaration      (value, thing)
@@ -170,11 +167,8 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | TLDLet                          thing -> invalidate_let_statement                  (value, thing)
     | TLDUsingStatementBlockScoped    thing -> invalidate_using_statement_block_scoped   (value, thing)
     | TLDUsingStatementFunctionScoped thing -> invalidate_using_statement_function_scoped (value, thing)
-    | TLDDeclareDirective             thing -> invalidate_declare_directive_statement    (value, thing)
-    | TLDDeclareBlock                 thing -> invalidate_declare_block_statement        (value, thing)
     | TLDWhile                        thing -> invalidate_while_statement                (value, thing)
     | TLDIf                           thing -> invalidate_if_statement                   (value, thing)
-    | TLDAlternateIf                  thing -> invalidate_alternate_if_statement         (value, thing)
     | TLDTry                          thing -> invalidate_try_statement                  (value, thing)
     | TLDDo                           thing -> invalidate_do_statement                   (value, thing)
     | TLDFor                          thing -> invalidate_for_statement                  (value, thing)
@@ -186,9 +180,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | TLDThrow                        thing -> invalidate_throw_statement                (value, thing)
     | TLDBreak                        thing -> invalidate_break_statement                (value, thing)
     | TLDContinue                     thing -> invalidate_continue_statement             (value, thing)
-    | TLDFunctionStatic               thing -> invalidate_function_static_statement      (value, thing)
     | TLDEcho                         thing -> invalidate_echo_statement                 (value, thing)
-    | TLDGlobal                       thing -> invalidate_global_statement               (value, thing)
   and validate_expression : expression validator = fun x ->
     match Syntax.syntax x with
     | Syntax.LiteralExpression _ -> tag validate_literal_expression (fun x -> ExprLiteral x) x
@@ -198,7 +190,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.DecoratedExpression _ -> tag validate_decorated_expression (fun x -> ExprDecorated x) x
     | Syntax.InclusionExpression _ -> tag validate_inclusion_expression (fun x -> ExprInclusion x) x
     | Syntax.AnonymousFunction _ -> tag validate_anonymous_function (fun x -> ExprAnonymousFunction x) x
-    | Syntax.Php7AnonymousFunction _ -> tag validate_php7_anonymous_function (fun x -> ExprPhp7AnonymousFunction x) x
     | Syntax.LambdaExpression _ -> tag validate_lambda_expression (fun x -> ExprLambda x) x
     | Syntax.CastExpression _ -> tag validate_cast_expression (fun x -> ExprCast x) x
     | Syntax.ScopeResolutionExpression _ -> tag validate_scope_resolution_expression (fun x -> ExprScopeResolution x) x
@@ -210,24 +201,22 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.PrefixUnaryExpression _ -> tag validate_prefix_unary_expression (fun x -> ExprPrefixUnary x) x
     | Syntax.PostfixUnaryExpression _ -> tag validate_postfix_unary_expression (fun x -> ExprPostfixUnary x) x
     | Syntax.BinaryExpression _ -> tag validate_binary_expression (fun x -> ExprBinary x) x
-    | Syntax.InstanceofExpression _ -> tag validate_instanceof_expression (fun x -> ExprInstanceof x) x
     | Syntax.IsExpression _ -> tag validate_is_expression (fun x -> ExprIs x) x
     | Syntax.AsExpression _ -> tag validate_as_expression (fun x -> ExprAs x) x
     | Syntax.NullableAsExpression _ -> tag validate_nullable_as_expression (fun x -> ExprNullableAs x) x
     | Syntax.ConditionalExpression _ -> tag validate_conditional_expression (fun x -> ExprConditional x) x
     | Syntax.EvalExpression _ -> tag validate_eval_expression (fun x -> ExprEval x) x
-    | Syntax.EmptyExpression _ -> tag validate_empty_expression (fun x -> ExprEmpty x) x
     | Syntax.DefineExpression _ -> tag validate_define_expression (fun x -> ExprDefine x) x
     | Syntax.HaltCompilerExpression _ -> tag validate_halt_compiler_expression (fun x -> ExprHaltCompiler x) x
     | Syntax.IssetExpression _ -> tag validate_isset_expression (fun x -> ExprIsset x) x
     | Syntax.FunctionCallExpression _ -> tag validate_function_call_expression (fun x -> ExprFunctionCall x) x
-    | Syntax.FunctionCallWithTypeArgumentsExpression _ -> tag validate_function_call_with_type_arguments_expression (fun x -> ExprFunctionCallWithTypeArguments x) x
     | Syntax.ParenthesizedExpression _ -> tag validate_parenthesized_expression (fun x -> ExprParenthesized x) x
     | Syntax.BracedExpression _ -> tag validate_braced_expression (fun x -> ExprBraced x) x
     | Syntax.EmbeddedBracedExpression _ -> tag validate_embedded_braced_expression (fun x -> ExprEmbeddedBraced x) x
     | Syntax.ListExpression _ -> tag validate_list_expression (fun x -> ExprList x) x
     | Syntax.CollectionLiteralExpression _ -> tag validate_collection_literal_expression (fun x -> ExprCollectionLiteral x) x
     | Syntax.ObjectCreationExpression _ -> tag validate_object_creation_expression (fun x -> ExprObjectCreation x) x
+    | Syntax.RecordCreationExpression _ -> tag validate_record_creation_expression (fun x -> ExprRecordCreation x) x
     | Syntax.ArrayCreationExpression _ -> tag validate_array_creation_expression (fun x -> ExprArrayCreation x) x
     | Syntax.ArrayIntrinsicExpression _ -> tag validate_array_intrinsic_expression (fun x -> ExprArrayIntrinsic x) x
     | Syntax.DarrayIntrinsicExpression _ -> tag validate_darray_intrinsic_expression (fun x -> ExprDarrayIntrinsic x) x
@@ -243,61 +232,60 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.ShapeExpression _ -> tag validate_shape_expression (fun x -> ExprShape x) x
     | Syntax.TupleExpression _ -> tag validate_tuple_expression (fun x -> ExprTuple x) x
     | Syntax.PocketAtomExpression _ -> tag validate_pocket_atom_expression (fun x -> ExprPocketAtom x) x
+    | Syntax.PocketIdentifierExpression _ -> tag validate_pocket_identifier_expression (fun x -> ExprPocketIdentifier x) x
     | s -> aggregation_fail Def.Expression s
   and invalidate_expression : expression invalidator = fun (value, thing) ->
     match thing with
-    | ExprLiteral                       thing -> invalidate_literal_expression             (value, thing)
-    | ExprPrefixedString                thing -> invalidate_prefixed_string_expression     (value, thing)
-    | ExprVariable                      thing -> invalidate_variable_expression            (value, thing)
-    | ExprPipeVariable                  thing -> invalidate_pipe_variable_expression       (value, thing)
-    | ExprDecorated                     thing -> invalidate_decorated_expression           (value, thing)
-    | ExprInclusion                     thing -> invalidate_inclusion_expression           (value, thing)
-    | ExprAnonymousFunction             thing -> invalidate_anonymous_function             (value, thing)
-    | ExprPhp7AnonymousFunction         thing -> invalidate_php7_anonymous_function        (value, thing)
-    | ExprLambda                        thing -> invalidate_lambda_expression              (value, thing)
-    | ExprCast                          thing -> invalidate_cast_expression                (value, thing)
-    | ExprScopeResolution               thing -> invalidate_scope_resolution_expression    (value, thing)
-    | ExprMemberSelection               thing -> invalidate_member_selection_expression    (value, thing)
-    | ExprSafeMemberSelection           thing -> invalidate_safe_member_selection_expression (value, thing)
-    | ExprEmbeddedMemberSelection       thing -> invalidate_embedded_member_selection_expression (value, thing)
-    | ExprYield                         thing -> invalidate_yield_expression               (value, thing)
-    | ExprYieldFrom                     thing -> invalidate_yield_from_expression          (value, thing)
-    | ExprPrefixUnary                   thing -> invalidate_prefix_unary_expression        (value, thing)
-    | ExprPostfixUnary                  thing -> invalidate_postfix_unary_expression       (value, thing)
-    | ExprBinary                        thing -> invalidate_binary_expression              (value, thing)
-    | ExprInstanceof                    thing -> invalidate_instanceof_expression          (value, thing)
-    | ExprIs                            thing -> invalidate_is_expression                  (value, thing)
-    | ExprAs                            thing -> invalidate_as_expression                  (value, thing)
-    | ExprNullableAs                    thing -> invalidate_nullable_as_expression         (value, thing)
-    | ExprConditional                   thing -> invalidate_conditional_expression         (value, thing)
-    | ExprEval                          thing -> invalidate_eval_expression                (value, thing)
-    | ExprEmpty                         thing -> invalidate_empty_expression               (value, thing)
-    | ExprDefine                        thing -> invalidate_define_expression              (value, thing)
-    | ExprHaltCompiler                  thing -> invalidate_halt_compiler_expression       (value, thing)
-    | ExprIsset                         thing -> invalidate_isset_expression               (value, thing)
-    | ExprFunctionCall                  thing -> invalidate_function_call_expression       (value, thing)
-    | ExprFunctionCallWithTypeArguments thing -> invalidate_function_call_with_type_arguments_expression (value, thing)
-    | ExprParenthesized                 thing -> invalidate_parenthesized_expression       (value, thing)
-    | ExprBraced                        thing -> invalidate_braced_expression              (value, thing)
-    | ExprEmbeddedBraced                thing -> invalidate_embedded_braced_expression     (value, thing)
-    | ExprList                          thing -> invalidate_list_expression                (value, thing)
-    | ExprCollectionLiteral             thing -> invalidate_collection_literal_expression  (value, thing)
-    | ExprObjectCreation                thing -> invalidate_object_creation_expression     (value, thing)
-    | ExprArrayCreation                 thing -> invalidate_array_creation_expression      (value, thing)
-    | ExprArrayIntrinsic                thing -> invalidate_array_intrinsic_expression     (value, thing)
-    | ExprDarrayIntrinsic               thing -> invalidate_darray_intrinsic_expression    (value, thing)
-    | ExprDictionaryIntrinsic           thing -> invalidate_dictionary_intrinsic_expression (value, thing)
-    | ExprKeysetIntrinsic               thing -> invalidate_keyset_intrinsic_expression    (value, thing)
-    | ExprVarrayIntrinsic               thing -> invalidate_varray_intrinsic_expression    (value, thing)
-    | ExprVectorIntrinsic               thing -> invalidate_vector_intrinsic_expression    (value, thing)
-    | ExprSubscript                     thing -> invalidate_subscript_expression           (value, thing)
-    | ExprEmbeddedSubscript             thing -> invalidate_embedded_subscript_expression  (value, thing)
-    | ExprAwaitableCreation             thing -> invalidate_awaitable_creation_expression  (value, thing)
-    | ExprXHPChildrenParenthesizedList  thing -> invalidate_xhp_children_parenthesized_list (value, thing)
-    | ExprXHP                           thing -> invalidate_xhp_expression                 (value, thing)
-    | ExprShape                         thing -> invalidate_shape_expression               (value, thing)
-    | ExprTuple                         thing -> invalidate_tuple_expression               (value, thing)
-    | ExprPocketAtom                    thing -> invalidate_pocket_atom_expression         (value, thing)
+    | ExprLiteral                      thing -> invalidate_literal_expression             (value, thing)
+    | ExprPrefixedString               thing -> invalidate_prefixed_string_expression     (value, thing)
+    | ExprVariable                     thing -> invalidate_variable_expression            (value, thing)
+    | ExprPipeVariable                 thing -> invalidate_pipe_variable_expression       (value, thing)
+    | ExprDecorated                    thing -> invalidate_decorated_expression           (value, thing)
+    | ExprInclusion                    thing -> invalidate_inclusion_expression           (value, thing)
+    | ExprAnonymousFunction            thing -> invalidate_anonymous_function             (value, thing)
+    | ExprLambda                       thing -> invalidate_lambda_expression              (value, thing)
+    | ExprCast                         thing -> invalidate_cast_expression                (value, thing)
+    | ExprScopeResolution              thing -> invalidate_scope_resolution_expression    (value, thing)
+    | ExprMemberSelection              thing -> invalidate_member_selection_expression    (value, thing)
+    | ExprSafeMemberSelection          thing -> invalidate_safe_member_selection_expression (value, thing)
+    | ExprEmbeddedMemberSelection      thing -> invalidate_embedded_member_selection_expression (value, thing)
+    | ExprYield                        thing -> invalidate_yield_expression               (value, thing)
+    | ExprYieldFrom                    thing -> invalidate_yield_from_expression          (value, thing)
+    | ExprPrefixUnary                  thing -> invalidate_prefix_unary_expression        (value, thing)
+    | ExprPostfixUnary                 thing -> invalidate_postfix_unary_expression       (value, thing)
+    | ExprBinary                       thing -> invalidate_binary_expression              (value, thing)
+    | ExprIs                           thing -> invalidate_is_expression                  (value, thing)
+    | ExprAs                           thing -> invalidate_as_expression                  (value, thing)
+    | ExprNullableAs                   thing -> invalidate_nullable_as_expression         (value, thing)
+    | ExprConditional                  thing -> invalidate_conditional_expression         (value, thing)
+    | ExprEval                         thing -> invalidate_eval_expression                (value, thing)
+    | ExprDefine                       thing -> invalidate_define_expression              (value, thing)
+    | ExprHaltCompiler                 thing -> invalidate_halt_compiler_expression       (value, thing)
+    | ExprIsset                        thing -> invalidate_isset_expression               (value, thing)
+    | ExprFunctionCall                 thing -> invalidate_function_call_expression       (value, thing)
+    | ExprParenthesized                thing -> invalidate_parenthesized_expression       (value, thing)
+    | ExprBraced                       thing -> invalidate_braced_expression              (value, thing)
+    | ExprEmbeddedBraced               thing -> invalidate_embedded_braced_expression     (value, thing)
+    | ExprList                         thing -> invalidate_list_expression                (value, thing)
+    | ExprCollectionLiteral            thing -> invalidate_collection_literal_expression  (value, thing)
+    | ExprObjectCreation               thing -> invalidate_object_creation_expression     (value, thing)
+    | ExprRecordCreation               thing -> invalidate_record_creation_expression     (value, thing)
+    | ExprArrayCreation                thing -> invalidate_array_creation_expression      (value, thing)
+    | ExprArrayIntrinsic               thing -> invalidate_array_intrinsic_expression     (value, thing)
+    | ExprDarrayIntrinsic              thing -> invalidate_darray_intrinsic_expression    (value, thing)
+    | ExprDictionaryIntrinsic          thing -> invalidate_dictionary_intrinsic_expression (value, thing)
+    | ExprKeysetIntrinsic              thing -> invalidate_keyset_intrinsic_expression    (value, thing)
+    | ExprVarrayIntrinsic              thing -> invalidate_varray_intrinsic_expression    (value, thing)
+    | ExprVectorIntrinsic              thing -> invalidate_vector_intrinsic_expression    (value, thing)
+    | ExprSubscript                    thing -> invalidate_subscript_expression           (value, thing)
+    | ExprEmbeddedSubscript            thing -> invalidate_embedded_subscript_expression  (value, thing)
+    | ExprAwaitableCreation            thing -> invalidate_awaitable_creation_expression  (value, thing)
+    | ExprXHPChildrenParenthesizedList thing -> invalidate_xhp_children_parenthesized_list (value, thing)
+    | ExprXHP                          thing -> invalidate_xhp_expression                 (value, thing)
+    | ExprShape                        thing -> invalidate_shape_expression               (value, thing)
+    | ExprTuple                        thing -> invalidate_tuple_expression               (value, thing)
+    | ExprPocketAtom                   thing -> invalidate_pocket_atom_expression         (value, thing)
+    | ExprPocketIdentifier             thing -> invalidate_pocket_identifier_expression   (value, thing)
   and validate_specifier : specifier validator = fun x ->
     match Syntax.syntax x with
     | Syntax.SimpleTypeSpecifier _ -> tag validate_simple_type_specifier (fun x -> SpecSimple x) x
@@ -319,6 +307,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.ShapeTypeSpecifier _ -> tag validate_shape_type_specifier (fun x -> SpecShape x) x
     | Syntax.GenericTypeSpecifier _ -> tag validate_generic_type_specifier (fun x -> SpecGeneric x) x
     | Syntax.NullableTypeSpecifier _ -> tag validate_nullable_type_specifier (fun x -> SpecNullable x) x
+    | Syntax.LikeTypeSpecifier _ -> tag validate_like_type_specifier (fun x -> SpecLike x) x
     | Syntax.SoftTypeSpecifier _ -> tag validate_soft_type_specifier (fun x -> SpecSoft x) x
     | Syntax.TupleTypeSpecifier _ -> tag validate_tuple_type_specifier (fun x -> SpecTuple x) x
     | s -> aggregation_fail Def.Specifier s
@@ -343,6 +332,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | SpecShape             thing -> invalidate_shape_type_specifier           (value, thing)
     | SpecGeneric           thing -> invalidate_generic_type_specifier         (value, thing)
     | SpecNullable          thing -> invalidate_nullable_type_specifier        (value, thing)
+    | SpecLike              thing -> invalidate_like_type_specifier            (value, thing)
     | SpecSoft              thing -> invalidate_soft_type_specifier            (value, thing)
     | SpecTuple             thing -> invalidate_tuple_type_specifier           (value, thing)
   and validate_parameter : parameter validator = fun x ->
@@ -383,7 +373,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     match Syntax.syntax x with
     | Syntax.InclusionDirective _ -> tag validate_inclusion_directive (fun x -> StmtInclusionDirective x) x
     | Syntax.CompoundStatement _ -> tag validate_compound_statement (fun x -> StmtCompound x) x
-    | Syntax.AlternateLoopStatement _ -> tag validate_alternate_loop_statement (fun x -> StmtAlternateLoop x) x
     | Syntax.ExpressionStatement _ -> tag validate_expression_statement (fun x -> StmtExpression x) x
     | Syntax.MarkupSection _ -> tag validate_markup_section (fun x -> StmtMarkupSection x) x
     | Syntax.MarkupSuffix _ -> tag validate_markup_suffix (fun x -> StmtMarkupSuffix x) x
@@ -391,17 +380,13 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.LetStatement _ -> tag validate_let_statement (fun x -> StmtLet x) x
     | Syntax.UsingStatementBlockScoped _ -> tag validate_using_statement_block_scoped (fun x -> StmtUsingStatementBlockScoped x) x
     | Syntax.UsingStatementFunctionScoped _ -> tag validate_using_statement_function_scoped (fun x -> StmtUsingStatementFunctionScoped x) x
-    | Syntax.DeclareDirectiveStatement _ -> tag validate_declare_directive_statement (fun x -> StmtDeclareDirective x) x
-    | Syntax.DeclareBlockStatement _ -> tag validate_declare_block_statement (fun x -> StmtDeclareBlock x) x
     | Syntax.WhileStatement _ -> tag validate_while_statement (fun x -> StmtWhile x) x
     | Syntax.IfStatement _ -> tag validate_if_statement (fun x -> StmtIf x) x
-    | Syntax.AlternateIfStatement _ -> tag validate_alternate_if_statement (fun x -> StmtAlternateIf x) x
     | Syntax.TryStatement _ -> tag validate_try_statement (fun x -> StmtTry x) x
     | Syntax.DoStatement _ -> tag validate_do_statement (fun x -> StmtDo x) x
     | Syntax.ForStatement _ -> tag validate_for_statement (fun x -> StmtFor x) x
     | Syntax.ForeachStatement _ -> tag validate_foreach_statement (fun x -> StmtForeach x) x
     | Syntax.SwitchStatement _ -> tag validate_switch_statement (fun x -> StmtSwitch x) x
-    | Syntax.AlternateSwitchStatement _ -> tag validate_alternate_switch_statement (fun x -> StmtAlternateSwitch x) x
     | Syntax.SwitchFallthrough _ -> tag validate_switch_fallthrough (fun x -> StmtSwitchFallthrough x) x
     | Syntax.ReturnStatement _ -> tag validate_return_statement (fun x -> StmtReturn x) x
     | Syntax.GotoLabel _ -> tag validate_goto_label (fun x -> StmtGotoLabel x) x
@@ -409,9 +394,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.ThrowStatement _ -> tag validate_throw_statement (fun x -> StmtThrow x) x
     | Syntax.BreakStatement _ -> tag validate_break_statement (fun x -> StmtBreak x) x
     | Syntax.ContinueStatement _ -> tag validate_continue_statement (fun x -> StmtContinue x) x
-    | Syntax.FunctionStaticStatement _ -> tag validate_function_static_statement (fun x -> StmtFunctionStatic x) x
     | Syntax.EchoStatement _ -> tag validate_echo_statement (fun x -> StmtEcho x) x
-    | Syntax.GlobalStatement _ -> tag validate_global_statement (fun x -> StmtGlobal x) x
     | Syntax.ConcurrentStatement _ -> tag validate_concurrent_statement (fun x -> StmtConcurrent x) x
     | Syntax.TypeConstant _ -> tag validate_type_constant (fun x -> StmtTypeConstant x) x
     | s -> aggregation_fail Def.Statement s
@@ -419,7 +402,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     match thing with
     | StmtInclusionDirective           thing -> invalidate_inclusion_directive            (value, thing)
     | StmtCompound                     thing -> invalidate_compound_statement             (value, thing)
-    | StmtAlternateLoop                thing -> invalidate_alternate_loop_statement       (value, thing)
     | StmtExpression                   thing -> invalidate_expression_statement           (value, thing)
     | StmtMarkupSection                thing -> invalidate_markup_section                 (value, thing)
     | StmtMarkupSuffix                 thing -> invalidate_markup_suffix                  (value, thing)
@@ -427,17 +409,13 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | StmtLet                          thing -> invalidate_let_statement                  (value, thing)
     | StmtUsingStatementBlockScoped    thing -> invalidate_using_statement_block_scoped   (value, thing)
     | StmtUsingStatementFunctionScoped thing -> invalidate_using_statement_function_scoped (value, thing)
-    | StmtDeclareDirective             thing -> invalidate_declare_directive_statement    (value, thing)
-    | StmtDeclareBlock                 thing -> invalidate_declare_block_statement        (value, thing)
     | StmtWhile                        thing -> invalidate_while_statement                (value, thing)
     | StmtIf                           thing -> invalidate_if_statement                   (value, thing)
-    | StmtAlternateIf                  thing -> invalidate_alternate_if_statement         (value, thing)
     | StmtTry                          thing -> invalidate_try_statement                  (value, thing)
     | StmtDo                           thing -> invalidate_do_statement                   (value, thing)
     | StmtFor                          thing -> invalidate_for_statement                  (value, thing)
     | StmtForeach                      thing -> invalidate_foreach_statement              (value, thing)
     | StmtSwitch                       thing -> invalidate_switch_statement               (value, thing)
-    | StmtAlternateSwitch              thing -> invalidate_alternate_switch_statement     (value, thing)
     | StmtSwitchFallthrough            thing -> invalidate_switch_fallthrough             (value, thing)
     | StmtReturn                       thing -> invalidate_return_statement               (value, thing)
     | StmtGotoLabel                    thing -> invalidate_goto_label                     (value, thing)
@@ -445,9 +423,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | StmtThrow                        thing -> invalidate_throw_statement                (value, thing)
     | StmtBreak                        thing -> invalidate_break_statement                (value, thing)
     | StmtContinue                     thing -> invalidate_continue_statement             (value, thing)
-    | StmtFunctionStatic               thing -> invalidate_function_static_statement      (value, thing)
     | StmtEcho                         thing -> invalidate_echo_statement                 (value, thing)
-    | StmtGlobal                       thing -> invalidate_global_statement               (value, thing)
     | StmtConcurrent                   thing -> invalidate_concurrent_statement           (value, thing)
     | StmtTypeConstant                 thing -> invalidate_type_constant                  (value, thing)
   and validate_switch_label : switch_label validator = fun x ->
@@ -469,7 +445,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.InclusionExpression _ -> tag validate_inclusion_expression (fun x -> LambdaInclusion x) x
     | Syntax.CompoundStatement _ -> tag validate_compound_statement (fun x -> LambdaCompoundStatement x) x
     | Syntax.AnonymousFunction _ -> tag validate_anonymous_function (fun x -> LambdaAnonymousFunction x) x
-    | Syntax.Php7AnonymousFunction _ -> tag validate_php7_anonymous_function (fun x -> LambdaPhp7AnonymousFunction x) x
     | Syntax.LambdaExpression _ -> tag validate_lambda_expression (fun x -> LambdaLambda x) x
     | Syntax.CastExpression _ -> tag validate_cast_expression (fun x -> LambdaCast x) x
     | Syntax.ScopeResolutionExpression _ -> tag validate_scope_resolution_expression (fun x -> LambdaScopeResolution x) x
@@ -481,24 +456,22 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.PrefixUnaryExpression _ -> tag validate_prefix_unary_expression (fun x -> LambdaPrefixUnary x) x
     | Syntax.PostfixUnaryExpression _ -> tag validate_postfix_unary_expression (fun x -> LambdaPostfixUnary x) x
     | Syntax.BinaryExpression _ -> tag validate_binary_expression (fun x -> LambdaBinary x) x
-    | Syntax.InstanceofExpression _ -> tag validate_instanceof_expression (fun x -> LambdaInstanceof x) x
     | Syntax.IsExpression _ -> tag validate_is_expression (fun x -> LambdaIs x) x
     | Syntax.AsExpression _ -> tag validate_as_expression (fun x -> LambdaAs x) x
     | Syntax.NullableAsExpression _ -> tag validate_nullable_as_expression (fun x -> LambdaNullableAs x) x
     | Syntax.ConditionalExpression _ -> tag validate_conditional_expression (fun x -> LambdaConditional x) x
     | Syntax.EvalExpression _ -> tag validate_eval_expression (fun x -> LambdaEval x) x
-    | Syntax.EmptyExpression _ -> tag validate_empty_expression (fun x -> LambdaEmpty x) x
     | Syntax.DefineExpression _ -> tag validate_define_expression (fun x -> LambdaDefine x) x
     | Syntax.HaltCompilerExpression _ -> tag validate_halt_compiler_expression (fun x -> LambdaHaltCompiler x) x
     | Syntax.IssetExpression _ -> tag validate_isset_expression (fun x -> LambdaIsset x) x
     | Syntax.FunctionCallExpression _ -> tag validate_function_call_expression (fun x -> LambdaFunctionCall x) x
-    | Syntax.FunctionCallWithTypeArgumentsExpression _ -> tag validate_function_call_with_type_arguments_expression (fun x -> LambdaFunctionCallWithTypeArguments x) x
     | Syntax.ParenthesizedExpression _ -> tag validate_parenthesized_expression (fun x -> LambdaParenthesized x) x
     | Syntax.BracedExpression _ -> tag validate_braced_expression (fun x -> LambdaBraced x) x
     | Syntax.EmbeddedBracedExpression _ -> tag validate_embedded_braced_expression (fun x -> LambdaEmbeddedBraced x) x
     | Syntax.ListExpression _ -> tag validate_list_expression (fun x -> LambdaList x) x
     | Syntax.CollectionLiteralExpression _ -> tag validate_collection_literal_expression (fun x -> LambdaCollectionLiteral x) x
     | Syntax.ObjectCreationExpression _ -> tag validate_object_creation_expression (fun x -> LambdaObjectCreation x) x
+    | Syntax.RecordCreationExpression _ -> tag validate_record_creation_expression (fun x -> LambdaRecordCreation x) x
     | Syntax.ArrayCreationExpression _ -> tag validate_array_creation_expression (fun x -> LambdaArrayCreation x) x
     | Syntax.ArrayIntrinsicExpression _ -> tag validate_array_intrinsic_expression (fun x -> LambdaArrayIntrinsic x) x
     | Syntax.DarrayIntrinsicExpression _ -> tag validate_darray_intrinsic_expression (fun x -> LambdaDarrayIntrinsic x) x
@@ -513,61 +486,60 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.XHPExpression _ -> tag validate_xhp_expression (fun x -> LambdaXHP x) x
     | Syntax.ShapeExpression _ -> tag validate_shape_expression (fun x -> LambdaShape x) x
     | Syntax.TupleExpression _ -> tag validate_tuple_expression (fun x -> LambdaTuple x) x
+    | Syntax.PocketIdentifierExpression _ -> tag validate_pocket_identifier_expression (fun x -> LambdaPocketIdentifier x) x
     | s -> aggregation_fail Def.LambdaBody s
   and invalidate_lambda_body : lambda_body invalidator = fun (value, thing) ->
     match thing with
-    | LambdaLiteral                       thing -> invalidate_literal_expression             (value, thing)
-    | LambdaPrefixedString                thing -> invalidate_prefixed_string_expression     (value, thing)
-    | LambdaVariable                      thing -> invalidate_variable_expression            (value, thing)
-    | LambdaPipeVariable                  thing -> invalidate_pipe_variable_expression       (value, thing)
-    | LambdaDecorated                     thing -> invalidate_decorated_expression           (value, thing)
-    | LambdaInclusion                     thing -> invalidate_inclusion_expression           (value, thing)
-    | LambdaCompoundStatement             thing -> invalidate_compound_statement             (value, thing)
-    | LambdaAnonymousFunction             thing -> invalidate_anonymous_function             (value, thing)
-    | LambdaPhp7AnonymousFunction         thing -> invalidate_php7_anonymous_function        (value, thing)
-    | LambdaLambda                        thing -> invalidate_lambda_expression              (value, thing)
-    | LambdaCast                          thing -> invalidate_cast_expression                (value, thing)
-    | LambdaScopeResolution               thing -> invalidate_scope_resolution_expression    (value, thing)
-    | LambdaMemberSelection               thing -> invalidate_member_selection_expression    (value, thing)
-    | LambdaSafeMemberSelection           thing -> invalidate_safe_member_selection_expression (value, thing)
-    | LambdaEmbeddedMemberSelection       thing -> invalidate_embedded_member_selection_expression (value, thing)
-    | LambdaYield                         thing -> invalidate_yield_expression               (value, thing)
-    | LambdaYieldFrom                     thing -> invalidate_yield_from_expression          (value, thing)
-    | LambdaPrefixUnary                   thing -> invalidate_prefix_unary_expression        (value, thing)
-    | LambdaPostfixUnary                  thing -> invalidate_postfix_unary_expression       (value, thing)
-    | LambdaBinary                        thing -> invalidate_binary_expression              (value, thing)
-    | LambdaInstanceof                    thing -> invalidate_instanceof_expression          (value, thing)
-    | LambdaIs                            thing -> invalidate_is_expression                  (value, thing)
-    | LambdaAs                            thing -> invalidate_as_expression                  (value, thing)
-    | LambdaNullableAs                    thing -> invalidate_nullable_as_expression         (value, thing)
-    | LambdaConditional                   thing -> invalidate_conditional_expression         (value, thing)
-    | LambdaEval                          thing -> invalidate_eval_expression                (value, thing)
-    | LambdaEmpty                         thing -> invalidate_empty_expression               (value, thing)
-    | LambdaDefine                        thing -> invalidate_define_expression              (value, thing)
-    | LambdaHaltCompiler                  thing -> invalidate_halt_compiler_expression       (value, thing)
-    | LambdaIsset                         thing -> invalidate_isset_expression               (value, thing)
-    | LambdaFunctionCall                  thing -> invalidate_function_call_expression       (value, thing)
-    | LambdaFunctionCallWithTypeArguments thing -> invalidate_function_call_with_type_arguments_expression (value, thing)
-    | LambdaParenthesized                 thing -> invalidate_parenthesized_expression       (value, thing)
-    | LambdaBraced                        thing -> invalidate_braced_expression              (value, thing)
-    | LambdaEmbeddedBraced                thing -> invalidate_embedded_braced_expression     (value, thing)
-    | LambdaList                          thing -> invalidate_list_expression                (value, thing)
-    | LambdaCollectionLiteral             thing -> invalidate_collection_literal_expression  (value, thing)
-    | LambdaObjectCreation                thing -> invalidate_object_creation_expression     (value, thing)
-    | LambdaArrayCreation                 thing -> invalidate_array_creation_expression      (value, thing)
-    | LambdaArrayIntrinsic                thing -> invalidate_array_intrinsic_expression     (value, thing)
-    | LambdaDarrayIntrinsic               thing -> invalidate_darray_intrinsic_expression    (value, thing)
-    | LambdaDictionaryIntrinsic           thing -> invalidate_dictionary_intrinsic_expression (value, thing)
-    | LambdaKeysetIntrinsic               thing -> invalidate_keyset_intrinsic_expression    (value, thing)
-    | LambdaVarrayIntrinsic               thing -> invalidate_varray_intrinsic_expression    (value, thing)
-    | LambdaVectorIntrinsic               thing -> invalidate_vector_intrinsic_expression    (value, thing)
-    | LambdaSubscript                     thing -> invalidate_subscript_expression           (value, thing)
-    | LambdaEmbeddedSubscript             thing -> invalidate_embedded_subscript_expression  (value, thing)
-    | LambdaAwaitableCreation             thing -> invalidate_awaitable_creation_expression  (value, thing)
-    | LambdaXHPChildrenParenthesizedList  thing -> invalidate_xhp_children_parenthesized_list (value, thing)
-    | LambdaXHP                           thing -> invalidate_xhp_expression                 (value, thing)
-    | LambdaShape                         thing -> invalidate_shape_expression               (value, thing)
-    | LambdaTuple                         thing -> invalidate_tuple_expression               (value, thing)
+    | LambdaLiteral                      thing -> invalidate_literal_expression             (value, thing)
+    | LambdaPrefixedString               thing -> invalidate_prefixed_string_expression     (value, thing)
+    | LambdaVariable                     thing -> invalidate_variable_expression            (value, thing)
+    | LambdaPipeVariable                 thing -> invalidate_pipe_variable_expression       (value, thing)
+    | LambdaDecorated                    thing -> invalidate_decorated_expression           (value, thing)
+    | LambdaInclusion                    thing -> invalidate_inclusion_expression           (value, thing)
+    | LambdaCompoundStatement            thing -> invalidate_compound_statement             (value, thing)
+    | LambdaAnonymousFunction            thing -> invalidate_anonymous_function             (value, thing)
+    | LambdaLambda                       thing -> invalidate_lambda_expression              (value, thing)
+    | LambdaCast                         thing -> invalidate_cast_expression                (value, thing)
+    | LambdaScopeResolution              thing -> invalidate_scope_resolution_expression    (value, thing)
+    | LambdaMemberSelection              thing -> invalidate_member_selection_expression    (value, thing)
+    | LambdaSafeMemberSelection          thing -> invalidate_safe_member_selection_expression (value, thing)
+    | LambdaEmbeddedMemberSelection      thing -> invalidate_embedded_member_selection_expression (value, thing)
+    | LambdaYield                        thing -> invalidate_yield_expression               (value, thing)
+    | LambdaYieldFrom                    thing -> invalidate_yield_from_expression          (value, thing)
+    | LambdaPrefixUnary                  thing -> invalidate_prefix_unary_expression        (value, thing)
+    | LambdaPostfixUnary                 thing -> invalidate_postfix_unary_expression       (value, thing)
+    | LambdaBinary                       thing -> invalidate_binary_expression              (value, thing)
+    | LambdaIs                           thing -> invalidate_is_expression                  (value, thing)
+    | LambdaAs                           thing -> invalidate_as_expression                  (value, thing)
+    | LambdaNullableAs                   thing -> invalidate_nullable_as_expression         (value, thing)
+    | LambdaConditional                  thing -> invalidate_conditional_expression         (value, thing)
+    | LambdaEval                         thing -> invalidate_eval_expression                (value, thing)
+    | LambdaDefine                       thing -> invalidate_define_expression              (value, thing)
+    | LambdaHaltCompiler                 thing -> invalidate_halt_compiler_expression       (value, thing)
+    | LambdaIsset                        thing -> invalidate_isset_expression               (value, thing)
+    | LambdaFunctionCall                 thing -> invalidate_function_call_expression       (value, thing)
+    | LambdaParenthesized                thing -> invalidate_parenthesized_expression       (value, thing)
+    | LambdaBraced                       thing -> invalidate_braced_expression              (value, thing)
+    | LambdaEmbeddedBraced               thing -> invalidate_embedded_braced_expression     (value, thing)
+    | LambdaList                         thing -> invalidate_list_expression                (value, thing)
+    | LambdaCollectionLiteral            thing -> invalidate_collection_literal_expression  (value, thing)
+    | LambdaObjectCreation               thing -> invalidate_object_creation_expression     (value, thing)
+    | LambdaRecordCreation               thing -> invalidate_record_creation_expression     (value, thing)
+    | LambdaArrayCreation                thing -> invalidate_array_creation_expression      (value, thing)
+    | LambdaArrayIntrinsic               thing -> invalidate_array_intrinsic_expression     (value, thing)
+    | LambdaDarrayIntrinsic              thing -> invalidate_darray_intrinsic_expression    (value, thing)
+    | LambdaDictionaryIntrinsic          thing -> invalidate_dictionary_intrinsic_expression (value, thing)
+    | LambdaKeysetIntrinsic              thing -> invalidate_keyset_intrinsic_expression    (value, thing)
+    | LambdaVarrayIntrinsic              thing -> invalidate_varray_intrinsic_expression    (value, thing)
+    | LambdaVectorIntrinsic              thing -> invalidate_vector_intrinsic_expression    (value, thing)
+    | LambdaSubscript                    thing -> invalidate_subscript_expression           (value, thing)
+    | LambdaEmbeddedSubscript            thing -> invalidate_embedded_subscript_expression  (value, thing)
+    | LambdaAwaitableCreation            thing -> invalidate_awaitable_creation_expression  (value, thing)
+    | LambdaXHPChildrenParenthesizedList thing -> invalidate_xhp_children_parenthesized_list (value, thing)
+    | LambdaXHP                          thing -> invalidate_xhp_expression                 (value, thing)
+    | LambdaShape                        thing -> invalidate_shape_expression               (value, thing)
+    | LambdaTuple                        thing -> invalidate_tuple_expression               (value, thing)
+    | LambdaPocketIdentifier             thing -> invalidate_pocket_identifier_expression   (value, thing)
   and validate_constructor_expression : constructor_expression validator = fun x ->
     match Syntax.syntax x with
     | Syntax.LiteralExpression _ -> tag validate_literal_expression (fun x -> CExprLiteral x) x
@@ -577,7 +549,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.DecoratedExpression _ -> tag validate_decorated_expression (fun x -> CExprDecorated x) x
     | Syntax.InclusionExpression _ -> tag validate_inclusion_expression (fun x -> CExprInclusion x) x
     | Syntax.AnonymousFunction _ -> tag validate_anonymous_function (fun x -> CExprAnonymousFunction x) x
-    | Syntax.Php7AnonymousFunction _ -> tag validate_php7_anonymous_function (fun x -> CExprPhp7AnonymousFunction x) x
     | Syntax.LambdaExpression _ -> tag validate_lambda_expression (fun x -> CExprLambda x) x
     | Syntax.CastExpression _ -> tag validate_cast_expression (fun x -> CExprCast x) x
     | Syntax.ScopeResolutionExpression _ -> tag validate_scope_resolution_expression (fun x -> CExprScopeResolution x) x
@@ -589,24 +560,22 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.PrefixUnaryExpression _ -> tag validate_prefix_unary_expression (fun x -> CExprPrefixUnary x) x
     | Syntax.PostfixUnaryExpression _ -> tag validate_postfix_unary_expression (fun x -> CExprPostfixUnary x) x
     | Syntax.BinaryExpression _ -> tag validate_binary_expression (fun x -> CExprBinary x) x
-    | Syntax.InstanceofExpression _ -> tag validate_instanceof_expression (fun x -> CExprInstanceof x) x
     | Syntax.IsExpression _ -> tag validate_is_expression (fun x -> CExprIs x) x
     | Syntax.AsExpression _ -> tag validate_as_expression (fun x -> CExprAs x) x
     | Syntax.NullableAsExpression _ -> tag validate_nullable_as_expression (fun x -> CExprNullableAs x) x
     | Syntax.ConditionalExpression _ -> tag validate_conditional_expression (fun x -> CExprConditional x) x
     | Syntax.EvalExpression _ -> tag validate_eval_expression (fun x -> CExprEval x) x
-    | Syntax.EmptyExpression _ -> tag validate_empty_expression (fun x -> CExprEmpty x) x
     | Syntax.DefineExpression _ -> tag validate_define_expression (fun x -> CExprDefine x) x
     | Syntax.HaltCompilerExpression _ -> tag validate_halt_compiler_expression (fun x -> CExprHaltCompiler x) x
     | Syntax.IssetExpression _ -> tag validate_isset_expression (fun x -> CExprIsset x) x
     | Syntax.FunctionCallExpression _ -> tag validate_function_call_expression (fun x -> CExprFunctionCall x) x
-    | Syntax.FunctionCallWithTypeArgumentsExpression _ -> tag validate_function_call_with_type_arguments_expression (fun x -> CExprFunctionCallWithTypeArguments x) x
     | Syntax.ParenthesizedExpression _ -> tag validate_parenthesized_expression (fun x -> CExprParenthesized x) x
     | Syntax.BracedExpression _ -> tag validate_braced_expression (fun x -> CExprBraced x) x
     | Syntax.EmbeddedBracedExpression _ -> tag validate_embedded_braced_expression (fun x -> CExprEmbeddedBraced x) x
     | Syntax.ListExpression _ -> tag validate_list_expression (fun x -> CExprList x) x
     | Syntax.CollectionLiteralExpression _ -> tag validate_collection_literal_expression (fun x -> CExprCollectionLiteral x) x
     | Syntax.ObjectCreationExpression _ -> tag validate_object_creation_expression (fun x -> CExprObjectCreation x) x
+    | Syntax.RecordCreationExpression _ -> tag validate_record_creation_expression (fun x -> CExprRecordCreation x) x
     | Syntax.ArrayCreationExpression _ -> tag validate_array_creation_expression (fun x -> CExprArrayCreation x) x
     | Syntax.ArrayIntrinsicExpression _ -> tag validate_array_intrinsic_expression (fun x -> CExprArrayIntrinsic x) x
     | Syntax.DarrayIntrinsicExpression _ -> tag validate_darray_intrinsic_expression (fun x -> CExprDarrayIntrinsic x) x
@@ -622,61 +591,60 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.XHPExpression _ -> tag validate_xhp_expression (fun x -> CExprXHP x) x
     | Syntax.ShapeExpression _ -> tag validate_shape_expression (fun x -> CExprShape x) x
     | Syntax.TupleExpression _ -> tag validate_tuple_expression (fun x -> CExprTuple x) x
+    | Syntax.PocketIdentifierExpression _ -> tag validate_pocket_identifier_expression (fun x -> CExprPocketIdentifier x) x
     | s -> aggregation_fail Def.ConstructorExpression s
   and invalidate_constructor_expression : constructor_expression invalidator = fun (value, thing) ->
     match thing with
-    | CExprLiteral                       thing -> invalidate_literal_expression             (value, thing)
-    | CExprPrefixedString                thing -> invalidate_prefixed_string_expression     (value, thing)
-    | CExprVariable                      thing -> invalidate_variable_expression            (value, thing)
-    | CExprPipeVariable                  thing -> invalidate_pipe_variable_expression       (value, thing)
-    | CExprDecorated                     thing -> invalidate_decorated_expression           (value, thing)
-    | CExprInclusion                     thing -> invalidate_inclusion_expression           (value, thing)
-    | CExprAnonymousFunction             thing -> invalidate_anonymous_function             (value, thing)
-    | CExprPhp7AnonymousFunction         thing -> invalidate_php7_anonymous_function        (value, thing)
-    | CExprLambda                        thing -> invalidate_lambda_expression              (value, thing)
-    | CExprCast                          thing -> invalidate_cast_expression                (value, thing)
-    | CExprScopeResolution               thing -> invalidate_scope_resolution_expression    (value, thing)
-    | CExprMemberSelection               thing -> invalidate_member_selection_expression    (value, thing)
-    | CExprSafeMemberSelection           thing -> invalidate_safe_member_selection_expression (value, thing)
-    | CExprEmbeddedMemberSelection       thing -> invalidate_embedded_member_selection_expression (value, thing)
-    | CExprYield                         thing -> invalidate_yield_expression               (value, thing)
-    | CExprYieldFrom                     thing -> invalidate_yield_from_expression          (value, thing)
-    | CExprPrefixUnary                   thing -> invalidate_prefix_unary_expression        (value, thing)
-    | CExprPostfixUnary                  thing -> invalidate_postfix_unary_expression       (value, thing)
-    | CExprBinary                        thing -> invalidate_binary_expression              (value, thing)
-    | CExprInstanceof                    thing -> invalidate_instanceof_expression          (value, thing)
-    | CExprIs                            thing -> invalidate_is_expression                  (value, thing)
-    | CExprAs                            thing -> invalidate_as_expression                  (value, thing)
-    | CExprNullableAs                    thing -> invalidate_nullable_as_expression         (value, thing)
-    | CExprConditional                   thing -> invalidate_conditional_expression         (value, thing)
-    | CExprEval                          thing -> invalidate_eval_expression                (value, thing)
-    | CExprEmpty                         thing -> invalidate_empty_expression               (value, thing)
-    | CExprDefine                        thing -> invalidate_define_expression              (value, thing)
-    | CExprHaltCompiler                  thing -> invalidate_halt_compiler_expression       (value, thing)
-    | CExprIsset                         thing -> invalidate_isset_expression               (value, thing)
-    | CExprFunctionCall                  thing -> invalidate_function_call_expression       (value, thing)
-    | CExprFunctionCallWithTypeArguments thing -> invalidate_function_call_with_type_arguments_expression (value, thing)
-    | CExprParenthesized                 thing -> invalidate_parenthesized_expression       (value, thing)
-    | CExprBraced                        thing -> invalidate_braced_expression              (value, thing)
-    | CExprEmbeddedBraced                thing -> invalidate_embedded_braced_expression     (value, thing)
-    | CExprList                          thing -> invalidate_list_expression                (value, thing)
-    | CExprCollectionLiteral             thing -> invalidate_collection_literal_expression  (value, thing)
-    | CExprObjectCreation                thing -> invalidate_object_creation_expression     (value, thing)
-    | CExprArrayCreation                 thing -> invalidate_array_creation_expression      (value, thing)
-    | CExprArrayIntrinsic                thing -> invalidate_array_intrinsic_expression     (value, thing)
-    | CExprDarrayIntrinsic               thing -> invalidate_darray_intrinsic_expression    (value, thing)
-    | CExprDictionaryIntrinsic           thing -> invalidate_dictionary_intrinsic_expression (value, thing)
-    | CExprKeysetIntrinsic               thing -> invalidate_keyset_intrinsic_expression    (value, thing)
-    | CExprVarrayIntrinsic               thing -> invalidate_varray_intrinsic_expression    (value, thing)
-    | CExprVectorIntrinsic               thing -> invalidate_vector_intrinsic_expression    (value, thing)
-    | CExprElementInitializer            thing -> invalidate_element_initializer            (value, thing)
-    | CExprSubscript                     thing -> invalidate_subscript_expression           (value, thing)
-    | CExprEmbeddedSubscript             thing -> invalidate_embedded_subscript_expression  (value, thing)
-    | CExprAwaitableCreation             thing -> invalidate_awaitable_creation_expression  (value, thing)
-    | CExprXHPChildrenParenthesizedList  thing -> invalidate_xhp_children_parenthesized_list (value, thing)
-    | CExprXHP                           thing -> invalidate_xhp_expression                 (value, thing)
-    | CExprShape                         thing -> invalidate_shape_expression               (value, thing)
-    | CExprTuple                         thing -> invalidate_tuple_expression               (value, thing)
+    | CExprLiteral                      thing -> invalidate_literal_expression             (value, thing)
+    | CExprPrefixedString               thing -> invalidate_prefixed_string_expression     (value, thing)
+    | CExprVariable                     thing -> invalidate_variable_expression            (value, thing)
+    | CExprPipeVariable                 thing -> invalidate_pipe_variable_expression       (value, thing)
+    | CExprDecorated                    thing -> invalidate_decorated_expression           (value, thing)
+    | CExprInclusion                    thing -> invalidate_inclusion_expression           (value, thing)
+    | CExprAnonymousFunction            thing -> invalidate_anonymous_function             (value, thing)
+    | CExprLambda                       thing -> invalidate_lambda_expression              (value, thing)
+    | CExprCast                         thing -> invalidate_cast_expression                (value, thing)
+    | CExprScopeResolution              thing -> invalidate_scope_resolution_expression    (value, thing)
+    | CExprMemberSelection              thing -> invalidate_member_selection_expression    (value, thing)
+    | CExprSafeMemberSelection          thing -> invalidate_safe_member_selection_expression (value, thing)
+    | CExprEmbeddedMemberSelection      thing -> invalidate_embedded_member_selection_expression (value, thing)
+    | CExprYield                        thing -> invalidate_yield_expression               (value, thing)
+    | CExprYieldFrom                    thing -> invalidate_yield_from_expression          (value, thing)
+    | CExprPrefixUnary                  thing -> invalidate_prefix_unary_expression        (value, thing)
+    | CExprPostfixUnary                 thing -> invalidate_postfix_unary_expression       (value, thing)
+    | CExprBinary                       thing -> invalidate_binary_expression              (value, thing)
+    | CExprIs                           thing -> invalidate_is_expression                  (value, thing)
+    | CExprAs                           thing -> invalidate_as_expression                  (value, thing)
+    | CExprNullableAs                   thing -> invalidate_nullable_as_expression         (value, thing)
+    | CExprConditional                  thing -> invalidate_conditional_expression         (value, thing)
+    | CExprEval                         thing -> invalidate_eval_expression                (value, thing)
+    | CExprDefine                       thing -> invalidate_define_expression              (value, thing)
+    | CExprHaltCompiler                 thing -> invalidate_halt_compiler_expression       (value, thing)
+    | CExprIsset                        thing -> invalidate_isset_expression               (value, thing)
+    | CExprFunctionCall                 thing -> invalidate_function_call_expression       (value, thing)
+    | CExprParenthesized                thing -> invalidate_parenthesized_expression       (value, thing)
+    | CExprBraced                       thing -> invalidate_braced_expression              (value, thing)
+    | CExprEmbeddedBraced               thing -> invalidate_embedded_braced_expression     (value, thing)
+    | CExprList                         thing -> invalidate_list_expression                (value, thing)
+    | CExprCollectionLiteral            thing -> invalidate_collection_literal_expression  (value, thing)
+    | CExprObjectCreation               thing -> invalidate_object_creation_expression     (value, thing)
+    | CExprRecordCreation               thing -> invalidate_record_creation_expression     (value, thing)
+    | CExprArrayCreation                thing -> invalidate_array_creation_expression      (value, thing)
+    | CExprArrayIntrinsic               thing -> invalidate_array_intrinsic_expression     (value, thing)
+    | CExprDarrayIntrinsic              thing -> invalidate_darray_intrinsic_expression    (value, thing)
+    | CExprDictionaryIntrinsic          thing -> invalidate_dictionary_intrinsic_expression (value, thing)
+    | CExprKeysetIntrinsic              thing -> invalidate_keyset_intrinsic_expression    (value, thing)
+    | CExprVarrayIntrinsic              thing -> invalidate_varray_intrinsic_expression    (value, thing)
+    | CExprVectorIntrinsic              thing -> invalidate_vector_intrinsic_expression    (value, thing)
+    | CExprElementInitializer           thing -> invalidate_element_initializer            (value, thing)
+    | CExprSubscript                    thing -> invalidate_subscript_expression           (value, thing)
+    | CExprEmbeddedSubscript            thing -> invalidate_embedded_subscript_expression  (value, thing)
+    | CExprAwaitableCreation            thing -> invalidate_awaitable_creation_expression  (value, thing)
+    | CExprXHPChildrenParenthesizedList thing -> invalidate_xhp_children_parenthesized_list (value, thing)
+    | CExprXHP                          thing -> invalidate_xhp_expression                 (value, thing)
+    | CExprShape                        thing -> invalidate_shape_expression               (value, thing)
+    | CExprTuple                        thing -> invalidate_tuple_expression               (value, thing)
+    | CExprPocketIdentifier             thing -> invalidate_pocket_identifier_expression   (value, thing)
   and validate_namespace_internals : namespace_internals validator = fun x ->
     match Syntax.syntax x with
     | Syntax.NamespaceBody _ -> tag validate_namespace_body (fun x -> NSINamespaceBody x) x
@@ -903,6 +871,54 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       }
     ; Syntax.value = v
     }
+  and validate_record_declaration : record_declaration validator = function
+  | { Syntax.syntax = Syntax.RecordDeclaration x; value = v } -> v,
+    { record_right_brace = validate_token x.record_right_brace
+    ; record_fields = validate_list_with (validate_record_field) x.record_fields
+    ; record_left_brace = validate_token x.record_left_brace
+    ; record_extends_list = validate_option_with (validate_specifier) x.record_extends_list
+    ; record_extends_keyword = validate_option_with (validate_token) x.record_extends_keyword
+    ; record_name = validate_token x.record_name
+    ; record_keyword = validate_token x.record_keyword
+    ; record_modifier = validate_token x.record_modifier
+    ; record_attribute_spec = validate_option_with (validate_attribute_specification) x.record_attribute_spec
+    }
+  | s -> validation_fail (Some SyntaxKind.RecordDeclaration) s
+  and invalidate_record_declaration : record_declaration invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.RecordDeclaration
+      { record_attribute_spec = invalidate_option_with (invalidate_attribute_specification) x.record_attribute_spec
+      ; record_modifier = invalidate_token x.record_modifier
+      ; record_keyword = invalidate_token x.record_keyword
+      ; record_name = invalidate_token x.record_name
+      ; record_extends_keyword = invalidate_option_with (invalidate_token) x.record_extends_keyword
+      ; record_extends_list = invalidate_option_with (invalidate_specifier) x.record_extends_list
+      ; record_left_brace = invalidate_token x.record_left_brace
+      ; record_fields = invalidate_list_with (invalidate_record_field) x.record_fields
+      ; record_right_brace = invalidate_token x.record_right_brace
+      }
+    ; Syntax.value = v
+    }
+  and validate_record_field : record_field validator = function
+  | { Syntax.syntax = Syntax.RecordField x; value = v } -> v,
+    { record_field_comma = validate_token x.record_field_comma
+    ; record_field_init = validate_option_with (validate_simple_initializer) x.record_field_init
+    ; record_field_type = validate_type_constraint x.record_field_type
+    ; record_field_colon = validate_token x.record_field_colon
+    ; record_field_name = validate_token x.record_field_name
+    }
+  | s -> validation_fail (Some SyntaxKind.RecordField) s
+  and invalidate_record_field : record_field invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.RecordField
+      { record_field_name = invalidate_token x.record_field_name
+      ; record_field_colon = invalidate_token x.record_field_colon
+      ; record_field_type = invalidate_type_constraint x.record_field_type
+      ; record_field_init = invalidate_option_with (invalidate_simple_initializer) x.record_field_init
+      ; record_field_comma = invalidate_token x.record_field_comma
+      }
+    ; Syntax.value = v
+    }
   and validate_alias_declaration : alias_declaration validator = function
   | { Syntax.syntax = Syntax.AliasDeclaration x; value = v } -> v,
     { alias_semicolon = validate_token x.alias_semicolon
@@ -1086,7 +1102,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and validate_function_declaration_header : function_declaration_header validator = function
   | { Syntax.syntax = Syntax.FunctionDeclarationHeader x; value = v } -> v,
     { function_where_clause = validate_option_with (validate_where_clause) x.function_where_clause
-    ; function_type = validate_option_with (validate_specifier) x.function_type
+    ; function_type = validate_option_with (validate_attributized_specifier) x.function_type
     ; function_colon = validate_option_with (validate_token) x.function_colon
     ; function_right_paren = validate_token x.function_right_paren
     ; function_parameter_list = validate_list_with (validate_option_with (validate_parameter)) x.function_parameter_list
@@ -1108,7 +1124,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       ; function_parameter_list = invalidate_list_with (invalidate_option_with (invalidate_parameter)) x.function_parameter_list
       ; function_right_paren = invalidate_token x.function_right_paren
       ; function_colon = invalidate_option_with (invalidate_token) x.function_colon
-      ; function_type = invalidate_option_with (invalidate_specifier) x.function_type
+      ; function_type = invalidate_option_with (invalidate_attributized_specifier) x.function_type
       ; function_where_clause = invalidate_option_with (invalidate_where_clause) x.function_where_clause
       }
     ; Syntax.value = v
@@ -1184,6 +1200,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and validate_classish_declaration : classish_declaration validator = function
   | { Syntax.syntax = Syntax.ClassishDeclaration x; value = v } -> v,
     { classish_body = validate_classish_body x.classish_body
+    ; classish_where_clause = validate_option_with (validate_where_clause) x.classish_where_clause
     ; classish_implements_list = validate_list_with (validate_specifier) x.classish_implements_list
     ; classish_implements_keyword = validate_option_with (validate_token) x.classish_implements_keyword
     ; classish_extends_list = validate_list_with (validate_specifier) x.classish_extends_list
@@ -1207,6 +1224,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       ; classish_extends_list = invalidate_list_with (invalidate_specifier) x.classish_extends_list
       ; classish_implements_keyword = invalidate_option_with (invalidate_token) x.classish_implements_keyword
       ; classish_implements_list = invalidate_list_with (invalidate_specifier) x.classish_implements_list
+      ; classish_where_clause = invalidate_option_with (invalidate_where_clause) x.classish_where_clause
       ; classish_body = invalidate_classish_body x.classish_body
       }
     ; Syntax.value = v
@@ -1321,15 +1339,13 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; const_declarators = validate_list_with (validate_constant_declarator) x.const_declarators
     ; const_type_specifier = validate_option_with (validate_specifier) x.const_type_specifier
     ; const_keyword = validate_token x.const_keyword
-    ; const_abstract = validate_option_with (validate_token) x.const_abstract
-    ; const_visibility = validate_option_with (validate_token) x.const_visibility
+    ; const_modifiers = validate_list_with (validate_token) x.const_modifiers
     }
   | s -> validation_fail (Some SyntaxKind.ConstDeclaration) s
   and invalidate_const_declaration : const_declaration invalidator = fun (v, x) ->
     { Syntax.syntax =
       Syntax.ConstDeclaration
-      { const_visibility = invalidate_option_with (invalidate_token) x.const_visibility
-      ; const_abstract = invalidate_option_with (invalidate_token) x.const_abstract
+      { const_modifiers = invalidate_list_with (invalidate_token) x.const_modifiers
       ; const_keyword = invalidate_token x.const_keyword
       ; const_type_specifier = invalidate_option_with (invalidate_specifier) x.const_type_specifier
       ; const_declarators = invalidate_list_with (invalidate_constant_declarator) x.const_declarators
@@ -1361,7 +1377,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; type_const_name = validate_token x.type_const_name
     ; type_const_type_keyword = validate_token x.type_const_type_keyword
     ; type_const_keyword = validate_token x.type_const_keyword
-    ; type_const_abstract = validate_option_with (validate_token) x.type_const_abstract
+    ; type_const_modifiers = validate_option_with (validate_token) x.type_const_modifiers
     ; type_const_attribute_spec = validate_option_with (validate_attribute_specification) x.type_const_attribute_spec
     }
   | s -> validation_fail (Some SyntaxKind.TypeConstDeclaration) s
@@ -1369,7 +1385,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { Syntax.syntax =
       Syntax.TypeConstDeclaration
       { type_const_attribute_spec = invalidate_option_with (invalidate_attribute_specification) x.type_const_attribute_spec
-      ; type_const_abstract = invalidate_option_with (invalidate_token) x.type_const_abstract
+      ; type_const_modifiers = invalidate_option_with (invalidate_token) x.type_const_modifiers
       ; type_const_keyword = invalidate_token x.type_const_keyword
       ; type_const_type_keyword = invalidate_token x.type_const_type_keyword
       ; type_const_name = invalidate_token x.type_const_name
@@ -1433,19 +1449,45 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       }
     ; Syntax.value = v
     }
+  and validate_old_attribute_specification : old_attribute_specification validator = function
+  | { Syntax.syntax = Syntax.OldAttributeSpecification x; value = v } -> v,
+    { old_attribute_specification_right_double_angle = validate_token x.old_attribute_specification_right_double_angle
+    ; old_attribute_specification_attributes = validate_list_with (validate_constructor_call) x.old_attribute_specification_attributes
+    ; old_attribute_specification_left_double_angle = validate_token x.old_attribute_specification_left_double_angle
+    }
+  | s -> validation_fail (Some SyntaxKind.OldAttributeSpecification) s
+  and invalidate_old_attribute_specification : old_attribute_specification invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.OldAttributeSpecification
+      { old_attribute_specification_left_double_angle = invalidate_token x.old_attribute_specification_left_double_angle
+      ; old_attribute_specification_attributes = invalidate_list_with (invalidate_constructor_call) x.old_attribute_specification_attributes
+      ; old_attribute_specification_right_double_angle = invalidate_token x.old_attribute_specification_right_double_angle
+      }
+    ; Syntax.value = v
+    }
   and validate_attribute_specification : attribute_specification validator = function
   | { Syntax.syntax = Syntax.AttributeSpecification x; value = v } -> v,
-    { attribute_specification_right_double_angle = validate_token x.attribute_specification_right_double_angle
-    ; attribute_specification_attributes = validate_list_with (validate_constructor_call) x.attribute_specification_attributes
-    ; attribute_specification_left_double_angle = validate_token x.attribute_specification_left_double_angle
+    { attribute_specification_attributes = validate_list_with (validate_attribute) x.attribute_specification_attributes
     }
   | s -> validation_fail (Some SyntaxKind.AttributeSpecification) s
   and invalidate_attribute_specification : attribute_specification invalidator = fun (v, x) ->
     { Syntax.syntax =
       Syntax.AttributeSpecification
-      { attribute_specification_left_double_angle = invalidate_token x.attribute_specification_left_double_angle
-      ; attribute_specification_attributes = invalidate_list_with (invalidate_constructor_call) x.attribute_specification_attributes
-      ; attribute_specification_right_double_angle = invalidate_token x.attribute_specification_right_double_angle
+      { attribute_specification_attributes = invalidate_list_with (invalidate_attribute) x.attribute_specification_attributes
+      }
+    ; Syntax.value = v
+    }
+  and validate_attribute : attribute validator = function
+  | { Syntax.syntax = Syntax.Attribute x; value = v } -> v,
+    { attribute_attribute_name = validate_constructor_call x.attribute_attribute_name
+    ; attribute_at = validate_token x.attribute_at
+    }
+  | s -> validation_fail (Some SyntaxKind.Attribute) s
+  and invalidate_attribute : attribute invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.Attribute
+      { attribute_at = invalidate_token x.attribute_at
+      ; attribute_attribute_name = invalidate_constructor_call x.attribute_attribute_name
       }
     ; Syntax.value = v
     }
@@ -1490,24 +1532,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       { compound_left_brace = invalidate_token x.compound_left_brace
       ; compound_statements = invalidate_list_with (invalidate_statement) x.compound_statements
       ; compound_right_brace = invalidate_token x.compound_right_brace
-      }
-    ; Syntax.value = v
-    }
-  and validate_alternate_loop_statement : alternate_loop_statement validator = function
-  | { Syntax.syntax = Syntax.AlternateLoopStatement x; value = v } -> v,
-    { alternate_loop_closing_semicolon = validate_token x.alternate_loop_closing_semicolon
-    ; alternate_loop_closing_keyword = validate_token x.alternate_loop_closing_keyword
-    ; alternate_loop_statements = validate_list_with (validate_statement) x.alternate_loop_statements
-    ; alternate_loop_opening_colon = validate_token x.alternate_loop_opening_colon
-    }
-  | s -> validation_fail (Some SyntaxKind.AlternateLoopStatement) s
-  and invalidate_alternate_loop_statement : alternate_loop_statement invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.AlternateLoopStatement
-      { alternate_loop_opening_colon = invalidate_token x.alternate_loop_opening_colon
-      ; alternate_loop_statements = invalidate_list_with (invalidate_statement) x.alternate_loop_statements
-      ; alternate_loop_closing_keyword = invalidate_token x.alternate_loop_closing_keyword
-      ; alternate_loop_closing_semicolon = invalidate_token x.alternate_loop_closing_semicolon
       }
     ; Syntax.value = v
     }
@@ -1639,46 +1663,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       }
     ; Syntax.value = v
     }
-  and validate_declare_directive_statement : declare_directive_statement validator = function
-  | { Syntax.syntax = Syntax.DeclareDirectiveStatement x; value = v } -> v,
-    { declare_directive_semicolon = validate_token x.declare_directive_semicolon
-    ; declare_directive_right_paren = validate_token x.declare_directive_right_paren
-    ; declare_directive_expression = validate_expression x.declare_directive_expression
-    ; declare_directive_left_paren = validate_token x.declare_directive_left_paren
-    ; declare_directive_keyword = validate_token x.declare_directive_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.DeclareDirectiveStatement) s
-  and invalidate_declare_directive_statement : declare_directive_statement invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.DeclareDirectiveStatement
-      { declare_directive_keyword = invalidate_token x.declare_directive_keyword
-      ; declare_directive_left_paren = invalidate_token x.declare_directive_left_paren
-      ; declare_directive_expression = invalidate_expression x.declare_directive_expression
-      ; declare_directive_right_paren = invalidate_token x.declare_directive_right_paren
-      ; declare_directive_semicolon = invalidate_token x.declare_directive_semicolon
-      }
-    ; Syntax.value = v
-    }
-  and validate_declare_block_statement : declare_block_statement validator = function
-  | { Syntax.syntax = Syntax.DeclareBlockStatement x; value = v } -> v,
-    { declare_block_body = validate_statement x.declare_block_body
-    ; declare_block_right_paren = validate_token x.declare_block_right_paren
-    ; declare_block_expression = validate_expression x.declare_block_expression
-    ; declare_block_left_paren = validate_token x.declare_block_left_paren
-    ; declare_block_keyword = validate_token x.declare_block_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.DeclareBlockStatement) s
-  and invalidate_declare_block_statement : declare_block_statement invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.DeclareBlockStatement
-      { declare_block_keyword = invalidate_token x.declare_block_keyword
-      ; declare_block_left_paren = invalidate_token x.declare_block_left_paren
-      ; declare_block_expression = invalidate_expression x.declare_block_expression
-      ; declare_block_right_paren = invalidate_token x.declare_block_right_paren
-      ; declare_block_body = invalidate_statement x.declare_block_body
-      }
-    ; Syntax.value = v
-    }
   and validate_while_statement : while_statement validator = function
   | { Syntax.syntax = Syntax.WhileStatement x; value = v } -> v,
     { while_body = validate_statement x.while_body
@@ -1754,74 +1738,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       Syntax.ElseClause
       { else_keyword = invalidate_token x.else_keyword
       ; else_statement = invalidate_statement x.else_statement
-      }
-    ; Syntax.value = v
-    }
-  and validate_alternate_if_statement : alternate_if_statement validator = function
-  | { Syntax.syntax = Syntax.AlternateIfStatement x; value = v } -> v,
-    { alternate_if_semicolon = validate_token x.alternate_if_semicolon
-    ; alternate_if_endif_keyword = validate_token x.alternate_if_endif_keyword
-    ; alternate_if_else_clause = validate_option_with (validate_alternate_else_clause) x.alternate_if_else_clause
-    ; alternate_if_elseif_clauses = validate_list_with (validate_alternate_elseif_clause) x.alternate_if_elseif_clauses
-    ; alternate_if_statement = validate_list_with (validate_statement) x.alternate_if_statement
-    ; alternate_if_colon = validate_token x.alternate_if_colon
-    ; alternate_if_right_paren = validate_token x.alternate_if_right_paren
-    ; alternate_if_condition = validate_expression x.alternate_if_condition
-    ; alternate_if_left_paren = validate_token x.alternate_if_left_paren
-    ; alternate_if_keyword = validate_token x.alternate_if_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.AlternateIfStatement) s
-  and invalidate_alternate_if_statement : alternate_if_statement invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.AlternateIfStatement
-      { alternate_if_keyword = invalidate_token x.alternate_if_keyword
-      ; alternate_if_left_paren = invalidate_token x.alternate_if_left_paren
-      ; alternate_if_condition = invalidate_expression x.alternate_if_condition
-      ; alternate_if_right_paren = invalidate_token x.alternate_if_right_paren
-      ; alternate_if_colon = invalidate_token x.alternate_if_colon
-      ; alternate_if_statement = invalidate_list_with (invalidate_statement) x.alternate_if_statement
-      ; alternate_if_elseif_clauses = invalidate_list_with (invalidate_alternate_elseif_clause) x.alternate_if_elseif_clauses
-      ; alternate_if_else_clause = invalidate_option_with (invalidate_alternate_else_clause) x.alternate_if_else_clause
-      ; alternate_if_endif_keyword = invalidate_token x.alternate_if_endif_keyword
-      ; alternate_if_semicolon = invalidate_token x.alternate_if_semicolon
-      }
-    ; Syntax.value = v
-    }
-  and validate_alternate_elseif_clause : alternate_elseif_clause validator = function
-  | { Syntax.syntax = Syntax.AlternateElseifClause x; value = v } -> v,
-    { alternate_elseif_statement = validate_list_with (validate_statement) x.alternate_elseif_statement
-    ; alternate_elseif_colon = validate_token x.alternate_elseif_colon
-    ; alternate_elseif_right_paren = validate_token x.alternate_elseif_right_paren
-    ; alternate_elseif_condition = validate_expression x.alternate_elseif_condition
-    ; alternate_elseif_left_paren = validate_token x.alternate_elseif_left_paren
-    ; alternate_elseif_keyword = validate_token x.alternate_elseif_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.AlternateElseifClause) s
-  and invalidate_alternate_elseif_clause : alternate_elseif_clause invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.AlternateElseifClause
-      { alternate_elseif_keyword = invalidate_token x.alternate_elseif_keyword
-      ; alternate_elseif_left_paren = invalidate_token x.alternate_elseif_left_paren
-      ; alternate_elseif_condition = invalidate_expression x.alternate_elseif_condition
-      ; alternate_elseif_right_paren = invalidate_token x.alternate_elseif_right_paren
-      ; alternate_elseif_colon = invalidate_token x.alternate_elseif_colon
-      ; alternate_elseif_statement = invalidate_list_with (invalidate_statement) x.alternate_elseif_statement
-      }
-    ; Syntax.value = v
-    }
-  and validate_alternate_else_clause : alternate_else_clause validator = function
-  | { Syntax.syntax = Syntax.AlternateElseClause x; value = v } -> v,
-    { alternate_else_statement = validate_list_with (validate_statement) x.alternate_else_statement
-    ; alternate_else_colon = validate_token x.alternate_else_colon
-    ; alternate_else_keyword = validate_token x.alternate_else_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.AlternateElseClause) s
-  and invalidate_alternate_else_clause : alternate_else_clause invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.AlternateElseClause
-      { alternate_else_keyword = invalidate_token x.alternate_else_keyword
-      ; alternate_else_colon = invalidate_token x.alternate_else_colon
-      ; alternate_else_statement = invalidate_list_with (invalidate_statement) x.alternate_else_statement
       }
     ; Syntax.value = v
     }
@@ -1985,32 +1901,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       }
     ; Syntax.value = v
     }
-  and validate_alternate_switch_statement : alternate_switch_statement validator = function
-  | { Syntax.syntax = Syntax.AlternateSwitchStatement x; value = v } -> v,
-    { alternate_switch_closing_semicolon = validate_token x.alternate_switch_closing_semicolon
-    ; alternate_switch_closing_endswitch = validate_token x.alternate_switch_closing_endswitch
-    ; alternate_switch_sections = validate_list_with (validate_switch_section) x.alternate_switch_sections
-    ; alternate_switch_opening_colon = validate_token x.alternate_switch_opening_colon
-    ; alternate_switch_right_paren = validate_token x.alternate_switch_right_paren
-    ; alternate_switch_expression = validate_expression x.alternate_switch_expression
-    ; alternate_switch_left_paren = validate_token x.alternate_switch_left_paren
-    ; alternate_switch_keyword = validate_token x.alternate_switch_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.AlternateSwitchStatement) s
-  and invalidate_alternate_switch_statement : alternate_switch_statement invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.AlternateSwitchStatement
-      { alternate_switch_keyword = invalidate_token x.alternate_switch_keyword
-      ; alternate_switch_left_paren = invalidate_token x.alternate_switch_left_paren
-      ; alternate_switch_expression = invalidate_expression x.alternate_switch_expression
-      ; alternate_switch_right_paren = invalidate_token x.alternate_switch_right_paren
-      ; alternate_switch_opening_colon = invalidate_token x.alternate_switch_opening_colon
-      ; alternate_switch_sections = invalidate_list_with (invalidate_switch_section) x.alternate_switch_sections
-      ; alternate_switch_closing_endswitch = invalidate_token x.alternate_switch_closing_endswitch
-      ; alternate_switch_closing_semicolon = invalidate_token x.alternate_switch_closing_semicolon
-      }
-    ; Syntax.value = v
-    }
   and validate_switch_section : switch_section validator = function
   | { Syntax.syntax = Syntax.SwitchSection x; value = v } -> v,
     { switch_section_fallthrough = validate_option_with (validate_switch_fallthrough) x.switch_section_fallthrough
@@ -2165,36 +2055,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       }
     ; Syntax.value = v
     }
-  and validate_function_static_statement : function_static_statement validator = function
-  | { Syntax.syntax = Syntax.FunctionStaticStatement x; value = v } -> v,
-    { static_semicolon = validate_token x.static_semicolon
-    ; static_declarations = validate_list_with (validate_static_declarator) x.static_declarations
-    ; static_static_keyword = validate_token x.static_static_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.FunctionStaticStatement) s
-  and invalidate_function_static_statement : function_static_statement invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.FunctionStaticStatement
-      { static_static_keyword = invalidate_token x.static_static_keyword
-      ; static_declarations = invalidate_list_with (invalidate_static_declarator) x.static_declarations
-      ; static_semicolon = invalidate_token x.static_semicolon
-      }
-    ; Syntax.value = v
-    }
-  and validate_static_declarator : static_declarator validator = function
-  | { Syntax.syntax = Syntax.StaticDeclarator x; value = v } -> v,
-    { static_initializer = validate_option_with (validate_simple_initializer) x.static_initializer
-    ; static_name = validate_token x.static_name
-    }
-  | s -> validation_fail (Some SyntaxKind.StaticDeclarator) s
-  and invalidate_static_declarator : static_declarator invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.StaticDeclarator
-      { static_name = invalidate_token x.static_name
-      ; static_initializer = invalidate_option_with (invalidate_simple_initializer) x.static_initializer
-      }
-    ; Syntax.value = v
-    }
   and validate_echo_statement : echo_statement validator = function
   | { Syntax.syntax = Syntax.EchoStatement x; value = v } -> v,
     { echo_semicolon = validate_token x.echo_semicolon
@@ -2208,22 +2068,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       { echo_keyword = invalidate_token x.echo_keyword
       ; echo_expressions = invalidate_list_with (invalidate_expression) x.echo_expressions
       ; echo_semicolon = invalidate_token x.echo_semicolon
-      }
-    ; Syntax.value = v
-    }
-  and validate_global_statement : global_statement validator = function
-  | { Syntax.syntax = Syntax.GlobalStatement x; value = v } -> v,
-    { global_semicolon = validate_token x.global_semicolon
-    ; global_variables = validate_list_with (validate_token) x.global_variables
-    ; global_keyword = validate_token x.global_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.GlobalStatement) s
-  and invalidate_global_statement : global_statement invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.GlobalStatement
-      { global_keyword = invalidate_token x.global_keyword
-      ; global_variables = invalidate_list_with (invalidate_token) x.global_variables
-      ; global_semicolon = invalidate_token x.global_semicolon
       }
     ; Syntax.value = v
     }
@@ -2314,40 +2158,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       ; anonymous_type = invalidate_option_with (invalidate_specifier) x.anonymous_type
       ; anonymous_use = invalidate_option_with (invalidate_anonymous_function_use_clause) x.anonymous_use
       ; anonymous_body = invalidate_compound_statement x.anonymous_body
-      }
-    ; Syntax.value = v
-    }
-  and validate_php7_anonymous_function : php7_anonymous_function validator = function
-  | { Syntax.syntax = Syntax.Php7AnonymousFunction x; value = v } -> v,
-    { php7_anonymous_body = validate_compound_statement x.php7_anonymous_body
-    ; php7_anonymous_type = validate_option_with (validate_specifier) x.php7_anonymous_type
-    ; php7_anonymous_colon = validate_option_with (validate_token) x.php7_anonymous_colon
-    ; php7_anonymous_use = validate_option_with (validate_anonymous_function_use_clause) x.php7_anonymous_use
-    ; php7_anonymous_right_paren = validate_token x.php7_anonymous_right_paren
-    ; php7_anonymous_parameters = validate_list_with (validate_parameter) x.php7_anonymous_parameters
-    ; php7_anonymous_left_paren = validate_token x.php7_anonymous_left_paren
-    ; php7_anonymous_function_keyword = validate_token x.php7_anonymous_function_keyword
-    ; php7_anonymous_coroutine_keyword = validate_option_with (validate_token) x.php7_anonymous_coroutine_keyword
-    ; php7_anonymous_async_keyword = validate_option_with (validate_token) x.php7_anonymous_async_keyword
-    ; php7_anonymous_static_keyword = validate_option_with (validate_token) x.php7_anonymous_static_keyword
-    ; php7_anonymous_attribute_spec = validate_option_with (validate_attribute_specification) x.php7_anonymous_attribute_spec
-    }
-  | s -> validation_fail (Some SyntaxKind.Php7AnonymousFunction) s
-  and invalidate_php7_anonymous_function : php7_anonymous_function invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.Php7AnonymousFunction
-      { php7_anonymous_attribute_spec = invalidate_option_with (invalidate_attribute_specification) x.php7_anonymous_attribute_spec
-      ; php7_anonymous_static_keyword = invalidate_option_with (invalidate_token) x.php7_anonymous_static_keyword
-      ; php7_anonymous_async_keyword = invalidate_option_with (invalidate_token) x.php7_anonymous_async_keyword
-      ; php7_anonymous_coroutine_keyword = invalidate_option_with (invalidate_token) x.php7_anonymous_coroutine_keyword
-      ; php7_anonymous_function_keyword = invalidate_token x.php7_anonymous_function_keyword
-      ; php7_anonymous_left_paren = invalidate_token x.php7_anonymous_left_paren
-      ; php7_anonymous_parameters = invalidate_list_with (invalidate_parameter) x.php7_anonymous_parameters
-      ; php7_anonymous_right_paren = invalidate_token x.php7_anonymous_right_paren
-      ; php7_anonymous_use = invalidate_option_with (invalidate_anonymous_function_use_clause) x.php7_anonymous_use
-      ; php7_anonymous_colon = invalidate_option_with (invalidate_token) x.php7_anonymous_colon
-      ; php7_anonymous_type = invalidate_option_with (invalidate_specifier) x.php7_anonymous_type
-      ; php7_anonymous_body = invalidate_compound_statement x.php7_anonymous_body
       }
     ; Syntax.value = v
     }
@@ -2567,22 +2377,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       }
     ; Syntax.value = v
     }
-  and validate_instanceof_expression : instanceof_expression validator = function
-  | { Syntax.syntax = Syntax.InstanceofExpression x; value = v } -> v,
-    { instanceof_right_operand = validate_expression x.instanceof_right_operand
-    ; instanceof_operator = validate_token x.instanceof_operator
-    ; instanceof_left_operand = validate_expression x.instanceof_left_operand
-    }
-  | s -> validation_fail (Some SyntaxKind.InstanceofExpression) s
-  and invalidate_instanceof_expression : instanceof_expression invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.InstanceofExpression
-      { instanceof_left_operand = invalidate_expression x.instanceof_left_operand
-      ; instanceof_operator = invalidate_token x.instanceof_operator
-      ; instanceof_right_operand = invalidate_expression x.instanceof_right_operand
-      }
-    ; Syntax.value = v
-    }
   and validate_is_expression : is_expression validator = function
   | { Syntax.syntax = Syntax.IsExpression x; value = v } -> v,
     { is_right_operand = validate_specifier x.is_right_operand
@@ -2669,24 +2463,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       }
     ; Syntax.value = v
     }
-  and validate_empty_expression : empty_expression validator = function
-  | { Syntax.syntax = Syntax.EmptyExpression x; value = v } -> v,
-    { empty_right_paren = validate_token x.empty_right_paren
-    ; empty_argument = validate_expression x.empty_argument
-    ; empty_left_paren = validate_token x.empty_left_paren
-    ; empty_keyword = validate_token x.empty_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.EmptyExpression) s
-  and invalidate_empty_expression : empty_expression invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.EmptyExpression
-      { empty_keyword = invalidate_token x.empty_keyword
-      ; empty_left_paren = invalidate_token x.empty_left_paren
-      ; empty_argument = invalidate_expression x.empty_argument
-      ; empty_right_paren = invalidate_token x.empty_right_paren
-      }
-    ; Syntax.value = v
-    }
   and validate_define_expression : define_expression validator = function
   | { Syntax.syntax = Syntax.DefineExpression x; value = v } -> v,
     { define_right_paren = validate_token x.define_right_paren
@@ -2746,6 +2522,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { function_call_right_paren = validate_token x.function_call_right_paren
     ; function_call_argument_list = validate_list_with (validate_expression) x.function_call_argument_list
     ; function_call_left_paren = validate_token x.function_call_left_paren
+    ; function_call_type_args = validate_option_with (validate_type_arguments) x.function_call_type_args
     ; function_call_receiver = validate_expression x.function_call_receiver
     }
   | s -> validation_fail (Some SyntaxKind.FunctionCallExpression) s
@@ -2753,29 +2530,10 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { Syntax.syntax =
       Syntax.FunctionCallExpression
       { function_call_receiver = invalidate_expression x.function_call_receiver
+      ; function_call_type_args = invalidate_option_with (invalidate_type_arguments) x.function_call_type_args
       ; function_call_left_paren = invalidate_token x.function_call_left_paren
       ; function_call_argument_list = invalidate_list_with (invalidate_expression) x.function_call_argument_list
       ; function_call_right_paren = invalidate_token x.function_call_right_paren
-      }
-    ; Syntax.value = v
-    }
-  and validate_function_call_with_type_arguments_expression : function_call_with_type_arguments_expression validator = function
-  | { Syntax.syntax = Syntax.FunctionCallWithTypeArgumentsExpression x; value = v } -> v,
-    { function_call_with_type_arguments_right_paren = validate_token x.function_call_with_type_arguments_right_paren
-    ; function_call_with_type_arguments_argument_list = validate_list_with (validate_expression) x.function_call_with_type_arguments_argument_list
-    ; function_call_with_type_arguments_left_paren = validate_token x.function_call_with_type_arguments_left_paren
-    ; function_call_with_type_arguments_type_args = validate_type_arguments x.function_call_with_type_arguments_type_args
-    ; function_call_with_type_arguments_receiver = validate_expression x.function_call_with_type_arguments_receiver
-    }
-  | s -> validation_fail (Some SyntaxKind.FunctionCallWithTypeArgumentsExpression) s
-  and invalidate_function_call_with_type_arguments_expression : function_call_with_type_arguments_expression invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.FunctionCallWithTypeArgumentsExpression
-      { function_call_with_type_arguments_receiver = invalidate_expression x.function_call_with_type_arguments_receiver
-      ; function_call_with_type_arguments_type_args = invalidate_type_arguments x.function_call_with_type_arguments_type_args
-      ; function_call_with_type_arguments_left_paren = invalidate_token x.function_call_with_type_arguments_left_paren
-      ; function_call_with_type_arguments_argument_list = invalidate_list_with (invalidate_expression) x.function_call_with_type_arguments_argument_list
-      ; function_call_with_type_arguments_right_paren = invalidate_token x.function_call_with_type_arguments_right_paren
       }
     ; Syntax.value = v
     }
@@ -2892,6 +2650,26 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       ; constructor_call_left_paren = invalidate_option_with (invalidate_token) x.constructor_call_left_paren
       ; constructor_call_argument_list = invalidate_list_with (invalidate_expression) x.constructor_call_argument_list
       ; constructor_call_right_paren = invalidate_option_with (invalidate_token) x.constructor_call_right_paren
+      }
+    ; Syntax.value = v
+    }
+  and validate_record_creation_expression : record_creation_expression validator = function
+  | { Syntax.syntax = Syntax.RecordCreationExpression x; value = v } -> v,
+    { record_creation_right_bracket = validate_token x.record_creation_right_bracket
+    ; record_creation_members = validate_list_with (validate_element_initializer) x.record_creation_members
+    ; record_creation_left_bracket = validate_token x.record_creation_left_bracket
+    ; record_creation_array_token = validate_option_with (validate_token) x.record_creation_array_token
+    ; record_creation_type = validate_todo_aggregate x.record_creation_type
+    }
+  | s -> validation_fail (Some SyntaxKind.RecordCreationExpression) s
+  and invalidate_record_creation_expression : record_creation_expression invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.RecordCreationExpression
+      { record_creation_type = invalidate_todo_aggregate x.record_creation_type
+      ; record_creation_array_token = invalidate_option_with (invalidate_token) x.record_creation_array_token
+      ; record_creation_left_bracket = invalidate_token x.record_creation_left_bracket
+      ; record_creation_members = invalidate_list_with (invalidate_element_initializer) x.record_creation_members
+      ; record_creation_right_bracket = invalidate_token x.record_creation_right_bracket
       }
     ; Syntax.value = v
     }
@@ -3164,6 +2942,20 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       ; xhp_enum_left_brace = invalidate_token x.xhp_enum_left_brace
       ; xhp_enum_values = invalidate_list_with (invalidate_literal_expression) x.xhp_enum_values
       ; xhp_enum_right_brace = invalidate_token x.xhp_enum_right_brace
+      }
+    ; Syntax.value = v
+    }
+  and validate_xhp_lateinit : xhp_lateinit validator = function
+  | { Syntax.syntax = Syntax.XHPLateinit x; value = v } -> v,
+    { xhp_lateinit_keyword = validate_token x.xhp_lateinit_keyword
+    ; xhp_lateinit_at = validate_token x.xhp_lateinit_at
+    }
+  | s -> validation_fail (Some SyntaxKind.XHPLateinit) s
+  and invalidate_xhp_lateinit : xhp_lateinit invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.XHPLateinit
+      { xhp_lateinit_at = invalidate_token x.xhp_lateinit_at
+      ; xhp_lateinit_keyword = invalidate_token x.xhp_lateinit_keyword
       }
     ; Syntax.value = v
     }
@@ -3701,6 +3493,20 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       }
     ; Syntax.value = v
     }
+  and validate_like_type_specifier : like_type_specifier validator = function
+  | { Syntax.syntax = Syntax.LikeTypeSpecifier x; value = v } -> v,
+    { like_type = validate_specifier x.like_type
+    ; like_tilde = validate_token x.like_tilde
+    }
+  | s -> validation_fail (Some SyntaxKind.LikeTypeSpecifier) s
+  and invalidate_like_type_specifier : like_type_specifier invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.LikeTypeSpecifier
+      { like_tilde = invalidate_token x.like_tilde
+      ; like_type = invalidate_specifier x.like_type
+      }
+    ; Syntax.value = v
+    }
   and validate_soft_type_specifier : soft_type_specifier validator = function
   | { Syntax.syntax = Syntax.SoftTypeSpecifier x; value = v } -> v,
     { soft_type = validate_specifier x.soft_type
@@ -3712,6 +3518,20 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       Syntax.SoftTypeSpecifier
       { soft_at = invalidate_token x.soft_at
       ; soft_type = invalidate_specifier x.soft_type
+      }
+    ; Syntax.value = v
+    }
+  and validate_attributized_specifier : attributized_specifier validator = function
+  | { Syntax.syntax = Syntax.AttributizedSpecifier x; value = v } -> v,
+    { attributized_specifier_type = validate_specifier x.attributized_specifier_type
+    ; attributized_specifier_attribute_spec = validate_option_with (validate_attribute_specification) x.attributized_specifier_attribute_spec
+    }
+  | s -> validation_fail (Some SyntaxKind.AttributizedSpecifier) s
+  and invalidate_attributized_specifier : attributized_specifier invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.AttributizedSpecifier
+      { attributized_specifier_attribute_spec = invalidate_option_with (invalidate_attribute_specification) x.attributized_specifier_attribute_spec
+      ; attributized_specifier_type = invalidate_specifier x.attributized_specifier_type
       }
     ; Syntax.value = v
     }
@@ -3732,7 +3552,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and validate_type_arguments : type_arguments validator = function
   | { Syntax.syntax = Syntax.TypeArguments x; value = v } -> v,
     { type_arguments_right_angle = validate_token x.type_arguments_right_angle
-    ; type_arguments_types = validate_list_with (validate_specifier) x.type_arguments_types
+    ; type_arguments_types = validate_list_with (validate_attributized_specifier) x.type_arguments_types
     ; type_arguments_left_angle = validate_token x.type_arguments_left_angle
     }
   | s -> validation_fail (Some SyntaxKind.TypeArguments) s
@@ -3740,7 +3560,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { Syntax.syntax =
       Syntax.TypeArguments
       { type_arguments_left_angle = invalidate_token x.type_arguments_left_angle
-      ; type_arguments_types = invalidate_list_with (invalidate_specifier) x.type_arguments_types
+      ; type_arguments_types = invalidate_list_with (invalidate_attributized_specifier) x.type_arguments_types
       ; type_arguments_right_angle = invalidate_token x.type_arguments_right_angle
       }
     ; Syntax.value = v
@@ -3780,12 +3600,34 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and validate_pocket_atom_expression : pocket_atom_expression validator = function
   | { Syntax.syntax = Syntax.PocketAtomExpression x; value = v } -> v,
     { pocket_atom_expression = validate_token x.pocket_atom_expression
+    ; pocket_atom_glyph = validate_token x.pocket_atom_glyph
     }
   | s -> validation_fail (Some SyntaxKind.PocketAtomExpression) s
   and invalidate_pocket_atom_expression : pocket_atom_expression invalidator = fun (v, x) ->
     { Syntax.syntax =
       Syntax.PocketAtomExpression
-      { pocket_atom_expression = invalidate_token x.pocket_atom_expression
+      { pocket_atom_glyph = invalidate_token x.pocket_atom_glyph
+      ; pocket_atom_expression = invalidate_token x.pocket_atom_expression
+      }
+    ; Syntax.value = v
+    }
+  and validate_pocket_identifier_expression : pocket_identifier_expression validator = function
+  | { Syntax.syntax = Syntax.PocketIdentifierExpression x; value = v } -> v,
+    { pocket_identifier_name = validate_expression x.pocket_identifier_name
+    ; pocket_identifier_operator = validate_token x.pocket_identifier_operator
+    ; pocket_identifier_field = validate_expression x.pocket_identifier_field
+    ; pocket_identifier_pu_operator = validate_token x.pocket_identifier_pu_operator
+    ; pocket_identifier_qualifier = validate_expression x.pocket_identifier_qualifier
+    }
+  | s -> validation_fail (Some SyntaxKind.PocketIdentifierExpression) s
+  and invalidate_pocket_identifier_expression : pocket_identifier_expression invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.PocketIdentifierExpression
+      { pocket_identifier_qualifier = invalidate_expression x.pocket_identifier_qualifier
+      ; pocket_identifier_pu_operator = invalidate_token x.pocket_identifier_pu_operator
+      ; pocket_identifier_field = invalidate_expression x.pocket_identifier_field
+      ; pocket_identifier_operator = invalidate_token x.pocket_identifier_operator
+      ; pocket_identifier_name = invalidate_expression x.pocket_identifier_name
       }
     ; Syntax.value = v
     }
@@ -3795,13 +3637,15 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; pocket_atom_mapping_right_paren = validate_option_with (validate_token) x.pocket_atom_mapping_right_paren
     ; pocket_atom_mapping_mappings = validate_list_with (validate_pumapping_aggregate) x.pocket_atom_mapping_mappings
     ; pocket_atom_mapping_left_paren = validate_option_with (validate_token) x.pocket_atom_mapping_left_paren
-    ; pocket_atom_mapping_expression = validate_token x.pocket_atom_mapping_expression
+    ; pocket_atom_mapping_name = validate_expression x.pocket_atom_mapping_name
+    ; pocket_atom_mapping_glyph = validate_token x.pocket_atom_mapping_glyph
     }
   | s -> validation_fail (Some SyntaxKind.PocketAtomMappingDeclaration) s
   and invalidate_pocket_atom_mapping_declaration : pocket_atom_mapping_declaration invalidator = fun (v, x) ->
     { Syntax.syntax =
       Syntax.PocketAtomMappingDeclaration
-      { pocket_atom_mapping_expression = invalidate_token x.pocket_atom_mapping_expression
+      { pocket_atom_mapping_glyph = invalidate_token x.pocket_atom_mapping_glyph
+      ; pocket_atom_mapping_name = invalidate_expression x.pocket_atom_mapping_name
       ; pocket_atom_mapping_left_paren = invalidate_option_with (invalidate_token) x.pocket_atom_mapping_left_paren
       ; pocket_atom_mapping_mappings = invalidate_list_with (invalidate_pumapping_aggregate) x.pocket_atom_mapping_mappings
       ; pocket_atom_mapping_right_paren = invalidate_option_with (invalidate_token) x.pocket_atom_mapping_right_paren
@@ -3834,7 +3678,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and validate_pocket_field_type_expr_declaration : pocket_field_type_expr_declaration validator = function
   | { Syntax.syntax = Syntax.PocketFieldTypeExprDeclaration x; value = v } -> v,
     { pocket_field_type_expr_semicolon = validate_token x.pocket_field_type_expr_semicolon
-    ; pocket_field_type_expr_name = validate_token x.pocket_field_type_expr_name
+    ; pocket_field_type_expr_name = validate_expression x.pocket_field_type_expr_name
     ; pocket_field_type_expr_type = validate_specifier x.pocket_field_type_expr_type
     ; pocket_field_type_expr_case = validate_token x.pocket_field_type_expr_case
     }
@@ -3844,7 +3688,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       Syntax.PocketFieldTypeExprDeclaration
       { pocket_field_type_expr_case = invalidate_token x.pocket_field_type_expr_case
       ; pocket_field_type_expr_type = invalidate_specifier x.pocket_field_type_expr_type
-      ; pocket_field_type_expr_name = invalidate_token x.pocket_field_type_expr_name
+      ; pocket_field_type_expr_name = invalidate_expression x.pocket_field_type_expr_name
       ; pocket_field_type_expr_semicolon = invalidate_token x.pocket_field_type_expr_semicolon
       }
     ; Syntax.value = v
@@ -3852,7 +3696,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and validate_pocket_field_type_declaration : pocket_field_type_declaration validator = function
   | { Syntax.syntax = Syntax.PocketFieldTypeDeclaration x; value = v } -> v,
     { pocket_field_type_semicolon = validate_token x.pocket_field_type_semicolon
-    ; pocket_field_type_name = validate_token x.pocket_field_type_name
+    ; pocket_field_type_name = validate_expression x.pocket_field_type_name
     ; pocket_field_type_type = validate_token x.pocket_field_type_type
     ; pocket_field_type_case = validate_token x.pocket_field_type_case
     }
@@ -3862,7 +3706,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       Syntax.PocketFieldTypeDeclaration
       { pocket_field_type_case = invalidate_token x.pocket_field_type_case
       ; pocket_field_type_type = invalidate_token x.pocket_field_type_type
-      ; pocket_field_type_name = invalidate_token x.pocket_field_type_name
+      ; pocket_field_type_name = invalidate_expression x.pocket_field_type_name
       ; pocket_field_type_semicolon = invalidate_token x.pocket_field_type_semicolon
       }
     ; Syntax.value = v
@@ -3870,13 +3714,13 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and validate_pocket_mapping_id_declaration : pocket_mapping_id_declaration validator = function
   | { Syntax.syntax = Syntax.PocketMappingIdDeclaration x; value = v } -> v,
     { pocket_mapping_id_initializer = validate_simple_initializer x.pocket_mapping_id_initializer
-    ; pocket_mapping_id_name = validate_token x.pocket_mapping_id_name
+    ; pocket_mapping_id_name = validate_expression x.pocket_mapping_id_name
     }
   | s -> validation_fail (Some SyntaxKind.PocketMappingIdDeclaration) s
   and invalidate_pocket_mapping_id_declaration : pocket_mapping_id_declaration invalidator = fun (v, x) ->
     { Syntax.syntax =
       Syntax.PocketMappingIdDeclaration
-      { pocket_mapping_id_name = invalidate_token x.pocket_mapping_id_name
+      { pocket_mapping_id_name = invalidate_expression x.pocket_mapping_id_name
       ; pocket_mapping_id_initializer = invalidate_simple_initializer x.pocket_mapping_id_initializer
       }
     ; Syntax.value = v
@@ -3885,7 +3729,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | { Syntax.syntax = Syntax.PocketMappingTypeDeclaration x; value = v } -> v,
     { pocket_mapping_type_type = validate_specifier x.pocket_mapping_type_type
     ; pocket_mapping_type_equal = validate_token x.pocket_mapping_type_equal
-    ; pocket_mapping_type_name = validate_token x.pocket_mapping_type_name
+    ; pocket_mapping_type_name = validate_expression x.pocket_mapping_type_name
     ; pocket_mapping_type_keyword = validate_token x.pocket_mapping_type_keyword
     }
   | s -> validation_fail (Some SyntaxKind.PocketMappingTypeDeclaration) s
@@ -3893,7 +3737,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { Syntax.syntax =
       Syntax.PocketMappingTypeDeclaration
       { pocket_mapping_type_keyword = invalidate_token x.pocket_mapping_type_keyword
-      ; pocket_mapping_type_name = invalidate_token x.pocket_mapping_type_name
+      ; pocket_mapping_type_name = invalidate_expression x.pocket_mapping_type_name
       ; pocket_mapping_type_equal = invalidate_token x.pocket_mapping_type_equal
       ; pocket_mapping_type_type = invalidate_specifier x.pocket_mapping_type_type
       }

@@ -37,8 +37,6 @@ namespace HPHP {
 
 TRACE_SET_MOD(runtime);
 
-const StaticString s_86reifiedinit("86reifiedinit");
-
 /**
  * print_string will decRef the string
  */
@@ -175,41 +173,6 @@ StringData* concat_s4(StringData* v1, StringData* v2,
   return ret;
 }
 
-int init_closure(ActRec* ar, TypedValue* sp) {
-  auto closure = c_Closure::fromObject(ar->getThis());
-
-  // Put in the correct context
-  ar->m_func = closure->getInvokeFunc();
-
-  if (ar->func()->cls()) {
-    // Swap in the $this or late bound class or null if it is ony from a plain
-    // function or pseudomain
-    ar->setThisOrClass(closure->getThisOrClass());
-
-    if (ar->hasThis()) {
-      ar->getThis()->incRefCount();
-    }
-  } else {
-    ar->trashThis();
-  }
-
-  // The closure is the first local.
-  // Similar to tvWriteObject() but we don't incref because it used to be $this
-  // and now it is a local, so they cancel out
-  TypedValue* firstLocal = --sp;
-  firstLocal->m_type = KindOfObject;
-  firstLocal->m_data.pobj = closure;
-
-  // Copy in all the use vars
-  TypedValue* prop = closure->getUseVars();
-  int n = closure->getNumUseVars();
-  for (int i=0; i < n; i++) {
-    tvDup(*prop++, *--sp);
-  }
-
-  return n + 1;
-}
-
 void raiseWarning(const StringData* sd) {
   raise_warning("%s", sd->data());
 }
@@ -218,14 +181,15 @@ void raiseNotice(const StringData* sd) {
   raise_notice("%s", sd->data());
 }
 
-void raiseArrayIndexNotice(const int64_t index, bool isInOut) {
-  raise_notice("Undefined index%s: %" PRId64,
-               isInOut ? " on inout parameter" : "", index);
+void throwArrayIndexException(const int64_t index, bool isInOut) {
+  SystemLib::throwOutOfBoundsExceptionObject(folly::sformat(
+    "Undefined index{}: {}", isInOut ? " on inout parameter" : "", index));
 }
 
-void raiseArrayKeyNotice(const StringData* key, bool isInOut) {
-  raise_notice("Undefined index%s: %s",
-               isInOut ? " on inout parameter" : "", key->data());
+void throwArrayKeyException(const StringData* key, bool isInOut) {
+  SystemLib::throwOutOfBoundsExceptionObject(folly::sformat(
+    "Undefined index{}: {}", isInOut ? " on inout parameter" : "",
+    key->data()));
 }
 
 std::string formatParamRefMismatch(const char* fname, uint32_t index,
@@ -243,9 +207,41 @@ std::string formatParamRefMismatch(const char* fname, uint32_t index,
   }
 }
 
-void raiseParamRefMismatchForFunc(const Func* func, uint32_t index) {
+void throwParamRefMismatch(const Func* func, uint32_t index) {
   SystemLib::throwInvalidArgumentExceptionObject(formatParamRefMismatch(
     func->fullDisplayName()->data(), index, func->byRef(index)));
+}
+
+void throwParamRefMismatchRange(const Func* func, unsigned firstVal,
+                                uint64_t mask, uint64_t vals) {
+  for (auto i = 0; i < 64; ++i) {
+    if (mask & (1UL << i)) {
+      bool byRef = vals & (1UL << i);
+      if (func->byRef(firstVal + i) != byRef) {
+        throwParamRefMismatch(func, firstVal + i);
+      }
+    }
+  }
+
+  // Caller guarantees at least one parameter with reffiness mismatch.
+  not_reached();
+}
+
+void raiseRxCallViolation(const ActRec* caller, const Func* callee) {
+  assertx(RuntimeOption::EvalRxEnforceCalls > 0);
+  auto const errMsg = folly::sformat(
+    "Call to {} '{}' from {} '{}' violates reactivity constraints.",
+    rxLevelToString(callee->rxLevel()),
+    callee->fullName()->data(),
+    rxLevelToString(caller->rxMinLevel()),
+    caller->func()->fullName()->data()
+  );
+
+  if (RuntimeOption::EvalRxEnforceCalls >= 2) {
+    SystemLib::throwBadMethodCallExceptionObject(errMsg);
+  } else {
+    raise_warning(errMsg);
+  }
 }
 
 //////////////////////////////////////////////////////////////////////

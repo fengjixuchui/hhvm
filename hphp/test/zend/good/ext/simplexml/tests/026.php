@@ -1,4 +1,4 @@
-<?php 
+<?hh
 $xml =<<<EOF
 <people>
   <person>Jane</person>
@@ -13,7 +13,7 @@ function traverse_xml($xml, $pad = '')
   {
     echo " $attr=\"$value\"";
   }
-  echo ">" . trim($xml) . "\n";
+  echo ">" . trim((string)$xml) . "\n";
   foreach($xml->children() as $node)
   {
     traverse_xml($node, $pad.'  ');
@@ -25,5 +25,4 @@ function traverse_xml($xml, $pad = '')
 $people = simplexml_load_string($xml);
 traverse_xml($people);
 
-?>
-===DONE===
+echo "===DONE===\n";

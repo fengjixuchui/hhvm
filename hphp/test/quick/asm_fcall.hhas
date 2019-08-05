@@ -1,8 +1,12 @@
+.hh_file 1;
 #
 # Test some function call junk
 #
 
 .main {
+  NullUninit
+  NullUninit
+  NullUninit
   FPushFuncD 0 "main"
   FCall <> 0 1 "" - "" ""
   PopC
@@ -11,14 +15,20 @@
 }
 
 .function caller($who, $arg) {
+  NullUninit
+  NullUninit
+  NullUninit
+  CGetL $arg
   CGetL $who
   FPushFunc 1
-  CGetL $arg
   FCall <> 1 1 "" - "" ""
 
   SetL $ret
   PopC
 
+  NullUninit
+  NullUninit
+  NullUninit
   CGetL $ret
   FPushFunc 0
   FCall <> 0 1 "" - "" ""
@@ -55,17 +65,23 @@
 }
 
 .function main() {
-  FPushFuncD 2 "caller"
+  NullUninit
+  NullUninit
+  NullUninit
   String "a"
   String "b"
+  FPushFuncD 2 "caller"
   FCall <> 2 1 "" - "" ""
   PopC
 
   String "strval"
   SetL $funk
   PopC
-  FPushFuncD 1 "byref"
+  NullUninit
+  NullUninit
+  NullUninit
   VGetL $funk
+  FPushFuncD 1 "byref"
   FCall <> 1 1 "" - "" ""
   PopC
   CGetL $funk

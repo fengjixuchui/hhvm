@@ -1,51 +1,14 @@
 ======= base_elem_warn =============================
-
-Warning: Cannot use a scalar value as an array in %s on line %d
-NULL
 Exception: "Out of bounds keyset access: invalid index 3"
 string(1) "1"
 Exception: "Out of bounds keyset access: invalid index "foo""
 Exception: "Invalid keyset key: expected a key of type int or string, bool given"
 ======= base_elem ==================================
-
-Warning: Cannot use a scalar value as an array in %s on line %d
-string(7) "MISSING"
 string(7) "MISSING"
 string(1) "1"
 string(7) "MISSING"
 Exception: "Invalid keyset key: expected a key of type int or string, bool given"
 ======= base_define ================================
-Exception: "Invalid operation on keyset"
-keyset(3) {
-  int(1)
-  int(2)
-  string(1) "1"
-}
-Exception: "Invalid operation on keyset"
-keyset(3) {
-  int(1)
-  int(2)
-  string(1) "1"
-}
-Exception: "Invalid operation on keyset"
-keyset(3) {
-  int(1)
-  int(2)
-  string(1) "1"
-}
-Exception: "Invalid operation on keyset"
-keyset(3) {
-  int(1)
-  int(2)
-  string(1) "1"
-}
-Exception: "Invalid keyset key: expected a key of type int or string, bool given"
-keyset(3) {
-  int(1)
-  int(2)
-  string(1) "1"
-}
-======= base_define_reffy ==========================
 Exception: "Invalid operation on keyset"
 keyset(3) {
   int(1)
@@ -116,89 +79,24 @@ Exception: "Invalid operation on keyset"
 Notice: Cannot access property on non-object in %s on line %d
 NULL
 ======= base_prop_set ==============================
+
+Warning: Cannot access property on non-object in %s/member-ops.php on line %d
 keyset(3) {
   int(1)
   int(2)
   string(1) "1"
 }
 ======= dim_elem_warn ==============================
-
-Warning: Cannot use a scalar value as an array in %s on line %d
-NULL
 Exception: "Out of bounds keyset access: invalid index 3"
 string(1) "1"
 Exception: "Out of bounds keyset access: invalid index "foo""
 Exception: "Invalid keyset key: expected a key of type int or string, bool given"
 ======= dim_elem ===================================
-
-Warning: Cannot use a scalar value as an array in %s on line %d
-string(7) "MISSING"
 string(7) "MISSING"
 string(1) "1"
 string(7) "MISSING"
 Exception: "Invalid keyset key: expected a key of type int or string, bool given"
 ======= dim_define =================================
-Exception: "Invalid operation on keyset"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Invalid operation on keyset"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Invalid operation on keyset"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Invalid operation on keyset"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Invalid keyset key: expected a key of type int or string, bool given"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-======= dim_define_reffy ===========================
 Exception: "Invalid operation on keyset"
 array(2) {
   [0]=>
@@ -329,6 +227,8 @@ Exception: "Invalid operation on keyset"
 Notice: Cannot access property on non-object in %s on line %d
 NULL
 ======= dim_prop_set ===============================
+
+Warning: Cannot access property on non-object in %s/member-ops.php on line %d
 array(2) {
   [0]=>
   NULL
@@ -364,69 +264,6 @@ bool(false)
 bool(true)
 bool(false)
 Exception: "Invalid keyset key: expected a key of type int or string, bool given"
-======= fini_vget ==================================
-Exception: "Keysets cannot contain references"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Keysets cannot contain references"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Keysets cannot contain references"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Keysets cannot contain references"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Invalid keyset key: expected a key of type int or string, bool given"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-======= fini_vget_new_elem =========================
-Exception: "Keysets cannot contain references"
 ======= fini_set ===================================
 Exception: "Invalid operation on keyset"
 array(2) {
@@ -682,69 +519,6 @@ array(2) {
     string(0) ""
   }
 }
-======= fini_bind ==================================
-Exception: "Keysets cannot contain references"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Keysets cannot contain references"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Keysets cannot contain references"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Keysets cannot contain references"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-Exception: "Invalid keyset key: expected a key of type int or string, bool given"
-array(2) {
-  [0]=>
-  NULL
-  [1]=>
-  keyset(4) {
-    int(1)
-    int(2)
-    string(1) "1"
-    string(0) ""
-  }
-}
-======= fini_bind_new_elem =========================
-Exception: "Keysets cannot contain references"
 ======= fini_str_to_arr ============================
 Exception: "Invalid operation on keyset"
 ======= fini_prop_get ===============================

@@ -452,7 +452,7 @@ RegionDescPtr selectHotRegion(TransID transId);
  * information to translate at least one instruction.
  *
  * The `allowInlining' flag should be disabled when we are selecting a tracelet
- * whose shape will be analyzed by the InliningDecider.
+ * whose shape will be analyzed by the inlining decider.
  */
 RegionDescPtr selectTracelet(const RegionContext& ctx, TransKind kind,
                              int32_t maxBCInstrs, bool inlining = false);
@@ -513,8 +513,8 @@ void optimizeGuards(RegionDesc& region, bool simple);
 
 /*
  * Returns the PGO region selector to be used for the given `func'.
- * This depends on the values of RuntimeOption::EvalJitPGORegionSelector
- * and RuntimeOption::EvalJitPGOCFGHotFuncOnly and the given `func'.
+ * This depends on the value of RuntimeOption::EvalJitPGORegionSelector
+ * and the given `func'.
  */
 PGORegionMode pgoRegionMode(const Func& func);
 

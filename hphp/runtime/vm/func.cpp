@@ -64,9 +64,9 @@ namespace HPHP {
 
 TRACE_SET_MOD(hhbc);
 
-const StringData*     Func::s___call       = makeStaticString("__call");
-const StringData*     Func::s___callStatic = makeStaticString("__callStatic");
-std::atomic<bool>     Func::s_treadmill;
+const StaticString s___call("__call");
+
+std::atomic<bool> Func::s_treadmill;
 
 /*
  * FuncId high water mark and FuncId -> Func* table.
@@ -100,14 +100,31 @@ Func::Func(Unit& unit, const StringData* name, Attr attrs)
   , m_isPreFunc(false)
   , m_hasPrivateAncestor(false)
   , m_shouldSampleJit(StructuredLog::coinflip(RuntimeOption::EvalJitSampleRate))
-  , m_hot(false)
   , m_serialized(false)
   , m_hasForeignThis(false)
   , m_unit(&unit)
   , m_shared(nullptr)
   , m_attrs(attrs)
 {
-  assertx(IMPLIES(readsCallerFrame(), isBuiltin() && !isMethod()));
+}
+
+Func::Func(
+  Unit& unit, const StringData* name, Attr attrs,
+  const StringData *methCallerCls, const StringData *methCallerMeth)
+  : m_name(name)
+  , m_methCallerMethName(to_low(methCallerMeth, kMethCallerBit))
+  , m_u(methCallerCls)
+  , m_isPreFunc(false)
+  , m_hasPrivateAncestor(false)
+  , m_shouldSampleJit(StructuredLog::coinflip(RuntimeOption::EvalJitSampleRate))
+  , m_serialized(false)
+  , m_hasForeignThis(false)
+  , m_unit(&unit)
+  , m_shared(nullptr)
+  , m_attrs(attrs)
+{
+  assertx(methCallerCls != nullptr);
+  assertx(methCallerMeth != nullptr);
 }
 
 Func::~Func() {
@@ -132,7 +149,7 @@ void* Func::allocFuncMem(int numParams) {
     sizeof(Func) + numPrologues * sizeof(m_prologueTable[0])
     - sizeof(m_prologueTable);
 
-  return low_malloc(funcSize);
+  return lower_malloc(funcSize);
 }
 
 void Func::destroy(Func* func) {
@@ -158,7 +175,7 @@ void Func::destroy(Func* func) {
     }
   }
   func->~Func();
-  low_free(func);
+  lower_free(func);
 }
 
 void Func::freeClone() {
@@ -199,7 +216,7 @@ Func* Func::clone(Class* cls, const StringData* name) const {
   f->initPrologues(numParams);
   f->m_funcId = InvalidFuncId;
   if (name) f->m_name = name;
-  f->m_cls = cls;
+  f->m_u.setCls(cls);
   f->setFullName(numParams);
 
   if (RuntimeOption::EvalEnableReverseDataMap) {
@@ -215,12 +232,8 @@ Func* Func::clone(Class* cls, const StringData* name) const {
   return f;
 }
 
-void Func::rescope(Class* ctx, Attr attrs) {
-  m_cls = ctx;
-  if (attrs != AttrNone) {
-    m_attrs = attrs;
-    assertx(IMPLIES(readsCallerFrame(), isBuiltin() && !isMethod()));
-  }
+void Func::rescope(Class* ctx) {
+  m_u.setCls(ctx);
   setFullName(numParams());
 }
 
@@ -277,11 +290,11 @@ void Func::initPrologues(int numParams) {
 
 void Func::setFullName(int /*numParams*/) {
   assertx(m_name->isStatic());
-  if (m_cls) {
-    m_fullName = makeStaticString(
-      std::string(m_cls->name()->data()) + "::" + m_name->data());
+  Class *clazz = cls();
+  if (clazz) {
+    m_fullName = (StringData*)kNeedsFullName;
   } else {
-    m_fullName = m_name;
+    m_fullName = m_name.get();
 
     // A scoped closure may not have a `cls', but we still need to preserve its
     // `methodSlot', which refers to its slot in its `baseCls' (which still
@@ -291,9 +304,16 @@ void Func::setFullName(int /*numParams*/) {
     }
   }
 
-  if (!RuntimeOption::RepoAuthoritative &&
-      RuntimeOption::DynamicInvokeFunctions.count(m_fullName->data())) {
-    m_attrs = Attr(m_attrs | AttrInterceptable);
+  if (!RuntimeOption::RepoAuthoritative) {
+    std::string tmp;
+    const char* fn = [&] () -> const char* {
+      if (!clazz) return m_name->data();
+      tmp = std::string(clazz->name()->data()) + "::" + m_name->data();
+      return tmp.data();
+    }();
+    if (RuntimeOption::DynamicInvokeFunctions.count(fn)) {
+      m_attrs = Attr(m_attrs | AttrInterceptable);
+    }
   }
 }
 
@@ -304,8 +324,8 @@ void Func::appendParam(bool ref, const Func::ParamInfo& info,
   // When called by FuncEmitter, the least significant bit of m_paramCounts
   // are not yet being used as a variadic flag, so numParams() cannot be
   // used
-  int qword = numParams / kBitsPerQword;
-  int bit   = numParams % kBitsPerQword;
+  const int qword = numParams / kBitsPerQword;
+  const int bit   = numParams % kBitsPerQword;
   assertx(!info.isVariadic() || (m_attrs & AttrVariadicParam));
   uint64_t* refBits = &m_refBitVal;
   // Grow args, if necessary.
@@ -318,14 +338,10 @@ void Func::appendParam(bool ref, const Func::ParamInfo& info,
   }
 
   if (bit == 0) {
-    // The new word is either zerod or set to 1, depending on whether
-    // we are one of the special builtins that takes variadic
-    // reference arguments.  This is for use in the translator.
-    *refBits = (m_attrs & AttrVariadicByRef) ? -1ull : 0;
+    *refBits = 0;
   }
 
-  assertx(!(*refBits & (uint64_t(1) << bit)) == !(m_attrs & AttrVariadicByRef));
-  *refBits &= ~(1ull << bit);
+  assertx(!(*refBits & (uint64_t(1) << bit)));
   *refBits |= uint64_t(ref) << bit;
   pBuilder.push_back(info);
 }
@@ -337,10 +353,7 @@ void Func::appendParam(bool ref, const Func::ParamInfo& info,
  */
 void Func::finishedEmittingParams(std::vector<ParamInfo>& fParams) {
   assertx(m_paramCounts == 0);
-  if (!fParams.size()) {
-    assertx(!m_refBitVal && !shared()->m_refBitPtr);
-    m_refBitVal = attrs() & AttrVariadicByRef ? -1uLL : 0uLL;
-  }
+  assertx(fParams.size() || (!m_refBitVal && !shared()->m_refBitPtr));
 
   shared()->m_params = fParams;
   m_paramCounts = fParams.size() << 1;
@@ -357,6 +370,18 @@ bool Func::isMemoizeImplName(const StringData* name) {
 
 const StringData* Func::genMemoizeImplName(const StringData* origName) {
   return makeStaticString(folly::sformat("{}$memoize_impl", origName->data()));
+}
+
+std::pair<const StringData*, const StringData*> Func::getMethCallerNames(
+  const StringData* name) {
+  assertx(name->size() > 11 && !memcmp(name->data(), "MethCaller$", 11));
+  auto clsMethName = name->slice();
+  clsMethName.uncheckedAdvance(11);
+  auto const sep = folly::qfind(clsMethName, folly::StringPiece("$"));
+  assertx(sep != std::string::npos);
+  auto cls = clsMethName.uncheckedSubpiece(0, sep);
+  auto meth = clsMethName.uncheckedSubpiece(sep + 1);
+  return std::make_pair(makeStaticString(cls), makeStaticString(meth));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -447,13 +472,14 @@ Offset Func::getEntryForNumArgs(int numArgsPassed) const {
 // Parameters.
 
 bool Func::anyByRef() const {
-  if (m_refBitVal || (m_attrs & AttrVariadicByRef)) {
+  if (m_refBitVal) {
     return true;
   }
 
-  if (UNLIKELY(numParams() >= kBitsPerQword)) {
-    auto limit = ((uint32_t) numParams() / kBitsPerQword);
-    for (int i = 0; i < limit; ++i) {
+  if (UNLIKELY(numParams() > kBitsPerQword)) {
+    auto limit = argToQword(numParams() - 1);
+    assertx(limit >= 0);
+    for (int i = 0; i <= limit; ++i) {
       if (shared()->m_refBitPtr[i]) {
         return true;
       }
@@ -466,12 +492,10 @@ bool Func::byRef(int32_t arg) const {
   const uint64_t* ref = &m_refBitVal;
   assertx(arg >= 0);
   if (UNLIKELY(arg >= kBitsPerQword)) {
-    // Super special case. A handful of builtins are varargs functions where the
-    // (not formally declared) varargs are pass-by-reference. psychedelic-kitten
     if (arg >= numParams()) {
-      return m_attrs & AttrVariadicByRef;
+      return false;
     }
-    ref = &shared()->m_refBitPtr[(uint32_t)arg / kBitsPerQword - 1];
+    ref = &shared()->m_refBitPtr[argToQword(arg)];
   }
   int bit = (uint32_t)arg % kBitsPerQword;
   return *ref & (1ull << bit);
@@ -493,9 +517,7 @@ bool Func::isImmutableFrom(const Class* cls) const {
   if (!RuntimeOption::RepoAuthoritative) return false;
   assertx(cls && cls->lookupMethod(name()) == this);
   if (attrs() & AttrNoOverride) {
-    // Even if the func isn't overridden, we clone it into
-    // any derived classes if it has static locals
-    if (!hasStaticLocals()) return true;
+    return true;
   }
   if (cls->preClass()->attrs() & AttrNoOverride) {
     return true;
@@ -562,7 +584,7 @@ void Func::resetFuncBody() {
 // Reified Generics
 
 namespace {
-const ReifiedGenericsInfo k_defaultReifiedGenericsInfo{0, {}};
+const ReifiedGenericsInfo k_defaultReifiedGenericsInfo{0, false, 0, {}};
 } // namespace
 
 const ReifiedGenericsInfo& Func::getReifiedGenericsInfo() const {
@@ -588,12 +610,11 @@ void Func::print_attrs(std::ostream& out, Attr attrs) {
   if (attrs & AttrMayUseVV) { out << " (mayusevv)"; }
   if (attrs & AttrRequiresThis) { out << " (requiresthis)"; }
   if (attrs & AttrBuiltin) { out << " (builtin)"; }
-  if (attrs & AttrReadsCallerFrame) { out << " (reads_caller_frame)"; }
-  if (attrs & AttrSkipFrame) { out << " (skip_frame)"; }
   if (attrs & AttrIsFoldable) { out << " (foldable)"; }
   if (attrs & AttrNoInjection) { out << " (no_injection)"; }
   if (attrs & AttrSupportsAsyncEagerReturn) { out << " (can_async_eager_ret)"; }
   if (attrs & AttrDynamicallyCallable) { out << " (dyn_callable)"; }
+  if (attrs & AttrIsMethCaller) { out << " (is_meth_caller)"; }
   auto rxAttrString = rxAttrsToAttrString(attrs);
   if (rxAttrString) out << " (" << rxAttrString << ")";
 }
@@ -607,7 +628,6 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
     if (isPhpLeafFn()) out << " (leaf)";
     if (isMemoizeWrapper()) out << " (memoize_wrapper)";
     if (isMemoizeWrapperLSB()) out << " (memoize_wrapper_lsb)";
-    if (isHot()) out << " (hot)";
     if (cls() != nullptr) {
       out << ' ' << fullName()->data();
     } else {
@@ -619,7 +639,6 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
     if (isPhpLeafFn()) out << " (leaf)";
     if (isMemoizeWrapper()) out << " (memoize_wrapper)";
     if (isMemoizeWrapperLSB()) out << " (memoize_wrapper_lsb)";
-    if (isHot()) out << " (hot)";
     out << ' ' << m_name->data();
   }
 
@@ -667,14 +686,12 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
   }
   out << "maxStackCells: " << maxStackCells() << '\n'
       << "numLocals: " << numLocals() << '\n'
-      << "numIterators: " << numIterators() << '\n'
-      << "numClsRefSlots: " << numClsRefSlots() << '\n';
+      << "numIterators: " << numIterators() << '\n';
 
   const EHEntVec& ehtab = shared()->m_ehtab;
   size_t ehId = 0;
   for (auto it = ehtab.begin(); it != ehtab.end(); ++it, ++ehId) {
-    bool catcher = it->m_type == EHEnt::Type::Catch;
-    out << " EH " << ehId << " " << (catcher ? "Catch" : "Fault") << " for " <<
+    out << " EH " << ehId << " Catch for " <<
       it->m_base << ":" << it->m_past;
     if (it->m_parentIndex != -1) {
       out << " outer EH " << it->m_parentIndex;
@@ -730,10 +747,8 @@ Func::SharedData::SharedData(PreClass* preClass, Offset base, Offset past,
   , m_isMemoizeWrapper(false)
   , m_isMemoizeWrapperLSB(false)
   , m_isPhpLeafFn(isPhpLeafFn)
-  , m_takesNumArgs(false)
   , m_hasReifiedGenerics(false)
   , m_isRxDisabled(false)
-  , m_numClsRefSlots(0)
   , m_originalFilename(nullptr)
 {
   m_pastDelta = std::min<uint32_t>(past - base, kSmallDeltaLimit);
@@ -754,325 +769,6 @@ void Func::SharedData::atomicRelease() {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-namespace {
-
-using FuncSet = std::unordered_set<std::string,string_hashi,string_eqstri>;
-
-/*
- * This is a conservative list of functions that we are certain won't inspect
- * the caller frame (generally by either CallerFrame or vm_call_user_func).
- */
-FuncSet s_ignores_frame = {
-  "array_key_exists",
-  "key_exists",
-  "array_keys",
-  "array_pop",
-  "array_push",
-  "array_rand",
-  "array_search",
-  "array_shift",
-  "array_slice",
-  "array_splice",
-  "array_unique",
-  "array_unshift",
-  "array_values",
-  "compact",
-  "shuffle",
-  "count",
-  "sizeof",
-  "each",
-  "current",
-  "in_array",
-  "range",
-  "sort",
-  "rsort",
-  "asort",
-  "arsort",
-  "ksort",
-  "krsort",
-  "natsort",
-  "natcasesort",
-  "hphp_array_idx",
-  "ctype_alnum",
-  "ctype_alpha",
-  "ctype_cntrl",
-  "ctype_digit",
-  "ctype_graph",
-  "ctype_lower",
-  "ctype_print",
-  "ctype_punct",
-  "ctype_space",
-  "ctype_upper",
-  "ctype_xdigit",
-  "fb_serialize",
-  "fb_unserialize",
-  "fb_compact_serialize",
-  "fb_compact_unserialize",
-  "fb_utf8ize",
-  "fb_utf8_strlen",
-  "fb_utf8_strlen_deprecated",
-  "fb_utf8_substr",
-  "fb_get_code_coverage",
-  "fb_output_compression",
-  "fb_set_exit_callback",
-  "fb_get_last_flush_size",
-  "fb_lazy_lstat",
-  "fb_lazy_realpath",
-  "HH\\non_crypto_md5_upper",
-  "HH\\non_crypto_md5_lower",
-  "hash",
-  "hash_algos",
-  "hash_file",
-  "hash_final",
-  "hash_init",
-  "hash_update",
-  "hash_copy",
-  "hash_equals",
-  "furchash_hphp_ext",
-  "hphp_murmurhash",
-  "get_declared_classes",
-  "get_declared_interfaces",
-  "get_declared_traits",
-  "class_alias",
-  "class_exists",
-  "interface_exists",
-  "trait_exists",
-  "enum_exists",
-  "get_class_methods",
-  "get_class_constants",
-  "is_a",
-  "is_subclass_of",
-  "method_exists",
-  "property_exists",
-  "error_log",
-  "error_reporting",
-  "restore_error_handler",
-  "restore_exception_handler",
-  "set_error_handler",
-  "set_exception_handler",
-  "hphp_set_error_page",
-  "hphp_clear_unflushed",
-  "get_defined_functions",
-  "function_exists",
-  "min",
-  "max",
-  "abs",
-  "is_finite",
-  "is_infinite",
-  "is_nan",
-  "ceil",
-  "floor",
-  "round",
-  "deg2rad",
-  "rad2deg",
-  "decbin",
-  "dechex",
-  "decoct",
-  "bindec",
-  "hexdec",
-  "octdec",
-  "base_convert",
-  "pow",
-  "exp",
-  "expm1",
-  "log10",
-  "log1p",
-  "log",
-  "cos",
-  "cosh",
-  "sin",
-  "sinh",
-  "tan",
-  "tanh",
-  "acos",
-  "acosh",
-  "asin",
-  "asinh",
-  "atan",
-  "atanh",
-  "atan2",
-  "hypot",
-  "fmod",
-  "sqrt",
-  "getrandmax",
-  "srand",
-  "rand",
-  "mt_getrandmax",
-  "mt_srand",
-  "mt_rand",
-  "lcg_value",
-  "intdiv",
-  "flush",
-  "hphp_crash_log",
-  "hphp_stats",
-  "hphp_get_stats",
-  "hphp_get_status",
-  "hphp_get_iostatus",
-  "hphp_set_iostatus_address",
-  "hphp_get_timers",
-  "hphp_output_global_state",
-  "hphp_instruction_counter",
-  "hphp_get_hardware_counters",
-  "hphp_set_hardware_events",
-  "hphp_clear_hardware_events",
-  "wordwrap",
-  "sprintf",
-  "is_null",
-  "is_bool",
-  "is_int",
-  "is_float",
-  "is_numeric",
-  "is_string",
-  "is_scalar",
-  "is_array",
-  "HH\\is_vec",
-  "HH\\is_dict",
-  "HH\\is_keyset",
-  "HH\\is_varray",
-  "HH\\is_darray",
-  "is_object",
-  "is_resource",
-  "boolval",
-  "intval",
-  "floatval",
-  "strval",
-  "gettype",
-  "get_resource_type",
-  "settype",
-  "serialize",
-  "unserialize",
-  "addcslashes",
-  "stripcslashes",
-  "addslashes",
-  "stripslashes",
-  "bin2hex",
-  "hex2bin",
-  "nl2br",
-  "quotemeta",
-  "str_shuffle",
-  "strrev",
-  "strtolower",
-  "strtoupper",
-  "ucfirst",
-  "lcfirst",
-  "ucwords",
-  "strip_tags",
-  "trim",
-  "ltrim",
-  "rtrim",
-  "chop",
-  "explode",
-  "implode",
-  "join",
-  "str_split",
-  "chunk_split",
-  "strtok",
-  "str_replace",
-  "str_ireplace",
-  "substr_replace",
-  "substr",
-  "str_pad",
-  "str_repeat",
-  "html_entity_decode",
-  "htmlentities",
-  "htmlspecialchars_decode",
-  "htmlspecialchars",
-  "fb_htmlspecialchars",
-  "quoted_printable_encode",
-  "quoted_printable_decode",
-  "convert_uudecode",
-  "convert_uuencode",
-  "str_rot13",
-  "crc32",
-  "crypt",
-  "md5",
-  "sha1",
-  "strtr",
-  "convert_cyr_string",
-  "get_html_translation_table",
-  "hebrev",
-  "hebrevc",
-  "setlocale",
-  "localeconv",
-  "nl_langinfo",
-  "chr",
-  "ord",
-  "money_format",
-  "number_format",
-  "strcmp",
-  "strncmp",
-  "strnatcmp",
-  "strcasecmp",
-  "strncasecmp",
-  "strnatcasecmp",
-  "strcoll",
-  "substr_compare",
-  "strchr",
-  "strrchr",
-  "strstr",
-  "stristr",
-  "strpbrk",
-  "strpos",
-  "stripos",
-  "strrpos",
-  "strripos",
-  "substr_count",
-  "strspn",
-  "strcspn",
-  "strlen",
-  "str_getcsv",
-  "count_chars",
-  "str_word_count",
-  "levenshtein",
-  "similar_text",
-  "soundex",
-  "metaphone",
-  "base64_decode",
-  "base64_encode",
-  "get_headers",
-  "get_meta_tags",
-  "http_build_query",
-  "parse_url",
-  "rawurldecode",
-  "rawurlencode",
-  "urldecode",
-  "urlencode",
-  "HH\\vec",
-  "HH\\dict",
-  "HH\\keyset",
-  "HH\\varray",
-  "HH\\darray",
-  "HH\\array_key_cast"
-};
-
-}
-
-bool disallowDynamicVarEnvFuncs() {
-  return RuntimeOption::DisallowDynamicVarEnvFuncs == HackStrictOption::ON;
-}
-
-bool funcReadsLocals(const Func* callee) {
-  assertx(callee != nullptr);
-
-  // A skip-frame function can dynamically call a function which reads from the
-  // caller's frame. If we don't forbid such dynamic calls, we have to be
-  // pessimistic.
-  if (callee->isSkipFrame() && !disallowDynamicVarEnvFuncs()) {
-    return true;
-  }
-
-  return callee->readsCallerFrame();
-}
-
-bool funcNeedsCallerFrame(const Func* callee) {
-  assertx(callee != nullptr);
-
-  return
-    (callee->isCPPBuiltin() &&
-      s_ignores_frame.count(callee->name()->data()) == 0) ||
-    funcReadsLocals(callee);
-}
-
 void logFunc(const Func* func, StructuredLogEntry& ent) {
   auto const attrs = attrs_to_vec(AttrContext::Func, func->attrs());
   std::set<folly::StringPiece> attrSet(attrs.begin(), attrs.end());
@@ -1085,8 +781,6 @@ void logFunc(const Func* func, StructuredLogEntry& ent) {
   if (func->isClosureBody()) attrSet.emplace("closure_body");
   if (func->isPairGenerator()) attrSet.emplace("pair_generator");
   if (func->hasVariadicCaptureParam()) attrSet.emplace("variadic_param");
-  if (func->hasStaticLocals()) attrSet.emplace("has_statics");
-  if (func->isHot()) attrSet.emplace("hot");
   if (func->attrs() & AttrMayUseVV) attrSet.emplace("may_use_vv");
   if (func->attrs() & AttrRequiresThis) attrSet.emplace("must_have_this");
   if (func->isPhpLeafFn()) attrSet.emplace("leaf_function");
@@ -1097,11 +791,9 @@ void logFunc(const Func* func, StructuredLogEntry& ent) {
   ent.setInt("num_params", func->numNonVariadicParams());
   ent.setInt("num_locals", func->numLocals());
   ent.setInt("num_named_locals", func->numNamedLocals());
-  ent.setInt("num_class_refs", func->numClsRefSlots());
   ent.setInt("num_iterators", func->numIterators());
   ent.setInt("frame_cells", func->numSlotsInFrame());
   ent.setInt("max_stack_cells", func->maxStackCells());
-  ent.setInt("num_static_locals", func->numStaticLocals());
 }
 
 ///////////////////////////////////////////////////////////////////////////////

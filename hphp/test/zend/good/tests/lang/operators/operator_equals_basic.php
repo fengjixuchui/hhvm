@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $valid_true = array(1, "1", "true", 1.0, array(1));
 $valid_false = array(0, "", 0.0, array(), NULL);
 
@@ -55,5 +55,5 @@ if ($failed == false) {
    echo "Test Passed\n";
 }
    
-?>
-===DONE===
+echo "===DONE===\n";
+}

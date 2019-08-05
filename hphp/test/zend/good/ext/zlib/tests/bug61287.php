@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $array = array(
     'region_id' => 1,
     'discipline' => 23,
@@ -12,5 +12,5 @@ $deflated = gzdeflate($serialized, 9);
 $inflated = gzinflate($deflated);
 
 echo strlen($inflated),"\n";
-?>
-Done
+echo "Done";
+}

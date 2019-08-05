@@ -32,11 +32,26 @@ module type State_S = sig
   val next : t -> r list -> t
 end
 
+module type RustParser_S = sig
+  type t
+  type r
+  val rust_parse :
+    Full_fidelity_source_text.t ->
+    ParserEnv.t ->
+    t * r * Full_fidelity_syntax_error.t list
+end
+
 module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
   module WithState(State : State_S with type r = Syntax.t) = struct
+  module WithRustParser(RustParser : RustParser_S
+   with type t = State.t
+   with type r = Syntax.t
+  ) = struct
     module Token = Syntax.Token
     type t = State.t [@@deriving show]
     type r = Syntax.t [@@deriving show]
+
+    let rust_parse = RustParser.rust_parse
 
     let initial_state = State.initial
     let make_token token state = State.next state [], Syntax.make_token token
@@ -56,6 +71,8 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     let make_file_attribute_specification arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_file_attribute_specification arg0 arg1 arg2 arg3 arg4
     let make_enum_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8], Syntax.make_enum_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8
     let make_enumerator arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_enumerator arg0 arg1 arg2 arg3
+    let make_record_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8], Syntax.make_record_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8
+    let make_record_field arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_record_field arg0 arg1 arg2 arg3 arg4
     let make_alias_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7], Syntax.make_alias_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7
     let make_property_declaration arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_property_declaration arg0 arg1 arg2 arg3 arg4
     let make_property_declarator arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_property_declarator arg0 arg1
@@ -71,24 +88,25 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     let make_where_constraint arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_where_constraint arg0 arg1 arg2
     let make_methodish_declaration arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_methodish_declaration arg0 arg1 arg2 arg3
     let make_methodish_trait_resolution arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_methodish_trait_resolution arg0 arg1 arg2 arg3 arg4
-    let make_classish_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9], Syntax.make_classish_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9
+    let make_classish_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9; arg10], Syntax.make_classish_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10
     let make_classish_body arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_classish_body arg0 arg1 arg2
     let make_trait_use_precedence_item arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_trait_use_precedence_item arg0 arg1 arg2
     let make_trait_use_alias_item arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_trait_use_alias_item arg0 arg1 arg2 arg3
     let make_trait_use_conflict_resolution arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_trait_use_conflict_resolution arg0 arg1 arg2 arg3 arg4
     let make_trait_use arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_trait_use arg0 arg1 arg2
     let make_require_clause arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_require_clause arg0 arg1 arg2 arg3
-    let make_const_declaration arg0 arg1 arg2 arg3 arg4 arg5 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5], Syntax.make_const_declaration arg0 arg1 arg2 arg3 arg4 arg5
+    let make_const_declaration arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_const_declaration arg0 arg1 arg2 arg3 arg4
     let make_constant_declarator arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_constant_declarator arg0 arg1
     let make_type_const_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9], Syntax.make_type_const_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9
     let make_decorated_expression arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_decorated_expression arg0 arg1
     let make_parameter_declaration arg0 arg1 arg2 arg3 arg4 arg5 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5], Syntax.make_parameter_declaration arg0 arg1 arg2 arg3 arg4 arg5
     let make_variadic_parameter arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_variadic_parameter arg0 arg1 arg2
-    let make_attribute_specification arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_attribute_specification arg0 arg1 arg2
+    let make_old_attribute_specification arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_old_attribute_specification arg0 arg1 arg2
+    let make_attribute_specification arg0 state = State.next state [arg0], Syntax.make_attribute_specification arg0
+    let make_attribute arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_attribute arg0 arg1
     let make_inclusion_expression arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_inclusion_expression arg0 arg1
     let make_inclusion_directive arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_inclusion_directive arg0 arg1
     let make_compound_statement arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_compound_statement arg0 arg1 arg2
-    let make_alternate_loop_statement arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_alternate_loop_statement arg0 arg1 arg2 arg3
     let make_expression_statement arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_expression_statement arg0 arg1
     let make_markup_section arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_markup_section arg0 arg1 arg2 arg3
     let make_markup_suffix arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_markup_suffix arg0 arg1
@@ -96,15 +114,10 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     let make_let_statement arg0 arg1 arg2 arg3 arg4 arg5 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5], Syntax.make_let_statement arg0 arg1 arg2 arg3 arg4 arg5
     let make_using_statement_block_scoped arg0 arg1 arg2 arg3 arg4 arg5 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5], Syntax.make_using_statement_block_scoped arg0 arg1 arg2 arg3 arg4 arg5
     let make_using_statement_function_scoped arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_using_statement_function_scoped arg0 arg1 arg2 arg3
-    let make_declare_directive_statement arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_declare_directive_statement arg0 arg1 arg2 arg3 arg4
-    let make_declare_block_statement arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_declare_block_statement arg0 arg1 arg2 arg3 arg4
     let make_while_statement arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_while_statement arg0 arg1 arg2 arg3 arg4
     let make_if_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6], Syntax.make_if_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6
     let make_elseif_clause arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_elseif_clause arg0 arg1 arg2 arg3 arg4
     let make_else_clause arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_else_clause arg0 arg1
-    let make_alternate_if_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9], Syntax.make_alternate_if_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9
-    let make_alternate_elseif_clause arg0 arg1 arg2 arg3 arg4 arg5 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5], Syntax.make_alternate_elseif_clause arg0 arg1 arg2 arg3 arg4 arg5
-    let make_alternate_else_clause arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_alternate_else_clause arg0 arg1 arg2
     let make_try_statement arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_try_statement arg0 arg1 arg2 arg3
     let make_catch_clause arg0 arg1 arg2 arg3 arg4 arg5 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5], Syntax.make_catch_clause arg0 arg1 arg2 arg3 arg4 arg5
     let make_finally_clause arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_finally_clause arg0 arg1
@@ -112,7 +125,6 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     let make_for_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8], Syntax.make_for_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8
     let make_foreach_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9], Syntax.make_foreach_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9
     let make_switch_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6], Syntax.make_switch_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6
-    let make_alternate_switch_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7], Syntax.make_alternate_switch_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7
     let make_switch_section arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_switch_section arg0 arg1 arg2
     let make_switch_fallthrough arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_switch_fallthrough arg0 arg1
     let make_case_label arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_case_label arg0 arg1 arg2
@@ -123,15 +135,11 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     let make_throw_statement arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_throw_statement arg0 arg1 arg2
     let make_break_statement arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_break_statement arg0 arg1 arg2
     let make_continue_statement arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_continue_statement arg0 arg1 arg2
-    let make_function_static_statement arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_function_static_statement arg0 arg1 arg2
-    let make_static_declarator arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_static_declarator arg0 arg1
     let make_echo_statement arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_echo_statement arg0 arg1 arg2
-    let make_global_statement arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_global_statement arg0 arg1 arg2
     let make_concurrent_statement arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_concurrent_statement arg0 arg1
     let make_simple_initializer arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_simple_initializer arg0 arg1
     let make_anonymous_class arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8], Syntax.make_anonymous_class arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8
     let make_anonymous_function arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9; arg10; arg11], Syntax.make_anonymous_function arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11
-    let make_php7_anonymous_function arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5; arg6; arg7; arg8; arg9; arg10; arg11], Syntax.make_php7_anonymous_function arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11
     let make_anonymous_function_use_clause arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_anonymous_function_use_clause arg0 arg1 arg2 arg3
     let make_lambda_expression arg0 arg1 arg2 arg3 arg4 arg5 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5], Syntax.make_lambda_expression arg0 arg1 arg2 arg3 arg4 arg5
     let make_lambda_signature arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_lambda_signature arg0 arg1 arg2 arg3 arg4
@@ -145,18 +153,15 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     let make_prefix_unary_expression arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_prefix_unary_expression arg0 arg1
     let make_postfix_unary_expression arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_postfix_unary_expression arg0 arg1
     let make_binary_expression arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_binary_expression arg0 arg1 arg2
-    let make_instanceof_expression arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_instanceof_expression arg0 arg1 arg2
     let make_is_expression arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_is_expression arg0 arg1 arg2
     let make_as_expression arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_as_expression arg0 arg1 arg2
     let make_nullable_as_expression arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_nullable_as_expression arg0 arg1 arg2
     let make_conditional_expression arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_conditional_expression arg0 arg1 arg2 arg3 arg4
     let make_eval_expression arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_eval_expression arg0 arg1 arg2 arg3
-    let make_empty_expression arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_empty_expression arg0 arg1 arg2 arg3
     let make_define_expression arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_define_expression arg0 arg1 arg2 arg3
     let make_halt_compiler_expression arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_halt_compiler_expression arg0 arg1 arg2 arg3
     let make_isset_expression arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_isset_expression arg0 arg1 arg2 arg3
-    let make_function_call_expression arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_function_call_expression arg0 arg1 arg2 arg3
-    let make_function_call_with_type_arguments_expression arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_function_call_with_type_arguments_expression arg0 arg1 arg2 arg3 arg4
+    let make_function_call_expression arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_function_call_expression arg0 arg1 arg2 arg3 arg4
     let make_parenthesized_expression arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_parenthesized_expression arg0 arg1 arg2
     let make_braced_expression arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_braced_expression arg0 arg1 arg2
     let make_embedded_braced_expression arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_embedded_braced_expression arg0 arg1 arg2
@@ -164,6 +169,7 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     let make_collection_literal_expression arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_collection_literal_expression arg0 arg1 arg2 arg3
     let make_object_creation_expression arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_object_creation_expression arg0 arg1
     let make_constructor_call arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_constructor_call arg0 arg1 arg2 arg3
+    let make_record_creation_expression arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_record_creation_expression arg0 arg1 arg2 arg3 arg4
     let make_array_creation_expression arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_array_creation_expression arg0 arg1 arg2
     let make_array_intrinsic_expression arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_array_intrinsic_expression arg0 arg1 arg2 arg3
     let make_darray_intrinsic_expression arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_darray_intrinsic_expression arg0 arg1 arg2 arg3 arg4
@@ -179,6 +185,7 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     let make_xhp_children_parenthesized_list arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_xhp_children_parenthesized_list arg0 arg1 arg2
     let make_xhp_category_declaration arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_xhp_category_declaration arg0 arg1 arg2
     let make_xhp_enum_type arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_xhp_enum_type arg0 arg1 arg2 arg3 arg4
+    let make_xhp_lateinit arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_xhp_lateinit arg0 arg1
     let make_xhp_required arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_xhp_required arg0 arg1
     let make_xhp_class_attribute_declaration arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_xhp_class_attribute_declaration arg0 arg1 arg2
     let make_xhp_class_attribute arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_xhp_class_attribute arg0 arg1 arg2 arg3
@@ -209,21 +216,25 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     let make_tuple_expression arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_tuple_expression arg0 arg1 arg2 arg3
     let make_generic_type_specifier arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_generic_type_specifier arg0 arg1
     let make_nullable_type_specifier arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_nullable_type_specifier arg0 arg1
+    let make_like_type_specifier arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_like_type_specifier arg0 arg1
     let make_soft_type_specifier arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_soft_type_specifier arg0 arg1
+    let make_attributized_specifier arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_attributized_specifier arg0 arg1
     let make_reified_type_argument arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_reified_type_argument arg0 arg1
     let make_type_arguments arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_type_arguments arg0 arg1 arg2
     let make_type_parameters arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_type_parameters arg0 arg1 arg2
     let make_tuple_type_specifier arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_tuple_type_specifier arg0 arg1 arg2
     let make_error arg0 state = State.next state [arg0], Syntax.make_error arg0
     let make_list_item arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_list_item arg0 arg1
-    let make_pocket_atom_expression arg0 state = State.next state [arg0], Syntax.make_pocket_atom_expression arg0
-    let make_pocket_atom_mapping_declaration arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_pocket_atom_mapping_declaration arg0 arg1 arg2 arg3 arg4
+    let make_pocket_atom_expression arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_pocket_atom_expression arg0 arg1
+    let make_pocket_identifier_expression arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_pocket_identifier_expression arg0 arg1 arg2 arg3 arg4
+    let make_pocket_atom_mapping_declaration arg0 arg1 arg2 arg3 arg4 arg5 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5], Syntax.make_pocket_atom_mapping_declaration arg0 arg1 arg2 arg3 arg4 arg5
     let make_pocket_enum_declaration arg0 arg1 arg2 arg3 arg4 arg5 state = State.next state [arg0; arg1; arg2; arg3; arg4; arg5], Syntax.make_pocket_enum_declaration arg0 arg1 arg2 arg3 arg4 arg5
     let make_pocket_field_type_expr_declaration arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_pocket_field_type_expr_declaration arg0 arg1 arg2 arg3
     let make_pocket_field_type_declaration arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_pocket_field_type_declaration arg0 arg1 arg2 arg3
     let make_pocket_mapping_id_declaration arg0 arg1 state = State.next state [arg0; arg1], Syntax.make_pocket_mapping_id_declaration arg0 arg1
     let make_pocket_mapping_type_declaration arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_pocket_mapping_type_declaration arg0 arg1 arg2 arg3
 
+  end (* WithRustParser *)
   end (* WithState *)
 
   include WithState(
@@ -234,4 +245,13 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
       let next () _ = ()
     end
   )
+
+  include WithRustParser(
+    struct
+      type r = Syntax.t
+      type t = unit
+      let rust_parse = Syntax.rust_parse
+    end
+  )
+
 end (* WithSyntax *)

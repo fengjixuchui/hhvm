@@ -35,7 +35,6 @@
 
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/runtime-option.h"
-#include "hphp/runtime/base/rds-local.h"
 #include "hphp/runtime/base/vm-worker.h"
 #include "hphp/hhvm/process-init.h"
 #include "hphp/runtime/vm/native.h"
@@ -44,8 +43,11 @@
 #include "hphp/runtime/vm/treadmill.h"
 
 #include "hphp/hhbbc/misc.h"
+#include "hphp/hhbbc/options.h"
 #include "hphp/hhbbc/stats.h"
 #include "hphp/hhbbc/parallel.h"
+
+#include "hphp/util/rds-local.h"
 
 namespace HPHP { namespace HHBBC {
 
@@ -136,6 +138,10 @@ void parse_options(int argc, char** argv) {
     ("parallel-num-threads",
       po::value(&parallel::num_threads)->default_value(defaultThreadCount),
       "Number of threads to use for parallelism")
+    ("parallel-final-threads",
+      po::value(&parallel::final_threads)->default_value(
+        parallel::final_threads),
+      "Number of threads to use for the final pass")
     ("parallel-work-size",
       po::value(&parallel::work_chunk)->default_value(120),
       "Work unit size for parallelism")
@@ -168,11 +174,9 @@ void parse_options(int argc, char** argv) {
     ("remove-dead-blocks",      po::value(&options.RemoveDeadBlocks))
     ("constant-prop",           po::value(&options.ConstantProp))
     ("constant-fold-builtins",  po::value(&options.ConstantFoldBuiltins))
-    ("peephole",                po::value(&options.Peephole))
     ("local-dce",               po::value(&options.LocalDCE))
     ("global-dce",              po::value(&options.GlobalDCE))
     ("remove-unused-locals",    po::value(&options.RemoveUnusedLocals))
-    ("remove-unused-clsref-slots", po::value(&options.RemoveUnusedClsRefSlots))
     ("insert-assertions",       po::value(&options.InsertAssertions))
     ("insert-stack-assertions", po::value(&options.InsertStackAssertions))
     ("filter-assertions",       po::value(&options.FilterAssertions))
@@ -251,11 +255,6 @@ UNUSED void validate_options() {
     std::cerr << "-fremove-unused-locals requires -fglobal-dce\n";
     std::exit(1);
   }
-
-  if (options.RemoveUnusedClsRefSlots && !options.GlobalDCE) {
-    std::cerr << "-fremove-unused-clsref-slots requires -fglobal-dce\n";
-    std::exit(1);
-  }
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -280,14 +279,18 @@ std::pair<std::vector<std::unique_ptr<UnitEmitter>>,
   // When running hhvm, these option is not loaded from GD, but read from CLI.
   RuntimeOption::EvalJitEnableRenameFunction = gd.EnableRenameFunction;
   RuntimeOption::EvalHackArrCompatNotices =
-    RuntimeOption::EvalHackArrCompatCheckIntishCast =
     RuntimeOption::EvalHackArrCompatCheckRefBind =
     RuntimeOption::EvalHackArrCompatCheckFalseyPromote =
     RuntimeOption::EvalHackArrCompatCheckCompare =
     RuntimeOption::EvalHackArrCompatCheckArrayPlus =
     RuntimeOption::EvalHackArrCompatCheckArrayKeyCast =
       gd.HackArrCompatNotices;
-  RuntimeOption::EvalForbidDynamicCalls      = gd.ForbidDynamicCalls;
+  RuntimeOption::EvalForbidDynamicCallsToFunc = gd.ForbidDynamicCallsToFunc;
+  RuntimeOption::EvalForbidDynamicCallsToClsMeth =
+    gd.ForbidDynamicCallsToClsMeth;
+  RuntimeOption::EvalForbidDynamicCallsToInstMeth =
+    gd.ForbidDynamicCallsToInstMeth;
+  RuntimeOption::EvalForbidDynamicConstructs = gd.ForbidDynamicConstructs;
   RuntimeOption::EvalNoticeOnBuiltinDynamicCalls =
     gd.NoticeOnBuiltinDynamicCalls;
   RuntimeOption::EvalHackArrCompatIsArrayNotices =
@@ -299,13 +302,17 @@ std::pair<std::vector<std::unique_ptr<UnitEmitter>>,
   RuntimeOption::EvalHackArrCompatSerializeNotices =
     gd.HackArrCompatSerializeNotices;
   RuntimeOption::EvalHackArrDVArrs = gd.HackArrDVArrs;
-  RuntimeOption::EvalEnableIntishCast = gd.EnableIntishCast;
   RuntimeOption::EvalAbortBuildOnVerifyError = gd.AbortBuildOnVerifyError;
-  RuntimeOption::UndefinedConstFallback = gd.UndefinedConstFallback;
-  RuntimeOption::UndefinedFunctionFallback = gd.UndefinedFunctionFallback;
+  RuntimeOption::EnableArgsInBacktraces = gd.EnableArgsInBacktraces;
+  RuntimeOption::EvalEmitClsMethPointers = gd.EmitClsMethPointers;
+  RuntimeOption::EvalIsVecNotices = gd.IsVecNotices;
+  RuntimeOption::EvalIsCompatibleClsMethType = gd.IsCompatibleClsMethType;
+  RuntimeOption::EvalArrayProvenance = gd.ArrayProvenance;
+  RuntimeOption::StrictArrayFillKeys = gd.StrictArrayFillKeys;
+
   return {
-    parallel::map(Repo::get().enumerateUnits(RepoIdCentral, false, true),
-      [&] (const std::pair<std::string,MD5>& kv) {
+    parallel::map(Repo::get().enumerateUnits(RepoIdCentral, true),
+      [&] (const std::pair<std::string,SHA1>& kv) {
         return Repo::get().urp().loadEmitter(
           kv.first, kv.second, Native::s_noNativeFuncs
         );
@@ -348,19 +355,13 @@ void write_global_data(
     );
 
   auto gd                        = Repo::GlobalData{};
-  gd.UsedHHBBC                   = true;
   gd.Signature                   = nanos.count();
-  gd.EnableHipHopSyntax          = RuntimeOption::EnableHipHopSyntax;
-  gd.HardTypeHints               = RuntimeOption::EvalHardTypeHints;
   gd.ThisTypeHintLevel           = RuntimeOption::EvalThisTypeHintLevel;
   gd.HardReturnTypeHints         = RuntimeOption::EvalCheckReturnTypeHints >= 3;
   gd.CheckPropTypeHints          = RuntimeOption::EvalCheckPropTypeHints;
   gd.HardPrivatePropInference    = options.HardPrivatePropInference;
-  gd.DisallowDynamicVarEnvFuncs  = RuntimeOption::DisallowDynamicVarEnvFuncs;
-  gd.ElideAutoloadInvokes        = options.ElideAutoloadInvokes;
   gd.PHP7_IntSemantics           = RuntimeOption::PHP7_IntSemantics;
   gd.PHP7_NoHexNumerics          = RuntimeOption::PHP7_NoHexNumerics;
-  gd.PHP7_ScalarTypes            = RuntimeOption::PHP7_ScalarTypes;
   gd.PHP7_Substr                 = RuntimeOption::PHP7_Substr;
   gd.PHP7_Builtins               = RuntimeOption::PHP7_Builtins;
   gd.PromoteEmptyObject          = RuntimeOption::EvalPromoteEmptyObject;
@@ -369,10 +370,14 @@ void write_global_data(
   gd.EnableIntrinsicsExtension   = RuntimeOption::EnableIntrinsicsExtension;
   gd.APCProfile                  = std::move(apcProfile);
   gd.ReffinessInvariance         = RuntimeOption::EvalReffinessInvariance;
-  gd.ForbidDynamicCalls          = RuntimeOption::EvalForbidDynamicCalls;
+  gd.ForbidDynamicCallsToFunc    = RuntimeOption::EvalForbidDynamicCallsToFunc;
+  gd.ForbidDynamicCallsToClsMeth =
+    RuntimeOption::EvalForbidDynamicCallsToClsMeth;
+  gd.ForbidDynamicCallsToInstMeth =
+    RuntimeOption::EvalForbidDynamicCallsToInstMeth;
+  gd.ForbidDynamicConstructs     = RuntimeOption::EvalForbidDynamicConstructs;
   gd.AbortBuildOnVerifyError     = RuntimeOption::EvalAbortBuildOnVerifyError;
-  gd.UndefinedConstFallback      = RuntimeOption::UndefinedConstFallback;
-  gd.UndefinedFunctionFallback   = RuntimeOption::UndefinedFunctionFallback;
+  gd.EnableArgsInBacktraces      = RuntimeOption::EnableArgsInBacktraces;
   gd.NoticeOnBuiltinDynamicCalls =
     RuntimeOption::EvalNoticeOnBuiltinDynamicCalls;
   gd.HackArrCompatIsArrayNotices =
@@ -384,11 +389,16 @@ void write_global_data(
   gd.HackArrCompatSerializeNotices =
     RuntimeOption::EvalHackArrCompatSerializeNotices;
   gd.HackArrDVArrs = RuntimeOption::EvalHackArrDVArrs;
-  gd.EnableIntishCast = RuntimeOption::EvalEnableIntishCast;
   gd.InitialNamedEntityTableSize  =
     RuntimeOption::EvalInitialNamedEntityTableSize;
   gd.InitialStaticStringTableSize =
     RuntimeOption::EvalInitialStaticStringTableSize;
+  gd.EmitClsMethPointers = RuntimeOption::EvalEmitClsMethPointers;
+  gd.IsVecNotices = RuntimeOption::EvalIsVecNotices;
+  gd.IsCompatibleClsMethType = RuntimeOption::EvalIsCompatibleClsMethType;
+  gd.ArrayProvenance = RuntimeOption::EvalArrayProvenance;
+  gd.StrictArrayFillKeys = RuntimeOption::StrictArrayFillKeys;
+
   for (auto const& elm : RuntimeOption::ConstantFunctions) {
     gd.ConstantFunctions.push_back(elm);
   }
@@ -408,11 +418,7 @@ void compile_repo() {
   std::unique_ptr<ArrayTypeTable::Builder> arrTable;
   VMWorker wp_thread(
     [&] {
-      hphp_session_init(Treadmill::SessionKind::CompileRepo);
-      SCOPE_EXIT {
-        hphp_context_exit();
-        hphp_session_exit();
-      };
+      HphpSession _{Treadmill::SessionKind::CompileRepo};
       Trace::BumpRelease bumper(Trace::hhbbc_time, -1, logging);
       whole_program(std::move(input.first), ueq, arrTable);
     }

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 
 echo "*** Test substituting argument 1 with object values ***\n";
@@ -35,4 +35,3 @@ $variation_array = array(
 foreach ( $variation_array as $var ) {
   var_dump(posix_ttyname( $var  ) );
 }
-?>

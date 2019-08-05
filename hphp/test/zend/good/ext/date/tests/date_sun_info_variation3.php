@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : array date_sun_info ( int $time , float $latitude , float $longitude )
  * Description:  Returns an array with information about sunset/sunrise and twilight begin/end.
  * Source code: ext/standard/data/php_date.c
  */
- 
+<<__EntryPoint>> function main(): void {
 date_default_timezone_set("UTC");
 
 echo "*** Testing date_sun_info() : usage variations ***\n";
@@ -44,7 +44,7 @@ $inputs = array(
        false,
        TRUE,
        FALSE,
-       
+
        // empty data
 /*16*/ "",
        '',
@@ -54,7 +54,7 @@ $inputs = array(
 /*19*/ "abcxyz",
        'abcxyz',
        $heredoc,
-       
+
        // undefined data
 /*22*/ @$undefined_var,
 
@@ -73,6 +73,5 @@ foreach($inputs as $input) {
     try { var_dump(date_sun_info(strtotime("2006-12-12"), 31.7667, $input)); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
     $iterator++;
 };
-
-?>
-===Done===
+echo "===Done===";
+}

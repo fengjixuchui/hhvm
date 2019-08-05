@@ -15,29 +15,28 @@
  */
 
 /**
- * `Pair` is a fixed-size collection with exactly two elements (possibly of
- * different types). HHVM provides a native implementation for this class.
- * The PHP class definition below is not actually used at run time; it is
- * simply provided for the typechecker and for developer reference.
+ * `Pair` is an immutable, fixed-size collection with exactly two elements
+ * (possibly of different types). HHVM provides a native implementation for
+ * this class.  The Hack class definition below is not actually used at run
+ * time; it is simply provided for the typechecker and for developer reference.
  *
  * Like all objects in PHP, `Pair`s have reference-like semantics. The elements
- * or a `Pair` cannot be mutated (i.e. you can assign to the elements of a
+ * of a `Pair` cannot be mutated (i.e. you can't assign to the elements of a
  * `Pair`) though `Pair`s may contain mutable objects.
  *
  * `Pair`s only support integer keys. If a non-integer key is used, an
  * exception will be thrown.
  *
- * `Pair`s support `$m[$k]` style syntax for getting and setting values by
- * key. `Pair`s also support `isset($m[$k])` and `empty($m[$k])` syntax, and
- * they provide similar semantics as arrays. Elements can be added to a `Pair`
- * using `$m[] = ..` syntax.
+ * `Pair`s support `$m[$k]` style syntax for getting values by key. `Pair`s
+ * also support `isset($m[$k])` and `empty($m[$k])` syntax, and they provide
+ * similar semantics as arrays.
  *
  * `Pair`s do not support taking elements by reference. If binding assignment
- * (`=&`) is used with an element of a `Pair`, or if an element of a `Pair` is
- * passed by reference, of if a `Pair` is used with foreach by reference, an
+ * (`=&`) is used with an element of a `Pair`, if an element of a `Pair` is
+ * passed by reference, or if a `Pair` is used with foreach by reference, an
  * exception will be thrown.
  *
- * `Pair` keys are always 0 and 1, repsectively.
+ * `Pair` keys are always 0 and 1, respectively.
  *
  * You may notice that many methods affecting the instace of `Pair` return an
  * `ImmVector` -- `Pair`s are essentially backed by 2-element `ImmVector`s.
@@ -52,7 +51,7 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    *
    * Pairs must be constructed with "Pair {$first, $second}".
    */
-  <<__Rx, __MaybeMutable>>
+  <<__Rx>>
   private function __construct();
 
   /**
@@ -62,7 +61,7 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    *
    * @return - an `array` containing the values from the current `Pair`.
    */
-  <<__Rx, __MaybeMutable>>
+  <<__Rx, __MaybeMutable, __PHPStdLib>>
   /* HH_IGNORE_ERROR[2082] T30260145 */
   public function toArray(): array;
 
@@ -74,7 +73,9 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    * @return - an `array` containing the values from the current `Pair`.
    */
   <<__Rx, __MaybeMutable>>
-  public function toValuesArray(): varray;
+  /* HH_FIXME[4110] pair needs to extend ConstVector<Tv1|Tv2> */
+  public function toValuesArray<Tu>(): varray<Tu>
+    where Tv1 as Tu, Tv2 as Tu;
 
   /**
    * Returns an `array` whose values are the keys from the current `Pair`.
@@ -82,7 +83,7 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    * @return - an `array` with the integer keys from the current `Pair`.
    */
   <<__Rx, __MaybeMutable>>
-  public function toKeysArray(): varray;
+  public function toKeysArray(): varray<int>;
 
  /**
    * Returns a `Vector` containing the elements of the current `Pair`.
@@ -370,8 +371,8 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    * @guide /hack/generics/constraints
    */
   <<__Rx, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
-  public function concat<Tu super mixed>(<<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\Traversable::class)>> Traversable<Tu> $traversable):
-    ImmVector<Tu>;
+  public function concat(<<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\Traversable::class)>> Traversable<mixed> $traversable):
+    ImmVector<mixed>;
 
   /**
    * Returns the first value in the current `Pair`.
@@ -422,7 +423,7 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    * @guide /hack/generics/constraints
    */
   <<__Rx, __MaybeMutable>>
-  public function linearSearch<Tu super mixed>(Tu $search_value): int;
+  public function linearSearch(mixed $search_value): int;
 
   /**
    * Returns `false`; a `Pair` cannot be empty.
@@ -495,7 +496,7 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    *           0 or 1.
    */
   <<__Rx, __MaybeMutable>>
-  public function containsKey<Tu super int>(Tu $k): bool;
+  public function containsKey(mixed $k): bool;
 
   /**
    * Returns an iterator that points to beginning of the current `Pair`.

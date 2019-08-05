@@ -45,7 +45,10 @@ let process_parse_result
   && ParserOptions.deregister_php_stdlib popt
   then Ast_utils.deregister_ignored_attributes ast
   else ast in
-  let content = if ide then File_heap.Ide content else File_heap.Disk content in
+  let content =
+    if ide
+    then File_provider.Ide content
+    else File_provider.Disk content in
   if file_mode <> None then begin
     let funs, classes, typedefs, consts = Ast_utils.get_defs ast in
     (* If this file was parsed from a tmp directory,
@@ -55,9 +58,9 @@ let process_parse_result
     (* We only have to write to the disk heap on initialization, and only *)
     (* if quick mode is on: otherwise Full Asts means the ParserHeap will *)
     (* never use the DiskHeap, and the Ide services update DiskHeap directly *)
-    if quick then File_heap.FileHeap.write_around fn content;
-    let mode = if quick then Parser_heap.Decl else Parser_heap.Full in
-    Parser_heap.ParserHeap.write_around fn (ast, mode);
+    if quick then File_provider.provide_file_hint fn content;
+    let mode = if quick then Ast_provider.Decl else Ast_provider.Full in
+    Ast_provider.provide_ast_hint fn ast mode;
     let comments = None in
     let hash = Some (Ast_utils.generate_ast_decl_hash ast) in
     let defs =
@@ -73,7 +76,7 @@ let process_parse_result
     acc, errorl, error_files
   end
   else begin
-    File_heap.FileHeap.write_around fn content;
+    File_provider.provide_file_hint fn content;
     let info = try !legacy_php_file_info fn with _ -> empty_file_info in
     (* we also now keep in the file_info regular php files
      * as we need at least their names in hack build
@@ -82,10 +85,10 @@ let process_parse_result
     acc, errorl, error_files
   end
 
-let parse ~quick popt acc fn =
+let parse ~quick ~show_all_errors popt acc fn =
   if not @@ FindUtils.path_filter fn then acc else
   let res = Errors.do_with_context fn Errors.Parsing @@
-    fun () -> Full_fidelity_ast.defensive_from_file ~quick popt fn
+    fun () -> Full_fidelity_ast.defensive_from_file ~quick ~show_all_errors popt fn
   in
   process_parse_result ~quick acc fn res popt
 
@@ -97,29 +100,29 @@ let merge_parse
   Errors.merge status1 status2,
   Relative_path.Set.union files1 files2
 
-let parse_files ?(quick = false) popt acc fnl =
+let parse_files ?(quick = false) ?(show_all_errors = false) popt acc fnl =
   let parse =
     if !Utils.profile
     then (fun acc fn ->
       let t = Unix.gettimeofday () in
-      let result = parse ~quick popt acc fn in
+      let result = parse ~quick ~show_all_errors popt acc fn in
       let t' = Unix.gettimeofday () in
       let msg =
         Printf.sprintf "%f %s [parsing]" (t' -. t) (Relative_path.suffix fn) in
       !Utils.log msg;
       result)
-    else parse ~quick popt in
+    else parse ~quick ~show_all_errors popt in
   List.fold_left fnl ~init:acc ~f:parse
 
-let parse_parallel ?(quick = false) workers get_next popt =
+let parse_parallel ?(quick = false) ?(show_all_errors = false) workers get_next popt =
   MultiWorker.call
       workers
-      ~job:(parse_files ~quick popt)
+      ~job:(parse_files ~quick ~show_all_errors popt)
       ~neutral:neutral
       ~merge:merge_parse
       ~next:get_next
 
-let parse_sequential ~quick fn content acc popt =
+let parse_sequential ~quick ~show_all_errors fn content acc popt =
   if not @@ FindUtils.path_filter fn then acc else
   let res =
     Errors.do_with_context fn Errors.Parsing begin fun () ->
@@ -135,7 +138,7 @@ let parse_sequential ~quick fn content acc popt =
         else
           content
       in
-        Full_fidelity_ast.defensive_program ~quick popt fn content
+        Full_fidelity_ast.defensive_program ~quick ~show_all_errors popt fn content
     end
   in
   process_parse_result ~ide:true ~quick acc fn res popt
@@ -148,14 +151,21 @@ let log_parsing_results fast =
 (*****************************************************************************)
 (* Main entry points *)
 (*****************************************************************************)
-
-let go ?(quick = false) workers files_set ~get_next popt ~trace =
-  let acc = parse_parallel ~quick workers get_next popt in
+let go
+    ?(quick = false)
+    ?(show_all_errors = false)
+    (workers: MultiWorker.worker list option)
+    (files_set: Relative_path.Set.t)
+    ~(get_next: Relative_path.t list MultiWorker.Hh_bucket.next)
+    (popt: ParserOptions.t)
+    ~(trace: bool)
+    : (FileInfo.t Relative_path.Map.t * Errors.t * Relative_path.Set.t) =
+  let acc = parse_parallel ~quick ~show_all_errors workers get_next popt in
   let fast, errorl, failed_parsing =
     Relative_path.Set.fold files_set ~init:acc ~f:(
       fun fn acc ->
-        let content = File_heap.get_ide_contents_unsafe fn in
-        parse_sequential ~quick fn content acc popt
+        let content = File_provider.get_ide_contents_unsafe fn in
+        parse_sequential ~quick ~show_all_errors fn content acc popt
       ) in
   if trace then log_parsing_results fast;
   fast, errorl, failed_parsing

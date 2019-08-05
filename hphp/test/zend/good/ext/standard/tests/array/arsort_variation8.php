@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool arsort ( array &$array [, int $sort_flags] )
  * Description: Sort an array and maintain index association.
                 Elements will be arranged from highest to lowest when this function has completed.
@@ -11,7 +11,7 @@
  * SORT_REGULAR - compare items normally
  * Note: arrays are sorted based on total count of elements inside it, when all the elements are arrays
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing arsort() : usage variations ***\n";
 
 // array of arrays
@@ -53,4 +53,4 @@ foreach ($various_arrays as $array) {
 }
 
 echo "Done\n";
-?>
+}

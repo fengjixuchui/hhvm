@@ -1,4 +1,5 @@
-<?php
+<?hh
     var_dump(posix_times());
-?>
-===DONE===
+<<__EntryPoint>> function main(): void {
+echo "===DONE===\n";
+}

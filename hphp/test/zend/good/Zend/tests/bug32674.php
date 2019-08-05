@@ -1,5 +1,5 @@
-<?php
-class collection implements Iterator {
+<?hh
+class mycollection implements Iterator {
 
   private $_elements = array();
 
@@ -7,7 +7,9 @@ class collection implements Iterator {
   }
 
   public function rewind() {
-    reset(&$this->_elements);
+    $__elements = $this->_elements;
+    reset(&$__elements);
+    $this->_elements = $__elements;
   }
 
   public function count() {
@@ -15,18 +17,24 @@ class collection implements Iterator {
   }
 
   public function current() {
-    $element = current(&$this->_elements);
+    $__elements = $this->_elements;
+    $element = current(&$__elements);
+    $this->_elements = $__elements;
     return $element;
   }
 
   public function next() {
-    $element = next(&$this->_elements);
+    $__elements = $this->_elements;
+    $element = next(&$__elements);
+    $this->_elements = $__elements;
     return $element;
   }
 
   public function key() {
     $this->_fillCollection();
-    $element = key(&$this->_elements);
+    $__elements = $this->_elements;
+    $element = key(&$__elements);
+    $this->_elements = $__elements;
     return $element;
   }
 
@@ -40,18 +48,18 @@ class collection implements Iterator {
 class class2 {
   public $dummy;
 }
-
+<<__EntryPoint>> function main(): void {
 $obj = new class2();
-$col = new collection();
+$col = new mycollection();
 
 try {
-	foreach($col as $co) {
-  	//irrelevant
-	}
-	echo 'shouldn`t get here';
-	//$dummy = 'this will not crash';
-	$obj->dummy = 'this will crash';
+    foreach($col as $co) {
+      //irrelevant
+    }
+    echo 'shouldn`t get here';
+    //$dummy = 'this will not crash';
+    $obj->dummy = 'this will crash';
 } catch (Exception $e) {
-	echo "ok\n";
+    echo "ok\n";
 }
-?>
+}

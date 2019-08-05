@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : string sprintf(string $format [, mixed $arg1 [, mixed ...]])
  * Description: Return a formatted string 
  * Source code: ext/standard/formatted_print.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing sprintf() : scientific formats with array values ***\n";
 
 // array of array values 
@@ -44,4 +44,4 @@ foreach($array_values as $array_value) {
 };
 
 echo "Done";
-?>
+}

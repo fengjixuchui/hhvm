@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $ary = array(
 	0 => array(
 		(binary) "binary",
@@ -33,5 +33,5 @@ echo "key, getEntry, current:\n";
 foreach($it as $k => $v) {
 	var_dump($it->key(), $it->getEntry(), $it->current());
 }
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -72,7 +72,7 @@ let error0013 = "This XHP body is not terminated."
 let error0014 = "This XHP comment is not terminated."
 
 (* Syntactic errors *)
-let error1001 = "A source file must begin with '<?hh'."
+let error1001 = "A .php file must begin with '<?hh'."
 let error1003 = "The 'function' keyword is expected here."
 let error1004 = "A name is expected here."
 let error1006 = "A right brace ('}') is expected here."
@@ -104,16 +104,17 @@ let error1033 = "A class member, method, type, trait usage, trait require, " ^
 let error1034 = "A left brace ('{') is expected here."
 let error1035 = "The 'class' keyword is expected here."
 let error1036 = "An equals sign ('=') is expected here."
+let error1037 = "Either 'abstract' or 'final' keyword is expected here."
 let error1038 = "A semicolon (';') or a namespace body is expected here."
 let error1039 = "A closing XHP tag is expected here."
 let error1041 = "A function body or a semicolon (';') is expected here."
-let error1044 = "A name, __construct, or __destruct keyword is expected here."
+let error1044 = "A name or __construct keyword is expected here."
 let error1045 = "An 'extends' or 'implements' keyword is expected here."
 let error1046 = "A lambda arrow ('==>') is expected here."
 let error1047 = "A scope resolution operator ('::') is expected here."
 let error1048 = "A name, variable name or 'class' is expected here."
 let error1050 = "A name or variable name is expected here."
-let error1051 = "The 'required' keyword is expected here."
+let error1051 = "The 'required' or 'lateinit' keyword is expected here."
 let error1052 = "An XHP category name beginning with a '%' is expected here."
 let error1053 = "An XHP name or category name is expected here."
 let error1054 = "A comma (',') is expected here."
@@ -129,6 +130,8 @@ let error1059 terminator = Printf.sprintf
   (Full_fidelity_token_kind.to_string terminator)
 let error1060 = "Leading markup and `<?hh` are not permitted in `.hack` "^
   "files, which are always strict."
+let error1061 = "A Pocket Universes operator (':@') is expected here."
+let error1062 = "References in use lists are not supported in Hack."
 
 let error2001 = "A type annotation is required in strict mode."
 let error2003 = "A case statement may only appear directly inside a switch."
@@ -144,8 +147,6 @@ let error2009 class_name method_name =
 
 let error2010 = "Parameters cannot have visibility modifiers (except in " ^
   "parameter lists of constructors)."
-let error2011 = "A destructor must have an empty parameter list."
-let error2012 = "A destructor can only have visibility modifiers."
 let error2013 = "A method declaration cannot have duplicate modifiers."
 let error2014 = "An abstract method cannot have a method body."
 let error2015 class_name method_name =
@@ -157,7 +158,7 @@ let error2016 class_name method_name =
 let error2017 =
   "A method declaration cannot have multiple visibility modifiers."
 let error2018 =
-  "A constructor or destructor cannot have a non-void type annotation."
+  "A constructor cannot have a non-void type annotation."
 let error2019 class_name method_name =
   Printf.sprintf "Cannot declare abstract method %s::%s final"
     class_name method_name
@@ -166,6 +167,10 @@ let error2020 = "Use of the '{}' subscript operator is deprecated; " ^
 let error2021 = "A variadic parameter ('...') may only appear at the end of " ^
   "a parameter list."
 let error2022 = "A variadic parameter ('...') may not be followed by a comma."
+let error2023 = "Abstract constructors cannot have parameters with visibility modifiers"
+let error2024 = "Traits or interfaces cannot have parameters with visibility modifiers"
+let error2025 class_name prop_name =
+  Printf.sprintf "Cannot redeclare %s::%s" class_name prop_name
 
 let error2029 = "Only traits and interfaces may use 'require extends'."
 let error2030 = "Only traits may use 'require implements'."
@@ -197,8 +202,9 @@ let error2044 class_name method_name = Printf.sprintf ("Classes cannot both " ^^
   "contain abstract methods and be non-abstract. Either declare 'abstract " ^^
   "class %s', or make 'function %s' non-abstract.") class_name method_name
 let error2045 = "No method inside an interface may be declared 'abstract'."
-let error2046 = "The 'async' annotation cannot be used on 'abstract' methods " ^
-  "or methods inside of interfaces."
+let error2046 method_type = Printf.sprintf
+  "'async' cannot be used on %s. Use an Awaitable<...> return type instead."
+  method_type
 let error2047 visibility_modifier = "Methods inside of interfaces may not be " ^
   "marked '" ^ visibility_modifier ^ "'; only 'public' visibility is allowed."
 let error2048 = "Expected group use prefix to end with '\\'"
@@ -216,7 +222,7 @@ let error2056 = "First unbracketed namespace occurrence here"
 let error2057 = "First bracketed namespace occurrence here"
 let error2058 = "Property may not be abstract."
 let invalid_shape_field_name = "Shape field name must be a nonempty single-quoted string or a class constant"
-let error2060 = "Shape field name must not start with an integer"
+let shape_field_int_like_string = "Shape field name must not be an int-like string (i.e. \"123\")"
 let error2061 = "Non-static instance variables are not allowed in abstract " ^
   "final classes."
 let error2062 = "Non-static methods are not allowed in abstract final classes."
@@ -229,7 +235,6 @@ let error2066 = "A previous parameter has a default value. Remove all the " ^
   "this one."
 let error2067 = "A hack source file cannot contain '?>'."
 let error2068 = "hh blocks and php blocks cannot be mixed."
-let error2069 = "Operator '?->' is only allowed in Hack."
 let error2070 ~open_tag ~close_tag =
   Printf.sprintf "XHP: mismatched tag: '%s' not the same as '%s'"
     close_tag open_tag
@@ -243,25 +248,22 @@ let error2075 call_modifier = "An '" ^ call_modifier ^ "' parameter cannot " ^
   "be passed by reference ('&')."
 let error2076 = "Cannot use both 'inout' and '&' on the same argument."
 let error2077 = "Cannot use empty list"
+let error2078 = "Superglobals may not be taken by reference."
 let list_must_be_lvar = "list() can only be used as an lvar. Did you mean to use tuple()?"
 
 (* Start giving names rather than numbers *)
 let async_not_last = "The 'async' modifier must be directly before the 'function' keyword."
-let list_as_subscript = "A subscript index cannot be a list"
-let vdarray_in_php = "varray and darray are only allowed in Hack files"
 let uppercase_kw text = "Keyword " ^ text ^ " must be written in lowercase"
 let using_st_function_scoped_top_level =
   "Using statement in function scoped form may only be used at the top " ^
-  "level of a function or a method"
+  "level of a function or a method" (**)
 let const_in_trait = "Traits cannot have constants"
 let const_visibility = "Class constants cannot have visibility modifiers in " ^
   "Hack files"
 let strict_namespace_hh =
-  "To use strict hack, place // strict after the open tag. " ^
+  "To use strict Hack, place // strict after the open tag. " ^
   "If it's already there, remove this line. " ^
   "Hack is strict already."
-let strict_namespace_not_hh =
-  "Strict mode is not supported for non-Hack files."
 
 let original_definition = "Original definition"
 
@@ -311,6 +313,7 @@ let type_name_is_already_in_use ~name ~short_name =
   " because the name is already in use"
 
 let variadic_reference = "Variadic '...' should be followed by a '$variable'"
+let reference_variadic = "Variadic parameters cannot be taken by reference"
 let double_variadic = "Parameter redundantly marked as variadic ('...')."
 let double_reference = "Parameter redundantly marked as reference ('&')."
 let global_in_const_decl = "Cannot have globals in constant declaration"
@@ -324,7 +327,7 @@ let shape_type_ellipsis_without_trailing_comma =
   "A comma is required before the ... in a shape type"
 
 let yield_in_magic_methods =
-  "'yield' is not allowed in constructor, destructor, or magic methods"
+  "'yield' is not allowed in constructors or magic methods"
 
 let reference_not_allowed_on_key = "Key of collection element cannot " ^
   "be marked as reference"
@@ -334,6 +337,8 @@ let reference_not_allowed_on_element = "Collection element cannot " ^
   "be marked as reference"
 let yield_outside_function =
   "Yield can only be used inside a function"
+let reference_param_in_construct =
+  "Constructors cannot take parameters by reference"
 
 let coloncolonclass_on_dynamic =
   "Dynamic class names are not allowed in compile-time ::class fetch"
@@ -343,19 +348,23 @@ let expected_dotdotdot =
   "'...' is expected here."
 let not_allowed_in_write what =
   what ^ " is not allowed in write context"
+let references_not_allowed =
+  "References are only allowed as function call arguments"
 let reassign_this =
   "Cannot re-assign $this"
 let this_in_static =
   "Don't use $this in a static method, use static:: instead"
-let strict_types_first_statement =
-  "strict_types declaration must be the very first statement in the script"
 let async_magic_method ~name =
-  "cannot declare constructors, destructors, and magic methods such as '"^ name ^ "' async"
+  "cannot declare constructors and magic methods such as '"^ name ^ "' async"
+let call_static_method =
+  "__callStatic methods are no longer supported"
 
 let reserved_keyword_as_class_name class_name =
   "Cannot use '" ^ class_name ^ "' as class name as it is reserved"
 let xhp_class_multiple_category_decls =
   "An XHP class cannot have multiple category declarations"
+let xhp_class_multiple_children_decls =
+  "An XHP class cannot have multiple children declarations"
 let inout_param_in_generator =
   "Parameters may not be marked inout on generators"
 let inout_param_in_async_generator =
@@ -398,16 +407,12 @@ let namespace_decl_first_statement =
   "Namespace declaration statement has to be the very first statement in the script"
 let code_outside_namespace =
   "No code may exist outside of namespace {}"
-let strict_types_in_declare_block_mode =
-  "strict_types declaration must not use block mode"
 let invalid_number_of_args name n =
   "Method " ^ name ^ " must take exactly " ^ (string_of_int n) ^ " arguments"
 let invalid_args_by_ref name =
   "Method " ^ name ^ " cannot take arguments by reference"
 let redeclaration_error name =
   "Cannot redeclare " ^ name
-let reference_to_static_scope_resolution =
-  "Cannot take a reference to a static scope resolution expression"
 let class_with_abstract_method name =
   "Class " ^ name ^ " contains an abstract method and must " ^
   "therefore be declared abstract"
@@ -419,14 +424,12 @@ let redeclaration_of_method ~name =
   "Redeclared method " ^ name
 let self_or_parent_colon_colon_class_outside_of_class name =
   "Cannot access " ^ name ^ "::class when no class scope is active"
-let variadic_param_with_type_in_php name type_ =
-  "Parameter " ^ name ^ " is variadic and has a type constraint ("
-  ^ type_ ^ "); variadic params with type constraints are not "
-  ^ "supported in non-Hack files"
 let final_property = "Properties cannot be declared final"
 let var_property = "Properties cannot be declared as var; a type is required"
 let property_has_multiple_visibilities name =
   "Multiple access type modifiers are not allowed: properties of " ^ name
+let property_has_multiple_modifiers name =
+  "Multiple modifiers are not allowed: properties of " ^ name
 let property_requires_visibility =
   "Property declarations require a visibility modifier " ^
   "such as public, private or protected."
@@ -435,12 +438,9 @@ let invalid_is_as_expression_hint n hint =
 let elvis_operator_space = "An Elvis operator ('?:') is expected here."
 let autoload_takes_one_argument =
   "__autoload() must take exactly 1 argument"
-let clone_destruct_takes_no_arguments class_name method_name =
+let clone_takes_no_arguments class_name method_name =
   Printf.sprintf "Method %s::%s cannot accept any arguments"
     class_name method_name
-let class_destructor_cannot_be_static class_name method_name =
-  Printf.sprintf "Destructor %s::%s() cannot be static"
-  class_name method_name
 
 let clone_cannot_be_static class_name method_name =
   Printf.sprintf "Clone method %s::%s() cannot be static"
@@ -474,10 +474,6 @@ let memoize_lsb_on_non_method =
 let constants_as_attribute_arguments =
   "User-defined constants are not allowed in user attribute expressions"
 
-let instanceof_paren x =
-  Printf.sprintf "`instanceof (%s)` is not allowed because it is ambiguous. Is `%s` a class or a constant?"
-    x x
-
 let instanceof_invalid_scope_resolution = "A scope resolution (::) on the right side of an " ^
   "instanceof operator must start with a class name, `self`, `parent`, or `static`, and end with " ^
   "a variable"
@@ -493,6 +489,9 @@ let instanceof_new_unknown_node msg =
 
 let instanceof_reference = "References are not allowed on the right side of an instanceof operation"
 
+let instanceof_disabled = "The 'instanceof' operator is not supported in Hack; \
+  use the 'is' operator or 'is_a()'"
+
 let invalid_await_use = "Await cannot be used as an expression"
 
 let toplevel_await_use = "Await cannot be used in a toplevel statement"
@@ -503,18 +502,6 @@ let invalid_default_argument s = s ^ " expression is not permitted \
 let invalid_constructor_method_call = "Method call following immediate constructor call \
   requires parentheses around constructor call."
 
-let do_not_use_xor =
-  "Do not use \"xor\", it has surprising precedence. Cast to bool and use \"!==\" instead"
-
-let do_not_use_or =
-  "Do not use \"or\", it has surprising precedence. Use \"||\" instead"
-
-let do_not_use_and =
-  "Do not use \"and\", it has surprising precedence. Use \"&&\" instead"
-
-let do_not_use_ltgt =
-  "Do not use '<>', it performs type coercion. Use '!==' instead"
-
 let invalid_foreach_element = "An arrow ('=>') or right parenthesis (')') \
   is expected here."
 let invalid_scope_resolution_qualifier = "Only classnames and variables are allowed before '::'."
@@ -522,8 +509,9 @@ let invalid_variable_name =
   "A valid variable name starts with a letter or underscore, followed \
   by any number of letters, numbers, or underscores"
 
-let invalid_reference = "Only variables, members, and the results of function calls \
+let invalid_reference = "Only variables and the results of function calls \
   can be used as references"
+
 let invalid_variable_variable = "Variable Variables are not legal"
 
 let function_modifier s =
@@ -548,9 +536,8 @@ let alternate_control_flow =
 let execution_operator =
   "The execution operator is not allowed in Hack files"
 let goto = "The `goto` operator is not allowed in Hack files"
+let goto_label = "Labels are used only for `goto`, which is not allowed in Hack files"
 let invalid_octal_integer = "Invalid octal integers"
-let php7_anonymous_function =
-  "Type annotations should occur before the use() clause"
 
 let prefixed_invalid_string_kind = "Only double-quoted strings may be prefixed."
 
@@ -574,11 +561,11 @@ let pair_initializer_arity =
 let nested_unary_reference = "References cannot be followed by unary operators"
 
 let toplevel_statements =
-  "Toplevel statements besides requires are not allowed in strict files"
+  "Toplevel statements are not allowed. Use __EntryPoint attribute instead"
 let invalid_reified =
   "Reify keyword can only appear at function or class type parameter position"
-let reified_in_interface =
-  "Invalid to use a reified type within an interface's type parameters"
+let reified_in_invalid_classish s =
+  "Invalid to use a reified type within " ^ s ^ "'s type parameters"
 let shadowing_reified =
   "You may not shadow a reified parameter"
 let static_property_in_reified_class =
@@ -662,8 +649,9 @@ let invalid_non_rx_argument_for_declaration  =
 let nested_concurrent_blocks =
   "Concurrent blocks cannot be nested."
 
-let less_than_two_statements_in_concurrent_block =
-  "Less than 2 statements in concurrent block."
+let fewer_than_two_statements_in_concurrent_block =
+  "Expected 2 or more statements in concurrent block. Concurrent wrapping " ^
+  "nothing or a single statement is not useful or already implied."
 
 let invalid_syntax_concurrent_block =
   "Concurrent block must contain a compound statement of two or " ^
@@ -678,14 +666,18 @@ let concurrent_is_disabled =
 let static_closures_are_disabled =
   "Static closures are not supported in Hack"
 
-let static_locals_variables_are_disabled =
-  "Static local variables are not supported in Hack"
-
 let invalid_await_position = "Await cannot be used as an expression in this " ^
   "location because it's conditionally executed."
 
+let invalid_await_position_dependent =
+  "Await cannot be used as an expression inside another await expression. " ^
+  "Pull the inner await out into it's own statement."
+
 let misplaced_reactivity_annotation =
   "Reactive annotations are not allowed on classes, interfaces or traits."
+
+let mutability_annotation_on_constructor =
+  "__Mutable, __MaybeMutable, and __MutableReturn annotations are not allowed on constructors."
 
 let mutability_annotation_on_static_method =
   "__Mutable and __MaybeMutable annotations are not allowed on static methods."
@@ -707,10 +699,12 @@ let expected_user_attribute = "A user attribute is expected here."
 
 let tparams_in_tconst = "Type parameters are not allowed on class type constants"
 
+let targs_not_allowed = "Type arguments are not allowed in this position"
+
 let reified_attribute = "__Reified and __HasReifiedParent attributes may not be provided by the user"
 
 let lval_as_expression =
-  "Lval can no longer be used as an expression. Pull it out into it's own statement."
+  "Assignments can no longer be used as expressions. Pull the assignment out into a separate statement."
 
 let pocket_universe_final_expected =
   "The 'final' keyword is expected here."
@@ -718,9 +712,48 @@ let pocket_universe_final_expected =
 let pocket_universe_enum_expected =
   "The 'enum' keyword is expected here."
 
-(* this one is currently too wide, but will be enough for prototyping *)
-let pocket_universe_invalid_field n =
-  "Invalid pocket universe field syntax: " ^ (string_of_int n) ^"."
+let pocket_universe_invalid_field =
+  "Invalid pocket universe field syntax."
 
 let type_keyword =
-    "The 'type' keyword is expected here."
+  "The 'type' keyword is expected here."
+
+let non_public_const_in_interface =
+"Constants inside of interfaces must have 'public' visibility."
+
+let const_abstract_private = "Cannot declare abstract constants private."
+
+let const_has_multiple_visibilities =
+  "A constant cannot have multiple visibility modifiers."
+
+let const_has_duplicate_modifiers = "A constant cannot have duplicate modifiers."
+
+let only_soft_allowed =
+  "Only the __Soft attribute is allowed here."
+
+let soft_no_arguments =
+  "The __Soft attribute does not take arguments."
+
+let no_legacy_soft_typehints =
+  "The @ syntax for soft typehints is not allowed. Use the __Soft attribute instead."
+
+let static_const =
+  "Cannot declare constants static."
+
+let outside_dollar_str_interp =
+  "The ${x} syntax is disallowed in Hack. Use {$x} instead."
+
+let no_const_interfaces_traits_enums =
+  "Interfaces, traits and enums may not be declared __Const"
+
+let no_const_late_init_props =
+  "__Const properties may not also be __LateInit or __SoftLateInit"
+
+let no_const_static_props =
+  "Static properties may not be __Const"
+
+let no_const_abstract_final_class =
+  "Cannot apply __Const attribute to an abstract final class"
+
+let no_legacy_attribute_syntax =
+  "The <<...>> syntax for user attributes is not allowed. Use the @ syntax instead."

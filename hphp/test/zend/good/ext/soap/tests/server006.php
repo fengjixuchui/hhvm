@@ -1,8 +1,8 @@
-<?php
+<?hh
 class Foo {
   private $str = "";
 
-  function Foo($str) {
+  function __construct($str) {
     $this->str = $str . " World";
   }
 
@@ -10,7 +10,7 @@ class Foo {
     return $this->str;
   }
 }
-
+<<__EntryPoint>> function main(): void {
 $server = new soapserver(null,array('uri'=>"http://testuri.org"));
 $server->setclass("Foo","Hello");
 
@@ -30,4 +30,4 @@ EOF;
 
 $server->handle($HTTP_RAW_POST_DATA);
 echo "ok\n";
-?>
+}

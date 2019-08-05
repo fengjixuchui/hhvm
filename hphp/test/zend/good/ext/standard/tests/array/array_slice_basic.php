@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_slice(array $input, int $offset [, int $length [, bool $preserve_keys]])
  * Description: Returns elements specified by offset and length 
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Test basic functionality of array_slice()
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_slice() : basic functionality ***\n";
 
 
@@ -25,5 +25,4 @@ echo "\n-- Mandatory arguments --\n";
 var_dump( array_slice($input, $offset) );
 
 echo "Done";
-?>
-
+}

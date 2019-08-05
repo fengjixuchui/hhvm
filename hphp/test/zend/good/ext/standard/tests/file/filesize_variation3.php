@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* 
  Prototype   : int filesize ( string $filename );
  Description : Returns the size of the file in bytes, or FALSE 
    (and generates an error of level E_WARNING) in case of an error.
 */
-
+<<__EntryPoint>> function main(): void {
 $file_path = dirname(__FILE__);
 
 echo "*** Testing filesize(): usage variations ***\n"; 
@@ -26,9 +26,7 @@ for($size = filesize($filename); $size>=-1200; $size-=1200) {
 }
 
 echo "*** Done ***\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = dirname(__FILE__);
 unlink($file_path."/filesize_variation3.tmp");
-?>
+}

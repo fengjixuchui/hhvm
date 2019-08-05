@@ -1,10 +1,10 @@
-<?php
+<?hh
 
 /* Prototype  : string convert_uuencode  ( string $data  )
  * Description: Uuencode a string
  * Source code: ext/standard/uuencode.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing convert_uuencode() : basic functionality ***\n";
 
 // array with different values for $string
@@ -33,7 +33,5 @@ foreach($strings as $string) {
   var_dump( convert_uuencode($string) );
   $count ++;
 }
-
-
-?>
-===DONE=== 
+echo "===DONE=== ";
+}

@@ -614,8 +614,7 @@ static void xhp_children_stmt(Parser *_p, Token &out, Token &children) {
 static void only_in_hh_syntax(Parser *_p) {
   if (!_p->scanner().isHHSyntaxEnabled()) {
     HPHP_PARSER_ERROR(
-      "Syntax only allowed in Hack files (<?hh) or with -v "
-        "Eval.EnableHipHopSyntax=true",
+      "Syntax only allowed in Hack files (<?hh)",
       _p);
   }
 }
@@ -815,6 +814,7 @@ static int yylex(YYSTYPE* token, HPHP::Location* loc, Parser* _p) {
 %token T_UNRESOLVED_OP
 %token T_WHERE
 
+%token T_FUNC_CRED_C
 %%
 
 start:
@@ -1432,12 +1432,6 @@ class_declaration_statement:
                                          _p->popClass();
                                          _p->popTypeScope();}
 ;
-
-class_expression:
-    T_CLASS                            { _p->onClassExpressionStart(); }
-    ctor_arguments
-    extends_from implements_list '{'
-    class_statement_list '}'           { _p->onClassExpression($$, $3, $4, $5, $7); }
 
 trait_declaration_statement:
     T_TRAIT
@@ -2134,7 +2128,6 @@ expr_with_parens:
     '(' expr_with_parens ')'           { $$ = $2;}
   | T_NEW class_name_reference
     ctor_arguments                     { _p->onNewObject($$, $2, $3);}
-  | T_NEW class_expression             { $$ = $2;}
   | T_CLONE expr                       { UEXP($$,$2,T_CLONE,1);}
   | xhp_tag                            { $$ = $1;}
   | collection_literal                 { $$ = $1;}
@@ -2818,6 +2811,7 @@ xhp_bareword:
   | T_SHAPE                            { $$ = $1;}
   | T_USING                            { $$ = $1;}
   | T_INOUT                            { $$ = $1;}
+  | T_FUNC_CRED_C                      { $$ = $1;}
 ;
 
 simple_function_call:
@@ -2904,6 +2898,7 @@ common_scalar:
   | T_TRAIT_C                          { _p->onScalar($$, T_TRAIT_C,  $1);}
   | T_METHOD_C                         { _p->onScalar($$, T_METHOD_C, $1);}
   | T_FUNC_C                           { _p->onScalar($$, T_FUNC_C,   $1);}
+  | T_FUNC_CRED_C                      { _p->onScalar($$, T_FUNC_CRED_C, 1);}
   | T_NS_C                             { _p->onScalar($$, T_NS_C,  $1);}
   | T_COMPILER_HALT_OFFSET             { _p->onScalar($$, T_COMPILER_HALT_OFFSET, $1);}
   | T_START_HEREDOC

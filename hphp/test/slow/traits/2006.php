@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 trait T {
   function F(&$a, $b="default") {
@@ -8,6 +8,7 @@ trait T {
 class C {
   use T;
 }
+<<__EntryPoint>> function main(): void {
 $o = new C;
 $x = "value";
 $o->F(&$x);
@@ -16,4 +17,4 @@ echo "\n";
 $y = "zero";
 $o->F(&$y, "0");
 echo $y;
-?>
+}

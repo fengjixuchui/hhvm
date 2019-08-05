@@ -20,7 +20,6 @@
 #include <folly/Format.h>
 #include <folly/Singleton.h>
 
-#include "hphp/hhbbc/options.h"
 #include "hphp/runtime/vm/blob-helper.h"
 #include "hphp/runtime/vm/repo-global-data.h"
 #include "hphp/runtime/server/xbox-server.h"
@@ -109,16 +108,18 @@ Repo::Repo()
     m_insertFileHash{InsertFileHashStmt(*this, 0),
                      InsertFileHashStmt(*this, 1)},
     m_getFileHash{GetFileHashStmt(*this, 0), GetFileHashStmt(*this, 1)},
+    m_removeFileHash{RemoveFileHashStmt(*this, 0),
+                     RemoveFileHashStmt(*this, 1)},
     m_dbc(nullptr), m_localReadable(false), m_localWritable(false),
     m_evalRepoId(-1), m_txDepth(0), m_rollback(false), m_beginStmt(*this),
     m_rollbackStmt(*this), m_commitStmt(*this), m_urp(*this), m_pcrp(*this),
-    m_frp(*this), m_lsrp(*this) {
+    m_rrp(*this), m_frp(*this), m_lsrp(*this) {
 
   ++s_nRepos;
   connect();
 }
 
-Repo::~Repo() {
+Repo::~Repo() noexcept {
   disconnect();
   --s_nRepos;
 }
@@ -202,7 +203,7 @@ void Repo::loadGlobalData(bool readArrayTable /* = true */) {
         throw RepoExc("No rows in %s. Did you forget to compile that file with "
                       "this HHVM version?", tbl.c_str());
       }
-      BlobDecoder decoder = query.getBlob(1);
+      BlobDecoder decoder = query.getBlob(1, true);
       decoder(s_globalData);
       FTRACE(1, "GlobalData loaded from '{}':\n", repoName(repoId));
       FTRACE(1, "{}", show(s_globalData));
@@ -226,28 +227,27 @@ void Repo::loadGlobalData(bool readArrayTable /* = true */) {
     RuntimeOption::EvalPromoteEmptyObject    = s_globalData.PromoteEmptyObject;
     RuntimeOption::EnableIntrinsicsExtension =
       s_globalData.EnableIntrinsicsExtension;
-    HHBBC::options.ElideAutoloadInvokes     = s_globalData.ElideAutoloadInvokes;
-    RuntimeOption::EnableHipHopSyntax       = s_globalData.EnableHipHopSyntax;
-    RuntimeOption::EvalHardTypeHints        = s_globalData.HardTypeHints;
-    RuntimeOption::EvalUseHHBBC             = s_globalData.UsedHHBBC;
     RuntimeOption::PHP7_Builtins            = s_globalData.PHP7_Builtins;
     RuntimeOption::PHP7_IntSemantics        = s_globalData.PHP7_IntSemantics;
     RuntimeOption::PHP7_NoHexNumerics       = s_globalData.PHP7_NoHexNumerics;
-    RuntimeOption::PHP7_ScalarTypes         = s_globalData.PHP7_ScalarTypes;
     RuntimeOption::PHP7_Substr              = s_globalData.PHP7_Substr;
     RuntimeOption::EvalReffinessInvariance  = s_globalData.ReffinessInvariance;
     RuntimeOption::EvalCheckPropTypeHints   = s_globalData.CheckPropTypeHints;
     RuntimeOption::EvalHackArrDVArrs        = s_globalData.HackArrDVArrs;
-    RuntimeOption::UndefinedConstFallback =
-      s_globalData.UndefinedConstFallback;
-    RuntimeOption::UndefinedFunctionFallback =
-      s_globalData.UndefinedFunctionFallback;
-    RuntimeOption::EvalEnableIntishCast =
-      s_globalData.EnableIntishCast;
+    /*
+     * We only should enable array provenance at runtime if it was enabled in
+     * the repo AND we have logging enabled--otherwise it's pointless to do the
+     * bookkeeping
+     *
+     * Also--just because array provenance wasn't enabled in the repo doesn't
+     * mean it can't be explicitly enabled at runtime
+     */
+    RuntimeOption::EvalArrayProvenance = RuntimeOption::EvalArrayProvenance ||
+      (s_globalData.ArrayProvenance && RuntimeOption::EvalLogArrayProvenance);
+    RuntimeOption::EnableArgsInBacktraces = s_globalData.EnableArgsInBacktraces;
     RuntimeOption::EvalAbortBuildOnVerifyError =
       s_globalData.AbortBuildOnVerifyError;
-    RuntimeOption::DisallowDynamicVarEnvFuncs =
-      s_globalData.DisallowDynamicVarEnvFuncs;
+    RuntimeOption::StrictArrayFillKeys      = s_globalData.StrictArrayFillKeys;
     if (s_globalData.HardReturnTypeHints) {
       RuntimeOption::EvalCheckReturnTypeHints = 3;
     }
@@ -292,7 +292,7 @@ void Repo::saveGlobalData(GlobalData newData) {
   );
   auto txn = RepoTxn{begin()};
   RepoTxnQuery query(txn, stmt);
-  BlobEncoder encoder;
+  BlobEncoder encoder{true};
   encoder(s_globalData);
   encoder(globalArrayTypeTable());
   encoder(s_globalData.APCProfile);
@@ -310,42 +310,45 @@ void Repo::saveGlobalData(GlobalData newData) {
   txn.commit();
 }
 
-std::unique_ptr<Unit> Repo::loadUnit(const std::string& name, const MD5& md5,
+std::unique_ptr<Unit> Repo::loadUnit(const folly::StringPiece name,
+                                     const SHA1& sha1,
                                      const Native::FuncTable& nativeFuncs) {
-  if (m_dbc == nullptr) {
-    return nullptr;
-  }
-  return m_urp.load(name, md5, nativeFuncs);
+  if (m_dbc == nullptr) return nullptr;
+  return m_urp.load(name, sha1, nativeFuncs);
 }
 
-std::vector<std::pair<std::string,MD5>>
-Repo::enumerateUnits(int repoId, bool preloadOnly, bool warn) {
-  std::vector<std::pair<std::string,MD5>> ret;
+void Repo::forgetUnit(const std::string& name) {
+  if (m_dbc == nullptr) {
+    return;
+  }
+
+  auto const repoId = repoIdForNewUnit(UnitOrigin::File);
+  auto txn = RepoTxn{begin()};
+  m_removeFileHash[repoId].remove(txn, name);
+  txn.commit();
+}
+
+std::vector<std::pair<std::string,SHA1>>
+Repo::enumerateUnits(int repoId, bool warn) {
+  std::vector<std::pair<std::string,SHA1>> ret;
 
   try {
     RepoStmt stmt(*this);
-    stmt.prepare(preloadOnly ?
-                 folly::sformat(
-                   "SELECT path, {0}.md5 FROM {0} "
-                   "LEFT JOIN {1} ON ({0}.md5={1}.md5) WHERE preload != 0 "
-                   "ORDER BY preload DESC;",
-                   table(repoId, "FileMd5"),
-                   table(repoId, "Unit")) :
-                 folly::sformat(
-                   "SELECT path, md5 FROM {};",
-                   table(repoId, "FileMd5"))
+    stmt.prepare(folly::sformat(
+                   "SELECT path, sha1 FROM {};",
+                   table(repoId, "FileSha1"))
                 );
     auto txn = RepoTxn{begin()};
     RepoTxnQuery query(txn, stmt);
 
     for (query.step(); query.row(); query.step()) {
       std::string path;
-      MD5 md5;
+      SHA1 sha1;
 
       query.getStdString(0, path);
-      query.getMd5(1, md5);
+      query.getSha1(1, sha1);
 
-      ret.emplace_back(path, md5);
+      ret.emplace_back(path, sha1);
     }
 
     txn.commit();
@@ -361,29 +364,29 @@ Repo::enumerateUnits(int repoId, bool preloadOnly, bool warn) {
 }
 
 void Repo::InsertFileHashStmt::insert(RepoTxn& txn, const StringData* path,
-                                      const MD5& md5) {
+                                      const SHA1& sha1) {
   if (!prepared()) {
     auto insertQuery = folly::sformat(
-      "INSERT INTO {} VALUES(@path, @md5);",
-      m_repo.table(m_repoId, "FileMd5"));
+      "INSERT INTO {} VALUES(@path, @sha1);",
+      m_repo.table(m_repoId, "FileSha1"));
     txn.prepare(*this, insertQuery);
   }
   RepoTxnQuery query(txn, *this);
   query.bindStaticString("@path", path);
-  query.bindMd5("@md5", md5);
+  query.bindSha1("@sha1", sha1);
   query.exec();
 }
 
-RepoStatus Repo::GetFileHashStmt::get(const char *path, MD5& md5) {
+RepoStatus Repo::GetFileHashStmt::get(const char *path, SHA1& sha1) {
   try {
     auto txn = RepoTxn{m_repo.begin()};
     if (!prepared()) {
       auto selectQuery = folly::sformat(
-        "SELECT f.md5 "
+        "SELECT f.sha1 "
         "FROM {} AS f, {} AS u "
-        "WHERE path == @path AND f.md5 == u.md5 "
+        "WHERE path == @path AND f.sha1 == u.sha1 "
         "ORDER BY unitSn DESC LIMIT 1;",
-        m_repo.table(m_repoId, "FileMd5"),
+        m_repo.table(m_repoId, "FileSha1"),
         m_repo.table(m_repoId, "Unit"));
       txn.prepare(*this, selectQuery);
     }
@@ -393,7 +396,7 @@ RepoStatus Repo::GetFileHashStmt::get(const char *path, MD5& md5) {
     if (!query.row()) {
       return RepoStatus::error;
     }
-    query.getMd5(0, md5);
+    query.getSha1(0, sha1);
     txn.commit();
     return RepoStatus::success;
   } catch (RepoExc& re) {
@@ -401,7 +404,20 @@ RepoStatus Repo::GetFileHashStmt::get(const char *path, MD5& md5) {
   }
 }
 
-RepoStatus Repo::findFile(const char *path, const std::string &root, MD5& md5) {
+void Repo::RemoveFileHashStmt::remove(RepoTxn& txn, const std::string& path) {
+  if (!prepared()) {
+    auto insertQuery = folly::sformat(
+      "DELETE FROM {} WHERE path == @path;",
+      m_repo.table(m_repoId, "FileSha1"));
+    txn.prepare(*this, insertQuery);
+  }
+  RepoTxnQuery query(txn, *this);
+  query.bindStdString("@path", path);
+  query.exec();
+}
+
+RepoStatus Repo::findFile(const char *path, const std::string &root,
+                          SHA1& sha1) {
   if (m_dbc == nullptr) {
     return RepoStatus::error;
   }
@@ -409,13 +425,13 @@ RepoStatus Repo::findFile(const char *path, const std::string &root, MD5& md5) {
   for (repoId = RepoIdCount - 1; repoId >= 0; --repoId) {
     if (*path == '/' && !root.empty() &&
         !strncmp(root.c_str(), path, root.size()) &&
-        (m_getFileHash[repoId].get(path + root.size(), md5) ==
+        (m_getFileHash[repoId].get(path + root.size(), sha1) ==
          RepoStatus::success)) {
       TRACE(3, "Repo loaded file hash for '%s' from '%s'\n",
                path + root.size(), repoName(repoId).c_str());
       return RepoStatus::success;
     }
-    if (m_getFileHash[repoId].get(path, md5) == RepoStatus::success) {
+    if (m_getFileHash[repoId].get(path, sha1) == RepoStatus::success) {
       TRACE(3, "Repo loaded file hash for '%s' from '%s'\n",
                 path, repoName(repoId).c_str());
       return RepoStatus::success;
@@ -425,35 +441,35 @@ RepoStatus Repo::findFile(const char *path, const std::string &root, MD5& md5) {
   return RepoStatus::error;
 }
 
-RepoStatus Repo::insertMd5(UnitOrigin unitOrigin, UnitEmitter* ue,
+RepoStatus Repo::insertSha1(UnitOrigin unitOrigin, UnitEmitter* ue,
                            RepoTxn& txn) {
   const StringData* path = ue->m_filepath;
-  const MD5& md5 = ue->md5();
+  const SHA1& sha1 = ue->sha1();
   int repoId = repoIdForNewUnit(unitOrigin);
   if (repoId == RepoIdInvalid) {
     return RepoStatus::error;
   }
   try {
-    m_insertFileHash[repoId].insert(txn, path, md5);
+    m_insertFileHash[repoId].insert(txn, path, sha1);
     return RepoStatus::success;
   } catch (RepoExc& re) {
-    TRACE(3, "Failed to commit md5 for '%s' to '%s': %s\n",
+    TRACE(3, "Failed to commit sha1 for '%s' to '%s': %s\n",
               path->data(), repoName(repoId).c_str(), re.msg().c_str());
     return RepoStatus::error;
   }
 }
 
-void Repo::commitMd5(UnitOrigin unitOrigin, UnitEmitter* ue) {
+void Repo::commitSha1(UnitOrigin unitOrigin, UnitEmitter* ue) {
   try {
     auto txn = RepoTxn{begin()};
-    RepoStatus err = insertMd5(unitOrigin, ue, txn);
+    RepoStatus err = insertSha1(unitOrigin, ue, txn);
     if (err == RepoStatus::success) {
       txn.commit();
     }
   } catch (RepoExc& re) {
     int repoId = repoIdForNewUnit(unitOrigin);
     if (repoId != RepoIdInvalid) {
-      TRACE(3, "Failed to commit md5 for '%s' to '%s': %s\n",
+      TRACE(3, "Failed to commit sha1 for '%s' to '%s': %s\n",
                ue->m_filepath->data(), repoName(repoId).c_str(),
                re.msg().c_str());
     }
@@ -559,7 +575,7 @@ void Repo::commit() {
 
 RepoStatus Repo::insertUnit(UnitEmitter* ue, UnitOrigin unitOrigin,
                             RepoTxn& txn) {
-  if (insertMd5(unitOrigin, ue, txn) == RepoStatus::error ||
+  if (insertSha1(unitOrigin, ue, txn) == RepoStatus::error ||
       ue->insert(unitOrigin, txn) == RepoStatus::error) {
     return RepoStatus::error;
   }
@@ -570,7 +586,7 @@ void Repo::commitUnit(UnitEmitter* ue, UnitOrigin unitOrigin) {
   if (!RuntimeOption::RepoCommit || ue->m_ICE) return;
 
   try {
-    commitMd5(unitOrigin, ue);
+    commitSha1(unitOrigin, ue);
     ue->commit(unitOrigin);
   } catch (const std::exception& e) {
     TRACE(0, "unexpected exception in commitUnit: %s\n",
@@ -598,7 +614,7 @@ void Repo::connect() {
              : "readonly");
 }
 
-void Repo::disconnect() {
+void Repo::disconnect() noexcept {
   if (m_dbc != nullptr) {
     sqlite3_close(m_dbc);
     m_dbc = nullptr;
@@ -693,22 +709,6 @@ void Repo::initCentral() {
 #endif
 
   fail_no_repo();
-}
-
-static int busyHandler(void* opaque, int nCalls) {
-  Repo* repo UNUSED = static_cast<Repo*>(opaque);
-  // yield to allow other threads access to the machine
-  // spin-wait can starve other threads.
-  // We need to give up eventually or we will wait forever in the event of a
-  // deadlock. We've already waited nCalls * (nCalls - 1) / 2 ms; at nCalls
-  // of 300 that's just under 45 seconds.
-  if (nCalls < 300) {
-    usleep(1000 * nCalls);
-    return 1; // Tell SQLite to retry.
-  } else {
-    Logger::Error("Failed to acquire SQLite lock during repository operation");
-    return 0; // Tell SQLite to give up.
-  }
 }
 
 namespace {
@@ -854,8 +854,9 @@ RepoStatus Repo::openCentral(const char* rawPath, std::string& errorMsg) {
     return RepoStatus::error;
   }
 
-  // Register a busy handler to avoid spurious SQLITE_BUSY errors.
-  sqlite3_busy_handler(m_dbc, busyHandler, (void*)this);
+  if (RuntimeOption::RepoBusyTimeoutMS) {
+    sqlite3_busy_timeout(m_dbc, RuntimeOption::RepoBusyTimeoutMS);
+  }
   try {
     m_beginStmt.prepare("BEGIN TRANSACTION;");
     m_rollbackStmt.prepare("ROLLBACK;");
@@ -1088,14 +1089,15 @@ RepoStatus Repo::createSchema(int repoId, std::string& errorMsg) {
     }
     {
       auto createQuery = folly::sformat(
-        "CREATE TABLE {} (path TEXT, md5 BLOB, UNIQUE(path, md5));",
-        table(repoId, "FileMd5"));
+        "CREATE TABLE {} (path TEXT, sha1 BLOB, UNIQUE(path, sha1));",
+        table(repoId, "FileSha1"));
       txn.exec(createQuery);
     }
     txn.exec(folly::sformat("CREATE TABLE {} (data BLOB);",
                            table(repoId, "GlobalData")));
     m_urp.createSchema(repoId, txn);
     m_pcrp.createSchema(repoId, txn);
+    m_rrp.createSchema(repoId, txn);
     m_frp.createSchema(repoId, txn);
     m_lsrp.createSchema(repoId, txn);
 

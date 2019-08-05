@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string mb_stristr(string haystack, string needle[, bool part[, string encoding]])
  * Description: Finds first occurrence of a string within another, case insensitive
  * Source code: ext/mbstring/mbstring.c
@@ -121,5 +121,4 @@ foreach($inputs as $key =>$value) {
 
 fclose($fp);
 
-?>
-===DONE===
+echo "===DONE===\n";

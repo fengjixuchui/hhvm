@@ -1,9 +1,14 @@
+.hh_file 1;
 # Test making closures
 
 .main {
   Int 20
   SetL $x
   PopC
+
+  NullUninit
+  NullUninit
+  NullUninit
 
   CUGetL $x
   CreateCl 1 0

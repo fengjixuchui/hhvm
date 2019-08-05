@@ -3,10 +3,18 @@
   (wrapped false)
   (libraries
     ast
+    ast_provider
+    facts
     file_info
+    full_fidelity
+    future
     heap_shared_mem
-    naming_heap
-    parser_heap
+    index_builder
+    logging
+    naming
     procs_procs
     pos
+    search_utils
+    sqlite3
+    state_loader
     trie))

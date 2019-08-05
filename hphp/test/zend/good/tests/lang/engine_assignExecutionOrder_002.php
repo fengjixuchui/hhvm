@@ -1,13 +1,20 @@
-<?php
+<?hh
+
+// expect the inner array to be defined
+function f() {
+  LangEngineAssignexecutionorder002::$ee = array("array created in f()");
+  return 1;
+}
+
+abstract final class LangEngineAssignexecutionorder002 {
+  public static $ee;
+}
+
 
 // simple case with missing element
-$f = array("hello","item2","bye");
+<<__EntryPoint>> function main(): void { $f = array("hello","item2","bye");
 list($a,,$b) = $f;
 echo "A=$a B=$b\n";
-
-
-// Warning: Cannot use a scalar value as an array in %s on line %d
-$c[$c=1] = 1;
 
 // i++ evaluated first, so $d[0] is 10
 $d = array(0,10);
@@ -25,7 +32,7 @@ $g3 = array(30,30);
 $g = array($g1,$g2,$g3);
 list($e[$f++],$e[$f++]) = $g[$f];
 // expect 30,30
-var_dump($e); 
+var_dump($e);
 
 
 $i1 = array(1,2);
@@ -35,7 +42,7 @@ $i4 = array(array(1000,2000),3000);
 $i = array($i1,$i2,$i3,$i4);
 $j = array(0,0,0);
 $h = 0;
-// a list of lists 
+// a list of lists
 list(list($j[$h++],$j[$h++]),$j[$h++]) = $i[$h];
 var_dump($j);
 
@@ -47,7 +54,7 @@ list(list($l,$m),$n) = $k;
 echo "L=$l M=$m N=$n\n";
 
 
-// expect $x and $y to be null - this fails on php.net 5.2.1 (invalid opcode) - fixed in 5.2.3 
+// expect $x and $y to be null - this fails on php.net 5.2.1 (invalid opcode) - fixed in 5.2.3
 list($o,$p) = 20;
 echo "O=$o and P=$p\n";
 
@@ -62,28 +69,22 @@ list(list(list($r,$s,,$t),list($u,$v),,$w),,$x) = $q4;
 echo "$r $s $t $u $v $w $x\n";
 
 
-// expect y and z to be undefined 
-list($y,$z) = array();
-echo "Y=$y,Z=$z\n";
+// expect y and z to be undefined
+try {
+  list($y,$z) = array();
+  echo "Y=$y,Z=$z\n";
+} catch (Exception $e) { echo $e->getMessage()."\n"; }
 
 // expect h to be defined and be 10
-list($aa,$bb) = array(10);
-echo "AA=$aa\n";
+try {
+  list($aa,$bb) = array(10);
+  echo "AA=$aa\n";
+} catch (Exception $e) { echo $e->getMessage()."\n"; }
+
 
 // expect cc and dd to be 10 and 30
 list($cc,,$dd) = array(10,20,30,40);
 echo "CC=$cc DD=$dd\n";
 
-// expect the inner array to be defined 
 LangEngineAssignexecutionorder002::$ee = array("original array");
-function f() {
-
-  LangEngineAssignexecutionorder002::$ee = array("array created in f()");
-  return 1;
-}
-LangEngineAssignexecutionorder002::$ee["array entry created after f()"][f()] = "hello";
-print_r(LangEngineAssignexecutionorder002::$ee);
-
-abstract final class LangEngineAssignexecutionorder002 {
-  public static $ee;
 }

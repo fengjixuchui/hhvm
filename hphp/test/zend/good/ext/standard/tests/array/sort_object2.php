@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool sort ( array &$array [, int $sort_flags] )
  * Description: This function sorts an array.
                 Elements will be arranged from lowest to highest when this function has completed.
@@ -8,8 +8,6 @@
 /*
  * testing sort() by providing integer/string object arrays with flag values are defualt, SORT_REGULAR
 */
-
-echo "*** Testing sort() : object functionality ***\n";
 
 // class declaration for integer objects
 class for_integer_sort
@@ -45,6 +43,8 @@ class for_string_sort
   }
 
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing sort() : object functionality ***\n";
 
 // array of integer objects
 $unsorted_int_obj = array(
@@ -87,4 +87,4 @@ var_dump(sort(&$temp_array, SORT_REGULAR) );
 var_dump($temp_array);
 
 echo "Done\n";
-?>
+}

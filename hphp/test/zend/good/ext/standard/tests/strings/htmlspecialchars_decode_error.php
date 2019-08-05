@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : string htmlspecialchars_decode(string $string [, int $quote_style])
  * Description: Convert special HTML entities back to characters 
  * Source code: ext/standard/html.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing htmlspecialchars_decode() : error conditions ***\n";
 
 // Zero arguments
@@ -18,4 +18,4 @@ $extra_arg = 10;
 try { var_dump( htmlspecialchars_decode($string, $quote_style, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

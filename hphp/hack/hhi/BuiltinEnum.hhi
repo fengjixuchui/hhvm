@@ -40,7 +40,7 @@ abstract class BuiltinEnum<T> {
    * @return array($value => 'CONST_NAME', ....)
    */
   <<__Rx>>
-  final public static function getNames(): darray<T, string>;
+  final public static function getNames(): darray<T, string> where T as arraykey;
 
   /**
    * Returns whether or not the value is defined as a constant.

@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $im = new Imagick();
 $draw = new ImagickDraw();
 
@@ -21,5 +21,4 @@ try {
 } catch (ImagickDrawException $e) {
   echo "pass\n";
 }
-
-?>
+}

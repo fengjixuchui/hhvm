@@ -14,22 +14,11 @@ module SyntaxError = Full_fidelity_syntax_error
 
 module Env = struct
 
-  let force_hh_opt = ref false
-  let enable_xhp_opt = ref false
-  let is_hh_file = ref true
-  let backend_is_codegen = ref true
-  let enable_unsafe_expr = ref true
-  let enable_unsafe_block = ref true
-  let set_is_hh_file b = is_hh_file := b
-  let set ~force_hh ~enable_xhp ~codegen ~disable_unsafe_expr ~disable_unsafe_block =
-    force_hh_opt := force_hh;
-    enable_xhp_opt := enable_xhp;
-    backend_is_codegen := codegen;
-    enable_unsafe_expr := not disable_unsafe_expr;
-    enable_unsafe_block := not disable_unsafe_block
-  let is_hh () = !is_hh_file || !force_hh_opt
-  let enable_xhp () = is_hh () || !enable_xhp_opt
-  let force_kw_in_lowercase () = is_hh () && not !backend_is_codegen
+  let is_rust = ref false
+  let set ~rust =
+    is_rust := rust
+
+  let is_rust () = !is_rust
 
 end
 
@@ -46,11 +35,6 @@ module Lexer : sig
   [@@@warning "+32"]
   val make :
     ?is_experimental_mode:bool ->
-    ?force_hh:bool ->
-    ?enable_xhp:bool ->
-    ?codegen:bool ->
-    ?disable_unsafe_expr:bool ->
-    ?disable_unsafe_block:bool ->
     Full_fidelity_source_text.t -> t
   val make_at : ?is_experimental_mode:bool -> SourceText.t -> int -> t
   val start : t -> int
@@ -81,16 +65,10 @@ end = struct
 
   let make
     ?(is_experimental_mode = false)
-    ?(force_hh = false)
-    ?(enable_xhp = false)
-    ?(codegen = false)
-    ?(disable_unsafe_expr = false)
-    ?(disable_unsafe_block = false)
     text =
-    (* this can be overridden in scan_markup, but we need to explicitly reset *)
-    (* it, as `scan_markup` is never called for `.hack` files *)
-    if (force_hh) then Env.set_is_hh_file true;
-    Env.set ~force_hh ~enable_xhp ~codegen ~disable_unsafe_expr ~disable_unsafe_block;
+    (* this can be overridden in scan_header, but we need to explicitly reset *)
+    (* it, as `scan_header` is never called for `.hack` files *)
+    Env.set ~rust:false;
     { text; start = 0; offset = 0; errors = []; is_experimental_mode }
 
   let start  x = x.start
@@ -110,11 +88,6 @@ end = struct
     with_start_offset
       (make
         ?is_experimental_mode
-        ~force_hh:!Env.force_hh_opt
-        ~enable_xhp:!Env.enable_xhp_opt
-        ~codegen:!Env.backend_is_codegen
-        ~disable_unsafe_expr:(not !Env.enable_unsafe_expr)
-        ~disable_unsafe_block:(not !Env.enable_unsafe_block)
         text)
       start_offset
       start_offset
@@ -191,9 +164,6 @@ let current_text lexer =
 
 let at_end lexer =
   (offset lexer) >= SourceText.length (source lexer)
-
-let at_end_index lexer index =
-  index >= SourceText.length (source lexer)
 
 let remaining lexer =
   let r = (SourceText.length (source lexer)) - offset lexer in
@@ -315,23 +285,6 @@ let scan_variable lexer =
   assert('$' = peek_char lexer 0);
   let lexer = scan_name_impl (advance lexer 1) in
   (lexer, TokenKind.Variable)
-
-(* Pocket Universe atom: like a variable name but must start with `:@` *)
-let scan_atom lexer =
-  assert(':' = peek_char lexer 0);
-  assert('@' = peek_char lexer 1);
-  let lexer = scan_name_impl (advance lexer 2) in
-  (lexer, TokenKind.PUAtom)
-
-let scan_atom_token lexer =
-  (* Pocket Universe syntax is `:@name` to avoid conflict with existing
-     syntax
-   *)
-  let ch2 = peek_char lexer 2 in
-  if is_name_nondigit ch2 then scan_atom lexer (* :@x *)
-  else
-  let lexer = with_error lexer SyntaxError.error0008 in
-  (advance lexer 2, TokenKind.ErrorToken)
 
 let scan_with_underscores (l : lexer) accepted_char =
   let n = text_len l in
@@ -1010,7 +963,6 @@ let scan_xhp_body lexer =
     match (ch1, ch2, ch3) with
     | ('!', '-', '-') -> (scan_xhp_comment lexer, TokenKind.XHPComment)
     | ('/', _, _) -> (advance lexer 2, TokenKind.LessThanSlash)
-    | ('<', '<', _) -> scan_docstring_literal lexer
     | _ -> (advance lexer 1, TokenKind.LessThan)
     end
   | _ -> ((aux lexer 0), TokenKind.XHPBody)
@@ -1118,7 +1070,6 @@ let rec scan_token_impl : bool -> lexer -> (lexer * TokenKind.t) =
        TODO: This is not in the spec at present.  We should either make it an
        TODO: error, or add it to the specification. *)
     | ('=', '>') -> (advance lexer 3, TokenKind.LessThanEqualGreaterThan)
-    | ('>', _) -> (advance lexer 2, TokenKind.LessThanGreaterThan)
     | ('=', _) -> (advance lexer 2, TokenKind.LessThanEqual)
     | ('<', _) -> (advance lexer 2, TokenKind.LessThanLessThan)
     | _ -> (advance lexer 1, TokenKind.LessThan)
@@ -1171,12 +1122,13 @@ let rec scan_token_impl : bool -> lexer -> (lexer * TokenKind.t) =
     | _ -> (advance lexer 1, TokenKind.Question)
     end
   (* In experimental mode only: try to scan for a pocket universes atom
-     of the form `:@name`
+     of the form `:@`
    *)
   | ':' ->
     let ch1 = peek_char lexer 1 in
     if ch1 = ':' then (advance lexer 2, TokenKind.ColonColon)
-    else if Lexer.is_experimental_mode lexer && ch1 = '@' then scan_atom_token lexer
+    else if Lexer.is_experimental_mode lexer && ch1 = '@'
+    then (advance lexer 2, TokenKind.ColonAt)
     else (advance lexer 1, TokenKind.Colon)
   | ';' -> (advance lexer 1, TokenKind.Semicolon)
   | ',' -> (advance lexer 1, TokenKind.Comma)
@@ -1266,8 +1218,6 @@ let scan_hash_comment lexer =
 let scan_single_line_comment lexer =
   (* A fallthrough comment is two slashes, any amount of whitespace,
     FALLTHROUGH, and any characters may follow.
-    An unsafe comment is two slashes, any amount of whitespace,
-    UNSAFE, and then any characters may follow.
     TODO: Consider allowing lowercase fallthrough.
   *)
   let lexer = advance lexer 2 in
@@ -1278,8 +1228,6 @@ let scan_single_line_comment lexer =
   let c =
     if remainder >= 11 && peek_string lexer_ws 11 = "FALLTHROUGH" then
       Trivia.make_fallthrough (source lexer) (start lexer) w
-    else if remainder >= 6 && peek_string lexer_ws 6 = "UNSAFE" && !Env.enable_unsafe_block then
-      Trivia.make_unsafe (source lexer) (start lexer) w
     else
       Trivia.make_single_line_comment (source lexer) (start lexer) w in
   (lexer, c)
@@ -1301,10 +1249,7 @@ let skip_to_end_of_delimited_comment lexer =
   aux lexer 0
 
 let scan_delimited_comment lexer =
-  (* An unsafe expression comment is a delimited comment that begins with any
-    whitespace, followed by UNSAFE_EXPR, followed by any text.
-
-    The original lexer lexes a fixme / ignore error as:
+  (* The original lexer lexes a fixme / ignore error as:
 
     slash star [whitespace]* HH_FIXME [whitespace or newline]* leftbracket
     [whitespace or newline]* integer [any text]* star slash
@@ -1321,9 +1266,7 @@ let scan_delimited_comment lexer =
   let lexer = skip_to_end_of_delimited_comment lexer_ws in
   let w = width lexer in
   let c =
-    if !Env.enable_unsafe_expr && match_string lexer_ws "UNSAFE_EXPR" then
-      Trivia.make_unsafe_expression (source lexer) (start lexer) w
-    else if match_string lexer_ws "HH_FIXME" then
+    if match_string lexer_ws "HH_FIXME" then
       Trivia.make_fix_me (source lexer) (start lexer) w
     else if match_string lexer_ws "HH_IGNORE_ERROR" then
       Trivia.make_ignore_error (source lexer) (start lexer) w
@@ -1404,7 +1347,7 @@ we use are:
 * The first newline trivia encountered is the last trailing trivia.
 * The newline which follows a // or # comment is not part of the comment
   but does terminate the trailing trivia.
-* A pragma to turn checks off (HH_FIXME, HH_IGNORE_ERROR and UNSAFE_EXPR) is
+* A pragma to turn checks off (HH_FIXME and HH_IGNORE_ERROR) is
 * always a leading trivia.
 *)
 
@@ -1433,7 +1376,6 @@ let scan_trailing_trivia scanner lexer  =
       | TriviaKind.EndOfLine -> (lexer1, t :: acc)
       | TriviaKind.FixMe
       | TriviaKind.IgnoreError
-      | TriviaKind.UnsafeExpression
         -> (lexer, acc)
       | _ -> aux lexer1 (t :: acc)
       end in
@@ -1457,44 +1399,35 @@ let is_next_xhp_class_name lexer =
 type kw_set = [ `AllKeywords | `NonReservedKeywords | `NoKeywords ]
 
 let as_case_insensitive_keyword text =
-  (* Some keywords are case-insensitive in Hack or PHP. *)
-  (* TODO: Consider making non-lowercase versions of these keywords errors
-     in strict mode. *)
-  (* TODO: Consider making these illegal, period, and code-modding away all
-  non-lower versions in our codebase. *)
   let lower = String.lowercase_ascii text in
   match lower with
   | "__halt_compiler" | "abstract" | "and" | "array" | "as" | "bool" | "boolean" | "break"
   | "callable"
-  | "case" | "catch" | "class" | "clone" | "const" | "continue" | "declare" | "default"
-  | "die" | "do" | "echo" | "else" | "elseif" | "empty" | "enddeclare" | "endfor"
+  | "case" | "catch" | "class" | "clone" | "const" | "continue" | "default"
+  | "die" | "do" | "echo" | "else" | "elseif" | "empty" | "endfor"
   | "endforeach" | "endif" | "endswitch" | "endwhile" | "eval" | "exit" | "extends" | "false"
   | "final" | "finally" | "for" | "foreach" | "function" | "global" | "goto" | "if"
-  | "implements" | "include" | "include_once" | "instanceof" | "insteadof" | "int" | "integer"
+  | "implements" | "include" | "include_once" | "inout" | "instanceof" | "insteadof" | "int" | "integer"
   | "interface" | "isset" | "list" | "namespace" | "new" | "null" | "or" | "parent"
   | "print" | "private" | "protected" | "public" | "require" | "require_once"
   | "return" | "self" | "static" | "string" | "switch" | "throw" | "trait"
-  | "try" | "true" | "unset" | "use" | "var" | "void" | "while"
+  | "try" | "true" | "unset" | "use" | "using" | "var" | "void" | "while"
   | "xor" | "yield" -> lower
-  | "inout" | "using" when Env.is_hh () -> lower
   | _ -> text
 
 let enforce_lowercase lexer ~original_text ~lowered_text =
-  if Env.force_kw_in_lowercase () then
-    match lowered_text with
-    | "true" | "false" | "null" -> lexer
-    | _ ->
-      if original_text <> lowered_text then
-        with_error lexer (SyntaxError.uppercase_kw original_text)
-      else lexer
-  else lexer
+  match lowered_text with
+  | "true" | "false" | "null" -> lexer
+  | _ ->
+    if original_text <> lowered_text then
+      with_error lexer (SyntaxError.uppercase_kw original_text)
+    else lexer
 
 let as_keyword ~only_reserved kind lexer =
   if kind = TokenKind.Name then
     let original_text = current_text lexer in
     let text = as_case_insensitive_keyword original_text in
-    let is_hack = Env.is_hh () and allow_xhp = Env.enable_xhp () in
-    match TokenKind.from_string text ~is_hack ~allow_xhp ~only_reserved with
+    match TokenKind.from_string text ~only_reserved with
     | Some TokenKind.Let when (not (is_experimental_mode lexer)) ->
       lexer, TokenKind.Name
     | Some keyword ->
@@ -1676,7 +1609,7 @@ let next_xhp_name lexer =
 let make_markup_token lexer =
   Token.make TokenKind.Markup (source lexer) (start lexer) (width lexer) [] []
 
-let skip_to_end_of_markup lexer ~is_leading_section =
+let skip_to_end_of_markup lexer =
   let make_markup_and_suffix lexer =
     let markup_text = make_markup_token lexer in
     let less_than_question_token =
@@ -1691,10 +1624,7 @@ let skip_to_end_of_markup lexer ~is_leading_section =
       (* single line comments that follow the language in leading markup_text
         determine the file check mode, read the trailing trivia and attach it
         to the language token *)
-      let lexer, trailing =
-        if is_leading_section then scan_trailing_php_trivia lexer
-        else lexer, []
-      in
+      let lexer, trailing = scan_trailing_php_trivia lexer in
       let name = Token.make TokenKind.Name
         (source lexer) name_token_offset size [] trailing in
       lexer, markup_text, Some (less_than_question_token, Some name)
@@ -1704,13 +1634,10 @@ let skip_to_end_of_markup lexer ~is_leading_section =
     let ch2 = peek_char lexer 2 in
     match ch0, ch1, ch2 with
     | ('H' | 'h'), ('H' | 'h'), _ ->
-      Env.set_is_hh_file true;
       make_long_tag lexer 2
     | ('P' | 'p'), ('H' | 'h'), ('P' | 'p') ->
-      Env.set_is_hh_file false;
       make_long_tag lexer 3
     | '=', _, _ ->
-      Env.set_is_hh_file false;
       begin
         (* skip = *)
         let lexer = advance lexer 1 in
@@ -1719,39 +1646,29 @@ let skip_to_end_of_markup lexer ~is_leading_section =
         lexer, markup_text, Some (less_than_question_token, Some equal)
       end
     | _ ->
-      Env.set_is_hh_file false;
       lexer, markup_text, Some (less_than_question_token, None)
   in
-  let rec aux lexer index =
-    (* It's not an error to run off the end of one of these. *)
-    if at_end_index lexer index then
-      let lexer' = with_offset lexer index in
-      lexer', (make_markup_token lexer'), None
-    else begin
-      let ch = peek lexer index in
-      if ch = '<' && peek_def lexer (succ index) ~def:'\x00' = '?' then
-        (* Found a beginning tag that delimits markup from the script *)
-        make_markup_and_suffix (with_offset lexer index)
-      else
-        aux lexer (succ index)
-    end
-  in
   let start_offset =
-    if is_leading_section
-    then begin
-      (* if leading section starts with #! - it should span the entire line *)
-      let index = offset lexer in
-      if peek_def ~def:'\x00' lexer index = '#' &&
-         peek_def ~def:'\x00' lexer (succ index)  = '!'
-      then skip_while_to_offset lexer not_newline
-      else index
-    end
-    else offset lexer in
-  aux lexer start_offset
+    (* if leading section starts with #! - it should span the entire line *)
+    let index = offset lexer in
+    if index != 0 then failwith "Should only try to lex header at start of document";
+    if peek_def ~def:'\x00' lexer index = '#' && peek_def ~def:'\x00' lexer (succ index) = '!'
+    then succ (skip_while_to_offset lexer not_newline)
+    (* this should really just be `index` - but, skip whitespace as the FFP *)
+    (* tests use magic comments in leading markup to set flags, but blank *)
+    (* them out before parsing; the newlines are kept to provide correct line *)
+    (* numbers in errors *)
+    else skip_while_to_offset lexer (fun c -> is_newline c || is_whitespace_no_newline c)
+  in
+  if peek lexer start_offset = '<' && peek_def ~def:'\x00' lexer (succ start_offset) = '?'
+  then make_markup_and_suffix (with_offset lexer start_offset)
+  else begin
+    lexer, make_markup_token lexer, None
+  end
 
-let scan_markup lexer ~is_leading_section =
+let scan_header lexer =
   let lexer = start_new_lexeme lexer in
-  skip_to_end_of_markup lexer ~is_leading_section
+  skip_to_end_of_markup lexer
 
 let is_next_xhp_category_name lexer =
   let (lexer, _) = scan_leading_php_trivia lexer in

@@ -30,6 +30,8 @@ namespace HPHP {
 struct Synchronizable {
   Synchronizable();
   virtual ~Synchronizable();
+  Synchronizable(const Synchronizable&) = delete;
+  Synchronizable& operator=(const Synchronizable&) = delete;
 
   void wait();
   bool wait(long seconds); // false if timed out
@@ -37,7 +39,8 @@ struct Synchronizable {
   void notify();
   void notifyAll();
 
-  Mutex &getMutex() { return m_mutex;}
+  const Mutex& getMutex() const { return m_mutex; }
+  Mutex& getMutex() { return m_mutex; }
 
  private:
   Mutex m_mutex;

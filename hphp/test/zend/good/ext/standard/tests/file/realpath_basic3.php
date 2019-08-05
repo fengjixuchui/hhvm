@@ -1,8 +1,8 @@
-<?php
+<?hh
 /* Prototype: string realpath ( string $path );
    Description: Returns canonicalized absolute pathname
 */
-
+<<__EntryPoint>> function main(): void {
 echo "\n*** Testing basic functions of realpath() with files ***\n";
 
 /* creating directories and files */
@@ -44,9 +44,7 @@ foreach($filenames as $file) {
 }
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $name_prefix = $file_path."/realpath_basic3";
 unlink("$name_prefix/home/test/realpath_basic3.tmp");
@@ -55,4 +53,4 @@ unlink("$name_prefix/realpath_basic3.tmp");
 rmdir("$name_prefix/home/test/");
 rmdir("$name_prefix/home/");
 rmdir("$name_prefix/");
-?>
+}

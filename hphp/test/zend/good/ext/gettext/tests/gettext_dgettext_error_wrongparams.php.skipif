@@ -1,4 +1,4 @@
-<?php 
+<?hh 
 	if (!extension_loaded("gettext")) {
 		die("skip extension gettext not loaded\n");
 	}
@@ -6,4 +6,3 @@
         die("skip en_US.UTF-8 locale not supported.");
     }
 
-?>

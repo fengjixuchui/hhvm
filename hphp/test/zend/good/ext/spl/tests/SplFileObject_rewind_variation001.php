@@ -1,4 +1,4 @@
-<?php
+<?hh
 //line 2
 //line 3
 //line 4
@@ -13,4 +13,3 @@ var_dump($s->valid());
 $s->rewind();
 var_dump($s->valid());
 echo $s->current();
-?>

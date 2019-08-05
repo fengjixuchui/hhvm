@@ -35,8 +35,7 @@ let rec rebalance_stk n (req : stack) : instruct list * stack =
   if List.length req < 0 then failwith "cannot rebalance empty stack" else
   match List.hd req, List.tl req |> rebalance_stk (n - 1) with
   | "C", (buf, extra) -> ILitConst (Int (Int64.of_int 1)) :: buf, "C" :: extra
-  | "V", (buf, extra) ->
-    ILitConst (Int (Int64.of_int 1)) :: IBasic (Box) :: buf, "V" :: extra
+  | "V", _ -> failwith "not supported, V flavor being removed"
   | "U", (buf, extra) -> ILitConst NullUninit :: buf, "U" :: extra
   | _ -> [], [] (* Impossible *)
 
@@ -69,43 +68,30 @@ let string_of_stack (stk : stack) : string =
  * TODO(T20108993): autogenerate this from the bytecode spec. *)
 let stk_data : instruct -> stack_sig = function
   | IMutator UnsetL _
-  | ICall FPushFuncD _
-  | ICall FPushClsMethodD _
-  | ICall FPushFuncU _
   | IIncludeEvalDefine DefClsNop _
   | IIncludeEvalDefine DefCls _
   | IIncludeEvalDefine DefTypeAlias _
   | IGenerator ContCheck _                 -> [], []
-  | ICall FPushObjMethod _                 -> ["C"; "C"], []
+  | ICall FPushFuncD _
+  | ICall FPushFuncRD _                    -> ["U"; "U"; "U"], []
+  | ICall FPushFunc _                      -> ["U"; "U"; "U"; "C"], []
   | IOp Fatal _
   | IContFlow JmpZ _
   | IContFlow JmpNZ _
   | IContFlow Switch _
   | IContFlow SSwitch _
   | IContFlow RetC
-  | IMisc StaticLocDef _
   | IContFlow Throw
-  | IGet ClsRefGetC _
-  | IGet ClsRefGetTS _
   | IMutator UnsetG
   | IMutator InitProp _
-  | ICall FPushCtor _
-  | ICall FPushFunc _
-  | ICall FPushObjMethodD _
   | IIterator IterInit _
   | IIterator IterInitK _
-  | IMisc StaticLocInit _
   | IMisc CheckReifiedGenericMismatch
   | IBasic PopC                            -> ["C"], []
   | IBasic PopU                            -> ["U"], []
   | IBasic PopV                            -> ["V"], []
   | IGet CGetL2 _
   | IBasic Dup                             -> ["C"], ["C"; "C"]
-  | IGet VGetS _
-  | IGet VGetG
-  | IBasic Box                             -> ["C"], ["V"]
-  | IBasic Unbox                           -> ["V"], ["C"]
-  | IMutator BindL _                       -> ["V"], ["V"]
   | IMisc CGetCUNop                        -> ["U"], ["C"]
   | IMisc UGetCUNop                        -> ["C"], ["U"]
   | IGet VGetL _                           -> [], ["V"]
@@ -119,14 +105,11 @@ let stk_data : instruct -> stack_sig = function
   | ILitConst NewPackedArray n             -> produce "C" n, ["C"]
   | IFinal SetOpM (n, _, _)
   | IFinal SetM (n, _)                     -> produce "C" (n + 1), ["C"]
-  | IFinal VGetM (n, _)                    -> produce "C" n, ["V"]
   | IFinal UnsetM (n, _)                   -> produce "C" n, []
-  | IFinal BindM (n, _)                    -> produce "V" (n + 1), ["V"]
   | ILitConst NewStructArray v             -> produce "C" (List.length v), ["C"]
   | IMisc Idx
   | IMisc ArrayIdx
   | ILitConst AddElemC                     -> ["C"; "C"; "C"], ["C"]
-  | ILitConst AddElemV                     -> ["C"; "C"; "V"], ["C"]
   | IGet CGetL _
   | IGet PushL _
   | IGet CUGetL _
@@ -137,16 +120,13 @@ let stk_data : instruct -> stack_sig = function
   | IMutator CheckProp _
   | IMisc This
   | IMisc BareThis _
-  | IMisc StaticLocCheck _
-  | IMisc Catch
   | IMisc GetMemoKeyL _
   | IGenerator CreateCont
   | IGenerator ContValid
   | IGenerator ContKey
   | IGenerator ContGetReturn
-  | ICall NewObj _
   | ICall NewObjD _
-  | ICall NewObjI _
+  | ICall NewObjRD _
   | IGet CGetQuietL _                      -> [], ["C"]
   | IMutator SetG
   | IMutator SetOpG _
@@ -154,9 +134,6 @@ let stk_data : instruct -> stack_sig = function
   | IMisc OODeclExists _
   | IMisc AKExists
   | IGenerator YieldK                      -> ["C"; "C"], ["C"]
-  | IMutator BindG
-  | IMutator BindS _
-  | ILitConst AddNewElemV                  -> ["C"; "V"], ["V"]
   | IOp Abs
   | IOp Not
   | IOp Floor
@@ -173,7 +150,6 @@ let stk_data : instruct -> stack_sig = function
   | IOp CastKeyset
   | IOp InstanceOfD _
   | IOp IsTypeStructC _
-  | IOp AsTypeStructC _
   | IOp Print
   | IOp Clone
   | IOp BitNot
@@ -187,17 +163,17 @@ let stk_data : instruct -> stack_sig = function
   | IMisc VerifyRetTypeTS
   | IGenerator _
   | IAsync _
+  | IMisc RecordReifiedGeneric
+  | IMisc ReifiedName _
   | ILitConst ColFromArray _               -> ["C"], ["C"]
   | IOp CombineAndResolveTypeStruct n      -> produce "C" n, ["C"]
-  | IMisc RecordReifiedGeneric n           -> produce "C" n, ["C"]
-  | IMisc ReifiedName (n, _)               -> produce "C" n, ["C"]
   | ILitConst NewPair
   | IOp _
   | ILitConst AddNewElemC                  -> ["C"; "C"], ["C"]
-  | ICall FCall ((f, n, r, _, _), _, _)       ->
+  | ICall FCall ((f, n, r, _, _))       ->
     produce "C" (n + (if f.has_unpack then 1 else 0)),
     produce "C" r
-  | ICall FCallBuiltin (n, _, _)           -> produce "C" n, ["C"]
+  | ICall FCallBuiltin (n, _, _, _)        -> produce "C" n, ["C"]
   | ILitConst _                            -> [], ["C"]
   | ICall _                                -> ["C"], []
   | _ -> [], []
@@ -228,7 +204,7 @@ let stack_history (seq : IS.t) : (instruct * stack) list =
 (* Produces a map from stack height to indices in the instruction sequence
    with that height, as well as a list of all the heights in the table. This
    map doesn't include the last instruction, since swapping the position of a
-   Ret* or Unwind instruction is not desirable. *)
+   Ret* instruction is not desirable. *)
 let height_map (lst : (instruct * stack) list) :
     int list * (int, int list) Hashtbl.t =
   if List.length lst < 0 then failwith "cannot get history of empty sequence";

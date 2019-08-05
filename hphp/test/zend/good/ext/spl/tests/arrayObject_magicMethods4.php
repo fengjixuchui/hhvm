@@ -1,4 +1,4 @@
-<?php
+<?hh
 class C {
 	public $a = 1;
 	public $b = 2;
@@ -8,26 +8,26 @@ class C {
 }
 
 class UsesMagic extends ArrayObject {
-	
+
 	public $b = "This should not be in the storage";
 
-	function __get($name) { 
+	function __get($name) {
 		$args = func_get_args();
 		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
 	}
-	function __set($name, $value) { 
+	function __set($name, $value) {
 		$args = func_get_args();
 		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
 	}
-	function __isset($name) { 
+	function __isset($name) {
 		$args = func_get_args();
 		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
 	}
-	function __unset($name) { 
+	function __unset($name) {
 		$args = func_get_args();
 		echo "In " . __METHOD__ . "(" . implode($args, ',') . ")\n";
 	}
-	
+
 }
 $obj = new C;
 $ao = new UsesMagic($obj);
@@ -60,10 +60,9 @@ var_dump($ao);
 
 echo "\n--> Unset existent, non-existent and dynamic:\n";
 unset($ao['a']);
-unset($ao['nonexistent']);
+try { unset($ao['nonexistent']); } catch (Exception $e) { echo $e->getMessage()."\n"; }
 unset($ao['dynamic']);
 echo "  Original wrapped object:\n";
 var_dump($obj);
 echo "  Wrapping ArrayObject:\n";
 var_dump($ao);
-?>

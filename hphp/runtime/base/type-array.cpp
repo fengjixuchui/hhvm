@@ -44,7 +44,6 @@ namespace HPHP {
 ////////////////////////////////////////////////////////////////////////////////
 
 const Array null_array{};
-const Array empty_array_ref{staticEmptyArray()};
 const StaticString array_string("Array");
 const StaticString vec_string("Vec");
 const StaticString dict_string("Dict");
@@ -194,7 +193,7 @@ Array Array::diffImpl(const Array& array, bool by_key, bool by_value, bool match
       Variant key(iter.first());
       auto const value = iter.secondVal();
       bool found = false;
-      if (array->exists(array.convertKey<IntishCast::CastSilently>(key))) {
+      if (array->exists(array.convertKey<IntishCast::Cast>(key))) {
         if (by_value) {
           found = value_cmp_as_string_function(
             VarNR(value),
@@ -609,15 +608,6 @@ arr_lval Array::lvalAtImpl(const T& key, AccessFlags) {
 }
 
 template<typename T> ALWAYS_INLINE
-arr_lval Array::lvalAtRefImpl(const T& key, AccessFlags) {
-  if (!m_arr) m_arr = Ptr::attach(ArrayData::Create());
-  auto const lval = m_arr->lvalRef(key, m_arr->cowCheck());
-  if (lval.arr != m_arr) m_arr = Ptr::attach(lval.arr);
-  assertx(lval);
-  return lval;
-}
-
-template<typename T> ALWAYS_INLINE
 bool Array::existsImpl(const T& key) const {
   if (m_arr) return m_arr->exists(key);
   return false;
@@ -644,25 +634,11 @@ void Array::setImpl(const T& key, TypedValue v) {
 template<typename T> ALWAYS_INLINE
 void Array::setWithRefImpl(const T& key, TypedValue v) {
   if (!m_arr) {
-    m_arr = Ptr::attach(ArrayData::CreateWithRef(key, v));
+    ArrayInit init(1, ArrayInit::Map{});
+    init.setWithRef(key, v);
+    m_arr = Ptr::attach(init.create());
   } else {
     auto const escalated = m_arr->setWithRef(key, v);
-    if (escalated != m_arr) m_arr = Ptr::attach(escalated);
-  }
-}
-
-template<typename T> ALWAYS_INLINE
-void Array::setRefImpl(const T& key, Variant& v) {
-  setRefImpl(key, tv_lval{v.asTypedValue()});
-}
-
-template<typename T> ALWAYS_INLINE
-void Array::setRefImpl(const T& key, tv_lval v) {
-  if (!m_arr) {
-    m_arr = Ptr::attach(ArrayData::CreateRef(key, v));
-  } else {
-    escalate();
-    auto const escalated = m_arr->setRef(key, v);
     if (escalated != m_arr) m_arr = Ptr::attach(escalated);
   }
 }
@@ -771,7 +747,6 @@ decltype(auto) elem(const Array& arr, Fn fn, bool is_key,
 
 FOR_EACH_KEY_TYPE(rvalAt, tv_rval, const)
 FOR_EACH_KEY_TYPE(lvalAt, arr_lval, )
-FOR_EACH_KEY_TYPE(lvalAtRef, arr_lval, )
 
 #undef I
 #undef V
@@ -807,8 +782,6 @@ FOR_EACH_KEY_TYPE(void, remove, )
 
 FOR_EACH_KEY_TYPE(set, TypedValue)
 FOR_EACH_KEY_TYPE(setWithRef, TypedValue)
-FOR_EACH_KEY_TYPE(setRef, Variant&)
-FOR_EACH_KEY_TYPE(setRef, tv_lval)
 
 #undef I
 #undef V
@@ -844,28 +817,11 @@ arr_lval Array::lvalAt() {
   return lval;
 }
 
-arr_lval Array::lvalAtRef() {
-  if (!m_arr) m_arr = Ptr::attach(ArrayData::Create());
-  auto const lval = m_arr->lvalNewRef(m_arr->cowCheck());
-  if (lval.arr != m_arr) m_arr = Ptr::attach(lval.arr);
-  assertx(lval);
-  return lval;
-}
-
 void Array::append(TypedValue v) {
   if (!m_arr) operator=(Create());
   assertx(m_arr);
   auto const escalated = m_arr->append(tvToInitCell(v));
   if (escalated != m_arr) m_arr = Ptr::attach(escalated);
-}
-
-void Array::appendRef(Variant& v) {
-  if (!m_arr) {
-    m_arr = Ptr::attach(ArrayData::CreateRef(v));
-  } else {
-    auto const escalated = m_arr->appendRef(v);
-    if (escalated != m_arr) m_arr = Ptr::attach(escalated);
-  }
 }
 
 void Array::appendWithRef(TypedValue v) {
@@ -993,7 +949,7 @@ void Array::sort(PFUNC_CMP cmp_func, bool by_key, bool renumber,
   operator=(sorted);
 }
 
-bool Array::MultiSort(std::vector<SortData> &data, bool renumber) {
+bool Array::MultiSort(std::vector<SortData> &data) {
   assertx(!data.empty());
 
   int count = -1;
@@ -1039,7 +995,7 @@ bool Array::MultiSort(std::vector<SortData> &data, bool renumber) {
     for (int i = 0; i < count; i++) {
       ssize_t pos = opaque.positions[indices[i]];
       Variant k(arr->getKey(pos));
-      if (renumber && k.isInteger()) {
+      if (k.isInteger()) {
         sorted.append(arr->atPos(pos));
       } else {
         sorted.set(k, arr->atPos(pos));

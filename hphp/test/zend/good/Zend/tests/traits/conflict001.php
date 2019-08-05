@@ -1,4 +1,4 @@
-<?php
+<?hh
 error_reporting(E_ALL);
 
 trait THello1 {
@@ -17,4 +17,3 @@ class TraitsTest {
 	use THello1;
 	use THello2;
 }
-?>

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class ObjA
 {
@@ -20,7 +20,8 @@ class ObjB extends ObjA
         parent::__construct($keys->getIterator());
     }
 }
-
+<<__EntryPoint>> function main(): void {
 $obj = new ObjB(new ArrayObject());
 
 var_dump($obj == unserialize(serialize($obj)));
+}

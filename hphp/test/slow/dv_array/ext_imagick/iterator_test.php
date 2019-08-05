@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function row_dump($row, $pixels) {
   printf("[%d] ", $row);
@@ -13,7 +13,7 @@ function row_dump($row, $pixels) {
     printf("\n");
   }
 }
-
+<<__EntryPoint>> function main(): void {
 $magick = new Imagick(__DIR__.'/facebook.png');
 
 $iterators = array(
@@ -48,5 +48,6 @@ foreach ($iterators as $iterator) {
     }
   }
 }
-?>
-==DONE==
+
+echo "==DONE==";
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool uasort(array $array_arg, string $cmp_function)
  * Description: Sort an array with a user-defined comparison function and maintain index association
  * Source code: ext/standard/array.c
@@ -9,7 +9,7 @@
 *   arguments passed by value
 *   arguments passed by reference
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing uasort() : anonymous function as 'cmp_function' ***\n";
 
 $cmp_function = ($value1, $value2) ==> { if($value1 == $value2) {return 0;} else if($value1 > $value2) {return 1;} else{return -1;} };
@@ -25,5 +25,5 @@ echo "-- Anonymous 'cmp_function' with parameters passed by reference --\n";
 var_dump( uasort(&$array_arg, $cmp_function_ref) );
 var_dump($array_arg);
 
-echo "Done"
-?>
+echo "Done";
+}

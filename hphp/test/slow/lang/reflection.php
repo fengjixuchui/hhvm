@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 print "Test begin\n";
 
@@ -7,15 +7,15 @@ const SOME_CONSTANT = "some string";
 #===============================================================================
 # ReflectionFunction.
 
+class State { static $staticX = 4; }
+
 /**
  * This is f's doc comment.
  */
 function f($a, &$b, $c=null, $d=array(1, 2, SOME_CONSTANT)) {
-  static $staticX = 4;
-  static $staticY;
   print "In f()\n";
-  $staticX++;
-  $x = $staticX;
+  State::$staticX++;
+  $x = State::$staticX;
   return $x;
 }
 
@@ -53,9 +53,9 @@ print "--- getParameters(\"f\") ---\n";
 var_dump($rf->getParameters());
 print "\n";
 
-print "--- getStaticVariables(\"f\") ---\n";
-var_dump($rf->getStaticVariables());
-print "\n";
+
+
+
 
 print "--- isInternal(\"f\") ---\n";
 var_dump($rf->isInternal());
@@ -66,21 +66,21 @@ var_dump($rf->isUserDefined());
 print "\n";
 
 print "--- export(\"f\") ---\n";
-var_dump($rf->export('f', true));
+var_dump(ReflectionFunction::export('f', true));
 print "\n";
 
-# invoke() can't be used because $b is pass-by-reference.
 
-print "--- invokeArgs(\"f\") ---\n";
-$b = "b";
-var_dump($rf->invokeArgs(array("a", &$b, "c")));
-var_dump($rf->invokeArgs(array("a", &$b, "c")));
-print "\n";
 
-print "--- getStaticVariables(\"f\") ---\n";
-$rf = new ReflectionFunction("f");
-var_dump($rf->getStaticVariables());
-print "\n";
+
+
+
+
+
+
+
+
+
+
 
 /**
  * This is g's doc comment.
@@ -97,7 +97,7 @@ var_dump($rg->invoke("a", "b"));
 print "\n";
 
 print "--- export(\"g\") ---\n";
-var_dump($rf->export('g', true));
+var_dump(ReflectionFunction::export('g', true));
 print "\n";
 
 #===============================================================================
@@ -146,7 +146,7 @@ class C {}
 $rb = new ReflectionClass("B");
 
 print "--- export() ---\n";
-var_dump($rb->export('B', true));
+var_dump(ReflectionClass::export('B', true));
 print "\n";
 
 print "--- getConstant() ---\n";

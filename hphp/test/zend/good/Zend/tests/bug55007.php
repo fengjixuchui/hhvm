@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function __autoload($classname) {
   if ('CompileErrorClass'==$classname) eval('class CompileErrorClass { function foo() { $a[]; } }');
@@ -9,9 +9,8 @@ function shutdown() {
   new MyErrorHandler();
 }
 
-
+<<__EntryPoint>> function main(): void {
 register_shutdown_function('shutdown');
-	
-new CompileErrorClass();
 
-?>
+new CompileErrorClass();
+}

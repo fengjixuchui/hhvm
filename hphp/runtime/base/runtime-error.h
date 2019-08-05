@@ -127,8 +127,7 @@ void raise_hack_strict(HackStrictOption option, const char *ini_setting,
 
 /*
  * raise_typehint_error() is the same as raise_recoverable_error(), except
- * when compiled in RepoAuthoritative mode with HardTypeHints the error
- * handler is not allowed to recover.
+ * the error handler is not allowed to recover.
  * raise_reified_typehint_error flavor also takes a warn flag that demotes the
  * error to a warning for reified generics migrations purposes
  */
@@ -150,12 +149,24 @@ void raise_return_typehint_error(const std::string& msg);
 void raise_property_typehint_error(const std::string& msg, bool isSoft);
 
 /*
+ * Raise the appropriate warning or error (with the given message) for some
+ * violation of a record field type-hint. If isSoft is true, than a warning is
+ * always raised.
+ */
+void raise_record_field_typehint_error(const std::string& msg, bool isSoft);
+
+/*
+ * Raise  error if a record field is not inititialized after construction.
+ */
+void raise_record_init_error(const StringData* recName,
+                             const StringData* fieldName);
+
+/*
  * Raise the appropriate warning or error if we try to bind a property to a ref,
  * and that property has a type-hint which we're enforcing.
  */
 void raise_property_typehint_binding_error(const Class* declCls,
                                            const StringData* propName,
-                                           bool isStatic,
                                            bool isSoft);
 
 /*
@@ -166,14 +177,11 @@ void raise_property_typehint_unset_error(const Class* declCls,
                                          const StringData* propName,
                                          bool isSoft);
 
-void raise_disallowed_dynamic_call(const Func* f);
-
 void raise_resolve_undefined(const StringData* name, const Class* c = nullptr);
 void raise_call_to_undefined(const StringData* name, const Class* c = nullptr);
 
-void raise_intish_index_cast();
-
 void raise_convert_object_to_string(const char* cls_name);
+void raise_convert_record_to_type(const char* typeName);
 
 ///////////////////////////////////////////////////////////////////////////////
 /*
@@ -200,10 +208,16 @@ void raise_hackarr_compat_type_hint_property_notice(const Class* declCls,
                                                     AnnotType at,
                                                     const StringData* propName,
                                                     bool isStatic);
-
+void raise_hackarr_compat_type_hint_rec_field_notice(
+    const StringData* recName,
+    const ArrayData* ad,
+    AnnotType at,
+    const StringData* fieldName);
 void raise_hackarr_compat_is_operator(const char* source, const char* target);
 
 void raise_hackarr_compat_notice(const std::string& msg);
+
+void raise_array_serialization_notice(const char* src, const ArrayData* arr);
 
 #define HC(Opt, opt) void raise_hac_##opt##_notice(const std::string& msg);
 HAC_CHECK_OPTS
@@ -228,17 +242,6 @@ HAC_CHECK_OPTS
   };
 HAC_CHECK_OPTS
 #undef HC
-
-///////////////////////////////////////////////////////////////////////////////
-/*
- * PHPism notices.
- */
-
-void raise_undefined_const_fallback_notice(const StringData* name,
-                                           const StringData* fallback);
-
-void raise_undefined_function_fallback_notice(const StringData* name,
-                                              const StringData* fallback);
 
 ///////////////////////////////////////////////////////////////////////////////
 

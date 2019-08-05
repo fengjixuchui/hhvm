@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function get_declared_user_traits() {
   $ret = array();
@@ -21,5 +21,6 @@ abstract class MY_ABSTRCT_CLASS {
  }
 final class MY_FINAL_CLASS {
  }
+<<__EntryPoint>> function main(): void {
 var_dump(get_declared_user_traits());
-?>
+}

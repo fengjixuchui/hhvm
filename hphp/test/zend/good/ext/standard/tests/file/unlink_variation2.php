@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype : bool unlink ( string $filename [, resource $context] );
    Description : Deletes filename
 */
 
 /* Try to unlink file when file handle is still in use */
-
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 echo "*** Testing unlink() on a file which is in use ***\n";
@@ -20,4 +20,4 @@ var_dump( file_exists($filename) );  // confirm file is deleted
 fclose($fp);
 
 echo "Done\n";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string nl2br(string $str);
  * Description: Inserts HTML line breaks before all newlines in a string
  * Source code: ext/standard/string.c
@@ -7,7 +7,7 @@
 /* Test nl2br() function by passing double quoted strings containing various 
  *   combinations of new line chars to 'str' argument
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing nl2br() : usage variations ***\n";
 
 $strings = array(
@@ -41,4 +41,4 @@ foreach( $strings as $str ){
   $count ++ ;
 }
 echo "Done";
-?>
+}

@@ -764,10 +764,6 @@ void RegionDesc::Block::checkMetadata() const {
         case LTag::Stack:
         case LTag::MBase:
           break;
-        case LTag::CSlotCls:
-        case LTag::CSlotTS:
-          assertx("Class-ref slot type-prediction" && false);
-          break;
       }
     }
   };
@@ -784,10 +780,6 @@ void RegionDesc::Block::checkMetadata() const {
           break;
         case LTag::Stack:
         case LTag::MBase:
-          break;
-        case LTag::CSlotCls:
-        case LTag::CSlotTS:
-          assertx("Class-ref slot type-precondition" && false);
           break;
       }
     }
@@ -925,7 +917,6 @@ bool breaksRegion(SrcKey sk) {
     case Op::Exit:
     case Op::Fatal:
     case Op::Throw:
-    case Op::Unwind:
     case Op::Eval:
     case Op::NativeImpl:
       return true;

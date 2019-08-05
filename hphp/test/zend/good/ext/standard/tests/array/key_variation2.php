@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : mixed key(array $array_arg)
  * Description: Return the key of the element currently pointed to by the internal array pointer
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass arrays where keys are different data types as $array_arg to key() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing key() : usage variations ***\n";
 
 //get an unset variable
@@ -94,10 +94,10 @@ $iterator = 1;
 foreach($inputs as $key => $input) {
   echo "\n-- Iteration $iterator : $key data --\n";
   while (key(&$input) !== NULL) {
-  	var_dump(key(&$input));
-  	next(&$input);
+      var_dump(key(&$input));
+      next(&$input);
   }
   $iterator++;
 };
-?>
-===DONE===
+echo "===DONE===\n";
+}

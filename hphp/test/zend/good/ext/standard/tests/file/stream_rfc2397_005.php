@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $streams = array(
 	'data:,A%20brief%20note',
 	'data:application/vnd-xxx-query,select_vcount,fcol_from_fieldtable/local',
@@ -17,6 +17,5 @@ foreach($streams as $stream)
 	var_dump(@file_get_contents($stream));
 }
 
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

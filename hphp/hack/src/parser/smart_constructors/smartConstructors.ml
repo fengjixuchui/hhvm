@@ -27,6 +27,11 @@ module type SmartConstructors_S = sig
   type t (* state *) [@@deriving show]
   type r (* smart constructor return type *) [@@deriving show]
 
+  val rust_parse :
+    Full_fidelity_source_text.t ->
+    ParserEnv.t ->
+    t * r * Full_fidelity_syntax_error.t list
+
   val initial_state : ParserEnv.t -> t
   val make_token : Token.t -> t -> t * r
   val make_missing : Full_fidelity_source_text.pos -> t -> t * r
@@ -42,6 +47,8 @@ module type SmartConstructors_S = sig
   val make_file_attribute_specification : r -> r -> r -> r -> r -> t -> t * r
   val make_enum_declaration : r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
   val make_enumerator : r -> r -> r -> r -> t -> t * r
+  val make_record_declaration : r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
+  val make_record_field : r -> r -> r -> r -> r -> t -> t * r
   val make_alias_declaration : r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
   val make_property_declaration : r -> r -> r -> r -> r -> t -> t * r
   val make_property_declarator : r -> r -> t -> t * r
@@ -57,24 +64,25 @@ module type SmartConstructors_S = sig
   val make_where_constraint : r -> r -> r -> t -> t * r
   val make_methodish_declaration : r -> r -> r -> r -> t -> t * r
   val make_methodish_trait_resolution : r -> r -> r -> r -> r -> t -> t * r
-  val make_classish_declaration : r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
+  val make_classish_declaration : r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
   val make_classish_body : r -> r -> r -> t -> t * r
   val make_trait_use_precedence_item : r -> r -> r -> t -> t * r
   val make_trait_use_alias_item : r -> r -> r -> r -> t -> t * r
   val make_trait_use_conflict_resolution : r -> r -> r -> r -> r -> t -> t * r
   val make_trait_use : r -> r -> r -> t -> t * r
   val make_require_clause : r -> r -> r -> r -> t -> t * r
-  val make_const_declaration : r -> r -> r -> r -> r -> r -> t -> t * r
+  val make_const_declaration : r -> r -> r -> r -> r -> t -> t * r
   val make_constant_declarator : r -> r -> t -> t * r
   val make_type_const_declaration : r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
   val make_decorated_expression : r -> r -> t -> t * r
   val make_parameter_declaration : r -> r -> r -> r -> r -> r -> t -> t * r
   val make_variadic_parameter : r -> r -> r -> t -> t * r
-  val make_attribute_specification : r -> r -> r -> t -> t * r
+  val make_old_attribute_specification : r -> r -> r -> t -> t * r
+  val make_attribute_specification : r -> t -> t * r
+  val make_attribute : r -> r -> t -> t * r
   val make_inclusion_expression : r -> r -> t -> t * r
   val make_inclusion_directive : r -> r -> t -> t * r
   val make_compound_statement : r -> r -> r -> t -> t * r
-  val make_alternate_loop_statement : r -> r -> r -> r -> t -> t * r
   val make_expression_statement : r -> r -> t -> t * r
   val make_markup_section : r -> r -> r -> r -> t -> t * r
   val make_markup_suffix : r -> r -> t -> t * r
@@ -82,15 +90,10 @@ module type SmartConstructors_S = sig
   val make_let_statement : r -> r -> r -> r -> r -> r -> t -> t * r
   val make_using_statement_block_scoped : r -> r -> r -> r -> r -> r -> t -> t * r
   val make_using_statement_function_scoped : r -> r -> r -> r -> t -> t * r
-  val make_declare_directive_statement : r -> r -> r -> r -> r -> t -> t * r
-  val make_declare_block_statement : r -> r -> r -> r -> r -> t -> t * r
   val make_while_statement : r -> r -> r -> r -> r -> t -> t * r
   val make_if_statement : r -> r -> r -> r -> r -> r -> r -> t -> t * r
   val make_elseif_clause : r -> r -> r -> r -> r -> t -> t * r
   val make_else_clause : r -> r -> t -> t * r
-  val make_alternate_if_statement : r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
-  val make_alternate_elseif_clause : r -> r -> r -> r -> r -> r -> t -> t * r
-  val make_alternate_else_clause : r -> r -> r -> t -> t * r
   val make_try_statement : r -> r -> r -> r -> t -> t * r
   val make_catch_clause : r -> r -> r -> r -> r -> r -> t -> t * r
   val make_finally_clause : r -> r -> t -> t * r
@@ -98,7 +101,6 @@ module type SmartConstructors_S = sig
   val make_for_statement : r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
   val make_foreach_statement : r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
   val make_switch_statement : r -> r -> r -> r -> r -> r -> r -> t -> t * r
-  val make_alternate_switch_statement : r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
   val make_switch_section : r -> r -> r -> t -> t * r
   val make_switch_fallthrough : r -> r -> t -> t * r
   val make_case_label : r -> r -> r -> t -> t * r
@@ -109,15 +111,11 @@ module type SmartConstructors_S = sig
   val make_throw_statement : r -> r -> r -> t -> t * r
   val make_break_statement : r -> r -> r -> t -> t * r
   val make_continue_statement : r -> r -> r -> t -> t * r
-  val make_function_static_statement : r -> r -> r -> t -> t * r
-  val make_static_declarator : r -> r -> t -> t * r
   val make_echo_statement : r -> r -> r -> t -> t * r
-  val make_global_statement : r -> r -> r -> t -> t * r
   val make_concurrent_statement : r -> r -> t -> t * r
   val make_simple_initializer : r -> r -> t -> t * r
   val make_anonymous_class : r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
   val make_anonymous_function : r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
-  val make_php7_anonymous_function : r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> r -> t -> t * r
   val make_anonymous_function_use_clause : r -> r -> r -> r -> t -> t * r
   val make_lambda_expression : r -> r -> r -> r -> r -> r -> t -> t * r
   val make_lambda_signature : r -> r -> r -> r -> r -> t -> t * r
@@ -131,18 +129,15 @@ module type SmartConstructors_S = sig
   val make_prefix_unary_expression : r -> r -> t -> t * r
   val make_postfix_unary_expression : r -> r -> t -> t * r
   val make_binary_expression : r -> r -> r -> t -> t * r
-  val make_instanceof_expression : r -> r -> r -> t -> t * r
   val make_is_expression : r -> r -> r -> t -> t * r
   val make_as_expression : r -> r -> r -> t -> t * r
   val make_nullable_as_expression : r -> r -> r -> t -> t * r
   val make_conditional_expression : r -> r -> r -> r -> r -> t -> t * r
   val make_eval_expression : r -> r -> r -> r -> t -> t * r
-  val make_empty_expression : r -> r -> r -> r -> t -> t * r
   val make_define_expression : r -> r -> r -> r -> t -> t * r
   val make_halt_compiler_expression : r -> r -> r -> r -> t -> t * r
   val make_isset_expression : r -> r -> r -> r -> t -> t * r
-  val make_function_call_expression : r -> r -> r -> r -> t -> t * r
-  val make_function_call_with_type_arguments_expression : r -> r -> r -> r -> r -> t -> t * r
+  val make_function_call_expression : r -> r -> r -> r -> r -> t -> t * r
   val make_parenthesized_expression : r -> r -> r -> t -> t * r
   val make_braced_expression : r -> r -> r -> t -> t * r
   val make_embedded_braced_expression : r -> r -> r -> t -> t * r
@@ -150,6 +145,7 @@ module type SmartConstructors_S = sig
   val make_collection_literal_expression : r -> r -> r -> r -> t -> t * r
   val make_object_creation_expression : r -> r -> t -> t * r
   val make_constructor_call : r -> r -> r -> r -> t -> t * r
+  val make_record_creation_expression : r -> r -> r -> r -> r -> t -> t * r
   val make_array_creation_expression : r -> r -> r -> t -> t * r
   val make_array_intrinsic_expression : r -> r -> r -> r -> t -> t * r
   val make_darray_intrinsic_expression : r -> r -> r -> r -> r -> t -> t * r
@@ -165,6 +161,7 @@ module type SmartConstructors_S = sig
   val make_xhp_children_parenthesized_list : r -> r -> r -> t -> t * r
   val make_xhp_category_declaration : r -> r -> r -> t -> t * r
   val make_xhp_enum_type : r -> r -> r -> r -> r -> t -> t * r
+  val make_xhp_lateinit : r -> r -> t -> t * r
   val make_xhp_required : r -> r -> t -> t * r
   val make_xhp_class_attribute_declaration : r -> r -> r -> t -> t * r
   val make_xhp_class_attribute : r -> r -> r -> r -> t -> t * r
@@ -195,15 +192,18 @@ module type SmartConstructors_S = sig
   val make_tuple_expression : r -> r -> r -> r -> t -> t * r
   val make_generic_type_specifier : r -> r -> t -> t * r
   val make_nullable_type_specifier : r -> r -> t -> t * r
+  val make_like_type_specifier : r -> r -> t -> t * r
   val make_soft_type_specifier : r -> r -> t -> t * r
+  val make_attributized_specifier : r -> r -> t -> t * r
   val make_reified_type_argument : r -> r -> t -> t * r
   val make_type_arguments : r -> r -> r -> t -> t * r
   val make_type_parameters : r -> r -> r -> t -> t * r
   val make_tuple_type_specifier : r -> r -> r -> t -> t * r
   val make_error : r -> t -> t * r
   val make_list_item : r -> r -> t -> t * r
-  val make_pocket_atom_expression : r -> t -> t * r
-  val make_pocket_atom_mapping_declaration : r -> r -> r -> r -> r -> t -> t * r
+  val make_pocket_atom_expression : r -> r -> t -> t * r
+  val make_pocket_identifier_expression : r -> r -> r -> r -> r -> t -> t * r
+  val make_pocket_atom_mapping_declaration : r -> r -> r -> r -> r -> r -> t -> t * r
   val make_pocket_enum_declaration : r -> r -> r -> r -> r -> r -> t -> t * r
   val make_pocket_field_type_expr_declaration : r -> r -> r -> r -> t -> t * r
   val make_pocket_field_type_declaration : r -> r -> r -> r -> t -> t * r
@@ -213,7 +213,7 @@ module type SmartConstructors_S = sig
 end (* SmartConstructors_S *)
 
 module ParserWrapper (Parser : sig
-  type parser_type [@@deriving show]
+  type parser_type
   module SCI : SmartConstructors_S
   val call : parser_type -> (SCI.t -> SCI.t * SCI.r) -> parser_type * SCI.r
 end) = struct
@@ -235,6 +235,8 @@ end) = struct
     let file_attribute_specification parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_file_attribute_specification arg0 arg1 arg2 arg3 arg4)
     let enum_declaration parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 = call parser (SCI.make_enum_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8)
     let enumerator parser arg0 arg1 arg2 arg3 = call parser (SCI.make_enumerator arg0 arg1 arg2 arg3)
+    let record_declaration parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 = call parser (SCI.make_record_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8)
+    let record_field parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_record_field arg0 arg1 arg2 arg3 arg4)
     let alias_declaration parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 = call parser (SCI.make_alias_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7)
     let property_declaration parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_property_declaration arg0 arg1 arg2 arg3 arg4)
     let property_declarator parser arg0 arg1 = call parser (SCI.make_property_declarator arg0 arg1)
@@ -250,24 +252,25 @@ end) = struct
     let where_constraint parser arg0 arg1 arg2 = call parser (SCI.make_where_constraint arg0 arg1 arg2)
     let methodish_declaration parser arg0 arg1 arg2 arg3 = call parser (SCI.make_methodish_declaration arg0 arg1 arg2 arg3)
     let methodish_trait_resolution parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_methodish_trait_resolution arg0 arg1 arg2 arg3 arg4)
-    let classish_declaration parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 = call parser (SCI.make_classish_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9)
+    let classish_declaration parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 = call parser (SCI.make_classish_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10)
     let classish_body parser arg0 arg1 arg2 = call parser (SCI.make_classish_body arg0 arg1 arg2)
     let trait_use_precedence_item parser arg0 arg1 arg2 = call parser (SCI.make_trait_use_precedence_item arg0 arg1 arg2)
     let trait_use_alias_item parser arg0 arg1 arg2 arg3 = call parser (SCI.make_trait_use_alias_item arg0 arg1 arg2 arg3)
     let trait_use_conflict_resolution parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_trait_use_conflict_resolution arg0 arg1 arg2 arg3 arg4)
     let trait_use parser arg0 arg1 arg2 = call parser (SCI.make_trait_use arg0 arg1 arg2)
     let require_clause parser arg0 arg1 arg2 arg3 = call parser (SCI.make_require_clause arg0 arg1 arg2 arg3)
-    let const_declaration parser arg0 arg1 arg2 arg3 arg4 arg5 = call parser (SCI.make_const_declaration arg0 arg1 arg2 arg3 arg4 arg5)
+    let const_declaration parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_const_declaration arg0 arg1 arg2 arg3 arg4)
     let constant_declarator parser arg0 arg1 = call parser (SCI.make_constant_declarator arg0 arg1)
     let type_const_declaration parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 = call parser (SCI.make_type_const_declaration arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9)
     let decorated_expression parser arg0 arg1 = call parser (SCI.make_decorated_expression arg0 arg1)
     let parameter_declaration parser arg0 arg1 arg2 arg3 arg4 arg5 = call parser (SCI.make_parameter_declaration arg0 arg1 arg2 arg3 arg4 arg5)
     let variadic_parameter parser arg0 arg1 arg2 = call parser (SCI.make_variadic_parameter arg0 arg1 arg2)
-    let attribute_specification parser arg0 arg1 arg2 = call parser (SCI.make_attribute_specification arg0 arg1 arg2)
+    let old_attribute_specification parser arg0 arg1 arg2 = call parser (SCI.make_old_attribute_specification arg0 arg1 arg2)
+    let attribute_specification parser arg0 = call parser (SCI.make_attribute_specification arg0)
+    let attribute parser arg0 arg1 = call parser (SCI.make_attribute arg0 arg1)
     let inclusion_expression parser arg0 arg1 = call parser (SCI.make_inclusion_expression arg0 arg1)
     let inclusion_directive parser arg0 arg1 = call parser (SCI.make_inclusion_directive arg0 arg1)
     let compound_statement parser arg0 arg1 arg2 = call parser (SCI.make_compound_statement arg0 arg1 arg2)
-    let alternate_loop_statement parser arg0 arg1 arg2 arg3 = call parser (SCI.make_alternate_loop_statement arg0 arg1 arg2 arg3)
     let expression_statement parser arg0 arg1 = call parser (SCI.make_expression_statement arg0 arg1)
     let markup_section parser arg0 arg1 arg2 arg3 = call parser (SCI.make_markup_section arg0 arg1 arg2 arg3)
     let markup_suffix parser arg0 arg1 = call parser (SCI.make_markup_suffix arg0 arg1)
@@ -275,15 +278,10 @@ end) = struct
     let let_statement parser arg0 arg1 arg2 arg3 arg4 arg5 = call parser (SCI.make_let_statement arg0 arg1 arg2 arg3 arg4 arg5)
     let using_statement_block_scoped parser arg0 arg1 arg2 arg3 arg4 arg5 = call parser (SCI.make_using_statement_block_scoped arg0 arg1 arg2 arg3 arg4 arg5)
     let using_statement_function_scoped parser arg0 arg1 arg2 arg3 = call parser (SCI.make_using_statement_function_scoped arg0 arg1 arg2 arg3)
-    let declare_directive_statement parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_declare_directive_statement arg0 arg1 arg2 arg3 arg4)
-    let declare_block_statement parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_declare_block_statement arg0 arg1 arg2 arg3 arg4)
     let while_statement parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_while_statement arg0 arg1 arg2 arg3 arg4)
     let if_statement parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 = call parser (SCI.make_if_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6)
     let elseif_clause parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_elseif_clause arg0 arg1 arg2 arg3 arg4)
     let else_clause parser arg0 arg1 = call parser (SCI.make_else_clause arg0 arg1)
-    let alternate_if_statement parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 = call parser (SCI.make_alternate_if_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9)
-    let alternate_elseif_clause parser arg0 arg1 arg2 arg3 arg4 arg5 = call parser (SCI.make_alternate_elseif_clause arg0 arg1 arg2 arg3 arg4 arg5)
-    let alternate_else_clause parser arg0 arg1 arg2 = call parser (SCI.make_alternate_else_clause arg0 arg1 arg2)
     let try_statement parser arg0 arg1 arg2 arg3 = call parser (SCI.make_try_statement arg0 arg1 arg2 arg3)
     let catch_clause parser arg0 arg1 arg2 arg3 arg4 arg5 = call parser (SCI.make_catch_clause arg0 arg1 arg2 arg3 arg4 arg5)
     let finally_clause parser arg0 arg1 = call parser (SCI.make_finally_clause arg0 arg1)
@@ -291,7 +289,6 @@ end) = struct
     let for_statement parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 = call parser (SCI.make_for_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8)
     let foreach_statement parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 = call parser (SCI.make_foreach_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9)
     let switch_statement parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 = call parser (SCI.make_switch_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6)
-    let alternate_switch_statement parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 = call parser (SCI.make_alternate_switch_statement arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7)
     let switch_section parser arg0 arg1 arg2 = call parser (SCI.make_switch_section arg0 arg1 arg2)
     let switch_fallthrough parser arg0 arg1 = call parser (SCI.make_switch_fallthrough arg0 arg1)
     let case_label parser arg0 arg1 arg2 = call parser (SCI.make_case_label arg0 arg1 arg2)
@@ -302,15 +299,11 @@ end) = struct
     let throw_statement parser arg0 arg1 arg2 = call parser (SCI.make_throw_statement arg0 arg1 arg2)
     let break_statement parser arg0 arg1 arg2 = call parser (SCI.make_break_statement arg0 arg1 arg2)
     let continue_statement parser arg0 arg1 arg2 = call parser (SCI.make_continue_statement arg0 arg1 arg2)
-    let function_static_statement parser arg0 arg1 arg2 = call parser (SCI.make_function_static_statement arg0 arg1 arg2)
-    let static_declarator parser arg0 arg1 = call parser (SCI.make_static_declarator arg0 arg1)
     let echo_statement parser arg0 arg1 arg2 = call parser (SCI.make_echo_statement arg0 arg1 arg2)
-    let global_statement parser arg0 arg1 arg2 = call parser (SCI.make_global_statement arg0 arg1 arg2)
     let concurrent_statement parser arg0 arg1 = call parser (SCI.make_concurrent_statement arg0 arg1)
     let simple_initializer parser arg0 arg1 = call parser (SCI.make_simple_initializer arg0 arg1)
     let anonymous_class parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 = call parser (SCI.make_anonymous_class arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8)
     let anonymous_function parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11 = call parser (SCI.make_anonymous_function arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11)
-    let php7_anonymous_function parser arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11 = call parser (SCI.make_php7_anonymous_function arg0 arg1 arg2 arg3 arg4 arg5 arg6 arg7 arg8 arg9 arg10 arg11)
     let anonymous_function_use_clause parser arg0 arg1 arg2 arg3 = call parser (SCI.make_anonymous_function_use_clause arg0 arg1 arg2 arg3)
     let lambda_expression parser arg0 arg1 arg2 arg3 arg4 arg5 = call parser (SCI.make_lambda_expression arg0 arg1 arg2 arg3 arg4 arg5)
     let lambda_signature parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_lambda_signature arg0 arg1 arg2 arg3 arg4)
@@ -324,18 +317,15 @@ end) = struct
     let prefix_unary_expression parser arg0 arg1 = call parser (SCI.make_prefix_unary_expression arg0 arg1)
     let postfix_unary_expression parser arg0 arg1 = call parser (SCI.make_postfix_unary_expression arg0 arg1)
     let binary_expression parser arg0 arg1 arg2 = call parser (SCI.make_binary_expression arg0 arg1 arg2)
-    let instanceof_expression parser arg0 arg1 arg2 = call parser (SCI.make_instanceof_expression arg0 arg1 arg2)
     let is_expression parser arg0 arg1 arg2 = call parser (SCI.make_is_expression arg0 arg1 arg2)
     let as_expression parser arg0 arg1 arg2 = call parser (SCI.make_as_expression arg0 arg1 arg2)
     let nullable_as_expression parser arg0 arg1 arg2 = call parser (SCI.make_nullable_as_expression arg0 arg1 arg2)
     let conditional_expression parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_conditional_expression arg0 arg1 arg2 arg3 arg4)
     let eval_expression parser arg0 arg1 arg2 arg3 = call parser (SCI.make_eval_expression arg0 arg1 arg2 arg3)
-    let empty_expression parser arg0 arg1 arg2 arg3 = call parser (SCI.make_empty_expression arg0 arg1 arg2 arg3)
     let define_expression parser arg0 arg1 arg2 arg3 = call parser (SCI.make_define_expression arg0 arg1 arg2 arg3)
     let halt_compiler_expression parser arg0 arg1 arg2 arg3 = call parser (SCI.make_halt_compiler_expression arg0 arg1 arg2 arg3)
     let isset_expression parser arg0 arg1 arg2 arg3 = call parser (SCI.make_isset_expression arg0 arg1 arg2 arg3)
-    let function_call_expression parser arg0 arg1 arg2 arg3 = call parser (SCI.make_function_call_expression arg0 arg1 arg2 arg3)
-    let function_call_with_type_arguments_expression parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_function_call_with_type_arguments_expression arg0 arg1 arg2 arg3 arg4)
+    let function_call_expression parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_function_call_expression arg0 arg1 arg2 arg3 arg4)
     let parenthesized_expression parser arg0 arg1 arg2 = call parser (SCI.make_parenthesized_expression arg0 arg1 arg2)
     let braced_expression parser arg0 arg1 arg2 = call parser (SCI.make_braced_expression arg0 arg1 arg2)
     let embedded_braced_expression parser arg0 arg1 arg2 = call parser (SCI.make_embedded_braced_expression arg0 arg1 arg2)
@@ -343,6 +333,7 @@ end) = struct
     let collection_literal_expression parser arg0 arg1 arg2 arg3 = call parser (SCI.make_collection_literal_expression arg0 arg1 arg2 arg3)
     let object_creation_expression parser arg0 arg1 = call parser (SCI.make_object_creation_expression arg0 arg1)
     let constructor_call parser arg0 arg1 arg2 arg3 = call parser (SCI.make_constructor_call arg0 arg1 arg2 arg3)
+    let record_creation_expression parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_record_creation_expression arg0 arg1 arg2 arg3 arg4)
     let array_creation_expression parser arg0 arg1 arg2 = call parser (SCI.make_array_creation_expression arg0 arg1 arg2)
     let array_intrinsic_expression parser arg0 arg1 arg2 arg3 = call parser (SCI.make_array_intrinsic_expression arg0 arg1 arg2 arg3)
     let darray_intrinsic_expression parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_darray_intrinsic_expression arg0 arg1 arg2 arg3 arg4)
@@ -358,6 +349,7 @@ end) = struct
     let xhp_children_parenthesized_list parser arg0 arg1 arg2 = call parser (SCI.make_xhp_children_parenthesized_list arg0 arg1 arg2)
     let xhp_category_declaration parser arg0 arg1 arg2 = call parser (SCI.make_xhp_category_declaration arg0 arg1 arg2)
     let xhp_enum_type parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_xhp_enum_type arg0 arg1 arg2 arg3 arg4)
+    let xhp_lateinit parser arg0 arg1 = call parser (SCI.make_xhp_lateinit arg0 arg1)
     let xhp_required parser arg0 arg1 = call parser (SCI.make_xhp_required arg0 arg1)
     let xhp_class_attribute_declaration parser arg0 arg1 arg2 = call parser (SCI.make_xhp_class_attribute_declaration arg0 arg1 arg2)
     let xhp_class_attribute parser arg0 arg1 arg2 arg3 = call parser (SCI.make_xhp_class_attribute arg0 arg1 arg2 arg3)
@@ -388,15 +380,18 @@ end) = struct
     let tuple_expression parser arg0 arg1 arg2 arg3 = call parser (SCI.make_tuple_expression arg0 arg1 arg2 arg3)
     let generic_type_specifier parser arg0 arg1 = call parser (SCI.make_generic_type_specifier arg0 arg1)
     let nullable_type_specifier parser arg0 arg1 = call parser (SCI.make_nullable_type_specifier arg0 arg1)
+    let like_type_specifier parser arg0 arg1 = call parser (SCI.make_like_type_specifier arg0 arg1)
     let soft_type_specifier parser arg0 arg1 = call parser (SCI.make_soft_type_specifier arg0 arg1)
+    let attributized_specifier parser arg0 arg1 = call parser (SCI.make_attributized_specifier arg0 arg1)
     let reified_type_argument parser arg0 arg1 = call parser (SCI.make_reified_type_argument arg0 arg1)
     let type_arguments parser arg0 arg1 arg2 = call parser (SCI.make_type_arguments arg0 arg1 arg2)
     let type_parameters parser arg0 arg1 arg2 = call parser (SCI.make_type_parameters arg0 arg1 arg2)
     let tuple_type_specifier parser arg0 arg1 arg2 = call parser (SCI.make_tuple_type_specifier arg0 arg1 arg2)
     let error parser arg0 = call parser (SCI.make_error arg0)
     let list_item parser arg0 arg1 = call parser (SCI.make_list_item arg0 arg1)
-    let pocket_atom_expression parser arg0 = call parser (SCI.make_pocket_atom_expression arg0)
-    let pocket_atom_mapping_declaration parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_pocket_atom_mapping_declaration arg0 arg1 arg2 arg3 arg4)
+    let pocket_atom_expression parser arg0 arg1 = call parser (SCI.make_pocket_atom_expression arg0 arg1)
+    let pocket_identifier_expression parser arg0 arg1 arg2 arg3 arg4 = call parser (SCI.make_pocket_identifier_expression arg0 arg1 arg2 arg3 arg4)
+    let pocket_atom_mapping_declaration parser arg0 arg1 arg2 arg3 arg4 arg5 = call parser (SCI.make_pocket_atom_mapping_declaration arg0 arg1 arg2 arg3 arg4 arg5)
     let pocket_enum_declaration parser arg0 arg1 arg2 arg3 arg4 arg5 = call parser (SCI.make_pocket_enum_declaration arg0 arg1 arg2 arg3 arg4 arg5)
     let pocket_field_type_expr_declaration parser arg0 arg1 arg2 arg3 = call parser (SCI.make_pocket_field_type_expr_declaration arg0 arg1 arg2 arg3)
     let pocket_field_type_declaration parser arg0 arg1 arg2 arg3 = call parser (SCI.make_pocket_field_type_declaration arg0 arg1 arg2 arg3)

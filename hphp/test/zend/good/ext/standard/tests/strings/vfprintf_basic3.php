@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : int vfprintf  ( resource $handle  , string $format , array $args  )
  * Description: Write a formatted string to a stream
  * Source code: ext/standard/formatted_print.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vfprintf() : basic functionality - using float format ***\n";
 
 // Initialise all required variables
@@ -47,5 +47,5 @@ fclose($fp);
 print_r(file_get_contents($data_file));
 
 unlink($data_file);
-?>
-===DONE===
+echo "===DONE===\n";
+}

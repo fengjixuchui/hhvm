@@ -28,7 +28,7 @@ module Inst = Decl_instantiate
 
 type inherited = {
   ih_substs   : subst_context SMap.t;
-  ih_cstr     : element option * bool (* consistency required *);
+  ih_cstr     : element option * consistent_kind;
   ih_consts   : class_const SMap.t ;
   ih_typeconsts : typeconst_type SMap.t ;
   ih_props    : element SMap.t ;
@@ -39,7 +39,7 @@ type inherited = {
 
 let empty = {
   ih_substs   = SMap.empty;
-  ih_cstr     = None, false;
+  ih_cstr     = None, Inconsistent;
   ih_consts   = SMap.empty;
   ih_typeconsts = SMap.empty;
   ih_props    = SMap.empty;
@@ -105,54 +105,67 @@ let add_const name const acc =
 let add_members members acc =
   SMap.fold SMap.add members acc
 
-let is_abstract_typeconst x = x.ttc_type = None
-
-let can_override_typeconst x =
-  (is_abstract_typeconst x) || x.ttc_constraint <> None
-
 let add_typeconst name sig_ typeconsts =
   match SMap.get name typeconsts with
   | None ->
       (* The type constant didn't exist so far, let's add it *)
       SMap.add name sig_ typeconsts
-  (* This covers the following case
-   *
-   * interface I1 { abstract const type T; }
-   * interface I2 { const type T = int; }
-   *
-   * class C implements I1, I2 {}
-   *
-   * Then C::T == I2::T since I2::T is not abstract
-   *)
-  | Some old_sig
-    when not (is_abstract_typeconst old_sig) && (is_abstract_typeconst sig_) ->
+  | Some old_sig ->
+    match old_sig.ttc_abstract, sig_.ttc_abstract with
+    (* This covers the following case
+     *
+     * interface I1 { abstract const type T; }
+     * interface I2 { const type T = int; }
+     *
+     * class C implements I1, I2 {}
+     *
+     * Then C::T == I2::T since I2::T is not abstract
+     *)
+    | TCConcrete, TCAbstract _
+    | TCPartiallyAbstract, TCAbstract _ ->
       typeconsts
-  (* This covers the following case
-   *
-   * abstract P { const type T as arraykey = arraykey; }
-   * interface I { const type T = int; }
-   *
-   * class C extends P implements I {}
-   *
-   * Then C::T == I::T since P::T has a constraint and thus can be overridden
-   * by it's child, while I::T cannot be overridden.
-   *)
-  | Some old_sig
-    when not (can_override_typeconst old_sig) && (can_override_typeconst sig_) ->
+    (* This covers the following case
+     *
+     * abstract P { const type T as arraykey = arraykey; }
+     * interface I { const type T = int; }
+     *
+     * class C extends P implements I {}
+     *
+     * Then C::T == I::T since P::T has a constraint and thus can be overridden
+     * by it's child, while I::T cannot be overridden.
+     *)
+    | TCConcrete, TCPartiallyAbstract ->
       typeconsts
-  (* When a type constant is declared in multiple parents we need to make a
-   * subtle choice of what type we inherit. For example in:
-   *
-   * interface I1 { abstract const type t as Container<int>; }
-   * interface I2 { abstract const type t as KeyedContainer<int, int>; }
-   * abstract class C implements I1, I2 {}
-   *
-   * Depending on the order the interfaces are declared, we may report an error.
-   * Since this could be confusing there is special logic in Typing_extends that
-   * checks for this potentially ambiguous situation and warns the programmer to
-   * explicitly declare T in C.
-   *)
-  | _ ->
+    (* This covers the following case
+     *
+     * interface I {
+     *   abstract const type T as arraykey;
+     * }
+     *
+     * abstract class A {
+     *   abstract const type T as arraykey = string;
+     * }
+     *
+     * final class C extends A implements I {}
+     *
+     * C::T must come from A, not I, as A provides the default that will synthesize
+     * into a concrete type constant in C.
+     *)
+    | TCAbstract (Some _), TCAbstract None ->
+      typeconsts
+    | _, _ ->
+     (* When a type constant is declared in multiple parents we need to make a
+      * subtle choice of what type we inherit. For example in:
+      *
+      * interface I1 { abstract const type t as Container<int>; }
+      * interface I2 { abstract const type t as KeyedContainer<int, int>; }
+      * abstract class C implements I1, I2 {}
+      *
+      * Depending on the order the interfaces are declared, we may report an error.
+      * Since this could be confusing there is special logic in Typing_extends that
+      * checks for this potentially ambiguous situation and warns the programmer to
+      * explicitly declare T in C.
+      *)
       SMap.add name sig_ typeconsts
 
 let add_constructor (cstr, cstr_consist) (acc, acc_consist) =
@@ -161,7 +174,7 @@ let add_constructor (cstr, cstr_consist) (acc, acc_consist) =
     | Some ce, Some acce when should_keep_old_sig ce acce ->
       acc
     | _ -> cstr
-  in ce, cstr_consist || acc_consist
+  in ce, Decl_utils.coalesce_consistent acc_consist cstr_consist
 
 let add_inherited inherited acc = {
   ih_substs = SMap.merge begin fun _ sub old_sub ->
@@ -228,14 +241,7 @@ let collapse_trait_inherited methods smethods acc =
 (* Helpers *)
 (*****************************************************************************)
 
-let check_arity pos class_name class_type class_parameters =
-  let arity = List.length class_type.dc_tparams in
-  if List.length class_parameters <> arity
-  then Errors.class_arity pos class_type.dc_pos class_name arity;
-  ()
-
-let make_substitution pos class_name class_type class_parameters =
-  check_arity pos class_name class_type class_parameters;
+let make_substitution class_type class_parameters =
   Inst.make_subst class_type.dc_tparams class_parameters
 
 let mark_as_synthesized inh =
@@ -287,16 +293,16 @@ let chown_privates owner class_type =
 (* Builds the inherited type when the class lives in Hack *)
 (*****************************************************************************)
 
-let inherit_hack_class env c p class_name class_type argl =
-  let subst = make_substitution p class_name class_type argl in
+let inherit_hack_class env c class_name class_type argl =
+  let subst = make_substitution class_type argl in
   let class_type =
     match class_type.dc_kind with
-    | Ast.Ctrait ->
+    | Ast_defs.Ctrait ->
         (* Change the private visibility to point to the inheriting class *)
         chown_privates (snd c.sc_name) class_type
-    | Ast.Cnormal | Ast.Cabstract | Ast.Cinterface ->
+    | Ast_defs.Cnormal | Ast_defs.Cabstract | Ast_defs.Cinterface ->
         filter_privates class_type
-    | Ast.Cenum -> class_type
+    | Ast_defs.Cenum | Ast_defs.Crecord -> class_type
   in
   let typeconsts = SMap.map (Inst.instantiate_typeconst subst)
     class_type.dc_typeconsts in
@@ -325,8 +331,8 @@ let inherit_hack_class env c p class_name class_type argl =
   result
 
 (* mostly copy paste of inherit_hack_class *)
-let inherit_hack_class_constants_only p class_name class_type argl =
-  let subst = make_substitution p class_name class_type argl in
+let inherit_hack_class_constants_only class_type argl =
+  let subst = make_substitution class_type argl in
   let instantiate = SMap.map (Inst.instantiate_cc subst) in
   let consts  = instantiate class_type.dc_consts in
   let typeconsts = SMap.map (Inst.instantiate_typeconst subst)
@@ -343,7 +349,7 @@ let inherit_hack_xhp_attrs_only class_type =
   (* Filter out properties that are not XHP attributes *)
   let props =
     SMap.fold begin fun name prop acc ->
-      if prop.elt_is_xhp_attr then SMap.add name prop acc else acc
+      if Option.is_some prop.elt_xhp_attr then SMap.add name prop acc else acc
     end class_type.dc_props SMap.empty in
   let result = { empty with ih_props = props; } in
   result
@@ -351,7 +357,7 @@ let inherit_hack_xhp_attrs_only class_type =
 (*****************************************************************************)
 
 let from_class env c ty =
-  let _, (pos, class_name), class_params = Decl_utils.unwrap_class_type ty in
+  let _, (_, class_name), class_params = Decl_utils.unwrap_class_type ty in
   let class_type = Decl_env.get_class_dep env class_name in
   match class_type with
   | None ->
@@ -359,11 +365,11 @@ let from_class env c ty =
     empty
   | Some class_ ->
     (* The class lives in Hack *)
-    inherit_hack_class env c pos class_name class_ class_params
+    inherit_hack_class env c class_name class_ class_params
 
 (* mostly copy paste of from_class *)
 let from_class_constants_only env ty =
-  let _, (pos, class_name), class_params = Decl_utils.unwrap_class_type ty in
+  let _, (_, class_name), class_params = Decl_utils.unwrap_class_type ty in
   let class_type = Decl_env.get_class_dep env class_name in
   match class_type with
   | None ->
@@ -371,7 +377,7 @@ let from_class_constants_only env ty =
     empty
   | Some class_ ->
     (* The class lives in Hack *)
-    inherit_hack_class_constants_only pos class_name class_ class_params
+    inherit_hack_class_constants_only class_ class_params
 
 let from_class_xhp_attrs_only env ty =
   let _, (_pos, class_name), _class_params = Decl_utils.unwrap_class_type ty in
@@ -391,8 +397,8 @@ let from_parent env c =
      * part of the class (as requested by dependency injection implementers)
      *)
     match c.sc_kind with
-      | Ast.Cabstract -> c.sc_implements @ c.sc_extends
-      | Ast.Ctrait -> c.sc_implements @ c.sc_extends @ c.sc_req_implements
+      | Ast_defs.Cabstract -> c.sc_implements @ c.sc_extends
+      | Ast_defs.Ctrait -> c.sc_implements @ c.sc_extends @ c.sc_req_implements
       | _ -> c.sc_extends
   in
   let inherited_l = List.map extends (from_class env c) in

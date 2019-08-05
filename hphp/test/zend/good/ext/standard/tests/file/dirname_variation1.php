@@ -1,19 +1,31 @@
-<?php
+<?hh
 /* Prototype  : string dirname(string path)
- * Description: Returns the directory name component of the path 
+ * Description: Returns the directory name component of the path
  * Source code: ext/standard/string.c
- * Alias to functions: 
+ * Alias to functions:
  */
 
-echo "*** Testing dirname() : usage variation ***\n";
+// define some classes
+class classWithToString
+{
+    public function __toString() {
+        return "Class A object";
+    }
+}
+
+class classWithoutToString
+{
+}
 
 // Define error handler
 function test_error_handler($err_no, $err_msg, $filename, $linenum, $vars) {
-	if (error_reporting() != 0) {
-		// report non-silenced errors
-		echo "Error: $err_no - $err_msg, $filename($linenum)\n";
-	}
+    if (error_reporting() != 0) {
+        // report non-silenced errors
+        echo "Error: $err_no - $err_msg, $filename($linenum)\n";
+    }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing dirname() : usage variation ***\n";
 set_error_handler('test_error_handler');
 
 // Initialise function arguments not being substituted (if any)
@@ -21,18 +33,6 @@ set_error_handler('test_error_handler');
 //get an unset variable
 $unset_var = 10;
 unset ($unset_var);
-
-// define some classes
-class classWithToString
-{
-	public function __toString() {
-		return "Class A object";
-	}
-}
-
-class classWithoutToString
-{
-}
 
 // heredoc string
 $heredoc = <<<EOT
@@ -97,5 +97,5 @@ foreach($inputs as $key =>$value) {
       try { var_dump( dirname($value) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 };
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

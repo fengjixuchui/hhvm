@@ -1,19 +1,31 @@
-<?php
+<?hh
 /* Prototype  : int fwrite(resource fp, string str [, int length])
- * Description: Binary-safe file write 
+ * Description: Binary-safe file write
  * Source code: ext/standard/file.c
  * Alias to functions: bzwrite fputs gzwrite
  */
 
-echo "*** Testing fwrite() : usage variation ***\n";
+// define some classes
+class classWithToString
+{
+    public function __toString() {
+        return "Class A object";
+    }
+}
+
+class classWithoutToString
+{
+}
 
 // Define error handler
 function test_error_handler($err_no, $err_msg, $filename, $linenum, $vars) {
-	if (error_reporting() != 0) {
-		// report non-silenced errors
-		echo "Error: $err_no - $err_msg, $filename($linenum)\n";
-	}
+    if (error_reporting() != 0) {
+        // report non-silenced errors
+        echo "Error: $err_no - $err_msg, $filename($linenum)\n";
+    }
 }
+<<__EntryPoint>> function main(): void {
+echo "*** Testing fwrite() : usage variation ***\n";
 set_error_handler('test_error_handler');
 
 // Initialise function arguments not being substituted (if any)
@@ -25,18 +37,6 @@ $filename = __DIR__ . '/fwriteVar5.tmp';
 //get an unset variable
 $unset_var = 10;
 unset ($unset_var);
-
-// define some classes
-class classWithToString
-{
-	public function __toString() {
-		return "Class A object";
-	}
-}
-
-class classWithoutToString
-{
-}
 
 // heredoc string
 $heredoc = <<<EOT
@@ -105,5 +105,5 @@ foreach($inputs as $key =>$value) {
 };
 unlink($filename);
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

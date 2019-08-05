@@ -247,6 +247,7 @@ type rewrite_suspend_result =
  *)
 let rewrite_suspend
   function_call_receiver
+  function_call_type_args
   function_call_left_paren
   function_call_argument_list
   function_call_right_paren
@@ -266,6 +267,7 @@ let rewrite_suspend
     let invoke_coroutine =
       FunctionCallExpression {
         function_call_receiver;
+        function_call_type_args;
         function_call_left_paren;
         function_call_argument_list;
         function_call_right_paren;
@@ -288,6 +290,7 @@ let rewrite_suspend
   let invoke_coroutine =
     FunctionCallExpression {
         function_call_receiver;
+        function_call_type_args;
         function_call_left_paren;
         function_call_argument_list;
         function_call_right_paren;
@@ -648,6 +651,7 @@ let rewrite_suspends_in_statement
         prefix_unary_operand = {
           syntax = FunctionCallExpression {
             function_call_receiver;
+            function_call_type_args;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;};
@@ -669,6 +673,7 @@ let rewrite_suspends_in_statement
       let { next_label; next_temp; expression = new_node; extra_info } =
         rewrite_suspend
           function_call_receiver
+          function_call_type_args
           function_call_left_paren
           function_call_argument_list
           function_call_right_paren
@@ -821,9 +826,7 @@ let rewrite_suspends_in_statement
                 Token.kind = (
                   TokenKind.BarBar |
                   TokenKind.AmpersandAmpersand |
-                  TokenKind.QuestionQuestion |
-                  TokenKind.And |
-                  TokenKind.Or) as t;
+                  TokenKind.QuestionQuestion) as t;
                 _ };
               _ } ;
           binary_right_operand = right;
@@ -843,8 +846,7 @@ let rewrite_suspends_in_statement
           Rewriter.Keep
         else
           begin match t with
-          | TokenKind.BarBar
-          | TokenKind.Or ->
+          | TokenKind.BarBar ->
             (* transform e1 || e2 to
                if (!$temp = boolval(e1)) {
                    $temp = boolval(e2);
@@ -863,8 +865,7 @@ let rewrite_suspends_in_statement
             (extra_info :: node_extra_info_rest, next_label, next_temp),
             Rewriter.Result.Replace new_node
 
-          | TokenKind.AmpersandAmpersand
-          | TokenKind.And ->
+          | TokenKind.AmpersandAmpersand ->
             (* transform e1 && e2 to
                if ($temp = boolval(e1)) {
                  $temp = boolval(e2);
@@ -1254,8 +1255,6 @@ let rewrite_suspends ?(only_tail_call_suspends = false) node =
       | GotoStatement _ (* Suspends are invalid in goto statements. *)
       | BreakStatement _ (* Suspends are impossible in break statements. *)
       | ContinueStatement _ (* Suspends are impossible in continue statements. *)
-      | FunctionStaticStatement _ (* Suspends are impossible in these. *)
-      | GlobalStatement _ (* Suspends are impossible in global statements. *)
       | _ ->
         acc, Rewriter.Result.Keep
       end

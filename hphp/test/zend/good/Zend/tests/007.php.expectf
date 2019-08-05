@@ -1,10 +1,10 @@
 
-Warning: %s
+Warning: each() expects exactly 1 parameter, 0 given in %s/007.php on line 3
 
-Warning: %s
+Warning: Invalid operand type was used: each() expects array, was integer in %s/007.php on line 5
 NULL
 
-Warning: %s
+Warning: Invalid operand type was used: each() expects array, was string in %s/007.php on line 7
 NULL
 array(4) {
   [1]=>
@@ -25,15 +25,5 @@ array(4) {
   string(1) "a"
   ["key"]=>
   string(1) "a"
-}
-array(4) {
-  [1]=>
-  int(1)
-  ["value"]=>
-  int(1)
-  [0]=>
-  int(0)
-  ["key"]=>
-  int(0)
 }
 Done

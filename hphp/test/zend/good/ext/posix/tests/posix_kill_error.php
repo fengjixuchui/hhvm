@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype  : proto bool posix_kill(int pid, int sig)
  * Description: Send a signal to a process (POSIX.1, 3.3.2) 
  * Source code: ext/posix/posix.c
  * Alias to functions: 
  */
 
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing posix_kill() : error conditions ***\n";
 
 
@@ -30,4 +30,4 @@ $sig = 9;
 var_dump( posix_kill($pid, 999) );
 
 echo "Done";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 echo "*** Testing class_uses() : basic ***\n";
 
@@ -41,5 +41,5 @@ function s_var_dump($arr) {
    krsort(&$arr);
    var_dump($arr);
 }
-?>
-===DONE===
+
+echo "===DONE===\n";

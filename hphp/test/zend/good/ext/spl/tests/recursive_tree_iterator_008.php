@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $ary = array(
 	"a" => array("b"),
 	"c" => array("d"),
@@ -24,5 +24,5 @@ try {
 } catch (OutOfRangeException $e) {
 	echo "OutOfRangeException thrown\n";
 }
-?>
-===DONE===
+echo "===DONE===\n";
+}

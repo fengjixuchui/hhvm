@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* 
  Prototype: resource fopen(string $filename, string $mode 
                             [, bool $use_include_path [, resource $context]] );
@@ -10,7 +10,7 @@
  Prototype: bool feof ( resource $handle );
  Description: Tests for end-of-file on a file pointer
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing basic operations of fopen() and fclose() functions ***\n";
 $modes = array(
   "w",
@@ -85,3 +85,4 @@ for( $i=0; $i<count($x_modes); $i++ ) {
 }
 
 echo "\n*** Done ***\n";
+}

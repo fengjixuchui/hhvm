@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class C {
 	public $a = "Original a";
@@ -24,5 +24,4 @@ foreach ($obj as $v) {
 var_dump($obj);
 
 
-?>
-===DONE===
+echo "===DONE===\n";

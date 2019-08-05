@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool natcasesort(array &$array_arg)
  * Description: Sort an array using case-insensitive natural sort
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass incorrect number of arguments to natcasesort() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing natcasesort() : error conditions ***\n";
 
 // Zero arguments
@@ -21,4 +21,4 @@ $extra_arg = 10;
 try { var_dump( natcasesort(&$array_arg, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

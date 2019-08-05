@@ -13,25 +13,28 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
+#include "hphp/util/numa.h"
 
 #ifdef HAVE_NUMA
-
-#include "hphp/util/numa.h"
 #include "hphp/util/portability.h"
 #include <folly/Bits.h>
-
 extern "C" {
 HHVM_ATTRIBUTE_WEAK extern void numa_init();
 }
+#endif
 
 namespace HPHP {
 
+// Treat the system as having a single NUMA node if HAVE_NUMA not defined.
+// Otherwise, initNuma() will calculate the number of allowed NUMA nodes.
+uint32_t numa_num_nodes = 1;
+
+#ifdef HAVE_NUMA
+
 uint32_t numa_node_set;
-uint32_t numa_num_nodes;
 uint32_t numa_node_mask;
 std::vector<bitmask*> node_to_cpu_mask;
 bool use_numa = false;
-bool threads_bind_local = false;
 
 void initNuma() {
   if (getenv("HHVM_DISABLE_NUMA")) {
@@ -56,6 +59,7 @@ void initNuma() {
   bool ret = true;
   bitmask* run_nodes = numa_get_run_node_mask();
   bitmask* mem_nodes = numa_get_mems_allowed();
+  numa_num_nodes = 0;
   for (int i = 0; i <= max_node; i++) {
     if (!numa_bitmask_isbitset(run_nodes, i) ||
         !numa_bitmask_isbitset(mem_nodes, i)) {
@@ -64,7 +68,7 @@ void initNuma() {
       ret = false;
       break;
     }
-    numa_node_set |= (uint32_t)1 << i;
+    numa_node_set |= 1u << i;
     numa_num_nodes++;
   }
   numa_bitmask_free(run_nodes);
@@ -75,11 +79,11 @@ void initNuma() {
   numa_node_mask = folly::nextPowTwo(numa_num_nodes) - 1;
 }
 
-int next_numa_node(std::atomic_int& curr_node) {
-  if (!use_numa) return -1;
-  int node;
+uint32_t next_numa_node(std::atomic<uint32_t>& curr_node) {
+  if (!use_numa) return 0;
+  uint32_t node;
   do {
-    node = curr_node.fetch_add(1, std::memory_order_relaxed);
+    node = curr_node.fetch_add(1u, std::memory_order_relaxed);
     node &= numa_node_mask;
   } while (!((numa_node_set >> node) & 1));
   return node;
@@ -90,16 +94,10 @@ void numa_interleave(void* start, size_t size) {
   numa_interleave_memory(start, size, numa_all_nodes_ptr);
 }
 
-void numa_local(void* start, size_t size) {
+void numa_bind_to(void* start, size_t size, uint32_t node) {
   if (!use_numa) return;
-  numa_setlocal_memory(start, size);
-}
-
-void numa_bind_to(void* start, size_t size, int node) {
-  if (node < 0 || !use_numa) return;
-  numa_tonode_memory(start, size, node);
-}
-
+  numa_tonode_memory(start, size, (int)node);
 }
 
 #endif
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 include_once( 'ut_common.inc' );
 $GLOBALS['oo-mode'] = true;
 $res_str = '';
@@ -18,4 +18,3 @@ $res_str .= "Formatting clone result: " . ut_msgfmt_format( $fmt_clone, array(12
 
 echo $res_str;
 
-?>

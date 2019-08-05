@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $it = new ArrayIterator(range(0,3));
 
 foreach(new IteratorIterator($it) as $v)
@@ -14,6 +14,5 @@ foreach(new IteratorIterator($it) as $v)
 	var_dump($v);
 }
 
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

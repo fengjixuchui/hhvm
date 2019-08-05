@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int mb_strripos(string haystack, string needle [, int offset [, string encoding]])
  * Description: Finds position of last occurrence of a string within another, case insensitive 
  * Source code: ext/mbstring/mbstring.c
@@ -8,7 +8,7 @@
 /*
  * Test basic functionality of mb_strripos with ASCII and multibyte characters
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mb_strripos() : basic functionality***\n";
 
 mb_internal_encoding('UTF-8');
@@ -62,4 +62,4 @@ foreach ($greek_needles as $needle) {
 }
 
 echo "Done";
-?>
+}

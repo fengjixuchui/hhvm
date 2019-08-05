@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function backtrace_print($opt = null)
 {
@@ -7,16 +7,17 @@ function backtrace_print($opt = null)
 	} else {
 		print_r(debug_backtrace($opt));
 	}
+	__hhvm_intrinsics\launder_value($opt);
 }
 
 function doit($a, $b, $how)
 {
 	echo "==default\n";
 	$how();
-	echo "==true\n";
-	$how(true);
-	echo "==false\n";
-	$how(false);
+	echo "==1\n";
+	$how(1);
+	echo "==0\n";
+	$how(0);
 	echo "==DEBUG_BACKTRACE_PROVIDE_OBJECT\n";
 	$how(DEBUG_BACKTRACE_PROVIDE_OBJECT);
 	echo "==DEBUG_BACKTRACE_IGNORE_ARGS\n";
@@ -26,8 +27,8 @@ function doit($a, $b, $how)
 }
 
 class foo {
-	protected function doCall($dowhat, $how) 
-	{  
+	protected function doCall($dowhat, $how)
+	{
 	   $dowhat('a','b', $how);
 	}
 	static function statCall($dowhat, $how)
@@ -38,5 +39,3 @@ class foo {
 }
 foo::statCall("doit", "debug_print_backtrace");
 foo::statCall("doit", "backtrace_print");
-
-?>

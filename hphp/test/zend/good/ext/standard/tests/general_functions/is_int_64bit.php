@@ -1,8 +1,8 @@
-<?php
+<?hh
 /* Prototype: bool is_int ( mixed $var );
  * Description: Finds whether the given variable is an integer  
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing is_int(), is_integer() & is_long()  with valid integer values ***\n";
 // different valid  integer vlaues 
 $valid_ints = array(
@@ -137,4 +137,4 @@ try { var_dump( is_integer(TRUE, FALSE) ); } catch (Exception $e) { echo "\n".'W
 try { var_dump( is_long(TRUE, FALSE) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
  
 echo "Done\n";
-?>
+}

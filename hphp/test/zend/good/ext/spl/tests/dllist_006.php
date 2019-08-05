@@ -1,4 +1,4 @@
-<?php
+<?hh <<__EntryPoint>> function main(): void {
 $a = new SplDoublyLinkedList();
 $a->push(1);
 $a->push(2);
@@ -41,6 +41,5 @@ try {
 } catch (OutOfRangeException $e) {
     echo "Exception: ".$e->getMessage()."\n";
 }
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

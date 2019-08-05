@@ -247,7 +247,7 @@ inline bool ArrayData::hasApcTv() const { return m_aux16 & kHasApcTv; }
 inline bool ArrayData::isLegacyArray() const { return m_aux16 & kLegacyArray; }
 
 inline void ArrayData::setLegacyArray(bool legacy) {
-  assert(!legacy || kind() == kDictKind || kind() == kVecKind);
+  assertx(!legacy || kind() == kDictKind || kind() == kVecKind);
   m_aux16 = (m_aux16 & ~kLegacyArray) | (legacy ? kLegacyArray : 0);
 }
 
@@ -309,16 +309,24 @@ inline bool ArrayData::IsValidKey(const StringData* k) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+ALWAYS_INLINE
+bool ArrayData::hasProvenanceData() const {
+  return m_aux16 & kHasProvenanceData;
+}
+
+ALWAYS_INLINE
+void ArrayData::markHasProvenanceData() {
+  m_aux16 |= kHasProvenanceData;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 ALWAYS_INLINE void decRefArr(ArrayData* arr) {
   arr->decRefAndRelease();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-ALWAYS_INLINE bool checkHACIntishCast() {
-  return RuntimeOption::EvalHackArrCompatNotices &&
-         RuntimeOption::EvalHackArrCompatCheckIntishCast;
-}
 ALWAYS_INLINE bool checkHACRefBind() {
   return RuntimeOption::EvalHackArrCompatNotices &&
          RuntimeOption::EvalHackArrCompatCheckRefBind;

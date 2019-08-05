@@ -1,4 +1,4 @@
-<?php
+<?hh
 $data = "Testing openssl_public_encrypt()";
 $privkey = "file://" . dirname(__FILE__) . "/private.key";
 $pubkey = "file://" . dirname(__FILE__) . "/public.key";
@@ -14,7 +14,6 @@ var_dump(openssl_public_encrypt($data, &$encrypted, $pubkey));
 var_dump(openssl_public_encrypt($data, &$encrypted, $privkey));
 var_dump(openssl_public_encrypt($data, &$encrypted, $wrong));
 var_dump(openssl_public_encrypt($data, &$encrypted, $obj));
-var_dump(openssl_public_encrypt($obj, &$encrypted, $pubkey));
+try { var_dump(openssl_public_encrypt($obj, &$encrypted, $pubkey)); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 openssl_private_decrypt($encrypted, &$output, $privkey);
 var_dump($output);
-?>

@@ -1,9 +1,9 @@
-<?php
+<?hh
 /* Prototype  : array array_unique(array $input)
  * Description: Removes duplicate values from array 
  * Source code: ext/standard/array.c
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_unique() : basic functionality ***\n";
 
 // array with default keys
@@ -19,4 +19,4 @@ $input = array("1" => "one", "two", "one", 2 => "two", "three");
 var_dump( array_unique($input) );
 
 echo "Done";
-?>
+}

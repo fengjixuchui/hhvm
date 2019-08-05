@@ -46,11 +46,22 @@ let watchman_expression_terms = [
   ]
 ]
 
-let make_genv options config local_config workers =
+type changes_mode =
+| Check_mode
+| Dfind_mode
+| Watchman_mode of Watchman.env
+
+let make_genv options config local_config workers lru_host_env =
   let root = ServerArgs.root options in
   let check_mode   = ServerArgs.check_mode options in
   Typing_deps.trace :=
-    not check_mode || ServerArgs.save_filename options <> None;
+    not check_mode ||
+    ServerArgs.save_filename options <> None ||
+    ServerArgs.save_with_spec options <> None;
+  (* The number of workers is set both in hh.conf and as an optional server argument.
+    if the two numbers given in argument and in hh.conf are different, we always take the minimum
+    of the two.
+  *)
 
   let (>>=) = Option.(>>=) in
   let since_clockspec = (ServerArgs.with_saved_state options) >>= function
@@ -60,27 +71,40 @@ let make_genv options config local_config workers =
         Some mb.ServerMonitorUtils.watchman_clock
   in
   let watchman_env =
-    if check_mode || not local_config.SLC.use_watchman
-    then None
-    else Watchman.init ?since_clockspec {
-      Watchman.init_timeout = local_config.SLC.watchman_init_timeout;
-      subscribe_mode = if local_config.SLC.watchman_subscribe
-        then Some Watchman.Defer_changes
-        else None;
-      expression_terms = watchman_expression_terms;
-      debug_logging =
-        ServerArgs.watchman_debug_logging options ||
-        local_config.SLC.watchman_debug_logging;
-      subscription_prefix = "hh_type_check_watcher";
-      roots = [root];
-    } ()
+    if check_mode then begin
+      Hh_logger.log "Not using dfind or watchman";
+      Check_mode
+    end
+    else if not local_config.SLC.use_watchman then begin
+      Hh_logger.log "Using dfind";
+      Dfind_mode
+    end
+    else begin
+      Hh_logger.log "Using watchman";
+      let watchman_env = Watchman.init ?since_clockspec {
+        Watchman.init_timeout =
+          Watchman.Explicit_timeout (float local_config.SLC.watchman_init_timeout);
+        subscribe_mode = if local_config.SLC.watchman_subscribe
+          then Some Watchman.Defer_changes
+          else None;
+        expression_terms = watchman_expression_terms;
+        debug_logging =
+          ServerArgs.watchman_debug_logging options ||
+          local_config.SLC.watchman_debug_logging;
+        subscription_prefix = "hh_type_check_watcher";
+        roots = [root];
+      } ()
+      in
+      match watchman_env with
+      | Some watchman_env -> Watchman_mode watchman_env
+      | None -> Dfind_mode
+    end
   in
-  if Option.is_some watchman_env then Hh_logger.log "Using watchman";
   let max_bucket_size = local_config.SLC.max_bucket_size in
   Hh_bucket.set_max_bucket_size max_bucket_size;
   let indexer, notifier_async, notifier_async_reader, notifier, wait_until_ready, options =
     match watchman_env with
-    | Some watchman_env ->
+    | Watchman_mode watchman_env ->
       let indexer filter =
         let files = Watchman.get_all_files watchman_env in
         Hh_bucket.make_list
@@ -144,7 +168,7 @@ let make_genv options config local_config workers =
        * done, so we don't have anything else to wait for here. *)
       let wait_until_ready () = () in
       indexer, notifier_async, notifier_async_reader, notifier, wait_until_ready, options
-    | None ->
+    | Dfind_mode ->
       (** Failed to start Watchman subscription. Clear out the watchman_mergebase
        * inside the Informant-directed target mini state since it is no longer
        * usable during init. *)
@@ -184,6 +208,14 @@ let make_genv options config local_config workers =
       notifier,
       wait_until_ready,
       options
+    | Check_mode ->
+      let wait_until_ready () = () in
+      let notifier () = SSet.empty in
+      let notifier_async = (fun() ->
+        ServerNotifierTypes.Notifier_synchronous_changes (notifier ())) in
+      let notifier_async_reader = (fun () -> None) in
+      let indexer filter = Find.make_next_files ~name:"root" ~filter root in
+      indexer, notifier_async, notifier_async_reader, notifier, wait_until_ready, options
   in
   { options;
     config;
@@ -195,27 +227,29 @@ let make_genv options config local_config workers =
     notifier;
     wait_until_ready;
     debug_channels = None;
+    lru_host_env;
   }
 
 (* useful in testing code *)
 let default_genv =
-  { options          = ServerArgs.default_options "";
-    config           = ServerConfig.default_config;
-    local_config     = ServerLocalConfig.default;
-    workers          = None;
-    indexer          = (fun _ -> fun () -> []);
-    notifier_async   = (fun () ->
+  { options               = ServerArgs.default_options "";
+    config                = ServerConfig.default_config;
+    local_config          = ServerLocalConfig.default;
+    workers               = None;
+    indexer               = (fun _ -> fun () -> []);
+    notifier_async        = (fun () ->
       ServerNotifierTypes.Notifier_synchronous_changes SSet.empty);
     notifier_async_reader = (fun () -> None);
-    notifier         = (fun () -> SSet.empty);
-    wait_until_ready = (fun () -> ());
-    debug_channels   = None;
+    notifier              = (fun () -> SSet.empty);
+    wait_until_ready      = (fun () -> ());
+    debug_channels        = None;
+    lru_host_env          = None;
   }
 
-let make_env config =
+let make_env ?init_id config =
   { tcopt          = ServerConfig.typechecker_options config;
     popt           = ServerConfig.parser_options config;
-    files_info     = Relative_path.Map.empty;
+    naming_table   = Naming_table.empty;
     errorl         = Errors.empty;
     failed_naming = Relative_path.Set.empty;
     persistent_client = None;
@@ -228,6 +262,7 @@ let make_env config =
     disk_needs_parsing = Relative_path.Set.empty;
     needs_phase2_redecl = Relative_path.Set.empty;
     needs_recheck = Relative_path.Set.empty;
+    paused = false;
     full_check = Full_check_done;
     prechecked_files = Prechecked_files_disabled;
     can_interrupt = true;
@@ -236,6 +271,8 @@ let make_env config =
     persistent_client_pending_command_needs_full_check = None;
     default_client_pending_command_needs_full_check = None;
     init_env = {
+      init_id = (match init_id with Some init_id -> init_id | None -> Random_id.short_string ());
+      recheck_id = None;
       needs_full_init = false;
       init_start_t = Unix.gettimeofday ();
       state_distance = None;
@@ -245,4 +282,6 @@ let make_env config =
     };
     diag_subscribe = None;
     recent_recheck_loop_stats = empty_recheck_loop_stats;
+    last_recheck_info = None;
+    local_symbol_table = ref SearchUtils.default_si_env;
   }

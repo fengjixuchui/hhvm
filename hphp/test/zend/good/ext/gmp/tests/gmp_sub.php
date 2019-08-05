@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 try { var_dump(gmp_sub()); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 try { var_dump(gmp_sub("")); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 var_dump(gmp_sub("", ""));
@@ -16,4 +16,4 @@ var_dump($g = gmp_sub(new stdclass, 100));
 var_dump(gmp_strval($g));
 
 echo "Done\n";
-?>
+}

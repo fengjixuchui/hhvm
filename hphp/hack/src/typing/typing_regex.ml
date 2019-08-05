@@ -9,7 +9,7 @@
 
 open Core_kernel
 open Typing_defs
-open Nast
+open Aast
 open Ast_defs
 module Reason = Typing_reason
 
@@ -38,9 +38,9 @@ let rec keys_aux p top names_numbers acc =
  * [ SFlit_int (p, "1"); SFlit_int (p, 'o') ].
  *
  *)
-let keys p s =
+let keys p s ~flags =
   (* Compile `re`-prefixed string for use in Pcre functions *)
-  let pattern = Pcre.regexp s in
+  let pattern = Pcre.regexp s ~flags in
   (* For re"Hel(\D)(?'o'\D)", this is 2. *)
   let count =
     try Pcre.capturecount pattern
@@ -59,30 +59,67 @@ let keys p s =
       names_numbers in
   keys_aux p count names_numbers_sorted []
 
-let type_match p s =
+let type_match p s ~flags =
   let sft =
     { sft_optional = false; sft_ty = Reason.Rregex p, Tprim Tstring; } in
-  let keys = keys p s in
+  let keys = keys p s ~flags in
   let shape_map = List.fold_left ~f:(fun acc key -> ShapeMap.add key sft acc)
     ~init:ShapeMap.empty keys in
   (* Any Regex\Match will contain the entire matched substring at key 0 *)
   let shape_map = ShapeMap.add (SFlit_int (p, "0")) sft shape_map in
-  Reason.Rregex p, Tshape (FieldsFullyKnown, shape_map)
+  Reason.Rregex p, Tshape (Closed_shape, shape_map)
 
-let check_global_options s =
-  String.iter ~f:(fun c ->
-    match c with
-    | 'i' | 'm' | 's' | 'x' | 'A' | 'D' | 'S' | 'U' | 'X' | 'u' -> ()
-    | _ -> raise Invalid_global_option) s
+let get_global_options s =
+  List.fold_left (String.to_list_rev s) ~init:[] ~f:(fun acc x ->
+    match x with
+    | 'u' -> `UTF8::acc
+    | 'i' -> `CASELESS::acc
+    | 'm' -> `MULTILINE::acc
+    | 's' -> `DOTALL::acc
+    | 'x' -> `EXTENDED::acc
+    | 'A' -> `ANCHORED::acc
+    | 'D' -> `DOLLAR_ENDONLY::acc
+    | 'U' -> `UNGREEDY::acc
+    | 'X' -> `EXTRA::acc
+    | 'S' -> acc
+    | _ -> raise Invalid_global_option
+  )
 
-let rec find_delimiter s desired from_i =
-  match String.index_from s from_i desired with
-  | Some i ->
-    if i <> 0 && s.[i - 1] = '\\'
-    then find_delimiter s desired (i + 1)
-    else Some i
-  | None -> None
 
+let complement c =
+  match c with
+  | '(' -> ')'
+  | '{' -> '}'
+  | '<' -> '>'
+  | '[' -> ']'
+  | _ -> c
+
+(* Takes in delimiter-stripped string, checks brace-like delimiters *)
+let check_balanced_delimiters s delim =
+  let length = String.length s in
+  let delim_closed = complement delim in
+  let rec check_acc d i =
+    if d < 0 then
+      raise Missing_delimiter
+    else if i < length then
+      let d2, i2 =
+        match s.[i] with
+        | x when x = delim -> d + 1, i + 1
+        | x when x = delim_closed -> d - 1, i + 1
+        (* Skip escape characters *)
+        |'\\' -> d, i + 2
+        | _   -> d, i + 1
+      in
+      check_acc d2 i2
+    else if d > 0 then
+      raise Missing_delimiter
+    else s
+  in
+  check_acc 0 0
+
+(* Takes in regex string and strips outer delimiters, checks and strips
+   nested brace-like delimiters.
+*)
 let check_and_strip_delimiters s =
   (*  Non-alphanumeric, non-whitespace, non-backslash characters are delimiter-eligible *)
   let delimiter = Str.regexp "[^a-zA-Z0-9\t\n\r\x0b\x0c \\]" in
@@ -91,28 +128,25 @@ let check_and_strip_delimiters s =
   let first = s.[0] in
   if Str.string_match delimiter (String.make 1 first) 0
   then begin
-    let desired =
-      match first with
-      | '(' -> ')'
-      | '[' -> ']'
-      | '{' -> '}'
-      | '<' -> '>'
-      | _ -> first
-    in
-    match find_delimiter (String.sub s 1 (length - 1)) desired 0 with
-    | Some i -> (* i is 0-indexed from the second character in s *)
-      check_global_options (String.sub s (i + 2) ((length - 2) - i));
-      String.sub s 1 i
+    let closed_delim = complement first in
+    let no_first_delim = (String.sub s 1 (length - 1)) in
+    match String.rindex_from no_first_delim (length - 2) closed_delim with
+    | Some i ->
+      let flags = get_global_options (String.sub s (i + 2) (length - i - 2)) in
+      let stripped_string = (String.sub s 1 i) in
+      if (closed_delim <> first) then
+        check_balanced_delimiters stripped_string first, flags
+      else stripped_string, flags
     | None -> raise Missing_delimiter
   end else raise Missing_delimiter
 
 let type_pattern (p, e_) =
   match e_ with
   | String s ->
-    let s = check_and_strip_delimiters s in
-    let match_type = type_match p s in
+    let s, flags = check_and_strip_delimiters s in
+    let match_type = type_match p s ~flags in
     Reason.Rregex p,
       Tabstract (AKnewtype (Naming_special_names.Regex.tPattern,
       [match_type]),
       Some (Reason.Rregex p, Tprim Tstring))
-  | _ -> failwith "Should have caught non-Ast.String prefixed expression!"
+  | _ -> failwith "Should have caught non-Ast_defs.String prefixed expression!"

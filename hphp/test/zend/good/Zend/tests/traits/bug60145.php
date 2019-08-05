@@ -1,12 +1,14 @@
-<?php
+<?hh
 
 trait foo {
 
 }
 
 interface MyInterface {
-	use foo;
+    use foo;
 
-	public function b();
+    public function b();
 
 }
+
+<<__EntryPoint>> function main(): void {}

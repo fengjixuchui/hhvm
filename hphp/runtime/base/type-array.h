@@ -32,7 +32,7 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 // Forward declare to avoid including tv-conversions.h and creating a cycle.
-template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+template <IntishCast IC = IntishCast::None>
 ArrayData* tvCastToArrayLikeData(TypedValue tv);
 
 struct ArrayIter;
@@ -207,7 +207,9 @@ public:
   Array toShape() const { COPY_BODY(toShape(true), CreateShape()) }
   Array toKeyset() const { COPY_BODY(toKeyset(true), CreateKeyset()) }
   Array toPHPArray() const { COPY_BODY(toPHPArray(true), Array{}) }
-  Array toPHPArrayIntishCast() const { COPY_BODY(toPHPArrayIntishCast(true), Array{}) }
+  Array toPHPArrayIntishCast() const {
+    COPY_BODY(toPHPArrayIntishCast(true), Array{})
+  }
   Array toVArray() const { COPY_BODY(toVArray(true), CreateVArray()) }
   Array toDArray() const { COPY_BODY(toDArray(true), CreateDArray()) }
 
@@ -256,9 +258,9 @@ public:
   /*
    * Converts `k' to a valid key for this array kind.
    */
-  template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+  template <IntishCast IC = IntishCast::None>
   Cell convertKey(Cell k) const;
-  template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+  template <IntishCast IC = IntishCast::None>
   Cell convertKey(const Variant& k) const;
 
   /*
@@ -374,14 +376,14 @@ public:
    * Sort multiple arrays at once similar to how ORDER BY clause works in SQL.
    */
   struct SortData {
-    Variant*     original;
-    const Array* array;
-    bool         by_key;
-    PFUNC_CMP    cmp_func;
-    const void*  data;
+    const Variant* original;
+    const Array*   array;
+    bool           by_key;
+    PFUNC_CMP      cmp_func;
+    const void*    data;
     std::vector<ssize_t> positions;
   };
-  static bool MultiSort(std::vector<SortData>& data, bool renumber);
+  static bool MultiSort(std::vector<SortData>& data);
 
   static void SortImpl(std::vector<int>& indices, const Array& source,
                        Array::SortData& opaque,
@@ -447,12 +449,9 @@ public:
   /*
    * Get an lval to the element at `key'.
    *
-   * These are ArrayData::lval() and ArrayData::lvalRef(), with CoW and
-   * escalation.  As with those functions, the Ref versions should be used if
-   * the lval will be boxed, and the non-Ref versions should be used otherwise.
+   * This is ArrayData::lval() with CoW and escalation.
    */
   FOR_EACH_KEY_TYPE(lvalAt, arr_lval, )
-  FOR_EACH_KEY_TYPE(lvalAtRef, arr_lval, )
 
 #undef D
 #undef I
@@ -463,7 +462,6 @@ public:
    * Get an lval to a newly created element.
    */
   arr_lval lvalAt();
-  arr_lval lvalAtRef();
 
   /////////////////////////////////////////////////////////////////////////////
   // Element access and mutation.
@@ -504,12 +502,6 @@ public:
    */
   FOR_EACH_KEY_TYPE(setWithRef, TypedValue)
 
-  /*
-   * Set an element to a reference to `v', boxing it if it's unboxed.
-   */
-  FOR_EACH_KEY_TYPE(setRef, Variant&)
-  FOR_EACH_KEY_TYPE(setRef, tv_lval);
-
 #undef D
 #undef I
 #undef V
@@ -539,7 +531,6 @@ public:
   void append(const Variant& v);
   void appendWithRef(TypedValue v);
   void appendWithRef(const Variant& v);
-  void appendRef(Variant& v);
   void prepend(TypedValue v);
   void prepend(const Variant& v);
 
@@ -569,14 +560,11 @@ private:
 
   template<typename T> tv_rval rvalAtImpl(const T& key, Flags) const;
   template<typename T> arr_lval lvalAtImpl(const T& key, Flags);
-  template<typename T> arr_lval lvalAtRefImpl(const T& key, Flags);
 
   template<typename T> bool existsImpl(const T& key) const;
   template<typename T> void removeImpl(const T& key);
   template<typename T> void setImpl(const T& key, TypedValue v);
   template<typename T> void setWithRefImpl(const T& key, TypedValue v);
-  template<typename T> void setRefImpl(const T& key, Variant& v);
-  template<typename T> void setRefImpl(const T& key, tv_lval v);
 
   static void compileTimeAssertions();
 
@@ -689,12 +677,12 @@ ALWAYS_INLINE const Array& toCArrRef(tv_rval tv) {
   return asCArrRef(tvIsRef(tv) ? val(tv).pref->cell() : tv);
 }
 
-template <IntishCast intishCast = IntishCast::AllowCastAndWarn>
+template <IntishCast IC = IntishCast::None>
 ALWAYS_INLINE Array toArray(tv_rval rval) {
   if (isArrayLikeType(type(rval))) {
     return Array{assert_not_null(val(rval).parr)};
   }
-  return Array::attach(tvCastToArrayLikeData<intishCast>(*rval));
+  return Array::attach(tvCastToArrayLikeData<IC>(*rval));
 }
 
 ///////////////////////////////////////////////////////////////////////////////

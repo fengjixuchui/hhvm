@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string mcrypt_decrypt(string cipher, string key, string data, string mode, string iv)
  * Description: OFB crypt/decrypt data using key key with cipher cipher starting with iv 
  * Source code: ext/mcrypt/mcrypt.c
@@ -109,5 +109,4 @@ foreach($inputs as $valueType =>$value) {
 
 fclose($fp);
 
-?>
-===DONE===
+echo "===DONE===\n";

@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /*
 Default values are "localhost", "cn=Manager,dc=my-domain,dc=com", and password "secret".
@@ -71,4 +71,3 @@ function remove_dummy_data($link, $base) {
 	ldap_delete($link, "cn=userB,$base");
 	ldap_delete($link, "o=test,$base");
 }
-?>

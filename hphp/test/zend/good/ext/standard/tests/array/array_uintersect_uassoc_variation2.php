@@ -1,34 +1,34 @@
-<?php
+<?hh
 /* Prototype  : array array_uintersect_uassoc(array arr1, array arr2 [, array ...], callback data_compare_func, callback key_compare_func)
- * Description: Returns the entries of arr1 that have values which are present in all the other arguments. Keys are used to do more restrictive check. Both data and keys are compared by using user-supplied callbacks. 
+ * Description: Returns the entries of arr1 that have values which are present in all the other arguments. Keys are used to do more restrictive check. Both data and keys are compared by using user-supplied callbacks.
  * Source code: ext/standard/array.c
- * Alias to functions: 
+ * Alias to functions:
  */
 
+// define some classes
+class classWithToString
+{
+    public function __toString() {
+        return "Class A object";
+    }
+}
+
+class classWithoutToString
+{
+}
+include('compare_function.inc');
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_uintersect_uassoc() : usage variation ***\n";
 
 // Initialise function arguments not being substituted (if any)
 $arr1 = array(1, 2);
 
-include('compare_function.inc');
 $data_compare_func = 'compare_function';
 $key_compare_func = 'compare_function';
 
 //get an unset variable
 $unset_var = 10;
 unset ($unset_var);
-
-// define some classes
-class classWithToString
-{
-	public function __toString() {
-		return "Class A object";
-	}
-}
-
-class classWithoutToString
-{
-}
 
 // heredoc string
 $heredoc = <<<EOT
@@ -93,5 +93,5 @@ foreach($inputs as $key =>$value) {
       var_dump( array_uintersect_uassoc($arr1, $value, $data_compare_func, $key_compare_func) );
 };
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

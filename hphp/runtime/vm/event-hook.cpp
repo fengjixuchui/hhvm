@@ -28,6 +28,7 @@
 #include "hphp/runtime/ext/hotprofiler/ext_hotprofiler.h"
 #include "hphp/runtime/ext/intervaltimer/ext_intervaltimer.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
+#include "hphp/runtime/ext/std/ext_std_variable.h"
 #include "hphp/runtime/ext/xenon/ext_xenon.h"
 
 #include "hphp/runtime/server/server-stats.h"
@@ -50,6 +51,7 @@ const StaticString
   s_frame_ptr("frame_ptr"),
   s_parent_frame_ptr("parent_frame_ptr"),
   s_this_ptr("this_ptr"),
+  s_this_obj("this_obj"),
   s_enter("enter"),
   s_exit("exit"),
   s_suspend("suspend"),
@@ -128,7 +130,10 @@ bool shouldRunUserProfiler(const Func* func) {
   // Don't do anything if we are running the profiling function itself
   // or if we haven't set up a profiler.
   if (g_context->m_executingSetprofileCallback ||
-      g_context->m_setprofileCallback.isNull()) {
+      g_context->m_setprofileCallback.isNull() ||
+      (!g_context->m_setprofileFunctions.empty() &&
+        g_context->m_setprofileFunctions.count(
+          func->fullName()->toCppString()) == 0)) {
     return false;
   }
   // Don't profile 86ctor, since its an implementation detail,
@@ -152,9 +157,14 @@ void addFramePointers(const ActRec* ar, Array& frameinfo, bool isEnter) {
   }
 
   if (isEnter) {
-    auto this_ptr = ar->func()->cls() && ar->hasThis() ?
-      intptr_t(ar->getThis()) : 0;
-    frameinfo.set(s_this_ptr, Variant(this_ptr));
+    auto this_ = ar->func()->cls() && ar->hasThis() ?
+      ar->getThis() : nullptr;
+    frameinfo.set(s_this_ptr, Variant(intptr_t(this_)));
+
+    if ((g_context->m_setprofileFlags & EventHook::ProfileThisObject) != 0
+        && !RuntimeOption::SetProfileNullThisObject && this_) {
+      frameinfo.set(s_this_obj, Variant(this_));
+    }
   }
 
   frameinfo.set(s_frame_ptr, Variant(intptr_t(ar)));
@@ -216,11 +226,12 @@ void runUserProfilerOnFunctionExit(const ActRec* ar, const TypedValue* retval,
 
 }
 
-static Array get_frame_args_with_ref(const ActRec* ar) {
+static Array get_frame_args(const ActRec* ar, bool with_ref) {
   int numNonVariadic = ar->func()->numNonVariadicParams();
   int numArgs = ar->numArgs();
 
-  PackedArrayInit retArray(numArgs);
+  SuppressHACRefBindNotices _guard;
+  VArrayInit retArray(numArgs);
 
   auto local = reinterpret_cast<TypedValue*>(
     uintptr_t(ar) - sizeof(TypedValue)
@@ -228,7 +239,8 @@ static Array get_frame_args_with_ref(const ActRec* ar) {
   int i = 0;
   // The function's formal parameters are on the stack
   for (; i < numArgs && i < numNonVariadic; ++i) {
-    retArray.appendWithRef(tvAsCVarRef(local));
+    if (with_ref) retArray.appendWithRef(tvAsCVarRef(local));
+    else          retArray.append(tvAsCVarRef(local));
     --local;
   }
 
@@ -239,13 +251,15 @@ static Array get_frame_args_with_ref(const ActRec* ar) {
       // ... shuffled into a packed array stored in the variadic capture
       // param on the stack
       for (ArrayIter iter(tvAsCVarRef(local)); iter; ++iter) {
-        retArray.appendWithRef(iter.secondVal());
+        if (with_ref) retArray.appendWithRef(iter.secondVal());
+        else          retArray.append(iter.secondVal());
       }
     } else {
       // ... or moved into the ExtraArgs datastructure.
       for (; i < numArgs; ++i) {
-        retArray.appendWithRef(
-          tvAsCVarRef(ar->getExtraArg(i - numNonVariadic)));
+        auto const arg = ar->getExtraArg(i - numNonVariadic);
+        if (with_ref) retArray.appendWithRef(tvAsCVarRef(arg));
+        else          retArray.append(tvAsCVarRef(arg));
       }
     }
   }
@@ -258,19 +272,47 @@ static Variant call_intercept_handler(
   const Variant& called_on,
   Array& args,
   const Variant& ctx,
-  Variant& done
+  Variant& done,
+  ActRec* ar
 ) {
-  ObjectData* obj = nullptr;
-  Class* cls = nullptr;
-  CallerFrame cf;
-  StringData* invName = nullptr;
-  ArrayData* reifiedGenerics = nullptr;
-  bool dynamic = false;
-  auto f = vm_decode_function(function, cf(), false,
-                              obj, cls, invName, dynamic, reifiedGenerics);
+  CallCtx callCtx;
+  vm_decode_function(function, callCtx);
+  auto f = callCtx.func;
   if (!f) {
     return uninit_null();
   }
+
+  auto const inout = [&] {
+    if (f->isInOutWrapper()) {
+      auto const name = mangleInOutFuncName(f->name(), {2,4});
+
+      if (!f->isMethod()) {
+        f = Unit::lookupFunc(name.get());
+      } else {
+        assertx(callCtx.cls);
+        f = callCtx.cls->lookupMethod(name.get());
+      }
+      if (!f) {
+        raise_error(
+          "fb_intercept used with an inout handler with a bad signature "
+          "(expected parameters three and five to be inout)"
+        );
+      }
+      return true;
+    } else if (f->isClosureBody() && f->anyByRef()) {
+      auto const name = mangleInOutFuncName(f->name(), {2,4});
+      auto const impl = f->implCls();
+      assertx(impl);
+
+      if (auto const invoke = impl->lookupMethod(name.get())) {
+        f = invoke;
+        return true;
+      }
+    }
+    return f->takesInOutParams();
+  }();
+
+  args = get_frame_args(ar, !inout);
 
   PackedArrayInit par(5);
   par.append(called);
@@ -280,41 +322,29 @@ static Variant call_intercept_handler(
 
   Variant intArgs;
 
-  auto const inout = f->isInOutWrapper();
   if (inout) {
-    auto const name = mangleInOutFuncName(f->name(), {2,4});
-
-    if (!f->isMethod()) {
-      f = Unit::lookupFunc(name.get());
-    } else {
-      assertx(cls);
-      f = cls->lookupMethod(name.get());
-    }
-    if (!f) {
-      raise_error(
-        "fb_intercept used with an inout handler with a bad signature "
-        "(expected parameters three and five to be inout)"
-      );
-    }
     intArgs = par.append(done).toArray();
   } else {
-    intArgs = par.appendRef(done).toArray();
+    SuppressHACRefBindNotices _guard;
+    Variant tmp;
+    tmp.assignRef(done);
+    intArgs = par.appendWithRef(tmp).toArray();
   }
 
   auto ret = Variant::attach(
-    g_context->invokeFunc(f, intArgs, obj, cls,
-                          nullptr, invName, ExecutionContext::InvokeNormal,
-                          dynamic, false)
+    g_context->invokeFunc(f, intArgs, callCtx.this_, callCtx.cls,
+                          nullptr, callCtx.invName,
+                          ExecutionContext::InvokeNormal,
+                          callCtx.dynamic, false)
   );
-  if (UNLIKELY(isRefType(ret.getRawType()))) {
-    tvUnbox(*ret.asTypedValue());
-  }
 
   if (inout) {
     auto& arr = ret.asCArrRef();
     if (arr[1].isArray()) args = arr[1].toArray();
     if (arr[2].isBoolean()) done = arr[2].toBoolean();
     return arr[0];
+  } else if (!ar->func()->takesInOutParams()) {
+    args.reset();
   }
   return ret;
 }
@@ -367,34 +397,55 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
     return init_null();
   }();
 
-  auto args = get_frame_args_with_ref(ar);
+  Array args;
   VarNR called(ar->func()->fullDisplayName());
 
   Variant ret = call_intercept_handler(
-    h->asCArrRef()[0], called, called_on, args, h->asCArrRef()[1], doneFlag
+    h->asCArrRef()[0], called, called_on, args, h->asCArrRef()[1], doneFlag, ar
   );
+
+  auto const rebind_locals = [&] {
+    auto local = reinterpret_cast<TypedValue*>(
+      uintptr_t(ar) - sizeof(TypedValue)
+    );
+    uint32_t param = 0;
+    IterateKV(args.get(), [&] (Cell, TypedValue v) {
+      if (param < func->numParams() && func->byRef(param++)) {
+        if (tvIsReferenced(*local)) {
+          cellSet(tvToCell(v), val(local).pref->cell());
+        }
+      }
+      --local;
+    });
+  };
 
   if (doneFlag.toBoolean()) {
     Offset pcOff;
     bool vmEntry;
     ActRec* outer = g_context->getPrevVMState(ar, &pcOff, nullptr, &vmEntry);
 
-    ar->setLocalsDecRefd();
-    frame_free_locals_no_hook(ar);
-
-    // Tear down the callee frame, then push the return value.
     Stack& stack = vmStack();
-    stack.trim((Cell*)(ar + 1));
+    auto const trim = [&] {
+      ar->setLocalsDecRefd();
+      frame_free_locals_no_hook(ar);
+
+      // Tear down the callee frame, then push the return value.
+      stack.trim((Cell*)(ar + 1));
+    };
+
     if (UNLIKELY(func->takesInOutParams())) {
+      assertx(!args.isNull());
       uint32_t count = func->numInOutParams();
 
+      trim(); // discard the callee frame before pushing inout values
       auto start = stack.topTV();
       auto const end = start + count;
 
       auto push = [&] (TypedValue v) {
+        auto const c = tvToCell(v);
         assertx(start < end);
-        tvIncRefGen(v);
-        *start++ = v;
+        tvIncRefGen(c);
+        *start++ = c;
       };
 
       uint32_t param = 0;
@@ -406,6 +457,11 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
       });
 
       while (start < end) push(make_tv<KindOfNull>());
+    } else if (!args.isNull()) {
+      rebind_locals();
+      trim(); // discard the callee frame after binding refs
+    } else {
+      trim(); // nothing to do throw away the frame
     }
 
     cellDup(*ret.toCell(), *stack.allocTV());
@@ -416,6 +472,8 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
     if (vmpc() && !vmEntry) vmpc() = skipCall(vmpc());
 
     return false;
+  } else if (!func->takesInOutParams() && !args.isNull()) {
+    rebind_locals();
   }
   vmfp() = ar;
   vmpc() = savePc;
@@ -502,8 +560,7 @@ void EventHook::onFunctionExit(const ActRec* ar, const TypedValue* retval,
   // Inlined calls normally skip the function enter and exit events. If we
   // side exit in an inlined callee, we short-circuit here in order to skip
   // exit events that could unbalance the call stack.
-  if (RuntimeOption::EvalJit &&
-      ((jit::TCA) ar->m_savedRip == jit::tc::ustubs().retInlHelper)) {
+  if (RuntimeOption::EvalJit && ar->isInlined()) {
     return;
   }
 

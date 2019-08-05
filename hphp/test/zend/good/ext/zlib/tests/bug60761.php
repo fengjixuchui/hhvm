@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 // the INI directives from bug #60761 report
 ini_set('zlib.output_compression', '4096');
@@ -38,4 +38,3 @@ var_dump($lens); // show lengths to help triage in case of failure
  
 // expected headers since its CGI
 
-?>

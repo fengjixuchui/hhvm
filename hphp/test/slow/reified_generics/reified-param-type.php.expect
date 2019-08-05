@@ -1,0 +1,16 @@
+done
+done
+ERROR: Argument 1 passed to f() must be an instance of @int, float given on line 15
+done
+done
+ERROR: Argument 1 passed to f() must be an instance of @int, bool given on line 15
+done
+done
+ERROR: Argument 1 passed to f() must be an instance of @bool, int given on line 15
+done
+done
+ERROR: Argument 1 passed to f() must be an instance of @shape('x' => int, 'y' => string), array given on line 15
+done
+done
+ERROR: Argument 1 passed to f() must be an instance of @(int, string), array given on line 15
+done

@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $list = array (
   0 => 'aaa,bbb',
   1 => 'aaa,"bbb"',
@@ -51,6 +51,5 @@ echo '$list = ';var_export($res);echo ";\n";
 
 @unlink($file);
 
-?>
-===DONE===
-<?php exit(0); ?>
+echo "===DONE===\n";
+}

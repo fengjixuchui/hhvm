@@ -11,16 +11,15 @@ class blah {
     $x = 0;
     $y = 0;
 
-    if (($top_var_ref =& $this->breaker()) === NULL) {
+    if ($this->breaker() === NULL) {
       echo "hi\n";
     }
     echo "ok\n";
   }
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   $x = new blah();
   $x->foo();
   $x->foo();
 }
-main();

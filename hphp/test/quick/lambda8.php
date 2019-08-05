@@ -17,7 +17,7 @@ class C {
     return () ==> () ==> $x->bar();
   }
 }
-function main() {
+<<__EntryPoint>> function main(): void {
   $x = $y ==> $z ==> $y + $z;
   var_dump(($x(3))(4));
   $x = (int $y = 5): int ==> $y;
@@ -32,6 +32,5 @@ function main() {
   $x = (Vector<Vector<int>> $v = Vector {Vector {1, 2}, Vector {3, 4}},
         string $x, (function(int):bool) $f):
          Vector<Vector<int>> ==> $v;
-  var_dump($x instanceof Closure);
+  var_dump($x is Closure);
 }
-main();

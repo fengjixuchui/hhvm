@@ -1,28 +1,35 @@
+.hh_file 1;
 .main {
   DefCls 0
 
   NewObjD "Foo"
   Dup
-  FPushCtor 0
-  FCall <> 0 1 "" - "" ""
+  NullUninit
+  NullUninit
+  FCallCtor <LockWhileUnwinding> 0 1 "" - ""
   PopC
+  LockObj
   SetL $object
   PopC
 
   CGetL $object
-  FPushObjMethodD 1 "main" NullThrows
+  NullUninit
+  NullUninit
    NewObjD "Foo"
    Dup
-   FPushCtor 0
-   FCall <> 0 1 "" - "" ""
+   NullUninit
+   NullUninit
+   FCallCtor <LockWhileUnwinding> 0 1 "" - ""
    PopC
-  FCall <> 1 1 "" - "" ""
+   LockObj
+  FCallObjMethodD <> 1 1 "" - "" NullThrows "main"
   PopC
 
   CGetL $object
-  FPushObjMethodD 1 "main" NullThrows
+  NullUninit
+  NullUninit
    Null
-  FCall <> 1 1 "" - "" ""
+  FCallObjMethodD <> 1 1 "" - "" NullThrows "main"
   PopC
 
   Int 1

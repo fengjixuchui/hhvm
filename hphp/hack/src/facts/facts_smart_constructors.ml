@@ -37,24 +37,33 @@ type node =
   | Final
   | Static
   | QualifiedName of node list
+  | ScopeResolutionExpression of node * node
   (* declarations *)
   | ClassDecl of {
       modifiers: node;
+      attributes: node;
       kind: node;
       name: node;
       extends: node;
       implements: node;
+      constrs: node;
       body: node
     }
   | FunctionDecl of node
   | MethodDecl of node
-  | EnumDecl of node
+  | EnumDecl of {
+    attributes: node;
+    name: node;
+    }
   | TraitUseClause of node
   | RequireExtendsClause of node
   | RequireImplementsClause of node
   | ConstDecl of node
   | Define of node
-  | TypeAliasDecl of node
+  | TypeAliasDecl of {
+    attributes: node;
+    name: node;
+    }
   | NamespaceDecl of node * node
   | EmptyBody
   [@@deriving show]
@@ -100,6 +109,8 @@ module SC = struct
     let flatten l = flatten l
     let zero = Ignored
   end)
+
+  let rust_parse _ _ = failwith "not implemented"
   let initial_state _ = false
 
   let make_token token st =
@@ -107,6 +118,7 @@ module SC = struct
     let result =
       match Token.kind token with
       | TK.Name -> Name (fun () -> Token.text token)
+      | TK.DecimalLiteral -> String (fun () -> Token.text token)
       | TK.SingleQuotedStringLiteral
       | TK.DoubleQuotedStringLiteral -> String (fun () -> Token.text token)
       | TK.XHPClassName -> XhpName (fun () -> Token.text token)
@@ -155,13 +167,13 @@ module SC = struct
 
   let make_generic_type_specifier class_type _argument_list st =
     st, class_type
-  let make_enum_declaration _attributes _keyword name _colon _base _type
+  let make_enum_declaration attributes _keyword name _colon _base _type
     _left_brace _enumerators _right_brace st =
-    st, if name = Ignored then Ignored else EnumDecl name
+    st, if name = Ignored then Ignored else EnumDecl { attributes; name }
 
-  let make_alias_declaration _attributes _keyword name _generic_params _constraint
+  let make_alias_declaration attributes _keyword name _generic_params _constraint
     _equal _type _semicolon st =
-    st, if name = Ignored then Ignored else TypeAliasDecl name
+    st, if name = Ignored then Ignored else TypeAliasDecl { attributes; name }
 
   let make_define_expression _keyword _left_paren args _right_paren st =
     match args with
@@ -208,12 +220,31 @@ module SC = struct
     if body = Ignored then st, Ignored
     else st, MethodDecl body
 
-  let make_classish_declaration _attributes modifiers keyword name _type_parameters
-    _extends_keyword extends _implements_keyword implements body st =
+  let make_classish_declaration attributes modifiers keyword name _type_parameters
+    _extends_keyword extends _implements_keyword implements constrs body st =
     if name = Ignored then st, Ignored
-    else st, ClassDecl { modifiers; kind = keyword; name; extends; implements; body }
+    else st, ClassDecl { modifiers; attributes; kind = keyword; name; extends
+      ; implements; constrs; body }
 
   let make_classish_body _left_brace elements _right_brace st =
     st, elements
+
+  let make_old_attribute_specification _left_double_angle attributes _right_double_angle st =
+    st, attributes
+
+  let make_attribute_specification attributes st =
+    st, attributes
+
+  let make_attribute _at attribute st =
+    st, attribute
+
+  let make_constructor_call class_type _left_paren argument_list _right_paren st =
+    st, ListItem (class_type, argument_list)
+
+  let make_decorated_expression _decorator expression st =
+    st, expression
+
+  let make_scope_resolution_expression qualifier _operator name st =
+    st, ScopeResolutionExpression (qualifier, name)
 
 end

@@ -1,5 +1,4 @@
-<?php
-
+<?hh
 class C {
   public static function log(Exception $exception) {
     $msg = get_class($exception).': '.$exception->getMessage();
@@ -9,6 +8,7 @@ class C {
     set_exception_handler(array(__CLASS__, 'log'));
   }
 }
-$obj = new C;
-$obj->setup();
+<<__EntryPoint>> function main(): void {
+C::setup();
 throw new Exception('test');
+}

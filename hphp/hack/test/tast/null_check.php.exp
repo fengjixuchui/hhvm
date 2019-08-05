@@ -1,7 +1,8 @@
 [(Fun
     { f_span = [3:1-7:2]; f_annotation = (); f_mode = <opaque>;
-      f_ret = (Some ([3:22-25], (Hprim Tint))); f_name = ([3:10-11], "\\f");
-      f_tparams = []; f_where_constraints = []; f_variadic = FVnonVariadic;
+      f_ret = (([Pos.none], _), (Some ([3:22-25], (Hprim Tint))));
+      f_name = ([3:10-11], "\\f"); f_tparams = []; f_where_constraints = [];
+      f_variadic = FVnonVariadic;
       f_params =
       [{ param_annotation = ([3:17-19], ?int);
          param_hint = (Some ([3:12-16], (Hoption ([3:13-16], (Hprim Tint)))));
@@ -11,19 +12,21 @@
         ];
       f_body =
       { fb_ast =
-        [(If (
-            (([4:7-18], bool),
-             (Binop (Eqeqeq, (([4:7-9], ?int), (Lvar ([4:7-9], $x))),
-                (([4:14-18], ?int), Null)))),
-            [(Return ([4:20-29], (Some (([4:27-28], int), (Int "1")))))],
-            [Noop]));
+        [([4:3-29],
           (If (
-             (([5:7-18], bool),
-              (Binop (Eqeqeq, (([5:7-11], int), Null),
-                 (([5:16-18], int), (Lvar ([5:16-18], $x)))))),
-             [(Return ([5:20-29], (Some (([5:27-28], int), (Int "2")))))],
-             [Noop]));
-          (Return ([6:3-12], (Some (([6:10-11], int), (Int "0")))))];
+             (([4:7-18], bool),
+              (Binop (Eqeqeq, (([4:7-9], ?int), (Lvar ([4:7-9], $x))),
+                 (([4:14-18], null), Null)))),
+             [([4:20-29], (Return (Some (([4:27-28], int), (Int "1")))))],
+             [([Pos.none], Noop)])));
+          ([5:3-29],
+           (If (
+              (([5:7-18], bool),
+               (Binop (Eqeqeq, (([5:7-11], null), Null),
+                  (([5:16-18], int), (Lvar ([5:16-18], $x)))))),
+              [([5:20-29], (Return (Some (([5:27-28], int), (Int "2")))))],
+              [([Pos.none], Noop)])));
+          ([6:3-12], (Return (Some (([6:10-11], int), (Int "0")))))];
         fb_annotation = No unsafe blocks };
       f_fun_kind = FSync; f_user_attributes = []; f_file_attributes = [];
       f_external = false; f_namespace = <opaque>; f_doc_comment = None;

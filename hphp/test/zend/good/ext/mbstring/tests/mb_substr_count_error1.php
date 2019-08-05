@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int mb_substr_count(string $haystack, string $needle [, string $encoding])
  * Description: Count the number of substring occurrences 
  * Source code: ext/mbstring/mbstring.c
@@ -7,7 +7,7 @@
 /*
  * Pass an incorrect number of arguments to mb_substr_count() to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mb_substr_count() : error conditions ***\n";
 
 
@@ -25,4 +25,4 @@ $haystack = 'string_val';
 try { var_dump( mb_substr_count($haystack) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

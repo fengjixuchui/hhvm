@@ -89,14 +89,7 @@ struct AliasAnalysis {
    * Similar to `stack_ranges', if an AFrame covers multiple locations, it will
    * have an entry in this map.
    */
-  LocationMap local_sets;
-
-  /*
-   * Similar to `stack_ranges', if an AClsRefSlot covers multiple locations, it
-   * will have an entry in this map.
-   */
-  LocationMap clsrefcls_sets;
-  LocationMap clsrefts_sets;
+  LocationMap loc_expand_map;
 
   /*
    * Short-hand to find an alias class in the locations map, or get folly::none
@@ -110,10 +103,9 @@ struct AliasAnalysis {
    */
   ALocBits all_props;
   ALocBits all_elemIs;
+  ALocBits all_elemSs;
   ALocBits all_frame;
   ALocBits all_stack;
-  ALocBits all_clsRefClsSlot;
-  ALocBits all_clsRefTSSlot;
   ALocBits all_rds;
   ALocBits all_ref;
   ALocBits all_iterPos;

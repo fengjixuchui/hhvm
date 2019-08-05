@@ -21,8 +21,13 @@ module WithSyntax(Syntax : Positioned_syntax_sig.PositionedSyntax_S) = struct
     let next state _ = state
   end
 
-  module SyntaxSC = SyntaxSmartConstructors.WithSyntax(Syntax)
-  include SyntaxSC.WithState(State)
+  module SyntaxSC_ = SyntaxSmartConstructors.WithSyntax(Syntax)
+  module SyntaxSC = SyntaxSC_.WithState(State)
+  include SyntaxSC.WithRustParser(struct
+    type r = Syntax.t
+    type t = bool
+    let rust_parse = Syntax.rust_parse_with_coroutine_sc
+  end)
 
   let is_coroutine = Syntax.is_coroutine
 
@@ -49,11 +54,6 @@ module WithSyntax(Syntax : Positioned_syntax_sig.PositionedSyntax_S) = struct
       is_coroutine coroutine in
     state, Syntax.make_anonymous_function r1 r2 r3 coroutine r5 r6 r7 r8 r9 r10 r11 r12
 
-  let make_php7_anonymous_function r1 r2 r3 coroutine r5 r6 r7 r8 r9 r10 r11 r12 state =
-    let state = state ||
-      is_coroutine coroutine in
-    state, Syntax.make_php7_anonymous_function r1 r2 r3 coroutine r5 r6 r7 r8 r9 r10 r11 r12
-
   let make_lambda_expression r1 r2 coroutine r3 r4 r5 state =
     let state = state ||
       is_coroutine coroutine in
@@ -64,7 +64,7 @@ module WithSyntax(Syntax : Positioned_syntax_sig.PositionedSyntax_S) = struct
       is_coroutine coroutine in
     state, Syntax.make_awaitable_creation_expression r1 r2 coroutine r4
 
-  let make_attribute_specification left attribute_name right state =
+  let make_old_attribute_specification left attribute_name right state =
     let open Syntax in
     let is_ppl_attribute_folder has_seen_ppl constructor_call =
       if has_seen_ppl then has_seen_ppl else
@@ -85,6 +85,6 @@ module WithSyntax(Syntax : Positioned_syntax_sig.PositionedSyntax_S) = struct
       | _ -> false in
     let state = state
       || syntax_list_fold ~init:false ~f:is_ppl_attribute_folder attribute_name in
-    state, Syntax.make_attribute_specification left attribute_name right
+    state, Syntax.make_old_attribute_specification left attribute_name right
 
 end (* WithSyntax *)

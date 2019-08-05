@@ -1,9 +1,9 @@
-<?php
+<?hh
 
-<<__EntryPoint>>
-function main_php_reserved_name_float_1() {
-if (false) {
-  class Float {}
-}
+
+
+
+class Float {}
+<<__EntryPoint>> function main(): void {
 echo "Done\n";
 }

@@ -1,4 +1,4 @@
-<?php
+<?hh
 ini_set("soap.wsdl_cache_enabled", 0);
 
 function getContinentList() {
@@ -30,4 +30,3 @@ var_dump($client->__getFunctions());
 var_dump($client->__getTypes());
 $x = $client->getContinentList(array("AFFILIATE_ID"=>1,"PASSWORD"=>"x"));
 var_dump($x);
-?>

@@ -11,11 +11,12 @@ function dynString() {
 }
 
 function dynArray($n) {
+  $a = array();
   foreach (range(0, $n) as $i) {
     $a[] = dynString();
   }
   return $a;
 }
-
+<<__EntryPoint>> function main(): void {
 var_dump(dynArray(2)[1]);
-
+}

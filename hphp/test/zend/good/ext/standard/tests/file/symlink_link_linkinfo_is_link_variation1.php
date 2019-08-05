@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype: bool symlink ( string $target, string $link );
    Description: creates a symbolic link to the existing target with the specified name link
 
@@ -13,8 +13,15 @@
 */
 
 /* Variation 1 : Creating links across directories where linkname is stored as an object and array member */
+class object_temp {
+  var $linkname;
+  function __construct($link) {
+    $this->linkname = $link;
+  }
+}
 
-// creating temp directory which will contain temp file and links created 
+<<__EntryPoint>> function main(): void {
+// creating temp directory which will contain temp file and links created
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $dirname = "$file_path/symlink_link_linkinfo_is_link_variation1/test/home";
 mkdir($dirname, 0777, true);
@@ -25,13 +32,6 @@ $fp = fopen($filename, "w");
 fclose($fp);
 
 echo "*** Testing symlink(), link(), linkinfo() and is_link() with linknames stored as members in an object ***\n";
-class object_temp {
-  var $linkname;
-  function object_temp($link) {
-    $this->linkname = $link;
-  }
-}
-
 $obj = new object_temp("$dirname/symlink_link_linkinfo_is_link_link.tmp");
 /* Testing on soft links */
 echo "\n-- Working with soft links --\n";
@@ -49,11 +49,11 @@ clearstatcache();
 /* Testing on hard links */
 echo "\n-- Working with hard links --\n";
 // creating hard link
-var_dump( link($filename, $obj->linkname) ); 
+var_dump( link($filename, $obj->linkname) );
 // check if the link exists
 var_dump( linkinfo($obj->linkname) );
 // check if link is soft link; expected: false as the link is a hardlink
-var_dump( is_link($obj->linkname) ); 
+var_dump( is_link($obj->linkname) );
 // delete the link created
 unlink($obj->linkname);
 // clear the cache
@@ -90,13 +90,11 @@ unlink($link_arr[0]);
 clearstatcache();
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 $dirname = "$file_path/symlink_link_linkinfo_is_link_variation1";
 unlink("$dirname/symlink_link_linkinfo_is_link_variation1.tmp");
 rmdir("$dirname/test/home");
 rmdir("$dirname/test");
 rmdir($dirname);
-?>
+}

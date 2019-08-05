@@ -1,4 +1,4 @@
-<?php
+<?hh
 class SplMinHeap2 extends SplMinHeap {
     public function compare($a, $b) {
         return -parent::compare($a,$b);
@@ -22,4 +22,3 @@ $h->insert(6);
 $h->insert(5);
 $h->insert(2);
 var_dump($h->top());
-?>

@@ -151,6 +151,7 @@ namespace Trace {
       TM(jittime)       \
       TM(layout)        \
       TM(libxml)        \
+      TM(logging)       \
       TM(mcg)           \
       TM(mcgstats)      \
       TM(minstr)        \
@@ -159,6 +160,7 @@ namespace Trace {
       TM(perf_mem_event) \
       TM(pgo)           \
       TM(printir)       \
+      TM(printir_json)  \
       TM(prof_branch)   \
       TM(prof_array)    \
       TM(rat)           \
@@ -186,6 +188,7 @@ namespace Trace {
       TM(vasm_copy)     \
       TM(vasm_graph_color) \
       TM(vasm_phi)      \
+      TM(watchman_autoload) \
       TM(xenon)         \
       TM(xls)           \
       TM(xls_stats)     \

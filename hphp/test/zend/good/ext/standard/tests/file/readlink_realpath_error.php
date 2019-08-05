@@ -1,11 +1,11 @@
-<?php
+<?hh
 /* Prototype: string readlink ( string $path );
    Description: Returns the target of a symbolic link
 
    Prototype: string realpath ( string $path );
    Description: Returns canonicalized absolute pathname
 */
-
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 
 echo "*** Testing readlink(): error conditions ***\n";
@@ -29,4 +29,4 @@ echo "\n*** Testing realpath() on a non-existent file ***\n";
 var_dump( realpath($file_path."/realpath_error.tmp") );
 
 echo "Done\n";
-?>
+}

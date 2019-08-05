@@ -10,6 +10,7 @@
   (libraries
     ai
     build_options
+    cli_args
     config_state_loader
     diagnostic_subscription
     errors
@@ -20,9 +21,12 @@
     server_client_provider
     server_command_types
     server_monitor
+    shared_lru_stubs
     typechecker_options
     utils_core
-    utils_www_root))
+    utils_www_root
+    version)
+  (preprocess (pps lwt_ppx))) ; See T41851208
 
 (library
   (name diagnostic_subscription)
@@ -34,9 +38,11 @@
     core_kernel
     errors
     file_info
+    naming
     pos
     relative_path
-    utils_core))
+    utils_core)
+  (preprocess (pps lwt_ppx))) ; See T41851208
 
 (library
   (name server_utils)
@@ -46,13 +52,18 @@
     serverUtils)
   (libraries
     core_kernel
+    find
     decl
+    hhi
     global_config
+    procs_bucket
     procs_procs
+    relative_path
     server_monitor
     sys_utils
     utils_core
-    watchman))
+    watchman)
+  (preprocess (pps lwt_ppx))) ; See T41851208
 
 (library
   (name server_command_types)
@@ -62,10 +73,10 @@
     docblockService
     hoverService
     inferAtPosService
+    saveStateServiceTypes
     serverCommandTypes
     serverCommandTypesUtils
     serverCoverageMetricTypes
-    serverIdeUtils
     serverFormatTypes
     serverHighlightRefsTypes
     serverLintTypes
@@ -73,18 +84,17 @@
     serverRageTypes
     serverRefactorTypes)
   (libraries
-    coverage_level
+    full_fidelity
     hh_json
     ide_rpc_api_types
-    utils_lint
     lsp
     lwt
     pos
-    search
-    typing
-    typing_check)
-  (preprocess
-    (pps lwt_ppx)))
+    search_utils
+    symbol
+    typing_defs
+    utils_lint)
+  (preprocess (pps lwt_ppx))) ; See T41851208
 
 (library
   (name server_client_provider)
@@ -99,7 +109,8 @@
     libancillary
     server_command_types
     server_utils
-    utils_core))
+    utils_core)
+  (preprocess (pps lwt_ppx)))  ; See T41851208
 
 (library
   (name server_services)
@@ -115,31 +126,38 @@
     fileOutline
     findRefsService
     identifySymbolService
-    inferReturnTypeService
     methodJumps
     saveStateService
-    serverSymbolDefinition
-    serverIdentifyFunction
     serverAutoComplete
     serverFindLocals
     serverFunDepsBatch
     serverFunIsLocallableBatch
     serverGlobalState
+    serverIdeContext
+    serverIdeUtils
+    serverIdentifyFunction
     serverRxApiShared
+    serverSymbolDefinition
     symbolFunCallService
     symbolTypeService)
   (libraries
     ast
     decl
+    fileutils
     heap_shared_mem
-    parser_docblock_finder
+    parser
+    search
     server_command_types
     server_env
     sys_utils
+    tast_check
     typechecker_options
     typed_positioned_syntax
+    typing
+    typing_check
     typing_deps
-    utils_core))
+    utils_core)
+  (preprocess (pps lwt_ppx)))  ; See T41851208
 
 (library
   (name server)
@@ -148,6 +166,7 @@
     colorFile
     fullFidelityParseService
     searchServiceRunner
+    serverBigCode
     serverBusyStatus
     serverCheckUtils
     serverCheckpoint
@@ -158,9 +177,12 @@
     serverDynamicView
     serverEnvBuild
     serverError
+    serverExtractStandalone
+    serverFileDependencies
     serverFileSync
     serverFindRefs
     serverFormat
+    serverGoToDefinition
     serverHighlightRefs
     serverHotClasses
     serverHotClassesDescription
@@ -168,6 +190,7 @@
     serverIdle
     serverInferType
     serverInferTypeBatch
+    serverInvalidateUnits
     serverLint
     serverMethodJumps
     serverMethodJumpsBatch
@@ -175,11 +198,13 @@
     serverRage
     serverRefactor
     serverRevisionTracker
+    serverRewriteLambdaParameters
     serverSearch
     serverSignatureHelp
     serverStamp
     serverStatusSingle
     serverTypeCheck
+    serverTypeDefinition
     serverTypedAst
     serverWorker
     symbolInfoService)
@@ -196,15 +221,22 @@
     search
     server_env
     server_services
+    shared_lru_stubs
     sys_utils
     typed_positioned_syntax
     typed_syntax_transforms
     typing
     utils_core
+    version
     watchman_utils
     (select serverHotClassesDescription.ml from
     (facebook signed_source_fb -> facebook/serverHotClassesDescription.ml)
-    (-> ../stubs/serverHotClassesDescription.ml))))
+    (-> ../stubs/serverHotClassesDescription.ml))
+    (select serverInvalidateUnits.ml from
+    (facebook signed_source_fb -> facebook/serverInvalidateUnits.ml)
+    (-> ../stubs/serverInvalidateUnits.ml))
+  )
+  (preprocess (pps lwt_ppx))) ; See T41851208
 
 (library
   (name hh_server_monitor)
@@ -223,6 +255,7 @@
     serverInitTypes
     serverLazyInit
     serverMain
+    serverRemoteInit
     serverRpc)
   (libraries
     build
@@ -230,8 +263,10 @@
     bad_files
     lwt
     parent
+    provider_config
+    remote_worker_stubs
     server
     state_loader
-    watchman_event_watcher)
-  (preprocess
-    (pps lwt_ppx)))
+    typing_symbol_info
+    watchman_client)
+  (preprocess (pps lwt_ppx)))

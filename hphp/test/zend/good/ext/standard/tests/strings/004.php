@@ -1,4 +1,4 @@
-<?php
+<?hh
 function stats($f, $a) {
     $times = 90000;
     print "$f\n";
@@ -6,13 +6,14 @@ function stats($f, $a) {
     foreach($a as $k => $v)
         print "$k: $v: " . sprintf('%0.3f', $v / $times) . "\n";
 }
+<<__EntryPoint>> function main(): void {
 $a = array();
 $times = 90000;
 for ($i = 0; $i < $times; $i++) {
     $p = range(1,4);
     shuffle(&$p);
     $s = join('', $p);
-    if (empty($a[$s])) $a[$s] = 0; 
+    if (!($a[$s] ?? false)) $a[$s] = 0;
     $a[$s]++;
 }
 
@@ -22,9 +23,9 @@ $times = 90000;
 for ($i = 0; $i < $times; $i++) {
     $p = '1234';
     $s = str_shuffle($p);
-    if (empty($a[$s])) $a[$s] = 0;
+    if (!($a[$s] ?? false)) $a[$s] = 0;
     $a[$s]++;
 }
 
 stats('str_shuffle', $a);
-?>
+}

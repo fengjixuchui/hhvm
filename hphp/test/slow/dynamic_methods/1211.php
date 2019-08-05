@@ -1,11 +1,11 @@
-<?php
+<?hh
 
 function bar() {
   echo 'bar called';
 }
 class foo {
   public $functions = array();
-  function foo() {
+  function __construct() {
     $function = 'bar';
     print($function);
     print($function());

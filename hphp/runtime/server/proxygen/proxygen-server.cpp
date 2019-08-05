@@ -38,7 +38,8 @@
 namespace HPHP {
 
 constexpr auto kPollInterval = std::chrono::milliseconds(60000); // 60 sec
-
+constexpr uint32_t kStreamFlowControl = 1 << 20; // 1 MB
+constexpr uint32_t kConnFlowControl = kStreamFlowControl * 1.5; // 1.5 MB
 using folly::SocketAddress;
 using folly::AsyncServerSocket;
 using wangle::Acceptor;
@@ -198,13 +199,15 @@ ProxygenServer::ProxygenServer(
   m_httpsConfig.connectionIdleTimeout = timeout;
   m_httpsConfig.transactionIdleTimeout = timeout;
 
+  // Set flow control (for uploads) to 1MB.  We could also make this
+  // configurable if needed
+  m_httpsConfig.initialReceiveWindow = kStreamFlowControl;
+  m_httpsConfig.receiveSessionWindowSize = kConnFlowControl;
   if (RuntimeOption::ServerEnableH2C) {
     m_httpConfig.allowedPlaintextUpgradeProtocols = {
       proxygen::http2::kProtocolCleartextString };
-    // Set flow control (for uploads) to 1MB.  We could also make this
-    // configurable if needed
-    m_httpConfig.initialReceiveWindow = 1 << 20;
-    m_httpConfig.receiveSessionWindowSize = 1 << 20;
+    m_httpConfig.initialReceiveWindow = kStreamFlowControl;
+    m_httpConfig.receiveSessionWindowSize = kConnFlowControl;
   }
 
   if (!options.m_takeoverFilename.empty()) {
@@ -278,7 +281,8 @@ void ProxygenServer::start() {
   bool socketSetupSucceeded = false;
   if (m_accept_sock >= 0) {
     try {
-      m_httpServerSocket->useExistingSocket(m_accept_sock);
+      m_httpServerSocket->useExistingSocket(
+        folly::NetworkSocket::fromFd(m_accept_sock));
       socketSetupSucceeded = true;
       Logger::Info("inheritfd: successfully inherited fd %d for server",
                    m_accept_sock);
@@ -291,7 +295,8 @@ void ProxygenServer::start() {
     m_accept_sock = m_takeover_agent->takeover();
     if (m_accept_sock >= 0) {
       try {
-        m_httpServerSocket->useExistingSocket(m_accept_sock);
+        m_httpServerSocket->useExistingSocket(
+          folly::NetworkSocket::fromFd(m_accept_sock));
         needListen = false;
         m_takeover_agent->requestShutdown();
         socketSetupSucceeded = true;
@@ -317,7 +322,7 @@ void ProxygenServer::start() {
 
   if (m_takeover_agent) {
     m_takeover_agent->setupFdServer(m_worker.getEventBase()->getLibeventBase(),
-                                    m_httpServerSocket->getSocket(), this);
+                                    m_httpServerSocket->getNetworkSocket().toFd(), this);
   }
 
   m_httpAcceptor.reset(new HPHPSessionAcceptor(m_httpConfig, this));
@@ -352,7 +357,8 @@ void ProxygenServer::start() {
       if (m_accept_sock_ssl >= 0) {
         Logger::Info("inheritfd: using inherited fd %d for ssl",
                      m_accept_sock_ssl);
-        m_httpsServerSocket->useExistingSocket(m_accept_sock_ssl);
+        m_httpsServerSocket->useExistingSocket(
+          folly::NetworkSocket::fromFd(m_accept_sock_ssl));
       } else {
         m_httpsServerSocket->setReusePortEnabled(RuntimeOption::StopOldServer);
         m_httpsServerSocket->bind(m_httpsConfig.bindAddress);
@@ -484,14 +490,6 @@ void ProxygenServer::stop() {
 void ProxygenServer::stopListening(bool hard) {
   m_shutdownState = ShutdownState::DRAINING_READS;
   HttpServer::MarkShutdownStat(ShutdownEvent::SHUTDOWN_DRAIN_READS);
-#define SHUT_FBLISTEN 3
-  /*
-   * Modifications to the Linux kernel to support shutting down a listen
-   * socket for new connections only, but anything which has completed
-   * the TCP handshake will still be accepted.  This allows for un-accepted
-   * connections to be queued and then wait until all queued requests are
-   * actively being processed.
-   */
 
   // triggers acceptStopped/sets acceptor state to Draining
   if (hard) {
@@ -499,10 +497,10 @@ void ProxygenServer::stopListening(bool hard) {
     m_httpsServerSocket.reset();
   } else {
     if (m_httpServerSocket) {
-      m_httpServerSocket->stopAccepting(SHUT_FBLISTEN);
+      m_httpServerSocket->stopAccepting();
     }
     if (m_httpsServerSocket) {
-      m_httpsServerSocket->stopAccepting(SHUT_FBLISTEN);
+      m_httpsServerSocket->stopAccepting();
     }
   }
 

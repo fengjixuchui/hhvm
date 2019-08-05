@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 var_dump(gmp_strval(gmp_sqrt(-2)));
 var_dump(gmp_strval(gmp_sqrt("-2")));
 var_dump(gmp_strval(gmp_sqrt("0")));
@@ -18,4 +18,4 @@ try { var_dump(gmp_sqrt()); } catch (Exception $e) { echo "\n".'Warning: '.$e->g
 var_dump(gmp_sqrt(array()));
 
 echo "Done\n";
-?>
+}

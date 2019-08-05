@@ -1,5 +1,4 @@
-<?php
+<?hh
 
 throw new Exception();
 
-?>

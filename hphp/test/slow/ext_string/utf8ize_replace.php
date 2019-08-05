@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 function VS($x, $y) {
   var_dump($x === $y);
@@ -39,7 +39,7 @@ VS(fb_htmlspecialchars($input, ENT_FB_UTF8, "", null),
    "&#x218a3;A".
    "helloworld");
 
-VS(fb_htmlspecialchars($sanitized, ENT_QUOTES, "", Array()),
+VS(fb_htmlspecialchars($sanitized, ENT_QUOTES, "", array()),
    $sanitized);
 
 $zfoo = "\0foo";

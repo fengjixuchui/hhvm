@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : array array_merge_recursive(array $arr1[, array $...])
  * Description: Recursively merges elements from passed arrays into one array
  * Source code: ext/standard/array.c
@@ -8,7 +8,7 @@
 * Passing different arrays to $arr1 argument and testing whether
 * array_merge_recursive() behaves in an expected way.
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing array_merge_recursive() : Passing different arrays to \$arr1 argument ***\n";
 
 /* Different heredoc strings */
@@ -89,6 +89,6 @@ foreach($arrays as $arr1) {
 
   $iterator++;
 }
-  
+
 echo "Done";
-?>
+}

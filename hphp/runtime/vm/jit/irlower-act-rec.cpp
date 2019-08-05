@@ -29,10 +29,13 @@
 #include "hphp/runtime/base/tv-variant.h"
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/base/type-array.h"
+#include "hphp/runtime/base/type-structure-helpers-defs.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/func.h"
+#include "hphp/runtime/vm/reified-generics.h"
+#include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
@@ -61,6 +64,48 @@ TRACE_SET_MOD(irlower);
 
 ///////////////////////////////////////////////////////////////////////////////
 
+namespace {
+
+uint32_t getTSBitsImpl(const ArrayData* tsList) {
+  if (!tsList || tsList->size() > 15) return 0;
+  auto bitmap = 1;
+  IterateV(
+    tsList,
+    [&](TypedValue v) {
+      assertx(isArrayLikeType(v.m_type));
+      bitmap = (bitmap << 1) | !isWildCard(v.m_data.parr);
+    }
+  );
+  return bitmap;
+}
+
+folly::Optional<Vreg> getTSBits(
+  IRLS& env,
+  const IRInstruction* inst,
+  SSATmp* tsList,
+  Vreg tsListReg
+) {
+  auto& v = vmain(env);
+  auto const tsListType = RuntimeOption::EvalHackArrDVArrs ? TVec : TArr;
+  if (tsList->isA(TNullptr) || !tsList->type().maybe(tsListType)) {
+    return folly::none;
+  }
+  if (tsList->hasConstVal(tsListType)) {
+    auto const bitmap =
+      getTSBitsImpl(RuntimeOption::EvalHackArrDVArrs ? tsList->vecVal()
+                                                     : tsList->arrVal());
+    return v.cns(bitmap);
+  }
+
+  auto const args = argGroup(env, inst).reg(tsListReg);
+  auto const dest = v.makeReg();
+  cgCallHelper(v, env, CallSpec::direct(getTSBitsImpl),
+               callDest(dest), SyncOptions::None, args);
+  return dest;
+}
+
+}
+
 void cgSpillFrame(IRLS& env, const IRInstruction* inst) {
   auto const sp = srcLoc(env, inst, 0).reg();
   auto const extra = inst->extra<SpillFrame>();
@@ -68,6 +113,7 @@ void cgSpillFrame(IRLS& env, const IRInstruction* inst) {
   auto const ctxTmp = inst->src(2);
   auto const invNameTmp = inst->src(3);
   auto const isDynamic = inst->src(4);
+  auto const tsListTmp = inst->src(5);
   auto& v = vmain(env);
 
   auto const ar = sp[cellsToBytes(extra->spOffset.offset)];
@@ -165,11 +211,28 @@ void cgSpillFrame(IRLS& env, const IRInstruction* inst) {
     }
   }
 
+  auto const createCompactReifiedPtr = [&] (Vout& v) {
+    auto const tsListReg = srcLoc(env, inst, 5).reg();
+    auto const bits = getTSBits(env, inst, tsListTmp, tsListReg);
+    if (!bits) return tsListReg;
+    auto const bits_shifted = v.makeReg();
+    auto const result = v.makeReg();
+    v << shlqi{
+      static_cast<int32_t>(ReifiedGenericsPtr::kShiftAmount),
+      *bits,
+      bits_shifted,
+      v.makeReg()
+    };
+    v << orq{bits_shifted, tsListReg, result, v.makeReg()};
+    return result;
+  };
+
   // Set flags
   auto flags = ActRec::Flags::None;
 
   bool dynamicCheck = false;
   bool magicCheck = false;
+  bool reifiedCheck = false;
   if (!isDynamic->hasConstVal()) {
     dynamicCheck = true;
   } else if (isDynamic->hasConstVal(true)) {
@@ -182,6 +245,15 @@ void cgSpillFrame(IRLS& env, const IRInstruction* inst) {
     magicCheck = true;
   }
 
+  if (!tsListTmp->type().maybe(TNullptr)) {
+    auto const tsList = createCompactReifiedPtr(v);
+    v << store{tsList, ar + AROFF(m_reifiedGenerics)};
+    flags =
+      static_cast<ActRec::Flags>(flags | ActRec::Flags::HasReifiedGenerics);
+  } else if (!tsListTmp->isA(TNullptr)) {
+    reifiedCheck = true;
+  }
+
   auto naaf = v.cns(
     static_cast<int32_t>(ActRec::encodeNumArgsAndFlags(extra->numArgs, flags))
   );
@@ -189,49 +261,50 @@ void cgSpillFrame(IRLS& env, const IRInstruction* inst) {
   if (magicCheck) {
     auto const invName = srcLoc(env, inst, 3).reg();
     auto const sf = v.makeReg();
-    v << testq{invName, invName, sf};
-    naaf = unlikelyCond(
-      v,
-      vcold(env),
-      CC_NZ,
-      sf,
-      v.makeReg(),
-      [&] (Vout& v) {
-        auto const dst = v.makeReg();
-        v << orqi{
-          static_cast<int32_t>(ActRec::Flags::MagicDispatch),
-          naaf,
-          dst,
-          v.makeReg()
-        };
-        return dst;
-      },
-      [&] (Vout& v) { return naaf; }
-    );
+    auto const naaf2 = v.makeReg();
+    auto const dst = v.makeReg();
+    v << orli{
+      static_cast<int32_t>(ActRec::Flags::MagicDispatch),
+      naaf,
+      dst,
+      v.makeReg()
+    };
+    v << testb{invName, invName, sf};
+    v << cmovl{CC_NZ, sf, naaf, dst, naaf2};
+    naaf = naaf2;
   }
 
   if (dynamicCheck) {
     auto const dynamicReg = srcLoc(env, inst, 4).reg();
     auto const sf = v.makeReg();
+    auto const naaf2 = v.makeReg();
+    auto const dst = v.makeReg();
+    v << orli{
+      static_cast<int32_t>(ActRec::Flags::DynamicCall),
+      naaf,
+      dst,
+      v.makeReg()
+    };
     v << testb{dynamicReg, dynamicReg, sf};
-    naaf = unlikelyCond(
-      v,
-      vcold(env),
-      CC_NZ,
-      sf,
-      v.makeReg(),
-      [&] (Vout& v) {
-        auto const dst = v.makeReg();
-        v << orqi{
-          static_cast<int32_t>(ActRec::Flags::DynamicCall),
-          naaf,
-          dst,
-          v.makeReg()
-        };
-        return dst;
-      },
-      [&] (Vout& v) { return naaf; }
-    );
+    v << cmovl{CC_NZ, sf, naaf, dst, naaf2};
+    naaf = naaf2;
+  }
+
+  if (reifiedCheck) {
+    auto const tsList = createCompactReifiedPtr(v);
+    v << store{tsList, ar + AROFF(m_reifiedGenerics)};
+    auto const sf = v.makeReg();
+    auto const naaf2 = v.makeReg();
+    auto const dst = v.makeReg();
+    v << orli{
+      static_cast<int32_t>(ActRec::Flags::HasReifiedGenerics),
+      naaf,
+      dst,
+      v.makeReg()
+    };
+    v << testq{tsList, tsList, sf};
+    v << cmovl{CC_NZ, sf, naaf, dst, naaf2};
+    naaf = naaf2;
   }
 
   v << storel{naaf, ar + AROFF(m_numArgsAndFlags)};
@@ -248,20 +321,6 @@ void cgLdARFuncPtr(IRLS& env, const IRInstruction* inst) {
   vmain(env) << load{sp[off + AROFF(m_func)], dst};
 }
 
-void cgLdARIsDynamic(IRLS& env, const IRInstruction* inst) {
-  auto const dst = dstLoc(env, inst, 0).reg();
-  auto const sp = srcLoc(env, inst, 0).reg();
-  auto const off = cellsToBytes(inst->extra<LdARIsDynamic>()->offset.offset);
-
-  auto& v = vmain(env);
-  auto const sf = v.makeReg();
-  v << testlim{
-    static_cast<int32_t>(ActRec::Flags::DynamicCall),
-    sp[off + AROFF(m_numArgsAndFlags)], sf
-  };
-  v << setcc{CC_NZ, sf, dst};
-}
-
 void cgLdARCtx(IRLS& env, const IRInstruction* inst) {
   auto const dst = dstLoc(env, inst, 0).reg();
   auto const sp = srcLoc(env, inst, 0).reg();
@@ -269,23 +328,48 @@ void cgLdARCtx(IRLS& env, const IRInstruction* inst) {
   vmain(env) << load{sp[off + AROFF(m_thisUnsafe)], dst};
 }
 
-void cgStARReifiedGenerics(IRLS& env, const IRInstruction* inst) {
-  auto const sp = srcLoc(env, inst, 0).reg();
-  auto const src = srcLoc(env, inst, 1).reg();
-  auto const off =
-    cellsToBytes(inst->extra<StARReifiedGenerics>()->offset.offset);
-  vmain(env) << store{src, sp[off + AROFF(m_reifiedGenerics)]};
-  vmain(env) << orlim{
-     static_cast<int32_t>(ActRec::Flags::HasReifiedGenerics),
-     sp[off + AROFF(m_numArgsAndFlags)],
-     vmain(env).makeReg()
-   };
-}
-
 void cgLdARReifiedGenerics(IRLS& env, const IRInstruction* inst) {
   auto const dst = dstLoc(env, inst, 0).reg();
   auto const fp = srcLoc(env, inst, 0).reg();
-  vmain(env) << load{fp[AROFF(m_reifiedGenerics)], dst};
+  auto& v = vmain(env);
+
+  auto const compactTSList = v.makeReg();
+  auto const imm = v.cns(-1ull >> ReifiedGenericsPtr::kMaxTagSize);
+  v << load{fp[AROFF(m_reifiedGenerics)], compactTSList};
+  v << andq{imm, compactTSList, dst, v.makeReg()};
+}
+
+void cgIsFunReifiedGenericsMatched(IRLS& env, const IRInstruction* inst) {
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto const fp = srcLoc(env, inst, 0).reg();
+  auto const func = inst->extra<FuncData>()->func;
+  auto& v = vmain(env);
+
+  auto const info = func->getReifiedGenericsInfo();
+  if (!func->hasReifiedGenerics() ||
+      info.m_hasSoftGenerics ||
+      info.m_typeParamInfo.size() > 15) {
+    v << copy{v.cns(0), dst};
+    return;
+  }
+  auto const sf = v.makeReg();
+  // Higher order 16 bits contain the tag in a compact tagged pointer
+  // Tag contains ((1 << number-of-parameters) | bitmap)
+  auto const tagAddress = fp[AROFF(m_reifiedGenerics) + 6];
+  auto const bitmapImmed = static_cast<int16_t>(info.m_bitmap);
+  auto const topBit = 1u << info.m_typeParamInfo.size();
+
+  if (bitmapImmed == topBit - 1) {
+    v << cmpwim{static_cast<int16_t>(bitmapImmed | topBit), tagAddress, sf};
+  } else {
+    auto const tag = v.makeReg();
+    auto const anded = v.makeReg();
+    v << loadw{tagAddress, tag};
+    v << andwi{static_cast<int16_t>(bitmapImmed | -topBit),
+               tag, anded, v.makeReg()};
+    v << cmpwi{static_cast<int16_t>(bitmapImmed | topBit), anded, sf};
+  }
+  v << setcc{CC_Z, sf, dst};
 }
 
 void cgKillARReifiedGenerics(IRLS& env, const IRInstruction* inst) {
@@ -451,6 +535,9 @@ static void actionMayReenter(ActRec* ar,
   TRACE(1, "extra args: %d args, function %s takes only %d, ar %p\n",   \
         numArgs, f->name()->data(), numParams, ar);                     \
   auto tvArgs = reinterpret_cast<TypedValue*>(ar) - numArgs;            \
+  auto tsList = !ar->hasReifiedGenerics() ? nullptr                     \
+                                          : ar->getReifiedGenerics();   \
+  auto reifiedLocal = frame_local(ar, f->numParams()); // regular + var \
   /* end SHUFFLE_EXTRA_ARGS_PRELUDE */
 
 void trimExtraArgs(ActRec* ar) {
@@ -470,6 +557,7 @@ void trimExtraArgs(ActRec* ar) {
   assertx(f->numParams() == (numArgs - numExtra));
   assertx(f->numParams() == numParams);
   ar->setNumArgs(numParams);
+  if (tsList) tvSet(make_array_like_tv(tsList), *reifiedLocal);
 }
 
 void shuffleExtraArgsMayUseVV(ActRec* ar) {
@@ -478,6 +566,7 @@ void shuffleExtraArgsMayUseVV(ActRec* ar) {
   assertx(f->attrs() & AttrMayUseVV);
 
   ar->setExtraArgs(ExtraArgs::allocateCopy(tvArgs, numExtra));
+  if (tsList) tvSet(make_array_like_tv(tsList), *reifiedLocal);
 }
 
 void shuffleExtraArgsVariadic(ActRec* ar) {
@@ -515,6 +604,7 @@ void shuffleExtraArgsVariadic(ActRec* ar) {
   assertx(f->numParams() == (numArgs - numExtra + 1));
   assertx(f->numParams() == (numParams + 1));
   ar->setNumArgs(numParams + 1);
+  if (tsList) tvSet(make_array_like_tv(tsList), *reifiedLocal);
 }
 
 void shuffleExtraArgsVariadicAndVV(ActRec* ar) {
@@ -544,6 +634,7 @@ void shuffleExtraArgsVariadicAndVV(ActRec* ar) {
     ar->resetExtraArgs();
     throw;
   }
+  if (tsList) tvSet(make_array_like_tv(tsList), *reifiedLocal);
 }
 
 #undef SHUFFLE_EXTRA_ARGS_PRELUDE

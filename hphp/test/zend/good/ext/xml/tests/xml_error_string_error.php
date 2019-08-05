@@ -1,10 +1,10 @@
-<?php
+<?hh
 /* Prototype  : proto string xml_error_string(int code)
  * Description: Get XML parser error string 
  * Source code: ext/xml/xml.c
  * Alias to functions: 
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing xml_error_string() : error conditions ***\n";
 
 // Zero arguments
@@ -18,4 +18,4 @@ $extra_arg = 10;
 try { var_dump( xml_error_string($code, $extra_arg) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : bool rsort(array &$array_arg [, int $sort_flags])
  * Description: Sort an array in reverse order
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Pass rsort() multi-dimensional arrays to test behaviour
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing rsort() : variation ***\n";
 
 // array of arrays
@@ -46,5 +46,4 @@ foreach ($various_arrays as $array) {
 }
 
 echo "Done";
-?>
-
+}

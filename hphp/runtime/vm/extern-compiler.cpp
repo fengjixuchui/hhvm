@@ -30,7 +30,7 @@
 #include <folly/FileUtil.h>
 
 #include "hphp/runtime/base/ini-setting.h"
-#include "hphp/runtime/base/zend-strtod.h"
+#include "hphp/runtime/server/source-root-info.h"
 #include "hphp/runtime/vm/native.h"
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/unit-emitter.h"
@@ -40,9 +40,10 @@
 #include "hphp/util/light-process.h"
 #include "hphp/util/logger.h"
 #include "hphp/util/match.h"
-#include "hphp/util/md5.h"
+#include "hphp/util/sha1.h"
 #include "hphp/util/struct-log.h"
 #include "hphp/util/timer.h"
+#include "hphp/zend/zend-strtod.h"
 
 #include <iostream>
 
@@ -180,6 +181,103 @@ struct CompilerOptions {
 
 constexpr int kInvalidPid = -1;
 
+struct Pipe final {
+  explicit Pipe(bool nonblocking = false) {
+    int flags = O_CLOEXEC;
+    if (nonblocking) flags |= O_NONBLOCK;
+
+    if (pipe2(fds, flags) == -1) throwErrno("unable to open pipe");
+  }
+  ~Pipe() {
+    close();
+  }
+
+  FILE* detach(const char* mode) {
+    auto ret = fdopen(fds[*mode == 'r' ? 0 : 1], mode);
+    if (!ret) throwErrno("unable to fdopen pipe");
+    ::close(fds[*mode == 'r' ? 1 : 0]);
+    fds[0] = fds[1] = -1;
+    return ret;
+  }
+  int remoteIn() const { return fds[0]; }
+  int remoteOut() const { return fds[1]; }
+  void close() {
+    if (fds[0] != -1) {
+      ::close(fds[0]);
+      fds[0] = -1;
+    }
+    if (fds[1] != -1) {
+      ::close(fds[1]);
+      fds[1] = -1;
+    }
+  }
+  int fds[2];
+};
+
+std::string readline(FILE* f);
+
+struct LogThread {
+  LogThread(int pid, FILE* file)
+    : m_pid(pid), m_file(file), m_signalPipe(true)
+  {
+    m_thread = std::make_unique<std::thread>([&]() {
+        int ret = 0;
+        auto pid = m_pid;
+        auto signalFD = m_signalPipe.remoteIn();
+        try {
+          pollfd pfd[] = {
+            {fileno(m_file), POLLIN, 0},
+            {signalFD, POLLIN, 0 },
+          };
+          while ((ret = poll(pfd, 2, -1)) != -1) {
+            if (ret == 0) continue;
+            if (pfd[0].revents & (POLLHUP | POLLNVAL | POLLERR) ||
+                pfd[1].revents) {
+              throw std::runtime_error("hangup");
+            }
+            if (pfd[0].revents) {
+              const auto line = readline(m_file);
+              Logger::FError("[external compiler {}]: {}", pid, line);
+            }
+          }
+        } catch (const std::exception& exc) {
+          // The stderr output messes with expected test output, which
+          // presumably come from non-server runs.
+          if (RuntimeOption::ServerMode) {
+            Logger::FVerbose(
+              "Ceasing to log stderr from external compiler ({}): {}",
+              pid,
+              exc.what());
+          }
+        }
+      });
+  }
+  ~LogThread() {
+      stop();
+  }
+
+  void stop() {
+    if (m_thread && m_thread->joinable()) {
+      SCOPE_EXIT {
+        m_signalPipe.close();
+      };
+
+      // Signal thread to exit.
+      write(m_signalPipe.remoteOut(), "X", 1);
+      m_thread->join();
+    }
+
+    m_pid = kInvalidPid;
+    m_file = nullptr;
+  }
+
+private:
+  int m_pid;
+  FILE* m_file;
+  Pipe m_signalPipe;
+  std::unique_ptr<std::thread> m_thread;
+};
+
 struct ExternCompiler {
   explicit ExternCompiler(const CompilerOptions& options)
       : m_options(options)
@@ -255,11 +353,11 @@ struct ExternCompiler {
 
   std::unique_ptr<UnitEmitter> compile(
     const char* filename,
-    const MD5& md5,
+    const SHA1& sha1,
     folly::StringPiece code,
     const Native::FuncTable& nativeFuncs,
     bool forDebuggerEval,
-    AsmCallbacks* callbacks,
+    bool wantsSymbolRefs,
     const RepoOptions& options
   ) {
     if (!isRunning()) {
@@ -273,17 +371,17 @@ struct ExternCompiler {
       StructuredLogEntry log;
       log.setStr("filename", filename);
       int64_t t = logTime(log, 0, nullptr, true);
-      writeProgram(filename, md5, code, forDebuggerEval, options);
+      writeProgram(filename, sha1, code, forDebuggerEval, options);
       t = logTime(log, t, "send_source");
       prog = readResult(&log);
       t = logTime(log, t, "receive_hhas");
       auto ue = assemble_string(prog.data(),
                                 prog.length(),
                                 filename,
-                                md5,
+                                sha1,
                                 nativeFuncs,
                                 false /* swallow errors */,
-                                callbacks
+                                wantsSymbolRefs
                               );
       logTime(log, t, "assemble_hhas");
       if (RuntimeOption::EvalLogExternCompilerPerf) {
@@ -297,6 +395,9 @@ struct ExternCompiler {
       }
       throw;
     } catch (CompilerFatal& ex) {
+      // this catch is here so we don't fall into the std::runtime_error one
+      throw;
+    } catch (AssemblerFatal& ex) {
       // this catch is here so we don't fall into the std::runtime_error one
       throw;
     } catch (FatalErrorException&) {
@@ -345,7 +446,7 @@ private:
 
   void writeMessage(folly::dynamic& header, folly::StringPiece body);
   void writeConfigs();
-  void writeProgram(const char* filename, MD5 md5, folly::StringPiece code,
+  void writeProgram(const char* filename, SHA1 sha1, folly::StringPiece code,
                     bool forDebuggerEval, const RepoOptions& options);
   void writeExtractFacts(const std::string& filename, folly::StringPiece code);
   void writeParseFile(const std::string& filename, folly::StringPiece code);
@@ -359,7 +460,7 @@ private:
   std::string m_version;
 
   FILE* m_err{nullptr};
-  std::unique_ptr<std::thread> m_logStderrThread;
+  std::unique_ptr<LogThread> m_logStderrThread;
 
   unsigned m_compilations{0};
   const CompilerOptions& m_options;
@@ -380,10 +481,10 @@ struct CompilerPool {
   CompilerResult compile(const char* code,
                          int len,
                          const char* filename,
-                         const MD5& md5,
+                         const SHA1& sha1,
                          const Native::FuncTable& nativeFuncs,
                          bool forDebuggerEval,
-                         AsmCallbacks* callbacks,
+                         bool wantsSymbolRefs,
                          bool& internal_error,
                          const RepoOptions& options);
   FfpResult parse(std::string name, const char* code, int len);
@@ -509,6 +610,9 @@ auto run_compiler(
     } catch (CompilerFatal& ex) {
       // ExternCompiler returned an error when building this unit
       return ex.what();
+    } catch (AssemblerFatal& ex) {
+      // Assembler returned an error when building this unit
+      return ex.what();
     } catch (CompileException& ex) {
       internal_error = true;
       // Swallow and retry, we return infra errors in bulk once the retry limit
@@ -553,20 +657,20 @@ ParseFactsResult extract_facts_worker(const CompilerGuard& compiler,
 CompilerResult CompilerPool::compile(const char* code,
                                      int len,
                                      const char* filename,
-                                     const MD5& md5,
+                                     const SHA1& sha1,
                                      const Native::FuncTable& nativeFuncs,
                                      bool forDebuggerEval,
-                                     AsmCallbacks* callbacks,
+                                     bool wantsSymbolRefs,
                                      bool& internal_error,
                                      const RepoOptions& options
 ) {
   auto compile = [&](const CompilerGuard& c) {
     return c->compile(filename,
-                      md5,
+                      sha1,
                       folly::StringPiece(code, len),
                       nativeFuncs,
                       forDebuggerEval,
-                      callbacks,
+                      wantsSymbolRefs,
                       options);
   };
   return run_compiler(
@@ -670,11 +774,12 @@ std::string ExternCompiler::readResult(StructuredLogEntry* log) const {
 
 void ExternCompiler::stopLogStderrThread() {
   SCOPE_EXIT { m_err = nullptr; };
+
   if (m_err) {
     fclose(m_err);   // need to unblock getline()
   }
-  if (m_logStderrThread && m_logStderrThread->joinable()) {
-    m_logStderrThread->join();
+  if (m_logStderrThread) {
+    m_logStderrThread->stop();
   }
 }
 
@@ -744,18 +849,19 @@ void ExternCompiler::writeConfigs() {
 
 void ExternCompiler::writeProgram(
   const char* filename,
-  MD5 md5,
+  SHA1 sha1,
   folly::StringPiece code,
   bool forDebuggerEval,
   const RepoOptions& options
 ) {
   folly::dynamic header = folly::dynamic::object
     ("type", "code")
-    ("md5", md5.toString())
+    ("sha1", sha1.toString())
     ("file", filename)
     ("is_systemlib", !SystemLib::s_inited)
     ("for_debugger_eval", forDebuggerEval)
-    ("config_overrides", options.toDynamic());
+    ("config_overrides", options.toDynamic())
+    ("root", SourceRootInfo::GetCurrentSourceRoot());
   writeMessage(header, code);
 }
 
@@ -765,7 +871,8 @@ void ExternCompiler::writeExtractFacts(
 ) {
   folly::dynamic header = folly::dynamic::object
     ("type", "facts")
-    ("file", filename);
+    ("file", filename)
+    ("root", SourceRootInfo::GetCurrentSourceRoot());
   writeMessage(header, code);
 }
 
@@ -881,26 +988,6 @@ void ExternCompiler::stop() {
   }
 }
 
-struct Pipe final {
-  Pipe() {
-    if (pipe2(fds, O_CLOEXEC) == -1) throwErrno("unable to open pipe");
-  }
-  ~Pipe() {
-    if (fds[0] != -1) close(fds[0]);
-    if (fds[1] != -1) close(fds[1]);
-  }
-  FILE* detach(const char* mode) {
-    auto ret = fdopen(fds[*mode == 'r' ? 0 : 1], mode);
-    if (!ret) throwErrno("unable to fdopen pipe");
-    close(fds[*mode == 'r' ? 1 : 0]);
-    fds[0] = fds[1] = -1;
-    return ret;
-  }
-  int remoteIn() const { return fds[0]; }
-  int remoteOut() const { return fds[1]; }
-  int fds[2];
-};
-
 void ExternCompiler::start() {
   if (m_pid != kInvalidPid) return;
 
@@ -937,32 +1024,7 @@ void ExternCompiler::start() {
   m_out = out.detach("r");
   m_err = err.detach("r");
 
-  m_logStderrThread = std::make_unique<std::thread>([&]() {
-      int ret = 0;
-      auto pid = m_pid;
-      try {
-        pollfd pfd[] = {{fileno(m_err), POLLIN, 0}};
-        while ((ret = poll(pfd, 1, -1)) != -1) {
-          if (ret == 0) continue;
-          if (pfd[0].revents & (POLLHUP | POLLNVAL | POLLERR)) {
-            throw std::runtime_error("hangup");
-          }
-          if (pfd[0].revents) {
-            const auto line = readline(m_err);
-            Logger::FError("[external compiler {}]: {}", pid, line);
-          }
-        }
-      } catch (const std::exception& exc) {
-        // The stderr output messes with expected test output, which presumably
-        // come from non-server runs.
-        if (RuntimeOption::ServerMode) {
-          Logger::FVerbose(
-            "Ceasing to log stderr from external compiler ({}): {}",
-            pid,
-            exc.what());
-        }
-      }
-    });
+  m_logStderrThread = std::make_unique<LogThread>(m_pid, m_err);
 
   // Here we expect the very first communication from the external compiler
   // process to be a single line of JSON representing the compiler version.
@@ -987,10 +1049,10 @@ CompilerResult hackc_compile(
   const char* code,
   int len,
   const char* filename,
-  const MD5& md5,
+  const SHA1& sha1,
   const Native::FuncTable& nativeFuncs,
   bool forDebuggerEval,
-  AsmCallbacks* callbacks,
+  bool wantsSymbolRefs,
   bool& internal_error,
   const RepoOptions& options
 ) {
@@ -998,10 +1060,10 @@ CompilerResult hackc_compile(
     code,
     len,
     filename,
-    md5,
+    sha1,
     nativeFuncs,
     forDebuggerEval,
-    callbacks,
+    wantsSymbolRefs,
     internal_error,
     options
   );
@@ -1152,7 +1214,7 @@ std::unique_ptr<UnitCompiler>
 UnitCompiler::create(const char* code,
                      int codeLen,
                      const char* filename,
-                     const MD5& md5,
+                     const SHA1& sha1,
                      const Native::FuncTable& nativeFuncs,
                      bool forDebuggerEval,
                      const RepoOptions& options
@@ -1162,7 +1224,7 @@ UnitCompiler::create(const char* code,
     code,
     codeLen,
     filename,
-    md5,
+    sha1,
     nativeFuncs,
     forDebuggerEval,
     options
@@ -1170,15 +1232,15 @@ UnitCompiler::create(const char* code,
 }
 
 std::unique_ptr<UnitEmitter> HackcUnitCompiler::compile(
-  AsmCallbacks* callbacks) const {
+  bool wantsSymbolRefs) const {
   bool ice = false;
   auto res = hackc_compile(m_code,
                            m_codeLen,
                            m_filename,
-                           m_md5,
+                           m_sha1,
                            m_nativeFuncs,
                            m_forDebuggerEval,
-                           callbacks,
+                           wantsSymbolRefs,
                            ice,
                            m_options);
   std::unique_ptr<UnitEmitter> unitEmitter;
@@ -1190,7 +1252,7 @@ std::unique_ptr<UnitEmitter> HackcUnitCompiler::compile(
     [&] (std::string& err) {
       unitEmitter = createFatalUnit(
         makeStaticString(m_filename),
-        m_md5,
+        m_sha1,
         FatalOp::Runtime,
         makeStaticString(err));
     }

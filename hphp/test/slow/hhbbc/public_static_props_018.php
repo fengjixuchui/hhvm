@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class Something {}
 
@@ -7,7 +7,7 @@ class Asd {
 }
 
 function foo($y) {
-  if ($y instanceof Asd::$SOMETHING) {
+  if (is_a($y, Asd::$SOMETHING)) {
     echo "was an instance\n";
   } else {
     echo "nope\n";

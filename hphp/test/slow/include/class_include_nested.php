@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 class testClass
 {
@@ -10,6 +10,7 @@ class testClass
   }
 }
 
-
+<<__EntryPoint>> function main(): void {
 $test = new testClass();
 $test->testInclude();
+}

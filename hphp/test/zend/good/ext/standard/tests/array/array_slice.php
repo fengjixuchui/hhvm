@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $var_array = array(
                    array(),
                    array(1,2,3,4,5,6,7,8,9),
@@ -83,5 +83,4 @@ foreach ($var_array as $sub_array)
   var_dump (array_slice($var_array[2], 1, -3, false) );
   var_dump (array_slice($var_array[2], -3, -2, true) );
   var_dump (array_slice($var_array[2], -3, -2, false) );
-
-?>
+}

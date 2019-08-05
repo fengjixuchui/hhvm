@@ -1,4 +1,4 @@
-<?php
+<?hh
 require_once("dom_test.inc");
 
 echo "Test 1: accessing single nodes from php\n";
@@ -91,4 +91,3 @@ print ("Not implemented\n");
 echo "--------- Check various node_name return values\n";
 print ("Not needed\n");
 
-?>

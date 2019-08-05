@@ -11,11 +11,19 @@ type status_liveness =
   | Stale_status
   | Live_status
 
+module Recheck_stats = struct
+  type t = {
+    id : string;
+    time : float;
+  }
+end
+
 module Server_status = struct
   type t = {
     liveness : status_liveness;
     has_unsaved_changes : bool;
     error_list : Pos.absolute Errors.error_ list;
+    last_recheck_stats: Recheck_stats.t option;
   }
 end
 
@@ -69,12 +77,12 @@ module Done_or_retry = struct
    * (the reason for retrying is a one time event that is resolved during first call).
    * If this ends up throwing, it's a bug in hh_server. *)
   let rec call ~(f:unit -> 'a t Lwt.t) ~(depth:int) : 'a Lwt.t =
-    let%lwt () =
-      if depth = 2
-      then Lwt.fail Two_retries_in_a_row
-      else Lwt.return_unit
-    in
-    match%lwt f () with
+    let open Lwt.Infix in
+    (if depth = 2
+    then Lwt.fail Two_retries_in_a_row
+    else Lwt.return_unit) >>= fun () ->
+    f () >>= fun result ->
+    match result with
     | Done x -> Lwt.return x
     | Retry -> call ~f ~depth:(depth+1)
 
@@ -172,13 +180,19 @@ module Ide_refactor_type = struct
   }
 end
 
+module Go_to_definition = struct
+  type result = (string SymbolOccurrence.t * string SymbolDefinition.t) list
+end
+
 type file_input =
   | FileName of string
   | FileContent of string
+  [@@deriving show]
 
 type labelled_file =
   | LabelledFileName of string
   | LabelledFileContent of { filename: string; content: string }
+  [@@deriving show]
 
 type lint_stdin_input = { filename: string; contents: string }
 
@@ -197,11 +211,13 @@ type _ t =
       InferAtPosService.result t
   | INFER_TYPE_BATCH : (string * int * int * (int * int) option) list * bool -> string list t
   | TYPED_AST : string -> string t
-  | IDE_HOVER : file_input * int * int ->
-      HoverService.result t
-  | DOCBLOCK_AT : (string * int * int * string option) -> DocblockService.result t
+  | IDE_HOVER : string * int * int -> HoverService.result t
+  | LOCATE_SYMBOL : (string * SearchUtils.si_kind) -> (string * int * int * string option) option t
+  | DOCBLOCK_AT : (string * int * int * string option * SearchUtils.si_kind) ->
+      DocblockService.result t
+  | DOCBLOCK_FOR_SYMBOL: (string * SearchUtils.si_kind) -> DocblockService.result t
   | IDE_SIGNATURE_HELP : (file_input * int * int) -> Lsp.SignatureHelp.result t
-  | COVERAGE_LEVELS : file_input -> Coverage_level.result t
+  | COVERAGE_LEVELS : file_input -> Coverage_level_defs.result t
   | AUTOCOMPLETE : string -> AutocompleteTypes.result t
   | IDENTIFY_FUNCTION : file_input * int * int ->
       Identify_symbol.result t
@@ -218,9 +234,12 @@ type _ t =
   | IDE_REFACTOR : Ide_refactor_type.t -> Refactor.ide_result_or_retry t
   | DUMP_SYMBOL_INFO : string list -> Symbol_info_service.result t
   | REMOVE_DEAD_FIXMES : int list -> [`Ok of ServerRefactorTypes.patch list | `Error of string] t
+  | REWRITE_LAMBDA_PARAMETERS : string list -> ServerRefactorTypes.patch list t
   | IN_MEMORY_DEP_TABLE_SIZE : ((int, string) Pervasives.result) t
-  | SAVE_STATE : (string * bool * bool * bool) -> ((int, string) Pervasives.result) t
-  | SEARCH : string * string -> HackSearchService.result t
+  | SAVE_NAMING : string -> ((SaveStateServiceTypes.save_naming_result, string) Pervasives.result) t
+  | SAVE_STATE : (string * bool * bool) ->
+    ((SaveStateServiceTypes.save_state_result, string) Pervasives.result) t
+  | SEARCH : string * string -> SearchUtils.result t
   | COVERAGE_COUNTS : string -> ServerCoverageMetricTypes.result t
   | LINT : string list -> ServerLintTypes.result t
   | LINT_STDIN : lint_stdin_input -> ServerLintTypes.result t
@@ -236,15 +255,13 @@ type _ t =
   | OPEN_FILE : string * string -> unit t
   | CLOSE_FILE : string -> unit t
   | EDIT_FILE : string * (text_edit list) -> unit t
-  | IDE_AUTOCOMPLETE : string * position * bool * bool -> AutocompleteTypes.ide_result t
+  | IDE_AUTOCOMPLETE : string * position * bool -> AutocompleteTypes.ide_result t
   | IDE_FFP_AUTOCOMPLETE : string * position -> AutocompleteTypes.ide_result t
   | DISCONNECT : unit t
   | SUBSCRIBE_DIAGNOSTIC : int -> unit t
   | UNSUBSCRIBE_DIAGNOSTIC : int -> unit t
   | OUTLINE : string -> Outline.outline t
   | IDE_IDLE : unit t
-  | INFER_RETURN_TYPE : Infer_return_type.t ->
-      Infer_return_type.result t
   | RAGE : ServerRageTypes.result t
   | DYNAMIC_VIEW: bool -> unit t
   | CST_SEARCH: cst_search_input -> (Hh_json.json, string) result t
@@ -253,6 +270,12 @@ type _ t =
   | FUN_DEPS_BATCH : (string * int * int) list * bool -> string list t
   | FUN_IS_LOCALLABLE_BATCH : (string * int * int) list -> string list t
   | LIST_FILES_WITH_ERRORS : string list t
+  | FILE_DEPENDENCIES : string list -> string list t
+  | IDENTIFY_TYPES : file_input * int * int -> (Pos.absolute * string) list t
+  | EXTRACT_STANDALONE : string -> string t
+  | GO_TO_DEFINITION : labelled_file * int * int -> Go_to_definition.result t
+  | BIGCODE : string -> string t
+  | PAUSE : bool -> unit t
 
 
 let is_disconnect_rpc : type a. a t -> bool = function
@@ -307,3 +330,11 @@ type 'a message_type =
 
 (** Timeout on reading the command from the client - client probably frozen. *)
 exception Read_command_timeout
+
+(* This data is marshalled by the server to a <pid>.fin file in certain cases *)
+(* of a controlled exit, so the client can know about it. *)
+type finale_data = {
+  exit_status: Exit_status.t;
+  msg: string;
+  stack: Utils.callstack;
+}

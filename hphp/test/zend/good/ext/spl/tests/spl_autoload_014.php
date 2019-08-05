@@ -1,4 +1,4 @@
-<?php
+<?hh
 $closure = function($class) {
   echo "closure called with class $class\n";
 };
@@ -34,5 +34,4 @@ spl_autoload_unregister($al1);
 
 $y = new TestY;
 
-?>
-===DONE===
+echo "===DONE===\n";

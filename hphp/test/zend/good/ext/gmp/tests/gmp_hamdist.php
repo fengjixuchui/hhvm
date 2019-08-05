@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 var_dump(gmp_hamdist(1231231, 0));
 var_dump(gmp_hamdist(1231231, -1));
 var_dump(gmp_hamdist(1231231, "8765434567897654333334567"));
@@ -18,4 +18,4 @@ var_dump(gmp_hamdist(array(), array()));
 try { var_dump(gmp_hamdist()); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done\n";
-?>
+}

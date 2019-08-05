@@ -1,2 +1,2 @@
-<?php /* $Id$ */
-if (!extension_loaded("zlib")) print "skip"; ?>
+<?hh /* $Id$ */
+if (!extension_loaded("zlib")) print "skip";

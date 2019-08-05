@@ -1,4 +1,4 @@
-<?php 
+<?hh
 
 $xml =<<<EOF
 <?xml version="1.0" encoding="ISO-8859-1" ?>
@@ -19,6 +19,5 @@ echo $sxe->asXML();
 
 $sxe[] = "error";
 
-__HALT_COMPILER();
-?>
-===DONE===
+__halt_compiler();
+echo "===DONE===\n";

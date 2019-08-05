@@ -70,9 +70,8 @@ bool mcGenUnit(TransEnv& env, CodeCache::View codeView, CGMeta& fixups) {
   auto const& unit = *env.unit;
   try {
     emitVunit(*env.vunit, unit, codeView, fixups,
-              mcgen::dumpTCAnnotation(*env.args.sk.func(), env.args.kind)
-              ? &env.annotations
-              : nullptr);
+              mcgen::dumpTCAnnotation(env.args.kind) ? &env.annotations
+                                                     : nullptr);
   } catch (const DataBlockFull& dbFull) {
     if (dbFull.name == "hot") {
       code().disableHot();
@@ -896,8 +895,6 @@ folly::Optional<TransMetaInfo> emitTranslation(TransEnv env, OptView optDst) {
   auto& args = env.args;
   auto const sk = args.sk;
 
-  profileSetHotFunc();
-
   std::unique_lock<SimpleMutex> codeLock;
   if (!optDst) {
     codeLock = lockCode();
@@ -945,7 +942,8 @@ folly::Optional<TransMetaInfo> emitTranslation(TransEnv env, OptView optDst) {
   if (args.kind == TransKind::Profile) {
     always_assert(args.region);
     auto metaLock = lockMetadata();
-    profData()->addTransProfile(env.transID, args.region, env.pconds);
+    profData()->addTransProfile(env.transID, args.region, env.pconds,
+                                range.main.size());
   }
 
   TransRec tr;

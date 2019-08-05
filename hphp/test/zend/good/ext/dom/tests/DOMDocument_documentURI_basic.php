@@ -1,4 +1,4 @@
-<?php
+<?hh
 // create dom document
 $dom = new DOMDocument;
 $xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -21,4 +21,3 @@ echo "Set documentURI to a URL, reading again:\n";
 var_dump( $test );
 
 echo "Done\n";
-?>

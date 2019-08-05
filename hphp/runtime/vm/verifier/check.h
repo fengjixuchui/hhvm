@@ -58,26 +58,22 @@ bool checkUnit(const UnitEmitter*, ErrorMode mode = kStderr);
  * Checked:
  * 1.  Depth of eval stack must be same for any control-flow path.
  *     flavor descriptors for every stack element are same for any path.
- * 2.  Stack underflow & overflow not allowed.  INS_1 stack
- *     refs must be in-bounds.
+ * 2.  Stack underflow & overflow not allowed.
  * 3.  Empty stack at try-region starts (but not ends).
- * 5.  |stack| == 1 before Ret*, == 0 before Unwind.
- * 6.  no jumps between sections, where section is main body or any funclet.
- * 8.  each section must end with a terminal;  main body cannot contain Unwind;
- *     Funclets may not contain Ret*.
- * 9.  each fpi starts with FPush* and ends with FCall; each FPush must be
+ * 4.  |stack| == 1 before Ret*.
+ * 5.  The body must end with a terminal.
+ * 6.  each fpi starts with FPush* and ends with FCall; each FPush must be
  *     the first instr in exactly 1 fpi region.
- * 10. no back-jumps in FPI; no forward jumps out of FPI; no jumps into
+ * 7.  no back-jumps in FPI; no forward jumps out of FPI; no jumps into
  *     FPI from outside; no terminals inside FPI region.
- * 11. FPI depth same for all ctrl paths. every path must push N values.
- * 12. stack depth @FPush == depth @FCall.  No instr can pop past depth of
+ * 8.  FPI depth same for all ctrl paths. every path must push N values.
+ * 9.  stack depth @FPush == depth @FCall.  No instr can pop past depth of
  *     FPush.
- * 13. State of each iterator variable known everywhere.
- * 14. initialized state of iterators correct for Iter* instructions.
- * 17. Asserts not separated from following instruction by control flow
- * 18. Member instruction sequences are consistent and continuous
+ * 10. State of each iterator variable known everywhere.
+ * 11. initialized state of iterators correct for Iter* instructions.
+ * 12. Asserts not separated from following instruction by control flow
+ * 13. Member instruction sequences are consistent and continuous
  * -- All region and branch offsets must refer to valid instruction starts.
- * -- Every FPI region is wholly contained in one body/funclet section.
  * -- every string table index in-bounds
  * -- every array table index in-bounds
  * -- Local variable ids must be < Func.numLocals
@@ -86,9 +82,9 @@ bool checkUnit(const UnitEmitter*, ErrorMode mode = kStderr);
  * -- init-state of every iterator must be known everywhere
  *
  * Not Checked:
- * 3.  empty stack at try-region ends (but starts are checked).  And what
+ * 1.  empty stack at try-region ends (but starts are checked).  And what
  *     does this mean? -- linear-end or flow-end?
- * 4.  eval stack must be empty in blocks that come before all preds.
+ * 2.  eval stack must be empty in blocks that come before all preds.
  * -- FuncVar entries must refer to valid local ids; no local can have
  *    2+ names.
  * -- FuncStaticVar not checked

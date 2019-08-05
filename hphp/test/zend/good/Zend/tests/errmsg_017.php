@@ -1,9 +1,9 @@
-<?php
+<?hh
 
 class test {
-	function __unset() {
-	}
+    function __unset() {
+    }
 }
-
+<<__EntryPoint>> function main(): void {
 echo "Done\n";
-?>
+}

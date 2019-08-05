@@ -77,7 +77,6 @@ inline ControlFlowInfo opcodeControlFlowInfo(const Op op, bool inlining) {
     case Op::LIterInitK: // Ditto
     case Op::IterBreak:
     case Op::Throw:
-    case Op::Unwind:
     case Op::Eval:
     case Op::NativeImpl:
     case Op::BreakTraceHint:
@@ -88,6 +87,16 @@ inline ControlFlowInfo opcodeControlFlowInfo(const Op op, bool inlining) {
     case Op::AwaitAll:
       return inlining ? ControlFlowInfo::ChangesPC : ControlFlowInfo::BreaksBB;
     case Op::FCall:
+    case Op::FCallClsMethod:
+    case Op::FCallClsMethodD:
+    case Op::FCallClsMethodRD:
+    case Op::FCallClsMethodS:
+    case Op::FCallClsMethodSD:
+    case Op::FCallClsMethodSRD:
+    case Op::FCallCtor:
+    case Op::FCallObjMethod:
+    case Op::FCallObjMethodD:
+    case Op::FCallObjMethodRD:
     case Op::ContEnter:
     case Op::ContRaise:
     case Op::ContEnterDelegate:
@@ -107,7 +116,7 @@ inline bool opcodeChangesPC(const Op op) {
 }
 
 inline bool opcodeBreaksBB(const Op op, bool inlining) {
-  if (op == Op::ClsCns) {
+  if (op == Op::ClsCns || op == Op::CGetS) {
     // side exits if it misses in the RDS, and may produce an overly
     // specific type without guarding if the class comes from an
     // object (during form_region, the class will appear to be a
@@ -122,7 +131,6 @@ inline bool opcodeBreaksBB(const Op op, bool inlining) {
 
 inline bool opcodeIgnoresInnerType(const Op op) {
   switch (op) {
-    case Op::BindL:
     case Op::PopV:
     case Op::RetC:
     case Op::RetCSuspended:

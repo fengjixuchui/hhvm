@@ -1,4 +1,4 @@
-<?php
+<?hh
 
 /*
  * This test emulates a regpressure case that occurred with inlining
@@ -31,7 +31,7 @@ class IPAddressIsh {
   }
 }
 
-function main() {
+<<__EntryPoint>> function main(): void {
   $x = new IPAddressIsh('x');
   $y = new IPAddressIsh('y');
   echo $x->inSubnetWithMask($y, "213");
@@ -42,4 +42,3 @@ function main() {
   $y->foobar();
   echo "after3\n";
 }
-main();

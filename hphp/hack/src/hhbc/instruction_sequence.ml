@@ -11,7 +11,7 @@ open Core_kernel
 open Common
 open Hhbc_ast
 
-module A = Ast
+module A = Ast_defs
 
 (* The various from_X functions below take some kind of AST (expression,
  * statement, etc.) and produce what is logically a sequence of instructions.
@@ -25,7 +25,6 @@ type t =
 | Instr_one of instruct
 | Instr_list of instruct list
 | Instr_concat of t list
-| Instr_try_fault of t * t
 
 (* Some helper constructors *)
 let instr x = Instr_one x
@@ -40,17 +39,18 @@ let optional b instrs = if b then gather instrs else empty
 let optionally f v = match v with None -> empty | Some v -> f v
 let of_pair (i1, i2) = gather [i1; i2]
 
-let class_ref_rewrite_sentinel = -100
-
 let default_fcall_flags = {
   has_unpack = false;
   supports_async_eager_return = false;
+  lock_while_unwinding = false;
 }
 let make_fcall_args ?(flags=default_fcall_flags) ?(num_rets=1)
   ?(by_refs=[]) ?async_eager_label num_args =
   if by_refs <> [] && (List.length by_refs) <> num_args then
     failwith "length of by_refs must be either zero or num_args";
   flags, num_args, num_rets, by_refs, async_eager_label
+let num_args_of (flags, num_args, _, _, _) =
+  if flags.has_unpack then num_args + 1 else num_args
 
 let instr_lit_const l =
   instr (ILitConst l)
@@ -80,7 +80,6 @@ let instr_break level = instr (ISpecialFlow (Break level))
 let instr_goto label = instr (ISpecialFlow (Goto label))
 let instr_iter_break label itrs =
   instr (IIterator (IterBreak (label, itrs)))
-let instr_unwind = instr (IContFlow Unwind)
 let instr_false = instr (ILitConst False)
 let instr_true = instr (ILitConst True)
 let instr_eq = instr (IOp Eq)
@@ -95,18 +94,18 @@ let instr_retc_suspended = instr (IContFlow (RetCSuspended))
 let instr_retm p = instr (IContFlow (RetM p))
 let instr_null = instr (ILitConst Null)
 let instr_nulluninit = instr (ILitConst NullUninit)
-let instr_catch = instr (IMisc Catch)
 let instr_chain_faults = instr (IMisc ChainFaults)
 let instr_dup = instr (IBasic Dup)
 let instr_nop = instr (IBasic Nop)
 let instr_instanceofd s = instr (IOp (InstanceOfD s))
 let instr_instanceof = instr (IOp InstanceOf)
+let instr_islateboundcls = instr (IOp IsLateBoundCls)
 let instr_istypestructc mode = instr (IOp (IsTypeStructC mode))
-let instr_astypestructc mode = instr (IOp (AsTypeStructC mode))
+let instr_throwastypestructexception = instr (IOp ThrowAsTypeStructException)
 let instr_combine_and_resolve_type_struct i =
   instr (IOp (CombineAndResolveTypeStruct i))
-let instr_reified_name i name = instr (IMisc (ReifiedName (i, name)))
-let instr_record_reified_generic i = instr (IMisc (RecordReifiedGeneric i))
+let instr_reified_name name = instr (IMisc (ReifiedName name))
+let instr_record_reified_generic = instr (IMisc RecordReifiedGeneric)
 let instr_check_reified_generic_mismatch =
   instr (IMisc CheckReifiedGenericMismatch)
 let instr_int i = instr (ILitConst (Int (Int64.of_int i)))
@@ -119,87 +118,63 @@ let instr_this = instr (IMisc This)
 let instr_istypec op = instr (IIsset (IsTypeC op))
 let instr_istypel id op = instr (IIsset (IsTypeL (id, op)))
 let instr_not = instr (IOp Not)
-let instr_sets =
-  instr (IMutator (SetS class_ref_rewrite_sentinel))
+let instr_sets = instr (IMutator SetS)
 let instr_setl local = instr (IMutator (SetL local))
 let instr_unsetl local = instr (IMutator (UnsetL local))
 let instr_issetl local = instr (IIsset (IssetL local))
 let instr_issetg = instr (IIsset IssetG)
-let instr_issets = instr (IIsset (IssetS class_ref_rewrite_sentinel))
-let instr_emptys = instr (IIsset (EmptyS class_ref_rewrite_sentinel))
+let instr_issets = instr (IIsset IssetS)
+let instr_emptys = instr (IIsset EmptyS)
 let instr_emptyg = instr (IIsset EmptyG)
 let instr_emptyl local = instr (IIsset (EmptyL local))
-let instr_cgets =
-  instr (IGet (CGetS class_ref_rewrite_sentinel))
-let instr_vgets =
-  instr (IGet (VGetS class_ref_rewrite_sentinel))
-let instr_vgetg = instr (IGet VGetG)
+let instr_cgets = instr (IGet CGetS)
 let instr_cgetg = instr (IGet CGetG)
 let instr_cgetl local = instr (IGet (CGetL local))
+let instr_cugetl local = instr (IGet (CUGetL local))
 let instr_vgetl local = instr (IGet (VGetL local))
 let instr_cgetl2 local = instr (IGet (CGetL2 local))
 let instr_cgetquietl local = instr (IGet (CGetQuietL local))
-let instr_bindl local = instr (IMutator (BindL local))
-let instr_clsrefgetc =
-  instr (IGet (ClsRefGetC class_ref_rewrite_sentinel))
-let instr_clsrefgetts =
-  instr (IGet (ClsRefGetTS class_ref_rewrite_sentinel))
-let instr_clsrefname =
-  instr (IMisc (ClsRefName class_ref_rewrite_sentinel))
-let instr_self =
-  instr (IMisc (Self class_ref_rewrite_sentinel))
-let instr_lateboundcls =
-  instr (IMisc (LateBoundCls class_ref_rewrite_sentinel))
-let instr_parent =
-  instr (IMisc (Parent class_ref_rewrite_sentinel))
+let instr_classgetc = instr (IGet ClassGetC)
+let instr_classgetts = instr (IGet ClassGetTS)
+
+let instr_classname =
+  instr (IMisc ClassName)
+let instr_self = instr (IMisc Self)
+let instr_lateboundcls = instr (IMisc LateBoundCls)
+let instr_parent = instr (IMisc Parent)
 
 let instr_popu = instr (IBasic PopU)
 let instr_popc = instr (IBasic PopC)
-let instr_popv = instr (IBasic PopV)
 let instr_popl l = instr (IMutator (PopL l))
-let instr_pop flavor =
-  match flavor with
-  | Flavor.Ref -> instr_popv
-  | Flavor.Cell -> instr_popc
 
 let instr_pushl local = instr (IGet (PushL local))
 let instr_throw = instr (IContFlow Throw)
 
 let instr_new_vec_array i = instr (ILitConst (NewVecArray i))
 let instr_add_elemc = instr (ILitConst (AddElemC))
-let instr_add_elemv = instr (ILitConst (AddElemV))
 let instr_add_new_elemc = instr (ILitConst (AddNewElemC))
-let instr_add_new_elemv = instr (ILitConst (AddNewElemV))
 let instr_switch labels = instr (IContFlow (Switch (Unbounded, 0, labels)))
-let instr_newobj id op = instr (ICall (NewObj (id, op)))
+let instr_newobj = instr (ICall NewObj)
+let instr_newobjr = instr (ICall NewObjR)
 let instr_newobjd id = instr (ICall (NewObjD id))
+let instr_newobjrd id = instr (ICall (NewObjRD id))
 let instr_newobjs scref = instr (ICall (NewObjS scref))
-let instr_newobji clsnum = instr (ICall (NewObjI clsnum))
-let instr_fpushctor nargs = instr (ICall (FPushCtor nargs))
+let instr_lockobj = instr (IMisc LockObj)
 let instr_clone = instr (IOp Clone)
+let instr_new_record id keys = instr (ILitConst (NewRecord (id, keys)))
+let instr_new_recordarray id keys = instr (ILitConst (NewRecordArray (id, keys)))
 let instr_newstructarray keys = instr (ILitConst (NewStructArray keys))
 let instr_newstructdarray keys = instr (ILitConst (NewStructDArray keys))
 let instr_newstructdict keys = instr (ILitConst (NewStructDict keys))
 let instr_newcol collection_type = instr (ILitConst (NewCol collection_type))
 let instr_colfromarray collection_type =
   instr (ILitConst (ColFromArray collection_type))
-let instr_unbox = instr (IBasic Unbox)
-let instr_box = instr (IBasic Box)
 let instr_entrynop = instr (IBasic EntryNop)
 let instr_typedvalue xs = instr (ILitConst (TypedValue xs))
-let instr_staticlocinit local text = instr (IMisc (StaticLocInit(local, text)))
 let instr_basel local mode = instr (IBase(BaseL(local, mode)))
 let instr_basec stack_index mode = instr (IBase (BaseC(stack_index, mode)))
-let instr_basesc y mode =
-  instr (IBase(BaseSC(y, class_ref_rewrite_sentinel, mode)))
+let instr_basesc y z mode = instr (IBase(BaseSC(y, z, mode)))
 let instr_baseh = instr (IBase BaseH)
-let instr_fpushfunc n param_locs = instr (ICall(FPushFunc(n, param_locs)))
-let instr_fpushfuncd n id = instr (ICall(FPushFuncD(n, id)))
-let instr_fpushfuncu n id fallback = instr (ICall(FPushFuncU(n, id, fallback)))
-let instr_fcall fcall_args =
-  let no_class = Hhbc_id.Class.from_raw_string "" in
-  let no_func = Hhbc_id.Function.from_raw_string "" in
-  instr (ICall(FCall(fcall_args, no_class, no_func)))
 let instr_cgetcunop = instr (IMisc CGetCUNop)
 let instr_ugetcunop = instr (IMisc UGetCUNop)
 let instr_memoget label range =
@@ -218,20 +193,39 @@ let instr_verifyOutType i = instr (IMisc (VerifyOutType i))
 let instr_dim op key = instr (IBase (Dim (op, key)))
 let instr_dim_warn_pt key = instr_dim MemberOpMode.Warn (MemberKey.PT key)
 let instr_dim_define_pt key = instr_dim MemberOpMode.Define (MemberKey.PT key)
-let instr_fpushobjmethod n flavor pl =
-  instr (ICall (FPushObjMethod (n, flavor, pl)))
-let instr_fpushobjmethodd num_params method_ flavor =
-  instr (ICall (FPushObjMethodD (num_params, method_, flavor)))
-let instr_fpushclsmethodd num_params method_name class_name =
-  instr (ICall (FPushClsMethodD (num_params, method_name, class_name)))
-let instr_fpushclsmethod num_params pl =
-  instr (ICall (FPushClsMethod (num_params, class_ref_rewrite_sentinel, pl)))
-let instr_fpushclsmethods num_params scref =
-  instr (ICall (FPushClsMethodS (num_params, scref)))
-let instr_fpushclsmethodsd num_params scref method_name =
-  instr (ICall (FPushClsMethodSD (num_params, scref, method_name)))
-let instr_fpushobjmethodd_nullthrows num_params method_ =
-  instr_fpushobjmethodd num_params method_ Ast.OG_nullthrows
+let instr_fcallfunc fcall_args param_locs = gather [
+  instr (ICall (FPushFunc ((num_args_of fcall_args), param_locs)));
+  instr (ICall (FCall (fcall_args)))
+]
+let instr_fcallfuncd fcall_args id = gather [
+  instr (ICall (FPushFuncD ((num_args_of fcall_args), id)));
+  instr (ICall (FCall (fcall_args)))
+]
+let instr_fcallfuncrd fcall_args id = gather [
+  instr (ICall (FPushFuncRD ((num_args_of fcall_args), id)));
+  instr (ICall (FCall (fcall_args)))
+]
+let instr_fcallctor fcall_args = instr (ICall (FCallCtor (fcall_args)))
+let instr_fcallobjmethod fcall_args flavor pl =
+  instr (ICall (FCallObjMethod (fcall_args, flavor, pl)))
+let instr_fcallobjmethodd fcall_args method_ flavor =
+  instr (ICall (FCallObjMethodD (fcall_args, flavor, method_)))
+let instr_fcallobjmethodrd fcall_args method_ flavor =
+  instr (ICall (FCallObjMethodRD (fcall_args, flavor, method_)))
+let instr_fcallclsmethodd fcall_args method_name class_name =
+  instr (ICall (FCallClsMethodD (fcall_args, class_name, method_name)))
+let instr_fcallclsmethodrd fcall_args method_name class_name =
+  instr (ICall (FCallClsMethodRD (fcall_args, class_name, method_name)))
+let instr_fcallclsmethod fcall_args pl =
+  instr (ICall (FCallClsMethod (fcall_args, pl)))
+let instr_fcallclsmethods fcall_args scref =
+  instr (ICall (FCallClsMethodS (fcall_args, scref)))
+let instr_fcallclsmethodsd fcall_args scref method_name =
+  instr (ICall (FCallClsMethodSD (fcall_args, scref, method_name)))
+let instr_fcallclsmethodsrd fcall_args scref method_name =
+  instr (ICall (FCallClsMethodSRD (fcall_args, scref, method_name)))
+let instr_fcallobjmethodd_nullthrows fcall_args method_ =
+  instr_fcallobjmethodd fcall_args method_ Ast_defs.OG_nullthrows
 let instr_querym num_params op key =
   instr (IFinal (QueryM (num_params, op, key)))
 let instr_querym_cget_pt num_params key =
@@ -247,28 +241,36 @@ let instr_yieldk = instr (IGenerator YieldK)
 let instr_createcont = instr (IGenerator CreateCont)
 let instr_awaitall range = instr (IAsync (AwaitAll range))
 
-let instr_static_loc_check name =
-  instr (IMisc (StaticLocCheck (Local.Named name,
-    Hhbc_string_utils.Locals.strip_dollar name)))
+let instr_awaitall_list unnamed_locals =
+  let head, tail = match unnamed_locals with
+  | head :: tail -> head, tail
+  | _ -> failwith "Expected at least one await" in
 
-let instr_static_loc_def name =
-  instr (IMisc (StaticLocDef (Local.Named name,
-    Hhbc_string_utils.Locals.strip_dollar name)))
+  let get_unnamed_offset unnamed_local = match unnamed_local with
+  | Local.Unnamed i -> i
+  | _ -> failwith "Expected unnamed local" in
 
-let instr_static_loc_init name =
-  instr (IMisc (StaticLocInit (Local.Named name,
-    Hhbc_string_utils.Locals.strip_dollar name)))
+  let _ = List.fold_left tail
+    ~init:(get_unnamed_offset head)
+    ~f:(fun acc unnamed_local ->
+      let next_offset = get_unnamed_offset unnamed_local in
+      assert (acc + 1 = next_offset);
+      next_offset
+    ) in
+  instr_awaitall (Some (head, List.length unnamed_locals))
 
 let instr_exit = instr (IOp Hhbc_ast.Exit)
 let instr_idx = instr (IMisc Idx)
 let instr_array_idx = instr (IMisc ArrayIdx)
 
-let instr_fcallbuiltin n un s = instr (ICall (FCallBuiltin (n, un, s)))
+let instr_fcallbuiltin n un io s = instr (ICall (FCallBuiltin (n, un, io, s)))
 
 let instr_defcls n =
   instr (IIncludeEvalDefine (DefCls n))
 let instr_defclsnop n =
   instr (IIncludeEvalDefine (DefClsNop n))
+let instr_defrecord n =
+  instr (IIncludeEvalDefine (DefRecord n))
 let instr_deftypealias n =
   instr (IIncludeEvalDefine (DefTypeAlias n))
 let instr_defcns s =
@@ -303,9 +305,25 @@ let instr_contkey = instr (IGenerator ContKey)
 let instr_contgetreturn = instr (IGenerator ContGetReturn)
 
 let instr_trigger_sampled_error =
-  instr_fcallbuiltin 3 3 "trigger_sampled_error"
+  instr_fcallbuiltin 3 3 0 "trigger_sampled_error"
 
 let instr_nativeimpl = instr (IMisc NativeImpl)
+
+let create_try_catch ?(opt_done_label) ?(skip_throw=false)
+  try_instrs catch_instrs =
+  let done_label = match opt_done_label with
+    | None -> Label.next_regular ()
+    | Some l -> l in
+  gather [
+    instr (ITry TryCatchBegin);
+    try_instrs;
+    instr_jmp done_label;
+    instr (ITry TryCatchMiddle);
+    catch_instrs;
+    if skip_throw then empty else instr_throw;
+    instr (ITry TryCatchEnd);
+    instr_label done_label;
+  ]
 
 
 (* Functions on instr_seq that correspond to existing Hh_core.List functions *)
@@ -322,8 +340,6 @@ module InstrSeq = struct
       | [x] -> Instr_one x
       | x -> Instr_list x
       end
-    | Instr_try_fault (try_body, fault_body) ->
-      Instr_try_fault ((flat_map try_body ~f), (flat_map fault_body ~f))
     | Instr_list instrl ->
       Instr_list (flat_map_list instrl ~f)
     | Instr_concat instrseql ->
@@ -334,8 +350,6 @@ module InstrSeq = struct
     match instrseq with
     | Instr_empty -> Instr_empty
     | Instr_one x -> f x
-    | Instr_try_fault (try_body, fault_body) ->
-      Instr_try_fault ((flat_map_seq try_body ~f), (flat_map_seq fault_body ~f))
     | Instr_list instrl ->
       Instr_concat (List.map instrl ~f)
     | Instr_concat instrseql ->
@@ -347,8 +361,6 @@ module InstrSeq = struct
     match instrseq with
     | Instr_empty -> init
     | Instr_one x -> f init x
-    | Instr_try_fault (try_body, fault_body) ->
-      fold_left fault_body ~init:(fold_left try_body ~f ~init) ~f
     | Instr_list instrl ->
       List.fold_left instrl ~f ~init
     | Instr_concat instrseql ->
@@ -362,8 +374,6 @@ module InstrSeq = struct
       | Some x -> Instr_one x
       | None -> Instr_empty
       end
-    | Instr_try_fault (try_body, fault_body) ->
-      Instr_try_fault ((filter_map try_body ~f), (filter_map fault_body ~f))
     | Instr_list instrl ->
       Instr_list (List.filter_map instrl ~f)
     | Instr_concat instrseql ->
@@ -381,8 +391,6 @@ let instr_seq_to_list t =
       match s with
       | Instr_empty -> go acc sl
       | Instr_one x -> go (x :: acc) sl
-      (* NOTE we discard fault blocks when linearizing an instruction sequence *)
-      | Instr_try_fault (try_body, _fault_body) -> go acc (try_body :: sl)
       | Instr_list instrl -> go (List.rev_append instrl acc) sl
       | Instr_concat sl' -> go acc (sl' @ sl) in
   let rec compact_src_locs acc = function
@@ -394,66 +402,6 @@ let instr_seq_to_list t =
     end
     | i :: is -> compact_src_locs (i :: acc) is in
   go [] [t] |> compact_src_locs []
-
-let instr_try_fault fault_label try_body fault_body =
-  let instr_try_fault_body = gather [
-    instr (ITry (TryFaultBegin (fault_label)));
-    try_body;
-    instr (ITry TryFaultEnd)
-  ] in
-  let fault_body = gather [
-    instr_label fault_label;
-    fault_body
-  ] in
-  Instr_try_fault (instr_try_fault_body, fault_body)
-
-let instr_try_catch_begin = instr (ITry TryCatchBegin)
-let instr_try_catch_middle = instr (ITry TryCatchMiddle)
-let instr_try_catch_end = instr (ITry TryCatchEnd)
-
-(* Return a list of all fault funclets in instrseq, to be emitted after the
-function's main body. *)
-let extract_fault_funclets instrseq =
-  let rec aux instrseq acc =
-    match instrseq with
-    | Instr_empty
-    | Instr_one _ -> acc
-    | Instr_try_fault (try_body, fault_body) ->
-    (* collect fault handlers in try body and fault body, then prepend
-       the outer fault handler *)
-      fault_body :: aux fault_body (aux try_body acc)
-    | Instr_list _ -> acc
-    | Instr_concat ([]) -> acc
-    | Instr_concat (h :: t) -> aux (Instr_concat t) (aux h acc) in
-  (* fault handlers are accumulated in reverse so result list needs to
-     be reversed to get the correct order *)
-  gather (List.rev @@ aux instrseq [])
-
-(* Return a copy of instrseq with any fault bodies stripped out. This is used
-when we copy the body of a finally block, to avoid generating two copies of the
-fault body. *)
-let rec strip_fault_bodies instrseq =
-  match instrseq with
-  | Instr_empty
-  | Instr_one _
-  | Instr_list _ -> instrseq
-  | Instr_concat l -> Instr_concat (List.map l strip_fault_bodies)
-  | Instr_try_fault (try_body, _) ->
-      Instr_try_fault (strip_fault_bodies try_body, Instr_empty)
-
-let get_num_cls_ref_slots instrseq =
-  InstrSeq.fold_left
-    instrseq
-    ~init:0
-    ~f:(fun num i ->
-        match i with
-        | IMisc (Parent id)
-        | IMisc (LateBoundCls id)
-        | IMisc (Self id)
-        | IMisc (ClsRefName id)
-        | IGet (ClsRefGetTS id)
-        | IGet (ClsRefGetC id) -> if id + 1 > num then id + 1 else num
-        | _ -> num)
 
 let get_or_put_label name_label_map name =
   match SMap.get name name_label_map with
@@ -493,10 +441,6 @@ let rewrite_user_labels instrseq =
     | Instr_one i ->
       let i, map = rewrite_user_labels_instr name_label_map i in
       (Instr_one i), map
-    | Instr_try_fault (try_body, fault_body) ->
-      let try_body, name_label_map = aux try_body name_label_map in
-      let fault_body, name_label_map = aux fault_body name_label_map in
-      Instr_try_fault (try_body, fault_body), name_label_map
     | Instr_concat l ->
       let l, name_label_map = List.fold_left l
         ~f:(fun (acc, map) s -> let l, map = aux s map in l :: acc, map)
@@ -512,159 +456,12 @@ let rewrite_user_labels instrseq =
       Instr_list (List.rev l), name_label_map in
   fst @@ aux instrseq SMap.empty
 
-(* TODO: What other instructions manipulate the class ref stack *)
-let rewrite_class_refs_instr num = function
-| IGet (ClsRefGetC _) -> (num + 1, IGet (ClsRefGetC (num + 1)))
-| IGet (ClsRefGetTS _) -> (num + 1, IGet (ClsRefGetTS (num + 1)))
-| IMisc (Parent _) -> (num + 1, IMisc (Parent (num + 1)))
-| IMisc (LateBoundCls _) -> (num + 1, IMisc (LateBoundCls (num + 1)))
-| IMisc (Self _) -> (num + 1, IMisc (Self (num + 1)))
-| IMisc (ClsRefName _) -> (num - 1, IMisc (ClsRefName num))
-| ILitConst (ClsCns (id, _)) -> (num - 1, ILitConst (ClsCns (id, num)))
-| IGet (CGetS _) -> (num - 1, IGet (CGetS num))
-| IGet (VGetS _) -> (num - 1, IGet (VGetS num))
-| IMutator (SetS _) -> (num - 1, IMutator (SetS num))
-| IMutator (SetOpS (o, _)) -> (num - 1, IMutator (SetOpS (o, num)))
-| IMutator (IncDecS (o, _)) -> (num - 1, IMutator (IncDecS (o, num)))
-| IMutator (BindS _) -> (num - 1, IMutator (BindS num))
-| IBase (BaseSC (si, _, m)) -> (num - 1, IBase (BaseSC (si, num, m)))
-| ICall (NewObj (_, op)) -> (num - 1, ICall (NewObj (num, op)))
-| ICall (FPushClsMethod (np, _, pl)) ->
-  (num - 1, ICall (FPushClsMethod (np, num, pl)))
-| IIsset (IssetS _) -> (num - 1, IIsset (IssetS num))
-| IIsset (EmptyS _) -> (num - 1, IIsset (EmptyS num))
-| ILitConst (TypedValue tv) -> (num, Emit_adata.rewrite_typed_value tv)
-(* all class ref slots at every catch clause must be uninitialized
-   Technically we can reset the counter at ICatchMiddle however this won't work
-   in following case:
-   try {
+let rewrite_tv instruction =
+  match instruction with
+  | ILitConst (TypedValue tv) -> Emit_adata.rewrite_typed_value tv
+  | _ -> instruction
 
-   }
-   catch (A $e) { unset(AA::$x); }
-   catch (B $e) { unset(AA::$x); }
-
-   During codegen all catch clauses are flattened to something like:
-   try {
-     ...
-   }
-   catch ($e) {
-     if (!($e instanceof A)) goto L1;
-     load_class_ref(AA);
-     raise_fatal "cannot unset static property"
-
-     goto AfterCatch:
-     if (!($e instanceof B)) throw $e; // (**)
-     load_class_ref(AA);
-     raise_fatal "cannot unset static property"
-
-     goto AfterCatch
-   }
-   AfterCatch:
-
-   Resetting counter at the beginning of catch clause will not help
-   to reset it at line (**). What we do instead - reset counter
-   at instructions that raise errors
-
-   *)
-| (IOp (Fatal _) | IContFlow Throw) as i -> (-1, i)
-| i -> (num, i)
-
-(* Cannot use InstrSeq.fold_left since we want to maintain the exact
- * placement of try blocks *)
-let rewrite_class_refs instrseq =
-  let rec aux instrseq num =
-    match instrseq with
-    | Instr_empty ->
-      Instr_empty, num
-    | Instr_one i ->
-      let n, i = rewrite_class_refs_instr num i in
-      Instr_one i, n
-    | Instr_try_fault (try_body, fault_body) ->
-      let try_body, num = aux try_body num in
-      let fault_body, num = aux fault_body num in
-      Instr_try_fault (try_body, fault_body), num
-    | Instr_concat l ->
-      let l, num = List.fold_left l
-        ~f:(fun (acc, n) s -> let l, n = aux s n in l :: acc, n)
-        ~init:([], num)
-      in
-      Instr_concat (List.rev l), num
-    | Instr_list l ->
-      let l, num = List.fold_left l
-        ~f:(fun (acc, n) i ->
-            let n, i = rewrite_class_refs_instr n i in i :: acc, n)
-        ~init:([], num)
-      in
-      Instr_list (List.rev l), num
-  in
-  fst @@ aux instrseq (-1)
-
-let rec can_initialize_static_var e =
-  match snd e with
-  | A.Float _ | A.String _ | A.Int _ | A.Null | A.False | A.True -> true
-  | A.Array es ->
-    List.for_all es ~f:(function
-      | A.AFvalue v ->
-        can_initialize_static_var v
-      | A.AFkvalue (k, v) ->
-        can_initialize_static_var k
-        && can_initialize_static_var v)
-  | A.Darray (_, es) ->
-    List.for_all es ~f:(fun (k, v) ->
-      can_initialize_static_var k
-      && can_initialize_static_var v)
-  | A.Varray (_, es) ->
-    List.for_all es ~f:can_initialize_static_var
-  | A.Class_const(_, (_, name)) ->
-    String.lowercase name = Naming_special_names.Members.mClass
-  | A.Collection ((_, name), _, fields) ->
-    let name =
-      Hhbc_string_utils.Types.fix_casing @@ Hhbc_string_utils.strip_ns name in
-    begin match name with
-    | "vec" ->
-      List.for_all fields ~f:(function
-        | A.AFvalue e -> can_initialize_static_var e
-        | _ -> false)
-    | "keyset" ->
-      List.for_all fields ~f:(function
-        | A.AFvalue (_, (A.String _ | A.Int _)) -> true
-        | _ -> false)
-    | "dict" ->
-      List.for_all fields ~f:(function
-        | A.AFkvalue ((_, (A.String _ | A.Int _)), v) ->
-          can_initialize_static_var v
-        | _ -> false)
-    | _ -> false
-    end
-  | _ -> false
-
-let rewrite_static_instrseq static_var_map emit_expr env instrseq =
-  let rewrite_static_instr instruction =
-    match instruction with
-    | IMisc (StaticLocInit (Local.Named name, _)) ->
-      begin match (SMap.get name static_var_map) with
-            | None ->
-              failwith "rewrite_static_instr: No value in static map!"
-            | Some None -> gather [instr_null; instr_static_loc_init name;]
-            | Some (Some e) ->
-              if can_initialize_static_var e then
-                gather [
-                  emit_expr env e;
-                  instr_static_loc_init name;
-                ]
-              else
-                let l = Label.next_regular () in
-                gather [
-                  instr_static_loc_check name;
-                  instr_jmpnz l;
-                  emit_expr env e;
-                  instr_static_loc_def name;
-                  instr_label l;
-                ]
-      end
-    | _ -> instr instruction
-  in
-  InstrSeq.flat_map_seq instrseq rewrite_static_instr
+let rewrite_tvs instrseq = InstrSeq.map instrseq rewrite_tv
 
 let is_srcloc i =
   match i with
@@ -678,7 +475,6 @@ let first instrs =
     | Instr_one i -> if is_srcloc i then None else Some i
     | Instr_list l -> List.find l (fun x -> not (is_srcloc x))
     | Instr_concat l -> List.find_map ~f:aux l
-    | Instr_try_fault (t, f) -> match aux t with None -> aux f | v -> v
   in
   aux instrs
 
@@ -689,6 +485,5 @@ let is_empty instrs =
     | Instr_one i -> is_srcloc i
     | Instr_list l -> List.is_empty l || List.for_all ~f:is_srcloc l
     | Instr_concat l -> List.for_all ~f:aux l
-    | Instr_try_fault (t, f) -> aux t && aux f
   in
   aux instrs

@@ -1,4 +1,4 @@
-<?php
+<?hh
 /*
  Prototype: string fgetss ( resource $handle [, int $length [, string $allowable_tags]] );
  Description: Gets line from file pointer and strip HTML tags
@@ -10,15 +10,15 @@
     x+, x+b, x+t
 */
 
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing fgetss() : usage variations ***\n";
 
 /* string with html and php tags */
 $string_with_tags = <<<EOT
 <test>Testing fgetss() functions</test>
-<?php echo "this string is within php tag"; ?> {;}<{> this
+<?hh echo "this string is within php tag"; ?> {;}<{> this
 is a heredoc string. <pg>ksklnm@@$$&$&^%&^%&^%&</pg>
-<html> html </html> <?php echo "php"; ?>
+<html> html </html> <?hh echo "php"; ?>
 this line is without any html and php tags
 this is a line with more than eighty character,want to check line splitting correctly after 80 characters
 this text contains some html tags <body> body </body> <br> br </br>
@@ -67,4 +67,4 @@ for($mode_counter = 0; $mode_counter < count($file_modes); $mode_counter++) {
 } // end of for - mode_counter
 
 echo "Done\n";
-?>
+}

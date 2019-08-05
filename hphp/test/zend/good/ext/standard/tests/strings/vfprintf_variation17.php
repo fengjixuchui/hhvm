@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : int vfprintf  ( resource $handle  , string $format , array $args  )
  * Description: Write a formatted string to a stream
  * Source code: ext/standard/formatted_print.c
@@ -8,7 +8,7 @@
  * Test vfprintf() when different scientific formats and scientific values
  * are passed to the '$format' and '$args' arguments of the function
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing vfprintf() : scientific formats and scientific values ***\n";
 
 // defining array of scientific formats
@@ -49,5 +49,5 @@ print_r(file_get_contents($data_file));
 echo "\n";
 
 unlink($data_file); 
-?>
-===DONE===
+echo "===DONE===\n";
+}

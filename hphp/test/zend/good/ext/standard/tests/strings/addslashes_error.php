@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : string addslashes ( string $str )
  * Description: Returns a string with backslashes before characters that need to be quoted in database queries etc.
  * Source code: ext/standard/string.c
@@ -7,7 +7,7 @@
 /*
  * Testing addslashes() for error conditions
 */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing addslashes() : error conditions ***\n";
 
 // Zero argument
@@ -23,4 +23,4 @@ try { var_dump( addslashes($str, $extra_arg) ); } catch (Exception $e) { echo "\
 var_dump( $str );
 
 echo "Done\n";
-?>
+}

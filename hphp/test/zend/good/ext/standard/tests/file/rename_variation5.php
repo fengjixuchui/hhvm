@@ -1,13 +1,13 @@
-<?php
+<?hh
+// Test rename() by trying to rename an existing file/dir/link to the same name
+// and one another.
 
-/* test rename() by trying to rename an existing file/dir/link to the same name
-  and one another */
-// create a dir 
+<<__EntryPoint>> function main(): void {
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
-$dirname = "$file_path/rename_variation5_dir"; 
+$dirname = "$file_path/rename_variation5_dir";
 mkdir($dirname);
 //create a file
-$filename = "$file_path/rename_variation5.tmp"; 
+$filename = "$file_path/rename_variation5.tmp";
 $fp = fopen($filename, "w");
 fclose($fp);
 // create a link
@@ -41,11 +41,9 @@ echo "\n-- Renaming existing directory to existing link name --\n";
 var_dump( rename($dirname, $linkname) );
 
 echo "Done\n";
-?>
-<?php error_reporting(0); ?>
-<?php
+error_reporting(0);
 $file_path = getenv('HPHP_TEST_TMPDIR') ?? dirname(__FILE__);
 unlink($file_path."/rename_variation5_link.tmp");
 unlink($file_path."/rename_variation5.tmp");
 rmdir($file_path."/rename_variation5_dir");
-?>
+}

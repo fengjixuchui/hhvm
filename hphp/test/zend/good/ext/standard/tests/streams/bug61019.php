@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 echo "Test\n";
 
 $descriptorspec = array(
@@ -63,5 +63,5 @@ else
 {
 	echo "Can't start external command\n";
 }
-?>
-===DONE===
+echo "===DONE===\n";
+}

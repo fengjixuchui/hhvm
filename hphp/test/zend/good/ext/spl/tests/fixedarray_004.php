@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $a = new SplFixedArray(10);
 
 try {
@@ -8,5 +8,5 @@ try {
 	var_dump($e->getMessage());
 }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}

@@ -58,7 +58,6 @@ void emitFuncPrologueImpl(Func* func, int argc, TransKind kind,
   auto const funcBody =
     SrcKey{func, func->getEntryForNumArgs(argc), SrcKey::PrologueTag{}};
 
-  profileSetHotFunc();
   auto codeView = code().view(kind);
   TCA mainOrig = codeView.main().frontier();
 
@@ -79,7 +78,8 @@ void emitFuncPrologueImpl(Func* func, int argc, TransKind kind,
     if (kind == TransKind::ProfPrologue) {
       auto const profData = jit::profData();
       auto const id = profData->allocTransID();
-      profData->addTransProfPrologue(id, funcBody, paramIndex);
+      profData->addTransProfPrologue(id, funcBody, paramIndex,
+        0 /* asmSize: updated below after machine code is generated */);
       return id;
     }
     if (profData() && transdb::enabled()) {
@@ -91,6 +91,11 @@ void emitFuncPrologueImpl(Func* func, int argc, TransKind kind,
   info.start = genFuncPrologue(transID, kind, func, argc, codeView, fixups);
 
   loc = maker.markEnd().loc();
+
+  if (kind == TransKind::ProfPrologue) {
+    // Update the profiling prologue size now that we generated it.
+    profData()->transRec(transID)->setAsmSize(loc.mainSize());
+  }
 
   if (RuntimeOption::EvalEnableReusableTC) {
     TCA UNUSED ms = loc.mainStart(), me = loc.mainEnd(),
@@ -199,6 +204,8 @@ bool publishFuncPrologueMeta(Func* func, int nArgs, TransKind kind,
 
   recordGdbTranslation(funcBody, func, codeView.main(), loc.mainStart(),
                        loc.mainEnd(), false, true);
+  recordGdbTranslation(funcBody, func, codeView.cold(), loc.coldStart(),
+                       loc.coldEnd(), false, true);
   recordBCInstr(OpFuncPrologue, loc.mainStart(), loc.mainEnd(), false);
   return true;
 }
@@ -288,11 +295,13 @@ TCA emitFuncBodyDispatchInternal(Func* func, const DVFuncletsVec& dvs,
   return genFuncBodyDispatch(func, dvs, kind, view);
 }
 
-void publishFuncBodyDispatch(Func* func, TCA start, TCA end) {
+namespace {
+
+void publishFuncBodyDispatchImpl(const Func* func, Address start, Address end) {
+  if (start == end) return;
+
   TRACE(2, "emitFuncBodyDispatch: emitted code for %s at %p\n",
         func->fullName()->data(), start);
-
-  func->setFuncBody(start);
 
   if (!RuntimeOption::EvalJitNoGdb) {
     Debug::DebugInfo::Get()->recordStub(
@@ -309,15 +318,56 @@ void publishFuncBodyDispatch(Func* func, TCA start, TCA end) {
   }
 }
 
+}
+
+void publishFuncBodyDispatch(Func* func,
+                             TCA start,
+                             CodeCache::View view,
+                             TransLoc loc) {
+  func->setFuncBody(start);
+  auto const& codeCache = code();
+
+  // We may have inserted padding at the beginning, so adjust past it (using the
+  // start address).
+  auto const& startBlock = codeCache.blockFor(start);
+
+  publishFuncBodyDispatchImpl(
+    func,
+    &view.main() == &startBlock ? start : loc.mainStart(),
+    loc.mainEnd()
+  );
+  publishFuncBodyDispatchImpl(
+    func,
+    &view.cold() == &startBlock ? start : loc.coldCodeStart(),
+    loc.coldEnd()
+  );
+  if (&view.cold() != &view.frozen()) {
+    publishFuncBodyDispatchImpl(
+      func,
+      &view.frozen() == &startBlock ? start : loc.frozenCodeStart(),
+      loc.frozenEnd()
+    );
+  }
+}
+
+void publishFuncBodyDispatch(Func* func, TCA start, TCA end) {
+  func->setFuncBody(start);
+  publishFuncBodyDispatchImpl(func, start, end);
+}
+
 TCA emitFuncBodyDispatch(Func* func, const DVFuncletsVec& dvs, TransKind kind) {
   VMProtect _;
 
   auto codeLock = lockCode();
   auto metaLock = lockMetadata();
 
-  const auto& view = code().view(kind);
+  auto& codeCache = code();
+  const auto& view = codeCache.view(kind);
+
+  TransLocMaker maker{view};
+  maker.markStart();
   const auto tca = emitFuncBodyDispatchInternal(func, dvs, kind, view);
-  publishFuncBodyDispatch(func, tca, view.main().frontier());
+  publishFuncBodyDispatch(func, tca, view, maker.markEnd().loc());
   return tca;
 }
 

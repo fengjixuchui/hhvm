@@ -1,5 +1,5 @@
-<?php
-
+<?hh
+<<__EntryPoint>> function main(): void {
 $a = new SplFixedArray(0);
 $a = new SplFixedArray(3);
 
@@ -36,5 +36,4 @@ $a->setSize(0);
 var_dump($a->getSize());
 
 print "ok\n";
-
-?>
+}

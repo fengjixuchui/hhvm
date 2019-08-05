@@ -44,7 +44,7 @@ let pos_contains_line_char pos line char =
 
 type 'a walker = {
   plus: 'a -> 'a -> 'a;
-  on_method: Tast_env.env -> Tast.constructor -> 'a;
+  on_method: Tast_env.env -> Tast.method_ -> 'a;
   on_fun: Tast_env.env -> Tast.fun_ -> 'a;
 }
 
@@ -55,12 +55,12 @@ let find_in_tree (walker: 'a walker) line char = object(self)
   method merge = walker.plus
 
   method! on_method_ env m =
-    if pos_contains_line_char (fst m.Tast.m_name) line char
+    if pos_contains_line_char (fst m.Aast.m_name) line char
     then Some (walker.on_method env m)
     else self#zero
 
   method! on_fun_ env f =
-    if pos_contains_line_char (fst f.Tast.f_name) line char
+    if pos_contains_line_char (fst f.Aast.f_name) line char
     then Some (walker.on_fun env f)
     else self#zero
 end
@@ -72,7 +72,7 @@ type ('a, 'r, 's) handlers = {
   map_result: 's -> 'a -> 'r
 }
 
-let prepare_pos_infos h pos_list files_info =
+let prepare_pos_infos h pos_list naming_table =
   let pos_info_results =
     pos_list
     (* Sort, so that many queries on the same file will (generally) be
@@ -84,7 +84,7 @@ let prepare_pos_infos h pos_list files_info =
     |> List.map ~f:begin fun (fn, line, char) ->
       let fn = Relative_path.create_detect_prefix fn in
       let pos = (fn, line, char) in
-      match Relative_path.Map.get files_info fn with
+      match Naming_table.get_file_info naming_table fn with
       | Some fileinfo -> Ok (pos, fileinfo)
       | None -> Error pos
     end
@@ -132,8 +132,8 @@ let go:
   (_ handlers) ->
   _ =
 fun workers pos_list env h ->
-  let {ServerEnv.tcopt; files_info; _} = env in
-  let pos_infos, failure_msgs = prepare_pos_infos h pos_list files_info in
+  let {ServerEnv.tcopt; naming_table; _} = env in
+  let pos_infos, failure_msgs = prepare_pos_infos h pos_list naming_table in
   let results =
     if (List.length pos_infos) < 10
     then helper h tcopt [] pos_infos

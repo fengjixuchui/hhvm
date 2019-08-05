@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : proto array mb_split(string pattern, string string [, int limit])
  * Description: split multibyte string into array by regular expression 
  * Source code: ext/mbstring/php_mbregex.c
@@ -8,7 +8,7 @@
 /*
  * test too few and too many parameters
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing mb_split() : error conditions ***\n";
 
 
@@ -26,4 +26,4 @@ $pattern = 'string_val';
 try { var_dump( mb_split($pattern) ); } catch (Exception $e) { echo "\n".'Warning: '.$e->getMessage().' in '.__FILE__.' on line '.__LINE__."\n"; }
 
 echo "Done";
-?>
+}

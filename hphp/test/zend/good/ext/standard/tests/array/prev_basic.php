@@ -1,4 +1,4 @@
-<?php
+<?hh
 /* Prototype  : mixed prev(array $array_arg)
  * Description: Move array argument's internal pointer to the previous element and return it
  * Source code: ext/standard/array.c
@@ -7,7 +7,7 @@
 /*
  * Test basic functionality of prev()
  */
-
+<<__EntryPoint>> function main(): void {
 echo "*** Testing prev() : basic functionality ***\n";
 
 $array = array('zero', 'one', 'two');
@@ -29,5 +29,5 @@ for ($i = $length; $i > 0; $i--) {
     var_dump(prev(&$array2));
 }
 
-?>
-===DONE===
+echo "===DONE===\n";
+}
