@@ -17,9 +17,9 @@
  *
  */
 use parser_rust as parser;
+use parser::source_text::SourceText;
 use parser::flatten_smart_constructors::*;
 use parser::smart_constructors::SmartConstructors;
-use parser::source_text::SourceText;
 use parser::parser_env::ParserEnv;
 use parser::positioned_token::PositionedToken;
 
@@ -34,7 +34,7 @@ impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstru
     type R = Node;
 
     fn new(_: &ParserEnv, src: &SourceText<'src>) -> Self {
-        Self { state: (false, *src) }
+        Self { state: (false, src.clone()) }
     }
 
     fn state_mut(&mut self) -> &mut HasScriptContent<'src> {
@@ -595,6 +595,10 @@ impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstru
 
     fn make_type_constant(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_type_constant(self, arg0, arg1, arg2)
+    }
+
+    fn make_pu_access(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_pu_access(self, arg0, arg1, arg2)
     }
 
     fn make_vector_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {

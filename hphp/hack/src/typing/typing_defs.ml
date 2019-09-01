@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -32,8 +32,23 @@ type exact =
 type decl = private DeclPhase
 type locl = private LoclPhase
 
+(* This abstract type allows us to guard the construction of Tany to the
+ * make_tany function in this module. *)
+module TanySentinel: sig
+  type t
+  val value : t
+end
+= struct
+  type t = ()
+  let value : t = ()
+end
+
 let show_phase_ty _ = "<phase_ty>"
 let pp_phase_ty _ _ = Printf.printf "%s\n" "<phase_ty>"
+
+type pu_kind =
+  | Pu_plain (* all atoms of an enumeration *)
+  | Pu_atom  of string (* single atom of an enumeration *)
 
 type 'phase ty = ( Reason.t * 'phase ty_ )
 
@@ -117,8 +132,11 @@ and _ ty_ =
   | Tlike : decl ty -> decl ty_
 
   (*========== Following Types Exist in Both Phases ==========*)
-  | Tany
+  | Tany : TanySentinel.t -> 'phase ty_
+  | Terr
+
   | Tnonnull
+
   (* A dynamic type is a special type which sometimes behaves as if it were a
    * top type; roughly speaking, where a specific value of a particular type is
    * expected and that type is dynamic, anything can be given. We call this
@@ -130,7 +148,6 @@ and _ ty_ =
    * See tests in typecheck/dynamic/ for more examples.
    *)
   | Tdynamic
-  | Terr
 
   (* Nullable, called "option" in the ML parlance. *)
   | Toption : 'phase ty -> 'phase ty_
@@ -154,13 +171,13 @@ and _ ty_ =
     : shape_kind * ('phase shape_field_type Nast.ShapeMap.t)
       -> 'phase ty_
 
-  (*========== Below Are Types That Cannot Be Declared In User Code ==========*)
-
   (* A type variable (not to be confused with a type parameter).
    * It represents a type that is "unknown" and must be inferred by Hack's
    * constraint-based type inference engine.
    *)
-  | Tvar : Ident.t -> locl ty_
+  | Tvar : Ident.t -> 'phase ty_
+
+  (*========== Below Are Types That Cannot Be Declared In User Code ==========*)
 
   (* The type of an opaque type (e.g. a "newtype" outside of the file where it
    * was defined). They are "opaque", which means that they only unify with
@@ -230,6 +247,21 @@ and _ ty_ =
    * Implements valid destructuring operations via subtyping *)
   | Tdestructure : locl ty list -> locl ty_
 
+  (* Typing of Pocket Universe Expressions
+   * - first parameter is the enclosing class
+   * - second parameter is the name of the Pocket Universe Enumeration
+   * - third parameter is  either Pu_plain (the enumeration as the set of
+   *   all its atoms) or Pu_atom (a specific atom in the enumeration)
+   *)
+  | Tpu: locl ty * Nast.sid * pu_kind -> locl ty_
+
+  (* Access to a Pocket Universe Expression or Atom, denoted by
+   * Foo:@Bar or Foo:@Bar:@X.
+   * It might be unresolved at first (e.g. if Foo is a generic variable).
+   * Will be refined to Tpu once typechecking is successful
+   *)
+  | Tpu_access : 'a ty * Nast.sid -> 'a ty_
+
 and array_kind =
   (* Those three types directly correspond to their decl level counterparts:
    * array, array<_> and array<_, _> *)
@@ -277,14 +309,14 @@ and abstract_kind =
  *)
 and dependent_type =
   (* Type that is the subtype of the late bound type within a class. *)
-  [ `this
+  | DTthis
   (* A class name, new type, or generic, i.e.
    *
    * abstract class C { abstract const type T }
    *
    * The type C::T is (`cls '\C', ['T'])
    *)
-  | `cls of string
+  | DTcls of string
   (* A reference to some expression. For example:
    *
    *  $x->foo()
@@ -292,8 +324,7 @@ and dependent_type =
    *  The expression $x would have a reference Ident.t
    *  The expression $x->foo() would have a different one
    *)
-  | `expr of Ident.t
-  ]
+  | DTexpr of Ident.t
 
 and taccess_type = decl ty * Nast.sid list
 
@@ -354,7 +385,7 @@ and 'phase fun_type = {
   ft_tparams    : ('phase tparam) list * fun_tparams_kind;
   ft_where_constraints : 'phase where_constraint list  ;
   ft_params     : 'phase fun_params   ;
-  ft_ret        : 'phase ty           ;
+  ft_ret        : 'phase possibly_enforced_ty ;
   (* Carries through the sync/async information from the aast *)
   ft_fun_kind   : Ast_defs.fun_kind        ;
   ft_reactive   : reactivity          ;
@@ -385,10 +416,16 @@ and param_rx_annotation =
   | Param_rx_var
   | Param_rx_if_impl of decl ty
 
+and 'phase possibly_enforced_ty = {
+  (* True if consumer of this type enforces it at runtime *)
+  et_enforced : bool;
+  et_type : 'phase ty;
+}
+
 and 'phase fun_param = {
   fp_pos  : Pos.t;
   fp_name : string option;
-  fp_type : 'phase ty;
+  fp_type : 'phase possibly_enforced_ty;
   fp_kind : param_mode;
   fp_accept_disposable : bool;
   fp_mutability           : param_mutability option;
@@ -491,6 +528,7 @@ and class_type = {
   tc_where_constraints   : decl where_constraint list;
   tc_consts              : class_const SMap.t;
   tc_typeconsts          : typeconst_type SMap.t;
+  tc_pu_enums            : pu_enum_type SMap.t;
   tc_props               : class_elt SMap.t;
   tc_sprops              : class_elt SMap.t;
   tc_methods             : class_elt SMap.t;
@@ -521,7 +559,20 @@ and typeconst_type = {
   ttc_type        : decl ty option;
   ttc_origin      : string;
   ttc_enforceable : Pos.t * bool;
-  ttc_disallow_php_arrays : Pos.t option;
+  ttc_reifiable : Pos.t option;
+}
+
+and pu_enum_type = {
+  tpu_name : Nast.sid;
+  tpu_is_final : bool;
+  tpu_case_types : Nast.sid SMap.t;
+  tpu_case_values : (Nast.sid * decl ty) SMap.t;
+  tpu_members: pu_member_type SMap.t;
+}
+
+and pu_member_type = {
+  tpum_atom: Nast.sid;
+  tpum_types: (Nast.sid * decl ty) SMap.t;
 }
 
 and enum_type = {
@@ -594,6 +645,11 @@ let has_expanded {type_expansions; _} x =
 (* The identifier for this *)
 let this = Local_id.make_scoped "$this"
 
+(* This should be the ONLY way that Tany is constructed anywhere in the
+ * codebase. *)
+let make_tany () =
+  Tany TanySentinel.value
+
 let arity_min ft_arity : int = match ft_arity with
   | Fstandard (min, _) | Fvariadic (min, _) | Fellipsis (min, _) -> min
 
@@ -611,9 +667,9 @@ module AbstractKind = struct
     | AKdependent dt ->
        let dt =
          match dt with
-         | `this -> SN.Typehints.this
-         | `cls c -> c
-         | `expr i ->
+         | DTthis -> SN.Typehints.this
+         | DTcls c -> c
+         | DTexpr i ->
              let display_id = Reason.get_expr_display_id i in
              "<expr#"^string_of_int display_id^">" in
        dt
@@ -668,7 +724,7 @@ let is_suggest_mode = ref false
 (* Ordinal value for type constructor, for localized types *)
 let ty_con_ordinal ty =
   match snd ty with
-  | Tany | Terr -> 0
+  | Tany _ | Terr -> 0
   | Toption (_, Tnonnull) -> 1
   | Tnonnull -> 2
   | Tdynamic -> 3
@@ -686,6 +742,8 @@ let ty_con_ordinal ty =
   | Tclass _ -> 15
   | Tarraykind _ -> 16
   | Tdestructure _ -> 17
+  | Tpu _ -> 18
+  | Tpu_access _ -> 19
 
 let array_kind_con_ordinal ak =
   match ak with
@@ -711,6 +769,8 @@ let abstract_kind_con_ordinal ak =
  * aliases.
  * But if ty_compare ty1 ty2 = 0, then the types must not be distinguishable
  * by any typing rules.
+ *
+ * TODO(T52611361): Make this comparison exhaustive on ty1 to remove the _ catchall
  *)
 let rec ty_compare ?(normalize_lists = false) ty1 ty2 =
   let rec ty_compare ty1 ty2 =
@@ -722,6 +782,8 @@ let rec ty_compare ?(normalize_lists = false) ty1 ty2 =
         ty_compare ty ty2
       | Tfun fty, Tfun fty2 ->
         tfun_compare fty fty2
+      | Tdestructure tyl1, Tdestructure tyl2 ->
+        tyl_compare ~sort:false tyl1 tyl2
       | Tunion tyl1, Tunion tyl2
       | Tintersection tyl1, Tintersection tyl2 ->
         tyl_compare ~sort:normalize_lists ~normalize_lists tyl1 tyl2
@@ -779,7 +841,7 @@ let rec ty_compare ?(normalize_lists = false) ty1 ty2 =
       | n -> n
 
     and tfun_compare fty1 fty2 =
-      begin match ty_compare fty1.ft_ret fty2.ft_ret with
+      begin match possibly_enforced_ty_compare fty1.ft_ret fty2.ft_ret with
       | 0 ->
         begin match ft_params_compare fty1.ft_params fty2.ft_params with
         | 0 ->
@@ -821,14 +883,18 @@ and tyl_compare ~sort ?(normalize_lists = false) tyl1 tyl2 =
     else (tyl1, tyl2) in
   List.compare (ty_compare ~normalize_lists) tyl1 tyl2
 
-and ft_params_compare ?(normalize_lists = false) params1 params2 =
-  let ty_compare = ty_compare ~normalize_lists in
+and possibly_enforced_ty_compare ?(normalize_lists = false) ety1 ety2 =
+  begin match ty_compare ~normalize_lists ety1.et_type ety2.et_type with
+  | 0 -> Bool.compare ety1.et_enforced ety2.et_enforced
+  | n -> n
+end
 
+and ft_params_compare ?(normalize_lists = false) params1 params2 =
   let rec ft_params_compare params1 params2 =
     List.compare ft_param_compare params1 params2
 
   and ft_param_compare param1 param2 =
-    match ty_compare param1.fp_type param2.fp_type with
+    match possibly_enforced_ty_compare ~normalize_lists param1.fp_type param2.fp_type with
     | 0 ->
       compare
         (param1.fp_kind, param1.fp_accept_disposable, param1.fp_mutability)

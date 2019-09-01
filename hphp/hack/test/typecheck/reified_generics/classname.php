@@ -2,6 +2,7 @@
 
 class C<reify T> {}
 class D {}
+class E<T> {}
 
 type Tx = int;
 type Ty = classname<D>;
@@ -9,5 +10,7 @@ type Tz = typename<Tx>;
 
 type Ta = C<classname<D>>;
 type Tb = C<typename<Tx>>;
-type Tc = C<Ty>; // TODO make reified check a type validator
-type Td = C<Tz>; // TODO Make reified check a type validator
+type Tc = C<Ty>;
+type Td = C<Tz>;
+type Te = C<E<classname<D>>>;
+type Tf = C<E<typename<Tx>>>;

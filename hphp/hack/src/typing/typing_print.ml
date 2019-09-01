@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -14,6 +14,7 @@
 
 open Core_kernel
 open Typing_defs
+open Typing_env_types
 open Typing_logic
 open Utils
 
@@ -54,7 +55,7 @@ module Suggest = struct
     | Tunion _               -> "..."
     | Tintersection _               -> "..."
     | Ttuple (l)             -> "("^list l^")"
-    | Tany                   -> "..."
+    | Tany _                 -> "..."
     | Terr                   -> "..."
     | Tmixed                 -> "mixed"
     | Tnonnull               -> "nonnull"
@@ -96,6 +97,14 @@ module Suggest = struct
               ~f:(fun acc (_, sid) -> acc^"::"^sid)
               ~init:(strip_ns x)
         )
+    | Tpu (ty, (_, enum), kind) ->
+      let suffix = match kind with
+        | Pu_plain -> ""
+        | Pu_atom atom -> atom
+      in
+      type_ ty ^ ":@" ^ enum ^ suffix
+    | Tpu_access (ty, (_, access)) ->
+      type_ ty ^ ":@" ^ access
 
   and list: type a. a ty list -> string = function
     | []      -> ""
@@ -113,6 +122,7 @@ module Suggest = struct
     | Nast.Tresource -> "resource"
     | Nast.Tarraykey -> "arraykey (int/string)"
     | Nast.Tnoreturn -> "noreturn"
+    | Nast.Tatom s -> ":@ " ^ s
 
 end
 
@@ -181,7 +191,7 @@ module Full = struct
     fun to_doc st env x ->
     let k: type b. b ty -> _ = fun x -> ty to_doc st env x in
     match x with
-    | Tany -> text "_"
+    | Tany _ -> text "_"
     | Terr -> text (if !debug_mode then "err" else "_")
     | Tthis -> text SN.Typehints.this
     | Tmixed -> text "mixed"
@@ -224,7 +234,7 @@ module Full = struct
     | Tprim x -> text @@ prim x
     | Tvar n ->
       let _, n' = Env.get_var env n in
-      let _, ety = Env.expand_type env (Reason.Rnone, x) in
+      let _, ety = Env.expand_type env (Reason.Rnone, (Tvar n)) in
       begin match ety with
         (* For unsolved type variables, always show the type variable *)
       | (_, Tvar _) ->
@@ -250,7 +260,7 @@ module Full = struct
         text "function";
         fun_type to_doc st env ft;
         text ")";
-        (match ft.ft_ret with
+        (match ft.ft_ret.et_type with
           | (Reason.Rdynamic_yield _, _) -> Space ^^ text "[DynamicYield]"
           | _ -> Nothing)
       ]
@@ -276,9 +286,9 @@ module Full = struct
     | Tdestructure tyl -> list "list(" k tyl ")"
     | Tanon (_, id) ->
       begin match Env.get_anonymous env id with
-      | Some { Env. rx = Reactive _; is_coroutine = true; _ } -> text "[coroutine rx fun]"
-      | Some { Env. rx = Nonreactive; is_coroutine = true; _ } -> text "[coroutine fun]"
-      | Some { Env. rx = Reactive _; is_coroutine = false; _ } -> text "[rx fun]"
+      | Some { rx = Reactive _; is_coroutine = true; _ } -> text "[coroutine rx fun]"
+      | Some { rx = Nonreactive; is_coroutine = true; _ } -> text "[coroutine fun]"
+      | Some { rx = Reactive _; is_coroutine = false; _ } -> text "[rx fun]"
       | _ -> text "[fun]"
       end
     | Tunion [] ->
@@ -379,6 +389,14 @@ module Full = struct
         | Open_shape -> fields @ [text "..."]
       in
         list "shape(" id fields ")"
+    | Tpu (ty', (_, enum), kind) ->
+      let suffix = match kind with
+        | Pu_atom atom -> atom
+        | Pu_plain -> ""
+      in
+      k ty' ^^ text (":@" ^ enum ^ suffix)
+    | Tpu_access (ty', (_, access)) ->
+      k ty' ^^ text (":@" ^ access)
 
   and prim x =
     match x with
@@ -392,6 +410,7 @@ module Full = struct
     | Nast.Tresource -> "resource"
     | Nast.Tarraykey -> "arraykey"
     | Nast.Tnoreturn -> "noreturn"
+    | Nast.Tatom s -> ":@" ^ s
 
   and fun_type: type a. _ -> _ -> _ -> a fun_type -> _ =
     fun to_doc st env ft ->
@@ -402,8 +421,8 @@ module Full = struct
       | Fellipsis _ -> Some (text "...")
       | Fvariadic (_, p) ->
         Some (Concat [
-          (match p.fp_type with
-          | _, Tany -> Nothing
+          (match p.fp_type.et_type with
+          | _, Tany _ -> Nothing
           | _ -> fun_param to_doc st env p
           );
           text "..."
@@ -424,7 +443,14 @@ module Full = struct
       );
       list "(" id params "):";
       Space;
-      ty to_doc st env ft.ft_ret
+      possibly_enforced_ty to_doc st env ft.ft_ret
+    ]
+
+  and possibly_enforced_ty: type a. _ -> _ -> _ -> a possibly_enforced_ty -> _ =
+    fun to_doc st env { et_enforced; et_type; } ->
+    Concat [
+      (if show_verbose env && et_enforced then text "enforced" ^^ Space else Nothing);
+      ty to_doc st env et_type
     ]
 
   and fun_param: type a. _ -> _ -> _ -> a fun_param -> _ =
@@ -435,10 +461,10 @@ module Full = struct
       | _ -> Nothing
       );
       match fp_name, fp_type with
-      | None, _ -> ty to_doc st env fp_type
-      | Some param_name, (_, Tany) -> text param_name
+      | None, _ -> possibly_enforced_ty to_doc st env fp_type
+      | Some param_name, { et_type = (_, Tany _); _ } -> text param_name
       | Some param_name, _ ->
-          Concat [ty to_doc st env fp_type; Space; text param_name]
+          Concat [possibly_enforced_ty to_doc st env fp_type; Space; text param_name]
     ]
 
   and tparam: type a. _ -> _ -> _ -> a Typing_defs.tparam -> _ =
@@ -462,7 +488,6 @@ module Full = struct
           | Ast_defs.Constraint_as -> "as"
           | Ast_defs.Constraint_super -> "super"
           | Ast_defs.Constraint_eq -> "="
-          | Ast_defs.Constraint_pu_from -> "from"
           );
         Space;
         ty to_doc st env cty
@@ -599,13 +624,14 @@ module ErrorString = struct
     | Nast.Tresource   -> "a resource"
     | Nast.Tarraykey   -> "an array key (int | string)"
     | Nast.Tnoreturn   -> "noreturn (throws or exits)"
+    | Nast.Tatom s     -> "a PU atom " ^ s
 
   let varray = "a varray"
   let darray = "a darray"
   let varray_or_darray = "a varray_or_darray"
 
   let rec type_: _ -> locl ty_ -> _ = function env -> function
-    | Tany               -> "an untyped value"
+    | Tany _             -> "an untyped value"
     | Terr               -> "a type error"
     | Tdynamic           -> "a dynamic value"
     | Tunion l           -> union env l
@@ -643,6 +669,31 @@ module ErrorString = struct
     | Tshape _           -> "a shape"
     | Tdestructure l     ->
       "a list destructuring assignment of length " ^ string_of_int (List.length l)
+    | Tpu ((_, ty), (_, enum), kind) ->
+      let ty = match ty with
+        | Tclass ((_, x), _, tyl) -> strip_ns x ^ inst env tyl
+        | _ -> "..."
+      in
+      let prefix = match kind with
+        | Pu_atom atom -> "member " ^ atom
+        | Pu_plain -> "a member"
+      in
+      prefix ^ " of pocket universe " ^ ty ^ ":@" ^ enum
+    | Tpu_access ((_, ty), (_, access)) ->
+      let ty = match ty with
+        | Tpu ((_, ty), (_, enum), kind) ->
+          let ty = match ty with
+            | Tclass ((_, x), _, tyl) -> strip_ns x ^ inst env tyl
+            | _ -> "..."
+          in
+          let kind = match kind with
+            | Pu_plain -> ""
+            | Pu_atom atom -> atom
+          in
+          ty ^ ":@" ^ enum ^ kind
+        | _ -> "..."
+      in
+      "pocket universe dependent type " ^ ty ^ ":@" ^ access
 
   and array: type a. a ty option * a ty option -> _ = function
     | None, None     -> "an untyped array"
@@ -665,9 +716,9 @@ module ErrorString = struct
     | AKgeneric s, _ when AbstractKind.is_generic_dep_ty s ->
       "the expression dependent type "^s
     | AKgeneric _, _ -> "a value of generic type "^x
-    | AKdependent (`cls c), Some ty ->
+    | AKdependent (DTcls c), Some ty ->
         to_string env ty^" (known to be exactly the class '"^strip_ns c^"')"
-    | AKdependent (`this | `expr _), _ ->
+    | AKdependent (DTthis | DTexpr _), _ ->
         "the expression dependent type "^x
     | AKdependent _, _ ->
         "the type '"^x^"'"
@@ -724,6 +775,7 @@ let prim = function
   | Nast.Tresource -> "resource"
   | Nast.Tarraykey -> "arraykey"
   | Nast.Tnoreturn -> "noreturn"
+  | Nast.Tatom s -> s
 
 let param_mode_to_string = function
    | FPnormal -> "normal"
@@ -736,7 +788,7 @@ let string_to_param_mode = function
   | "inout" -> Some FPinout
   | _ -> None
 
-let rec from_type: type a. Typing_env.env -> a ty -> json =
+let rec from_type: type a. env -> a ty -> json =
   function env -> function ty ->
   (* Helpers to construct fields that appear in JSON rendering of type *)
   let kind k = ["kind", JSON_String k] in
@@ -773,8 +825,8 @@ let rec from_type: type a. Typing_env.env -> a ty -> json =
     | None -> []
     | Some ty -> ["as", from_type env ty] in
   match snd ty with
-  | Tvar _ ->
-    let _, ty = Typing_env.expand_type env ty in
+  | Tvar n ->
+    let _, ty = Typing_env.expand_type env (fst ty, Tvar n) in
     begin match snd ty with
     | Tvar _ -> obj @@ kind "var"
     | _ -> from_type env ty
@@ -785,7 +837,7 @@ let rec from_type: type a. Typing_env.env -> a ty -> json =
     obj @@ kind "this"
   | Ttuple tys ->
     obj @@ kind "tuple" @ is_array false @ args tys
-  | Tany | Terr ->
+  | Tany _ | Terr ->
     obj @@ kind "any"
   | Tmixed ->
     obj @@ kind "mixed"
@@ -803,13 +855,13 @@ let rec from_type: type a. Typing_env.env -> a ty -> json =
     obj @@ kind "enum" @ name s @ as_type opt_ty
   | Tabstract (AKnewtype (s, tys), opt_ty) ->
     obj @@ kind "newtype" @ name s @ args tys @ as_type opt_ty
-  | Tabstract (AKdependent (`cls c), opt_ty) ->
+  | Tabstract (AKdependent (DTcls c), opt_ty) ->
     obj @@ kind "path" @ ["type", obj @@ kind "class" @ name c @ args []]
       @ as_type opt_ty
-  | Tabstract (AKdependent (`expr _), opt_ty) ->
+  | Tabstract (AKdependent (DTexpr _), opt_ty) ->
     obj @@ kind "path" @ ["type", obj @@ kind "expr"]
       @ as_type opt_ty
-  | Tabstract (AKdependent (`this), opt_ty) ->
+  | Tabstract (AKdependent (DTthis), opt_ty) ->
     obj @@ kind "path" @ ["type", obj @@ kind "this"]
       @ as_type opt_ty
   | Toption (_, Tnonnull) ->
@@ -857,9 +909,9 @@ let rec from_type: type a. Typing_env.env -> a ty -> json =
       then kind "coroutine"
       else kind "function" in
     let callconv cc = ["callConvention", JSON_String (param_mode_to_string cc)] in
-    let param fp = obj @@ callconv fp.fp_kind @ typ fp.fp_type in
+    let param fp = obj @@ callconv fp.fp_kind @ typ fp.fp_type.et_type in
     let params fps = ["params", JSON_Array (List.map fps param)] in
-    obj @@ fun_kind @ params ft.ft_params @ result ft.ft_ret
+    obj @@ fun_kind @ params ft.ft_params @ result ft.ft_ret.et_type
   | Tanon _ ->
     obj @@ kind "anon"
   | Tdarray (ty1, ty2) ->
@@ -884,6 +936,15 @@ let rec from_type: type a. Typing_env.env -> a ty -> json =
     obj @@ kind "array" @ empty true @ args []
   | Tdestructure tyl ->
     obj @@ kind "union" @ args tyl
+  | Tpu (base, enum, pukind) ->
+    let pukind = match pukind with
+      | Pu_plain -> string_ "plain"
+      | Pu_atom atom -> JSON_Array [string_ "atom"; string_ atom]
+    in
+    obj @@ kind "pocket universe" @
+      args [base] @ name (snd enum) @ ["pukind", pukind]
+  | Tpu_access (base, access) ->
+    obj @@ kind "pocket universe access" @ args [base] @ name (snd access)
 
 type 'a deserialized_result = ('a ty, deserialization_error) result
 
@@ -931,7 +992,7 @@ let to_locl_ty
         ~keytrace
 
     | "any" ->
-      ty Tany
+      ty (Typing_defs.make_tany ())
     | "mixed" ->
       ty (Toption (reason, Tnonnull))
     | "nonnull" ->
@@ -1005,7 +1066,7 @@ let to_locl_ty
         get_string "name" (type_json, type_keytrace)
           >>= fun (class_name, _class_name_keytrace) ->
         aux_as json ~keytrace >>= fun as_opt ->
-        ty (Tabstract (AKdependent (`cls class_name), as_opt))
+        ty (Tabstract (AKdependent (DTcls class_name), as_opt))
 
       | "expr" ->
         not_supported
@@ -1014,7 +1075,7 @@ let to_locl_ty
 
       | "this" ->
         aux_as json ~keytrace >>= fun as_opt ->
-        ty (Tabstract (AKdependent `this, as_opt))
+        ty (Tabstract (AKdependent DTthis, as_opt))
 
       | path_kind ->
         deserialization_error
@@ -1263,7 +1324,7 @@ let to_locl_ty
           aux param_type ~keytrace:param_type_keytrace
             >>= fun param_type ->
           Ok {
-            fp_type = param_type;
+            fp_type = { et_type = param_type; et_enforced = false; };
             fp_kind = callconv;
 
             (* Dummy values: these aren't currently serialized. *)
@@ -1282,7 +1343,7 @@ let to_locl_ty
       ty (Tfun {
         ft_is_coroutine;
         ft_params;
-        ft_ret;
+        ft_ret = { et_type = ft_ret; et_enforced = false; };
 
         (* Dummy values: these aren't currently serialized. *)
         ft_pos = Pos.none;
@@ -1393,7 +1454,6 @@ module PrintClass = struct
     | (Ast_defs.Constraint_as, ty) -> "as " ^ (Full.to_string_decl tcopt ty)
     | (Ast_defs.Constraint_eq, ty) -> "= " ^ (Full.to_string_decl tcopt ty)
     | (Ast_defs.Constraint_super, ty) -> "super " ^ (Full.to_string_decl tcopt ty)
-    | (Ast_defs.Constraint_pu_from, ty) -> "from " ^ (Full.to_string_decl tcopt ty)
 
   let variance = function
     | Ast_defs.Covariant -> "+"
@@ -1455,7 +1515,7 @@ module PrintClass = struct
     ttc_origin = origin;
     ttc_enforceable = (_, enforceable);
     ttc_visibility = _;
-    ttc_disallow_php_arrays = disallow_php_arrays;
+    ttc_reifiable = reifiable;
   } =
     let name = snd tc_name in
     let ty x = Full.to_string_decl tcopt x in
@@ -1471,7 +1531,7 @@ module PrintClass = struct
     in
     name^constraint_^type_^" (origin:"^origin^")" ^
       (if enforceable then " (enforceable)" else "")^
-      (if disallow_php_arrays <> None then " (PHP arrays disallowed)" else "")
+      (if reifiable <> None then " (reifiable)" else "")
 
   let typeconsts tcopt m =
     Sequence.fold m ~init:"" ~f:begin fun acc (_, v) ->
@@ -1560,7 +1620,7 @@ end
 
 module PrintFun = struct
 
-  let fparam tcopt { fp_name = sopt; fp_type = ty; _ } =
+  let fparam tcopt { fp_name = sopt; fp_type = { et_type = ty; _ }; _ } =
     let s = match sopt with
       | None -> "[None]"
       | Some s -> s in
@@ -1584,7 +1644,7 @@ module PrintFun = struct
     | FTKtparams -> "FTKtparams"
     | FTKinstantiated_targs -> "FTKinstantiated_targs" in
     let ft_params = fparams tcopt f.ft_params in
-    let ft_ret = Full.to_string_decl tcopt f.ft_ret in
+    let ft_ret = Full.to_string_decl tcopt f.ft_ret.et_type in
     "ft_pos: "^ft_pos^"\n"^
     "ft_abstract: "^ft_abstract^"\n"^
     "ft_arity: "^ft_arity^"\n"^

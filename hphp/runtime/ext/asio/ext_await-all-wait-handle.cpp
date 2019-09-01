@@ -69,6 +69,17 @@ namespace {
       "Expected dependencies to be a collection of WaitHandle instances");
   }
 
+  [[noreturn]] NEVER_INLINE
+  void failNotContainer() {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      "Expected dependencies to be a container");
+  }
+
+  void failInvalidContainer() {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      "Dependencies cannot be a set-like container or Pair");
+  }
+
   c_StaticWaitHandle* returnEmpty() {
     return c_StaticWaitHandle::CreateSucceeded(make_tv<KindOfNull>());
   }
@@ -202,6 +213,10 @@ Object HHVM_STATIC_METHOD(AwaitAllWaitHandle, fromArray,
       // Shouldn't get Hack arrays
       not_reached();
 
+    case ArrayData::kRecordKind:
+      // TODO: T47449944
+      not_reached();
+
     case ArrayData::kNumKinds:
       not_reached();
   }
@@ -260,6 +275,56 @@ Object HHVM_STATIC_METHOD(AwaitAllWaitHandle, fromVector,
     }
   }
   failVector();
+}
+
+Object HHVM_STATIC_METHOD(AwaitAllWaitHandle, fromContainer,
+                          const Variant& dependencies) {
+  switch (dependencies.getType()) {
+    case KindOfPersistentVec:
+    case KindOfVec:
+      return c_AwaitAllWaitHandle_ns_fromVec(self_, dependencies.asCArrRef());
+    case KindOfPersistentDict:
+    case KindOfDict:
+      return c_AwaitAllWaitHandle_ns_fromDict(self_, dependencies.asCArrRef());
+    case KindOfPersistentShape:
+    case KindOfShape:
+    case KindOfPersistentArray:
+    case KindOfArray:
+      return c_AwaitAllWaitHandle_ns_fromArray(self_, dependencies.asCArrRef());
+    case KindOfObject: {
+      auto obj = dependencies.getObjectData();
+      if (LIKELY(obj->isCollection())) {
+        if (isVectorCollection(obj->collectionType())) {
+          return c_AwaitAllWaitHandle_ns_fromVector(self_, dependencies);
+        } else if (isMapCollection(obj->collectionType())) {
+          return c_AwaitAllWaitHandle_ns_fromMap(self_, dependencies);
+        }
+        failInvalidContainer();
+      }
+      failNotContainer();
+      break;
+    }
+    case KindOfPersistentKeyset:
+    case KindOfKeyset:
+      failInvalidContainer();
+      break;
+    case KindOfPersistentString:
+    case KindOfString:
+    case KindOfRecord:
+    case KindOfUninit:
+    case KindOfNull:
+    case KindOfBoolean:
+    case KindOfResource:
+    case KindOfInt64:
+    case KindOfRef:
+    case KindOfDouble:
+    case KindOfFunc:
+    case KindOfClass:
+    case KindOfClsMeth:
+      failNotContainer();
+      break;
+  }
+  not_reached();
 }
 
 void c_AwaitAllWaitHandle::initialize(context_idx_t ctx_idx) {
@@ -348,6 +413,7 @@ void AsioExtension::initAwaitAllWaitHandle() {
   AAWH_SME(fromMap);
   AAWH_SME(fromVector);
   AAWH_SME(setOnCreateCallback);
+  AAWH_SME(fromContainer);
 #undef AAWH_SME
   if (RuntimeOption::EvalHackArrDVArrs) {
     HHVM_STATIC_MALIAS(HH\\AwaitAllWaitHandle, fromDArray, AwaitAllWaitHandle, fromDict);

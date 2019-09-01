@@ -14,14 +14,6 @@
     buildMain))
 
 (library
-  (name client_ide_service)
-  (wrapped false)
-  (modules
-    clientIdeService)
-  (libraries
-    lwt))
-
-(library
   (name debug_stubs)
   (wrapped false)
   (modules
@@ -31,10 +23,9 @@
     full_fidelity))
 
 (library
-  (name rust_facts_ffi_stubs)
+  (name rust_ffi_stubs)
   (wrapped false)
-  (modules
-    rust_facts_ffi))
+  (modules ))
 
 (library
   (name hackc_parse_delegator_stubs)
@@ -98,17 +89,11 @@
     state_loader
     saved_state_loader
     state_loader_futures
+    state_loader_lwt
     xdb)
   (libraries
     hg
     server_monitor))
-
-(library
-  (name rust_parser_ffi_stubs)
-  (wrapped false)
-  (modules
-    rust_parser_ffi
-    rust_lazy_trivia_ffi))
 
 (library
   (name shared_lru_stubs)

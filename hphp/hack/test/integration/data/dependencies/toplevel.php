@@ -28,14 +28,26 @@ function g() : void {
   $b = new B();
 }
 
-function f(C $c): void  {
+function shallow_toplevel(C $c): void  {
   g();
 }
 
-function h<Tfirst, Tsecond>(D<Tfirst, Tsecond> $d, E<Tfirst> $e): int {
+function with_generics<Tfirst, Tsecond>(D<Tfirst, Tsecond> $d, E<Tfirst> $e): int {
   return generic<C>();
 }
 
-function with_types(Complex $c, shape('x' => int, 'y' => C) $pair) : Point {
+function with_typedefs(Complex $c, shape('x' => int, 'y' => C) $pair) : Point {
   return shape('x' => $pair['x'], 'y' => $c['first']);
 }
+
+function with_defaults(int $arg = 42, float $argf = 4.2): void {
+}
+
+function call_defaulted(int $arg): void {
+  with_defaults($arg);
+  with_defaults();
+}
+
+function nonexistent_dependency(BogusType $arg): void {}
+
+function builtin_argument_types(Exception $e, keyset<string> $k): void {}

@@ -391,9 +391,7 @@ constexpr bool operator>(Mem a, Mem b) {
   IRT(RDSHandle,   bits_t::bit<kRuntime+8>()) /* rds::Handle */         \
   IRT(Nullptr,     bits_t::bit<kRuntime+9>())                           \
   IRT(MIPropSPtr,  bits_t::bit<kRuntime+10>()) /* Ptr to MInstrPropState */ \
-  IRT(Smashable,   bits_t::bit<kRuntime+11>()) /* Smashable uint64_t */     \
-  IRT(FuncM,       bits_t::bit<kRuntime+12>()) /* Func* with the lowest */  \
-                                      /* bit set indicating magic call */
+  IRT(Smashable,   bits_t::bit<kRuntime+11>()) /* Smashable uint64_t */
   /* bits above this are unused */
 
 /*
@@ -414,7 +412,6 @@ constexpr bool operator>(Mem a, Mem b) {
   IRTX(Bottom,       Bottom, kBottom)                         \
   IRTX(Top,          Top,    kTop)                            \
   IRT(Ctx,                   kObj|kCctx)                      \
-  IRT(FuncMM,                kFunc|kFuncM)                    \
   IRTX(AnyObj,       Top,    kAnyObj)                         \
   IRTX(AnyArr,       Top,    kAnyArr)                         \
   IRTX(AnyShape,     Top,    kAnyShape)                       \
@@ -994,6 +991,10 @@ using OptType = folly::Optional<Type>;
 /*
  * Return the most refined Type that can be used to represent the type of a
  * live TypedValue or a RepoAuthType.
+ *
+ * For these methods, ctx may be null in general. propCls may be null during
+ * Class initialization, but only if the type-hints involved are not "this",
+ * "self", or other hints that use propCls. We always check this constraint.
  */
 Type typeFromTV(tv_rval tv, const Class* ctx);
 Type typeFromRAT(RepoAuthType ty, const Class* ctx);

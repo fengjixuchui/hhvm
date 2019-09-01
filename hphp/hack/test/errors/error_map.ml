@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2018, Facebook, Inc.
  * All rights reserved.
  *
@@ -10,22 +10,21 @@
 open Printf
 open Buffer
 
-module GenErr(M: Errors.Error_category) = struct
+module GenErr (M : Errors.Error_category) = struct
   let generate_errors buffer name =
     add_string buffer @@ sprintf "%s Errors:\n" name;
     for i = M.min to M.max do
       match M.of_enum i with
-      | Some err -> add_string buffer @@ sprintf "%s = %d\n" (M.show err) i;
-      | None -> ();
+      | Some err -> add_string buffer @@ sprintf "%s = %d\n" (M.show err) i
+      | None -> ()
     done;
     add_string buffer "\n"
-
 end
 
-module P = GenErr(Errors.Parsing)
-module N = GenErr(Errors.Naming)
-module NC = GenErr(Errors.NastCheck)
-module T = GenErr(Errors.Typing)
+module P = GenErr (Errors.Parsing)
+module N = GenErr (Errors.Naming)
+module NC = GenErr (Errors.NastCheck)
+module T = GenErr (Errors.Typing)
 
 let gen_error_map_content () : string =
   let buffer = create 4096 in
@@ -35,14 +34,15 @@ let gen_error_map_content () : string =
   T.generate_errors buffer "Typing";
   contents buffer
 
- (*
+(*
    Please modify the error map below if you have changed the error codes.
   *)
 
 let%expect_test "error_map" =
   let map = gen_error_map_content () in
   Printf.printf "%s\n" map;
-  [%expect {|
+  [%expect
+    {|
 Parsing Errors:
 FixmeFormat = 1001
 ParsingError = 1002
@@ -289,7 +289,7 @@ GenaExpectsArrayDEPRECATED = 4044
 GenericArrayStrict = 4045
 GenericStatic = 4046
 ImplementAbstract = 4047
-InterfaceFinal = 4048
+InterfaceFinalDEPRECATED = 4048
 InvalidShapeFieldConst = 4049
 InvalidShapeFieldLiteral = 4050
 InvalidShapeFieldName = 4051
@@ -337,7 +337,7 @@ StaticOverflowDEPRECATED = 4092
 RetiredError4093DEPRECATED = 4093
 ThisInStaticDEPRECATED = 4094
 ThisVarOutsideClass = 4095
-TraitFinal = 4096
+TraitFinalDEPRECATED = 4096
 TupleArityDEPRECATED = 4097
 TupleArityMismatchDEPRECATED = 4098
 TupleIndexTooLargeDEPRECATED = 4099
@@ -568,7 +568,7 @@ TypeConstraintViolation = 4323
 IndexTypeMismatch = 4324
 ExpectedStringlike = 4325
 TypeConstantMismatch = 4326
-TypeConstantRedeclaration = 4327
+TypeConstantRedeclarationDEPRECATED = 4327
 ConstantDoesNotMatchEnumType = 4328
 EnumConstraintMustBeArraykey = 4329
 EnumSubtypeMustHaveCompatibleConstraint = 4330
@@ -588,4 +588,6 @@ XhpAttributeValueDoesNotMatchHint = 4343
 TraitPropConstClass = 4344
 EnumUnderlyingTypeMustBeArraykey = 4345
 ClassGetReified = 4346
+RequireGenericExplicit = 4347
+ClassConstantTypeMismatch = 4348
   |}]

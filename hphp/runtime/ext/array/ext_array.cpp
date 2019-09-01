@@ -344,7 +344,10 @@ bool HHVM_FUNCTION(array_key_exists,
   switch (cell->m_type) {
     case KindOfUninit:
     case KindOfNull:
-      if (checkHACArrayKeyCast() && ad->useWeakKeys()) {
+      if (checkHACNullHackArrayKey() && ad->isHackArray()) {
+        raise_hackarr_compat_notice(
+          getHackArrCompatNullHackArrayKeyMsg()->data());
+      } else if (checkHACArrayKeyCast() && ad->useWeakKeys()) {
         raiseHackArrCompatImplicitArrayKey(cell);
       }
       return ad->useWeakKeys() && ad->exists(staticEmptyString());
@@ -980,7 +983,7 @@ TypedValue HHVM_FUNCTION(array_slice,
   }
 
   if (len <= 0) {
-    return make_tv<KindOfPersistentArray>(staticEmptyArray());
+    return make_tv<KindOfPersistentArray>(ArrayData::Create());
   }
 
   bool input_is_packed = isClsMethType(cell_input.m_type) ||
@@ -1170,8 +1173,14 @@ TypedValue HHVM_FUNCTION(array_unshift,
       ref_array->asArrRef().prepend(var);
     } else {
       {
-        auto newArray = Array::attach(
-          MixedArray::MakeReserveSame(cell_array->m_data.parr, 0));
+        Array newArray;
+        if (cell_array->m_data.parr->isHackArray()) {
+          newArray = Array::attach(
+            MixedArray::MakeReserveSame(cell_array->m_data.parr, 0));
+        } else {
+          newArray = Array::attach(
+            MixedArray::MakeReserveDArray(cell_array->m_data.parr->size()));
+        }
         newArray.append(var);
         if (!args.empty()) {
           auto pos_limit = args->iter_end();
@@ -1381,9 +1390,8 @@ int64_t HHVM_FUNCTION(count,
 }
 
 int64_t HHVM_FUNCTION(sizeof,
-                      const Variant& var,
-                      int64_t mode /* = 0 */) {
-  return HHVM_FN(count)(var, mode);
+                      const Variant& var) {
+  return HHVM_FN(count)(var, 0);
 }
 
 namespace {
@@ -1807,7 +1815,7 @@ TypedValue HHVM_FUNCTION(array_diff,
   }
   /* If container1 is empty, we can stop here and return the empty array */
   if (!getContainerSize(c1)) {
-    return make_tv<KindOfPersistentArray>(staticEmptyArray());
+    return make_tv<KindOfPersistentArray>(ArrayData::Create());
   }
   /* If all of the containers (except container1) are empty, we can just
      return container1 (converting it to an array if needed) */
@@ -2017,7 +2025,7 @@ TypedValue HHVM_FUNCTION(array_diff_key,
     return make_tv<KindOfNull>();
   }
   if (getContainerSize(c1) == 0) {
-    return make_tv<KindOfPersistentArray>(staticEmptyArray());
+    return make_tv<KindOfPersistentArray>(ArrayData::Create());
   }
   if (largestSize == 0) {
     if (isArrayLikeType(c1.m_type)) {
@@ -2416,7 +2424,7 @@ TypedValue HHVM_FUNCTION(array_intersect,
   /* If any of the containers were empty, we can stop here and return the
      empty array */
   if (!getContainerSize(c1) || !smallestSize) {
-    return make_tv<KindOfPersistentArray>(staticEmptyArray());
+    return make_tv<KindOfPersistentArray>(ArrayData::Create());
   }
 
   Array ret = Array::Create();
@@ -2471,7 +2479,7 @@ TypedValue HHVM_FUNCTION(array_intersect_key,
     return make_tv<KindOfNull>();
   }
   if ((getContainerSize(c1) == 0) || empty_arg) {
-    return make_tv<KindOfPersistentArray>(staticEmptyArray());
+    return make_tv<KindOfPersistentArray>(ArrayData::Create());
   }
 
   auto intersect_step = [](TypedValue left, TypedValue right) {
@@ -3272,6 +3280,89 @@ bool HHVM_FUNCTION(array_multisort,
   return Array::MultiSort(data);
 }
 
+bool HHVM_FUNCTION(array_multisort1,
+                   VRefParam arg1) {
+  return HHVM_FN(array_multisort)(arg1);
+}
+
+bool HHVM_FUNCTION(array_multisort2,
+                   VRefParam arg1,
+                   VRefParam arg2) {
+  return HHVM_FN(array_multisort)(arg1, arg2);
+}
+
+bool HHVM_FUNCTION(array_multisort3,
+                   VRefParam arg1,
+                   VRefParam arg2,
+                   VRefParam arg3) {
+  return HHVM_FN(array_multisort)(arg1, arg2, arg3);
+}
+
+bool HHVM_FUNCTION(array_multisort4,
+                   VRefParam arg1,
+                   VRefParam arg2,
+                   VRefParam arg3,
+                   VRefParam arg4) {
+  return HHVM_FN(array_multisort)(arg1, arg2, arg3, arg4);
+}
+
+bool HHVM_FUNCTION(array_multisort5,
+                   VRefParam arg1,
+                   VRefParam arg2,
+                   VRefParam arg3,
+                   VRefParam arg4,
+                   VRefParam arg5) {
+  return HHVM_FN(array_multisort)(arg1, arg2, arg3, arg4, arg5);
+}
+
+bool HHVM_FUNCTION(array_multisort6,
+                   VRefParam arg1,
+                   VRefParam arg2,
+                   VRefParam arg3,
+                   VRefParam arg4,
+                   VRefParam arg5,
+                   VRefParam arg6) {
+  return HHVM_FN(array_multisort)(arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+bool HHVM_FUNCTION(array_multisort7,
+                   VRefParam arg1,
+                   VRefParam arg2,
+                   VRefParam arg3,
+                   VRefParam arg4,
+                   VRefParam arg5,
+                   VRefParam arg6,
+                   VRefParam arg7) {
+  return HHVM_FN(array_multisort)(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+}
+
+bool HHVM_FUNCTION(array_multisort8,
+                   VRefParam arg1,
+                   VRefParam arg2,
+                   VRefParam arg3,
+                   VRefParam arg4,
+                   VRefParam arg5,
+                   VRefParam arg6,
+                   VRefParam arg7,
+                   VRefParam arg8) {
+  return HHVM_FN(array_multisort)(
+      arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
+}
+
+bool HHVM_FUNCTION(array_multisort9,
+                   VRefParam arg1,
+                   VRefParam arg2,
+                   VRefParam arg3,
+                   VRefParam arg4,
+                   VRefParam arg5,
+                   VRefParam arg6,
+                   VRefParam arg7,
+                   VRefParam arg8,
+                   VRefParam arg9) {
+  return HHVM_FN(array_multisort)(
+      arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
+}
+
 // HH\\dict
 Array HHVM_FUNCTION(HH_dict, const Variant& input) {
   return input.toDict();
@@ -3544,6 +3635,15 @@ struct ArrayExtension final : Extension {
     HHVM_FE(i18n_loc_get_error_code);
     HHVM_FE(hphp_array_idx);
     HHVM_FE(array_multisort);
+    HHVM_FE(array_multisort1);
+    HHVM_FE(array_multisort2);
+    HHVM_FE(array_multisort3);
+    HHVM_FE(array_multisort4);
+    HHVM_FE(array_multisort5);
+    HHVM_FE(array_multisort6);
+    HHVM_FE(array_multisort7);
+    HHVM_FE(array_multisort8);
+    HHVM_FE(array_multisort9);
     HHVM_FALIAS(HH\\dict, HH_dict);
     HHVM_FALIAS(HH\\vec, HH_vec);
     HHVM_FALIAS(HH\\keyset, HH_keyset);

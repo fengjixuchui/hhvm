@@ -67,6 +67,7 @@ TRACE_SET_MOD(hhir);
 #define DKeysetLastElem   HasDest
 #define DArrPacked     HasDest
 #define DArrMixed      HasDest
+#define DArrRecord     HasDest
 #define DVArr          HasDest
 #define DVArrOrNull    HasDest
 #define DDArr          HasDest
@@ -145,6 +146,7 @@ OpInfo g_opInfo[] = {
 #undef DKeysetLastElem
 #undef DArrPacked
 #undef DArrMixed
+#undef DArrRecord
 #undef DVArr
 #undef DVArrOrNull
 #undef DDArr
@@ -307,6 +309,7 @@ bool opcodeMayRaise(Opcode opc) {
 
   case IsTypeStruct:
     return RuntimeOption::EvalHackArrCompatIsArrayNotices ||
+           RuntimeOption::EvalHackArrCompatTypeHintNotices ||
            RuntimeOption::EvalIsExprEnableUnresolvedWarning ||
            RuntimeOption::EvalIsVecNotices;
 
@@ -428,7 +431,6 @@ bool opcodeMayRaise(Opcode opc) {
   case IterNext:
   case IterNextK:
   case KeysetGet:
-  case LdArrFuncCtx:
   case LdCls:
   case LdClsCached:
   case LdClsCtor:
@@ -467,6 +469,7 @@ bool opcodeMayRaise(Opcode opc) {
   case NeqVec:
   case NewKeysetArray:
   case NewRecord:
+  case NewRecordArray:
   case OODeclExists:
   case OrdStrIdx:
   case PrintBool:
@@ -518,6 +521,7 @@ bool opcodeMayRaise(Opcode opc) {
   case ThrowAsTypeStructException:
   case ThrowArrayIndexException:
   case ThrowArrayKeyException:
+  case ThrowCallReifiedFunctionWithoutGenerics:
   case ThrowDivisionByZeroError:
   case ThrowDivisionByZeroException:
   case ThrowHasThisNeedStatic:
@@ -573,7 +577,6 @@ bool opcodeMayRaise(Opcode opc) {
   case AssertNonNull:
   case AssertStk:
   case AssertType:
-  case AssertARFunc:
   case AsyncFuncRet:
   case AsyncFuncRetSlow:
   case AsyncSwitchFast:
@@ -582,13 +585,11 @@ bool opcodeMayRaise(Opcode opc) {
   case Box:
   case BoxPtr:
   case Ceil:
-  case CheckARMagicFlag:
   case CheckArrayCOW:
   case CheckCold:
   case CheckCtxThis:
   case CheckDArray:
   case CheckDictOffset:
-  case CheckFuncMMNonMagic:
   case CheckInit:
   case CheckInitMem:
   case CheckKeysetOffset:
@@ -731,7 +732,6 @@ bool opcodeMayRaise(Opcode opc) {
   case FinishMemberOp:
   case Floor:
   case FuncCred:
-  case FuncGuard:
   case FuncHasAttr:
   case FwdCtxStaticCall:
   case GenericRetDecRefs:
@@ -805,8 +805,6 @@ bool opcodeMayRaise(Opcode opc) {
   case KillARReifiedGenerics:
   case LdAFWHActRec:
   case LdARCtx:
-  case LdARFuncPtr:
-  case LdARInvName:
   case LdARNumArgsAndFlags:
   case LdARNumParams:
   case LdARReifiedGenerics:
@@ -839,7 +837,6 @@ bool opcodeMayRaise(Opcode opc) {
   case LdElem:
   case LdFuncCls:
   case LdFuncFromClsMeth:
-  case LdFuncMFunc:
   case LdFuncNumParams:
   case LdFuncName:
   case LdFuncRxLevel:
@@ -956,14 +953,15 @@ bool opcodeMayRaise(Opcode opc) {
   case NSameStr:
   case OrdStr:
   case OrInt:
-  case PackMagicArgs:
   case PairIsset:
   case ProfileArrayKind:
+  case ProfileCall:
   case ProfileDictAccess:
   case ProfileInstanceCheck:
   case ProfileKeysetAccess:
   case ProfileMethod:
   case ProfileMixedArrayAccess:
+  case ProfileProp:
   case ProfileSubClsCns:
   case ProfileSwitchDest:
   case ProfileType:
@@ -984,8 +982,6 @@ bool opcodeMayRaise(Opcode opc) {
   case Shr:
   case SpillFrame:
   case Sqrt:
-  case StARInvName:
-  case StARNumArgsAndFlags:
   case StArResumeAddr:
   case StClosureArg:
   case StClosureCtx:

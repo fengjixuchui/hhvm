@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2018, Facebook, Inc.
  * All rights reserved.
  *
@@ -8,4 +8,5 @@
  *)
 
 let parse_file _ _ _ = None
+
 let extract_facts _ _ = None

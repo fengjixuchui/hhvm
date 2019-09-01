@@ -47,22 +47,36 @@ Variant HHVM_FUNCTION(preg_grep, const String& pattern, const Variant& input,
 
 TypedValue HHVM_FUNCTION(preg_match,
                          StringArg pattern, StringArg subject,
-                         OutputArg matches /* = null */,
                          int flags /* = 0 */, int offset /* = 0 */) {
   return tvReturn(preg_match(pattern.get(), subject.get(),
-                             matches.get() ? matches->var() : nullptr,
-                             flags, offset));
+                             nullptr, flags, offset));
+}
+
+TypedValue HHVM_FUNCTION(preg_match_with_matches,
+                         StringArg pattern, StringArg subject,
+                         Variant& matches,
+                         int flags /* = 0 */, int offset /* = 0 */) {
+  return tvReturn(preg_match(pattern.get(), subject.get(),
+                             &matches, flags, offset));
 }
 
 TypedValue HHVM_FUNCTION(preg_match_all,
                          StringArg pattern,
                          StringArg subject,
-                         OutputArg matches /* = null */,
                          int flags /* = 0 */,
                          int offset /* = 0 */) {
   return tvReturn(preg_match_all(pattern.get(), subject.get(),
-                                 matches.get() ? matches->var() : nullptr,
-                                 flags, offset));
+                                 nullptr, flags, offset));
+}
+
+TypedValue HHVM_FUNCTION(preg_match_all_with_matches,
+                         StringArg pattern,
+                         StringArg subject,
+                         Variant& matches,
+                         int flags /* = 0 */,
+                         int offset /* = 0 */) {
+  return tvReturn(preg_match_all(pattern.get(), subject.get(),
+                                 &matches, flags, offset));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -71,6 +85,16 @@ TypedValue HHVM_FUNCTION(preg_match_all,
 Variant HHVM_FUNCTION(preg_replace, const Variant& pattern, const Variant& replacement,
                                     const Variant& subject, int limit /* = -1 */,
                                     VRefParam count /* = null */) {
+  return preg_replace_impl(pattern, replacement, subject,
+                           limit, count.getVariantOrNull(), false, false);
+}
+
+Variant HHVM_FUNCTION(preg_replace_with_count,
+                      const Variant& pattern,
+                      const Variant& replacement,
+                      const Variant& subject,
+                      int limit,
+                      VRefParam count) {
   return preg_replace_impl(pattern, replacement, subject,
                            limit, count.getVariantOrNull(), false, false);
 }
@@ -312,8 +336,11 @@ struct PcreExtension final : Extension {
     HHVM_FE(preg_filter);
     HHVM_FE(preg_grep);
     HHVM_FE(preg_match);
+    HHVM_FE(preg_match_with_matches);
     HHVM_FE(preg_match_all);
+    HHVM_FE(preg_match_all_with_matches);
     HHVM_FE(preg_replace);
+    HHVM_FE(preg_replace_with_count);
     HHVM_FE(preg_replace_callback);
     HHVM_FE(preg_replace_callback_array);
     HHVM_FE(preg_split);

@@ -315,18 +315,19 @@ void coerceFCallArgs(TypedValue* args,
     // Check if we have the right type, or if its a Variant.
     if (!targetType || equivDataTypes(args[-i].m_type, *targetType)) {
       auto const c = &args[-i];
+
+      if (LIKELY(!RuntimeOption::EvalHackArrCompatTypeHintNotices) ||
+          !tc.isArray() ||
+          !isArrayOrShapeType(c->m_type)) continue;
+
       auto const raise = [&] {
-        if (LIKELY(!RuntimeOption::EvalHackArrCompatTypeHintNotices)) {
-          return false;
-        }
-        if (!tc.isArray()) return false;
-        if (!isArrayOrShapeType(c->m_type)) return false;
         if (tc.isVArray()) {
           return !c->m_data.parr->isVArray();
         } else if (tc.isDArray()) {
           return !c->m_data.parr->isDArray();
         } else if (tc.isVArrayOrDArray()) {
-          return c->m_data.parr->isNotDVArray();
+          return c->m_data.parr->isNotDVArray() ||
+                 RuntimeOption::EvalHackArrCompatTypeHintPolymorphism;
         } else {
           return !c->m_data.parr->isNotDVArray();
         }
@@ -335,7 +336,7 @@ void coerceFCallArgs(TypedValue* args,
         raise_hackarr_compat_type_hint_param_notice(
           func,
           c->m_data.parr,
-          tc.type(),
+          tc.displayName().c_str(),
           i
         );
       }
@@ -348,7 +349,7 @@ void coerceFCallArgs(TypedValue* args,
       );
       args[-i].m_type = KindOfPersistentString;
       if (RuntimeOption::EvalStringHintNotices) {
-        raise_notice("Implicit Func to string conversion for type-hint");
+        raise_notice(Strings::FUNC_TO_STRING_IMPLICIT);
       }
       continue;
     }
@@ -358,7 +359,7 @@ void coerceFCallArgs(TypedValue* args,
       );
       args[-i].m_type = KindOfPersistentString;
       if (RuntimeOption::EvalStringHintNotices) {
-        raise_notice("Implicit Class to string conversion for type-hint");
+        raise_notice(Strings::CLASS_TO_STRING_IMPLICIT);
       }
       continue;
     }
@@ -420,42 +421,12 @@ const StringData* getInvokeName(ActRec* ar) {
   return ar->func()->fullDisplayName();
 }
 
-bool nativeWrapperCheckArgs(ActRec* ar) {
-  auto func = ar->m_func;
-  auto numArgs = func->numNonVariadicParams();
-  auto numNonDefault = ar->numArgs();
-
-  if (numNonDefault < numArgs) {
-    const Func::ParamInfoVec& paramInfo = func->params();
-    for (auto i = numNonDefault; i < numArgs; ++i) {
-      if (InvalidAbsoluteOffset == paramInfo[i].funcletOff) {
-        // There's at least one non-default param which wasn't passed, throw a
-        // RuntimeException
-        throw_wrong_arguments_nr(
-            getInvokeName(ar)->data(), numNonDefault, minNumArgs(ar),
-            func->hasVariadicCaptureParam() ? INT_MAX : numArgs);
-      }
-    }
-  } else if (numNonDefault > numArgs && !func->hasVariadicCaptureParam()) {
-    // Too many arguments passed, throw a RuntimeException
-    throw_wrong_arguments_nr(getInvokeName(ar)->data(),
-      numNonDefault, minNumArgs(ar), numArgs);
-  }
-
-  // Looks good
-  return true;
-}
-
 TypedValue* functionWrapper(ActRec* ar) {
   assertx(ar);
   auto func = ar->m_func;
   auto numArgs = func->numParams();
   auto numNonDefault = ar->numArgs();
   TypedValue* args = ((TypedValue*)ar) - 1;
-
-  if (numNonDefault != numArgs) {
-    nativeWrapperCheckArgs(ar);
-  }
 
   coerceFCallArgs(args, numArgs, numNonDefault, func);
 
@@ -476,10 +447,6 @@ TypedValue* methodWrapper(ActRec* ar) {
   auto numNonDefault = ar->numArgs();
   bool isStatic = func->isStatic();
   TypedValue* args = ((TypedValue*)ar) - 1;
-
-  if (numNonDefault != numArgs) {
-    nativeWrapperCheckArgs(ar);
-  }
 
   coerceFCallArgs(args, numArgs, numNonDefault, func);
 
@@ -601,17 +568,17 @@ static folly::Optional<TypedValue> builtinInValue(
   case KindOfInt64:   return make_tv<KindOfInt64>(0);
   case KindOfDouble:  return make_tv<KindOfDouble>(0.0);
   case KindOfPersistentString:
-  case KindOfString:  return make_tv<KindOfString>(empty_string().get());
+  case KindOfString:  return make_tv<KindOfString>(staticEmptyString());
   case KindOfPersistentVec:
-  case KindOfVec:     return make_tv<KindOfVec>(empty_vec_array().get());
+  case KindOfVec:     return make_tv<KindOfVec>(ArrayData::CreateVec());
   case KindOfPersistentDict:
-  case KindOfDict:    return make_tv<KindOfDict>(empty_dict_array().get());
+  case KindOfDict:    return make_tv<KindOfDict>(ArrayData::CreateDict());
   case KindOfPersistentKeyset:
   case KindOfKeyset:  return make_tv<KindOfNull>();
   case KindOfPersistentShape:
-  case KindOfShape:   return make_array_like_tv(empty_darray().get());
+  case KindOfShape:   return make_array_like_tv(ArrayData::CreateShape());
   case KindOfPersistentArray:
-  case KindOfArray:   return make_tv<KindOfArray>(empty_array().get());
+  case KindOfArray:   return make_tv<KindOfArray>(ArrayData::Create());
   case KindOfUninit:
   case KindOfObject:
   case KindOfResource:

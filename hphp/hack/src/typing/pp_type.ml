@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -22,6 +22,12 @@ open Typing_defs
  * human-readable (for error and IDE display) and JSON (for tooling)
  * representations of types.
  *)
+
+let pp_pu_kind fmt = function
+  | Pu_plain ->
+    Format.pp_print_string fmt "Pu_plain"
+  | Pu_atom id ->
+    Format.fprintf fmt "(@[<2>Pu_atom@ %S@])" id
 
 let rec pp_ty : type a. Format.formatter -> a ty -> unit = fun fmt (a0,a1) ->
   Format.fprintf fmt "(@[";
@@ -50,7 +56,7 @@ and show_shape_field_type : type a. a shape_field_type -> string = fun x ->
 
 and pp_ty_ : type a. Format.formatter -> a ty_ -> unit = fun fmt ty ->
   match ty with
-  | Tany -> Format.pp_print_string fmt "Tany"
+  | Tany _ -> Format.pp_print_string fmt "Tany"
   | Terr -> Format.pp_print_string fmt "Terr"
   | Tthis -> Format.pp_print_string fmt "Tthis"
   | Tmixed -> Format.pp_print_string fmt "Tmixed"
@@ -198,6 +204,16 @@ and pp_ty_ : type a. Format.formatter -> a ty_ -> unit = fun fmt ty ->
   | Tdestructure tyl ->
     Format.fprintf fmt "(@[<2>Tdestructure@ ";
     pp_ty_list fmt tyl
+  | Tpu (base, enum, kind) ->
+    Format.fprintf fmt "(@[<2>Tpu (%a@,,%a@,,%a)@])"
+      pp_ty base Aast.pp_sid enum pp_pu_kind kind;
+    Format.fprintf fmt "@])"
+  | Tpu_access (base, sid) ->
+    Format.fprintf fmt "(@[<2>Tpu_access (@,";
+    pp_ty fmt base;
+    Format.fprintf fmt ",@ ";
+    Aast.pp_sid fmt sid;
+    Format.fprintf fmt "@,))@]"
 
 and pp_ty_list : type a. Format.formatter -> a ty list -> unit = fun fmt tyl ->
   Format.fprintf fmt "@[<2>[";
@@ -280,13 +296,13 @@ and pp_dependent_type : Format.formatter -> dependent_type -> unit =
 fun fmt a0 ->
   Format.fprintf fmt "(@[";
   (match a0 with
-  | `this -> Format.pp_print_string fmt "`this"
-  | `cls x ->
-    Format.fprintf fmt "`cls (@[<hov>";
+  | DTthis -> Format.pp_print_string fmt "DTthis"
+  | DTcls x ->
+    Format.fprintf fmt "DTcls (@[<hov>";
     Format.fprintf fmt "%S" x;
     Format.fprintf fmt "@])"
-  | `expr x ->
-    Format.fprintf fmt "`expr (@[<hov>";
+  | DTexpr x ->
+    Format.fprintf fmt "DTexpr (@[<hov>";
     Ident.pp fmt x;
     Format.fprintf fmt "@])"
   )
@@ -357,6 +373,19 @@ and pp_reactivity : Format.formatter -> reactivity -> unit = fun fmt r ->
 and show_reactivity : reactivity -> string = fun x ->
   Format.asprintf "%a" pp_reactivity x
 
+and pp_possibly_enforced_ty :
+  type a. Format.formatter -> a possibly_enforced_ty -> unit = fun fmt x ->
+  Format.fprintf fmt "@[<2>{ ";
+
+  Format.fprintf fmt "@[%s =@ " "et_enforced";
+  Format.fprintf fmt "%B" x.et_enforced;
+  Format.fprintf fmt "@]";
+
+  Format.fprintf fmt "@[%s =@ " "et_type";
+  pp_ty fmt x.et_type;
+  Format.fprintf fmt "@]";
+  Format.fprintf fmt "@ }@]"
+
 and pp_fun_type : type a. Format.formatter -> a fun_type -> unit = fun fmt x ->
   Format.fprintf fmt "@[<2>{ ";
 
@@ -425,7 +454,7 @@ and pp_fun_type : type a. Format.formatter -> a fun_type -> unit = fun fmt x ->
   Format.fprintf fmt ";@ ";
 
   Format.fprintf fmt "@[%s =@ " "ft_ret";
-  pp_ty fmt x.ft_ret;
+  pp_possibly_enforced_ty fmt x.ft_ret;
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
 
@@ -518,7 +547,7 @@ fun fmt x ->
   Format.fprintf fmt ";@ ";
 
   Format.fprintf fmt "@[%s =@ " "fp_type";
-  pp_ty fmt x.fp_type;
+  pp_possibly_enforced_ty fmt x.fp_type;
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
 
@@ -945,6 +974,11 @@ fun fmt x ->
 and show_typeconst_type : typeconst_type -> string = fun x ->
   Format.asprintf "%a" pp_typeconst_type x
 
+and pp_pu_enum_type : Format.formatter -> pu_enum_type -> unit =
+  fun fmt _ -> Format.fprintf fmt "PUENUM PP"
+
+and show_pu_enum_type : pu_enum_type -> string = fun _ -> "PUENUM"
+
 and pp_enum_type : Format.formatter -> enum_type -> unit = fun fmt x ->
   Format.fprintf fmt "@[<2>{ ";
 
@@ -1065,6 +1099,7 @@ let show_shape_field_type _ x = show_shape_field_type x
 let pp_ty_ _ fmt x = pp_ty_ fmt x
 let show_ty_ _ x = show_ty_ x
 let pp_fun_type _ fmt x = pp_fun_type fmt x
+let pp_possibly_enforced_ty _ fmt x = pp_possibly_enforced_ty fmt x
 let show_fun_type _ x = show_fun_type x
 let pp_fun_arity _ fmt x = pp_fun_arity fmt x
 let show_fun_arity _ x = show_fun_arity x

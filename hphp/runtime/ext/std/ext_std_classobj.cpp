@@ -176,12 +176,13 @@ Variant HHVM_FUNCTION(get_class_vars, const String& className) {
 
   ArrayInit arr(numDeclProps + numSProps, ArrayInit::Map{});
 
-  for (size_t i = 0; i < numDeclProps; ++i) {
-    auto const name = const_cast<StringData*>(propInfo[i].name.get());
+  for (size_t slot = 0; slot < numDeclProps; ++slot) {
+    auto index = cls->propSlotToIndex(slot);
+    auto const name = const_cast<StringData*>(propInfo[slot].name.get());
     // Empty names are used for invisible/private parent properties; skip them.
     assertx(name->size() != 0);
-    if (Class::IsPropAccessible(propInfo[i], ctx)) {
-      auto const value = &((*propVals)[i]);
+    if (Class::IsPropAccessible(propInfo[slot], ctx)) {
+      auto const value = &((*propVals)[index]);
       arr.set(name, tvAsCVarRef(value));
     }
   }
@@ -333,7 +334,7 @@ Variant HHVM_FUNCTION(property_exists, const Variant& class_or_object,
     return Variant(Variant::NullInit());
   }
 
-  auto const lookup = cls->getDeclPropIndex(cls, property.get());
+  auto const lookup = cls->getDeclPropSlot(cls, property.get());
   if (lookup.slot != kInvalidSlot) return true;
 
   if (obj &&
@@ -366,20 +367,20 @@ Variant HHVM_FUNCTION(call_user_method_array, const String& method_name,
 
 String HHVM_FUNCTION(HH_class_meth_get_class, TypedValue v) {
   if (!tvIsClsMeth(v)) {
-    raise_error("Argument 1 passed to %s must be a class_meth",
-                __FUNCTION__+5);
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("Argument 1 passed to {}() must be a class_meth",
+      __FUNCTION__+5));
   }
-  auto const c = val(v).pclsmeth->getCls();
-  return String::attach(const_cast<StringData*>(classToStringHelper(c)));
+  return val(v).pclsmeth->getCls()->nameStr();
 }
 
 String HHVM_FUNCTION(HH_class_meth_get_method, TypedValue v) {
   if (!tvIsClsMeth(v)) {
-    raise_error("Argument 1 passed to %s must be a class_meth",
-                __FUNCTION__+5);
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("Argument 1 passed to {}() must be a class_meth",
+      __FUNCTION__+5));
   }
-  auto const c = val(v).pclsmeth->getFunc();
-  return String::attach(const_cast<StringData*>(funcToStringHelper(c)));
+  return val(v).pclsmeth->getFunc()->nameStr();
 }
 
 namespace {

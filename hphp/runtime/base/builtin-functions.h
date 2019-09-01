@@ -54,6 +54,9 @@ String concat4(const String& s1, const String& s2, const String& s3,
 void NEVER_INLINE throw_invalid_property_name(const String& name);
 
 [[noreturn]]
+void NEVER_INLINE throw_call_reified_func_without_generics(const Func* f);
+
+[[noreturn]]
 void throw_exception(const Object& e);
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -99,7 +102,8 @@ inline bool is_string(const Cell* c) {
 inline bool is_array(const Cell* c) {
   assertx(cellIsPlausible(*c));
   if (tvIsClsMeth(c)) {
-    if (!RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalIsCompatibleClsMethType &&
+        !RuntimeOption::EvalHackArrDVArrs) {
       if (RuntimeOption::EvalIsVecNotices) {
         raise_notice(Strings::CLSMETH_COMPAT_IS_ARR);
       }
@@ -166,6 +170,11 @@ inline bool is_clsmeth(const Cell* c) {
   return tvIsClsMeth(c);
 }
 
+inline bool is_fun(const Cell* c) {
+  assertx(cellIsPlausible(*c));
+  return tvIsFunc(c);
+}
+
 inline bool is_empty_string(const Cell* c) {
   return tvIsString(c) && c->m_data.pstr->empty();
 }
@@ -177,7 +186,7 @@ inline bool is_empty_string(const Cell* c) {
  * Semantics of is_callable defined here:
  * http://php.net/manual/en/function.is-callable.php
  */
-bool is_callable(const Variant& v, bool syntax_only, RefData* name);
+bool is_callable(const Variant& v, bool syntax_only, Variant* name);
 /*
  * Equivalent to is_callable(v, false, nullptr)
  */
@@ -193,15 +202,17 @@ vm_decode_function(const_variant_ref function,
                    StringData*& invName,
                    bool& dynamic,
                    ArrayData*& reifiedGenerics,
-                   DecodeFlags flags = DecodeFlags::Warn);
+                   DecodeFlags flags = DecodeFlags::Warn,
+                   bool genericsAlreadyGiven = false);
 
 inline void
 vm_decode_function(const_variant_ref function,
                    CallCtx& ctx,
-                   DecodeFlags flags = DecodeFlags::Warn) {
+                   DecodeFlags flags = DecodeFlags::Warn,
+                   bool genericsAlreadyGiven = false) {
   ctx.func = vm_decode_function(function, nullptr, ctx.this_, ctx.cls,
                                 ctx.invName, ctx.dynamic, ctx.reifiedGenerics,
-                                flags);
+                                flags, genericsAlreadyGiven);
 }
 
 std::pair<Class*, Func*> decode_for_clsmeth(
@@ -283,19 +294,8 @@ void throw_object(const String& s, const Array& params, bool init = true) {
   throw_object(create_object(s, params, init));
 }
 
-/**
- * Argument count handling.
- *   - When level is 2, it's from constructors that turn these into fatals
- *   - When level is 1, it's from system funcs that turn both into warnings
- *   - When level is 0, it's from user funcs that turn missing arg in warnings
- */
-void throw_wrong_argument_count_nr(const char *fn, int expected, int got,
-                                   const char *expectDesc)
-  __attribute__((__cold__));
 void throw_missing_arguments_nr(const char *fn, int expected, int got)
 
-  __attribute__((__cold__));
-void throw_wrong_arguments_nr(const char *fn, int count, int cmin, int cmax)
   __attribute__((__cold__));
 
 /**

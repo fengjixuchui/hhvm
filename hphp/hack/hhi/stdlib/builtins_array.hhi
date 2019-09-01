@@ -133,6 +133,78 @@ function array_multisort(
   mixed &$arg8 = null,
   mixed &$arg9 = null,
 );
+<<__PHPStdLib>>
+function array_multisort1(
+  mixed &$arg1,
+);
+<<__PHPStdLib>>
+function array_multisort2(
+  mixed &$arg1,
+  mixed &$arg2,
+);
+<<__PHPStdLib>>
+function array_multisort3(
+  mixed &$arg1,
+  mixed &$arg2,
+  mixed &$arg3,
+);
+<<__PHPStdLib>>
+function array_multisort4(
+  mixed &$arg1,
+  mixed &$arg2,
+  mixed &$arg3,
+  mixed &$arg4,
+);
+<<__PHPStdLib>>
+function array_multisort5(
+  mixed &$arg1,
+  mixed &$arg2,
+  mixed &$arg3,
+  mixed &$arg4,
+  mixed &$arg5,
+);
+<<__PHPStdLib>>
+function array_multisort6(
+  mixed &$arg1,
+  mixed &$arg2,
+  mixed &$arg3,
+  mixed &$arg4,
+  mixed &$arg5,
+  mixed &$arg6,
+);
+<<__PHPStdLib>>
+function array_multisort7(
+  mixed &$arg1,
+  mixed &$arg2,
+  mixed &$arg3,
+  mixed &$arg4,
+  mixed &$arg5,
+  mixed &$arg6,
+  mixed &$arg7,
+);
+<<__PHPStdLib>>
+function array_multisort8(
+  mixed &$arg1,
+  mixed &$arg2,
+  mixed &$arg3,
+  mixed &$arg4,
+  mixed &$arg5,
+  mixed &$arg6,
+  mixed &$arg7,
+  mixed &$arg8,
+);
+<<__PHPStdLib>>
+function array_multisort9(
+  mixed &$arg1,
+  mixed &$arg2,
+  mixed &$arg3,
+  mixed &$arg4,
+  mixed &$arg5,
+  mixed &$arg6,
+  mixed &$arg7,
+  mixed &$arg8,
+  mixed &$arg9,
+);
 <<__PHPStdLib, __Rx>>
 function array_pad($input, int $pad_size, $pad_value);
 <<__PHPStdLib>>
@@ -151,27 +223,31 @@ function array_search($needle, $haystack, bool $strict = false);
 function array_shift(&$array);
 <<__PHPStdLib, __Rx>>
 function array_slice($array, int $offset, $length = null, bool $preserve_keys = false);
-<<__PHPStdLib>>
-function array_splice(&$input, int $offset, $length = null, $replacement = null);
+<<__PHPStdLib, __Rx, __AtMostRxAsArgs>>
+/* HH_FIXME[2088] reference will be inout eventually */
+function array_splice(
+  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> mixed &$input,
+  int $offset,
+  mixed $length = null,
+  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> mixed $replacement = null,
+);
 <<__PHPStdLib, __Rx>>
 function array_unique($array, int $sort_flags = 2);
 <<__PHPStdLib>>
 function array_unshift(&$array, $var, ...$args);
 <<__PHPStdLib, __Rx>>
 function array_values<Tv>(Container<Tv> $input): array<Tv>;
-<<__PHPStdLib, __Deprecated('This function is scheduled for removal')>>
-function array_walk_recursive(&$input, $funcname, $userdata = null);
-<<__PHPStdLib, __Deprecated('This function is scheduled for removal')>>
-function array_walk(&$input, $funcname, $userdata = null);
 <<__PHPStdLib>>
 function shuffle(&$array);
 <<__Deprecated('Use count(), it does the same thing as sizeof() in PHP and '.
   'doesn\'t suggest that it\'s counting bytes.'), __PHPStdLib, __Rx>>
-function sizeof($var, int $recursive = COUNT_NORMAL);
+function sizeof($var);
 <<__PHPStdLib>>
 function each(&$array);
 <<__PHPStdLib>>
 function current(&$array);
+<<__PHPStdLib>>
+function current_ref(&$array);
 <<__PHPStdLib>>
 function hphp_current_ref(&$array);
 <<__PHPStdLib>>
@@ -186,6 +262,8 @@ function reset(&$array);
 function end(&$array);
 <<__PHPStdLib>>
 function key(&$array);
+<<__PHPStdLib>>
+function key_ref(&$array);
 <<__PHPStdLib>>
 function hphp_get_iterator($iterable);
 <<__PHPStdLib>>

@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
@@ -110,7 +110,7 @@ let type_fun
     : Tast.def option =
   match Ast_provider.find_fun_in_file ~full:true fn x with
   | Some f ->
-    let fun_ = Naming.fun_ (Ast_to_nast.on_fun f) in
+    let fun_ = Naming.fun_ f in
     Nast_check.def (Aast.Fun fun_);
     let def_opt = Typing.fun_def opts fun_
       |> Option.map ~f:(fun f -> Aast.Fun f) in
@@ -125,7 +125,7 @@ let type_class
     : Tast.def option =
   match Ast_provider.find_class_in_file ~full:true fn x with
   | Some cls ->
-    let class_ = Naming.class_ (Ast_to_nast.on_class cls) in
+    let class_ = Naming.class_ cls in
     Nast_check.def (Aast.Class class_);
     let def_opt =
       Typing.class_def opts class_
@@ -142,7 +142,7 @@ let check_typedef
     : Tast.def option =
   match Ast_provider.find_typedef_in_file ~full:true fn x with
   | Some t ->
-    let typedef = Naming.typedef (Ast_to_nast.on_typedef t) in
+    let typedef = Naming.typedef t in
     Nast_check.def (Aast.Typedef typedef);
     let ret = Typing.typedef_def opts typedef in
     Typing_variance.typedef opts x;
@@ -159,7 +159,7 @@ let check_const
   match Ast_provider.find_gconst_in_file ~full:true fn x with
   | None -> None
   | Some cst ->
-    let cst = Naming.global_const (Ast_to_nast.on_constant cst) in
+    let cst = Naming.global_const cst in
     let def = Aast.Constant (Typing.gconst_def opts cst) in
     Tast_check.def opts def;
     Some def
@@ -327,17 +327,16 @@ let merge
 
 let next
     (workers: MultiWorker.worker list option)
-    ~(files_initial_count: int)
     (files_to_process: file_computation list ref)
     (files_in_progress: file_computation Hash_set.Poly.t) =
   let max_size = Bucket.max_size () in
   let num_workers = (match workers with Some w -> List.length w | None -> 1) in
-  let bucket_size = Bucket.calculate_bucket_size
-    ~num_jobs:files_initial_count
-    ~num_workers
-    ~max_size
-  in
   fun () ->
+    let bucket_size = Bucket.calculate_bucket_size
+      ~num_jobs:(List.length !files_to_process)
+      ~num_workers
+      ~max_size
+    in
     match !files_to_process with
     | [] when Hash_set.Poly.is_empty files_in_progress -> Bucket.Done
     | [] -> Bucket.Wait
@@ -383,7 +382,7 @@ let process_in_parallel
   let files_initial_count = List.length fnl in
   ServerProgress.send_percentage_progress_to_monitor
     "typechecking" 0 files_initial_count "files";
-  let next = next ~files_initial_count workers files_to_process files_in_progress in
+  let next = next workers files_to_process files_in_progress in
   let errors, env, cancelled =
     MultiWorker.call_with_interrupt
       workers

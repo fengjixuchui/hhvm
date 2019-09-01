@@ -10,14 +10,12 @@ use parser_rust as parser;
 use crate::ocaml_coroutine_state::OcamlCoroutineState;
 use crate::ocaml_syntax::OcamlSyntax;
 
-use ocaml::core::memory;
-use ocaml::core::mlvalues::{empty_list, Color, Size, Tag, Value};
+use ocaml::core::mlvalues::{empty_list, Value};
 
 use std::iter::Iterator;
 
 use parser::coroutine_smart_constructors::{CoroutineStateType, State as CoroutineState};
 use parser::decl_mode_smart_constructors::State as DeclModeState;
-use parser::file_mode::FileMode;
 use parser::lexable_token::LexableToken;
 use parser::minimal_syntax::MinimalValue;
 use parser::minimal_token::MinimalToken;
@@ -32,54 +30,17 @@ use parser::syntax_error::SyntaxError;
 use parser::syntax_kind::SyntaxKind;
 use parser::token_kind::TokenKind;
 use parser::trivia_kind::TriviaKind;
+use parser::verify_smart_constructors::State as VerifyState;
+
+use ocamlpool_rust::ocamlvalue::Ocamlvalue;
+use ocamlpool_rust::utils::*;
 
 extern "C" {
-    fn ocamlpool_reserve_block(tag: Tag, size: Size) -> Value;
-    fn ocamlpool_reserve_string(size: Size) -> Value;
     static mut ocamlpool_generation: usize;
-    static ocamlpool_limit: *mut Value;
-    static ocamlpool_bound: *mut Value;
-    static mut ocamlpool_cursor: *mut Value;
-    static ocamlpool_color: Color;
-}
-
-unsafe fn reserve_block(tag: Tag, size: Size) -> Value {
-    let result = ocamlpool_cursor.offset(-(size as isize) - 1);
-    if result < ocamlpool_limit {
-        return ocamlpool_reserve_block(tag, size);
-    }
-    ocamlpool_cursor = result;
-    *result = (tag as usize) | ocamlpool_color | (size << 10);
-    return result.offset(1) as Value;
-}
-
-unsafe fn caml_set_field(obj: Value, index: usize, val: Value) {
-    if (val & 1 == 1)
-        || ((val as *const Value) >= ocamlpool_limit && (val as *const Value) <= ocamlpool_bound)
-    {
-        *(obj as *mut Value).offset(index as isize) = val;
-    } else {
-        memory::caml_initialize((obj as *mut Value).offset(index as isize), val);
-    }
-}
-
-// Unsafe functions in this file should be called only:
-// - while being called from OCaml process
-// - between ocamlpool_enter / ocamlpool_leave invocations
-pub unsafe fn caml_block(tag: Tag, fields: &[Value]) -> Value {
-    let result = reserve_block(tag, fields.len());
-    for (i, field) in fields.iter().enumerate() {
-        caml_set_field(result, i, *field);
-    }
-    return result;
-}
-
-pub unsafe fn caml_tuple(fields: &[Value]) -> Value {
-    caml_block(0, fields)
 }
 
 pub struct SerializationContext {
-    source_text: Value,
+    pub source_text: Value,
 }
 
 impl SerializationContext {
@@ -104,16 +65,6 @@ where
     res
 }
 
-// Not implementing ToOcaml for integer types, because Value itself is an integer too and it makes
-// it too easy to accidentally treat a pointer to heap as integer and try double convert it
-fn usize_to_ocaml(x: usize) -> Value {
-    (x << 1) + 1
-}
-
-pub fn u8_to_ocaml(x: u8) -> Value {
-    usize_to_ocaml(x as usize)
-}
-
 impl ToOcaml for bool {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
         usize_to_ocaml(*self as usize)
@@ -121,12 +72,12 @@ impl ToOcaml for bool {
 }
 
 impl ToOcaml for Vec<bool> {
-    unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
-        to_list(&self, context)
+    unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
+        self.ocamlvalue()
     }
 }
 
-impl<S> ToOcaml for DeclModeState<S> {
+impl<S> ToOcaml for DeclModeState<'_, S> {
     unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
         self.stack().to_ocaml(context)
     }
@@ -184,9 +135,9 @@ impl ToOcaml for MinimalValue {
     }
 }
 
-impl<Token, SyntaxValue> ToOcaml for Syntax<Token, SyntaxValue>
+impl<'a, Token, SyntaxValue> ToOcaml for Syntax<Token, SyntaxValue>
 where
-    Token: LexableToken + ToOcaml,
+    Token: LexableToken<'a> + ToOcaml,
     SyntaxValue: SyntaxValueType<Token> + ToOcaml,
 {
     unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
@@ -354,53 +305,27 @@ impl ToOcaml for PositionedValue {
     }
 }
 
-impl ToOcaml for Option<FileMode> {
-    unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        match self {
-            None => usize_to_ocaml(0),
-            Some(x) => {
-                let tag: u8 = match x {
-                    FileMode::Mphp => 0,
-                    FileMode::Mdecl => 1,
-                    FileMode::Mstrict => 2,
-                    FileMode::Mpartial => 3,
-                    FileMode::Mexperimental => 4,
-                };
-                caml_tuple(&[u8_to_ocaml(tag)])
-            }
-        }
-    }
-}
-
 impl ToOcaml for SyntaxError {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        // type error_type = ParseError | RuntimeError
-        //
-        // type t = {
-        //   child        : t option;
-        //   start_offset : int;
-        //   end_offset   : int;
-        //   error_type   : error_type;
-        //   message      : string;
-        // }
-
-        let child = usize_to_ocaml(0); // None
-        let start_offset = usize_to_ocaml(self.start_offset);
-        let end_offset = usize_to_ocaml(self.end_offset);
-        let error_type = usize_to_ocaml(0); // ParseError
-
-        let m = self.message.as_bytes();
-        let message = ocamlpool_reserve_string(m.len());
-        let mut str_ = ocaml::Str::from(ocaml::Value::new(message));
-        str_.data_mut().copy_from_slice(m);
-
-        caml_tuple(&[child, start_offset, end_offset, error_type, message])
+        self.ocamlvalue()
     }
 }
 
 impl ToOcaml for NoState {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
         ocaml::core::mlvalues::UNIT
+    }
+}
+
+impl ToOcaml for SyntaxKind {
+    unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
+        u8_to_ocaml(self.ocaml_tag())
+    }
+}
+
+impl ToOcaml for VerifyState {
+    unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
+        to_list(self.stack(), context)
     }
 }
 

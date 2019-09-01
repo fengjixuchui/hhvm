@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -26,8 +26,8 @@ exception NoTypeConst of (unit -> unit)
 let raise_error error = raise_notrace @@ NoTypeConst error
 
 type env = {
-  tenv : Env.env;
-  ety_env : Phase.env;
+  tenv : Typing_env_types.env;
+  ety_env : expand_env;
   choose_assigned_type : bool;
   (* A list of generics we've seen while expanding. *)
   gen_seen : TySet.t;
@@ -70,8 +70,8 @@ and expand_with_env_ ety_env env ~as_tyvar_with_cnstr root id =
     (* if type constant has type this::ID and method has associated condition type ROOTCOND_TY
        for the receiver - check if condition type has type constant at the same path.
        If yes - attach a condition type ROOTCOND_TY::ID to a result type *)
-       begin match root, id, TR.condition_type_from_reactivity (Env.env_reactivity tenv) with
-       | (_, Tabstract (AKdependent (`this), _)),
+       begin match root, id, TR.condition_type_from_reactivity (Typing_env_types.env_reactivity tenv) with
+       | (_, Tabstract (AKdependent (DTthis), _)),
          (_, tconst),
          Some cond_ty ->
          begin match CT.try_get_class_for_condition_type tenv cond_ty with
@@ -160,8 +160,8 @@ and expand env ~as_tyvar_with_cnstr root id =
   in
   let env = { env with tenv = tenv } in
   match root_ty with
-  | Tany | Terr -> env, root
-  | Tabstract (AKdependent (`cls _), Some ty)
+  | Tany _ | Terr -> env, root
+  | Tabstract (AKdependent (DTcls _), Some ty)
   | Tabstract (AKnewtype (_, _), Some ty) -> expand env ty
   | Tclass ((class_pos, class_name), _, _) ->
     create_root_from_type_constant
@@ -230,6 +230,12 @@ and expand env ~as_tyvar_with_cnstr root id =
   | Tvar n ->
     let tenv, ty = Typing_subtype_tconst.get_tyvar_type_const env.tenv n id in
     { env with tenv }, ty
+  | Tpu _ ->
+    failwithf "TODO(T36532263) expand_ty: Tpu type access %s"
+      (Pp_type.show_ty () root) ()
+  | Tpu_access _ ->
+    failwithf "TODO(T36532263) expand_ty: Tpu_access type access %s"
+      (Pp_type.show_ty () root) ()
   | Tanon _ | Tobject | Tnonnull | Tprim _ | Tshape _ | Ttuple _
   | Tarraykind _ | Tfun _ | Tabstract (_, _)  | Tdynamic | Toption _ | Tdestructure _ ->
     let pos, tconst = id in

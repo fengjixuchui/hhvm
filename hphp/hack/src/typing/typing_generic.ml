@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -35,7 +35,7 @@ end = struct
       | Tthis -> ()
       | Tmixed -> ()
       | Tnothing -> ()
-      | Tdynamic | Tany | Terr | Tnonnull | Tprim _ -> ()
+      | Tdynamic | Tany _ | Terr | Tnonnull | Tprim _ -> ()
       | Tarraykind akind ->
         begin match akind with
           | AKany -> ()
@@ -46,14 +46,14 @@ end = struct
           | AKdarray (tk, tv)
           | AKmap (tk, tv) -> ty tk; ty tv
         end
-      | Tvar _ -> assert false (* Expansion got rid of Tvars ... *)
+      | Tvar _ -> ()
       | Toption x -> ty x
       | Tlike x -> ty x
       | Tfun fty ->
-          List.iter (List.map fty.ft_params (fun x -> x.fp_type)) ty;
-          ty fty.ft_ret;
+          List.iter (List.map fty.ft_params (fun x -> x.fp_type.et_type)) ty;
+          ty fty.ft_ret.et_type;
           (match fty.ft_arity with
-            | Fvariadic (_min, { fp_type = var_ty; _ }) -> ty var_ty
+            | Fvariadic (_min, { fp_type = var_ty; _ }) -> ty var_ty.et_type
             | _ -> ())
       | Tabstract (AKnewtype (_, tyl), x) ->
           List.iter tyl ty; ty_opt x
@@ -71,6 +71,8 @@ end = struct
       | Tshape (_, fdm) ->
           ShapeFieldMap.iter (fun _ v -> ty v) fdm
       | Tdestructure _ -> () (* Only apperas in assignment lhs position *)
+      | Tpu (base, _, _) -> ty base
+      | Tpu_access (base, _) -> ty base
 
     and ty_opt : type a . a ty option -> _ =
       function None -> () | Some x -> ty x in

@@ -520,8 +520,11 @@ inline tv_rval ElemObject(TypedValue& tvRef,
 template <KeyType keyType>
 inline tv_rval ElemRecord(RecordData* base, key_type<keyType> key) {
   auto const fieldName = tvCastToString(initScratchKey(key));
-  auto const ret = base->fieldRval(fieldName.get());
-  return ret;
+  auto const idx = base->record()->lookupField(fieldName.get());
+  if (idx == kInvalidSlot) {
+    raise_record_field_error(base->record()->name(), fieldName.get());
+  }
+  return base->rvalAt(idx);
 }
 
 /**
@@ -706,7 +709,6 @@ inline tv_lval ElemDVecPre(tv_lval base, int64_t key) {
 
   auto const lval = PackedArray::LvalIntVec(oldArr, key, oldArr->cowCheck());
   if (lval.arr != oldArr) {
-    if (copyProv) arrprov::copyTag(oldArr, lval.arr);
     base.type() = KindOfVec;
     base.val().parr = lval.arr;
     assertx(cellIsPlausible(base.tv()));
@@ -759,7 +761,6 @@ inline tv_lval ElemDDictPre(tv_lval base, int64_t key) {
   }
 
   if (lval.arr != oldArr) {
-    if (copyProv) arrprov::copyTag(oldArr, lval.arr);
     base.type() = KindOfDict;
     base.val().parr = lval.arr;
     assertx(cellIsPlausible(base.tv()));
@@ -782,7 +783,6 @@ inline tv_lval ElemDDictPre(tv_lval base, StringData* key) {
   }
 
   if (lval.arr != oldArr) {
-    if (copyProv) arrprov::copyTag(oldArr, lval.arr);
     base.type() = KindOfDict;
     base.val().parr = lval.arr;
     assertx(cellIsPlausible(base.tv()));
@@ -906,9 +906,18 @@ template <KeyType keyType>
 inline tv_lval ElemDRecord(tv_lval base, key_type<keyType> key) {
   assertx(tvIsRecord(base));
   assertx(tvIsPlausible(base.tv()));
-  auto const recData = val(base).prec;
+  auto const oldRecData = val(base).prec;
+  if (oldRecData->cowCheck()) {
+    val(base).prec = oldRecData->copyRecord();
+    decRefRec(oldRecData);
+  }
   auto const fieldName = tvCastToString(initScratchKey(key));
-  return recData->fieldLval(fieldName.get());
+  auto const rec = val(base).prec->record();
+  auto const idx = rec->lookupField(fieldName.get());
+  if (idx == kInvalidSlot) {
+    raise_record_field_error(rec->name(), fieldName.get());
+  }
+  return val(base).prec->lvalAt(idx);
 }
 /**
  * ElemD when base is an Object
@@ -928,7 +937,7 @@ inline tv_lval ElemDObject(TypedValue& tvRef, tv_lval base,
       // ArrayObject should always have the 'storage' property, it shouldn't
       // have a type-hint on it, nor should it be LateInit.
       always_assert(storage);
-      auto const slot = obj->getVMClass()->getDeclPropIndex(
+      auto const slot = obj->getVMClass()->getDeclPropSlot(
         SystemLib::s_ArrayObjectClass,
         s_storage.get()
       ).slot;
@@ -1387,7 +1396,7 @@ inline void SetElemEmptyish(tv_lval base, key_type<keyType> key,
                             Cell* value, const MInstrPropState* pState) {
   detail::checkPromotion(base, pState);
   auto const& scratchKey = initScratchKey(key);
-  cellMove(make_tv<KindOfArray>(staticEmptyArray()), base);
+  cellMove(make_tv<KindOfArray>(ArrayData::Create()), base);
   asArrRef(base).set(tvAsCVarRef(&scratchKey), tvAsCVarRef(value));
 }
 
@@ -1537,14 +1546,22 @@ template <KeyType keyType>
 inline void SetElemRecord(tv_lval base, key_type<keyType> key,
                           Cell* value) {
   auto const fieldName = tvCastToString(initScratchKey(key));
-  auto const recData = val(base).prec;
-  auto const rec = recData->record();
-  auto const& field = rec->field(fieldName.get());
+  auto const oldRecData = val(base).prec;
+  auto const rec = oldRecData->record();
+  auto const idx = rec->lookupField(fieldName.get());
+  if (idx == kInvalidSlot) {
+    raise_record_field_error(rec->name(), fieldName.get());
+  }
+  auto const& field = rec->field(idx);
   auto const& tc = field.typeConstraint();
   if (tc.isCheckable()) {
     tc.verifyRecField(value, rec->name(), field.name());
   }
-  auto const& tv = recData->fieldLval(fieldName.get());
+  if (oldRecData->cowCheck()) {
+    val(base).prec = oldRecData->copyRecord();
+    decRefRec(oldRecData);
+  }
+  auto const& tv = val(base).prec->lvalAt(idx);
   tvSet(*value, tv);
 }
 
@@ -1705,9 +1722,6 @@ inline void SetElemVec(tv_lval base, key_type<keyType> key, Cell* value) {
   auto* newData = SetElemVecPre<setResult>(a, key, value);
   assertx(newData->isVecArray());
 
-  if (copyProv && a != newData) {
-    arrprov::copyTag(a, newData);
-  }
   arrayRefShuffle<true, KindOfVec>(a, newData, base);
 }
 
@@ -1752,9 +1766,6 @@ inline void SetElemDict(tv_lval base, key_type<keyType> key,
   auto newData = SetElemDictPre<setResult>(a, key, value);
   assertx(newData->isDict());
 
-  if (copyProv && a != newData) {
-    arrprov::copyTag(a, newData);
-  }
   arrayRefShuffle<true, KindOfDict>(a, newData, base);
 }
 
@@ -1935,7 +1946,6 @@ inline void SetNewElemVec(tv_lval base, Cell* value) {
   auto a = val(base).parr;
   auto a2 = PackedArray::AppendVec(a, *value);
   if (a2 != a) {
-    if (copyProv) arrprov::copyTag(a, a2);
     type(base) = KindOfVec;
     val(base).parr = a2;
     assertx(cellIsPlausible(*base));
@@ -1954,7 +1964,6 @@ inline void SetNewElemDict(tv_lval base, Cell* value) {
   auto a = val(base).parr;
   auto a2 = MixedArray::AppendDict(a, *value);
   if (a2 != a) {
-    if (copyProv) arrprov::copyTag(a, a2);
     type(base) = KindOfDict;
     val(base).parr = a2;
     assertx(cellIsPlausible(*base));
@@ -2055,7 +2064,7 @@ inline tv_lval SetOpElemEmptyish(SetOpOp op, tv_lval base,
 
   detail::checkPromotion(base, pState);
 
-  cellMove(make_tv<KindOfArray>(staticEmptyArray()), base);
+  cellMove(make_tv<KindOfArray>(ArrayData::Create()), base);
   auto const lval = asArrRef(base).lvalAt(tvAsCVarRef(&key));
   setopBody(lval, op, rhs);
   return lval;
@@ -2203,7 +2212,7 @@ inline tv_lval SetOpElem(TypedValue& tvRef,
 inline tv_lval SetOpNewElemEmptyish(SetOpOp op, tv_lval base, Cell* rhs,
                                     const MInstrPropState* pState) {
   detail::checkPromotion(base, pState);
-  cellMove(make_tv<KindOfArray>(staticEmptyArray()), base);
+  cellMove(make_tv<KindOfArray>(ArrayData::Create()), base);
   auto result = asArrRef(base).lvalAt();
   setopBody(tvToCell(result), op, rhs);
   return result;
@@ -2341,7 +2350,7 @@ inline Cell IncDecElemEmptyish(
 ) {
   detail::checkPromotion(base, pState);
 
-  cellMove(make_tv<KindOfArray>(staticEmptyArray()), base);
+  cellMove(make_tv<KindOfArray>(ArrayData::Create()), base);
   auto const lval = asArrRef(base).lvalAt(tvAsCVarRef(&key));
   assertx(type(lval) == KindOfNull);
   return IncDecBody(op, lval);
@@ -2480,7 +2489,7 @@ inline Cell IncDecNewElemEmptyish(
   const MInstrPropState* pState
 ) {
   detail::checkPromotion(base, pState);
-  cellMove(make_tv<KindOfArray>(staticEmptyArray()), base);
+  cellMove(make_tv<KindOfArray>(ArrayData::Create()), base);
   auto result = asArrRef(base).lvalAt();
   assertx(type(result) == KindOfNull);
   return IncDecBody(op, result);

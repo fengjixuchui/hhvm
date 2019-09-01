@@ -1501,7 +1501,7 @@ class Status {
             Status::sayColor("$test ", Status::YELLOW, "skipped");
 
             if ($reason !== null) {
-              Status::sayColor(" - $reason");
+              Status::sayColor(" - reason: $reason");
             }
             Status::sayColor(sprintf(" (%.2fs)\n", $time));
             break;
@@ -1914,12 +1914,13 @@ function generate_array_diff($ar1, $ar2, $is_reg, $w) {
 
 function generate_diff($wanted, $wanted_re, $output)
 {
+  $m = null;
   $w = explode("\n", $wanted);
   $o = explode("\n", $output);
   if (is_null($wanted_re)) {
     $r = $w;
   } else {
-    if (preg_match('/^\((.*)\)\{(\d+)\}$/s', $wanted_re, &$m)) {
+    if (preg_match_with_matches('/^\((.*)\)\{(\d+)\}$/s', $wanted_re, inout $m)) {
       $t = explode("\n", $m[1]);
       $r = array();
       $w2 = array();
@@ -1967,6 +1968,7 @@ function can_run_server_test($test) {
     !find_test_ext($test, 'opts') &&
     !is_file("$test.ini") &&
     !is_file("$test.onlyrepo") &&
+    !is_file("$test.onlyjumpstart") &&
     !is_file("$test.use.for.ini.migration.testing.only.hdf") &&
     strpos($test, 'quick/debugger') === false &&
     strpos($test, 'quick/xenon') === false &&
@@ -2356,6 +2358,10 @@ function run_test($options, $test) {
     if (preg_grep('/-m debug/', (array)$hhvm) || file_exists($test.'.norepo')) {
       return 'skip-norepo';
     }
+    if (file_exists($test.'.onlyjumpstart') &&
+       (!isset($options['jit-serialize']) || $options['jit-serialize'] < 1)) {
+      return 'skip-onlyjumpstart';
+    }
 
     $hphp_hhvm_repo = "$test.repo/hhvm.hhbc";
     $hhbbc_hhvm_repo = "$test.repo/hhvm.hhbbc";
@@ -2421,8 +2427,8 @@ function run_test($options, $test) {
     return run_one_config($options, $test, $hhvm, $hhvm_env);
   }
 
-  if (file_exists($test.'.onlyrepo')) {
-    return 'skip-onlyrepo';
+  if (file_exists($test.'.onlyrepo') || file_exists($test.'.onlyjumpstart')) {
+    return 'skip-onlyrepo or skip-onlyjumpstart';
   }
 
   if (isset($options['hhas-round-trip'])) {
@@ -2528,10 +2534,11 @@ function msg_loop($num_tests, $queue) {
 
   if ($do_progress) {
     $stty = strtolower(Status::getSTTY());
-    preg_match_all("/columns ([0-9]+);/", $stty, &$output);
+    $output = null;
+    preg_match_all_with_matches("/columns ([0-9]+);/", $stty, inout $output);
     if (!isset($output[1][0])) {
       // because BSD has to be different
-      preg_match_all("/([0-9]+) columns;/", $stty, &$output);
+      preg_match_all_with_matches("/([0-9]+) columns;/", $stty, inout $output);
     }
     if (!isset($output[1][0])) {
       $do_progress = false;

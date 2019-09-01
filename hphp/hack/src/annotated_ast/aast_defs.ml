@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
@@ -110,6 +110,7 @@ and hint_ =
   | Hsoft of hint
   (* The following constructors don't exist in the AST hint type *)
   | Hany
+  | Herr
   | Hmixed
   | Hnonnull
   | Habstr of string
@@ -121,6 +122,7 @@ and hint_ =
   | Hthis
   | Hdynamic
   | Hnothing
+  | Hpu_access of hint * sid
 
 (* AST types such as Happly("int", []) are resolved to Hprim values *)
 and tprim =
@@ -134,6 +136,9 @@ and tprim =
   | Tnum
   | Tarraykey
   | Tnoreturn
+  (* plain Pocket Universe atom when we don't know which enum it is in.
+   * E.g. `:@MyAtom` *)
+  | Tatom of string
 
 and shape_field_info = {
   sfi_optional: bool;
@@ -147,20 +152,20 @@ and nast_shape_info = {
 }
 
 and kvc_kind =
-  ([ `Map
-   | `ImmMap
-   | `Dict
-   ][@visitors.opaque])
+  | Map
+  | ImmMap
+  | Dict
+[@@visitors.opaque]
 
 and vc_kind =
-  ([ `Vector
-   | `ImmVector
-   | `Vec
-   | `Set
-   | `ImmSet
-   | `Pair
-   | `Keyset
-   ][@visitors.opaque])
+  | Vector
+  | ImmVector
+  | Vec
+  | Set
+  | ImmSet
+  | Pair_
+  | Keyset
+[@@visitors.opaque]
 
 and visibility =
   | Private [@visitors.name "visibility_Private"]

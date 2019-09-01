@@ -315,6 +315,7 @@ CapturedPtr getEdgeInfo(const HeapGraph& g, int ptr) {
         // just provide raw prop_offset
         break;
       case HeaderKind::Record:  // TODO(T41026982)
+      case HeaderKind::RecordArray:
         raise_error(Strings::RECORD_NOT_SUPPORTED);
     }
   }
@@ -403,7 +404,9 @@ Array createPhpEdge(HeapGraphContextPtr hgptr, int index) {
       ptr_arr.set(s_value, make_tv<KindOfInt64>(cptr.index));
       break;
     case CapturedPtr::Property: {
-      auto& prop = cfrom.heap_object.cls->declProperties()[cptr.index];
+      auto cls = cfrom.heap_object.cls;
+      auto slot = cls->propIndexToSlot(cptr.index);
+      auto& prop = cls->declProperties()[slot];
       ptr_arr.set(s_prop, make_tv<KindOfPersistentString>(prop.name));
       break;
     }

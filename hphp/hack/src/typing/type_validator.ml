@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
@@ -10,6 +10,7 @@ open Core_kernel
 open Typing_defs
 
 module Env = Tast_env
+module MakeType = Typing_make_type
 module Reason = Typing_reason
 
 type validity =
@@ -41,7 +42,7 @@ class virtual type_validator = object(this)
     validate env {
       type_expansions = [];
       substs = SMap.empty;
-      this_ty = Option.value ~default:(Reason.none, Tany) @@ Env.get_self env;
+      this_ty = Option.value (Env.get_self env) ~default:(MakeType.nothing Reason.none);
       from_class = None;
       validate_dty = None;
     } root_ty

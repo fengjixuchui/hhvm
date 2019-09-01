@@ -208,9 +208,6 @@ enum InstrFlags {
    * not affect what vmpc() is set to after the instruction completes. */
   CF = 0x2,
 
-  /* Instruction pushes an FPI */
-  PF = 0x4,
-
   /* Shorthand for common combinations. */
   CF_TF = (CF | TF),
 };
@@ -266,7 +263,8 @@ inline bool isIncDecO(IncDecOp op) {
   ISTYPE_OP(Res)                               \
   ISTYPE_OP(VArray)                            \
   ISTYPE_OP(DArray)                            \
-  ISTYPE_OP(ClsMeth)
+  ISTYPE_OP(ClsMeth)                           \
+  ISTYPE_OP(Func)
 
 enum class IsTypeOp : uint8_t {
 #define ISTYPE_OP(op) op,
@@ -457,6 +455,16 @@ enum class SpecialClsRef : uint8_t {
 #undef REF
 };
 
+#define CLS_METH_RESOLVE_OPS \
+  OP(NoWarn)               \
+  OP(Warn)
+
+enum class ClsMethResolveOp : uint8_t {
+#define OP(name) name,
+  CLS_METH_RESOLVE_OPS
+#undef OP
+};
+
 constexpr uint32_t kMaxConcatN = 4;
 
 //  name             immediates        inputs           outputs     flags
@@ -468,7 +476,7 @@ constexpr uint32_t kMaxConcatN = 4;
   O(PopV,            NA,               ONE(VV),         NOV,        NF) \
   O(PopU,            NA,               ONE(UV),         NOV,        NF) \
   O(PopU2,           NA,               TWO(CV,UV),      ONE(CV),    NF) \
-  O(PopFrame,        ONE(IVA),         FPUSH(0, 0),     FPUSH,      NF) \
+  O(PopFrame,        ONE(IVA),         CMANY_U3,        CMANY,      NF) \
   O(PopL,            ONE(LA),          ONE(CV),         NOV,        NF) \
   O(Dup,             NA,               ONE(CV),         TWO(CV,CV), NF) \
   O(CGetCUNop,       NA,               ONE(CUV),        ONE(CV),    NF) \
@@ -498,6 +506,7 @@ constexpr uint32_t kMaxConcatN = 4;
   O(NewVArray,       ONE(IVA),         CMANY,           ONE(CV),    NF) \
   O(NewDArray,       ONE(IVA),         NOV,             ONE(CV),    NF) \
   O(NewRecord,       TWO(SA,VSA),      SMANY,           ONE(CV),    NF) \
+  O(NewRecordArray,  TWO(SA,VSA),      SMANY,           ONE(CV),    NF) \
   O(AddElemC,        NA,               THREE(CV,CV,CV), ONE(CV),    NF) \
   O(AddNewElemC,     NA,               TWO(CV,CV),      ONE(CV),    NF) \
   O(NewCol,          ONE(OA(CollectionType)),                           \
@@ -616,7 +625,8 @@ constexpr uint32_t kMaxConcatN = 4;
                                                                         \
   O(ResolveFunc,     ONE(SA),          NOV,             ONE(CV),    NF) \
   O(ResolveObjMethod,NA,               TWO(CV,CV),      ONE(CV),    NF) \
-  O(ResolveClsMethod,NA,               TWO(CV,CV),      ONE(CV),    NF) \
+  O(ResolveClsMethod,ONE(OA(ClsMethResolveOp)),                         \
+                                       TWO(CV,CV),      ONE(CV),    NF) \
   O(NewObj,          NA,               ONE(CV),         ONE(CV),    NF) \
   O(NewObjR,         NA,               TWO(CV,CV),      ONE(CV),    NF) \
   O(NewObjD,         ONE(SA),          NOV,             ONE(CV),    NF) \
@@ -624,29 +634,28 @@ constexpr uint32_t kMaxConcatN = 4;
   O(NewObjS,         ONE(OA(SpecialClsRef)),                            \
                                        NOV,             ONE(CV),    NF) \
   O(LockObj,         NA,               ONE(CV),         ONE(CV),    NF) \
-  O(FPushFunc,       TWO(IVA,I32LA),   FPUSH(1, 0),     FPUSH,      PF) \
-  O(FPushFuncD,      TWO(IVA,SA),      FPUSH(0, 0),     FPUSH,      PF) \
-  O(FPushFuncRD,     TWO(IVA,SA),      FPUSH(1, 0),     FPUSH,      PF) \
-  O(FCallCtor,       TWO(FCA,SA),      FCALL(0, 1),     FCALL,      CF) \
-  O(FCallObjMethod,  FOUR(FCA,SA,OA(ObjMethodOp),I32LA),                \
-                                       FCALL(1, 1),     FCALL,      CF) \
-  O(FCallObjMethodD, FOUR(FCA,SA,OA(ObjMethodOp),SA),                   \
-                                       FCALL(0, 1),     FCALL,      CF) \
-  O(FCallObjMethodRD,FOUR(FCA,SA,OA(ObjMethodOp),SA),                   \
-                                       FCALL(1, 1),     FCALL,      CF) \
   O(FCallClsMethod,  THREE(FCA,SA,I32LA),                               \
                                        FCALL(2, 0),     FCALL,      CF) \
+  O(FCallClsMethodD, FOUR(FCA,SA,SA,SA),                                \
+                                       FCALL(0, 0),     FCALL,      CF) \
+  O(FCallClsMethodRD,FOUR(FCA,SA,SA,SA),                                \
+                                       FCALL(1, 0),     FCALL,      CF) \
   O(FCallClsMethodS, FOUR(FCA,SA,OA(SpecialClsRef),I32LA),              \
                                        FCALL(1, 0),     FCALL,      CF) \
   O(FCallClsMethodSD,FOUR(FCA,SA,OA(SpecialClsRef),SA),                 \
                                        FCALL(0, 0),     FCALL,      CF) \
   O(FCallClsMethodSRD,FOUR(FCA,SA,OA(SpecialClsRef),SA),                \
                                        FCALL(1, 0),     FCALL,      CF) \
-  O(FCallClsMethodD, FOUR(FCA,SA,SA,SA),                                \
-                                       FCALL(0, 0),     FCALL,      CF) \
-  O(FCallClsMethodRD,FOUR(FCA,SA,SA,SA),                                \
-                                       FCALL(1, 0),     FCALL,      CF) \
-  O(FCall,           THREE(FCA,SA,SA), FCALLO,          FCALL,      CF) \
+  O(FCallCtor,       TWO(FCA,SA),      FCALL(0, 1),     FCALL,      CF) \
+  O(FCallFunc,       TWO(FCA,I32LA),   FCALL(1, 0),     FCALL,      CF) \
+  O(FCallFuncD,      TWO(FCA,SA),      FCALL(0, 0),     FCALL,      CF) \
+  O(FCallFuncRD,     TWO(FCA,SA),      FCALL(1, 0),     FCALL,      CF) \
+  O(FCallObjMethod,  FOUR(FCA,SA,OA(ObjMethodOp),I32LA),                \
+                                       FCALL(1, 1),     FCALL,      CF) \
+  O(FCallObjMethodD, FOUR(FCA,SA,OA(ObjMethodOp),SA),                   \
+                                       FCALL(0, 1),     FCALL,      CF) \
+  O(FCallObjMethodRD,FOUR(FCA,SA,OA(ObjMethodOp),SA),                   \
+                                       FCALL(1, 1),     FCALL,      CF) \
   O(FCallBuiltin,    FOUR(IVA,IVA,IVA,SA),CALLNATIVE,   CALLNATIVE, NF) \
   O(IterInit,        THREE(IA,BA,LA),  ONE(CV),         NOV,        CF) \
   O(LIterInit,       FOUR(IA,LA,BA,LA),NOV,             NOV,        CF) \
@@ -914,6 +923,7 @@ const char* subopToName(TypeStructResolveOp);
 const char* subopToName(ContCheckOp);
 const char* subopToName(CudOp);
 const char* subopToName(SpecialClsRef);
+const char* subopToName(ClsMethResolveOp);
 
 /*
  * Returns true iff the given SubOp is in the valid range for its type.
@@ -956,7 +966,7 @@ OffsetSet instrSuccOffsets(PC opc, const Func* func);
  * creates the illusion that the instruction fell through normally to the
  * instruction after it, within the context of its execution frame.
  *
- * The canonical example of this behavior is the FCall instruction, so we use
+ * The canonical example of this behavior are the FCall* instructions, so we use
  * "non-call control flow" to describe the set of CF instruction that do not
  * exhibit this behavior. This function returns true if `opcode' is a non-call
  * control flow instruction.
@@ -1005,6 +1015,13 @@ constexpr bool isFCallClsMethod(Op opcode) {
     opcode == OpFCallClsMethodSRD;
 }
 
+constexpr bool isFCallFunc(Op opcode) {
+  return
+    opcode == OpFCallFunc ||
+    opcode == OpFCallFuncD ||
+    opcode == OpFCallFuncRD;
+}
+
 constexpr bool isFCallObjMethod(Op opcode) {
   return
     opcode == OpFCallObjMethod ||
@@ -1012,32 +1029,12 @@ constexpr bool isFCallObjMethod(Op opcode) {
     opcode == OpFCallObjMethodRD;
 }
 
-constexpr bool isNewFCall(Op opcode) {
+constexpr bool isFCall(Op opcode) {
   return
     opcode == OpFCallCtor ||
     isFCallClsMethod(opcode) ||
+    isFCallFunc(opcode) ||
     isFCallObjMethod(opcode);
-}
-
-constexpr bool isLegacyFPush(Op opcode) {
-  return (instrFlags(opcode) & PF) != 0;
-}
-
-constexpr bool hasFPushEffects(Op opcode) {
-  return isLegacyFPush(opcode) || isNewFCall(opcode);
-}
-
-constexpr bool isFPushFunc(Op opcode) {
-  return opcode == OpFPushFunc || opcode == OpFPushFuncD ||
-         opcode == OpFPushFuncRD;
-}
-
-constexpr bool isLegacyFCall(Op opcode) {
-  return opcode == Op::FCall;
-}
-
-constexpr bool hasFCallEffects(Op opcode) {
-  return isLegacyFCall(opcode) || isNewFCall(opcode);
 }
 
 constexpr bool isRet(Op op) {

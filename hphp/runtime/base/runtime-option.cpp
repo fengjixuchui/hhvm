@@ -390,6 +390,7 @@ folly::dynamic RepoOptions::toDynamic() const {
 #define H(_, n, ...) OUT("Hack.Lang." #n, n)
 #define E(_, n, ...) OUT("Eval." #n, n)
 PARSERFLAGS()
+PARSERFLAGSNOCACHEKEY()
 AUTOLOADFLAGS();
 #undef N
 #undef P
@@ -407,6 +408,7 @@ bool RepoOptions::operator==(const RepoOptions& o) const {
 #define H(_, n, ...) if (n != o.n) return false;
 #define E(_, n, ...) if (n != o.n) return false;
 PARSERFLAGS()
+PARSERFLAGSNOCACHEKEY()
 AUTOLOADFLAGS();
 #undef N
 #undef P
@@ -446,7 +448,8 @@ RepoOptions::RepoOptions(const char* file) : m_path(file) {
 #define P(_, n, ...) hdfExtract(parserConfig, "PHP7." #n, n, s_defaults.n);
 #define H(_, n, ...) hdfExtract(parserConfig, "Hack.Lang." #n, n, s_defaults.n);
 #define E(_, n, ...) hdfExtract(parserConfig, "Eval." #n, n, s_defaults.n);
-PARSERFLAGS();
+PARSERFLAGS()
+PARSERFLAGSNOCACHEKEY();
 #undef N
 #undef P
 #undef H
@@ -473,6 +476,7 @@ void RepoOptions::initDefaults(const Hdf& hdf, const IniSettingMap& ini) {
 #define H(_, n, dv) Config::Bind(n, ini, hdf, "Hack.Lang." #n, dv);
 #define E(_, n, dv) Config::Bind(n, ini, hdf, "Eval." #n, dv);
 PARSERFLAGS()
+PARSERFLAGSNOCACHEKEY()
 AUTOLOADFLAGS()
 #undef N
 #undef P
@@ -517,6 +521,7 @@ uint32_t RuntimeOption::EvalInitialStaticStringTableSize =
 uint32_t RuntimeOption::EvalInitialNamedEntityTableSize = 30000;
 JitSerdesMode RuntimeOption::EvalJitSerdesMode{};
 int RuntimeOption::ProfDataTTLHours = 24;
+std::string RuntimeOption::ProfDataTag;
 std::string RuntimeOption::EvalJitSerdesFile;
 
 std::map<std::string, ErrorLogFileData> RuntimeOption::ErrorLogs = {
@@ -585,6 +590,7 @@ bool RuntimeOption::ServerStatCache = false;
 bool RuntimeOption::ServerFixPathInfo = false;
 bool RuntimeOption::ServerAddVaryEncoding = true;
 bool RuntimeOption::ServerLogSettingsOnStartup = false;
+bool RuntimeOption::ServerLogReorderProps = false;
 bool RuntimeOption::ServerForkEnabled = true;
 bool RuntimeOption::ServerForkLogging = false;
 bool RuntimeOption::ServerWarmupConcurrently = false;
@@ -679,6 +685,9 @@ std::string RuntimeOption::SSLTicketSeedFile;
 bool RuntimeOption::TLSDisableTLS1_2 = false;
 std::string RuntimeOption::TLSClientCipherSpec;
 bool RuntimeOption::EnableSSLWithPlainText = false;
+int RuntimeOption::SSLClientAuthLevel = 0;
+std::string RuntimeOption::SSLClientCAFile = "";
+uint32_t RuntimeOption::SSLClientAuthLoggingSampleRatio = 0;
 
 std::vector<std::shared_ptr<VirtualHost>> RuntimeOption::VirtualHosts;
 std::shared_ptr<IpBlockMap> RuntimeOption::IpBlocks;
@@ -706,6 +715,7 @@ std::string RuntimeOption::SourceRoot = Process::GetCurrentDirectory() + '/';
 std::vector<std::string> RuntimeOption::IncludeSearchPaths;
 std::map<std::string, std::string> RuntimeOption::IncludeRoots;
 std::map<std::string, std::string> RuntimeOption::AutoloadRoots;
+bool RuntimeOption::AutoloadEnabled;
 std::string RuntimeOption::AutoloadDBPath;
 std::string RuntimeOption::FileCache;
 std::string RuntimeOption::DefaultDocument;
@@ -805,9 +815,6 @@ bool RuntimeOption::DisableSmallAllocator = true;
 #else
 bool RuntimeOption::DisableSmallAllocator = false;
 #endif
-
-int RuntimeOption::PerAllocSampleF = 100 * 1000 * 1000;
-int RuntimeOption::TotalAllocSampleF = 1 * 1000 * 1000;
 
 std::map<std::string, std::string> RuntimeOption::ServerVariables;
 std::map<std::string, std::string> RuntimeOption::EnvVariables;
@@ -975,6 +982,13 @@ static inline uint32_t hotTextHugePagesDefault() {
   return arch() == Arch::ARM ? 12 : 8;
 }
 
+static inline std::string reorderPropsDefault() {
+  if (isJitDeserializing()) {
+    return "countedness-hotness";
+  }
+  return debug ? "alphabetical" : "countedness";
+}
+
 static inline uint32_t profileRequestsDefault() {
   return debug ? std::numeric_limits<uint32_t>::max() : 2500;
 }
@@ -1099,6 +1113,7 @@ std::string RuntimeOption::DebuggerStartupDocument;
 int RuntimeOption::DebuggerSignalTimeout = 1;
 std::string RuntimeOption::DebuggerAuthTokenScriptBin;
 std::string RuntimeOption::DebuggerSessionAuthScriptBin;
+bool RuntimeOption::ForceDebuggerBpToInterp = false;
 
 std::string RuntimeOption::SendmailPath = "sendmail -t -i";
 std::string RuntimeOption::MailForceExtraParameters;
@@ -1732,15 +1747,17 @@ void RuntimeOption::Load(
     // few places.  The config file should never need to explicitly set
     // DumpPreciseProfileData to true.
     auto const couldDump = !EvalJitSerdesFile.empty() &&
-      (isJitSerializing(EvalJitSerdesMode) ||
+      (isJitSerializing() ||
        (EvalJitSerdesMode == JitSerdesMode::DeserializeOrGenerate));
     Config::Bind(DumpPreciseProfData, ini, config,
                  "Eval.DumpPreciseProfData", couldDump);
     Config::Bind(ProfDataTTLHours, ini, config,
                  "Eval.ProfDataTTLHours", ProfDataTTLHours);
+    Config::Bind(ProfDataTag, ini, config, "Eval.ProfDataTag", ProfDataTag);
 
     Config::Bind(CheckSymLink, ini, config, "Eval.CheckSymLink", true);
-    Config::Bind(TrustAutoloaderPath, ini, config, "Eval.TrustAutoloaderPath", false);
+    Config::Bind(TrustAutoloaderPath, ini, config,
+                 "Eval.TrustAutoloaderPath", false);
 
 #define F(type, name, defaultVal) \
     Config::Bind(Eval ## name, ini, config, "Eval."#name, defaultVal);
@@ -1814,11 +1831,6 @@ void RuntimeOption::Load(
                  "Eval.DisableSmallAllocator", DisableSmallAllocator);
     SetArenaSlabAllocBypass(DisableSmallAllocator);
 
-    Config::Bind(PerAllocSampleF, ini, config, "Eval.PerAllocSampleF",
-                 PerAllocSampleF);
-    Config::Bind(TotalAllocSampleF, ini, config, "Eval.TotalAllocSampleF",
-                 TotalAllocSampleF);
-
     if (RecordCodeCoverage) CheckSymLink = true;
     Config::Bind(CodeCoverageOutputFile, ini, config,
                  "Eval.CodeCoverageOutputFile");
@@ -1864,6 +1876,8 @@ void RuntimeOption::Load(
                    "Eval.Debugger.Auth.TokenScriptBin");
       Config::Bind(DebuggerSessionAuthScriptBin, ini, config,
                    "Eval.Debugger.Auth.SessionAuthScriptBin");
+      Config::Bind(ForceDebuggerBpToInterp, ini, config,
+                   "Eval.Debugger.ForceDebuggerBpToInterp");
     }
   }
   {
@@ -1998,6 +2012,8 @@ void RuntimeOption::Load(
                  ServerAddVaryEncoding);
     Config::Bind(ServerLogSettingsOnStartup, ini, config,
                  "Server.LogSettingsOnStartup", false);
+    Config::Bind(ServerLogReorderProps, ini, config,
+                 "Server.LogReorderProps", false);
     Config::Bind(ServerWarmupConcurrently, ini, config,
                  "Server.WarmupConcurrently", false);
     Config::Bind(ServerWarmupThreadCount, ini, config,
@@ -2127,6 +2143,26 @@ void RuntimeOption::Load(
                  "Server.TLSClientCipherSpec");
     Config::Bind(EnableSSLWithPlainText, ini, config,
                  "Server.EnableSSLWithPlainText");
+    Config::Bind(SSLClientAuthLevel, ini, config,
+                 "Server.SSLClientAuthLevel", 0);
+    if (SSLClientAuthLevel < 0) SSLClientAuthLevel = 0;
+    if (SSLClientAuthLevel > 2) SSLClientAuthLevel = 2;
+    Config::Bind(SSLClientCAFile, ini, config, "Server.SSLClientCAFile", "");
+    if (!SSLClientAuthLevel) {
+      SSLClientCAFile = "";
+    } else if (SSLClientCAFile.empty()) {
+      throw std::runtime_error(
+          "SSLClientCAFile is required to enable client auth");
+    }
+
+    Config::Bind(SSLClientAuthLoggingSampleRatio, ini, config,
+                 "Server.SSLClientAuthLoggingSampleRatio", 0);
+    if (SSLClientAuthLoggingSampleRatio < 0) {
+      SSLClientAuthLoggingSampleRatio = 0;
+    }
+    if (SSLClientAuthLoggingSampleRatio > 100) {
+      SSLClientAuthLoggingSampleRatio = 100;
+    }
 
     // SourceRoot has been default to: Process::GetCurrentDirectory() + '/'
     auto defSourceRoot = SourceRoot;
@@ -2143,6 +2179,7 @@ void RuntimeOption::Load(
     }
     IncludeSearchPaths.insert(IncludeSearchPaths.begin(), ".");
 
+    Config::Bind(AutoloadEnabled, ini, config, "Autoload.Enabled", false);
     Config::Bind(AutoloadDBPath, ini, config, "Autoload.DBPath");
 
     Config::Bind(FileCache, ini, config, "Server.FileCache");
@@ -2654,6 +2691,10 @@ void RuntimeOption::Load(
 
   if (!RuntimeOption::EvalEmitClsMethPointers) {
     RuntimeOption::EvalIsCompatibleClsMethType = false;
+  }
+
+  if (RuntimeOption::EvalArrayProvenance) {
+    RuntimeOption::EvalJitForceVMRegSync = true;
   }
 
   // Initialize defaults for repo-specific parser configuration options.

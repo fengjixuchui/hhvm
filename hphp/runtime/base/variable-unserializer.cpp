@@ -597,7 +597,7 @@ void VariableUnserializer::unserializeProp(ObjectData* obj,
                                            int nProp) {
 
   auto const cls = obj->getVMClass();
-  auto const lookup = cls->getDeclPropIndex(ctx, key.get());
+  auto const lookup = cls->getDeclPropSlot(ctx, key.get());
   auto const slot = lookup.slot;
   tv_lval t;
 
@@ -1094,6 +1094,7 @@ void VariableUnserializer::unserializeVariant(
             auto const declProps = objCls->declProperties();
             for (auto const& p : declProps) {
               auto slot = p.serializationIdx;
+              auto index = objCls->propSlotToIndex(slot);
               auto const& prop = declProps[slot];
               if (prop.name == s_86reified_prop.get()) continue;
               if (!matchString(prop.mangledName->slice())) {
@@ -1104,7 +1105,7 @@ void VariableUnserializer::unserializeVariant(
               // don't need to worry about overwritten list, because
               // this is definitely the first time we're setting this
               // property.
-              TypedValue* tv = objProps + slot;
+              TypedValue* tv = objProps + index;
               auto const t = tv_lval{tv};
               unserializePropertyValue(t, remainingProps--);
 
@@ -1320,12 +1321,32 @@ Array VariableUnserializer::unserializeArray() {
   return arr;
 }
 
+folly::Optional<arrprov::Tag> VariableUnserializer::unserializeProvenanceTag() {
+  if (type() != VariableUnserializer::Type::Internal) return {};
+  if (peek() != 'p') return {};
+  expectChar('p');
+  expectChar(':');
+  expectChar('i');
+  expectChar(':');
+  auto const line = static_cast<int>(readInt());
+  expectChar(';');
+  expectChar('s');
+  expectChar(':');
+  auto const filename = unserializeString();
+  expectChar(';');
+  if (!RuntimeOption::EvalArrayProvenance) return {};
+  return arrprov::Tag{ makeStaticString(filename.get()), line };
+}
+
 Array VariableUnserializer::unserializeDict() {
   if (m_dvOverrides) m_dvOverrides->push_back(false);
 
   int64_t size = readInt();
   expectChar(':');
   expectChar('{');
+
+  auto const provTag = unserializeProvenanceTag();
+
   if (size == 0) {
     expectChar('}');
     return Array::CreateDict();
@@ -1378,6 +1399,7 @@ Array VariableUnserializer::unserializeDict() {
 
   check_non_safepoint_surprise();
   expectChar('}');
+  if (provTag) arrprov::setTagReplace(arr.get(), *provTag);
   return arr;
 }
 
@@ -1387,6 +1409,9 @@ Array VariableUnserializer::unserializeVec() {
   int64_t size = readInt();
   expectChar(':');
   expectChar('{');
+
+  auto const provTag = unserializeProvenanceTag();
+
   if (size == 0) {
     expectChar('}');
     return Array::CreateVec();
@@ -1423,6 +1448,7 @@ Array VariableUnserializer::unserializeVec() {
   }
   check_non_safepoint_surprise();
   expectChar('}');
+  if (provTag) arrprov::setTagReplace(arr.get(), *provTag);
   return arr;
 }
 

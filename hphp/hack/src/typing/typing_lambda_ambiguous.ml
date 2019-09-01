@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
@@ -48,8 +48,9 @@ let visitor = object
             match tfun_params, efun_params with
             | _, [] -> []
             | { fp_type; _ } :: tfun_params,
-              ({ Tast.param_hint = None; Tast.param_annotation = (pos, _); _ } as param)::params ->
-              { param with Tast.param_annotation = (pos, make_suggest_ty [fp_type]) }
+              ({Tast.param_annotation = (pos, _); _ } as param)::params
+              when Tast.hint_of_type_hint param.Tast.param_type_hint = None ->
+              { param with Tast.param_annotation = (pos, make_suggest_ty [fp_type.et_type]) }
                 :: add_types tfun_params params
             | _ :: tfun_params, param :: params ->
               param :: add_types tfun_params params

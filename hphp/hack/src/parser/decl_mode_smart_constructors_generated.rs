@@ -16,20 +16,24 @@
  **
  *
  */
+use parser_core_types::{
+  lexable_token::LexableToken,
+  source_text::SourceText,
+  syntax::{
+    Syntax,
+    SyntaxValueType,
+  },
+};
 use crate::decl_mode_smart_constructors::*;
-use crate::lexable_token::LexableToken;
 use crate::parser_env::ParserEnv;
 use crate::smart_constructors::SmartConstructors;
-use crate::source_text::SourceText;
-use crate::syntax::Syntax;
 use crate::syntax_smart_constructors::SyntaxSmartConstructors;
-use crate::syntax::SyntaxValueType;
 
 impl<'src, Token, Value>
-SmartConstructors<'src, State<Syntax<Token, Value>>>
-    for DeclModeSmartConstructors<Syntax<Token, Value>, Token, Value>
+SmartConstructors<'src, State<'src, Syntax<Token, Value>>>
+    for DeclModeSmartConstructors<'src, Syntax<Token, Value>, Token, Value>
 where
-    Token: LexableToken,
+    Token: LexableToken<'src>,
     Value: SyntaxValueType<Token>,
 {
     type Token = Token;
@@ -39,7 +43,7 @@ where
         <Self as SyntaxSmartConstructors<'src, Self::R, State<Self::R>>>::new(env, src)
     }
 
-    fn state_mut(&mut self) -> &mut State<Syntax<Token, Value>> {
+    fn state_mut(&mut self) -> &mut State<'src, Syntax<Token, Value>> {
         &mut self.state
     }
 
@@ -597,6 +601,10 @@ where
 
     fn make_type_constant(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<'src, Self::R, State<Self::R>>>::make_type_constant(self, arg0, arg1, arg2)
+    }
+
+    fn make_pu_access(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<'src, Self::R, State<Self::R>>>::make_pu_access(self, arg0, arg1, arg2)
     }
 
     fn make_vector_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {

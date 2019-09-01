@@ -24,7 +24,7 @@ use parser::syntax_kind::SyntaxKind;
 use parser::syntax::{SyntaxType, SyntaxValueType};
 use parser::positioned_token::PositionedToken;
 
-impl<V, C> SyntaxType<C> for OcamlSyntax<V>
+impl<V, C> SyntaxType<'_, C> for OcamlSyntax<V>
 where
     C: Context,
     V: SyntaxValueType<PositionedToken> + ToOcaml,
@@ -2975,6 +2975,26 @@ where
       let syntax = Self::make(
           ctx,
           SyntaxKind::TypeConstant,
+          &value,
+          &[
+              arg0.syntax, 
+              arg1.syntax, 
+              arg2.syntax
+          ],
+      );
+      Self { syntax, value }
+    }
+
+    fn make_pu_access(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
+      let children = [
+          &arg0.value, 
+          &arg1.value, 
+          &arg2.value
+      ];
+      let value = V::from_values(&children);
+      let syntax = Self::make(
+          ctx,
+          SyntaxKind::PUAccess,
           &value,
           &[
               arg0.syntax, 

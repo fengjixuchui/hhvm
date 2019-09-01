@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2018, Facebook, Inc.
  * All rights reserved.
  *
@@ -18,6 +18,7 @@ let validate_classname (pos, hint) =
     | Aast.Happly _
     | Aast.Hthis
     | Aast.Hany
+    | Aast.Herr
     | Aast.Hmixed
     | Aast.Hnonnull
     | Aast.Habstr _
@@ -35,7 +36,8 @@ let validate_classname (pos, hint) =
     | Aast.Hprim _
     | Aast.Hoption _
     | Aast.Hfun _
-    | Aast.Hshape _ ->
+    | Aast.Hshape _
+    | Aast.Hpu_access _ ->
       Errors.invalid_classname pos
 
 let rec check_hint env (pos, hint) =
@@ -76,6 +78,7 @@ let rec check_hint env (pos, hint) =
   | Aast.Habstr _
   | Aast.Hprim _
   | Aast.Hany
+  | Aast.Herr
   | Aast.Hdynamic
   | Aast.Hnonnull
   | Aast.Hmixed
@@ -87,6 +90,7 @@ let rec check_hint env (pos, hint) =
     check_hint env h
   | Aast.Htuple hl ->
     List.iter hl (check_hint env)
+  | Aast.Hpu_access (h, _) -> check_hint env h
 
 and check_shape env Aast.{ nsi_allows_unknown_fields=_; nsi_field_map } =
   List.iter ~f:(fun v -> check_hint env v.Aast.sfi_hint) nsi_field_map
@@ -104,7 +108,7 @@ let check_tparams env tparams =
   end
 
 let check_param env param =
-  Option.iter param.param_hint (check_hint env)
+  Option.iter (hint_of_type_hint param.param_type_hint) (check_hint env)
 
 let check_variadic_param env param =
   match param with

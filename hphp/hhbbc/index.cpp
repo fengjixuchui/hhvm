@@ -819,14 +819,6 @@ Func::Func(const Index* idx, Rep val)
   , val(val)
 {}
 
-bool Func::same(const Func& o) const {
-  /*
-   * TODO(#3666699): function name case sensitivity here shouldn't
-   * break equality.
-   */
-  return val == o.val;
-}
-
 SString Func::name() const {
   return match<SString>(
     val,
@@ -2571,8 +2563,8 @@ bool define_func_family(IndexData& index, ClassInfo* cinfo,
             [&] (const MethTabEntryPair* a, const MethTabEntryPair* b) {
               // We want a canonical order for the family. Putting the
               // one corresponding to cinfo first makes sense, because
-              // the first one is used as the name for FCall hint, after
-              // that, sort by name so that different case spellings
+              // the first one is used as the name for FCall*Method* hint,
+              // after that, sort by name so that different case spellings
               // come in the same order.
               if (a->second.func == b->second.func)   return false;
               if (func) {
@@ -4772,8 +4764,14 @@ Index::ConstraintResolution Index::get_type_for_annotated_type(
     return ConstraintResolution{ folly::none, false };
   }();
 
-  if (mainType.type && nullable && !mainType.type->couldBe(BInitNull)) {
-    mainType.type = opt(*mainType.type);
+  if (mainType.type && nullable) {
+    if (mainType.type->subtypeOf(BBottom)) {
+      if (candidate.couldBe(BInitNull)) {
+        mainType.type = TInitNull;
+      }
+    } else if (!mainType.type->couldBe(BInitNull)) {
+      mainType.type = opt(*mainType.type);
+    }
   }
   return mainType;
 }
@@ -4984,7 +4982,7 @@ Type Index::lookup_foldable_return_type(Context ctx,
       FTRACE_MOD(
         Trace::hhbbc, 4,
         "Found foldableReturnType for {}{}{} with args {} (hash: {})\n",
-        func->cls ? func->cls->name : empty_string().get(),
+        func->cls ? func->cls->name : staticEmptyString(),
         func->cls ? "::" : "",
         func->name,
         showArgs(calleeCtx.args),
@@ -4999,7 +4997,7 @@ Type Index::lookup_foldable_return_type(Context ctx,
     FTRACE_MOD(
       Trace::hhbbc, 4,
       "MISSING: foldableReturnType for {}{}{} with args {} (hash: {})\n",
-      func->cls ? func->cls->name : empty_string().get(),
+      func->cls ? func->cls->name : staticEmptyString(),
       func->cls ? "::" : "",
       func->name,
       showArgs(calleeCtx.args),
@@ -5566,7 +5564,7 @@ void Index::init_return_type(const php::Func* func) {
       if (t == TBottom) return;
       types.emplace_back(intersection_of(TInitCell, std::move(t)));
     }
-    tcT = vec(std::move(types));
+    tcT = vec(std::move(types), folly::none);
   }
 
   tcT = to_cell(std::move(tcT));

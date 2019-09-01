@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -10,6 +10,7 @@
 open Core_kernel
 open Common
 open Typing_defs
+open Typing_env_types
 
 module Reason = Typing_reason
 module Env = Typing_env
@@ -45,7 +46,7 @@ module MakeType = Typing_make_type
 let rec freshen_inside_ty env ((r, ty_) as ty) =
   let default () = env, ty in
   match ty_ with
-  | Tany | Tnonnull | Terr | Tdynamic | Tobject | Tprim _ | Tanon _ | Tabstract(_, None) ->
+  | Tany _ | Tnonnull | Terr | Tdynamic | Tobject | Tprim _ | Tanon _ | Tabstract(_, None) ->
     default ()
     (* Nullable is covariant *)
   | Toption ty ->
@@ -70,12 +71,12 @@ let rec freshen_inside_ty env ((r, ty_) as ty) =
     env, (r, Tshape (shape_kind, fdm))
     (* Functions are covariant in return type, contravariant in parameter types *)
   | Tfun ft ->
-    let env, ft_ret = freshen_ty env ft.ft_ret in
+    let env, ft_ret = freshen_possibly_enforced_ty env ft.ft_ret in
     let env, ft_params = List.map_env env ft.ft_params
       (fun env p ->
-       let env, fp_type = freshen_ty env p.fp_type in
+       let env, fp_type = freshen_possibly_enforced_ty env p.fp_type in
        env, { p with fp_type = fp_type }) in
-    env, (r, Tfun { ft with ft_ret = ft_ret; ft_params = ft_params })
+    env, (r, Tfun { ft with ft_ret; ft_params })
   | Tabstract (AKnewtype (name, tyl), tyopt) ->
     begin match Env.get_typedef env name with
     | None ->
@@ -119,9 +120,17 @@ let rec freshen_inside_ty env ((r, ty_) as ty) =
     end
   | Tvar _ ->
     default ()
+  | Tpu _
+  | Tpu_access _ ->
+    (* TODO(T36532263) suggested by Catherine, might be updated next *)
+    default()
 
 and freshen_ty env ty =
   Env.fresh_invariant_type_var env (Reason.to_pos (fst ty))
+
+and freshen_possibly_enforced_ty env ety =
+  let env, et_type = freshen_ty env ety.et_type in
+  env, { ety with et_type }
 
 and freshen_tparams env variancel tyl =
     match variancel, tyl with
@@ -138,7 +147,7 @@ and freshen_tparams env variancel tyl =
 
 let var_occurs_in_ty env var ty =
   let finder = object
-    inherit [Env.env * bool] Type_visitor.type_visitor
+    inherit [env * bool] Type_visitor.type_visitor
     method! on_tvar (env, occurs) _r v =
       if occurs then env, occurs else
       let env, v = Env.get_var env v in
@@ -347,7 +356,7 @@ let tyvar_is_solved env var =
  *)
 let ty_equal_shallow ty1 ty2 =
   match snd ty1, snd ty2 with
-  | Tany, Tany
+  | Tany _, Tany _
   | Tnonnull, Tnonnull
   | Terr, Terr
   | Tdynamic, Tdynamic
@@ -382,7 +391,7 @@ let ty_equal_shallow ty1 ty2 =
   | _ -> false
 
 let union_any_if_any_in_lower_bounds env ty lower_bounds =
-  let r = Reason.none in let any = (r, Tany) and err = (r, Terr) in
+  let r = Reason.none in let any = (r, Typing_defs.make_tany ()) and err = (r, Terr) in
   let env, ty = match TySet.find_opt any lower_bounds with
     | Some any -> Union.union env ty any
     | None -> env, ty in
@@ -400,10 +409,10 @@ let try_bind_to_equal_bound ~freshen env r var on_error =
   let expand_all tyset = Typing_set.map
     (fun ty -> let _, ty = Env.expand_type env ty in ty) tyset in
   let tyvar_info = Env.get_tyvar_info env var in
-  let lower_bounds = expand_all tyvar_info.Env.lower_bounds in
-  let upper_bounds = expand_all tyvar_info.Env.upper_bounds in
+  let lower_bounds = expand_all tyvar_info.lower_bounds in
+  let upper_bounds = expand_all tyvar_info.upper_bounds in
   let equal_bounds = Typing_set.inter lower_bounds upper_bounds in
-  let r = Reason.none in let any = (r, Tany) and err = (r, Terr) in
+  let r = Reason.none in let any = (r, Typing_defs.make_tany ()) and err = (r, Terr) in
   let equal_bounds = equal_bounds |> TySet.remove any |> TySet.remove err in
   match Typing_set.choose_opt equal_bounds with
   | Some ty ->
@@ -441,8 +450,8 @@ let rec always_solve_tyvar ~freshen env r var on_error =
   then env
   else
   let tyvar_info = Env.get_tyvar_info env var in
-  let r = if r = Reason.Rnone then Reason.Rwitness tyvar_info.Env.tyvar_pos else r in
-  let env = bind_to_lower_bound ~freshen env r var tyvar_info.Env.lower_bounds on_error in
+  let r = if r = Reason.Rnone then Reason.Rwitness tyvar_info.tyvar_pos else r in
+  let env = bind_to_lower_bound ~freshen env r var tyvar_info.lower_bounds on_error in
   let env, ety = Env.expand_var env r var in
   match ety with
   | _, Tvar var' when var <> var' -> always_solve_tyvar ~freshen env r var on_error
@@ -474,9 +483,9 @@ let solve_tyvar_wrt_variance env r var on_error =
   then env
   else
   let tyvar_info = Env.get_tyvar_info env var in
-  let r = if r = Reason.Rnone then Reason.Rwitness tyvar_info.Env.tyvar_pos else r in
-  let lower_bounds = tyvar_info.Env.lower_bounds and upper_bounds = tyvar_info.Env.upper_bounds in
-  match tyvar_info.Env.appears_covariantly, tyvar_info.Env.appears_contravariantly with
+  let r = if r = Reason.Rnone then Reason.Rwitness tyvar_info.tyvar_pos else r in
+  let lower_bounds = tyvar_info.lower_bounds and upper_bounds = tyvar_info.upper_bounds in
+  match tyvar_info.appears_covariantly, tyvar_info.appears_contravariantly with
   | true, false
   | false, false ->
     (* As in Local Type Inference by Pierce & Turner, if type variable does
@@ -507,7 +516,7 @@ let solve_all_unsolved_tyvars env on_error =
     Env.log_env_change "solve_all_unsolved_tyvars" env @@
     IMap.fold
     (fun tyvar _ env ->
-      always_solve_tyvar ~freshen:false env Reason.Rnone tyvar on_error) env.Env.tvenv env in
+      always_solve_tyvar ~freshen:false env Reason.Rnone tyvar on_error) env.tvenv env in
   Typing_subtype.log_prop env;
   env
 
@@ -559,7 +568,7 @@ let widen env widen_concrete_type ty =
     (* Don't widen the `this` type, because the field type changes up the hierarchy
      * so we lose precision
      *)
-    | _, Tabstract (AKdependent `this, _) ->
+    | _, Tabstract (AKdependent DTthis, _) ->
       env, ty
     (* For other abstract types, just widen to the bound, if possible *)
     | _, Tabstract (_, Some ty) ->
@@ -717,9 +726,10 @@ let rec push_option_out pos env ty =
       push_option_out pos env ty
     end
     else env, ty
-  | _, (Terr | Tany | Tnonnull | Tarraykind _ | Tprim _
+  | _, (Terr | Tany _ | Tnonnull | Tarraykind _ | Tprim _
     | Tclass _ | Ttuple _ | Tanon _ | Tfun _
-    | Tobject | Tshape _ | Tdynamic | Tdestructure _) -> env, ty
+    | Tobject | Tshape _ | Tdynamic | Tdestructure _ | Tpu _
+    | Tpu_access _) -> env, ty
 
 (**
  * Strips away all Toption that we possible can in a type, expanding type

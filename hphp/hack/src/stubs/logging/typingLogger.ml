@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -9,7 +9,9 @@
 
 module ProfileTypeCheck = struct
   let init ~threshold:_ ~root:_ = ()
+
   let log ~init_id:_ ~recheck_id:_ ~start_time:_ ~absolute:_ ~relative:_ = ()
+
   let print_path ~init_id:_ = ()
 end
 

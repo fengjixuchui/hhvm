@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2018, Facebook, Inc.
  * All rights reserved.
  *
@@ -55,8 +55,9 @@ let rec check_hint env (pos, hint) =
   | Aast.Hshape Aast.{ nsi_allows_unknown_fields=_; nsi_field_map } ->
     List.iter ~f:(fun v -> check_hint env v.Aast.sfi_hint) nsi_field_map
   | Aast.Haccess _ -> ()
-  | Aast.Hany  | Aast.Hmixed | Aast.Hnonnull | Aast.Hprim _
+  | Aast.Hany  | Aast.Herr | Aast.Hmixed | Aast.Hnonnull | Aast.Hprim _
   | Aast.Hthis | Aast.Habstr _  | Aast.Hdynamic | Aast.Hnothing -> ()
+  | Aast.Hpu_access (h, _) -> check_hint env h
 
 and check_tparams env p x tparams hl c_pos =
   let arity = List.length tparams in
@@ -74,7 +75,7 @@ and check_arity env pos tname arity size c_pos =
   Errors.type_arity pos tname num_args c_pos
 
 let check_param env p =
-  Option.iter p.param_hint (check_hint env)
+  Option.iter (hint_of_type_hint p.param_type_hint) (check_hint env)
 
 let check_tparam env t =
   List.iter t.tp_constraints (fun (_, h) -> check_hint env h)

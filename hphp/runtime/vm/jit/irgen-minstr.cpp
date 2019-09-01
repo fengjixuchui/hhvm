@@ -78,6 +78,7 @@ enum class SimpleOp {
   Vector, // c_Vector* or c_ImmVector*
   Map,    // c_Map*
   Pair,   // c_Pair*
+  RecordArray,
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -179,7 +180,7 @@ PropInfo getPropertyOffset(IRGS& env,
   }
 
   // Lookup the index of the property based on ctx and baseClass
-  auto const lookup = baseClass->getDeclPropIndex(ctx, name);
+  auto const lookup = baseClass->getDeclPropSlot(ctx, name);
   auto const idx = lookup.slot;
 
   // If we couldn't find a property that is accessible in the current context,
@@ -191,6 +192,15 @@ PropInfo getPropertyOffset(IRGS& env,
   // offset.
 
   auto const& prop = baseClass->declProperties()[idx];
+
+  // If we're going to serialize the profile data, we emit a ProfileProp here to
+  // profile property accesses.  We only do this here, when we can resolve the
+  // property at JIT time, in order to make profiling simpler and cheaper.  And
+  // this should cover the vast majority of the property accesses anyway.
+  if (env.context.kind == TransKind::Profile && isJitSerializing()) {
+    gen(env, ProfileProp, cns(env, prop.baseCls->name()), cns(env, name));
+  }
+
   // If we want the AttrLateInitSoft default value behavior here, resort to the
   // runtime helpers to handle it.
   if ((prop.attrs & AttrLateInitSoft) && !ignoreLateInit) return PropInfo();
@@ -227,7 +237,7 @@ bool prop_ignores_tvref(IRGS& env, SSATmp* base, const SSATmp* key) {
   if (key->hasConstVal(TStr)) {
     auto const keyStr = key->strVal();
     auto const ctx = curClass(env);
-    auto const lookup = cls->getDeclPropIndex(ctx, keyStr);
+    auto const lookup = cls->getDeclPropSlot(ctx, keyStr);
     if (lookup.slot != kInvalidSlot && lookup.accessible) {
       isDeclared = true;
       auto const& prop = cls->declProperties()[lookup.slot];
@@ -265,6 +275,8 @@ folly::Optional<GuardConstraint> simpleOpConstraint(SimpleOp op) {
     case SimpleOp::Dict:
     case SimpleOp::Keyset:
     case SimpleOp::String:
+    // TODO: T47925625: DatatypeSpecialized GuardConstraint for RecordArray
+    case SimpleOp::RecordArray:
       return GuardConstraint(DataTypeSpecific);
 
     case SimpleOp::PackedArray:
@@ -740,7 +752,7 @@ SSATmp* emitDictKeysetGet(IRGS& env, SSATmp* base, SSATmp* key,
       return gen(env, is_dict ? DictGetK : KeysetGetK, IndexData { pos },
                  base, key);
     },
-    [&] (SSATmp* key) {
+    [&] (SSATmp* key, SizeHintData data) {
       return gen(
         env,
         is_dict
@@ -762,7 +774,7 @@ SSATmp* emitArrayGet(IRGS& env, SSATmp* base, SSATmp* key, MOpMode mode,
     [&] (SSATmp* arr, SSATmp* key, uint32_t pos) {
       return gen(env, MixedArrayGetK, IndexData { pos }, arr, key);
     },
-    [&] (SSATmp* key) {
+    [&] (SSATmp* key, SizeHintData data) {
       return gen(env, ArrayGet, MOpModeData { mode }, base, key);
     }
   );
@@ -778,7 +790,7 @@ SSATmp* emitArrayGet(IRGS& env, SSATmp* base, SSATmp* key, MOpMode mode,
 template<class Finish>
 SSATmp* emitProfiledPackedArrayGet(IRGS& env, SSATmp* base, SSATmp* key,
                                    MOpMode mode, Finish finish) {
-  TargetProfile<ArrayKindProfile> prof(env.context,
+  TargetProfile<ArrayKindProfile> prof(env.unit,
                                        env.irb->curMarker(),
                                        s_ArrayKindProfile.get());
   if (prof.profiling()) {
@@ -1027,6 +1039,9 @@ SSATmp* emitCGetElem(IRGS& env, SSATmp* base, SSATmp* key,
     case SimpleOp::Map:
       assertx(mode != MOpMode::InOut);
       return gen(env, MapGet, base, key);
+    case SimpleOp::RecordArray:
+      assertx(mode != MOpMode::InOut);
+      return gen(env, ArrayGet, MOpModeData{mode}, base, key);
     case SimpleOp::None:
       return gen(env, CGetElem, MOpModeData{mode}, base, key);
   }
@@ -1055,6 +1070,7 @@ SSATmp* emitCGetElemQuiet(IRGS& env, SSATmp* base, SSATmp* key,
     case SimpleOp::Pair:
     case SimpleOp::Map:
       assertx(mode != MOpMode::InOut);
+    case SimpleOp::RecordArray:
     case SimpleOp::None:
       return gen(env, CGetElem, MOpModeData{mode}, ldMBase(env), key);
   }
@@ -1065,6 +1081,7 @@ SSATmp* emitIssetElem(IRGS& env, SSATmp* base, SSATmp* key, SimpleOp simpleOp) {
   switch (simpleOp) {
   case SimpleOp::Array:
   case SimpleOp::ProfiledPackedArray:
+  case SimpleOp::RecordArray:
     return gen(env, ArrayIsset, base, key);
   case SimpleOp::PackedArray:
     return emitPackedArrayIsset(env, base, key);
@@ -1105,6 +1122,7 @@ SSATmp* emitEmptyElem(IRGS& env, SSATmp* base,
     case SimpleOp::Vector:
     case SimpleOp::Pair:
     case SimpleOp::Map:
+    case SimpleOp::RecordArray:
     case SimpleOp::None:
       return gen(env, EmptyElem, ldMBase(env), key);
   }
@@ -1123,6 +1141,9 @@ SimpleOp simpleCollectionOp(Type baseType, Type keyType, bool readInst,
   if (baseType <= TArr) {
     auto isPacked = false;
     if (auto arrSpec = baseType.arrSpec()) {
+      if (arrSpec.kind() == ArrayData::kRecordKind) {
+        return SimpleOp::RecordArray;
+      }
       isPacked = arrSpec.kind() == ArrayData::kPackedKind;
     }
     if (keyType <= TInt || keyType <= TStr) {
@@ -1487,7 +1508,7 @@ SSATmp* dictElemImpl(IRGS& env, MOpMode mode, Type baseType, SSATmp* key) {
     [&] (SSATmp* dict, SSATmp* key, uint32_t pos) {
       return gen(env, ElemDictK, IndexData { pos }, dict, key);
     },
-    [&] (SSATmp* key) {
+    [&] (SSATmp* key, SizeHintData data) {
       if (define || unset) {
         return gen(env, unset ? ElemDictU : ElemDictD,
                    baseType, ldMBase(env), key);
@@ -1530,7 +1551,7 @@ SSATmp* keysetElemImpl(IRGS& env, MOpMode mode, Type baseType, SSATmp* key) {
     [&] (SSATmp* keyset, SSATmp* key, uint32_t pos) {
       return gen(env, ElemKeysetK, IndexData { pos }, keyset, key);
     },
-    [&] (SSATmp* key) {
+    [&] (SSATmp* key, SizeHintData data) {
       if (unset) return gen(env, ElemKeysetU, baseType, ldMBase(env), key);
       assertx(
         mode == MOpMode::Warn ||
@@ -1566,7 +1587,7 @@ SSATmp* elemImpl(IRGS& env, MOpMode mode, SSATmp* key) {
       [&] (SSATmp* arr, SSATmp* key, uint32_t pos) {
         return gen(env, ElemMixedArrayK, IndexData { pos }, arr, key);
       },
-      [&] (SSATmp* key) {
+      [&] (SSATmp* key, SizeHintData data) {
         if (define || unset) {
           return gen(env, unset ? ElemArrayU : ElemArrayD,
                      base->type(), ldMBase(env), key);
@@ -1980,6 +2001,7 @@ SSATmp* setElemImpl(IRGS& env, uint32_t nDiscard, SSATmp* key) {
       // If we couldn't emit ArraySet, fall through to the generic path.
 
     case SimpleOp::Pair:
+    case SimpleOp::RecordArray:
     case SimpleOp::None:
       // We load the member base pointer before calling makeCatchSet() to avoid
       // mismatched in-states for any catch block edges we emit later on.
@@ -2029,6 +2051,22 @@ SSATmp* memberKey(IRGS& env, MemberKey mk) {
 
 }
 
+//////////////////////////////////////////////////////////////////////
+
+bool propertyMayBeCountable(const Class::Prop& prop) {
+  // We can't call `knownTypeForProp` for type-hints that involve objects
+  // here because the classes they refer to may not yet be defined. We return
+  // `true` for these cases. Doing so doesn't cause unnecessary pessimization,
+  // because subtypes of Object are going to be countable anyway.
+  auto const& tc = prop.typeConstraint;
+  if (tc.isObject() || tc.isThis()) return true;
+  if (prop.repoAuthType.hasClassName()) return true;
+  auto const type = knownTypeForProp(prop, nullptr, nullptr, true);
+  return type.maybe(jit::TCounted);
+}
+
+//////////////////////////////////////////////////////////////////////
+
 void emitBaseGC(IRGS& env, uint32_t idx, MOpMode mode) {
   initTvRefs(env);
   auto name = top(env, BCSPRelOffset{safe_cast<int32_t>(idx)});
@@ -2051,8 +2089,10 @@ void emitBaseSC(IRGS& env, uint32_t propIdx, uint32_t clsIdx, MOpMode mode) {
   auto const name = top(env, BCSPRelOffset{safe_cast<int32_t>(propIdx)});
   if (!name->isA(TStr)) PUNT(BaseS-non-string-name);
 
+  auto const disallowConst = mode == MOpMode::Define ||
+    mode == MOpMode::Unset || mode == MOpMode::InOut;
   auto const spropPtr = ldClsPropAddr(
-    env, cls, name, true, false, mode == MOpMode::Define
+    env, cls, name, true, false, disallowConst
   ).propPtr;
   stMBase(env, spropPtr);
   setClsMIPropState(env, spropPtr, mode, cls, name);

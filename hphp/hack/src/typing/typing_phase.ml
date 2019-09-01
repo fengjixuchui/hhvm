@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -10,6 +10,7 @@
 open Core_kernel
 open Common
 open Typing_defs
+open Typing_env_types
 open Typing_dependent_type
 
 module Env = Typing_env
@@ -75,8 +76,6 @@ module MakeType = Typing_make_type
 let decl ty = DeclTy ty
 let locl ty = LoclTy ty
 
-type env = expand_env
-
 type method_instantiation =
 {
   use_pos: Pos.t;
@@ -93,6 +92,7 @@ let env_with_self env =
     from_class = None;
     validate_dty = None;
   }
+
 (*****************************************************************************)
 (* Transforms a declaration phase type into a localized type. This performs
  * common operations that are necessary for this operation, specifically:
@@ -114,8 +114,10 @@ let rec localize ~ety_env env (dty: decl ty) =
   match dty with
   | r, Terr ->
       env, (r, TUtils.terr env)
-  | r, Tany ->
+  | r, Tany _ ->
       env, (r, TUtils.tany env)
+  | r, Tvar var ->
+    Env.set_tvenv_link_global_tyvar env var, (r, Tvar var)
   | _, (Tnonnull | Tprim _ | Tdynamic) as x ->
       env, x
   | r, Tmixed ->
@@ -242,6 +244,9 @@ let rec localize ~ety_env env (dty: decl ty) =
   | r, Tshape (shape_kind, tym) ->
       let env, tym = ShapeFieldMap.map_env (localize ~ety_env) env tym in
       env, (r, Tshape (shape_kind, tym))
+  | r, Tpu_access (base, sid) ->
+    let (env, base) = localize ~ety_env env base in
+    env, (r, Tpu_access (base, sid))
 
 and localize_tparams ~ety_env env pos tyl tparams =
   let length = min (List.length tyl) (List.length tparams) in
@@ -282,6 +287,11 @@ and tyl_contains_wildcard tyl =
     | _ -> false
   end
 
+(* Recursive localizations of function types do not make judgements about enforceability *)
+and localize_possibly_enforced_ty ~ety_env env ety =
+  let env, et_type = localize ~ety_env env ety.et_type in
+  env, { ety with et_type }
+
 and localize_cstr_ty ~ety_env env ty tp_name =
   let env, (r, ty_) = localize ~ety_env env ty in
   let ty = (Reason.Rcstr_on_generics (Reason.to_pos r, tp_name), ty_) in
@@ -299,7 +309,7 @@ and localize_cstr_ty ~ety_env env ty tp_name =
 and localize_ft ?(instantiation) ~ety_env env ft =
   (* set reactivity to Nonreactive to prevent occasional setting
      of condition types when expanding type constants *)
-  let saved_r = Env.env_reactivity env in
+  let saved_r = env_reactivity env in
   let env = Env.set_env_reactive env Nonreactive in
   (* If no explicit type parameters are provided, set the instantiated type parameter to
    * initially point to unresolved, so that it can grow and eventually be a subtype of
@@ -342,12 +352,12 @@ and localize_ft ?(instantiation) ~ety_env env ft =
   in
   let ety_env = {ety_env with substs = substs} in
   let env, params = List.map_env env ft.ft_params begin fun env param ->
-    let env, ty = localize ~ety_env env param.fp_type in
+    let env, ty = localize_possibly_enforced_ty ~ety_env env param.fp_type in
     env, { param with fp_type = ty }
   end in
   (* restore reactivity *)
   let env =
-    if saved_r <> Env.env_reactivity env
+    if saved_r <> env_reactivity env
     then Env.set_env_reactive env saved_r
     else env
   in
@@ -369,7 +379,7 @@ and localize_ft ?(instantiation) ~ety_env env ft =
         Env.add_lower_bound env name_str ty
       | Ast_defs.Constraint_eq ->
         Env.add_upper_bound (Env.add_lower_bound env name_str ty) name_str ty
-      | Ast_defs.Constraint_pu_from -> failwith "TODO(T36532263): Pocket Universes" in
+      in
       env, (ck, ty)
     end in
     env, { t with tp_constraints = cstrl }
@@ -383,7 +393,7 @@ and localize_ft ?(instantiation) ~ety_env env ft =
 
   (* Grab and store the old tpenvs *)
   let old_tpenv = Env.get_tpenv env in
-  let old_global_tpenv = env.Env.global_tpenv in
+  let old_global_tpenv = env.global_tpenv in
 
   (* Always localize tparams so they are available for later Tast check *)
   let env, tparams = List.map_env env (fst ft.ft_tparams) localize_tparam in
@@ -416,10 +426,11 @@ and localize_ft ?(instantiation) ~ety_env env ft =
 
   let env, arity = match ft.ft_arity with
     | Fvariadic (min, ({ fp_type = var_ty; _ } as param)) ->
-       let env, var_ty = localize ~ety_env env var_ty in
-       env, Fvariadic (min, { param with fp_type = var_ty })
+       let env, var_ty = localize ~ety_env env var_ty.et_type in
+       (* HHVM does not enforce types on vararg parameters yet *)
+       env, Fvariadic (min, { param with fp_type = { et_type = var_ty; et_enforced = false } })
     | Fellipsis _ | Fstandard (_, _) as x -> env, x in
-  let env, ret = localize ~ety_env env ft.ft_ret in
+  let env, ret = localize_possibly_enforced_ty ~ety_env env ft.ft_ret in
   env, { ft with ft_arity = arity; ft_params = params;
                  ft_ret = ret; ft_tparams = ft_tparams;
                  ft_where_constraints = where_constraints }
@@ -509,11 +520,11 @@ and localize_with_dty_validator env ty validate_dty =
   localize ~ety_env env ty
 
 and localize_hint_with_self env h =
-  let h = Decl_hint.hint env.Env.decl_env h in
+  let h = Decl_hint.hint env.decl_env h in
   localize_with_self env h
 
 and localize_hint ~ety_env env hint =
-  let hint_ty = Decl_hint.hint env.Env.decl_env hint in
+  let hint_ty = Decl_hint.hint env.decl_env hint in
   localize ~ety_env env hint_ty
 
 (* Add generic parameters to the environment, localize their bounds, and
@@ -521,7 +532,7 @@ and localize_hint ~ety_env env hint =
  * where ck is as, super or =
  *)
 let localize_generic_parameters_with_bounds
-    ~ety_env (env:Env.env) (tparams:decl tparam list) =
+    ~ety_env (env:env) (tparams:decl tparam list) =
   let env = Env.add_generic_parameters env tparams in
   let localize_bound env ({ tp_name = (pos,name); tp_constraints = cstrl; _ }: decl tparam) =
     let tparam_ty = (Reason.Rwitness pos, Tabstract(AKgeneric name, None)) in
@@ -532,12 +543,12 @@ let localize_generic_parameters_with_bounds
   env, List.concat cstrss
 
 let localize_where_constraints
-    ~ety_env (env:Env.env) where_constraints =
+    ~ety_env (env:env) where_constraints =
   let add_constraint env (h1, ck, h2) =
     let env, ty1 =
-      localize env (Decl_hint.hint env.Env.decl_env h1) ~ety_env in
+      localize env (Decl_hint.hint env.decl_env h1) ~ety_env in
     let env, ty2 =
-      localize env (Decl_hint.hint env.Env.decl_env h2) ~ety_env in
+      localize env (Decl_hint.hint env.decl_env h2) ~ety_env in
     TUtils.add_constraint (fst h1) env ck ty1 ty2
   in
   List.fold_left where_constraints ~f:add_constraint ~init:env
@@ -568,6 +579,11 @@ let localize ~ety_env env ty =
   let ty = Typing_enforceability.pessimize_type env ty in
   localize ~ety_env env ty
 
+let localize_with_self_possibly_enforceable env ty =
+  let et_enforced = Typing_enforceability.is_enforceable env ty in
+  let env, et_type = localize_with_self env ty in
+  env, { et_type; et_enforced }
+
 let localize_ft ?instantiation ~ety_env env ft =
   let ft = Typing_enforceability.pessimize_fun_type env ft in
   let instantiation = Option.map instantiation ~f:(fun i ->
@@ -577,21 +593,9 @@ let localize_ft ?instantiation ~ety_env env ft =
   ) in
   localize_ft ?instantiation ~ety_env env ft
 
-let localize_generic_parameters_with_bounds
-    ~ety_env (env:Env.env) (tparams:Nast.tparam list) =
-  let tparams: decl tparam list = List.map ~f:(fun t ->
-    let cstrl = List.map t.Aast.tp_constraints (fun (ck, cstr) ->
-      let cstr = Decl_hint.hint env.Env.decl_env cstr in
-      (ck, cstr)) in
-    let tparam = {
-      Typing_defs.tp_variance = t.Aast.tp_variance;
-      tp_name = t.Aast.tp_name;
-      tp_constraints = cstrl;
-      tp_reified = t.Aast.tp_reified;
-      tp_user_attributes = t.Aast.tp_user_attributes;
-    } in
-    Typing_enforceability.pessimize_tparam_constraints env tparam
-  ) tparams in
+let localize_generic_parameters_with_bounds ~ety_env env tparams =
+  let tparams: decl tparam list = List.map tparams
+    ~f:(Typing_enforceability.pessimize_tparam_constraints env) in
   localize_generic_parameters_with_bounds ~ety_env env tparams
 
 let check_tparams_constraints ~use_pos ~ety_env env tparams =

@@ -1726,7 +1726,7 @@ Variant getImageSize(const req::ptr<File>& stream, VRefParam imageinfo) {
   }
 
   if (result) {
-    ArrayInit ret(7, ArrayInit::Mixed{});
+    DArrayInit ret(7);
     ret.set(0, (int64_t)result->width);
     ret.set(1, (int64_t)result->height);
     ret.set(2, itype);
@@ -2811,7 +2811,7 @@ static Variant php_imagettftext_common(int mode, int extended,
   }
 
   /* return array with the text's bounding box */
-  Array ret;
+  Array ret = Array::CreateDArray();
   for (int i = 0; i < 8; i++) {
     ret.set(i, brect[i]);
   }
@@ -2837,7 +2837,7 @@ const StaticString
   s_JIS_mapped_Japanese_Font_Support("JIS-mapped Japanese Font Support");
 
 Array HHVM_FUNCTION(gd_info) {
-  Array ret;
+  Array ret = Array::CreateDArray();
 
   ret.set(s_GD_Version, PHP_GD_VERSION_STRING);
 

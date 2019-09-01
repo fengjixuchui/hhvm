@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -29,7 +29,7 @@ Ad-hoc rules for typing some common idioms
 
 open Core_kernel
 open Typing_defs
-open Utils
+open Typing_env_types
 open Aast
 
 module Env = Typing_env
@@ -48,49 +48,54 @@ let magic_method_name input =
           else if phys_equal c uc then "format_upcase_" ^ String.make 1 lc
           else "format_" ^ String.make 1 lc
 
-let lookup_magic_type (env:Env.env) (class_:locl ty) (fname:string) :
-    Env.env * (locl fun_params * locl ty option) option =
+let lookup_magic_type (env:env) (class_:locl ty) (fname:string) :
+    env * (locl fun_params * locl ty option) option =
   match class_ with
-    | (_, Tclass ((_, className), _, [])) ->
-        (match Env.get_class env className with
-           | Some c ->
-               let env, ce_type =
-                 Env.get_member true env c fname |>
-                   opt
-                     (fun env { ce_type = lazy ty; _ } ->
-                      Typing_phase.localize_with_self env ty)
-                     env
-               in
-               (match ce_type with
-                  | Some (_, Tfun {
-                                   ft_params = pars;
-                            ft_ret = ty;
-                            _;
-                          }
-                    ) ->
-                     env, Some (pars,
-                                (match ty with
-                                 | (_, Tprim Tstring) -> None
-                                 | _ -> Some ty))
-                  | _ -> env, None)
-           | None -> env, None)
-    | _ -> env, None
+  | (_, Tunion [
+      (_, Tdynamic);
+      (_, Tclass ((_, className), _, []));
+    ])
+  | (_, Tclass ((_, className), _, [])) ->
+    let (>>=) = Option.(>>=) in
+    let ce_type = Env.get_class env className >>=
+      (fun c -> Env.get_member true env c fname) >>=
+      (fun { ce_type = lazy ty; _ } ->
+        match ty with
+        | _, Tfun fty ->
+          let ety_env = Typing_phase.env_with_self env in
+          let instantiation = Typing_phase.({
+            use_pos = fty.ft_pos;
+            use_name = fname;
+            explicit_targs = [];
+          }) in
+          Some (Typing_phase.localize_ft ~instantiation ~ety_env env fty)
+        | _ -> None
+      ) in
+    begin match ce_type with
+    | Some (env, { ft_params = pars; ft_ret = { et_type = ty; _ }; _; }) ->
+      let ty_opt =
+        match ty with
+        | (_, Tprim Tstring) -> None
+        | _ -> Some ty in
+      env, Some (pars, ty_opt)
+    | _ -> env, None end
+  | _ -> env, None
 
 let get_char s i =
   if i >= String.length s then None else Some (String.get s i)
 
-let parse_printf_string env s pos (class_:locl ty) : Env.env * locl fun_params =
-  let rec read_text env i : Env.env * locl fun_params =
+let parse_printf_string env s pos (class_:locl ty) : env * locl fun_params =
+  let rec read_text env i : env * locl fun_params =
     match get_char s i with
       | Some '%' -> read_modifier env (i+1) class_ i
       | Some _   -> read_text env (i+1)
       | None     -> env, []
-  and read_modifier env i class_ i0 : Env.env * locl fun_params =
+  and read_modifier env i class_ i0 : env * locl fun_params =
     let fname = magic_method_name (get_char s i) in
     let snippet = String.sub s i0 ((min (i+1) (String.length s)) - i0) in
     let add_reason = List.map ~f:begin fun p ->
-      let why, ty = p.fp_type in
-      { p with fp_type = Reason.Rformat (pos, snippet, why), ty }
+      let why, ty = p.fp_type.et_type in
+      { p with fp_type = { p.fp_type with et_type = Reason.Rformat (pos, snippet, why), ty } }
     end in
     match lookup_magic_type env class_ fname with
       | env, Some (good_args, None) ->
@@ -121,7 +126,7 @@ let mapM (f:'s->'x->'s*'y) : 'st -> 'x list -> 's * 'y list =
 
 (* If expr is a constant string, that string, otherwise a position
    where it is obviously not *)
-let rec const_string_of (env:Env.env) (e:Nast.expr) : Env.env * (Pos.t, string) either =
+let rec const_string_of (env:env) (e:Nast.expr) : env * (Pos.t, string) either =
   let glue x y = match x,y with
     | Right sx, Right sy -> Right (sx^sy)
     | Left p, _ -> Left p
@@ -140,19 +145,23 @@ let rec const_string_of (env:Env.env) (e:Nast.expr) : Env.env * (Pos.t, string) 
     | p, _ -> env, Left p
 
 (* Specialize a function type using whatever we can tell about the args *)
-let retype_magic_func (env:Env.env) (ft:locl fun_type) (el:Nast.expr list) : Env.env * locl fun_type =
-  let rec f env param_types args : Env.env * locl fun_params option =
+let retype_magic_func (env:env) (ft:locl fun_type) (el:Nast.expr list) : env * locl fun_type =
+  let rec f env param_types args : env * locl fun_params option =
     (match param_types, args with
-      | [ { fp_type = (_, Toption (_, Tclass ((_, fs), _, [_]))); _ }], [(_, Null)]
+      | [ { fp_type = { et_type = (_, Toption (_, Tclass ((_, fs), _, [_]))); _ }; _}], [(_, Null)]
         when SN.Classes.is_format_string fs -> env, None
-      | [({ fp_type = (why, Toption (_, Tclass ((_, fs), _, [type_arg]))); _ } as fp)], (arg :: _)
-      | [({ fp_type = (why,             Tclass ((_, fs), _, [type_arg] )); _ } as fp)], (arg :: _)
+      | [({ fp_type = { et_type = (why, Toption (_, Tclass ((_, fs), _, [type_arg]))); _ }; _} as fp)], (arg :: _)
+      | [({ fp_type = { et_type = (why,             Tclass ((_, fs), _, [type_arg] )); _ }; _} as fp)], (arg :: _)
+      | [({ fp_type = { et_type = (why, Tunion [
+          (_, Tdynamic);
+          (_, Tclass ((_, fs), _, [type_arg]));
+        ]); _ }; _ } as fp)], (arg :: _)
         when SN.Classes.is_format_string fs ->
           (match const_string_of env arg with
              |  env, Right str ->
                   let env, argl =
                     parse_printf_string env str (fst arg) type_arg in
-                  env, Some ({ fp with fp_type = (why, Tprim Tstring) } :: argl)
+                  env, Some ({ fp with fp_type = { et_type = (why, Tprim Tstring); et_enforced = false; } } :: argl)
              |  env, Left pos ->
                   if Partial.should_check_error (Env.get_mode env) 4027
                   then Errors.expected_literal_format_string pos;

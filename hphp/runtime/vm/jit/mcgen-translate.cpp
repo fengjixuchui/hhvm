@@ -206,7 +206,7 @@ void retranslateAll() {
     auto const mode = RuntimeOption::EvalJitSerdesMode;
     if (RuntimeOption::RepoAuthoritative &&
         !RuntimeOption::EvalJitSerdesFile.empty() &&
-        isJitSerializing(mode)) {
+        isJitSerializing()) {
       if (serverMode) Logger::Info("retranslateAll: serializing profile data");
       std::string errMsg;
       VMWorker([&errMsg] () {
@@ -237,7 +237,7 @@ void retranslateAll() {
     profData()->setFuncOrder(std::move(result.first));
     profData()->setBaseProfCount(result.second);
   } else {
-    assertx(isJitDeserializing(RuntimeOption::EvalJitSerdesMode));
+    assertx(isJitDeserializing());
   }
   setBaseInliningProfCount(globalProfData()->baseProfCount());
   auto const& sortedFuncs = globalProfData()->sortedFuncs();
@@ -362,10 +362,12 @@ translate(TransArgs args, FPInvOffset spOff,
       TransContext{env.transID, args.kind, args.flags, args.sk,
                    env.initSpOffset, args.optIndex};
 
-    env.unit = irGenRegion(*args.region, transContext,
-                           env.pconds, env.annotations);
+    env.unit = irGenRegion(*args.region, transContext, env.pconds);
+    auto const unitAnnotations = env.unit->annotationData->getAllAnnotations();
+    env.annotations.insert(env.annotations.end(),
+                           unitAnnotations.begin(), unitAnnotations.end());
     if (env.unit) {
-      env.vunit = irlower::lowerUnit(*env.unit, &env.annotations);
+      env.vunit = irlower::lowerUnit(*env.unit);
     }
   }
 

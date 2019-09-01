@@ -1,0 +1,10 @@
+use ocamlrep_derive::IntoOcamlRep;
+
+#[derive(Clone, Debug, IntoOcamlRep)]
+pub enum A {
+    I,
+    J(isize),
+    K(isize, isize),
+    L((isize, isize)),
+    M { x: isize, y: isize },
+}

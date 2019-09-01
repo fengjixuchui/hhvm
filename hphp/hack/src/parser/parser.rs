@@ -6,12 +6,14 @@
 
 use crate::declaration_parser::DeclarationParser;
 use crate::lexer::Lexer;
+use crate::mode_parser::parse_mode;
 use crate::parser_env::ParserEnv;
 use crate::parser_trait::{Context, ParserTrait};
 use crate::smart_constructors::{NodeType, SmartConstructors};
-use crate::source_text::SourceText;
 use crate::stack_limit::StackLimit;
-use crate::syntax_error::SyntaxError;
+use parser_core_types::source_text::SourceText;
+use parser_core_types::syntax_error::SyntaxError;
+use parser_core_types::syntax_tree::SyntaxTree;
 
 pub struct Parser<'a, S, T>
 where
@@ -39,6 +41,17 @@ where
         }
     }
 
+    pub fn make_syntax_tree(
+        source: &'a SourceText<'a>,
+        env: ParserEnv,
+    ) -> SyntaxTree<<S::R as NodeType>::R, S> {
+        let mode = parse_mode(&source);
+        let mut parser = Parser::make(&source, env);
+        let root = parser.parse_script(None);
+        let (_, errors, _, state) = parser.into_parts();
+        SyntaxTree::create(source, root, errors, mode, state)
+    }
+
     fn into_parts(self) -> (Lexer<'a, S::Token>, Vec<SyntaxError>, ParserEnv, S) {
         (self.lexer, self.errors, self.env, self.sc)
     }
@@ -55,10 +68,7 @@ where
             .map(|r| r.extract())
     }
 
-    pub fn parse_script(
-        &mut self,
-        stack_limit: Option<std::rc::Rc<StackLimit>>,
-    ) -> <S::R as NodeType>::R {
+    pub fn parse_script(&mut self, stack_limit: Option<&'a StackLimit>) -> <S::R as NodeType>::R {
         let mut decl_parser: DeclarationParser<S, T> = DeclarationParser::make(
             self.lexer.clone(),
             self.env.clone(),

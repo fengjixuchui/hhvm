@@ -7,12 +7,16 @@
 //
 
 use crate::token_kind::TokenKind;
+use ocamlpool_rust::{
+    ocamlvalue::Ocamlvalue,
+    utils::{caml_tuple, usize_to_ocaml},
+};
 use std::borrow::Cow;
 
 // many errors are static strings, but not all of them
 pub type Error = Cow<'static, str>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyntaxError {
     pub start_offset: usize,
     pub end_offset: usize,
@@ -26,6 +30,27 @@ impl SyntaxError {
             end_offset,
             message,
         }
+    }
+}
+
+impl Ocamlvalue for SyntaxError {
+    fn ocamlvalue(&self) -> usize {
+        // type error_type = ParseError | RuntimeError
+        //
+        // type t = {
+        //   child        : t option;
+        //   start_offset : int;
+        //   end_offset   : int;
+        //   error_type   : error_type;
+        //   message      : string;
+        // }
+        let child = usize_to_ocaml(0); // None
+        let start_offset = usize_to_ocaml(self.start_offset);
+        let end_offset = usize_to_ocaml(self.end_offset);
+        let error_type = usize_to_ocaml(0); // ParseError
+
+        let message = self.message.ocamlvalue();
+        caml_tuple(&[child, start_offset, end_offset, error_type, message])
     }
 }
 
@@ -91,8 +116,7 @@ pub const error1038: Error =
 pub const error1039: Error = Cow::Borrowed("A closing XHP tag is expected here.");
 pub const error1041: Error =
     Cow::Borrowed("A function body or a semicolon (';') is expected here.");
-pub const error1044: Error =
-    Cow::Borrowed("A name or __construct keyword is expected here.");
+pub const error1044: Error = Cow::Borrowed("A name or __construct keyword is expected here.");
 pub const error1045: Error =
     Cow::Borrowed("An 'extends' or 'implements' keyword is expected here.");
 pub const error1046: Error = Cow::Borrowed("A lambda arrow ('==>') is expected here.");
@@ -165,8 +189,7 @@ pub const error2013: Error = Cow::Borrowed("A method declaration cannot have dup
 pub const error2014: Error = Cow::Borrowed("An abstract method cannot have a method body.");
 pub const error2017: Error =
     Cow::Borrowed("A method declaration cannot have multiple visibility modifiers.");
-pub const error2018: Error =
-    Cow::Borrowed("A constructor cannot have a non-void type annotation.");
+pub const error2018: Error = Cow::Borrowed("A constructor cannot have a non-void type annotation.");
 pub const error2020: Error = Cow::Borrowed(concat!(
     "Use of the '{}' subscript operator is deprecated; ",
     " use '[]' instead."

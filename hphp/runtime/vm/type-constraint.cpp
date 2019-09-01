@@ -513,7 +513,10 @@ bool TypeConstraint::checkNamedTypeNonObj(tv_rval val) const {
         return Assert || val.val().parr->isDArray();
       case AnnotAction::VArrayOrDArrayCheck:
         assertx(tvIsArrayOrShape(val));
-        return Assert || !val.val().parr->isNotDVArray();
+        return (Assert || (
+          !RuntimeOption::EvalHackArrCompatTypeHintPolymorphism &&
+          !val.val().parr->isNotDVArray()
+        ));
       case AnnotAction::NonVArrayOrDArrayCheck:
         assertx(tvIsArrayOrShape(val));
         return Assert || val.val().parr->isNotDVArray();
@@ -766,7 +769,10 @@ bool TypeConstraint::checkImpl(tv_rval val,
       return isAssert || val.val().parr->isDArray();
     case AnnotAction::VArrayOrDArrayCheck:
       assertx(tvIsArrayOrShape(val));
-      return isAssert || !val.val().parr->isNotDVArray();
+      return (isAssert || (
+        !RuntimeOption::EvalHackArrCompatTypeHintPolymorphism &&
+        !val.val().parr->isNotDVArray()
+      ));
     case AnnotAction::NonVArrayOrDArrayCheck:
       assertx(tvIsArrayOrShape(val));
       return isAssert || val.val().parr->isNotDVArray();
@@ -1023,7 +1029,8 @@ folly::Optional<AnnotType> TypeConstraint::checkDVArray(tv_rval val) const {
         assertx(!val.val().parr->isDArray());
         break;
       case AnnotType::VArrOrDArr:
-        assertx(val.val().parr->isNotDVArray());
+        assertx(RuntimeOption::EvalHackArrCompatTypeHintPolymorphism ||
+                val.val().parr->isNotDVArray());
         break;
       default:
         return folly::none;
@@ -1049,7 +1056,8 @@ void TypeConstraint::verifyParamFail(const Func* func, TypedValue* tv,
     isSoft() ||
     (isThis() && couldSeeMockObject()) ||
     (RuntimeOption::EvalHackArrCompatTypeHintNotices &&
-     isArrayType(tvToCell(tv)->m_type)) ||
+     (RuntimeOption::EvalHackArrCompatTypeHintPolymorphism ||
+      isArrayType(tvToCell(tv)->m_type))) ||
     check(tv, func->cls())
   );
 }
@@ -1076,9 +1084,9 @@ void TypeConstraint::verifyOutParamFail(const Func* func,
   }
 
   auto c = tvToCell(tv);
-  if (auto const at = checkDVArray(c)) {
+  if (checkDVArray(c)) {
     raise_hackarr_compat_type_hint_outparam_notice(
-      func, c->m_data.parr, *at, paramNum
+      func, c->m_data.parr, displayName(func->cls()).c_str(), paramNum
     );
     return;
   }
@@ -1087,9 +1095,9 @@ void TypeConstraint::verifyOutParamFail(const Func* func,
     if (isString() || (isObject() && interface_supports_string(m_typeName))) {
       if (RuntimeOption::EvalStringHintNotices) {
         if (isFuncType(c->m_type)) {
-          raise_notice("Implicit Func to string conversion for type-hint");
+          raise_notice(Strings::FUNC_TO_STRING_IMPLICIT);
         } else {
-          raise_notice("Implicit Class to string conversion for type-hint");
+          raise_notice(Strings::CLASS_TO_STRING_IMPLICIT);
         }
       }
       c->m_data.pstr = isFuncType(c->m_type)
@@ -1144,9 +1152,9 @@ void TypeConstraint::verifyRecFieldFail(tv_rval val,
                                      const StringData* fieldName) const {
   assertx(validForRecField());
 
-  if (auto const at = checkDVArray(val)) {
+  if (checkDVArray(val)) {
     raise_hackarr_compat_type_hint_rec_field_notice(
-      recordName, val.val().parr, *at, fieldName
+      recordName, val.val().parr, displayName().c_str(), fieldName
     );
     return;
   }
@@ -1171,9 +1179,9 @@ void TypeConstraint::verifyPropFail(const Class* thisCls,
   assertx(validForProp());
 
   val = tvToCell(val);
-  if (auto const at = checkDVArray(val)) {
+  if (checkDVArray(val)) {
     raise_hackarr_compat_type_hint_property_notice(
-      declCls, val.val().parr, *at, propName, isStatic
+      declCls, val.val().parr, displayName().c_str(), propName, isStatic
     );
     return;
   }
@@ -1229,18 +1237,18 @@ void TypeConstraint::verifyFail(const Func* func, TypedValue* tv,
 
   auto const c = tvToCell(tv);
 
-  if (auto const at = checkDVArray(c)) {
+  if (checkDVArray(c)) {
     if (id == ReturnId) {
       raise_hackarr_compat_type_hint_ret_notice(
         func,
         c->m_data.parr,
-        *at
+        name.c_str()
       );
     } else {
       raise_hackarr_compat_type_hint_param_notice(
         func,
         c->m_data.parr,
-        *at,
+        name.c_str(),
         id
       );
     }
@@ -1260,9 +1268,9 @@ void TypeConstraint::verifyFail(const Func* func, TypedValue* tv,
     if (isString() || (isObject() && interface_supports_string(m_typeName))) {
       if (RuntimeOption::EvalStringHintNotices) {
         if (isFuncType(c->m_type)) {
-          raise_notice("Implicit Func to string conversion for type-hint");
+          raise_notice(Strings::FUNC_TO_STRING_IMPLICIT);
         } else {
-          raise_notice("Implicit Class to string conversion for type-hint");
+          raise_notice(Strings::CLASS_TO_STRING_IMPLICIT);
         }
       }
       c->m_data.pstr = isFuncType(c->m_type)

@@ -437,10 +437,10 @@ const StaticString
   s_default_output_handler("default output handler");
 
 Array ExecutionContext::obGetStatus(bool full) {
-  Array ret = Array::CreateVArray();
+  Array ret = empty_varray();
   int level = 0;
   for (auto& buffer : m_buffers) {
-    Array status = Array::CreateDArray();
+    Array status = empty_darray();
     if (level < m_protectedLevel || buffer.handler.isNull()) {
       status.set(s_name, s_default_output_handler);
       status.set(s_type, 0);
@@ -496,7 +496,7 @@ void ExecutionContext::obSetImplicitFlush(bool on) {
 }
 
 Array ExecutionContext::obGetHandlers() {
-  Array ret = Array::CreateVArray();
+  Array ret = empty_varray();
   for (auto& ob : m_buffers) {
     auto& handler = ob.handler;
     ret.append(handler.isNull() ? s_default_output_handler : handler);
@@ -899,8 +899,8 @@ bool ExecutionContext::callUserErrorHandler(const Exception& e, int errnum,
     }
     try {
       ErrorStateHelper esh(this, ErrorState::ExecutingUserHandler);
-      m_deferredErrors = Array::CreateVec();
-      SCOPE_EXIT { m_deferredErrors = Array::CreateVec(); };
+      m_deferredErrors = empty_vec_array();
+      SCOPE_EXIT { m_deferredErrors = empty_vec_array(); };
       if (!same(vm_call_user_func
                 (m_userErrorHandlers.back().first,
                  make_vec_array(errnum, String(e.getMessage()),
@@ -1172,8 +1172,9 @@ void ExecutionContext::onLoadWithOptions(
     return;
   }
   if (m_requestOptions != opts) {
-    auto const path =
-      opts.path().empty() ? "{default options}" : opts.path().data();
+    // The data buffer has to stay alive for the call to raise_error.
+    auto const path_str = opts.path();
+    auto const path = path_str.empty() ? "{default options}" : path_str.data();
     raise_error(
       "Attempting to load file %s with incompatible parser settings from %s, "
       "this request is using parser settings from %s",
@@ -1559,7 +1560,7 @@ void ExecutionContext::requestExit() {
     clearLastError();
   }
 
-  m_deferredErrors = Array::CreateVec();
+  m_deferredErrors = empty_vec_array();
 
   if (Logger::UseRequestLog) Logger::SetThreadHook(nullptr);
   if (m_requestTrace) record_trace(std::move(*m_requestTrace));
@@ -1582,7 +1583,8 @@ TypedValue ExecutionContext::invokeFuncImpl(const Func* f,
                                             bool dynamic,
                                             FStackCheck doStackCheck,
                                             FInitArgs doInitArgs,
-                                            FEnterVM doEnterVM) {
+                                            FEnterVM doEnterVM,
+                                            Array&& reifiedGenerics) {
   assertx(f);
   // If `f' is a regular function, `thiz' and `cls' must be null.
   assertx(IMPLIES(!f->implCls(), (!thiz && !cls)));
@@ -1652,6 +1654,8 @@ TypedValue ExecutionContext::invokeFuncImpl(const Func* f,
     vmStack().popAR();
     throw;
   }
+
+  if (reifiedGenerics.get()) ar->setReifiedGenerics(reifiedGenerics.detach());
 
   {
     pushVMState(reentrySP);
@@ -1729,7 +1733,9 @@ TypedValue ExecutionContext::invokeFunc(const Func* f,
                                         StringData* invName /* = NULL */,
                                         InvokeFlags flags /* = InvokeNormal */,
                                         bool dynamic /* = true */,
-                                        bool checkRefAnnot /* = false */) {
+                                        bool checkRefAnnot /* = false */,
+                                        Array&& reifiedGenerics
+                                                              /* = Array() */) {
   const auto& args = *args_.toCell();
   assertx(isContainerOrNull(args));
 
@@ -1773,7 +1779,7 @@ TypedValue ExecutionContext::invokeFunc(const Func* f,
   auto const doInitArgs = [&] (ActRec* ar) {
     if (!varEnv) {
       auto const& prepArgs = cellIsNull(&args)
-        ? make_array_like_tv(staticEmptyVArray())
+        ? make_array_like_tv(ArrayData::CreateVArray())
         : args;
       prepareArrayArgs(ar, prepArgs, vmStack(), 0, checkRefAnnot);
     }
@@ -1791,7 +1797,8 @@ TypedValue ExecutionContext::invokeFunc(const Func* f,
 
   return invokeFuncImpl(f, thiz, cls, argc, invName,
                         dynamic && !(flags & InvokePseudoMain),
-                        doCheckStack, doInitArgs, doEnterVM);
+                        doCheckStack, doInitArgs, doEnterVM,
+                        std::move(reifiedGenerics));
 }
 
 TypedValue ExecutionContext::invokeFuncFew(const Func* f,
@@ -1831,7 +1838,7 @@ TypedValue ExecutionContext::invokeFuncFew(const Func* f,
                         ActRec::decodeThis(thisOrCls),
                         ActRec::decodeClass(thisOrCls),
                         argc, invName, dynamic,
-                        doCheckStack, doInitArgs, doEnterVM);
+                        doCheckStack, doInitArgs, doEnterVM, Array());
 }
 
 static void prepareAsyncFuncEntry(ActRec* enterFnAr, Resumable* resumable) {

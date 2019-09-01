@@ -83,9 +83,16 @@ function preg_last_error(): int;
 <<__Native, __Rx>>
 function preg_match_all(string $pattern,
                         string $subject,
-                        ?array &$matches = null,
                         int $flags = 0,
                         int $offset = 0): mixed;
+
+<<__Native, __Rx>>
+function preg_match_all_with_matches(string $pattern,
+                                     string $subject,
+                                     <<__OutOnly>>
+                                     inout mixed $matches,
+                                     int $flags = 0,
+                                     int $offset = 0): mixed;
 
 /**
  * Perform a regular expression match
@@ -116,9 +123,16 @@ function preg_match_all(string $pattern,
 <<__Native, __Rx>>
 function preg_match(string $pattern,
                     string $subject,
-                    ?array &$matches = null,
                     int $flags = 0,
                     int $offset = 0): mixed;
+
+<<__Native, __Rx>>
+function preg_match_with_matches(string $pattern,
+                                 string $subject,
+                                 <<__OutOnly>>
+                                 inout mixed $matches,
+                                 int $flags = 0,
+                                 int $offset = 0): mixed;
 
 /**
  * Quote regular expression characters
@@ -259,6 +273,14 @@ function preg_replace(mixed $pattern,
                       mixed $subject,
                       int $limit = -1,
                       ?int &$count = null): mixed;
+
+<<__Native, __Rx>>
+function preg_replace_with_count(mixed $pattern,
+                                 mixed $replacement,
+                                 mixed $subject,
+                                 int $limit,
+                                 ?int &$count): mixed;
+
 
 /**
  * Split string by a regular expression

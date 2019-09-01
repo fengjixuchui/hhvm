@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
@@ -39,7 +39,7 @@ let rec walk_and_gather_xhp_ ~env ~pos cty =
   let env, cty = Typing_solver.expand_type_and_solve
     ~description_of_expected:"an XHP instance" env pos cty Errors.unify_error in
   match (snd cty) with
-  | Tany
+  | Tany _
   | Terr
   | Tdynamic -> env, [], []
   | Tunion tyl ->
@@ -51,7 +51,7 @@ let rec walk_and_gather_xhp_ ~env ~pos cty =
       (* ok to have non_xhp if there are some xhp *)
       let non_xhp = match xhp with _::_ -> [] | _ -> non_xhp in
       env, xhp, non_xhp
-  | Tabstract (AKdependent (`this), _) ->
+  | Tabstract (AKdependent (DTthis), _) ->
       (* This is unsound, but we want to do best-effort checking
        * of attribute spreads even on XHP classes not marked `final`. We should
        * implement <<__ConsistentAttributes>> as a way to make this hacky
@@ -69,6 +69,8 @@ let rec walk_and_gather_xhp_ ~env ~pos cty =
   | (Tnonnull | Tarraykind _ | Toption _
        | Tprim _ | Tvar _ | Tfun _ | Ttuple _ | Tanon (_, _) | Tobject
        | Tshape _ | Tdestructure _) -> env, [], [cty]
+  | Tpu_access _
+  | Tpu _ -> env, [], [cty]
 
 and walk_list_and_gather_xhp env pos tyl =
   List.fold ~init:(env, [], []) tyl ~f:(fun (env, xhp_acc, non_xhp_acc) ty ->

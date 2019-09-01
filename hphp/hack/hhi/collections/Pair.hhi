@@ -62,7 +62,6 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    * @return - an `array` containing the values from the current `Pair`.
    */
   <<__Rx, __MaybeMutable, __PHPStdLib>>
-  /* HH_IGNORE_ERROR[2082] T30260145 */
   public function toArray(): array;
 
   /**
@@ -74,6 +73,7 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    */
   <<__Rx, __MaybeMutable>>
   /* HH_FIXME[4110] pair needs to extend ConstVector<Tv1|Tv2> */
+  /* HH_FIXME[4341] pair needs to extend ConstVector<Tv1|Tv2> */
   public function toValuesArray<Tu>(): varray<Tu>
     where Tv1 as Tu, Tv2 as Tu;
 
@@ -132,6 +132,7 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    */
   <<__Rx, __MutableReturn, __MaybeMutable>>
   /* HH_FIXME[4110] pair needs to extend ConstVector<Tv1|Tv2> */
+  /* HH_FIXME[4341] pair needs to extend ConstVector<Tv1|Tv2> */
   public function toSet(): Set<arraykey> where Tv1 as arraykey, Tv2 as arraykey;
 
   /**
@@ -141,6 +142,7 @@ final class Pair<+Tv1, +Tv2> implements ConstVector<mixed> {
    */
   <<__Rx, __MaybeMutable>>
   /* HH_FIXME[4110] pair needs to extend ConstVector<Tv1|Tv2> */
+  /* HH_FIXME[4341] pair needs to extend ConstVector<Tv1|Tv2> */
   public function toImmSet(): ImmSet<arraykey> where Tv1 as arraykey, Tv2 as arraykey;
 
   /**

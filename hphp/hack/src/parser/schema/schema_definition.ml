@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
@@ -1769,6 +1769,18 @@ let schema : schema_node list =
     ; func_name   = "type_constant"
     ; description = "type_constant"
     ; prefix      = "type_constant"
+    ; aggregates  = [ Statement ]
+    ; fields =
+      [ "left_type", Aggregate Specifier
+      ; "separator", Token
+      ; "right_type", Token
+      ]
+    }
+  ; { kind_name   = "PUAccess"
+    ; type_name   = "pu_access"
+    ; func_name   = "pu_access"
+    ; description = "pu_access"
+    ; prefix      = "pu_access"
     ; aggregates  = [ Statement ]
     ; fields =
       [ "left_type", Aggregate Specifier

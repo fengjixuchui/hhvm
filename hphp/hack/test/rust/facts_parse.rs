@@ -5,12 +5,16 @@
 // LICENSE file in the "hack" directory of this source tree.;
 
 use std::fs;
+use std::path::PathBuf;
 
 extern crate clap;
 use clap::{App, Arg};
 
 extern crate facts_rust;
 use facts_rust::facts_parser::*;
+
+extern crate oxidized;
+use oxidized::relative_path::*;
 
 fn main() {
     let args = App::new("Facts JSON test (Rust)")
@@ -34,10 +38,12 @@ fn main() {
 }
 
 fn parse(file_path: String, parse_only: bool) {
+    let path = RelativePath::make(Prefix::Dummy, PathBuf::from(file_path.clone()));
     let opts = ExtractAsJsonOpts {
         php5_compat_mode: true,
         hhvm_compat_mode: true,
-        filename: file_path.clone(),
+        allow_new_attribute_syntax: false,
+        filename: path,
     };
 
     let content = fs::read(&file_path).expect("failed to read file");

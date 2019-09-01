@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -9,12 +9,11 @@
 
 open Core_kernel
 open Common
-include Typing_env_types
+open Typing_env_types
 open Decl_env
 open Typing_defs
 open Aast
 open Typing_env_return_info
-open Type_parameter_env
 
 module Dep = Typing_deps.Dep
 module LID = Local_id
@@ -24,6 +23,7 @@ module C = Typing_continuations
 module TL = Typing_logic
 module Cls = Decl_provider.Class
 module Fake = Typing_fake_members
+module TPEnv = Type_parameter_env
 
 let show_env _ = "<env>"
 let pp_env _ _ = Printf.printf "%s\n" "<env>"
@@ -86,10 +86,12 @@ let add env x ty =
   | _ -> { env with tenv = IMap.add x ty env.tenv }
 
 let empty_bounds = TySet.empty
-let singleton_bound ty = TySet.singleton ty
 
 let env_with_tvenv env tvenv =
   { env with tvenv = tvenv }
+
+let env_with_global_tvenv env global_tvenv =
+  { env with global_tvenv = global_tvenv }
 
 let empty_tyvar_info =
   { tyvar_pos = Pos.none;
@@ -101,19 +103,26 @@ let empty_tyvar_info =
     type_constants = SMap.empty;
     }
 
-let add_current_tyvar env p v =
+let add_current_tyvar ?variance env p v =
   match env.tyvars_stack with
   | (expr_pos, tyvars) :: rest ->
+    let tyvar_info =
+      match variance with
+      | Some Ast_defs.Invariant -> {empty_tyvar_info with appears_covariantly = true; appears_contravariantly = true}
+      | Some Ast_defs.Covariant -> {empty_tyvar_info with appears_covariantly = true}
+      | Some Ast_defs.Contravariant -> {empty_tyvar_info with appears_contravariantly = true}
+      | None -> empty_tyvar_info
+    in
     let env = env_with_tvenv env
-      (IMap.add v { empty_tyvar_info with tyvar_pos = p } env.tvenv) in
+      (IMap.add v (LocalTyvar { tyvar_info with tyvar_pos = p }) env.tvenv) in
     { env with tyvars_stack = (expr_pos, (v :: tyvars)) :: rest }
   | _ -> env
 
-let fresh_type_reason env r =
+let fresh_type_reason ?variance env r =
   let v = Ident.tmp () in
   let env =
     log_env_change "fresh_type" env @@
-    add_current_tyvar env (Reason.to_pos r) v in
+    add_current_tyvar ?variance env (Reason.to_pos r) v in
   env, (r, Tvar v)
 
 let fresh_type env p =
@@ -143,14 +152,28 @@ let get_type_unsafe env x =
   let ty = IMap.get x env.tenv in
   match ty with
   | None ->
-      env, (Reason.none, Tany)
+      env, (Reason.none, Typing_defs.make_tany ())
   | Some ty -> env, ty
 
-let get_tyvar_info env var =
-  Option.value (IMap.get var env.tvenv) ~default:empty_tyvar_info
+let get_tyvar_info_opt env var =
+  let tyvaropt = IMap.get var env.tvenv in
+  match tyvaropt with
+  | None -> None
+  | Some GlobalTyvar -> IMap.get var env.global_tvenv
+  | Some (LocalTyvar tyvar) -> Some tyvar
 
-let set_tyvar_info env var tyvar_info =
-  { env with tvenv = IMap.add var tyvar_info env.tvenv }
+let get_tyvar_info env var =
+  Option.value (get_tyvar_info_opt env var) ~default:empty_tyvar_info
+
+let set_tvenv_link_global_tyvar env var =
+  env_with_tvenv env (IMap.add var GlobalTyvar env.tvenv)
+
+let update_tyvar_info env var tyvar_info =
+  if IMap.get var env.tvenv = Some GlobalTyvar then
+    let env = env_with_tvenv env (IMap.add var GlobalTyvar env.tvenv) in
+    env_with_global_tvenv env (IMap.add var tyvar_info env.global_tvenv)
+  else
+    env_with_tvenv env (IMap.add var (LocalTyvar tyvar_info) env.tvenv)
 
 let get_tyvar_eager_solve_fail env var =
   let tvinfo = get_tyvar_info env var in
@@ -179,53 +202,27 @@ let get_shape_field_name_pos = function
 
 let next_cont_opt env = LEnvC.get_cont_option C.Next env.lenv.per_cont_env
 
-let get_tpenv_lower_bounds tpenv name =
-match SMap.get name tpenv with
-| None -> empty_bounds
-| Some {lower_bounds; _} -> lower_bounds
-
-let get_tpenv_upper_bounds tpenv name =
-match SMap.get name tpenv with
-| None -> empty_bounds
-| Some {upper_bounds; _} -> upper_bounds
-
-
-let get_tpenv_reified tpenv name =
-match SMap.get name tpenv with
-| None -> Erased
-| Some {reified; _} -> reified
-
-let get_tpenv_enforceable tpenv name =
-match SMap.get name tpenv with
-| None -> false
-| Some {enforceable; _} -> enforceable
-
-let get_tpenv_newable tpenv name =
-match SMap.get name tpenv with
-| None -> false
-| Some {newable; _} -> newable
-
 let get_tpenv env =
   match next_cont_opt env with
-  | None -> Type_parameter_env.empty
+  | None -> TPEnv.empty
   | Some entry -> entry.Typing_per_cont_env.tpenv
 
 let get_lower_bounds env name =
   let tpenv = get_tpenv env in
-  let local = get_tpenv_lower_bounds tpenv name in
-  let global = get_tpenv_lower_bounds env.global_tpenv name in
+  let local = TPEnv.get_lower_bounds tpenv name in
+  let global = TPEnv.get_lower_bounds env.global_tpenv name in
   TySet.union local global
 
 let get_upper_bounds env name =
   let tpenv = get_tpenv env in
-  let local = get_tpenv_upper_bounds tpenv name in
-  let global = get_tpenv_upper_bounds env.global_tpenv name in
+  let local = TPEnv.get_upper_bounds tpenv name in
+  let global = TPEnv.get_upper_bounds env.global_tpenv name in
   TySet.union local global
 
 let get_reified env name =
   let tpenv = get_tpenv env in
-  let local = get_tpenv_reified tpenv name in
-  let global = get_tpenv_reified env.global_tpenv name in
+  let local = TPEnv.get_reified tpenv name in
+  let global = TPEnv.get_reified env.global_tpenv name in
   match local, global with
   | Reified, _ | _, Reified -> Reified
   | SoftReified, _ | _, SoftReified -> SoftReified
@@ -233,14 +230,14 @@ let get_reified env name =
 
 let get_enforceable env name =
   let tpenv = get_tpenv env in
-  let local = get_tpenv_enforceable tpenv name in
-  let global = get_tpenv_enforceable env.global_tpenv name in
+  let local = TPEnv.get_enforceable tpenv name in
+  let global = TPEnv.get_enforceable env.global_tpenv name in
   local || global
 
 let get_newable env name =
   let tpenv = get_tpenv env in
-  let local = get_tpenv_newable tpenv name in
-  let global = get_tpenv_newable env.global_tpenv name in
+  let local = TPEnv.get_newable tpenv name in
+  let global = TPEnv.get_newable env.global_tpenv name in
   local || global
 
 (* Get bounds that are both an upper and lower of a given generic *)
@@ -248,45 +245,6 @@ let get_equal_bounds env name =
   let lower = get_lower_bounds env name in
   let upper = get_upper_bounds env name in
   TySet.inter lower upper
-
-let rec is_generic_param ~elide_nullable ty name =
-  match ty with
-  | (_, Tabstract (AKgeneric name', None)) -> name = name'
-  | (_, Toption ty) when elide_nullable -> is_generic_param ~elide_nullable ty name
-  | _ -> false
-
-(* Add a single new upper bound [ty] to generic parameter [name] in [tpenv] *)
-let add_upper_bound_ tpenv name ty =
-  (* Don't add superfluous T <: T or T <: ?T to environment *)
-  if is_generic_param ~elide_nullable:true ty name
-  then tpenv
-  else match SMap.get name tpenv with
-  | None ->
-    SMap.add name
-      { lower_bounds = empty_bounds;
-        upper_bounds = singleton_bound ty;
-        reified = Erased;
-        enforceable = false;
-        newable = false } tpenv
-  | Some tp ->
-    SMap.add name { tp with upper_bounds = ty++tp.upper_bounds; } tpenv
-
-(* Add a single new lower bound [ty] to generic parameter [name] in [tpenv] *)
-let add_lower_bound_ tpenv name ty =
-  (* Don't add superfluous T <: T to environment *)
-  if is_generic_param ~elide_nullable:false ty name
-  then tpenv
-  else
-  match SMap.get name tpenv with
-  | None ->
-    SMap.add name
-      { lower_bounds = singleton_bound ty;
-        upper_bounds = empty_bounds;
-        reified = Erased;
-        enforceable = false;
-        newable = false } tpenv
-  | Some tp ->
-    SMap.add name { tp with lower_bounds = ty++tp.lower_bounds } tpenv
 
 let env_with_tpenv env tpenv =
   { env with lenv =
@@ -301,11 +259,11 @@ let add_upper_bound_global env name ty =
   let tpenv =
     begin match ty with
     | (r, Tabstract (AKgeneric formal_super, _)) ->
-      add_lower_bound_ env.global_tpenv formal_super
+      TPEnv.add_lower_bound env.global_tpenv formal_super
         (r, Tabstract (AKgeneric name, None))
     | _ -> env.global_tpenv
     end in
-   { env with global_tpenv=(add_upper_bound_ tpenv name ty) }
+   { env with global_tpenv = TPEnv.add_upper_bound tpenv name ty }
 
  (* Add a single new upper bound [ty] to generic parameter [name] in the local
   * type parameter environment of [env].
@@ -317,28 +275,7 @@ let add_upper_bound_global env name ty =
   *   T <: (t1 & ... & tn)
   *)
  let add_upper_bound ?intersect env name ty =
-   let env_tpenv = get_tpenv env in
-   let tpenv =
-     begin match ty with
-     | (r, Tabstract (AKgeneric formal_super, _)) ->
-       add_lower_bound_ env_tpenv formal_super
-         (r, Tabstract (AKgeneric name, None))
-     | _ -> env_tpenv
-     end in
-   match intersect with
-   | None -> env_with_tpenv env (add_upper_bound_ env_tpenv name ty)
-   | Some intersect ->
-     let tyl = intersect ty (TySet.elements (get_upper_bounds env name)) in
-     let add ty tys =
-       if is_generic_param ~elide_nullable:true ty name
-       then tys else TySet.add ty tys in
-     let upper_bounds = List.fold_right ~init:TySet.empty ~f:add tyl in
-     let lower_bounds = get_tpenv_lower_bounds env_tpenv name in
-     let reified = get_tpenv_reified env_tpenv name in
-     let enforceable = get_tpenv_enforceable env_tpenv name in
-     let newable = get_tpenv_newable env_tpenv name in
-     env_with_tpenv env
-       (SMap.add name {lower_bounds; upper_bounds; reified; enforceable; newable} tpenv)
+   env_with_tpenv env (TPEnv.add_upper_bound ?intersect (get_tpenv env) name ty)
 
 (* Add a single new upper lower [ty] to generic parameter [name] in the
  * local type parameter environment [env].
@@ -350,53 +287,21 @@ let add_upper_bound_global env name ty =
  *   (t1 | ... | tn) <: T
  *)
 let add_lower_bound ?union env name ty =
-  let env_tpenv = get_tpenv env in
-  let tpenv =
-    begin match ty with
-    | (r, Tabstract (AKgeneric formal_sub, _)) ->
-      add_upper_bound_ env_tpenv formal_sub
-        (r, Tabstract (AKgeneric name, None))
-    | _ -> env_tpenv
-    end in
-  match union with
-  | None -> env_with_tpenv env (add_lower_bound_ env_tpenv name ty)
-  | Some union ->
-    let tyl = union ty (TySet.elements (get_lower_bounds env name)) in
-    let lower_bounds = List.fold_right ~init:TySet.empty ~f:TySet.add tyl in
-    let upper_bounds = get_tpenv_upper_bounds env_tpenv name in
-    let reified = get_tpenv_reified env_tpenv name in
-    let enforceable = get_tpenv_enforceable env_tpenv name in
-    let newable = get_tpenv_newable env_tpenv name in
-    env_with_tpenv env
-      (SMap.add name {lower_bounds; upper_bounds; reified; enforceable; newable} tpenv)
+  env_with_tpenv env (TPEnv.add_lower_bound ?union (get_tpenv env) name ty)
 
 (* Add type parameters to environment, initially with no bounds.
  * Existing type parameters with the same name will be overridden. *)
 let add_generic_parameters env tparaml =
-  let add_empty_bounds tpenv { Typing_defs.tp_name = (_, name); tp_reified = reified; tp_user_attributes; _ } =
-    let enforceable = Attributes.mem SN.UserAttributes.uaEnforceable tp_user_attributes in
-    let newable = Attributes.mem SN.UserAttributes.uaNewable tp_user_attributes in
-    SMap.add name {lower_bounds = empty_bounds;
-                   upper_bounds = empty_bounds;
-                   reified;
-                   enforceable;
-                   newable} tpenv in
-  env_with_tpenv env
-    (List.fold_left tparaml ~f:add_empty_bounds ~init:(get_tpenv env))
+  env_with_tpenv env (TPEnv.add_generic_parameters (get_tpenv env) tparaml)
 
 let is_generic_parameter env name =
-  SMap.mem name (get_tpenv env) || SSet.mem name env.fresh_typarams
+  TPEnv.mem name (get_tpenv env) || SSet.mem name env.fresh_typarams
 
 let get_generic_parameters env =
-  SMap.keys (SMap.union (get_tpenv env) env.global_tpenv)
+  TPEnv.get_names (TPEnv.union (get_tpenv env) env.global_tpenv)
 
 let get_tpenv_size env =
-  let local = SMap.fold (fun _x { lower_bounds; upper_bounds; reified = _; enforceable = _; newable = _ } count ->
-    count + TySet.cardinal lower_bounds + TySet.cardinal upper_bounds)
-    (get_tpenv env) 0 in
-    SMap.fold (fun _x { lower_bounds; upper_bounds; reified = _; enforceable = _ ; newable = _ } count ->
-      count + TySet.cardinal lower_bounds + TySet.cardinal upper_bounds)
-      env.global_tpenv local
+  TPEnv.size (get_tpenv env) + TPEnv.size env.global_tpenv
 
 
 (*****************************************************************************
@@ -406,25 +311,25 @@ let get_tpenv_size env =
  *****************************************************************************)
 
 let get_tyvar_lower_bounds env var =
-  match IMap.get var env.tvenv with
+  match get_tyvar_info_opt env var with
   | None -> empty_bounds
-  | Some {lower_bounds; _} -> lower_bounds
+  | Some ({lower_bounds; _}) -> lower_bounds
 
 let get_tyvar_upper_bounds env var =
-  match IMap.get var env.tvenv with
+  match get_tyvar_info_opt env var with
   | None -> empty_bounds
-  | Some {upper_bounds; _} -> upper_bounds
+  | Some ({upper_bounds; _}) -> upper_bounds
 
 let set_tyvar_lower_bounds env var lower_bounds =
   let tyvar_info = get_tyvar_info env var in
   let tyvar_info = { tyvar_info with lower_bounds } in
-  let env = set_tyvar_info env var tyvar_info in
+  let env = update_tyvar_info env var tyvar_info in
   env
 
 let set_tyvar_upper_bounds env var upper_bounds =
   let tyvar_info = get_tyvar_info env var in
   let tyvar_info = { tyvar_info with upper_bounds } in
-  let env = set_tyvar_info env var tyvar_info in
+  let env = update_tyvar_info env var tyvar_info in
   env
 
 let rec is_tvar ~elide_nullable ty var =
@@ -433,20 +338,17 @@ let rec is_tvar ~elide_nullable ty var =
   | (_, Toption ty) when elide_nullable -> is_tvar ~elide_nullable ty var
   | _ -> false
 
-let set_tyvar_info env var tvinfo =
-  env_with_tvenv env (IMap.add var tvinfo env.tvenv)
-
 let remove_tyvar env var =
   (* Don't remove it entirely if we have marked it as eager_solve_fail *)
   log_env_change "remove_tyvar" env @@
   let tvinfo = get_tyvar_info env var in
   if tvinfo.eager_solve_fail
-  then set_tyvar_info env var { empty_tyvar_info with eager_solve_fail = true }
+  then update_tyvar_info env var { empty_tyvar_info with eager_solve_fail = true }
   else env_with_tvenv env (IMap.remove var env.tvenv)
 
 let set_tyvar_eager_solve_fail env var =
   let tvinfo = get_tyvar_info env var in
-  set_tyvar_info env var { tvinfo with eager_solve_fail = true }
+  update_tyvar_info env var { tvinfo with eager_solve_fail = true }
 
 let get_tyvar_appears_covariantly env var =
   let tvinfo = get_tyvar_info env var in
@@ -469,7 +371,7 @@ let get_tyvar_type_const env var (_, tyconstid) =
 let set_tyvar_type_const env var (_, tyconstid_ as tyconstid) ty =
   let tvinfo = get_tyvar_info env var in
   let type_constants = SMap.add tyconstid_ (tyconstid, ty) tvinfo.type_constants in
-  set_tyvar_info env var { tvinfo with type_constants }
+  update_tyvar_info env var { tvinfo with type_constants }
 
 (* Conjoin a subtype proposition onto the subtype_prop in the environment *)
 let add_subtype_prop env prop =
@@ -486,11 +388,16 @@ let add_fresh_generic_parameter env prefix ~reified ~enforceable ~newable =
   let env = { env with fresh_typarams = SSet.add name env.fresh_typarams } in
   let env =
     env_with_tpenv env
-      (SMap.add name {lower_bounds = empty_bounds;
-                      upper_bounds = empty_bounds;
-                      reified;
-                      enforceable;
-                      newable} (get_tpenv env)) in
+      (TPEnv.add
+         name
+         TPEnv.{
+           lower_bounds = empty_bounds;
+           upper_bounds = empty_bounds;
+           reified;
+           enforceable;
+           newable
+         }
+         (get_tpenv env)) in
   env, name
 
 let is_fresh_generic_parameter name =
@@ -514,7 +421,7 @@ let get_tparams_aux env acc ty = (tparams_visitor env)#on_type acc ty
 let get_tparams env ty = get_tparams_aux env SSet.empty ty
 
 let get_tpenv_tparams env =
-  SMap.fold begin fun _x { lower_bounds; upper_bounds; reified = _; enforceable = _ ; newable = _ } acc ->
+  TPEnv.fold begin fun _x TPEnv.{ lower_bounds; upper_bounds; reified = _; enforceable = _ ; newable = _ } acc ->
     let folder ty acc =
       match ty with
       | _, Tabstract (AKgeneric _, _) -> acc
@@ -546,7 +453,7 @@ let empty ?(mode = FileInfo.Mstrict) tcopt file ~droot = {
   tenv    = IMap.empty;
   subst   = IMap.empty;
   fresh_typarams = SSet.empty;
-  lenv    = initial_local SMap.empty Nonreactive;
+  lenv    = initial_local TPEnv.empty Nonreactive;
   in_loop = false;
   in_try  = false;
   in_case  = false;
@@ -561,8 +468,7 @@ let empty ?(mode = FileInfo.Mstrict) tcopt file ~droot = {
     tcopt   = tcopt;
     return  = {
       (* Actually should get set straight away anyway *)
-      return_type = (Reason.Rnone, Tunion []);
-      return_type_decl = None;
+      return_type = { et_type = (Reason.Rnone, Tunion []); et_enforced = false; };
       return_disposable = false;
       return_mutable = false;
       return_explicit = false;
@@ -571,27 +477,43 @@ let empty ?(mode = FileInfo.Mstrict) tcopt file ~droot = {
     params  = LID.Map.empty;
     condition_types = SMap.empty;
     self_id = "";
-    self    = Reason.none, Tany;
+    self    = Reason.none, Typing_defs.make_tany ();
     static  = false;
     val_kind = Other;
     parent_id = "";
-    parent  = Reason.none, Tany;
+    parent  = Reason.none, Typing_defs.make_tany ();
     fun_kind = Ast_defs.FSync;
     fun_mutable = None;
     anons   = IMap.empty;
     file    = file;
   };
-  global_tpenv = SMap.empty;
+  global_tpenv = TPEnv.empty;
   subtype_prop = TL.valid;
   log_levels = TypecheckerOptions.log_levels tcopt;
   tvenv = IMap.empty;
+  global_tvenv = IMap.empty;
   tyvars_stack = [];
   allow_wildcards = false;
   big_envs = ref [];
+  pessimize = false;
 }
 
 let set_env_reactive env reactive =
   { env with lenv = {env.lenv with local_reactive = reactive }}
+
+let set_env_pessimize env =
+  let pessimize_coefficient = TypecheckerOptions.simple_pessimize (get_tcopt env) in
+  let path = Pos.filename env.function_pos in
+  let open Relative_path in
+  let pessimize = match prefix path with
+    | Root when pessimize_coefficient > 0.0 ->
+      let range = 2000000 in
+      let filename = suffix path in
+      let hash = Hashtbl.hash filename in
+      let r = hash % range in
+      (Float.of_int r) /. (Float.of_int range) <= pessimize_coefficient
+    | _ -> pessimize_coefficient = 1.0 (* hack for test cases *) in
+  { env with pessimize }
 
 let set_env_function_pos env function_pos =
   { env with function_pos }
@@ -603,9 +525,6 @@ let set_condition_type env n ty =
 
 let get_condition_type env n =
   SMap.get n env.genv.condition_types
-
-let env_reactivity env =
-  env.lenv.local_reactive
 
 (* Some form (strict/shallow/local) of reactivity *)
 let env_local_reactive env =
@@ -674,6 +593,12 @@ let get_typeconst env class_ mid =
   let dep = Dep.Const ((Cls.name class_), mid) in
   Option.iter env.decl_env.droot (fun root -> Typing_deps.add_idep root dep);
   Cls.get_typeconst class_ mid
+
+let get_pu_enum env class_ mid =
+  add_wclass env (Cls.name class_);
+  let dep = Dep.Const ((Cls.name class_), mid) in
+  Option.iter env.decl_env.droot (fun root -> Typing_deps.add_idep root dep);
+  Cls.get_pu_enum class_ mid
 
 (* Used to access class constants. *)
 let get_const env class_ mid =
@@ -807,11 +732,6 @@ let get_fn_kind env = env.genv.fun_kind
 
 let get_file env = env.genv.file
 
-let get_fun env x =
-  let dep = Dep.Fun x in
-  Option.iter env.decl_env.droot (fun root -> Typing_deps.add_idep root dep);
-  Decl_provider.get_fun x
-
 let set_fn_kind env fn_type =
   let genv = env.genv in
   let genv = { genv with fun_kind = fn_type } in
@@ -931,7 +851,7 @@ let local_is_mutable ~include_borrowed env id =
 
 let tany env =
   let dynamic_view_enabled = TypecheckerOptions.dynamic_view (get_tcopt env) in
-  if dynamic_view_enabled then Tdynamic else Tany
+  if dynamic_view_enabled then Tdynamic else Typing_defs.make_tany ()
 
 let get_local_in_ctx env ?error_if_undef_at_pos:p x ctx_opt =
   let not_found_is_ok x ctx =
@@ -1163,7 +1083,7 @@ let save local_tpenv env =
     Tast.tcopt = get_tcopt env;
     Tast.tenv = env.tenv;
     Tast.subst = env.subst;
-    Tast.tpenv = SMap.union local_tpenv env.global_tpenv;
+    Tast.tpenv = TPEnv.union local_tpenv env.global_tpenv;
     Tast.reactivity = env_reactivity env;
     Tast.local_mutability = get_env_mutability env;
     Tast.fun_mutable = function_is_mutable env;
@@ -1179,11 +1099,21 @@ let rec get_tyvars env ty =
   let get_tyvars_union (env, acc_positive, acc_negative) ty =
     let env, positive, negative = get_tyvars env ty in
     env, ISet.union acc_positive positive, ISet.union acc_negative negative in
+  let get_tyvars_param (env, acc_positive, acc_negative) {fp_type; fp_kind; _} =
+    let env, positive, negative = get_tyvars env fp_type.et_type in
+    match fp_kind with
+    (* Parameters are treated contravariantly *)
+    | FPnormal ->
+      env, ISet.union negative acc_positive, ISet.union positive acc_negative
+    (* Inout/ref parameters are both co- and contra-variant *)
+    | FPinout | FPref ->
+      let tyvars = ISet.union negative positive in
+      env, ISet.union tyvars acc_positive, ISet.union tyvars acc_negative in
   let env, ety = expand_type env ty in
   match snd ety with
   | Tvar v ->
     env, ISet.singleton v, ISet.empty
-  | Tany | Tnonnull | Terr | Tdynamic | Tobject | Tprim _ | Tanon _ ->
+  | Tany _ | Tnonnull | Terr | Tdynamic | Tobject | Tprim _ | Tanon _ ->
     env, ISet.empty, ISet.empty
   | Toption ty ->
     get_tyvars env ty
@@ -1195,18 +1125,13 @@ let rec get_tyvars env ty =
       m (env, ISet.empty, ISet.empty)
   | Tfun ft ->
     let env, params_positive, params_negative =
-      List.fold_left ft.ft_params ~init:(env, ISet.empty, ISet.empty)
-        ~f:(fun (env, acc_positive, acc_negative) {fp_type; fp_kind; _} ->
-          let env, positive, negative = get_tyvars env fp_type in
-          match fp_kind with
-          (* Parameters are treated contravariantly *)
-          | FPnormal ->
-            env, ISet.union negative acc_positive, ISet.union positive acc_negative
-          (* Inout/ref parameters are both co- and contra-variant *)
-          | FPinout | FPref ->
-            let tyvars = ISet.union negative positive in
-            env, ISet.union tyvars acc_positive, ISet.union tyvars acc_negative) in
-    let env, ret_positive, ret_negative = get_tyvars env ft.ft_ret in
+      match ft.ft_arity with
+      | Fstandard _ | Fellipsis _ -> (env, ISet.empty, ISet.empty)
+      | Fvariadic (_, fp) -> get_tyvars_param (env, ISet.empty, ISet.empty) fp in
+    let env, params_positive, params_negative =
+      List.fold_left ft.ft_params ~init:(env, params_positive, params_negative)
+        ~f:get_tyvars_param in
+    let env, ret_positive, ret_negative = get_tyvars env ft.ft_ret.et_type in
     env, ISet.union ret_positive params_positive, ISet.union ret_negative params_negative
   | Tabstract (AKnewtype (name, tyl), _) ->
     begin match get_typedef env name with
@@ -1233,6 +1158,8 @@ let rec get_tyvars env ty =
       let env, positive2, negative2 = get_tyvars env ty2 in
       env, ISet.union positive1 positive2, ISet.union negative1 negative2
     end
+  | Tpu (base, _, _) -> get_tyvars env base
+  | Tpu_access (base, _) -> get_tyvars env base
 
 and get_tyvars_variance_list (env, acc_positive, acc_negative) variancel tyl =
   match variancel, tyl with
@@ -1256,7 +1183,7 @@ let rec set_tyvar_appears_covariantly env var =
   if tvinfo.appears_covariantly
   then env
   else
-    let env = env_with_tvenv env (IMap.add var { tvinfo with appears_covariantly = true } env.tvenv) in
+    let env = update_tyvar_info env var { tvinfo with appears_covariantly = true } in
     update_variance_of_tyvars_occurring_in_lower_bounds env tvinfo.lower_bounds
 
 and set_tyvar_appears_contravariantly env var =
@@ -1264,7 +1191,7 @@ and set_tyvar_appears_contravariantly env var =
   if tvinfo.appears_contravariantly
   then env
   else
-    let env = env_with_tvenv env (IMap.add var { tvinfo with appears_contravariantly = true } env.tvenv) in
+    let env = update_tyvar_info env var { tvinfo with appears_contravariantly = true } in
     update_variance_of_tyvars_occurring_in_upper_bounds env tvinfo.upper_bounds
 
 and update_variance_of_tyvars_occurring_in_lower_bounds env tys =
@@ -1375,8 +1302,7 @@ let fresh_invariant_type_var env p =
     | None -> ty ++ tvinfo.upper_bounds
     | Some intersect ->
       TySet.of_list (intersect ty (TySet.elements tvinfo.upper_bounds)) in
-   let env = env_with_tvenv env
-    (IMap.add var { tvinfo with upper_bounds } env.tvenv) in
+   let env = update_tyvar_info env var { tvinfo with upper_bounds } in
    if get_tyvar_appears_contravariantly env var
    then update_variance_of_tyvars_occurring_in_upper_bound env ty
    else env
@@ -1389,7 +1315,7 @@ let remove_tyvar_upper_bound env var upper_var =
   let upper_bounds = TySet.filter
     (fun ty -> match expand_type env ty with _, (_, Tvar v) -> v <> upper_var | _ -> true)
     tvinfo.upper_bounds in
-  env_with_tvenv env (IMap.add var { tvinfo with upper_bounds } env.tvenv)
+  update_tyvar_info env var { tvinfo with upper_bounds }
 
 
 (* Remove type variable `lower_var` from the lower bounds on `var`, if it exists
@@ -1400,7 +1326,7 @@ let remove_tyvar_lower_bound env var lower_var =
   let lower_bounds = TySet.filter
     (fun ty -> match expand_type env ty with _, (_, Tvar v) -> v <> lower_var | _ -> true)
     tvinfo.lower_bounds in
-  env_with_tvenv env (IMap.add var { tvinfo with lower_bounds } env.tvenv)
+  update_tyvar_info env var { tvinfo with lower_bounds }
 
 
 (* Add a single new upper bound [ty] to type variable [var] in [env.tvenv].
@@ -1420,8 +1346,7 @@ let add_tyvar_lower_bound ?union env var ty =
     | None -> ty ++ tvinfo.lower_bounds
     | Some union ->
       TySet.of_list (union ty (TySet.elements tvinfo.lower_bounds)) in
-  let env = env_with_tvenv env
-    (IMap.add var { tvinfo with lower_bounds } env.tvenv) in
+  let env = update_tyvar_info env var { tvinfo with lower_bounds } in
   if get_tyvar_appears_covariantly env var
   then update_variance_of_tyvars_occurring_in_lower_bound env ty
   else env

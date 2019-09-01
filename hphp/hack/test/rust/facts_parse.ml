@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2019, Facebook, Inc.
  * All rights reserved.
  *
@@ -26,8 +26,13 @@ let () =
         if !parse_only then
           match
             Facts_parser.from_text
+              ~rust
               ~php5_compat_mode
               ~hhvm_compat_mode
+              ~disable_nontoplevel_declarations:false
+              ~disable_legacy_soft_typehints:false
+              ~allow_new_attribute_syntax:false
+              ~disable_legacy_attribute_syntax:false
               ~filename
               ~text
           with
@@ -39,6 +44,10 @@ let () =
               ~rust
               ~php5_compat_mode
               ~hhvm_compat_mode
+              ~disable_nontoplevel_declarations:false
+              ~disable_legacy_soft_typehints:false
+              ~allow_new_attribute_syntax:false
+              ~disable_legacy_attribute_syntax:false
               ~filename
               ~text
           with

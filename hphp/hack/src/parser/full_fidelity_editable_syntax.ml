@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
@@ -166,3 +166,5 @@ let to_json ?with_value:_ node =
 let rust_parse _ _ = failwith "not implemented"
 let rust_parse_with_coroutine_sc _ _ = failwith "not implemented"
 let rust_parse_with_decl_mode_sc _ _ = failwith "not implemented"
+let rust_parse_with_verify_sc _ _ = failwith "not implemented"
+let rust_parser_errors _ _ _ = failwith "not implemented"

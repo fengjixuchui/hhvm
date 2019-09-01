@@ -14,6 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
+#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/runtime-option.h"
 
 #include "hphp/util/portability.h"
@@ -88,7 +89,9 @@ ALWAYS_INLINE ArrayData* ArrayData::CreateVArray() {
 }
 
 ALWAYS_INLINE ArrayData* ArrayData::CreateVec() {
-  return staticEmptyVecArray();
+  return RuntimeOption::EvalArrayProvenanceEmpty
+    ? arrprov::makeEmptyVec()
+    : staticEmptyVecArray();
 }
 
 ALWAYS_INLINE ArrayData* ArrayData::CreateDArray() {
@@ -96,7 +99,9 @@ ALWAYS_INLINE ArrayData* ArrayData::CreateDArray() {
 }
 
 ALWAYS_INLINE ArrayData* ArrayData::CreateDict() {
-  return staticEmptyDictArray();
+  return RuntimeOption::EvalArrayProvenanceEmpty
+    ? arrprov::makeEmptyDict()
+    : staticEmptyDictArray();
 }
 
 ALWAYS_INLINE ArrayData* ArrayData::CreateShape() {
@@ -180,6 +185,7 @@ inline bool ArrayData::isDictOrShape() const {
 inline bool ArrayData::isVecArray() const { return kind() == kVecKind; }
 inline bool ArrayData::isKeyset() const { return kind() == kKeysetKind; }
 inline bool ArrayData::isShape() const { return kind() == kShapeKind; }
+inline bool ArrayData::isRecordArray() const { return kind() == kRecordKind; }
 
 inline bool ArrayData::hasPackedLayout() const {
   return isPacked() || isVecArray();
@@ -350,6 +356,11 @@ ALWAYS_INLINE bool checkHACArrayPlus() {
 ALWAYS_INLINE bool checkHACArrayKeyCast() {
   return RuntimeOption::EvalHackArrCompatNotices &&
          RuntimeOption::EvalHackArrCompatCheckArrayKeyCast;
+}
+
+ALWAYS_INLINE bool checkHACNullHackArrayKey() {
+  return RuntimeOption::EvalHackArrCompatNotices &&
+         RuntimeOption::EvalHackArrCompatCheckNullHackArrayKey;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

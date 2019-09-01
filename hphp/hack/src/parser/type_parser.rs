@@ -6,14 +6,14 @@
 
 use crate::declaration_parser::DeclarationParser;
 use crate::expression_parser::ExpressionParser;
-use crate::lexable_token::LexableToken;
 use crate::lexer::Lexer;
 use crate::parser_env::ParserEnv;
 use crate::parser_trait::Context;
 use crate::parser_trait::ParserTrait;
 use crate::smart_constructors::{NodeType, SmartConstructors};
-use crate::syntax_error::{self as Errors, SyntaxError};
-use crate::token_kind::TokenKind;
+use parser_core_types::lexable_token::LexableToken;
+use parser_core_types::syntax_error::{self as Errors, SyntaxError};
+use parser_core_types::token_kind::TokenKind;
 
 pub struct TypeParser<'a, S, T>
 where
@@ -22,7 +22,7 @@ where
 {
     lexer: Lexer<'a, S::Token>,
     env: ParserEnv,
-    context: Context<S::Token>,
+    context: Context<'a, S::Token>,
     errors: Vec<SyntaxError>,
     sc: S,
 }
@@ -51,7 +51,7 @@ where
     fn make(
         mut lexer: Lexer<'a, S::Token>,
         env: ParserEnv,
-        context: Context<S::Token>,
+        context: Context<'a, S::Token>,
         errors: Vec<SyntaxError>,
         sc: S,
     ) -> Self {
@@ -65,7 +65,14 @@ where
         }
     }
 
-    fn into_parts(mut self) -> (Lexer<'a, S::Token>, Context<S::Token>, Vec<SyntaxError>, S) {
+    fn into_parts(
+        mut self,
+    ) -> (
+        Lexer<'a, S::Token>,
+        Context<'a, S::Token>,
+        Vec<SyntaxError>,
+        S,
+    ) {
         self.lexer.set_in_type(false);
         (self.lexer, self.context, self.errors, self.sc)
     }
@@ -110,11 +117,11 @@ where
         &self.context.skipped_tokens
     }
 
-    fn context_mut(&mut self) -> &mut Context<S::Token> {
+    fn context_mut(&mut self) -> &mut Context<'a, S::Token> {
         &mut self.context
     }
 
-    fn context(&self) -> &Context<S::Token> {
+    fn context(&self) -> &Context<'a, S::Token> {
         &self.context
     }
 }
@@ -261,6 +268,35 @@ where
         }
     }
 
+    //  SPEC
+    // pocket-universe-access:
+    //   name  :@  name
+    //   self  :@  name
+    //   this  :@  name
+    //   parent  :@  name
+    //   pocket-universe-access :@  name
+    fn parse_remaining_pocket_universe_access(&mut self, left: S::R) -> S::R {
+        let separator = self.fetch_token();
+        let right = self.next_token_as_name();
+        if right.kind() == TokenKind::Name {
+            let right = S!(make_token, self, right);
+            let syntax = S!(make_pu_access, self, left, separator, right);
+            let token = self.peek_token();
+            if token.kind() == TokenKind::ColonAt {
+                self.parse_remaining_pocket_universe_access(syntax)
+            } else {
+                syntax
+            }
+        } else {
+            // ERROR RECOVERY: Assume that the thing following the :@
+            // that is not a name belongs to the next thing to be
+            // parsed; treat the name as missing.
+            self.with_error(Errors::error1004);
+            let missing = S!(make_missing, self, self.pos());
+            S!(make_pu_access, self, left, separator, missing)
+        }
+    }
+
     fn parse_remaining_generic(&mut self, name: S::R) -> S::R {
         let (arguments, _) = self.parse_generic_type_argument_list();
         S!(make_generic_type_specifier, self, name, arguments)
@@ -280,6 +316,7 @@ where
         let token = self.peek_token();
         match token.kind() {
             TokenKind::ColonColon => self.parse_remaining_type_constant(name),
+            TokenKind::ColonAt => self.parse_remaining_pocket_universe_access(name),
             _ => S!(make_simple_type_specifier, self, name),
         }
     }
@@ -324,7 +361,7 @@ where
         let mut parser1 = self.clone();
         let token = parser1.next_token();
         match token.kind() {
-            TokenKind::As | TokenKind::Super | TokenKind::From => {
+            TokenKind::As | TokenKind::Super => {
                 self.continue_from(parser1);
                 let constraint_token = S!(make_token, self, token);
                 let matched_type = self.parse_type_specifier(false, true);
@@ -638,7 +675,7 @@ where
             let left_angle = self.assert_left_angle_in_type_list_with_possible_attribute();
             let value_type = self.parse_type_specifier(false, true);
             let optional_comma = self.optional_token(TokenKind::Comma);
-            let right_angle = self.fetch_token();
+            let right_angle = self.require_right_angle();
             S!(
                 make_varray_type_specifier,
                 self,

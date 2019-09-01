@@ -408,8 +408,7 @@ SSATmp* simplifySpillFrame(State& env, const IRInstruction* inst) {
     auto const src = ctx->inst();
     if (src->op() == LdClsCctx) {
       return gen(env, SpillFrame, *inst->extra<SpillFrame>(),
-                 inst->src(0), inst->src(1), src->src(0),
-                 inst->src(3), inst->src(4), inst->src(5));
+                 inst->src(0), inst->src(1), src->src(0), inst->src(3));
     }
   }
   return nullptr;
@@ -2150,12 +2149,13 @@ SSATmp* simplifyConvCellToArr(State& env, const IRInstruction* inst) {
   if (src->isA(TVec))    return gen(env, ConvVecToArr, src);
   if (src->isA(TDict))   return gen(env, ConvDictToArr, inst->taken(), src);
   if (src->isA(TKeyset)) return gen(env, ConvKeysetToArr, inst->taken(), src);
-  if (src->isA(TNull))   return cns(env, staticEmptyArray());
+  if (src->isA(TNull))   return cns(env, ArrayData::Create());
   if (src->isA(TBool))   return gen(env, ConvBoolToArr, src);
   if (src->isA(TDbl))    return gen(env, ConvDblToArr, src);
   if (src->isA(TInt))    return gen(env, ConvIntToArr, src);
   if (src->isA(TStr))    return gen(env, ConvStrToArr, src);
   if (src->isA(TObj))    return gen(env, ConvObjToArr, inst->taken(), src);
+  // TODO: T53309695 Handle TFunc and TClsMeth as well
   return nullptr;
 }
 

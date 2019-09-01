@@ -18,14 +18,19 @@
 
 #include <stdio.h>
 #include <assert.h>
+#include <unistd.h>
 
 #include <cstdint>
 #include <string>
 #include <vector>
 #include <sstream>
 
+#include <boost/uuid/uuid_io.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+
 #include <folly/Format.h>
 #include <folly/dynamic.h>
+#include <folly/DynamicConverter.h>
 #include <folly/json.h>
 #include <folly/Singleton.h>
 
@@ -36,6 +41,7 @@
 #include "hphp/runtime/base/program-functions.h"
 
 #include "hphp/tools/tc-print/perf-events.h"
+#include "hphp/tools/tc-print/printir-annotation.h"
 #include "hphp/tools/tc-print/offline-trans-data.h"
 #include "hphp/tools/tc-print/offline-code.h"
 #include "hphp/tools/tc-print/mappers.h"
@@ -43,6 +49,7 @@
 #include "hphp/tools/tc-print/std-logger.h"
 #include "hphp/tools/tc-print/tc-print-logger.h"
 #ifdef FACEBOOK
+#include "hphp/facebook/extensions/scribe/ext_scribe.h"
 #include "hphp/tools/tc-print/facebook/db-logger.h"
 #endif
 
@@ -76,6 +83,7 @@ TCA             maxAddr         = (TCA)-1;
 uint32_t        annotationsVerbosity = 2;
 #ifdef FACEBOOK
 bool            printToDB       = false;
+std::string     hiveTable;
 #endif
 
 std::vector<uint32_t> transPrintOrder;
@@ -161,8 +169,10 @@ void usage() {
     " the more helpers that will show up.\n"
     "    -j              : outputs tc-dump in JSON format (not compatible with "
     "some other flags).\n"
-    // TODO(elijahrivera) - investigate compatibility with other flags
+    // TODO(T52857399) - investigate compatibility with other flags
     #ifdef FACEBOOK
+    "    -H <HIVE_TABLE> : used with -j, write the JSON output to Hive in the "
+    "table <HIVE_TABLE>\n"
     "    -x              : log translations to database\n"
     #endif
     "    -h              : prints help message\n",
@@ -192,7 +202,8 @@ void parseOptions(int argc, char *argv[]) {
   int c;
   opterr = 0;
   char* sortByArg = nullptr;
-  while ((c = getopt(argc, argv, "hc:Dd:f:g:ip:st:u:S:T:o:e:E:bB:v:k:a:A:n:jx"))
+  while ((c = getopt(argc, argv, "hc:Dd:f:g:ip:st:u:S:T:o:e:E:bB:v:k:a:A:n:jH:"
+                                 "x"))
          != -1) {
     switch (c) {
       case 'A':
@@ -326,6 +337,9 @@ void parseOptions(int argc, char *argv[]) {
       #ifdef FACEBOOK
       case 'x':
         printToDB = true;
+        break;
+      case 'H':
+        hiveTable = optarg;
         break;
       #endif
       default:
@@ -534,21 +548,29 @@ std::string show(TCA tca) {
   return folly::sformat("{}", static_cast<void*>(tca));
 }
 
-dynamic getAnnotations(const Annotations& annotations) {
-  dynamic annotationObjs = dynamic::array;
+dynamic getAnnotation(const Annotations& annotations) {
+  // for JSON outputs, we only care about the annotation "after code gen"
+  std::string annotationStr;
   for (auto const& annotation : annotations) {
-    auto const rawValue = g_annotations->getAnnotation(annotation.second);
-    dynamic annotationValue;
-    try {
-      annotationValue = folly::parseJson(rawValue);
+    if (annotation.first == " after code gen ") {
+      annotationStr = annotation.second;
+      break;
     }
-    catch (const std::runtime_error&){
-      annotationValue = rawValue;
-    }
-    annotationObjs.push_back(dynamic::object("caption", annotation.first)
-                                            ("value", annotationValue));
   }
-  return annotationObjs;
+  if (annotationStr.empty()) return dynamic();
+
+  auto const rawValue = g_annotations->getAnnotation(annotationStr);
+  if (rawValue.subpiece(0, 5) != "json:") return rawValue;
+
+  try {
+    return folly::parseJson(rawValue.subpiece(5));
+  }
+  catch (const std::runtime_error& re){
+    std::cerr << re.what() << std::endl;
+    std::cerr << "Parsing annotation as JSON failed. "
+              << "Annotation included as raw value\n";
+    return rawValue;
+  }
 }
 
 dynamic getTransRec(const TransRec* tRec,
@@ -583,9 +605,7 @@ dynamic getTransRec(const TransRec* tRec,
                                         ("coldLen", tRec->acoldLen)
                                         ("frozenStart",
                                          show(tRec->afrozenStart))
-                                        ("frozenLen", tRec->afrozenLen)
-                                        ("annotations",
-                                         getAnnotations(tRec->annotations));
+                                        ("frozenLen", tRec->afrozenLen);
 
   return result;
 }
@@ -622,14 +642,13 @@ dynamic getTrans(TransID transId) {
 
   dynamic blocks = dynamic::array;
   for (auto const& block : tRec->blocks) {
-    std::stringstream byteInfo; // TODO(elijahrivera) - translate to actual data
+    std::stringstream byteInfo; // TODO(T52857125) - translate to actual data
 
     auto const unit = g_repo->getUnit(block.sha1);
     if (unit) {
       auto const newFunc = unit->getFunc(block.bcStart);
       always_assert(newFunc);
-      newFunc->prettyPrint(byteInfo, HPHP::Func::PrintOpts().noFpi()
-                                                            .noMetadata());
+      newFunc->prettyPrint(byteInfo, HPHP::Func::PrintOpts().noMetadata());
       unit->prettyPrint(byteInfo, HPHP::Unit::PrintOpts().range(block.bcStart,
                                                                 block.bcPast)
                                                          .noFuncs());
@@ -643,12 +662,26 @@ dynamic getTrans(TransID transId) {
                                              dynamic()));
   }
 
+  auto const annotationDynamic = getAnnotation(tRec->annotations);
+
+  auto const maybeUnit = [&]() -> folly::Optional<printir::Unit> {
+    if (!annotationDynamic.isObject()) return folly::none;
+    try {
+      return folly::convertTo<printir::Unit>(annotationDynamic);
+    }
+    catch (const printir::ParseError& pe) {
+      std::cerr << pe.what() << std::endl;
+      return folly::none;
+    }
+  }();
+
   const dynamic mainDisasm = tRec->aLen ?
                              transCode->getDisasm(tRec->aStart,
                                                   tRec->aLen,
                                                   tRec->bcMapping,
                                                   tcaPerfEvents,
-                                                  hostOpcodes) :
+                                                  hostOpcodes,
+                                                  maybeUnit) :
                              dynamic();
 
   auto const coldIsFrozen = tRec->acoldStart == tRec->afrozenStart;
@@ -657,14 +690,16 @@ dynamic getTrans(TransID transId) {
                                                   tRec->acoldLen,
                                                   tRec->bcMapping,
                                                   tcaPerfEvents,
-                                                  hostOpcodes) :
+                                                  hostOpcodes,
+                                                  maybeUnit) :
                              dynamic();
   const dynamic frozenDisasm = tRec -> afrozenLen ?
                                transCode->getDisasm(tRec->afrozenStart,
                                                     tRec->afrozenLen,
                                                     tRec->bcMapping,
                                                     tcaPerfEvents,
-                                                    hostOpcodes) :
+                                                    hostOpcodes,
+                                                    maybeUnit) :
                                dynamic();
   const dynamic disasmObj = dynamic::object("main", mainDisasm)
                                            ("cold", coldDisasm)
@@ -674,7 +709,12 @@ dynamic getTrans(TransID transId) {
                         ("blocks", blocks)
                         ("archName", transCode->getArchName())
                         ("regions", disasmObj)
-                        ("perfEvents", perfEvents);
+                        ("perfEvents", perfEvents)
+                        ("transId", transId)
+                        ("ir_annotation", maybeUnit ?
+                          folly::toDynamic(*maybeUnit) :
+                          annotationDynamic);
+  // if annotation fails to parse, give raw to the user in annotation field
 }
 
 dynamic getTC() {
@@ -716,7 +756,7 @@ void printTrans(TransID transId) {
       always_assert(newFunc);
       if (newFunc != curFunc) {
         byteInfo << '\n';
-        newFunc->prettyPrint(byteInfo, Func::PrintOpts().noFpi().noMetadata());
+        newFunc->prettyPrint(byteInfo, Func::PrintOpts().noMetadata());
       }
       curFunc = newFunc;
 
@@ -1102,7 +1142,32 @@ int main(int argc, char *argv[]) {
                       sortBy,
                       filterByOpcode);
   } else if (useJSON) {
-    std::cout << get_json::getTC() << std::endl;
+    auto const tcObj = get_json::getTC();
+
+    auto const jsonStr = folly::toJson(tcObj);
+    std::cout << jsonStr << std::endl;
+
+    #ifdef FACEBOOK
+    if (!hiveTable.empty()) {
+      auto const uuid = boost::uuids::random_generator()();
+      auto const uuidStr = boost::uuids::to_string(uuid);
+
+      for (auto const& translation : tcObj["translations"]) {
+        StructuredLogEntry entry;
+        entry.force_init = true;
+
+        entry.setStr("translation_json", folly::toJson(translation));
+        entry.setInt("trans_id", translation["transId"].asInt());
+        entry.setStr("repoSchema", repoSchemaId().begin());
+        entry.setStr("func_name",
+                     translation["transRec"]["src"]["funcName"].asString());
+        entry.setStr("username" , std::string(getlogin()));
+        entry.setStr("uuid", uuidStr);
+
+        writeStructLogLazyInit(hiveTable, entry);
+      }
+    }
+    #endif
   } else {
     // Print all translations in original order, filtered by unit if desired.
     for (uint32_t t = 0; t < NTRANS; t++) {

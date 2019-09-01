@@ -27,6 +27,7 @@ class SaveStateCommandResult(NamedTuple):
 
     def get_edges_added(self) -> int:
         assert self.edges_added is not None
+        # pyre-fixme[7]: Expected `int` but got `Optional[int]`.
         return self.edges_added
 
 
@@ -277,13 +278,19 @@ auto_namespace_map = {"Herp": "Derp\\Lib\\Herp"}
     def start_hh_server(
         self,
         changed_files: Optional[Iterable[ChangedFile]] = None,
+        changed_naming_files: Optional[Iterable[str]] = None,
         saved_state_path: Optional[str] = None,
+        naming_saved_state_path: Optional[str] = None,
         args: Optional[List[str]] = None,
     ) -> None:
         if changed_files is None:
             changed_files = []
 
-        naming_saved_state_path = self.naming_saved_state_path(saved_state_path)
+        if changed_naming_files is None:
+            changed_naming_files = []
+
+        if naming_saved_state_path is None:
+            naming_saved_state_path = self.naming_saved_state_path(saved_state_path)
 
         # Yeah, gross again. This function's default value for a parameter
         # is from the object's state.
@@ -299,6 +306,7 @@ auto_namespace_map = {"Herp": "Derp\\Lib\\Herp"}
             "is_cached": True,
             "deptable": saved_state_path + ".sql",
             "changes": changed_files,
+            "naming_changes": changed_naming_files,
         }
 
         with_state_arg = {"data_dump": state}

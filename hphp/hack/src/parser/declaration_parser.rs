@@ -5,17 +5,17 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 use crate::expression_parser::ExpressionParser;
-use crate::lexable_token::LexableToken;
-use crate::lexable_trivia::LexableTrivia;
 use crate::lexer::Lexer;
 use crate::parser_env::ParserEnv;
 use crate::parser_trait::{Context, ExpectedTokens, ParserTrait, SeparatedListKind};
 use crate::smart_constructors::{NodeType, SmartConstructors};
 use crate::statement_parser::StatementParser;
-use crate::syntax_error::{self as Errors, SyntaxError};
-use crate::token_kind::TokenKind;
-use crate::trivia_kind::TriviaKind;
 use crate::type_parser::TypeParser;
+use parser_core_types::lexable_token::LexableToken;
+use parser_core_types::lexable_trivia::LexableTrivia;
+use parser_core_types::syntax_error::{self as Errors, SyntaxError};
+use parser_core_types::token_kind::TokenKind;
+use parser_core_types::trivia_kind::TriviaKind;
 
 #[derive(Debug)]
 pub struct DeclarationParser<'a, S, T>
@@ -25,7 +25,7 @@ where
 {
     lexer: Lexer<'a, S::Token>,
     env: ParserEnv,
-    context: Context<S::Token>,
+    context: Context<'a, S::Token>,
     errors: Vec<SyntaxError>,
     sc: S,
 }
@@ -54,7 +54,7 @@ where
     fn make(
         lexer: Lexer<'a, S::Token>,
         env: ParserEnv,
-        context: Context<S::Token>,
+        context: Context<'a, S::Token>,
         errors: Vec<SyntaxError>,
         sc: S,
     ) -> Self {
@@ -67,7 +67,14 @@ where
         }
     }
 
-    fn into_parts(self) -> (Lexer<'a, S::Token>, Context<S::Token>, Vec<SyntaxError>, S) {
+    fn into_parts(
+        self,
+    ) -> (
+        Lexer<'a, S::Token>,
+        Context<'a, S::Token>,
+        Vec<SyntaxError>,
+        S,
+    ) {
         (self.lexer, self.context, self.errors, self.sc)
     }
 
@@ -110,11 +117,11 @@ where
         &self.context.skipped_tokens
     }
 
-    fn context_mut(&mut self) -> &mut Context<S::Token> {
+    fn context_mut(&mut self) -> &mut Context<'a, S::Token> {
         &mut self.context
     }
 
-    fn context(&self) -> &Context<S::Token> {
+    fn context(&self) -> &Context<'a, S::Token> {
         &self.context
     }
 }
@@ -2185,19 +2192,10 @@ where
                 let missing2 = S!(make_missing, self, self.pos());
                 self.parse_methodish(missing1, missing2)
             }
-            TokenKind::Var => {
-                // We allow "var" as a synonym for "public" in a property; this
-                // is a PHP-ism that we do not support in Hack, but we parse anyways
-                // so as to give an error later.
-                let missing = S!(make_missing, self, self.pos());
-                let var = self.assert_token(TokenKind::Var);
-                self.parse_property_declaration(missing, var)
-            }
             kind if self.expects(kind) => S!(make_missing, self, self.pos()),
             _ => {
                 // If this is a property declaration which is missing its visibility
-                // modifier (or the "var" keyword), accept it here, but emit an error in a
-                // later pass.
+                // modifier, accept it here, but emit an error in a later pass.
                 let mut parser1 = self.clone();
                 let missing1 = S!(make_missing, parser1, self.pos());
                 let missing2 = S!(make_missing, parser1, self.pos());

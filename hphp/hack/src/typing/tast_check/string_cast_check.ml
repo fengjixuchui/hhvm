@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2018, Facebook, Inc.
  * All rights reserved.
  *
@@ -14,9 +14,6 @@ open Typing_defs
 module Env = Tast_env
 module TCO = TypecheckerOptions
 module SN = Naming_special_names
-
-let should_enforce env =
-  TCO.disallow_stringish_magic (Env.get_tcopt env)
 
 (** Produce an error on (string) casts of objects. Currently it is allowed in HHVM to
     cast an object if it is Stringish (i.e., has a __toString() method), but all
@@ -46,9 +43,11 @@ let rec is_stringish env ty =
     List.for_all ~f:(is_stringish env) tyl
   | Tclass (x, _, _) ->
     Option.is_none (Env.get_class env (snd x))
-  | Tany | Terr | Tdynamic | Tobject | Tnonnull | Tprim _ ->
+  | Tany _ | Terr | Tdynamic | Tobject | Tnonnull | Tprim _
+  | Tpu (_, _, (Pu_plain | Pu_atom _)) ->
     true
-  | Tarraykind _ | Tvar _ | Ttuple _ | Tanon (_, _) | Tfun _ | Tshape _ | Tdestructure _ ->
+  | Tarraykind _ | Tvar _ | Ttuple _ | Tanon (_, _) | Tfun _ | Tshape _
+  | Tdestructure _ | Tpu_access _ ->
     false
 
 let handler = object
@@ -56,7 +55,7 @@ let handler = object
 
   method! at_expr env ((p, _), expr) =
     match expr with
-    | Cast ((_, Hprim Tstring), te) when should_enforce env ->
+    | Cast ((_, Hprim Tstring), te) ->
       let ((_, ty), _) = te in
       if not (is_stringish env ty)
       then Errors.string_cast p (Env.print_ty env ty)

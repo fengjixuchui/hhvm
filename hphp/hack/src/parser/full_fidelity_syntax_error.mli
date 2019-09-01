@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
@@ -145,7 +145,9 @@ val error2047 : string -> string
 val error2048 : string
 val error2049 : string
 val error2050 : string
+val const_static_prop_init : string
 val error2051 : string
+val abstract_prop_init : string
 val error2052 : string
 val error2053 : string
 val error2054 : string
@@ -179,6 +181,7 @@ val uppercase_kw : string -> string
 val using_st_function_scoped_top_level : string
 val const_in_trait : string
 val const_visibility : string
+val type_const_visibility : string
 val strict_namespace_hh : string
 val original_definition : string
 val name_is_already_in_use_php :
@@ -245,8 +248,6 @@ val interface_has_private_method : string
 val redeclaration_of_function : name:string -> loc:string -> string
 val redeclaration_of_method : name:string -> string
 val self_or_parent_colon_colon_class_outside_of_class : string -> string
-val final_property : string
-val var_property : string
 val invalid_is_as_expression_hint : string -> string -> string
 val elvis_operator_space : string
 val property_has_multiple_visibilities : string -> string
@@ -279,7 +280,6 @@ val instanceof_disabled: string
 val invalid_await_use: string
 val toplevel_await_use: string
 val invalid_constructor_method_call: string
-val invalid_default_argument: string -> string
 val invalid_foreach_element: string
 val invalid_scope_resolution_qualifier : string
 val invalid_variable_name : string
@@ -362,7 +362,7 @@ val pocket_universe_enum_expected : string
 val pocket_universe_invalid_field : string
 val type_keyword : string
 val non_public_const_in_interface : string
-val const_abstract_private : string
+val elt_abstract_private : string -> string
 val const_has_multiple_visibilities : string
 val const_has_duplicate_modifiers : string
 val only_soft_allowed : string
@@ -375,3 +375,8 @@ val no_const_late_init_props : string
 val no_const_static_props : string
 val no_const_abstract_final_class : string
 val no_legacy_attribute_syntax : string
+val no_silence : string
+val declared_final : string -> string
+val abstract_instance_property : string
+val const_mutation : string
+val no_attributes_on_variadic_parameter : string

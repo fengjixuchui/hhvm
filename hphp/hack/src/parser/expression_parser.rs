@@ -8,16 +8,17 @@ use std::borrow::Cow;
 use std::marker::PhantomData;
 
 use crate::declaration_parser::DeclarationParser;
-use crate::lexable_token::LexableToken;
 use crate::lexer::{Lexer, StringLiteralKind};
 use crate::operator::{Assoc, Operator};
 use crate::parser_env::ParserEnv;
 use crate::parser_trait::{Context, ParserTrait};
 use crate::smart_constructors::{NodeType, SmartConstructors};
+use crate::source_text::SourceText;
 use crate::statement_parser::StatementParser;
-use crate::syntax_error::{self as Errors, SyntaxError};
-use crate::token_kind::TokenKind;
 use crate::type_parser::TypeParser;
+use parser_core_types::lexable_token::LexableToken;
+use parser_core_types::syntax_error::{self as Errors, SyntaxError};
+use parser_core_types::token_kind::TokenKind;
 
 #[derive(PartialEq)]
 pub enum BinaryExpressionPrefixKind<P> {
@@ -42,7 +43,7 @@ where
 {
     lexer: Lexer<'a, S::Token>,
     env: ParserEnv,
-    context: Context<S::Token>,
+    context: Context<'a, S::Token>,
     errors: Vec<SyntaxError>,
     sc: S,
     precedence: usize,
@@ -77,7 +78,7 @@ where
     fn make(
         lexer: Lexer<'a, S::Token>,
         env: ParserEnv,
-        context: Context<S::Token>,
+        context: Context<'a, S::Token>,
         errors: Vec<SyntaxError>,
         sc: S,
     ) -> Self {
@@ -93,7 +94,14 @@ where
         }
     }
 
-    fn into_parts(self) -> (Lexer<'a, S::Token>, Context<S::Token>, Vec<SyntaxError>, S) {
+    fn into_parts(
+        self,
+    ) -> (
+        Lexer<'a, S::Token>,
+        Context<'a, S::Token>,
+        Vec<SyntaxError>,
+        S,
+    ) {
         (self.lexer, self.context, self.errors, self.sc)
     }
 
@@ -136,11 +144,11 @@ where
         &self.context.skipped_tokens
     }
 
-    fn context_mut(&mut self) -> &mut Context<S::Token> {
+    fn context_mut(&mut self) -> &mut Context<'a, S::Token> {
         &mut self.context
     }
 
-    fn context(&self) -> &Context<S::Token> {
+    fn context(&self) -> &Context<'a, S::Token> {
         &self.context
     }
 }
@@ -810,7 +818,7 @@ where
         //
         //
 
-        let merge = |token: S::Token, head: Option<S::Token>| {
+        let merge = |token: S::Token, head: Option<S::Token>, source: &SourceText<'a>| {
             // TODO: Assert that new head has no leading trivia, old head has no
             // trailing trivia.
             // Invariant: A token inside a list of string fragments is always a head,
@@ -855,7 +863,7 @@ where
                     let l = head.leading().to_vec();
                     let t = token.trailing().to_vec();
                     // TODO: Make a "position" type that is a tuple of source and offset.
-                    Some(S::Token::make(k, o, w, l, t))
+                    Some(S::Token::make(k, source, o, w, l, t))
                 }
                 None => {
                     let token = match token.kind() {
@@ -998,7 +1006,7 @@ where
                     // We got a { not followed by a $. Ignore it.
                     // TODO: Give a warning?
                     parser.continue_from(parser1);
-                    merge(left_brace, head)
+                    merge(left_brace, head, parser.lexer.source())
                 }
             }
         };
@@ -1037,7 +1045,7 @@ where
                     _ => {
                         // We got a $ not followed by a { or variable name. Ignore it.
                         // TODO: Give a warning?
-                        merge(dollar, head)
+                        merge(dollar, head, parser.lexer.source())
                     }
                 }
             };
@@ -1051,7 +1059,7 @@ where
             match token.kind() {
                 TokenKind::HeredocStringLiteralTail | TokenKind::DoubleQuotedStringLiteralTail => {
                     self.continue_from(parser1);
-                    let head = merge(token, head);
+                    let head = merge(token, head, self.lexer.source());
                     put_opt(self, head, &mut acc);
                     break;
                 }
@@ -1069,7 +1077,7 @@ where
                 }
                 _ => {
                     self.continue_from(parser1);
-                    head = merge(token, head)
+                    head = merge(token, head, self.lexer.source())
                 }
             }
         }
@@ -1330,7 +1338,8 @@ where
                         }
                         TokenKind::Instanceof => {
                             self.with_error(Errors::instanceof_disabled);
-                            S!(make_missing, self, self.pos())
+                            let _ = self.assert_token(TokenKind::Instanceof);
+                            term
                         }
                         TokenKind::Is => self.parse_is_expression(term),
                         TokenKind::As if self.allow_as_expressions() => {

@@ -4,9 +4,6 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-#[macro_use]
-extern crate ocaml;
-
 extern crate libc;
 
 mod ocaml_coroutine_state;
@@ -16,16 +13,19 @@ pub mod rust_to_ocaml;
 
 use parser_rust as parser;
 
-use parser::file_mode::parse_mode;
 use parser::lexer::Lexer;
 use parser::minimal_parser::MinimalSyntaxParser;
+use parser::minimal_syntax::MinimalSyntax;
 use parser::minimal_token::MinimalToken;
 use parser::minimal_trivia::MinimalTrivia;
+use parser::mode_parser::parse_mode;
 use parser::parser_env::ParserEnv;
 use parser::source_text::SourceText;
 use parser::stack_limit::StackLimit;
+use parser_core_types::syntax_tree::SyntaxTree;
 
-use rust_to_ocaml::{caml_tuple, to_list, SerializationContext, ToOcaml};
+use ocamlpool_rust::{caml_raise, ocamlvalue::Ocamlvalue, utils::*};
+use rust_to_ocaml::{to_list, SerializationContext, ToOcaml};
 
 use parser::parser::Parser;
 use parser::positioned_smart_constructors::*;
@@ -34,11 +34,13 @@ use parser::positioned_token::PositionedToken;
 use parser::smart_constructors::NoState;
 use parser::smart_constructors_wrappers::WithKind;
 
+use oxidized::relative_path::RelativePath;
+
 type PositionedSyntaxParser<'a> = Parser<'a, WithKind<PositionedSmartConstructors>, NoState>;
 
 use crate::ocaml_coroutine_state::OcamlCoroutineState;
 use crate::ocaml_syntax::OcamlSyntax;
-use parser::coroutine_smart_constructors::CoroutineSmartConstructors;
+use parser::coroutine_smart_constructors::{CoroutineSmartConstructors, State as CoroutineState};
 
 type CoroutineParser<'a> = Parser<
     'a,
@@ -52,68 +54,35 @@ type CoroutineParser<'a> = Parser<
     OcamlCoroutineState<'a, OcamlSyntax<PositionedValue>>,
 >;
 
+type CoroutineParserLeakTree<'a> = Parser<
+    'a,
+    WithKind<
+        CoroutineSmartConstructors<'a, PositionedSyntax, CoroutineState<'a, PositionedSyntax>>,
+    >,
+    CoroutineState<'a, PositionedSyntax>,
+>;
+
 use parser::decl_mode_smart_constructors::DeclModeSmartConstructors;
 use parser::decl_mode_smart_constructors::State as DeclModeState;
 
 type DeclModeParser<'a> = Parser<
     'a,
-    WithKind<DeclModeSmartConstructors<PositionedSyntax, PositionedToken, PositionedValue>>,
-    DeclModeState<PositionedSyntax>,
+    WithKind<DeclModeSmartConstructors<'a, PositionedSyntax, PositionedToken, PositionedValue>>,
+    DeclModeState<'a, PositionedSyntax>,
 >;
+
+use parser::verify_smart_constructors::State as VerifyState;
+use parser::verify_smart_constructors::VerifySmartConstructors;
+
+type VerifyParser<'a> = Parser<'a, WithKind<VerifySmartConstructors>, VerifyState>;
 
 extern "C" {
     fn ocamlpool_enter();
     fn ocamlpool_leave();
 }
 
-unsafe fn block_field(block: &ocaml::Value, field: usize) -> ocaml::Value {
-    ocaml::Value::new(*ocaml::core::mlvalues::field(block.0, field))
-}
-
-unsafe fn bool_field(block: &ocaml::Value, field: usize) -> bool {
-    ocaml::Value::new(*ocaml::core::mlvalues::field(block.0, field)).i32_val() != 0
-}
-
-unsafe fn str_field(block: &ocaml::Value, field: usize) -> ocaml::Str {
-    ocaml::Str::from(ocaml::Value::new(*ocaml::core::mlvalues::field(
-        block.0, field,
-    )))
-}
-
-macro_rules! caml_raise {
-    ($name:ident, |$($param:ident),*|, <$($local:ident),*>, $code:block -> $retval:ident) => {
-        caml!($name, |$($param),*|, <caml_raise_ret, $($local),*>, {
-            let result = std::panic::catch_unwind(
-                || {
-                    $code;
-                    return $retval;
-                }
-            );
-            match result {
-                Ok (value) => {
-                    caml_raise_ret = value;
-                },
-                Err (err) => {
-                    let msg: &str;
-                    if let Some (str) = err.downcast_ref::<&str>() {
-                        msg = str;
-                    } else if let Some (string) = err.downcast_ref::<String>() {
-                        msg = &string[..];
-                    } else {
-                        msg = "Unknown panic type, only support string type.";
-                    }
-                    ocaml::runtime::raise_with_string(
-                        &ocaml::named_value("rust exception").unwrap(),
-                        msg,
-                    );
-                },
-            };
-        } -> caml_raise_ret);
-    };
-}
-
 macro_rules! parse {
-    ($name:ident, $parser:ident) => {
+    ($name:ident, $parser:ident, $syntax:ty) => {
         caml_raise!($name, |ocaml_source_text, opts|, <l>, {
             let ocaml_source_text_value = ocaml_source_text.0;
 
@@ -122,6 +91,7 @@ macro_rules! parse {
             let php5_compat_mode = bool_field(&opts, 2);
             let codegen = bool_field(&opts, 3);
             let allow_new_attribute_syntax = bool_field(&opts, 4);
+            let leak_rust_tree = bool_field(&opts, 5);
             let env = ParserEnv {
                 is_experimental_mode,
                 hhvm_compat_mode,
@@ -137,6 +107,7 @@ macro_rules! parse {
             const MAX_STACK_SIZE: usize = 1024 * MI;
             let mut stack_size = 2 * MI;
             let mut default_stack_size_sufficient = true;
+            parser::stack_limit::init();
             loop {
                 if stack_size > MAX_STACK_SIZE {
                     panic!("Rust FFI exceeded maximum allowed stack of {} KiB", MAX_STACK_SIZE / KI);
@@ -159,51 +130,66 @@ macro_rules! parse {
                 // (https://github.com/facebook/hhvm/blob/master/hphp/runtime/base/request-info.h)
                 let relative_stack_size = stack_size - stack_size*6/10;
                 stack_size = next_stack_size;
-
-                let relative_path = block_field(&ocaml_source_text, 0);
-                let file_path = str_field(&relative_path, 1);
                 let content = str_field(&ocaml_source_text, 2);
-                let env = env.clone();
+                let relative_path_raw = block_field(&ocaml_source_text, 0);
 
+                let env = env.clone();
                 let try_parse = move || {
-                    let stack_limit = std::rc::Rc::new(StackLimit::relative(relative_stack_size));
+                    let stack_limit = StackLimit::relative(relative_stack_size);
                     stack_limit.reset();
-                    let source_text = SourceText::make_with_raw(
-                        &file_path.as_str(),
-                        &content.data(),
-                        ocaml_source_text_value,
-                    );
+                    let stack_limit_ref = &stack_limit;
+                    let relative_path = RelativePath::from_ocamlvalue(&relative_path_raw);
+                    let file_path = relative_path.path_str().to_owned();
                     ocamlpool_enter();
-                    let mut parser = $parser::make(&source_text, env);
-                    let root = parser.parse_script(Some(stack_limit.clone()));
-                    let errors = parser.errors();
-                    let state = parser.sc_state();
-                    let result = if (*stack_limit).exceeded() {
-                        // Not always printing warning here because this would fail some HHVM tests
-                        let istty = libc::isatty(libc::STDERR_FILENO as i32) != 0;
-                        if istty || std::env::var_os("HH_TEST_MODE").is_some() {
-                            eprintln!("[hrust] warning: parser exceeded stack of {} KiB on: {}",
-                                      stack_limit.get() / KI,
-                                      file_path.as_str(),
-                            );
-                        }
-                        None
-                    } else {
+                    let maybe_l = std::panic::catch_unwind(move || {
+                        let source_text = SourceText::make_with_raw(
+                            &relative_path,
+                            &content.data(),
+                            ocaml_source_text_value,
+                        );
+                        let mut parser = $parser::make(&source_text, env);
+                        let root = parser.parse_script(Some(&stack_limit_ref));
+                        let errors = parser.errors();
+                        let state = parser.sc_state();
+
                         // traversing the parsed syntax tree uses about 1/3 of the stack
                         let context = SerializationContext::new(ocaml_source_text_value);
                         let ocaml_root = root.to_ocaml(&context);
-                        let ocaml_errors = to_list(&errors, &context);
+                        let ocaml_errors = errors.ocamlvalue();
                         let ocaml_state = state.to_ocaml(&context);
+                        let tree = if leak_rust_tree {
+                            let mode = parse_mode(&source_text);
+                            let tree = Box::new(SyntaxTree::build(&source_text, root, errors, mode, ()));
+                            Some(Box::leak(tree) as *const SyntaxTree<$syntax, ()> as usize)
+                        } else {
+                            None
+                        };
+                        let ocaml_tree = tree.ocamlvalue();
                         let res = caml_tuple(&[
                             ocaml_state,
                             ocaml_root,
-                            ocaml_errors
+                            ocaml_errors,
+                            ocaml_tree,
                         ]);
                         let l = ocaml::Value::new(res);
-                        Some(l)
-                    };
-                    ocamlpool_leave();
-                    result
+                        l
+                    });
+                    ocamlpool_leave();  // note: must run even if a panic occurs
+                    match maybe_l {
+                        Ok(l) => Some(l),
+                        Err(_) if stack_limit.exceeded() => {
+                            // Not always printing warning here because this would fail some HHVM tests
+                            let istty = libc::isatty(libc::STDERR_FILENO as i32) != 0;
+                            if istty || std::env::var_os("HH_TEST_MODE").is_some() {
+                                eprintln!("[hrust] warning: parser exceeded stack of {} KiB on: {}",
+                                          stack_limit.get() / KI,
+                                          file_path,
+                                );
+                            }
+                            None
+                        }
+                        Err(msg) => panic!(msg),
+                    }
                 };
 
                 let l_opt = if default_stack_size_sufficient {
@@ -226,22 +212,39 @@ macro_rules! parse {
     };
 }
 
-parse!(parse_minimal, MinimalSyntaxParser);
-parse!(parse_positioned, PositionedSyntaxParser);
-parse!(parse_positioned_with_coroutine_sc, CoroutineParser);
-parse!(parse_positioned_with_decl_mode_sc, DeclModeParser);
+parse!(parse_minimal, MinimalSyntaxParser, MinimalSyntax);
+parse!(parse_positioned, PositionedSyntaxParser, PositionedSyntax);
+parse!(
+    parse_positioned_with_coroutine_sc,
+    CoroutineParser,
+    OcamlSyntax<PositionedValue>
+);
+parse!(
+    parse_positioned_with_coroutine_sc_leak_tree,
+    CoroutineParserLeakTree,
+    PositionedSyntax
+);
+parse!(
+    parse_positioned_with_decl_mode_sc,
+    DeclModeParser,
+    PositionedSyntax
+);
+parse!(
+    parse_positioned_with_verify_sc,
+    VerifyParser,
+    PositionedSyntax
+);
 
 caml_raise!(rust_parse_mode, |ocaml_source_text|, <l>, {
-    let relative_path = block_field(&ocaml_source_text, 0);
-    let file_path = str_field(&relative_path, 1);
+    let relative_path_raw = block_field(&ocaml_source_text, 0);
+    let relative_path = RelativePath::from_ocamlvalue(&relative_path_raw);
     let content = str_field(&ocaml_source_text, 2);
-    let source_text = SourceText::make(&file_path.as_str(), &content.data());
+    let source_text = SourceText::make(&relative_path, &content.data());
 
     let mode = parse_mode(&source_text);
 
     ocamlpool_enter();
-    let context = SerializationContext::new(ocaml_source_text.0);
-    let ocaml_mode = mode.to_ocaml(&context);
+    let ocaml_mode = mode.ocamlvalue();
     l = ocaml::Value::new(ocaml_mode);
     ocamlpool_leave();
 } -> l);
@@ -249,10 +252,10 @@ caml_raise!(rust_parse_mode, |ocaml_source_text|, <l>, {
 macro_rules! scan_trivia {
     ($name:ident) => {
         caml_raise!($name, |ocaml_source_text, offset|, <l>, {
-            let relative_path = block_field(&ocaml_source_text, 0);
-            let file_path = str_field(&relative_path, 1);
+            let relative_path_raw = block_field(&ocaml_source_text, 0);
+            let relative_path = RelativePath::from_ocamlvalue(&relative_path_raw);
             let content = str_field(&ocaml_source_text, 2);
-            let source_text = SourceText::make(&file_path.as_str(), &content.data());
+            let source_text = SourceText::make(&relative_path, &content.data());
 
             let offset = offset.usize_val();
 

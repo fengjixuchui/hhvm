@@ -293,7 +293,6 @@ bool refinable_load_eligible(const IRInstruction& inst) {
     case LdStk:
     case LdMBase:
     case LdMem:
-    case LdARFuncPtr:
     case LdARCtx:
       assertx(inst.hasTypeParam());
       return true;
@@ -1269,7 +1268,7 @@ void optimizeLoads(IRUnit& unit) {
       logPerfWarning(
         "optimize_loads_max_iters", 1,
         [&](StructuredLogEntry& cols) {
-          auto const func = unit.context().func;
+          auto const func = unit.context().initSrcKey.func();
           cols.setStr("func", func->fullName()->slice());
           cols.setStr("filename", func->unit()->filepath()->slice());
           cols.setStr("hhir_unit", show(unit));

@@ -4,14 +4,14 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use crate::lexable_token::LexableToken;
-use crate::lexable_trivia::LexableTrivia;
 use crate::lexer::{self, Lexer};
 use crate::parser_env::ParserEnv;
 use crate::smart_constructors::{NodeType, SmartConstructors};
 use crate::stack_limit::StackLimit;
-use crate::syntax_error::{self as Errors, Error, SyntaxError};
-use crate::token_kind::TokenKind;
+use parser_core_types::lexable_token::LexableToken;
+use parser_core_types::lexable_trivia::LexableTrivia;
+use parser_core_types::syntax_error::{self as Errors, Error, SyntaxError};
+use parser_core_types::token_kind::TokenKind;
 
 #[derive(PartialEq)]
 pub enum SeparatedListKind {
@@ -78,14 +78,14 @@ impl ExpectedTokenVec {
 }
 
 #[derive(Debug, Clone)]
-pub struct Context<T> {
+pub struct Context<'a, T> {
     pub expected: ExpectedTokenVec,
     pub skipped_tokens: Vec<T>,
-    stack_limit: Option<std::rc::Rc<StackLimit>>,
+    stack_limit: Option<&'a StackLimit>,
 }
 
-impl<T> Context<T> {
-    pub fn empty(stack_limit: Option<std::rc::Rc<StackLimit>>) -> Self {
+impl<'a, T> Context<'a, T> {
+    pub fn empty(stack_limit: Option<&'a StackLimit>) -> Self {
         Self {
             expected: ExpectedTokenVec(vec![]),
             skipped_tokens: vec![],
@@ -119,12 +119,19 @@ where
     fn make(
         _: Lexer<'a, S::Token>,
         _: ParserEnv,
-        _: Context<S::Token>,
+        _: Context<'a, S::Token>,
         _: Vec<SyntaxError>,
         _: S,
     ) -> Self;
     fn add_error(&mut self, _: SyntaxError);
-    fn into_parts(self) -> (Lexer<'a, S::Token>, Context<S::Token>, Vec<SyntaxError>, S);
+    fn into_parts(
+        self,
+    ) -> (
+        Lexer<'a, S::Token>,
+        Context<'a, S::Token>,
+        Vec<SyntaxError>,
+        S,
+    );
     fn lexer(&self) -> &Lexer<'a, S::Token>;
     fn lexer_mut(&mut self) -> &mut Lexer<'a, S::Token>;
     fn continue_from<P: ParserTrait<'a, S, T>>(&mut self, _: P)
@@ -138,8 +145,8 @@ where
     fn skipped_tokens(&self) -> &[S::Token];
     fn skipped_tokens_mut(&mut self) -> &mut Vec<S::Token>;
 
-    fn context_mut(&mut self) -> &mut Context<S::Token>;
-    fn context(&self) -> &Context<S::Token>;
+    fn context_mut(&mut self) -> &mut Context<'a, S::Token>;
+    fn context(&self) -> &Context<'a, S::Token>;
 
     fn pos(&self) -> usize {
         self.lexer().offset()
@@ -187,18 +194,20 @@ where
 
     fn next_token_with_tokenizer(
         &mut self,
-        tokenizer: &dyn Fn(&mut Lexer<S::Token>) -> S::Token,
+        tokenizer: &dyn Fn(&mut Lexer<'a, S::Token>) -> S::Token,
     ) -> S::Token {
         let token = tokenizer(self.lexer_mut());
         if !self.skipped_tokens().is_empty() {
             let mut leading = vec![];
             for t in self.skipped_tokens().iter() {
                 leading.extend(t.leading().iter().rev().cloned());
-                leading.push(<S::Token as LexableToken>::Trivia::make_extra_token_error(
-                    self.lexer().source(),
-                    self.lexer().start(),
-                    t.width(),
-                ));
+                leading.push(
+                    <S::Token as LexableToken<'a>>::Trivia::make_extra_token_error(
+                        self.lexer().source(),
+                        self.lexer().start(),
+                        t.width(),
+                    ),
+                );
                 leading.extend(t.trailing().iter().rev().cloned());
             }
             leading.extend(token.leading().to_vec());
@@ -285,7 +294,14 @@ where
         let attr2 = lexer.peek_char(2);
         if tparam_open == '<' && attr1 == '<' && attr2 == '<' {
             lexer.advance(1);
-            let token = S::Token::make(TokenKind::LessThan, lexer.start(), 1, vec![], vec![]);
+            let token = S::Token::make(
+                TokenKind::LessThan,
+                lexer.source(),
+                lexer.start(),
+                1,
+                vec![],
+                vec![],
+            );
             S!(make_token, self, token)
         } else {
             self.continue_from(parser1);
@@ -294,7 +310,9 @@ where
     }
 
     fn assert_xhp_body_token(&mut self, kind: TokenKind) -> S::R {
-        self.assert_token_with_tokenizer(kind, &|x: &mut Lexer<S::Token>| x.next_xhp_body_token())
+        self.assert_token_with_tokenizer(kind, &|x: &mut Lexer<'a, S::Token>| {
+            x.next_xhp_body_token()
+        })
     }
 
     fn peek_token_with_lookahead(&self, lookahead: usize) -> S::Token {
@@ -331,7 +349,7 @@ where
     fn assert_token_with_tokenizer(
         &mut self,
         kind: TokenKind,
-        tokenizer: &dyn Fn(&mut Lexer<S::Token>) -> S::Token,
+        tokenizer: &dyn Fn(&mut Lexer<'a, S::Token>) -> S::Token,
     ) -> S::R {
         let token = self.next_token_with_tokenizer(tokenizer);
         if token.kind() != kind {
@@ -1374,18 +1392,10 @@ where
         }
     }
 
-    fn set_stack_limit(&mut self, shared: std::rc::Rc<StackLimit>) {
-        self.context_mut().stack_limit = Some(shared.clone());
-    }
-
     fn check_stack_limit(&mut self) {
-        if self
-            .context()
+        self.context()
             .stack_limit
             .as_ref()
-            .map_or(false, |limit| limit.check_exceeded())
-        {
-            self.lexer_mut().skip_to_end();
-        }
+            .map(|limit| limit.panic_if_exceeded());
     }
 }

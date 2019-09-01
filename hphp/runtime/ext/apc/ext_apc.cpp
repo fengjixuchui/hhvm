@@ -310,7 +310,7 @@ Variant HHVM_FUNCTION(apc_store,
       apc_store().set(key.toString(), v, ttl);
     }
 
-    return Variant(staticEmptyArray());
+    return Variant(ArrayData::Create());
   }
 
   if (!key_or_array.isString()) {
@@ -445,26 +445,26 @@ bool HHVM_FUNCTION(apc_clear_cache, const String& /*cache_type*/ /* = "" */) {
 
 Variant HHVM_FUNCTION(apc_inc,
                       const String& key,
-                      int64_t step /* = 1 */,
-                      VRefParam success /* = null */) {
+                      int64_t step,
+                      bool& success) {
   if (!apcExtension::Enable) return false;
 
   bool found = false;
   int64_t newValue = apc_store().inc(key, step, found);
-  success.assignIfRef(found);
+  success = found;
   if (!found) return false;
   return newValue;
 }
 
 Variant HHVM_FUNCTION(apc_dec,
                       const String& key,
-                      int64_t step /* = 1 */,
-                      VRefParam success /* = null */) {
+                      int64_t step,
+                      bool& success) {
   if (!apcExtension::Enable) return false;
 
   bool found = false;
   int64_t newValue = apc_store().inc(key, -step, found);
-  success.assignIfRef(found);
+  success = found;
   if (!found) return false;
   return newValue;
 }

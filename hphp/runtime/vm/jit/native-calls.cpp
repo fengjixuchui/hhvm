@@ -27,6 +27,7 @@
 #include "hphp/runtime/base/timestamp.h"
 #include "hphp/runtime/base/tv-conversions.h"
 
+#include "hphp/runtime/vm/property-profile.h"
 #include "hphp/runtime/vm/reified-generics.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/unit-util.h"
@@ -161,11 +162,11 @@ static CallMap s_callMap {
 
     {ConvArrToVec,       convArrToVecHelper, DSSA, SSync,
                            {{SSA, 0}}},
-    {ConvDictToVec,      convDictToVecHelper, DSSA, SNone,
+    {ConvDictToVec,      convDictToVecHelper, DSSA, SSync,
                            {{SSA, 0}}},
-    {ConvShapeToVec,     convShapeToVecHelper, DSSA, SNone,
+    {ConvShapeToVec,     convShapeToVecHelper, DSSA, SSync,
                            {{SSA, 0}}},
-    {ConvKeysetToVec,    convKeysetToVecHelper, DSSA, SNone,
+    {ConvKeysetToVec,    convKeysetToVecHelper, DSSA, SSync,
                            {{SSA, 0}}},
     {ConvObjToVec,       convObjToVecHelper, DSSA, SSync,
                            {{SSA, 0}}},
@@ -174,9 +175,9 @@ static CallMap s_callMap {
                            {{SSA, 0}}},
     {ConvShapeToDict,    convShapeToDictHelper, DSSA, SSync,
                            {{SSA, 0}}},
-    {ConvVecToDict,      convVecToDictHelper, DSSA, SNone,
+    {ConvVecToDict,      convVecToDictHelper, DSSA, SSync,
                            {{SSA, 0}}},
-    {ConvKeysetToDict,   convKeysetToDictHelper, DSSA, SNone,
+    {ConvKeysetToDict,   convKeysetToDictHelper, DSSA, SSync,
                            {{SSA, 0}}},
     {ConvObjToDict,      convObjToDictHelper, DSSA, SSync,
                            {{SSA, 0}}},
@@ -312,13 +313,15 @@ static CallMap s_callMap {
                            {extra(&FuncArgData::func),
                             extra(&FuncArgData::argNum)}},
     {RaiseTooManyArg,    raiseTooManyArguments, DNone, SSync,
-                           {extra(&FuncArgData::func),
-                            extra(&FuncArgData::argNum)}},
+                           {extra(&FuncData::func), {SSA, 0}}},
     {RaiseRxCallViolation, raiseRxCallViolation,
                           DNone, SSync, {{SSA, 0}, {SSA, 1}}},
     {ThrowInvalidOperation, throw_invalid_operation_exception,
                           DNone, SSync, {{SSA, 0}}},
     {ThrowArithmeticError, throw_arithmetic_error,
+                          DNone, SSync, {{SSA, 0}}},
+    {ThrowCallReifiedFunctionWithoutGenerics,
+                          throw_call_reified_func_without_generics,
                           DNone, SSync, {{SSA, 0}}},
     {ThrowDivisionByZeroError, throw_division_by_zero_error,
                           DNone, SSync, {{SSA, 0}}},
@@ -478,6 +481,9 @@ static CallMap s_callMap {
     {LdClsPropAddrOrRaise,
                          getSPropOrRaise, DSSA, SSync,
                            {{SSA, 0}, {SSA, 1}, {SSA, 2}, {SSA, 3}, {SSA, 4}}},
+
+    {ProfileProp,        &PropertyProfile::incCount, DNone, SNone,
+                           {{SSA, 0}, {SSA, 1}}},
 
     /* Global helpers */
     {LdGblAddrDef,       ldGblAddrDefHelper, DSSA, SNone,

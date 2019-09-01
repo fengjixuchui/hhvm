@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -72,11 +72,11 @@ class virtual ['a] type_visitor : ['a] type_visitor_type = object(this)
   method on_tfun: type a. _ -> Reason.t -> a fun_type -> _ =
     fun acc _ {ft_params; ft_tparams; ft_ret; _} ->
     let acc = List.fold_left ~f:this#on_type ~init:acc
-      (List.map ft_params (fun x -> x.fp_type)) in
+      (List.map ft_params (fun x -> x.fp_type.et_type)) in
     let tparams = List.map (fst ft_tparams) (fun t -> List.map t.tp_constraints snd) in
     let acc = List.fold_left tparams ~f:(fun acc tp ->
       List.fold ~f:this#on_type ~init:acc tp) ~init:acc in
-    this#on_type acc ft_ret
+    this#on_type acc ft_ret.et_type
   method on_tabstract acc _ ak ty_opt =
     let acc =
       match ak with
@@ -114,7 +114,7 @@ class virtual ['a] type_visitor : ['a] type_visitor_type = object(this)
   method on_tlist acc _ tyl = List.fold_left tyl ~f:this#on_type ~init:acc
   method on_type: type a. _ -> a ty -> _ = fun acc (r, x) ->
     match x with
-    | Tany -> this#on_tany acc r
+    | Tany _ -> this#on_tany acc r
     | Terr -> this#on_terr acc r
     | Tmixed -> this#on_tmixed acc r
     | Tnonnull -> this#on_tnonnull acc r
@@ -147,4 +147,6 @@ class virtual ['a] type_visitor : ['a] type_visitor_type = object(this)
     | Tclass (cls, exact, tyl) -> this#on_tclass acc r cls exact tyl
     | Tarraykind akind -> this#on_tarraykind acc r akind
     | Tdestructure tyl -> this#on_tlist acc r tyl
+    | Tpu (base, _, _) -> this#on_type acc base
+    | Tpu_access (base, _) -> this#on_type acc base
 end

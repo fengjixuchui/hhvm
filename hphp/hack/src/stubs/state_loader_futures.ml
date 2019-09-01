@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
@@ -6,4 +6,6 @@
  *
  *)
 
- let load ~repo:_ ~saved_state_type:_ = failwith "Not implemented"
+let load ~repo:_ ~saved_state_type:_ = failwith "Not implemented"
+
+let wait_for_finish _ = failwith "Not implemented"

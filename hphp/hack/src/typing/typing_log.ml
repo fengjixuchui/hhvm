@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
@@ -9,10 +9,11 @@
 
 open Core_kernel
 open Typing_defs
+open Typing_env_types
 module Env = Typing_env
 module Pr = Typing_print
+module TPEnv = Type_parameter_env
 module TySet = Typing_set
-open Env
 open Tty
 open Typing_log_value
 
@@ -214,14 +215,16 @@ and log_key_delta k d =
 
 let type_as_value env ty = Atom (Typing_print.debug env ty)
 
+let possibly_enforced_type_as_value env et =
+  Atom (if et.et_enforced then "enforced " else "" ^
+    Typing_print.debug env et.et_type)
+
 let return_info_as_value env return_info =
     let Typing_env_return_info.
-      {return_type; return_type_decl; return_disposable; return_mutable; return_explicit;
+      {return_type; return_disposable; return_mutable; return_explicit;
        return_void_to_rx; } = return_info in
     make_map [
-      "return_type", type_as_value env return_type;
-      "return_type_decl", Option.value_map ~f:(type_as_value env)
-        ~default:(Atom "") return_type_decl;
+      "return_type", possibly_enforced_type_as_value env return_type;
       "return_disposable", Bool return_disposable;
       "return_mutable", Bool return_mutable;
       "return_explicit", Bool return_explicit;
@@ -259,7 +262,7 @@ let tparam_info_as_value env tpinfo =
   ]
 
 let tpenv_as_value env tpenv =
-  Map (SMap.fold (fun name tpinfo m ->
+  Map (TPEnv.fold (fun name tpinfo m ->
     SMap.add name (tparam_info_as_value env tpinfo) m) tpenv SMap.empty)
 
 let per_cont_entry_as_value env f entry =
@@ -306,7 +309,10 @@ let subst_as_value subst =
   Map (IMap.fold (fun i x m ->
     SMap.add (Printf.sprintf "#%d" i) (Atom (Printf.sprintf "#%d" x)) m) subst SMap.empty)
 
-let tyvar_info_as_value env tvinfo =
+let global_tyvar_info_as_value =
+  Atom "global"
+
+let local_tyvar_info_as_value env tvinfo =
   let {
     tyvar_pos;
     eager_solve_fail;
@@ -326,7 +332,18 @@ let tyvar_info_as_value env tvinfo =
   ]
 let tvenv_as_value env tvenv =
   Map (IMap.fold (fun i x m ->
-    SMap.add (Printf.sprintf "#%d" i) (tyvar_info_as_value env x) m) tvenv SMap.empty)
+    match x with
+    | LocalTyvar x ->
+      SMap.add (Printf.sprintf "#%d" i) (local_tyvar_info_as_value env x) m
+    | GlobalTyvar ->
+      SMap.add (Printf.sprintf "#%d" i) (global_tyvar_info_as_value) m
+    ) tvenv SMap.empty)
+
+let global_tvenv_as_value env global_tvenv =
+  Map (IMap.fold (fun i x m ->
+      SMap.add (Printf.sprintf "#%d" i) (local_tyvar_info_as_value env x) m
+    ) global_tvenv SMap.empty)
+
 let tyvars_stack_as_value tyvars_stack =
   List (List.map tyvars_stack (fun (_, l) ->
   List (List.map l (fun i -> Atom (Printf.sprintf "#%d" i)))))
@@ -437,13 +454,16 @@ let env_as_value env =
     subtype_prop;
     log_levels = _;
     tvenv;
+    global_tvenv;
     tyvars_stack;
     allow_wildcards;
     big_envs = _;
+    pessimize = _;
   } = env in
   make_map [
     "function_pos", pos_as_value function_pos;
     "tvenv", tvenv_as_value env tvenv;
+    "global_tvenv", global_tvenv_as_value env global_tvenv;
     "tenv", tenv_as_value env tenv;
     "subst", subst_as_value subst;
     "fresh_typarams", Set fresh_typarams;

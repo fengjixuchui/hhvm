@@ -16,13 +16,15 @@
  **
  *
  */
+use parser_core_types::{
+  syntax::*,
+  source_text::SourceText,
+};
 use crate::parser_env::ParserEnv;
 use crate::smart_constructors::{NoState, SmartConstructors};
 use crate::syntax_smart_constructors::StateType;
-use crate::source_text::SourceText;
-use crate::syntax::*;
 
-pub trait SyntaxSmartConstructors<'src, S: SyntaxType<State>, State = NoState>:
+pub trait SyntaxSmartConstructors<'src, S: SyntaxType<'src, State>, State = NoState>:
     SmartConstructors<'src, State, R=S, Token=S::Token>
 where
     State: StateType<'src, S>,
@@ -729,6 +731,11 @@ where
     fn make_type_constant(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         self.state_mut().next(&[&arg0, &arg1, &arg2]);
         Self::R::make_type_constant(self.state_mut(), arg0, arg1, arg2)
+    }
+
+    fn make_pu_access(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
+        self.state_mut().next(&[&arg0, &arg1, &arg2]);
+        Self::R::make_pu_access(self.state_mut(), arg0, arg1, arg2)
     }
 
     fn make_vector_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {

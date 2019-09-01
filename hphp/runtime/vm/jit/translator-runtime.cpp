@@ -566,6 +566,7 @@ void VerifyReifiedReturnTypeImpl(TypedValue cell, ArrayData* ts) {
 }
 
 namespace {
+
 ALWAYS_INLINE
 TypedValue getDefaultIfNullCell(tv_rval rval, const TypedValue& def) {
   return UNLIKELY(!rval) ? def : rval.tv();
@@ -577,6 +578,34 @@ TypedValue arrayIdxSSlow(ArrayData* a, StringData* key, TypedValue def) {
   return getDefaultIfNullCell(a->rval(key), def);
 }
 
+ALWAYS_INLINE
+bool isMixedArrayWithStaticKeys(const ArrayData* arr) {
+  // In one comparison we check both the kind and the fact that the array only
+  // has static string keys (no tombstones, int keys, or counted str keys).
+  auto const test = static_cast<uint32_t>(HeaderKind::Mixed);
+  auto const mask = static_cast<uint32_t>(~MixedArray::kStaticStrKey) << 24 |
+                    static_cast<uint32_t>(0xff);
+  return (*(reinterpret_cast<const uint32_t*>(arr) + 1) & mask) == test;
+}
+
+ALWAYS_INLINE
+TypedValue doScan(const MixedArray* arr, StringData* key, TypedValue def) {
+  assertx(key->isStatic());
+  assertx((arr->keyTypes() & ~MixedArray::kStaticStrKey) == 0x00);
+  auto used = arr->iterLimit();
+  for (auto elm = arr->data(); used; used--, elm++) {
+    assertx(elm->hasStrKey());
+    assertx(elm->strKey()->isStatic());
+    if (key == elm->strKey()) return *elm->datatv();
+  }
+  return def;
+}
+
+}
+
+TypedValue arrayIdxI(ArrayData* a, int64_t key, TypedValue def) {
+  assertx(a->isPHPArray());
+  return getDefaultIfNullCell(a->rval(key), def);
 }
 
 TypedValue arrayIdxS(ArrayData* a, StringData* key, TypedValue def) {
@@ -585,9 +614,11 @@ TypedValue arrayIdxS(ArrayData* a, StringData* key, TypedValue def) {
   return getDefaultIfNullCell(MixedArray::RvalStr(a, key), def);
 }
 
-TypedValue arrayIdxI(ArrayData* a, int64_t key, TypedValue def) {
+TypedValue arrayIdxScan(ArrayData* a, StringData* key, TypedValue def) {
   assertx(a->isPHPArray());
-  return getDefaultIfNullCell(a->rval(key), def);
+  return LIKELY(isMixedArrayWithStaticKeys(a))
+    ? doScan(MixedArray::asMixed(a), key, def)
+    : arrayIdxSSlow(a, key, def);
 }
 
 TypedValue dictIdxI(ArrayData* a, int64_t key, TypedValue def) {
@@ -595,9 +626,18 @@ TypedValue dictIdxI(ArrayData* a, int64_t key, TypedValue def) {
   return getDefaultIfNullCell(MixedArray::RvalIntDict(a, key), def);
 }
 
+NEVER_INLINE
 TypedValue dictIdxS(ArrayData* a, StringData* key, TypedValue def) {
   assertx(a->isDict());
   return getDefaultIfNullCell(MixedArray::RvalStrDict(a, key), def);
+}
+
+TypedValue dictIdxScan(ArrayData* a, StringData* key, TypedValue def) {
+  assertx(a->isDict());
+  auto ad = MixedArray::asMixed(a);
+  return LIKELY((ad->keyTypes() & ~MixedArray::kStaticStrKey) == 0)
+    ? doScan(ad, key, def)
+    : dictIdxS(a, key, def);
 }
 
 TypedValue keysetIdxI(ArrayData* a, int64_t key, TypedValue def) {
@@ -739,7 +779,7 @@ int64_t switchObjHelper(ObjectData* o, int64_t base, int64_t nTargets) {
 
 //////////////////////////////////////////////////////////////////////
 
-void checkFrame(ActRec* fp, Cell* sp, bool fullCheck, Offset bcOff) {
+void checkFrame(ActRec* fp, Cell* sp, bool fullCheck) {
   const Func* func = fp->m_func;
   func->validate();
   if (func->cls()) {
@@ -762,10 +802,7 @@ void checkFrame(ActRec* fp, Cell* sp, bool fullCheck, Offset bcOff) {
   }
 
   visitStackElems(
-    fp, sp, bcOff,
-    [](const ActRec* ar) {
-      ar->func()->validate();
-    },
+    fp, sp,
     [](const TypedValue* tv) {
       assertx(tvIsPlausible(*tv));
     }
@@ -805,7 +842,10 @@ const Func* lookupClsMethodHelper(const Class* cls, const StringData* methName,
 //////////////////////////////////////////////////////////////////////
 
 void raiseArgumentImpl(const Func* func, int got, bool missing) {
-  if (!missing && !RuntimeOption::EvalWarnOnTooManyArguments) return;
+  if (!missing && !RuntimeOption::EvalWarnOnTooManyArguments &&
+      !func->isCPPBuiltin()) {
+    return;
+  }
   const auto total = func->numNonVariadicParams();
   const auto variadic = func->hasVariadicCaptureParam();
   const Func::ParamInfoVec& params = func->params();
@@ -829,13 +869,14 @@ void raiseArgumentImpl(const Func* func, int got, bool missing) {
 
   auto const value = atmost ? total : expected;
   auto const msg = folly::sformat("{}() expects {} {} parameter{}, {} given",
-                                  func->displayName()->data(),
+                                  func->fullDisplayName()->data(),
                                   amount,
                                   value,
                                   value == 1 ? "" : "s",
                                   got);
 
-  if (missing || RuntimeOption::EvalWarnOnTooManyArguments > 1) {
+  if (missing || RuntimeOption::EvalWarnOnTooManyArguments > 1 ||
+      func->isCPPBuiltin()) {
     SystemLib::throwRuntimeExceptionObject(Variant(msg));
   } else {
     raise_warning(msg);

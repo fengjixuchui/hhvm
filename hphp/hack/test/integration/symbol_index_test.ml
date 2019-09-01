@@ -95,6 +95,7 @@ let run_index_builder (harness : Test_harness.t) : si_env =
       custom_service = None;
       custom_repo_name = None;
       include_builtins = true;
+      silent = true;
     }
   in
   (* Scan the repo folder and produce answers in sqlite *)
@@ -104,7 +105,7 @@ let run_index_builder (harness : Test_harness.t) : si_env =
       ~globalrev_opt:None
       ~namespace_map:[]
       ~provider_name:"SqliteIndex"
-      ~quiet:false
+      ~quiet:true
       ~savedstate_file_opt:file_opt
       ~workers:None
   in
@@ -112,7 +113,7 @@ let run_index_builder (harness : Test_harness.t) : si_env =
   sienv
 
 let test_sqlite_plus_local (harness : Test_harness.t) : bool =
-  let sienv = ref SearchUtils.default_si_env in
+  let sienv = ref SearchUtils.quiet_si_env in
   sienv := run_index_builder harness;
 
   (* Find one of each major type *)
@@ -203,7 +204,7 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
   assert_autocomplete ~query_text:"UsesA" ~kind:SI_Class ~expected:1 ~sienv;
   assert_autocomplete
     ~query_text:"NoBigTrait"
-    ~kind:SI_Class
+    ~kind:SI_Trait
     ~expected:1
     ~sienv;
   assert_autocomplete
@@ -224,7 +225,7 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
 (* Test the ability of the index builder to capture a variety of
  * names and kinds correctly *)
 let test_builder_names (harness : Test_harness.t) : bool =
-  let sienv = ref SearchUtils.default_si_env in
+  let sienv = ref SearchUtils.quiet_si_env in
   sienv := run_index_builder harness;
 
   (* Assert that we can capture all kinds of symbols *)
@@ -279,7 +280,7 @@ let test_builder_names (harness : Test_harness.t) : bool =
 let test_namespace_map (harness : Test_harness.t) : bool =
   NamespaceSearchService.(
     let _ = harness in
-    let sienv = SearchUtils.default_si_env in
+    let sienv = SearchUtils.quiet_si_env in
     (* Register a namespace and fetch it back exactly *)
     register_namespace ~sienv ~namespace:"HH\\Lib\\Str\\fb";
     let ns = find_exact_match ~sienv ~namespace:"HH" in

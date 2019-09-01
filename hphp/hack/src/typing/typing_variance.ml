@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -372,20 +372,27 @@ and class_method tcopt root static env (_method_name, method_) =
     else
       match method_.ce_type with
       | lazy (_, Tfun { ft_tparams = (tparams, _);
-                          ft_params;
-                          ft_ret;
-                          ft_where_constraints; _ }) ->
+                        ft_params;
+                        ft_arity;
+                        ft_ret;
+                        ft_where_constraints; _ }) ->
           let env = List.fold_left tparams
             ~f:begin fun env t ->
               SMap.remove (snd t.tp_name) env
             end ~init:env in
           List.iter ft_params ~f:(fun_param tcopt root (Vcovariant []) static env);
+          fun_arity tcopt root (Vcovariant []) static env ft_arity;
           List.iter tparams ~f:(fun_tparam tcopt root env);
           List.iter ft_where_constraints ~f:(fun_where_constraint tcopt root env);
-          fun_ret tcopt root (Vcovariant []) static env ft_ret
+          fun_ret tcopt root (Vcovariant []) static env ft_ret.et_type
       | _ -> assert false
 
-and fun_param tcopt root variance static env { fp_type = (reason, _ as ty); fp_kind; _ } =
+and fun_arity tcopt root variance static env arity =
+  match arity with
+  | Fstandard _ | Fellipsis _ -> ()
+  | Fvariadic (_, fp) -> fun_param tcopt root variance static env fp
+
+and fun_param tcopt root variance static env { fp_type = { et_type = (reason, _ as ty); _ }; fp_kind; _ } =
   let pos = Reason.to_pos reason in
   match fp_kind with
   | FPnormal ->
@@ -419,7 +426,6 @@ and fun_where_constraint tcopt root env (ty1, ck, ty2) =
     let var2 = Vcontravariant [pos2, Rwhere_as, Pcontravariant] in
     type_ tcopt root var1 env ty1;
     type_ tcopt root var2 env ty2
-  | Ast_defs.Constraint_pu_from -> failwith "TODO(T36532263): Pocket Universes"
 
 and fun_ret tcopt root variance static env (reason, _ as ty) =
   let pos = Reason.to_pos reason in
@@ -459,7 +465,7 @@ and generic_ env variance name =
 
 and type_ tcopt root variance env (reason, ty) =
   match ty with
-  | Tany | Tmixed | Tnonnull | Terr | Tdynamic | Tnothing -> ()
+  | Tany _ | Tmixed | Tnonnull | Terr | Tdynamic | Tnothing | Tvar _ -> ()
   | Tarray (ty1, ty2) ->
     type_option tcopt root variance env ty1;
     type_option tcopt root variance env ty2
@@ -510,7 +516,8 @@ and type_ tcopt root variance env (reason, ty) =
   | Tprim _ -> ()
   | Tfun ft ->
       List.iter ft.ft_params ~f:(fun_param tcopt root variance `Instance env);
-      fun_ret tcopt root variance `Instance env ft.ft_ret
+      fun_arity tcopt root variance `Instance env ft.ft_arity;
+      fun_ret tcopt root variance `Instance env ft.ft_ret.et_type
   | Tapply (_, []) -> ()
   | Tapply ((_, name as pos_name), tyl) ->
       let variancel = get_class_variance root pos_name in
@@ -527,6 +534,8 @@ and type_ tcopt root variance env (reason, ty) =
   | Tshape (_, ty_map) ->
       Nast.ShapeMap.iter begin fun _ { sft_ty; _ } ->
         type_ tcopt root variance env sft_ty end ty_map
+  | Tpu_access (base, _) ->
+      type_ tcopt root variance env base
 
 (* `as` constraints on method type parameters must be contravariant
  * and `super` constraints on method type parameters are covariant. To
@@ -604,7 +613,6 @@ and constraint_ tcopt root env (ck, (r, _ as ty)) =
       let reasons = [pos, Rconstraint_eq, Pinvariant] in
       Vinvariant (reasons, reasons)
     | Ast_defs.Constraint_super -> Vcovariant [pos, Rconstraint_super, Pcovariant]
-    | Ast_defs.Constraint_pu_from -> failwith "TODO(T36532263): Pocket Universes"
   in
   type_ tcopt root var env ty
 
@@ -622,23 +630,28 @@ and get_typarams root env (ty: decl ty) =
     if Option.is_some (SMap.get id env)
     then empty
     else single id (fst ty)
-  | Tnonnull | Tdynamic | Tprim _ | Tnothing | Tany | Terr | Tthis | Tmixed | Taccess _ -> empty
-  | Toption ty | Tlike ty -> get_typarams root env ty
+  | Tnonnull | Tdynamic | Tprim _ | Tnothing | Tany _ | Terr | Tthis | Tmixed | Tvar _ -> empty
+  | Toption ty | Tlike ty | Taccess (ty, _) -> get_typarams root env ty
   | Ttuple tyl -> List.fold_left tyl ~init:empty ~f:get_typarams_union
   | Tshape (_, m) ->
     Nast.ShapeMap.fold (fun _ {sft_ty; _} res -> get_typarams_union res sft_ty) m empty
   | Tfun ft ->
-    let params = List.fold_left ft.ft_params ~init:empty
-      ~f:(fun res {fp_type; fp_kind; _} ->
-        let tp = get_typarams root env fp_type in
-        let tp =
-          match fp_kind with
-          (* Parameters behave contravariantly *)
-          | FPnormal -> flip tp
-          (* Inout/ref parameters behave both co- and contra-variantly *)
-          | FPref | FPinout -> union tp (flip tp) in
-        union res tp) in
-    let ret = get_typarams root env ft.ft_ret in
+    let get_typarams_param acc fp =
+      let tp = get_typarams root env fp.fp_type.et_type in
+      let tp =
+        match fp.fp_kind with
+        (* Parameters behave contravariantly *)
+        | FPnormal -> flip tp
+        (* Inout/ref parameters behave both co- and contra-variantly *)
+        | FPref | FPinout -> union tp (flip tp) in
+      union acc tp in
+    let get_typarams_arity acc arity =
+      match arity with
+      | Fstandard _ | Fellipsis _ -> acc
+      | Fvariadic (_, fp) -> get_typarams_param acc fp in
+    let params = List.fold_left ft.ft_params
+      ~init:(get_typarams_arity empty ft.ft_arity) ~f:get_typarams_param in
+    let ret = get_typarams root env ft.ft_ret.et_type in
     let get_typarams_constraint acc (ck, ty) =
       union acc (
       match ck with
@@ -649,7 +662,6 @@ and get_typarams root env (ty: decl ty) =
           union (flip tp) tp
         | Ast_defs.Constraint_super ->
           flip (get_typarams root env ty)
-        | Ast_defs.Constraint_pu_from -> failwith "TODO(T36532263): Pocket Universes"
       ) in
     let get_typarams_tparam acc tp =
       List.fold_left tp.tp_constraints ~init:acc ~f:get_typarams_constraint in
@@ -663,9 +675,7 @@ and get_typarams root env (ty: decl ty) =
         union (get_typarams root env ty1) (flip (get_typarams root env ty2))
       | Ast_defs.Constraint_eq ->
         let tp = union (get_typarams root env ty1) (get_typarams root env ty2) in
-        union tp (flip tp)
-      | Ast_defs.Constraint_pu_from ->
-        empty) in
+        union tp (flip tp)) in
     let constrs = List.fold_left ft.ft_where_constraints ~init:empty
       ~f:get_typarams_where_constraint in
     union bounds (union constrs (union ret params))
@@ -693,3 +703,5 @@ and get_typarams root env (ty: decl ty) =
     union (get_typarams root env ty1) (get_typarams root env ty2)
   | Tvarray ty | Tvarray_or_darray ty ->
     get_typarams root env ty
+  | Tpu_access (base, _) ->
+    get_typarams root env base

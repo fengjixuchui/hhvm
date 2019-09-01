@@ -106,7 +106,10 @@ void emitCallerDynamicCallChecksKnown(IRGS& env, const Func* callee) {
     ) :
     RuntimeOption::EvalForbidDynamicCallsToFunc;
   if (dynCallErrorLevel <= 0) return;
-  if (callee->isDynamicallyCallable()) return;
+  if (callee->isDynamicallyCallable() &&
+      !RuntimeOption::EvalForbidDynamicCallsWithAttr) {
+        return;
+  }
   gen(env, RaiseForbiddenDynCall, cns(env, callee));
 }
 
@@ -115,21 +118,26 @@ void emitCallerDynamicCallChecksUnknown(IRGS& env, SSATmp* callee,
   assertx(!callee->hasConstVal());
   if (!mightCareAboutDynCall) return;
 
-  ifElse(
-    env,
-    [&] (Block* skip) {
-      auto const dynCallable = gen(
-        env,
-        FuncHasAttr,
-        AttrData {static_cast<int32_t>(AttrDynamicallyCallable)},
-        callee);
-      gen(env, JmpNZero, skip, dynCallable);
-    },
-    [&] {
-      hint(env, Block::Hint::Unlikely);
-      gen(env, RaiseForbiddenDynCall, callee);
-    }
-  );
+  if(RuntimeOption::EvalForbidDynamicCallsWithAttr) {
+    gen(env, RaiseForbiddenDynCall, callee);
+  } else {
+    ifElse(
+      env,
+      [&] (Block* skip) {
+        auto const dynCallable = gen(
+          env,
+          FuncHasAttr,
+          AttrData {static_cast<int32_t>(AttrDynamicallyCallable)},
+          callee);
+        gen(env, JmpNZero, skip, dynCallable);
+      },
+      [&] {
+        hint(env, Block::Hint::Unlikely);
+        gen(env, RaiseForbiddenDynCall, callee);
+      }
+    );
+  }
+
 }
 
 } // namespace
@@ -173,24 +181,22 @@ void emitCallerRxChecksUnknown(IRGS& env, SSATmp* callee) {
 IRSPRelOffset fsetActRec(
   IRGS& env,
   SSATmp* func,
+  const FCallArgs& fca,
   SSATmp* objOrClass,
-  uint32_t numArgs,
-  SSATmp* invName,
   bool dynamicCall,
   SSATmp* tsList
 ) {
+  auto const numArgs = fca.numArgsInclUnpack();
   auto const arOffset =
     offsetFromIRSP(env, BCSPRelOffset{static_cast<int32_t>(numArgs)});
 
   gen(
     env,
     SpillFrame,
-    ActRecInfo { arOffset, numArgs },
+    ActRecInfo { arOffset, numArgs, dynamicCall },
     sp(env),
     func,
     objOrClass ? objOrClass : cns(env, TNullptr),
-    invName ? invName : cns(env, TNullptr),
-    cns(env, dynamicCall),
     tsList ? tsList : cns(env, TNullptr)
   );
 
@@ -240,7 +246,7 @@ void callWithAsyncEagerReturn(IRGS& env, const Func* callee,
     [&] (Block* taken) {
       auto const aux = gen(env, LdTVAux, LdTVAuxData {}, retVal);
       auto const tst = gen(env, AndInt, aux, cns(env, 1u << 31));
-      gen(env, JmpNZero, taken, tst);
+      gen(env, JmpZero, taken, tst);
     },
     [&] {
       auto const ty = callee ? awaitedCallReturnType(callee) : TInitCell;
@@ -272,83 +278,65 @@ void callKnown(IRGS& env, const Func* callee, const FCallArgs& fca) {
     return callWithAsyncEagerReturn(env, callee, fca, false /* unlikely */);
   }
 
-  return callRegular(env, callee, fca, false /* unlikely */);
+  callRegular(env, callee, fca, false /* unlikely */);
 }
 
-void callUnknown(IRGS& env, SSATmp* callee, const FCallArgs& fca, bool unlikely,
-                 bool noAsyncEagerReturn) {
+void callUnknown(IRGS& env, SSATmp* callee, const FCallArgs& fca,
+                 bool unlikely) {
   assertx(!callee->hasConstVal() || env.formingRegion);
   if (fca.hasUnpack()) return callUnpack(env, nullptr, fca, unlikely);
 
-  if (noAsyncEagerReturn || fca.asyncEagerOffset == kInvalidOffset) {
-    return callRegular(env, nullptr, fca, unlikely);
-  }
-
-  if (fca.supportsAsyncEagerReturn()) {
+  if (fca.asyncEagerOffset != kInvalidOffset) {
+    // Okay to request async eager return even if it is not supported.
     return callWithAsyncEagerReturn(env, nullptr, fca, unlikely);
   }
 
-  ifThenElse(
-    env,
-    [&] (Block* taken) {
-      auto const supportsAER = gen(
-        env,
-        FuncHasAttr,
-        AttrData {static_cast<int32_t>(AttrSupportsAsyncEagerReturn)},
-        callee);
-      gen(env, JmpNZero, taken, supportsAER);
-    },
-    [&] {
-      hint(env, Block::Hint::Unlikely);
-      callRegular(env, nullptr, fca, unlikely);
-    },
-    [&] {
-      callWithAsyncEagerReturn(env, nullptr, fca, unlikely);
-    }
-  );
+  callRegular(env, nullptr, fca, unlikely);
 }
 
 //////////////////////////////////////////////////////////////////////
 
 /*
  * In PGO mode, we use profiling to try to determine the most likely target
- * function at each call site.  profiledCalledFunc() returns the most likely
- * called function based on profiling, as long as it was seen at least
- * Eval.JitPGOCalledFuncCheckThreshold percent of the times during profiling.
- * When a callee satisfies this condition, profiledCalledFunc() returns such
- * callee and it also returns the probability of seeing that callee.
+ * function at each call site. In profiling translations, this function profiles
+ * callees. If the most likely called function based on profiling was seen
+ * at least Eval.JitPGOCalledFuncCheckThreshold percent of the times during
+ * profiling, optimized translations emit a runtime check whether the callee
+ * is the given profiled function and if so, emit a code to invoke it directly.
  */
-const Func* profiledCalledFunc(IRGS& env, double& probability) {
-  probability = 0;
-  if (!RuntimeOption::RepoAuthoritative) return nullptr;
-
-  auto profile = TargetProfile<CallTargetProfile>(
-    env.unit.context(), env.irb->curMarker(), callTargetProfileKey());
-
-  // NB: the profiling used here is shared and done in getCallTarget() in
-  // irlower-call.cpp, so we only handle the optimization phase here.
-  if (!profile.optimizing()) return nullptr;
-
-  auto const data = profile.data();
-  auto profiledFunc = data.choose(probability);
-
-  if (profiledFunc == nullptr) return nullptr;
-
-  // Don't emit the check if the probability of it succeeding is below the
-  // threshold.
-  if (probability * 100 < RuntimeOption::EvalJitPGOCalledFuncCheckThreshold) {
-    return nullptr;
-  }
-
-  return profiledFunc;
-}
-
 template<class TKnown, class TUnknown>
 void callProfiledFunc(IRGS& env, SSATmp* callee,
                       TKnown callKnown, TUnknown callUnknown) {
-  double profiledFuncBias{0};
-  auto const profiledFunc = profiledCalledFunc(env, profiledFuncBias);
-  if (!profiledFunc) return callUnknown(false);
+  if (!RuntimeOption::RepoAuthoritative) return callUnknown(false);
+
+  auto profile = TargetProfile<CallTargetProfile>(
+    env.unit, env.irb->curMarker(), callTargetProfileKey());
+
+  if (profile.profiling()) {
+    gen(env, ProfileCall, ProfileCallTargetData { profile.handle() }, callee);
+  }
+
+  if (!profile.optimizing()) return callUnknown(false);
+
+  double probability = 0;
+  auto const data = profile.data();
+  auto const profiledFunc = data.choose(probability);
+
+  // Dump annotations if requested.
+  if (RuntimeOption::EvalDumpCallTargets) {
+    auto const fnName = curFunc(env)->fullName()->data();
+    env.annotations.emplace_back(
+      "CallTargets",
+      folly::sformat("BC={} FN={}: {}\n", bcOff(env), fnName, data.toString())
+    );
+  }
+
+  // Don't emit the check if the probability of it succeeding is below the
+  // threshold.
+  if (profiledFunc == nullptr ||
+      probability * 100 < RuntimeOption::EvalJitPGOCalledFuncCheckThreshold) {
+    return callUnknown(false);
+  }
 
   ifThenElse(
     env,
@@ -364,7 +352,7 @@ void callProfiledFunc(IRGS& env, SSATmp* callee,
       updateMarker(env);
       env.irb->exceptionStackBoundary();
 
-      auto const unlikely = profiledFuncBias * 100 >=
+      auto const unlikely = probability * 100 >=
         RuntimeOption::EvalJitPGOCalledFuncExitThreshold;
       if (unlikely) {
         hint(env, Block::Hint::Unlikely);
@@ -379,73 +367,22 @@ void callProfiledFunc(IRGS& env, SSATmp* callee,
 
 //////////////////////////////////////////////////////////////////////
 
-void prepareToCallKnown(IRGS& env, const Func* callee, SSATmp* objOrClass,
-                        uint32_t numArgs, const StringData* invName,
-                        bool dynamicCall, SSATmp* tsList) {
+void prepareAndCallKnown(IRGS& env, const Func* callee, const FCallArgs& fca,
+                         SSATmp* objOrClass, bool dynamicCall, SSATmp* tsList) {
   assertx(callee);
 
   // Caller checks
+  if (!emitCallerReffinessChecksKnown(env, callee, fca)) return;
   if (dynamicCall) emitCallerDynamicCallChecksKnown(env, callee);
   emitCallerRxChecksKnown(env, callee);
 
-  auto const func = cns(env, callee);
-  fsetActRec(env, func, objOrClass, numArgs,
-             invName ? cns(env, invName) : nullptr,
-             dynamicCall, tsList);
-}
-
-void prepareToCallUnknown(IRGS& env, SSATmp* callee, SSATmp* objOrClass,
-                          uint32_t numArgs, SSATmp* invName,
-                          bool dynamicCall, bool mightCareAboutDynCall,
-                          SSATmp* tsList) {
-  assertx(callee->isA(TFunc));
-  if (callee->hasConstVal() && (invName == nullptr || invName->hasConstVal())) {
-    return prepareToCallKnown(env, callee->funcVal(), objOrClass, numArgs,
-                              invName ? invName->strVal() : nullptr,
-                              dynamicCall, tsList);
-  }
-
-  // Caller checks
-  if (dynamicCall) {
-    emitCallerDynamicCallChecksUnknown(env, callee, mightCareAboutDynCall);
-  }
-  emitCallerRxChecksUnknown(env, callee);
-
-  fsetActRec(env, callee, objOrClass, numArgs, invName, dynamicCall, tsList);
-}
-
-template<class Fn>
-SSATmp* prepareToCallCustom(IRGS& env, SSATmp* objOrClass, uint32_t numArgs,
-                            bool dynamicCall, SSATmp* tsList, Fn prepare) {
-  auto const arOffset = fsetActRec(
-    env, cns(env, TNullptr), objOrClass, numArgs, nullptr, dynamicCall, tsList);
-
-  // This is special. We need to sync SP in case prepare() reenters. Otherwise
-  // it would clobber the ActRec we just pushed.
-  updateMarker(env);
-  env.irb->exceptionStackBoundary();
-
-  // Responsible for:
-  // - performing caller checks
-  // - populating missing ActRec fields (m_func at minimum)
-  // - returning SSATmp* of the resolved func pointer
-  return prepare(arOffset);
-}
-
-//////////////////////////////////////////////////////////////////////
-
-void prepareAndCallKnown(IRGS& env, const Func* callee, const FCallArgs& fca,
-                         SSATmp* objOrClass, const StringData* invName,
-                         bool dynamicCall, SSATmp* tsList) {
-  assertx(callee);
-  if (!emitCallerReffinessChecksKnown(env, callee, fca)) return;
-  prepareToCallKnown(env, callee, objOrClass, fca.numArgsInclUnpack(), invName,
-                     dynamicCall, tsList);
-  if (invName == nullptr) {
+  if (isFCall(curSrcKey(env).op())) {
     auto const inlined = irGenTryInlineFCall(
-      env, callee, fca, objOrClass, objOrClass->type(), curSrcKey(env).op());
+      env, callee, fca, objOrClass, dynamicCall, tsList);
     if (inlined) return;
   }
+
+  fsetActRec(env, cns(env, callee), fca, objOrClass, dynamicCall, tsList);
 
   // We just wrote to the stack, make sure Call opcode can set up its Catch.
   updateMarker(env);
@@ -460,30 +397,34 @@ void prepareAndCallKnown(IRGS& env, const Func* callee, const FCallArgs& fca,
     // FCall to specialize using this information, we may infer narrower type
     // for the return value, erroneously preventing the region from breaking
     // on unknown type.
-    callUnknown(env, cns(env, callee), fca, false, false);
+    callUnknown(env, cns(env, callee), fca, false);
   }
 }
 
 void prepareAndCallUnknown(IRGS& env, SSATmp* callee, const FCallArgs& fca,
-                           SSATmp* objOrClass, SSATmp* invName,
-                           bool dynamicCall, bool mightCareAboutDynCall,
-                           SSATmp* tsList, bool unlikely) {
+                           SSATmp* objOrClass, bool dynamicCall,
+                           bool mightCareAboutDynCall, SSATmp* tsList,
+                           bool unlikely) {
   assertx(callee->isA(TFunc));
-  if (callee->hasConstVal() && (invName == nullptr || invName->hasConstVal())) {
+  if (callee->hasConstVal()) {
     return prepareAndCallKnown(env, callee->funcVal(), fca, objOrClass,
-                               invName ? invName->strVal() : nullptr,
                                dynamicCall, tsList);
   }
 
+  // Caller checks
   emitCallerReffinessChecksUnknown(env, callee, fca);
-  prepareToCallUnknown(env, callee, objOrClass, fca.numArgsInclUnpack(),
-                       invName, dynamicCall, mightCareAboutDynCall, tsList);
+  if (dynamicCall) {
+    emitCallerDynamicCallChecksUnknown(env, callee, mightCareAboutDynCall);
+  }
+  emitCallerRxChecksUnknown(env, callee);
+
+  fsetActRec(env, callee, fca, objOrClass, dynamicCall, tsList);
 
   // We just wrote to the stack, make sure Call opcode can set up its Catch.
   updateMarker(env);
   env.irb->exceptionStackBoundary();
 
-  callUnknown(env, callee, fca, unlikely, invName != nullptr /* no AER */);
+  callUnknown(env, callee, fca, unlikely);
 }
 
 void prepareAndCallProfiled(IRGS& env, SSATmp* callee, const FCallArgs& fca,
@@ -491,13 +432,12 @@ void prepareAndCallProfiled(IRGS& env, SSATmp* callee, const FCallArgs& fca,
                             bool mightCareAboutDynCall, SSATmp* tsList) {
   assertx(callee->isA(TFunc));
   auto const handleKnown = [&] (const Func* knownCallee) {
-    prepareAndCallKnown(env, knownCallee, fca, objOrClass, nullptr, dynamicCall,
-                        tsList);
+    prepareAndCallKnown(env, knownCallee, fca, objOrClass, dynamicCall, tsList);
   };
   if (callee->hasConstVal()) return handleKnown(callee->funcVal());
 
   auto const handleUnknown = [&] (bool unlikely) {
-    prepareAndCallUnknown(env, callee, fca, objOrClass, nullptr, dynamicCall,
+    prepareAndCallUnknown(env, callee, fca, objOrClass, dynamicCall,
                           mightCareAboutDynCall, tsList, unlikely);
   };
   callProfiledFunc(env, callee, handleKnown, handleUnknown);
@@ -514,6 +454,7 @@ void fcallObjMethodUnknown(
   SSATmp* methodName,
   bool dynamic,
   SSATmp* ts,
+  uint32_t numExtraInputs,
   TProfile profileMethod,
   bool noCallProfiling
 ) {
@@ -522,83 +463,45 @@ void fcallObjMethodUnknown(
   updateMarker(env);
   env.irb->exceptionStackBoundary();
 
-  auto const magicCallBlock = defBlock(env, Block::Hint::Unlikely);
-  auto const doneBlock = defBlock(env, Block::Hint::Likely);
+  auto const func = [&] {
+    auto const cls = gen(env, LdObjClass, obj);
+    if (!methodName->hasConstVal()) {
+      auto const func = gen(env, LdObjMethodD, cls, methodName);
+      return gen(env, CheckNonNull, makeExitSlow(env), func);
+    }
 
-  SSATmp* funcMM;
-  SSATmp* funcWoM;
-
-  auto const cls = gen(env, LdObjClass, obj);
-
-  if (methodName->hasConstVal()) {
-    auto const regularCallBlock = defBlock(env, Block::Hint::Likely);
-    auto const slowCheckBlock = defBlock(env, Block::Hint::Unlikely);
-
-    // check for TC cache hit; go to slow check on miss
     auto const tcCache = gen(env, LdSmashable);
-    gen(env, CheckSmashableClass, slowCheckBlock, tcCache, cls);
+    return cond(
+      env,
+      [&] (Block* taken) {
+        // check for TC cache hit; go to the slow check on miss
+        gen(env, CheckSmashableClass, taken, tcCache, cls);
+      },
+      [&] {
+        // fast path: load func from TC cache and proceed to regular call
+        return gen(env, LdSmashableFunc, tcCache);
+      },
+      [&] {
+        // slow path: run C++ helper to determine Func*, exit if we can't handle
+        // the call in the JIT
+        auto const fnData = FuncNameData { methodName->strVal() };
+        auto const func = gen(env, LdObjMethodS, fnData, cls, tcCache);
+        return gen(env, CheckNonNull, makeExitSlow(env), func);
+      }
+    );
+  }();
 
-    // fast path: load func from TC cache and proceed to regular call
-    auto const funcS = gen(env, LdSmashableFunc, tcCache);
-    gen(env, Jmp, regularCallBlock, funcS);
-
-    // slow path: run C++ helper to determine Func*, then check for magic call
-    env.irb->appendBlock(slowCheckBlock);
-    auto const fnData = FuncNameData { methodName->strVal() };
-    funcMM = gen(env, LdObjMethodS, fnData, cls, tcCache);
-    auto const funcNM = gen(env, CheckFuncMMNonMagic, magicCallBlock, funcMM);
-    gen(env, Jmp, regularCallBlock, funcNM);
-
-    // set up dst for a regular (non-magic) call
-    env.irb->appendBlock(regularCallBlock);
-    auto const label = env.unit.defLabel(1, env.irb->nextBCContext());
-    regularCallBlock->push_back(label);
-    funcWoM = label->dst(0);
-    funcWoM->setType(TFunc);
-  } else {
-    funcMM = gen(env, LdObjMethodD, cls, methodName);
-    funcWoM = gen(env, CheckFuncMMNonMagic, magicCallBlock, funcMM);
-  }
-
-  // prepare to do a regular (non-magic) call
   auto const mightCareAboutDynCall =
     RuntimeOption::EvalForbidDynamicCallsToInstMeth > 0
     || RuntimeOption::EvalForbidDynamicCallsToClsMeth > 0;
-  profileMethod(funcWoM);
+  profileMethod(func);
+  discard(env, numExtraInputs);
   if (noCallProfiling) {
-    prepareAndCallUnknown(env, funcWoM, fca, obj, nullptr, dynamic,
-                          mightCareAboutDynCall, ts, true);
+    prepareAndCallUnknown(env, func, fca, obj, dynamic, mightCareAboutDynCall,
+                          ts, true);
   } else {
-    prepareAndCallProfiled(env, funcWoM, fca, obj, dynamic,
+    prepareAndCallProfiled(env, func, fca, obj, dynamic,
                            mightCareAboutDynCall, ts);
-  }
-  gen(env, Jmp, doneBlock);
-
-  // prepare to do a magic call (no profiling, as inlining is not supported)
-  env.irb->appendBlock(magicCallBlock);
-  auto const funcM = gen(env, AssertType, TFuncM, funcMM);
-  auto const funcWM = gen(env, LdFuncMFunc, funcM);
-  profileMethod(funcWM);
-  prepareAndCallUnknown(env, funcWM, fca, obj, methodName, dynamic,
-                        mightCareAboutDynCall, ts, true);
-  assertx(env.irb->curBlock()->back().isTerminal());
-
-  // done
-  env.irb->appendBlock(doneBlock);
-}
-
-void lookupObjMethodExactFunc(IRGS& env, SSATmp* obj, const Func* func) {
-  /*
-   * Static function: throw an exception; obj will be decref'd via stack.
-   *
-   * Static closure body: we still need to pass the object instance for the
-   * closure prologue to properly do its dispatch (and extract use vars). It
-   * will decref it and set up the alternative class pointer before entering the
-   * "real" cloned closure body.
-   */
-  implIncStat(env, Stats::ObjMethod_known);
-  if (func->isStaticInPrologue()) {
-    gen(env, ThrowHasThisNeedStatic, cns(env, func));
   }
 }
 
@@ -711,7 +614,7 @@ void optimizeProfiledCallMethod(IRGS& env,
                                 Fn emitFCall) {
   always_assert(objOrCls->type().subtypeOfAny(TObj, TCls));
   auto const isStaticCall = objOrCls->type() <= TCls;
-  auto profile = TargetProfile<MethProfile>(env.context, env.irb->curMarker(),
+  auto profile = TargetProfile<MethProfile>(env.unit, env.irb->curMarker(),
                                             methProfileKey.get());
   if (!profile.optimizing()) {
     emitFCall(&profile);
@@ -747,7 +650,7 @@ void optimizeProfiledCallMethod(IRGS& env,
   MethProfile data = profile.data();
 
   if (auto const uniqueMeth = data.uniqueMeth()) {
-    bool isMagic = !uniqueMeth->name()->isame(methodName);
+    assertx(uniqueMeth->name()->isame(methodName));
     if (auto const uniqueClass = data.uniqueClass()) {
       // Profiling saw a unique class.
       // Check for it, then burn in the func
@@ -760,17 +663,10 @@ void optimizeProfiledCallMethod(IRGS& env,
           env.irb->constrainValue(refined, GuardConstraint(uniqueClass));
           auto const ctx = getCtx(uniqueMeth, refined, uniqueClass);
           discard(env, numExtraInputs);
-          prepareAndCallKnown(env, uniqueMeth, fca, ctx,
-                              isMagic ? methodName : nullptr,
-                              dynamic, nullptr);
+          prepareAndCallKnown(env, uniqueMeth, fca, ctx, dynamic, nullptr);
         },
         fallback
       );
-      return;
-    }
-
-    if (isMagic) {
-      emitFCall();
       return;
     }
 
@@ -794,8 +690,7 @@ void optimizeProfiledCallMethod(IRGS& env,
         gen(env, JmpZero, sideExit, same);
         auto const ctx = getCtx(uniqueMeth, objOrCls, nullptr);
         discard(env, numExtraInputs);
-        prepareAndCallKnown(env, uniqueMeth, fca, ctx, nullptr, dynamic,
-                            nullptr);
+        prepareAndCallKnown(env, uniqueMeth, fca, ctx, dynamic, nullptr);
       },
       fallback
     );
@@ -882,9 +777,42 @@ void optimizeProfiledCallMethod(IRGS& env,
   emitFCall();
 }
 
+void fcallObjMethodMagic(IRGS& env, const Func* callee, const FCallArgs& fca,
+                         SSATmp* obj, const StringData* methodName,
+                         bool dynamic, SSATmp* tsList,
+                         uint32_t numExtraInputs) {
+  if (fca.hasUnpack() || fca.numRets != 1) return interpOne(env);
+  if (fca.enforceReffiness()) {
+    for (auto i = 0; i < fca.numArgs; ++i) {
+      if (fca.byRef(i)) {
+        gen(env, ThrowParamRefMismatch, ParamData { i }, cns(env, callee));
+        return;
+      }
+    }
+  }
+
+  discard(env, numExtraInputs);
+  if (RuntimeOption::EvalHackArrDVArrs) {
+    emitNewVecArray(env, fca.numArgs);
+  } else {
+    emitNewVArray(env, fca.numArgs);
+  }
+  auto const arr = popC(env);
+  push(env, cns(env, methodName));
+  push(env, arr);
+
+  // We just wrote to the stack, make sure the function call can proceed.
+  updateMarker(env);
+  env.irb->exceptionStackBoundary();
+
+  assertx(!fca.supportsAsyncEagerReturn());
+  auto const fca2 = FCallArgs(fca.flags, 2, 1, nullptr, kInvalidOffset, false);
+  prepareAndCallKnown(env, callee, fca2, obj, dynamic, tsList);
+}
+
 void fcallObjMethodObj(IRGS& env, const FCallArgs& fca, SSATmp* obj,
                        const StringData* clsHint, SSATmp* methodName,
-                       bool dynamic, SSATmp* tsList) {
+                       bool dynamic, SSATmp* tsList, uint32_t numExtraInputs) {
   assertx(obj->isA(TObj));
   assertx(methodName->isA(TStr));
 
@@ -928,19 +856,26 @@ void fcallObjMethodObj(IRGS& env, const FCallArgs& fca, SSATmp* obj,
   // If we know which exact or overridden method to call, we don't need PGO.
   switch (lookup.type) {
     case ImmutableObjMethodLookup::Type::MagicFunc:
-      lookupObjMethodExactFunc(env, obj, lookup.func);
-      prepareAndCallKnown(env, lookup.func, fca, obj, methodName->strVal(),
-                          dynamic, tsList);
+      implIncStat(env, Stats::ObjMethod_known);
+      assertx(!lookup.func->isStaticInPrologue());
+      fcallObjMethodMagic(env, lookup.func, fca, obj, methodName->strVal(),
+                          dynamic, tsList, numExtraInputs);
       return;
     case ImmutableObjMethodLookup::Type::Func:
-      lookupObjMethodExactFunc(env, obj, lookup.func);
-      prepareAndCallKnown(env, lookup.func, fca, obj, nullptr, dynamic, tsList);
+      implIncStat(env, Stats::ObjMethod_known);
+      if (lookup.func->isStaticInPrologue()) {
+        gen(env, ThrowHasThisNeedStatic, cns(env, lookup.func));
+        return;
+      }
+      discard(env, numExtraInputs);
+      prepareAndCallKnown(env, lookup.func, fca, obj, dynamic, tsList);
       return;
     case ImmutableObjMethodLookup::Type::Class: {
       auto const func = lookupObjMethodNonExactFunc(env, obj, lookup.func);
       auto const mightCareAboutDynCall =
         RuntimeOption::EvalForbidDynamicCallsToInstMeth > 0
         || RuntimeOption::EvalForbidDynamicCallsToClsMeth > 0;
+      discard(env, numExtraInputs);
       prepareAndCallProfiled(env, func, fca, obj, dynamic,
                              mightCareAboutDynCall, tsList);
       return;
@@ -964,15 +899,16 @@ void fcallObjMethodObj(IRGS& env, const FCallArgs& fca, SSATmp* obj,
 
     if (knownIfaceFunc == nullptr) {
       fcallObjMethodUnknown(env, fca, obj, methodName, dynamic, tsList,
-                            profileMethod, noCallProfiling);
+                            numExtraInputs, profileMethod, noCallProfiling);
     } else {
       auto const func = lookupObjMethodInterfaceFunc(env, obj, knownIfaceFunc);
       auto const mightCareAboutDynCall =
         RuntimeOption::EvalForbidDynamicCallsToInstMeth > 0
         || RuntimeOption::EvalForbidDynamicCallsToClsMeth > 0;
       profileMethod(func);
+      discard(env, numExtraInputs);
       if (noCallProfiling) {
-        prepareAndCallUnknown(env, func, fca, obj, nullptr, dynamic,
+        prepareAndCallUnknown(env, func, fca, obj, dynamic,
                               mightCareAboutDynCall, tsList, true);
       } else {
         prepareAndCallProfiled(env, func, fca, obj, dynamic,
@@ -990,62 +926,149 @@ void fcallObjMethodObj(IRGS& env, const FCallArgs& fca, SSATmp* obj,
   // If we don't know anything about the object's class, or all we know is an
   // interface that it implements, then enable PGO.
   optimizeProfiledCallMethod(env, fca, obj, knownIfaceFunc != nullptr,
-                             methodName->strVal(), dynamic, 0, emitFCall);
+                             methodName->strVal(), dynamic, numExtraInputs,
+                             emitFCall);
 }
 
-void fpushFuncObj(IRGS& env, uint32_t numParams) {
+SSATmp* getReifiedGenerics(IRGS& env, SSATmp* funcName) {
+  if (funcName->hasConstVal(TStr)) {
+    auto const name = funcName->strVal();
+    if (!isReifiedName(name)) return nullptr;
+    return cns(env, getReifiedTypeList(stripClsOrFnNameFromReifiedName(name)));
+  }
+  return cond(
+    env,
+    [&] (Block* not_reified_block) {
+      // Lets do a quick check before calling IsReifiedName since that's an
+      // expensive native call
+      // Reified names always start with a $
+      // It is also safe to read the 0th char without checking the length since
+      // if it is an empty string, then we'll be reading the null terminator
+      auto const first_char = gen(env, OrdStrIdx, funcName, cns(env, 0));
+      auto const issame = gen(env, EqInt, cns(env, (uint64_t)'$'), first_char);
+      gen(env, JmpZero, not_reified_block, issame);
+      auto const isreified = gen(env, IsReifiedName, funcName);
+      gen(env, JmpZero, not_reified_block, isreified);
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      return gen(env, LdReifiedGeneric, funcName);
+    },
+    [&] {
+      return cns(env, TNullptr);
+    }
+  );
+}
+
+void fcallFuncObj(IRGS& env, const FCallArgs& fca) {
+  auto const obj = topC(env);
+  assertx(obj->isA(TObj));
+
   auto const slowExit = makeExitSlow(env);
-  auto const obj      = popC(env);
-  auto const cls      = gen(env, LdObjClass, obj);
-  auto const func     = gen(env, LdObjInvoke, slowExit, cls);
-  prepareToCallUnknown(env, func, obj, numParams, nullptr, false, false,
-                       nullptr);
+  auto const cls = gen(env, LdObjClass, obj);
+  auto const func = gen(env, LdObjInvoke, slowExit, cls);
+  discard(env);
+  prepareAndCallProfiled(env, func, fca, obj, false, false, nullptr);
 }
 
-void fpushFuncArr(IRGS& env, uint32_t numParams) {
-  auto const arr = popC(env);
-  auto const prepare = [&] (IRSPRelOffset arOffset) {
-    auto const func = gen(env, LdArrFuncCtx, IRSPRelOffsetData { arOffset },
-                          arr, sp(env), fp(env));
-    decRef(env, arr);
-    return func;
-  };
-  prepareToCallCustom(env, nullptr, numParams, true, nullptr, prepare);
+void fcallFuncFunc(IRGS& env, const FCallArgs& fca) {
+  auto const func = popC(env);
+  assertx(func->isA(TFunc));
+
+  ifElse(
+    env,
+    [&] (Block* taken) {
+      gen(env, CheckNonNull, taken, gen(env, LdFuncCls, func));
+      auto const attr = AttrData {static_cast<int32_t>(AttrIsMethCaller)};
+      gen(env, JmpNZero, taken, gen(env, FuncHasAttr, attr, func));
+    },
+    [&] { // next, attrs & IsMethCaller == 0 && Func has Cls
+      hint(env, Block::Hint::Unlikely);
+      auto const err = cns(env, makeStaticString(Strings::CALL_ILLFORMED_FUNC));
+      gen(env, RaiseError, err);
+    }
+  );
+  prepareAndCallProfiled(env, func, fca, nullptr, false, false, nullptr);
 }
 
-void fpushFuncClsMeth(IRGS& env, uint32_t numParams) {
+void fcallFuncClsMeth(IRGS& env, const FCallArgs& fca) {
   auto const clsMeth = popC(env);
+  assertx(clsMeth->isA(TClsMeth));
+
   auto const cls = gen(env, LdClsFromClsMeth, clsMeth);
   auto const func = gen(env, LdFuncFromClsMeth, clsMeth);
-  prepareToCallUnknown(env, func, cls, numParams, nullptr, false, false,
-                       nullptr);
+  prepareAndCallProfiled(env, func, fca, cls, false, false, nullptr);
 }
 
-void fPushFuncDImpl(IRGS& env, uint32_t numParams, const StringData* name,
-                    SSATmp* tsList) {
-  auto const lookup = lookupImmutableFunc(curUnit(env), name);
+void fcallFuncStr(IRGS& env, const FCallArgs& fca) {
+  auto const str = topC(env);
+  assertx(str->isA(TStr));
+
+  // TODO: improve this if str->hasConstVal()
+  auto const funcN = gen(env, LdFunc, str);
+  auto const func = gen(env, CheckNonNull, makeExitSlow(env), funcN);
+  auto const tsList = getReifiedGenerics(env, str);
+  popDecRef(env);
+  auto const mightCareAboutDynCall =
+    RuntimeOption::EvalForbidDynamicCallsToFunc > 0;
+  prepareAndCallProfiled(env, func, fca, nullptr, true, mightCareAboutDynCall,
+                         tsList);
+}
+
+void fcallFuncArr(IRGS& env, const FCallArgs& fca) {
+  UNUSED auto const arr = topC(env);
+  assertx(arr->isA(TArr) || arr->isA(TVec) || arr->isA(TDict));
+
+  return interpOne(env);
+}
+
+void fcallFuncD(IRGS& env, const FCallArgs& fca, const StringData* funcName,
+                SSATmp* tsList) {
+  auto const lookup = lookupImmutableFunc(curUnit(env), funcName);
   if (lookup.func) {
     // We know the function, but we have to ensure its unit is loaded. Use
     // LdFuncCached, ignoring the result to ensure this.
-    if (lookup.needsUnitLoad) gen(env, LdFuncCached, FuncNameData { name });
-    prepareToCallKnown(env, lookup.func, nullptr, numParams, nullptr, false,
-                       tsList);
+    if (lookup.needsUnitLoad) gen(env, LdFuncCached, FuncNameData { funcName });
+    prepareAndCallKnown(env, lookup.func, fca, nullptr, false, tsList);
     return;
   }
 
-  auto const func = gen(env, LdFuncCached, FuncNameData { name });
-  prepareToCallUnknown(env, func, nullptr, numParams, nullptr, false, false,
-                       tsList);
+  auto const func = gen(env, LdFuncCached, FuncNameData { funcName });
+  prepareAndCallProfiled(env, func, fca, nullptr, false, false, tsList);
 }
 
 } // namespace
 
-void emitFPushFuncD(IRGS& env, uint32_t numParams, const StringData* name) {
-  fPushFuncDImpl(env, numParams, name, nullptr);
+void emitFCallFuncD(IRGS& env, FCallArgs fca, const StringData* funcName) {
+  fcallFuncD(env, fca, funcName, nullptr);
 }
 
-void emitFPushFuncRD(IRGS& env, uint32_t numParams, const StringData* name) {
-  fPushFuncDImpl(env, numParams, name, popC(env));
+void emitFCallFuncRD(IRGS& env, FCallArgs fca, const StringData* funcName) {
+  fcallFuncD(env, fca, funcName, popC(env));
+}
+
+void emitFCallFunc(IRGS& env, FCallArgs fca, const ImmVector& v) {
+  if (v.size() != 0) return interpOne(env);
+  auto const callee = topC(env);
+  if (callee->isA(TObj)) return fcallFuncObj(env, fca);
+  if (callee->isA(TFunc)) return fcallFuncFunc(env, fca);
+  if (callee->isA(TClsMeth)) return fcallFuncClsMeth(env, fca);
+  if (callee->isA(TStr)) return fcallFuncStr(env, fca);
+  if (callee->isA(TArr)) return fcallFuncArr(env, fca);
+  if (callee->isA(TVec)) return fcallFuncArr(env, fca);
+  if (callee->isA(TDict)) return fcallFuncArr(env, fca);
+  return interpOne(env);
+}
+
+void emitResolveFunc(IRGS& env, const StringData* name) {
+  auto const lookup = lookupImmutableFunc(curUnit(env), name);
+  auto func = lookup.func;
+  if (!func) {
+    push(env, gen(env, LookupFuncCached, FuncNameData { name }));
+    return;
+  }
+  if (lookup.needsUnitLoad) gen(env, LookupFuncCached, FuncNameData { name });
+  push(env, cns(env, func));
 }
 
 namespace {
@@ -1068,37 +1091,6 @@ SSATmp* specialClsRefToCls(IRGS& env, SpecialClsRef ref) {
   }
   always_assert(false);
 }
-
-SSATmp* getReifiedGenerics(IRGS& env, SSATmp* funName) {
-  if (funName->hasConstVal(TStr)) {
-    auto const name = funName->strVal();
-    if (!isReifiedName(name)) return nullptr;
-    return cns(env, getReifiedTypeList(stripClsOrFnNameFromReifiedName(name)));
-  }
-  return cond(
-    env,
-    [&] (Block* not_reified_block) {
-      // Lets do a quick check before calling IsReifiedName since that's an
-      // expensive native call
-      // Reified names always start with a $
-      // It is also safe to read the 0th char without checking the length since
-      // if it is an empty string, then we'll be reading the null terminator
-      auto const first_char = gen(env, OrdStrIdx, funName, cns(env, 0));
-      auto const issame = gen(env, EqInt, cns(env, (uint64_t)'$'), first_char);
-      gen(env, JmpZero, not_reified_block, issame);
-      auto const isreified = gen(env, IsReifiedName, funName);
-      gen(env, JmpZero, not_reified_block, isreified);
-    },
-    [&] {
-      hint(env, Block::Hint::Unlikely);
-      return gen(env, LdReifiedGeneric, funName);
-    },
-    [&] {
-      return cns(env, TNullptr);
-    }
-  );
-}
-
 
 folly::Optional<int> specialClsReifiedPropSlot(IRGS& env, SpecialClsRef ref) {
   auto const cls = curClass(env);
@@ -1262,7 +1254,7 @@ void emitFCallCtor(IRGS& env, FCallArgs fca, const StringData* clsHint) {
   }();
   if (exactCls) {
     if (auto const ctor = lookupImmutableCtor(exactCls, curClass(env))) {
-      return prepareAndCallKnown(env, ctor, fca, obj, nullptr, false, nullptr);
+      return prepareAndCallKnown(env, ctor, fca, obj, false, nullptr);
     }
   }
 
@@ -1277,67 +1269,6 @@ void emitLockObj(IRGS& env) {
   gen(env, LockObj, obj);
 }
 
-void emitFPushFunc(IRGS& env, uint32_t numParams, const ImmVector& v) {
-  if (v.size() != 0) PUNT(InOut-FPushFunc);
-  auto const callee = topC(env);
-
-  if (callee->isA(TObj)) return fpushFuncObj(env, numParams);
-  if (callee->isA(TArr) || callee->isA(TVec)) {
-    return fpushFuncArr(env, numParams);
-  }
-  if (callee->isA(TFunc)) {
-    popC(env);
-    ifElse(
-      env,
-      [&] (Block* taken) {
-        gen(env, CheckNonNull, taken, gen(env, LdFuncCls, callee));
-        auto const attr = AttrData {static_cast<int32_t>(AttrIsMethCaller)};
-        gen(env, JmpNZero, taken, gen(env, FuncHasAttr, attr, callee));
-      },
-      [&] { // next, attrs & IsMethCaller == 0 && Func has Cls
-        hint(env, Block::Hint::Unlikely);
-        gen(
-          env,
-          RaiseError,
-          cns(env, makeStaticString(Strings::CALL_ILLFORMED_FUNC))
-        );
-      }
-    );
-    prepareToCallUnknown(env, callee, nullptr, numParams, nullptr, false, false,
-                         nullptr);
-    return;
-  }
-  if (topC(env)->isA(TClsMeth)) {
-    return fpushFuncClsMeth(env, numParams);
-  }
-
-  if (!callee->isA(TStr)) {
-    PUNT(FPushFunc_not_Str);
-  }
-
-  popC(env);
-
-  auto const prepare = [&] (IRSPRelOffset arOffset) {
-    auto const func = gen(env, LdFunc, IRSPRelOffsetData { arOffset }, callee,
-                          sp(env), fp(env));
-    decRef(env, callee);
-    return func;
-  };
-  auto const tsList = getReifiedGenerics(env, callee);
-  prepareToCallCustom(env, nullptr, numParams, true, tsList, prepare);
-}
-
-void emitResolveFunc(IRGS& env, const StringData* name) {
-  auto const lookup = lookupImmutableFunc(curUnit(env), name);
-  auto func = lookup.func;
-  if (!func) {
-    push(env, gen(env, LookupFuncCached, FuncNameData { name }));
-    return;
-  }
-  if (lookup.needsUnitLoad) gen(env, LookupFuncCached, FuncNameData { name });
-  push(env, cns(env, func));
-}
-
 namespace {
 
 void fcallObjMethod(IRGS& env, const FCallArgs& fca, const StringData* clsHint,
@@ -1348,8 +1279,8 @@ void fcallObjMethod(IRGS& env, const FCallArgs& fca, const StringData* clsHint,
   auto const obj = topC(env, BCSPRelOffset { static_cast<int32_t>(objPos) });
 
   if (obj->type() <= TObj) {
-    if (extraInput) popC(env);
-    fcallObjMethodObj(env, fca, obj, clsHint, methodName, dynamic, tsList);
+    fcallObjMethodObj(env, fca, obj, clsHint, methodName, dynamic, tsList,
+                      extraInput ? 1 : 0);
     return;
   }
 
@@ -1434,7 +1365,7 @@ void fcallClsMethodD(IRGS& env,
       }
       auto const ctx = ldCtxForClsMethod(env, func, cns(env, cls), cls, true);
       auto const tsList = isRFlavor ? popC(env) : nullptr;
-      return prepareAndCallKnown(env, func, fca, ctx, nullptr, false, tsList);
+      return prepareAndCallKnown(env, func, fca, ctx, false, tsList);
     }
   }
 
@@ -1493,7 +1424,10 @@ void emitResolveObjMethod(IRGS& env) {
       gen(env, ThrowInvalidOperation, cns(env, s_resolveMagicCall.get()));
       return;
     case ImmutableObjMethodLookup::Type::Func:
-      lookupObjMethodExactFunc(env, obj, lookup.func);
+      if (lookup.func->isStaticInPrologue()) {
+        gen(env, ThrowHasThisNeedStatic, cns(env, lookup.func));
+        return;
+      }
       func = cns(env, lookup.func);
       break;
     case ImmutableObjMethodLookup::Type::Class:
@@ -1518,11 +1452,18 @@ void emitResolveObjMethod(IRGS& env) {
 const StaticString s_resolveClsMagicCall(
   "Unable to resolve magic call for class_meth()");
 
-void emitResolveClsMethod(IRGS& env) {
+void emitResolveClsMethod(IRGS& env, ClsMethResolveOp op) {
   auto const classNameTmp = topC(env, BCSPRelOffset { 1 });
   auto const methodNameTmp = topC(env, BCSPRelOffset { 0 });
   if (!classNameTmp->hasConstVal(TStr) || !methodNameTmp->hasConstVal(TStr)) {
     return interpOne(env);
+  } else if (op == ClsMethResolveOp::Warn &&
+      RuntimeOption::EvalWarnOnNonLiteralClsMeth) {
+    gen(
+      env,
+      RaiseWarning,
+      cns(env, makeStaticString(Strings::WARN_CLS_METH_WRONG_ARGS))
+    );
   }
   auto className = classNameTmp->strVal();
   auto methodName = methodNameTmp->strVal();
@@ -1632,8 +1573,8 @@ void fcallClsMethodCommon(IRGS& env,
     decRef(env, methVal);
     discard(env, numExtraInputs);
     if (noCallProfiling) {
-      prepareAndCallUnknown(env, func, fca, ctx, nullptr, dynamic,
-                            mightCareAboutDynCall, tsList, true);
+      prepareAndCallUnknown(env, func, fca, ctx, dynamic, mightCareAboutDynCall,
+                            tsList, true);
     } else {
       prepareAndCallProfiled(env, func, fca, ctx, dynamic,
                              mightCareAboutDynCall, tsList);
@@ -1732,111 +1673,16 @@ void emitFCallClsMethodSRD(IRGS& env, FCallArgs fca, const StringData* clsHint,
 
 //////////////////////////////////////////////////////////////////////
 
-namespace {
-
-SSATmp* ldPreLiveFunc(IRGS& env, IRSPRelOffset actRecOff) {
-  if (env.currentNormalizedInstruction->funcd) {
-    return cns(env, env.currentNormalizedInstruction->funcd);
-  }
-
-  // Try to load Func* from fpiStack, but only if we are not forming a region.
-  // Otherwise we may have inferred the target of the call based on specialized
-  // type information that won't be available when the region is translated.
-  // If we allow the FCall to specialize using this information, we may infer
-  // narrower type for the return value, erroneously preventing the region from
-  // breaking on unknown type.
-  if (!env.formingRegion) {
-    auto const& fpiStack = env.irb->fs().fpiStack();
-    if (!fpiStack.empty() && fpiStack.back().func) {
-      return cns(env, fpiStack.back().func);
-    }
-  }
-
-  return gen(env, LdARFuncPtr, TFunc, IRSPRelOffsetData { actRecOff }, sp(env));
-}
-
-} // namespace
-
-void emitFCall(IRGS& env, FCallArgs fca, const StringData*, const StringData*) {
-  auto const numStackInputs = fca.numArgsInclUnpack();
-  auto const actRecOff = spOffBCFromIRSP(env) + numStackInputs;
-  auto const callee = ldPreLiveFunc(env, actRecOff);
-
-  auto const tryInline = [&] (const Func* knownCallee) {
-    // Make sure the FPushOp was in the region.
-    auto const& fpiStack = env.irb->fs().fpiStack();
-    if (fpiStack.empty()) return false;
-
-    // Make sure the FPushOp wasn't interpreted, based on a spanned another
-    // call, or marked as not eligible for inlining by frame-state.
-    auto const& info = fpiStack.back();
-    if (!info.inlineEligible || info.spansCall) return false;
-
-    // Its possible that we have an "FCall T2 meth" guarded by eg an
-    // InstanceOfD T2, and that we know the object has type T1, and we
-    // also know that T1::meth exists. The FCall is actually
-    // unreachable, but we might not have figured that out yet - so we
-    // could be trying to inline T1::meth while the fpiStack has
-    // T2::meth.
-    if (info.func && info.func != knownCallee) return false;
-
-    return irGenTryInlineFCall(env, knownCallee, fca, info.ctx, info.ctxType,
-                               info.fpushOpc);
-  };
-
-  auto const doCallKnown = [&] (const Func* knownCallee) {
-    if (!callee->hasConstVal()) {
-      auto const data = IRSPRelOffsetData{ actRecOff };
-      gen(env, AssertARFunc, data, sp(env), cns(env, knownCallee));
-    }
-    if (!emitCallerReffinessChecksKnown(env, knownCallee, fca)) return;
-
-    if (tryInline(knownCallee)) return;
-    callKnown(env, knownCallee, fca);
-  };
-
-  if (callee->hasConstVal()) return doCallKnown(callee->funcVal());
-
-  auto const doCallUnknown = [&] (bool unlikely) {
-    emitCallerReffinessChecksUnknown(env, callee, fca);
-    callUnknown(env, callee, fca, unlikely, false);
-  };
-
-  callProfiledFunc(env, callee, doCallKnown, doCallUnknown);
-}
-
 void emitDirectCall(IRGS& env, Func* callee, uint32_t numParams,
                     SSATmp* const* const args) {
-  auto const callBcOffset = bcOff(env) - curFunc(env)->base();
-
   allocActRec(env);
   for (int32_t i = 0; i < numParams; i++) {
     push(env, args[i]);
   }
 
-  env.irb->fs().setFPushOverride(Op::FPushFuncD);
-  prepareToCallKnown(env, callee, nullptr, numParams, nullptr, false, nullptr);
-  assertx(!env.irb->fs().hasFPushOverride());
-
-  updateMarker(env);
-  env.irb->exceptionStackBoundary();
-
-  auto const retVal = gen(
-    env,
-    Call,
-    CallData {
-      spOffBCFromIRSP(env),
-      static_cast<uint32_t>(numParams),
-      0,
-      callBcOffset,
-      callee,
-      false
-    },
-    sp(env),
-    fp(env)
-  );
-
-  push(env, retVal);
+  auto const fca = FCallArgs(FCallArgs::Flags::None, numParams, 1, nullptr,
+                             kInvalidOffset, false);
+  prepareAndCallKnown(env, callee, fca, nullptr, false, nullptr);
 }
 
 //////////////////////////////////////////////////////////////////////

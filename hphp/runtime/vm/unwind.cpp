@@ -53,22 +53,13 @@ std::string describeEx(ObjectData* phpException) {
 }
 #endif
 
-void discardStackTemps(const ActRec* const fp,
-                       Stack& stack,
-                       Offset const bcOffset) {
-  ITRACE(2, "discardStackTemps with fp {} sp {} pc {} op {}\n",
+void discardStackTemps(const ActRec* const fp, Stack& stack) {
+  ITRACE(2, "discardStackTemps with fp {} sp {}\n",
          implicit_cast<const void*>(fp),
-         implicit_cast<void*>(stack.top()),
-         bcOffset, opcodeToName(fp->func()->unit()->getOp(bcOffset)));
+         implicit_cast<void*>(stack.top()));
 
   visitStackElems(
-    fp, stack.top(), bcOffset,
-    [&] (ActRec* ar) {
-      assertx(ar == reinterpret_cast<ActRec*>(stack.top()));
-      ITRACE(2, "  unwind pop AR : {}\n",
-             implicit_cast<void*>(stack.top()));
-      stack.popAR();
-    },
+    fp, stack.top(),
     [&] (TypedValue* tv) {
       assertx(tv == stack.top());
       ITRACE(2, "  unwind pop TV : {}\n",
@@ -162,7 +153,7 @@ ObjectData* tearDownFrame(ActRec*& fp, Stack& stack, PC& pc,
       stack.ret();
       assertx(stack.topTV() == fp->retSlot());
       cellCopy(make_tv<KindOfObject>(waitHandle), *fp->retSlot());
-      fp->retSlot()->m_aux.u_asyncNonEagerReturnFlag = -1;
+      fp->retSlot()->m_aux.u_asyncEagerReturnFlag = 0;
     } else {
       // Free ActRec.
       stack.ndiscard(func->numSlotsInFrame());
@@ -257,7 +248,6 @@ DEBUG_ONLY bool throwable_has_expected_props() {
 
 const StaticString s_hphpd_break("hphpd_break");
 const StaticString s_fb_enable_code_coverage("fb_enable_code_coverage");
-const StaticString s_xdebug_start_code_coverage("xdebug_start_code_coverage");
 
 //////////////////////////////////////////////////////////////////////
 
@@ -359,20 +349,18 @@ void unwindPhp(ObjectData* phpException) {
 
   do {
     auto const func = fp->func();
-    auto const raiseOffset = func->unit()->offsetOf(pc);
 
     ITRACE(1, "unwindPhp: func {}, raiseOffset {} fp {}\n",
            func->name()->data(),
-           raiseOffset,
+           func->unit()->offsetOf(pc),
            implicit_cast<void*>(fp));
 
     if (fromTearDownFrame) {
       fromTearDownFrame = false;
       lockObjectWhileUnwinding(pc, stack);
-      discardStackTemps(fp, stack, func->unit()->offsetOf(skipCall(pc)));
-    } else {
-      discardStackTemps(fp, stack, raiseOffset);
     }
+
+    discardStackTemps(fp, stack);
 
     // Note: we skip catch/finally clauses if we have a pending C++
     // exception as part of our efforts to avoid running more PHP
@@ -383,7 +371,7 @@ void unwindPhp(ObjectData* phpException) {
     if (RequestInfo::s_requestInfo->m_pendingException == nullptr &&
         !UNLIKELY(fp->localsDecRefd())) {
 
-      const EHEnt* eh = func->findEH(raiseOffset);
+      const EHEnt* eh = func->findEH(func->unit()->offsetOf(pc));
       if (eh != nullptr) {
         // Found exception handler. Push the exception on top of the
         // stack and resume VM.
@@ -445,15 +433,13 @@ void unwindCpp(Exception* exception) {
   discardMemberTVRefs(pc);
 
   do {
-    auto const offset = fp->func()->unit()->offsetOf(pc);
-
     ITRACE(1, "unwindCpp: func {}, raiseOffset {} fp {}\n",
            fp->func()->name()->data(),
-           offset,
+           fp->func()->unit()->offsetOf(pc),
            implicit_cast<void*>(fp));
 
     // Discard stack temporaries
-    discardStackTemps(fp, stack, offset);
+    discardStackTemps(fp, stack);
 
     // Discard the frame
     DEBUG_ONLY auto const phpException = tearDownFrame(fp, stack, pc, nullptr);
@@ -473,12 +459,10 @@ void unwindBuiltinFrame() {
   auto& fp = vmfp();
 
   assertx(fp->m_func->name()->isame(s_hphpd_break.get()) ||
-         fp->m_func->name()->isame(s_fb_enable_code_coverage.get()) ||
-         fp->m_func->name()->isame(s_xdebug_start_code_coverage.get()));
+          fp->m_func->name()->isame(s_fb_enable_code_coverage.get()));
 
-  // Free any values that may be on the eval stack.  We know there
-  // can't be FPI regions and it can't be a generator body because
-  // it's a builtin frame.
+  // Free any values that may be on the eval stack. We know it can't be
+  // a resumable body because it's a builtin frame.
   const int numSlots = fp->m_func->numSlotsInFrame();
   auto const evalTop = reinterpret_cast<TypedValue*>(vmfp()) - numSlots;
   while (stack.topTV() < evalTop) {

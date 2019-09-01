@@ -1,32 +1,32 @@
-/**
- * Copyright (c) 2019, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the "hack" directory of this source tree.
- *
-*/
-use crate::lexable_token::LexableToken;
-use crate::parser_env::ParserEnv;
-use crate::source_text::SourceText;
-use crate::syntax::*;
-use crate::syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
-use crate::token_kind::TokenKind;
+// Copyright (c) 2019, Facebook, Inc.
+// All rights reserved.
+//
+// This source code is licensed under the MIT license found in the
+// LICENSE file in the "hack" directory of this source tree.
 
-pub struct State<S> {
+use crate::parser_env::ParserEnv;
+use crate::syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
+use parser_core_types::lexable_token::LexableToken;
+use parser_core_types::source_text::SourceText;
+use parser_core_types::syntax::*;
+use parser_core_types::token_kind::TokenKind;
+
+pub struct State<'src, S> {
+    source: SourceText<'src>,
     stack: Vec<bool>,
     phantom_s: std::marker::PhantomData<*const S>,
 }
-impl<S> Clone for State<S> {
+impl<'a, S> Clone for State<'a, S> {
     fn clone(&self) -> Self {
         Self {
+            source: self.source.clone(),
             stack: self.stack.clone(),
             phantom_s: self.phantom_s,
         }
     }
 }
 
-impl<S> State<S> {
+impl<'a, S> State<'a, S> {
     /// Pops n times and returns the first popped element
     fn pop_n(&mut self, n: usize) -> bool {
         if self.stack.len() < n {
@@ -46,9 +46,10 @@ impl<S> State<S> {
     }
 }
 
-impl<'src, S> StateType<'src, S> for State<S> {
-    fn initial(_: &ParserEnv, _: &SourceText<'src>) -> Self {
+impl<'src, S> StateType<'src, S> for State<'src, S> {
+    fn initial(_: &ParserEnv, source: &SourceText<'src>) -> Self {
         Self {
+            source: source.clone(),
             stack: vec![],
             phantom_s: std::marker::PhantomData,
         }
@@ -67,12 +68,12 @@ impl<'src, S> StateType<'src, S> for State<S> {
 
 pub use crate::decl_mode_smart_constructors_generated::*;
 
-pub struct DeclModeSmartConstructors<S, Token, Value> {
-    pub state: State<S>,
+pub struct DeclModeSmartConstructors<'src, S, Token, Value> {
+    pub state: State<'src, S>,
     phantom_token: std::marker::PhantomData<*const Token>,
     phantom_value: std::marker::PhantomData<*const Value>,
 }
-impl<'a, S, Token, Value> Clone for DeclModeSmartConstructors<S, Token, Value> {
+impl<'a, S, Token, Value> Clone for DeclModeSmartConstructors<'a, S, Token, Value> {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
@@ -83,10 +84,10 @@ impl<'a, S, Token, Value> Clone for DeclModeSmartConstructors<S, Token, Value> {
 }
 
 impl<'a, Token, Value>
-    SyntaxSmartConstructors<'a, Syntax<Token, Value>, State<Syntax<Token, Value>>>
-    for DeclModeSmartConstructors<Syntax<Token, Value>, Token, Value>
+    SyntaxSmartConstructors<'a, Syntax<Token, Value>, State<'a, Syntax<Token, Value>>>
+    for DeclModeSmartConstructors<'a, Syntax<Token, Value>, Token, Value>
 where
-    Token: LexableToken,
+    Token: LexableToken<'a>,
     Value: SyntaxValueType<Token>,
 {
     fn new(env: &ParserEnv, src: &SourceText<'a>) -> Self {
@@ -194,19 +195,19 @@ where
     }
 }
 
-fn replace_body<Token, Value>(
-    st: &State<Syntax<Token, Value>>,
+fn replace_body<'a, Token, Value>(
+    st: &State<'a, Syntax<Token, Value>>,
     body: Syntax<Token, Value>,
     saw_yield: bool,
 ) -> Syntax<Token, Value>
 where
-    Token: LexableToken,
+    Token: LexableToken<'a>,
     Value: SyntaxValueType<Token>,
 {
     match body.syntax {
         SyntaxVariant::CompoundStatement(children) => {
             let stmts = if saw_yield {
-                let token = Token::make(TokenKind::Yield, 0, 0, vec![], vec![]);
+                let token = Token::make(TokenKind::Yield, &st.source, 0, 0, vec![], vec![]);
                 let yield_ = Syntax::<Token, Value>::make_token(st, token);
                 Syntax::make_list(st, vec![yield_], 0)
             } else {

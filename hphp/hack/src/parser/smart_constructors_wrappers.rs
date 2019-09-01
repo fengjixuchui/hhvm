@@ -20,11 +20,13 @@
  // build AST.
 
 
-use crate::lexable_token::LexableToken;
+use parser_core_types::{
+  lexable_token::LexableToken,
+  source_text::SourceText,
+  syntax_kind::SyntaxKind,
+};
 use crate::parser_env::ParserEnv;
 use crate::smart_constructors::SmartConstructors;
-use crate::source_text::SourceText;
-use crate::syntax_kind::SyntaxKind;
 
 #[derive(Clone)]
 pub struct WithKind<S> {
@@ -467,6 +469,9 @@ where S: SmartConstructors<'src, State> {
     }
     fn make_type_constant(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::TypeConstant, self.s.make_type_constant(arg0.1, arg1.1, arg2.1))
+    }
+    fn make_pu_access(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
+        compose(SyntaxKind::PUAccess, self.s.make_pu_access(arg0.1, arg1.1, arg2.1))
     }
     fn make_vector_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
         compose(SyntaxKind::VectorTypeSpecifier, self.s.make_vector_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))

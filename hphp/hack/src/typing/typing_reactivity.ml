@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
@@ -9,6 +9,7 @@
 
 open Core_kernel
 open Typing_defs
+open Typing_env_types
 
 module Phase   = Typing_phase
 module Env     = Typing_env
@@ -27,10 +28,10 @@ type method_call_info = {
 let make_call_info ~receiver_is_self ~is_static receiver_type method_name =
   { receiver_type; receiver_is_self; is_static; method_name; }
 
-let type_to_str: type a. Env.env -> a ty -> string = fun env ty ->
+let type_to_str: type a. env -> a ty -> string = fun env ty ->
   (* strip expression dependent types to make error message clearer *)
   let rec unwrap: type a. a ty -> a ty = function
-  | _, Tabstract (AKdependent `this, Some ty) -> unwrap ty
+  | _, Tabstract (AKdependent DTthis, Some ty) -> unwrap ty
   | ty -> ty in
   Typing_print.full env (unwrap ty)
 
@@ -55,10 +56,10 @@ let get_associated_condition_type env ~is_self ty =
   match ty with
   | _, Tabstract (AKgeneric n, _) ->
     Env.get_condition_type env n
-  | _, Tabstract (AKdependent `this, _) ->
-    condition_type_from_reactivity (Env.env_reactivity env)
+  | _, Tabstract (AKdependent DTthis, _) ->
+    condition_type_from_reactivity (env_reactivity env)
   | _ when is_self ->
-    condition_type_from_reactivity (Env.env_reactivity env)
+    condition_type_from_reactivity (env_reactivity env)
   | _ -> None
 
 (* removes condition type from given reactivity flavor *)
@@ -85,9 +86,15 @@ let check_only_rx_if_impl env ~is_receiver ~is_self pos reason ty cond_ty =
     - ty is a subtype of condition type
     - type has linked condition type which is a subtype of condition type *)
   let cond_ty = CT.localize_condition_type env cond_ty in
-  let ok =
-    SubType.is_sub_type_LEGACY_DEPRECATED env ty cond_ty ||
-    condition_type_matches ~is_self env ty cond_ty in
+  let rec check env ty =
+    (* TODO: move caller to be TAST check  *)
+    match Env.expand_type env ty with
+    | env, (_, Tintersection tyl) -> List.exists tyl ~f:(check env)
+    | env, ty ->
+      SubType.is_sub_type_LEGACY_DEPRECATED env ty cond_ty ||
+      condition_type_matches ~is_self env ty cond_ty
+  in
+  let ok = check env ty in
   if not ok
   then begin
     let condition_type_str = type_to_str env cond_ty in
@@ -182,7 +189,7 @@ let check_call env method_info pos reason ft arg_types =
   (* do nothing if unsafe_rx is set *)
   if TypecheckerOptions.unsafe_rx (Env.get_tcopt env) then ()
   else
-  match Env.env_reactivity env with
+  match env_reactivity env with
   (* non reactive and locally reactive functions can call pretty much anything
      - do nothing *)
   | Nonreactive | Local _ -> ()
@@ -201,7 +208,7 @@ let check_call env method_info pos reason ft arg_types =
     | MaybeReactive (Local (Some _)) -> MaybeReactive (Local None)
     | MaybeReactive (RxVar (Some v)) -> MaybeReactive (RxVar (Some (go v)))
     | r -> r in
-    go (Env.env_reactivity env) in
+    go (env_reactivity env) in
   (* check that all conditions are met if we are calling something
      conditionally reactive *)
   let callee_is_conditionally_reactive =
@@ -227,21 +234,37 @@ let check_call env method_info pos reason ft arg_types =
           true in
       allow_call &&
       (* check that conditions for all arguments are met *)
-      begin match List.zip ft.ft_params arg_types with
-      | None -> false
-      | Some l ->
-        List.for_all l ~f:begin function
-        | { fp_rx_annotation = Some Param_rx_if_impl ty; fp_type; _ }, arg_ty ->
-          let ty =
-            if Typing_utils.is_option env fp_type
-            then fst ty, Toption ty
-            else ty
-          in
-          check_only_rx_if_impl env ~is_receiver:false ~is_self:false pos reason arg_ty ty
-        (* | { fp_rx_condition = Some Param_rxfunc; fp_type; _ }, arg_ty ->
-          check_only_rx_if_rx_func env pos reason caller_reactivity arg_ty fp_type *)
-        | { fp_rx_annotation = _; _ }, _ ->  true
-        end
+      begin
+        let rec check_params ft_params arg_types =
+          match ft_params, arg_types with
+          | [], _ -> true
+          | { fp_rx_annotation = Some Param_rx_if_impl ty; fp_type; _ } :: tl, arg_ty::arg_tl ->
+            let ty =
+              if Typing_utils.is_option env fp_type.et_type
+              then MakeType.nullable (fst ty) ty
+              else ty
+            in
+            (* check if argument type matches condition *)
+            check_only_rx_if_impl env ~is_receiver:false ~is_self:false pos reason arg_ty ty &&
+            (* check the rest of arguments *)
+            check_params tl arg_tl
+          | { fp_rx_annotation = Some Param_rx_if_impl ty; fp_type; _ } :: tl, []
+            when Typing_utils.is_option env fp_type.et_type ->
+            (* if there are more parameters than actual arguments - assume that remaining parameters
+            have default values (actual arity check is performed elsewhere).  *)
+            let ty = MakeType.nullable (fst ty) ty in
+            (* Treat missing arguments as if null was provided explicitly *)
+            let arg_ty = (MakeType.null Reason.none)  in
+            check_only_rx_if_impl env ~is_receiver:false ~is_self:false pos reason arg_ty ty &&
+            check_params tl []
+          | { fp_rx_annotation = Some Param_rx_if_impl _; _ } :: _, [] ->
+            (* Missing argument for non-nulalble RxIfImpl parameter - no reasonable defaults are expected.
+            TODO: add check that type of parameter annotated with RxIfImpl is class or interface *)
+            false
+          | _::tl, _::arg_tl -> check_params tl arg_tl
+          | _:: tl, [] -> check_params tl []
+        in
+        check_params ft.ft_params arg_types
       end
     end
     else true in
@@ -264,7 +287,7 @@ let disallow_atmost_rx_as_rxfunc_on_non_functions env param param_ty =
   let module UA = Naming_special_names.UserAttributes in
   if Attributes.mem UA.uaAtMostRxAsFunc param.Aast.param_user_attributes
   then begin
-    if param.Aast.param_hint = None
+    if Aast.hint_of_type_hint param.Aast.param_type_hint = None
     then Errors.missing_annotation_for_atmost_rx_as_rxfunc_parameter param.Aast.param_pos
     else
       let rec err_if_not_fun ty =
@@ -331,7 +354,7 @@ let try_substitute_type_with_condition env cond_ty ty =
    and it is not assignable to fresh type parameter. To handle this for returns we reduce
    return type to its upper bound if return type is TFresh and current context is non-reactive *)
 let strip_condition_type_in_return env ty =
-  if Env.env_reactivity env <> Nonreactive then ty
+  if env_reactivity env <> Nonreactive then ty
   else begin match ty with
   | _, Tabstract ((AKgeneric n), _)
     when Option.is_some (Env.get_condition_type env n) ->
@@ -346,5 +369,5 @@ let get_adjusted_return_type env receiver_info ret_ty =
   match try_get_method_from_condition_type env receiver_info with
   | None -> env, ret_ty
   | Some cond_fty ->
-    try_substitute_type_with_condition env cond_fty.ft_ret ret_ty
+    try_substitute_type_with_condition env cond_fty.ft_ret.et_type ret_ty
     |> Option.value ~default:(env, ret_ty)

@@ -309,7 +309,7 @@ OffsetList instrJumpOffsets(const PC origPC) {
   auto const op = decode_op(pc);
 
   OffsetList targets;
-  if (hasFCallEffects(op)) {
+  if (isFCall(op)) {
     auto const offset = decodeFCallArgs(op, pc).asyncEagerOffset;
     if (offset != kInvalidOffset) targets.emplace_back(offset);
     return targets;
@@ -403,10 +403,9 @@ int instrNumPops(PC pc) {
 #define MFINAL -3
 #define C_MFINAL(n) -10 - (n)
 #define CUMANY -3
+#define CMANY_U3 C_MFINAL(3)
 #define CALLNATIVE -5
-#define FPUSH(nin, nobj) C_MFINAL(nin + 3)
 #define FCALL(nin, nobj) -20 - (nin)
-#define FCALLO -4
 #define CMANY -3
 #define SMANY -1
 #define O(name, imm, pop, push, flags) pop,
@@ -420,10 +419,9 @@ int instrNumPops(PC pc) {
 #undef MFINAL
 #undef C_MFINAL
 #undef CUMANY
+#undef CMANY_U3
 #undef CALLNATIVE
-#undef FPUSH
 #undef FCALL
-#undef FCALLO
 #undef CMANY
 #undef SMANY
 #undef O
@@ -436,11 +434,6 @@ int instrNumPops(PC pc) {
   // NewPackedArray and some final member operations specify how
   // many values are popped in their first immediate
   if (n == -3) return getImm(pc, 0).u_IVA;
-  // FCall pops numArgs, unpack and (numRets - 1) uninit values
-  if (n == -4) {
-    auto const fca = getImm(pc, 0).u_FCA;
-    return fca.numArgsInclUnpack() + fca.numRets - 1;
-  }
   // FCallBuiltin pops numArgs and numOut uninit values
   if (n == -5) {
     return getImm(pc, 0).u_IVA + getImm(pc, 2).u_IVA;
@@ -476,7 +469,7 @@ int instrNumPushes(PC pc) {
 #define THREE(...) 3
 #define FOUR(...) 4
 #define FIVE(...) 5
-#define FPUSH -2
+#define CMANY -2
 #define FCALL -1
 #define CALLNATIVE -3
 #define O(name, imm, pop, push, flags) push,
@@ -487,7 +480,7 @@ int instrNumPushes(PC pc) {
 #undef THREE
 #undef FOUR
 #undef FIVE
-#undef FPUSH
+#undef CMANY
 #undef FCALL
 #undef CALLNATIVE
 #undef O
@@ -497,9 +490,9 @@ int instrNumPushes(PC pc) {
 
   // FCallBuiltin pushes numOut + 1 return values
   if (n == -3) return getImm(pc, 2).u_IVA + 1;
-  // The FPush* opcodes push all arguments onto the stack
+  // The PopFrame opcode push all arguments onto the stack
   if (n == -2) return getImm(pc, 0).u_IVA;
-  // The FCall opcode pushes all return values onto the stack
+  // The FCall* opcodes pushes all return values onto the stack
   if (n == -1) return getImm(pc, 0).u_FCA.numRets;
 
   return n;
@@ -520,18 +513,6 @@ FlavorDesc manyFlavor(PC op, uint32_t i, FlavorDesc flavor) {
 }
 
 template<int nin, int nobj>
-FlavorDesc fpushFlavor(PC op, uint32_t i) {
-  always_assert(i < uint32_t(instrNumPops(op)));
-  if (i < nin) return CV;
-  i -= nin;
-  auto const numArgs = getImm(op, 0).u_IVA;
-  if (i < numArgs) return CVV;
-  i -= numArgs;
-  if (i < 2) return UV;
-  return nobj ? CV : UV;
-}
-
-template<int nin, int nobj>
 FlavorDesc fcallFlavor(PC op, uint32_t i) {
   always_assert(i < uint32_t(instrNumPops(op)));
   auto const fca = getImm(op, 0).u_FCA;
@@ -542,13 +523,6 @@ FlavorDesc fcallFlavor(PC op, uint32_t i) {
   i -= fca.numArgsInclUnpack();
   if (i == 2 && nobj) return CV;
   return UV;
-}
-
-FlavorDesc fcallOldFlavor(PC op, uint32_t i) {
-  always_assert(i < uint32_t(instrNumPops(op)));
-  auto const fca = getImm(op, 0).u_FCA;
-  if (i == 0 && fca.hasUnpack()) return CV;
-  return i < fca.numArgsInclUnpack() ? CVV : UV;
 }
 
 FlavorDesc fcallBuiltinFlavor(PC op, uint32_t i) {
@@ -573,10 +547,9 @@ FlavorDesc instrInputFlavor(PC op, uint32_t idx) {
 #define MFINAL return manyFlavor(op, idx, CV);
 #define C_MFINAL(n) return manyFlavor(op, idx, CV);
 #define CUMANY return manyFlavor(op, idx, CUV);
+#define CMANY_U3 return manyFlavor(op, idx, CUV);
 #define CALLNATIVE return fcallBuiltinFlavor(op, idx);
-#define FPUSH(nin, nobj) return fpushFlavor<nin, nobj>(op, idx);
 #define FCALL(nin, nobj) return fcallFlavor<nin, nobj>(op, idx);
-#define FCALLO return fcallOldFlavor(op, idx);
 #define CMANY return manyFlavor(op, idx, CV);
 #define SMANY return manyFlavor(op, idx, CV);
 #define O(name, imm, pop, push, flags) case Op::name: pop
@@ -593,10 +566,9 @@ FlavorDesc instrInputFlavor(PC op, uint32_t idx) {
 #undef MFINAL
 #undef C_MFINAL
 #undef CUMANY
+#undef CMANY_U3
 #undef CALLNATIVE
-#undef FPUSH
 #undef FCALL
-#undef FCALLO
 #undef CMANY
 #undef SMANY
 #undef O
@@ -635,6 +607,14 @@ void staticArrayStreamer(const ArrayData* ad, std::string& out) {
     }
   }
   out += ")";
+
+  if (ad->hasProvenanceData() && RuntimeOption::EvalArrayProvenance) {
+    out += " [";
+    if (auto const tag = arrprov::getTag(ad)) {
+      out += tag->toString();
+    }
+    out += "]";
+  }
 }
 
 void staticStreamer(const TypedValue* tv, std::string& out) {
@@ -1014,6 +994,12 @@ static const char* SpecialClsRef_names[] = {
 #undef REF
 };
 
+static const char* ClsMethResolveOp_names[] = {
+#define OP(x) #x,
+  CLS_METH_RESOLVE_OPS
+#undef OP
+};
+
 template<class T, size_t Sz>
 const char* subopToNameImpl(const char* (&arr)[Sz], T opcode, int off) {
   static_assert(
@@ -1085,6 +1071,8 @@ X(MOpMode,        static_cast<int>(MOpMode::None))
 X(ContCheckOp,    static_cast<int>(ContCheckOp::IgnoreStarted))
 X(CudOp,          static_cast<int>(CudOp::IgnoreIter))
 X(SpecialClsRef,  static_cast<int>(SpecialClsRef::Self))
+X(ClsMethResolveOp,
+                  static_cast<int>(ClsMethResolveOp::NoWarn))
 #undef X
 
 //////////////////////////////////////////////////////////////////////
@@ -1092,7 +1080,7 @@ X(SpecialClsRef,  static_cast<int>(SpecialClsRef::Self))
 namespace {
 
 bool instrIsVMCall(Op opcode) {
-  if (hasFCallEffects(opcode)) return true;
+  if (isFCall(opcode)) return true;
   switch (opcode) {
     case OpContEnter:
     case OpContEnterDelegate:

@@ -19,15 +19,26 @@
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/init-fini-node.h"
+#include "hphp/runtime/base/mixed-array.h"
+#include "hphp/runtime/base/packed-array.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
 #include "hphp/util/rds-local.h"
 #include "hphp/util/type-scan.h"
+#include "hphp/util/type-traits.h"
 
 #include <folly/AtomicHashMap.h>
 #include <folly/container/F14Map.h>
+#include <folly/Format.h>
 
 namespace HPHP { namespace arrprov {
+
+////////////////////////////////////////////////////////////////////////////////
+
+std::string Tag::toString() const {
+  assertx(m_filename);
+  return folly::sformat("{}:{}", m_filename->slice(), m_line);
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -56,10 +67,12 @@ bool arrayWantsTag(const ArrayData* ad) {
          kind == ArrayData::ArrayKind::kDictKind;
 }
 
-void setTag(ArrayData* ad, const Tag& tag) {
+namespace {
+
+template <bool allow_overwrite>
+void setTagImpl(ArrayData* ad, const Tag& tag) {
   if (!arrayWantsTag(ad)) return;
-  assertx(ad->hasExactlyOneRef() || !ad->empty());
-  assertx(!getTag(ad));
+  assertx(allow_overwrite || !getTag(ad));
   ad->markHasProvenanceData();
   if (ad->isRefCounted()) {
     rl_array_provenance->tags[ad] = tag;
@@ -69,13 +82,47 @@ void setTag(ArrayData* ad, const Tag& tag) {
   }
 }
 
+} // namespace
+
+void setTag(ArrayData* ad, const Tag& tag) {
+  setTagImpl<false>(ad, tag);
+}
+
+void setTagReplace(ArrayData* ad, const Tag& tag) {
+  setTagImpl<true>(ad, tag);
+}
+
+void setTagRecursive(ArrayData* ad, const Tag& tag) {
+  assertx(RuntimeOption::EvalArrayProvenance);
+  if (ad->empty()) return;
+  if (!ad->isRefCounted()) return;
+
+  if (arrayWantsTag(ad) &&
+      !ad->hasProvenanceData()) {
+    setTag(ad, tag);
+  }
+
+  IterateVNoInc(
+    ad,
+    [&](TypedValue tv) {
+      if (!isArrayLikeType(tv.m_type)) return;
+      setTagRecursive(tv.m_data.parr, tag);
+    }
+  );
+}
+
 folly::Optional<Tag> getTag(const ArrayData* ad) {
   if (!ad->hasProvenanceData()) return {};
   if (ad->isRefCounted()) {
-    return rl_array_provenance->tags[ad];
+    auto const iter = rl_array_provenance->tags.find(ad);
+    assertx(iter != rl_array_provenance->tags.cend());
+    assertx(iter->second.filename());
+    return iter->second;
   } else {
     std::lock_guard<std::mutex> g{s_static_provenance_lock};
-    return s_static_array_provenance.find(ad)->second;
+    auto const ret = s_static_array_provenance.find(ad)->second;
+    assertx(ret.filename());
+    return ret;
   }
 }
 
@@ -85,35 +132,107 @@ void clearTag(const ArrayData* ad) {
   rl_array_provenance->tags.erase(ad);
 }
 
-TypedValue tagTV(TypedValue tv) {
-  using namespace arrprov;
+namespace {
 
+void tagTVImpl(TypedValue& tv, folly::Optional<Tag> tag) {
   assertx(RuntimeOption::EvalArrayProvenance);
-  if (!tvWantsTag(tv)) return tv;
+
+  if (!tvWantsTag(tv)) return;
 
   auto ad = val(tv).parr;
-  if (getTag(ad)) return tv;
+  if (ad->hasProvenanceData()) return;
+
+  if (!tag) tag = tagFromProgramCounter();
+  if (!tag) return;
 
   if (!ad->hasExactlyOneRef()) {
     ad = ad->copy();
-    type(tv) = dt_with_rc(type(tv));
-    val(tv).parr = ad;
+
+    TypedValue tmp;
+    type(tmp) = dt_with_rc(type(tv));
+    val(tmp).parr = ad;
+
+    tvMove(tmp, tv);
   }
-  setTag(ad, tagFromProgramCounter());
+  setTag(ad, *tag);
+}
+
+}
+
+TypedValue tagTV(TypedValue tv) {
+  tagTVImpl(tv, folly::none);
   return tv;
 }
 
-Tag tagFromProgramCounter() {
+TypedValue tagTVKnown(TypedValue tv, Tag tag) {
+  tagTVImpl(tv, tag);
+  return tv;
+}
+
+namespace {
+
+template<typename AD, typename Copy>
+typename maybe_const<AD, ArrayData, AD*>::type
+makeEmptyImpl(AD* base, folly::Optional<Tag> tag, Copy&& copy) {
+  assertx(base->empty());
+  assertx(base->isStatic());
+  assertx(arrayWantsTag(base));
+
+  if (!tag) tag = tagFromProgramCounter();
+  if (!tag) return base;
+
+  auto ad = copy(base);
+  assertx(ad);
+  assertx(ad->hasExactlyOneRef());
+
+  arrprov::setTagReplace(ad, *tag);
+  ArrayData::GetScalarArray(&ad);
+
+  return ad;
+}
+
+}
+
+const ArrayData* makeEmptyArray(const ArrayData* base,
+                                folly::Optional<Tag> tag) {
+  return makeEmptyImpl(base, tag, [] (const ArrayData* ad) {
+    return ad->copy();
+  });
+}
+
+ArrayData* makeEmptyVec() {
+  return makeEmptyImpl(
+    staticEmptyVecArray(), folly::none,
+    [] (const ArrayData* ad) { return PackedArray::CopyVec(ad); }
+  );
+}
+
+ArrayData* makeEmptyDict() {
+  return makeEmptyImpl(
+    staticEmptyDictArray(), folly::none,
+    [] (const ArrayData* ad) { return MixedArray::CopyDict(ad); }
+  );
+}
+
+folly::Optional<Tag> tagFromProgramCounter() {
+  VMRegAnchor _(VMRegAnchor::Soft);
+  if (tl_regState != VMRegState::CLEAN || vmfp() == nullptr) {
+    return folly::none;
+  }
+
   auto const tag = fromLeaf(
-    [&] (const ActRec* fp, Offset offset) {
+    [&] (const ActRec* fp, Offset offset) -> folly::Optional<Tag> {
       auto const unit = fp->unit();
       auto const filename = unit->filepath();
       auto const line = unit->getLineNumber(offset);
       return Tag { filename, line };
     },
-    [] (const ActRec* fp) { return !fp->func()->isProvenanceSkipFrame(); }
+    [] (const ActRec* fp) {
+      return !fp->func()->isProvenanceSkipFrame() &&
+             !fp->func()->isCPPBuiltin();
+    }
   );
-  assertx(tag.filename() != nullptr);
+  assertx(!tag || tag->filename() != nullptr);
   return tag;
 }
 

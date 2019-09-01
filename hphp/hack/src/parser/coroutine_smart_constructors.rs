@@ -1,9 +1,9 @@
-use crate::lexable_token::LexableToken;
 use crate::parser_env::ParserEnv;
-use crate::source_text::SourceText;
-use crate::syntax::*;
 use crate::syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
-use crate::token_kind::TokenKind;
+use parser_core_types::lexable_token::LexableToken;
+use parser_core_types::source_text::SourceText;
+use parser_core_types::syntax::*;
+use parser_core_types::token_kind::TokenKind;
 
 use std::marker::PhantomData;
 
@@ -61,7 +61,7 @@ impl<'src, S> StateType<'src, S> for State<'src, S> {
     fn initial(env0: &ParserEnv, src: &SourceText<'src>) -> Self {
         State {
             seen_ppl: false,
-            source: *src,
+            source: src.clone(),
             is_codegen: env0.codegen,
             phantom_s: PhantomData,
         }
@@ -88,9 +88,9 @@ where
     }
 }
 
-fn is_coroutine<S, T>(r: &S) -> bool
+fn is_coroutine<'a, S, T>(r: &S) -> bool
 where
-    S: SyntaxType<T>,
+    S: SyntaxType<'a, T>,
     S::Value: SyntaxValueWithKind,
 {
     let value = r.value();
@@ -103,7 +103,7 @@ where
 impl<'a, S, T> SyntaxSmartConstructors<'a, S, T> for CoroutineSmartConstructors<'a, S, T>
 where
     T: StateType<'a, S> + CoroutineStateType,
-    S: SyntaxType<T>,
+    S: SyntaxType<'a, T>,
     S::Value: SyntaxValueWithKind,
 {
     fn new(env: &ParserEnv, src: &SourceText<'a>) -> Self {

@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -135,7 +135,7 @@ and union_ env ty1 ty2 r =
      * to say whether a given T can be null - e.g. opaque newtypes, dependent
      * types, etc. - so for now we leave it here.
      * TODO improve that. *)
-    | Tnonnull | Tany | Tintersection _) as ty1_)),
+    | Tnonnull | Tany _ | Tintersection _ | Tpu _ | Tpu_access _) as ty1_)),
     (_, ty2_) ->
     (* Make sure to add a dependency on any classes referenced here, even if
      * we're in an error state (i.e., where we are right now). The need for
@@ -270,9 +270,13 @@ and union_funs env fty1 fty2 =
     fty2.ft_return_disposable, fty2.ft_returns_mutable) &&
     ft_params_compare fty1.ft_params fty2.ft_params = 0
   then
-    let env, ft_ret = union env fty1.ft_ret fty2.ft_ret in
+    let env, ft_ret = union_possibly_enforced_tys env fty1.ft_ret fty2.ft_ret in
     env, { fty1 with ft_ret }
   else raise Dont_unify
+
+and union_possibly_enforced_tys env ety1 ety2 =
+  let env, et_type = union env ety1.et_type ety2.et_type in
+  env, { ety1 with et_type }
 
 and union_class env name tyl1 tyl2 =
   let tparams = match Env.get_class env name with

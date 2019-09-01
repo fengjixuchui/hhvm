@@ -1,8 +1,6 @@
-File "collections_index_by_key_subtype.php", line 16, characters 8-17:
-Invalid index type for this array (Typing[4110])
-File "collections_index_by_key_subtype.php", line 16, characters 13-16:
-Expected int
-File "collections_index_by_key_subtype.php", line 15, characters 20-27:
-This can only be indexed with integers
-File "collections_index_by_key_subtype.php", line 15, characters 35-44:
-But got dynamic because it is an unenforceable type
+File "collections_index_by_key_subtype.php", line 20, characters 8-18:
+Invalid index type for this array (Typing[4324])
+File "collections_index_by_key_subtype.php", line 19, characters 25-27:
+This is an int
+File "collections_index_by_key_subtype.php", line 19, characters 40-49:
+It is incompatible with a dynamic value or a value of type IntSubtype because it is an unenforceable type

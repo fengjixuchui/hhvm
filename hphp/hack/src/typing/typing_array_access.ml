@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -130,7 +130,7 @@ let check_arraykey_index env pos container_ty index_ty =
     let ty_arraykey = MakeType.arraykey (Reason.Ridx_dict pos) in
     (* Wrap generic type mismatch error with special error code *)
     Errors.try_
-      (fun () -> Typing_coercion.coerce_type pos reason env index_ty ty_arraykey Errors.unify_error)
+      (fun () -> Typing_coercion.coerce_type pos reason env index_ty { et_type = ty_arraykey; et_enforced = true } Errors.unify_error)
       (fun _ ->
         Errors.invalid_arraykey pos (info_of_type container_ty) (info_of_type index_ty);
         env)
@@ -174,7 +174,7 @@ let rec array_get ~array_pos ~expr_pos ?(lhs_of_null_coalesce=false) is_lvalue e
       [Log_head ("array_get/type_index",
        [Log_type ("ty_have", ty_have); Log_type("ty_expect", ty_expect)])]));
       (* coerce if possible *)
-      match Typing_coercion.try_coerce p reason env ty_have ty_expect with
+      match Typing_coercion.try_coerce p reason env ty_have { et_type = ty_expect; et_enforced = true } with
       | Some env -> env
       | None ->
           (* if subtype of dynamic, allow it to be used *)
@@ -269,7 +269,7 @@ let rec array_get ~array_pos ~expr_pos ?(lhs_of_null_coalesce=false) is_lvalue e
       env, v
     | Terr -> env, err_witness env expr_pos
     | Tdynamic -> env, ety1
-    | Tany ->
+    | Tany _ ->
       env, (Reason.Rnone, TUtils.tany env)
     | Tarraykind (AKany | AKempty) ->
       let env = check_arraykey_index env expr_pos ety1 ty2 in
@@ -376,7 +376,8 @@ let rec array_get ~array_pos ~expr_pos ?(lhs_of_null_coalesce=false) is_lvalue e
         let ty = r, Tshape (shape_kind, fields) in
         array_get ~array_pos ~expr_pos ~lhs_of_null_coalesce is_lvalue env ty e2 ty2
     | Tnonnull | Tprim _ | Tfun _ | Tdestructure _
-    | Tclass _ | Tanon _ | Tabstract _ | Tunion _ | Tintersection _ ->
+    | Tclass _ | Tanon _ | Tabstract _ | Tunion _ | Tintersection _ | Tpu _
+    | Tpu_access _ ->
         error_array env expr_pos ety1
     (* Type-check array access as though it is the method
      * array_get<Tk,Tv>(KeyedContainer<Tk,Tv> $array, Tk $key): Tv
@@ -426,7 +427,7 @@ let assign_array_append ~array_pos ~expr_pos ur env ty1 ty2 =
   GenericRules.apply_rules env ty1
   begin fun env ty1 ->
     match ty1 with
-    | _, (Tany | Tarraykind (AKany | AKempty)) ->
+    | _, (Tany _ | Tarraykind (AKany | AKempty)) ->
       env, ty1
     | _, Terr ->
       env, ty1
@@ -466,7 +467,7 @@ let assign_array_append ~array_pos ~expr_pos ur env ty1 ty2 =
       else env, ty1
     | _, (Tnonnull | Tarraykind _ | Toption _ | Tprim _ | Tvar _ |
           Tfun _ | Tclass _ | Ttuple _ | Tanon _ | Tshape _ | Tdestructure _
-          | Tunion _ | Tintersection _ | Tabstract _) ->
+          | Tunion _ | Tintersection _ | Tabstract _ | Tpu _ | Tpu_access _) ->
       error_assign_array_append env expr_pos ty1
   end (* of begin fun *)
 
@@ -541,7 +542,7 @@ let assign_array_get ~array_pos ~expr_pos ur env ty1 key tkey ty2 =
       Errors.array_get_arity expr_pos name (Reason.to_pos r) in
     let type_index env p ty_have ty_expect reason =
       (* coerce if possible *)
-      match Typing_coercion.try_coerce p reason env ty_have ty_expect with
+      match Typing_coercion.try_coerce p reason env ty_have { et_type = ty_expect; et_enforced = true } with
       | Some e -> e
       | None ->
         (* if subtype of dynamic, allow it to be used *)
@@ -624,7 +625,7 @@ let assign_array_get ~array_pos ~expr_pos ur env ty1 key tkey ty2 =
     | Terr -> error
     | Tdynamic ->
       env, ety1
-    | (Tany | Tarraykind AKany) ->
+    | (Tany _ | Tarraykind AKany) ->
       env, ety1
     | Tarraykind AKempty ->
       let env = check_arraykey_index env expr_pos ety1 tkey in
@@ -666,8 +667,9 @@ let assign_array_get ~array_pos ~expr_pos ur env ty1 key tkey ty2 =
         error)
       else
         env, ety1
-    | (Toption _ | Tnonnull | Tprim _ | Tdestructure _ | Tunion _ | Tintersection _ |
-       Tabstract _ | Tvar _ | Tfun _ | Tclass _ | Tanon _) ->
+    | (Toption _ | Tnonnull | Tprim _ | Tdestructure _ | Tunion _ | Tintersection _
+      | Tabstract _ | Tvar _ | Tfun _ | Tclass _ | Tanon _ | Tpu _
+      | Tpu_access _) ->
       Errors.array_access expr_pos (Reason.to_pos r) (Typing_print.error env ety1);
       error
   end (* of begin fun *)

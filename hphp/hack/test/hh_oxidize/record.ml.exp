@@ -1,0 +1,7 @@
+use ocamlrep_derive::IntoOcamlRep;
+
+#[derive(Clone, Debug, IntoOcamlRep)]
+pub struct A {
+    pub x: isize,
+    pub y: isize,
+}

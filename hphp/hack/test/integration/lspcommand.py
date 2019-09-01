@@ -5,6 +5,7 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 import contextlib
 import pprint
 import subprocess
+import urllib
 import uuid
 from typing import (
     BinaryIO,
@@ -116,6 +117,8 @@ class LspCommandProcessor:
                 # Hack: HackLSP server only connects to hh_server asynchronously.
                 # We want to delay until after it's connected before testing more.
                 transcript = self._wait_for_initialized(transcript)
+            elif command["method"] == "$test/writeToDisk":
+                self._write_to_disk(command)
             else:
                 self.writer.write(command)
                 transcript = self._scribe(transcript, sent=command, received=None)
@@ -243,6 +246,14 @@ Transcript of all the messages we saw:
         )
         return transcript
 
+    def _write_to_disk(self, command: Json) -> None:
+        params = command["params"]
+        # pyre-fixme[18]: Global name `parse` is undefined.
+        path = urllib.parse.urlparse(params["uri"]).path
+        contents = params["contents"]
+        with open(path, "w") as f:
+            f.write(contents)
+
     def _read_request_responses(
         self, transcript: Transcript, commands: Sequence[Json], timeout_seconds: float
     ) -> Transcript:
@@ -284,6 +295,7 @@ Transcript of all the messages we saw:
         def make_id(
             json: Json, is_client_request: bool, idgen: Callable[[], str]
         ) -> str:
+            # pyre-fixme[18]: Global name `lspcommand` is undefined.
             if LspCommandProcessor._has_id(json):
                 if is_client_request:
                     return LspCommandProcessor._client_request_id(json["id"])

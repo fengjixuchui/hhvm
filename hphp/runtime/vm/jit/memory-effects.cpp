@@ -1229,6 +1229,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     }
 
   case NewRecord:
+  case NewRecordArray:
     {
       auto const extra = inst.extra<NewStructData>();
       auto const stack_in = AStack {
@@ -1606,10 +1607,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return PureLoad {
       actrec_ctx(inst.src(0), inst.extra<LdARCtx>()->offset)
     };
-  case LdARFuncPtr:
-    return PureLoad {
-      actrec_func(inst.src(0), inst.extra<LdARFuncPtr>()->offset)
-    };
 
   case DbgAssertARFunc:
     return may_load_store(
@@ -1647,8 +1644,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case AssertLoc:
   case AssertStk:
   case AssertMBase:
-  case AssertARFunc:
-  case FuncGuard:
   case DefFP:
   case DefSP:
   case EndGuards:
@@ -1705,7 +1700,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case AssertNonNull:
   case CheckNonNull:
   case CheckNullptr:
-  case CheckFuncMMNonMagic:
   case CheckSmashableClass:
   case Ceil:
   case Floor:
@@ -1745,7 +1739,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case FuncHasAttr:
   case IsFunReifiedGenericsMatched:
   case IsClsDynConstructible:
-  case LdFuncMFunc:
   case LdFuncRxLevel:
   case LdSmashable:
   case LdSmashableFunc:
@@ -1757,14 +1750,10 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ProfileType:
   case LdIfaceMethod:
   case InstanceOfIfaceVtable:
-  case CheckARMagicFlag:
   case LdARNumArgsAndFlags:
-  case StARNumArgsAndFlags:
   case LdARReifiedGenerics:
   case KillARReifiedGenerics:
   case LdTVAux:
-  case LdARInvName:
-  case StARInvName:
   case MethodExists:
   case GetTime:
   case GetTimeNs:
@@ -1773,6 +1762,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LookupSPropSlot:
   case ConvPtrToLval:
   case MangleReifiedName:
+  case ProfileProp:
     return IrrelevantEffects {};
 
   case StClosureArg:
@@ -1934,9 +1924,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LookupClsMethod:
   case LookupClsRDS:
   case InitCtx:
-  case PackMagicArgs:
   case StrictlyIntegerConv:
   case DbgAssertFunc:
+  case ProfileCall:
   case ProfileMethod:
     return may_load_store(AEmpty, AEmpty);
 
@@ -1988,14 +1978,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   case GetMemoKeyScalar:
     return IrrelevantEffects{};
-
-  case LdArrFuncCtx:
-  case LdFunc: // these all can autoload
-    {
-      AliasClass effects =
-        actrec(inst.src(1), inst.extra<IRSPRelOffsetData>()->offset);
-      return may_load_store(effects, effects);
-    }
 
   case LdClsPropAddrOrNull:   // may run 86{s,p}init, which can autoload
   case LdClsPropAddrOrRaise:  // raises errors, and 86{s,p}init
@@ -2063,6 +2045,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case DefCls:         // autoload
   case LdCls:          // autoload
   case LdClsCached:    // autoload
+  case LdFunc:         // autoload
   case LdFuncCached:   // autoload
   case LdRecDescCached:    // autoload
   case LdSwitchObjIndex:  // decrefs arg
@@ -2117,6 +2100,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ThrowInvalidArrayKey:
   case ThrowInvalidOperation:
   case ThrowArithmeticError:
+  case ThrowCallReifiedFunctionWithoutGenerics:
   case ThrowDivisionByZeroError:
   case ThrowDivisionByZeroException:
   case ThrowHasThisNeedStatic:

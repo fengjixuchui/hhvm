@@ -47,8 +47,8 @@ namespace HPHP {
 
 const StaticString
   s_InvalidKeysetOperationMsg{"Invalid operation on keyset"},
-  s_VecUnsetMsg{"Vecs do not support unsetting non-end elements"};
-
+  s_VecUnsetMsg{"Vecs do not support unsetting non-end elements"},
+  s_NullHackArrayKey{"null used as key for Hack array in array_key_exists"};
 ///////////////////////////////////////////////////////////////////////////////
 
 __thread std::pair<const ArrayData*, size_t> s_cachedHash;
@@ -187,13 +187,17 @@ void ArrayData::GetScalarArray(ArrayData** parr) {
     s_cachedHash.first = nullptr;
   };
 
-  if (arr->empty()) {
-    if (arr->isVecArray()) return replace(staticEmptyVecArray());
-    if (arr->isDict())     return replace(staticEmptyDictArray());
+  auto const provenanceEnabled =
+    RuntimeOption::EvalArrayProvenance &&
+    arr->hasProvenanceData();
+
+  if (arr->empty() && LIKELY(!provenanceEnabled)) {
     if (arr->isShape())    return replace(staticEmptyShapeArray());
     if (arr->isKeyset())   return replace(staticEmptyKeysetArray());
     if (arr->isVArray())   return replace(staticEmptyVArray());
     if (arr->isDArray())   return replace(staticEmptyDArray());
+    if (arr->isVecArray()) return replace(staticEmptyVecArray());
+    if (arr->isDict())     return replace(staticEmptyDictArray());
     return replace(staticEmptyArray());
   }
 
@@ -255,6 +259,7 @@ static_assert(ArrayFunctions::NK == ArrayData::ArrayKind::kNumKinds,
     EmptyArray::entry,                          \
     APCLocalArray::entry,                       \
     GlobalsArray::entry,                        \
+    RecordArray::entry,                         \
     MixedArray::entry##Shape,  /* Shape */      \
     MixedArray::entry##Dict,   /* Dict */       \
     PackedArray::entry##Vec,   /* Vec */        \
@@ -831,7 +836,7 @@ ArrayData* ArrayData::Create(TypedValue name, TypedValue value) {
 
 ArrayData* ArrayData::toShapeInPlaceIfCompatible() {
   if (size() == 0 && isStatic()) {
-    return staticEmptyShapeArray();
+    return ArrayData::CreateShape();
   }
   assertx((RuntimeOption::EvalHackArrDVArrs && isDict()) ||
           (!RuntimeOption::EvalHackArrDVArrs && isMixed() && isDArray()));
@@ -1135,12 +1140,13 @@ tv_rval ArrayData::getNotFound(const StringData* k, bool error) const {
 }
 
 const char* ArrayData::kindToString(ArrayKind kind) {
-  std::array<const char*,9> names = {{
+  std::array<const char*,10> names = {{
     "PackedKind",
     "MixedKind",
     "EmptyKind",
     "ApcKind",
     "GlobalsKind",
+    "RecordKind",
     "ShapeKind",
     "DictKind",
     "VecKind",
@@ -1383,6 +1389,24 @@ std::string makeHackArrCompatImplicitArrayKeyMsg(const TypedValue* key) {
 
 void raiseHackArrCompatImplicitArrayKey(const TypedValue* key) {
   raise_hac_array_key_cast_notice(makeHackArrCompatImplicitArrayKeyMsg(key));
+}
+
+StringData* getHackArrCompatNullHackArrayKeyMsg() {
+  return s_NullHackArrayKey.get();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+ArrayData* tagArrProv(ArrayData* ad, const ArrayData* src) {
+  assertx(RuntimeOption::EvalArrayProvenance);
+  assertx(ad->hasExactlyOneRef());
+
+  if (src != nullptr) {
+    arrprov::copyTag(src, ad);
+  } else if (auto const tag = arrprov::tagFromProgramCounter()) {
+    arrprov::setTag(ad, *tag);
+  }
+  return ad;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
@@ -24,7 +24,7 @@ let foo_contents =
     "<?hh // strict
 
 class Foo {
-  /* HH_FIXME[4110] */
+  /* HH_FIXME[4336] */
   public function f() : %s {
   }
 }

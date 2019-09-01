@@ -47,7 +47,7 @@ lazy_init2 = {use_saved_state}
         naming_table_saved_state_path = os.path.join(
             self.repo_dir, "naming_table_saved_state.sqlite"
         )
-        (_, _, retcode) = self.proc_call(
+        (stdout, stderr, retcode) = self.proc_call(
             [
                 hh_server,
                 "--check",
@@ -56,7 +56,11 @@ lazy_init2 = {use_saved_state}
                 naming_table_saved_state_path,
             ]
         )
-        assert retcode == 0, "Failed to save naming table saved state"
+        assert retcode == 0, (
+            f"Failed to save naming table saved state: {retcode}\n"
+            + f"STDOUT:\n{stdout}\n"
+            + f"STDERR:\n{stderr}\n"
+        )
         return naming_table_saved_state_path
 
 
@@ -333,6 +337,12 @@ class TestLsp(TestCase[LspTestDriver]):
             options=["--identify-function", "2:21", "--json"],
             stdin="<?hh // partial\nfunction f():void {PHP_EOL;}\n",
         )
+        if retcode == 7:
+            self.skipTest(
+                "Could not discover builtins directory -- "
+                + "got exit code 7 (either Out_of_time or Out_of_retries). "
+                + "The test machine is likely under too much load."
+            )
         self.assertEqual(retcode, 0)
         constants_path = json.loads(output)[0]["definition_pos"]["filename"]
         return {
@@ -340,8 +350,6 @@ class TestLsp(TestCase[LspTestDriver]):
             "root_path": self.test_driver.repo_dir,
             "php_file_uri": self.repo_file_uri(test_php),
             "php_file": self.read_repo_file(test_php),
-            # Sometimes Windows happens.
-            "path_sep": os.sep,
         }
 
     def test_init_shutdown(self) -> None:
@@ -370,12 +378,209 @@ class TestLsp(TestCase[LspTestDriver]):
         variables = dict(self.prepare_serverless_ide_environment())
         variables.update(self.setup_php_file("definition.php"))
         self.test_driver.stop_hh_server()
-        self.load_and_run(
-            "serverless_ide_definition",
-            variables,
-            wait_for_server=False,
-            use_serverless_ide=True,
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_definition"), use_serverless_ide=True
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="call to `b_definition`",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 10},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/definition.php",
+                        "range": {
+                            "start": {"line": 6, "character": 9},
+                            "end": {"line": 6, "character": 21},
+                        },
+                        "title": "b_definition",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="call to `new BB(1)`",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 29, "character": 13},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/definition.php",
+                        "range": {
+                            "start": {"line": 11, "character": 18},
+                            "end": {"line": 11, "character": 29},
+                        },
+                        "title": "BB::__construct",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="call to `new CC(1)`",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 30, "character": 13},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/definition.php",
+                        "range": {
+                            "start": {"line": 14, "character": 6},
+                            "end": {"line": 14, "character": 8},
+                        },
+                        "title": "CC",
+                    },
+                    {
+                        "uri": "file://${root_path}/definition.php",
+                        "range": {
+                            "start": {"line": 11, "character": 18},
+                            "end": {"line": 11, "character": 29},
+                        },
+                        "title": "BB::__construct",
+                    },
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="call to `new DD(1)`",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 31, "character": 13},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/definition.php",
+                        "range": {
+                            "start": {"line": 17, "character": 6},
+                            "end": {"line": 17, "character": 8},
+                        },
+                        "title": "DD",
+                    },
+                    {
+                        "uri": "file://${root_path}/definition.php",
+                        "range": {
+                            "start": {"line": 11, "character": 18},
+                            "end": {"line": 11, "character": 29},
+                        },
+                        "title": "BB::__construct",
+                    },
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="call to `new EE(1)`",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 32, "character": 13},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/definition.php",
+                        "range": {
+                            "start": {"line": 21, "character": 18},
+                            "end": {"line": 21, "character": 29},
+                        },
+                        "title": "EE::__construct",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="call to `new FF(1)`",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 33, "character": 13},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/definition.php",
+                        "range": {
+                            "start": {"line": 26, "character": 6},
+                            "end": {"line": 26, "character": 8},
+                        },
+                        "title": "FF",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="call to `new TakesString(HasString::MyString)`",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 45, "character": 23},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/definition.php",
+                        "range": {
+                            "start": {"line": 40, "character": 6},
+                            "end": {"line": 40, "character": 15},
+                        },
+                        "title": "HasString",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="make local, unsaved change to the file",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}", "version": 2},
+                    "contentChanges": [
+                        {
+                            "text": "test",
+                            "range": {
+                                "start": {"line": 3, "character": 9},
+                                "end": {"line": 3, "character": 21},
+                            },
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="call to `test` instead of `b_definition`",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 10},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/definition.php",
+                        "range": {
+                            "start": {"line": 28, "character": 9},
+                            "end": {"line": 28, "character": 13},
+                        },
+                        "title": "test",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(method="shutdown", params={}, result=None)
         )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
     def test_type_definition(self) -> None:
         self.prepare_server_environment()
@@ -390,17 +595,21 @@ class TestLsp(TestCase[LspTestDriver]):
     def initialize_spec(
         self, spec: LspTestSpec, use_serverless_ide: bool
     ) -> LspTestSpec:
+        if use_serverless_ide:
+            initialization_options = {
+                "namingTableSavedStatePath": "${naming_table_saved_state_path}"
+            }
+        else:
+            initialization_options = {}
+
         spec = spec.ignore_notifications(method="telemetry/event").request(
             method="initialize",
             params={
-                "initializationOptions": {
-                    "namingTableSavedStatePath": "${naming_table_saved_state_path}"
-                },
+                "initializationOptions": initialization_options,
                 "processId": None,
                 "rootPath": "${root_path}",
                 "capabilities": {},
             },
-            wait=True,
             result={
                 "capabilities": {
                     "textDocumentSync": {
@@ -452,6 +661,143 @@ class TestLsp(TestCase[LspTestDriver]):
                 result=None,
             )
         return spec
+
+    def test_serverless_ide_type_definition(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("type_definition.php"))
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_type_definition"), use_serverless_ide=True
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="Conditional Type Definition of HH or II",
+                method="textDocument/typeDefinition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 32, "character": 2},
+                },
+                result=[
+                    {
+                        "uri": "${php_file_uri}",
+                        "range": {
+                            "start": {"line": 2, "character": 6},
+                            "end": {"line": 2, "character": 8},
+                        },
+                        "title": "\\HH",
+                    },
+                    {
+                        "uri": "${php_file_uri}",
+                        "range": {
+                            "start": {"line": 12, "character": 6},
+                            "end": {"line": 12, "character": 8},
+                        },
+                        "title": "\\LL",
+                    },
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="Standard Class Definition",
+                method="textDocument/typeDefinition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 40, "character": 2},
+                },
+                result=[
+                    {
+                        "uri": "${php_file_uri}",
+                        "range": {
+                            "start": {"line": 2, "character": 6},
+                            "end": {"line": 2, "character": 8},
+                        },
+                        "title": "\\HH",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="Class Type Definition with Casting",
+                method="textDocument/typeDefinition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 41, "character": 2},
+                },
+                result=[
+                    {
+                        "uri": "${php_file_uri}",
+                        "range": {
+                            "start": {"line": 2, "character": 6},
+                            "end": {"line": 2, "character": 8},
+                        },
+                        "title": "\\HH",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="Primitive Type Definition",
+                method="textDocument/typeDefinition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 42, "character": 2},
+                },
+                result=[],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="Function Return Type Definition",
+                method="textDocument/typeDefinition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 43, "character": 2},
+                },
+                result=[
+                    {
+                        "uri": "${php_file_uri}",
+                        "range": {
+                            "start": {"line": 12, "character": 6},
+                            "end": {"line": 12, "character": 8},
+                        },
+                        "title": "\\LL",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="Function definition with primitive return type",
+                method="textDocument/typeDefinition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 44, "character": 2},
+                },
+                result=[
+                    {
+                        "uri": "${php_file_uri}",
+                        "range": {
+                            "start": {"line": 22, "character": 9},
+                            "end": {"line": 22, "character": 29},
+                        },
+                        "title": "(function(): int)",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
     def test_serverless_ide_hover(self) -> None:
         variables = dict(self.prepare_serverless_ide_environment())
@@ -541,32 +887,45 @@ class TestLsp(TestCase[LspTestDriver]):
                 },
                 result=None,
                 powered_by="serverless_ide",
-                wait=True,
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
+    def test_serverless_ide_file_touched_on_disk(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("hover.php"))
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_file_on_disk_change"),
+                use_serverless_ide=True,
             )
             .notification(
-                comment="make local, unsaved change to the file",
-                method="textDocument/didChange",
+                method="textDocument/didOpen",
                 params={
-                    "textDocument": {"uri": "${php_file_uri}", "version": 2},
-                    "contentChanges": [
-                        {
-                            "text": """\
-<?hh  //strict
-// comment
-function a_hover(): int {
-  return b_hover();
-}
-# Another comment describing b_hover.
-function b_hover(): int {
-  return 42;
-}
-"""
-                        }
-                    ],
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .notification(
+                method="workspace/didChangeWatchedFiles",
+                params={"changes": [{"uri": "${php_file_uri}", "type": 2}]},
+            )
+            .wait_for_notification(
+                comment="wait for sIDE to process file change",
+                method="telemetry/event",
+                params={
+                    "type": 4,
+                    "message": "[client-ide] Done processing file changes",
                 },
             )
             .request(
-                comment="another hover over function invocation",
                 method="textDocument/hover",
                 params={
                     "textDocument": {"uri": "${php_file_uri}"},
@@ -575,7 +934,7 @@ function b_hover(): int {
                 result={
                     "contents": [
                         {"language": "hack", "value": "int"},
-                        "Another comment describing b_hover.",
+                        "A comment describing b_hover.",
                     ],
                     "range": {
                         "start": {"line": 3, "character": 9},
@@ -655,4 +1014,218 @@ function b_hover(): int {
         self.prepare_server_environment()
         variables = self.setup_php_file("non_blocking.php")
         self.test_driver.start_hh_loop_forever_assert_timeout()
-        self.load_and_run("non_blocking", variables, wait_for_server=False)
+        spec = (
+            self.initialize_spec(LspTestSpec("non_blocking"), use_serverless_ide=False)
+            .wait_for_hh_server_ready()
+            .request(
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 7, "character": 11},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/non_blocking.php",
+                        "range": {
+                            "start": {"line": 2, "character": 9},
+                            "end": {"line": 2, "character": 32},
+                        },
+                        "title": "non_blocking_definition",
+                    }
+                ],
+                wait_id="definition request",
+            )
+            .notification(
+                comment="remove hh_loop_forever() invocation to break the infinite loop",
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${root_path}/__hh_loop_forever_foo.php",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": """\
+<?hh // strict
+
+function __hh_loop_forever_foo(): int {
+  return 4;
+}
+""",
+                    }
+                },
+            )
+            .wait_for_response(wait_id="definition request")
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
+
+    def test_serverless_ide_hierarchy_file_change_on_disk(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("incremental_derived.php"))
+        changed_php_file_uri = self.repo_file("incremental_base.php")
+        variables.update({"changed_php_file_uri": changed_php_file_uri})
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_hierarchy_file_change_on_disk"),
+                use_serverless_ide=True,
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="hover before change to class hierarchy should be `int`",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 7, "character": 14},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "public function foo(): int"},
+                        "Return type: `int`",
+                        "Full name: `BaseClassIncremental::foo`",
+                    ],
+                    "range": {
+                        "start": {"line": 7, "character": 12},
+                        "end": {"line": 7, "character": 15},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .write_to_disk(
+                uri=changed_php_file_uri,
+                contents="""\
+<?hh // strict
+class BaseClassIncremental {
+  public function foo(): string { return ''; }
+}
+""",
+                notify=True,
+            )
+            .wait_for_notification(
+                comment="wait for sIDE to process file change",
+                method="telemetry/event",
+                params={
+                    "type": 4,
+                    "message": "[client-ide] Done processing file changes",
+                },
+            )
+            .request(
+                comment="hover after change to class hierarchy should be `string`",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 7, "character": 14},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "public function foo(): string"},
+                        "Return type: `string`",
+                        "Full name: `BaseClassIncremental::foo`",
+                    ],
+                    "range": {
+                        "start": {"line": 7, "character": 12},
+                        "end": {"line": 7, "character": 15},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
+    def test_serverless_ide_decl_in_unsaved_buffer_changed(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("hover.php"))
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_decl_in_unsaved_buffer_changed"),
+                use_serverless_ide=True,
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="hover over function invocation",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 16},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "int"},
+                        "A comment describing b_hover.",
+                    ],
+                    "range": {
+                        "start": {"line": 3, "character": 9},
+                        "end": {"line": 3, "character": 16},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="make local, unsaved change to the file",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}", "version": 2},
+                    "contentChanges": [
+                        {
+                            "text": """\
+<?hh // strict
+// comment
+function a_hover(): int {
+  return b_hover();
+}
+# A comment describing b_hover.
+function b_hover(): string {
+  return 42;
+}
+"""
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="another hover over function invocation, should be string now",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 16},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "string"},
+                        "A comment describing b_hover.",
+                    ],
+                    "range": {
+                        "start": {"line": 3, "character": 9},
+                        "end": {"line": 3, "character": 16},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)

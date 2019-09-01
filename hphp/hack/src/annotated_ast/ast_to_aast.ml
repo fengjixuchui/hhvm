@@ -11,22 +11,22 @@ open Ast
 open Core_kernel
 module SN = Naming_special_names
 
-type ('ex, 'fb, 'en) class_body = {
+type ('ex, 'fb, 'en, 'hi) class_body = {
   c_uses: Aast.hint list;
   c_use_as_aliases: Aast.use_as_alias list;
   c_insteadof_aliases: Aast.insteadof_alias list;
-  c_method_redeclarations: ('ex, 'fb, 'en) Aast.method_redeclaration list;
+  c_method_redeclarations: ('ex, 'fb, 'en, 'hi) Aast.method_redeclaration list;
   c_xhp_attr_uses: Aast.hint list;
   c_xhp_category: (pos * pstring list) option;
   c_reqs: (Aast.hint * Aast.is_extends) list;
-  c_consts: ('ex, 'fb, 'en) Aast.class_const list;
-  c_typeconsts: ('ex, 'fb, 'en) Aast.class_typeconst list;
-  c_vars: ('ex, 'fb, 'en) Aast.class_var list;
-  c_methods: ('ex, 'fb, 'en) Aast.method_ list;
-  c_attributes: ('ex, 'fb, 'en) Aast.class_attr list;
+  c_consts: ('ex, 'fb, 'en, 'hi) Aast.class_const list;
+  c_typeconsts: ('ex, 'fb, 'en, 'hi) Aast.class_typeconst list;
+  c_vars: ('ex, 'fb, 'en, 'hi) Aast.class_var list;
+  c_methods: ('ex, 'fb, 'en, 'hi) Aast.method_ list;
+  c_attributes: ('ex, 'fb, 'en, 'hi) Aast.class_attr list;
   c_xhp_children: (pos * Aast.xhp_child) list;
-  c_xhp_attrs: ('ex, 'fb, 'en) Aast.xhp_attr list;
-  c_pu_enums: ('ex, 'fb, 'en) Aast.pu_enum list;
+  c_xhp_attrs: ('ex, 'fb, 'en, 'hi) Aast.xhp_attr list;
+  c_pu_enums: ('ex, 'fb, 'en, 'hi) Aast.pu_enum list;
 }
 
 let make_empty_class_body =
@@ -79,7 +79,8 @@ let reification reified attributes =
 let converter
     (expr_annotation : Ast_defs.pos -> 'ex)
     (func_body_ann : 'fb)
-    (env_annotation : 'en) =
+    (env_annotation : 'en)
+    (hint_annotation : 'hi) =
   let rec on_variadic_hint h = optional on_hint h
   and get_pos_shape_name name =
     match name with
@@ -137,6 +138,7 @@ let converter
     | Haccess (root, id, ids) -> (p, on_haccess root id ids)
     | Hsoft h -> (p, Aast.Hsoft (on_hint h))
     | Hlike h -> (p, Aast.Hlike (on_hint h))
+    | Hpu_access (h, id) -> (p, Aast.Hpu_access (on_hint h, id))
   and on_class_elt body elt =
     match elt with
     | Attributes attrs ->
@@ -414,9 +416,16 @@ let converter
     }
   and on_fun_param param =
     let (p, name) = param.param_id in
+    let visibility =
+      match param.param_modifier with
+      | Some Public -> Some Aast.Public
+      | Some Private -> Some Aast.Private
+      | Some Protected -> Some Aast.Protected
+      | _ -> None
+    in
     {
       Aast.param_annotation = expr_annotation p;
-      param_hint = optional on_hint param.param_hint;
+      param_type_hint = on_type_hint param.param_hint;
       param_is_reference = param.param_is_reference;
       param_is_variadic = param.param_is_variadic;
       param_pos = p;
@@ -425,6 +434,7 @@ let converter
       param_callconv = param.param_callconv;
       param_user_attributes =
         on_list on_user_attribute param.param_user_attributes;
+      param_visibility = visibility;
     }
   and determine_variadicity params =
     match params with
@@ -445,7 +455,7 @@ let converter
           on_list on_user_attribute attribute.fa_user_attributes;
         fa_namespace = attribute.fa_namespace;
       }
-  and on_type_hint ta = (expr_annotation Pos.none, optional on_hint ta)
+  and on_type_hint ta = (hint_annotation, optional on_hint ta)
   and on_fun f =
     let body = on_block f.f_body in
     let body = { Aast.fb_ast = body; Aast.fb_annotation = func_body_ann } in
@@ -543,12 +553,14 @@ let converter
       kinds
   and on_class_var xhp_info h attrs kinds variadic doc_com (span, id, eopt) =
     let cv_final = mem kinds Final in
+    let cv_abstract = mem kinds Abstract in
     let cv_visibility = get_visibility_from_kinds kinds in
     let cv_is_static = mem kinds Static in
     Aast.
       {
         cv_final;
         cv_xhp_attr = xhp_info;
+        cv_abstract;
         cv_visibility;
         cv_type = h;
         cv_id = id;
@@ -854,5 +866,8 @@ let convert_program
     (expr_annotation : Ast_defs.pos -> 'ex)
     (func_body_ann : 'fb)
     (env_annotation : 'en)
-    (p : Ast.program) : ('ex, 'fb, 'en) Aast.program =
-  (converter expr_annotation func_body_ann env_annotation)#on_program p
+    (hint_annotation : 'hi)
+    (p : Ast.program) : ('ex, 'fb, 'en, 'hi) Aast.program =
+  (converter expr_annotation func_body_ann env_annotation hint_annotation)
+    #on_program
+    p

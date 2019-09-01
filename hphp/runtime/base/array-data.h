@@ -87,11 +87,12 @@ struct ArrayData : MaybeCountable {
     kEmptyKind = 2,   // The singleton static empty array
     kApcKind = 3,     // APCLocalArray
     kGlobalsKind = 4, // GlobalsArray
-    kShapeKind = 5,   // Shape
-    kDictKind = 6,    // Hack dict
-    kVecKind = 7,     // Hack vec
-    kKeysetKind = 8,  // Hack keyset
-    kNumKinds = 9     // insert new values before kNumKinds.
+    kRecordKind = 5,  // RecordArray
+    kShapeKind = 6,   // Shape
+    kDictKind = 7,    // Hack dict
+    kVecKind = 8,     // Hack vec
+    kKeysetKind = 9,  // Hack keyset
+    kNumKinds = 10    // insert new values before kNumKinds.
   };
 
   /*
@@ -197,7 +198,7 @@ public:
    * DArrays are compatible when it is not set. Empty arrays are always
    * compatible. No other types are compatible.
    *
-   * This function will return staticEmptyShapeArray when this is empty and it
+   * This function will return ArrayData::CreateShape when this is empty and it
    * will return this otherwise.
    */
   ArrayData* toShapeInPlaceIfCompatible();
@@ -278,6 +279,7 @@ public:
   bool isShape() const;
   bool isVecArray() const;
   bool isKeyset() const;
+  bool isRecordArray() const;
 
   /*
    * Whether the ArrayData is backed by PackedArray or MixedArray.
@@ -848,6 +850,7 @@ static_assert(ArrayData::kGlobalsKind == uint8_t(HeaderKind::Globals), "");
 static_assert(ArrayData::kShapeKind == uint8_t(HeaderKind::Shape), "");
 static_assert(ArrayData::kDictKind == uint8_t(HeaderKind::Dict), "");
 static_assert(ArrayData::kVecKind == uint8_t(HeaderKind::VecArray), "");
+static_assert(ArrayData::kRecordKind == uint8_t(HeaderKind::RecordArray), "");
 
 //////////////////////////////////////////////////////////////////////
 
@@ -1009,18 +1012,30 @@ void raiseHackArrCompatMissingSetOp();
 std::string makeHackArrCompatImplicitArrayKeyMsg(const TypedValue* key);
 void raiseHackArrCompatImplicitArrayKey(const TypedValue* key);
 
+StringData* getHackArrCompatNullHackArrayKeyMsg();
+
 bool checkHACRefBind();
 bool checkHACFalseyPromote();
 bool checkHACEmptyStringPromote();
 bool checkHACCompare();
 bool checkHACArrayPlus();
 bool checkHACArrayKeyCast();
+bool checkHACNullHackArrayKey();
 
 /*
  * Like isStrictlyInteger() but changes behavior with the value of `ic'.
  */
 template <IntishCast IC = IntishCast::None>
 folly::Optional<int64_t> tryIntishCast(const StringData* key);
+
+/*
+ * Add a provenance tag for the current vmpc to `ad`, copying instead from
+ * `src` if it's provided (and if it has a tag).  Returns `ad` for convenience.
+ *
+ * This function asserts that `ad` is singly reference counted.  It does not
+ * assert that `ad` does not have an existing tag, and instead overrides it.
+ */
+ArrayData* tagArrProv(ArrayData* ad, const ArrayData* src = nullptr);
 
 ///////////////////////////////////////////////////////////////////////////////
 

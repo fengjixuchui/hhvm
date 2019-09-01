@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
@@ -33,7 +33,6 @@ and constraint_kind =
   | Constraint_as
   | Constraint_eq
   | Constraint_super
-  | Constraint_pu_from
 
 and reified = bool
 

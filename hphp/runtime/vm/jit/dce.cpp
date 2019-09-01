@@ -179,7 +179,6 @@ bool canDCE(IRInstruction* inst) {
   case LdClosure:
   case LdClsCtx:
   case LdClsCctx:
-  case LdFuncMFunc:
   case LdSmashable:
   case LdSmashableFunc:
   case LdClsFromClsMeth:
@@ -197,7 +196,6 @@ bool canDCE(IRInstruction* inst) {
   case LdPropAddr:
   case LdObjClass:
   case LdClsName:
-  case LdARFuncPtr:
   case LdARNumParams:
   case LdFuncCls:
   case LdFuncNumParams:
@@ -253,8 +251,6 @@ bool canDCE(IRInstruction* inst) {
   case OrdStr:
   case ChrInt:
   case CheckRange:
-  case LdARInvName:
-  case PackMagicArgs:
   case LdMBase:
   case MethodExists:
   case LdTVAux:
@@ -377,7 +373,6 @@ bool canDCE(IRInstruction* inst) {
   case CheckTypeMem:
   case CheckVArray:
   case CheckDArray:
-  case CheckFuncMMNonMagic:
   case CheckSmashableClass:
   case HintLocInner:
   case HintStkInner:
@@ -388,7 +383,6 @@ bool canDCE(IRInstruction* inst) {
   case AssertLoc:
   case AssertStk:
   case AssertMBase:
-  case AssertARFunc:
   case CheckInit:
   case CheckInitMem:
   case CheckCold:
@@ -484,7 +478,6 @@ bool canDCE(IRInstruction* inst) {
   case LdObjMethodD:
   case LdObjMethodS:
   case LdObjInvoke:
-  case LdArrFuncCtx:
   case LdFunc:
   case LdFuncCached:
   case LookupFuncCached:
@@ -506,6 +499,7 @@ bool canDCE(IRInstruction* inst) {
   case InitPackedLayoutArrayLoop:
   case NewKeysetArray:
   case NewRecord:
+  case NewRecordArray:
   case NewStructArray:
   case NewStructDArray:
   case NewStructDict:
@@ -535,7 +529,6 @@ bool canDCE(IRInstruction* inst) {
   case IncRef:
   case DecRef:
   case DecRefNZ:
-  case FuncGuard:
   case DefFP:
   case DefSP:
   case Count:
@@ -697,6 +690,7 @@ bool canDCE(IRInstruction* inst) {
   case EmptyElem:
   case ProfileArrayKind:
   case ProfileType:
+  case ProfileCall:
   case ProfileMethod:
   case ProfileSubClsCns:
   case CheckPackedArrayDataBounds:
@@ -713,14 +707,12 @@ bool canDCE(IRInstruction* inst) {
   case InitExtraArgs:
   case InitCtx:
   case CheckSurpriseFlagsEnter:
-  case CheckARMagicFlag:
-  case StARNumArgsAndFlags:
-  case StARInvName:
   case ExitPlaceholder:
   case ThrowOutOfBounds:
   case ThrowInvalidArrayKey:
   case ThrowInvalidOperation:
   case ThrowArithmeticError:
+  case ThrowCallReifiedFunctionWithoutGenerics:
   case ThrowDivisionByZeroError:
   case ThrowDivisionByZeroException:
   case ThrowHasThisNeedStatic:
@@ -762,6 +754,7 @@ bool canDCE(IRInstruction* inst) {
   case ResolveTypeStruct:
   case CheckRDSInitialized:
   case MarkRDSInitialized:
+  case ProfileProp:
     return false;
 
   case SameShape:

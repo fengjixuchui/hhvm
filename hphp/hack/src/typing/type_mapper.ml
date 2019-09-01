@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -12,13 +12,10 @@ open Core_kernel
 [@@@warning "+33"]
 open Common
 open Typing_defs
+open Typing_env_types
 
 module Env = Typing_env
 module Reason = Typing_reason
-
-(* Mapping environment threaded through all function calls:
- * - typing environment *)
-type env = Env.env
 
 (* Mapping result - updated environment, mapped type *)
 type result = env * locl ty
@@ -68,7 +65,7 @@ class shallow_type_mapper: type_mapper_type = object(this)
   method on_infinite_tvar = this#on_tvar
   method on_tnonnull env r = env, (r, Tnonnull)
   method on_tdynamic env r = env, (r, Tdynamic)
-  method on_tany env r = env, (r, Tany)
+  method on_tany env r = env, (r, Typing_defs.make_tany ())
   method on_terr env r = env, (r, Terr)
   method on_tanon env r fun_arity id = env, (r, Tanon (fun_arity, id))
   method on_tprim env r p = env, (r, Tprim p)
@@ -96,7 +93,7 @@ class shallow_type_mapper: type_mapper_type = object(this)
   method on_type env (r, ty) = match ty with
     | Tvar n -> this#on_tvar env r n
     | Tnonnull -> this#on_tnonnull env r
-    | Tany -> this#on_tany env r
+    | Tany _ -> this#on_tany env r
     | Terr -> this#on_terr env r
     | Tanon (fun_arity, id) -> this#on_tanon env r fun_arity id
     | Tprim p -> this#on_tprim env r p
@@ -119,6 +116,12 @@ class shallow_type_mapper: type_mapper_type = object(this)
     | Tobject -> this#on_tobject env r
     | Tshape (shape_kind, fdm) -> this#on_tshape env r shape_kind fdm
     | Tdestructure tyl -> this#on_tdestructure env r tyl
+    | Tpu (base, enum, kind) ->
+      let env, ty = this#on_type env base in
+      (env, (r, Tpu (ty, enum, kind)))
+    | Tpu_access (base, access) ->
+      let env, ty = this#on_type env base in
+      (env, (r, Tpu_access (ty, access)))
 end
 
 (* Mixin class - adding it to shallow type mapper creates a mapper that
@@ -173,13 +176,13 @@ class deep_type_mapper = object(this)
     env, (r, Toption ty)
   method! on_tfun env r ft =
     let on_param env param =
-      let env, ty = this#on_type env param.fp_type in
+      let env, ty = this#on_possibly_enforced_ty env param.fp_type in
       env, { param with fp_type = ty } in
     let env, params = List.map_env env ft.ft_params on_param in
-    let env, ret = this#on_type env ft.ft_ret in
+    let env, ret = this#on_possibly_enforced_ty env ft.ft_ret in
     let env, arity = match ft.ft_arity with
       | Fvariadic (min, ({ fp_type = p_ty; _ } as param)) ->
-        let env, p_ty = this#on_type env p_ty in
+        let env, p_ty = this#on_possibly_enforced_ty env p_ty in
         env, Fvariadic (min, { param with fp_type = p_ty })
       | x -> env, x
     in
@@ -212,12 +215,16 @@ class deep_type_mapper = object(this)
     | Some x ->
        let env, x = this#on_type env x in
        env, Some x
+
+  method private on_possibly_enforced_ty env x =
+    let env, et_type = this#on_type env x.et_type in
+    env, { x with et_type }
 end
 
 (* Mixin that expands type variables. *)
 class virtual tvar_expanding_type_mapper = object(this)
   method on_infinite_tvar (env : env) (r : Reason.t) (_ : int) : result =
-    env, (r, Tany)
+    env, (r, Typing_defs.make_tany ())
 
   method on_tvar env (r : Reason.t) n =
     let env, ty = Env.get_type env r n in

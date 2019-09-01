@@ -38,7 +38,6 @@
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/runtime/vm/unit-util.h"
 
-#include "hphp/runtime/vm/jit/func-guard.h"
 #include "hphp/runtime/vm/jit/mcgen.h"
 #include "hphp/runtime/vm/jit/tc.h"
 #include "hphp/runtime/vm/jit/types.h"
@@ -48,7 +47,6 @@
 #include "hphp/util/atomic-vector.h"
 #include "hphp/util/fixed-vector.h"
 #include "hphp/util/functional.h"
-#include "hphp/util/debug.h"
 #include "hphp/util/struct-log.h"
 #include "hphp/util/trace.h"
 
@@ -131,11 +129,6 @@ Func::~Func() {
   if (m_fullName != nullptr && m_maybeIntercepted != -1) {
     unregister_intercept_flag(fullNameStr(), &m_maybeIntercepted);
   }
-  if (jit::mcgen::initialized() && !RuntimeOption::EvalEnableReusableTC) {
-    // If Reusable TC is enabled then the prologue may have already been smashed
-    // and the memory may now be in use by another function.
-    jit::clobberFuncGuards(this);
-  }
 #ifndef NDEBUG
   validate();
   m_magic = ~m_magic;
@@ -185,8 +178,6 @@ void Func::freeClone() {
   if (jit::mcgen::initialized() && RuntimeOption::EvalEnableReusableTC) {
     // Free TC-space associated with func
     jit::tc::reclaimFunction(this);
-  } else {
-    jit::clobberFuncGuards(this);
   }
 
   if (m_funcId != InvalidFuncId) {
@@ -526,44 +517,6 @@ bool Func::isImmutableFrom(const Class* cls) const {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// Unit table entries.
-
-const FPIEnt* Func::findFPI(const FPIEnt* b, const FPIEnt* e, Offset o) {
-  /*
-   * We consider the "FCall" instruction part of the FPI region, but
-   * the corresponding push is not considered part of it.  (This
-   * means all offsets in the FPI region will have the partial
-   * ActRec on the stack.)
-   */
-
-  auto it =
-    std::lower_bound(b, e, o, [](const FPIEnt& f, Offset o) {
-      return f.m_fpushOff < o;
-    });
-
-  // Didn't find any candidates.
-  if (it == b) {
-    return nullptr;
-  }
-
-  const FPIEnt* fe = --it;
-
-  // Iterate through parents until we find a valid region.
-  while (true) {
-    if (fe->m_fpiEndOff >= o) {
-      return fe;
-    }
-
-    if (fe->m_parentIndex < 0) {
-      return nullptr;
-    }
-
-    fe = &b[fe->m_parentIndex];
-  }
-}
-
-
-///////////////////////////////////////////////////////////////////////////////
 // JIT data.
 
 int Func::numPrologues() const {
@@ -707,18 +660,6 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
       out << " parentIndex " << it->m_parentIndex;
     }
     out << std::endl;
-  }
-
-  if (opts.fpi) {
-    for (auto& fpi : fpitab()) {
-      out << " FPI " << fpi.m_fpushOff << "-" << fpi.m_fpiEndOff
-          << "; fpOff = " << fpi.m_fpOff;
-      if (fpi.m_parentIndex != -1) {
-        out << " parentIndex = " << fpi.m_parentIndex
-            << " (depth " << fpi.m_fpiDepth << ")";
-      }
-      out << '\n';
-    }
   }
 }
 

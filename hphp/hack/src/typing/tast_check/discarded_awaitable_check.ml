@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2018, Facebook, Inc.
  * All rights reserved.
  *
@@ -31,9 +31,10 @@ let rec enforce_not_awaitable env p ty =
   | r, Tclass ((_, awaitable), _, _) when
       awaitable = SN.Classes.cAwaitable ->
     Errors.discarded_awaitable p (Typing_reason.to_pos r)
-  | _, (Terr | Tany | Tnonnull | Tarraykind _ | Tprim _ | Toption _
+  | _, (Terr | Tany _ | Tnonnull | Tarraykind _ | Tprim _ | Toption _
     | Tvar _ | Tfun _ | Tabstract _ | Tclass _ | Ttuple _
-    | Tanon _ | Tobject | Tshape _ | Tdynamic | Tdestructure _) -> ()
+    | Tanon _ | Tobject | Tshape _ | Tdynamic | Tdestructure _ | Tpu _
+    | Tpu_access _) -> ()
 
 let enforce_nullable_or_not_awaitable env p ty =
   if can_be_null env ty then ()

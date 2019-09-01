@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -9,6 +9,7 @@
 
 open Core_kernel
 open Typing_defs
+open Typing_env_types
 
 module Reason = Typing_reason
 module Env = Typing_env
@@ -20,10 +21,8 @@ let is_object env ty =
 
 let sub_string
   (p : Pos.Map.key)
-  (env : Env.env)
-  (ty : locl ty) : Env.env =
-  let stringish_deprecated =
-    TypecheckerOptions.disallow_stringish_magic (Env.get_tcopt env) in
+  (env : env)
+  (ty : locl ty) : env =
   (* Under constraint-based inference, we implement sub_string as a subtype test.
    * All the cases in the legacy implementation just fall out from subtyping rules.
    * We test against ?(arraykey | bool | float | resource | object | dynamic |
@@ -42,15 +41,11 @@ let sub_string
   ] in
   let stringish =
     (Reason.Rwitness p, Tclass((p, SN.Classes.cStringish), Nonexact, [])) in
-  let tyl =
-    if stringish_deprecated
-    then tyl
-    else stringish::tyl in
   let stringlike = (Reason.Rwitness p, Toption (Reason.Rwitness p, Tunion tyl)) in
   Errors.try_
     (fun () -> Typing_subtype.sub_type env ty stringlike Errors.expected_stringlike)
     (fun _ ->
-      if stringish_deprecated && Typing_solver.is_sub_type env ty stringish then
+      if Typing_solver.is_sub_type env ty stringish then
         Errors.object_string_deprecated p
       else if is_object env ty then
         Errors.object_string p (Reason.to_pos (fst ty))

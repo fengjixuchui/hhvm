@@ -7,8 +7,9 @@
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use crate::lexable_token::LexableToken;
+use crate::lexable_token::{LexablePositionedToken, LexableToken};
 use crate::positioned_trivia::PositionedTrivia;
+use crate::source_text::SourceText;
 use crate::token_kind::TokenKind;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,11 +34,12 @@ pub struct PositionedTokenImpl {
 #[derive(Debug, Clone)]
 pub struct PositionedToken(pub Rc<PositionedTokenImpl>);
 
-impl LexableToken for PositionedToken {
+impl<'a> LexableToken<'a> for PositionedToken {
     type Trivia = PositionedTrivia;
 
     fn make(
         kind: TokenKind,
+        _source: &SourceText,
         offset: usize,
         width: usize,
         leading: Vec<Self::Trivia>,
@@ -131,6 +133,14 @@ impl PositionedToken {
         self.start_offset() + w
     }
 
+    pub fn leading_text<'a>(&self, source_text: &SourceText<'a>) -> &'a [u8] {
+        source_text.sub(self.leading_start_offset().unwrap(), self.leading_width())
+    }
+
+    pub fn trailing_text<'a>(&self, source_text: &SourceText<'a>) -> &'a [u8] {
+        source_text.sub(self.end_offset() + 1, self.trailing_width())
+    }
+
     // Similar convention to calling Rc::clone(x) instead of x.clone() to make it more explicit
     // that we are only cloning the reference, not the value
     pub fn clone_rc(x: &Self) -> Self {
@@ -155,3 +165,5 @@ impl PartialEq for PositionedToken {
     }
 }
 impl Eq for PositionedToken {}
+
+impl<'a> LexablePositionedToken<'a> for PositionedToken {}

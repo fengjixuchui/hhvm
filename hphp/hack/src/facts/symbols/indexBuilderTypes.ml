@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
@@ -6,7 +6,7 @@
  * LICENSE file in the "hack" directory of this source tree. An additional grant
  * of patent rights can be found in the PATENTS file in the same directory.
  *
-*)
+ *)
 
 type index_builder_context = {
   repo_folder: string;
@@ -18,6 +18,7 @@ type index_builder_context = {
   custom_service: string option;
   custom_repo_name: string option;
   include_builtins: bool;
+  silent: bool;
 }
 
 (* Fully parsed data structure *)

@@ -48,15 +48,13 @@
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-extern const StaticString
-  s_serializedNativeDataKey(std::string("\0native", 7));
-
 const StaticString
+  s_serializedNativeDataKey("\0native"),
   s_JsonSerializable("JsonSerializable"),
   s_jsonSerialize("jsonSerialize"),
   s_serialize("serialize"),
-  s_zero("\0", 1),
-  s_protected_prefix("\0*\0", 3),
+  s_zero("\0"),
+  s_protected_prefix("\0*\0"),
   s_PHP_DebugDisplay("__PHP_DebugDisplay"),
   s_PHP_Incomplete_Class("__PHP_Incomplete_Class"),
   s_PHP_Incomplete_Class_Name("__PHP_Incomplete_Class_Name"),
@@ -1519,11 +1517,11 @@ void VariableSerializer::serializeClsMeth(
 
     case Type::VarExport:
     case Type::PHPOutput:
-      m_buf->append("classMeth{\n    class(");
+      m_buf->append("class_meth(");
       write(clsName->data(), clsName->size());
-      m_buf->append(")\n    fun(");
+      m_buf->append(", ");
       write(funcName->data(), funcName->size());
-      m_buf->append(")\n}");
+      m_buf->append(')');
       break;
 
     case Type::VarDump:
@@ -1684,6 +1682,18 @@ void VariableSerializer::serializeArrayImpl(const ArrayData* arr) {
     arr->isVectorData(),
     kind
   );
+
+  if (m_type == Type::Internal && RuntimeOption::EvalArrayProvenance) {
+    if (kind == ArrayKind::Dict || kind == ArrayKind::Vec) {
+      if (auto tag = arrprov::getTag(arr)) {
+        auto const line = tag->line();
+        auto const filename = tag->filename();
+        m_buf->append("p:");
+        write(line);
+        write(filename->data(), filename->size());
+      }
+    }
+  }
 
   IterateKV(
     arr,
@@ -1982,7 +1992,7 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
           }
         }
 
-        auto const lookup = obj_cls->getDeclPropIndex(ctx, memberName.get());
+        auto const lookup = obj_cls->getDeclPropSlot(ctx, memberName.get());
         auto const slot = lookup.slot;
 
         if (slot != kInvalidSlot && lookup.accessible) {

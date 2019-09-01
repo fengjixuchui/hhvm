@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -24,6 +24,7 @@
 open Core_kernel
 open Aast
 open Typing_defs
+open Typing_env_types
 open Utils
 
 module Env = Typing_env
@@ -37,37 +38,26 @@ module Cls = Decl_provider.Class
 
 type env = {
   typedef_tparams : Nast.tparam list;
-  is_reactive: bool; (* The enclosing function is reactive *)
-  tenv: Env.env;
+  tenv: Typing_env_types.env;
 }
-
-let is_some_reactivity_attribute { ua_name = (_, name); _ } =
-  name = SN.UserAttributes.uaReactive ||
-  name = SN.UserAttributes.uaLocalReactive ||
-  name = SN.UserAttributes.uaShallowReactive
-
-(* During NastCheck, all reactivity kinds are the same *)
-let fun_is_reactive user_attributes =
-  List.exists user_attributes ~f:is_some_reactivity_attribute
-
 let rec fun_ tenv f =
   let env = { typedef_tparams = [];
               tenv = tenv;
-              is_reactive = fun_is_reactive f.f_user_attributes;
               } in
   let p, _ = f.f_name in
   (* Add type parameters to typing environment and localize the bounds
      and where constraints *)
   let ety_env = Phase.env_with_self env.tenv in
+  let f_tparams : decl tparam list = List.map f.f_tparams
+    ~f:(Decl_hint.aast_tparam_to_decl_tparam env.tenv.decl_env) in
   let tenv, constraints =
-    Phase.localize_generic_parameters_with_bounds env.tenv f.f_tparams
+    Phase.localize_generic_parameters_with_bounds env.tenv f_tparams
       ~ety_env in
   let tenv = add_constraints p tenv constraints in
   let tenv =
     Phase.localize_where_constraints ~ety_env tenv f.f_where_constraints in
   let env = { env with
     tenv;
-    is_reactive = env.is_reactive || fun_is_reactive f.f_user_attributes;
   } in
   maybe hint env (hint_of_type_hint f.f_ret);
 
@@ -85,7 +75,7 @@ and hint env (p, h) =
   hint_ env p h
 
 and hint_ env p = function
-  | Hany  | Hmixed | Hnonnull | Hprim _  | Hthis | Haccess _ | Habstr _  |
+  | Hany | Herr | Hmixed | Hnonnull | Hprim _  | Hthis | Haccess _ | Habstr _  |
     Hdynamic | Hnothing ->
      ()
   | Harray (ty1, ty2) ->
@@ -126,13 +116,14 @@ and hint_ env p = function
       let compute_hint_for_shape_field_info { sfi_hint; _; } =
         hint env sfi_hint in
       List.iter ~f:compute_hint_for_shape_field_info nsi_field_map
+  | Hpu_access (h, _) -> hint env h
 
 and check_happly unchecked_tparams env h =
-  let decl_ty = Decl_hint.hint env.Env.decl_env h in
+  let decl_ty = Decl_hint.hint env.decl_env h in
   let unchecked_tparams =
     List.map unchecked_tparams begin fun t ->
       let cstrl = List.map t.tp_constraints (fun (ck, cstr) ->
-        let cstr = Decl_hint.hint env.Env.decl_env cstr in
+        let cstr = Decl_hint.hint env.decl_env cstr in
         (ck, cstr)) in
       {
         Typing_defs.tp_variance = t.tp_variance;
@@ -142,7 +133,8 @@ and check_happly unchecked_tparams env h =
         tp_user_attributes = t.tp_user_attributes;
       }
     end in
-  let tyl = List.map unchecked_tparams (fun t -> Reason.Rwitness (fst t.tp_name), Tany) in
+  let tyl = List.map unchecked_tparams
+    (fun t -> Reason.Rwitness (fst t.tp_name), Typing_defs.make_tany ()) in
   let subst = Inst.make_subst unchecked_tparams tyl in
   let decl_ty = Inst.instantiate subst decl_ty in
   match decl_ty with
@@ -186,13 +178,13 @@ and check_happly unchecked_tparams env h =
 
 and class_ tenv c =
   let env = { typedef_tparams = [];
-              is_reactive = false;
               tenv = tenv;
             } in
   (* Add type parameters to typing environment and localize the bounds *)
+  let c_tparam_list : decl tparam list = List.map c.c_tparams.c_tparam_list
+    ~f:(Decl_hint.aast_tparam_to_decl_tparam env.tenv.decl_env) in
   let tenv, constraints = Phase.localize_generic_parameters_with_bounds
-               tenv c.c_tparams.c_tparam_list
-               ~ety_env:(Phase.env_with_self tenv) in
+    tenv c_tparam_list ~ety_env:(Phase.env_with_self tenv) in
   let tenv = add_constraints (fst c.c_name) tenv constraints in
   (* When where clauses are present, we need instantiate those type
    * parameters before checking base class *)
@@ -228,14 +220,13 @@ and add_constraints pos tenv (cstrs: locl where_constraint list) =
   List.fold_left cstrs ~init:tenv ~f:(add_constraint pos)
 
 and method_ env m =
-  let env =
-    { env with is_reactive = fun_is_reactive m.m_user_attributes } in
   (* Add method type parameters to environment and localize the bounds
      and where constraints *)
   let ety_env = Phase.env_with_self env.tenv in
+  let m_tparams : decl tparam list = List.map m.m_tparams
+    ~f:(Decl_hint.aast_tparam_to_decl_tparam env.tenv.decl_env) in
   let tenv, constraints =
-    Phase.localize_generic_parameters_with_bounds env.tenv m.m_tparams
-      ~ety_env in
+    Phase.localize_generic_parameters_with_bounds env.tenv m_tparams ~ety_env in
   let tenv = add_constraints (fst m.m_name) tenv constraints in
   let tenv =
     Phase.localize_where_constraints ~ety_env tenv m.m_where_constraints in
@@ -246,7 +237,7 @@ and method_ env m =
   maybe hint env (hint_of_type_hint m.m_ret)
 
 and fun_param env param =
-  maybe hint env param.param_hint
+  maybe hint env (hint_of_type_hint param.param_type_hint)
 
 let typedef tenv t =
   let env = { (* Since typedefs cannot have constraints we shouldn't check
@@ -255,7 +246,6 @@ let typedef tenv t =
                *)
               typedef_tparams = t.t_tparams;
               tenv = tenv;
-              is_reactive = false;
               } in
   maybe hint env t.t_constraint;
   hint env t.t_kind

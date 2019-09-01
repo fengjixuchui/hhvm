@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
@@ -21,7 +21,7 @@ let test () =
         {
           default_loop_input with
           persistent_client_request =
-            Some (UncleanDisconect (ServerCommandTypes.STATUS false));
+            Some (UncleanDisconect (ServerCommandTypes.STATUS (false, None)));
         })
   in
   match env.ServerEnv.persistent_client with

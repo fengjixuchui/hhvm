@@ -1,16 +1,12 @@
-File "lambda_prop.php", line 24, characters 39-52:
-Cannot determine types of lambda parameters in strict mode. Please add type hints on parameters. (Typing[4224])
-File "lambda_prop.php", line 26, characters 39-52:
-Cannot determine types of lambda parameters in strict mode. Please add type hints on parameters. (Typing[4224])
-File "lambda_prop.php", line 28, characters 28-41:
-Cannot determine types of lambda parameters in strict mode. Please add type hints on parameters. (Typing[4224])
-File "lambda_prop.php", line 30, characters 28-41:
-Cannot determine types of lambda parameters in strict mode. Please add type hints on parameters. (Typing[4224])
-File "lambda_prop.php", line 36, characters 28-54:
-Cannot determine types of lambda parameters in strict mode. Please add type hints on parameters. (Typing[4224])
-File "lambda_prop.php", line 38, characters 28-54:
-Cannot determine types of lambda parameters in strict mode. Please add type hints on parameters. (Typing[4224])
-File "lambda_prop.php", line 40, characters 28-54:
-Cannot determine types of lambda parameters in strict mode. Please add type hints on parameters. (Typing[4224])
-File "lambda_prop.php", line 42, characters 28-54:
-Cannot determine types of lambda parameters in strict mode. Please add type hints on parameters. (Typing[4224])
+File "lambda_prop.php", line 19, characters 13-14:
+Invalid argument (Typing[4110])
+File "lambda_prop.php", line 18, characters 49-50:
+Expected T1
+File "lambda_prop.php", line 18, characters 32-33:
+But got dynamic because it is an unenforceable type
+File "lambda_prop.php", line 20, characters 10-33:
+Invalid return type (Typing[4110])
+File "lambda_prop.php", line 18, characters 61-75:
+Expected ~(T2, Contra<T1>) because it is an unenforceable type
+File "lambda_prop.php", line 20, characters 10-33:
+But got (~T2, Contra<mixed>)

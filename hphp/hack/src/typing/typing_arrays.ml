@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -10,6 +10,7 @@
 open Core_kernel
 open Common
 open Typing_defs
+open Typing_env_types
 open Type_mapper
 
 module Env = Typing_env
@@ -58,7 +59,10 @@ let union_keys = union
 
 let union_values env values =
   let unknown = List.find values (fun ty ->
-    snd (snd (TUtils.fold_unresolved env ty)) = Tany) in
+    match snd (snd (TUtils.fold_unresolved env ty)) with
+    | Tany _ -> true
+    | _ -> false
+  ) in
   match unknown with
   | Some (r, _) -> env, (r, TUtils.tany env)
   | None -> union env values

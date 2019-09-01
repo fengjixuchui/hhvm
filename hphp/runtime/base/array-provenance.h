@@ -24,10 +24,12 @@
 #include "hphp/util/low-ptr.h"
 #include "hphp/util/rds-local.h"
 
+#include <folly/Format.h>
 #include <folly/Optional.h>
 
 namespace HPHP {
 
+struct ArrayData;
 struct StringData;
 
 namespace arrprov {
@@ -45,7 +47,9 @@ struct Tag {
   Tag() = default;
   Tag(const StringData* filename, int line)
     : m_filename(filename)
-    , m_line(line) {}
+    , m_line(line) {
+    assertx(m_filename);
+  }
 
   const StringData* filename() const { return m_filename; }
   int line() const { return m_line; }
@@ -55,6 +59,8 @@ struct Tag {
            m_line == other.m_line;
   }
   bool operator!=(const Tag& other) const { return !(*this == other); }
+
+  std::string toString() const;
 
 private:
   const StringData* m_filename{nullptr};
@@ -83,7 +89,7 @@ struct ArrayProvenanceTable {
  *
  * Requires VM regs to be synced or for a sync point to be available.
  */
-Tag tagFromProgramCounter();
+folly::Optional<Tag> tagFromProgramCounter();
 
 /*
  * Whether `ad` or `tv` admits a provenance tag---i.e., whether it's either a
@@ -103,6 +109,12 @@ folly::Optional<Tag> getTag(const ArrayData* ad);
 void setTag(ArrayData* ad, const Tag& tag);
 
 /*
+ * Set the provenance tag for `ad`, overriding any previous value that may have
+ * been recorded.
+ */
+void setTagReplace(ArrayData* ad, const Tag& tag);
+
+/*
  * Copy the provenance tag from `src` to `dest`.
  */
 void copyTag(const ArrayData* src, ArrayData* dest);
@@ -117,6 +129,13 @@ void copyTag(const ArrayData* src, ArrayData* dest);
 void copyTagStatic(const ArrayData* src, ArrayData* dest);
 
 /*
+ * Tag an array and all of its subarrays.
+ *
+ * If an empty or static array is encountered, it will not be tagged.
+ */
+void setTagRecursive(ArrayData* ad, const Tag& tag);
+
+/*
  * Clear a tag for a released array---only call this if the array is henceforth
  * unreachable.
  */
@@ -125,8 +144,29 @@ void clearTag(const ArrayData* ad);
 /*
  * Tag `tv` with provenance for the current PC and unit (if it admits a tag and
  * doesn't already have one).
+ *
+ * tagTV() takes logical ownership of `tv`, and if it makes any modifications,
+ * it will incref the new value and decref the old one.  As such, generally the
+ * appropriate use of this function is:
+ *
+ *    tv = tagTV(tv);
+ *
+ * without touching the usual TV mutation machinery.
  */
 TypedValue tagTV(TypedValue tv);
+TypedValue tagTVKnown(TypedValue tv, Tag tag);
+
+/*
+ * Produce a static empty array (with the same kind as `base`) with the given
+ * provenance tag.  If no tag is provided, we attempt to make one from vmpc(),
+ * and failing that we just return the input array.
+ *
+ * Should only be called with staticEmptyVecArray() or staticEmptyDictArray().
+ */
+const ArrayData* makeEmptyArray(const ArrayData* base,
+                          folly::Optional<Tag> tag = folly::none);
+ArrayData* makeEmptyVec();
+ArrayData* makeEmptyDict();
 
 ///////////////////////////////////////////////////////////////////////////////
 

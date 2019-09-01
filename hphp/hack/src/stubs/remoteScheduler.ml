@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
@@ -15,7 +15,12 @@ type schedule_env = {
   num_remote_workers: int;
   root: Path.t;
   timeout: int;
+  version_specifier: string option;
   workers: MultiWorker.worker list option;
 }
+
+let default_env ~bin_root ~root =
+  ignore (bin_root, root);
+  failwith "not implemented"
 
 let go _ = failwith "not implemented"

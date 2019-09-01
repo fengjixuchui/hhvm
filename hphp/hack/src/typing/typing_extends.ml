@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -100,27 +100,6 @@ let check_members_implemented check_private parent_reason reason
         Errors.member_not_implemented member_name parent_reason reason defn_reason
       | _ -> ()
   end
-
-(* When constant is overridden we need to check if the type is
- * compatible with the previous type defined in the parent.
- *)
-let check_types_for_const env
-    parent_abstract parent_type class_abstract class_type =
-  match (parent_type, class_type) with
-    | fty_parent, fty_child when parent_abstract && class_abstract ->
-      (* redeclaration of an abstract constant *)
-      Phase.sub_type_decl env fty_child fty_parent Errors.type_constant_redeclaration
-    | fty_parent, _ when parent_abstract ->
-      (* const definition constrained by parent abstract const *)
-      Phase.sub_type_decl env class_type fty_parent Errors.type_constant_mismatch
-    | _, _ when class_abstract ->
-      (* Trying to override concrete type with an abstract one *)
-      let pos = Reason.to_pos (fst class_type) in
-      let parent_pos = Reason.to_pos (fst parent_type) in
-      Errors.abstract_concrete_override pos parent_pos `constant
-    | (_, _) ->
-      (* types should be the same *)
-      Phase.unify_decl env parent_type class_type Errors.type_constant_mismatch
 
 (* An abstract member can be declared in multiple ancestors. Sometimes these
  * declarations can be different, but yet compatible depending on which ancestor
@@ -246,16 +225,16 @@ let check_override env ~check_member_unique member_name mem_source ?(ignore_fun_
   let check_params = should_check_params parent_class class_ in
   check_class_elt_visibility parent_class_elt class_elt;
   let lazy fty_child = class_elt.ce_type in
+  let lazy fty_parent = parent_class_elt.ce_type in
   let pos = Reason.to_pos (fst fty_child) in
+  let parent_pos = Reason.to_pos (fst fty_parent) in
   if class_elt.ce_const <> parent_class_elt.ce_const then (
-    let lazy fty_parent = parent_class_elt.ce_type in
-    let parent_pos = Reason.to_pos (fst fty_parent) in
     Errors.overriding_prop_const_mismatch parent_pos parent_class_elt.ce_const
       pos class_elt.ce_const);
   if check_params then
     Errors.try_ (fun () ->
-    match parent_class_elt.ce_type, fty_child with
-    | lazy (r_parent, Tfun ft_parent), (r_child, Tfun ft_child) ->
+    match fty_parent, fty_child with
+    | (r_parent, Tfun ft_parent), (r_child, Tfun ft_child) ->
       let is_static = Cls.has_smethod parent_class member_name in
       (* Add deps here when we override *)
       let subtype_funs = SubType.subtype_method
@@ -273,31 +252,41 @@ let check_override env ~check_member_unique member_name mem_source ?(ignore_fun_
         | false, false ->
           (* Multiple concrete trait definitions, error *)
           Errors.multiple_concrete_defs
-            (Reason.to_pos r_child)
-            (Reason.to_pos r_parent)
+            pos
+            parent_pos
             (class_elt.ce_origin)
             (parent_class_elt.ce_origin)
             member_name
-            ((Cls.name class_))
+            (Cls.name class_)
         | _ -> () end;
         (* these unify errors are collected into errorl *)
-        ignore(subtype_funs env r2 ft2 r1 ft1 Errors.unify_error) in
+        subtype_funs env r2 ft2 r1 ft1 Errors.unify_error in
       check_ambiguous_inheritance check (r_parent, ft_parent) (r_child, ft_child)
-        (Reason.to_pos r_child) class_ class_elt.ce_origin
-    | lazy fty_parent, _ ->
-      begin match snd fty_parent, snd fty_child with
-        | Tany, Tany -> ()
-        | Tany, _ ->
-          Errors.decl_override_missing_hint @@ Reason.to_pos (fst fty_parent)
-        | _, Tany ->
-          Errors.decl_override_missing_hint @@ Reason.to_pos (fst fty_child)
-        | _, _ -> ()
-      end;
-      Typing_ops.unify_decl pos Typing_reason.URnone env fty_parent fty_child
+        pos class_ class_elt.ce_origin
+    | fty_parent, _ ->
+      (match snd fty_parent, snd fty_child with
+        | Tany _, Tany _ -> ()
+        | Tany _, _ ->
+          Errors.decl_override_missing_hint parent_pos
+        | _, Tany _ ->
+          Errors.decl_override_missing_hint pos
+        | _, _ -> ());
+        if not parent_class_elt.ce_abstract && class_elt.ce_abstract then
+          Errors.abstract_concrete_override pos parent_pos `property;
+        if class_elt.ce_const then
+          (if check_member_unique && not class_elt.ce_abstract &&
+            not parent_class_elt.ce_abstract then
+            Errors.multiple_concrete_defs pos parent_pos
+            class_elt.ce_origin parent_class_elt.ce_origin
+            member_name (Cls.name class_);
+          Typing_ops.sub_type_decl pos Typing_reason.URnone env fty_child fty_parent;)
+        else
+          Typing_ops.unify_decl pos Typing_reason.URnone env fty_parent fty_child;
+        env
     )
     (fun errorl ->
-      Errors.bad_method_override pos member_name errorl)
-
+      Errors.bad_method_override pos member_name errorl; env)
+    else env
 
 let check_const_override env
     const_name parent_class class_ parent_class_const class_const =
@@ -329,9 +318,12 @@ let check_const_override env
       class_const.cc_origin parent_class_const.cc_origin
       const_name (Cls.name class_)
     else
-      check_types_for_const env
-        parent_class_const.cc_abstract parent_class_const.cc_type
-        class_const.cc_abstract class_const.cc_type
+      if not parent_class_const.cc_abstract && class_const.cc_abstract then (
+        let pos = Reason.to_pos (fst class_const.cc_type) in
+        let parent_pos = Reason.to_pos (fst parent_class_const.cc_type) in
+        Errors.abstract_concrete_override pos parent_pos `constant);
+      Phase.sub_type_decl env class_const.cc_type parent_class_const.cc_type
+        Errors.class_constant_type_mismatch
 
 (* Privates are only visible in the parent, we don't need to check them *)
 let filter_privates members =
@@ -366,28 +358,30 @@ let check_members check_private env removals (parent_class, psubst, parent_ty)
       (* defined from parent class, nothing to check *)
       && class_elt.ce_origin <> parent_class_elt.ce_origin
     | _ -> false in
-  Sequence.iter parent_members begin fun (member_name, parent_class_elt) ->
-    (* for this particular member, check to see if the parent considered
-    is a trait that was removed, otherwise subtype with the declaration in
-    that parent *)
-    let removed = match String.Map.find removals member_name with
-    | Some traits -> List.mem traits parent_class_elt.ce_origin ~equal:String.equal
-    | None -> false in
-    if not removed then
-    match get_member member_name with
-    | Some class_elt ->
-      let parent_class_elt = Inst.instantiate_ce psubst parent_class_elt in
-      let class_elt = Inst.instantiate_ce subst class_elt in
-      let check_member_unique = should_check_member_unique class_elt parent_class_elt in
-      if parent_class_elt.ce_origin <> class_elt.ce_origin then
-        Typing_deps.add_idep
-          (Dep.Class (Cls.name class_))
-          (dep parent_class_elt.ce_origin member_name);
-      check_override ~check_member_unique env member_name mem_source
-        (parent_class, parent_ty) (class_, class_ty)
-        parent_class_elt class_elt
-    | None -> ()
-  end
+  Sequence.fold ~init:env parent_members
+    ~f:(fun env (member_name, parent_class_elt) ->
+      (* for this particular member, check to see if the parent considered
+      is a trait that was removed, otherwise subtype with the declaration in
+      that parent *)
+      let removed = match String.Map.find removals member_name with
+      | Some traits -> List.mem traits parent_class_elt.ce_origin ~equal:String.equal
+      | None -> false in
+      if not removed then
+      match get_member member_name with
+      | Some class_elt ->
+        let parent_class_elt = Inst.instantiate_ce psubst parent_class_elt in
+        let class_elt = Inst.instantiate_ce subst class_elt in
+        let check_member_unique = should_check_member_unique class_elt parent_class_elt in
+        if parent_class_elt.ce_origin <> class_elt.ce_origin then
+          Typing_deps.add_idep
+            (Dep.Class (Cls.name class_))
+            (dep parent_class_elt.ce_origin member_name);
+        check_override ~check_member_unique env member_name mem_source
+          (parent_class, parent_ty) (class_, class_ty)
+          parent_class_elt class_elt
+      | None -> env
+      else env
+  )
 
 (*****************************************************************************)
 (* Before checking that a class implements an interface, we have to
@@ -426,7 +420,7 @@ let default_constructor_ce class_ =
              ft_tparams  = ([], FTKtparams);
              ft_where_constraints = [];
              ft_params   = [];
-             ft_ret      = MakeType.void r;
+             ft_ret      = { et_type = MakeType.void r; et_enforced = false; };
              ft_fun_kind = Ast_defs.FSync;
              ft_reactive = Nonreactive;
              ft_mutability = None;
@@ -455,12 +449,12 @@ let check_constructors env (parent_class, parent_ty) (class_, class_ty) psubst s
   if (Cls.kind parent_class) = Ast_defs.Cinterface || consistent
   then (
     match (fst (Cls.construct parent_class)), (fst (Cls.construct class_)) with
-      | Some parent_cstr, _  when parent_cstr.ce_synthesized -> ()
+      | Some parent_cstr, _  when parent_cstr.ce_synthesized -> env
       | Some parent_cstr, None ->
         let lazy (pos, _) = parent_cstr.ce_type in
-        Errors.missing_constructor (Reason.to_pos pos)
+        Errors.missing_constructor (Reason.to_pos pos); env
       | _, Some cstr when cstr.ce_override -> (* <<__UNSAFE_Construct>> *)
-        ()
+        env
       | Some parent_cstr, Some cstr ->
         let parent_cstr = Inst.instantiate_ce psubst parent_cstr in
         let cstr = Inst.instantiate_ce subst cstr in
@@ -481,14 +475,16 @@ let check_constructors env (parent_class, parent_ty) (class_, class_ty) psubst s
             (Dep.Cstr parent_cstr.ce_origin);
         check_override env ~check_member_unique:false "__construct" `FromMethod
           ~ignore_fun_return:true (parent_class, parent_ty) (class_, class_ty) parent_cstr cstr
-      | None, _ -> ()
+      | None, _ -> env
   ) else (
-    match fst (Cls.construct parent_class), fst (Cls.construct class_) with
+    begin match fst (Cls.construct parent_class), fst (Cls.construct class_) with
     | Some parent_cstr, _ when parent_cstr.ce_synthesized -> ()
     | Some parent_cstr, Some child_cstr ->
       check_final_method `FromMethod parent_cstr child_cstr;
       check_class_elt_visibility parent_cstr child_cstr
     | _, _ -> ()
+    end;
+    env
   )
 
 (* Checks if a child is compatible with the type constant of its parent.
@@ -549,11 +545,11 @@ let tconst_subsumption env parent_typeconst child_typeconst =
   | _ -> ()
   end;
 
-  begin match parent_typeconst.ttc_disallow_php_arrays with
+  begin match parent_typeconst.ttc_reifiable with
   | None -> ()
   | Some pos ->
     let tast_env = Tast_env.typing_env_as_tast_env env in
-    Type_const_check.disallow_php_arrays tast_env child_typeconst pos
+    Type_const_check.check_reifiable tast_env child_typeconst pos
   end;
 
   (* If the parent cannot be overridden, we unify the types otherwise we ensure
@@ -617,15 +613,15 @@ let check_class_implements env removals (parent_class, parent_ty) (class_, class
   let subst = Inst.make_subst (Cls.tparams class_) tparaml in
   check_consts env parent_class class_ psubst subst;
   let memberl = make_all_members ~parent_class ~child_class:class_ in
-  check_constructors env (parent_class, parent_ty) (class_, class_ty) psubst subst;
+  let env = check_constructors env (parent_class, parent_ty) (class_, class_ty) psubst subst in
   let check_privates:bool = Cls.kind parent_class = Ast_defs.Ctrait in
   if not fully_known then () else
     List.iter memberl
       (check_members_implemented check_privates parent_pos pos);
-  List.iter memberl
-    (check_members check_privates env removals
-      (parent_class, psubst, parent_ty) (class_, subst, class_ty));
-  ()
+  List.fold ~init:env memberl
+    ~f:(fun env -> check_members check_privates env removals
+      (parent_class, psubst, parent_ty) (class_, subst, class_ty))
+
 
 (*****************************************************************************)
 (* The externally visible function *)
@@ -638,18 +634,27 @@ let check_implements env removals parent_type type_ =
   let parent_class = Env.get_class env (snd parent_name) in
   let class_ = Env.get_class env (snd name) in
   match parent_class, class_ with
-  | None, _ | _, None -> ()
+  | None, _ | _, None -> env
   | Some parent_class, Some class_ ->
       let parent_class =
         (Reason.to_pos parent_r), parent_class, parent_tparaml in
       let class_ = (Reason.to_pos r), class_, tparaml in
-      Errors.try_
-        (fun () ->
-          check_class_implements env removals (parent_class, parent_type) (class_, type_))
-        (fun errorl ->
-          let p_name_pos, p_name_str = parent_name in
-          let name_pos, name_str = name in
-          if snd parent_name = SN.Classes.cHH_BuiltinEnum
-          then Errors.bad_enum_decl name_pos errorl
-          else Errors.bad_decl_override p_name_pos p_name_str name_pos name_str
-            errorl)
+      begin
+        if snd parent_name = SN.Classes.cHH_BuiltinEnum
+          then
+            (* sadly, enum error reporting requires this to keep the error in the file
+               with the enum *)
+            Errors.try_
+              (fun () -> check_class_implements env removals (parent_class, parent_type) (class_, type_))
+              (fun errorl ->
+                let name_pos, _ = name in
+                Errors.bad_enum_decl name_pos errorl; env)
+          else
+            Errors.try_unless_error_in_different_file
+              (Env.get_file env)
+              (fun () -> check_class_implements env removals (parent_class, parent_type) (class_, type_))
+              (fun errorl ->
+                let p_name_pos, p_name_str = parent_name in
+                let name_pos, name_str = name in
+                Errors.bad_decl_override p_name_pos p_name_str name_pos name_str errorl)
+      end

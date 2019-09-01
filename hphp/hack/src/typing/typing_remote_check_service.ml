@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * This source code is licensed under the MIT license found in the
@@ -43,16 +43,19 @@ let go
     : Errors.t =
   let t = Unix.gettimeofday() in
   let num_remote_workers = TypecheckerOptions.num_remote_workers opts in
+  let version_specifier = TypecheckerOptions.remote_version_specifier opts in
   let open RemoteScheduler in
-  let errors = RemoteScheduler.go {
-    bin_root = Path.make (Filename.dirname Sys.argv.(0));
+  let default_env = default_env
+    ~bin_root:(Path.make (Filename.dirname Sys.argv.(0)))
+    ~root:(Path.make (Relative_path.path_of_prefix Relative_path.Root))
+  in
+  let errors = go { default_env with
     eden_threshold;
     files = Some fnl;
     naming_sqlite_path;
     naming_table;
     num_remote_workers;
-    root = Path.make (Relative_path.path_of_prefix Relative_path.Root);
-    timeout = 9999;
+    version_specifier;
     workers;
   }
   in

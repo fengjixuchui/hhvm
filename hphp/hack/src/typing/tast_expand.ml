@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
@@ -23,7 +23,7 @@ let expand_ty ?pos env ty =
   let rec exp_ty ty =
     let _, ety = Tast_env.expand_type env ty in
     let ety = match ety with
-      | (_, (Tany | Tnonnull | Tprim _ | Tobject | Tdynamic)) -> ety
+      | (_, (Tany _ | Tnonnull | Tprim _ | Tobject | Tdynamic)) -> ety
       | (p, Tclass(n, e, tyl)) -> (p, Tclass(n, e, exp_tys tyl))
       | (p, Tunion tyl) -> (p, Tunion (exp_tys tyl))
       | (p, Tintersection tyl) -> (p, Tintersection (exp_tys tyl))
@@ -44,7 +44,11 @@ let expand_ty ?pos env ty =
                                 (p, Tvar v))
         (* TODO TAST: replace with Tfun type *)
       | (p, Tanon(x, y)) -> (p, Tanon(x,y))
-      | (p, Terr) -> (p, Terr) in
+      | (p, Terr) -> (p, Terr)
+      (* TODO(T36532263) see if that needs updating *)
+      | (p, Tpu (base, enum, kind)) -> (p, Tpu (exp_ty base, enum, kind))
+      | (p, Tpu_access (base, sid)) -> (p, Tpu_access (exp_ty base, sid))
+    in
     let _env, ety = Tast_env.simplify_unions env ety in
     ety
 
@@ -60,7 +64,7 @@ let expand_ty ?pos env ty =
     ft_return_disposable; ft_mutability; ft_returns_mutable;
     ft_tparams = Tuple.T2.map_fst ~f:(List.map ~f:exp_tparam) ft_tparams;
     ft_where_constraints = List.map ~f:exp_where_constraint ft_where_constraints;
-    ft_ret = exp_ty ft_ret;
+    ft_ret = exp_possibly_enforced_ty ft_ret;
     ft_params = List.map ~f:exp_fun_param ft_params;
     ft_decl_errors; ft_returns_void_to_rx;
   }
@@ -68,8 +72,11 @@ let expand_ty ?pos env ty =
   and exp_fun_param { fp_pos; fp_name; fp_kind; fp_type; fp_mutability;
                       fp_accept_disposable; fp_rx_annotation; } =
   { fp_pos; fp_name; fp_kind; fp_accept_disposable; fp_mutability;
-    fp_type = exp_ty fp_type; fp_rx_annotation;
+    fp_type = exp_possibly_enforced_ty fp_type; fp_rx_annotation;
   }
+
+  and exp_possibly_enforced_ty { et_type; et_enforced; } =
+  { et_type = exp_ty et_type; et_enforced = et_enforced; }
 
   and exp_sft { sft_optional; sft_ty } =
   { sft_optional;
@@ -102,6 +109,7 @@ let expand_ty ?pos env ty =
 let expander = object
   inherit Tast_visitor.endo
   method! on_'ex env (pos, ty) = (pos, expand_ty ~pos env ty)
+  method! on_'hi env  ty = expand_ty env ty
 end
 
 (* Replace all types in a program AST by their expansions *)

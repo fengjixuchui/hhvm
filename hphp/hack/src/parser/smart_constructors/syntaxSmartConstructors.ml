@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
@@ -38,7 +38,7 @@ module type RustParser_S = sig
   val rust_parse :
     Full_fidelity_source_text.t ->
     ParserEnv.t ->
-    t * r * Full_fidelity_syntax_error.t list
+    t * r * Full_fidelity_syntax_error.t list * Rust_pointer.t option
 end
 
 module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
@@ -196,6 +196,7 @@ module WithSyntax(Syntax : Syntax_sig.Syntax_S) = struct
     let make_xhp_expression arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_xhp_expression arg0 arg1 arg2
     let make_xhp_close arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_xhp_close arg0 arg1 arg2
     let make_type_constant arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_type_constant arg0 arg1 arg2
+    let make_pu_access arg0 arg1 arg2 state = State.next state [arg0; arg1; arg2], Syntax.make_pu_access arg0 arg1 arg2
     let make_vector_type_specifier arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_vector_type_specifier arg0 arg1 arg2 arg3 arg4
     let make_keyset_type_specifier arg0 arg1 arg2 arg3 arg4 state = State.next state [arg0; arg1; arg2; arg3; arg4], Syntax.make_keyset_type_specifier arg0 arg1 arg2 arg3 arg4
     let make_tuple_type_explicit_specifier arg0 arg1 arg2 arg3 state = State.next state [arg0; arg1; arg2; arg3], Syntax.make_tuple_type_explicit_specifier arg0 arg1 arg2 arg3

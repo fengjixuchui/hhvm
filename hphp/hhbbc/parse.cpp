@@ -171,7 +171,7 @@ std::set<Offset> findBasicBlocks(const FuncEmitter& fe) {
     auto const breaksBB =
       instrIsNonCallControlFlow(op) ||
       instrFlags(op) & TF ||
-      (hasFCallEffects(op) && !instrJumpOffsets(pc).empty());
+      (isFCall(op) && !instrJumpOffsets(pc).empty());
 
     if (options.TraceBytecodes.count(op)) traceBc = true;
 
@@ -374,18 +374,10 @@ void populate_block(ParseUnitState& puState,
   auto createcl = [&] (const Bytecode& b) {
     puState.createClMap[b.CreateCl.arg2].insert(&func);
   };
-  auto fpushfuncd = [&] (const Bytecode& b) {
-    if (b.FPushFuncD.str2 == s_class_alias.get()) {
+  auto fcallfuncd = [&] (const Bytecode& b) {
+    if (b.FCallFuncD.str2 == s_class_alias.get()) {
       puState.constPassFuncs.insert(&func);
     }
-  };
-  auto has_call_unpack = [&] {
-    auto const fpi = Func::findFPI(&*fe.fpitab.begin(),
-                                   &*fe.fpitab.end(), pc - ue.bc());
-    auto pc = ue.bc() + fpi->m_fpiEndOff;
-    auto const op = decode_op(pc);
-    if (!isLegacyFCall(op)) return false;
-    return decodeFCallArgs(op, pc).hasUnpack();
   };
 
 #define IMM_BLA(n)     auto targets = decode_switch(opPC);
@@ -463,7 +455,6 @@ void populate_block(ParseUnitState& puState,
 #define FLAGS_TF
 #define FLAGS_CF
 #define FLAGS_FF
-#define FLAGS_PF auto hu = has_call_unpack();
 #define FLAGS_CF_TF
 #define FLAGS_CF_FF
 
@@ -471,7 +462,6 @@ void populate_block(ParseUnitState& puState,
 #define FLAGS_ARG_TF
 #define FLAGS_ARG_CF
 #define FLAGS_ARG_FF
-#define FLAGS_ARG_PF ,hu
 #define FLAGS_ARG_CF_TF
 #define FLAGS_ARG_CF_FF
 
@@ -490,7 +480,7 @@ void populate_block(ParseUnitState& puState,
       if (Op::opcode == Op::DefClsNop)   defclsnop(b);             \
       if (Op::opcode == Op::AliasCls)    aliascls(b);              \
       if (Op::opcode == Op::CreateCl)    createcl(b);              \
-      if (Op::opcode == Op::FPushFuncD)  fpushfuncd(b);            \
+      if (Op::opcode == Op::FCallFuncD)  fcallfuncd(b);            \
       blk.hhbcs.push_back(std::move(b));                           \
       assert(pc == next);                                          \
     }                                                              \
@@ -549,7 +539,6 @@ void populate_block(ParseUnitState& puState,
 #undef FLAGS_TF
 #undef FLAGS_CF
 #undef FLAGS_FF
-#undef FLAGS_PF
 #undef FLAGS_CF_TF
 #undef FLAGS_CF_FF
 
@@ -557,7 +546,6 @@ void populate_block(ParseUnitState& puState,
 #undef FLAGS_ARG_TF
 #undef FLAGS_ARG_CF
 #undef FLAGS_ARG_FF
-#undef FLAGS_ARG_PF
 #undef FLAGS_ARG_CF_TF
 #undef FLAGS_ARG_CF_FF
 

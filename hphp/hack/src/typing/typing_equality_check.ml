@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -75,7 +75,11 @@ let rec assert_nontrivial p bop env ty1 ty2 =
   | (_, Toption ty1), (_, Tprim _ as ty2)
   | (_, Tprim _ as ty1), (_, Toption ty2) ->
       assert_nontrivial p bop env ty1 ty2
-  | (_, (Terr | Tany | Tnonnull | Tarraykind _ | Tprim _ | Toption _ | Tdynamic
+  | (_, Tpu _), _
+  | _, (_, Tpu _) -> failwith "TODO(T36532263) typing_equality_check Tpu"
+  | (_, Tpu_access _), _
+  | _, (_, Tpu_access _) -> failwith "TODO(T36532263) typing_equality_check Taccess"
+  | (_, (Terr | Tany _ | Tnonnull | Tarraykind _ | Tprim _ | Toption _ | Tdynamic
     | Tvar _ | Tfun _ | Tabstract _ | Tclass _ | Ttuple _
     | Tanon (_, _) | Tunion _ | Tintersection _ | Tobject | Tshape _ | Tdestructure _)
     ), _ -> ()

@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -7,13 +7,14 @@
  *
  *)
 
-val go: (string * int * int) -> TypecheckerOptions.t ->
-  ServerHighlightRefsTypes.result
+val go :
+  string * int * int -> TypecheckerOptions.t -> ServerHighlightRefsTypes.result
 
 (* For serverless IDE *)
-val go_ctx:
-  entry: ServerIdeContext.entry ->
-  line: int ->
-  column: int ->
-  tcopt: TypecheckerOptions.t ->
+val go_ctx :
+  ctx:Provider_context.t ->
+  entry:Provider_context.entry ->
+  line:int ->
+  column:int ->
+  tcopt:TypecheckerOptions.t ->
   ServerHighlightRefsTypes.result

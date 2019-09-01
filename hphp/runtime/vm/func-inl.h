@@ -22,18 +22,7 @@
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
-// EH and FPI tables.
-
-template<class SerDe>
-void FPIEnt::serde(SerDe& sd) {
-  sd(m_fpushOff)
-    (m_fpiEndOff)
-    (m_fpOff)
-    // These fields are recomputed by sortFPITab:
-    // (m_parentIndex)
-    // (m_fpiDepth)
-    ;
-}
+// EH table.
 
 template<class SerDe>
 void EHEnt::serde(SerDe& sd) {
@@ -168,7 +157,7 @@ inline const StringData* Func::fullDisplayName() const {
 
 inline const StringData* funcToStringHelper(const Func* func) {
   if (RuntimeOption::EvalRaiseFuncConversionWarning) {
-    raise_warning("Func to string conversion");
+    raise_warning(Strings::FUNC_TO_STRING);
   }
   return func->name();
 }
@@ -549,10 +538,6 @@ inline bool Func::isGenerated() const {
   return shared()->m_isGenerated;
 }
 
-inline bool Func::isMagicCallMethod() const {
-  return m_name->isame(s___call.get());
-}
-
 inline bool Func::isSpecial(const StringData* name) {
   return strncmp("86", name->data(), 2) == 0;
 }
@@ -623,10 +608,6 @@ inline const Func::EHEntVec& Func::ehtab() const {
   return shared()->m_ehtab;
 }
 
-inline const Func::FPIEntVec& Func::fpitab() const {
-  return shared()->m_fpitab;
-}
-
 inline const EHEnt* Func::findEH(Offset o) const {
   assertx(o >= base() && o < past());
   return findEH(shared()->m_ehtab, o);
@@ -643,11 +624,6 @@ Func::findEH(const Container& ehtab, Offset o) {
     }
   }
   return eh;
-}
-
-inline const FPIEnt* Func::findFPI(Offset o) const {
-  assertx(o >= base() && o < past());
-  return findFPI(fpitab().begin(), fpitab().end(), o);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
@@ -885,9 +885,8 @@ let test () =
         let path = Relative_path.from_root file in
         let file_input = ServerCommandTypes.FileName ("/" ^ file) in
         let (ctx, entry) =
-          ServerIdeContext.update
-            ~tcopt:env.ServerEnv.tcopt
-            ~ctx:ServerIdeContext.empty
+          Provider_utils.update_context
+            ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
             ~path
             ~file_input
         in

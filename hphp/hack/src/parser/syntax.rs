@@ -38,8 +38,8 @@ pub struct Syntax<T, V> {
     pub value: V,
 }
 
-pub trait SyntaxTypeBase<C> {
-    type Token: LexableToken;
+pub trait SyntaxTypeBase<'a, C> {
+    type Token: LexableToken<'a>;
     type Value: SyntaxValueType<Self::Token>;
 
     fn make_missing(ctx: &C, offset: usize) -> Self;
@@ -51,9 +51,9 @@ pub trait SyntaxTypeBase<C> {
     fn value(&self) -> &Self::Value;
 }
 
-impl<T, V, C> SyntaxTypeBase<C> for Syntax<T, V>
+impl<'a, T, V, C> SyntaxTypeBase<'a, C> for Syntax<T, V>
 where
-    T: LexableToken,
+    T: LexableToken<'a>,
     V: SyntaxValueType<T>,
 {
     type Token = T;
@@ -90,13 +90,61 @@ where
     }
 }
 
-impl<T, V> Syntax<T, V>
+impl<'src, T, V> Syntax<T, V>
 where
-    T: LexableToken,
+    T: LexableToken<'src>,
     V: SyntaxValueType<T>,
 {
     pub fn make(syntax: SyntaxVariant<T, V>, value: V) -> Self {
         Self { syntax, value }
+    }
+
+    pub fn is_public(&self) -> bool {
+        if let SyntaxVariant::Token(t) = &self.syntax {
+            t.kind() == TokenKind::Public
+        } else {
+            false
+        }
+    }
+
+    pub fn is_private(&self) -> bool {
+        if let SyntaxVariant::Token(t) = &self.syntax {
+            t.kind() == TokenKind::Private
+        } else {
+            false
+        }
+    }
+
+    pub fn is_protected(&self) -> bool {
+        if let SyntaxVariant::Token(t) = &self.syntax {
+            t.kind() == TokenKind::Protected
+        } else {
+            false
+        }
+    }
+
+    pub fn is_abstract(&self) -> bool {
+        if let SyntaxVariant::Token(t) = &self.syntax {
+            t.kind() == TokenKind::Abstract
+        } else {
+            false
+        }
+    }
+
+    pub fn is_static(&self) -> bool {
+        if let SyntaxVariant::Token(t) = &self.syntax {
+            t.kind() == TokenKind::Static
+        } else {
+            false
+        }
+    }
+
+    pub fn is_missing(&self) -> bool {
+        if let SyntaxVariant::Missing = &self.syntax {
+            true
+        } else {
+            false
+        }
     }
 
     pub fn children<'a>(&'a self) -> Vec<&'a Self> {
@@ -105,6 +153,19 @@ where
             acc
         };
         Self::fold_over_children(&f, vec![], &self.syntax)
+    }
+
+    pub fn drain_children(&mut self) -> Vec<Self> {
+        let f = |node: Self, mut acc: Vec<Self>| {
+            acc.push(node);
+            acc
+        };
+        let syntax = std::mem::replace(&mut self.syntax, SyntaxVariant::Missing);
+        Self::fold_over_children_owned(&f, vec![], syntax)
+    }
+
+    pub fn replace_children(&mut self, kind: SyntaxKind, children: Vec<Self>) {
+        std::mem::replace(&mut self.syntax, Syntax::from_children(kind, children));
     }
 
     fn get_token(&self) -> Option<&T> {

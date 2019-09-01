@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2017, Facebook, Inc.
  * All rights reserved.
  *
@@ -11,6 +11,7 @@ open Hh_core
 
 open Delta
 open Typing_defs
+open Typing_env_types
 open Aast
 
 module ETast = Tast
@@ -97,7 +98,7 @@ let check_expr env (expr:ETast.expr) (gamma:gamma) : gamma =
         expect_ty_equal ty (Tprim Nast.Tstring)
       | Lvar (_, lid) ->
         let expected_ty = match lookup lid (gamma.Typing_per_cont_env.local_types) with
-        | None -> Tany
+        | None -> Typing_defs.make_tany ()
         | Some (_p, (_r, ty)) -> ty
         in
         expect_ty_equal ty expected_ty
@@ -223,7 +224,7 @@ let localize env hint =
   match hint with
   | None -> failwith "There should be a hint in strict mode."
   | Some decl_ty ->
-    let ty = Decl_hint.hint env.Env.decl_env decl_ty in
+    let ty = Decl_hint.hint env.decl_env decl_ty in
     let _env, ty = Phase.localize ~ety_env:(Phase.env_with_self env) env ty in
     ty
 
@@ -231,7 +232,7 @@ let gamma_from_params env (params:ETast.fun_param list) =
   let add_param_to_gamma gamma param =
     if param.param_user_attributes <> [] then raise Not_implemented;
     let name = make_local_id param.param_name in
-    let ty = localize env param.param_hint in
+    let ty = localize env (hint_of_type_hint param.param_type_hint) in
     (* TODO can we avoid this? *)
     let reas_ty_to_pos_reas_ty (r, _ as ty) = (Typing_reason.to_pos r, ty) in
     let ty = reas_ty_to_pos_reas_ty ty in

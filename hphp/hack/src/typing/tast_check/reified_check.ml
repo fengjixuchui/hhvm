@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2018, Facebook, Inc.
  * All rights reserved.
  *
@@ -10,6 +10,7 @@
 open Core_kernel
 open Aast
 open Typing_defs
+open Type_validator
 
 module Env = Tast_env
 module SN = Naming_special_names
@@ -17,8 +18,83 @@ module UA = SN.UserAttributes
 module Cls = Decl_provider.Class
 module Nast = Aast
 
+let validator = object(this) inherit type_validator as super
+
+  method! on_tapply acc r (p, h) tyl =
+    if h = SN.Classes.cTypename then
+      this#invalid acc r "a typename"
+    else if  h = SN.Classes.cClassname then
+      this#invalid acc r "a classname"
+    else if h = SN.Typehints.wildcard && not (Env.get_allow_wildcards acc.env) then
+      this#invalid acc r "a wildcard"
+    else
+      super#on_tapply acc r (p, h) tyl
+
+  method! on_tgeneric acc r t =
+    match Env.get_reified acc.env t with
+    | Nast.Erased -> this#invalid acc r "not reified"
+    | Nast.SoftReified -> this#invalid acc r "soft reified"
+    | Nast.Reified -> acc
+
+  method! on_tarraykind acc r _ =
+    this#invalid acc r "an array"
+
+  method! on_tfun acc r _ =
+    this#invalid acc r "a function type"
+
+  method! on_taccess acc r (root, ids) =
+    (* We care only about the last type constant we access in the chain
+     * this::T1::T2::Tn. So we reverse the ids to get the last one then we resolve
+     * up to that point using localize to determine the root. i.e. we resolve
+     *   root = (this::T1::T2)
+     *   id = Tn
+     *)
+    match List.rev ids with
+    | [] ->
+      this#on_type acc root
+    | (_, tconst)::rest ->
+      let root = if rest = [] then root else (r, Taccess (root, List.rev rest)) in
+      let env, root = Env.localize acc.env acc.ety_env root in
+      let env, tyl = Env.get_concrete_supertypes env root in
+      List.fold tyl ~init:acc ~f:begin fun acc ty ->
+        match snd ty with
+        | Typing_defs.Tclass ((_, class_name), _, _) ->
+          let (>>=) = Option.(>>=) in
+          Option.value ~default:acc begin
+            Env.get_class env class_name >>= fun class_ ->
+            Cls.get_typeconst class_ tconst >>= fun typeconst ->
+            match typeconst.ttc_abstract with
+            | _ when typeconst.ttc_reifiable <> None -> Some acc
+            | TCConcrete -> Some acc
+            (* This handles the case for partially abstract type constants. In this case
+             * we know the assigned type will be chosen if the root is the same as the
+             * concrete supertype of the root.
+             *)
+            | TCPartiallyAbstract when phys_equal root ty -> Some acc
+            | _ ->
+              let r = Reason.Rwitness (fst typeconst.ttc_name) in
+              let kind = "an abstract type constant without the __Reifiable attribute" in
+              Some (this#invalid acc r kind)
+          end
+        | _ -> acc
+      end
+
+  method! on_tabstract acc r ak _ty_opt =
+    match ak with
+    | AKdependent (DTthis) -> this#invalid acc r "the late static bound this type"
+    | AKgeneric _
+    | AKnewtype _
+    | AKdependent _ -> acc
+
+end
+
 let tparams_has_reified tparams =
   List.exists tparams ~f:(fun tparam -> tparam.tp_reified <> Nast.Erased)
+
+let check_explicit expr_pos tparams =
+  List.iter tparams ~f:(fun tparam ->
+    if Attributes.mem UA.uaExplicit tparam.tp_user_attributes
+    then Errors.require_generic_explicit tparam.tp_name expr_pos)
 
 let valid_newable_hint env tp (pos, hint) =
   match hint with
@@ -47,7 +123,6 @@ let verify_has_consistent_bound env (tparam: Tast.tparam) =
     let cbs = List.map ~f:(Cls.name) valid_classes in
     Errors.invalid_newable_type_param_constraints tparam.tp_name cbs
 
-
 (* When passing targs to a reified position, they must either be concrete types
  * or reified type parameters. This prevents the case of
  *
@@ -57,6 +132,15 @@ let verify_has_consistent_bound env (tparam: Tast.tparam) =
  * where Tf does not exist at runtime.
  *)
 let verify_targ_valid env tparam targ =
+  if Attributes.mem UA.uaExplicit tparam.tp_user_attributes
+  then
+    match targ with
+    | pos, Aast.Happly ((_, class_id), _targs)
+      when class_id = SN.Typehints.wildcard ->
+      Errors.require_generic_explicit tparam.tp_name pos
+    | _ -> ()
+  else ();
+
   (* There is some subtlety here. If a type *parameter* is declared reified,
    * even if it is soft, we require that the argument be concrete or reified, not soft
    * reified or erased *)
@@ -64,49 +148,8 @@ let verify_targ_valid env tparam targ =
   begin match tparam.tp_reified with
   | Nast.Reified
   | Nast.SoftReified ->
-    let p, _h = targ in
-    let ty = Env.hint_to_ty env targ in
-    begin match ty with
-    | _, Tapply ((pw, h), [])
-      when h = SN.Typehints.wildcard && not (Env.get_allow_wildcards env) ->
-      Errors.invalid_reified_argument tparam.tp_name pw "a wildcard"
-    | _, Tapply ((pw, h), _) when h = SN.Classes.cClassname ->
-      Errors.invalid_reified_argument tparam.tp_name pw "a classname"
-    | _, Tapply ((pw, h), _) when h = SN.Classes.cTypename ->
-      Errors.invalid_reified_argument tparam.tp_name pw "a typename"
-    | _, Tgeneric t ->
-      begin match (Env.get_reified env t) with
-      | Nast.Erased -> Errors.invalid_reified_argument tparam.tp_name p "not reified"
-      | Nast.SoftReified -> Errors.invalid_reified_argument tparam.tp_name p "soft reified"
-      | Nast.Reified -> () end
-    | _, Tarray _
-    | _, Tdarray _
-    | _, Tvarray _
-    | _, Tvarray_or_darray _ ->
-      Errors.invalid_reified_argument tparam.tp_name p "an array"
-    | _, Tfun { ft_arity = (Fvariadic _ | Fellipsis _); _ } ->
-      Errors.invalid_reified_argument tparam.tp_name p "a function type with variadic args"
-    | _, Tthis ->
-      Errors.invalid_reified_argument tparam.tp_name p "the late static bound this type"
-    | _, Taccess _ ->
-      let emit_err =
-        Errors.invalid_reified_argument_disallow_php_arrays tparam.tp_name
-      in
-      Type_const_check.php_array_validator#validate_type env ty emit_err
-    | _, Tdynamic
-    | _, Tfun _
-    | _, Tprim _
-    | _, Toption _
-    | _, Tshape _
-    | _, Ttuple _
-    | _, Tlike _
-    | _, Tapply _
-    | _, Tnothing
-    | _, Tnonnull
-    | _, Tmixed
-    | _, Tany
-    | _, Terr -> ()
-    end;
+    let emit_error = Errors.invalid_reified_argument tparam.tp_name in
+    validator#validate_hint env targ emit_error
   | Nast.Erased -> () end;
 
   begin if Attributes.mem UA.uaEnforceable tparam.tp_user_attributes then
@@ -121,6 +164,7 @@ let verify_call_targs env expr_pos decl_pos tparams targs =
   if tparams_has_reified tparams &&
      List.is_empty targs then
     Errors.require_args_reify decl_pos expr_pos;
+  if List.is_empty targs then check_explicit expr_pos tparams;
   (* Unequal_lengths case handled elsewhere *)
   List.iter2 tparams targs ~f:begin fun tparam targ ->
     verify_targ_valid env tparam targ

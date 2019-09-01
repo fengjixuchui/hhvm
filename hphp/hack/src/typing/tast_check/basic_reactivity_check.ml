@@ -44,7 +44,8 @@ let rec is_byval_collection_or_string_or_any_type env ty =
     | _, (Tarraykind _ | Ttuple _ | Tshape _)
       -> true
     | _, Tprim Tstring
-    | _, Tany -> true
+    | _, Tdynamic
+    | _, Tany _ -> true
     | _, Tunion tl -> List.for_all tl ~f:(is_byval_collection_or_string_or_any_type env)
     | _ -> false in
   let _, tl = Tast_env.get_concrete_supertypes env ty in
@@ -286,8 +287,8 @@ let enforce_mutable_constructor_call env ctor_fty el =
 let is_valid_rx_mutable_arg env e =
   match snd e with
   | New _
-  | KeyValCollection ((`Map | `ImmMap), _, _)
-  | ValCollection ((`Vector | `ImmVector | `Set | `ImmSet), _, _)
+  | KeyValCollection ((Map | ImmMap), _, _)
+  | ValCollection ((Vector | ImmVector | Set | ImmSet), _, _)
   | Pair _
   | Clone _
   | Xml _ ->

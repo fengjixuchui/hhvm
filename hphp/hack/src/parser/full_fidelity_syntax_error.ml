@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
@@ -210,7 +210,9 @@ let error2047 visibility_modifier = "Methods inside of interfaces may not be " ^
 let error2048 = "Expected group use prefix to end with '\\'"
 let error2049 = "A namespace use clause may not specify the kind here."
 let error2050 = "A concrete constant declaration must have an initializer."
+let const_static_prop_init = "A const static property must have an initializer."
 let error2051 = "An abstract constant declaration must not have an initializer."
+let abstract_prop_init = "An abstract property must not have an initializer."
 let error2052 = "Cannot mix bracketed namespace declarations with " ^
   "unbracketed namespace declarations"
 let error2053 = "Use of 'var' as synonym for 'public' in declaration disallowed in Hack. " ^
@@ -221,6 +223,7 @@ let error2055 = "At least one enumerated item is expected."
 let error2056 = "First unbracketed namespace occurrence here"
 let error2057 = "First bracketed namespace occurrence here"
 let error2058 = "Property may not be abstract."
+let abstract_instance_property = "Instance property may not be abstract."
 let invalid_shape_field_name = "Shape field name must be a nonempty single-quoted string or a class constant"
 let shape_field_int_like_string = "Shape field name must not be an int-like string (i.e. \"123\")"
 let error2061 = "Non-static instance variables are not allowed in abstract " ^
@@ -260,6 +263,7 @@ let using_st_function_scoped_top_level =
 let const_in_trait = "Traits cannot have constants"
 let const_visibility = "Class constants cannot have visibility modifiers in " ^
   "Hack files"
+let type_const_visibility = "Type constants cannot have visibility modifiers"
 let strict_namespace_hh =
   "To use strict Hack, place // strict after the open tag. " ^
   "If it's already there, remove this line. " ^
@@ -424,8 +428,6 @@ let redeclaration_of_method ~name =
   "Redeclared method " ^ name
 let self_or_parent_colon_colon_class_outside_of_class name =
   "Cannot access " ^ name ^ "::class when no class scope is active"
-let final_property = "Properties cannot be declared final"
-let var_property = "Properties cannot be declared as var; a type is required"
 let property_has_multiple_visibilities name =
   "Multiple access type modifiers are not allowed: properties of " ^ name
 let property_has_multiple_modifiers name =
@@ -496,9 +498,6 @@ let invalid_await_use = "Await cannot be used as an expression"
 
 let toplevel_await_use = "Await cannot be used in a toplevel statement"
 
-let invalid_default_argument s = s ^ " expression is not permitted \
-  as the default value to a function parameter"
-
 let invalid_constructor_method_call = "Method call following immediate constructor call \
   requires parentheses around constructor call."
 
@@ -509,8 +508,7 @@ let invalid_variable_name =
   "A valid variable name starts with a letter or underscore, followed \
   by any number of letters, numbers, or underscores"
 
-let invalid_reference = "Only variables and the results of function calls \
-  can be used as references"
+let invalid_reference = "Only variables can be used as references"
 
 let invalid_variable_variable = "Variable Variables are not legal"
 
@@ -721,7 +719,7 @@ let type_keyword =
 let non_public_const_in_interface =
 "Constants inside of interfaces must have 'public' visibility."
 
-let const_abstract_private = "Cannot declare abstract constants private."
+let elt_abstract_private elt = "Cannot declare abstract " ^ elt ^ " private."
 
 let const_has_multiple_visibilities =
   "A constant cannot have multiple visibility modifiers."
@@ -747,7 +745,7 @@ let no_const_interfaces_traits_enums =
   "Interfaces, traits and enums may not be declared __Const"
 
 let no_const_late_init_props =
-  "__Const properties may not also be __LateInit or __SoftLateInit"
+  "__Const properties may not also be __LateInit"
 
 let no_const_static_props =
   "Static properties may not be __Const"
@@ -757,3 +755,13 @@ let no_const_abstract_final_class =
 
 let no_legacy_attribute_syntax =
   "The <<...>> syntax for user attributes is not allowed. Use the @ syntax instead."
+
+let no_silence =
+  "The error suppression operator @ is not allowed"
+
+let declared_final elt = elt ^ " cannot be declared final."
+
+let const_mutation = "Cannot mutate a class constant"
+
+let no_attributes_on_variadic_parameter =
+  "Attributes on variadic parameters are not allowed"

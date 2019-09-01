@@ -16,14 +16,17 @@ import textwrap
 from typing import AbstractSet, Iterable, Mapping, Optional, Sequence, Tuple, Union
 
 from lspcommand import LspCommandProcessor, Transcript, TranscriptEntry
-from utils import Json, interpolate_variables
+from utils import Json, VariableMap, interpolate_variables, uninterpolate_variables
 
 
 _MessageSpec = Union[
     "_RequestSpec",
+    "_DebugRequestSpec",
     "_NotificationSpec",
     "_WaitForNotificationSpec",
     "_WaitForRequestSpec",
+    "_WaitForResponseSpec",
+    "_WaitForHhServerReadySpec",
 ]
 
 
@@ -56,7 +59,7 @@ class LspTestSpec:
         params: Json,
         *,
         result: Json,
-        wait: bool = True,
+        wait_id: Optional[str] = None,
         comment: Optional[str] = None,
         powered_by: Optional[str] = None,
     ) -> "LspTestSpec":
@@ -64,17 +67,38 @@ class LspTestSpec:
         assert traceback is not None, "Failed to get traceback info"
 
         messages = list(self._messages)
+        if wait_id is not None and any(
+            isinstance(message, _RequestSpec) and message.wait_id == wait_id
+            for message in messages
+        ):
+            raise ValueError(f"Duplicate wait ID: {wait_id}")
+
         messages.append(
             _RequestSpec(
                 method=method,
                 params=params,
                 result=result,
-                wait=wait,
+                wait_id=wait_id,
                 comment=comment,
                 powered_by=powered_by,
                 traceback=traceback,
             )
         )
+        return self._update(messages=messages)
+
+    def debug(self) -> "LspTestSpec":
+        """Issue a `telemetry/rage` request for debugging.
+
+        The language server has to support the `telemetry/rage` request. Once
+        the response is received, its debugging output is rendered in the test
+        output. This can be useful when trying to debug the internal state of
+        the language server.
+
+        The test will not pass while there's a `debug()` statement in its spec,
+        so it must be removed before committing the code.
+        """
+        messages = list(self._messages)
+        messages.append(_DebugRequestSpec())
         return self._update(messages=messages)
 
     def notification(
@@ -106,8 +130,51 @@ class LspTestSpec:
         )
         return self._update(messages=messages)
 
+    def wait_for_response(self, wait_id: str) -> "LspTestSpec":
+        messages = list(self._messages)
+        messages.append(_WaitForResponseSpec(wait_id=wait_id))
+        return self._update(messages=messages)
+
+    def wait_for_hh_server_ready(self) -> "LspTestSpec":
+        messages = list(self._messages)
+        messages.append(_WaitForHhServerReadySpec())
+        return self._update(messages=messages)
+
+    def write_to_disk(
+        self, *, comment: Optional[str] = None, uri: str, contents: str, notify: bool
+    ) -> "LspTestSpec":
+        """Write a file to disk in the middle of the LSP test.
+
+        Due to the asynchronous nature of these LSP tests, it may be a good idea
+        to add a `wait=True` to the previous request(s) you sent. Otherwise, the
+        request will be sent and the file will be written to disk almost
+        simultaneously, and the language server may read the new file from disk
+        by the time it processes the request, rather than the old file.
+
+        If `notify` is `True`, also send a `workspace/didChangeWatchedFiles`
+        notification to the language server corresponding to the file you just
+        changed.
+        """
+        messages = list(self._messages)
+        messages.append(
+            _NotificationSpec(
+                method="$test/writeToDisk",
+                params={"uri": uri, "contents": contents},
+                comment=comment,
+            )
+        )
+        if notify:
+            messages.append(
+                _NotificationSpec(
+                    method="workspace/didChangeWatchedFiles",
+                    params={"changes": [{"uri": uri, "type": 2}]},
+                    comment=comment,
+                )
+            )
+        return self._update(messages=messages)
+
     def run(
-        self, lsp_command_processor: LspCommandProcessor, variables: Mapping[str, str]
+        self, lsp_command_processor: LspCommandProcessor, variables: VariableMap
     ) -> Tuple[Transcript, Optional[str]]:
         """Run the test given the LSP command processor.
 
@@ -115,7 +182,9 @@ class LspTestSpec:
         (json_commands, lsp_id_map) = self._get_json_commands(variables=variables)
         transcript = lsp_command_processor.communicate(json_commands=json_commands)
         errors = list(
-            self._verify_transcript(transcript=transcript, lsp_id_map=lsp_id_map)
+            self._verify_transcript(
+                variables=variables, transcript=transcript, lsp_id_map=lsp_id_map
+            )
         )
         if errors:
             num_errors = len(errors)
@@ -147,7 +216,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
         return spec
 
     def _get_json_commands(
-        self, variables: Mapping[str, str]
+        self, variables: VariableMap
     ) -> Tuple[Sequence[Json], "_LspIdMap"]:
         """Transforms this test spec into something the LSP command processor
         can interpret."""
@@ -171,7 +240,9 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                     }
                 )
 
-                if message.wait:
+                if message.wait_id is None:
+                    # Assume that if no wait ID was explicitly passed, we want
+                    # to wait on the response before sending the next message.
                     json_commands.append(
                         {
                             "jsonrpc": "2.0",
@@ -179,6 +250,15 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                             "params": {"id": current_id},
                         }
                     )
+            elif isinstance(message, _DebugRequestSpec):
+                json_commands.append(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": current_id,
+                        "method": "telemetry/rage",
+                        "params": {},
+                    }
+                )
             elif isinstance(message, _NotificationSpec):
                 json_commands.append(
                     {
@@ -212,12 +292,34 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                         "params": {"method": message.method, "params": message.params},
                     }
                 )
+            elif isinstance(message, _WaitForResponseSpec):
+                [lsp_id] = [
+                    lsp_id
+                    for previous_message, lsp_id in lsp_id_map.items()
+                    if isinstance(previous_message, _RequestSpec)
+                    and previous_message.wait_id == message.wait_id
+                ]
+                json_commands.append(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "$test/waitForResponse",
+                        "params": {"id": lsp_id},
+                    }
+                )
+            elif isinstance(message, _WaitForHhServerReadySpec):
+                json_commands.append(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "$test/waitForHhServerReady",
+                        "params": {},
+                    }
+                )
             else:
                 raise ValueError(f"unhandled message type {message.__class__.__name__}")
         return (json_commands, lsp_id_map)
 
     def _verify_transcript(
-        self, *, transcript: Transcript, lsp_id_map: "_LspIdMap"
+        self, *, variables: VariableMap, transcript: Transcript, lsp_id_map: "_LspIdMap"
     ) -> Iterable["_ErrorDescription"]:
         handled_entries = set()
 
@@ -234,15 +336,37 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 )
                 entry = transcript[transcript_id]
                 error_description = self._verify_request(
-                    entry=entry, lsp_id=lsp_id, request=message
+                    variables=variables, entry=entry, lsp_id=lsp_id, request=message
                 )
                 if error_description is not None:
                     yield error_description
+            elif isinstance(message, _DebugRequestSpec):
+                transcript_id = LspCommandProcessor._client_request_id(lsp_id)
+                handled_entries.add(transcript_id)
+                assert transcript_id in transcript, (
+                    f"Expected message with ID {lsp_id!r} "
+                    + f"to have an entry in the transcript "
+                    + f"under key {transcript_id!r}, "
+                    + f"but it was not found. Transcript: {transcript!r}"
+                )
+                entry = transcript[transcript_id]
+                error_description = self._render_telemetry_rage(
+                    debug_request=message, result=entry.received["result"]
+                )
+                yield error_description
             elif isinstance(message, _NotificationSpec):
                 # Nothing needs to be done here, since we sent the notification
                 # and don't expect a response.
                 pass
-            elif isinstance(message, (_WaitForRequestSpec, _WaitForNotificationSpec)):
+            elif isinstance(
+                message,
+                (
+                    _WaitForRequestSpec,
+                    _WaitForNotificationSpec,
+                    _WaitForResponseSpec,
+                    _WaitForHhServerReadySpec,
+                ),
+            ):
                 # Nothing needs to be done here -- if we failed to wait for the
                 # message, an exception will have been thrown at the
                 # `LspCommandProcessor` layer.
@@ -256,7 +380,12 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
         )
 
     def _verify_request(
-        self, *, lsp_id: Json, entry: TranscriptEntry, request: "_RequestSpec"
+        self,
+        *,
+        variables: VariableMap,
+        lsp_id: Json,
+        entry: TranscriptEntry,
+        request: "_RequestSpec",
     ) -> Optional["_ErrorDescription"]:
         actual_result = entry.received.get("result")
         actual_powered_by = entry.received.get("powered_by")
@@ -267,22 +396,25 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
         else:
             request_description = f"Request with ID {lsp_id!r}"
 
-        if actual_result != request.result:
+        expected_result = interpolate_variables(
+            payload=request.result, variables=variables
+        )
+
+        if actual_result != expected_result:
             error_description = self._pretty_print_diff(
-                actual=actual_result, expected=request.result
+                actual=actual_result, expected=expected_result
             )
             description = f"""\
 {request_description} got an incorrect result:
 
-{error_description}
-    """
+{error_description}"""
             request_context = self._get_context_for_traceback(request.traceback)
             context = f"""\
 This was the associated request:
 
 {request_context}"""
             remediation = self._describe_response_for_remediation(
-                request=request, actual_response=entry.received
+                variables=variables, request=request, actual_response=entry.received
             )
             return _ErrorDescription(
                 description=description, context=context, remediation=remediation
@@ -298,7 +430,7 @@ This was the associated request:
 
 {request_context}"""
             remediation = self._describe_response_for_remediation(
-                request=request, actual_response=entry.received
+                variables=variables, request=request, actual_response=entry.received
             )
             return _ErrorDescription(
                 description=description, context=context, remediation=remediation
@@ -312,19 +444,23 @@ This was the associated request:
         with open(source_filename) as f:
             source_text = f.read()
 
-        (start_line_num, end_line_num) = self._find_line_range_for_function_call(
-            file_contents=source_text, line_num=caller_frame.lineno
+        (
+            start_line_num_0idx_incl,
+            end_line_num_0idx_incl,
+        ) = self._find_line_range_for_function_call(
+            file_contents=source_text, line_num_1idx=caller_frame.lineno
         )
         return self._pretty_print_file_context(
             file_path=source_filename,
             file_contents=source_text,
-            start_line_num=start_line_num,
-            end_line_num=end_line_num,
+            start_line_num_0idx_incl=start_line_num_0idx_incl,
+            end_line_num_0idx_incl=end_line_num_0idx_incl,
         )
 
     def _find_line_range_for_function_call(
-        self, file_contents: str, line_num: int
+        self, file_contents: str, line_num_1idx: int
     ) -> Tuple[int, int]:
+        # pyre-fixme[18]: Global name `driver` is undefined.
         driver = lib2to3.pgen2.driver.Driver(
             grammar=lib2to3.pygram.python_grammar, convert=pytree.convert
         )
@@ -355,37 +491,46 @@ This was the associated request:
             (node, self._line_range_of_node(node)) for node in all_function_calls
         ]
         function_calls_containing_line = [
-            (node, (max_line_num - min_line_num))
-            for (node, (min_line_num, max_line_num)) in function_calls_with_line_ranges
-            if min_line_num <= line_num <= max_line_num
+            (node, (max_line_num_1idx_incl - min_line_num_1idx_incl))
+            for (
+                node,
+                (min_line_num_1idx_incl, max_line_num_1idx_incl),
+            ) in function_calls_with_line_ranges
+            if min_line_num_1idx_incl <= line_num_1idx <= max_line_num_1idx_incl
         ]
         innermost_function_call = min(
             function_calls_containing_line, key=operator.itemgetter(1)
         )[0]
-        (start_line_num, end_line_num) = self._line_range_of_node(
+        (start_line_num_1idx_incl, end_line_num_1idx_incl) = self._line_range_of_node(
             innermost_function_call
         )
-        start_line_num -= 1  # zero-index
-        end_line_num -= 1  # zero-index
-        return (start_line_num, end_line_num)
+        start_line_num_0idx_incl = start_line_num_1idx_incl - 1
+        end_line_num_0idx_incl = end_line_num_1idx_incl - 1
+        return (start_line_num_0idx_incl, end_line_num_0idx_incl)
 
     def _line_range_of_node(self, node: pytree.Base) -> Tuple[int, int]:
-        min_line_num = node.get_lineno()
-        num_lines_in_node = str(node).count("\n")
-        max_line_num = node.get_lineno() + num_lines_in_node
-        return (min_line_num, max_line_num)
+        min_line_num_1idx_incl = node.get_lineno()
+        num_lines_in_node = str(node).strip().count("\n")
+        max_line_num_1idx_incl = node.get_lineno() + num_lines_in_node
+        return (min_line_num_1idx_incl, max_line_num_1idx_incl)
 
     def _pretty_print_file_context(
-        self, file_path: str, file_contents: str, start_line_num: int, end_line_num: int
+        self,
+        file_path: str,
+        file_contents: str,
+        start_line_num_0idx_incl: int,
+        end_line_num_0idx_incl: int,
     ) -> str:
         source_lines = file_contents.splitlines(keepends=True)
-        context_lines = source_lines[start_line_num : end_line_num + 1]
+        context_lines = source_lines[
+            start_line_num_0idx_incl : end_line_num_0idx_incl + 1
+        ]
         vertical_bar = "\N{BOX DRAWINGS LIGHT VERTICAL}"
         context_lines = [
             # Include the line number in a gutter for display.
             f"{line_num:>5} {vertical_bar} {line_contents}"
             for line_num, line_contents in enumerate(
-                context_lines, start=start_line_num + 1
+                context_lines, start=start_line_num_0idx_incl + 1
             )
         ]
         file_context = "".join(context_lines)
@@ -397,11 +542,13 @@ This was the associated request:
         return display_filename + "\n" + file_context
 
     def _describe_response_for_remediation(
-        self, request: "_RequestSpec", actual_response: Json
+        self, variables: VariableMap, request: "_RequestSpec", actual_response: Json
     ) -> str:
         method = request.method
         params = request.params
-        result = actual_response.get("result")
+        result = uninterpolate_variables(
+            payload=actual_response.get("result"), variables=variables
+        )
         powered_by = actual_response.get("powered_by")
 
         request_snippet = f"""\
@@ -413,10 +560,10 @@ This was the associated request:
         method={method!r},
         params={params!r},
         result={result!r},"""
-        if not request.wait:
+        if request.wait_id is not None:
             request_snippet += f"""
-        wait=False,"""
-        if request.powered_by is not None:
+        wait_id={request.wait_id!r},"""
+        if powered_by is not None:
             request_snippet += f"""
         powered_by={powered_by!r},"""
         request_snippet += f"""
@@ -555,6 +702,37 @@ received the notification:
         ), "We should have identified a client-to-server request at this point"
         return corresponding_request
 
+    def _render_telemetry_rage(
+        self, debug_request: "_DebugRequestSpec", result: Json
+    ) -> "_ErrorDescription":
+        sections = []
+        for row in result:
+            title = row["title"]
+            if title is None:
+                title = "<none>"
+            data = row.get("data")
+            sections.append(
+                f"""\
+### Section {title} ###
+{data}
+"""
+            )
+        sections = textwrap.indent("".join(sections), prefix="  ")
+        description = f"""\
+Here are the results of issuing a `telemetry/rage` request to the language
+server:
+
+{sections}"""
+        context = """\
+<none>
+"""
+        remediation = """\
+Remove this `debug` request once you're done debugging.
+"""
+        return _ErrorDescription(
+            description=description, context=context, remediation=remediation
+        )
+
     def _pretty_print_snippet(self, obj: object) -> str:
         return textwrap.indent(pprint.pformat(obj), prefix="  ")
 
@@ -581,7 +759,7 @@ class _RequestSpec:
         "method",
         "params",
         "result",
-        "wait",
+        "wait_id",
         "comment",
         "powered_by",
         "traceback",
@@ -593,7 +771,7 @@ class _RequestSpec:
         method: str,
         params: Json,
         result: Json,
-        wait: bool,
+        wait_id: Optional[str],
         comment: Optional[str],
         powered_by: Optional[str],
         traceback: _Traceback,
@@ -601,10 +779,14 @@ class _RequestSpec:
         self.method = method
         self.params = params
         self.result = result
-        self.wait = wait
+        self.wait_id = wait_id
         self.comment = comment
         self.powered_by = powered_by
         self.traceback = traceback
+
+
+class _DebugRequestSpec:
+    pass
 
 
 class _NotificationSpec:
@@ -635,6 +817,17 @@ class _WaitForNotificationSpec:
         self.method = method
         self.params = params
         self.comment = comment
+
+
+class _WaitForResponseSpec:
+    __slots__ = ["wait_id"]
+
+    def __init__(self, *, wait_id: str) -> None:
+        self.wait_id = wait_id
+
+
+class _WaitForHhServerReadySpec:
+    pass
 
 
 class _ErrorDescription:

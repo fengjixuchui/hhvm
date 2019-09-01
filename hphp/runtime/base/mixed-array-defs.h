@@ -129,6 +129,7 @@ inline ArrayData* MixedArray::addVal(int64_t ki, Cell data) {
   auto ei = findForNewInsert(h);
   auto e = allocElm(ei);
   e->setIntKey(ki, h);
+  recordIntKey();
   if (ki >= m_nextKI && m_nextKI >= 0) m_nextKI = ki + 1;
   cellDup(data, e->data);
   // TODO(#3888164): should avoid needing these KindOfUninit checks.
@@ -149,6 +150,7 @@ inline ArrayData* MixedArray::addValNoAsserts(StringData* key, Cell data) {
   auto ei = findForNewInsert(h);
   auto e = allocElm(ei);
   e->setStrKey(key, h);
+  recordStrKey(key);
   // TODO(#3888164): we should restructure things so we don't have to check
   // KindOfUninit here.
   initElem(e->data, data);
@@ -288,6 +290,10 @@ void ConvertTvToUncounted(
   // Thus we only need to deal with strings/arrays.
   switch (type) {
     case KindOfFunc:
+    if (RuntimeOption::EvalAPCSerializeFuncs) {
+      assertx(data.pfunc->isPersistent());
+      break;
+    }
     case KindOfClass:
       data.pstr = isFuncType(type)
         ? const_cast<StringData*>(funcToStringHelper(data.pfunc))
@@ -324,7 +330,7 @@ void ConvertTvToUncounted(
       auto& ad = data.parr;
       assertx(ad->isVecArray());
       if (handlePersistent(ad)) break;
-      if (ad->empty()) ad = staticEmptyVecArray();
+      if (ad->empty()) ad = ArrayData::CreateVec();
       else ad = PackedArray::MakeUncounted(ad, false, seen);
       break;
     }
@@ -336,7 +342,7 @@ void ConvertTvToUncounted(
       auto& ad = data.parr;
       assertx(ad->isDict());
       if (handlePersistent(ad)) break;
-      if (ad->empty()) ad = staticEmptyDictArray();
+      if (ad->empty()) ad = ArrayData::CreateDict();
       else ad = MixedArray::MakeUncounted(ad, false, seen);
       break;
     }
@@ -348,7 +354,7 @@ void ConvertTvToUncounted(
       auto& ad = data.parr;
       assertx(ad->isKeyset());
       if (handlePersistent(ad)) break;
-      if (ad->empty()) ad = staticEmptyKeysetArray();
+      if (ad->empty()) ad = ArrayData::CreateKeyset();
       else ad = SetArray::MakeUncounted(ad, false, seen);
       break;
     }
@@ -359,7 +365,7 @@ void ConvertTvToUncounted(
       assertx(ad->isShape());
       if (handlePersistent(ad)) break;
       if (ad->empty()) {
-        ad = staticEmptyShapeArray();
+        ad = ArrayData::CreateShape();
       } else {
         ad = MixedArray::MakeUncounted(ad, false, seen);
       }
@@ -375,9 +381,9 @@ void ConvertTvToUncounted(
       assertx(!RuntimeOption::EvalHackArrDVArrs || ad->isNotDVArray());
       if (handlePersistent(ad)) break;
       if (ad->empty()) {
-        if (ad->isVArray()) ad = staticEmptyVArray();
-        else if (ad->isDArray()) ad = staticEmptyDArray();
-        else ad = staticEmptyArray();
+        if (ad->isVArray()) ad = ArrayData::CreateVArray();
+        else if (ad->isDArray()) ad = ArrayData::CreateDArray();
+        else ad = ArrayData::Create();
       } else if (ad->hasPackedLayout()) {
         ad = PackedArray::MakeUncounted(ad, false, seen);
       } else {

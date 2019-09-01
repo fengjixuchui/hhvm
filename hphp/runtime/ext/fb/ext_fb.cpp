@@ -602,10 +602,10 @@ Variant HHVM_FUNCTION(fb_compact_serialize, const Variant& thing) {
 }
 
 /* Check if there are enough bytes left in the buffer */
-#define CHECK_ENOUGH(bytes, pos, num) do {                      \
-    if ((int)(bytes) > (int)((num) - (pos))) {                  \
-      return FB_UNSERIALIZE_UNEXPECTED_END;                     \
-    }                                                           \
+#define CHECK_ENOUGH(bytes, pos, num) do {                                \
+    if ((int64_t)(bytes) > (int64_t)((num) - (pos)) || bytes < 0) {       \
+      return FB_UNSERIALIZE_UNEXPECTED_END;                               \
+    }                                                                     \
   } while (0)
 
 
@@ -729,7 +729,7 @@ int fb_compact_unserialize_from_buffer(
         }
       }
 
-      CHECK_ENOUGH(len, p, n);
+    CHECK_ENOUGH(len, p, n);
       out = Variant::attach(StringData::Make(buf + p, len, CopyString));
       p += len;
       break;
@@ -1082,7 +1082,11 @@ String HHVM_FUNCTION(fb_utf8_substr, const String& str, int64_t start,
 
 bool HHVM_FUNCTION(fb_intercept, const String& name, const Variant& handler,
                                  const Variant& data /* = uninit_variant */) {
-  return register_intercept(name, handler, data, true);
+  return register_intercept(name, handler, data, true, false);
+}
+
+bool HHVM_FUNCTION(fb_intercept2, const String& name, const Variant& handler) {
+  return register_intercept(name, handler, uninit_variant, true, true);
 }
 
 bool HHVM_FUNCTION(fb_rename_function, const String& orig_func_name,
@@ -1135,7 +1139,24 @@ void HHVM_FUNCTION(fb_enable_code_coverage) {
     raise_notice("Calling fb_enable_code_coverage from a nested "
                  "VM instance may cause unpredicable results");
   }
-  throw VMSwitchModeBuiltin();
+  if (RuntimeOption::EvalEnableCodeCoverage < 0) {
+    throw VMSwitchModeBuiltin();
+  }
+  if (RuntimeOption::EvalEnableCodeCoverage == 0) {
+    raise_notice("Calling fb_enable_code_coverage without enabling the setting "
+                 "Eval.EnableCodeCoverage");
+    throw VMSwitchModeBuiltin();
+  } else if (RuntimeOption::EvalEnableCodeCoverage == 1) {
+    auto const tport = g_context->getTransport();
+    if (!tport ||
+        tport->getParam("enable_code_coverage").compare("true") != 0) {
+      raise_notice("Calling fb_enable_code_coverage without adding "
+                    "'enable_code_coverage' in request params");
+      throw VMSwitchModeBuiltin();
+    }
+  }
+  // Otherwise we should have forced interp aleady,
+  // so no need to throw exception
 }
 
 Array disable_code_coverage_helper(bool report_frequency) {
@@ -1271,7 +1292,7 @@ struct FBExtension : Extension {
 
   void moduleInit() override {
     HHVM_RC_BOOL_SAME(HHVM_FACEBOOK);
-    HHVM_RC_BOOL(HHVM_NO_DESTRUCTORS, one_bit_refcount);
+    HHVM_RC_BOOL(HHVM_ONE_BIT_REFCOUNT, one_bit_refcount);
     HHVM_RC_INT_SAME(FB_UNSERIALIZE_NONSTRING_VALUE);
     HHVM_RC_INT_SAME(FB_UNSERIALIZE_UNEXPECTED_END);
     HHVM_RC_INT_SAME(FB_UNSERIALIZE_UNRECOGNIZED_OBJECT_TYPE);
@@ -1289,6 +1310,7 @@ struct FBExtension : Extension {
     HHVM_FE(fb_utf8_strlen_deprecated);
     HHVM_FE(fb_utf8_substr);
     HHVM_FE(fb_intercept);
+    HHVM_FE(fb_intercept2);
     HHVM_FE(fb_rename_function);
     HHVM_FE(fb_get_code_coverage);
     HHVM_FE(fb_enable_code_coverage);

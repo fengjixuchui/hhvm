@@ -185,7 +185,7 @@ loaded, using a separate CheckRefInner instruction.
   If S0 is not a null pointer, branch to block B. This is used to check the
   return value of a native helper that returns a potentially null StringData*.
 
-| AssertType, DRefineS(0), S(Gen,Cls,Ctx,FuncMM), P
+| AssertType, DRefineS(0), S(Gen,Cls,Ctx), P
 
   Assert that the type of S0 is T, copying it to D.
 
@@ -303,15 +303,6 @@ loaded, using a separate CheckRefInner instruction.
 
   Returns S0, with Nullptr removed from its type. This instruction currently
   supports a very limited range of types but can be expanded if needed.
-
-| AssertARFunc<spOff>, ND, S(StkPtr) S(Func), NF
-
-  Asserts that the ActRec at offset spOff from S0 contains function S1.
-
-| CheckFuncMMNonMagic, D(Func), S(FuncMM), B|P
-
-  Check that S0 is not a func pointer with magic bit set and if so copy it
-  to D, and fallthrough. If S0 has a magic bit set, branch to block B.
 
 | CheckSmashableClass, ND, S(Smashable) S(Cls), B
 
@@ -1207,10 +1198,6 @@ To string conversions:
   Loads into D the constructor of class S0. If the constructor cannot be called
   from the context in S1, raise an error.
 
-| LdFuncMFunc, D(Func), S(FuncM), NF
-
-  Loads into D the func pointer for the func pointer with magic bit set in S0.
-
 | LdSmashable, D(Smashable), NA, NF
 
   Loads a smashable value. The initial value is set to (1 << addr) + 1, where
@@ -1455,14 +1442,14 @@ To string conversions:
   Lookup the slot index of the static property with the name S1 on the class
   S0, returning -1 if not found.
 
-| LdObjMethodD, D(FuncMM), S(Cls) S(Str), NF
+| LdObjMethodD, D(Func|Nullptr), S(Cls) S(Str), NF
 
   Loads a func pointer, maybe with a magic bit set, pointing to the instance
   method that would be called if a method named S1 is invoked on an instance
   of S0. Raises a fatal if the class does not have an accessible method with
   the given name and does not have a __call method.
 
-| LdObjMethodS<methodName>, D(FuncMM), S(Cls) S(Smashable), NF
+| LdObjMethodS<methodName>, D(Func|Nullptr), S(Cls) S(Smashable), NF
 
   Loads a func pointer, maybe with a magic bit set, pointing to the instance
   method that would be called if a `methodName` is invoked on an instance of S0.
@@ -1475,13 +1462,6 @@ To string conversions:
   Try to load a cached non-static __invoke Func from the Class in S0, or branch
   to block B if it is not present.
 
-| LdArrFuncCtx<offset>, D(Func), S(Arr,Vec) S(StkPtr) S(FramePtr), NF
-
-  Try to load an array as a function context. This is for use translating
-  FPushFunc when the callee is an array. This instruction attempts to populate
-  a partially created ActRec pointed to by S1 + `offset' (in cells). It is also
-  responsible for performing caller checks (dynamic call, rx).
-
 | LdObjClass, DLdObjCls, S(Obj), NF
 
   Load the class out of the object in S0 and put it in D.
@@ -1490,13 +1470,12 @@ To string conversions:
 
   Load the name of the Class* in S0.
 
-| LdFunc<offset>, D(Func), S(Str) S(StkPtr) S(FramePtr), NF
+| LdFunc, D(Func|Nullptr), S(Str), NF
 
-  Resolve the Func whose name is S0. Perform caller checks (dynamic call, rx).
-  Then store the Func into the partially constructed ActRec pointed to by
-  S1 + `offset` (in cells). Also populate the m_this/m_cls field if necessary.
-  Fatal if the named function is not defined, and the autoloader fails to
-  define it.
+  Loads the Func whose name is S0, invoking autoloader if it is not defined yet.
+  Fatals if the named function is not defined, and the autoloader fails to
+  define it. Returns nullptr if S0 contained '::', indicating that this legacy
+  call should be handled by interpreter.
 
 | LdFuncCached<funcName>, D(Func), NA, NF
 
@@ -1509,11 +1488,6 @@ To string conversions:
   defined yet. Fatal if the function autoload fails to define it. This
   instruction does not assume the loaded function will be called immediately,
   so it will raise a resolution failure error instead of a call failure error.
-
-| LdARFuncPtr<offset>, DParam(Func), S(StkPtr), NF
-
-  Loads the m_func member of a pre-live ActRec. S0 is the base address, with
-  `offset' cells to the ActRec.
 
 | LdARCtx<T,offset>, DParam(Ctx), S(StkPtr), NF
 
@@ -1708,6 +1682,13 @@ To string conversions:
   This instruction assumes it can take the values from the stack
   without increfing them.
 
+| NewRecordArray<offset,keys...>, DArrRecord, S(RecDesc) S(StkPtr), PRc|CRc
+
+  Allocate a new record array, given the type S0 and N immediate keys
+  and taking N elements off the stack given by S1, at `offset'.
+  This instruction assumes it can take the values from the stack
+  without increfing them.
+
 | NewStructArray<offset,keys...>, DArrMixed, S(StkPtr), PRc|CRc
 
   Allocate a new key/value array, given N immediate keys and taking N elements
@@ -1756,10 +1737,9 @@ To string conversions:
 
 9. Call & Return
 
-| SpillFrame<offset,numArgs>,
+| SpillFrame<offset,numArgs,dynamicCall>,
 |   ND,
-|   S(StkPtr) S(Func,Nullptr) S(Ctx,Cls,Nullptr) S(Str,Nullptr) S(Bool)
-|   S(Arr|Vec,Nullptr),
+|   S(StkPtr) S(Func) S(Ctx,Cls,Nullptr) S(Arr|Vec,Nullptr),
 |   NF
 
   Operands:
@@ -1767,10 +1747,8 @@ To string conversions:
      S0 - caller stack pointer
      S1 - callee Func or nullptr
      S2 - object (for FCallObjMethod*), class (for FCallClsMethod*), context
-          (for FCallClsMethod*), or nullptr (for FPushFunc*).
-     S3 - invoke name for magic dispatch
-     S4 - whether this is a "dynamic" call
-     S5 - reified generics type structure list
+          (for FCallClsMethod*), or nullptr (for FCallFunc*).
+     S3 - reified generics type structure list
 
   Defines the fields for an activation record and writes them to the stack
   pointed to by S0, at `offset'.
@@ -2093,11 +2071,6 @@ To string conversions:
   This instruction is used at the beginning of tracelets to represent the state
   of the stack on entry and does not emit code.
 
-| FuncGuard<func,prologueAddrPtr>, ND, NA, NF
-
-  Emits a function guard for func, and arranges to write the address of the
-  following instruction to prologueAddrPtr.
-
 | Count, D(Int), S(Cell), NF
 
   Computes the number of elements in S0. The count of an array is the number of
@@ -2244,13 +2217,17 @@ To string conversions:
 | RaiseHackArrParamNotice<type,id,isReturn>, ND, S(Arr) S(Func), NF
 
   Raise a HackArrCompatNotice corresponding to a parameter or return type-hint
-  d/varray mismatch. S0 is the array being passed in. S1 is the function being
+  d/varray check.  S0 is the array being passed in.  S1 is the function being
   called.
+
+  This instruction performs the appropriate check based on `type', and logs
+  either on the failure branch or on both branches depending on the value of
+  RuntimeOption::EvalHackArrCompatTypeHintPolymorphism.
 
 | RaiseHackArrPropNotice<type>, ND, S(Cls) S(Arr) S(Int) C(Bool), NF
 
   Raise a HackArrCompatNotice corresponding to a property type-hint d/varray
-  mismatch.
+  mismatch.  Behaves like RaiseHackArrParamNotice.
 
 | RaiseArraySerializeNotice, ND, CStr S(Vec|Dict), NF
 
@@ -2269,9 +2246,9 @@ To string conversions:
   Raise a missing argument warning because only argc arguments were passed to
   function func.
 
-| RaiseTooManyArg<func,argc>, ND, NA, NF
+| RaiseTooManyArg<func>, ND, S(Int), NF
 
-  Raise a too many argument warning because argc arguments were passed to
+  Raise a too many argument warning because S0 arguments were passed to
   function func.
 
 | RaiseError, ND, S(Str), T
@@ -2296,6 +2273,11 @@ To string conversions:
   Throws a BadMethodCallException to indicate that an instance method was called
   with null $this.
 
+| ThrowCallReifiedFunctionWithoutGenerics, ND, S(Func), T
+
+  Throws a BadMethodCallException to indicate that S0 was called without reified
+  generics.
+
 | RaiseHackArrCompatNotice, ND, S(Str), NF
 
   Raises a Hack array compat notice with the text in S0 as its message.
@@ -2318,6 +2300,8 @@ To string conversions:
   `ForbidDynamicCallsToClsMeth` and `ForbidDynamicCallsToInstMeth` runtime
   options, either raise a warning or throw an exception indicating that the
   func specified in S0 was called dynamically (and should not be).
+  If `ForbidDynamicCallsWithAttr` is false, warnings and exceptions will not be
+  raised for functions and methods with `__DynamicallyCallable` attribute.
 
 | RaiseForbiddenDynConstruct, ND, S(Cls), NF
 
@@ -2448,15 +2432,19 @@ To string conversions:
   Identical to GetMemoKey but only accepts scalar types and cannot produce
   errors.
 
-| ArrayIdx, DArrElem, S(Arr) S(Int,Str) S(Cell), NF
+| ArrayIdx<sizeHint>, DArrElem, S(Arr) S(Int,Str) S(Cell), NF
 
   Checks if S0 contains the key S1, and returns the result if found. Otherwise
-  S2 is returned.
+  S2 is returned. The optimization data `sizeHint` doesn't affect semantics.
+  (`sizeHint` describes S0; it's one of {Default, SmallStatic}. Default is a
+  hash lookup. For SmallStatic, we'll do a linear scan for static string keys.)
 
-| DictIdx, DDictElem, S(Dict) S(Int,Str) S(Cell), NF
+| DictIdx<sizeHint>, DDictElem, S(Dict) S(Int,Str) S(Cell), NF
 
   Checks if S0 contains the key S1 and returns the result if found. Otherwise
-  S2 is returned.
+  S2 is returned. The optimization data `sizeHint` doesn't affect semantics.
+  (`sizeHint` describes S0; it's one of {Default, SmallStatic}. Default is a
+  hash lookup. For SmallStatic, we'll do a linear scan for static string keys.)
 
 | KeysetIdx, DKeysetElem, S(Keyset) S(Int,Str) S(Cell), NF
 
@@ -2974,7 +2962,7 @@ fields of that struct for holding intermediate values.
 
 | ProfileMixedArrayAccess, ND, S(Arr) S(Int,Str), NF
 
-  Profile access of the element keyed by S1 in S0, tracking offsets.
+  Profile access of the element keyed by S1 in S0, tracking sizes and offsets.
 
 | CheckMixedArrayOffset<pos>, ND, S(AK(Mixed)) S(Int,Str), B
 
@@ -2989,7 +2977,7 @@ fields of that struct for holding intermediate values.
 
 | ProfileDictAccess, ND, S(Dict) S(Int,Str), NF
 
-  Profile access of the element keyed by S1 in S0, tracking offsets.
+  Profile access of the element keyed by S1 in S0, tracking sizes and offsets.
 
 | CheckDictOffset<pos>, ND, S(Dict) S(Int,Str), B
 
@@ -2999,7 +2987,7 @@ fields of that struct for holding intermediate values.
 
 | ProfileKeysetAccess, ND, S(Keyset) S(Int,Str), NF
 
-  Profile access of the element keyed by S1 in S0, tracking offsets.
+  Profile access of the element keyed by S1 in S0, tracking sizes and offsets.
 
 | CheckKeysetOffset<pos>, ND, S(Keyset) S(Int,Str), B
 
@@ -3403,9 +3391,17 @@ fields of that struct for holding intermediate values.
 
   Profile the type of S0.
 
+| ProfileCall<rdsHandle>, ND, S(Func), NF
+
+  Profile the call to a function S0.
+
 | ProfileMethod<rdsHandle>, ND, S(Cls) S(Func), NF
 
   Profile the method S1 called with class context S0.
+
+| ProfileProp, ND, C(StaticStr) C(StaticStr), NF
+
+  Profile the access to property S(1) with base class S(0).
 
 | CheckPackedArrayDataBounds, ND, S(AK(Packed),Vec) S(Int), B
 
@@ -3550,36 +3546,10 @@ fields of that struct for holding intermediate values.
 
   Test surprise flags and stack overflow at the same time.
 
-| CheckARMagicFlag, ND, S(FramePtr), B
-
-  If the MagicDispatch flags on the ActRec pointed to by the frame pointer S0
-  are not set, branch to block B.
-
 | LdARNumArgsAndFlags, D(Int), S(FramePtr), NF
 
   Load the value of m_numArgsAndFlags on the ActRec pointed to by the frame
   pointer S0.
-
-| StARNumArgsAndFlags, ND, S(FramePtr) S(Int), NF
-
-  Store S1 to m_numArgsAndFlags on the ActRec pointed to by the frame pointer
-  S0.
-
-| LdARInvName, D(Str), S(FramePtr), NF
-
-  Load the value of m_invName off the ActRec pointed to by the frame pointer S0.
-  The compiler should generate this only if it knows that m_invName is a
-  StringData* (rather than, e.g., a VarEnv*).
-
-| StARInvName, ND, S(FramePtr) S(Str,Nullptr), CRc
-
-  Store S1 to m_invName on the ActRec pointed to by the frame pointer S0.
-
-| PackMagicArgs, DVArr, S(FramePtr), PRc
-
-  Call PackedArray::MakeVArray() with the value of numArgs() on the ActRec
-  pointed to by the frame pointer S0 as the first argument, and the pointer to
-  the first parameter in the frame as the second argument.
 
 | LdTVAux<ValidBits>, D(Int), S(Gen), NF
 

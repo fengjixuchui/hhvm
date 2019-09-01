@@ -25,27 +25,14 @@ namespace HPHP { namespace jit {
 
 inline TransContext::TransContext(
   TransID id, TransKind kind, TransFlags flags,
-  SrcKey sk, FPInvOffset spOff, int optIndex, Op fpushOff)
+  SrcKey sk, FPInvOffset spOff, int optIndex)
   : transID(id)
   , optIndex(optIndex)
   , kind(kind)
   , flags(flags)
   , initSpOffset(spOff)
-  , callerFPushOp(fpushOff)
-  , func(sk.valid() ? sk.func() : nullptr)
-  , initBcOffset(sk.offset())
-  , hasThis(sk.hasThis())
-  , prologue(sk.prologue())
-  , resumeMode(sk.resumeMode())
+  , initSrcKey(sk)
 {}
-
-inline SrcKey TransContext::srcKey() const {
-  if (prologue) {
-    assertx(resumeMode == ResumeMode::None);
-    return SrcKey { func, initBcOffset, SrcKey::PrologueTag{} };
-  }
-  return SrcKey { func, initBcOffset, resumeMode, hasThis };
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Control flow information.
@@ -86,7 +73,6 @@ inline ControlFlowInfo opcodeControlFlowInfo(const Op op, bool inlining) {
     case Op::Await:
     case Op::AwaitAll:
       return inlining ? ControlFlowInfo::ChangesPC : ControlFlowInfo::BreaksBB;
-    case Op::FCall:
     case Op::FCallClsMethod:
     case Op::FCallClsMethodD:
     case Op::FCallClsMethodRD:
@@ -94,6 +80,9 @@ inline ControlFlowInfo opcodeControlFlowInfo(const Op op, bool inlining) {
     case Op::FCallClsMethodSD:
     case Op::FCallClsMethodSRD:
     case Op::FCallCtor:
+    case Op::FCallFunc:
+    case Op::FCallFuncD:
+    case Op::FCallFuncRD:
     case Op::FCallObjMethod:
     case Op::FCallObjMethodD:
     case Op::FCallObjMethodRD:

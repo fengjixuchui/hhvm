@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
  *
@@ -137,7 +137,7 @@ let test () =
         List.map (("qux.php", "") :: base_disk_state) ~f:(fun (name, _) ->
             let relative_path = Relative_path.from_root name in
             let ast = Ast_provider.get_ast relative_path in
-            (name, Ast_utils.generate_ast_decl_hash ast))
+            (name, Nast.generate_ast_decl_hash ast))
         |> SMap.of_list
       in
       Ast_provider.local_changes_pop_stack ();

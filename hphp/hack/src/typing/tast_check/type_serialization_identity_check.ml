@@ -1,4 +1,4 @@
-(**
+(*
  * Copyright (c) 2018, Facebook, Inc.
  * All rights reserved.
  *
@@ -17,13 +17,15 @@ let rec strip_ty : type a. a ty -> a ty = fun ty ->
   let (reason, ty) = ty in
   let strip_tyl tyl = List.map tyl ~f:strip_ty in
   let strip_opt ty_opt = Option.map ty_opt ~f:strip_ty in
+  let strip_possibly_enforced_ty et =
+    { et with et_type = strip_ty et.et_type } in
   let ty =
     match ty with
     | Tmixed ->
       ty
     | Tnothing ->
       ty
-    | Tany
+    | Tany _
     | Tnonnull
     | Tdynamic
     | Terr ->
@@ -96,7 +98,7 @@ let rec strip_ty : type a. a ty -> a ty = fun ty ->
         _
       } ->
       let strip_param { fp_type; fp_kind; _ } =
-        let fp_type = strip_ty fp_type in
+        let fp_type = strip_possibly_enforced_ty fp_type in
         {
           fp_type;
           fp_kind;
@@ -109,7 +111,7 @@ let rec strip_ty : type a. a ty -> a ty = fun ty ->
           fp_rx_annotation = None;
       } in
       let ft_params = List.map ft_params ~f:strip_param in
-      let ft_ret = strip_ty ft_ret in
+      let ft_ret = strip_possibly_enforced_ty ft_ret in
       Tfun {
         ft_is_coroutine;
         ft_params;
@@ -138,6 +140,10 @@ let rec strip_ty : type a. a ty -> a ty = fun ty ->
       in
       let shape_fields = Nast.ShapeMap.map strip_field shape_fields in
       Tshape (shape_kind, shape_fields)
+    | Tpu (base, enum, kind) ->
+      Tpu (strip_ty base, enum, kind)
+    | Tpu_access (base, id) ->
+      Tpu_access (strip_ty base, id)
   in
   (reason, ty)
 

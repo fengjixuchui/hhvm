@@ -330,9 +330,11 @@ CachedUnit createUnitFromString(const char* path,
                                 const RepoOptions& options,
                                 FileLoadFlags& flags,
                                 copy_ptr<CachedUnitWithFree> orig = {}) {
+  LogTimer generateSha1Timer("generate_sha1_ms", ent);
   folly::StringPiece path_sp = path;
   auto const sha1 = SHA1{mangleUnitSha1(string_sha1(contents.slice()), path_sp,
                                         options)};
+  generateSha1Timer.stop();
   if (orig && orig->cu.unit && sha1 == orig->cu.unit->sha1()) return orig->cu;
   auto const check = [&] (Unit* unit) {
     if (orig && orig->cu.unit && unit &&
@@ -385,7 +387,9 @@ CachedUnit createUnitFromFile(const StringData* const path,
                               const RepoOptions& options,
                               FileLoadFlags& flags,
                               copy_ptr<CachedUnitWithFree> orig = {}) {
+  LogTimer readUnitTimer("read_unit_ms", ent);
   auto const contents = readFileAsString(w, path);
+  readUnitTimer.stop();
   return contents
     ? createUnitFromString(path->data(), *contents, releaseUnit, ent,
                            nativeFuncs, options, flags, orig)
@@ -835,6 +839,8 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + std::to_string(RuntimeOption::EvalForbidDynamicCallsToClsMeth)
     + std::to_string(RuntimeOption::EvalForbidDynamicCallsToInstMeth)
     + std::to_string(RuntimeOption::EvalForbidDynamicConstructs)
+    + (RuntimeOption::EvalForbidDynamicCallsWithAttr ? '1' : '0')
+    + (RuntimeOption::EvalWarnOnNonLiteralClsMeth ? '1' : '0')
     + (RuntimeOption::EvalNoticeOnBuiltinDynamicCalls ? '1' : '0')
     + (RuntimeOption::EvalHackArrDVArrs ? '1' : '0')
     + (RuntimeOption::EvalAssemblerFoldDefaultValues ? '1' : '0')
@@ -852,6 +858,7 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EvalIsCompatibleClsMethType ? '1' : '0')
     + (RuntimeOption::EvalNoticeOnByRefArgumentTypehintViolation ? '1' : '0')
     + (RuntimeOption::EvalHackRecords ? '1' : '0')
+    + (RuntimeOption::EvalHackRecordArrays ? '1' : '0')
     + (RuntimeOption::EvalArrayProvenance ? '1' : '0')
     + std::to_string(RuntimeOption::EvalAssemblerMaxScalarSize)
     + opts.cacheKeyRaw()
