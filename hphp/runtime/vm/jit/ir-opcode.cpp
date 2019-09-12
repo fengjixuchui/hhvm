@@ -359,6 +359,12 @@ bool opcodeMayRaise(Opcode opc) {
   case ConvCellToInt:
   case ConvCellToObj:
   case ConvCellToStr:
+  case ConvClsMethToArr:
+  case ConvClsMethToDArr:
+  case ConvClsMethToDict:
+  case ConvClsMethToKeyset:
+  case ConvClsMethToVArr:
+  case ConvClsMethToVec:
   case ConvDictToArr:
   case ConvDictToDArr:
   case ConvDictToKeyset:
@@ -436,7 +442,6 @@ bool opcodeMayRaise(Opcode opc) {
   case LdClsCtor:
   case LdClsPropAddrOrNull:
   case LdClsPropAddrOrRaise:
-  case LdReifiedGeneric:
   case LdClsTypeCns:
   case LdClsTypeCnsClsName:
   case LdFunc:
@@ -495,7 +500,6 @@ bool opcodeMayRaise(Opcode opc) {
   case RaiseUndefProp:
   case RaiseUninitLoc:
   case RaiseWarning:
-  case RecordReifiedGenericsAndGetName:
   case RecordReifiedGenericsAndGetTSList:
   case ResolveTypeStruct:
   case ReturnHook:
@@ -644,6 +648,7 @@ bool opcodeMayRaise(Opcode opc) {
   case ConvDblToStr:
   case ConvDictToVArr:
   case ConvDictToVec:
+  case ConvFuncToArr:
   case ConvShapeToVArr:
   case ConvShapeToVec:
   case ConvIntToArr:
@@ -783,7 +788,6 @@ bool opcodeMayRaise(Opcode opc) {
   case IsDVArray:
   case IsFunReifiedGenericsMatched:
   case IsClsDynConstructible:
-  case IsReifiedName:
   case IsNType:
   case IsNTypeMem:
   case IsType:
@@ -904,7 +908,6 @@ bool opcodeMayRaise(Opcode opc) {
   case LtRes:
   case LtStr:
   case LtStrInt:
-  case MangleReifiedName:
   case MapIsset:
   case MarkRDSInitialized:
   case MemoGetInstanceCache:

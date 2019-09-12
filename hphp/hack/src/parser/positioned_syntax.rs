@@ -156,8 +156,8 @@ impl PositionedValue {
         syntax_variant: &'a SyntaxVariant<PositionedToken, Self>,
         f: &'b dyn Fn(&'a Self, Acc<'a>) -> Acc<'a>,
     ) -> Acc<'a> {
-        let f_ = |n: &'a Syntax<PositionedToken, Self>, acc: Acc<'a>| f(&n.value, acc);
-        Syntax::fold_over_children(&f_, acc, syntax_variant)
+        let f_ = |acc: Acc<'a>, n: &'a Syntax<PositionedToken, Self>| f(&n.value, acc);
+        syntax_variant.iter_children().fold(acc, f_)
     }
 
     // This function should be a closure in the caller,
@@ -245,6 +245,14 @@ impl SyntaxTrait for PositionedSyntax {
         self.value.leading_width()
     }
 
+    fn trailing_width(&self) -> usize {
+        self.value.trailing_width()
+    }
+
+    fn full_width(&self) -> usize {
+        self.leading_width() + self.width() + self.trailing_width()
+    }
+
     fn leading_start_offset(&self) -> usize {
         self.value.start_offset()
     }
@@ -262,16 +270,11 @@ pub trait PositionedSyntaxTrait: SyntaxTrait {
      * Similar to position except that the end_offset does not include
      * the last character. (the end offset is one larger than given by position)
      */
-    fn trailing_width(&self) -> usize;
     fn position_exclusive(&self, source_text: &IndexedSourceText) -> Option<Pos>;
     fn text<'a>(&self, source_text: &'a SourceText) -> &'a str;
 }
 
 impl PositionedSyntaxTrait for PositionedSyntax {
-    fn trailing_width(&self) -> usize {
-        self.value.trailing_width()
-    }
-
     fn start_offset(&self) -> usize {
         self.leading_start_offset() + self.leading_width()
     }

@@ -297,8 +297,8 @@ let handle_message :
             (Printf.sprintf
                "IDE services failed to initialize: %s"
                error_message) )
-    | ( Initialized { server_env; _ },
-        File_opened { File_opened.file_path; file_contents } ) ->
+    | (Initialized { server_env; _ }, File_opened { file_path; file_contents })
+      ->
       let path =
         file_path |> Path.to_string |> Relative_path.create_detect_prefix
       in
@@ -383,6 +383,35 @@ let handle_message :
           in
           () );
         Lwt.return (state, Handle_message_result.Response result))
+    (* Autocomplete docblock resolve *)
+    | (Initialized { server_env; _ }, Completion_resolve_location param) ->
+      ClientIdeMessage.Completion_resolve_location.(
+        let start_time = Unix.gettimeofday () in
+        let contents =
+          Option.value_exn param.document_location.file_contents
+        in
+        let result =
+          ServerDocblockAt.go_docblock_at_contents
+            ~filename:(Path.to_string param.document_location.file_path)
+            ~contents
+            ~line:param.document_location.line
+            ~column:param.document_location.column
+            ~kind:param.kind
+        in
+        let sienv = !(server_env.ServerEnv.local_symbol_table) in
+        ( if sienv.SearchUtils.sie_log_timings then
+          let pathstr = Path.to_string param.document_location.file_path in
+          let msg =
+            Printf.sprintf
+              "[docblock] Search for [%s] line [%d] column [%d] kind [%s]"
+              pathstr
+              param.document_location.line
+              param.document_location.column
+              (SearchUtils.show_si_kind param.kind)
+          in
+          let _t : float = Hh_logger.log_duration msg start_time in
+          () );
+        Lwt.return (state, Handle_message_result.Response result))
     (* Document highlighting *)
     | (Initialized { server_env; _ }, Document_highlight document_location) ->
       let (ctx, entry) =
@@ -438,6 +467,33 @@ let handle_message :
               ~entry
               ~line:document_location.ClientIdeMessage.line
               ~column:document_location.ClientIdeMessage.column)
+      in
+      Lwt.return (state, Handle_message_result.Response result)
+    (* Document Symbol *)
+    | (Initialized { server_env; _ }, Document_symbol document_identifier) ->
+      let result =
+        match document_identifier.Document_symbol.file_contents with
+        | None -> []
+        | Some file_contents ->
+          FileOutline.outline server_env.ServerEnv.popt file_contents
+      in
+      Lwt.return (state, Handle_message_result.Response result)
+    (* Type Coverage *)
+    | (Initialized { server_env; _ }, Type_coverage document_identifier) ->
+      let document_location =
+        {
+          file_path = document_identifier.file_path;
+          file_contents = Some document_identifier.file_contents;
+          line = 0;
+          column = 0;
+        }
+      in
+      let (ctx, entry) =
+        make_context_from_document_location server_env document_location
+      in
+      let result =
+        Provider_utils.with_context ~ctx ~f:(fun () ->
+            ServerColorFile.go_ctx ~ctx ~entry)
       in
       Lwt.return (state, Handle_message_result.Response result))
 

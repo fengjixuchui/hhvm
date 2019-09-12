@@ -6,6 +6,7 @@
  * when choosing a different Pos module, you must also choose its
  * compatible Pos_source module. *)
 
+open Core_kernel
 open Lexing
 
 type b = Pos_source.t
@@ -160,7 +161,7 @@ let string t =
   let (line, start, end_) = info_pos t in
   Printf.sprintf
     "File %S, line %d, characters %d-%d:"
-    (String.trim (filename t))
+    (String.strip (filename t))
     line
     start
     end_
@@ -177,10 +178,12 @@ let json pos =
   let (line, start, end_) = info_pos pos in
   let fn = filename pos in
   Hh_json.JSON_Object
-    [ ("filename", Hh_json.JSON_String fn);
+    [
+      ("filename", Hh_json.JSON_String fn);
       ("line", Hh_json.int_ line);
       ("char_start", Hh_json.int_ start);
-      ("char_end", Hh_json.int_ end_) ]
+      ("char_end", Hh_json.int_ end_);
+    ]
 
 (*
  * !!! Be careful !!!
@@ -454,7 +457,7 @@ let multiline_string t =
   let (line_start, char_start, line_end, char_end) = destruct_range t in
   Printf.sprintf
     "File %S, line %d, character %d - line %d, character %d:"
-    (String.trim (filename t))
+    (String.strip (filename t))
     line_start
     char_start
     line_end
@@ -475,11 +478,13 @@ let multiline_json t =
   let (line_start, char_start, line_end, char_end) = destruct_range t in
   let fn = filename t in
   Hh_json.JSON_Object
-    [ ("filename", Hh_json.JSON_String fn);
+    [
+      ("filename", Hh_json.JSON_String fn);
       ("line_start", Hh_json.int_ line_start);
       ("char_start", Hh_json.int_ char_start);
       ("line_end", Hh_json.int_ line_end);
-      ("char_end", Hh_json.int_ (char_end - 1)) ]
+      ("char_end", Hh_json.int_ (char_end - 1));
+    ]
 
 let line_beg_offset p =
   match p with
@@ -521,6 +526,19 @@ let make_from_lnum_bol_cnum ~pos_file ~pos_start ~pos_end =
             ~pos_bol:bol_end
             ~pos_cnum:cnum_end;
       }
+
+let pessimize_enabled pos pessimize_coefficient =
+  let path = filename pos in
+  match Relative_path.prefix path with
+  | Relative_path.Root when pessimize_coefficient > 0.0 ->
+    let range = 2000000 in
+    let filename = Relative_path.suffix path in
+    let hash = Hashtbl.hash filename in
+    let r = hash % range in
+    Float.of_int r /. Float.of_int range <= pessimize_coefficient
+  | _ -> pessimize_coefficient = 1.0
+
+(* hack for test cases *)
 
 let print_verbose_absolute p =
   let (a, b, c) = line_beg_offset p in

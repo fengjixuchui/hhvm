@@ -201,7 +201,6 @@ vm_decode_function(const_variant_ref function,
                    HPHP::Class*& cls,
                    StringData*& invName,
                    bool& dynamic,
-                   ArrayData*& reifiedGenerics,
                    DecodeFlags flags = DecodeFlags::Warn,
                    bool genericsAlreadyGiven = false);
 
@@ -211,8 +210,8 @@ vm_decode_function(const_variant_ref function,
                    DecodeFlags flags = DecodeFlags::Warn,
                    bool genericsAlreadyGiven = false) {
   ctx.func = vm_decode_function(function, nullptr, ctx.this_, ctx.cls,
-                                ctx.invName, ctx.dynamic, ctx.reifiedGenerics,
-                                flags, genericsAlreadyGiven);
+                                ctx.invName, ctx.dynamic, flags,
+                                genericsAlreadyGiven);
 }
 
 std::pair<Class*, Func*> decode_for_clsmeth(
@@ -223,13 +222,14 @@ std::pair<Class*, Func*> decode_for_clsmeth(
   DecodeFlags flags = DecodeFlags::Warn);
 
 Variant vm_call_user_func(const_variant_ref function, const Variant& params,
-                          bool checkRef = false);
+                          bool checkRef = false,
+                          bool allowDynCallNoPointer = false);
 template<typename T>
-Variant vm_call_user_func(T&& t, const Variant& params,
-                          bool checkRef = false) {
+Variant vm_call_user_func(T&& t, const Variant& params, bool checkRef = false,
+                          bool allowDynCallNoPointer = false) {
   const Variant function{std::forward<T>(t)};
   return vm_call_user_func(
-    const_variant_ref{function}, params, checkRef
+    const_variant_ref{function}, params, checkRef, allowDynCallNoPointer
   );
 }
 

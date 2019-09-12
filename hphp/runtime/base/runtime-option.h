@@ -18,6 +18,7 @@
 #define incl_HPHP_RUNTIME_OPTION_H_
 
 #include <folly/dynamic.h>
+#include <folly/experimental/io/FsUtil.h>
 
 #include <unordered_map>
 #include <algorithm>
@@ -79,7 +80,6 @@ struct RepoOptions {
   H(bool,           EnableCoroutines,               true)             \
   H(bool,           Hacksperimental,                false)            \
   H(bool,           DisableLvalAsAnExpression,      false)            \
-  H(bool,           HackCompilerUseRustParser,      true)             \
   H(bool,           AllowNewAttributeSyntax,        false)            \
   H(bool,           ConstDefaultFuncArgs,           false)            \
   H(bool,           ConstStaticProps,               false)            \
@@ -176,6 +176,18 @@ struct RuntimeOption {
     std::string& xboxPassword,
     std::set<std::string>& xboxPasswords
   );
+
+  static folly::Optional<folly::fs::path> GetHomePath(
+    const folly::StringPiece user);
+
+  /**
+   * Find a config file corresponding to the given user and parse its
+   * settings into the given ini and hdf objects.
+   *
+   * Return true on success and false on failure.
+   */
+  static bool ReadPerUserSettings(const folly::fs::path& confFileName,
+                                  IniSettingMap& ini, Hdf& config);
 
   static std::string getTraceOutputFile();
 
@@ -586,6 +598,9 @@ struct RuntimeOption {
   // Disables static closures
   // true => error, false => default behaviour
   static bool DisableStaticClosures;
+  // Disables __halt_compiler()
+  // true => error, false => default behaviour
+  static bool DisableHaltCompiler;
   // Enables the class-level where constraints
   // true => allow the feature, false => disable the feature
   static bool EnableClassLevelWhereClauses;
@@ -1052,9 +1067,6 @@ struct RuntimeOption {
   F(bool, ArrayProvenance, false)                                       \
   /* Tag _all_ empty arrays we create at runtime. */                    \
   F(bool, ArrayProvenanceEmpty, false)                                  \
-  /* Enable experimental array provenance opportunistic creation of     \
-   * tagged empty arrays */                                             \
-  F(bool, ArrayProvenancePromoteEmptyArrays, false)                      \
   /* Enable logging the source of vecs/dicts whose vec/dict-ness is     \
    * observed, e.g. through serialization */                            \
   F(bool, LogArrayProvenance, false)                                    \
@@ -1131,6 +1143,8 @@ struct RuntimeOption {
    */                                                                   \
   F(bool, ForbidDynamicCallsWithAttr, false)                            \
   F(bool, WarnOnNonLiteralClsMeth, false)                               \
+  /* Toggles logging for expressions of type $var::name() */            \
+  F(bool, LogKnownMethodsAsDynamicCalls, true)                          \
   /*                                                                    \
    * Control handling of out-of-range integer values in the compact     \
    * Thrift serializer.                                                 \

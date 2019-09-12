@@ -52,6 +52,7 @@ type hh_server_state =
   | Hh_server_typechecking_local
   | Hh_server_typechecking_global_blocking
   | Hh_server_typechecking_global_interruptible
+  | Hh_server_typechecking_global_remote_blocking
   | Hh_server_stolen
   | Hh_server_forgot
 
@@ -245,6 +246,8 @@ let hh_server_state_to_string (hh_server_state : hh_server_state) : string =
     "hh_server typechecking (global, blocking)"
   | Hh_server_typechecking_global_interruptible ->
     "hh_server typechecking (global, interruptible)"
+  | Hh_server_typechecking_global_remote_blocking ->
+    "hh_server typechecking (global remote, blocking)"
   | Hh_server_handling_or_ready -> "hh_server ready"
   | Hh_server_unknown -> "hh_server unknown state"
   | Hh_server_forgot -> "hh_server forgotten state"
@@ -384,12 +387,12 @@ let update_hh_server_state_if_necessary (event : event) : unit =
         set_hh_server_state Hh_server_handling_or_ready
       | BUSY_STATUS Doing_local_typecheck ->
         set_hh_server_state Hh_server_typechecking_local
-      | BUSY_STATUS (Doing_global_typecheck can_interrupt) ->
+      | BUSY_STATUS (Doing_global_typecheck global_typecheck_kind) ->
         set_hh_server_state
-          ( if can_interrupt then
-            Hh_server_typechecking_global_interruptible
-          else
-            Hh_server_typechecking_global_blocking )
+          (match global_typecheck_kind with
+          | Blocking -> Hh_server_typechecking_global_blocking
+          | Interruptible -> Hh_server_typechecking_global_interruptible
+          | Remote_blocking _ -> Hh_server_typechecking_global_remote_blocking)
       | NEW_CLIENT_CONNECTED -> set_hh_server_state Hh_server_stolen
       | DIAGNOSTIC _
       | FATAL_EXCEPTION _
@@ -471,16 +474,18 @@ let get_message_source (server : server_conn) (client : Jsonrpc.queue) :
     in
     let%lwt message_source =
       Lwt.pick
-        [ (let%lwt () = Lwt_unix.sleep 1.0 in
+        [
+          (let%lwt () = Lwt_unix.sleep 1.0 in
            Lwt.return `No_source);
           (* Note that `wait_read` waits for the file descriptor to be readable, but
     does not actually read anything from it (so we won't end up with a race
     condition where we've read data from both file descriptors but only process
     the data from either the client or the server). *)
-          (let%lwt () = Lwt_unix.wait_read server_read_fd in
-           Lwt.return `From_server);
+            (let%lwt () = Lwt_unix.wait_read server_read_fd in
+             Lwt.return `From_server);
           (let%lwt () = Lwt_unix.wait_read client_read_fd in
-           Lwt.return `From_client) ]
+           Lwt.return `From_client);
+        ]
     in
     Lwt.return message_source
 
@@ -496,7 +501,8 @@ let get_client_message_source
     in
     let%lwt message_source =
       Lwt.pick
-        [ (let%lwt () = Lwt_unix.sleep 1.0 in
+        [
+          (let%lwt () = Lwt_unix.sleep 1.0 in
            Lwt.return `No_source);
           (let%lwt () = Lwt_unix.wait_read client_read_fd in
            Lwt.return `From_client);
@@ -510,7 +516,7 @@ let get_client_message_source
              failwith
                "this `sleep` should have deferred to the `No_source case above"
            | Some message ->
-             Lwt.return (`From_ide_service (Client_ide_notification message)))
+             Lwt.return (`From_ide_service (Client_ide_notification message)));
         ]
     in
     Lwt.return message_source
@@ -875,21 +881,28 @@ let hack_errors_to_lsp_diagnostic
 (************************************************************************)
 (* Protocol                                                             *)
 (************************************************************************)
+let get_document_contents
+    (editor_open_files : Lsp.TextDocumentItem.t SMap.t) (uri : string) :
+    string option =
+  match SMap.get uri editor_open_files with
+  | Some document -> Some document.TextDocumentItem.text
+  | None ->
+    let rawpath = String_utils.lstrip uri "file://" in
+    (try
+       let contents = Disk.cat rawpath in
+       Some contents
+     with _ -> None)
 
 let get_document_location
     (editor_open_files : Lsp.TextDocumentItem.t SMap.t)
     (params : Lsp.TextDocumentPositionParams.t) :
     ClientIdeMessage.document_location =
   let (file_path, line, column) = lsp_file_position_to_hack params in
-  let file_path = Path.make file_path in
-  let file_contents =
-    let uri =
-      params.TextDocumentPositionParams.textDocument.TextDocumentIdentifier.uri
-    in
-    match SMap.get uri editor_open_files with
-    | Some document -> Some document.TextDocumentItem.text
-    | None -> None
+  let uri =
+    params.TextDocumentPositionParams.textDocument.TextDocumentIdentifier.uri
   in
+  let file_path = Path.make file_path in
+  let file_contents = get_document_contents editor_open_files uri in
   { ClientIdeMessage.file_path; file_contents; line; column }
 
 let do_shutdown
@@ -932,7 +945,8 @@ let state_to_rage (state : state) : string =
     | Post_shutdown -> []
     | Main_loop menv ->
       Main_env.
-        [ "needs_idle";
+        [
+          "needs_idle";
           menv.needs_idle |> string_of_bool;
           "editor_open_files";
           menv.editor_open_files |> SMap.keys |> List.length |> string_of_int;
@@ -943,10 +957,12 @@ let state_to_rage (state : state) : string =
           "status.message";
           menv.status.message;
           "status.shortMessage";
-          Option.value menv.status.shortMessage ~default:"" ]
+          Option.value menv.status.shortMessage ~default:"";
+        ]
     | In_init ienv ->
       In_init_env.
-        [ "first_start_time";
+        [
+          "first_start_time";
           ienv.first_start_time |> string_of_float;
           "most_recent_start_time";
           ienv.most_recent_start_time |> string_of_float;
@@ -955,10 +971,12 @@ let state_to_rage (state : state) : string =
           "file_edits";
           ienv.file_edits |> ImmQueue.length |> string_of_int;
           "uris_with_unsaved_changes";
-          ienv.uris_with_unsaved_changes |> SSet.cardinal |> string_of_int ]
+          ienv.uris_with_unsaved_changes |> SSet.cardinal |> string_of_int;
+        ]
     | Lost_server lenv ->
       Lost_env.
-        [ "editor_open_files";
+        [
+          "editor_open_files";
           lenv.editor_open_files |> SMap.keys |> List.length |> string_of_int;
           "uris_with_unsaved_changes";
           lenv.uris_with_unsaved_changes |> SSet.cardinal |> string_of_int;
@@ -973,7 +991,8 @@ let state_to_rage (state : state) : string =
           "trigger_on_lsp";
           lenv.p.trigger_on_lsp |> string_of_bool;
           "trigger_on_lock_file";
-          lenv.p.trigger_on_lock_file |> string_of_bool ]
+          lenv.p.trigger_on_lock_file |> string_of_bool;
+        ]
   in
   state_to_string state ^ "\n" ^ String.concat ~sep:"\n" details ^ "\n"
 
@@ -1032,11 +1051,13 @@ let do_rage (state : state) (ref_unblocked_time : float ref) :
            in
            let%lwt stacks =
              Lwt.pick
-               [ (let%lwt () = Lwt_unix.sleep 4.50 in
+               [
+                 (let%lwt () = Lwt_unix.sleep 4.50 in
                   Lwt.return ["Timed out while getting pstacks"]);
                  pids
                  |> List.filter ~f:is_interesting
-                 |> Lwt_list.map_p get_stack ]
+                 |> Lwt_list.map_p get_stack;
+               ]
            in
            List.iter stacks ~f:add_data;
            Lwt.return_unit
@@ -1378,11 +1399,13 @@ let make_ide_completion_response
         | (_, false) -> (`InsertText completion.res_name, PlainText)
         | (_, true) ->
           ( `TextEdit
-              [ TextEdit.
+              [
+                TextEdit.
                   {
                     range = ide_range_to_lsp completion.res_replace_pos;
                     newText = completion.res_name;
-                  } ],
+                  };
+              ],
             PlainText )
       in
       let hack_completion_to_lsp (completion : complete_autocomplete_result) :
@@ -1408,18 +1431,20 @@ let make_ide_completion_response
           in
           Some
             (Hh_json.JSON_Object
-               [ (* Fullname is needed for namespaces.  We often trim namespaces to make
+               [
+                 (* Fullname is needed for namespaces.  We often trim namespaces to make
                   * the results more readable, such as showing "ad__breaks" instead of
                   * "Thrift\Packages\cf\ad__breaks".
                   *)
-                 ("fullname", Hh_json.JSON_String completion.res_fullname);
+                   ("fullname", Hh_json.JSON_String completion.res_fullname);
                  (* Filename/line/char/base_class are used to handle class methods.
                   * We could unify this with fullname in the future.
                   *)
-                 ("filename", Hh_json.JSON_String filename);
+                   ("filename", Hh_json.JSON_String filename);
                  ("line", Hh_json.int_ line);
                  ("char", Hh_json.int_ start);
-                 ("base_class", base_class) ])
+                 ("base_class", base_class);
+               ])
         in
         {
           label =
@@ -1599,22 +1624,61 @@ let do_completionItemResolve
  * hh_server.
  *)
 let do_resolve_local
-    (ide_service : ClientIdeService.t) (params : CompletionItemResolve.params)
-    : CompletionItemResolve.result Lwt.t =
-  let symbolname = params.Completion.label in
+    (ide_service : ClientIdeService.t)
+    (editor_open_files : Lsp.TextDocumentItem.t SMap.t)
+    (params : CompletionItemResolve.params) :
+    CompletionItemResolve.result Lwt.t =
   let raw_kind = params.Completion.kind in
   let kind = completion_kind_to_si_kind raw_kind in
-  let request =
-    ClientIdeMessage.Completion_resolve
-      { ClientIdeMessage.Completion_resolve.symbol = symbolname; kind }
+  (* Some docblocks are for class methods.  Class methods need to know
+  * file/line/column/base_class to find the docblock. *)
+  let%lwt result =
+    try
+      match params.Completion.data with
+      | None -> raise NoLocationFound
+      | Some _ as data ->
+        let filename = Jget.string_exn data "filename" in
+        let uri = "file://" ^ filename in
+        let file_path = Path.make filename in
+        let line = Jget.int_exn data "line" in
+        let column = Jget.int_exn data "char" in
+        let file_contents = get_document_contents editor_open_files uri in
+        let request =
+          ClientIdeMessage.Completion_resolve_location
+            {
+              ClientIdeMessage.Completion_resolve_location.document_location =
+                {
+                  ClientIdeMessage.file_path;
+                  ClientIdeMessage.file_contents;
+                  ClientIdeMessage.line;
+                  ClientIdeMessage.column;
+                };
+              kind;
+            }
+        in
+        let%lwt location_result = ClientIdeService.rpc ide_service request in
+        (match location_result with
+        | Ok raw_docblock ->
+          let documentation = docblock_to_markdown raw_docblock in
+          Lwt.return { params with Completion.documentation }
+        | Error error_message ->
+          failwith (Printf.sprintf "Local resolve failed: %s" error_message))
+      (* If that fails, next try using symbol *)
+    with _ ->
+      let symbolname = params.Completion.label in
+      let request =
+        ClientIdeMessage.Completion_resolve
+          { ClientIdeMessage.Completion_resolve.symbol = symbolname; kind }
+      in
+      let%lwt resolve_result = ClientIdeService.rpc ide_service request in
+      (match resolve_result with
+      | Ok raw_docblock ->
+        let documentation = docblock_to_markdown raw_docblock in
+        Lwt.return { params with Completion.documentation }
+      | Error error_message ->
+        failwith (Printf.sprintf "Local resolve failed: %s" error_message))
   in
-  let%lwt result = ClientIdeService.rpc ide_service request in
-  match result with
-  | Ok raw_docblock ->
-    let documentation = docblock_to_markdown raw_docblock in
-    Lwt.return { params with Completion.documentation }
-  | Error error_message ->
-    failwith (Printf.sprintf "Local resolve failed: %s" error_message)
+  Lwt.return result
 
 let do_workspaceSymbol
     (conn : server_conn)
@@ -1665,56 +1729,99 @@ let do_workspaceSymbol
       in
       Lwt.return (List.map results ~f:hack_symbol_to_lsp)))
 
+let rec hack_symbol_tree_to_lsp
+    ~(filename : string)
+    ~(accu : Lsp.SymbolInformation.t list)
+    ~(container_name : string option)
+    (defs : FileOutline.outline) : Lsp.SymbolInformation.t list =
+  SymbolDefinition.(
+    let hack_to_lsp_kind = function
+      | SymbolDefinition.Function -> SymbolInformation.Function
+      | SymbolDefinition.Class -> SymbolInformation.Class
+      | SymbolDefinition.Method -> SymbolInformation.Method
+      | SymbolDefinition.Property -> SymbolInformation.Property
+      | SymbolDefinition.Const -> SymbolInformation.Constant
+      | SymbolDefinition.Enum -> SymbolInformation.Enum
+      | SymbolDefinition.Interface -> SymbolInformation.Interface
+      | SymbolDefinition.Trait -> SymbolInformation.Interface
+      (* LSP doesn't have traits, so we approximate with interface *)
+      | SymbolDefinition.LocalVar -> SymbolInformation.Variable
+      | SymbolDefinition.Typeconst -> SymbolInformation.Class
+      (* e.g. "const type Ta = string;" -- absent from LSP *)
+      | SymbolDefinition.Typedef -> SymbolInformation.Class
+      (* e.g. top level type alias -- absent from LSP *)
+      | SymbolDefinition.Param -> SymbolInformation.Variable
+      (* We never return a param from a document-symbol-search *)
+    in
+    let hack_symbol_to_lsp definition containerName =
+      {
+        SymbolInformation.name = definition.name;
+        kind = hack_to_lsp_kind definition.kind;
+        location =
+          hack_symbol_definition_to_lsp_construct_location
+            definition
+            ~default_path:filename;
+        containerName;
+      }
+    in
+    match defs with
+    (* Flattens the recursive list of symbols *)
+    | [] -> List.rev accu
+    | def :: defs ->
+      let children = Option.value def.children ~default:[] in
+      let accu = hack_symbol_to_lsp def container_name :: accu in
+      let accu =
+        hack_symbol_tree_to_lsp
+          ~filename
+          ~accu
+          ~container_name:(Some def.name)
+          children
+      in
+      hack_symbol_tree_to_lsp ~filename ~accu ~container_name defs)
+
 let do_documentSymbol
     (conn : server_conn)
     (ref_unblocked_time : float ref)
     (params : DocumentSymbol.params) : DocumentSymbol.result Lwt.t =
   DocumentSymbol.(
     TextDocumentIdentifier.(
-      SymbolDefinition.(
-        let filename = lsp_uri_to_path params.textDocument.uri in
-        let command = ServerCommandTypes.OUTLINE filename in
-        let%lwt results = rpc conn ref_unblocked_time command in
-        let hack_to_lsp_kind = function
-          | SymbolDefinition.Function -> SymbolInformation.Function
-          | SymbolDefinition.Class -> SymbolInformation.Class
-          | SymbolDefinition.Method -> SymbolInformation.Method
-          | SymbolDefinition.Property -> SymbolInformation.Property
-          | SymbolDefinition.Const -> SymbolInformation.Constant
-          | SymbolDefinition.Enum -> SymbolInformation.Enum
-          | SymbolDefinition.Interface -> SymbolInformation.Interface
-          | SymbolDefinition.Trait -> SymbolInformation.Interface
-          (* LSP doesn't have traits, so we approximate with interface *)
-          | SymbolDefinition.LocalVar -> SymbolInformation.Variable
-          | SymbolDefinition.Typeconst -> SymbolInformation.Class
-          (* e.g. "const type Ta = string;" -- absent from LSP *)
-          | SymbolDefinition.Typedef -> SymbolInformation.Class
-          (* e.g. top level type alias -- absent from LSP *)
-          | SymbolDefinition.Param -> SymbolInformation.Variable
-          (* We never return a param from a document-symbol-search *)
+      let filename = lsp_uri_to_path params.textDocument.uri in
+      let command = ServerCommandTypes.OUTLINE filename in
+      let%lwt outline = rpc conn ref_unblocked_time command in
+      let converted =
+        hack_symbol_tree_to_lsp ~filename ~accu:[] ~container_name:None outline
+      in
+      Lwt.return converted))
+
+(* for serverless ide *)
+let do_documentSymbol_local
+    (ide_service : ClientIdeService.t)
+    (editor_open_files : Lsp.TextDocumentItem.t SMap.t)
+    (params : DocumentSymbol.params) : DocumentSymbol.result Lwt.t =
+  DocumentSymbol.(
+    TextDocumentIdentifier.(
+      let filename = lsp_uri_to_path params.textDocument.uri in
+      let file_contents =
+        get_document_contents editor_open_files params.textDocument.uri
+      in
+      let request =
+        ClientIdeMessage.Document_symbol
+          { ClientIdeMessage.Document_symbol.file_contents }
+      in
+      let%lwt results = ClientIdeService.rpc ide_service request in
+      match results with
+      | Ok outline ->
+        let converted =
+          hack_symbol_tree_to_lsp
+            ~filename
+            ~accu:[]
+            ~container_name:None
+            outline
         in
-        let hack_symbol_to_lsp definition containerName =
-          {
-            SymbolInformation.name = definition.name;
-            kind = hack_to_lsp_kind definition.kind;
-            location =
-              hack_symbol_definition_to_lsp_construct_location
-                definition
-                ~default_path:filename;
-            containerName;
-          }
-        in
-        let rec hack_symbol_tree_to_lsp ~accu ~container_name = function
-          (* Flattens the recursive list of symbols *)
-          | [] -> List.rev accu
-          | def :: defs ->
-            let children = Option.value def.children ~default:[] in
-            let accu = hack_symbol_to_lsp def container_name :: accu in
-            let accu = hack_symbol_tree_to_lsp accu (Some def.name) children in
-            hack_symbol_tree_to_lsp accu container_name defs
-        in
-        Lwt.return
-          (hack_symbol_tree_to_lsp ~accu:[] ~container_name:None results))))
+        Lwt.return converted
+      | Error error_message ->
+        failwith
+          (Printf.sprintf "Local document-symbol failed: %s" error_message)))
 
 let do_findReferences
     (conn : server_conn)
@@ -1776,6 +1883,25 @@ let do_highlight_local
   | Error error_message ->
     failwith (Printf.sprintf "Local highlight failed: %s" error_message)
 
+let format_typeCoverage_result results counts =
+  TypeCoverage.(
+    let coveredPercent = Coverage_level.get_percent counts in
+    let hack_coverage_to_lsp (pos, level) =
+      let range = hack_pos_to_lsp_range pos in
+      match level with
+      (* We only show diagnostics for completely untypechecked code. *)
+      | Ide_api_types.Checked
+      | Ide_api_types.Partial ->
+        None
+      | Ide_api_types.Unchecked -> Some { range; message = None }
+    in
+    {
+      coveredPercent;
+      uncoveredRanges = List.filter_map results ~f:hack_coverage_to_lsp;
+      defaultMessage =
+        "Un-type checked code. Consider adding type annotations.";
+    })
+
 let do_typeCoverage
     (conn : server_conn)
     (ref_unblocked_time : float ref)
@@ -1790,23 +1916,39 @@ let do_typeCoverage
     let%lwt (results, counts) : Coverage_level_defs.result =
       rpc conn ref_unblocked_time command
     in
-    let coveredPercent = Coverage_level.get_percent counts in
-    let hack_coverage_to_lsp (pos, level) =
-      let range = hack_pos_to_lsp_range pos in
-      match level with
-      (* We only show diagnostics for completely untypechecked code. *)
-      | Ide_api_types.Checked
-      | Ide_api_types.Partial ->
-        None
-      | Ide_api_types.Unchecked -> Some { range; message = None }
+    let formatted = format_typeCoverage_result results counts in
+    Lwt.return formatted)
+
+let do_typeCoverage_local
+    (ide_service : ClientIdeService.t)
+    (editor_open_files : Lsp.TextDocumentItem.t SMap.t)
+    (params : TypeCoverage.params) : TypeCoverage.result Lwt.t =
+  TypeCoverage.(
+    let document_contents =
+      get_document_contents
+        editor_open_files
+        params.textDocument.TextDocumentIdentifier.uri
     in
-    Lwt.return
-      {
-        coveredPercent;
-        uncoveredRanges = List.filter_map results ~f:hack_coverage_to_lsp;
-        defaultMessage =
-          "Un-type checked code. Consider adding type annotations.";
-      })
+    match document_contents with
+    | None -> failwith "Local type coverage failed, file could not be found."
+    | Some file_contents ->
+      let file_path =
+        params.textDocument.TextDocumentIdentifier.uri
+        |> lsp_uri_to_path
+        |> Path.make
+      in
+      let request =
+        ClientIdeMessage.Type_coverage
+          { ClientIdeMessage.file_path; ClientIdeMessage.file_contents }
+      in
+      let%lwt result = ClientIdeService.rpc ide_service request in
+      (match result with
+      | Ok (results, counts) ->
+        let formatted = format_typeCoverage_result results counts in
+        Lwt.return formatted
+      | Error error_message ->
+        failwith
+          (Printf.sprintf "Local type coverage failed: %s" error_message)))
 
 let do_formatting_common
     (editor_open_files : Lsp.TextDocumentItem.t SMap.t)
@@ -1993,14 +2135,20 @@ let do_server_busy (state : state) (status : ServerCommandTypes.busy_status) :
           ( MessageType.InfoMessage,
             None,
             "hh_server is initialized and running correctly." )
-        | Doing_global_typecheck false ->
+        | Doing_global_typecheck Blocking ->
           ( MessageType.WarningMessage,
             Some "checking project",
             "Hack: checking entire project (blocking)" )
-        | Doing_global_typecheck true ->
+        | Doing_global_typecheck Interruptible ->
           ( MessageType.InfoMessage,
             None,
             "Hack: checking entire project (interruptible)" )
+        | Doing_global_typecheck (Remote_blocking message) ->
+          ( MessageType.WarningMessage,
+            Some (Printf.sprintf "checking project: %s" message),
+            Printf.sprintf
+              "Hack: checking entire project (remote, blocking) - %s"
+              message )
         | Done_global_typecheck _ ->
           ( MessageType.InfoMessage,
             None,
@@ -2220,6 +2368,8 @@ let rec connect_client (root : Path.t) ~(autostart : bool) : server_conn Lwt.t
         (* irrelevant *)
         profile_log = false;
         (* irrelevant *)
+        remote = false;
+        (* irrelevant *)
         ai_mode = None;
         (* only relevant when autostart=true *)
         progress_callback = ClientConnect.null_progress_reporter;
@@ -2294,13 +2444,15 @@ let do_didChangeWatchedFiles_registerCapability () : Lsp.lsp_request =
     DidChangeWatchedFilesRegistrationOptions
       {
         DidChangeWatchedFiles.watchers =
-          [ {
+          [
+            {
               DidChangeWatchedFiles.globPattern
               (* We could be more precise here, but some language clients (such as
           LanguageClient-neovim) don't currently support rich glob patterns.
           We'll do further filtering at a later stage. *) =
                 "**";
-            } ];
+            };
+          ];
       }
   in
   let registration =
@@ -2676,7 +2828,7 @@ let track_ide_service_open_files
         ClientIdeService.rpc
           ide_service
           (ClientIdeMessage.File_opened
-             { ClientIdeMessage.File_opened.file_path; file_contents })
+             { ClientIdeMessage.file_path; file_contents })
       in
       Lwt.return_unit
     | _ ->
@@ -2685,8 +2837,10 @@ let track_ide_service_open_files
       Lwt.return_unit)
 
 let log_response_if_necessary
-    (event : event) (response : Hh_json.json option) (unblocked_time : float) :
-    unit =
+    (event : event)
+    (response : Hh_json.json option)
+    (unblocked_time : float)
+    (env : env) : unit =
   Jsonrpc.(
     match event with
     | Client_message c ->
@@ -2708,6 +2862,7 @@ let log_response_if_necessary
         ~start_hh_server_state:
           (get_older_hh_server_state c.timestamp |> hh_server_state_to_string)
         ~start_handle_time:unblocked_time
+        ~serverless_ide_flag:env.use_serverless_ide
         ~json
         ~json_response
     | _ -> ())
@@ -2717,7 +2872,8 @@ let hack_log_error
     (message : string)
     (stack : string)
     (source : string)
-    (unblocked_time : float) : unit =
+    (unblocked_time : float)
+    (env : env) : unit =
   let root = get_root_opt () in
   log "Exception: message: %s, stack trace: %s" message stack;
   match event with
@@ -2732,6 +2888,7 @@ let hack_log_error
         ~start_hh_server_state:
           (get_older_hh_server_state c.timestamp |> hh_server_state_to_string)
         ~start_handle_time:unblocked_time
+        ~serverless_ide_flag:env.use_serverless_ide
         ~json
         ~message
         ~stack
@@ -2966,12 +3123,15 @@ let handle_event
           |> respond_jsonrpc ~powered_by:Serverless_ide c;
           Lwt.return_unit
         (* Resolve documentation for a symbol: "Autocomplete Docblock!" *)
-        | ((In_init _ | Lost_server _), Client_message c)
+        | ( ( In_init { In_init_env.editor_open_files; _ }
+            | Lost_server { Lost_env.editor_open_files; _ } ),
+            Client_message c )
           when env.use_serverless_ide && c.method_ = "completionItem/resolve"
           ->
           let%lwt () = cancel_if_stale client c short_timeout in
           let%lwt result =
-            parse_completionItem c.params |> do_resolve_local ide_service
+            parse_completionItem c.params
+            |> do_resolve_local ide_service editor_open_files
           in
           result
           |> print_completionItem
@@ -2990,6 +3150,20 @@ let handle_event
           in
           result |> print_documentHighlight |> Jsonrpc.respond to_stdout c;
           Lwt.return_unit
+        (* Type coverage in serverless IDE *)
+        | ( ( In_init { In_init_env.editor_open_files; _ }
+            | Lost_server { Lost_env.editor_open_files; _ } ),
+            Client_message c )
+          when env.use_serverless_ide
+               && c.method_ = "textDocument/typeCoverage" ->
+          let%lwt () = cancel_if_stale client c short_timeout in
+          let%lwt result =
+            parse_typeCoverage c.params
+            |> do_typeCoverage_local ide_service editor_open_files
+          in
+          result |> print_typeCoverage |> Jsonrpc.respond to_stdout c;
+          Lwt.return_unit
+        (* Hover docblocks in serverless IDE *)
         | ( ( In_init { In_init_env.editor_open_files; _ }
             | Lost_server { Lost_env.editor_open_files; _ } ),
             Client_message c )
@@ -3000,6 +3174,20 @@ let handle_event
             |> do_hover_local ide_service editor_open_files
           in
           result |> print_hover |> respond_jsonrpc ~powered_by:Serverless_ide c;
+          Lwt.return_unit
+        | ( ( In_init { In_init_env.editor_open_files; _ }
+            | Lost_server { Lost_env.editor_open_files; _ } ),
+            Client_message c )
+          when env.use_serverless_ide
+               && c.method_ = "textDocument/documentSymbol" ->
+          let%lwt () = cancel_if_stale client c short_timeout in
+          let%lwt result =
+            parse_documentSymbol c.params
+            |> do_documentSymbol_local ide_service editor_open_files
+          in
+          result
+          |> print_documentSymbol
+          |> respond_jsonrpc ~powered_by:Serverless_ide c;
           Lwt.return_unit
         | ( ( In_init { In_init_env.editor_open_files; _ }
             | Lost_server { Lost_env.editor_open_files; _ } ),
@@ -3510,7 +3698,7 @@ let main (env : env) : Exit_status.t Lwt.t =
       in
       let response = Jsonrpc.last_sent () in
       (* for LSP requests and notifications, we keep a log of what+when we responded *)
-      log_response_if_necessary event response !ref_unblocked_time;
+      log_response_if_necessary event response !ref_unblocked_time env;
       Lwt.return_unit
     with
     | Server_fatal_connection_exception { Marshal_tools.stack; message } ->
@@ -3544,7 +3732,8 @@ let main (env : env) : Exit_status.t Lwt.t =
           message
           stack
           "from_server"
-          !ref_unblocked_time;
+          !ref_unblocked_time
+          env;
         Lsp_helpers.telemetry_error
           to_stdout
           (message ^ ", from_server\n" ^ stack);
@@ -3604,7 +3793,13 @@ let main (env : env) : Exit_status.t Lwt.t =
       Lwt.return_unit
     | Client_fatal_connection_exception { Marshal_tools.stack; message } ->
       let stack = stack ^ "---\n" ^ Printexc.get_backtrace () in
-      hack_log_error !ref_event message stack "from_client" !ref_unblocked_time;
+      hack_log_error
+        !ref_event
+        message
+        stack
+        "from_client"
+        !ref_unblocked_time
+        env;
       Lsp_helpers.telemetry_error
         to_stdout
         (message ^ ", from_client\n" ^ stack);
@@ -3613,14 +3808,26 @@ let main (env : env) : Exit_status.t Lwt.t =
     | Client_recoverable_connection_exception { Marshal_tools.stack; message }
       ->
       let stack = stack ^ "---\n" ^ Printexc.get_backtrace () in
-      hack_log_error !ref_event message stack "from_client" !ref_unblocked_time;
+      hack_log_error
+        !ref_event
+        message
+        stack
+        "from_client"
+        !ref_unblocked_time
+        env;
       Lsp_helpers.telemetry_error
         to_stdout
         (message ^ ", from_client\n" ^ stack);
       Lwt.return_unit
     | Server_nonfatal_exception { Marshal_tools.stack; message } ->
       let stack = stack ^ "---\n" ^ Printexc.get_backtrace () in
-      hack_log_error !ref_event message stack "from_server" !ref_unblocked_time;
+      hack_log_error
+        !ref_event
+        message
+        stack
+        "from_server"
+        !ref_unblocked_time
+        env;
       respond_to_error !ref_event (Error.Unknown message) stack;
       Lwt.return_unit
     | Error.RequestCancelled _ as e ->
@@ -3635,7 +3842,13 @@ let main (env : env) : Exit_status.t Lwt.t =
       let stack = Printexc.get_backtrace () in
       let message = Exn.to_string e in
       respond_to_error !ref_event e stack;
-      hack_log_error !ref_event message stack "from_lsp" !ref_unblocked_time;
+      hack_log_error
+        !ref_event
+        message
+        stack
+        "from_lsp"
+        !ref_unblocked_time
+        env;
       Lwt.return_unit
   in
   let rec main_loop () : unit Lwt.t =

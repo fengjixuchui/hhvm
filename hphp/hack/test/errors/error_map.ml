@@ -240,6 +240,8 @@ ByRefParamOnConstruct = 3077
 ByRefDynamicCall = 3078
 ByRefProperty = 3079
 ByRefCall = 3080
+SwitchNonTerminalDefault = 3081
+SwitchMultipleDefault = 3082
 
 Typing Errors:
 AbstractClassFinalDEPRECATED = 4001
@@ -590,4 +592,6 @@ EnumUnderlyingTypeMustBeArraykey = 4345
 ClassGetReified = 4346
 RequireGenericExplicit = 4347
 ClassConstantTypeMismatch = 4348
+PocketUniversesExpansion = 4349
+PocketUniversesTyping = 4350
   |}]

@@ -146,6 +146,8 @@ static CallMap s_callMap {
                            {{TV, 0}}},
     {ConvStrToArr,       convCellToArrHelper, DSSA, SNone,
                            {{TV, 0}}},
+    {ConvFuncToArr,      convCellToArrHelper, DSSA, SNone,
+                           {{TV, 0}}},
     {ConvVecToArr,       convVecToArrHelper, DSSA, SNone,
                            {{SSA, 0}}},
     // These two need to sync because of Hack array compat notices
@@ -159,6 +161,13 @@ static CallMap s_callMap {
                            {{TV, 0}}},
     {ConvArrToNonDVArr,  convArrToNonDVArrHelper, DSSA, SSync,
                            {{SSA, 0}}},
+    // ConvClsMethTo##T to sync due to clsmeth conversion notices
+    {ConvClsMethToArr,   convClsMethToArrHealper, DSSA, SSync,
+                           {{SSA, 0}}},
+    {ConvClsMethToVArr,  convClsMethToVArrHealper, DSSA, SSync,
+                           {{SSA, 0}}},
+    {ConvClsMethToDArr,  convClsMethToDArrHealper, DSSA, SSync,
+                           {{SSA, 0}}},
 
     {ConvArrToVec,       convArrToVecHelper, DSSA, SSync,
                            {{SSA, 0}}},
@@ -167,6 +176,8 @@ static CallMap s_callMap {
     {ConvShapeToVec,     convShapeToVecHelper, DSSA, SSync,
                            {{SSA, 0}}},
     {ConvKeysetToVec,    convKeysetToVecHelper, DSSA, SSync,
+                           {{SSA, 0}}},
+    {ConvClsMethToVec,   convClsMethToVecHealper, DSSA, SSync,
                            {{SSA, 0}}},
     {ConvObjToVec,       convObjToVecHelper, DSSA, SSync,
                            {{SSA, 0}}},
@@ -179,6 +190,8 @@ static CallMap s_callMap {
                            {{SSA, 0}}},
     {ConvKeysetToDict,   convKeysetToDictHelper, DSSA, SSync,
                            {{SSA, 0}}},
+    {ConvClsMethToDict,  convClsMethToDictHealper, DSSA, SSync,
+                           {{SSA, 0}}},
     {ConvObjToDict,      convObjToDictHelper, DSSA, SSync,
                            {{SSA, 0}}},
 
@@ -189,6 +202,8 @@ static CallMap s_callMap {
     {ConvDictToKeyset,   convDictToKeysetHelper, DSSA, SSync,
                            {{SSA, 0}}},
     {ConvShapeToKeyset,  convShapeToKeysetHelper, DSSA, SSync,
+                           {{SSA, 0}}},
+    {ConvClsMethToKeyset, convClsMethToKeysetHealper, DSSA, SSync,
                            {{SSA, 0}}},
     {ConvObjToKeyset,    convObjToKeysetHelper, DSSA, SSync,
                            {{SSA, 0}}},
@@ -593,8 +608,6 @@ static CallMap s_callMap {
     {GetTimeNs, folly::chrono::clock_gettime_ns, DSSA, SNone, {{SSA, 0}}},
 
     /* reified generics operations */
-    {IsReifiedName, isReifiedName, DSSA, SNone, {{SSA, 0}}},
-    {LdReifiedGeneric, getReifiedGenerics, DSSA, SSync, {{SSA, 0}}},
     {CheckClsReifiedGenericMismatch, checkClassReifiedGenericMismatch,
                                      DNone, SSync,
                                      {{extra(&ClassData::cls)}, {SSA, 0}}},
@@ -605,9 +618,6 @@ static CallMap s_callMap {
                              {{extra(&ParamData::paramId)}, {SSA, 0}}},
     {VerifyReifiedReturnType, VerifyReifiedReturnTypeImpl, DNone, SSync,
                               {{TV, 0}, {SSA, 1}}},
-    {MangleReifiedName, mangleReifiedName, DSSA,  SNone, {{SSA, 0}, {SSA, 1}}},
-    {RecordReifiedGenericsAndGetName, recordReifiedGenericsAndGetName,
-                                      DSSA, SSync, {{SSA, 0}}},
     {RecordReifiedGenericsAndGetTSList, recordReifiedGenericsAndGetTSList,
                                         DSSA, SSync, {{SSA, 0}}},
     {RaiseErrorOnInvalidIsAsExpressionType,

@@ -97,16 +97,20 @@ let gen_pu_accessor
       let call =
         Call (Aast.Cnormal, (annotation pos, parent_call), [], [var_atom], [])
       in
-      Default [(pos, Return (Some (annotation pos, call)))]
+      Default (pos, [(pos, Return (Some (annotation pos, call)))])
     else
       let msg = Binop (Dot, str pos error, var_atom) in
       let class_id = (annotation pos, CIexpr (id pos "\\Exception")) in
       Default
-        [ ( pos,
-            Throw
-              ( annotation pos,
-                New (class_id, [], [(annotation pos, msg)], [], annotation pos)
-              ) ) ]
+        ( pos,
+          [
+            ( pos,
+              Throw
+                ( annotation pos,
+                  New
+                    (class_id, [], [(annotation pos, msg)], [], annotation pos)
+                ) );
+          ] )
   in
   let cases = cases @ [default] in
   let body =
@@ -119,7 +123,8 @@ let gen_pu_accessor
     m_tparams = [];
     m_name = (pos, fun_name);
     m_params =
-      [ {
+      [
+        {
           param_annotation = annotation pos;
           param_type_hint =
             (snd (annotation pos), Some (simple_typ pos "string"));
@@ -131,7 +136,8 @@ let gen_pu_accessor
           param_callconv = None;
           param_user_attributes = [];
           param_visibility = None;
-        } ];
+        };
+      ];
     m_body = body;
     m_user_attributes = [];
     (* TODO: Memoize ? *)
@@ -162,7 +168,8 @@ let gen_Members field pos (fields : pu_enum) =
   let body =
     {
       fb_ast =
-        [ ( pos,
+        [
+          ( pos,
             Expr
               ( annot,
                 Binop
@@ -171,7 +178,8 @@ let gen_Members field pos (fields : pu_enum) =
                     (annot, Collection ((pos, "ImmVector"), None, mems)) ) ) );
           ( pos,
             Return (Some (annot, Lvar (pos, Local_id.make_unscoped "$mems")))
-          ) ];
+          );
+        ];
       fb_annotation = NoUnsafeBlocks;
     }
   in
@@ -235,6 +243,12 @@ class ['self] erase_body_visitor =
     method! on_PU_identifier _ _ qual (pos, field) (_, name) =
       let fun_name = (pos, gen_fun_name field name) in
       Class_const (qual, fun_name)
+
+    method! on_hint_ _ h =
+      match h with
+      | Hpu_access _ -> Hmixed
+      | Hprim (Tatom _) -> Hprim Tstring
+      | _ -> h
   end
 
 (* Wrapper around the AST visitor *)

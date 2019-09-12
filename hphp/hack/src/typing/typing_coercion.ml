@@ -9,22 +9,15 @@
 
 open Core_kernel
 open Typing_defs
-open Type_validator
-
-module Env     = Typing_env
-module SubType = Typing_subtype
-module Cls = Decl_provider.Class
 
 (* Typing_union.union normalizes a union out of two types, but it creates Toption for unions with
  * null. This function unwraps the null. TODO: remove in accordance with T45650596 *)
 let force_null_union env r t =
   let null = Typing_make_type.null r in
-  let _, union = Typing_union.union env null t in
+  let (_, union) = Typing_union.union env null t in
   match union with
-  | r, Toption (_, Tunion tyl) ->
-    r, Tunion (null::tyl)
-  | r, Toption ty ->
-    r, Tunion [null; ty]
+  | (r, Toption (_, Tunion tyl)) -> (r, Tunion (null :: tyl))
+  | (r, Toption ty) -> (r, Tunion [null; ty])
   | _ -> union
 
 (*
@@ -34,13 +27,11 @@ let force_null_union env r t =
 *
 * 1. |- t ~> dynamic
 *    (you can coerce t to dynamic)
-* 2. t1 ~> t2 |- t1 ~> ?t2
-*    (you can coerce t1 to optional type if the inner type is a valid coercion target)
-* 3. t is enforceable |- dynamic ~> t
+* 2. t is enforceable |- dynamic ~> t
 *    (coercion from dynamic to enforceable types is permitted)
-* 4. T1 ~> T and T2 ~> T |- T1|T2 ~> T
+* 3. T1 ~> T and T2 ~> T |- T1|T2 ~> T
 *    (coercion from a union is valid if coercion from each element is valid)
-* 5. t1 <: t2 |- t1 ~> t2
+* 4. t1 <: t2 |- t1 ~> t2
 *    (you can coerce t1 to any of its supertypes)
 *
 * This boils down to running the normal sub_type procedure whenever possible,
@@ -53,68 +44,71 @@ let force_null_union env r t =
 * type that could be dynamic is required, like parameters and returns.
 *)
 
-(* checks coercion that isn't just subtyping *)
-let rec can_coerce p env ?(ur=Reason.URnone) ty_have ty_expect on_error =
-  Typing_log.(log_with_level env "sub" 1 (fun () ->
-    log_types p env
-    [Log_head ("can_coerce",
-     [Log_type ("ty_have", ty_have);
-      Log_type ("ty_expect", ty_expect.et_type)])]));
-  let env, ety_expect = Env.expand_type env ty_expect.et_type in
-  let env, ety_have = Env.expand_type env ty_have in
-  match ety_have, ety_expect with
-
-  | _, (_, Tdynamic) -> Some env
-
-  (* dynamic ~> T if T is enforceable
-   *)
-  | (_, Tdynamic), _
-    when (TypecheckerOptions.coercion_from_dynamic (Env.get_tcopt env)) ->
-    if ty_expect.et_enforced then Some env
-    else None
-
-  (* T1|T2 ~> T if T1 ~> T and T2 ~> T *)
-  | (_, Tunion tyl), _
-    when (TypecheckerOptions.coercion_from_dynamic (Env.get_tcopt env)) ->
+(* does coercion, including subtyping *)
+let rec coerce_type_impl ~sub_type p ur env ty_have ty_expect on_error =
+  Typing_log.(
+    log_with_level env "sub" 1 (fun () ->
+        log_types
+          p
+          env
+          [
+            Log_head
+              ( "can_coerce",
+                [
+                  Log_type ("ty_have", ty_have);
+                  Log_type ("ty_expect", ty_expect.et_type);
+                ] );
+          ]));
+  let coercion_from_dynamic =
+    TypecheckerOptions.coercion_from_dynamic (Typing_env.get_tcopt env)
+  in
+  let coercion_from_union =
+    TypecheckerOptions.coercion_from_union (Typing_env.get_tcopt env)
+  in
+  let coerce_type_impl = coerce_type_impl ~sub_type p ur in
+  let (env, ety_expect) = Typing_env.expand_type env ty_expect.et_type in
+  let (env, ety_have) = Typing_env.expand_type env ty_have in
+  match (ety_have, ety_expect) with
+  | (_, (_, Tdynamic)) -> env
+  | ((_, Tdynamic), _) when ty_expect.et_enforced && coercion_from_dynamic ->
+    env
+  | ((_, Tunion tyl), _) when coercion_from_union ->
     (* If coercion and subtyping fail for any of the elements of the union,
      * errors will be emitted *)
-    Some (List.fold tyl ~init:env ~f:(fun env ty ->
-      coerce_type p ur env ty ty_expect on_error
-    ))
+    List.fold tyl ~init:env ~f:(fun env ty ->
+        coerce_type_impl env ty ty_expect on_error)
+  | ((r, Toption t), _) when coercion_from_union ->
+    let union : locl ty = force_null_union env r t in
+    coerce_type_impl env union ty_expect on_error
+  | _ -> sub_type p ur env ty_have ty_expect.et_type on_error
 
-  (* TODO: remove in accordance with T45650596 *)
-  | (r, Toption t), _
-    when (TypecheckerOptions.coercion_from_dynamic (Env.get_tcopt env)) ->
-    let union: locl ty = force_null_union env r t in
-    can_coerce p env ~ur union ty_expect on_error
-
-  (* TODO: remove in accordance with T45650596 *)
-  | _, (_, Toption ty) ->
-    can_coerce p env ty_have { et_type = ty; et_enforced = ty_expect.et_enforced } on_error
-
-  | _ -> None
-
-(* does coercion, including subtyping *)
-and coerce_type p ?sub_fn:(sub=Typing_ops.sub_type) ur env ty_have ty_expect on_error =
-  match can_coerce p env ~ur ty_have ty_expect on_error with
-  | Some e -> e
-  | None -> sub p ur env ty_have ty_expect.et_type on_error
+(* The Errors.try_ allows us to report a union ty_have in an error
+ * instead of just elements in the union *)
+let coerce_type
+    p ?sub_fn:(sub = Typing_ops.sub_type) ur env ty_have ty_expect on_error =
+  Errors.try_
+    (fun () ->
+      coerce_type_impl p ~sub_type:sub ur env ty_have ty_expect on_error)
+    (fun _ -> sub p ur env ty_have ty_expect.et_type on_error)
 
 (* does coercion if possible, returning Some env with resultant coercion constraints
  * otherwise suppresses errors from attempted coercion and returns None *)
 let try_coerce p ur env ty_have ty_expect =
   let f = !Errors.is_hh_fixme in
-  Errors.is_hh_fixme := (fun _ _ -> false);
+  (Errors.is_hh_fixme := (fun _ _ -> false));
   let result =
     Errors.try_
-      (fun () -> Some (coerce_type ~sub_fn:Typing_ops.sub_type p ur env ty_have ty_expect Errors.unify_error))
-      (fun _ -> None) in
+      (fun () ->
+        Some
+          (coerce_type_impl
+             ~sub_type:Typing_ops.sub_type
+             p
+             ur
+             env
+             ty_have
+             ty_expect
+             Errors.unify_error))
+      (fun _ -> None)
+  in
   Errors.is_hh_fixme := f;
   result
-
-let coerce_type p ?sub_fn:(sub=Typing_ops.sub_type) ur env ty_have ty_expect on_error =
-  Errors.try_
-    (fun () -> coerce_type p ~sub_fn:sub ur env ty_have ty_expect on_error)
-    (fun _ -> sub p ur env ty_have ty_expect.et_type on_error)
-
-let () = Typing_utils.coerce_type_ref := coerce_type

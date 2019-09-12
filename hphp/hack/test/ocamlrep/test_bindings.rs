@@ -3,18 +3,26 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 
 use ocaml::caml;
-use ocamlrep::IntoOcamlRep;
-use ocamlrep_derive::IntoOcamlRep;
+use ocamlrep::OcamlRep;
+use ocamlrep_derive::OcamlRep;
 
-fn val<T: IntoOcamlRep>(value: T) -> ocaml::Value {
-    let mut arena = ocamlrep::Arena::new_with_size(8);
-    let value = arena.add(value);
+fn val<T: OcamlRep>(value: T) -> ocaml::Value {
+    let arena = ocamlrep::Arena::new_with_size(8);
+    let value = value.into_ocamlrep(&arena);
     mem::forget(arena);
     ocaml::Value::new(unsafe { value.as_usize() })
 }
+
+caml!(convert_to_ocamlrep, |value|, <result>, {
+    let mut arena = ocamlrep::Arena::new_with_size(8);
+    let value = arena.add_from_ocaml(value.0);
+    mem::forget(arena);
+    result = ocaml::Value::new(value.as_usize());
+} -> result);
 
 // Primitive Tests
 
@@ -72,13 +80,13 @@ caml!(get_float_list, |_unit|, <result>, {
 
 // Struct tests
 
-#[derive(IntoOcamlRep)]
+#[derive(OcamlRep)]
 struct Foo {
     a: isize,
     b: bool,
 }
 
-#[derive(IntoOcamlRep)]
+#[derive(OcamlRep)]
 struct Bar {
     c: Foo,
     d: Option<Vec<Option<isize>>>,
@@ -131,7 +139,7 @@ caml!(get_one_two_float, |_unit|, <result>, {
 
 // Variant tests
 
-#[derive(IntoOcamlRep)]
+#[derive(OcamlRep)]
 enum Fruit {
     Apple,
     Orange(isize),
@@ -153,4 +161,46 @@ caml!(get_pear, |_unit|, <result>, {
 
 caml!(get_kiwi, |_unit|, <result>, {
     result = val(Fruit::Kiwi);
+} -> result);
+
+// Map tests
+
+caml!(get_empty_smap, |_unit|, <result>, {
+    let map: BTreeMap<String, isize> = BTreeMap::new();
+    result = val(map);
+} -> result);
+
+caml!(get_int_smap_singleton, |_unit|, <result>, {
+    let mut map = BTreeMap::new();
+    map.insert("a", 1);
+    result = val(map);
+} -> result);
+
+caml!(get_int_smap, |_unit|, <result>, {
+    let mut map = BTreeMap::new();
+    map.insert("a", 1);
+    map.insert("b", 2);
+    map.insert("c", 3);
+    result = val(map);
+} -> result);
+
+// Set tests
+
+caml!(get_empty_sset, |_unit|, <result>, {
+    let set: BTreeSet<String> = BTreeSet::new();
+    result = val(set);
+} -> result);
+
+caml!(get_sset_singleton, |_unit|, <result>, {
+    let mut set = BTreeSet::new();
+    set.insert("a");
+    result = val(set);
+} -> result);
+
+caml!(get_sset, |_unit|, <result>, {
+    let mut set = BTreeSet::new();
+    set.insert("a");
+    set.insert("b");
+    set.insert("c");
+    result = val(set);
 } -> result);

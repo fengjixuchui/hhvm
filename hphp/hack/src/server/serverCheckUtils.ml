@@ -6,6 +6,7 @@
  *
  *)
 
+open Core_kernel
 open ServerEnv
 open ServerLocalConfig
 
@@ -13,9 +14,11 @@ let get_naming_table_fallback_path genv (naming_table_fn : string option) :
     string option =
   Hh_logger.log "Figuring out naming table SQLite path...";
   match genv.local_config.naming_sqlite_path with
-  | Some path -> Some path
+  | Some path ->
+    Hh_logger.log "Naming table path from config: %s" path;
+    Some path
   | None ->
-    Hh_logger.log "No path, using loaded naming table";
+    Hh_logger.log "No path set in config, using the loaded naming table";
     naming_table_fn
 
 let extend_fast_sequential fast naming_table additional_files =
@@ -27,7 +30,7 @@ let extend_fast_sequential fast naming_table additional_files =
            let info = Naming_table.get_file_info_unsafe naming_table x in
            let info_names = FileInfo.simplify info in
            Relative_path.Map.add acc ~key:x ~data:info_names
-         with Not_found -> acc)
+         with Not_found_s _ -> acc)
       | Some _ -> acc)
 
 let extend_fast_batch genv fast naming_table additional_files bucket_size =
@@ -38,7 +41,7 @@ let extend_fast_batch genv fast naming_table additional_files bucket_size =
       let info = Naming_table.get_file_info_unsafe naming_table x in
       let info_names = FileInfo.simplify info in
       Relative_path.Map.add acc ~key:x ~data:info_names
-    with Not_found -> acc
+    with Not_found_s _ -> acc
   in
   let job (acc : FileInfo.names Relative_path.Map.t) additional_files =
     Core_kernel.(
@@ -80,10 +83,21 @@ let extend_fast
     extended_fast
   )
 
+let global_typecheck_kind genv env =
+  if genv.ServerEnv.options |> ServerArgs.remote then
+    ServerCommandTypes.Remote_blocking "Forced remote type check"
+  else if env.can_interrupt then
+    ServerCommandTypes.Interruptible
+  else
+    ServerCommandTypes.Blocking
+
 let maybe_remote_type_check genv env fnl =
   let t = Unix.gettimeofday () in
   let (do_remote, _t) =
-    Typing_remote_check_service.should_do_remote env.tcopt fnl t
+    if genv.ServerEnv.options |> ServerArgs.remote then
+      (true, t)
+    else
+      Typing_remote_check_service.should_do_remote env.tcopt fnl t
   in
   if do_remote then
     let eden_threshold =

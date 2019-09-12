@@ -683,10 +683,7 @@ SSATmp* opt_foldable(IRGS& env,
 
     auto retVal = g_context->invokeFunc(func, args.toArray(),
                                         nullptr, const_cast<Class*>(cls),
-                                        nullptr, nullptr,
-                                        ExecutionContext::InvokeNormal,
-                                        false,
-                                        false);
+                                        nullptr, false);
     SCOPE_EXIT { tvDecRefGen(retVal); };
     assertx(tvIsPlausible(retVal));
 
@@ -1037,9 +1034,17 @@ SSATmp* opt_shapes_idx(IRGS& env, const ParamPrep& params) {
       return gen(env, op, data, arr, key, def);
     }
   );
-  auto const cell = is_dict ? elm : unbox(env, elm, nullptr);
-  gen(env, IncRef, cell);
-  return cell;
+
+  auto const finish = [&](SSATmp* val){
+    auto const cell = is_dict ? val : unbox(env, val, nullptr);
+    gen(env, IncRef, cell);
+    return cell;
+  };
+  return finish(profiledType(env, elm, [&] {
+    auto const cell = finish(elm);
+    params.decRefParams(env);
+    push(env, cell);
+  }));
 }
 
 SSATmp* opt_is_meth_caller(IRGS& env, const ParamPrep& params) {
@@ -1081,7 +1086,43 @@ SSATmp* optimizedFCallBuiltin(IRGS& env,
     auto const fname = func->fullName();
 
     if (auto const retVal = opt_foldable(env, func, params, numNonDefault)) {
-      return retVal;
+      // Check if any of the parameters are in-out. If not, we don't
+      // need any special handling.
+      auto const numInOut = std::count_if(
+        params.info.begin(), params.info.end(),
+        [] (const ParamPrep::Info& i) { return i.isInOut; }
+      );
+      if (!numInOut) return retVal;
+
+      // Otherwise, the return value is actually a tuple containing
+      // all of the results. We need to unpack the tuple and write the
+      // contents to their proper place on the stack.
+      auto const ad = [&] {
+        if (retVal->hasConstVal(TArr)) return retVal->arrVal();
+        if (retVal->hasConstVal(TVec)) return retVal->vecVal();
+        always_assert(false);
+      }();
+      assertx(ad->isStatic());
+      assertx(ad->size() == numInOut + 1);
+
+      size_t inOutIndex = 0;
+      for (auto const& param : params.info) {
+        if (!param.isInOut) continue;
+        // NB: The parameters to the builtin have already been popped
+        // at this point, so we don't need to account for them when
+        // calculating the stack offset.
+        auto const val = cns(env, ad->atPos(inOutIndex + 1));
+        auto const offset = offsetFromIRSP(
+          env,
+          BCSPRelOffset{safe_cast<int32_t>(inOutIndex)}
+        );
+        gen(env, StStk, IRSPRelOffsetData{offset}, sp(env), val);
+        ++inOutIndex;
+      }
+
+      // The first element of the tuple is always the actual function
+      // return.
+      return cns(env, ad->atPos(0));
     }
 #define X(x) \
     if (fname->isame(s_##x.get())) return opt_##x(env, params);
@@ -2256,21 +2297,6 @@ void implDictKeysetIdx(IRGS& env,
   finish(pelem);
 }
 
-const StaticString s_idx("hh\\idx");
-
-void implGenericIdx(IRGS& env) {
-  auto const def = popC(env, DataTypeSpecific);
-  auto const key = popC(env, DataTypeSpecific);
-  auto const base = popC(env, DataTypeSpecific);
-
-  SSATmp* const args[] = { base, key, def };
-
-  static auto func = Unit::lookupBuiltin(s_idx.get());
-  assertx(func && func->numParams() == 3);
-
-  emitDirectCall(env, func, 3, args);
-}
-
 /*
  * Return the GuardConstraint that should be used to constrain baseType for an
  * Idx bytecode.
@@ -2338,11 +2364,8 @@ void emitIdx(IRGS& env) {
     return;
   }
 
-  auto const simple_key =
-    keyType <= TInt || keyType <= TStr;
-
-  if (!simple_key) {
-    implGenericIdx(env);
+  if (!(keyType <= TInt || keyType <= TStr)) {
+    interpOne(env, TCell, 3);
     return;
   }
 
@@ -2367,7 +2390,7 @@ void emitIdx(IRGS& env) {
     return;
   }
 
-  implGenericIdx(env);
+  interpOne(env, TCell, 3);
 }
 
 void emitAKExists(IRGS& env) {

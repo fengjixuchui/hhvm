@@ -46,6 +46,7 @@ type t = {
   option_phpism_disallow_execution_operator: bool;
   option_phpism_disable_nontoplevel_declarations: bool;
   option_phpism_disable_static_closures: bool;
+  option_phpism_disable_halt_compiler: bool;
   option_emit_func_pointers: bool;
   option_emit_cls_meth_pointers: bool;
   option_emit_inst_meth_pointers: bool;
@@ -55,7 +56,6 @@ type t = {
   option_enable_pocket_universes: bool;
   option_notice_on_byref_argument_typehint_violation: bool;
   option_array_provenance: bool;
-  option_use_rust_parser: bool;
   option_enable_constant_visibility_modifiers: bool;
   option_enable_class_level_where_clauses: bool;
   option_disable_legacy_soft_typehints: bool;
@@ -106,6 +106,7 @@ let default =
     option_phpism_disallow_execution_operator = false;
     option_phpism_disable_nontoplevel_declarations = false;
     option_phpism_disable_static_closures = false;
+    option_phpism_disable_halt_compiler = false;
     option_emit_func_pointers = true;
     option_emit_cls_meth_pointers = true;
     option_emit_inst_meth_pointers = true;
@@ -115,7 +116,6 @@ let default =
     option_enable_pocket_universes = false;
     option_notice_on_byref_argument_typehint_violation = false;
     option_array_provenance = false;
-    option_use_rust_parser = false;
     option_enable_constant_visibility_modifiers = false;
     option_enable_class_level_where_clauses = false;
     option_disable_legacy_soft_typehints = false;
@@ -198,6 +198,8 @@ let phpism_disable_nontoplevel_declarations o =
 
 let phpism_disable_static_closures o = o.option_phpism_disable_static_closures
 
+let phpism_disable_halt_compiler o = o.option_phpism_disable_halt_compiler
+
 let emit_func_pointers o = o.option_emit_func_pointers
 
 let emit_cls_meth_pointers o = o.option_emit_cls_meth_pointers
@@ -216,8 +218,6 @@ let notice_on_byref_argument_typehint_violation o =
   o.option_notice_on_byref_argument_typehint_violation
 
 let array_provenance o = o.option_array_provenance
-
-let use_rust_parser o = o.option_use_rust_parser
 
 let enable_constant_visibility_modifiers o =
   o.option_enable_constant_visibility_modifiers
@@ -252,7 +252,8 @@ let to_string o =
   in
   String.concat
     ~sep:"\n"
-    [ Printf.sprintf "constant_folding: %B" @@ constant_folding o;
+    [
+      Printf.sprintf "constant_folding: %B" @@ constant_folding o;
       Printf.sprintf "optimize_null_check: %B" @@ optimize_null_check o;
       Printf.sprintf "max_array_elem_size_on_the_stack: %d"
       @@ max_array_elem_size_on_the_stack o;
@@ -287,6 +288,8 @@ let to_string o =
       @@ phpism_disable_nontoplevel_declarations o;
       Printf.sprintf "phpism_disable_static_closures %B"
       @@ phpism_disable_static_closures o;
+      Printf.sprintf "phpism_disable_halt_compiler: %B"
+      @@ phpism_disable_halt_compiler o;
       Printf.sprintf "emit_func_pointers: %B" @@ emit_func_pointers o;
       Printf.sprintf "emit_cls_meth_pointers: %B" @@ emit_cls_meth_pointers o;
       Printf.sprintf "emit_inst_meth_pointers: %B" @@ emit_inst_meth_pointers o;
@@ -297,7 +300,6 @@ let to_string o =
       Printf.sprintf "notice_on_byref_argument_typehint_violation: %B"
       @@ notice_on_byref_argument_typehint_violation o;
       Printf.sprintf "array_provenance: %B" @@ array_provenance o;
-      Printf.sprintf "use_rust_parser: %B" @@ use_rust_parser o;
       Printf.sprintf "enable_constant_visibility_modifiers: %B"
       @@ enable_constant_visibility_modifiers o;
       Printf.sprintf "enable_class_level_where_clauses: %B"
@@ -312,7 +314,8 @@ let to_string o =
       Printf.sprintf "const_static_props: %B" @@ const_static_props o;
       Printf.sprintf "abstract_static_props: %B" @@ abstract_static_props o;
       Printf.sprintf "disable_unset_class_const: %B"
-      @@ disable_unset_class_const o ]
+      @@ disable_unset_class_const o;
+    ]
 
 let as_bool s =
   match String.lowercase s with
@@ -408,6 +411,8 @@ let set_option options name value =
     }
   | "hack.lang.phpism.disablestaticclosures" ->
     { options with option_phpism_disable_static_closures = as_bool value }
+  | "hhvm.lang.phpism.disablehaltcompiler" ->
+    { options with option_phpism_disable_halt_compiler = as_bool value }
   | "hhvm.emit_func_pointers" ->
     { options with option_emit_func_pointers = int_of_string value > 0 }
   | "hhvm.emit_cls_meth_pointers" ->
@@ -517,7 +522,8 @@ let set_value name get set config opts =
     raise (Arg.Bad ("Option " ^ name ^ ": error parsing JSON"))
 
 let value_setters =
-  [ ( set_value "hhvm.aliased_namespaces" get_value_from_config_kv_list
+  [
+    ( set_value "hhvm.aliased_namespaces" get_value_from_config_kv_list
     @@ (fun opts v -> { opts with option_aliased_namespaces = Some v }) );
     ( set_value "hack.compiler.constant_folding" get_value_from_config_int
     @@ (fun opts v -> { opts with option_constant_folding = v = 1 }) );
@@ -618,6 +624,11 @@ let value_setters =
         get_value_from_config_int
     @@ fun opts v ->
     { opts with option_phpism_disable_static_closures = v = 1 } );
+    ( set_value
+        "hhvm.hack.lang.phpism.disable_halt_compiler"
+        get_value_from_config_int
+    @@ (fun opts v -> { opts with option_phpism_disable_halt_compiler = v = 1 })
+    );
     ( set_value "hhvm.emit_func_pointers" get_value_from_config_int
     @@ (fun opts v -> { opts with option_emit_func_pointers = v > 0 }) );
     ( set_value "hhvm.emit_cls_meth_pointers" get_value_from_config_int
@@ -631,10 +642,6 @@ let value_setters =
     @@ (fun opts v -> { opts with option_rx_is_enabled = v > 0 }) );
     ( set_value "hhvm.array_provenance" get_value_from_config_int
     @@ (fun opts v -> { opts with option_array_provenance = v > 0 }) );
-    ( set_value
-        "hhvm.hack.lang.hack_compiler_use_rust_parser"
-        get_value_from_config_int
-    @@ (fun opts v -> { opts with option_use_rust_parser = v > 0 }) );
     ( set_value
         "hhvm.hack.lang.enable_constant_visibility_modifiers"
         get_value_from_config_int
@@ -672,7 +679,8 @@ let value_setters =
         "hhvm.hack.lang.disable_unset_class_const"
         get_value_from_config_int
     @@ (fun opts v -> { opts with option_disable_unset_class_const = v = 1 })
-    ) ]
+    );
+  ]
 
 let extract_config_options_from_json ~init config_json =
   match config_json with

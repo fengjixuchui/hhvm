@@ -316,7 +316,10 @@ void verifyTypeImpl(IRGS& env,
       return;
     case AnnotAction::RecordCheck:
       assertx(valType <= TRecord);
-      auto const checkRecDesc = ldRecDescSafe(env, tc.typeName());
+      auto const rec = Unit::lookupUniqueRecDesc(tc.typeName());
+      auto const isPersistent = recordHasPersistentRDS(rec);
+      auto const checkRecDesc = isPersistent ?
+        cns(env, rec) : ldRecDescSafe(env, tc.typeName());
       verifyRecDesc(gen(env, LdRecDesc, val), checkRecDesc, val);
       return;
   }
@@ -332,7 +335,9 @@ void verifyTypeImpl(IRGS& env,
       if (tc.namedEntity()->isPersistentTypeAlias() && td &&
           ((td->nullable && valType <= TNull) ||
            annotCompat(valType.toDataType(), td->type,
-             td->klass ? td->klass->name() : nullptr) == AnnotAction::Pass)) {
+             td->klass ?
+             td->klass->name() :
+             (td->rec ? td->rec->name() : nullptr)) == AnnotAction::Pass)) {
         env.irb->constrainValue(val, DataTypeSpecific);
         return;
       }
@@ -1349,17 +1354,6 @@ void emitRecordReifiedGeneric(IRGS& env) {
   // RecordReifiedGenericsAndGetTSList decrefs the ts
   auto const result = gen(env, RecordReifiedGenericsAndGetTSList, ts);
   push(env, result);
-}
-
-void emitReifiedName(IRGS& env, const StringData* name) {
-  auto const ts = popC(env);
-  if (!ts->isA(RuntimeOption::EvalHackArrDVArrs ? TVec : TArr)) {
-    PUNT(ReifiedName-InvalidTS);
-  }
-  // RecordReifiedGenericsAndGetName decrefs the ts
-  auto const result = gen(env, RecordReifiedGenericsAndGetName, ts);
-  auto const mangledName = gen(env, MangleReifiedName, cns(env, name), result);
-  push(env, mangledName);
 }
 
 void emitCombineAndResolveTypeStruct(IRGS& env, uint32_t n) {

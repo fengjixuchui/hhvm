@@ -74,6 +74,16 @@ constexpr Type::bits_t Type::kClsSpecBits;
 
 ///////////////////////////////////////////////////////////////////////////////
 
+const ArrayData* Type::arrLikeVal() const {
+  assertx(hasConstVal(TArrLike));
+  if (*this <= TArr)    return m_arrVal;
+  if (*this <= TVec)    return m_vecVal;
+  if (*this <= TDict)   return m_dictVal;
+  if (*this <= TShape)  return m_shapeVal;
+  if (*this <= TKeyset) return m_keysetVal;
+  always_assert(false);
+}
+
 std::string Type::constValString() const {
   if (*this <= TBottom)   return "Bottom";
   if (*this <= TUninit)   return "Uninit";
@@ -146,6 +156,10 @@ std::string Type::constValString() const {
       m_clsmethVal->getFunc() ?
       m_clsmethVal->getFunc()->fullName()->data() : "nullptr"
     ).str();
+  }
+  if (*this <= TRecDesc) {
+    return folly::format("RecDesc({})", m_recVal ? m_recVal->name()->data()
+                                                 : "nullptr").str();
   }
   if (*this <= TCctx) {
     if (!m_intVal) {
@@ -246,6 +260,9 @@ std::string Type::toString() const {
   if (m_hasConstVal) {
     if (*this <= TCls) {
       return folly::sformat("Cls={}", m_clsVal->name()->data());
+    }
+    if (*this <= TRecDesc) {
+      return folly::sformat("RecDesc={}", m_recVal->name()->data());
     }
     return folly::sformat("{}<{}>",
                           dropConstVal().toString(), constValString());

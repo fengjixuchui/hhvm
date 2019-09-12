@@ -1727,7 +1727,8 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
                (arr->isDict() || arr->isVecArray()))) {
     auto const source = [&]() -> const char* {
       switch (getType()) {
-      case VariableSerializer::Type::JSON:      return "json_encode";
+      case VariableSerializer::Type::JSON:
+        return arr->isVecArray() ? nullptr : "json_encode";
       case VariableSerializer::Type::Serialize: return "serialize";
       case VariableSerializer::Type::VarExport: return "var_export";
       case VariableSerializer::Type::PrintR:    return "print_r";
@@ -1737,12 +1738,13 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
     if (source) raise_array_serialization_notice(source, arr);
   }
 
-  if (arr->size() == 0) {
+  if (arr->size() == 0 && LIKELY(!RuntimeOption::EvalArrayProvenance)) {
     auto const kind = getKind(arr);
     writeArrayHeader(0, arr->isVectorData(), kind);
     writeArrayFooter(kind);
     return;
   }
+
   if (!skipNestCheck) {
     TypedValue tv = make_array_like_tv(const_cast<ArrayData*>(arr));
     if (incNestedLevel(&tv)) {

@@ -10,6 +10,7 @@ use crate::utils::*;
 
 use ocaml::core::mlvalues::{empty_list, Value, UNIT};
 use std::borrow::Cow;
+use std::collections::{btree_set, BTreeSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::result::Result;
@@ -154,4 +155,71 @@ impl<T: Ocamlvalue, E: Ocamlvalue> Ocamlvalue for Result<T, E> {
             Result::Err(e) => caml_block(1, &[e.ocamlvalue()]),
         }
     }
+}
+
+impl<T1: Ocamlvalue, T2: Ocamlvalue> Ocamlvalue for std::collections::BTreeMap<T1, T2> {
+    fn ocamlvalue(&self) -> Value {
+        match self.is_empty() {
+            true => usize_to_ocaml(0),
+            false => {
+                let mut iterator: std::collections::btree_map::Iter<T1, T2> = self.iter();
+                let (res, _) = ocamlvalue_from_iterator(&mut iterator, self.len());
+                res
+            }
+        }
+    }
+}
+
+fn ocamlvalue_from_iterator<T1: Ocamlvalue, T2: Ocamlvalue>(
+    iterator: &mut std::collections::btree_map::Iter<T1, T2>,
+    size: usize,
+) -> (Value, usize) {
+    if size == 0 {
+        (usize_to_ocaml(0), 0)
+    } else {
+        let (left, left_height) = ocamlvalue_from_iterator(iterator, size / 2);
+        let (key, val) = iterator.next().unwrap();
+        let (right, right_height) = ocamlvalue_from_iterator(iterator, size - 1 - size / 2);
+        let height = std::cmp::max(left_height, right_height) + 1;
+        (
+            caml_block(
+                0,
+                &[
+                    left,
+                    key.ocamlvalue(),
+                    val.ocamlvalue(),
+                    right,
+                    usize_to_ocaml(height),
+                ],
+            ),
+            height,
+        )
+    }
+}
+
+impl<T: Ocamlvalue> Ocamlvalue for BTreeSet<T> {
+    fn ocamlvalue(&self) -> Value {
+        if self.is_empty() {
+            return usize_to_ocaml(0);
+        }
+        let len = self.len();
+        let mut iter = self.iter();
+        let (res, _) = btree_set_helper(&mut iter, len);
+        res
+    }
+}
+
+fn btree_set_helper<'a, T: Ocamlvalue>(
+    iter: &mut btree_set::Iter<T>,
+    size: usize,
+) -> (Value, usize) {
+    if size == 0 {
+        return (usize_to_ocaml(0), 0);
+    }
+    let (left, left_height) = btree_set_helper(iter, size / 2);
+    let val = iter.next().unwrap();
+    let (right, right_height) = btree_set_helper(iter, size - 1 - size / 2);
+    let height = std::cmp::max(left_height, right_height) + 1;
+    let block = caml_block(0, &[left, val.ocamlvalue(), right, usize_to_ocaml(height)]);
+    (block, height)
 }

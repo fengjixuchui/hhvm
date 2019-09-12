@@ -236,7 +236,9 @@ val uninstantiable_class :
 
 val abstract_const_usage : Pos.t -> Pos.t -> string -> unit
 
-val add_a_typehint : Pos.t -> unit
+val const_without_typehint : Pos.t * string -> unit
+
+val prop_without_typehint : string -> Pos.t * string -> unit
 
 val illegal_constant : Pos.t -> unit
 
@@ -470,15 +472,29 @@ val static_redeclared_as_dynamic :
 val dynamic_redeclared_as_static :
   Pos.t -> Pos.t -> string -> elt_type:[ `Method | `Property ] -> unit
 
-val null_member : string -> Pos.t -> (Pos.t * string) list -> unit
+val null_member :
+  is_method:bool -> string -> Pos.t -> (Pos.t * string) list -> unit
 
-val non_object_member : string -> Pos.t -> string -> Pos.t -> unit
+val top_member :
+  is_method:bool ->
+  is_nullable:bool ->
+  string ->
+  Pos.t ->
+  string ->
+  Pos.t ->
+  unit
 
-val unknown_object_member : string -> Pos.t -> (Pos.t * string) list -> unit
+val non_object_member :
+  is_method:bool -> string -> Pos.t -> string -> Pos.t -> unit
 
-val non_class_member : string -> Pos.t -> string -> Pos.t -> unit
+val unknown_object_member :
+  is_method:bool -> string -> Pos.t -> (Pos.t * string) list -> unit
 
-val ambiguous_member : string -> Pos.t -> string -> Pos.t -> unit
+val non_class_member :
+  is_method:bool -> string -> Pos.t -> string -> Pos.t -> unit
+
+val ambiguous_member :
+  is_method:bool -> string -> Pos.t -> string -> Pos.t -> unit
 
 val null_container : Pos.t -> (Pos.t * string) list -> unit
 
@@ -908,6 +924,10 @@ val mutable_methods_must_be_reactive : Pos.t -> string -> unit
 val mutable_return_annotated_decls_must_be_reactive :
   string -> Pos.t -> string -> unit
 
+val pu_expansion : Pos.t -> unit
+
+val pu_typing : Pos.t -> unit
+
 val lvar_in_obj_get : Pos.t -> unit
 
 val invalid_freeze_target : Pos.t -> Pos.t -> string -> unit
@@ -1181,6 +1201,10 @@ val invalid_mutability_in_return_type_hint : Pos.t -> unit
 val typechecker_timeout : Pos.t * string -> int -> unit
 
 val byref_on_property : Pos.t -> unit
+
+val switch_multiple_default : Pos.t -> unit
+
+val switch_non_terminal_default : Pos.t -> unit
 
 val unsupported_trait_use_as : Pos.t -> unit
 

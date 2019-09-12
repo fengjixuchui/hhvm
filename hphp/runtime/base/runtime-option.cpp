@@ -836,6 +836,7 @@ bool RuntimeOption::DisableReservedVariables = true;
 uint64_t RuntimeOption::DisableConstant = 0;
 bool RuntimeOption::DisableNontoplevelDeclarations = false;
 bool RuntimeOption::DisableStaticClosures = false;
+bool RuntimeOption::DisableHaltCompiler = false;
 bool RuntimeOption::EnableClassLevelWhereClauses = false;
 
 #ifdef HHVM_DYNAMIC_EXTENSION_DIR
@@ -1023,6 +1024,38 @@ static inline bool layoutPrologueSplitHotColdDefault() {
 
 uint64_t ahotDefault() {
   return RuntimeOption::RepoAuthoritative ? 4 << 20 : 0;
+}
+
+folly::Optional<folly::fs::path> RuntimeOption::GetHomePath(
+  const folly::StringPiece user) {
+
+  auto homePath = folly::fs::path{RuntimeOption::SandboxHome}
+    / folly::fs::path{user};
+  if (folly::fs::is_directory(homePath)) {
+    return {std::move(homePath)};
+  }
+
+  if (!RuntimeOption::SandboxFallback.empty()) {
+    homePath = folly::fs::path{RuntimeOption::SandboxFallback}
+      / folly::fs::path{user};
+    if (folly::fs::is_directory(homePath)) {
+      return {std::move(homePath)};
+    }
+  }
+
+  return {};
+}
+
+bool RuntimeOption::ReadPerUserSettings(const folly::fs::path& confFileName,
+                                        IniSettingMap& ini, Hdf& config) {
+  try {
+    Config::ParseConfigFile(confFileName.native(), ini, config, false);
+    return true;
+  } catch (HdfException& e) {
+    Logger::Error("%s ignored: %s", confFileName.native().c_str(),
+                  e.getMessage().c_str());
+    return false;
+  }
 }
 
 std::string RuntimeOption::getTraceOutputFile() {
@@ -1363,6 +1396,7 @@ void RuntimeOption::Load(
         [&] (const String& f) {
           if (access(f.data(), R_OK) == 0) {
             fullpath = f.toCppString();
+            FTRACE_MOD(Trace::watchman_autoload, 3, "Parsing {}\n", fullpath);
             Config::ParseConfigFile(fullpath, ini, config);
             return true;
           }
@@ -1629,6 +1663,9 @@ void RuntimeOption::Load(
     Config::Bind(DisableStaticClosures, ini, config,
                  "Hack.Lang.Phpism.DisableStaticClosures",
                  DisableStaticClosures);
+    Config::Bind(DisableHaltCompiler, ini, config,
+                 "Hack.Lang.Phpism.DisableHaltCompiler",
+                 DisableHaltCompiler);
     Config::Bind(DisableConstant, ini, config,
                  "Hack.Lang.Phpism.DisableConstant",
                  DisableConstant);
@@ -1892,6 +1929,8 @@ void RuntimeOption::Load(
                  24 << 20);
     Config::Bind(CodeCache::AFrozenSize, ini, config, "Eval.JitAFrozenSize",
                  40 << 20);
+    Config::Bind(CodeCache::ABytecodeSize, ini, config,
+                 "Eval.JitABytecodeSize", 0);
     Config::Bind(CodeCache::GlobalDataSize, ini, config,
                  "Eval.JitGlobalDataSize", CodeCache::ASize >> 2);
 

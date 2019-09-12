@@ -334,9 +334,7 @@ static Variant call_intercept_handler(
 
   auto ret = Variant::attach(
     g_context->invokeFunc(f, intArgs, callCtx.this_, callCtx.cls,
-                          nullptr, callCtx.invName,
-                          ExecutionContext::InvokeNormal,
-                          callCtx.dynamic, false)
+                          callCtx.invName, callCtx.dynamic)
   );
 
   if (inout) {
@@ -370,7 +368,6 @@ static Variant call_intercept_handler_callback(
     assertx(tvIsVecOrVArray(tv));
     return tv->m_data.parr;
   }();
-  callCtx.reifiedGenerics = reifiedGenerics;
   vm_decode_function(function, callCtx, DecodeFlags::Warn, true);
   auto f = callCtx.func;
   if (!f) return uninit_null();
@@ -396,9 +393,7 @@ static Variant call_intercept_handler_callback(
   IterateV(curArgs.get(), [&](TypedValue v) { args.append(v); });
   auto ret = Variant::attach(
     g_context->invokeFunc(f, args.toArray(), callCtx.this_, callCtx.cls,
-                          nullptr, callCtx.invName,
-                          ExecutionContext::InvokeNormal,
-                          callCtx.dynamic, false,
+                          callCtx.invName, callCtx.dynamic, false, false,
                           Array::attach(reifiedGenerics))
   );
   return ret;

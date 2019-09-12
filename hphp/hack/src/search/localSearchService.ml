@@ -13,11 +13,95 @@ open SearchUtils
 let count_local_fileinfos ~(sienv : si_env) : int =
   Relative_path.Map.cardinal sienv.lss_fullitems
 
+(* Relative paths sometimes produce doubled-up slashes, as in
+ * "/path/to/root//subpath/file".  When we extract the suffix
+ * from a relative_path.t, clear out any preceding slash. *)
+let strip_first_char char s =
+  if String.length s = 0 || s.[0] <> char then
+    s
+  else
+    String.sub s 1 (String.length s - 1)
+
 (* Determine a tombstone for a file path *)
 let get_tombstone (path : Relative_path.t) : int64 =
   let rel_path_str = Relative_path.suffix path in
-  let path_hash = SharedMem.get_hash rel_path_str in
+  let fixed_path_str = strip_first_char '/' rel_path_str in
+  let path_hash = SharedMem.get_hash fixed_path_str in
   path_hash
+
+(* This function is used if fast-facts-parser fails to scan the file *)
+let convert_fileinfo_to_contents
+    ~(info : SearchUtils.info) ~(filepath : string) : SearchUtils.si_capture =
+  let append_item
+      (kind : SearchUtils.si_kind)
+      (acc : SearchUtils.si_capture)
+      (name : string) =
+    let (fixed_kind, is_abstract, is_final) =
+      (* FFP produces more detailed information about classes
+       * than we can get from FileInfo.t objects.  Since this function is only
+       * called when a file has been modified locally, it's safe to call
+       * decl_provider - this information has already been cached. *)
+      if kind = SI_Class then
+        match Decl_provider.get_class name with
+        | Some cls ->
+          let is_final = Decl_provider.Class.final cls in
+          let is_abstract = Decl_provider.Class.abstract cls in
+          let real_kind = Decl_provider.Class.kind cls in
+          let converted_kind =
+            match real_kind with
+            | Ast_defs.Cnormal
+            | Ast_defs.Crecord
+            | Ast_defs.Cabstract ->
+              SI_Class
+            | Ast_defs.Cinterface -> SI_Interface
+            | Ast_defs.Ctrait -> SI_Trait
+            | Ast_defs.Cenum -> SI_Enum
+          in
+          (converted_kind, is_abstract, is_final)
+        | None -> (kind, false, false)
+      else
+        (kind, false, false)
+    in
+    let item =
+      {
+        sif_name = Utils.strip_both_ns name;
+        sif_kind = fixed_kind;
+        sif_filepath = filepath;
+        sif_is_abstract = is_abstract;
+        sif_is_final = is_final;
+      }
+    in
+    item :: acc
+  in
+  let fold_full
+      (kind : SearchUtils.si_kind)
+      (acc : SearchUtils.si_capture)
+      (list : FileInfo.id list) : SearchUtils.si_capture =
+    List.fold list ~init:acc ~f:(fun inside_acc (_, name) ->
+        append_item kind inside_acc name)
+  in
+  let fold_fast
+      (kind : SearchUtils.si_kind)
+      (acc : SearchUtils.si_capture)
+      (sset : SSet.t) : SearchUtils.si_capture =
+    SSet.fold
+      (fun name inside_acc -> append_item kind inside_acc name)
+      sset
+      acc
+  in
+  match info with
+  | Full f ->
+    let acc = fold_full SI_Function [] f.FileInfo.funs in
+    let acc = fold_full SI_Class acc f.FileInfo.classes in
+    let acc = fold_full SI_Typedef acc f.FileInfo.typedefs in
+    let acc = fold_full SI_GlobalConstant acc f.FileInfo.consts in
+    acc
+  | Fast f ->
+    let acc = fold_fast SI_Function [] f.FileInfo.n_funs in
+    let acc = fold_fast SI_Class acc f.FileInfo.n_classes in
+    let acc = fold_fast SI_Typedef acc f.FileInfo.n_types in
+    let acc = fold_fast SI_GlobalConstant acc f.FileInfo.n_consts in
+    acc
 
 (* Update files when they were discovered *)
 let update_file
@@ -25,7 +109,18 @@ let update_file
     si_env =
   let _ = info in
   let tombstone = get_tombstone path in
-  let contents = IndexBuilder.parse_one_file ~path in
+  let filepath = Relative_path.suffix path in
+  let contents =
+    let full_filename = Relative_path.to_absolute path in
+    if Sys.file_exists full_filename then
+      let contents = IndexBuilder.parse_one_file ~path in
+      if List.length contents = 0 then
+        convert_fileinfo_to_contents ~info ~filepath
+      else
+        contents
+    else
+      convert_fileinfo_to_contents ~info ~filepath
+  in
   {
     sienv with
     lss_fullitems =
@@ -81,7 +176,7 @@ let search_local_symbols
            symbol.sif_name
            0
     then
-      let fullname = Utils.strip_ns symbol.sif_name in
+      let fullname = Utils.strip_both_ns symbol.sif_name in
       let acc_new =
         {
           si_name = fullname;

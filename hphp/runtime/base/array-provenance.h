@@ -29,6 +29,7 @@
 
 namespace HPHP {
 
+struct APCArray;
 struct ArrayData;
 struct StringData;
 
@@ -73,7 +74,7 @@ private:
  */
 struct ArrayProvenanceTable {
   /* The table itself -- allocated in general heap */
-  folly::F14FastMap<const ArrayData*, Tag> tags;
+  folly::F14FastMap<const void*, Tag> tags;
 
   /*
    * We never dereference ArrayData*s from this table--so it's safe for the GC
@@ -87,59 +88,44 @@ struct ArrayProvenanceTable {
 /*
  * Create a tag based on the current PC and unit.
  *
- * Requires VM regs to be synced or for a sync point to be available.
+ * Attempts to sync VM regs and returns folly::none on failure.
  */
-folly::Optional<Tag> tagFromProgramCounter();
+folly::Optional<Tag> tagFromPC();
 
 /*
- * Whether `ad` or `tv` admits a provenance tag---i.e., whether it's either a
+ * Whether `a` or `tv` admits a provenance tag---i.e., whether it's either a
  * vec or a dict.
  */
-bool arrayWantsTag(const ArrayData* ad);
+bool arrayWantsTag(const ArrayData* a);
+bool arrayWantsTag(const APCArray* a);
 bool tvWantsTag(TypedValue tv);
 
 /*
- * Get the provenance tag for `ad`.
+ * Get the provenance tag for `a`.
  */
-folly::Optional<Tag> getTag(const ArrayData* ad);
+folly::Optional<Tag> getTag(const ArrayData* a);
+folly::Optional<Tag> getTag(const APCArray* a);
 
 /*
- * Set the provnenance tag for `ad` to `tag`.
- */
-void setTag(ArrayData* ad, const Tag& tag);
-
-/*
- * Set the provenance tag for `ad`, overriding any previous value that may have
- * been recorded.
- */
-void setTagReplace(ArrayData* ad, const Tag& tag);
-
-/*
- * Copy the provenance tag from `src` to `dest`.
- */
-void copyTag(const ArrayData* src, ArrayData* dest);
-
-/*
- * Like copyTag(), but for static arrays.
+ * Set mode: insert or emplace.
  *
- * Unlike all the other functions here, copyTagStatic() bails if array
- * provenance tracking is turned off.  (Everything else assumes it as a
- * prerequisite.)
+ * Just controls whether we assert about provenance not already being set: we
+ * assert for Insert mode, and not for Emplace.
  */
-void copyTagStatic(const ArrayData* src, ArrayData* dest);
+enum class Mode { Insert, Emplace };
 
 /*
- * Tag an array and all of its subarrays.
- *
- * If an empty or static array is encountered, it will not be tagged.
+ * Set the provenance tag for `a` to `tag`.
  */
-void setTagRecursive(ArrayData* ad, const Tag& tag);
+template<Mode mode = Mode::Insert> void setTag(ArrayData* a, Tag tag);
+template<Mode mode = Mode::Insert> void setTag(const APCArray* a, Tag tag);
 
 /*
  * Clear a tag for a released array---only call this if the array is henceforth
- * unreachable.
+ * unreachable or no longer of a kind that accepts provenance tags
  */
-void clearTag(const ArrayData* ad);
+void clearTag(ArrayData* ad);
+void clearTag(const APCArray* a);
 
 /*
  * Tag `tv` with provenance for the current PC and unit (if it admits a tag and
@@ -165,8 +151,8 @@ TypedValue tagTVKnown(TypedValue tv, Tag tag);
  */
 const ArrayData* makeEmptyArray(const ArrayData* base,
                           folly::Optional<Tag> tag = folly::none);
-ArrayData* makeEmptyVec();
-ArrayData* makeEmptyDict();
+ArrayData* makeEmptyVec(folly::Optional<Tag> tag = folly::none);
+ArrayData* makeEmptyDict(folly::Optional<Tag> tag = folly::none);
 
 ///////////////////////////////////////////////////////////////////////////////
 

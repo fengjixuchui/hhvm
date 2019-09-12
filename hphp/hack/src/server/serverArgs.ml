@@ -35,6 +35,7 @@ type options = {
   no_load: bool;
   prechecked: bool option;
   profile_log: bool;
+  remote: bool;
   replace_state_after_saving: bool;
   root: Path.t;
   save_filename: string option;
@@ -106,6 +107,8 @@ module Messages = struct
 
   let profile_log = " enable profile logging"
 
+  let remote = " force remote type checking"
+
   let replace_state_after_saving =
     " if combined with --save-mini, causes the saved state"
     ^ " to replace the program state; otherwise, the state files are not"
@@ -160,6 +163,7 @@ let parse_options () =
   let no_load = ref false in
   let prechecked = ref None in
   let profile_log = ref false in
+  let remote = ref false in
   let root = ref "" in
   let replace_state_after_saving = ref false in
   let save = ref None in
@@ -183,7 +187,8 @@ let parse_options () =
   let set_from s = from := s in
   let set_lru_cache_directory s = lru_cache_directory := Some s in
   let options =
-    [ ("--ai", Arg.String set_ai, Messages.ai);
+    [
+      ("--ai", Arg.String set_ai, Messages.ai);
       ("--allow-non-opt-build", Arg.Set allow_non_opt_build, "");
       ("--check", Arg.Set check_mode, Messages.check);
       ( "--config",
@@ -219,6 +224,7 @@ let parse_options () =
         Arg.Unit (fun () -> prechecked := Some true),
         Messages.prechecked );
       ("--profile-log", Arg.Set profile_log, Messages.profile_log);
+      ("--remote", Arg.Set remote, Messages.remote);
       ( "--replace-state-after-saving",
         Arg.Set replace_state_after_saving,
         Messages.replace_state_after_saving );
@@ -243,7 +249,8 @@ let parse_options () =
         Arg.String set_write_symbol_info,
         Messages.write_symbol_info );
       ("-d", Arg.Set should_detach, Messages.daemon);
-      ("-s", Arg.String set_save_state, Messages.save_state) ]
+      ("-s", Arg.String set_save_state, Messages.save_state);
+    ]
   in
   let options = Arg.align options in
   Arg.parse options (fun s -> root := s) usage;
@@ -318,6 +325,7 @@ let parse_options () =
     no_load = !no_load;
     prechecked = !prechecked;
     profile_log = !profile_log;
+    remote = !remote;
     replace_state_after_saving = !replace_state_after_saving;
     root = root_path;
     save_filename = !save;
@@ -350,6 +358,7 @@ let default_options ~root =
     no_load = true;
     prechecked = None;
     profile_log = false;
+    remote = false;
     replace_state_after_saving = false;
     root = Path.make root;
     save_filename = None;
@@ -398,6 +407,8 @@ let no_load options = options.no_load
 let prechecked options = options.prechecked
 
 let profile_log options = options.profile_log
+
+let remote options = options.remote
 
 let replace_state_after_saving options = options.replace_state_after_saving
 
@@ -462,6 +473,7 @@ let to_string
       no_load;
       prechecked;
       profile_log;
+      remote;
       replace_state_after_saving;
       root;
       save_filename;
@@ -532,7 +544,8 @@ let to_string
            ~f:(fun (key, value) -> Printf.sprintf "%s=%s" key value)
            config )
   in
-  [ "ServerArgs.options({";
+  [
+    "ServerArgs.options({";
     "ai_mode: ";
     ai_mode_str;
     ", ";
@@ -579,6 +592,9 @@ let to_string
     "profile_log: ";
     string_of_bool profile_log;
     ", ";
+    "remote: ";
+    string_of_bool remote;
+    ", ";
     "replace_state_after_saving: ";
     string_of_bool replace_state_after_saving;
     ", ";
@@ -612,5 +628,6 @@ let to_string
     "write_symbol_info: ";
     write_symbol_info_str;
     ", ";
-    "})" ]
+    "})";
+  ]
   |> String.concat ~sep:""

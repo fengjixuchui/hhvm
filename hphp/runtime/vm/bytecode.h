@@ -281,7 +281,6 @@ struct CallCtx {
   Class* cls;
   StringData* invName;
   bool dynamic;
-  ArrayData* reifiedGenerics;
 };
 
 constexpr size_t kNumIterCells = sizeof(Iter) / sizeof(Cell);
@@ -843,7 +842,9 @@ enum class StackArgsState { // tells prepareFuncEntry how much work to do
   // have been teleported away into ExtraArgs and/or a variadic param
   Trimmed
 };
-void enterVMAtFunc(ActRec* enterFnAr, StackArgsState stk, VarEnv* varEnv);
+void enterVMAtPseudoMain(ActRec* enterFnAr, VarEnv* varEnv);
+void enterVMAtFunc(ActRec* enterFnAr, StackArgsState stk,
+                   bool allowDynCallNoPointer = false);
 void enterVMAtCurPC();
 void prepareArrayArgs(ActRec* ar, const Cell args, Stack& stack,
                       int nregular, bool checkRefAnnot);

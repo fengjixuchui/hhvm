@@ -75,6 +75,36 @@ external get_pear : unit -> fruit = "get_pear"
 
 external get_kiwi : unit -> fruit = "get_kiwi"
 
+(* map tests *)
+
+module SMap = Caml.Map.Make (struct
+  type t = string
+
+  let compare = String.compare
+end)
+
+external get_empty_smap : unit -> 'a SMap.t = "get_empty_smap"
+
+external get_int_smap_singleton : unit -> int SMap.t = "get_int_smap_singleton"
+
+external get_int_smap : unit -> int SMap.t = "get_int_smap"
+
+(* set tests *)
+
+module SSet = Caml.Set.Make (struct
+  type t = string
+
+  let compare = String.compare
+end)
+
+external get_empty_sset : unit -> SSet.t = "get_empty_sset"
+
+external get_sset_singleton : unit -> SSet.t = "get_sset_singleton"
+
+external get_sset : unit -> SSet.t = "get_sset"
+
+external convert_to_ocamlrep : 'a -> 'a = "convert_to_ocamlrep"
+
 let test_char () =
   let x = get_a () in
   assert (x = 'a')
@@ -206,8 +236,213 @@ let test_pear () =
   | Pear { num = 76 } -> ()
   | _ -> assert false
 
+let test_empty_smap () =
+  match SMap.bindings (get_empty_smap ()) with
+  | [] -> ()
+  | _ -> assert false
+
+let test_int_smap_singleton () =
+  match SMap.bindings (get_int_smap_singleton ()) with
+  | [("a", 1)] -> ()
+  | _ -> assert false
+
+let test_int_smap () =
+  match SMap.bindings (get_int_smap ()) with
+  | [("a", 1); ("b", 2); ("c", 3)] -> ()
+  | _ -> assert false
+
+let test_empty_sset () =
+  match SSet.elements (get_empty_sset ()) with
+  | [] -> ()
+  | _ -> assert false
+
+let test_sset_singleton () =
+  match SSet.elements (get_sset_singleton ()) with
+  | ["a"] -> ()
+  | _ -> assert false
+
+let test_sset () =
+  match SSet.elements (get_sset ()) with
+  | ["a"; "b"; "c"] -> ()
+  | _ -> assert false
+
+(* Conversion tests *)
+
+let test_convert_char () =
+  let x = convert_to_ocamlrep 'a' in
+  assert (x = 'a')
+
+let test_convert_int () =
+  let x = convert_to_ocamlrep 5 in
+  assert (x = 5)
+
+let test_convert_true () =
+  let x = convert_to_ocamlrep true in
+  assert x
+
+let test_convert_false () =
+  let x = convert_to_ocamlrep false in
+  assert (not x)
+
+let test_convert_none () =
+  let opt = convert_to_ocamlrep None in
+  assert (Option.is_none opt)
+
+let test_convert_some () =
+  let opt = convert_to_ocamlrep (Some 5) in
+  match opt with
+  | None -> assert false
+  | Some x -> assert (x = 5)
+
+let test_convert_some_none () =
+  let opt = convert_to_ocamlrep (Some None) in
+  match opt with
+  | None -> assert false
+  | Some x -> assert (Option.is_none x)
+
+let test_convert_some_some_five () =
+  let opt = convert_to_ocamlrep (Some (Some 5)) in
+  match opt with
+  | None -> assert false
+  | Some x ->
+    (match x with
+    | None -> assert false
+    | Some y -> assert (y = 5))
+
+let test_convert_empty_list () =
+  let lst = convert_to_ocamlrep [] in
+  assert (List.length lst = 0);
+  match lst with
+  | [] -> ()
+  | _ -> assert false
+
+let test_convert_five_list () =
+  let lst = convert_to_ocamlrep [5] in
+  assert (List.length lst = 1);
+  match lst with
+  | [5] -> ()
+  | _ -> assert false
+
+let test_convert_one_two_three_list () =
+  match convert_to_ocamlrep [1; 2; 3] with
+  | [1; 2; 3] -> ()
+  | _ -> assert false
+
+let test_convert_float_list () =
+  match convert_to_ocamlrep [1.0; 2.0; 3.0] with
+  | [1.0; 2.0; 3.0] -> ()
+  | _ -> assert false
+
+let test_convert_foo () =
+  match convert_to_ocamlrep { a = 25; b = true } with
+  | { a = 25; b = true } -> ()
+  | _ -> assert false
+
+let test_convert_bar () =
+  match
+    convert_to_ocamlrep
+      { c = { a = 42; b = false }; d = Some [Some 88; None; Some 66] }
+  with
+  | { c = { a = 42; b = false }; d = Some [Some 88; None; Some 66] } -> ()
+  | _ -> assert false
+
+let test_convert_empty_string () =
+  let s = convert_to_ocamlrep "" in
+  assert (String.length s = 0);
+  assert (s = "")
+
+let test_convert_a_string () =
+  let s = convert_to_ocamlrep "a" in
+  assert (String.length s = 1);
+  assert (s = "a")
+
+let test_convert_ab_string () =
+  let s = convert_to_ocamlrep "ab" in
+  assert (String.length s = 2);
+  assert (s = "ab")
+
+let test_convert_abcde_string () =
+  let s = convert_to_ocamlrep "abcde" in
+  assert (String.length s = 5);
+  assert (s = "abcde")
+
+let test_convert_abcdefg_string () =
+  let s = convert_to_ocamlrep "abcdefg" in
+  assert (String.length s = 7);
+  assert (s = "abcdefg")
+
+let test_convert_abcdefgh_string () =
+  let s = convert_to_ocamlrep "abcdefgh" in
+  assert (String.length s = 8);
+  assert (s = "abcdefgh")
+
+let float_compare f1 f2 =
+  let abs_diff = Float.abs (f1 -. f2) in
+  abs_diff < 0.0001
+
+let test_convert_zero_float () =
+  let f = convert_to_ocamlrep 0. in
+  assert (float_compare f 0.)
+
+let test_convert_one_two_float () =
+  let f = convert_to_ocamlrep 1.2 in
+  assert (float_compare f 1.2)
+
+let test_convert_apple () = assert (convert_to_ocamlrep Apple = Apple)
+
+let test_convert_kiwi () = assert (convert_to_ocamlrep Kiwi = Kiwi)
+
+let test_convert_orange () =
+  match convert_to_ocamlrep (Orange 39) with
+  | Orange 39 -> ()
+  | _ -> assert false
+
+let test_convert_pear () =
+  match convert_to_ocamlrep (Pear { num = 76 }) with
+  | Pear { num = 76 } -> ()
+  | _ -> assert false
+
+let test_convert_empty_smap () =
+  match SMap.bindings (convert_to_ocamlrep SMap.empty) with
+  | [] -> ()
+  | _ -> assert false
+
+let test_convert_int_smap_singleton () =
+  match SMap.bindings (convert_to_ocamlrep (SMap.singleton "a" 1)) with
+  | [("a", 1)] -> ()
+  | _ -> assert false
+
+let test_convert_int_smap () =
+  let map = SMap.empty in
+  let map = SMap.add "a" 1 map in
+  let map = SMap.add "b" 2 map in
+  let map = SMap.add "c" 3 map in
+  match SMap.bindings (convert_to_ocamlrep map) with
+  | [("a", 1); ("b", 2); ("c", 3)] -> ()
+  | _ -> assert false
+
+let test_convert_empty_sset () =
+  match SSet.elements (convert_to_ocamlrep SSet.empty) with
+  | [] -> ()
+  | _ -> assert false
+
+let test_convert_sset_singleton () =
+  match SSet.elements (convert_to_ocamlrep (SSet.singleton "a")) with
+  | ["a"] -> ()
+  | _ -> assert false
+
+let test_convert_sset () =
+  let set = SSet.empty in
+  let set = SSet.add "a" set in
+  let set = SSet.add "b" set in
+  let set = SSet.add "c" set in
+  match SSet.elements (convert_to_ocamlrep set) with
+  | ["a"; "b"; "c"] -> ()
+  | _ -> assert false
+
 let test_cases =
-  [ test_char;
+  [
+    test_char;
     test_int;
     test_true;
     test_false;
@@ -232,7 +467,46 @@ let test_cases =
     test_apple;
     test_kiwi;
     test_orange;
-    test_pear ]
+    test_pear;
+    test_empty_smap;
+    test_int_smap_singleton;
+    test_int_smap;
+    test_empty_sset;
+    test_sset_singleton;
+    test_sset;
+    test_convert_char;
+    test_convert_int;
+    test_convert_true;
+    test_convert_false;
+    test_convert_none;
+    test_convert_some;
+    test_convert_some_none;
+    test_convert_some_some_five;
+    test_convert_empty_list;
+    test_convert_five_list;
+    test_convert_one_two_three_list;
+    test_convert_float_list;
+    test_convert_foo;
+    test_convert_bar;
+    test_convert_empty_string;
+    test_convert_a_string;
+    test_convert_ab_string;
+    test_convert_abcde_string;
+    test_convert_abcdefg_string;
+    test_convert_abcdefgh_string;
+    test_convert_zero_float;
+    test_convert_one_two_float;
+    test_convert_apple;
+    test_convert_kiwi;
+    test_convert_orange;
+    test_convert_pear;
+    test_convert_empty_smap;
+    test_convert_int_smap_singleton;
+    test_convert_int_smap;
+    test_convert_empty_sset;
+    test_convert_sset_singleton;
+    test_convert_sset;
+  ]
 
 let main () = List.iter test_cases (fun test -> test ())
 

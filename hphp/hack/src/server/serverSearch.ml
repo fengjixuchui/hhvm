@@ -18,13 +18,15 @@ let result_to_json res =
   let fn = Pos.filename p in
   let (line, start, end_) = Pos.info_pos p in
   Hh_json.JSON_Object
-    [ ("name", Hh_json.JSON_String (Utils.strip_ns res.SUtils.name));
+    [
+      ("name", Hh_json.JSON_String (Utils.strip_ns res.SUtils.name));
       ("filename", Hh_json.JSON_String fn);
       ("desc", Hh_json.JSON_String desc_string);
       ("line", Hh_json.int_ line);
       ("char_start", Hh_json.int_ start);
       ("char_end", Hh_json.int_ end_);
-      ("scope", Hh_json.JSON_String "") ]
+      ("scope", Hh_json.JSON_String "");
+    ]
 
 let re_colon_colon = Str.regexp "::"
 
@@ -73,7 +75,10 @@ let go workers query type_ (sienv : SearchUtils.si_env) : SearchUtils.result =
       in
       begin
         match class_ with
-        | Some name -> ClassMethodSearch.query_class_methods name method_query
+        | Some name ->
+          ClassMethodSearch.query_class_methods
+            (Utils.add_ns name)
+            method_query
         | None ->
           (* When we can't find a class with a name similar to the given one,
            just return no search results. *)

@@ -118,13 +118,22 @@ MixedArray::ShapeInitializer MixedArray::s_shape_initializer;
 
 namespace {
 
-template<bool check_kind = false>
-ArrayData* tryTagArrProvDict(ArrayData* ad,
-                             const ArrayData* src = nullptr) {
+template<bool check_kind, typename SrcArr>
+ArrayData* implTagArrProvDict(ArrayData* ad, const SrcArr* src) {
   return RuntimeOption::EvalArrayProvenance &&
          (!check_kind || ad->kind() == ArrayData::kDictKind)
     ? tagArrProv(ad, src)
     : ad;
+}
+
+template<bool check_kind = false>
+ArrayData* tryTagArrProvDict(ArrayData* ad, const ArrayData* src = nullptr) {
+  return implTagArrProvDict<check_kind>(ad, src);
+}
+
+template<bool check_kind = false>
+ArrayData* tryTagArrProvDict(ArrayData* ad, const APCArray* src) {
+  return implTagArrProvDict<check_kind>(ad, src);
 }
 
 }
@@ -397,7 +406,9 @@ MixedArray* MixedArray::MakeDict(uint32_t size, const TypedValue* kvs) {
   auto const ad =
     MakeMixedImpl<HeaderKind::Dict, ArrayData::kNotDVArray>(size, kvs);
   assertx(ad == nullptr || ad->kind() == kDictKind);
-  return asMixed(tryTagArrProvDict(ad));
+  return ad ?
+    asMixed(tryTagArrProvDict(ad)) :
+    nullptr;
 }
 
 MixedArray* MixedArray::MakeDArrayNatural(uint32_t size,
@@ -554,7 +565,15 @@ NEVER_INLINE ArrayData* MixedArray::CopyStatic(const ArrayData* in) {
   auto a = asMixed(in);
   assertx(a->checkInvariants());
   auto ret = CopyMixed(*a, AllocMode::Static, in->m_kind, in->dvArray());
-  arrprov::copyTagStatic(in, ret);
+
+  if (RuntimeOption::EvalArrayProvenance) {
+    assertx(!ret->hasProvenanceData());
+    if (auto const tag = arrprov::getTag(in)) {
+      arrprov::setTag(ret, *tag);
+    }
+  }
+  assertx(!arrprov::arrayWantsTag(ret) ||
+          ret->hasProvenanceData() == in->hasProvenanceData());
   return ret;
 }
 
@@ -635,7 +654,7 @@ ArrayData* MixedArray::MakeUncounted(ArrayData* array,
   if (updateSeen) (*seen)[array] = ad;
   assertx(ad->keyTypes() == a->keyTypes());
   assertx(ad->checkInvariants());
-  return ad;
+  return tryTagArrProvDict<true>(ad, array);
 }
 
 ArrayData* MixedArray::MakeDictFromAPC(const APCArray* apc) {
@@ -645,7 +664,8 @@ ArrayData* MixedArray::MakeDictFromAPC(const APCArray* apc) {
   for (uint32_t i = 0; i < apcSize; ++i) {
     init.setValidKey(apc->getKey(i), apc->getValue(i)->toLocal());
   }
-  return init.create();
+  auto const ad = init.create();
+  return tryTagArrProvDict(ad, apc);
 }
 
 ArrayData* MixedArray::MakeDArrayFromAPC(const APCArray* apc) {
@@ -724,6 +744,9 @@ void MixedArray::ReleaseUncounted(ArrayData* in) {
   auto const ad = asMixed(in);
   if (!ad->uncountedDecRef()) return;
 
+  if (RuntimeOption::EvalArrayProvenance) {
+    arrprov::clearTag(in);
+  }
   if (!ad->isZombie()) {
     auto const data = ad->data();
     auto const stop = data + ad->m_used;
@@ -797,6 +820,7 @@ bool MixedArray::checkInvariants() const {
   assertx(m_scale >= 1 && (m_scale & (m_scale - 1)) == 0);
   assertx(MixedArray::HashSize(m_scale) ==
          folly::nextPowTwo<uint64_t>(capacity()));
+  assertx(arrprov::arrayWantsTag(this) || !hasProvenanceData());
 
   if (isZombie()) return true;
 
@@ -1825,6 +1849,7 @@ ArrayData* MixedArray::FromDictImpl(ArrayData* adIn,
     // No int-like string keys, so transform in place.
     a->m_kind = HeaderKind::Mixed;
     if (toDArray) a->setDVArray(ArrayData::kDArray);
+    arrprov::clearTag(a);
     a->setLegacyArray(false);
     assertx(a->checkInvariants());
     return a;

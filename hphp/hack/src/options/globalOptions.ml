@@ -45,6 +45,8 @@ type t = {
   tco_migration_flags: SSet.t;
   tco_dynamic_view: bool;
   tco_defer_class_declaration_threshold: int option;
+  tco_max_times_to_defer_type_checking: int option;
+  tco_prefetch_deferred_files: bool;
   tco_remote_type_check_threshold: int option;
   tco_remote_type_check: bool;
   tco_remote_worker_key: string option;
@@ -61,6 +63,7 @@ type t = {
   po_disallow_toplevel_requires: bool;
   po_disable_nontoplevel_declarations: bool;
   po_disable_static_closures: bool;
+  po_disable_halt_compiler: bool;
   po_allow_goto: bool;
   tco_log_inference_constraints: bool;
   tco_disallow_ambiguous_lambda: bool;
@@ -82,12 +85,14 @@ type t = {
   tco_typecheck_xhp_cvars: bool;
   tco_ignore_collection_expr_type_arguments: bool;
   tco_shallow_class_decl: bool;
-  po_rust: bool;
+  po_rust_parser_errors: bool;
   profile_type_check_duration_threshold: float;
   tco_like_types: bool;
   tco_pessimize_types: bool;
   tco_simple_pessimize: float;
   tco_coercion_from_dynamic: bool;
+  tco_coercion_from_union: bool;
+  tco_complex_coercion: bool;
   tco_disable_partially_abstract_typeconsts: bool;
   error_codes_treated_strictly: ISet.t;
   tco_check_xhp_attribute: bool;
@@ -159,11 +164,6 @@ let tco_experimental_trait_method_redeclarations =
   "trait_method_redeclarations"
 
 (**
- * Enable support for the Pocket Universes
- *)
-let tco_experimental_pocket_universes = "pocket_universes"
-
-(**
  * Enable abstract const type with default syntax, i.e.
  * abstract const type T as num = int;
  *)
@@ -174,7 +174,8 @@ let tco_experimental_all =
   SSet.empty
   |> List.fold_right
        SSet.add
-       [ tco_experimental_isarray;
+       [
+         tco_experimental_isarray;
          tco_experimental_stronger_shape_idx_ret;
          tco_experimental_generics_arity;
          tco_experimental_forbid_nullable_cast;
@@ -182,7 +183,8 @@ let tco_experimental_all =
          tco_experimental_disallow_static_memoized;
          tco_experimental_no_trait_reuse;
          tco_experimental_trait_method_redeclarations;
-         tco_experimental_abstract_type_const_with_default ]
+         tco_experimental_abstract_type_const_with_default;
+       ]
 
 let tco_migration_flags_all =
   SSet.empty |> List.fold_right SSet.add ["array_cast"]
@@ -197,6 +199,8 @@ let default =
     tco_migration_flags = SSet.empty;
     tco_dynamic_view = false;
     tco_defer_class_declaration_threshold = None;
+    tco_max_times_to_defer_type_checking = None;
+    tco_prefetch_deferred_files = false;
     tco_remote_type_check_threshold = None;
     tco_remote_type_check = true;
     tco_remote_worker_key = None;
@@ -213,6 +217,7 @@ let default =
     po_deregister_php_stdlib = false;
     po_disable_nontoplevel_declarations = false;
     po_disable_static_closures = false;
+    po_disable_halt_compiler = false;
     po_allow_goto = true;
     tco_log_inference_constraints = false;
     tco_disallow_ambiguous_lambda = false;
@@ -234,12 +239,14 @@ let default =
     tco_typecheck_xhp_cvars = false;
     tco_ignore_collection_expr_type_arguments = false;
     tco_shallow_class_decl = false;
-    po_rust = true;
+    po_rust_parser_errors = false;
     profile_type_check_duration_threshold = 0.05;
     tco_like_types = false;
     tco_pessimize_types = false;
     tco_simple_pessimize = 0.0;
     tco_coercion_from_dynamic = false;
+    tco_coercion_from_union = false;
+    tco_complex_coercion = false;
     tco_disable_partially_abstract_typeconsts = false;
     error_codes_treated_strictly = ISet.of_list [];
     tco_check_xhp_attribute = false;
@@ -272,12 +279,15 @@ let make
     ?(po_disable_nontoplevel_declarations =
       default.po_disable_nontoplevel_declarations)
     ?(po_disable_static_closures = default.po_disable_static_closures)
+    ?(po_disable_halt_compiler = default.po_disable_halt_compiler)
     ?(po_allow_goto = default.po_allow_goto)
     ?(tco_log_inference_constraints = default.tco_log_inference_constraints)
     ?(tco_experimental_features = default.tco_experimental_features)
     ?(tco_migration_flags = default.tco_migration_flags)
     ?(tco_dynamic_view = default.tco_dynamic_view)
     ?tco_defer_class_declaration_threshold
+    ?tco_max_times_to_defer_type_checking
+    ?(tco_prefetch_deferred_files = default.tco_prefetch_deferred_files)
     ?tco_remote_type_check_threshold
     ?(tco_remote_type_check = default.tco_remote_type_check)
     ?tco_remote_worker_key
@@ -312,13 +322,15 @@ let make
     ?(tco_ignore_collection_expr_type_arguments =
       default.tco_ignore_collection_expr_type_arguments)
     ?(tco_shallow_class_decl = default.tco_shallow_class_decl)
-    ?(po_rust = default.po_rust)
+    ?(po_rust_parser_errors = default.po_rust_parser_errors)
     ?(profile_type_check_duration_threshold =
       default.profile_type_check_duration_threshold)
     ?(tco_like_types = default.tco_like_types)
     ?(tco_pessimize_types = default.tco_pessimize_types)
     ?(tco_simple_pessimize = default.tco_simple_pessimize)
     ?(tco_coercion_from_dynamic = default.tco_coercion_from_dynamic)
+    ?(tco_coercion_from_union = default.tco_coercion_from_union)
+    ?(tco_complex_coercion = default.tco_complex_coercion)
     ?(tco_disable_partially_abstract_typeconsts =
       default.tco_disable_partially_abstract_typeconsts)
     ?(error_codes_treated_strictly = default.error_codes_treated_strictly)
@@ -355,6 +367,8 @@ let make
     tco_migration_flags;
     tco_dynamic_view;
     tco_defer_class_declaration_threshold;
+    tco_max_times_to_defer_type_checking;
+    tco_prefetch_deferred_files;
     tco_remote_type_check_threshold;
     tco_remote_type_check;
     tco_remote_worker_key;
@@ -373,6 +387,7 @@ let make
     po_disallow_toplevel_requires;
     po_disable_nontoplevel_declarations;
     po_disable_static_closures;
+    po_disable_halt_compiler;
     po_allow_goto;
     tco_log_inference_constraints;
     tco_disallow_ambiguous_lambda;
@@ -392,12 +407,14 @@ let make
     tco_typecheck_xhp_cvars;
     tco_ignore_collection_expr_type_arguments;
     tco_shallow_class_decl;
-    po_rust;
+    po_rust_parser_errors;
     profile_type_check_duration_threshold;
     tco_like_types;
     tco_pessimize_types;
     tco_simple_pessimize;
     tco_coercion_from_dynamic;
+    tco_coercion_from_union;
+    tco_complex_coercion;
     tco_disable_partially_abstract_typeconsts;
     error_codes_treated_strictly;
     tco_check_xhp_attribute;
@@ -435,6 +452,11 @@ let tco_dynamic_view t = t.tco_dynamic_view
 let tco_defer_class_declaration_threshold t =
   t.tco_defer_class_declaration_threshold
 
+let tco_max_times_to_defer_type_checking t =
+  t.tco_max_times_to_defer_type_checking
+
+let tco_prefetch_deferred_files t = t.tco_prefetch_deferred_files
+
 let tco_remote_type_check_threshold t = t.tco_remote_type_check_threshold
 
 let tco_remote_type_check t = t.tco_remote_type_check
@@ -462,6 +484,8 @@ let po_disable_nontoplevel_declarations t =
   t.po_disable_nontoplevel_declarations
 
 let po_disable_static_closures t = t.po_disable_static_closures
+
+let po_disable_halt_compiler t = t.po_disable_halt_compiler
 
 let po_allow_goto t = t.po_allow_goto
 
@@ -513,7 +537,7 @@ let tco_typecheck_xhp_cvars t = t.tco_typecheck_xhp_cvars
 
 let tco_shallow_class_decl t = t.tco_shallow_class_decl
 
-let po_rust t = t.po_rust
+let po_rust_parser_errors t = t.po_rust_parser_errors
 
 let profile_type_check_duration_threshold t =
   t.profile_type_check_duration_threshold
@@ -525,6 +549,10 @@ let tco_pessimize_types t = t.tco_pessimize_types
 let tco_simple_pessimize t = t.tco_simple_pessimize
 
 let tco_coercion_from_dynamic t = t.tco_coercion_from_dynamic
+
+let tco_coercion_from_union t = t.tco_coercion_from_union
+
+let tco_complex_coercion t = t.tco_complex_coercion
 
 let tco_disable_partially_abstract_typeconsts t =
   t.tco_disable_partially_abstract_typeconsts
@@ -570,16 +598,6 @@ let po_abstract_static_props t = t.po_abstract_static_props
 let po_disable_unset_class_const t = t.po_disable_unset_class_const
 
 let tco_check_attribute_locations t = t.tco_check_attribute_locations
-
-let setup_pocket_universes env enabled =
-  let exp_features = env.tco_experimental_features in
-  let exp_features =
-    if enabled then
-      SSet.add tco_experimental_pocket_universes exp_features
-    else
-      SSet.remove tco_experimental_pocket_universes exp_features
-  in
-  { env with tco_experimental_features = exp_features }
 
 let set_infer_missing t w = { t with tco_infer_missing = w }
 

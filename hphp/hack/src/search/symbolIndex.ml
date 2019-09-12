@@ -17,7 +17,9 @@ let set_fuzzy_search_enabled x = HackSearchService.fuzzy := x
 
 let init_needs_search_updates ~(provider_name : string) : bool =
   match SearchUtils.provider_of_string provider_name with
-  | TrieIndex -> true
+  | LocalIndex
+  | TrieIndex ->
+    true
   | _ -> false
 
 (* Set the currently selected search provider *)
@@ -140,12 +142,14 @@ let find_matching_symbols
    * Let's capture it and avoid doing unnecessary work.
    *)
   if query_text = "this_is_just_to_check_liveness_of_hh_server" then
-    [ {
+    [
+      {
         si_name = "Yes_hh_server_is_alive";
         si_kind = SI_Unknown;
         si_filehash = 0L;
         si_fullname = "";
-      } ]
+      };
+    ]
   else
     (* Potential namespace matches always show up first *)
     let namespace_results =
@@ -255,8 +259,8 @@ let update_files
     ~(workers : MultiWorker.worker list option)
     ~(paths : (Relative_path.t * info * file_source) list) : unit =
   match !sienv.sie_provider with
+  | NoIndex -> ()
   | CustomIndex
-  | NoIndex
   | LocalIndex
   | SqliteIndex ->
     List.iter paths ~f:(fun (path, info, detector) ->
@@ -271,8 +275,8 @@ let update_files
 let remove_files
     ~(sienv : SearchUtils.si_env ref) ~(paths : Relative_path.Set.t) : unit =
   match !sienv.sie_provider with
+  | NoIndex -> ()
   | CustomIndex
-  | NoIndex
   | LocalIndex
   | SqliteIndex ->
     Relative_path.Set.iter paths ~f:(fun path ->

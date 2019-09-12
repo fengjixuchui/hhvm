@@ -1549,6 +1549,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ConvBoolToArr:
   case ConvDblToStr:
   case ConvDblToArr:
+  case ConvFuncToArr:
   case ConvIntToArr:
   case ConvIntToStr:
   case Box:  // conditional allocation
@@ -1742,7 +1743,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LdFuncRxLevel:
   case LdSmashable:
   case LdSmashableFunc:
-  case IsReifiedName:
   case LdARNumParams:
   case LdRDSAddr:
   case ExitPlaceholder:
@@ -1761,7 +1761,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case Select:
   case LookupSPropSlot:
   case ConvPtrToLval:
-  case MangleReifiedName:
   case ProfileProp:
     return IrrelevantEffects {};
 
@@ -2118,8 +2117,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   case AddNewElemVec:
   case IsTypeStruct:
-  case LdReifiedGeneric:
-  case RecordReifiedGenericsAndGetName:
   case RecordReifiedGenericsAndGetTSList:
     return may_load_store(AElemAny, AEmpty);
 
@@ -2133,6 +2130,12 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ConvDictToArr:
   case ConvShapeToArr:
   case ConvKeysetToArr:
+  case ConvClsMethToArr:
+  case ConvClsMethToDArr:
+  case ConvClsMethToDict:
+  case ConvClsMethToKeyset:
+  case ConvClsMethToVArr:
+  case ConvClsMethToVec:
     return may_load_store(AElemAny, AEmpty);
 
   case ConvVecToArr:

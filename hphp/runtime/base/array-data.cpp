@@ -139,6 +139,9 @@ struct ScalarHash {
       return false;
     }
 
+    if (UNLIKELY(RuntimeOption::EvalArrayProvenance) &&
+        arrprov::getTag(ad1) != arrprov::getTag(ad2)) return false;
+
     auto check = [] (const TypedValue& tv1, const TypedValue& tv2) {
       if (tv1.m_type != tv2.m_type) {
         // String keys from arrays might be KindOfString, even when
@@ -1397,16 +1400,32 @@ StringData* getHackArrCompatNullHackArrayKeyMsg() {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-ArrayData* tagArrProv(ArrayData* ad, const ArrayData* src) {
+namespace {
+
+template<typename SrcArr>
+ArrayData* tagArrProvImpl(ArrayData* ad, const SrcArr* src) {
   assertx(RuntimeOption::EvalArrayProvenance);
-  assertx(ad->hasExactlyOneRef());
+  assertx(ad->hasExactlyOneRef() || ad->isUncounted());
 
   if (src != nullptr) {
-    arrprov::copyTag(src, ad);
-  } else if (auto const tag = arrprov::tagFromProgramCounter()) {
-    arrprov::setTag(ad, *tag);
+    if (auto const tag = arrprov::getTag(src)) {
+      arrprov::setTag<arrprov::Mode::Emplace>(ad, *tag);
+      return ad;
+    }
+  }
+  if (auto const tag = arrprov::tagFromPC()) {
+    arrprov::setTag<arrprov::Mode::Emplace>(ad, *tag);
   }
   return ad;
+}
+
+}
+
+ArrayData* tagArrProv(ArrayData* ad, const ArrayData* src) {
+  return tagArrProvImpl(ad, src);
+}
+ArrayData* tagArrProv(ArrayData* ad, const APCArray* src) {
+  return tagArrProvImpl(ad, src);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

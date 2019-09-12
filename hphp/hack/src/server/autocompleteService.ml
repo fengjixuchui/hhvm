@@ -84,17 +84,20 @@ let get_replace_pos_exn () =
 let autocomplete_result_to_json res =
   let func_param_to_json param =
     Hh_json.JSON_Object
-      [ ("name", Hh_json.JSON_String param.param_name);
+      [
+        ("name", Hh_json.JSON_String param.param_name);
         ("type", Hh_json.JSON_String param.param_ty);
-        ("variadic", Hh_json.JSON_Bool param.param_variadic) ]
+        ("variadic", Hh_json.JSON_Bool param.param_variadic);
+      ]
   in
   let func_details_to_json details =
     match details with
     | Some fd ->
       Hh_json.JSON_Object
-        [ ("min_arity", Hh_json.int_ fd.min_arity);
+        [
+          ("min_arity", Hh_json.int_ fd.min_arity);
           ("return_type", Hh_json.JSON_String fd.return_ty);
-          ("params", Hh_json.JSON_Array (List.map fd.params func_param_to_json))
+          ("params", Hh_json.JSON_Array (List.map fd.params func_param_to_json));
         ]
     | None -> Hh_json.JSON_Null
   in
@@ -102,13 +105,15 @@ let autocomplete_result_to_json res =
   let pos = res.res_pos in
   let ty = res.res_ty in
   Hh_json.JSON_Object
-    [ ("name", Hh_json.JSON_String name);
+    [
+      ("name", Hh_json.JSON_String name);
       ("type", Hh_json.JSON_String ty);
       ("pos", Pos.json pos);
       ("func_details", func_details_to_json res.func_details);
-      ("expected_ty", Hh_json.JSON_Bool false)
-      (* legacy field, left here in case clients need it *)
-     ]
+      ("expected_ty", Hh_json.JSON_Bool false);
+        (* legacy field, left here in case clients need it *)
+      
+    ]
 
 let get_partial_result name ty kind class_opt =
   let base_class = Option.map ~f:(fun class_ -> Cls.name class_) class_opt in
@@ -477,7 +482,8 @@ let compute_complete_global
     (* This will give a good experience only for codebases where users rarely   *)
     (* define their own namespaces...                                           *)
     let standard_namespaces =
-      [ "C";
+      [
+        "C";
         "Vec";
         "Dict";
         "Str";
@@ -486,15 +492,18 @@ let compute_complete_global
         "PseudoRandom";
         "SecureRandom";
         "PHP";
-        "JS" ]
+        "JS";
+      ]
     in
     let auto_namespace_map = GlobalOptions.po_auto_namespace_map tcopt in
     let all_standard_namespaces =
       List.concat_map standard_namespaces ~f:(fun ns ->
-          [ Printf.sprintf "%s" ns;
+          [
+            Printf.sprintf "%s" ns;
             Printf.sprintf "%s\\fb" ns;
             Printf.sprintf "HH\\Lib\\%s" ns;
-            Printf.sprintf "HH\\Lib\\%s\\fb" ns ])
+            Printf.sprintf "HH\\Lib\\%s\\fb" ns;
+          ])
     in
     let all_aliased_namespaces =
       List.concat_map auto_namespace_map ~f:(fun (alias, fully_qualified) ->
@@ -546,7 +555,7 @@ let get_desc_string_for env ty kind =
 
 (* Convert a `TFun` into a func details structure *)
 let tfun_to_func_details (env : Tast_env.t) (ft : 'a Typing_defs.fun_type) :
-    func_details_result option =
+    func_details_result =
   let param_to_record ?(is_variadic = false) param =
     {
       param_name =
@@ -557,28 +566,27 @@ let tfun_to_func_details (env : Tast_env.t) (ft : 'a Typing_defs.fun_type) :
       param_variadic = is_variadic;
     }
   in
-  Some
-    {
-      return_ty = Tast_env.print_ty env ft.ft_ret.et_type;
-      min_arity = arity_min ft.ft_arity;
-      params =
-        ( List.map ft.ft_params param_to_record
-        @
-        match ft.ft_arity with
-        | Fellipsis _ ->
-          let empty =
-            TUtils.default_fun_param (Reason.none, Tany TanySentinel.value)
-          in
-          [param_to_record ~is_variadic:true empty]
-        | Fvariadic (_, p) -> [param_to_record ~is_variadic:true p]
-        | Fstandard _ -> [] );
-    }
+  {
+    return_ty = Tast_env.print_ty env ft.ft_ret.et_type;
+    min_arity = arity_min ft.ft_arity;
+    params =
+      ( List.map ft.ft_params param_to_record
+      @
+      match ft.ft_arity with
+      | Fellipsis _ ->
+        let empty =
+          TUtils.default_fun_param (Reason.none, Tany TanySentinel.value)
+        in
+        [param_to_record ~is_variadic:true empty]
+      | Fvariadic (_, p) -> [param_to_record ~is_variadic:true p]
+      | Fstandard _ -> [] );
+  }
 
 (* Convert a `ty` into a func details structure *)
 let get_func_details_for env ty =
   match ty with
-  | DeclTy (_, Tfun ft) -> tfun_to_func_details env ft
-  | LoclTy (_, Tfun ft) -> tfun_to_func_details env ft
+  | DeclTy (_, Tfun ft) -> Some (tfun_to_func_details env ft)
+  | LoclTy (_, Tfun ft) -> Some (tfun_to_func_details env ft)
   | _ -> None
 
 (* Here we turn partial_autocomplete_results into complete_autocomplete_results *)
@@ -722,9 +730,7 @@ let visitor =
 
        In order to handle this, we strip off the leading `:` if one exists and
        use that as the search term. *)
-      let trimmed_sid =
-        snd sid |> Utils.strip_ns |> (fun s -> (fst sid, lstrip s ":"))
-      in
+      let trimmed_sid = (fst sid, snd sid |> Utils.strip_both_ns) in
       autocomplete_id trimmed_sid env;
       let cid = Nast.CI sid in
       Decl_provider.get_class (snd sid)
@@ -889,14 +895,18 @@ let find_global_results
      *)
     List.iter results ~f:(fun r ->
         (* Only load func details if the flag sie_resolve_signatures is true *)
-        let func_details =
+        let (func_details, res_ty) =
           if sienv.sie_resolve_signatures && r.si_kind = SI_Function then
             let fixed_name = ns ^ r.si_name in
             match Tast_env.get_fun tast_env fixed_name with
-            | None -> None
-            | Some ft -> tfun_to_func_details tast_env ft
+            | None -> (None, kind_to_string r.si_kind)
+            | Some ft ->
+              let details = tfun_to_func_details tast_env ft in
+              let ty = (Typing_reason.Rnone, Tfun ft) in
+              let res_ty = Tast_env.print_ty tast_env ty in
+              (Some details, res_ty)
           else
-            None
+            (None, kind_to_string r.si_kind)
         in
         (* Figure out how to display them *)
         let complete =
@@ -905,7 +915,7 @@ let find_global_results
             (* This is okay - resolve will fill it in *)
             res_replace_pos = replace_pos;
             res_base_class = None;
-            res_ty = kind_to_string r.si_kind;
+            res_ty;
             res_name = r.si_name;
             res_fullname = r.si_fullname;
             res_kind = r.si_kind;

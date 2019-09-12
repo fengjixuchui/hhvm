@@ -1398,22 +1398,22 @@ namespace {
 
 enum class NoCow {};
 template<class DoCow = void, class NonArrayRet, class OpPtr>
-static Variant iter_op_impl(VRefParam refParam, OpPtr op, const String& objOp,
+static Variant iter_op_impl(Variant& refParam, OpPtr op, const String& objOp,
                             NonArrayRet nonArray,
                             const std::string& fnName,
                             bool(ArrayData::*pred)() const =
                               &ArrayData::isInvalid) {
-  auto& cell = *refParam.wrapped().toCell();
+  auto& cell = *refParam.toCell();
   if (!isArrayLikeType(cell.m_type)) {
     if (cell.m_type == KindOfObject) {
-      auto obj = refParam.wrapped().toObject();
+      auto obj = cell.m_data.pobj;
       if (obj->instanceof(SystemLib::s_ArrayObjectClass)) {
         return obj->o_invoke_few_args(objOp, 0);
       }
     }
     throw_bad_type_exception("%s() expects array, was %s",
                              fnName.c_str(),
-                             getDataTypeString(refParam->getType()).c_str());
+                             getDataTypeString(refParam.getType()).c_str());
     return Variant(nonArray);
   }
 
@@ -1422,12 +1422,7 @@ static Variant iter_op_impl(VRefParam refParam, OpPtr op, const String& objOp,
   if (doCow && ad->cowCheck() && !(ad->*pred)() &&
       !ad->noCopyOnWrite()) {
     ad = ad->copy();
-    if (LIKELY(refParam.isRefData())) {
-      cellMove(make_array_like_tv(ad), *refParam.getRefData()->cell());
-    } else {
-      req::ptr<ArrayData> tmp(ad, req::ptr<ArrayData>::NoIncRef{});
-      return (ad->*op)();
-    }
+    refParam = Variant::attach(ad);
   }
   return (ad->*op)();
 }
@@ -1445,7 +1440,7 @@ const StaticString
 
 
 Variant HHVM_FUNCTION(each,
-                      VRefParam refParam) {
+                      Variant& refParam) {
   return iter_op_impl(
     refParam,
     &ArrayData::each,
@@ -1456,9 +1451,11 @@ Variant HHVM_FUNCTION(each,
 }
 
 Variant HHVM_FUNCTION(current,
-                      VRefParam refParam) {
+                      const Variant& refParam) {
   return iter_op_impl<NoCow>(
-    refParam,
+    // NoCow version never actually modifies refParam but
+    // yet still requires non-const reference
+    const_cast<Variant&>(refParam),
     &ArrayData::current,
     s___current,
     false,
@@ -1466,15 +1463,12 @@ Variant HHVM_FUNCTION(current,
   );
 }
 
-Variant HHVM_FUNCTION(pos,
-                      VRefParam refParam) {
-  return HHVM_FN(current)(refParam);
-}
-
 Variant HHVM_FUNCTION(key,
-                      VRefParam refParam) {
+                      const Variant& refParam) {
   return iter_op_impl<NoCow>(
-    refParam,
+    // NoCow version never actually modifies refParam but
+    // yet still requires non-const reference
+    const_cast<Variant&>(refParam),
     &ArrayData::key,
     s___key,
     false,
@@ -1483,7 +1477,7 @@ Variant HHVM_FUNCTION(key,
 }
 
 Variant HHVM_FUNCTION(next,
-                      VRefParam refParam) {
+                      Variant& refParam) {
   return iter_op_impl(
     refParam,
     &ArrayData::next,
@@ -1494,7 +1488,7 @@ Variant HHVM_FUNCTION(next,
 }
 
 Variant HHVM_FUNCTION(prev,
-                      VRefParam refParam) {
+                      Variant& refParam) {
   return iter_op_impl(
     refParam,
     &ArrayData::prev,
@@ -1505,7 +1499,7 @@ Variant HHVM_FUNCTION(prev,
 }
 
 Variant HHVM_FUNCTION(reset,
-                      VRefParam refParam) {
+                      Variant& refParam) {
   return iter_op_impl(
     refParam,
     &ArrayData::reset,
@@ -1517,7 +1511,7 @@ Variant HHVM_FUNCTION(reset,
 }
 
 Variant HHVM_FUNCTION(end,
-                      VRefParam refParam) {
+                      Variant& refParam) {
   return iter_op_impl(
     refParam,
     &ArrayData::end,
@@ -3479,6 +3473,18 @@ String HHVM_FUNCTION(HH_get_provenance, const Variant& in) {
   }
 }
 
+TypedValue HHVM_FUNCTION(HH_tag_provenance_here, TypedValue in) {
+  if (!isArrayLikeType(type(in))) return in;
+  if (!RuntimeOption::EvalArrayProvenance) return in;
+
+  auto const ad = in.m_data.parr;
+  if (auto const tag = arrprov::tagFromPC()) {
+    arrprov::setTag<arrprov::Mode::Emplace>(ad, *tag);
+  }
+
+  return in;
+}
+
 Array HHVM_FUNCTION(merge_xhp_attr_declarations,
                     const Array& arr1,
                     const Array& arr2,
@@ -3594,7 +3600,6 @@ struct ArrayExtension final : Extension {
     HHVM_FE(each);
     HHVM_FE(current);
     HHVM_FE(next);
-    HHVM_FE(pos);
     HHVM_FE(prev);
     HHVM_FE(reset);
     HHVM_FE(end);
@@ -3651,6 +3656,7 @@ struct ArrayExtension final : Extension {
     HHVM_FALIAS(HH\\darray, HH_darray);
     HHVM_FALIAS(HH\\array_key_cast, HH_array_key_cast);
     HHVM_FALIAS(HH\\get_provenance, HH_get_provenance);
+    HHVM_FALIAS(HH\\tag_provenance_here, HH_tag_provenance_here);
     HHVM_FALIAS(__SystemLib\\merge_xhp_attr_declarations,
                 merge_xhp_attr_declarations);
 

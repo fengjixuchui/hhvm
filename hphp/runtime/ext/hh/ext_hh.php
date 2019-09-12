@@ -133,6 +133,22 @@ function dynamic_fun(string $name): mixed;
 <<__Native>>
 function dynamic_class_meth(string $cls, string $meth): mixed;
 
+/**
+ * Same as dynamic_fun but can't be used in RepoAuthoritative mode and
+ * doesn't raise warnings or errors
+ * on functions not marked __DynamicallyCallable.
+ */
+<<__Native>>
+function dynamic_fun_force(string $name): mixed;
+
+/**
+ * Same as dynamic_class_meth but can't be used in RepoAuthoritative mode
+ * and doesn't raise warnings or errors
+ * on methods not marked __DynamicallyCallable.
+ */
+<<__Native>>
+function dynamic_class_meth_force(string $cls, string $meth): mixed;
+
 // class-like
 interface ClassLikeAttribute {}
 interface ClassAttribute extends ClassLikeAttribute {}
@@ -231,12 +247,6 @@ namespace HH\ReifiedGenerics {
     return ${'0ReifiedGenerics'}[0];
   }
 
-  // Old API for get_type_structure()
-  // TODO(T46695073): Kill after next HHVM release
-  function getTypeStructure<reify T>(): mixed {
-    return namespace\get_type_structure<T>();
-  }
-
   /**
    * Returns the name of the class represented by this reified type.
    * If this type does not represent a class, throws an exception
@@ -250,9 +260,4 @@ namespace HH\ReifiedGenerics {
     return $clsname;
   }
 
-  // Old API for get_classname
-  // TODO(T46695073): Kill after next HHVM release
-  function getClassname<reify T>(): classname<T> {
-    return namespace\get_classname<T>();
-  }
 }

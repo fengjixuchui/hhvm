@@ -170,10 +170,12 @@ let process_untrusted_mode config =
   | Some s ->
     if bool_of_string s then
       let blacklist =
-        [ (* out of tree file access*)
-          "extra_paths";
+        [
+          (* out of tree file access*)
+            "extra_paths";
           (* potential resource abuse *)
-          "language_feature_logging" ]
+            "language_feature_logging";
+        ]
       in
       let prefix_blacklist =
         [(* potential resource abuse *) "gc_"; "sharedmem_"]
@@ -291,6 +293,7 @@ let load config_filename options =
       ?po_deregister_php_stdlib:(bool_opt "deregister_php_stdlib" config)
       ?po_allow_goto:(Option.map ~f:not (bool_opt "disallow_goto" config))
       ?po_disable_static_closures:(bool_opt "disable_static_closures" config)
+      ?po_disable_halt_compiler:(bool_opt "disable_halt_compiler" config)
       ?tco_disallow_array_as_tuple:(bool_opt "disallow_array_as_tuple" config)
       ?tco_disallow_ambiguous_lambda:
         (bool_opt "disallow_ambiguous_lambda" config)
@@ -298,6 +301,10 @@ let load config_filename options =
       ?tco_disallow_array_literal:(bool_opt "disallow_array_literal" config)
       ?tco_defer_class_declaration_threshold:
         local_config.ServerLocalConfig.defer_class_declaration_threshold
+      ?tco_max_times_to_defer_type_checking:
+        local_config.ServerLocalConfig.max_times_to_defer_type_checking
+      ?tco_prefetch_deferred_files:
+        (Some local_config.ServerLocalConfig.prefetch_deferred_files)
       ?tco_remote_type_check_threshold:
         local_config.ServerLocalConfig.remote_type_check_threshold
       ?tco_remote_type_check:
@@ -338,13 +345,14 @@ let load config_filename options =
         (ServerArgs.log_inference_constraints options)
       ~tco_migration_flags:(config_tc_migration_flags config)
       ~tco_shallow_class_decl:local_config.ServerLocalConfig.shallow_class_decl
-      ~po_rust:local_config.ServerLocalConfig.rust
       ~profile_type_check_duration_threshold:
         local_config.ServerLocalConfig.profile_type_check_duration_threshold
       ?tco_like_types:(bool_opt "like_types" config)
       ?tco_pessimize_types:(bool_opt "pessimize_types" config)
       ?tco_simple_pessimize:(float_opt "simple_pessimize" config)
       ?tco_coercion_from_dynamic:(bool_opt "coercion_from_dynamic" config)
+      ?tco_complex_coercion:(bool_opt "complex_coercion" config)
+      ?tco_coercion_from_union:(bool_opt "coercion_from_union" config)
       ?tco_disable_partially_abstract_typeconsts:
         (bool_opt "disable_partially_abstract_typeconsts" config)
       ~error_codes_treated_strictly:

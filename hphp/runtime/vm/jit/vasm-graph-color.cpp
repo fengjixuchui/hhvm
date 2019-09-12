@@ -203,9 +203,10 @@ struct State {
   std::unordered_multimap<Vlabel, Vlabel> loopMembership;
 
   // Cached operands. The "id" field in a Vinstr is an index into this
-  // table. Since 0 means no cached information, the first entry in
-  // this vector is never used.
-  jit::vector<CachedOperands> cachedOperands;
+  // table. Since 0 means no cached information, the first entry is
+  // never used. We use a deque to guarantee that references will
+  // never be invalidated.
+  jit::deque<CachedOperands> cachedOperands;
 
   // Calculate penalty vectors. Different Vregs may share the same
   // penalty vector.
@@ -4665,6 +4666,7 @@ void fixup_spill_mismatches(State& state, SpillerResults& results) {
 
           // Try to replace the instruction with a rematerialized one.
           auto& inst = unit.blocks[b].code[instIdx];
+          auto const irctx = inst.irctx();
           assertx(inst.op == Vinstr::reload &&
                   inst.reload_.s == r &&
                   inst.reload_.d == r2);
@@ -4677,6 +4679,7 @@ void fixup_spill_mismatches(State& state, SpillerResults& results) {
             r,
             r2
           );
+          inst.set_irctx(irctx);
           // The def of the instruction is now available for more
           // rematerialized instructions.
           inReg.add(r2);

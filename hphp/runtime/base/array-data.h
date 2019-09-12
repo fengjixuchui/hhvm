@@ -38,6 +38,7 @@ namespace HPHP {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+struct APCArray;
 struct Array;
 struct String;
 struct StringData;
@@ -310,10 +311,11 @@ public:
    * side table--see array-provenance.h
    */
   bool hasProvenanceData() const;
+
   /*
-   * Latches the provenance data bit to true
+   * Sets the provenance data bit
    */
-  void markHasProvenanceData();
+  void setHasProvenanceData(bool value);
 
   /*
    * Whether the array has legacy behaviors enabled (this bit can only be set
@@ -1036,6 +1038,7 @@ folly::Optional<int64_t> tryIntishCast(const StringData* key);
  * assert that `ad` does not have an existing tag, and instead overrides it.
  */
 ArrayData* tagArrProv(ArrayData* ad, const ArrayData* src = nullptr);
+ArrayData* tagArrProv(ArrayData* ad, const APCArray* src);
 
 ///////////////////////////////////////////////////////////////////////////////
 

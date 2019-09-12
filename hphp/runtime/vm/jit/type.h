@@ -38,6 +38,7 @@ namespace HPHP {
 struct ArrayData;
 struct Class;
 struct Func;
+struct RecordDesc;
 struct StringData;
 struct TypeConstraint;
 struct TypedValue;
@@ -758,8 +759,10 @@ public:
   const ArrayData* dictVal() const;
   const ArrayData* shapeVal() const;
   const ArrayData* keysetVal() const;
+  const ArrayData* arrLikeVal() const;
   const HPHP::Func* funcVal() const;
   const Class* clsVal() const;
+  const RecordDesc* recVal() const;
   ClsMethDataRef clsmethVal() const;
   ConstCctx cctxVal() const;
   rds::Handle rdsHandleVal() const;
@@ -972,6 +975,7 @@ private:
     const ArrayData* m_keysetVal;
     const HPHP::Func* m_funcVal;
     const Class* m_clsVal;
+    const RecordDesc* m_recVal;
     ClsMethDataRef m_clsmethVal;
     ConstCctx m_cctxVal;
     jit::TCA m_tcaVal;

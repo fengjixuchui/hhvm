@@ -19,6 +19,7 @@
 #include <array>
 #include <folly/MapUtil.h>
 
+#include "hphp/util/low-ptr.h"
 #include "hphp/util/match.h"
 #include "hphp/util/trace.h"
 
@@ -68,6 +69,7 @@ bool canDCE(IRInstruction* inst) {
   case ConvBoolToArr:
   case ConvDblToArr:
   case ConvIntToArr:
+  case ConvFuncToArr:
   case ConvArrToBool:
   case ConvDblToBool:
   case ConvIntToBool:
@@ -288,7 +290,6 @@ bool canDCE(IRInstruction* inst) {
   case StrictlyIntegerConv:
   case GetMemoKeyScalar:
   case LookupSPropSlot:
-  case MangleReifiedName:
   case ConstructClosure:
   case Box:
   case AllocPackedArray:
@@ -362,6 +363,17 @@ bool canDCE(IRInstruction* inst) {
   case LdOutAddr:
     return !opcodeMayRaise(inst->op()) &&
       (!inst->consumesReferences() || inst->producesReference());
+
+  case ConvClsMethToArr:
+  case ConvClsMethToDArr:
+  case ConvClsMethToDict:
+  case ConvClsMethToKeyset:
+  case ConvClsMethToVArr:
+  case ConvClsMethToVec: {
+    bool consumeRef = use_lowptr ? false : inst->consumesReferences();
+    return !opcodeMayRaise(inst->op()) &&
+      (!consumeRef || inst->producesReference());
+  }
 
   case DbgTraceCall:
   case AKExistsObj:
@@ -732,8 +744,6 @@ bool canDCE(IRInstruction* inst) {
   case ConjureUse:
   case LdClsMethodFCacheFunc:
   case LdClsMethodCacheFunc:
-  case LdReifiedGeneric:
-  case IsReifiedName:
   case ProfileInstanceCheck:
   case MemoGetStaticValue:
   case MemoGetStaticCache:
@@ -749,7 +759,6 @@ bool canDCE(IRInstruction* inst) {
   case MemoSetInstanceCache:
   case BoxPtr:
   case ThrowAsTypeStructException:
-  case RecordReifiedGenericsAndGetName:
   case RecordReifiedGenericsAndGetTSList:
   case ResolveTypeStruct:
   case CheckRDSInitialized:

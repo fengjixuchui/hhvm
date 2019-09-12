@@ -96,6 +96,7 @@ bool PackedArray::checkInvariants(const ArrayData* arr) {
   assertx(!arr->isPacked() || !arr->isDArray());
   assertx(!arr->isVecArray() || arr->isNotDVArray());
   assertx(!RuntimeOption::EvalHackArrDVArrs || arr->isNotDVArray());
+  assertx(arrprov::arrayWantsTag(arr) || !arr->hasProvenanceData());
   static_assert(ArrayData::kPackedKind == 0, "");
   // Note that m_pos < m_size is not an invariant, because an array
   // that grows will only adjust m_size to zero on the old array.
@@ -117,13 +118,22 @@ bool PackedArray::checkInvariants(const ArrayData* arr) {
 
 namespace {
 
-template<bool check_kind = false>
-ArrayData* tryTagArrProvVec(ArrayData* ad,
-                            const ArrayData* src = nullptr) {
+template<bool check_kind, typename SrcArr>
+ArrayData* implTagArrProvVec(ArrayData* ad, const SrcArr* src) {
   return RuntimeOption::EvalArrayProvenance &&
          (!check_kind || ad->kind() == ArrayData::kVecKind)
     ? tagArrProv(ad, src)
     : ad;
+}
+
+template<bool check_kind = false>
+ArrayData* tryTagArrProvVec(ArrayData* ad, const ArrayData* src = nullptr) {
+  return implTagArrProvVec<check_kind>(ad, src);
+}
+
+template<bool check_kind = false>
+ArrayData* tryTagArrProvVec(ArrayData* ad, const APCArray* src) {
+  return implTagArrProvVec<check_kind>(ad, src);
 }
 
 }
@@ -371,10 +381,17 @@ ArrayData* PackedArray::CopyStatic(const ArrayData* adIn) {
     packSizeIndexAndAuxBits(sizeIndex, adIn->auxBits())
   );
 
-  arrprov::copyTagStatic(adIn, ad);
+  if (RuntimeOption::EvalArrayProvenance) {
+    assertx(!ad->hasProvenanceData());
+    if (auto const tag = arrprov::getTag(adIn)) {
+      arrprov::setTag(ad, *tag);
+    }
+  }
 
   assertx(ad->kind() == adIn->kind());
   assertx(ad->dvArray() == adIn->dvArray());
+  assertx(!arrprov::arrayWantsTag(ad) ||
+          ad->hasProvenanceData() == adIn->hasProvenanceData());
   assertx(capacity(ad) >= adIn->m_size);
   assertx(ad->m_size == adIn->m_size);
   assertx(ad->m_pos == adIn->m_pos);
@@ -404,11 +421,18 @@ ArrayData* PackedArray::ConvertStatic(const ArrayData* arr) {
     tvDupWithRef(arr->atPos(pos), LvalUncheckedInt(ad, i), arr);
   }
 
-  arrprov::copyTagStatic(arr, ad);
+  if (RuntimeOption::EvalArrayProvenance) {
+    assertx(!ad->hasProvenanceData());
+    if (auto const tag = arrprov::getTag(arr)) {
+      arrprov::setTag(ad, *tag);
+    }
+  }
 
   assertx(ad->isPacked());
   assertx(capacity(ad) >= arr->m_size);
   assertx(ad->dvArray() == arr->dvArray());
+  assertx(!arrprov::arrayWantsTag(ad) ||
+          ad->hasProvenanceData() == arr->hasProvenanceData());
   assertx(ad->m_size == arr->m_size);
   assertx(ad->m_pos == arr->m_pos);
   assertx(ad->isStatic());
@@ -601,7 +625,8 @@ ArrayData* PackedArray::MakeVecFromAPC(const APCArray* apc) {
   for (uint32_t i = 0; i < apcSize; ++i) {
     init.append(apc->getValue(i)->toLocal());
   }
-  return init.create();
+  auto const ad = init.create();
+  return tryTagArrProvVec(ad, apc);
 }
 
 ArrayData* PackedArray::MakeVArrayFromAPC(const APCArray* apc) {
@@ -636,6 +661,9 @@ void PackedArray::ReleaseUncounted(ArrayData* ad) {
   assertx(checkInvariants(ad));
   if (!ad->uncountedDecRef()) return;
 
+  if (RuntimeOption::EvalArrayProvenance) {
+    arrprov::clearTag(ad);
+  }
   for (uint32_t i = 0; i < ad->m_size; ++i) {
     ReleaseUncountedTv(LvalUncheckedInt(ad, i));
   }
@@ -1256,6 +1284,7 @@ ArrayData* PackedArray::ToPHPArrayVec(ArrayData* adIn, bool copy) {
   ArrayData* ad = copy ? Copy(adIn) : adIn;
   ad->m_kind = HeaderKind::Packed;
   assertx(ad->isNotDVArray());
+  arrprov::clearTag(ad);
   ad->setLegacyArray(false);
   assertx(checkInvariants(ad));
   return ad;
@@ -1268,6 +1297,7 @@ ArrayData* PackedArray::ToVArrayVec(ArrayData* adIn, bool copy) {
   if (adIn->getSize() == 0) return ArrayData::CreateVArray();
   ArrayData* ad = copy ? Copy(adIn) : adIn;
   ad->m_kind = HeaderKind::Packed;
+  arrprov::clearTag(ad);
   ad->setDVArray(ArrayData::kVArray);
   ad->setLegacyArray(false);
   assertx(checkInvariants(ad));
@@ -1457,7 +1487,7 @@ ArrayData* PackedArray::MakeUncounted(ArrayData* array,
   assertx(ad->isUncounted());
   assertx(checkInvariants(ad));
   if (updateSeen) (*seen)[array] = ad;
-  return ad;
+  return tryTagArrProvVec<true>(ad, array);
 }
 
 ALWAYS_INLINE

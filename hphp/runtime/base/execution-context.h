@@ -462,20 +462,19 @@ private:
 public:
   void syncGdbState();
 
-  enum InvokeFlags {
-    InvokeNormal,
-    InvokePseudoMain
-  };
+  TypedValue invokePseudoMain(const Func* f,
+                              VarEnv* varEnv = nullptr,
+                              ObjectData* this_ = nullptr,
+                              Class* class_ = nullptr);
 
   TypedValue invokeFunc(const Func* f,
                         const Variant& args_ = init_null_variant,
                         ObjectData* this_ = nullptr,
                         Class* class_ = nullptr,
-                        VarEnv* varEnv = nullptr,
                         StringData* invName = nullptr,
-                        InvokeFlags flags = InvokeNormal,
                         bool dynamic = true,
                         bool checkRefAnnot = false,
+                        bool allowDynCallNoPointer = false,
                         Array&& reifiedGenerics = Array());
 
   TypedValue invokeFunc(const CallCtx& ctx,
@@ -524,7 +523,7 @@ private:
   TypedValue invokeFuncImpl(const Func* f,
                             ObjectData* thiz, Class* cls, uint32_t argc,
                             StringData* invName,
-                            bool dynamic,
+                            bool dynamic, bool allowDynCallNoPointer,
                             FStackCheck doStackCheck,
                             FInitArgs doInitArgs,
                             FEnterVM doEnterVM,

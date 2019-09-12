@@ -952,14 +952,7 @@ std::pair<ArrayData*, std::string> read_litarray(AsmState& as) {
         as.error(".adata only supports serialized arrays");
       }
 
-      auto const line = as.srcLoc.line0;
-      auto const filename = as.ue->m_filepath;
       auto data = var.detach().m_data.parr;
-      if (RuntimeOption::EvalArrayProvenance &&
-          !data->empty() &&
-          !(as.fe->attrs & AttrProvenanceSkipFrame)) {
-        arrprov::setTagRecursive(data, {filename, line});
-      }
       ArrayData::GetScalarArray(&data);
       as.adataMap[name] = std::make_pair(data, std::move(overrides));
       as.adataDecls.erase(decl);
@@ -1358,6 +1351,7 @@ read_fcall_flags(AsmState& as, Op thisOpcode) {
       }
     }
     if (flag == "Unpack") { flags |= FCallArgs::HasUnpack; continue; }
+    if (flag == "Generics") { flags |= FCallArgs::HasGenerics; continue; }
     as.error("unrecognized FCall flag `" + flag + "'");
   }
   as.in.expectWs('>');
@@ -1541,8 +1535,7 @@ std::map<std::string,ParserFunc> opcode_parsers;
 #define NUM_POP_CUMANY immIVA[0] /* number of arguments */
 #define NUM_POP_CMANY_U3 immIVA[0] + 3
 #define NUM_POP_CALLNATIVE (immIVA[0] + immIVA[2]) /* number of args + nout */
-#define NUM_POP_FCALL(nin, nobj) \
-  (nin + immFCA.numArgsInclUnpack() + 2 + immFCA.numRets)
+#define NUM_POP_FCALL(nin, nobj) (nin + immFCA.numInputs() + 2 + immFCA.numRets)
 #define NUM_POP_CMANY immIVA[0] /* number of arguments */
 #define NUM_POP_SMANY vecImmStackValues
 

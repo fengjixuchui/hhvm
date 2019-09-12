@@ -89,6 +89,12 @@ type t = {
   (* If set, defers class declarations after N lazy declarations; if not set,
     always lazily declares classes not already in cache. *)
   defer_class_declaration_threshold: int option;
+  (* If set, prevents type checking of files from being deferred more than
+    the number of times greater than or equal to the threshold. If not set,
+    defers class declarations indefinitely. *)
+  max_times_to_defer_type_checking: int option;
+  (* The whether to use the hook that prefetches files on an Eden checkout *)
+  prefetch_deferred_files: bool;
   (* If set, distributes type checking to remote workers if the number of files to
     type check exceeds the threshold. If not set, then always checks everything locally. *)
   remote_type_check_threshold: int option;
@@ -115,8 +121,6 @@ type t = {
   tico_invalidate_files: bool;
   (* Use finer grain hh_server dependencies *)
   tico_invalidate_smart: bool;
-  (* Use rust parser *)
-  rust: bool;
   profile_type_check_duration_threshold: float;
   (* Use shared_lru workers *)
   use_lru_workers: bool;
@@ -173,6 +177,8 @@ let default =
     idle_gc_slice = 0;
     shallow_class_decl = false;
     defer_class_declaration_threshold = None;
+    max_times_to_defer_type_checking = None;
+    prefetch_deferred_files = false;
     remote_type_check_threshold = None;
     remote_type_check = true;
     remote_worker_key = None;
@@ -187,7 +193,6 @@ let default =
     symbolindex_file = None;
     tico_invalidate_files = false;
     tico_invalidate_smart = false;
-    rust = true;
     profile_type_check_duration_threshold = 0.05;
     (* seconds *)
     use_lru_workers = false;
@@ -462,6 +467,16 @@ let load_ fn ~silent ~current_version overrides =
   let defer_class_declaration_threshold =
     int_opt "defer_class_declaration_threshold" config
   in
+  let max_times_to_defer_type_checking =
+    int_opt "max_times_to_defer_type_checking" config
+  in
+  let prefetch_deferred_files =
+    bool_if_min_version
+      "prefetch_deferred_files"
+      ~default:false
+      ~current_version
+      config
+  in
   let remote_type_check_threshold =
     int_opt "remote_type_check_threshold" config
   in
@@ -521,7 +536,6 @@ let load_ fn ~silent ~current_version overrides =
       ~default:default.tico_invalidate_smart
       config
   in
-  let rust = bool_if_version "rust" ~default:default.rust config in
   let profile_type_check_duration_threshold =
     float_
       "profile_type_check_duration_threshold"
@@ -580,6 +594,8 @@ let load_ fn ~silent ~current_version overrides =
     idle_gc_slice;
     shallow_class_decl;
     defer_class_declaration_threshold;
+    max_times_to_defer_type_checking;
+    prefetch_deferred_files;
     remote_worker_eden_checkout_threshold;
     remote_type_check_threshold;
     remote_type_check;
@@ -594,7 +610,6 @@ let load_ fn ~silent ~current_version overrides =
     symbolindex_file;
     tico_invalidate_files;
     tico_invalidate_smart;
-    rust;
     profile_type_check_duration_threshold;
     use_lru_workers;
   }

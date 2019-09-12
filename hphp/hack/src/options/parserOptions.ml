@@ -41,11 +41,7 @@ let with_disable_lval_as_an_expression po b =
 let disable_lval_as_an_expression =
   GlobalOptions.po_disable_lval_as_an_expression
 
-let setup_pocket_universes = GlobalOptions.setup_pocket_universes
-
-let with_rust po b = { po with GlobalOptions.po_rust = b }
-
-let rust = GlobalOptions.po_rust
+let rust_parser_errors = GlobalOptions.po_rust_parser_errors
 
 let enable_constant_visibility_modifiers =
   GlobalOptions.po_enable_constant_visibility_modifiers
@@ -91,6 +87,11 @@ let disable_unset_class_const = GlobalOptions.po_disable_unset_class_const
 
 let parser_errors_only = GlobalOptions.po_parser_errors_only
 
+let disable_halt_compiler = GlobalOptions.po_disable_halt_compiler
+
+let with_disable_halt_compiler po b =
+  { po with GlobalOptions.po_disable_halt_compiler = b }
+
 let make
     ~auto_namespace_map
     ~codegen
@@ -98,7 +99,6 @@ let make
     ~disable_nontoplevel_declarations
     ~disable_static_closures
     ~disable_lval_as_an_expression
-    ~rust
     ~enable_constant_visibility_modifiers
     ~enable_class_level_where_clauses
     ~disable_legacy_soft_typehints
@@ -108,7 +108,8 @@ let make
     ~disallow_silence
     ~const_static_props
     ~abstract_static_props
-    ~disable_unset_class_const =
+    ~disable_unset_class_const
+    ~disable_halt_compiler =
   GlobalOptions.
     {
       default with
@@ -118,7 +119,6 @@ let make
       po_disable_nontoplevel_declarations = disable_nontoplevel_declarations;
       po_disable_static_closures = disable_static_closures;
       po_disable_lval_as_an_expression = disable_lval_as_an_expression;
-      po_rust = rust;
       po_enable_constant_visibility_modifiers =
         enable_constant_visibility_modifiers;
       po_enable_class_level_where_clauses = enable_class_level_where_clauses;
@@ -130,4 +130,5 @@ let make
       tco_const_static_props = const_static_props;
       po_abstract_static_props = abstract_static_props;
       po_disable_unset_class_const = disable_unset_class_const;
+      po_disable_halt_compiler = disable_halt_compiler;
     }

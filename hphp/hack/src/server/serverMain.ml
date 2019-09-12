@@ -79,6 +79,7 @@ module Program = struct
           {
             ServerCommandTypes.Recheck_stats.id = info.recheck_id;
             time = info.recheck_time;
+            count = info.stats.total_rechecked_count;
           }
     in
     ServerError.print_error_list
@@ -92,8 +93,7 @@ module Program = struct
 
     WorkerController.killall ();
 
-    (* as Warnings shouldn't break CI, don't change the exit status except
-      * for Errors *)
+    (* as Warnings shouldn't break CI, don't change the exit status except for Errors *)
     let has_errors =
       List.exists
         ~f:(fun e -> Errors.get_severity e = Errors.Error)
@@ -244,7 +244,8 @@ let handle_connection_ genv env client =
         if env.full_check = Full_check_started then
           ServerBusyStatus.send
             env
-            (ServerCommandTypes.Doing_global_typecheck env.can_interrupt);
+            (ServerCommandTypes.Doing_global_typecheck
+               (ServerCheckUtils.global_typecheck_kind genv env));
         env
       in
       if
@@ -899,8 +900,10 @@ let setup_interrupts env client_provider =
         let handlers =
           match genv.notifier_async_reader () with
           | Some reader when interrupt_on_watchman ->
-            [ ( Buffered_line_reader.get_fd reader,
-                watchman_interrupt_handler genv ) ]
+            [
+              ( Buffered_line_reader.get_fd reader,
+                watchman_interrupt_handler genv );
+            ]
           | _ -> []
         in
         let handlers =
@@ -1123,7 +1126,6 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
     interrupt_on_client;
     predeclare_ide;
     max_typechecker_worker_memory_mb;
-    rust;
     _;
   } =
     local_config
@@ -1141,8 +1143,12 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
     let profile_threshold =
       local_config.ServerLocalConfig.profile_type_check_duration_threshold
     in
+    let max_times_to_defer =
+      local_config.ServerLocalConfig.max_times_to_defer_type_checking
+    in
     TypingLogger.ProfileTypeCheck.init
       ~threshold:profile_threshold
+      ~max_times_to_defer
       ~root:(Path.to_string root);
     if Sys_utils.is_test_mode () then
       EventLogger.init ~exit_on_parent_exit EventLogger.Event_logger_fake 0.0
@@ -1180,8 +1186,7 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
   );
 
   ( if
-    rust
-    && ServerConfig.warn_on_non_opt_build config
+    ServerConfig.warn_on_non_opt_build config
     && not Build_id.is_build_optimized
   then
     let msg =

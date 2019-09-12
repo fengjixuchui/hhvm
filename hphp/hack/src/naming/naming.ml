@@ -810,11 +810,6 @@ module Make (GetLocals : GetLocals) = struct
       env
       (p, x) =
     let tcopt = (fst env).tcopt in
-    let pu_enabled =
-      TypecheckerOptions.experimental_feature_enabled
-        tcopt
-        GlobalOptions.tco_experimental_pocket_universes
-    in
     let like_types_enabled = TypecheckerOptions.like_types tcopt in
     let hint = hint ~forbid_this ~allow_typedef ~allow_wildcard in
     match x with
@@ -829,7 +824,12 @@ module Make (GetLocals : GetLocals) = struct
       N.Hlike (hint ~allow_retonly env h)
     | Aast.Hsoft h ->
       let h = hint ~allow_retonly env h in
-      snd h
+      let pessimize_coefficient = TypecheckerOptions.simple_pessimize tcopt in
+      let pessimize = Pos.pessimize_enabled (fst h) pessimize_coefficient in
+      if pessimize then
+        Aast.Hlike h
+      else
+        snd h
     | Aast.Hfun (reactivity, coroutine, hl, kl, _, variadic_hint, h, _) ->
       hfun env reactivity coroutine hl kl variadic_hint h
     (* Special case for Rx<function> *)
@@ -866,6 +866,7 @@ module Make (GetLocals : GetLocals) = struct
       | N.Hprim _
       | N.Hmixed
       | N.Hnonnull
+      | N.Hdynamic
       | N.Hnothing ->
         if hl <> [] then Errors.unexpected_type_arguments p
       | _ -> ());
@@ -902,14 +903,7 @@ module Make (GetLocals : GetLocals) = struct
             | N.Hthis
             | N.Happly _ ->
               h
-            (* Pocket Universes: we want to be able to write `FieldName::Type`
-               in various locations (class, pu enum definitions, function
-               signatures), not just in `where` clauses.
-               This syntax is not (yet) allowed in Hack so
-               I guard its handling behind the experimental PU flag.
-            *)
-            | N.Habstr _ when in_where_clause && not pu_enabled -> h
-            | N.Habstr _ when pu_enabled -> h
+            | N.Habstr _ when in_where_clause -> h
             | _ ->
               Errors.invalid_type_access_root root;
               N.Herr
@@ -1707,6 +1701,7 @@ module Make (GetLocals : GetLocals) = struct
         List.iter l ~f:(check_afield_constant_expr env)
       else
         Errors.illegal_constant p
+    | Aast.As (e, (_, Aast.Hlike _), _) -> check_constant_expr env e
     | _ -> Errors.illegal_constant pos
 
   and check_afield_constant_expr env afield =
@@ -2921,9 +2916,9 @@ module Make (GetLocals : GetLocals) = struct
 
   and case env c =
     match c with
-    | Aast.Default b ->
+    | Aast.Default (p, b) ->
       let b = branch env b in
-      N.Default b
+      N.Default (p, b)
     | Aast.Case (e, b) ->
       let e = expr env e in
       let b = branch env b in
@@ -3200,7 +3195,7 @@ module Make (GetLocals : GetLocals) = struct
   let check_constant_hint cst =
     match cst.Aast.cst_type with
     | None when Partial.should_check_error cst.Aast.cst_mode 2001 ->
-      Errors.add_a_typehint (fst cst.Aast.cst_name)
+      Errors.const_without_typehint cst.Aast.cst_name
     | None
     | Some _ ->
       ()

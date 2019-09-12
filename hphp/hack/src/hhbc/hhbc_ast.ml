@@ -47,6 +47,7 @@ type num_params = int
 
 type fcall_flags = {
   has_unpack: bool;
+  has_generics: bool;
   supports_async_eager_return: bool;
   lock_while_unwinding: bool;
 }
@@ -188,6 +189,10 @@ type has_generics_op =
   | NoGenerics
   | MaybeGenerics
   | HasGenerics
+
+type is_log_as_dynamic_call_op =
+  | LogAsDynamicCall
+  | DontLogAsDynamicCall
 
 type instruct_lit_const =
   | Null
@@ -414,19 +419,15 @@ type instruct_call =
   | NewObjS of SpecialClsRef.t
   | FCall of fcall_args
   | FCallBuiltin of num_params * num_params * num_params * string
-  | FCallClsMethod of fcall_args * param_locations
+  | FCallClsMethod of fcall_args * param_locations * is_log_as_dynamic_call_op
   | FCallClsMethodD of fcall_args * class_id * method_id
-  | FCallClsMethodRD of fcall_args * class_id * method_id
   | FCallClsMethodS of fcall_args * SpecialClsRef.t
   | FCallClsMethodSD of fcall_args * SpecialClsRef.t * method_id
-  | FCallClsMethodSRD of fcall_args * SpecialClsRef.t * method_id
   | FCallCtor of fcall_args
   | FCallFunc of fcall_args * param_locations
   | FCallFuncD of fcall_args * function_id
-  | FCallFuncRD of fcall_args * function_id
   | FCallObjMethod of fcall_args * Ast_defs.og_null_flavor * param_locations
   | FCallObjMethodD of fcall_args * Ast_defs.og_null_flavor * method_id
-  | FCallObjMethodRD of fcall_args * Ast_defs.og_null_flavor * method_id
 
 type instruct_base =
   | BaseGC of stack_index * MemberOpMode.t
@@ -507,7 +508,6 @@ type instruct_misc =
   | Parent
   | LateBoundCls
   | ClassName
-  | ReifiedName of string
   | RecordReifiedGeneric
   | CheckReifiedGenericMismatch
   | NativeImpl

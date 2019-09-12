@@ -78,8 +78,10 @@ let assert_autocomplete
   )
 
 let run_index_builder (harness : Test_harness.t) : si_env =
+  let hhi_folder = Hhi.get_hhi_root () in
   Relative_path.set_path_prefix Relative_path.Root harness.repo_dir;
   Relative_path.set_path_prefix Relative_path.Tmp (Path.make "/tmp");
+  Relative_path.set_path_prefix Relative_path.Hhi hhi_folder;
   let repo_path = Path.to_string harness.repo_dir in
   (* Set up initial variables *)
   let fn = Filename.temp_file "autocomplete." ".db" in
@@ -95,6 +97,8 @@ let run_index_builder (harness : Test_harness.t) : si_env =
       custom_service = None;
       custom_repo_name = None;
       include_builtins = true;
+      set_paths_for_worker = false;
+      hhi_root_folder = Some hhi_folder;
       silent = true;
     }
   in
@@ -193,8 +197,10 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
     }
   in
   let changelist =
-    [ (bar1path, Full bar1fileinfo, TypeChecker);
-      (foo3path, Full foo3fileinfo, TypeChecker) ]
+    [
+      (bar1path, Full bar1fileinfo, TypeChecker);
+      (foo3path, Full foo3fileinfo, TypeChecker);
+    ]
   in
   SymbolIndex.update_files ~sienv ~workers:None ~paths:changelist;
   let n = LocalSearchService.count_local_fileinfos !sienv in
@@ -266,9 +272,10 @@ let test_builder_names (harness : Test_harness.t) : bool =
     ~expected:1
     ~sienv;
 
-  (* XHP is considered a class at the moment - this may change *)
+  (* XHP is considered a class at the moment - this may change.
+   * Note that XHP classes are saved WITHOUT a leading colon. *)
   assert_autocomplete
-    ~query_text:":xhp:helloworld"
+    ~query_text:"xhp:helloworld"
     ~kind:SI_Class
     ~expected:1
     ~sienv;
@@ -375,7 +382,6 @@ let test_docblock_finder (harness : Test_harness.t) : bool =
   let root_prefix = Path.to_string harness.repo_dir in
   let docblock =
     ServerDocblockAt.go_docblock_at
-      ~env
       ~filename:(root_prefix ^ "/bar_1.php")
       ~line:6
       ~column:7
@@ -395,7 +401,8 @@ let tests args =
       template_repo = args.Args.template_repo;
     }
   in
-  [ ( "test_sqlite_plus_local",
+  [
+    ( "test_sqlite_plus_local",
       fun () ->
         Test_harness.run_test
           ~stop_server_in_teardown:false
@@ -418,7 +425,8 @@ let tests args =
         Test_harness.run_test
           ~stop_server_in_teardown:false
           harness_config
-          test_docblock_finder ) ]
+          test_docblock_finder );
+  ]
 
 let () =
   Daemon.check_entry_point ();

@@ -145,16 +145,21 @@ let parse_options () =
   let cli_root = ref None in
   let rec options =
     ref
-      [ ( "--range",
+      [
+        ( "--range",
           Arg.Tuple
-            [ Arg.Int (fun x -> start_char := Some x);
-              Arg.Int (fun x -> end_char := Some x) ],
+            [
+              Arg.Int (fun x -> start_char := Some x);
+              Arg.Int (fun x -> end_char := Some x);
+            ],
           "[start end]  Range of character positions to be formatted (1 indexed)"
         );
         ( "--line-range",
           Arg.Tuple
-            [ Arg.Int (fun x -> start_line := Some x);
-              Arg.Int (fun x -> end_line := Some x) ],
+            [
+              Arg.Int (fun x -> start_line := Some x);
+              Arg.Int (fun x -> end_line := Some x);
+            ],
           "[start end]  Range of lines to be formatted (1 indexed, inclusive)"
         );
         ( "--at-char",
@@ -197,7 +202,8 @@ let parse_options () =
           Arg.String (fun x -> filename_for_logging := Some x),
           " The filename for logging purposes, when providing file contents "
           ^ "through stdin." );
-        ("--test", Arg.Set test, " Disable logging") ]
+        ("--test", Arg.Set test, " Disable logging");
+      ]
   in
   Arg.parse_dynamic options (fun file -> files := file :: !files) usage;
   let range =
@@ -382,7 +388,7 @@ let parse ~parser_env text_source =
     {
       parser_env with
       Full_fidelity_parser_env.mode =
-        Full_fidelity_parser.parse_mode ~rust:false source_text;
+        Full_fidelity_parser.parse_mode source_text;
     }
   in
   let tree = SyntaxTree.make ~env:parser_env source_text in

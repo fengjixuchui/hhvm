@@ -14,7 +14,6 @@ module SyntaxError = Full_fidelity_syntax_error
 module SourceText = Full_fidelity_source_text
 module SyntaxTree =
   Full_fidelity_syntax_tree.WithSyntax (Full_fidelity_positioned_syntax)
-module Lex = Full_fidelity_lexer
 module Logger = HackcEventLogger
 
 (*****************************************************************************)
@@ -82,8 +81,10 @@ let print_compiler_version () =
     let compiler_version_msg =
       json_to_string
       @@ JSON_Object
-           [ ("type", JSON_String "compiler_version");
-             ("version", JSON_String (Compiler_id.get_compiler_id ())) ]
+           [
+             ("type", JSON_String "compiler_version");
+             ("version", JSON_String (Compiler_id.get_compiler_id ()));
+           ]
     in
     P.printf "%s\n%!" compiler_version_msg)
 
@@ -115,7 +116,8 @@ let parse_options () =
     P.sprintf "Usage: hh_single_compile (%s) filename\n" Sys.argv.(0)
   in
   let options =
-    [ ("--version", Arg.Set want_version, " print the version and do nothing");
+    [
+      ("--version", Arg.Set want_version, " print the version and do nothing");
       ("--fallback", Arg.Set fallback, " Enables fallback compilation");
       ( "--debug-time",
         Arg.Set debug_time,
@@ -159,7 +161,8 @@ let parse_options () =
         " Stop logging stats" );
       ( "--for-debugger-eval",
         Arg.Unit (fun () -> for_debugger_eval := true),
-        " Mutate the program as if we're in the debugger repl" ) ]
+        " Mutate the program as if we're in the debugger repl" );
+    ]
   in
   let options = Arg.align ~limit:25 options in
   Arg.parse options (fun fn -> fn_ref := Some fn) usage;
@@ -209,9 +212,11 @@ let fail_daemon file error =
     let msg =
       json_to_string
       @@ JSON_Object
-           [ ("type", JSON_String "error");
+           [
+             ("type", JSON_String "error");
              ("file", JSON_String file);
-             ("error", JSON_String error) ]
+             ("error", JSON_String error);
+           ]
     in
     P.printf "%s\n%!" msg;
     die error)
@@ -278,10 +283,6 @@ let parse_text compiler_options popt fn text =
   let lower_coroutines =
     Hhbc_options.enable_coroutines !Hhbc_options.compiler_options
   in
-  let pocket_universes =
-    Hhbc_options.enable_pocket_universes !Hhbc_options.compiler_options
-  in
-  let popt = ParserOptions.setup_pocket_universes popt pocket_universes in
   let env =
     Full_fidelity_ast.make_env
       ~parser_options:popt
@@ -451,14 +452,14 @@ let do_compile filename compiler_options popt fail_or_ast debug_time =
     log_success compiler_options filename debug_time;
   hhas
 
-let extract_facts ~rust ~filename ~source_root text =
-  [ Hhbc_options.(
+let extract_facts ~filename ~source_root text =
+  [
+    Hhbc_options.(
       let co = !compiler_options in
       match Hackc_parse_delegator.extract_facts filename source_root with
       | Some result -> Hh_json.json_to_multiline ~sort_keys:true result
       | None ->
         Facts_parser.extract_as_json_string
-          ~rust
           ~php5_compat_mode:true
           ~hhvm_compat_mode:true
           ~disable_nontoplevel_declarations:
@@ -468,15 +469,15 @@ let extract_facts ~rust ~filename ~source_root text =
           ~disable_legacy_attribute_syntax:(disable_legacy_attribute_syntax co)
           ~filename
           ~text
-        |> Option.value ~default:"") ]
+        |> Option.value ~default:"");
+  ]
 
 let parse_hh_file filename body =
   Hhbc_options.(
     let co = !compiler_options in
-    let rust = use_rust_parser co in
     let file = Relative_path.create Relative_path.Dummy filename in
     let source_text = SourceText.make file body in
-    let mode = Full_fidelity_parser.parse_mode ~rust source_text in
+    let mode = Full_fidelity_parser.parse_mode source_text in
     let env =
       Full_fidelity_parser_env.make
         ~codegen:true
@@ -508,11 +509,11 @@ let make_popt () =
       ~disable_nontoplevel_declarations:
         (phpism_disable_nontoplevel_declarations co)
       ~disable_static_closures:(phpism_disable_static_closures co)
+      ~disable_halt_compiler:(phpism_disable_halt_compiler co)
       ~disable_lval_as_an_expression:(disable_lval_as_an_expression co)
       ~enable_constant_visibility_modifiers:
         (enable_constant_visibility_modifiers co)
       ~enable_class_level_where_clauses:(enable_class_level_where_clauses co)
-      ~rust:(use_rust_parser co)
       ~disable_legacy_soft_typehints:(disable_legacy_soft_typehints co)
       ~allow_new_attribute_syntax:(allow_new_attribute_syntax co)
       ~disable_legacy_attribute_syntax:(disable_legacy_attribute_syntax co)
@@ -535,11 +536,7 @@ let process_single_source_unit
     let t = Unix.gettimeofday () in
     let output =
       if compiler_options.extract_facts then
-        extract_facts
-          ~rust:(ParserOptions.rust popt)
-          ~filename
-          ~source_root
-          source_text
+        extract_facts ~filename ~source_root source_text
       else
         let fail_or_ast =
           match
@@ -591,9 +588,11 @@ let decl_and_run_mode compiler_options =
             List.fold ~f:(fun len s -> len + String.length s) ~init:0 output
           in
           let msg =
-            [ ("type", JSON_String "success");
+            [
+              ("type", JSON_String "success");
               ("file", JSON_String abs_path);
-              ("bytes", int_ bytes) ]
+              ("bytes", int_ bytes);
+            ]
           in
           let msg =
             if Hhbc_options.enable_perf_logging !Hhbc_options.compiler_options
@@ -614,9 +613,11 @@ let decl_and_run_mode compiler_options =
           let msg =
             json_to_string
             @@ JSON_Object
-                 [ ("type", JSON_String "error");
+                 [
+                   ("type", JSON_String "error");
                    ("file", JSON_String abs_path);
-                   ("error", JSON_String (Caml.Printexc.to_string exc)) ]
+                   ("error", JSON_String (Caml.Printexc.to_string exc));
+                 ]
           in
           P.printf "%s\n%!" msg
         in
@@ -717,9 +718,6 @@ let decl_and_run_mode compiler_options =
                  let path =
                    Relative_path.create Relative_path.Dummy filename
                  in
-                 let rust =
-                   Hhbc_options.use_rust_parser !Hhbc_options.compiler_options
-                 in
                  let old_config = !Hhbc_options.compiler_options in
                  let config_overrides =
                    get_field
@@ -731,7 +729,7 @@ let decl_and_run_mode compiler_options =
                  let result =
                    handle_output
                      path
-                     (extract_facts ~rust ~filename:path ~source_root body)
+                     (extract_facts ~filename:path ~source_root body)
                  in
                  Hhbc_options.set_compiler_options old_config;
                  result)

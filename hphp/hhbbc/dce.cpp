@@ -1517,7 +1517,6 @@ void dce(Env& env, const bc::Neq&)              { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::Not&)              { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::NSame&)            { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::Pow&)              { pushRemovableIfNoThrow(env); }
-void dce(Env& env, const bc::ReifiedName&)      { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::Same&)             { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::Shl&)              { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::Shr&)              { pushRemovableIfNoThrow(env); }
@@ -1592,17 +1591,13 @@ void dce(Env& env, const bc::Eval& op) { no_dce(env, op); }
 void dce(Env& env, const bc::FCallBuiltin& op) { no_dce(env, op); }
 void dce(Env& env, const bc::FCallClsMethod& op) { no_dce(env, op); }
 void dce(Env& env, const bc::FCallClsMethodD& op) { no_dce(env, op); }
-void dce(Env& env, const bc::FCallClsMethodRD& op) { no_dce(env, op); }
 void dce(Env& env, const bc::FCallClsMethodS& op) { no_dce(env, op); }
 void dce(Env& env, const bc::FCallClsMethodSD& op) { no_dce(env, op); }
-void dce(Env& env, const bc::FCallClsMethodSRD& op) { no_dce(env, op); }
 void dce(Env& env, const bc::FCallCtor& op) { no_dce(env, op); }
 void dce(Env& env, const bc::FCallFunc& op) { no_dce(env, op); }
 void dce(Env& env, const bc::FCallFuncD& op) { no_dce(env, op); }
-void dce(Env& env, const bc::FCallFuncRD& op) { no_dce(env, op); }
 void dce(Env& env, const bc::FCallObjMethod& op) { no_dce(env, op); }
 void dce(Env& env, const bc::FCallObjMethodD& op) { no_dce(env, op); }
-void dce(Env& env, const bc::FCallObjMethodRD& op) { no_dce(env, op); }
 void dce(Env& env, const bc::GetMemoKeyL& op) { no_dce(env, op); }
 void dce(Env& env, const bc::IncDecG& op) { no_dce(env, op); }
 void dce(Env& env, const bc::IncDecS& op) { no_dce(env, op); }

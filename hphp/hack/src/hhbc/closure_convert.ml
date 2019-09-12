@@ -764,7 +764,8 @@ let convert_meth_caller_to_func_ptr env st ann pc cls pf func =
            ( Aast.Cnormal,
              Tast_annotate.with_pos p (Id (p, "invariant")),
              [],
-             [ Tast_annotate.with_pos p
+             [
+               Tast_annotate.with_pos p
                @@ Call
                     ( Aast.Cnormal,
                       Tast_annotate.with_pos p (Id (p, "is_a")),
@@ -773,7 +774,8 @@ let convert_meth_caller_to_func_ptr env st ann pc cls pf func =
                       [] );
                Tast_annotate.with_pos
                  p
-                 (String ("object must be an instance of (" ^ cls ^ ")")) ],
+                 (String ("object must be an instance of (" ^ cls ^ ")"));
+             ],
              [] )
     in
     (* return $o-><func>(...$args); *)
@@ -806,8 +808,10 @@ let convert_meth_caller_to_func_ptr env st ann pc cls pf func =
         f_body =
           {
             fb_ast =
-              [ (p, Expr assert_invariant);
-                (p, Return (Some meth_caller_handle)) ];
+              [
+                (p, Expr assert_invariant);
+                (p, Return (Some meth_caller_handle));
+              ];
             fb_annotation = Tast.NoUnsafeBlocks;
           };
         f_fun_kind = Ast_defs.FSync;
@@ -1037,6 +1041,9 @@ let rec convert_expr env st ((p, expr_) as expr) =
       let (st, e) = convert_expr env st e in
       let (st, h) = convert_hint env st h in
       (st, (p, Is (e, h)))
+    | As (e, (_, Hlike _), _) ->
+      let (st, e) = convert_expr env st e in
+      (st, e)
     | As (e, h, b) ->
       let (st, e) = convert_expr env st e in
       let (st, h) = convert_hint env st h in
@@ -1527,9 +1534,9 @@ and convert_catch env st (ty, (p, catch_var), b) =
 
 and convert_case env st case =
   match case with
-  | Default b ->
+  | Default (p, b) ->
     let (st, b) = convert_block env st b in
-    (st, Default b)
+    (st, Default (p, b))
   | Case (e, b) ->
     let (st, e) = convert_expr env st e in
     let (st, b) = convert_block env st b in

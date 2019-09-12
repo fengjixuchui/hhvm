@@ -1349,7 +1349,10 @@ Array VariableUnserializer::unserializeDict() {
 
   if (size == 0) {
     expectChar('}');
-    return Array::CreateDict();
+    return Array::attach(provTag
+      ? arrprov::makeEmptyDict(provTag)
+      : staticEmptyDictArray()
+    );
   }
   if (UNLIKELY(size < 0 || size > std::numeric_limits<int>::max())) {
     throwArraySizeOutOfBounds();
@@ -1399,7 +1402,7 @@ Array VariableUnserializer::unserializeDict() {
 
   check_non_safepoint_surprise();
   expectChar('}');
-  if (provTag) arrprov::setTagReplace(arr.get(), *provTag);
+  if (provTag) arrprov::setTag<arrprov::Mode::Emplace>(arr.get(), *provTag);
   return arr;
 }
 
@@ -1414,7 +1417,10 @@ Array VariableUnserializer::unserializeVec() {
 
   if (size == 0) {
     expectChar('}');
-    return Array::CreateVec();
+    return Array::attach(provTag
+      ? arrprov::makeEmptyVec(provTag)
+      : staticEmptyVecArray()
+    );
   }
   if (UNLIKELY(size < 0 || size > std::numeric_limits<int>::max())) {
     throwArraySizeOutOfBounds();
@@ -1448,7 +1454,7 @@ Array VariableUnserializer::unserializeVec() {
   }
   check_non_safepoint_surprise();
   expectChar('}');
-  if (provTag) arrprov::setTagReplace(arr.get(), *provTag);
+  if (provTag) arrprov::setTag<arrprov::Mode::Emplace>(arr.get(), *provTag);
   return arr;
 }
 

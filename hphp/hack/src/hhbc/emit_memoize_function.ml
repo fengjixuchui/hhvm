@@ -10,6 +10,7 @@
 open Core_kernel
 open Instruction_sequence
 open Emit_memoize_helpers
+open Hhbc_ast
 module R = Hhbc_string_utils.Reified
 module T = Aast
 
@@ -29,13 +30,16 @@ let make_memoize_function_no_params_code
       make_fcall_args 0
   in
   gather
-    [ deprecation_body;
+    [
+      deprecation_body;
       ( if is_async then
         gather
-          [ instr_memoget_eager notfound suspended_get None;
+          [
+            instr_memoget_eager notfound suspended_get None;
             instr_retc;
             instr_label suspended_get;
-            instr_retc_suspended ]
+            instr_retc_suspended;
+          ]
       else
         gather [instr_memoget notfound None; instr_retc] );
       instr_label notfound;
@@ -46,12 +50,15 @@ let make_memoize_function_no_params_code
       instr_memoset None;
       ( if is_async then
         gather
-          [ instr_retc_suspended;
+          [
+            instr_retc_suspended;
             instr_label eager_set;
             instr_memoset_eager None;
-            instr_retc ]
+            instr_retc;
+          ]
       else
-        gather [instr_retc] ) ]
+        gather [instr_retc] );
+    ]
 
 let make_memoize_function_with_params_code
     ~pos
@@ -85,32 +92,27 @@ let make_memoize_function_with_params_code
     Emit_body.emit_deprecation_warning scope deprecation_info
   in
   let fcall_args =
+    let flags = { default_fcall_flags with has_generics = is_reified } in
     if is_async then
-      make_fcall_args ~async_eager_label:eager_set param_count
+      make_fcall_args ~flags ~async_eager_label:eager_set param_count
     else
-      make_fcall_args param_count
+      make_fcall_args ~flags param_count
   in
-  let fcall_instrs =
+  let (reified_get, reified_memokeym) =
     if not is_reified then
-      instr_fcallfuncd fcall_args renamed_method_id
+      (empty, empty)
     else
-      gather
-        [ instr_cgetl (Local.Named R.reified_generics_local_name);
-          instr_fcallfuncrd fcall_args renamed_method_id ]
-  in
-  let reified_memokeym =
-    if not is_reified then
-      empty
-    else
-      gather
-      @@ getmemokeyl
-           param_count
-           (param_count + add_reified)
-           R.reified_generics_local_name
+      ( instr_cgetl (Local.Named R.reified_generics_local_name),
+        gather
+        @@ getmemokeyl
+             param_count
+             (param_count + add_reified)
+             R.reified_generics_local_name )
   in
   let param_count = param_count + add_reified in
   gather
-    [ begin_label;
+    [
+      begin_label;
       Emit_body.emit_method_prolog
         ~env
         ~pos
@@ -122,33 +124,41 @@ let make_memoize_function_with_params_code
       reified_memokeym;
       ( if is_async then
         gather
-          [ instr_memoget_eager
+          [
+            instr_memoget_eager
               notfound
               suspended_get
               (Some (first_local, param_count));
             instr_retc;
             instr_label suspended_get;
-            instr_retc_suspended ]
+            instr_retc_suspended;
+          ]
       else
         gather
-          [instr_memoget notfound (Some (first_local, param_count)); instr_retc]
-      );
+          [
+            instr_memoget notfound (Some (first_local, param_count));
+            instr_retc;
+          ] );
       instr_label notfound;
       instr_nulluninit;
       instr_nulluninit;
       instr_nulluninit;
       param_code_gets params;
-      fcall_instrs;
+      reified_get;
+      instr_fcallfuncd fcall_args renamed_method_id;
       instr_memoset (Some (first_local, param_count));
       ( if is_async then
         gather
-          [ instr_retc_suspended;
+          [
+            instr_retc_suspended;
             instr_label eager_set;
             instr_memoset_eager (Some (first_local, param_count));
-            instr_retc ]
+            instr_retc;
+          ]
       else
         gather [instr_retc] );
-      default_value_setters ]
+      default_value_setters;
+    ]
 
 let make_memoize_function_code
     ~pos

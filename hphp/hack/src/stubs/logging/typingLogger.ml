@@ -8,11 +8,19 @@
  *)
 
 module ProfileTypeCheck = struct
-  let init ~threshold:_ ~root:_ = ()
+  let init ~threshold:_ ~max_times_to_defer:_ ~root:_ = ()
 
-  let log ~init_id:_ ~recheck_id:_ ~start_time:_ ~absolute:_ ~relative:_ = ()
+  let log
+      ~init_id:_
+      ~recheck_id:_
+      ~start_time:_
+      ~times_checked:_
+      ~files_to_declare:_
+      ~absolute:_
+      ~relative:_ =
+    ()
 
-  let print_path ~init_id:_ = ()
+  let print_path ~init_id:_ ~recheck_id:_ = ()
 end
 
 let log_lambda_counts _ = ()
