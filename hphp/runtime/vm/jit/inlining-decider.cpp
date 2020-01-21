@@ -25,6 +25,7 @@
 #include "hphp/runtime/vm/jit/location.h"
 #include "hphp/runtime/vm/jit/irlower.h"
 #include "hphp/runtime/vm/jit/mcgen.h"
+#include "hphp/runtime/vm/jit/mcgen-translate.h"
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
 #include "hphp/runtime/vm/jit/prof-data.h"
 #include "hphp/runtime/vm/jit/prof-data-serialize.h"
@@ -115,18 +116,6 @@ bool isCalleeInlinable(SrcKey callSK, const Func* callee,
   if (callee == callSK.func()) {
     return refuse("call is recursive");
   }
-  if (callee->hasVariadicCaptureParam()) {
-    if (callee->attrs() & AttrMayUseVV) {
-      return refuse("callee has variadic capture and MayUseVV");
-    }
-    // Refuse if the variadic parameter actually captures something.
-    auto pc = callSK.pc();
-    auto const numArgs = getImm(pc, 0).u_FCA.numArgs;
-    auto const numParams = callee->numParams();
-    if (numArgs >= numParams) {
-      return refuse("callee has variadic capture with non-empty value");
-    }
-  }
   if (callee->hasReifiedGenerics() && !callee->cls()) {
     return refuse("reified generics on non-method");
   }
@@ -151,41 +140,30 @@ bool isCalleeInlinable(SrcKey callSK, const Func* callee,
  */
 bool checkNumArgs(SrcKey callSK,
                   const Func* callee,
+                  const FCallArgs& fca,
                   AnnotationData* annotations) {
-  assertx(isFCall(callSK.op()));
   assertx(callee);
 
   auto refuse = [&] (const char* why) {
     return traceRefusal(callSK, callee, why, annotations);
   };
 
-  auto pc = callSK.pc();
-  auto const fca = getImm(pc, 0).u_FCA;
-  auto const numParams = callee->numParams();
+  assertx(fca.numArgs <= callee->numNonVariadicParams());
+  assertx(!fca.hasUnpack() || fca.numArgs == callee->numNonVariadicParams());
 
-  if (fca.numArgs > numParams) {
+  if (fca.hasUnpack() && !callee->hasVariadicCaptureParam()) {
     return refuse("callee called with too many arguments");
   }
 
-  if (fca.hasUnpack()) {
-    return refuse("callee called with variadic arguments");
+  if (fca.numArgs < callee->numRequiredParams()) {
+    return refuse("callee called with too few arguments");
   }
 
-  if (fca.enforceReffiness()) {
+  if (fca.enforceInOut()) {
     for (auto i = 0; i < fca.numArgs; ++i) {
-      if (callee->byRef(i) != fca.byRef(i)) {
-        return refuse("callee called with arguments of mismatched reffiness");
+      if (callee->isInOut(i) != fca.isInOut(i)) {
+        return refuse("callee called with arguments with mismatched inout");
       }
-    }
-  }
-
-  // It's okay if we passed fewer arguments than there are parameters as long
-  // as the gap can be filled in by DV funclets.
-  for (auto i = fca.numArgs; i < numParams; ++i) {
-    auto const& param = callee->params()[i];
-    if (!param.hasDefaultValue() &&
-        (i < numParams - 1 || !callee->hasVariadicCaptureParam())) {
-      return refuse("callee called with too few arguments");
     }
   }
 
@@ -197,6 +175,7 @@ bool checkNumArgs(SrcKey callSK,
 
 bool canInlineAt(SrcKey callSK,
                  const Func* callee,
+                 const FCallArgs& fca,
                  AnnotationData* annotations) {
   assertx(isFCall(callSK.op()));
 
@@ -221,7 +200,7 @@ bool canInlineAt(SrcKey callSK,
   }
 
   if (!isCalleeInlinable(callSK, callee, annotations) ||
-      !checkNumArgs(callSK, callee, annotations)) {
+      !checkNumArgs(callSK, callee, fca, annotations)) {
     return false;
   }
 
@@ -248,41 +227,6 @@ bool isInlinableCPPBuiltin(const Func* f) {
   }
 
   return true;
-}
-
-/*
- * Conservative whitelist for HHBC opcodes we know are safe to inline, even if
- * the entire callee body required a AttrMayUseVV.
- *
- * This affects cases where we're able to eliminate control flow while inlining
- * due to the parameter types, and the AttrMayUseVV flag was due to something
- * happening in a block we won't inline.
- */
-bool isInliningVVSafe(Op op) {
-  switch (op) {
-    case Op::Array:
-    case Op::Null:
-    case Op::PopC:
-    case Op::PopL:
-    case Op::CGetL:
-    case Op::SetL:
-    case Op::IsTypeL:
-    case Op::JmpNS:
-    case Op::JmpNZ:
-    case Op::JmpZ:
-    case Op::AssertRATL:
-    case Op::AssertRATStk:
-    case Op::VerifyParamType:
-    case Op::VerifyParamTypeTS:
-    case Op::VerifyRetTypeC:
-    case Op::VerifyRetTypeTS:
-    case Op::RetC:
-    case Op::RetCSuspended:
-      return true;
-    default:
-      break;
-  }
-  return false;
 }
 
 struct InlineRegionKey {
@@ -383,6 +327,7 @@ Vcost computeTranslationCostSlow(SrcKey at,
   };
 
   rqtrace::DisableTracing notrace;
+  auto const unbumper = mcgen::unbumpFunctions();
 
   auto const unit = irGenInlineRegion(ctx, region);
   if (!unit) return {0, true};
@@ -574,11 +519,6 @@ bool shouldInline(const irgen::IRGS& irgs,
     return refuse("non-inlinable CPP builtin");
   }
 
-  // If the function may use a VarEnv (which is stored in the ActRec) or may be
-  // variadic, we restrict inlined callees to certain whitelisted instructions
-  // which we know won't actually require these features.
-  const bool needsCheckVVSafe = callee->attrs() & AttrMayUseVV;
-
   bool hasRet = false;
 
   // Iterate through the region, checking its suitability for inlining.
@@ -592,12 +532,6 @@ bool shouldInline(const irgen::IRGS& irgs,
       // expected to disable inlining for the region it gives us to peek.
       if (sk.func() != callee) {
         return refuse("got region with inlined calls");
-      }
-
-      // Restrict to VV-safe opcodes if necessary.
-      if (needsCheckVVSafe && !isInliningVVSafe(op)) {
-        return refuse(folly::format("{} may use dynamic environment",
-                                    opcodeToName(op)).str().c_str());
       }
 
       // Detect that the region contains a return.
@@ -668,36 +602,24 @@ bool shouldInline(const irgen::IRGS& irgs,
 
 namespace {
 RegionDescPtr selectCalleeTracelet(const Func* callee,
-                                   const int numArgs,
                                    Type ctxType,
                                    std::vector<Type>& argTypes,
                                    int32_t maxBCInstrs) {
-  auto const numParams = callee->numParams();
-
-  bool hasThis;
-  if (ctxType <= TObj || !ctxType.maybe(TObj)) {
-    hasThis = ctxType <= TObj;
-  } else if (!callee->hasThisVaries()) {
-    hasThis = callee->mayHaveThis();
-  } else {
-    return RegionDescPtr{};
-  }
-
   // Set up the RegionContext for the tracelet selector.
+  auto const entryOff = callee->getEntryForNumArgs(argTypes.size());
   RegionContext ctx{
-    callee, callee->getEntryForNumArgs(numArgs),
+    SrcKey { callee, entryOff, ResumeMode::None },
     FPInvOffset{safe_cast<int32_t>(callee->numSlotsInFrame())},
-    ResumeMode::None,
-    hasThis
   };
 
-  for (uint32_t i = 0; i < numArgs; ++i) {
+  for (uint32_t i = 0; i < argTypes.size(); ++i) {
     auto type = argTypes[i];
-    assertx(type <= TGen);
+    assertx(type <= TCell);
     ctx.liveTypes.push_back({Location::Local{i}, type});
   }
 
-  for (unsigned i = numArgs; i < numParams; ++i) {
+  auto const numParams = callee->numParams();
+  for (uint32_t i = argTypes.size(); i < numParams; ++i) {
     // These locals will be populated by DV init funclets but they'll start out
     // as Uninit.
     ctx.liveTypes.push_back({Location::Local{i}, TUninit});
@@ -716,32 +638,27 @@ RegionDescPtr selectCalleeTracelet(const Func* callee,
   return r;
 }
 
-TransID findTransIDForCallee(const ProfData* profData,
-                             const Func* callee, const int numArgs,
+TransID findTransIDForCallee(const ProfData* profData, const Func* callee,
                              Type ctxType, std::vector<Type>& argTypes) {
   auto const idvec = profData->funcProfTransIDs(callee->getFuncId());
 
-  auto const offset = callee->getEntryForNumArgs(numArgs);
+  auto const offset = callee->getEntryForNumArgs(argTypes.size());
   TransID ret = kInvalidTransID;
-  bool hasThisVaries = callee->hasThisVaries() &&
-    ctxType.maybe(TObj) && !(ctxType <= TObj);
-  FTRACE(2, "findTransIDForCallee: offset={}  hasThisVaries={}\n",
-         offset, hasThisVaries);
+  FTRACE(2, "findTransIDForCallee: offset={}\n", offset);
   for (auto const id : idvec) {
     auto const rec = profData->transRec(id);
     if (rec->startBcOff() != offset) continue;
     auto const region = rec->region();
 
     auto const isvalid = [&] () {
-      if (!hasThisVaries &&
-          (rec->srcKey().hasThis() != ctxType.maybe(TObj))) {
+      if (rec->srcKey().hasThis() != ctxType.maybe(TObj)) {
         return false;
       }
       for (auto const& typeloc : region->entry()->typePreConditions()) {
         if (typeloc.location.tag() != LTag::Local) continue;
         auto const locId = typeloc.location.localId();
 
-        if (locId < numArgs && !(argTypes[locId].maybe(typeloc.type))) {
+        if (locId < argTypes.size() && !(argTypes[locId].maybe(typeloc.type))) {
           return false;
         }
       }
@@ -758,7 +675,6 @@ TransID findTransIDForCallee(const ProfData* profData,
 }
 
 RegionDescPtr selectCalleeCFG(SrcKey callerSk, const Func* callee,
-                              const int numArgs,
                               Type ctxType, std::vector<Type>& argTypes,
                               int32_t maxBCInstrs,
                               AnnotationData* annotations) {
@@ -776,8 +692,7 @@ RegionDescPtr selectCalleeCFG(SrcKey callerSk, const Func* callee,
     return nullptr;
   }
 
-  auto const dvID = findTransIDForCallee(profData, callee,
-                                         numArgs, ctxType, argTypes);
+  auto const dvID = findTransIDForCallee(profData, callee, ctxType, argTypes);
 
   if (dvID == kInvalidTransID) {
     traceRefusal(callerSk, callee, "didn't find entry TransID for callee",
@@ -833,10 +748,10 @@ RegionDescPtr selectCalleeRegion(const irgen::IRGS& irgs,
   if (callee->isClosureBody()) {
     if (!callee->cls()) {
       ctxType = TNullptr;
-    } else if (callee->mayHaveThis()) {
-      ctxType = TCtx;
+    } else if (callee->hasThisInBody()) {
+      ctxType = TObj;
     } else {
-      ctxType = TCctx;
+      ctxType = TCls;
     }
   } else {
     // Bail out if calling a static methods with an object ctx.
@@ -849,30 +764,54 @@ RegionDescPtr selectCalleeRegion(const irgen::IRGS& irgs,
     }
   }
 
+  if (callee->cls()) {
+    if (callee->isStatic() && !ctxType.maybe(TCls)) {
+      traceRefusal(sk, callee, "calling a static method with an instance",
+                   annotationsPtr);
+      return nullptr;
+    }
+    if (!callee->isStatic() && !ctxType.maybe(TObj)) {
+      traceRefusal(sk, callee, "calling an instance method without an instance",
+                   annotationsPtr);
+      return nullptr;
+    }
+  }
+
   FTRACE(2, "selectCalleeRegion: callee = {}\n", callee->fullName()->data());
   auto const firstArgPos = static_cast<int32_t>(fca.numInputs()) - 1;
   std::vector<Type> argTypes;
-  for (int32_t i = 0; i < fca.numArgs; ++i) {
+  auto const numArgsInclUnpack = fca.numArgs + (fca.hasUnpack() ? 1 : 0);
+  for (int32_t i = 0; i < numArgsInclUnpack; ++i) {
     // DataTypeGeneric is used because we're just passing the locals into the
     // callee.  It's up to the callee to constrain further if needed.
     auto type = irgen::publicTopType(irgs, BCSPRelOffset{firstArgPos - i});
-    assertx(type <= TGen);
+    assertx(type <= TCell);
 
     // If we don't have sufficient type information to inline the region return
     // early
     if (type == TBottom) return nullptr;
-    if (!(type <= TCell) && !(type <= TBoxedCell)) {
-      traceRefusal(sk, callee, folly::sformat("maybe boxed arg num: {}", i + 1),
-                   annotationsPtr);
-      return nullptr;
-    }
     FTRACE(2, "arg {}: {}\n", i + 1, type);
     argTypes.push_back(type);
   }
 
+  if (fca.hasUnpack()) {
+    const int32_t ix = fca.numArgs;
+    auto const ty = irgen::publicTopType(irgs, BCSPRelOffset{firstArgPos - ix});
+    if (!(ty <= (RuntimeOption::EvalHackArrDVArrs ? TVec : TArr))) {
+      traceRefusal(
+        sk,
+        callee,
+        folly::sformat("unpacked argument has a wrong type ({})",
+                       ty.toString()),
+        annotationsPtr
+      );
+      return nullptr;
+    }
+  }
+
   const auto depth = inlineDepth(irgs);
   if (profData()) {
-    auto region = selectCalleeCFG(sk, callee, fca.numArgs, ctxType, argTypes,
+    auto region = selectCalleeCFG(sk, callee, ctxType, argTypes,
                                   irgs.budgetBCInstrs, annotationsPtr);
     if (region &&
         shouldInline(irgs, sk, callee, *region,
@@ -882,7 +821,7 @@ RegionDescPtr selectCalleeRegion(const irgen::IRGS& irgs,
     return nullptr;
   }
 
-  auto region = selectCalleeTracelet(callee, fca.numArgs, ctxType, argTypes,
+  auto region = selectCalleeTracelet(callee, ctxType, argTypes,
                                      irgs.budgetBCInstrs);
 
   if (region &&

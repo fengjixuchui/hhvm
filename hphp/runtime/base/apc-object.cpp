@@ -27,8 +27,8 @@
 #include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/data-walker.h"
-#include "hphp/runtime/base/externals.h"
 #include "hphp/runtime/base/tv-type.h"
+#include "hphp/runtime/base/type-variant.h"
 #include "hphp/runtime/ext/apc/ext_apc.h"
 
 namespace HPHP {
@@ -83,8 +83,8 @@ APCHandle::Pair APCObject::Construct(ObjectData* objectData) {
   if (!cls->lookupMethod(s___wakeup.get())) apcObj->m_no_wakeup = 1;
 
   auto const apcPropVec = apcObj->persistentProps();
-  auto const objPropVec = objectData->propVec();
-  const TypedValueAux* propInit = nullptr;
+  auto const objProps = objectData->props();
+  const ObjectProps* propInit = nullptr;
 
   auto propsDontNeedCheck = RuntimeOption::EvalCheckPropTypeHints > 0;
   for (unsigned slot = 0; slot < numRealProps; ++slot) {
@@ -97,38 +97,26 @@ APCHandle::Pair APCObject::Construct(ObjectData* objectData) {
       // Special properties like the Memoize cache should be set to their
       // default value, not the current value.
       if (propInit == nullptr) {
-        propInit = cls->pinitVec().empty() ? &cls->declPropInit()[0]
-                                           : &(*cls->getPropData())[0];
+        propInit = cls->pinitVec().empty()
+          ? cls->declPropInit().data()
+          : cls->getPropData()->data();
       }
 
-      objProp = propInit + index;
+      objProp = propInit->at(index);
     } else {
-      objProp = objPropVec + index;
+      objProp = objProps->at(index);
     }
 
     if (UNLIKELY(type(objProp) == KindOfUninit) && (attrs & AttrLateInit)) {
-      if (attrs & AttrLateInitSoft) {
-        assertx(!(attrs & AttrBuiltin));
-        raise_soft_late_init_prop(
-          propInfo[slot].cls,
-          propInfo[slot].name,
-          false
-        );
-        tvDup(
-          *g_context->getSoftLateInitDefault().asTypedValue(),
-          *const_cast<TypedValue*>(objPropVec + index)
-        );
-      } else {
-        auto const origSlot = slot;
-        while (slot > 0) {
-          --slot;
-          auto idx = cls->propSlotToIndex(slot);
-          apcPropVec[idx]->unreferenceRoot();
-        }
-        apc_sized_free(apcObj, size);
-        throw_late_init_prop(propInfo[origSlot].cls, propInfo[origSlot].name,
-                             false);
+      auto const origSlot = slot;
+      while (slot > 0) {
+        --slot;
+        auto idx = cls->propSlotToIndex(slot);
+        apcPropVec[idx]->unreferenceRoot();
       }
+      apc_sized_free(apcObj, size);
+      throw_late_init_prop(propInfo[origSlot].cls, propInfo[origSlot].name,
+                           false);
     }
 
     // If the property value satisfies its type-hint in all contexts, we don't
@@ -173,7 +161,7 @@ APCHandle::Pair APCObject::ConstructSlow(ObjectData* objectData,
     Variant key(it.first());
     assertx(key.isString());
     auto const rval = it.secondRval();
-    if (!isNullType(rval.unboxed().type())) {
+    if (!isNullType(rval.type())) {
       auto val = APCHandle::Create(const_variant_ref{rval}, false,
                                    APCHandleLevel::Inner, true);
       prop->val = val.handle;
@@ -271,22 +259,29 @@ Object APCObject::createObject() const {
   );
 
   auto const numProps = cls->numDeclProperties();
-  auto const objProp = obj->propVecForConstruct();
+  auto const objProp = obj->props();
   auto const apcProp = persistentProps();
 
   // re-entry is possible while we're executing toLocal() on each
   // property, so heap inspectors may see partially initid objects
   // not yet exposed to PHP.
-  unsigned i = 0;
+  auto i = 0;
+
+  objProp->init(numProps);
+  auto range = objProp->range(0, numProps);
+  auto it = range.begin();
+
   try {
     obj->setHasUninitProps();
-    for (; i < numProps; ++i) {
-      new (objProp + i) Variant(apcProp[i]->toLocal());
+    for (; it != range.end(); ++it, ++i) {
+      auto const val = apcProp[i]->toLocal();
+      tvDup(*val.asTypedValue(), tv_lval{it});
     }
     obj->clearHasUninitProps();
   } catch (...) {
-    for (; i < numProps; ++i) {
-      new (objProp + i) Variant();
+    for (; it != range.end(); ++it, ++i) {
+      auto const val = apcProp[i]->toLocal();
+      type(tv_lval{it}) = KindOfUninit;
     }
     obj->clearHasUninitProps();
     throw;
@@ -345,7 +340,7 @@ Object APCObject::createObjectSlow() const {
       }
 
       auto val = prop->val ? prop->val->toLocal() : init_null();
-      obj->setProp(const_cast<Class*>(ctx), key, *val.toCell());
+      obj->setProp(const_cast<Class*>(ctx), key, *val.asTypedValue());
     }
   }
 

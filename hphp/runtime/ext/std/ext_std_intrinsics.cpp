@@ -14,15 +14,20 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
+
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/request-tracing.h"
 #include "hphp/runtime/base/surprise-flags.h"
-#include "hphp/runtime/ext/std/ext_std.h"
-#include "hphp/runtime/vm/jit/inlining-decider.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
+#include "hphp/runtime/vm/jit/inlining-decider.h"
+
+#include "hphp/runtime/ext/asio/asio-external-thread-event.h"
+#include "hphp/runtime/ext/std/ext_std.h"
+
 namespace HPHP {
+
 ///////////////////////////////////////////////////////////////////////////////
 
 void HHVM_FUNCTION(trigger_oom, bool oom) {
@@ -73,13 +78,15 @@ Array HHVM_FUNCTION(dummy_dict_builtin, const Array& arr) {
 String HHVM_FUNCTION(serialize_with_format, const Variant& thing,
                      int64_t format) {
   if (format > static_cast<int64_t>(VariableSerializer::Type::Last)) {
-    throw_invalid_argument("invalid serializer format");
+    raise_invalid_argument_warning("invalid serializer format");
   }
   VariableSerializer vs(static_cast<VariableSerializer::Type>(format));
   return vs.serialize(thing, true);
 }
 
 namespace {
+
+///////////////////////////////////////////////////////////////////////////////
 
 timespec from_micros(int64_t us) {
   struct timespec ts;
@@ -92,7 +99,7 @@ template<class T>
 void annotate_items(T& what, const ArrayData* annot) {
   IterateKV(
     annot,
-    [&] (Cell k, TypedValue v) {
+    [&] (TypedValue k, TypedValue v) {
       if (!tvIsString(k) || !tvIsString(v)) return;
       what.annotate(k.m_data.pstr->data(), v.m_data.pstr->data());
     }
@@ -141,7 +148,7 @@ void HHVM_FUNCTION(
   g.setEventSuffix(suffix->data());
   IterateKV(
     events.get(),
-    [&] (Cell k, TypedValue v) {
+    [&] (TypedValue k, TypedValue v) {
       auto const arr = v.m_data.parr;
       if (!tvIsString(k) || !tvIsArrayLike(v) || arr->size() != 3) return;
       auto const elem0 = arr->rval(int64_t{0});
@@ -156,13 +163,6 @@ void HHVM_FUNCTION(
     }
   );
   g.finish(from_micros(end_us));
-}
-
-static String HHVM_STATIC_METHOD(ReffyNativeMeth, meth, VRefParam& i) {
-  String ret = "Got: ";
-  ret += i.toInt64();
-  i.assignIfRef(i.toInt64() * i.toInt64());
-  return ret;
 }
 
 void HHVM_FUNCTION(hhbbc_fail_verification) {
@@ -241,6 +241,40 @@ int64_t HHVM_FUNCTION(
   return t1;
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
+struct DummyDArrayAwait : AsioExternalThreadEvent {
+  DummyDArrayAwait() { markAsFinished(); }
+
+  void unserialize(TypedValue& tv) override {
+    auto arr = make_darray("foo", "bar", "baz", "quux");
+    type(tv) = KindOfArray;
+    val(tv).parr = arr.detach();
+  }
+};
+
+struct DummyDictAwait : AsioExternalThreadEvent {
+  DummyDictAwait() { markAsFinished(); }
+
+  void unserialize(TypedValue& tv) override {
+    auto arr = make_dict_array("foo", "bar", "baz", "quux");
+    type(tv) = KindOfDict;
+    val(tv).parr = arr.detach();
+  }
+};
+
+Object HHVM_FUNCTION(dummy_darray_await) {
+  auto ev = new DummyDArrayAwait();
+  return Object{ev->getWaitHandle()};
+}
+
+Object HHVM_FUNCTION(dummy_dict_await) {
+  auto ev = new DummyDictAwait();
+  return Object{ev->getWaitHandle()};
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 }
 
 void StandardExtension::initIntrinsics() {
@@ -262,6 +296,9 @@ void StandardExtension::initIntrinsics() {
   HHVM_FALIAS(__hhvm_intrinsics\\dummy_array_builtin, dummy_array_builtin);
   HHVM_FALIAS(__hhvm_intrinsics\\dummy_dict_builtin, dummy_dict_builtin);
 
+  HHVM_FALIAS(__hhvm_intrinsics\\dummy_darray_await, dummy_darray_await);
+  HHVM_FALIAS(__hhvm_intrinsics\\dummy_dict_await, dummy_dict_await);
+
   HHVM_FALIAS(__hhvm_intrinsics\\serialize_with_format, serialize_with_format);
 
   HHVM_FALIAS(__hhvm_intrinsics\\rqtrace_create_event, rqtrace_create_event);
@@ -272,11 +309,9 @@ void StandardExtension::initIntrinsics() {
   HHVM_FALIAS(__hhvm_intrinsics\\hhbbc_fail_verification,
               hhbbc_fail_verification);
 
-  HHVM_STATIC_MALIAS(__hhvm_intrinsics\\ReffyNativeMeth, meth,
-                     ReffyNativeMeth, meth);
-
   loadSystemlib("std_intrinsics");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-} // namespace HPHP
+
+}

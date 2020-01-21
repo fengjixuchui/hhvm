@@ -1,8 +1,7 @@
 <?hh
 
-final record Foo {
+record Foo {
 }
 
 type Foo = int;
 
-<<__EntryPoint>> function main(): void {}

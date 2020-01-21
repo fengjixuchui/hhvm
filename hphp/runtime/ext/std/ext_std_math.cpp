@@ -18,10 +18,10 @@
 #include "hphp/runtime/ext/std/ext_std_math.h"
 
 #include "hphp/runtime/base/comparisons.h"
-#include "hphp/runtime/base/zend-math.h"
 #include "hphp/runtime/base/zend-multiply.h"
 #include "hphp/runtime/base/container-functions.h"
 #include "hphp/runtime/ext/std/ext_std.h"
+#include "hphp/zend/zend-math.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -48,7 +48,7 @@ Variant HHVM_FUNCTION(min,
                       const Variant& value,
                       const Array& args /* = null_array */) {
   if (args.empty()) {
-    const auto& cell_value = *value.toCell();
+    const auto& cell_value = *value.asTypedValue();
     if (UNLIKELY(!isContainer(cell_value))) {
       return value;
     }
@@ -82,7 +82,7 @@ Variant HHVM_FUNCTION(max,
                       const Variant& value,
                       const Array& args /* = null_array */) {
   if (args.empty()) {
-    const auto& cell_value = *value.toCell();
+    const auto& cell_value = *value.asTypedValue();
     if (UNLIKELY(!isContainer(cell_value))) {
       return value;
     }
@@ -229,11 +229,11 @@ Variant HHVM_FUNCTION(base_convert,
                       int64_t frombase,
                       int64_t tobase) {
   if (!string_validate_base(frombase)) {
-    throw_invalid_argument("Invalid frombase: %" PRId64, frombase);
+    raise_invalid_argument_warning("Invalid frombase: %" PRId64, frombase);
     return false;
   }
   if (!string_validate_base(tobase)) {
-    throw_invalid_argument("Invalid tobase: %" PRId64, tobase);
+    raise_invalid_argument_warning("Invalid tobase: %" PRId64, tobase);
     return false;
   }
   String str = number.toString();
@@ -275,13 +275,14 @@ static MaybeDataType convert_for_pow(const Variant& val,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfClsMeth:
       // Not reachable since HHVM_FN(pow) deals with these base cases first.
-    case KindOfRef:
     case KindOfRecord:
       break;
   }

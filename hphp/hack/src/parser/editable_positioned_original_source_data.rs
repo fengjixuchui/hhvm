@@ -4,17 +4,15 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 /// SourceData represents information with relation to the original SourceText.
-use parser_rust as parser;
-
-use parser::lexable_token::LexableToken;
-use parser::positioned_syntax::PositionedSyntax;
-use parser::positioned_token::PositionedToken;
-use parser::positioned_trivia::PositionedTrivia;
-use parser::source_text::SourceText;
+use parser_core_types::lexable_token::LexableToken;
+use parser_core_types::positioned_syntax::PositionedSyntax;
+use parser_core_types::positioned_token::PositionedToken;
+use parser_core_types::positioned_trivia::PositionedTrivia;
+use parser_core_types::source_text::SourceText;
 use parser_core_types::syntax_trait::SyntaxTrait;
 
 // Data about the token with respect to the original source text.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SourceData<'a> {
     pub source_text: SourceText<'a>,
     pub offset: usize, // Beginning of first trivia
@@ -50,6 +48,40 @@ impl<'a> SourceData<'a> {
             trailing_width: syntax.trailing_width(),
             leading: [].to_vec(),
             trailing: [].to_vec(),
+        }
+    }
+
+    pub fn text(data: &Self) -> String {
+        std::str::from_utf8(SourceText::sub(
+            &data.source_text,
+            data.offset + data.leading_width,
+            data.width,
+        ))
+        .unwrap()
+        .to_string()
+    }
+
+    pub fn spanning_between(b: &Self, e: &Self) -> Self {
+        Self {
+            source_text: b.source_text.clone(),
+            offset: b.offset,
+            leading_width: b.leading_width,
+            width: Self::end_offset(e) + 1 - Self::start_offset(b),
+            trailing_width: e.trailing_width,
+            leading: b.leading.to_vec(),
+            trailing: e.trailing.to_vec(),
+        }
+    }
+
+    fn start_offset(data: &Self) -> usize {
+        data.offset + data.leading_width
+    }
+
+    fn end_offset(data: &Self) -> usize {
+        if data.width < 1 {
+            Self::start_offset(data)
+        } else {
+            Self::start_offset(data) + data.width - 1
         }
     }
 }

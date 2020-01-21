@@ -7,8 +7,9 @@
  *
  *)
 
-open Core_kernel
-open Utils
+open Hh_prelude
+
+let strip_ns id = id |> Utils.strip_ns |> Hh_autoimport.reverse_type
 
 (* The reason why something is expected to have a certain type *)
 type t =
@@ -29,7 +30,7 @@ type t =
   | Rarith_ret_float of Pos.t * t * arg_position (* pos, arg float typing reason, arg position *)
   | Rarith_ret_num of Pos.t * t * arg_position (* pos, arg num typing reason, arg position *)
   | Rarith_ret_int of Pos.t
-  | Rsum_dynamic of Pos.t
+  | Rarith_dynamic of Pos.t
   | Rbitwise_dynamic of Pos.t
   | Rincdec_dynamic of Pos.t
   | Rstring2 of Pos.t
@@ -64,7 +65,7 @@ type t =
   | Rdynamic_yield of Pos.t * Pos.t * string * string
   | Rmap_append of Pos.t
   | Rvar_param of Pos.t
-  | Runpack_param of Pos.t
+  | Runpack_param of Pos.t * Pos.t * int (* splat pos, fun def pos, number of args before splat *)
   | Rinout_param of Pos.t
   | Rinstantiate of t * string * t
   | Rarray_filter of Pos.t * t
@@ -99,7 +100,8 @@ type t =
   | Rlambda_param of Pos.t * t
   | Rshape of Pos.t * string
   | Renforceable of Pos.t
-  | Rdestructure of Pos.t * int
+  | Rdestructure of Pos.t
+  | Rkey_value_collection_key of Pos.t
 
 and arg_position =
   | Aonly
@@ -112,6 +114,7 @@ and expr_dep_type_reason =
   | ERclass of string
   | ERparent of string
   | ERself of string
+[@@deriving eq]
 
 let arg_pos_str ap =
   match ap with
@@ -130,7 +133,7 @@ let rec to_string prefix r =
   | Ridx (_, r2) ->
     [(p, prefix)]
     @ [
-        ( ( if r2 = Rnone then
+        ( ( if equal r2 Rnone then
             p
           else
             to_pos r2 ),
@@ -144,8 +147,7 @@ let rec to_string prefix r =
     ]
   | Rappend _ -> [(p, prefix ^ " because a value is appended to it")]
   | Rfield _ -> [(p, prefix ^ " because one of its field is accessed")]
-  | Rforeach _ ->
-    [(p, prefix ^ " because this is used in a foreach statement")]
+  | Rforeach _ -> [(p, prefix ^ " because this is used in a foreach statement")]
   | Rasyncforeach _ ->
     [
       ( p,
@@ -199,8 +201,13 @@ let rec to_string prefix r =
         prefix
         ^ " because this is the result of an integer arithmetic operation" );
     ]
-  | Rsum_dynamic _ ->
-    [(p, prefix ^ " because this is the sum of two arguments typed dynamic")]
+  | Rarith_dynamic _ ->
+    [
+      ( p,
+        prefix
+        ^ " because this is the result of an arithmetic operation with two arguments typed dynamic"
+      );
+    ]
   | Rbitwise_dynamic _ ->
     [
       ( p,
@@ -224,19 +231,14 @@ let rec to_string prefix r =
   | Rlogic _ -> [(p, prefix ^ " because this is used in a logical operation")]
   | Rlogic_ret _ ->
     [(p, prefix ^ " because this is the result of a logical operation")]
-  | Rbitwise _ ->
-    [(p, prefix ^ " because this is used in a bitwise operation")]
+  | Rbitwise _ -> [(p, prefix ^ " because this is used in a bitwise operation")]
   | Rbitwise_ret _ ->
     [(p, prefix ^ " because this is the result of a bitwise operation")]
   | Rstmt _ -> [(p, prefix ^ " because this is a statement")]
   | Rno_return _ ->
-    [(p, prefix ^ " because this function implicitly returns void")]
+    [(p, prefix ^ " because this function does not always return a value")]
   | Rno_return_async _ ->
-    [
-      ( p,
-        prefix
-        ^ " because this async function implicitly returns Awaitable<void>" );
-    ]
+    [(p, prefix ^ " because this function does not always return a value")]
   | Rret_fun_kind (_, kind) ->
     [
       ( p,
@@ -288,7 +290,7 @@ let rec to_string prefix r =
       (p2, "It was implicitly typed as " ^ s ^ " during this operation");
     ]
   | Rlost_info (s, r1, p2, under_lambda) ->
-    let s = Utils.strip_ns s in
+    let s = strip_ns s in
     let cause =
       if under_lambda then
         "by this lambda function"
@@ -315,7 +317,7 @@ let rec to_string prefix r =
       ( p,
         prefix
         ^ "; implicitly defined constant ::class is a string that contains the fully qualified name of "
-        ^ Utils.strip_ns s );
+        ^ strip_ns s );
     ]
   | Runknown_class _ -> [(p, prefix ^ "; this class name is unknown to Hack")]
   | Rdynamic_yield (_, yield_pos, implicit_name, yield_name) ->
@@ -362,7 +364,7 @@ let rec to_string prefix r =
       ]
   | Rtypeconst (Rnone, (pos, tconst), ty_str, r_root) ->
     let prefix =
-      if prefix = "" then
+      if String.equal prefix "" then
         ""
       else
         prefix ^ "\n  "
@@ -372,8 +374,7 @@ let rec to_string prefix r =
   | Rtypeconst (r_orig, (pos, tconst), ty_str, r_root) ->
     to_string prefix r_orig
     @ [
-        ( pos,
-          sprintf "  resulting from accessing the type constant '%s'" tconst );
+        (pos, sprintf "  resulting from accessing the type constant '%s'" tconst);
       ]
     @ to_string ("  on " ^ ty_str) r_root
   | Rtype_access (Rtypeconst (Rnone, _, _, _), (r, _) :: l) ->
@@ -443,14 +444,14 @@ let rec to_string prefix r =
     @ [
         ( p,
           "Considering that this type argument is contravariant with respect to "
-          ^ class_name );
+          ^ strip_ns class_name );
       ]
   | Rinvariant_generic (r_orig, class_name) ->
     to_string prefix r_orig
     @ [
         ( p,
           "Considering that this type argument is invariant with respect to "
-          ^ class_name );
+          ^ strip_ns class_name );
       ]
   | Rregex _ -> [(p, prefix ^ " resulting from this regex pattern")]
   | Rlambda_use p ->
@@ -480,13 +481,10 @@ let rec to_string prefix r =
   | Rshape (p, fun_name) ->
     [(p, prefix ^ " because " ^ fun_name ^ " expects a shape")]
   | Renforceable p -> [(p, prefix ^ " because it is an unenforceable type")]
-  | Rdestructure (p, n) ->
-    [
-      ( p,
-        prefix
-        ^ " resulting from a list destructuring assignment of length "
-        ^ string_of_int n );
-    ]
+  | Rdestructure p ->
+    [(p, prefix ^ " resulting from a list destructuring assignment or a splat")]
+  | Rkey_value_collection_key _ ->
+    [(p, "This is a key-value collection, which requires arraykey-typed keys")]
 
 and to_pos = function
   | Rnone -> Pos.none
@@ -500,7 +498,7 @@ and to_pos = function
   | Raccess p -> p
   | Rarith p -> p
   | Rarith_ret p -> p
-  | Rsum_dynamic p -> p
+  | Rarith_dynamic p -> p
   | Rstring2 p -> p
   | Rcomp p -> p
   | Rconcat p -> p
@@ -533,7 +531,7 @@ and to_pos = function
   | Rdynamic_yield (p, _, _, _) -> p
   | Rmap_append p -> p
   | Rvar_param p -> p
-  | Runpack_param p -> p
+  | Runpack_param (p, _, _) -> p
   | Rinout_param p -> p
   | Rinstantiate (_, _, r) -> to_pos r
   | Rtypeconst (Rnone, (p, _), _, _)
@@ -578,7 +576,8 @@ and to_pos = function
   | Rlambda_param (p, _) -> p
   | Rshape (p, _) -> p
   | Renforceable p -> p
-  | Rdestructure (p, _) -> p
+  | Rdestructure p -> p
+  | Rkey_value_collection_key p -> p
 
 (* This is a mapping from internal expression ids to a standardized int.
  * Used for outputting cleaner error messages to users
@@ -587,7 +586,7 @@ and expr_display_id_map = ref IMap.empty
 
 and get_expr_display_id id =
   let map = !expr_display_id_map in
-  match IMap.get id map with
+  match IMap.find_opt id map with
   | Some n -> n
   | None ->
     let n = IMap.cardinal map + 1 in
@@ -597,9 +596,7 @@ and get_expr_display_id id =
 and expr_dep_type_reason_string = function
   | ERexpr id ->
     let did = get_expr_display_id id in
-    "where '<expr#"
-    ^ string_of_int did
-    ^ ">' is a reference to this expression"
+    "where '<expr#" ^ string_of_int did ^ ">' is a reference to this expression"
   | ERstatic ->
     "where '<static>' refers to the late bound type of the enclosing class"
   | ERclass c -> "where the class '" ^ strip_ns c ^ "' was referenced here"
@@ -689,7 +686,7 @@ let to_constructor_string r =
   | Rarith_ret_num _ -> "Rarith_ret_num"
   | Rarith_ret_float _ -> "Rarith_ret_float"
   | Rarith_ret_int _ -> "Rarith_ret_int"
-  | Rsum_dynamic _ -> "Rsum_dynamic"
+  | Rarith_dynamic _ -> "Rarith_dynamic"
   | Rbitwise_dynamic _ -> "Rbitwise_dynamic"
   | Rincdec_dynamic _ -> "Rincdec_dynamic"
   | Rtype_variable _ -> "Rtype_variable"
@@ -700,8 +697,18 @@ let to_constructor_string r =
   | Rshape _ -> "Rshape"
   | Renforceable _ -> "Renforceable"
   | Rdestructure _ -> "Rdestructure"
+  | Rkey_value_collection_key _ -> "Rkey_value_collection_key"
 
-let pp fmt r = Format.pp_print_string fmt @@ to_constructor_string r
+let pp fmt r =
+  let pos = to_pos r in
+  Format.pp_print_string fmt
+  @@ Printf.sprintf
+       "%s (%s)"
+       (to_constructor_string r)
+       (Printf.sprintf
+          "%s %s"
+          (Relative_path.S.to_string (Pos.filename pos))
+          (Pos.string_no_file pos))
 
 type ureason =
   | URnone
@@ -769,7 +776,7 @@ let string_of_ureason = function
   | URxhp (cls, attr) ->
     "Invalid xhp value for attribute " ^ attr ^ " in " ^ strip_ns cls
   | URxhp_spread -> "The attribute spread operator cannot be called on non-XHP"
-  | URindex s -> "Invalid index type for this " ^ s
+  | URindex s -> "Invalid index type for this " ^ strip_ns s
   | URparam -> "Invalid argument"
   | URparam_inout -> "Invalid argument to an inout parameter"
   | URarray_value -> "Incompatible field values"
@@ -809,10 +816,10 @@ let compare r1 r2 =
     | _ -> 2
   in
   let d = get_pri r2 - get_pri r1 in
-  if d <> 0 then
+  if Int.( <> ) d 0 then
     d
   else
-    compare (to_pos r1) (to_pos r2)
+    Pos.compare (to_pos r1) (to_pos r2)
 
 let none = Rnone
 

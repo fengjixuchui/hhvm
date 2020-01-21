@@ -13,64 +13,7 @@
   - so_<feature/flag/setting> - server option
 *)
 
-module InferMissing : sig
-  type t =
-    | Deactivated
-    | Infer_return
-    | Infer_params
-    | Infer_global
-  [@@deriving show]
-
-  val can_infer_return : t -> bool
-
-  val can_infer_params : t -> bool
-
-  val global_inference : t -> bool
-
-  val is_on : t -> bool
-
-  val from_string : string -> t
-
-  val from_string_opt : string option -> t
-end
-
 type t = {
-  (*
-   * Enforces array subtyping relationships.
-   *
-   * There are a few kinds of arrays in Hack:
-   *   1. array: This is a type parameter-less array, that behaves like a PHP
-   *      array, but may be used in place of the arrays listed below.
-   *   2. array<T>: This is a vector-like array. It may be implemented with a
-   *      compact representation. Keys are integer indices. Values are of type T.
-   *   3. array<Tk, Tv>: This is a dictionary-like array. It is generally
-   *      implemented as a hash table. Keys are of type Tk. Values are of type
-   *      Tv.
-   *
-   * Unfortunately, there is no consistent subtyping relationship between these
-   * types:
-   *   1. An array<T> may be provided where an array is required.
-   *   2. An array may be provided where an array<T> is required.
-   *   3. An array<Tk, Tv> may be provided where an array is required.
-   *   4. An array may be provided where an array<Tk, Tv> is required.
-   *
-   * This option enforces a stricter subtyping relationship within these types.
-   * In particular, when enabled, points 2. and 4. from the above list become
-   * typing errors.
-   *)
-  tco_safe_array: bool;
-  (*
-   * Enforces that a vector-like array may not be used where a hashtable-like
-   * array is required.
-   *
-   * When disabled, Hack assumes the following:
-   *
-   *   array<T> <: array<int, T>
-   *
-   * When enabled, there is no subtyping relationship between array<T> and
-   * array<int, T>.
-   *)
-  tco_safe_vector_array: bool;
   (* Set of experimental features, in lowercase. *)
   tco_experimental_features: SSet.t;
   (* Set of opt-in migration behavior flags, in lowercase. *)
@@ -95,16 +38,18 @@ type t = {
   tco_remote_worker_key: string option;
   (* If set, uses the check ID when logging events in the context of remove init/work *)
   tco_remote_check_id: string option;
+  (* The max batch size that a remote worker can receive to type check *)
+  tco_remote_max_batch_size: int;
+  (* The min batch size that a remote worker can receive to type check *)
+  tco_remote_min_batch_size: int;
   (* Dictates the number of remote type checking workers *)
   tco_num_remote_workers: int;
   (* The version specifier that is used to identify the remote worker package version to install *)
   so_remote_version_specifier: string option;
   (* Above this threshold of files to check, the remote type checking worker will not use Eden *)
-  so_remote_worker_eden_checkout_threshold: int;
+  so_remote_worker_vfs_checkout_threshold: int;
   (* Enables the reverse naming table to fall back to SQLite for queries. *)
   so_naming_sqlite_path: string option;
-  (* Flag to disallow subtyping of untyped arrays and tuples (both ways) *)
-  tco_disallow_array_as_tuple: bool;
   (* Namespace aliasing map *)
   po_auto_namespace_map: (string * string) list;
   (* Are we emitting bytecode? *)
@@ -119,8 +64,6 @@ type t = {
   po_disable_nontoplevel_declarations: bool;
   (* Flag to disable PHP's static closures *)
   po_disable_static_closures: bool;
-  (* Flag to disable PHP's __halt_compiler() function *)
-  po_disable_halt_compiler: bool;
   (* Flag to enable PHP's `goto` operator *)
   po_allow_goto: bool;
   (* Print types of size bigger than 1000 after performing a type union. *)
@@ -152,10 +95,6 @@ type t = {
    * undocumented features.
    *)
   tco_unsafe_rx: bool;
-  (*
-   * Flag to disable unsetting on varray / varray_or_darray.
-   *)
-  tco_disallow_unset_on_varray: bool;
   (*
    * When enabled, mismatches between the types of the scrutinee and case value
    * of a switch expression are reported as type errors.
@@ -195,32 +134,34 @@ type t = {
   log_levels: int SMap.t;
   (* Flag to disable using lvals as expressions. *)
   po_disable_lval_as_an_expression: bool;
-  (* Flag to typecheck xhp code *)
-  tco_typecheck_xhp_cvars: bool;
   (* Flag to ignore the string in vec<string>[...] *)
-  tco_ignore_collection_expr_type_arguments: bool;
   (* Look up class members lazily from shallow declarations instead of eagerly
      computing folded declarations representing the entire class type. *)
   tco_shallow_class_decl: bool;
   (* Use Rust parser errors *)
   po_rust_parser_errors: bool;
+  (* Use Rust lowerer *)
+  po_rust_lowerer: bool;
   (* The threshold (in seconds) that determines whether a file's type checking time
       should be logged. It's only in effect if we're profiling type checking to begin
       with. To profile, pass --profile-log to hh_server. *)
   profile_type_check_duration_threshold: float;
-  (* Enables deeper like types features *)
-  tco_like_types: bool;
-  (* This tells the type checker to rewrite unenforceable as like types
-     i.e. vec<string> => vec<~string> *)
-  tco_pessimize_types: bool;
+  (* When typechecking, do a second typecheck on each file. *)
+  profile_type_check_twice: bool;
+  (* Two more profile options, used solely to send to logging backend. These allow
+      the person who launches hack, to provide unique identifying keys that get
+      sent to logging, so they can correlate/sort/filter their logs as they want. *)
+  profile_owner: string;
+  profile_desc: string;
+  (* Enables like type hints *)
+  tco_like_type_hints: bool;
+  (* Enables union and intersection type hints *)
+  tco_union_intersection_type_hints: bool;
+  (* Enables like casts *)
+  tco_like_casts: bool;
   (* A simpler form of pessimization, only wraps the outermost type in like
    * if the type is not enforceable *)
   tco_simple_pessimize: float;
-  (* Enables coercion from dynamic to enforceable types
-     i.e. dynamic ~> int *)
-  tco_coercion_from_dynamic: bool;
-  (* Enables coercion from union types *)
-  tco_coercion_from_union: bool;
   (* Enables complex coercion interactions that involve like types *)
   tco_complex_coercion: bool;
   (* Treat partially abstract typeconsts like concrete typeconsts, disable overriding type *)
@@ -235,22 +176,17 @@ type t = {
   tco_disallow_unresolved_type_variables: bool;
   (* Disallow using non-string, non-int types as array key type constraints. *)
   tco_disallow_invalid_arraykey_constraint: bool;
-  (* Enable constants to have visibility modifiers *)
-  po_enable_constant_visibility_modifiers: bool;
   (* Enable class-level where clauses, i.e.
      class base<T> where T = int {} *)
   po_enable_class_level_where_clauses: bool;
   (* Disable legacy soft typehint syntax (@int) and only allow the __Soft attribute. *)
   po_disable_legacy_soft_typehints: bool;
-  (* Use shared_lru workers instead of MultiWorker workers *)
-  tco_use_lru_workers: bool;
   (* Set of error codes disallowed in decl positions *)
   po_disallowed_decl_fixmes: ISet.t;
   (* Enable @ attribute syntax *)
   po_allow_new_attribute_syntax: bool;
-  (* Trigger the use of inferred types in the tast for non annotated
-    arguments and return types *)
-  tco_infer_missing: InferMissing.t;
+  (* Perform global inference globally on the code base to infer missing type annotations. *)
+  tco_global_inference: bool;
   (* Enable const static properties *)
   tco_const_static_props: bool;
   (* Disable <<...>> attribute syntax *)
@@ -269,18 +205,34 @@ type t = {
    * (skipping post parse error checks) *)
   po_parser_errors_only: bool;
   tco_check_attribute_locations: bool;
+  (* Service name for glean connection; default "" to autoselect server *)
+  glean_service: string;
+  (* Hostname for glean connection; default "" to autoselect server *)
+  glean_hostname: string;
+  (* Port number for glean connection; default 0 to autoselect server *)
+  glean_port: int;
+  (* Reponame used for glean connection, default to "www.autocomplete" *)
+  glean_reponame: string;
+  (* Flag to disallow HH\fun and HH\class_meth in constants and constant initializers *)
+  po_disallow_func_ptrs_in_constants: bool;
+  (* Flag to report an error on php style anonymous functions *)
+  tco_error_php_lambdas: bool;
+  (* Flag to error on using discarded nullable awaitables *)
+  tco_disallow_discarded_nullable_awaitables: bool;
+  (* Enable the new style xhp class.
+   * Old style: class :name {}
+   * New style: xhp class name {}
+   *)
+  po_enable_xhp_class_modifier: bool;
 }
 [@@deriving show]
 
 val make :
-  ?tco_safe_array:bool ->
-  ?tco_safe_vector_array:bool ->
   ?po_deregister_php_stdlib:bool ->
   ?po_disallow_execution_operator:bool ->
   ?po_disallow_toplevel_requires:bool ->
   ?po_disable_nontoplevel_declarations:bool ->
   ?po_disable_static_closures:bool ->
-  ?po_disable_halt_compiler:bool ->
   ?po_allow_goto:bool ->
   ?tco_log_inference_constraints:bool ->
   ?tco_experimental_features:SSet.t ->
@@ -293,18 +245,18 @@ val make :
   ?tco_remote_type_check:bool ->
   ?tco_remote_worker_key:string ->
   ?tco_remote_check_id:string ->
+  ?tco_remote_max_batch_size:int ->
+  ?tco_remote_min_batch_size:int ->
   ?tco_num_remote_workers:int ->
   ?so_remote_version_specifier:string ->
-  ?so_remote_worker_eden_checkout_threshold:int ->
+  ?so_remote_worker_vfs_checkout_threshold:int ->
   ?so_naming_sqlite_path:string ->
-  ?tco_disallow_array_as_tuple:bool ->
   ?po_auto_namespace_map:(string * string) list ->
   ?tco_disallow_ambiguous_lambda:bool ->
   ?tco_disallow_array_typehint:bool ->
   ?tco_disallow_array_literal:bool ->
   ?tco_language_feature_logging:bool ->
   ?tco_unsafe_rx:bool ->
-  ?tco_disallow_unset_on_varray:bool ->
   ?tco_disallow_scrutinee_case_value_type_mismatch:bool ->
   ?tco_new_inference_lambda:bool ->
   ?tco_timeout:int ->
@@ -315,29 +267,28 @@ val make :
   ?ignored_fixme_regex:string ->
   ?log_levels:int SMap.t ->
   ?po_disable_lval_as_an_expression:bool ->
-  ?tco_typecheck_xhp_cvars:bool ->
-  ?tco_ignore_collection_expr_type_arguments:bool ->
   ?tco_shallow_class_decl:bool ->
   ?po_rust_parser_errors:bool ->
+  ?po_rust_lowerer:bool ->
   ?profile_type_check_duration_threshold:float ->
-  ?tco_like_types:bool ->
-  ?tco_pessimize_types:bool ->
+  ?profile_type_check_twice:bool ->
+  ?profile_owner:string ->
+  ?profile_desc:string ->
+  ?tco_like_type_hints:bool ->
+  ?tco_union_intersection_type_hints:bool ->
+  ?tco_like_casts:bool ->
   ?tco_simple_pessimize:float ->
-  ?tco_coercion_from_dynamic:bool ->
-  ?tco_coercion_from_union:bool ->
   ?tco_complex_coercion:bool ->
   ?tco_disable_partially_abstract_typeconsts:bool ->
   ?error_codes_treated_strictly:ISet.t ->
   ?tco_check_xhp_attribute:bool ->
   ?tco_disallow_unresolved_type_variables:bool ->
   ?tco_disallow_invalid_arraykey_constraint:bool ->
-  ?po_enable_constant_visibility_modifiers:bool ->
   ?po_enable_class_level_where_clauses:bool ->
   ?po_disable_legacy_soft_typehints:bool ->
-  ?tco_use_lru_workers:bool ->
   ?po_disallowed_decl_fixmes:ISet.t ->
   ?po_allow_new_attribute_syntax:bool ->
-  ?tco_infer_missing:InferMissing.t ->
+  ?tco_global_inference:bool ->
   ?tco_const_static_props:bool ->
   ?po_disable_legacy_attribute_syntax:bool ->
   ?tco_const_attribute:bool ->
@@ -347,12 +298,16 @@ val make :
   ?po_disable_unset_class_const:bool ->
   ?po_parser_errors_only:bool ->
   ?tco_check_attribute_locations:bool ->
+  ?glean_service:string ->
+  ?glean_hostname:string ->
+  ?glean_port:int ->
+  ?glean_reponame:string ->
+  ?po_disallow_func_ptrs_in_constants:bool ->
+  ?tco_error_php_lambdas:bool ->
+  ?tco_disallow_discarded_nullable_awaitables:bool ->
+  ?po_enable_xhp_class_modifier:bool ->
   unit ->
   t
-
-val tco_safe_array : t -> bool
-
-val tco_safe_vector_array : t -> bool
 
 val tco_experimental_feature_enabled : t -> SSet.elt -> bool
 
@@ -374,15 +329,17 @@ val tco_remote_worker_key : t -> string option
 
 val tco_remote_check_id : t -> string option
 
+val tco_remote_max_batch_size : t -> int
+
+val tco_remote_min_batch_size : t -> int
+
 val tco_num_remote_workers : t -> int
 
 val so_remote_version_specifier : t -> string option
 
-val so_remote_worker_eden_checkout_threshold : t -> int
+val so_remote_worker_vfs_checkout_threshold : t -> int
 
 val so_naming_sqlite_path : t -> string option
-
-val tco_disallow_array_as_tuple : t -> bool
 
 val po_auto_namespace_map : t -> (string * string) list
 
@@ -395,8 +352,6 @@ val po_disallow_toplevel_requires : t -> bool
 val po_disable_nontoplevel_declarations : t -> bool
 
 val po_disable_static_closures : t -> bool
-
-val po_disable_halt_compiler : t -> bool
 
 val po_allow_goto : t -> bool
 
@@ -413,8 +368,6 @@ val tco_disallow_array_literal : t -> bool
 val tco_language_feature_logging : t -> bool
 
 val tco_unsafe_rx : t -> bool
-
-val tco_disallow_unset_on_varray : t -> bool
 
 val tco_disallow_scrutinee_case_value_type_mismatch : t -> bool
 
@@ -462,25 +415,27 @@ val log_levels : t -> int SMap.t
 
 val po_disable_lval_as_an_expression : t -> bool
 
-val tco_typecheck_xhp_cvars : t -> bool
-
-val tco_ignore_collection_expr_type_arguments : t -> bool
-
 val tco_shallow_class_decl : t -> bool
 
 val po_rust_parser_errors : t -> bool
 
+val po_rust_lowerer : t -> bool
+
 val profile_type_check_duration_threshold : t -> float
 
-val tco_like_types : t -> bool
+val profile_type_check_twice : t -> bool
 
-val tco_pessimize_types : t -> bool
+val profile_owner : t -> string
+
+val profile_desc : t -> string
+
+val tco_like_type_hints : t -> bool
+
+val tco_union_intersection_type_hints : t -> bool
+
+val tco_like_casts : t -> bool
 
 val tco_simple_pessimize : t -> float
-
-val tco_coercion_from_dynamic : t -> bool
-
-val tco_coercion_from_union : t -> bool
 
 val tco_complex_coercion : t -> bool
 
@@ -494,19 +449,15 @@ val tco_disallow_unresolved_type_variables : t -> bool
 
 val tco_disallow_invalid_arraykey_constraint : t -> bool
 
-val po_enable_constant_visibility_modifiers : t -> bool
-
 val po_enable_class_level_where_clauses : t -> bool
 
 val po_disable_legacy_soft_typehints : t -> bool
-
-val tco_use_lru_workers : t -> bool
 
 val po_disallowed_decl_fixmes : t -> ISet.t
 
 val po_allow_new_attribute_syntax : t -> bool
 
-val tco_infer_missing : t -> InferMissing.t
+val tco_global_inference : t -> bool
 
 val tco_const_static_props : t -> bool
 
@@ -522,8 +473,24 @@ val po_abstract_static_props : t -> bool
 
 val po_disable_unset_class_const : t -> bool
 
-val set_infer_missing : t -> InferMissing.t -> t
+val set_global_inference : t -> t
 
 val po_parser_errors_only : t -> bool
 
 val tco_check_attribute_locations : t -> bool
+
+val glean_service : t -> string
+
+val glean_hostname : t -> string
+
+val glean_port : t -> int
+
+val glean_reponame : t -> string
+
+val po_disallow_func_ptrs_in_constants : t -> bool
+
+val tco_error_php_lambdas : t -> bool
+
+val tco_disallow_discarded_nullable_awaitables : t -> bool
+
+val po_enable_xhp_class_modifier : t -> bool

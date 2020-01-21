@@ -17,7 +17,6 @@
 #include "hphp/runtime/server/http-server.h"
 
 #include "hphp/runtime/base/backtrace.h"
-#include "hphp/runtime/base/externals.h"
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/runtime/base/http-client.h"
 #include "hphp/runtime/base/init-fini-node.h"
@@ -166,6 +165,10 @@ HttpServer::HttpServer() {
   m_adminServer = serverFactory->createServer(admin_options);
   m_adminServer->setRequestHandlerFactory<AdminRequestHandler>(
     RuntimeOption::RequestTimeoutSeconds);
+  if (RuntimeOption::AdminServerEnableSSLWithPlainText) {
+    assertx(SSLInit::IsInited());
+    m_adminServer->enableSSLWithPlainText();
+  }
 
   for (auto const& info : RuntimeOption::SatelliteServerInfos) {
     auto satellite(SatelliteServer::Create(info));
@@ -261,6 +264,8 @@ void HttpServer::playShutdownRequest(const std::string& fileName) {
     } else {
       Logger::Error("request unsuccessful: %s", rt.getUrl());
     }
+    Logger::FlushAll();
+    HttpRequestHandler::GetAccessLog().flushAllWriters();
   } catch (...) {
     Logger::Error("got exception when playing request: %s",
                   fileName.c_str());
@@ -291,13 +296,13 @@ void HttpServer::runOrExitProcess() {
             std::vector<std::string> frameStrings;
             std::vector<folly::StringPiece> frames;
             for (int i = 0; i < bt.size(); i++) {
-              auto f = tvCastToArrayLike(bt.rvalAt(i).tv());
+              auto f = tvCastToArrayLike(bt.rval(i).tv());
               if (f.exists(s_file)) {
-                auto s = tvCastToString(f.rvalAt(s_file).tv()).toCppString();
+                auto s = tvCastToString(f.rval(s_file).tv()).toCppString();
                 if (f.exists(s_line)) {
                   s += folly::sformat(
                     ":{}",
-                    tvCastToInt64(f.rvalAt(s_line).tv())
+                    tvCastToInt64(f.rval(s_line).tv())
                   );
                 }
                 frameStrings.emplace_back(std::move(s));
@@ -548,9 +553,10 @@ void HttpServer::stopOnSignal(int sig) {
         alarm(totalWait);
     }
   }
-  // Invoke HttpServer::stop() from the synchronous signal handler thread. This
-  // way, stopOnSignal() is asynchronous-signal safe.
-  raise(SIGTERM);
+  // Invoke on_kill_server() in the synchronous signal handler thread. We cannot
+  // directly call HttpServer::stop() here directly, because this function must
+  // be asynchronous-signal safe.
+  kill(getpid(), SIGTERM);
 }
 
 void HttpServer::EvictFileCache() {

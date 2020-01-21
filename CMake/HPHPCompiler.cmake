@@ -45,6 +45,7 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang" OR ${CMAKE_CXX_COMPILER_ID} STREQU
     "attributes"
     "deprecated"
     "invalid-offsetof"
+    "register"
     "sign-compare"
     "strict-aliasing"
     "unused-function"
@@ -66,7 +67,7 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang" OR ${CMAKE_CXX_COMPILER_ID} STREQU
   # General options to pass to the C++ compiler
   set(GENERAL_CXX_OPTIONS)
   list(APPEND GENERAL_CXX_OPTIONS
-    "std=gnu++1y"
+    "std=gnu++1z"
     "fno-omit-frame-pointer"
     "fno-operator-names"
     "Wall"
@@ -173,9 +174,9 @@ if (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang" OR ${CMAKE_CXX_COMPILER_ID} STREQU
        message(WARNING "HHVM is known to trigger optimization bugs in GCC 4.9. Upgrading to GCC 5 is recommended. See https://github.com/facebook/hhvm/issues/8011 for more details.")
     endif()
 
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 6.0 OR
-       CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL 6.0)
-     message(WARNING "HHVM is primarily tested on GCC 4.9 and 5. Using other versions may produce unexpected results, or may not even build at all.")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 8.3 OR
+       CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL 8.3)
+     message(WARNING "HHVM is primarily tested on GCC 5.0-8.3. Using other versions may produce unexpected results, or may not even build at all.")
     endif()
 
     if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 5.1 OR

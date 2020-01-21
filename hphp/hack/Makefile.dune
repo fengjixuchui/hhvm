@@ -1,13 +1,6 @@
-EXTRA_INCLUDE_PATHS=
-EXTRA_LIB_PATHS=
-EXTRA_LINK_OPTS=
-EXTRA_NATIVE_LIBRARIES=
 BYTECODE=
-DUNE_BUILD_DIR=
-CMAKE_BINARY_DIR=
 
 ROOT=$(shell pwd)
-HACK_BIN_DIR="$(CMAKE_BINARY_DIR)/hphp/hack/bin"
 
 ################################################################################
 #                                    Rules                                     #
@@ -38,8 +31,8 @@ build-hack$(2):
 		src/hh_single_type_check.$(1) \
 		src/hackfmt.$(1) \
 		src/hh_parse.$(1) \
-		src/hh_single_compile.$(1) \
-		src/hh_single_parse.$(1)
+		src/generate_full_fidelity.$(1) \
+		src/hh_single_compile.$(1)
 
 copy-hack$(2)-files: build-hack$(2)
 	mkdir -p "$(HACK_BIN_DIR)"
@@ -48,8 +41,8 @@ copy-hack$(2)-files: build-hack$(2)
 	cp "$(DUNE_BUILD_DIR)/default/src/hh_single_type_check.$(1)" "$(HACK_BIN_DIR)/hh_single_type_check$(ext)"
 	cp "$(DUNE_BUILD_DIR)/default/src/hackfmt.$(1)" "$(HACK_BIN_DIR)/hackfmt$(ext)"
 	cp "$(DUNE_BUILD_DIR)/default/src/hh_parse.$(1)" "$(HACK_BIN_DIR)/hh_parse$(ext)"
+	cp "$(DUNE_BUILD_DIR)/default/src/generate_full_fidelity.$(1)" "$(HACK_BIN_DIR)/generate_full_fidelity$(ext)"
 	cp "$(DUNE_BUILD_DIR)/default/src/hh_single_compile.$(1)" "$(HACK_BIN_DIR)/hh_single_compile$(ext)"
-	cp "$(DUNE_BUILD_DIR)/default/src/hh_single_parse.$(1)" "$(HACK_BIN_DIR)/hh_single_parse$(ext)"
 endef
 
 # Define rules for normal build / debug build

@@ -28,7 +28,7 @@ bool same(const Variant& v1, bool v2) {
 }
 
 bool same(const Variant& v1, int64_t v2) {
-  auto const cell = v1.toCell();
+  auto const cell = v1.asTypedValue();
   if (isIntType(cell->m_type)) {
     return v2 == cell->m_data.num;
   }
@@ -65,10 +65,6 @@ bool same(const Variant& v1, const Array& v2) {
 
 //////////////////////////////////////////////////////////////////////
 
-bool equal(int v1, const StringData *v2) {
-  return equal((int64_t)v1, v2);
-}
-
 bool equal(int64_t v1, const StringData *v2) {
   int64_t lval; double dval;
   DataType ret = v2->isNumericWithVal(lval, dval, 1);
@@ -79,10 +75,6 @@ bool equal(int64_t v1, const StringData *v2) {
   } else {
     return v1 == 0;
   }
-}
-
-bool less(int v1, const StringData *v2) {
-  return less((int64_t)v1, v2);
 }
 
 bool less(int64_t v1, const StringData *v2) {
@@ -107,10 +99,6 @@ bool lessEqual(int64_t v1, const StringData *v2) {
     return (double)v1 <= dval;
   }
   return v1 <= 0;
-}
-
-bool more(int v1, const StringData *v2) {
-  return more((int64_t)v1, v2);
 }
 
 bool more(int64_t v1, const StringData *v2) {

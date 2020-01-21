@@ -25,7 +25,6 @@
    full_fidelity_positioned_trivia
    full_fidelity_rewriter
    full_fidelity_source_text
-   stats_container
    full_fidelity_token_kind
    full_fidelity_syntax
    full_fidelity_syntax_error
@@ -80,12 +79,12 @@
   (name parser)
   (wrapped false)
   (modules
-    ast_check
     docblock_finder
+    docblock_parser
     full_fidelity_ast
-    globalParserOptions
+    scoured_comments
+    rust_aast_parser_types
     hack_grammar_descriptor_helper
-    html_entities
     ide_parser_cache
     limited_width_pretty_printing_library
     namespaces
@@ -100,11 +99,14 @@
     fixme_provider
     full_fidelity
     heap_shared_mem
+    hh_autoimport
     logging
     namespace_env
     nast
     parser_ppl
     partial_provider
+    rust_parser_ffi
+    typing_ast
     utils_lint
     utils_php_escape))
 
@@ -115,7 +117,8 @@
   (preprocess (pps visitors.ppx ppx_deriving.std)) ; See T41851208
   (libraries
     collections
-    core_kernel))
+    core_kernel
+    naming_special_names))
 
 (library
   (name parsing_service)

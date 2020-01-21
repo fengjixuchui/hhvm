@@ -19,7 +19,7 @@
    `if Env.is_strict env.tenv` style checks accordingly.
 *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Typing_defs
 open Typing_env_types
@@ -31,6 +31,7 @@ module SN = Naming_special_names
 module TGenConstraint = Typing_generic_constraint
 module Subst = Decl_subst
 module TUtils = Typing_utils
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 
 type env = {
@@ -38,13 +39,15 @@ type env = {
   tenv: Typing_env_types.env;
 }
 
+let get_ctx env = Env.get_ctx env.tenv
+
 let rec fun_ tenv f =
   let env = { typedef_tparams = []; tenv } in
   let (p, _) = f.f_name in
   (* Add type parameters to typing environment and localize the bounds
      and where constraints *)
   let ety_env = Phase.env_with_self env.tenv in
-  let f_tparams : decl tparam list =
+  let f_tparams : decl_tparam list =
     List.map
       f.f_tparams
       ~f:(Decl_hint.aast_tparam_to_decl_tparam env.tenv.decl_env)
@@ -52,7 +55,7 @@ let rec fun_ tenv f =
   let (tenv, constraints) =
     Phase.localize_generic_parameters_with_bounds env.tenv f_tparams ~ety_env
   in
-  let tenv = add_constraints p tenv constraints in
+  let tenv = Typing_subtype.add_constraints p tenv constraints in
   let tenv =
     Phase.localize_where_constraints ~ety_env tenv f.f_where_constraints
   in
@@ -88,21 +91,35 @@ and hint_ env p = function
   | Hdarray (ty1, ty2) ->
     hint env ty1;
     hint env ty2
-  | Hvarray_or_darray ty
-  | Hvarray ty ->
-    hint env ty
-  | Htuple hl -> List.iter hl (hint env)
+  | Hvarray_or_darray (ty1, ty2) ->
+    maybe hint env ty1;
+    hint env ty2
+  | Hvarray ty -> hint env ty
+  | Htuple hl
+  | Hunion hl
+  | Hintersection hl ->
+    List.iter hl (hint env)
   | Hoption h
   | Hsoft h
   | Hlike h ->
     hint env h
-  | Hfun (_, _, hl, _, _, variadic_hint, h, _) ->
+  | Hfun
+      {
+        hf_reactive_kind = _;
+        hf_is_coroutine = _;
+        hf_param_tys = hl;
+        hf_param_kinds = _;
+        hf_param_mutability = _;
+        hf_variadic_ty = variadic_hint;
+        hf_return_ty = h;
+        hf_is_mutable_return = _;
+      } ->
     List.iter hl (hint env);
     hint env h;
     Option.iter variadic_hint (hint env)
   | Happly ((_, x), hl) as h when Env.is_typedef x ->
     begin
-      match Decl_provider.get_typedef x with
+      match Decl_provider.get_typedef (get_ctx env) x with
       | Some _ ->
         check_happly env.typedef_tparams env.tenv (p, h);
         List.iter hl (hint env)
@@ -116,9 +133,7 @@ and hint_ env p = function
       List.iter hl (hint env));
     ()
   | Hshape { nsi_allows_unknown_fields = _; nsi_field_map } ->
-    let compute_hint_for_shape_field_info { sfi_hint; _ } =
-      hint env sfi_hint
-    in
+    let compute_hint_for_shape_field_info { sfi_hint; _ } = hint env sfi_hint in
     List.iter ~f:compute_hint_for_shape_field_info nsi_field_map
   | Hpu_access (h, _) -> hint env h
 
@@ -141,16 +156,16 @@ and check_happly unchecked_tparams env h =
   in
   let tyl =
     List.map unchecked_tparams (fun t ->
-        (Reason.Rwitness (fst t.tp_name), Typing_defs.make_tany ()))
+        mk (Reason.Rwitness (fst t.tp_name), Typing_defs.make_tany ()))
   in
   let subst = Inst.make_subst unchecked_tparams tyl in
   let decl_ty = Inst.instantiate subst decl_ty in
-  match decl_ty with
-  | (_, Tapply _) ->
+  match get_node decl_ty with
+  | Tapply _ ->
     let (env, locl_ty) = Phase.localize_with_self env decl_ty in
     begin
-      match TUtils.get_base_type env locl_ty with
-      | (_, Tclass (cls, _, tyl)) ->
+      match get_node (TUtils.get_base_type env locl_ty) with
+      | Tclass (cls, _, tyl) ->
         (match Env.get_class env (snd cls) with
         | Some cls ->
           let tc_tparams = Cls.tparams cls in
@@ -160,15 +175,10 @@ and check_happly unchecked_tparams env h =
            * stored in the class_type since it may lead to infinite
            * recursion
            *)
-          let tc_tparams =
-            List.map
-              tc_tparams
-              ~f:(Typing_enforceability.pessimize_tparam_constraints env)
-          in
           let ety_env =
             {
               (Phase.env_with_self env) with
-              substs = Subst.make tc_tparams tyl;
+              substs = Subst.make_locl tc_tparams tyl;
             }
           in
           iter2_shortest
@@ -178,12 +188,13 @@ and check_happly unchecked_tparams env h =
                   let r = Reason.Rwitness p in
                   let (env, cstr_ty) = Phase.localize ~ety_env env cstr_ty in
                   ignore
-                  @@ Errors.try_
-                       (fun () ->
-                         TGenConstraint.check_constraint env ck ty ~cstr_ty)
-                       (fun l ->
-                         Reason.explain_generic_constraint (fst h) r x l;
-                         env))
+                  @@ TGenConstraint.check_constraint
+                       env
+                       ck
+                       ty
+                       ~cstr_ty
+                       (fun ?code:_ l ->
+                         Reason.explain_generic_constraint (fst h) r x l))
             end
             tc_tparams
             tyl
@@ -195,7 +206,7 @@ and check_happly unchecked_tparams env h =
 and class_ tenv c =
   let env = { typedef_tparams = []; tenv } in
   (* Add type parameters to typing environment and localize the bounds *)
-  let c_tparam_list : decl tparam list =
+  let c_tparam_list : decl_tparam list =
     List.map
       c.c_tparams.c_tparam_list
       ~f:(Decl_hint.aast_tparam_to_decl_tparam env.tenv.decl_env)
@@ -206,7 +217,7 @@ and class_ tenv c =
       c_tparam_list
       ~ety_env:(Phase.env_with_self tenv)
   in
-  let tenv = add_constraints (fst c.c_name) tenv constraints in
+  let tenv = Typing_subtype.add_constraints (fst c.c_name) tenv constraints in
   (* When where clauses are present, we need instantiate those type
    * parameters before checking base class *)
   let tenv =
@@ -218,7 +229,8 @@ and class_ tenv c =
   let env = { env with tenv } in
   let (c_constructor, c_statics, c_methods) = split_methods c in
   let (c_static_vars, c_vars) = split_vars c in
-  if not (c.c_kind = Ast_defs.Cinterface) then maybe method_ env c_constructor;
+  if not Ast_defs.(equal_class_kind c.c_kind Cinterface) then
+    maybe method_ env c_constructor;
   List.iter c.c_tparams.c_tparam_list (tparam env);
   List.iter c.c_where_constraints (where_constr env);
   List.iter c.c_extends (hint env);
@@ -235,17 +247,11 @@ and typeconst (env, _) tconst =
 
 and class_var env cv = maybe hint env cv.cv_type
 
-and add_constraint pos tenv (ty1, ck, ty2) =
-  Typing_subtype.add_constraint pos tenv ck ty1 ty2
-
-and add_constraints pos tenv (cstrs : locl where_constraint list) =
-  List.fold_left cstrs ~init:tenv ~f:(add_constraint pos)
-
 and method_ env m =
   (* Add method type parameters to environment and localize the bounds
      and where constraints *)
   let ety_env = Phase.env_with_self env.tenv in
-  let m_tparams : decl tparam list =
+  let m_tparams : decl_tparam list =
     List.map
       m.m_tparams
       ~f:(Decl_hint.aast_tparam_to_decl_tparam env.tenv.decl_env)
@@ -253,7 +259,7 @@ and method_ env m =
   let (tenv, constraints) =
     Phase.localize_generic_parameters_with_bounds env.tenv m_tparams ~ety_env
   in
-  let tenv = add_constraints (fst m.m_name) tenv constraints in
+  let tenv = Typing_subtype.add_constraints (fst m.m_name) tenv constraints in
   let tenv =
     Phase.localize_where_constraints ~ety_env tenv m.m_where_constraints
   in

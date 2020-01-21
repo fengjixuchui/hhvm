@@ -34,7 +34,6 @@ namespace HPHP {
 struct ArrayData;
 struct MaybeCountable;
 struct ObjectData;
-struct RefData;
 struct ResourceHdr;
 struct StringData;
 struct MemoCacheBase;
@@ -54,10 +53,9 @@ union Value {
   int64_t       num;    // KindOfInt64, KindOfBool (must be zero-extended)
   double        dbl;    // KindOfDouble
   StringData*   pstr;   // KindOfString, KindOfPersistentString
-  ArrayData*    parr;   // KindOfArray, KindOfVec, KindOfDict, KindOfShape, KindOfKeyset
+  ArrayData*    parr;   // KindOfArray, KindOfVec, KindOfDict, KindOfKeyset
   ObjectData*   pobj;   // KindOfObject
   ResourceHdr*  pres;   // KindOfResource
-  RefData*      pref;   // KindOfRef
   MaybeCountable* pcnt; // for alias-safe generic refcounting operations
   MemoCacheBase* pcache; // Not valid except when in a MemoSlot
   const Func*   pfunc;  // KindOfFunc
@@ -184,16 +182,6 @@ struct TypedValueAux : TypedValue {
 constexpr size_t kTVSimdAlign = 0x10;
 
 /*
- * These may be used to provide a little more self-documentation about whether
- * typed values must be cells (not KindOfRef) or ref (must be KindOfRef).
- *
- * See bytecode.specification for details.  Note that in
- * bytecode.specification, refs are abbreviated as "V".
- */
-using Cell = TypedValue;
-using Ref = TypedValue;
-
-/*
  * A TypedNum is a TypedValue that is either KindOfDouble or KindOfInt64.
  */
 using TypedNum = TypedValue;
@@ -205,8 +193,6 @@ using TypedNum = TypedValue;
  * assertx().
  */
 bool tvIsPlausible(TypedValue);
-bool cellIsPlausible(Cell);
-bool refIsPlausible(Ref);
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -284,8 +270,6 @@ X(KindOfNull,         void);
 X(KindOfBoolean,      bool);
 X(KindOfInt64,        int64_t);
 X(KindOfDouble,       double);
-X(KindOfShape,        ArrayData*);
-X(KindOfPersistentShape,  const ArrayData*);
 X(KindOfArray,        ArrayData*);
 X(KindOfPersistentArray,  const ArrayData*);
 X(KindOfVec,          ArrayData*);
@@ -296,7 +280,6 @@ X(KindOfKeyset,       ArrayData*);
 X(KindOfPersistentKeyset, const ArrayData*);
 X(KindOfObject,       ObjectData*);
 X(KindOfResource,     ResourceHdr*);
-X(KindOfRef,          RefData*);
 X(KindOfString,       StringData*);
 X(KindOfPersistentString, const StringData*);
 X(KindOfFunc,         Func*);
@@ -340,7 +323,10 @@ inline Value make_value(ClsMethDataRef clsMeth) {
  */
 template<DataType DType>
 typename std::enable_if<
-  !std::is_same<typename DataTypeCPPType<DType>::type,void>::value,
+  !std::is_same<typename DataTypeCPPType<DType>::type,void>::value &&
+  DType != KindOfDArray && DType != KindOfPersistentDArray &&
+  DType != KindOfVArray && DType != KindOfPersistentVArray &&
+  DType != KindOfArray && DType != KindOfPersistentArray,
   TypedValue
 >::type make_tv(typename DataTypeCPPType<DType>::type val) {
   TypedValue ret;
@@ -361,54 +347,14 @@ typename std::enable_if<
   return ret;
 }
 
-/*
- * Extract the underlying data element for the TypedValue
- *
- * int64_t val = unpack_tv<KindOfInt64>(tv);
- */
-template <DataType DType, typename T>
-typename std::enable_if<
-  std::is_same<typename DataTypeCPPType<DType>::type,double>::value,
-  enable_if_lval_t<T, double>
->::type unpack_tv(T tv) {
-  assertx(DType == type(tv));
-  return val(tv).dbl;
-}
-
-template <DataType DType, typename T>
-typename std::enable_if<
-  std::is_integral<typename DataTypeCPPType<DType>::type>::value,
-  enable_if_lval_t<T, typename DataTypeCPPType<DType>::type>
->::type unpack_tv(T tv) {
-  assertx(DType == type(tv));
-  assertx(tvIsPlausible(*tv));
-  return val(tv).num;
-}
-
-template <DataType DType, typename T>
-typename std::enable_if<
-  std::is_pointer<typename DataTypeCPPType<DType>::type>::value,
-  enable_if_lval_t<T, typename DataTypeCPPType<DType>::type>
->::type unpack_tv(T tv) {
-  assertx((DType == type(tv)) ||
-         (isStringType(DType) && isStringType(type(tv))) ||
-         (isArrayType(DType) && isArrayType(type(tv))) ||
-         (isVecType(DType) && isVecType(type(tv))) ||
-         (isDictType(DType) && isDictType(type(tv))) ||
-         (isKeysetType(DType) && isKeysetType(type(tv))));
-  assertx(tvIsPlausible(*tv));
-  return reinterpret_cast<typename DataTypeCPPType<DType>::type>
-           (val(tv).pstr);
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
  * Unlike init_null_variant and uninit_variant, these should be placed in
  * .rodata and cause a segfault if written to.
  */
-extern const Cell immutable_null_base;
-extern const Cell immutable_uninit_base;
+extern const TypedValue immutable_null_base;
+extern const TypedValue immutable_uninit_base;
 
 ///////////////////////////////////////////////////////////////////////////////
 

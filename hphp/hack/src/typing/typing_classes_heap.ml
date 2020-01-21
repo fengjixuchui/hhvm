@@ -7,22 +7,22 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Decl_inheritance
 open Shallow_decl_defs
 open Typing_defs
-module Attrs = Attributes
+module Attrs = Naming_attributes
 module LSTable = Lazy_string_table
 module SN = Naming_special_names
 
 type lazy_class_type = {
   sc: shallow_class;
   ih: inherited_members;
-  ancestors: decl ty LSTable.t;
+  ancestors: decl_ty LSTable.t;
   parents_and_traits: unit LSTable.t;
   members_fully_known: bool Lazy.t;
   req_ancestor_names: unit LSTable.t;
-  all_requirements: (Pos.t * decl ty) list Lazy.t;
+  all_requirements: (Pos.t * decl_ty) list Lazy.t;
 }
 
 type class_type_variant =
@@ -53,11 +53,7 @@ let make_lazy_class_type class_name sc =
   }
 
 let shallow_decl_enabled () =
-  TypecheckerOptions.shallow_class_decl (GlobalNamingOptions.get ())
-
-let defer_threshold () =
-  TypecheckerOptions.defer_class_declaration_threshold
-    (GlobalNamingOptions.get ())
+  TypecheckerOptions.shallow_class_decl (Global_naming_options.get ())
 
 module Classes = struct
   module Cache =
@@ -89,18 +85,19 @@ module Classes = struct
         match cached with
         | Some dc -> dc
         | None ->
-          (match Naming_table.Types.get_pos class_name with
+          let start_time = Unix.gettimeofday () in
+          (match Naming_table.Types.get_filename_and_kind class_name with
           | Some (_, Naming_table.TTypedef)
+          | Some (_, Naming_table.TRecordDef)
           | None ->
             raise Exit
-          | Some (pos, Naming_table.TClass) ->
-            let file = FileInfo.get_pos_filename pos in
-            Option.iter (defer_threshold ()) ~f:(fun threshold ->
-                Deferred_decl.should_defer ~d:file ~threshold);
+          | Some (file, Naming_table.TClass) ->
+            Deferred_decl.raise_if_should_defer ~d:file;
             let class_type =
               Errors.run_in_decl_mode file (fun () ->
                   Decl.declare_class_in_file file class_name)
             in
+            Deferred_decl.count_decl_cache_miss class_name ~start_time;
             (match class_type with
             | Some class_type -> class_type
             | None ->
@@ -127,7 +124,7 @@ module Classes = struct
       (* If we raise Exit, then the class does not exist. *)
     with
     | Deferred_decl.Defer d ->
-      Deferred_decl.add ~d;
+      Deferred_decl.add_deferment ~d;
       None
     | Exit -> None
 
@@ -233,7 +230,7 @@ module Api = struct
         let add_class_name names param =
           match param with
           | (_, Class_const ((_, CI (_, cls)), (_, name)))
-            when name = SN.Members.mClass ->
+            when String.equal name SN.Members.mClass ->
             SSet.add cls names
           | _ -> names
         in
@@ -258,7 +255,7 @@ module Api = struct
   let get_ancestor t ancestor =
     match t with
     | Lazy lc -> LSTable.get lc.ancestors ancestor
-    | Eager c -> SMap.get ancestor c.tc_ancestors
+    | Eager c -> SMap.find_opt ancestor c.tc_ancestors
 
   let has_ancestor t ancestor =
     match t with
@@ -321,23 +318,24 @@ module Api = struct
 
   let all_where_constraints_on_this t =
     List.filter
-      ~f:(fun c ->
-        match c with
-        | ((_, Typing_defs.Tthis), _, _)
-        | (_, _, (_, Typing_defs.Tthis)) ->
+      ~f:(fun (l, _, r) ->
+        match (get_node l, get_node r) with
+        | (Tthis, _)
+        | (_, Tthis) ->
           true
         | _ -> false)
       (where_constraints t)
 
   let upper_bounds_on_this_from_constraints t =
     List.filter_map
-      ~f:(fun c ->
-        match c with
-        | ((_, Typing_defs.Tthis), Ast_defs.Constraint_as, ty)
-        | ((_, Typing_defs.Tthis), Ast_defs.Constraint_eq, ty)
-        | (ty, Ast_defs.Constraint_eq, (_, Typing_defs.Tthis))
-        | (ty, Ast_defs.Constraint_super, (_, Typing_defs.Tthis)) ->
-          Some ty
+      ~f:(fun (l, c, r) ->
+        match (get_node l, c, get_node r) with
+        | (Tthis, Ast_defs.Constraint_as, _)
+        | (Tthis, Ast_defs.Constraint_eq, _) ->
+          Some r
+        | (_, Ast_defs.Constraint_eq, Tthis)
+        | (_, Ast_defs.Constraint_super, Tthis) ->
+          Some l
         | _ -> None)
       (where_constraints t)
     |> Sequence.of_list
@@ -354,13 +352,14 @@ module Api = struct
   (* get lower bounds on `this` from the where constraints *)
   let lower_bounds_on_this_from_constraints t =
     List.filter_map
-      ~f:(fun c ->
-        match c with
-        | ((_, Typing_defs.Tthis), Ast_defs.Constraint_super, ty)
-        | ((_, Typing_defs.Tthis), Ast_defs.Constraint_eq, ty)
-        | (ty, Ast_defs.Constraint_eq, (_, Typing_defs.Tthis))
-        | (ty, Ast_defs.Constraint_as, (_, Typing_defs.Tthis)) ->
-          Some ty
+      ~f:(fun (l, c, r) ->
+        match (get_node l, c, get_node r) with
+        | (Tthis, Ast_defs.Constraint_super, _)
+        | (Tthis, Ast_defs.Constraint_eq, _) ->
+          Some r
+        | (_, Ast_defs.Constraint_eq, Tthis)
+        | (_, Ast_defs.Constraint_as, Tthis) ->
+          Some l
         | _ -> None)
       (where_constraints t)
     |> Sequence.of_list
@@ -371,8 +370,8 @@ module Api = struct
     not (Sequence.is_empty (lower_bounds_on_this_from_constraints t))
 
   let is_disposable_class_name class_name =
-    class_name = SN.Classes.cIDisposable
-    || class_name = SN.Classes.cIAsyncDisposable
+    String.equal class_name SN.Classes.cIDisposable
+    || String.equal class_name SN.Classes.cIAsyncDisposable
 
   let is_disposable t =
     match t with
@@ -385,37 +384,37 @@ module Api = struct
   let get_const t id =
     match t with
     | Lazy lc -> LSTable.get lc.ih.consts id
-    | Eager c -> SMap.get id c.tc_consts
+    | Eager c -> SMap.find_opt id c.tc_consts
 
   let get_typeconst t id =
     match t with
     | Lazy lc -> LSTable.get lc.ih.typeconsts id
-    | Eager c -> SMap.get id c.tc_typeconsts
+    | Eager c -> SMap.find_opt id c.tc_typeconsts
 
   let get_pu_enum t id =
     match t with
     | Lazy lc -> LSTable.get lc.ih.pu_enums id
-    | Eager c -> SMap.get id c.tc_pu_enums
+    | Eager c -> SMap.find_opt id c.tc_pu_enums
 
   let get_prop t id =
     match t with
     | Lazy lc -> LSTable.get lc.ih.props id
-    | Eager c -> SMap.get id c.tc_props
+    | Eager c -> SMap.find_opt id c.tc_props
 
   let get_sprop t id =
     match t with
     | Lazy lc -> LSTable.get lc.ih.sprops id
-    | Eager c -> SMap.get id c.tc_sprops
+    | Eager c -> SMap.find_opt id c.tc_sprops
 
   let get_method t id =
     match t with
     | Lazy lc -> LSTable.get lc.ih.methods id
-    | Eager c -> SMap.get id c.tc_methods
+    | Eager c -> SMap.find_opt id c.tc_methods
 
   let get_smethod t id =
     match t with
     | Lazy lc -> LSTable.get lc.ih.smethods id
-    | Eager c -> SMap.get id c.tc_smethods
+    | Eager c -> SMap.find_opt id c.tc_smethods
 
   let has_const t id =
     match t with

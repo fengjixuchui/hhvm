@@ -30,6 +30,7 @@ final class Derived extends ImplementingBase {
     $this->result = $num;
   }
 
+  <<__Override>>
   public function overridden(): int {
     return $this->result;
   }
@@ -47,11 +48,14 @@ function call_constructors(): void {
   $b = new Derived(0);
 }
 
+function only_variadic(int ...$args): void {}
+
 function variadic(inout int $arg, int ...$args): void{}
 
 function with_nontrivial_fun_decls(): void {
   $num = 17;
   variadic(inout $num, 18, 19);
+  only_variadic($num, 18, 19);
   $d = new Derived($num);
 }
 
@@ -62,16 +66,69 @@ class WithProperties {
 
   public int $first;
   public int $second = 0;
+  public static int $third = 7;
 }
 
 function use_properties(WithProperties $arg): int {
-  return $arg->first + $arg->second;
+  return $arg->first + $arg->second + WithProperties::$third;
 }
 
 class SimpleClass {
+  public function __construct(string $s, int $i) {}
   public function simple_method(): void {}
   public function another_method(): void {
     $this->coarse_grained_dependency();
   }
   public function coarse_grained_dependency(): void {}
+}
+
+class SimpleDerived extends SimpleClass {
+  public function __construct(float $f, bool $b, mixed ...$args) {
+    parent::__construct('mumble', 42);
+  }
+  public function call_parent_method(): void {
+    parent::simple_method();
+    ++SimpleDerived::$calls;
+  }
+
+  private static int $calls = 0;
+}
+
+interface IWithRequirement {
+  require extends A;
+}
+
+function with_requiring_interface(IWithRequirement $arg): void {}
+
+function WithNameMatchingClassName(): WithNameMatchingClassName {
+  return new WithNameMatchingClassName();
+}
+
+class WithNameMatchingClassName {}
+
+function with_classname(): string {
+  return SimpleClass::class;
+}
+
+function with_parent_constructor_call(): void {
+  $_ = new SimpleClass('frob', 1337);
+  $_ = new SimpleDerived(3.14, true, null);
+}
+
+class WithReactiveMethods {
+  <<__Rx>>
+  public function reactive(): void {}
+
+  <<__Rx>>
+  public function call_reactive(): void {
+    $this->reactive();
+  }
+
+  <<__RxShallow>>
+  public function shallow_reactive(): void {}
+
+  <<__RxShallow>>
+  public function call_shallow_reactive(): void {
+    $this->shallow_reactive();
+  }
 }

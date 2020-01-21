@@ -14,6 +14,13 @@ val find_class_in_file :
   string ->
   Nast.class_ option
 
+val find_record_def_in_file :
+  ?full:bool ->
+  ?case_insensitive:bool ->
+  Relative_path.t ->
+  string ->
+  Nast.record_def option
+
 val find_fun_in_file :
   ?full:bool ->
   ?case_insensitive:bool ->
@@ -37,7 +44,7 @@ val parse_file_input :
   ?full:bool ->
   Relative_path.t ->
   ServerCommandTypes.file_input ->
-  Nast.program
+  Full_fidelity_source_text.t * Nast.program * Parser_return.comments
 
 val local_changes_push_stack : unit -> unit
 

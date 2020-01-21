@@ -182,7 +182,9 @@ function import_request_variables(string $types,
  * $_POST, etc. variables.
  */
 <<__Native>>
-function parse_str(string $str, mixed &$arr): void;
+function parse_str(string $str,
+                   <<__OutOnly("KindOfArray")>>
+                   inout mixed $arr): void;
 
 }
 
@@ -232,6 +234,8 @@ namespace HH {
   * warnOnPHPArrays  - If true, emit a Hack array compat notice if serializing a
   *                    PHP array
   * forcePHPArrays   - If true, serialize all Hack arrays as PHP arrays
+  * keepDVArrays     - If true, use custom HHVM-specific serialization format,
+  *                    which preserves varray and darray intact.
   */
   <<__Native, __IsFoldable>>
   function serialize_with_options(mixed $value, dict $options = dict[]): string;

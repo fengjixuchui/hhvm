@@ -41,7 +41,6 @@ function my_option_map(): OptionInfoMap {
 'build-root:'     => Pair { '',
                             'Override the default directory for hhvm and hphp'},
 'perf:'           => Pair { '', 'Run perf record'},
-'hhjs'            => Pair { '', 'Enable HHJS' },
   };
 }
 
@@ -169,7 +168,6 @@ function determine_flags(OptionMap $opts): string {
     'no-pgo'          => '-v Eval.JitPGO=false ',
     'hphpd'           => '-m debug ',
     'server'          => '-m server ',
-    'hhjs'            => '-v Eval.EnableHHJS=1 ',
   };
 
   if ($opts->containsKey('pgo-threshold')) {
@@ -252,7 +250,8 @@ function compile_a_repo(bool $unoptimized, OptionMap $opts): string {
   if ($echo_command) {
     echo "\n", $cmd, "\n";
   }
-  system($cmd);
+  $return_var = -1;
+  system($cmd, inout $return_var);
   echo "done.\n";
 
   $compile_dir = rtrim(shell_exec(
@@ -260,11 +259,12 @@ function compile_a_repo(bool $unoptimized, OptionMap $opts): string {
     '| perl -pe \'s@.*(/tmp[^ ]*).*@$1@g\''
   ));
   $repo=$compile_dir.'/hhvm.hhbc';
-  system("rm -f $hphp_out");
+  system("rm -f $hphp_out", inout $return_var);
   if ($echo_command !== true) {
     register_shutdown_function(
       function() use ($compile_dir) {
-        system("rm -fr $compile_dir");
+        $return_var = -1;
+        system("rm -fr $compile_dir", inout $return_var);
       },
     );
   }
@@ -286,7 +286,8 @@ function compile_with_hphp(string $flags, OptionMap $opts): string {
 
 function create_repo(OptionMap $opts): void {
   $repo = compile_a_repo(true, $opts);
-  system("cp $repo ./hhvm.hhbc");
+  $return_var = -1;
+  system("cp $repo ./hhvm.hhbc", inout $return_var);
 }
 
 function run_hhvm(OptionMap $opts): void {
@@ -313,7 +314,7 @@ function run_hhvm(OptionMap $opts): void {
   } else {
     // Give the return value of the command back to the caller.
     $retval = null;
-    passthru($cmd, &$retval);
+    passthru($cmd, inout $retval);
     exit($retval);
   }
 }

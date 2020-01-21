@@ -15,6 +15,7 @@ open ServerCommandTypes
 open SearchServiceRunner
 open Coverage_level
 open Coverage_level_defs
+open Int.Replace_polymorphic_compare
 
 exception Integration_test_tailure
 
@@ -57,7 +58,7 @@ let test_init_common ?(hhi_files = []) () =
     did_init := true;
 
   Printexc.record_backtrace true;
-  EventLogger.init EventLogger.Event_logger_fake 0.0;
+  EventLogger.init_fake ();
   Relative_path.set_path_prefix Relative_path.Root (Path.make root);
   Relative_path.set_path_prefix Relative_path.Hhi (Path.make hhi);
   Relative_path.set_path_prefix Relative_path.Tmp (Path.make tmp);
@@ -91,16 +92,18 @@ let setup_server ?custom_config ?(hhi_files = []) () =
         Relative_path.create Relative_path.Hhi (Filename.concat hhi fn))
   in
   let hhi_set = Relative_path.Set.of_list hhi_file_list in
-  GlobalParserOptions.set result.ServerEnv.popt;
-  GlobalNamingOptions.set result.ServerEnv.tcopt;
+  Parser_options_provider.set result.ServerEnv.popt;
+  Global_naming_options.set result.ServerEnv.tcopt;
 
   (* Initialize symbol index *)
   let sienv =
     SymbolIndex.initialize
-      ~globalrev_opt:None
+      ~globalrev:None
+      ~gleanopt:result.ServerEnv.gleanopt
       ~namespace_map:[]
-      ~provider_name:"TrieIndex"
+      ~provider_name:"LocalIndex"
       ~quiet:true
+      ~ignore_hh_version:false
       ~savedstate_file_opt:None
       ~workers:None
   in
@@ -116,8 +119,7 @@ let default_loop_input =
 
 let run_loop_once :
     type a b.
-    ServerEnv.env -> (a, b) loop_inputs -> ServerEnv.env * (a, b) loop_outputs
-    =
+    ServerEnv.env -> (a, b) loop_inputs -> ServerEnv.env * (a, b) loop_outputs =
  fun env inputs ->
   TestClientProvider.clear ();
   Option.iter inputs.new_client ~f:(function
@@ -136,8 +138,7 @@ let run_loop_once :
   let disk_changes =
     List.map inputs.disk_changes ~f:(fun (x, y) -> (root ^ x, y))
   in
-  List.iter disk_changes ~f:(fun (path, contents) ->
-      TestDisk.set path contents);
+  List.iter disk_changes ~f:(fun (path, contents) -> TestDisk.set path contents);
 
   let did_read_disk_changes_ref = ref false in
   let notifier () =
@@ -159,7 +160,7 @@ let run_loop_once :
   (* Always pick up disk changes in tests immediately *)
   let env = ServerEnv.{ env with last_notifier_check_time = 0.0 } in
   let env = ServerMain.serve_one_iteration genv env client_provider in
-  SearchServiceRunner.run_completely genv env.ServerEnv.local_symbol_table;
+  SearchServiceRunner.run_completely env.ServerEnv.local_symbol_table;
   ( env,
     {
       did_read_disk_changes = !did_read_disk_changes_ref;
@@ -206,7 +207,7 @@ let assert_responded (error : string) loop_output =
 let assertEqual expected got =
   let expected = String.strip expected in
   let got = String.strip got in
-  if expected <> got then
+  if String.( <> ) expected got then
     fail (Printf.sprintf "Expected:\n%s\nGot:\n%s\n" expected got)
 
 let change_files env disk_changes =
@@ -334,6 +335,16 @@ let edit_file env name contents =
   assert_responded "Expected EDIT_FILE to be processed" loop_output;
   (env, loop_output)
 
+let save_file env name contents =
+  let (env, loop_output) =
+    run_loop_once
+      env
+      { default_loop_input with disk_changes = [(name, contents)] }
+  in
+  if not loop_output.did_read_disk_changes then
+    fail "Expected the server to process disk updates";
+  (env, loop_output)
+
 let close_file ?(ignore_response = false) env name =
   let (env, loop_output) =
     run_loop_once
@@ -353,12 +364,14 @@ let wait env =
    * counters. *)
   ServerEnv.{ env with last_command_time = env.last_command_time -. 1.0 }
 
-let coverage_levels env file_input =
+let coverage_levels env filename =
+  let file_input = ServerCommandTypes.FileName filename in
   run_loop_once
     env
     {
       default_loop_input with
-      persistent_client_request = Some (Request (COVERAGE_LEVELS file_input));
+      persistent_client_request =
+        Some (Request (COVERAGE_LEVELS (filename, file_input)));
     }
 
 let coverage_counts env contents =
@@ -374,7 +387,8 @@ let autocomplete env contents =
     env
     {
       default_loop_input with
-      persistent_client_request = Some (Request (AUTOCOMPLETE contents));
+      persistent_client_request =
+        Some (Request (COMMANDLINE_AUTOCOMPLETE contents));
     }
 
 let ide_autocomplete env (path, line, column) =
@@ -392,14 +406,15 @@ let ide_autocomplete env (path, line, column) =
                   is_manually_invoked )));
     }
 
-let status ?(ignore_ide = false) ?(max_errors = None) env =
+let status ?(ignore_ide = false) ?(max_errors = None) ?(remote = false) env =
   run_loop_once
     env
     {
       default_loop_input with
       new_client =
         Some
-          (RequestResponse (ServerCommandTypes.STATUS (ignore_ide, max_errors)));
+          (RequestResponse
+             (ServerCommandTypes.STATUS { ignore_ide; max_errors; remote }));
     }
 
 let full_check env =
@@ -473,8 +488,7 @@ let assert_errors errors expected =
   |> errors_to_string buf;
   assertEqual expected (Buffer.contents buf)
 
-let assert_env_errors env expected =
-  assert_errors env.ServerEnv.errorl expected
+let assert_env_errors env expected = assert_errors env.ServerEnv.errorl expected
 
 let assert_no_errors env = assert_env_errors env ""
 
@@ -501,8 +515,7 @@ let save_state
     ?(enable_naming_table_fallback = false)
     disk_changes
     temp_dir =
-  in_daemon
-  @@ fun () ->
+  in_daemon @@ fun () ->
   let hhi_files =
     if load_hhi_files then
       real_hhi_files ()
@@ -554,8 +567,7 @@ let save_state_incremental
   ServerInit.save_state !genv env (temp_dir ^ "/" ^ saved_state_filename)
 
 let save_state_with_errors disk_changes temp_dir expected_error : unit =
-  in_daemon
-  @@ fun () ->
+  in_daemon @@ fun () ->
   let env = setup_server () in
   let env = setup_disk env disk_changes in
   assert_env_errors env expected_error;
@@ -564,9 +576,7 @@ let save_state_with_errors disk_changes temp_dir expected_error : unit =
     {
       !genv with
       ServerEnv.options =
-        ServerArgs.set_gen_saved_ignore_type_errors
-          !genv.ServerEnv.options
-          true;
+        ServerArgs.set_gen_saved_ignore_type_errors !genv.ServerEnv.options true;
     }
   in
   let _edges_added =
@@ -620,8 +630,7 @@ let load_state
   test_init_common () ~hhi_files;
 
   let disk_changes = List.map disk_state ~f:(fun (x, y) -> (root ^ x, y)) in
-  List.iter disk_changes ~f:(fun (path, contents) ->
-      TestDisk.set path contents);
+  List.iter disk_changes ~f:(fun (path, contents) -> TestDisk.set path contents);
 
   let prechecked_changes =
     List.map master_changes ~f:(fun x ->
@@ -686,7 +695,8 @@ let assert_diagnostics loop_output expected =
 let assert_diagnostics_in loop_output filename expected =
   let diagnostics = get_diagnostics loop_output in
   let diagnostics =
-    SMap.filter diagnostics ~f:(fun path _ -> path = prepend_root filename)
+    SMap.filter diagnostics ~f:(fun path _ ->
+        String.equal path (prepend_root filename))
   in
   let diagnostics_as_string = diagnostics_to_string diagnostics in
   assertEqual expected diagnostics_as_string
@@ -716,7 +726,7 @@ let assert_coverage_levels loop_output expected =
   in
   let results_as_string =
     List.map results ~f:coverage_levels_to_str_helper
-    |> List.sort ~compare
+    |> List.sort ~compare:String.compare
     |> List.append strings_of_stats
     |> list_to_string
   in
@@ -733,8 +743,12 @@ let assert_autocomplete loop_output expected =
     results |> List.map ~f:(fun x -> x.AutocompleteTypes.res_name)
   in
   (* The autocomplete results out of hack are unsorted *)
-  let results_as_string = results |> List.sort ~compare |> list_to_string in
-  let expected_as_string = expected |> List.sort ~compare |> list_to_string in
+  let results_as_string =
+    results |> List.sort ~compare:String.compare |> list_to_string
+  in
+  let expected_as_string =
+    expected |> List.sort ~compare:String.compare |> list_to_string
+  in
   assertEqual expected_as_string results_as_string
 
 let assert_ide_autocomplete loop_output expected =
@@ -753,7 +767,7 @@ let assert_ide_autocomplete loop_output expected =
 
 let smap_to_str_list (f : 'a -> string) (m : 'a SMap.t) =
   (m |> SMap.ordered_keys |> List.map) ~f:(fun s ->
-      s ^ "< " ^ (m |> SMap.find s |> f) ^ ">")
+      s ^ "< " ^ (SMap.find m s |> f) ^ ">")
 
 let level_stats_to_str (ls : level_stats) =
   let lvls =
@@ -771,7 +785,7 @@ let rec trie_to_string (base : string) (f : 'a -> string) (t : 'a trie) =
   | Node (_, smap_of_tr) ->
     (*TODO: figure out why the first of the pair is duplicated*)
     List.map (SMap.ordered_keys smap_of_tr) ~f:(fun k ->
-        trie_to_string (base ^ "/" ^ k) f (SMap.find k smap_of_tr))
+        trie_to_string (base ^ "/" ^ k) f (SMap.find smap_of_tr k))
     |> list_to_string
 
 let assert_coverage_counts loop_output expected =

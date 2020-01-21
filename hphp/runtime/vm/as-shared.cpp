@@ -66,7 +66,6 @@ constexpr bool supported(ContextMask mask, AttrContext a) {
   X(AttrProvenanceSkipFrame,      F,       "prov_skip_frame");      \
   X(AttrIsFoldable,               F,       "foldable");             \
   X(AttrNoInjection,              F,       "no_injection");         \
-  X(AttrIsInOutWrapper,           F,       "inout_wrapper");        \
   X(AttrInterceptable,            F,       "interceptable");        \
   X(AttrDynamicallyCallable,      F,       "dyn_callable");         \
   X(AttrLSB,                      P,       "lsb");                  \
@@ -75,20 +74,19 @@ constexpr bool supported(ContextMask mask, AttrContext a) {
   X(AttrNoImplicitNullable,       P,       "no_implicit_null");     \
   X(AttrInitialSatisfiesTC,       P,       "initial_satisfies_tc"); \
   X(AttrLateInit,                 P,       "late_init");            \
-  X(AttrLateInitSoft,             P,       "late_init_soft");       \
   X(AttrNoReifiedInit,            C,       "noreifiedinit");        \
   X(AttrIsMethCaller,             F,       "is_meth_caller");
   /* */
 
 #define HHAS_TYPE_FLAGS                                     \
   X(Nullable,        "nullable");                           \
-  X(HHType,          "hh_type");                            \
   X(ExtendedHint,    "extended_hint");                      \
   X(TypeVar,         "type_var");                           \
   X(Soft,            "soft");                               \
   X(TypeConstant,    "type_constant")                       \
   X(Resolved,        "resolved")                            \
-  X(DisplayNullable, "display_nullable")
+  X(DisplayNullable, "display_nullable")                    \
+  X(UpperBound,      "upper_bound")
 }
 
 //////////////////////////////////////////////////////////////////////

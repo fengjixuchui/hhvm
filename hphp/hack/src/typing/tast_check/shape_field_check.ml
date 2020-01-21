@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Ast_defs
 open Aast
 open Typing_defs
@@ -16,25 +16,26 @@ module SN = Naming_special_names
 
 let shapes_key_exists env shape field_name =
   let (_, shape) = Tast_env.expand_type env shape in
-  match shape with
-  | (r, Tshape (shape_kind, fields)) ->
+  match get_node shape with
+  | Tshape (shape_kind, fields) ->
     begin
-      match ShapeMap.get field_name fields with
+      match ShapeMap.find_opt field_name fields with
       | None ->
         begin
           match shape_kind with
-          | Closed_shape -> `DoesNotExist (Reason.to_pos r, `Undefined)
+          | Closed_shape -> `DoesNotExist (get_pos shape, `Undefined)
           | Open_shape -> `Unknown
         end
       | Some { sft_optional; sft_ty } ->
         if not sft_optional then
-          `DoesExist (Reason.to_pos (fst sft_ty))
+          `DoesExist (get_pos sft_ty)
         else
           let nothing = Typing_make_type.nothing Reason.Rnone in
           if Tast_env.is_sub_type env sft_ty nothing then
             `DoesNotExist
-              ( Reason.to_pos r,
-                `Nothing (Reason.to_string "It is nothing" (fst sft_ty)) )
+              ( get_pos shape,
+                `Nothing (Reason.to_string "It is nothing" (get_reason sft_ty))
+              )
           else
             `Unknown
     end
@@ -85,9 +86,9 @@ let handler =
               (_, Class_const ((_, CI (_, class_name)), (_, method_name))),
               _,
               [shape; ((pos, _), String field_name)],
-              [] ) )
-        when class_name = SN.Shapes.cShapes
-             && method_name = SN.Shapes.keyExists ->
+              None ) )
+        when String.equal class_name SN.Shapes.cShapes
+             && String.equal method_name SN.Shapes.keyExists ->
         trivial_shapes_key_exists_check p env shape (pos, field_name)
       | ( (p, _),
           Call
@@ -95,16 +96,17 @@ let handler =
               (_, Class_const ((_, CI (_, class_name)), (_, method_name))),
               _,
               [shape; ((pos, _), String field_name); _],
-              [] ) )
+              None ) )
       | ( (p, _),
           Call
             ( Aast.Cnormal,
               (_, Class_const ((_, CI (_, class_name)), (_, method_name))),
               _,
               [shape; ((pos, _), String field_name)],
-              [] ) )
-        when class_name = SN.Shapes.cShapes
-             && (method_name = SN.Shapes.idx || method_name = SN.Shapes.at) ->
+              None ) )
+        when String.equal class_name SN.Shapes.cShapes
+             && ( String.equal method_name SN.Shapes.idx
+                || String.equal method_name SN.Shapes.at ) ->
         shapes_method_access_with_non_existent_field
           p
           env

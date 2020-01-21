@@ -14,6 +14,8 @@
  * YOU SHOULD NEVER INCLUDE THIS FILE ANYWHERE!!!
  */
 
+namespace HH {
+
 /**
  * `ImmMap` is an immutable `Map`. HHVM provides a native implementation for
  * this class. The PHP class definition below is not actually used at run time;
@@ -40,7 +42,7 @@
  * @guide /hack/collections/classes
  */
 
-final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
+final class ImmMap<Tk as arraykey, +Tv> implements \ConstMap<Tk, Tv> {
   /**
    * Creates an `ImmMap` from the given `KeyedTraversable`, or an empty
    * `ImmMap` if `null` is passed.
@@ -49,7 +51,7 @@ final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
    *             (e.g., `array`). If `null`, then an empty `ImmMap` is created.
    */
   <<__Rx, __AtMostRxAsArgs>>
-  public function __construct(<<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\KeyedTraversable::class)>> ?KeyedTraversable<Tk, Tv> $it);
+  public function __construct(<<__MaybeMutable, __OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> ?KeyedTraversable<Tk, Tv> $it);
 
   /**
    * Returns an `array` containing the key/value pairs from the current
@@ -80,17 +82,6 @@ final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
   public function toKeysArray(): varray<Tk>;
 
   /**
-   * Returns a `Vector` with the values of the current `ImmMap`.
-   *
-   * @return - a `Vector` that contains the values of the current `ImmMap`.
-   */
-  <<__Rx, __MutableReturn, __MaybeMutable>>
-  /* HH_FIXME[4120]: While this violates our variance annotations, we are
-   * returning a copy of the underlying collection, so it is actually safe
-   * See #6853603. */
-  public function toVector(): Vector<Tv>;
-
-  /**
    * Returns an immutable vector (`ImmVector`) with the values of the current
    * `ImmMap`.
    *
@@ -100,34 +91,12 @@ final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
   public function toImmVector(): ImmVector<Tv>;
 
   /**
-   * Returns a mutable copy (`Map`) of this `ImmMap`.
-   *
-   * @return - a mutable `Map` that is a copy of the current `ImmMap`.
-   */
-  <<__Rx, __MutableReturn, __MaybeMutable>>
-  /* HH_FIXME[4120]: While this violates our variance annotations, we are
-   * returning a copy of the underlying collection, so it is actually safe
-   * See #6853603. */
-  public function toMap(): Map<Tk, Tv>;
-
-  /**
    * Returns an immutable copy (`ImmMap`) of the current `ImmMap`.
    *
    * @return - an `ImmMap` that is a copy of the current `ImmMap`.
    */
   <<__Rx, __MaybeMutable>>
   public function toImmMap(): ImmMap<Tk, Tv>;
-
-  /**
-   * Returns a `Set` based on the values of the current `ImmMap`.
-   *
-   * @return - a `Set` with the current values of the current `ImmMap`.
-   */
-  <<__Rx, __MutableReturn, __MaybeMutable>>
-  /* HH_FIXME[4120]: While this violates our variance annotations, we are
-   * returning a copy of the underlying collection, so it is actually safe
-   * See #6853603. */
-  public function toSet(): Set<Tv> where Tv as arraykey;
 
   /**
    * Returns an immutable set (`ImmSet`) based on the values of the current
@@ -162,7 +131,7 @@ final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
    * @guide /hack/collections/examples
    */
   <<__Rx, __MutableReturn, __MaybeMutable>>
-  public function lazy(): HH\Rx\KeyedIterable<Tk, Tv>;
+  public function lazy(): \HH\Rx\KeyedIterable<Tk, Tv>;
 
   /**
    * Returns an ImmVector containing the values of the current `ImmMap`.
@@ -288,7 +257,7 @@ final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
    *           with the provided `Traversable`.
    */
   <<__Rx, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
-  public function zip<Tu>(<<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\Traversable::class)>> Traversable<Tu> $traversable):
+  public function zip<Tu>(<<__MaybeMutable, __OnlyRxIfImpl(\HH\Rx\Traversable::class)>> Traversable<Tu> $traversable):
     ImmMap<Tk, Pair<Tv, Tu>>;
 
   /**
@@ -396,7 +365,7 @@ final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
    * @guide /hack/generics/constraints
    */
   <<__Rx, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
-  public function concat<Tu super Tv>(<<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\Traversable::class)>> Traversable<Tu> $traversable):
+  public function concat<Tu super Tv>(<<__MaybeMutable, __OnlyRxIfImpl(\HH\Rx\Traversable::class)>> Traversable<Tu> $traversable):
     ImmVector<Tu>;
 
   /**
@@ -522,7 +491,7 @@ final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
    */
   <<__Rx, __AtMostRxAsArgs, __MaybeMutable>>
   public function differenceByKey(
-    <<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\KeyedTraversable::class)>> KeyedTraversable<mixed, mixed> $traversable
+    <<__MaybeMutable, __OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> KeyedTraversable<mixed, mixed> $traversable
   ): ImmMap<Tk, Tv>;
 
   /**
@@ -532,7 +501,7 @@ final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
    *           `ImmMap`.
    */
   <<__Rx, __MutableReturn, __MaybeMutable>>
-  public function getIterator(): HH\Rx\KeyedIterator<Tk, Tv>;
+  public function getIterator(): \HH\Rx\KeyedIterator<Tk, Tv>;
 
   /**
    * Creates an `ImmMap` from the given `Traversable`, or an empty `ImmMap`
@@ -549,7 +518,7 @@ final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
    *           an empty `ImmMap` if the `Traversable` is `null`.
    */
   <<__Rx, __AtMostRxAsArgs>>
-  public static function fromItems(<<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\Traversable::class)>> ?Traversable<Pair<Tk, Tv>> $items):
+  public static function fromItems(<<__MaybeMutable, __OnlyRxIfImpl(\HH\Rx\Traversable::class)>> ?Traversable<Pair<Tk, Tv>> $items):
     ImmMap<Tk, Tv>;
 
   /**
@@ -569,10 +538,12 @@ final class ImmMap<Tk as arraykey, +Tv> implements ConstMap<Tk, Tv> {
    * @return - The `Iterable` view of the current `ImmMap`.
    */
   <<__Rx, __MutableReturn, __MaybeMutable>>
-  public function items(): HH\Rx\Iterable<Pair<Tk, Tv>>;
+  public function items(): \HH\Rx\Iterable<Pair<Tk, Tv>>;
 
   <<__Rx, __MaybeMutable>> /* HH_FIXME[0002] */
   public function toVArray(): varray<Tv>;
   <<__Rx, __MaybeMutable>> /* HH_FIXME[0001] */
   public function toDArray(): darray<Tk, Tv>;
 }
+
+} // namespace HH

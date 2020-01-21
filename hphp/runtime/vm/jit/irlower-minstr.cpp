@@ -547,21 +547,28 @@ void cgCheckArrayCOW(IRLS& env, const IRInstruction* inst) {
   ifThen(v, CC_NE, sf, label(env, inst->taken()));
 }
 
+void cgCheckMixedArrayKeys(IRLS& env, const IRInstruction* inst) {
+  auto const src = srcLoc(env, inst, 0).reg();
+  auto const mask = MixedArrayKeys::getMask(inst->typeParam());
+  always_assert_flog(mask, "Invalid MixedArray key check: {}",
+                     inst->typeParam().toString());
+
+  auto& v = vmain(env);
+  auto const sf = v.makeReg();
+  v << testbim{int8_t(*mask), src[MixedArray::kKeyTypesOffset], sf};
+  v << jcc{CC_NZ, sf, {label(env, inst->next()), label(env, inst->taken())}};
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Array.
 
 namespace {
 
 void implArraySet(IRLS& env, const IRInstruction* inst) {
-  auto const setRef = inst->op() == ArraySetRef;
-  BUILD_OPTAB2(setRef,
-               ARRAYSET_REF_HELPER_TABLE,
-               ARRAYSET_HELPER_TABLE,
-               getKeyType(inst->src(1)));
+  BUILD_OPTAB(ARRAYSET_HELPER_TABLE, getKeyType(inst->src(1)));
 
   auto args = argGroup(env, inst).ssa(0).ssa(1);
   args.typedValue(2);
-  if (setRef) args.ssa(3);
 
   auto& v = vmain(env);
   cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
@@ -618,6 +625,103 @@ void cgArrayGet(IRLS& env, const IRInstruction* inst) {
                SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
+void cgGetMixedPtrIter(IRLS& env, const IRInstruction* inst) {
+  auto const pos_tmp = inst->src(1);
+  auto const arr = srcLoc(env, inst, 0).reg();
+  auto const pos = srcLoc(env, inst, 1).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+
+  auto& v = vmain(env);
+  if (pos_tmp->hasConstVal(TInt)) {
+    auto const offset = MixedArray::elmOff(pos_tmp->intVal());
+    if (deltaFits(offset, sz::dword)) {
+      v << addqi{safe_cast<int32_t>(offset), arr, dst, v.makeReg()};
+      return;
+    }
+  }
+
+  auto const px3 = v.makeReg();
+  v << lea{pos[pos * 2], px3};
+  v << lea{arr[px3 * 8 + MixedArray::dataOff()], dst};
+}
+
+void cgGetPackedPtrIter(IRLS& env, const IRInstruction* inst) {
+  auto const pos_tmp = inst->src(1);
+  auto const arr = srcLoc(env, inst, 0).reg();
+  auto const pos = srcLoc(env, inst, 1).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+
+  auto& v = vmain(env);
+  if (pos_tmp->hasConstVal(TInt)) {
+    auto const n = pos_tmp->intVal();
+    auto const offset = PackedArray::entriesOffset() + n * sizeof(TypedValue);
+    if (deltaFits(offset, sz::dword)) {
+      v << addqi{safe_cast<int32_t>(offset), arr, dst, v.makeReg()};
+      return;
+    }
+  }
+
+  auto const px2 = v.makeReg();
+  v << shlqi{1, pos, px2, v.makeReg()};
+  v << lea{arr[px2 * 8 + PackedArray::entriesOffset()], dst};
+}
+
+void cgAdvanceMixedPtrIter(IRLS& env, const IRInstruction* inst) {
+  auto const src = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+
+  auto& v = vmain(env);
+  auto const extra = inst->extra<AdvanceMixedPtrIter>();
+  auto const delta = extra->offset * int32_t(sizeof(MixedArrayElm));
+  v << addqi{delta, src, dst, v.makeReg()};
+}
+
+void cgAdvancePackedPtrIter(IRLS& env, const IRInstruction* inst) {
+  auto const src = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+
+  auto& v = vmain(env);
+  auto const extra = inst->extra<AdvancePackedPtrIter>();
+  auto const delta = extra->offset * int32_t(sizeof(TypedValue));
+  v << addqi{delta, src, dst, v.makeReg()};
+}
+
+void cgLdPtrIterKey(IRLS& env, const IRInstruction* inst) {
+  static_assert(sizeof(MixedArrayElm::hash_t) == 4, "");
+  auto const elm = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0);
+
+  auto& v = vmain(env);
+  if (inst->dst(0)->type().needsReg()) {
+    assertx(dst.hasReg(1));
+    auto const sf = v.makeReg();
+    v << cmplim{0, elm[MixedArrayElm::hashOff()], sf};
+    v << cmovb{CC_L, sf, v.cns(KindOfString), v.cns(KindOfInt64), dst.reg(1)};
+  }
+  v << load{elm[MixedArrayElm::keyOff()], dst.reg(0)};
+}
+
+void cgLdPtrIterVal(IRLS& env, const IRInstruction* inst) {
+  static_assert(MixedArrayElm::dataOff() == 0, "");
+  auto const elm = srcLoc(env, inst, 0).reg();
+  loadTV(vmain(env), inst->dst(0), dstLoc(env, inst, 0), elm[0]);
+}
+
+void cgEqPtrIter(IRLS& env, const IRInstruction* inst) {
+  auto const s0 = srcLoc(env, inst, 0).reg();
+  auto const s1 = srcLoc(env, inst, 1).reg();
+  auto const d  = dstLoc(env, inst, 0).reg();
+
+  auto& v = vmain(env);
+  auto const sf = v.makeReg();
+  v << cmpq{s1, s0, sf};
+  v << setcc{CC_E, sf, d};
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 void cgMixedArrayGetK(IRLS& env, const IRInstruction* inst) {
   auto const arr = srcLoc(env, inst, 0).reg();
   auto const pos = inst->extra<MixedArrayGetK>()->index;
@@ -628,21 +732,20 @@ void cgMixedArrayGetK(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgArraySet(IRLS& env, const IRInstruction* i)    { implArraySet(env, i); }
-void cgArraySetRef(IRLS& env, const IRInstruction* i) { implArraySet(env, i); }
 
 IMPL_OPCODE_CALL(SetNewElemArray);
 
 IMPL_OPCODE_CALL(AddElemIntKey);
 IMPL_OPCODE_CALL(AddNewElem);
 
-static ArrayData* addNewElemKeysetImpl(ArrayData* keyset, Cell v) {
+static ArrayData* addNewElemKeysetImpl(ArrayData* keyset, TypedValue v) {
   assertx(keyset->isKeyset());
   auto out = SetArray::Append(keyset, v);
   if (keyset != out) decRefArr(keyset);
   return out;
 }
 
-static ArrayData* addNewElemVecImpl(ArrayData* vec, Cell v) {
+static ArrayData* addNewElemVecImpl(ArrayData* vec, TypedValue v) {
   assertx(vec->isVecArray());
   auto out = PackedArray::AppendVec(vec, v);
   if (vec != out) decRefArr(vec);
@@ -793,18 +896,12 @@ LvalPtrs implPackedLayoutElemAddr(IRLS& env, Vloc arrLoc,
 }
 
 void implVecSet(IRLS& env, const IRInstruction* inst) {
-  bool const setRef = inst->op() == VecSetRef;
-
-  BUILD_OPTAB2(setRef,
-               VECSET_REF_HELPER_TABLE,
-               VECSET_HELPER_TABLE,
-               RuntimeOption::EvalArrayProvenance);
+  BUILD_OPTAB(VECSET_HELPER_TABLE, RuntimeOption::EvalArrayProvenance);
 
   auto args = argGroup(env, inst).
     ssa(0).
     ssa(1).
     typedValue(2);
-  if (setRef) args.ssa(3);
 
   auto& v = vmain(env);
   cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
@@ -910,7 +1007,6 @@ void cgElemVecD(IRLS& env, const IRInstruction* inst) {
 IMPL_OPCODE_CALL(ElemVecU)
 
 void cgVecSet(IRLS& env, const IRInstruction* i)    { implVecSet(env, i); }
-void cgVecSetRef(IRLS& env, const IRInstruction* i) { implVecSet(env, i); }
 
 void cgSetNewElemVec(IRLS& env, const IRInstruction* inst) {
   auto const target = RuntimeOption::EvalArrayProvenance
@@ -979,18 +1075,14 @@ void implDictGet(IRLS& env, const IRInstruction* inst) {
 }
 
 void implDictSet(IRLS& env, const IRInstruction* inst) {
-  bool const setRef  = inst->op() == DictSetRef;
-  BUILD_OPTAB2(setRef,
-               DICTSET_REF_HELPER_TABLE,
-               DICTSET_HELPER_TABLE,
-               getKeyType(inst->src(1)),
-               RuntimeOption::EvalArrayProvenance);
+  BUILD_OPTAB(DICTSET_HELPER_TABLE,
+              getKeyType(inst->src(1)),
+              RuntimeOption::EvalArrayProvenance);
 
   auto args = argGroup(env, inst).
     ssa(0).
     ssa(1).
     typedValue(2);
-  if (setRef) args.ssa(3);
 
   auto& v = vmain(env);
   cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
@@ -1074,7 +1166,6 @@ void cgDictGetK(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgDictSet(IRLS& env, const IRInstruction* i)    { implDictSet(env, i); }
-void cgDictSetRef(IRLS& env, const IRInstruction* i) { implDictSet(env, i); }
 
 IMPL_OPCODE_CALL(DictAddElemIntKey);
 IMPL_OPCODE_CALL(DictAddElemStrKey);

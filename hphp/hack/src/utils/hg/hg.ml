@@ -17,27 +17,24 @@ module Hg_actual = struct
     | Hg_rev hash -> hash
     | Global_rev rev -> Printf.sprintf "r%d" rev
 
-  let exec_hg ?(plain = true) args =
+  let exec_hg args =
     let env =
-      match plain with
-      | true ->
-        (* Disable user aliases or configs. *)
-        Process_types.Augment ["HGPLAIN=1"]
-      | false -> Process_types.Default
+      (* Disable user aliases or configs. *)
+      Process_types.Augment ["HGPLAIN=1"]
     in
-    Process.exec "hg" ~env args
+    Process.exec Exec_command.Hg ~env args
 
   (** Given a list of files and their revisions, saves the files to the output
- * directory. For example,
- * get_old_version_of_files ~rev:"X" ~files:["file1.php"]
- * ~out:"/tmp/hh_server/%s" ~repo:"~/www"
- * runs the command
- *
- * hg cat -r X file1.php -o "/tmp/hh_server/%s" --cwd ~/www
- *
- * which saves the version of file1.php at revision X in directory
- * /tmp/hh_server/file1.php
- *)
+   * directory. For example,
+   * get_old_version_of_files ~rev:"X" ~files:["file1.php"]
+   * ~out:"/tmp/hh_server/%s" ~repo:"~/www"
+   * runs the command
+   *
+   * hg cat -r X file1.php -o "/tmp/hh_server/%s" --cwd ~/www
+   *
+   * which saves the version of file1.php at revision X in directory
+   * /tmp/hh_server/file1.php
+   *)
   let get_old_version_of_files ~rev ~files ~out ~repo =
     let process =
       exec_hg
@@ -46,9 +43,9 @@ module Hg_actual = struct
     Future.make process ignore
 
   (** Returns the closest global ancestor in master to the given rev.
- *
- * hg log -r 'ancestor(master,rev)' -T '{globalrev}\n'
- *)
+   *
+   * hg log -r 'ancestor(master,rev)' -T '{globalrev}\n'
+   *)
   let get_closest_global_ancestor rev repo =
     let global_rev_query rev =
       exec_hg ["log"; "-r"; rev; "-T"; "{globalrev}\n"; "--cwd"; repo]
@@ -75,14 +72,11 @@ module Hg_actual = struct
     Future.(merge q1 (merge q2 q3 take_first) take_first)
 
   let current_mergebase_hg_rev repo =
-    (* "bottom^" does not work in plain mode *)
     let process =
       exec_hg
-        ~plain:false
-        ["id"; "--debug"; "-i"; "--rev"; "bottom^"; "--cwd"; repo]
+        ["log"; "--rev"; "ancestor(master,.)"; "-T"; "{node}"; "--cwd"; repo]
     in
-    Future.make process
-    @@ fun result ->
+    Future.make process @@ fun result ->
     let result = String.trim result in
     if String.length result < 1 then
       raise Malformed_result
@@ -93,9 +87,8 @@ module Hg_actual = struct
    *
    * hg id -i --cwd <repo> *)
   let current_working_copy_hg_rev repo =
-    let process = exec_hg ["id"; "--debug"; "-i"; "--cwd"; repo] in
-    Future.make process
-    @@ fun result ->
+    let process = exec_hg ["id"; "-i"; "--cwd"; repo] in
+    Future.make process @@ fun result ->
     let result = String.trim result in
     if String.length result < 1 then
       raise Malformed_result
@@ -229,8 +222,7 @@ module Hg_mock = struct
 
     let files_changed_since_rev_to_rev = Hashtbl.create 10
 
-    let current_working_copy_hg_rev_returns v =
-      current_working_copy_hg_rev := v
+    let current_working_copy_hg_rev_returns v = current_working_copy_hg_rev := v
 
     let current_working_copy_base_rev_returns v =
       current_working_copy_base_rev := v

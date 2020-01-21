@@ -8,7 +8,10 @@ use crate::lexable_token::LexableToken;
 use crate::syntax_kind::SyntaxKind;
 use crate::token_kind::TokenKind;
 
+use std::fmt::Debug;
 use std::marker::Sized;
+
+use itertools::Either::{Left, Right};
 
 pub use crate::syntax_generated::*;
 pub use crate::syntax_type::*;
@@ -27,7 +30,10 @@ where
     fn text_range(&self) -> Option<(usize, usize)>; // corresponds to extract_text in OCaml impl.
 }
 
-pub trait SyntaxValueWithKind {
+pub trait SyntaxValueWithKind
+where
+    Self: Debug,
+{
     fn is_missing(&self) -> bool;
     fn token_kind(&self) -> Option<TokenKind>;
 }
@@ -66,9 +72,7 @@ where
     }
 
     fn make_token(_: &C, arg: T) -> Self {
-        let value = V::from_token(&arg);
-        let syntax = SyntaxVariant::Token(Box::new(arg));
-        Self::make(syntax, value)
+        Self::make_token(arg)
     }
 
     fn make_list(ctx: &C, arg: Vec<Self>, offset: usize) -> Self {
@@ -97,6 +101,12 @@ where
 {
     pub fn make(syntax: SyntaxVariant<T, V>, value: V) -> Self {
         Self { syntax, value }
+    }
+
+    pub fn make_token(arg: T) -> Self {
+        let value = V::from_token(&arg);
+        let syntax = SyntaxVariant::Token(Box::new(arg));
+        Self::make(syntax, value)
     }
 
     fn is_specific_token(&self, kind: TokenKind) -> bool {
@@ -138,8 +148,20 @@ where
         self.is_specific_token(TokenKind::Final)
     }
 
+    pub fn is_xhp(&self) -> bool {
+        self.is_specific_token(TokenKind::XHP)
+    }
+
     pub fn is_async(&self) -> bool {
         self.is_specific_token(TokenKind::Async)
+    }
+
+    pub fn is_coroutine(&self) -> bool {
+        self.is_specific_token(TokenKind::Coroutine)
+    }
+
+    pub fn is_yield(&self) -> bool {
+        self.is_specific_token(TokenKind::Yield)
     }
 
     pub fn is_construct(&self) -> bool {
@@ -162,6 +184,10 @@ where
         self.is_specific_token(TokenKind::Inout)
     }
 
+    pub fn is_this(&self) -> bool {
+        self.is_specific_token(TokenKind::This)
+    }
+
     pub fn is_name(&self) -> bool {
         self.is_specific_token(TokenKind::Name)
     }
@@ -172,6 +198,10 @@ where
 
     pub fn is_missing(&self) -> bool {
         self.kind() == SyntaxKind::Missing
+    }
+
+    pub fn is_external(&self) -> bool {
+        self.is_specific_token(TokenKind::Semicolon) || self.is_missing()
     }
 
     pub fn is_namespace_empty_body(&self) -> bool {
@@ -202,12 +232,49 @@ where
         self.kind() == SyntaxKind::SafeMemberSelectionExpression
     }
 
-    pub fn syntax_node_to_list<'a>(&'a self) -> Box<dyn DoubleEndedIterator<Item = &'a Self> + 'a> {
+    pub fn is_object_creation_expression(&self) -> bool {
+        self.kind() == SyntaxKind::ObjectCreationExpression
+    }
+
+    pub fn is_compound_statement(&self) -> bool {
+        self.kind() == SyntaxKind::CompoundStatement
+    }
+
+    pub fn is_methodish_declaration(&self) -> bool {
+        self.kind() == SyntaxKind::MethodishDeclaration
+    }
+
+    pub fn is_function_declaration(&self) -> bool {
+        self.kind() == SyntaxKind::FunctionDeclaration
+    }
+
+    pub fn is_xhp_open(&self) -> bool {
+        self.kind() == SyntaxKind::XHPOpen
+    }
+
+    pub fn is_braced_expression(&self) -> bool {
+        self.kind() == SyntaxKind::BracedExpression
+    }
+
+    pub fn is_syntax_list(&self) -> bool {
+        self.kind() == SyntaxKind::SyntaxList
+    }
+
+    pub fn syntax_node_to_list<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a Self> {
         use std::iter::{empty, once};
         match &self.syntax {
-            SyntaxVariant::SyntaxList(x) => Box::new(x.iter()),
-            SyntaxVariant::Missing => Box::new(empty()),
-            _ => Box::new(once(self)),
+            SyntaxVariant::SyntaxList(x) => Left(x.iter()),
+            SyntaxVariant::Missing => Right(Left(empty())),
+            _ => Right(Right(once(self))),
+        }
+    }
+
+    pub fn syntax_node_into_list(self) -> impl DoubleEndedIterator<Item = Self> {
+        use std::iter::{empty, once};
+        match self.syntax {
+            SyntaxVariant::SyntaxList(x) => Left(x.into_iter()),
+            SyntaxVariant::Missing => Right(Left(empty())),
+            _ => Right(Right(once(self))),
         }
     }
 
@@ -234,11 +301,23 @@ where
         Self::fold_over_children_owned(&f, vec![], syntax)
     }
 
-    pub fn replace_children(&mut self, kind: SyntaxKind, children: Vec<Self>) {
-        std::mem::replace(&mut self.syntax, Syntax::from_children(kind, children));
+    pub fn replace_children(
+        &mut self,
+        kind: SyntaxKind,
+        children: Vec<Self>,
+        children_changed: bool,
+    ) {
+        if !children_changed {
+            std::mem::replace(&mut self.syntax, Syntax::from_children(kind, children));
+        } else {
+            let children_values = &children.iter().map(|x| &x.value).collect::<Vec<_>>();
+            let value = V::from_children(kind, 0, children_values);
+            let syntax = Syntax::from_children(kind, children);
+            std::mem::replace(self, Self::make(syntax, value));
+        }
     }
 
-    fn get_token(&self) -> Option<&T> {
+    pub fn get_token(&self) -> Option<&T> {
         match &self.syntax {
             SyntaxVariant::Token(t) => Some(&t),
             _ => None,
@@ -275,6 +354,22 @@ where
 
     pub fn iter_children<'a>(&'a self) -> SyntaxChildrenIterator<'a, T, V> {
         self.syntax.iter_children()
+    }
+
+    pub fn all_tokens<'a>(node: &'a Self) -> Vec<&'a T> {
+        Self::all_tokens_with_acc(node, vec![])
+    }
+
+    fn all_tokens_with_acc<'a>(node: &'a Self, mut acc: Vec<&'a T>) -> Vec<&'a T> {
+        match &node.syntax {
+            SyntaxVariant::Token(t) => acc.push(t),
+            _ => {
+                for child in node.iter_children() {
+                    acc = Self::all_tokens_with_acc(child, acc)
+                }
+            }
+        };
+        acc
     }
 }
 

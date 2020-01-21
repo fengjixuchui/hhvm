@@ -20,13 +20,9 @@ IR function inliner
 Inlining functions at the IR level can be complex, particularly when dealing
 with async callees. All inlined regions are setup the same way, though later
 optimization passes may attempt to elide elements of this inititalization,
-particularly the SpillFrame and DefinlineFP. Below is an annotated version of
-this setup.
+particularly the DefinlineFP. Below is an annotated version of this setup.
 
   StStk ...  # Stores initiated for parameters as if this was an ordinary call.
-
-  SpillFrame # Standard spill of an ActRec prior to making a call. The StoreElim
-             # pass will attempt to elide these spills.
 
   #
   # This is where this module starts to emit instructions, the stores and spills
@@ -42,9 +38,10 @@ this setup.
                 # frame. Most importantly it marks any values on the callee
                 # stack from before the call as dead.
 
-  DefInlineFP   # This instruction sets up the inlined frame, redefining the
-                # fp SSATmp to refer to the callee frame. In most cases the DCE
-                # or partial-DCE passes are able to elide this instruction.
+  DefInlineFP   # This instruction spills ActRec and sets up the inlined frame,
+                # redefining the fp SSATmp to refer to the callee frame. In most
+                # cases the DCE or partial-DCE passes are able to elide this
+                # instruction.
 
   StLoc ...     # At this point the arguments are stored back to the frame
                 # locations for their corresponding locals in the callee. N.B.
@@ -62,7 +59,7 @@ value moved into the caller. The sequence for this is annotated below.
   DecRef tx       # emitted for inlined regions, in the hopes that IncRefs from
   ...             # pushing arguments will cancel DecRefs from the return.
 
-  ty := LdCtx     # The context is DecRef'ed
+  ty := LdFrameThis     # The context is DecRef'ed
   DecRef ty
 
   tz := LdStk     # The InlineReturn instruction will kill the callee frame
@@ -148,7 +145,6 @@ Outer:                                 | Inner:
            |
            v
 +-------------------+
-| SpillFrame        |
 | ...               |
 | BeginInlining     |
 | DefInlineFP       |
@@ -193,6 +189,7 @@ Outer:                                 | Inner:
 
 #include "hphp/runtime/vm/jit/irgen-call.h"
 #include "hphp/runtime/vm/jit/irgen-control.h"
+#include "hphp/runtime/vm/jit/irgen-create.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-func-prologue.h"
 #include "hphp/runtime/vm/jit/irgen-sprop-global.h"
@@ -214,7 +211,6 @@ void beginInlining(IRGS& env,
                    const Func* target,
                    const FCallArgs& fca,
                    SSATmp* ctx,
-                   Type ctxType,
                    bool dynamicCall,
                    Op writeArOpc,
                    SrcKey startSk,
@@ -226,72 +222,65 @@ void beginInlining(IRGS& env,
   assertx((!curFunc(env) ||
           curFunc(env)->base() + callBcOffset < curFunc(env)->past()) &&
          "callBcOffset past end of caller");
+  assertx(fca.numArgs <= target->numNonVariadicParams());
+  assertx(!fca.hasUnpack() || fca.numArgs == target->numNonVariadicParams());
+  assertx(!fca.hasUnpack() || target->hasVariadicCaptureParam());
 
   FTRACE(1, "[[[ begin inlining: {}\n", target->fullName()->data());
 
-  auto const generics = fca.hasGenerics() ? popC(env) : cns(env, TNullptr);
-
-  // The VM stack-pointer is conceptually pointing to the last
-  // parameter, so we need to add numArgs to get to the ActRec
-  assertx(!fca.hasUnpack());
-  IRSPRelOffset calleeAROff = spOffBCFromIRSP(env) + fca.numArgs;
-
-  auto const arInfo = ActRecInfo { calleeAROff, fca.numArgs, dynamicCall };
-  gen(env, SpillFrame, arInfo, sp(env), cns(env, target), ctx, generics);
+  auto const closure = target->isClosureBody()
+    ? gen(env, AssertType, Type::ExactObj(target->implCls()), ctx)
+    : nullptr;
 
   ctx = [&] () -> SSATmp* {
-    if (!target->implCls()) {
-      return nullptr;
-    }
-    auto ty = ctxType;
-    if (!target->isClosureBody()) {
-      if (target->isStaticInPrologue() ||
-          (!hasThis(env) &&
-           isFCallClsMethod(writeArOpc))) {
-        assertx(!ty.maybe(TObj));
-        if (ty.hasConstVal(TCctx)) {
-          ty = Type::ExactCls(ty.cctxVal().cls());
-        } else if (!ty.hasConstVal(TCls)) {
-          if (!ty.maybe(TCls)) ty = TCls;
-          ty &= Type::SubCls(target->cls());
-        }
-      } else {
-        if (target->attrs() & AttrRequiresThis ||
-            isFCallObjMethod(writeArOpc) ||
-            ty <= TObj) {
-          ty &= thisTypeFromFunc(target);
-        }
+    if (target->isClosureBody()) {
+      if (!target->cls()) return cns(env, nullptr);
+      if (target->isStatic()) {
+        return gen(env, LdClosureCls, Type::SubCls(target->cls()), closure);
       }
+      auto const closureCtx =
+        gen(env, LdClosureThis, Type::SubObj(target->cls()), closure);
+      gen(env, IncRef, closureCtx);
+      return closureCtx;
     }
-    if (ctx && !ctx->isA(TNullptr)) {
-      if (ctx->type() <= ty) {
+
+    if (!target->cls()) {
+      assertx(ctx->isA(TNullptr));
+      return ctx;
+    }
+    assertx(!ctx->type().maybe(TNullptr));
+
+    if (ctx->isA(TBottom)) return ctx;
+
+    if (target->isStatic()) {
+      assertx(ctx->isA(TCls));
+      if (ctx->hasConstVal(TCls)) {
         return ctx;
       }
-      if (ctx->type().maybe(ty)) {
-        return gen(env, AssertType, ty, ctx);
-      }
-      if (ctx->type() <= TCctx && ty <= TCls) {
-        return gen(env, AssertType, ty, gen(env, LdClsCctx, ctx));
-      }
+
+      auto const ty = ctx->type() & Type::SubCls(target->cls());
+      if (ctx->type() <= ty) return ctx;
+      return gen(env, AssertType, ty, ctx);
     }
-    if (ty <= TObj) {
-      return gen(env, LdARCtx, ty, IRSPRelOffsetData{calleeAROff}, sp(env));
-    }
-    if (ty <= TCls) {
-      auto const cctx =
-        gen(env, LdARCtx, TCctx, IRSPRelOffsetData{calleeAROff}, sp(env));
-      return gen(env, AssertType, ty, gen(env, LdClsCctx, cctx));
-    }
+
+    assertx(ctx->type().maybe(TObj));
+    auto const ty = ctx->type() & thisTypeFromFunc(target);
+    if (ctx->type() <= ty) return ctx;
+    return gen(env, AssertType, ty, ctx);
+  }();
+
+  auto const generics = [&]() -> SSATmp* {
+    if (!fca.hasGenerics()) return nullptr;
+    if (target->hasReifiedGenerics()) return popC(env);
+    popDecRef(env, DataTypeGeneric);
     return nullptr;
   }();
 
-  // If the ctx was extracted from SpillFrame it may be a TCls, otherwise it
-  // will be a TCtx (= TObj | TCctx) read from the stack
-  assertx(!ctx || (ctx->type() <= (TCtx | TCls) && target->implCls()));
+  auto const numArgs = fca.numArgs + (fca.hasUnpack() ? 1 : 0);
+  jit::vector<SSATmp*> params{numArgs + 1};
 
-  jit::vector<SSATmp*> params{fca.numArgs};
-  for (unsigned i = 0; i < fca.numArgs; ++i) {
-    params[fca.numArgs - i - 1] = popF(env);
+  for (unsigned i = 0; i < numArgs; ++i) {
+    params[numArgs - i - 1] = popC(env);
   }
 
   // NB: Now that we've popped the callee's arguments off the stack
@@ -300,10 +289,8 @@ void beginInlining(IRGS& env,
   // will be as if the arguments don't exist on the stack (even though
   // they do).
 
-  if (RuntimeOption::EvalHHIRGenerateAsserts) {
-    gen(env, DbgAssertARFunc, IRSPRelOffsetData{calleeAROff},
-        sp(env), cns(env, target));
-  }
+  // The top of the stack now points to the space for ActRec.
+  IRSPRelOffset calleeAROff = spOffBCFromIRSP(env);
 
   gen(
     env,
@@ -315,14 +302,14 @@ void beginInlining(IRGS& env,
   DefInlineFPData data;
   data.target        = target;
   data.callBCOff     = callBcOffset;
-  data.ctx           = target->isClosureBody() ? nullptr : ctx;
   data.retSPOff      = offsetFromFP(env, calleeAROff) - kNumActRecCells;
   data.spOffset      = calleeAROff;
-  data.numNonDefault = fca.numArgs;
+  data.numArgs       = numArgs;
   data.asyncEagerReturn = returnTarget.asyncEagerOffset != kInvalidOffset;
+  data.syncVmfp = false;
 
   assertx(startSk.func() == target &&
-          startSk.offset() == target->getEntryForNumArgs(fca.numArgs) &&
+          startSk.offset() == target->getEntryForNumArgs(numArgs) &&
           startSk.resumeMode() == ResumeMode::None);
 
   env.inlineState.depth++;
@@ -334,65 +321,38 @@ void beginInlining(IRGS& env,
   env.bcState = startSk;
   updateMarker(env);
 
-  auto const calleeFP = gen(env, DefInlineFP, data, sp(env), fp(env));
+  auto const calleeFP = gen(env, DefInlineFP, data, sp(env), fp(env), ctx);
 
-  for (unsigned i = 0; i < fca.numArgs; ++i) {
+  for (unsigned i = 0; i < numArgs; ++i) {
     stLocRaw(env, i, calleeFP, params[i]);
   }
-  emitPrologueLocals(env, fca.numArgs, target, ctx);
+  if (generics != nullptr) stLocRaw(env, numArgs, calleeFP, generics);
 
+  // All the code below may reenter, so update the marker so we don't
+  // accidentally overwrite the locals.
   updateMarker(env);
   env.irb->exceptionStackBoundary();
-  emitCalleeDynamicCallCheck(env);
 
-  if (data.ctx && data.ctx->isA(TObj)) {
-    assertx(startSk.hasThis());
-  } else if (data.ctx && !data.ctx->type().maybe(TObj)) {
-    assertx(!startSk.hasThis());
-  } else if (target->cls()) {
-    env.bcState =
-      SrcKey{startSk.func(), startSk.offset(), SrcKey::PrologueTag{}};
-    updateMarker(env);
+  auto const callFlags = cns(env, CallFlags(
+    generics != nullptr,
+    dynamicCall,
+    returnTarget.asyncEagerOffset != kInvalidOffset,
+    0, // call offset unused by the logic below
+    0
+  ).value());
 
-    auto sideExit = [&] (bool hasThis) {
-      hint(env, Block::Hint::Unlikely);
-      auto const sk =
-        SrcKey { startSk.func(), startSk.offset(), ResumeMode::None, hasThis };
-      gen(
-        env,
-        ReqBindJmp,
-        ReqBindJmpData {
-          sk,
-          FPInvOffset { startSk.func()->numSlotsInFrame() },
-          spOffBCFromIRSP(env),
-          TransFlags{}
-        },
-        sp(env),
-        fp(env)
-      );
-    };
+  emitPrologueLocals(env, numArgs, callFlags, closure);
 
-    ifThenElse(
-      env,
-      [&] (Block* taken) {
-        auto const maybeThis = gen(env, LdCtx, fp(env));
-        gen(env, CheckCtxThis, taken, maybeThis);
-      },
-      [&] {
-        if (!startSk.hasThis()) {
-          sideExit(true);
-        }
-      },
-      [&] {
-        if (startSk.hasThis()) {
-          sideExit(false);
-        }
-      }
-    );
+  emitGenericsMismatchCheck(env, callFlags);
+  emitCalleeDynamicCallCheck(env, callFlags);
 
-    env.bcState = startSk;
-    updateMarker(env);
-  }
+  assertx(startSk.hasThis() == startSk.func()->hasThisInBody());
+  assertx(
+    ctx->isA(TBottom) ||
+    (ctx->isA(TNullptr) && !target->cls()) ||
+    (ctx->isA(TCls) && target->cls() && target->isStatic()) ||
+    (ctx->isA(TObj) && target->cls() && !target->isStatic())
+  );
 }
 
 void conjureBeginInlining(IRGS& env,
@@ -407,7 +367,8 @@ void conjureBeginInlining(IRGS& env,
 
   always_assert(isFCall(env.context.initSrcKey.op()));
   always_assert(thisType != TBottom);
-  auto const numParams = static_cast<uint32_t>(args.size());
+  auto const hasUnpack = args.size() > func->numNonVariadicParams();
+  auto const numParams = safe_cast<uint32_t>(args.size()) - (hasUnpack ? 1 : 0);
 
   // Push space for out parameters
   for (auto i = 0; i < func->numInOutParams(); i++) {
@@ -418,7 +379,15 @@ void conjureBeginInlining(IRGS& env,
   for (auto const argType : args) {
     push(env, conjure(argType));
   }
-  auto const ctx = conjure(thisType);
+
+  auto const flags = hasUnpack
+    ? FCallArgs::Flags::HasUnpack : FCallArgs::Flags::None;
+
+  // thisType is the context type inside the closure, but beginInlining()'s ctx
+  // is a context given to the prologue.
+  auto const ctx = func->isClosureBody()
+    ? conjure(Type::ExactObj(func->implCls()))
+    : conjure(thisType);
 
   // FIXME: conjure generics; otherwise this translation will have tiny cost
   // as it will fail early due to generics mismatch, causing us to inline
@@ -426,10 +395,8 @@ void conjureBeginInlining(IRGS& env,
   beginInlining(
     env,
     func,
-    FCallArgs(FCallArgs::Flags::None, numParams, 1, nullptr, kInvalidOffset,
-              false),
+    FCallArgs(flags, numParams, 1, nullptr, kInvalidOffset, false, false),
     ctx,
-    ctx->type(),
     false,
     env.context.initSrcKey.op(),
     startSk,
@@ -507,12 +474,20 @@ InlineFrame implInlineReturn(IRGS& env, bool suspend) {
 void implReturnBlock(IRGS& env, const RegionDesc& calleeRegion) {
   auto const rt = env.inlineState.returnTarget.back();
 
-  // The IR instructions should be associated with one of the return bytecodes,
-  // which should be one of the predecessors of this block.
+  // The IR instructions should be associated with one of the return bytecodes;
+  // all predecessors of this block should be valid options. Choose the hottest
+  // predecessor in order to get the most-likely DecRefProfiles.
   auto const curBlock = env.irb->curBlock();
   always_assert(curBlock && !curBlock->preds().empty());
-  auto const bcContext = curBlock->preds().front().inst()->bcctx();
+  auto best = curBlock->preds().front().inst();
+  for (auto const& pred : curBlock->preds()) {
+    if (pred.inst()->block()->profCount() > best->block()->profCount()) {
+      best = pred.inst();
+    }
+  }
+  auto const bcContext = best->bcctx();
   env.bcState.setOffset(bcContext.marker.sk().offset());
+  env.irb->setCurMarker(bcContext.marker);
 
   // At this point, env.profTransID and env.region are already set with the
   // caller's information.  We temporarily reset both of these with the callee's
@@ -566,7 +541,7 @@ void implReturnBlock(IRGS& env, const RegionDesc& calleeRegion) {
     push(env, gen(env, CreateSSWH, retVal));
   } else {
     // Async eager return was requested. Continue execution at the async eager
-    // offset with the unboxed value.
+    // offset with the returned value.
     push(env, retVal);
     jmpImpl(env, bcOff(env) + rt.asyncEagerOffset);
   }

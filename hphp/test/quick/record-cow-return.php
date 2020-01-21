@@ -1,7 +1,7 @@
 <?hh
 
-final record Foo {
-  x: vec,
+record Foo {
+  vec x;
 }
 
 function foo(Foo $aa) : Foo {

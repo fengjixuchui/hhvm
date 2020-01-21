@@ -49,19 +49,19 @@ let parse_status raw_status_contents =
   in
   {
     rss_anon =
-      SMap.get "RssAnon" stats
+      SMap.find_opt "RssAnon" stats
       |> Option.value_map ~default:0 ~f:humanReadableToBytes;
     rss_file =
-      SMap.get "RssFile" stats
+      SMap.find_opt "RssFile" stats
       |> Option.value_map ~default:0 ~f:humanReadableToBytes;
     rss_shmem =
-      SMap.get "RssShmem" stats
+      SMap.find_opt "RssShmem" stats
       |> Option.value_map ~default:0 ~f:humanReadableToBytes;
     rss_total =
-      SMap.get "VmRSS" stats
+      SMap.find_opt "VmRSS" stats
       |> Option.value_map ~default:0 ~f:humanReadableToBytes;
     rss_hwm =
-      SMap.get "VmHWM" stats
+      SMap.find_opt "VmHWM" stats
       |> Option.value_map ~default:0 ~f:humanReadableToBytes;
   }
 
@@ -93,11 +93,11 @@ let asset_procfs_supported =
       supported
 
 let status_for_pid pid =
-  asset_procfs_supported ()
-  >>= (fun () -> read_proc_file "status" pid >>| parse_status)
+  asset_procfs_supported () >>= fun () ->
+  read_proc_file "status" pid >>| parse_status
 
 (* In cgroup v1 a pid can be in multiple cgroups. In cgroup v2 it will only be in a single cgroup.
  *)
 let first_cgroup_for_pid pid =
-  asset_procfs_supported ()
-  >>= (fun () -> read_proc_file "cgroup" pid >>= parse_cgroup)
+  asset_procfs_supported () >>= fun () ->
+  read_proc_file "cgroup" pid >>= parse_cgroup

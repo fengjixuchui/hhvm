@@ -1,6 +1,5 @@
 <?hh
-final record A {
-  x: noreturn,
+record A {
+  noreturn x;
 }
 
-<<__EntryPoint>> function main(): void {}

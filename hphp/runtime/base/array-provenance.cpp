@@ -47,6 +47,8 @@ std::string Tag::toString() const {
 
 namespace {
 
+RDS_LOCAL(c_WaitableWaitHandle*, rl_wh_override);
+
 RDS_LOCAL(ArrayProvenanceTable, rl_array_provenance);
 folly::F14FastMap<const void*, Tag> s_static_array_provenance;
 std::mutex s_static_provenance_lock;
@@ -56,7 +58,7 @@ std::mutex s_static_provenance_lock;
  * valid anymore
  */
 InitFiniNode flushTable([]{
-  if (!RuntimeOption::EvalArrayProvenance) return;
+  if (!RO::EvalArrayProvenance) return;
   rl_array_provenance->tags.clear();
 }, InitFiniNode::When::RequestFini);
 
@@ -77,16 +79,45 @@ constexpr bool wants_local_prov(const APCArray* a) { return false; }
 }
 
 bool arrayWantsTag(const ArrayData* ad) {
-  auto const kind = ad->kind();
-  return kind == ArrayData::ArrayKind::kVecKind ||
-         kind == ArrayData::ArrayKind::kDictKind;
+  return !ad->isLegacyArray() && (
+    (RO::EvalArrProvHackArrays && (ad->isVecArray() || ad->isDict())) ||
+    (RO::EvalArrProvDVArrays && (ad->isVArray() || ad->isDArray()))
+  );
 }
 
 bool arrayWantsTag(const APCArray* a) {
-  return a->isVec() || a->isDict();
+  return (
+    (RO::EvalArrProvHackArrays && (a->isVec() || a->isDict())) ||
+    (RO::EvalArrProvDVArrays && (a->isVArray() || a->isDArray()))
+  );
 }
 
 namespace {
+
+/*
+ * Used to override the provenance tag reported for ArrayData*'s in a given
+ * thread.
+ *
+ * This is pretty hacky, but it's only used for one specific purpose: for
+ * obtaining a copy of a static array which has specific provenance.
+ *
+ * The static array cache is set up to distinguish arrays by provenance tag.
+ * However, it's a tbb::concurrent_hash_set, which we can't jam a tag into.
+ * Instead, its hash and equal functions look up the provenance tag of an array
+ * in order to allow for multiple identical static arrays with different source
+ * tags.
+ *
+ * As a result, there's no real way to thread a tag into the lookups and
+ * inserts of the hash set.  We could pass in tagged temporary empty arrays,
+ * but we don't want to keep allocating those.  We could keep one around for
+ * each thread... but that's pretty much the moral equivalent of doing things
+ * this way:
+ *
+ * So instead, we have a thread-local tag that is only "active" when we're
+ * trying to retrieve or create a specifically tagged copy of a static array,
+ * which facilitates the desired behavior in the static array cache.
+ */
+thread_local folly::Optional<Tag> tl_tag_override = folly::none;
 
 template<typename A>
 folly::Optional<Tag> getTagImpl(const A* a) {
@@ -118,7 +149,7 @@ folly::Optional<Tag> getTagImpl(const A* a) {
 template<Mode mode, typename A>
 bool setTagImpl(A* a, Tag tag) {
   if (!arrayWantsTag(a)) return false;
-  assertx(mode == Mode::Emplace || !getTag(a));
+  assertx(mode == Mode::Emplace || !getTag(a) || tl_tag_override);
 
   if (wants_local_prov(a)) {
     rl_array_provenance->tags[a] = tag;
@@ -145,6 +176,7 @@ void clearTagImpl(const A* a) {
 } // namespace
 
 folly::Optional<Tag> getTag(const ArrayData* ad) {
+  if (tl_tag_override) return tl_tag_override;
   if (!ad->hasProvenanceData()) return folly::none;
   auto const tag = getTagImpl(ad);
   assertx(tag);
@@ -181,12 +213,12 @@ void clearTag(const APCArray* a) {
 namespace {
 
 void tagTVImpl(TypedValue& tv, folly::Optional<Tag> tag) {
-  assertx(RuntimeOption::EvalArrayProvenance);
+  assertx(RO::EvalArrayProvenance);
 
-  if (!tvWantsTag(tv)) return;
+  if (!isArrayType(type(tv))) return;
 
   auto ad = val(tv).parr;
-  if (ad->hasProvenanceData()) return;
+  if (!arrayWantsTag(ad) || ad->hasProvenanceData()) return;
 
   if (!tag) tag = tagFromPC();
   if (!tag) return;
@@ -218,73 +250,65 @@ TypedValue tagTVKnown(TypedValue tv, Tag tag) {
   return tv;
 }
 
-namespace {
-
-template<typename AD, typename Copy>
-typename maybe_const<AD, ArrayData, AD*>::type
-makeEmptyImpl(AD* base, folly::Optional<Tag> tag, Copy&& copy) {
-  assertx(RuntimeOption::EvalArrayProvenance);
-  assertx(base->empty());
-  assertx(base->isStatic());
-  assertx(arrayWantsTag(base));
+ArrayData* tagStaticArr(ArrayData* ad, folly::Optional<Tag> tag) {
+  assertx(RO::EvalArrayProvenance);
+  assertx(ad->isStatic());
+  assertx(arrayWantsTag(ad));
 
   if (!tag) tag = tagFromPC();
-  if (!tag) return base;
+  if (!tag) return ad;
 
-  auto ad = copy(base);
-  assertx(ad);
-  assertx(ad->hasExactlyOneRef());
+  tl_tag_override = tag;
+  SCOPE_EXIT { tl_tag_override = folly::none; };
 
-  arrprov::setTag<Mode::Emplace>(ad, *tag);
-  ArrayData::GetScalarArray(&ad);
-
+  ArrayData::GetScalarArray(&ad, tag);
   return ad;
 }
 
+///////////////////////////////////////////////////////////////////////////////
+
+TagOverride::TagOverride(c_WaitableWaitHandle* wh)
+  : m_saved_wh{*rl_wh_override}
+{
+  assertx(rl_wh_override);
+  assertx(wh != nullptr);
+
+  *rl_wh_override = wh;
 }
 
-const ArrayData* makeEmptyArray(const ArrayData* base,
-                                folly::Optional<Tag> tag) {
-  return makeEmptyImpl(base, tag, [] (const ArrayData* ad) {
-    return ad->copy();
-  });
-}
-
-ArrayData* makeEmptyVec(folly::Optional<Tag> tag /* = folly::none */) {
-  return makeEmptyImpl(
-    staticEmptyVecArray(), tag,
-    [] (const ArrayData* ad) { return PackedArray::CopyVec(ad); }
-  );
-}
-
-ArrayData* makeEmptyDict(folly::Optional<Tag> tag /* = folly::none */) {
-  return makeEmptyImpl(
-    staticEmptyDictArray(), tag,
-    [] (const ArrayData* ad) { return MixedArray::CopyDict(ad); }
-  );
+TagOverride::~TagOverride() {
+  *rl_wh_override = m_saved_wh;
 }
 
 folly::Optional<Tag> tagFromPC() {
   VMRegAnchor _(VMRegAnchor::Soft);
-  if (tl_regState != VMRegState::CLEAN || vmfp() == nullptr) {
+  if (tl_regState != VMRegState::CLEAN ||
+      rds::header() == nullptr ||
+      vmfp() == nullptr) {
     return folly::none;
   }
 
-  auto const tag = fromLeaf(
-    [&] (const ActRec* fp, Offset offset) -> folly::Optional<Tag> {
-      auto const func = fp->func();
-      auto const unit = fp->unit();
-      // grab the filename off the Func* since it might be different
-      // from the unit's for flattened trait methods
-      auto const filename = func->filename();
-      auto const line = unit->getLineNumber(offset);
-      return Tag { filename, line };
-    },
-    [] (const ActRec* fp) {
-      return !fp->func()->isProvenanceSkipFrame() &&
-             !fp->func()->isCPPBuiltin();
-    }
-  );
+  auto const make_tag = [&] (
+    const ActRec* fp,
+    Offset offset
+  ) -> folly::Optional<Tag> {
+    auto const func = fp->func();
+    auto const unit = fp->unit();
+    // grab the filename off the Func* since it might be different
+    // from the unit's for flattened trait methods
+    auto const filename = func->filename();
+    auto const line = unit->getLineNumber(offset);
+    return Tag { filename, line };
+  };
+
+  auto const skip_frame = [] (const ActRec* fp) {
+    return !fp->func()->isProvenanceSkipFrame() &&
+           !fp->func()->isCPPBuiltin();
+  };
+
+  auto const tag = rl_wh_override && *rl_wh_override
+    ? fromLeafWH(*rl_wh_override, make_tag, skip_frame)
+    : fromLeaf(make_tag, skip_frame);
   assertx(!tag || tag->filename() != nullptr);
   return tag;
 }

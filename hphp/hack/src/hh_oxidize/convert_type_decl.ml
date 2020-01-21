@@ -22,36 +22,33 @@ let derived_traits =
     (None, "Clone");
     (None, "Debug");
     (Some "ocamlrep_derive", "OcamlRep");
-    (Some "ocamlvalue_macro", "Ocamlvalue");
+    (Some "serde", "Serialize");
+    (Some "serde", "Deserialize");
   ]
+
+let additional_derived_traits ty =
+  match (State.curr_module_name (), ty) with
+  | ("errors", "Phase") -> [(None, "PartialOrd"); (None, "Ord")]
+  | _ -> []
 
 (* HACK: ignore phases since we are only considering decl tys *)
 let blacklisted_types =
   [
-    ("typing_defs", "Decl");
-    ("typing_defs", "Locl");
+    ("typing_defs", "AbstractKind");
+    ("typing_defs", "ArrayKind");
+    ("typing_defs", "DeclPhase");
+    ("typing_defs", "ExpandEnv");
+    ("typing_defs", "LoclPhase");
     ("typing_defs", "PhaseTy");
+    ("typing_defs", "ConstraintType_");
+    ("typing_defs", "HasMember");
+    ("typing_defs", "ConstraintType");
+    ("typing_defs", "InternalType");
   ]
 
-let ocamlvalue_derive_whitelist =
-  [
-    "aast_defs";
-    "aast";
-    "ast_defs";
-    "namespace_env";
-    "file_info";
-    "global_options";
-    "prim_defs";
-  ]
-
-let ocamlvalue_derive_filter (derive : string option * string) : bool =
-  snd derive <> "Ocamlvalue"
-  || List.mem
-       ocamlvalue_derive_whitelist
-       ~equal:( = )
-       (State.curr_module_name ())
-
-let derives_filters = [ocamlvalue_derive_filter]
+(* HACK: ignore anything beginning with the "locl" prefix, since we are only
+   considering decl tys *)
+let blacklisted_type_prefixes = [("typing_defs", "Locl")]
 
 (* HACK: Typing_reason is usually aliased to Reason, so we have lots of
    instances of Reason.t. Since we usually convert an identifier like Reason.t
@@ -63,10 +60,44 @@ let renamed_types = [(("typing_reason", "TypingReason"), "Reason")]
    adds some meaning, and generate a new tuple struct type named after the
    alias. In some cases, the alias adds no meaning and we should also use an
    alias in Rust. *)
-let tuple_aliases = [("ast_defs", "Pstring")]
+let tuple_aliases = [("ast_defs", "Pstring"); ("errors", "Message")]
+
+(*
+A list of (<module>, <ty1>) where ty1 is enum and all non-empty variant fields should
+be wrapped by Box to keep ty1 size down.
+*)
+let box_variant = [("aast", "Expr_"); ("aast", "Stmt_"); ("aast", "Def")]
+
+let should_box_variant ty =
+  List.mem box_variant (curr_module_name (), ty) ~equal:( = )
+
+let add_rcoc = [("aast", "Nsenv")]
+
+let should_add_rcoc ty =
+  List.mem add_rcoc (curr_module_name (), ty) ~equal:( = )
+
+let override_field_type =
+  SMap.of_list
+    [
+      ("Fun_", SMap.of_list [("doc_comment", "Option<DocComment>")]);
+      ("Method_", SMap.of_list [("doc_comment", "Option<DocComment>")]);
+      ("Class_", SMap.of_list [("doc_comment", "Option<DocComment>")]);
+      ("ClassConst", SMap.of_list [("doc_comment", "Option<DocComment>")]);
+      ("ClassTypeconst", SMap.of_list [("doc_comment", "Option<DocComment>")]);
+      ("ClassVar", SMap.of_list [("doc_comment", "Option<DocComment>")]);
+      ("RecordDef", SMap.of_list [("doc_comment", "Option<DocComment>")]);
+    ]
+
+let get_overrides name =
+  match SMap.find_opt name override_field_type with
+  | None -> SMap.empty
+  | Some x -> x
 
 let blacklisted ty_name =
-  List.mem blacklisted_types (curr_module_name (), ty_name) ~equal:( = )
+  let ty = (curr_module_name (), ty_name) in
+  List.mem blacklisted_types ty ~equal:( = )
+  || List.exists blacklisted_type_prefixes ~f:(fun (mod_name, prefix) ->
+         mod_name = curr_module_name () && String.is_prefix ty_name ~prefix)
 
 let rename ty_name =
   List.find renamed_types ~f:(fun (x, _) -> x = (curr_module_name (), ty_name))
@@ -83,7 +114,7 @@ let type_params params =
   else
     params |> map_and_concat ~f:type_param ~sep:", " |> sprintf "<%s>"
 
-let record_label_declaration ?(pub = false) ?(prefix = "") ld =
+let record_label_declaration ?(pub = false) ?(prefix = "") overrides ld =
   let pub =
     if pub then
       "pub "
@@ -93,10 +124,14 @@ let record_label_declaration ?(pub = false) ?(prefix = "") ld =
   let name =
     ld.pld_name.txt |> String.chop_prefix_exn ~prefix |> convert_field_name
   in
-  let ty = core_type ld.pld_type in
+  let ty =
+    match SMap.find_opt name overrides with
+    | None -> core_type ld.pld_type
+    | Some x -> x
+  in
   sprintf "%s%s: %s,\n" pub name ty
 
-let record_declaration ?(pub = false) labels =
+let record_declaration ?(pub = false) overrides labels =
   let prefix =
     labels |> List.map ~f:(fun ld -> ld.pld_name.txt) |> common_prefix_of_list
   in
@@ -110,17 +145,59 @@ let record_declaration ?(pub = false) labels =
     String.sub prefix 0 !idx
   in
   labels
-  |> map_and_concat ~f:(record_label_declaration ~pub ~prefix)
+  |> map_and_concat ~f:(record_label_declaration ~pub ~prefix overrides)
   |> sprintf "{\n%s}"
 
-let constructor_arguments = function
-  | Pcstr_tuple types -> tuple types
-  | Pcstr_record labels -> record_declaration labels
+let constructor_arguments ?(box_fields = false) = function
+  | Pcstr_tuple types ->
+    if not box_fields then
+      tuple types
+    else (
+      match types with
+      | [] -> ""
+      | [ty] ->
+        let ty = core_type ty in
+        if
+          ty = "String"
+          || String.is_prefix ty ~prefix:"Vec<"
+          || String.is_prefix ty ~prefix:"Block<"
+        then
+          sprintf "(%s)" ty
+        else
+          sprintf "(Box<%s>)" ty
+      | _ -> sprintf "(Box<%s>)" (tuple types)
+    )
+  | Pcstr_record labels -> record_declaration SMap.empty labels
 
-let variant_constructor_declaration cd =
+let variant_constructor_declaration ?(box_fields = false) cd =
   let name = convert_type_name cd.pcd_name.txt in
-  let args = constructor_arguments cd.pcd_args in
-  sprintf "%s%s,\n" name args
+  let args = constructor_arguments ~box_fields cd.pcd_args in
+  let discriminant =
+    (* If we see the [@value 42] attribute, assume it's for ppx_deriving enum,
+       and that all the variants are zero-argument (i.e., assume this is a
+       C-like enum and provide custom discriminant values). *)
+    List.find_map cd.pcd_attributes (fun attr ->
+        match attr with
+        | ( { txt = "value"; _ },
+            PStr
+              [
+                {
+                  pstr_desc =
+                    Pstr_eval
+                      ( {
+                          pexp_desc =
+                            Pexp_constant (Pconst_integer (discriminant, None));
+                          _;
+                        },
+                        _ );
+                  _;
+                };
+              ] ) ->
+          Some (" = " ^ discriminant)
+        | _ -> None)
+    |> Option.value ~default:""
+  in
+  sprintf "%s%s%s,\n" name args discriminant
 
 let ctor_arg_len (ctor_args : constructor_arguments) : int =
   match ctor_args with
@@ -129,9 +206,8 @@ let ctor_arg_len (ctor_args : constructor_arguments) : int =
 
 let type_declaration name td =
   let attrs_and_vis init_derives =
-    let filter a f = List.filter a ~f in
     let derive_attr =
-      List.fold derives_filters ~init:(derived_traits @ init_derives) ~f:filter
+      derived_traits @ init_derives @ additional_derived_traits name
       |> List.sort ~compare:(fun (_, t1) (_, t2) -> String.compare t1 t2)
       |> List.map ~f:(fun (m, trait) ->
              Option.iter m ~f:(fun m -> add_extern_use (m ^ "::" ^ trait));
@@ -191,7 +267,11 @@ let type_declaration name td =
         add_ty_use id ty_name;
         raise (Skip_type_decl ("it is a re-export of " ^ id))
       ) else
-        sprintf "pub type %s%s = %s;" name tparams (core_type ty)
+        let ty = core_type ty in
+        if should_add_rcoc name then
+          sprintf "pub type %s%s = ocamlrep::rc::RcOc<%s>;" name tparams ty
+        else
+          sprintf "pub type %s%s = %s;" name tparams ty
     | _ ->
       if should_use_alias_instead_of_tuple_struct name then
         sprintf "pub type %s%s = %s;" name tparams (core_type ty)
@@ -219,14 +299,14 @@ let type_declaration name td =
                         [
                           {
                             ptyp_desc =
-                              Ptyp_constr ({ txt = Lident "locl"; _ }, _);
+                              Ptyp_constr ({ txt = Lident "locl_phase"; _ }, _);
                             _;
                           };
                         ] );
                   _;
                 } ->
               log
-                "Not generating an equivalent to the locl ty_ constructor %s"
+                "Not generating an equivalent to the locl_phase ty_ constructor %s"
                 cd.pcd_name.txt;
               false
             | _ -> true)
@@ -240,11 +320,16 @@ let type_declaration name td =
       else
         []
     in
-    let ctors = map_and_concat ctors variant_constructor_declaration in
+    let should_box_variant = should_box_variant name in
+    let ctors =
+      map_and_concat
+        ctors
+        (variant_constructor_declaration ~box_fields:should_box_variant)
+    in
     sprintf "%s enum %s%s {\n%s}" (attrs_and_vis derives) name tparams ctors
   (* Record types. *)
   | (Ptype_record labels, None) ->
-    let labels = record_declaration labels ~pub:true in
+    let labels = record_declaration (get_overrides name) labels ~pub:true in
     sprintf "%s struct %s%s %s" (attrs_and_vis []) name tparams labels
   (* `type foo`; an abstract type with no specified implementation. This doesn't
      mean much outside of an .mli, I don't think. *)

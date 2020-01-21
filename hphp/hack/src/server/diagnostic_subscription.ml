@@ -101,28 +101,21 @@ let update
           RP.Map.add acc path (RP.Set.singleton path))
   in
   (* Merge rechecked and reparsed into single collection. *)
-  let rechecked =
-    RP.Set.fold reparsed ~init:rechecked ~f:(fun path acc ->
-        (* We only care about map keys, so empty_names here is fine *)
-        RP.Map.add acc path FileInfo.empty_names)
-  in
+  let rechecked = RP.Set.union reparsed rechecked in
   (* Look through rechecked files for more sources of tracked files *)
   let local_errors =
-    RP.Map.fold rechecked ~init:local_errors ~f:(fun source _ acc ->
+    RP.Set.fold rechecked ~init:local_errors ~f:(fun source acc ->
         Errors.fold_errors_in global_errors ~source ~init:acc ~f:(fun e acc ->
             let file = error_filename e in
-            match RP.Map.get acc file with
+            match RP.Map.find_opt acc file with
             | None -> acc (* not an IDE-relevant file *)
             | Some sources -> RP.Map.add acc file (RP.Set.add sources source)))
   in
   (* Remove sources that no longer produce errors in files we care about *)
   let local_errors =
     filter_filter local_errors ~f:(fun source ->
-        Errors.fold_errors_in
-          global_errors
-          ~source
-          ~init:false
-          ~f:(fun e acc -> acc || RP.Map.mem local_errors (error_filename e)))
+        Errors.fold_errors_in global_errors ~source ~init:false ~f:(fun e acc ->
+            acc || RP.Map.mem local_errors (error_filename e)))
   in
   (* If we've done a full check, that it's safe to look through all of the
    * errors in global_errors, no only those that were just rechecked *)
@@ -135,7 +128,7 @@ let update
         ~init:(false, local_errors)
         ~f:(fun source e (is_truncated, acc) ->
           let file = error_filename e in
-          match RP.Map.get acc file with
+          match RP.Map.find_opt acc file with
           | Some sources ->
             (* Add a source to already tracked file *)
             (is_truncated, RP.Map.add acc file (RP.Set.add sources source))
@@ -167,7 +160,7 @@ let of_id ~id ~init =
     res
     ~priority_files:Relative_path.Set.empty
     ~reparsed:Relative_path.Set.empty
-    ~rechecked:Relative_path.Map.empty
+    ~rechecked:Relative_path.Set.empty
     ~global_errors:init
     ~full_check_done:true
 

@@ -212,7 +212,6 @@ CapturedPtr getEdgeInfo(const HeapGraph& g, int ptr) {
       // Known generalized cases that don't really need pointer kind
       case HeaderKind::Mixed:
       case HeaderKind::Dict:
-      case HeaderKind::Shape:
       case HeaderKind::Keyset: {
         if (edge.offset >= sizeof(MixedArray)) {
           using Elm = MixedArray::Elm;
@@ -267,7 +266,6 @@ CapturedPtr getEdgeInfo(const HeapGraph& g, int ptr) {
 
       case HeaderKind::AwaitAllWH:
       case HeaderKind::WaitHandle:
-      case HeaderKind::Ref:
       case HeaderKind::ClsMeth:
         break;
 
@@ -283,8 +281,9 @@ CapturedPtr getEdgeInfo(const HeapGraph& g, int ptr) {
         FTRACE(5, "HG: Getting connection name for class {} at {}\n",
                from_obj->getClassName().data(), from_obj);
         if (prop_offset >= sizeof(ObjectData)) {
-          uint32_t index = (prop_offset - sizeof(ObjectData)) /
-                           sizeof(TypedValue);
+          uint32_t index = ObjectProps::offset2Idx(
+            prop_offset - sizeof(ObjectData)
+          );
           if (index < cls->numDeclProperties()) {
             return {CapturedPtr::Property, index};
           }

@@ -13,7 +13,6 @@ open Instruction_sequence
 open Emit_expression
 open Emit_pos
 module A = Aast
-module H = Hhbc_ast
 module TC = Hhas_type_constraint
 module SN = Naming_special_names
 module TFR = Try_finally_rewriter
@@ -57,22 +56,20 @@ let emit_return (env : Emit_env.t) =
 let emit_def_inline def =
   match def with
   | A.Class cd ->
-    (match cd.A.c_kind with
-    | Ast_defs.Crecord ->
-      Emit_pos.emit_pos_then (fst cd.A.c_name)
-      @@ instr_defrecord (int_of_string (snd cd.A.c_name))
-    | _ ->
-      let defcls_fn =
-        if Emit_env.is_systemlib () then
-          instr_defclsnop
-        else
-          instr_defcls
-      in
-      Emit_pos.emit_pos_then (fst cd.A.c_name)
-      @@ defcls_fn (int_of_string (snd cd.A.c_name)))
+    let defcls_fn =
+      if Emit_env.is_systemlib () then
+        instr_defclsnop
+      else
+        instr_defcls
+    in
+    Emit_pos.emit_pos_then (fst cd.A.c_name)
+    @@ defcls_fn (int_of_string (snd cd.A.c_name))
   | A.Typedef td ->
     Emit_pos.emit_pos_then (fst td.A.t_name)
     @@ instr_deftypealias (int_of_string (snd td.A.t_name))
+  | A.RecordDef rd ->
+    Emit_pos.emit_pos_then (fst rd.A.rd_name)
+    @@ instr_defrecord (int_of_string (snd rd.A.rd_name))
   | _ -> failwith "Define inline: Invalid inline definition"
 
 let emit_markup env s echo_expr_opt ~check_for_hashbang =
@@ -80,7 +77,7 @@ let emit_markup env s echo_expr_opt ~check_for_hashbang =
     let p = Pos.none in
     let call_expr =
       Tast_annotate.make
-        (A.Call (Aast.Cnormal, Tast_annotate.make (A.Id (p, f)), [], [e], []))
+        (A.Call (Aast.Cnormal, Tast_annotate.make (A.Id (p, f)), [], [e], None))
     in
     emit_ignored_expr env call_expr
   in
@@ -163,12 +160,9 @@ let rec set_bytes_kind name =
 
 and emit_stmt env (pos, stmt) =
   match stmt with
-  | A.Let _ -> assert false
-  (* Let statement is converted to assignment in closure convert *)
   | A.Expr (_, A.Yield_break) -> gather [instr_null; emit_return env]
-  | A.Expr (((pos, _), A.Call (_, (_, A.Id s), _, exprl, [])) as expr) ->
-    let ns = Emit_env.get_namespace env in
-    let s = Hhbc_id.Function.(elaborate_id ns s |> to_raw_string) in
+  | A.Expr (((pos, _), A.Call (_, (_, A.Id (_, s)), _, exprl, None)) as expr) ->
+    let s = Hhbc_id.Function.(from_ast_name s |> to_raw_string) in
     if String.lowercase s = "unset" then
       gather (List.map exprl (emit_unset_expr env))
     else (
@@ -205,8 +199,7 @@ and emit_stmt env (pos, stmt) =
           | _ -> true)
     in
     if has_elements then
-      Scope.with_unnamed_local
-      @@ fun temp ->
+      Scope.with_unnamed_local @@ fun temp ->
       (* before *)
       ( gather [awaited_instrs; instr_popl temp],
         (* inner *)
@@ -221,10 +214,8 @@ and emit_stmt env (pos, stmt) =
     emit_await_assignment env await_pos e_lhs e_await
   | A.Expr (_, A.Yield_from e) ->
     gather [emit_yield_from_delegates env pos e; emit_pos pos; instr_popc]
-  | A.Expr ((pos, _), A.Binop (Ast_defs.Eq None, e_lhs, (_, A.Yield_from e)))
-    ->
-    Local.scope
-    @@ fun () ->
+  | A.Expr ((pos, _), A.Binop (Ast_defs.Eq None, e_lhs, (_, A.Yield_from e))) ->
+    Local.scope @@ fun () ->
     let temp = Local.get_unnamed_local () in
     let rhs_instrs = instr_pushl temp in
     gather
@@ -236,8 +227,7 @@ and emit_stmt env (pos, stmt) =
         instr_popc;
       ]
   | A.Expr expr -> emit_ignored_expr ~pop_pos:pos env expr
-  | A.Return None ->
-    gather [instr_null; Emit_pos.emit_pos pos; emit_return env]
+  | A.Return None -> gather [instr_null; Emit_pos.emit_pos pos; emit_return env]
   | A.Return (Some expr) ->
     gather [emit_expr env expr; Emit_pos.emit_pos pos; emit_return env]
   | A.GotoLabel (_, label) -> instr_label (Label.named label)
@@ -256,11 +246,7 @@ and emit_stmt env (pos, stmt) =
         } ->
     emit_using env pos is_block_scoped has_await e (block_pos b, A.Block b)
   | A.Break -> emit_break env pos
-  | A.TempBreak level_opt ->
-    emit_temp_break env pos (get_level pos "break" level_opt)
   | A.Continue -> emit_continue env pos
-  | A.TempContinue level_opt ->
-    emit_temp_continue env pos (get_level pos "continue" level_opt)
   | A.Do (b, e) -> emit_do env (pos, A.Block b) e
   | A.For (e1, e2, e3, b) -> emit_for env pos e1 e2 e3 (pos, A.Block b)
   | A.Throw ((_, _) as expr) ->
@@ -296,12 +282,7 @@ and emit_stmt env (pos, stmt) =
     empty
 
 and emit_break env pos =
-  TFR.emit_break_or_continue
-    ~is_break:true
-    ~in_finally_epilogue:false
-    env
-    pos
-    1
+  TFR.emit_break_or_continue ~is_break:true ~in_finally_epilogue:false env pos 1
 
 and emit_continue env pos =
   TFR.emit_break_or_continue
@@ -367,8 +348,7 @@ and emit_await_assignment env pos lval e =
       ]
   | _ ->
     let awaited_instrs = emit_await env pos e in
-    Scope.with_unnamed_local
-    @@ fun temp ->
+    Scope.with_unnamed_local @@ fun temp ->
     let rhs_instrs = instr_pushl temp in
     let (lhs, rhs, setop) =
       emit_lval_op_nonlist_steps env pos LValOp.Set lval rhs_instrs 1
@@ -387,8 +367,7 @@ and emit_awaitall env pos el b =
   | _ -> emit_awaitall_multi env el b
 
 and emit_awaitall_single env pos lval e b =
-  Scope.with_unnamed_locals
-  @@ fun () ->
+  Scope.with_unnamed_locals @@ fun () ->
   let load_arg = emit_await env pos e in
   let (load, unset) =
     match lval with
@@ -403,8 +382,7 @@ and emit_awaitall_single env pos lval e b =
                                               unset)
 
 and emit_awaitall_multi env el b =
-  Scope.with_unnamed_locals
-  @@ fun () ->
+  Scope.with_unnamed_locals @@ fun () ->
   let load_args =
     gather @@ List.map el ~f:(fun (_, arg) -> emit_expr env arg)
   in
@@ -483,8 +461,7 @@ and emit_using
                } ))
          ~init:b
   | _ ->
-    Local.scope
-    @@ fun () ->
+    Local.scope @@ fun () ->
     let (local, preamble) =
       match snd e with
       | A.Binop (Ast_defs.Eq None, (_, A.Lvar (_, id)), _)
@@ -530,7 +507,7 @@ and emit_using
           instr_fcallobjmethodd
             (make_fcall_args ?async_eager_label 0)
             fn_name
-            A.OG_nullthrows;
+            Obj_null_throws;
           epilogue;
           ( if is_block_scoped then
             instr_unsetl local
@@ -615,7 +592,9 @@ and emit_for (env : Emit_env.t) p (e1 : Tast.expr) e2 e3 b =
       | [] ->
         [
           final
-          @@ ( (Pos.none, (Typing_reason.none, Typing_defs.make_tany ())),
+          @@ ( ( Pos.none,
+                 Typing_defs.mk (Typing_reason.none, Typing_defs.make_tany ())
+               ),
                A.Expr_list [h] );
         ]
       | h1 :: t1 -> emit_ignored_expr env ~pop_pos:p h :: expr_list h1 t1
@@ -680,8 +659,8 @@ and emit_switch (env : Emit_env.t) pos scrutinee_expr cl =
     (* "continue" in a switch in PHP has the same semantics as break! *)
     let break_label = Label.next_regular () in
     let cl =
-      Emit_env.do_in_switch_body break_label env cl
-      @@ (fun env _ -> List.map cl ~f:(emit_case env))
+      Emit_env.do_in_switch_body break_label env cl @@ fun env _ ->
+      List.map cl ~f:(emit_case env)
     in
     let instr_bodies = gather @@ List.map cl ~f:snd in
     let default_label =
@@ -726,13 +705,11 @@ and block_pos b =
     Pos.btw (List.hd_exn valid_pos) (List.last_exn valid_pos)
 
 and emit_catch
-    (env : Emit_env.t) pos end_label (catch_type, (_, catch_local), b) =
+    (env : Emit_env.t) pos end_label ((_, catch_type), (_, catch_local), b) =
   (* Note that this is a "regular" label; we're not going to branch to
     it directly in the event of an exception. *)
   let next_catch = Label.next_regular () in
-  let id =
-    Hhbc_id.Class.elaborate_id (Emit_env.get_namespace env) catch_type
-  in
+  let id = Hhbc_id.Class.from_ast_name catch_type in
   gather
     [
       instr_dup;
@@ -756,7 +733,7 @@ and is_empty_block (_, b) =
   | _ -> false
 
 and emit_try_catch (env : Emit_env.t) try_block catch_list =
-  Local.scope @@ (fun () -> emit_try_catch_ env try_block catch_list)
+  Local.scope @@ fun () -> emit_try_catch_ env try_block catch_list
 
 and emit_try_catch_ (env : Emit_env.t) try_block catch_list =
   if is_empty_block try_block then
@@ -771,7 +748,7 @@ and emit_try_catch_ (env : Emit_env.t) try_block catch_list =
       (emit_catches env pos catch_list end_label)
 
 and emit_try_finally env pos try_block finally_block =
-  Local.scope @@ (fun () -> emit_try_finally_ env pos try_block finally_block)
+  Local.scope @@ fun () -> emit_try_finally_ env pos try_block finally_block
 
 and emit_try_finally_ env pos try_block finally_block =
   let make_finally_body () =
@@ -815,6 +792,7 @@ and emit_try_finally_ env pos try_block finally_block =
       else
         TFR.cleanup_try_body try_body
     in
+
     (* (2) Finally body
 
   Note that this is used both in the normal-continuation and
@@ -849,6 +827,7 @@ and emit_try_finally_ env pos try_block finally_block =
         jump_instructions
         finally_end
     in
+
     (* (4) Catch body
 
   We now emit the catch body; it is just cleanup code for the temp_local,
@@ -900,7 +879,6 @@ and get_id_of_simple_lvar_opt v =
   | A.Lvar (pos, id) when Local_id.get_name id = SN.SpecialIdents.this ->
     Emit_fatal.raise_fatal_parse pos "Cannot re-assign $this"
   | A.Lvar (_, id)
-  | A.Unop (Ast_defs.Uref, (_, A.Lvar (_, id)))
     when not
            ( SN.Superglobals.is_superglobal (Local_id.get_name id)
            || Local_id.get_name id = SN.Superglobals.globals ) ->
@@ -1013,8 +991,7 @@ and emit_iterator_key_value_storage env iterator :
 and emit_foreach_await_lvalue_storage
     (env : Emit_env.t) (expr1 : Tast.expr) indices keep_on_stack =
   let ((pos, _), _) = expr1 in
-  Scope.with_unnamed_local
-  @@ fun local ->
+  Scope.with_unnamed_local @@ fun local ->
   (* before *)
   ( instr_popl local,
     (* inner *)
@@ -1038,9 +1015,7 @@ and emit_foreach_await_key_value_storage (env : Emit_env.t) iterator =
   | A.Await_as_kv (_, expr_k, expr_v)
   | A.As_kv (expr_k, expr_v) ->
     let key_instrs = emit_foreach_await_lvalue_storage env expr_k [0] true in
-    let value_instrs =
-      emit_foreach_await_lvalue_storage env expr_v [1] false
-    in
+    let value_instrs = emit_foreach_await_lvalue_storage env expr_v [1] false in
     gather [key_instrs; value_instrs]
   | A.Await_as_v (_, expr_v)
   | A.As_v expr_v ->
@@ -1075,8 +1050,7 @@ and emit_iterator_lvalue_storage env v local =
     ([lhs], [rhs; set_op; instr_popc; instr_unsetl local])
 
 and emit_foreach env pos collection iterator block =
-  Local.scope
-  @@ fun () ->
+  Local.scope @@ fun () ->
   match iterator with
   | A.As_kv _
   | A.As_v _ ->
@@ -1087,8 +1061,7 @@ and emit_foreach env pos collection iterator block =
 
 and emit_foreach_await env pos collection iterator block =
   let instr_collection = emit_expr env collection in
-  Scope.with_unnamed_local
-  @@ fun iter_temp_local ->
+  Scope.with_unnamed_local @@ fun iter_temp_local ->
   let input_is_async_iterator_label = Label.next_regular () in
   let next_label = Label.next_regular () in
   let exit_label = Label.next_regular () in
@@ -1118,7 +1091,7 @@ and emit_foreach_await env pos collection iterator block =
         instr_fcallobjmethodd
           (make_fcall_args ~async_eager_label 0)
           next_meth
-          A.OG_nullthrows;
+          Obj_null_throws;
         instr_await;
         instr_label async_eager_label;
         instr_dup;
@@ -1137,31 +1110,23 @@ and emit_foreach_await env pos collection iterator block =
 
 and emit_foreach_ env pos collection iterator block =
   let instr_collection = emit_expr env collection in
-  Scope.with_unnamed_locals_and_iterators
-  @@ fun () ->
-  let iterator_number = Iterator.get_iterator () in
+  Scope.with_unnamed_locals_and_iterators @@ fun () ->
+  let iter_id = Iterator.get_iterator () in
   let loop_break_label = Label.next_regular () in
   let loop_continue_label = Label.next_regular () in
   let loop_head_label = Label.next_regular () in
-  let (key_local_opt, value_local, preamble) =
+  let (key_id, val_id, preamble) =
     emit_iterator_key_value_storage env iterator
   in
-  let (init, next) =
-    match key_local_opt with
-    | Some key_local ->
-      ( instr_iterinitk iterator_number loop_break_label value_local key_local,
-        instr_iternextk iterator_number loop_head_label value_local key_local
-      )
-    | None ->
-      ( instr_iterinit iterator_number loop_break_label value_local,
-        instr_iternext iterator_number loop_head_label value_local )
-  in
+  let iter_args = { iter_id; key_id; val_id } in
+  let init = instr_iterinit iter_args loop_break_label in
+  let next = instr_iternext iter_args loop_head_label in
   let body =
     Emit_env.do_in_loop_body
       loop_break_label
       loop_continue_label
       env
-      ~iter:iterator_number
+      ~iter:iter_id
       block
       emit_stmt
   in

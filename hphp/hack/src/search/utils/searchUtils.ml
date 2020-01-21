@@ -13,7 +13,6 @@ type search_provider =
   | CustomIndex
   | NoIndex
   | SqliteIndex
-  | TrieIndex
   | LocalIndex
 [@@deriving show]
 
@@ -26,8 +25,8 @@ type autocomplete_type =
   | Acprop
   | Acshape_key
   | Actrait_only
-  | Ac_no_namespace (* used for symbol search *)
-[@@deriving show]
+  | Ac_workspace_symbol (* Excludes namespaces; used for symbol search *)
+[@@deriving eq, show]
 
 (* Convert a string to a provider *)
 let provider_of_string (provider_str : string) : search_provider =
@@ -35,9 +34,8 @@ let provider_of_string (provider_str : string) : search_provider =
   | "SqliteIndex" -> SqliteIndex
   | "NoIndex" -> NoIndex
   | "CustomIndex" -> CustomIndex
-  | "TrieIndex" -> TrieIndex
   | "LocalIndex" -> LocalIndex
-  | _ -> TrieIndex
+  | _ -> SqliteIndex
 
 (* Convert a string to a human readable description of the provider *)
 let descriptive_name_of_provider (provider : search_provider) : string =
@@ -45,7 +43,6 @@ let descriptive_name_of_provider (provider : search_provider) : string =
   | CustomIndex -> "Custom symbol index"
   | NoIndex -> "Symbol index disabled"
   | SqliteIndex -> "Sqlite"
-  | TrieIndex -> "SharedMem/Trie"
   | LocalIndex -> "Local file index only"
 
 (* Shared Search code between Fuzzy and Trie based searches *)
@@ -95,7 +92,8 @@ type si_kind =
   | SI_LocalVariable
   | SI_Keyword
   | SI_Constructor
-[@@deriving show]
+  | SI_RecordDef
+[@@deriving eq, show]
 
 (* Individual result object as known by the autocomplete system *)
 type symbol = (Pos.absolute, si_kind) term
@@ -136,6 +134,7 @@ let kind_to_int (kind : si_kind) : int =
   | SI_LocalVariable -> 16
   | SI_Keyword -> 17
   | SI_Constructor -> 18
+  | SI_RecordDef -> 19
 
 (* Convert an integer back to an enum *)
 let int_to_kind (kind_num : int) : si_kind =
@@ -158,6 +157,7 @@ let int_to_kind (kind_num : int) : si_kind =
   | 16 -> SI_LocalVariable
   | 17 -> SI_Keyword
   | 18 -> SI_Constructor
+  | 19 -> SI_RecordDef
   | _ -> SI_Unknown
 
 (* Internal representation of a single item stored by the symbol list *)
@@ -189,6 +189,7 @@ let kind_to_string (kind : si_kind) : string =
   | SI_LocalVariable -> "local variable"
   | SI_Keyword -> "keyword"
   | SI_Constructor -> "constructor"
+  | SI_RecordDef -> "record"
 
 (* Sigh, yet another string to enum conversion *)
 let string_to_kind (type_ : string) : si_kind option =
@@ -296,7 +297,26 @@ type si_env = {
   sie_quiet_mode: bool;
   sie_fuzzy_search_mode: bool ref;
   sie_log_timings: bool;
+  (*
+   * Setting the "resolve" parameters to true slows down autocomplete
+   * but increases precision for answers.
+   *
+   * sie_resolve_signatures: When a result appears in autocomplete,
+   * look up the full declaration and include parameters.  Uses extra
+   * memory.
+   *
+   * sie_resolve_positions: When a result appears in autocomplete,
+   * look up the exact position of the symbol from the naming table.
+   * Slows down autocomplete.
+   *
+   * sie_resolve_local_decl: When a file changes on disk, the local
+   * search index digs through its decls and saves exact class
+   * information.  Uses more memory and slows down processing of
+   * changed files.
+   *)
   sie_resolve_signatures: bool;
+  sie_resolve_positions: bool;
+  sie_resolve_local_decl: bool;
   (* LocalSearchService *)
   lss_fullitems: si_capture Relative_path.Map.t;
   lss_tombstones: Tombstone_set.t;
@@ -308,8 +328,11 @@ type si_env = {
   sql_select_acnew_stmt: Sqlite3.stmt option ref;
   sql_select_actype_stmt: Sqlite3.stmt option ref;
   sql_select_namespaces_stmt: Sqlite3.stmt option ref;
+  sql_select_namespaced_symbols_stmt: Sqlite3.stmt option ref;
   (* NamespaceSearchService *)
   nss_root_namespace: nss_node;
+  (* AutocomleteRankService *)
+  use_ranked_autocomplete: bool;
 }
 
 (* Default provider with no functionality *)
@@ -320,6 +343,8 @@ let default_si_env =
     sie_fuzzy_search_mode = ref false;
     sie_log_timings = false;
     sie_resolve_signatures = false;
+    sie_resolve_positions = false;
+    sie_resolve_local_decl = false;
     (* LocalSearchService *)
     lss_fullitems = Relative_path.Map.empty;
     lss_tombstones = Tombstone_set.empty;
@@ -331,6 +356,7 @@ let default_si_env =
     sql_select_acnew_stmt = ref None;
     sql_select_actype_stmt = ref None;
     sql_select_namespaces_stmt = ref None;
+    sql_select_namespaced_symbols_stmt = ref None;
     (* NamespaceSearchService *)
     nss_root_namespace =
       {
@@ -338,6 +364,8 @@ let default_si_env =
         nss_full_namespace = "\\";
         nss_children = Hashtbl.create 0;
       };
+    (* AutocomleteRankService *)
+    use_ranked_autocomplete = false;
   }
 
 (* Default provider, but no logging *)

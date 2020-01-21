@@ -64,29 +64,20 @@ let default_fcall_flags =
 let make_fcall_args
     ?(flags = default_fcall_flags)
     ?(num_rets = 1)
-    ?(by_refs = [])
+    ?(inouts = [])
     ?async_eager_label
     num_args =
-  if by_refs <> [] && List.length by_refs <> num_args then
-    failwith "length of by_refs must be either zero or num_args";
-  (flags, num_args, num_rets, by_refs, async_eager_label)
+  if inouts <> [] && List.length inouts <> num_args then
+    failwith "length of inouts must be either zero or num_args";
+  (flags, num_args, num_rets, inouts, async_eager_label)
 
 let instr_lit_const l = instr (ILitConst l)
 
-let instr_lit_empty_varray =
-  instr_lit_const (TypedValue (Typed_value.VArray []))
+let instr_iterinit iter_args label =
+  instr (IIterator (IterInit (iter_args, label)))
 
-let instr_iterinit iter_id label value =
-  instr (IIterator (IterInit (iter_id, label, value)))
-
-let instr_iterinitk id label key value =
-  instr (IIterator (IterInitK (id, label, key, value)))
-
-let instr_iternext id label value =
-  instr (IIterator (IterNext (id, label, value)))
-
-let instr_iternextk id label key value =
-  instr (IIterator (IterNextK (id, label, key, value)))
+let instr_iternext iter_args label =
+  instr (IIterator (IterNext (iter_args, label)))
 
 let instr_iterfree id = instr (IIterator (IterFree id))
 
@@ -108,7 +99,9 @@ let instr_break level = instr (ISpecialFlow (Break level))
 
 let instr_goto label = instr (ISpecialFlow (Goto label))
 
-let instr_iter_break label itrs = instr (IIterator (IterBreak (label, itrs)))
+let instr_iter_break label iters =
+  let frees = List.rev_map ~f:(fun iter -> IIterator (IterFree iter)) iters in
+  instrs (frees @ [IContFlow (Jmp label)])
 
 let instr_false = instr (ILitConst False)
 
@@ -206,8 +199,6 @@ let instr_cgetg = instr (IGet CGetG)
 let instr_cgetl local = instr (IGet (CGetL local))
 
 let instr_cugetl local = instr (IGet (CUGetL local))
-
-let instr_vgetl local = instr (IGet (VGetL local))
 
 let instr_cgetl2 local = instr (IGet (CGetL2 local))
 
@@ -314,9 +305,9 @@ let instr_dim_warn_pt key = instr_dim MemberOpMode.Warn (MemberKey.PT key)
 
 let instr_dim_define_pt key = instr_dim MemberOpMode.Define (MemberKey.PT key)
 
-let instr_fcallclsmethod
-    ?(is_log_as_dynamic_call = LogAsDynamicCall) fcall_args pl =
-  instr (ICall (FCallClsMethod (fcall_args, pl, is_log_as_dynamic_call)))
+let instr_fcallclsmethod ?(is_log_as_dynamic_call = LogAsDynamicCall) fcall_args
+    =
+  instr (ICall (FCallClsMethod (fcall_args, is_log_as_dynamic_call)))
 
 let instr_fcallclsmethodd fcall_args method_name class_name =
   instr (ICall (FCallClsMethodD (fcall_args, class_name, method_name)))
@@ -329,20 +320,18 @@ let instr_fcallclsmethodsd fcall_args scref method_name =
 
 let instr_fcallctor fcall_args = instr (ICall (FCallCtor fcall_args))
 
-let instr_fcallfunc fcall_args param_locs =
-  instr (ICall (FCallFunc (fcall_args, param_locs)))
+let instr_fcallfunc fcall_args = instr (ICall (FCallFunc fcall_args))
 
-let instr_fcallfuncd fcall_args id =
-  instr (ICall (FCallFuncD (fcall_args, id)))
+let instr_fcallfuncd fcall_args id = instr (ICall (FCallFuncD (fcall_args, id)))
 
-let instr_fcallobjmethod fcall_args flavor pl =
-  instr (ICall (FCallObjMethod (fcall_args, flavor, pl)))
+let instr_fcallobjmethod fcall_args flavor =
+  instr (ICall (FCallObjMethod (fcall_args, flavor)))
 
 let instr_fcallobjmethodd fcall_args method_ flavor =
   instr (ICall (FCallObjMethodD (fcall_args, flavor, method_)))
 
 let instr_fcallobjmethodd_nullthrows fcall_args method_ =
-  instr_fcallobjmethodd fcall_args method_ Ast_defs.OG_nullthrows
+  instr_fcallobjmethodd fcall_args method_ Obj_null_throws
 
 let instr_querym num_params op key =
   instr (IFinal (QueryM (num_params, op, key)))
@@ -412,8 +401,6 @@ let instr_defcns s =
   instr (IIncludeEvalDefine (DefCns (Hhbc_id.Const.from_raw_string s)))
 
 let instr_eval = instr (IIncludeEvalDefine Eval)
-
-let instr_alias_cls c1 c2 = instr (IIncludeEvalDefine (AliasCls (c1, c2)))
 
 let instr_silence_start local = instr (IMisc (Silence (local, Start)))
 
@@ -551,7 +538,7 @@ let instr_seq_to_list t =
   go [] [t] |> compact_src_locs []
 
 let get_or_put_label name_label_map name =
-  match SMap.get name name_label_map with
+  match SMap.find_opt name name_label_map with
   | Some label -> (label, name_label_map)
   | None ->
     let label = Label.next_regular () in
@@ -563,9 +550,6 @@ let rewrite_user_labels_instr name_label_map instruction =
   | IContFlow (Jmp (Label.Named name)) ->
     let (label, name_label_map) = get_result name in
     (IContFlow (Jmp label), name_label_map)
-  | IIterator (IterBreak (Label.Named name, iters)) ->
-    let (label, name_label_map) = get_result name in
-    (IIterator (IterBreak (label, iters)), name_label_map)
   | IContFlow (JmpNS (Label.Named name)) ->
     let (label, name_label_map) = get_result name in
     (IContFlow (JmpNS label), name_label_map)
@@ -609,13 +593,6 @@ let rewrite_user_labels instrseq =
       (Instr_list (List.rev l), name_label_map)
   in
   fst @@ aux instrseq SMap.empty
-
-let rewrite_tv instruction =
-  match instruction with
-  | ILitConst (TypedValue tv) -> Emit_adata.rewrite_typed_value tv
-  | _ -> instruction
-
-let rewrite_tvs instrseq = InstrSeq.map instrseq rewrite_tv
 
 let is_srcloc i =
   match i with

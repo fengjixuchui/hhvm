@@ -327,7 +327,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
         // If there's a persistent constant with the same name, either
         // this is the one and only definition, or the persistent
         // definition is in systemlib (and this one will always fail).
-        auto const kind = val && cellSame(*val, *top) ?
+        auto const kind = val && tvSame(*val, *top) ?
           Unit::MergeKind::PersistentDefine : Unit::MergeKind::Define;
         ue.pushMergeableDef(kind, bc.DefCns.str1, *top);
         return;
@@ -452,27 +452,6 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
       emit_branch(targets[targets.size() - 1].second);
     };
 
-    auto emit_itertab = [&] (const IterTab& iterTab) {
-      ue.emitIVA(iterTab.size());
-      for (auto const& kv : iterTab) {
-        ue.emitIVA(kv.kind);
-        ue.emitIVA(kv.id);
-        if (kv.kind == KindOfLIter) {
-          always_assert(kv.local != NoLocalId);
-          ue.emitIVA(map_local(kv.local));
-        } else {
-          always_assert(kv.local == NoLocalId);
-        }
-      }
-    };
-
-    auto emit_argvec32 = [&] (const CompactVector<uint32_t>& argv) {
-      ue.emitIVA(argv.size());
-      for (auto i : argv) {
-        ue.emitInt32(i);
-      }
-    };
-
     auto emit_srcloc = [&] {
       auto const sl = srcLoc(func, inst.srcLoc);
       if (!sl.isValid()) return;
@@ -521,10 +500,14 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
       encodeLocalRange(ue, HPHP::LocalRange{first, range.count});
     };
 
+    auto emit_ita  = [&](IterArgs ita) {
+      ita.valId = map_local(ita.valId);
+      if (ita.hasKey()) ita.keyId = map_local(ita.keyId);
+      encodeIterArgs(ue, ita);
+    };
+
 #define IMM_BLA(n)     emit_switch(data.targets);
 #define IMM_SLA(n)     emit_sswitch(data.targets);
-#define IMM_ILA(n)     emit_itertab(data.iterTab);
-#define IMM_I32LA(n)   emit_argvec32(data.argv);
 #define IMM_IVA(n)     ue.emitIVA(data.arg##n);
 #define IMM_I64A(n)    ue.emitInt64(data.arg##n);
 #define IMM_LA(n)      ue.emitIVA(map_local(data.loc##n));
@@ -540,8 +523,9 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
 #define IMM_VSA(n)     emit_vsa(data.keys);
 #define IMM_KA(n)      encode_member_key(make_member_key(data.mkey), ue);
 #define IMM_LAR(n)     emit_lar(data.locrange);
+#define IMM_ITA(n)     emit_ita(data.ita);
 #define IMM_FCA(n)     encodeFCallArgs(                                    \
-                         ue, data.fca, data.fca.byRefs.get(),              \
+                         ue, data.fca, data.fca.inoutArgs.get(),              \
                          data.fca.asyncEagerTarget != NoBlockId,           \
                          [&] {                                             \
                            set_expected_depth(data.fca.asyncEagerTarget);  \
@@ -550,11 +534,12 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
                        if (!data.fca.hasUnpack()) ret.containsCalls = true;\
 
 #define IMM_NA
-#define IMM_ONE(x)           IMM_##x(1)
-#define IMM_TWO(x, y)        IMM_##x(1);         IMM_##y(2);
-#define IMM_THREE(x, y, z)   IMM_TWO(x, y);      IMM_##z(3);
-#define IMM_FOUR(x, y, z, n) IMM_THREE(x, y, z); IMM_##n(4);
-#define IMM_FIVE(x, y, z, n, m) IMM_FOUR(x, y, z, n); IMM_##m(5);
+#define IMM_ONE(x)                IMM_##x(1)
+#define IMM_TWO(x, y)             IMM_##x(1); IMM_##y(2);
+#define IMM_THREE(x, y, z)        IMM_TWO(x, y); IMM_##z(3);
+#define IMM_FOUR(x, y, z, n)      IMM_THREE(x, y, z); IMM_##n(4);
+#define IMM_FIVE(x, y, z, n, m)   IMM_FOUR(x, y, z, n); IMM_##m(5);
+#define IMM_SIX(x, y, z, n, m, o) IMM_FIVE(x, y, z, n, m); IMM_##o(6);
 
 #define POP_NOV
 #define POP_ONE(x)            pop(1);
@@ -633,8 +618,6 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
 #undef IMM_MA
 #undef IMM_BLA
 #undef IMM_SLA
-#undef IMM_ILA
-#undef IMM_I32LA
 #undef IMM_IVA
 #undef IMM_I64A
 #undef IMM_LA
@@ -657,6 +640,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
 #undef IMM_THREE
 #undef IMM_FOUR
 #undef IMM_FIVE
+#undef IMM_SIX
 
 #undef POP_NOV
 #undef POP_ONE
@@ -805,10 +789,10 @@ void emit_locals_and_params(FuncEmitter& fe,
       pinfo.defaultValue = param.defaultValue;
       pinfo.typeConstraint = param.typeConstraint;
       pinfo.userType = param.userTypeConstraint;
+      pinfo.upperBounds = param.upperBounds;
       pinfo.phpCode = param.phpCode;
       pinfo.userAttributes = param.userAttributes;
       pinfo.builtinType = param.builtinType;
-      pinfo.byRef = param.byRef;
       pinfo.inout = param.inout;
       pinfo.variadic = param.isVariadic;
       fe.appendParam(func.locals[id].name, pinfo);
@@ -1072,7 +1056,6 @@ void merge_repo_auth_type(UnitEmitter& ue, RepoAuthType rat) {
   case T::OptStrLike:
   case T::Null:
   case T::Cell:
-  case T::Ref:
   case T::InitUnc:
   case T::Unc:
   case T::UncArrKey:
@@ -1080,8 +1063,6 @@ void merge_repo_auth_type(UnitEmitter& ue, RepoAuthType rat) {
   case T::UncStrLike:
   case T::StrLike:
   case T::InitCell:
-  case T::InitGen:
-  case T::Gen:
   case T::Uninit:
   case T::InitNull:
   case T::Bool:
@@ -1169,6 +1150,7 @@ void emit_finish_func(EmitUnitState& state,
 
   fe.userAttributes = func.userAttributes;
   fe.retUserType = func.returnUserType;
+  fe.retUpperBounds = func.returnUBs;
   fe.originalFilename =
     func.originalFilename ? func.originalFilename :
     func.originalUnit ? func.originalUnit->filename : nullptr;
@@ -1180,6 +1162,8 @@ void emit_finish_func(EmitUnitState& state,
   fe.isMemoizeWrapper = func.isMemoizeWrapper;
   fe.isMemoizeWrapperLSB = func.isMemoizeWrapperLSB;
   fe.isRxDisabled = func.isRxDisabled;
+  fe.hasParamsWithMultiUBs = func.hasParamsWithMultiUBs;
+  fe.hasReturnWithMultiUBs = func.hasReturnWithMultiUBs;
 
   auto const retTy = state.index.lookup_return_type_raw(&func);
   if (!retTy.subtypeOf(BBottom)) {
@@ -1364,7 +1348,7 @@ void emit_class(EmitUnitState& state,
   auto const privateStatics = state.index.lookup_private_statics(&cls, true);
   for (auto& prop : cls.properties) {
     auto const makeRat = [&] (const Type& ty) -> RepoAuthType {
-      if (!ty.subtypeOf(BGen)) return RepoAuthType{};
+      if (!ty.subtypeOf(BCell)) return RepoAuthType{};
       if (ty.subtypeOf(BBottom)) {
         // A property can be TBottom if no sets (nor its initial value) is
         // compatible with its type-constraint, or if its LateInit and there's

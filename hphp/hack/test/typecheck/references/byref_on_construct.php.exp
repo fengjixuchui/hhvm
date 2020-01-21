@@ -1,2 +1,0 @@
-File "byref_on_construct.php", line 4, characters 47-55:
-Constructors cannot take parameters by reference (Parsing[1002])

@@ -131,11 +131,12 @@ void UnitEmitter::setBc(const unsigned char* bc, size_t bclen) {
 // Litstrs and Arrays.
 
 const StringData* UnitEmitter::lookupLitstr(Id id) const {
-  if (isGlobalLitstrId(id)) {
-    return LitstrTable::get().lookupLitstrId(decodeGlobalLitstrId(id));
+  if (!isUnitLitstrId(id)) {
+    return LitstrTable::get().lookupLitstrId(id);
   }
-  assertx(id < m_litstrs.size());
-  return m_litstrs[id];
+  auto unitId = decodeUnitLitstrId(id);
+  assertx(unitId < m_litstrs.size());
+  return m_litstrs[unitId];
 }
 
 const ArrayData* UnitEmitter::lookupArray(Id id) const {
@@ -156,9 +157,9 @@ void UnitEmitter::repopulateArrayTypeTable(
 
 Id UnitEmitter::mergeLitstr(const StringData* litstr) {
   if (m_useGlobalIds) {
-    return encodeGlobalLitstrId(LitstrTable::get().mergeLitstr(litstr));
+    return LitstrTable::get().mergeLitstr(litstr);
   }
-  return mergeUnitLitstr(litstr);
+  return encodeUnitLitstrId(mergeUnitLitstr(litstr));
 }
 
 Id UnitEmitter::mergeUnitLitstr(const StringData* litstr) {
@@ -400,20 +401,6 @@ void UnitEmitter::pushMergeableClass(PreClassEmitter* e) {
   m_mergeableStmts.push_back(std::make_pair(MergeKind::Class, e->id()));
 }
 
-void UnitEmitter::pushMergeableInclude(Unit::MergeKind kind,
-                                       const StringData* unitName) {
-  m_mergeableStmts.push_back(
-    std::make_pair(kind, mergeLitstr(unitName)));
-  m_allClassesHoistable = false;
-}
-
-void UnitEmitter::insertMergeableInclude(int ix, Unit::MergeKind kind, Id id) {
-  assertx(size_t(ix) <= m_mergeableStmts.size());
-  m_mergeableStmts.insert(m_mergeableStmts.begin() + ix,
-                          std::make_pair(kind, id));
-  m_allClassesHoistable = false;
-}
-
 void UnitEmitter::pushMergeableDef(Unit::MergeKind kind,
                                    const StringData* name,
                                    const TypedValue& tv) {
@@ -518,16 +505,14 @@ RepoStatus UnitEmitter::insert(UnitOrigin unitOrigin, RepoTxn& txn) {
         case MergeKind::UniqueDefinedClass:
           not_reached();
         case MergeKind::Class: break;
-        case MergeKind::TypeAlias:
-        case MergeKind::ReqDoc: {
+        case MergeKind::TypeAlias: {
           urp.insertUnitMergeable[repoId].insert(
             txn, usn, i,
             m_mergeableStmts[i].first, m_mergeableStmts[i].second, nullptr);
           break;
         }
         case MergeKind::Define:
-        case MergeKind::PersistentDefine:
-        case MergeKind::Global: {
+        case MergeKind::PersistentDefine: {
           int ix = m_mergeableStmts[i].second;
           urp.insertUnitMergeable[repoId].insert(
             txn, usn, i,
@@ -670,7 +655,6 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
         switch (mergeable.first) {
           case MergeKind::PersistentDefine:
           case MergeKind::Define:
-          case MergeKind::Global:
             extra += sizeof(TypedValueAux) / sizeof(void*);
             break;
           default:
@@ -695,7 +679,7 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
     assertx(ix == fe->id());
     mi->mergeableObj(ix++) = func;
   }
-  assertx(u->getMain(nullptr)->isPseudoMain());
+  assertx(u->getMain(nullptr, false)->isPseudoMain());
   if (!mi->m_firstHoistableFunc) {
     mi->m_firstHoistableFunc =  ix;
   }
@@ -715,14 +699,7 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
           mi->mergeableObj(ix++) =
             (void*)((intptr_t(mergeable.second) << 3) + (int)mergeable.first);
           break;
-        case MergeKind::ReqDoc: {
-          assertx(RuntimeOption::RepoAuthoritative);
-          void* name = const_cast<StringData*>(lookupLitstr(mergeable.second));
-          mi->mergeableObj(ix++) = (char*)name + (int)mergeable.first;
-          break;
-        }
         case MergeKind::Define:
-        case MergeKind::Global:
           assertx(RuntimeOption::RepoAuthoritative);
         case MergeKind::PersistentDefine: {
           void* name = const_cast<StringData*>(
@@ -775,7 +752,7 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
   if (u->m_extended) {
     auto ux = u->getExtended();
     for (auto s : m_litstrs) {
-      ux->m_namedInfo.push_back(s);
+      ux->m_namedInfo.emplace_back(LowStringPtr{s});
     }
     ux->m_arrayTypeTable = m_arrayTypeTable;
 
@@ -1210,11 +1187,10 @@ void UnitRepoProxy::InsertUnitMergeableStmt
   query.bindId("@mergeableId", id);
   if (value) {
     assertx(kind == MergeKind::Define ||
-           kind == MergeKind::PersistentDefine ||
-           kind == MergeKind::Global);
+           kind == MergeKind::PersistentDefine);
     query.bindTypedValue("@mergeableValue", *value);
   } else {
-    assertx(kind == MergeKind::ReqDoc || kind == MergeKind::TypeAlias);
+    assertx(kind == MergeKind::TypeAlias);
     query.bindNull("@mergeableValue");
   }
   query.exec();
@@ -1261,12 +1237,8 @@ void UnitRepoProxy::GetUnitMergeablesStmt
         case MergeKind::TypeAlias:
           ue.insertMergeableTypeAlias(mergeableIx, mergeableId);
           break;
-        case MergeKind::ReqDoc:
-          ue.insertMergeableInclude(mergeableIx, k, mergeableId);
-          break;
         case MergeKind::PersistentDefine:
-        case MergeKind::Define:
-        case MergeKind::Global: {
+        case MergeKind::Define: {
           TypedValue mergeableValue; /**/ query.getTypedValue(3,
                                                               mergeableValue);
           ue.insertMergeableDef(mergeableIx, k, mergeableId, mergeableValue);

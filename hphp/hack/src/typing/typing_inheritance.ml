@@ -10,11 +10,12 @@
 (** Module which checks class members against the full set of members it
     inherited, including those which were overridden. *)
 
-open Core_kernel
+open Hh_prelude
 open Decl_defs
 open Reordered_argument_collections
 open Shallow_decl_defs
 open Typing_defs
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 module Env = Typing_env
 
@@ -45,7 +46,7 @@ let check_override_annotations cls ~static =
         | Some meth ->
           let parent_method_exists =
             List.exists (all_methods_named cls id) (fun parent_meth ->
-                meth.ce_origin <> parent_meth.ce_origin)
+                String.( <> ) meth.ce_origin parent_meth.ce_origin)
           in
           if not parent_method_exists then
             Errors.should_be_override pos (Cls.name cls) id)
@@ -63,24 +64,26 @@ let check_trait_override_annotations env cls ~static =
   Sequence.iter (methods cls) (fun (id, meth) ->
       if not meth.ce_override then
         ()
-      else if meth.ce_origin = Cls.name cls then
+      else if String.equal meth.ce_origin (Cls.name cls) then
         ()
       else
         match Env.get_class env meth.ce_origin with
         | None -> ()
         | Some parent_class ->
-          if Cls.kind parent_class <> Ast_defs.Ctrait then
+          if not Ast_defs.(equal_class_kind (Cls.kind parent_class) Ctrait) then
             ()
           else (
             match meth with
-            | { ce_type = (lazy (_, Tfun { ft_pos; _ })); _ } ->
+            | { ce_type = (lazy ty); _ } ->
               let parent_method_exists =
                 List.exists (all_methods_named cls id) (fun parent_meth ->
-                    meth.ce_origin <> parent_meth.ce_origin)
+                    String.( <> ) meth.ce_origin parent_meth.ce_origin)
               in
               if not parent_method_exists then
-                Errors.override_per_trait (Cls.pos cls, Cls.name cls) id ft_pos
-            | _ -> ()
+                Errors.override_per_trait
+                  (Cls.pos cls, Cls.name cls)
+                  id
+                  (get_pos ty)
           ))
 
 let check_if_cyclic cls =
@@ -111,9 +114,7 @@ let check_extend_kinds shallow_class =
   let class_pos = fst shallow_class.sc_name in
   let class_kind = shallow_class.sc_kind in
   List.iter shallow_class.sc_extends ~f:(fun ty ->
-      let (_, (parent_pos, parent_name), _) =
-        Decl_utils.unwrap_class_type ty
-      in
+      let (_, (parent_pos, parent_name), _) = Decl_utils.unwrap_class_type ty in
       match Shallow_classes_heap.get parent_name with
       | None -> ()
       | Some parent ->
@@ -146,11 +147,11 @@ let check_class env cls =
   let shallow_class = Cls.shallow_decl cls in
   check_extend_kinds shallow_class;
   if no_trait_reuse_enabled env then check_trait_reuse shallow_class;
-  if Cls.kind cls <> Ast_defs.Ctrait then (
+  if not Ast_defs.(equal_class_kind (Cls.kind cls) Ctrait) then (
     check_override_annotations cls ~static:false;
     check_override_annotations cls ~static:true
   );
-  if Cls.kind cls = Ast_defs.Cnormal then (
+  if Ast_defs.(equal_class_kind (Cls.kind cls) Cnormal) then (
     check_trait_override_annotations env cls ~static:false;
     check_trait_override_annotations env cls ~static:true
   );

@@ -17,7 +17,6 @@
 #define incl_HPHP_RUNTIME_BASE_RDS_UTIL_H_
 
 #include "hphp/runtime/base/rds.h"
-#include "hphp/runtime/base/ref-data.h"
 #include "hphp/runtime/base/typed-value.h"
 
 namespace HPHP {
@@ -42,25 +41,25 @@ namespace HPHP { namespace rds {
 Link<TypedValue, rds::Mode::Normal>
 bindClassConstant(const StringData* clsName, const StringData* cnsName);
 
-Link<Cell, rds::Mode::Normal>
+Link<TypedValue, rds::Mode::Normal>
 bindStaticMemoValue(const Func*);
 
 Link<MemoCacheBase*, rds::Mode::Normal>
 bindStaticMemoCache(const Func*);
 
-Link<Cell, rds::Mode::Normal>
+Link<TypedValue, rds::Mode::Normal>
 attachStaticMemoValue(const Func*);
 
 Link<MemoCacheBase*, rds::Mode::Normal>
 attachStaticMemoCache(const Func*);
 
-Link<Cell, rds::Mode::Normal>
+Link<TypedValue, rds::Mode::Normal>
 bindLSBMemoValue(const Class*, const Func*);
 
 Link<MemoCacheBase*, rds::Mode::Normal>
 bindLSBMemoCache(const Class*, const Func*);
 
-Link<Cell, rds::Mode::Normal>
+Link<TypedValue, rds::Mode::Normal>
 attachLSBMemoValue(const Class*, const Func*);
 
 Link<MemoCacheBase*, rds::Mode::Normal>

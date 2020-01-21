@@ -1013,9 +1013,7 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("Cell",     T::Cell);
   X("Dbl",      T::Dbl);
   X("?Dbl",     T::OptDbl);
-  X("Gen",      T::Gen);
   X("InitCell", T::InitCell);
-  X("InitGen",  T::InitGen);
   X("InitNull", T::InitNull);
   X("InitUnc",  T::InitUnc);
   X("Int",      T::Int);
@@ -1031,7 +1029,6 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("?ClsMeth", T::OptClsMeth);
   X("Record",   T::Record);
   X("?Record",  T::OptRecord);
-  X("Ref",      T::Ref);
   X("?Res",     T::OptRes);
   X("Res",      T::Res);
   X("?SArr",    T::OptSArr);
@@ -1128,9 +1125,6 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::StrLike:
   case T::InitCell:
   case T::Cell:
-  case T::Ref:
-  case T::InitGen:
-  case T::Gen:
   case T::ExactObj:
   case T::SubObj:
   case T::OptExactObj:
@@ -1165,56 +1159,6 @@ std::vector<uint32_t> read_argv32(AsmState& as) {
   as.in.expectWs('>');
 
   return result;
-}
-
-// Read in a vector of iterators the format for this vector is:
-// <(TYPE) ID LOCAL?, (TYPE) ID LOCAL?, ...>
-// Where TYPE := Iter | LIter
-// and   ID   := Integer
-// and   LOCAL := String (only valid when TYPE = LIter)
-IterTable read_iter_table(AsmState& as) {
-  IterTable ret;
-
-  as.in.skipSpaceTab();
-  as.in.expect('<');
-
-  std::string word;
-
-  for (;;) {
-    IterTableEnt ent;
-    as.in.expectWs('(');
-    if (!as.in.readword(word)) as.error("Was expecting Iterator type.");
-    if (!word.compare("Iter")) ent.kind = KindOfIter;
-    else if (!word.compare("LIter")) ent.kind = KindOfLIter;
-    else as.error("Unknown iterator type `" + word + "'");
-    as.in.expectWs(')');
-
-    as.in.skipSpaceTab();
-
-    if (!as.in.readword(word)) as.error("Was expecting iterator id.");
-    ent.id = as.getIterId(folly::to<uint32_t>(word));
-
-    if (ent.kind == KindOfLIter) {
-      as.in.skipSpaceTab();
-      if (!as.in.readword(word)) as.error("Was expecting local.");
-      ent.local = as.getLocalId(word);
-    } else {
-      ent.local = kInvalidId;
-    }
-
-    ret.push_back(std::move(ent));
-
-    if (!isdigit(word.back())) {
-      if (word.back() == '>') break;
-      if (word.back() != ',') as.error("Was expecting `,'.");
-    } else {
-      as.in.skipSpaceTab();
-      if (as.in.peek() == '>') { as.in.getc(); break; }
-      as.in.expect(',');
-    }
-  }
-
-  return ret;
 }
 
 // Jump tables are lists of labels.
@@ -1324,10 +1268,32 @@ LocalRange read_local_range(AsmState& as) {
   return LocalRange{uint32_t(firstLoc), count};
 }
 
-std::pair<FCallArgs::Flags, bool>
+IterArgs read_iter_args(AsmState& as) {
+  auto const iterInt = read_opcode_arg<int32_t>(as);
+  auto const iterId = as.getIterId(iterInt);
+  auto const keyId = [&]{
+    auto const keyStr = read_opcode_arg<std::string>(as);
+    if (keyStr == "NK") return IterArgs::kNoKey;
+    if (!folly::StringPiece(keyStr).startsWith("K:")) {
+      as.error("Expected: NK | K:$local; got: `" + keyStr + "'");
+    }
+    return as.getLocalId(keyStr.substr(2));
+  }();
+  auto const valId = [&]{
+    auto const valStr = read_opcode_arg<std::string>(as);
+    if (!folly::StringPiece(valStr).startsWith("V:")) {
+      as.error("Expected: V:$local; got: `" + valStr + "'");
+    }
+    return as.getLocalId(valStr.substr(2));
+  }();
+  return IterArgs(IterArgs::Flags::None, iterId, keyId, valId);
+}
+
+std::tuple<FCallArgs::Flags, bool, bool>
 read_fcall_flags(AsmState& as, Op thisOpcode) {
   uint8_t flags = 0;
   bool lockWhileUnwinding = false;
+  bool skipNumArgsCheck = false;
 
   as.in.skipSpaceTab();
   as.in.expect('<');
@@ -1352,16 +1318,18 @@ read_fcall_flags(AsmState& as, Op thisOpcode) {
     }
     if (flag == "Unpack") { flags |= FCallArgs::HasUnpack; continue; }
     if (flag == "Generics") { flags |= FCallArgs::HasGenerics; continue; }
+    if (flag == "SkipNumArgsCheck") { skipNumArgsCheck = true; continue; }
+
     as.error("unrecognized FCall flag `" + flag + "'");
   }
   as.in.expectWs('>');
 
-  return std::make_pair(static_cast<FCallArgs::Flags>(flags),
-                        lockWhileUnwinding);
+  return std::make_tuple(static_cast<FCallArgs::Flags>(flags),
+                         lockWhileUnwinding, skipNumArgsCheck);
 }
 
 // Read a vector of booleans formatted as a quoted string of '0' and '1'.
-std::unique_ptr<uint8_t[]> read_by_refs(AsmState& as, uint32_t numArgs) {
+std::unique_ptr<uint8_t[]> read_inouts(AsmState& as, uint32_t numArgs) {
   as.in.skipSpaceTab();
   std::string strVal;
   if (!as.in.readQuotedStr(strVal)) {
@@ -1370,7 +1338,7 @@ std::unique_ptr<uint8_t[]> read_by_refs(AsmState& as, uint32_t numArgs) {
 
   if (strVal.empty()) return nullptr;
   if (strVal.length() != numArgs) {
-    as.error("reffiness vector must be either empty or match number of args");
+    as.error("inout-ness vector must be either empty or match number of args");
   }
 
   auto result = std::make_unique<uint8_t[]>((numArgs + 7) / 8);
@@ -1387,14 +1355,17 @@ std::tuple<FCallArgsBase, std::unique_ptr<uint8_t[]>, std::string>
 read_fcall_args(AsmState& as, Op thisOpcode) {
   FCallArgs::Flags flags;
   bool lockWhileUnwinding;
-  std::tie(flags, lockWhileUnwinding) = read_fcall_flags(as, thisOpcode);
+  bool skipNumArgsCheck;
+  std::tie(flags, lockWhileUnwinding, skipNumArgsCheck)
+    = read_fcall_flags(as, thisOpcode);
   auto const numArgs = read_opcode_arg<uint32_t>(as);
   auto const numRets = read_opcode_arg<uint32_t>(as);
-  auto byRefs = read_by_refs(as, numArgs);
+  auto inoutArgs = read_inouts(as, numArgs);
   auto asyncEagerLabel = read_opcode_arg<std::string>(as);
   return std::make_tuple(
-    FCallArgsBase(flags, numArgs, numRets, lockWhileUnwinding),
-    std::move(byRefs),
+    FCallArgsBase(flags, numArgs, numRets,
+                  lockWhileUnwinding, skipNumArgsCheck),
+    std::move(inoutArgs),
     std::move(asyncEagerLabel)
   );
 }
@@ -1416,6 +1387,7 @@ std::map<std::string,ParserFunc> opcode_parsers;
 #define IMM_THREE(t1, t2, t3) IMM_TWO(t1, t2); ++immIdx; IMM_##t3
 #define IMM_FOUR(t1, t2, t3, t4) IMM_THREE(t1, t2, t3); ++immIdx; IMM_##t4
 #define IMM_FIVE(t1, t2, t3, t4, t5) IMM_FOUR(t1, t2, t3, t4); ++immIdx; IMM_##t5
+#define IMM_SIX(t1, t2, t3, t4, t5, t6) IMM_FIVE(t1, t2, t3, t4, t5); ++immIdx; IMM_##t6
 
 // Some bytecodes need to know an iva imm for (PUSH|POP)_*.
 #define IMM_IVA do {                                      \
@@ -1442,6 +1414,7 @@ std::map<std::string,ParserFunc> opcode_parsers;
                      read_opcode_arg<int32_t>(as)))
 #define IMM_OA(ty) as.ue->emitByte(read_subop<ty>(as));
 #define IMM_LAR    encodeLocalRange(*as.ue, read_local_range(as))
+#define IMM_ITA    encodeIterArgs(*as.ue, read_iter_args(as))
 #define IMM_FCA do {                                                \
     auto const fca = read_fcall_args(as, thisOpcode);               \
     encodeFCallArgs(                                                \
@@ -1462,32 +1435,6 @@ std::map<std::string,ParserFunc> opcode_parsers;
   auto const pos = as.ue->bcPos();              \
   as.ue->emitInt32(as.ue->mergeArray(p.first)); \
   as.adataUses[pos] = std::move(p.second);      \
-} while (0)
-
-/*
- * There can currently be no more than one immvector per instruction,
- * and we need access to the size of the immediate vector for
- * NUM_POP_*, so the member vector guy exposes a vecImmStackValues
- * integer.
- */
-#define IMM_ILA do {                               \
-  auto const immTable = read_iter_table(as);       \
-  as.ue->emitIVA(immTable.size());                 \
-  for (auto const& it : immTable) {                \
-    as.ue->emitIVA(it.kind);                       \
-    as.ue->emitIVA(it.id);                         \
-    if (it.kind == KindOfLIter) {                  \
-      as.ue->emitIVA(it.local);                    \
-    }                                              \
-  }                                                \
-} while (0)
-
-#define IMM_I32LA do {                             \
-  std::vector<uint32_t> vecImm = read_argv32(as);  \
-  as.ue->emitIVA(vecImm.size());                   \
-  for (auto i : vecImm) {                          \
-    as.ue->emitInt32(i);                           \
-  }                                                \
 } while (0)
 
 #define IMM_BLA do {                                    \
@@ -1542,7 +1489,7 @@ std::map<std::string,ParserFunc> opcode_parsers;
 #define O(name, imm, pop, push, flags)                                 \
   void parse_opcode_##name(AsmState& as) {                             \
     UNUSED auto immFCA = FCallArgsBase(FCallArgsBase::None, -1, -1,    \
-                                       false);                         \
+                                       false, false);                  \
     UNUSED uint32_t immIVA[kMaxHhbcImms];                              \
     UNUSED auto const thisOpcode = Op::name;                           \
     UNUSED const Offset curOpcodeOff = as.ue->bcPos();                 \
@@ -1636,8 +1583,6 @@ OPCODES
 #undef IMM_IVA
 #undef IMM_LA
 #undef IMM_BA
-#undef IMM_ILA
-#undef IMM_I32LA
 #undef IMM_BLA
 #undef IMM_SLA
 #undef IMM_OA
@@ -1743,7 +1688,7 @@ void checkSize(TypedValue tv, size_t& available) {
   if (isArrayLikeType(type(tv))) {
     update(allocSize(val(tv).parr));
 
-    IterateKVNoInc(val(tv).parr, [&] (Cell k, TypedValue v) {
+    IterateKVNoInc(val(tv).parr, [&] (TypedValue k, TypedValue v) {
       if (isStringType(type(k))) {
         update(val(k).pstr->heapSize());
       }
@@ -2191,9 +2136,7 @@ void parse_user_attribute(AsmState& as,
     }
 
     userAttrs[name] =
-      RuntimeOption::EvalHackArrDVArrs
-        ? make_tv<KindOfVec>(ArrayData::GetScalarArray(std::move(var)))
-        : make_tv<KindOfArray>(ArrayData::GetScalarArray(std::move(var)));
+      make_array_like_tv(ArrayData::GetScalarArray(std::move(var)));
   });
 }
 
@@ -2294,6 +2237,67 @@ TypeConstraint parse_type_constraint(AsmState& as) {
   return parse_type_info(as, true).second;
 }
 
+using UpperBoundVec = CompactVector<TypeConstraint>;
+using UpperBoundMap = std::unordered_map<const StringData*, UpperBoundVec>;
+
+void parse_ub(AsmState& as, UpperBoundMap& ubs) {
+  as.in.skipWhitespace();
+  if (as.in.peek() != '(') return;
+  as.in.getc();
+  std::string name;
+  if (!as.in.readword(name)) {
+    as.error("Type name expected");
+  }
+  auto nameStr = makeStaticString(name);
+  if (!as.in.readword(name) || name != "as") {
+    as.error("Expected keyword as");
+  }
+  for (;;) {
+    const auto& tc = parse_type_info(as).second;
+    auto& v = ubs[nameStr];
+    v.push_back(tc);
+    as.in.skipWhitespace();
+    if (as.in.peek() != ',') break;
+    as.in.getc();
+    as.in.skipWhitespace();
+  }
+  as.in.expectWs(')');
+}
+
+/*
+ * upper-bound-list : '{' upper-bound-name-list '}'
+ *                ;
+ *
+ * upper-bound-name-list : empty
+ *                       | '(' type-name 'as' type-constraint-list ')'
+ *                 ;
+ */
+
+UpperBoundMap parse_ubs(AsmState& as) {
+  UpperBoundMap ret;
+  as.in.skipWhitespace();
+  if (as.in.peek() != '{') return ret;
+  as.in.getc();
+  for (;;) {
+    parse_ub(as, ret);
+    if (as.in.peek() == '}') break;
+    as.in.expectWs(',');
+  }
+  as.in.expect('}');
+  return ret;
+}
+
+UpperBoundVec getUpperBounds(const StringData* typeName,
+                             const UpperBoundMap& ubs,
+                             const UpperBoundMap& class_ubs) {
+  if (!typeName) return {};
+  assertx(typeName->isStatic());
+  auto it = ubs.find(typeName);
+  if (it != ubs.end()) return it->second;
+  it = class_ubs.find(typeName);
+  if (it != class_ubs.end()) return it->second;
+  return {};
+}
 
 /*
  * parameter-list : '(' param-name-list ')'
@@ -2315,7 +2319,10 @@ TypeConstraint parse_type_constraint(AsmState& as) {
  *             | '(' long-string-literal ')'
  *             ;
  */
-void parse_parameter_list(AsmState& as) {
+void parse_parameter_list(AsmState& as,
+                          const UpperBoundMap& ubs,
+                          const UpperBoundMap& class_ubs,
+                          bool hasReifiedGenerics) {
   as.in.skipWhitespace();
   if (as.in.peek() != '(') return;
   as.in.getc();
@@ -2325,7 +2332,6 @@ void parse_parameter_list(AsmState& as) {
 
   for (;;) {
     FuncEmitter::ParamInfo param;
-    param.byRef = false;
     param.inout = false;
 
     as.in.skipWhitespace();
@@ -2358,28 +2364,20 @@ void parse_parameter_list(AsmState& as) {
         as.error("functions cannot contain both inout and ref parameters");
       }
       param.inout = true;
-      as.fe->attrs |= AttrTakesInOutParams;
     }
 
     std::tie(param.userType, param.typeConstraint) = parse_type_info(as);
+    auto const& ub = getUpperBounds(param.userType, ubs, class_ubs);
+    if (ub.size() == 1 && !hasReifiedGenerics) {
+      param.typeConstraint = ub[0];
+    } else if (!ub.empty()) {
+      param.upperBounds = ub;
+      as.fe->hasParamsWithMultiUBs = true;
+    }
 
     as.in.skipWhitespace();
     ch = as.in.getc();
 
-    if (ch == '&') {
-      if (param.variadic) {
-        as.error("ref parameters cannot be variadic");
-      }
-      if (param.inout) {
-        as.error("parameters cannot be marked both inout and ref");
-      }
-      if (as.fe->attrs & AttrTakesInOutParams) {
-        as.error("functions cannot contain both inout and ref parameters");
-      }
-      seenRef = true;
-      param.byRef = true;
-      ch = as.in.getc();
-    }
     if (ch != '$') {
       as.error("function parameters must have a $ prefix");
     }
@@ -2546,10 +2544,6 @@ MaybeDataType type_constraint_to_data_type(LowStringPtr user_type,
     return folly::none;
 }
 
-static const StaticString
-  s_AllowStatic("__AllowStatic");
-
-
 /*
  * Checks whether the current function is native by looking at the user
  * attribute map and sets the isNative flag accoringly
@@ -2594,7 +2588,8 @@ void check_native(AsmState& as, bool is_construct) {
 }
 
 /*
- * directive-function : attribute-list ?line-range type-info identifier
+ * directive-function : upper-bound-list attribute-list ?line-range type-info
+ *                      identifier
  *                      parameter-list function-flags '{' function-body
  *                    ;
  */
@@ -2604,6 +2599,8 @@ void parse_function(AsmState& as) {
   }
 
   as.in.skipWhitespace();
+
+  auto ubs = parse_ubs(as);
 
   bool isTop = true;
 
@@ -2628,7 +2625,7 @@ void parse_function(AsmState& as) {
   int line1;
   parse_line_range(as, line0, line1);
 
-  auto typeInfo = parse_type_info(as);
+  auto retTypeInfo = parse_type_info(as);
   std::string name;
   if (!as.in.readname(name)) {
     as.error(".function must have a name");
@@ -2636,10 +2633,21 @@ void parse_function(AsmState& as) {
 
   as.fe = as.ue->newFuncEmitter(makeStaticString(name));
   as.fe->init(line0, line1, as.ue->bcPos(), attrs, isTop, 0);
-  std::tie(as.fe->retUserType, as.fe->retTypeConstraint) = typeInfo;
+
+  auto const& ub = getUpperBounds(retTypeInfo.first, ubs, {});
+  auto const hasReifiedGenerics =
+    userAttrs.find(s___Reified.get()) != userAttrs.end();
+  if (ub.size() == 1 && !hasReifiedGenerics) {
+    retTypeInfo.second = ub[0];
+  } else if (!ub.empty()) {
+    as.fe->retUpperBounds = ub;
+    as.fe->hasReturnWithMultiUBs = true;
+  }
+
+  std::tie(as.fe->retUserType, as.fe->retTypeConstraint) = retTypeInfo;
   as.fe->userAttributes = userAttrs;
 
-  parse_parameter_list(as);
+  parse_parameter_list(as, ubs, {}, hasReifiedGenerics);
   // parse_function_flabs relies on as.fe already having valid attrs
   parse_function_flags(as);
 
@@ -2656,25 +2664,21 @@ void parse_function(AsmState& as) {
  *                      parameter-list function-flags '{' function-body
  *                  ;
  */
-void parse_method(AsmState& as) {
+void parse_method(AsmState& as, const UpperBoundMap& class_ubs) {
   as.in.skipWhitespace();
+
+  auto ubs = parse_ubs(as);
 
   UserAttributeMap userAttrs;
   Attr attrs = parse_attribute_list(as, AttrContext::Func, &userAttrs);
 
-  if (!SystemLib::s_inited) {
-    attrs |= AttrBuiltin;
-
-    if (!(attrs & AttrStatic) && !userAttrs.count(s_AllowStatic.get())) {
-      attrs |= AttrRequiresThis;
-    }
-  }
+  if (!SystemLib::s_inited) attrs |= AttrBuiltin;
 
   int line0;
   int line1;
   parse_line_range(as, line0, line1);
 
-  auto typeInfo = parse_type_info(as);
+  auto retTypeInfo = parse_type_info(as);
   std::string name;
   if (!as.in.readname(name)) {
     as.error(".method requires a method name");
@@ -2689,10 +2693,23 @@ void parse_method(AsmState& as) {
   as.pce->addMethod(as.fe);
   as.fe->init(line0, line1,
               as.ue->bcPos(), attrs, false, 0);
-  std::tie(as.fe->retUserType, as.fe->retTypeConstraint) = typeInfo;
+
+  auto const hasReifiedGenerics =
+    userAttrs.find(s___Reified.get()) != userAttrs.end() ||
+    as.pce->userAttributes().find(s___Reified.get()) !=
+    as.pce->userAttributes().end();
+  auto const& ub = getUpperBounds(retTypeInfo.first, ubs, class_ubs);
+  if (ub.size() == 1 && !hasReifiedGenerics) {
+    retTypeInfo.second = ub[0];
+  } else if (!ub.empty()) {
+    as.fe->retUpperBounds = ub;
+    as.fe->hasReturnWithMultiUBs = true;
+  }
+
+  std::tie(as.fe->retUserType, as.fe->retTypeConstraint) = retTypeInfo;
   as.fe->userAttributes = userAttrs;
 
-  parse_parameter_list(as);
+  parse_parameter_list(as, ubs, class_ubs, hasReifiedGenerics);
   // parse_function_flabs relies on as.fe already having valid attrs
   parse_function_flags(as);
 
@@ -2759,7 +2776,7 @@ void parse_prop_or_field_impl(AsmState& as, AttrValidator validate, Adder add) {
   Attr attrs = parse_attribute_list(as, AttrContext::Prop, &userAttributes);
   validate(attrs);
 
-  auto const heredoc = makeStaticString(parse_maybe_long_string(as));
+  auto const heredoc = makeDocComment(parse_maybe_long_string(as));
 
   const StringData* userTy;
   TypeConstraint typeConstraint;
@@ -2797,7 +2814,7 @@ void parse_property(AsmState& as, bool class_is_const) {
     as,
     [&](Attr attrs) {
       if (attrs & AttrIsConst) {
-        if (attrs & (AttrLateInit | AttrLateInitSoft)) {
+        if (attrs & AttrLateInit) {
           as.error("const properties may not also be late init");
         }
       } else if (class_is_const && !(attrs & AttrStatic)) {
@@ -3040,7 +3057,8 @@ void parse_cls_doccomment(AsmState& as) {
  *                 | ".doc"          directive-doccomment
  *                 ;
  */
-void parse_class_body(AsmState& as, bool class_is_const) {
+void parse_class_body(AsmState& as, bool class_is_const,
+                      const UpperBoundMap& class_ubs) {
   if (!ensure_pseudomain(as)) {
     as.error(".class blocks must all follow the .main block");
   }
@@ -3051,7 +3069,7 @@ void parse_class_body(AsmState& as, bool class_is_const) {
       parse_property(as, class_is_const);
       continue;
     }
-    if (directive == ".method")       { parse_method(as);         continue; }
+    if (directive == ".method")       { parse_method(as, class_ubs); continue; }
     if (directive == ".const")        { parse_constant(as);       continue; }
     if (directive == ".use")          { parse_use(as);            continue; }
     if (directive == ".default_ctor") { parse_default_ctor(as);   continue; }
@@ -3113,8 +3131,9 @@ PreClass::Hoistable compute_hoistable(AsmState& as,
 }
 
 /*
- * directive-class : ?"top" attribute-list identifier ?line-range
- *                      extension-clause implements-clause '{' class-body
+ * directive-class : upper-bound-list ?"top" attribute-list identifier
+ *                   ?line-range extension-clause implements-clause '{'
+ *                   class-body
  *                 ;
  *
  * extension-clause : empty
@@ -3129,8 +3148,9 @@ PreClass::Hoistable compute_hoistable(AsmState& as,
 void parse_class(AsmState& as) {
   as.in.skipWhitespace();
 
-  bool isTop = true;
+  auto ubs = parse_ubs(as);
 
+  bool isTop = true;
   UserAttributeMap userAttrs;
   Attr attrs = parse_attribute_list(as, AttrContext::Class, &userAttrs, &isTop);
   if (!SystemLib::s_inited) {
@@ -3196,7 +3216,7 @@ void parse_class(AsmState& as) {
   as.pce->setUserAttributes(userAttrs);
 
   as.in.expectWs('{');
-  parse_class_body(as, attrs & AttrIsConst);
+  parse_class_body(as, attrs & AttrIsConst, ubs);
 
   as.pce->setHoistable(
     isTop ? compute_hoistable(as, name, parentName) : PreClass::NotHoistable
@@ -3564,6 +3584,13 @@ std::unique_ptr<UnitEmitter> assemble_string(
   }
   StringData* sd = makeStaticString(filename);
   ue->m_filepath = sd;
+
+  FTRACE(
+    4,
+    "==================== Assembling {} ====================\n{}\n",
+    ue->m_filepath,
+    std::string(code, codeLen)
+  );
 
   try {
     auto const mode = std::istringstream::binary | std::istringstream::in;

@@ -18,7 +18,6 @@
 #include <memory>
 #include <cstring>
 
-#include <folly/Memory.h>
 #include <folly/Format.h>
 
 #include "hphp/runtime/base/tv-comparisons.h"
@@ -113,7 +112,7 @@ TEST(APC, Basic) {
   EXPECT_EQ(store->exists(s_key), true);
   Variant got;
   EXPECT_EQ(store->get(s_key, got), true);
-  EXPECT_TRUE(cellSame(*got.toCell(),
+  EXPECT_TRUE(tvSame(*got.asTypedValue(),
     make_tv<KindOfPersistentString>(s_value1.get())));
   EXPECT_EQ(store->eraseKey(s_key), true);
   EXPECT_EQ(store->get(s_key, got), false);
@@ -125,11 +124,11 @@ TEST(APC, SetOverwrite) {
   store->set(s_key, Variant(s_value1), 1500);
   Variant got;
   EXPECT_EQ(store->get(s_key, got), true);
-  EXPECT_TRUE(cellSame(*got.toCell(),
+  EXPECT_TRUE(tvSame(*got.asTypedValue(),
               make_tv<KindOfPersistentString>(s_value1.get())));
   store->set(s_key, Variant(s_value2), 1500);
   EXPECT_EQ(store->get(s_key, got), true);
-  EXPECT_TRUE(cellSame(*got.toCell(),
+  EXPECT_TRUE(tvSame(*got.asTypedValue(),
               make_tv<KindOfPersistentString>(s_value2.get())));
 }
 
@@ -200,7 +199,7 @@ TEST(APC, BasicPrimeStuff) {
   Variant val;
 
   EXPECT_TRUE(store->get("int_2", val));
-  EXPECT_TRUE(cellSame(*val.toCell(), make_tv<KindOfInt64>(2)));
+  EXPECT_TRUE(tvSame(*val.asTypedValue(), make_tv<KindOfInt64>(2)));
 
   bool found = false;
   EXPECT_EQ(store->inc("int_3", 1, found), 4);

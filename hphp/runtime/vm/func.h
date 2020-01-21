@@ -72,16 +72,6 @@ using NativeFunction = void(*)(NativeArgs*);
  */
 using DVFuncletsVec = std::vector<std::pair<int, Offset>>;
 
-/*
- * Call ABI for a function parameter: input only (normal behavior), by
- * reference (RefData), or inout (desugars to multiple return values).
- */
-enum class ParamMode : uint8_t {
-  In,
-  Ref,
-  InOut,
-};
-
 ///////////////////////////////////////////////////////////////////////////////
 // EH table.
 
@@ -95,6 +85,15 @@ struct EHEnt {
   int m_parentIndex;
   Offset m_handler;
   Offset m_end;
+
+  EHEnt()
+    : m_base()
+    , m_past()
+    , m_iterId()
+    , m_parentIndex()
+    , m_handler()
+    , m_end()
+  {}
 
   template<class SerDe> void serde(SerDe& sd);
 };
@@ -143,10 +142,8 @@ struct Func final {
     bool variadic{false};
     // Does this use a NativeArg?
     bool nativeArg{false};
-    // Is this an inout parameter?
-    bool inout{false};
     // DV initializer funclet offset.
-    Offset funcletOff{InvalidAbsoluteOffset};
+    Offset funcletOff{kInvalidOffset};
     // Set to Uninit if there is no DV, or if there's a nonscalar DV.
     TypedValue defaultValue;
     // Eval-able PHP code.
@@ -154,7 +151,7 @@ struct Func final {
     // User-annotated type.
     LowStringPtr userType{nullptr};
     // offset of dvi funclet from cti section base.
-    Offset ctiFunclet{InvalidAbsoluteOffset};
+    Offset ctiFunclet{kInvalidOffset};
     TypeConstraint typeConstraint;
     UserAttributeMap userAttributes;
   };
@@ -171,6 +168,8 @@ struct Func final {
   using ParamInfoVec = VMFixedVector<ParamInfo>;
   using SVInfoVec = VMFixedVector<SVInfo>;
   using EHEntVec = VMFixedVector<EHEnt>;
+  using UpperBoundVec = VMCompactVector<TypeConstraint>;
+  using ParamUBMap = vm_flat_map<uint32_t, UpperBoundVec>;
 
   /////////////////////////////////////////////////////////////////////////////
   // Creation and destruction.
@@ -335,19 +334,6 @@ struct Func final {
   StrNR fullNameStr() const;
 
   /*
-   * The function's display name, which is almost always name(), except for some
-   * internal functions. In that case, return the original function's name.
-   */
-  const StringData* displayName() const;
-
-  /*
-   * The function's full display name, which is almost always fullName(), except
-   * for some internal functions. In that case, return the original function's
-   * full name.
-   */
-  const StringData* fullDisplayName() const;
-
-  /*
    * The function's named entity.  Only valid for non-methods.
    *
    * @requires: shared()->m_preClass == nullptr
@@ -498,6 +484,9 @@ struct Func final {
    */
   const StringData* returnUserType() const;
 
+  bool hasReturnWithMultiUBs() const;
+  const UpperBoundVec& returnUBs() const;
+
   /////////////////////////////////////////////////////////////////////////////
   // Parameters.                                                        [const]
 
@@ -519,14 +508,10 @@ struct Func final {
   uint32_t numNonVariadicParams() const;
 
   /*
-   * Whether the arg-th parameter are taken by reference.
+   * Number of required parameters, i.e. all arguments starting from
+   * the returned position have default value.
    */
-  bool byRef(int32_t arg) const;
-
-  /*
-   * Whether any parameters are taken by reference.
-   */
-  bool anyByRef() const;
+  uint32_t numRequiredParams() const;
 
   /*
    * Whether the function is declared with a `...' parameter.
@@ -534,10 +519,9 @@ struct Func final {
   bool hasVariadicCaptureParam() const;
 
   /*
-   * Whether extra arguments passed at call time can be ignored because they
-   * are never used.
+   * Whether the arg-th parameter was declared inout.
    */
-  bool discardExtraArgs() const;
+  bool isInOut(int32_t arg) const;
 
   /*
    * Whether any of the parameters to this function are inout parameters.
@@ -549,16 +533,9 @@ struct Func final {
    */
   uint32_t numInOutParams() const;
 
-  /*
-   * When isInOutWrapper() is true--
-   *
-   * If takesInOutParams() this function has inout params and wraps a function
-   * which takes parameters by reference
-   *
-   * If !takesInOutParams() this function has reference parameters and wraps a
-   * function with inout paramaters.
-   */
-  bool isInOutWrapper() const;
+  bool hasParamsWithMultiUBs() const;
+
+  const ParamUBMap& paramUBs() const;
 
   /////////////////////////////////////////////////////////////////////////////
   // Locals, iterators, and stack.                                      [const]
@@ -655,29 +632,12 @@ struct Func final {
 
   /*
    * Whether a method is guaranteed to have a valid this in the body.
-   * A method with AttrRequiresThis is guaranteed to be called with a
-   * valid this, but closures swap out the closure object for the
-   * closure context in the prologue, so may not have a this in the
-   * body.
+   * A method which is !isStatic() || isClosureBody() is guaranteed to
+   * be called with a valid this, but closures swap out the closure
+   * object for the closure context in the prologue, so may not have
+   * a this in the body.
    */
-  bool requiresThisInBody() const;
-
-  /*
-   * Whether the function could sometimes have this, and sometimes not
-   * depending on how it's called.
-   */
-  bool hasThisVaries() const;
-
-  /*
-   * Could this function have a valid $this?
-   *
-   * Instance methods certainly have $this, but pseudomains may as well, if
-   * they were included in the context of an instance method definition.
-   *
-   * Note that closure __invoke() methods that are scoped outside the context
-   * of a class (e.g., in a toplevel non-method function) may /not/ have $this.
-   */
-  bool mayHaveThis() const;
+  bool hasThisInBody() const;
 
   /*
    * Is this Func owned by a PreClass?
@@ -1103,7 +1063,7 @@ struct Func final {
   OFF(maybeIntercepted)
   OFF(paramCounts)
   OFF(prologueTable)
-  OFF(refBitVal)
+  OFF(inoutBitVal)
   OFF(shared)
   OFF(unit)
   OFF(methCallerMethName)
@@ -1121,8 +1081,8 @@ struct Func final {
     return offsetof(SharedData, m_base);
   }
 
-  static constexpr ptrdiff_t sharedRefBitPtrOff() {
-    return offsetof(SharedData, m_refBitPtr);
+  static constexpr ptrdiff_t sharedInOutBitPtrOff() {
+    return offsetof(SharedData, m_inoutBitPtr);
   }
 
 
@@ -1162,9 +1122,9 @@ private:
     Id m_numIterators;
     int m_line1;
     LowStringPtr m_docComment;
-    // Bits 64 and up of the reffiness guards (the first 64 bits are in
-    // Func::m_refBitVal for faster access).
-    uint64_t* m_refBitPtr;
+    // Bits 64 and up of the inout-ness guards (the first 64 bits are in
+    // Func::m_inoutBitVal for faster access).
+    uint64_t* m_inoutBitPtr;
     ParamInfoVec m_params;
     NamedLocalsMap m_localNames;
     EHEntVec m_ehtab;
@@ -1185,6 +1145,8 @@ private:
     bool m_isPhpLeafFn : 1;
     bool m_hasReifiedGenerics : 1;
     bool m_isRxDisabled : 1;
+    bool m_hasParamsWithMultiUBs : 1;
+    bool m_hasReturnWithMultiUBs : 1;
 
     // 16 bits of padding here in LOWPTR builds
 
@@ -1233,6 +1195,8 @@ private:
     ArFunction m_arFuncPtr;
     NativeFunction m_nativeFuncPtr;
     ReifiedGenericsInfo m_reifiedGenericsInfo;
+    ParamUBMap m_paramUBs;
+    UpperBoundVec m_returnUBs;
     Offset m_past;  // Only read if SharedData::m_pastDelta is kSmallDeltaLimit
     int m_line2;    // Only read if SharedData::m_line2 is kSmallDeltaLimit
   };
@@ -1437,7 +1401,7 @@ private:
   bool m_serialized : 1;
   bool m_hasForeignThis : 1;
   int m_maxStackCells{0};
-  uint64_t m_refBitVal{0};
+  uint64_t m_inoutBitVal{0};
   Unit* const m_unit;
   AtomicSharedPtr<SharedData> m_shared;
   // Initialized by Func::finishedEmittingParams.  The least significant bit is

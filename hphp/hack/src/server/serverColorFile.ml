@@ -7,15 +7,12 @@
  *
  *)
 
-let go tcopt naming_table f_in =
-  let (check, tast) =
-    ServerIdeUtils.check_file_input tcopt naming_table f_in
-  in
-  Coverage_level.get_levels tast check
-
-let go_ctx ~(ctx : Provider_context.t) ~(entry : Provider_context.entry) =
+let go_quarantined ~(ctx : Provider_context.t) ~(entry : Provider_context.entry)
+    =
   try
-    let tast = Provider_utils.compute_tast ~ctx ~entry in
+    let { Provider_utils.Compute_tast.tast; _ } =
+      Provider_utils.compute_tast_quarantined ~ctx ~entry
+    in
     Coverage_level.get_levels tast entry.Provider_context.path
   with _ ->
     (* The "Fixme Provider" will throw an exception if the file cannot be found.

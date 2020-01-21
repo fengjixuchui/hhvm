@@ -9,7 +9,7 @@ function test_error_handler($err_no, $err_msg, $filename, $linenum, $vars) {
     echo "Error: $err_no - $err_msg, $filename($linenum)\n";
 }
 <<__EntryPoint>> function main(): void {
-set_error_handler('test_error_handler');
+set_error_handler(fun('test_error_handler'));
 echo "*** Testing getimagesize() : usage variations ***\n";
 
 // Initialise function arguments not being substituted (if any)
@@ -70,7 +70,7 @@ $values = array(
 
 foreach($values as $key => $value) {
       echo "\n-- Arg value $key --\n";
-      getimagesize($imagefile, &$value);
+      getimagesize($imagefile, inout $value);
       var_dump(bin2hex($value["APP0"]));
 };
 

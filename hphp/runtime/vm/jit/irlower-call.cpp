@@ -26,6 +26,7 @@
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/bytecode.h"
+#include "hphp/runtime/vm/call-flags.h"
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/hhbc.h"
@@ -66,74 +67,83 @@ TRACE_SET_MOD(irlower);
 
 ///////////////////////////////////////////////////////////////////////////////
 
-namespace {
-
-TCA getCallTarget(IRLS& env, const IRInstruction* inst, Vreg sp) {
-  auto const extra = inst->extra<Call>();
-  auto const callee = extra->callee;
-  if (callee != nullptr) return tc::ustubs().immutableBindCallStub;
-  return tc::ustubs().funcPrologueRedispatch;
-}
-
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
 void cgCall(IRLS& env, const IRInstruction* inst) {
   auto const sp = srcLoc(env, inst, 0).reg();
-  auto const fp = srcLoc(env, inst, 1).reg();
+  auto const callee = srcLoc(env, inst, 2).reg();
+  auto const ctx = srcLoc(env, inst, 3).reg();
   auto const extra = inst->extra<Call>();
-  auto const callee = extra->callee;
-  auto const argc = extra->numParams;
-  auto const callOff = safe_cast<int32_t>(extra->callOffset);
+  auto const numArgsInclUnpack = extra->numArgs + (extra->hasUnpack ? 1 : 0);
 
   auto& v = vmain(env);
-  auto const catchBlock = label(env, inst->taken());
 
-  auto const calleeSP = sp[cellsToBytes(extra->spOffset.offset)];
-  auto const calleeAR = calleeSP + cellsToBytes(argc);
+  auto const callFlags = CallFlags(
+    extra->hasGenerics,
+    extra->dynamicCall,
+    extra->asyncEagerReturn,
+    extra->callOffset,
+    extra->genericsBitmap
+  );
 
-  auto const target = getCallTarget(env, inst, sp);
+  v << copy{v.cns(callFlags.value()), r_php_call_flags()};
+  v << copy{callee, r_php_call_func()};
+  v << copy{v.cns(numArgsInclUnpack), r_php_call_num_args()};
 
-  v << store{fp, calleeAR + AROFF(m_sfp)};
-  v << storeli{callOff, calleeAR + AROFF(m_callOff)};
-
-  if (extra->asyncEagerReturn) {
-    v << orlim{
-      static_cast<int32_t>(ActRec::Flags::AsyncEagerRet),
-      calleeAR + AROFF(m_numArgsAndFlags),
-      v.makeReg()
-    };
+  auto withCtx = false;
+  assertx(inst->src(3)->isA(TObj) || inst->src(3)->isA(TCls) ||
+          inst->src(3)->isA(TNullptr));
+  if (inst->src(3)->isA(TObj) || inst->src(3)->isA(TCls)) {
+    withCtx = true;
+    v << copy{ctx, r_php_call_ctx()};
+  } else if (RuntimeOption::EvalHHIRGenerateAsserts) {
+    withCtx = true;
+    v << copy{v.cns(ActRec::kTrashedThisSlot), r_php_call_ctx()};
   }
 
-  if (extra->numOut) {
-    v << orlim{
-      static_cast<int32_t>(ActRec::Flags::MultiReturn),
-      calleeAR + AROFF(m_numArgsAndFlags),
-      v.makeReg()
-    };
-  }
+  // Make vmsp() point to the future vmfp().
+  auto const ssp = v.makeReg();
+  v << lea{sp[cellsToBytes(extra->spOffset.offset + extra->numInputs())], ssp};
+  v << syncvmsp{ssp};
 
-  if (RuntimeOption::EvalHHIRGenerateAsserts) {
-    v << syncvmsp{v.cns(0x42)};
-
-    constexpr uint64_t kUninitializedRIP = 0xba5eba11acc01ade;
-    emitImmStoreq(v, kUninitializedRIP, calleeAR + AROFF(m_savedRip));
-  }
-
-  // A few vasm passes depend on the particular instruction sequence here:
-  //  - vasm-copy expects this lea{} to be immediately followed by the
-  //    callphp{} below.
-  //  - vasm-prof-branch requires that this lea{} fall through straight to the
-  //    callphp{}, with no intervening control flow (though it doesn't care if
-  //    they're contiguous).
-  v << lea{calleeAR, rvmfp()};
-
-  // Emit a smashable call that initially calls a recyclable service request
-  // stub.  The stub and the eventual targets take rvmfp() as an argument,
-  // pointing to the callee ActRec.
   auto const done = v.makeBlock();
-  v << callphp{target, php_call_regs(), {{done, catchBlock}}, callee, argc};
+  if (inst->src(2)->hasConstVal(TFunc) &&
+      extra->numArgs <= inst->src(2)->funcVal()->numNonVariadicParams()) {
+    // Emit a smashable call that initially calls a recyclable service request
+    // stub.  The stub and the eventual targets take rvmfp() as an argument,
+    // pointing to the callee ActRec.
+    auto const func = inst->src(2)->funcVal();
+    assertx(!extra->hasUnpack ||
+            extra->numArgs == func->numNonVariadicParams());
+    v << callphp{tc::ustubs().immutableBindCallStub, php_call_regs(withCtx),
+                 func, numArgsInclUnpack};
+  } else if (extra->skipNumArgsCheck) {
+    // If we've statically determined the provided number of arguments
+    // doesn't exceed what the target expects, we can skip the stub
+    // and call the prologue directly.
+    assertx(!extra->hasUnpack);
+    auto const pTabOff = safe_cast<int32_t>(Func::prologueTableOff());
+    auto const ptrSize = safe_cast<int32_t>(sizeof(LowPtr<uint8_t>));
+    auto const dest = v.makeReg();
+    emitLdLowPtr(v, r_php_call_func()[extra->numArgs * ptrSize + pTabOff],
+                 dest, sizeof(LowPtr<uint8_t>));
+    v << callphpr{dest, php_call_regs(withCtx)};
+  } else {
+    // If the callee is not known statically, or it was determined later, but
+    // we have too many arguments for prologue to handle, go to the redispatch
+    // stub that will pack any extra arguments and transfer control to the
+    // appropriate prologue.
+    assertx(!extra->hasUnpack);
+    v << callphp{tc::ustubs().funcPrologueRedispatch, php_call_regs(withCtx),
+                 nullptr, extra->numArgs};
+  }
+
+  // The prologue is responsible for unwinding all inputs. We could have
+  // optimized away Uninit stores for ActRec and inouts, so skip them as well.
+  auto const marker = inst->marker();
+  auto const fixupBcOff = marker.fixupBcOff() - marker.fixupFunc()->base();
+  auto const fixupSpOff =
+    marker.spOff() - extra->numInputs() - kNumActRecCells - extra->numOut;
+  v << syncpoint{Fixup{fixupBcOff, fixupSpOff.offset}};
+  v << unwind{done, label(env, inst->taken())};
   v = done;
 
   auto const dst = dstLoc(env, inst, 0);
@@ -149,24 +159,44 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
 void cgCallUnpack(IRLS& env, const IRInstruction* inst) {
   auto const extra = inst->extra<CallUnpack>();
   auto const sp = srcLoc(env, inst, 0).reg();
+  auto const callee = srcLoc(env, inst, 2).reg();
+  auto const ctx = srcLoc(env, inst, 3).reg();
   auto& v = vmain(env);
+
+  auto const calleeSP = sp[cellsToBytes(extra->spOffset.offset)];
+  auto const calleeAR = calleeSP + cellsToBytes(extra->numInputs());
+  v << store{callee, calleeAR + AROFF(m_func)};
+  v << storeli{safe_cast<int32_t>(extra->numArgs) + 1,
+               calleeAR + AROFF(m_numArgs)};
+
+  assertx(inst->src(3)->isA(TObj) || inst->src(3)->isA(TCls) ||
+          inst->src(3)->isA(TNullptr));
+  if (inst->src(3)->isA(TObj) || inst->src(3)->isA(TCls)) {
+    v << store{ctx, calleeAR + AROFF(m_thisUnsafe)};
+  } else if (RuntimeOption::EvalHHIRGenerateAsserts) {
+    emitImmStoreq(v, ActRec::kTrashedThisSlot, calleeAR + AROFF(m_thisUnsafe));
+  }
+
+  if (RuntimeOption::EvalHHIRGenerateAsserts) {
+    emitImmStoreq(v, ActRec::kTrashedVarEnvSlot, calleeAR + AROFF(m_varEnv));
+  }
 
   auto const syncSP = v.makeReg();
   v << lea{sp[cellsToBytes(extra->spOffset.offset)], syncSP};
   v << syncvmsp{syncSP};
 
-  if (extra->numOut) {
-    auto const calleeAR = syncSP + cellsToBytes(extra->numParams);
-    v << orlim{
-      static_cast<int32_t>(ActRec::Flags::MultiReturn),
-      calleeAR + AROFF(m_numArgsAndFlags),
-      v.makeReg()
-    };
-  }
+  auto const callFlags = CallFlags(
+    extra->hasGenerics,
+    extra->dynamicCall,
+    false,  // async eager return unsupported with unpack
+    0, // call offset passed differently to unpack
+    0  // generics bitmap not used with unpack
+  );
 
   auto const target = tc::ustubs().fcallUnpackHelper;
   auto const callOff = v.cns(extra->callOffset);
-  auto const args = v.makeTuple({callOff, v.cns(extra->numParams)});
+  auto const args = v.makeTuple(
+    {callOff, v.cns(extra->numInputs()), v.cns(callFlags.value())});
 
   auto const done = v.makeBlock();
   v << vcallunpack{target, fcall_unpack_regs(), args,
@@ -269,9 +299,9 @@ void cgCallBuiltin(IRLS& env, const IRInstruction* inst) {
     // req::ptr types (String, Array, Object) need adjusting to point to
     // &ptr->m_data.
     if (TVOFF(m_data) && !pi.nativeArg && isReqPtrRef(pi.builtinType)) {
-      assertx(inst->src(srcNum)->type() <= TPtrToGen);
+      assertx(inst->src(srcNum)->type() <= TPtrToCell);
       args.addr(srcLoc(env, inst, srcNum).reg(), TVOFF(m_data));
-    } else if (pi.nativeArg && !pi.builtinType && !callee->byRef(i)) {
+    } else if (pi.nativeArg && !pi.builtinType) {
       // This condition indicates a MixedTV (i.e., TypedValue-by-value) arg.
       args.typedValue(srcNum);
     } else {
@@ -353,7 +383,7 @@ void cgCallBuiltin(IRLS& env, const IRInstruction* inst) {
     return end(v);
   }
 
-  if (returnType <= TCell || returnType <= TBoxedCell) {
+  if (returnType <= TCell) {
     // The return type is Variant; fold KindOfUninit to KindOfNull.
     assertx(isBuiltinByRef(funcReturnType) && !isReqPtrRef(funcReturnType));
     static_assert(KindOfUninit == static_cast<DataType>(0),
@@ -428,7 +458,7 @@ void cgNativeImpl(IRLS& env, const IRInstruction* inst) {
   }
 }
 
-static void traceCallback(ActRec* fp, Cell* sp, Offset bcOff) {
+static void traceCallback(ActRec* fp, TypedValue* sp, Offset bcOff) {
   if (Trace::moduleEnabled(Trace::hhirTracelets)) {
     FTRACE(0, "{} {} {} {} {}\n",
            fp->m_func->fullName()->data(), bcOff, fp, sp,
@@ -451,13 +481,6 @@ void cgDbgTraceCall(IRLS& env, const IRInstruction* inst) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void cgEnterFrame(IRLS& env, const IRInstruction* inst) {
-  auto const fp = srcLoc(env, inst, 0).reg();
-  vmain(env) << phplogue{fp};
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
 void cgProfileCall(IRLS& env, const IRInstruction* inst) {
   auto const extra = inst->extra<ProfileCallTargetData>();
 
@@ -471,11 +494,17 @@ void cgProfileCall(IRLS& env, const IRInstruction* inst) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void cgCheckRefs(IRLS& env, const IRInstruction* inst)  {
+void cgEnterPrologue(IRLS& env, const IRInstruction*) {
+  vmain(env) << stublogue{false};
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+void cgCheckInOuts(IRLS& env, const IRInstruction* inst)  {
   auto const func = srcLoc(env, inst, 0).reg();
   auto const nparams = srcLoc(env, inst, 1).reg();
 
-  auto const extra = inst->extra<CheckRefs>();
+  auto const extra = inst->extra<CheckInOuts>();
   auto const mask64 = extra->mask;
   auto const vals64 = extra->vals;
   assertx(mask64);
@@ -491,12 +520,12 @@ void cgCheckRefs(IRLS& env, const IRInstruction* inst)  {
     auto cond = CC_NE;
 
     if (extra->firstBit == 0) {
-      bitsOff = Func::refBitValOff();
+      bitsOff = Func::inoutBitValOff();
       bitsPtr = func;
     } else {
       auto const shared = v.makeReg();
       v << load{func[Func::sharedOff()], shared};
-      v << load{shared[Func::sharedRefBitPtrOff()], bitsPtr};
+      v << load{shared[Func::sharedInOutBitPtrOff()], bitsPtr};
       bitsOff -= sizeof(uint64_t);
     }
 

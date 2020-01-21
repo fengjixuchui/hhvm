@@ -537,9 +537,9 @@ IniSettingMap::IniSettingMap(IniSettingMap&& i) noexcept {
 const IniSettingMap IniSettingMap::operator[](const String& key) const {
   assertx(this->isArray());
   if (auto const intish = tryIntishCast<IntishCast::Cast>(key.get())) {
-    return IniSettingMap(m_map.toCArrRef()[*intish]);
+    return IniSettingMap(m_map.asCArrRef()[*intish]);
   }
-  return IniSettingMap(m_map.toCArrRef()[key]);
+  return IniSettingMap(m_map.asCArrRef()[key]);
 }
 
 IniSettingMap& IniSettingMap::operator=(const IniSettingMap& i) {
@@ -549,31 +549,28 @@ IniSettingMap& IniSettingMap::operator=(const IniSettingMap& i) {
 
 namespace {
 void mergeSettings(tv_lval curval, TypedValue v) {
-  auto const cur_inner = curval.unboxed();
-  auto const cell = tvToCell(v);
-
-  if (isArrayLikeType(cell.m_type) &&
-      isArrayLikeType(cur_inner.type())) {
-    for (auto i = ArrayIter(cell.m_data.parr); !i.end(); i.next()) {
-      auto& cur_inner_ref = asArrRef(cur_inner);
+  if (isArrayLikeType(v.m_type) &&
+      isArrayLikeType(curval.type())) {
+    for (auto i = ArrayIter(v.m_data.parr); !i.end(); i.next()) {
+      auto& cur_inner_ref = asArrRef(curval);
       if (!cur_inner_ref.exists(i.first())) {
         cur_inner_ref.set(i.first(), empty_array());
       }
-      mergeSettings(cur_inner_ref.lvalAt(i.first()), i.secondVal());
+      mergeSettings(cur_inner_ref.lval(i.first()), i.secondVal());
     }
   } else {
-    tvSet(tvToInitCell(v), curval);
+    tvSet(tvToInit(v), curval);
   }
 }
 }
 
 void IniSettingMap::set(const String& key, const Variant& v) {
   assertx(this->isArray());
-  auto& mapref = m_map.toArrRef();
+  auto& mapref = m_map.asArrRef();
   if (!mapref.exists(key)) {
     mapref.set(key, empty_array());
   }
-  auto const curval = mapref.lvalAt(key);
+  auto const curval = mapref.lval(key);
   mergeSettings(curval, *v.asTypedValue());
 }
 
@@ -607,11 +604,11 @@ void IniSetting::ParserCallback::onPopEntry(
   forceToArray(*arr);
 
   String skey(key);
-  auto& arr_ref = arr->toArrRef();
+  auto& arr_ref = arr->asArrRef();
   if (!arr_ref.exists(skey)) {
     arr_ref.set(skey, empty_array());
   }
-  auto const hash = arr_ref.lvalAt(skey);
+  auto const hash = arr_ref.lval(skey);
   forceToArray(hash);
   if (!offset.empty()) {                 // a[b]
     makeArray(hash, offset, value);
@@ -645,9 +642,9 @@ void IniSetting::ParserCallback::makeArray(tv_lval val,
     // Similar to the above, in the case of a nested array we need to ensure
     // that we create empty arrays on the way down if they don't already exist.
     if (!arr.exists(key)) {
-      arr.set(key, make_tv<KindOfArray>(ArrayData::Create()));
+      arr.set(key, make_array_like_tv(ArrayData::Create()));
     }
-    val = arr.lvalAt(key);
+    val = arr.lval(key);
     p += index.size() + 1;
   }
 }
@@ -696,7 +693,7 @@ void IniSetting::SectionParserCallback::onSection(
     const std::string &name, void *arg) {
   auto const data = (CallbackData*)arg;
   if (!data->active_name.isNull()) {
-    data->arr.toArrRef().set(data->active_name, data->active_section);
+    data->arr.asArrRef().set(data->active_name, data->active_section);
     data->active_section.unset();
   }
   data->active_section = Array::Create();
@@ -782,7 +779,7 @@ Variant IniSetting::FromString(const String& ini, const String& filename,
     data.arr = Array::Create();
     if (zend_parse_ini_string(ini_cpp, filename_cpp, scanner_mode, cb, &data)) {
       if (!data.active_name.isNull()) {
-        data.arr.toArrRef().set(data.active_name, data.active_section);
+        data.arr.asArrRef().set(data.active_name, data.active_section);
       }
       ret = data.arr;
     }
@@ -807,53 +804,7 @@ IniSettingMap IniSetting::FromStringAsMap(const std::string& ini,
   if (parsed.isNull()) {
     return uninit_null();
   }
-  // We have the final values for our ini settings.
-  // Unbox everything so that we have no more references in the map since we do
-  // things that might require us not to have references
-  // (e.g. calling Variant::SetEvalScalar(), which will assert if an
-  // arraydata's elements are KindOfRef)
-  std::set<ArrayData*> seen;
-  bool use_defaults = false;
-  Variant ret = Unbox(parsed, seen, use_defaults, empty_string());
-  if (use_defaults) {
-    return uninit_null();
-  }
-  return ret;
-}
-
-Variant IniSetting::Unbox(const_variant_ref boxed, std::set<ArrayData*>& seen,
-                          bool& use_defaults, const String& array_key) {
-  assertx(boxed.isArray());
-  Variant unboxed(Array::Create());
-  auto ad = boxed.getArrayData();
-  if (seen.insert(ad).second) {
-    for (auto it = boxed.toArray().begin(); it; it.next()) {
-      auto key = it.first();
-      // asserting here to ensure that key is  a scalar type that can be
-      // converted to a string.
-      assertx(key.isScalar());
-      auto elem = it.secondRef();
-      unboxed.asArrRef().set(
-        key,
-        elem.isArray()
-          ? *Unbox(elem, seen, use_defaults, key.toString()).asTypedValue()
-          : *elem.rval()
-      );
-    }
-    seen.erase(ad);
-  } else {
-    // The insert into seen wasn't successful. We have recursion.  break the
-    // recursive cycle, so the elements can be freed by the MM. The
-    // as_variant_ref() is ok because we fully own the array, with no sharing.
-
-    // Use the current array key to give a little help in the log message
-    boxed.as_variant_ref().unset();
-    use_defaults = true;
-    Logger::Warning("INI Recursion Detected at offset named %s. "
-                    "Using default runtime settings.",
-                    array_key.toCppString().c_str());
-  }
-  return unboxed;
+  return parsed;
 }
 
 struct IniCallbackData {

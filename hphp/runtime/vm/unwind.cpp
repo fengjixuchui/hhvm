@@ -33,6 +33,7 @@
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/hhbc.h"
 #include "hphp/runtime/vm/hhbc-codec.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/runtime/vm/vm-regs.h"
@@ -47,9 +48,13 @@ namespace {
 //////////////////////////////////////////////////////////////////////
 
 #if (!defined(NDEBUG) || defined(USE_TRACE))
-std::string describeEx(ObjectData* phpException) {
-  return folly::format("[user exception] {}",
-                       implicit_cast<void*>(phpException)).str();
+std::string describeEx(Either<ObjectData*, Exception*> exception) {
+  if (exception.left()) {
+    return folly::format("[user exception] {}",
+                         implicit_cast<void*>(exception.left())).str();
+  }
+  return folly::format("[C++ exception] {}",
+                       implicit_cast<void*>(exception.right())).str();
 }
 #endif
 
@@ -99,7 +104,7 @@ ObjectData* tearDownFrame(ActRec*& fp, Stack& stack, PC& pc,
                           ObjectData* phpException) {
   auto const func = fp->func();
   auto const prevFp = fp->sfp();
-  auto const callOff = fp->m_callOff;
+  auto const callOff = fp->callOffset();
 
   ITRACE(1, "tearDownFrame: {} ({})\n",
          func->fullName()->data(),
@@ -139,7 +144,7 @@ ObjectData* tearDownFrame(ActRec*& fp, Stack& stack, PC& pc,
     }
   };
 
-  if (LIKELY(!fp->resumed())) {
+  if (LIKELY(!isResumed(fp))) {
     decRefLocals();
     if (UNLIKELY(func->isAsyncFunction()) &&
         phpException &&
@@ -152,12 +157,25 @@ ObjectData* tearDownFrame(ActRec*& fp, Stack& stack, PC& pc,
       stack.ndiscard(func->numSlotsInFrame());
       stack.ret();
       assertx(stack.topTV() == fp->retSlot());
-      cellCopy(make_tv<KindOfObject>(waitHandle), *fp->retSlot());
+      tvCopy(make_tv<KindOfObject>(waitHandle), *fp->retSlot());
       fp->retSlot()->m_aux.u_asyncEagerReturnFlag = 0;
     } else {
+      // We need to discard the NullUninits from inout on the stack but if the
+      // function was called with the wrong arity (resulting in an excpetion),
+      // then there may be missing inout arguments.
+      auto const numInOut = [&] () -> uint32_t {
+        if (!func->takesInOutParams()) return 0;
+        uint32_t i = 0;
+        for (int p = 0; p < fp->numArgs(); ++p) i += func->isInOut(p);
+        return i;
+      }();
       // Free ActRec.
       stack.ndiscard(func->numSlotsInFrame());
       stack.discardAR();
+
+      // JIT may have optimized away NullUninit writes over the space reserved
+      // for inout outputs.
+      stack.ndiscard(numInOut);
     }
   } else if (func->isAsyncFunction()) {
     auto const waitHandle = frame_afwh(fp);
@@ -209,8 +227,9 @@ ObjectData* tearDownFrame(ActRec*& fp, Stack& stack, PC& pc,
   }
 
   assertx(stack.isValidAddress(reinterpret_cast<uintptr_t>(prevFp)) ||
-         prevFp->resumed());
+          isResumed(prevFp));
   pc = prevFp->func()->unit()->at(callOff + prevFp->func()->base());
+  assertx(prevFp->func()->contains(pc));
   fp = prevFp;
   return phpException;
 }
@@ -247,7 +266,6 @@ DEBUG_ONLY bool throwable_has_expected_props() {
 }
 
 const StaticString s_hphpd_break("hphpd_break");
-const StaticString s_fb_enable_code_coverage("fb_enable_code_coverage");
 
 //////////////////////////////////////////////////////////////////////
 
@@ -255,7 +273,7 @@ const StaticString s_fb_enable_code_coverage("fb_enable_code_coverage");
 
 Offset findCatchHandler(const Func* func, Offset raiseOffset) {
   auto const eh = func->findEH(raiseOffset);
-  if (eh == nullptr) return InvalidAbsoluteOffset;
+  if (eh == nullptr) return kInvalidOffset;
   return eh->m_handler;
 }
 
@@ -291,12 +309,10 @@ void chainFaultObjects(ObjectData* top, ObjectData* prev) {
 
   // Found an unset previous pointer, and result will not have a cycle so chain
   // the fault objects.
-  tvMoveIgnoreRef(make_tv<KindOfObject>(prev), prevLval);
+  tvMove(make_tv<KindOfObject>(prev), prevLval);
 }
 
-namespace {
-
-ALWAYS_INLINE void lockObjectWhileUnwinding(PC pc, Stack& stack) {
+void lockObjectWhileUnwinding(PC pc, Stack& stack) {
   auto const op = decode_op(pc);
   if (LIKELY(op != OpFCallCtor)) return;
   auto fca = decodeFCallArgs(op, pc);
@@ -307,19 +323,14 @@ ALWAYS_INLINE void lockObjectWhileUnwinding(PC pc, Stack& stack) {
   // constructed is on the top of the stack, and needs to be locked.
   auto const obj = stack.top();
   assertx(tvIsObject(obj));
+  ITRACE(2, "Locking object {}\n", obj);
   obj->m_data.pobj->lockObject();
-}
-
 }
 
 /*
  * Unwinding proceeds as follows:
  *
- *   - Discard all evaluation stack temporaries (including pre-live
- *     activation records).
- *
- *   - Check if the current PC is inside a protected region, if so,
- *     leave the exception on the stack and resume the VM at the handler.
+ *   - Discard all evaluation stack temporaries.
  *
  *   - Check if we are handling user exception in an eagerly executed
  *     async function. If so, pop its frame, wrap the exception into
@@ -331,34 +342,38 @@ ALWAYS_INLINE void lockObjectWhileUnwinding(PC pc, Stack& stack) {
  *     current VM nesting level, rethrow the exception, otherwise go
  *     to the first step and repeat this process in the caller's
  *     frame.
+ *
+ * If a non nullptr fpToUnwind is given, the unwinder will not unwind past
+ * fpToUnwind, instead return when vmfp() is equal to fpToUnwind.
+ *
+ * The return value UnwinderResult indicates whether we ended unwinding due to
+ * reaching fpToUnwind as well as whether we ended with putting a failed
+ * static wait handle on the stack.
  */
-void unwindPhp(ObjectData* phpException) {
-  phpException->incRefCount();
+UnwinderResult unwindVM(Either<ObjectData*, Exception*> exception,
+                        const ActRec* fpToUnwind /* = nullptr */) {
+  assertx(!exception.isNull());
+  auto phpException = exception.left();
+  if (phpException) phpException->incRefCount();
 
   auto& fp = vmfp();
   auto& stack = vmStack();
   auto& pc = vmpc();
-  bool fromTearDownFrame = false;
 
-  ITRACE(1, "entering unwinder for exception: {}\n", describeEx(phpException));
+  ITRACE(1, "entering unwinder for exception: {}\n", describeEx(exception));
   SCOPE_EXIT {
-    ITRACE(1, "leaving unwinder for exception: {}\n", describeEx(phpException));
+    ITRACE(1, "leaving unwinder for exception: {}\n", describeEx(exception));
   };
 
   discardMemberTVRefs(pc);
 
-  do {
+  while (true) {
     auto const func = fp->func();
 
-    ITRACE(1, "unwindPhp: func {}, raiseOffset {} fp {}\n",
+    ITRACE(1, "unwind: func {}, raiseOffset {} fp {}\n",
            func->name()->data(),
            func->unit()->offsetOf(pc),
            implicit_cast<void*>(fp));
-
-    if (fromTearDownFrame) {
-      fromTearDownFrame = false;
-      lockObjectWhileUnwinding(pc, stack);
-    }
 
     discardStackTemps(fp, stack);
 
@@ -369,13 +384,13 @@ void unwindPhp(ObjectData* phpException) {
     // profiler on function exit), we can't execute any handlers in
     // *this* frame.
     if (RequestInfo::s_requestInfo->m_pendingException == nullptr &&
-        !UNLIKELY(fp->localsDecRefd())) {
+        phpException && !UNLIKELY(fp->localsDecRefd())) {
 
       const EHEnt* eh = func->findEH(func->unit()->offsetOf(pc));
       if (eh != nullptr) {
         // Found exception handler. Push the exception on top of the
         // stack and resume VM.
-        ITRACE(1, "unwindPhp: entering catch at {} func {} ({})\n",
+        ITRACE(1, "unwind: entering catch at {} func {} ({})\n",
                eh->m_handler,
                func->fullName()->data(),
                func->unit()->filepath()->data());
@@ -383,105 +398,46 @@ void unwindPhp(ObjectData* phpException) {
         vmStack().pushObjectNoRc(phpException);
         pc = func->unit()->at(eh->m_handler);
         DEBUGGER_ATTACHED_ONLY(phpDebuggerExceptionHandlerHook());
-        return;
+        return UnwindNone;
       }
     }
 
     // We found no more handlers in this frame.
     phpException = tearDownFrame(fp, stack, pc, phpException);
-    if (phpException == nullptr) {
-      if (fp) pc = skipCall(pc);
-      return;
+
+    // If we entered from the JIT and this is the last iteration, we can't
+    // trust the PC since catch traces for inlined frames may add more
+    // frames on vmfp()'s rbp chain which might have resulted in us incorrectly
+    // calculating the PC.
+
+    if (exception.left() != phpException) {
+      assertx(phpException == nullptr);
+      auto retCode = UnwindNone;
+      if (fp) {
+        if (!fpToUnwind) pc = skipCall(pc);
+        retCode = UnwindSkipCall;
+      }
+      ITRACE(1, "Returning with exception == null\n");
+      return retCode | UnwindFSWH;
     }
 
-    fromTearDownFrame = true;
-  } while (fp);
-
-  ITRACE(1, "unwind: reached the end of this nesting's ActRec chain\n");
-  throw_object(Object::attach(phpException));
-}
-
-/*
- * Unwinding of C++ exceptions proceeds as follows:
- *
- *   - Discard all PHP exceptions pending for this frame.
- *
- *   - Discard all evaluation stack temporaries (including pre-live
- *     activation records).
- *
- *   - Pop the frame for the current function.  If the current function
- *     was the last frame in the current VM nesting level, re-throw
- *     the C++ exception, otherwise go to the first step and repeat
- *     this process in the caller's frame.
- */
-void unwindCpp(Exception* exception) {
-  auto& fp = vmfp();
-  auto& stack = vmStack();
-  auto& pc = vmpc();
-
-  assertx(!g_context->m_unwindingCppException);
-  g_context->m_unwindingCppException = true;
-  ITRACE(1, "entering unwinder for C++ exception: {}\n",
-         implicit_cast<void*>(exception));
-  SCOPE_EXIT {
-    assertx(g_context->m_unwindingCppException);
-    g_context->m_unwindingCppException = false;
-    ITRACE(1, "leaving unwinder for C++ exception: {}\n",
-           implicit_cast<void*>(exception));
-  };
-
-  discardMemberTVRefs(pc);
-
-  do {
-    ITRACE(1, "unwindCpp: func {}, raiseOffset {} fp {}\n",
-           fp->func()->name()->data(),
-           fp->func()->unit()->offsetOf(pc),
-           implicit_cast<void*>(fp));
-
-    // Discard stack temporaries
-    discardStackTemps(fp, stack);
-
-    // Discard the frame
-    DEBUG_ONLY auto const phpException = tearDownFrame(fp, stack, pc, nullptr);
-    assertx(phpException == nullptr);
-    if (fp) {
-      lockObjectWhileUnwinding(pc, stack);
-      pc = skipCall(pc);
-    }
-  } while (fp);
-
-  // Propagate the C++ exception to the outer VM nesting
-  exception->throwException();
-}
-
-void unwindBuiltinFrame() {
-  auto& stack = vmStack();
-  auto& fp = vmfp();
-
-  assertx(fp->m_func->name()->isame(s_hphpd_break.get()) ||
-          fp->m_func->name()->isame(s_fb_enable_code_coverage.get()));
-
-  // Free any values that may be on the eval stack. We know it can't be
-  // a resumable body because it's a builtin frame.
-  const int numSlots = fp->m_func->numSlotsInFrame();
-  auto const evalTop = reinterpret_cast<TypedValue*>(vmfp()) - numSlots;
-  while (stack.topTV() < evalTop) {
-    stack.popTV();
+    if (!fp || (fpToUnwind && fp == fpToUnwind)) break;
+    lockObjectWhileUnwinding(pc, stack);
   }
 
-  // Free the locals and VarEnv if there is one
-  auto rv = make_tv<KindOfNull>();
-  frame_free_locals_inl(fp, fp->m_func->numLocals(), &rv);
+  if (fp) {
+    assertx(fpToUnwind && phpException);
+    ITRACE(1, "Reached {}\n", fpToUnwind);
+    phpException->decRefCount();
+    return UnwindReachedGoal;
+  }
 
-  // Tear down the frame
-  Offset pc = -1;
-  ActRec* sfp = g_context->getPrevVMState(fp, &pc);
-  assertx(pc != -1);
-  fp = sfp;
-  vmpc() = skipCall(fp->m_func->unit()->at(pc));
-  stack.ndiscard(numSlots);
-  stack.discardAR();
-  stack.pushNull(); // return value
+  ITRACE(1, "unwind: reached the end of this nesting's ActRec chain\n");
+  if (exception.right()) {
+    exception.right()->throwException();
+  }
+  assertx(phpException);
+  throw_object(Object::attach(phpException));
 }
 
 //////////////////////////////////////////////////////////////////////

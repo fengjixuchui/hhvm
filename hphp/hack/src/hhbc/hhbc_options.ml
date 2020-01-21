@@ -13,36 +13,25 @@ module J = Hh_json
 (* Compiler configuration options, as set by -v key=value on the command line *)
 type t = {
   option_constant_folding: bool;
-  option_optimize_null_check: bool;
+  option_optimize_null_checks: bool;
   option_max_array_elem_size_on_the_stack: int;
-  option_aliased_namespaces: (string * string) list option;
+  option_aliased_namespaces: (string * string) list;
   option_source_mapping: bool;
   option_relabel: bool;
   option_php7_uvs: bool;
   option_php7_ltr_assign: bool;
-  option_create_inout_wrapper_functions: bool;
-  option_reffiness_invariance: int;
   option_hack_arr_compat_notices: bool;
   option_hack_arr_dv_arrs: bool;
   option_dynamic_invoke_functions: SSet.t;
   option_repo_authoritative: bool;
   option_jit_enable_rename_function: bool;
-  option_php7_int_semantics: bool;
   option_enable_coroutines: bool;
   option_hacksperimental: bool;
   option_doc_root: string;
   option_include_search_paths: string list;
   option_include_roots: string SMap.t;
-  option_enable_perf_logging: bool;
+  option_log_extern_compiler_perf: bool;
   option_enable_intrinsics_extension: bool;
-  option_enable_hhjs: bool;
-  option_dump_hhjs: bool;
-  option_hhjs_additional_transform: string;
-  option_hhjs_no_babel: bool;
-  option_hhjs_unique_filenames: bool;
-  option_hhjs_babel_transform: string;
-  option_hhjs_node_modules: SSet.t;
-  option_hhjs_setlocs: bool;
   option_phpism_disallow_execution_operator: bool;
   option_phpism_disable_nontoplevel_declarations: bool;
   option_phpism_disable_static_closures: bool;
@@ -54,9 +43,7 @@ type t = {
   option_rx_is_enabled: bool;
   option_disable_lval_as_an_expression: bool;
   option_enable_pocket_universes: bool;
-  option_notice_on_byref_argument_typehint_violation: bool;
   option_array_provenance: bool;
-  option_enable_constant_visibility_modifiers: bool;
   option_enable_class_level_where_clauses: bool;
   option_disable_legacy_soft_typehints: bool;
   option_allow_new_attribute_syntax: bool;
@@ -65,14 +52,19 @@ type t = {
   option_const_static_props: bool;
   option_abstract_static_props: bool;
   option_disable_unset_class_const: bool;
+  option_disallow_func_ptrs_in_constants: bool;
+  option_enforce_generics_ub: bool;
+  option_check_int_overflow: bool;
+  option_enable_xhp_class_modifier: bool;
+  option_rust_lowerer: bool;
 }
 
 let default =
   {
     option_constant_folding = true;
-    option_optimize_null_check = false;
+    option_optimize_null_checks = false;
     option_max_array_elem_size_on_the_stack = 64;
-    option_aliased_namespaces = None;
+    option_aliased_namespaces = [];
     option_source_mapping = false;
     option_php7_uvs = false;
     option_php7_ltr_assign = false;
@@ -80,29 +72,18 @@ let default =
      * body. Semantic diff doesn't care about labels, but for visual diff against
      * HHVM it's helpful to renumber in order that the labels match more closely *)
     option_relabel = true;
-    option_create_inout_wrapper_functions = true;
-    option_reffiness_invariance = 0;
     option_hack_arr_compat_notices = false;
     option_hack_arr_dv_arrs = false;
     option_dynamic_invoke_functions = SSet.empty;
     option_repo_authoritative = false;
     option_jit_enable_rename_function = false;
-    option_php7_int_semantics = false;
     option_enable_coroutines = true;
     option_hacksperimental = false;
     option_doc_root = "";
     option_include_search_paths = [];
     option_include_roots = SMap.empty;
-    option_enable_perf_logging = false;
+    option_log_extern_compiler_perf = false;
     option_enable_intrinsics_extension = false;
-    option_enable_hhjs = false;
-    option_dump_hhjs = false;
-    option_hhjs_additional_transform = "";
-    option_hhjs_no_babel = false;
-    option_hhjs_unique_filenames = true;
-    option_hhjs_babel_transform = "";
-    option_hhjs_node_modules = SSet.empty;
-    option_hhjs_setlocs = false;
     option_phpism_disallow_execution_operator = false;
     option_phpism_disable_nontoplevel_declarations = false;
     option_phpism_disable_static_closures = false;
@@ -114,9 +95,7 @@ let default =
     option_rx_is_enabled = false;
     option_disable_lval_as_an_expression = false;
     option_enable_pocket_universes = false;
-    option_notice_on_byref_argument_typehint_violation = false;
     option_array_provenance = false;
-    option_enable_constant_visibility_modifiers = false;
     option_enable_class_level_where_clauses = false;
     option_disable_legacy_soft_typehints = false;
     option_allow_new_attribute_syntax = false;
@@ -125,16 +104,21 @@ let default =
     option_const_static_props = false;
     option_abstract_static_props = false;
     option_disable_unset_class_const = false;
+    option_disallow_func_ptrs_in_constants = false;
+    option_enforce_generics_ub = false;
+    option_check_int_overflow = false;
+    option_enable_xhp_class_modifier = false;
+    option_rust_lowerer = true;
   }
 
 let constant_folding o = o.option_constant_folding
 
-let optimize_null_check o = o.option_optimize_null_check
+let optimize_null_checks o = o.option_optimize_null_checks
 
 let max_array_elem_size_on_the_stack o =
   o.option_max_array_elem_size_on_the_stack
 
-let aliased_namespaces o = Option.value o.option_aliased_namespaces ~default:[]
+let aliased_namespaces o = o.option_aliased_namespaces
 
 let source_mapping o = o.option_source_mapping
 
@@ -143,10 +127,6 @@ let relabel o = o.option_relabel
 let enable_uniform_variable_syntax o = o.option_php7_uvs
 
 let php7_ltr_assign o = o.option_php7_ltr_assign
-
-let create_inout_wrapper_functions o = o.option_create_inout_wrapper_functions
-
-let reffiness_invariance o = o.option_reffiness_invariance
 
 let hack_arr_compat_notices o = o.option_hack_arr_compat_notices
 
@@ -158,8 +138,6 @@ let repo_authoritative o = o.option_repo_authoritative
 
 let jit_enable_rename_function o = o.option_jit_enable_rename_function
 
-let php7_int_semantics o = o.option_php7_int_semantics
-
 let enable_coroutines o = o.option_enable_coroutines
 
 let hacksperimental o = o.option_hacksperimental
@@ -170,25 +148,9 @@ let include_search_paths o = o.option_include_search_paths
 
 let include_roots o = o.option_include_roots
 
-let enable_perf_logging o = o.option_enable_perf_logging
+let log_extern_compiler_perf o = o.option_log_extern_compiler_perf
 
 let enable_intrinsics_extension o = o.option_enable_intrinsics_extension
-
-let enable_hhjs o = o.option_enable_hhjs
-
-let dump_hhjs o = o.option_dump_hhjs
-
-let hhjs_additional_transform o = o.option_hhjs_additional_transform
-
-let hhjs_no_babel o = o.option_hhjs_no_babel
-
-let hhjs_unique_filenames o = o.option_hhjs_unique_filenames
-
-let hhjs_babel_transform o = o.option_hhjs_babel_transform
-
-let hhjs_node_modules o = o.option_hhjs_node_modules
-
-let hhjs_setlocs o = o.option_hhjs_setlocs
 
 let phpism_disallow_execution_operator o =
   o.option_phpism_disallow_execution_operator
@@ -214,13 +176,7 @@ let disable_lval_as_an_expression o = o.option_disable_lval_as_an_expression
 
 let enable_pocket_universes o = o.option_enable_pocket_universes
 
-let notice_on_byref_argument_typehint_violation o =
-  o.option_notice_on_byref_argument_typehint_violation
-
 let array_provenance o = o.option_array_provenance
-
-let enable_constant_visibility_modifiers o =
-  o.option_enable_constant_visibility_modifiers
 
 let enable_class_level_where_clauses o =
   o.option_enable_class_level_where_clauses
@@ -229,8 +185,7 @@ let disable_legacy_soft_typehints o = o.option_disable_legacy_soft_typehints
 
 let allow_new_attribute_syntax o = o.option_allow_new_attribute_syntax
 
-let disable_legacy_attribute_syntax o =
-  o.option_disable_legacy_attribute_syntax
+let disable_legacy_attribute_syntax o = o.option_disable_legacy_attribute_syntax
 
 let const_default_func_args o = o.option_const_default_func_args
 
@@ -240,7 +195,22 @@ let abstract_static_props o = o.option_abstract_static_props
 
 let disable_unset_class_const o = o.option_disable_unset_class_const
 
+let disallow_func_ptrs_in_constants o = o.option_disallow_func_ptrs_in_constants
+
+let enable_xhp_class_modifier o = o.option_enable_xhp_class_modifier
+
+let enforce_generics_ub o = o.option_enforce_generics_ub
+
+let check_int_overflow o = o.option_check_int_overflow
+
+let rust_lowerer o = o.option_rust_lowerer
+
 let to_string o =
+  let aliased_namespaces_str =
+    aliased_namespaces o
+    |> List.map ~f:(fun (fst, snd) -> Printf.sprintf "(%s, %s)" fst snd)
+    |> String.concat ~sep:", "
+  in
   let dynamic_invokes =
     String.concat ~sep:", " (SSet.elements (dynamic_invoke_functions o))
   in
@@ -254,54 +224,48 @@ let to_string o =
     ~sep:"\n"
     [
       Printf.sprintf "constant_folding: %B" @@ constant_folding o;
-      Printf.sprintf "optimize_null_check: %B" @@ optimize_null_check o;
+      Printf.sprintf "optimize_null_checks: %B" @@ optimize_null_checks o;
       Printf.sprintf "max_array_elem_size_on_the_stack: %d"
       @@ max_array_elem_size_on_the_stack o;
+      Printf.sprintf "aliased_namespaces: %s" aliased_namespaces_str;
       Printf.sprintf "source_mapping: %B" @@ source_mapping o;
       Printf.sprintf "relabel: %B" @@ relabel o;
       Printf.sprintf "enable_uniform_variable_syntax: %B"
       @@ enable_uniform_variable_syntax o;
       Printf.sprintf "php7_ltr_assign: %B" @@ php7_ltr_assign o;
-      Printf.sprintf "create_inout_wrapper_functions: %B"
-      @@ create_inout_wrapper_functions o;
-      Printf.sprintf "reffiness_invariance: %d" @@ reffiness_invariance o;
       Printf.sprintf "hack_arr_compat_notices: %B" @@ hack_arr_compat_notices o;
       Printf.sprintf "hack_arr_dv_arrs: %B" @@ hack_arr_dv_arrs o;
       Printf.sprintf "dynamic_invoke_functions: [%s]" dynamic_invokes;
       Printf.sprintf "repo_authoritative: %B" @@ repo_authoritative o;
       Printf.sprintf "jit_enable_rename_function: %B"
       @@ jit_enable_rename_function o;
-      Printf.sprintf "php7_int_semantics: %B" @@ php7_int_semantics o;
       Printf.sprintf "enable_coroutines: %B" @@ enable_coroutines o;
       Printf.sprintf "hacksperimental: %B" @@ hacksperimental o;
       Printf.sprintf "doc_root: %s" @@ doc_root o;
       Printf.sprintf "include_search_paths: [%s]" search_paths;
       Printf.sprintf "include_roots: {%s}" inc_roots;
-      Printf.sprintf "enable_perf_logging: %B" @@ enable_perf_logging o;
+      Printf.sprintf "log_extern_compiler_perf: %B"
+      @@ log_extern_compiler_perf o;
       Printf.sprintf "enable_intrinsics_extension: %B"
       @@ enable_intrinsics_extension o;
-      Printf.sprintf "enable_hhjs: %B" @@ enable_hhjs o;
-      Printf.sprintf "hhjs_setlocs: %B" @@ hhjs_setlocs o;
-      Printf.sprintf "phpism_disallow_execution_operator %B"
+      Printf.sprintf "phpism_disallow_execution_operator: %B"
       @@ phpism_disallow_execution_operator o;
-      Printf.sprintf "phpism_disable_nontoplevel_declarations %B"
+      Printf.sprintf "phpism_disable_nontoplevel_declarations: %B"
       @@ phpism_disable_nontoplevel_declarations o;
-      Printf.sprintf "phpism_disable_static_closures %B"
+      Printf.sprintf "phpism_disable_static_closures: %B"
       @@ phpism_disable_static_closures o;
       Printf.sprintf "phpism_disable_halt_compiler: %B"
       @@ phpism_disable_halt_compiler o;
       Printf.sprintf "emit_func_pointers: %B" @@ emit_func_pointers o;
       Printf.sprintf "emit_cls_meth_pointers: %B" @@ emit_cls_meth_pointers o;
       Printf.sprintf "emit_inst_meth_pointers: %B" @@ emit_inst_meth_pointers o;
+      Printf.sprintf "emit_meth_caller_func_pointers: %B"
+      @@ emit_meth_caller_func_pointers o;
       Printf.sprintf "rx_is_enabled: %B" @@ rx_is_enabled o;
       Printf.sprintf "disable_lval_as_an_expression: %B"
       @@ disable_lval_as_an_expression o;
       Printf.sprintf "enable_pocket_universes: %B" @@ enable_pocket_universes o;
-      Printf.sprintf "notice_on_byref_argument_typehint_violation: %B"
-      @@ notice_on_byref_argument_typehint_violation o;
       Printf.sprintf "array_provenance: %B" @@ array_provenance o;
-      Printf.sprintf "enable_constant_visibility_modifiers: %B"
-      @@ enable_constant_visibility_modifiers o;
       Printf.sprintf "enable_class_level_where_clauses: %B"
       @@ enable_class_level_where_clauses o;
       Printf.sprintf "disable_legacy_soft_typehints: %B"
@@ -315,6 +279,13 @@ let to_string o =
       Printf.sprintf "abstract_static_props: %B" @@ abstract_static_props o;
       Printf.sprintf "disable_unset_class_const: %B"
       @@ disable_unset_class_const o;
+      Printf.sprintf "disallow_func_ptrs_in_constants: %B"
+      @@ disallow_func_ptrs_in_constants o;
+      Printf.sprintf "enforce_generics_ub: %B" @@ enforce_generics_ub o;
+      Printf.sprintf "check_int_overflow: %B" @@ check_int_overflow o;
+      Printf.sprintf "enable_xhp_class_modifier: %B"
+      @@ enable_xhp_class_modifier o;
+      Printf.sprintf "rust_lowerer: %B" @@ rust_lowerer o;
     ]
 
 let as_bool s =
@@ -330,31 +301,12 @@ let as_bool s =
 let set_of_csv_string s =
   SSet.of_list @@ String.split ~on:(Char.of_string ",") s
 
-let get_hhjs_node_modules_from_string = function
-  | Some "" -> Some SSet.empty
-  | Some v ->
-    let v_set = set_of_csv_string v in
-    let all_have_trailing_slash =
-      SSet.for_all
-        (fun s -> String_utils.string_ends_with s Filename.dir_sep)
-        v_set
-    in
-    if not all_have_trailing_slash then
-      raise
-        (Arg.Bad
-           ( "Expected all paths of HHJSNodeModules to end in "
-           ^ Filename.dir_sep
-           ^ ", however, at least one path did not." ))
-    else
-      Some v_set
-  | None -> None
-
 let set_option options name value =
   match String.lowercase name with
   | "hack.compiler.constantfolding" ->
     { options with option_constant_folding = as_bool value }
   | "hack.compiler.optimizenullcheck" ->
-    { options with option_optimize_null_check = as_bool value }
+    { options with option_optimize_null_checks = as_bool value }
   (* Keep both for backwards compatibility until next release *)
   | "hack.compiler.sourcemapping"
   | "eval.disassemblersourcemapping" ->
@@ -363,10 +315,6 @@ let set_option options name value =
     { options with option_php7_ltr_assign = as_bool value }
   | "hhvm.php7.uvs" -> { options with option_php7_uvs = as_bool value }
   | "hack.compiler.relabel" -> { options with option_relabel = as_bool value }
-  | "eval.createinoutwrapperfunctions" ->
-    { options with option_create_inout_wrapper_functions = as_bool value }
-  | "eval.reffinessinvariance" ->
-    { options with option_reffiness_invariance = int_of_string value }
   | "eval.hackarrcompatnotices" ->
     { options with option_hack_arr_compat_notices = as_bool value }
   | "eval.hackarrdvarrs" ->
@@ -375,33 +323,14 @@ let set_option options name value =
     { options with option_repo_authoritative = as_bool value }
   | "eval.jitenablerenamefunction" ->
     { options with option_jit_enable_rename_function = as_bool value }
-  | "hhvm.php7.int_semantics" ->
-    { options with option_php7_int_semantics = as_bool value }
   | "hack.lang.enablecoroutines" ->
     { options with option_enable_coroutines = as_bool value }
   | "hack.lang.hacksperimental" ->
     { options with option_hacksperimental = as_bool value }
   | "eval.logexterncompilerperf" ->
-    { options with option_enable_perf_logging = as_bool value }
+    { options with option_log_extern_compiler_perf = as_bool value }
   | "eval.enableintrinsicsextension" ->
     { options with option_enable_intrinsics_extension = as_bool value }
-  | "eval.enablehhjs" -> { options with option_enable_hhjs = as_bool value }
-  | "eval.dumphhjs" -> { options with option_dump_hhjs = as_bool value }
-  | "eval.hhjsnobabel" -> { options with option_hhjs_no_babel = as_bool value }
-  | "eval.hhjsuniquefilenames" ->
-    { options with option_hhjs_unique_filenames = as_bool value }
-  | "eval.hhjsadditionaltransform" ->
-    { options with option_hhjs_additional_transform = value }
-  | "eval.hhjsbabeltransform" ->
-    { options with option_hhjs_babel_transform = value }
-  | "eval.hhjsnodemodules" ->
-    let hhjs_node_modules =
-      match get_hhjs_node_modules_from_string @@ Some value with
-      | Some s -> s
-      | None -> SSet.empty
-    in
-    { options with option_hhjs_node_modules = hhjs_node_modules }
-  | "eval.hhjssetlocs" -> { options with option_hhjs_setlocs = as_bool value }
   | "hack.lang.phpism.disallowexecutionoperator" ->
     { options with option_phpism_disallow_execution_operator = as_bool value }
   | "hack.lang.phpism.disablenontopleveldeclarations" ->
@@ -430,18 +359,8 @@ let set_option options name value =
     { options with option_disable_lval_as_an_expression = as_bool value }
   | "hack.lang.enablepocketuniverses" ->
     { options with option_enable_pocket_universes = as_bool value }
-  | "hhvm.notice_on_by_ref_argument_typehint_violation" ->
-    {
-      options with
-      option_notice_on_byref_argument_typehint_violation = as_bool value;
-    }
   | "hhvm.array_provenance" ->
     { options with option_array_provenance = as_bool value }
-  | "hhvm.lang.enable_constant_visibility_modifiers" ->
-    {
-      options with
-      option_enable_constant_visibility_modifiers = as_bool value;
-    }
   | "hhvm.lang.enable_class_level_where_clauses" ->
     { options with option_enable_class_level_where_clauses = as_bool value }
   | "hhvm.lang.disable_legacy_soft_typehints" ->
@@ -458,6 +377,16 @@ let set_option options name value =
     { options with option_abstract_static_props = as_bool value }
   | "hhvm.lang.disableunsetclassconst" ->
     { options with option_disable_unset_class_const = as_bool value }
+  | "hhvm.lang.disallow_func_ptrs_in_constants" ->
+    { options with option_disallow_func_ptrs_in_constants = as_bool value }
+  | "hhvm.hack.lang.enable_xhp_class_modifier" ->
+    { options with option_enable_xhp_class_modifier = as_bool value }
+  | "eval.enforcegenericsub" ->
+    { options with option_enforce_generics_ub = int_of_string value > 0 }
+  | "hhvm.hack.lang.check_int_overflow" ->
+    { options with option_check_int_overflow = int_of_string value > 0 }
+  | "hhvm.hack.lang.rust_lowerer" ->
+    { options with option_rust_lowerer = as_bool value }
   | _ -> options
 
 let get_value_from_config_ config key =
@@ -473,10 +402,20 @@ let get_value_from_config_ config key =
 
 let get_value_from_config_int config key =
   let json_opt = get_value_from_config_ config key in
-  Option.map json_opt ~f:(fun json ->
-      match J.get_string_exn json with
-      | "" -> 0
-      | x -> int_of_string x)
+  Option.map json_opt ~f:(function
+      | J.JSON_String s
+      | J.JSON_Number s ->
+        (match s with
+        | "" -> 0
+        | x -> int_of_string x)
+      | J.JSON_Bool s ->
+        (* Boolean options are currently parsed as ints; for migration to Rust,
+         * it is important they can be parsed from JSON bools as well *)
+        if s then
+          1
+        else
+          0
+      | _ -> raise (Arg.Bad ("option can't be cast to integer: " ^ key)))
 
 let get_value_from_config_string config key =
   get_value_from_config_ config key |> Option.map ~f:J.get_string_exn
@@ -509,9 +448,6 @@ let get_value_from_config_string_to_string_map config key =
            | _ -> raise (Arg.Bad "Expected {root:path} pair")))
   | _ -> raise (Arg.Bad ("Expected string-to-string map strings at " ^ key))
 
-let get_hhjs_node_modules_from_config_string config key =
-  get_hhjs_node_modules_from_string @@ get_value_from_config_string config key
-
 let set_value name get set config opts =
   try
     let value = get config name in
@@ -524,162 +460,138 @@ let set_value name get set config opts =
 let value_setters =
   [
     ( set_value "hhvm.aliased_namespaces" get_value_from_config_kv_list
-    @@ (fun opts v -> { opts with option_aliased_namespaces = Some v }) );
+    @@ fun opts v -> { opts with option_aliased_namespaces = v } );
     ( set_value "hack.compiler.constant_folding" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_constant_folding = v = 1 }) );
+    @@ fun opts v -> { opts with option_constant_folding = v = 1 } );
     ( set_value "hack.compiler.optimize_null_checks" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_optimize_null_check = v = 1 }) );
+    @@ fun opts v -> { opts with option_optimize_null_checks = v = 1 } );
     ( set_value "eval.disassembler_source_mapping" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_source_mapping = v = 1 }) );
-    ( set_value "hhvm.php7.uvs" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_php7_uvs = v = 1 }) );
-    ( set_value "hhvm.php7.ltr_assign" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_php7_ltr_assign = v = 1 }) );
-    ( set_value "hhvm.create_in_out_wrapper_functions" get_value_from_config_int
-    @@ fun opts v ->
-    { opts with option_create_inout_wrapper_functions = v = 1 } );
-    ( set_value "hhvm.reffiness_invariance" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_reffiness_invariance = v }) );
+    @@ fun opts v -> { opts with option_source_mapping = v = 1 } );
+    ( set_value "hhvm.php7.uvs" get_value_from_config_int @@ fun opts v ->
+      { opts with option_php7_uvs = v = 1 } );
+    ( set_value "hhvm.php7.ltr_assign" get_value_from_config_int @@ fun opts v ->
+      { opts with option_php7_ltr_assign = v = 1 } );
     ( set_value "hhvm.hack_arr_compat_notices" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_hack_arr_compat_notices = v = 1 }) );
+    @@ fun opts v -> { opts with option_hack_arr_compat_notices = v = 1 } );
     ( set_value "hhvm.hack_arr_dv_arrs" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_hack_arr_dv_arrs = v = 1 }) );
+    @@ fun opts v -> { opts with option_hack_arr_dv_arrs = v = 1 } );
     ( set_value
         "hhvm.dynamic_invoke_functions"
         get_value_from_config_string_array
     @@ fun opts v ->
-    {
-      opts with
-      option_dynamic_invoke_functions =
-        SSet.of_list (List.map v String.lowercase);
-    } );
+      {
+        opts with
+        option_dynamic_invoke_functions =
+          SSet.of_list (List.map v String.lowercase);
+      } );
     ( set_value "hhvm.repo.authoritative" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_repo_authoritative = v = 1 }) );
+    @@ fun opts v -> { opts with option_repo_authoritative = v = 1 } );
     ( set_value "hhvm.jit_enable_rename_function" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_jit_enable_rename_function = v = 1 })
-    );
-    ( set_value "hhvm.php7.int_semantics" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_php7_int_semantics = v = 1 }) );
+    @@ fun opts v -> { opts with option_jit_enable_rename_function = v = 1 } );
     ( set_value "hhvm.hack.lang.enable_coroutines" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_enable_coroutines = v = 1 }) );
+    @@ fun opts v -> { opts with option_enable_coroutines = v = 1 } );
     ( set_value "hhvm.hack.lang.hacksperimental" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_hacksperimental = v = 1 }) );
+    @@ fun opts v -> { opts with option_hacksperimental = v = 1 } );
     ( set_value
         "hhvm.hack.lang.disable_lval_as_an_expression"
         get_value_from_config_int
-    @@ fun opts v ->
-    { opts with option_disable_lval_as_an_expression = v = 1 } );
+    @@ fun opts v -> { opts with option_disable_lval_as_an_expression = v = 1 }
+    );
     ( set_value
         "hhvm.hack.lang.enable_pocket_universes"
         get_value_from_config_int
-    @@ (fun opts v -> { opts with option_enable_pocket_universes = v = 1 }) );
+    @@ fun opts v -> { opts with option_enable_pocket_universes = v = 1 } );
     ( set_value
-        "hhvm.notice_on_by_ref_argument_typehint_violation"
+        "hhvm.hack.lang.enable_xhp_class_modifier"
         get_value_from_config_int
-    @@ fun opts v ->
-    { opts with option_notice_on_byref_argument_typehint_violation = v = 1 } );
-    ( set_value "doc_root" get_value_from_config_string
-    @@ (fun opts v -> { opts with option_doc_root = v }) );
+    @@ fun opts v -> { opts with option_enable_xhp_class_modifier = v = 1 } );
+    ( set_value "doc_root" get_value_from_config_string @@ fun opts v ->
+      { opts with option_doc_root = v } );
     ( set_value
         "hhvm.server.include_search_paths"
         get_value_from_config_string_array
-    @@ (fun opts v -> { opts with option_include_search_paths = v }) );
+    @@ fun opts v -> { opts with option_include_search_paths = v } );
     ( set_value "hhvm.include_roots" get_value_from_config_string_to_string_map
-    @@ (fun opts v -> { opts with option_include_roots = v }) );
+    @@ fun opts v -> { opts with option_include_roots = v } );
     ( set_value "hhvm.log_extern_compiler_perf" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_enable_perf_logging = v = 1 }) );
+    @@ fun opts v -> { opts with option_log_extern_compiler_perf = v = 1 } );
     ( set_value "hhvm.enable_intrinsics_extension" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_enable_intrinsics_extension = v = 1 })
-    );
-    ( set_value "hhvm.enable_hhjs" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_enable_hhjs = v = 1 }) );
-    ( set_value "hhvm.dump_hhjs" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_dump_hhjs = v = 1 }) );
-    ( set_value "hhvm.hhjs_additional_transform" get_value_from_config_string
-    @@ (fun opts v -> { opts with option_hhjs_additional_transform = v }) );
-    ( set_value "hhvm.hhjs_no_babel" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_hhjs_no_babel = v = 1 }) );
-    ( set_value "hhvm.hhjs_unique_filenames" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_hhjs_unique_filenames = v = 1 }) );
-    ( set_value "hhvm.hhjs_babel_transform" get_value_from_config_string
-    @@ (fun opts v -> { opts with option_hhjs_babel_transform = v }) );
-    ( set_value
-        "hhvm.hhjs_node_modules"
-        get_hhjs_node_modules_from_config_string
-    @@ (fun opts v -> { opts with option_hhjs_node_modules = v }) );
-    ( set_value "hhvm.hhjs_set_locs" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_hhjs_setlocs = v = 1 }) );
+    @@ fun opts v -> { opts with option_enable_intrinsics_extension = v = 1 } );
     ( set_value
         "hhvm.hack.lang.phpism.disallow_execution_operator"
         get_value_from_config_int
     @@ fun opts v ->
-    { opts with option_phpism_disallow_execution_operator = v = 1 } );
+      { opts with option_phpism_disallow_execution_operator = v = 1 } );
     ( set_value
         "hhvm.hack.lang.phpism.disable_nontoplevel_declarations"
         get_value_from_config_int
     @@ fun opts v ->
-    { opts with option_phpism_disable_nontoplevel_declarations = v = 1 } );
+      { opts with option_phpism_disable_nontoplevel_declarations = v = 1 } );
     ( set_value
         "hhvm.hack.lang.phpism.disable_static_closures"
         get_value_from_config_int
-    @@ fun opts v ->
-    { opts with option_phpism_disable_static_closures = v = 1 } );
+    @@ fun opts v -> { opts with option_phpism_disable_static_closures = v = 1 }
+    );
     ( set_value
         "hhvm.hack.lang.phpism.disable_halt_compiler"
         get_value_from_config_int
-    @@ (fun opts v -> { opts with option_phpism_disable_halt_compiler = v = 1 })
+    @@ fun opts v -> { opts with option_phpism_disable_halt_compiler = v = 1 }
     );
     ( set_value "hhvm.emit_func_pointers" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_emit_func_pointers = v > 0 }) );
+    @@ fun opts v -> { opts with option_emit_func_pointers = v > 0 } );
     ( set_value "hhvm.emit_cls_meth_pointers" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_emit_cls_meth_pointers = v > 0 }) );
+    @@ fun opts v -> { opts with option_emit_cls_meth_pointers = v > 0 } );
     ( set_value "hhvm.emit_meth_caller_func_pointers" get_value_from_config_int
-    @@ fun opts v ->
-    { opts with option_emit_meth_caller_func_pointers = v > 0 } );
+    @@ fun opts v -> { opts with option_emit_meth_caller_func_pointers = v > 0 }
+    );
     ( set_value "hhvm.emit_inst_meth_pointers" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_emit_inst_meth_pointers = v > 0 }) );
-    ( set_value "hhvm.rx_is_enabled" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_rx_is_enabled = v > 0 }) );
+    @@ fun opts v -> { opts with option_emit_inst_meth_pointers = v > 0 } );
+    ( set_value "hhvm.rx_is_enabled" get_value_from_config_int @@ fun opts v ->
+      { opts with option_rx_is_enabled = v > 0 } );
     ( set_value "hhvm.array_provenance" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_array_provenance = v > 0 }) );
-    ( set_value
-        "hhvm.hack.lang.enable_constant_visibility_modifiers"
-        get_value_from_config_int
-    @@ fun opts v ->
-    { opts with option_enable_constant_visibility_modifiers = v = 1 } );
+    @@ fun opts v -> { opts with option_array_provenance = v > 0 } );
     ( set_value
         "hhvm.hack.lang.enable_class_level_where_clauses"
         get_value_from_config_int
     @@ fun opts v ->
-    { opts with option_enable_class_level_where_clauses = v = 1 } );
+      { opts with option_enable_class_level_where_clauses = v = 1 } );
     ( set_value
         "hhvm.hack.lang.disable_legacy_soft_typehints"
         get_value_from_config_int
-    @@ fun opts v ->
-    { opts with option_disable_legacy_soft_typehints = v = 1 } );
+    @@ fun opts v -> { opts with option_disable_legacy_soft_typehints = v = 1 }
+    );
     ( set_value
         "hhvm.hack.lang.allow_new_attribute_syntax"
         get_value_from_config_int
-    @@ (fun opts v -> { opts with option_allow_new_attribute_syntax = v = 1 })
-    );
+    @@ fun opts v -> { opts with option_allow_new_attribute_syntax = v = 1 } );
     ( set_value
         "hhvm.hack.lang.disable_legacy_attribute_syntax"
         get_value_from_config_int
     @@ fun opts v ->
-    { opts with option_disable_legacy_attribute_syntax = v = 1 } );
+      { opts with option_disable_legacy_attribute_syntax = v = 1 } );
     ( set_value
         "hhvm.hack.lang.const_default_func_args"
         get_value_from_config_int
-    @@ (fun opts v -> { opts with option_const_default_func_args = v = 1 }) );
+    @@ fun opts v -> { opts with option_const_default_func_args = v = 1 } );
     ( set_value "hhvm.hack.lang.const_static_props" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_const_static_props = v = 1 }) );
+    @@ fun opts v -> { opts with option_const_static_props = v = 1 } );
     ( set_value "hhvm.hack.lang.abstract_static_props" get_value_from_config_int
-    @@ (fun opts v -> { opts with option_abstract_static_props = v = 1 }) );
+    @@ fun opts v -> { opts with option_abstract_static_props = v = 1 } );
     ( set_value
         "hhvm.hack.lang.disable_unset_class_const"
         get_value_from_config_int
-    @@ (fun opts v -> { opts with option_disable_unset_class_const = v = 1 })
-    );
+    @@ fun opts v -> { opts with option_disable_unset_class_const = v = 1 } );
+    ( set_value
+        "hhvm.hack.lang.disallow_func_ptrs_in_constants"
+        get_value_from_config_int
+    @@ fun opts v ->
+      { opts with option_disallow_func_ptrs_in_constants = v = 1 } );
+    ( set_value "hhvm.enforce_generics_ub" get_value_from_config_int
+    @@ fun opts v -> { opts with option_enforce_generics_ub = v > 0 } );
+    ( set_value "hhvm.hack.lang.check_int_overflow" get_value_from_config_int
+    @@ fun opts v -> { opts with option_check_int_overflow = v > 0 } );
+    ( set_value "hhvm.hack.lang.rust_lowerer" get_value_from_config_int
+    @@ fun opts v -> { opts with option_rust_lowerer = v = 1 } );
   ]
 
 let extract_config_options_from_json ~init config_json =
@@ -699,6 +611,13 @@ let get_options_from_config ?(init = default) ?(config_list = []) config_json =
       match Str.split_delim (Str.regexp "=") str with
       | [name; value] -> set_option options name value
       | _ -> options)
+
+let apply_config_overrides_statelessly config_list config_jsons =
+  List.fold_right
+    ~init:default
+    ~f:(fun config_json init ->
+      get_options_from_config config_json ~init ~config_list)
+    config_jsons
 
 let compiler_options = ref default
 

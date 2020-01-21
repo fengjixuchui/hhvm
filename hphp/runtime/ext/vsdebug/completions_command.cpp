@@ -564,8 +564,8 @@ void CompletionsCommand::addFuncConstantCompletions(
   });
 
   auto const consts = lookupDefinedConstants();
-  IterateKVNoInc(consts.get(), [&] (Cell k, TypedValue) {
-    auto const& name = String::attach(cellCastToStringData(k));
+  IterateKVNoInc(consts.get(), [&] (TypedValue k, TypedValue) {
+    auto const& name = String::attach(tvCastToStringData(k));
     addIfMatch(
       name.toCppString(),
       context.matchPrefix,

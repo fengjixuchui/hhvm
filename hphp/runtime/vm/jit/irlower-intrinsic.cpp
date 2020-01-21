@@ -56,23 +56,43 @@ TRACE_SET_MOD(irlower);
 void cgNop(IRLS&, const IRInstruction*) {}
 void cgDefConst(IRLS&, const IRInstruction*) {}
 void cgEndGuards(IRLS&, const IRInstruction*) {}
-void cgExitPlaceholder(IRLS&, const IRInstruction*) {}
+void cgJmpPlaceholder(IRLS&, const IRInstruction*) {}
 
 ///////////////////////////////////////////////////////////////////////////////
 
 void cgDefFP(IRLS&, const IRInstruction*) {}
 
-void cgDefSP(IRLS& env, const IRInstruction* inst) {
+void cgDefFrameRelSP(IRLS& env, const IRInstruction* inst) {
+  auto const fp = srcLoc(env, inst, 0).reg();
   auto const sp = dstLoc(env, inst, 0).reg();
   auto& v = vmain(env);
+  v << lea{fp[-cellsToBytes(inst->extra<DefFrameRelSP>()->offset.offset)], sp};
+}
 
-  if (inst->marker().resumeMode() != ResumeMode::None) {
-    v << defvmsp{sp};
-    return;
-  }
+void cgDefRegSP(IRLS& env, const IRInstruction* inst) {
+  auto const sp = dstLoc(env, inst, 0).reg();
+  auto& v = vmain(env);
+  v << defvmsp{sp};
+}
 
-  auto const fp = srcLoc(env, inst, 0).reg();
-  v << lea{fp[-cellsToBytes(inst->extra<DefSP>()->offset.offset)], sp};
+void cgDefCallFlags(IRLS& env, const IRInstruction* inst) {
+  auto& v = vmain(env);
+  v << copy{r_php_call_flags(), dstLoc(env, inst, 0).reg()};
+}
+
+void cgDefCallFunc(IRLS& env, const IRInstruction* inst) {
+  auto& v = vmain(env);
+  v << copy{r_php_call_func(), dstLoc(env, inst, 0).reg()};
+}
+
+void cgDefCallNumArgs(IRLS& env, const IRInstruction* inst) {
+  auto& v = vmain(env);
+  v << copy{r_php_call_num_args(), dstLoc(env, inst, 0).reg()};
+}
+
+void cgDefCallCtx(IRLS& env, const IRInstruction* inst) {
+  auto& v = vmain(env);
+  v << copy{r_php_call_ctx(), dstLoc(env, inst, 0).reg()};
 }
 
 void cgEagerSyncVMRegs(IRLS& env, const IRInstruction* inst) {
@@ -158,13 +178,15 @@ void getMemoKeyImpl(IRLS& env, const IRInstruction* inst, bool sync) {
   auto const s = inst->src(0);
 
   auto args = argGroup(env, inst);
-  if (s->isA(TArrLike) || s->isA(TObj) || s->isA(TStr) || s->isA(TDbl)) {
+  if (s->isA(TKeyset) || s->isA(TArrLike) || s->isA(TObj) || s->isA(TStr) ||
+      s->isA(TDbl)) {
     args.ssa(0, s->isA(TDbl));
   } else {
     args.typedValue(0);
   }
 
   auto const target = [&]{
+    if (s->isA(TKeyset))  return CallSpec::direct(serialize_memoize_param_set);
     if (s->isA(TArrLike)) return CallSpec::direct(serialize_memoize_param_arr);
     if (s->isA(TStr))     return CallSpec::direct(serialize_memoize_param_str);
     if (s->isA(TDbl))     return CallSpec::direct(serialize_memoize_param_dbl);
@@ -200,10 +222,10 @@ void cgGetMemoKeyScalar(IRLS& env, const IRInstruction* inst) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-static void memoSetDecRefImpl(Cell newVal, Cell* cache) {
-  assertx(cellIsPlausible(newVal));
-  assertx(cellIsPlausible(*cache));
-  cellSetWithAux(newVal, *cache);
+static void memoSetDecRefImpl(TypedValue newVal, TypedValue* cache) {
+  assertx(tvIsPlausible(newVal));
+  assertx(tvIsPlausible(*cache));
+  tvSetWithAux(newVal, *cache);
 }
 
 namespace {

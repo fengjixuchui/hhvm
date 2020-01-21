@@ -551,7 +551,7 @@ String HHVM_FUNCTION(implode,
       arg1.toString(),
       StrNR(clsMeth->getFunc()->name()));
   } else {
-    throw_bad_type_exception("implode() expects a container as "
+    raise_bad_type_warning("implode() expects a container as "
                              "one of the arguments");
     return String();
   }
@@ -641,7 +641,7 @@ TypedValue HHVM_FUNCTION(strtok, const String& str, const Variant& token) {
 namespace {
 
 Variant str_replace(const Variant& search, const Variant& replace,
-                    const String& subject, int &count, bool caseSensitive) {
+                    const String& subject, int64_t& count, bool caseSensitive) {
   count = 0;
   if (search.isArray()) {
     String ret = subject;
@@ -678,17 +678,20 @@ Variant str_replace(const Variant& search, const Variant& replace,
   if (replace.isArray()) {
     raise_notice("Array to string conversion");
   }
-  return string_replace(subject, search.toString(), replace.toString(), count,
-                        caseSensitive);
+  int icount;
+  auto ret = string_replace(subject, search.toString(), replace.toString(), icount,
+                            caseSensitive);
+  count = icount;
+  return ret;
 }
 
 Variant str_replace(const Variant& search, const Variant& replace,
-                    const Variant& subject, int &count, bool caseSensitive) {
+                    const Variant& subject, int64_t& count, bool caseSensitive) {
   count = 0;
   if (subject.isArray()) {
     Array arr = subject.toArray();
     Array ret = Array::Create();
-    int c;
+    int64_t c;
     for (ArrayIter iter(arr); iter; ++iter) {
       if (iter.second().isArray() || iter.second().is(KindOfObject)) {
         ret.set(iter.first(), iter.second());
@@ -708,27 +711,26 @@ Variant str_replace(const Variant& search, const Variant& replace,
 }
 
 Variant str_replace(const Variant& search, const Variant& replace,
-                    const Variant& subject, VRefParam count) {
-  int nCount = 0;
+                    const Variant& subject, int64_t& count) {
   Variant ret;
+  count = 0;
   if (LIKELY(search.isString() && replace.isString() && subject.isString())) {
+    int icount;
     // Short-cut for the most common (and simplest) case
     ret = string_replace(subject.asCStrRef(), search.asCStrRef(),
-                         replace.asCStrRef(), nCount, true);
+                         replace.asCStrRef(), icount, true);
+    count = icount;
   } else {
     // search, replace, and subject can all be arrays. str_replace() reduces all
     // the valid combinations to multiple string_replace() calls.
-    ret = str_replace(search, replace, subject, nCount, true);
+    ret = str_replace(search, replace, subject, count, true);
   }
-  if (auto ref = count.getRefDataOrNull()) *ref->var() = nCount;
   return ret;
 }
 
 Variant str_ireplace(const Variant& search, const Variant& replace,
-                     const Variant& subject, VRefParam count) {
-  int nCount = 0;
-  Variant ret = str_replace(search, replace, subject, nCount, false);
-  if (auto ref = count.getRefDataOrNull()) *ref->var() = nCount;
+                     const Variant& subject, int64_t& count) {
+  Variant ret = str_replace(search, replace, subject, count, false);
   return ret;
 }
 
@@ -736,25 +738,27 @@ Variant str_ireplace(const Variant& search, const Variant& replace,
 
 TypedValue HHVM_FUNCTION(str_replace,
                          const Variant& search, const Variant& replace,
-                         const Variant& subject, VRefParam count) {
+                         const Variant& subject) {
+  int64_t count;
   return tvReturn(str_replace(search, replace, subject, count));
 }
 
 TypedValue HHVM_FUNCTION(str_replace_with_count,
                          const Variant& search, const Variant& replace,
-                         const Variant& subject, VRefParam count) {
+                         const Variant& subject, int64_t& count) {
   return tvReturn(str_replace(search, replace, subject, count));
 }
 
 TypedValue HHVM_FUNCTION(str_ireplace,
                          const Variant& search, const Variant& replace,
-                         const Variant& subject, VRefParam count) {
+                         const Variant& subject) {
+  int64_t count;
   return tvReturn(str_ireplace(search, replace, subject, count));
 }
 
 TypedValue HHVM_FUNCTION(str_ireplace_with_count,
                          const Variant& search, const Variant& replace,
-                         const Variant& subject, VRefParam count) {
+                         const Variant& subject, int64_t& count) {
   return tvReturn(str_ireplace(search, replace, subject, count));
 }
 
@@ -769,17 +773,17 @@ static Variant substr_replace(const Variant& str, const Variant& replacement,
     }
     if (start.isArray()) {
       if (!length.isArray()) {
-        throw_invalid_argument("start and length should be of same type - "
+        raise_invalid_argument_warning("start and length should be of same type - "
                                "numerical or array");
         return str;
       }
       Array startArr = start.toArray();
       Array lengthArr = length.toArray();
       if (startArr.size() != lengthArr.size()) {
-        throw_invalid_argument("start and length: (different item count)");
+        raise_invalid_argument_warning("start and length: (different item count)");
         return str;
       }
-      throw_invalid_argument("start and length as arrays not implemented");
+      raise_invalid_argument_warning("start and length as arrays not implemented");
       return str;
     }
     return string_replace(str.toString(), start.toInt32(), length.toInt32(),
@@ -994,12 +998,14 @@ String HHVM_FUNCTION(chr, const Variant& ascii) {
     case KindOfPersistentVec:
     case KindOfPersistentDict:
     case KindOfPersistentKeyset:
-    case KindOfPersistentShape:
+    case KindOfPersistentDArray:
+    case KindOfPersistentVArray:
     case KindOfPersistentArray:
     case KindOfVec:
     case KindOfDict:
     case KindOfKeyset:
-    case KindOfShape:
+    case KindOfDArray:
+    case KindOfVArray:
     case KindOfArray:
     case KindOfObject:
     case KindOfResource:
@@ -1007,7 +1013,6 @@ String HHVM_FUNCTION(chr, const Variant& ascii) {
     case KindOfClass:
     case KindOfClsMeth:
     case KindOfRecord:
-    case KindOfRef:
       return String::FromChar(0);
   }
 
@@ -1216,7 +1221,7 @@ template<bool existence_only>
 static ALWAYS_INLINE
 Variant strpbrk_impl(const String& haystack, const String& char_list) {
   if (char_list.empty()) {
-    throw_invalid_argument("char_list: (empty)");
+    raise_invalid_argument_warning("char_list: (empty)");
     return false;
   }
   if (haystack.empty()) {
@@ -1402,18 +1407,18 @@ TypedValue HHVM_FUNCTION(substr_count,
                          int length /* = 0x7FFFFFFF */) {
   int lenNeedle = needle.size();
   if (lenNeedle == 0) {
-    throw_invalid_argument("needle: (empty)");
+    raise_invalid_argument_warning("needle: (empty)");
     return make_tv<KindOfBoolean>(false);
   }
 
   if (offset < 0 || offset > haystack.size()) {
-    throw_invalid_argument("offset: (out of range)");
+    raise_invalid_argument_warning("offset: (out of range)");
     return make_tv<KindOfBoolean>(false);
   }
   if (length == 0x7FFFFFFF) {
     length = haystack.size() - offset;
   } else if (length <= 0 || length > haystack.size() - offset) {
-    throw_invalid_argument("length: (out of range)");
+    raise_invalid_argument_warning("length: (out of range)");
     return make_tv<KindOfBoolean>(false);
   }
 
@@ -1574,7 +1579,7 @@ Variant HHVM_FUNCTION(count_chars,
     return String(retstr, retlen, CopyString);
   }
 
-  throw_invalid_argument("mode: %" PRId64, mode);
+  raise_invalid_argument_warning("mode: %" PRId64, mode);
   return false;
 }
 
@@ -1607,7 +1612,7 @@ Variant HHVM_FUNCTION(str_word_count,
     }
     break;
   default:
-    throw_invalid_argument("format: %" PRId64, format);
+    raise_invalid_argument_warning("format: %" PRId64, format);
     return false;
   }
 
@@ -1678,11 +1683,9 @@ int64_t HHVM_FUNCTION(levenshtein,
 int64_t HHVM_FUNCTION(similar_text,
                       const String& first,
                       const String& second,
-                      VRefParam percent /* = uninit_null() */) {
-  float p;
+                      double& percent) {
   int ret = string_similar_text(first.data(), first.size(),
-                                second.data(), second.size(), &p);
-  percent.assignIfRef(p);
+                                second.data(), second.size(), &percent);
   return ret;
 }
 
@@ -1743,7 +1746,7 @@ String HHVM_FUNCTION(fb_htmlspecialchars,
                      const String& charset /* = "ISO-8859-1" */,
                      const Variant& extra /* = varray[] */) {
   if (!extra.isNull() && !extra.isArray()) {
-    throw_expected_array_exception("fb_htmlspecialchars");
+    raise_expected_array_warning("fb_htmlspecialchars");
   }
   const Array& arr_extra = extra.isNull() ? empty_varray() : extra.toArray();
   return StringUtil::HtmlEncodeExtra(str, StringUtil::toQuoteStyle(flags),
@@ -2106,7 +2109,7 @@ Variant HHVM_FUNCTION(strtr,
   }
 
   if (!from.isArray()) {
-    throw_invalid_argument("2nd argument: (not array)");
+    raise_invalid_argument_warning("2nd argument: (not array)");
     return false;
   }
 
@@ -2164,7 +2167,7 @@ Variant HHVM_FUNCTION(setlocale,
                       const Array& _argv /* = null_array */) {
   Array argv = _argv;
   if (locale.isArray()) {
-    if (!argv.empty()) throw_invalid_argument("locale: not string)");
+    if (!argv.empty()) raise_invalid_argument_warning("locale: not string)");
     argv = locale; // ignore _argv
   }
 
@@ -2179,7 +2182,7 @@ Variant HHVM_FUNCTION(setlocale,
 
     const char *loc = slocale.c_str();
     if (slocale.size() >= 255) {
-      throw_invalid_argument("locale name is too long: %s", loc);
+      raise_invalid_argument_warning("locale name is too long: %s", loc);
       return false;
     }
     if (strcmp("0", loc) == 0) {

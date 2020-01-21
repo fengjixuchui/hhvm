@@ -39,7 +39,7 @@ struct Unit;
 struct UnitEmitter;
 struct Func;
 
-constexpr size_t kMaxHhbcImms = 5;
+constexpr size_t kMaxHhbcImms = 6;
 
 // A contiguous range of locals. The count is the number of locals
 // including the first. If the range is empty, count will be zero and
@@ -49,16 +49,56 @@ struct LocalRange {
   uint32_t count;
 };
 
+/*
+ * Arguments to IterInit / IterNext opcodes.
+ * hhas format: <iterId> K:<keyId> V:<valId> (for key-value iters)
+ *              <iterId> NK V:<valId>        (for value-only iters)
+ * hhbc format: <uint8:flags> <iva:iterId> <iva:(keyId + 1)> <iva:valId>
+ *
+ * For value-only iters, keyId will be -1 (an invalid local ID); to take
+ * advantage of the one-byte encoding for IVA arguments, we add 1 to the key
+ * when encoding these args in the hhbc format.
+ *
+ * We don't accept flags from hhas because our flags require analyses that we
+ * currently only do in HHBBC.
+ */
+struct IterArgs {
+  enum Flags : uint8_t {
+    None      = 0,
+    // The base is stored in a local, and that local is unmodified in the loop.
+    BaseConst = (1 << 0),
+  };
+
+  static constexpr int32_t kNoKey = -1;
+
+  explicit IterArgs(Flags flags, int32_t iterId, int32_t keyId, int32_t valId)
+    : iterId(iterId), keyId(keyId), valId(valId), flags(flags) {}
+
+  bool hasKey() const {
+    assertx(keyId == kNoKey || keyId >= 0);
+    return keyId != kNoKey;
+  };
+
+  bool operator==(const IterArgs& other) const {
+    return iterId == other.iterId && keyId == other.keyId &&
+           valId == other.valId && flags == other.flags;
+  }
+
+  int32_t iterId;
+  int32_t keyId;
+  int32_t valId;
+  Flags flags;
+};
 
 // Arguments to FCall opcodes.
-// hhas format: <flags> <numArgs> <numRets> <byRefs> <asyncEagerOffset>
+// hhas format: <flags> <numArgs> <numRets> <inoutArgs> <asyncEagerOffset>
 // hhbc format: <uint8:flags> ?<iva:numArgs> ?<iva:numRets>
-//              ?<boolvec:byRefs> ?<ba:asyncEagerOffset>
+//              ?<boolvec:inoutArgs> ?<ba:asyncEagerOffset>
 //   flags            = flags (hhas doesn't have HHBC-only flags)
 //   numArgs          = flags >> kFirstNumArgsBit
 //                        ? flags >> kFirstNumArgsBit - 1 : decode_iva()
 //   numRets          = flags & HasInOut ? decode_iva() : 1
-//   byRefs           = flags & EnforceReffiness ? decode bool vec : nullptr
+//   inoutArgs        = flags & EnforceInOut ? decode bool vec : nullptr
 //   asyncEagerOffset = flags & HasAEO ? decode_ba() : kInvalidOffset
 struct FCallArgsBase {
   enum Flags : uint8_t {
@@ -72,8 +112,8 @@ struct FCallArgsBase {
     SupportsAsyncEagerReturn = (1 << 2),
     // HHBC-only: is the number of returns provided? false => 1
     HasInOut                 = (1 << 3),
-    // HHBC-only: should this FCall enforce argument reffiness?
-    EnforceReffiness         = (1 << 4),
+    // HHBC-only: should this FCall enforce argument inout-ness?
+    EnforceInOut             = (1 << 4),
     // HHBC-only: is the async eager offset provided? false => kInvalidOffset
     HasAsyncEagerOffset      = (1 << 5),
     // HHBC-only: the remaining space is used for number of arguments
@@ -87,9 +127,13 @@ struct FCallArgsBase {
   static constexpr uint8_t kFirstNumArgsBit = 6;
 
   explicit FCallArgsBase(Flags flags, uint32_t numArgs, uint32_t numRets,
-                         bool lockWhileUnwinding)
-    : numArgs(numArgs), numRets(numRets), flags(flags)
-      , lockWhileUnwinding(lockWhileUnwinding) {
+                         bool lockWhileUnwinding, bool skipNumArgsCheck)
+    : numArgs(numArgs)
+    , numRets(numRets)
+    , flags(flags)
+    , lockWhileUnwinding(lockWhileUnwinding)
+    , skipNumArgsCheck(skipNumArgsCheck)
+  {
     assertx(!(flags & ~kInternalFlags));
     assertx(!(supportsAsyncEagerReturn() && lockWhileUnwinding));
   }
@@ -105,32 +149,37 @@ struct FCallArgsBase {
   uint32_t numRets;
   Flags flags;
   bool lockWhileUnwinding;
+  bool skipNumArgsCheck;
 };
 
 struct FCallArgs : FCallArgsBase {
   explicit FCallArgs(Flags flags, uint32_t numArgs, uint32_t numRets,
-                     const uint8_t* byRefs, Offset asyncEagerOffset,
-                     bool lockWhileUnwinding)
-    : FCallArgsBase(flags, numArgs, numRets, lockWhileUnwinding)
+                     const uint8_t* inoutArgs, Offset asyncEagerOffset,
+                     bool lockWhileUnwinding, bool skipNumArgsCheck)
+    : FCallArgsBase(flags, numArgs, numRets,
+                    lockWhileUnwinding, skipNumArgsCheck)
     , asyncEagerOffset(asyncEagerOffset)
-    , byRefs(byRefs) {
-    assertx(IMPLIES(byRefs != nullptr, numArgs != 0));
+    , inoutArgs(inoutArgs) {
+    assertx(IMPLIES(inoutArgs != nullptr, numArgs != 0));
     assertx(IMPLIES(asyncEagerOffset == kInvalidOffset,
                     !supportsAsyncEagerReturn()));
   }
-  bool enforceReffiness() const { return byRefs != nullptr; }
-  bool byRef(uint32_t i) const {
-    assertx(enforceReffiness());
-    return byRefs[i / 8] & (1 << (i % 8));
+  bool enforceInOut() const { return inoutArgs != nullptr; }
+  bool isInOut(uint32_t i) const {
+    assertx(enforceInOut());
+    return inoutArgs[i / 8] & (1 << (i % 8));
   }
   Offset asyncEagerOffset;
-  const uint8_t* byRefs;
+  const uint8_t* inoutArgs;
 };
 
 static_assert(1 << FCallArgs::kFirstNumArgsBit == FCallArgs::NumArgsStart, "");
 
+using PrintLocal = std::function<std::string(int32_t local)>;
+std::string show(const IterArgs&, PrintLocal);
+
 std::string show(const LocalRange&);
-std::string show(const FCallArgsBase&, const uint8_t* byRefs,
+std::string show(const FCallArgsBase&, const uint8_t* inoutArgs,
                  std::string asyncEagerLabel);
 
 /*
@@ -140,8 +189,8 @@ std::string show(const FCallArgsBase&, const uint8_t* byRefs,
  * and the byte is the value. Otherwise, it's 4 bytes, and bits 8..31 must be
  * logical-shifted to the right by one to get rid of the flag bit.
  *
- * The types in this macro for BLA, SLA, ILA, I32LA and VSA are meaningless
- * since they are never read out of ArgUnion (they use ImmVector).
+ * The types in this macro for BLA, SLA, and VSA are meaningless since they
+ * are never read out of ArgUnion (they use ImmVector).
  *
  * ArgTypes and their various decoding helpers should be kept in sync with the
  * `hhx' bytecode inspection GDB command.
@@ -150,8 +199,6 @@ std::string show(const FCallArgsBase&, const uint8_t* byRefs,
   ARGTYPE(NA,     void*)         /* unused */                                  \
   ARGTYPEVEC(BLA, Offset)        /* Bytecode offset vector immediate */        \
   ARGTYPEVEC(SLA, Id)            /* String id/offset pair vector */            \
-  ARGTYPEVEC(ILA, Id)            /* IterKind/IterId pair vector */             \
-  ARGTYPEVEC(I32LA,uint32_t)     /* Vector of 32-bit uint */                   \
   ARGTYPE(IVA,    uint32_t)      /* Variable size: 8 or 32-bit uint */         \
   ARGTYPE(I64A,   int64_t)       /* 64-bit Integer */                          \
   ARGTYPE(LA,     int32_t)       /* Local variable ID: 8 or 32-bit int */      \
@@ -164,6 +211,7 @@ std::string show(const FCallArgsBase&, const uint8_t* byRefs,
   ARGTYPE(OA,     unsigned char) /* Sub-opcode, untyped */                     \
   ARGTYPE(KA,     MemberKey)     /* Member key: local, stack, int, str */      \
   ARGTYPE(LAR,    LocalRange)    /* Contiguous range of locals */              \
+  ARGTYPE(ITA,    IterArgs)      /* Iterator arguments */                      \
   ARGTYPE(FCA,    FCallArgs)     /* FCall arguments */                         \
   ARGTYPEVEC(VSA, Id)            /* Vector of static string IDs */
 
@@ -185,16 +233,11 @@ union ArgUnion {
 #undef ARGTYPEVEC
 };
 
-const Offset InvalidAbsoluteOffset = -1;
-
 enum FlavorDesc {
   NOV,  // None
-  CV,   // Cell
-  VV,   // Var
+  CV,   // TypedValue
   UV,   // Uninit
-  CVV,  // Cell or Var argument
-  CUV,  // Cell, or Uninit argument
-  CVUV, // Cell, Var, or Uninit argument
+  CUV,  // TypedValue, or Uninit argument
 };
 
 enum InstrFlags {
@@ -285,11 +328,6 @@ enum class InitPropOp : uint8_t {
 #define INITPROP_OP(op) op,
   INITPROP_OPS
 #undef INITPROP_OP
-};
-
-enum IterKind {
-  KindOfIter  = 0,
-  KindOfLIter = 1,
 };
 
 #define FATAL_OPS                               \
@@ -488,7 +526,6 @@ constexpr uint32_t kMaxConcatN = 4;
   O(EntryNop,        NA,               NOV,             NOV,        NF) \
   O(BreakTraceHint,  NA,               NOV,             NOV,        NF) \
   O(PopC,            NA,               ONE(CV),         NOV,        NF) \
-  O(PopV,            NA,               ONE(VV),         NOV,        NF) \
   O(PopU,            NA,               ONE(UV),         NOV,        NF) \
   O(PopU2,           NA,               TWO(CV,UV),      ONE(CV),    NF) \
   O(PopFrame,        ONE(IVA),         CMANY_U3,        CMANY,      NF) \
@@ -569,7 +606,6 @@ constexpr uint32_t kMaxConcatN = 4;
   O(CastDouble,      NA,               ONE(CV),         ONE(CV),    NF) \
   O(CastString,      NA,               ONE(CV),         ONE(CV),    NF) \
   O(CastArray,       NA,               ONE(CV),         ONE(CV),    NF) \
-  O(CastObject,      NA,               ONE(CV),         ONE(CV),    NF) \
   O(CastDict,        NA,               ONE(CV),         ONE(CV),    NF) \
   O(CastKeyset,      NA,               ONE(CV),         ONE(CV),    NF) \
   O(CastVec,         NA,               ONE(CV),         ONE(CV),    NF) \
@@ -608,7 +644,6 @@ constexpr uint32_t kMaxConcatN = 4;
   O(PushL,           ONE(LA),          NOV,             ONE(CV),    NF) \
   O(CGetG,           NA,               ONE(CV),         ONE(CV),    NF) \
   O(CGetS,           NA,               TWO(CV,CV),      ONE(CV),    NF) \
-  O(VGetL,           ONE(LA),          NOV,             ONE(VV),    NF) \
   O(ClassGetC,       NA,               ONE(CV),         ONE(CV),    NF) \
   O(ClassGetTS,      NA,               ONE(CV),         TWO(CV,CV), NF) \
   O(GetMemoKeyL,     ONE(LA),          NOV,             ONE(CV),    NF) \
@@ -649,33 +684,28 @@ constexpr uint32_t kMaxConcatN = 4;
   O(NewObjS,         ONE(OA(SpecialClsRef)),                            \
                                        NOV,             ONE(CV),    NF) \
   O(LockObj,         NA,               ONE(CV),         ONE(CV),    NF) \
-  O(FCallClsMethod,  FOUR(FCA,SA,I32LA,OA(IsLogAsDynamicCallOp)),       \
+  O(FCallClsMethod,  THREE(FCA,SA,OA(IsLogAsDynamicCallOp)),            \
                                        FCALL(2, 0),     FCALL,      CF) \
   O(FCallClsMethodD, FOUR(FCA,SA,SA,SA),                                \
                                        FCALL(0, 0),     FCALL,      CF) \
-  O(FCallClsMethodS, FOUR(FCA,SA,OA(SpecialClsRef),I32LA),              \
+  O(FCallClsMethodS, THREE(FCA,SA,OA(SpecialClsRef)),                   \
                                        FCALL(1, 0),     FCALL,      CF) \
   O(FCallClsMethodSD,FOUR(FCA,SA,OA(SpecialClsRef),SA),                 \
                                        FCALL(0, 0),     FCALL,      CF) \
   O(FCallCtor,       TWO(FCA,SA),      FCALL(0, 1),     FCALL,      CF) \
-  O(FCallFunc,       TWO(FCA,I32LA),   FCALL(1, 0),     FCALL,      CF) \
+  O(FCallFunc,       ONE(FCA),         FCALL(1, 0),     FCALL,      CF) \
   O(FCallFuncD,      TWO(FCA,SA),      FCALL(0, 0),     FCALL,      CF) \
-  O(FCallObjMethod,  FOUR(FCA,SA,OA(ObjMethodOp),I32LA),                \
+  O(FCallObjMethod,  THREE(FCA,SA,OA(ObjMethodOp)),                     \
                                        FCALL(1, 1),     FCALL,      CF) \
   O(FCallObjMethodD, FOUR(FCA,SA,OA(ObjMethodOp),SA),                   \
                                        FCALL(0, 1),     FCALL,      CF) \
   O(FCallBuiltin,    FOUR(IVA,IVA,IVA,SA),CALLNATIVE,   CALLNATIVE, NF) \
-  O(IterInit,        THREE(IA,BA,LA),  ONE(CV),         NOV,        CF) \
-  O(LIterInit,       FOUR(IA,LA,BA,LA),NOV,             NOV,        CF) \
-  O(IterInitK,       FOUR(IA,BA,LA,LA),ONE(CV),         NOV,        CF) \
-  O(LIterInitK,      FIVE(IA,LA,BA,LA,LA),NOV,          NOV,        CF) \
-  O(IterNext,        THREE(IA,BA,LA),  NOV,             NOV,        CF) \
-  O(LIterNext,       FOUR(IA,LA,BA,LA),NOV,             NOV,        CF) \
-  O(IterNextK,       FOUR(IA,BA,LA,LA),NOV,             NOV,        CF) \
-  O(LIterNextK,      FIVE(IA,LA,BA,LA,LA),NOV,          NOV,        CF) \
+  O(IterInit,        TWO(ITA,BA),      ONE(CV),         NOV,        CF) \
+  O(LIterInit,       THREE(ITA,LA,BA), NOV,             NOV,        CF) \
+  O(IterNext,        TWO(ITA,BA),      NOV,             NOV,        CF) \
+  O(LIterNext,       THREE(ITA,LA,BA), NOV,             NOV,        CF) \
   O(IterFree,        ONE(IA),          NOV,             NOV,        NF) \
   O(LIterFree,       TWO(IA,LA),       NOV,             NOV,        NF) \
-  O(IterBreak,       TWO(BA,ILA),      NOV,             NOV,        CF_TF) \
   O(Incl,            NA,               ONE(CV),         ONE(CV),    CF) \
   O(InclOnce,        NA,               ONE(CV),         ONE(CV),    CF) \
   O(Req,             NA,               ONE(CV),         ONE(CV),    CF) \
@@ -685,7 +715,6 @@ constexpr uint32_t kMaxConcatN = 4;
   O(DefCls,          ONE(IVA),         NOV,             NOV,        NF) \
   O(DefClsNop,       ONE(IVA),         NOV,             NOV,        NF) \
   O(DefRecord,       ONE(IVA),         NOV,             NOV,        NF) \
-  O(AliasCls,        TWO(SA,SA),       ONE(CV),         ONE(CV),    NF) \
   O(DefCns,          ONE(SA),          ONE(CV),         ONE(CV),    NF) \
   O(DefTypeAlias,    ONE(IVA),         NOV,             NOV,        NF) \
   O(This,            NA,               NOV,             ONE(CV),    NF) \
@@ -868,29 +897,17 @@ private:
   const uint8_t* m_start;
 };
 
-struct IterTableEnt {
-  IterKind kind;
-  int32_t id;
-  int32_t local;
-};
-using IterTable = CompactVector<IterTableEnt>;
-
 // Must be an opcode that actually has an ImmVector.
 ImmVector getImmVector(PC opcode);
-
-// Must be an opcode that actually has an IterTable.
-IterTable getIterTable(PC opcode);
 
 // Some decoding helper functions.
 int numImmediates(Op opcode);
 ArgType immType(Op opcode, int idx);
 bool hasImmVector(Op opcode);
-bool hasIterTable(Op opcode);
 int instrLen(PC opcode);
 int numSuccs(PC opcode);
 
 PC skipCall(PC pc);
-IterTable iterTableFromStream(PC&);
 
 /*
  * The returned struct has normalized variable-sized immediates. u must be

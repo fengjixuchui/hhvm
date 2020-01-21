@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 
 type ctx = { class_tparams: Nast.tparam list }
@@ -23,7 +23,7 @@ let visitor =
           List.iter
             state.class_tparams
             (fun { tp_name = (c_tp_pos, c_tp_name); _ } ->
-              if c_tp_name = tp_name then
+              if String.equal c_tp_name tp_name then
                 Errors.typeconst_depends_on_external_tparam
                   pos
                   c_tp_pos

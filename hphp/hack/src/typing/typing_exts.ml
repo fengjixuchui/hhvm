@@ -6,6 +6,7 @@
  * LICENSE file in the "hack" directory of this source tree.
  *
  *)
+
 (*
 
 Ad-hoc rules for typing some common idioms
@@ -27,7 +28,7 @@ Ad-hoc rules for typing some common idioms
 
 *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 open Typing_env_types
 open Aast
@@ -49,32 +50,43 @@ let magic_method_name input =
     else
       "format_" ^ String.make 1 lc
 
-let lookup_magic_type (env : env) (class_ : locl ty) (fname : string) :
-    env * (locl fun_params * locl ty option) option =
-  match class_ with
-  | (_, Tunion [(_, Tdynamic); (_, Tclass ((_, className), _, []))])
-  | (_, Tclass ((_, className), _, [])) ->
+let strip_dynamic t =
+  match get_node t with
+  | Tunion [t1; t2] when is_dynamic t1 -> t2
+  | Tunion [t1; t2] when is_dynamic t2 -> t1
+  | _ -> t
+
+let lookup_magic_type (env : env) (class_ : locl_ty) (fname : string) :
+    env * (locl_fun_params * locl_ty option) option =
+  match get_node (strip_dynamic class_) with
+  | Tclass ((_, className), _, []) ->
     let ( >>= ) = Option.( >>= ) in
     let ce_type =
-      Env.get_class env className
-      >>= (fun c -> Env.get_member true env c fname)
-      >>= fun { ce_type = (lazy ty); _ } ->
-      match ty with
-      | (_, Tfun fty) ->
+      (Env.get_class env className >>= fun c -> Env.get_member true env c fname)
+      >>= fun { ce_type = (lazy ty); ce_pos = (lazy pos); _ } ->
+      match deref ty with
+      | (r, Tfun fty) ->
         let ety_env = Typing_phase.env_with_self env in
         let instantiation =
           Typing_phase.
-            { use_pos = fty.ft_pos; use_name = fname; explicit_targs = [] }
+            { use_pos = Reason.to_pos r; use_name = fname; explicit_targs = [] }
         in
-        Some (Typing_phase.localize_ft ~instantiation ~ety_env env fty)
+        Some
+          (Typing_phase.localize_ft
+             ~instantiation
+             ~def_pos:pos
+             ~ety_env
+             env
+             fty)
       | _ -> None
     in
     begin
       match ce_type with
       | Some (env, { ft_params = pars; ft_ret = { et_type = ty; _ }; _ }) ->
+        let (env, ty) = Env.expand_type env ty in
         let ty_opt =
-          match ty with
-          | (_, Tprim Tstring) -> None
+          match get_node ty with
+          | Tprim Tstring -> None
           | _ -> Some ty
         in
         (env, Some (pars, ty_opt))
@@ -88,24 +100,24 @@ let get_char s i =
   else
     Some s.[i]
 
-let parse_printf_string env s pos (class_ : locl ty) : env * locl fun_params =
-  let rec read_text env i : env * locl fun_params =
+let parse_printf_string env s pos (class_ : locl_ty) : env * locl_fun_params =
+  let rec read_text env i : env * locl_fun_params =
     match get_char s i with
     | Some '%' -> read_modifier env (i + 1) class_ i
     | Some _ -> read_text env (i + 1)
     | None -> (env, [])
-  and read_modifier env i class_ i0 : env * locl fun_params =
+  and read_modifier env i class_ i0 : env * locl_fun_params =
     let fname = magic_method_name (get_char s i) in
     let snippet = String.sub s i0 (min (i + 1) (String.length s) - i0) in
     let add_reason =
       List.map ~f:(fun p ->
-          let (why, ty) = p.fp_type.et_type in
+          let (why, ty) = deref p.fp_type.et_type in
           {
             p with
             fp_type =
               {
                 p.fp_type with
-                et_type = (Reason.Rformat (pos, snippet, why), ty);
+                et_type = mk (Reason.Rformat (pos, snippet, why), ty);
               };
           })
     in
@@ -121,9 +133,9 @@ let parse_printf_string env s pos (class_ : locl ty) : env * locl fun_params =
         pos
         snippet
         s
-        (Reason.to_pos (fst class_))
+        (get_pos class_)
         fname
-        (Print.suggest class_);
+        (Print.full_strip_ns env class_);
       let (env, xs) = read_text env (i + 1) in
       (env, add_reason xs)
   in
@@ -167,70 +179,54 @@ let rec const_string_of (env : env) (e : Nast.expr) :
     (env, glue stra strb)
   | (p, _) -> (env, Left p)
 
+let get_format_string_type_arg t =
+  match get_node t with
+  | Tclass ((_, fs), _, [ty]) when SN.Classes.is_format_string fs -> Some ty
+  | _ -> None
+
+let get_opt_format_string_type_arg t =
+  match get_node t with
+  | Toption t -> get_format_string_type_arg t
+  | _ -> None
+
+let get_possibly_like_format_string_type_arg t =
+  match get_node t with
+  | Tunion [t1; t2] when is_dynamic t1 -> get_format_string_type_arg t2
+  | Toption t -> get_format_string_type_arg t
+  | _ -> get_format_string_type_arg t
+
 (* Specialize a function type using whatever we can tell about the args *)
-let retype_magic_func (env : env) (ft : locl fun_type) (el : Nast.expr list) :
-    env * locl fun_type =
-  let rec f env param_types args : env * locl fun_params option =
+let retype_magic_func (env : env) (ft : locl_fun_type) (el : Nast.expr list) :
+    env * locl_fun_type =
+  let rec f env param_types args : env * locl_fun_params option =
     match (param_types, args) with
-    | ( [
-          {
-            fp_type =
-              { et_type = (_, Toption (_, Tclass ((_, fs), _, [_]))); _ };
-            _;
-          };
-        ],
-        [(_, Null)] )
-      when SN.Classes.is_format_string fs ->
+    | ([{ fp_type = { et_type; _ }; _ }], [(_, Null)])
+      when is_some (get_opt_format_string_type_arg et_type) ->
       (env, None)
-    | ( [
-          ( {
-              fp_type =
-                {
-                  et_type = (why, Toption (_, Tclass ((_, fs), _, [type_arg])));
-                  _;
-                };
-              _;
-            } as fp );
-        ],
-        arg :: _ )
-    | ( [
-          ( {
-              fp_type = { et_type = (why, Tclass ((_, fs), _, [type_arg])); _ };
-              _;
-            } as fp );
-        ],
-        arg :: _ )
-    | ( [
-          ( {
-              fp_type =
-                {
-                  et_type =
-                    ( why,
-                      Tunion
-                        [(_, Tdynamic); (_, Tclass ((_, fs), _, [type_arg]))]
-                    );
-                  _;
-                };
-              _;
-            } as fp );
-        ],
-        arg :: _ )
-      when SN.Classes.is_format_string fs ->
-      (match const_string_of env arg with
-      | (env, Right str) ->
-        let (env, argl) = parse_printf_string env str (fst arg) type_arg in
-        ( env,
-          Some
-            ( {
-                fp with
-                fp_type =
-                  { et_type = (why, Tprim Tstring); et_enforced = false };
-              }
-            :: argl ) )
-      | (env, Left pos) ->
-        if Partial.should_check_error (Env.get_mode env) 4027 then
-          Errors.expected_literal_format_string pos;
-        (env, None))
+    | ([({ fp_type = { et_type; _ }; _ } as fp)], arg :: _) ->
+      begin
+        match get_possibly_like_format_string_type_arg et_type with
+        | Some type_arg ->
+          (match const_string_of env arg with
+          | (env, Right str) ->
+            let (env, argl) = parse_printf_string env str (fst arg) type_arg in
+            ( env,
+              Some
+                ( {
+                    fp with
+                    fp_type =
+                      {
+                        et_type = mk (get_reason et_type, Tprim Tstring);
+                        et_enforced = false;
+                      };
+                  }
+                :: argl ) )
+          | (env, Left pos) ->
+            if Partial.should_check_error (Env.get_mode env) 4027 then
+              Errors.expected_literal_format_string pos;
+            (env, None))
+        | None -> (env, None)
+      end
     | (param :: params, _ :: args) ->
       (match f env params args with
       | (env, None) -> (env, None)

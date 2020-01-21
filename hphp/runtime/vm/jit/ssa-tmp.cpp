@@ -48,12 +48,12 @@ int typeNeededWords(Type t) {
   if (t.maybe(TNullptr)) {
     return typeNeededWords(t - TNullptr);
   }
-  if (t <= TCtx || t <= TPtrToGen) {
-    // Ctx and PtrTo* may be statically unknown but always need just one
+  if (t <= TPtrToCell) {
+    // PtrTo* may be statically unknown but always need just one
     // register.
     return 1;
   }
-  if (t <= TLvalToGen) {
+  if (t <= TLvalToCell) {
     // If tv_val<> is ever anything other than 1 or more normal pointers, this
     // will need to change.
     static_assert(sizeof(tv_lval) % 8 == 0, "");
@@ -61,11 +61,11 @@ int typeNeededWords(Type t) {
   }
   if (!t.isUnion()) {
     // Not a union type and not a special case: 1 register.
-    assertx(IMPLIES(t <= TGen, t.isKnownDataType()));
+    assertx(IMPLIES(t <= TCell, t.isKnownDataType()));
     return 1;
   }
 
-  assertx(t <= TGen);
+  assertx(t <= TCell);
 
   // XXX(t4592459): This will return 2 for TNull, even though it only
   // needs 1 register (one for the type, none for the value). This is to work
@@ -81,7 +81,8 @@ int SSATmp::numWords() const {
 }
 
 Variant SSATmp::variantVal() const {
-  switch (type().toDataType()) {
+  auto const dt = type().toDataType();
+  switch (dt) {
     case KindOfUninit:
     case KindOfNull:
       // Upon return both will converted to KindOfNull anyway.
@@ -94,21 +95,15 @@ Variant SSATmp::variantVal() const {
       return dblVal();
     case KindOfPersistentString:
       return Variant{strVal(), Variant::PersistentStrInit{}};
+    case KindOfPersistentDArray:
+    case KindOfPersistentVArray:
+      // TODO(T58820726)
+      break;
     case KindOfPersistentVec:
-      return Variant{vecVal(), KindOfPersistentVec,
-                     Variant::PersistentArrInit{}};
     case KindOfPersistentDict:
-      return Variant{dictVal(), KindOfPersistentDict,
-                     Variant::PersistentArrInit{}};
     case KindOfPersistentKeyset:
-      return Variant{keysetVal(), KindOfPersistentKeyset,
-                     Variant::PersistentArrInit{}};
-    case KindOfPersistentShape:
-      return Variant{shapeVal(), KindOfPersistentShape,
-                     Variant::PersistentArrInit{}};
     case KindOfPersistentArray:
-      return Variant{arrVal(), KindOfPersistentArray,
-                     Variant::PersistentArrInit{}};
+      return Variant{arrLikeVal(), dt, Variant::PersistentArrInit{}};
     case KindOfClass:
       return Variant{const_cast<Class*>(clsVal())};
     case KindOfFunc:
@@ -120,11 +115,11 @@ Variant SSATmp::variantVal() const {
     case KindOfVec:
     case KindOfDict:
     case KindOfKeyset:
-    case KindOfShape:
+    case KindOfDArray:
+    case KindOfVArray:
     case KindOfArray:
     case KindOfObject:
     case KindOfResource:
-    case KindOfRef:
     case KindOfRecord:
       break;
   }

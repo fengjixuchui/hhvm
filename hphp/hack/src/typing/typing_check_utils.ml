@@ -7,29 +7,46 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 
-let type_file tcopt fn { FileInfo.funs; classes; typedefs; consts; _ } =
-  let (errors, tast) =
+let type_file_with_global_tvenvs
+    tcopt fn { FileInfo.funs; classes; record_defs; typedefs; consts; _ } =
+  let (errors, (tast, global_tvenvs)) =
     Errors.do_with_context fn Errors.Typing (fun () ->
-        let fs =
-          List.filter_map funs (fun (_, x) ->
-              Typing_check_service.type_fun tcopt fn x)
+        let (fs, f_global_tvenvs) =
+          List.map funs ~f:snd
+          |> List.filter_map ~f:(fun x ->
+                 Typing_check_service.type_fun tcopt fn x)
+          |> List.unzip
         in
-        let cs =
-          List.filter_map classes (fun (_, x) ->
-              Typing_check_service.type_class tcopt fn x)
+        let (cs, c_global_tvenvs) =
+          List.map classes ~f:snd
+          |> List.filter_map ~f:(fun x ->
+                 Typing_check_service.type_class tcopt fn x)
+          |> List.unzip
+        in
+        let rs =
+          List.map record_defs ~f:snd
+          |> List.filter_map ~f:(fun x ->
+                 Typing_check_service.type_record_def tcopt fn x)
         in
         let ts =
-          List.filter_map typedefs (fun (_, x) ->
-              Typing_check_service.check_typedef tcopt fn x)
+          List.map typedefs ~f:snd
+          |> List.filter_map ~f:(fun x ->
+                 Typing_check_service.check_typedef tcopt fn x)
         in
         let gcs =
-          List.filter_map consts (fun (_, x) ->
-              Typing_check_service.check_const tcopt fn x)
+          List.map consts ~f:snd
+          |> List.filter_map ~f:(fun x ->
+                 Typing_check_service.check_const tcopt fn x)
         in
-        fs @ cs @ ts @ gcs)
+        ( fs @ cs @ rs @ ts @ gcs,
+          lazy (List.concat (f_global_tvenvs :: c_global_tvenvs)) ))
   in
+  (tast, global_tvenvs, errors)
+
+let type_file tcopt fn fi =
+  let (tast, _, errors) = type_file_with_global_tvenvs tcopt fn fi in
   (tast, errors)
 
 (*****************************************************************************)

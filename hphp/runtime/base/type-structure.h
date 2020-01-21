@@ -75,15 +75,24 @@ enum class Kind : uint8_t {
   // Make sure to update kMaxResolvedKind if you add a new kind here
 
   /* The following kinds needs class/alias resolution, and
-   * are not exposed to the users. */
+   * are generally not exposed to the users.
+   *
+   * Unfortunately this is a bit leaky, and a few of these are needed by
+   * tooling.
+   */
   T_unresolved = 101,
   T_typeaccess = 102,
   T_xhp = 103,
   T_reifiedtype = 104,
 };
 
-String toString(const Array& arr);
-String toStringForDisplay(const Array& arr);
+enum class TSDisplayType : uint8_t {
+  TSDisplayTypeReflection = 0,
+  TSDisplayTypeUser       = 1,
+  TSDisplayTypeInternal   = 2,
+};
+
+String toString(const Array& arr, TSDisplayType type);
 
 /*
  * Checks whether the given type structure is a valid resolved type structure,
@@ -98,7 +107,9 @@ bool isValidResolvedTypeStructureList(const Array& arr, bool isShape = false);
  * persistent flag
  */
 
-Array resolve(const Class::Const& typeCns,
+Array resolve(const ArrayData* ts,
+              const StringData* clsName,
+              const Class* declCls,
               const Class* typeCnsCls,
               bool& persistent);
 

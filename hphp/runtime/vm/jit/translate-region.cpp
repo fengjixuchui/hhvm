@@ -184,9 +184,8 @@ void emitEntryAssertions(irgen::IRGS& irgs, const Func* func, SrcKey sk) {
 
   if (func->isClosureBody()) {
     // In a closure, non-parameter locals can have types other than Uninit
-    // after the prologue runs.  (Local 0 will be the closure itself, and other
-    // locals will have used vars unpacked into them.)  We rely on hhbbc to
-    // assert these types.
+    // after the prologue runs, as use vars gets unpacked into them. We rely
+    // on hhbbc to assert these types.
     return;
   }
   if (func->isPseudoMain()) {
@@ -209,7 +208,7 @@ void emitEntryAssertions(irgen::IRGS& irgs, const Func* func, SrcKey sk) {
 }
 
 /*
- * Emit type and reffiness prediction guards.
+ * Emit type prediction guards.
  */
 void emitPredictionsAndPreConditions(irgen::IRGS& irgs,
                                      const RegionDesc& /*region*/,
@@ -229,7 +228,7 @@ void emitPredictionsAndPreConditions(irgen::IRGS& irgs,
   for (auto const& pred : typePredictions) {
     auto type = pred.type;
     auto loc  = pred.location;
-    assertx(type <= TGen);
+    assertx(type <= TCell);
     irgen::predictType(irgs, loc, type);
   }
 
@@ -237,7 +236,7 @@ void emitPredictionsAndPreConditions(irgen::IRGS& irgs,
   for (auto const& preCond : typePreConditions) {
     auto type = preCond.type;
     auto loc  = preCond.location;
-    assertx(type <= TGen);
+    assertx(type <= TCell);
     irgen::checkType(irgs, loc, type, bcOff, checkOuterTypeOnly);
   }
 
@@ -342,7 +341,7 @@ RegionDescPtr getInlinableCalleeRegion(const irgen::IRGS& irgs,
   }
   auto annotationsPtr = mcgen::dumpTCAnnotation(irgs.context.kind) ?
                         irgs.unit.annotationData.get() : nullptr;
-  if (!canInlineAt(psk.srcKey, callee, annotationsPtr)) return nullptr;
+  if (!canInlineAt(psk.srcKey, callee, fca, annotationsPtr)) return nullptr;
 
   auto const& inlineBlacklist = irgs.retryContext->inlineBlacklist;
   if (inlineBlacklist.find(psk) != inlineBlacklist.end()) {
@@ -401,7 +400,7 @@ TranslateResult irGenRegionImpl(irgen::IRGS& irgs,
 
   if (RuntimeOption::EvalDumpRegion &&
       mcgen::dumpTCAnnotation(irgs.context.kind)) {
-    irgs.annotations.emplace_back("RegionDesc", show(region));
+    irgs.unit.annotationData->add("RegionDesc", show(region));
   }
 
   std::string errorMsg;
@@ -473,16 +472,8 @@ TranslateResult irGenRegionImpl(irgen::IRGS& irgs,
     }
     setSuccIRBlocks(irgs, region, blockId, blockIdToIRBlock);
 
-    // Emit an ExitPlaceholder at the beginning of the block if any of the
-    // optimizations that can benefit from it are enabled, and only if we're
-    // not inlining. The inlining decision could be smarter but this is enough
-    // for now since we never emit guards in inlined functions (t7385908).
-    const bool emitExitPlaceholder = !inlining &&
-      (RuntimeOption::EvalHHIRLICM && hasUnprocPred);
-    if (emitExitPlaceholder) irgen::makeExitPlaceholder(irgs);
-
-    // Emit the type and reffiness predictions for this region block. If this is
-    // the first instruction in the region, we check inner type eagerly, insert
+    // Emit the type predictions for this region block. If this is the first
+    // instruction in the region, we check inner type eagerly, insert
     // `EndGuards` after the checks, and generate profiling code in profiling
     // translations.
     auto const isEntry = &block == region.entry().get() && !inlining;
@@ -599,7 +590,9 @@ std::unique_ptr<IRUnit> irGenRegion(const RegionDesc& region,
   uint32_t tries = 0;
 
   while (true) {
-    int32_t budgetBCInstrs = RuntimeOption::EvalJitMaxRegionInstrs;
+    int32_t budgetBCInstrs = context.kind == TransKind::Live
+      ? RuntimeOption::EvalJitMaxLiveRegionInstrs
+      : RuntimeOption::EvalJitMaxRegionInstrs;
     unit = std::make_unique<IRUnit>(context,
                                     std::make_unique<AnnotationData>());
     unit->initLogEntry(context.initSrcKey.func());
@@ -696,7 +689,7 @@ bool irGenTryInlineFCall(irgen::IRGS& irgs, const Func* callee,
   };
   auto callFuncOff = bcOff(irgs) - curFunc(irgs)->base();
 
-  irgen::beginInlining(irgs, callee, fca, ctx, ctx->type(), dynamicCall,
+  irgen::beginInlining(irgs, callee, fca, ctx, dynamicCall,
                        psk.srcKey.op(),
                        calleeRegion->start(),
                        callFuncOff,
@@ -757,7 +750,9 @@ std::unique_ptr<IRUnit> irGenInlineRegion(const TransContext& ctx,
   auto const entryBID = region.entry()->id();
 
   while (true) {
-    int32_t budgetBCInstrs = RuntimeOption::EvalJitMaxRegionInstrs;
+    const int32_t budgetBCInstrs = ctx.kind == TransKind::Live
+      ? RuntimeOption::EvalJitMaxLiveRegionInstrs
+      : RuntimeOption::EvalJitMaxRegionInstrs;
     unit = std::make_unique<IRUnit>(ctx, std::make_unique<AnnotationData>());
     irgen::IRGS irgs{*unit, &region, budgetBCInstrs, &retryContext};
     irgs.inlineState.conjure = true;

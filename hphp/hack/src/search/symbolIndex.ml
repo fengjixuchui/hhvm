@@ -10,24 +10,14 @@
 open Core_kernel
 open SearchUtils
 
-(* Note that fuzzy search does not currently do anything *)
-let fuzzy_search_enabled () = !HackSearchService.fuzzy
-
-let set_fuzzy_search_enabled x = HackSearchService.fuzzy := x
-
-let init_needs_search_updates ~(provider_name : string) : bool =
-  match SearchUtils.provider_of_string provider_name with
-  | LocalIndex
-  | TrieIndex ->
-    true
-  | _ -> false
-
 (* Set the currently selected search provider *)
 let initialize
-    ~(globalrev_opt : int option)
+    ~(globalrev : int option)
+    ~(gleanopt : GleanOptions.t)
     ~(namespace_map : (string * string) list)
     ~(provider_name : string)
     ~(quiet : bool)
+    ~(ignore_hh_version : bool)
     ~(savedstate_file_opt : string option)
     ~(workers : MultiWorker.worker list option) : si_env =
   (* Create the object *)
@@ -42,13 +32,16 @@ let initialize
   let sienv =
     match sienv.sie_provider with
     | SqliteIndex ->
-      SqliteSearchService.initialize ~sienv ~workers ~savedstate_file_opt
+      SqliteSearchService.initialize
+        ~sienv
+        ~workers
+        ~ignore_hh_version
+        ~savedstate_file_opt
     | CustomIndex ->
-      CustomSearchService.initialize ~globalrev_opt;
+      CustomSearchService.initialize ~globalrev ~gleanopt;
       sienv
     | NoIndex
-    | LocalIndex
-    | TrieIndex ->
+    | LocalIndex ->
       sienv
   in
   (* Fetch namespaces from provider-specific query *)
@@ -57,8 +50,7 @@ let initialize
     | SqliteIndex -> SqliteSearchService.fetch_namespaces ~sienv
     | CustomIndex -> CustomSearchService.fetch_namespaces ()
     | NoIndex
-    | LocalIndex
-    | TrieIndex ->
+    | LocalIndex ->
       []
   in
   (* Register all namespaces *)
@@ -153,7 +145,7 @@ let find_matching_symbols
   else
     (* Potential namespace matches always show up first *)
     let namespace_results =
-      if context <> Some Ac_no_namespace then
+      if context <> Some Ac_workspace_symbol then
         NamespaceSearchService.find_matching_namespaces ~sienv ~query_text
       else
         []
@@ -163,9 +155,7 @@ let find_matching_symbols
      * that we haven't seen before *)
     let local_results =
       match sienv.sie_provider with
-      | NoIndex
-      | TrieIndex ->
-        []
+      | NoIndex -> []
       | CustomIndex
       | LocalIndex
       | SqliteIndex ->
@@ -198,8 +188,6 @@ let find_matching_symbols
             ~kind_filter
         in
         LocalSearchService.extract_dead_results ~sienv ~results
-      | TrieIndex ->
-        HackSearchService.index_search query_text max_results kind_filter
       | LocalIndex
       | NoIndex ->
         []
@@ -207,8 +195,8 @@ let find_matching_symbols
     (* Merge and deduplicate results *)
     let all_results = List.append local_results global_results in
     let dedup_results =
-      List.dedup_and_sort
-        ~compare:(fun a b -> String.compare a.si_name b.si_name)
+      List.sort
+        ~compare:(fun a b -> String.compare b.si_name a.si_name)
         all_results
     in
     (* Strip namespace already typed from the results *)
@@ -225,39 +213,13 @@ let find_matching_symbols
     List.take results max_results
 
 (*
- * Legacy API
- * Will be replaced in a future diff in this stack
- *)
-let query_for_symbol_search
-    (worker_list_opt : MultiWorker.worker list option)
-    (s1 : string)
-    (s2 : string)
-    ~(fuzzy : bool) : (Pos.t, si_kind) term list =
-  (* Just route to the trie-based search service for now *)
-  HackSearchService.MasterApi.query worker_list_opt s1 s2 fuzzy
-
-(*
- * Legacy API
- * Exact replacement TBD
- *)
-let query_for_autocomplete
-    (s1 : string)
-    ~(limit : int option)
-    ~(filter_map :
-       string -> string -> (FileInfo.pos, si_kind) term -> 'a option) :
-    'a list Utils.With_complete_flag.t =
-  (* Just route to the trie-based search service for now *)
-  HackSearchService.MasterApi.query_autocomplete s1 limit filter_map
-
-(*
  * This method is called when the typechecker has finished re-checking a file,
  * or when the saved-state is fully loaded.  Any system that needs to cache
  * this information should capture it here.
  *)
 let update_files
-    ~(sienv : si_env ref)
-    ~(workers : MultiWorker.worker list option)
-    ~(paths : (Relative_path.t * info * file_source) list) : unit =
+    ~(sienv : si_env ref) ~(paths : (Relative_path.t * info * file_source) list)
+    : unit =
   match !sienv.sie_provider with
   | NoIndex -> ()
   | CustomIndex
@@ -266,7 +228,12 @@ let update_files
     List.iter paths ~f:(fun (path, info, detector) ->
         if detector = SearchUtils.TypeChecker then
           sienv := LocalSearchService.update_file ~sienv:!sienv ~path ~info)
-  | TrieIndex -> HackSearchService.update_from_typechecker workers paths
+
+(* Update from fast facts parser directly *)
+let update_from_facts
+    ~(sienv : si_env ref) ~(path : Relative_path.t) ~(facts : Facts.facts) :
+    unit =
+  sienv := LocalSearchService.update_file_facts ~sienv:!sienv ~path ~facts
 
 (*
  * This method is called when the typechecker is about to re-check a file.
@@ -281,12 +248,12 @@ let remove_files
   | SqliteIndex ->
     Relative_path.Set.iter paths ~f:(fun path ->
         sienv := LocalSearchService.remove_file ~sienv:!sienv ~path)
-  | TrieIndex -> HackSearchService.MasterApi.clear_shared_memory paths
 
 (* Fetch best available position information for a symbol *)
 let get_position_for_symbol (symbol : string) (kind : si_kind) :
     (Relative_path.t * int * int) option =
-  (* Symbols can only be found if they have a backslash *)
+  (* Symbols can only be found if they are properly namespaced.
+   * Even XHP classes must start with a backslash. *)
   let name_with_ns = Utils.add_ns symbol in
   let pos_opt =
     match kind with
@@ -295,7 +262,9 @@ let get_position_for_symbol (symbol : string) (kind : si_kind) :
     | SI_Trait
     | SI_Enum
     | SI_Typedef
-    | SI_Class ->
+    | SI_Class
+    | SI_Constructor
+    | SI_RecordDef ->
       let fipos =
         match Naming_table.Types.get_pos name_with_ns with
         | None -> None
@@ -313,7 +282,6 @@ let get_position_for_symbol (symbol : string) (kind : si_kind) :
     | SI_Property
     | SI_LocalVariable
     | SI_Keyword
-    | SI_Constructor
     | SI_Mixed ->
       None
   in
@@ -321,7 +289,7 @@ let get_position_for_symbol (symbol : string) (kind : si_kind) :
   match pos_opt with
   | None -> None
   | Some fi ->
-    let (pos, _) = NamingGlobal.GEnv.get_full_pos (fi, name_with_ns) in
+    let (pos, _) = Naming_global.GEnv.get_full_pos (fi, name_with_ns) in
     let relpath = FileInfo.get_pos_filename fi in
     let (line, col, _) = Pos.info_pos pos in
     Some (relpath, line, col)
@@ -330,11 +298,11 @@ let absolute_none = Pos.none |> Pos.to_absolute
 
 (* Shortcut to use the above method to get an absolute pos *)
 let get_pos_for_item_opt (item : si_item) : Pos.absolute option =
-  let result = get_position_for_symbol item.si_name item.si_kind in
+  let result = get_position_for_symbol item.si_fullname item.si_kind in
   match result with
   | None -> None
   | Some (relpath, line, col) ->
-    let symbol_len = String.length item.si_name in
+    let symbol_len = String.length item.si_fullname in
     let pos =
       Pos.make_from_lnum_bol_cnum
         ~pos_file:relpath

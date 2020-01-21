@@ -57,24 +57,24 @@ SourceRootInfo::SourceRootInfo(Transport* transport)
   Variant r = preg_match(String(RuntimeOption::SandboxPattern.c_str(),
                                 RuntimeOption::SandboxPattern.size(),
                                 CopyString), host, &matches);
-  if (!same(r, 1)) {
+  if (!same(r, static_cast<int64_t>(1))) {
     m_sandboxCond = SandboxCondition::Off;
     return;
   }
   if (RuntimeOption::SandboxFromCommonRoot) {
-    auto sandboxName = tvCastToString(matches.toArray().rvalAt(1).tv());
+    auto sandboxName = tvCastToString(matches.toArray().rval(1).tv());
     createFromCommonRoot(sandboxName);
   } else {
     Array pair = StringUtil::Explode(
-      tvCastToString(matches.toArray().rvalAt(1).tv()),
+      tvCastToString(matches.toArray().rval(1).tv()),
       "-", 2
     ).toArray();
-    m_user = tvCastToString(pair.rvalAt(0).tv());
+    m_user = tvCastToString(pair.rval(0).tv());
     bool defaultSb = pair.size() == 1;
     if (defaultSb) {
       m_sandbox = s_default;
     } else {
-      m_sandbox = tvCastToString(pair.rvalAt(1).tv());
+      m_sandbox = tvCastToString(pair.rval(1).tv());
     }
 
     createFromUserConfig();
@@ -214,11 +214,15 @@ Array SourceRootInfo::setServerVariables(Array server) const {
     server.set(arrkey, make_tv<KindOfString>(str.get()), true);
   }
 
-  {
-    SuppressHACArrayPlusNotices shacn;
-    if (!m_serverVars.empty()) {
-      server += m_serverVars;
-    }
+  if (!m_serverVars.empty()) {
+    IterateKVNoInc(
+      m_serverVars.get(),
+      [&](TypedValue key, TypedValue val) {
+        if (!server.exists(key)) {
+          server.set(key, val);
+        }
+      }
+    );
   }
 
   return server;

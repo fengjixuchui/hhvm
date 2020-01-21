@@ -53,14 +53,14 @@ void EmptyArray::Release(ArrayData*) {
   always_assert(!"never try to free the empty array");
 }
 
-Cell EmptyArray::NvGetKey(const ArrayData*, ssize_t /*pos*/) {
+TypedValue EmptyArray::NvGetKey(const ArrayData*, ssize_t /*pos*/) {
   // We have no valid positions---no one should call this function.
   not_reached();
 }
 
 size_t EmptyArray::Vsize(const ArrayData*) { not_reached(); }
 
-tv_rval EmptyArray::GetValueRef(const ArrayData* /*ad*/, ssize_t /*pos*/) {
+tv_rval EmptyArray::RvalPos(const ArrayData* /*ad*/, ssize_t /*pos*/) {
   // We have no valid positions---no one should call this function.
   not_reached();
 }
@@ -156,7 +156,7 @@ arr_lval EmptyArray::MakeMixed(StringData* key, TypedValue val) {
   auto const mask = MixedArray::SmallMask;
   hash[khash & mask] = 0;
   data[0].setStrKey(key, khash);
-  ad->recordStrKey(key);
+  ad->mutableKeyTypes()->recordStr(key);
 
   auto& elem  = data[0].data;
   elem.m_data = val.m_data;
@@ -186,7 +186,7 @@ arr_lval EmptyArray::MakeMixed(int64_t key, TypedValue val) {
   auto h = hash_int64(key);
   hash[h & mask] = 0;
   data[0].setIntKey(key, h);
-  ad->recordIntKey();
+  ad->mutableKeyTypes()->recordInt();
 
   auto& elem  = data[0].data;
   elem.m_data = val.m_data;
@@ -204,57 +204,40 @@ arr_lval EmptyArray::MakeMixed(int64_t key, TypedValue val) {
 
 //////////////////////////////////////////////////////////////////////
 
-template<bool warn> ALWAYS_INLINE
+template<bool enforce> ALWAYS_INLINE
 arr_lval EmptyArray::LvalIntImpl(ArrayData*, int64_t k, bool) {
-  if (warn && checkHACFalseyPromote()) {
-    raise_hac_falsey_promote_notice("Lval on missing array element");
-  }
+  if (enforce) throwMissingElementException("Lval");
   return k == 0 ? EmptyArray::MakePacked(make_tv<KindOfNull>())
                 : EmptyArray::MakeMixed(k, make_tv<KindOfNull>());
 }
 
-template<bool warn> ALWAYS_INLINE
+template<bool enforce> ALWAYS_INLINE
 arr_lval EmptyArray::LvalStrImpl(ArrayData*, StringData* k, bool) {
-  if (warn && checkHACFalseyPromote()) {
-    raise_hac_falsey_promote_notice("Lval on missing array element");
-  }
+  if (enforce) throwMissingElementException("Lval");
   return EmptyArray::MakeMixed(k, make_tv<KindOfNull>());
 }
 
-ArrayData* EmptyArray::SetInt(ArrayData*, int64_t k, Cell v) {
-  // TODO(#3888164): we should make it so we don't need KindOfUninit checks
-  if (v.m_type == KindOfUninit) v.m_type = KindOfNull;
+ArrayData* EmptyArray::SetInt(ArrayData* ad, int64_t k, TypedValue v) {
   tvIncRefGen(v);
-  auto const lval = k == 0 ? EmptyArray::MakePacked(v)
-                           : EmptyArray::MakeMixed(k, v);
-  return lval.arr;
+  return SetIntMove(ad, k, v);
 }
 
-ArrayData*
-EmptyArray::SetStr(ArrayData*, StringData* k, Cell v) {
+ArrayData* EmptyArray::SetIntMove(ArrayData*, int64_t k, TypedValue v) {
+  // TODO(#3888164): we should make it so we don't need KindOfUninit checks
+  if (v.m_type == KindOfUninit) v.m_type = KindOfNull;
+  return k == 0 ? EmptyArray::MakePacked(v).arr
+                : EmptyArray::MakeMixed(k, v).arr;
+}
+
+ArrayData* EmptyArray::SetStr(ArrayData* ad, StringData* k, TypedValue v) {
   tvIncRefGen(v);
+  return SetStrMove(ad, k, v);
+}
+
+ArrayData* EmptyArray::SetStrMove(ArrayData*, StringData* k, TypedValue v) {
   // TODO(#3888164): we should make it so we don't need KindOfUninit checks
   if (v.m_type == KindOfUninit) v.m_type = KindOfNull;
   return EmptyArray::MakeMixed(k, v).arr;
-}
-
-ArrayData* EmptyArray::SetWithRefInt(ArrayData* ad, int64_t k, TypedValue v) {
-  if (checkHACRefBind() && tvIsReferenced(v)) {
-    raiseHackArrCompatRefBind(k);
-  }
-  auto const lval = LvalIntImpl<false>(ad, k, ad->cowCheck());
-  tvSetWithRef(v, lval);
-  return lval.arr;
-}
-
-ArrayData* EmptyArray::SetWithRefStr(ArrayData* ad, StringData* k,
-                                     TypedValue v) {
-  if (checkHACRefBind() && tvIsReferenced(v)) {
-    raiseHackArrCompatRefBind(k);
-  }
-  auto const lval = LvalStrImpl<false>(ad, k, ad->cowCheck());
-  tvSetWithRef(v, lval);
-  return lval.arr;
 }
 
 ArrayData* EmptyArray::RemoveInt(ArrayData* ad, int64_t) {
@@ -273,25 +256,21 @@ arr_lval EmptyArray::LvalStr(ArrayData* ad, StringData* k, bool copy) {
   return LvalStrImpl<true>(ad, k, copy);
 }
 
-arr_lval EmptyArray::LvalNew(ArrayData*, bool) {
-  if (checkHACFalseyPromote()) {
-    raise_hac_falsey_promote_notice("Lval on missing array element");
-  }
+arr_lval EmptyArray::LvalSilentInt(ArrayData* ad, int64_t k, bool copy) {
+  return arr_lval { ad, nullptr };
+}
+
+arr_lval EmptyArray::LvalSilentStr(ArrayData* ad, StringData* k, bool copy) {
+  return arr_lval { ad, nullptr };
+}
+
+arr_lval EmptyArray::LvalForceNew(ArrayData*, bool) {
   return EmptyArray::MakePacked(make_tv<KindOfNull>());
 }
 
-ArrayData* EmptyArray::Append(ArrayData*, Cell v) {
+ArrayData* EmptyArray::Append(ArrayData*, TypedValue v) {
   tvIncRefGen(v);
   return EmptyArray::MakePackedInl(v).arr;
-}
-
-ArrayData* EmptyArray::AppendWithRef(ArrayData*, TypedValue v) {
-  if (checkHACRefBind() && tvIsReferenced(v)) {
-    raiseHackArrCompatRefNew();
-  }
-  auto tv = make_tv<KindOfNull>();
-  tvAsVariant(&tv).setWithRef(v);
-  return EmptyArray::MakePacked(tv).arr;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -329,17 +308,13 @@ ArrayData* EmptyArray::PopOrDequeue(ArrayData* ad, Variant& value) {
   return ad;
 }
 
-ArrayData* EmptyArray::Prepend(ArrayData*, Cell v) {
+ArrayData* EmptyArray::Prepend(ArrayData*, TypedValue v) {
   tvIncRefGen(v);
   return EmptyArray::MakePacked(v).arr;
 }
 
 ArrayData* EmptyArray::ToDict(ArrayData*, bool) {
   return ArrayData::CreateDict();
-}
-
-ArrayData* EmptyArray::ToShape(ArrayData*, bool) {
-  return ArrayData::CreateShape();
 }
 
 ArrayData* EmptyArray::ToVec(ArrayData*, bool) {

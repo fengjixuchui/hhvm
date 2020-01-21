@@ -31,8 +31,7 @@ void DataWalker::traverseData(ArrayData* data,
                               PointerSet& visited,
                               PointerMap* seenArrs) const {
   // Static and Uncounted arrays are never circular, never contain
-  // KindOfRef, and never contain objects or resources, so there's no
-  // need to traverse them.
+  // objects or resources, so there's no need to traverse them.
   if (!data->isRefCounted()) return;
 
   // At this point we're just using seenArrs to keep track of arrays
@@ -80,7 +79,7 @@ void DataWalker::traverseData(
     [&](Slot slot, const Class::Prop& prop, tv_rval val) {
       visitTypedValue(val.tv(), features, visited);
     },
-    [&](Cell key_tv, TypedValue val) {
+    [&](TypedValue key_tv, TypedValue val) {
       visitTypedValue(val, features, visited);
     }
   );
@@ -91,21 +90,6 @@ bool DataWalker::visitTypedValue(TypedValue rval,
                                  DataFeature& features,
                                  PointerSet& visited,
                                  PointerMap* seenArrs) const {
-  if (isRefType(rval.m_type)) {
-    if (rval.m_data.pref->isReferenced()) {
-      if (markVisited(rval.m_data.pref, features, visited)) {
-        // Don't recurse forever; we already went down this path, and
-        // stop the walk if we've already got everything we need.
-        return canStopWalk(features);
-      }
-      // Right now consider it circular even if the referenced variant
-      // only showed up in one spot.  This could be revisted later.
-      features.isCircular = true;
-      if (canStopWalk(features)) return true;
-    }
-    rval = *rval.m_data.pref->cell();
-  }
-
   auto const serialize_funcs = RuntimeOption::EvalAPCSerializeFuncs;
 
   if (rval.m_type == KindOfObject) {

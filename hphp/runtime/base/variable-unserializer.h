@@ -33,7 +33,6 @@ enum class UnserializeMode {
   ColKey = 3,
   VecValue = 4,
   DictValue = 5,
-  ShapeValue = 6,
 };
 
 struct InvalidAllowedClassesException : Exception {
@@ -144,11 +143,6 @@ struct VariableUnserializer {
   tv_lval getByVal(int id);
 
   /*
-   * Used by the 'R' encoding to get a reference.
-   */
-  tv_lval getByRef(int id);
-
-  /*
    * Store properties/array elements that get overwritten incase they are
    * referenced later during unserialization
    */
@@ -171,7 +165,6 @@ private:
     static RefInfo makeColValue(tv_lval v);
     static RefInfo makeVecValue(tv_lval v);
     static RefInfo makeDictValue(tv_lval v);
-    static RefInfo makeShapeValue(tv_lval v);
 
     tv_lval var() const;
 
@@ -185,7 +178,6 @@ private:
       ColValue,
       VecValue,
       DictValue,
-      ShapeValue
     };
     RefInfo(tv_lval, Type);
     // tv_lval with a Type tag.
@@ -206,6 +198,7 @@ private:
   req::vector<Object> m_sleepingObjects;
   const char* const m_begin;
   bool m_forceDArrays;
+  bool m_legacyHackArrays;
   VariableSerializer::DVOverrides* m_dvOverrides = nullptr;
 
   void unserializeVariant(tv_lval self,
@@ -217,7 +210,6 @@ private:
   Array unserializeKeyset();
   Array unserializeVArray();
   Array unserializeDArray();
-  Array unserializeShape();
   folly::StringPiece unserializeStringPiece(char delimiter0 = '"',
                                             char delimiter1 = '"');
   String unserializeString(char delimiter0 = '"', char delimiter1 = '"');

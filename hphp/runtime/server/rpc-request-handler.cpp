@@ -259,7 +259,7 @@ bool RPCRequestHandler::executePHPFunction(Transport *transport,
     RequestURI reqURI(rpcFunc);
     HttpProtocol::PrepareSystemVariables(transport, reqURI, sourceRootInfo);
     auto env = php_global(s__ENV);
-    env.toArrRef().set(s_HPHP_RPC, 1);
+    env.asArrRef().set(s_HPHP_RPC, 1);
     php_global_set(s__ENV, std::move(env));
   }
 
@@ -351,7 +351,7 @@ bool RPCRequestHandler::executePHPFunction(Transport *transport,
       if (!forbidden) {
         rpcFile = (std::string) canonicalize_path(rpcFile, "", 0);
         rpcFile = getSourceFilename(rpcFile, sourceRootInfo);
-        ret = hphp_invoke(m_context, rpcFile, false, Array(), uninit_null(),
+        ret = hphp_invoke(m_context, rpcFile, false, Array(), nullptr,
                           reqInitFunc, reqInitDoc, error, errorMsg, runOnce,
                           false /* warmupOnly */,
                           false /* richErrorMessage */,
@@ -363,7 +363,7 @@ bool RPCRequestHandler::executePHPFunction(Transport *transport,
       reqInitDoc.clear();
     }
     if (ret && !rpcFunc.empty()) {
-      ret = hphp_invoke(m_context, rpcFunc, true, params, ref(funcRet),
+      ret = hphp_invoke(m_context, rpcFunc, true, params, &funcRet,
                         reqInitFunc, reqInitDoc, error, errorMsg,
                         true /* once */,
                         false /* warmupOnly */,
@@ -390,7 +390,7 @@ bool RPCRequestHandler::executePHPFunction(Transport *transport,
         case 1: response = m_context->obDetachContents(); break;
         case 2:
           response = Variant::attach(HHVM_FN(json_encode)(
-            make_map_array(
+            make_dict_array(
               s_output,
               m_context->obDetachContents(),
               s_return,

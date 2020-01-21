@@ -372,6 +372,16 @@ void sortTrans() {
       transPrintOrder.push_back(tid);
     }
   }
+  std::sort(transPrintOrder.begin(), transPrintOrder.end(),
+            [] (uint32_t tid1, uint32_t tid2) {
+              auto const tr1 = TREC(tid1);
+              auto const tr2 = TREC(tid2);
+
+              if (tr1->aStart != tr2->aStart) {
+                return std::less<void*>{}(tr1->aStart, tr2->aStart);
+              }
+              return tid1 < tid2;
+            });
 }
 
 void loadPerfEvents() {
@@ -529,7 +539,7 @@ void loadProfData() {
   }
 }
 
-const char* getDisasmStr(OfflineCode* code,
+std::string getDisasmStr(OfflineCode* code,
                          TCA startAddr,
                          uint32_t len,
                          const std::vector<TransBCMapping>& bcMap,
@@ -537,7 +547,7 @@ const char* getDisasmStr(OfflineCode* code,
                          bool hostOpcodes) {
   std::ostringstream os;
   code->printDisasm(os, startAddr, len, bcMap, perfEvents, hostOpcodes);
-  return os.str().c_str();
+  return os.str();
 }
 
 namespace get_json {
@@ -774,7 +784,7 @@ void printTrans(TransID transId) {
                                         tRec->aLen,
                                         tRec->bcMapping,
                                         tcaPerfEvents,
-                                        hostOpcodes));
+                                        hostOpcodes).c_str());
 
   g_logger->printGeneric("----------\n%s: cold\n----------\n",
                          transCode->getArchName());
@@ -786,7 +796,7 @@ void printTrans(TransID transId) {
                                           tRec->acoldLen,
                                           tRec->bcMapping,
                                           tcaPerfEvents,
-                                          hostOpcodes));
+                                          hostOpcodes).c_str());
   }
 
   g_logger->printGeneric("----------\n%s: frozen\n----------\n",
@@ -796,7 +806,7 @@ void printTrans(TransID transId) {
                                         tRec->afrozenLen,
                                         tRec->bcMapping,
                                         tcaPerfEvents,
-                                        hostOpcodes));
+                                        hostOpcodes).c_str());
   g_logger->printGeneric("----------\n");
 
 }
@@ -1051,7 +1061,7 @@ void printTopBytecodes(const OfflineTransData* tdata,
                                           tfrag.aLen,
                                           trec->bcMapping,
                                           samples,
-                                          hostOpcodes));
+                                          hostOpcodes).c_str());
 
     g_logger->printGeneric("----------\n%s: cold\n----------\n",
                            olCode->getArchName());
@@ -1060,7 +1070,7 @@ void printTopBytecodes(const OfflineTransData* tdata,
                                           tfrag.acoldLen,
                                           trec->bcMapping,
                                           samples,
-                                          hostOpcodes));
+                                          hostOpcodes).c_str());
 
     g_logger->printGeneric("----------\n%s: frozen\n----------\n",
                            olCode->getArchName());
@@ -1069,7 +1079,7 @@ void printTopBytecodes(const OfflineTransData* tdata,
                                           tfrag.afrozenLen,
                                           trec->bcMapping,
                                           samples,
-                                          hostOpcodes));
+                                          hostOpcodes).c_str());
   }
 }
 

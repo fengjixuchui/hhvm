@@ -42,7 +42,6 @@ struct APCArray;
 struct Array;
 struct String;
 struct StringData;
-struct RefData;
 struct VariableSerializer;
 struct Variant;
 
@@ -89,11 +88,10 @@ struct ArrayData : MaybeCountable {
     kApcKind = 3,     // APCLocalArray
     kGlobalsKind = 4, // GlobalsArray
     kRecordKind = 5,  // RecordArray
-    kShapeKind = 6,   // Shape
-    kDictKind = 7,    // Hack dict
-    kVecKind = 8,     // Hack vec
-    kKeysetKind = 9,  // Hack keyset
-    kNumKinds = 10    // insert new values before kNumKinds.
+    kDictKind = 6,    // Hack dict
+    kVecKind = 7,     // Hack vec
+    kKeysetKind = 8,  // Hack keyset
+    kNumKinds = 9    // insert new values before kNumKinds.
   };
 
   /*
@@ -146,7 +144,6 @@ public:
   static ArrayData* Create();
   static ArrayData* CreateVec();
   static ArrayData* CreateDict();
-  static ArrayData* CreateShape();
   static ArrayData* CreateKeyset();
   static ArrayData* CreateVArray();
   static ArrayData* CreateDArray();
@@ -154,7 +151,7 @@ public:
   /*
    * Create a new kPackedKind ArrayData with a single element, `value'.
    *
-   * Unboxes `value' and initializes it if it's UninitNull.
+   * Initializes `value' if it's UninitNull.
    */
   static ArrayData* Create(TypedValue value);
   static ArrayData* Create(const Variant& value);
@@ -163,7 +160,7 @@ public:
    * Create a new kMixedKind ArrayData with a single key `name' and value
    * `value'.
    *
-   * Unboxes `value' and initializes it if it's UninitNull.
+   * Initializes `value' if it's UninitNull.
    */
   static ArrayData* Create(TypedValue name, TypedValue value);
   static ArrayData* Create(const Variant& name, TypedValue value);
@@ -183,26 +180,11 @@ public:
    */
   ArrayData* toPHPArray(bool copy);
   ArrayData* toPHPArrayIntishCast(bool copy);
-  ArrayData* toShape(bool copy);
   ArrayData* toDict(bool copy);
   ArrayData* toVec(bool copy);
   ArrayData* toKeyset(bool copy);
   ArrayData* toVArray(bool copy);
   ArrayData* toDArray(bool copy);
-
-  /*
-   * Converts this to a Shape in place if this is a compatible type with Shapes.
-   * If this is not refCounted it will instead make a copy before converting
-   * to a Shape.
-   *
-   * Dicts are compatible when RuntimeOption::EvalHackArrDVArrs is set and
-   * DArrays are compatible when it is not set. Empty arrays are always
-   * compatible. No other types are compatible.
-   *
-   * This function will return ArrayData::CreateShape when this is empty and it
-   * will return this otherwise.
-   */
-  ArrayData* toShapeInPlaceIfCompatible();
 
   /*
    * Return an array with identical contents to this array, but of an array
@@ -271,13 +253,10 @@ public:
    */
   bool isPacked() const;
   bool isMixed() const;
-  bool isMixedOrShape() const;
   bool isApcArray() const;
   bool isGlobalsArray() const;
   bool isEmptyArray() const;
   bool isDict() const;
-  bool isDictOrShape() const;
-  bool isShape() const;
   bool isVecArray() const;
   bool isKeyset() const;
   bool isRecordArray() const;
@@ -337,7 +316,6 @@ public:
   bool isNotDVArray() const;
   bool isVecOrVArray() const;
   bool isDictOrDArray() const;
-  bool isDictOrDArrayOrShape() const;
 
   static bool dvArrayEqual(const ArrayData* a, const ArrayData* b);
 
@@ -362,7 +340,7 @@ public:
   /*
    * ensure a circular self-reference is not being created
    */
-  bool notCyclic(Cell v) const;
+  bool notCyclic(TypedValue v) const;
 
   /*
    * Should int-like string keys be implicitly converted to integers before
@@ -388,7 +366,7 @@ public:
    */
   bool exists(int64_t k) const;
   bool exists(const StringData* k) const;
-  bool exists(Cell k) const;
+  bool exists(TypedValue k) const;
   bool exists(const String& k) const;
   bool exists(const Variant& k) const;
 
@@ -397,9 +375,19 @@ public:
    */
   arr_lval lval(int64_t k, bool copy);
   arr_lval lval(StringData* k, bool copy);
-  arr_lval lval(Cell k, bool copy);
+  arr_lval lval(TypedValue k, bool copy);
   arr_lval lval(const String& k, bool copy);
   arr_lval lval(const Variant& k, bool copy);
+
+  /*
+   * Get an lval for the element at key `k', failing quietly (by returning an
+   * empty arr_lval) instead of throwing.
+   */
+  arr_lval lvalSilent(int64_t k, bool copy);
+  arr_lval lvalSilent(StringData* k, bool copy);
+  arr_lval lvalSilent(TypedValue k, bool copy);
+  arr_lval lvalSilent(const String& k, bool copy);
+  arr_lval lvalSilent(const Variant& k, bool copy);
 
   /*
    * Get an lval for a new element at the next available integer key.
@@ -408,7 +396,7 @@ public:
    * fail, in which case we return the lval blackhole (see lvalBlackHole() for
    * details).
    */
-  arr_lval lvalNew(bool copy);
+  arr_lval lvalForce(bool copy);
 
   /*
    * Get an rval for the element at key `k'.
@@ -439,7 +427,7 @@ public:
    */
   TypedValue at(int64_t k) const;
   TypedValue at(const StringData* k) const;
-  TypedValue at(Cell k) const;
+  TypedValue at(TypedValue k) const;
 
   /*
    * Get the internal position for element with key `k', if it exists.
@@ -457,7 +445,7 @@ public:
    * @requires: `pos' refers to a valid array element.
    */
   TypedValue atPos(ssize_t pos) const;
-  Cell nvGetKey(ssize_t pos) const;
+  TypedValue nvGetKey(ssize_t pos) const;
 
   /*
    * Variant wrappers around atPos() and nvGetKey().
@@ -472,7 +460,7 @@ public:
    * resultant rval !has_val(), we raise a notice and return a dummy rval
    * instead.
    */
-  tv_rval get(Cell k, bool error = false) const;
+  tv_rval get(TypedValue k, bool error = false) const;
   tv_rval get(int64_t k, bool error = false) const;
   tv_rval get(const StringData* k, bool error = false) const;
   tv_rval get(const String& k, bool error = false) const;
@@ -486,17 +474,24 @@ public:
    * calling cowCheck(), but may still return a new array for escalation
    * or reallocating to grow.
    *
-   * Return `this' if copy/escalation are not needed, or a copied/escalated
-   * array data.
+   * Semantically, setMove() methods 1) do a set, 2) dec-ref the value, and
+   * 3) if the operation required copy/escalation, dec-ref the old array. This
+   * sequence is needed for member ops and can be implemented more efficiently
+   * if done as a single unit.
+   *
+   * These methods return `this' if copy/escalation are not needed, or a
+   * copied/escalated array data if they are.
    */
-  ArrayData* set(int64_t k, Cell v);
-  ArrayData* set(StringData* k, Cell v);
-  ArrayData* set(Cell k, Cell v);
-  ArrayData* set(const String& k, Cell v);
-  ArrayData* setInPlace(int64_t k, Cell v);
-  ArrayData* setInPlace(StringData* k, Cell v);
-  ArrayData* setInPlace(Cell k, Cell v);
-  ArrayData* setInPlace(const String& k, Cell v);
+  ArrayData* set(int64_t k, TypedValue v);
+  ArrayData* set(StringData* k, TypedValue v);
+  ArrayData* set(TypedValue k, TypedValue v);
+  ArrayData* set(const String& k, TypedValue v);
+  ArrayData* setInPlace(int64_t k, TypedValue v);
+  ArrayData* setInPlace(StringData* k, TypedValue v);
+  ArrayData* setInPlace(TypedValue k, TypedValue v);
+  ArrayData* setInPlace(const String& k, TypedValue v);
+  ArrayData* setMove(int64_t k, TypedValue v);
+  ArrayData* setMove(StringData* k, TypedValue v);
 
   ArrayData* set(int64_t k, const Variant& v);
   ArrayData* set(StringData* k, const Variant& v);
@@ -506,24 +501,10 @@ public:
   ArrayData* setInPlace(const String& k, const Variant& v);
   ArrayData* setInPlace(const Variant& k, const Variant& v);
 
-  ArrayData* set(const StringData*, Cell) = delete;
+  ArrayData* set(const StringData*, TypedValue) = delete;
   ArrayData* set(const StringData*, const Variant&) = delete;
-  ArrayData* setInPlace(const StringData*, Cell) = delete;
+  ArrayData* setInPlace(const StringData*, TypedValue) = delete;
   ArrayData* setInPlace(const StringData*, const Variant&) = delete;
-
-  /*
-   * Like set(), except the reffiness of `v' is preserved unless it is
-   * singly-referenced.
-   */
-  ArrayData* setWithRef(int64_t k, TypedValue v);
-  ArrayData* setWithRef(StringData* k, TypedValue v);
-  ArrayData* setWithRef(Cell k, TypedValue v);
-  ArrayData* setWithRef(const String& k, TypedValue v);
-  ArrayData* setWithRef(const StringData*, TypedValue) = delete;
-  ArrayData* setWithRefInPlace(Cell k, TypedValue v);
-  ArrayData* setWithRefInPlace(const String& k, TypedValue v);
-  ArrayData* setWithRefInPlace(StringData* k, TypedValue v);
-  ArrayData* setWithRefInPlace(int64_t k, TypedValue v);
 
   /*
    * Remove the value at key `k'. remove() will make a copy first if necessary;
@@ -534,7 +515,7 @@ public:
    */
   ArrayData* remove(int64_t k);
   ArrayData* remove(const StringData* k);
-  ArrayData* remove(Cell k);
+  ArrayData* remove(TypedValue k);
   ArrayData* remove(const String& k);
   ArrayData* remove(const Variant& k);
   ArrayData* removeInPlace(int64_t k);
@@ -547,16 +528,8 @@ public:
    * Return `this' if copy/escalation are not needed, or a copied/escalated
    * array data.
    */
-  ArrayData* append(Cell v);
-  ArrayData* appendInPlace(Cell v);
-
-  /*
-   * Like append(), except the reffiness of `v' is preserved unless it is
-   * singly-referenced.
-   */
-  ArrayData* appendWithRef(TypedValue v);
-  ArrayData* appendWithRefInPlace(TypedValue v);
-  ArrayData* appendWithRef(const Variant& v);
+  ArrayData* append(TypedValue v);
+  ArrayData* appendInPlace(TypedValue v);
 
   /////////////////////////////////////////////////////////////////////////////
   // Iteration.
@@ -678,7 +651,7 @@ public:
    * Return `this' if copy/escalation are not needed, or a copied/escalated
    * array data.
    */
-  ArrayData* prepend(Cell v);
+  ArrayData* prepend(TypedValue v);
 
   /*
    * Comparisons.
@@ -700,11 +673,18 @@ public:
   // Static arrays.
 
   /*
-   * If arr points to a static array, do nothing. Otherwise, make a
-   * static copy, destroy the original and update arr.
+   * If `arr' points to a static array, do nothing.  Otherwise, make a static
+   * copy, destroy the original, and update `*arr`.
+   *
+   * If `tag` is set or `arr` has provenance data, we copy the tag to the new
+   * static array.  (A set `tag` overrides the provenance of `arr`.)
    */
-  static void GetScalarArray(ArrayData** arr);
-  /* Promote the array referenced by arr to a static array, and return it */
+  static void GetScalarArray(ArrayData** arr,
+                             folly::Optional<arrprov::Tag> tag = folly::none);
+
+  /*
+   * Promote the array referenced by `arr` to a static array and return it.
+   */
   static ArrayData* GetScalarArray(Array&& arr);
   static ArrayData* GetScalarArray(Variant&& arr);
 
@@ -805,7 +785,7 @@ protected:
   /*
    * Is `k' of an arraykey type (i.e., int or string)?
    */
-  static bool IsValidKey(Cell k);
+  static bool IsValidKey(TypedValue k);
   static bool IsValidKey(const Variant& k);
   static bool IsValidKey(const String& k);
   static bool IsValidKey(const StringData* k);
@@ -831,6 +811,7 @@ protected:
   friend struct BaseMap;
   friend struct c_Map;
   friend struct c_ImmMap;
+  friend struct RecordArray;
 
   // The following fields are blocked into unions with qwords so we
   // can combine the stores when initializing arrays.  (gcc won't do
@@ -849,7 +830,6 @@ static_assert(ArrayData::kMixedKind == uint8_t(HeaderKind::Mixed), "");
 static_assert(ArrayData::kEmptyKind == uint8_t(HeaderKind::Empty), "");
 static_assert(ArrayData::kApcKind == uint8_t(HeaderKind::Apc), "");
 static_assert(ArrayData::kGlobalsKind == uint8_t(HeaderKind::Globals), "");
-static_assert(ArrayData::kShapeKind == uint8_t(HeaderKind::Shape), "");
 static_assert(ArrayData::kDictKind == uint8_t(HeaderKind::Dict), "");
 static_assert(ArrayData::kVecKind == uint8_t(HeaderKind::VecArray), "");
 static_assert(ArrayData::kRecordKind == uint8_t(HeaderKind::RecordArray), "");
@@ -867,9 +847,6 @@ extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVecArray;
 extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVArray;
 extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDictArray;
 extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDArray;
-extern std::aligned_storage<kEmptyMixedArraySize, 16>::type
-  s_theEmptyShapeDArray;
-extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyShapeDict;
 extern std::aligned_storage<kEmptySetArraySize, 16>::type s_theEmptySetArray;
 
 /*
@@ -884,7 +861,6 @@ ArrayData* staticEmptyVArray();
 ArrayData* staticEmptyDArray();
 ArrayData* staticEmptyVecArray();
 ArrayData* staticEmptyDictArray();
-ArrayData* staticEmptyShapeArray();
 ArrayData* staticEmptyKeysetArray();
 
 /*
@@ -916,16 +892,13 @@ struct ArrayFunctions {
   tv_rval (*nvTryGetStr[NK])(const ArrayData*, const StringData* k);
   ssize_t (*nvGetIntPos[NK])(const ArrayData*, int64_t k);
   ssize_t (*nvGetStrPos[NK])(const ArrayData*, const StringData* k);
-  Cell (*nvGetKey[NK])(const ArrayData*, ssize_t pos);
-  ArrayData* (*setInt[NK])(ArrayData*, int64_t k, Cell v);
-  ArrayData* (*setIntInPlace[NK])(ArrayData*, int64_t k, Cell v);
-  ArrayData* (*setStr[NK])(ArrayData*, StringData* k, Cell v);
-  ArrayData* (*setStrInPlace[NK])(ArrayData*, StringData* k, Cell v);
-  ArrayData* (*setWithRefInt[NK])(ArrayData*, int64_t k, TypedValue v);
-  ArrayData* (*setWithRefIntInPlace[NK])(ArrayData*, int64_t k, TypedValue v);
-  ArrayData* (*setWithRefStr[NK])(ArrayData*, StringData* k, TypedValue v);
-  ArrayData* (*setWithRefStrInPlace[NK])(ArrayData*, StringData* k,
-                                         TypedValue v);
+  TypedValue (*nvGetKey[NK])(const ArrayData*, ssize_t pos);
+  ArrayData* (*setInt[NK])(ArrayData*, int64_t k, TypedValue v);
+  ArrayData* (*setIntMove[NK])(ArrayData*, int64_t k, TypedValue v);
+  ArrayData* (*setIntInPlace[NK])(ArrayData*, int64_t k, TypedValue v);
+  ArrayData* (*setStr[NK])(ArrayData*, StringData* k, TypedValue v);
+  ArrayData* (*setStrMove[NK])(ArrayData*, StringData* k, TypedValue v);
+  ArrayData* (*setStrInPlace[NK])(ArrayData*, StringData* k, TypedValue v);
   size_t (*vsize[NK])(const ArrayData*);
   tv_rval (*nvGetPos[NK])(const ArrayData*, ssize_t pos);
   bool (*isVectorData[NK])(const ArrayData*);
@@ -933,7 +906,9 @@ struct ArrayFunctions {
   bool (*existsStr[NK])(const ArrayData*, const StringData* k);
   arr_lval (*lvalInt[NK])(ArrayData*, int64_t k, bool copy);
   arr_lval (*lvalStr[NK])(ArrayData*, StringData* k, bool copy);
-  arr_lval (*lvalNew[NK])(ArrayData*, bool copy);
+  arr_lval (*lvalSilentInt[NK])(ArrayData*, int64_t k, bool copy);
+  arr_lval (*lvalSilentStr[NK])(ArrayData*, StringData* k, bool copy);
+  arr_lval (*lvalForce[NK])(ArrayData*, bool copy);
   ArrayData* (*removeInt[NK])(ArrayData*, int64_t k);
   ArrayData* (*removeIntInPlace[NK])(ArrayData*, int64_t k);
   ArrayData* (*removeStr[NK])(ArrayData*, const StringData* k);
@@ -952,21 +927,18 @@ struct ArrayFunctions {
   bool (*uasort[NK])(ArrayData* ad, const Variant& cmp_function);
   ArrayData* (*copy[NK])(const ArrayData*);
   ArrayData* (*copyStatic[NK])(const ArrayData*);
-  ArrayData* (*append[NK])(ArrayData*, Cell v);
-  ArrayData* (*appendInPlace[NK])(ArrayData*, Cell v);
-  ArrayData* (*appendWithRef[NK])(ArrayData*, TypedValue v);
-  ArrayData* (*appendWithRefInPlace[NK])(ArrayData*, TypedValue v);
+  ArrayData* (*append[NK])(ArrayData*, TypedValue v);
+  ArrayData* (*appendInPlace[NK])(ArrayData*, TypedValue v);
   ArrayData* (*plusEq[NK])(ArrayData*, const ArrayData* elems);
   ArrayData* (*merge[NK])(ArrayData*, const ArrayData* elems);
   ArrayData* (*pop[NK])(ArrayData*, Variant& value);
   ArrayData* (*dequeue[NK])(ArrayData*, Variant& value);
-  ArrayData* (*prepend[NK])(ArrayData*, Cell v);
+  ArrayData* (*prepend[NK])(ArrayData*, TypedValue v);
   void (*renumber[NK])(ArrayData*);
   void (*onSetEvalScalar[NK])(ArrayData*);
   ArrayData* (*escalate[NK])(const ArrayData*);
   ArrayData* (*toPHPArray[NK])(ArrayData*, bool);
   ArrayData* (*toPHPArrayIntishCast[NK])(ArrayData*, bool);
-  ArrayData* (*toShape[NK])(ArrayData*, bool);
   ArrayData* (*toDict[NK])(ArrayData*, bool);
   ArrayData* (*toVec[NK])(ArrayData*, bool);
   ArrayData* (*toKeyset[NK])(ArrayData*, bool);
@@ -991,35 +963,26 @@ extern const ArrayFunctions g_array_funcs;
                                             const ArrayData* ad);
 [[noreturn]] void throwOOBArrayKeyException(const StringData* key,
                                             const ArrayData* ad);
-[[noreturn]] void throwRefInvalidArrayValueException(const ArrayData* ad);
-[[noreturn]] void throwRefInvalidArrayValueException(const Array& arr);
+[[noreturn]] void throwFalseyPromoteException(const char* type);
+[[noreturn]] void throwMissingElementException(const char* op);
 [[noreturn]] void throwInvalidKeysetOperation();
 [[noreturn]] void throwInvalidAdditionException(const ArrayData* ad);
 [[noreturn]] void throwVecUnsetException();
 
-void raiseHackArrCompatRefBind(int64_t);
-void raiseHackArrCompatRefBind(const StringData*);
-void raiseHackArrCompatRefBind(TypedValue);
-void raiseHackArrCompatRefNew();
-void raiseHackArrCompatRefIter();
-
 void raiseHackArrCompatAdd();
 
-void raiseHackArrCompatArrMixedCmp();
+void raiseHackArrCompatArrHackArrCmp();
+void raiseHackArrCompatArrNonArrCmp();
 void raiseHackArrCompatDVArrCmp(const ArrayData*, const ArrayData*);
-
-void raiseHackArrCompatMissingIncDec();
-void raiseHackArrCompatMissingSetOp();
 
 std::string makeHackArrCompatImplicitArrayKeyMsg(const TypedValue* key);
 void raiseHackArrCompatImplicitArrayKey(const TypedValue* key);
 
 StringData* getHackArrCompatNullHackArrayKeyMsg();
 
-bool checkHACRefBind();
-bool checkHACFalseyPromote();
 bool checkHACEmptyStringPromote();
 bool checkHACCompare();
+bool checkHACCompareNonAnyArray();
 bool checkHACArrayPlus();
 bool checkHACArrayKeyCast();
 bool checkHACNullHackArrayKey();
@@ -1034,8 +997,8 @@ folly::Optional<int64_t> tryIntishCast(const StringData* key);
  * Add a provenance tag for the current vmpc to `ad`, copying instead from
  * `src` if it's provided (and if it has a tag).  Returns `ad` for convenience.
  *
- * This function asserts that `ad` is singly reference counted.  It does not
- * assert that `ad` does not have an existing tag, and instead overrides it.
+ * This function does not assert that `ad` does not have an existing tag, and
+ * instead overrides it.
  */
 ArrayData* tagArrProv(ArrayData* ad, const ArrayData* src = nullptr);
 ArrayData* tagArrProv(ArrayData* ad, const APCArray* src);

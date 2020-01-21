@@ -52,10 +52,10 @@ let update_rechecked_files env rechecked =
   let t = Unix.gettimeofday () in
   let add_rechecked dirty_deps =
     let rechecked_files =
-      Relative_path.Map.fold
+      Relative_path.Set.fold
         rechecked
         ~init:dirty_deps.rechecked_files
-        ~f:(fun path _ acc -> Relative_path.Set.add acc path)
+        ~f:(fun path acc -> Relative_path.Set.add acc path)
     in
     { dirty_deps with rechecked_files }
   in
@@ -132,9 +132,7 @@ let update_after_local_changes genv env changes =
     (* This is cleared during transition from Initial_typechecking to
      * Prechecked_files_ready and should not be populated again *)
     assert (Typing_deps.DepSet.is_empty dirty_deps.dirty_local_deps);
-    let changes =
-      Typing_deps.DepSet.diff changes dirty_deps.clean_local_deps
-    in
+    let changes = Typing_deps.DepSet.diff changes dirty_deps.clean_local_deps in
     if Typing_deps.DepSet.is_empty changes then
       env
     else

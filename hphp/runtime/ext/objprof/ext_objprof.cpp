@@ -39,6 +39,7 @@
 #include "hphp/runtime/base/object-iterator.h"
 #include "hphp/runtime/base/memory-manager-defs.h"
 #include "hphp/runtime/base/tv-refcount.h"
+#include "hphp/runtime/ext/asio/ext_static-wait-handle.h"
 #include "hphp/runtime/ext/datetime/ext_datetime.h"
 #include "hphp/runtime/ext/simplexml/ext_simplexml.h"
 #include "hphp/runtime/ext/std/ext_std_closure.h"
@@ -161,6 +162,8 @@ bool isObjprofRoot(
   ObjprofFlags flags,
   const std::unordered_set<std::string>& exclude_classes
 ) {
+  using SSWH = c_StaticWaitHandle;
+
   Class* cls = obj->getVMClass();
   auto cls_name = cls->name()->toCppString();
   // Classes in exclude_classes not considered root
@@ -168,6 +171,11 @@ bool isObjprofRoot(
   // In USER_TYPES_ONLY mode, Classes with "HH\\" prefix not considered root
   if ((flags & ObjprofFlags::USER_TYPES_ONLY) != 0) {
     if (cls_name.compare(0, 3, "HH\\") == 0) return false;
+  }
+  if (SSWH::NullHandle.bound() && SSWH::NullHandle.isInit()) {
+    if (obj == SSWH::NullHandle->get())  return false;
+    if (obj == SSWH::TrueHandle->get())  return false;
+    if (obj == SSWH::FalseHandle->get()) return false;
   }
   return true;
 }
@@ -240,7 +248,7 @@ std::pair<int, double> sizeOfArray(
     if (stack) stack->pop_back();
   } else {
     FTRACE(2, "Iterating mixed array\n");
-    IterateKV(ad, [&] (Cell k, TypedValue v) {
+    IterateKV(ad, [&] (TypedValue k, TypedValue v) {
 
       std::pair<int, double> key_size_pair;
       switch (k.m_type) {
@@ -288,15 +296,16 @@ std::pair<int, double> sizeOfArray(
         case KindOfBoolean:
         case KindOfPersistentDict:
         case KindOfDouble:
-        case KindOfPersistentShape:
         case KindOfPersistentArray:
         case KindOfPersistentKeyset:
         case KindOfObject:
         case KindOfResource:
         case KindOfVec:
         case KindOfDict:
-        case KindOfRef:
-        case KindOfShape:
+        case KindOfPersistentDArray:
+        case KindOfDArray:
+        case KindOfPersistentVArray:
+        case KindOfVArray:
         case KindOfArray:
         case KindOfKeyset:
         case KindOfFunc:
@@ -365,7 +374,7 @@ void stringsOfArray(
     });
     path->pop_back();
   } else {
-    IterateKV(ad, [&] (Cell k, TypedValue v) {
+    IterateKV(ad, [&] (TypedValue k, TypedValue v) {
       switch (k.m_type) {
         case KindOfPersistentString:
         case KindOfString: {
@@ -389,15 +398,16 @@ void stringsOfArray(
         case KindOfBoolean:
         case KindOfPersistentDict:
         case KindOfDouble:
-        case KindOfPersistentShape:
         case KindOfPersistentArray:
         case KindOfPersistentKeyset:
         case KindOfObject:
         case KindOfResource:
         case KindOfVec:
         case KindOfDict:
-        case KindOfRef:
-        case KindOfShape:
+        case KindOfPersistentDArray:
+        case KindOfDArray:
+        case KindOfPersistentVArray:
+        case KindOfVArray:
         case KindOfArray:
         case KindOfKeyset:
         case KindOfFunc:
@@ -505,14 +515,20 @@ std::pair<int, double> tvGetSize(
       }
       break;
     }
+
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray: {
       ArrayData* arr = tv.m_data.parr;
@@ -561,37 +577,6 @@ std::pair<int, double> tvGetSize(
       } else {
         assertx(tvGetCount(tv) > 0);
         sized += resource_size / (double)(tvGetCount(tv));
-      }
-      break;
-    }
-    case KindOfRef: {
-      auto ref_ref_count = int{tvGetCount(tv)};
-      RefData* ref = tv.m_data.pref;
-      size += sizeof(*ref);
-      sized += sizeof(*ref);
-
-      FTRACE(3, " RefData tv at {} that with ref count {}\n",
-        (void*)ref,
-        ref_ref_count
-      );
-
-      Cell* cell = ref->cell();
-      auto size_of_tv_pair = tvGetSize(
-        *cell,
-        source,
-        stack,
-        paths,
-        val_stack,
-        exclude_classes,
-        flags
-      );
-      size += size_of_tv_pair.first;
-
-      if (one_bit_refcount) {
-        sized += size_of_tv_pair.second;
-      } else {
-        assertx(ref_ref_count > 0);
-        sized += size_of_tv_pair.second / (double)(ref_ref_count);
       }
       break;
     }
@@ -677,24 +662,22 @@ void tvGetStrings(
       // This is a shallow size function, not a recursive one
       break;
     }
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
     case HPHP::KindOfPersistentVec:
     case HPHP::KindOfVec:
     case HPHP::KindOfPersistentDict:
     case HPHP::KindOfDict:
     case HPHP::KindOfPersistentKeyset:
     case HPHP::KindOfKeyset:
-    case HPHP::KindOfPersistentShape:
-    case HPHP::KindOfShape:
     case HPHP::KindOfPersistentArray:
     case HPHP::KindOfArray: {
       auto* arr = tv.m_data.parr;
       stringsOfArray(arr, metrics, path, pointers, val_stack);
-      break;
-    }
-    case HPHP::KindOfRef: {
-      RefData* ref = tv.m_data.pref;
-      Cell* cell = ref->cell();
-      tvGetStrings(*cell, metrics, path, pointers, val_stack);
       break;
     }
     case HPHP::KindOfPersistentString:
@@ -853,7 +836,7 @@ std::pair<int, double> getObjSize(
       size += val_size_pair.first;
       sized += val_size_pair.second;
     },
-    [&](Cell key_tv, TypedValue val) {
+    [&](TypedValue key_tv, TypedValue val) {
       auto key = tvCastToString(key_tv);
       std::pair<int, double> key_size_pair = {0, 0.0};
       if (isStringType(key_tv.m_type)) {
@@ -955,7 +938,7 @@ void getObjStrings(
       path->pop_back();
       FTRACE(2, "   Finished for key/val {}\n", prop.name->data());
     },
-    [&](Cell key_tv, TypedValue val) {
+    [&](TypedValue key_tv, TypedValue val) {
       auto key = tvCastToString(key_tv);
       if (isStringType(key_tv.m_type)) {
         FTRACE(2, "Inspecting dynamic string key {}\n", key.c_str());
@@ -1276,7 +1259,7 @@ Array HHVM_FUNCTION(thread_memory_stats, void) {
   auto stack_size = get_thread_stack_size();
   auto stack_size_peak = get_thread_stack_peak_size();
 
-  auto stats = make_map_array(
+  auto stats = make_darray(
       s_cpp_stack, Variant(stack_size),
       s_cpp_stack_peak, Variant(stack_size_peak)
   );

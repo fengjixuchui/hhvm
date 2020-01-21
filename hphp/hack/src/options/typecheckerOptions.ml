@@ -9,12 +9,6 @@
 
 type t = GlobalOptions.t [@@deriving show]
 
-module InferMissing = GlobalOptions.InferMissing
-
-let safe_array = GlobalOptions.tco_safe_array
-
-let safe_vector_array = GlobalOptions.tco_safe_vector_array
-
 let disallow_ambiguous_lambda = GlobalOptions.tco_disallow_ambiguous_lambda
 
 let defer_class_declaration_threshold =
@@ -32,6 +26,10 @@ let remote_type_check = GlobalOptions.tco_remote_type_check
 let remote_worker_key = GlobalOptions.tco_remote_worker_key
 
 let remote_check_id = GlobalOptions.tco_remote_check_id
+
+let remote_max_batch_size = GlobalOptions.tco_remote_max_batch_size
+
+let remote_min_batch_size = GlobalOptions.tco_remote_min_batch_size
 
 let num_remote_workers = GlobalOptions.tco_num_remote_workers
 
@@ -86,10 +84,6 @@ let migration_flags_all = GlobalOptions.tco_migration_flags_all
 
 let dynamic_view = GlobalOptions.tco_dynamic_view
 
-let disallow_array_as_tuple = GlobalOptions.tco_disallow_array_as_tuple
-
-let disallow_unset_on_varray = GlobalOptions.tco_disallow_unset_on_varray
-
 let disallow_scrutinee_case_value_type_mismatch =
   GlobalOptions.tco_disallow_scrutinee_case_value_type_mismatch
 
@@ -106,22 +100,16 @@ let disallow_byref_calls = GlobalOptions.tco_disallow_byref_calls
 
 let log_levels = GlobalOptions.log_levels
 
-let typecheck_xhp_cvars = GlobalOptions.tco_typecheck_xhp_cvars
-
-let ignore_collection_expr_type_arguments =
-  GlobalOptions.tco_ignore_collection_expr_type_arguments
-
 let shallow_class_decl = GlobalOptions.tco_shallow_class_decl
 
-let like_types = GlobalOptions.tco_like_types
+let like_type_hints = GlobalOptions.tco_like_type_hints
 
-let pessimize_types = GlobalOptions.tco_pessimize_types
+let union_intersection_type_hints =
+  GlobalOptions.tco_union_intersection_type_hints
+
+let like_casts = GlobalOptions.tco_like_casts
 
 let simple_pessimize = GlobalOptions.tco_simple_pessimize
-
-let coercion_from_dynamic = GlobalOptions.tco_coercion_from_dynamic
-
-let coercion_from_union = GlobalOptions.tco_coercion_from_union
 
 let complex_coercion = GlobalOptions.tco_complex_coercion
 
@@ -136,19 +124,19 @@ let disallow_unresolved_type_variables =
 let disallow_invalid_arraykey_constraint =
   GlobalOptions.tco_disallow_invalid_arraykey_constraint
 
-let enable_constant_visibility_modifiers =
-  GlobalOptions.po_enable_constant_visibility_modifiers
-
 let const_static_props = GlobalOptions.tco_const_static_props
 
-let use_lru_workers = GlobalOptions.tco_use_lru_workers
-
-let infer_missing = GlobalOptions.tco_infer_missing
+let global_inference = GlobalOptions.tco_global_inference
 
 let const_attribute = GlobalOptions.tco_const_attribute
 
 let abstract_static_props = GlobalOptions.po_abstract_static_props
 
-let set_infer_missing = GlobalOptions.set_infer_missing
+let set_global_inference = GlobalOptions.set_global_inference
 
 let check_attribute_locations = GlobalOptions.tco_check_attribute_locations
+
+let error_php_lambdas = GlobalOptions.tco_error_php_lambdas
+
+let disallow_discarded_nullable_awaitables =
+  GlobalOptions.tco_disallow_discarded_nullable_awaitables

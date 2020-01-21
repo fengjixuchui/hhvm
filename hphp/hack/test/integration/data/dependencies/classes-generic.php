@@ -24,7 +24,14 @@ class GenericDerived<Tfirst> extends GenericBase<Tfirst, Mode> {
   }
 
   protected int $property;
+
+  public function foo(): void {}
 }
+
+class First {}
+class Second {}
+
+class NonGenericDerived extends GenericBase<First, Second> {}
 
 class Regular {
   public function generic_method<T>(T $arg): void {}
@@ -35,10 +42,55 @@ function with_generic_method(int $arg): void {
   $r->generic_method($arg);
 }
 
+function with_generic_method_with_wildcard_tparam(int $arg): void {
+  $r = new Regular();
+  $r->generic_method<_>($arg);
+}
+
 function with_properties<T>(GenericDerived<T> $arg) : Mode {
   $x = new GenericDerived<int>(1, Mode::Two);
   return $arg->second;
 }
 
 function with_generic_type<T>(GenericType<T> $arg): void {
+}
+
+function with_non_generic_type(NonGenericDerived $_): void {}
+
+interface GenericInterface<Tfirst, Tsecond> {}
+
+interface IGenericDerived<T> extends GenericInterface<T, int> {
+  require extends GenericBase<float, T>;
+}
+
+function with_generic_interface<T>(IGenericDerived<T> $arg): void {}
+
+function with_is_refinement<Tfirst, Tsecond>(
+  GenericBase<Tfirst, Tsecond> $x,
+): void {
+  if ($x is GenericDerived<_>) {
+    $x->foo();
+  }
+}
+
+class BoundedGeneric<T as arraykey> {
+  public function emptyKeyset(): keyset<T> {
+    return keyset[];
+  }
+}
+
+function with_bounded_generic_class_tparam(BoundedGeneric<int> $x): keyset<int> {
+  return $x->emptyKeyset();
+}
+
+interface IResult<+T> {}
+
+class Result<+T> implements IResult<T> {}
+
+interface IKwery<TResult as Result<mixed>> {}
+
+class Kwery<TValue, TResult as Result<TValue>> implements IKwery<TResult> {}
+
+function kwery(): Kwery<int, Result<int>> {
+  return new Kwery();
 }

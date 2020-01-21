@@ -1,6 +1,5 @@
 <?hh
-final record A {
-  x: callable,
+record A {
+  callable x;
 }
 
-<<__EntryPoint>> function main(): void {}

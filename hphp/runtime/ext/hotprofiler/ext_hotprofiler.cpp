@@ -23,16 +23,17 @@
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/system-profiler.h"
 #include "hphp/runtime/base/variable-serializer.h"
-#include "hphp/runtime/base/zend-math.h"
 #include "hphp/runtime/ext/extension-registry.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/ext/std/ext_std_misc.h"
 #include "hphp/runtime/vm/event-hook.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/util/alloc.h"
 #include "hphp/util/cycles.h"
 #include "hphp/util/rds-local.h"
 #include "hphp/util/timer.h"
+#include "hphp/zend/zend-math.h"
 
 #include <iostream>
 #include <fstream>
@@ -1147,7 +1148,7 @@ struct MemoProfiler final : Profiler {
     ActRec *ar = vmfp();
     // Lots of random cases to skip just to keep this simple for
     // now. There's no reason not to do more later.
-    if (ar->m_func->isCPPBuiltin() || ar->resumed()) return;
+    if (ar->m_func->isCPPBuiltin() || isResumed(ar)) return;
     auto ret = tvAsCVarRef(retval);
     if (ret.isNull()) return;
     if (!(ret.isString() || ret.isObject() || ret.isArray())) return;
@@ -1304,13 +1305,13 @@ bool ProfilerFactory::start(ProfilerKind kind,
     } else if (m_external_profiler) {
       m_profiler = m_external_profiler;
     } else {
-      throw_invalid_argument(
+      raise_invalid_argument_warning(
         "ProfilerFactory::setExternalProfiler() not yet called");
       return false;
     }
     break;
   default:
-    throw_invalid_argument("level: %d", static_cast<int>(kind));
+    raise_invalid_argument_warning("level: %d", static_cast<int>(kind));
     return false;
   }
   if (m_profiler && m_profiler->m_successful) {

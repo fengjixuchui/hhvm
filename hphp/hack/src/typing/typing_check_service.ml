@@ -7,8 +7,9 @@
  *)
 
 module Hack_bucket = Bucket
-open Core_kernel
+open Hh_prelude
 module Bucket = Hack_bucket
+include Typing_service_types
 
 (*
 ####
@@ -72,27 +73,9 @@ The paper refers to this approach as "restarting", and further suggests that rec
 the chain of jobs could be used to minimize the number of restarts.
  *)
 
-type check_file_computation = {
-  path: Relative_path.t;
-  names: FileInfo.names;
-  deferred_count: int;
-}
+module Delegate = Typing_service_delegate
 
-type file_computation =
-  | Check of check_file_computation
-  | Declare of Relative_path.t
-  | Prefetch of Relative_path.t list
-
-type progress = {
-  completed: file_computation list;
-  remaining: file_computation list;
-  deferred: file_computation list;
-}
-
-type check_info = {
-  init_id: string;
-  recheck_id: string option;
-}
+type progress = job_progress
 
 (*****************************************************************************)
 (* The place where we store the shared data in cache *)
@@ -108,43 +91,56 @@ let neutral = Errors.empty
 (* The job that will be run on the workers *)
 (*****************************************************************************)
 
-let type_fun (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string)
-    : Tast.def option =
+let type_fun (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string) :
+    (Tast.def * Typing_inference_env.t_global_with_pos) option =
   match Ast_provider.find_fun_in_file ~full:true fn x with
   | Some f ->
     let fun_ = Naming.fun_ f in
     Nast_check.def (Aast.Fun fun_);
     let def_opt =
-      Typing.fun_def opts fun_ |> Option.map ~f:(fun f -> Aast.Fun f)
+      Typing.fun_def opts fun_
+      |> Option.map ~f:(fun (f, global_tvenv) -> (Aast.Fun f, global_tvenv))
     in
-    Option.iter def_opt (Tast_check.def opts);
+    Option.iter def_opt (fun (f, _) -> Tast_check.def opts f);
     def_opt
   | None -> None
 
-let type_class
-    (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string) :
-    Tast.def option =
+let type_class (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string)
+    : (Tast.def * Typing_inference_env.t_global_with_pos list) option =
   match Ast_provider.find_class_in_file ~full:true fn x with
   | Some cls ->
     let class_ = Naming.class_ cls in
     Nast_check.def (Aast.Class class_);
     let def_opt =
-      Typing.class_def opts class_ |> Option.map ~f:(fun c -> Aast.Class c)
+      Typing.class_def opts class_
+      |> Option.map ~f:(fun (c, global_tvenv) -> (Aast.Class c, global_tvenv))
     in
-    Option.iter def_opt (Tast_check.def opts);
+    Option.iter def_opt (fun (f, _) -> Tast_check.def opts f);
     def_opt
   | None -> None
 
+let type_record_def
+    (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string) :
+    Tast.def option =
+  match Ast_provider.find_record_def_in_file ~full:true fn x with
+  | Some rd ->
+    let rd = Naming.record_def rd in
+    Nast_check.def (Aast.RecordDef rd);
+
+    let def = Aast.RecordDef (Typing.record_def_def opts rd) in
+    Tast_check.def opts def;
+    Some def
+  | None -> None
+
 let check_typedef
-    (opts : TypecheckerOptions.t)
-    (fn : Relative_path.t)
-    (x : Decl_provider.typedef_key) : Tast.def option =
+    (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string) :
+    Tast.def option =
   match Ast_provider.find_typedef_in_file ~full:true fn x with
   | Some t ->
     let typedef = Naming.typedef t in
     Nast_check.def (Aast.Typedef typedef);
     let ret = Typing.typedef_def opts typedef in
-    Typing_variance.typedef opts x;
+    Typing_variance.typedef (Provider_context.empty ~tcopt:opts) x;
     let def = Aast.Typedef ret in
     Tast_check.def opts def;
     Some def
@@ -157,6 +153,7 @@ let check_const
   | None -> None
   | Some cst ->
     let cst = Naming.global_const cst in
+    Nast_check.def (Aast.Constant cst);
     let def = Aast.Constant (Typing.gconst_def opts cst) in
     Tast_check.def opts def;
     Some def
@@ -167,14 +164,26 @@ let should_enable_deferring
   | Some max_times when file.deferred_count >= max_times -> false
   | _ -> true
 
+type process_file_results = {
+  errors: Errors.t;
+  computation: file_computation list;
+  decl_cache_misses: int;
+  decl_cache_misses_time: float;
+}
+
 let process_file
     (dynamic_view_files : Relative_path.Set.t)
     (opts : GlobalOptions.t)
     (errors : Errors.t)
-    (file : check_file_computation) : Errors.t * file_computation list =
-  Deferred_decl.reset ~enable:(should_enable_deferring opts file);
+    (file : check_file_computation) : process_file_results =
+  let (_old_state : Deferred_decl.deferred_decl_state) =
+    Deferred_decl.reset
+      ~enable:(should_enable_deferring opts file)
+      ~threshold_opt:(GlobalOptions.tco_defer_class_declaration_threshold opts)
+  in
   let fn = file.path in
-  let file_infos = file.names in
+  let ast = Ast_provider.get_ast ~full:true fn in
+  let (funs, classes, record_defs, typedefs, gconsts) = Nast.get_defs ast in
   let opts =
     {
       opts with
@@ -182,34 +191,54 @@ let process_file
         Relative_path.Set.mem dynamic_view_files fn;
     }
   in
-  let { FileInfo.n_funs; n_classes; n_types; n_consts } = file_infos in
-  let ignore_type_fun opts fn name = ignore (type_fun opts fn name) in
-  let ignore_type_class opts fn name = ignore (type_class opts fn name) in
-  let ignore_check_typedef opts fn name =
-    ignore (check_typedef opts fn name)
+  let ignore_type_record_def opts fn name =
+    ignore (type_record_def opts fn name)
   in
+  let ignore_check_typedef opts fn name = ignore (check_typedef opts fn name) in
   let ignore_check_const opts fn name = ignore (check_const opts fn name) in
   try
-    let (errors', ()) =
+    let (errors', global_tvenvs) =
       Errors.do_with_context fn Errors.Typing (fun () ->
-          SSet.iter (ignore_type_fun opts fn) n_funs;
-          SSet.iter (ignore_type_class opts fn) n_classes;
-          SSet.iter (ignore_check_typedef opts fn) n_types;
-          SSet.iter (ignore_check_const opts fn) n_consts)
+          let fun_global_tvenvs =
+            List.map funs ~f:snd
+            |> List.filter_map ~f:(type_fun opts fn)
+            |> List.map ~f:snd
+          in
+          let class_global_tvenvs =
+            List.map classes ~f:snd
+            |> List.filter_map ~f:(type_class opts fn)
+            |> List.map ~f:snd
+            |> List.concat
+          in
+          List.map record_defs ~f:snd
+          |> List.iter ~f:(ignore_type_record_def opts fn);
+          List.map typedefs ~f:snd
+          |> List.iter ~f:(ignore_check_typedef opts fn);
+          List.map gconsts ~f:snd |> List.iter ~f:(ignore_check_const opts fn);
+          fun_global_tvenvs @ class_global_tvenvs)
     in
-    let deferred_files = Deferred_decl.get ~f:(fun d -> Declare d) in
-    let result =
-      match deferred_files with
-      | [] -> (Errors.merge errors' errors, [])
-      | _ ->
-        ( errors,
-          List.concat
-            [
-              deferred_files;
-              [Check { file with deferred_count = file.deferred_count + 1 }];
-            ] )
-    in
-    result
+    if GlobalOptions.tco_global_inference opts then
+      Typing_global_inference.StateSubConstraintGraphs.save global_tvenvs;
+    let deferred_files = Deferred_decl.get_deferments ~f:(fun d -> Declare d) in
+    let decl_cache_misses = Deferred_decl.get_decl_cache_misses_counter () in
+    let decl_cache_misses_time = Deferred_decl.get_decl_cache_misses_time () in
+    match deferred_files with
+    | [] ->
+      {
+        errors = Errors.merge errors' errors;
+        computation = [];
+        decl_cache_misses;
+        decl_cache_misses_time;
+      }
+    | _ ->
+      let computation =
+        List.concat
+          [
+            deferred_files;
+            [Check { file with deferred_count = file.deferred_count + 1 }];
+          ]
+      in
+      { errors; computation; decl_cache_misses; decl_cache_misses_time }
   with e ->
     let stack = Caml.Printexc.get_raw_backtrace () in
     let () =
@@ -224,16 +253,11 @@ let should_exit ~(memory_cap : int option) =
     (* Use [quick_stat] instead of [stat] in order to avoid walking the major
        heap on each call, and just check the major heap because the minor
        heap is a) small and b) fixed size. *)
-    let heap_size_mb =
-      Gc.((quick_stat ()).Stat.heap_words) * 8 / 1024 / 1024
-    in
+    let heap_size_mb = Gc.((quick_stat ()).Stat.heap_words) * 8 / 1024 / 1024 in
     if heap_size_mb > max_heap_mb then (
-      let error_msg =
-        Printf.sprintf
-          "Exiting worker due to memory pressure: %d MB"
-          heap_size_mb
-      in
-      !Utils.log error_msg;
+      Hh_logger.debug
+        "Exiting worker due to memory pressure: %d MB"
+        heap_size_mb;
       true
     ) else
       false
@@ -242,43 +266,55 @@ let process_files
     (dynamic_view_files : Relative_path.Set.t)
     (opts : GlobalOptions.t)
     (errors : Errors.t)
-    (progress : progress)
+    (progress : computation_progress)
     ~(memory_cap : int option)
-    ~(check_info : check_info) : Errors.t * progress =
+    ~(check_info : check_info) : Errors.t * computation_progress =
   SharedMem.invalidate_caches ();
   File_provider.local_changes_push_stack ();
   Ast_provider.local_changes_push_stack ();
 
-  let process_file_profiled dynamic_view_files opts acc file =
-    let start_time = Unix.gettimeofday () in
-    let result = process_file dynamic_view_files opts acc file in
+  let profile_log start_time second_start_time_opt file result =
+    let { computation; _ } = result in
+    let end_time = Unix.gettimeofday () in
+    let times_checked = file.deferred_count + 1 in
     let files_to_declare =
-      List.count (snd result) ~f:(fun f ->
+      List.count computation ~f:(fun f ->
           match f with
           | Declare _ -> true
           | _ -> false)
     in
-    let filepath = Relative_path.suffix file.path in
-    TypingLogger.ProfileTypeCheck.log
-      ~init_id:check_info.init_id
-      ~recheck_id:check_info.recheck_id
-      ~start_time
-      ~times_checked:(file.deferred_count + 1)
-      ~files_to_declare
-      ~absolute:(Relative_path.to_absolute file.path)
-      ~relative:filepath;
-    let _t =
+    let (time_decl_and_typecheck, time_typecheck_opt) =
+      match second_start_time_opt with
+      | None -> (end_time -. start_time, None)
+      | Some second_start_time ->
+        (second_start_time -. start_time, Some (end_time -. second_start_time))
+    in
+    (* "deciding_time" is what we compare against the threshold, *)
+    (* to see if we should log. *)
+    let deciding_time =
+      Option.value time_typecheck_opt ~default:time_decl_and_typecheck
+    in
+    let should_log =
+      deciding_time >= check_info.profile_type_check_duration_threshold
+      || times_checked > 1
+      || files_to_declare > 0
+    in
+    if should_log then
+      HackEventLogger.ProfileTypeCheck.process_file
+        ~recheck_id:check_info.recheck_id
+        ~time_decl_and_typecheck
+        ~time_typecheck_opt
+        ~times_checked
+        ~files_to_declare
+        ~decl_cache_misses:result.decl_cache_misses
+        ~decl_cache_misses_time:result.decl_cache_misses_time
+        ~path:file.path;
+    let _t : float =
       Hh_logger.log_duration
-        (Printf.sprintf "%s [type-check]" filepath)
+        (Printf.sprintf "%s [type-check]" (Relative_path.suffix file.path))
         start_time
     in
-    result
-  in
-  let process_file_wrapper =
-    if !Utils.profile then
-      process_file_profiled
-    else
-      process_file
+    ()
   in
   let rec process_or_exit errors progress =
     match progress.remaining with
@@ -286,13 +322,27 @@ let process_files
       let (errors, deferred) =
         match fn with
         | Check file ->
-          process_file_wrapper dynamic_view_files opts errors file
+          let start_time = Unix.gettimeofday () in
+          let result = process_file dynamic_view_files opts errors file in
+          let second_start_time =
+            if check_info.profile_type_check_twice then
+              let t = Unix.gettimeofday () in
+              (* we're running this routine solely for the side effect *)
+              (* of seeing how long it takes to run. *)
+              let _ignored = process_file dynamic_view_files opts errors file in
+              Some t
+            else
+              None
+          in
+          if check_info.profile_log then
+            profile_log start_time second_start_time file result;
+          (result.errors, result.computation)
         | Declare path ->
           let errors = Decl_service.decl_file errors path in
           (errors, [])
         | Prefetch paths ->
           Vfs.prefetch paths;
-          (Errors.empty, [])
+          (errors, [])
       in
       let progress =
         {
@@ -316,10 +366,15 @@ let process_files
 let load_and_process_files
     (dynamic_view_files : Relative_path.Set.t)
     (errors : Errors.t)
-    (progress : progress)
+    (progress : computation_progress)
     ~(memory_cap : int option)
-    ~(check_info : check_info) : Errors.t * progress =
+    ~(check_info : check_info) : Errors.t * computation_progress =
   let opts = TypeCheckStore.load () in
+  (* When the type-checking worker receives SIGUSR1, display a position which
+     corresponds approximately with the function/expression being checked. *)
+  Sys_utils.set_signal
+    Sys.sigusr1
+    (Sys.Signal_handle Typing.debug_print_last_pos);
   process_files dynamic_view_files opts errors progress ~memory_cap ~check_info
 
 (*****************************************************************************)
@@ -333,12 +388,21 @@ let load_and_process_files
     empty list for the list of unchecked files. *)
 let merge
     ~(should_prefetch_deferred_files : bool)
+    (delegate_state : Delegate.state ref)
     (files_to_process : file_computation list ref)
     (files_initial_count : int)
     (files_in_progress : file_computation Hash_set.t)
     (files_checked_count : int ref)
     ((errors : Errors.t), (results : progress))
     (acc : Errors.t) : Errors.t =
+  let () =
+    match results.kind with
+    | Progress -> ()
+    | DelegateProgress _ ->
+      delegate_state := Delegate.merge !delegate_state errors results.progress
+  in
+  let results = results.progress in
+
   files_to_process := results.remaining @ !files_to_process;
 
   (* Let's also prepend the deferred files! *)
@@ -356,6 +420,14 @@ let merge
       Prefetch files_to_prefetch :: !files_to_process
     else
       !files_to_process;
+
+  (* If workers can steal work from each other, then it's possible that
+    some of the files that the current worker completed checking have already
+    been removed from the in-progress set. Thus, we should calculate
+    the checked count by subtracting the old in-progress count from the new one
+    after we remove the completed files from the set. This way, we get
+    an accurate count whether there's work stealing going on or not. *)
+  let old_in_progress_count = Hash_set.Poly.length files_in_progress in
   List.iter ~f:(Hash_set.Poly.remove files_in_progress) results.completed;
 
   (* Let's re-add the deferred files here! *)
@@ -366,7 +438,9 @@ let merge
     | _ -> false
   in
   let deferred_check_count = List.count ~f:is_check results.deferred in
-  let completed_check_count = List.count ~f:is_check results.completed in
+  let completed_check_count =
+    old_in_progress_count - Hash_set.Poly.length files_in_progress
+  in
   files_checked_count :=
     !files_checked_count + completed_check_count - deferred_check_count;
   ServerProgress.send_percentage_progress_to_monitor
@@ -378,6 +452,7 @@ let merge
 
 let next
     (workers : MultiWorker.worker list option)
+    (delegate_state : Delegate.state ref)
     (files_to_process : file_computation list ref)
     (files_in_progress : file_computation Hash_set.Poly.t) =
   let max_size = Bucket.max_size () in
@@ -386,23 +461,68 @@ let next
     | Some w -> List.length w
     | None -> 1
   in
+  let return_bucket_job kind ~current_bucket ~remaining_jobs =
+    (* Update our shared mutable state, because hey: it's not like we're
+       writing OCaml or anything. *)
+    files_to_process := remaining_jobs;
+    List.iter ~f:(Hash_set.Poly.add files_in_progress) current_bucket;
+    Bucket.Job
+      {
+        kind;
+        progress = { completed = []; remaining = current_bucket; deferred = [] };
+      }
+  in
   fun () ->
-    let bucket_size =
-      Bucket.calculate_bucket_size
-        ~num_jobs:(List.length !files_to_process)
-        ~num_workers
-        ~max_size
+    let (state, delegate_job) =
+      Typing_service_delegate.next
+        !files_to_process
+        files_in_progress
+        !delegate_state
     in
-    match !files_to_process with
-    | [] when Hash_set.Poly.is_empty files_in_progress -> Bucket.Done
-    | [] -> Bucket.Wait
-    | jobs ->
-      let (current_bucket, remaining_files) = List.split_n jobs bucket_size in
-      (* Update our shared mutable state, because hey: it's not like we're
-         writing OCaml or anything. *)
-      files_to_process := remaining_files;
-      List.iter ~f:(Hash_set.Poly.add files_in_progress) current_bucket;
-      Bucket.Job { completed = []; remaining = current_bucket; deferred = [] }
+    delegate_state := state;
+
+    let (stolen, state) = Typing_service_delegate.steal state max_size in
+    (* If a delegate job is returned, then that means that it should be done
+      by the next MultiWorker worker (the one for whom we're creating a job
+      in this function). If delegate job is None, then the regular (local
+      type checking) logic applies. *)
+    match delegate_job with
+    | Some { current_bucket; remaining_jobs; job } ->
+      return_bucket_job (DelegateProgress job) current_bucket remaining_jobs
+    | None ->
+      begin
+        match (!files_to_process, stolen) with
+        | ([], []) when Hash_set.Poly.is_empty files_in_progress -> Bucket.Done
+        | ([], []) -> Bucket.Wait
+        | (jobs, stolen_jobs) ->
+          ignore (jobs, stolen_jobs, num_workers, state);
+          let jobs =
+            if List.length jobs > List.length stolen_jobs then
+              jobs
+            else begin
+              delegate_state := state;
+              let stolen_jobs =
+                List.map stolen_jobs ~f:(fun job ->
+                    Hash_set.Poly.remove files_in_progress job;
+                    match job with
+                    | Check { path; deferred_count } ->
+                      Check { path; deferred_count = deferred_count + 1 }
+                    | _ -> failwith "unexpected state")
+              in
+              List.rev_append stolen_jobs jobs
+            end
+          in
+          let bucket_size =
+            Bucket.calculate_bucket_size
+              ~num_jobs:(List.length !files_to_process)
+              ~num_workers
+              ~max_size
+          in
+          let (current_bucket, remaining_jobs) =
+            List.split_n jobs bucket_size
+          in
+          return_bucket_job Progress current_bucket remaining_jobs
+      end
 
 let on_cancelled
     (next : unit -> 'a Bucket.bucket)
@@ -422,15 +542,24 @@ let on_cancelled
   in
   add_next []
 
+(**
+  `next` and `merge` both run in the master process and update mutable
+  state in order to track work in progress and work remaining.
+  `job` runs in each worker and does not have access to this mutable state.
+ *)
 let process_in_parallel
     (dynamic_view_files : Relative_path.Set.t)
     (workers : MultiWorker.worker list option)
+    (delegate_state : Delegate.state)
+    (telemetry : Telemetry.t)
     (opts : TypecheckerOptions.t)
     (fnl : file_computation list)
     ~(interrupt : 'a MultiWorker.interrupt_config)
     ~(memory_cap : int option)
-    ~(check_info : check_info) : Errors.t * 'a * Relative_path.t list =
+    ~(check_info : check_info) :
+    Errors.t * Delegate.state * Telemetry.t * 'a * Relative_path.t list =
   TypeCheckStore.store opts;
+  let delegate_state = ref delegate_state in
   let files_to_process = ref fnl in
   let files_in_progress = Hash_set.Poly.create () in
   let files_processed_count = ref 0 in
@@ -440,18 +569,28 @@ let process_in_parallel
     ~done_count:0
     ~total_count:files_initial_count
     ~unit:"files";
-  let next = next workers files_to_process files_in_progress in
+  let next = next workers delegate_state files_to_process files_in_progress in
   let should_prefetch_deferred_files =
     Vfs.is_vfs () && TypecheckerOptions.prefetch_deferred_files opts
   in
-  let (errors, env, cancelled) =
+  let job = load_and_process_files dynamic_view_files ~memory_cap ~check_info in
+  let job (errors : Errors.t) (progress : progress) =
+    let (errors, computation_progress) =
+      match progress.kind with
+      | Progress -> job errors progress.progress
+      | DelegateProgress job -> Delegate.process job
+    in
+    (errors, { progress with progress = computation_progress })
+  in
+  let (errors, env, cancelled_results) =
     MultiWorker.call_with_interrupt
       workers
-      ~job:(load_and_process_files dynamic_view_files ~memory_cap ~check_info)
+      ~job
       ~neutral
       ~merge:
         (merge
            ~should_prefetch_deferred_files
+           delegate_state
            files_to_process
            files_initial_count
            files_in_progress
@@ -460,19 +599,25 @@ let process_in_parallel
       ~on_cancelled:(on_cancelled next files_to_process files_in_progress)
       ~interrupt
   in
+  let telemetry =
+    Typing_service_delegate.add_telemetry !delegate_state telemetry
+  in
   TypeCheckStore.clear ();
-  ( errors,
-    env,
-    List.concat
-      ( cancelled
-      |> List.map ~f:(fun progress ->
-             progress.remaining
-             |> List.fold ~init:[] ~f:(fun acc computation ->
-                    match computation with
-                    | Check { path; _ } -> path :: acc
-                    | _ -> acc)) ) )
+  let paths_of (cancelled_results : progress list) : Relative_path.t list =
+    let paths_of (cancelled_progress : progress) =
+      let cancelled_computations = cancelled_progress.progress.remaining in
+      let paths_of paths (cancelled_computation : file_computation) =
+        match cancelled_computation with
+        | Check { path; _ } -> path :: paths
+        | _ -> paths
+      in
+      List.fold cancelled_computations ~init:[] ~f:paths_of
+    in
+    List.concat (List.map cancelled_results ~f:paths_of)
+  in
+  (errors, !delegate_state, telemetry, env, paths_of cancelled_results)
 
-type ('b, 'c) job_result = 'b * 'c * Relative_path.t list
+type ('a, 'b, 'c, 'd) job_result = 'a * 'b * 'c * 'd * Relative_path.t list
 
 module type Mocking_sig = sig
   val with_test_mocking :
@@ -480,9 +625,9 @@ module type Mocking_sig = sig
     file_computation list ->
     ((* ... before passing it to the real job executor... *)
      file_computation list ->
-    ('b, 'c) job_result) ->
+    ('a, 'b, 'c, 'd) job_result) ->
     (* ... which output we can also modify. *)
-    ('b, 'c) job_result
+    ('a, 'b, 'c, 'd) job_result
 end
 
 module NoMocking = struct
@@ -509,8 +654,8 @@ module TestMocking = struct
     in
     (* Only cancel once to avoid infinite loops *)
     cancelled := Relative_path.Set.empty;
-    let (res, env, cancelled) = f fnl in
-    (res, env, mock_cancelled @ cancelled)
+    let (res, delegate_state, telemetry, env, cancelled) = f fnl in
+    (res, delegate_state, telemetry, env, mock_cancelled @ cancelled)
 end
 
 module Mocking =
@@ -532,18 +677,17 @@ let should_process_sequentially
 
 let go_with_interrupt
     (workers : MultiWorker.worker list option)
+    (delegate_state : Delegate.state)
+    (telemetry : Telemetry.t)
     (opts : TypecheckerOptions.t)
     (dynamic_view_files : Relative_path.Set.t)
-    (fnl : (Relative_path.t * FileInfo.names) list)
+    (fnl : Relative_path.t list)
     ~(interrupt : 'a MultiWorker.interrupt_config)
     ~(memory_cap : int option)
-    ~(check_info : check_info) : (Errors.t, 'a) job_result =
-  let fnl =
-    List.map fnl ~f:(fun (path, names) ->
-        Check { path; names; deferred_count = 0 })
-  in
-  Mocking.with_test_mocking fnl
-  @@ fun fnl ->
+    ~(check_info : check_info) :
+    (Errors.t, Delegate.state, Telemetry.t, 'a) job_result =
+  let fnl = List.map fnl ~f:(fun path -> Check { path; deferred_count = 0 }) in
+  Mocking.with_test_mocking fnl @@ fun fnl ->
   let result =
     if should_process_sequentially opts fnl then (
       Hh_logger.log "Type checking service will process files sequentially";
@@ -557,12 +701,14 @@ let go_with_interrupt
           ~memory_cap:None
           ~check_info
       in
-      (errors, interrupt.MultiThreadedCall.env, [])
+      (errors, delegate_state, telemetry, interrupt.MultiThreadedCall.env, [])
     ) else (
       Hh_logger.log "Type checking service will process files in parallel";
       process_in_parallel
         dynamic_view_files
         workers
+        delegate_state
+        telemetry
         opts
         fnl
         ~interrupt
@@ -570,23 +716,30 @@ let go_with_interrupt
         ~check_info
     )
   in
-  if !Utils.profile then
-    TypingLogger.ProfileTypeCheck.print_path
+  let url_opt =
+    HackEventLogger.ProfileTypeCheck.get_telemetry_url_opt
+      ~profile_log:check_info.profile_log
       ~init_id:check_info.init_id
-      ~recheck_id:check_info.recheck_id;
+      ~recheck_id:check_info.recheck_id
+  in
+  Option.iter url_opt ~f:(fun s -> Hh_logger.log "%s" s);
   result
 
 let go
     (workers : MultiWorker.worker list option)
+    (delegate_state : Delegate.state)
+    (telemetry : Telemetry.t)
     (opts : TypecheckerOptions.t)
     (dynamic_view_files : Relative_path.Set.t)
-    (fnl : (Relative_path.t * FileInfo.names) list)
+    (fnl : Relative_path.t list)
     ~(memory_cap : int option)
-    ~(check_info : check_info) : Errors.t =
+    ~(check_info : check_info) : Errors.t * Delegate.state * Telemetry.t =
   let interrupt = MultiThreadedCall.no_interrupt () in
-  let (res, (), cancelled) =
+  let (res, delegate_state, telemetry, (), cancelled) =
     go_with_interrupt
       workers
+      delegate_state
+      telemetry
       opts
       dynamic_view_files
       fnl
@@ -594,5 +747,5 @@ let go
       ~memory_cap
       ~check_info
   in
-  assert (cancelled = []);
-  res
+  assert (List.is_empty cancelled);
+  (res, delegate_state, telemetry)

@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 open Pp_type
 
@@ -42,7 +42,7 @@ exception Decl_not_found of string
  * `dc_substs` during inheritance. See Decl_inherit module.
  *)
 type subst_context = {
-  sc_subst: decl ty SMap.t;
+  sc_subst: decl_ty SMap.t;
   sc_class_context: string;
   sc_from_req_extends: bool;
 }
@@ -56,7 +56,7 @@ type source_type =
   | Interface
   | ReqImpl
   | ReqExtends
-[@@deriving show]
+[@@deriving eq, show]
 
 type mro_element = {
   (* The class's name *)
@@ -70,7 +70,7 @@ type mro_element = {
   (* The type arguments with which this ancestor class was instantiated. The
      first class in the linearization (the one which was linearized) will have
      an empty list here, even when it takes type parameters. *)
-  mro_type_args: decl ty list;
+  mro_type_args: decl_ty list;
   (* True if this element referred to a class whose definition could not be
      found. This is always indicative of an "Unbound name" error (emitted by
      Naming), so one could imagine omitting elements with this flag set from the
@@ -125,9 +125,19 @@ type mro_element = {
      type constant instead. *)
   mro_passthrough_abstract_typeconst: bool;
 }
-[@@deriving show]
+[@@deriving eq, show]
 
 type linearization = mro_element Sequence.t
+
+(* name of condition type for conditional reactivity of methods.
+   If None - method is unconditionally reactive *)
+type condition_type_name = string option [@@deriving eq, show]
+
+type method_reactivity =
+  | Method_reactive of condition_type_name
+  | Method_shallow of condition_type_name
+  | Method_local of condition_type_name
+[@@deriving eq, show]
 
 type decl_class_type = {
   dc_need_init: bool;
@@ -140,10 +150,11 @@ type decl_class_type = {
   dc_deferred_init_members: SSet.t;
   dc_kind: Ast_defs.class_kind;
   dc_is_xhp: bool;
+  dc_has_xhp_keyword: bool;
   dc_name: string;
   dc_pos: Pos.t;
-  dc_tparams: decl tparam list;
-  dc_where_constraints: decl where_constraint list;
+  dc_tparams: decl_tparam list;
+  dc_where_constraints: decl_where_constraint list;
   (* class name to the subst_context that must be applied to that class *)
   dc_substs: subst_context SMap.t;
   dc_consts: class_const SMap.t;
@@ -154,7 +165,7 @@ type decl_class_type = {
   dc_methods: element SMap.t;
   dc_smethods: element SMap.t;
   dc_construct: element option * consistent_kind;
-  dc_ancestors: decl ty SMap.t;
+  dc_ancestors: decl_ty SMap.t;
   dc_req_ancestors: requirement list;
   dc_req_ancestors_extends: SSet.t;
   dc_extends: SSet.t;
@@ -167,15 +178,6 @@ type decl_class_type = {
   dc_condition_types: SSet.t;
 }
 [@@deriving show]
-
-(* name of condition type for conditional reactivity of methods.
-   If None - method is unconditionally reactive *)
-and condition_type_name = string option
-
-and method_reactivity =
-  | Method_reactive of condition_type_name
-  | Method_shallow of condition_type_name
-  | Method_local of condition_type_name
 
 and element = {
   elt_final: bool;
@@ -193,4 +195,5 @@ and element = {
   elt_origin: string;
   elt_visibility: visibility;
   elt_fixme_codes: ISet.t;
+  elt_deprecated: string option;
 }

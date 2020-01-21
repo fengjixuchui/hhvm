@@ -16,6 +16,7 @@ use serde_json::json;
 #[serde(rename_all = "camelCase")]
 pub enum TypeKind {
     Class,
+    Record,
     Interface,
     Enum,
     Trait,
@@ -49,9 +50,10 @@ pub struct Facts {
     pub functions: Vec<String>,
     pub constants: Vec<String>,
     pub type_aliases: Vec<String>,
+    pub file_attributes: Attributes,
 }
 impl Facts {
-    pub fn to_json(&self, text: &str) -> String {
+    pub fn to_json(&self, text: &[u8]) -> String {
         let (md5sum, sha1sum) = md5_and_sha1(text);
         let mut json = json!(&self);
         json.as_object_mut().map(|m| {
@@ -64,8 +66,14 @@ impl Facts {
                 json!(hex_number_to_i64(&md5sum[16..32])),
             );
             m.insert(String::from("sha1sum"), json!(sha1sum));
+            if self.skip_file_attributes() {
+                m.remove("fileAttributes");
+            }
         });
         serde_json::to_string_pretty(&json).expect("Could not serialize facts to JSON")
+    }
+    fn skip_file_attributes(&self) -> bool {
+        self.file_attributes.is_empty()
     }
 }
 
@@ -95,7 +103,7 @@ impl Flag {
     }
 }
 
-pub fn md5_and_sha1(text: &str) -> (String, String) {
+pub fn md5_and_sha1(text: &[u8]) -> (String, String) {
     (
         hash_and_hexify(crypto::md5::Md5::new(), text),
         hash_and_hexify(crypto::sha1::Sha1::new(), text),
@@ -150,8 +158,8 @@ impl TypeFacts {
     }
 }
 
-fn hash_and_hexify<D: Digest>(mut digest: D, text: &str) -> String {
-    digest.input_str(text);
+fn hash_and_hexify<D: Digest>(mut digest: D, text: &[u8]) -> String {
+    digest.input(text);
     digest.result_str()
 }
 
@@ -180,7 +188,7 @@ mod tests {
 
     #[test]
     fn md5_and_sha1_some_text() {
-        let text = "some text";
+        let text = b"some text";
         assert_eq!(
             md5_and_sha1(text),
             (
@@ -281,11 +289,12 @@ mod tests {
         assert_eq!(
             (Facts {
                 constants: vec!["c1".into(), "c2".into()],
+                file_attributes: BTreeMap::new(),
                 functions: vec![],
                 type_aliases: vec!["my_type_alias".into()],
                 types,
             })
-            .to_json("some text"),
+            .to_json(b"some text"),
             r#"{
   "constants": [
     "c1",

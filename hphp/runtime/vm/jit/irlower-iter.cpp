@@ -25,16 +25,19 @@
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/vm/act-rec.h"
 
-#include "hphp/runtime/vm/jit/types.h"
+#include "hphp/runtime/vm/jit/abi.h"
 #include "hphp/runtime/vm/jit/arg-group.h"
+#include "hphp/runtime/vm/jit/array-iter-profile.h"
 #include "hphp/runtime/vm/jit/bc-marker.h"
 #include "hphp/runtime/vm/jit/call-spec.h"
 #include "hphp/runtime/vm/jit/extra-data.h"
 #include "hphp/runtime/vm/jit/ir-instruction.h"
 #include "hphp/runtime/vm/jit/ir-opcode.h"
 #include "hphp/runtime/vm/jit/ssa-tmp.h"
+#include "hphp/runtime/vm/jit/target-profile.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/vm/jit/type.h"
+#include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/vasm-gen.h"
 #include "hphp/runtime/vm/jit/vasm-instr.h"
 #include "hphp/runtime/vm/jit/vasm-reg.h"
@@ -51,21 +54,40 @@ namespace {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+static auto const s_ArrayIterProfile = makeStaticString("ArrayIterProfile");
+
+void profileIterInit(IRLS& env, const IRInstruction* inst, bool isInitK) {
+  if (!inst->src(0)->isA(TArrLike)) return;
+  auto const profile = TargetProfile<ArrayIterProfile>(
+    env.unit,
+    inst->marker(),
+    s_ArrayIterProfile
+  );
+  if (!profile.profiling()) return;
+
+  auto const args = argGroup(env, inst)
+    .addr(rvmtl(), safe_cast<int32_t>(profile.handle()))
+    .ssa(0)
+    .imm(isInitK);
+  cgCallHelper(vmain(env), env, CallSpec::method(&ArrayIterProfile::update),
+               kVoidDest, SyncOptions::Sync, args);
+}
+
 int iterOffset(const BCMarker& marker, uint32_t id) {
   auto const func = marker.func();
   return -cellsToBytes(((id + 1) * kNumIterCells + func->numLocals()));
 }
 
 void implIterInit(IRLS& env, const IRInstruction* inst) {
-  bool isInitK = inst->is(IterInitK, LIterInitK);
-  bool isLInit = inst->is(LIterInit, LIterInitK);
-
-  auto const extra = inst->extra<IterInitData>();
+  auto const isInitK = inst->is(IterInitK, LIterInitK);
+  auto const isLInit = inst->is(LIterInit, LIterInitK);
+  auto const extra = &inst->extra<IterData>()->args;
 
   auto const src = inst->src(0);
   auto const fp = srcLoc(env, inst, 1).reg();
   auto const iterOff = iterOffset(inst->marker(), extra->iterId);
   auto const valOff = localOffset(extra->valId);
+  profileIterInit(env, inst, isInitK);
 
   auto& v = vmain(env);
 
@@ -79,17 +101,14 @@ void implIterInit(IRLS& env, const IRInstruction* inst) {
       args.addr(fp, localOffset(extra->keyId));
     }
 
-    auto const target = [&] {
-      if (isLInit) {
-        if (isInitK) return CallSpec::direct(new_iter_array_key<true>);
-        return CallSpec::direct(new_iter_array<true>);
-      } else if (isInitK) {
-        return CallSpec::direct(new_iter_array_key<false>);
-      } else {
-        return CallSpec::direct(new_iter_array<false>);
-      }
+    auto const op = [&]{
+      if (!isLInit) return IterTypeOp::NonLocal;
+      auto const flag = extra->flags & IterArgs::Flags::BaseConst;
+      return flag ? IterTypeOp::LocalBaseConst : IterTypeOp::LocalBaseMutable;
     }();
-
+    auto const target = isInitK
+      ? CallSpec::direct(new_iter_array_key_helper(op))
+      : CallSpec::direct(new_iter_array_helper(op));
     cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
     return;
   }
@@ -105,21 +124,23 @@ void implIterInit(IRLS& env, const IRInstruction* inst) {
     args.imm(0);
   }
 
-  // new_iter_object decrefs its src object if it propagates an exception
-  // out, so we use SyncAdjustOne, which adjusts the stack pointer by 1 stack
-  // element on an unwind, skipping over the src object.
-  cgCallHelper(
-    v, env, CallSpec::direct(new_iter_object),
-    callDest(env, inst),
-    extra->fromStack ? SyncOptions::SyncAdjustOne : SyncOptions::Sync,
-    args
-  );
+  // new_iter_object decrefs the base object if it propagates an exception out,
+  // so if the base came from the stack, we adjust the stack pointer by 1 on
+  // an unwind, skipping over the base.
+  auto const sync = [&]{
+    switch (inst->extra<IterInitData>()->source) {
+      case IterInitData::Source::Stack: return SyncOptions::SyncAdjustOne;
+      case IterInitData::Source::Local: return SyncOptions::Sync;
+    }
+    always_assert(false);
+  }();
+  auto const target = CallSpec::direct(new_iter_object);
+  cgCallHelper(v, env, target, callDest(env, inst), sync, args);
 }
 
 void implIterNext(IRLS& env, const IRInstruction* inst) {
-  bool isNextK = inst->is(IterNextK);
-
-  auto const extra = inst->extra<IterData>();
+  auto const isNextK = inst->is(IterNextK);
+  auto const extra = &inst->extra<IterData>()->args;
 
   auto const args = [&] {
     auto const fp = srcLoc(env, inst, 0).reg();
@@ -141,8 +162,7 @@ void implIterNext(IRLS& env, const IRInstruction* inst) {
 void implLIterNext(IRLS& env, const IRInstruction* inst) {
   always_assert(inst->is(LIterNext, LIterNextK));
   auto const isKey = inst->is(LIterNextK);
-
-  auto const extra = inst->extra<IterData>();
+  auto const extra = &inst->extra<IterData>()->args;
 
   auto const args = [&] {
     auto const fp = srcLoc(env, inst, 1).reg();
@@ -172,6 +192,168 @@ void implIterFree(IRLS& env, const IRInstruction* inst, CallSpec meth) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+namespace {
+
+// A function mapping HeaderKind to DataType, for HeaderKinds that are valid
+// iter base kinds. It takes size_t because make_index_sequence doesn't allow
+// enum classes, but we check at compile time that index is a valid HeaderKind.
+constexpr DataType baseKindToDataType(size_t index) {
+  assertx(index < NumHeaderKinds);
+  auto const kind = (HeaderKind)index;
+
+  // Hack arrays are included in isArrayKind, so check them first.
+  if (kind == HeaderKind::Dict) return KindOfDict;
+  if (kind == HeaderKind::VecArray) return KindOfVec;
+  if (kind == HeaderKind::Keyset) return KindOfKeyset;
+  assertx(!isHackArrayKind(kind));
+
+  // All other iterator bases are either arrays or objects.
+  if (isArrayKind(kind)) return KindOfArray;
+  if (isObjectKind(kind)) return KindOfObject;
+  return kInvalidDataType;
+}
+
+template<typename Fn, typename T, T... Values>
+constexpr std::array<std::result_of_t<Fn(T)>, sizeof...(Values)>
+make_array(Fn&& fn, std::integer_sequence<T, Values...>) {
+   return std::array<std::result_of_t<Fn(T)>, sizeof...(Values)>{fn(Values)...};
+}
+
+alignas(64) constexpr std::array<DataType, NumHeaderKinds>
+kBaseKindToDataType = make_array(
+  baseKindToDataType,
+  std::make_index_sequence<NumHeaderKinds>());
+
+template<typename T>
+Vptr iteratorPtr(IRLS& env, const IRInstruction* inst, const T* extra) {
+  assertx(inst->src(0)->isA(TFramePtr));
+  auto const fp = srcLoc(env, inst, 0).reg();
+  return fp[iterOffset(inst->marker(), extra->iterId)];
+}
+
+int32_t iteratorType(IterSpecialization specialization) {
+  auto const nextHelperIndex = [&]{
+    using S = IterSpecialization;
+    switch (specialization.base_type) {
+      case S::Packed:
+      case S::Vec: {
+        return specialization.base_const && !specialization.output_key
+          ? IterNextIndex::ArrayPackedPointer
+          : IterNextIndex::ArrayPacked;
+      }
+      case S::Mixed:
+      case S::Dict: {
+        return specialization.base_const
+          ? IterNextIndex::ArrayMixedPointer
+          : IterNextIndex::ArrayMixed;
+      }
+    }
+    always_assert(false);
+  }();
+
+  auto const type = ArrayIter::packTypeFields(
+    ArrayIter::TypeArray, nextHelperIndex, specialization);
+  return safe_cast<int32_t>(type);
+}
+
+}
+
+void cgCheckIter(IRLS& env, const IRInstruction* inst) {
+  static_assert(sizeof(IterSpecialization) == 1, "");
+  auto const iter = iteratorPtr(env, inst, inst->extra<CheckIter>());
+  auto const type = inst->extra<CheckIter>()->type;
+  auto& v = vmain(env);
+  auto const sf = v.makeReg();
+  v << cmpbim{type.as_byte, iter + ArrayIter::specializationOffset(), sf};
+  v << jcc{CC_NE, sf, {label(env, inst->next()), label(env, inst->taken())}};
+}
+
+void cgLdIterBase(IRLS& env, const IRInstruction* inst) {
+  static_assert(ArrayIter::baseSize() == 8, "");
+
+  auto& v = vmain(env);
+  auto const iter = iteratorPtr(env, inst, inst->extra<LdIterBase>());
+  auto const& type = inst->dst()->type();
+
+  // Load the result's data field. Skip masking the object tag bit if we know
+  // the base is array-like. Then, if we don't need the type byte, return.
+  auto const dst = dstLoc(env, inst, 0);
+  auto const dst_data = dst.reg(0);
+  if (type <= TArrLike) {
+    v << load{iter + ArrayIter::baseOffset(), dst_data};
+  } else {
+    auto const base = v.makeReg();
+    auto const mask = ~safe_cast<int32_t>(ArrayIter::objectBaseTag());
+    v << load{iter + ArrayIter::baseOffset(), base};
+    v << andqi{mask, base, dst_data, v.makeReg()};
+  }
+  if (!type.needsReg()) return;
+
+  // The iterator doesn't store the base's type byte. To recover it, we load
+  // the header kind and look up the data type from our lookup table.
+  auto const dst_type = dst.reg(1);
+  auto const kind = v.makeReg();
+  auto const kind_to_data_type = v.makeReg();
+  v << ldimmq{intptr_t(kBaseKindToDataType.data()), kind_to_data_type};
+  v << loadzbq{dst_data[HeaderKindOffset], kind};
+  v << loadb{kind_to_data_type[kind], dst_type};
+}
+
+void cgLdIterPos(IRLS& env, const IRInstruction* inst) {
+  static_assert(ArrayIter::posSize() == 8, "");
+  auto const dst  = dstLoc(env, inst, 0).reg();
+  auto const iter = iteratorPtr(env, inst, inst->extra<LdIterPos>());
+  vmain(env) << load{iter + ArrayIter::posOffset(), dst};
+}
+
+void cgLdIterEnd(IRLS& env, const IRInstruction* inst) {
+  static_assert(ArrayIter::endSize() == 8, "");
+  auto const dst  = dstLoc(env, inst, 0).reg();
+  auto const iter = iteratorPtr(env, inst, inst->extra<LdIterEnd>());
+  vmain(env) << load{iter + ArrayIter::endOffset(), dst};
+}
+
+void cgStIterBase(IRLS& env, const IRInstruction* inst) {
+  static_assert(ArrayIter::baseSize() == 8, "");
+  auto const src  = srcLoc(env, inst, 1).reg();
+  auto const iter = iteratorPtr(env, inst, inst->extra<StIterBase>());
+  vmain(env) << store{src, iter + ArrayIter::baseOffset()};
+}
+
+void cgStIterType(IRLS& env, const IRInstruction* inst) {
+  static_assert(ArrayIter::typeSize() == 4, "");
+  auto const type = inst->extra<StIterType>()->type;
+  auto const iter = iteratorPtr(env, inst, inst->extra<StIterType>());
+  vmain(env) << storeli{iteratorType(type), iter + ArrayIter::typeOffset()};
+}
+
+void cgStIterPos(IRLS& env, const IRInstruction* inst) {
+  static_assert(ArrayIter::posSize() == 8, "");
+  auto const src  = srcLoc(env, inst, 1).reg();
+  auto const iter = iteratorPtr(env, inst, inst->extra<StIterPos>());
+  vmain(env) << store{src, iter + ArrayIter::posOffset()};
+}
+
+void cgStIterEnd(IRLS& env, const IRInstruction* inst) {
+  static_assert(ArrayIter::endSize() == 8, "");
+  auto const src  = srcLoc(env, inst, 1).reg();
+  auto const iter = iteratorPtr(env, inst, inst->extra<StIterEnd>());
+  vmain(env) << store{src, iter + ArrayIter::endOffset()};
+}
+
+void cgKillIter(IRLS& env, const IRInstruction* inst) {
+  if (!debug) return;
+  int32_t trash;
+  memset(&trash, kIterTrashFill, sizeof(trash));
+  auto const iter = iteratorPtr(env, inst, inst->extra<KillIter>());
+  auto& v = vmain(env);
+  for (auto i = 0; i < sizeof(ArrayIter); i += sizeof(trash)) {
+    v << storeli{trash, iter + i};
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

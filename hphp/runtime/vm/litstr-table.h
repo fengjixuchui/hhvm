@@ -17,27 +17,19 @@
 #ifndef incl_HPHP_LITSTR_TABLE_H_
 #define incl_HPHP_LITSTR_TABLE_H_
 
-#include "hphp/runtime/base/string-hash-map.h"
+#include "hphp/runtime/base/string-functors.h"
 #include "hphp/runtime/vm/named-entity.h"
 #include "hphp/runtime/vm/named-entity-pair-table.h"
 #include "hphp/util/alloc.h"
-#include "hphp/util/functional.h"
-#include "hphp/util/hash-map.h"
-#include "hphp/util/mutex.h"
 
 #include <tbb/concurrent_hash_map.h>
 
 namespace HPHP {
-///////////////////////////////////////////////////////////////////////////////
-
-struct StringData;
-
-///////////////////////////////////////////////////////////////////////////////
 
 /*
- * Global litstr Id's are all above this mark.
+ * Unit litstr Id's are all above this mark.
  */
-constexpr int kGlobalLitstrOffset = 0x40000000;
+constexpr int kUnitLitstrOffset = 0x40000000;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -100,6 +92,11 @@ struct LitstrTable {
   void setNamedEntityPairTable(NamedEntityPairTable&& namedInfo);
 
   /*
+   * Set an entry, used for lazy loading.
+   */
+  void setLitstr(Id id, const StringData* str);
+
+  /*
    * Add an entry for `litstr' to the table.
    *
    * The "merge" terminology is inherited from Unit.
@@ -152,15 +149,20 @@ private:
   std::atomic<bool> m_safeToRead{true};
 };
 
+/*
+ * Lazy load helper that is safe to call concurrently.
+ */
+StringData* loadLitstrById(Id id);
+
 ///////////////////////////////////////////////////////////////////////////////
 // ID helpers.
 
 /*
- * Functions for differentiating global litstrId's from unit-local Id's.
+ * Functions for differentiating unit-local Id's from global litstrId's.
  */
-bool isGlobalLitstrId(Id id);
-Id encodeGlobalLitstrId(Id id);
-Id decodeGlobalLitstrId(Id id);
+bool isUnitLitstrId(Id id);
+Id encodeUnitLitstrId(Id id);
+Id decodeUnitLitstrId(Id id);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

@@ -199,7 +199,6 @@ bool supportsGVN(const IRInstruction* inst) {
   case ConvIntToDbl:
   case ConvBoolToInt:
   case ConvDblToInt:
-  case ConvClsToCctx:
   case DblAsBits:
   case GtInt:
   case GteInt:
@@ -276,12 +275,9 @@ bool supportsGVN(const IRInstruction* inst) {
   case IsNType:
   case IsWaitHandle:
   case IsCol:
-  case IsDVArray:
   case LdRDSAddr:
-  case LdCtx:
-  case LdCctx:
-  case LdClsCtx:
-  case LdClsCctx:
+  case LdFrameThis:
+  case LdFrameCls:
   case LdClsCtor:
   case DefConst:
   case DefCls:
@@ -310,7 +306,6 @@ bool supportsGVN(const IRInstruction* inst) {
   case CountArrayFast:
   case CountVec:
   case CountDict:
-  case CountShape:
   case CountKeyset:
   case Select:
   case StrictlyIntegerConv:
@@ -574,7 +569,6 @@ void insertIncRefs(PrcEnv& env) {
     id++;
   }
 
-  using Bits = PrcState::Bits;
   // compute anticipated
   do {
     auto const blk = env.rpoBlocks[antQ.pop()];

@@ -54,7 +54,7 @@ let random_incdec_op () : incdec_op =
    rand_elt
 
 let random_flag () : HTC.type_constraint_flag =
-  [HTC.Nullable; HTC.HHType; HTC.ExtendedHint; HTC.TypeVar; HTC.Soft;
+  [HTC.Nullable; HTC.ExtendedHint; HTC.TypeVar; HTC.Soft;
    HTC.TypeConstant] |> rand_elt
 
 let random_collection_type () : CollectionType.t =
@@ -110,7 +110,6 @@ let random_adata_id () : adata_id =  "A_" ^ (Random.int 10 |> string_of_int)
 let all_instrs (_ : IS.t) : lazy_instruct list =
    [(fun () -> IBasic Nop);
     (fun () -> IBasic EntryNop);
-    (fun () -> IGet (VGetL (random_local ())));
     (fun () -> ILitConst Null);
     (fun () -> ILitConst True);
     (fun () -> ILitConst (Int (Random.int64 Int64.max_int)));
@@ -142,7 +141,6 @@ let all_instrs (_ : IS.t) : lazy_instruct list =
     (fun () -> ILitConst NullUninit);
     (fun () -> IBasic PopC);
     (fun () -> IBasic PopU);
-    (fun () -> IBasic PopV);
     (fun () -> ILitConst (ColFromArray (random_collection_type ())));
     (*(fun () -> IOp Abs);*)
     (*(fun () -> IOp Sqrt);*)
@@ -154,7 +152,6 @@ let all_instrs (_ : IS.t) : lazy_instruct list =
     (fun () -> IOp CastDouble);
     (fun () -> IOp CastString);
     (fun () -> IOp CastArray);
-    (fun () -> IOp CastObject);
     (fun () -> IOp CastVec);
     (fun () -> IOp CastDict);
     (fun () -> IOp CastKeyset);
@@ -217,7 +214,6 @@ let all_instrs (_ : IS.t) : lazy_instruct list =
     (fun () -> IIncludeEvalDefine ReqOnce);
     (fun () -> IIncludeEvalDefine ReqDoc);
     (fun () -> IIncludeEvalDefine Eval);
-    (fun () -> IIncludeEvalDefine (AliasCls ("", "")));
     (fun () -> IIncludeEvalDefine (DefCls (Random.int 10)));
     (fun () -> IIncludeEvalDefine (DefClsNop (Random.int 10)));
     (fun () -> IIncludeEvalDefine (DefCns (Const.from_raw_string "")));

@@ -1,7 +1,7 @@
 <?hh
 
 require(__DIR__ . '/common.inc');
-
+<<__EntryPoint>> function main(): void {
 /*
  * Not enabled test: verify that if --mode vsdebug is not specified, the
  * VSDebug extension is not listening and the script executes without waiting
@@ -14,7 +14,8 @@ $descriptorspec = array(
 );
 
 $cmd = getHhvmPath() . " " . __DIR__ . "/not_enabled.php.test";
-$process = proc_open($cmd, $descriptorspec, &$pipes);
+$pipes = null;
+$process = proc_open($cmd, $descriptorspec, inout $pipes);
 if (!is_resource($process)) {
   throw new UnexpectedValueException("Failed to open child process!");
 }
@@ -29,3 +30,4 @@ foreach ($pipes as $pipe) {
 }
 
 proc_close($process);
+}

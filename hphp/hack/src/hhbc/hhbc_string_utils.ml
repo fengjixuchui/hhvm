@@ -22,7 +22,7 @@ let triple_quote_string s = "\"\"\"" ^ Php_escaping.escape s ^ "\"\"\""
 let prefix_namespace n s = n ^ "\\" ^ s
 
 let strip_global_ns s =
-  if String.length s > 0 || s.[0] = '\\' then
+  if String.length s > 0 && s.[0] = '\\' then
     String_utils.lstrip s "\\"
   else
     s
@@ -30,6 +30,11 @@ let strip_global_ns s =
 let strip_ns =
   let rx = Str.regexp {|.*\\|} in
   (* strip zero or more chars followed by a backslash *)
+  (fun s -> Str.replace_first rx "" s)
+
+(* Remove \HH\ or HH\ preceding a string *)
+let strip_hh_ns =
+  let rx = Str.regexp {|^\\?HH\\|} in
   (fun s -> Str.replace_first rx "" s)
 
 let has_ns =
@@ -92,7 +97,6 @@ module Integer = struct
       | 'b'
       | 'B'
       (* Hex *)
-      
       | 'x'
       | 'X' ->
         s
@@ -100,26 +104,6 @@ module Integer = struct
       | _ -> "0o" ^ String_utils.lstrip s "0"
     else
       s
-
-  (* In order for this to be true, every char has to be a number as well as
-   * if the first digit is a zero, then there cannot be more digits
-   * negative zero is dealt specially as it is not casted to zero
-   *
-   * E.g.:
-   * -1 -> true
-   * -0 -> false (special case)
-   * 08 -> false (octal)
-   * 0b1 -> false (binary)
-   *
-   * *)
-  let is_decimal_int s =
-    if s = "-0" then
-      false
-    else
-      let s = String_utils.lstrip s "-" in
-      String_utils.fold_left s ~acc:true ~f:(fun acc i ->
-          String_utils.is_decimal_digit i && acc)
-      && (String.length s = 1 || s.[0] <> '0')
 end
 
 module Float = struct
@@ -174,11 +158,8 @@ module Closures = struct
   let is_closure_name s = String_utils.string_starts_with s "Closure$"
 
   (* Closure classes have names of the form
-   *   Closure prefix $ scope ix ; num
+   *   Closure$ scope ix ; num
    * where
-   *   prefix ::=
-   *     $ <prefix-attribute>
-   *   |
    *   scope  ::=
    *     <function-name>
    *   | <class-name> :: <method-name>
@@ -187,21 +168,17 @@ module Closures = struct
    *     # <digits>
    *)
   let unmangle_closure =
-    let strip_index s =
-      match String.lsplit2 s ~on:'#' with
-      | Some (prefix, _) -> prefix
-      | None -> s
-    in
+    let rx = Str.regexp "#" in
     fun s ->
-      match String.split s ~on:'$' with
-      | ["Closure"; _prefix; scope] -> Some (strip_index scope)
-      | ["Closure"; scope] -> Some (strip_index scope)
-      | _ -> None
+      if is_closure_name s then
+        let suffix = String_utils.lstrip s "Closure$" in
+        match Str.split_delim rx suffix with
+        | [prefix; _] -> Some prefix
+        | _ -> Some suffix
+      else
+        None
 
-  let mangle_closure scope ix name =
-    match name with
-    | Some s -> Classes.mangle_class ("Closure$" ^ s) scope ix
-    | None -> Classes.mangle_class "Closure" scope ix
+  let mangle_closure scope ix = Classes.mangle_class "Closure" scope ix
 end
 
 (* XHP name mangling *)
@@ -274,9 +251,7 @@ module Xhp = struct
           s
       in
       let s =
-        s
-        |> Str.global_replace rx_dunder ":"
-        |> Str.global_replace rx_under "-"
+        s |> Str.global_replace rx_dunder ":" |> Str.global_replace rx_under "-"
       in
       if has_prefix then
         ":" ^ s
@@ -325,9 +300,7 @@ module Reified = struct
   let is_captured_generic id =
     let prefix = "$__captured$reifiedgeneric$" in
     let ( >>= ) = Option.( >>= ) in
-    String.chop_prefix ~prefix id
-    >>= String.lsplit2 ~on:'$'
-    >>= fun v ->
+    String.chop_prefix ~prefix id >>= String.lsplit2 ~on:'$' >>= fun v ->
     try
       match v with
       | ("function", i) -> Some (true, int_of_string i)

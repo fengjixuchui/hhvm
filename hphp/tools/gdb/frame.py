@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 Helpers for collecting and printing frame data.
 """
@@ -162,7 +164,7 @@ def create_php(idx, ar, rip='0x????????', pc=None):
     if not shared['m_isClosureBody']:
         func_name = nameof(func)
     else:
-        func_name = nameof(func['m_baseCls'])
+        func_name = nameof(func['m_baseCls'].cast(T('HPHP::Class').pointer()))
         func_name = func_name[:func_name.find(';')]
 
     if len(func_name) == 0:
@@ -183,11 +185,7 @@ def create_php(idx, ar, rip='0x????????', pc=None):
 
     # Pull the PC from Func::base() and ar->m_callOff if necessary.
     if pc is None:
-        pc = shared['m_base'] + ar['m_callOff']
-
-    # Adjust it for calls.
-    op_ptype = T('HPHP::Op').pointer()
-    op = (func['m_unit']['m_bc'] + pc).cast(op_ptype).dereference()
+        pc = shared['m_base'] + (ar['m_callOffAndFlags'] >> 2)
 
     frame['file'] = php_filename(func)
     frame['line'] = php_line_number(func, pc)
@@ -200,7 +198,7 @@ def create_resumable(idx, resumable):
         idx=idx,
         ar=resumable['m_actRec'].address,
         rip='{suspended}',
-        pc=resumable['m_resumeOffset'])
+        pc=resumable['m_suspendOffset'])
 
 
 #------------------------------------------------------------------------------

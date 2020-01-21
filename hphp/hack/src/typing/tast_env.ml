@@ -7,8 +7,9 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
+module Decl_provider = Decl_provider_ctx
 
 (** {!Tast_env.env} is just an alias to {!Typing_env.env}, and the functions we
     provide for it are largely just aliases to functions that take a
@@ -33,35 +34,30 @@ exception Not_in_class
 
 let print_ty = Typing_print.full_strip_ns
 
+let print_decl_ty = Typing_print.full_strip_ns_decl
+
 let print_error_ty = Typing_print.error
 
-let print_ty_with_identity = Typing_print.full_with_identity
+let print_ty_with_identity env phase_ty sym_occurrence sym_definition =
+  match phase_ty with
+  | Typing_defs.DeclTy ty ->
+    let (env, ty) = Typing_phase.localize_with_self env ty in
+    Typing_print.full_with_identity env ty sym_occurrence sym_definition
+  | Typing_defs.LoclTy ty ->
+    Typing_print.full_with_identity env ty sym_occurrence sym_definition
 
 let ty_to_json = Typing_print.to_json
 
 let json_to_locl_ty = Typing_print.json_to_locl_ty
 
-let get_self_id_exn env =
-  match Typing_env.get_self_id env with
-  | "" -> raise Not_in_class
-  | id -> id
+let get_self_id = Typing_env.get_self_id
 
-let get_self_id env =
-  (try Some (get_self_id_exn env) with Not_in_class -> None)
+let get_self_ty = Typing_env.get_self_ty
 
-let get_self_exn env =
-  let _ = get_self_id_exn env in
-  Typing_env.get_self env
-
-let get_self env = (try Some (get_self_exn env) with Not_in_class -> None)
-
-let fresh_type = Typing_env.fresh_type
-
-let open_tyvars = Typing_env.open_tyvars
-
-let close_tyvars_and_solve = Typing_solver.close_tyvars_and_solve
-
-let set_tyvar_variance env ty = Typing_env.set_tyvar_variance env ty
+let get_self_ty_exn env =
+  match get_self_ty env with
+  | Some self_ty -> self_ty
+  | None -> raise Not_in_class
 
 let get_class = Typing_env.get_class
 
@@ -72,6 +68,8 @@ let is_strict = Typing_env.is_strict
 let get_mode = Typing_env.get_mode
 
 let get_tcopt = Typing_env.get_tcopt
+
+let get_ctx = Typing_env.get_ctx
 
 let expand_type = Typing_env.expand_type
 
@@ -96,11 +94,7 @@ let fully_expand = Typing_expand.fully_expand
 
 let get_class_ids = Typing_utils.get_class_ids
 
-let fold_unresolved = Typing_utils.fold_unresolved
-
-let flatten_unresolved = Typing_utils.flatten_unresolved
-
-let push_option_out = Typing_solver.push_option_out Pos.none
+let non_null = Typing_solver.non_null
 
 let get_concrete_supertypes = Typing_utils.get_concrete_supertypes
 
@@ -116,13 +110,13 @@ let localize env ety_env = Typing_phase.localize ~ety_env env
 
 let localize_with_self = Typing_phase.localize_with_self
 
-let localize_with_dty_validator = Typing_phase.localize_with_dty_validator
-
 let get_upper_bounds = Typing_env.get_upper_bounds
 
 let is_fresh_generic_parameter = Typing_env.is_fresh_generic_parameter
 
 let simplify_unions env ty = Typing_union.simplify_unions env ty
+
+let union_list env r tyl = Typing_union.union_list env r tyl
 
 let get_reified = Typing_env.get_reified
 
@@ -150,7 +144,11 @@ let referenced_typeconsts env root ids =
       Typing_defs.from_class = Some CIstatic;
     }
   in
-  Typing_taccess.referenced_typeconsts env ety_env (root, ids)
+  Typing_taccess.referenced_typeconsts
+    env
+    ety_env
+    (root, ids)
+    ~on_error:Errors.unify_error
 
 let empty tcopt = Typing_env.empty tcopt Relative_path.default ~droot:None
 
@@ -165,8 +163,10 @@ let restore_saved_env env saved_env =
         Env.fun_mutable = saved_env.Tast.fun_mutable;
         Env.condition_types = saved_env.Tast.condition_types;
       };
-    Env.tenv = IMap.union env.Env.tenv saved_env.Tast.tenv;
-    Env.subst = IMap.union env.Env.subst saved_env.Tast.subst;
+    Env.inference_env =
+      Typing_inference_env.simple_merge
+        env.Env.inference_env
+        saved_env.Tast.inference_env;
     Env.global_tpenv = saved_env.Tast.tpenv;
     Env.lenv =
       {
@@ -182,6 +182,8 @@ open Tast
 let restore_method_env env m = restore_saved_env env m.m_annotation
 
 let restore_fun_env env f = restore_saved_env env f.f_annotation
+
+let restore_pu_enum_env env pu = restore_saved_env env pu.pu_annotation
 
 let fun_env f =
   let env = EnvFromDef.fun_env f.f_annotation.tcopt f in
@@ -205,6 +207,7 @@ let def_env d =
   | Class x -> class_env x
   | Typedef x -> typedef_env x
   | Constant x -> gconst_env x
+  | RecordDef _ -> empty GlobalOptions.default (* TODO T44306013 *)
   (* The following nodes are included in the TAST, but are not typechecked.
    * However, we need to return an env here so for now create an empty env using
    * the default typechecker options.
@@ -233,6 +236,8 @@ let is_xhp_child = Typing_xhp.is_xhp_child
 
 let get_enum = Typing_env.get_enum
 
+let get_typedef = Typing_env.get_typedef
+
 let is_enum = Typing_env.is_enum
 
 let env_reactivity = Typing_env_types.env_reactivity
@@ -243,7 +248,7 @@ let local_is_mutable = Typing_env.local_is_mutable
 
 let get_env_mutability = Typing_env.get_env_mutability
 
-let get_fun = Typing_env_types.get_fun
+let get_fun = Typing_env.get_fun
 
 let set_env_reactive = Typing_env.set_env_reactive
 

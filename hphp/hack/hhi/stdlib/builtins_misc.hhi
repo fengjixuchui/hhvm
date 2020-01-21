@@ -11,6 +11,10 @@
 namespace HH {
 function server_warmup_status(): string;
 function execution_context(): string;
+function mark_legacy_hack_array<Tk as arraykey,
+                                Tv,
+                                T as KeyedContainer<Tk,Tv>>(T $in): T;
+function is_marked_legacy_hack_array(mixed $in): bool;
 }
 namespace {
 const INF = 0.0;
@@ -33,8 +37,6 @@ function get_browser($user_agent = null, $return_array = false);
 function ignore_user_abort(bool $setting = false);
 <<__PHPStdLib, __Rx>>
 function pack(string $format, ...$args);
-<<__PHPStdLib>>
-function php_check_syntax($filename, &$error_message = null);
 <<__PHPStdLib>>
 function sleep(int $seconds);
 <<__PHPStdLib>>

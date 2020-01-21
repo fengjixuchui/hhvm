@@ -14,7 +14,7 @@ import time
 import unittest
 from typing import ClassVar, List, Mapping, Optional, Tuple
 
-from hh_paths import hh_client, hh_merge_deps, hh_server
+from hh_paths import hackfmt, hh_client, hh_merge_deps, hh_server
 from test_case import TestCase, TestDriver
 from utils import Json, JsonObject
 
@@ -24,6 +24,7 @@ class DebugSubscription(object):
     Wraps `hh_client debug`.
     """
 
+    # pyre-fixme[24]: Generic type `subprocess.Popen` expects 1 type parameter.
     def __init__(self, proc: subprocess.Popen) -> None:
         self.proc = proc
         hello = self.read_msg()
@@ -161,6 +162,7 @@ class CommonTestDriver(TestDriver):
         self.tearDownWithRetries()
 
     @classmethod
+    # pyre-fixme[24]: Generic type `subprocess.Popen` expects 1 type parameter.
     def proc_create(cls, args: List[str], env: Mapping[str, str]) -> subprocess.Popen:
         return subprocess.Popen(
             args,
@@ -235,6 +237,20 @@ class CommonTestDriver(TestDriver):
         # If the file isn't found you will get this
         except FileNotFoundError:
             return False
+
+    def run_hackfmt(
+        self,
+        stdin: Optional[str] = None,
+        options: Optional[List[str]] = None,
+        expected_output: Optional[str] = None,
+    ) -> bool:
+        options = [] if options is None else options
+        (output, err, retcode) = self.proc_call([hackfmt] + options, stdin=stdin)
+        if retcode != 0:
+            print("check returned non-zero code: " + str(retcode), file=sys.stderr)
+        if expected_output is not None:
+            self.assertEqual(expected_output, output)
+        return True
 
     # Runs `hh_client check` asserting the stdout is equal the expected.
     # Returns stderr.
@@ -709,7 +725,7 @@ class CommonTests(BarebonesTests):
             options=["--list-files"],
         )
 
-    def test_misc_ide_tools(self) -> None:
+    def test_type_at_pos(self) -> None:
         """
         Test hh_client --type-at-pos
         """
@@ -723,6 +739,25 @@ class CommonTests(BarebonesTests):
                 + '"full_type":{{"kind":"primitive","name":"string"}}}}'
             ],
             options=["--type-at-pos", "{root}foo_3.php:11:14"],
+        )
+
+    def test_type_at_pos_batch(self) -> None:
+        """
+        Test hh_client --type-at-pos-batch
+        """
+        self.test_driver.start_hh_server()
+
+        self.test_driver.check_cmd(
+            [
+                '{{"position":'
+                + '{{"file":"{root}foo_3.php",'
+                + '"line":11,'
+                + '"character":14}}'
+                + ',"type":{{'
+                + '"kind":"primitive",'
+                + '"name":"string"}}}}'
+            ],
+            options=["--type-at-pos-batch", "{root}foo_3.php:11:14"],
         )
 
     def test_ide_get_definition(self) -> None:
@@ -838,24 +873,16 @@ class CommonTests(BarebonesTests):
         if not self.test_driver.run_hackfmt_check():
             raise unittest.SkipTest("Hackfmt can't be found. Skipping.")
 
-        self.test_driver.start_hh_server()
-        self.test_driver.check_cmd_and_json_cmd(
-            [
-                "function test1(int $x) {{",
-                "  $x = $x * x + 3;",
-                "  return f($x);",
-                "}}",
-            ],
-            [
-                '{{"error_message":"","result":"function test1(int $x) {{\\n'
-                "  $x"
-                ' = $x * x + 3;\\n  return f($x);\\n}}\\n","internal_error":false}}'
-            ],
-            options=["--format", "7", "63"],
+        self.test_driver.run_hackfmt(
+            expected_output="function test1(int $x) {\n"
+            + "  $x = $x * x + 3;\n"
+            + "  return f($x);\n"
+            + "}\n",
+            options=["--indent-width", "2", "--range", "7", "63"],
             stdin="""<?hh
 
 function test1(int $x) { $x = $x*x + 3; return f($x); }
-function test2(int $x) { $x = $x*x + 3; return f($x); }
+function test2(int $x) { $x = $x*x + 5; return f($x); }
 """,
         )
 

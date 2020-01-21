@@ -23,6 +23,7 @@
 #include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/func.h"
+#include "hphp/runtime/vm/resumable.h"
 
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/abi.h"
@@ -133,10 +134,10 @@ void asyncFuncRetImpl(IRLS& env, const IRInstruction* inst, TCA target) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void traceRet(ActRec* fp, Cell* sp, void* rip) {
+void traceRet(ActRec* fp, TypedValue* sp, void* rip) {
   if (rip == tc::ustubs().callToExit) return;
   checkFrame(fp, sp, false /* fullCheck */);
-  assertx(sp <= (Cell*)fp || fp->resumed());
+  assertx(sp <= (TypedValue*)fp || isResumed(fp));
 }
 
 void cgRetCtrl(IRLS& env, const IRInstruction* inst) {
@@ -258,31 +259,15 @@ void cgReleaseVVAndSkip(IRLS& env, const IRInstruction* inst) {
       v << incwm{rvmtl()[profile.handle() + releasedOff], v.makeReg()};
     }
 
-    auto const sf = v.makeReg();
-    v << testqim{ActRec::kExtraArgsBit, fp[AROFF(m_varEnv)], sf};
-
-    unlikelyIfThenElse(v, vc, CC_NZ, sf,
-      [&] (Vout& v) {
-        cgCallHelper(
-          v, env,
-          CallSpec::direct(static_cast<void (*)(ActRec*)>(
-                           ExtraArgs::deallocate)),
-          kVoidDest,
-          SyncOptions::Sync,
-          argGroup(env, inst).reg(fp)
-        );
-      },
-      [&] (Vout& v) {
-        cgCallHelper(
-          v, env,
-          CallSpec::direct(static_cast<void (*)(ActRec*)>(
-                           VarEnv::deallocate)),
-          kVoidDest,
-          SyncOptions::Sync,
-          argGroup(env, inst).reg(fp)
-        );
-        v << jmp{label(env, inst->taken())};
-      });
+    cgCallHelper(
+      v, env,
+      CallSpec::direct(static_cast<void (*)(ActRec*)>(
+                       VarEnv::deallocate)),
+      kVoidDest,
+      SyncOptions::Sync,
+      argGroup(env, inst).reg(fp)
+    );
+    v << jmp{label(env, inst->taken())};
   }, releaseUnlikely);
 }
 

@@ -24,6 +24,7 @@
 #include <folly/gen/Base.h>
 #include <folly/gen/String.h>
 
+#include "hphp/util/hash-set.h"
 #include "hphp/util/trace.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/collections.h"
@@ -199,32 +200,40 @@ bool start_add_elem(ISS& env, Type& ty, Op op) {
  * add_elem array cached in the interp state and should write to it directly.
  */
 template <typename Fn>
-bool mutate_add_elem_array(ISS& env, ProvTag tag, Fn&& mutate) {
+bool mutate_add_elem_array(ISS& env, ProvTag loc, Fn&& mutate) {
   auto const arr = add_elem_array(env);
   if (!arr) return false;
+
+  assertx(!RuntimeOption::EvalArrayProvenance || loc.valid());
+
+  if (!RuntimeOption::EvalArrayProvenance) {
+    mutate(arr);
+    return true;
+  }
+
   // We need to propagate the provenance info in case we promote *arr from
-  // static to counted (or if its representation changes in some other
-  // way) ...
-  assertx(!RuntimeOption::EvalArrayProvenance || tag);
-  auto const oldTag = RuntimeOption::EvalArrayProvenance ?
-    arrprov::getTag(*arr) :
-    folly::none;
+  // static to counted (or if its representation changes in some other way)...
+  auto const tag = ProvTag::FromSArr(*arr);
+
   mutate(arr);
-  // ... which means we'll have to setTag if
-  // - the array still needs a tag AND
+
+  // ...which means we'll have to setTag if
+  //   - the array still needs a tag AND
   // either:
   //   - the array had no tag coming into this op OR
   //   - the set op cleared the provenance bit somehow
   //     (representation changed or we CoWed a static array)
-  if (RuntimeOption::EvalArrayProvenance &&
-      arrprov::arrayWantsTag(*arr) &&
-      (!oldTag || !(*arr)->hasProvenanceData())) {
-    // if oldTag is unset, then this operation is the provenance location
-    arrprov::setTag(*arr, oldTag ? *oldTag : *tag);
+  if (arrprov::arrayWantsTag(*arr)) {
+    if (tag == ProvTag::NoTag) {
+      arrprov::setTag(*arr, loc.get());
+    } else if (!(*arr)->hasProvenanceData()) {
+      arrprov::setTag(*arr, tag.get());
+    }
   }
-  // make sure that if provenance is enabled and the array wants a tag,
-  // that we definitely assigned one leaving this op
-  assertx(!tag ||
+
+  // Make sure that, if provenance is enabled and the array wants a tag, we
+  // definitely assigned one leaving this op.
+  assertx(!loc.valid() ||
           !arrprov::arrayWantsTag(*arr) ||
           (*arr)->hasProvenanceData());
   return true;
@@ -558,23 +567,29 @@ SString getNameFromType(const Type& t) {
 namespace {
 
 ArrayData*
-resolveTSListStatically(ISS& env, SArray tsList, const php::Class* declaringCls,
-                        bool checkArrays) {
+resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
+                        const php::Class* declaringCls);
+
+ArrayData*
+resolveTSListStatically(ISS& env, hphp_fast_set<SArray>& seenTs,
+                        SArray tsList, const php::Class* declaringCls) {
   auto arr = Array::attach(const_cast<ArrayData*>(tsList));
   for (auto i = 0; i < arr.size(); i++) {
     auto elemArr = arr[i].getArrayData();
-    auto elem = resolveTSStatically(env, elemArr, declaringCls, checkArrays);
+    auto elem = resolveTSStaticallyImpl(env, seenTs, elemArr, declaringCls);
     if (!elem) return nullptr;
     arr.set(i, Variant(elem));
   }
   return arr.detach();
 }
 
-} // namespace
-
 ArrayData*
-resolveTSStatically(ISS& env, SArray ts, const php::Class* declaringCls,
-                    bool checkArrays) {
+resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
+                        const php::Class* declaringCls) {
+  if (seenTs.contains(ts)) return nullptr;
+  seenTs.emplace(ts);
+  SCOPE_EXIT { seenTs.erase(ts); };
+
   auto const addModifiers = [&](ArrayData* result) {
     auto a = Array::attach(result);
     if (is_ts_like(ts) && !is_ts_like(a.get())) {
@@ -619,9 +634,15 @@ resolveTSStatically(ISS& env, SArray ts, const php::Class* declaringCls,
     case TypeStructure::Kind::T_vec:
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
-    case TypeStructure::Kind::T_arraylike:
-      if (!checkArrays || isTSAllWildcards(ts)) return finish(ts);
-      return nullptr;
+    case TypeStructure::Kind::T_arraylike: {
+      if (!ts->exists(s_generic_types)) return finish(ts);
+      auto const generics = get_ts_generic_types(ts);
+      auto rgenerics =
+        resolveTSListStatically(env, seenTs, generics, declaringCls);
+      if (!rgenerics) return nullptr;
+      auto result = const_cast<ArrayData*>(ts);
+      return finish(result->set(s_generic_types.get(), Variant(rgenerics)));
+    }
     case TypeStructure::Kind::T_class:
     case TypeStructure::Kind::T_interface:
     case TypeStructure::Kind::T_xhp:
@@ -631,8 +652,7 @@ resolveTSStatically(ISS& env, SArray ts, const php::Class* declaringCls,
       return finish(ts);
     case TypeStructure::Kind::T_tuple: {
       auto const elems = get_ts_elem_types(ts);
-      auto relems =
-        resolveTSListStatically(env, elems, declaringCls, checkArrays);
+      auto relems = resolveTSListStatically(env, seenTs, elems, declaringCls);
       if (!relems) return nullptr;
       auto result = const_cast<ArrayData*>(ts);
       return finish(result->set(s_elem_types.get(), Variant(relems)));
@@ -648,7 +668,7 @@ resolveTSStatically(ISS& env, SArray ts, const php::Class* declaringCls,
       if (ts->exists(s_generic_types)) {
         auto const generics = get_ts_generic_types(ts);
         auto rgenerics =
-          resolveTSListStatically(env, generics, declaringCls, checkArrays);
+          resolveTSListStatically(env, seenTs, generics, declaringCls);
         if (!rgenerics) return nullptr;
         result = result->set(s_generic_types.get(), Variant(rgenerics));
       }
@@ -695,8 +715,8 @@ resolveTSStatically(ISS& env, SArray ts, const php::Class* declaringCls,
         if (checkNoOverrideOnFirst && i == 0 && !cnst->isNoOverride) {
           return nullptr;
         }
-        typeCnsVal = resolveTSStatically(env, cnst->val->m_data.parr, cnst->cls,
-                                         checkArrays);
+        typeCnsVal = resolveTSStaticallyImpl(env, seenTs,
+                                             cnst->val->m_data.parr, cnst->cls);
         if (!typeCnsVal) return nullptr;
         if (i == size - 1) break;
         auto const kind = get_ts_kind(typeCnsVal);
@@ -710,19 +730,21 @@ resolveTSStatically(ISS& env, SArray ts, const php::Class* declaringCls,
       return finish(addModifiers(typeCnsVal));
     }
     case TypeStructure::Kind::T_fun: {
-      auto rreturn = resolveTSStatically(env, get_ts_return_type(ts),
-                                         declaringCls, checkArrays);
+      auto rreturn = resolveTSStaticallyImpl(env, seenTs,
+                                             get_ts_return_type(ts),
+                                             declaringCls);
       if (!rreturn) return nullptr;
-      auto rparams = resolveTSListStatically(env, get_ts_param_types(ts),
-                                             declaringCls, checkArrays);
+      auto rparams = resolveTSListStatically(env, seenTs,
+                                             get_ts_param_types(ts),
+                                             declaringCls);
       if (!rparams) return nullptr;
       auto result = const_cast<ArrayData*>(ts)
         ->set(s_return_type.get(), Variant(rreturn))
         ->set(s_param_types.get(), Variant(rparams));
       auto const variadic = get_ts_variadic_type_opt(ts);
       if (variadic) {
-        auto rvariadic = resolveTSStatically(env, variadic, declaringCls,
-                                             checkArrays);
+        auto rvariadic =
+          resolveTSStaticallyImpl(env, seenTs, variadic, declaringCls);
         if (!rvariadic) return nullptr;
         result = result->set(s_variadic_type.get(), Variant(rvariadic));
       }
@@ -737,6 +759,14 @@ resolveTSStatically(ISS& env, SArray ts, const php::Class* declaringCls,
       return nullptr;
   }
   not_reached();
+}
+
+} // namespace
+
+ArrayData*
+resolveTSStatically(ISS& env, SArray ts, const php::Class* declaringCls) {
+  hphp_fast_set<SArray> seenTs;
+  return resolveTSStaticallyImpl(env, seenTs, ts, declaringCls);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -792,7 +822,6 @@ void in(ISS& env, const bc::PopU2&) {
   popU(env);
   push(env, std::move(val), equiv != StackDupId ? equiv : NoLocalId);
 }
-void in(ISS& env, const bc::PopV&) { nothrow(env); popV(env); }
 
 void in(ISS& env, const bc::PopFrame& op) {
   effect_free(env);
@@ -908,7 +937,8 @@ void in(ISS& env, const bc::NewArray& op) {
 
 void in(ISS& env, const bc::NewDictArray& op) {
   effect_free(env);
-  push(env, op.arg1 == 0 ? dict_empty() : some_dict_empty());
+  push(env, op.arg1 == 0 ? dict_empty(provTagHere(env))
+                         : some_dict_empty(provTagHere(env)));
 }
 
 void in(ISS& env, const bc::NewMixedArray& op) {
@@ -935,7 +965,7 @@ void in(ISS& env, const bc::NewVArray& op) {
     elems.push_back(std::move(topC(env, op.arg1 - i - 1)));
   }
   discard(env, op.arg1);
-  push(env, arr_packed_varray(std::move(elems)));
+  push(env, arr_packed_varray(std::move(elems), provTagHere(env)));
   effect_free(env);
   constprop(env);
 }
@@ -943,7 +973,8 @@ void in(ISS& env, const bc::NewVArray& op) {
 void in(ISS& env, const bc::NewDArray& op) {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
   effect_free(env);
-  push(env, op.arg1 == 0 ? aempty_darray() : some_aempty_darray());
+  auto const tag = provTagHere(env);
+  push(env, op.arg1 == 0 ? aempty_darray(tag) : some_aempty_darray(tag));
 }
 
 void in(ISS& env, const bc::NewRecord& op) {
@@ -972,7 +1003,7 @@ void in(ISS& env, const bc::NewStructDArray& op) {
   for (auto it = op.keys.end(); it != op.keys.begin(); ) {
     map.emplace_front(make_tv<KindOfPersistentString>(*--it), popC(env));
   }
-  push(env, arr_map_darray(std::move(map)));
+  push(env, arr_map_darray(std::move(map), provTagHere(env)));
   effect_free(env);
   constprop(env);
 }
@@ -1067,7 +1098,7 @@ void in(ISS& env, const bc::AddElemC& /*op*/) {
         if (!ktv) return false;
         auto vtv = tv(v);
         if (!vtv) return false;
-        return mutate_add_elem_array(env, tag, [&](ArrayData** arr){
+        return mutate_add_elem_array(env, tag, [&](ArrayData** arr) {
           *arr = (*arr)->set(*ktv, *vtv);
         });
       }();
@@ -1127,7 +1158,7 @@ void in(ISS& env, const bc::AddNewElemC&) {
       auto const handled = [&] {
         auto vtv = tv(v);
         if (!vtv) return false;
-        return mutate_add_elem_array(env, tag, [&](ArrayData** arr){
+        return mutate_add_elem_array(env, tag, [&](ArrayData** arr) {
           *arr = (*arr)->append(*vtv);
         });
       }();
@@ -1193,13 +1224,12 @@ void in(ISS& env, const bc::ColFromArray& op) {
 }
 
 void in(ISS& env, const bc::CnsE& op) {
-  if (!options.HardConstProp) return push(env, TInitCell);
   auto t = env.index.lookup_constant(env.ctx, op.str1);
   if (!t) {
     // There's no entry for this constant in the index. It must be
     // the first iteration, so we'll add a dummy entry to make sure
     // there /is/ something next time around.
-    Cell val;
+    TypedValue val;
     val.m_type = kReadOnlyConstant;
     env.collect.cnsMap.emplace(op.str1, val);
     t = TInitCell;
@@ -1233,7 +1263,7 @@ void in(ISS& env, const bc::ClsCns& op) {
 void in(ISS& env, const bc::ClsCnsD& op) {
   if (auto const rcls = env.index.resolve_class(env.ctx, op.str2)) {
     auto t = env.index.lookup_class_constant(env.ctx, *rcls, op.str1, false);
-    if (options.HardConstProp) constprop(env);
+    constprop(env);
     push(env, std::move(t));
     return;
   }
@@ -1442,7 +1472,7 @@ void in(ISS& env, const bc::BitNot& /*op*/) {
     constprop(env);
     auto cell = eval_cell([&] {
       auto c = *v;
-      cellBitNot(c);
+      tvBitNot(c);
       return c;
     });
     if (cell) return push(env, std::move(*cell));
@@ -1485,7 +1515,7 @@ std::pair<Type,bool> resolveSame(ISS& env) {
     }
 
     if (v1 && v2) {
-      if (auto r = eval_cell_value([&]{ return cellSame(*v2, *v1); })) {
+      if (auto r = eval_cell_value([&]{ return tvSame(*v2, *v1); })) {
         // we wouldn't get here if cellSame raised a warning
         warningsEnabled = false;
         return r != NSame ? TTrue : TFalse;
@@ -1702,7 +1732,7 @@ void in(ISS& env, const bc::Eq&) {
     discard(env, 2);
     return push(env, TTrue);
   }
-  binOpBoolImpl(env, [&] (Cell c1, Cell c2) { return cellEqual(c1, c2); });
+  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return tvEqual(c1, c2); });
 }
 void in(ISS& env, const bc::Neq&) {
   auto rs = resolveSame<false>(env);
@@ -1711,24 +1741,24 @@ void in(ISS& env, const bc::Neq&) {
     discard(env, 2);
     return push(env, TFalse);
   }
-  binOpBoolImpl(env, [&] (Cell c1, Cell c2) { return !cellEqual(c1, c2); });
+  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return !tvEqual(c1, c2); });
 }
 void in(ISS& env, const bc::Lt&) {
-  binOpBoolImpl(env, [&] (Cell c1, Cell c2) { return cellLess(c1, c2); });
+  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return tvLess(c1, c2); });
 }
 void in(ISS& env, const bc::Gt&) {
-  binOpBoolImpl(env, [&] (Cell c1, Cell c2) { return cellGreater(c1, c2); });
+  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return tvGreater(c1, c2); });
 }
-void in(ISS& env, const bc::Lte&) { binOpBoolImpl(env, cellLessOrEqual); }
-void in(ISS& env, const bc::Gte&) { binOpBoolImpl(env, cellGreaterOrEqual); }
+void in(ISS& env, const bc::Lte&) { binOpBoolImpl(env, tvLessOrEqual); }
+void in(ISS& env, const bc::Gte&) { binOpBoolImpl(env, tvGreaterOrEqual); }
 
 void in(ISS& env, const bc::Cmp&) {
-  binOpInt64Impl(env, [&] (Cell c1, Cell c2) { return cellCompare(c1, c2); });
+  binOpInt64Impl(env, [&] (TypedValue c1, TypedValue c2) { return tvCompare(c1, c2); });
 }
 
 void in(ISS& env, const bc::Xor&) {
-  binOpBoolImpl(env, [&] (Cell c1, Cell c2) {
-    return cellToBool(c1) ^ cellToBool(c2);
+  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) {
+    return tvToBool(c1) ^ tvToBool(c2);
   });
 }
 
@@ -1767,7 +1797,7 @@ void in(ISS& env, const bc::CastInt&) {
   if (!t.couldBe(BObj)) nothrow(env);
   if (auto const v = tv(t)) {
     auto cell = eval_cell([&] {
-      return make_tv<KindOfInt64>(cellToInt(*v));
+      return make_tv<KindOfInt64>(tvToInt(*v));
     });
     if (cell) return push(env, std::move(*cell));
   }
@@ -1804,8 +1834,6 @@ void in(ISS& env, const bc::CastString&) {
 void in(ISS& env, const bc::CastArray&)  {
   castImpl(env, TPArr, tvCastToArrayInPlace);
 }
-
-void in(ISS& env, const bc::CastObject&) { castImpl(env, TObj, nullptr); }
 
 void in(ISS& env, const bc::CastDict&)   {
   castImpl(env, TDict, tvCastToDictInPlace);
@@ -2235,7 +2263,7 @@ void in(ISS& env, const bc::Switch& op) {
           return go(op.targets.back());
         }
         auto match = eval_cell_value([&] {
-            return cellEqual(*v, static_cast<int64_t>(op.arg2 + i));
+            return tvEqual(*v, static_cast<int64_t>(op.arg2 + i));
         });
         if (!match) break;
         if (*match) {
@@ -2257,7 +2285,7 @@ void in(ISS& env, const bc::SSwitch& op) {
   if (v) {
     for (auto& kv : op.targets) {
       auto match = eval_cell_value([&] {
-        return !kv.first || cellEqual(*v, kv.first);
+        return !kv.first || tvEqual(*v, kv.first);
       });
       if (!match) break;
       if (*match) {
@@ -2337,7 +2365,7 @@ void in(ISS& env, const bc::CGetL& op) {
         op.loc1 == last->PopL.loc1) {
       reprocess(env);
       rewind(env, 1);
-      if (!locCouldBeRef(env, op.loc1)) setLocRaw(env, op.loc1, TCell);
+      setLocRaw(env, op.loc1, TCell);
       return reduce(env, bc::SetL { op.loc1 });
     }
   }
@@ -2468,15 +2496,14 @@ void in(ISS& env, const bc::CGetS& op) {
   auto indexTy = env.index.lookup_public_static(env.ctx, tcls, tname);
   if (indexTy.subtypeOf(BInitCell)) {
     /*
-     * Constant propagation here can change when we invoke autoload, so it's
-     * considered HardConstProp.  It's safe not to check anything about private
-     * or protected static properties, because you can't override a public
-     * static property with a private or protected one---if the index gave us
-     * back a constant type, it's because it found a public static and it must
-     * be the property this would have read dynamically.
+     * Constant propagation here can change when we invoke autoload.
+     * It's safe not to check anything about private or protected static
+     * properties, because you can't override a public static property with
+     * a private or protected one---if the index gave us back a constant type,
+     * it's because it found a public static and it must be the property this
+     * would have read dynamically.
      */
-    if (options.HardConstProp &&
-        !classInitMightRaise(env, tcls) &&
+    if (!classInitMightRaise(env, tcls) &&
         !env.index.lookup_public_static_maybe_late_init(tcls, tname)) {
       constprop(env);
     }
@@ -2485,12 +2512,6 @@ void in(ISS& env, const bc::CGetS& op) {
   }
 
   push(env, TInitCell);
-}
-
-void in(ISS& env, const bc::VGetL& op) {
-  nothrow(env);
-  setLocRaw(env, op.loc1, TRef);
-  push(env, TRef);
 }
 
 void in(ISS& env, const bc::ClassGetC& op) {
@@ -2892,7 +2913,7 @@ void in(ISS& env, const bc::IssetS& op) {
   auto const indexTy = env.index.lookup_public_static(env.ctx, tcls, tname);
   if (indexTy.subtypeOf(BInitCell)) {
     // See the comments in CGetS about constprop for public statics.
-    if (options.HardConstProp && !classInitMightRaise(env, tcls)) {
+    if (!classInitMightRaise(env, tcls)) {
       constprop(env);
     }
     if (env.index.lookup_public_static_maybe_late_init(tcls, tname)) {
@@ -3095,7 +3116,7 @@ bool isValidTypeOpForIsAs(const IsTypeOp& op) {
 
 template<bool asExpression>
 void isAsTypeStructImpl(ISS& env, SArray inputTS) {
-  auto const resolvedTS = resolveTSStatically(env, inputTS, env.ctx.cls, true);
+  auto const resolvedTS = resolveTSStatically(env, inputTS, env.ctx.cls);
   auto const ts = resolvedTS ? resolvedTS : inputTS;
   auto const t = topC(env, 1); // operand to is/as
 
@@ -3290,9 +3311,13 @@ void isAsTypeStructImpl(ISS& env, SArray inputTS) {
   not_reached();
 }
 
-bool canReduceToDontResolveList(SArray tsList);
+bool canReduceToDontResolveList(SArray tsList, bool checkArrays);
 
-bool canReduceToDontResolve(SArray ts) {
+bool canReduceToDontResolve(SArray ts, bool checkArrays) {
+  auto const checkGenerics = [&](SArray arr) {
+    if (!ts->exists(s_generic_types)) return true;
+    return canReduceToDontResolveList(get_ts_generic_types(ts), true);
+  };
   switch (get_ts_kind(ts)) {
     case TypeStructure::Kind::T_int:
     case TypeStructure::Kind::T_bool:
@@ -3308,47 +3333,31 @@ bool canReduceToDontResolve(SArray ts) {
     case TypeStructure::Kind::T_dynamic:
     case TypeStructure::Kind::T_nonnull:
     case TypeStructure::Kind::T_resource:
-    // Following ones don't reify, so no need to check the generics
+      return true;
+    // Following have generic parameters that may need to be resolved
     case TypeStructure::Kind::T_dict:
     case TypeStructure::Kind::T_vec:
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
     case TypeStructure::Kind::T_arraylike:
-      return true;
+      return !checkArrays || checkGenerics(ts);
     case TypeStructure::Kind::T_class:
     case TypeStructure::Kind::T_interface:
     case TypeStructure::Kind::T_xhp:
     case TypeStructure::Kind::T_enum:
-      // If it does not have generics, then we can reduce
-      // If it has generics but all of them are wildcards, then we can reduce
-      // Otherwise, we can't.
-      return isTSAllWildcards(ts);
+      return isTSAllWildcards(ts) || checkGenerics(ts);
     case TypeStructure::Kind::T_tuple:
-      return canReduceToDontResolveList(get_ts_elem_types(ts));
-    case TypeStructure::Kind::T_shape: {
-      auto result = true;
-      IterateV(
-        get_ts_fields(ts),
-        [&](TypedValue v) {
-          assertx(isArrayLikeType(v.m_type));
-          auto const arr = v.m_data.parr;
-          if (arr->exists(s_is_cls_cns)) {
-            result = false;
-            return true; // short circuit
-          }
-          result &= canReduceToDontResolve(get_ts_value(arr));
-           // when result is false, we can short circuit
-          return !result;
-        }
-      );
-      return result;
-    }
+      return canReduceToDontResolveList(get_ts_elem_types(ts), checkArrays);
     case TypeStructure::Kind::T_fun: {
       auto const variadicType = get_ts_variadic_type_opt(ts);
-      return canReduceToDontResolve(get_ts_return_type(ts))
-        && canReduceToDontResolveList(get_ts_param_types(ts))
-        && (!variadicType || canReduceToDontResolve(variadicType));
+      return canReduceToDontResolve(get_ts_return_type(ts), checkArrays)
+        && canReduceToDontResolveList(get_ts_param_types(ts), checkArrays)
+        && (!variadicType || canReduceToDontResolve(variadicType, checkArrays));
     }
+    case TypeStructure::Kind::T_shape:
+      // We cannot skip resolution on shapes since shapes contain "value" field
+      // which resolution removes.
+      return false;
     // Following needs to be resolved
     case TypeStructure::Kind::T_unresolved:
     case TypeStructure::Kind::T_typeaccess:
@@ -3367,13 +3376,13 @@ bool canReduceToDontResolve(SArray ts) {
   not_reached();
 }
 
-bool canReduceToDontResolveList(SArray tsList) {
+bool canReduceToDontResolveList(SArray tsList, bool checkArrays) {
   auto result = true;
   IterateV(
     tsList,
     [&](TypedValue v) {
       assertx(isArrayLikeType(v.m_type));
-      result &= canReduceToDontResolve(v.m_data.parr);
+      result &= canReduceToDontResolve(v.m_data.parr, checkArrays);
        // when result is false, we can short circuit
       return !result;
     }
@@ -3404,7 +3413,7 @@ void in(ISS& env, const bc::IsTypeStructC& op) {
     return push(env, TBool);
   }
   if (op.subop1 == TypeStructResolveOp::Resolve &&
-      canReduceToDontResolve(a->m_data.parr)) {
+      canReduceToDontResolve(a->m_data.parr, false)) {
     return reduce(env, bc::IsTypeStructC { TypeStructResolveOp::DontResolve });
   }
   isAsTypeStructImpl<false>(env, a->m_data.parr);
@@ -3426,9 +3435,8 @@ void in(ISS& env, const bc::CombineAndResolveTypeStruct& op) {
     auto const ts = first->m_data.parr;
     // Optimize single input that does not need any combination
     if (op.arg1 == 1) {
-      if (canReduceToDontResolve(ts)) return reduce(env);
-      if (auto const resolved = resolveTSStatically(env, ts, env.ctx.cls,
-                                                    false)) {
+      if (canReduceToDontResolve(ts, true)) return reduce(env);
+      if (auto const resolved = resolveTSStatically(env, ts, env.ctx.cls)) {
         return RuntimeOption::EvalHackArrDVArrs
           ? reduce(env, bc::PopC {}, bc::Dict  { resolved })
           : reduce(env, bc::PopC {}, bc::Array { resolved });
@@ -3505,16 +3513,15 @@ folly::Optional<std::pair<Type, LocalId>> moveToLocImpl(ISS& env,
   auto equivLoc = topStkEquiv(env);
   // If the local could be a Ref, don't record equality because the stack
   // element and the local won't actually have the same type.
-  if (!locCouldBeRef(env, op.loc1)) {
-    if (equivLoc == StackThisId && env.state.thisLoc != NoLocalId) {
-      if (env.state.thisLoc == op.loc1 ||
-                 locsAreEquiv(env, env.state.thisLoc, op.loc1)) {
-        return folly::none;
-      } else {
-        equivLoc = env.state.thisLoc;
-      }
+  if (equivLoc == StackThisId && env.state.thisLoc != NoLocalId) {
+    if (env.state.thisLoc == op.loc1 ||
+               locsAreEquiv(env, env.state.thisLoc, op.loc1)) {
+      return folly::none;
+    } else {
+      equivLoc = env.state.thisLoc;
     }
-    assertx(!is_volatile_local(env.ctx.func, op.loc1));
+  }
+  if (!is_volatile_local(env.ctx.func, op.loc1)) {
     if (equivLoc <= MaxLocalId) {
       if (equivLoc == op.loc1 ||
           locsAreEquiv(env, equivLoc, op.loc1)) {
@@ -3609,8 +3616,8 @@ void in(ISS& env, const bc::SetOpL& op) {
     // Can't constprop at this eval_cell, because of the effects on
     // locals.
     auto resultTy = eval_cell([&] {
-      Cell c = *locVal;
-      Cell rhs = *v1;
+      TypedValue c = *locVal;
+      TypedValue rhs = *v1;
       setopBody(&c, op.subop2, &rhs);
       return c;
     });
@@ -3658,7 +3665,7 @@ void in(ISS& env, const bc::SetOpS& op) {
     if (vname && vname->m_type == KindOfPersistentString) {
       mergeSelfProp(env, vname->m_data.pstr, TInitCell);
     } else {
-      loseNonRefSelfPropTypes(env);
+      killSelfProps(env);
     }
   }
 
@@ -3704,7 +3711,7 @@ void in(ISS& env, const bc::IncDecS& op) {
     if (vname && vname->m_type == KindOfPersistentString) {
       mergeSelfProp(env, vname->m_data.pstr, TInitCell);
     } else {
-      loseNonRefSelfPropTypes(env);
+      killSelfProps(env);
     }
   }
 
@@ -3739,7 +3746,8 @@ bool fcallOptimizeChecks(
   const res::Func& func,
   FCallWithFCA fcallWithFCA
 ) {
-  if (fca.enforceReffiness()) {
+  auto const numOut = env.index.lookup_num_inout_params(env.ctx, func);
+  if (fca.enforceInOut() && numOut == fca.numRets - 1) {
     bool match = true;
     for (auto i = 0; i < fca.numArgs; ++i) {
       auto const kind = env.index.lookup_param_prep(env.ctx, func, i);
@@ -3748,11 +3756,15 @@ bool fcallOptimizeChecks(
         break;
       }
 
-      if (kind != (fca.byRef(i) ? PrepKind::Ref : PrepKind::Val)) {
-        // Reffiness mismatch
+      if (kind != (fca.isInOut(i) ? PrepKind::InOut : PrepKind::Val)) {
+        // The function/method may not exist, in which case we should raise a
+        // different error. Just defer the checks to the runtime.
+        if (!func.exactFunc()) return false;
+
+        // inout mismatch
         auto const exCls = makeStaticString("InvalidArgumentException");
-        auto const err = makeStaticString(formatParamRefMismatch(
-          func.name()->data(), i, !fca.byRef(i)));
+        auto const err = makeStaticString(formatParamInOutMismatch(
+          func.name()->data(), i, !fca.isInOut(i)));
 
         reduce(
           env,
@@ -3771,10 +3783,10 @@ bool fcallOptimizeChecks(
     }
 
     if (match) {
-      // Optimize away the runtime reffiness check.
+      // Optimize away the runtime inout-ness check.
       reduce(env, fcallWithFCA(FCallArgs(
         fca.flags, fca.numArgs, fca.numRets, nullptr, fca.asyncEagerTarget,
-        fca.lockWhileUnwinding)));
+        fca.lockWhileUnwinding, fca.skipNumArgsCheck)));
       return true;
     }
   }
@@ -3796,6 +3808,13 @@ bool fcallOptimizeChecks(
       reduce(env, fcallWithFCA(std::move(newFCA)));
       return true;
     }
+  }
+
+  if (!fca.skipNumArgsCheck && fca.numArgs <= func.minNonVariadicParams()) {
+    auto newFCA = fca;
+    newFCA.skipNumArgsCheck = true;
+    reduce(env, fcallWithFCA(std::move(newFCA)));
+    return true;
   }
 
   return false;
@@ -3958,8 +3977,7 @@ void fcallKnownImpl(
   }
 
   if (func.name()->isame(s_defined.get()) &&
-      fca.numArgs == 1 && !fca.hasUnpack() && !fca.hasGenerics() &&
-      options.HardConstProp) {
+      fca.numArgs == 1 && !fca.hasUnpack() && !fca.hasGenerics()) {
     // If someone calls defined('foo') they probably want foo to be
     // defined normally; ie not a persistent constant.
     if (auto const v = tv(topCV(env, numExtraInputs))) {
@@ -4077,7 +4095,7 @@ void fcallFuncStr(ISS& env, const bc::FCallFunc& op) {
   }
 
   auto const updateBC = [&] (FCallArgs fca) {
-    return bc::FCallFunc { std::move(fca), op.argv };
+    return bc::FCallFunc { std::move(fca) };
   };
 
   if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC)) return;
@@ -4087,8 +4105,6 @@ void fcallFuncStr(ISS& env, const bc::FCallFunc& op) {
 } // namespace
 
 void in(ISS& env, const bc::FCallFunc& op) {
-  if (op.argv.size() != 0) return fcallFuncUnknown(env, op);
-
   auto const callable = topC(env);
   if (callable.subtypeOf(BFunc)) return fcallFuncFunc(env, op);
   if (callable.subtypeOf(BClsMeth)) return fcallFuncClsMeth(env, op);
@@ -4127,12 +4143,8 @@ void fcallObjMethodNullsafe(ISS& env, const FCallArgs& fca, bool extraInput) {
   if (fca.hasGenerics()) repl.push_back(bc::PopC {});
   if (fca.hasUnpack()) repl.push_back(bc::PopC {});
   for (uint32_t i = 0; i < fca.numArgs; ++i) {
-    if (topC(env, repl.size()).subtypeOf(BRef)) {
-      repl.push_back(bc::PopV {});
-    } else {
-      assertx(topC(env, repl.size()).subtypeOf(BInitCell));
-      repl.push_back(bc::PopC {});
-    }
+    assertx(topC(env, repl.size()).subtypeOf(BInitCell));
+    repl.push_back(bc::PopC {});
   }
   repl.push_back(bc::PopU {});
   repl.push_back(bc::PopU {});
@@ -4243,7 +4255,7 @@ void in(ISS& env, const bc::FCallObjMethodD& op) {
 
 void in(ISS& env, const bc::FCallObjMethod& op) {
   auto const methName = getNameFromType(topC(env));
-  if (!methName || op.argv.size() != 0) {
+  if (!methName) {
     popC(env);
     fcallUnknownImpl(env, op.fca);
     return;
@@ -4262,7 +4274,7 @@ void in(ISS& env, const bc::FCallObjMethod& op) {
 
   auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
     if (!clsHint) clsHint = op.str2;
-    return bc::FCallObjMethod { std::move(fca), clsHint, op.subop3, op.argv };
+    return bc::FCallObjMethod { std::move(fca), clsHint, op.subop3 };
   };
   fcallObjMethodImpl(env, op, methName, true, true, updateBC);
 }
@@ -4325,7 +4337,7 @@ void in(ISS& env, const bc::FCallClsMethodD& op) {
 
 void in(ISS& env, const bc::FCallClsMethod& op) {
   auto const methName = getNameFromType(topC(env, 1));
-  if (!methName || op.argv.size() != 0) {
+  if (!methName) {
     popC(env);
     popC(env);
     fcallUnknownImpl(env, op.fca);
@@ -4336,7 +4348,7 @@ void in(ISS& env, const bc::FCallClsMethod& op) {
   auto const rfunc = env.index.resolve_method(env.ctx, clsTy, methName);
   auto const skipLogAsDynamicCall =
     !RuntimeOption::EvalLogKnownMethodsAsDynamicCalls &&
-      op.subop4 == IsLogAsDynamicCallOp::DontLogAsDynamicCall;
+      op.subop3 == IsLogAsDynamicCallOp::DontLogAsDynamicCall;
   if (is_specialized_cls(clsTy) && dcls_of(clsTy).type == DCls::Exact &&
       (!rfunc.mightCareAboutDynCalls() || skipLogAsDynamicCall)) {
     auto const clsName = dcls_of(clsTy).cls.name();
@@ -4350,7 +4362,7 @@ void in(ISS& env, const bc::FCallClsMethod& op) {
 
   auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
     if (!clsHint) clsHint = op.str2;
-    return bc::FCallClsMethod { std::move(fca), clsHint, op.argv, op.subop4 };
+    return bc::FCallClsMethod { std::move(fca), clsHint, op.subop3 };
   };
   fcallClsMethodImpl(env, op, clsTy, methName, true, 2, updateBC);
 }
@@ -4427,7 +4439,7 @@ void in(ISS& env, const bc::FCallClsMethodSD& op) {
 
 void in(ISS& env, const bc::FCallClsMethodS& op) {
   auto const methName = getNameFromType(topC(env));
-  if (!methName || op.argv.size() != 0) {
+  if (!methName) {
     popC(env);
     fcallUnknownImpl(env, op.fca);
     return;
@@ -4445,7 +4457,7 @@ void in(ISS& env, const bc::FCallClsMethodS& op) {
 
   auto const updateBC = [&] (FCallArgs fca, SString clsHint = nullptr) {
     if (!clsHint) clsHint = op.str2;
-    return bc::FCallClsMethodS { std::move(fca), clsHint, op.subop3, op.argv };
+    return bc::FCallClsMethodS { std::move(fca), clsHint, op.subop3 };
   };
   fcallClsMethodSImpl(env, op, methName, true, true, updateBC);
 }
@@ -4620,39 +4632,46 @@ void in(ISS& env, const bc::LockObj& op) {
 
 namespace {
 
-void iterInitImpl(ISS& env, IterId iter, LocalId valueLoc,
-                  BlockId target, const Type& base, LocalId baseLoc,
-                  bool needsPop) {
+// baseLoc is NoLocalId for non-local iterators.
+void iterInitImpl(ISS& env, IterArgs ita, BlockId target, LocalId baseLoc) {
+  auto const local = baseLoc != NoLocalId;
+  auto const sourceLoc = local ? baseLoc : topStkLocal(env);
+  auto const base = local ? locAsCell(env, baseLoc) : topC(env);
   auto ity = iter_types(base);
 
   auto const fallthrough = [&] {
-    setIter(env, iter, LiveIter { ity, baseLoc, NoLocalId, env.bid });
+    auto const baseCannotBeObject = !base.couldBe(BObj);
+    setIter(env, ita.iterId, LiveIter { ity, sourceLoc, NoLocalId, env.bid,
+                                        false, baseCannotBeObject });
     // Do this after setting the iterator, in case it clobbers the base local
     // equivalency.
-    setLoc(env, valueLoc, std::move(ity.value));
+    setLoc(env, ita.valId, std::move(ity.value));
+    if (ita.hasKey()) {
+      setLoc(env, ita.keyId, std::move(ity.key));
+      setIterKey(env, ita.iterId, ita.keyId);
+    }
   };
 
-  assert(iterIsDead(env, iter));
+  assert(iterIsDead(env, ita.iterId));
 
   if (!ity.mayThrowOnInit) {
     if (ity.count == IterTypes::Count::Empty && will_reduce(env)) {
-      if (needsPop) {
-        reduce(env, bc::PopC{});
-      } else {
+      if (local) {
         reduce(env);
+      } else {
+        reduce(env, bc::PopC{});
       }
       return jmp_setdest(env, target);
     }
     nothrow(env);
   }
 
-  if (needsPop) {
-    popC(env);
-  }
+  if (!local) popC(env);
 
   switch (ity.count) {
     case IterTypes::Count::Empty:
-      mayReadLocal(env, valueLoc);
+      mayReadLocal(env, ita.valId);
+      if (ita.hasKey()) mayReadLocal(env, ita.keyId);
       jmp_setdest(env, target);
       return;
     case IterTypes::Count::Single:
@@ -4671,64 +4690,14 @@ void iterInitImpl(ISS& env, IterId iter, LocalId valueLoc,
   always_assert(false);
 }
 
-void iterInitKImpl(ISS& env, IterId iter, LocalId valueLoc, LocalId keyLoc,
-                   BlockId target, const Type& base, LocalId baseLoc,
-                   bool needsPop) {
-  auto ity = iter_types(base);
+// baseLoc is NoLocalId for non-local iterators.
+void iterNextImpl(ISS& env, IterArgs ita, BlockId target, LocalId baseLoc) {
+  auto const curVal = peekLocRaw(env, ita.valId);
+  auto const curKey = ita.hasKey() ? peekLocRaw(env, ita.keyId) : TBottom;
 
-  auto const fallthrough = [&]{
-    setIter(env, iter, LiveIter { ity, baseLoc, NoLocalId, env.bid });
-    // Do this after setting the iterator, in case it clobbers the base local
-    // equivalency.
-    setLoc(env, valueLoc, std::move(ity.value));
-    setLoc(env, keyLoc, std::move(ity.key));
-    if (!locCouldBeRef(env, keyLoc)) setIterKey(env, iter, keyLoc);
-  };
-
-  assert(iterIsDead(env, iter));
-
-  if (!ity.mayThrowOnInit) {
-    if (ity.count == IterTypes::Count::Empty && will_reduce(env)) {
-      if (needsPop) {
-        reduce(env, bc::PopC{});
-      } else {
-        reduce(env);
-      }
-      return jmp_setdest(env, target);
-    }
-    nothrow(env);
-  }
-
-  if (needsPop) {
-    popC(env);
-  }
-
-  switch (ity.count) {
-    case IterTypes::Count::Empty:
-      mayReadLocal(env, valueLoc);
-      mayReadLocal(env, keyLoc);
-      return jmp_setdest(env, target);
-    case IterTypes::Count::Single:
-    case IterTypes::Count::NonEmpty:
-      fallthrough();
-      return jmp_nevertaken(env);
-    case IterTypes::Count::ZeroOrOne:
-    case IterTypes::Count::Any:
-      env.propagate(target, &env.state);
-      fallthrough();
-      return;
-  }
-
-  always_assert(false);
-}
-
-void iterNextImpl(ISS& env,
-                  IterId iter, LocalId valueLoc, BlockId target,
-                  LocalId baseLoc) {
-  auto const curLoc = peekLocRaw(env, valueLoc);
   auto noThrow = false;
   auto const noTaken = match<bool>(
-    env.state.iters[iter],
+    env.state.iters[ita.iterId],
     [&] (DeadIter)           {
       always_assert(false && "IterNext on dead iter");
       return false;
@@ -4742,7 +4711,11 @@ void iterNextImpl(ISS& env,
           return true;
         case IterTypes::Count::NonEmpty:
         case IterTypes::Count::Any:
-          setLoc(env, valueLoc, ti.types.value);
+          setLoc(env, ita.valId, ti.types.value);
+          if (ita.hasKey()) {
+            setLoc(env, ita.keyId, ti.types.key);
+            setIterKey(env, ita.iterId, ita.keyId);
+          }
           return false;
         case IterTypes::Count::Empty:
           always_assert(false);
@@ -4752,154 +4725,47 @@ void iterNextImpl(ISS& env,
   );
 
   if (noTaken && noThrow && will_reduce(env)) {
-    if (baseLoc != NoLocalId) {
-      return reduce(env, bc::LIterFree { iter, baseLoc });
-    }
-    return reduce(env, bc::IterFree { iter });
+    auto const iterId = safe_cast<IterId>(ita.iterId);
+    return baseLoc == NoLocalId
+      ? reduce(env, bc::IterFree { iterId })
+      : reduce(env, bc::LIterFree { iterId, baseLoc });
   }
 
-  mayReadLocal(env, valueLoc);
   mayReadLocal(env, baseLoc);
+  mayReadLocal(env, ita.valId);
+  if (ita.hasKey()) mayReadLocal(env, ita.keyId);
 
   if (noThrow) nothrow(env);
 
   if (noTaken) {
     jmp_nevertaken(env);
-    freeIter(env, iter);
+    freeIter(env, ita.iterId);
     return;
   }
 
   env.propagate(target, &env.state);
 
-  freeIter(env, iter);
-  setLocRaw(env, valueLoc, curLoc);
-}
-
-void iterNextKImpl(ISS& env, IterId iter, LocalId valueLoc,
-                   LocalId keyLoc, BlockId target, LocalId baseLoc) {
-  auto const curValue = peekLocRaw(env, valueLoc);
-  auto const curKey = peekLocRaw(env, keyLoc);
-  auto noThrow = false;
-  auto const noTaken = match<bool>(
-    env.state.iters[iter],
-    [&] (DeadIter)           {
-      always_assert(false && "IterNextK on dead iter");
-      return false;
-    },
-    [&] (const LiveIter& ti) {
-      if (!ti.types.mayThrowOnNext) noThrow = true;
-      if (ti.baseLocal != NoLocalId) hasInvariantIterBase(env);
-      switch (ti.types.count) {
-        case IterTypes::Count::Single:
-        case IterTypes::Count::ZeroOrOne:
-          return true;
-        case IterTypes::Count::NonEmpty:
-        case IterTypes::Count::Any:
-          setLoc(env, valueLoc, ti.types.value);
-          setLoc(env, keyLoc, ti.types.key);
-          if (!locCouldBeRef(env, keyLoc)) setIterKey(env, iter, keyLoc);
-          return false;
-        case IterTypes::Count::Empty:
-          always_assert(false);
-      }
-      not_reached();
-    }
-  );
-
-  if (noTaken && noThrow && will_reduce(env)) {
-    if (baseLoc != NoLocalId) {
-      return reduce(env, bc::LIterFree { iter, baseLoc });
-    }
-    return reduce(env, bc::IterFree { iter });
-  }
-
-  mayReadLocal(env, valueLoc);
-  mayReadLocal(env, keyLoc);
-  mayReadLocal(env, baseLoc);
-
-  if (noThrow) nothrow(env);
-
-  if (noTaken) {
-    jmp_nevertaken(env);
-    freeIter(env, iter);
-    return;
-  }
-
-  env.propagate(target, &env.state);
-
-  freeIter(env, iter);
-  setLocRaw(env, valueLoc, curValue);
-  setLocRaw(env, keyLoc, curKey);
+  freeIter(env, ita.iterId);
+  setLocRaw(env, ita.valId, curVal);
+  if (ita.hasKey()) setLocRaw(env, ita.keyId, curKey);
 }
 
 }
 
 void in(ISS& env, const bc::IterInit& op) {
-  auto base = topC(env);
-  iterInitImpl(
-    env,
-    op.iter1,
-    op.loc3,
-    op.target2,
-    std::move(base),
-    topStkLocal(env),
-    true
-  );
+  iterInitImpl(env, op.ita, op.target2, NoLocalId);
 }
 
 void in(ISS& env, const bc::LIterInit& op) {
-  iterInitImpl(
-    env,
-    op.iter1,
-    op.loc4,
-    op.target3,
-    locAsCell(env, op.loc2),
-    op.loc2,
-    false
-  );
-}
-
-void in(ISS& env, const bc::IterInitK& op) {
-  auto base = topC(env);
-  iterInitKImpl(
-    env,
-    op.iter1,
-    op.loc3,
-    op.loc4,
-    op.target2,
-    std::move(base),
-    topStkLocal(env),
-    true
-  );
-}
-
-void in(ISS& env, const bc::LIterInitK& op) {
-  iterInitKImpl(
-    env,
-    op.iter1,
-    op.loc4,
-    op.loc5,
-    op.target3,
-    locAsCell(env, op.loc2),
-    op.loc2,
-    false
-  );
+  iterInitImpl(env, op.ita, op.target3, op.loc2);
 }
 
 void in(ISS& env, const bc::IterNext& op) {
-  iterNextImpl(env, op.iter1, op.loc3, op.target2, NoLocalId);
+  iterNextImpl(env, op.ita, op.target2, NoLocalId);
 }
 
 void in(ISS& env, const bc::LIterNext& op) {
-  iterNextImpl(env, op.iter1, op.loc4, op.target3, op.loc2);
-}
-
-void in(ISS& env, const bc::IterNextK& op) {
-  iterNextKImpl(env, op.iter1, op.loc3, op.loc4, op.target2, NoLocalId);
-}
-
-void in(ISS& env, const bc::LIterNextK& op) {
-  iterNextKImpl(env, op.iter1, op.loc4, op.loc5, op.target3, op.loc2);
+  iterNextImpl(env, op.ita, op.target3, op.loc2);
 }
 
 void in(ISS& env, const bc::IterFree& op) {
@@ -4927,26 +4793,6 @@ void in(ISS& env, const bc::LIterFree& op) {
   freeIter(env, op.iter1);
 }
 
-void in(ISS& env, const bc::IterBreak& op) {
-  nothrow(env);
-
-  for (auto const& it : op.iterTab) {
-    if (it.kind == KindOfIter || it.kind == KindOfLIter) {
-      match<void>(
-        env.state.iters[it.id],
-        []  (DeadIter) {},
-        [&] (const LiveIter& ti) {
-          if (ti.baseLocal != NoLocalId) hasInvariantIterBase(env);
-        }
-      );
-    }
-    if (it.kind == KindOfLIter) mayReadLocal(env, it.local);
-    freeIter(env, it.id);
-  }
-
-  env.propagate(op.target1, &env.state);
-}
-
 /*
  * Any include/require (or eval) op kills all locals, and private properties.
  */
@@ -4969,26 +4815,20 @@ void in(ISS& env, const bc::Eval&)      { inclOpImpl(env); }
 void in(ISS& /*env*/, const bc::DefCls&) {}
 void in(ISS& /*env*/, const bc::DefRecord&) {}
 void in(ISS& /*env*/, const bc::DefClsNop&) {}
-void in(ISS& env, const bc::AliasCls&) {
-  popC(env);
-  push(env, TBool);
-}
 
 void in(ISS& env, const bc::DefCns& op) {
   auto const t = popC(env);
-  if (options.HardConstProp) {
-    auto const v = tv(t);
-    auto const val = v && tvAsCVarRef(&*v).isAllowedAsConstantValue() ?
-      *v : make_tv<KindOfUninit>();
-    auto const res = env.collect.cnsMap.emplace(op.str1, val);
-    if (!res.second) {
-      if (res.first->second.m_type == kReadOnlyConstant) {
-        // we only saw a read of this constant
-        res.first->second = val;
-      } else {
-        // more than one definition in this function
-        res.first->second.m_type = kDynamicConstant;
-      }
+  auto const v = tv(t);
+  auto const val = v && tvAsCVarRef(&*v).isAllowedAsConstantValue() ?
+    *v : make_tv<KindOfUninit>();
+  auto const res = env.collect.cnsMap.emplace(op.str1, val);
+  if (!res.second) {
+    if (res.first->second.m_type == kReadOnlyConstant) {
+      // we only saw a read of this constant
+      res.first->second = val;
+    } else {
+      // more than one definition in this function
+      res.first->second.m_type = kDynamicConstant;
     }
   }
   push(env, TBool);
@@ -5109,20 +4949,27 @@ bool couldBeMocked(const Type& t) {
 }
 }
 
+using TCVec = std::vector<const TypeConstraint*>;
+
 void in(ISS& env, const bc::VerifyParamType& op) {
   IgnoreUsedParams _{env};
 
-  if (env.ctx.func->isMemoizeImpl && !locCouldBeRef(env, op.loc1)) {
+  if (env.ctx.func->isMemoizeImpl) {
     // a MemoizeImpl's params have already been checked by the wrapper
     return reduce(env);
   }
 
+  auto const& pinfo = env.ctx.func->params[op.loc1];
   // Generally we won't know anything about the params, but
   // analyze_func_inline does - and this can help with effect-free analysis
-  auto const constraint = env.ctx.func->params[op.loc1].typeConstraint;
-  if (env.index.satisfies_constraint(env.ctx,
-                                     locAsCell(env, op.loc1),
-                                     constraint)) {
+  TCVec tcs = {&pinfo.typeConstraint};
+  for (auto const& t : pinfo.upperBounds) tcs.push_back(&t);
+  if (std::all_of(std::begin(tcs), std::end(tcs),
+        [&](const TypeConstraint* tc) {
+          return env.index.satisfies_constraint(env.ctx,
+                                                locAsCell(env, op.loc1),
+                                                *tc);
+          })) {
     if (!locAsCell(env, op.loc1).couldBe(BFunc | BCls)) {
       return reduce(env);
     }
@@ -5130,29 +4977,23 @@ void in(ISS& env, const bc::VerifyParamType& op) {
 
   /*
    * We assume that if this opcode doesn't throw, the parameter was of the
-   * specified type (although it may have been a Ref if the parameter was
-   * by reference).
-   *
-   * The env.setLoc here handles dealing with a parameter that was
-   * already known to be a reference.
-   *
-   * NB: VerifyParamType of a reference parameter can kill any references
-   * if it re-enters.
+   * specified type.
    */
-  if (RuntimeOption::EvalThisTypeHintLevel != 3 && constraint.isThis()) {
-    return;
-  }
-  if (constraint.hasConstraint() && !constraint.isTypeVar() &&
-      !constraint.isTypeConstant()) {
-    auto t =
-      loosen_dvarrayness(env.index.lookup_constraint(env.ctx, constraint));
-    if (constraint.isThis() && couldBeMocked(t)) {
-      t = unctx(std::move(t));
+  Type tcT;
+  for (auto const& constraint : tcs) {
+    if (constraint->hasConstraint() && !constraint->isTypeVar() &&
+      !constraint->isTypeConstant()) {
+      auto t =
+        loosen_dvarrayness(env.index.lookup_constraint(env.ctx, *constraint));
+      if (constraint->isThis() && couldBeMocked(t)) {
+        t = unctx(std::move(t));
+      }
+      FTRACE(2, "     {} ({})\n", constraint->fullName(), show(t));
+      tcT = intersection_of(std::move(tcT), std::move(t));
+      if (tcT.subtypeOf(BBottom)) unreachable(env);
     }
-    if (t.subtypeOf(BBottom)) unreachable(env);
-    FTRACE(2, "     {} ({})\n", constraint.fullName(), show(t));
-    setLoc(env, op.loc1, std::move(t));
   }
+  if (tcT != TTop) setLoc(env, op.loc1, std::move(tcT));
 }
 
 void in(ISS& env, const bc::VerifyParamTypeTS& op) {
@@ -5178,7 +5019,7 @@ void in(ISS& env, const bc::VerifyParamTypeTS& op) {
       return;
     }
     auto const resolvedTS =
-      resolveTSStatically(env, inputTS->m_data.parr, env.ctx.cls, true);
+      resolveTSStatically(env, inputTS->m_data.parr, env.ctx.cls);
     if (resolvedTS && resolvedTS != inputTS->m_data.parr) {
       reduce(env, bc::PopC {});
       RuntimeOption::EvalHackArrDVArrs ? reduce(env, bc::Dict { resolvedTS })
@@ -5190,7 +5031,7 @@ void in(ISS& env, const bc::VerifyParamTypeTS& op) {
   popC(env);
 }
 
-void verifyRetImpl(ISS& env, const TypeConstraint& constraint,
+void verifyRetImpl(ISS& env, const TCVec& tcs,
                    bool reduce_this, bool ts_flavor) {
   // If it is the ts flavor, then second thing on the stack, otherwise first
   auto stackT = topC(env, (int)ts_flavor);
@@ -5200,7 +5041,10 @@ void verifyRetImpl(ISS& env, const TypeConstraint& constraint,
   // constraint is a typevar, or if the top of stack is the same or a
   // subtype of the type constraint, then this is a no-op, unless
   // reified types could be involved.
-  if (env.index.satisfies_constraint(env.ctx, stackT, constraint)) {
+  if (std::all_of(std::begin(tcs), std::end(tcs),
+                  [&](const TypeConstraint* tc) {
+                    return env.index.satisfies_constraint(env.ctx, stackT, *tc);
+                  })) {
     if (ts_flavor) {
       // we wouldn't get here if reified types were definitely not
       // involved, so just bail.
@@ -5212,62 +5056,70 @@ void verifyRetImpl(ISS& env, const TypeConstraint& constraint,
     return reduce(env);
   }
 
-  // For CheckReturnTypeHints >= 3 AND the constraint is not soft.
-  // We can safely assume that either VerifyRetTypeC will
-  // throw or it will produce a value whose type is compatible with the
-  // return type constraint.
-  auto tcT = remove_uninit(
-    loosen_dvarrayness(env.index.lookup_constraint(env.ctx, constraint)));
-
-  // If tcT could be an interface or trait, we upcast it to TObj/TOptObj.
-  // Why?  Because we want uphold the invariant that we only refine return
-  // types and never widen them, and if we allow tcT to be an interface then
-  // it's possible for violations of this invariant to arise.  For an example,
-  // see "hphp/test/slow/hhbbc/return-type-opt-bug.php".
-  // Note: It's safe to use TObj/TOptObj because lookup_constraint() only
-  // returns classes or interfaces or traits (it never returns something that
-  // could be an enum or type alias) and it never returns anything that could
-  // be a "magic" interface that supports non-objects.  (For traits the return
-  // typehint will always throw at run time, so it's safe to use TObj/TOptObj.)
-  if (is_specialized_obj(tcT) && dobj_of(tcT).cls.couldBeInterfaceOrTrait()) {
-    tcT = is_opt(tcT) ? TOptObj : TObj;
-  }
-
-  // In some circumstances, verifyRetType can modify the type. If it
-  // does that we can't reduce even when we know it succeeds.
+  std::vector<Type> constraintTypes;
   auto dont_reduce = false;
-  // VerifyRetType will convert a TFunc to a TStr implicitly
-  // (and possibly warn)
-  if (tcT.couldBe(BStr) && stackT.couldBe(BFunc | BCls)) {
-    stackT |= TStr;
-    dont_reduce = true;
-  }
 
-  // VerifyRetType will convert TClsMeth to TVec/TVArr/TArr implicitly
-  if (stackT.couldBe(BClsMeth)) {
-    if (tcT.couldBe(BVec)) {
-      stackT |= TVec;
-      dont_reduce = true;
-    }
-    if (tcT.couldBe(BVArr)) {
-      stackT |= TVArr;
-      dont_reduce = true;
-    }
-    if (tcT.couldBe(TArr)) {
-      stackT |= TArr;
-      dont_reduce = true;
-    }
-  }
+  for (auto const& constraint : tcs) {
+    // For CheckReturnTypeHints >= 3 AND the constraint is not soft.
+    // We can safely assume that either VerifyRetTypeC will
+    // throw or it will produce a value whose type is compatible with the
+    // return type constraint.
+    auto tcT = remove_uninit(
+      loosen_dvarrayness(env.index.lookup_constraint(env.ctx, *constraint)));
 
-  // If CheckReturnTypeHints < 3 OR if the constraint is soft,
-  // then there are no optimizations we can safely do here, so
-  // just leave the top of stack as is.
-  if (RuntimeOption::EvalCheckReturnTypeHints < 3 || constraint.isSoft() ||
-      (RuntimeOption::EvalThisTypeHintLevel != 3 && constraint.isThis())) {
-    if (ts_flavor) popC(env);
-    popC(env);
-    push(env, std::move(stackT), stackEquiv);
-    return;
+    // If tcT could be an interface or trait, we upcast it to TObj/TOptObj.
+    // Why?  Because we want uphold the invariant that we only refine return
+    // types and never widen them, and if we allow tcT to be an interface then
+    // it's possible for violations of this invariant to arise.  For an example,
+    // see "hphp/test/slow/hhbbc/return-type-opt-bug.php".
+    // Note: It's safe to use TObj/TOptObj because lookup_constraint() only
+    // returns classes or interfaces or traits (it never returns something that
+    // could be an enum or type alias) and it never returns anything that could
+    // be a "magic" interface that supports non-objects.  (For traits the return
+    // typehint will always throw at run time, so it's safe to use TObj/TOptObj.)
+    if (is_specialized_obj(tcT) && dobj_of(tcT).cls.couldBeInterfaceOrTrait()) {
+      tcT = is_opt(tcT) ? TOptObj : TObj;
+    }
+
+    constraintTypes.push_back(tcT);
+
+    // In some circumstances, verifyRetType can modify the type. If it
+    // does that we can't reduce even when we know it succeeds.
+    // VerifyRetType will convert a TFunc to a TStr implicitly
+    // (and possibly warn)
+    if (tcT.couldBe(BStr) && stackT.couldBe(BFunc | BCls)) {
+      stackT |= TStr;
+      dont_reduce = true;
+    }
+
+    // VerifyRetType will convert TClsMeth to TVec/TVArr/TArr implicitly
+    if (stackT.couldBe(BClsMeth)) {
+      if (tcT.couldBe(BVec)) {
+        stackT |= TVec;
+        dont_reduce = true;
+      }
+      if (tcT.couldBe(BVArr)) {
+        stackT |= TVArr;
+        dont_reduce = true;
+      }
+      if (tcT.couldBe(TArr)) {
+        stackT |= TArr;
+        dont_reduce = true;
+      }
+    }
+
+    // If CheckReturnTypeHints < 3 OR if the constraint is soft,
+    // then there are no optimizations we can safely do here, so
+    // just leave the top of stack as is.
+    if (RuntimeOption::EvalCheckReturnTypeHints < 3 || constraint->isSoft() ||
+        (RuntimeOption::EvalEnforceGenericsUB != 2 &&
+         constraint->isUpperBound()))
+    {
+      if (ts_flavor) popC(env);
+      popC(env);
+      push(env, std::move(stackT), stackEquiv);
+      return;
+    }
   }
 
   // In cases where we have a `this` hint where stackT is an TOptObj known to
@@ -5276,21 +5128,30 @@ void verifyRetImpl(ISS& env, const TypeConstraint& constraint,
   // split these translations, it will rarely in practice return null.
   if (reduce_this &&
       !dont_reduce &&
-      constraint.isThis() &&
-      !constraint.isNullable() &&
       is_opt(stackT) &&
-      env.index.satisfies_constraint(env.ctx, unopt(stackT), constraint)) {
+      std::all_of(std::begin(tcs), std::end(tcs),
+                  [&](const TypeConstraint* constraint) {
+                    return constraint->isThis() &&
+                           !constraint->isNullable() &&
+                           env.index.satisfies_constraint(
+                               env.ctx, unopt(stackT), *constraint);
+                    }
+                  )
+  ) {
     if (ts_flavor) {
       return reduce(env, bc::PopC {}, bc::VerifyRetNonNullC {});
     }
     return reduce(env, bc::VerifyRetNonNullC {});
   }
 
-  auto retT = intersection_of(std::move(tcT), std::move(stackT));
-  if (retT.subtypeOf(BBottom)) {
-    unreachable(env);
-    if (ts_flavor) popC(env); // the type structure
-    return;
+  auto retT = std::move(stackT);
+  for (auto& tcT : constraintTypes) {
+    retT = intersection_of(std::move(tcT), std::move(retT));
+    if (retT.subtypeOf(BBottom)) {
+      unreachable(env);
+      if (ts_flavor) popC(env); // the type structure
+      return;
+    }
   }
 
   if (ts_flavor) popC(env); // the type structure
@@ -5299,18 +5160,18 @@ void verifyRetImpl(ISS& env, const TypeConstraint& constraint,
 }
 
 void in(ISS& env, const bc::VerifyOutType& op) {
-  // We reuse VerifyOutType bytecode for log typehint violations on
-  // byref parameters. Do not perform any optimizations for byref parameters,
-  // as we do not enforce those.
-  if (env.ctx.func->params[op.arg1].byRef) {
-    return;
-  }
-  verifyRetImpl(env, env.ctx.func->params[op.arg1].typeConstraint,
-                false, false);
+  TCVec tcs;
+  auto const& pinfo = env.ctx.func->params[op.arg1];
+  tcs.push_back(&pinfo.typeConstraint);
+  for (auto const& t : pinfo.upperBounds) tcs.push_back(&t);
+  verifyRetImpl(env, tcs, false, false);
 }
 
 void in(ISS& env, const bc::VerifyRetTypeC& /*op*/) {
-  verifyRetImpl(env, env.ctx.func->retTypeConstraint, true, false);
+  TCVec tcs;
+  tcs.push_back(&env.ctx.func->retTypeConstraint);
+  for (auto const& t : env.ctx.func->returnUBs) tcs.push_back(&t);
+  verifyRetImpl(env, tcs, true, false);
 }
 
 void in(ISS& env, const bc::VerifyRetTypeTS& /*op*/) {
@@ -5335,7 +5196,7 @@ void in(ISS& env, const bc::VerifyRetTypeTS& /*op*/) {
       return;
     }
     auto const resolvedTS =
-      resolveTSStatically(env, inputTS->m_data.parr, env.ctx.cls, true);
+      resolveTSStatically(env, inputTS->m_data.parr, env.ctx.cls);
     if (resolvedTS && resolvedTS != inputTS->m_data.parr) {
       reduce(env, bc::PopC {});
       RuntimeOption::EvalHackArrDVArrs ? reduce(env, bc::Dict { resolvedTS })
@@ -5344,13 +5205,14 @@ void in(ISS& env, const bc::VerifyRetTypeTS& /*op*/) {
       return;
     }
   }
-  verifyRetImpl(env, constraint, true, true);
+  TCVec tcs {&constraint};
+  for (auto const& t : env.ctx.func->returnUBs) tcs.push_back(&t);
+  verifyRetImpl(env, tcs, true, true);
 }
 
 void in(ISS& env, const bc::VerifyRetNonNullC& /*op*/) {
   auto const constraint = env.ctx.func->retTypeConstraint;
-  if (RuntimeOption::EvalCheckReturnTypeHints < 3 || constraint.isSoft()
-      || (RuntimeOption::EvalThisTypeHintLevel != 3 && constraint.isThis())) {
+  if (RuntimeOption::EvalCheckReturnTypeHints < 3 || constraint.isSoft()) {
     return;
   }
 
@@ -5848,7 +5710,7 @@ void interpStep(ISS& env, const Bytecode& bc) {
     if (!options.ConstantProp || !env.flags.canConstProp) return false;
 
     auto const numPushed   = bc.numPush();
-    TinyVector<Cell> cells;
+    TinyVector<TypedValue> cells;
 
     auto i = size_t{0};
     while (i < numPushed) {
@@ -5871,25 +5733,20 @@ void interpStep(ISS& env, const Bytecode& bc) {
 
     auto const numPop = bc.numPop();
     for (auto j = 0; j < numPop; j++) {
-      switch (bc.popFlavor(j)) {
-        case Flavor::CVU:
-          // Note that we only support C's for CVU so far (this only
-          // comes up with FCallBuiltin)---we'll fail the verifier if
-          // something changes to send V's or U's through here.
+      auto const flavor = bc.popFlavor(j);
+      if (flavor == Flavor::C) {
+        interpStep(env, bc::PopC {});
+      } else if (flavor == Flavor::U) {
+        interpStep(env, bc::PopU {});
+      } else {
+        assertx(flavor == Flavor::CU);
+        auto const& popped = topT(env);
+        if (popped.subtypeOf(BUninit)) {
+          interpStep(env, bc::PopU {});
+        } else {
+          assertx(popped.subtypeOf(BInitCell));
           interpStep(env, bc::PopC {});
-          break;
-        case Flavor::CU:
-          // We only support C's for CU right now.
-          interpStep(env, bc::PopC {});
-          break;
-        case Flavor::C:
-          interpStep(env, bc::PopC {});
-          break;
-        case Flavor::V:
-          interpStep(env, bc::PopV {});
-          break;
-        case Flavor::U:  not_reached();
-        case Flavor::CV: not_reached();
+        }
       }
     }
 
@@ -6054,7 +5911,13 @@ BlockId speculateHelper(ISS& env, BlockId orig, bool updateTaken) {
   }
 
   while (pops--) {
-    interpStep(env, bc::PopC {});
+    auto const& popped = topT(env);
+    if (popped.subtypeOf(BInitCell)) {
+      interpStep(env, bc::PopC {});
+    } else {
+      assertx(popped.subtypeOf(BUninit));
+      interpStep(env, bc::PopU {});
+    }
   }
 
   return target;

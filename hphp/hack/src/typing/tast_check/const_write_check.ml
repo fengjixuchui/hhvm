@@ -8,7 +8,7 @@
  *)
 
 open Aast
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 module Env = Tast_env
 
@@ -27,7 +27,7 @@ let check_const_prop env tenv class_ (pos, id) cty =
           not
             ( Env.get_inside_constructor env
             && (* expensive call behind short circuiting && *)
-               Tast_env.is_sub_type env (Env.get_self_exn env) cty )
+            Tast_env.is_sub_type env (Env.get_self_ty_exn env) cty )
         then
           Errors.mutating_const_property pos)
 
@@ -35,7 +35,7 @@ let check_prop env c pid cty_opt =
   let class_ = Env.get_class env c in
   (* Check we're in the LHS of an assignment, so we don't get confused
      by $foo->bar(), which is an Obj_get but not a property. *)
-  if Env.get_val_kind env = Typing_defs.Lval then
+  if Typing_defs.(equal_val_kind (Env.get_val_kind env) Lval) then
     Option.iter class_ ~f:(fun class_ ->
         match cty_opt with
         | Some cty ->
@@ -46,15 +46,20 @@ let check_prop env c pid cty_opt =
 let rec check_expr env (_, e) =
   match e with
   | Class_get (((_, cty), _), CGstring pid) ->
+    let (env, cty) = Env.expand_type env cty in
     begin
-      match snd cty with
+      match get_node cty with
       | Tclass ((_, c), _, _) -> check_prop env c pid None
-      | Tabstract (AKdependent _, Some (_, Tclass ((_, c), _, _))) ->
-        check_prop env c pid None
-      | Tabstract (AKgeneric name, None) ->
+      | Tdependent (_, bound) ->
+        begin
+          match get_node bound with
+          | Tclass ((_, c), _, _) -> check_prop env c pid None
+          | _ -> ()
+        end
+      | Tgeneric name ->
         let upper_bounds = Env.get_upper_bounds env name in
         let check_class bound =
-          match snd bound with
+          match get_node bound with
           | Tclass ((_, c), _, _) -> check_prop env c pid None
           | _ -> ()
         in
@@ -62,14 +67,21 @@ let rec check_expr env (_, e) =
       | _ -> ()
     end
   | Obj_get (((_, cty), _), (_, Id id), _) ->
+    let (env, cty) = Env.expand_type env cty in
     begin
-      match snd cty with
+      match get_node cty with
       | Tclass ((_, c), _, _) -> check_prop env c id (Some cty)
-      | Tabstract (_, (Some (_, Tclass ((_, c), _, _)) as ty)) ->
-        check_prop env c id ty
+      | Tnewtype (_, _, bound)
+      | Tdependent (_, bound) ->
+        begin
+          match get_node bound with
+          | Tclass ((_, c), _, _) -> check_prop env c id (Some bound)
+          | _ -> ()
+        end
       | _ -> ()
     end
-  | Call (_, (_, Id (_, f)), _, el, []) when f = SN.PseudoFunctions.unset ->
+  | Call (_, (_, Id (_, f)), _, el, None)
+    when String.equal f SN.PseudoFunctions.unset ->
     let rec check_unset_exp e =
       match e with
       | (_, Array_get (e, Some _)) -> check_unset_exp e

@@ -1,0 +1,23 @@
+# @generated
+# @autocargo from //hphp/hack/src/hhbc:instruction_sequence_rust
+# Signature<<9b65260ad5c647cd73a77e11e0ca229beafe3902>>
+[package]
+name = "instruction_sequence_rust"
+edition = "2018"
+version = "0.0.0"
+include = ["../../instruction_sequence.rs"]
+
+[lib]
+path = "../../instruction_sequence.rs"
+
+[dependencies]
+env = { path = "../env" }
+hhbc_ast_rust = { path = "../hhbc_ast" }
+hhbc_id_rust = { path = "../hhbc_id" }
+label_rust = { path = "../label" }
+local_rust = { path = "../local" }
+runtime = { path = "../runtime" }
+
+[dev-dependencies]
+pretty_assertions = "0.6"
+# @end of Signature<<9b65260ad5c647cd73a77e11e0ca229beafe3902>>

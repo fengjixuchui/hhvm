@@ -9,15 +9,16 @@
 
 (* Typing code concerned with disposable types. *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 module Env = Typing_env
 module MakeType = Typing_make_type
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 
 let is_disposable_visitor env =
   object (this)
-    inherit [string option] Type_visitor.type_visitor
+    inherit [string option] Type_visitor.locl_type_visitor
 
     (* Only bother looking at classish types. Other types can spuriously
      * claim to implement these interfaces. Ideally we should check
@@ -49,7 +50,12 @@ let enforce_is_disposable env hint =
       match Env.get_class_dep env c with
       | None -> ()
       | Some c ->
-        if not (Cls.is_disposable c) then Errors.must_extend_disposable p
+        if
+          not
+            ( Cls.is_disposable c
+            || Ast_defs.(equal_class_kind (Cls.kind c) Cinterface) )
+        then
+          Errors.must_extend_disposable p
     end
   | _ -> ()
 
@@ -64,10 +70,4 @@ let enforce_is_disposable_type env has_await pos ty =
       SN.Classes.cIDisposable
   in
   let disposable_ty = MakeType.class_type (Reason.Rusing pos) class_name [] in
-  Typing_ops.sub_type
-    pos
-    Reason.URusing
-    env
-    ty
-    disposable_ty
-    Errors.unify_error
+  Typing_ops.sub_type pos Reason.URusing env ty disposable_ty Errors.unify_error

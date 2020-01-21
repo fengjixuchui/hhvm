@@ -272,7 +272,10 @@ void copyTV(Vout& v, Vloc src, Vloc dst, Type destType) {
 
   if (dst_arity == 2) {
     always_assert(src_arity == 2);
-    v << copy2{src.reg(0), src.reg(1), dst.reg(0), dst.reg(1)};
+    v << copyargs{
+      v.makeTuple({src.reg(0), src.reg(1)}),
+      v.makeTuple({dst.reg(0), dst.reg(1)})
+    };
     return;
   }
   always_assert(dst_arity == 1);
@@ -482,13 +485,6 @@ Vreg emitLdObjClass(Vout& v, Vreg obj, Vreg d) {
   emitLdLowPtr(v, obj[ObjectData::getVMClassOffset()], d,
                sizeof(LowPtr<Class>));
   return d;
-}
-
-Vreg emitLdClsCctx(Vout& v, Vreg src, Vreg dst) {
-  static_assert(ActRec::kHasClassBit == 1,
-                "Fix the decq if you change kHasClassBit");
-  v << decq{src, dst, v.makeReg()};
-  return dst;
 }
 
 void cmpLowPtrImpl(Vout& v, Vreg sf, const void* ptr, Vptr mem, size_t size) {

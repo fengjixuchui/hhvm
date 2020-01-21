@@ -673,10 +673,7 @@ const char* VariablesCommand::getTypeName(const Variant& variable) {
     }
 
     case KindOfObject:
-      return variable.toCObjRef()->getClassName().c_str();
-
-    case KindOfRef:
-      return "reference";
+      return variable.asCObjRef()->getClassName().c_str();
 
     default:
       VSDebugLogger::Log(
@@ -721,7 +718,7 @@ const VariablesCommand::VariableValue VariablesCommand::getVariableValue(
 
     case KindOfPersistentString:
     case KindOfString: {
-      std::string value {variable.toCStrRef().toCppString()};
+      std::string value {variable.asCStrRef().toCppString()};
       int maxDisplayLength =
         debugger->getDebuggerOptions().maxReturnedStringLength;
       if (value.length() > maxDisplayLength) {
@@ -758,12 +755,8 @@ const VariablesCommand::VariableValue VariablesCommand::getVariableValue(
       return VariableValue{format("keyset[{}]", variable.toArray().size()).str()};
     }
 
-    case KindOfRef:
-      // Note: PHP references are not supported in Hack.
-      return VariableValue{"reference"};
-
     case KindOfObject:
-      return getObjectSummary(session, debugger, requestId, variable.toCObjRef());
+      return getObjectSummary(session, debugger, requestId, variable.asCObjRef());
 
     default:
       return VariableValue{"Unexpected variable type"};
@@ -787,7 +780,7 @@ const VariablesCommand::VariableValue VariablesCommand::getObjectSummary(
 
   if (executor.m_debugDisplay.isString()) {
     return VariableValue{
-      executor.m_debugDisplay.toCStrRef().toCppString(),
+      executor.m_debugDisplay.asCStrRef().toCppString(),
       true
     };
   }

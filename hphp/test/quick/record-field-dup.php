@@ -1,11 +1,11 @@
 <?hh
 
 abstract record A {
-  x: int,
+  int x;
 }
 
-final record B extends A {
-  x: int,
+record B extends A {
+  int x;
 }
 
 <<__EntryPoint>>

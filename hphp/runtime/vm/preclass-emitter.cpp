@@ -161,8 +161,6 @@ bool PreClassEmitter::addProperty(const StringData* n, Attr attrs,
   if (it != m_propMap.end()) {
     return false;
   }
-  // LateInitSoft implies LateInit
-  if (attrs & AttrLateInitSoft) attrs |= AttrLateInit;
   PreClassEmitter::Prop prop{
     this,
     n,
@@ -371,14 +369,14 @@ template<class SerDe> void PreClassEmitter::serdeMetaData(SerDe& sd) {
     (m_traitPrecRules)
     (m_traitAliasRules)
     (m_userAttributes)
-    (m_propMap)
-    (m_constMap)
+    (m_propMap, [](Prop p) { return p.name(); })
+    (m_constMap, [](Const c) { return c.name(); })
     (m_enumBaseTy)
     ;
 
     if (SerDe::deserializing) {
       for (unsigned i = 0; i < m_propMap.size(); ++i) {
-        m_propMap[i].resolveArray(this);
+        m_propMap[i].updateAfterDeserialize(this);
       }
     }
 }

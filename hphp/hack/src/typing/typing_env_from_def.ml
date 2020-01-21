@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 module Env = Typing_env
 module MakeType = Typing_make_type
@@ -30,43 +30,58 @@ let fun_env tcopt f =
 let get_self_from_c c =
   let tparams =
     List.map c.c_tparams.c_tparam_list (fun { tp_name = (p, s); _ } ->
-        (Reason.Rwitness p, Tgeneric s))
+        mk (Reason.Rwitness p, Tgeneric s))
   in
-  (Reason.Rwitness (fst c.c_name), Tapply (c.c_name, tparams))
+  mk (Reason.Rwitness (fst c.c_name), Tapply (c.c_name, tparams))
 
 let class_env tcopt c =
   let file = Pos.filename (fst c.c_name) in
   let droot = Some (Typing_deps.Dep.Class (snd c.c_name)) in
   let env = Env.empty tcopt file ~mode:c.c_mode ~droot in
   (* Set up self identifier and type *)
-  let env = Env.set_self_id env (snd c.c_name) in
+  let self_id = snd c.c_name in
   let self = get_self_from_c c in
   (* For enums, localize makes self:: into an abstract type, which we don't
    * want *)
-  let (env, self) =
+  let (env, self_ty) =
     match c.c_kind with
-    | Ast_defs.Cenum
-    | Ast_defs.Crecord ->
-      (env, MakeType.class_type (fst self) (snd c.c_name) [])
+    | Ast_defs.Cenum ->
+      (env, MakeType.class_type (get_reason self) (snd c.c_name) [])
     | Ast_defs.Cinterface
     | Ast_defs.Cabstract
     | Ast_defs.Ctrait
     | Ast_defs.Cnormal ->
       Typing_phase.localize_with_self env self
   in
-  let env = Env.set_self env self in
+  let env = Env.set_self env self_id self_ty in
+  (* In order to type-check a class, we need to know what "parent"
+   * refers to. Sometimes people write "parent::", when that happens,
+   * we need to know the type of parent.
+   *)
   let env =
     match c.c_extends with
-    | ((_, Happly ((_, parent_id), _)) as _parent_ty) :: _ ->
-      Env.set_parent_id env parent_id
-    | _ -> env
+    | ((_, Happly ((_, parent_id), _)) as parent_ty) :: _ ->
+      let parent_ty = Decl_hint.hint env.Typing_env_types.decl_env parent_ty in
+      Env.set_parent env parent_id parent_ty
+    (* The only case where we have more than one parent class is when
+     * dealing with interfaces and interfaces cannot use parent.
+     *)
+    | _ :: _
+    | _ ->
+      env
   in
   (* Set the ppl env flag *)
   let is_ppl =
     List.exists c.c_user_attributes (fun { ua_name; _ } ->
-        SN.UserAttributes.uaProbabilisticModel = snd ua_name)
+        String.equal SN.UserAttributes.uaProbabilisticModel (snd ua_name))
   in
   let env = Env.set_inside_ppl_class env is_ppl in
+  env
+
+let record_def_env tcopt rd =
+  let file = Pos.filename (fst rd.rd_name) in
+  let droot = Some (Typing_deps.Dep.Class (snd rd.rd_name)) in
+  let env = Env.empty tcopt file ~droot in
   env
 
 let typedef_env tcopt t =

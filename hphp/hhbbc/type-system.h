@@ -46,11 +46,11 @@ struct Type;
  *
  *                      Top
  *                       |
- *                 +-----+              InitGen :=  Gen - Uninit
+ *                 +-----+
  *                 |     |             InitCell := Cell - Uninit
- *                Cls   Gen---+              ?X := X + InitNull
- *                 |     |    |
- *              Cls<=c  Cell  Ref
+ *                Cls    |                   ?X := X + InitNull
+ *                 |     |
+ *              Cls<=c  Cell
  *                 |     |
  *              Cls=c    +-------------+--------+-------+-------+-----+
  *                       |             |        |       |       |     |
@@ -226,22 +226,21 @@ enum trep : uint64_t {
   BObj      = 1ULL << 22,
   BRes      = 1ULL << 23,
   BCls      = 1ULL << 24,
-  BRef      = 1ULL << 25,
 
-  BSVecE    = 1ULL << 26, // static empty vec
-  BCVecE    = 1ULL << 27, // counted empty vec
-  BSVecN    = 1ULL << 28, // static non-empty vec
-  BCVecN    = 1ULL << 29, // counted non-empty vec
-  BSDictE   = 1ULL << 30, // static empty dict
-  BCDictE   = 1ULL << 31, // counted empty dict
-  BSDictN   = 1ULL << 32, // static non-empty dict
-  BCDictN   = 1ULL << 33, // counted non-empty dict
-  BSKeysetE = 1ULL << 34, // static empty keyset
-  BCKeysetE = 1ULL << 35, // counted empty keyset
-  BSKeysetN = 1ULL << 36, // static non-empty keyset
-  BCKeysetN = 1ULL << 37, // counted non-empty keyset
+  BSVecE    = 1ULL << 25, // static empty vec
+  BCVecE    = 1ULL << 26, // counted empty vec
+  BSVecN    = 1ULL << 27, // static non-empty vec
+  BCVecN    = 1ULL << 28, // counted non-empty vec
+  BSDictE   = 1ULL << 29, // static empty dict
+  BCDictE   = 1ULL << 30, // counted empty dict
+  BSDictN   = 1ULL << 31, // static non-empty dict
+  BCDictN   = 1ULL << 32, // counted non-empty dict
+  BSKeysetE = 1ULL << 33, // static empty keyset
+  BCKeysetE = 1ULL << 34, // counted empty keyset
+  BSKeysetN = 1ULL << 35, // static non-empty keyset
+  BCKeysetN = 1ULL << 36, // counted non-empty keyset
 
-  BRecord  = 1ULL << 38,
+  BRecord  = 1ULL << 37,
 
   BSPArr    = BSPArrE | BSPArrN,
   BCPArr    = BCPArrE | BCPArrN,
@@ -394,8 +393,6 @@ enum trep : uint64_t {
   BInitCell = BInitNull | BBool | BInt | BDbl | BStr | BArr | BObj | BRes |
               BVec | BDict | BKeyset | BFunc | BCls | BClsMeth | BRecord,
   BCell     = BUninit | BInitCell,
-  BInitGen  = BInitCell | BRef,
-  BGen      = BUninit | BInitGen,
 
   BTop      = static_cast<uint64_t>(-1),
 };
@@ -428,6 +425,7 @@ constexpr auto BArrLikeE = BArrE | BVecE | BDictE | BKeysetE;
 constexpr auto BArrLikeN = BArrN | BVecN | BDictN | BKeysetN;
 constexpr auto BArrLike = BArrLikeE | BArrLikeN;
 constexpr auto BSArrLike = BSArr | BSVec | BSDict | BSKeyset;
+constexpr auto BSArrLikeE = BSArrE | BSVecE | BSDictE | BSKeysetE;
 
 #define DATATAGS                                                \
   DT(Str, SString, sval)                                        \
@@ -436,7 +434,6 @@ constexpr auto BSArrLike = BSArr | BSVec | BSDict | BSKeyset;
   DT(ArrLikeVal, SArray, aval)                                  \
   DT(Obj, DObj, dobj)                                           \
   DT(Cls, DCls, dcls)                                           \
-  DT(RefInner, copy_ptr<Type>, inner)                           \
   DT(ArrLikePacked, copy_ptr<DArrLikePacked>, packed)           \
   DT(ArrLikePackedN, copy_ptr<DArrLikePackedN>, packedn)        \
   DT(ArrLikeMap, copy_ptr<DArrLikeMap>, map)                    \
@@ -494,40 +491,81 @@ struct DArrLikePacked;
 struct DArrLikePackedN;
 struct DArrLikeMap;
 struct DArrLikeMapN;
-using MapElems = ArrayLikeMap<Cell>;
+using MapElems = ArrayLikeMap<TypedValue>;
 struct ArrKey;
 struct IterTypes;
 
+//////////////////////////////////////////////////////////////////////
+
 /*
- * A provenance tag as tracked on a DArrLike{Packed,Map}. (and, at runtime, on
- * dicts and vecs.) The provenance tag on an array contains a file and line
- * nubmer where that array is 'from' (ideally, where the array was
- * allocated--for static arrays the srcloc where the array is first referenced)
+ * A provenance tag as tracked on a DArrLike{Packed,Map} (and, at runtime, on
+ * various kinds of arrays).  The provenance tag on an array contains a file
+ * and line nubmer where that array is "from" (ideally, where the array was
+ * allocated---for static arrays the srcloc where the array is first
+ * referenced).
  *
- * This is tracked here in hhbbc both because we manipulate and create new
+ * This is tracked here in hhbbc because we both manipulate and create new
  * static arrays.
  *
  * If the runtime option EvalArrayProvenance is not set, all ProvTags should be
- * equal to the top of the lattice (folly::none)
+ * equal to ProvTag::Top.
  *
- * The absence of a value here (folly::none) means the array type could have a
- * provenance tag from anywhere, or no tag at all. (i.e. its provenance is
- * unknown completely).
+ * ProvTag::Top means the array type could have a provenance tag from anywhere,
+ * or no tag at all. (i.e. its provenance is unknown completely, a.k.a. NoTag).
  *
  * This information forms a sublattice like:
  *
  *        top (folly::none)
- *    ____/|\___________
- *   /     |            \
- *  t_1   t_2     ...   t_n (specific arrprov::Tag's)
- *   \____ | ___________/
+ *    ____/|\_______________________________________________
+ *   /     |            \                                   \
+ *  t_1   t_2     ...   t_n (specific arrprov::Tag's)     no tag
+ *   \____ | ___________/___________________________________/
  *        \|/
  *       bottom (unrepresentable)
  *
- * If we would produce a 'bottom' provenance tag, (i.e. in intersectProvTag)
- * we widen the result to 'top'
+ * If we would produce a Bottom provenance tag, (i.e. in intersectProvTag) we
+ * widen the result to ProvTag::Top.
  */
-using ProvTag  = folly::Optional<arrprov::Tag>;
+struct ProvTag {
+  template<typename... Args>
+  explicit constexpr ProvTag(Args... args)
+    : m_tag(std::forward<Args>(args)...)
+  {}
+
+  /* implicit */ ProvTag(arrprov::Tag tag) : m_tag{tag} {}
+
+  static ProvTag Top;
+  static ProvTag NoTag;
+
+  static ProvTag FromSArr(SArray a) {
+    assertx(RuntimeOption::EvalArrayProvenance);
+    // It would be nice to assert a->isStatic() here, but, of course, SArrays
+    // (like the ones representing bytecode immediates) are not always static
+    // because we muck with them during various optimization passes.
+    auto const tag = arrprov::getTag(a);
+    return tag ? *tag : ProvTag::NoTag;
+  }
+
+  const arrprov::Tag* operator->() const { return &m_tag; }
+        arrprov::Tag* operator->() { return &m_tag; }
+
+  /*
+   * Do we have a known provenance tag.
+   */
+  bool valid() const { return m_tag.filename() != nullptr; }
+
+  arrprov::Tag get() const { return m_tag; }
+
+  bool operator==(ProvTag o) const { return m_tag == o.m_tag; }
+  bool operator!=(ProvTag o) const { return m_tag != o.m_tag; }
+
+private:
+  arrprov::Tag m_tag;
+};
+
+constexpr auto kProvBits = BVec | BDict | BVArr | BDArr;
+
+//////////////////////////////////////////////////////////////////////
 
 enum class Emptiness {
   Empty,
@@ -646,7 +684,6 @@ private:
   friend bool is_specialized_array_like(const Type& t);
   friend bool is_specialized_obj(const Type&);
   friend bool is_specialized_cls(const Type&);
-  friend bool is_ref_with_inner(const Type&);
   friend bool is_specialized_string(const Type&);
   friend Type wait_handle_inner(const Type&);
   friend Type sval(SString);
@@ -658,11 +695,10 @@ private:
   friend Type objExact(res::Class);
   friend Type subCls(res::Class);
   friend Type clsExact(res::Class);
-  friend Type ref_to(Type);
   friend Type rname(SString);
   friend Type packed_impl(trep, std::vector<Type>, ProvTag);
   friend Type packedn_impl(trep, Type);
-  friend Type map_impl(trep, MapElems, ProvTag);
+  friend Type map_impl(trep, MapElems, Type, Type, ProvTag);
   friend Type mapn_impl(trep bits, Type k, Type v, ProvTag);
   friend Type mapn_impl_from_map(trep bits, Type k, Type v, ProvTag);
   friend DObj dobj_of(const Type&);
@@ -681,18 +717,20 @@ private:
   friend bool is_opt(const Type&);
   friend bool is_nullish(const Type&);
   friend Type project_data(Type t, trep bits);
+  friend bool must_be_counted(const Type&);
+  friend bool must_be_counted(const Type&, trep bits);
+  friend Type remove_counted(Type t);
   template<typename R, bool>
   friend R tvImpl(const Type&);
   friend Type scalarize(Type t);
   friend folly::Optional<size_t> array_size(const Type& t);
-  friend folly::Optional<std::pair<Type,Type>>
-  array_get_by_index(const Type& t, ssize_t index);
 
   friend Type return_with_context(Type, Type);
   friend Type setctx(Type, bool);
   friend Type unctx(Type);
   friend std::string show(const Type&);
   friend ArrKey disect_array_key(const Type&);
+  friend ProvTag arr_like_update_prov_tag(const Type&, ProvTag);
   friend std::pair<Type,bool> arr_val_elem(const Type& aval, const ArrKey& key);
   friend std::pair<Type,bool> arr_map_elem(const Type& map, const ArrKey& key);
   friend std::pair<Type,bool> arr_packed_elem(const Type& pack,
@@ -725,12 +763,15 @@ private:
   friend struct ArrKey disect_strict_key(const Type&);
 
   friend Type spec_array_like_union(Type&, Type&, trep, trep);
+  friend Type aempty_varray(ProvTag);
+  friend Type aempty_darray(ProvTag);
   friend Type vec_val(SArray);
-  friend Type vec_empty();
-  friend Type some_vec_empty();
+  friend Type vec_empty(ProvTag);
   friend Type dict_val(SArray);
-  friend Type dict_empty();
-  friend Type some_dict_empty();
+  friend Type dict_empty(ProvTag);
+  friend Type some_aempty_darray(ProvTag);
+  friend Type some_vec_empty(ProvTag);
+  friend Type some_dict_empty(ProvTag);
   friend Type keyset_val(SArray);
   friend bool could_contain_objects(const Type&);
   friend bool could_copy_on_write(const Type&);
@@ -775,6 +816,7 @@ private:
   bool subtypeData(const Type&) const;
   bool couldBeData(const Type&) const;
   bool checkInvariants() const;
+  ProvTag getProvTag() const;
 
 private:
   trep m_bits;
@@ -790,7 +832,7 @@ struct ArrKey {
   Type type;
   bool mayThrow = false;
 
-  folly::Optional<Cell> tv() const {
+  folly::Optional<TypedValue> tv() const {
     assert(!i || !s);
     if (i) {
       return make_tv<KindOfInt64>(*i);
@@ -819,11 +861,19 @@ struct DArrLikePackedN {
 
 struct DArrLikeMap {
   DArrLikeMap() {}
-  explicit DArrLikeMap(MapElems map, ProvTag tag)
+  explicit DArrLikeMap(MapElems map, Type optKey, Type optVal, ProvTag tag)
     : map(std::move(map))
+    , optKey(std::move(optKey))
+    , optVal(std::move(optVal))
     , provenance(tag)
   {}
+  bool hasOptElements() const { return !optKey.subtypeOf(BBottom); }
+  // The array always starts with these known keys
   MapElems map;
+  // Key/value types for optional elements after known keys. Bottom if
+  // none.
+  Type optKey;
+  Type optVal;
   ProvTag provenance;
 };
 
@@ -852,7 +902,6 @@ X(SArrN)                                        \
 X(Obj)                                          \
 X(Res)                                          \
 X(Cls)                                          \
-X(Ref)                                          \
 X(Func)                                         \
 X(ClsMeth)                                      \
 X(Record)                                       \
@@ -970,8 +1019,6 @@ X(OptUncStrLike)                              \
 X(OptStrLike)                                 \
 X(InitCell)                                     \
 X(Cell)                                         \
-X(InitGen)                                      \
-X(Gen)                                          \
 X(Top)
 
 #define X(y) extern const Type T##y;
@@ -1058,19 +1105,19 @@ Type sval_nonstatic(SString);
  */
 Type sempty();
 Type aempty();
-Type aempty_varray();
-Type aempty_darray();
-Type vec_empty();
-Type dict_empty();
+Type aempty_varray(ProvTag = ProvTag::Top);
+Type aempty_darray(ProvTag = ProvTag::Top);
+Type vec_empty(ProvTag = ProvTag::Top);
+Type dict_empty(ProvTag = ProvTag::Top);
 Type keyset_empty();
 
 /*
  * Create an any-countedness empty array/vec/dict type.
  */
 Type some_aempty();
-Type some_aempty_darray();
-Type some_vec_empty();
-Type some_dict_empty();
+Type some_aempty_darray(ProvTag = ProvTag::Top);
+Type some_vec_empty(ProvTag = ProvTag::Top);
+Type some_dict_empty(ProvTag = ProvTag::Top);
 Type some_keyset_empty();
 
 /*
@@ -1088,7 +1135,7 @@ Type clsExact(res::Class);
  * Pre: !v.empty()
  */
 Type arr_packed(std::vector<Type> v);
-Type arr_packed_varray(std::vector<Type> v);
+Type arr_packed_varray(std::vector<Type> v, ProvTag = ProvTag::Top);
 Type sarr_packed(std::vector<Type> v);
 
 /*
@@ -1104,9 +1151,9 @@ Type sarr_packedn(Type);
  *
  * Pre: !m.empty()
  */
-Type arr_map(MapElems m);
-Type arr_map_darray(MapElems m);
-Type sarr_map(MapElems m);
+Type arr_map(MapElems m, Type optKey = TBottom, Type optVal = TBottom);
+Type arr_map_darray(MapElems m, ProvTag = ProvTag::Top);
+Type sarr_map(MapElems m, Type optKey = TBottom, Type optVal = TBottom);
 
 /*
  * Map-like arrays.
@@ -1133,7 +1180,9 @@ Type svec_n(Type);
  *
  * Pre: !m.empty()
  */
-Type dict_map(MapElems m, ProvTag);
+Type dict_map(MapElems m, ProvTag,
+              Type optKey = TBottom,
+              Type optVal = TBottom);
 
 /*
  * Dict with key/value types.
@@ -1151,7 +1200,7 @@ Type ckeyset_n(Type);
  * Keyset from MapElems
  */
 inline Type keyset_map(MapElems m) {
-  return map_impl(BKeysetN, std::move(m), folly::none);
+  return map_impl(BKeysetN, std::move(m), TBottom, TBottom, ProvTag::Top);
 }
 
 /*
@@ -1219,6 +1268,16 @@ Type unctx(Type t);
 Type project_data(Type t, trep bits);
 
 /*
+ * Returns true if the type can only be counted. We don't allow the
+ * the usage of the counted side of the type lattice, so this checks
+ * if the type is a definitely counted type (IE, object or resource),
+ * or if it has an array specialization which contains such a type
+ * recursively (an array which contains a definitely counted type must
+ * itself by counted).
+ */
+bool must_be_counted(const Type&);
+
+/*
  * Refinedness equivalence checks.
  */
 bool equivalently_refined(const Type&, const Type&);
@@ -1282,22 +1341,22 @@ Type toobj(const Type& t);
 Type objcls(const Type& t);
 
 /*
- * If the type t has a known constant value, return it as a Cell.
+ * If the type t has a known constant value, return it as a TypedValue.
  * Otherwise return folly::none.
  *
- * The returned Cell can only contain non-reference-counted types.
+ * The returned TypedValue can only contain non-reference-counted types.
  */
-folly::Optional<Cell> tv(const Type& t);
+folly::Optional<TypedValue> tv(const Type& t);
 
 /*
- * If the type t has a known constant value, return it as a Cell.
+ * If the type t has a known constant value, return it as a TypedValue.
  * Otherwise return folly::none.
  *
- * The returned Cell may contain reference-counted types.
+ * The returned TypedValue may contain reference-counted types.
  *
  * You are responsible for any required ref-counting.
  */
-folly::Optional<Cell> tvNonStatic(const Type& t);
+folly::Optional<TypedValue> tvNonStatic(const Type& t);
 
 /*
  * If the type t has a known constant value, return true.
@@ -1322,15 +1381,6 @@ Type scalarize(Type t);
  * If t represents an array, and we know its size, return it.
  */
 folly::Optional<size_t> array_size(const Type& t);
-
-/*
- * If t represents an array, and we know the index'th element (by
- * iteration order), return the key/value pair.
- *
- * Negative values of index work backwards from the last element.
- */
-folly::Optional<std::pair<Type,Type>>
-array_get_by_index(const Type& t, ssize_t index);
 
 /*
  * Get the type in our typesystem that corresponds to an hhbc
@@ -1377,12 +1427,12 @@ DCls dcls_of(Type t);
 SString sval_of(const Type& t);
 
 /*
- * Create a Type from a Cell.
+ * Create a Type from a TypedValue.
  *
  * Pre: the cell must contain a non-reference-counted type.
  * Post: returned type is a subtype of TUnc
  */
-Type from_cell(Cell tv);
+Type from_cell(TypedValue tv);
 
 /*
  * Create a Type from a DataType. KindOfString and KindOfPersistentString
@@ -1470,9 +1520,9 @@ bool could_have_magic_bool_conversion(const Type&);
 
 /*
  * Returns the smallest type that `a' is a subtype of, from the
- * following set: TGen, TInitCell, TRef, TUninit, TCls.
+ * following set: TInitCell, TUninit.
  *
- * Pre: `a' is a subtype of TGen, or TCls.
+ * Pre: `a' is a subtype of TCell.
  */
 Type stack_flav(Type a);
 
@@ -1540,6 +1590,13 @@ Type to_cell(Type t);
  * present. Doesn't change the type otherwise.
  */
 Type add_nonemptiness(Type t);
+
+/*
+ * Force `t` to only contain static types, including any specialized
+ * data recursively. If `t` is definitely counted, TBottom will be
+ * returned.
+ */
+Type remove_counted(Type t);
 
 /*
  * Produced the most refined type possible, given that

@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 module T = Aast
 
@@ -19,50 +19,55 @@ module T = Aast
  *   Transform completely unconstrained types to Tmixed
  *   Consider using a fresh datatype for TAST types.
  *)
-let expand_ty ?pos env ty =
+let expand_ty ?var_hook ?pos env ty =
   let rec exp_ty ty =
+    begin
+      match (get_node ty, var_hook) with
+      | (Tvar var, Some hook) -> hook var
+      | _ -> ()
+    end;
     let (_, ety) = Tast_env.expand_type env ty in
     let ety =
-      match ety with
-      | (_, (Tany _ | Tnonnull | Tprim _ | Tobject | Tdynamic)) -> ety
-      | (p, Tclass (n, e, tyl)) -> (p, Tclass (n, e, exp_tys tyl))
-      | (p, Tunion tyl) -> (p, Tunion (exp_tys tyl))
-      | (p, Tintersection tyl) -> (p, Tintersection (exp_tys tyl))
-      | (p, Toption ty) -> (p, Toption (exp_ty ty))
-      | (p, Ttuple tyl) -> (p, Ttuple (exp_tys tyl))
-      | (p, Tdestructure tyl) -> (p, Tdestructure (exp_tys tyl))
-      | (p, Tfun ft) -> (p, Tfun (exp_fun_type ft))
-      | (p, Tabstract (ak, tyopt)) ->
-        (p, Tabstract (exp_abstract_kind ak, Option.map tyopt exp_ty))
+      match deref ety with
+      | (_, (Tany _ | Tnonnull | Tprim _ | Tobject | Tdynamic | Tgeneric _)) ->
+        ety
+      | (p, Tclass (n, e, tyl)) -> mk (p, Tclass (n, e, exp_tys tyl))
+      | (p, Tunion tyl) -> mk (p, Tunion (exp_tys tyl))
+      | (p, Tintersection tyl) -> mk (p, Tintersection (exp_tys tyl))
+      | (p, Toption ty) -> mk (p, Toption (exp_ty ty))
+      | (p, Ttuple tyl) -> mk (p, Ttuple (exp_tys tyl))
+      | (p, Tfun ft) -> mk (p, Tfun (exp_fun_type ft))
+      | (p, Tnewtype (n, tyl, ty)) ->
+        mk (p, Tnewtype (n, exp_tys tyl, exp_ty ty))
+      | (p, Tdependent (n, ty)) -> mk (p, Tdependent (n, exp_ty ty))
       | (p, Tshape (shape_kind, fields)) ->
-        (p, Tshape (shape_kind, Nast.ShapeMap.map exp_sft fields))
-      | (p, Tarraykind ak) -> (p, Tarraykind (exp_array_kind ak))
+        mk (p, Tshape (shape_kind, Nast.ShapeMap.map exp_sft fields))
+      | (p, Tarraykind ak) -> mk (p, Tarraykind (exp_array_kind ak))
       | (p, Tvar v) ->
         (match pos with
-        | None -> (p, Tvar v)
+        | None -> mk (p, Tvar v)
         | Some pos ->
           if
             TypecheckerOptions.disallow_unresolved_type_variables
               (Tast_env.get_tcopt env)
           then
             Errors.unresolved_type_variable pos;
-          (p, Tvar v))
+          mk (p, Tvar v))
       (* TODO TAST: replace with Tfun type *)
-      | (p, Tanon (x, y)) -> (p, Tanon (x, y))
-      | (p, Terr) -> (p, Terr)
+      | (p, Tanon (x, y)) -> mk (p, Tanon (x, y))
+      | (p, Terr) -> mk (p, Terr)
       (* TODO(T36532263) see if that needs updating *)
-      | (p, Tpu (base, enum, kind)) -> (p, Tpu (exp_ty base, enum, kind))
-      | (p, Tpu_access (base, sid)) -> (p, Tpu_access (exp_ty base, sid))
+      | (p, Tpu (base, enum)) -> mk (p, Tpu (exp_ty base, enum))
+      | (p, Tpu_type_access (base, enum, member, tyname)) ->
+        let base = exp_ty base in
+        let member = exp_ty member in
+        mk (p, Tpu_type_access (base, enum, member, tyname))
     in
-    let (_env, ety) = Tast_env.simplify_unions env ety in
     ety
   and exp_tys tyl = List.map ~f:exp_ty tyl
   and exp_fun_type
       {
-        ft_pos;
-        ft_deprecated;
         ft_arity;
-        ft_abstract;
         ft_tparams;
         ft_where_constraints;
         ft_ret;
@@ -73,14 +78,10 @@ let expand_ty ?pos env ty =
         ft_mutability;
         ft_returns_mutable;
         ft_is_coroutine;
-        ft_decl_errors;
         ft_returns_void_to_rx;
       } =
     {
-      ft_pos;
-      ft_deprecated;
       ft_arity;
-      ft_abstract;
       ft_fun_kind;
       ft_reactive;
       ft_is_coroutine;
@@ -92,7 +93,6 @@ let expand_ty ?pos env ty =
         List.map ~f:exp_where_constraint ft_where_constraints;
       ft_ret = exp_possibly_enforced_ty ft_ret;
       ft_params = List.map ~f:exp_fun_param ft_params;
-      ft_decl_errors;
       ft_returns_void_to_rx;
     }
   and exp_fun_param
@@ -120,19 +120,11 @@ let expand_ty ?pos env ty =
     { sft_optional; sft_ty = exp_ty sft_ty }
   and exp_array_kind ak =
     match ak with
-    | AKany -> AKany
     | AKvarray ty -> AKvarray (exp_ty ty)
-    | AKvec ty -> AKvec (exp_ty ty)
     | AKdarray (ty1, ty2) -> AKdarray (exp_ty ty1, exp_ty ty2)
-    | AKvarray_or_darray ty -> AKvarray_or_darray (exp_ty ty)
-    | AKmap (ty1, ty2) -> AKmap (exp_ty ty1, exp_ty ty2)
+    | AKvarray_or_darray (ty1, ty2) ->
+      AKvarray_or_darray (exp_ty ty1, exp_ty ty2)
     | AKempty -> AKempty
-  and exp_abstract_kind ak =
-    match ak with
-    | AKnewtype (n, tyl) -> AKnewtype (n, exp_tys tyl)
-    | AKgeneric _
-    | AKdependent _ ->
-      ak
   and exp_tparam t =
     {
       t with

@@ -500,25 +500,25 @@ bool TypeConstraint::checkNamedTypeNonObj(tv_rval val) const {
       case AnnotAction::Pass: return true;
       case AnnotAction::Fail: return false;
       case AnnotAction::CallableCheck:
-        return !ForProp && (Assert || is_callable(cellAsCVarRef(*val)));
+        return !ForProp && (Assert || is_callable(tvAsCVarRef(*val)));
       case AnnotAction::ObjectCheck:
         assertx(td->type == AnnotType::Object);
         c = td->klass;
         break;
       case AnnotAction::VArrayCheck:
-        assertx(tvIsArrayOrShape(val));
+        assertx(tvIsArray(val));
         return Assert || val.val().parr->isVArray();
       case AnnotAction::DArrayCheck:
-        assertx(tvIsArrayOrShape(val));
+        assertx(tvIsArray(val));
         return Assert || val.val().parr->isDArray();
       case AnnotAction::VArrayOrDArrayCheck:
-        assertx(tvIsArrayOrShape(val));
+        assertx(tvIsArray(val));
         return (Assert || (
           !RuntimeOption::EvalHackArrCompatTypeHintPolymorphism &&
           !val.val().parr->isNotDVArray()
         ));
       case AnnotAction::NonVArrayOrDArrayCheck:
-        assertx(tvIsArrayOrShape(val));
+        assertx(tvIsArray(val));
         return Assert || val.val().parr->isNotDVArray();
       case AnnotAction::WarnFunc:
       case AnnotAction::WarnClass:
@@ -657,7 +657,6 @@ bool TypeConstraint::checkImpl(tv_rval val,
   assertx(!isProp   || validForProp());
   assertx(!isRecField || validForRecField());
 
-  val = tvToCell(val);
   if (isNullable() && val.type() == KindOfNull) return true;
 
   if (val.type() == KindOfObject) {
@@ -689,21 +688,10 @@ bool TypeConstraint::checkImpl(tv_rval val,
           if (isAssert) return true;
           if (isPasses) return false;
           if (isProp) return val.val().pobj->getVMClass() == context;
-          switch (RuntimeOption::EvalThisTypeHintLevel) {
-            case 0:   // Like Mixed.
-              return true;
-              break;
-            case 1:   // Like Self.
-              c = context;
-              break;
-            case 2:   // Soft this in irgen verifyTypeImpl and verifyFail.
-            case 3:   // Hard this.
-              if (auto const cls = getThis()) {
-                return val.val().pobj->getVMClass() == cls;
-              }
-              return false;
+          if (auto const cls = getThis()) {
+            return val.val().pobj->getVMClass() == cls;
           }
-          break;
+          return false;
         case MetaType::Parent:
           assertx(!isProp);
           assertx(!isRecField);
@@ -716,7 +704,7 @@ bool TypeConstraint::checkImpl(tv_rval val,
           assertx(!isRecField);
           if (isAssert) return true;
           if (isPasses) return false;
-          return is_callable(cellAsCVarRef(*val));
+          return is_callable(tvAsCVarRef(*val));
         case MetaType::Nothing:
         case MetaType::NoReturn:
           assertx(!isProp);
@@ -755,26 +743,26 @@ bool TypeConstraint::checkImpl(tv_rval val,
       assertx(!isRecField);
       if (isAssert) return true;
       if (isPasses) return false;
-      return is_callable(cellAsCVarRef(*val));
+      return is_callable(tvAsCVarRef(*val));
     case AnnotAction::ObjectCheck:
       assertx(isObject());
       return !isPasses && checkNamedTypeNonObj<isAssert, isProp>(val);
     case AnnotAction::VArrayCheck:
       // Since d/varray type-hints are always soft, we can never assert on their
       // correctness.
-      assertx(tvIsArrayOrShape(val));
+      assertx(tvIsArray(val));
       return isAssert || val.val().parr->isVArray();
     case AnnotAction::DArrayCheck:
-      assertx(tvIsArrayOrShape(val));
+      assertx(tvIsArray(val));
       return isAssert || val.val().parr->isDArray();
     case AnnotAction::VArrayOrDArrayCheck:
-      assertx(tvIsArrayOrShape(val));
+      assertx(tvIsArray(val));
       return (isAssert || (
         !RuntimeOption::EvalHackArrCompatTypeHintPolymorphism &&
         !val.val().parr->isNotDVArray()
       ));
     case AnnotAction::NonVArrayOrDArrayCheck:
-      assertx(tvIsArrayOrShape(val));
+      assertx(tvIsArray(val));
       return isAssert || val.val().parr->isNotDVArray();
     case AnnotAction::WarnFunc:
     case AnnotAction::WarnClass:
@@ -960,7 +948,7 @@ void TypeConstraint::verifyReturnNonNull(TypedValue* tv,
                                          const Func* func) const {
   const auto DEBUG_ONLY tc = func->returnTypeConstraint();
   assertx(!tc.isNullable());
-  if (UNLIKELY(cellIsNull(tv))) {
+  if (UNLIKELY(tvIsNull(tv))) {
     verifyReturnFail(func, tv);
   } else if (debug) {
     auto vm = &*g_context;
@@ -973,14 +961,13 @@ void TypeConstraint::verifyReturnNonNull(TypedValue* tv,
   }
 }
 
-std::string describe_actual_type(tv_rval val, bool isHHType) {
-  val = tvToCell(val);
+std::string describe_actual_type(tv_rval val) {
   switch (val.type()) {
     case KindOfUninit:        return "undefined variable";
     case KindOfNull:          return "null";
     case KindOfBoolean:       return "bool";
     case KindOfInt64:         return "int";
-    case KindOfDouble:        return isHHType ? "float" : "double";
+    case KindOfDouble:        return "float";
     case KindOfPersistentString:
     case KindOfString:        return "string";
     case KindOfPersistentVec:
@@ -989,9 +976,6 @@ std::string describe_actual_type(tv_rval val, bool isHHType) {
     case KindOfDict:          return "HH\\dict";
     case KindOfPersistentKeyset:
     case KindOfKeyset:        return "HH\\keyset";
-    case KindOfPersistentShape:
-    case KindOfShape:
-      return RuntimeOption::EvalHackArrDVArrs ? "HH\\dict" : "array";
     case KindOfPersistentArray:
     case KindOfArray:         return "array";
     case KindOfResource:
@@ -1001,8 +985,6 @@ std::string describe_actual_type(tv_rval val, bool isHHType) {
     case KindOfClsMeth:       return "clsmeth";
     case KindOfRecord:
       return val.val().prec->record()->name()->data();
-    case KindOfRef:
-      break;
     case KindOfObject: {
       auto const obj = val.val().pobj;
       auto const cls = obj->getVMClass();
@@ -1011,6 +993,11 @@ std::string describe_actual_type(tv_rval val, bool isHHType) {
       auto const generics = getClsReifiedGenericsProp(cls, obj);
       return folly::sformat("{}{}", name, mangleReifiedGenericsName(generics));
     }
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      return "premature use of datatype-specialized php arrays";
   }
   not_reached();
 }
@@ -1057,33 +1044,15 @@ void TypeConstraint::verifyParamFail(const Func* func, TypedValue* tv,
     (isThis() && couldSeeMockObject()) ||
     (RuntimeOption::EvalHackArrCompatTypeHintNotices &&
      (RuntimeOption::EvalHackArrCompatTypeHintPolymorphism ||
-      isArrayType(tvToCell(tv)->m_type))) ||
+      isArrayType(tv->m_type))) ||
+    (RuntimeOption::EvalEnforceGenericsUB != 2 && isUpperBound()) ||
     check(tv, func->cls())
   );
 }
 
 void TypeConstraint::verifyOutParamFail(const Func* func,
-                                        TypedValue* tv,
+                                        TypedValue* c,
                                         int paramNum) const {
-  // we reuse VerifyOutType bytecode for log typehint violations on
-  // byref parameters. For byref parameters we raise notice but never do
-  // any hard enforcement - basically we treat it as soft typehint.
-  if (func->byRef(paramNum)) {
-    if (RuntimeOption::EvalNoticeOnByRefArgumentTypehintViolation) {
-      std::string msg = folly::sformat(
-          "Argument {} returned from {}() by reference must be of type "
-          "{}, {} given",
-          paramNum + 1,
-          func->fullDisplayName(),
-          displayName(func->cls()),
-          describe_actual_type(tv, isHHType())
-      );
-      raise_warning_unsampled(msg);
-    }
-    return;
-  }
-
-  auto c = tvToCell(tv);
   if (checkDVArray(c)) {
     raise_hackarr_compat_type_hint_outparam_notice(
       func, c->m_data.parr, displayName(func->cls()).c_str(), paramNum
@@ -1131,16 +1100,17 @@ void TypeConstraint::verifyOutParamFail(const Func* func,
   }
 
   std::string msg = folly::sformat(
-      "Argument {} returned from {}() as an inout parameter must be of type "
+      "Argument {} returned from {}() as an inout parameter must be {} "
       "{}, {} given",
       paramNum + 1,
-      func->fullDisplayName(),
+      func->fullName(),
+      isUpperBound() ? "upper-bounded by" : "of type",
       displayName(func->cls()),
-      describe_actual_type(tv, isHHType())
+      describe_actual_type(c)
   );
 
   if (RuntimeOption::EvalCheckReturnTypeHints >= 2 && !isSoft()
-      && (!isThis() || RuntimeOption::EvalThisTypeHintLevel != 2)) {
+      && (!isUpperBound() || RuntimeOption::EvalEnforceGenericsUB != 1)) {
     raise_return_typehint_error(msg);
   } else {
     raise_warning_unsampled(msg);
@@ -1165,7 +1135,7 @@ void TypeConstraint::verifyRecFieldFail(tv_rval val,
       recordName,
       fieldName,
       displayName(nullptr),
-      describe_actual_type(val, isHHType())
+      describe_actual_type(val)
     ),
     isSoft()
   );
@@ -1178,7 +1148,6 @@ void TypeConstraint::verifyPropFail(const Class* thisCls,
   assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
   assertx(validForProp());
 
-  val = tvToCell(val);
   if (checkDVArray(val)) {
     raise_hackarr_compat_type_hint_property_notice(
       declCls, val.val().parr, displayName().c_str(), propName, isStatic
@@ -1223,19 +1192,17 @@ void TypeConstraint::verifyPropFail(const Class* thisCls,
       declCls->name(),
       propName,
       displayName(nullptr),
-      describe_actual_type(val, isHHType())
+      describe_actual_type(val)
     ),
     isSoft()
   );
 }
 
-void TypeConstraint::verifyFail(const Func* func, TypedValue* tv,
+void TypeConstraint::verifyFail(const Func* func, TypedValue* c,
                                 int id) const {
   VMRegAnchor _;
   std::string name = displayName(func->cls());
-  auto const givenType = describe_actual_type(tv, isHHType());
-
-  auto const c = tvToCell(tv);
+  auto const givenType = describe_actual_type(c);
 
   if (checkDVArray(c)) {
     if (id == ReturnId) {
@@ -1319,16 +1286,17 @@ void TypeConstraint::verifyFail(const Func* func, TypedValue* tv,
     } else {
       msg =
         folly::format(
-          "Value returned from {}{} {}() must be of type {}, {} given",
+          "Value returned from {}{} {}() must be {} {}, {} given",
           func->isAsync() ? "async " : "",
           func->preClass() ? "method" : "function",
-          func->fullDisplayName(),
+          func->fullName(),
+          isUpperBound() ? "upper-bounded by" : "of type",
           name,
           givenType
         ).str();
     }
     if (RuntimeOption::EvalCheckReturnTypeHints >= 2 && !isSoft()
-        && (!isThis() || RuntimeOption::EvalThisTypeHintLevel != 2)) {
+        && (!isUpperBound() || RuntimeOption::EvalEnforceGenericsUB == 2)) {
       raise_return_typehint_error(msg);
     } else {
       raise_warning_unsampled(msg);
@@ -1338,38 +1306,49 @@ void TypeConstraint::verifyFail(const Func* func, TypedValue* tv,
 
   // Handle parameter type constraint failures
   if (isExtended() &&
-      (isSoft() || (isThis() && RuntimeOption::EvalThisTypeHintLevel == 2))) {
+      (isSoft() ||
+      (isUpperBound() && RuntimeOption::EvalEnforceGenericsUB == 1))) {
     // Soft extended type hints raise warnings instead of recoverable
     // errors, to ease migration.
     raise_warning_unsampled(
       folly::format(
         "Argument {} to {}() must be of type {}, {} given",
-        id + 1, func->fullDisplayName(), name, givenType
+        id + 1, func->fullName(), name, givenType
       ).str()
     );
   } else if (isExtended() && isNullable()) {
     raise_typehint_error(
       folly::format(
         "Argument {} to {}() must be of type {}, {} given",
-        id + 1, func->fullDisplayName(), name, givenType
+        id + 1, func->fullName(), name, givenType
       ).str()
     );
   } else {
     auto cls = Unit::lookupClass(m_typeName);
     if (cls && isInterface(cls)) {
-      raise_typehint_error(
+      auto const msg =
         folly::format(
           "Argument {} passed to {}() must implement interface {}, {} given",
-          id + 1, func->fullDisplayName(), name, givenType
-        ).str()
-      );
+          id + 1, func->fullName(), name, givenType
+        ).str();
+      if (isUpperBound() && RuntimeOption::EvalEnforceGenericsUB == 1) {
+        raise_warning_unsampled(msg);
+      } else {
+        raise_typehint_error(msg);
+      }
     } else {
-      raise_typehint_error(
+      auto const msg =
         folly::format(
-          "Argument {} passed to {}() must be an instance of {}, {} given",
-          id + 1, func->fullDisplayName(), name, givenType
-        ).str()
-      );
+          "Argument {} passed to {}() must be {} {}, {} given",
+          id + 1, func->fullName(),
+          isUpperBound() ? "upper-bounded by" : "an instance of",
+          name, givenType
+        ).str();
+      if (isUpperBound() && RuntimeOption::EvalEnforceGenericsUB == 1) {
+        raise_warning_unsampled(msg);
+      } else {
+        raise_typehint_error(msg);
+      }
     }
   }
 }
@@ -1409,16 +1388,17 @@ MemoKeyConstraint memoKeyConstraintFromTC(const TypeConstraint& tc) {
         case KindOfDict:
         case KindOfPersistentKeyset:
         case KindOfKeyset:
-        case KindOfPersistentShape:
-        case KindOfShape:
         case KindOfPersistentArray:
         case KindOfArray:
         case KindOfClsMeth:
         case KindOfResource:
         case KindOfRecord:
         case KindOfNull:         return MK::None;
+        case KindOfPersistentDArray:
+        case KindOfDArray:
+        case KindOfPersistentVArray:
+        case KindOfVArray:
         case KindOfUninit:
-        case KindOfRef:
         case KindOfFunc:
         case KindOfClass:
           always_assert_flog(false, "Unexpected DataType");
@@ -1456,9 +1436,9 @@ bool tcCouldBeReified(const Func* func, uint32_t paramId) {
     auto const lNames = func->localNames();
     auto const nParams = func->numParams();
     auto const nDeclaredProps = func->baseCls()->numDeclProperties();
-    assertx(nParams + 1 + nDeclaredProps <= func->numNamedLocals());
-    // Skip over params and 0Closure
-    for (int i = nParams + 1; i < nParams + 1 + nDeclaredProps; ++i) {
+    assertx(nParams + nDeclaredProps <= func->numNamedLocals());
+    // Skip over params
+    for (int i = nParams; i < nParams + nDeclaredProps; ++i) {
       if (isMangledReifiedGenericInClosure(lNames[i])) return true;
     }
     return false;

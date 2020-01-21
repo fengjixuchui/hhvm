@@ -73,9 +73,6 @@ struct c_AsyncFunctionWaitHandle final : c_ResumableWaitHandle {
   static constexpr ptrdiff_t resumeAddrOff() {
     return resumableOff() + Resumable::resumeAddrOff();
   }
-  static constexpr ptrdiff_t resumeOffsetOff() {
-    return resumableOff() + Resumable::resumeOffsetOff();
-  }
   static constexpr ptrdiff_t childrenOff() {
     return offsetof(c_AsyncFunctionWaitHandle, m_children);
   }
@@ -84,14 +81,14 @@ struct c_AsyncFunctionWaitHandle final : c_ResumableWaitHandle {
     const ActRec* origFp,
     size_t numSlots,
     jit::TCA resumeAddr,
-    Offset resumeOffset,
+    Offset suspendOffset,
     c_WaitableWaitHandle* child
   ); // nothrow
   static void PrepareChild(const ActRec* fp, c_WaitableWaitHandle* child);
   void onUnblocked();
   void resume();
-  void await(Offset resumeOffset, req::ptr<c_WaitableWaitHandle>&& child);
-  void ret(Cell& result);
+  void await(Offset suspendOffset, req::ptr<c_WaitableWaitHandle>&& child);
+  void ret(TypedValue& result);
   void fail(ObjectData* exception);
   void failCpp();
   String getName();
@@ -100,7 +97,6 @@ struct c_AsyncFunctionWaitHandle final : c_ResumableWaitHandle {
   bool isRunning() { return getState() == STATE_RUNNING; }
   String getFileName();
   Offset getNextExecutionOffset();
-  int getLineNumber();
 
   Resumable* resumable() const {
     return reinterpret_cast<Resumable*>(

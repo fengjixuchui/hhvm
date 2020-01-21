@@ -31,7 +31,7 @@ created in a `foreach` or a `catch`, because those won't survive outside
 the block.
 *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 module C = Typing_continuations
 module LEnvC = Typing_per_cont_env
@@ -78,7 +78,7 @@ module LocalIdsPerCont = struct
     match get C.Next m with
     | None -> m
     | Some e ->
-      let tany = ((Reason.none, Utils.tany env), Ident.tmp ()) in
+      let tany = (Typing_defs.mk (Reason.none, Utils.tany env), Ident.tmp ()) in
       add
         C.Next
         {
@@ -129,8 +129,7 @@ class gatherer env =
         self#might_throw delta
       | _ -> delta
 
-    method! on_stmt () (s : Nast.stmt) =
-      self#update_gamma (parent#on_stmt () s)
+    method! on_stmt () (s : Nast.stmt) = self#update_gamma (parent#on_stmt () s)
 
     method! on_Binop () bop e1 e2 =
       let delta = parent#on_Binop () bop e1 e2 in
@@ -217,7 +216,8 @@ class gatherer env =
 
     method! on_Try () b _cl fb =
       let delta = self#on_block () b in
-      let delta = L.set C.Next (self#union_cont_list C.all delta) delta in
+      let all_conts = Typing_env.all_continuations env in
+      let delta = L.set C.Next (self#union_cont_list all_conts delta) delta in
       let delta = L.drop C.Catch delta in
       (* The catch list might never be executed, so we ignore it *)
       self#plus delta (self#on_block () fb)

@@ -23,9 +23,9 @@ val progress_and_actionRequired_counter : int ref
 
 val url_scheme_regex : Str.regexp
 
-val lsp_uri_to_path : string -> string
+val lsp_uri_to_path : Lsp.documentUri -> string
 
-val path_to_lsp_uri : string -> default_path:string -> string
+val path_to_lsp_uri : string -> default_path:string -> Lsp.documentUri
 
 val lsp_textDocumentIdentifier_to_filename :
   Lsp.TextDocumentIdentifier.t -> string
@@ -62,8 +62,7 @@ val get_range_overlap : Lsp.range -> Lsp.range -> range_overlap
 val update_pos_due_to_prior_replace :
   Lsp.position -> range_replace -> Lsp.position
 
-val update_range_due_to_replace :
-  Lsp.range -> range_replace -> Lsp.range option
+val update_range_due_to_replace : Lsp.range -> range_replace -> Lsp.range option
 
 val update_diagnostics_due_to_change :
   Lsp.PublishDiagnostics.diagnostic list ->
@@ -72,15 +71,13 @@ val update_diagnostics_due_to_change :
 
 val get_root : Lsp.Initialize.params -> string
 
-val supports_progress : Lsp.Initialize.params -> bool
-
-val supports_actionRequired : Lsp.Initialize.params -> bool
-
 val supports_status : Lsp.Initialize.params -> bool
 
 val supports_snippets : Lsp.Initialize.params -> bool
 
 val supports_connectionStatus : Lsp.Initialize.params -> bool
+
+val get_uri_opt : Lsp.lsp_message -> Lsp.documentUri option
 
 val telemetry : Jsonrpc.writer -> Lsp.MessageType.t -> string -> unit
 
@@ -96,29 +93,4 @@ val log_warning : Jsonrpc.writer -> string -> unit
 
 val log_info : Jsonrpc.writer -> string -> unit
 
-val dismiss_diagnostics : Jsonrpc.writer -> SSet.t -> SSet.t
-
-val notify_connectionStatus :
-  Lsp.Initialize.params -> Jsonrpc.writer -> bool -> bool -> bool
-
-val notify_progress_raw :
-  'a ->
-  Lsp.Initialize.params ->
-  ('a -> Lsp.Progress.params -> 'a) ->
-  Lsp.Progress.t ->
-  string option ->
-  'a * Lsp.Progress.t
-
-val notify_progress :
-  Lsp.Initialize.params ->
-  Jsonrpc.writer ->
-  Lsp.Progress.t ->
-  string option ->
-  Lsp.Progress.t
-
-val notify_actionRequired :
-  Lsp.Initialize.params ->
-  Jsonrpc.writer ->
-  Lsp.ActionRequired.t ->
-  string option ->
-  Lsp.ActionRequired.t
+val dismiss_diagnostics : Jsonrpc.writer -> Lsp.UriSet.t -> Lsp.UriSet.t

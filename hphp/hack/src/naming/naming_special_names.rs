@@ -21,11 +21,11 @@ pub mod classes {
 
     /* Used for dynamic classnames, e.g. new $foo(); */
 
-    pub const AWAITABLE: &str = "\\Awaitable";
+    pub const AWAITABLE: &str = "\\HH\\Awaitable";
 
     pub const GENERATOR: &str = "\\Generator";
 
-    pub const ASYNC_GENERATOR: &str = "\\AsyncGenerator";
+    pub const ASYNC_GENERATOR: &str = "\\HH\\AsyncGenerator";
 
     pub const FORMAT_STRING: &str = "\\FormatString";
 
@@ -48,19 +48,19 @@ pub mod classes {
 
     pub const DATE_TIME_IMMUTABLE: &str = "\\DateTimeImmutable";
 
-    pub const ASYNC_ITERATOR: &str = "\\AsyncIterator";
+    pub const ASYNC_ITERATOR: &str = "\\HH\\AsyncIterator";
 
-    pub const ASYNC_KEYED_ITERATOR: &str = "\\AsyncKeyedIterator";
+    pub const ASYNC_KEYED_ITERATOR: &str = "\\HH\\AsyncKeyedIterator";
 
     pub const STRINGISH: &str = "\\Stringish";
 
     pub const XHP_CHILD: &str = "\\XHPChild";
 
-    pub const IMEMOIZE_PARAM: &str = "\\IMemoizeParam";
+    pub const IMEMOIZE_PARAM: &str = "\\HH\\IMemoizeParam";
 
-    pub const CLASS_NAME: &str = "\\classname";
+    pub const CLASS_NAME: &str = "\\HH\\classname";
 
-    pub const TYPE_NAME: &str = "\\typename";
+    pub const TYPE_NAME: &str = "\\HH\\typename";
 
     pub const IDISPOSABLE: &str = "\\IDisposable";
 
@@ -69,30 +69,28 @@ pub mod classes {
 
 pub mod collections {
     /* concrete classes */
-    pub const VECTOR: &str = "\\Vector";
+    pub const VECTOR: &str = "\\HH\\Vector";
 
-    pub const IMM_VECTOR: &str = "\\ImmVector";
+    pub const IMM_VECTOR: &str = "\\HH\\ImmVector";
 
-    pub const SET: &str = "\\Set";
+    pub const SET: &str = "\\HH\\Set";
 
-    pub const IMM_SET: &str = "\\ImmSet";
+    pub const IMM_SET: &str = "\\HH\\ImmSet";
 
-    pub const MAP: &str = "\\Map";
+    pub const MAP: &str = "\\HH\\Map";
 
-    pub const STABLE_MAP: &str = "\\StableMap";
+    pub const IMM_MAP: &str = "\\HH\\ImmMap";
 
-    pub const IMM_MAP: &str = "\\ImmMap";
-
-    pub const PAIR: &str = "\\Pair";
+    pub const PAIR: &str = "\\HH\\Pair";
 
     /* interfaces */
-    pub const CONTAINER: &str = "\\Container";
+    pub const CONTAINER: &str = "\\HH\\Container";
 
-    pub const KEYED_CONTAINER: &str = "\\KeyedContainer";
+    pub const KEYED_CONTAINER: &str = "\\HH\\KeyedContainer";
 
-    pub const TRAVERSABLE: &str = "\\Traversable";
+    pub const TRAVERSABLE: &str = "\\HH\\Traversable";
 
-    pub const KEYED_TRAVERSABLE: &str = "\\KeyedTraversable";
+    pub const KEYED_TRAVERSABLE: &str = "\\HH\\KeyedTraversable";
 
     pub const COLLECTION: &str = "\\Collection";
 
@@ -102,11 +100,11 @@ pub mod collections {
 
     pub const CONST_COLLECTION: &str = "\\ConstCollection";
 
-    pub const DICT: &str = "\\dict";
+    pub const DICT: &str = "\\HH\\dict";
 
-    pub const VEC: &str = "\\vec";
+    pub const VEC: &str = "\\HH\\vec";
 
-    pub const KEYSET: &str = "\\keyset";
+    pub const KEYSET: &str = "\\HH\\keyset";
 }
 
 pub mod members {
@@ -170,8 +168,7 @@ pub mod members {
             __UNSET,
             __WAKEUP
         ]
-        .iter()
-        .cloned()
+        .into_iter()
         .collect();
         pub static ref AS_LOWERCASE_SET: HashSet<String> = {
             AS_SET
@@ -316,9 +313,26 @@ pub mod user_attributes {
             REIFIABLE,
             NEVER_INLINE,
         ]
-        .iter()
-        .cloned()
+        .into_iter()
         .collect();
+    }
+
+    pub fn is_memoized(name: &str) -> bool {
+        name == MEMOIZE || name == MEMOIZE_LSB
+    }
+
+    // TODO(hrust) these should probably be added to the above map/fields, too
+
+    pub fn is_native(name: &str) -> bool {
+        name == "__Native"
+    }
+
+    pub fn is_foldable(name: &str) -> bool {
+        name == "__IsFoldable"
+    }
+
+    pub fn is_meth_caller(name: &str) -> bool {
+        name == "__MethCaller"
     }
 }
 
@@ -348,23 +362,23 @@ pub mod attribute_kinds {
 
     pub const TYPE_CONST: &str = "\\HH\\TypeConstantAttribute";
 
+    pub static PLAIN_ENGLISH: &'static [(&'static str, &'static str)] = &[
+        (CLS, "a class"),
+        (ENUM, "an enum"),
+        (TYPE_ALIAS, "a typealias"),
+        (FN, "a function"),
+        (MTHD, "a method"),
+        (INST_PROPERTY, "an instance property"),
+        (STATIC_PROPERTY, "a static property"),
+        (PARAMETER, "a parameter"),
+        (TYPE_PARAM, "a type parameter"),
+        (FILE, "a file"),
+        (TYPE_CONST, "a type pub constant"),
+    ];
+
     lazy_static! {
-        pub static ref PLAIN_ENGLISH_MAP: HashMap<&'static str, &'static str> = [
-            (CLS, "a class"),
-            (ENUM, "an enum"),
-            (TYPE_ALIAS, "a typealias"),
-            (FN, "a function"),
-            (MTHD, "a method"),
-            (INST_PROPERTY, "an instance property"),
-            (STATIC_PROPERTY, "a static property"),
-            (PARAMETER, "a parameter"),
-            (TYPE_PARAM, "a type parameter"),
-            (FILE, "a file"),
-            (TYPE_CONST, "a type pub constant")
-        ]
-        .iter()
-        .cloned()
-        .collect();
+        pub static ref PLAIN_ENGLISH_MAP: HashMap<&'static str, &'static str> =
+            PLAIN_ENGLISH.iter().cloned().collect();
     }
 }
 
@@ -376,23 +390,21 @@ pub mod special_functions {
 
     pub const ASSERT_: &str = "assert";
 
-    pub const INVARIANT: &str = "invariant";
-
-    pub const INVARIANT_VIOLATION: &str = "invariant_violation";
-
-    pub const FUN_: &str = "fun";
-
-    pub const INST_METH: &str = "inst_meth";
-
-    pub const CLASS_METH: &str = "class_meth";
-
-    pub const METH_CALLER: &str = "meth_caller";
-
-    pub const CALL_USER_FUNC: &str = "call_user_func";
-
     pub const AUTOLOAD: &str = "__autoload";
+}
 
-    pub const CLONE: &str = "__clone";
+pub mod autoimported_functions {
+    pub const INVARIANT: &str = "\\HH\\invariant";
+
+    pub const INVARIANT_VIOLATION: &str = "\\HH\\invariant_violation";
+
+    pub const FUN_: &str = "\\HH\\fun";
+
+    pub const INST_METH: &str = "\\HH\\inst_meth";
+
+    pub const CLASS_METH: &str = "\\HH\\class_meth";
+
+    pub const METH_CALLER: &str = "\\HH\\meth_caller";
 }
 
 pub mod special_idents {
@@ -431,6 +443,14 @@ pub mod pseudo_functions {
 
     pub const HH_LOOP_FOREVER: &str = "\\hh_loop_forever";
 
+    pub const ASSERT: &str = "\\assert";
+
+    pub const ECHO: &str = "\\echo";
+
+    pub const EXIT: &str = "\\exit";
+
+    pub const DIE: &str = "\\die";
+
     lazy_static! {
         pub static ref ALL_PSEUDO_FUNCTIONS: Vec<&'static str> = vec![
             ISSET,
@@ -440,6 +460,10 @@ pub mod pseudo_functions {
             HH_LOG_LEVEL,
             HH_FORCE_SOLVE,
             HH_LOOP_FOREVER,
+            ASSERT,
+            ECHO,
+            EXIT,
+            DIE,
         ];
     }
 }
@@ -455,7 +479,11 @@ pub mod std_lib_functions {
 
     pub const ARRAY_MAP: &str = "\\array_map";
 
+    pub const CALL_USER_FUNC: &str = "\\call_user_func";
+
     pub const TYPE_STRUCTURE: &str = "\\HH\\type_structure";
+
+    pub const MARK_LEGACY_HACK_ARRAY: &str = "\\HH\\mark_legacy_hack_array";
 }
 
 pub mod typehints {
@@ -500,40 +528,38 @@ pub mod typehints {
 
     pub const VARRAY_OR_DARRAY: &str = "varray_or_darray";
 
-    pub const INTEGER: &str = "integer";
-
-    pub const BOOLEAN: &str = "boolean";
-
-    pub const DOUBLE: &str = "double";
-
     pub const CALLABLE: &str = "callable";
 
     pub const OBJECT_CAST: &str = "object";
 
-    pub const UNSET_CAST: &str = "unset";
-
     pub const WILDCARD: &str = "_";
 
+    lazy_static! {
+        static ref RESERVED_GLOBAL_NAMES: HashSet<&'static str> = vec![
+            ARRAY,
+            CALLABLE,
+            crate::classes::SELF,
+            crate::classes::PARENT
+        ]
+        .into_iter()
+        .collect();
+    }
+
     pub fn is_reserved_global_name(x: &str) -> bool {
-        x.eq_ignore_ascii_case(ARRAY)
-            || x.eq_ignore_ascii_case(CALLABLE)
-            || x.eq_ignore_ascii_case(crate::classes::SELF)
-            || x.eq_ignore_ascii_case(crate::classes::PARENT)
+        RESERVED_GLOBAL_NAMES.contains(x)
     }
 
     lazy_static! {
         static ref RESERVED_HH_NAMES: HashSet<&'static str> = vec![
             VOID, NORETURN, INT, BOOL, FLOAT, NUM, STRING, RESOURCE, MIXED, ARRAY, ARRAYKEY,
-            INTEGER, BOOLEAN, DOUBLE, DYNAMIC, WILDCARD, NONNULL, NOTHING
+            DYNAMIC, WILDCARD, NONNULL, NOTHING, THIS
         ]
-        .iter()
-        .cloned()
+        .into_iter()
         .collect();
     }
 
     pub fn is_reserved_hh_name(x: &str) -> bool {
-        let lower_x: String = x.to_ascii_lowercase();
-        RESERVED_HH_NAMES.contains(&lower_x[..])
+        RESERVED_HH_NAMES.contains(x)
     }
 
     // This function checks if this is a namespace of the "(not HH)\\(...)*\\(reserved_name)"
@@ -566,6 +592,12 @@ pub mod typehints {
     }
 }
 
+pub mod literal {
+    pub const TRUE: &str = "true";
+    pub const FALSE: &str = "false";
+    pub const NULL: &str = "null";
+}
+
 pub mod pseudo_consts {
     use lazy_static::lazy_static;
     use std::collections::HashSet;
@@ -590,6 +622,10 @@ pub mod pseudo_consts {
 
     pub const G__FUNCTION_CREDENTIAL__: &str = "\\__FUNCTION_CREDENTIAL__";
 
+    pub const DIE: &str = "\\die";
+
+    pub const EXIT: &str = "\\exit";
+
     lazy_static! {
         static ref ALL_PSEUDO_CONSTS: Vec<&'static str> = vec![
             G__LINE__,
@@ -601,10 +637,11 @@ pub mod pseudo_consts {
             G__METHOD__,
             G__NAMESPACE__,
             G__COMPILER_FRONTEND__,
-            G__FUNCTION_CREDENTIAL__
+            G__FUNCTION_CREDENTIAL__,
+            DIE,
+            EXIT,
         ];
-        static ref PSEUDO_SET: HashSet<&'static str> =
-            { ALL_PSEUDO_CONSTS.iter().cloned().collect() };
+        static ref PSEUDO_SET: HashSet<&'static str> = ALL_PSEUDO_CONSTS.iter().cloned().collect();
     }
 
     pub fn is_pseudo_const(x: &str) -> bool {
@@ -620,6 +657,11 @@ pub mod fb {
     pub const IDX: &str = "\\HH\\idx";
 
     pub const TYPE_STRUCTURE: &str = "\\HH\\TypeStructure";
+
+    pub const INCORRECT_TYPE: &str = "\\HH\\INCORRECT_TYPE";
+
+    pub const INCORRECT_TYPE_NO_NS: &str = "HH\\INCORRECT_TYPE";
+
 }
 
 pub mod hh {
@@ -648,10 +690,22 @@ pub mod rx {
     pub const ASYNC_ITERATOR: &str = "\\HH\\Rx\\AsyncIterator";
 
     pub const MOVE: &str = "\\HH\\Rx\\move";
+
+    pub const RX: &str = "Rx";
+
+    pub const RX_LOCAL: &str = "RxLocal";
+
+    pub const RX_SHALLOW: &str = "RxShallow";
+
+    pub const MUTABLE: &str = "Mutable";
+
+    pub const MAYBE_MUTABLE: &str = "MaybeMutable";
+
+    pub const OWNED_MUTABLE: &str = "OwnedMutable";
 }
 
 pub mod shapes {
-    pub const SHAPES: &str = "\\Shapes";
+    pub const SHAPES: &str = "\\HH\\Shapes";
 
     pub const IDX: &str = "idx";
 
@@ -686,6 +740,9 @@ pub mod superglobals {
     pub fn is_superglobal(x: &str) -> bool {
         SUPERGLOBALS_SET.contains(x)
     }
+    pub fn is_any_global(x: &str) -> bool {
+        is_superglobal(x) || x == GLOBALS
+    }
 }
 
 pub mod ppl_functions {
@@ -713,6 +770,15 @@ pub mod ppl_functions {
 
 pub mod regex {
     pub const T_PATTERN: &str = "\\HH\\Lib\\Regex\\Pattern";
+}
+
+pub mod math {
+    pub const NAN: &str = "NAN";
+    pub const INF: &str = "INF";
+}
+
+pub mod pocket_universes {
+    pub const MEMBERS: &str = "Members";
 }
 
 #[cfg(test)]

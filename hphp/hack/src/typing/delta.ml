@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 module C = Typing_continuations
 module Cont = Typing_per_cont_env
 module LEnvOps = Typing_per_cont_ops
@@ -15,7 +15,6 @@ module Env = Typing_env
 module LEnv = Typing_lenv
 module Reason = Typing_reason
 
-type gamma = Typing_per_cont_env.per_cont_entry
 (**
  * This type represents the structure refered to using the greek alphabet
  * letter 'gamma' in the type system specification.
@@ -23,14 +22,15 @@ type gamma = Typing_per_cont_env.per_cont_entry
  * It is essentially a map from local ids to types.
  * For now, we reuse Typing_env.local_id_map but this may change.
  *)
+type gamma = Typing_per_cont_env.per_cont_entry
 
-type delta = gamma Typing_continuations.Map.t
 (**
  * This type represents the structure refered to using the greek alphabet
  * letter 'delta' in the type system specification.
  *
  * It is a map from continuations to gammas
  *)
+type delta = gamma Typing_continuations.Map.t
 
 let empty_gamma : gamma = Typing_per_cont_env.empty_entry
 
@@ -45,7 +45,7 @@ let dummify_local_id local_id =
 
 let lookup local_id gamma =
   let local_id = dummify_local_id local_id in
-  let tyopt = Local_id.Map.get local_id gamma in
+  let tyopt = Local_id.Map.find_opt local_id gamma in
   (* Convert from type (local = ty * expression_id) to
    * (Tast.annotation = Pos.t * ty). Ignore the expression id.
    * TODO Avoid this conversion? Do we need the expression ids? *)
@@ -54,7 +54,9 @@ let lookup local_id gamma =
 
 let add_to_gamma local_id ty gamma =
   let local_id = dummify_local_id local_id in
-  let pos_ty_to_local (p, (_r, ty)) = ((Reason.Rwitness p, ty), 0) in
+  let pos_ty_to_local (p, ty) =
+    Typing_defs.(mk (Reason.Rwitness p, get_node ty), 0)
+  in
   let ty = pos_ty_to_local ty in
   {
     gamma with

@@ -40,36 +40,140 @@ inline bool Class::validate() const {
 ///////////////////////////////////////////////////////////////////////////////
 // Class::PropInitVec.
 
+template <bool is_const>
+Class::PropInitVec::iterator_impl<is_const>::iterator_impl(
+  tv_iter_t tv,
+  bit_iter_t bit
+  ) : m_val(tv), m_bit(bit) {}
+
+template <bool is_const>
+bool Class::PropInitVec::iterator_impl<is_const>::operator==(
+  const Class::PropInitVec::iterator_impl<is_const>& o
+) const {
+  return m_val == o.m_val;
+}
+
+template <bool is_const>
+bool Class::PropInitVec::iterator_impl<is_const>::operator!=(
+  const Class::PropInitVec::iterator_impl<is_const>& o
+  ) const {
+  return !(*this == o);
+}
+
+template <bool is_const>
+Class::PropInitVec::iterator_impl<is_const>&
+Class::PropInitVec::iterator_impl<is_const>::operator++() {
+  ++m_bit;
+  ++m_val;
+  return *this;
+}
+
+template <bool is_const>
+Class::PropInitVec::iterator_impl<is_const>
+Class::PropInitVec::iterator_impl<is_const>::operator++(int) {
+  auto const ret = *this;
+  ++(*this);
+  return ret;
+}
+
+template <bool is_const>
+Class::PropInitVec::Entry<is_const>
+Class::PropInitVec::iterator_impl<is_const>::operator*() const {
+  return Entry<is_const>{m_val, *m_bit};
+}
+
+template <bool is_const>
+Class::PropInitVec::Entry<is_const>
+Class::PropInitVec::iterator_impl<is_const>::operator->() const {
+  return *(*this);
+}
+
 inline Class::PropInitVec::PropInitVec() : m_data(nullptr),
                                            m_size(0),
-                                           m_capacity(0) {
+                                           m_capacity(0) {}
+
+template <typename T>
+inline Class::PropInitVec::Entry<false>
+Class::PropInitVec::operator[](T i) {
+  auto lval = m_data->at(i);
+  auto deepInit = deepInitBits()[i];
+  return Entry<false>{lval, deepInit};
+}
+
+template <typename T>
+inline Class::PropInitVec::Entry<true>
+Class::PropInitVec::operator[](T i) const {
+  auto lval = m_data->at(i);
+  auto deepInit = deepInitBits()[i];
+  return Entry<true>{lval, deepInit};
 }
 
 inline Class::PropInitVec::iterator Class::PropInitVec::begin() {
-  return m_data;
+  return iterator{m_data->iteratorAt(0),
+                  deepInitBits().iteratorAt(0)};
 }
 
 inline Class::PropInitVec::iterator Class::PropInitVec::end() {
-  return m_data + m_size;
+  return iterator{m_data->iteratorAt(m_size),
+                  deepInitBits().iteratorAt(m_size)};
+}
+
+inline Class::PropInitVec::const_iterator Class::PropInitVec::cbegin() const {
+  return const_iterator{
+    const_cast<const ObjectProps*>(m_data)->iteratorAt(0),
+      deepInitBits().iteratorAt(0)};
+}
+
+inline Class::PropInitVec::const_iterator Class::PropInitVec::cend() const {
+  return const_iterator{
+    const_cast<const ObjectProps*>(m_data)->iteratorAt(m_size),
+      deepInitBits().iteratorAt(m_size)};
 }
 
 inline size_t Class::PropInitVec::size() const {
   return m_size;
 }
 
-inline TypedValueAux& Class::PropInitVec::operator[](size_t i) {
-  assertx(i < m_size);
-  return m_data[i];
-}
-
-inline const TypedValueAux& Class::PropInitVec::operator[](size_t i) const {
-  assertx(i < m_size);
-  return m_data[i];
-}
-
 inline bool Class::PropInitVec::reqAllocated() const {
   return m_capacity < 0;
 }
+
+inline const ObjectProps* Class::PropInitVec::data() const {
+  return m_data;
+}
+
+inline BitsetView<false> Class::PropInitVec::deepInitBits() {
+  auto const cap = m_capacity < 0 ? ~m_capacity : m_capacity;
+  return BitsetView<false>{reinterpret_cast<unsigned char*>(m_data) +
+                           ObjectProps::sizeFor(cap)};
+}
+
+inline BitsetView<true>
+Class::PropInitVec::deepInitBits() const {
+  auto const cap = m_capacity < 0 ? ~m_capacity : m_capacity;
+  return BitsetView<true>{reinterpret_cast<const unsigned char*>(m_data) +
+                          ObjectProps::sizeFor(cap)};
+}
+
+template <bool is_const>
+template <typename Dummy, typename>
+Class::PropInitVec::Entry<is_const>&
+Class::PropInitVec::Entry<is_const>::operator=(TypedValueAux tva) {
+  tvCopy(tva, val);
+  deepInit = tva.deepInit();
+  return *this;
+}
+
+template <bool is_const>
+Class::PropInitVec::Entry<is_const>::operator TypedValueAux() const {
+  TypedValueAux tva;
+
+  tvCopy(val.tv(), tva);
+  tva.deepInit() = deepInit;
+
+  return tva;
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////
 // Pre- and post-allocations.

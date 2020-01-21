@@ -1,25 +1,24 @@
 <?hh
-abstract class AbstractBase {
-
-}
-class ImplementingBase extends AbstractBase {
-
+class ImplementingBase extends \AbstractBase {
+  public function overridden(): int {
+    throw new \Exception();
+  }
   public function inherited(): void {
-    throw new Exception();
+    throw new \Exception();
   }
 }
+abstract class AbstractBase {}
 function with_overriding(Derived $arg): int {
   $arg->inherited();
   return $arg->overridden();
 }
-class Derived extends ImplementingBase {
-
+final class Derived extends \ImplementingBase {
+  <<__Override>>
   public function overridden(): int {
-    throw new Exception();
+    throw new \Exception();
   }
 }
-function extract_standalone_make_default<T>(): T {
-  throw new Exception();
+<<__Rx>>
+function extract_standalone_make_default(): nothing {
+  throw new \Exception();
 }
-
-

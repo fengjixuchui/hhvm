@@ -147,25 +147,40 @@ bool consumesRefImpl(const IRInstruction* inst, int srcNo) {
       // Call a helper that decrefs the first argument
       return move == Consume && srcNo == 0;
 
+    case ConstructClosure:
+      return srcNo == 0;
+
     case StClosureArg:
-    case StClosureCtx:
     case StContArValue:
     case StContArKey:
       return srcNo == 1;
 
-    case InitCtx:
-      return srcNo == 1;
+    case Call:
+    case CallUnpack:
+      return move != MustMove && srcNo == 3;
+
+    case EnterTCUnwind:
+      return srcNo == 0;
+
+    case RaiseTooManyArg:
+      // RaiseTooManyArg decrefs the unpack arguments.
+      return move == Consume && srcNo == 0;
 
     case AFWHBlockOn:
       // Consume the value being stored, not the thing it's being stored into
       return srcNo == 1;
 
     case ArraySet:
-    case ArraySetRef:
     case VecSet:
-    case VecSetRef:
     case DictSet:
-    case DictSetRef:
+      // Consumes the reference to its input array, and moves input value
+      return move == Consume && (srcNo == 0 || srcNo == 2);
+
+    case MapSet:
+    case VectorSet:
+      // Moves input value
+      return move == Consume && srcNo == 2;
+
     case AddNewElem:
     case AddNewElemKeyset:
     case AddNewElemVec:
@@ -251,20 +266,6 @@ Type thisTypeFromFunc(const Func* func) {
 // outputType().
 
 namespace {
-
-Type unboxPtr(Type t) {
-  assertx(t <= TPtrToGen || t <= TLvalToGen);
-  auto const mcell = t & TMemToCell;
-  auto const mref = t & TMemToBoxedInitCell;
-  return mref.deref().inner().mem(t.memKind(), Ptr::Ref) | mcell;
-}
-
-Type boxPtr(Type t) {
-  assertx(t <= TPtrToGen || t <= TLvalToGen);
-  auto const rawBoxed = t.deref().unbox().box();
-  auto const noNull = rawBoxed - TBoxedUninit;
-  return noNull.mem(t.memKind(), t.ptrKind() - Ptr::Ref);
-}
 
 Type allocObjReturn(const IRInstruction* inst) {
   switch (inst->op()) {
@@ -406,39 +407,9 @@ Type keysetElemReturn(const IRInstruction* inst) {
   return elem.first;
 }
 
-Type ctxReturn(const IRInstruction* inst) {
-  auto const func = inst->func();
-  if (!func) return TCtx;
-
-  if (func->requiresThisInBody()) {
-    return thisTypeFromFunc(func);
-  }
-  if (func->hasForeignThis()) {
-    return func->isStatic() ? TCctx : TCtx;
-  }
-  auto const cls = inst->ctx();
-  if (inst->is(LdCctx) || func->isStatic()) {
-    if (cls->attrs() & AttrNoOverride) {
-      return Type::cns(ConstCctx::cctx(cls));
-    }
-    return TCctx;
-  }
-  return thisTypeFromFunc(func) | TCctx;
-}
-
-Type ctxClsReturn(const IRInstruction* inst) {
-  // If we aren't loading the cls from the ctx of the current function doing
-  // this makes no sense.
-  if (!canonical(inst->src(0))->inst()->is(LdCtx, LdCctx)) return TCls;
-
-  auto const func = inst->func();
-  if (!func || func->hasForeignThis()) return TCls;
-  return Type::SubCls(inst->ctx());
-}
-
 Type setElemReturn(const IRInstruction* inst) {
   assertx(inst->op() == SetElem);
-  auto baseType = inst->src(minstrBaseIdx(inst->op()))->type().strip();
+  auto baseType = inst->src(minstrBaseIdx(inst->op()))->type().derefIfPtr();
 
   // If the base is a Str, the result will always be a StaticStr (or
   // an exception). If the base might be a str, the result wil be
@@ -476,17 +447,26 @@ Type builtinReturn(const IRInstruction* inst) {
 Type callReturn(const IRInstruction* inst) {
   assertx(inst->is(Call, CallUnpack));
 
+  // Do not use the inferred Func* if we are forming a region. We may have
+  // inferred the target of the call based on specialized type information
+  // that won't be available when the region is translated. If we allow the
+  // FCall to specialize using this information, we may infer narrower type
+  // for the return value, erroneously preventing the region from breaking
+  // on unknown type.
+
   if (inst->is(Call)) {
     // Async eager return needs to load TVAux
     if (inst->extra<Call>()->asyncEagerReturn) return TInitCell;
     if (inst->extra<Call>()->numOut) return TInitCell;
-    auto callee = inst->extra<Call>()->callee;
-    return callee ? irgen::callReturnType(callee) : TInitCell;
+    if (inst->extra<Call>()->formingRegion) return TInitCell;
+    return inst->src(2)->hasConstVal(TFunc)
+      ? irgen::callReturnType(inst->src(2)->funcVal()) : TInitCell;
   }
   if (inst->is(CallUnpack)) {
     if (inst->extra<CallUnpack>()->numOut) return TInitCell;
-    auto callee = inst->extra<CallUnpack>()->callee;
-    return callee ? irgen::callReturnType(callee) : TInitCell;
+    if (inst->extra<CallUnpack>()->formingRegion) return TInitCell;
+    return inst->src(2)->hasConstVal(TFunc)
+      ? irgen::callReturnType(inst->src(2)->funcVal()) : TInitCell;
   }
   not_reached();
 }
@@ -510,8 +490,44 @@ Type memoKeyReturn(const IRInstruction* inst) {
 
 Type ptrToLvalReturn(const IRInstruction* inst) {
   auto const ptr = inst->src(0)->type();
-  assertx(ptr <= TPtrToGen);
+  assertx(ptr <= TPtrToCell);
   return ptr.deref().mem(Mem::Lval, ptr.ptrKind());
+}
+
+// A pointer iterator type has three components:
+//   - The pointer type: it's always PtrToElem, for now
+//   - The target type: the union of the possible values of the base array
+//   - The constant value: e.g. a specific pointer to the end of a static array
+//
+// The target type is the key aspect of this type. Because it's the union of
+// the possible values of the base array, the type of the pointer iterator
+// doesn't change when we advance it. This definition also allows us to type
+// the pointer to the end of an array (even though its target is invalid).
+//
+// This definition makes sense by analogy to regular int* types in C: the type
+// of the end of the array is an int* even though its target is invalid.
+Type ptrIterReturn(const IRInstruction* inst) {
+  if (inst->is(AdvanceMixedPtrIter, AdvancePackedPtrIter)) {
+    auto const ptr = inst->src(0)->type();
+    assertx(ptr <= TPtrToElemCell);
+    return ptr;
+  }
+  assertx(inst->is(GetMixedPtrIter, GetPackedPtrIter));
+  auto const arr = inst->src(0)->type();
+  assertx(arr <= TArrLike);
+  auto const value = [&]{
+    if (arr <= TArr)  return arrElemType(arr, TInt | TStr, inst->ctx()).first;
+    if (arr <= TVec)  return vecElemType(arr, TInt, inst->ctx()).first;
+    if (arr <= TDict) return dictElemType(arr, TInt | TStr).first;
+    return TCell;
+  }();
+  return value.ptr(Ptr::Elem);
+}
+
+Type ptrIterValReturn(const IRInstruction* inst) {
+  auto const ptr = inst->src(0)->type();
+  assertx(ptr <= TPtrToElemCell);
+  return ptr.deref();
 }
 
 template <uint32_t...> struct IdxSeq {};
@@ -544,8 +560,6 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
   }                                                                \
   return TCls;                                                     \
 }
-#define DUnboxPtr       return unboxPtr(inst->src(0)->type());
-#define DBoxPtr         return boxPtr(inst->src(0)->type());
 #define DAllocObj       return allocObjReturn(inst);
 #define DArrElem        return arrElemReturn(inst);
 #define DVecElem        return vecElemReturn(inst);
@@ -575,8 +589,6 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
                                 ? TStaticDict \
                                 : Type::StaticArray(ArrayData::kMixedKind));
 #define DCol            return newColReturn(inst);
-#define DCtx            return ctxReturn(inst);
-#define DCtxCls         return ctxClsReturn(inst);
 #define DMulti          return TBottom;
 #define DSetElem        return setElemReturn(inst);
 #define DBuiltin        return builtinReturn(inst);
@@ -589,6 +601,8 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
 #define DUnion(...)     return unionReturn(inst, IdxSeq<__VA_ARGS__>{});
 #define DMemoKey        return memoKeyReturn(inst);
 #define DLvalOfPtr      return ptrToLvalReturn(inst);
+#define DPtrIter        return ptrIterReturn(inst);
+#define DPtrIterVal     return ptrIterValReturn(inst);
 
 #define O(name, dstinfo, srcinfo, flags) case name: dstinfo not_reached();
 
@@ -606,8 +620,6 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
 #undef DParamMayRelax
 #undef DParam
 #undef DLdObjCls
-#undef DUnboxPtr
-#undef DBoxPtr
 #undef DAllocObj
 #undef DArrElem
 #undef DVecElem
@@ -630,8 +642,6 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
 #undef DDArr
 #undef DStaticDArr
 #undef DCol
-#undef DCtx
-#undef DCtxCls
 #undef DMulti
 #undef DSetElem
 #undef DBuiltin
@@ -642,6 +652,8 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
 #undef DUnion
 #undef DMemoKey
 #undef DLvalOfPtr
+#undef DPtrIter
+#undef DPtrIterVal
 }
 
 }}

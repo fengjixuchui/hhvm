@@ -29,6 +29,13 @@ inline int RequestInjectionData::getCPUTimeout() const {
   return m_cpuTimer.m_timeoutSeconds;
 }
 
+/*
+ * Returns the amount of seconds until user callback is invoked
+ */
+inline int RequestInjectionData::getUserTimeout() const {
+  return m_userTimeoutTimer.m_timeoutSeconds;
+}
+
 inline bool RequestInjectionData::getJit() const {
   return m_jit;
 }

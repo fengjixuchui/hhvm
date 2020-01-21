@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 module Env = Typing_env
 open Typing_env_types
 module C = Typing_continuations
@@ -28,7 +28,7 @@ let get_all_locals env = env.lenv.per_cont_env
 let union env local1 local2 =
   let ((ty1, eid1), (ty2, eid2)) = (local1, local2) in
   let eid =
-    if eid1 = eid2 then
+    if Ident.equal eid1 eid2 then
       eid1
     else
       Ident.tmp ()
@@ -159,8 +159,6 @@ let union_lenvs_ env parent_lenv lenv1 lenv2 =
  *)
 let union_lenvs env parent_lenv lenv1 lenv2 =
   fst @@ union_lenvs_ env parent_lenv lenv1 lenv2
-
-let union_envs env env1 env2 = union_lenvs env env.lenv env1.lenv env2.lenv
 
 let rec union_lenv_list env parent_lenv = function
   | []

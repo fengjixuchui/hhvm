@@ -127,10 +127,10 @@ void asyncFunctionReturn(IRGS& env, SSATmp* retVal, bool suspended) {
     auto const wrapped = cond(
       env,
       [&] (Block* taken) {
-        auto flags = gen(env, LdARNumArgsAndFlags, fp(env));
+        auto flags = gen(env, LdARFlags, fp(env));
         auto test = gen(
           env, AndInt, flags,
-          cns(env, static_cast<int32_t>(ActRec::Flags::AsyncEagerRet)));
+          cns(env, static_cast<int32_t>(1 << ActRec::AsyncEagerRet)));
         gen(env, JmpNZero, taken, test);
       },
       [&] {
@@ -230,7 +230,7 @@ void implRet(IRGS& env, bool suspended) {
 }
 
 IRSPRelOffset offsetToReturnSlot(IRGS& env) {
-  auto const retOff = FPRelOffset { kArRetOff / int32_t{sizeof(Cell)} };
+  auto const retOff = FPRelOffset { kArRetOff / int32_t{sizeof(TypedValue)} };
   return retOff.to<IRSPRelOffset>(env.irb->fs().irSPOff());
 }
 

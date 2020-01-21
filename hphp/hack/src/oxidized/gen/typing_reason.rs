@@ -3,18 +3,20 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<364f81509fc3a6a48ec0eed52d2f5be7>>
+// @generated SignedSource<<a44faa87fd877c37261059656e1e3aa0>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
 
 use ocamlrep_derive::OcamlRep;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::aast;
 use crate::ast_defs;
 use crate::pos;
 
-#[derive(Clone, Debug, OcamlRep)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub enum Reason {
     Rnone,
     Rwitness(pos::Pos),
@@ -31,7 +33,7 @@ pub enum Reason {
     RarithRetFloat(pos::Pos, Box<Reason>, ArgPosition),
     RarithRetNum(pos::Pos, Box<Reason>, ArgPosition),
     RarithRetInt(pos::Pos),
-    RsumDynamic(pos::Pos),
+    RarithDynamic(pos::Pos),
     RbitwiseDynamic(pos::Pos),
     RincdecDynamic(pos::Pos),
     Rstring2(pos::Pos),
@@ -102,16 +104,17 @@ pub enum Reason {
     Rshape(pos::Pos, String),
     Renforceable(pos::Pos),
     Rdestructure(pos::Pos, isize),
+    RkeyValueCollectionKey(pos::Pos),
 }
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum ArgPosition {
     Aonly,
     Afirst,
     Asecond,
 }
 
-#[derive(Clone, Debug, OcamlRep)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub enum ExprDepTypeReason {
     ERexpr(isize),
     ERstatic,
@@ -120,7 +123,7 @@ pub enum ExprDepTypeReason {
     ERself(String),
 }
 
-#[derive(Clone, Debug, OcamlRep)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub enum Ureason {
     URnone,
     URassign,

@@ -3,20 +3,18 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use ocamlpool_rust::ocamlvalue::*;
 use ocamlrep::OcamlRep;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Lazy<T>(T);
 
 impl<T: OcamlRep> OcamlRep for Lazy<T> {
-    fn into_ocamlrep<'a>(self, arena: &ocamlrep::Arena<'a>) -> ocamlrep::Value<'a> {
-        ().into_ocamlrep(arena)
+    fn to_ocamlrep<'a, A: ocamlrep::Allocator<'a>>(&self, _alloc: &A) -> ocamlrep::Value<'a> {
+        unimplemented!()
     }
-}
 
-impl<T> Ocamlvalue for Lazy<T> {
-    fn ocamlvalue(&self) -> ocaml::core::mlvalues::Value {
-        panic!("Not implemented")
+    fn from_ocamlrep(_value: ocamlrep::Value<'_>) -> Result<Self, ocamlrep::FromError> {
+        unimplemented!()
     }
 }

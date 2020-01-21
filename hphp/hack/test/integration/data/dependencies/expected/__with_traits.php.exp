@@ -1,28 +1,20 @@
 <?hh
-class TraitBase extends AbstractBase {
-  use ImplementingAbstractBase, T;
-
-
+class TraitBase extends \AbstractBase {
+  use \ImplementingAbstractBase;
+  use \T;
 }
 function with_traits(TraitBase $arg): void {
   $arg->routine();
 }
-abstract class AbstractBase {
-
-}
+abstract class AbstractBase {}
 trait T {
-  require extends AbstractBase;
-
-
+  require extends \AbstractBase;
   public function routine(): void {
-    throw new Exception();
+    throw new \Exception();
   }
 }
-trait ImplementingAbstractBase {
-
+trait ImplementingAbstractBase {}
+<<__Rx>>
+function extract_standalone_make_default(): nothing {
+  throw new \Exception();
 }
-function extract_standalone_make_default<T>(): T {
-  throw new Exception();
-}
-
-

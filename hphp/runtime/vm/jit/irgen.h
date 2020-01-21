@@ -132,14 +132,6 @@ void prepareEntry(IRGS&);
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
- * Creates a no-op IR instruction that branches to an exit.
- *
- * These placeholder instructions are later removed after any passes that want
- * to use them for their exits.
- */
-void makeExitPlaceholder(IRGS&);
-
-/*
  * Support for Profiling counters, including reoptimization (CheckCold).
  */
 void incProfCounter(IRGS&, TransID);
@@ -205,14 +197,13 @@ uint16_t inlineDepth(const IRGS& env);
  * looks like this:
  *
  *   fp0  = DefFP
- *   sp   = DefSP<offset>
+ *   sp   = DefFrameRelSP<offset>/DefRegSP<offset>
  *
  *   // ... normal stuff happens ...
  *   // ... probably some StStks due to argument expressions
  *   // FCall*:
- *     SpillFrame sp, ...
  *             BeginInlining<offset> sp
- *     fp2   = DefInlineFP<func,retBC,retSP,off> sp
+ *     fp2   = DefInlineFP<func,retBC,retSP,off> sp fp ctx
  *
  *         // ... callee body ...
  *
@@ -225,7 +216,6 @@ void beginInlining(IRGS& env,
                    const Func* target,
                    const FCallArgs& fca,
                    SSATmp* ctx,
-                   Type ctxType,
                    bool dynamicCall,
                    Op writeArOpc,
                    SrcKey startSk,
@@ -295,8 +285,6 @@ Type predictedType(const IRGS&, const Location&);
 
 #define IMM_BLA        const ImmVector&
 #define IMM_SLA        const ImmVector&
-#define IMM_ILA        const IterTable&
-#define IMM_I32LA      const ImmVector&
 #define IMM_VSA        const ImmVector&
 #define IMM_IVA        uint32_t
 #define IMM_I64A       int64_t
@@ -310,6 +298,7 @@ Type predictedType(const IRGS&, const Location&);
 #define IMM_OA(subop)  subop
 #define IMM_KA         MemberKey
 #define IMM_LAR        LocalRange
+#define IMM_ITA        IterArgs
 #define IMM_FCA        FCallArgs
 
 #define NA /*  */
@@ -318,6 +307,7 @@ Type predictedType(const IRGS&, const Location&);
 #define THREE(x0, x1, x2)    , IMM_##x0, IMM_##x1, IMM_##x2
 #define FOUR(x0, x1, x2, x3) , IMM_##x0, IMM_##x1, IMM_##x2, IMM_##x3
 #define FIVE(x0, x1, x2, x3, x4) , IMM_##x0, IMM_##x1, IMM_##x2, IMM_##x3, IMM_##x4
+#define SIX(x0, x1, x2, x3, x4, x5) , IMM_##x0, IMM_##x1, IMM_##x2, IMM_##x3, IMM_##x4, IMM_##x5
 
 #define O(name, imms, ...) void emit##name(IRGS& imms);
   OPCODES
@@ -329,12 +319,11 @@ Type predictedType(const IRGS&, const Location&);
 #undef THREE
 #undef FOUR
 #undef FIVE
+#undef SIX
 
 #undef IMM_MA
 #undef IMM_BLA
 #undef IMM_SLA
-#undef IMM_ILA
-#undef IMM_I32LA
 #undef IMM_VSA
 #undef IMM_IVA
 #undef IMM_I64A
@@ -348,6 +337,7 @@ Type predictedType(const IRGS&, const Location&);
 #undef IMM_OA
 #undef IMM_KA
 #undef IMM_LAR
+#undef IMM_ITA
 #undef IMM_FCA
 
 ///////////////////////////////////////////////////////////////////////////////

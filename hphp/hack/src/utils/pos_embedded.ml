@@ -27,11 +27,11 @@ type 'a pos =
       pos_start: File_pos_large.t;
       pos_end: File_pos_large.t;
     }
-[@@deriving show]
+[@@deriving eq, show]
 
-type t = Relative_path.t pos [@@deriving show]
+type t = Relative_path.t pos [@@deriving eq, show]
 
-type absolute = string pos [@@deriving show]
+type absolute = string pos [@@deriving eq, show]
 
 [@@@warning "+32"]
 
@@ -235,8 +235,7 @@ let make_from_lexing_pos pos_file pos_start pos_end =
     ( File_pos_small.of_lexing_pos pos_start,
       File_pos_small.of_lexing_pos pos_end )
   with
-  | (Some pos_start, Some pos_end) ->
-    Pos_small { pos_file; pos_start; pos_end }
+  | (Some pos_start, Some pos_end) -> Pos_small { pos_file; pos_start; pos_end }
   | (_, _) ->
     Pos_large
       {
@@ -279,8 +278,7 @@ let btw_nocheck x1 x2 =
     Pos_large
       { pos_file; pos_start = small_to_large_file_pos pos_start; pos_end }
   | (Pos_large { pos_file; pos_start; _ }, Pos_small { pos_end; _ }) ->
-    Pos_large
-      { pos_file; pos_start; pos_end = small_to_large_file_pos pos_end }
+    Pos_large { pos_file; pos_start; pos_end = small_to_large_file_pos pos_end }
 
 let set_file pos_file pos =
   match pos with
@@ -291,8 +289,7 @@ let set_file pos_file pos =
 
 let to_absolute p = set_file (Relative_path.to_absolute (filename p)) p
 
-let to_relative p =
-  set_file (Relative_path.create_detect_prefix (filename p)) p
+let to_relative p = set_file (Relative_path.create_detect_prefix (filename p)) p
 
 let btw x1 x2 =
   if filename x1 <> filename x2 then failwith "Position in separate files";
@@ -509,8 +506,7 @@ let make_from_lnum_bol_cnum ~pos_file ~pos_start ~pos_end =
         ~pos_bol:bol_end
         ~pos_cnum:cnum_end )
   with
-  | (Some pos_start, Some pos_end) ->
-    Pos_small { pos_file; pos_start; pos_end }
+  | (Some pos_start, Some pos_end) -> Pos_small { pos_file; pos_start; pos_end }
   | (_, _) ->
     Pos_large
       {
@@ -547,17 +543,17 @@ let print_verbose_absolute p =
 
 let print_verbose_relative p = print_verbose_absolute (to_absolute p)
 
-module Map = MyMap.Make (struct
+module Map = WrappedMap.Make (struct
   type path = t
 
-  (* The definition below needs to refer to the t in the outer scope, but MyMap
+  (* The definition below needs to refer to the t in the outer scope, but WrappedMap
    * expects a module with a type of name t, so we define t in a second step *)
   type t = path
 
   let compare = compare
 end)
 
-module AbsolutePosMap = MyMap.Make (struct
+module AbsolutePosMap = WrappedMap.Make (struct
   type t = absolute
 
   let compare = compare

@@ -395,7 +395,7 @@ void SetArray::erase(int32_t pos) {
 
 //////////////////////////////////////////////////////////////////////
 
-Cell SetArray::getElm(ssize_t ei) const {
+TypedValue SetArray::getElm(ssize_t ei) const {
   assertx(0 <= ei && ei < m_used);
   return data()[ei].getKey();
 }
@@ -602,7 +602,7 @@ tv_rval SetArray::NvTryGetStr(const ArrayData* ad,
 
 size_t SetArray::Vsize(const ArrayData*) { not_reached(); }
 
-tv_rval SetArray::GetValueRef(const ArrayData* ad, ssize_t pos) {
+tv_rval SetArray::RvalPos(const ArrayData* ad, ssize_t pos) {
   auto a = asSet(ad);
   assertx(0 <= pos && pos < a->m_used);
   return a->tvOfPos(pos);
@@ -649,33 +649,21 @@ arr_lval SetArray::LvalStr(ArrayData*, StringData*, bool) {
   );
 }
 
-arr_lval SetArray::LvalNew(ArrayData*, bool) {
+arr_lval SetArray::LvalForceNew(ArrayData*, bool) {
   SystemLib::throwInvalidOperationExceptionObject(
     "Invalid keyset operation (lval new)"
   );
 }
 
-ArrayData* SetArray::SetInt(ArrayData*, int64_t, Cell) {
+ArrayData* SetArray::SetInt(ArrayData*, int64_t, TypedValue) {
   SystemLib::throwInvalidOperationExceptionObject(
     "Invalid keyset operation (set int)"
   );
 }
 
-ArrayData* SetArray::SetStr(ArrayData*, StringData*, Cell) {
+ArrayData* SetArray::SetStr(ArrayData*, StringData*, TypedValue) {
   SystemLib::throwInvalidOperationExceptionObject(
     "Invalid keyset operation (set string)"
-  );
-}
-
-ArrayData* SetArray::SetWithRefInt(ArrayData*, int64_t, TypedValue) {
-  SystemLib::throwInvalidOperationExceptionObject(
-    "Invalid keyset operation (set with ref int)"
-  );
-}
-
-ArrayData* SetArray::SetWithRefStr(ArrayData*, StringData*, TypedValue) {
-  SystemLib::throwInvalidOperationExceptionObject(
-    "Invalid keyset operation (set with ref string)"
   );
 }
 
@@ -728,7 +716,7 @@ ArrayData* SetArray::CopyStatic(const ArrayData* ad) {
   return CopySet(*a, AllocMode::Static);
 }
 
-ArrayData* SetArray::AppendImpl(ArrayData* ad, Cell v, bool copy) {
+ArrayData* SetArray::AppendImpl(ArrayData* ad, TypedValue v, bool copy) {
   if (isIntType(v.m_type)) {
     auto a = asSet(ad)->prepareForInsert(copy);
     a->insert(v.m_data.num);
@@ -742,22 +730,12 @@ ArrayData* SetArray::AppendImpl(ArrayData* ad, Cell v, bool copy) {
   }
 }
 
-ArrayData* SetArray::Append(ArrayData* ad, Cell v) {
+ArrayData* SetArray::Append(ArrayData* ad, TypedValue v) {
   return AppendImpl(ad, v, ad->cowCheck());
 }
 
-ArrayData* SetArray::AppendInPlace(ArrayData* ad, Cell v) {
+ArrayData* SetArray::AppendInPlace(ArrayData* ad, TypedValue v) {
   return AppendImpl(ad, v, false);
-}
-
-ArrayData* SetArray::AppendWithRef(ArrayData* ad, TypedValue v) {
-  if (tvIsReferenced(v)) throwRefInvalidArrayValueException(ad);
-  return Append(ad, tvToInitCell(v));
-}
-
-ArrayData* SetArray::AppendWithRefInPlace(ArrayData* ad, TypedValue v) {
-  if (tvIsReferenced(v)) throwRefInvalidArrayValueException(ad);
-  return AppendInPlace(ad, tvToInitCell(v));
 }
 
 ArrayData* SetArray::PlusEq(ArrayData* ad, const ArrayData*) {
@@ -776,7 +754,7 @@ ArrayData* SetArray::Pop(ArrayData* ad, Variant& value) {
   if (a->cowCheck()) a = a->copySet();
   if (a->m_size) {
     ssize_t pos = a->getIterLast();
-    cellCopy(a->getElm(pos), *value.asTypedValue());
+    tvCopy(a->getElm(pos), *value.asTypedValue());
     auto const pelm = &a->data()[pos];
     auto loc = a->findForRemove(pelm->hash(),
       [pelm] (const Elm& e) { return &e == pelm; }
@@ -799,7 +777,7 @@ ArrayData* SetArray::Dequeue(ArrayData* ad, Variant& value) {
   if (a->cowCheck()) a = a->copySet();
   if (a->m_size) {
     ssize_t pos = a->getIterBegin();
-    cellCopy(a->getElm(pos), *value.asTypedValue());
+    tvCopy(a->getElm(pos), *value.asTypedValue());
     auto const pelm = &a->data()[pos];
     auto loc = a->findForRemove(pelm->hash(),
       [pelm] (const Elm& e) { return &e == pelm; }
@@ -817,7 +795,7 @@ ArrayData* SetArray::Dequeue(ArrayData* ad, Variant& value) {
   return a;
 }
 
-ArrayData* SetArray::Prepend(ArrayData* ad, Cell v) {
+ArrayData* SetArray::Prepend(ArrayData* ad, TypedValue v) {
   auto a = asSet(ad);
   if (a->cowCheck()) a = a->copySet();
   Elm e;
@@ -918,14 +896,6 @@ ArrayData* SetArray::ToDArray(ArrayData* ad, bool copy) {
   auto out = ToArrayImpl<DArrayInit, IntishCast::None>(ad, true);
   assertx(out->isDArray());
   return out;
-}
-
-ArrayData* SetArray::ToShape(ArrayData* ad, bool copy) {
-  auto arr = RuntimeOption::EvalHackArrDVArrs
-    ? SetArray::ToDict(ad, copy)
-    : SetArray::ToDArray(ad, copy);
-  arr = arr->toShapeInPlaceIfCompatible();
-  return arr;
 }
 
 ArrayData* SetArray::ToKeyset(ArrayData* ad, bool /*copy*/) {

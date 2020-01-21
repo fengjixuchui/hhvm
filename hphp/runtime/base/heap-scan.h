@@ -27,7 +27,6 @@
 #include "hphp/runtime/base/packed-array.h"
 #include "hphp/runtime/base/packed-array-defs.h"
 #include "hphp/runtime/base/rds-header.h"
-#include "hphp/runtime/base/ref-data.h"
 #include "hphp/runtime/base/req-root.h"
 #include "hphp/runtime/base/resource-data.h"
 #include "hphp/runtime/base/string-data.h"
@@ -117,7 +116,6 @@ inline void scanHeapObject(const HeapObject* h, type_scan::Scanner& scanner) {
       return PackedArray::scan(static_cast<const ArrayData*>(h), scanner);
     case HeaderKind::Mixed:
     case HeaderKind::Dict:
-    case HeaderKind::Shape:
       return static_cast<const MixedArray*>(h)->scan(scanner);
     case HeaderKind::Keyset:
       return static_cast<const SetArray*>(h)->scan(scanner);
@@ -177,9 +175,6 @@ inline void scanHeapObject(const HeapObject* h, type_scan::Scanner& scanner) {
       return scanner.scanByIndex(res->typeIndex(), res->data(),
                                  res->heapSize() - sizeof(ResourceHdr));
     }
-    case HeaderKind::Ref:
-      scanner.scan(*static_cast<const RefData*>(h)->cell());
-      return;
     case HeaderKind::ClsMeth:
       // ClsMeth only holds pointers to non-request allocated data
       return;
@@ -233,13 +228,11 @@ inline void RecordData::scan(type_scan::Scanner& scanner) const {
 
 inline void RecordArray::scan(type_scan::Scanner& scanner) const {
   RecordBase::scan(scanner);
-  auto const extraMap = extraFieldMap();
-  scanner.scan(*extraMap);
+  scanner.scan(extraFieldMap());
 }
 
 inline void ObjectData::scan(type_scan::Scanner& scanner) const {
-  auto props = propVec();
-  scanner.scan(*props, m_cls->numDeclProperties() * sizeof(*props));
+  props()->scan(m_cls->countablePropsEnd(), scanner);
   if (getAttribute(HasDynPropArr)) {
     // nb: dynamic property arrays are in ExecutionContext::dynPropTable,
     // which is not marked as a root. Scan the entry pair, so both the key
@@ -276,7 +269,7 @@ inline void ObjectData::scan(type_scan::Scanner& scanner) const {
 //     m_sfp                prev ActRec*
 //     m_savedRIP           return addr
 //     m_func               Func*
-//     m_callOff            caller's vmpc
+//     m_callOffAndFlags    caller's vmpc
 //     m_argc_flags
 //     m_this|m_cls         ObjectData* or Class*
 //     m_varenv|extraArgs

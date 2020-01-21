@@ -32,12 +32,12 @@ class W {
   }
 }
 
-function foo(&$x) { echo "fail!\n"; }
-function bar(&$x) { echo "fail!\n"; }
-function fiz(&$x) { echo "fail!\n"; }
-function buz(&$x) { echo "fail!\n"; }
-function biz(&$x) { echo "fail!\n"; }
-function far(&$x) { echo "fail!\n"; }
+<<__NEVER_INLINE>> function foo(inout $x) { echo "fail!\n"; }
+<<__NEVER_INLINE>> function bar(inout $x) { echo "fail!\n"; }
+<<__NEVER_INLINE>> function fiz(inout $x) { echo "fail!\n"; }
+<<__NEVER_INLINE>> function buz(inout $x) { echo "fail!\n"; }
+<<__NEVER_INLINE>> function biz(inout $x) { echo "fail!\n"; }
+<<__NEVER_INLINE>> function far(inout $x) { echo "fail!\n"; }
 
 <<__EntryPoint>>
 function main() {
@@ -52,10 +52,10 @@ function main() {
   fb_intercept('biz', W::make_static_closure());
   fb_intercept('far', $handler6);
 
-  $x = 'fail'; foo(&$x); echo "foo: $x\n";
-  $x = 'fail'; bar(&$x); echo "bar: $x\n";
-  $x = 'fail'; fiz(&$x); echo "fiz: $x\n";
-  $x = 'fail'; buz(&$x); echo "buz: $x\n";
-  $x = 'fail'; biz(&$x); echo "biz: $x\n";
-  $x = 'fail'; far(&$x); echo "far: $x\n";
+  $x = 'fail'; foo(inout $x); echo "foo: $x\n";
+  $x = 'fail'; bar(inout $x); echo "bar: $x\n";
+  $x = 'fail'; fiz(inout $x); echo "fiz: $x\n";
+  $x = 'fail'; buz(inout $x); echo "buz: $x\n";
+  $x = 'fail'; biz(inout $x); echo "biz: $x\n";
+  $x = 'fail'; far(inout $x); echo "far: $x\n";
 }

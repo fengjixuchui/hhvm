@@ -4,19 +4,16 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use parser_rust as parser;
-
+use hhbc_string_utils_rust::mangle_xhp_id;
+use mode_parser::parse_mode;
+use ocamlrep::rc::RcOc;
 use oxidized::{file_info::Mode, relative_path::RelativePath};
-use parser::mode_parser::parse_mode;
-use parser::parser::Parser;
-use parser::parser_env::ParserEnv;
-use parser::smart_constructors_wrappers::WithKind;
-use parser::source_text::SourceText;
+use parser_core_types::parser_env::ParserEnv;
+use parser_core_types::source_text::SourceText;
 
 use crate::facts::*;
 use crate::facts_smart_constructors::*;
-
-pub type FactsParser<'a> = Parser<'a, WithKind<FactsSmartConstructors<'a>>, HasScriptContent<'a>>;
+use facts_parser;
 
 pub struct ExtractAsJsonOpts {
     pub php5_compat_mode: bool,
@@ -25,70 +22,43 @@ pub struct ExtractAsJsonOpts {
     pub filename: RelativePath,
 }
 
-pub fn extract_as_json(text: &str, opts: ExtractAsJsonOpts) -> Option<String> {
+pub fn extract_as_json(text: &[u8], opts: ExtractAsJsonOpts) -> Option<String> {
     from_text(text, opts).map(|facts| facts.to_json(text))
 }
 
-pub fn from_text(text: &str, opts: ExtractAsJsonOpts) -> Option<Facts> {
-    let text = SourceText::make(&opts.filename, text.as_bytes());
-    let is_experimental = match parse_mode(&text) {
+pub fn from_text(text: &[u8], opts: ExtractAsJsonOpts) -> Option<Facts> {
+    let ExtractAsJsonOpts {
+        php5_compat_mode,
+        hhvm_compat_mode,
+        allow_new_attribute_syntax,
+        filename,
+    } = opts;
+    let text = SourceText::make(RcOc::new(filename), text);
+    let is_experimental_mode = match parse_mode(&text) {
         Some(Mode::Mexperimental) => true,
         _ => false,
     };
     let env = ParserEnv {
-        php5_compat_mode: opts.php5_compat_mode,
-        hhvm_compat_mode: opts.hhvm_compat_mode,
-        is_experimental_mode: is_experimental,
-        allow_new_attribute_syntax: opts.allow_new_attribute_syntax,
+        php5_compat_mode,
+        hhvm_compat_mode,
+        is_experimental_mode,
+        allow_new_attribute_syntax,
         ..ParserEnv::default()
     };
-    let mut parser = FactsParser::make(&text, env);
-    let root = parser.parse_script(None);
+    let (root, errors, has_script_content) = facts_parser::parse_script(&text, env, None);
 
     // report errors only if result of parsing is non-empty *)
-    if parser.sc_state().0 && !parser.errors().is_empty() {
+    if has_script_content.0 && !errors.is_empty() {
         None
     } else {
         Some(collect(("".to_owned(), Facts::default()), root).1)
     }
 }
 
-pub fn without_xhp_mangling<T>(f: impl FnOnce() -> T) -> T {
-    MANGLE_XHP_MODE.with(|cur| {
-        let old = cur.replace(false);
-        let ret = f();
-        cur.set(old); // use old instead of true to support nested calls in the same thread
-        ret
-    })
-}
-
 // implementation details
 
-use std::cell::Cell;
 use std::string::String;
 use Node::*; // Ensure String doesn't refer to Node::String
-
-thread_local!(static MANGLE_XHP_MODE: Cell<bool> = Cell::new(true));
-
-// TODO(leoo) move to hhbc_utils::Xhp::mangle_id​ once HHBC is ported
-fn mangle_xhp_id(mut name: String) -> String {
-    fn ignore_id(name: &str) -> bool {
-        name.starts_with("class@anonymous") || name.starts_with("Closure$")
-    }
-
-    fn is_xhp(name: &str) -> bool {
-        name.chars().next().map_or(false, |c| c == ':')
-    }
-
-    if !ignore_id(&name) && MANGLE_XHP_MODE.with(|x| x.get()) {
-        if is_xhp(&name) {
-            name.replace_range(..1, "xhp_")
-        }
-        name.replace(":", "__").replace("-", "_")
-    } else {
-        name
-    }
-}
 
 fn qualified_name(namespace: &str, name: Node) -> Option<String> {
     fn qualified_name_from_parts(namespace: &str, parts: Vec<Node>) -> Option<String> {
@@ -411,6 +381,9 @@ fn collect(mut acc: CollectAcc, node: Node) -> CollectAcc {
                 }
             }
         }
+        FileAttributeSpecification(attributes) => {
+            acc.1.file_attributes = attributes_into_facts(&acc.0, *attributes);
+        }
         _ => (),
     };
     acc
@@ -419,6 +392,7 @@ fn collect(mut acc: CollectAcc, node: Node) -> CollectAcc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hhbc_string_utils_rust::without_xhp_mangling;
 
     #[test]
     fn xhp_mangling() {

@@ -7,22 +7,36 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 
 (* Logical proposition about types *)
 type subtype_prop =
-  (* IsSubtype(ty1,ty2) if ty1 is a subtype of ty2, written ty1 <: ty2 *)
-  | IsSubtype of locl ty * locl ty
-  (* Conjunction. Conj [] means "true" *)
-  | Conj of subtype_prop list
-  (* Disjunction. Disj f [] means "false".  The error message function f
-   * wraps the error that should be produced in this case. *)
+  | Coerce of locl_ty * locl_ty
+  | IsSubtype of internal_type * internal_type
+      (** IsSubtype(ty1,ty2) if ty1 is a subtype of ty2, written ty1 <: ty2 *)
+  | Conj of subtype_prop list  (** Conjunction. Conj [] means "true" *)
   | Disj of (unit -> unit) * subtype_prop list
+      (** Disjunction. Disj f [] means "false".  The error message function f
+   * wraps the error that should be produced in this case. *)
+
+let rec equal_subtype_prop p1 p2 =
+  match (p1, p2) with
+  | (Coerce (ty1, ty1'), Coerce (ty2, ty2')) ->
+    ty_equal ty1 ty2 && ty_equal ty1' ty2'
+  | (IsSubtype (ty1, ty1'), IsSubtype (ty2, ty2')) ->
+    equal_internal_type ty1 ty2 && equal_internal_type ty1' ty2'
+  | (Conj ps1, Conj ps2)
+  | (Disj (_, ps1), Disj (_, ps2)) ->
+    Int.equal (List.length ps1) (List.length ps2)
+    && List.for_all2_exn ps1 ps2 ~f:equal_subtype_prop
+  | (_, (Coerce _ | IsSubtype _ | Conj _ | Disj _)) -> false
 
 let rec size (p : subtype_prop) : int =
   match p with
-  | IsSubtype _ -> 1
+  | Coerce _
+  | IsSubtype _ ->
+    1
   | Conj l
   | Disj (_, l) ->
     let sizes = List.map l ~f:size in
@@ -31,7 +45,9 @@ let rec size (p : subtype_prop) : int =
 (** Sum of the sizes of the disjunctions. *)
 let rec n_disj (p : subtype_prop) : int =
   match p with
-  | IsSubtype _ -> 0
+  | Coerce _
+  | IsSubtype _ ->
+    0
   | Conj l ->
     let n_disjs = List.map l ~f:n_disj in
     List.fold ~init:0 ~f:( + ) n_disjs
@@ -42,7 +58,9 @@ let rec n_disj (p : subtype_prop) : int =
 (** Sum of the sizes of the conjunctions. *)
 let rec n_conj (p : subtype_prop) : int =
   match p with
-  | IsSubtype _ -> 0
+  | Coerce _
+  | IsSubtype _ ->
+    0
   | Disj (_, l) ->
     let n_conjs = List.map l ~f:n_conj in
     List.fold ~init:0 ~f:( + ) n_conjs
@@ -61,7 +79,9 @@ let rec is_valid p =
   match p with
   | Conj ps -> List.for_all ps is_valid
   | Disj (_, ps) -> List.exists ps is_valid
-  | IsSubtype (_, _) -> false
+  | Coerce _
+  | IsSubtype (_, _) ->
+    false
 
 (* Is this proposition always false? e.g. Unsat _ but also Conj [Conj []; Disj (_, [])]
 * if not simplified
@@ -70,7 +90,9 @@ and is_unsat p =
   match p with
   | Conj ps -> List.exists ps is_unsat
   | Disj (_, ps) -> List.for_all ps is_unsat
-  | IsSubtype (_, _) -> false
+  | Coerce _
+  | IsSubtype (_, _) ->
+    false
 
 (* Smart constructor for binary conjunction *)
 let conj p1 p2 =

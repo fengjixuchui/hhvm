@@ -55,13 +55,13 @@ let calc_percentage partial_weight ctr =
   let score =
     CLMap.fold (fun k v acc -> (mult k *. float_of_int v.count) +. acc) ctr 0.0
   in
-  if total = 0 then
+  if Int.equal total 0 then
     1.0
   else
     score /. float_of_int total
 
 let print_reasons reasons_stats =
-  if Coverage_level.sample_rate = 0 then
+  if Int.equal Coverage_level.sample_rate 0 then
     ()
   else
     let reasons_list =
@@ -108,7 +108,7 @@ let print_counts counts =
 let print_pretty_entry = function
   | Leaf r
   | Node (r, _) ->
-    if r = SMap.empty then
+    if SMap.is_empty r then
       Printf.printf "No relevant expressions found!\n%!"
     else (
       SMap.iter
@@ -117,10 +117,7 @@ let print_pretty_entry = function
           print_counts counts)
         r;
       let total_counts =
-        SMap.fold
-          (fun _ counts acc -> merge_and_sum counts acc)
-          r
-          empty_counter
+        SMap.fold (fun _ counts acc -> merge_and_sum counts acc) r empty_counter
       in
       Printf.printf "== total ==\n";
       print_counts total_counts;

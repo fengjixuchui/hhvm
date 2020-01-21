@@ -11,7 +11,12 @@ type lsp_id =
   | NumberId of int
   | StringId of string
 
-type documentUri = string
+(* Note: this datatype provides no invariants that the string is well-formed. *)
+type documentUri = DocumentUri of string
+
+val uri_of_string : string -> documentUri
+
+val string_of_uri : documentUri -> string
 
 type position = {
   line: int;
@@ -120,40 +125,47 @@ module DocumentSelector : sig
 end
 
 module SymbolInformation : sig
+  type symbolKind =
+    | File [@value 1]
+    | Module [@value 2]
+    | Namespace [@value 3]
+    | Package [@value 4]
+    | Class [@value 5]
+    | Method [@value 6]
+    | Property [@value 7]
+    | Field [@value 8]
+    | Constructor [@value 9]
+    | Enum [@value 10]
+    | Interface [@value 11]
+    | Function [@value 12]
+    | Variable [@value 13]
+    | Constant [@value 14]
+    | String [@value 15]
+    | Number [@value 16]
+    | Boolean [@value 17]
+    | Array [@value 18]
+    | Object [@value 19]
+    | Key [@value 20]
+    | Null [@value 21]
+    | EnumMember [@value 22]
+    | Struct [@value 23]
+  [@@deriving enum]
+
   type t = {
     name: string;
     kind: symbolKind;
     location: Location.t;
     containerName: string option;
   }
-
-  and symbolKind =
-    | File
-    | Module
-    | Namespace
-    | Package
-    | Class
-    | Method
-    | Property
-    | Field
-    | Constructor
-    | Enum
-    | Interface
-    | Function
-    | Variable
-    | Constant
-    | String
-    | Number
-    | Boolean
-    | Array
 end
 
 module MessageType : sig
   type t =
-    | ErrorMessage
-    | WarningMessage
-    | InfoMessage
-    | LogMessage
+    | ErrorMessage [@value 1]
+    | WarningMessage [@value 2]
+    | InfoMessage [@value 3]
+    | LogMessage [@value 4]
+  [@@deriving enum]
 end
 
 module CancelRequest : sig
@@ -183,6 +195,12 @@ module CodeActionKind : sig
 end
 
 module Initialize : sig
+  type textDocumentSyncKind =
+    | NoSync [@value 0]
+    | FullSync [@value 1]
+    | IncrementalSync [@value 2]
+  [@@deriving enum]
+
   type params = {
     processId: int option;
     rootPath: string option;
@@ -248,11 +266,7 @@ module Initialize : sig
 
   and codeActionliteralSupport = { codeAction_valueSet: CodeActionKind.t list }
 
-  and windowClientCapabilities = {
-    status: bool;
-    progress: bool;
-    actionRequired: bool;
-  }
+  and windowClientCapabilities = { status: bool }
 
   and telemetryClientCapabilities = { connectionStatus: bool }
 
@@ -275,8 +289,9 @@ module Initialize : sig
     renameProvider: bool;
     documentLinkProvider: documentLinkOptions option;
     executeCommandProvider: executeCommandOptions option;
-    typeCoverageProvider: bool;
-    rageProvider: bool;
+    implementationProvider: bool;
+    typeCoverageProviderFB: bool;
+    rageProviderFB: bool;
   }
 
   and completionOptions = {
@@ -305,11 +320,6 @@ module Initialize : sig
     want_didSave: saveOptions option;
   }
 
-  and textDocumentSyncKind =
-    | NoSync
-    | FullSync
-    | IncrementalSync
-
   and saveOptions = { includeText: bool }
 end
 
@@ -317,7 +327,7 @@ module Shutdown : sig end
 
 module Exit : sig end
 
-module Rage : sig
+module RageFB : sig
   type result = rageItem list
 
   and rageItem = {
@@ -455,6 +465,12 @@ module TypeDefinition : sig
   and result = DefinitionLocation.t list
 end
 
+module Implementation : sig
+  type params = TextDocumentPositionParams.t
+
+  and result = Location.t list
+end
+
 module CodeAction : sig
   type t = {
     title: string;
@@ -521,7 +537,13 @@ module Completion : sig
     | PlainText (* 1 *)
     (* the insertText/textEdits are just plain strings *)
     | SnippetFormat (* 2 *)
-  (* wire: just "Snippet" *)
+                    (* wire: just "Snippet" *)
+  [@@deriving enum]
+
+  type completionTriggerKind =
+    | Invoked [@value 1]
+    | TriggerCharacter [@value 2]
+    | TriggerForIncompleteCompletions [@value 3]
   [@@deriving enum]
 
   type params = completionParams
@@ -531,14 +553,11 @@ module Completion : sig
     context: completionContext option;
   }
 
-  and completionContext = { triggerKind: completionTriggerKind }
+  and completionContext = {
+    triggerKind: completionTriggerKind;
+    triggerCharacter: string option;
+  }
 
-  and completionTriggerKind =
-    | Invoked (* 1 *)
-    | TriggerCharacter (* 2 *)
-    | TriggerForIncompleteCompletions
-
-  (* 3 *)
   and result = completionList
 
   (* wire: can also be 'completionItem list' *)
@@ -617,20 +636,21 @@ end
 module DocumentHighlight : sig
   type params = TextDocumentPositionParams.t
 
-  and result = documentHighlight list
+  type documentHighlightKind =
+    | Text [@value 1]
+    | Read [@value 2]
+    | Write [@value 3]
+  [@@deriving enum]
+
+  type result = documentHighlight list
 
   and documentHighlight = {
     range: range;
     kind: documentHighlightKind option;
   }
-
-  and documentHighlightKind =
-    | Text
-    | Read
-    | Write
 end
 
-module TypeCoverage : sig
+module TypeCoverageFB : sig
   type params = typeCoverageParams
 
   and result = {
@@ -645,6 +665,12 @@ module TypeCoverage : sig
     range: range;
     message: string option;
   }
+end
+
+module ToggleTypeCoverageFB : sig
+  type params = toggleTypeCoverageParams
+
+  and toggleTypeCoverageParams = { toggle: bool }
 end
 
 module DocumentFormatting : sig
@@ -767,7 +793,7 @@ module ShowMessageRequest : sig
   and messageActionItem = { title: string }
 end
 
-module ShowStatus : sig
+module ShowStatusFB : sig
   type params = showStatusParams
 
   and result = ShowMessageRequest.messageActionItem option
@@ -780,48 +806,10 @@ module ShowStatus : sig
   }
 end
 
-module Progress : sig
-  type t =
-    | Present of {
-        id: int;
-        label: string;
-      }
-    | Absent
-
-  and params = progressParams
-
-  and progressParams = {
-    id: int;
-    label: string option;
-  }
-end
-
-module ActionRequired : sig
-  type t =
-    | Present of {
-        id: int;
-        label: string;
-      }
-    | Absent
-
-  and params = actionRequiredParams
-
-  and actionRequiredParams = {
-    id: int;
-    label: string option;
-  }
-end
-
-module ConnectionStatus : sig
+module ConnectionStatusFB : sig
   type params = connectionStatusParams
 
   and connectionStatusParams = { isConnected: bool }
-end
-
-module ToggleTypeCoverage : sig
-  type params = toggleTypeCoverageParams
-
-  and toggleTypeCoverageParams = { toggle: bool }
 end
 
 module Error : sig
@@ -900,6 +888,7 @@ type lsp_request =
   | HoverRequest of Hover.params
   | DefinitionRequest of Definition.params
   | TypeDefinitionRequest of TypeDefinition.params
+  | ImplementationRequest of Implementation.params
   | CodeActionRequest of CodeActionRequest.params
   | CompletionRequest of Completion.params
   | CompletionItemResolveRequest of CompletionItemResolve.params
@@ -907,15 +896,19 @@ type lsp_request =
   | DocumentSymbolRequest of DocumentSymbol.params
   | FindReferencesRequest of FindReferences.params
   | DocumentHighlightRequest of DocumentHighlight.params
-  | TypeCoverageRequest of TypeCoverage.params
+  | TypeCoverageRequestFB of TypeCoverageFB.params
   | DocumentFormattingRequest of DocumentFormatting.params
   | DocumentRangeFormattingRequest of DocumentRangeFormatting.params
   | DocumentOnTypeFormattingRequest of DocumentOnTypeFormatting.params
   | ShowMessageRequestRequest of ShowMessageRequest.params
-  | ShowStatusRequest of ShowStatus.params
-  | RageRequest
+  | ShowStatusRequestFB of ShowStatusFB.params
+  | RageRequestFB
   | RenameRequest of Rename.params
   | DocumentCodeLensRequest of DocumentCodeLens.params
+  | SignatureHelpRequest of SignatureHelp.params
+  | HackTestStartServerRequestFB
+  | HackTestStopServerRequestFB
+  | HackTestShutdownServerlessRequestFB
   | UnknownRequest of string * Hh_json.json option
 
 type lsp_result =
@@ -925,6 +918,7 @@ type lsp_result =
   | HoverResult of Hover.result
   | DefinitionResult of Definition.result
   | TypeDefinitionResult of TypeDefinition.result
+  | ImplementationResult of Implementation.result
   | CodeActionResult of CodeAction.result
   | CompletionResult of Completion.result
   | CompletionItemResolveResult of CompletionItemResolve.result
@@ -932,15 +926,19 @@ type lsp_result =
   | DocumentSymbolResult of DocumentSymbol.result
   | FindReferencesResult of FindReferences.result
   | DocumentHighlightResult of DocumentHighlight.result
-  | TypeCoverageResult of TypeCoverage.result
+  | TypeCoverageResultFB of TypeCoverageFB.result
   | DocumentFormattingResult of DocumentFormatting.result
   | DocumentRangeFormattingResult of DocumentRangeFormatting.result
   | DocumentOnTypeFormattingResult of DocumentOnTypeFormatting.result
   | ShowMessageRequestResult of ShowMessageRequest.result
-  | ShowStatusResult of ShowStatus.result
-  | RageResult of Rage.result
+  | ShowStatusResultFB of ShowStatusFB.result
+  | RageResultFB of RageFB.result
   | RenameResult of Rename.result
   | DocumentCodeLensResult of DocumentCodeLens.result
+  | SignatureHelpResult of SignatureHelp.result
+  | HackTestStartServerResultFB
+  | HackTestStopServerResultFB
+  | HackTestShutdownServerlessResultFB
   (* the string is a stacktrace *)
   | ErrorResult of Error.t * string
 
@@ -956,12 +954,11 @@ type lsp_notification =
   | LogMessageNotification of LogMessage.params
   | TelemetryNotification of LogMessage.params (* LSP allows 'any' but we only send these *)
   | ShowMessageNotification of ShowMessage.params
-  | ProgressNotification of Progress.params
-  | ActionRequiredNotification of ActionRequired.params
-  | ConnectionStatusNotification of ConnectionStatus.params
+  | ConnectionStatusNotificationFB of ConnectionStatusFB.params
   | InitializedNotification
   | SetTraceNotification (* $/setTraceNotification *)
   | LogTraceNotification (* $/logTraceNotification *)
+  | ToggleTypeCoverageNotificationFB of ToggleTypeCoverageFB.params
   | UnknownNotification of string * Hh_json.json option
 
 type lsp_message =
@@ -975,7 +972,7 @@ and 'a lsp_error_handler = Error.t * string -> 'a -> 'a
 
 and 'a lsp_result_handler =
   | ShowMessageHandler of (ShowMessageRequest.result -> 'a -> 'a)
-  | ShowStatusHandler of (ShowStatus.result -> 'a -> 'a)
+  | ShowStatusHandler of (ShowStatusFB.result -> 'a -> 'a)
 
 module IdKey : sig
   type t = lsp_id
@@ -988,5 +985,19 @@ module IdSet : sig
 end
 
 module IdMap : sig
-  include module type of MyMap.Make (IdKey)
+  include module type of WrappedMap.Make (IdKey)
+end
+
+module UriKey : sig
+  type t = documentUri
+
+  val compare : t -> t -> int
+end
+
+module UriSet : sig
+  include module type of Set.Make (UriKey)
+end
+
+module UriMap : sig
+  include module type of WrappedMap.Make (UriKey)
 end

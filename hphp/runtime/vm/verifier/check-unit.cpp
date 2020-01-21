@@ -115,7 +115,7 @@ bool UnitChecker::checkLiteral(size_t id,
 bool UnitChecker::checkStrings() {
   bool ok = true;
   for (size_t i = 0, n = m_unit->numLitstrs(); i < n; ++i) {
-    ok &= checkLiteral(i, m_unit->lookupLitstr(i), "string");
+    ok &= checkLiteral(i, m_unit->lookupLitstr(encodeUnitLitstrId(i)), "string");
   }
   return ok;
   // Notes
@@ -169,25 +169,12 @@ bool UnitChecker::checkClosure(const PreClassEmitter* cls){
     ok = false;
   }
 
-  auto invalidMethods = [&] {
+  if (cls->methods().size() != 1 ||
+      !cls->hasMethod(s_invoke.get()) ||
+      !(cls->lookupMethod(s_invoke.get())->attrs & AttrPublic)) {
     error("Closure %s must have a single public method named __invoke\n",
           cls->name()->data());
     ok = false;
-  };
-
-  if (!cls->hasMethod(s_invoke.get()) ||
-      !(cls->lookupMethod(s_invoke.get())->attrs & AttrPublic)) {
-    invalidMethods();
-  } else if (cls->methods().size() == 2) {
-    auto invoke = cls->lookupMethod(s_invoke.get());
-    for (auto m : cls->methods()) {
-      if (m != invoke && !(m->attrs & AttrIsInOutWrapper)) {
-        invalidMethods();
-        break;
-      }
-    }
-  } else if (cls->methods().size() != 1) {
-    invalidMethods();
   }
 
   if (cls->hasMethod(s_invoke.get()) &&

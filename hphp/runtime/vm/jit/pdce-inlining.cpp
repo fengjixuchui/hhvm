@@ -130,8 +130,7 @@ to use the parent frame pointer (generally with some additional fixup in any
 associated catch traces) are also accepted.
 
 All pure memory access and pointer logic can be transformed, in
-particular: LdLoc, StLoc, LdLocAddr, CheckLoc, HintLocInner, and
-AssertLoc.
+particular: LdLoc, StLoc, LdLocAddr, CheckLoc, and AssertLoc.
 
 Currently only EagerSyncVMRegs, CallBuiltin, and Call can be adjusted
 to use the parent frame.
@@ -170,6 +169,7 @@ ensure that the callee frame is visited by the unwinder.
 #include "hphp/runtime/vm/jit/ir-opcode.h"
 #include "hphp/runtime/vm/jit/ir-unit.h"
 #include "hphp/runtime/vm/jit/mutation.h"
+#include "hphp/runtime/vm/jit/pass-tracer.h"
 #include "hphp/runtime/vm/jit/print.h"
 #include "hphp/runtime/vm/jit/timer.h"
 #include "hphp/util/trace.h"
@@ -184,6 +184,15 @@ using InstructionList = jit::vector<IRInstruction*>;
 using InstructionSet = jit::fast_set<IRInstruction*>;
 using FPUseMap = jit::fast_map<SSATmp*, InstructionSet>;
 using FPMap = jit::fast_map<Block*, SSATmp*>;
+
+struct BlockCmp {
+  bool operator()(const Block* a, const Block* b) const {
+    if (a->id() == b->id()) return false;
+    return a->id() < b->id();
+  }
+};
+
+using OrderedBlockSet = std::set<Block*, BlockCmp>;
 
 struct InlineAnalysis {
   IRUnit* unit;
@@ -202,7 +211,7 @@ struct InlineAnalysis {
    * Map fp -> set, where all blocks in set exit the unit while still within the
    * the inlined region for fp.
    */
-  jit::fast_map<SSATmp*, BlockSet> exitBlocks;
+  jit::fast_map<SSATmp*, OrderedBlockSet> exitBlocks;
   /*
    * Cache of a SSATmp (defined by a DefLabel), to the "resolved"
    * operands of that DefLabel.
@@ -252,12 +261,6 @@ struct OptimizeContext {
    * region.
    */
   FPMap fpMap;
-
-  /*
-   * If the region contains an InitCtx with a *constant* value it can be pushed
-   * into a side exit along with the DefInlineFP.
-   */
-  const IRInstruction* initCtx{nullptr};
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -288,8 +291,8 @@ bool isDangerousActRecInst(IRInstruction& inst) {
 
 /*
  * Given a FramePtr defined by a DefLabel, return the "resolved"
- * operands of that DefLabel. That is, the set of all SSA tmps defined
- * by a DefFP or DefInlineFP (not a DefLabel) that ultimately feed
+ * operands of that DefLabel. That is, the set of all SSA tmps defined by
+ * a DefFP, DefFuncEntryFP or DefInlineFP (not a DefLabel) that ultimately feed
  * into that DefLabel (perhaps through intermediate DefLabels).
  */
 void resolveDefLabel(InlineAnalysis& ia,
@@ -320,7 +323,7 @@ void resolveDefLabel(InlineAnalysis& ia,
         resolveDefLabel(ia, resolved, src, visited);
         return;
       }
-      if (src->inst()->is(DefFP) || src->inst()->is(DefInlineFP)) {
+      if (src->inst()->is(DefFP, DefFuncEntryFP, DefInlineFP)) {
         resolved.add(src);
       }
     }
@@ -329,10 +332,9 @@ void resolveDefLabel(InlineAnalysis& ia,
 
 /*
  * If 'tmp' is defined by a DefLabel, resolve its operands (using
- * resolveDefLabel) and call 'f' on each operand. Otherwise if 'tmp'
- * is defined by DefFP or DefInlineFP, call 'f' with it. This is used
- * to canonicalize a frame pointer to a set of actual non-Phi'd frame
- * pointers.
+ * resolveDefLabel) and call 'f' on each operand. Otherwise if 'tmp' is defined
+ * by DefFP, DefFuncEntryFP or DefInlineFP, call 'f' with it. This is used to
+ * canonicalize a frame pointer to a set of actual non-Phi'd frame pointers.
  */
 template <typename F>
 void resolve(InlineAnalysis& ia, SSATmp* tmp, F&& f) {
@@ -354,7 +356,7 @@ void resolve(InlineAnalysis& ia, SSATmp* tmp, F&& f) {
     );
     return;
   }
-  if (tmp->inst()->is(DefFP, DefInlineFP)) f(tmp);
+  if (tmp->inst()->is(DefFP, DefFuncEntryFP, DefInlineFP)) f(tmp);
 }
 
 /*
@@ -464,10 +466,10 @@ InlineAnalysis analyze(IRUnit& unit) {
         possibleFps = std::move(prevFps);
         ITRACE(2, "Found InlineSuspend (depth = {}, fp = {}): {}\n",
                depth, inst, showSet(possibleFps));
-      } else if (inst.is(DefFP)) {
+      } else if (inst.is(DefFP, DefFuncEntryFP)) {
         assertx(!depth && possibleFps.none());
         possibleFps.add(inst.dst());
-        ITRACE(3, "Found DefFP: {}\n", inst);
+        ITRACE(3, "Found DefFP/DefFuncEntryFP: {}\n", inst);
       } else if (isDangerousActRecInst(inst)) {
         possibleFps.forEach(
           [&] (size_t id) { addFPUse(inst, unit.findSSATmp(id)); }
@@ -476,7 +478,7 @@ InlineAnalysis analyze(IRUnit& unit) {
         depth++;
         possibleFps = SSATmpSet{inst.dst()};
         ia.fpUses.emplace(inst.dst(), InstructionSet{});
-        ia.exitBlocks.emplace(inst.dst(), BlockSet{});
+        ia.exitBlocks.emplace(inst.dst(), OrderedBlockSet{});
         addFPUse(inst, inst.src(1));
         ITRACE(2, "Found DefInlineFP (depth = {}): {}\n", depth, inst);
       } else {
@@ -605,7 +607,7 @@ bool canConvertToStack(IRInstruction& inst) {
     auto const id = inst.marker().func()->lookupVarId(s_86metadata.get());
     return inst.extra<StLoc>()->locId != id;
   }
-  return inst.is(LdLoc, CheckLoc, AssertLoc, HintLocInner, LdLocAddr);
+  return inst.is(LdLoc, CheckLoc, AssertLoc, LdLocAddr);
 }
 
 /*
@@ -614,13 +616,7 @@ bool canConvertToStack(IRInstruction& inst) {
  * catch blocks to ensure that the callee is visited by the unwinder).
  */
 bool canAdjustFrame(IRInstruction& inst) {
-  switch (inst.op()) {
-  case Call:
-  case CallBuiltin:
-  case EagerSyncVMRegs: return true;
-  default: break;
-  }
-  return false;
+  return inst.is(Call, CallBuiltin, EagerSyncVMRegs);
 }
 
 /*
@@ -628,9 +624,15 @@ bool canAdjustFrame(IRInstruction& inst) {
  * will be after the BeginCatch. The marker for BeginCatch must match the
  * marker on inst.
  */
-void updateCatchMarker(IRInstruction& inst) {
+void updateCatchMarker(
+    IRInstruction& inst,
+    folly::Optional<std::map<uint32_t, std::vector<std::string>>>& traces) {
   if (inst.taken() && inst.taken()->isCatch()) {
-    ITRACE(4, "Updating catch marker: {}", inst);
+    if (traces) {
+      (*traces)[inst.block()->id()].push_back(
+        folly::sformat("Updating catch marker: {}\n", inst)
+      );
+    }
     auto it = inst.taken()->skipHeader();
     assertx(it != inst.taken()->begin());
     (--it)->marker() = inst.marker();
@@ -684,7 +686,8 @@ void adjustFrame(IRUnit& unit,
    */
   if (it->is(SyncReturnBC)) {
     assertx(
-      it->extra<SyncReturnBC>()->spOffset == extra->spOffset + extra->numParams
+      it->extra<SyncReturnBC>()->spOffset ==
+        extra->spOffset + extra->numInputs()
     );
     return;
   }
@@ -692,7 +695,7 @@ void adjustFrame(IRUnit& unit,
   auto syncInst = unit.gen(
     SyncReturnBC,
     it->bcctx(),
-    SyncReturnBCData{callOffset, extra->spOffset + extra->numParams},
+    SyncReturnBCData{callOffset, extra->spOffset + extra->numInputs()},
     inst.src(0),
     def->dst()
   );
@@ -701,7 +704,8 @@ void adjustFrame(IRUnit& unit,
 
 bool isCallCatch(Block* block) {
   assertx(block->back().is(EndCatch));
-  return block->back().extra<EndCatch>()->mode == EndCatchData::SwitchMode;
+  return
+    block->back().extra<EndCatch>()->mode == EndCatchData::CatchMode::CallCatch;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -744,8 +748,9 @@ BlockSet findMainBlocks(Block* enterBlock, Block* exitBlock) {
  * 4) exit head can only have a single predecessor (the main-block) as the
  *    main-block must have another successor.
  */
-BlockList findExitHeads(OptimizeContext& ctx, BlockSet& exits) {
+BlockList findExitHeads(OptimizeContext& ctx, OrderedBlockSet& exits) {
   std::deque<Block*> workQ(exits.begin(), exits.end());
+
   BlockSet seen;
   seen.insert(exits.begin(), exits.end());
 
@@ -787,13 +792,15 @@ void recordNewUse(InlineAnalysis& ia,
 
 bool insertDefInlineFP(InlineAnalysis& ia, OptimizeContext& ctx, Block* block) {
   assertx(block->numPreds() == 1);
+  assertx(ctx.deadFp->inst()->is(DefInlineFP));
   auto newDef = ctx.unit->clone(ctx.deadFp->inst());
-  auto newFp  = newDef->dst();
-  if (ctx.initCtx) {
-    auto newInit = ctx.unit->clone(ctx.initCtx);
-    newInit->setSrc(0, newFp);
-    block->prepend(newInit);
+  if (block->isCatch()) {
+    newDef->extra<DefInlineFP>()->syncVmfp = true;
+    // Update DefInlineFP's marker to be BeginCatch's marker so that we can
+    // later use it to correctly calculate PC
+    newDef->marker() = block->catchMarker();
   }
+  auto newFp  = newDef->dst();
   block->prepend(newDef);
   auto const inlineExit = replaceFP(block, ctx.deadFp, newFp, *ctx.fpUses);
   ctx.fpMap[block] = newFp;
@@ -903,13 +910,22 @@ void transformUses(InlineAnalysis& ia,
                    OptimizeContext& ctx,
                    InstructionSet& uses,
                    bool& reflow) {
+  if (!uses.size()) return;
+
   auto fp = ctx.deadFp;
   auto def = fp->inst();
   auto parentFp = ctx.deadFp->inst()->src(1);
 
-  auto it = uses.begin();
-  while (it != uses.end()) {
-    auto inst = *it;
+  jit::vector<IRInstruction*> vuses(uses.begin(), uses.end());
+  std::sort(vuses.begin(), vuses.end(),
+            [] (IRInstruction* a, IRInstruction* b) {
+              if (a->block() != b->block()) {
+                return a->block()->id() < b->block()->id();
+              }
+              if (a->id() == b->id()) return false;
+              return a->id() < b->id();
+            });
+  for (auto inst : vuses) {
     auto block = inst->block();
     /*
      * We may have previously sunk a child DefInlineFP into an exit block, so
@@ -939,10 +955,6 @@ void transformUses(InlineAnalysis& ia,
     } else if (isDangerousActRecInst(*inst)) {
       // It's okay to have these in side exits
       always_assert(ctx.mainBlocks.count(block) == 0);
-    } else if (inst->is(InitCtx)) {
-      always_assert(inst->src(1)->type().hasConstVal());
-      always_assert(ctx.initCtx == inst);
-      inst->convertToNop();
     } else {
       /*
        * All uses that weren't dealt with in side exiting traces need to be
@@ -950,8 +962,8 @@ void transformUses(InlineAnalysis& ia,
        */
       always_assert(false);
     }
-    it = uses.erase(it);
   }
+  uses.clear();
 }
 
 /*
@@ -969,8 +981,10 @@ folly::Optional<int32_t> findSPOffset(const IRUnit& unit,
   if (inst->is(DefInlineFP)) {
     return inst->extra<DefInlineFP>()->spOffset.offset;
   }
-  if (inst->is(DefFP)) {
-    return unit.mainSP()->inst()->extra<DefSP>()->offset.offset;
+  if (inst->is(DefFP, DefFuncEntryFP)) {
+    auto const defSP = unit.mainSP()->inst();
+    assertx(defSP->is(DefFrameRelSP, DefRegSP));
+    return defSP->extra<FPInvOffsetData>()->offset.offset;
   }
 
   assertx(inst->is(DefLabel));
@@ -1029,6 +1043,11 @@ void adjustBCMarkers(OptimizeContext& ctx) {
    */
   auto const callSK = findCallSK(*def);
 
+  // if we're tracing, use a map to make sure the output is produced in a
+  // deterministic order.
+  folly::Optional<std::map<uint32_t, std::vector<std::string>>> traces;
+  if (Trace::moduleEnabled(Trace::pdce_inline, 4)) traces.emplace();
+
   // We need to fix up the main trace-- if a function can reenter we need to be
   // sure that we've adjusted its BC marker so that it doesn't stomp on the
   // stack
@@ -1054,18 +1073,30 @@ void adjustBCMarkers(OptimizeContext& ctx) {
        * the live ActRec.
        */
       auto newOff = inst.marker().spOff() + spAdjust;
-      ITRACE(4, "Updating marker (old spOff = {}, new spOff = {}): {}\n",
-             inst.marker().spOff().offset, newOff.offset, inst);
+      if (traces) {
+        (*traces)[block->id()].push_back(
+          folly::sformat(
+            "Updating marker (old spOff = {}, new spOff = {}): {}\n",
+            inst.marker().spOff().offset, newOff.offset, inst));
+      }
 
       inst.marker() = inst.marker().adjustFP(parentFp)
                                    .adjustSP(newOff)
                                    .adjustFixupSK(callSK);
-      updateCatchMarker(inst);
+      updateCatchMarker(inst, traces);
+    }
+  }
+
+  if (traces) {
+    for (auto const& t : *traces) {
+      for (auto const DEBUG_ONLY& s : t.second) {
+        ITRACE(4, "{}", s);
+      }
     }
   }
 }
 
-void syncCatchTraces(OptimizeContext& ctx, BlockSet& exitBlocks) {
+void syncCatchTraces(OptimizeContext& ctx, OrderedBlockSet& exitBlocks) {
   for (auto block : exitBlocks) {
     /*
      * Catch blocks are special: we need to sync vmfp() and vmsp() so that the
@@ -1117,30 +1148,24 @@ bool optimize(InlineAnalysis& env, IRInstruction* inlineReturn, bool& reflow) {
   OptimizeContext ctx {env.unit, fp, inlineReturn, &env.fpUses};
   ctx.mainBlocks = findMainBlocks(def->block(), inlineReturn->block());
 
-  auto canMoveInitCtx = [&] (const IRInstruction& inst) {
-    if (ctx.initCtx) return false;
-    if (inst.is(InitCtx) && inst.src(1)->type().hasConstVal()) {
-      ctx.initCtx = &inst;
-      return true;
-    }
-    return false;
-  };
-
   // Check if this callee is a candidate for DefInlineFP sinking
   auto& uses = env.fpUses[fp];
-  auto hasMainUse = std::any_of(
-    uses.begin(),
-    uses.end(),
-    [&] (IRInstruction* inst) {
-      return
-        ctx.mainBlocks.count(inst->block()) &&
-        !canConvertToStack(*inst) &&
-        !canAdjustFrame(*inst) &&
-        !canMoveInitCtx(*inst);
+  auto const hasMainUse = [&](IRInstruction* inst) {
+    return ctx.mainBlocks.count(inst->block()) &&
+           !canConvertToStack(*inst) &&
+           !canAdjustFrame(*inst);
+  };
+  auto numMainUses = std::count_if(uses.begin(), uses.end(), hasMainUse);
+  if (numMainUses > 0) {
+    ITRACE(2, "skipping unsuitable InlineReturn (uses = {})\n", numMainUses);
+    if (Trace::moduleEnabled(Trace::pdce_inline, 3)) {
+      std::vector<std::string> tmp;
+      for (auto const inst : uses) {
+        if (hasMainUse(inst)) tmp.push_back(inst->toString());
       }
-  );
-  if (hasMainUse) {
-    ITRACE(2, "skipping unsuitable InlineReturn (uses = {})\n", uses.size());
+      std::sort(tmp.begin(), tmp.end());
+      for (auto const DEBUG_ONLY& s : tmp) ITRACE(3, "  use: {}\n", s);
+    }
     return false;
   }
 
@@ -1202,6 +1227,7 @@ bool optimize(InlineAnalysis& env, IRInstruction* inlineReturn, bool& reflow) {
 ////////////////////////////////////////////////////////////////////////////////
 
 void optimizeInlineReturns(IRUnit& unit) {
+  PassTracer tracer{&unit, Trace::pdce_inline, "optimizeInlineReturns"};
   Timer timer(Timer::partial_dce_DefInlineFP, unit.logEntry().get_pointer());
 
   ITRACE(1, "optimize_inline_returns()\n");

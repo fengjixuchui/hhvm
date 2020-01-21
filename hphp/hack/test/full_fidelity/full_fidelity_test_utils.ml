@@ -13,8 +13,7 @@ module SyntaxKind = Full_fidelity_syntax_kind
 module TriviaKind = Full_fidelity_trivia_kind
 module TokenKind = Full_fidelity_token_kind
 module EditableSyntax = Full_fidelity_editable_syntax
-module EditableSyntaxTree =
-  Full_fidelity_syntax_tree.WithSyntax (EditableSyntax)
+module EditableSyntaxTree = Full_fidelity_syntax_tree.WithSyntax (EditableSyntax)
 module EditableToken = EditableSyntax.Token
 module EditableTrivia = EditableToken.Trivia
 module EditableRewriter = Full_fidelity_rewriter.WithSyntax (EditableSyntax)
@@ -23,6 +22,7 @@ module PositionedSyntaxTree =
   Full_fidelity_syntax_tree.WithSyntax (PositionedSyntax)
 module PositionedToken = Full_fidelity_positioned_token
 open Hh_core
+open Sexplib
 
 let identity x = x
 
@@ -131,9 +131,7 @@ let tree_dump_node node =
       [print level (TokenKind.to_string (PositionedToken.kind token))]
     | _ ->
       let children =
-        List.concat_map
-          ~f:(aux @@ (level + 1))
-          (PositionedSyntax.children node)
+        List.concat_map ~f:(aux @@ (level + 1)) (PositionedSyntax.children node)
       in
       let name =
         print level (SyntaxKind.to_string (PositionedSyntax.kind node))
@@ -142,7 +140,7 @@ let tree_dump_node node =
   in
   aux 0 node
 
-let tree_dump_list lst =
+let tree_dump_list (lst : PositionedSyntax.t list) =
   List.concat_map ~f:tree_dump_node lst |> String.concat "\n"
 
 let printer w1 w2 s1 s2 =
@@ -166,7 +164,8 @@ let adjust l1 l2 =
   let len = max (List.length l1) (List.length l2) in
   (aux l1 len, aux l2 len)
 
-let dump_diff expected actual =
+let dump_diff
+    (expected : PositionedSyntax.t list) (actual : PositionedSyntax.t list) =
   let l1 = List.concat_map ~f:tree_dump_node expected in
   let l2 = List.concat_map ~f:tree_dump_node actual in
   let (l1, l2) = adjust l1 l2 in

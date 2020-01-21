@@ -95,6 +95,11 @@ ConcurrentTableSharedStore& apc_store() {
   return *static_cast<ConcurrentTableSharedStore*>(vpStore);
 }
 
+bool isKeyInvalid(const String &key) {
+  // T39154441 - check if invalid chars exist
+  return key.find('\0') != -1;
+}
+
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -303,21 +308,31 @@ Variant HHVM_FUNCTION(apc_store,
     for (ArrayIter iter(valuesArr); iter; ++iter) {
       Variant key = iter.first();
       if (!key.isString()) {
-        throw_invalid_argument("apc key: (not a string)");
+        raise_invalid_argument_warning("apc key: (not a string)");
         return Variant(false);
       }
       Variant v = iter.second();
-      apc_store().set(key.toString(), v, ttl);
-    }
 
+      auto const& strKey = key.asCStrRef();
+      if (isKeyInvalid(strKey)) {
+        raise_invalid_argument_warning("apc key: (contains invalid characters)");
+        return Variant(false);
+      }
+      apc_store().set(strKey, v, ttl);
+    }
     return Variant(ArrayData::Create());
   }
 
   if (!key_or_array.isString()) {
-    throw_invalid_argument("apc key: (not a string)");
+    raise_invalid_argument_warning("apc key: (not a string)");
     return Variant(false);
   }
   String strKey = key_or_array.toString();
+
+  if (isKeyInvalid(strKey)) {
+    raise_invalid_argument_warning("apc key: (contains invalid characters)");
+    return Variant(false);
+  }
   apc_store().set(strKey, var, ttl);
   return Variant(true);
 }
@@ -330,6 +345,10 @@ bool HHVM_FUNCTION(apc_store_as_primed_do_not_use,
                    const String& key,
                    const Variant& var) {
   if (!apcExtension::Enable) return false;
+  if (isKeyInvalid(key)) {
+    raise_invalid_argument_warning("apc key: (contains invalid characters)");
+    return false;
+  }
   apc_store().setWithoutTTL(key, var);
   return true;
 }
@@ -349,22 +368,33 @@ Variant HHVM_FUNCTION(apc_add,
     for (ArrayIter iter(valuesArr); iter; ++iter) {
       Variant key = iter.first();
       if (!key.isString()) {
-        throw_invalid_argument("apc key: (not a string)");
+        raise_invalid_argument_warning("apc key: (not a string)");
         return false;
       }
       Variant v = iter.second();
-      if (!apc_store().add(key.toString(), v, ttl)) {
-        errors.add(key, -1);
+
+      auto const& strKey = key.asCStrRef();
+      if (isKeyInvalid(strKey)) {
+        raise_invalid_argument_warning("apc key: (contains invalid characters)");
+        return false;
+      }
+
+      if (!apc_store().add(strKey, v, ttl)) {
+        errors.add(strKey, -1);
       }
     }
     return errors.toVariant();
   }
 
   if (!key_or_array.isString()) {
-    throw_invalid_argument("apc key: (not a string)");
+    raise_invalid_argument_warning("apc key: (not a string)");
     return false;
   }
   String strKey = key_or_array.toString();
+  if (isKeyInvalid(strKey)) {
+    raise_invalid_argument_warning("apc key: (contains invalid characters)");
+    return false;
+  }
   return apc_store().add(strKey, var, ttl);
 }
 
@@ -380,7 +410,7 @@ TypedValue HHVM_FUNCTION(apc_fetch, const Variant& key, bool& success) {
     for (ArrayIter iter(keys); iter; ++iter) {
       Variant k = iter.second();
       if (!k.isString()) {
-        throw_invalid_argument("apc key: (not a string)");
+        raise_invalid_argument_warning("apc key: (not a string)");
         return make_tv<KindOfBoolean>(false);
       }
       String strKey = k.toString();
@@ -414,7 +444,7 @@ Variant HHVM_FUNCTION(apc_delete,
       if (!k.isString()) {
         raise_warning("apc key is not a string");
         init.append(k);
-      } else if (!apc_store().eraseKey(k.toCStrRef())) {
+      } else if (!apc_store().eraseKey(k.asCStrRef())) {
         init.append(k);
       }
     }
@@ -487,7 +517,7 @@ Variant HHVM_FUNCTION(apc_exists,
     for (ArrayIter iter(keys); iter; ++iter) {
       Variant k = iter.second();
       if (!k.isString()) {
-        throw_invalid_argument("apc key: (not a string)");
+        raise_invalid_argument_warning("apc key: (not a string)");
         return false;
       }
       String strKey = k.toString();
@@ -824,9 +854,9 @@ void apc_load_impl_compressed
         item.readOnly = readOnly;
         p += thrift_lens[i + i + 2] + 1; // skip \0
         String value(p, thrift_lens[i + i + 3], CopyString);
-        Variant success;
-        Variant v = HHVM_FN(fb_unserialize)(value, ref(success));
-        if (same(success, false)) {
+        bool success;
+        Variant v = HHVM_FN(fb_unserialize)(value, success, k_FB_SERIALIZE_VARRAY_DARRAY);
+        if (success ==  false) {
           throw Exception("bad apc archive, fb_unserialize failed");
         }
         s.constructPrime(v, item);

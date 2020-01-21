@@ -49,6 +49,7 @@ struct Class;
 
 namespace jit {
 struct ArrayAccessProfile;
+struct ArrayIterProfile;
 struct ArrayKindProfile;
 struct CallTargetProfile;
 struct ClsCnsProfile;
@@ -235,6 +236,7 @@ using Symbol = boost::variant< ClsConstant
                              , StaticMethod
                              , StaticMethodF
                              , Profile<jit::ArrayAccessProfile>
+                             , Profile<jit::ArrayIterProfile>
                              , Profile<jit::ArrayKindProfile>
                              , Profile<jit::CallTargetProfile>
                              , Profile<jit::ClsCnsProfile>
@@ -637,12 +639,6 @@ void visitSymbols(std::function<void(const Symbol&,Handle,uint32_t)> fun);
  * Return a list of all the tl_bases for any threads that are using RDS
  */
 std::vector<void*> allTLBases();
-
-/*
- * Values for dynamically defined constants are stored as key value
- * pairs in an array, accessible here.
- */
-Array& s_constants();
 
 //////////////////////////////////////////////////////////////////////
 

@@ -17,7 +17,6 @@
 #include "hphp/runtime/vm/jit/irlower-internal.h"
 
 #include "hphp/runtime/base/datatype.h"
-#include "hphp/runtime/base/ref-data.h"
 
 #include "hphp/runtime/vm/jit/abi.h"
 #include "hphp/runtime/vm/jit/code-gen-cf.h"
@@ -87,14 +86,6 @@ void cgCheckType(IRLS& env, const IRInstruction* inst) {
 
   if (srcType != InvalidReg) {
     emitTypeTest(v, env, typeParam, srcType, srcData, v.makeReg(), doJcc);
-    doMov();
-    return;
-  }
-
-  if (src->type() <= TBoxedCell && typeParam <= TBoxedCell) {
-    // We should never have specific known Boxed types; those should only be
-    // used for hints and predictions.
-    always_assert(!(typeParam < TBoxedInitCell));
     doMov();
     return;
   }
@@ -170,14 +161,6 @@ void cgCheckStk(IRLS& env, const IRInstruction* inst) {
                 base + TVOFF(m_type), base + TVOFF(m_data), inst->taken());
 }
 
-void cgCheckRefInner(IRLS& env, const IRInstruction* inst) {
-  if (inst->typeParam() >= TInitCell) return;
-  auto const base = srcLoc(env, inst, 0).reg()[RefData::cellOffset()];
-
-  emitTypeCheck(vmain(env), env, inst->typeParam(),
-                base + TVOFF(m_type), base + TVOFF(m_data), inst->taken());
-}
-
 void cgCheckMBase(IRLS& env, const IRInstruction* inst) {
   cgCheckTypeMem(env, inst);
 }
@@ -196,13 +179,13 @@ void implIsType(IRLS& env, const IRInstruction* inst, bool negate) {
     v << setcc{negate ? ccNegate(cc) : cc, sf, dst};
   };
 
-  if (src->isA(TPtrToGen)) {
+  if (src->isA(TPtrToCell)) {
     auto const base = loc.reg();
     emitTypeTest(v, env, inst->typeParam(), base[TVOFF(m_type)],
                  base[TVOFF(m_data)], v.makeReg(), doJcc);
     return;
   }
-  assertx(src->isA(TGen));
+  assertx(src->isA(TCell));
 
   auto const data = loc.reg(0);
   auto const type = loc.reg(1) != InvalidReg
@@ -251,13 +234,14 @@ void cgCheckDArray(IRLS& env, const IRInstruction* inst) {
   v << copy{src, dst};
 }
 
-void cgIsDVArray(IRLS& env, const IRInstruction* inst) {
+void cgCheckDVArray(IRLS& env, const IRInstruction* inst) {
   auto const src = srcLoc(env, inst, 0).reg();
   auto const dst = dstLoc(env, inst, 0).reg();
   auto& v = vmain(env);
   auto const sf = v.makeReg();
   v << testbim{ArrayData::kDVArrayMask, src + ArrayData::offsetofDVArray(), sf};
-  v << setcc{CC_NZ, sf, dst};
+  fwdJcc(v, env, CC_Z, sf, inst->taken());
+  v << copy{src, dst};
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -279,9 +263,6 @@ void cgAssertType(IRLS& env, const IRInstruction* inst) {
 void cgAssertLoc(IRLS&, const IRInstruction*) {}
 void cgAssertStk(IRLS&, const IRInstruction*) {}
 void cgAssertMBase(IRLS&, const IRInstruction*) {}
-void cgHintLocInner(IRLS&, const IRInstruction*) {}
-void cgHintStkInner(IRLS&, const IRInstruction*) {}
-void cgHintMBaseInner(IRLS&, const IRInstruction*) {}
 
 void cgProfileType(IRLS& env, const IRInstruction* inst) {
   auto const extra = inst->extra<RDSHandleData>();

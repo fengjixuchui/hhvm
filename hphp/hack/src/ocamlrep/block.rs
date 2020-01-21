@@ -5,61 +5,62 @@
 
 use std::borrow::Cow;
 use std::fmt::{self, Debug};
-use std::mem;
-use std::ops::{Index, IndexMut};
+use std::ops::Index;
 
-use crate::value::Value;
+use crate::Value;
 
+pub const NO_SCAN_TAG: u8 = 251;
 pub const STRING_TAG: u8 = 252;
 pub const DOUBLE_TAG: u8 = 253;
 
+/// A recently-allocated, not-yet-finalized Block.
 #[repr(transparent)]
 pub struct BlockBuilder<'arena: 'builder, 'builder>(pub(crate) &'builder mut [Value<'arena>]);
 
 impl<'a, 'b> BlockBuilder<'a, 'b> {
-    pub fn new(size: usize, tag: u8, block: &'b mut [Value<'a>]) -> Self {
-        if size == 0 {
+    #[inline(always)]
+    pub fn new(block: &'b mut [Value<'a>]) -> Self {
+        if block.len() == 0 {
             panic!()
         }
-        let header_bytes = size << 10 | (tag as usize);
-        let header = Value::bits(header_bytes);
-        block[0] = header;
         BlockBuilder(block)
     }
 
+    /// The number of fields in this block.
+    #[inline(always)]
+    pub fn size(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline(always)]
     pub fn build(self) -> Value<'a> {
-        Value::bits(unsafe { mem::transmute(self.0.as_ptr().offset(1)) })
+        unsafe { Value::from_bits(self.0.as_ptr() as usize) }
+    }
+
+    /// Return a pointer to the first field in the block.
+    #[inline(always)]
+    pub unsafe fn as_mut_ptr(&mut self) -> *mut Value<'a> {
+        self.0.as_mut_ptr()
     }
 }
 
-impl<'a, 'b> Index<usize> for BlockBuilder<'a, 'b> {
-    type Output = Value<'a>;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.0[index + 1]
-    }
-}
-
-impl IndexMut<usize> for BlockBuilder<'_, '_> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.0[index + 1]
-    }
-}
-
+/// The contents of an OCaml block, consisting of a header and one or more
+/// fields of type [`Value`](struct.Value.html).
 #[repr(transparent)]
+#[derive(Clone, Copy)]
 pub struct Block<'arena>(pub(crate) &'arena [Value<'arena>]);
 
 impl<'a> Block<'a> {
-    fn header_bits(&self) -> usize {
-        self.0[0].0
+    pub(crate) fn header(&self) -> Header {
+        Header(self.0[0].0)
     }
 
     pub fn size(&self) -> usize {
-        self.header_bits() >> 10
+        self.header().size()
     }
 
     pub fn tag(&self) -> u8 {
-        self.header_bits() as u8
+        self.header().tag()
     }
 
     pub fn as_str(&self) -> Option<Cow<str>> {
@@ -67,8 +68,8 @@ impl<'a> Block<'a> {
             return None;
         }
         let slice = unsafe {
-            let size = self.size() * mem::size_of::<usize>();
-            let ptr: *mut u8 = mem::transmute(self.0.as_ptr().offset(1));
+            let size = self.size() * std::mem::size_of::<Value>();
+            let ptr = self.0.as_ptr().offset(1) as *mut u8;
             let last_byte = ptr.offset(size as isize - 1);
             let padding = *last_byte;
             let size = size - padding as usize - 1;
@@ -90,6 +91,10 @@ impl<'a> Block<'a> {
         }
         Some(&self.0[1..])
     }
+
+    pub(crate) fn header_ptr(&self) -> *const Value<'a> {
+        self.0.as_ptr()
+    }
 }
 
 impl<'a> Index<usize> for Block<'a> {
@@ -109,5 +114,41 @@ impl Debug for Block<'_> {
         } else {
             write!(f, "{:?}", self.as_values().unwrap())
         }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Header(usize);
+
+impl Header {
+    pub(crate) fn new(size: usize, tag: u8) -> Self {
+        let bits = size << 10 | (tag as usize);
+        Header(bits)
+    }
+
+    pub fn size(self) -> usize {
+        self.0 >> 10
+    }
+
+    pub fn tag(self) -> u8 {
+        self.0 as u8
+    }
+
+    pub(crate) fn from_bits(bits: usize) -> Self {
+        Header(bits)
+    }
+
+    pub(crate) fn to_bits(self) -> usize {
+        self.0
+    }
+}
+
+impl Debug for Header {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Header")
+            .field("size", &self.size())
+            .field("tag", &self.tag())
+            .finish()
     }
 }

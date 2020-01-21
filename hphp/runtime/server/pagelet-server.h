@@ -168,6 +168,11 @@ private:
 };
 
 struct PageletServerTaskEvent final : AsioExternalThreadEvent {
+
+  PageletServerTaskEvent() = default;
+  PageletServerTaskEvent(const PageletServerTaskEvent&) = delete;
+  PageletServerTaskEvent& operator=(const PageletServerTaskEvent&) = delete;
+
   ~PageletServerTaskEvent() override {
     if (m_job) m_job->decRefCount();
   }
@@ -182,12 +187,13 @@ struct PageletServerTaskEvent final : AsioExternalThreadEvent {
   }
 
 protected:
- void unserialize(Cell& result) final {
-   cellCopy(make_array_like_tv(m_job->getAsyncResults(false).detach()), result);
+ void unserialize(TypedValue& result) final {
+   tvCopy(make_array_like_tv(m_job->getAsyncResults(false).detach()), result);
   }
 
 private:
-  PageletTransport* m_job;
+
+  PageletTransport* m_job{nullptr};
   // string m_response;
   // Object m_next_wait_handle;
 };

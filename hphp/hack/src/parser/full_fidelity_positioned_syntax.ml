@@ -301,14 +301,11 @@ let is_in_body node position =
   let rec aux parents =
     match parents with
     | [] -> false
-    | h1 :: t1 ->
-      if is_compound_statement h1 then
-        match t1 with
-        | [] -> false
-        | h2 :: _ ->
-          is_methodish_declaration h2 || is_function_declaration h2 || aux t1
-      else
-        aux t1
+    | h1 :: h2 :: _
+      when is_compound_statement h1
+           && (is_methodish_declaration h2 || is_function_declaration h2) ->
+      true
+    | _ :: rest -> aux rest
   in
   let parents = parentage node position in
   aux parents
@@ -360,11 +357,10 @@ let rust_parse_with_decl_mode_sc text env =
 let rust_parse_with_verify_sc_ref : t list rust_parse_type ref =
   ref (fun _ _ -> failwith "This should be lazily set in Rust_parser_ffi")
 
-let rust_parse_with_verify_sc text env =
-  !rust_parse_with_verify_sc_ref text env
+let rust_parse_with_verify_sc text env = !rust_parse_with_verify_sc_ref text env
 
 external rust_parser_errors :
   Full_fidelity_source_text.t ->
   Rust_pointer.t ->
-  ParserOptions.t ->
+  ParserOptions.ffi_t ->
   Full_fidelity_syntax_error.t list = "rust_parser_errors_positioned"

@@ -1,0 +1,16 @@
+# @generated
+# @autocargo from //hphp/hack/src/parser:syntax_smart_constructors
+# Signature<<4341fae4ef4eee90928daa33b5fab0cd545f1532>>
+[package]
+name = "syntax_smart_constructors"
+edition = "2018"
+version = "0.0.0"
+include = ["../../syntax_smart_constructors.rs", "../../syntax_smart_constructors_generated.rs"]
+
+[lib]
+path = "../../syntax_smart_constructors.rs"
+
+[dependencies]
+parser_core_types = { path = "../core_types" }
+smart_constructors = { path = "../smart_constructors" }
+# @end of Signature<<4341fae4ef4eee90928daa33b5fab0cd545f1532>>

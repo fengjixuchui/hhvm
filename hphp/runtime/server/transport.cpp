@@ -428,6 +428,17 @@ void Transport::getResponseHeaders(HeaderMap &headers) {
      cookies_existing.end());
 }
 
+void Transport::addToCommaSeparatedHeader(const char* name, const char* value) {
+  assertx(name && *name);
+  assertx(value);
+  const auto it = m_responseHeaders.find(name);
+  if (it != m_responseHeaders.end() && !it->second.empty()) {
+    it->second[0] = it->second[0] + std::string(", ") + value;
+  } else {
+    addHeader(name, value);
+  }
+}
+
 bool Transport::cookieExists(const char *name) {
   assertx(name && *name);
   std::string header = getHeader("Cookie");
@@ -701,8 +712,11 @@ void Transport::prepareHeaders(bool precompressed, bool chunked,
     String ip = this->getServerAddr();
     String key = RuntimeOption::XFBDebugSSLKey;
     String cipher("AES-256-CBC");
+    bool crypto_strong = false;
     auto const iv_len = HHVM_FN(openssl_cipher_iv_length)(cipher).toInt32();
-    auto const iv = HHVM_FN(openssl_random_pseudo_bytes)(iv_len).toString();
+    auto const iv = HHVM_FN(openssl_random_pseudo_bytes)(
+      iv_len, crypto_strong
+    ).toString();
     auto const encrypted = HHVM_FN(openssl_encrypt)(
       ip, cipher, key, k_OPENSSL_RAW_DATA, iv
     ).toString();
@@ -818,7 +832,7 @@ void Transport::sendRawInternal(const char *data, int size,
   bool chunked = m_chunkedEncoding;
 
   if (!g_context->m_headerCallbackDone &&
-      !cellIsNull(&g_context->m_headerCallback)) {
+      !tvIsNull(&g_context->m_headerCallback)) {
     // We could use m_headerSent here, however it seems we can still
     // end up in an infinite loop when:
     // m_headerCallback calls flush()
@@ -826,7 +840,7 @@ void Transport::sendRawInternal(const char *data, int size,
     // the recursion guard calls back into m_headerCallback
     g_context->m_headerCallbackDone = true;
     try {
-      vm_call_user_func(cellAsVariant(g_context->m_headerCallback),
+      vm_call_user_func(tvAsVariant(g_context->m_headerCallback),
                         init_null_variant);
     } catch (...) {
       LogException("HeaderCallback");

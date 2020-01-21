@@ -620,21 +620,24 @@ void stashExtendedLineTable(const Unit* unit, SourceLocTable table) {
 ///////////////////////////////////////////////////////////////////////////////
 // Funcs and PreClasses.
 
-Func* Unit::getMain(Class* cls /* = nullptr */) const {
+Func* Unit::getMain(Class* cls, bool hasThis) const {
   auto const mi = mergeInfo();
   if (!cls) return *mi->funcBegin();
   Lock lock(g_classesMutex);
   if (!m_pseudoMainCache) {
     m_pseudoMainCache = new PseudoMainCacheMap;
   }
-  auto it = m_pseudoMainCache->find(cls);
+  auto const key = reinterpret_cast<Class*>(intptr_t(cls)|hasThis);
+  auto it = m_pseudoMainCache->find(key);
   if (it != m_pseudoMainCache->end()) {
     return it->second;
   }
   Func* f = (*mi->funcBegin())->clone(cls);
+  auto const attrs = f->attrs();
   f->setNewFuncId();
   f->setBaseCls(cls);
-  (*m_pseudoMainCache)[cls] = f;
+  f->setAttrs(Attr(hasThis ? (attrs & ~AttrStatic) : (attrs | AttrStatic)));
+  (*m_pseudoMainCache)[key] = f;
   return f;
 }
 
@@ -785,13 +788,14 @@ struct FrameRestore : private VMRegAnchor {
       ActRec &tmp = *vmStack().allocA();
       tmp.m_sfp = fp;
       tmp.m_savedRip = 0;
-      tmp.m_func = unit->getMain(nullptr);
-      tmp.m_callOff = !fp
+      tmp.m_func = unit->getMain(nullptr, false);
+      tmp.initCallOffset(!fp
         ? 0
-        : fp->m_func->unit()->offsetOf(m_pc) - fp->m_func->base();
+        : fp->m_func->unit()->offsetOf(m_pc) - fp->m_func->base()
+      );
       tmp.trashThis();
       tmp.m_varEnv = 0;
-      tmp.initNumArgs(0);
+      tmp.setNumArgs(0);
       vmfp() = &tmp;
       auto const offset = [&] {
         if (offsetOrOp < kInvalidOffset) return static_cast<Offset>(offsetOrOp);
@@ -825,7 +829,7 @@ struct FrameRestore : private VMRegAnchor {
     }
   }
  private:
-  Cell*   m_top;
+  TypedValue*   m_top;
   ActRec* m_fp;
   PC      m_pc;
 };
@@ -1011,33 +1015,6 @@ Class* Unit::defClosure(const PreClass* preClass) {
   return newClass.get();
 }
 
-bool Unit::aliasClass(const StringData* original, const StringData* alias,
-                      bool autoload) {
-  auto const origClass =
-    autoload ? Unit::loadClass(original)
-             : Unit::lookupClass(original);
-  if (!origClass) {
-    raise_warning("Class %s not found", original->data());
-    return false;
-  }
-  if (origClass->isBuiltin()) {
-    raise_warning("First argument of class_alias() must be "
-                  "the name of a user defined class");
-    return false;
-  }
-
-  auto const aliasNe = NamedEntity::get(alias);
-  aliasNe->m_cachedClass.bind(rds::Mode::Normal);
-
-  auto const aliasClass = aliasNe->getCachedClass();
-  if (aliasClass) {
-    raise_warning("Cannot redeclare class %s", alias->data());
-    return false;
-  }
-  aliasNe->setCachedClass(origClass);
-  return true;
-}
-
 Class* Unit::loadClass(const NamedEntity* ne,
                        const StringData* name) {
   Class* cls;
@@ -1199,33 +1176,29 @@ tv_rval Unit::lookupCns(const StringData* cnsName) {
     auto const& tv = rds::handleToRef<TypedValue, rds::Mode::NonLocal>(handle);
 
     if (LIKELY(tv.m_type != KindOfUninit)) {
-      assertx(cellIsPlausible(tv));
+      assertx(tvIsPlausible(tv));
       return &tv;
     }
 
-    assertx(tv.m_data.pref != nullptr);
+    assertx(tv.m_data.pcnt != nullptr);
     auto const callback =
-      reinterpret_cast<Native::ConstantCallback>(tv.m_data.pref);
-    const Cell* tvRet = callback().asTypedValue();
-    assertx(cellIsPlausible(*tvRet));
+      reinterpret_cast<Native::ConstantCallback>(tv.m_data.pcnt);
+    const TypedValue* tvRet = callback().asTypedValue();
+    assertx(tvIsPlausible(*tvRet));
     if (LIKELY(tvRet->m_type != KindOfUninit)) {
       return tvRet;
     }
-    return nullptr;
-  }
-  if (UNLIKELY(rds::s_constants().get() != nullptr)) {
-    return rds::s_constants()->rval(cnsName);
   }
   return nullptr;
 }
 
-const Cell* Unit::lookupPersistentCns(const StringData* cnsName) {
+const TypedValue* Unit::lookupPersistentCns(const StringData* cnsName) {
   auto const handle = lookupCnsHandle(cnsName);
   if (!rds::isHandleBound(handle) || !rds::isPersistentHandle(handle)) {
     return nullptr;
   }
-  auto const ret = rds::handleToPtr<Cell, rds::Mode::Persistent>(handle);
-  assertx(cellIsPlausible(*ret));
+  auto const ret = rds::handleToPtr<TypedValue, rds::Mode::Persistent>(handle);
+  assertx(tvIsPlausible(*ret));
   return ret;
 }
 
@@ -1244,60 +1217,32 @@ tv_rval Unit::loadCns(const StringData* cnsName) {
   return lookupCns(cnsName);
 }
 
-static bool defCnsHelper(rds::Handle ch,
-                         const TypedValue *value,
-                         const StringData *cnsName) {
+void Unit::defCns(const StringData* cnsName, const TypedValue* value) {
+  auto const ch = makeCnsHandle(cnsName);
+  assertx(rds::isHandleBound(ch));
   auto cns = rds::handleToPtr<TypedValue, rds::Mode::NonLocal>(ch);
 
   if (!rds::isHandleInit(ch)) {
     cns->m_type = KindOfUninit;
-    cns->m_data.pref = nullptr;
+    cns->m_data.pcnt = nullptr;
   }
 
   if (UNLIKELY(cns->m_type != KindOfUninit ||
-               cns->m_data.pref != nullptr)) {
-    raise_notice(Strings::CONSTANT_ALREADY_DEFINED, cnsName->data());
-    return false;
+               cns->m_data.pcnt != nullptr)) {
+    raise_error(Strings::CONSTANT_ALREADY_DEFINED, cnsName->data());
   }
 
   if (UNLIKELY(!tvAsCVarRef(value).isAllowedAsConstantValue())) {
-    raise_warning(Strings::CONSTANTS_MUST_BE_SCALAR);
-    return false;
+    raise_error(Strings::CONSTANTS_MUST_BE_SCALAR);
   }
 
   assertx(rds::isNormalHandle(ch));
-  cellDup(*value, *cns);
+  tvDup(*value, *cns);
   rds::initHandle(ch);
-  return true;
-}
-
-bool Unit::defCns(const StringData* cnsName, const TypedValue* value) {
-  auto const handle = makeCnsHandle(cnsName);
-
-  if (UNLIKELY(!rds::isHandleBound(handle))) {
-    if (UNLIKELY(!rds::s_constants().get())) {
-      /*
-       * This only happens when we call define on a non
-       * static string. Not worth presizing or otherwise
-       * optimizing for.
-       */
-      rds::s_constants() =
-        Array::attach(PackedArray::MakeReserve(PackedArray::SmallSize));
-    }
-    auto const existed = !!rds::s_constants()->rval(cnsName);
-    if (!existed) {
-      rds::s_constants().set(StrNR(cnsName),
-        tvAsCVarRef(value), true /* isKey */);
-      return true;
-    }
-    raise_notice(Strings::CONSTANT_ALREADY_DEFINED, cnsName->data());
-    return false;
-  }
-  return defCnsHelper(handle, value, cnsName);
 }
 
 bool Unit::defNativeConstantCallback(const StringData* cnsName,
-                                     Cell value) {
+                                     TypedValue value) {
   static const bool kServer = RuntimeOption::ServerExecutionMode();
   // Zend doesn't define the STD* streams in server mode so we don't either
   if (UNLIKELY(kServer &&
@@ -1651,19 +1596,6 @@ void Unit::initialMerge() {
               needsCompact = true;
             }
             break;
-          case MergeKind::ReqDoc: {
-            StringData* s = (StringData*)((char*)obj - (int)k);
-            auto const unit = lookupUnit(
-              SourceRootInfo::RelativeToPhpRoot(StrNR(s)).get(),
-              "",
-              nullptr /* initial_opt */,
-              Native::s_noNativeFuncs,
-              false
-            );
-            unit->initialMerge();
-            mi->mergeableObj(ix) = (void*)((char*)unit + (int)k);
-            break;
-          }
           case MergeKind::PersistentDefine:
             needsCompact = true;
           case MergeKind::Define: {
@@ -1677,10 +1609,6 @@ void Unit::initialMerge() {
             v->rdsHandle() = makeCnsHandle(s);
             break;
           }
-          case MergeKind::Global:
-            // Skip over the value of the global, embedded in mergeableData
-            ix += sizeof(TypedValueAux) / sizeof(void*);
-            break;
         }
         ix++;
       }
@@ -1707,27 +1635,6 @@ void Unit::merge() {
   for (auto& r : prerecords()) {
     defRecordDesc(r.get());
   }
-}
-
-void* Unit::replaceUnit() const {
-  if (isEmpty()) return nullptr;
-  if (!isMergeOnly()) return const_cast<Unit*>(this);
-  auto const mi = mergeInfo();
-  if (mi->m_mergeablesSize == mi->m_firstHoistableFunc + 1) {
-    void* obj =
-      mi->mergeableObj(mi->m_firstHoistableFunc);
-    if (mi->m_firstMergeablePreClass ==
-        mi->m_firstHoistableFunc) {
-      auto k = MergeKind(uintptr_t(obj) & 7);
-      if (k != MergeKind::Class) return obj;
-    } else if (mi->m_firstHoistablePreClass ==
-               mi->m_firstHoistableFunc) {
-      if (uintptr_t(obj) & 1) {
-        return (char*)obj - 1 + (int)MergeKind::UniqueDefinedClass;
-      }
-    }
-  }
-  return const_cast<Unit*>(this);
 }
 
 static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out,
@@ -1828,7 +1735,6 @@ static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out,
         // fall through
       }
       case MergeKind::Define:
-      case MergeKind::Global:
         if (out) {
           out->mergeableObj(oix++) = obj;
           *(TypedValueAux*)out->mergeableData(oix) =
@@ -1838,20 +1744,6 @@ static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out,
         ix += sizeof(TypedValueAux) / sizeof(void*);
         break;
 
-      case MergeKind::ReqDoc: {
-        Unit *unit = (Unit*)((char*)obj - (int)k);
-        void *rep = unit->replaceUnit();
-        if (!rep) {
-          delta++;
-        } else if (out) {
-          if (rep == unit) {
-            out->mergeableObj(oix++) = obj;
-          } else {
-            out->mergeableObj(oix++) = rep;
-          }
-        }
-        break;
-      }
       case MergeKind::Done:
         not_reached();
     }
@@ -2073,7 +1965,7 @@ void Unit::mergeImpl(MergeInfo* mi) {
           auto const handle = v->rdsHandle();
           assertx(rds::isNormalHandle(handle));
           if (UNLIKELY(rds::isHandleInit(handle, rds::NormalTag{}))) {
-            raise_notice(Strings::CONSTANT_ALREADY_DEFINED, name->data());
+            raise_error(Strings::CONSTANT_ALREADY_DEFINED, name->data());
           } else {
             rds::handleToRef<TypedValue, rds::Mode::Normal>(handle) = *v;
             rds::initHandle(handle);
@@ -2084,56 +1976,6 @@ void Unit::mergeImpl(MergeInfo* mi) {
         } while (k == MergeKind::Define);
         continue;
 
-      case MergeKind::Global:
-        do {
-          Stats::inc(Stats::UnitMerge_mergeable);
-          Stats::inc(Stats::UnitMerge_mergeable_global);
-          StringData* name = (StringData*)((char*)obj - (int)k);
-          auto* v = (TypedValueAux*)mi->mergeableData(ix + 1);
-          setGlobal(name, v);
-          ix += 1 + sizeof(*v) / sizeof(void*);
-          obj = mi->mergeableObj(ix);
-          k = MergeKind(uintptr_t(obj) & 7);
-        } while (k == MergeKind::Global);
-        continue;
-
-      case MergeKind::ReqDoc:
-        do {
-          Stats::inc(Stats::UnitMerge_mergeable);
-          Stats::inc(Stats::UnitMerge_mergeable_require);
-          Unit *unit = (Unit*)((char*)obj - (int)k);
-
-          unit->mergeImpl<debugger>(unit->mergeInfo());
-          if (UNLIKELY(!unit->isMergeOnly())) {
-            VarEnv* ve = nullptr;
-            ActRec* fp = vmfp();
-            if (!fp) {
-              ve = g_context->m_globalVarEnv;
-            } else {
-              if ((fp->func()->attrs() & AttrMayUseVV) && fp->hasVarEnv()) {
-                ve = fp->m_varEnv;
-              } else {
-                // Nothing to do. If there is no varEnv, the enclosing
-                // file was called by fb_autoload_map, which wants a
-                // local scope.
-              }
-            }
-
-            // Move the count from executed to reentered.
-            Stats::inc(Stats::PseudoMain_Reentered);
-            Stats::inc(Stats::PseudoMain_Executed, -1);
-
-            tvDecRefGen(
-              g_context->invokePseudoMain(unit->getMain(nullptr), ve)
-            );
-          } else {
-            Stats::inc(Stats::PseudoMain_SkipDeep);
-          }
-
-          obj = mi->mergeableObj(++ix);
-          k = MergeKind(uintptr_t(obj) & 7);
-        } while (k == MergeKind::ReqDoc);
-        continue;
       case MergeKind::TypeAlias:
         do {
           Stats::inc(Stats::UnitMerge_mergeable);
@@ -2211,7 +2053,7 @@ void Unit::mergeImpl(MergeInfo* mi) {
 namespace {
 
 Array getClassesWithAttrInfo(Attr attrs, bool inverse = false) {
-  Array a = Array::Create();
+  Array a = Array::CreateVArray();
   NamedEntity::foreach_cached_class([&](Class* c) {
     if ((c->attrs() & attrs) ? !inverse : inverse) {
       if (c->isBuiltin()) {
@@ -2228,7 +2070,7 @@ template<bool system>
 Array getFunctions() {
   // Return an array of all defined functions.  This method is used
   // to support get_defined_functions().
-  Array a = Array::Create();
+  Array a = Array::CreateVArray();
   NamedEntity::foreach_cached_func([&](Func* func) {
     if ((system ^ func->isBuiltin()) || func->isGenerated()) return; //continue
     a.append(HHVM_FN(strtolower)(func->nameStr()));
@@ -2332,7 +2174,7 @@ std::string Unit::toString() const {
 // Other methods.
 
 bool Unit::compileTimeFatal(const StringData*& msg, int& line) const {
-  auto entry = getMain(nullptr)->getEntry();
+  auto entry = getMain(nullptr, false)->getEntry();
   auto pc = entry;
   // String <id>; Fatal;
   // ^^^^^^
@@ -2358,7 +2200,7 @@ bool Unit::parseFatal(const StringData*& msg, int& line) const {
     return false;
   }
 
-  auto pc = getMain(nullptr)->getEntry();
+  auto pc = getMain(nullptr, false)->getEntry();
 
   // String <id>
   decode_op(pc);
@@ -2377,7 +2219,8 @@ std::string mangleReifiedGenericsName(const ArrayData* tsList) {
     [&](TypedValue v) {
       assertx(tvIsDictOrDArray(v));
       auto str =
-        TypeStructure::toStringForDisplay(ArrNR(v.m_data.parr)).toCppString();
+        TypeStructure::toString(ArrNR(v.m_data.parr),
+          TypeStructure::TSDisplayType::TSDisplayTypeInternal).toCppString();
       str.erase(remove_if(str.begin(), str.end(), isspace), str.end());
       l.emplace_back(str);
     }

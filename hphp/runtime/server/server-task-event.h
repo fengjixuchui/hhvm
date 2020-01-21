@@ -33,6 +33,8 @@ namespace HPHP {
 template<class TServer, class TTransport>
 struct ServerTaskEvent final : AsioExternalThreadEvent {
   ServerTaskEvent() {}
+  ServerTaskEvent(const ServerTaskEvent&) = delete;
+  ServerTaskEvent& operator=(const ServerTaskEvent&) = delete;
 
   ~ServerTaskEvent() override {
     if (m_job) m_job->decRefCount();
@@ -48,7 +50,7 @@ struct ServerTaskEvent final : AsioExternalThreadEvent {
   }
 
  protected:
-  void unserialize(Cell& result) final {
+  void unserialize(TypedValue& result) final {
     if (UNLIKELY(!m_job)) {
       SystemLib::throwInvalidOperationExceptionObject(
         "The async operation was incorrectly initialized.");
@@ -61,11 +63,12 @@ struct ServerTaskEvent final : AsioExternalThreadEvent {
       SystemLib::throwExceptionObject(ret);
     }
 
-    cellDup(*ret.toCell(), result);
+    tvDup(*ret.asTypedValue(), result);
   }
 
  private:
-  TTransport *m_job;
+
+  TTransport *m_job{nullptr};
 };
 
 ///////////////////////////////////////////////////////////////////////////////

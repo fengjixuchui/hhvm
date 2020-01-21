@@ -14,6 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
+#include "hphp/runtime/base/init-fini-node.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/execution-context.h"
@@ -152,19 +153,6 @@ void raise_record_field_error(const StringData* recName,
                               fieldName, recName));
 }
 
-void raise_property_typehint_binding_error(const Class* declCls,
-                                           const StringData* propName,
-                                           bool isSoft) {
-  raise_property_typehint_error(
-    folly::sformat(
-      "Property '{}::{}' with type annotation binding to ref",
-      declCls->name(),
-      propName
-    ),
-    isSoft
-  );
-}
-
 void raise_property_typehint_unset_error(const Class* declCls,
                                          const StringData* propName,
                                          bool isSoft) {
@@ -186,8 +174,20 @@ void raise_convert_record_to_type(const char* typeName) {
   raise_error("Cannot convert record to %s", typeName);
 }
 
+void raise_use_of_specialized_array() {
+  raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+}
+
 void raise_hackarr_compat_notice(const std::string& msg) {
   raise_notice("Hack Array Compat: %s", msg.c_str());
+}
+
+void raise_recordarray_promotion_notice(const std::string& op) {
+  raise_notice("Record-array to mixed-array promotion for %s", op.c_str());
+}
+
+void raise_recordarray_unsupported_op_notice(const std::string& op) {
+  raise_notice("Opertation not supported for records: %s", op.c_str());
 }
 
 #define HC(Opt, opt) \
@@ -217,6 +217,11 @@ folly::Synchronized<
 
 template <typename... Args>
 void raise_dynamically_sampled_notice(folly::StringPiece fmt, Args&& ... args) {
+  static auto samplingTableSize = ServiceData::createTimeSeries(
+    "vm.dynsampling.table-size",
+    {ServiceData::StatsType::SUM}
+  );
+
   /*
    * We want to dedupe notices, but not so much that we exclude
    * notices at a new location, so we need to grab the first
@@ -237,19 +242,81 @@ void raise_dynamically_sampled_notice(folly::StringPiece fmt, Args&& ... args) {
     auto const inserted = notices->emplace(pc, str);
     if (!inserted.second) return;
   }
+  samplingTableSize->addValue(1);
   raise_notice(str);
 }
 
+enum class ArrayType {
+  VArray,
+  DArray,
+  Vec,
+  Dict,
+  Other,
+  Count
+};
+
+const char* arrayTypeName(ArrayType ty) {
+  switch (ty) {
+  case ArrayType::VArray: return "varray";
+  case ArrayType::DArray: return "darray";
+  case ArrayType::Vec: return "vec";
+  case ArrayType::Dict: return "dict";
+  case ArrayType::Other: return "other";
+  default:
+    always_assert(false);
+  }
 }
 
-void raise_array_serialization_notice(const char* src, const ArrayData* arr) {
+const char* srcName(SerializationSite src) {
+  switch (src) {
+  case SerializationSite::IsDict:             return "is_dict";
+  case SerializationSite::IsVec:              return "is_vec";
+  case SerializationSite::IsTuple:            return "is_tuple";
+  case SerializationSite::IsShape:            return "is_shape";
+  case SerializationSite::IsArray:            return "is_array";
+  case SerializationSite::IsVArray:           return "is_varray";
+  case SerializationSite::IsDArray:           return "is_darray";
+  case SerializationSite::FBSerialize:        return "fb_serialize";
+  case SerializationSite::FBCompactSerialize: return "fb_compact_serialize";
+  case SerializationSite::Gettype:            return "gettype";
+  case SerializationSite::Serialize:          return "serialize";
+  case SerializationSite::VarExport:          return "var_export";
+  case SerializationSite::PrintR:             return "print_r";
+  case SerializationSite::JsonEncode:         return "json_encode";
+  default:
+    always_assert(false);
+  }
+}
+
+static auto constexpr num_pl_counters =
+  static_cast<size_t>(ArrayType::Count) *
+  static_cast<size_t>(SerializationSite::Count);
+static ServiceData::ExportedTimeSeries* s_provLoggingCounters[num_pl_counters];
+
+InitFiniNode s_initProvLoggingCounters([] {
+  for (size_t idx = 0; idx < num_pl_counters; idx++) {
+    constexpr size_t numArrayTypes = static_cast<size_t>(ArrayType::Count);
+    auto const at = static_cast<ArrayType>(idx % numArrayTypes);
+    auto const src = static_cast<SerializationSite>(idx / numArrayTypes);
+
+    s_provLoggingCounters[idx] = ServiceData::createTimeSeries(
+      folly::sformat("vm.provlogging.unsampled.{}.{}",
+                     arrayTypeName(at),
+                     srcName(src)),
+      {ServiceData::StatsType::COUNT}
+    );
+  }
+}, InitFiniNode::When::ProcessInit);
+
+} // namespace
+
+void raise_array_serialization_notice(SerializationSite src,
+                                      const ArrayData* arr) {
   assertx(RuntimeOption::EvalLogArrayProvenance);
+  if (arr->isLegacyArray()) return;
   if (UNLIKELY(g_context->getThrowAllErrors())) {
     throw Exception("Would have logged provenance");
   }
-  static auto const sampl_threshold =
-    RAND_MAX / RuntimeOption::EvalLogArrayProvenanceSampleRatio;
-  if (std::rand() >= sampl_threshold) return;
   static auto knownCounter = ServiceData::createTimeSeries(
     "vm.provlogging.known",
     {ServiceData::StatsType::COUNT}
@@ -265,13 +332,24 @@ void raise_array_serialization_notice(const char* src, const ArrayData* arr) {
                                   {ServiceData::StatsType::COUNT}),
   };
 
-  auto const dvarray = ([&](){
-    if (arr->isVArray()) return "varray";
-    if (arr->isDArray()) return "darray";
-    if (arr->isVecArray()) return "vec";
-    if (arr->isDict()) return "dict";
-    return "<weird array>";
-  })();
+  auto const counterFor = [&] (SerializationSite src, ArrayType at)
+    -> ServiceData::ExportedTimeSeries* {
+    auto const idx =
+      static_cast<size_t>(at) +
+      static_cast<size_t>(ArrayType::Count) * static_cast<size_t>(src);
+
+    return s_provLoggingCounters[idx];
+  };
+
+  auto const arrayType = [&] {
+    if (arr->isVArray()) return ArrayType::VArray;
+    if (arr->isDArray()) return ArrayType::DArray;
+    if (arr->isVecArray()) return ArrayType::Vec;
+    if (arr->isDict()) return ArrayType::Dict;
+    return ArrayType::Other;
+  }();
+
+  counterFor(src, arrayType)->addValue(1);
 
   auto const bail = [&]() {
     auto const isEmpty = arr->empty();
@@ -282,10 +360,13 @@ void raise_array_serialization_notice(const char* src, const ArrayData* arr) {
       "Observing {}{}{} in {} from unknown location",
       isEmpty ? "empty, " : "",
       isStatic ? "static, " : "",
-      dvarray,
-      src);
+      arrayTypeName(arrayType),
+      srcName(src));
   };
 
+  static auto const sampl_threshold =
+    RAND_MAX / RuntimeOption::EvalLogArrayProvenanceSampleRatio;
+  if (std::rand() >= sampl_threshold) return;
   auto const ann = arrprov::getTag(arr);
   if (!ann) { bail(); return; }
 
@@ -296,7 +377,8 @@ void raise_array_serialization_notice(const char* src, const ArrayData* arr) {
 
   knownCounter->addValue(1);
   raise_dynamically_sampled_notice("Observing {} in {} from {}:{}",
-                                   dvarray, src, name->slice(), line);
+                                   arrayTypeName(arrayType),
+                                   srcName(src), name->slice(), line);
 }
 
 void
@@ -322,13 +404,13 @@ void raise_hackarr_compat_type_hint_impl(const Func* func,
   if (param) {
     raise_notice(
       "Hack Array Compat: Argument %d to %s() must be of type %s, %s given",
-      *param + 1, func->fullDisplayName()->data(), name, given
+      *param + 1, func->fullName()->data(), name, given
     );
   } else {
     raise_notice(
       "Hack Array Compat: Value returned from %s() must be of type %s, "
       "%s given",
-      func->fullDisplayName()->data(), name, given
+      func->fullName()->data(), name, given
     );
   }
 }
@@ -336,27 +418,11 @@ void raise_hackarr_compat_type_hint_impl(const Func* func,
 [[noreturn]]
 void raise_func_undefined(const char* prefix, const StringData* name,
                           const Class* cls) {
-  if (LIKELY(!needsStripInOut(name))) {
-    if (cls) {
-      raise_error("%s undefined method %s::%s()", prefix, cls->name()->data(),
-                  name->data());
-    }
-    raise_error("%s undefined function %s()", prefix, name->data());
-  } else {
-    auto stripped = stripInOutSuffix(name);
-    if (cls) {
-      if (cls->lookupMethod(stripped)) {
-        raise_error("%s method %s::%s() with incorrectly annotated inout "
-                    "parameter", prefix, cls->name()->data(), stripped->data());
-      }
-      raise_error("%s undefined method %s::%s()", cls->name()->data(), prefix,
-                  stripped->data());
-    } else if (Unit::lookupFunc(stripped)) {
-      raise_error("%s function %s() with incorrectly annotated inout "
-                  "parameter", prefix, stripped->data());
-    }
-    raise_error("%s undefined function %s()", prefix, stripped->data());
+  if (cls) {
+    raise_error("%s undefined method %s::%s()", prefix, cls->name()->data(),
+                name->data());
   }
+  raise_error("%s undefined function %s()", prefix, name->data());
 }
 
 }
@@ -382,7 +448,7 @@ void raise_hackarr_compat_type_hint_outparam_notice(const Func* func,
   raise_notice(
     "Hack Array Compat: Argument %d returned from %s() as an inout parameter "
     "must be of type %s, %s given",
-    param + 1, func->fullDisplayName()->data(), name, given
+    param + 1, func->fullName()->data(), name, given
   );
 }
 
@@ -765,12 +831,12 @@ void raise_clsmeth_compat_type_hint(
     raise_notice(
       "class_meth Compat: Argument %d passed to %s()"
       " must be of type %s, clsmeth given",
-      *param + 1, func->fullDisplayName()->data(), displayName.c_str());
+      *param + 1, func->fullName()->data(), displayName.c_str());
   } else {
     raise_notice(
       "class_meth Compat: Value returned from function %s()"
       " must be of type %s, clsmeth given",
-      func->fullDisplayName()->data(), displayName.c_str());
+      func->fullName()->data(), displayName.c_str());
   }
 }
 
@@ -779,7 +845,7 @@ void raise_clsmeth_compat_type_hint_outparam_notice(
   raise_notice(
     "class_meth Compat: Argument %d returned from %s()"
     " must be of type %s, clsmeth given",
-    paramNum + 1, func->fullDisplayName()->data(), displayName.c_str());
+    paramNum + 1, func->fullName()->data(), displayName.c_str());
 }
 
 void raise_clsmeth_compat_type_hint_property_notice(

@@ -30,10 +30,7 @@ let log_file_info_change
         match symbols with
         | [] -> "<none>"
         | symbols when num_symbols <= max_num_symbols_to_show ->
-          symbols
-          |> strip_positions
-          |> SSet.elements
-          |> String.concat ~sep:", "
+          symbols |> strip_positions |> SSet.elements |> String.concat ~sep:", "
         | symbols ->
           let num_remaining_symbols = num_symbols - max_num_symbols_to_show in
           let symbols = List.take symbols max_num_symbols_to_show in
@@ -92,16 +89,16 @@ let log_file_info_change
  * Result: (old * new)
  *)
 let compute_fileinfo_for_path (env : ServerEnv.env) (path : Relative_path.t) :
-    (FileInfo.t option * FileInfo.t option) Lwt.t =
+    (FileInfo.t option * FileInfo.t option * Facts.facts option) Lwt.t =
   let start_time = Unix.gettimeofday () in
   let naming_table = env.ServerEnv.naming_table in
   let old_file_info = Naming_table.get_file_info naming_table path in
   (* Fetch file contents *)
   let%lwt contents = Lwt_utils.read_all (Relative_path.to_absolute path) in
   let contents = Result.ok contents in
-  let new_file_info =
+  let (new_file_info, facts) =
     match contents with
-    | None -> None
+    | None -> (None, None)
     (* The file couldn't be read from disk. Assume it's been deleted or is
       otherwise inaccessible. We've already deleted the entries from the naming
       table and reverse naming table, so there's nothing left to do here. *)
@@ -120,11 +117,11 @@ let compute_fileinfo_for_path (env : ServerEnv.env) (path : Relative_path.t) :
           ~filename:path
           ~text:contents
       in
-      let (funs, classes, typedefs, consts) =
+      let (funs, classes, record_defs, typedefs, consts) =
         match facts with
         | None ->
           (* File failed to parse or was not a Hack file. *)
-          ([], [], [], [])
+          ([], [], [], [], [])
         | Some facts ->
           let to_ids name_type names =
             List.map names ~f:(fun name ->
@@ -149,9 +146,17 @@ let compute_fileinfo_for_path (env : ServerEnv.env) (path : Relative_path.t) :
                      | TKUnknown
                      | TKMixed ->
                        true
-                     | TKTypeAlias -> false))
+                     | TKTypeAlias
+                     | TKRecord ->
+                       false))
             |> Facts.InvSMap.keys
             |> to_ids FileInfo.Class
+          in
+          let record_defs =
+            facts.Facts.types
+            |> Facts.InvSMap.filter (fun _k v -> Facts.(v.kind = TKRecord))
+            |> Facts.InvSMap.keys
+            |> to_ids FileInfo.RecordDef
           in
           let typedefs =
             facts.Facts.types
@@ -164,13 +169,14 @@ let compute_fileinfo_for_path (env : ServerEnv.env) (path : Relative_path.t) :
                      | TKEnum
                      | TKTrait
                      | TKUnknown
-                     | TKMixed ->
+                     | TKMixed
+                     | TKRecord ->
                        false))
             |> Facts.InvSMap.keys
             |> to_ids FileInfo.Typedef
           in
           let consts = facts.Facts.constants |> to_ids FileInfo.Const in
-          (funs, classes, typedefs, consts)
+          (funs, classes, record_defs, typedefs, consts)
       in
       let fi_mode =
         Full_fidelity_parser.parse_mode
@@ -178,19 +184,21 @@ let compute_fileinfo_for_path (env : ServerEnv.env) (path : Relative_path.t) :
         |> Option.value (* TODO: is this a reasonable default? *)
              ~default:FileInfo.Mstrict
       in
-      Some
-        {
-          FileInfo.file_mode = Some fi_mode;
-          funs;
-          classes;
-          typedefs;
-          consts;
-          hash = None;
-          comments = None;
-        }
+      ( Some
+          {
+            FileInfo.file_mode = Some fi_mode;
+            funs;
+            classes;
+            record_defs;
+            typedefs;
+            consts;
+            hash = None;
+            comments = None;
+          },
+        facts )
   in
   log_file_info_change ~old_file_info ~new_file_info ~start_time ~path;
-  Lwt.return (old_file_info, new_file_info)
+  Lwt.return (old_file_info, new_file_info, facts)
 
 let update_naming_table
     ~(env : ServerEnv.env)
@@ -205,9 +213,10 @@ let update_naming_table
     | Some old_file_info ->
       (* Update reverse naming table *)
       FileInfo.(
-        NamingGlobal.remove_decls
+        Naming_global.remove_decls
           ~funs:(strip_positions old_file_info.funs)
           ~classes:(strip_positions old_file_info.classes)
+          ~record_defs:(strip_positions old_file_info.record_defs)
           ~typedefs:(strip_positions old_file_info.typedefs)
           ~consts:(strip_positions old_file_info.consts);
 
@@ -220,50 +229,73 @@ let update_naming_table
     match new_file_info with
     | None -> naming_table
     | Some new_file_info ->
-      (* Update reverse naming table *)
-      FileInfo.(
-        (* TODO: when we start typechecking files, we'll have to keep track of
-      which files have naming errors, so that we can re-typecheck them
-       - Also note that [_fast] means that this function call ignores errors *)
-        NamingGlobal.ndecl_file_fast
-          path
-          ~funs:(strip_positions new_file_info.funs)
-          ~classes:(strip_positions new_file_info.classes)
-          ~typedefs:(strip_positions new_file_info.typedefs)
-          ~consts:(strip_positions new_file_info.consts);
+      (* Update reverse naming table.
+      TODO: this doesn't handle name collisions in erroneous programs.
+      NOTE: We don't use [Naming_global.ndecl_file_fast] here because it
+      attempts to look up the symbol by doing a file parse, but the file may not
+      exist on disk anymore. We also don't need to do the file parse in this
+      case anyways, since we just did one and know for a fact where the symbol
+      is. *)
+      let open FileInfo in
+      List.iter new_file_info.funs ~f:(fun (pos, fun_name) ->
+          Naming_table.Funs.add fun_name pos);
+      List.iter new_file_info.classes ~f:(fun (pos, class_name) ->
+          Naming_table.Types.add class_name (pos, Naming_table.TClass));
+      List.iter new_file_info.record_defs ~f:(fun (pos, record_def_name) ->
+          Naming_table.Types.add record_def_name (pos, Naming_table.TRecordDef));
+      List.iter new_file_info.typedefs ~f:(fun (pos, typedef_name) ->
+          Naming_table.Types.add typedef_name (pos, Naming_table.TTypedef));
+      List.iter new_file_info.consts ~f:(fun (pos, const_name) ->
+          Naming_table.Consts.add const_name pos);
 
-        (* Update and return the forward naming table *)
-        Naming_table.update naming_table path new_file_info)
+      (* Update and return the forward naming table *)
+      Naming_table.update naming_table path new_file_info
   in
   { env with ServerEnv.naming_table }
 
 let invalidate_decls ~(old_file_info : FileInfo.t option) : unit =
   match old_file_info with
   | None -> ()
-  | Some { FileInfo.funs; classes; typedefs; consts; _ } ->
+  | Some { FileInfo.funs; classes; record_defs; typedefs; consts; _ } ->
     funs |> strip_positions |> SSet.iter ~f:Decl_provider.invalidate_fun;
     classes |> strip_positions |> SSet.iter ~f:Decl_provider.invalidate_class;
-    typedefs
+    record_defs
     |> strip_positions
-    |> SSet.iter ~f:Decl_provider.invalidate_typedef;
+    |> SSet.iter ~f:Decl_provider.invalidate_record_def;
+    typedefs |> strip_positions |> SSet.iter ~f:Decl_provider.invalidate_typedef;
     consts |> strip_positions |> SSet.iter ~f:Decl_provider.invalidate_gconst;
     ()
 
+let update_symbol_index
+    ~(env : ServerEnv.env)
+    ~(path : Relative_path.t)
+    ~(facts : Facts.facts option) : unit =
+  match facts with
+  | None ->
+    let paths = Relative_path.Set.singleton path in
+    SymbolIndex.remove_files ~sienv:env.ServerEnv.local_symbol_table ~paths
+  | Some facts ->
+    SymbolIndex.update_from_facts
+      ~sienv:env.ServerEnv.local_symbol_table
+      ~path
+      ~facts
+
 let process_changed_file (env : ServerEnv.env) (path : Path.t) :
     ServerEnv.env Lwt.t =
-  let path = Path.to_string path in
-  match Relative_path.strip_root_if_possible path with
+  let str_path = Path.to_string path in
+  match Relative_path.strip_root_if_possible str_path with
   | None ->
-    log "Ignored change to file %s, as it is not within our repo root" path;
+    log "Ignored change to file %s, as it is not within our repo root" str_path;
     Lwt.return env
   | Some path ->
     let path = Relative_path.from_root path in
     if not (FindUtils.path_filter path) then
       Lwt.return env
     else
-      let%lwt (old_file_info, new_file_info) =
+      let%lwt (old_file_info, new_file_info, facts) =
         compute_fileinfo_for_path env path
       in
       invalidate_decls ~old_file_info;
       let env = update_naming_table ~env ~path ~old_file_info ~new_file_info in
+      update_symbol_index ~env ~path ~facts;
       Lwt.return env

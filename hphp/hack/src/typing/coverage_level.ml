@@ -7,11 +7,12 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Coverage_level_defs
 open Ide_api_types
 open Typing_defs
 open Utils
+open Int_replace_polymorphic_compare
 module TUtils = Typing_utils
 module Reason = Typing_reason
 
@@ -65,12 +66,12 @@ let incr_reason_stats r p reason_stats =
     let reason_pos = Reason.to_pos r in
     let string_key = Reason.to_constructor_string r in
     let pos_stats_map =
-      match SMap.get string_key reason_stats with
+      match SMap.find_opt string_key reason_stats with
       | Some x -> x
       | None -> Pos.Map.empty
     in
     let pos_stats =
-      match Pos.Map.get reason_pos pos_stats_map with
+      match Pos.Map.find_opt reason_pos pos_stats_map with
       | Some x -> x
       | None -> empty_pos_stats_entry
     in
@@ -86,13 +87,10 @@ let incr_reason_stats r p reason_stats =
       reason_stats
 
 let incr_counter k (r, p, c) =
-  let v = CLMap.find_unsafe k c in
+  let v = CLMap.find k c in
   CLMap.add
     k
-    {
-      count = v.count + 1;
-      reason_stats = incr_reason_stats r p v.reason_stats;
-    }
+    { count = v.count + 1; reason_stats = incr_reason_stats r p v.reason_stats }
     c
 
 let merge_pos_stats p1 p2 =
@@ -124,33 +122,41 @@ let merge_and_sum cs1 cs2 =
     cs1
     cs2
 
-let rec is_tany ty =
-  match ty with
-  | (r, (Tany _ | Terr)) -> Some r
-  | (_, Tunion []) -> None
+let rec is_tany env ty =
+  let (env, ty) = Tast_env.expand_type env ty in
+  match deref ty with
+  | (r, (Tany _ | Terr)) -> (env, Some r)
+  | (_, Tunion []) -> (env, None)
   | (_, Tunion (h :: tl)) ->
-    begin
-      match is_tany h with
-      | Some r when List.for_all tl (compose Option.is_some is_tany) -> Some r
-      | _ -> None
-    end
-  | _ -> None
+    let (env, r_opt) = is_tany env h in
+    (match r_opt with
+    | Some r
+      when List.for_all tl (compose Option.is_some (compose snd (is_tany env)))
+      ->
+      (env, Some r)
+    | _ -> (env, None))
+  | _ -> (env, None)
 
-let level_of_type fixme_map (pos, ty) =
-  match ty with
-  | (_, Tobject) -> Partial
-  | (_, _) ->
-    (match is_tany ty with
-    | Some _ -> Unchecked
-    | None ->
-      (match TUtils.HasTany.check_why ty with
-      | Some _ -> Partial
-      | _ ->
-        (* If the line has a HH_FIXME, then mark it as (at most) partially checked *)
-        if IMap.mem (Pos.line pos) fixme_map then
-          Partial
-        else
-          Checked))
+let level_of_type env fixme_map (pos, ty) =
+  let (env, ty) = Tast_env.expand_type env ty in
+  match get_node ty with
+  | Tobject -> (env, Partial)
+  | _ ->
+    let (env, r_opt) = is_tany env ty in
+    let level =
+      match r_opt with
+      | Some _ -> Unchecked
+      | None ->
+        (match TUtils.HasTany.check_why ty with
+        | Some _ -> Partial
+        | _ ->
+          (* If the line has a HH_FIXME, then mark it as (at most) partially checked *)
+          if IMap.mem (Pos.line pos) fixme_map then
+            Partial
+          else
+            Checked)
+    in
+    (env, level)
 
 class level_getter fixme_map =
   object
@@ -182,7 +188,7 @@ class level_getter fixme_map =
        *)
       let (pmap, cmap) = super#on_expr env expr in
       let ((pos, ty), _) = expr in
-      let lvl = level_of_type fixme_map (pos, ty) in
+      let (_env, lvl) = level_of_type env fixme_map (pos, ty) in
       let should_update_pmap =
         match lvl with
         | Checked -> cmap.checked + cmap.partial + cmap.unchecked = 0

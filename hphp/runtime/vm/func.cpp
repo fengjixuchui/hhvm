@@ -319,14 +319,14 @@ void Func::appendParam(bool ref, const Func::ParamInfo& info,
   const int qword = numParams / kBitsPerQword;
   const int bit   = numParams % kBitsPerQword;
   assertx(!info.isVariadic() || (m_attrs & AttrVariadicParam));
-  uint64_t* refBits = &m_refBitVal;
+  uint64_t* refBits = &m_inoutBitVal;
   // Grow args, if necessary.
   if (qword) {
     if (bit == 0) {
-      shared()->m_refBitPtr = (uint64_t*)
-        realloc(shared()->m_refBitPtr, qword * sizeof(uint64_t));
+      shared()->m_inoutBitPtr = (uint64_t*)
+        realloc(shared()->m_inoutBitPtr, qword * sizeof(uint64_t));
     }
-    refBits = shared()->m_refBitPtr + qword - 1;
+    refBits = shared()->m_inoutBitPtr + qword - 1;
   }
 
   if (bit == 0) {
@@ -345,7 +345,7 @@ void Func::appendParam(bool ref, const Func::ParamInfo& info,
  */
 void Func::finishedEmittingParams(std::vector<ParamInfo>& fParams) {
   assertx(m_paramCounts == 0);
-  assertx(fParams.size() || (!m_refBitVal && !shared()->m_refBitPtr));
+  assertx(fParams.size() || (!m_inoutBitVal && !shared()->m_inoutBitPtr));
 
   shared()->m_params = fParams;
   m_paramCounts = fParams.size() << 1;
@@ -463,8 +463,8 @@ Offset Func::getEntryForNumArgs(int numArgsPassed) const {
 ///////////////////////////////////////////////////////////////////////////////
 // Parameters.
 
-bool Func::anyByRef() const {
-  if (m_refBitVal) {
+bool Func::takesInOutParams() const {
+  if (m_inoutBitVal) {
     return true;
   }
 
@@ -472,7 +472,7 @@ bool Func::anyByRef() const {
     auto limit = argToQword(numParams() - 1);
     assertx(limit >= 0);
     for (int i = 0; i <= limit; ++i) {
-      if (shared()->m_refBitPtr[i]) {
+      if (shared()->m_inoutBitPtr[i]) {
         return true;
       }
     }
@@ -480,19 +480,31 @@ bool Func::anyByRef() const {
   return false;
 }
 
-bool Func::byRef(int32_t arg) const {
-  const uint64_t* ref = &m_refBitVal;
+bool Func::isInOut(int32_t arg) const {
+  const uint64_t* ref = &m_inoutBitVal;
   assertx(arg >= 0);
   if (UNLIKELY(arg >= kBitsPerQword)) {
     if (arg >= numParams()) {
       return false;
     }
-    ref = &shared()->m_refBitPtr[argToQword(arg)];
+    ref = &shared()->m_inoutBitPtr[argToQword(arg)];
   }
   int bit = (uint32_t)arg % kBitsPerQword;
   return *ref & (1ull << bit);
 }
 
+uint32_t Func::numInOutParams() const {
+  uint32_t count = folly::popcount(m_inoutBitVal);
+
+  if (UNLIKELY(numParams() > kBitsPerQword)) {
+    auto limit = argToQword(numParams() - 1);
+    assertx(limit >= 0);
+    for (int i = 0; i <= limit; ++i) {
+      count += folly::popcount(shared()->m_inoutBitPtr[i]);
+    }
+  }
+  return count;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Locals, iterators, and stack.
@@ -562,7 +574,6 @@ void Func::print_attrs(std::ostream& out, Attr attrs) {
   if (attrs & AttrInterceptable) { out << " (interceptable)"; }
   if (attrs & AttrPersistent) { out << " (persistent)"; }
   if (attrs & AttrMayUseVV) { out << " (mayusevv)"; }
-  if (attrs & AttrRequiresThis) { out << " (requiresthis)"; }
   if (attrs & AttrBuiltin) { out << " (builtin)"; }
   if (attrs & AttrIsFoldable) { out << " (foldable)"; }
   if (attrs & AttrNoInjection) { out << " (no_injection)"; }
@@ -611,7 +622,7 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
     if (param.userType) {
       out << " (" << param.userType->data() << ")";
     }
-    if (param.funcletOff != InvalidAbsoluteOffset) {
+    if (param.funcletOff != kInvalidOffset) {
       out << " DV" << " at " << param.funcletOff;
       if (param.phpCode) {
         out << " = " << param.phpCode->data();
@@ -632,10 +643,10 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
     out << std::endl;
   }
 
-  if (repoReturnType().tag() != RepoAuthType::Tag::Gen) {
+  if (repoReturnType().tag() != RepoAuthType::Tag::Cell) {
     out << "repoReturnType: " << show(repoReturnType()) << '\n';
   }
-  if (repoAwaitedReturnType().tag() != RepoAuthType::Tag::Gen) {
+  if (repoAwaitedReturnType().tag() != RepoAuthType::Tag::Cell) {
     out << "repoAwaitedReturnType: " << show(repoAwaitedReturnType()) << '\n';
   }
   out << "maxStackCells: " << maxStackCells() << '\n'
@@ -677,7 +688,7 @@ Func::SharedData::SharedData(PreClass* preClass, Offset base, Offset past,
   , m_numIterators(0)
   , m_line1(line1)
   , m_docComment(docComment)
-  , m_refBitPtr(0)
+  , m_inoutBitPtr(0)
   , m_top(top)
   , m_isClosureBody(false)
   , m_isAsync(false)
@@ -691,6 +702,8 @@ Func::SharedData::SharedData(PreClass* preClass, Offset base, Offset past,
   , m_isPhpLeafFn(isPhpLeafFn)
   , m_hasReifiedGenerics(false)
   , m_isRxDisabled(false)
+  , m_hasParamsWithMultiUBs(false)
+  , m_hasReturnWithMultiUBs(false)
   , m_originalFilename(nullptr)
   , m_cti_base(0)
 {
@@ -699,7 +712,7 @@ Func::SharedData::SharedData(PreClass* preClass, Offset base, Offset past,
 }
 
 Func::SharedData::~SharedData() {
-  free(m_refBitPtr);
+  free(m_inoutBitPtr);
   if (m_cti_base) free_cti(m_cti_base, m_cti_size);
 }
 
@@ -726,7 +739,6 @@ void logFunc(const Func* func, StructuredLogEntry& ent) {
   if (func->isPairGenerator()) attrSet.emplace("pair_generator");
   if (func->hasVariadicCaptureParam()) attrSet.emplace("variadic_param");
   if (func->attrs() & AttrMayUseVV) attrSet.emplace("may_use_vv");
-  if (func->attrs() & AttrRequiresThis) attrSet.emplace("must_have_this");
   if (func->isPhpLeafFn()) attrSet.emplace("leaf_function");
   if (func->cls() && func->cls()->isPersistent()) attrSet.emplace("persistent");
 

@@ -17,11 +17,16 @@
 #ifndef incl_HPHP_RECORD_ARRAY_H_
 #define incl_HPHP_RECORD_ARRAY_H_
 
+#include "hphp/runtime/base/array-common.h"
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/record-data.h"
 #include "hphp/runtime/base/string-hash-map.h"
 
 namespace HPHP {
+
+///////////////////////////////////////////////////////////////////////////////
+struct MixedArray;
+
 struct RecordArray : ArrayData,
                      RecordBase,
                      type_scan::MarkCollectable<RecordArray>  {
@@ -32,7 +37,7 @@ struct RecordArray : ArrayData,
 
 
   static size_t sizeWithFields(const RecordDesc* rec) {
-    return sizeof(RecordArray) + fieldSize(rec) + sizeof(ExtraFieldMap);
+    return sizeof(RecordArray) + fieldSize(rec) + sizeof(ExtraFieldMapPtr);
   }
   size_t heapSize() const;
   bool kindIsValid() const;
@@ -43,37 +48,37 @@ struct RecordArray : ArrayData,
                                      uint32_t initSize,
                                      const StringData* const* keys,
                                      const TypedValue* values);
-  RecordArray* copyRecordArray() const;
+  RecordArray* copyRecordArray(AllocMode) const;
 
   // Array interface
   static void Release(ArrayData*);
   static tv_rval NvGetInt(const ArrayData*, int64_t key);
-  static tv_rval NvTryGetInt(const ArrayData*, int64_t key);
+  static constexpr auto NvTryGetInt = &NvGetInt;
   static tv_rval NvGetStr(const ArrayData*, const StringData*);
   static constexpr auto NvTryGetStr = &NvGetStr;
   static ssize_t NvGetIntPos(const ArrayData*, int64_t k);
   static ssize_t NvGetStrPos(const ArrayData*, const StringData* k);
-  static Cell NvGetKey(const ArrayData*, ssize_t pos);
-  static ArrayData* SetInt(ArrayData*, int64_t key, Cell v);
-  static ArrayData* SetIntInPlace(ArrayData*, int64_t key, Cell v);
-  static ArrayData* SetStr(ArrayData*, StringData*, Cell v);
-  static ArrayData* SetStrInPlace(ArrayData*, StringData*, Cell v);
-  static ArrayData* SetWithRefInt(ArrayData*, int64_t k, Cell v);
-  static ArrayData* SetWithRefIntInPlace(ArrayData*, int64_t k, Cell v);
-  static ArrayData* SetWithRefStr(ArrayData*, StringData* k, Cell v);
-  static ArrayData* SetWithRefStrInPlace(ArrayData*, StringData* k, Cell v);
+  static TypedValue NvGetKey(const ArrayData*, ssize_t pos);
+  static ArrayData* SetInt(ArrayData*, int64_t key, TypedValue v);
+  static ArrayData* SetIntMove(ArrayData*, int64_t key, TypedValue v);
+  static constexpr auto SetIntInPlace = &SetInt;
+  static ArrayData* SetStr(ArrayData*, StringData*, TypedValue v);
+  static ArrayData* SetStrMove(ArrayData*, StringData*, TypedValue v);
+  static ArrayData* SetStrInPlace(ArrayData*, StringData*, TypedValue v);
   static size_t Vsize(const ArrayData*);
-  static tv_rval GetValueRef(const ArrayData*, ssize_t pos);
+  static tv_rval RvalPos(const ArrayData*, ssize_t pos);
   static bool IsVectorData(const ArrayData*);
   static bool ExistsInt(const ArrayData*, int64_t key);
   static bool ExistsStr(const ArrayData*, const StringData*);
   static arr_lval LvalInt(ArrayData*, int64_t k, bool copy);
   static arr_lval LvalStr(ArrayData*, StringData* key, bool copy);
-  static arr_lval LvalNew(ArrayData*, bool copy);
+  static arr_lval LvalSilentInt(ArrayData*, int64_t k, bool copy);
+  static arr_lval LvalSilentStr(ArrayData*, StringData* key, bool copy);
+  static arr_lval LvalForceNew(ArrayData*, bool copy);
   static ArrayData* RemoveInt(ArrayData*, int64_t key);
-  static ArrayData* RemoveIntInPlace(ArrayData*, int64_t key);
+  static constexpr auto RemoveIntInPlace = &RemoveInt;
   static ArrayData* RemoveStr(ArrayData*, const StringData*);
-  static ArrayData* RemoveStrInPlace(ArrayData*, const StringData*);
+  static constexpr auto RemoveStrInPlace = &RemoveStr;
   static ssize_t IterEnd(const ArrayData*);
   static ssize_t IterBegin(const ArrayData*);
   static ssize_t IterLast(const ArrayData*);
@@ -88,33 +93,32 @@ struct RecordArray : ArrayData,
   static bool Uasort(ArrayData*, const Variant&);
   static ArrayData* Copy(const ArrayData*);
   static ArrayData* CopyStatic(const ArrayData*);
-  static ArrayData* Append(ArrayData*, Cell v);
-  static ArrayData* AppendInPlace(ArrayData*, Cell v);
-  static ArrayData* AppendWithRef(ArrayData*, TypedValue v);
-  static ArrayData* AppendWithRefInPlace(ArrayData*, TypedValue v);
+  static ArrayData* Append(ArrayData*, TypedValue v);
+  static constexpr auto AppendInPlace = &Append;
   static ArrayData* PlusEq(ArrayData*, const ArrayData* elems);
   static ArrayData* Merge(ArrayData*, const ArrayData* elems);
   static ArrayData* Pop(ArrayData*, Variant& value);
   static ArrayData* Dequeue(ArrayData*, Variant& value);
-  static ArrayData* Prepend(ArrayData*, Cell v);
+  static ArrayData* Prepend(ArrayData*, TypedValue v);
   static void Renumber(ArrayData*);
   static void OnSetEvalScalar(ArrayData*);
   static ArrayData* Escalate(const ArrayData*);
   static ArrayData* ToPHPArray(ArrayData*, bool);
-  static ArrayData* ToPHPArrayIntishCast(ArrayData*, bool);
-  static ArrayData* ToShape(ArrayData*, bool);
-  static ArrayData* ToDict(ArrayData*, bool);
-  static ArrayData* ToVec(ArrayData*, bool);
-  static ArrayData* ToKeyset(ArrayData*, bool);
-  static ArrayData* ToVArray(ArrayData*, bool);
-  static ArrayData* ToDArray(ArrayData*, bool);
+  static constexpr auto ToPHPArrayIntishCast = &ToPHPArray;
+  static constexpr auto ToDict = &ArrayCommon::ToDict;
+  static constexpr auto ToVec = &ArrayCommon::ToVec;
+  static constexpr auto ToKeyset = &ArrayCommon::ToKeyset;
+  static constexpr auto ToVArray = &ArrayCommon::ToVArray;
+  static constexpr auto ToDArray = &ArrayCommon::ToDArray;
 
   static RecordArray* asRecordArray(ArrayData*);
   static const RecordArray* asRecordArray(const ArrayData*);
 
+  static MixedArray* ToMixed(const ArrayData*);
+
 private:
-  using ExtraFieldMap = req::StringFastMap<TypedValue>;
-  const ExtraFieldMap* extraFieldMap() const;
+  using ExtraFieldMapPtr = MixedArray*;
+  ExtraFieldMapPtr& extraFieldMap() const;
   bool checkInvariants() const;
   /**
    * Returns index of the field with name `key` if it exists and
@@ -122,12 +126,18 @@ private:
    * Returns kInvalidSlot if the field does not exist.
    * Raises a typehint error if the field exists but the type check fails.
    */
-  Slot checkFieldForWrite(const StringData* key, Cell val) const;
+  Slot checkFieldForWrite(const StringData* key, TypedValue val) const;
   /*
    * Updates the field at idx if idx is valid. Otherwise inserts key, val pair
    * in the extra field map.
    */
-  void updateField(StringData* key, Cell val, Slot idx);
+  void updateField(StringData* key, TypedValue val, Slot idx);
+
+  static MixedArray* ToMixedHeader(const RecordArray*);
 };
-} // namespace HPHP
+
+///////////////////////////////////////////////////////////////////////////////
+
+}
+
 #endif // incl_HPHP_RECORD_ARRAY_H_

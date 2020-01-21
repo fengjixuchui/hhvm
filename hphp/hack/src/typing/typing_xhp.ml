@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Common
 open Typing_defs
 module Env = Typing_env
@@ -16,11 +16,12 @@ module Reason = Typing_reason
 module Subst = Decl_subst
 module TUtils = Typing_utils
 module MakeType = Typing_make_type
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 
 let raise_xhp_required env pos ureason ty =
   let ty_str = Typing_print.error env ty in
-  let msgl = Reason.to_string ("This is " ^ ty_str) (fst ty) in
+  let msgl = Reason.to_string ("This is " ^ ty_str) (get_reason ty) in
   Errors.xhp_required pos (Reason.string_of_ureason ureason) msgl
 
 (**
@@ -43,7 +44,7 @@ let rec walk_and_gather_xhp_ ~env ~pos cty =
       cty
       Errors.unify_error
   in
-  match snd cty with
+  match get_node cty with
   | Tany _
   | Terr
   | Tdynamic ->
@@ -61,13 +62,15 @@ let rec walk_and_gather_xhp_ ~env ~pos cty =
       | _ -> non_xhp
     in
     (env, xhp, non_xhp)
-  | Tabstract (AKdependent DTthis, _) ->
+  | Tdependent (DTthis, _) ->
     (* This is unsound, but we want to do best-effort checking
      * of attribute spreads even on XHP classes not marked `final`. We should
      * implement <<__ConsistentAttributes>> as a way to make this hacky
      * inference sound and check it before doing this conversion. *)
     walk_and_gather_xhp_ ~env ~pos (Env.get_self env)
-  | Tabstract _ ->
+  | Tgeneric _
+  | Tdependent _
+  | Tnewtype _ ->
     let (env, tyl) = TUtils.get_concrete_supertypes env cty in
     walk_list_and_gather_xhp env pos tyl
   | Tclass ((_, c), _, tyl) ->
@@ -86,11 +89,10 @@ let rec walk_and_gather_xhp_ ~env ~pos cty =
   | Ttuple _
   | Tanon (_, _)
   | Tobject
-  | Tshape _
-  | Tdestructure _ ->
+  | Tshape _ ->
     (env, [], [cty])
-  | Tpu_access _
-  | Tpu _ ->
+  | Tpu _
+  | Tpu_type_access _ ->
     (env, [], [cty])
 
 and walk_list_and_gather_xhp env pos tyl =
@@ -119,9 +121,10 @@ and get_spread_attributes env pos onto_xhp cty =
       {
         type_expansions = [];
         this_ty = xhp_ty;
-        substs = Subst.make (Cls.tparams xhp_info) tparams;
+        substs = Subst.make_locl (Cls.tparams xhp_info) tparams;
         from_class = None;
-        validate_dty = None;
+        quiet = false;
+        on_error = Errors.unify_error;
       }
     in
     List.map_env
@@ -150,4 +153,6 @@ let is_xhp_child env pos ty =
   Typing_solver.is_sub_type
     env
     ty
-    (MakeType.nullable r (r, Tunion [ty_child; ty_traversable]))
+    (MakeType.nullable_locl
+       r
+       (MakeType.union r [MakeType.dynamic r; ty_child; ty_traversable]))

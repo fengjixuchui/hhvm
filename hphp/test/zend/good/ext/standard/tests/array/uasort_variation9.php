@@ -15,7 +15,7 @@
  *               -1 - if value1 is less than value2
  * Description : compares value1 and value2
  */
-function cmp(&$value1, &$value2)
+function cmp(inout $value1, inout $value2)
 {
   if($value1 == $value2) {
     return 0;
@@ -32,13 +32,13 @@ echo "*** Testing uasort() : 'cmp_function' with reference arguments ***\n";
 // Int array with default keys
 $int_values = array(1, 8, 9, 3, 2, 6, 7);
 echo "-- Passing integer values to 'cmp_function' --\n";
-var_dump( uasort(&$int_values, fun('cmp')) );
+var_dump( uasort(inout $int_values, fun('cmp')) );
 var_dump($int_values);
 
 // String array with default keys
 $string_values = array("Mango", "Apple", "Orange", "Banana");
 echo "-- Passing string values to 'cmp_function' --\n";
-var_dump( uasort(&$string_values, fun('cmp')) );
+var_dump( uasort(inout $string_values, fun('cmp')) );
 var_dump($string_values);
 
 echo "Done";

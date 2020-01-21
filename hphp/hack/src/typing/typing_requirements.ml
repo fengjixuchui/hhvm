@@ -7,9 +7,10 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 module Reason = Typing_reason
 module TUtils = Typing_utils
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 
 (* Only applied to classes. Checks that all the requirements of the traits
@@ -20,7 +21,7 @@ let check_fulfillment env get_impl (parent_pos, req_ty) =
   | Some (_r, (_p, req_name), _paraml) ->
     (match get_impl req_name with
     | None ->
-      let req_pos = Reason.to_pos (fst req_ty) in
+      let req_pos = Typing_defs.get_pos req_ty in
       Errors.unsatisfied_req parent_pos req_name req_pos;
       ()
     | Some impl_ty ->
@@ -35,6 +36,5 @@ let check_class env tc =
       (check_fulfillment env (Cls.get_ancestor tc))
   | Ast_defs.Ctrait
   | Ast_defs.Cinterface
-  | Ast_defs.Cenum
-  | Ast_defs.Crecord ->
+  | Ast_defs.Cenum ->
     ()

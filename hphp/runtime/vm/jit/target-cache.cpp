@@ -95,7 +95,7 @@ const Func* FuncCache::lookup(rds::Handle handle, StringData* sd) {
   }
   auto const pair = keyToPair(thiz, sd);
   if (stringMatches(pair->m_key, sd)) {
-    assertx(stringMatches(pair->m_key, pair->m_value->displayName()));
+    assertx(stringMatches(pair->m_key, pair->m_value->name()));
     pair->m_value->validate();
     return pair->m_value;
   }
@@ -110,7 +110,7 @@ const Func* FuncCache::lookup(rds::Handle handle, StringData* sd) {
   assertx(!func->implCls());
   func->validate();
   // use a static name
-  pair->m_key = const_cast<StringData*>(func->displayName());
+  pair->m_key = const_cast<StringData*>(func->name());
   pair->m_value = func;
   return func;
 }
@@ -431,7 +431,7 @@ StaticMethodCache::lookup(rds::Handle handle, const NamedEntity *ne,
     TRACE(1, "fill %s :: %s -> %p\n", clsName->data(),
           methName->data(), f);
     // Do the | here instead of on every call.
-    thiz->m_cls = (Class*)(uintptr_t(cls) | 1);
+    thiz->m_cls = cls;
     thiz->m_func = f;
     rds::initHandle(handle);
     return f;

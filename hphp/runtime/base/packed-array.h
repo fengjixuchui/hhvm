@@ -35,7 +35,6 @@ namespace HPHP {
 //////////////////////////////////////////////////////////////////////
 
 struct Variant;
-struct RefData;
 struct ArrayData;
 struct StringData;
 struct MixedArray;
@@ -83,29 +82,15 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
     assertx(ad->isPacked());
     return NvTryGetInt(ad, k);
   }
-  static tv_rval RvalStr(const ArrayData* ad, const StringData* k) {
-    assertx(ad->isPacked());
-    return NvGetStr(ad, k);
-  }
-  static tv_rval RvalStrStrict(const ArrayData* ad, const StringData* k) {
-    assertx(ad->isPacked());
-    return NvTryGetStr(ad, k);
-  }
-  static tv_rval RvalAtPos(const ArrayData* ad, ssize_t pos) {
-    assertx(ad->isPacked());
-    return GetValueRef(ad, pos);
-  }
-  static Cell NvGetKey(const ArrayData*, ssize_t pos);
-  static ArrayData* SetInt(ArrayData*, int64_t k, Cell v);
-  static ArrayData* SetIntInPlace(ArrayData*, int64_t k, Cell v);
-  static ArrayData* SetStr(ArrayData*, StringData* k, Cell v);
-  static ArrayData* SetStrInPlace(ArrayData*, StringData* k, Cell v);
-  static ArrayData* SetWithRefInt(ArrayData*, int64_t k, TypedValue v);
-  static ArrayData* SetWithRefIntInPlace(ArrayData*, int64_t k, TypedValue v);
-  static ArrayData* SetWithRefStr(ArrayData*, StringData* k, TypedValue v);
-  static ArrayData* SetWithRefStrInPlace(ArrayData*, StringData*, TypedValue);
+  static TypedValue NvGetKey(const ArrayData*, ssize_t pos);
+  static ArrayData* SetInt(ArrayData*, int64_t k, TypedValue v);
+  static ArrayData* SetIntMove(ArrayData*, int64_t k, TypedValue v);
+  static ArrayData* SetIntInPlace(ArrayData*, int64_t k, TypedValue v);
+  static ArrayData* SetStr(ArrayData*, StringData* k, TypedValue v);
+  static ArrayData* SetStrMove(ArrayData*, StringData* k, TypedValue v);
+  static ArrayData* SetStrInPlace(ArrayData*, StringData* k, TypedValue v);
   static size_t Vsize(const ArrayData*);
-  static tv_rval GetValueRef(const ArrayData* ad, ssize_t pos);
+  static tv_rval RvalPos(const ArrayData* ad, ssize_t pos);
   static bool IsVectorData(const ArrayData*) {
     return true;
   }
@@ -113,7 +98,9 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static bool ExistsStr(const ArrayData*, const StringData*);
   static arr_lval LvalInt(ArrayData*, int64_t k, bool copy);
   static arr_lval LvalStr(ArrayData*, StringData* k, bool copy);
-  static arr_lval LvalNew(ArrayData*, bool copy);
+  static arr_lval LvalSilentInt(ArrayData*, int64_t, bool copy);
+  static arr_lval LvalSilentStr(ArrayData*, StringData*, bool copy);
+  static arr_lval LvalForceNew(ArrayData*, bool copy);
   static ArrayData* RemoveInt(ArrayData*, int64_t k);
   static ArrayData* RemoveIntInPlace(ArrayData*, int64_t k);
   static ArrayData* RemoveStr(ArrayData*, const StringData* k);
@@ -132,21 +119,18 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static bool Uksort(ArrayData*, const Variant&);
   static bool Usort(ArrayData*, const Variant&);
   static bool Uasort(ArrayData*, const Variant&);
-  static ArrayData* Append(ArrayData*, Cell v);
-  static ArrayData* AppendInPlace(ArrayData*, Cell v);
-  static ArrayData* AppendWithRef(ArrayData*, TypedValue v);
-  static ArrayData* AppendWithRefInPlace(ArrayData*, TypedValue v);
+  static ArrayData* Append(ArrayData*, TypedValue v);
+  static ArrayData* AppendInPlace(ArrayData*, TypedValue v);
   static ArrayData* PlusEq(ArrayData*, const ArrayData* elems);
   static ArrayData* Merge(ArrayData*, const ArrayData* elems);
   static ArrayData* Pop(ArrayData*, Variant& value);
   static ArrayData* Dequeue(ArrayData*, Variant& value);
-  static ArrayData* Prepend(ArrayData*, Cell v);
+  static ArrayData* Prepend(ArrayData*, TypedValue v);
   static ArrayData* ToPHPArray(ArrayData*, bool);
   static constexpr auto ToPHPArrayIntishCast = &ToPHPArray;
   static ArrayData* ToVArray(ArrayData*, bool);
   static ArrayData* ToDArray(ArrayData*, bool);
   static ArrayData* ToDict(ArrayData*, bool);
-  static ArrayData* ToShape(ArrayData*, bool);
   static ArrayData* ToVec(ArrayData*, bool);
   static void Renumber(ArrayData*) {}
   static void OnSetEvalScalar(ArrayData*);
@@ -158,26 +142,23 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
 
   static tv_rval NvTryGetIntVec(const ArrayData*, int64_t);
   static tv_rval NvTryGetStrVec(const ArrayData*, const StringData*);
-  static ArrayData* SetIntVec(ArrayData*, int64_t, Cell);
-  static ArrayData* SetIntInPlaceVec(ArrayData*, int64_t, Cell);
-  static ArrayData* SetStrVec(ArrayData*, StringData*, Cell);
+  static ArrayData* SetIntVec(ArrayData*, int64_t, TypedValue);
+  static ArrayData* SetIntMoveVec(ArrayData*, int64_t, TypedValue);
+  static ArrayData* SetIntInPlaceVec(ArrayData*, int64_t, TypedValue);
+  static ArrayData* SetStrVec(ArrayData*, StringData*, TypedValue);
+  static constexpr auto SetStrMoveVec = &SetStrVec;
   static constexpr auto SetStrInPlaceVec = &SetStrVec;
-  static ArrayData* SetWithRefIntVec(ArrayData*, int64_t k, TypedValue v);
-  static ArrayData* SetWithRefIntInPlaceVec(ArrayData*, int64_t, TypedValue);
-  static ArrayData* SetWithRefStrVec(ArrayData*, StringData* k, TypedValue v);
-  static constexpr auto SetWithRefStrInPlaceVec = &SetWithRefStrVec;
   static ArrayData* RemoveIntVec(ArrayData*, int64_t);
   static ArrayData* RemoveIntInPlaceVec(ArrayData*, int64_t);
   static arr_lval LvalIntVec(ArrayData*, int64_t, bool);
   static arr_lval LvalStrVec(ArrayData*, StringData*, bool);
-  static ArrayData* AppendWithRefVec(ArrayData*, TypedValue);
-  static ArrayData* AppendWithRefInPlaceVec(ArrayData*, TypedValue);
+  static constexpr auto LvalSilentIntVec = &LvalSilentInt;
+  static constexpr auto LvalSilentStrVec = &LvalSilentStr;
   static ArrayData* PlusEqVec(ArrayData*, const ArrayData*);
   static ArrayData* ToPHPArrayVec(ArrayData*, bool);
   static constexpr auto ToPHPArrayIntishCastVec = &ToPHPArrayVec;
   static ArrayData* ToVArrayVec(ArrayData*, bool);
   static ArrayData* ToDictVec(ArrayData*, bool);
-  static ArrayData* ToShapeVec(ArrayData*, bool);
   static ArrayData* ToVecVec(ArrayData*, bool);
 
   static constexpr auto MergeVec = &Merge;
@@ -186,11 +167,11 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static constexpr auto NvGetStrVec = &NvGetStr;
   static constexpr auto NvGetKeyVec = &NvGetKey;
   static constexpr auto VsizeVec = &Vsize;
-  static constexpr auto GetValueRefVec = &GetValueRef;
+  static constexpr auto RvalPosVec = &RvalPos;
   static constexpr auto IsVectorDataVec = &IsVectorData;
   static constexpr auto ExistsIntVec = &ExistsInt;
   static constexpr auto ExistsStrVec = &ExistsStr;
-  static constexpr auto LvalNewVec = &LvalNew;
+  static constexpr auto LvalForceNewVec = &LvalForceNew;
   static constexpr auto RemoveStrVec = &RemoveStr;
   static constexpr auto RemoveStrInPlaceVec = &RemoveStr;
   static constexpr auto IterBeginVec = &IterBegin;
@@ -217,7 +198,6 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static constexpr auto EscalateVec = &Escalate;
   static constexpr auto ToKeysetVec = &ArrayCommon::ToKeyset;
   static constexpr auto ToDArrayVec = &ToDArray;
-  static constexpr auto ToDArrayShape = &ToDArray;
 
   static tv_rval RvalIntVec(const ArrayData* ad, int64_t k) {
     assertx(ad->isVecArray());
@@ -229,11 +209,6 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   }
 
   //////////////////////////////////////////////////////////////////////
-
-  // Like LvalInt, but silently does nothing if the element doesn't exist. Not
-  // part of the ArrayData interface, but used in member operations.
-  static arr_lval LvalSilentInt(ArrayData*, int64_t, bool);
-  static constexpr auto LvalSilentIntVec = &LvalSilentInt;
 
   // Like LvalInt, but without any bounds checking. Used to implement the
   // Vector / ImmVector collection types in ext/collections. This function
@@ -269,16 +244,16 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
    *
    * This function takes ownership of the Cells in `values'.
    */
-  static ArrayData* MakePacked(uint32_t size, const Cell* values);
-  static ArrayData* MakeVArray(uint32_t size, const Cell* values);
-  static ArrayData* MakeVec(uint32_t size, const Cell* values);
+  static ArrayData* MakePacked(uint32_t size, const TypedValue* values);
+  static ArrayData* MakeVArray(uint32_t size, const TypedValue* values);
+  static ArrayData* MakeVec(uint32_t size, const TypedValue* values);
 
   /*
    * Like MakePacked, but with `values' array in natural (not reversed) order.
    */
-  static ArrayData* MakePackedNatural(uint32_t size, const Cell* values);
-  static ArrayData* MakeVArrayNatural(uint32_t size, const Cell* values);
-  static ArrayData* MakeVecNatural(uint32_t size, const Cell* values);
+  static ArrayData* MakePackedNatural(uint32_t size, const TypedValue* values);
+  static ArrayData* MakeVArrayNatural(uint32_t size, const TypedValue* values);
+  static ArrayData* MakeVecNatural(uint32_t size, const TypedValue* values);
 
   static ArrayData* MakeUninitialized(uint32_t size);
   static ArrayData* MakeUninitializedVArray(uint32_t size);
@@ -334,11 +309,10 @@ private:
   static ArrayData* MakeReserveImpl(uint32_t, HeaderKind, ArrayData::DVArray);
 
   template<bool reverse>
-  static ArrayData* MakePackedImpl(uint32_t, const Cell*,
+  static ArrayData* MakePackedImpl(uint32_t, const TypedValue*,
                                    HeaderKind, ArrayData::DVArray);
 
-  template<bool convertingPackedToVec>
-  static bool CopyPackedHelper(const ArrayData* adIn, ArrayData* ad);
+  static void CopyPackedHelper(const ArrayData* adIn, ArrayData* ad);
 
   static bool VecEqualHelper(const ArrayData*, const ArrayData*, bool);
   static int64_t VecCmpHelper(const ArrayData*, const ArrayData*);
@@ -346,16 +320,7 @@ private:
   static ArrayData* RemoveImpl(ArrayData*, int64_t, bool);
   static ArrayData* RemoveImplVec(ArrayData*, int64_t, bool);
 
-  static ArrayData* SetWithRefIntImpl(ArrayData*, int64_t k, TypedValue v,
-                                      bool copy);
-  static ArrayData* SetWithRefStrImpl(ArrayData*, StringData* k, TypedValue v,
-                                      bool copy);
-  static ArrayData* SetWithRefIntVecImpl(ArrayData*, int64_t k,
-                                         TypedValue v, bool copy);
-
-  static ArrayData* AppendImpl(ArrayData*, Cell v, bool copy);
-  static ArrayData* AppendWithRefImpl(ArrayData*, TypedValue v, bool copy);
-  static ArrayData* AppendWithRefVecImpl(ArrayData*, TypedValue, bool copy);
+  static ArrayData* AppendImpl(ArrayData*, TypedValue v, bool copy);
 
   struct VecInitializer;
   static VecInitializer s_vec_initializer;

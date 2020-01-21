@@ -4,17 +4,14 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use parser::coroutine_smart_constructors::CoroutineStateType;
-use parser::parser_env::ParserEnv;
-use parser::source_text::SourceText;
-use parser::syntax_smart_constructors::StateType;
-use parser_rust as parser;
-
-use crate::ocaml_syntax::Context;
-use crate::rust_to_ocaml::SerializationContext;
-
+use crate::Context;
+use coroutine_smart_constructors::CoroutineStateType;
+use ocaml::core::mlvalues::Value;
+use parser_core_types::{parser_env::ParserEnv, source_text::SourceText};
+use rust_to_ocaml::{SerializationContext, ToOcaml};
 use std::marker::PhantomData;
 use std::rc::Rc;
+use syntax_smart_constructors::StateType;
 
 #[derive(Clone)]
 pub struct OcamlCoroutineState<'src, S> {
@@ -53,10 +50,18 @@ impl<'src, S: Clone> StateType<'src, S> for OcamlCoroutineState<'src, S> {
             seen_ppl: false,
             source: src.clone(),
             is_codegen: env.codegen,
-            context: Rc::new(SerializationContext::new(src.ocaml_source_text())),
+            context: Rc::new(SerializationContext::new(
+                src.ocaml_source_text().unwrap().as_usize(),
+            )),
             phantom_s: PhantomData,
         }
     }
 
     fn next(&mut self, _inputs: &[&S]) {}
+}
+
+impl<'a, S> ToOcaml for OcamlCoroutineState<'a, S> {
+    unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
+        self.seen_ppl().to_ocaml(context)
+    }
 }

@@ -41,10 +41,10 @@ ArrayData* addToReifiedGenericsTable(
     ne->setCachedReifiedGenerics(tsList);
     return tsList;
   }
-  // it already exists on the named entity table
-  if (debug && !tsList->equal(generics, true)) {
-    raise_error("Mismatched reified types");
-  }
+  // Same key should never result in different values.
+  // If this assertion fires, there's a high chance that two different type
+  // structure mangle to the same name and they should not.
+  assertx(tsList->equal(generics, true));
   decRefArr(tsList);
   return generics;
 }
@@ -56,7 +56,7 @@ ArrayData* getClsReifiedGenericsProp(Class* cls, ObjectData* obj) {
   auto const slot = cls->lookupReifiedInitProp();
   assertx(slot != kInvalidSlot);
   auto index = cls->propSlotToIndex(slot);
-  auto tv = obj->propVec()[index];
+  auto tv = obj->props()->at(index).tv();
   assertx(tvIsVecOrVArray(tv));
   return tv.m_data.parr;
 }
@@ -74,7 +74,7 @@ extractSizeAndPosFromReifiedAttribute(const ArrayData* arr) {
   std::vector<TypeParamInfo> tpList;
   IterateKV(
     arr,
-    [&](Cell k, TypedValue v) {
+    [&](TypedValue k, TypedValue v) {
       assertx(isIntType(k.m_type));
       assertx(isIntType(v.m_type));
       if (k.m_data.num == 0) {
@@ -117,6 +117,12 @@ void checkReifiedGenericMismatchHelper(
   auto const generics = info.m_typeParamInfo;
   auto const len = generics.size();
   if (len != reified_generics->size()) {
+    if (reified_generics->size() == 0) {
+      if (areAllGenericsSoft(info)) {
+        raise_warning_for_soft_reified(0, fun, name);
+        return;
+      }
+    }
     SystemLib::throwBadMethodCallExceptionObject(
       folly::sformat("{} {} requires {} generics but {} given",
                      fun ? "Function" : "Class",
@@ -127,7 +133,7 @@ void checkReifiedGenericMismatchHelper(
   auto it = generics.begin();
   IterateKV(
     reified_generics,
-    [&](Cell k, TypedValue v) {
+    [&](TypedValue k, TypedValue v) {
       assertx(isIntType(k.m_type));
       assertx(isArrayLikeType(v.m_type));
       auto const i = k.m_data.num;
@@ -139,11 +145,7 @@ void checkReifiedGenericMismatchHelper(
                            name->data(),
                            i));
         }
-        raise_warning("Generic at index %zu to %s %s must be reified,"
-                      " erased given",
-                      i,
-                      fun ? "Function" : "Class",
-                      name->data());
+        raise_warning_for_soft_reified(i, fun, name);
       }
       ++it;
     }
@@ -171,6 +173,38 @@ void checkClassReifiedGenericMismatch(
     reified_generics
   );
 }
+
+uint32_t getGenericsBitmap(const ArrayData* generics) {
+  assertx(generics);
+  if (generics->size() > 15) return 0;
+  auto bitmap = 1;
+  IterateV(
+    generics,
+    [&](TypedValue v) {
+      assertx(isArrayLikeType(v.m_type));
+      bitmap = (bitmap << 1) | !isWildCard(v.m_data.parr);
+    }
+  );
+  return bitmap;
+}
+
+bool areAllGenericsSoft(const ReifiedGenericsInfo& info) {
+  for (auto const& tp : info.m_typeParamInfo) {
+    if (!tp.m_isSoft) return false;
+  }
+  return true;
+}
+
+void raise_warning_for_soft_reified(size_t i, bool fun,
+                                    const StringData *name) {
+  raise_warning("Generic at index %zu to %s %s must be reified,"
+                " erased given",
+                i,
+                fun ? "Function" : "Class",
+                name->data());
+}
+
+
 
 ///////////////////////////////////////////////////////////////////////////////
 }

@@ -52,19 +52,17 @@ namespace {
 ///////////////////////////////////////////////////////////////////////////////
 
 RegionContext getContext(SrcKey sk) {
-  RegionContext ctx {
-    sk.func(), sk.offset(), liveSpOff(),
-    sk.resumeMode(), sk.hasThis()
-  };
+  RegionContext ctx { sk, liveSpOff() };
 
+  auto const func = sk.func();
   auto const fp = vmfp();
   auto const sp = vmsp();
 
-  always_assert(ctx.func == fp->m_func);
+  always_assert(func == fp->m_func);
 
-  auto const ctxClass = ctx.func->cls();
+  auto const ctxClass = func->cls();
   // Track local types.
-  for (uint32_t i = 0; i < fp->m_func->numLocals(); ++i) {
+  for (uint32_t i = 0; i < func->numLocals(); ++i) {
     ctx.liveTypes.push_back(
       { Location::Local{i}, typeFromTV(frame_local(fp, i), ctxClass) }
     );
@@ -86,7 +84,7 @@ RegionContext getContext(SrcKey sk) {
 
   // Get the bytecode for `ctx', skipping Asserts.
   auto const op = [&] {
-    auto pc = ctx.func->unit()->at(ctx.bcOffset);
+    auto pc = func->unit()->at(sk.offset());
     while (isTypeAssert(peek_op(pc))) {
       pc += instrLen(pc);
     }
@@ -177,7 +175,7 @@ TCA getFuncBody(Func* func) {
   if (tca != tc::ustubs().funcBodyHelperThunk) return tca;
 
   auto const dvs = func->getDVFunclets();
-  if (dvs.size() || func->hasThisVaries()) {
+  if (dvs.size()) {
     if (UNLIKELY(RID().isJittingDisabled())) {
       TRACE(2, "punting because jitting code was disabled\n");
       return nullptr;
@@ -186,7 +184,7 @@ TCA getFuncBody(Func* func) {
                                             : TransKind::Live;
     tca = tc::emitFuncBodyDispatch(func, dvs, kind);
   } else {
-    SrcKey sk(func, func->base(), ResumeMode::None, func->mayHaveThis());
+    SrcKey sk(func, func->base(), ResumeMode::None);
     tca = getTranslation(TransArgs{sk});
     if (tca) func->setFuncBody(tca);
   }
@@ -215,23 +213,23 @@ TCA bindJmp(TCA toSmash, SrcKey destSk, ServiceRequest req, TransFlags trflags,
 void syncFuncBodyVMRegs(ActRec* fp, void* sp) {
   auto& regs = vmRegsUnsafe();
   regs.fp = fp;
-  regs.stack.top() = (Cell*)sp;
+  regs.stack.top() = (TypedValue*)sp;
   regs.jitReturnAddr = nullptr;
 
   auto const nargs = fp->numArgs();
   auto const nparams = fp->func()->numNonVariadicParams();
   auto const& paramInfo = fp->func()->params();
 
-  auto firstDVI = InvalidAbsoluteOffset;
+  auto firstDVI = kInvalidOffset;
 
   for (auto i = nargs; i < nparams; ++i) {
     auto const dvi = paramInfo[i].funcletOff;
-    if (dvi != InvalidAbsoluteOffset) {
+    if (dvi != kInvalidOffset) {
       firstDVI = dvi;
       break;
     }
   }
-  if (firstDVI != InvalidAbsoluteOffset) {
+  if (firstDVI != kInvalidOffset) {
     regs.pc = fp->m_func->unit()->entry() + firstDVI;
   } else {
     regs.pc = fp->m_func->getEntry();
@@ -244,7 +242,7 @@ void syncFuncBodyVMRegs(ActRec* fp, void* sp) {
 
 TCA funcBodyHelper(ActRec* fp) {
   assert_native_stack_aligned();
-  void* const sp = reinterpret_cast<Cell*>(fp) - fp->func()->numSlotsInFrame();
+  void* const sp = reinterpret_cast<TypedValue*>(fp) - fp->func()->numSlotsInFrame();
   syncFuncBodyVMRegs(fp, sp);
   tl_regState = VMRegState::CLEAN;
 
@@ -286,9 +284,7 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
 
     case REQ_RETRANSLATE: {
       INC_TPC(retranslate);
-      sk = SrcKey{
-        liveFunc(), info.args[0].offset, liveResumeMode(), liveHasThis()
-      };
+      sk = SrcKey{ liveFunc(), info.args[0].offset, liveResumeMode() };
       auto trflags = info.args[1].trflags;
       auto args = TransArgs{sk};
       args.flags = trflags;
@@ -324,7 +320,7 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
       // cause an assumption that we made earlier to be violated (that `ar` is
       // on the stack), so if we detect this situation we need to fix up the
       // value of `ar`.
-      if (UNLIKELY(caller->resumed() &&
+      if (UNLIKELY(isResumed(caller) &&
                    caller->func()->isNonAsyncGenerator())) {
         auto gen = frame_generator(caller);
         if (gen->m_delegate.m_type == KindOfObject) {
@@ -340,7 +336,8 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
       }
       Unit* destUnit = caller->func()->unit();
       // Set PC so logging code in getTranslation doesn't get confused.
-      vmpc() = skipCall(destUnit->at(caller->m_func->base() + ar->m_callOff));
+      vmpc() = skipCall(
+        destUnit->at(caller->m_func->base() + ar->callOffset()));
       if (ar->isAsyncEagerReturn()) {
         // When returning to the interpreted FCall, the execution continues at
         // the next opcode, not honoring the request for async eager return.
@@ -348,28 +345,15 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
         // StaticWaitHandle.
         assertx(ar->retSlot()->m_aux.u_asyncEagerReturnFlag + 1 < 2);
         if (ar->retSlot()->m_aux.u_asyncEagerReturnFlag) {
-          auto const retval = tvAssertCell(*ar->retSlot());
+          auto const retval = tvAssertPlausible(*ar->retSlot());
           auto const waitHandle = c_StaticWaitHandle::CreateSucceeded(retval);
-          cellCopy(make_tv<KindOfObject>(waitHandle), *ar->retSlot());
+          tvCopy(make_tv<KindOfObject>(waitHandle), *ar->retSlot());
         }
       }
       assertx(caller == vmfp());
       TRACE(3, "REQ_POST_INTERP_RET: from %s to %s\n",
             ar->m_func->fullName()->data(),
             caller->m_func->fullName()->data());
-      sk = liveSK();
-      start = getTranslation(TransArgs{sk});
-      break;
-    }
-
-    case REQ_POST_DEBUGGER_RET: {
-      auto fp = vmfp();
-      auto caller = fp->func();
-      assertx(g_unwind_rds.isInit());
-      vmpc() = skipCall(caller->unit()->at(caller->base() +
-                                           g_unwind_rds->debuggerCallOff));
-      FTRACE(3, "REQ_DEBUGGER_RET: pc {} in {}\n",
-             vmpc(), fp->func()->fullName()->data());
       sk = liveSK();
       start = getTranslation(TransArgs{sk});
       break;
@@ -396,17 +380,15 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
   return start;
 }
 
-TCA handleBindCall(TCA toSmash, ActRec* calleeFrame) {
-  Func* func = const_cast<Func*>(calleeFrame->m_func);
-  int nArgs = calleeFrame->numArgs();
-  TRACE(2, "bindCall %s, ActRec %p\n", func->fullName()->data(), calleeFrame);
-  TCA start = mcgen::getFuncPrologue(func, nArgs);
+TCA handleBindCall(TCA toSmash, Func* func, int32_t numArgs) {
+  TRACE(2, "bindCall %s, numArgs %d\n", func->fullName()->data(), numArgs);
+  TCA start = mcgen::getFuncPrologue(func, numArgs);
   TRACE(2, "bindCall immutably %s -> %p\n", func->fullName()->data(), start);
 
-  if (start && !RuntimeOption::EvalFailJitPrologs) {
+  if (start) {
     // Using start is racy but bindCall will recheck the start address after
     // acquiring a lock on the ProfTransRec
-    tc::bindCall(toSmash, start, func, nArgs);
+    tc::bindCall(toSmash, start, func, numArgs);
   } else {
     // We couldn't get a prologue address. Return a stub that will finish
     // entering the callee frame in C++, then call handleResume at the callee's

@@ -85,19 +85,13 @@ void ifNonPersistent(Vout& v, Vout& vtaken, Type ty, Vloc loc, Then then) {
 template<class Then>
 void ifRefCountedType(Vout& v, Vout& vtaken, Type ty, Vloc loc, Then then) {
   if (!ty.maybe(TCounted)) return;
-  if (ty <= TGen && ty.isKnownDataType()) {
+  if (ty <= TCell && ty.isKnownDataType()) {
     if (isRefcountedType(ty.toDataType())) then(v);
     return;
   }
   auto const sf = v.makeReg();
-  ConditionCode cond;
-  if (ty <= TCtx) {
-    v << testqi{ActRec::kHasClassBit, loc.reg(0), sf};
-    cond = CC_E;
-  } else {
-    assertx(ty <= TGen);
-    cond = emitIsTVTypeRefCounted(v, sf, loc.reg(1));
-  }
+  assertx(ty <= TCell);
+  auto const cond = emitIsTVTypeRefCounted(v, sf, loc.reg(1));
   unlikelyIfThen(v, vtaken, cond, sf, then);
 }
 
@@ -169,7 +163,7 @@ void cgIncRef(IRLS& env, const IRInstruction* inst) {
     if (data.total > 0) {
       if (data.percent(data.refcounted) <
           RuntimeOption::EvalJitPGOUnlikelyIncRefCountedPercent
-          && !(ty <= TGen && ty.isKnownDataType())) {
+          && !(ty <= TCell && ty.isKnownDataType())) {
         unlikelyCounted = true;
         FTRACE(3, "irlower-inc-dec: Emitting cold counted check for {}, {}\n",
                data, *inst);
@@ -181,20 +175,6 @@ void cgIncRef(IRLS& env, const IRInstruction* inst) {
                data, *inst);
       }
     }
-  }
-
-  if (ty.maybe(TCctx)) {
-    always_assert(ty <= TCtx && ty.maybe(TObj));
-    auto const sf = v.makeReg();
-    v << testqi{ActRec::kHasClassBit, loc.reg(), sf};
-    ifThen(v, vcold(env), CC_Z, sf,
-           [&] (Vout& v) {
-             incrementProfile(v, profile, incr,
-                              offsetof(IncRefProfile, incremented));
-             emitIncRef(v, loc.reg(), TRAP_REASON);
-           },
-           unlikelyIncrement);
-    return;
   }
 
   if (useAddrForCountedCheck() &&
@@ -285,8 +265,10 @@ CallSpec getDtorCallSpec(Vout& v, Vreg obj, DataType type, ArgGroup& args) {
   switch (type) {
     case KindOfString:
       return CallSpec::method(&StringData::release);
-    case KindOfShape:
-      return CallSpec::direct(MixedArray::Release);
+    case KindOfDArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      // fallthrough
     case KindOfArray:
       return CallSpec::method(&ArrayData::release);
     case KindOfVec:
@@ -302,8 +284,6 @@ CallSpec getDtorCallSpec(Vout& v, Vreg obj, DataType type, ArgGroup& args) {
     }
     case KindOfResource:
       return CallSpec::method(&ResourceHdr::release);
-    case KindOfRef:
-      return CallSpec::method(&RefData::release);
     case KindOfRecord:
       return CallSpec::method(&RecordData::release);
     case KindOfClsMeth:
@@ -672,19 +652,6 @@ void cgDecRef(IRLS& env, const IRInstruction *inst) {
     implDecRefProf(v, env, inst, t, profile, incr);
   };
 
-  if (ty.maybe(TCctx)) {
-    always_assert(ty <= TCtx && ty.maybe(TObj));
-    auto const loc = srcLoc(env, inst, 0);
-    auto const sf = v.makeReg();
-    v << testqi{ActRec::kHasClassBit, loc.reg(), sf};
-    if (profile.profiling()) {
-      ifThen(v, CC_Z, sf, [&] (Vout& v) { implProf(v, TObj); });
-    } else {
-      ifThen(v, CC_Z, sf, [&] (Vout& v) { impl(v, TObj); });
-    }
-    return;
-  }
-
   if (RuntimeOption::EvalHHIROutlineGenericIncDecRef &&
       profile.optimizing() &&
       !ty.isKnownDataType()) {
@@ -705,7 +672,10 @@ void cgDecRef(IRLS& env, const IRInstruction *inst) {
 
       unlikelyIfThen(v, vcold(env), cc, sf, [&] (Vout& v) {
         auto const stub = tc::ustubs().decRefGeneric;
-        v << copy2{data, type, rarg(0), rarg(1)};
+        v << copyargs{
+          v.makeTuple({data, type}),
+          v.makeTuple({rarg(0), rarg(1)})
+        };
         v << callfaststub{stub, makeFixup(inst->marker()), arg_regs(2)};
       });
       return;
@@ -714,7 +684,7 @@ void cgDecRef(IRLS& env, const IRInstruction *inst) {
 
   if (profile.profiling()) {
     ifRefCountedType(v, v, ty, srcLoc(env, inst, 0), [&] (Vout& v) {
-        implProf(v, ty);
+        implProf(v, negativeCheckType(ty, TUncounted));
       });
   } else {
     if (useAddrForCountedCheck() &&
@@ -732,13 +702,13 @@ void cgDecRef(IRLS& env, const IRInstruction *inst) {
         v << shrqi{(int)kUncountedMaxShift, addr, v.makeReg(), sf};
         unlikelyIfThen(v, vcold(env), CC_NZ, sf,
                        [&] (Vout& v) {
-                         impl(v, ty & TCounted);
+                         impl(v, negativeCheckType(ty, TUncounted));
                        });
         return;
       }
     }
     ifRefCountedType(v, v, ty, srcLoc(env, inst, 0), [&] (Vout& v) {
-        impl(v, ty);
+        impl(v, negativeCheckType(ty, TUncounted));
       });
   }
 }
@@ -769,7 +739,7 @@ void cgDecRefNZ(IRLS& env, const IRInstruction* inst) {
     if (data.total > 0) {
       if (data.percent(data.refcounted) <
           RuntimeOption::EvalJitPGOUnlikelyDecRefCountedPercent
-          && !(ty <= TGen && ty.isKnownDataType())) {
+          && !(ty <= TCell && ty.isKnownDataType())) {
         unlikelyCounted = true;
         FTRACE(3, "irlower-inc-dec: Emitting cold counted check for {}, {}\n",
                data, *inst);
@@ -781,24 +751,6 @@ void cgDecRefNZ(IRLS& env, const IRInstruction* inst) {
                data, *inst);
       }
     }
-  }
-
-  if (ty.maybe(TCctx)) {
-    always_assert(ty <= TCtx);
-    if (ty.maybe(TObj)) {
-      auto const sf = v.makeReg();
-      v << testqi{ActRec::kHasClassBit, loc.reg(), sf};
-      ifThen(
-        v, vcold(env), CC_Z, sf,
-        [&] (Vout& v) {
-          incrementProfile(v, profile, incr,
-                           offsetof(DecRefProfile, decremented));
-          emitDecRef(v, loc.reg(), TRAP_REASON);
-        },
-        unlikelyDecrement
-      );
-    }
-    return;
   }
 
   emitIncStat(v, Stats::TC_DecRef_NZ);
@@ -833,6 +785,43 @@ void cgDecRefNZ(IRLS& env, const IRInstruction* inst) {
       );
     }
   );
+}
+
+void cgProfileDecRef(IRLS& env, const IRInstruction* inst) {
+  auto const local = inst->extra<ProfileDecRef>()->locId;
+  auto const profile = decRefProfile(env.unit, inst);
+  if (!profile.profiling()) return;
+
+  auto const type = inst->src(0)->type();
+  if (!type.maybe(TCounted)) return;
+
+  auto& v = vmain(env);
+  auto const amount = incrAmount(v, profile);
+  auto const base = srcLoc(env, inst, 0).reg(0);
+
+  auto const increment = [&](Vout& v, size_t offset) {
+    incrementProfile(v, profile, amount, offset);
+  };
+
+  auto const handle_refcounted_type = [&](Vout& v) {
+    increment(v, offsetof(DecRefProfile, refcounted));
+    auto const sf = emitCmpRefCount(v, OneReference, base);
+    ifThenElse(v, CC_E, sf,
+      [&](Vout& v){ increment(v, offsetof(DecRefProfile, released)); },
+      [&](Vout& v){ type.maybe(TPersistent)
+        ? ifThen(v, CC_NL, sf, [&](Vout& v){
+            increment(v, offsetof(DecRefProfile, decremented)); })
+        : increment(v, offsetof(DecRefProfile, decremented)); }
+    );
+  };
+
+  increment(v, offsetof(DecRefProfile, total));
+  if (type <= (TArrLike | TObj) && local == kInvalidId) {
+    // We don't need to read the type byte for iterator bases. Avoid doing so.
+    handle_refcounted_type(v);
+  } else {
+    ifRefCountedType(v, v, type, srcLoc(env, inst, 0), handle_refcounted_type);
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

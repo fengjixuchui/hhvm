@@ -17,6 +17,7 @@
 #include "hphp/runtime/vm/jit/fixup.h"
 
 #include "hphp/runtime/base/stats.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
 #include "hphp/runtime/vm/jit/abi-arm.h"
@@ -36,8 +37,7 @@ bool isVMFrame(const ActRec* ar, bool may_be_non_runtime) {
   assertx(
     !ret ||
     may_be_non_runtime ||
-    isValidVMStackAddress(ar) ||
-    (ar->m_func->validate(), ar->resumed())
+    (ar->m_func->validate(), true)
   );
   return ret;
 }
@@ -118,7 +118,7 @@ void regsFromActRec(TCA tca, const ActRec* ar, const Fixup& fixup,
   outRegs->fp = ar;
   outRegs->retAddr = tca;
 
-  if (UNLIKELY(ar->resumed())) {
+  if (UNLIKELY(isResumed(ar))) {
     TypedValue* stackBase = Stack::resumableStackBase(ar);
     outRegs->sp = stackBase - fixup.spOffset;
   } else {
@@ -141,7 +141,8 @@ bool getFrameRegs(const ActRec* ar, VMRegs* outVMRegs) {
                         ent->indirect.returnIpDisp;
     tca = *reinterpret_cast<TCA*>(savedRIPAddr);
     ent = s_fixups.find(tc::addrToOffset(tca));
-    assertx(ent && !ent->isIndirect());
+    assertx(ent && "Missing fixup for indirect fixup");
+    assertx(!ent->isIndirect() && "Invalid doubly indirect fixup");
   }
 
   // Non-obvious off-by-one fun: if the *return address* points into the TC,
@@ -228,7 +229,7 @@ bool eagerRecord(const Func* func) {
   };
 
   for (auto str : list) {
-    if (!strcmp(func->displayName()->data(), str)) return true;
+    if (!strcmp(func->name()->data(), str)) return true;
   }
 
   return false;

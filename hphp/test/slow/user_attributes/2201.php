@@ -17,23 +17,7 @@ function show($fn, $class=null) {
   foreach ($params as $param) {
     echo "{$param->getName()}:\n";
     $attrs = $param->getAttributes();
-    ksort(&$attrs);
-    var_dump($attrs);
-  }
-}
-
-function showr($fn, $class=null) {
-  $rf = null;
-  if ($class) {
-    $rf = get_rf_for_method($fn, $class);
-  } else {
-    $rf = new ReflectionFunction($fn);
-  }
-  $params = $rf->getParameters();
-  foreach ($params as $param) {
-    echo "{$param->getName()}:\n";
-    $attrs = $param->getAttributesRecursive();
-    ksort(&$attrs);
+    ksort(inout $attrs);
     var_dump($attrs);
   }
 }
@@ -43,9 +27,6 @@ function doboth($fn, $class=null) {
   if ($class) echo "$class::";
   echo "$fn =>\n---- non-recursive: ----\n";
   show($fn, $class);
-  echo "\n---- recursive: ----\n";
-  showr($fn, $class);
-  echo "\n";
 }
 
 //------------------------

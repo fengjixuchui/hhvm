@@ -7,26 +7,18 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Decl_defs
 open Decl_fun_utils
 open Shallow_decl_defs
 open Aast
 open Typing_deps
 open Typing_defs
-module Attrs = Attributes
+module Attrs = Naming_attributes
 module Partial = Partial_provider
 
 let class_const env c cc =
-  let {
-    cc_id = name;
-    cc_type = h;
-    cc_expr = e;
-    cc_visibility = v;
-    cc_doc_comment = _;
-  } =
-    cc
-  in
+  let { cc_id = name; cc_type = h; cc_expr = e; cc_doc_comment = _ } = cc in
   let pos = fst name in
   match c.c_kind with
   | Ast_defs.Ctrait ->
@@ -34,7 +26,6 @@ let class_const env c cc =
       match c.c_kind with
       | Ast_defs.Ctrait -> `trait
       | Ast_defs.Cenum -> `enum
-      | Ast_defs.Crecord -> `record
       | _ -> assert false
     in
     Errors.cannot_declare_constant kind pos c.c_name;
@@ -42,8 +33,7 @@ let class_const env c cc =
   | Ast_defs.Cnormal
   | Ast_defs.Cabstract
   | Ast_defs.Cinterface
-  | Ast_defs.Cenum
-  | Ast_defs.Crecord ->
+  | Ast_defs.Cenum ->
     let (ty, abstract) =
       (* Optional hint h, optional expression e *)
       match (h, e) with
@@ -56,27 +46,21 @@ let class_const env c cc =
           | None ->
             if
               Partial.should_check_error c.c_mode 2035
-              && c.c_kind <> Ast_defs.Cenum
+              && not Ast_defs.(equal_class_kind c.c_kind Cenum)
             then (
               Errors.missing_typehint pos;
-              ((Reason.Rwitness pos, Terr), false)
+              (mk (Reason.Rwitness pos, Terr), false)
             ) else
-              ((Reason.Rwitness pos, Typing_defs.make_tany ()), false)
+              (mk (Reason.Rwitness pos, Typing_defs.make_tany ()), false)
         end
       | (None, None) ->
         if Partial.should_check_error c.c_mode 2035 then
           Errors.missing_typehint pos;
         let r = Reason.Rwitness pos in
-        ((r, Typing_defs.make_tany ()), true)
+        (mk (r, Typing_defs.make_tany ()), true)
     in
     Some
-      {
-        scc_abstract = abstract;
-        scc_expr = e;
-        scc_name = name;
-        scc_type = ty;
-        scc_visibility = v;
-      }
+      { scc_abstract = abstract; scc_expr = e; scc_name = name; scc_type = ty }
 
 let typeconst_abstract_kind env = function
   | Aast.TCAbstract default ->
@@ -87,13 +71,11 @@ let typeconst_abstract_kind env = function
 let typeconst env c tc =
   match c.c_kind with
   | Ast_defs.Ctrait
-  | Ast_defs.Cenum
-  | Ast_defs.Crecord ->
+  | Ast_defs.Cenum ->
     let kind =
       match c.c_kind with
       | Ast_defs.Ctrait -> `trait
       | Ast_defs.Cenum -> `enum
-      | Ast_defs.Crecord -> `record
       | _ -> assert false
     in
     Errors.cannot_declare_constant kind (fst tc.c_tconst_name) c.c_name;
@@ -121,18 +103,21 @@ let typeconst env c tc =
         stc_constraint = constr;
         stc_type = ty;
         stc_enforceable = enforceable;
-        stc_visibility = tc.c_tconst_visibility;
         stc_reifiable = reifiable;
       }
 
 let pu_enum
-    env { pu_name; pu_is_final; pu_case_types; pu_case_values; pu_members } =
+    env { pu_name; pu_is_final; pu_case_types; pu_case_values; pu_members; _ } =
   let spu_case_types = pu_case_types in
   let hint_assoc (k, hint) = (k, Decl_hint.hint env hint) in
   let spu_case_values = List.map ~f:hint_assoc pu_case_values in
   let spu_members =
-    let case_member { pum_atom; pum_types; _ } =
-      { spum_atom = pum_atom; spum_types = List.map ~f:hint_assoc pum_types }
+    let case_member { pum_atom; pum_types; pum_exprs } =
+      {
+        spum_atom = pum_atom;
+        spum_types = List.map ~f:hint_assoc pum_types;
+        spum_exprs = List.map ~f:fst pum_exprs;
+      }
     in
     List.map ~f:case_member pu_members
   in
@@ -159,11 +144,10 @@ let prop env cv =
   let cv_pos = fst cv.cv_id in
   let ty = Option.map cv.cv_type ~f:(Decl_hint.hint env) in
   let const = Attrs.mem SN.UserAttributes.uaConst cv.cv_user_attributes in
-  let lateinit =
-    Attrs.mem SN.UserAttributes.uaLateInit cv.cv_user_attributes
-  in
+  let lateinit = Attrs.mem SN.UserAttributes.uaLateInit cv.cv_user_attributes in
   if cv.cv_final then Errors.final_property cv_pos;
-  if lateinit && cv.cv_expr <> None then Errors.lateinit_with_default cv_pos;
+  if lateinit && Option.is_some cv.cv_expr then
+    Errors.lateinit_with_default cv_pos;
   {
     sp_const = const;
     sp_xhp_attr = make_xhp_attr cv;
@@ -181,13 +165,13 @@ and static_prop env c cv =
   let (cv_pos, cv_name) = cv.cv_id in
   let ty = Option.map cv.cv_type ~f:(Decl_hint.hint env) in
   let id = "$" ^ cv_name in
-  let lateinit =
-    Attrs.mem SN.UserAttributes.uaLateInit cv.cv_user_attributes
-  in
+  let lateinit = Attrs.mem SN.UserAttributes.uaLateInit cv.cv_user_attributes in
   let abstract = cv.cv_abstract in
   let lsb = Attrs.mem SN.UserAttributes.uaLSB cv.cv_user_attributes in
   let const = Attrs.mem SN.UserAttributes.uaConst cv.cv_user_attributes in
-  ( if cv.cv_expr = None && FileInfo.(is_strict c.c_mode || c.c_mode = Mpartial)
+  ( if
+    Option.is_none cv.cv_expr
+    && FileInfo.(is_strict c.c_mode || equal_mode c.c_mode Mpartial)
   then
     match cv.cv_type with
     | None
@@ -196,7 +180,8 @@ and static_prop env c cv =
       ()
     | _ when (not lateinit) && not abstract -> Errors.missing_assign cv_pos
     | _ -> () );
-  if lateinit && cv.cv_expr <> None then Errors.lateinit_with_default cv_pos;
+  if lateinit && Option.is_some cv.cv_expr then
+    Errors.lateinit_with_default cv_pos;
   {
     sp_const = const;
     sp_xhp_attr = make_xhp_attr cv;
@@ -216,16 +201,15 @@ let method_type env m =
   let mut = get_param_mutability m.m_user_attributes in
   let returns_mutable = fun_returns_mutable m.m_user_attributes in
   let returns_void_to_rx = fun_returns_void_to_rx m.m_user_attributes in
-  let return_disposable =
-    has_return_disposable_attribute m.m_user_attributes
-  in
+  let return_disposable = has_return_disposable_attribute m.m_user_attributes in
   let arity_min = minimum_arity m.m_params in
-  let params = make_params env m.m_params in
+  let params = make_params env ~is_lambda:false m.m_params in
   let ret =
     match hint_of_type_hint m.m_ret with
     | None ->
       ret_from_fun_kind
-        ~is_constructor:(snd m.m_name = SN.Members.__construct)
+        ~is_lambda:false
+        ~is_constructor:(String.equal (snd m.m_name) SN.Members.__construct)
         (fst m.m_name)
         m.m_fun_kind
     | Some ret -> Decl_hint.hint env ret
@@ -234,8 +218,8 @@ let method_type env m =
     match m.m_variadic with
     | FVvariadicArg param ->
       assert param.param_is_variadic;
-      assert (param.param_expr = None);
-      Fvariadic (arity_min, make_param_ty env param)
+      assert (Option.is_none param.param_expr);
+      Fvariadic (arity_min, make_param_ty env ~is_lambda:false param)
     | FVellipsis p -> Fellipsis (arity_min, p)
     | FVnonVariadic -> Fstandard (arity_min, List.length m.m_params)
   in
@@ -244,11 +228,7 @@ let method_type env m =
     List.map m.m_where_constraints (where_constraint env)
   in
   {
-    ft_pos = fst m.m_name;
-    ft_deprecated =
-      Attrs.deprecated ~kind:"method" m.m_name m.m_user_attributes;
-    ft_abstract = m.m_abstract;
-    ft_is_coroutine = m.m_fun_kind = Ast_defs.FCoroutine;
+    ft_is_coroutine = Ast_defs.(equal_fun_kind m.m_fun_kind FCoroutine);
     ft_arity = arity;
     ft_tparams = (tparams, FTKtparams);
     ft_where_constraints = where_constraints;
@@ -259,19 +239,19 @@ let method_type env m =
     ft_returns_mutable = returns_mutable;
     ft_return_disposable = return_disposable;
     ft_fun_kind = m.m_fun_kind;
-    ft_decl_errors = None;
     ft_returns_void_to_rx = returns_void_to_rx;
   }
 
 let method_redeclaration_type env m =
   check_params env m.mt_params;
   let arity_min = minimum_arity m.mt_params in
-  let params = make_params env m.mt_params in
+  let params = make_params env ~is_lambda:false m.mt_params in
   let ret =
     match hint_of_type_hint m.mt_ret with
     | None ->
       ret_from_fun_kind
-        ~is_constructor:(snd m.mt_name = SN.Members.__construct)
+        ~is_lambda:false
+        ~is_constructor:(String.equal (snd m.mt_name) SN.Members.__construct)
         (fst m.mt_name)
         m.mt_fun_kind
     | Some ret -> Decl_hint.hint env ret
@@ -280,8 +260,8 @@ let method_redeclaration_type env m =
     match m.mt_variadic with
     | FVvariadicArg param ->
       assert param.param_is_variadic;
-      assert (param.param_expr = None);
-      Fvariadic (arity_min, make_param_ty env param)
+      assert (Option.is_none param.param_expr);
+      Fvariadic (arity_min, make_param_ty env ~is_lambda:false param)
     | FVellipsis p -> Fellipsis (arity_min, p)
     | FVnonVariadic -> Fstandard (arity_min, List.length m.mt_params)
   in
@@ -290,10 +270,7 @@ let method_redeclaration_type env m =
     List.map m.mt_where_constraints (where_constraint env)
   in
   {
-    ft_pos = fst m.mt_name;
-    ft_deprecated = None;
-    ft_abstract = m.mt_abstract;
-    ft_is_coroutine = m.mt_fun_kind = Ast_defs.FCoroutine;
+    ft_is_coroutine = Ast_defs.(equal_fun_kind m.mt_fun_kind FCoroutine);
     ft_arity = arity;
     ft_tparams = (tparams, FTKtparams);
     ft_where_constraints = where_constraints;
@@ -304,55 +281,74 @@ let method_redeclaration_type env m =
     ft_returns_mutable = false;
     ft_fun_kind = m.mt_fun_kind;
     ft_return_disposable = false;
-    ft_decl_errors = None;
     ft_returns_void_to_rx = false;
   }
 
 let method_ env c m =
   let override = Attrs.mem SN.UserAttributes.uaOverride m.m_user_attributes in
-  ( if m.m_visibility = Private && override then
-    let (pos, id) = m.m_name in
-    Errors.private_override pos (snd c.c_name) id );
+  let (pos, id) = m.m_name in
+  if Aast.equal_visibility m.m_visibility Private && override then
+    Errors.private_override pos (snd c.c_name) id;
   let has_memoizelsb =
     Attrs.mem SN.UserAttributes.uaMemoizeLSB m.m_user_attributes
   in
   let ft = method_type env m in
   let reactivity =
     match ft.ft_reactive with
-    | Reactive (Some (_, Tapply ((_, cls), []))) ->
-      Some (Method_reactive (Some cls))
+    | Reactive (Some ty) ->
+      begin
+        match get_node ty with
+        | Tapply ((_, cls), []) -> Some (Method_reactive (Some cls))
+        | _ -> None
+      end
     | Reactive None -> Some (Method_reactive None)
-    | Shallow (Some (_, Tapply ((_, cls), []))) ->
-      Some (Method_shallow (Some cls))
+    | Shallow (Some ty) ->
+      begin
+        match get_node ty with
+        | Tapply ((_, cls), []) -> Some (Method_shallow (Some cls))
+        | _ -> None
+      end
     | Shallow None -> Some (Method_shallow None)
-    | Local (Some (_, Tapply ((_, cls), []))) -> Some (Method_local (Some cls))
+    | Local (Some ty) ->
+      begin
+        match get_node ty with
+        | Tapply ((_, cls), []) -> Some (Method_local (Some cls))
+        | _ -> None
+      end
     | Local None -> Some (Method_local None)
     | _ -> None
   in
+  let sm_deprecated =
+    Naming_attributes_deprecated.deprecated
+      ~kind:"method"
+      m.m_name
+      m.m_user_attributes
+  in
   {
-    sm_abstract = ft.ft_abstract;
+    sm_abstract = m.m_abstract;
     sm_final = m.m_final;
     sm_memoizelsb = has_memoizelsb;
     sm_name = m.m_name;
     sm_override = override;
     sm_reactivity = reactivity;
-    sm_type = ft;
+    sm_type = mk (Reason.Rwitness pos, Tfun ft);
     sm_visibility = m.m_visibility;
-    sm_fixme_codes = Fixme_provider.get_fixme_codes_for_pos ft.ft_pos;
+    sm_fixme_codes = Fixme_provider.get_fixme_codes_for_pos pos;
+    sm_deprecated;
   }
 
 let method_redeclaration env m =
   let ft = method_redeclaration_type env m in
   {
-    smr_abstract = ft.ft_abstract;
+    smr_abstract = m.mt_abstract;
     smr_final = m.mt_final;
     smr_static = m.mt_static;
     smr_name = m.mt_name;
-    smr_type = ft;
+    smr_type = mk (Reason.Rwitness (fst m.mt_name), Tfun ft);
     smr_visibility = m.mt_visibility;
     smr_trait = m.mt_trait;
     smr_method = m.mt_method;
-    smr_fixme_codes = Fixme_provider.get_fixme_codes_for_pos ft.ft_pos;
+    smr_fixme_codes = Fixme_provider.get_fixme_codes_for_pos (fst m.mt_name);
   }
 
 let enum_type hint e =
@@ -392,6 +388,7 @@ let class_ env c =
     sc_mode = c.c_mode;
     sc_final = c.c_final;
     sc_is_xhp = c.c_is_xhp;
+    sc_has_xhp_keyword = c.c_has_xhp_keyword;
     sc_kind = c.c_kind;
     sc_name = c.c_name;
     sc_tparams = List.map c.c_tparams.c_tparam_list (type_param env);
@@ -424,7 +421,7 @@ let class_ c =
     {
       Decl_env.mode = c.c_mode;
       droot = Some class_dep;
-      decl_tcopt = GlobalNamingOptions.get ();
+      ctx = Provider_context.get_global_context_or_empty_FOR_MIGRATION ();
     }
   in
   let (errors, sc) =

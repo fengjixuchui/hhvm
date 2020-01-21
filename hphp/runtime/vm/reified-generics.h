@@ -64,6 +64,15 @@ void checkClassReifiedGenericMismatch(
   const ArrayData* reified_generics
 );
 
+uint32_t getGenericsBitmap(const ArrayData* generics);
+
+// Returns whether all the generics in the given ReifiedGenericsInfo are denoted
+// as soft
+bool areAllGenericsSoft(const ReifiedGenericsInfo& info);
+
+// Raises warning for parameter at index i for function/class name
+void raise_warning_for_soft_reified(size_t i, bool fun, const StringData *name);
+
 ///////////////////////////////////////////////////////////////////////////////
 
 }

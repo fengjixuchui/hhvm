@@ -328,12 +328,16 @@ struct ElmUCompare {
 
   bool operator()(ElmT left, ElmT right) const {
     TypedValue args[2] = {
-      *acc.getValue(left).toCell(),
-      *acc.getValue(right).toCell()
+      *acc.getValue(left).asTypedValue(),
+      *acc.getValue(right).asTypedValue()
     };
     auto ret = Variant::attach(
       g_context->invokeFuncFew(*ctx, 2, args)
     );
+    if (ctx->func->takesInOutParams()) {
+      assertx(ret.isArray());
+      ret = ret.asCArrRef()[0];
+    }
     if (LIKELY(ret.isInteger())) {
       return ret.toInt64() > 0;
     }

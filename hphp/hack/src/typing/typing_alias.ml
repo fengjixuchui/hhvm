@@ -31,7 +31,7 @@
  *)
 (*****************************************************************************)
 
-open Core_kernel
+open Hh_prelude
 open Common
 open Aast
 module Fake = Typing_fake_members
@@ -49,11 +49,11 @@ module Fake = Typing_fake_members
 module Dep = struct
   let add x1 x2 acc =
     let x2 = Local_id.to_string x2 in
-    let prev = (try SMap.find_unsafe x1 acc with Caml.Not_found -> []) in
+    let prev = (try SMap.find x1 acc with Caml.Not_found -> []) in
     SMap.add x1 (x2 :: prev) acc
 
   let get key acc =
-    match SMap.get key acc with
+    match SMap.find_opt key acc with
     | None -> []
     | Some kl -> kl
 
@@ -117,9 +117,11 @@ end = struct
       method on_assign acc (_, e1) e2 =
         Option.value_map
           (local_to_string e1)
-          ~f:begin
-               fun s -> Dep.expr s acc e2
-             end
+          ~f:
+            begin
+              fun s ->
+              Dep.expr s acc e2
+            end
           ~default:acc
 
       method! on_efun acc _ _ = acc
@@ -158,7 +160,7 @@ end = struct
 
   and key aliases visited k =
     if SMap.mem k visited then
-      (visited, SMap.find_unsafe k visited)
+      (visited, SMap.find k visited)
     else
       let visited = SMap.add k 0 visited in
       let kl = AliasMap.get k aliases in

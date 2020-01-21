@@ -4,12 +4,12 @@ class Foo {
   public A $x;
 }
 
-final record A {
-  x: int,
+record A {
+  int x;
 }
 
-final record B {
-  x: int,
+record B {
+  int x;
 }
 <<__EntryPoint>> function main(): void {
 $a = A['x' => 1];

@@ -153,7 +153,7 @@ bool builtin_strlen(ISS& env, const bc::FCallBuiltin& op) {
 }
 
 bool builtin_defined(ISS& env, const bc::FCallBuiltin& op) {
-  if (!options.HardConstProp || op.arg1 != 2) return false;
+  if (op.arg1 != 2) return false;
   if (auto const v = tv(topT(env, 1))) {
     if (isStringType(v->m_type) &&
         !env.index.lookup_constant(env.ctx, v->m_data.pstr)) {
@@ -209,29 +209,6 @@ bool builtin_interface_exists(ISS& env, const bc::FCallBuiltin& op) {
 
 bool builtin_trait_exists(ISS& env, const bc::FCallBuiltin& op) {
   return handle_oodecl_exists(env, op, OODeclExistsOp::Trait);
-}
-
-bool builtin_class_alias(ISS& env, const bc::FCallBuiltin& op) {
-  if (op.arg1 != 3) return false;
-  auto const& alias = topT(env, 1);
-  auto const& orig  = topT(env, 2);
-  auto const alias_tv = tv(alias);
-  auto const orig_tv = tv(orig);
-  if (!alias_tv || !orig_tv ||
-      !isStringType(alias_tv->m_type) ||
-      !isStringType(orig_tv->m_type) ||
-      !env.index.register_class_alias(orig_tv->m_data.pstr,
-                                      alias_tv->m_data.pstr)) {
-    return false;
-  }
-
-  auto const aload = topT(env);
-  if (aload != TTrue && aload != TFalse) return false;
-
-  reduce(env, bc::PopC {}, bc::PopC {}, bc::PopC {},
-         gen_constant(make_tv<KindOfBoolean>(aload == TTrue)),
-         bc::AliasCls { orig_tv->m_data.pstr, alias_tv->m_data.pstr });
-  return true;
 }
 
 bool builtin_array_key_cast(ISS& env, const bc::FCallBuiltin& op) {
@@ -342,7 +319,7 @@ ArrayData* impl_type_structure_opts(ISS& env, const bc::FCallBuiltin& op,
     if (check_lsb && !cnst->isNoOverride) return nullptr;
     auto const typeCns = cnst->val;
     if (!tvIsDictOrDArray(&*typeCns)) return nullptr;
-    return resolveTSStatically(env, typeCns->m_data.parr, env.ctx.cls, true);
+    return resolveTSStatically(env, typeCns->m_data.parr, env.ctx.cls);
   };
   if (op.arg1 != 2) return nullptr;
   auto const cns_name = tv(topT(env));
@@ -415,6 +392,53 @@ bool builtin_type_structure_classname(ISS& env, const bc::FCallBuiltin& op) {
   return true;
 }
 
+bool builtin_shapes_idx(ISS& env, const bc::FCallBuiltin& op) {
+  if (op.arg1 != 3) return false;
+
+  auto const def = to_cell(topT(env));
+  auto const key = topC(env, 1);
+  auto const base = topC(env, 2);
+
+  if (!base.couldBe(RuntimeOption::EvalHackArrDVArrs ? BDict : BArr) ||
+      !key.couldBe(BArrKey)) {
+    unreachable(env);
+    discard(env, 3);
+    push(env, TBottom);
+    return true;
+  }
+  if (!base.subtypeOf(RuntimeOption::EvalHackArrDVArrs ? BOptDict : BOptDArr) ||
+      !key.subtypeOf(BOptArrKey)) {
+    return false;
+  }
+
+  auto const unoptBase = is_opt(base) ? unopt(base) : base;
+  auto const unoptKey = is_opt(key) ? unopt(key) : key;
+  auto mightThrow = is_opt(base) || is_opt(key);
+
+  auto elem = RuntimeOption::EvalHackArrDVArrs
+    ? dict_elem(unoptBase, unoptKey, def)
+    : array_elem(unoptBase, unoptKey, def);
+  switch (elem.second) {
+    case ThrowMode::None:
+    case ThrowMode::MaybeMissingElement:
+    case ThrowMode::MissingElement:
+      break;
+    case ThrowMode::MaybeBadKey:
+      mightThrow = true;
+      break;
+    case ThrowMode::BadOperation:
+      always_assert(false);
+  }
+
+  if (!mightThrow) {
+    constprop(env);
+    effect_free(env);
+  }
+  discard(env, 3);
+  push(env, std::move(elem.first));
+  return true;
+}
+
 #define SPECIAL_BUILTINS                                                \
   X(abs, abs)                                                           \
   X(ceil, ceil)                                                         \
@@ -429,11 +453,11 @@ bool builtin_type_structure_classname(ISS& env, const bc::FCallBuiltin& op) {
   X(class_exists, class_exists)                                         \
   X(interface_exists, interface_exists)                                 \
   X(trait_exists, trait_exists)                                         \
-  X(class_alias, class_alias)                                           \
   X(array_key_cast, HH\\array_key_cast)                                 \
   X(is_list_like, HH\\is_list_like)                                     \
   X(type_structure, HH\\type_structure)                                 \
   X(type_structure_classname, HH\\type_structure_classname)             \
+  X(shapes_idx, HH\\Shapes::idx)                                        \
 
 #define X(x, y)    const StaticString s_##x(#y);
   SPECIAL_BUILTINS
@@ -484,7 +508,15 @@ void in(ISS& env, const bc::FCallBuiltin& op) {
       BytecodeVec repl;
       // Pop the arguments
       for (uint32_t i = 0; i < op.arg1; ++i) {
-        repl.push_back(bc::PopC {});
+        // FCallBuiltin has CU flavored args, so we need to check the
+        // type to know how to pop them.
+        auto const& popped = topT(env, i);
+        if (popped.subtypeOf(BUninit)) {
+          repl.push_back(bc::PopU {});
+        } else {
+          assertx(popped.subtypeOf(BInitCell));
+          repl.push_back(bc::PopC {});
+        }
       }
       // Pop the placeholder uninit values
       for (uint32_t i = 0; i < op.arg3; ++i) {
@@ -590,6 +622,19 @@ bool can_emit_builtin(ISS& env, const php::Func* func, const FCallArgs& fca) {
     return false;
   }
 
+  if (fca.enforceInOut()) {
+    // Don't convert functions with mis-annotated inout arguments
+    for (int i = 0; i < func->params.size(); ++i) {
+      auto const isInOut = i < fca.numArgs && fca.isInOut(i);
+      if (func->params[i].inout != isInOut) return false;
+    }
+
+    // Don't convert functions with extra inout arguments
+    for (int i = func->params.size(); i < fca.numArgs; ++i) {
+      if (fca.isInOut(i)) return false;
+    }
+  }
+
   // Check for missing non-optional arguments.
   for (int i = fca.numArgs; i < concrete_params; i++) {
     auto const& pi = func->params[i];
@@ -684,7 +729,7 @@ folly::Optional<Type> const_fold(ISS& env,
                                  bool variadicsPacked) {
   assert(phpFunc.attrs & AttrIsFoldable);
 
-  std::vector<Cell> args(nArgs);
+  std::vector<TypedValue> args(nArgs);
   auto const firstArgPos = numExtraInputs + nArgs - 1;
   for (auto i = uint32_t{0}; i < nArgs; ++i) {
     auto const val = tv(topT(env, firstArgPos - i));
@@ -728,12 +773,12 @@ folly::Optional<Type> const_fold(ISS& env,
   return eval_cell(
     [&] {
       auto retVal = g_context->invokeFuncFew(
-        func, HPHP::ActRec::encodeClass(cls), nullptr,
+        func, cls, nullptr,
         args.size(), args.data(),
-        false
+        false, false
       );
 
-      assert(cellIsPlausible(retVal));
+      assert(tvIsPlausible(retVal));
       return retVal;
     }
   );

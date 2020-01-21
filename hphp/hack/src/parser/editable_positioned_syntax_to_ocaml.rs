@@ -3,12 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-extern crate ocaml;
-
 use ocaml::core::mlvalues::Value;
-use ocamlpool_rust::ocamlvalue::Ocamlvalue;
-use ocamlpool_rust::utils::{caml_block, caml_tuple, u8_to_ocaml, usize_to_ocaml};
-use rust_to_ocaml::rust_to_ocaml::{to_list, SerializationContext, ToOcaml};
+use ocamlpool_rust::utils::{caml_set_field, reserve_block, u8_to_ocaml, usize_to_ocaml};
+use ocamlrep_ocamlpool::add_to_ambient_pool;
+use rust_to_ocaml::{to_list, SerializationContext, ToOcaml};
 
 use crate::editable_positioned_original_source_data::SourceData;
 use crate::editable_positioned_token::{EditablePositionedToken, SyntheticTokenData, TokenData};
@@ -26,15 +24,15 @@ impl ToOcaml for SourceData<'_> {
         //   leading: Trivia.t list;
         //   trailing: Trivia.t list;
         // }
-        caml_tuple(&[
-            context.source_text,
-            usize_to_ocaml(self.offset),
-            usize_to_ocaml(self.leading_width),
-            usize_to_ocaml(self.width),
-            usize_to_ocaml(self.trailing_width),
-            to_list(&self.leading, context),
-            to_list(&self.trailing, context),
-        ])
+        let block = reserve_block(0.into(), 7);
+        caml_set_field(block, 0, context.source_text);
+        caml_set_field(block, 1, usize_to_ocaml(self.offset));
+        caml_set_field(block, 2, usize_to_ocaml(self.leading_width));
+        caml_set_field(block, 3, usize_to_ocaml(self.width));
+        caml_set_field(block, 4, usize_to_ocaml(self.trailing_width));
+        caml_set_field(block, 5, to_list(&self.leading, context));
+        caml_set_field(block, 6, to_list(&self.trailing, context));
+        block
     }
 }
 
@@ -46,7 +44,9 @@ impl ToOcaml for EditablePositionedValue<'_> {
         //   | Synthetic
         match self {
             EditablePositionedValue::Positioned(source_data) => {
-                caml_block(0, &[source_data.to_ocaml(context)])
+                let block = reserve_block(0.into(), 1);
+                caml_set_field(block, 0, source_data.to_ocaml(context));
+                block
             }
             EditablePositionedValue::Synthetic => u8_to_ocaml(0),
         }
@@ -62,12 +62,12 @@ impl ToOcaml for EditablePositionedToken<'_> {
         //   trailing_text: string;
         //   token_data: token_data;
         // }
-        caml_tuple(&[
-            self.kind.to_ocaml(context),
-            self.leading_text.ocamlvalue(),
-            self.trailing_text.ocamlvalue(),
-            self.token_data.to_ocaml(context),
-        ])
+        let block = reserve_block(0.into(), 4);
+        caml_set_field(block, 0, self.kind.to_ocaml(context));
+        caml_set_field(block, 1, add_to_ambient_pool(&self.leading_text));
+        caml_set_field(block, 2, add_to_ambient_pool(&self.trailing_text));
+        caml_set_field(block, 3, self.token_data.to_ocaml(context));
+        block
     }
 }
 
@@ -77,7 +77,9 @@ impl ToOcaml for SyntheticTokenData {
         // type synthetic_token_data = {
         //   text: string;
         // }
-        caml_tuple(&[self.text.ocamlvalue()])
+        let block = reserve_block(0.into(), 1);
+        caml_set_field(block, 0, add_to_ambient_pool(&self.text));
+        block
     }
 }
 
@@ -89,16 +91,21 @@ impl ToOcaml for TokenData<'_> {
         //   | SynthesizedFromOriginal of synthetic_token_data * SourceData.t
         //   | Synthetic of synthetic_token_data
         match self {
-            TokenData::Original(source_data) => caml_block(0, &[source_data.to_ocaml(context)]),
-            TokenData::SynthesizedFromOriginal(synthetic_token_data, source_data) => caml_block(
-                1,
-                &[
-                    synthetic_token_data.to_ocaml(context),
-                    source_data.to_ocaml(context),
-                ],
-            ),
+            TokenData::Original(source_data) => {
+                let block = reserve_block(0.into(), 1);
+                caml_set_field(block, 0, source_data.to_ocaml(context));
+                block
+            }
+            TokenData::SynthesizedFromOriginal(synthetic_token_data, source_data) => {
+                let block = reserve_block(1.into(), 2);
+                caml_set_field(block, 0, synthetic_token_data.to_ocaml(context));
+                caml_set_field(block, 1, source_data.to_ocaml(context));
+                block
+            }
             TokenData::Synthetic(synthetic_token_data) => {
-                caml_block(2, &[synthetic_token_data.to_ocaml(context)])
+                let block = reserve_block(2.into(), 1);
+                caml_set_field(block, 0, synthetic_token_data.to_ocaml(context));
+                block
             }
         }
     }

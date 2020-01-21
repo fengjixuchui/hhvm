@@ -137,12 +137,6 @@ void IRBuilder::appendInstruction(IRInstruction* inst) {
         m_constraints.prevTypes[inst] = m_state.typeOf(*l);
       }
     }
-
-    // And a LdRef or CheckRefInner automatically constrains the value to be a
-    // boxed cell, specifically.
-    if (inst->is(LdRef, CheckRefInner)) {
-      constrainValue(inst->src(0), DataTypeSpecific);
-    }
   }
 
   auto where = m_curBlock->end();
@@ -229,22 +223,6 @@ SSATmp* IRBuilder::preOptimizeCheckMBase(IRInstruction* inst) {
   return preOptimizeCheckLocation(inst, Location::MBase{});
 }
 
-SSATmp* IRBuilder::preOptimizeHintInner(IRInstruction* inst, Location l) {
-  if (!(typeOf(l, DataTypeGeneric) <= TBoxedCell) ||
-      predictedInnerType(l).box() <= inst->typeParam()) {
-    inst->convertToNop();
-  }
-  return nullptr;
-}
-
-SSATmp* IRBuilder::preOptimizeHintLocInner(IRInstruction* inst) {
-  return preOptimizeHintInner(inst, loc(inst->extra<HintLocInner>()->locId));
-}
-
-SSATmp* IRBuilder::preOptimizeHintMBaseInner(IRInstruction* inst) {
-  return preOptimizeHintInner(inst, Location::MBase{});
-}
-
 SSATmp* IRBuilder::preOptimizeAssertTypeOp(IRInstruction* inst,
                                            const Type oldType,
                                            SSATmp* oldVal,
@@ -258,7 +236,7 @@ SSATmp* IRBuilder::preOptimizeAssertTypeOp(IRInstruction* inst,
 
   // Eliminate this AssertTypeOp if:
   // 1) oldType is at least as good as newType and:
-  //      a) typeParam == Gen
+  //      a) typeParam == Cell
   //      b) oldVal is from a DefConst
   //      c) oldType.hasConstVal()
   //    The AssertType will never be useful for guard constraining in these
@@ -266,7 +244,7 @@ SSATmp* IRBuilder::preOptimizeAssertTypeOp(IRInstruction* inst,
   // 2) The source instruction is known to be another assert that's at least
   //    as good as this one.
   if ((oldType <= newType &&
-       (inst->typeParam() == TGen ||
+       (inst->typeParam() == TCell ||
         (oldVal && oldVal->inst()->is(DefConst)) ||
         oldType.hasConstVal())) ||
       (srcInst &&
@@ -318,60 +296,6 @@ SSATmp* IRBuilder::preOptimizeAssertStk(IRInstruction* inst) {
   return preOptimizeAssertLocation(inst, stk(inst->extra<AssertStk>()->offset));
 }
 
-SSATmp* IRBuilder::preOptimizeCheckCtxThis(IRInstruction* inst) {
-  auto const func = inst->marker().func();
-  if (!func->mayHaveThis()) {
-    auto const taken = inst->taken();
-    inst->convertToNop();
-    return gen(Jmp, taken);
-  }
-  return nullptr;
-}
-
-SSATmp* IRBuilder::preOptimizeLdCtxHelper(IRInstruction* inst) {
-  // Change LdCtx in static functions to LdCctx, or if we're inlining try to
-  // fish out a constant context.
-  auto const func = inst->marker().func();
-  assertx(func->cls());
-  auto const ctx = [&]() -> SSATmp* {
-    auto ret = m_state.ctx();
-    if (!ret) return nullptr;
-    if (ret->inst()->is(DefConst)) return ret;
-    if (ret->hasConstVal() ||
-        ret->type().subtypeOfAny(TInitNull, TUninit, TNullptr)) {
-      return m_unit.cns(ret->type());
-    }
-    if (!m_state.frameMaySpanCall()) return ret;
-    return nullptr;
-  }();
-
-  if (ctx) {
-    if (ctx->hasConstVal(TCls)) {
-      return m_unit.cns(ConstCctx::cctx(ctx->clsVal()));
-    }
-    if (ctx->isA(TCls)) {
-      return gen(ConvClsToCctx, ctx);
-    }
-    if (ctx->isA(TCtx)) {
-      return ctx;
-    }
-  }
-
-  if (!func->mayHaveThis()) {
-    // ActRec->m_cls of a static function is always a valid class pointer with
-    // the bottom bit set
-    if (func->cls()->attrs() & AttrNoOverride) {
-      return m_unit.cns(ConstCctx::cctx(func->cls()));
-    }
-    if (inst->op() == LdCtx) {
-      auto const src = inst->src(0);
-      return gen(LdCctx, src);
-    }
-  }
-
-  return nullptr;
-}
-
 SSATmp* IRBuilder::preOptimizeLdLocation(IRInstruction* inst, Location l) {
   if (auto tmp = valueOf(l, DataTypeGeneric)) return tmp;
 
@@ -386,12 +310,9 @@ SSATmp* IRBuilder::preOptimizeLdLocation(IRInstruction* inst, Location l) {
   }
 
   if (l.tag() == LTag::Local) {
-    if (!inst->marker().func()->isClosureBody() ||
-        l.localId() != inst->marker().func()->numParams()) {
-      // If FrameStateMgr's type for a local isn't as good as the type param,
-      // we're missing information in the IR.
-      assertx(inst->typeParam() >= type);
-    }
+    // If FrameStateMgr's type for a local isn't as good as the type param,
+    // we're missing information in the IR.
+    assertx(inst->typeParam() >= type);
   }
   inst->setTypeParam(std::min(type, inst->typeParam()));
 
@@ -414,11 +335,66 @@ SSATmp* IRBuilder::preOptimizeLdMBase(IRInstruction* inst) {
   return nullptr;
 }
 
+SSATmp* IRBuilder::preOptimizeLdClosureCtx(IRInstruction* inst) {
+  auto const closure = canonical(inst->src(0));
+  if (!closure->inst()->is(ConstructClosure)) return nullptr;
+  return gen(AssertType, inst->typeParam(), closure->inst()->src(0));
+}
+
+SSATmp* IRBuilder::preOptimizeLdClosureCls(IRInstruction* inst) {
+  return preOptimizeLdClosureCtx(inst);
+}
+
+SSATmp* IRBuilder::preOptimizeLdClosureThis(IRInstruction* inst) {
+  return preOptimizeLdClosureCtx(inst);
+}
+
+SSATmp* IRBuilder::preOptimizeLdFrameCtx(IRInstruction* inst) {
+  auto const func = inst->marker().func();
+  assertx(func->cls() || func->isClosureBody());
+  if (auto ctx = m_state.ctx()) {
+    assertx(!inst->is(LdFrameCls) || ctx->type() <= TCls);
+    assertx(!inst->is(LdFrameThis) || ctx->type() <= TObj);
+    if (ctx->inst()->is(DefConst)) return ctx;
+    if (ctx->hasConstVal() ||
+        ctx->type().subtypeOfAny(TInitNull, TUninit, TNullptr)) {
+      return m_unit.cns(ctx->type());
+    }
+    return ctx;
+  }
+
+  if (inst->is(LdFrameCls)) {
+    // ActRec->m_cls of a static function is always a valid class pointer with
+    // the bottom bit set
+    assertx(func->cls());
+    if (func->cls()->attrs() & AttrNoOverride) {
+      return m_unit.cns(func->cls());
+    }
+  }
+
+  return nullptr;
+}
+
+SSATmp* IRBuilder::preOptimizeLdObjClass(IRInstruction* inst) {
+  if (auto const spec = inst->src(0)->type().clsSpec()) {
+    if (spec.exact() || spec.cls()->attrs() & AttrNoOverride) {
+      return m_unit.cns(spec.cls());
+    }
+  }
+  return nullptr;
+}
+
+SSATmp* IRBuilder::preOptimizeLdFrameThis(IRInstruction* inst) {
+  return preOptimizeLdFrameCtx(inst);
+}
+
+SSATmp* IRBuilder::preOptimizeLdFrameCls(IRInstruction* inst) {
+  return preOptimizeLdFrameCtx(inst);
+}
+
 SSATmp* IRBuilder::preOptimize(IRInstruction* inst) {
 #define X(op) case op: return preOptimize##op(inst);
   switch (inst->op()) {
-  X(HintLocInner)
-  X(HintMBaseInner)
   X(AssertType)
   X(AssertLoc)
   X(AssertStk)
@@ -427,10 +403,12 @@ SSATmp* IRBuilder::preOptimize(IRInstruction* inst) {
   X(CheckMBase)
   X(LdLoc)
   X(LdStk)
-  X(CheckCtxThis)
-  X(LdCtx)
-  X(LdCctx)
   X(LdMBase)
+  X(LdClosureCls)
+  X(LdClosureThis)
+  X(LdFrameCls)
+  X(LdFrameThis)
+  X(LdObjClass)
   default: break;
   }
 #undef X
@@ -791,26 +769,6 @@ SSATmp* IRBuilder::valueOf(Location l, GuardConstraint gc) {
 Type IRBuilder::typeOf(Location l, GuardConstraint gc) {
   constrainLocation(l, gc, "");
   return m_state.typeOf(l);
-}
-
-Type IRBuilder::predictedInnerType(Location l) const {
-  auto const ty = m_state.predictedTypeOf(l);
-  assertx(ty <= TBoxedCell);
-  return ldRefReturn(ty.unbox());
-}
-
-Type IRBuilder::predictedLocalInnerType(uint32_t id) const {
-  return predictedInnerType(loc(id));
-}
-
-Type IRBuilder::predictedStackInnerType(IRSPRelOffset offset) const {
-  return predictedInnerType(stk(offset));
-}
-
-Type IRBuilder::predictedMBaseInnerType() const {
-  auto const ty = m_state.mbase().predictedType;
-  assertx(ty <= TBoxedCell);
-  return ldRefReturn(ty.unbox());
 }
 
 /*

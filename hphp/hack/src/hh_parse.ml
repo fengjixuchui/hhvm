@@ -49,7 +49,6 @@ module FullFidelityParseArgs = struct
     schema: bool;
     show_file_name: bool;
     (* Configuring the parser *)
-    is_hh_file: bool;
     codegen: bool;
     php5_compat_mode: bool;
     elaborate_namespaces: bool;
@@ -60,10 +59,7 @@ module FullFidelityParseArgs = struct
     fail_open: bool;
     (* Defining the input *)
     files: string list;
-    dump_nast: bool;
     disable_lval_as_an_expression: bool;
-    rust_parser_errors: bool;
-    enable_constant_visibility_modifiers: bool;
     enable_class_level_where_clauses: bool;
     disable_legacy_soft_typehints: bool;
     allow_new_attribute_syntax: bool;
@@ -72,6 +68,9 @@ module FullFidelityParseArgs = struct
     const_static_props: bool;
     abstract_static_props: bool;
     disable_halt_compiler: bool;
+    disallow_func_ptrs_in_constants: bool;
+    error_php_lambdas: bool;
+    disallow_discarded_nullable_awaitables: bool;
   }
 
   let make
@@ -86,7 +85,6 @@ module FullFidelityParseArgs = struct
       program_text
       pretty_print
       schema
-      is_hh_file
       codegen
       php5_compat_mode
       elaborate_namespaces
@@ -97,10 +95,7 @@ module FullFidelityParseArgs = struct
       fail_open
       show_file_name
       files
-      dump_nast
       disable_lval_as_an_expression
-      rust_parser_errors
-      enable_constant_visibility_modifiers
       enable_class_level_where_clauses
       disable_legacy_soft_typehints
       allow_new_attribute_syntax
@@ -108,7 +103,10 @@ module FullFidelityParseArgs = struct
       const_default_func_args
       const_static_props
       abstract_static_props
-      disable_halt_compiler =
+      disable_halt_compiler
+      disallow_func_ptrs_in_constants
+      error_php_lambdas
+      disallow_discarded_nullable_awaitables =
     {
       full_fidelity_json;
       full_fidelity_dot;
@@ -121,7 +119,6 @@ module FullFidelityParseArgs = struct
       program_text;
       pretty_print;
       schema;
-      is_hh_file;
       codegen;
       php5_compat_mode;
       elaborate_namespaces;
@@ -132,10 +129,7 @@ module FullFidelityParseArgs = struct
       fail_open;
       show_file_name;
       files;
-      dump_nast;
       disable_lval_as_an_expression;
-      rust_parser_errors;
-      enable_constant_visibility_modifiers;
       enable_class_level_where_clauses;
       disable_legacy_soft_typehints;
       allow_new_attribute_syntax;
@@ -144,6 +138,9 @@ module FullFidelityParseArgs = struct
       const_static_props;
       abstract_static_props;
       disable_halt_compiler;
+      disallow_func_ptrs_in_constants;
+      error_php_lambdas;
+      disallow_discarded_nullable_awaitables;
     }
 
   let parse_args () =
@@ -170,7 +167,6 @@ module FullFidelityParseArgs = struct
     let set_pretty_print () = pretty_print := true in
     let schema = ref false in
     let set_schema () = schema := true in
-    let is_hh_file = ref false in
     let codegen = ref false in
     let php5_compat_mode = ref false in
     let elaborate_namespaces = ref true in
@@ -181,13 +177,10 @@ module FullFidelityParseArgs = struct
     let enable_hh_syntax = ref false in
     let fail_open = ref true in
     let show_file_name = ref false in
-    let dump_nast = ref false in
     let disable_lval_as_an_expression = ref false in
     let set_show_file_name () = show_file_name := true in
     let files = ref [] in
     let push_file file = files := file :: !files in
-    let rust_parser_errors = ref false in
-    let enable_constant_visibility_modifiers = ref false in
     let enable_class_level_where_clauses = ref false in
     let disable_legacy_soft_typehints = ref false in
     let allow_new_attribute_syntax = ref false in
@@ -196,12 +189,15 @@ module FullFidelityParseArgs = struct
     let const_static_props = ref false in
     let abstract_static_props = ref false in
     let disable_halt_compiler = ref false in
+    let disallow_func_ptrs_in_constants = ref false in
+    let error_php_lambdas = ref false in
+    let disallow_discarded_nullable_awaitables = ref false in
     let options =
       [
         (* modes *)
-          ( "--full-fidelity-json",
-            Arg.Unit set_full_fidelity_json,
-            "Displays the full-fidelity parse tree in JSON format." );
+        ( "--full-fidelity-json",
+          Arg.Unit set_full_fidelity_json,
+          "Displays the full-fidelity parse tree in JSON format." );
         ( "--full-fidelity-text-json",
           Arg.Unit set_full_fidelity_text_json,
           "Displays the full-fidelity parse tree in JSON format with token text."
@@ -238,12 +234,6 @@ No errors are filtered out."
         ( "--schema",
           Arg.Unit set_schema,
           "Displays the parser version and schema of nodes." );
-        ( "--is-hh-file",
-          Arg.Set is_hh_file,
-          "Set the is_hh_file option for the parser." );
-        ( "--no-is-hh-file",
-          Arg.Clear is_hh_file,
-          "Unset the is_hh_file option for the parser." );
         ("--codegen", Arg.Set codegen, "Set the codegen option for the parser.");
         ( "--no-codegen",
           Arg.Clear codegen,
@@ -294,18 +284,9 @@ No errors are filtered out."
         ( "--show-file-name",
           Arg.Unit set_show_file_name,
           "Displays the file name." );
-        ( "--dump-nast",
-          Arg.Set dump_nast,
-          "Converts the legacy AST to a NAST and prints it." );
         ( "--disable-lval-as-an-expression",
           Arg.Set disable_lval_as_an_expression,
           "Disable lval as an expression." );
-        ( "--rust-parser-errors",
-          Arg.Bool (fun x -> rust_parser_errors := x),
-          "Use the parser errors written in Rust instead of OCaml one" );
-        ( "--enable-constant-visibility-modifiers",
-          Arg.Set enable_constant_visibility_modifiers,
-          "Require constants to have visibility modifiers" );
         ( "--enable-class-level-where-clauses",
           Arg.Set enable_class_level_where_clauses,
           "Enables support for class-level where clauses" );
@@ -315,8 +296,7 @@ No errors are filtered out."
         );
         ( "--allow-new-attribute-syntax",
           Arg.Set allow_new_attribute_syntax,
-          "Allow the new @ attribute syntax (disables legacy soft typehints)"
-        );
+          "Allow the new @ attribute syntax (disables legacy soft typehints)" );
         ( "--disable-legacy-attribute-syntax",
           Arg.Set disable_legacy_attribute_syntax,
           "Disable the legacy <<...>> user attribute syntax" );
@@ -333,6 +313,16 @@ No errors are filtered out."
         ( "--disable-halt-compiler",
           Arg.Set disable_halt_compiler,
           "Disable using PHP __halt_compiler()" );
+        ( "--disallow-func-ptrs-in-constants",
+          Arg.Set disallow_func_ptrs_in_constants,
+          "Disallow use of HH\\fun and HH\\class_meth in constants and constant initializers"
+        );
+        ( "--error-php-lambdas",
+          Arg.Set error_php_lambdas,
+          "Report errors on php style anonymous functions" );
+        ( "--disallow-discarded-nullable-awaitables",
+          Arg.Set disallow_discarded_nullable_awaitables,
+          "Error on using discarded nullable awaitables" );
       ]
     in
     Arg.parse options push_file usage;
@@ -365,7 +355,6 @@ No errors are filtered out."
       !program_text
       !pretty_print
       !schema
-      !is_hh_file
       !codegen
       !php5_compat_mode
       !elaborate_namespaces
@@ -376,10 +365,7 @@ No errors are filtered out."
       !fail_open
       !show_file_name
       (List.rev !files)
-      !dump_nast
       !disable_lval_as_an_expression
-      !rust_parser_errors
-      !enable_constant_visibility_modifiers
       !enable_class_level_where_clauses
       !disable_legacy_soft_typehints
       !allow_new_attribute_syntax
@@ -388,6 +374,9 @@ No errors are filtered out."
       !const_static_props
       !abstract_static_props
       !disable_halt_compiler
+      !disallow_func_ptrs_in_constants
+      !error_php_lambdas
+      !disallow_discarded_nullable_awaitables
 end
 
 open FullFidelityParseArgs
@@ -401,6 +390,18 @@ let print_full_fidelity_error source_text error =
   in
   Printf.printf "%s\n" text
 
+let print_ast_check_errors errors =
+  let error_list = Errors.get_error_list errors in
+  List.iter
+    (fun e ->
+      let text = Errors.to_string (Errors.to_absolute e) in
+      if
+        Core_kernel.String.is_substring text SyntaxError.this_in_static
+        || Core_kernel.String.is_substring text SyntaxError.toplevel_await_use
+      then
+        Printf.eprintf "%s\n%!" (Errors.to_string (Errors.to_absolute e)))
+    error_list
+
 let handle_existing_file args filename =
   let popt = ParserOptions.default in
   let popt = ParserOptions.with_codegen popt args.codegen in
@@ -408,11 +409,6 @@ let handle_existing_file args filename =
     ParserOptions.with_disable_lval_as_an_expression
       popt
       args.disable_lval_as_an_expression
-  in
-  let popt =
-    ParserOptions.with_enable_constant_visibility_modifiers
-      popt
-      args.enable_constant_visibility_modifiers
   in
   let popt =
     {
@@ -437,9 +433,7 @@ let handle_existing_file args filename =
       args.disable_legacy_attribute_syntax
   in
   let popt =
-    ParserOptions.with_const_default_func_args
-      popt
-      args.const_default_func_args
+    ParserOptions.with_const_default_func_args popt args.const_default_func_args
   in
   let popt =
     ParserOptions.with_const_static_props popt args.const_static_props
@@ -448,7 +442,9 @@ let handle_existing_file args filename =
     ParserOptions.with_abstract_static_props popt args.abstract_static_props
   in
   let popt =
-    ParserOptions.with_disable_halt_compiler popt args.disable_halt_compiler
+    ParserOptions.with_disallow_func_ptrs_in_constants
+      popt
+      args.disallow_func_ptrs_in_constants
   in
   (* Parse with the full fidelity parser *)
   let file = Relative_path.create Relative_path.Dummy filename in
@@ -466,7 +462,7 @@ let handle_existing_file args filename =
         args.disable_legacy_attribute_syntax
         (* When print_errors is true, the leaked tree will be passed to ParserErrors,
          * which will consume it. *)
-      ~leak_rust_tree:(args.rust_parser_errors && print_errors)
+      ~leak_rust_tree:print_errors
       ?mode
       ()
   in
@@ -484,28 +480,6 @@ let handle_existing_file args filename =
     let str = DebugPos.dump_syntax root in
     Printf.printf "%s\n" str );
 
-  let dump_needed = args.full_fidelity_ast_s_expr || args.dump_nast in
-  let lowered =
-    if dump_needed || print_errors then
-      let env =
-        Full_fidelity_ast.make_env
-          ~codegen:args.codegen
-          ~php5_compat_mode:args.php5_compat_mode
-          ~elaborate_namespaces:args.elaborate_namespaces
-          ~include_line_comments:args.include_line_comments
-          ~keep_errors:(args.keep_errors && not print_errors)
-          ~quick_mode:args.quick_mode
-          ~lower_coroutines:args.lower_coroutines
-          ~parser_options:popt
-          ~fail_open:args.fail_open
-          ~is_hh_file:args.is_hh_file
-          file
-      in
-      try Some (Full_fidelity_ast.from_file env)
-      with _ when print_errors -> None
-    else
-      None
-  in
   ( if print_errors then
     let level =
       if args.full_fidelity_errors_all then
@@ -530,19 +504,37 @@ let handle_existing_file args filename =
     let errors = ParserErrors.parse_errors error_env in
     List.iter (print_full_fidelity_error source_text) errors );
   begin
+    let dump_needed = args.full_fidelity_ast_s_expr in
+    let lowered =
+      if dump_needed || print_errors then
+        let env =
+          Full_fidelity_ast.make_env
+            ~codegen:args.codegen
+            ~php5_compat_mode:args.php5_compat_mode
+            ~elaborate_namespaces:args.elaborate_namespaces
+            ~include_line_comments:args.include_line_comments
+            ~keep_errors:(args.keep_errors || print_errors)
+            ~quick_mode:args.quick_mode
+            ~lower_coroutines:args.lower_coroutines
+            ~parser_options:popt
+            ~fail_open:args.fail_open
+            file
+        in
+        try
+          let (errors, res) =
+            Errors.do_ (fun () -> Full_fidelity_ast.from_file_with_legacy env)
+          in
+          if print_errors then print_ast_check_errors errors;
+          Some res
+        with _ when print_errors -> None
+      else
+        None
+    in
     match lowered with
     | Some res ->
-      let ast = res.Full_fidelity_ast.ast in
-      if print_errors then
-        Ast_check.check_program ast
-        |> List.iter (print_full_fidelity_error source_text);
       if dump_needed then
-        let str =
-          if args.dump_nast then
-            Nast.show_program (Ast_to_nast.convert ast)
-          else
-            Debug.dump_ast (Ast.AProgram ast)
-        in
+        let ast = res.Parser_return.ast in
+        let str = Nast.show_program ast in
         Printf.printf "%s\n" str
     | None -> ()
   end;
@@ -579,7 +571,7 @@ let rec main args files =
 
 let () =
   let args = parse_args () in
-  EventLogger.init EventLogger.Event_logger_fake 0.0;
+  EventLogger.init_fake ();
   let handle =
     SharedMem.init ~num_workers:0 GlobalConfig.default_sharedmem_config
   in

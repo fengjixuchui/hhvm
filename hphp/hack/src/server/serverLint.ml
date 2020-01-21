@@ -62,8 +62,7 @@ let lint tcopt _acc (files_with_contents : lint_target list) =
                   let contents =
                     match contents with
                     | Some contents -> contents
-                    | None ->
-                      Sys_utils.cat (Relative_path.to_absolute filename)
+                    | None -> Sys_utils.cat (Relative_path.to_absolute filename)
                   in
                   Linting_service.lint tcopt filename contents))
         in
@@ -75,7 +74,7 @@ let lint_and_filter tcopt code acc fnl =
   let lint_errs = lint tcopt acc fnl in
   List.filter lint_errs (fun err -> Lint.get_code err = code)
 
-let lint_all genv env code =
+let lint_all genv ctx code =
   let next =
     compose
       (fun lst ->
@@ -83,12 +82,12 @@ let lint_all genv env code =
         |> List.map ~f:(fun fn ->
                { filename = RP.create RP.Root fn; contents = None })
         |> Hack_bucket.of_list)
-      (genv.indexer FindUtils.is_php)
+      (genv.indexer FindUtils.is_hack)
   in
   let errs =
     MultiWorker.call
       genv.workers
-      ~job:(lint_and_filter env.tcopt code)
+      ~job:(lint_and_filter ctx code)
       ~merge:List.rev_append
       ~neutral:[]
       ~next
@@ -103,7 +102,7 @@ let prepare_errors_for_output errs =
          Pos.compare (Lint.get_pos x) (Lint.get_pos y))
   |> List.map ~f:Lint.to_absolute
 
-let go genv env fnl =
+let go genv ctx fnl =
   let files_with_contents =
     List.map fnl ~f:(fun filename ->
         { filename = create_rp filename; contents = None })
@@ -112,20 +111,20 @@ let go genv env fnl =
     if List.length files_with_contents > 10 then
       MultiWorker.call
         genv.workers
-        ~job:(lint env.tcopt)
+        ~job:(lint ctx)
         ~merge:List.rev_append
         ~neutral:[]
         ~next:(MultiWorker.next genv.workers files_with_contents)
     else
-      lint env.tcopt [] files_with_contents
+      lint ctx [] files_with_contents
   in
   prepare_errors_for_output errs
 
-let go_stdin env ~(filename : string) ~(contents : string) =
+let go_stdin ctx ~(filename : string) ~(contents : string) =
   let file_with_contents =
     { filename = create_rp filename; contents = Some contents }
   in
-  lint env.tcopt [] [file_with_contents] |> prepare_errors_for_output
+  lint ctx [] [file_with_contents] |> prepare_errors_for_output
 
 let lint_single_xcontroller tcopt name =
   let module Cls = Decl_provider.Class in
@@ -149,7 +148,7 @@ let go_xcontroller genv env (fnl : string list) =
       List.filter_map fnl ~f:(fun path ->
           Relative_path.create_detect_prefix path
           |> Naming_table.get_file_info env.naming_table
-          >>= (fun info -> Some (List.map info.FileInfo.classes ~f:snd)))
+          >>= fun info -> Some (List.map info.FileInfo.classes ~f:snd))
       |> List.concat
     in
     MultiWorker.call

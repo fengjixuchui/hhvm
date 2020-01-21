@@ -17,7 +17,6 @@
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/object-data.h"
-#include "hphp/runtime/base/ref-data.h"
 #include "hphp/runtime/base/resource-data.h"
 #include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/typed-value.h"
@@ -30,9 +29,7 @@ namespace HPHP {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-bool cellIsPlausible(const Cell cell) {
-  assertx(!isRefType(cell.m_type));
-
+bool tvIsPlausible(const TypedValue cell) {
   auto assertPtr = [](const void* ptr) {
     assertx(ptr && (uintptr_t(ptr) % sizeof(ptr) == 0));
   };
@@ -94,31 +91,6 @@ bool cellIsPlausible(const Cell cell) {
         assertx(cell.m_data.parr->isKeyset());
         assertx(cell.m_data.parr->isNotDVArray());
         return;
-      case KindOfPersistentShape:
-        if (RuntimeOption::EvalHackArrDVArrs) {
-          assertPtr(cell.m_data.parr);
-          assertx(!cell.m_data.parr->isRefCounted());
-          assertx(cell.m_data.parr->isShape());
-          assertx(cell.m_data.parr->isNotDVArray());
-          return;
-        }
-        assertPtr(cell.m_data.parr);
-        assertx(cell.m_data.parr->kindIsValid());
-        assertx(!cell.m_data.parr->isRefCounted());
-        assertx(cell.m_data.parr->isShape());
-        assertx(cell.m_data.parr->dvArraySanityCheck());
-        return;
-      case KindOfShape:
-        assertPtr(cell.m_data.parr);
-        assertx(cell.m_data.parr->checkCountZ());
-        assertx(cell.m_data.parr->isShape());
-        if (RuntimeOption::EvalHackArrDVArrs) {
-          assertx(cell.m_data.parr->isNotDVArray());
-          return;
-        }
-        assertx(cell.m_data.parr->kindIsValid());
-        assertx(cell.m_data.parr->dvArraySanityCheck());
-        return;
       case KindOfPersistentArray:
         assertPtr(cell.m_data.parr);
         assertx(cell.m_data.parr->kindIsValid());
@@ -159,30 +131,17 @@ bool cellIsPlausible(const Cell cell) {
       case KindOfClsMeth:
         assertx(cell.m_data.pclsmeth->validate());
         return;
-      case KindOfRef:
-        assertx(!"KindOfRef found in a Cell");
-        break;
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        assert_flog(false, "premature use of datatype-specialized php arrays");
+        return;
     }
     not_reached();
   }();
 
   return true;
-}
-
-bool tvIsPlausible(TypedValue tv) {
-  if (isRefType(tv.m_type)) {
-    assertx(tv.m_data.pref);
-    assertx(uintptr_t(tv.m_data.pref) % sizeof(void*) == 0);
-    assertx(tv.m_data.pref->kindIsValid());
-    assertx(tv.m_data.pref->checkCountZ());
-    tv = *tv.m_data.pref->cell();
-  }
-  return cellIsPlausible(tv);
-}
-
-bool refIsPlausible(const Ref ref) {
-  assertx(isRefType(ref.m_type));
-  return tvIsPlausible(ref);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -4,40 +4,20 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-extern crate ocaml;
-use parser_rust as parser;
-
-use crate::ocaml_coroutine_state::OcamlCoroutineState;
-use crate::ocaml_syntax::OcamlSyntax;
-
 use ocaml::core::mlvalues::{empty_list, Value};
 
 use std::iter::Iterator;
 
-use parser::coroutine_smart_constructors::{CoroutineStateType, State as CoroutineState};
-use parser::decl_mode_smart_constructors::State as DeclModeState;
-use parser::lexable_token::LexableToken;
-use parser::minimal_syntax::MinimalValue;
-use parser::minimal_token::MinimalToken;
-use parser::minimal_trivia::MinimalTrivia;
-use parser::positioned_syntax::PositionedValue;
-use parser::positioned_token::PositionedToken;
-use parser::positioned_trivia::PositionedTrivia;
-use parser::smart_constructors::NoState;
-use parser::source_text::SourceText;
-use parser::syntax::*;
-use parser::syntax_error::SyntaxError;
-use parser::syntax_kind::SyntaxKind;
-use parser::token_kind::TokenKind;
-use parser::trivia_kind::TriviaKind;
-use parser::verify_smart_constructors::State as VerifyState;
-
-use ocamlpool_rust::ocamlvalue::Ocamlvalue;
 use ocamlpool_rust::utils::*;
-
-extern "C" {
-    static mut ocamlpool_generation: usize;
-}
+use ocamlrep_ocamlpool::add_to_ambient_pool;
+use parser_core_types::{
+    lexable_token::LexableToken, minimal_syntax::MinimalValue, minimal_token::MinimalToken,
+    minimal_trivia::MinimalTrivia, positioned_syntax::PositionedValue,
+    positioned_token::PositionedToken, positioned_trivia::PositionedTrivia,
+    source_text::SourceText, syntax::*, syntax_error::SyntaxError, syntax_kind::SyntaxKind,
+    token_kind::TokenKind, trivia_kind::TriviaKind,
+};
+use smart_constructors::NoState;
 
 pub struct SerializationContext {
     pub source_text: Value,
@@ -60,78 +40,53 @@ where
     let mut res = empty_list();
 
     for v in values.iter().rev() {
-        res = caml_tuple(&[v.to_ocaml(context), res])
+        let tmp = res;
+        res = reserve_block(0.into(), 2);
+        caml_set_field(res, 0, v.to_ocaml(context));
+        caml_set_field(res, 1, tmp);
     }
     res
 }
 
 impl ToOcaml for bool {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        usize_to_ocaml(*self as usize)
+        add_to_ambient_pool(self)
     }
 }
 
 impl ToOcaml for Vec<bool> {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        self.ocamlvalue()
-    }
-}
-
-impl<S> ToOcaml for DeclModeState<'_, S> {
-    unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
-        self.stack().to_ocaml(context)
+        add_to_ambient_pool(self)
     }
 }
 
 impl ToOcaml for TokenKind {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        u8_to_ocaml(self.ocaml_tag())
+        add_to_ambient_pool(self)
     }
 }
 
 impl ToOcaml for TriviaKind {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        u8_to_ocaml(self.ocaml_tag())
+        add_to_ambient_pool(self)
     }
 }
 
 impl ToOcaml for MinimalTrivia {
-    unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
-        // From full_fidelity_minimal_trivia.ml:
-        // type t = {
-        //   kind: Full_fidelity_trivia_kind.t;
-        //   width: int
-        // }
-        let kind = self.kind.to_ocaml(context);
-        let width = usize_to_ocaml(self.width);
-        caml_tuple(&[kind, width])
+    unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
+        add_to_ambient_pool(self)
     }
 }
 
 impl ToOcaml for MinimalToken {
-    unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
-        let kind = self.kind().to_ocaml(context);
-        let width = usize_to_ocaml(self.width());
-        let leading = to_list(&self.leading, context);
-        let trailing = to_list(&self.trailing, context);
-
-        // From full_fidelity_minimal_token.ml:
-        // type t = {
-        //   kind: TokenKind.t;
-        //   width: int;
-        //   leading: Trivia.t list;
-        //   trailing: Trivia.t list
-        // }
-        caml_tuple(&[kind, width, leading, trailing])
+    unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
+        add_to_ambient_pool(self)
     }
 }
 
 impl ToOcaml for MinimalValue {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        // From full_fidelity_minimal_syntax.ml:
-        // type t = { full_width: int }
-        let full_width = usize_to_ocaml(self.full_width);
-        caml_tuple(&[full_width])
+        add_to_ambient_pool(self)
     }
 }
 
@@ -148,16 +103,20 @@ where
             SyntaxVariant::Token(token) => {
                 let token_kind = token.kind();
                 let token = token.to_ocaml(context);
-                caml_block(SyntaxKind::Token(token_kind).ocaml_tag(), &[token])
+                let block = reserve_block(SyntaxKind::Token(token_kind).ocaml_tag().into(), 1);
+                caml_set_field(block, 0, token);
+                block
             }
             SyntaxVariant::SyntaxList(l) => {
                 let l = to_list(l, context);
-                caml_block(SyntaxKind::SyntaxList.ocaml_tag(), &[l])
+                let block = reserve_block(SyntaxKind::SyntaxList.ocaml_tag().into(), 1);
+                caml_set_field(block, 0, l);
+                block
             }
             _ => {
                 let tag = self.kind().ocaml_tag() as u8;
                 // This could be much more readable by constructing a vector of children and
-                // passing it to caml_block, but the cost of this intermediate vector allocation is
+                // passing it to to_list, but the cost of this intermediate vector allocation is
                 // too big
                 let n = self.iter_children().count();
                 let result = reserve_block(tag, n);
@@ -170,7 +129,10 @@ where
                 result
             }
         };
-        caml_tuple(&[syntax, value])
+        let block = reserve_block(0.into(), 2);
+        caml_set_field(block, 0, syntax);
+        caml_set_field(block, 1, value);
+        block
     }
 }
 
@@ -183,12 +145,12 @@ impl ToOcaml for PositionedTrivia {
         //   offset : int;
         //   width : int
         // }
-        caml_tuple(&[
-            self.kind.to_ocaml(context),
-            context.source_text,
-            usize_to_ocaml(self.offset),
-            usize_to_ocaml(self.width),
-        ])
+        let block = reserve_block(0.into(), 4);
+        caml_set_field(block, 0, self.kind.to_ocaml(context));
+        caml_set_field(block, 1, context.source_text);
+        caml_set_field(block, 2, usize_to_ocaml(self.offset));
+        caml_set_field(block, 3, usize_to_ocaml(self.width));
+        block
     }
 }
 
@@ -210,18 +172,14 @@ fn build_lazy_trivia(trivia_list: &[PositionedTrivia], acc: Option<usize>) -> Op
         })
 }
 
-unsafe fn get_forward_pointer(token: &PositionedToken) -> Value {
-    if token.0.ocamlpool_generation == ocamlpool_generation {
-        return token.0.ocamlpool_forward_pointer;
-    } else {
-        return ocaml::core::mlvalues::UNIT;
-    }
+fn get_forward_pointer(token: &PositionedToken) -> Value {
+    token
+        .get_cached_value_in_generation(get_ocamlpool_generation())
+        .unwrap_or(ocaml::core::mlvalues::UNIT)
 }
 
-unsafe fn set_forward_pointer(token: &PositionedToken, value: Value) {
-    *std::mem::transmute::<&usize, *mut Value>(&token.0.ocamlpool_forward_pointer) = value;
-    *std::mem::transmute::<&usize, *mut usize>(&token.0.ocamlpool_generation) =
-        ocamlpool_generation;
+fn set_forward_pointer(token: &PositionedToken, value: Value) {
+    token.set_cached_value(value, get_ocamlpool_generation());
 }
 
 impl ToOcaml for PositionedToken {
@@ -247,7 +205,10 @@ impl ToOcaml for PositionedToken {
                 //( Trivia.t list * Trivia.t list)
                 let leading = to_list(self.leading(), context);
                 let trailing = to_list(self.trailing(), context);
-                caml_tuple(&[leading, trailing])
+                let block = reserve_block(0.into(), 2);
+                caml_set_field(block, 0, leading);
+                caml_set_field(block, 1, trailing);
+                block
             }
         };
         // From full_fidelity_positioned_token.ml:
@@ -260,15 +221,14 @@ impl ToOcaml for PositionedToken {
         //   trailing_width: int;
         //   trivia: LazyTrivia.t;
         // }
-        let res = caml_tuple(&[
-            kind,
-            context.source_text,
-            offset,
-            leading_width,
-            width,
-            trailing_width,
-            trivia,
-        ]);
+        let res = reserve_block(0.into(), 7);
+        caml_set_field(res, 0, kind);
+        caml_set_field(res, 1, context.source_text);
+        caml_set_field(res, 2, offset);
+        caml_set_field(res, 3, leading_width);
+        caml_set_field(res, 4, width);
+        caml_set_field(res, 5, trailing_width);
+        caml_set_field(res, 6, trivia);
         set_forward_pointer(self, res);
         res
     }
@@ -284,18 +244,26 @@ impl ToOcaml for PositionedValue {
             PositionedValue::TokenValue(t) => {
                 let token = t.to_ocaml(context);
                 // TokenValue of  ...
-                caml_block(TOKEN_VALUE_VARIANT, &[token])
+                let block = reserve_block(TOKEN_VALUE_VARIANT.into(), 1);
+                caml_set_field(block, 0, token);
+                block
             }
-            PositionedValue::TokenSpan { left, right } => {
-                let left = left.to_ocaml(context);
-                let right = right.to_ocaml(context);
+            PositionedValue::TokenSpan(x) => {
+                let left = x.left.to_ocaml(context);
+                let right = x.right.to_ocaml(context);
                 // TokenSpan { left: Token.t; right: Token.t }
-                caml_block(TOKEN_SPAN_VARIANT, &[left, right])
+                let block = reserve_block(TOKEN_SPAN_VARIANT.into(), 2);
+                caml_set_field(block, 0, left);
+                caml_set_field(block, 1, right);
+                block
             }
             PositionedValue::Missing { offset } => {
                 let offset = usize_to_ocaml(*offset);
                 // Missing of {...}
-                caml_block(MISSING_VALUE_VARIANT, &[context.source_text, offset])
+                let block = reserve_block(MISSING_VALUE_VARIANT.into(), 2);
+                caml_set_field(block, 0, context.source_text);
+                caml_set_field(block, 1, offset);
+                block
             }
         }
     }
@@ -303,25 +271,19 @@ impl ToOcaml for PositionedValue {
 
 impl ToOcaml for SyntaxError {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        self.ocamlvalue()
+        add_to_ambient_pool(self)
     }
 }
 
 impl ToOcaml for NoState {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        ocaml::core::mlvalues::UNIT
+        add_to_ambient_pool(self)
     }
 }
 
 impl ToOcaml for SyntaxKind {
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        u8_to_ocaml(self.ocaml_tag())
-    }
-}
-
-impl ToOcaml for VerifyState {
-    unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
-        to_list(self.stack(), context)
+        add_to_ambient_pool(self)
     }
 }
 
@@ -334,23 +296,5 @@ where
     unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
         // don't serialize .1 (source text) as it is not part the real state we care about
         self.0.to_ocaml(_context)
-    }
-}
-
-impl<'a, S> ToOcaml for CoroutineState<'a, S> {
-    unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        self.seen_ppl().to_ocaml(_context)
-    }
-}
-
-impl<'a, S> ToOcaml for OcamlCoroutineState<'a, S> {
-    unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
-        self.seen_ppl().to_ocaml(context)
-    }
-}
-
-impl<V> ToOcaml for OcamlSyntax<V> {
-    unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
-        self.syntax
     }
 }

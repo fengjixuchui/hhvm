@@ -15,9 +15,11 @@
 */
 #include "hphp/runtime/base/static-string-table.h"
 
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/perf-warning.h"
 #include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/vm/debug/debug.h"
 #include "hphp/runtime/vm/reverse-data-map.h"
 
@@ -237,6 +239,14 @@ StringData* lookupStaticString(const StringData *str) {
   return nullptr;
 }
 
+StringData* lookupStaticString(folly::StringPiece slice) {
+  auto const it = s_stringDataMap->find(slice);
+  if (it != s_stringDataMap->end()) {
+    return const_cast<StringData*>(to_sdata(it->first));
+  }
+  return nullptr;
+}
+
 StringData* makeStaticString(const String& str) {
   assertx(!str.isNull());
   return makeStaticString(str.get());
@@ -276,7 +286,7 @@ StringData* makeStaticStringSafe(const char* str) {
   return makeStaticString(str);
 }
 
-bool bindPersistentCns(const StringData* cnsName, const Cell& value) {
+bool bindPersistentCns(const StringData* cnsName, const TypedValue& value) {
   assertx(s_stringDataMap);
   auto const it = s_stringDataMap->find(cnsName);
   assertx(it != s_stringDataMap->end());
@@ -303,14 +313,9 @@ rds::Handle lookupCnsHandle(const StringData* cnsName) {
 }
 
 rds::Handle makeCnsHandle(const StringData* cnsName) {
+  assertx(cnsName->isStatic());
   auto const val = lookupCnsHandle(cnsName);
   if (rds::isHandleBound(val)) return val;
-  if (!cnsName->isStatic()) {
-    // Its a dynamic constant, that doesn't correspond to
-    // an already allocated handle. We'll allocate it in
-    // the request local rds::s_constants instead.
-    return rds::kUninitHandle;
-  }
   auto const it = s_stringDataMap->find(cnsName);
   assertx(it != s_stringDataMap->end());
   if (!it->second.bound()) {
@@ -325,10 +330,10 @@ rds::Handle makeCnsHandle(const StringData* cnsName) {
 std::vector<StringData*> lookupDefinedStaticStrings() {
   assertx(s_stringDataMap);
   std::vector<StringData*> ret;
+  ret.reserve(s_stringDataMap->size());
 
-  for (auto it = s_stringDataMap->begin();
-       it != s_stringDataMap->end(); ++it) {
-    ret.push_back(const_cast<StringData*>(to_sdata(it->first)));
+  for (auto const& it : *s_stringDataMap) {
+    ret.push_back(const_cast<StringData*>(to_sdata(it.first)));
   }
 
   return ret;
@@ -340,38 +345,34 @@ const StaticString s_Core("Core");
 
 Array lookupDefinedConstants(bool categorize /*= false */) {
   assertx(s_stringDataMap);
-  Array usr(rds::s_constants());
-  Array sys;
+  auto usr = Array::CreateDArray();
+  auto sys = categorize ? Array::CreateDArray() : Array();
 
-  for (auto it = s_stringDataMap->begin();
-       it != s_stringDataMap->end(); ++it) {
-    if (it->second.bound()) {
-      if (!it->second.isInit()) continue;
+  for (auto const& it : *s_stringDataMap) {
+    auto const& rval = it.second;
+    if (!rval.bound() || !rval.isInit()) continue;
 
-      Array *tbl = (categorize && it->second.isPersistent()) ? &sys : &usr;
-      auto& tv = *it->second;
+    auto* tbl = (categorize && rval.isPersistent()) ? &sys : &usr;
+    auto const& tv = *rval;
 
-      if (tv.m_type != KindOfUninit) {
-        StrNR key(const_cast<StringData*>(to_sdata(it->first)));
-        tbl->set(key, tvAsVariant(&tv), true);
-      } else {
-        assertx(tv.m_data.pref);
-        StrNR key(const_cast<StringData*>(to_sdata(it->first)));
-        auto callback =
-          reinterpret_cast<Native::ConstantCallback>(tv.m_data.pref);
-        auto cns = callback();
-        if (cns.isInitialized()) {
-          tbl->set(key, cns, true);
-        }
+    StrNR key{to_sdata(it.first)};
+    if (type(tv) != KindOfUninit) {
+      tbl->set(key, tv, true);
+    } else {
+      assertx(val(tv).pcnt);
+      auto callback = reinterpret_cast<Native::ConstantCallback>(val(tv).pcnt);
+      auto cns = callback();
+      if (cns.isInitialized()) {
+        tbl->set(key, cns, true);
       }
     }
   }
 
   if (categorize) {
-    Array ret;
-    ret.set(s_user, usr);
-    ret.set(s_Core, sys);
-    return ret;
+    return make_darray(
+      s_user, usr,
+      s_Core, sys
+    );
   } else {
     return usr;
   }
@@ -380,9 +381,9 @@ Array lookupDefinedConstants(bool categorize /*= false */) {
 size_t countStaticStringConstants() {
   if (!s_stringDataMap) return 0;
   size_t count = 0;
-  for (auto it = s_stringDataMap->begin();
-       it != s_stringDataMap->end(); ++it) {
-    if (it->second.bound()) {
+
+  for (auto const& it : *s_stringDataMap) {
+    if (it.second.bound()) {
       ++count;
     }
   }

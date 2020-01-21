@@ -55,8 +55,6 @@ struct SSATmp;
  *     DParam(t)    single dst has type of the instruction's type parameter,
  *                    which must be a subtype of t
  *     DParamMayRelax(t) like DParam, except type may relax
- *     DUnboxPtr    Unboxed PtrTo*T; adds possibility of pointing into a ref
- *     DBoxPtr      Boxed PtrTo*T
  *     DAllocObj    single dst has a type of a newly allocated object; may be a
  *                    specialized object type if the class is known
  *     DArrPacked   single dst has a packed array type
@@ -74,8 +72,6 @@ struct SSATmp;
                       intersected with an optional type parameter
  *     DKeysetElem single dst has type int or string, intersected with an
  *                   optional type parameter.
- *     DCtx         single dst has type Cctx|Obj<=ctx, where ctx is the
- *                    current context class
  *     DMulti       multiple dests. type and number depend on instruction
  *     DSetElem     single dst is a subset of StaticStr|Nullptr depending on
  *                    sources

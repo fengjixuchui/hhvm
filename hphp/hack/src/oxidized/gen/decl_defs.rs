@@ -3,12 +3,14 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<6552513a8cacdabe7bc246bbbfb26b40>>
+// @generated SignedSource<<f0ae359dbd2f0730951623f1100ae3d1>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
 
 use ocamlrep_derive::OcamlRep;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::ast_defs;
 use crate::errors;
@@ -20,14 +22,14 @@ use crate::sequence;
 
 use crate::typing_defs::*;
 
-#[derive(Clone, Debug, OcamlRep)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct SubstContext {
-    pub subst: s_map::SMap<Ty>,
+    pub subst: s_map::SMap<DeclTy>,
     pub class_context: String,
     pub from_req_extends: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum SourceType {
     Child,
     Parent,
@@ -38,12 +40,12 @@ pub enum SourceType {
     ReqExtends,
 }
 
-#[derive(Clone, Debug, OcamlRep)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct MroElement {
     pub name: String,
     pub use_pos: pos::Pos,
     pub ty_pos: pos::Pos,
-    pub type_args: Vec<Ty>,
+    pub type_args: Vec<DeclTy>,
     pub class_not_found: bool,
     pub cyclic: Option<s_set::SSet>,
     pub trait_reuse: Option<String>,
@@ -58,7 +60,16 @@ pub struct MroElement {
 
 pub type Linearization = sequence::Sequence<MroElement>;
 
-#[derive(Clone, Debug, OcamlRep)]
+pub type ConditionTypeName = Option<String>;
+
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+pub enum MethodReactivity {
+    MethodReactive(ConditionTypeName),
+    MethodShallow(ConditionTypeName),
+    MethodLocal(ConditionTypeName),
+}
+
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct DeclClassType {
     pub need_init: bool,
     pub members_fully_known: bool,
@@ -70,10 +81,11 @@ pub struct DeclClassType {
     pub deferred_init_members: s_set::SSet,
     pub kind: ast_defs::ClassKind,
     pub is_xhp: bool,
+    pub has_xhp_keyword: bool,
     pub name: String,
     pub pos: pos::Pos,
-    pub tparams: Vec<Tparam>,
-    pub where_constraints: Vec<WhereConstraint>,
+    pub tparams: Vec<DeclTparam>,
+    pub where_constraints: Vec<DeclWhereConstraint>,
     pub substs: s_map::SMap<SubstContext>,
     pub consts: s_map::SMap<ClassConst>,
     pub typeconsts: s_map::SMap<TypeconstType>,
@@ -83,7 +95,7 @@ pub struct DeclClassType {
     pub methods: s_map::SMap<Element>,
     pub smethods: s_map::SMap<Element>,
     pub construct: (Option<Element>, ConsistentKind),
-    pub ancestors: s_map::SMap<Ty>,
+    pub ancestors: s_map::SMap<DeclTy>,
     pub req_ancestors: Vec<Requirement>,
     pub req_ancestors_extends: s_set::SSet,
     pub extends: s_set::SSet,
@@ -94,16 +106,7 @@ pub struct DeclClassType {
     pub condition_types: s_set::SSet,
 }
 
-pub type ConditionTypeName = Option<String>;
-
-#[derive(Clone, Debug, OcamlRep)]
-pub enum MethodReactivity {
-    MethodReactive(ConditionTypeName),
-    MethodShallow(ConditionTypeName),
-    MethodLocal(ConditionTypeName),
-}
-
-#[derive(Clone, Debug, OcamlRep)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct Element {
     pub final_: bool,
     pub synthesized: bool,
@@ -118,4 +121,5 @@ pub struct Element {
     pub origin: String,
     pub visibility: Visibility,
     pub fixme_codes: i_set::ISet,
+    pub deprecated: Option<String>,
 }

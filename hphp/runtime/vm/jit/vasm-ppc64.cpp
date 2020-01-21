@@ -465,7 +465,7 @@ struct Vgen {
   void emit(const callr& i);
   void emit(const calls& i);
   void emit(const callstub& i);
-  void emit(const calltc& i);
+  void emit(const callphpr& i) { emit(callr{i.target}); }
   void emit(const cmovq&);
   void emit(const contenter&);
   void emit(const cvtsi2sd& i);
@@ -495,8 +495,10 @@ struct Vgen {
   void emit(const stubunwind& i);
   void emit(const syncpoint& i);
   void emit(const tailcallstub& i);
+  void emit(const tailcallstubr& i);
   void emit(const testqi& i);
   void emit(const ucomisd& i);
+  void emit(const unstublogue& i);
   void emit(const unwind& i);
 
   void emit_nop() {
@@ -758,29 +760,10 @@ void Vgen::emit(const inittc&) {
 }
 
 void Vgen::emit(const leavetc&) {
-  // should read enterTCExit address that was pushed by calltc/resumetc
+  // should read enterTCExit address that was pushed by resumetc
   emit(pop{rAsm});
   a.mtlr(rAsm);
   a.blr();
-}
-
-void Vgen::emit(const calltc& i) {
-  // Dummy call for branch predictor's sake:
-  // the link stack would be wrong otherwise and mispredictions would occur
-  a.bl(instr_size_in_bytes);  // jump to next instruction
-
-  // this will be verified by emitCallToExit
-  a.limmediate(rAsm, reinterpret_cast<int64_t>(i.exittc));
-  emit(push{rAsm});
-
-  // keep the return address as initialized by the vm frame
-  a.ld(rfuncln(), i.fp[AROFF(m_savedRip)]);
-  a.mtlr(rfuncln());
-
-  // and jump. When it returns, it'll be to enterTCExit
-  a.mr(rfuncentry(), i.target.asReg());
-  a.mtctr(rfuncentry());
-  a.bctr();
 }
 
 void Vgen::emit(const resumetc& i) {
@@ -895,6 +878,15 @@ void Vgen::emit(const stublogue& i) {
   a.std(rfuncln(), rsfp()[AROFF(m_savedRip)]);
 }
 
+void Vgen::emit(const unstublogue& i) {
+  // Restore return address.
+  a.ld(rfuncln(), rsfp()[AROFF(m_savedRip)]);
+  a.mtlr(rfuncln());
+
+  // Undo stublogue allocation.
+  a.mr(rsfp(), rsp());
+}
+
 void Vgen::emit(const stubret& i) {
   // rvmfp, if necessary.
   if (i.saveframe) a.ld(rvmfp(), rsp()[AROFF(m_sfp)]);
@@ -920,21 +912,34 @@ void Vgen::emit(const tailcallstub& i) {
   emit(jmpi{i.target, i.args});
 }
 
+void Vgen::emit(const tailcallstubr& i) {
+  // tail call: perform a jmp instead of a call. Use current return address on
+  // frame and undo stublogue allocation.
+  a.ld(rfuncln(), rsp()[AROFF(m_savedRip)]);
+  a.mtlr(rfuncln());
+  a.mr(rsfp(), rsp());
+  emit(jmpr{i.target, i.args});
+}
+
 void Vgen::emit(const loadstubret& i) {
   // grab the return address and store this return address for phplogue
   a.ld(i.d, rsp()[AROFF(m_savedRip)]);
 }
 
-void Vgen::emit(const stubunwind& /*i*/) {
-  // reset the return address from native frame due to call to the vm frame
-  a.ld(rfuncln(), rsp()[AROFF(m_savedRip)]);
-  a.mtlr(rfuncln());
+void Vgen::emit(const stubunwind& i) {
+  // load the return address and restore the return address register
+  a.ld(i.d, rsp()[AROFF(m_savedRip)]);
+  a.mtlr(i.d);
   // pop this frame as created by stublogue
   a.addi(rsp(), rsp(), min_frame_size);
 }
 
 void Vgen::emit(const stubtophp& /*i*/) {
-  emit(stubunwind{});
+  // reset the return address from native frame due to call to the vm frame
+  a.ld(rfuncln(), rsp()[AROFF(m_savedRip)]);
+  a.mtlr(rfuncln());
+  // pop this frame as created by stublogue
+  a.addi(rsp(), rsp(), min_frame_size);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1274,16 +1279,6 @@ void lowerForPPC64(const VLS& /*e*/, Vout& v, phpret& inst) {
   // for balancing the link stack (branch predictor), this should perform blr
   v << mtlr{rfuncln()};
   v << ret{RegSet()};
-}
-
-/*
- * Tail call elimination on ppc64: call without creating a stack and keep LR
- * contents as prior to the call.
- */
-void lowerForPPC64(const VLS& /*e*/, Vout& v, tailcallphp& inst) {
-  v << load{inst.fp[AROFF(m_savedRip)], rfuncln()};
-  v << mtlr{rfuncln()};
-  v << jmpr{inst.target, inst.args};
 }
 
 /////////////////////////////////////////////////////////////////////////////

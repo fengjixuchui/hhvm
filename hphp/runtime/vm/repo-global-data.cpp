@@ -29,7 +29,7 @@ std::string show(const Repo::GlobalData& gd) {
   SHOW(InitialStaticStringTableSize);
   SHOW(HardReturnTypeHints);
   SHOW(CheckPropTypeHints);
-  SHOW(ThisTypeHintLevel);
+  SHOW(EnforceGenericsUB);
   SHOW(HardPrivatePropInference);
   SHOW(PHP7_IntSemantics);
   SHOW(PHP7_NoHexNumerics);
@@ -53,7 +53,6 @@ std::string show(const Repo::GlobalData& gd) {
   SHOW(WarnOnNonLiteralClsMeth);
   SHOW(LogKnownMethodsAsDynamicCalls);
   SHOW(NoticeOnBuiltinDynamicCalls);
-  SHOW(ReffinessInvariance);
   SHOW(AbortBuildOnVerifyError);
   SHOW(EnableArgsInBacktraces);
   SHOW(Signature);

@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Decl_defs
 open Typing_defs
 module LSTable = Lazy_string_table
@@ -15,17 +15,16 @@ module Reason = Typing_reason
 module SN = Naming_special_names
 
 type ancestor_caches = {
-  ancestors: decl ty LSTable.t;
-      (** Types of parents, interfaces, and traits *)
+  ancestors: decl_ty LSTable.t;  (** Types of parents, interfaces, and traits *)
   parents_and_traits: unit LSTable.t;  (** Names of parents and traits only *)
   members_fully_known: bool Lazy.t;
   req_ancestor_names: unit LSTable.t;
-  all_requirements: (Pos.t * decl ty) list Lazy.t;
+  all_requirements: (Pos.t * decl_ty) list Lazy.t;
 }
 
 let type_of_mro_element mro =
   let { mro_name; mro_type_args; mro_use_pos; mro_ty_pos; _ } = mro in
-  (Reason.Rhint mro_ty_pos, Tapply ((mro_use_pos, mro_name), mro_type_args))
+  mk (Reason.Rhint mro_ty_pos, Tapply ((mro_use_pos, mro_name), mro_type_args))
 
 let all_ancestors lin =
   Sequence.map lin ~f:(fun mro -> (mro.mro_name, type_of_mro_element mro))
@@ -62,7 +61,7 @@ let make class_name =
   let lin =
     Decl_linearize.(get_linearization ~kind:Ancestor_types) class_name
     (* Drop the requested class; we only want its ancestors. *)
-    |> (fun lin -> Sequence.drop_eagerly lin 1)
+    |> fun lin -> Sequence.drop_eagerly lin 1
   in
   {
     ancestors = LSTable.make (all_ancestors lin) ~is_canonical ~merge;

@@ -124,6 +124,8 @@ checkCalls(const Vunit& unit, const jit::vector<Vlabel>& blocks) {
         case Vinstr::callm:
         case Vinstr::callr:
         case Vinstr::calls:
+        case Vinstr::callphp:
+        case Vinstr::callphpr:
         case Vinstr::callstub:
         case Vinstr::callunpack:
         case Vinstr::contenter:
@@ -364,15 +366,6 @@ checkWidths(const Vunit& unit, const jit::vector<Vlabel>& blocks) {
 
         if (!i.s.isPhys() && !i.d.isPhys()) {
           widths[i.d] = widths[i.s];
-        }
-      } else if (inst.op == Vinstr::copy2) {
-        auto const& i = inst.copy2_;
-
-        if (!i.s0.isPhys() && !i.d0.isPhys()) {
-          widths[i.d0] = widths[i.s0];
-        }
-        if (!i.s1.isPhys() && !i.d1.isPhys()) {
-          widths[i.d1] = widths[i.s1];
         }
       } else if (inst.op == Vinstr::copyargs) {
         auto const& i = inst.copyargs_;

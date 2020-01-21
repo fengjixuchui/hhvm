@@ -261,12 +261,12 @@ struct Vgen {
   void emit(const callfaststub& i);
 
   // php function abi
+  void emit(const callphpr& i) { a->Blr(X(i.target)); }
   void emit(const callunpack& i);
   void emit(const contenter& i);
   void emit(const phpret& i);
 
   // vm entry abi
-  void emit(const calltc& i);
   void emit(const inittc& /*i*/) {}
   void emit(const leavetc& i);
 
@@ -836,26 +836,8 @@ void Vgen::emit(const contenter& i) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void Vgen::emit(const calltc& i) {
-  vixl::Label stub;
-
-  // Preserve the LR (exittc) on the stack, pushing twice for SP alignment.
-  recordAddressImmediate();
-  a->Mov(rAsm, i.exittc);
-  a->Stp(rAsm, rAsm, MemOperand(sp, -16, PreIndex));
-
-  // Branch and link to nowhere to balance the LR stack.
-  recordAddressImmediate();
-  a->bl(&stub);
-  a->bind(&stub);
-
-  // Load the saved RIP into LR and branch without link.
-  a->Ldr(X(rlr()), M(i.fp[AROFF(m_savedRip)]));
-  a->Br(X(i.target));
-}
-
 void Vgen::emit(const leavetc& /*i*/) {
-  // The LR was preserved on the stack by calltc above. Pop it while preserving
+  // The LR was preserved on the stack by resumetc. Pop it while preserving
   // SP alignment and return.
   a->Ldp(rAsm, X(rlr()), MemOperand(sp, 16, PostIndex));
   a->Ret();
@@ -1701,6 +1683,13 @@ void lower(const VLS& e, stublogue& /*i*/, Vlabel b, size_t z) {
   });
 }
 
+void lower(const VLS& e, unstublogue& /*i*/, Vlabel b, size_t z) {
+  lower_impl(e.unit, b, z, [&] (Vout& v) {
+    // Pop LR and remove FP from the stack.
+    v << popp{PhysReg(rAsm), rlr()};
+  });
+}
+
 void lower(const VLS& e, stubret& i, Vlabel b, size_t z) {
   lower_impl(e.unit, b, z, [&] (Vout& v) {
     // Pop LR and (optionally) FP.
@@ -1724,10 +1713,19 @@ void lower(const VLS& e, tailcallstub& i, Vlabel b, size_t z) {
   });
 }
 
-void lower(const VLS& e, stubunwind& /*i*/, Vlabel b, size_t z) {
+void lower(const VLS& e, tailcallstubr& i, Vlabel b, size_t z) {
+  lower_impl(e.unit, b, z, [&] (Vout& v) {
+    // Restore LR from native stack and adjust SP.
+    v << popp{PhysReg(rAsm), rlr()};
+
+    v << jmpr{i.target, i.args};
+  });
+}
+
+void lower(const VLS& e, stubunwind& i, Vlabel b, size_t z) {
   lower_impl(e.unit, b, z, [&] (Vout& v) {
     // Pop the call frame.
-    v << lea{rsp()[16], rsp()};
+    v << popp{PhysReg(rAsm), i.d};
   });
 }
 
@@ -1750,15 +1748,6 @@ void lower(const VLS& e, loadstubret& i, Vlabel b, size_t z) {
 void lower(const VLS& e, phplogue& i, Vlabel b, size_t z) {
   lower_impl(e.unit, b, z, [&] (Vout& v) {
     v << store{rlr(), i.fp[AROFF(m_savedRip)]};
-  });
-}
-
-void lower(const VLS& e, tailcallphp& i, Vlabel b, size_t z) {
-  lower_impl(e.unit, b, z, [&] (Vout& v) {
-    // Undoes the prologue by restoring LR from saved RIP.
-    v << load{i.fp[AROFF(m_savedRip)], rlr()};
-
-    v << jmpr{i.target, i.args};
   });
 }
 

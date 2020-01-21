@@ -13,6 +13,7 @@ val make_body :
   (* Actually local_id list *)
   bool ->
   bool ->
+  (string * Hhas_type_info.t list) list ->
   Hhas_param.t list ->
   Hhas_type_info.t option ->
   string option ->
@@ -50,13 +51,13 @@ val emit_method_prolog :
   pos:Pos.t ->
   params:Hhas_param.t list ->
   ast_params:Tast.fun_param list ->
+  tparams:string list ->
   should_emit_init_this:bool ->
   Instruction_sequence.t
 
 val emit_return_type_info :
   scope:Ast_scope.Scope.t ->
   skipawaitable:bool ->
-  namespace:Namespace_env.env ->
   Aast.hint option ->
   Hhas_type_info.t
 
@@ -66,3 +67,8 @@ val emit_deprecation_warning :
   Typed_value.t list option ->
   (* deprecation_info *)
   Instruction_sequence.t
+
+val emit_generics_upper_bounds :
+  Tast.tparam list ->
+  skipawaitable:bool ->
+  (string * Hhas_type_info.t list) list

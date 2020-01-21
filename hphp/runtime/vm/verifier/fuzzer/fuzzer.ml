@@ -298,7 +298,6 @@ let mut_imms (is : IS.t) : IS.t =
     | CGetQuietL  id     -> CGetQuietL (mutate_local_id id !mag)
     | CGetL2      id     -> CGetL2     (mutate_local_id id !mag)
     | PushL       id     -> PushL      (mutate_local_id id !mag)
-    | VGetL       id     -> VGetL      (mutate_local_id id !mag)
     | _ -> s in  (*TODO: in general it might be worthwhile to get rid of wild
                    card cases like this. It would make the code more verbose,
                    but it will make adding new bytecodes easier since this will
@@ -329,25 +328,23 @@ let mut_imms (is : IS.t) : IS.t =
   let mutate_call s =
     match s with (*It's not worth mutating arg numbers for Push* or Call*,
                    because we already know it will fail the verifier/assembler*)
-    | FCallObjMethod   (i, Ast_defs.OG_nullthrows, pl)    ->
+    | FCallObjMethod   (i, Hhbc_ast.Obj_null_throws)    ->
          FCallObjMethod(i,    (if should_mutate()
-                              then Ast_defs.OG_nullsafe
-                              else Ast_defs.OG_nullthrows),
-                        pl)
-    | FCallObjMethod   (i, Ast_defs.OG_nullsafe, pl)      ->
+                              then Hhbc_ast.Obj_null_safe
+                              else Hhbc_ast.Obj_null_throws))
+    | FCallObjMethod   (i, Hhbc_ast.Obj_null_safe)      ->
          FCallObjMethod(i,    (if should_mutate()
-                              then Ast_defs.OG_nullthrows
-                              else Ast_defs.OG_nullsafe),
-                        pl)
-    | FCallObjMethodD  (i, Ast_defs.OG_nullthrows, m) ->
+                              then Hhbc_ast.Obj_null_throws
+                              else Hhbc_ast.Obj_null_safe))
+    | FCallObjMethodD  (i, Hhbc_ast.Obj_null_throws, m) ->
         FCallObjMethodD(i, (if should_mutate()
-                              then Ast_defs.OG_nullsafe
-                              else Ast_defs.OG_nullthrows),
+                              then Hhbc_ast.Obj_null_safe
+                              else Hhbc_ast.Obj_null_throws),
                         m)
-    | FCallObjMethodD  (i, Ast_defs.OG_nullsafe, m)   ->
+    | FCallObjMethodD  (i, Hhbc_ast.Obj_null_safe, m)   ->
         FCallObjMethodD(i, (if should_mutate()
-                              then Ast_defs.OG_nullthrows
-                              else Ast_defs.OG_nullsafe),
+                              then Hhbc_ast.Obj_null_throws
+                              else Hhbc_ast.Obj_null_safe),
                         m)
     | _ -> s in
   let mutate_base s =
@@ -392,21 +389,17 @@ let mut_imms (is : IS.t) : IS.t =
     | SetRangeM (i, op, s) ->
         SetRangeM (mutate_int i !mag, op, mutate_int s !mag)
   in
+  let mutate_iter_args args =
+    let {iter_id; key_id; val_id} = args in
+    let key_id = Option.map key_id (fun x -> mutate_local_id x !mag) in
+    {iter_id; key_id; val_id = mutate_local_id val_id !mag}
+  in
   let mutate_iterator data s =
     match s with
-    | IterInit   (i, l, id)      ->
-        IterInit   (i, mutate_label data l,      mutate_local_id id  !mag)
-    | IterInitK  (i, l, id, id') ->
-        IterInitK  (i, mutate_label data l,
-                       mutate_local_id  id !mag, mutate_local_id id' !mag)
-    | IterNext   (i, l, id)      ->
-        IterNext   (i, mutate_label data l,      mutate_local_id id  !mag)
-    | IterNextK  (i, l, id, id') ->
-        IterNextK  (i, mutate_label data l,
-                       mutate_local_id  id !mag, mutate_local_id id' !mag)
-    | IterBreak  (l, lst)        ->
-        IterBreak     (mutate_label data l,
-                       List.map ~f:(fun (k, i) -> (k, i)) lst)
+    | IterInit   (a, l)          ->
+        IterInit   (mutate_iter_args a, mutate_label data l)
+    | IterNext   (a, l)          ->
+        IterNext   (mutate_iter_args a, mutate_label data l)
     | _ -> s in
   let mutate_misc s =
     let mutate_bare op = if should_mutate() then random_bare_op    () else op in
@@ -610,7 +603,6 @@ let mutate_metadata (input : HP.t)  =
   let mutate_param (param : Hhas_param.t) : Hhas_param.t =
     Hhas_param.make
       (param |> Hhas_param.name)
-      (param |> Hhas_param.is_reference |> mutate_bool)
       (param |> Hhas_param.is_variadic  |> mutate_bool)
       (param |> Hhas_param.is_inout  |> mutate_bool)
       (param |> Hhas_param.user_attributes |> List.map ~f:mutate_attribute)
@@ -623,6 +615,7 @@ let mutate_metadata (input : HP.t)  =
       (body |> Hhas_body.num_iters)
       (body |> Hhas_body.is_memoize_wrapper     |> mutate_bool)
       (body |> Hhas_body.is_memoize_wrapper_lsb |> mutate_bool)
+      (body |> Hhas_body.upper_bounds)
       (body |> Hhas_body.params                 |> delete_map mutate_param)
       (body |> Hhas_body.return_type            |> option_lift mutate_type_info)
       (body |> Hhas_body.doc_comment)
@@ -639,7 +632,6 @@ let mutate_metadata (input : HP.t)  =
         (m |> Hhas_method.is_final          |> mutate_bool)
         (m |> Hhas_method.is_abstract       |> mutate_bool)
         (m |> Hhas_method.no_injection      |> mutate_bool)
-        (m |> Hhas_method.inout_wrapper     |> mutate_bool)
         (m |> Hhas_method.name)
         (m |> Hhas_method.body              |> mutate_body_data)
         (m |> Hhas_method.span)
@@ -665,7 +657,6 @@ let mutate_metadata (input : HP.t)  =
         (prop |> Hhas_property.no_implicit_null   |> mutate_bool)
         (prop |> Hhas_property.initial_satisfies_tc |> mutate_bool)
         (prop |> Hhas_property.is_late_init       |> mutate_bool)
-        (prop |> Hhas_property.is_soft_late_init  |> mutate_bool)
         (prop |> Hhas_property.name)
         (prop |> Hhas_property.initial_value |> option_lift mutate_typed_value)
         (prop |> Hhas_property.initializer_instrs |> mutate_option)
@@ -676,7 +667,6 @@ let mutate_metadata (input : HP.t)  =
       Hhas_constant.make
         (const |> Hhas_constant.name)
         (const |> Hhas_constant.value |> option_lift mutate_typed_value)
-        (const |> Hhas_constant.visibility         |> mutate_visibility)
         (const |> Hhas_constant.initializer_instrs |> mutate_option) in
     let mutate_typed_constant (const : Hhas_type_constant.t) =
       Hhas_type_constant.make
@@ -699,7 +689,6 @@ let mutate_metadata (input : HP.t)  =
       (cls |> HC.is_abstract        |> mutate_bool)
       (cls |> HC.is_interface       |> mutate_bool)
       (cls |> HC.is_trait           |> mutate_bool)
-      (cls |> HC.is_record          |> mutate_bool)
       (cls |> HC.is_xhp             |> mutate_bool)
       (cls.HC.class_hoisted         |> mutate_hoisted)
       (cls |> HC.is_const           |> mutate_bool)
@@ -715,6 +704,7 @@ let mutate_metadata (input : HP.t)  =
       (cls |> HC.constants          |> delete_map mutate_constant)
       (cls |> HC.type_constants     |> delete_map mutate_typed_constant)
       (cls |> HC.requirements       |> delete_map mutate_req)
+      (cls |> HC.upper_bounds)
       (cls |> HC.doc_comment) in
   let mutate_fun_data (f : Hhas_function.t) : Hhas_function.t =
     Hhas_function.make
@@ -727,7 +717,6 @@ let mutate_metadata (input : HP.t)  =
       (f |> Hhas_function.is_pair_generator |> mutate_bool)
       (f.Hhas_function.function_hoisted     |> mutate_hoisted)
       (f |> Hhas_function.no_injection      |> mutate_bool)
-      (f |> Hhas_function.inout_wrapper     |> mutate_bool)
       (f |> Hhas_function.is_interceptable  |> mutate_bool)
       (f |> Hhas_function.is_memoize_impl   |> mutate_bool)
       (f |> Hhas_function.rx_level)
@@ -750,6 +739,7 @@ let mutate_metadata (input : HP.t)  =
       (prog |> HP.adata           |> delete_map mutate_adata)
       (prog |> HP.functions       |> delete_map mutate_fun_data)
       (prog |> HP.classes         |> delete_map (mutate_class_data ids))
+      []
       (prog |> HP.typedefs        |> delete_map mutate_typedef)
       (prog |> HP.file_attributes |> delete_map mutate_attribute)
       (prog |> HP.main            |> mutate_body_data)

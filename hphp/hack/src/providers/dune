@@ -1,20 +1,23 @@
 (library
-  (name provider_config)
-  (wrapped false)
-  (modules provider_config)
+  (name provider_backend)
+  (modules provider_backend)
   (libraries
+    decl_service_client
     heap_shared_mem
-    memory_bounded_lru_cache)
+    lru_cache
+    typing_defs)
   (preprocess (pps ppx_deriving.std)))
 
 (library
   (name provider_context)
-  (wrapped false)
   (modules provider_context)
   (libraries
     ast
     collections
+    global_naming_options
     nast
+    parser
+    provider_backend
     server_command_types
     typing_ast
     typing_deps
@@ -22,28 +25,36 @@
   (preprocess (pps ppx_deriving.std)))
 
 (library
-  (name memory_bounded_lru_cache)
-  (wrapped false)
-  (modules memory_bounded_lru_cache)
+  (name lru_cache)
+  (modules lru_cache)
   (libraries
     core_kernel)
   (preprocess (pps ppx_deriving.std)))
 
 (library
+  (name decl_service_client)
+  (modules decl_service_client)
+  (libraries
+    core_kernel
+    decl_ipc_ffi_externs
+    marshal_tools
+    typing_defs
+    utils_core
+    sys_utils)
+  (preprocess (pps ppx_deriving.std)))
+
+(library
   (name file_provider)
-  (wrapped false)
   (modules file_provider)
   (libraries
     ast
-    heap_shared_mem
-    provider_config
+    provider_backend
     relative_path
     sys_utils)
   (preprocess (pps ppx_deriving.std)))
 
 (library
   (name ast_provider)
-  (wrapped false)
   (modules ast_provider)
   (libraries
     ast
@@ -51,6 +62,7 @@
     heap_shared_mem
     nast
     parser
+    parser_options_provider
     provider_context
     relative_path
     server_command_types
@@ -58,31 +70,36 @@
   (preprocess (pps ppx_deriving.std)))
 
 (library
-  (name decl_provider)
-  (wrapped false)
+  (name decl_provider_ctx)
   (modules
-    decl_lru_cache
-    decl_provider)
+    decl_provider_ctx)
   (libraries
-    lru_worker_stubs
-    provider_config
+    decl_service_client
+    global_naming_options
+    provider_backend
     typing_heap)
   (preprocess (pps ppx_deriving.std)))
 
 (library
+  (name decl_provider)
+  (modules
+    decl_provider)
+  (libraries
+    decl_provider_ctx)
+  (preprocess (pps ppx_deriving.std)))
+
+(library
   (name fixme_provider)
-  (wrapped false)
   (modules fixme_provider)
   (libraries
     collections
     errors
     heap_shared_mem
-    pos)
+    provider_backend)
   (preprocess (pps ppx_deriving.std)))
 
 (library
   (name partial_provider)
-  (wrapped false)
   (modules partial_provider)
   (libraries
     errors
@@ -90,8 +107,17 @@
   (preprocess (pps ppx_deriving.std)))
 
 (library
+  (name parser_options_provider)
+  (modules parser_options_provider)
+  (libraries
+    heap_shared_mem
+    parser_options
+    provider_backend
+    utils_core)
+  (preprocess (pps ppx_deriving.std)))
+
+(library
   (name provider_utils)
-  (wrapped false)
   (modules provider_utils)
   (libraries
     ast_provider
@@ -103,7 +129,6 @@
     provider_context
     relative_path
     server_command_types
-    server_ide_utils
     typechecker_options
     typing)
   (preprocess (pps ppx_deriving.std)))

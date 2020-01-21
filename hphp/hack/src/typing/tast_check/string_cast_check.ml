@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Typing_defs
 module Env = Tast_env
@@ -21,8 +21,8 @@ module SN = Naming_special_names
 
 let check__toString m =
   let (pos, name) = m.m_name in
-  if name = SN.Members.__toString then (
-    if m.m_visibility <> Public || m.m_static then
+  if String.equal name SN.Members.__toString then (
+    if (not (Aast.equal_visibility m.m_visibility Public)) || m.m_static then
       Errors.toString_visibility pos;
     match hint_of_type_hint m.m_ret with
     | Some (_, Hprim Tstring) -> ()
@@ -32,11 +32,13 @@ let check__toString m =
 
 let rec is_stringish env ty =
   let (env, ety) = Env.expand_type env ty in
-  match snd ety with
+  match get_node ety with
   | Toption ty' -> is_stringish env ty'
   | Tunion tyl -> List.for_all ~f:(is_stringish env) tyl
   | Tintersection tyl -> List.exists ~f:(is_stringish env) tyl
-  | Tabstract _ ->
+  | Tgeneric _
+  | Tnewtype _
+  | Tdependent _ ->
     let (env, tyl) = Env.get_concrete_supertypes env ty in
     List.for_all ~f:(is_stringish env) tyl
   | Tclass (x, _, _) -> Option.is_none (Env.get_class env (snd x))
@@ -46,7 +48,7 @@ let rec is_stringish env ty =
   | Tobject
   | Tnonnull
   | Tprim _
-  | Tpu (_, _, (Pu_plain | Pu_atom _)) ->
+  | Tpu _ ->
     true
   | Tarraykind _
   | Tvar _
@@ -54,8 +56,7 @@ let rec is_stringish env ty =
   | Tanon (_, _)
   | Tfun _
   | Tshape _
-  | Tdestructure _
-  | Tpu_access _ ->
+  | Tpu_type_access _ ->
     false
 
 let handler =

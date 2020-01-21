@@ -306,7 +306,7 @@ void getSymbolNames(std::shared_ptr<DebuggerClient::LiveLists>& liveLists) {
     functions.push_back(iter.second().toString().toCppString());
   }
   auto consts = lookupDefinedConstants();
-  constants.reserve(consts.size());
+  constants.reserve(consts.size() + constants.size());
   for (ArrayIter iter(consts); iter; ++iter) {
     constants.push_back(iter.first().toString().toCppString());
   }
@@ -370,8 +370,8 @@ void CmdInfo::PrintDocComments(StringBuffer &sb, const Array& info) {
     if (!same(ret1, false) && !same(ret2, false) &&
         matches1.isArray() && matches2.isArray()) {
       // we have perfect doc comment blocks, so we can re-adjust spaces
-      space1 = matches1.toCArrRef()[1].toString().size();
-      space2 = matches2.toCArrRef()[1].toString().size();
+      space1 = matches1.asCArrRef()[1].toString().size();
+      space2 = matches2.asCArrRef()[1].toString().size();
     }
     String spaces = HHVM_FN(str_repeat)(" ", space2 - space1 - 1);
     sb.printf("%s%s\n", spaces.data(), doc.data());
@@ -433,7 +433,7 @@ String CmdInfo::GetParams(const Array& params, bool varg,
         // ClassInfo was not able to serialize the value, so ext_reflection
         // prepared a stdClass error object. We should fall back to display
         // the original PHP text, if there.
-        Object obj{defValue.toCell()->m_data.pobj};
+        Object obj{defValue.asTypedValue()->m_data.pobj};
         args.append(obj->o_get(s_msg).toString());
       } else if (detailed) {
         args.append(DebuggerClient::FormatVariable(arg[s_default]));

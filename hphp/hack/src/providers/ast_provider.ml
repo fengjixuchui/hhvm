@@ -44,8 +44,9 @@ module LocalParserCache =
 let parse_file_input
     ?(full = false)
     (file_name : Relative_path.t)
-    (file_input : ServerCommandTypes.file_input) : Nast.program =
-  let popt = GlobalParserOptions.get () in
+    (file_input : ServerCommandTypes.file_input) :
+    Full_fidelity_source_text.t * Nast.program * Parser_return.comments =
+  let popt = Parser_options_provider.get () in
   let parser_env =
     Full_fidelity_ast.make_env
       ~quick_mode:(not full)
@@ -53,13 +54,14 @@ let parse_file_input
       ~parser_options:popt
       file_name
   in
+  let source = ServerCommandTypesUtils.source_tree_of_file_input file_input in
   let result =
-    let source =
-      ServerCommandTypesUtils.source_tree_of_file_input file_input
-    in
-    Full_fidelity_ast.from_text parser_env source
+    Full_fidelity_ast.from_text_with_legacy
+      parser_env
+      source.Full_fidelity_source_text.text
   in
-  let ast = Ast_to_nast.convert result.Full_fidelity_ast.ast in
+  let ast = result.Parser_return.ast in
+  let comments = result.Parser_return.comments in
   let ast =
     if
       Relative_path.prefix file_name = Relative_path.Hhi
@@ -69,14 +71,14 @@ let parse_file_input
     else
       ast
   in
-  ast
+  (source, ast, comments)
 
 let get_from_local_cache ~full file_name =
   let fn = Relative_path.to_absolute file_name in
   match LocalParserCache.get file_name with
   | Some ast -> ast
   | None ->
-    let popt = GlobalParserOptions.get () in
+    let popt = Parser_options_provider.get () in
     let f contents =
       let contents =
         if FindUtils.file_filter fn then
@@ -135,6 +137,33 @@ let get_class ?(case_insensitive = false) defs class_name =
           in
           if def_name = class_name then
             Some c
+          else
+            acc
+        | Aast.Namespace (_, defs) -> get acc defs
+        | _ -> acc)
+  in
+  get None defs
+
+let get_record_def ?(case_insensitive = false) defs record_name =
+  let record_name =
+    if case_insensitive then
+      Caml.String.lowercase_ascii record_name
+    else
+      record_name
+  in
+  let rec get acc defs =
+    List.fold_left defs ~init:acc ~f:(fun acc def ->
+        match def with
+        | Aast.RecordDef rd ->
+          let def_name = snd rd.Aast.rd_name in
+          let def_name =
+            if case_insensitive then
+              Caml.String.lowercase_ascii def_name
+            else
+              def_name
+          in
+          if def_name = record_name then
+            Some rd
           else
             acc
         | Aast.Namespace (_, defs) -> get acc defs
@@ -207,41 +236,55 @@ let get_gconst defs name =
   get None defs
 
 let get_ast ?(full = false) file_name =
-  match Provider_config.get_backend () with
-  | Provider_config.Lru_shared_memory
-  | Provider_config.Shared_memory ->
+  (* If there's a ctx, and this file is in the ctx, then use ctx. *)
+  (* Otherwise, the way we fetch/cache ASTs depends on the provider. *)
+  let entry_opt =
+    match Provider_context.get_global_context () with
+    | None -> None
+    | Some ctx ->
+      Relative_path.Map.find_opt ctx.Provider_context.entries file_name
+  in
+  match (entry_opt, Provider_backend.get ()) with
+  | (Some entry, _) -> entry.Provider_context.ast
+  | (None, Provider_backend.Shared_memory) ->
     begin
-      match ParserHeap.get file_name with
-      | None ->
+      (* Note that we might be looking up the shared ParserHeap directly, *)
+      (* or maybe into a local-change-stack due to quarantine. *)
+      match (ParserHeap.get file_name, full) with
+      | (None, true)
+      | (Some (_, Decl), true) ->
+        (* If we need full, and parser-heap can't provide it, then we *)
+        (* don't want to write a full decl into the parser heap. *)
+        get_from_local_cache ~full file_name
+      | (None, false) ->
+        (* This is the case where we will write into the parser heap. *)
         let ast = get_from_local_cache ~full file_name in
-        (* Only store decl asts *)
-        if not full then ParserHeap.add file_name (ast, Decl);
+        ParserHeap.add file_name (ast, Decl);
         ast
-      | Some (_, Decl) when full ->
-        let ast = get_from_local_cache ~full file_name in
+      | (Some (ast, _), _) ->
+        (* It's in the parser-heap! hurrah! *)
         ast
-      | Some (defs, _) -> defs
     end
-  | Provider_config.Local_memory _ ->
-    let ast_opt =
-      Option.Monad_infix.(
-        Provider_context.(
-          Provider_context.get_global_context ()
-          >>= fun ctx ->
-          Relative_path.Map.get ctx.Provider_context.entries file_name
-          >>| (fun entry -> entry.ast)))
-    in
-    (match ast_opt with
-    | Some ast -> ast
-    | None ->
+  | (None, Provider_backend.Local_memory _) ->
+    (* We never cache ASTs for this provider. There'd be no use. *)
+    (* The only valuable caching is to cache decls. *)
+    let (_, ast, _) =
       parse_file_input
         ~full
         file_name
-        (ServerCommandTypes.FileName (Relative_path.to_absolute file_name)))
+        (ServerCommandTypes.FileName (Relative_path.to_absolute file_name))
+    in
+    ast
+  | (None, Provider_backend.Decl_service _) ->
+    failwith "Ast_provider.get_ast not supported with decl memory provider"
 
 let find_class_in_file
     ?(full = false) ?(case_insensitive = false) file_name class_name =
   get_class (get_ast ~full file_name) ~case_insensitive class_name
+
+let find_record_def_in_file
+    ?(full = false) ?(case_insensitive = false) file_name record_name =
+  get_record_def (get_ast ~full file_name) ~case_insensitive record_name
 
 let find_fun_in_file
     ?(full = false) ?(case_insensitive = false) file_name fun_name =
@@ -267,7 +310,12 @@ let local_changes_revert_batch paths =
 let provide_ast_hint
     (path : Relative_path.t) (program : Nast.program) (parse_type : parse_type)
     : unit =
-  ParserHeap.write_around path (program, parse_type)
+  match Provider_backend.get () with
+  | Provider_backend.Shared_memory ->
+    ParserHeap.write_around path (program, parse_type)
+  | Provider_backend.Local_memory _
+  | Provider_backend.Decl_service _ ->
+    ()
 
 let remove_batch paths = ParserHeap.remove_batch paths
 

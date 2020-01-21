@@ -31,17 +31,19 @@ let get_tombstone (path : Relative_path.t) : int64 =
 
 (* This function is used if fast-facts-parser fails to scan the file *)
 let convert_fileinfo_to_contents
-    ~(info : SearchUtils.info) ~(filepath : string) : SearchUtils.si_capture =
+    ~(sienv : SearchUtils.si_env)
+    ~(info : SearchUtils.info)
+    ~(filepath : string) : SearchUtils.si_capture =
   let append_item
       (kind : SearchUtils.si_kind)
       (acc : SearchUtils.si_capture)
       (name : string) =
-    let (fixed_kind, is_abstract, is_final) =
+    let (sif_kind, sif_is_abstract, sif_is_final) =
       (* FFP produces more detailed information about classes
        * than we can get from FileInfo.t objects.  Since this function is only
        * called when a file has been modified locally, it's safe to call
        * decl_provider - this information has already been cached. *)
-      if kind = SI_Class then
+      if kind = SI_Class && sienv.sie_resolve_local_decl then
         match Decl_provider.get_class name with
         | Some cls ->
           let is_final = Decl_provider.Class.final cls in
@@ -50,7 +52,6 @@ let convert_fileinfo_to_contents
           let converted_kind =
             match real_kind with
             | Ast_defs.Cnormal
-            | Ast_defs.Crecord
             | Ast_defs.Cabstract ->
               SI_Class
             | Ast_defs.Cinterface -> SI_Interface
@@ -64,11 +65,12 @@ let convert_fileinfo_to_contents
     in
     let item =
       {
-        sif_name = Utils.strip_both_ns name;
-        sif_kind = fixed_kind;
+        (* Only strip Hack namespaces. XHP must have a preceding colon *)
+        sif_name = Utils.strip_ns name;
+        sif_kind;
         sif_filepath = filepath;
-        sif_is_abstract = is_abstract;
-        sif_is_final = is_final;
+        sif_is_abstract;
+        sif_is_final;
       }
     in
     item :: acc
@@ -84,10 +86,7 @@ let convert_fileinfo_to_contents
       (kind : SearchUtils.si_kind)
       (acc : SearchUtils.si_capture)
       (sset : SSet.t) : SearchUtils.si_capture =
-    SSet.fold
-      (fun name inside_acc -> append_item kind inside_acc name)
-      sset
-      acc
+    SSet.fold (fun name inside_acc -> append_item kind inside_acc name) sset acc
   in
   match info with
   | Full f ->
@@ -107,20 +106,33 @@ let convert_fileinfo_to_contents
 let update_file
     ~(sienv : si_env) ~(path : Relative_path.t) ~(info : SearchUtils.info) :
     si_env =
-  let _ = info in
   let tombstone = get_tombstone path in
   let filepath = Relative_path.suffix path in
   let contents =
-    let full_filename = Relative_path.to_absolute path in
-    if Sys.file_exists full_filename then
-      let contents = IndexBuilder.parse_one_file ~path in
-      if List.length contents = 0 then
-        convert_fileinfo_to_contents ~info ~filepath
+    try
+      let full_filename = Relative_path.to_absolute path in
+      if Sys.file_exists full_filename then
+        let contents = IndexBuilder.parse_one_file ~path in
+        if List.length contents = 0 then
+          convert_fileinfo_to_contents ~sienv ~info ~filepath
+        else
+          contents
       else
-        contents
-    else
-      convert_fileinfo_to_contents ~info ~filepath
+        convert_fileinfo_to_contents ~sienv ~info ~filepath
+    with _ -> convert_fileinfo_to_contents ~sienv ~info ~filepath
   in
+  {
+    sienv with
+    lss_fullitems =
+      Relative_path.Map.add sienv.lss_fullitems ~key:path ~data:contents;
+    lss_tombstones = Tombstone_set.add sienv.lss_tombstones tombstone;
+  }
+
+let update_file_facts
+    ~(sienv : si_env) ~(path : Relative_path.t) ~(facts : Facts.facts) : si_env
+    =
+  let tombstone = get_tombstone path in
+  let contents = IndexBuilder.convert_facts ~path ~facts in
   {
     sienv with
     lss_fullitems =
@@ -176,7 +188,8 @@ let search_local_symbols
            symbol.sif_name
            0
     then
-      let fullname = Utils.strip_both_ns symbol.sif_name in
+      (* Only strip Hack namespaces. XHP must have a preceding colon *)
+      let fullname = Utils.strip_ns symbol.sif_name in
       let acc_new =
         {
           si_name = fullname;

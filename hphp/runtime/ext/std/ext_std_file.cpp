@@ -49,6 +49,7 @@
 #include "hphp/util/logger.h"
 #include "hphp/util/process.h"
 #include "hphp/util/rds-local.h"
+#include "hphp/util/user-info.h"
 
 #include <folly/String.h>
 #include <folly/portability/Dirent.h>
@@ -417,7 +418,7 @@ Variant HHVM_FUNCTION(fgets,
                       const Resource& handle,
                       int64_t length /* = 0 */) {
   if (length < 0) {
-    throw_invalid_argument("length (negative): %" PRId64, length);
+    raise_invalid_argument_warning("length (negative): %" PRId64, length);
     return false;
   }
   CHECK_HANDLE(handle, f);
@@ -520,26 +521,25 @@ static int flock_values[] = { LOCK_SH, LOCK_EX, LOCK_UN };
 bool HHVM_FUNCTION(flock,
                    const Resource& handle,
                    int operation,
-                   VRefParam wouldblock /* = null */) {
+                   bool& wouldblock) {
   CHECK_HANDLE(handle, f);
-  bool block = false;
   int act;
+  wouldblock = false;
 
   act = operation & 3;
   if (act < 1 || act > 3) {
-    throw_invalid_argument("operation: %d", operation);
+    raise_invalid_argument_warning("operation: %d", operation);
     return false;
   }
   act = flock_values[act - 1] | (operation & 4 ? LOCK_NB : 0);
-  bool ret = f->lock(act, block);
-  wouldblock.assignIfRef(block);
+  bool ret = f->lock(act, wouldblock);
   return ret;
 }
 
 // match the behavior of PHP5
 #define FCSV_CHECK_ARG(NAME)                            \
   if (NAME.size() == 0) {                               \
-    throw_invalid_argument(#NAME ": %s", NAME.data());  \
+    raise_invalid_argument_warning(#NAME ": %s", NAME.data());  \
     return false;                                       \
   } else if (NAME.size() > 1) {                         \
     raise_notice(#NAME " must be a single character");  \
@@ -567,7 +567,7 @@ Variant HHVM_FUNCTION(fgetcsv,
                       const String& enclosure /* = "\"" */,
                       const String& escape /* = "\\" */) {
   if (length < 0) {
-    throw_invalid_argument("Length parameter may not be negative");
+    raise_invalid_argument_warning("Length parameter may not be negative");
     return false;
   }
 
@@ -667,14 +667,19 @@ Variant HHVM_FUNCTION(file_put_contents,
       break;
     }
 
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfClsMeth: {
@@ -707,8 +712,7 @@ Variant HHVM_FUNCTION(file_put_contents,
     case KindOfPersistentString:
     case KindOfString:
     case KindOfFunc:
-    case KindOfClass:
-    case KindOfRef: {
+    case KindOfClass: {
       String value = data.toString();
       if (!value.empty()) {
         numbytes += value.size();
@@ -876,7 +880,7 @@ Variant HHVM_FUNCTION(parse_ini_file,
                       int scanner_mode /* = k_INI_SCANNER_NORMAL */) {
   CHECK_PATH_FALSE(filename, 1);
   if (filename.empty()) {
-    throw_invalid_argument("Filename cannot be empty!");
+    raise_invalid_argument_warning("Filename cannot be empty!");
     return false;
   }
 
@@ -1448,7 +1452,12 @@ static bool do_chown(const String& filename,
   int uid;
   if (user.isString()) {
     String suser = user.toString();
-    struct passwd *pw = getpwnam(suser.data());
+    auto buf = PasswdBuffer{};
+    struct passwd *pw;
+    if (getpwnam_r(suser.data(), &buf.ent, buf.data.get(), buf.size, &pw)) {
+      // failed to read user info
+      return false;
+    }
     if (!pw) {
       Logger::Verbose("%s/%d: Unable to find uid for %s",
         __FUNCTION__, __LINE__, suser.data());
@@ -1512,7 +1521,12 @@ static bool do_chgrp(const String& filename,
   int gid;
   if (group.isString()) {
     String sgroup = group.toString();
-    struct group *gr = getgrnam(sgroup.data());
+    auto buf = GroupBuffer{};
+    struct group *gr;
+    if (getgrnam_r(sgroup.data(), &buf.ent, buf.data.get(), buf.size, &gr)) {
+      // failed to read group info
+      return false;
+    }
     if (!gr) {
       Logger::Verbose("%s/%d: Unable to find gid for %s",
         __FUNCTION__, __LINE__, sgroup.data());
@@ -2001,8 +2015,8 @@ Variant HHVM_FUNCTION(dir,
     return false;
   }
   auto d = SystemLib::AllocDirectoryObject();
-  d->setProp(nullptr, s_path.get(), directory.toCell());
-  d->setProp(nullptr, s_handle.get(), *dir.toCell());
+  d->setProp(nullptr, s_path.get(), directory.asTypedValue());
+  d->setProp(nullptr, s_handle.get(), *dir.asTypedValue());
   return d;
 }
 

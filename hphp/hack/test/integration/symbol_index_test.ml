@@ -7,8 +7,8 @@ module SA = Asserter.String_asserter
 module IA = Asserter.Int_asserter
 
 let rec assert_docblock_markdown
-    (expected : DocblockService.result) (actual : DocblockService.result) :
-    unit =
+    (expected : DocblockService.result) (actual : DocblockService.result) : unit
+    =
   DocblockService.(
     match (expected, actual) with
     | ([], []) -> ()
@@ -27,8 +27,8 @@ let rec assert_docblock_markdown
       in
       assert_docblock_markdown exp_list act_list)
 
-let assert_ns_matches (expected_ns : string) (actual : SearchUtils.si_results)
-    : unit =
+let assert_ns_matches (expected_ns : string) (actual : SearchUtils.si_results) :
+    unit =
   let found =
     List.fold actual ~init:false ~f:(fun acc item ->
         item.si_name = expected_ns || acc)
@@ -96,7 +96,6 @@ let run_index_builder (harness : Test_harness.t) : si_env =
       json_chunk_size = 0;
       custom_service = None;
       custom_repo_name = None;
-      include_builtins = true;
       set_paths_for_worker = false;
       hhi_root_folder = Some hhi_folder;
       silent = true;
@@ -106,10 +105,12 @@ let run_index_builder (harness : Test_harness.t) : si_env =
   IndexBuilder.go ctxt None;
   let sienv =
     SymbolIndex.initialize
-      ~globalrev_opt:None
+      ~globalrev:None
+      ~gleanopt:GleanOptions.default
       ~namespace_map:[]
       ~provider_name:"SqliteIndex"
       ~quiet:true
+      ~ignore_hh_version:false
       ~savedstate_file_opt:file_opt
       ~workers:None
   in
@@ -122,11 +123,7 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
 
   (* Find one of each major type *)
   assert_autocomplete ~query_text:"UsesA" ~kind:SI_Class ~expected:1 ~sienv;
-  assert_autocomplete
-    ~query_text:"NoBigTrait"
-    ~kind:SI_Trait
-    ~expected:1
-    ~sienv;
+  assert_autocomplete ~query_text:"NoBigTrait" ~kind:SI_Trait ~expected:1 ~sienv;
   assert_autocomplete
     ~query_text:"some_long_function_name"
     ~kind:SI_Function
@@ -150,11 +147,7 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
 
   (* Two of these have been removed! *)
   assert_autocomplete ~query_text:"UsesA" ~kind:SI_Class ~expected:1 ~sienv;
-  assert_autocomplete
-    ~query_text:"NoBigTrait"
-    ~kind:SI_Trait
-    ~expected:0
-    ~sienv;
+  assert_autocomplete ~query_text:"NoBigTrait" ~kind:SI_Trait ~expected:0 ~sienv;
   assert_autocomplete
     ~query_text:"some_long_function_name"
     ~kind:SI_Function
@@ -180,6 +173,7 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
       file_mode = None;
       funs = [];
       classes = [nobigtrait_id];
+      record_defs = [];
       typedefs = [];
       consts = [];
       comments = Some [];
@@ -191,6 +185,7 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
       file_mode = None;
       funs = [some_long_function_name_id];
       classes = [];
+      record_defs = [];
       typedefs = [];
       consts = [];
       comments = Some [];
@@ -202,17 +197,13 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
       (foo3path, Full foo3fileinfo, TypeChecker);
     ]
   in
-  SymbolIndex.update_files ~sienv ~workers:None ~paths:changelist;
+  SymbolIndex.update_files ~sienv ~paths:changelist;
   let n = LocalSearchService.count_local_fileinfos !sienv in
   Hh_logger.log "Added back; local search service now contains %d files" n;
 
   (* Find one of each major type *)
   assert_autocomplete ~query_text:"UsesA" ~kind:SI_Class ~expected:1 ~sienv;
-  assert_autocomplete
-    ~query_text:"NoBigTrait"
-    ~kind:SI_Trait
-    ~expected:1
-    ~sienv;
+  assert_autocomplete ~query_text:"NoBigTrait" ~kind:SI_Trait ~expected:1 ~sienv;
   assert_autocomplete
     ~query_text:"some_long_function_name"
     ~kind:SI_Function
@@ -236,11 +227,7 @@ let test_builder_names (harness : Test_harness.t) : bool =
 
   (* Assert that we can capture all kinds of symbols *)
   assert_autocomplete ~query_text:"UsesA" ~kind:SI_Class ~expected:1 ~sienv;
-  assert_autocomplete
-    ~query_text:"NoBigTrait"
-    ~kind:SI_Trait
-    ~expected:1
-    ~sienv;
+  assert_autocomplete ~query_text:"NoBigTrait" ~kind:SI_Trait ~expected:1 ~sienv;
   assert_autocomplete
     ~query_text:"some_long_function_name"
     ~kind:SI_Function
@@ -273,9 +260,11 @@ let test_builder_names (harness : Test_harness.t) : bool =
     ~sienv;
 
   (* XHP is considered a class at the moment - this may change.
-   * Note that XHP classes are saved WITHOUT a leading colon. *)
+   * Note that XHP classes are saved WITH a leading colon.
+   * Storing them without the leading colon results in incorrect
+   * text for XHP class autocomplete. *)
   assert_autocomplete
-    ~query_text:"xhp:helloworld"
+    ~query_text:":xhp:helloworld"
     ~kind:SI_Class
     ~expected:1
     ~sienv;
@@ -371,18 +360,27 @@ let test_namespace_map (harness : Test_harness.t) : bool =
 
 (* Rapid unit tests to verify docblocks are found and correct *)
 let test_docblock_finder (harness : Test_harness.t) : bool =
+  let _ = harness in
   let env = ServerEnvBuild.make_env ServerConfig.default_config in
   let handle =
     SharedMem.init ~num_workers:0 GlobalConfig.default_sharedmem_config
   in
   ignore (handle : SharedMem.handle);
-  GlobalNamingOptions.set env.ServerEnv.tcopt;
+  Parser_options_provider.set ParserOptions.default;
+  Global_naming_options.set env.ServerEnv.tcopt;
 
   (* Search for docblocks for various items *)
-  let root_prefix = Path.to_string harness.repo_dir in
+  let ctx = Provider_context.empty env.ServerEnv.tcopt in
+  Relative_path.set_path_prefix Relative_path.Root harness.repo_dir;
+  let path =
+    Relative_path.create_detect_prefix
+      (Path.to_string (Path.concat harness.repo_dir "/bar_1.php"))
+  in
+  let entry = Provider_utils.get_entry_VOLATILE ~ctx ~path in
   let docblock =
-    ServerDocblockAt.go_docblock_at
-      ~filename:(root_prefix ^ "/bar_1.php")
+    ServerDocblockAt.go_docblock_ctx
+      ~ctx
+      ~entry
       ~line:6
       ~column:7
       ~kind:SI_Trait
@@ -431,5 +429,5 @@ let tests args =
 let () =
   Daemon.check_entry_point ();
   let args = Args.parse () in
-  let () = HackEventLogger.client_init args.Args.template_repo in
+  EventLogger.init_fake ();
   Unit_test.run_all (tests args)

@@ -8,6 +8,8 @@
  *
  */
 
+namespace HH {
+
 abstract final class Shapes {
 
 /**
@@ -47,8 +49,8 @@ abstract final class Shapes {
   ): bool;
 
   /**
-   * Returns a $shape with $index field removed. Currently allowed only for
-   * local variables.
+   * Removes the $index field from the $shape (passed in as an inout argument).
+   * As with all inout arguments, it can only be used with local variables.
    */
   <<__Rx>>
   public static function removeKey<T as shape(...)>(
@@ -78,3 +80,5 @@ abstract final class Shapes {
   );
 
 }
+
+} // namespace HH

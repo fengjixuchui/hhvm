@@ -38,8 +38,7 @@ let collect_jump_instructions instrseq env =
   in
   InstrSeq.fold_left instrseq ~init:IMap.empty ~f:folder
 
-(* Delete Ret*, Break/Continue/Jmp(Named)/IterBreak(Named)
-   instructions from the try body *)
+(* Delete Ret*, Break/Continue/Jmp(Named) instructions from the try body *)
 let cleanup_try_body instrseq =
   let rewriter i =
     match i with
@@ -53,9 +52,7 @@ let cleanup_try_body instrseq =
 let emit_jump_to_label l iters =
   match iters with
   | [] -> instr_jmp l
-  | iters ->
-    let iters = List.map iters ~f:(fun id -> (Iter, id)) in
-    instr_iter_break l iters
+  | iters -> instr_iter_break l iters
 
 let emit_save_label_id id =
   gather [instr_int id; instr_setl (Local.get_label_id_local ()); instr_popc]
@@ -116,7 +113,7 @@ let fail_if_goto_from_try_to_finally try_block finally_block =
 
 let emit_goto ~in_finally_epilogue env label =
   let err_pos = get_pos_for_error env in
-  match SMap.get label @@ JT.get_labels_in_function () with
+  match SMap.find_opt label @@ JT.get_labels_in_function () with
   | None ->
     Emit_fatal.raise_fatal_parse err_pos
     @@ "'goto' to undefined label '"
@@ -153,7 +150,7 @@ let emit_goto ~in_finally_epilogue env label =
             emit_jump_to_label rgf_finally_start_label rgf_iterators_to_release;
             (* emit goto as an indicator for try/finally rewriter to generate
             finally epilogue, try/finally rewriter will remove it. *)
-              instr_goto label;
+            instr_goto label;
           ]
       | JT.ResolvedGoto_goto_from_finally ->
         Emit_fatal.raise_fatal_runtime
@@ -180,9 +177,7 @@ let emit_return ~verify_return ~verify_out ~num_out ~in_finally_epilogue env =
       match verify_return with
       | None -> empty
       | Some h ->
-        let h =
-          RGH.convert_awaitable env h |> RGH.remove_erased_generics env
-        in
+        let h = RGH.convert_awaitable env h |> RGH.remove_erased_generics env in
         (match RGH.has_reified_type_constraint env h with
         | RGH.NoConstraint -> empty
         | RGH.NotReified -> instr_verifyRetTypeC
@@ -190,8 +185,8 @@ let emit_return ~verify_return ~verify_out ~num_out ~in_finally_epilogue env =
           gather
             [
               Emit_expression.get_type_structure_for_hint
-                env
                 ~targ_map:SMap.empty
+                ~tparams:[]
                 h;
               instr_verifyRetTypeTS;
             ]
@@ -228,7 +223,7 @@ let emit_return ~verify_return ~verify_out ~num_out ~in_finally_epilogue env =
             instr_retc );
         ]
   (* ret is in finally block and there might be iterators to release -
-    jump to finally block via Jmp/IterBreak *)
+    jump to finally block via Jmp *)
   | Some (target_label, iterators_to_release) ->
     let preamble =
       if in_finally_epilogue then
@@ -246,7 +241,7 @@ let emit_return ~verify_return ~verify_out ~num_out ~in_finally_epilogue env =
         emit_jump_to_label target_label iterators_to_release;
         (* emit ret instr as an indicator for try/finally rewriter to generate
         finally epilogue, try/finally rewriter will remove it. *)
-          instr_retc;
+        instr_retc;
       ]
 
 and emit_break_or_continue ~is_break ~in_finally_epilogue env pos level =
@@ -286,10 +281,10 @@ and emit_break_or_continue ~is_break ~in_finally_epilogue env pos level =
         Emit_pos.emit_pos pos;
         (* emit break/continue instr as an indicator for try/finally rewriter
          to generate finally epilogue - try/finally rewriter will remove it. *)
-          ( if is_break then
-            instr_break adjusted_level
-          else
-            instr_continue adjusted_level );
+        ( if is_break then
+          instr_break adjusted_level
+        else
+          instr_continue adjusted_level );
       ]
 
 let emit_finally_epilogue
@@ -314,17 +309,12 @@ let emit_finally_epilogue
     | ISpecialFlow (Break l) ->
       emit_break_or_continue ~is_break:true ~in_finally_epilogue:true env pos l
     | ISpecialFlow (Continue l) ->
-      emit_break_or_continue
-        ~is_break:false
-        ~in_finally_epilogue:true
-        env
-        pos
-        l
+      emit_break_or_continue ~is_break:false ~in_finally_epilogue:true env pos l
     | ISpecialFlow (Goto l) -> emit_goto ~in_finally_epilogue:true env l
     | _ ->
       failwith
       @@ "unexpected instruction: "
-      ^ "only Ret* or Break/Continue/Jmp(Named)/IterBreak(Named) are expected"
+      ^ "only Ret* or Break/Continue/Jmp(Named) are expected"
   in
   match IMap.elements jump_instructions with
   | [] -> empty
@@ -368,7 +358,7 @@ let emit_finally_epilogue
         else
           aux (n - 1) instructions (finally_end :: labels) (empty :: bodies)
     in
-    (* lst is already sorted - IMap.elements took care of it *)
+    (* lst is already sorted - IMap.bindings took care of it *)
     (* TODO: add is_sorted assert to make sure this behavior is preserved *)
     let (labels, bodies) = aux max_id lst [] [] in
     let labels = labels in

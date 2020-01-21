@@ -170,7 +170,7 @@ void StringBuffer::append(int64_t n) {
 }
 
 void StringBuffer::append(const Variant& v) {
-  auto const cell = v.toCell();
+  auto const cell = v.asTypedValue();
   switch (cell->m_type) {
     case KindOfInt64:
       append(cell->m_data.num);
@@ -189,13 +189,14 @@ void StringBuffer::append(const Variant& v) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfObject:
     case KindOfResource:
-    case KindOfRef:
     case KindOfFunc:
     case KindOfClass:
     case KindOfClsMeth:

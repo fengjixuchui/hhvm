@@ -139,7 +139,6 @@ public:
   const IniSettingMap operator[](const String& key) const;
   String toString() const { return m_map.toString();}
   Array toArray() const { return m_map.toArray();}
-  Array& toArrRef() { return m_map.toArrRef(); }
   Object toObject() const { return m_map.toObject();}
   bool isNull() const { return m_map.isNull();}
   bool isString() const { return m_map.isString();}
@@ -414,12 +413,6 @@ private:
     std::function<bool(const Variant&)>updateCallback,
     std::function<Variant()> getCallback,
     std::function<UserIniData *(void)> userDataCallback = nullptr);
-
-  /**
-   * Take a Variant full of KindOfRefs and unbox it.
-   */
-  static Variant Unbox(const_variant_ref boxed, std::set<ArrayData*>& seen,
-                       bool& use_defaults, const String& array_key);
 };
 
 int64_t convert_bytes_to_long(folly::StringPiece value);

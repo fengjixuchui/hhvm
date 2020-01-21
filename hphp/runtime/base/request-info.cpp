@@ -144,6 +144,7 @@ void RequestInfo::onSessionExit() {
   // been destroyed.
   m_reqInjectionData.setTimeout(0);
   m_reqInjectionData.setCPUTimeout(0);
+  m_reqInjectionData.setUserTimeout(0);
 
   m_reqInjectionData.reset();
 
@@ -260,23 +261,38 @@ size_t handle_request_surprise(c_WaitableWaitHandle* wh, size_t mask) {
     }
   }
 
-  if ((flags & TimedOutFlag) && !debugging) {
-    p.setCPUTimeout(0);  // Stop CPU timer so we won't time out twice.
-    if (pendingException) {
-      setSurpriseFlag(TimedOutFlag);
-    } else {
-      pendingException = generate_request_timeout_exception(wh);
-    }
-  } else if ((flags & CPUTimedOutFlag) && !debugging) {
-    // Don't bother with the CPU timeout if we're already handling a wall
-    // timeout.
-    p.setTimeout(0);  // Stop wall timer so we won't time out twice.
-    if (pendingException) {
-      setSurpriseFlag(CPUTimedOutFlag);
-    } else {
-      pendingException = generate_request_cpu_timeout_exception(wh);
+  if (flags & TimedOutFlag) {
+    // Never send it back to callers unless we want soft timeout callback
+    flags -= TimedOutFlag;
+
+    if (!debugging) {
+      if (p.checkTimeoutKind(TimeoutTime)) {
+        p.setCPUTimeout(0);  // Stop CPU timer so we won't time out twice.
+        if (pendingException) {
+          setSurpriseFlag(TimedOutFlag);
+        } else {
+          pendingException = generate_request_timeout_exception(wh);
+        }
+      } else if (p.checkTimeoutKind(TimeoutCPUTime)) {
+        // Don't bother with the CPU timeout if we're already handling a wall
+        // timeout.
+        p.setTimeout(0);  // Stop wall timer so we won't time out twice.
+        if (pendingException) {
+          setSurpriseFlag(TimedOutFlag);
+        } else {
+          pendingException = generate_request_cpu_timeout_exception(wh);
+        }
+      } else if (p.checkTimeoutKind(TimeoutSoft)) {
+        p.setUserTimeout(0); // Stop wall timer so we won't time out twice.
+        if (!callbacksOk()) {
+          setSurpriseFlag(TimedOutFlag);
+        } else {
+          flags += TimedOutFlag;
+        }
+      }
     }
   }
+
   if (flags & MemExceededFlag) {
     if (pendingException) {
       setSurpriseFlag(MemExceededFlag);

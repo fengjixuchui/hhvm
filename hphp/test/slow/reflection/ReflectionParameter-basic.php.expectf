@@ -126,7 +126,7 @@ name: string(1) "e"
 position: int(4)
 canBePassedByValue: bool(false)
 isPassedByReference: bool(true)
-isInOut: bool(false)
+isInOut: bool(true)
 hasType: bool(true)
 getType: object(ReflectionType) (1) {
   ["type_hint_info":"ReflectionType":private]=>

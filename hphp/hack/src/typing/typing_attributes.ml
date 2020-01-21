@@ -7,10 +7,11 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_reason
 module SN = Naming_special_names
 module MakeType = Typing_make_type
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 
 let check_implements
@@ -19,7 +20,7 @@ let check_implements
     { Aast.ua_name = (attr_pos, attr_name); ua_params = params }
     env =
   let expr_kind =
-    match SMap.get attr_interface SN.AttributeKinds.plain_english_map with
+    match SMap.find_opt attr_interface SN.AttributeKinds.plain_english_map with
     | Some ek -> ek
     | None -> "this expression"
     (* this case should never execute *)
@@ -27,7 +28,7 @@ let check_implements
   if String_utils.string_starts_with attr_name "__" then
     (* Check against builtins *)
     let () =
-      match SMap.get attr_name SN.UserAttributes.as_map with
+      match SMap.find_opt attr_name SN.UserAttributes.as_map with
       | Some intfs ->
         let check_locations =
           TypecheckerOptions.check_attribute_locations
@@ -54,13 +55,13 @@ let check_implements
       let attr_cid = (Cls.pos attr_class, Cls.name attr_class) in
       (* successful exit condition: attribute class is subtype of correct interface
        * and its args satisfy the attribute class constructor *)
-      let attr_locl_ty : Typing_defs.locl Typing_defs.ty =
+      let attr_locl_ty : Typing_defs.locl_ty =
         MakeType.class_type
           (Rwitness (Cls.pos attr_class))
           (Cls.name attr_class)
           []
       in
-      let interface_locl_ty : Typing_defs.locl Typing_defs.ty =
+      let interface_locl_ty : Typing_defs.locl_ty =
         MakeType.class_type
           (Rwitness (Cls.pos intf_class))
           (Cls.name intf_class)
@@ -77,7 +78,7 @@ let check_implements
           (Cls.name intf_class);
         env
       ) else
-        let (env, _, _, _, _, _) =
+        let (env, _, _, _, _, _, _) =
           check_new_object
             ~expected:None
             ~check_parent:false
@@ -88,7 +89,7 @@ let check_implements
             (Aast.CI attr_cid)
             []
             params (* list of attr parameter literals *)
-            []
+            None
           (* no variadic arguments *)
         in
         env

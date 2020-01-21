@@ -170,14 +170,14 @@ class F extends A {
 async function positive_tests() {
   try { $x = 'func'; $x(); } catch (Exception $e) { wrap($e); }
   try { $x = 'async_func'; await $x(); } catch (Exception $e) { wrap($e); }
-  try { $x = 'A::func'; $x(); } catch (Exception $e) { wrap($e); }
+  //try { $x = 'A::func'; $x(); } catch (Exception $e) { wrap($e); } // fatal
   try { $x = 'A::static_func'; $x(); } catch (Exception $e) { wrap($e); }
-  try { $x = 'A::async_func'; await $x(); } catch (Exception $e) { wrap($e); }
+  //try { $x = 'A::async_func'; await $x(); } catch (Exception $e) { wrap($e); } // fatal
   try { $x = 'A::static_async_func'; await $x(); } catch (Exception $e) { wrap($e); }
 
-  try { $x = ['A', 'func']; $x(); } catch (Exception $e) { wrap($e); }
+  //try { $x = ['A', 'func']; $x(); } catch (Exception $e) { wrap($e); } // fatal
   try { $x = ['A', 'static_func']; $x(); } catch (Exception $e) { wrap($e); }
-  try { $x = ['A', 'async_func']; await $x(); } catch (Exception $e) { wrap($e); }
+  //try { $x = ['A', 'async_func']; await $x(); } catch (Exception $e) { wrap($e); } // fatal
   try { $x = ['A', 'static_async_func']; await $x(); } catch (Exception $e) { wrap($e); }
 
   try { $x = [new A, 'func']; $x(); } catch (Exception $e) { wrap($e); }
@@ -207,10 +207,10 @@ async function positive_tests() {
   try { $obj = new C; $x = 'foobar'; $obj->$x(); } catch (Exception $e) { wrap($e); }
 
   try { array_map('func', [true]); } catch (Exception $e) { wrap($e); }
-  try { array_map('A::func', [true]); } catch (Exception $e) { wrap($e); }
+  //try { array_map('A::func', [true]); } catch (Exception $e) { wrap($e); } // fatal
   try { array_map('A::static_func', [true]); } catch (Exception $e) { wrap($e); }
 
-  try { array_map(['A', 'func'], [true]); } catch (Exception $e) { wrap($e); }
+  //try { array_map(['A', 'func'], [true]); } catch (Exception $e) { wrap($e); } // fatal
   try { array_map(['A', 'static_func'], [true]); } catch (Exception $e) { wrap($e); }
 
   try { array_map([new A, 'func'], [true]); } catch (Exception $e) { wrap($e); }
@@ -248,16 +248,16 @@ async function positive_tests() {
   try { call_user_func_array([new A, 'func'], []); } catch (Exception $e) { wrap($e); }
   try { call_user_func_array([new A, 'static_func'], []); } catch (Exception $e) { wrap($e); }
 
-  try { $x = 'cmp'; $y = [2, 1]; usort(&$y, $x); } catch (Exception $e) { wrap($e); }
+  try { $x = 'cmp'; $y = [2, 1]; usort(inout $y, $x); } catch (Exception $e) { wrap($e); }
 
-  try { $x = 'A::static_cmp'; $y = [2, 1]; usort(&$y, $x); } catch (Exception $e) { wrap($e); }
+  try { $x = 'A::static_cmp'; $y = [2, 1]; usort(inout $y, $x); } catch (Exception $e) { wrap($e); }
 
 
-  try { $x = ['A', 'static_cmp']; $y = [2, 1]; usort(&$y, $x); } catch (Exception $e) { wrap($e); }
+  try { $x = ['A', 'static_cmp']; $y = [2, 1]; usort(inout $y, $x); } catch (Exception $e) { wrap($e); }
 
-  try { $x = [new A, 'cmp']; $y = [2, 1]; usort(&$y, $x); } catch (Exception $e) { wrap($e); }
-  try { $x = [new A, 'static_cmp']; $y = [2, 1]; usort(&$y, $x); } catch (Exception $e) { wrap($e); }
-  try { $x = [new CCmp, 'foobar']; $y = [2, 1]; usort(&$y, $x); } catch (Exception $e) { wrap($e); }
+  try { $x = [new A, 'cmp']; $y = [2, 1]; usort(inout $y, $x); } catch (Exception $e) { wrap($e); }
+  try { $x = [new A, 'static_cmp']; $y = [2, 1]; usort(inout $y, $x); } catch (Exception $e) { wrap($e); }
+  try { $x = [new CCmp, 'foobar']; $y = [2, 1]; usort(inout $y, $x); } catch (Exception $e) { wrap($e); }
 }
 
 async function negative_tests() {
@@ -302,10 +302,10 @@ async function negative_tests() {
   $x->map(new Invokable);
 
   $x = [2, 1];
-  usort(&$x, ($k1, $k2) ==> { return $k1 <=> $k2; });
+  usort(inout $x, ($k1, $k2) ==> { return $k1 <=> $k2; });
 
   $x = [2, 1];
-  usort(&$x, new InvokableCmp);
+  usort(inout $x, new InvokableCmp);
 
   $x = 'count'; $x([]);
   array_map('count', [[]]);
@@ -346,14 +346,14 @@ async function negative_tests() {
 
   $x = 'func2'; $x();
   $x = 'async_func2'; await $x();
-  $x = 'A::func2'; $x();
+  //$x = 'A::func2'; $x(); // fatal
   $x = 'A::static_func2'; $x();
-  $x = 'A::async_func2'; await $x();
+  //$x = 'A::async_func2'; await $x(); // fatal
   $x = 'A::static_async_func2'; await $x();
 
-  $x = ['A', 'func2']; $x();
+  //$x = ['A', 'func2']; $x(); // fatal
   $x = ['A', 'static_func2']; $x();
-  $x = ['A', 'async_func2']; await $x();
+  //$x = ['A', 'async_func2']; await $x(); // fatal
   $x = ['A', 'static_async_func2']; await $x();
 
   $x = [new A, 'func2']; $x();
@@ -380,10 +380,10 @@ async function negative_tests() {
   $obj = new E; $x = 'foobar'; $obj->$x();
 
   array_map('func2', [true]);
-  array_map('A::func2', [true]);
+  //array_map('A::func2', [true]); // fatal
   array_map('A::static_func2', [true]);
 
-  array_map(['A', 'func2'], [true]);
+  //array_map(['A', 'func2'], [true]); // fatal
   array_map(['A', 'static_func2'], [true]);
 
   array_map([new A, 'func2'], [true]);
@@ -421,26 +421,29 @@ async function negative_tests() {
   call_user_func_array([new A, 'func2'], []);
   call_user_func_array([new A, 'static_func2'], []);
 
-  $x = 'cmp2'; $y = [2, 1]; usort(&$y, $x);
+  $x = 'cmp2'; $y = [2, 1]; usort(inout $y, $x);
 
-  $x = 'A::static_cmp2'; $y = [2, 1]; usort(&$y, $x);
+  $x = 'A::static_cmp2'; $y = [2, 1]; usort(inout $y, $x);
 
 
-  $x = ['A', 'static_cmp2']; $y = [2, 1]; usort(&$y, $x);
+  $x = ['A', 'static_cmp2']; $y = [2, 1]; usort(inout $y, $x);
 
-  $x = [new A, 'cmp2']; $y = [2, 1]; usort(&$y, $x);
-  $x = [new A, 'static_cmp2']; $y = [2, 1]; usort(&$y, $x);
-  $x = [new CCmp2, 'foobar']; $y = [2, 1]; usort(&$y, $x);
+  $x = [new A, 'cmp2']; $y = [2, 1]; usort(inout $y, $x);
+  $x = [new A, 'static_cmp2']; $y = [2, 1]; usort(inout $y, $x);
+  $x = [new CCmp2, 'foobar']; $y = [2, 1]; usort(inout $y, $x);
 }
+<<__EntryPoint>>
+function main_entry(): void {
 
-echo "=============== positive tests =====================\n";
-HH\Asio\join(positive_tests());
+  echo "=============== positive tests =====================\n";
+  HH\Asio\join(positive_tests());
 
-echo "=============== negative tests =====================\n";
-HH\Asio\join(negative_tests());
+  echo "=============== negative tests =====================\n";
+  HH\Asio\join(negative_tests());
 
-set_error_handler(
-  function ($type, $msg, $file) { throw new Exception($msg); }
-);
-echo "=============== positive tests (exceptions) ========\n";
-HH\Asio\join(positive_tests());
+  set_error_handler(
+    function ($type, $msg, $file) { throw new Exception($msg); }
+  );
+  echo "=============== positive tests (exceptions) ========\n";
+  HH\Asio\join(positive_tests());
+}

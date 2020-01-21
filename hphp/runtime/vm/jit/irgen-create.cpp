@@ -67,7 +67,7 @@ void initThrowable(IRGS& env, const Class* cls, SSATmp* throwable) {
     return gen(
       env,
       LdPropAddr,
-      ByteOffsetData { (ptrdiff_t)rootCls->declPropOffset(slot) },
+      IndexData { rootCls->propSlotToIndex(slot) },
       TUncounted.lval(Ptr::Prop),
       throwable
     );
@@ -211,7 +211,7 @@ void checkPropInitialValues(IRGS& env, const Class* cls) {
         auto const& tc = prop.typeConstraint;
         if (!tc.isCheckable()) continue;
         auto index = cls->propSlotToIndex(slot);
-        const TypedValue& tv = cls->declPropInit()[index];
+        auto const tv = cls->declPropInit()[index].val.tv();
         if (tv.m_type == KindOfUninit) continue;
         verifyPropType(
           env,
@@ -243,13 +243,13 @@ void initObjProps(IRGS& env, const Class* cls, SSATmp* obj) {
     }
     for (int slot = 0; slot < nprops; ++slot) {
       auto index = cls->propSlotToIndex(slot);
-      const TypedValue& tv = cls->declPropInit()[index];
+      auto const tv = cls->declPropInit()[index].val.tv();
       auto const val = cns(env, tv);
       auto const addr = gen(
         env,
         LdPropAddr,
-        ByteOffsetData { (ptrdiff_t)(cls->declPropOffset(slot)) },
-        TLvalToPropGen,
+        IndexData { cls->propSlotToIndex(slot) },
+        TLvalToPropCell,
         obj
       );
       gen(env, StMem, addr, val);
@@ -350,21 +350,15 @@ void emitCreateCl(IRGS& env, uint32_t numParams, uint32_t clsIx) {
 
   auto const func = cls->getCachedInvoke();
 
-  auto const closure = gen(env, ConstructClosure, ClassData(cls));
-
   auto const live_ctx = [&] {
-    auto const ldctx = ldCtx(env);
-    if (!ldctx->type().maybe(TObj)) {
-      return ldctx;
-    }
-    if (func->isStatic()) {
-      return gen(env, FwdCtxStaticCall, ldctx);
-    }
+    if (func->isStatic()) return ldCtxCls(env);
+    assertx(hasThis(env));
+    auto const ldctx = ldThis(env);
     gen(env, IncRef, ldctx);
     return ldctx;
   }();
 
-  gen(env, StClosureCtx, closure, live_ctx);
+  auto const closure = gen(env, ConstructClosure, ClassData(cls), live_ctx);
 
   SSATmp** args = (SSATmp**)alloca(sizeof(SSATmp*) * numParams);
   for (int32_t i = 0; i < numParams; ++i) {
@@ -376,7 +370,7 @@ void emitCreateCl(IRGS& env, uint32_t numParams, uint32_t clsIx) {
     gen(
       env,
       StClosureArg,
-      ByteOffsetData { safe_cast<ptrdiff_t>(cls->declPropOffset(propId)) },
+      IndexData { cls->propSlotToIndex(propId) },
       closure,
       args[propId]
     );
@@ -431,9 +425,8 @@ void emitNewKeysetArray(IRGS& env, uint32_t numArgs) {
 }
 
 void emitNewLikeArrayL(IRGS& env, int32_t id, uint32_t capacity) {
-  auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
-  auto const ld = ldLocInner(env, id, ldrefExit, ldPMExit, DataTypeSpecific);
+  auto const ld = ldLoc(env, id, ldPMExit, DataTypeSpecific);
 
   SSATmp* arr;
   if (ld->isA(TArr)) {
@@ -454,8 +447,7 @@ void emitNewPackedLayoutArray(IRGS& env, uint32_t numArgs, Opcode op) {
     op,
     PackedArrayData { numArgs }
   );
-  static constexpr auto kMaxUnrolledInitArray = 8;
-  if (numArgs > kMaxUnrolledInitArray) {
+  if (numArgs > RuntimeOption::EvalHHIRMaxInlineInitPackedElements) {
     gen(
       env,
       InitPackedLayoutArrayLoop,
@@ -500,7 +492,10 @@ void emitNewVArray(IRGS& env, uint32_t numArgs) {
 
 namespace {
 
-void newStructImpl(IRGS& env, const ImmVector& immVec, Opcode op) {
+// `make` is an op that allocates the new struct and stores the values to it.
+// `alloc` is an op that just does the allocation, letting us inline stores.
+void newStructImpl(IRGS& env, const ImmVector& immVec,
+                   Opcode make, Opcode alloc) {
   auto const numArgs = immVec.size();
   auto const ids = immVec.vec32();
 
@@ -512,24 +507,35 @@ void newStructImpl(IRGS& env, const ImmVector& immVec, Opcode op) {
     extra.keys[i] = curUnit(env)->lookupLitstrId(ids[i]);
   }
 
-  auto const structData = gen(env, op, extra, sp(env));
-  discard(env, numArgs);
-  push(env, structData);
+  if (numArgs > RuntimeOption::EvalHHIRMaxInlineInitMixedElements) {
+    auto const arr = gen(env, make, extra, sp(env));
+    discard(env, numArgs);
+    push(env, arr);
+    return;
+  }
+
+  auto const arr = gen(env, alloc, extra);
+  for (int i = 0; i < numArgs; ++i) {
+    auto const index = numArgs - i - 1;
+    auto const data = KeyedIndexData(index, extra.keys[index]);
+    gen(env, InitMixedLayoutArray, data, arr, popC(env, DataTypeGeneric));
+  }
+  push(env, arr);
 }
 
 }
 
 void emitNewStructArray(IRGS& env, const ImmVector& immVec) {
-  newStructImpl(env, immVec, NewStructArray);
+  newStructImpl(env, immVec, NewStructArray, AllocStructArray);
 }
 
 void emitNewStructDArray(IRGS& env, const ImmVector& immVec) {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
-  newStructImpl(env, immVec, NewStructDArray);
+  newStructImpl(env, immVec, NewStructDArray, AllocStructDArray);
 }
 
 void emitNewStructDict(IRGS& env, const ImmVector& immVec) {
-  newStructImpl(env, immVec, NewStructDict);
+  newStructImpl(env, immVec, NewStructDict, AllocStructDict);
 }
 
 void emitAddElemC(IRGS& env) {

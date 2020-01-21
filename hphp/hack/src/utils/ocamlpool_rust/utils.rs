@@ -14,11 +14,16 @@ extern "C" {
     static ocamlpool_bound: *mut Value;
     static mut ocamlpool_cursor: *mut Value;
     static ocamlpool_color: Color;
+    static mut ocamlpool_generation: usize;
 }
+
+// Unsafe functions in this file should be called only:
+// - while being called from OCaml process
+// - between ocamlpool_enter / ocamlpool_leave invocations
 
 pub unsafe fn reserve_block(tag: Tag, size: Size) -> Value {
     let result = ocamlpool_cursor.offset(-(size as isize) - 1);
-    if result < ocamlpool_limit {
+    if result < ocamlpool_limit || result >= ocamlpool_bound {
         return ocamlpool_reserve_block(tag, size);
     }
     ocamlpool_cursor = result;
@@ -34,23 +39,6 @@ pub unsafe fn caml_set_field(obj: Value, index: usize, val: Value) {
     } else {
         memory::caml_initialize((obj as *mut Value).offset(index as isize), val);
     }
-}
-
-// Unsafe functions in this file should be called only:
-// - while being called from OCaml process
-// - between ocamlpool_enter / ocamlpool_leave invocations
-pub fn caml_block(tag: Tag, fields: &[Value]) -> Value {
-    unsafe {
-        let result = reserve_block(tag, fields.len());
-        for (i, field) in fields.iter().enumerate() {
-            caml_set_field(result, i, *field);
-        }
-        return result;
-    }
-}
-
-pub fn caml_tuple(fields: &[Value]) -> Value {
-    caml_block(0, fields)
 }
 
 // Not implementing Ocamlvalue for integer types, because Value itself is an integer too and it makes
@@ -92,4 +80,8 @@ pub unsafe fn str_field(block: &ocaml::Value, field: usize) -> ocaml::Str {
     ocaml::Str::from(ocaml::Value::new(*ocaml::core::mlvalues::field(
         block.0, field,
     )))
+}
+
+pub fn get_ocamlpool_generation() -> usize {
+    unsafe { ocamlpool_generation }
 }

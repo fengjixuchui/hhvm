@@ -7,8 +7,15 @@
  *
  *)
 
+type override_info = {
+  class_name: string;
+  method_name: string;
+  is_static: bool;
+}
+
 type kind =
   | Class
+  | Record
   | Function
   | Method of string * string
   | LocalVar
@@ -16,6 +23,8 @@ type kind =
   | ClassConst of string * string
   | Typeconst of string * string
   | GConst
+  (* For __Override occurrences, we track the associated method and class. *)
+  | Attribute of override_info option
 
 type 'a t = {
   name: string;
@@ -29,6 +38,7 @@ let to_absolute x = { x with pos = Pos.to_absolute x.pos }
 
 let kind_to_string = function
   | Class -> "type_id"
+  | Record -> "record"
   | Method _ -> "method"
   | Function -> "function"
   | LocalVar -> "local"
@@ -36,6 +46,7 @@ let kind_to_string = function
   | ClassConst _ -> "member_const"
   | Typeconst _ -> "typeconst"
   | GConst -> "global_const"
+  | Attribute _ -> "attribute"
 
 let enclosing_class occurrence =
   match occurrence.type_ with

@@ -35,7 +35,7 @@ BCMarker initial_marker(TransContext ctx) {
 //////////////////////////////////////////////////////////////////////
 
 IRGS::IRGS(IRUnit& unit, const RegionDesc* region, int32_t budgetBCInstrs,
-           TranslateRetryContext* retryContext)
+           TranslateRetryContext* retryContext, bool prologueSetup)
   : context(unit.context())
   , transFlags(unit.context().flags)
   , region(region)
@@ -50,9 +50,15 @@ IRGS::IRGS(IRUnit& unit, const RegionDesc* region, int32_t budgetBCInstrs,
 
   // Now that we've defined the FP, update the BC marker appropriately.
   updateMarker(*this);
-  gen(*this, DefSP, FPInvOffsetData { context.initSpOffset }, frame);
 
-  if (RuntimeOption::EvalHHIRGenerateAsserts) {
+  // Define SP.
+  if (resumeMode(*this) == ResumeMode::None && !prologueSetup) {
+    gen(*this, DefFrameRelSP, FPInvOffsetData { context.initSpOffset }, frame);
+  } else {
+    gen(*this, DefRegSP, FPInvOffsetData { context.initSpOffset });
+  }
+
+  if (RuntimeOption::EvalHHIRGenerateAsserts && !prologueSetup) {
     // Assert that we're in the correct function.
     gen(*this, DbgAssertFunc, frame, cns(*this, bcState.func()));
   }
@@ -90,7 +96,7 @@ std::string show(const IRGS& irgs) {
     auto const stkVal = irgs.irb->stack(spRel, DataTypeGeneric).value;
 
     std::string elemStr;
-    if (stkTy == TGen) {
+    if (stkTy == TCell) {
       elemStr = "unknown";
     } else if (stkVal) {
       elemStr = stkVal->inst()->toString();
@@ -121,13 +127,6 @@ std::string show(const IRGS& irgs) {
                           : localTy.toString();
     auto const predicted = irgs.irb->fs().local(i).predictedType;
     if (predicted < localTy) str += folly::sformat(" (predict: {})", predicted);
-
-    if (localTy <= TBoxedCell) {
-      auto const pred = irgs.irb->predictedLocalInnerType(i);
-      if (pred != TBottom) {
-        str += folly::sformat(" (predict inner: {})", pred.toString());
-      }
-    }
 
     out << folly::format("| {:<100} |\n",
                          folly::format("{:>2}: {}", i, str));

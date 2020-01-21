@@ -44,7 +44,7 @@ void SparseHeap::reset() {
   auto const do_free =
     [this] (void* ptr, size_t size) {
       if (RuntimeOption::EvalBigAllocUseLocalArena) {
-        local_sized_free(ptr, size);
+        if (size) local_sized_free(ptr, size);
       } else {
 #ifdef USE_JEMALLOC
 #if JEMALLOC_VERSION_MAJOR >= 4
@@ -112,6 +112,11 @@ HeapObject* SparseHeap::allocSlab(MemoryUsageStats& stats) {
   auto const flags = MALLOCX_ALIGN(kSlabAlign) |
     (RuntimeOption::EvalBigAllocUseLocalArena ? local_arena_flags : 0);
   auto slab = mallocx(kSlabSize, flags);
+  // this is the expected behavior of jemalloc 5 and above;
+  // if the allocation size differs, HHVM
+  // does not properly account for it,
+  // leading to OOMs and potential GC issues
+  assertx(sallocx(slab, flags) == kSlabSize);
 #else
   auto slab = safe_aligned_alloc(kSlabAlign, kSlabSize);
 #endif

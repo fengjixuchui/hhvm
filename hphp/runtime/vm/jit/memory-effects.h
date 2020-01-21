@@ -102,50 +102,29 @@ struct PureLoad       { AliasClass src; };
 struct PureStore    { AliasClass dst; SSATmp* value; SSATmp* dep; };
 
 /*
- * Spilling pre-live ActRecs are somewhat unusual, but effectively still just
- * pure stores.  They store to a range of stack slots, and don't store a PHP
- * value, so they get their own branch of the union.
- *
- * The `stk' class is the entire stack range the instruction stores to, and the
- * `ctx' class is a subclass of `stk' that is the stack slot where it'll store
- * the context for the pre-live ActRec.
- *
- * The `stk' range should be interpreted as an exact AliasClass, not an upper
- * bound: it is guaranteed to be kNumActRecCells in size---no bigger than the
- * actual range of stack slots a SpillFrame instruction affects.
- *
- * The `callee' class is the memory location where the callee's Func* is written
- * to. The `callee' class should be a subset of the `stk' class.
- */
-struct PureSpillFrame { AliasClass stk;
-                        AliasClass ctx;
-                        AliasClass callee;
-                        SSATmp* calleeValue; };
-
-/*
  * Calls are somewhat special enough that they get a top-level effect.
  *
  * The `kills' set are locations that cannot be read by this instruction unless
  * it writes to them first, and which it generally may write to.  (This is used
- * for killing stack slots below the call depth.)
+ * for killing stack slots below the call depth and MInstrState locations)
  *
- * The `stack' set contains stack locations the call will read as arguments, as
- * well as stack locations it may read or write via other means. Locations in
- * any intersection between `stack' and `kills' may be assumed to be killed.
+ * The `inputs' set contains stack locations the call will read as arguments.
  *
- * The `locals` set contains frame locations that the call might read. (If the
- * call might write *any* local, then writes_local will be true).
+ * The `actrec' set contains stack locations the call will write ActRec to.
  *
- * The `callee' set contains the frame location that the call will read to
- * obtain the callee. It must be a subset of the `stack' set.
+ * The `outputs' set contains stack locations the call will write inout
+ * variables to.
+ *
+ * The `locals` set contains frame locations that the call might read.
  *
  * Note that calls that have been weakened to CallBuiltin use GeneralEffects,
  * not CallEffects.
  */
 struct CallEffects    { AliasClass kills;
-                        AliasClass stack;
-                        AliasClass locals;
-                        AliasClass callee; };
+                        AliasClass inputs;
+                        AliasClass actrec;
+                        AliasClass outputs;
+                        AliasClass locals; };
 
 /*
  * ReturnEffects is a return, either from the php function or an inlined
@@ -215,7 +194,6 @@ struct UnknownEffects {};
 using MemEffects = boost::variant< GeneralEffects
                                  , PureLoad
                                  , PureStore
-                                 , PureSpillFrame
                                  , CallEffects
                                  , ReturnEffects
                                  , ExitEffects
@@ -242,7 +220,7 @@ MemEffects canonicalize(MemEffects);
 
 /*
  * Return an alias class representing the pointee of the given value, which
- * must be <= TMemToGen.
+ * must be <= TMemToCell.
  */
 AliasClass pointee(const SSATmp*);
 
@@ -250,19 +228,6 @@ AliasClass pointee(const SSATmp*);
  * Produces a string about some MemEffects for debug-printing.
  */
 std::string show(MemEffects);
-
-//////////////////////////////////////////////////////////////////////
-
-/*
- * Get the frame from a DefInlineFP.
- *
- * Returns: an (uncanonicalized, precise) AliasClass containing the stack slots
- * corresponding to the ActRec that is being converted from a pre-live to a
- * live ActRec by this instruction.
- *
- * Pre: inst->is(DefInlineFP)
- */
-AliasClass inline_fp_frame(const IRInstruction* inst);
 
 //////////////////////////////////////////////////////////////////////
 

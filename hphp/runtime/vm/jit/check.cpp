@@ -29,6 +29,7 @@
 #include "hphp/runtime/vm/jit/type.h"
 
 #include "hphp/runtime/base/perf-warning.h"
+#include "hphp/runtime/ext/std/ext_std_closure.h"
 
 #include <folly/Format.h>
 
@@ -122,53 +123,6 @@ bool checkBlock(Block* b) {
   if (b->isCatch()) {
     // keyed off a tca, so there needs to be exactly one
     always_assert(b->preds().size() <= 1);
-  }
-
-  return true;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-/*
- * Check some invariants around InitCtx(fp):
- * 1. For each fp, at most one should exist in a given unit.
- * 2. If present, InitCtx must dominate all occurrences of LdCtx and LdCctx
- *    with the same fp.
- */
-bool DEBUG_ONLY checkInitCtxInvariants(const IRUnit& unit) {
-  auto const blocks = rpoSortCfg(unit);
-
-  jit::fast_map<SSATmp*, Block*> init_ctx_blocks;
-
-  for (auto& blk : blocks) {
-    for (auto& inst : blk->instrs()) {
-      if (!inst.is(InitCtx)) continue;
-      auto& init_ctx_block = init_ctx_blocks[inst.src(0)];
-      if (init_ctx_block) return false;
-      init_ctx_block = blk;
-    }
-  }
-
-  if (init_ctx_blocks.empty()) return true;
-
-  auto const rpoIDs = numberBlocks(unit, blocks);
-  auto const idoms = findDominators(unit, blocks, rpoIDs);
-
-  for (auto& blk : blocks) {
-    SSATmp* init_ctx_src = nullptr;
-
-    for (auto& inst : blk->instrs()) {
-      if (inst.is(InitCtx)) {
-        init_ctx_src = inst.src(0);
-        continue;
-      }
-      if (!inst.is(LdCtx, LdCctx)) continue;
-
-      auto const init_ctx_block = init_ctx_blocks[inst.src(0)];
-      if (!init_ctx_block) continue;
-      if (init_ctx_block == blk && init_ctx_src != inst.src(0)) return false;
-      if (!dominates(init_ctx_block, blk, idoms)) return false;
-    }
   }
 
   return true;
@@ -329,6 +283,7 @@ bool checkTmpsSpanningCalls(const IRUnit& unit) {
   if (!isValid) {
     logLowPriPerfWarning(
       "checkTmpsSpanningCalls",
+      100 * kDefaultPerfWarningRate,
       [&](StructuredLogEntry& cols) {
         cols.setStr("live_tmps", failures);
         cols.setStr("hhir_unit", show(unit));
@@ -491,6 +446,12 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
     }
   };
 
+  auto checkConstant = [&] (SSATmp* src, Type type, const char* expected) {
+    // We can't check src->hasConstVal(type) because of TNullptr.
+    auto const match = src->isA(type) && src->type().admitsSingleVal();
+    check(match || src->isA(TBottom), type, expected);
+  };
+
   auto checkVariadic = [&] (Type super) {
     for (; curSrc < inst->numSrcs(); ++curSrc) {
       auto const valid = (inst->src(curSrc)->type() <= super);
@@ -517,11 +478,7 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
                         ++curSrc;                         \
                       }
 #define AK(kind)      Type::Array(ArrayData::k##kind##Kind)
-#define C(T)          check(src()->hasConstVal(T) ||     \
-                            src()->isA(TBottom),         \
-                            Type(),                      \
-                            "constant " #T);             \
-                      ++curSrc;
+#define C(T)          checkConstant(src(), T, "constant " #T); ++curSrc;
 #define CStr          C(StaticStr)
 #define SVar(...)     checkVariadic(buildUnion(__VA_ARGS__));
 #define SVArr         checkArr(false /* is_kv */, false /* is_const */);
@@ -550,8 +507,6 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
                          IdxSeq<__VA_ARGS__>{}                                 \
                        );
 #define DLdObjCls
-#define DUnboxPtr
-#define DBoxPtr
 #define DAllocObj
 #define DArrElem
 #define DVecElem
@@ -574,11 +529,11 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
 #define DDArr
 #define DStaticDArr
 #define DCol
-#define DCtx
-#define DCtxCls
 #define DCns
 #define DMemoKey
 #define DLvalOfPtr
+#define DPtrIter
+#define DPtrIterVal
 
 #define O(opcode, dstinfo, srcinfo, flags) \
   case opcode: dstinfo srcinfo countCheck(); return true;
@@ -614,8 +569,6 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
 #undef DParamMayRelax
 #undef DParam
 #undef DLdObjCls
-#undef DUnboxPtr
-#undef DBoxPtr
 #undef DAllocObj
 #undef DArrElem
 #undef DVecElem
@@ -638,8 +591,6 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
 #undef DDArr
 #undef DStaticDArr
 #undef DCol
-#undef DCtx
-#undef DCtxCls
 #undef DCns
 #undef DUnion
 #undef DMemoKey
@@ -649,7 +600,6 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
 
 bool checkEverything(const IRUnit& unit) {
   assertx(checkCfg(unit));
-  assertx(checkInitCtxInvariants(unit));
   if (debug) {
     checkTmpsSpanningCalls(unit);
     forEachInst(rpoSortCfg(unit), [&](IRInstruction* inst) {

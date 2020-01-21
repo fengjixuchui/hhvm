@@ -145,7 +145,7 @@ ArrayData* deepCopyArray(ArrayData* arr) {
   Array ar(arr);
   IterateKV(
     arr,
-    [&](Cell k, TypedValue v) {
+    [&](TypedValue k, TypedValue v) {
       if (!isRefcountedType(v.m_type)) return false;
       Variant value{tvAsCVarRef(&v)};
       deepCopy(value.asTypedValue());
@@ -163,7 +163,7 @@ ArrayData* deepCopyVecArray(ArrayData* arr) {
   Array ar(arr);
   PackedArray::IterateKV(
     arr,
-    [&](Cell k, TypedValue v) {
+    [&](TypedValue k, TypedValue v) {
       if (!isRefcountedType(v.m_type)) return false;
       Variant value{tvAsCVarRef(&v)};
       deepCopy(value.asTypedValue());
@@ -178,11 +178,11 @@ ArrayData* deepCopyVecArray(ArrayData* arr) {
 }
 
 ArrayData* deepCopyDict(ArrayData* arr) {
-  assertx(arr->isDictOrShape());
+  assertx(arr->isDict());
   Array ar(arr);
   MixedArray::IterateKV(
     MixedArray::asMixed(arr),
-    [&](Cell k, TypedValue v) {
+    [&](TypedValue k, TypedValue v) {
       if (!isRefcountedType(v.m_type)) return false;
       Variant value{tvAsCVarRef(&v)};
       deepCopy(value.asTypedValue());
@@ -210,7 +210,6 @@ void deepCopy(tv_lval lval) {
     DT_UNCOUNTED_CASE:
     case KindOfString:
     case KindOfResource:
-    case KindOfRef:
     case KindOfKeyset:
     case KindOfClsMeth:
       return;
@@ -218,15 +217,6 @@ void deepCopy(tv_lval lval) {
     case KindOfVec: {
       auto& original = val(lval).parr;
       auto arr = deepCopyVecArray(original);
-      decRefArr(original);
-      original = arr;
-      return;
-    }
-
-    case KindOfShape: {
-      auto& original = val(lval).parr;
-      auto arr = RuntimeOption::EvalHackArrDVArrs ?
-        deepCopyDict(original) : deepCopyArray(original);
       decRefArr(original);
       original = arr;
       return;
@@ -240,6 +230,10 @@ void deepCopy(tv_lval lval) {
       return;
     }
 
+    case KindOfDArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
     case KindOfArray: {
       auto& original = val(lval).parr;
       auto arr = deepCopyArray(original);
@@ -329,7 +323,6 @@ inline bool isValueType(DataType type) {
 
 template <bool throwOnMiss>
 inline tv_lval atImpl(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   switch (obj->collectionType()) {
 #define X(type) case CollectionType::type: \
                   return c_##type::OffsetAt<throwOnMiss>(obj, key);
@@ -349,7 +342,6 @@ tv_lval get(ObjectData* obj, const TypedValue* key) {
 }
 
 tv_lval atLval(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   tv_lval ret;
   switch (obj->collectionType()) {
     case CollectionType::Pair:
@@ -407,7 +399,6 @@ tv_lval atLval(ObjectData* obj, const TypedValue* key) {
 }
 
 tv_lval atRw(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   switch (obj->collectionType()) {
     case CollectionType::Vector:
       // Since we're exposing an element of a Vector in an read/write context,
@@ -429,7 +420,7 @@ tv_lval atRw(ObjectData* obj, const TypedValue* key) {
 }
 
 bool contains(ObjectData* obj, const Variant& offset) {
-  auto* key = offset.toCell();
+  auto* key = offset.asTypedValue();
   switch (obj->collectionType()) {
     case CollectionType::Vector:
     case CollectionType::ImmVector:
@@ -447,7 +438,6 @@ bool contains(ObjectData* obj, const Variant& offset) {
 }
 
 bool isset(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   switch (obj->collectionType()) {
     case CollectionType::Vector:
     case CollectionType::ImmVector:
@@ -465,7 +455,6 @@ bool isset(ObjectData* obj, const TypedValue* key) {
 }
 
 bool empty(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   switch (obj->collectionType()) {
     case CollectionType::Vector:
     case CollectionType::ImmVector:
@@ -483,7 +472,6 @@ bool empty(ObjectData* obj, const TypedValue* key) {
 }
 
 void unset(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   switch (obj->collectionType()) {
     case CollectionType::Vector:
       c_Vector::OffsetUnset(obj, key);
@@ -503,7 +491,6 @@ void unset(ObjectData* obj, const TypedValue* key) {
 }
 
 void append(ObjectData* obj, TypedValue* val) {
-  assertx(!isRefType(val->m_type));
   assertx(val->m_type != KindOfUninit);
   switch (obj->collectionType()) {
     case CollectionType::Vector:
@@ -524,8 +511,6 @@ void append(ObjectData* obj, TypedValue* val) {
 }
 
 void set(ObjectData* obj, const TypedValue* key, const TypedValue* val) {
-  assertx(!isRefType(key->m_type));
-  assertx(!isRefType(val->m_type));
   assertx(val->m_type != KindOfUninit);
   switch (obj->collectionType()) {
     case CollectionType::Vector:

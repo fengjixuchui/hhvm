@@ -183,11 +183,11 @@ struct FieldInfo {
   Class* cls = nullptr;
   // A pointer to a property which may be set lazily by calling
   // cls->lookupDeclProp(fieldName) first time we need the property.
-  const Class::Prop *prop = nullptr;
+  mutable const Class::Prop *prop = nullptr;
   const StringData* fieldName = nullptr;
   int16_t fieldNum = 0;
 
-  const Class::Prop* getProp() {
+  const Class::Prop* getProp() const {
     if (!prop) {
       auto slot = cls->lookupDeclProp(fieldName);
       if (slot != kInvalidSlot) {
@@ -266,14 +266,16 @@ struct CompactWriter {
       SpecHolder specHolder;
       const auto& fields = specHolder.getSpec(spec, obj, false);
       auto prop = cls->declProperties().begin();
-      auto objProp = obj->propVec();
+      auto objProps = obj->props();
       const size_t numProps = cls->numDeclProperties();
       const size_t numFields = fields.size();
       // Write each member
       for (int slot = 0; slot < numFields; ++slot) {
         if (slot < numProps && fields[slot].name == prop[slot].name) {
           auto index = cls->propSlotToIndex(slot);
-          auto const& fieldVal = tvAsCVarRef(&objProp[index]);
+
+          VarNR fieldWrapper(objProps->at(index).tv());
+          const Variant& fieldVal = fieldWrapper;
           if (!fieldVal.isNull()) {
             TType fieldType = fields[slot].type;
             ArrNR fieldSpec(fields[slot].spec);
@@ -286,18 +288,7 @@ struct CompactWriter {
             writeFieldEnd();
           } else if (UNLIKELY(fieldVal.is(KindOfUninit)) &&
                      (prop[slot].attrs & AttrLateInit)) {
-            if (prop[slot].attrs & AttrLateInitSoft) {
-              raise_soft_late_init_prop(prop[slot].cls, prop[slot].name, false);
-              tvDup(
-                *g_context->getSoftLateInitDefault().asTypedValue(),
-                *const_cast<TypedValue*>(&objProp[index])
-              );
-              // Loop over this property again
-              --slot;
-              continue;
-            } else {
-              throw_late_init_prop(prop[slot].cls, prop[slot].name, false);
-            }
+            throw_late_init_prop(prop[slot].cls, prop[slot].name, false);
           }
         } else {
           writeSlow(fields[slot], obj);
@@ -345,7 +336,7 @@ struct CompactWriter {
     void writeField(const Variant& value,
                     const Array& valueSpec,
                     TType type,
-                    FieldInfo& fieldInfo) {
+                    const FieldInfo& fieldInfo) {
       switch (type) {
         case T_STOP:
         case T_VOID:
@@ -447,22 +438,22 @@ struct CompactWriter {
     }
 
     void writeMap(
-        const Variant& map, const Array& spec, FieldInfo& fieldInfo) {
+        const Variant& map, const Array& spec, const FieldInfo& fieldInfo) {
       TType keyType = (TType)(char)tvCastToInt64(
-        spec.rvalAt(s_ktype, AccessFlags::ErrorKey).tv()
+        spec.rval(s_ktype, AccessFlags::ErrorKey).tv()
       );
       TType valueType = (TType)(char)tvCastToInt64(
-        spec.rvalAt(s_vtype, AccessFlags::ErrorKey).tv()
+        spec.rval(s_vtype, AccessFlags::ErrorKey).tv()
       );
 
       auto keySpec = tvCastToArrayLike(
-        spec.rvalAt(s_key, AccessFlags::ErrorKey).tv()
+        spec.rval(s_key, AccessFlags::ErrorKey).tv()
       );
       auto valueSpec = tvCastToArrayLike(
-        spec.rvalAt(s_val, AccessFlags::ErrorKey).tv()
+        spec.rval(s_val, AccessFlags::ErrorKey).tv()
       );
 
-      auto elemWriter = [&](Cell k, TypedValue v) {
+      auto elemWriter = [&](TypedValue k, TypedValue v) {
         writeField(VarNR(k), keySpec, keyType, fieldInfo);
         writeField(VarNR(v), valueSpec, valueType, fieldInfo);
         return false;
@@ -470,7 +461,7 @@ struct CompactWriter {
 
       if (isContainer(map)) {
         writeMapBegin(keyType, valueType, getContainerSize(map));
-        IterateKV(*map.toCell(), [](const ArrayData* /*ad*/) { return false; },
+        IterateKV(*map.asTypedValue(), [](const ArrayData* /*ad*/) { return false; },
                   elemWriter, [](const ObjectData* /*o*/) { return false; });
       } else {
         auto const arr = map.toArray();
@@ -485,18 +476,18 @@ struct CompactWriter {
         const Variant& list,
         const Array& spec,
         CListType listType,
-        FieldInfo& fieldInfo) {
+        const FieldInfo& fieldInfo) {
       TType valueType = (TType)(char)tvCastToInt64(
-        spec.rvalAt(s_etype, AccessFlags::ErrorKey).tv()
+        spec.rval(s_etype, AccessFlags::ErrorKey).tv()
       );
       auto valueSpec = tvCastToArrayLike(
-        spec.rvalAt(s_elem, AccessFlags::ErrorKey).tv()
+        spec.rval(s_elem, AccessFlags::ErrorKey).tv()
       );
 
       auto const listWriter = [&](TypedValue v) {
         writeField(VarNR(v), valueSpec, valueType, fieldInfo);
       };
-      auto const setWriter = [&](Cell k, TypedValue /*v*/) {
+      auto const setWriter = [&](TypedValue k, TypedValue /*v*/) {
         writeField(VarNR(k), valueSpec, valueType, fieldInfo);
       };
 
@@ -506,11 +497,11 @@ struct CompactWriter {
       if (isContainer(list)) {
         writeListBegin(valueType, getContainerSize(list));
         if (listType == C_LIST_LIST) {
-          IterateV(*list.toCell(),
+          IterateV(*list.asTypedValue(),
                    [](const ArrayData* /*ad*/) { return false; }, listWriter,
                    [](const ObjectData* /*o*/) { return false; });
         } else {
-          IterateKV(*list.toCell(),
+          IterateKV(*list.asTypedValue(),
                     [](const ArrayData* /*ad*/) { return false; }, setWriter,
                     [](const ObjectData* /*o*/) { return false; });
         }
@@ -568,7 +559,7 @@ struct CompactWriter {
     }
 
     template <typename T>
-    void writeIChecked(const Variant& value, FieldInfo& fieldInfo) {
+    void writeIChecked(const Variant& value, const FieldInfo& fieldInfo) {
       static_assert(std::is_integral<T>::value, "not an integral type");
       auto n = value.toInt64();
       using limits = std::numeric_limits<T>;
@@ -587,8 +578,10 @@ struct CompactWriter {
             prop->preProp->userAttributes().count(
                 LowStringPtr(SKIP_CHECKS_ATTR.get())) != 0;
         };
-        if (forbidInvalid == 1 || hasSkipChecksAttr()) {
-          raise_warning(message);
+        if (hasSkipChecksAttr()) {
+          raise_warning("[Suppressed] " + message);
+        } else if (forbidInvalid == 1) {
+          raise_warning("[Unsuppressed] " + message);
         } else {
           thrift_error(message, ERR_INVALID_DATA);
         }
@@ -674,20 +667,20 @@ struct CompactReader {
       while (fieldType != T_STOP) {
         bool readComplete = false;
 
-        auto const fieldSpecVariant = spec.rvalAt(fieldNum).unboxed();
+        auto const fieldSpecVariant = spec.rval(fieldNum);
         if (!isNullType(fieldSpecVariant.type())) {
           auto fieldSpec = tvCastToArrayLike(fieldSpecVariant.tv());
 
-          auto fieldName = tvCastToString(fieldSpec.rvalAt(s_var).tv());
+          auto fieldName = tvCastToString(fieldSpec.rval(s_var).tv());
           auto expectedType = (TType)tvCastToInt64(
-            fieldSpec.rvalAt(s_type).tv()
+            fieldSpec.rval(s_type).tv()
           );
 
           if (typesAreCompatible(fieldType, expectedType)) {
             readComplete = true;
             Variant fieldValue = readField(fieldSpec, fieldType);
             dest->o_set(fieldName, fieldValue, dest->getClassName());
-            bool isUnion = tvCastToBoolean(spec.rvalAt(s_union).tv());
+            bool isUnion = tvCastToBoolean(spec.rval(s_union).tv());
             if (isUnion) {
               dest->o_set(s__type, Variant(fieldNum), dest->getClassName());
             }
@@ -717,7 +710,7 @@ struct CompactReader {
       if (cls->numDeclProperties() < numFields) {
         return readStructSlow(dest, spec, fieldNum, fieldType);
       }
-      auto objProp = dest->propVecForConstruct();
+      auto objProp = dest->props();
       auto prop = cls->declProperties().begin();
       int slot = -1;
       while (fieldType != T_STOP) {
@@ -732,15 +725,15 @@ struct CompactReader {
         if (fields[slot].isUnion) {
           if (s__type.equal(prop[numFields].name)) {
             auto index = cls->propSlotToIndex(numFields);
-            tvAsVariant(&objProp[index]) = Variant(fieldNum);
+            tvSetInt(fieldNum, objProp->at(index));
           } else {
             return readStructSlow(dest, spec, fieldNum, fieldType);
           }
         }
         ArrNR fieldSpec(fields[slot].spec);
         auto index = cls->propSlotToIndex(slot);
-        tvAsVariant(&objProp[index]) = readField(fieldSpec.asArray(),
-                                                 fieldType);
+        tvSet(*readField(fieldSpec.asArray(), fieldType).asTypedValue(),
+              objProp->at(index));
         if (!fields[slot].noTypeCheck) {
           dest->verifyPropTypeHint(slot);
           if (fields[slot].isUnion) dest->verifyPropTypeHint(numFields);
@@ -815,7 +808,7 @@ struct CompactReader {
           return init_null();
 
         case T_STRUCT: {
-            auto const className = spec.rvalAt(s_class).unboxed();
+            auto const className = spec.rval(s_class);
             if (isNullType(className.type())) {
               thrift_error("no class type in spec", ERR_INVALID_DATA);
             }
@@ -1000,13 +993,13 @@ struct CompactReader {
       readMapBegin(keyType, valueType, size);
 
       auto keySpec = tvCastToArrayLike(
-        spec.rvalAt(s_key, AccessFlags::Error).tv()
+        spec.rval(s_key, AccessFlags::Error).tv()
       );
       auto valueSpec = tvCastToArrayLike(
-        spec.rvalAt(s_val, AccessFlags::Error).tv()
+        spec.rval(s_val, AccessFlags::Error).tv()
       );
       auto format = tvCastToString(
-        spec.rvalAt(s_format, AccessFlags::None).tv()
+        spec.rval(s_format, AccessFlags::None).tv()
       );
       if (format.equal(s_harray)) {
         DictInit arr(size);
@@ -1040,7 +1033,7 @@ struct CompactReader {
         for (uint32_t i = 0; i < size; i++) {
           Variant key = readField(keySpec, keyType);
           Variant value = readField(valueSpec, valueType);
-          BaseMap::OffsetSet(ret.get(), key.toCell(), value.toCell());
+          BaseMap::OffsetSet(ret.get(), key.asTypedValue(), value.asTypedValue());
         }
         readCollectionEnd();
         return Variant(std::move(ret));
@@ -1062,10 +1055,10 @@ struct CompactReader {
       readListBegin(valueType, size);
 
       auto valueSpec = tvCastToArrayLike(
-        spec.rvalAt(s_elem, AccessFlags::ErrorKey).tv()
+        spec.rval(s_elem, AccessFlags::ErrorKey).tv()
       );
       auto format = tvCastToString(
-        spec.rvalAt(s_format, AccessFlags::None).tv()
+        spec.rval(s_format, AccessFlags::None).tv()
       );
       if (format.equal(s_harray)) {
         VecArrayInit arr(size);
@@ -1083,7 +1076,7 @@ struct CompactReader {
         int64_t i = 0;
         do {
           auto val = readField(valueSpec, valueType);
-          cellDup(*val.toCell(), vec->appendForUnserialize(i));
+          tvDup(*val.asTypedValue(), vec->appendForUnserialize(i));
         } while (++i < size);
         readCollectionEnd();
         return Variant(std::move(vec));
@@ -1103,10 +1096,10 @@ struct CompactReader {
       readListBegin(valueType, size);
 
       auto valueSpec = tvCastToArrayLike(
-        spec.rvalAt(s_elem, AccessFlags::ErrorKey).tv()
+        spec.rval(s_elem, AccessFlags::ErrorKey).tv()
       );
       auto format = tvCastToString(
-        spec.rvalAt(s_format, AccessFlags::None).tv()
+        spec.rval(s_format, AccessFlags::None).tv()
       );
       if (format.equal(s_harray)) {
         KeysetInit arr(size);

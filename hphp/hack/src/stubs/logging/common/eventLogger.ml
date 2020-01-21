@@ -19,7 +19,9 @@ type init_mode =
   | Event_logger_fake
   | Event_logger_real of init_settings
 
-let init ?exit_on_parent_exit:_ ?log_pid:_ ?init_id:_ _ _ = ()
+let init ?log_pid:_ ?init_id:_ _ _ = ()
+
+let init_fake () = ()
 
 let disable_logging _ = ()
 
@@ -43,8 +45,7 @@ let sharedmem_failed_anonymous_memfd_init _ = ()
 
 let sharedmem_failed_to_use_shm_dir ~shm_dir:_ ~reason:_ = ()
 
-let sharedmem_less_than_minimum_available ~shm_dir:_ ~shm_min_avail:_ ~avail:_
-    =
+let sharedmem_less_than_minimum_available ~shm_dir:_ ~shm_min_avail:_ ~avail:_ =
   ()
 
 let sharedmem_access_sample ~heap_name:_ ~key:_ ~write_time:_ = ()

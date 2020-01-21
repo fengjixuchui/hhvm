@@ -7,10 +7,11 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 module ShapeMap = Aast.ShapeMap
 module SN = Naming_special_names
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 
 let validate_classname (pos, hint) =
@@ -29,6 +30,8 @@ let validate_classname (pos, hint) =
   | Aast.Hnothing ->
     ()
   | Aast.Htuple _
+  | Aast.Hunion _
+  | Aast.Hintersection _
   | Aast.Harray _
   | Aast.Hdarray _
   | Aast.Hvarray _
@@ -48,17 +51,17 @@ let rec check_hint env (pos, hint) =
       | Some cls
         when let kind = Cls.kind cls in
              let tc_name = Cls.name cls in
-             ( kind = Ast_defs.Ctrait
-             || (kind = Ast_defs.Cabstract && Cls.final cls) )
-             && tc_name <> SN.Collections.cDict
-             && tc_name <> SN.Collections.cKeyset
-             && tc_name <> SN.Collections.cVec ->
+             ( Ast_defs.(equal_class_kind kind Ctrait)
+             || (Ast_defs.(equal_class_kind kind Cabstract) && Cls.final cls) )
+             && String.( <> ) tc_name SN.Collections.cDict
+             && String.( <> ) tc_name SN.Collections.cKeyset
+             && String.( <> ) tc_name SN.Collections.cVec ->
         let tc_pos = Cls.pos cls in
         let tc_name = Cls.name cls in
         Errors.uninstantiable_class pos tc_pos tc_name []
       | _ -> ()
     end;
-    if class_id = SN.Classes.cClassname then
+    if String.equal class_id SN.Classes.cClassname then
       Option.iter (List.hd tal) validate_classname
     else
       List.iter tal (check_hint env)
@@ -70,7 +73,9 @@ let rec check_hint env (pos, hint) =
     check_hint env h2
   | Aast.Hshape hm -> check_shape env hm
   | Aast.Haccess (h, ids) -> check_access env h ids
-  | Aast.Hvarray_or_darray h
+  | Aast.Hvarray_or_darray (hopt1, h2) ->
+    Option.iter hopt1 (check_hint env);
+    check_hint env h2
   | Aast.Hvarray h
   | Aast.Hoption h
   | Aast.Hlike h
@@ -86,10 +91,25 @@ let rec check_hint env (pos, hint) =
   | Aast.Hthis
   | Aast.Hnothing ->
     ()
-  | Aast.Hfun (_, _, hl, _, _, _, h, _) ->
+  | Aast.Hfun
+      Aast.
+        {
+          hf_reactive_kind = _;
+          hf_is_coroutine = _;
+          hf_param_tys = hl;
+          hf_param_kinds = _;
+          hf_param_mutability = _;
+          (* TODO: shouldn't we be checking this hint as well? *)
+          hf_variadic_ty = _;
+          hf_return_ty = h;
+          hf_is_mutable_return = _;
+        } ->
     List.iter hl (check_hint env);
     check_hint env h
-  | Aast.Htuple hl -> List.iter hl (check_hint env)
+  | Aast.Htuple hl
+  | Aast.Hunion hl
+  | Aast.Hintersection hl ->
+    List.iter hl (check_hint env)
   | Aast.Hpu_access (h, _) -> check_hint env h
 
 and check_shape env Aast.{ nsi_allows_unknown_fields = _; nsi_field_map } =

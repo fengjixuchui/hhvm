@@ -2,7 +2,6 @@
   (name ast)
   (wrapped false)
   (modules
-    ast
     ast_defs
     ast_defs_visitors_ancestors)
   (libraries
@@ -20,6 +19,7 @@
   (libraries
     collections
     core_kernel
+    hh_autoimport
     parser_options)
   (preprocess
     (pps visitors.ppx ppx_deriving.std))) ; See T41851208

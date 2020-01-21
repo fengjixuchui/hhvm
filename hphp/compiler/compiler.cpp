@@ -24,7 +24,6 @@
 
 #include "hphp/hhbbc/hhbbc.h"
 #include "hphp/runtime/base/config.h"
-#include "hphp/runtime/base/externals.h"
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/program-functions.h"
@@ -97,7 +96,6 @@ struct CompilerOptions {
   std::vector<std::string> ffiles;
   std::vector<std::string> cfiles;
   std::vector<std::string> cmodules;
-  std::vector<std::string> hhjsDirs;
   bool parseOnDemand;
   std::string program;
   std::string programArgs;
@@ -145,8 +143,6 @@ int phpTarget(const CompilerOptions &po, AnalysisResultPtr ar);
 void hhbcTargetInit(const CompilerOptions &po, AnalysisResultPtr ar);
 int hhbcTarget(const CompilerOptions &po, AnalysisResultPtr&& ar,
                AsyncFileCacheSaver &fcThread);
-int runTargetCheck(const CompilerOptions &po, AnalysisResultPtr&& ar,
-                   AsyncFileCacheSaver &fcThread);
 int runTarget(const CompilerOptions &po);
 void pcre_init();
 
@@ -262,8 +258,6 @@ int prepareOptions(CompilerOptions &po, int argc, char **argv) {
      "extra static files forced to include without exclusion checking")
     ("cmodule", value<std::vector<std::string>>(&po.cmodules)->composing(),
      "extra directories for static files without exclusion checking")
-    ("hhjs-dir", value<std::vector<std::string>>(&po.hhjsDirs)->composing(),
-     "directory containing JS to compile using HHJS")
     ("parse-on-demand", value<bool>(&po.parseOnDemand)->default_value(true),
      "whether to parse files that are not specified from command line")
     ("branch", value<std::string>(&po.branch), "SVN branch")
@@ -551,15 +545,15 @@ int process(const CompilerOptions &po) {
   LitstrTable::init();
   LitstrTable::get().setWriting();
 
+  std::thread unit_cache_thread;
   {
     Timer timer2(Timer::WallTime, "parsing inputs");
-    if (po.target == "cache") package.cache_only();
     ar->setPackage(&package);
     ar->setParseOnDemand(po.parseOnDemand);
     if (!po.parseOnDemand) {
       ar->setParseOnDemandDirs(Option::ParseOnDemandDirs);
     }
-    if (po.modules.empty() && po.fmodules.empty() && po.hhjsDirs.empty() &&
+    if (po.modules.empty() && po.fmodules.empty() &&
         po.ffiles.empty() && po.inputs.empty() && po.inputList.empty()) {
       package.addAllFiles(false);
     } else {
@@ -568,9 +562,6 @@ int process(const CompilerOptions &po) {
       }
       for (auto const& fmodule : po.fmodules) {
         package.addDirectory(fmodule, true /*force*/);
-      }
-      for (auto const& hhjsDir : po.hhjsDirs) {
-        package.addHHJSDirectory(hhjsDir, false);
       }
       for (auto const& ffile : po.ffiles) {
         package.addSourceFile(ffile);
@@ -589,7 +580,7 @@ int process(const CompilerOptions &po) {
       }
     }
     if (po.target != "filecache") {
-      if (!package.parse(!po.force)) {
+      if (!package.parse(!po.force, unit_cache_thread)) {
         return 1;
       }
     }
@@ -614,15 +605,17 @@ int process(const CompilerOptions &po) {
     });
 
   int ret = 0;
-  if (po.target == "hhbc") {
+  if (po.target == "hhbc" || po.target == "run") {
     ret = hhbcTarget(po, std::move(ar), fileCacheThread);
-  } else if (po.target == "run") {
-    ret = runTargetCheck(po, std::move(ar), fileCacheThread);
   } else if (po.target == "filecache" || po.target == "cache") {
     ar->finish();
   } else {
     Logger::Error("Unknown target: %s", po.target.c_str());
     return 1;
+  }
+
+  if (unit_cache_thread.joinable()) {
+    unit_cache_thread.join();
   }
 
   if (!po.filecache.empty()) {
@@ -734,16 +727,6 @@ int hhbcTarget(const CompilerOptions &po, AnalysisResultPtr&& ar,
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-int runTargetCheck(const CompilerOptions &po, AnalysisResultPtr&& ar,
-                   AsyncFileCacheSaver &fcThread) {
-  // generate code
-  if (hhbcTarget(po, std::move(ar), fcThread)) {
-    return 1;
-  }
-
-  return 0;
-}
 
 int runTarget(const CompilerOptions &po) {
   int ret = 0;

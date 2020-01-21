@@ -9,19 +9,23 @@
 
 open Core_kernel
 
-type message = Message : 'a ClientIdeMessage.t -> message
+type message = Message : 'a ClientIdeMessage.tracked_t -> message
 
 type message_queue = message Lwt_message_queue.t
 
+type initialized_state = {
+  saved_state_info: Saved_state_loader.Naming_table_saved_state_info.t;
+  hhi_root: Path.t;
+  server_env: ServerEnv.env;
+  ctx: Provider_context.t;
+  changed_files_to_process: Path.Set.t;
+  peak_changed_files_queue_size: int;
+}
+
 type state =
   | Initializing
-  | Failed_to_initialize of string
-  | Initialized of {
-      saved_state_info: Saved_state_loader.Naming_table_saved_state_info.t;
-      hhi_root: Path.t;
-      server_env: ServerEnv.env;
-      changed_files_to_process: Path.Set.t;
-    }
+  | Failed_to_initialize of string * Utils.callstack
+  | Initialized of initialized_state
 
 type t = {
   message_queue: message_queue;
@@ -41,7 +45,6 @@ let set_up_hh_logger_for_client_ide_service ~(root : Path.t) : unit =
   Hh_logger.set_log
     client_ide_log_fn
     (Out_channel.create client_ide_log_fn ~append:true);
-  EventLogger.init EventLogger.Event_logger_fake 0.0;
   log "Starting client IDE service at %s" client_ide_log_fn
 
 let load_naming_table_from_saved_state_info
@@ -52,9 +55,7 @@ let load_naming_table_from_saved_state_info
     Saved_state_loader.Naming_table_saved_state_info.(
       Path.to_string saved_state_info.naming_table_path)
   in
-  let naming_table =
-    Naming_table.load_from_sqlite ~update_reverse_entries:false path
-  in
+  let naming_table = Naming_table.load_from_sqlite path in
   log "Loaded naming table from SQLite database at %s" path;
   let server_env = { server_env with ServerEnv.naming_table } in
   Lwt.return server_env
@@ -63,7 +64,8 @@ let load_saved_state
     (env : ServerEnv.env)
     ~(root : Path.t)
     ~(hhi_root : Path.t)
-    ~(naming_table_saved_state_path : Path.t option) : state Lwt.t =
+    ~(naming_table_saved_state_path : Path.t option) :
+    (state, string * Utils.callstack) Lwt_result.t =
   log "[saved-state] Starting load in root %s" (Path.to_string root);
   let%lwt result =
     try%lwt
@@ -84,57 +86,65 @@ let load_saved_state
           let%lwt result =
             State_loader_lwt.load
               ~repo:root
+              ~ignore_hh_version:false
               ~saved_state_type:Saved_state_loader.Naming_table
           in
           Lwt.return result
       in
-      let%lwt new_state =
-        match result with
-        | Ok (saved_state_info, changed_files) ->
-          log
-            "[saved-state] Naming table path: %s"
-            Saved_state_loader.Naming_table_saved_state_info.(
-              Path.to_string saved_state_info.naming_table_path);
+      match result with
+      | Ok (saved_state_info, changed_files) ->
+        log
+          "[saved-state] Naming table path: %s"
+          Saved_state_loader.Naming_table_saved_state_info.(
+            Path.to_string saved_state_info.naming_table_path);
 
-          let%lwt server_env =
-            load_naming_table_from_saved_state_info env saved_state_info
-          in
-          log "[saved-state] Load succeeded";
+        let%lwt server_env =
+          load_naming_table_from_saved_state_info env saved_state_info
+        in
+        (* Track how many files we have to change locally *)
+        HackEventLogger.serverless_ide_local_files
+          ~local_file_count:(List.length changed_files);
 
-          Lwt.return
-            (Initialized
-               {
-                 saved_state_info;
-                 hhi_root;
-                 server_env;
-                 changed_files_to_process = Path.Set.of_list changed_files;
-               })
-        | Error load_error ->
-          let message = Saved_state_loader.load_error_to_string load_error in
-          log "[saved-state] %s" message;
-          Lwt.return (Failed_to_initialize message)
-      in
-      Lwt.return new_state
+        Lwt.return_ok
+          (Initialized
+             {
+               saved_state_info;
+               hhi_root;
+               server_env;
+               changed_files_to_process = Path.Set.of_list changed_files;
+               ctx = Provider_context.empty server_env.ServerEnv.tcopt;
+               peak_changed_files_queue_size = List.length changed_files;
+             })
+      | Error load_error ->
+        let stack =
+          Utils.Callstack (Exception.get_current_callstack_string 100)
+        in
+        let message = Saved_state_loader.load_error_to_string load_error in
+        log "[saved-state] %s" message;
+        Lwt.return_error (message, stack)
     with e ->
       let stack = Printexc.get_backtrace () in
-      Hh_logger.exc
-        e
-        ~prefix:"Uncaught exception in client IDE services"
-        ~stack;
-      Lwt.return
-        (Failed_to_initialize
-           (Printf.sprintf
-              "Uncaught exception in client IDE services: %s"
-              stack))
+      Hh_logger.exc e ~prefix:"Uncaught exception in client IDE services" ~stack;
+      Lwt.return_error
+        ("Uncaught exception in client IDE services", Utils.Callstack stack)
   in
   Lwt.return result
+
+let log_startup_time (component : string) (start_time : float) : float =
+  let now = Unix.gettimeofday () in
+  HackEventLogger.serverless_ide_startup ~component ~start_time;
+  now
 
 let initialize
     ({
        ClientIdeMessage.Initialize_from_saved_state.root;
        naming_table_saved_state_path;
+       use_ranked_autocomplete;
      } :
-      ClientIdeMessage.Initialize_from_saved_state.t) =
+      ClientIdeMessage.Initialize_from_saved_state.t) :
+    (state, string * Utils.callstack) Lwt_result.t =
+  let start_time = Unix.gettimeofday () in
+  HackEventLogger.serverless_ide_set_root root;
   set_up_hh_logger_for_client_ide_service ~root;
 
   Relative_path.set_path_prefix Relative_path.Root root;
@@ -154,19 +164,15 @@ let initialize
   let (_ : SharedMem.handle) =
     SharedMem.init ~num_workers:0 (ServerConfig.sharedmem_config server_config)
   in
-  let bytes_per_word = Sys.word_size / 8 in
-  let words_per_mb = 1_000_000 / bytes_per_word in
-  let max_size_in_words = 250 * words_per_mb in
-  Provider_config.set_local_memory_backend ~max_size_in_words;
+
+  (* At the time of this writing, one decl on average is about 45 KB. So 1000
+  decls is 45 MB, well under the 250 MB cap we would like to stay under. In
+  practice, we don't find ourselves needing more than a few hundred decls to
+  provide good performance and avoid most cache misses. *)
+  Provider_backend.set_local_memory_backend ~max_num_decls:1000;
 
   let genv =
-    ServerEnvBuild.make_genv
-      server_args
-      server_config
-      server_local_config
-      [] (* no workers *)
-      None
-    (* no lru_workers *)
+    ServerEnvBuild.make_genv server_args server_config server_local_config []
   in
   let server_env = ServerEnvBuild.make_env genv.ServerEnv.config in
   (* We need shallow class declarations so that we can invalidate individual
@@ -181,33 +187,50 @@ let initialize
         };
     }
   in
-  GlobalParserOptions.set server_env.ServerEnv.popt;
-  GlobalNamingOptions.set server_env.ServerEnv.tcopt;
+  Parser_options_provider.set server_env.ServerEnv.popt;
+  Global_naming_options.set server_env.ServerEnv.tcopt;
 
   (* Use server_config to modify server_env with the correct symbol index *)
+  let start_time = log_startup_time "basic_startup" start_time in
   let namespace_map =
     GlobalOptions.po_auto_namespace_map server_env.ServerEnv.tcopt
   in
   let sienv =
     SymbolIndex.initialize
-      ~globalrev_opt:None
+      ~globalrev:None
+      ~gleanopt:server_env.ServerEnv.gleanopt
       ~namespace_map
       ~provider_name:
         server_local_config.ServerLocalConfig.symbolindex_search_provider
       ~quiet:server_local_config.ServerLocalConfig.symbolindex_quiet
+      ~ignore_hh_version:false
       ~savedstate_file_opt:
         server_local_config.ServerLocalConfig.symbolindex_file
       ~workers:None
   in
-  let sienv = { sienv with SearchUtils.sie_log_timings = true } in
+  let sienv =
+    {
+      sienv with
+      SearchUtils.sie_log_timings = true;
+      SearchUtils.use_ranked_autocomplete;
+    }
+  in
   let server_env =
     { server_env with ServerEnv.local_symbol_table = ref sienv }
   in
-  let%lwt new_state =
+  let start_time = log_startup_time "symbol_index" start_time in
+  if use_ranked_autocomplete then AutocompleteRankService.initialize ();
+  let%lwt load_state_result =
     load_saved_state server_env ~root ~hhi_root ~naming_table_saved_state_path
   in
-  log "Serverless IDE has completed initialization";
-  Lwt.return new_state
+  let _ = log_startup_time "saved_state" start_time in
+  match load_state_result with
+  | Ok state ->
+    log "Serverless IDE has completed initialization";
+    Lwt.return_ok state
+  | Error (message, stack) ->
+    log "Serverless IDE failed to initialize: %s" message;
+    Lwt.return_error (message, stack)
 
 let shutdown (state : state) : unit Lwt.t =
   match state with
@@ -221,281 +244,307 @@ let shutdown (state : state) : unit Lwt.t =
     Sys_utils.rm_dir_tree hhi_root;
     Lwt.return_unit
 
+let restore_hhi_root_if_necessary (state : initialized_state) :
+    initialized_state =
+  if Sys.file_exists (Path.to_string state.hhi_root) then
+    state
+  else
+    (* Some processes may clean up the temporary HHI directory we're using.
+    Assume that such a process has deleted the directory, and re-write the HHI
+    files to disk. *)
+    let hhi_root = Hhi.get_hhi_root ~force_write:true () in
+    log
+      "Old hhi root %s no longer exists. Creating a new hhi root at %s"
+      (Path.to_string state.hhi_root)
+      (Path.to_string hhi_root);
+    Relative_path.set_path_prefix Relative_path.Hhi hhi_root;
+    { state with hhi_root }
+
+let make_context_from_file_input
+    (initialized_state : initialized_state)
+    (path : Relative_path.t)
+    (file_input : ServerCommandTypes.file_input) :
+    state * Provider_context.t * Provider_context.entry =
+  let initialized_state = restore_hhi_root_if_necessary initialized_state in
+  let ctx = initialized_state.ctx in
+  match Provider_utils.find_entry ~ctx ~path with
+  | None ->
+    let (ctx, entry) = Provider_utils.update_context ~ctx ~path ~file_input in
+    (Initialized { initialized_state with ctx }, ctx, entry)
+  | Some entry ->
+    (* Only reparse the file if the contents have actually changed.
+     * If the user simply sends us a file_input variable with "FileName"
+     * we shouldn't count that as a change. *)
+    let any_changes =
+      match file_input with
+      | ServerCommandTypes.FileName _ -> false
+      | ServerCommandTypes.FileContent content ->
+        content
+        <> entry.Provider_context.source_text.Full_fidelity_source_text.text
+    in
+    if any_changes then
+      let (ctx, entry) = Provider_utils.update_context ~ctx ~path ~file_input in
+      (Initialized { initialized_state with ctx }, ctx, entry)
+    else
+      (Initialized initialized_state, ctx, entry)
+
 let make_context_from_document_location
-    (server_env : ServerEnv.env)
+    (initialized_state : initialized_state)
     (document_location : ClientIdeMessage.document_location) :
-    Provider_context.t * Provider_context.entry =
+    state * Provider_context.t * Provider_context.entry =
   let (file_path, file_input) =
     match document_location with
     | { ClientIdeMessage.file_contents = None; file_path; _ } ->
-      let file_input =
-        ServerCommandTypes.FileName (Path.to_string file_path)
-      in
+      let file_input = ServerCommandTypes.FileName (Path.to_string file_path) in
       (file_path, file_input)
     | { ClientIdeMessage.file_contents = Some file_contents; file_path; _ } ->
       let file_input = ServerCommandTypes.FileContent file_contents in
       (file_path, file_input)
   in
-  let file_path =
+  let path =
     file_path |> Path.to_string |> Relative_path.create_detect_prefix
   in
-  Provider_utils.update_context
-    ~ctx:(Provider_context.empty ~tcopt:server_env.ServerEnv.tcopt)
-    ~path:file_path
-    ~file_input
+  make_context_from_file_input initialized_state path file_input
 
 module Handle_message_result = struct
   type 'a t =
     | Notification
     | Response of 'a
-    | Error of string
+    | Error of string * Utils.callstack
 end
 
 let handle_message :
     type a.
-    state -> a ClientIdeMessage.t -> (state * a Handle_message_result.t) Lwt.t
-    =
- fun state message ->
-  ClientIdeMessage.(
-    match (state, message) with
-    | (state, Shutdown ()) ->
-      let%lwt () = shutdown state in
-      Lwt.return (state, Handle_message_result.Response ())
-    | ((Failed_to_initialize _ | Initializing), File_changed _) ->
-      (* Should not happen. *)
-      Lwt.return
-        ( state,
-          Handle_message_result.Error
-            ( "IDE services could not process file change because "
+    state ->
+    string ->
+    a ClientIdeMessage.t ->
+    (state * a Handle_message_result.t) Lwt.t =
+ fun state _tracking_id message ->
+  let open ClientIdeMessage in
+  match (state, message) with
+  | (state, Shutdown ()) ->
+    let%lwt () = shutdown state in
+    Lwt.return (state, Handle_message_result.Response ())
+  | ((Failed_to_initialize _ | Initializing), File_changed _) ->
+    (* Should not happen. *)
+    let stack = Utils.Callstack (Exception.get_current_callstack_string 99) in
+    Lwt.return
+      ( state,
+        Handle_message_result.Error
+          ( "IDE services could not process file change because "
             ^ "it failed to initialize or was still initializing. The caller "
             ^ "should have waited for the IDE services to become ready before "
-            ^ "sending file-change notifications." ) )
-    | ( Initialized ({ changed_files_to_process; _ } as state),
-        File_changed path ) ->
+            ^ "sending file-change notifications.",
+            stack ) )
+  | (Initialized initialized_state, File_changed path) ->
+    (* Only invalidate when a hack file changes *)
+    if FindUtils.file_filter (Path.to_string path) then
       let changed_files_to_process =
-        Path.Set.add changed_files_to_process path
+        Path.Set.add initialized_state.changed_files_to_process path
       in
-      let state = Initialized { state with changed_files_to_process } in
-      Lwt.return (state, Handle_message_result.Notification)
-    | (Initializing, Initialize_from_saved_state param) ->
-      let%lwt new_state = initialize param in
-      Lwt.return (new_state, Handle_message_result.Response ())
-    | (Initialized _, Initialize_from_saved_state _) ->
-      Lwt.return
-        ( state,
-          Handle_message_result.Error
-            "Tried to initialize when already initialized" )
-    | (Initializing, _) ->
-      Lwt.return
-        ( state,
-          Handle_message_result.Error
-            "IDE services have not yet been initialized" )
-    | (Failed_to_initialize error_message, _) ->
-      Lwt.return
-        ( state,
-          Handle_message_result.Error
-            (Printf.sprintf
-               "IDE services failed to initialize: %s"
-               error_message) )
-    | (Initialized { server_env; _ }, File_opened { file_path; file_contents })
-      ->
-      let path =
-        file_path |> Path.to_string |> Relative_path.create_detect_prefix
+      let peak_changed_files_queue_size =
+        initialized_state.peak_changed_files_queue_size + 1
       in
-      let (ctx, entry) =
-        Provider_utils.update_context
-          ~ctx:(Provider_context.empty ~tcopt:server_env.ServerEnv.tcopt)
-          ~path
-          ~file_input:(ServerCommandTypes.FileContent file_contents)
+      let ctx =
+        Provider_context.empty
+          ~tcopt:initialized_state.server_env.ServerEnv.tcopt
       in
-      (* Do a typecheck just to warm up the caches when you open a file. In the
-    future, we'll actually surface typechecking errors. *)
-      let _tast : Tast.program = Provider_utils.compute_tast ~ctx ~entry in
-      Lwt.return (state, Handle_message_result.Response ())
-    | (Initialized { server_env; _ }, Hover document_location) ->
-      let (ctx, entry) =
-        make_context_from_document_location server_env document_location
-      in
-      let result =
-        Provider_utils.with_context ~ctx ~f:(fun () ->
-            ServerHover.go_ctx
-              ~ctx
-              ~entry
-              ~line:document_location.ClientIdeMessage.line
-              ~column:document_location.ClientIdeMessage.column)
-      in
-      Lwt.return (state, Handle_message_result.Response result)
-    (* Autocomplete *)
-    | ( Initialized { server_env; _ },
-        Completion
+      let state =
+        Initialized
           {
-            ClientIdeMessage.Completion.document_location =
-              { ClientIdeMessage.file_path; file_contents; line; column };
-            is_manually_invoked;
-          } ) ->
-      let path =
-        file_path |> Path.to_string |> Relative_path.create_detect_prefix
+            initialized_state with
+            changed_files_to_process;
+            ctx;
+            peak_changed_files_queue_size;
+          }
       in
-      let file_content =
-        match file_contents with
-        | Some file_contents -> file_contents
-        | None -> file_path |> Path.to_string |> Sys_utils.cat_no_fail
-      in
-      let sienv = !(server_env.ServerEnv.local_symbol_table) in
-      let matches =
-        ServerAutoComplete.auto_complete_at_position_ctx
-          ~line
-          ~column
-          ~file_content
-          ~path
-          ~tcopt:server_env.ServerEnv.tcopt
-          ~sienv
-          ~is_manually_invoked
-      in
+      Lwt.return (state, Handle_message_result.Notification)
+    else
+      Lwt.return (state, Handle_message_result.Notification)
+  | (Initializing, Initialize_from_saved_state param) ->
+    let%lwt result = initialize param in
+    begin
+      match result with
+      | Ok state -> Lwt.return (state, Handle_message_result.Response ())
+      | Error (message, stack) ->
+        Lwt.return
+          ( Failed_to_initialize (message, stack),
+            Handle_message_result.Error (message, stack) )
+    end
+  | (Initialized _, Initialize_from_saved_state _) ->
+    let stack = Utils.Callstack (Exception.get_current_callstack_string 100) in
+    Lwt.return
+      ( state,
+        Handle_message_result.Error
+          ("Tried to initialize when already initialized", stack) )
+  | (Initializing, _) ->
+    let stack = Utils.Callstack (Exception.get_current_callstack_string 100) in
+    Lwt.return
+      ( state,
+        Handle_message_result.Error
+          ("IDE services have not yet been initialized", stack) )
+  | (Failed_to_initialize (error_message, stack), _) ->
+    Lwt.return
+      ( state,
+        Handle_message_result.Error
+          ( Printf.sprintf "IDE services failed to initialize: %s" error_message,
+            stack ) )
+  | (Initialized initialized_state, File_opened { file_path; file_contents }) ->
+    let path =
+      file_path |> Path.to_string |> Relative_path.create_detect_prefix
+    in
+    let (state, _, _) =
+      make_context_from_file_input
+        initialized_state
+        path
+        (ServerCommandTypes.FileContent file_contents)
+    in
+    Lwt.return (state, Handle_message_result.Response ())
+  | (Initialized initialized_state, Hover document_location) ->
+    let (state, ctx, entry) =
+      make_context_from_document_location initialized_state document_location
+    in
+    let result =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerHover.go_quarantined
+            ~ctx
+            ~entry
+            ~line:document_location.ClientIdeMessage.line
+            ~column:document_location.ClientIdeMessage.column)
+    in
+    Lwt.return (state, Handle_message_result.Response result)
+  (* Autocomplete *)
+  | ( Initialized initialized_state,
+      Completion
+        { ClientIdeMessage.Completion.document_location; is_manually_invoked }
+    ) ->
+    (* Update the state of the world with the document as it exists in the IDE *)
+    let (state, ctx, entry) =
+      make_context_from_document_location initialized_state document_location
+    in
+    let sienv = !(initialized_state.server_env.ServerEnv.local_symbol_table) in
+    let result =
+      ServerAutoComplete.go_ctx
+        ~ctx
+        ~entry
+        ~sienv
+        ~is_manually_invoked
+        ~line:document_location.line
+        ~column:document_location.column
+    in
+    Lwt.return (state, Handle_message_result.Response result)
+  (* Autocomplete docblock resolve *)
+  | (Initialized initialized_state, Completion_resolve param) ->
+    let ctx = initialized_state.ctx in
+    ClientIdeMessage.Completion_resolve.(
       let result =
-        {
-          AutocompleteTypes.completions =
-            matches.Utils.With_complete_flag.value;
-          char_at_pos = ' ';
-          is_complete = matches.Utils.With_complete_flag.is_complete;
-        }
-      in
-      Lwt.return (state, Handle_message_result.Response result)
-    (* Autocomplete docblock resolve *)
-    | (Initialized { server_env; _ }, Completion_resolve param) ->
-      ClientIdeMessage.Completion_resolve.(
-        let start_time = Unix.gettimeofday () in
-        let result =
-          ServerDocblockAt.go_docblock_for_symbol
-            ~env:server_env
-            ~symbol:param.symbol
-            ~kind:param.kind
-        in
-        let sienv = !(server_env.ServerEnv.local_symbol_table) in
-        ( if sienv.SearchUtils.sie_log_timings then
-          let _t : float =
-            Hh_logger.log_duration
-              (Printf.sprintf
-                 "[docblock] Search for [%s] [%s]"
-                 param.symbol
-                 (SearchUtils.show_si_kind param.kind))
-              start_time
-          in
-          () );
-        Lwt.return (state, Handle_message_result.Response result))
-    (* Autocomplete docblock resolve *)
-    | (Initialized { server_env; _ }, Completion_resolve_location param) ->
-      ClientIdeMessage.Completion_resolve_location.(
-        let start_time = Unix.gettimeofday () in
-        let contents =
-          Option.value_exn param.document_location.file_contents
-        in
-        let result =
-          ServerDocblockAt.go_docblock_at_contents
-            ~filename:(Path.to_string param.document_location.file_path)
-            ~contents
-            ~line:param.document_location.line
-            ~column:param.document_location.column
-            ~kind:param.kind
-        in
-        let sienv = !(server_env.ServerEnv.local_symbol_table) in
-        ( if sienv.SearchUtils.sie_log_timings then
-          let pathstr = Path.to_string param.document_location.file_path in
-          let msg =
-            Printf.sprintf
-              "[docblock] Search for [%s] line [%d] column [%d] kind [%s]"
-              pathstr
-              param.document_location.line
-              param.document_location.column
-              (SearchUtils.show_si_kind param.kind)
-          in
-          let _t : float = Hh_logger.log_duration msg start_time in
-          () );
-        Lwt.return (state, Handle_message_result.Response result))
-    (* Document highlighting *)
-    | (Initialized { server_env; _ }, Document_highlight document_location) ->
-      let (ctx, entry) =
-        make_context_from_document_location server_env document_location
-      in
-      let results =
-        Provider_utils.with_context ~ctx ~f:(fun () ->
-            ServerHighlightRefs.go_ctx
-              ~ctx
-              ~entry
-              ~line:document_location.line
-              ~column:document_location.column
-              ~tcopt:server_env.ServerEnv.tcopt)
-      in
-      Lwt.return (state, Handle_message_result.Response results)
-    (* Signature help *)
-    | (Initialized { server_env; _ }, Signature_help document_location) ->
-      let (ctx, entry) =
-        make_context_from_document_location server_env document_location
-      in
-      let results =
-        Provider_utils.with_context ~ctx ~f:(fun () ->
-            ServerSignatureHelp.go
-              ~env:server_env
-              ~file:entry.Provider_context.file_input
-              ~line:document_location.line
-              ~column:document_location.column)
-      in
-      Lwt.return (state, Handle_message_result.Response results)
-    (* Go to definition *)
-    | (Initialized { server_env; _ }, Definition document_location) ->
-      let (ctx, entry) =
-        make_context_from_document_location server_env document_location
-      in
-      let result =
-        Provider_utils.with_context ~ctx ~f:(fun () ->
-            ServerGoToDefinition.go_ctx
-              ~ctx
-              ~entry
-              ~line:document_location.ClientIdeMessage.line
-              ~column:document_location.ClientIdeMessage.column)
-      in
-      Lwt.return (state, Handle_message_result.Response result)
-    (* Type Definition *)
-    | (Initialized { server_env; _ }, Type_definition document_location) ->
-      let (ctx, entry) =
-        make_context_from_document_location server_env document_location
-      in
-      let result =
-        Provider_utils.with_context ~ctx ~f:(fun () ->
-            ServerTypeDefinition.go_ctx
-              ~ctx
-              ~entry
-              ~line:document_location.ClientIdeMessage.line
-              ~column:document_location.ClientIdeMessage.column)
-      in
-      Lwt.return (state, Handle_message_result.Response result)
-    (* Document Symbol *)
-    | (Initialized { server_env; _ }, Document_symbol document_identifier) ->
-      let result =
-        match document_identifier.Document_symbol.file_contents with
-        | None -> []
-        | Some file_contents ->
-          FileOutline.outline server_env.ServerEnv.popt file_contents
-      in
-      Lwt.return (state, Handle_message_result.Response result)
-    (* Type Coverage *)
-    | (Initialized { server_env; _ }, Type_coverage document_identifier) ->
-      let document_location =
-        {
-          file_path = document_identifier.file_path;
-          file_contents = Some document_identifier.file_contents;
-          line = 0;
-          column = 0;
-        }
-      in
-      let (ctx, entry) =
-        make_context_from_document_location server_env document_location
-      in
-      let result =
-        Provider_utils.with_context ~ctx ~f:(fun () ->
-            ServerColorFile.go_ctx ~ctx ~entry)
+        ServerDocblockAt.go_docblock_for_symbol
+          ~env:initialized_state.server_env
+          ~ctx
+          ~symbol:param.symbol
+          ~kind:param.kind
       in
       Lwt.return (state, Handle_message_result.Response result))
+  (* Autocomplete docblock resolve *)
+  | (Initialized initialized_state, Completion_resolve_location param) ->
+    ClientIdeMessage.Completion_resolve_location.(
+      let (state, ctx, entry) =
+        make_context_from_document_location
+          initialized_state
+          param.document_location
+      in
+      let result =
+        Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+            ServerDocblockAt.go_docblock_ctx
+              ~ctx
+              ~entry
+              ~line:param.document_location.line
+              ~column:param.document_location.column
+              ~kind:param.kind)
+      in
+      Lwt.return (state, Handle_message_result.Response result))
+  (* Document highlighting *)
+  | (Initialized initialized_state, Document_highlight document_location) ->
+    let (state, ctx, entry) =
+      make_context_from_document_location initialized_state document_location
+    in
+    let results =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerHighlightRefs.go_quarantined
+            ~ctx
+            ~entry
+            ~line:document_location.line
+            ~column:document_location.column)
+    in
+    Lwt.return (state, Handle_message_result.Response results)
+  (* Signature help *)
+  | (Initialized initialized_state, Signature_help document_location) ->
+    let (state, ctx, entry) =
+      make_context_from_document_location initialized_state document_location
+    in
+    let results =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerSignatureHelp.go_quarantined
+            ~env:initialized_state.server_env
+            ~ctx
+            ~entry
+            ~line:document_location.line
+            ~column:document_location.column)
+    in
+    Lwt.return (state, Handle_message_result.Response results)
+  (* Go to definition *)
+  | (Initialized initialized_state, Definition document_location) ->
+    let (state, ctx, entry) =
+      make_context_from_document_location initialized_state document_location
+    in
+    let result =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerGoToDefinition.go_quarantined
+            ~ctx
+            ~entry
+            ~line:document_location.ClientIdeMessage.line
+            ~column:document_location.ClientIdeMessage.column)
+    in
+    Lwt.return (state, Handle_message_result.Response result)
+  (* Type Definition *)
+  | (Initialized initialized_state, Type_definition document_location) ->
+    let (state, ctx, entry) =
+      make_context_from_document_location initialized_state document_location
+    in
+    let result =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerTypeDefinition.go_quarantined
+            ~ctx
+            ~entry
+            ~line:document_location.ClientIdeMessage.line
+            ~column:document_location.ClientIdeMessage.column)
+    in
+    Lwt.return (state, Handle_message_result.Response result)
+  (* Document Symbol *)
+  | (Initialized initialized_state, Document_symbol document_location) ->
+    let (state, ctx, entry) =
+      make_context_from_document_location initialized_state document_location
+    in
+    let result = FileOutline.outline_ctx ~ctx ~entry in
+    Lwt.return (state, Handle_message_result.Response result)
+  (* Type Coverage *)
+  | (Initialized initialized_state, Type_coverage document_identifier) ->
+    let document_location =
+      {
+        file_path = document_identifier.file_path;
+        file_contents = Some document_identifier.file_contents;
+        line = 0;
+        column = 0;
+      }
+    in
+    let (state, ctx, entry) =
+      make_context_from_document_location initialized_state document_location
+    in
+    let result =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerColorFile.go_quarantined ~ctx ~entry)
+    in
+    Lwt.return (state, Handle_message_result.Response result)
 
 let write_message
     ~(out_fd : Lwt_unix.file_descr)
@@ -503,16 +552,50 @@ let write_message
   let%lwt (_ : int) = Marshal_tools_lwt.to_fd_with_preamble out_fd message in
   Lwt.return_unit
 
-let serve
-    (type a) ~(in_fd : Lwt_unix.file_descr) ~(out_fd : Lwt_unix.file_descr) :
+let write_status ~(out_fd : Lwt_unix.file_descr) (state : state) : unit Lwt.t =
+  match state with
+  | Initializing
+  | Failed_to_initialize _ ->
+    Lwt.return_unit
+  | Initialized { changed_files_to_process; peak_changed_files_queue_size; _ }
+    ->
+    if Path.Set.is_empty changed_files_to_process then
+      let%lwt () =
+        write_message
+          ~out_fd
+          ~message:
+            (ClientIdeMessage.Notification ClientIdeMessage.Done_processing)
+      in
+      Lwt.return_unit
+    else
+      let total = peak_changed_files_queue_size in
+      let processed = total - Path.Set.cardinal changed_files_to_process in
+      let%lwt () =
+        write_message
+          ~out_fd
+          ~message:
+            (ClientIdeMessage.Notification
+               (ClientIdeMessage.Processing_files
+                  { ClientIdeMessage.Processing_files.processed; total }))
+      in
+      Lwt.return_unit
+
+let serve ~(in_fd : Lwt_unix.file_descr) ~(out_fd : Lwt_unix.file_descr) :
     unit Lwt.t =
+  let rec flush_event_logger () : unit Lwt.t =
+    let%lwt () = Lwt_unix.sleep 0.5 in
+    Lwt.async EventLoggerLwt.flush;
+    flush_event_logger ()
+  in
   let rec pump_message_queue (message_queue : message_queue) : unit Lwt.t =
     try%lwt
-      let%lwt (message : a ClientIdeMessage.t) =
+      let%lwt { ClientIdeMessage.tracking_id; message } =
         Marshal_tools_lwt.from_fd_with_preamble in_fd
       in
       let is_queue_open =
-        Lwt_message_queue.push message_queue (Message message)
+        Lwt_message_queue.push
+          message_queue
+          (Message { ClientIdeMessage.tracking_id; message })
       in
       match message with
       | ClientIdeMessage.Shutdown () -> Lwt.return_unit
@@ -543,65 +626,125 @@ let serve
         Path.Set.remove changed_files_to_process next_file
       in
       let%lwt server_env =
-        ClientIdeIncremental.process_changed_file server_env next_file
+        try%lwt
+          let%lwt server_env =
+            ClientIdeIncremental.process_changed_file server_env next_file
+          in
+          Lwt.return server_env
+        with exn ->
+          let e = Exception.wrap exn in
+          HackEventLogger.uncaught_exception exn;
+          Hh_logger.exception_
+            e
+            ~prefix:
+              (Printf.sprintf
+                 "Uncaught exception when processing changed file: %s"
+                 (Path.to_string next_file));
+          Lwt.return server_env
       in
-      let%lwt () =
+      let%lwt state =
         if Path.Set.is_empty changed_files_to_process then
-          let message = ClientIdeMessage.(Notification Done_processing) in
-          let%lwt () = write_message ~out_fd ~message in
-          Lwt.return_unit
+          Lwt.return
+            (Initialized
+               {
+                 state with
+                 server_env;
+                 changed_files_to_process;
+                 peak_changed_files_queue_size = 0;
+               })
         else
-          Lwt.return_unit
+          Lwt.return
+            (Initialized { state with server_env; changed_files_to_process })
       in
-      let state =
-        Initialized { state with server_env; changed_files_to_process }
-      in
+      let%lwt () = write_status ~out_fd state in
       handle_messages { t with state }
     | t ->
       let%lwt message = Lwt_message_queue.pop t.message_queue in
       (match message with
       | None -> Lwt.return_unit
-      | Some (Message message) ->
+      | Some (Message { ClientIdeMessage.tracking_id; message }) ->
+        let unblocked_time = Unix.gettimeofday () in
         let%lwt state =
           try%lwt
-            let%lwt (state, response) = handle_message t.state message in
+            let%lwt (state, response) =
+              handle_message t.state tracking_id message
+            in
             match response with
             | Handle_message_result.Notification ->
               (* No response needed for notifications. *)
               Lwt.return state
             | Handle_message_result.Response response ->
-              let response = ClientIdeMessage.Response (Ok response) in
-              let%lwt () = write_message ~out_fd ~message:response in
+              let message =
+                ClientIdeMessage.Response
+                  { ClientIdeMessage.response = Ok response; unblocked_time }
+              in
+              let%lwt () = write_message ~out_fd ~message in
               Lwt.return state
-            | Handle_message_result.Error message ->
-              let response = ClientIdeMessage.Response (Error message) in
-              let%lwt () = write_message ~out_fd ~message:response in
+            | Handle_message_result.Error (message, Utils.Callstack stack) ->
+              let message =
+                ClientIdeMessage.Response
+                  {
+                    ClientIdeMessage.response =
+                      Error { Marshal_tools.message; stack };
+                    unblocked_time;
+                  }
+              in
+              let%lwt () = write_message ~out_fd ~message in
               Lwt.return state
           with e ->
-            let stack = Printexc.get_backtrace () in
-            Hh_logger.exc ~prefix:"[ide-daemon] exception: " ~stack e;
+            let e = Exception.wrap e in
+            let message = Exception.to_string e in
+            log "Exception: %s" message;
+
+            (* If we were responding to a message, but threw an exception, write
+            that exception as a response. *)
+            let message =
+              ClientIdeMessage.Response
+                {
+                  ClientIdeMessage.response =
+                    Error
+                      {
+                        Marshal_tools.message;
+                        stack = Exception.get_backtrace_string e;
+                      };
+                  unblocked_time;
+                }
+            in
+            let%lwt () = write_message ~out_fd ~message in
             Lwt.return t.state
         in
         handle_messages { t with state })
   in
   try%lwt
     let message_queue = Lwt_message_queue.create () in
+    let flusher_promise = flush_event_logger () in
     let%lwt () = handle_messages { message_queue; state = Initializing }
     and () = pump_message_queue message_queue in
+    Lwt.cancel flusher_promise;
     Lwt.return_unit
   with e ->
     let e = Exception.wrap e in
-    log
-      "Exception occurred while handling RPC call: %s"
-      (Exception.to_string e);
+    log "Exception occurred while handling RPC call: %s" (Exception.to_string e);
     Lwt.return_unit
 
-let daemon_main () (channels : ('a, 'b) Daemon.channel_pair) : unit =
+let daemon_main
+    (args : ClientIdeMessage.daemon_args)
+    (channels : ('a, 'b) Daemon.channel_pair) : unit =
   Printexc.record_backtrace true;
   let (ic, oc) = channels in
   let in_fd = Lwt_unix.of_unix_file_descr (Daemon.descr_of_in_channel ic) in
   let out_fd = Lwt_unix.of_unix_file_descr (Daemon.descr_of_out_channel oc) in
+  let daemon_init_id =
+    Printf.sprintf
+      "%s.%s"
+      args.ClientIdeMessage.init_id
+      (Random_id.short_string ())
+  in
+  HackEventLogger.serverless_ide_init ~init_id:daemon_init_id;
+  if args.ClientIdeMessage.verbose then
+    Hh_logger.Level.set_min_level Hh_logger.Level.Debug;
   Lwt_main.run (serve ~in_fd ~out_fd)
 
-let daemon_entry_point : (unit, unit, unit) Daemon.entry =
+let daemon_entry_point : (ClientIdeMessage.daemon_args, unit, unit) Daemon.entry
+    =
   Daemon.register_entry_point "ClientIdeService" daemon_main

@@ -1,6 +1,6 @@
 <?hh
 
-function ref(&$x) {
+function ref(inout $x) {
 }
 
 function foo($r, inout $a, inout $b, $q, inout $c, ...$_) {
@@ -95,8 +95,8 @@ function main() {
     inout $b[0],
     $b,
     inout $c[0],
-    ref(&$a),
-    ref(&$c),
+    ref(inout $a),
+    ref(inout $c),
   );
   var_dump($a[0], $b[0], $c[0]);
 
@@ -106,7 +106,7 @@ function main() {
   $a->y = 'two';
   $saved = $a;
   foo(
-    &$a,
+    inout $a,
     inout $a->x,
     inout $a,
     $a,
@@ -117,7 +117,7 @@ function main() {
   Herp::$derp = 'foo';
   $a = 'Herp';
   foo(
-    &$a,
+    inout $a,
     inout $a::$derp,
     inout $a,
     $a,
@@ -130,7 +130,7 @@ function main() {
   $a->y = 'two';
   $saved = $a;
   foo(
-    &$a,
+    inout $a,
     inout $a,
     inout $a->x,
     $a,
@@ -143,7 +143,7 @@ function main() {
   $a->y = 'two';
   $saved = $a;
   foo(
-    &$a,
+    inout $a,
     inout $a->x,
     inout $a->y,
     $a = 'oops',

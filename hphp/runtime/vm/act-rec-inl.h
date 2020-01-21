@@ -16,8 +16,6 @@
 
 #include "hphp/util/compilation-flags.h"
 
-#include "hphp/runtime/vm/func.h"
-
 namespace HPHP {
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -40,136 +38,41 @@ inline ActRec* ActRec::sfp() const {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-inline int32_t ActRec::numArgs() const {
-  return m_numArgsAndFlags & kNumArgsMask;
-}
-
-inline ActRec::Flags ActRec::flags() const {
-  return static_cast<Flags>(m_numArgsAndFlags & kFlagsMask);
-}
-
 inline bool ActRec::localsDecRefd() const {
-  return flags() & LocalsDecRefd;
-}
-
-inline bool ActRec::resumed() const {
-  return (flags() & kExecutionModeMask) == InResumed;
+  return m_callOffAndFlags & (1 << LocalsDecRefd);
 }
 
 inline bool ActRec::isAsyncEagerReturn() const {
-  return (flags() & kExecutionModeMask) == AsyncEagerRet;
+  return m_callOffAndFlags & (1 << AsyncEagerRet);
 }
 
-inline bool ActRec::magicDispatch() const {
-  return (flags() & kExecutionModeMask) == MagicDispatch;
+inline Offset ActRec::callOffset() const {
+  return m_callOffAndFlags >> CallOffsetStart;
 }
 
-inline bool ActRec::isDynamicCall() const {
-  return flags() & DynamicCall;
+inline void ActRec::initCallOffset(Offset offset) {
+  m_callOffAndFlags = offset << CallOffsetStart;
 }
 
-inline bool ActRec::isFCallM() const {
-  return flags() & MultiReturn;
-}
-
-inline bool ActRec::hasReifiedGenerics() const {
-  return flags() & HasReifiedGenerics;
-}
-
-inline uint32_t ActRec::encodeNumArgsAndFlags(uint32_t numArgs, Flags flags) {
-  assertx((numArgs & kFlagsMask) == 0);
-  assertx((uint32_t{flags} & kNumArgsMask) == 0);
-  return numArgs | flags;
-}
-
-inline void ActRec::initNumArgs(uint32_t numArgs) {
-  m_numArgsAndFlags = encodeNumArgsAndFlags(numArgs, Flags::None);
-}
-
-inline void ActRec::setNumArgs(uint32_t numArgs) {
-  m_numArgsAndFlags = encodeNumArgsAndFlags(numArgs, flags());
+inline uint32_t ActRec::encodeCallOffsetAndFlags(Offset offset,
+                                                 uint32_t flags) {
+  assertx(!(flags & ~((1 << AsyncEagerRet)|(1 << LocalsDecRefd))));
+  return (offset << CallOffsetStart) | flags;
 }
 
 inline void ActRec::setLocalsDecRefd() {
-  m_numArgsAndFlags |= LocalsDecRefd;
+  m_callOffAndFlags |= 1 << LocalsDecRefd;
 }
 
-inline void ActRec::setDynamicCall() {
-  m_numArgsAndFlags |= DynamicCall;
+inline int32_t ActRec::numArgs() const {
+  return m_numArgs;
 }
 
-inline void ActRec::setFCallM() {
-  m_numArgsAndFlags |= MultiReturn;
-}
-
-inline void ActRec::setHasReifiedGenerics() {
-  m_numArgsAndFlags |= HasReifiedGenerics;
-}
-
-inline void ActRec::setResumed() {
-  assertx((flags() & ~(AsyncEagerRet | DynamicCall | HasReifiedGenerics))
-         == Flags::None);
-  m_numArgsAndFlags = encodeNumArgsAndFlags(
-    numArgs(),
-    static_cast<Flags>(InResumed | (flags() & DynamicCall))
-  );
-}
-
-inline void ActRec::setAsyncEagerReturn() {
-  assertx((flags() & ~(DynamicCall | HasReifiedGenerics)) == Flags::None);
-  m_numArgsAndFlags = encodeNumArgsAndFlags(
-    numArgs(),
-    static_cast<Flags>(AsyncEagerRet |
-                       (flags() & (DynamicCall | HasReifiedGenerics)))
-  );
-}
-
-inline void ActRec::setMagicDispatch(StringData* invName) {
-  assertx(!resumed());
-  m_numArgsAndFlags |= MagicDispatch;
-  m_invName = invName;
-}
-
-inline StringData* ActRec::clearMagicDispatch() {
-  assertx(magicDispatch());
-  auto const invName = getInvName();
-  m_numArgsAndFlags = encodeNumArgsAndFlags(
-    numArgs(),
-    static_cast<Flags>(flags() & ~MagicDispatch)
-  );
-  trashVarEnv();
-  return invName;
+inline void ActRec::setNumArgs(uint32_t numArgs) {
+  m_numArgs = numArgs;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-inline void* ActRec::encodeThis(ObjectData* obj) {
-  return obj;
-}
-
-inline void* ActRec::encodeClass(const Class* cls) {
-  return cls
-    ? (void*)(reinterpret_cast<uintptr_t>(cls) | kHasClassBit)
-    : nullptr;
-}
-
-inline bool ActRec::checkThis(void* p) {
-  assertx(p);
-  return !(reinterpret_cast<uintptr_t>(p) & kHasClassBit);
-}
-
-inline bool ActRec::checkThisOrNull(void* p) {
-  return !(reinterpret_cast<uintptr_t>(p) & kHasClassBit);
-}
-
-inline ObjectData* ActRec::decodeThis(void* p) {
-  return checkThisOrNull(p) ? (ObjectData*)p : nullptr;
-}
-
-inline Class* ActRec::decodeClass(void* p) {
-  return checkThisOrNull(p) ? nullptr :
-    (Class*)(reinterpret_cast<uintptr_t>(p) - kHasClassBit);
-}
 
 inline void ActRec::setThisOrClass(void* objOrCls) {
   assertx(m_func->implCls());
@@ -183,12 +86,27 @@ inline void ActRec::setThisOrClassAllowNull(void* objOrCls) {
 inline bool ActRec::hasThis() const {
   assertx(m_func->implCls());
   assertx(reinterpret_cast<uintptr_t>(m_thisUnsafe) != kTrashedThisSlot);
-  return checkThis(m_thisUnsafe);
+  return use_lowptr ? !is_low_mem(m_thisUnsafe) : !m_func->isStatic();
 }
 
 inline bool ActRec::hasClass() const {
   assertx(m_func->implCls());
-  return !checkThis(m_thisUnsafe);
+  assertx(reinterpret_cast<uintptr_t>(m_thisUnsafe) != kTrashedThisSlot);
+  return use_lowptr ? is_low_mem(m_thisUnsafe) : m_func->isStatic();
+}
+
+inline bool ActRec::hasThisInPrologue() const {
+  assertx(m_func->implCls());
+  return use_lowptr
+    ? !is_low_mem(m_thisUnsafe)
+    : !m_func->isStaticInPrologue();
+}
+
+inline bool ActRec::hasClassInPrologue() const {
+  assertx(m_func->implCls());
+  return use_lowptr
+    ? is_low_mem(m_thisUnsafe)
+    : m_func->isStaticInPrologue();
 }
 
 inline void* ActRec::getThisOrClass() const {
@@ -207,8 +125,17 @@ inline ObjectData* ActRec::getThis() const {
 
 inline Class* ActRec::getClass() const {
   assertx(hasClass());
-  return reinterpret_cast<Class*>(
-    reinterpret_cast<uintptr_t>(m_clsUnsafe) - kHasClassBit);
+  return m_clsUnsafe;
+}
+
+inline ObjectData* ActRec::getThisInPrologue() const {
+  assertx(hasThisInPrologue());
+  return m_thisUnsafe;
+}
+
+inline Class* ActRec::getClassInPrologue() const {
+  assertx(hasClassInPrologue());
+  return m_clsUnsafe;
 }
 
 inline void ActRec::setThis(ObjectData* val) {
@@ -217,30 +144,14 @@ inline void ActRec::setThis(ObjectData* val) {
 }
 
 inline void ActRec::setClass(Class* val) {
-  assertx(val && m_func->implCls() && !(m_func->attrs() & AttrRequiresThis));
-  m_clsUnsafe = reinterpret_cast<Class*>(
-    reinterpret_cast<uintptr_t>(val) | kHasClassBit);
+  assertx(val && m_func->implCls() && (m_func->isStaticInPrologue()));
+  m_clsUnsafe = val;
 }
 
 inline void ActRec::trashThis() {
   if (debug) m_thisUnsafe = reinterpret_cast<ObjectData*>(kTrashedThisSlot);
 }
 
-/////////////////////////////////////////////////////////////////////////////
-
-inline void ActRec::setReifiedGenerics(ArrayData* rg) {
-  m_numArgsAndFlags |= HasReifiedGenerics;
-  m_reifiedGenerics.set(0, rg);
-}
-
-inline ArrayData* ActRec::getReifiedGenerics() const {
-  return m_reifiedGenerics.ptr();
-}
-
-inline void ActRec::trashReifiedGenerics() {
-  if (!debug) return;
-  m_reifiedGenerics = ReifiedGenericsPtr(kTrashedReifiedGenericsSlot);
-}
 /////////////////////////////////////////////////////////////////////////////
 
 inline void ActRec::trashVarEnv() {
@@ -254,13 +165,7 @@ inline bool ActRec::checkVarEnv() const {
 
 inline bool ActRec::hasVarEnv() const {
   assertx(checkVarEnv());
-  assertx(!magicDispatch());
-  return m_varEnv && !(reinterpret_cast<uintptr_t>(m_varEnv) & kExtraArgsBit);
-}
-
-inline bool ActRec::hasExtraArgs() const {
-  assertx(checkVarEnv());
-  return reinterpret_cast<uintptr_t>(m_extraArgs) & kExtraArgsBit;
+  return m_varEnv;
 }
 
 inline VarEnv* ActRec::getVarEnv() const {
@@ -268,29 +173,8 @@ inline VarEnv* ActRec::getVarEnv() const {
   return m_varEnv;
 }
 
-inline ExtraArgs* ActRec::getExtraArgs() const {
-  if (!hasExtraArgs()) return nullptr;
-  return reinterpret_cast<ExtraArgs*>(
-    reinterpret_cast<uintptr_t>(m_extraArgs) - kExtraArgsBit);
-}
-
-inline StringData* ActRec::getInvName() const {
-  assertx(magicDispatch());
-  assertx(checkVarEnv());
-  return m_invName;
-}
-
 inline void ActRec::setVarEnv(VarEnv* val) {
   m_varEnv = val;
-}
-
-inline void ActRec::setExtraArgs(ExtraArgs* val) {
-  m_extraArgs = reinterpret_cast<ExtraArgs*>(
-    reinterpret_cast<uintptr_t>(val) | kExtraArgsBit);
-}
-
-inline void ActRec::resetExtraArgs() {
-  m_extraArgs = nullptr;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

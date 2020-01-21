@@ -10,9 +10,10 @@ while (($file = readdir($dir)) !== FALSE) {
     }
 }
 closedir($dir);
-sort(&$files);
+sort(inout $files);
+$info = null;
 foreach($files as $file) {
-    $result[$file] = getimagesize(dirname(__FILE__)."/$file");
+    $result[$file] = getimagesize(dirname(__FILE__)."/$file", inout $info);
     $result[$file] = image_type_to_mime_type($result[$file][2]);
 }
 var_dump($result);

@@ -73,9 +73,7 @@ class visitor =
 
     method method_call env target_type class_name method_id =
       let (pos, method_name) = method_id in
-      let method_fullname =
-        combine_name (Some class_name) (Some method_name)
-      in
+      let method_fullname = combine_name (Some class_name) (Some method_name) in
       self#fun_call env target_type method_fullname pos
 
     method! on_fun_ env f =
@@ -112,7 +110,7 @@ class visitor =
       in
       let special_fun_acc =
         let special_fun id = self#fun_call env Function id pos in
-        let module SF = SN.SpecialFunctions in
+        let module SF = SN.AutoimportedFunctions in
         match expr_ with
         | Tast.Fun_id _ -> special_fun SF.fun_
         | Tast.Method_id _ -> special_fun SF.inst_meth
@@ -123,7 +121,7 @@ class visitor =
       let ( + ) = self#plus in
       special_fun_acc + acc + super#on_expr env expr
 
-    method! on_Call env ct e hl el uel =
+    method! on_Call env ct e hl el unpacked_element =
       let acc =
         match snd e with
         | Tast.Id (pos, name) -> self#fun_call env Function name pos
@@ -140,7 +138,7 @@ class visitor =
           |> List.fold ~init:self#zero ~f:self#plus
         | _ -> self#zero
       in
-      self#plus acc (super#on_Call env ct e hl el uel)
+      self#plus acc (super#on_Call env ct e hl el unpacked_element)
   end
 
 let find_fun_calls tasts =

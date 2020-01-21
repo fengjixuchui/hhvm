@@ -16,7 +16,7 @@
 
 #include "hphp/runtime/vm/jit/stack-overflow.h"
 
-#include "hphp/runtime/base/runtime-error.h"
+#include "hphp/runtime/base/exceptions.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/func.h"
@@ -29,19 +29,14 @@
 #include "hphp/runtime/vm/jit/translator-inline.h"
 
 #include "hphp/util/assertions.h"
-#include "hphp/util/compilation-flags.h"
 
 namespace HPHP { namespace jit {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-bool checkCalleeStackOverflow(const ActRec* calleeAR) {
-  auto const func = calleeAR->func();
-  auto const limit = func->maxStackCells() + kStackCheckPadding;
-
-  const void* const needed_top =
-    reinterpret_cast<const TypedValue*>(calleeAR) - limit;
-
+bool checkCalleeStackOverflow(const TypedValue* calleeFP, const Func* callee) {
+  auto const limit = callee->maxStackCells() + kStackCheckPadding;
+  const void* const needed_top = calleeFP - limit;
   const void* const lower_limit =
     static_cast<char*>(vmRegsUnsafe().stack.getStackLowAddress()) +
     Stack::sSurprisePageSize;
@@ -62,10 +57,11 @@ void handleStackOverflow(ActRec* calleeAR) {
   unsafeRegs.fp = calleeAR;
   unsafeRegs.pc = calleeAR->func()->getEntry();
   unsafeRegs.stack.top() =
-    reinterpret_cast<Cell*>(calleeAR) - calleeAR->func()->numSlotsInFrame();
+    reinterpret_cast<TypedValue*>(calleeAR) - calleeAR->func()->numSlotsInFrame();
+  unsafeRegs.jitReturnAddr = nullptr;
   tl_regState = VMRegState::CLEAN;
 
-  throw FatalErrorException("Stack overflow");
+  throw_stack_overflow();
 }
 
 void handlePossibleStackOverflow(ActRec* calleeAR) {
@@ -74,8 +70,8 @@ void handlePossibleStackOverflow(ActRec* calleeAR) {
   // If it's not an overflow, it was probably a surprise flag trip.  But we
   // can't assert that it is because background threads are allowed to clear
   // surprise bits concurrently, so it could be cleared again by now.
-  if (!checkCalleeStackOverflow(calleeAR)) return;
-  auto const func = calleeAR->func();
+  auto const calleeFP = reinterpret_cast<const TypedValue*>(calleeAR);
+  if (!checkCalleeStackOverflow(calleeFP, calleeAR->func())) return;
 
   /*
    * Stack overflows in this situation are a slightly different case than
@@ -87,42 +83,21 @@ void handlePossibleStackOverflow(ActRec* calleeAR) {
    * it to sSurprisePageSize, so it's harmless).
    *
    * Most importantly, it might have pulled args /off/ the eval stack and
-   * shoved them into an ExtraArgs on the calleeAR, or into an array for a
-   * variadic capture param.  We need to get things into an appropriate state
-   * for handleStackOverflow to be able to synchronize things to throw from the
-   * PC of the caller's FCall.
+   * shoved them into an array for a variadic capture param.  We need to get
+   * things into an appropriate state for handleStackOverflow to be able to
+   * synchronize things to throw from the PC of the caller's FCall.
    *
    * We don't actually need to make sure the stack is the right depth for the
    * FCall: the unwinder will expect to see a pre-live ActRec (and we'll set it
    * up so it will), but it doesn't care how many args (or what types of args)
    * are below it on the stack.
    *
-   * It is tempting to try to free the ExtraArgs structure here, but it's ok to
-   * not to:
-   *
-   *     o We're about to raise an uncatchable fatal, which will end the
-   *       request.  We leak ExtraArgs in other similar situations for this too
-   *       (e.g. if called via FCall with unpack and then a stack overflow
-   *       happens).
-   *
-   *     o If we were going to free the ExtraArgs structure, we'd need to make
-   *       sure we can re-enter the VM right now, which means performing a
-   *       manual fixup first.  (We aren't in a situation where we can do a
-   *       normal VMRegAnchor fixup right now.)  But moreover we shouldn't be
-   *       running destructors if a fatal is happening anyway, so we don't want
-   *       that either.
-   *
-   * So, all that boils down to this: we ignore the extra args field (the
-   * unwinder will not consult the ExtraArgs field because it believes the
-   * ActRec is pre-live).  And set calleeAR->m_numArgs to indicate how many
-   * things are actually on the stack (so handleStackOverflow knows what to set
-   * the vmsp to)---we just set it to the function's numLocals, which might
-   * mean decreffing some uninits unnecessarily, but that's ok.
+   * So, all that boils down to this: we set calleeAR->m_numArgs to indicate
+   * how many things are actually on the stack (so handleStackOverflow knows
+   * what to set the vmsp to)---we just set it to the function's numLocals,
+   * which might mean decreffing some uninits unnecessarily, but that's ok.
    */
 
-  if (debug && func->attrs() & AttrMayUseVV && calleeAR->getExtraArgs()) {
-    calleeAR->trashVarEnv();
-  }
   calleeAR->setNumArgs(calleeAR->m_func->numLocals());
   handleStackOverflow(calleeAR);
 }

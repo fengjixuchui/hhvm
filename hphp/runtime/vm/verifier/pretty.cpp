@@ -61,7 +61,7 @@ void pretty_print(const FuncEmitter* fe, std::ostream& out) {
     if (param.userType) {
       out << " (" << param.userType->data() << ")";
     }
-    if (param.funcletOff != InvalidAbsoluteOffset) {
+    if (param.funcletOff != kInvalidOffset) {
       out << " DV" << " at " << param.funcletOff;
       if (param.phpCode) {
         out << " = " << param.phpCode->data();
@@ -82,10 +82,10 @@ void pretty_print(const FuncEmitter* fe, std::ostream& out) {
     out << std::endl;
   }
 
-  if (fe->repoReturnType.tag() != RepoAuthType::Tag::Gen) {
+  if (fe->repoReturnType.tag() != RepoAuthType::Tag::Cell) {
     out << "repoReturnType: " << show(fe->repoReturnType) << '\n';
   }
-  if (fe->repoAwaitedReturnType.tag() != RepoAuthType::Tag::Gen) {
+  if (fe->repoAwaitedReturnType.tag() != RepoAuthType::Tag::Cell) {
     out << "repoAwaitedReturnType: " << show(fe->repoAwaitedReturnType) << '\n';
   }
   out << "maxStackCells: " << fe->maxStackCells << '\n'

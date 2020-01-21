@@ -21,13 +21,14 @@
 #include "hphp/runtime/base/rds-header.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/vm/bytecode.h"
+#include "hphp/runtime/vm/call-flags.h"
 
 /*
  * This file contains accessors for the three primary VM registers:
  *
  * vmpc(): PC pointing to the currently executing bytecode instruction
  * vmfp(): ActRec* pointing to the current frame
- * vmsp(): Cell* pointing to the top of the eval stack
+ * vmsp(): TypedValue* pointing to the top of the eval stack
  *
  * The registers are physically located in the RDS header struct (defined in
  * runtime/base/rds-header.h), allowing efficient access from translated code
@@ -94,7 +95,7 @@ inline bool isValidVMStackAddress(const void* addr) {
   return vmRegsUnsafe().stack.isValidAddress(uintptr_t(addr));
 }
 
-inline Cell*& vmsp() {
+inline TypedValue*& vmsp() {
   return vmRegs().stack.top();
 }
 
@@ -134,7 +135,7 @@ inline void assert_native_stack_aligned() {
 #endif
 }
 
-inline void interp_set_regs(ActRec* ar, Cell* sp, Offset pcOff) {
+inline void interp_set_regs(ActRec* ar, TypedValue* sp, Offset pcOff) {
   assertx(tl_regState == VMRegState::DIRTY);
   tl_regState = VMRegState::CLEAN;
   vmfp() = ar;
@@ -175,13 +176,6 @@ struct VMRegAnchor {
   enum Mode { Hard, Soft };
 
   explicit VMRegAnchor(Mode mode = Hard);
-
-  /*
-   * Some C++ entry points have an ActRec prepared from after a call
-   * instruction.  Instantiating a VMRegAnchor with an ActRec argument syncs us
-   * to right after the call instruction.
-   */
-  explicit VMRegAnchor(ActRec* ar);
 
   ~VMRegAnchor() {
     if (m_old < VMRegState::GUARDED_THRESHOLD) {

@@ -58,7 +58,32 @@ void cgLdObjClass(IRLS& env, const IRInstruction* inst) {
 IMPL_OPCODE_CALL(AllocObj)
 IMPL_OPCODE_CALL(AllocObjReified)
 
+namespace {
+
+template <typename T> void
+objectPropsRawInitImpl(Vout& v, Vreg base, size_t props);
+
+template <> void
+objectPropsRawInitImpl<tv_layout::TvArray>(Vout& v, Vreg base, size_t props) {}
+
+template <> void
+objectPropsRawInitImpl<tv_layout::Tv7Up>(Vout& v, Vreg base, size_t props) {
+  if (props == 0) return;
+
+  auto const last_type_word_offset =
+    sizeof(ObjectData) +
+    8 * sizeof(uint64_t) * ((props - 1) / 7);
+
+  v << storeqi{0, base[last_type_word_offset]};
+}
+
+static auto constexpr objectPropsRawInit = &objectPropsRawInitImpl<ObjectProps>;
+
+}
+
+
 void cgNewInstanceRaw(IRLS& env, const IRInstruction* inst) {
+  auto& v = vmain(env);
   auto const dst = dstLoc(env, inst, 0).reg();
   auto const cls = inst->extra<NewInstanceRaw>()->cls;
 
@@ -89,13 +114,15 @@ void cgNewInstanceRaw(IRLS& env, const IRInstruction* inst) {
   if (memoSize > 0) args.imm(memoSize);
 
   cgCallHelper(
-    vmain(env),
+    v,
     env,
     target,
     callDest(dst),
     SyncOptions::Sync,
     args
   );
+  objectPropsRawInit(v, dst, cls->numDeclProperties());
+
 }
 
 void cgConstructInstance(IRLS& env, const IRInstruction* inst) {
@@ -111,12 +138,44 @@ void cgConstructInstance(IRLS& env, const IRInstruction* inst) {
 void cgConstructClosure(IRLS& env, const IRInstruction* inst) {
   auto const dst = dstLoc(env, inst, 0).reg();
   auto const cls = inst->extra<ConstructClosure>()->cls;
+  assertx(cls);
+  auto& v = vmain(env);
 
-  auto const args = argGroup(env, inst).immPtr(cls);
-  cgCallHelper(vmain(env), env,
-               CallSpec::direct(RuntimeOption::RepoAuthoritative
-                 ? createClosureRepoAuth : createClosure),
-               callDest(dst), SyncOptions::None, args);
+  // c_Closure is not allowed to use the fast path, as the constructor will
+  // throw immediately.  No other closure's constructor is able to throw, so we
+  // are able to make some optimizations that would be unsafe if unwinding.
+  if (!RuntimeOption::RepoAuthoritative || cls == c_Closure::classof()) {
+    auto const args = argGroup(env, inst).immPtr(cls);
+    cgCallHelper(vmain(env), env, CallSpec::direct(createClosure),
+                 callDest(dst), SyncOptions::None, args);
+  } else {
+    auto const size = c_Closure::size(cls);
+
+    auto const index = MemoryManager::size2Index(size);
+    auto const size_class = MemoryManager::sizeIndex2Size(index);
+
+    // We don't specialize the large allocation case since it is unlikely.
+    auto const target = index < kNumSmallSizes
+                        ? CallSpec::direct(&createClosureRepoAuthRawSmall)
+                        : CallSpec::direct(&createClosureRepoAuth);
+
+    auto args = argGroup(env, inst).immPtr(cls);
+    if (index < kNumSmallSizes) {
+      args.imm(size_class).imm(index);
+    }
+
+    cgCallHelper(vmain(env), env, target,
+                 callDest(dst), SyncOptions::None, args);
+
+    objectPropsRawInit(v, dst, cls->numDeclProperties());
+  }
+
+  if (inst->src(0)->isA(TNullptr)) {
+    v << storeqi{0, dst[c_Closure::ctxOffset()]};
+  } else {
+    auto const ctx = srcLoc(env, inst, 0).reg();
+    v << store{ctx, dst[c_Closure::ctxOffset()]};
+  }
 }
 
 IMPL_OPCODE_CALL(Clone)
@@ -132,8 +191,8 @@ void implInitObjPropsFast(Vout& v, IRLS& env, const IRInstruction* inst,
   // memcpy the values from the class property init vec.
   auto args = argGroup(env, inst)
     .addr(dst, safe_cast<int32_t>(sizeof(ObjectData)))
-    .imm(reinterpret_cast<uintptr_t>(&cls->declPropInit()[0]))
-    .imm(cellsToBytes(nprops));
+    .imm(reinterpret_cast<uintptr_t>(cls->declPropInit().data()))
+    .imm(ObjectProps::sizeFor(nprops));
 
   cgCallHelper(v, env, CallSpec::direct(memcpy),
                kVoidDest, SyncOptions::None, args);
@@ -196,18 +255,21 @@ void cgInitObjProps(IRLS& env, const IRInstruction* inst) {
       auto const propInitVec = v.makeReg();
       auto const propData = v.makeReg();
       v << load{Vreg(rvmtl())[propHandle], propInitVec};
-      v << load{propInitVec[Class::PropInitVec::dataOff()], propData};
 
       auto args = argGroup(env, inst)
-        .addr(obj, safe_cast<int32_t>(sizeof(ObjectData)))
-        .reg(propData);
+        .addr(obj, safe_cast<int32_t>(sizeof(ObjectData)));
 
       if (!cls->hasDeepInitProps()) {
+        v << load{propInitVec[Class::PropInitVec::dataOff()], propData};
         cgCallHelper(v, env, CallSpec::direct(memcpy), kVoidDest,
-                     SyncOptions::None, args.imm(cellsToBytes(nprops)));
+                     SyncOptions::None,
+                     args
+                     .reg(propData)
+                     .imm(ObjectProps::sizeFor(nprops)));
       } else {
         cgCallHelper(v, env, CallSpec::direct(deepInitHelper),
-                     kVoidDest, SyncOptions::None, args.imm(nprops));
+                     kVoidDest, SyncOptions::None,
+                     args.reg(propInitVec).imm(nprops));
       }
     }
   }

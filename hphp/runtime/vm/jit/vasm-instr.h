@@ -92,6 +92,9 @@ struct Vunit;
   O(popframe, Inone, Un, Dn)\
   O(recordstack, Inone, Un, Dn)\
   O(spill, Inone, U(s), D(d))\
+  O(spillbi, I(s), Un, D(d))\
+  O(spillli, I(s), Un, D(d))\
+  O(spillqi, I(s), Un, D(d))\
   O(reload, Inone, U(s), D(d))\
   O(ssaalias, Inone, U(s), D(d))\
   /* native function abi */\
@@ -104,12 +107,14 @@ struct Vunit;
   O(ret, Inone, U(args), Dn)\
   /* stub function abi */\
   O(stublogue, Inone, Un, Dn)\
+  O(unstublogue, Inone, Un, Dn)\
   O(stubret, Inone, U(args), Dn)\
   O(callstub, I(target), U(args), Dn)\
   O(callfaststub, I(fix), U(args), Dn)\
   O(tailcallstub, I(target), U(args), Dn)\
-  O(stubunwind, Inone, Un, Dn)\
-  O(stubtophp, Inone, U(fp), Dn)\
+  O(tailcallstubr, Inone, U(target) U(args), Dn)\
+  O(stubunwind, Inone, Un, D(d))\
+  O(stubtophp, Inone, Un, Dn)\
   O(loadstubret, Inone, Un, D(d))\
   /* php function abi */\
   O(defvmsp, Inone, Un, D(d))\
@@ -121,12 +126,11 @@ struct Vunit;
   O(phplogue, Inone, U(fp), Dn)\
   O(phpret, Inone, U(fp) U(args), D(d))\
   O(callphp, I(stub), U(args), Dn)\
-  O(tailcallphp, Inone, U(target) U(fp) U(args), Dn)\
+  O(callphpr, Inone, U(target) U(args), Dn)\
   O(callunpack, I(target), U(args), Dn)\
   O(vcallunpack, I(target), U(args) U(extraArgs), Dn)\
   O(contenter, Inone, U(fp) U(target) U(args), Dn)\
   /* vm entry intrinsics */\
-  O(calltc, Inone, U(target) U(fp) U(args), Dn)\
   O(resumetc, Inone, U(target) U(args), Dn)\
   O(inittc, Inone, Un, Dn)\
   O(leavetc, Inone, U(args), Dn)\
@@ -560,9 +564,14 @@ struct conjureuse { Vreg c; };
  * a Vreg in memory, and the other represents a Vreg in a
  * register. This lets spilled Vregs be manipulated like any
  * other. These will not exist outside of register allocation as they
- * are lowered into actual load/stores to/from memory.
+ * are lowered into actual load/stores to/from memory. The immediate
+ * forms represent spilling an immediate directly without using a
+ * Vreg.
  */
 struct spill { Vreg s, d; };
+struct spillbi { Immed s; Vreg d; };
+struct spillli { Immed s; Vreg d; };
+struct spillqi { Immed s; Vreg d; };
 struct reload { Vreg s, d; };
 
 /*
@@ -670,6 +679,11 @@ struct ret { RegSet args; };
 struct stublogue { bool saveframe; };
 
 /*
+ * Reverse the effects of stublogue{false}.
+ */
+struct unstublogue {};
+
+/*
  * Return from a stub.
  *
  * Return to the address saved on the stack, and restore the native stack
@@ -695,7 +709,7 @@ struct callstub { CodeAddress target; RegSet args; };
 struct callfaststub { TCA target; Fixup fix; RegSet args; };
 
 /*
- * Make a direct tail call to a stub.
+ * Make a direct tail call to another stub.
  *
  * As in the usual sense of tail call, this is really a jmp which will cause
  * the callee's return to serve as the caller's return.
@@ -707,7 +721,15 @@ struct callfaststub { TCA target; Fixup fix; RegSet args; };
 struct tailcallstub { CodeAddress target; RegSet args; };
 
 /*
- * Restore %rsp when leaving a stub context via an exception edge.
+ * Make an indirect tail call to another stub or a func prologue.
+ *
+ * Analogous to tailcallstub{}; except the target is indirect.
+ */
+struct tailcallstubr { Vreg target; RegSet args; };
+
+/*
+ * Restore %rsp when leaving a stub context via an exception edge, moving
+ * the saved return address to the provided register.
  *
  * When we unwind into normal TC frames (i.e., for PHP functions), we require
  * that %rsp be restored correctly, since we use spill space as our means of
@@ -715,22 +737,20 @@ struct tailcallstub { CodeAddress target; RegSet args; };
  * exception, we have to undo the stack effects of both the stublogue{} and the
  * callstub{}.
  */
-struct stubunwind {};
+struct stubunwind { Vreg d; };
 
 /*
- * Convert from a stublogue{} context to a phplogue{} context.  `fp' is the
- * target PHP context's frame.
+ * Convert from a stublogue{} context to a phplogue{} context.
  *
- * This is only used by fcallUnpackHelper, which needs to begin with a
- * stublogue{} (see unique-stubs.cpp) and later perform the work of phplogue{}.
+ * Users of this instruction are responsible for storing the return address into
+ * the PHP frame's m_savedRip prior to the usage, as this instruction loses that
+ * information.
  *
- * This instruction should, in theory, teleport the stub frame's saved %rip
- * onto the PHP callee's frame.  However, since fcallUnpackHelper is the only
- * user, and since the PHP frame's m_savedRip always gets updated by a native
- * helper before stubtophp{} is hit, for now, implementations of stubtophp{}
- * needn't touch the callee frame at all.
+ * This is only used by fcallHelper and fcallUnpackHelper, which needs to begin
+ * with a stublogue{} (see unique-stubs.cpp) and later perform the work of
+ * phplogue{}.
  */
-struct stubtophp { Vreg fp; };
+struct stubtophp {};
 
 /*
  * Load the saved return address from the stub's frame record.
@@ -790,9 +810,8 @@ struct syncvmrettype { Vreg type; };
  * was before the instruction that transferred control to us.
  *
  * The phplogue should dominate all code that is logically part of a PHP func
- * prologue or func body (but /not/ the func guard, which precedes it).  Note
- * that this includes unique stubs like fcallHelperThunk, which are reached by
- * PHP function call.
+ * prologue or func body.  Note that this includes unique stubs like
+ * fcallHelperThunk, which are reached by PHP function call.
  *
  * Ultimately, anytime we hit a phplogue, we came from enterTCHelper, which
  * means that after the phplogue (since we maintain the native stack pointer),
@@ -822,35 +841,12 @@ struct phpret { Vreg fp; Vreg d; RegSet args; bool noframe; };
  * callee, and winds up as a direct call to the callee's func guard or
  * prologue.
  */
-struct callphp {
-  explicit callphp(TCA stub,
-                   RegSet args,
-                   std::array<Vlabel,2> targets,
-                   const Func* func,
-                   uint32_t nargs)
-    : stub{stub}
-    , args{args}
-    , func{func}
-    , nargs{nargs}
-  {
-    this->targets[0] = targets[0];
-    this->targets[1] = targets[1];
-  }
-
-  TCA stub;
-  RegSet args;
-  Vlabel targets[2];
-  const Func* func;
-  uint32_t nargs;
-};
+struct callphp { TCA stub; RegSet args; const Func* func; uint32_t nargs; };
 
 /*
- * Make an indirect tail call to a PHP function.
- *
- * Analogous to tailcallstub{}; undoes phplogue{} and then jumps to `target',
- * which begins with a logically identical phplogue{}.
+ * Like callphp, but an indirect call through a register
  */
-struct tailcallphp { Vreg target; Vreg fp; RegSet args; };
+struct callphpr { Vreg64 target; RegSet args; };
 
 /*
  * Non-smashable PHP function call with (almost) the same ABI as callphp{}.
@@ -884,12 +880,11 @@ struct contenter { Vreg64 fp, target; RegSet args; Vlabel targets[2]; };
 // VM entry ABI.
 
 /*
- * Call into the TC at a function prologue.
+ * Resume execution in the middle of a TC function.
  *
- * This sets up for a phplogue{} and transfers control to `target'---which
- * logically executes said phplogue{} before doing anything else.
- *
- * Before calltc{} is executed, the stack will always be set up like this:
+ * This must set up the native stack in the same way as a phplogue{} would,
+ * before transferring control to `target'.  Before resumetc{} is executed,
+ * the native stack will always be set up like this:
  *
  *    +-----------------------+   <- 16-byte alignment
  *    |   <8 bytes of junk>   |
@@ -899,19 +894,6 @@ struct contenter { Vreg64 fp, target; RegSet args; Vlabel targets[2]; };
  * course, be aliged once phplogue{} finishes executing).  Using a native call
  * in the implementation (and likewise, using native returns for leavetc{}) is
  * recommended, in order to take advantage of return branch predictions.
- *
- * `fp' is the callee's ActRec, which will have already been set up
- * appropriately.  `exittc' is the address to resume execution at after
- * returning from the TC.
- */
-struct calltc { Vreg64 target, fp; TCA exittc; RegSet args; };
-
-/*
- * Resume execution in the middle of a TC function.
- *
- * This must set up the native stack in the same way as a phplogue{} would,
- * before transferring control to `target'.  As with calltc{}, the native stack
- * pointer is misaligned coming in, and using a native call is recommended.
  *
  * `exittc' is the address to resume execution at after returning from the TC.
  */

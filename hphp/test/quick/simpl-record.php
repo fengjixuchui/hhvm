@@ -1,7 +1,7 @@
 <?hh
-final record Foo {
-  x: int,
-  y: int,
+record Foo {
+  int x;
+  int y;
 }
 
 <<__EntryPoint>> function main():void {

@@ -14,7 +14,6 @@
    +----------------------------------------------------------------------+
 */
 
-#include "hphp/runtime/base/perf-warning.h"
 #include "hphp/runtime/vm/jit/region-selection.h"
 
 #include "hphp/runtime/vm/jit/inlining-decider.h"
@@ -63,7 +62,7 @@ struct Env {
     : ctx(ctx)
     , interp(interp)
     , breakAt(breakAt)
-    , sk{ctx.func, ctx.bcOffset, ctx.resumeMode, ctx.hasThis}
+    , sk{ctx.sk}
     , startSk(sk)
     , region(std::make_shared<RegionDesc>())
     , curBlock(region->addBlock(sk, 0, ctx.spOffset))
@@ -146,35 +145,10 @@ bool consumeInput(Env& env, const InputInfo& input) {
   if (input.dontGuard) return true;
   auto const type = irgen::predictedType(env.irgs, input.loc);
 
-  if (/* env.profiling &&
-       * FIXME: T21872803:
-       * This check is only intended for profiling translations.  We enabled it
-       * for live translations to avoid a bug tracking type dependences for
-       * boxed values. */
-      type <= TBoxedCell &&
-      (env.region->blocks().size() > 1 || !env.region->entry()->empty())) {
-    // We don't want side exits when profiling, so only allow instructions that
-    // consume refs at the beginning of the region.
-    return false;
-  }
-
   if (!input.dontBreak && !type.isKnownDataType()) {
     // Trying to consume a value without a precise enough type.
     FTRACE(1, "selectTracelet: {} tried to consume {}, type {}\n",
            env.inst.toString(), show(input.loc), type.toString());
-    return false;
-  }
-
-  if (!(type <= TBoxedCell) ||
-      input.dontGuardInner ||
-      opcodeIgnoresInnerType(env.inst.op())) {
-    return true;
-  }
-
-  if (!type.inner().isKnownDataType()) {
-    // Trying to consume a boxed value without a guess for the inner type.
-    FTRACE(1, "selectTracelet: {} tried to consume ref {}\n",
-           env.inst.toString(), show(input.loc));
     return false;
   }
 
@@ -331,7 +305,7 @@ bool isThisSelfOrParent(Op op) {
 
 /*
  * For every instruction in trace representing a tracelet guard, call func with
- * its location and type, and whether or not it's an inner hint.
+ * its location and type.
  */
 template<typename F>
 void visitGuards(IRUnit& unit, F func) {
@@ -342,31 +316,25 @@ void visitGuards(IRUnit& unit, F func) {
       switch (inst.op()) {
         case EndGuards:
           return;
-        case HintLocInner:
         case CheckLoc:
           func(&inst,
                Location::Local{inst.extra<LocalId>()->locId},
-               inst.typeParam(),
-               inst.is(HintLocInner));
+               inst.typeParam());
           break;
-        case HintStkInner:
         case CheckStk: {
           auto const irSPRel = inst.extra<IRSPRelOffsetData>()->offset;
 
           auto const defSP = inst.src(0)->inst();
-          assertx(defSP->is(DefSP));
-          auto const irSPOff = defSP->extra<DefSP>()->offset;
+          assertx(defSP->is(DefFrameRelSP, DefRegSP));
+          auto const irSPOff = defSP->extra<FPInvOffsetData>()->offset;
 
           func(&inst,
                Location::Stack{irSPRel.to<FPInvOffset>(irSPOff)},
-               inst.typeParam(),
-               inst.is(HintStkInner));
+               inst.typeParam());
           break;
         }
-        case HintMBaseInner:
         case CheckMBase:
-          func(&inst, Location::MBase{}, inst.typeParam(),
-               inst.is(HintMBaseInner));
+          func(&inst, Location::MBase{}, inst.typeParam());
           break;
         default: break;
       }
@@ -383,60 +351,31 @@ void recordDependencies(Env& env) {
   auto& unit = env.irgs.unit;
   auto guardMap = std::map<Location,Type>{};
   ITRACE(2, "Visiting guards\n");
-  auto hintMap = std::map<Location,Type>{};
   auto catMap = std::map<Location,DataTypeCategory>{};
   const auto& guards = env.irgs.irb->guards()->guards;
-  auto predictionMap = std::map<Location,Type>{};
   visitGuards(unit, [&] (const IRInstruction* guard,
                          const Location& loc,
-                         Type type, bool hint) {
+                         Type type) {
     Trace::Indent indent;
     ITRACE(3, "{}: {}\n", show(loc), type);
-    assertx(type <= TGen);
-    auto& whichMap = hint ? hintMap : guardMap;
+    assertx(type <= TCell);
+    auto& whichMap = guardMap;
     auto inret = whichMap.insert(std::make_pair(loc, type));
-    // Unconstrained pseudo-main guards will be relaxed to Gen by the guard
-    // relaxation pass. Since we don't allow loading TGen locals
-    // in pseudo-main, save the predicted type here.
-    if (guard->marker().func()->isPseudoMain()) {
-      auto ret = predictionMap.insert(std::make_pair(loc,type));
-      if (ret.second) {
-        FTRACE(1, "selectTracelet saving prediction for PseudoMain {}\n",
-            show(RegionDesc::TypedLocation {loc, type}));
-      } else {
-        auto& oldTy = ret.first->second;
-        oldTy &= type;
-      }
-    }
     if (inret.second) {
-      if (!hint) {
-        catMap[loc] = folly::get_default(guards, guard).category;
-      }
+      catMap[loc] = folly::get_default(guards, guard).category;
       return;
     }
     auto& oldTy = inret.first->second;
     oldTy &= type;
-    if (!hint) {
-      auto& oldCat = catMap[loc];
-      auto newCat = folly::get_default(guards, guard).category;
-      oldCat = std::max(oldCat, newCat);
-    }
+
+    auto& oldCat = catMap[loc];
+    auto newCat = folly::get_default(guards, guard).category;
+    oldCat = std::max(oldCat, newCat);
   });
 
   for (auto& kv : guardMap) {
-    auto const hint_it = hintMap.find(kv.first);
-    // If we have a hinted type that's better than the guarded type, we want to
-    // keep it around.  This can really only when a guard is relaxed away to
-    // Gen because we knew something was a BoxedCell statically, but we may
-    // need to keep information about what inner type we were predicting.
-    if (hint_it != end(hintMap) && hint_it->second < kv.second) {
-      FTRACE(1, "selectTracelet adding prediction {}\n",
-            show(RegionDesc::TypedLocation {hint_it->first, hint_it->second}));
-      predictionMap.insert(*hint_it);
-    }
-    if (kv.second == TGen) {
-      // Guard was relaxed to Gen---don't record it.  But if there's a hint, we
-      // may have needed that (recorded already above).
+    if (kv.second == TCell) {
+      // Guard was relaxed to Cell---don't record it.
       continue;
     }
     auto const preCond = RegionDesc::GuardedLocation {
@@ -445,12 +384,6 @@ void recordDependencies(Env& env) {
     };
     ITRACE(1, "selectTracelet adding guard {}\n", show(preCond));
     firstBlock.addPreCondition(preCond);
-  }
-
-  // Predictions are already sorted by location, so we can simply compare
-  // the type-prediction vectors for different blocks later.
-  for (auto& pred : predictionMap) {
-    firstBlock.addPredicted(RegionDesc::TypedLocation{pred.first, pred.second});
   }
 }
 
@@ -492,29 +425,18 @@ RegionDescPtr form_region(Env& env) {
 
   for (auto const& lt : env.ctx.liveTypes) {
     auto t = lt.type;
-    assertx(t <= TGen);
-    irgen::checkType(env.irgs, lt.location, t, env.ctx.bcOffset,
+    assertx(t <= TCell);
+    irgen::checkType(env.irgs, lt.location, t, env.ctx.sk.offset(),
                      true /* outerOnly */);
   }
   env.irgs.irb->resetGuardFailBlock();
 
   irgen::gen(env.irgs, EndGuards);
 
-  int32_t maxBCInstrs = env.numBCInstrs;
   for (bool firstInst = true; true; firstInst = false) {
     assertx(env.numBCInstrs >= 0);
     if (env.numBCInstrs == 0) {
       FTRACE(1, "selectTracelet: breaking region due to size limit\n");
-      if (!env.inlining) {
-        logLowPriPerfWarning(
-          "selectTracelet",
-          [&](StructuredLogEntry& cols) {
-            cols.setInt("maxBCInstrSize", maxBCInstrs);
-            auto sd = env.region->start().func()->fullName();
-            cols.setStr("funcName", sd->data());
-          }
-        );
-      }
       break;
     }
 
@@ -526,7 +448,7 @@ RegionDescPtr form_region(Env& env) {
 
     // Break translation if there's already a translation starting at the
     // current SrcKey.
-    if (!firstInst && env.irgs.context.kind == TransKind::Profile) {
+    if (!firstInst) {
       auto const sr = tc::findSrcRec(env.sk);
       if (sr != nullptr && sr->getTopTranslation() != nullptr) {
         FTRACE(1, "selectTracelet: breaking region at TC entry: {}\n",

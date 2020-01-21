@@ -31,6 +31,7 @@
 #include "hphp/util/logger.h"
 #include "hphp/util/process.h"
 #include "hphp/util/trace.h"
+#include "hphp/util/user-info.h"
 
 #include <grp.h>
 #include <pwd.h>
@@ -167,7 +168,7 @@ bool Repo::hasGlobalData() {
 }
 
 void Repo::loadGlobalData(bool readArrayTable /* = true */) {
-  if (readArrayTable) m_lsrp.load();
+  if (readArrayTable) m_lsrp.load(RuntimeOption::RepoLitstrLazyLoad);
 
   if (!RuntimeOption::RepoAuthoritative) return;
 
@@ -231,7 +232,6 @@ void Repo::loadGlobalData(bool readArrayTable /* = true */) {
     RuntimeOption::PHP7_IntSemantics        = s_globalData.PHP7_IntSemantics;
     RuntimeOption::PHP7_NoHexNumerics       = s_globalData.PHP7_NoHexNumerics;
     RuntimeOption::PHP7_Substr              = s_globalData.PHP7_Substr;
-    RuntimeOption::EvalReffinessInvariance  = s_globalData.ReffinessInvariance;
     RuntimeOption::EvalCheckPropTypeHints   = s_globalData.CheckPropTypeHints;
     RuntimeOption::EvalHackArrDVArrs        = s_globalData.HackArrDVArrs;
     /*
@@ -250,9 +250,6 @@ void Repo::loadGlobalData(bool readArrayTable /* = true */) {
     RuntimeOption::StrictArrayFillKeys      = s_globalData.StrictArrayFillKeys;
     if (s_globalData.HardReturnTypeHints) {
       RuntimeOption::EvalCheckReturnTypeHints = 3;
-    }
-    if (s_globalData.ThisTypeHintLevel == 3) {
-      RuntimeOption::EvalThisTypeHintLevel = s_globalData.ThisTypeHintLevel;
     }
 
     RuntimeOption::EvalIsCompatibleClsMethType =
@@ -307,9 +304,11 @@ void Repo::saveGlobalData(GlobalData newData) {
 
   // TODO(#3521039): we could just put the litstr table in the same
   // blob as the above and delete LitstrRepoProxy.
+  LitstrTable::get().setReading();
+  LitstrRepoProxy::InsertLitstrStmt insertStmt{*this, repoId};
   LitstrTable::get().forEachLitstr(
-    [this, &txn, repoId](int i, const StringData* name) {
-      lsrp().insertLitstr(repoId).insert(txn, i, name);
+    [this, &txn, &insertStmt](int i, const StringData* name) {
+      insertStmt.insert(txn, i, name);
     });
 
   txn.commit();
@@ -621,7 +620,7 @@ void Repo::connect() {
 
 void Repo::disconnect() noexcept {
   if (m_dbc != nullptr) {
-    sqlite3_close(m_dbc);
+    sqlite3_close_v2(m_dbc);
     m_dbc = nullptr;
     m_localReadable = false;
     m_localWritable = false;
@@ -682,19 +681,15 @@ void Repo::initCentral() {
   // Try the equivalent of "$HOME/.hhvm.hhbc", but look up the home directory
   // in the password database.
   {
-    passwd pwbuf;
-    passwd* pwbufp;
-    long bufsize = sysconf(_SC_GETPW_R_SIZE_MAX);
-    if (bufsize != -1) {
-      auto buf = new char[bufsize];
-      SCOPE_EXIT { delete[] buf; };
-      if (!getpwuid_r(getuid(), &pwbuf, buf, size_t(bufsize), &pwbufp)
-          && (HOME == nullptr || strcmp(HOME, pwbufp->pw_dir))) {
-        std::string centralPath = pwbufp->pw_dir;
-        centralPath += "/.hhvm.hhbc";
-        if (tryPath(centralPath.c_str())) {
-          return;
-        }
+    auto buf = PasswdBuffer{};
+    passwd* pw;
+    auto err = getpwuid_r(getuid(), &buf.ent, buf.data.get(), buf.size, &pw);
+    if (err == 0 && pw != nullptr &&
+        (HOME == nullptr || strcmp(HOME, pw->pw_dir))) {
+      std::string centralPath = pw->pw_dir;
+      centralPath += "/.hhvm.hhbc";
+      if (tryPath(centralPath.c_str())) {
+        return;
       }
     }
   }
@@ -736,31 +731,18 @@ std::string showPermissions(const struct stat& s) {
   return ret;
 }
 
-struct PasswdBuffer {
-  explicit PasswdBuffer(int name)
-    : size{sysconf(name)}
-  {
-    if (size == -1) size = 1024;
-    data = std::make_unique<char[]>(size);
-  }
-
-  long size;
-  std::unique_ptr<char[]> data;
-};
-
 /*
  * Return the name of the user with the given id.
  */
 std::string uidToName(uid_t uid) {
 #ifndef _WIN32
-  auto buffer = PasswdBuffer{_SC_GETPW_R_SIZE_MAX};
-  passwd pw;
-  passwd* result;
+  auto buf = PasswdBuffer{};
+  passwd* pw;
 
-  auto err = getpwuid_r(uid, &pw, buffer.data.get(), buffer.size, &result);
+  auto err = getpwuid_r(uid, &buf.ent, buf.data.get(), buf.size, &pw);
   if (err != 0) return folly::errnoStr(errno).toStdString();
-  if (result == nullptr) return "user does not exist";
-  return pw.pw_name;
+  if (pw == nullptr) return "user does not exist";
+  return pw->pw_name;
 #else
   return "<unsupported>";
 #endif
@@ -771,15 +753,12 @@ std::string uidToName(uid_t uid) {
  */
 uid_t nameToUid(const std::string& name) {
 #ifndef _WIN32
-  auto buffer = PasswdBuffer{_SC_GETPW_R_SIZE_MAX};
-  passwd pw;
-  passwd* result;
+  auto buf = PasswdBuffer{};
+  passwd* pw;
 
-  auto err = getpwnam_r(
-    name.c_str(), &pw, buffer.data.get(), buffer.size, &result
-  );
-  if (err != 0 || result == nullptr) return -1;
-  return pw.pw_uid;
+  auto err = getpwnam_r(name.c_str(), &buf.ent, buf.data.get(), buf.size, &pw);
+  if (err != 0 || pw == nullptr) return -1;
+  return pw->pw_uid;
 #else
   return -1;
 #endif
@@ -790,14 +769,13 @@ uid_t nameToUid(const std::string& name) {
  */
 std::string gidToName(gid_t gid) {
 #ifndef _WIN32
-  auto buffer = PasswdBuffer{_SC_GETGR_R_SIZE_MAX};
-  group grp;
-  group* result;
+  auto buf = GroupBuffer{};
+  group* grp;
 
-  auto err = getgrgid_r(gid, &grp, buffer.data.get(), buffer.size, &result);
+  auto err = getgrgid_r(gid, &buf.ent, buf.data.get(), buf.size, &grp);
   if (err != 0) return folly::errnoStr(errno).toStdString();
-  if (result == nullptr) return "group does not exist";
-  return grp.gr_name;
+  if (grp == nullptr) return "group does not exist";
+  return grp->gr_name;
 #else
   return "<unsupported>";
 #endif
@@ -808,15 +786,12 @@ std::string gidToName(gid_t gid) {
  */
 gid_t nameToGid(const std::string& name) {
 #ifndef _WIN32
-  auto buffer = PasswdBuffer{_SC_GETGR_R_SIZE_MAX};
-  group grp;
-  group* result;
+  auto buf = GroupBuffer{};
+  group* grp;
 
-  auto err = getgrnam_r(
-    name.c_str(), &grp, buffer.data.get(), buffer.size, &result
-  );
-  if (err != 0 || result == nullptr) return -1;
-  return grp.gr_gid;
+  auto err = getgrnam_r(name.c_str(), &buf.ent, buf.data.get(), buf.size, &grp);
+  if (err != 0 || grp == nullptr) return -1;
+  return grp->gr_gid;
 #else
   return -1;
 #endif
@@ -843,7 +818,8 @@ void setCentralRepoFileMode(const std::string& path) {
 }
 
 RepoStatus Repo::openCentral(const char* rawPath, std::string& errorMsg) {
-  std::string repoPath = insertSchema(rawPath);
+  std::string repoPath = rawPath;
+  replacePlaceholders(repoPath);
   // SQLITE_OPEN_NOMUTEX specifies that the connection be opened such
   // that no mutexes are used to protect the database connection from other
   // threads.  However, multiple connections can still be used concurrently,
@@ -930,7 +906,8 @@ void Repo::initLocal() {
 }
 
 void Repo::attachLocal(const char* path, bool isWritable) {
-  std::string repoPath = insertSchema(path);
+  std::string repoPath = path;
+  replacePlaceholders(repoPath);
   if (!isWritable) {
     // Make sure the repo exists before attaching it, in order to avoid
     // creating a read-only repo.

@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Shallow_decl_defs
 
 module Classes =
@@ -29,7 +29,7 @@ let class_naming_and_decl c =
   Shallow_decl.class_ c
 
 let shallow_decl_enabled () =
-  TypecheckerOptions.shallow_class_decl (GlobalNamingOptions.get ())
+  TypecheckerOptions.shallow_class_decl (Global_naming_options.get ())
 
 let get_from_store cid =
   if shallow_decl_enabled () then
@@ -64,8 +64,8 @@ let declare_class_in_file file name =
   | None -> err_not_found file name
 
 let get_class_filename x =
-  match Naming_table.Types.get_pos x with
-  | Some (pos, Naming_table.TClass) -> Some (FileInfo.get_pos_filename pos)
+  match Naming_table.Types.get_filename_and_kind x with
+  | Some (fn, Naming_table.TClass) -> Some fn
   | _ -> None
 
 let get cid =
@@ -76,6 +76,12 @@ let get cid =
     | None -> None
     | Some filename -> Some (declare_class_in_file filename cid))
 
+let get_batch = Classes.get_batch
+
+let get_old_batch = Classes.get_old_batch
+
 let oldify_batch = Classes.oldify_batch
 
 let remove_old_batch = Classes.remove_old_batch
+
+let remove_batch = Classes.remove_batch

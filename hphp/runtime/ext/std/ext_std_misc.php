@@ -40,10 +40,16 @@ function server_warmup_status_monotonic(): string;
 <<__Native>>
 function execution_context(): string;
 
-<<__Native>>
+<<__Rx, __Native, __IsFoldable>>
+function mark_legacy_hack_array(vec_or_dict $v): vec_or_dict;
+
+<<__Rx, __Native, __IsFoldable>>
+function is_marked_legacy_hack_array(vec_or_dict $v): bool;
+
+<<__Rx, __Native, __IsFoldable>>
 function enable_legacy_behavior(vec_or_dict $v): vec_or_dict;
 
-<<__Native>>
+<<__Rx, __Native, __IsFoldable>>
 function is_legacy_behavior_enabled(vec_or_dict $v): bool;
 
 /**

@@ -18,19 +18,19 @@ type type_hint_kind =
   | Return
   | Param
   | TypeDef
+  | UpperBound
 
 (* Produce the "userType" bit of the annotation *)
-let rec fmt_name_or_prim ~tparams ~namespace x =
-  let name = snd x in
+let rec fmt_name_or_prim ~tparams (_, name) =
   if List.mem ~equal:( = ) tparams name || is_self name || is_parent name then
     name
   else
     let needs_unmangling = Xhp.is_xhp (strip_ns name) in
-    let fq_id = Hhbc_id.Class.elaborate_id namespace x in
+    let id = Hhbc_id.Class.from_ast_name name in
     if needs_unmangling then
-      Hhbc_id.Class.to_unmangled_string fq_id
+      Hhbc_id.Class.to_unmangled_string id
     else
-      Hhbc_id.Class.to_raw_string fq_id
+      Hhbc_id.Class.to_raw_string id
 
 and prim_to_string prim =
   match prim with
@@ -46,8 +46,8 @@ and prim_to_string prim =
   | Aast.Tnoreturn -> SN.Typehints.noreturn
   | Aast.Tatom s -> ":@" ^ s
 
-and fmt_hint ~tparams ~namespace ?(strip_tparams = false) (pos, h) =
-  let fmt_name_or_prim = fmt_name_or_prim ~tparams ~namespace in
+and fmt_hint ~tparams ?(strip_tparams = false) (pos, h) =
+  let fmt_name_or_prim = fmt_name_or_prim ~tparams in
   match h with
   | Aast.Happly (id, []) -> fmt_name_or_prim id
   | Aast.Happly (id, args) ->
@@ -55,28 +55,37 @@ and fmt_hint ~tparams ~namespace ?(strip_tparams = false) (pos, h) =
     if strip_tparams then
       name
     else
-      name ^ "<" ^ fmt_hints ~tparams ~namespace args ^ ">"
-  | Aast.Hfun (_, true, _, _, _, _, _, _) ->
+      name ^ "<" ^ fmt_hints ~tparams args ^ ">"
+  | Aast.Hfun Aast.{ hf_is_coroutine = true; _ } ->
     failwith "Codegen for coroutine functions is not supported"
-  | Aast.Hfun (_, false, args, _kinds, _, _variadic, ret, _) ->
+  | Aast.Hfun
+      Aast.
+        {
+          hf_reactive_kind = _;
+          hf_is_coroutine = false;
+          hf_param_tys = args;
+          hf_param_kinds = _;
+          hf_param_mutability = _;
+          hf_variadic_ty = _;
+          hf_return_ty = ret;
+          hf_is_mutable_return = _;
+        } ->
     (* TODO(mqian): Implement for inout parameters *)
     "(function ("
-    ^ fmt_hints ~tparams ~namespace args
+    ^ fmt_hints ~tparams args
     ^ "): "
-    ^ fmt_hint ~tparams ~namespace ret
+    ^ fmt_hint ~tparams ret
     ^ ")"
-  | Aast.Htuple hs -> "(" ^ fmt_hints ~tparams ~namespace hs ^ ")"
+  | Aast.Htuple hs -> "(" ^ fmt_hints ~tparams hs ^ ")"
   | Aast.Haccess ((_, Aast.Happly (id, _)), accesses) ->
-    fmt_name_or_prim id
-    ^ "::"
-    ^ String.concat ~sep:"::" (List.map accesses snd)
+    fmt_name_or_prim id ^ "::" ^ String.concat ~sep:"::" (List.map accesses snd)
   | Aast.Haccess _ -> failwith "ast_to_nast error. Should be Haccess(Happly())"
   (* Follow HHVM order: soft -> option *)
   (* Can we fix this eventually? *)
-  | Aast.Hoption (_, Aast.Hsoft t) -> "@?" ^ fmt_hint ~tparams ~namespace t
-  | Aast.Hoption t -> "?" ^ fmt_hint ~tparams ~namespace t
-  | Aast.Hlike t -> "~" ^ fmt_hint ~tparams ~namespace t
-  | Aast.Hsoft h -> "@" ^ fmt_hint ~tparams ~namespace h
+  | Aast.Hoption (_, Aast.Hsoft t) -> "@?" ^ fmt_hint ~tparams t
+  | Aast.Hoption t -> "?" ^ fmt_hint ~tparams t
+  | Aast.Hlike t -> "~" ^ fmt_hint ~tparams t
+  | Aast.Hsoft h -> "@" ^ fmt_hint ~tparams h
   (* No guarantee that this is in the correct order when using map instead of list
    * TODO: Check whether shape fields need to retain order *)
   | Aast.Hshape { Aast.nsi_field_map; _ } ->
@@ -93,10 +102,7 @@ and fmt_hint ~tparams ~namespace ?(strip_tparams = false) (pos, h) =
         else
           ""
       in
-      prefix
-      ^ fmt_field_name sfi_name
-      ^ "=>"
-      ^ fmt_hint ~tparams ~namespace sfi_hint
+      prefix ^ fmt_field_name sfi_name ^ "=>" ^ fmt_hint ~tparams sfi_hint
     in
     let shape_fields = List.map ~f:format nsi_field_map in
     prefix_namespace "HH" "shape(" ^ String.concat ~sep:", " shape_fields ^ ")"
@@ -116,22 +122,24 @@ and fmt_hint ~tparams ~namespace ?(strip_tparams = false) (pos, h) =
   | Aast.Hthis -> fmt_name_or_prim (pos, SN.Typehints.this)
   | Aast.Hdynamic -> fmt_name_or_prim (pos, SN.Typehints.dynamic)
   | Aast.Hnothing -> fmt_name_or_prim (pos, SN.Typehints.nothing)
-  | Aast.Hpu_access _ -> failwith "TODO(T36532263) fmt_hint"
+  | Aast.Hpu_access (h, sid) -> "(" ^ fmt_hint ~tparams h ^ ":@" ^ snd sid ^ ")"
+  | Aast.Hunion _ -> fmt_name_or_prim (pos, SN.Typehints.mixed)
+  | Aast.Hintersection _ -> fmt_name_or_prim (pos, SN.Typehints.mixed)
 
-and fmt_hints ~tparams ~namespace hints =
-  String.concat ~sep:", " (List.map hints (fmt_hint ~tparams ~namespace))
+and fmt_hints ~tparams hints =
+  String.concat ~sep:", " (List.map hints (fmt_hint ~tparams))
 
 (* Differs from above in that this assumes that naming has occurred *)
 let can_be_nullable (_, h) =
   match h with
   | Aast.Hfun _
   | Aast.Hoption (_, Aast.Hfun _)
-  | Aast.Happly ((_, "dynamic"), _)
-  | Aast.Hoption (_, Aast.Happly ((_, "dynamic"), _))
-  | Aast.Happly ((_, "nonnull"), _)
-  | Aast.Hoption (_, Aast.Happly ((_, "nonnull"), _))
-  | Aast.Happly ((_, "mixed"), _)
-  | Aast.Hoption (_, Aast.Happly ((_, "mixed"), _))
+  | Aast.Happly ((_, "\\HH\\dynamic"), _)
+  | Aast.Hoption (_, Aast.Happly ((_, "\\HH\\dynamic"), _))
+  | Aast.Happly ((_, "\\HH\\nonnull"), _)
+  | Aast.Hoption (_, Aast.Happly ((_, "\\HH\\nonnull"), _))
+  | Aast.Happly ((_, "\\HH\\mixed"), _)
+  | Aast.Hoption (_, Aast.Happly ((_, "\\HH\\mixed"), _))
   | Aast.Hdynamic
   | Aast.Hnonnull
   | Aast.Hmixed
@@ -156,12 +164,11 @@ let can_be_nullable (_, h) =
     true
   | _ -> true
 
-let rec hint_to_type_constraint ~kind ~tparams ~skipawaitable ~namespace (p, h)
-    =
-  let happly_helper ((pos, name) as id) =
+let rec hint_to_type_constraint ~kind ~tparams ~skipawaitable (p, h) =
+  let happly_helper (pos, name) =
     if List.mem ~equal:( = ) tparams name then
       let tc_name = Some "" in
-      let tc_flags = [TC.HHType; TC.ExtendedHint; TC.TypeVar] in
+      let tc_flags = [TC.ExtendedHint; TC.TypeVar] in
       TC.make tc_name tc_flags
     else if kind = TypeDef && (is_self name || is_parent name) then
       Emit_fatal.raise_fatal_runtime
@@ -172,78 +179,76 @@ let rec hint_to_type_constraint ~kind ~tparams ~skipawaitable ~namespace (p, h)
         if is_self name || is_parent name then
           name
         else
-          let fq_id = Hhbc_id.Class.elaborate_id namespace id in
-          Hhbc_id.Class.to_raw_string fq_id
+          Hhbc_id.Class.(from_ast_name name |> to_raw_string)
       in
-      let tc_flags = [TC.HHType] in
-      TC.make (Some tc_name) tc_flags
+      TC.make (Some tc_name) []
   in
+  let is_awaitable s = s = SN.Classes.cAwaitable in
   match h with
   (* The dynamic and nonnull types are treated by the runtime as mixed *)
-  | Aast.Happly ((_, "dynamic"), [])
-  | Aast.Happly ((_, "mixed"), [])
+  | Aast.Happly ((_, "\\HH\\dynamic"), [])
+  | Aast.Happly ((_, "\\HH\\mixed"), [])
   | Aast.Hdynamic
   | Aast.Hlike _
   | Aast.Hfun _
+  | Aast.Hunion _
+  | Aast.Hintersection _
   | Aast.Hmixed ->
     TC.make None []
   | Aast.Hprim Aast.Tvoid when kind <> TypeDef -> TC.make None []
   | Aast.Happly ((_, s), [])
-    when String.lowercase s = "void" && kind <> TypeDef ->
+    when String.lowercase s = "\\hh\\void" && kind <> TypeDef ->
     TC.make None []
   | Aast.Haccess _ ->
     let tc_name = Some "" in
-    let tc_flags = [TC.HHType; TC.ExtendedHint; TC.TypeConstant] in
+    let tc_flags = [TC.ExtendedHint; TC.TypeConstant] in
     TC.make tc_name tc_flags
   (* Elide the Awaitable class for async return types only *)
-  | Aast.Happly ((_, "Awaitable"), [(_, Aast.Hprim Aast.Tvoid)])
-  | Aast.Happly ((_, "Awaitable"), [(_, Aast.Happly ((_, "void"), []))])
-    when skipawaitable ->
+  | Aast.Happly ((_, s), [(_, Aast.Hprim Aast.Tvoid)])
+  | Aast.Happly ((_, s), [(_, Aast.Happly ((_, "\\HH\\void"), []))])
+    when skipawaitable && is_awaitable s ->
     TC.make None []
-  | Aast.Happly ((_, "Awaitable"), [h])
-  | Aast.Hoption (_, Aast.Happly ((_, "Awaitable"), [h]))
-    when skipawaitable ->
-    hint_to_type_constraint ~kind ~tparams ~skipawaitable:false ~namespace h
-  | Aast.Hoption (_, Aast.Hsoft (_, Aast.Happly ((_, "Awaitable"), [h])))
-    when skipawaitable ->
+  | Aast.Happly ((_, s), [h])
+  | Aast.Hoption (_, Aast.Happly ((_, s), [h]))
+    when skipawaitable && is_awaitable s ->
+    hint_to_type_constraint ~kind ~tparams ~skipawaitable:false h
+  | Aast.Hoption (_, Aast.Hsoft (_, Aast.Happly ((_, s), [h])))
+    when skipawaitable && is_awaitable s ->
     make_tc_with_flags_if_non_empty_flags
       ~kind
       ~tparams
       ~skipawaitable
-      ~namespace
       h
-      [TC.Soft; TC.HHType; TC.ExtendedHint]
-  | Aast.Happly ((_, "Awaitable"), [])
-  | Aast.Hoption (_, Aast.Happly ((_, "Awaitable"), []))
-    when skipawaitable ->
+      [TC.Soft; TC.ExtendedHint]
+  | Aast.Happly ((_, s), [])
+  | Aast.Hoption (_, Aast.Happly ((_, s), []))
+    when skipawaitable && is_awaitable s ->
     TC.make None []
   (* Need to differentiate between type params and classes *)
   | Aast.Happly ((pos, name), _) -> happly_helper (pos, name)
   (* Shapes and tuples are just arrays *)
   | Aast.Hshape _ ->
     let tc_name = Some "HH\\darray" in
-    let tc_flags = [TC.HHType; TC.ExtendedHint] in
+    let tc_flags = [TC.ExtendedHint] in
     TC.make tc_name tc_flags
   | Aast.Htuple _ ->
     let tc_name = Some "HH\\varray" in
-    let tc_flags = [TC.HHType; TC.ExtendedHint] in
+    let tc_flags = [TC.ExtendedHint] in
     TC.make tc_name tc_flags
   | Aast.Hoption t ->
     make_tc_with_flags_if_non_empty_flags
       ~kind
       ~tparams
       ~skipawaitable
-      ~namespace
       t
-      [TC.Nullable; TC.DisplayNullable; TC.HHType; TC.ExtendedHint]
+      [TC.Nullable; TC.DisplayNullable; TC.ExtendedHint]
   | Aast.Hsoft t ->
     make_tc_with_flags_if_non_empty_flags
       ~kind
       ~tparams
       ~skipawaitable
-      ~namespace
       t
-      [TC.Soft; TC.HHType; TC.ExtendedHint]
+      [TC.Soft; TC.ExtendedHint]
   | Aast.Herr
   | Aast.Hany ->
     failwith "I'm convinced that this should be an error caught in naming"
@@ -257,13 +262,11 @@ let rec hint_to_type_constraint ~kind ~tparams ~skipawaitable ~namespace (p, h)
   | Aast.Hthis -> happly_helper (p, SN.Typehints.this)
   | Aast.Hnothing -> happly_helper (p, SN.Typehints.nothing)
   | Aast.Habstr s -> happly_helper (p, s)
-  | Aast.Hpu_access _ -> failwith "TODO(T36532263) hint_to_type_constraint"
+  | Aast.Hpu_access _ -> TC.make None []
 
-and make_tc_with_flags_if_non_empty_flags
-    ~kind ~tparams ~skipawaitable ~namespace t flags =
-  let tc =
-    hint_to_type_constraint ~kind ~tparams ~skipawaitable ~namespace t
-  in
+and make_tc_with_flags_if_non_empty_flags ~kind ~tparams ~skipawaitable t flags
+    =
+  let tc = hint_to_type_constraint ~kind ~tparams ~skipawaitable t in
   let tc_name = TC.name tc in
   let tc_flags = TC.flags tc in
   match (tc_name, tc_flags) with
@@ -281,13 +284,12 @@ let add_nullable ~nullable flags =
 let try_add_nullable ~nullable h flags =
   add_nullable ~nullable:(nullable && can_be_nullable h) flags
 
-let make_type_info ~tparams ~namespace h tc_name tc_flags =
-  let type_info_user_type = Some (fmt_hint ~tparams ~namespace h) in
+let make_type_info ~tparams h tc_name tc_flags =
+  let type_info_user_type = Some (fmt_hint ~tparams h) in
   let type_info_type_constraint = TC.make tc_name tc_flags in
   Hhas_type_info.make type_info_user_type type_info_type_constraint
 
-let param_hint_to_type_info
-    ~kind ~skipawaitable ~nullable ~tparams ~namespace h =
+let param_hint_to_type_info ~kind ~skipawaitable ~nullable ~tparams h =
   let is_simple_hint =
     match snd h with
     | Aast.Hsoft _
@@ -295,9 +297,9 @@ let param_hint_to_type_info
     | Aast.Haccess _
     | Aast.Hfun _
     | Aast.Happly (_, _ :: _)
-    | Aast.Happly ((_, "dynamic"), [])
-    | Aast.Happly ((_, "nonnull"), [])
-    | Aast.Happly ((_, "mixed"), [])
+    | Aast.Happly ((_, "\\HH\\dynamic"), [])
+    | Aast.Happly ((_, "\\HH\\nonnull"), [])
+    | Aast.Happly ((_, "\\HH\\mixed"), [])
     | Aast.Hdynamic
     | Aast.Hnonnull
     | Aast.Hmixed ->
@@ -318,32 +320,21 @@ let param_hint_to_type_info
     | Aast.Hthis -> true
     | _ -> true
   in
-  let tc =
-    hint_to_type_constraint ~kind ~tparams ~skipawaitable ~namespace h
-  in
+  let tc = hint_to_type_constraint ~kind ~tparams ~skipawaitable h in
   let tc_name = TC.name tc in
   if is_simple_hint then
-    let tc_flags = try_add_nullable ~nullable h [TC.HHType] in
-    make_type_info ~tparams ~namespace h tc_name tc_flags
+    let tc_flags = try_add_nullable ~nullable h [] in
+    make_type_info ~tparams h tc_name tc_flags
   else
     let tc_flags = TC.flags tc in
     let tc_flags = try_add_nullable ~nullable h tc_flags in
-    make_type_info ~tparams ~namespace h tc_name tc_flags
+    make_type_info ~tparams h tc_name tc_flags
 
-let hint_to_type_info ~kind ~skipawaitable ~nullable ~tparams ~namespace h =
+let hint_to_type_info ~kind ~skipawaitable ~nullable ~tparams h =
   match kind with
-  | Param ->
-    param_hint_to_type_info
-      ~kind
-      ~skipawaitable
-      ~nullable
-      ~tparams
-      ~namespace
-      h
+  | Param -> param_hint_to_type_info ~kind ~skipawaitable ~nullable ~tparams h
   | _ ->
-    let tc =
-      hint_to_type_constraint ~kind ~tparams ~skipawaitable ~namespace h
-    in
+    let tc = hint_to_type_constraint ~kind ~tparams ~skipawaitable h in
     let tc_name = TC.name tc in
     let tc_flags = TC.flags tc in
     let tc_flags =
@@ -358,13 +349,17 @@ let hint_to_type_info ~kind ~skipawaitable ~nullable ~tparams ~namespace h =
       else
         try_add_nullable ~nullable h tc_flags
     in
-    make_type_info ~tparams ~namespace h tc_name tc_flags
+    let tc_flags =
+      if kind = UpperBound then
+        List.stable_dedup (TC.UpperBound :: tc_flags)
+      else
+        tc_flags
+    in
+    make_type_info ~tparams h tc_name tc_flags
 
-let hint_to_class ~namespace (h : Aast.hint) =
+let hint_to_class (h : Aast.hint) =
   match h with
-  | (_, Aast.Happly (id, _)) ->
-    let fq_id = Hhbc_id.Class.elaborate_id namespace id in
-    fq_id
+  | (_, Aast.Happly ((_, name), _)) -> Hhbc_id.Class.from_ast_name name
   | _ -> Hhbc_id.Class.from_raw_string "__type_is_not_class__"
 
 let emit_type_constraint_for_native_function tparams ret ti =
@@ -373,7 +368,7 @@ let emit_type_constraint_for_native_function tparams ret ti =
     match (user_type, ret) with
     | (_, None)
     | (None, _) ->
-      (Some "HH\\void", [TC.HHType; TC.ExtendedHint])
+      (Some "HH\\void", [TC.ExtendedHint])
     | (Some t, _) when t = "HH\\mixed" || t = "callable" -> (None, [])
     | (Some t, Some ret) ->
       let strip_nullable n = String_utils.lstrip n "?" in
@@ -383,7 +378,7 @@ let emit_type_constraint_for_native_function tparams ret ti =
         (* Strip twice since we don't know which one is coming first *)
         Some (vanilla_name @@ strip_nullable @@ strip_soft @@ strip_nullable t)
       in
-      let flags = [TC.HHType; TC.ExtendedHint] in
+      let flags = [TC.ExtendedHint] in
       let rec get_flags (_, t) flags =
         match t with
         | Aast.Hoption x ->

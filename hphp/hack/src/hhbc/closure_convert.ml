@@ -19,9 +19,6 @@ module SU = Hhbc_string_utils
 let constant_folding () =
   Hhbc_options.constant_folding !Hhbc_options.compiler_options
 
-let hacksperimental () =
-  Hhbc_options.hacksperimental !Hhbc_options.compiler_options
-
 type hoist_kind =
   (* Def that is already at top-level *)
   | TopLevel
@@ -80,14 +77,12 @@ type state = {
   captured_generics: ULS.t;
   (* Closure classes and hoisted inline classes *)
   hoisted_classes: class_ list;
-  (* Hoisted inline functions *)
-  hoisted_functions: fun_ list;
   (* Hoisted meth_caller functions *)
   named_hoisted_functions: fun_ SMap.t;
-  (* Functions with inout_wrappers *)
-  inout_wrappers: fun_ list;
   (* The current namespace environment *)
   namespace: Namespace_env.env;
+  (* Empty namespace as constructed by parser *)
+  empty_namespace: Namespace_env.env;
   (* Set of closure names that used to have explicit 'use' language construct
     in original anonymous function *)
   explicit_use_set: SSet.t;
@@ -106,8 +101,6 @@ type state = {
   (* maps name of function that has at least one goto statement
      to labels in function (bool value denotes whether label appear in using) *)
   function_to_labels_map: bool SMap.t SMap.t;
-  (* most recent definition of lexical-scoped `let` variables *)
-  let_vars: int SMap.t;
   (* maps unique name of lambda to Rx level of the declaring scope *)
   lambda_rx_of_scope: Rx.t SMap.t;
 }
@@ -142,24 +135,22 @@ let set_has_goto (st : state) =
         { st.current_function_state with has_goto = true };
     }
 
-let initial_state popt =
+let initial_state empty_namespace =
   {
+    empty_namespace;
     closure_cnt_per_fun = 0;
     captured_vars = ULS.empty;
     captured_this = false;
     captured_generics = ULS.empty;
     hoisted_classes = [];
-    hoisted_functions = [];
     named_hoisted_functions = SMap.empty;
-    inout_wrappers = [];
-    namespace = Namespace_env.empty_from_popt popt;
+    namespace = empty_namespace;
     explicit_use_set = SSet.empty;
     closure_namespaces = SMap.empty;
     closure_enclosing_classes = SMap.empty;
     current_function_state = empty_per_function_state;
     functions_with_finally = SSet.empty;
     function_to_labels_map = SMap.empty;
-    let_vars = SMap.empty;
     lambda_rx_of_scope = SMap.empty;
   }
 
@@ -204,44 +195,6 @@ let should_capture_var env var =
     (not (SSet.mem var parameter_names)) && aux xs vs
   | _ -> false
 
-let get_let_var st x =
-  let let_vars = st.let_vars in
-  SMap.get x let_vars
-
-let next_let_var_id st x =
-  match get_let_var st x with
-  | Some id -> id + 1
-  | None -> 0
-
-let update_let_var_id st x =
-  let id = next_let_var_id st x in
-  (id, { st with let_vars = SMap.add x id st.let_vars })
-
-(* We prefix the let variable with "$LET_VAR", and add "$%d" suffix for
- * distinguishing shadowings
- * This by construction does not clash with other variables, note that dollar
- * is not allowed as part of variable name by parser, but HHVM is fine with it.
- *)
-let transform_let_var_name name id = Printf.sprintf "$LET_VAR_%s$%d" name id
-
-let append_let_vars env let_vars =
-  match env.variable_scopes with
-  | [] -> env
-  | outermost :: rest ->
-    let all_vars = outermost.all_vars in
-    let rec app var idx all_vars =
-      if idx < 0 then
-        all_vars
-      else
-        let var_name = transform_let_var_name var idx in
-        if SSet.mem var_name all_vars then
-          all_vars
-        else
-          app var (idx - 1) (SSet.add var_name all_vars)
-    in
-    let all_vars = SMap.fold app let_vars all_vars in
-    { env with variable_scopes = { outermost with all_vars } :: rest }
-
 (* Add a variable to the captured variables *)
 let add_var env st var =
   (* Don't bother if it's $this, as this is captured implicitly *)
@@ -267,9 +220,7 @@ let add_generic env st var =
       else
         (Ast_scope.Scope.get_class_tparams env.scope).c_tparam_list
     in
-    List.find_mapi
-      tparams
-      ~f:(fun i { tp_name = (_, id); tp_reified = b; _ } ->
+    List.find_mapi tparams ~f:(fun i { tp_name = (_, id); tp_reified = b; _ } ->
         if b <> Erased && id = var then
           Some i
         else
@@ -301,10 +252,7 @@ let get_vars scope ~is_closure_body params body =
 let wrap_block b = [Stmt (Pos.none, Block b)]
 
 let get_parameter_names (params : fun_param list) =
-  List.fold_left
-    ~init:SSet.empty
-    ~f:(fun s p -> SSet.add p.param_name s)
-    params
+  List.fold_left ~init:SSet.empty ~f:(fun s p -> SSet.add p.param_name s) params
 
 let env_with_function_like_ env e ~is_closure_body params pos body =
   let scope = e :: env.scope in
@@ -408,12 +356,7 @@ let env_with_method (env : env) md =
     md.m_span
     md.m_body.fb_ast
 
-let env_with_class env cd =
-  {
-    env with
-    scope = [ScopeItem.Class cd];
-    variable_scopes = env.variable_scopes;
-  }
+let env_with_class env cd = { env with scope = [ScopeItem.Class cd] }
 
 (* Clear the variables, upon entering a lambda *)
 let enter_lambda (st : state) =
@@ -428,8 +371,7 @@ let set_namespace st ns = { st with namespace = ns }
 
 let reset_function_counts st = { st with closure_cnt_per_fun = 0 }
 
-let record_function_state key { has_finally; has_goto; labels } rx_of_scope st
-    =
+let record_function_state key { has_finally; has_goto; labels } rx_of_scope st =
   if
     (not has_finally)
     && (not has_goto)
@@ -480,19 +422,8 @@ let make_defcls cd n =
 
 (* Make a stub record purely for the purpose of emitting the DefRecord instruction
  *)
-let make_defrecord (cd : class_) n : class_ =
-  {
-    cd with
-    c_method_redeclarations = [];
-    c_consts = [];
-    c_typeconsts = [];
-    c_vars = [];
-    c_methods = [];
-    c_xhp_children = [];
-    c_xhp_attrs = [];
-    c_kind = Ast_defs.Crecord;
-    c_name = (fst cd.c_name, string_of_int n);
-  }
+let make_defrecord rd n =
+  { rd with rd_fields = []; rd_name = (fst rd.rd_name, string_of_int n) }
 
 (* Def inline is not implemented yet *)
 (** let add_class env st cd =
@@ -503,28 +434,11 @@ let make_defrecord (cd : class_) n : class_ =
   * let add_record env st cd =
   *   st, make_defrecord cd env.defined_record_count *)
 
-let make_closure_name env st name =
+let make_closure_name env st =
   let per_fun_idx = st.closure_cnt_per_fun in
   SU.Closures.mangle_closure
     (make_scope_name st.namespace env.scope)
     per_fun_idx
-    name
-
-(* Get the user-provided closure name from the set of user attributes. This is
- * only allowed in systemlib and in transpiled javascript, otherwise we ignore the
- * attribute
- *
- * Returns the filtered list of attributes and the closure name
- *)
-let get_closure_name attrs =
-  let is_closure_name attr = snd attr.ua_name = "__ClosureName" in
-  if Emit_env.is_systemlib () || Emit_env.is_js () then
-    match List.find attrs is_closure_name with
-    | Some { ua_params = [(_, String s)]; _ } ->
-      (List.filter attrs (Fn.compose not is_closure_name), Some s)
-    | _ -> (attrs, None)
-  else
-    (attrs, None)
 
 let make_closure
     ~class_num
@@ -537,7 +451,6 @@ let make_closure
     is_static
     fd
     (body : func_body) =
-  let (user_attrs, name) = get_closure_name fd.f_user_attributes in
   let md =
     {
       m_span = fd.f_span;
@@ -553,7 +466,7 @@ let make_closure
       m_params = fd.f_params;
       m_body = body;
       m_fun_kind = fd.f_fun_kind;
-      m_user_attributes = user_attrs;
+      m_user_attributes = fd.f_user_attributes;
       m_ret = fd.f_ret;
       m_external = false;
       m_doc_comment = fd.f_doc_comment;
@@ -588,8 +501,9 @@ let make_closure
       c_file_attributes = [];
       c_final = false;
       c_is_xhp = false;
+      c_has_xhp_keyword = false;
       c_kind = Ast_defs.Cnormal;
-      c_name = (p, make_closure_name env st name);
+      c_name = (p, make_closure_name env st);
       c_tparams = class_tparams;
       c_extends = [(p, Aast.Happly ((p, "Closure"), []))];
       c_uses = [];
@@ -608,7 +522,7 @@ let make_closure
       c_attributes = [];
       c_xhp_children = [];
       c_xhp_attrs = [];
-      c_namespace = Namespace_env.empty_with_default;
+      c_namespace = st.empty_namespace;
       c_enum = None;
       c_doc_comment = None;
       c_pu_enums = [];
@@ -632,20 +546,20 @@ let convert_id (env : env) p ((pid, str) as id) =
   let return newstr = (p, String newstr) in
   let name c = (p, String (SU.Xhp.mangle @@ strip_id c.c_name)) in
   match str with
-  | "__TRAIT__" ->
+  | _ when str = SN.PseudoConsts.g__TRAIT__ ->
     begin
       match Scope.get_class env.scope with
       | Some c when c.c_kind = Ast_defs.Ctrait -> name c
       | _ -> return ""
     end
-  | "__CLASS__" ->
+  | _ when str = SN.PseudoConsts.g__CLASS__ ->
     begin
       match Scope.get_class env.scope with
       | Some c when c.c_kind <> Ast_defs.Ctrait -> name c
       | Some _ -> (p, Id (pid, snd id))
       | None -> return ""
     end
-  | "__METHOD__" ->
+  | _ when str = SN.PseudoConsts.g__METHOD__ ->
     let (prefix, is_trait) =
       match Scope.get_class env.scope with
       | None -> ("", false)
@@ -676,16 +590,15 @@ let convert_id (env : env) p ((pid, str) as id) =
       | ScopeItem.Class cd :: _ -> return @@ strip_id cd.c_name
       | _ -> return ""
     end
-  | "__FUNCTION__" ->
+  | _ when str = SN.PseudoConsts.g__FUNCTION__ ->
     begin
       match env.scope with
       | ScopeItem.Function fd :: _ -> return (strip_id fd.f_name)
       | ScopeItem.Method md :: _ -> return (strip_id md.m_name)
-      | (ScopeItem.Lambda _ | ScopeItem.LongLambda _) :: _ ->
-        return "{closure}"
+      | (ScopeItem.Lambda _ | ScopeItem.LongLambda _) :: _ -> return "{closure}"
       | _ -> return ""
     end
-  | "__LINE__" ->
+  | _ when str = SN.PseudoConsts.g__LINE__ ->
     (* If the expression goes on multi lines, we return the last line *)
     let (_, line, _, _) = Pos.info_pos_extended pid in
     (p, Int (string_of_int line))
@@ -726,7 +639,6 @@ let make_fn_param (p, lid) is_variadic =
   {
     param_annotation = Tast_annotate.null_annotation p;
     param_type_hint = (Typing_make_type.null Tast_annotate.witness, None);
-    param_is_reference = false;
     param_is_variadic = is_variadic;
     param_pos = p;
     param_name = Local_id.get_name lid;
@@ -749,9 +661,9 @@ let convert_meth_caller_to_func_ptr env st ann pc cls pf func =
            Tast_annotate.with_pos p (Id (p, "\\__systemlib\\fun")),
            [],
            [Tast_annotate.with_pos p (String mangle_name)],
-           [] )
+           None )
   in
-  if SMap.has_key mangle_name st.named_hoisted_functions then
+  if SMap.mem mangle_name st.named_hoisted_functions then
     (st, fun_handle)
   else
     (* Build a new meth_caller function *)
@@ -762,21 +674,21 @@ let convert_meth_caller_to_func_ptr env st ann pc cls pf func =
       Tast_annotate.with_pos p
       @@ Call
            ( Aast.Cnormal,
-             Tast_annotate.with_pos p (Id (p, "invariant")),
+             Tast_annotate.with_pos p (Id (p, "\\HH\\invariant")),
              [],
              [
                Tast_annotate.with_pos p
                @@ Call
                     ( Aast.Cnormal,
-                      Tast_annotate.with_pos p (Id (p, "is_a")),
+                      Tast_annotate.with_pos p (Id (p, "\\is_a")),
                       [],
                       [obj_lvar; Tast_annotate.with_pos pc (String cls)],
-                      [] );
+                      None );
                Tast_annotate.with_pos
                  p
                  (String ("object must be an instance of (" ^ cls ^ ")"));
              ],
-             [] )
+             None )
     in
     (* return $o-><func>(...$args); *)
     let args_var = (p, Local_id.make_unscoped "$args") in
@@ -791,7 +703,7 @@ let convert_meth_caller_to_func_ptr env st ann pc cls pf func =
                     Aast.OG_nullthrows ),
              [],
              [],
-             [Tast_annotate.with_pos p (Lvar args_var)] )
+             Some (Tast_annotate.with_pos p (Lvar args_var)) )
     in
     let variadic_param = make_fn_param args_var true in
     let fd =
@@ -809,8 +721,7 @@ let convert_meth_caller_to_func_ptr env st ann pc cls pf func =
           {
             fb_ast =
               [
-                (p, Expr assert_invariant);
-                (p, Return (Some meth_caller_handle));
+                (p, Expr assert_invariant); (p, Return (Some meth_caller_handle));
               ];
             fb_annotation = Tast.NoUnsafeBlocks;
           };
@@ -818,7 +729,7 @@ let convert_meth_caller_to_func_ptr env st ann pc cls pf func =
         f_user_attributes = [{ ua_name = (p, "__MethCaller"); ua_params = [] }];
         f_file_attributes = [];
         f_external = false;
-        f_namespace = Namespace_env.empty_with_default;
+        f_namespace = st.empty_namespace;
         f_doc_comment = None;
         f_static = false;
       }
@@ -847,7 +758,7 @@ let rec convert_expr env st ((p, expr_) as expr) =
         match targ with
         | None -> (st, None)
         | Some targ ->
-          let (st, targ) = convert_hint env st targ in
+          let (st, targ) = convert_tyarg env st targ in
           (st, Some targ)
       in
       (st, (p, Varray (targ, es)))
@@ -858,8 +769,8 @@ let rec convert_expr env st ((p, expr_) as expr) =
         (st, (e1, e2))
       in
       let convert_tarp st (t1, t2) =
-        let (st, t1) = convert_hint env st t1 in
-        let (st, t2) = convert_hint env st t2 in
+        let (st, t1) = convert_tyarg env st t1 in
+        let (st, t2) = convert_tyarg env st t2 in
         (st, (t1, t2))
       in
       let (st, es) = List.map_env st es convert_pair in
@@ -885,11 +796,11 @@ let rec convert_expr env st ((p, expr_) as expr) =
       let (st, ta) =
         match targs with
         | Some (CollectionTV tv) ->
-          let (st, ta) = convert_hint env st tv in
+          let (st, ta) = convert_tyarg env st tv in
           (st, Some (CollectionTV ta))
         | Some (CollectionTKV (tk, tv)) ->
-          let (st, tk) = convert_hint env st tk in
-          let (st, tv) = convert_hint env st tv in
+          let (st, tk) = convert_tyarg env st tk in
+          let (st, tv) = convert_tyarg env st tv in
           (st, Some (CollectionTKV (tk, tv)))
         | None -> (st, None)
       in
@@ -900,7 +811,7 @@ let rec convert_expr env st ((p, expr_) as expr) =
         match targ with
         | None -> (st, None)
         | Some targ ->
-          let (st, targ) = convert_hint env st targ in
+          let (st, targ) = convert_tyarg env st targ in
           (st, Some targ)
       in
       (st, (p, ValCollection (k, targ, es)))
@@ -924,8 +835,8 @@ let rec convert_expr env st ((p, expr_) as expr) =
         match targ with
         | None -> (st, None)
         | Some (t1, t2) ->
-          let (st, t1) = convert_hint env st t1 in
-          let (st, t2) = convert_hint env st t2 in
+          let (st, t1) = convert_tyarg env st t1 in
+          let (st, t2) = convert_tyarg env st t2 in
           (st, Some (t1, t2))
       in
       (st, (p, KeyValCollection (k, targ, es)))
@@ -948,7 +859,7 @@ let rec convert_expr env st ((p, expr_) as expr) =
           ((_, Id (_, meth_caller)) as e),
           targs,
           ([((pc, _), cls); ((pf, _), func)] as el2),
-          [] )
+          None )
       when let name = String.lowercase @@ SU.strip_global_ns meth_caller in
            (name = "hh\\meth_caller" || name = "meth_caller")
            && Hhbc_options.emit_meth_caller_func_pointers
@@ -961,12 +872,11 @@ let rec convert_expr env st ((p, expr_) as expr) =
             let (_, (_, ex)) = convert_class_id env st cid in
             let get_mangle_cls_name =
               match ex with
-              | CIexpr (_, Id (pc, id))
+              | CIexpr (_, Id (_, id))
                 when (not (SU.is_self id))
                      && (not (SU.is_parent id))
                      && not (SU.is_static id) ->
-                let fq_id = Hhbc_id.Class.elaborate_id st.namespace (pc, id) in
-                Hhbc_id.Class.to_raw_string fq_id
+                Hhbc_id.Class.(from_ast_name id |> to_raw_string)
               | _ -> Emit_fatal.raise_fatal_parse pc "Invalid class"
             in
             get_mangle_cls_name
@@ -979,29 +889,29 @@ let rec convert_expr env st ((p, expr_) as expr) =
         convert_meth_caller_to_func_ptr env st p pc cls pf fname
       | _ ->
         (* For other cases, fallback to create __SystemLib\MethCallerHelper *)
-        (st, (p, Call (ct, e, targs, el2, []))))
+        (st, (p, Call (ct, e, targs, el2, None))))
     | Call
         ( ct,
           ( ( (_, Class_get ((_, CIexpr (_, Id (_, cid))), _))
             | (_, Class_const ((_, CIexpr (_, Id (_, cid))), _)) ) as e ),
           targs,
           el2,
-          el3 )
+          e3 )
       when SU.is_parent cid ->
       let st = add_var env st "$this" in
       let (st, e) = convert_expr env st e in
-      let (st, targs) = convert_hints env st targs in
+      let (st, targs) = convert_tyargs env st targs in
       let (st, el2) = convert_exprs env st el2 in
-      let (st, el3) = convert_exprs env st el3 in
-      (st, (p, Call (ct, e, targs, el2, el3)))
+      let (st, e3) = convert_opt_expr env st e3 in
+      (st, (p, Call (ct, e, targs, el2, e3)))
     | Call (_, (_, Id (_, id)), _, es, _) when String.lowercase id = "tuple" ->
       convert_expr env st (p, Varray (None, es))
-    | Call (ct, e, targs, el2, el3) ->
+    | Call (ct, e, targs, el2, e3) ->
       let (st, e) = convert_expr env st e in
-      let (st, targs) = convert_hints env st targs in
+      let (st, targs) = convert_tyargs env st targs in
       let (st, el2) = convert_exprs env st el2 in
-      let (st, el3) = convert_exprs env st el3 in
-      (st, (p, Call (ct, e, targs, el2, el3)))
+      let (st, e3) = convert_opt_expr env st e3 in
+      (st, (p, Call (ct, e, targs, el2, e3)))
     | String2 el ->
       let (st, el) = convert_exprs env st el in
       (st, (p, String2 el))
@@ -1044,18 +954,21 @@ let rec convert_expr env st ((p, expr_) as expr) =
     | As (e, (_, Hlike _), _) ->
       let (st, e) = convert_expr env st e in
       (st, e)
+    | As (e, (_, Happly ((_, id), [_])), _)
+      when id = SN.FB.cIncorrectType
+           || id = SU.strip_global_ns SN.FB.cIncorrectType ->
+      convert_expr env st e
     | As (e, h, b) ->
       let (st, e) = convert_expr env st e in
       let (st, h) = convert_hint env st h in
       (st, (p, As (e, h, b)))
-    | New (cid, targs, el1, el2, annot) ->
+    | New (cid, targs, el1, e2, annot) ->
       let (st, cid) = convert_class_id env st cid in
-      let (st, targs) = convert_hints env st targs in
+      let (st, targs) = convert_tyargs env st targs in
       let (st, el1) = convert_exprs env st el1 in
-      let (st, el2) = convert_exprs env st el2 in
-      (st, (p, New (cid, targs, el1, el2, annot)))
+      let (st, e2) = convert_opt_expr env st e2 in
+      (st, (p, New (cid, targs, el1, e2, annot)))
     | Record (cid, is_array, es) ->
-      let (st, cid) = convert_class_id env st cid in
       let convert_pair st (e1, e2) =
         let (st, e1) = convert_expr env st e1 in
         let (st, e2) = convert_expr env st e2 in
@@ -1086,21 +999,17 @@ let rec convert_expr env st ((p, expr_) as expr) =
       let st = add_var env st id in
       let st = add_generic env st id in
       (st, (p, ast_id))
-    | Id ((pos, var) as id) ->
-      (match get_let_var st var with
-      | Some idx ->
-        let lvar_name = transform_let_var_name var idx in
-        let st = add_var env st lvar_name in
-        (st, (p, Lvar (pos, Local_id.make_scoped lvar_name)))
-      | None ->
-        let st = add_generic env st var in
-        (st, convert_id env p id))
+    | Id ((_, id) as ast_id) ->
+      let st = add_generic env st id in
+      (st, convert_id env p ast_id)
     | Class_get (cid, n) ->
       let (st, cid) = convert_class_id env st cid in
       let (st, n) =
         match n with
         | CGstring id ->
-          (* TODO: (thomasjiang) T43412864 This does not need to be added into the closure and can be removed *)
+          (* TODO: (thomasjiang) T43412864 This does not need to be added into the closure and can be removed
+           There are no relevant HHVM tests checking for it, but there are flib test failures when you try
+           to remove it. *)
           let st = add_var env st (snd id) in
           (st, n)
         | CGexpr e ->
@@ -1130,7 +1039,6 @@ let rec convert_expr env st ((p, expr_) as expr) =
     | Lplaceholder _
     | Dollardollar _ ->
       failwith "TODO Codegen after naming pass on AAST"
-    | ImmutableVar _ -> failwith "Codegen for 'let' is not supported"
     | Fun_id _ -> failwith "TODO Unimplemented closure_convert Fun_id"
     | Method_id (_, _) ->
       failwith "TODO Unimplemented closure_convert Method_id"
@@ -1138,8 +1046,6 @@ let rec convert_expr env st ((p, expr_) as expr) =
       failwith "TODO Unimplemented closure_convert Method_caller"
     | Smethod_id (_, _) ->
       failwith "TODO Unimplemented closure_convert Smethod_id"
-    | Special_func _ ->
-      failwith "TODO Unimplemented closure_convert Special_func"
     | Assert _ -> failwith "TODO Unimplemented closure_convert Assert"
     | Typename id -> (st, (p, Typename id))
     | PU_atom _
@@ -1166,6 +1072,12 @@ and convert_prop_expr env st ((_, expr_) as expr) =
 and convert_snd_expr env st (a, b_exp) =
   let (s, b_exp) = convert_expr env st b_exp in
   (s, (a, b_exp))
+
+and convert_tyarg env st (i, hint) =
+  let (st, hint) = convert_hint env st hint in
+  (st, (i, hint))
+
+and convert_tyargs env st targs = List.map_env st targs (convert_tyarg env)
 
 and convert_hint env st ((p, h) as hint) =
   match h with
@@ -1222,7 +1134,6 @@ and convert_lambda env st p fd use_vars_opt =
              Emit_fatal.raise_fatal_parse
                p
                "Cannot use $this as lexical variable"));
-  let env = append_let_vars env st.let_vars in
   let rx_of_scope = Scope.rx_of_scope env.scope in
   let env =
     if Option.is_some use_vars_opt then
@@ -1286,10 +1197,10 @@ and convert_lambda env st p fd use_vars_opt =
     match scope with
     | ScopeItem.LongLambda (is_static, _, _) :: scope ->
       is_static || is_scope_static scope
-    | ScopeItem.Function _ :: _ -> false
+    | ScopeItem.Function _ :: _ -> true
     | ScopeItem.Method md :: _ -> md.m_static
     | ScopeItem.Lambda _ :: scope -> is_scope_static scope
-    | _ -> false
+    | _ -> true
   in
   let is_static =
     let is_static =
@@ -1337,7 +1248,7 @@ and convert_lambda env st p fd use_vars_opt =
     (* we already know that $this is captured *)
     captured_this
     || (* lambda that was just processed was converted into non-static one *)
-       not is_static
+    not is_static
   in
   (* Restore capture and defined set *)
   let st =
@@ -1407,10 +1318,9 @@ and convert_stmt (env : env) (st : state) (p, stmt_) : _ * stmt =
       let (st, b2) = convert_block env st b2 in
       (st, If (e, b1, b2))
     | Do (b, e) ->
-      let let_vars_copy = st.let_vars in
-      let (st, b) = convert_block ~scope:false (reset_in_using env) st b in
+      let (st, b) = convert_block (reset_in_using env) st b in
       let (st, e) = convert_expr env st e in
-      ({ st with let_vars = let_vars_copy }, Do (b, e))
+      (st, Do (b, e))
     | While (e, b) ->
       let (st, e) = convert_expr env st e in
       let (st, b) = convert_block (reset_in_using env) st b in
@@ -1418,10 +1328,9 @@ and convert_stmt (env : env) (st : state) (p, stmt_) : _ * stmt =
     | For (e1, e2, e3, b) ->
       let (st, e1) = convert_expr env st e1 in
       let (st, e2) = convert_expr env st e2 in
-      let let_vars_copy = st.let_vars in
-      let (st, b) = convert_block ~scope:false (reset_in_using env) st b in
+      let (st, b) = convert_block (reset_in_using env) st b in
       let (st, e3) = convert_expr env st e3 in
-      ({ st with let_vars = let_vars_copy }, For (e1, e2, e3, b))
+      (st, For (e1, e2, e3, b))
     | Switch (e, cl) ->
       let (st, e) = convert_expr env st e in
       let (st, cl) = List.map_env st cl (convert_case (reset_in_using env)) in
@@ -1435,10 +1344,9 @@ and convert_stmt (env : env) (st : state) (p, stmt_) : _ * stmt =
       | Await_as_kv _ ->
         check_if_in_async_context env);
       let (st, e) = convert_expr env st e in
-      let let_vars_copy = st.let_vars in
       let (st, ae) = convert_as_expr env st ae in
       let (st, b) = convert_block env st b in
-      ({ st with let_vars = let_vars_copy }, Foreach (e, ae, b))
+      (st, Foreach (e, ae, b))
     | Try (b1, cl, b2) ->
       let (st, b1) = convert_block env st b1 in
       let (st, cl) = List.map_env st cl (convert_catch env) in
@@ -1467,40 +1375,19 @@ and convert_stmt (env : env) (st : state) (p, stmt_) : _ * stmt =
       (* record the fact that function has goto *)
       let st = set_has_goto st in
       (st, stmt_)
-    | Let ((_, var), _hint, e) ->
-      let an = Tast_annotate.with_pos p in
-      let (st, e) = convert_expr env st e in
-      let (id, st) = update_let_var_id st (Local_id.get_name var) in
-      let var_name = transform_let_var_name (Local_id.get_name var) id in
-      (* We convert let statement to a simple assignment expression for simplicity *)
-      ( st,
-        Expr
-          ( an
-          @@ Binop
-               ( Ast_defs.Eq None,
-                 an @@ Lvar (p, Local_id.make_scoped var_name),
-                 e ) ) )
     | Fallthrough
     | Noop
     | Break
-    | TempBreak _
     | Continue
-    | TempContinue _
     | Markup _ ->
       (st, stmt_)
   in
   (st, (p, stmt_))
 
-and convert_block ?(scope = true) env st stmts =
-  if scope then
-    let let_vars_copy = st.let_vars in
-    let (st, stmts) = List.map_env st stmts (convert_stmt env) in
-    ({ st with let_vars = let_vars_copy }, stmts)
-  else
-    List.map_env st stmts (convert_stmt env)
+and convert_block env st stmts = List.map_env st stmts (convert_stmt env)
 
-and convert_function_like_body (env : env) (old_st : state) (body : func_body)
-    : state * func_body * 'c =
+and convert_function_like_body (env : env) (old_st : state) (body : func_body) :
+    state * func_body * 'c =
   (* reset has_finally/goto_state values on the state *)
   let st =
     if old_st.current_function_state = empty_per_function_state then
@@ -1511,26 +1398,12 @@ and convert_function_like_body (env : env) (old_st : state) (body : func_body)
   let (st, r) = convert_block env st body.fb_ast in
   let function_state = st.current_function_state in
   (* restore old has_finally/goto_state values *)
-  let st =
-    { st with current_function_state = old_st.current_function_state }
-  in
+  let st = { st with current_function_state = old_st.current_function_state } in
   (st, { body with fb_ast = r }, function_state)
 
-and convert_catch env st (ty, (p, catch_var), b) =
-  let let_vars_copy = st.let_vars in
-  let catch_var_name = Local_id.get_name catch_var in
-  (* hacksperimental feature:
-     variables with name not beginning with dollar are treated as immutable *)
-  let (st, catch_var) =
-    if catch_var_name.[0] = '$' || not (hacksperimental ()) then
-      (st, catch_var)
-    else
-      let (id, st) = update_let_var_id st catch_var_name in
-      let var_name = transform_let_var_name catch_var_name id in
-      (st, Local_id.make_scoped var_name)
-  in
+and convert_catch env st (id1, id2, b) =
   let (st, b) = convert_block env st b in
-  ({ st with let_vars = let_vars_copy }, (ty, (p, catch_var), b))
+  (st, (id1, id2, b))
 
 and convert_case env st case =
   match case with
@@ -1543,14 +1416,6 @@ and convert_case env st case =
     (st, Case (e, b))
 
 and convert_as_expr env st aexpr =
-  let convert_expr env st e =
-    match e with
-    | (p1, Id (p2, var)) when hacksperimental () ->
-      let (id, st) = update_let_var_id st var in
-      let var_name = transform_let_var_name var id in
-      (st, (p1, Lvar (p2, Local_id.make_scoped var_name)))
-    | _ -> convert_expr env st e
-  in
   match aexpr with
   | As_v e ->
     let (st, e) = convert_expr env st e in
@@ -1637,7 +1502,7 @@ and add_reified_property cd c_vars =
      * varray/vec that holds a list of type structures
      * this prop will be initilized during runtime
      *)
-    let hint = Some (p, Happly ((p, "varray"), [])) in
+    let hint = Some (p, Happly ((p, "\\HH\\varray"), [])) in
     let var =
       {
         cv_final = false;
@@ -1721,36 +1586,45 @@ and convert_gconst env st gconst =
   let (st, expr) = convert_expr env st gconst.cst_value in
   (st, { gconst with cst_value = expr })
 
+and convert_record_fields env st fields =
+  let convert_field st (sid, hint, init) =
+    let (st, init) =
+      match init with
+      | Some e ->
+        let (st, e) = convert_expr env st e in
+        (st, Some e)
+      | None -> (st, None)
+    in
+    (st, (sid, hint, init))
+  in
+  let rec aux st fields =
+    match fields with
+    | f :: fs ->
+      let (st, f) = convert_field st f in
+      let (st, fs) = aux st fs in
+      (st, f :: fs)
+    | [] -> (st, [])
+  in
+  aux st fields
+
 and convert_defs env class_count record_count typedef_count st dl =
   match dl with
   | [] -> (st, [])
   | Fun fd :: dl ->
-    let let_vars_copy = st.let_vars in
-    let st = { st with let_vars = SMap.empty } in
     let (st, fd) = convert_fun env st fd in
     let (st, dl) =
       convert_defs env class_count record_count typedef_count st dl
     in
-    ({ st with let_vars = let_vars_copy }, (TopLevel, Fun fd) :: dl)
+    (st, (TopLevel, Fun fd) :: dl)
   (* Convert a top-level class definition into a true class definition and
    * a stub class that just corresponds to the DefCls instruction *)
   | Class cd :: dl ->
-    let let_vars_copy = st.let_vars in
-    let st = { st with let_vars = SMap.empty } in
     let (st, cd) = convert_class env st cd in
-    let stub_class =
-      if cd.c_kind = Ast_defs.Crecord then
-        make_defrecord cd record_count
-      else
-        make_defcls cd class_count
-    in
+    let stub_class = make_defcls cd class_count in
     let (st, dl) =
-      if cd.c_kind = Ast_defs.Crecord then
-        convert_defs env class_count (record_count + 1) typedef_count st dl
-      else
-        convert_defs env (class_count + 1) record_count typedef_count st dl
+      convert_defs env (class_count + 1) record_count typedef_count st dl
     in
-    ( { st with let_vars = let_vars_copy },
+    ( st,
       (TopLevel, Class cd)
       :: (TopLevel, Stmt (Pos.none, Def_inline (Class stub_class)))
       :: dl )
@@ -1760,6 +1634,16 @@ and convert_defs env class_count record_count typedef_count st dl =
       convert_defs env class_count record_count typedef_count st dl
     in
     (st, (TopLevel, Stmt stmt) :: dl)
+  | RecordDef rd :: dl ->
+    let (st, rd_fields) = convert_record_fields env st rd.rd_fields in
+    let stub_record = make_defrecord rd record_count in
+    let stub_stmt = Stmt (Pos.none, Def_inline (RecordDef stub_record)) in
+    let (st, dl) =
+      convert_defs env class_count (record_count + 1) typedef_count st dl
+    in
+    ( st,
+      (TopLevel, RecordDef { rd with rd_fields }) :: (TopLevel, stub_stmt) :: dl
+    )
   | Typedef td :: dl ->
     let (st, dl) =
       convert_defs env class_count record_count (typedef_count + 1) st dl
@@ -1806,12 +1690,12 @@ and convert_defs env class_count record_count typedef_count st dl =
 
 let count_classes (defs : program) =
   List.count defs ~f:(function
-      | Class { c_kind; _ } when c_kind <> Ast_defs.Crecord -> true
+      | Class _ -> true
       | _ -> false)
 
 let count_records defs =
   List.count defs ~f:(function
-      | Class { c_kind = Ast_defs.Crecord; _ } -> true
+      | RecordDef _ -> true
       | _ -> false)
 
 let hoist_toplevel_functions all_defs =
@@ -1828,10 +1712,10 @@ let hoist_toplevel_functions all_defs =
  * The closure classes and hoisted definitions are placed after the existing
  * definitions.
  *)
-let convert_toplevel_prog ~popt defs =
+let convert_toplevel_prog ~empty_namespace defs =
   let defs =
     if constant_folding () then
-      Ast_constant_folder.fold_program defs
+      Ast_constant_folder.fold_program ~empty_namespace defs
     else
       defs
   in
@@ -1839,7 +1723,7 @@ let convert_toplevel_prog ~popt defs =
    * integer identifiers for the generated classes. .main counts as a top-level
    * function and we place hoisted functions just after that *)
   let env = env_toplevel (count_classes defs) (count_records defs) 1 defs in
-  let st = initial_state popt in
+  let st = initial_state empty_namespace in
   let (st, original_defs) = convert_defs env 0 0 0 st defs in
   let main_state = st.current_function_state in
   let st =
@@ -1852,9 +1736,6 @@ let convert_toplevel_prog ~popt defs =
   (* Reorder the functions so that they appear first. This matches the
    * behaviour of HHVM. *)
   let original_defs = hoist_toplevel_functions original_defs in
-  let fun_defs =
-    List.rev_map st.hoisted_functions (fun fd -> (Hoisted, Fun fd))
-  in
   let named_hoisted_functions = SMap.values st.named_hoisted_functions in
   let named_fun_defs =
     List.rev_map named_hoisted_functions (fun fd -> (TopLevel, Fun fd))
@@ -1862,7 +1743,7 @@ let convert_toplevel_prog ~popt defs =
   let class_defs =
     List.rev_map st.hoisted_classes (fun cd -> (Hoisted, Class cd))
   in
-  let ast_defs = fun_defs @ named_fun_defs @ original_defs @ class_defs in
+  let ast_defs = named_fun_defs @ original_defs @ class_defs in
   let global_state =
     Emit_env.
       {

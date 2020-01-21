@@ -325,12 +325,12 @@ Array HHVM_METHOD(DateTime, __sleep) {
   auto const data = getDateTimeData(this_);
 
   auto const formatted = data->format(s_ISOformat);
-  this_->setProp(nullptr, s_date.get(), formatted.toCell());
+  this_->setProp(nullptr, s_date.get(), formatted.asTypedValue());
   int zoneType = data->m_dt->zoneType();
   this_->setProp(nullptr, s_timezone_type.get(),
                  make_tv<KindOfInt64>(zoneType));
   auto const timezone = zone_type_to_string(zoneType, data->m_dt);
-  this_->setProp(nullptr, s_timezone.get(), timezone.toCell());
+  this_->setProp(nullptr, s_timezone.get(), timezone.asTypedValue());
   return make_varray(s_date, s_timezone_type, s_timezone);
 }
 
@@ -764,7 +764,7 @@ Variant HHVM_FUNCTION(gmmktime,
 static TypedValue HHVM_FUNCTION(idate,
                                 const String& fmt, TypedValue timestamp) {
   if (fmt.size() != 1) {
-    throw_invalid_argument("format: %s", fmt.data());
+    raise_invalid_argument_warning("format: %s", fmt.data());
     return make_tv<KindOfBoolean>(false);
   }
   int64_t ret = req::make<DateTime>(

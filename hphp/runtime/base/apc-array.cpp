@@ -94,13 +94,25 @@ APCArray::MakeSharedArray(ArrayData* arr, APCHandleLevel level,
     arr,
     level,
     [&]() {
+      auto const add_prov = [arr] (APCHandle::Pair pair) {
+        if (UNLIKELY(
+          RO::EvalArrayProvenance &&
+          RO::EvalArrProvDVArrays
+        )) {
+          if (auto const tag = arrprov::getTag(arr)) {
+            arrprov::setTag(APCArray::fromHandle(pair.handle), *tag);
+          }
+        }
+        return pair;
+      };
+
       if (arr->isVArray()) {
         assertx(!RuntimeOption::EvalHackArrDVArrs);
-        return MakePacked(arr, APCKind::SharedVArray, unserializeObj);
+        return add_prov(MakePacked(arr, APCKind::SharedVArray, unserializeObj));
       }
       if (arr->isDArray()) {
         assertx(!RuntimeOption::EvalHackArrDVArrs);
-        return MakeHash(arr, APCKind::SharedDArray, unserializeObj);
+        return add_prov(MakeHash(arr, APCKind::SharedDArray, unserializeObj));
       }
       return arr->isVectorData()
         ? MakePacked(arr, APCKind::SharedPackedArray, unserializeObj)
@@ -124,7 +136,10 @@ APCArray::MakeSharedVec(ArrayData* vec, APCHandleLevel level,
     level,
     [&] {
       auto const pair = MakePacked(vec, APCKind::SharedVec, unserializeObj);
-      if (RuntimeOption::EvalArrayProvenance) {
+      if (UNLIKELY(
+        RO::EvalArrayProvenance &&
+        RO::EvalArrProvHackArrays
+      )) {
         if (auto const tag = arrprov::getTag(vec)) {
           arrprov::setTag(APCArray::fromHandle(pair.handle), *tag);
         }
@@ -149,7 +164,10 @@ APCArray::MakeSharedDict(ArrayData* dict, APCHandleLevel level,
     level,
     [&] {
       auto const pair = MakeHash(dict, APCKind::SharedDict, unserializeObj);
-      if (RuntimeOption::EvalArrayProvenance) {
+      if (UNLIKELY(
+        RO::EvalArrayProvenance &&
+        RO::EvalArrProvHackArrays
+      )) {
         if (auto const tag = arrprov::getTag(dict)) {
           arrprov::setTag(APCArray::fromHandle(pair.handle), *tag);
         }
@@ -158,23 +176,6 @@ APCArray::MakeSharedDict(ArrayData* dict, APCHandleLevel level,
     },
     [&](DataWalker::PointerMap* m) { return MakeUncountedDict(dict, m); },
     [&](StringData* s) { return APCString::MakeSerializedDict(s); }
-  );
-}
-
-APCHandle::Pair
-APCArray::MakeSharedShape(ArrayData* shape, APCHandleLevel level,
-                          bool unserializeObj) {
-  assertx(shape->isShape());
-  if (auto const value = APCTypedValue::HandlePersistent(
-        APCTypedValue::StaticShape{}, APCTypedValue::UncountedShape{}, shape)) {
-    return value;
-  }
-  return MakeSharedImpl(
-    shape,
-    level,
-    [&]() { return MakeHash(shape, APCKind::SharedShape, unserializeObj); },
-    [&](DataWalker::PointerMap* m) { return MakeUncountedShape(shape, m); },
-    [&](StringData* s) { return APCString::MakeSerializedShape(s); }
   );
 }
 
@@ -220,7 +221,7 @@ APCHandle::Pair APCArray::MakeHash(ArrayData* arr, APCKind kind,
   try {
     IterateKV(
       arr,
-      [&](Cell k, TypedValue v) {
+      [&](TypedValue k, TypedValue v) {
         auto key = APCHandle::Create(VarNR(k), false,
                                      APCHandleLevel::Inner, unserializeObj);
         size += key.size;
@@ -278,17 +279,6 @@ APCHandle* APCArray::MakeUncountedDict(
   auto data = MixedArray::MakeUncounted(dict, true, m);
   auto mem = reinterpret_cast<APCTypedValue*>(data) - 1;
   auto value = new(mem) APCTypedValue(APCTypedValue::UncountedDict{}, data);
-  return value->getHandle();
-}
-
-APCHandle* APCArray::MakeUncountedShape(
-    ArrayData* shape,
-    DataWalker::PointerMap* m) {
-  assertx(apcExtension::UseUncounted);
-  assertx(shape->isShape());
-  auto data = MixedArray::MakeUncounted(shape, true, m);
-  auto mem = reinterpret_cast<APCTypedValue*>(data) - 1;
-  auto value = new(mem) APCTypedValue(APCTypedValue::UncountedShape{}, data);
   return value->getHandle();
 }
 

@@ -5,3 +5,4 @@ $b = "ok\n";
 echo $a;
 echo $b;
 echo "ok\n";
+# NOTE: The assignments above must run at top-level.

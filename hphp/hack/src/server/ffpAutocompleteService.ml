@@ -28,6 +28,7 @@ let make_keyword_completion
     res_fullname = keyword_name;
     res_kind = SearchUtils.SI_Keyword;
     func_details = None;
+    ranking_details = None;
   }
 
 let handle_empty_autocomplete (pos : File_content.position) file_content =
@@ -127,6 +128,7 @@ let auto_complete
     in
     let global_completions =
       FfpAutocompleteGlobals.get_globals
+        sienv
         context
         stub
         positioned_tree

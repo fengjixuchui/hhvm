@@ -13,8 +13,8 @@
     default_injector_config
     file_content
     gen_deps
+    glean_dependency_graph_stubs
     hhi
-    nast
     parent
     server
     server_env
@@ -22,7 +22,6 @@
     tast
     tast_typecheck
     temp_file
-    typed_positioned_syntax
     typing
     utils_core
     utils_multifile))
@@ -41,13 +40,11 @@
     gen_deps
     hhi
     hh_server_monitor
-    nast
     parent
     server
     server_env
     sys_utils
     tast
-    typed_positioned_syntax
     typing
     utils_core))
 
@@ -65,13 +62,11 @@
     gen_deps
     hhi
     hh_server_monitor
-    nast
     parent
     server
     server_env
     sys_utils
     tast
-    typed_positioned_syntax
     typing
     utils_core))
 
@@ -85,13 +80,12 @@
     facts
     global_config
     global_options
-    hackc_parse_delegator
     hhbc
     hhi
     heap_ident
     logging
     naming
-    pocket_universes
+    naming_elaborate_namespaces_endo
     typing)
   (ocamlc_flags (:standard -custom))
   (link_flags (:standard (:include dune_config/ld-opts.sexp)))
@@ -108,7 +102,6 @@
     default_injector_config
     global_config
     hackfmt
-    nast
     parser
     utils_core))
 
@@ -126,27 +119,14 @@
     utils_ocaml_overrides))
 
 (executable
-  (name hh_single_parse)
-  (modules
-    hh_single_parse)
-  (ocamlc_flags (:standard -custom))
-  (link_flags (:standard (:include dune_config/ld-opts.sexp)))
-  (libraries
-    debug
-    default_injector_config
-    global_config
-    hackfmt
-    nast
-    parser))
-
-(executable
   (name generate_full_fidelity)
   (modules
-    generate_full_fidelity)
+    generate_full_fidelity
+    generate_full_fidelity_data)
   (ocamlc_flags (:standard -custom))
   (link_flags (:standard (:include dune_config/ld-opts.sexp)))
   (libraries
-    procs_procs_lwt
     core_kernel
     str
+    parser_schema
     collections))

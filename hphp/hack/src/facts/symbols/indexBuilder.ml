@@ -32,98 +32,96 @@ let get_details_from_info (info_opt : Facts.type_facts option) :
         | TKEnum -> SI_Enum
         | TKTrait -> SI_Trait
         | TKMixed -> SI_Mixed
+        | TKRecord -> SI_RecordDef
         | _ -> SI_Unknown
       in
       let is_abstract = info.flags land flags_abstract > 0 in
       let is_final = info.flags land flags_final > 0 in
       (k, is_abstract, is_final))
 
+let convert_facts ~(path : Relative_path.t) ~(facts : Facts.facts) : si_capture
+    =
+  let relative_path_str = Relative_path.suffix path in
+  (* Identify all classes in the file *)
+  let class_keys = InvSMap.keys facts.types in
+  let classes_mapped =
+    List.map class_keys ~f:(fun key ->
+        let info_opt = InvSMap.find_opt key facts.types in
+        let (kind, is_abstract, is_final) = get_details_from_info info_opt in
+        {
+          (* We need to strip away the preceding backslash for hack classes
+            * but leave intact the : for xhp classes. The preceding : symbol
+            * is needed to distinguish which type of a class you want. *)
+          sif_name = Utils.strip_ns key;
+          sif_kind = kind;
+          sif_filepath = relative_path_str;
+          sif_is_abstract = is_abstract;
+          sif_is_final = is_final;
+        })
+  in
+  (* Identify all functions in the file *)
+  let functions_mapped =
+    List.map facts.functions ~f:(fun funcname ->
+        {
+          sif_name = funcname;
+          sif_kind = SI_Function;
+          sif_filepath = relative_path_str;
+          sif_is_abstract = false;
+          sif_is_final = false;
+        })
+  in
+  (* Handle typedefs *)
+  let types_mapped =
+    List.map facts.type_aliases ~f:(fun typename ->
+        {
+          sif_name = typename;
+          sif_kind = SI_Typedef;
+          sif_filepath = relative_path_str;
+          sif_is_abstract = false;
+          sif_is_final = false;
+        })
+  in
+  (* Handle constants *)
+  let constants_mapped =
+    List.map facts.constants ~f:(fun constantname ->
+        {
+          sif_name = constantname;
+          sif_kind = SI_GlobalConstant;
+          sif_filepath = relative_path_str;
+          sif_is_abstract = false;
+          sif_is_final = false;
+        })
+  in
+  (* Return unified results *)
+  List.append classes_mapped functions_mapped
+  |> List.append types_mapped
+  |> List.append constants_mapped
+
 (* Parse one single file and capture information about it *)
 let parse_one_file ~(path : Relative_path.t) : si_capture =
   let filename = Relative_path.to_absolute path in
-  if Sys.is_directory filename then
-    []
-  else
-    let relative_path_str = Relative_path.suffix path in
-    let text = In_channel.read_all filename in
-    (* Just the facts ma'am *)
-    Facts_parser.mangle_xhp_mode := false;
-    let fact_opt =
-      Facts_parser.from_text
-        ~php5_compat_mode:false
-        ~hhvm_compat_mode:true
-        ~disable_nontoplevel_declarations:false
-        ~disable_legacy_soft_typehints:false
-        ~allow_new_attribute_syntax:false
-        ~disable_legacy_attribute_syntax:false
-        ~filename:path
-        ~text
-    in
-    (* Iterate through facts and print them out *)
-    let result =
-      match fact_opt with
-      | Some facts ->
-        (* Identify all classes in the file *)
-        let class_keys = InvSMap.keys facts.types in
-        let classes_mapped =
-          List.map class_keys ~f:(fun key ->
-              let info_opt = InvSMap.get key facts.types in
-              let (kind, is_abstract, is_final) =
-                get_details_from_info info_opt
-              in
-              {
-                (* We store all classes without the preceding
-                 * namespace indicator, because that is closest
-                 * to how they are returned by autocomplete. *)
-                sif_name = Utils.strip_both_ns key;
-                sif_kind = kind;
-                sif_filepath = relative_path_str;
-                sif_is_abstract = is_abstract;
-                sif_is_final = is_final;
-              })
-        in
-        (* Identify all functions in the file *)
-        let functions_mapped =
-          List.map facts.functions ~f:(fun funcname ->
-              {
-                sif_name = funcname;
-                sif_kind = SI_Function;
-                sif_filepath = relative_path_str;
-                sif_is_abstract = false;
-                sif_is_final = false;
-              })
-        in
-        (* Handle typedefs *)
-        let types_mapped =
-          List.map facts.type_aliases ~f:(fun typename ->
-              {
-                sif_name = typename;
-                sif_kind = SI_Typedef;
-                sif_filepath = relative_path_str;
-                sif_is_abstract = false;
-                sif_is_final = false;
-              })
-        in
-        (* Handle constants *)
-        let constants_mapped =
-          List.map facts.constants ~f:(fun constantname ->
-              {
-                sif_name = constantname;
-                sif_kind = SI_GlobalConstant;
-                sif_filepath = relative_path_str;
-                sif_is_abstract = false;
-                sif_is_final = false;
-              })
-        in
-        (* Return unified results *)
-        let r = List.append classes_mapped functions_mapped in
-        let r = List.append r types_mapped in
-        let r = List.append r constants_mapped in
-        r
-      | None -> []
-    in
-    files_scanned := !files_scanned + 1;
-    result
+  let text = In_channel.read_all filename in
+  (* Just the facts ma'am *)
+  Facts_parser.mangle_xhp_mode := false;
+  let fact_opt =
+    Facts_parser.from_text
+      ~php5_compat_mode:false
+      ~hhvm_compat_mode:true
+      ~disable_nontoplevel_declarations:false
+      ~disable_legacy_soft_typehints:false
+      ~allow_new_attribute_syntax:false
+      ~disable_legacy_attribute_syntax:false
+      ~filename:path
+      ~text
+  in
+  (* Iterate through facts and print them out *)
+  let result =
+    match fact_opt with
+    | Some facts -> convert_facts ~path ~facts
+    | None -> []
+  in
+  files_scanned := !files_scanned + 1;
+  result
 
 (* Parse the file using the existing context*)
 let parse_file (ctxt : index_builder_context) (path : Relative_path.t) :
@@ -166,7 +164,9 @@ let parallel_parse
     ~merge:List.append
     ~next:(MultiWorker.next workers files)
 
-let entry = WorkerController.register_entry_point ~restore:(fun () -> ())
+let entry =
+  WorkerController.register_entry_point ~restore:(fun () ~(worker_id : int) ->
+      Hh_logger.set_id (Printf.sprintf "indexBuilder %d" worker_id))
 
 (* Create one worker per cpu *)
 let init_workers () =
@@ -182,26 +182,9 @@ let init_workers () =
     ~gc_control
     ~heap_handle
 
-(* Let's use the unix find command which seems to be really quick at this sort of thing *)
 let gather_file_list (path : string) : Relative_path.t list =
-  let cmdline =
-    Printf.sprintf
-      "find %s \\( \\( -name \"*.php\" -o -name \"*.hhi\" \\) -and -not -path \"*/.hg/*\" \\)"
-      path
-  in
-  let channel = Unix.open_process_in cmdline in
-  let result = ref [] in
-  (try
-     while true do
-       let line_opt = In_channel.input_line channel in
-       match line_opt with
-       | Some line ->
-         result := Relative_path.create_detect_prefix line :: !result
-       | None -> raise End_of_file
-     done
-   with End_of_file -> ());
-  assert (Unix.close_process_in channel = Unix.WEXITED 0);
-  !result
+  Find.find ~file_only:true ~filter:FindUtils.file_filter [Path.make path]
+  |> List.map ~f:(fun path -> Relative_path.create_detect_prefix path)
 
 (* Run something and measure its duration *)
 let measure_time ~(silent : bool) ~f ~(name : string) =
@@ -236,7 +219,8 @@ let convert_capture (incoming : si_capture) : si_scan_result =
         Caml.Hashtbl.add result.sisr_filepaths s.sif_filepath path_hash);
   result
 
-let export_to_custom_writer json_exported_files ctxt =
+let export_to_custom_writer
+    (json_exported_files : string list) (ctxt : index_builder_context) : unit =
   match (ctxt.custom_service, ctxt.custom_repo_name) with
   | (Some _, None)
   | (None, Some _) ->
@@ -252,17 +236,18 @@ let export_to_custom_writer json_exported_files ctxt =
     measure_time
       ~silent:ctxt.silent
       ~f:(fun () ->
-        CustomSymbolIndexWriter.send_to_custom_writer
-          json_exported_files
-          service
-          repo_name
-          ctxt.repo_folder)
+        CustomJsonUploader.send_to_custom_writer
+          ~workers:None
+          ~print_file_status:true
+          ~files:json_exported_files
+          ~service
+          ~repo_name
+          ~repo_folder:ctxt.repo_folder)
       ~name
 
 (* Run the index builder project *)
-let go
-    (ctxt : index_builder_context) (workers : MultiWorker.worker list option) :
-    unit =
+let go (ctxt : index_builder_context) (workers : MultiWorker.worker list option)
+    : unit =
   if ctxt.json_repo_name <> None then
     (* if json repo is specified, just export to custom writer directly *)
     let json_exported_files =
@@ -282,15 +267,26 @@ let go
     let name =
       Printf.sprintf "Scanned repository folder [%s] in " ctxt.repo_folder
     in
+    let hhconfig_path = Path.concat (Path.make ctxt.repo_folder) ".hhconfig" in
     let files =
-      measure_time
-        ~silent:ctxt.silent
-        ~f:(fun () -> gather_file_list ctxt.repo_folder)
-        ~name
+      (* Sanity test.  If the folder does not have an .hhconfig file, this is probably
+        * an integration test that's using a fake repository.  Don't do anything! *)
+      if Disk.file_exists (Path.to_string hhconfig_path) then
+        measure_time
+          ~silent:ctxt.silent
+          ~f:(fun () -> gather_file_list ctxt.repo_folder)
+          ~name
+      else (
+        if not ctxt.silent then
+          Hh_logger.log
+            "The repository [%s] lacks an .hhconfig file.  Skipping index of repository."
+            ctxt.repo_folder;
+        []
+      )
     in
     (* If desired, get the HHI root folder and add all HHI files from there *)
     let files =
-      if ctxt.include_builtins then
+      if Option.is_some ctxt.hhi_root_folder then
         let hhi_root_folder_path =
           Path.to_string (Option.value_exn ctxt.hhi_root_folder)
         in

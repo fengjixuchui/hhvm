@@ -21,6 +21,7 @@
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/rds-util.h"
 #include "hphp/runtime/base/repo-auth-type.h"
+#include "hphp/runtime/base/tv-layout.h"
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/type-string.h"
 #include "hphp/runtime/base/typed-value.h"
@@ -32,7 +33,9 @@
 #include "hphp/runtime/vm/preclass.h"
 #include "hphp/runtime/vm/reified-generics-info.h"
 
+#include "hphp/util/bitset-view.h"
 #include "hphp/util/compact-vector.h"
+#include "hphp/util/compilation-flags.h"
 #include "hphp/util/default-ptr.h"
 #include "hphp/util/hash-map.h"
 
@@ -98,6 +101,12 @@ using ClassPtr = AtomicSharedLowPtr<Class>;
 // Since native instance dtors can be release functions, they have to have
 // compatible signatures.
 using ObjReleaseFunc = BuiltinDtorFunction;
+
+using ObjectProps = std::conditional_t<
+  wide_tv_val,
+  tv_layout::Tv7Up,
+  tv_layout::TvArray
+>;
 
 /*
  * Class represents the full definition of a user class in a given request
@@ -250,24 +259,94 @@ struct Class : AtomicCountable {
 
     const PropInitVec& operator=(const PropInitVec&);
 
-    using iterator = TypedValueAux*;
+    template <bool is_const>
+    struct Entry {
+      template <typename Dummy = void,
+                typename = std::enable_if_t<!is_const, Dummy>>
+      Entry& operator=(TypedValueAux);
+
+      operator TypedValueAux() const;
+
+      tv_val<is_const> val;
+      typename BitsetView<is_const>::bit_reference deepInit;
+    };
+
+    template <bool is_const>
+    struct iterator_impl {
+
+      using char_t = typename std::conditional_t<is_const,
+                                                 const unsigned char,
+                                                 unsigned char>;
+      using tv_iter_t = typename std::conditional_t<is_const,
+                                                    ObjectProps::const_iterator,
+                                                    ObjectProps::iterator>;
+      using bit_iter_t = typename BitsetView<is_const>::iterator;
+
+      iterator_impl(tv_iter_t tv, bit_iter_t bit);
+
+      bool operator==(const iterator_impl& o) const;
+      bool operator!=(const iterator_impl& o) const;
+
+      iterator_impl& operator++();
+      iterator_impl operator++(int);
+
+      Entry<is_const> operator*() const;
+      Entry<is_const> operator->() const;
+
+      using value_type = Entry<is_const>;
+      using reference = Entry<is_const>&;
+      using pointer = void;
+      using difference_type = void;
+      using iterator_category = std::forward_iterator_tag;
+
+      tv_iter_t m_val;
+      bit_iter_t m_bit;
+    };
+
+    using iterator = iterator_impl<false>;
+    using const_iterator = iterator_impl<true>;
+
+    size_t size() const;
+
+    template <typename T>
+    Entry<false> operator[](T i);
+
+    template <typename T>
+    Entry<true> operator[](T i) const;
 
     iterator begin();
     iterator end();
-    size_t size() const;
-
-    TypedValueAux& operator[](size_t i);
-    const TypedValueAux& operator[](size_t i) const;
+    const_iterator cbegin() const;
+    const_iterator cend() const;
 
     void push_back(const TypedValue& v);
+
+    const ObjectProps* data() const;
+
+    static constexpr size_t dataOff() {
+      return offsetof(PropInitVec, m_data);
+    }
+
+    size_t dataSize() const {
+      auto const cap = m_capacity < 0 ? ~m_capacity : m_capacity;
+      return ObjectProps::sizeFor(cap) +
+             BitsetView<true>::sizeFor(cap);
+    }
 
     /*
      * Make a request-allocated copy of `src'.
      */
     static PropInitVec* allocWithReqAllocator(const PropInitVec& src);
 
-    static constexpr size_t dataOff() {
-      return offsetof(PropInitVec, m_data);
+    TYPE_SCAN_CUSTOM() {
+      // We don't need to worry about scanning the pointer m_data itself because
+      // when we're heap-allocated, it always points inside of this allocation.
+      //
+      // The only time that's not the case is when we're allocated in general
+      // heap and we shouldn't be type-scanned under those circumstances
+      assertx(reqAllocated());
+      assertx(m_data == static_cast<const void*>(this + 1));
+      m_data->scan(ObjectProps::quickIndex(m_size), scanner);
     }
 
   private:
@@ -275,7 +354,10 @@ struct Class : AtomicCountable {
 
     bool reqAllocated() const;
 
-    TypedValueAux* m_data;
+    BitsetView<false> deepInitBits();
+    BitsetView<true> deepInitBits() const;
+
+    ObjectProps* m_data;
     uint32_t m_size;
     // m_capacity > 0, allocated on global huge heap
     // m_capacity = 0, not request allocated, m_data is nullptr
@@ -662,7 +744,9 @@ public:
    * An exclusive upper limit on the post-sort indices of properties of this
    * class that may be countable. See m_countablePropsEnd for more details.
    */
-  uint32_t countablePropsEnd() const { return m_countablePropsEnd; }
+  ObjectProps::quick_index countablePropsEnd() const {
+    return m_countablePropsEnd;
+  }
 
   /*
    * Number of declared instance properties that are actually accessible from
@@ -848,7 +932,9 @@ public:
    * Map the logical slot of a property to its physical index within the object
    * in memory.
    */
-  uint16_t propSlotToIndex(Slot slot) const { return m_slotIndex[slot]; }
+  ObjectProps::quick_index propSlotToIndex(Slot slot) const {
+    return m_slotIndex[slot];
+  }
 
   /*
    * Map the physical index of a property within the object to its logical slot.
@@ -939,12 +1025,12 @@ public:
    * Look up the actual value of a class constant.  Perform dynamic
    * initialization if necessary.
    *
-   * Return a Cell containing KindOfUninit if this class has no such constant.
+   * Return a TypedValue containing KindOfUninit if this class has no such constant.
    *
-   * The returned Cell is guaranteed not to hold a reference counted object (it
+   * The returned TypedValue is guaranteed not to hold a reference counted object (it
    * may, however, be KindOfString for a static string).
    */
-  Cell clsCnsGet(const StringData* clsCnsName,
+  TypedValue clsCnsGet(const StringData* clsCnsName,
                  ClsCnsLookup what = ClsCnsLookup::NoTypes) const;
 
   /*
@@ -959,7 +1045,7 @@ public:
    * otherwise it has m_type set to KindOfUninit.  Non-scalar class constants
    * need to run 86cinit code to determine their value at runtime.
    */
-  const Cell* cnsNameToTV(const StringData* clsCnsName,
+  const TypedValue* cnsNameToTV(const StringData* clsCnsName,
                           Slot& clsCnsInd,
                           ClsCnsLookup what = ClsCnsLookup::NoTypes) const;
 
@@ -1030,12 +1116,6 @@ public:
 
   /////////////////////////////////////////////////////////////////////////////
   // Objects.                                                           [const]
-
-  /*
-   * Offset of the declared instance property at `slot' on an ObjectData
-   * instantiated from this class.
-   */
-  size_t declPropOffset(Slot slot) const;
 
   /*
    * Whether instances of this class implement Throwable interface, which
@@ -1428,7 +1508,7 @@ private:
                         Slot& staticSerializationIdx,
                         std::vector<bool>& staticSerializationVisited);
   void importTraitInstanceProp(Prop& traitProp,
-                               const TypedValue& traitPropVal,
+                               TypedValue traitPropVal,
                                PropMap::Builder& curPropMap,
                                SPropMap::Builder& curSPropMap,
                                std::vector<uint16_t>& slotIndex,
@@ -1463,7 +1543,7 @@ private:
   void setNativeDataInfo();
   void setInstanceMemoCacheInfo();
   void setLSBMemoCacheInfo();
-  void setReleaseFunc();
+  void setReleaseData();
 
   template<bool setParents> void setInstanceBitsImpl();
   void addInterfacesFromUsedTraits(InterfaceMap::Builder& builder) const;
@@ -1535,7 +1615,21 @@ private:
   bool m_hasReifiedGenerics      : 1;
   /* This class has a refied parent */
   bool m_hasReifiedParent        : 1;
-  // NB: 19 bits available here (in USE_LOWPTR builds).
+  /*
+   * Whether the Class requires initialization, because it has either
+   * {p,s}init() methods or static members, or possibly has prop type invariance
+   * violations.
+   */
+  bool m_needInitialization : 1;
+
+  bool m_needsInitThrowable : 1;
+  bool m_hasDeepInitProps : 1;
+  /*
+   * Whether this class has been serialized yet.
+   */
+  mutable bool m_serialized : 1;
+
+  // NB: 15 bits available here (in USE_LOWPTR builds).
 
   /*
    * Vector of 86pinit() methods that need to be called to complete instance
@@ -1629,25 +1723,14 @@ private:
    */
   uint8_t m_RTAttrs;
 
-  /*
-   * Whether the Class requires initialization, because it has either
-   * {p,s}init() methods or static members, or possibly has prop type invariance
-   * violations.
-   */
-  bool m_needInitialization : 1;
-
-  bool m_needsInitThrowable : 1;
-  bool m_hasDeepInitProps : 1;
-  /*
-   * Whether this class has been serialized yet.
-   */
-  mutable bool m_serialized : 1;
+  // An index that represent the size bin in the MemoryManager
+  uint8_t m_sizeIdx{0};
 
   mutable rds::Link<PropInitVec*, rds::Mode::Normal> m_propDataCache;
 
   /* Indexed by logical Slot number, gives the corresponding index within the
    * objects in memory. */
-  VMFixedVector<uint16_t> m_slotIndex;
+  VMFixedVector<ObjectProps::quick_index> m_slotIndex;
 
   /*
    * Cache of m_preClass->attrs().
@@ -1657,9 +1740,7 @@ private:
   // Pointer to a function that releases object instances of this class type.
   ObjReleaseFunc m_releaseFunc;
   // Determines the offset to the base pointer to be released
-  uint32_t m_memoSize;
-  // An index that represent the size bin in the MemoryManager
-  uint8_t m_sizeIdx;
+  uint32_t m_memoSize{0};
 
   /*
    * An exclusive upper limit on the post-sort indices of properties of this
@@ -1670,7 +1751,7 @@ private:
    * (Note that there may still be uncounted properties with indices less than
    * this bound; in particular, we can't sort parent class properties freely.)
    */
-  uint32_t m_countablePropsEnd;
+  ObjectProps::quick_index m_countablePropsEnd;
 
   /*
    * Vector of Class pointers that encodes the inheritance hierarchy, including

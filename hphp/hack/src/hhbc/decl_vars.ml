@@ -119,9 +119,6 @@ let declvar_visitor explicit_use_set_opt is_in_static_method is_closure_body =
           state :=
             add_local ~barethis:Bare_this !state (pos, Local_id.get_name id)
         | _ -> super#on_expr () prop_e)
-      | Aast.Unop (Ast_defs.Uref, (_, Aast.Lvar (_, id)))
-        when Local_id.get_name id = "$this" ->
-        state := with_this Bare_this_as_ref !state
       | Aast.Binop (binop, e1, e2) ->
         (match (binop, e2) with
         | (Ast_defs.Eq _, (_, Aast.Await _))
@@ -133,8 +130,7 @@ let declvar_visitor explicit_use_set_opt is_in_static_method is_closure_body =
           self#on_expr () e1
         | _ -> super#on_expr_ () e)
       | Aast.Lvar (pos, id) ->
-        state :=
-          add_local ~barethis:Bare_this !state (pos, Local_id.get_name id)
+        state := add_local ~barethis:Bare_this !state (pos, Local_id.get_name id)
       | Aast.Class_get (cid, expr) ->
         on_class_get self cid expr ~is_call_target:false
       | Aast.Lfun _ ->
@@ -166,15 +162,19 @@ let declvar_visitor explicit_use_set_opt is_in_static_method is_closure_body =
                 add_local ~barethis:Bare_this !state (pos, Local_id.get_name id))
         else
           ()
-      | Aast.Call (_, func_e, _, pos_args, unpacked_args) ->
+      | Aast.Call (_, func_e, _, pos_args, unpacked_arg) ->
         (match func_e with
-        | (_, Aast.Id (pos, "HH\\set_frame_metadata"))
-        | (_, Aast.Id (pos, "\\HH\\set_frame_metadata")) ->
+        | (_, Aast.Id (pos, call_name))
+          when call_name = SN.EmitterSpecialFunctions.set_frame_metadata ->
           state := add_local ~barethis:Bare_this !state (pos, "$86metadata")
         | _ -> ());
         let barethis =
           match func_e with
-          | (_, Aast.Id (_, ("isset" | "echo" | "empty"))) -> Bare_this
+          | (_, Aast.Id (_, name))
+            when name = SN.PseudoFunctions.isset
+                 || name = SN.PseudoFunctions.empty
+                 || "\\" ^ name = SN.PseudoFunctions.echo ->
+            Bare_this
           | _ -> Bare_this_as_ref
         in
         let on_arg e =
@@ -182,9 +182,6 @@ let declvar_visitor explicit_use_set_opt is_in_static_method is_closure_body =
           (* Only add $this to locals if it's bare *)
           | (_, Aast.Lvar (_, id)) when Local_id.get_name id = "$this" ->
             state := with_this barethis !state
-          | (_, Aast.Unop (Ast_defs.Uref, (_, Aast.Lvar (pos, id)))) ->
-            state :=
-              add_local ~barethis:Bare_this !state (pos, Local_id.get_name id)
           | _ -> self#on_expr () e
         in
         (match snd func_e with
@@ -192,8 +189,8 @@ let declvar_visitor explicit_use_set_opt is_in_static_method is_closure_body =
           on_class_get self id prop ~is_call_target:true
         | _ -> self#on_expr () func_e);
         List.iter pos_args on_arg;
-        List.iter unpacked_args on_arg
-      | Aast.New (_, _, exprs1, exprs2, _) ->
+        Option.iter unpacked_arg on_arg
+      | Aast.New (_, _, exprs1, expr2, _) ->
         let add_bare_expr expr =
           match expr with
           | (_, Aast.Lvar (_, id)) when Local_id.get_name id = "$this" ->
@@ -201,7 +198,7 @@ let declvar_visitor explicit_use_set_opt is_in_static_method is_closure_body =
           | _ -> self#on_expr () expr
         in
         List.iter exprs1 add_bare_expr;
-        List.iter exprs2 add_bare_expr
+        Option.iter expr2 add_bare_expr
       | _ -> super#on_expr_ () e
 
     method! on_class_ _ _ = ()
@@ -242,8 +239,7 @@ let uls_from_ast
   in
   let decl_vars = ULS.diff state.dvs_locals param_names in
   let decl_vars =
-    if needs_local_this || is_closure_body || (not has_this) || is_toplevel
-    then
+    if needs_local_this || is_closure_body || (not has_this) || is_toplevel then
       decl_vars
     else
       ULS.remove "$this" decl_vars

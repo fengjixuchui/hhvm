@@ -122,10 +122,6 @@ enum Attr {
   // Traits have been flattened on this class.
   AttrNoExpandTrait        = (1u << 12), //    X  |          |         //
                                          //       |          |         //
-  // Like AttrLateInit, but instead of throwing, will provide a configurable
-  // default value (and have that value from that point on). This can only be
-  // set if AttrLateInit is set.
-  AttrLateInitSoft         = (1u << 12), //       |    X     |         //
   // Only valid in WholeProgram mode.  Indicates on a class that the class is
   // not extended, or on a method that no extending class defines the method.
   AttrNoOverride           = (1u << 13), //    X  |          |    X    //
@@ -159,10 +155,6 @@ enum Attr {
   // Set on all builtin functions, whether PHP or C++.
   AttrBuiltin              = (1u << 20), //    X  |          |    X    //
                                          //       |          |         //
-  // Set on all functions which take at least one inout parameter. Also implies
-  // that the function takes no parameters by reference.
-  AttrTakesInOutParams     = (1u << 21), //       |          |    X    //
-                                         //       |          |         //
   // Set on properties to indicate they can't be changed after construction
   // and on classes to indicate that all that class' properties are const.
   AttrIsConst              = (1u << 21), //    X  |    X     |         //
@@ -171,9 +163,6 @@ enum Attr {
   AttrNoReifiedInit        = (1u << 23), //    X  |          |         //
                                          //       |          |         //
   AttrIsMethCaller         = (1u << 24), //       |          |    X    //
-                                         //       |          |         //
-  // Is this a (non-static) method that *must* have a non-null this?   //
-  AttrRequiresThis         = (1u << 25), //       |          |    X    //
                                          //       |          |         //
   // Indicates that this function can be constant-folded if it is called with
   // all constant arguments.             //       |          |         //
@@ -191,9 +180,10 @@ enum Attr {
   // skip tagging the return value with the builtin's callsite.)
   AttrProvenanceSkipFrame  = (1u << 29), //       |          |    X    //
                                          //       |          |         //
-  // Indicates that this function wraps either a function taking inout or ref
-  // parameters.                         //       |          |         //
-  AttrIsInOutWrapper       = (1u << 31), //       |          |    X    //
+
+  // XXX: The enum is used as a bitmask and without a value in the highest bit
+  //      we get assertions in dev builds.
+  AttrUnusedMaxAttr        = (1u << 31),
 };
 
 constexpr Attr operator|(Attr a, Attr b) { return Attr((int)a | (int)b); }

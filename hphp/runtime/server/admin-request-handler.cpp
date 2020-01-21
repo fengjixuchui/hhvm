@@ -458,6 +458,18 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
                               && (cmd != "pprof/symbol")))
 #endif
                           ;
+    // When configured, we allow read-only stats to be read without a password.
+    if (needs_password && !RuntimeOption::AdminServerStatsNeedPassword) {
+      if ((strncmp(cmd.c_str(), "memory.", 7) == 0) ||
+          (strncmp(cmd.c_str(), "stats.", 6) == 0) ||
+          (strncmp(cmd.c_str(), "check-", 6) == 0) ||
+          (strncmp(cmd.c_str(), "static-strings", 14) == 0) ||
+          cmd == "hugepage" || cmd == "pcre-cache-size" ||
+          cmd == "vm-tcspace" || cmd == "vm-tcaddr" ||
+          cmd == "vm-namedentities" || cmd == "jemalloc-stats") {
+        needs_password = false;
+      }
+    }
 
     if (needs_password && !RuntimeOption::HashedAdminPasswords.empty()) {
       bool matched = false;
@@ -1373,14 +1385,13 @@ std::string formatStaticString(StringData* str) {
 
 bool AdminRequestHandler::handleDumpStaticStringsRequest(
   const std::string& /*cmd*/, const std::string& filename) {
-  std::vector<StringData*> list = lookupDefinedStaticStrings();
+  auto const& list = lookupDefinedStaticStrings();
   std::ofstream out(filename.c_str());
   SCOPE_EXIT { out.close(); };
   for (auto item : list) {
     out << formatStaticString(item);
     if (RuntimeOption::EvalPerfDataMap) {
-      size_t len = item->size();
-      if (len > 255) len = 255;
+      auto const len = std::min<size_t>(item->size(), 255);
       std::string str(item->data(), len);
       // Only print the first line (up to 255 characters). Since we want '\0' in
       // the list of characters to avoid, we need to use the version of
@@ -1407,7 +1418,7 @@ bool AdminRequestHandler::handleRandomStaticStringsRequest(
     }
   }
   std::string output;
-  std::vector<StringData*> list = lookupDefinedStaticStrings();
+  auto list = lookupDefinedStaticStrings();
   if (count < list.size()) {
     for (size_t i = 0; i < count; i++) {
       size_t j = folly::Random::rand64(i, list.size());

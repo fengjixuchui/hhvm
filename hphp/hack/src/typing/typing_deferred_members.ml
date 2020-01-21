@@ -7,11 +7,12 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Shallow_decl_defs
 open Typing_defs
-module Attrs = Attributes
+module Attrs = Naming_attributes
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 module Env = Typing_env
 module SN = Naming_special_names
@@ -23,20 +24,21 @@ let parent_init_prop = "parent::" ^ SN.Members.__construct
  * but it works. The idea here is that if the parent needs to be
  * initialized, we add a phony class variable. *)
 let add_parent_construct env c props parent_ty =
-  match parent_ty with
-  | (_, Tapply ((_, parent), _)) ->
+  match get_node parent_ty with
+  | Tapply ((_, parent), _) ->
     begin
       match Env.get_class_dep env parent with
-      | Some class_ when Cls.need_init class_ && c.sc_constructor <> None ->
+      | Some class_ when Cls.need_init class_ && Option.is_some c.sc_constructor
+        ->
         SSet.add parent_init_prop props
       | _ -> props
     end
   | _ -> props
 
 let parent env c acc =
-  if c.sc_mode = FileInfo.Mdecl then
+  if FileInfo.(equal_mode c.sc_mode Mdecl) then
     acc
-  else if c.sc_kind = Ast_defs.Ctrait then
+  else if Ast_defs.(equal_class_kind c.sc_kind Ctrait) then
     List.fold_left c.sc_req_extends ~f:(add_parent_construct env c) ~init:acc
   else
     match c.sc_extends with
@@ -53,12 +55,14 @@ let prop_needs_init sp =
     false
   else
     match sp.sp_type with
-    | None
-    | Some (_, Tprim Tnull)
-    | Some (_, Toption _)
-    | Some (_, Tmixed) ->
-      false
-    | Some _ -> sp.sp_needs_init
+    | None -> false
+    | Some ty ->
+      (match get_node ty with
+      | Tprim Tnull
+      | Toption _
+      | Tmixed ->
+        false
+      | _ -> sp.sp_needs_init)
 
 let own_props c props =
   List.fold_left
@@ -92,8 +96,8 @@ let rec parent_props env c props =
     ~f:
       begin
         fun acc parent ->
-        match parent with
-        | (_, Tapply ((_, parent), _)) ->
+        match get_node parent with
+        | Tapply ((_, parent), _) ->
           begin
             match Shallow_classes_heap.get parent with
             | None -> acc
@@ -110,8 +114,9 @@ and trait_props env c props =
     c.sc_uses
     ~f:
       begin
-        fun acc -> function
-        | (_, Tapply ((_, trait), _)) ->
+        fun acc ty ->
+        match get_node ty with
+        | Tapply ((_, trait), _) ->
           let cls = Env.get_class_dep env trait in
           let shallow_class = Shallow_classes_heap.get trait in
           (match (cls, shallow_class) with
@@ -129,9 +134,10 @@ and trait_props env c props =
             begin
               match fst cstr with
               | None -> SSet.union members acc
-              | Some cstr when cstr.ce_origin <> trait || cstr.ce_abstract ->
+              | Some cstr
+                when String.( <> ) cstr.ce_origin trait || cstr.ce_abstract ->
                 SSet.union members acc
-              | _ when c.sc_constructor <> None -> SSet.union members acc
+              | _ when Option.is_some c.sc_constructor -> SSet.union members acc
               | _ -> acc
             end
           | _ -> acc)
@@ -149,7 +155,7 @@ and get_deferred_init_props env c =
         let visibility = sp.sp_visibility in
         if not (prop_needs_init sp) then
           (priv_props, props)
-        else if visibility = Private then
+        else if Aast_defs.equal_visibility visibility Private then
           (SSet.add name priv_props, SSet.add name props)
         else
           (priv_props, SSet.add name props))
@@ -161,15 +167,15 @@ and get_deferred_init_props env c =
   (priv_props, props)
 
 and class_ env c =
-  match Decl_provider.get_class (snd c.sc_name) with
+  match Decl_provider.get_class (Typing_env.get_ctx env) (snd c.sc_name) with
   | None -> SSet.empty
   | Some cls ->
     let has_concrete_cstr = Cls.need_init cls in
-    let has_own_cstr = has_concrete_cstr && None <> c.sc_constructor in
+    let has_own_cstr = has_concrete_cstr && Option.is_some c.sc_constructor in
     (match c.sc_kind with
     | Ast_defs.Cabstract when not has_own_cstr ->
       let (priv_props, props) = get_deferred_init_props env c in
-      if priv_props <> SSet.empty then
+      if not (SSet.is_empty priv_props) then
         (* XXX: should priv_props be checked for a trait?
          * see chown_privates in typing_inherit *)
         Errors.constructor_required c.sc_name priv_props;

@@ -47,7 +47,7 @@ type changes_mode =
   | Dfind_mode
   | Watchman_mode of Watchman.env
 
-let make_genv options config local_config workers lru_host_env =
+let make_genv options config local_config workers =
   let root = ServerArgs.root options in
   let check_mode = ServerArgs.check_mode options in
   Typing_deps.trace :=
@@ -61,12 +61,11 @@ let make_genv options config local_config workers lru_host_env =
   *)
   let ( >>= ) = Option.( >>= ) in
   let since_clockspec =
-    ServerArgs.with_saved_state options
-    >>= function
+    ServerArgs.with_saved_state options >>= function
     | ServerArgs.Saved_state_target_info _ -> None
     | ServerArgs.Informant_induced_saved_state_target target ->
-      target.ServerMonitorUtils.watchman_mergebase
-      >>= (fun mb -> Some mb.ServerMonitorUtils.watchman_clock)
+      target.ServerMonitorUtils.watchman_mergebase >>= fun mb ->
+      Some mb.ServerMonitorUtils.watchman_clock
   in
   let watchman_env =
     if check_mode then (
@@ -269,7 +268,6 @@ let make_genv options config local_config workers lru_host_env =
     notifier;
     wait_until_ready;
     debug_channels = None;
-    lru_host_env;
   }
 
 (* useful in testing code *)
@@ -286,14 +284,23 @@ let default_genv =
     notifier = (fun () -> SSet.empty);
     wait_until_ready = (fun () -> ());
     debug_channels = None;
-    lru_host_env = None;
   }
 
 let make_env ?init_id config =
+  let tcopt = ServerConfig.typechecker_options config in
+  let max_batch_size = TypecheckerOptions.remote_max_batch_size tcopt in
+  let min_batch_size = TypecheckerOptions.remote_min_batch_size tcopt in
   {
-    tcopt = ServerConfig.typechecker_options config;
+    tcopt;
     popt = ServerConfig.parser_options config;
+    gleanopt = ServerConfig.glean_options config;
     naming_table = Naming_table.empty;
+    typing_service =
+      {
+        delegate_state =
+          Typing_service_delegate.create ~max_batch_size ~min_batch_size ();
+        enabled = false;
+      };
     errorl = Errors.empty;
     failed_naming = Relative_path.Set.empty;
     persistent_client = None;
@@ -306,7 +313,8 @@ let make_env ?init_id config =
     disk_needs_parsing = Relative_path.Set.empty;
     needs_phase2_redecl = Relative_path.Set.empty;
     needs_recheck = Relative_path.Set.empty;
-    paused = false;
+    full_recheck_on_file_changes = Not_paused;
+    remote = false;
     full_check = Full_check_done;
     prechecked_files = Prechecked_files_disabled;
     can_interrupt = true;
@@ -324,6 +332,7 @@ let make_env ?init_id config =
         needs_full_init = false;
         init_start_t = Unix.gettimeofday ();
         state_distance = None;
+        mergebase = None;
         init_error = None;
         approach_name = "";
         init_type = "";

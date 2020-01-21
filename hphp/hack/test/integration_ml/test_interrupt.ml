@@ -53,13 +53,21 @@ let test () =
 
   (* Run the recheck *)
   let interrupt = MultiThreadedCall.no_interrupt () in
-  let fnl = Relative_path.Map.elements fast in
+  let fnl = Relative_path.Map.keys fast in
   let check_info =
-    Typing_check_service.{ init_id = ""; recheck_id = Some "" }
+    {
+      Typing_check_service.init_id = "";
+      recheck_id = Some "";
+      profile_log = false;
+      profile_type_check_twice = false;
+      profile_type_check_duration_threshold = 0.;
+    }
   in
-  let (errors, (), cancelled) =
+  let (errors, _delegate_state, _telemetry, (), cancelled) =
     Typing_check_service.go_with_interrupt
       workers
+      (Typing_service_delegate.create ())
+      (Telemetry.create ())
       options
       Relative_path.Set.empty
       fnl

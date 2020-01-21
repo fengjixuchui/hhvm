@@ -55,27 +55,29 @@ struct FuncEmitter {
   /////////////////////////////////////////////////////////////////////////////
   // Types.
 
+  using UpperBoundVec = CompactVector<TypeConstraint>;
   struct ParamInfo : public Func::ParamInfo {
     ParamInfo()
-      : byRef(false)
+      : inout(false)
     {}
 
     template<class SerDe>
     void serde(SerDe& sd) {
       Func::ParamInfo* parent = this;
       parent->serde(sd);
-      sd(byRef);
+      sd(inout);
+      sd(upperBounds);
     }
 
-    // Whether the parameter is passed by reference.  This field is absent from
+    // Whether the parameter is passed as an inout.  This field is absent from
     // Func::ParamInfo because we store it in a bitfield on Func.
-    bool byRef;
+    bool inout;
+    UpperBoundVec upperBounds;
   };
 
   typedef std::vector<ParamInfo> ParamInfoVec;
   typedef std::vector<Func::SVInfo> SVInfoVec;
   typedef std::vector<EHEnt> EHEntVec;
-
 
   /////////////////////////////////////////////////////////////////////////////
   // Initialization and execution.
@@ -269,6 +271,7 @@ public:
   MaybeDataType hniReturnType;
   TypeConstraint retTypeConstraint;
   LowStringPtr retUserType;
+  UpperBoundVec retUpperBounds;
 
   EHEntVec ehtab;
 
@@ -284,6 +287,8 @@ public:
       bool isGenerator         : 1;
       bool isPairGenerator     : 1;
       bool isRxDisabled        : 1;
+      bool hasParamsWithMultiUBs : 1;
+      bool hasReturnWithMultiUBs : 1;
     };
   };
 

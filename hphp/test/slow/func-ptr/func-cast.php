@@ -3,7 +3,7 @@
 function foo() {}
 
 function getFun() {
-  return __hhvm_intrinsics\launder_value(hh\fun('foo'));
+  return __hhvm_intrinsics\launder_value(HH\fun('foo'));
 }
 
 function getStr() {
@@ -19,7 +19,7 @@ function boolCast($x) {
 }
 
 function doubleCast($x) {
-    return (double) $x;
+    return (float)$x;
 }
 
 function intCast($x) {

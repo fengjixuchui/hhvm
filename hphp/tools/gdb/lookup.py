@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 GDB commands for various HHVM ID lookups.
 """
@@ -66,17 +68,21 @@ LookupFuncFunction()
 # `lookup litstr' command.
 
 def lookup_litstr(litstr_id, u):
-    gloff = V('HPHP::kGlobalLitstrOffset')
+    uloff = V('HPHP::kUnitLitstrOffset')
 
-    if litstr_id >= gloff:
-        litstr_id -= gloff
+    if litstr_id < uloff:
         u = V('HPHP::LitstrTable::s_litstrTable')
+    else:
+        litstr_id -= uloff
+        u = u.cast(T('HPHP::UnitExtended').pointer())
 
     val = u['m_namedInfo']
     # get the base type
     ty = val.type.fields()[0].type
     val = val.address.cast(ty.pointer()).dereference()
-    return idx.compact_vector_at(val, litstr_id)
+    elm = idx.compact_vector_at(val, litstr_id)
+    ty = elm.type.template_argument(0)
+    return elm.address.cast(ty.pointer()).dereference()
 
 
 class LookupLitstrCommand(gdb.Command):

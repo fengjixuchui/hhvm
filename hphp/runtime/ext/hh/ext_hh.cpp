@@ -60,11 +60,16 @@ const StaticString
   s_falseMemoKey("\xf2");
 
 ///////////////////////////////////////////////////////////////////////////////
+bool HHVM_FUNCTION(autoload_is_native) {
+  auto const* autoloadMap = AutoloadHandler::s_instance->getAutoloadMap();
+  return autoloadMap && autoloadMap->isNative();
+}
+
 bool HHVM_FUNCTION(autoload_set_paths,
                    const Variant& map,
                    const String& root) {
   if (map.isArray()) {
-    return AutoloadHandler::s_instance->setMap(map.toCArrRef(), root);
+    return AutoloadHandler::s_instance->setMap(map.asCArrRef(), root);
   }
   if (!(map.isObject() && map.toObject()->isCollection())) {
     return false;
@@ -187,7 +192,7 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, const TypedValue *tv) {
 }
 
 ALWAYS_INLINE void serialize_memoize_arraykey(StringBuffer& sb,
-                                              const Cell& c) {
+                                              const TypedValue& c) {
   switch (c.m_type) {
     case KindOfPersistentString:
     case KindOfString:
@@ -204,10 +209,18 @@ ALWAYS_INLINE void serialize_memoize_arraykey(StringBuffer& sb,
 
 void serialize_memoize_array(StringBuffer& sb, int depth, const ArrayData* ad) {
   serialize_memoize_code(sb, SER_MC_CONTAINER);
-  IterateKV(ad, [&] (Cell k, TypedValue v) {
+  IterateKV(ad, [&] (TypedValue k, TypedValue v) {
     serialize_memoize_arraykey(sb, k);
     serialize_memoize_tv(sb, depth, v);
-    return false;
+  });
+  serialize_memoize_code(sb, SER_MC_STOP);
+}
+
+void serialize_memoize_set(StringBuffer& sb, const ArrayData* ad) {
+  serialize_memoize_code(sb, SER_MC_CONTAINER);
+  IterateKVNoInc(ad, [&] (TypedValue k, TypedValue) {
+    serialize_memoize_arraykey(sb, k);
+    serialize_memoize_arraykey(sb, k);
   });
   serialize_memoize_code(sb, SER_MC_STOP);
 }
@@ -217,7 +230,11 @@ void serialize_memoize_col(StringBuffer& sb, int depth, ObjectData* obj) {
   assertx(obj->isCollection());
   auto const ad = collections::asArray(obj);
   if (LIKELY(ad != nullptr)) {
-    serialize_memoize_array(sb, depth, ad);
+    if (UNLIKELY(isSetCollection(obj->collectionType()))) {
+      serialize_memoize_set(sb, ad);
+    } else {
+      serialize_memoize_array(sb, depth, ad);
+    }
   } else {
     assertx(obj->collectionType() == CollectionType::Pair);
     auto const pair = reinterpret_cast<const c_Pair*>(obj);
@@ -288,14 +305,22 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, TypedValue tv) {
       serialize_memoize_string_data(sb, tv.m_data.pstr);
       break;
 
+    case KindOfPersistentKeyset:
+    case KindOfKeyset:
+      serialize_memoize_set(sb, tv.m_data.parr);
+      break;
+
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
-    case KindOfPersistentKeyset:
-    case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
       serialize_memoize_array(sb, depth, tv.m_data.parr);
@@ -311,8 +336,7 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, TypedValue tv) {
       break;
 
     case KindOfResource:
-    case KindOfRecord: // TODO(T41025646)
-    case KindOfRef: {
+    case KindOfRecord: { // TODO(T41025646)
       auto msg = folly::format(
         "Cannot Serialize unexpected type {}",
         tname(tv.m_type)
@@ -348,6 +372,12 @@ TypedValue serialize_memoize_param_arr(ArrayData* arr) {
   return tvReturn(sb.detach());
 }
 
+TypedValue serialize_memoize_param_set(ArrayData* arr) {
+  StringBuffer sb;
+  serialize_memoize_set(sb, arr);
+  return tvReturn(sb.detach());
+}
+
 TypedValue serialize_memoize_param_obj(ObjectData* obj) {
   StringBuffer sb;
   serialize_memoize_obj(sb, 0, obj);
@@ -374,7 +404,7 @@ TypedValue serialize_memoize_param_dbl(double val) {
 TypedValue HHVM_FUNCTION(serialize_memoize_param, TypedValue param) {
   // Memoize throws in the emitter if any function parameters are references, so
   // we can just assert that the param is cell here
-  assertx(cellIsPlausible(param));
+  assertx(tvIsPlausible(param));
   auto const type = param.m_type;
 
   if (type == KindOfInt64) {
@@ -396,7 +426,7 @@ TypedValue HHVM_FUNCTION(serialize_memoize_param, TypedValue param) {
 
 namespace {
 
-void clearValueLink(rds::Link<Cell, rds::Mode::Normal> valLink) {
+void clearValueLink(rds::Link<TypedValue, rds::Mode::Normal> valLink) {
   if (valLink.bound() && valLink.isInit()) {
     auto oldVal = *valLink;
     valLink.markUninit();
@@ -723,6 +753,7 @@ TypedValue HHVM_FUNCTION(dynamic_class_meth_force, StringArg cls,
 static struct HHExtension final : Extension {
   HHExtension(): Extension("hh", NO_EXTENSION_VERSION_YET) { }
   void moduleInit() override {
+    HHVM_NAMED_FE(HH\\autoload_is_native, HHVM_FN(autoload_is_native));
     HHVM_NAMED_FE(HH\\autoload_set_paths, HHVM_FN(autoload_set_paths));
     HHVM_NAMED_FE(HH\\could_include, HHVM_FN(could_include));
     HHVM_NAMED_FE(HH\\serialize_memoize_param,

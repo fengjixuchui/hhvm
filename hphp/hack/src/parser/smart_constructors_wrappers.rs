@@ -24,9 +24,9 @@ use parser_core_types::{
   lexable_token::LexableToken,
   source_text::SourceText,
   syntax_kind::SyntaxKind,
+  parser_env::ParserEnv,
 };
-use crate::parser_env::ParserEnv;
-use crate::smart_constructors::SmartConstructors;
+use crate::SmartConstructors;
 
 #[derive(Clone)]
 pub struct WithKind<S> {
@@ -43,6 +43,10 @@ where S: SmartConstructors<'src, State> {
 
     fn state_mut(&mut self) -> &mut State {
         self.s.state_mut()
+    }
+
+    fn into_state(self) -> State {
+      self.s.into_state()
     }
 
     fn make_token(&mut self, token: Self::Token) -> Self::R {
@@ -98,8 +102,8 @@ where S: SmartConstructors<'src, State> {
     fn make_record_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R) -> Self::R {
         compose(SyntaxKind::RecordDeclaration, self.s.make_record_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1))
     }
-    fn make_record_field(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
-        compose(SyntaxKind::RecordField, self.s.make_record_field(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))
+    fn make_record_field(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
+        compose(SyntaxKind::RecordField, self.s.make_record_field(arg0.1, arg1.1, arg2.1, arg3.1))
     }
     fn make_alias_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R) -> Self::R {
         compose(SyntaxKind::AliasDeclaration, self.s.make_alias_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1))
@@ -146,8 +150,8 @@ where S: SmartConstructors<'src, State> {
     fn make_methodish_trait_resolution(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
         compose(SyntaxKind::MethodishTraitResolution, self.s.make_methodish_trait_resolution(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))
     }
-    fn make_classish_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R {
-        compose(SyntaxKind::ClassishDeclaration, self.s.make_classish_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1, arg10.1))
+    fn make_classish_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R, arg11 : Self::R) -> Self::R {
+        compose(SyntaxKind::ClassishDeclaration, self.s.make_classish_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1, arg10.1, arg11.1))
     }
     fn make_classish_body(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::ClassishBody, self.s.make_classish_body(arg0.1, arg1.1, arg2.1))
@@ -215,9 +219,6 @@ where S: SmartConstructors<'src, State> {
     fn make_unset_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
         compose(SyntaxKind::UnsetStatement, self.s.make_unset_statement(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))
     }
-    fn make_let_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
-        compose(SyntaxKind::LetStatement, self.s.make_let_statement(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1))
-    }
     fn make_using_statement_block_scoped(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
         compose(SyntaxKind::UsingStatementBlockScoped, self.s.make_using_statement_block_scoped(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1))
     }
@@ -281,11 +282,11 @@ where S: SmartConstructors<'src, State> {
     fn make_throw_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::ThrowStatement, self.s.make_throw_statement(arg0.1, arg1.1, arg2.1))
     }
-    fn make_break_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
-        compose(SyntaxKind::BreakStatement, self.s.make_break_statement(arg0.1, arg1.1, arg2.1))
+    fn make_break_statement(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
+        compose(SyntaxKind::BreakStatement, self.s.make_break_statement(arg0.1, arg1.1))
     }
-    fn make_continue_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
-        compose(SyntaxKind::ContinueStatement, self.s.make_continue_statement(arg0.1, arg1.1, arg2.1))
+    fn make_continue_statement(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
+        compose(SyntaxKind::ContinueStatement, self.s.make_continue_statement(arg0.1, arg1.1))
     }
     fn make_echo_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::EchoStatement, self.s.make_echo_statement(arg0.1, arg1.1, arg2.1))
@@ -554,6 +555,12 @@ where S: SmartConstructors<'src, State> {
     fn make_tuple_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::TupleTypeSpecifier, self.s.make_tuple_type_specifier(arg0.1, arg1.1, arg2.1))
     }
+    fn make_union_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
+        compose(SyntaxKind::UnionTypeSpecifier, self.s.make_union_type_specifier(arg0.1, arg1.1, arg2.1))
+    }
+    fn make_intersection_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
+        compose(SyntaxKind::IntersectionTypeSpecifier, self.s.make_intersection_type_specifier(arg0.1, arg1.1, arg2.1))
+    }
     fn make_error(&mut self, arg0 : Self::R) -> Self::R {
         compose(SyntaxKind::ErrorSyntax, self.s.make_error(arg0.1))
     }
@@ -575,8 +582,8 @@ where S: SmartConstructors<'src, State> {
     fn make_pocket_field_type_expr_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
         compose(SyntaxKind::PocketFieldTypeExprDeclaration, self.s.make_pocket_field_type_expr_declaration(arg0.1, arg1.1, arg2.1, arg3.1))
     }
-    fn make_pocket_field_type_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
-        compose(SyntaxKind::PocketFieldTypeDeclaration, self.s.make_pocket_field_type_declaration(arg0.1, arg1.1, arg2.1, arg3.1))
+    fn make_pocket_field_type_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
+        compose(SyntaxKind::PocketFieldTypeDeclaration, self.s.make_pocket_field_type_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))
     }
     fn make_pocket_mapping_id_declaration(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
         compose(SyntaxKind::PocketMappingIdDeclaration, self.s.make_pocket_mapping_id_declaration(arg0.1, arg1.1))

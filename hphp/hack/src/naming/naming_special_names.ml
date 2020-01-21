@@ -22,11 +22,11 @@ module Classes = struct
 
   (* Used for dynamic classnames, e.g. new $foo(); *)
 
-  let cAwaitable = "\\Awaitable"
+  let cAwaitable = "\\HH\\Awaitable"
 
   let cGenerator = "\\Generator"
 
-  let cAsyncGenerator = "\\AsyncGenerator"
+  let cAsyncGenerator = "\\HH\\AsyncGenerator"
 
   let cFormatString = "\\FormatString"
 
@@ -44,19 +44,19 @@ module Classes = struct
 
   let cDateTimeImmutable = "\\DateTimeImmutable"
 
-  let cAsyncIterator = "\\AsyncIterator"
+  let cAsyncIterator = "\\HH\\AsyncIterator"
 
-  let cAsyncKeyedIterator = "\\AsyncKeyedIterator"
+  let cAsyncKeyedIterator = "\\HH\\AsyncKeyedIterator"
 
   let cStringish = "\\Stringish"
 
   let cXHPChild = "\\XHPChild"
 
-  let cIMemoizeParam = "\\IMemoizeParam"
+  let cIMemoizeParam = "\\HH\\IMemoizeParam"
 
-  let cClassname = "\\classname"
+  let cClassname = "\\HH\\classname"
 
-  let cTypename = "\\typename"
+  let cTypename = "\\HH\\typename"
 
   let cIDisposable = "\\IDisposable"
 
@@ -65,30 +65,28 @@ end
 
 module Collections = struct
   (* concrete classes *)
-  let cVector = "\\Vector"
+  let cVector = "\\HH\\Vector"
 
-  let cImmVector = "\\ImmVector"
+  let cImmVector = "\\HH\\ImmVector"
 
-  let cSet = "\\Set"
+  let cSet = "\\HH\\Set"
 
-  let cImmSet = "\\ImmSet"
+  let cImmSet = "\\HH\\ImmSet"
 
-  let cMap = "\\Map"
+  let cMap = "\\HH\\Map"
 
-  let cStableMap = "\\StableMap"
+  let cImmMap = "\\HH\\ImmMap"
 
-  let cImmMap = "\\ImmMap"
-
-  let cPair = "\\Pair"
+  let cPair = "\\HH\\Pair"
 
   (* interfaces *)
-  let cContainer = "\\Container"
+  let cContainer = "\\HH\\Container"
 
-  let cKeyedContainer = "\\KeyedContainer"
+  let cKeyedContainer = "\\HH\\KeyedContainer"
 
-  let cTraversable = "\\Traversable"
+  let cTraversable = "\\HH\\Traversable"
 
-  let cKeyedTraversable = "\\KeyedTraversable"
+  let cKeyedTraversable = "\\HH\\KeyedTraversable"
 
   let cCollection = "\\Collection"
 
@@ -98,11 +96,11 @@ module Collections = struct
 
   let cConstCollection = "\\ConstCollection"
 
-  let cDict = "\\dict"
+  let cDict = "\\HH\\dict"
 
-  let cVec = "\\vec"
+  let cVec = "\\HH\\vec"
 
-  let cKeyset = "\\keyset"
+  let cKeyset = "\\HH\\keyset"
 end
 
 module Members = struct
@@ -294,6 +292,8 @@ module UserAttributes = struct
 
   let uaNeverInline = "__NEVER_INLINE"
 
+  let uaDisableTypecheckerInternal = "__DisableTypecheckerInternal"
+
   let as_map =
     AttributeKinds.(
       SMap.of_list
@@ -336,7 +336,10 @@ module UserAttributes = struct
           (uaDynamicallyConstructible, [cls]);
           (uaReifiable, [typeconst]);
           (uaNeverInline, [fn; mthd]);
+          (uaDisableTypecheckerInternal, [fn; mthd]);
         ])
+
+  let is_reserved name = String.is_prefix name ~prefix:"__"
 end
 
 (* Tested before \\-prepending name-canonicalization *)
@@ -347,23 +350,32 @@ module SpecialFunctions = struct
 
   let assert_ = "assert"
 
-  let invariant = "invariant"
-
-  let invariant_violation = "invariant_violation"
-
-  let fun_ = "fun"
-
-  let inst_meth = "inst_meth"
-
-  let class_meth = "class_meth"
-
-  let meth_caller = "meth_caller"
-
-  let call_user_func = "call_user_func"
-
   let autoload = "__autoload"
 
-  let clone = "__clone"
+  let hhas_adata = "__hhas_adata"
+
+  let is_special_function =
+    let all_special_functions = [tuple; echo; assert_; autoload; hhas_adata] in
+    let h = HashSet.create (List.length all_special_functions) in
+    List.iter all_special_functions (HashSet.add h);
+    (fun x -> HashSet.mem h x)
+end
+
+(* There are a number of functions that are automatically imported into the
+ * namespace. The full list can be found in hh_autoimport.ml.
+ *)
+module AutoimportedFunctions = struct
+  let invariant_violation = "\\HH\\invariant_violation"
+
+  let invariant = "\\HH\\invariant"
+
+  let fun_ = "\\HH\\fun"
+
+  let inst_meth = "\\HH\\inst_meth"
+
+  let class_meth = "\\HH\\class_meth"
+
+  let meth_caller = "\\HH\\meth_caller"
 end
 
 module SpecialIdents = struct
@@ -382,6 +394,9 @@ module SpecialIdents = struct
   let assert_tmp_var name = assert (is_tmp_var name)
 end
 
+(* PseudoFunctions are functions (or items that are parsed like functions)
+ * that are treated like builtins that do not have a public HHI or interface.
+ *)
 module PseudoFunctions = struct
   let isset = "\\isset"
 
@@ -397,6 +412,16 @@ module PseudoFunctions = struct
 
   let hh_loop_forever = "\\hh_loop_forever"
 
+  let assert_ = "\\assert"
+
+  let echo = "\\echo"
+
+  let empty = "\\empty"
+
+  let exit = "\\exit"
+
+  let die = "\\die"
+
   let all_pseudo_functions =
     [
       isset;
@@ -406,7 +431,17 @@ module PseudoFunctions = struct
       hh_log_level;
       hh_force_solve;
       hh_loop_forever;
+      assert_;
+      echo;
+      empty;
+      exit;
+      die;
     ]
+
+  let is_pseudo_function =
+    let h = HashSet.create (List.length all_pseudo_functions) in
+    List.iter all_pseudo_functions (HashSet.add h);
+    (fun x -> HashSet.mem h x)
 end
 
 module StdlibFunctions = struct
@@ -420,7 +455,11 @@ module StdlibFunctions = struct
 
   let array_map = "\\array_map"
 
+  let call_user_func = "\\call_user_func"
+
   let type_structure = "\\HH\\type_structure"
+
+  let mark_legacy_hack_array = "\\HH\\mark_legacy_hack_array"
 end
 
 module Typehints = struct
@@ -462,26 +501,44 @@ module Typehints = struct
 
   let varray_or_darray = "varray_or_darray"
 
-  let integer = "integer"
-
-  let boolean = "boolean"
-
-  let double = "double"
-
   let callable = "callable"
-
-  let object_cast = "object"
-
-  let unset_cast = "unset"
 
   let wildcard = "_"
 
+  let is_reserved_type_hint =
+    let reserved_typehints =
+      [
+        null;
+        void;
+        resource;
+        num;
+        arraykey;
+        noreturn;
+        mixed;
+        nonnull;
+        this;
+        dynamic;
+        nothing;
+        int;
+        bool;
+        float;
+        string;
+        array;
+        darray;
+        varray;
+        varray_or_darray;
+        callable;
+        wildcard;
+      ]
+    in
+    let h = HashSet.create (List.length reserved_typehints) in
+    List.iter reserved_typehints (HashSet.add h);
+    (fun x -> HashSet.mem h x)
+
   let is_reserved_global_name x =
-    let x = String.lowercase x in
     x = array || x = callable || x = Classes.cSelf || x = Classes.cParent
 
   let is_reserved_hh_name x =
-    let x = String.lowercase x in
     x = void
     || x = noreturn
     || x = int
@@ -493,13 +550,12 @@ module Typehints = struct
     || x = mixed
     || x = array
     || x = arraykey
-    || x = integer
-    || x = boolean
-    || x = double
     || x = dynamic
     || x = wildcard
+    || x = null
     || x = nonnull
     || x = nothing
+    || x = this
 
   let is_namespace_with_reserved_hh_name x =
     let unqualify qualified_name =
@@ -541,6 +597,13 @@ module PseudoConsts = struct
 
   let g__FUNCTION_CREDENTIAL__ = "\\__FUNCTION_CREDENTIAL__"
 
+  (* exit and die are not pseudo consts, but they are currently parsed as such.
+   * Would be more correct to parse them as special statements like return
+   *)
+  let exit = "\\exit"
+
+  let die = "\\die"
+
   let all_pseudo_consts =
     [
       g__LINE__;
@@ -553,6 +616,8 @@ module PseudoConsts = struct
       g__NAMESPACE__;
       g__COMPILER_FRONTEND__;
       g__FUNCTION_CREDENTIAL__;
+      exit;
+      die;
     ]
 
   let is_pseudo_const =
@@ -569,6 +634,8 @@ module FB = struct
   let idx = "\\HH\\idx"
 
   let cTypeStructure = "\\HH\\TypeStructure"
+
+  let cIncorrectType = "\\HH\\INCORRECT_TYPE"
 end
 
 module HH = struct
@@ -597,10 +664,28 @@ module Rx = struct
   let cAsyncIterator = "\\HH\\Rx\\AsyncIterator"
 
   let move = "\\HH\\Rx\\move"
+
+  let hRx = "Rx"
+
+  let hRxShallow = "RxShallow"
+
+  let hRxLocal = "RxLocal"
+
+  let hMutable = "Mutable"
+
+  let hMaybeMutable = "MaybeMutable"
+
+  let hOwnedMutable = "OwnedMutable"
+
+  let is_reactive_typehint =
+    let reactive_typehints =
+      [hRx; hRxShallow; hRxLocal; hMutable; hMaybeMutable; hOwnedMutable]
+    in
+    (fun name -> List.exists reactive_typehints ~f:(fun th -> th = name))
 end
 
 module Shapes = struct
-  let cShapes = "\\Shapes"
+  let cShapes = "\\HH\\Shapes"
 
   let idx = "idx"
 
@@ -658,4 +743,30 @@ end
 
 module Regex = struct
   let tPattern = "\\HH\\Lib\\Regex\\Pattern"
+end
+
+(* These are functions treated by the emitter specially. They are not
+ * autoimported (see hh_autoimport.ml) nor are they consider PseudoFunctions
+ * so they can be overridden by namespacing (at least currently)
+ *)
+module EmitterSpecialFunctions = struct
+  let eval = "\\eval"
+
+  let set_frame_metadata = "\\HH\\set_frame_metadata"
+end
+
+module PocketUniverses = struct
+  let members = "Members"
+end
+
+module XHP = struct
+  let pcdata = "pcdata"
+
+  let any = "any"
+
+  let empty = "empty"
+
+  let is_reserved name = name = pcdata || name = any || name = empty
+
+  let is_xhp_category name = String_utils.string_starts_with name "%"
 end

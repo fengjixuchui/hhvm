@@ -195,17 +195,6 @@ void AsioBlockableChain::removeFromChain(AsioBlockable* ab) {
   assertx(false);
 }
 
-Array AsioBlockableChain::toArray() {
-  Array result = Array::Create();
-  for (auto cur = m_firstParent; cur; cur = cur->getNextParent()) {
-    auto const wh = cur->getWaitHandle();
-    if (!wh->isFinished()) {
-      result.append(Variant{wh});
-    }
-  }
-  return result;
-}
-
 c_WaitableWaitHandle*
 AsioBlockableChain::firstInContext(context_idx_t ctx_idx) {
   for (auto cur = m_firstParent; cur; cur = cur->getNextParent()) {
@@ -229,7 +218,7 @@ void AsioBlockableChain::UnblockJitHelper(ActRec* ar,
   auto& regs = vmRegs();
   regs.stack.top() = sp;
   assertx(vmStack().isValidAddress((uintptr_t)vmsp()));
-  regs.pc = prevF->unit()->at(prevF->base() + ar->m_callOff);
+  regs.pc = prevF->unit()->at(prevF->base() + ar->callOffset());
   regs.fp = prevAr;
   regs.jitReturnAddr = nullptr;
 

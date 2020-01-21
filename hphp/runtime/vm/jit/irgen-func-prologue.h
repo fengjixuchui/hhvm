@@ -32,16 +32,18 @@ struct IRGS;
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void emitPrologueLocals(IRGS& env, uint32_t argc,
-                        const Func* func, SSATmp* closureOpt);
+void emitPrologueLocals(IRGS& env, uint32_t argc, SSATmp* callFlags,
+                        SSATmp* closureOpt);
 
 void emitFuncPrologue(IRGS& env, uint32_t argc, TransID transID);
 
 void emitFuncBodyDispatch(IRGS& env, const DVFuncletsVec& dvs);
 
-void emitCalleeDynamicCallCheck(IRGS& env);
+void emitGenericsMismatchCheck(IRGS& env, SSATmp* callFlags);
 
-void emitCallMCheck(IRGS& env);
+void emitCalleeDynamicCallCheck(IRGS& env, SSATmp* callFlags);
+
+void emitCallInOutCheck(IRGS& env, SSATmp* callFlags);
 
 ///////////////////////////////////////////////////////////////////////////////
 

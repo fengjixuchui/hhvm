@@ -61,42 +61,18 @@ ArrayData* ArrayCommon::ToVec(ArrayData* a, bool) {
   auto const size = a->size();
   if (!size) return ArrayData::CreateVec();
   VecArrayInit init{size};
-  IterateVNoInc(
-    a,
-    [&](TypedValue v) {
-      if (UNLIKELY(isRefType(v.m_type))) {
-        if (v.m_data.pref->isReferenced()) {
-          throwRefInvalidArrayValueException(init.toArray());
-        }
-      }
-      init.append(v);
-    }
-  );
+  IterateVNoInc(a, [&](TypedValue v) { init.append(v); });
   auto const out = init.create();
-  return RuntimeOption::EvalArrayProvenance && out->isRefCounted()
-    ? tagArrProv(out, a)
-    : out;
+  return tagArrProv(out, a);
 }
 
 ArrayData* ArrayCommon::ToDict(ArrayData* a, bool) {
   auto const size = a->size();
   if (!size) return ArrayData::CreateDict();
   DictInit init{size};
-  IterateKVNoInc(
-    a,
-    [&](Cell k, TypedValue v) {
-      if (UNLIKELY(isRefType(v.m_type))) {
-        if (v.m_data.pref->isReferenced()) {
-          throwRefInvalidArrayValueException(init.toArray());
-        }
-      }
-      init.setValidKey(k, v);
-    }
-  );
+  IterateKVNoInc(a, [&](TypedValue k, TypedValue v) { init.setValidKey(k, v); });
   auto const out = init.create();
-  return RuntimeOption::EvalArrayProvenance && out->isRefCounted()
-    ? tagArrProv(out, a)
-    : out;
+  return tagArrProv(out, a);
 }
 
 ArrayData* ArrayCommon::ToKeyset(ArrayData* a, bool) {
@@ -106,14 +82,6 @@ ArrayData* ArrayCommon::ToKeyset(ArrayData* a, bool) {
   IterateVNoInc(
     a,
     [&](TypedValue v) {
-      if (UNLIKELY(isRefType(v.m_type))) {
-        if (v.m_data.pref->isReferenced()) {
-          throwRefInvalidArrayValueException(init.toArray());
-        }
-        v = *v.m_data.pref->cell();
-        assertx(!isRefType(v.m_type));
-      }
-
       if (LIKELY(isStringType(v.m_type))) {
         init.add(v.m_data.pstr);
       } else if (LIKELY(isIntType(v.m_type))) {
@@ -131,7 +99,7 @@ ArrayData* ArrayCommon::ToVArray(ArrayData* a, bool) {
   auto const size = a->size();
   if (!size) return ArrayData::CreateVArray();
   VArrayInit init{size};
-  IterateVNoInc(a, [&](TypedValue v) { init.appendWithRef(v); });
+  IterateVNoInc(a, [&](TypedValue v) { init.append(v); });
   return init.create();
 }
 
@@ -142,39 +110,11 @@ ArrayData* ArrayCommon::ToDArray(ArrayData* a, bool) {
   DArrayInit init{size};
   IterateKV(
     a,
-    [&](Cell k, TypedValue v) {
+    [&](TypedValue k, TypedValue v) {
       init.setUnknownKey(tvAsCVarRef(&k), tvAsCVarRef(&v));
     }
   );
   return init.create();
-}
-
-ArrayData* ArrayCommon::ToShape(ArrayData* a, bool copy) {
-  auto arr = RuntimeOption::EvalHackArrDVArrs
-    ? ArrayCommon::ToDict(a, copy)
-    : ArrayCommon::ToDArray(a, copy);
-  arr = arr->toShapeInPlaceIfCompatible();
-  return arr;
-}
-
-ArrayCommon::RefCheckResult
-ArrayCommon::CheckForRefs(const ArrayData* ad) {
-  auto result = RefCheckResult::Pass;
-  IterateVNoInc(
-    ad,
-    [&](TypedValue v) {
-      if (UNLIKELY(isRefType(v.m_type))) {
-        auto const ref = v.m_data.pref;
-        if (ref->isReferenced() || ref->cell()->m_data.parr == ad) {
-          result = RefCheckResult::Fail;
-          return true;
-        }
-        result = RefCheckResult::Collapse;
-      }
-      return false;
-    }
-  );
-  return result;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -183,14 +123,21 @@ namespace {
 
 template <typename E, typename C, typename A>
 ALWAYS_INLINE
-ArrayData* castObjToHackArrImpl(ObjectData* obj,
+ArrayData* castObjToArrayLikeImpl(ObjectData* obj,
                                 E empty,
                                 C cast,
                                 A add,
                                 const char* msg) {
   if (LIKELY(obj->isCollection())) {
     if (auto ad = collections::asArray(obj)) {
-      return cast(ArrNR{ad}.asArray()).detach();
+      auto out = cast(ArrNR{ad}.asArray()).detach();
+      if (out->isRefCounted() && !out->hasExactlyOneRef()) {
+        decRefArr(out);
+        out = out->copy();
+      }
+      return RuntimeOption::EvalArrayProvenance && arrprov::arrayWantsTag(out)
+        ? tagArrProv(out)
+        : out;
     }
     return cast(collections::toArray(obj)).detach();
   }
@@ -207,7 +154,9 @@ ArrayData* castObjToHackArrImpl(ObjectData* obj,
   auto arr = empty();
   for (ArrayIter iter(iterObj); iter; ++iter) add(arr, iter);
   auto const out = arr.detach();
-  return RuntimeOption::EvalArrayProvenance && out->isRefCounted()
+  return RuntimeOption::EvalArrayProvenance
+      && arrprov::arrayWantsTag(out)
+      && out->isRefCounted()
     ? tagArrProv(out)
     : out;
 }
@@ -215,7 +164,7 @@ ArrayData* castObjToHackArrImpl(ObjectData* obj,
 }
 
 ArrayData* castObjToVec(ObjectData* obj) {
-  return castObjToHackArrImpl(
+  return castObjToArrayLikeImpl(
     obj,
     Array::CreateVec,
     [](const Array& arr) { return arr.toVec(); },
@@ -225,7 +174,7 @@ ArrayData* castObjToVec(ObjectData* obj) {
 }
 
 ArrayData* castObjToDict(ObjectData* obj) {
-  return castObjToHackArrImpl(
+  return castObjToArrayLikeImpl(
     obj,
     Array::CreateDict,
     [](const Array& arr) { return arr.toDict(); },
@@ -235,7 +184,7 @@ ArrayData* castObjToDict(ObjectData* obj) {
 }
 
 ArrayData* castObjToKeyset(ObjectData* obj) {
-  return castObjToHackArrImpl(
+  return castObjToArrayLikeImpl(
     obj,
     Array::CreateKeyset,
     [](const Array& arr) { return arr.toKeyset(); },
@@ -246,7 +195,7 @@ ArrayData* castObjToKeyset(ObjectData* obj) {
 
 ArrayData* castObjToVArray(ObjectData* obj) {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
-  return castObjToHackArrImpl(
+  return castObjToArrayLikeImpl(
     obj,
     Array::CreateVArray,
     [](const Array& arr) { return arr.toVArray(); },
@@ -258,7 +207,7 @@ ArrayData* castObjToVArray(ObjectData* obj) {
 
 ArrayData* castObjToDArray(ObjectData* obj) {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
-  return castObjToHackArrImpl(
+  return castObjToArrayLikeImpl(
     obj,
     Array::CreateDArray,
     [](const Array& arr) { return arr.toDArray(); },

@@ -72,7 +72,7 @@ static bool read_all_post_data(Transport *transport,
 static void CopyParams(Array& dest, const Array& src) {
   IterateKVNoInc(
     src.get(),
-    [&](Cell k, TypedValue v) {
+    [&](TypedValue k, TypedValue v) {
       const auto arraykey =
         dest.convertKey<IntishCast::Cast>(k);
       dest.set(arraykey, v, true);
@@ -646,12 +646,12 @@ static void CopyPathInfo(Array& server,
 
   std::string hostHeader;
   if (server.exists(s_HTTP_HOST)) {
-    hostHeader = server[s_HTTP_HOST].toCStrRef().data();
+    hostHeader = server[s_HTTP_HOST].asCStrRef().data();
   }
   String hostName;
   if (server.exists(s_SERVER_NAME)) {
     assertx(server[s_SERVER_NAME].isString());
-    hostName = server[s_SERVER_NAME].toCStrRef();
+    hostName = server[s_SERVER_NAME].asCStrRef();
   }
   server.set(s_SCRIPT_URI,
              String(prefix + (hostHeader.empty() ? hostName + port_suffix :
@@ -665,6 +665,9 @@ static void CopyPathInfo(Array& server,
       if (pos >= 0) {
         name = name.substr(0, pos);
       }
+    }
+    if (r.globalDoc()) {
+      name = String(RuntimeOption::GlobalDocument);
     }
     if (r.defaultDoc()) {
       if (!name.empty() && name[name.length() - 1] != '/') {
@@ -709,13 +712,13 @@ static void CopyPathInfo(Array& server,
         server.set(s_PATH_TRANSLATED, String(pathTranslated));
       } else {
         server.set(s_PATH_TRANSLATED,
-                   String(server[s_DOCUMENT_ROOT].toCStrRef() +
+                   String(server[s_DOCUMENT_ROOT].asCStrRef() +
                           s_forwardslash + pathTranslated));
       }
     } else {
       server.set(s_PATH_TRANSLATED,
-                 String(server[s_DOCUMENT_ROOT].toCStrRef() +
-                        server[s_SCRIPT_NAME].toCStrRef() +
+                 String(server[s_DOCUMENT_ROOT].asCStrRef() +
+                        server[s_SCRIPT_NAME].asCStrRef() +
                         r.pathInfo().data()));
     }
     server.set(s_PATH_INFO, r.pathInfo());

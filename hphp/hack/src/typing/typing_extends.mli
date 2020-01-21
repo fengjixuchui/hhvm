@@ -8,14 +8,17 @@
  *)
 
 (*****************************************************************************)
-(* Checks that a class implements an interface *)
+(* Checks that a class implements an interface, extends a base class, or     *)
+(* uses a trait.                                                             *)
 (*****************************************************************************)
 
-open Core_kernel
+open Hh_prelude
 
 val check_implements :
   Typing_env_types.env ->
   string list String.Map.t ->
-  Typing_defs.decl Typing_defs.ty ->
-  Typing_defs.decl Typing_defs.ty ->
+  (* The parent (interface, base type, or trait) *)
+  Typing_defs.decl_ty ->
+  (* The type to be checked, instantiated at its generic parameters *)
+  Typing_defs.decl_ty ->
   Typing_env_types.env

@@ -1,2 +1,0 @@
-File "sort_by.php", line 20, characters 57-76:
-Cannot determine types of lambda parameters in strict mode. Please add type hints on parameters. (Typing[4224])

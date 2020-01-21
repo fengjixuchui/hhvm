@@ -51,27 +51,18 @@ ALWAYS_INLINE Variant& tvAsUninitializedVariant(TypedValue* tv) {
 
 ALWAYS_INLINE const Variant& tvAsCVarRef(const TypedValue* tv) {
   assertx(tv != nullptr);
+  assertx(tvIsPlausible(*tv));
   return reinterpret_cast<const Variant&>(*tv);
 }
 
-ALWAYS_INLINE Variant& cellAsVariant(Cell& cell) {
-  assertx(cellIsPlausible(cell));
-  return reinterpret_cast<Variant&>(cell);
+ALWAYS_INLINE Variant& tvAsVariant(TypedValue& tv) {
+  assertx(tvIsPlausible(tv));
+  return reinterpret_cast<Variant&>(tv);
 }
 
-ALWAYS_INLINE const Variant& cellAsCVarRef(const Cell& cell) {
-  assertx(cellIsPlausible(cell));
-  return reinterpret_cast<const Variant&>(cell);
-}
-
-ALWAYS_INLINE Variant& refAsVariant(Ref& ref) {
-  assertx(refIsPlausible(ref));
-  return reinterpret_cast<Variant&>(ref);
-}
-
-ALWAYS_INLINE const Variant& refAsCVarRef(const Ref& ref) {
-  assertx(refIsPlausible(ref));
-  return reinterpret_cast<const Variant&>(ref);
+ALWAYS_INLINE const Variant& tvAsCVarRef(const TypedValue& tv) {
+  assertx(tvIsPlausible(tv));
+  return reinterpret_cast<const Variant&>(tv);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -274,15 +274,16 @@ inline int dataTypeToSoap(DataType dt) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfClsMeth: return SOAP_ENC_ARRAY_DT;
     case KindOfObject:  return SOAP_ENC_OBJECT;
     case KindOfResource:
-    case KindOfRecord:
-    case KindOfRef:     return INVALID_TYPE;
+    case KindOfRecord:  return INVALID_TYPE;
   }
   return INVALID_TYPE;
 }

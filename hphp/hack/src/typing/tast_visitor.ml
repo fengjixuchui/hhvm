@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 module Env = Tast_env
 
 class virtual iter =
@@ -23,7 +23,11 @@ class virtual iter =
 
     method! on_method_ env x =
       let env =
-        if snd x.Aast.m_name = Naming_special_names.Members.__construct then
+        if
+          String.equal
+            (snd x.Aast.m_name)
+            Naming_special_names.Members.__construct
+        then
           Env.set_inside_constructor env
         else if x.Aast.m_static then
           Env.set_static env
@@ -41,6 +45,9 @@ class virtual iter =
       in
       super#on_class_var env cv
 
+    method! on_pu_enum env x =
+      super#on_pu_enum (Env.restore_pu_enum_env env x) x
+
     method! on_Efun env x = super#on_Efun (Env.set_ppl_lambda env) x
 
     method! on_Lfun env x = super#on_Lfun (Env.set_ppl_lambda env) x
@@ -48,9 +55,18 @@ class virtual iter =
     method! on_Binop env op e1 e2 =
       match op with
       | Ast_defs.Eq _ ->
+        self#on_bop env op;
         self#on_expr (Env.set_val_kind env Typing_defs.Lval) e1;
         self#on_expr env e2
       | _ -> super#on_Binop env op e1 e2
+
+    method! on_Is env e h =
+      let env = Env.set_allow_wildcards env in
+      super#on_Is env e h
+
+    method! on_As env e h =
+      let env = Env.set_allow_wildcards env in
+      super#on_As env e h
   end
 
 class virtual ['state] iter_with_state =
@@ -68,7 +84,11 @@ class virtual ['state] iter_with_state =
 
     method! on_method_ (env, state) x =
       let env =
-        if snd x.Aast.m_name = Naming_special_names.Members.__construct then
+        if
+          String.equal
+            (snd x.Aast.m_name)
+            Naming_special_names.Members.__construct
+        then
           Env.set_inside_constructor env
         else if x.Aast.m_static then
           Env.set_static env
@@ -86,11 +106,30 @@ class virtual ['state] iter_with_state =
       in
       super#on_class_var (env, state) cv
 
+    method! on_pu_enum (env, state) x =
+      super#on_pu_enum (Env.restore_pu_enum_env env x, state) x
+
     method! on_Efun (env, state) x =
       super#on_Efun (Env.set_ppl_lambda env, state) x
 
     method! on_Lfun (env, state) x =
       super#on_Lfun (Env.set_ppl_lambda env, state) x
+
+    method! on_Binop (env, state) op e1 e2 =
+      match op with
+      | Ast_defs.Eq _ ->
+        self#on_bop (env, state) op;
+        self#on_expr (Env.set_val_kind env Typing_defs.Lval, state) e1;
+        self#on_expr (env, state) e2
+      | _ -> super#on_Binop (env, state) op e1 e2
+
+    method! on_Is (env, state) e h =
+      let env = Env.set_allow_wildcards env in
+      super#on_Is (env, state) e h
+
+    method! on_As (env, state) e h =
+      let env = Env.set_allow_wildcards env in
+      super#on_As (env, state) e h
   end
 
 class virtual ['a] reduce =
@@ -106,7 +145,11 @@ class virtual ['a] reduce =
 
     method! on_method_ env x =
       let env =
-        if snd x.Aast.m_name = Naming_special_names.Members.__construct then
+        if
+          String.equal
+            (snd x.Aast.m_name)
+            Naming_special_names.Members.__construct
+        then
           Env.set_inside_constructor env
         else if x.Aast.m_static then
           Env.set_static env
@@ -124,9 +167,29 @@ class virtual ['a] reduce =
       in
       super#on_class_var env cv
 
+    method! on_pu_enum env x =
+      super#on_pu_enum (Env.restore_pu_enum_env env x) x
+
     method! on_Efun env x = super#on_Efun (Env.set_ppl_lambda env) x
 
     method! on_Lfun env x = super#on_Lfun (Env.set_ppl_lambda env) x
+
+    method! on_Binop env op e1 e2 =
+      match op with
+      | Ast_defs.Eq _ ->
+        let op = self#on_bop env op in
+        let e1 = self#on_expr (Env.set_val_kind env Typing_defs.Lval) e1 in
+        let e2 = self#on_expr env e2 in
+        self#plus e1 (self#plus op e2)
+      | _ -> super#on_Binop env op e1 e2
+
+    method! on_Is env e h =
+      let env = Env.set_allow_wildcards env in
+      super#on_Is env e h
+
+    method! on_As env e h =
+      let env = Env.set_allow_wildcards env in
+      super#on_As env e h
   end
 
 class virtual map =
@@ -151,7 +214,11 @@ class virtual map =
 
     method! on_method_ env x =
       let env =
-        if snd x.Aast.m_name = Naming_special_names.Members.__construct then
+        if
+          String.equal
+            (snd x.Aast.m_name)
+            Naming_special_names.Members.__construct
+        then
           Env.set_inside_constructor env
         else if x.Aast.m_static then
           Env.set_static env
@@ -169,9 +236,29 @@ class virtual map =
       in
       super#on_class_var env cv
 
+    method! on_pu_enum env x =
+      super#on_pu_enum (Env.restore_pu_enum_env env x) x
+
     method! on_Efun env x = super#on_Efun (Env.set_ppl_lambda env) x
 
     method! on_Lfun env x = super#on_Lfun (Env.set_ppl_lambda env) x
+
+    method! on_Binop env op e1 e2 =
+      match op with
+      | Ast_defs.Eq _ ->
+        Aast.Binop
+          ( self#on_bop env op,
+            self#on_expr (Env.set_val_kind env Typing_defs.Lval) e1,
+            self#on_expr env e2 )
+      | _ -> super#on_Binop env op e1 e2
+
+    method! on_Is env e h =
+      let env = Env.set_allow_wildcards env in
+      super#on_Is env e h
+
+    method! on_As env e h =
+      let env = Env.set_allow_wildcards env in
+      super#on_As env e h
   end
 
 class virtual endo =
@@ -195,7 +282,11 @@ class virtual endo =
 
     method! on_method_ env x =
       let env =
-        if snd x.Aast.m_name = Naming_special_names.Members.__construct then
+        if
+          String.equal
+            (snd x.Aast.m_name)
+            Naming_special_names.Members.__construct
+        then
           Env.set_inside_constructor env
         else if x.Aast.m_static then
           Env.set_static env
@@ -213,9 +304,32 @@ class virtual endo =
       in
       super#on_class_var env cv
 
+    method! on_pu_enum env x =
+      super#on_pu_enum (Env.restore_pu_enum_env env x) x
+
     method! on_Efun env x = super#on_Efun (Env.set_ppl_lambda env) x
 
     method! on_Lfun env x = super#on_Lfun (Env.set_ppl_lambda env) x
+
+    method! on_Binop env this op e1 e2 =
+      match op with
+      | Ast_defs.Eq _ ->
+        let op' = self#on_bop env op in
+        let e1' = self#on_expr (Env.set_val_kind env Typing_defs.Lval) e1 in
+        let e2' = self#on_expr env e2 in
+        if phys_equal op op' && phys_equal e1 e2' && phys_equal e2 e2' then
+          this
+        else
+          Aast.Binop (op', e1', e2')
+      | _ -> super#on_Binop env this op e1 e2
+
+    method! on_Is env e h =
+      let env = Env.set_allow_wildcards env in
+      super#on_Is env e h
+
+    method! on_As env e h =
+      let env = Env.set_allow_wildcards env in
+      super#on_As env e h
   end
 
 (** A {!handler} is an {!iter} visitor which is not in control of the iteration
@@ -246,9 +360,9 @@ class type handler =
       Env.t ->
       Aast.call_type ->
       Tast.expr ->
-      Aast.targ list ->
+      Tast.targ list ->
       Tast.expr list ->
-      Tast.expr list ->
+      Tast.expr option ->
       unit
 
     method at_hint : Env.t -> Aast.hint -> unit
@@ -259,9 +373,7 @@ class type handler =
 
     method at_class_typeconst : Env.t -> Tast.class_typeconst -> unit
 
-    method at_Is : Env.t -> Tast.expr -> Tast.hint -> unit
-
-    method at_As : Env.t -> Tast.expr -> Tast.hint -> unit
+    method at_xhp_child : Env.t -> Tast.xhp_child -> unit
   end
 
 (** A {!handler} which does not need to make use of every visitation method can
@@ -294,9 +406,7 @@ class virtual handler_base : handler =
 
     method at_class_typeconst _ _ = ()
 
-    method at_Is _ _ _ = ()
-
-    method at_As _ _ _ = ()
+    method at_xhp_child _ _ = ()
   end
 
 (** Return an {!iter} visitor which invokes all of the given handlers upon
@@ -337,9 +447,9 @@ let iter_with (handlers : handler list) : iter =
       List.iter handlers (fun v -> v#at_fun_ env x);
       super#on_fun_ env x
 
-    method! on_Call env ct e tal el uel =
-      List.iter handlers (fun v -> v#at_Call env ct e tal el uel);
-      super#on_Call env ct e tal el uel
+    method! on_Call env ct e tal el unpacked_element =
+      List.iter handlers (fun v -> v#at_Call env ct e tal el unpacked_element);
+      super#on_Call env ct e tal el unpacked_element
 
     method! on_hint env h =
       List.iter handlers (fun v -> v#at_hint env h);
@@ -357,13 +467,7 @@ let iter_with (handlers : handler list) : iter =
       List.iter handlers (fun v -> v#at_class_typeconst env tc);
       super#on_class_typeconst env tc
 
-    method! on_Is env e h =
-      let env = Env.set_allow_wildcards env in
-      List.iter handlers (fun v -> v#at_Is env e h);
-      super#on_Is env e h
-
-    method! on_As env e h =
-      let env = Env.set_allow_wildcards env in
-      List.iter handlers (fun v -> v#at_As env e h);
-      super#on_As env e h
+    method! on_xhp_child env c =
+      List.iter handlers (fun v -> v#at_xhp_child env c);
+      super#on_xhp_child env c
   end

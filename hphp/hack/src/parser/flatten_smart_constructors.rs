@@ -16,7 +16,7 @@
  **
  *
  */
-use crate::smart_constructors_generated::SmartConstructors;
+use smart_constructors::SmartConstructors;
 
 pub trait FlattenOp {
     type S;
@@ -136,11 +136,11 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_record_field(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) {
+    fn make_record_field(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) {
           Self::zero()
         } else {
-          Self::flatten(vec!(arg0, arg1, arg2, arg3, arg4))
+          Self::flatten(vec!(arg0, arg1, arg2, arg3))
         }
     }
 
@@ -264,11 +264,11 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_classish_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) && Self::is_zero(&arg9) && Self::is_zero(&arg10) {
+    fn make_classish_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R, arg11: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) && Self::is_zero(&arg9) && Self::is_zero(&arg10) && Self::is_zero(&arg11) {
           Self::zero()
         } else {
-          Self::flatten(vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10))
+          Self::flatten(vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11))
         }
     }
 
@@ -448,14 +448,6 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_let_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) {
-          Self::zero()
-        } else {
-          Self::flatten(vec!(arg0, arg1, arg2, arg3, arg4, arg5))
-        }
-    }
-
     fn make_using_statement_block_scoped(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
         if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) {
           Self::zero()
@@ -624,19 +616,19 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_break_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
+    fn make_break_statement(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) {
           Self::zero()
         } else {
-          Self::flatten(vec!(arg0, arg1, arg2))
+          Self::flatten(vec!(arg0, arg1))
         }
     }
 
-    fn make_continue_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
+    fn make_continue_statement(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) {
           Self::zero()
         } else {
-          Self::flatten(vec!(arg0, arg1, arg2))
+          Self::flatten(vec!(arg0, arg1))
         }
     }
 
@@ -1352,6 +1344,22 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
+    fn make_union_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
+          Self::zero()
+        } else {
+          Self::flatten(vec!(arg0, arg1, arg2))
+        }
+    }
+
+    fn make_intersection_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
+          Self::zero()
+        } else {
+          Self::flatten(vec!(arg0, arg1, arg2))
+        }
+    }
+
     fn make_error(&mut self, arg0: Self::R) -> Self::R {
         if Self::is_zero(&arg0) {
           Self::zero()
@@ -1408,11 +1416,11 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_pocket_field_type_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) {
+    fn make_pocket_field_type_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) {
           Self::zero()
         } else {
-          Self::flatten(vec!(arg0, arg1, arg2, arg3))
+          Self::flatten(vec!(arg0, arg1, arg2, arg3, arg4))
         }
     }
 

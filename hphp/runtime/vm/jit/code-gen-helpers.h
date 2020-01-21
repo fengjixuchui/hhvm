@@ -77,7 +77,7 @@ Vreg zeroExtendIfBool(Vout& v, Type type, Vreg reg);
 
 /*
  * Return a pointer to the type or value field of the pointee of `ptr', whether
- * it is a TPtrToGen or a TLvalToGen.
+ * it is a TPtrToCell or a TLvalToCell.
  */
 Vptr memTVTypePtr(SSATmp* ptr, Vloc loc);
 Vptr memTVValPtr(SSATmp* ptr, Vloc loc);
@@ -219,14 +219,6 @@ Vreg emitLdRecDesc(Vout& v, Vreg val, Vreg d);
  * Load the Class* for `obj' into `d', then return `d'.
  */
 Vreg emitLdObjClass(Vout& v, Vreg obj, Vreg d);
-
-/*
- * Load the Class* underlying the Cctx `src' into `d', then return `d'.
- *
- * (This just unmasks the lowest-order bit, which designates `src' as a Cctx
- * rather than a This.)
- */
-Vreg emitLdClsCctx(Vout& v, Vreg src, Vreg d);
 
 /*
  * Internal helpers for LowPtr comparisons.

@@ -3,10 +3,12 @@
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
-#![allow(unused_variables)]
-#![allow(dead_code)]
+#[macro_use]
+extern crate lazy_static;
 
 mod lowerer;
+mod lowerer_modifier;
+mod scour_comment;
 
-pub use lowerer::Env;
-pub use lowerer::Lowerer;
+pub use lowerer::{Env, Lowerer};
+pub use scour_comment::ScourComment;

@@ -13,10 +13,11 @@
  * have the proper type, and restricts what types can be used for enums.
  *)
 (*****************************************************************************)
-open Core_kernel
+open Hh_prelude
 open Aast
 open Typing_defs
 module Phase = Typing_phase
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 module MakeType = Typing_make_type
 
@@ -25,8 +26,8 @@ let member_type env member_ce =
   if Option.is_none member_ce.ce_xhp_attr then
     default_result
   else
-    match default_result with
-    | (_, Tapply (enum_id, _)) ->
+    match get_node default_result with
+    | Tapply (enum_id, _) ->
       (* XHP attribute type transform is necessary to account for
        * non-first class Enums:
 
@@ -44,8 +45,8 @@ let member_type env member_ce =
              (Cls.get_ancestor tc)
          with
         | None -> default_result
-        | Some (_base, (_, enum_ty), _constraint) ->
-          let ty = (fst default_result, enum_ty) in
+        | Some (_base, enum_ty, _constraint) ->
+          let ty = mk (get_reason default_result, get_node enum_ty) in
           ty))
     | _ -> default_result
 
@@ -55,14 +56,11 @@ let member_type env member_ce =
 let check_valid_array_key_type f_fail ~allow_any env p t =
   let rec check_valid_array_key_type env t =
     let ety_env = Phase.env_with_self env in
-    let (env, (r, t'), trail) =
-      Typing_tdef.force_expand_typedef ~ety_env env t
-    in
-    match t' with
+    let (env, t, trail) = Typing_tdef.force_expand_typedef ~ety_env env t in
+    match get_node t with
     | Tprim (Tint | Tstring) -> (env, None)
     (* Enums have to be valid array keys *)
-    | Tabstract (AKnewtype (id, _), _) when Typing_env.is_enum env id ->
-      (env, None)
+    | Tnewtype (id, _, _) when Typing_env.is_enum env id -> (env, None)
     | Terr
     | Tany _
       when allow_any ->
@@ -84,21 +82,20 @@ let check_valid_array_key_type f_fail ~allow_any env p t =
     | Toption _
     | Tdynamic
     | Tvar _
-    | Tabstract _
+    | Tgeneric _
+    | Tnewtype _
+    | Tdependent _
     | Tclass _
     | Ttuple _
     | Tanon _
-    | Tdestructure _
     | Tfun _
     | Tunion _
     | Tobject
     | Tshape _
     | Tpu _
-    | Tpu_access _ ->
+    | Tpu_type_access _ ->
       ( env,
-        Some
-          (fun () ->
-            f_fail p (Reason.to_pos r) (Typing_print.error env (r, t')) trail)
+        Some (fun () -> f_fail p (get_pos t) (Typing_print.error env t) trail)
       )
   in
   let (env, err) = check_valid_array_key_type env t in
@@ -116,15 +113,12 @@ let enum_check_const ty_exp env cc t =
     Errors.constant_does_not_match_enum_type
 
 (* Check that the `as` bound or the underlying type of an enum is a subtype of arraykey *)
-let enum_check_type env pos ur ty on_error =
+let enum_check_type env pos ur ty _on_error =
   let ty_arraykey =
     MakeType.arraykey (Reason.Rimplicit_upper_bound (pos, "arraykey"))
   in
-  Errors.try_
-    (fun () -> Typing_ops.sub_type pos ur env ty ty_arraykey on_error)
-    (fun _ ->
-      Errors.enum_type_bad pos (Typing_print.full_strip_ns env ty) [];
-      env)
+  Typing_ops.sub_type pos ur env ty ty_arraykey (fun ?code:_ _ ->
+      Errors.enum_type_bad pos (Typing_print.full_strip_ns env ty) [])
 
 (* Check an enum declaration of the form
  *    enum E : <ty_exp> as <ty_constraint>

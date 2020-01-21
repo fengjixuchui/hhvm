@@ -16,6 +16,8 @@
 
 type t [@@deriving show]
 
+type changes_since_baseline
+
 type fast = FileInfo.names Relative_path.Map.t
 
 type saved_state_info = FileInfo.saved Relative_path.Map.t
@@ -30,17 +32,20 @@ val combine : t -> t -> t
 
 val empty : t
 
-val filter : t -> f:(Relative_path.t -> FileInfo.t -> bool) -> t
 (** [filter] is implemented using tombstones on SQLite-backed naming tables, so
   * if your naming table is backed by SQLite you should try to avoid removing
   * more than half the table by filtering (otherwise it would be best to just
   * make a new empty one and add elements to it). On non-SQLite backed tables
   * we remove entries, so it's no more or less efficient depending on how many
   * are removed. *)
+val filter : t -> f:(Relative_path.t -> FileInfo.t -> bool) -> t
 
 val fold : t -> init:'b -> f:(Relative_path.t -> FileInfo.t -> 'b -> 'b) -> 'b
 
 val get_files : t -> Relative_path.t list
+
+val get_files_changed_since_baseline :
+  changes_since_baseline -> Relative_path.t list
 
 val get_file_info : t -> Relative_path.t -> FileInfo.t option
 
@@ -61,7 +66,42 @@ val save : t -> string -> save_result
 (* Creation functions. *)
 val create : FileInfo.t Relative_path.Map.t -> t
 
-val load_from_sqlite : update_reverse_entries:bool -> string -> t
+(* The common path for loading a save state from a SQLite database *)
+val load_from_sqlite : string -> t
+
+(* This function is intended for incremental naming table saved state
+    creation. It does not update the reverse naming table, so it should not
+    be used when loading the naming table in type checking scenarios. *)
+val load_from_sqlite_for_batch_update : string -> t
+
+(* This function is intended for applying naming changes relative
+  to the source code version on which the naming table was first created.
+  For the additional naming changes to be compatible with a SQLite-backed
+  naming table originally created on source code version X, they must be
+  snapshotted by loading a naming table originally created on X and,
+  at a later time, calling `save_changes_since_baseline`.
+  The scenario where this can be useful is thus:
+  1) In process A
+    - load a SQLite-backed naming table for source code version N
+    - user makes changes, resulting in source code version N + 1
+    - save changes since baseline as C1
+  2) In process B
+    - load the naming table for N + C1
+    - do some work
+  3) In process A
+    - user makes changes, resulting in source code version N + 2
+    - save changes since baseline as C2
+  4) In process B
+    - load the naming table for N + C2
+    - do some work
+  This avoids having to send the naming table version N to process B more than
+  once. After B gets naming table N, it only needs the changes C1 and C2 to
+  restore the state as process A sees it.
+  This is more relevant if A and B are not on the same host, and the cost
+  of sending the naming table is not negligible.
+  *)
+val load_from_sqlite_with_changes_since_baseline :
+  changes_since_baseline -> string -> t
 
 (* The path to the table's SQLite database mapping filenames to symbol names, if any *)
 val get_forward_naming_fallback_path : t -> string option
@@ -79,6 +119,8 @@ val to_fast : t -> fast
 
 val saved_to_fast : saved_state_info -> fast
 
+val save_changes_since_baseline : t -> destination_path:string -> unit
+
 (* Querying and updating reverse naming tables. *)
 module type ReverseNamingTable = sig
   type pos
@@ -86,6 +128,10 @@ module type ReverseNamingTable = sig
   val add : string -> pos -> unit
 
   val get_pos : ?bypass_cache:bool -> string -> pos option
+
+  val get_filename : string -> Relative_path.t option
+
+  val is_defined : string -> bool
 
   val remove_batch : SSet.t -> unit
 
@@ -95,10 +141,15 @@ end
 type type_of_type =
   | TClass
   | TTypedef
-[@@deriving enum]
+  | TRecordDef
+[@@deriving eq, enum]
 
 module Types : sig
   include ReverseNamingTable with type pos = FileInfo.pos * type_of_type
+
+  val get_kind : string -> type_of_type option
+
+  val get_filename_and_kind : string -> (Relative_path.t * type_of_type) option
 
   val get_canon_name : string -> string option
 end

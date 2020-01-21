@@ -26,7 +26,6 @@
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/string-buffer.h"
 #include "hphp/runtime/base/zend-string.h"
-#include "hphp/zend/zend-strtod.h"
 
 namespace HPHP {
 
@@ -355,7 +354,7 @@ String string_printf(const char *format, int len, const Array& args) {
       if (format[temppos] == '$') {
         argnum = getnumber(format, &inpos);
         if (argnum <= 0) {
-          throw_invalid_argument("argnum: must be greater than zero");
+          raise_invalid_argument_warning("argnum: must be greater than zero");
           return String();
         }
         inpos++;  /* skip the '$' */
@@ -385,7 +384,7 @@ String string_printf(const char *format, int len, const Array& args) {
       /* after modifiers comes width */
       if (isdigit(ch)) {
         if ((width = getnumber(format, &inpos)) < 0) {
-          throw_invalid_argument("width: must be greater than zero "
+          raise_invalid_argument_warning("width: must be greater than zero "
                                  "and less than %d", INT_MAX);
           return String();
         }
@@ -400,7 +399,7 @@ String string_printf(const char *format, int len, const Array& args) {
         ch = format[++inpos];
         if (isdigit((int)ch)) {
           if ((precision = getnumber(format, &inpos)) < 0) {
-            throw_invalid_argument("precision: must be greater than zero "
+            raise_invalid_argument_warning("precision: must be greater than zero "
                                    "and less than %d", INT_MAX);
             return String();
           }
@@ -419,7 +418,7 @@ String string_printf(const char *format, int len, const Array& args) {
     }
 
     if (argnum > vargs.size()) {
-      throw_invalid_argument("arguments: (too few)");
+      raise_invalid_argument_warning("arguments: (too few)");
       return String();
     }
 

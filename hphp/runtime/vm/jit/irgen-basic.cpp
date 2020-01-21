@@ -15,7 +15,6 @@
 */
 
 #include "hphp/runtime/base/stats.h"
-#include "hphp/runtime/base/strings.h"
 
 #include "hphp/runtime/ext/functioncredential/ext_functioncredential.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
@@ -122,30 +121,26 @@ void emitClassGetTS(IRGS& env) {
 }
 
 void emitCGetL(IRGS& env, int32_t id) {
-  auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
-  auto const loc = ldLocInnerWarn(
+  auto const loc = ldLocWarn(
     env,
     id,
-    ldrefExit,
     ldPMExit,
-    DataTypeBoxAndCountnessInit
+    DataTypeCountnessInit
   );
   pushIncRef(env, loc);
 }
 
 void emitCGetQuietL(IRGS& env, int32_t id) {
-  auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
   pushIncRef(
     env,
     [&] {
-      auto const loc = ldLocInner(
+      auto const loc = ldLoc(
         env,
         id,
-        ldrefExit,
         ldPMExit,
-        DataTypeBoxAndCountnessInit
+        DataTypeCountnessInit
       );
 
       if (loc->type() <= TUninit) {
@@ -173,9 +168,8 @@ void emitCGetQuietL(IRGS& env, int32_t id) {
 }
 
 void emitCUGetL(IRGS& env, int32_t id) {
-  auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
-  pushIncRef(env, ldLocInner(env, id, ldrefExit, ldPMExit, DataTypeGeneric));
+  pushIncRef(env, ldLoc(env, id, ldPMExit, DataTypeGeneric));
 }
 
 void emitPushL(IRGS& env, int32_t id) {
@@ -186,47 +180,32 @@ void emitPushL(IRGS& env, int32_t id) {
 }
 
 void emitCGetL2(IRGS& env, int32_t id) {
-  auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
   auto const oldTop = pop(env, DataTypeGeneric);
-  auto const val = ldLocInnerWarn(
+  auto const val = ldLocWarn(
     env,
     id,
-    ldrefExit,
     ldPMExit,
-    DataTypeBoxAndCountnessInit
+    DataTypeCountnessInit
   );
   pushIncRef(env, val);
   push(env, oldTop);
 }
 
-void emitVGetL(IRGS& env, int32_t id) {
-  auto const value = ldLoc(env, id, makeExit(env), DataTypeBoxAndCountnessInit);
-  auto const boxed = boxHelper(
-    env,
-    gen(env, AssertType, TCell | TBoxedInitCell, value),
-    [&] (SSATmp* v) {
-      stLocRaw(env, id, fp(env), v);
-    });
-
-  pushIncRef(env, boxed);
-}
-
 void emitUnsetL(IRGS& env, int32_t id) {
-  auto const prev = ldLoc(env, id, makeExit(env), DataTypeBoxAndCountness);
+  auto const prev = ldLoc(env, id, makeExit(env), DataTypeCountness);
   stLocRaw(env, id, fp(env), cns(env, TUninit));
   decRef(env, prev);
 }
 
 void emitSetL(IRGS& env, int32_t id) {
-  auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
 
   // since we're just storing the value in a local, this function doesn't care
   // about the type of the value. stLoc needs to IncRef the value so it may
   // constrain it further.
   auto const src = popC(env, DataTypeGeneric);
-  pushStLoc(env, id, ldrefExit, ldPMExit, src);
+  pushStLoc(env, id, ldPMExit, src);
 }
 
 void emitInitThisLoc(IRGS& env, int32_t id) {
@@ -234,10 +213,9 @@ void emitInitThisLoc(IRGS& env, int32_t id) {
     // Do nothing if this is null
     return;
   }
-  auto const ldrefExit = makeExit(env);
-  auto const ctx       = ldCtx(env);
-  auto const oldLoc = ldLoc(env, id, ldrefExit, DataTypeBoxAndCountness);
-  auto const this_  = castCtxThis(env, ctx);
+  auto const ldExit = makeExit(env);
+  auto const oldLoc = ldLoc(env, id, ldExit, DataTypeCountness);
+  auto const this_  = ldThis(env);
   gen(env, IncRef, this_);
   stLocRaw(env, id, fp(env), this_);
   decRef(env, oldLoc);
@@ -270,14 +248,6 @@ void emitPrint(IRGS& env) {
   push(env, cns(env, 1));
 }
 
-void emitUnbox(IRGS& env) {
-  auto const exit = makeExit(env);
-  auto const srcBox = popV(env);
-  auto const unboxed = unbox(env, srcBox, exit);
-  pushIncRef(env, unboxed);
-  decRef(env, srcBox);
-}
-
 void emitThis(IRGS& env) {
   auto const this_ = checkAndLoadThis(env);
   pushIncRef(env, this_);
@@ -288,7 +258,6 @@ void emitCheckThis(IRGS& env) {
 }
 
 void emitBareThis(IRGS& env, BareThisOp subop) {
-  auto const ctx = ldCtx(env);
   if (!hasThis(env)) {
     if (subop == BareThisOp::NoNotice) {
       push(env, cns(env, TInitNull));
@@ -299,7 +268,7 @@ void emitBareThis(IRGS& env, BareThisOp subop) {
     return;
   }
 
-  pushIncRef(env, castCtxThis(env, ctx));
+  pushIncRef(env, ldThis(env));
 }
 
 void emitClone(IRGS& env) {
@@ -316,8 +285,7 @@ void emitLateBoundCls(IRGS& env) {
     interpOne(env);
     return;
   }
-  auto const ctx = ldCtx(env);
-  push(env, gen(env, LdClsCtx, ctx));
+  push(env, ldCtxCls(env));
 }
 
 void emitSelf(IRGS& env) {
@@ -348,7 +316,7 @@ void emitClassName(IRGS& env) {
 
 void emitCastArray(IRGS& env) {
   auto const src = popC(env);
-  push(env, gen(env, ConvCellToArr, src));
+  push(env, gen(env, ConvTVToArr, src));
 }
 
 void emitCastVArray(IRGS& env) {
@@ -381,7 +349,6 @@ void emitCastVArray(IRGS& env) {
       }
       if (src->isA(TVec))    return gen(env, ConvVecToVArr, src);
       if (src->isA(TDict))   return gen(env, ConvDictToVArr, src);
-      if (src->isA(TShape))  return gen(env, ConvShapeToVArr, src);
       if (src->isA(TKeyset)) return gen(env, ConvKeysetToVArr, src);
       if (src->isA(TClsMeth)) return gen(env, ConvClsMethToVArr, src);
       if (src->isA(TObj))    return gen(env, ConvObjToVArr, src);
@@ -428,7 +395,6 @@ void emitCastDArray(IRGS& env) {
       }
       if (src->isA(TVec))    return gen(env, ConvVecToDArr, src);
       if (src->isA(TDict))   return gen(env, ConvDictToDArr, src);
-      if (src->isA(TShape))  return gen(env, ConvShapeToDArr, src);
       if (src->isA(TKeyset)) return gen(env, ConvKeysetToDArr, src);
       if (src->isA(TClsMeth)) return gen(env, ConvClsMethToDArr, src);
       if (src->isA(TObj))    return gen(env, ConvObjToDArr, src);
@@ -466,7 +432,6 @@ void emitCastVec(IRGS& env) {
       if (src->isA(TVec))    return src;
       if (src->isA(TArr))    return gen(env, ConvArrToVec, src);
       if (src->isA(TDict))   return gen(env, ConvDictToVec, src);
-      if (src->isA(TShape))  return gen(env, ConvShapeToVec, src);
       if (src->isA(TKeyset)) return gen(env, ConvKeysetToVec, src);
       if (src->isA(TClsMeth)) return gen(env, ConvClsMethToVec, src);
       if (src->isA(TObj))    return gen(env, ConvObjToVec, src);
@@ -502,7 +467,6 @@ void emitCastDict(IRGS& env) {
     env,
     [&] {
       if (src->isA(TDict))    return src;
-      if (src->isA(TShape))   return gen(env, ConvShapeToDict, src);
       if (src->isA(TArr))     return gen(env, ConvArrToDict, src);
       if (src->isA(TVec))     return gen(env, ConvVecToDict, src);
       if (src->isA(TKeyset))  return gen(env, ConvKeysetToDict, src);
@@ -543,7 +507,6 @@ void emitCastKeyset(IRGS& env) {
       if (src->isA(TArr))     return gen(env, ConvArrToKeyset, src);
       if (src->isA(TVec))     return gen(env, ConvVecToKeyset, src);
       if (src->isA(TDict))    return gen(env, ConvDictToKeyset, src);
-      if (src->isA(TShape))   return gen(env, ConvShapeToKeyset, src);
       if (src->isA(TClsMeth)) return gen(env, ConvClsMethToKeyset, src);
       if (src->isA(TObj))     return gen(env, ConvObjToKeyset, src);
       if (src->isA(TRecord))  PUNT(CastKeysetRecord); // TODO: T53309767
@@ -561,30 +524,25 @@ void emitCastKeyset(IRGS& env) {
 
 void emitCastBool(IRGS& env) {
   auto const src = popC(env);
-  push(env, gen(env, ConvCellToBool, src));
+  push(env, gen(env, ConvTVToBool, src));
   decRef(env, src);
 }
 
 void emitCastDouble(IRGS& env) {
   auto const src = popC(env);
-  push(env, gen(env, ConvCellToDbl, src));
+  push(env, gen(env, ConvTVToDbl, src));
   decRef(env, src);
 }
 
 void emitCastInt(IRGS& env) {
   auto const src = popC(env);
-  push(env, gen(env, ConvCellToInt, src));
+  push(env, gen(env, ConvTVToInt, src));
   decRef(env, src);
-}
-
-void emitCastObject(IRGS& env) {
-  auto const src = popC(env);
-  push(env, gen(env, ConvCellToObj, src));
 }
 
 void emitCastString(IRGS& env) {
   auto const src = popC(env);
-  push(env, gen(env, ConvCellToStr, src));
+  push(env, gen(env, ConvTVToStr, src));
   decRef(env, src);
 }
 
@@ -609,7 +567,6 @@ void implIncStat(IRGS& env, uint32_t counter) {
 //////////////////////////////////////////////////////////////////////
 
 void emitPopC(IRGS& env)   { popDecRef(env, DataTypeGeneric); }
-void emitPopV(IRGS& env)   { popDecRef(env, DataTypeGeneric); }
 void emitPopU(IRGS& env)   { popU(env); }
 void emitPopU2(IRGS& env) {
   auto const src = popC(env, DataTypeGeneric);
@@ -618,10 +575,9 @@ void emitPopU2(IRGS& env) {
 }
 
 void emitPopL(IRGS& env, int32_t id) {
-  auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
   auto const src = popC(env, DataTypeGeneric);
-  stLocMove(env, id, ldrefExit, ldPMExit, src);
+  stLocMove(env, id, ldPMExit, src);
 }
 
 void emitPopFrame(IRGS& env, uint32_t nout) {

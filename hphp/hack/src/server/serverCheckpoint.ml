@@ -16,25 +16,26 @@ let process_updates updates =
   (* Appending changed files to each checkpoint in the map *)
   checkpoints :=
     SMap.map !checkpoints (fun cur_set ->
-        Relative_path.Map.fold
+        Relative_path.Set.fold
           updates
-          ~f:begin
-               fun path _ acc -> Relative_path.Set.add acc path
-             end
+          ~f:
+            begin
+              fun path acc ->
+              Relative_path.Set.add acc path
+            end
           ~init:cur_set)
 
 let create_checkpoint x =
   checkpoints := SMap.add !checkpoints ~key:x ~data:Relative_path.Set.empty
 
 let retrieve_checkpoint x =
-  match SMap.get !checkpoints x with
+  match SMap.find_opt !checkpoints x with
   | Some files ->
-    Some
-      (List.map (Relative_path.Set.elements files) Relative_path.to_absolute)
+    Some (List.map (Relative_path.Set.elements files) Relative_path.to_absolute)
   | None -> None
 
 let delete_checkpoint x =
-  match SMap.get !checkpoints x with
+  match SMap.find_opt !checkpoints x with
   | Some _ ->
     checkpoints := SMap.remove !checkpoints x;
     true

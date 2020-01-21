@@ -9,22 +9,22 @@
 
 type type_constraint_flag =
   | Nullable
-  | HHType
   | ExtendedHint
   | TypeVar
   | Soft
   | TypeConstant
   | DisplayNullable
+  | UpperBound
 
 let string_of_flag f =
   match f with
   | Nullable -> "nullable"
-  | HHType -> "hh_type"
   | ExtendedHint -> "extended_hint"
   | TypeVar -> "type_var"
   | Soft -> "soft"
   | TypeConstant -> "type_constant"
   | DisplayNullable -> "display_nullable"
+  | UpperBound -> "upper_bound"
 
 (* A type constraint is just a name and flags *)
 type t = {

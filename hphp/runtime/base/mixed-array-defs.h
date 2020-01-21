@@ -74,7 +74,7 @@ inline bool MixedArray::isTombstone(ssize_t pos) const {
 }
 
 ALWAYS_INLINE
-Cell MixedArray::getElmKey(const Elm& e) {
+TypedValue MixedArray::getElmKey(const Elm& e) {
   if (e.hasIntKey()) {
     return make_tv<KindOfInt64>(e.ikey);
   }
@@ -92,17 +92,15 @@ void MixedArray::getArrayElm(ssize_t pos,
                             TypedValue* keyOut) const {
   assertx(size_t(pos) < m_used);
   auto& elm = data()[pos];
-  auto const cur = tvToCell(&elm.data);
-  cellDup(*cur, *valOut);
-  cellCopy(getElmKey(elm), *keyOut);
+  tvDup(elm.data, *valOut);
+  tvCopy(getElmKey(elm), *keyOut);
 }
 
 ALWAYS_INLINE
 void MixedArray::getArrayElm(ssize_t pos, TypedValue* valOut) const {
   assertx(size_t(pos) < m_used);
   auto& elm = data()[pos];
-  auto const cur = tvToCell(&elm.data);
-  cellDup(*cur, *valOut);
+  tvDup(elm.data, *valOut);
 }
 
 ALWAYS_INLINE
@@ -122,16 +120,16 @@ TypedValue MixedArray::getArrayElmKey(ssize_t pos) const {
   return getElmKey(elm);
 }
 
-inline ArrayData* MixedArray::addVal(int64_t ki, Cell data) {
+inline ArrayData* MixedArray::addVal(int64_t ki, TypedValue data) {
   assertx(!exists(ki));
   assertx(!isFull());
   auto h = hash_int64(ki);
   auto ei = findForNewInsert(h);
   auto e = allocElm(ei);
   e->setIntKey(ki, h);
-  recordIntKey();
+  mutableKeyTypes()->recordInt();
   if (ki >= m_nextKI && m_nextKI >= 0) m_nextKI = ki + 1;
-  cellDup(data, e->data);
+  tvDup(data, e->data);
   // TODO(#3888164): should avoid needing these KindOfUninit checks.
   if (UNLIKELY(e->data.m_type == KindOfUninit)) {
     e->data.m_type = KindOfNull;
@@ -139,50 +137,31 @@ inline ArrayData* MixedArray::addVal(int64_t ki, Cell data) {
   return this;
 }
 
-inline ArrayData* MixedArray::addVal(StringData* key, Cell data) {
+inline ArrayData* MixedArray::addVal(StringData* key, TypedValue data) {
   assertx(!exists(key));
   assertx(!isFull());
   return addValNoAsserts(key, data);
 }
 
-inline ArrayData* MixedArray::addValNoAsserts(StringData* key, Cell data) {
+inline ArrayData* MixedArray::addValNoAsserts(StringData* key, TypedValue data) {
   strhash_t h = key->hash();
   auto ei = findForNewInsert(h);
   auto e = allocElm(ei);
   e->setStrKey(key, h);
-  recordStrKey(key);
+  mutableKeyTypes()->recordStr(key);
   // TODO(#3888164): we should restructure things so we don't have to check
   // KindOfUninit here.
   initElem(e->data, data);
   return this;
 }
 
-template <class K>
-ArrayData* MixedArray::updateWithRef(K k, TypedValue data) {
-  assertx(!isFull());
-  auto p = insert(k);
-  if (p.found) {
-    // TODO(#3888164): We should restructure things so we don't have to check
-    // KindOfUninit here.
-    setElemWithRef(p.tv, data);
-    return this;
-  }
-  // TODO(#3888164): We should restructure things so we don't have to check
-  // KindOfUninit here.
-  tvDupWithRef(data, p.tv);
-  if (p.tv.m_type == KindOfUninit) p.tv.m_type = KindOfNull;
-  return this;
-}
-
-template <bool warn, class K>
+template <bool enforce, class K>
 arr_lval MixedArray::addLvalImpl(K k) {
   assertx(!isFull());
   auto p = insert(k);
   if (!p.found) {
     tvWriteNull(p.tv);
-    if (warn && checkHACFalseyPromote()) {
-      raise_hac_falsey_promote_notice("Lval on missing array element");
-    }
+    if (enforce) throwMissingElementException("Lval");
   }
   return arr_lval { this, &p.tv };
 }
@@ -271,12 +250,6 @@ void ConvertTvToUncounted(
     DataWalker::PointerMap* seen = nullptr) {
   auto& data = source.val();
   auto& type = source.type();
-  if (isRefType(type)) {
-    // unbox
-    auto const inner = data.pref->cell();
-    tvCopy(*inner, source);
-  }
-
   auto const handlePersistent = [&] (MaybeCountable* elm) {
     if (elm->isRefCounted()) return false;
     if (elm->isStatic()) return true;
@@ -285,9 +258,8 @@ void ConvertTvToUncounted(
     return false;
   };
 
-  // `source' cannot be Ref here as we already did an unbox.  It won't be
-  // Object or Resource, as these should never appear in an uncounted array.
-  // Thus we only need to deal with strings/arrays.
+  // `source' won't be Object or Resource, as these should never appear in an
+  // uncounted array.  Thus we only need to deal with strings/arrays.
   switch (type) {
     case KindOfFunc:
     if (RuntimeOption::EvalAPCSerializeFuncs) {
@@ -359,18 +331,12 @@ void ConvertTvToUncounted(
       break;
     }
 
-    case KindOfShape:
-    case KindOfPersistentShape: {
-      auto& ad = data.parr;
-      assertx(ad->isShape());
-      if (handlePersistent(ad)) break;
-      if (ad->empty()) {
-        ad = ArrayData::CreateShape();
-      } else {
-        ad = MixedArray::MakeUncounted(ad, false, seen);
-      }
-      break;
-    }
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
     case KindOfArray:
       type = KindOfPersistentArray;
@@ -424,7 +390,6 @@ void ConvertTvToUncounted(
       raise_error(Strings::RECORD_NOT_SUPPORTED);
     case KindOfObject:
     case KindOfResource:
-    case KindOfRef:
       not_reached();
   }
 }

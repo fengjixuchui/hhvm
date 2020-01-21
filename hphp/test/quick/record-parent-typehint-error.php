@@ -1,13 +1,13 @@
 <?hh
 
 abstract record A {
-  x: int,
+  int x;
 }
 
-final record B extends A {
+record B extends A {
 }
 
-final record C extends A {
+record C extends A {
 }
 
 function foo(B $b) {

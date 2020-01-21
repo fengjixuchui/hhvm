@@ -20,30 +20,23 @@ let create_label_to_offset_map instrseq =
          | _ -> (i + 1, m))
 
 let lookup_def l defs =
-  match IMap.get l defs with
+  match IMap.find_opt l defs with
   | None -> failwith "lookup_def: label missing"
   | Some ix -> ix
 
 (* Get any regular labels referenced by this instruction *)
 let get_regular_labels instr =
   match instr with
-  | IIterator (IterInit (_, l, _))
-  | IIterator (IterInitK (_, l, _, _))
-  | IIterator (LIterInit (_, _, l, _))
-  | IIterator (LIterInitK (_, _, l, _, _))
-  | IIterator (IterNext (_, l, _))
-  | IIterator (IterNextK (_, l, _, _))
-  | IIterator (LIterNext (_, _, l, _))
-  | IIterator (LIterNextK (_, _, l, _, _))
-  | IIterator (IterBreak (l, _))
+  | IIterator (IterInit (_, l))
+  | IIterator (IterNext (_, l))
   | ICall (FCall (_, _, _, _, Some l))
-  | ICall (FCallClsMethod ((_, _, _, _, Some l), _, _))
+  | ICall (FCallClsMethod ((_, _, _, _, Some l), _))
   | ICall (FCallClsMethodD ((_, _, _, _, Some l), _, _))
   | ICall (FCallClsMethodS ((_, _, _, _, Some l), _))
   | ICall (FCallClsMethodSD ((_, _, _, _, Some l), _, _))
-  | ICall (FCallFunc ((_, _, _, _, Some l), _))
+  | ICall (FCallFunc (_, _, _, _, Some l))
   | ICall (FCallFuncD ((_, _, _, _, Some l), _))
-  | ICall (FCallObjMethod ((_, _, _, _, Some l), _, _))
+  | ICall (FCallObjMethod ((_, _, _, _, Some l), _))
   | ICall (FCallObjMethodD ((_, _, _, _, Some l), _, _))
   | IGenDelegation (YieldFromDelegate (_, l))
   | IMisc (MemoGet (l, _))
@@ -63,7 +56,7 @@ let create_label_ref_map defs params body =
   let process_ref ((n, (used, refs)) as acc) l =
     let l = Label.id l in
     let ix = lookup_def l defs in
-    match IMap.get ix refs with
+    match IMap.find_opt ix refs with
     (* This is the first time we've seen a reference to a label for
      * this instruction offset, so generate a new label *)
     | None -> (n + 1, (ISet.add l used, IMap.add ix n refs))
@@ -86,42 +79,28 @@ let create_label_ref_map defs params body =
 
 let relabel_instr instr relabel =
   match instr with
-  | IIterator (IterInit (id, l, v)) -> IIterator (IterInit (id, relabel l, v))
-  | IIterator (IterInitK (id, l, k, v)) ->
-    IIterator (IterInitK (id, relabel l, k, v))
-  | IIterator (LIterInit (id, b, l, v)) ->
-    IIterator (LIterInit (id, b, relabel l, v))
-  | IIterator (LIterInitK (id, b, l, k, v)) ->
-    IIterator (LIterInitK (id, b, relabel l, k, v))
-  | IIterator (IterNext (id, l, v)) -> IIterator (IterNext (id, relabel l, v))
-  | IIterator (IterNextK (id, l, k, v)) ->
-    IIterator (IterNextK (id, relabel l, k, v))
-  | IIterator (LIterNext (id, b, l, v)) ->
-    IIterator (LIterNext (id, b, relabel l, v))
-  | IIterator (LIterNextK (id, b, l, k, v)) ->
-    IIterator (LIterNextK (id, b, relabel l, k, v))
-  | IIterator (IterBreak (l, x)) -> IIterator (IterBreak (relabel l, x))
+  | IIterator (IterInit (id, l)) -> IIterator (IterInit (id, relabel l))
+  | IIterator (IterNext (id, l)) -> IIterator (IterNext (id, relabel l))
   | IGenDelegation (YieldFromDelegate (i, l)) ->
     IGenDelegation (YieldFromDelegate (i, relabel l))
   | ICall (FCall (fl, na, nr, br, Some l)) ->
     ICall (FCall (fl, na, nr, br, Some (relabel l)))
-  | ICall
-      (FCallClsMethod ((fl, na, nr, br, Some l), p, is_log_as_dynamic_call)) ->
+  | ICall (FCallClsMethod ((fl, na, nr, br, Some l), is_log_as_dynamic_call)) ->
     ICall
       (FCallClsMethod
-         ((fl, na, nr, br, Some (relabel l)), p, is_log_as_dynamic_call))
+         ((fl, na, nr, br, Some (relabel l)), is_log_as_dynamic_call))
   | ICall (FCallClsMethodD ((fl, na, nr, br, Some l), c, m)) ->
     ICall (FCallClsMethodD ((fl, na, nr, br, Some (relabel l)), c, m))
   | ICall (FCallClsMethodS ((fl, na, nr, br, Some l), c)) ->
     ICall (FCallClsMethodS ((fl, na, nr, br, Some (relabel l)), c))
   | ICall (FCallClsMethodSD ((fl, na, nr, br, Some l), c, m)) ->
     ICall (FCallClsMethodSD ((fl, na, nr, br, Some (relabel l)), c, m))
-  | ICall (FCallFunc ((fl, na, nr, br, Some l), p)) ->
-    ICall (FCallFunc ((fl, na, nr, br, Some (relabel l)), p))
+  | ICall (FCallFunc (fl, na, nr, br, Some l)) ->
+    ICall (FCallFunc (fl, na, nr, br, Some (relabel l)))
   | ICall (FCallFuncD ((fl, na, nr, br, Some l), f)) ->
     ICall (FCallFuncD ((fl, na, nr, br, Some (relabel l)), f))
-  | ICall (FCallObjMethod ((fl, na, nr, br, Some l), f, p)) ->
-    ICall (FCallObjMethod ((fl, na, nr, br, Some (relabel l)), f, p))
+  | ICall (FCallObjMethod ((fl, na, nr, br, Some l), f)) ->
+    ICall (FCallObjMethod ((fl, na, nr, br, Some (relabel l)), f))
   | ICall (FCallObjMethodD ((fl, na, nr, br, Some l), f, m)) ->
     ICall (FCallObjMethodD ((fl, na, nr, br, Some (relabel l)), f, m))
   | IContFlow (Jmp l) -> IContFlow (Jmp (relabel l))
@@ -146,7 +125,7 @@ let relabel_instr instr relabel =
 let rewrite_params_and_body defs used refs params body =
   let relabel_id l =
     let ix = lookup_def l defs in
-    match IMap.get ix refs with
+    match IMap.find_opt ix refs with
     | None -> failwith "relabel_instrseq: offset not in refs"
     | Some l' -> l'
   in
@@ -155,7 +134,7 @@ let rewrite_params_and_body defs used refs params body =
   (* Rewrite or remove a label definition *)
   let relabel_define_label_id id =
     if ISet.mem id used then
-      IMap.get (lookup_def id defs) refs
+      IMap.find_opt (lookup_def id defs) refs
     else
       None
   in
@@ -178,7 +157,6 @@ let rewrite_params_and_body defs used refs params body =
     | Some (l, e) ->
       Hhas_param.make
         (Hhas_param.name param)
-        (Hhas_param.is_reference param)
         (Hhas_param.is_variadic param)
         (Hhas_param.is_inout param)
         (Hhas_param.user_attributes param)
@@ -214,8 +192,8 @@ let clone_with_fresh_regular_labels block =
       Option.value ~default:l
       @@
       match l with
-      | Label.Regular id -> IMap.get id regular_labels
-      | Label.Named name -> SMap.get name named_labels
+      | Label.Regular id -> IMap.find_opt id regular_labels
+      | Label.Named name -> SMap.find_opt name named_labels
       | _ -> None
     in
     let rewrite_instr instr = relabel_instr instr relabel in

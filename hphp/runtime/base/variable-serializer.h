@@ -114,7 +114,8 @@ struct VariableSerializer {
   // ignore uninitialized late init props and do not attempt to serialize them
   void setIgnoreLateInit() { m_ignoreLateInit = true; }
 
-  enum class ArrayKind { PHP, Dict, Shape, Vec, Keyset, VArray, DArray };
+  enum class ArrayKind { PHP, Dict, Vec, Keyset, VArray, DArray,
+                         LegacyDict, LegacyVec };
 
   // One entry for each vec or dict in the value being serialized (in a
   // pre-order walk). If the bool is true, and mode is PHPOutput, the vec or
@@ -164,7 +165,6 @@ private:
    * Helpers.
    */
   void indent();
-  void setReferenced(bool referenced) { m_referenced = referenced;}
   void setRefCount(int count) { m_refCount = count;}
   bool incNestedLevel(tv_rval tv);
   void decNestedLevel(tv_rval tv);
@@ -180,7 +180,6 @@ private:
   void preventOverflow(const Object& v, const std::function<void()>& func);
   void writePropertyKey(const String& prop);
 
-  void serializeRef(tv_rval tv, bool isArrayKey);
   // Serialize a Variant recursively.
   // The last param noQuotes indicates to serializer to not put the output in
   // double quotes (used when printing the output of a __toDebugDisplay() of
@@ -251,7 +250,6 @@ private:
   int m_indent{0};
   SavedRefMap m_refs;            // reference ids and counts for objs/arrays
   int m_valueCount{0};           // current ref index
-  bool m_referenced{false};      // mark current array element as reference
   bool m_keepDVArrays;           // serialize d/varrays as themselves or arrays
   bool m_forcePHPArrays{false};  // serialize PHP and Hack arrays as PHP arrays
   bool m_hackWarn{false};        // warn when attempting on Hack arrays

@@ -22,7 +22,6 @@
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/header-kind.h"
 #include "hphp/runtime/base/object-data.h"
-#include "hphp/runtime/base/ref-data.h"
 #include "hphp/runtime/base/resource-data.h"
 #include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/typed-value.h"
@@ -161,7 +160,6 @@ enable_if_lval_t<T, void> tvDecRefArr(T tv) {
   assertx(type(tv) == KindOfArray ||
          type(tv) == KindOfVec ||
          type(tv) == KindOfDict ||
-         type(tv) == KindOfShape ||
          type(tv) == KindOfKeyset);
   decRefArr(val(tv).parr);
 }
@@ -180,12 +178,6 @@ template<typename T> ALWAYS_INLINE
 enable_if_lval_t<T, void> tvDecRefRes(T tv) {
   assertx(type(tv) == KindOfResource);
   decRefRes(val(tv).pres);
-}
-
-template<typename T> ALWAYS_INLINE
-enable_if_lval_t<T, void> tvDecRefRef(T tv) {
-  assertx(isRefType(type(tv)));
-  decRefRef(val(tv).pref);
 }
 
 template<typename T> ALWAYS_INLINE

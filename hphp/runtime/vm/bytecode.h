@@ -23,12 +23,15 @@
 #include "hphp/runtime/base/record-array.h"
 #include "hphp/runtime/base/record-data.h"
 #include "hphp/runtime/base/tv-arith.h"
+#include "hphp/runtime/base/tv-array-like.h"
 #include "hphp/runtime/base/tv-conversions.h"
 #include "hphp/runtime/base/tv-mutate.h"
 #include "hphp/runtime/base/tv-variant.h"
 #include "hphp/runtime/base/tv-refcount.h"
+#include "hphp/runtime/base/type-string.h"
 
 #include "hphp/runtime/vm/act-rec.h"
+#include "hphp/runtime/vm/call-flags.h"
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/class-meth-data-ref.h"
 #include "hphp/runtime/vm/func.h"
@@ -54,84 +57,33 @@ struct Resumable;
 #define EVAL_FILENAME_SUFFIX ") : eval()'d code"
 
 // perform the set(op) operation on lhs & rhs, leaving the result in lhs.
-// The old value of lhs is decrefed. Caller must call tvToCell() if lhs or
-// rhs might be a ref.
+// The old value of lhs is decrefed.
 ALWAYS_INLINE
-void setopBody(tv_lval lhs, SetOpOp op, Cell* rhs) {
-  assertx(cellIsPlausible(*lhs));
-  assertx(cellIsPlausible(*rhs));
+void setopBody(tv_lval lhs, SetOpOp op, TypedValue* rhs) {
+  assertx(tvIsPlausible(*lhs));
+  assertx(tvIsPlausible(*rhs));
 
   switch (op) {
-  case SetOpOp::PlusEqual:      cellAddEq(lhs, *rhs); return;
-  case SetOpOp::MinusEqual:     cellSubEq(lhs, *rhs); return;
-  case SetOpOp::MulEqual:       cellMulEq(lhs, *rhs); return;
-  case SetOpOp::DivEqual:       cellDivEq(lhs, *rhs); return;
-  case SetOpOp::PowEqual:       cellPowEq(lhs, *rhs); return;
-  case SetOpOp::ModEqual:       cellModEq(lhs, *rhs); return;
-  case SetOpOp::ConcatEqual:    cellConcatEq(lhs, *rhs); return;
-  case SetOpOp::AndEqual:       cellBitAndEq(lhs, *rhs); return;
-  case SetOpOp::OrEqual:        cellBitOrEq(lhs, *rhs);  return;
-  case SetOpOp::XorEqual:       cellBitXorEq(lhs, *rhs); return;
-  case SetOpOp::SlEqual:        cellShlEq(lhs, *rhs); return;
-  case SetOpOp::SrEqual:        cellShrEq(lhs, *rhs); return;
-  case SetOpOp::PlusEqualO:     cellAddEqO(lhs, *rhs); return;
-  case SetOpOp::MinusEqualO:    cellSubEqO(lhs, *rhs); return;
-  case SetOpOp::MulEqualO:      cellMulEqO(lhs, *rhs); return;
+  case SetOpOp::PlusEqual:      tvAddEq(lhs, *rhs); return;
+  case SetOpOp::MinusEqual:     tvSubEq(lhs, *rhs); return;
+  case SetOpOp::MulEqual:       tvMulEq(lhs, *rhs); return;
+  case SetOpOp::DivEqual:       tvDivEq(lhs, *rhs); return;
+  case SetOpOp::PowEqual:       tvPowEq(lhs, *rhs); return;
+  case SetOpOp::ModEqual:       tvModEq(lhs, *rhs); return;
+  case SetOpOp::ConcatEqual:    tvConcatEq(lhs, *rhs); return;
+  case SetOpOp::AndEqual:       tvBitAndEq(lhs, *rhs); return;
+  case SetOpOp::OrEqual:        tvBitOrEq(lhs, *rhs);  return;
+  case SetOpOp::XorEqual:       tvBitXorEq(lhs, *rhs); return;
+  case SetOpOp::SlEqual:        tvShlEq(lhs, *rhs); return;
+  case SetOpOp::SrEqual:        tvShrEq(lhs, *rhs); return;
+  case SetOpOp::PlusEqualO:     tvAddEqO(lhs, *rhs); return;
+  case SetOpOp::MinusEqualO:    tvSubEqO(lhs, *rhs); return;
+  case SetOpOp::MulEqualO:      tvMulEqO(lhs, *rhs); return;
   }
   not_reached();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-struct ExtraArgs {
-  ExtraArgs(const ExtraArgs&) = delete;
-  ExtraArgs& operator=(const ExtraArgs&) = delete;
-
-  /*
-   * Allocate an ExtraArgs structure, with arguments copied from the
-   * evaluation stack.  This takes ownership of the args without
-   * adjusting reference counts, so they must be discarded from the
-   * stack.
-   */
-  static ExtraArgs* allocateCopy(TypedValue* args, unsigned nargs);
-
-  /*
-   * Allocate an ExtraArgs, without initializing any of the arguments.
-   * All arguments must be initialized via getExtraArg before
-   * deallocate() is called for the returned pointer.
-   */
-  static ExtraArgs* allocateUninit(unsigned nargs);
-
-  /*
-   * Deallocate an extraArgs structure.  Either use the one that
-   * exists in a ActRec, or do it explicitly.
-   */
-  static void deallocate(ActRec*);
-  static void deallocate(ExtraArgs*, unsigned numArgs);
-
-  // Just free the memory, don't dec-ref anything.
-  static void deallocateRaw(ExtraArgs*);
-
-  /**
-   * Make a copy of ExtraArgs.
-   */
-  ExtraArgs* clone(ActRec* fp) const;
-
-  /*
-   * Get the slot for extra arg i, where i = argNum - func->numParams.
-   */
-  TypedValue* getExtraArg(unsigned argInd) const;
-
-private:
-  ExtraArgs();
-  ~ExtraArgs();
-
-  static void* allocMem(unsigned nargs);
-
-private:
-  TypedValue m_extraArgs[0];
-  TYPE_SCAN_FLEXIBLE_ARRAY_FIELD(m_extraArgs);
-};
 
 /*
  * Variable environment.
@@ -154,13 +106,12 @@ private:
 struct VarEnv {
  private:
   NameValueTable m_nvTable;
-  ExtraArgs* m_extraArgs;
   uint16_t m_depth;
   const bool m_global;
 
  public:
   explicit VarEnv();
-  explicit VarEnv(ActRec* fp, ExtraArgs* eArgs);
+  explicit VarEnv(ActRec* fp);
   explicit VarEnv(const VarEnv* varEnv, ActRec* fp);
   ~VarEnv();
 
@@ -190,38 +141,7 @@ struct VarEnv {
   // Used for save/store m_cfp for debugger
   ActRec* getFP() const { return m_nvTable.getFP(); }
   bool isGlobalScope() const { return m_global; }
-
-  // Access to wrapped ExtraArgs, if we have one.
-  TypedValue* getExtraArg(unsigned argInd) const;
 };
-
-/*
- * Action taken to handle any extra arguments passed for a function call.
- */
-enum class ExtraArgsAction {
-  None,     // no extra arguments; zero out m_extraArgs
-  Discard,  // discard extra arguments
-  Variadic, // populate `...$args' parameter
-  MayUseVV, // create ExtraArgs
-  VarAndVV, // both of the above
-};
-
-inline ExtraArgsAction extra_args_action(const Func* func, uint32_t argc) {
-  using Action = ExtraArgsAction;
-
-  auto const nparams = func->numNonVariadicParams();
-  if (argc <= nparams) return Action::None;
-
-  if (LIKELY(func->discardExtraArgs())) {
-    return Action::Discard;
-  }
-  if (func->attrs() & AttrMayUseVV) {
-    return func->hasVariadicCaptureParam() ? Action::VarAndVV
-                                           : Action::MayUseVV;
-  }
-  assertx(func->hasVariadicCaptureParam());
-  return Action::Variadic;
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -236,26 +156,6 @@ inline ExtraArgsAction extra_args_action(const Func* func, uint32_t argc) {
  */
 bool isVMFrame(const ActRec* ar, bool may_be_non_runtime = false);
 
-/*
- * Returns true iff the given address is one of the special debugger return
- * helpers.
- */
-bool isDebuggerReturnHelper(void* addr);
-
-/*
- * If ar->m_savedRip points somewhere in the TC that is not a return helper,
- * change it to point to an appropriate return helper. The two different
- * versions are for the different needs of the C++ unwinder and debugger hooks,
- * respectively.
- */
-void unwindPreventReturnToTC(ActRec* ar);
-void debuggerPreventReturnToTC(ActRec* ar);
-
-/*
- * Call debuggerPreventReturnToTC() on all live VM frames in this thread.
- */
-void debuggerPreventReturnsToTC();
-
 ///////////////////////////////////////////////////////////////////////////////
 
 void frame_free_locals_no_hook(ActRec* fp);
@@ -264,7 +164,7 @@ void frame_free_locals_no_hook(ActRec* fp);
   ([&] {                                                                \
     TypedValue val_;                                                    \
     new (&val_) Variant(x);                                             \
-    assertx(!isRefType(val_.m_type) && val_.m_type != KindOfUninit);    \
+    assertx(val_.m_type != KindOfUninit);                               \
     return val_;                                                        \
   }())
 
@@ -283,8 +183,8 @@ struct CallCtx {
   bool dynamic;
 };
 
-constexpr size_t kNumIterCells = sizeof(Iter) / sizeof(Cell);
-constexpr size_t kNumActRecCells = sizeof(ActRec) / sizeof(Cell);
+constexpr size_t kNumIterCells = sizeof(Iter) / sizeof(TypedValue);
+constexpr size_t kNumActRecCells = sizeof(ActRec) / sizeof(TypedValue);
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -369,17 +269,8 @@ public:
   ALWAYS_INLINE
   void popC() {
     assertx(m_top != m_base);
-    assertx(cellIsPlausible(*m_top));
+    assertx(tvIsPlausible(*m_top));
     tvDecRefGen(m_top);
-    tvDebugTrash(m_top);
-    m_top++;
-  }
-
-  ALWAYS_INLINE
-  void popV() {
-    assertx(m_top != m_base);
-    assertx(refIsPlausible(*m_top));
-    tvDecRefRef(m_top);
     tvDebugTrash(m_top);
     m_top++;
   }
@@ -409,9 +300,6 @@ public:
     assertx(m_top != m_base);
     ActRec* ar = (ActRec*)m_top;
     if (ar->func()->cls() && ar->hasThis()) decRefObj(ar->getThis());
-    if (ar->magicDispatch()) {
-      decRefStr(ar->getInvName());
-    }
     discardAR();
   }
 
@@ -459,7 +347,7 @@ public:
   }
 
   ALWAYS_INLINE
-  void trim(Cell* c) {
+  void trim(TypedValue* c) {
     assertx(c <= m_base);
     assertx(m_top <= c);
     if (debug) {
@@ -473,11 +361,10 @@ public:
   void dup() {
     assertx(m_top != m_base);
     assertx(m_top != m_elms);
-    assertx(!isRefType(m_top->m_type));
-    Cell* fr = m_top;
+    TypedValue* fr = m_top;
     m_top--;
-    Cell* to = m_top;
-    cellDup(*fr, *to);
+    TypedValue* to = m_top;
+    tvDup(*fr, *to);
   }
 
   ALWAYS_INLINE
@@ -536,7 +423,7 @@ public:
     assertx(a->isPHPArray());
     assertx(m_top != m_elms);
     m_top--;
-    *m_top = make_tv<KindOfArray>(a);
+    *m_top = make_array_like_tv(a);
   }
 
   ALWAYS_INLINE
@@ -597,7 +484,7 @@ public:
     assertx(a->isPHPArray());
     assertx(m_top != m_elms);
     m_top--;
-    *m_top = make_tv<KindOfPersistentArray>(a);
+    *m_top = make_persistent_array_like_tv(const_cast<ArrayData*>(a));
   }
 
   ALWAYS_INLINE
@@ -653,7 +540,7 @@ public:
   void pushRecordArrayNoRc(RecordArray* r) {
     assertx(m_top != m_elms);
     m_top--;
-    *m_top = make_tv<KindOfArray>(r);
+    *m_top = make_array_like_tv(r);
   }
 
   ALWAYS_INLINE
@@ -675,17 +562,10 @@ public:
   }
 
   ALWAYS_INLINE
-  Cell* allocC() {
+  TypedValue* allocC() {
     assertx(m_top != m_elms);
     m_top--;
-    return (Cell*)m_top;
-  }
-
-  ALWAYS_INLINE
-  Ref* allocV() {
-    assertx(m_top != m_elms);
-    m_top--;
-    return (Ref*)m_top;
+    return (TypedValue*)m_top;
   }
 
   ALWAYS_INLINE
@@ -698,22 +578,21 @@ public:
   ALWAYS_INLINE
   ActRec* allocA() {
     assertx((uintptr_t)(m_top - kNumActRecCells) >= (uintptr_t)m_elms);
-    assertx(kNumActRecCells * sizeof(Cell) == sizeof(ActRec));
+    assertx(kNumActRecCells * sizeof(TypedValue) == sizeof(ActRec));
     m_top -= kNumActRecCells;
     return (ActRec*)m_top;
   }
 
   ALWAYS_INLINE
   void allocI() {
-    assertx(kNumIterCells * sizeof(Cell) == sizeof(Iter));
+    assertx(kNumIterCells * sizeof(TypedValue) == sizeof(Iter));
     assertx((uintptr_t)(m_top - kNumIterCells) >= (uintptr_t)m_elms);
     m_top -= kNumIterCells;
   }
 
   ALWAYS_INLINE
-  void replaceC(const Cell c) {
+  void replaceC(const TypedValue c) {
     assertx(m_top != m_base);
-    assertx(!isRefType(m_top->m_type));
     tvDecRefGen(m_top);
     *m_top = c;
   }
@@ -722,7 +601,6 @@ public:
   ALWAYS_INLINE
   void replaceC() {
     assertx(m_top != m_base);
-    assertx(!isRefType(m_top->m_type));
     tvDecRefGen(m_top);
     *m_top = make_tv<DT>();
   }
@@ -731,7 +609,6 @@ public:
   ALWAYS_INLINE
   void replaceC(T value) {
     assertx(m_top != m_base);
-    assertx(!isRefType(m_top->m_type));
     tvDecRefGen(m_top);
     *m_top = make_tv<DT>(value);
   }
@@ -760,16 +637,9 @@ public:
   }
 
   ALWAYS_INLINE
-  Cell* topC() {
+  TypedValue* topC() {
     assertx(m_top != m_base);
-    return tvAssertCell(m_top);
-  }
-
-  ALWAYS_INLINE
-  Ref* topV() {
-    assertx(m_top != m_base);
-    assertx(isRefType(m_top->m_type));
-    return (Ref*)m_top;
+    return tvAssertPlausible(m_top);
   }
 
   ALWAYS_INLINE
@@ -781,15 +651,14 @@ public:
   ALWAYS_INLINE
   ActRec* indA(size_t ind) {
     assertx(m_top != m_base);
-    assertx(count() > ind + kNumActRecCells);
+    assertx(count() >= ind + kNumActRecCells);
     return (ActRec*)&m_top[ind];
   }
 
   ALWAYS_INLINE
-  Cell* indC(size_t ind) {
+  TypedValue* indC(size_t ind) {
     assertx(m_top != m_base);
-    assertx(!isRefType(m_top[ind].m_type));
-    return tvAssertCell(&m_top[ind]);
+    return tvAssertPlausible(&m_top[ind]);
   }
 
   ALWAYS_INLINE
@@ -829,8 +698,8 @@ void resetCoverageCounters();
 using InterpOneFunc = jit::TCA (*) (ActRec*, TypedValue*, Offset);
 extern InterpOneFunc interpOneEntryPoints[];
 
-bool doFCallUnpackTC(PC origpc, int32_t numArgs, void*);
-bool doFCall(ActRec* ar, uint32_t numArgs, bool unpack);
+bool doFCallUnpackTC(PC origpc, int32_t numInputs, CallFlags callFlags, void*);
+bool doFCall(ActRec* ar, uint32_t numArgs, bool hasUnpack, CallFlags callFlags);
 jit::TCA dispatchBB();
 void pushFrameSlots(const Func* func, int nparams = 0);
 Array getDefinedVariables(const ActRec*);
@@ -839,15 +708,16 @@ enum class StackArgsState { // tells prepareFuncEntry how much work to do
   // the stack may contain more arguments than the function expects
   Untrimmed,
   // the stack has already been trimmed of any extra arguments, which
-  // have been teleported away into ExtraArgs and/or a variadic param
+  // have been teleported away into a variadic param
   Trimmed
 };
 void enterVMAtPseudoMain(ActRec* enterFnAr, VarEnv* varEnv);
-void enterVMAtFunc(ActRec* enterFnAr, StackArgsState stk,
-                   bool allowDynCallNoPointer = false);
+void enterVMAtFunc(ActRec* enterFnAr, StackArgsState stk, Array&& generics,
+                   bool hasInOut, bool dynamicCall, bool allowDynCallNoPointer);
 void enterVMAtCurPC();
-void prepareArrayArgs(ActRec* ar, const Cell args, Stack& stack,
-                      int nregular, bool checkRefAnnot);
+void shuffleMagicArgs(String&& invName, uint32_t numArgs, bool hasUnpack);
+uint32_t prepareUnpackArgs(const Func* func, uint32_t numArgs,
+                           bool checkInOutAnnot, ActRec* ar = nullptr);
 
 ///////////////////////////////////////////////////////////////////////////////
 

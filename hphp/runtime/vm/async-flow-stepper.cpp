@@ -20,6 +20,7 @@
 #include "hphp/runtime/ext/asio/ext_asio.h"
 #include "hphp/runtime/ext/asio/ext_async-function-wait-handle.h"
 #include "hphp/runtime/vm/debugger-hook.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
 namespace HPHP {
@@ -44,7 +45,7 @@ bool AsyncFlowStepper::isActRecOnAsyncStack(const ActRec* target) {
   ArrayIter iter(depStack);
   ++iter; // Skip the top frame.
   for (; iter; ++iter) {
-    auto const rval = iter.secondRval().unboxed();
+    auto const rval = iter.secondRval();
     if (isNullType(rval.type())) {
       return false;
     }
@@ -113,7 +114,7 @@ AsyncStepHandleOpcodeResult AsyncFlowStepper::handleOpcode(PC pc) {
     {
       // Check if we are executing "await" instruction.
       if (m_awaitOpcodeBreakpointFilter.checkPC(pc)) {
-        auto wh = c_Awaitable::fromCell(*vmsp());
+        auto wh = c_Awaitable::fromTV(*vmsp());
         // Is "await" blocked?
         if (wh && !wh->isFinished()) {
           handleBlockedAwaitOpcode(pc);
@@ -191,7 +192,7 @@ void AsyncFlowStepper::handleBlockedAwaitOpcode(PC pc) {
   TRACE(2, "AsyncFlowStepper: encountered blocking await\n");
   setResumeInternalBreakpoint(pc);
   auto fp = vmfp();
-  if (fp->resumed()) {
+  if (isResumed(fp)) {
     // Already in resumed execution mode.
     m_asyncResumableId = fp;
     m_stage = AsyncStepperStage::WaitResume;
@@ -230,8 +231,7 @@ void AsyncFlowStepper::setResumeInternalBreakpoint(PC pc) {
   assertx(decode_op(pc) == Op::Await);
 
   auto resumeInstPc = pc + instrLen(pc);
-  assertx(vmfp()->func()->unit()->offsetOf(resumeInstPc)
-    != InvalidAbsoluteOffset);
+  assertx(vmfp()->func()->unit()->offsetOf(resumeInstPc) != kInvalidOffset);
 
   TRACE(2, "Setup internal breakpoint after await at '%s' offset %d\n",
     vmfp()->func()->fullName()->data(),
@@ -252,7 +252,7 @@ bool AsyncFlowStepper::didResumeBreakpointTrigger(PC pc) {
 }
 
 const ActRec* AsyncFlowStepper::getAsyncResumableId(const ActRec* fp) {
-  assertx(fp->resumed());
+  assertx(isResumed(fp));
   assertx(fp->func()->isResumable());
   return fp;
 }

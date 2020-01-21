@@ -7,11 +7,11 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 module Reason = Typing_reason
 
-type 'a subst = 'a ty SMap.t
+type decl_subst = decl_ty SMap.t
 
 (*****************************************************************************)
 (* Builds a substitution out of a list of type parameters and a list of types.
@@ -27,14 +27,33 @@ type 'a subst = 'a ty SMap.t
  *)
 (*****************************************************************************)
 
-let make tparams tyl : 'a subst =
+let make_locl tparams tyl =
   (* We tolerate missing types in silent_mode. When that happens, we bind
    * all the parameters we can, and bind the remaining ones to "Tany".
    *)
   let make_subst_tparam (subst, tyl) t =
     let (ty, tyl) =
       match tyl with
-      | [] -> ((Reason.Rnone, Typing_defs.make_tany ()), [])
+      | [] ->
+        ((Typing_defs.mk (Reason.Rnone, Typing_defs.make_tany ()) : locl_ty), [])
+      | ty :: rl -> (ty, rl)
+    in
+    (SMap.add (snd t.tp_name) ty subst, tyl)
+  in
+  let (subst, _) =
+    List.fold tparams ~init:(SMap.empty, tyl) ~f:make_subst_tparam
+  in
+  subst
+
+let make_decl tparams tyl =
+  (* We tolerate missing types in silent_mode. When that happens, we bind
+   * all the parameters we can, and bind the remaining ones to "Tany".
+   *)
+  let make_subst_tparam (subst, tyl) t =
+    let (ty, tyl) =
+      match tyl with
+      | [] ->
+        ((Typing_defs.mk (Reason.Rnone, Typing_defs.make_tany ()) : decl_ty), [])
       | ty :: rl -> (ty, rl)
     in
     (SMap.add (snd t.tp_name) ty subst, tyl)

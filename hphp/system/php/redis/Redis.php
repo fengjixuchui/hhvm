@@ -266,8 +266,9 @@ class Redis {
   /* Keys ---------------------------------------------------------------- */
 
   public function sort($key, array $arr = null) {
-    $args = $this->sortClause($arr, &$using_store);
-    array_unshift(&$args, $key);
+    $using_store = false;
+    $args = $this->sortClause($arr, inout $using_store);
+    array_unshift(inout $args, $key);
     $this->processArrayCommand('SORT', $args);
     if ($using_store) {
       return $this->processVectorResponse(true);
@@ -398,7 +399,7 @@ class Redis {
 
     $args[0] = $this->_prefix($args[0]);
     for ($i = 1; $i < $count; $i += 2) {
-      $args[$i  ] = (double)$args[$i];
+      $args[$i  ] = (float)$args[$i];
       $args[$i+1] = $this->_serialize($args[$i+1]);
     }
     $this->processArrayCommand('ZADD', $args);
@@ -519,7 +520,7 @@ class Redis {
 
   /* Scan --------------------------------------------------------------- */
 
-  protected function scanImpl($cmd, $key, &$cursor, $pattern, $count) {
+  protected function scanImpl($cmd, $key, inout $cursor, $pattern, $count) {
     if ($this->mode != self::ATOMIC) {
       throw new RedisException("Can't call SCAN commands in multi or pipeline mode!");
     }
@@ -556,16 +557,16 @@ class Redis {
     return $results;
   }
 
-  public function scan(&$cursor, $pattern = null, $count = null) {
-    return $this->scanImpl('SCAN', null, &$cursor, $pattern, $count);
+  public function scan(inout $cursor, $pattern = null, $count = null) {
+    return $this->scanImpl('SCAN', null, inout $cursor, $pattern, $count);
   }
 
-  public function sScan($key, &$cursor, $pattern = null, $count = null) {
-    return $this->scanImpl('SSCAN', $key, &$cursor, $pattern, $count);
+  public function sScan($key, inout $cursor, $pattern = null, $count = null) {
+    return $this->scanImpl('SSCAN', $key, inout $cursor, $pattern, $count);
   }
 
-  public function hScan($key, &$cursor, $pattern = null, $count = null) {
-    $flat = $this->scanImpl('HSCAN', $key, &$cursor, $pattern, $count);
+  public function hScan($key, inout $cursor, $pattern = null, $count = null) {
+    $flat = $this->scanImpl('HSCAN', $key, inout $cursor, $pattern, $count);
     /*
      * HScan behaves differently from the other *scan functions. The wire
      * protocol returns names in even slots s, and the corresponding value
@@ -579,8 +580,8 @@ class Redis {
     return $ret;
   }
 
-  public function zScan($key, &$cursor, $pattern = null, $count = null) {
-    $flat = $this->scanImpl('ZSCAN', $key, &$cursor, $pattern, $count);
+  public function zScan($key, inout $cursor, $pattern = null, $count = null) {
+    $flat = $this->scanImpl('ZSCAN', $key, inout $cursor, $pattern, $count);
     if ($flat === false) return $flat;
     /*
      * ZScan behaves differently from the other *scan functions. The wire
@@ -597,7 +598,8 @@ class Redis {
   /* Multi --------------------------------------------------------------- */
 
   protected function flushCallbacks($multibulk = true) {
-    if ($multibulk) $this->sockReadData(&$type); // Response Count
+    $type = null;
+    if ($multibulk) $this->sockReadData(inout $type); // Response Count
     $ret = [];
     foreach ($this->multiHandler as $callback) {
       $args = isset($callback['args']) ? $callback['args'] : [];
@@ -616,7 +618,8 @@ class Redis {
     }
     $this->discard();
     $this->processCommand('MULTI');
-    $resp = $this->sockReadData(&$type);
+    $type = null;
+    $resp = $this->sockReadData(inout $type);
     if (($type === self::TYPE_LINE) && ($resp === 'OK')) {
       $this->mode = self::MULTI;
       return $this;
@@ -702,8 +705,8 @@ class Redis {
       if ($keyCount-- <= 0) break;
       $args[$idx] = $this->_prefix($arg);
     }
-    array_unshift(&$args, $numKeys);
-    array_unshift(&$args, $script);
+    array_unshift(inout $args, $numKeys);
+    array_unshift(inout $args, $script);
     $this->processArrayCommand($cmd, $args);
     $response = $this->processVariantResponse();
     return ($response !== NULL) ? $response : false;
@@ -1091,7 +1094,7 @@ class Redis {
     return substr($line, 0, -2);
   }
 
-  protected function sockReadData(&$type) {
+  protected function sockReadData(inout $type) {
     $line = $this->sockReadLine();
     if (strlen($line)) {
       $type = $line[0];
@@ -1164,7 +1167,7 @@ class Redis {
 
     // Then prefix, serialie, and cast as needed
     if ($flags & self::VAR_TIMEOUT) {
-      $timeout = array_pop(&$args);
+      $timeout = array_pop(inout $args);
     }
     if (($this->prefix && ($flags & self::VAR_KEY_MASK)) ||
         ($flags & self::VAR_SERIALIZE)) {
@@ -1217,7 +1220,7 @@ class Redis {
     $cmd = "*{$count}\r\n\${$clen}\r\n{$cmd}\r\n";
 
     while (count($args)) {
-      $arg = (string)array_shift(&$args);
+      $arg = (string)array_shift(inout $args);
       $alen = strlen($arg);
       $cmd .= "\${$alen}\r\n{$arg}\r\n";
     }
@@ -1262,7 +1265,8 @@ class Redis {
       }
       return $this;
     }
-    $resp = $this->sockReadData(&$type);
+    $type = null;
+    $resp = $this->sockReadData(inout $type);
     if (($type !== self::TYPE_LINE) && ($type !== self::TYPE_BULK)) {
       return null;
     }
@@ -1293,7 +1297,8 @@ class Redis {
   }
 
   private function doProcessVariantResponse() {
-    $resp = $this->sockReadData(&$type);
+    $type = null;
+    $resp = $this->sockReadData(inout $type);
 
     if ($type === self::TYPE_INT) {
       return (int) $resp;
@@ -1323,7 +1328,8 @@ class Redis {
 
   protected function processSerializedResponse() {
     if ($this->mode === self::ATOMIC) {
-      $resp = $this->sockReadData(&$type);
+      $type = null;
+      $resp = $this->sockReadData(inout $type);
       if ($resp === null) {
         return false;
       }
@@ -1339,7 +1345,8 @@ class Redis {
 
   protected function processBooleanResponse() {
     if ($this->mode === self::ATOMIC) {
-      $resp = $this->sockReadData(&$type);
+      $type = null;
+      $resp = $this->sockReadData(inout $type);
       return ($type === self::TYPE_LINE) && ($resp === 'OK');
     }
     $this->multiHandler[] = [ 'cb' => [$this,'processBooleanResponse'] ];
@@ -1351,7 +1358,8 @@ class Redis {
 
   protected function processLongResponse() {
     if ($this->mode === self::ATOMIC) {
-      $resp = $this->sockReadData(&$type);
+      $type = null;
+      $resp = $this->sockReadData(inout $type);
       return ($type === self::TYPE_INT) ? ((int)$resp) : null;
     }
     $this->multiHandler[] = [ 'cb' => [$this,'processLongResponse'] ];
@@ -1363,7 +1371,8 @@ class Redis {
 
   protected function processDoubleResponse() {
     if ($this->mode === self::ATOMIC) {
-      $resp = $this->sockReadData(&$type);
+      $type = null;
+      $resp = $this->sockReadData(inout $type);
       if (($type === self::TYPE_INT) ||
           ($type === self::TYPE_BULK && is_numeric($resp))) {
         return (float)$resp;
@@ -1379,7 +1388,8 @@ class Redis {
 
   protected function processStringResponse() {
     if ($this->mode === self::ATOMIC) {
-      $resp = $this->sockReadData(&$type);
+      $type = null;
+      $resp = $this->sockReadData(inout $type);
       return (($type === self::TYPE_LINE) || ($type === self::TYPE_BULK))
              ? ((string)$resp) : null;
     }
@@ -1401,7 +1411,8 @@ class Redis {
       return $this;
     }
 
-    $count = $this->sockReadData(&$type);
+    $type = null;
+    $count = $this->sockReadData(inout $type);
     if ($type !== self::TYPE_MULTIBULK) {
       return null;
     }
@@ -1410,7 +1421,8 @@ class Redis {
     $lineNo = 0;
     while($count--) {
       $lineNo++;
-      $val = $this->sockReadData(&$type);
+      $type = null;
+      $val = $this->sockReadData(inout $type);
       if ($unser && (($lineNo % $unser) == 0)) {
         $val = $this->_unserialize($val);
       }
@@ -1430,18 +1442,21 @@ class Redis {
       return $this;
     }
 
-    $count = $this->sockReadData(&$type);
+    $type = null;
+    $count = $this->sockReadData(inout $type);
     if ($type !== self::TYPE_MULTIBULK) {
       return null;
     }
 
     $ret = [];
     while($count > 1) {
-      $key = $this->sockReadData(&$type);
+      $type = null;
+      $key = $this->sockReadData(inout $type);
       if ($unser_key) {
         $key = $this->_unserialize($key);
       }
-      $val = $this->sockReadData(&$type);
+      $type = null;
+      $val = $this->sockReadData(inout $type);
       if ($unser_val) {
         $val = $this->_unserialize($val);
       }
@@ -1449,7 +1464,8 @@ class Redis {
       $count -= 2;
     }
     if ($count > 1) {
-      $ret[$this->sockReadData(&$type)] = null;
+      $type = null;
+      $ret[$this->sockReadData(inout $type)] = null;
     }
     return $ret;
   }
@@ -1465,15 +1481,17 @@ class Redis {
       return $this;
     }
 
-    $count = $this->sockReadData(&$type);
+    $type = null;
+    $count = $this->sockReadData(inout $type);
     if ($type !== self::TYPE_MULTIBULK) {
       return null;
     }
 
     $ret = [];
     while($count--) {
-      $key = array_shift(&$keys);
-      $val = $this->sockReadData(&$type);
+      $key = array_shift(inout $keys);
+      $type = null;
+      $val = $this->sockReadData(inout $type);
       if ($unser_val) {
         $val = $this->_unserialize($val);
       }
@@ -1484,7 +1502,8 @@ class Redis {
 
   protected function process1Response() {
     if ($this->mode === self::ATOMIC) {
-      $resp = $this->sockReadData(&$type);
+      $type = null;
+      $resp = $this->sockReadData(inout $type);
       return ($type === self::TYPE_INT) && ($resp === '1');
     }
     $this->multiHandler[] = [ 'cb' => [$this,'process1Response'] ];
@@ -1496,7 +1515,8 @@ class Redis {
 
   protected function processTypeResponse() {
     if ($this->mode === self::ATOMIC) {
-      $resp = $this->sockReadData(&$type);
+      $type = null;
+      $resp = $this->sockReadData(inout $type);
       if ($type !== self::TYPE_LINE) {
         return self::REDIS_NOT_FOUND;
       }
@@ -1535,7 +1555,8 @@ class Redis {
       }
       return $this;
     }
-    $resp = $this->sockReadData(&$type);
+    $type = null;
+    $resp = $this->sockReadData(inout $type);
     if (($type !== self::TYPE_LINE) && ($type !== self::TYPE_BULK)) {
       return false;
     }
@@ -1558,7 +1579,8 @@ class Redis {
   }
 
   protected function processQueuedResponse() {
-    $resp = $this->sockReadData(&$type);
+    $type = null;
+    $resp = $this->sockReadData(inout $type);
     return ($type === self::TYPE_LINE) && ($resp === 'QUEUED');
   }
 
@@ -1689,6 +1711,8 @@ class Redis {
       }
     }
 
+    $errno = null;
+    $errstr = null;
     if ($persistent) {
       if ($persistent_id ?? false) {
         $pid     = array('id' => array('persistent_id' => $persistent_id));
@@ -1696,12 +1720,12 @@ class Redis {
         $sok     = $host;
         if ($port > 0) $sok .= ':' . $port;
         $conn    = stream_socket_client(
-          $sok, &$errno, &$errstr, $timeout, 2, $context);
+          $sok, inout $errno, inout $errstr, $timeout, 2, $context);
       } else {
-        $conn = pfsockopen($host, $port, &$errno, &$errstr, $timeout);
+        $conn = pfsockopen($host, $port, inout $errno, inout $errstr, $timeout);
       }
     } else {
-        $conn = fsockopen($host, $port, &$errno, &$errstr, $timeout);
+        $conn = fsockopen($host, $port, inout $errno, inout $errstr, $timeout);
     }
     $this->last_connect = time();
     $this->host = $host;
@@ -1731,7 +1755,7 @@ class Redis {
     return true;
   }
 
-  protected function sortClause(array $arr, &$using_store) {
+  protected function sortClause(array $arr, inout $using_store) {
     $using_store = false;
     if (!$arr) {
       return [];

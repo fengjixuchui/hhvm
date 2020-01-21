@@ -110,9 +110,9 @@ std::pair<String, int> ExtendedException::getFileAndLine() const {
   int line = 0;
   Array bt = getBacktrace();
   if (!bt.empty()) {
-    Array top = tvCastToArrayLike(bt.rvalAt(0).tv());
-    if (top.exists(s_file)) file = tvCastToString(top.rvalAt(s_file).tv());
-    if (top.exists(s_line)) line = tvCastToInt64(top.rvalAt(s_line).tv());
+    Array top = tvCastToArrayLike(bt.rval(0).tv());
+    if (top.exists(s_file)) file = tvCastToString(top.rval(s_file).tv());
+    if (top.exists(s_line)) line = tvCastToInt64(top.rval(s_line).tv());
   }
   return std::make_pair(file, line);
 }
@@ -166,6 +166,10 @@ void throw_not_implemented(const char* feature) {
 
 void throw_not_supported(const char* feature, const char* reason) {
   throw ExtendedException("%s is not supported: %s", feature, reason);
+}
+
+void throw_stack_overflow() {
+  throw FatalErrorException("Stack overflow");
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -249,18 +253,18 @@ namespace {
         if (!f.func || f.func->isBuiltin()) continue;
 
         auto const ln = f.func->unit()->getLineNumber(f.prevPc);
-        tvSetIgnoreRef(
+        tvSet(
           make_tv<KindOfInt64>(ln),
           throwable->propLvalAtOffset(s_lineSlot)
         );
 
         if (auto fn = f.func->originalFilename()) {
-          tvSetIgnoreRef(
+          tvSet(
             make_tv<KindOfPersistentString>(fn),
             throwable->propLvalAtOffset(s_fileSlot)
           );
         } else {
-          tvSetIgnoreRef(
+          tvSet(
             make_tv<KindOfPersistentString>(f.func->unit()->filepath()),
             throwable->propLvalAtOffset(s_fileSlot)
           );
@@ -285,15 +289,15 @@ namespace {
       if (file || line) {
         if (file) {
           auto const tv = file.tv();
-          tvSetIgnoreRef(
-            tvAssertCell(tv),
+          tvSet(
+            tvAssertPlausible(tv),
             throwable->propLvalAtOffset(s_fileSlot)
           );
         }
         if (line) {
           auto const tv = line.tv();
-          tvSetIgnoreRef(
-            tvAssertCell(tv),
+          tvSet(
+            tvAssertPlausible(tv),
             throwable->propLvalAtOffset(s_lineSlot)
           );
         }
@@ -316,12 +320,10 @@ void throwable_init(ObjectData* throwable) {
      opts != k_DEBUG_BACKTRACE_IGNORE_ARGS)
     ) {
     auto trace = HHVM_FN(debug_backtrace)(opts);
-    auto tv = RuntimeOption::EvalHackArrDVArrs ?
-      make_tv<KindOfVec>(trace.detach()) :
-      make_tv<KindOfArray>(trace.detach());
-    cellMove(tv, trace_lval);
+    auto tv = make_array_like_tv(trace.detach());
+    tvMove(tv, trace_lval);
   } else {
-    cellMove(
+    tvMove(
       make_tv<KindOfResource>(createCompactBacktrace().detach()->hdr()),
       trace_lval
     );
@@ -333,14 +335,18 @@ void throwable_init(ObjectData* throwable) {
   if (UNLIKELY(fp->func()->isBuiltin())) {
     throwable_init_file_and_line_from_builtin(throwable);
   } else {
-    auto const unit = fp->func()->unit();
+    // Get the current function and offset in an inline-aware way. It must
+    // always exist, as vmfp() is a non-builtin frame pointer.
+    auto const funcAndOffset = getCurrentFuncAndOffset();
+    assertx(funcAndOffset.first != nullptr);
+    auto const unit = funcAndOffset.first->unit();
     auto const file = const_cast<StringData*>(unit->filepath());
-    auto const line = unit->getLineNumber(unit->offsetOf(vmpc()));
-    tvSetIgnoreRef(
+    auto const line = unit->getLineNumber(funcAndOffset.second);
+    tvSet(
       make_tv<KindOfString>(file),
       throwable->propLvalAtOffset(s_fileSlot)
     );
-    tvSetIgnoreRef(
+    tvSet(
       make_tv<KindOfInt64>(line),
       throwable->propLvalAtOffset(s_lineSlot)
     );
@@ -371,7 +377,7 @@ void throwable_recompute_backtrace_from_wh(ObjectData* throwable,
                                .withMetadata(provide_metadata)
                                .ignoreArgs(ignore_args));
   auto tv = make_array_like_tv(trace.detach());
-  cellMove(tv, trace_lval);
+  tvMove(tv, trace_lval);
   throwable_init_file_and_line_from_trace(throwable);
 }
 

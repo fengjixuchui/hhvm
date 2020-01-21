@@ -5,8 +5,8 @@
 
 use std::fmt;
 
-use ocamlrep_derive::OcamlRep;
-use ocamlvalue_macro::Ocamlvalue;
+use ocamlrep::OcamlRep;
+use serde::{Deserialize, Serialize};
 
 // Three values packed into one 64-bit integer:
 //
@@ -33,7 +33,7 @@ use ocamlvalue_macro::Ocamlvalue;
 // behave incorrectly on a 32-bit machine. We use `usize` here to match its
 // behavior, but once parity is no longer necessary, we may want to switch to
 // `u64`.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, OcamlRep, Ocamlvalue)]
+#[derive(Copy, Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FilePosSmall(usize);
 
 const COLUMN_BITS: usize = 9;
@@ -166,6 +166,18 @@ impl FilePosSmall {
     }
 }
 
+impl Ord for FilePosSmall {
+    fn cmp(&self, other: &FilePosSmall) -> std::cmp::Ordering {
+        self.offset().cmp(&other.offset())
+    }
+}
+
+impl PartialOrd for FilePosSmall {
+    fn partial_cmp(&self, other: &FilePosSmall) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl fmt::Debug for FilePosSmall {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         fmt.debug_struct("FilePosSmall")
@@ -173,5 +185,15 @@ impl fmt::Debug for FilePosSmall {
             .field("line", &self.line())
             .field("column", &self.column())
             .finish()
+    }
+}
+
+impl OcamlRep for FilePosSmall {
+    fn to_ocamlrep<'a, A: ocamlrep::Allocator<'a>>(&self, _alloc: &A) -> ocamlrep::Value<'a> {
+        ocamlrep::Value::int(self.0 as isize)
+    }
+
+    fn from_ocamlrep(value: ocamlrep::Value<'_>) -> Result<Self, ocamlrep::FromError> {
+        Ok(Self(ocamlrep::from::expect_int(value)? as usize))
     }
 }

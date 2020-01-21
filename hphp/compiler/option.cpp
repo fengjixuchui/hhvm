@@ -153,7 +153,7 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
       try {
         auto v = uns.unserialize();
         v.setEvalScalar();
-        RuntimeOption::ConstantFunctions[func] = *v.toCell();
+        RuntimeOption::ConstantFunctions[func] = *v.asTypedValue();
         continue;
       } catch (const Exception& e) {
         // fall through and log
@@ -203,14 +203,7 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
     RuntimeOption::EvalCheckReturnTypeHints = HardReturnTypeHints ? 3 : 2;
   }
 
-  static bool HardConstProp = true;
-  Config::Bind(HardConstProp, ini, config, "HardConstProp", HardConstProp);
-  HHBBC::hard_constprop(HardConstProp);
-
   Config::Bind(APCProfile, ini, config, "APCProfile");
-
-  Config::Bind(RuntimeOption::EvalThisTypeHintLevel, ini, config,
-               "ThisTypeHintLevel", RuntimeOption::EvalThisTypeHintLevel);
 
   Config::Bind(RuntimeOption::EnableHipHopSyntax,
                ini, config, "EnableHipHopSyntax",
@@ -224,6 +217,8 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
   Config::Bind(RuntimeOption::EvalArrayProvenance,
                ini, config, "ArrayProvenance",
                RuntimeOption::EvalArrayProvenance);
+  RO::EvalArrProvHackArrays = RO::EvalArrayProvenance;
+  RO::EvalArrProvDVArrays   = RO::EvalArrayProvenance;
   Config::Bind(EnableShortTags, ini, config, "EnableShortTags", true);
 
 #define BIND_HAC_OPTION(Name, Def)                      \
@@ -234,9 +229,8 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
 #define BIND_HAC_OPTION_SELF(Name)  BIND_HAC_OPTION(Name, Name)
 
   BIND_HAC_OPTION_SELF(Notices)
-  BIND_HAC_OPTION(CheckRefBind, Notices)
-  BIND_HAC_OPTION(CheckFalseyPromote, Notices)
   BIND_HAC_OPTION(CheckCompare, Notices)
+  BIND_HAC_OPTION(CheckCompareNonAnyArray, Notices)
   BIND_HAC_OPTION(CheckArrayKeyCast, Notices)
   BIND_HAC_OPTION(CheckArrayPlus, Notices)
   BIND_HAC_OPTION_SELF(IsArrayNotices)
@@ -282,6 +276,9 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
 
   {
     // Hack
+    Config::Bind(RuntimeOption::CheckIntOverflow, ini, config,
+                 "Hack.Lang.CheckIntOverflow",
+                 RuntimeOption::CheckIntOverflow);
     Config::Bind(RuntimeOption::StrictArrayFillKeys, ini, config,
                  "Hack.Lang.StrictArrayFillKeys",
                  RuntimeOption::StrictArrayFillKeys);

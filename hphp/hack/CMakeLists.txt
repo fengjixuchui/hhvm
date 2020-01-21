@@ -33,13 +33,14 @@ if(NOT MAKE)
   set(MAKE make)
 endif()
 
-if (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR)
+if ("${CMAKE_CURRENT_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_BINARY_DIR}")
   set(DUNE_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/_build")
   set(OPAM_STAMP_FILE "_build/opam.stamp")
 else()
   set(DUNE_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}")
   set(OPAM_STAMP_FILE "opam.stamp")
 endif()
+set(HACK_BUILD_ROOT "${DUNE_BUILD_DIR}/default")
 
 add_custom_command(
   OUTPUT "${OPAM_STAMP_FILE}"
@@ -70,7 +71,8 @@ else()
   # wrong version.  We can't just add the new path and a native_lib because we
   # can't control the order (and -l won't accept the raw path to the lib).  By
   # doing it this way we specify the path explicitly.
-  list(APPEND extra_link_opts "$<TARGET_LINKER_FILE:lz4>")
+  get_target_property(LZ4_DIR lz4 BINARY_DIR)
+  list(APPEND extra_link_opts "${LZ4_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}lz4${CMAKE_STATIC_LIBRARY_SUFFIX}")
 endif()
 
 if(PC_SQLITE3_FOUND)
@@ -80,42 +82,27 @@ if(PC_SQLITE3_FOUND)
   list(APPEND extra_native_libraries "sqlite3")
 else()
   list(APPEND extra_include_paths "${TP_DIR}/libsqlite3")
-  list(APPEND extra_link_opts "$<TARGET_LINKER_FILE:sqlite3>")
+  get_target_property(SQLITE_DIR sqlite3 BINARY_DIR)
+  list(APPEND extra_link_opts "${SQLITE_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}sqlite3${CMAKE_STATIC_LIBRARY_SUFFIX}")
 endif()
 
-get_filename_component(RUSTC_BIN_DIR "${RUSTC_EXECUTABLE}" DIRECTORY)
-get_filename_component(CARGO_BIN_DIR "${CARGO_EXECUTABLE}" DIRECTORY)
+get_target_property(RUSTC_EXE rustc LOCATION)
+get_target_property(CARGO_EXE cargo LOCATION)
+get_filename_component(RUSTC_BIN_DIR "${RUSTC_EXE}" DIRECTORY)
+get_filename_component(CARGO_BIN_DIR "${CARGO_EXE}" DIRECTORY)
 
 function(invoke_dune name target)
   add_custom_target(
       ${name}
       COMMAND
-        export "RUSTC=${RUSTC_EXECUTABLE}" &&
-        export "CARGO_HOME=${CMAKE_CURRENT_BINARY_DIR}/cargo_home" &&
-        export "HACK_NO_CARGO_VENDOR=true" &&
-        export OPAMROOT=${OPAMROOT} &&
-        export PYTHONPATH="${HPHP_HOME}" && # needed for verify.py for `hack_dune_test`
-        export HACK_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}" &&
-        export HACK_BUILD_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/_build/default" &&
-        PATH="${RUSTC_BIN_DIR}:${CARGO_BIN_DIR}:${TP_BUILD_DIR}/ocaml/build/bin:$(PATH)"
+        . "${CMAKE_CURRENT_BINARY_DIR}/dev_env.sh" &&
         opam config exec --
         $(MAKE) --makefile=Makefile.dune ${target}
-        DUNE_BUILD_DIR="${DUNE_BUILD_DIR}"
-        CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}"
-        CMAKE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        CMAKE_INSTALL_FULL_SYSCONFDIR="${CMAKE_INSTALL_FULL_SYSCONFDIR}"
-        CMAKE_INSTALL_FULL_BINDIR="${CMAKE_INSTALL_FULL_BINDIR}"
-        EXTRA_INCLUDE_PATHS="${extra_include_paths}"
-        EXTRA_LINK_OPTS="${extra_link_opts}"
-        EXTRA_LIB_PATHS="${extra_lib_paths}"
-        EXTRA_NATIVE_LIBRARIES="${extra_native_libraries}"
         BYTECODE="${EMIT_OCAML_BYTECODE}"
-        OCAML="${OCAML_EXECUTABLE}"
-        OCAMLC="${OCAMLC_EXECUTABLE}"
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 
-  add_dependencies(${name} ocaml)
+  add_dependencies(${name} ocaml rustc cargo)
   if (NOT SKIP_OPAM)
     add_dependencies(${name} opam_setup)
   endif()
@@ -144,6 +131,8 @@ endif()
 # explicitly used
 add_custom_target(hack ALL DEPENDS hack_dune)
 add_custom_target(hack_test DEPENDS hack_dune_test)
+
+configure_file(dev_env.sh.in dev_env.sh ESCAPE_QUOTES @ONLY)
 
 install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/bin/hh_client
   DESTINATION bin

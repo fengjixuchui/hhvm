@@ -131,7 +131,7 @@ class Client
      */
     public function setKeepAlive($b)
     {
-        $this->_keepAlive = (boolean)$b;
+        $this->_keepAlive = (bool)$b;
         if (!$this->_keepAlive && $this->_sock) {
             \fclose($this->_sock);
         }
@@ -156,7 +156,7 @@ class Client
     public function setPersistentSocket($b)
     {
         $was_persistent = ($this->_sock && $this->_persistentSocket);
-        $this->_persistentSocket = (boolean)$b;
+        $this->_persistentSocket = (bool)$b;
         if (!$this->_persistentSocket && $was_persistent) {
             \fclose($this->_sock);
         }
@@ -235,9 +235,9 @@ class Client
     {
         if (!$this->_sock) {
             if ($this->_persistentSocket) {
-                $this->_sock = \pfsockopen($this->_host, $this->_port, &$errno, &$errstr, $this->_connectTimeout/1000.0);
+                $this->_sock = \pfsockopen($this->_host, $this->_port, inout $errno, inout $errstr, $this->_connectTimeout/1000.0);
             } else {
-                $this->_sock = \fsockopen($this->_host, $this->_port, &$errno, &$errstr, $this->_connectTimeout/1000.0);
+                $this->_sock = \fsockopen($this->_host, $this->_port, inout $errno, inout $errstr, $this->_connectTimeout/1000.0);
             }
 
             if (!$this->_sock) {

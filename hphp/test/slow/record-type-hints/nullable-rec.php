@@ -1,11 +1,11 @@
 <?hh
 
-final record A {
-  x: int,
+record A {
+  int x;
 }
 
-final record B {
-  y: ?A,
+record B {
+  ?A y;
 }
 <<__EntryPoint>> function main(): void {
 $a = A['x' => 10];

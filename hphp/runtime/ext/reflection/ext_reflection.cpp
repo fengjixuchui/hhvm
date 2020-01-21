@@ -18,7 +18,7 @@
 #include "hphp/runtime/ext/reflection/ext_reflection.h"
 
 #include "hphp/runtime/base/array-init.h"
-#include "hphp/runtime/base/externals.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/file.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/runtime-option.h"
@@ -123,7 +123,7 @@ Class* Reflection::s_ReflectionExtensionClass = nullptr;
 
 Class* get_cls(const Variant& class_or_object) {
   if (class_or_object.is(KindOfObject)) {
-    return class_or_object.toCObjRef()->getVMClass();
+    return class_or_object.asCObjRef()->getVMClass();
   } else if (class_or_object.isClass()) {
     return class_or_object.toClassVal();
   }
@@ -271,7 +271,7 @@ static void set_doc_comment(Array& ret,
 
 static void set_instance_prop_info(Array& ret,
                                    const Class::Prop* prop,
-                                   const Variant& default_val) {
+                                   TypedValue default_val) {
   ret.set(s_name, make_tv<KindOfPersistentString>(prop->name));
   ret.set(s_default, make_tv<KindOfBoolean>(true));
   ret.set(s_defaultValue, default_val);
@@ -289,7 +289,7 @@ static void set_instance_prop_info(Array& ret,
 
 static void set_dyn_prop_info(
     Array &ret,
-    Cell name,
+    TypedValue name,
     const StringData* className) {
   ret.set(s_name, name);
   set_attrs(ret, get_modifiers(AttrPublic, false, true) & ~0x66);
@@ -383,7 +383,7 @@ static const Class* get_prototype_class_from_interfaces(const Class *cls,
 }
 
 Variant HHVM_FUNCTION(hphp_invoke, const String& name, const Variant& params) {
-  return invoke(name.data(), params);
+  return invoke(name, params);
 }
 
 static const StaticString s_invoke_not_instanceof_error(
@@ -415,7 +415,7 @@ Variant HHVM_FUNCTION(hphp_invoke_method, const Variant& obj,
     raise_error("Call to undefined method %s::%s()", cls.data(), name.data());
   }
 
-  auto const objData = obj.toCObjRef().get();
+  auto const objData = obj.asCObjRef().get();
   auto const implementingClass = selectedFunc->implCls();
   if (!objData->instanceof(implementingClass)) {
     Reflection::ThrowReflectionExceptionObject(s_invoke_not_instanceof_error);
@@ -528,7 +528,7 @@ void HHVM_FUNCTION(hphp_set_static_property, const String& cls,
 
   auto const& sprop = class_->staticProperties()[lookup.slot];
   auto const& tc = sprop.typeConstraint;
-  auto const temp = value.asInitCellTmp();
+  auto const temp = value.asInitTVTmp();
   if (RuntimeOption::EvalCheckPropTypeHints > 0 && tc.isCheckable()) {
     tc.verifyStaticProperty(&temp, class_, sprop.cls, prop.get());
   }
@@ -574,15 +574,16 @@ Array implTypeStructure(const Variant& cls_or_obj, const Variant& cns_name) {
   }
 
   auto const cls_sd = cls->name();
+
+  if (!cls->hasTypeConstant(cns_sd, true)) {
+    raise_error("Non-existent type constant %s::%s",
+                cls_sd->data(), cns_sd->data());
+  }
+
   auto typeCns = cls->clsCnsGet(cns_sd, ClsCnsLookup::IncludeTypes);
   if (typeCns.m_type == KindOfUninit) {
-    if (cls->hasTypeConstant(cns_sd, true)) {
-      raise_error("Type constant %s::%s is abstract",
-                  cls_sd->data(), cns_sd->data());
-    } else {
-      raise_error("Non-existent type constant %s::%s",
-                  cls_sd->data(), cns_sd->data());
-    }
+    raise_error("Type constant %s::%s is abstract",
+                cls_sd->data(), cns_sd->data());
   }
 
   assertx(isArrayLikeType(typeCns.m_type));
@@ -609,7 +610,7 @@ Array HHVM_FUNCTION(type_structure,
 String HHVM_FUNCTION(type_structure_classname,
                      const Variant& cls_or_obj, const Variant& cns_name) {
   auto const ts = implTypeStructure(cls_or_obj, cns_name);
-  return ts[s_classname].toCStrRef();
+  return ts[s_classname].asCStrRef();
 }
 
 [[noreturn]]
@@ -765,10 +766,7 @@ static Array get_function_param_info(const Func* func) {
       param.set(s_defaultText, make_tv<KindOfPersistentString>(fpi.phpCode));
     }
 
-    if (func->byRef(i)) {
-      param.set(s_ref, make_tv<KindOfBoolean>(true));
-    }
-    if ((func->isInOutWrapper() && func->byRef(i)) || fpi.inout) {
+    if (func->isInOut(i)) {
       param.set(s_inout, make_tv<KindOfBoolean>(true));
     }
     if (fpi.isVariadic()) {
@@ -789,7 +787,7 @@ static Array get_function_param_info(const Func* func) {
 
   bool isOptional = true;
   for (int i = func->numParams() - 1; i >= 0; i--) {
-    auto& param = asArrRef(arr.lvalAt(i));
+    auto& param = asArrRef(arr.lval(i));
 
     isOptional = isOptional && (param.exists(s_default) ||
                  param.exists(s_is_variadic));
@@ -1431,9 +1429,9 @@ static Array HHVM_STATIC_METHOD(
   DArrayInit ai(numConsts);
   for (ArrayIter iter(st.get()); iter; ++iter) {
     auto constName = iter.first().getStringData();
-    Cell value = cls->clsCnsGet(constName);
+    TypedValue value = cls->clsCnsGet(constName);
     assertx(value.m_type != KindOfUninit);
-    ai.add(constName, cellAsCVarRef(value));
+    ai.add(constName, tvAsCVarRef(value));
   }
   return ai.toArray();
 }
@@ -1544,7 +1542,7 @@ static Array HHVM_STATIC_METHOD(
     auto slot = declProp.serializationIdx;
     auto index = cls->propSlotToIndex(slot);
     auto const& prop = properties[slot];
-    auto const& default_val = tvAsCVarRef(&propInitVec[index]);
+    auto const default_val = propInitVec[index].val.tv();
     if (((prop.attrs & AttrPrivate) == AttrPrivate) && (prop.cls != cls)) {
       continue;
     }
@@ -1581,7 +1579,7 @@ static Array HHVM_METHOD(ReflectionClass, getDynamicPropertyInfos,
 
   auto const dynPropArray = obj_data->dynPropArray();
   ArrayInit ret(dynPropArray->size(), ArrayInit::Mixed{});
-  IterateKV(dynPropArray.get(), [&](Cell k, TypedValue) {
+  IterateKV(dynPropArray.get(), [&](TypedValue k, TypedValue) {
     if (RuntimeOption::EvalNoticeOnReadDynamicProp) {
       auto const key = tvCastToString(k);
       obj_data->raiseReadDynamicProp(key.get());
@@ -1616,7 +1614,7 @@ void ReflectionClassHandle::wakeup(const Variant& content, ObjectData* obj) {
   // It is possible that $name does not get serialized. If a class derives
   // from ReflectionClass and the return value of its __sleep() function does
   // not contain 'name', $name gets ignored. So, we restore $name here.
-  obj->setProp(nullptr, s_name.get(), result.toCell());
+  obj->setProp(nullptr, s_name.get(), result.asTypedValue());
 }
 
 static Variant reflection_extension_name_get(const Object& this_) {
@@ -1624,7 +1622,7 @@ static Variant reflection_extension_name_get(const Object& this_) {
   auto const name = this_->getProp(
     Reflection::s_ReflectionExtensionClass,
     s___name.get()
-  ).unboxed();
+  );
   return tvCastToString(name.tv());
 }
 
@@ -1702,7 +1700,8 @@ static String HHVM_METHOD(ReflectionTypeConstant, getAssignedTypeHint) {
     assertx(typeCns->isType());
     assertx(!typeCns->isAbstract());
     assertx(isArrayLikeType(typeCns->val().m_type));
-    return TypeStructure::toString(Array::attach(typeCns->val().m_data.parr));
+    return TypeStructure::toString(Array::attach(typeCns->val().m_data.parr),
+      TypeStructure::TSDisplayType::TSDisplayTypeReflection);
   }
 
   return String();
@@ -1774,7 +1773,7 @@ static void HHVM_METHOD(ReflectionProperty, __construct,
 
   // is there a dynamic property?
   if (cls_or_obj.is(KindOfObject)) {
-    auto obj = cls_or_obj.toCObjRef().get();
+    auto obj = cls_or_obj.asCObjRef().get();
     assertx(cls == obj->getVMClass());
     if (obj->getAttribute(ObjectData::HasDynPropArr) &&
         obj->dynPropArray().exists(
@@ -1786,7 +1785,7 @@ static void HHVM_METHOD(ReflectionProperty, __construct,
       data->setDynamicProp();
       this_->setProp(nullptr, s_class.get(),
                      make_tv<KindOfPersistentString>(cls->name()));
-      this_->setProp(nullptr, s_name.get(), prop_name.toCell());
+      this_->setProp(nullptr, s_name.get(), prop_name.asTypedValue());
       return;
     }
   }
@@ -1952,7 +1951,8 @@ static TypedValue HHVM_METHOD(ReflectionProperty, getDefaultValue) {
       auto const& propInitVec = cls->getPropData()
         ? *cls->getPropData()
         : cls->declPropInit();
-      return tvReturn(tvAsCVarRef(&propInitVec[propIndex]));
+      auto val = VarNR{propInitVec[propIndex].val.tv()};
+      return tvReturn(val);
     }
     case ReflectionPropHandle::Type::Static: {
       auto const prop = data->getSProp();
@@ -2024,7 +2024,8 @@ static String HHVM_METHOD(ReflectionTypeAlias, getAssignedTypeText) {
   auto const typeStructure = req->typeStructure;
   assertx(!typeStructure.empty());
   assertx(typeStructure.isDictOrDArray());
-  return TypeStructure::toString(typeStructure);
+  return TypeStructure::toString(typeStructure,
+    TypeStructure::TSDisplayType::TSDisplayTypeReflection);
 }
 
 static Array HHVM_METHOD(ReflectionTypeAlias, getAttributesNamespaced) {
@@ -2424,7 +2425,7 @@ Array get_class_info(const String& name) {
     for (Slot slot = 0; slot < nProps; ++slot) {
       auto index = cls->propSlotToIndex(slot);
       auto const& prop = properties[slot];
-      auto const& default_val = tvAsCVarRef(&propInitVec[index]);
+      auto const default_val = propInitVec[index].val.tv();
       auto info = Array::Create();
       if ((prop.attrs & AttrPrivate) == AttrPrivate) {
         if (prop.cls == cls) {
@@ -2470,9 +2471,9 @@ Array get_class_info(const String& name) {
       // Note: hphpc doesn't include inherited constants in
       // get_class_constants(), so mimic that behavior
       if (consts[i].cls == cls) {
-        Cell value = cls->clsCnsGet(consts[i].name);
+        TypedValue value = cls->clsCnsGet(consts[i].name);
         assertx(value.m_type != KindOfUninit);
-        arr.set(StrNR(consts[i].name), cellAsCVarRef(value));
+        arr.set(StrNR(consts[i].name), tvAsCVarRef(value));
       }
     }
 

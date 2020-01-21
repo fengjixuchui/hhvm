@@ -33,7 +33,12 @@ namespace jit {
 struct IRUnit;
 struct Vunit;
 
-namespace tc { struct LocalTCBuffer; }
+namespace tc {
+
+struct LocalTCBuffer;
+struct FuncMetaInfo;
+
+}
 
 /*
  * Arguments for the translate() entry points in Translator.
@@ -123,6 +128,13 @@ bool retranslateOpt(FuncId funcId);
 void checkRetranslateAll(bool force = false);
 
 /*
+ * If JIT optimized code profile-data serialization is enabled and scheduled to
+ * trigger in the future, check if we hit one of the triggering conditions and,
+ * of so, append the data to the file containing the serialized profile.
+ */
+void checkSerializeOptProf();
+
+/*
  * Called once when the JIT is activated to initialize internal mcgen structures
  */
 void processInit();
@@ -132,6 +144,12 @@ void processInit();
  * worker threads.
  */
 void joinWorkerThreads();
+
+/*
+ * Wait until the specified function has been optimized by the
+ * retranslateAll workers.
+ */
+void waitForTranslate(const tc::FuncMetaInfo&);
 
 /*
  * True iff mcgen::processInit() has been called

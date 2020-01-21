@@ -4,12 +4,17 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 use ocamlrep::OcamlRep;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Sequence<T>(T);
 
 impl<T: OcamlRep> OcamlRep for Sequence<T> {
-    fn into_ocamlrep<'a>(self, arena: &ocamlrep::Arena<'a>) -> ocamlrep::Value<'a> {
-        ().into_ocamlrep(arena)
+    fn to_ocamlrep<'a, A: ocamlrep::Allocator<'a>>(&self, _alloc: &A) -> ocamlrep::Value<'a> {
+        unimplemented!()
+    }
+
+    fn from_ocamlrep(_value: ocamlrep::Value<'_>) -> Result<Self, ocamlrep::FromError> {
+        unimplemented!()
     }
 }

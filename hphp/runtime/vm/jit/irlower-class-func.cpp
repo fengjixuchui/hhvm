@@ -60,13 +60,11 @@ IMPL_OPCODE_CALL(MethodExists)
 void cgLdClsMethod(IRLS& env, const IRInstruction* inst) {
   auto const dst = dstLoc(env, inst, 0).reg();
   auto const cls = srcLoc(env, inst, 0).reg();
-  int32_t const mSlotVal = inst->src(1)->rawVal();
+  auto const idx = inst->src(1)->intVal();
+  assertx(idx >= 0);
 
-  // We could have a Cls or a Cctx.  The Cctx has the low bit set, so
-  // we need to subtract one in that case.
-  auto const methOff = int32_t(mSlotVal * sizeof(LowPtr<Func>)) -
-    (inst->src(0)->isA(TCctx) ? ActRec::kHasClassBit : 0);
   auto& v = vmain(env);
+  auto const methOff = -(idx + 1) * sizeof(LowPtr<Func>);
   emitLdLowPtr(v, cls[methOff], dst, sizeof(LowPtr<Func>));
 }
 
@@ -108,11 +106,7 @@ void cgLdFuncVecLen(IRLS& env, const IRInstruction* inst) {
   auto const cls = srcLoc(env, inst, 0).reg();
   auto& v = vmain(env);
 
-  // A Cctx is a Cls with the bottom bit set; subtract one from the offset to
-  // handle that case.
-  auto const off = Class::funcVecLenOff() -
-    (inst->src(0)->isA(TCctx) ? ActRec::kHasClassBit : 0);
-
+  auto const off = Class::funcVecLenOff();
   static_assert(sizeof(Class::veclen_t) == 2 || sizeof(Class::veclen_t) == 4,
                 "Class::veclen_t must be 2 or 4 bytes wide");
   if (sizeof(Class::veclen_t) == 2) {

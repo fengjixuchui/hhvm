@@ -18,7 +18,7 @@
  *    either redeclared or checked again.
  *)
 (*****************************************************************************)
-open Core_kernel
+open Hh_prelude
 open Decl_defs
 open Typing_deps
 
@@ -32,10 +32,10 @@ module ClassDiff = struct
     SMap.fold
       begin
         fun x ty1 diff ->
-        let ty2 = SMap.get x s2 in
+        let ty2 = SMap.find_opt x s2 in
         match ty2 with
         | Some ty2 ->
-          if ty1 = ty2 then
+          if Polymorphic_compare.( = ) ty1 ty2 then
             diff
           else
             SSet.add x diff
@@ -58,9 +58,7 @@ module ClassDiff = struct
     (* compare class constants *)
     let consts_diff = smap class1.dc_consts class2.dc_consts in
     let is_unchanged = is_unchanged && SSet.is_empty consts_diff in
-    let acc =
-      add_inverted_deps acc (fun x -> Dep.Const (cid, x)) consts_diff
-    in
+    let acc = add_inverted_deps acc (fun x -> Dep.Const (cid, x)) consts_diff in
     (* compare class members *)
     let props_diff = smap class1.dc_props class2.dc_props in
     let is_unchanged = is_unchanged && SSet.is_empty props_diff in
@@ -68,9 +66,7 @@ module ClassDiff = struct
     (* compare class static members *)
     let sprops_diff = smap class1.dc_sprops class2.dc_sprops in
     let is_unchanged = is_unchanged && SSet.is_empty sprops_diff in
-    let acc =
-      add_inverted_deps acc (fun x -> Dep.SProp (cid, x)) sprops_diff
-    in
+    let acc = add_inverted_deps acc (fun x -> Dep.SProp (cid, x)) sprops_diff in
     (* compare class methods *)
     let methods_diff = smap class1.dc_methods class2.dc_methods in
     let is_unchanged = is_unchanged && SSet.is_empty methods_diff in
@@ -84,7 +80,9 @@ module ClassDiff = struct
       add_inverted_deps acc (fun x -> Dep.SMethod (cid, x)) smethods_diff
     in
     (* compare class constructors *)
-    let cstr_diff = class1.dc_construct <> class2.dc_construct in
+    let cstr_diff =
+      Polymorphic_compare.( <> ) class1.dc_construct class2.dc_construct
+    in
     let is_unchanged = is_unchanged && not cstr_diff in
     let cstr_ideps = Typing_deps.get_ideps (Dep.Cstr cid) in
     let acc =
@@ -137,12 +135,12 @@ module ClassEltDiff = struct
         let key = (cid, name) in
         let match1 =
           match elt1 with
-          | Some elt -> elt.elt_origin = cid
+          | Some elt -> String.equal elt.elt_origin cid
           | _ -> false
         in
         let match2 =
           match elt2 with
-          | Some elt -> elt.elt_origin = cid
+          | Some elt -> String.equal elt.elt_origin cid
           | _ -> false
         in
         if match1 || match2 then
@@ -153,7 +151,7 @@ module ClassEltDiff = struct
           | (Some x1, Some x2) ->
             let ty1 = normalize x1 in
             let ty2 = normalize x2 in
-            if ty1 = ty2 then
+            if Polymorphic_compare.( = ) ty1 ty2 then
               None
             else
               Some ()
@@ -198,7 +196,7 @@ module ClassEltDiff = struct
         ~cid
         ~elts1
         ~elts2
-        ~normalize:Decl_pos_utils.NormalizeSig.fun_type
+        ~normalize:Decl_pos_utils.NormalizeSig.fun_elt
     in
     add_inverted_deps acc (fun x -> Dep.Method (cid, x)) diff
 
@@ -211,7 +209,7 @@ module ClassEltDiff = struct
         ~cid
         ~elts1
         ~elts2
-        ~normalize:Decl_pos_utils.NormalizeSig.fun_type
+        ~normalize:Decl_pos_utils.NormalizeSig.fun_elt
     in
     add_inverted_deps acc (fun x -> Dep.SMethod (cid, x)) diff
 
@@ -219,12 +217,12 @@ module ClassEltDiff = struct
     let cid = class1.dc_name in
     let match1 =
       match class1.dc_construct with
-      | (Some elt, _) -> elt.elt_origin = cid
+      | (Some elt, _) -> String.equal elt.elt_origin cid
       | _ -> false
     in
     let match2 =
       match class2.dc_construct with
-      | (Some elt, _) -> elt.elt_origin = cid
+      | (Some elt, _) -> String.equal elt.elt_origin cid
       | _ -> false
     in
     if match1 || match2 then
@@ -232,10 +230,10 @@ module ClassEltDiff = struct
       | (None, _)
       | (_, None) ->
         (Typing_deps.get_ideps (Dep.Cstr cid), `Changed)
-      | (Some ft1, Some ft2) ->
-        let ft1 = Decl_pos_utils.NormalizeSig.fun_type ft1 in
-        let ft2 = Decl_pos_utils.NormalizeSig.fun_type ft2 in
-        if ft1 = ft2 then
+      | (Some fe1, Some fe2) ->
+        let fe1 = Decl_pos_utils.NormalizeSig.fun_elt fe1 in
+        let fe2 = Decl_pos_utils.NormalizeSig.fun_elt fe2 in
+        if Polymorphic_compare.( = ) fe1 fe2 then
           (DepSet.empty, `Unchanged)
         else
           (Typing_deps.get_ideps (Dep.Cstr cid), `Changed)
@@ -265,6 +263,7 @@ let add_changed acc dep = DepSet.add acc (Dep.make dep)
 let class_big_diff class1 class2 =
   let class1 = Decl_pos_utils.NormalizeSig.class_type class1 in
   let class2 = Decl_pos_utils.NormalizeSig.class_type class2 in
+  let ( <> ) = Polymorphic_compare.( <> ) in
   class1.dc_need_init <> class2.dc_need_init
   || SSet.compare
        class1.dc_deferred_init_members
@@ -273,13 +272,15 @@ let class_big_diff class1 class2 =
   || class1.dc_members_fully_known <> class2.dc_members_fully_known
   || class1.dc_kind <> class2.dc_kind
   || class1.dc_is_xhp <> class2.dc_is_xhp
+  || class1.dc_has_xhp_keyword <> class2.dc_has_xhp_keyword
   || class1.dc_const <> class2.dc_const
   || class1.dc_is_disposable <> class2.dc_is_disposable
   || class1.dc_tparams <> class2.dc_tparams
-  || SMap.compare class1.dc_substs class2.dc_substs <> 0
-  || SMap.compare class1.dc_ancestors class2.dc_ancestors <> 0
+  || SMap.compare Pervasives.compare class1.dc_substs class2.dc_substs <> 0
+  || SMap.compare Pervasives.compare class1.dc_ancestors class2.dc_ancestors
+     <> 0
   || List.compare
-       Pervasives.compare
+       Polymorphic_compare.compare
        class1.dc_req_ancestors
        class2.dc_req_ancestors
      <> 0
@@ -315,15 +316,22 @@ let class_big_diff class1 class2 =
 and get_all_dependencies
     ~conservative_redecl trace cid (changed, to_redecl, to_recheck) =
   let dep = Dep.Class cid in
-  let where_class_was_used = Typing_deps.get_ideps dep in
+  let cid_hash = Typing_deps.Dep.make dep in
+  (* Why can't we just use `Typing_deps.get_ideps dep` here? See test case
+     hphp/hack/test/integration_ml/saved_state/test_changed_type_in_base_class.ml
+     for an example. *)
+  let where_class_and_subclasses_were_used =
+    Typing_deps.add_all_deps (DepSet.singleton cid_hash)
+  in
   let to_redecl =
     if conservative_redecl then
-      DepSet.union where_class_was_used to_redecl
+      DepSet.union where_class_and_subclasses_were_used to_redecl
     else
       to_redecl
   in
-  let to_recheck = DepSet.union where_class_was_used to_recheck in
-  let cid_hash = Typing_deps.Dep.make dep in
+  let to_recheck =
+    DepSet.union where_class_and_subclasses_were_used to_recheck
+  in
   let to_redecl = Typing_deps.get_extend_deps trace cid_hash to_redecl in
   (add_changed changed dep, to_redecl, to_recheck)
 
@@ -337,7 +345,7 @@ let get_extend_deps cid_hash to_redecl =
 (*****************************************************************************)
 let get_fun_deps
     ~conservative_redecl old_funs fid (changed, to_redecl, to_recheck) =
-  match (SMap.find_unsafe fid old_funs, Decl_heap.Funs.get fid) with
+  match (SMap.find fid old_funs, Decl_heap.Funs.get fid) with
   (* Note that we must include all dependencies even if we get the None, None
    * case. Due to the fact we can declare types lazily, there may be no
    * existing declaration in the old Decl_heap that corresponds to a function
@@ -357,11 +365,10 @@ let get_fun_deps
         to_redecl
     in
     (add_changed changed dep, to_redecl, DepSet.union fun_name to_recheck)
-  | (Some fty1, Some fty2) ->
-    let fty1 = Decl_pos_utils.NormalizeSig.fun_type fty1 in
-    let fty2 = Decl_pos_utils.NormalizeSig.fun_type fty2 in
-    let is_same_signature = fty1 = fty2 in
-    if is_same_signature then
+  | (Some fe1, Some fe2) ->
+    let fe1 = Decl_pos_utils.NormalizeSig.fun_elt fe1 in
+    let fe2 = Decl_pos_utils.NormalizeSig.fun_elt fe2 in
+    if Polymorphic_compare.( = ) fe1 fe2 then
       (changed, to_redecl, to_recheck)
     else
       (* No need to add Dep.FunName stuff here -- we found a function with the
@@ -384,7 +391,7 @@ let get_funs_deps ~conservative_redecl old_funs funs =
  *)
 (*****************************************************************************)
 let get_type_deps old_types tid (changed, to_recheck) =
-  match (SMap.find_unsafe tid old_types, Decl_heap.Typedefs.get tid) with
+  match (SMap.find tid old_types, Decl_heap.Typedefs.get tid) with
   | (None, _)
   | (_, None) ->
     let dep = Dep.Class tid in
@@ -393,7 +400,7 @@ let get_type_deps old_types tid (changed, to_recheck) =
   | (Some tdef1, Some tdef2) ->
     let tdef1 = Decl_pos_utils.NormalizeSig.typedef tdef1 in
     let tdef2 = Decl_pos_utils.NormalizeSig.typedef tdef2 in
-    let is_same_signature = tdef1 = tdef2 in
+    let is_same_signature = Polymorphic_compare.( = ) tdef1 tdef2 in
     if is_same_signature then
       (changed, to_recheck)
     else
@@ -412,7 +419,7 @@ let get_types_deps old_types types =
 (*****************************************************************************)
 let get_gconst_deps
     ~conservative_redecl old_gconsts cst_id (changed, to_redecl, to_recheck) =
-  let cst1 = SMap.find_unsafe cst_id old_gconsts in
+  let cst1 = SMap.find cst_id old_gconsts in
   let cst2 = Decl_heap.GConsts.get cst_id in
   match (cst1, cst2) with
   | (None, _)
@@ -429,7 +436,7 @@ let get_gconst_deps
     in
     (add_changed changed dep, to_redecl, DepSet.union const_name to_recheck)
   | (Some cst1, Some cst2) ->
-    let is_same_signature = cst1 = cst2 in
+    let is_same_signature = Polymorphic_compare.( = ) cst1 cst2 in
     if is_same_signature then
       (changed, to_redecl, to_recheck)
     else
@@ -445,7 +452,7 @@ let get_gconsts_deps ~conservative_redecl old_gconsts gconsts =
     (DepSet.empty, DepSet.empty, DepSet.empty)
 
 let shallow_decl_enabled () =
-  TypecheckerOptions.shallow_class_decl (GlobalNamingOptions.get ())
+  TypecheckerOptions.shallow_class_decl (Global_naming_options.get ())
 
 (*****************************************************************************)
 (* Determine which functions/classes have to be rechecked after comparing
@@ -459,9 +466,7 @@ let get_class_deps
     trace
     cid
     (changed, to_redecl, to_recheck) =
-  match
-    (SMap.find_unsafe cid old_classes, SMap.find_unsafe cid new_classes)
-  with
+  match (SMap.find cid old_classes, SMap.find cid new_classes) with
   | _ when shallow_decl_enabled () ->
     get_all_dependencies
       ~conservative_redecl
@@ -518,8 +523,9 @@ let get_class_deps
      * classes.
      *)
     let (deps, is_changed) = ClassEltDiff.compare class1 class2 in
+    let is_changed = phys_equal is_changed `Changed in
     let changed =
-      if is_changed = `Changed then
+      if is_changed then
         add_changed changed dep
       else
         changed
@@ -537,7 +543,7 @@ let get_class_deps
        inference on them and rechecking method bodies may not be necessary,
        but decl-validation and typechecking happen in the same step. *)
     let to_recheck =
-      if (not conservative_redecl) && is_changed = `Changed then
+      if (not conservative_redecl) && is_changed then
         Typing_deps.get_extend_deps trace cid_hash to_recheck
       else
         to_recheck
@@ -552,4 +558,34 @@ let get_classes_deps ~conservative_redecl old_classes new_classes classes =
        new_classes
        (ref DepSet.empty))
     classes
+    (DepSet.empty, DepSet.empty, DepSet.empty)
+
+(*****************************************************************************)
+(* Determine which top level definitions have to be rechecked if the record
+ * changed.
+ *)
+(*****************************************************************************)
+let get_record_def_deps
+    ~conservative_redecl old_record_defs rdid (changed, to_redecl, to_recheck) =
+  let _ = conservative_redecl in
+  match (SMap.find rdid old_record_defs, Decl_heap.RecordDefs.get rdid) with
+  | (None, _)
+  | (_, None) ->
+    let dep = Dep.RecordDef rdid in
+    let where_record_is_used = Typing_deps.get_ideps dep in
+    let to_recheck = DepSet.union where_record_is_used to_recheck in
+    (add_changed changed dep, to_redecl, to_recheck)
+  | (Some rd1, Some rd2) ->
+    if Polymorphic_compare.( = ) rd1 rd2 then
+      (changed, to_redecl, to_recheck)
+    else
+      let dep = Dep.RecordDef rdid in
+      let where_record_is_used = Typing_deps.get_ideps dep in
+      let to_recheck = DepSet.union where_record_is_used to_recheck in
+      (add_changed changed dep, to_redecl, to_recheck)
+
+let get_record_defs_deps ~conservative_redecl old_record_defs record_defs =
+  SSet.fold
+    (get_record_def_deps ~conservative_redecl old_record_defs)
+    record_defs
     (DepSet.empty, DepSet.empty, DepSet.empty)

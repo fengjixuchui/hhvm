@@ -74,18 +74,38 @@ Mutex g_classesMutex;
 
 Class::PropInitVec::~PropInitVec() {
   if (m_capacity > 0) {
+    // allocated in low heap
     lower_free(m_data);
   }
 }
 
 Class::PropInitVec*
 Class::PropInitVec::allocWithReqAllocator(const PropInitVec& src) {
-  PropInitVec* p = req::make_raw<PropInitVec>();
-  uint32_t sz = src.m_size;
-  p->m_size = sz;
-  p->m_capacity = ~sz;
-  p->m_data = req::make_raw_array<TypedValueAux>(sz);
-  memcpy(p->m_data, src.m_data, sz * sizeof(*p->m_data));
+  uint32_t size = src.m_size;
+  auto const props_size = ObjectProps::sizeFor(size);
+  auto const bits_size = BitsetView<true>::sizeFor(size);
+
+  PropInitVec* p = reinterpret_cast<PropInitVec*>(req::malloc(
+    sizeof(PropInitVec) + props_size + bits_size,
+    type_scan::getIndexForMalloc<
+      PropInitVec,
+      type_scan::Action::WithSuffix<char>
+    >()
+  ));
+
+  p->m_size = size;
+  p->m_capacity = ~size;
+  p->m_data = reinterpret_cast<ObjectProps*>(p + 1);
+
+  // these are two distinct memcpys because the props and deep init bits
+  // aren't necessarily contiguous in src (because capacity >= size)
+  // but will be in the destination (which is exactly sized)
+  memcpy16_inline(p->m_data, src.m_data, props_size);
+  memcpy(reinterpret_cast<char*>(p->m_data) +
+         ObjectProps::sizeFor(size),
+         src.deepInitBits().buffer(),
+         bits_size);
+
   return p;
 }
 
@@ -97,11 +117,24 @@ Class::PropInitVec::operator=(const PropInitVec& piv) {
       vm_free(m_data);
       m_data = nullptr;
     }
-    unsigned sz = m_size = m_capacity = piv.size();
-    if (sz == 0) return *this;
-    m_data = (TypedValueAux*)lower_malloc(sz * sizeof(*m_data));
+    m_size = m_capacity = piv.size();
+    auto const props_size = ObjectProps::sizeFor(m_size);
+    auto const bits_size = BitsetView<true>::sizeFor(m_size);
+    if (m_size == 0) return *this;
+
+    m_data = reinterpret_cast<ObjectProps*>(
+      lower_malloc(props_size + bits_size)
+    );
+    // these are two distinct memcpys because the props and deep init bits
+    // aren't necessarily contiguous in src (because capacity >= size)
+    // but will be in the destination (which is exactly sized)
+    memcpy16_inline(m_data, piv.m_data, props_size);
+    memcpy(deepInitBits().buffer(),
+           piv.deepInitBits().buffer(),
+           bits_size);
+
     assertx(m_data);
-    memcpy(m_data, piv.m_data, sz * sizeof(*m_data));
+    assertx(m_data->checkInvariants(m_capacity));
   }
   return *this;
 }
@@ -110,18 +143,40 @@ void Class::PropInitVec::push_back(const TypedValue& v) {
   assertx(!reqAllocated());
   if (m_size == m_capacity) {
     unsigned newCap = folly::nextPowTwo(m_size + 1);
-    m_capacity = static_cast<int32_t>(newCap);
-    auto newData = lower_malloc(newCap * sizeof(TypedValue));
+    auto const props_size = ObjectProps::sizeFor(newCap);
+    auto const bits_size = BitsetView<true>::sizeFor(newCap);
+
+    auto newData = reinterpret_cast<char*>(
+      lower_malloc(props_size + bits_size)
+    );
+
+    auto const oldSize = ObjectProps::sizeFor(m_size);
+
+    // TODO(jgriego) this is a kludge to preserve invariants of
+    // ObjectProps (when using 7up layouts) and should be replaced
+    // with some kind of `grow` fn on the layout class
+    memset(newData + oldSize, 0, props_size - oldSize);
+
     if (m_data) {
-      auto const oldSize = m_size * sizeof(*m_data);
-      memcpy(newData, m_data, oldSize);
+      // these two memcpys are separate because we're going from
+      // contiguous memory (since the size == capacity) to noncontiguous memory
+      // (because the structure has grown)
+      memcpy16_inline(newData, m_data, oldSize);
+      memcpy(newData + props_size,
+             deepInitBits().buffer(),
+             (m_size + 7) / 8);
       lower_free(m_data);
     }
-    m_data = reinterpret_cast<TypedValueAux*>(newData);
+
+    m_data = reinterpret_cast<ObjectProps*>(newData);
+    m_capacity = static_cast<int32_t>(newCap);
+
     assertx(m_data);
+    assertx(m_data->checkInvariants(m_capacity));
   }
-  cellDup(v, m_data[m_size]);
-  m_data[m_size++].deepInit() = false;
+  auto const idx = m_size++;
+  tvDup(v, m_data->at(idx));
+  deepInitBits()[idx] = false;
 }
 
 
@@ -176,16 +231,6 @@ unsigned loadUsedTraits(PreClass* preClass,
       auto newName = rule.newMethodName();
       if (origName != newName) {
         methodCount++;
-        auto const trait = Unit::lookupClass(rule.traitName());
-        // traitName should be one of the traits loaded above, so it
-        // should already exist; if it doesn't, there's a bug, and
-        // we'll fatal importing the trait anyway.
-        if (trait) {
-          auto const meth = trait->lookupMethod(origName);
-          if (meth && meth->isInOutWrapper()) {
-            methodCount++;
-          }
-        }
       }
     }
   }
@@ -205,9 +250,9 @@ struct assert_sizeof_class {
   // If this static_assert fails, the compiler error will have the real value
   // of sizeof_Class in it since it's in this struct's type.
 #ifndef NDEBUG
-  static_assert(sz == (use_lowptr ? 292 : 336), "Change this only on purpose");
+  static_assert(sz == (use_lowptr ? 288 : 328), "Change this only on purpose");
 #else
-  static_assert(sz == (use_lowptr ? 284 : 328), "Change this only on purpose");
+  static_assert(sz == (use_lowptr ? 280 : 320), "Change this only on purpose");
 #endif
 };
 template struct assert_sizeof_class<sizeof_Class>;
@@ -766,7 +811,6 @@ void Class::initProps() const {
     }
   } catch (...) {
     // Undo the allocation of propVec
-    req::destroy_raw_array(propVec->begin(), propVec->size());
     req::destroy_raw(propVec);
     *m_propDataCache = nullptr;
     m_propDataCache.markUninit();
@@ -781,13 +825,15 @@ void Class::initProps() const {
   // more work at object creation time.
   for (Slot slot = 0; slot < propVec->size(); slot++) {
     auto index = propSlotToIndex(slot);
-    TypedValueAux* tv = &(*propVec)[index];
-    assertx(!tv->deepInit());
+    auto piv_entry = (*propVec)[index];
+    assertx(!piv_entry.deepInit);
     // Set deepInit if the property requires "deep" initialization.
     if (m_declProperties[slot].attrs & AttrDeepInit) {
-      tv->deepInit() = true;
+      piv_entry.deepInit = true;
     } else {
-      tvAsVariant(tv).setEvalScalar();
+      TypedValue tv = piv_entry.val.tv();
+      tvAsVariant(&tv).setEvalScalar();
+      tvCopy(tv, piv_entry.val);
     }
   }
 }
@@ -887,9 +933,9 @@ void Class::checkPropInitialValues() const {
     auto const& tc = prop.typeConstraint;
     if (!tc.isCheckable()) continue;
     auto index = propSlotToIndex(slot);
-    auto const& tv = m_declPropInit[index];
-    if (tv.m_type == KindOfUninit) continue;
-    tc.verifyProperty(&tv, this, prop.cls, prop.name);
+    auto rval = m_declPropInit[index].val;
+    if (type(rval) == KindOfUninit) continue;
+    tc.verifyProperty(rval, this, prop.cls, prop.name);
   }
 
   extra->m_checkedPropInitialValues.initWith(true);
@@ -1033,8 +1079,9 @@ Class::PropInitVec* Class::getPropData() const {
 
 TypedValue* Class::getSPropData(Slot index) const {
   assertx(numStaticProperties() > index);
-  return m_sPropCache[index].bound() ? &m_sPropCache[index].get()->val :
-         nullptr;
+  return m_sPropCache[index].bound()
+    ? &m_sPropCache[index].get()->val
+    : nullptr;
 }
 
 
@@ -1206,9 +1253,7 @@ Class::PropValLookup Class::getSPropIgnoreLateInit(
       "Static property initialization failed to initialize a property."
     );
 
-    // Skip asserting on the property type for AttrLateInitSoft properties
-    // because the default value means they can be potentially anything.
-    if (sProp->m_type != KindOfUninit && !(decl.attrs & AttrLateInitSoft)) {
+    if (sProp->m_type != KindOfUninit) {
       if (RuntimeOption::RepoAuthoritative) {
         auto const repoTy = staticPropRepoAuthType(lookup.slot);
         always_assert(tvMatchesRepoAuthType(*sProp, repoTy));
@@ -1222,9 +1267,7 @@ Class::PropValLookup Class::getSPropIgnoreLateInit(
               !(decl.attrs & AttrNoImplicitNullable)) {
             return true;
           }
-          return sProp->m_type == KindOfRef
-            ? decl.typeConstraint.maybeMixed()
-            : decl.typeConstraint.assertCheck(sProp);
+          return decl.typeConstraint.assertCheck(sProp);
         }();
         always_assert(typeOk);
       }
@@ -1243,15 +1286,7 @@ Class::PropValLookup Class::getSProp(
   if (lookup.val && UNLIKELY(lookup.val->m_type == KindOfUninit)) {
     auto const& decl = m_staticProperties[lookup.slot];
     if (decl.attrs & AttrLateInit) {
-      if (decl.attrs & AttrLateInitSoft) {
-        raise_soft_late_init_prop(decl.cls, sPropName, true);
-        tvDup(
-          *g_context->getSoftLateInitDefault().asTypedValue(),
-          *lookup.val
-        );
-      } else {
-        throw_late_init_prop(decl.cls, sPropName, true);
-      }
+      throw_late_init_prop(decl.cls, sPropName, true);
     }
   }
   return lookup;
@@ -1278,7 +1313,7 @@ Slot Class::propIndexToSlot(uint16_t index) const {
 
 const StaticString s_classname("classname");
 
-Cell Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) const {
+TypedValue Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) const {
   Slot clsCnsInd;
   auto cnsVal = cnsNameToTV(clsCnsName, clsCnsInd, what);
   if (!cnsVal) return make_tv<KindOfUninit>();
@@ -1310,32 +1345,31 @@ Cell Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) const {
     }
   }
 
-  // This constant has a non-scalar initializer, meaning it will be potentially
-  // different in different requests, which we store separately in an array
-  // living off in RDS.
+  /*
+   * We have either a constant with a non-scalar initializer or an unresolved
+   * type constant, meaning it will be potentially different in different
+   * requests, which we store separately in an array in RDS.
+   *
+   * We need a special marker value in the non-scalar constant cache to indicate
+   * that we're currently evaluating the value of a (type) constant. If we
+   * attempt to evaluate the value of a (type) constant, and the special marker
+   * is present, that means the (type) constant is recursively defined and
+   * we'll raise an error. The globals array is never a valid value of a (type)
+   * constant, so we use it as the marker.
+   */
   m_nonScalarConstantCache.bind(rds::Mode::Normal);
   auto& clsCnsData = *m_nonScalarConstantCache;
-
-  /*
-   * We need a special marker value in the non-scalar constant cache to indicate
-   * that we're currently evaluating the value of a constant. If we attempt to
-   * evaluate the value of a constant, and the marker for that constant is
-   * present, that means the constant is recursively defined and we'll raise an
-   * error. We want to only store valid values in the cache to avoid breaking
-   * invariants, so we'll use the globals array for this purpose. We don't allow
-   * storing the globals array in a class constant, so this is unambiguous.
-   */
-
   if (m_nonScalarConstantCache.isInit()) {
     if (auto cCns = clsCnsData->rval(clsCnsName)) {
-      // There's an entry in the cache for this constant. If its the globals
-      // array, this constant is recursively defined, so raise an
-      // error. Otherwise just return it.
+      // There's an entry in the cache for this (type) constant. If its the
+      // globals array, this (type) constant is recursively defined, so raise
+      // an error. Otherwise just return it.
       if (UNLIKELY(isArrayType(cCns.type()) &&
                    cCns.val().parr == get_global_variables())) {
         raise_error(
           folly::sformat(
-            "Cannot declare self-referencing constant '{}::{}'",
+            "Cannot declare self-referencing {} '{}::{}'",
+            cns.isType() ? "type constant" : "constant",
             name(),
             clsCnsName
           )
@@ -1343,39 +1377,38 @@ Cell Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) const {
       }
       return cCns.tv();
     }
+  } else {
+    // Because RDS uses a generation number scheme, when isInit was false we
+    // may have a pointer to a (no-longer extant) ArrayData in our RDS entry.
+    // Use detach to clear our Array so we don't attempt to decref the stale
+    // ArrayData.
+    clsCnsData.detach();
+    clsCnsData = Array::attach(
+      MixedArray::MakeReserveDict(m_constants.size())
+    );
+    m_nonScalarConstantCache.markInit();
   }
 
-  auto makeCache = [&] {
-    if (!m_nonScalarConstantCache.isInit()) {
-      clsCnsData.detach();
-      clsCnsData = Array::attach(
-        MixedArray::MakeReserveMixed(m_constants.size())
-      );
-      m_nonScalarConstantCache.markInit();
-    }
-  };
+  // We're going to run the 86cinit to get the constant's value, or try to
+  // resolve the type constant. Store the globals array in the (type)
+  // constant's cache entry to prevent recursion.
+  auto marker = make_array_like_tv(get_global_variables());
+  clsCnsData.set(StrNR(clsCnsName), tvAsCVarRef(&marker), true /* isKey */);
 
-  // Resolve type constant, if needed.
   if (cns.isType()) {
+    // Resolve type constant, if needed
     if (what == ClsCnsLookup::IncludeTypesPartial) {
       return make_tv<KindOfUninit>();
     }
     Array resolvedTS;
     bool persistent = true;
     try {
-      // We must give TypeStructure::resolve() the same ArrayData* we tested up
-      // above, to avoid reading an already-resolved (by another thread)
-      // ArrayData* from cns. Since resolve() takes a Class::Const and no other
-      // fields of the Const can change, just copy cns and give the copy our
-      // local version of the ArrayData*.
-      auto cnsCopy = cns;
-      cnsCopy.val.m_data.parr = typeCns;
-
-      resolvedTS = TypeStructure::resolve(cnsCopy, this, persistent);
-      assertx(resolvedTS.isDictOrDArray());
+      resolvedTS = TypeStructure::resolve(typeCns, cns.name, cns.cls, this,
+                                          persistent);
     } catch (const Exception& e) {
       raise_error(e.getMessage());
     }
+    assertx(resolvedTS.isDictOrDArray());
 
     auto const ad = ArrayData::GetScalarArray(std::move(resolvedTS));
     if (persistent) {
@@ -1398,16 +1431,9 @@ Cell Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) const {
     }
 
     auto tv = make_persistent_array_like_tv(ad);
-    makeCache();
     clsCnsData.set(StrNR(clsCnsName), tvAsCVarRef(&tv), true /* isKey */);
     return tv;
   }
-
-  // We're going to run the 86cinit to get the constant's value. Store the
-  // globals array in the constant's cache entry to prevent recursion.
-  makeCache();
-  auto marker = make_tv<KindOfArray>(get_global_variables());
-  clsCnsData.set(StrNR(clsCnsName), tvAsCVarRef(&marker), true /* isKey */);
 
   // The class constant has not been initialized yet; do so.
   auto const meth86cinit = cns.cls->lookupMethod(s_86cinit.get());
@@ -1417,15 +1443,16 @@ Cell Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) const {
 
   auto ret = g_context->invokeFuncFew(
     meth86cinit,
-    ActRec::encodeClass(this),
+    const_cast<Class*>(this),
     nullptr,
     1,
     args,
+    false,
     false
   );
 
   assertx(tvAsCVarRef(&ret).isAllowedAsConstantValue());
-  clsCnsData.set(StrNR(clsCnsName), cellAsCVarRef(ret), true /* isKey */);
+  clsCnsData.set(StrNR(clsCnsName), tvAsCVarRef(ret), true /* isKey */);
 
   // The caller will inc-ref the returned value, so undo the inc-ref caused by
   // storing it in the cache.
@@ -1433,7 +1460,7 @@ Cell Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) const {
   return ret;
 }
 
-const Cell* Class::cnsNameToTV(const StringData* clsCnsName,
+const TypedValue* Class::cnsNameToTV(const StringData* clsCnsName,
                                Slot& clsCnsInd,
                                ClsCnsLookup what) const {
   clsCnsInd = m_constants.findIndex(clsCnsName);
@@ -1468,18 +1495,6 @@ DataType Class::clsCnsType(const StringData* cnsName) const {
   if (!cns) return KindOfUninit;
   return cns->m_type;
 }
-
-
-///////////////////////////////////////////////////////////////////////////////
-// Objects.
-
-size_t Class::declPropOffset(Slot slot) const {
-  static_assert(std::is_unsigned<Slot>::value,
-                "Slot is supposed to be unsigned");
-  auto index = m_slotIndex[slot];
-  return sizeof(ObjectData) + index * sizeof(TypedValue);
-}
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Other methods.
@@ -1627,22 +1642,8 @@ const StaticString
   s_debugInfo("__debugInfo"),
   s_clone("__clone");
 
-static Func* markNonStatic(Func* meth) {
-  // Do not use isStaticInPrologue here, since that uses the
-  // AttrRequiresThis flag.
-  if (meth && (!meth->isStatic() || meth->isClosureBody() ||
-      s_construct.equal(meth->name()))) {
-    meth->setAttrs(meth->attrs() | AttrRequiresThis);
-  }
-  return meth;
-}
-
-static Func* markNonStatic(const Class* thiz, const String& meth) {
-  return markNonStatic(thiz->lookupMethod(meth.get()));
-}
-
 void Class::setSpecial() {
-  m_toString = markNonStatic(this, s_toString);
+  m_toString = lookupMethod(s_toString.get());
 
   /*
    * The invoke method is only cached in the Class for a fast path JIT
@@ -1656,7 +1657,7 @@ void Class::setSpecial() {
    * here.  (The closure prologue uninstalls the $this and installs
    * the appropriate static context.)
    */
-  m_invoke = markNonStatic(this, s_invoke);
+  m_invoke = lookupMethod(s_invoke.get());
   if (m_invoke && m_invoke->isStaticInPrologue()) {
     m_invoke = nullptr;
   }
@@ -1664,7 +1665,7 @@ void Class::setSpecial() {
   // Look for __construct() declared in either this class or a trait
   auto const func = lookupMethod(s_construct.get());
   if (func && func->cls() == this) {
-    if (func->takesInOutParams() || func->isInOutWrapper()) {
+    if (func->takesInOutParams()) {
       raise_error("Parameters may not be marked inout on constructors");
     }
 
@@ -1702,70 +1703,40 @@ inline void checkRefCompat(const char* kind, const Func* self,
   // anyway.
   if (inherit->attrs() & AttrPrivate) return;
 
-  // Because of name mangling inout functions should only have the same names as
-  // other inout functions.
-  assertx(self->takesInOutParams() == inherit->takesInOutParams());
+  if (!self->takesInOutParams() && !inherit->takesInOutParams()) return;
 
-  // Inout functions have the parameter offsets of their inout parameters
-  // mangled into their names, so doing this check on them would be meaningless,
-  // instead we will check their wrappers.
-  if (self->takesInOutParams()) {
-    // When reffiness invariance is disabled we cannot create wrappers for ref
-    // functions, as those wrappers would violate our invariance rules for inout
-    // functions.
-    assertx(RuntimeOption::EvalReffinessInvariance == 2 ||
-            !self->isInOutWrapper());
-    return;
-  }
-
-  // When ReffinessInvariance is set we check the invariance of all functions,
-  // otherwise we only check the reffiness of functions which wrap inout
-  // inout functions.
-  if (!RuntimeOption::EvalReffinessInvariance) {
-    if (!self->isInOutWrapper() && !inherit->isInOutWrapper()) return;
-  } else {
-    if (!self->anyByRef() && !inherit->anyByRef()) return;
-  }
-
-  auto const fatal =
-    RuntimeOption::EvalReffinessInvariance == 2 ||
-    (self->isInOutWrapper() || inherit->isInOutWrapper());
-
-  auto const sname = self->fullDisplayName()->data();
-  auto const iname = inherit->fullDisplayName()->data();
   auto const max = std::max(
     self->numNonVariadicParams(),
     inherit->numNonVariadicParams()
   );
 
-  auto const both_wrap = self->isInOutWrapper() == inherit->isInOutWrapper();
-
   for (int i = 0; i < max; ++i) {
     // Since we're looking at ref wrappers of inout functions we need to check
-    // byRef, but if one of the functions isn't a wrapper we do actually have
+    // inout, but if one of the functions isn't a wrapper we do actually have
     // a mismatch.
-    auto const smode = self->byRef(i);
-    auto const imode = inherit->byRef(i);
-    if (smode != imode || (smode && !both_wrap)) {
+    auto const smode = self->isInOut(i);
+    auto const imode = inherit->isInOut(i);
+    if (smode != imode) {
       auto const msg = [&] {
-        if (smode && (!imode || self->isInOutWrapper() || both_wrap)) {
-          auto const sdecl = self->isInOutWrapper() ? "inout " : "'&' ";
-          auto const idecl = i >= inherit->numNonVariadicParams() ? "" : sdecl;
+        auto const sname = self->fullName()->data();
+        auto const iname = inherit->fullName()->data();
+
+        if (smode) {
+          auto const idecl =
+            i >= inherit->numNonVariadicParams() ? "" : "inout ";
           return folly::sformat(
-            "Parameter {} on function {} was declared {}but is not "
-            "declared {}on {} function {}", i + 1, sname, sdecl, idecl,
+            "Parameter {} on function {} was declared inout but is not "
+            "declared {}on {} function {}", i + 1, sname, idecl,
             kind, iname);
         } else {
-          auto const idecl = inherit->isInOutWrapper() ? "inout " : "'&' ";
-          auto const sdecl = i >= self->numNonVariadicParams() ? "" : idecl;
+          auto const sdecl = i >= self->numNonVariadicParams() ? "" : "inout ";
           return folly::sformat(
             "Parameter {} on function {} was not declared {}but is "
-            "declared {}on {} function {}", i + 1, sname, sdecl, idecl,
+            "declared inout on {} function {}", i + 1, sname, sdecl,
             kind, iname);
         }
       }();
-      if (fatal) raise_error(msg);
-      else       raise_warning(msg);
+      raise_error(msg);
     }
   }
 }
@@ -1808,15 +1779,8 @@ void checkDeclarationCompat(const PreClass* preClass,
         firstOptional = i + 1;
       }
     }
-    if (ivariadic) {
-      assertx(iparams[iparams.size() - 1].isVariadic());
-      assertx(params[params.size() - 1].isVariadic());
-      // reffiness of the variadics must match
-      if (imeth->byRef(iparams.size() - 1) !=
-          func->byRef(params.size() - 1)) {
-        raiseIncompat(preClass, imeth);
-      }
-    }
+    assertx(!ivariadic || iparams[iparams.size() - 1].isVariadic());
+    assertx(!ivariadic || params[params.size() - 1].isVariadic());
   }
 
   // Verify that meth provides defaults, starting with the parameter that
@@ -1852,13 +1816,12 @@ Class::Class(PreClass* preClass, Class* parent,
   , m_needsPropInitialCheck{false}
   , m_hasReifiedGenerics{false}
   , m_hasReifiedParent{false}
+  , m_serialized(false)
   , m_preClass(PreClassPtr(preClass))
   , m_classVecLen(always_safe_cast<decltype(m_classVecLen)>(classVecLen))
   , m_funcVecLen(always_safe_cast<decltype(m_funcVecLen)>(funcVecLen))
-  , m_serialized(false)
-  , m_releaseFunc{nullptr} // These fields are set in setReleaseFunc,
-  , m_memoSize{0}          // except that m_releaseFunc is set specially
-  , m_sizeIdx{0}           // for native classes.
+  // Will be overwritten if the class has a native dtor
+  , m_releaseFunc{ObjectData::release}
 {
   if (usedTraits.size()) {
     allocExtraData();
@@ -1885,9 +1848,9 @@ Class::Class(PreClass* preClass, Class* parent,
   // of those fatals could be thrown.
   setInterfaceVtables();
 
-  // Sets object release function if not already set, also calculates the base
-  // pointer offset and the MemoryManager index of the class size.
-  setReleaseFunc();
+  // Calculates the base pointer offset and
+  // the MemoryManager index of the class size.
+  setReleaseData();
 }
 
 void Class::methodOverrideCheck(const Func* parentMethod, const Func* method) {
@@ -2064,18 +2027,12 @@ void Class::setMethods() {
  */
 void Class::setRTAttributes() {
   m_RTAttrs = 0;
-  if (lookupMethod(s_sleep.get()     )) { m_RTAttrs |= Class::HasSleep; }
-  if (markNonStatic(this, s_get      )) { m_RTAttrs |= Class::UseGet;   }
-  if (markNonStatic(this, s_set      )) { m_RTAttrs |= Class::UseSet;   }
-  if (markNonStatic(this, s_isset    )) { m_RTAttrs |= Class::UseIsset; }
-  if (markNonStatic(this, s_unset    )) { m_RTAttrs |= Class::UseUnset; }
-  if (markNonStatic(this, s_clone    )) { m_RTAttrs |= Class::HasClone; }
-
-  markNonStatic(this, s_call);
-  markNonStatic(this, s_debugInfo);
-  if (!((attrs() & AttrAbstract) && (attrs() & AttrFinal))) {
-    markNonStatic(m_ctor);
-  }
+  if (lookupMethod(s_sleep.get())) { m_RTAttrs |= Class::HasSleep; }
+  if (lookupMethod(s_get.get()  )) { m_RTAttrs |= Class::UseGet;   }
+  if (lookupMethod(s_set.get()  )) { m_RTAttrs |= Class::UseSet;   }
+  if (lookupMethod(s_isset.get())) { m_RTAttrs |= Class::UseIsset; }
+  if (lookupMethod(s_unset.get())) { m_RTAttrs |= Class::UseUnset; }
+  if (lookupMethod(s_clone.get())) { m_RTAttrs |= Class::HasClone; }
 
   if ((isBuiltin() && Native::getNativePropHandler(name())) ||
       (m_parent && m_parent->hasNativePropHandler())) {
@@ -2494,20 +2451,15 @@ void Class::setProperties() {
       };
 
       auto const lateInitCheck = [&] (const Class::Prop& prop) {
-        auto const check = [&] (Attr attr, const char* str) {
-          if ((prop.attrs ^ preProp->attrs()) & attr) {
-            raise_error(
-              "Property %s::$%s must %sbe <<__%s>> (as in class %s)",
-              m_preClass->name()->data(),
-              preProp->name()->data(),
-              prop.attrs & attr ? "" : "not ",
-              str,
-              m_parent->name()->data()
-            );
-          }
-        };
-        check(AttrLateInitSoft, "SoftLateInit");
-        check(AttrLateInit, "LateInit");
+        if ((prop.attrs ^ preProp->attrs()) & AttrLateInit) {
+          raise_error(
+            "Property %s::$%s must %sbe <<__LateInit>> (as in class %s)",
+            m_preClass->name()->data(),
+            preProp->name()->data(),
+            prop.attrs & AttrLateInit ? "" : "not ",
+            m_parent->name()->data()
+          );
+        }
       };
 
       auto const redeclareProp = [&] (const Slot slot) {
@@ -2569,10 +2521,8 @@ void Class::setProperties() {
 
         checkPrePropVal(prop, preProp);
         auto index = slotIndex[slot];
-        TypedValueAux& tvaux = m_declPropInit[index];
-        auto const& tv = preProp->val();
-        tvaux.m_data = tv.m_data;
-        tvaux.m_type = tv.m_type;
+
+        tvCopy(preProp->val(), m_declPropInit[index].val);
         copyDeepInitAttr(preProp, &prop);
       };
 
@@ -2716,7 +2666,13 @@ void Class::setProperties() {
 
   m_declProperties.create(curPropMap);
   m_staticProperties.create(curSPropMap);
-  m_slotIndex = slotIndex;
+
+  std::vector<ObjectProps::quick_index> slotQuickIndex;
+  slotQuickIndex.reserve(slotIndex.size());
+  for (auto i : slotIndex) {
+    slotQuickIndex.push_back(ObjectProps::quickIndex(i));
+  }
+  m_slotIndex = slotQuickIndex;
 
   if (unsigned n = numStaticProperties()) {
     using LinkT = std::remove_pointer<decltype(m_sPropCache)>::type;
@@ -2731,15 +2687,21 @@ void Class::setProperties() {
   // To speed up ObjectData::release, we only iterate over property indices
   // up to the last countable property index. Here, "index" refers to the
   // position of the property in memory, and "slot" to its logical slot.
-  m_countablePropsEnd = 0;
+  uint16_t countablePropsEnd = 0;
   for (Slot slot = 0; slot < m_declProperties.size(); ++slot) {
     if (jit::irgen::propertyMayBeCountable(m_declProperties[slot])) {
-      auto const index = propSlotToIndex(slot) + uint32_t{1};
-      m_countablePropsEnd = std::max(m_countablePropsEnd, index);
+      auto const index =
+        safe_cast<uint16_t>(propSlotToIndex(slot) + uint16_t{1});
+      countablePropsEnd = std::max(countablePropsEnd, index);
     }
   }
+
+  assertx(m_declProperties.size() <= ObjectProps::max_index + 1);
+  assertx(countablePropsEnd <= ObjectProps::max_index);
+
+  m_countablePropsEnd = ObjectProps::quickIndex(countablePropsEnd);
   FTRACE(3, "numDeclProperties = {}\n", m_declProperties.size());
-  FTRACE(3, "countablePropsEnd = {}\n", m_countablePropsEnd);
+  FTRACE(3, "countablePropsEnd = {}\n", countablePropsEnd);
 }
 
 bool Class::compatibleTraitPropInit(const TypedValue& tv1,
@@ -2764,13 +2726,14 @@ bool Class::compatibleTraitPropInit(const TypedValue& tv1,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfObject:
     case KindOfResource:
-    case KindOfRef:
     case KindOfFunc:
     case KindOfClass:
     case KindOfClsMeth:
@@ -2794,7 +2757,7 @@ const constexpr Attr kRedeclarePropAttrMask =
 }
 
 void Class::importTraitInstanceProp(Prop& traitProp,
-                                    const TypedValue& traitPropVal,
+                                    TypedValue traitPropVal,
                                     PropMap::Builder& curPropMap,
                                     SPropMap::Builder& curSPropMap,
                                     std::vector<uint16_t>& slotIndex,
@@ -2848,7 +2811,7 @@ void Class::importTraitInstanceProp(Prop& traitProp,
     // Redeclared prop, make sure it matches previous declarations
     auto& prevProp    = curPropMap[prevIt->second];
     auto  prevPropIndex = slotIndex[prevIt->second];
-    auto& prevPropVal = m_declPropInit[prevPropIndex];
+    auto const prevPropVal = m_declPropInit[prevPropIndex].val.tv();
     if (((prevProp.attrs ^ traitProp.attrs) & kRedeclarePropAttrMask) ||
         (!(prevProp.attrs & AttrSystemInitialValue) &&
          !(traitProp.attrs & AttrSystemInitialValue) &&
@@ -3019,7 +2982,7 @@ void Class::importTraitProps(int traitIdx,
     for (Slot p = 0; p < trait->m_declProperties.size(); p++) {
       auto& traitProp    = trait->m_declProperties[p];
       auto  traitPropIndex = trait->propSlotToIndex(p);
-      auto& traitPropVal = trait->m_declPropInit[traitPropIndex];
+      auto traitPropVal = trait->m_declPropInit[traitPropIndex].val.tv();
       importTraitInstanceProp(traitProp, traitPropVal,
                               curPropMap, curSPropMap, slotIndex,
                               serializationIdx, serializationVisited);
@@ -3154,10 +3117,10 @@ void Class::setInitializers() {
   }
 }
 
-const StaticString s_Iterator("Iterator");
+const StaticString s_HH_Iterator("HH\\Iterator");
 const StaticString s_IteratorAggregate("IteratorAggregate");
 void Class::checkInterfaceConstraints() {
-  if (UNLIKELY(m_interfaces.contains(s_Iterator.get()) &&
+  if (UNLIKELY(m_interfaces.contains(s_HH_Iterator.get()) &&
       m_interfaces.contains(s_IteratorAggregate.get()))) {
     raise_error("Class %s cannot implement both IteratorAggregate and Iterator"
                 " at the same time", name()->data());
@@ -3617,7 +3580,7 @@ void Class::setInstanceMemoCacheInfo() {
   // caches. With the remaining non-assigned slots, we give preference to the
   // parameter-less methods first. This is because there's a greater benefit to
   // giving parameter-less methods non-shared slots (they can just be a
-  // Cell). However, we only give the methods non-shared slots if we can give
+  // TypedValue). However, we only give the methods non-shared slots if we can give
   // them to all the methods. If there's more methods than we have available
   // non-shared slots, its not clear which ones should get the non-shared slots
   // and which ones shouldn't, so we treat them all equally and give them all
@@ -3804,33 +3767,14 @@ void Class::setFuncVec(MethodMapBuilder& builder) {
   }
 }
 
-extern template NEVER_INLINE void ObjectData::release<true>(
-  ObjectData* obj,
-  const Class* cls
-) noexcept;
-extern template NEVER_INLINE void ObjectData::release<false>(
-  ObjectData* obj,
-  const Class* cls
-) noexcept;
-
-void Class::setReleaseFunc() {
-  auto const numSlots = numMemoSlots();
-  if (numSlots > 0) {
-    m_memoSize = numSlots * sizeof(MemoSlot) + sizeof(MemoNode);
+void Class::setReleaseData() {
+  if (getNativeDataInfo()) return;
+  if (hasMemoSlots()) {
+    m_memoSize = ObjectData::objOffFromMemoNode(this);
   }
   auto const nProps = numDeclProperties();
   auto const size = m_memoSize + ObjectData::sizeForNProps(nProps);
   m_sizeIdx = MemoryManager::size2Index(size);
-  /*
-   * m_releaseFunc is initialized to nullptr and might be updated to
-   * a specialized version, e.g. Native::nativeDataInstanceDtor.
-   * If the pointer is not set, it should be initialized to the default
-   * ObjectData release function.
-   */
-  if (m_releaseFunc) return;
-  m_releaseFunc = m_sizeIdx < kNumSmallSizes ?
-                    ObjectData::release<true> :
-                    ObjectData::release<false>;
 }
 
 void Class::getMethodNames(const Class* cls,

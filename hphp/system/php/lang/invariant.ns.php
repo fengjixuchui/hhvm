@@ -61,12 +61,13 @@ function invariant_callback_register(callable $callback) {
  *   - [`invariant` guide](/hack/types/refining#invariant)
  *
  * @param $test - The condition you are declaring as an expression of fact.
- * @param $args - Arguments supplied if the condition is not met. This is
- *                usually a string, with possible placeholders.
+ * @param $format_str - The string that will be displayed when your
+ *                      invariant fails, with possible placeholders.
+ * @param $args - Actual values to placeholders in your format string.
  */
-function invariant(mixed $test, ...$args): void {
+function invariant(mixed $test, $format_str, ...$args): void {
   if (!$test) {
-    \HH\invariant_violation(...$args);
+    \HH\invariant_violation($format_str, ...$args);
   }
 }
 
@@ -84,7 +85,7 @@ function invariant_violation(string $format_str, ...$args): void {
     $cb($format_str, ...$args);
   }
 
-  $args = \array_map('\__SystemLib\invariant_violation_helper', $args);
+  $args = \array_map(fun('\__SystemLib\invariant_violation_helper'), $args);
   $message = \vsprintf($format_str, $args);
 
   throw new InvariantException($message);

@@ -1,0 +1,20 @@
+<?hh
+class A0 {}
+function with_static_property(): void {
+  $a = WithStaticProperty::$map;
+  $b = WithStaticProperty::$vector;
+}
+class WithStaticProperty {
+  public static \HH\Map<\SomeEnum, string> $map = Map {};
+  public static \HH\Vector<\A> $vector = Vector {};
+}
+class A extends \A0 implements \I1 {}
+enum SomeEnum: int {
+  SECOND = 0;
+  FIRST = 0;
+}
+interface I1 {}
+<<__Rx>>
+function extract_standalone_make_default(): nothing {
+  throw new \Exception();
+}

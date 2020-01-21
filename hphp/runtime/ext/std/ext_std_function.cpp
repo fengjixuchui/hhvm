@@ -42,8 +42,8 @@ const StaticString
   s_user("user");
 
 Array HHVM_FUNCTION(get_defined_functions) {
-  return make_map_array(s_internal, Unit::getSystemFunctions(),
-                        s_user, Unit::getUserFunctions());
+  return make_darray(s_internal, Unit::getSystemFunctions(),
+                     s_user, Unit::getUserFunctions());
 }
 
 bool HHVM_FUNCTION(function_exists, const String& function_name,
@@ -109,8 +109,7 @@ Array hhvm_get_frame_args(const ActRec* ar, int offset) {
   }
   int numParams = ar->func()->numNonVariadicParams();
   int numArgs = ar->numArgs();
-  bool variadic = ar->func()->hasVariadicCaptureParam() &&
-    !(ar->func()->attrs() & AttrMayUseVV);
+  bool variadic = ar->func()->hasVariadicCaptureParam();
   auto local = reinterpret_cast<TypedValue*>(
     uintptr_t(ar) - sizeof(TypedValue)
   );
@@ -130,11 +129,9 @@ Array hhvm_get_frame_args(const ActRec* ar, int offset) {
       // on the stack.
       retInit.append(tvAsCVarRef(local));
       --local;
-    } else if (variadic) {
-      retInit.append(tvAsCVarRef(local).asCArrRef()[i - numParams]);
     } else {
-      // This is not a formal parameter, so it's in the ExtraArgs.
-      retInit.append(tvAsCVarRef(ar->getExtraArg(i - numParams)));
+      assertx(variadic);
+      retInit.append(tvAsCVarRef(local).asCArrRef()[i - numParams]);
     }
   }
 
@@ -143,16 +140,12 @@ Array hhvm_get_frame_args(const ActRec* ar, int offset) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void HHVM_FUNCTION(register_postsend_function, const Variant& function,
-                   const Array& params /* = null_array */) {
-  g_context->registerShutdownFunction(function, params,
-                                      ExecutionContext::PostSend);
+void HHVM_FUNCTION(register_postsend_function, const Variant& function) {
+  g_context->registerShutdownFunction(function, ExecutionContext::PostSend);
 }
 
-void HHVM_FUNCTION(register_shutdown_function, const Variant& function,
-                   const Array& params /* = null_array */) {
-  g_context->registerShutdownFunction(function, params,
-                                      ExecutionContext::ShutDown);
+void HHVM_FUNCTION(register_shutdown_function, const Variant& function) {
+  g_context->registerShutdownFunction(function, ExecutionContext::ShutDown);
 }
 
 void StandardExtension::initFunction() {

@@ -10,7 +10,7 @@
 (*****************************************************************************)
 (* Converts a type hint into a type  *)
 (*****************************************************************************)
-open Core_kernel
+open Hh_prelude
 open Aast
 open Typing_defs
 module Partial = Partial_provider
@@ -18,7 +18,7 @@ module Partial = Partial_provider
 (* Unpacking a hint for typing *)
 let rec hint env (p, h) =
   let h = hint_ p env h in
-  (Typing_reason.Rhint p, h)
+  mk (Typing_reason.Rhint p, h)
 
 and shape_field_info_to_shape_field_type env { sfi_optional; sfi_hint; _ } =
   { sft_optional = sfi_optional; sft_ty = hint env sfi_hint }
@@ -42,14 +42,16 @@ and hint_ p env = function
   | Hdynamic -> Tdynamic
   | Hnothing -> Tnothing
   | Harray (h1, h2) ->
-    if Partial.should_check_error env.Decl_env.mode 4045 && h1 = None then
+    if Partial.should_check_error env.Decl_env.mode 4045 && Option.is_none h1
+    then
       Errors.generic_array_strict p;
     let h1 = Option.map h1 (hint env) in
     let h2 = Option.map h2 (hint env) in
     Tarray (h1, h2)
   | Hdarray (h1, h2) -> Tdarray (hint env h1, hint env h2)
   | Hvarray h -> Tvarray (hint env h)
-  | Hvarray_or_darray h -> Tvarray_or_darray (hint env h)
+  | Hvarray_or_darray (h1, h2) ->
+    Tvarray_or_darray (Option.map h1 (hint env), hint env h2)
   | Hprim p -> Tprim p
   | Habstr x -> Tgeneric x
   | Hoption (_, Hprim Tnull) ->
@@ -68,7 +70,17 @@ and hint_ p env = function
     let h = hint env h in
     Toption h
   | Hlike h -> Tlike (hint env h)
-  | Hfun (reactivity, is_coroutine, hl, kl, muts, vh, h, mut_ret) ->
+  | Hfun
+      {
+        hf_reactive_kind = reactivity;
+        hf_is_coroutine = is_coroutine;
+        hf_param_tys = hl;
+        hf_param_kinds = kl;
+        hf_param_mutability = muts;
+        hf_variadic_ty = vh;
+        hf_return_ty = h;
+        hf_is_mutable_return = mut_ret;
+      } ->
     let make_param ((p, _) as x) k mut =
       let fp_mutability =
         match mut with
@@ -81,7 +93,7 @@ and hint_ p env = function
         fp_pos = p;
         fp_name = None;
         fp_type = possibly_enforced_hint env x;
-        fp_kind = get_param_mode ~is_ref:false k;
+        fp_kind = get_param_mode k;
         fp_accept_disposable = false;
         fp_mutability;
         fp_rx_annotation = None;
@@ -104,9 +116,6 @@ and hint_ p env = function
     in
     Tfun
       {
-        ft_pos = p;
-        ft_deprecated = None;
-        ft_abstract = false;
         ft_is_coroutine = is_coroutine;
         ft_arity = arity;
         ft_tparams = ([], FTKtparams);
@@ -118,7 +127,6 @@ and hint_ p env = function
         ft_return_disposable = false;
         ft_mutability = None;
         ft_returns_mutable = mut_ret;
-        ft_decl_errors = None;
         ft_returns_void_to_rx = false;
       }
   | Happly ((p, "\\Tuple"), _)
@@ -135,6 +143,12 @@ and hint_ p env = function
   | Htuple hl ->
     let tyl = List.map hl (hint env) in
     Ttuple tyl
+  | Hunion hl ->
+    let tyl = List.map hl (hint env) in
+    Tunion tyl
+  | Hintersection hl ->
+    let tyl = List.map hl (hint env) in
+    Tintersection tyl
   | Hshape { nsi_allows_unknown_fields; nsi_field_map } ->
     let shape_kind =
       if nsi_allows_unknown_fields then

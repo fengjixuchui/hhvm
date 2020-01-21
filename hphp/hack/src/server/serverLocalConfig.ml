@@ -11,6 +11,8 @@ open Config_file.Getters
 open Hh_core
 
 type t = {
+  min_log_level: Hh_logger.Level.t;
+  experiments_config_meta: string;
   use_watchman: bool;
   watchman_init_timeout: int;
   (* in seconds *)
@@ -22,8 +24,8 @@ type t = {
   require_saved_state: bool;
   (* if attempting saved-state, should we fail upon failure? *)
   load_state_script_timeout: int;
-      (* in seconds *)
       (** Prefer using Ocaml implementation over load script. *)
+  (* in seconds *)
   load_state_natively: bool;
   type_decl_bucket_size: int;
   extend_fast_bucket_size: int;
@@ -31,7 +33,7 @@ type t = {
   enable_fuzzy_search: bool;
   lazy_parse: bool;
   lazy_init: bool;
-      (** Limit the number of clients that can sit in purgatory waiting
+  (* Limit the number of clients that can sit in purgatory waiting
    * for a server to be started because we don't want this to grow
    * unbounded. *)
   max_purgatory_clients: int;
@@ -43,7 +45,8 @@ type t = {
   shm_dirs: string list;
   state_loader_timeouts: State_loader_config.timeouts;
   max_workers: int option;
-  max_bucket_size: int;  (** See HhMonitorInformant. *)
+  max_bucket_size: int;
+  (* See HhMonitorInformant. *)
   use_dummy_informant: bool;
   informant_min_distance_restart: int;
   informant_use_xdb: bool;
@@ -95,19 +98,12 @@ type t = {
   max_times_to_defer_type_checking: int option;
   (* The whether to use the hook that prefetches files on an Eden checkout *)
   prefetch_deferred_files: bool;
-  (* If set, distributes type checking to remote workers if the number of files to
-    type check exceeds the threshold. If not set, then always checks everything locally. *)
-  remote_type_check_threshold: int option;
-  (* Enables remote type check *)
-  remote_type_check: bool;
+  (* Remote type check settings that can be changed, e.g., by GK *)
+  remote_type_check: remote_type_check;
   (* If set, uses the key to fetch type checking jobs *)
   remote_worker_key: string option;
   (* If set, uses the check ID when logging events in the context of remove init/work *)
   remote_check_id: string option;
-  (* Indicates the size of the job below which Eden should be used by the remote worker *)
-  remote_worker_eden_checkout_threshold: int;
-  (* Dictates the number of remote type checking workers *)
-  num_remote_workers: int;
   (* The version of the package the remote worker is to install *)
   remote_version_specifier: string option;
   (* Enables the reverse naming table to fall back to SQLite for queries. *)
@@ -121,13 +117,37 @@ type t = {
   tico_invalidate_files: bool;
   (* Use finer grain hh_server dependencies *)
   tico_invalidate_smart: bool;
+  (* If --profile-log, we'll record telemetry on typechecks that took longer than the threshold. In case of profile_type_check_twice we judge by the second type check. *)
   profile_type_check_duration_threshold: float;
-  (* Use shared_lru workers *)
-  use_lru_workers: bool;
+  (* The flag "--config profile_type_check_twice=true" causes each file to be typechecked twice in succession. If --profile-log then both times are logged. *)
+  profile_type_check_twice: bool;
+  (* If --profile-log, we can use "--config profile_owner=<str>" to send an arbitrary "owner" along with the telemetry *)
+  profile_owner: string;
+  (* If --profile-log, we can use "--config profile_desc=<str>" to send an arbitrary "desc" along with telemetry *)
+  profile_desc: string;
+  (* Allows the IDE to show the 'find all implementations' button *)
+  go_to_implementation: bool;
+}
+
+and remote_type_check = {
+  (* Enables remote type check *)
+  enabled: bool;
+  max_batch_size: int;
+  min_batch_size: int;
+  (* Dictates the number of remote type checking workers *)
+  num_workers: int;
+  (* If set, distributes type checking to remote workers if the number of files to
+    type check exceeds the threshold. If not set, then always checks everything locally. *)
+  recheck_threshold: int option;
+  (* Indicates the size of the job below which a virtual file system should
+    be used by the remote worker *)
+  worker_vfs_checkout_threshold: int;
 }
 
 let default =
   {
+    min_log_level = Hh_logger.Level.Info;
+    experiments_config_meta = "";
     use_watchman = false;
     (* Buck and hgwatchman use a 10 second timeout too *)
     watchman_init_timeout = 10;
@@ -179,23 +199,31 @@ let default =
     defer_class_declaration_threshold = None;
     max_times_to_defer_type_checking = None;
     prefetch_deferred_files = false;
-    remote_type_check_threshold = None;
-    remote_type_check = true;
+    remote_type_check =
+      {
+        enabled = true;
+        max_batch_size = 8_000;
+        min_batch_size = 5_000;
+        num_workers = 4;
+        recheck_threshold = None;
+        worker_vfs_checkout_threshold = 10_000;
+      };
     remote_worker_key = None;
     remote_check_id = None;
-    num_remote_workers = 4;
     remote_version_specifier = None;
-    remote_worker_eden_checkout_threshold = 10000;
     naming_sqlite_path = None;
     enable_naming_table_fallback = false;
-    symbolindex_search_provider = "TrieIndex";
+    symbolindex_search_provider = "SqliteIndex";
     symbolindex_quiet = false;
     symbolindex_file = None;
     tico_invalidate_files = false;
     tico_invalidate_smart = false;
     profile_type_check_duration_threshold = 0.05;
+    profile_type_check_twice = false;
+    profile_owner = "";
+    profile_desc = "";
     (* seconds *)
-    use_lru_workers = false;
+    go_to_implementation = true;
   }
 
 let path =
@@ -245,12 +273,123 @@ let state_loader_timeouts_ ~default config =
       current_base_rev_timeout;
     })
 
+let load_remote_type_check ~current_version config =
+  let prefix = Some "remote_type_check" in
+  let num_workers =
+    int_
+      "num_workers"
+      ~prefix
+      ~default:default.remote_type_check.num_workers
+      config
+  in
+  let max_batch_size =
+    int_
+      "max_batch_size"
+      ~prefix
+      ~default:default.remote_type_check.max_batch_size
+      config
+  in
+  let min_batch_size =
+    int_
+      "min_batch_size"
+      ~prefix
+      ~default:default.remote_type_check.min_batch_size
+      config
+  in
+  let recheck_threshold = int_opt "recheck_threshold" ~prefix config in
+  let enabled =
+    bool_if_min_version "enabled" ~prefix ~default:true ~current_version config
+  in
+  let worker_vfs_checkout_threshold =
+    int_
+      "worker_vfs_checkout_threshold"
+      ~prefix
+      ~default:default.remote_type_check.worker_vfs_checkout_threshold
+      config
+  in
+  {
+    enabled;
+    max_batch_size;
+    min_batch_size;
+    num_workers;
+    recheck_threshold;
+    worker_vfs_checkout_threshold;
+  }
+
+let apply_overrides ~silent ~current_version ~config ~overrides =
+  (* First of all, apply the CLI overrides so the settings below could be specified
+    altered via the CLI, even though the CLI overrides take precedence
+    over the experiments overrides *)
+  let config = Config_file.apply_overrides ~silent ~config ~overrides in
+  let prefix = Some "experiments_config" in
+  let enabled =
+    bool_if_min_version "enabled" ~prefix ~default:false ~current_version config
+  in
+  if enabled then (
+    match Experiments_config_file.get_primary_owner () with
+    | None -> ("No primary owner", config)
+    | Some owner ->
+      Disk.mkdir_p GlobalConfig.tmp_dir;
+      let dir = string_ "path" ~prefix ~default:GlobalConfig.tmp_dir config in
+      let file =
+        Filename.concat dir (Printf.sprintf "hh.%s.experiments" owner)
+      in
+      let update =
+        bool_if_min_version
+          "update"
+          ~prefix
+          ~default:false
+          ~current_version
+          config
+      in
+      let ttl =
+        float_of_int (int_ "ttl_seconds" ~prefix ~default:86400 config)
+      in
+      let source = string_opt "source" ~prefix config in
+      let meta =
+        if update then
+          match Experiments_config_file.update ~file ~source ~ttl with
+          | Ok meta -> meta
+          | Error message -> message
+        else
+          "Updating experimental config not enabled"
+      in
+      if Disk.file_exists file then
+        (* Apply the experiments overrides *)
+        let experiment_overrides =
+          Config_file.parse_local_config ~silent file
+        in
+        let config =
+          Config_file.apply_overrides
+            ~silent
+            ~config
+            ~overrides:experiment_overrides
+        in
+        (* Finally, reapply the CLI overrides, since they should take
+          precedence over the experiments overrides *)
+        (meta, Config_file.apply_overrides ~silent ~config ~overrides)
+      else
+        ("Experimental config not found on disk", config)
+  ) else
+    ("Experimental config not enabled", config)
+
 let load_ fn ~silent ~current_version overrides =
-  let config =
-    Config_file.apply_overrides
-      ~silent
-      ~config:(Config_file.parse_local_config ~silent fn)
-      ~overrides
+  let config = Config_file.parse_local_config ~silent fn in
+  let (experiments_config_meta, config) =
+    apply_overrides ~silent ~current_version ~config ~overrides
+  in
+  let min_log_level =
+    match
+      String.lowercase_ascii (string_ "min_log_level" ~default:"info" config)
+    with
+    | "off" -> Hh_logger.Level.Off
+    | "fatal" -> Hh_logger.Level.Fatal
+    | "error" -> Hh_logger.Level.Error
+    | "warn" -> Hh_logger.Level.Warn
+    | "info" -> Hh_logger.Level.Info
+    | "debug"
+    | _ ->
+      Hh_logger.Level.Debug
   in
   let use_watchman =
     bool_if_version "use_watchman" ~default:default.use_watchman config
@@ -343,9 +482,7 @@ let load_ fn ~silent ~current_version overrides =
       config
   in
   let io_priority = int_ "io_priority" ~default:default.io_priority config in
-  let cpu_priority =
-    int_ "cpu_priority" ~default:default.cpu_priority config
-  in
+  let cpu_priority = int_ "cpu_priority" ~default:default.cpu_priority config in
   let saved_state_cache_limit =
     int_
       "saved_state_cache_limit"
@@ -477,38 +614,19 @@ let load_ fn ~silent ~current_version overrides =
       ~current_version
       config
   in
-  let remote_type_check_threshold =
-    int_opt "remote_type_check_threshold" config
-  in
-  let remote_type_check =
-    bool_if_min_version
-      "remote_type_check"
-      ~default:true
-      ~current_version
-      config
-  in
+  let remote_type_check = load_remote_type_check ~current_version config in
   let remote_worker_key = string_opt "remote_worker_key" config in
   let remote_check_id = string_opt "remote_check_id" config in
-  let num_remote_workers =
-    int_ "num_remote_workers" ~default:default.num_remote_workers config
-  in
-  let remote_version_specifier =
-    string_opt "remote_version_specifier" config
-  in
-  let remote_worker_eden_checkout_threshold =
-    int_
-      "remote_worker_eden_checkout_threshold"
-      ~default:default.remote_worker_eden_checkout_threshold
-      config
-  in
+  let remote_version_specifier = string_opt "remote_version_specifier" config in
   let naming_sqlite_path = string_opt "naming_sqlite_path" config in
   let enable_naming_table_fallback =
     match naming_sqlite_path with
     | Some _ -> true
     | None ->
-      bool_if_version
+      bool_if_min_version
         "enable_naming_table_fallback"
         ~default:default.enable_naming_table_fallback
+        ~current_version
         config
   in
   let symbolindex_search_provider =
@@ -542,10 +660,27 @@ let load_ fn ~silent ~current_version overrides =
       ~default:default.profile_type_check_duration_threshold
       config
   in
-  let use_lru_workers =
-    bool_if_version "use_lru_workers" ~default:default.use_lru_workers config
+  let profile_type_check_twice =
+    bool_if_version
+      "profile_type_check_twice"
+      ~default:default.profile_type_check_twice
+      config
+  in
+  let profile_owner =
+    string_ "profile_owner" ~default:default.profile_owner config
+  in
+  let profile_desc =
+    string_ "profile_desc" ~default:default.profile_desc config
+  in
+  let go_to_implementation =
+    bool_if_version
+      "go_to_implementation"
+      ~default:default.go_to_implementation
+      config
   in
   {
+    min_log_level;
+    experiments_config_meta;
     use_watchman;
     watchman_init_timeout;
     watchman_subscribe;
@@ -596,12 +731,9 @@ let load_ fn ~silent ~current_version overrides =
     defer_class_declaration_threshold;
     max_times_to_defer_type_checking;
     prefetch_deferred_files;
-    remote_worker_eden_checkout_threshold;
-    remote_type_check_threshold;
     remote_type_check;
     remote_worker_key;
     remote_check_id;
-    num_remote_workers;
     remote_version_specifier;
     naming_sqlite_path;
     enable_naming_table_fallback;
@@ -611,7 +743,10 @@ let load_ fn ~silent ~current_version overrides =
     tico_invalidate_files;
     tico_invalidate_smart;
     profile_type_check_duration_threshold;
-    use_lru_workers;
+    profile_type_check_twice;
+    profile_owner;
+    profile_desc;
+    go_to_implementation;
   }
 
 let load ~silent ~current_version config_overrides =

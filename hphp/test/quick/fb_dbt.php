@@ -1,6 +1,6 @@
 <?hh
 
-$_SERVER['PHP_ROOT'] = dirname(__FILE__)."../../..";
+
 
 function h() {
     var_dump(fb_debug_backtrace());
@@ -35,14 +35,14 @@ function fb_debug_backtrace($skip_top_libcore=true, $bt=null) {
   if (!$bt) {  // fb_handle_error defaults to array() in PHP5
     $bt = debug_backtrace();
     // Remove fb_debug_backtrace from the backtrace
-    array_shift(&$bt);
+    array_shift(inout $bt);
   }
 
   // Remove all lib/core functions at the top of the stack
   if ($skip_top_libcore === true) {
     while (isset($bt[0]['file']) &&
            substr(realpath($bt[0]['file']), FbDebugBacktraceStatics::$real, 9) === 'lib/core/') {
-      array_shift(&$bt);
+      array_shift(inout $bt);
     }
   }
 
@@ -84,5 +84,8 @@ function fb_debug_backtrace($skip_top_libcore=true, $bt=null) {
 function g() {
   C::f();
 }
-g();
 
+<<__EntryPoint>> function main(): void {
+$_SERVER['PHP_ROOT'] = dirname(__FILE__)."../../..";
+g();
+}

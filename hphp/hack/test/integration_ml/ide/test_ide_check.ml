@@ -1,4 +1,3 @@
-open Integration_test_base_types
 (**
  * Copyright (c) 2016, Facebook, Inc.
  * All rights reserved.
@@ -8,6 +7,7 @@ open Integration_test_base_types
  *
  *
  *)
+open Integration_test_base_types
 
 module Test = Integration_test_base
 
@@ -75,9 +75,7 @@ function test(B $b) : void {
 
 let test () =
   let env = Test.setup_server () in
-  let env =
-    Test.setup_disk env [(a_name, a_contents1); (b_name, b_contents)]
-  in
+  let env = Test.setup_disk env [(a_name, a_contents1); (b_name, b_contents)] in
   let env = Test.connect_persistent_client env in
   let env = Test.subscribe_diagnostic env in
   (* Open a file and send two edits, both with errors, in quick succession. *)
@@ -111,7 +109,7 @@ let test () =
             [
               (* The actual change doesn't matter - saving anything to disk just
                * happens to currently be a trigger for global recheck *)
-                ("x.php", "");
+              ("x.php", "");
             ];
         })
   in

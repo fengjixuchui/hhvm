@@ -45,10 +45,10 @@ c_AsyncGeneratorWaitHandle::~c_AsyncGeneratorWaitHandle() {
 c_AsyncGeneratorWaitHandle*
 c_AsyncGeneratorWaitHandle::Create(const ActRec* fp,
                                    jit::TCA resumeAddr,
-                                   Offset resumeOffset,
+                                   Offset suspendOffset,
                                    c_WaitableWaitHandle* child) {
   assertx(fp);
-  assertx(fp->resumed());
+  assertx(isResumed(fp));
   assertx(fp->func()->isAsyncGenerator());
   assertx(child);
   assertx(child->instanceof(c_WaitableWaitHandle::classof()));
@@ -64,7 +64,7 @@ c_AsyncGeneratorWaitHandle::Create(const ActRec* fp,
   wh->incRefCount();
 
   // Set resume address and link the AGWH to the async generator.
-  gen->resumable()->setResumeAddr(resumeAddr, resumeOffset);
+  gen->resumable()->setResumeAddr(resumeAddr, suspendOffset);
   gen->attachWaitHandle(req::ptr<c_AsyncGeneratorWaitHandle>(wh));
 
   return wh.detach();
@@ -134,10 +134,10 @@ void c_AsyncGeneratorWaitHandle::await(req::ptr<c_WaitableWaitHandle>&& child) {
     .addParent(m_blockable, AsioBlockable::Kind::AsyncGeneratorWaitHandle);
 }
 
-void c_AsyncGeneratorWaitHandle::ret(Cell& result) {
+void c_AsyncGeneratorWaitHandle::ret(TypedValue& result) {
   auto parentChain = getParentChain();
   setState(STATE_SUCCEEDED);
-  cellCopy(result, m_resultOrException);
+  tvCopy(result, m_resultOrException);
   parentChain.unblock();
   m_generator.reset();
 
@@ -153,7 +153,7 @@ void c_AsyncGeneratorWaitHandle::fail(ObjectData* exception) {
 
   auto parentChain = getParentChain();
   setState(STATE_FAILED);
-  cellCopy(make_tv<KindOfObject>(exception), m_resultOrException);
+  tvCopy(make_tv<KindOfObject>(exception), m_resultOrException);
   parentChain.unblock();
   m_generator.reset();
 

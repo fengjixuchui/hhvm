@@ -7,40 +7,27 @@
  *
  *)
 
-val go_comments_for_symbol :
+(** Returns the documentation comments for the given symbol or expression. *)
+val go_comments_for_symbol_ctx :
+  ctx:Provider_context.t ->
+  entry:Provider_context.entry ->
   def:'a SymbolDefinition.t ->
   base_class_name:string option ->
-  file:ServerCommandTypes.file_input ->
   string option
-(** Returns the documentation comments for the given symbol or expression. *)
 
-val go_docblock_at :
-  filename:string ->
-  line:int ->
-  column:int ->
-  kind:SearchUtils.si_kind ->
-  DocblockService.result
-(** Returns the docblock most appropriate to this position *)
-
-val go_docblock_at_contents :
-  filename:string ->
-  contents:string ->
-  line:int ->
-  column:int ->
-  kind:SearchUtils.si_kind ->
-  DocblockService.result
 (** Returns the docblock from these file contents *)
-
-val go_locate_symbol :
-  env:ServerEnv.env ->
-  symbol:string ->
+val go_docblock_ctx :
+  ctx:Provider_context.t ->
+  entry:Provider_context.entry ->
+  line:int ->
+  column:int ->
   kind:SearchUtils.si_kind ->
-  DocblockService.dbs_symbol_location_result
-(** Returns the location of a symbol, which can be used to call go_docblock_at *)
+  DocblockService.result
 
+(** Simplified one-step symbol/docblock *)
 val go_docblock_for_symbol :
   env:ServerEnv.env ->
+  ctx:Provider_context.t ->
   symbol:string ->
   kind:SearchUtils.si_kind ->
   DocblockService.result
-(** Simplified one-step symbol/docblock *)

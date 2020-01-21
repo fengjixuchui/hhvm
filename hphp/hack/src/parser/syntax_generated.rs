@@ -129,14 +129,14 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_record_declaration(_: &C, record_attribute_spec: Self, record_modifier: Self, record_keyword: Self, record_name: Self, record_extends_keyword: Self, record_extends_list: Self, record_left_brace: Self, record_fields: Self, record_right_brace: Self) -> Self {
+    fn make_record_declaration(_: &C, record_attribute_spec: Self, record_modifier: Self, record_keyword: Self, record_name: Self, record_extends_keyword: Self, record_extends_opt: Self, record_left_brace: Self, record_fields: Self, record_right_brace: Self) -> Self {
         let syntax = SyntaxVariant::RecordDeclaration(Box::new(RecordDeclarationChildren {
             record_attribute_spec,
             record_modifier,
             record_keyword,
             record_name,
             record_extends_keyword,
-            record_extends_list,
+            record_extends_opt,
             record_left_brace,
             record_fields,
             record_right_brace,
@@ -145,13 +145,12 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_record_field(_: &C, record_field_name: Self, record_field_colon: Self, record_field_type: Self, record_field_init: Self, record_field_comma: Self) -> Self {
+    fn make_record_field(_: &C, record_field_type: Self, record_field_name: Self, record_field_init: Self, record_field_semi: Self) -> Self {
         let syntax = SyntaxVariant::RecordField(Box::new(RecordFieldChildren {
-            record_field_name,
-            record_field_colon,
             record_field_type,
+            record_field_name,
             record_field_init,
-            record_field_comma,
+            record_field_semi,
         }));
         let value = V::from_syntax(&syntax);
         Self::make(syntax, value)
@@ -326,10 +325,11 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_classish_declaration(_: &C, classish_attribute: Self, classish_modifiers: Self, classish_keyword: Self, classish_name: Self, classish_type_parameters: Self, classish_extends_keyword: Self, classish_extends_list: Self, classish_implements_keyword: Self, classish_implements_list: Self, classish_where_clause: Self, classish_body: Self) -> Self {
+    fn make_classish_declaration(_: &C, classish_attribute: Self, classish_modifiers: Self, classish_xhp: Self, classish_keyword: Self, classish_name: Self, classish_type_parameters: Self, classish_extends_keyword: Self, classish_extends_list: Self, classish_implements_keyword: Self, classish_implements_list: Self, classish_where_clause: Self, classish_body: Self) -> Self {
         let syntax = SyntaxVariant::ClassishDeclaration(Box::new(ClassishDeclarationChildren {
             classish_attribute,
             classish_modifiers,
+            classish_xhp,
             classish_keyword,
             classish_name,
             classish_type_parameters,
@@ -569,19 +569,6 @@ where
             unset_variables,
             unset_right_paren,
             unset_semicolon,
-        }));
-        let value = V::from_syntax(&syntax);
-        Self::make(syntax, value)
-    }
-
-    fn make_let_statement(_: &C, let_statement_keyword: Self, let_statement_name: Self, let_statement_colon: Self, let_statement_type: Self, let_statement_initializer: Self, let_statement_semicolon: Self) -> Self {
-        let syntax = SyntaxVariant::LetStatement(Box::new(LetStatementChildren {
-            let_statement_keyword,
-            let_statement_name,
-            let_statement_colon,
-            let_statement_type,
-            let_statement_initializer,
-            let_statement_semicolon,
         }));
         let value = V::from_syntax(&syntax);
         Self::make(syntax, value)
@@ -829,20 +816,18 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_break_statement(_: &C, break_keyword: Self, break_level: Self, break_semicolon: Self) -> Self {
+    fn make_break_statement(_: &C, break_keyword: Self, break_semicolon: Self) -> Self {
         let syntax = SyntaxVariant::BreakStatement(Box::new(BreakStatementChildren {
             break_keyword,
-            break_level,
             break_semicolon,
         }));
         let value = V::from_syntax(&syntax);
         Self::make(syntax, value)
     }
 
-    fn make_continue_statement(_: &C, continue_keyword: Self, continue_level: Self, continue_semicolon: Self) -> Self {
+    fn make_continue_statement(_: &C, continue_keyword: Self, continue_semicolon: Self) -> Self {
         let syntax = SyntaxVariant::ContinueStatement(Box::new(ContinueStatementChildren {
             continue_keyword,
-            continue_level,
             continue_semicolon,
         }));
         let value = V::from_syntax(&syntax);
@@ -1806,6 +1791,26 @@ where
         Self::make(syntax, value)
     }
 
+    fn make_union_type_specifier(_: &C, union_left_paren: Self, union_types: Self, union_right_paren: Self) -> Self {
+        let syntax = SyntaxVariant::UnionTypeSpecifier(Box::new(UnionTypeSpecifierChildren {
+            union_left_paren,
+            union_types,
+            union_right_paren,
+        }));
+        let value = V::from_syntax(&syntax);
+        Self::make(syntax, value)
+    }
+
+    fn make_intersection_type_specifier(_: &C, intersection_left_paren: Self, intersection_types: Self, intersection_right_paren: Self) -> Self {
+        let syntax = SyntaxVariant::IntersectionTypeSpecifier(Box::new(IntersectionTypeSpecifierChildren {
+            intersection_left_paren,
+            intersection_types,
+            intersection_right_paren,
+        }));
+        let value = V::from_syntax(&syntax);
+        Self::make(syntax, value)
+    }
+
     fn make_error(_: &C, error_error: Self) -> Self {
         let syntax = SyntaxVariant::ErrorSyntax(Box::new(ErrorSyntaxChildren {
             error_error,
@@ -1881,10 +1886,11 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_pocket_field_type_declaration(_: &C, pocket_field_type_case: Self, pocket_field_type_type: Self, pocket_field_type_name: Self, pocket_field_type_semicolon: Self) -> Self {
+    fn make_pocket_field_type_declaration(_: &C, pocket_field_type_case: Self, pocket_field_type_type: Self, pocket_field_type_reified: Self, pocket_field_type_name: Self, pocket_field_type_semicolon: Self) -> Self {
         let syntax = SyntaxVariant::PocketFieldTypeDeclaration(Box::new(PocketFieldTypeDeclarationChildren {
             pocket_field_type_case,
             pocket_field_type_type,
+            pocket_field_type_reified,
             pocket_field_type_name,
             pocket_field_type_semicolon,
         }));
@@ -2005,25 +2011,24 @@ where
                 acc
             },
             SyntaxVariant::RecordDeclaration(x) => {
-                let RecordDeclarationChildren { record_attribute_spec, record_modifier, record_keyword, record_name, record_extends_keyword, record_extends_list, record_left_brace, record_fields, record_right_brace } = *x;
+                let RecordDeclarationChildren { record_attribute_spec, record_modifier, record_keyword, record_name, record_extends_keyword, record_extends_opt, record_left_brace, record_fields, record_right_brace } = *x;
                 let acc = f(record_attribute_spec, acc);
                 let acc = f(record_modifier, acc);
                 let acc = f(record_keyword, acc);
                 let acc = f(record_name, acc);
                 let acc = f(record_extends_keyword, acc);
-                let acc = f(record_extends_list, acc);
+                let acc = f(record_extends_opt, acc);
                 let acc = f(record_left_brace, acc);
                 let acc = f(record_fields, acc);
                 let acc = f(record_right_brace, acc);
                 acc
             },
             SyntaxVariant::RecordField(x) => {
-                let RecordFieldChildren { record_field_name, record_field_colon, record_field_type, record_field_init, record_field_comma } = *x;
-                let acc = f(record_field_name, acc);
-                let acc = f(record_field_colon, acc);
+                let RecordFieldChildren { record_field_type, record_field_name, record_field_init, record_field_semi } = *x;
                 let acc = f(record_field_type, acc);
+                let acc = f(record_field_name, acc);
                 let acc = f(record_field_init, acc);
-                let acc = f(record_field_comma, acc);
+                let acc = f(record_field_semi, acc);
                 acc
             },
             SyntaxVariant::AliasDeclaration(x) => {
@@ -2151,9 +2156,10 @@ where
                 acc
             },
             SyntaxVariant::ClassishDeclaration(x) => {
-                let ClassishDeclarationChildren { classish_attribute, classish_modifiers, classish_keyword, classish_name, classish_type_parameters, classish_extends_keyword, classish_extends_list, classish_implements_keyword, classish_implements_list, classish_where_clause, classish_body } = *x;
+                let ClassishDeclarationChildren { classish_attribute, classish_modifiers, classish_xhp, classish_keyword, classish_name, classish_type_parameters, classish_extends_keyword, classish_extends_list, classish_implements_keyword, classish_implements_list, classish_where_clause, classish_body } = *x;
                 let acc = f(classish_attribute, acc);
                 let acc = f(classish_modifiers, acc);
+                let acc = f(classish_xhp, acc);
                 let acc = f(classish_keyword, acc);
                 let acc = f(classish_name, acc);
                 let acc = f(classish_type_parameters, acc);
@@ -2327,16 +2333,6 @@ where
                 let acc = f(unset_variables, acc);
                 let acc = f(unset_right_paren, acc);
                 let acc = f(unset_semicolon, acc);
-                acc
-            },
-            SyntaxVariant::LetStatement(x) => {
-                let LetStatementChildren { let_statement_keyword, let_statement_name, let_statement_colon, let_statement_type, let_statement_initializer, let_statement_semicolon } = *x;
-                let acc = f(let_statement_keyword, acc);
-                let acc = f(let_statement_name, acc);
-                let acc = f(let_statement_colon, acc);
-                let acc = f(let_statement_type, acc);
-                let acc = f(let_statement_initializer, acc);
-                let acc = f(let_statement_semicolon, acc);
                 acc
             },
             SyntaxVariant::UsingStatementBlockScoped(x) => {
@@ -2519,16 +2515,14 @@ where
                 acc
             },
             SyntaxVariant::BreakStatement(x) => {
-                let BreakStatementChildren { break_keyword, break_level, break_semicolon } = *x;
+                let BreakStatementChildren { break_keyword, break_semicolon } = *x;
                 let acc = f(break_keyword, acc);
-                let acc = f(break_level, acc);
                 let acc = f(break_semicolon, acc);
                 acc
             },
             SyntaxVariant::ContinueStatement(x) => {
-                let ContinueStatementChildren { continue_keyword, continue_level, continue_semicolon } = *x;
+                let ContinueStatementChildren { continue_keyword, continue_semicolon } = *x;
                 let acc = f(continue_keyword, acc);
-                let acc = f(continue_level, acc);
                 let acc = f(continue_semicolon, acc);
                 acc
             },
@@ -3222,6 +3216,20 @@ where
                 let acc = f(tuple_right_paren, acc);
                 acc
             },
+            SyntaxVariant::UnionTypeSpecifier(x) => {
+                let UnionTypeSpecifierChildren { union_left_paren, union_types, union_right_paren } = *x;
+                let acc = f(union_left_paren, acc);
+                let acc = f(union_types, acc);
+                let acc = f(union_right_paren, acc);
+                acc
+            },
+            SyntaxVariant::IntersectionTypeSpecifier(x) => {
+                let IntersectionTypeSpecifierChildren { intersection_left_paren, intersection_types, intersection_right_paren } = *x;
+                let acc = f(intersection_left_paren, acc);
+                let acc = f(intersection_types, acc);
+                let acc = f(intersection_right_paren, acc);
+                acc
+            },
             SyntaxVariant::ErrorSyntax(x) => {
                 let ErrorSyntaxChildren { error_error } = *x;
                 let acc = f(error_error, acc);
@@ -3277,9 +3285,10 @@ where
                 acc
             },
             SyntaxVariant::PocketFieldTypeDeclaration(x) => {
-                let PocketFieldTypeDeclarationChildren { pocket_field_type_case, pocket_field_type_type, pocket_field_type_name, pocket_field_type_semicolon } = *x;
+                let PocketFieldTypeDeclarationChildren { pocket_field_type_case, pocket_field_type_type, pocket_field_type_reified, pocket_field_type_name, pocket_field_type_semicolon } = *x;
                 let acc = f(pocket_field_type_case, acc);
                 let acc = f(pocket_field_type_type, acc);
+                let acc = f(pocket_field_type_reified, acc);
                 let acc = f(pocket_field_type_name, acc);
                 let acc = f(pocket_field_type_semicolon, acc);
                 acc
@@ -3358,7 +3367,6 @@ where
             SyntaxVariant::MarkupSection {..} => SyntaxKind::MarkupSection,
             SyntaxVariant::MarkupSuffix {..} => SyntaxKind::MarkupSuffix,
             SyntaxVariant::UnsetStatement {..} => SyntaxKind::UnsetStatement,
-            SyntaxVariant::LetStatement {..} => SyntaxKind::LetStatement,
             SyntaxVariant::UsingStatementBlockScoped {..} => SyntaxKind::UsingStatementBlockScoped,
             SyntaxVariant::UsingStatementFunctionScoped {..} => SyntaxKind::UsingStatementFunctionScoped,
             SyntaxVariant::WhileStatement {..} => SyntaxKind::WhileStatement,
@@ -3471,6 +3479,8 @@ where
             SyntaxVariant::TypeArguments {..} => SyntaxKind::TypeArguments,
             SyntaxVariant::TypeParameters {..} => SyntaxKind::TypeParameters,
             SyntaxVariant::TupleTypeSpecifier {..} => SyntaxKind::TupleTypeSpecifier,
+            SyntaxVariant::UnionTypeSpecifier {..} => SyntaxKind::UnionTypeSpecifier,
+            SyntaxVariant::IntersectionTypeSpecifier {..} => SyntaxKind::IntersectionTypeSpecifier,
             SyntaxVariant::ErrorSyntax {..} => SyntaxKind::ErrorSyntax,
             SyntaxVariant::ListItem {..} => SyntaxKind::ListItem,
             SyntaxVariant::PocketAtomExpression {..} => SyntaxKind::PocketAtomExpression,
@@ -3552,7 +3562,7 @@ where
                  record_right_brace: ts.pop().unwrap(),
                  record_fields: ts.pop().unwrap(),
                  record_left_brace: ts.pop().unwrap(),
-                 record_extends_list: ts.pop().unwrap(),
+                 record_extends_opt: ts.pop().unwrap(),
                  record_extends_keyword: ts.pop().unwrap(),
                  record_name: ts.pop().unwrap(),
                  record_keyword: ts.pop().unwrap(),
@@ -3560,12 +3570,11 @@ where
                  record_attribute_spec: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::RecordField, 5) => SyntaxVariant::RecordField(Box::new(RecordFieldChildren {
-                 record_field_comma: ts.pop().unwrap(),
+             (SyntaxKind::RecordField, 4) => SyntaxVariant::RecordField(Box::new(RecordFieldChildren {
+                 record_field_semi: ts.pop().unwrap(),
                  record_field_init: ts.pop().unwrap(),
-                 record_field_type: ts.pop().unwrap(),
-                 record_field_colon: ts.pop().unwrap(),
                  record_field_name: ts.pop().unwrap(),
+                 record_field_type: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::AliasDeclaration, 8) => SyntaxVariant::AliasDeclaration(Box::new(AliasDeclarationChildren {
@@ -3677,7 +3686,7 @@ where
                  methodish_trait_attribute: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::ClassishDeclaration, 11) => SyntaxVariant::ClassishDeclaration(Box::new(ClassishDeclarationChildren {
+             (SyntaxKind::ClassishDeclaration, 12) => SyntaxVariant::ClassishDeclaration(Box::new(ClassishDeclarationChildren {
                  classish_body: ts.pop().unwrap(),
                  classish_where_clause: ts.pop().unwrap(),
                  classish_implements_list: ts.pop().unwrap(),
@@ -3687,6 +3696,7 @@ where
                  classish_type_parameters: ts.pop().unwrap(),
                  classish_name: ts.pop().unwrap(),
                  classish_keyword: ts.pop().unwrap(),
+                 classish_xhp: ts.pop().unwrap(),
                  classish_modifiers: ts.pop().unwrap(),
                  classish_attribute: ts.pop().unwrap(),
                  
@@ -3831,15 +3841,6 @@ where
                  unset_variables: ts.pop().unwrap(),
                  unset_left_paren: ts.pop().unwrap(),
                  unset_keyword: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::LetStatement, 6) => SyntaxVariant::LetStatement(Box::new(LetStatementChildren {
-                 let_statement_semicolon: ts.pop().unwrap(),
-                 let_statement_initializer: ts.pop().unwrap(),
-                 let_statement_type: ts.pop().unwrap(),
-                 let_statement_colon: ts.pop().unwrap(),
-                 let_statement_name: ts.pop().unwrap(),
-                 let_statement_keyword: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::UsingStatementBlockScoped, 6) => SyntaxVariant::UsingStatementBlockScoped(Box::new(UsingStatementBlockScopedChildren {
@@ -4000,15 +4001,13 @@ where
                  throw_keyword: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::BreakStatement, 3) => SyntaxVariant::BreakStatement(Box::new(BreakStatementChildren {
+             (SyntaxKind::BreakStatement, 2) => SyntaxVariant::BreakStatement(Box::new(BreakStatementChildren {
                  break_semicolon: ts.pop().unwrap(),
-                 break_level: ts.pop().unwrap(),
                  break_keyword: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::ContinueStatement, 3) => SyntaxVariant::ContinueStatement(Box::new(ContinueStatementChildren {
+             (SyntaxKind::ContinueStatement, 2) => SyntaxVariant::ContinueStatement(Box::new(ContinueStatementChildren {
                  continue_semicolon: ts.pop().unwrap(),
-                 continue_level: ts.pop().unwrap(),
                  continue_keyword: ts.pop().unwrap(),
                  
              })),
@@ -4613,6 +4612,18 @@ where
                  tuple_left_paren: ts.pop().unwrap(),
                  
              })),
+             (SyntaxKind::UnionTypeSpecifier, 3) => SyntaxVariant::UnionTypeSpecifier(Box::new(UnionTypeSpecifierChildren {
+                 union_right_paren: ts.pop().unwrap(),
+                 union_types: ts.pop().unwrap(),
+                 union_left_paren: ts.pop().unwrap(),
+                 
+             })),
+             (SyntaxKind::IntersectionTypeSpecifier, 3) => SyntaxVariant::IntersectionTypeSpecifier(Box::new(IntersectionTypeSpecifierChildren {
+                 intersection_right_paren: ts.pop().unwrap(),
+                 intersection_types: ts.pop().unwrap(),
+                 intersection_left_paren: ts.pop().unwrap(),
+                 
+             })),
              (SyntaxKind::ErrorSyntax, 1) => SyntaxVariant::ErrorSyntax(Box::new(ErrorSyntaxChildren {
                  error_error: ts.pop().unwrap(),
                  
@@ -4660,9 +4671,10 @@ where
                  pocket_field_type_expr_case: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::PocketFieldTypeDeclaration, 4) => SyntaxVariant::PocketFieldTypeDeclaration(Box::new(PocketFieldTypeDeclarationChildren {
+             (SyntaxKind::PocketFieldTypeDeclaration, 5) => SyntaxVariant::PocketFieldTypeDeclaration(Box::new(PocketFieldTypeDeclarationChildren {
                  pocket_field_type_semicolon: ts.pop().unwrap(),
                  pocket_field_type_name: ts.pop().unwrap(),
+                 pocket_field_type_reified: ts.pop().unwrap(),
                  pocket_field_type_type: ts.pop().unwrap(),
                  pocket_field_type_case: ts.pop().unwrap(),
                  
@@ -4762,7 +4774,7 @@ pub struct RecordDeclarationChildren<T, V> {
     pub record_keyword: Syntax<T, V>,
     pub record_name: Syntax<T, V>,
     pub record_extends_keyword: Syntax<T, V>,
-    pub record_extends_list: Syntax<T, V>,
+    pub record_extends_opt: Syntax<T, V>,
     pub record_left_brace: Syntax<T, V>,
     pub record_fields: Syntax<T, V>,
     pub record_right_brace: Syntax<T, V>,
@@ -4770,11 +4782,10 @@ pub struct RecordDeclarationChildren<T, V> {
 
 #[derive(Debug, Clone)]
 pub struct RecordFieldChildren<T, V> {
-    pub record_field_name: Syntax<T, V>,
-    pub record_field_colon: Syntax<T, V>,
     pub record_field_type: Syntax<T, V>,
+    pub record_field_name: Syntax<T, V>,
     pub record_field_init: Syntax<T, V>,
-    pub record_field_comma: Syntax<T, V>,
+    pub record_field_semi: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -4905,6 +4916,7 @@ pub struct MethodishTraitResolutionChildren<T, V> {
 pub struct ClassishDeclarationChildren<T, V> {
     pub classish_attribute: Syntax<T, V>,
     pub classish_modifiers: Syntax<T, V>,
+    pub classish_xhp: Syntax<T, V>,
     pub classish_keyword: Syntax<T, V>,
     pub classish_name: Syntax<T, V>,
     pub classish_type_parameters: Syntax<T, V>,
@@ -5078,16 +5090,6 @@ pub struct UnsetStatementChildren<T, V> {
     pub unset_variables: Syntax<T, V>,
     pub unset_right_paren: Syntax<T, V>,
     pub unset_semicolon: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct LetStatementChildren<T, V> {
-    pub let_statement_keyword: Syntax<T, V>,
-    pub let_statement_name: Syntax<T, V>,
-    pub let_statement_colon: Syntax<T, V>,
-    pub let_statement_type: Syntax<T, V>,
-    pub let_statement_initializer: Syntax<T, V>,
-    pub let_statement_semicolon: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -5272,14 +5274,12 @@ pub struct ThrowStatementChildren<T, V> {
 #[derive(Debug, Clone)]
 pub struct BreakStatementChildren<T, V> {
     pub break_keyword: Syntax<T, V>,
-    pub break_level: Syntax<T, V>,
     pub break_semicolon: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ContinueStatementChildren<T, V> {
     pub continue_keyword: Syntax<T, V>,
-    pub continue_level: Syntax<T, V>,
     pub continue_semicolon: Syntax<T, V>,
 }
 
@@ -5974,6 +5974,20 @@ pub struct TupleTypeSpecifierChildren<T, V> {
 }
 
 #[derive(Debug, Clone)]
+pub struct UnionTypeSpecifierChildren<T, V> {
+    pub union_left_paren: Syntax<T, V>,
+    pub union_types: Syntax<T, V>,
+    pub union_right_paren: Syntax<T, V>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IntersectionTypeSpecifierChildren<T, V> {
+    pub intersection_left_paren: Syntax<T, V>,
+    pub intersection_types: Syntax<T, V>,
+    pub intersection_right_paren: Syntax<T, V>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ErrorSyntaxChildren<T, V> {
     pub error_error: Syntax<T, V>,
 }
@@ -6031,6 +6045,7 @@ pub struct PocketFieldTypeExprDeclarationChildren<T, V> {
 pub struct PocketFieldTypeDeclarationChildren<T, V> {
     pub pocket_field_type_case: Syntax<T, V>,
     pub pocket_field_type_type: Syntax<T, V>,
+    pub pocket_field_type_reified: Syntax<T, V>,
     pub pocket_field_type_name: Syntax<T, V>,
     pub pocket_field_type_semicolon: Syntax<T, V>,
 }
@@ -6106,7 +6121,6 @@ pub enum SyntaxVariant<T, V> {
     MarkupSection(Box<MarkupSectionChildren<T, V>>),
     MarkupSuffix(Box<MarkupSuffixChildren<T, V>>),
     UnsetStatement(Box<UnsetStatementChildren<T, V>>),
-    LetStatement(Box<LetStatementChildren<T, V>>),
     UsingStatementBlockScoped(Box<UsingStatementBlockScopedChildren<T, V>>),
     UsingStatementFunctionScoped(Box<UsingStatementFunctionScopedChildren<T, V>>),
     WhileStatement(Box<WhileStatementChildren<T, V>>),
@@ -6219,6 +6233,8 @@ pub enum SyntaxVariant<T, V> {
     TypeArguments(Box<TypeArgumentsChildren<T, V>>),
     TypeParameters(Box<TypeParametersChildren<T, V>>),
     TupleTypeSpecifier(Box<TupleTypeSpecifierChildren<T, V>>),
+    UnionTypeSpecifier(Box<UnionTypeSpecifierChildren<T, V>>),
+    IntersectionTypeSpecifier(Box<IntersectionTypeSpecifierChildren<T, V>>),
     ErrorSyntax(Box<ErrorSyntaxChildren<T, V>>),
     ListItem(Box<ListItemChildren<T, V>>),
     PocketAtomExpression(Box<PocketAtomExpressionChildren<T, V>>),
@@ -6351,7 +6367,7 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     2 => Some(&x.record_keyword),
                     3 => Some(&x.record_name),
                     4 => Some(&x.record_extends_keyword),
-                    5 => Some(&x.record_extends_list),
+                    5 => Some(&x.record_extends_opt),
                     6 => Some(&x.record_left_brace),
                     7 => Some(&x.record_fields),
                     8 => Some(&x.record_right_brace),
@@ -6360,12 +6376,11 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             RecordField(x) => {
-                get_index(5).and_then(|index| { match index {
-                        0 => Some(&x.record_field_name),
-                    1 => Some(&x.record_field_colon),
-                    2 => Some(&x.record_field_type),
-                    3 => Some(&x.record_field_init),
-                    4 => Some(&x.record_field_comma),
+                get_index(4).and_then(|index| { match index {
+                        0 => Some(&x.record_field_type),
+                    1 => Some(&x.record_field_name),
+                    2 => Some(&x.record_field_init),
+                    3 => Some(&x.record_field_semi),
                         _ => None,
                     }
                 })
@@ -6525,18 +6540,19 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             ClassishDeclaration(x) => {
-                get_index(11).and_then(|index| { match index {
+                get_index(12).and_then(|index| { match index {
                         0 => Some(&x.classish_attribute),
                     1 => Some(&x.classish_modifiers),
-                    2 => Some(&x.classish_keyword),
-                    3 => Some(&x.classish_name),
-                    4 => Some(&x.classish_type_parameters),
-                    5 => Some(&x.classish_extends_keyword),
-                    6 => Some(&x.classish_extends_list),
-                    7 => Some(&x.classish_implements_keyword),
-                    8 => Some(&x.classish_implements_list),
-                    9 => Some(&x.classish_where_clause),
-                    10 => Some(&x.classish_body),
+                    2 => Some(&x.classish_xhp),
+                    3 => Some(&x.classish_keyword),
+                    4 => Some(&x.classish_name),
+                    5 => Some(&x.classish_type_parameters),
+                    6 => Some(&x.classish_extends_keyword),
+                    7 => Some(&x.classish_extends_list),
+                    8 => Some(&x.classish_implements_keyword),
+                    9 => Some(&x.classish_implements_list),
+                    10 => Some(&x.classish_where_clause),
+                    11 => Some(&x.classish_body),
                         _ => None,
                     }
                 })
@@ -6745,18 +6761,6 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     2 => Some(&x.unset_variables),
                     3 => Some(&x.unset_right_paren),
                     4 => Some(&x.unset_semicolon),
-                        _ => None,
-                    }
-                })
-            },
-            LetStatement(x) => {
-                get_index(6).and_then(|index| { match index {
-                        0 => Some(&x.let_statement_keyword),
-                    1 => Some(&x.let_statement_name),
-                    2 => Some(&x.let_statement_colon),
-                    3 => Some(&x.let_statement_type),
-                    4 => Some(&x.let_statement_initializer),
-                    5 => Some(&x.let_statement_semicolon),
                         _ => None,
                     }
                 })
@@ -6983,19 +6987,17 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             BreakStatement(x) => {
-                get_index(3).and_then(|index| { match index {
+                get_index(2).and_then(|index| { match index {
                         0 => Some(&x.break_keyword),
-                    1 => Some(&x.break_level),
-                    2 => Some(&x.break_semicolon),
+                    1 => Some(&x.break_semicolon),
                         _ => None,
                     }
                 })
             },
             ContinueStatement(x) => {
-                get_index(3).and_then(|index| { match index {
+                get_index(2).and_then(|index| { match index {
                         0 => Some(&x.continue_keyword),
-                    1 => Some(&x.continue_level),
-                    2 => Some(&x.continue_semicolon),
+                    1 => Some(&x.continue_semicolon),
                         _ => None,
                     }
                 })
@@ -7868,6 +7870,24 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     }
                 })
             },
+            UnionTypeSpecifier(x) => {
+                get_index(3).and_then(|index| { match index {
+                        0 => Some(&x.union_left_paren),
+                    1 => Some(&x.union_types),
+                    2 => Some(&x.union_right_paren),
+                        _ => None,
+                    }
+                })
+            },
+            IntersectionTypeSpecifier(x) => {
+                get_index(3).and_then(|index| { match index {
+                        0 => Some(&x.intersection_left_paren),
+                    1 => Some(&x.intersection_types),
+                    2 => Some(&x.intersection_right_paren),
+                        _ => None,
+                    }
+                })
+            },
             ErrorSyntax(x) => {
                 get_index(1).and_then(|index| { match index {
                         0 => Some(&x.error_error),
@@ -7937,11 +7957,12 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             PocketFieldTypeDeclaration(x) => {
-                get_index(4).and_then(|index| { match index {
+                get_index(5).and_then(|index| { match index {
                         0 => Some(&x.pocket_field_type_case),
                     1 => Some(&x.pocket_field_type_type),
-                    2 => Some(&x.pocket_field_type_name),
-                    3 => Some(&x.pocket_field_type_semicolon),
+                    2 => Some(&x.pocket_field_type_reified),
+                    3 => Some(&x.pocket_field_type_name),
+                    4 => Some(&x.pocket_field_type_semicolon),
                         _ => None,
                     }
                 })

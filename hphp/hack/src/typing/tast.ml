@@ -11,7 +11,7 @@ include Aast_defs
 
 [@@@warning "-33"]
 
-open Core_kernel
+open Hh_prelude
 
 [@@@warning "+33"]
 
@@ -20,11 +20,11 @@ open Core_kernel
  * that omits type inference artefacts such as type variables and lambda
  * identifiers.
  *)
-type ty = Typing_defs.locl Typing_defs.ty
+type ty = Typing_defs.locl_ty
 
-type possibly_enforced_ty = Typing_defs.locl Typing_defs.possibly_enforced_ty
+type possibly_enforced_ty = Typing_defs.locl_possibly_enforced_ty
 
-type decl_ty = Typing_defs.decl Typing_defs.ty
+type decl_ty = Typing_defs.decl_ty
 
 type reactivity = Typing_defs.reactivity
 
@@ -34,13 +34,13 @@ type type_param_mutability = Typing_defs.param_mutability
 
 type val_kind = Typing_defs.val_kind
 
-let pp_ty fmt ty = Pp_type.pp_ty () fmt ty
+let pp_ty = Pp_type.pp_locl_ty
 
-let show_ty ty = Pp_type.show_ty () ty
+let show_ty = Pp_type.show_locl_ty
 
-let pp_decl_ty fmt ty = Pp_type.pp_ty () fmt ty
+let pp_decl_ty = Pp_type.pp_decl_ty
 
-let show_decl_ty ty = Pp_type.show_ty () ty
+let show_decl_ty = Pp_type.show_decl_ty
 
 let pp_reactivity fmt r = Pp_type.pp_reactivity fmt r
 
@@ -57,8 +57,7 @@ let pp_type_param_mutability fmt v =
 
 type saved_env = {
   tcopt: TypecheckerOptions.t; [@opaque]
-  tenv: ty IMap.t;
-  subst: int IMap.t;
+  inference_env: Typing_inference_env.t;
   tpenv: Type_parameter_env.t;
   reactivity: reactivity;
   local_mutability: mutability_env;
@@ -71,7 +70,7 @@ type func_body_ann =
   (* True if there are any UNSAFE blocks *)
   | HasUnsafeBlocks
   | NoUnsafeBlocks
-[@@deriving show]
+[@@deriving eq, show]
 
 type program = (Pos.t * ty, func_body_ann, saved_env, ty) Aast.program
 [@@deriving show]
@@ -89,6 +88,10 @@ type block = (Pos.t * ty, func_body_ann, saved_env, ty) Aast.block
 type class_ = (Pos.t * ty, func_body_ann, saved_env, ty) Aast.class_
 
 type class_id = (Pos.t * ty, func_body_ann, saved_env, ty) Aast.class_id
+
+type type_hint = ty Aast.type_hint
+
+type targ = ty Aast.targ
 
 type class_get_expr =
   (Pos.t * ty, func_body_ann, saved_env, ty) Aast.class_get_expr
@@ -123,6 +126,8 @@ type tparam = (Pos.t * ty, func_body_ann, saved_env, ty) Aast.tparam
 
 type typedef = (Pos.t * ty, func_body_ann, saved_env, ty) Aast.typedef
 
+type record_def = (Pos.t * ty, func_body_ann, saved_env, ty) Aast.record_def
+
 type gconst = (Pos.t * ty, func_body_ann, saved_env, ty) Aast.gconst
 
 type pu_enum = (Pos.t * ty, func_body_ann, saved_env, ty) Aast.pu_enum
@@ -130,8 +135,7 @@ type pu_enum = (Pos.t * ty, func_body_ann, saved_env, ty) Aast.pu_enum
 let empty_saved_env tcopt : saved_env =
   {
     tcopt;
-    tenv = IMap.empty;
-    subst = IMap.empty;
+    inference_env = Typing_inference_env.empty_inference_env;
     tpenv = Type_parameter_env.empty;
     reactivity = Typing_defs.Nonreactive;
     local_mutability = Local_id.Map.empty;
@@ -144,7 +148,8 @@ let empty_saved_env tcopt : saved_env =
  *)
 let dummy_saved_env = empty_saved_env GlobalOptions.default
 
-let dummy_type_hint = ((Typing_reason.Rnone, Typing_defs.Tdynamic), None)
+let dummy_type_hint : ty * 'a option =
+  (Typing_defs.mk (Typing_reason.Rnone, Typing_defs.Tdynamic), None)
 
 (* Helper function to create an annotation for a typed and positioned expression.
  * Do not construct this tuple directly - at some point we will build

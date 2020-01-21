@@ -12,7 +12,7 @@ class State { static $staticX = 4; }
 /**
  * This is f's doc comment.
  */
-function f($a, &$b, $c=null, $d=array(1, 2, SOME_CONSTANT)) {
+function f($a, inout $b, $c=null, $d=array(1, 2, SOME_CONSTANT)) {
   print "In f()\n";
   State::$staticX++;
   $x = State::$staticX;
@@ -315,7 +315,7 @@ print "\n";
 
 print "--- get_defined_functions() ---\n";
 $a = get_defined_functions()["user"];
-sort(&$a);
+sort(inout $a);
 var_dump($a);
 
 print "--- get_defined_constants() ---\n";

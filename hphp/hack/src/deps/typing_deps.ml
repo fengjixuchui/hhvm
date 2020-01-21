@@ -14,33 +14,64 @@ open Utils
 (* Handling dependencies *)
 (**********************************)
 module Dep = struct
-  type variant =
-    (* GConst is used for "global" constants, in other words,
-     * constants that were introduced using "const X = ..." or
-     * "define('X', ...)".
-     *)
-    | GConst of string
-    | GConstName of string
-    (* Const is used to represent class constants. *)
-    | Const of string * string
-    (* There is a dependency on all members of a class *)
-    | AllMembers of string
-    | Class of string
-    | Fun of string
-    | FunName of string
-    | Prop of string * string
-    | SProp of string * string
-    | Method of string * string
-    | SMethod of string * string
-    | Cstr of string
-    | Extends of string
+  type dependent
+
+  type dependency
+
+  type _ variant =
+    | GConst : string -> 'a variant
+    | GConstName : string -> 'a variant
+    | Const : (string * string) -> dependency variant
+    | AllMembers : string -> dependency variant
+    | Class : string -> 'a variant
+    | RecordDef : string -> 'a variant
+    | Fun : string -> 'a variant
+    | FunName : string -> 'a variant
+    | Prop : (string * string) -> dependency variant
+    | SProp : (string * string) -> dependency variant
+    | Method : (string * string) -> dependency variant
+    | SMethod : (string * string) -> dependency variant
+    | Cstr : string -> dependency variant
+    | Extends : string -> dependency variant
+
+  (** Explicit [equals] function since [=] doesn't work on the [variant] GADT. *)
+  let variant_equals : type a b. a variant -> b variant -> bool =
+   fun lhs rhs ->
+    match (lhs, rhs) with
+    | (GConst lhs, GConst rhs) -> lhs = rhs
+    | (Class lhs, Class rhs) -> lhs = rhs
+    | (RecordDef lhs, RecordDef rhs) -> lhs = rhs
+    | (Fun lhs, Fun rhs) -> lhs = rhs
+    | (Const lhs, Const rhs) -> lhs = rhs
+    | (Prop lhs, Prop rhs) -> lhs = rhs
+    | (SProp lhs, SProp rhs) -> lhs = rhs
+    | (Method lhs, Method rhs) -> lhs = rhs
+    | (SMethod lhs, SMethod rhs) -> lhs = rhs
+    | (GConstName lhs, GConstName rhs) -> lhs = rhs
+    | (FunName lhs, FunName rhs) -> lhs = rhs
+    | (AllMembers lhs, AllMembers rhs) -> lhs = rhs
+    | (Extends lhs, Extends rhs) -> lhs = rhs
+    | (GConst _, _) -> false
+    | (Class _, _) -> false
+    | (RecordDef _, _) -> false
+    | (Fun _, _) -> false
+    | (Cstr _, _) -> false
+    | (Const _, _) -> false
+    | (Prop _, _) -> false
+    | (SProp _, _) -> false
+    | (Method _, _) -> false
+    | (SMethod _, _) -> false
+    | (GConstName _, _) -> false
+    | (FunName _, _) -> false
+    | (AllMembers _, _) -> false
+    | (Extends _, _) -> false
 
   type t = int
 
   (* 30 bits for the hash and 1 bit to determine if something is a class *)
   let mask = (1 lsl 30) - 1
 
-  let make = function
+  let make : type a. a variant -> t = function
     | Class class_name ->
       let h = Hashtbl.hash class_name land mask in
       let h = h lsl 1 in
@@ -61,20 +92,42 @@ module Dep = struct
 
   let compare = ( - )
 
-  let to_string = function
-    | GConst s -> "GConst " ^ Utils.strip_ns s
-    | GConstName s -> "GConstName " ^ Utils.strip_ns s
-    | Const (cls, s) -> spf "Const %s::%s" (Utils.strip_ns cls) s
-    | Class s -> "Class " ^ Utils.strip_ns s
-    | Fun s -> "Fun " ^ Utils.strip_ns s
-    | FunName s -> "FunName " ^ Utils.strip_ns s
-    | Prop (cls, s) -> spf "Prop %s::%s" (Utils.strip_ns cls) s
-    | SProp (cls, s) -> spf "SProp %s::%s" (Utils.strip_ns cls) s
-    | Method (cls, s) -> spf "Method %s::%s" (Utils.strip_ns cls) s
-    | SMethod (cls, s) -> spf "SMethod %s::%s" (Utils.strip_ns cls) s
-    | Cstr s -> "Cstr " ^ Utils.strip_ns s
-    | AllMembers s -> "AllMembers " ^ Utils.strip_ns s
-    | Extends s -> "Extends " ^ Utils.strip_ns s
+  let extract_name : type a. a variant -> string = function
+    | GConst s -> Utils.strip_ns s
+    | GConstName s -> Utils.strip_ns s
+    | Const (cls, s) -> spf "%s::%s" (Utils.strip_ns cls) s
+    | Class s -> Utils.strip_ns s
+    | RecordDef s -> Utils.strip_ns s
+    | Fun s -> Utils.strip_ns s
+    | FunName s -> Utils.strip_ns s
+    | Prop (cls, s) -> spf "%s::%s" (Utils.strip_ns cls) s
+    | SProp (cls, s) -> spf "%s::%s" (Utils.strip_ns cls) s
+    | Method (cls, s) -> spf "%s::%s" (Utils.strip_ns cls) s
+    | SMethod (cls, s) -> spf "%s::%s" (Utils.strip_ns cls) s
+    | Cstr s -> Utils.strip_ns s
+    | AllMembers s -> Utils.strip_ns s
+    | Extends s -> Utils.strip_ns s
+
+  let to_string : type a. a variant -> string =
+   fun dep ->
+    let prefix =
+      match dep with
+      | GConst _ -> "GConst"
+      | GConstName _ -> "GConstName"
+      | Const _ -> "Const"
+      | Class _ -> "Class"
+      | RecordDef _ -> "RecordDef"
+      | Fun _ -> "Fun"
+      | FunName _ -> "FunName"
+      | Prop _ -> "Prop"
+      | SProp _ -> "SProp"
+      | Method _ -> "Method"
+      | SMethod _ -> "SMethod"
+      | Cstr _ -> "Cstr"
+      | AllMembers _ -> "AllMembers"
+      | Extends _ -> "Extends"
+    in
+    prefix ^ " " ^ extract_name dep
 end
 
 module DepSet = struct
@@ -137,8 +190,9 @@ let dependency_callbacks = Caml.Hashtbl.create 0
 let add_dependency_callback cb_name cb =
   Caml.Hashtbl.replace dependency_callbacks cb_name cb
 
-let add_idep root obj =
-  if root = obj then
+let add_idep
+    (root : Dep.dependent Dep.variant) (obj : Dep.dependency Dep.variant) =
+  if Dep.variant_equals root obj then
     ()
   else (
     Caml.Hashtbl.iter (fun _ f -> f root obj) dependency_callbacks;
@@ -170,6 +224,7 @@ let update_file filename info =
   let {
     FileInfo.funs;
     classes;
+    record_defs;
     typedefs;
     consts;
     comments = _;
@@ -193,7 +248,8 @@ let update_file filename info =
       funs
       ~f:
         begin
-          fun acc (_, fun_id) -> DepSet.add acc (Dep.make (Dep.Fun fun_id))
+          fun acc (_, fun_id) ->
+          DepSet.add acc (Dep.make (Dep.Fun fun_id))
         end
       ~init:DepSet.empty
   in
@@ -209,10 +265,21 @@ let update_file filename info =
   in
   let classes =
     List.fold_left
+      record_defs
+      ~f:
+        begin
+          fun acc (_, type_id) ->
+          DepSet.add acc (Dep.make (Dep.Class type_id))
+        end
+      ~init:classes
+  in
+  let classes =
+    List.fold_left
       typedefs
       ~f:
         begin
-          fun acc (_, type_id) -> DepSet.add acc (Dep.make (Dep.Class type_id))
+          fun acc (_, type_id) ->
+          DepSet.add acc (Dep.make (Dep.Class type_id))
         end
       ~init:classes
   in

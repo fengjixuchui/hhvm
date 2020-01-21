@@ -21,8 +21,8 @@
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
-#include "hphp/runtime/base/externals.h"
 #include "hphp/runtime/base/root-map.h"
+#include "hphp/runtime/base/type-variant.h"
 #include "hphp/runtime/base/zend-functions.h"
 #include "hphp/runtime/base/zend-string.h"
 #include "hphp/runtime/vm/jit/translator.h"
@@ -389,7 +389,7 @@ static Variant xml_call_handler(const req::ptr<XmlParser>& parser,
     Variant retval;
     if (handler.isString() && !name_contains_class(handler.toString())) {
       if (!parser->object.isObject()) {
-        retval = invoke(handler.toString().c_str(), args, -1);
+        retval = invoke(handler.toString(), args);
       } else {
         retval = parser->object.toObject()->
           o_invoke(handler.toString(), args);
@@ -410,10 +410,10 @@ static void _xml_add_to_info(const req::ptr<XmlParser>& parser,
     return;
   }
   forceToArray(parser->info);
-  if (!parser->info.toCArrRef().exists(nameStr)) {
-    parser->info.toArrRef().set(nameStr, Array::Create());
+  if (!parser->info.asCArrRef().exists(nameStr)) {
+    parser->info.asArrRef().set(nameStr, Array::Create());
   }
-  auto const inner = parser->info.toArrRef().lvalAt(nameStr);
+  auto const inner = parser->info.asArrRef().lval(nameStr);
   forceToArray(inner).append(parser->curtag);
   parser->curtag++;
 }
@@ -447,14 +447,15 @@ void _xml_endElementHandler(void *userData, const XML_Char *name) {
 
     if (!parser->data.isNull()) {
       if (parser->lastwasopen) {
-        parser->ctag.toArrRef().set(s_type, s_complete);
+        asArrRef(parser->data.asArrRef().lval(parser->ctag))
+          .set(s_type, s_complete);
       } else {
         DArrayInit tag(3);
         _xml_add_to_info(parser, tag_name.substr(parser->toffset));
         tag.set(s_tag, tag_name.substr(parser->toffset));
         tag.set(s_type, s_close);
         tag.set(s_level, parser->level);
-        parser->data.toArrRef().append(tag.toArray());
+        parser->data.asArrRef().append(tag.toArray());
       }
       parser->lastwasopen = 0;
     }
@@ -506,13 +507,14 @@ void _xml_characterDataHandler(void *userData, const XML_Char *s, int len) {
       if (doprint || (! parser->skipwhite)) {
         if (parser->lastwasopen) {
           String myval;
+          auto ctag = parser->data.asArrRef().lval(parser->ctag);
           // check if value exists, if yes append to that
-          if (parser->ctag.toArrRef().exists(s_value)) {
-            myval = tvCastToString(parser->ctag.toArray().rvalAt(s_value).tv());
+          if (asCArrRef(ctag).exists(s_value)) {
+            myval = tvCastToString(asCArrRef(ctag).rval(s_value).tv());
             myval += decoded_value;
-            parser->ctag.toArrRef().set(s_value, myval);
+            asArrRef(ctag).set(s_value, myval);
           } else {
-            parser->ctag.toArrRef().set(
+            asArrRef(ctag).set(
               s_value,
               decoded_value
             );
@@ -522,20 +524,20 @@ void _xml_characterDataHandler(void *userData, const XML_Char *s, int len) {
           String myval;
           String mytype;
 
-          auto curtag = parser->data.toArrRef().pop();
+          auto curtag = parser->data.asArrRef().pop();
           SCOPE_EXIT {
             try {
-              parser->data.toArrRef().append(curtag);
+              parser->data.asArrRef().append(curtag);
             } catch (...) {}
           };
 
-          if (curtag.toArrRef().exists(s_type)) {
-            mytype = tvCastToString(curtag.toArrRef().rvalAt(s_type).tv());
+          if (curtag.asArrRef().exists(s_type)) {
+            mytype = tvCastToString(curtag.asArrRef().rval(s_type).tv());
             if (!strcmp(mytype.data(), "cdata") &&
-                curtag.toArrRef().exists(s_value)) {
-              myval = tvCastToString(curtag.toArrRef().rvalAt(s_value).tv());
+                curtag.asArrRef().exists(s_value)) {
+              myval = tvCastToString(curtag.asArrRef().rval(s_value).tv());
               myval += decoded_value;
-              curtag.toArrRef().set(s_value, myval);
+              curtag.asArrRef().set(s_value, myval);
               return;
             }
           }
@@ -548,7 +550,7 @@ void _xml_characterDataHandler(void *userData, const XML_Char *s, int len) {
             tag.set(s_value, decoded_value);
             tag.set(s_type, s_cdata);
             tag.set(s_level, parser->level);
-            parser->data.toArrRef().append(tag);
+            parser->data.asArrRef().append(tag);
           } else if (parser->level == (XML_MAXLEVEL + 1)) {
             raise_warning("Maximum depth exceeded - Results truncated");
           }
@@ -591,7 +593,7 @@ void _xml_startElementHandler(void *userData, const XML_Char *name, const XML_Ch
         String val = xml_utf8_decode(attributes[1],
                                     strlen((const char*)attributes[1]),
                                     parser->target_encoding);
-        auto const arr = args.lvalAt(2);
+        auto const arr = args.lval(2);
         asArrRef(arr).set(att, val);
         attributes += 2;
       }
@@ -630,11 +632,11 @@ void _xml_startElementHandler(void *userData, const XML_Char *name, const XML_Ch
         if (atcnt) {
           tag.set(s_attributes,atr);
         }
-        SuppressHACFalseyPromoteNotices shacn;
-        auto lval = parser->data.toArrRef().lvalAt();
+        auto& arr = parser->data.asArrRef();
+        auto lval = arr.lvalForce();
         type(lval) = KindOfArray;
         val(lval).parr = tag.detach();
-        parser->ctag.assignRef(lval);
+        parser->ctag = arr->getKey(arr->iter_last());
       } else if (parser->level == (XML_MAXLEVEL + 1)) {
         raise_warning("Maximum depth exceeded - Results truncated");
       }

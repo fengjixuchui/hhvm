@@ -16,13 +16,12 @@
  **
  *
  */
-use crate::ocaml_syntax::{OcamlSyntax, Context};
-use crate::rust_to_ocaml::*;
+use crate::{OcamlSyntax, Context};
+use rust_to_ocaml::*;
 
-use parser_rust as parser;
-use parser::syntax_kind::SyntaxKind;
-use parser::syntax::{SyntaxType, SyntaxValueType};
-use parser::positioned_token::PositionedToken;
+use parser_core_types::syntax_kind::SyntaxKind;
+use parser_core_types::syntax::{SyntaxType, SyntaxValueType};
+use parser_core_types::positioned_token::PositionedToken;
 
 impl<V, C> SyntaxType<'_, C> for OcamlSyntax<V>
 where
@@ -269,13 +268,12 @@ where
       Self { syntax, value }
     }
 
-    fn make_record_field(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self) -> Self {
+    fn make_record_field(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self) -> Self {
       let children = [
           &arg0.value, 
           &arg1.value, 
           &arg2.value, 
-          &arg3.value, 
-          &arg4.value
+          &arg3.value
       ];
       let value = V::from_values(&children);
       let syntax = Self::make(
@@ -286,8 +284,7 @@ where
               arg0.syntax, 
               arg1.syntax, 
               arg2.syntax, 
-              arg3.syntax, 
-              arg4.syntax
+              arg3.syntax
           ],
       );
       Self { syntax, value }
@@ -631,7 +628,7 @@ where
       Self { syntax, value }
     }
 
-    fn make_classish_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self, arg7: Self, arg8: Self, arg9: Self, arg10: Self) -> Self {
+    fn make_classish_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self, arg7: Self, arg8: Self, arg9: Self, arg10: Self, arg11: Self) -> Self {
       let children = [
           &arg0.value, 
           &arg1.value, 
@@ -643,7 +640,8 @@ where
           &arg7.value, 
           &arg8.value, 
           &arg9.value, 
-          &arg10.value
+          &arg10.value, 
+          &arg11.value
       ];
       let value = V::from_values(&children);
       let syntax = Self::make(
@@ -661,7 +659,8 @@ where
               arg7.syntax, 
               arg8.syntax, 
               arg9.syntax, 
-              arg10.syntax
+              arg10.syntax, 
+              arg11.syntax
           ],
       );
       Self { syntax, value }
@@ -1122,32 +1121,6 @@ where
               arg2.syntax, 
               arg3.syntax, 
               arg4.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_let_statement(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self) -> Self {
-      let children = [
-          &arg0.value, 
-          &arg1.value, 
-          &arg2.value, 
-          &arg3.value, 
-          &arg4.value, 
-          &arg5.value
-      ];
-      let value = V::from_values(&children);
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::LetStatement,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax, 
-              arg3.syntax, 
-              arg4.syntax, 
-              arg5.syntax
           ],
       );
       Self { syntax, value }
@@ -1637,11 +1610,10 @@ where
       Self { syntax, value }
     }
 
-    fn make_break_statement(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
+    fn make_break_statement(ctx: &C, arg0: Self, arg1: Self) -> Self {
       let children = [
           &arg0.value, 
-          &arg1.value, 
-          &arg2.value
+          &arg1.value
       ];
       let value = V::from_values(&children);
       let syntax = Self::make(
@@ -1650,18 +1622,16 @@ where
           &value,
           &[
               arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax
+              arg1.syntax
           ],
       );
       Self { syntax, value }
     }
 
-    fn make_continue_statement(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
+    fn make_continue_statement(ctx: &C, arg0: Self, arg1: Self) -> Self {
       let children = [
           &arg0.value, 
-          &arg1.value, 
-          &arg2.value
+          &arg1.value
       ];
       let value = V::from_values(&children);
       let syntax = Self::make(
@@ -1670,8 +1640,7 @@ where
           &value,
           &[
               arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax
+              arg1.syntax
           ],
       );
       Self { syntax, value }
@@ -3591,6 +3560,46 @@ where
       Self { syntax, value }
     }
 
+    fn make_union_type_specifier(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
+      let children = [
+          &arg0.value, 
+          &arg1.value, 
+          &arg2.value
+      ];
+      let value = V::from_values(&children);
+      let syntax = Self::make(
+          ctx,
+          SyntaxKind::UnionTypeSpecifier,
+          &value,
+          &[
+              arg0.syntax, 
+              arg1.syntax, 
+              arg2.syntax
+          ],
+      );
+      Self { syntax, value }
+    }
+
+    fn make_intersection_type_specifier(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
+      let children = [
+          &arg0.value, 
+          &arg1.value, 
+          &arg2.value
+      ];
+      let value = V::from_values(&children);
+      let syntax = Self::make(
+          ctx,
+          SyntaxKind::IntersectionTypeSpecifier,
+          &value,
+          &[
+              arg0.syntax, 
+              arg1.syntax, 
+              arg2.syntax
+          ],
+      );
+      Self { syntax, value }
+    }
+
     fn make_error(ctx: &C, arg0: Self) -> Self {
       let children = [
           &arg0.value
@@ -3741,12 +3750,13 @@ where
       Self { syntax, value }
     }
 
-    fn make_pocket_field_type_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self) -> Self {
+    fn make_pocket_field_type_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self) -> Self {
       let children = [
           &arg0.value, 
           &arg1.value, 
           &arg2.value, 
-          &arg3.value
+          &arg3.value, 
+          &arg4.value
       ];
       let value = V::from_values(&children);
       let syntax = Self::make(
@@ -3757,7 +3767,8 @@ where
               arg0.syntax, 
               arg1.syntax, 
               arg2.syntax, 
-              arg3.syntax
+              arg3.syntax, 
+              arg4.syntax
           ],
       );
       Self { syntax, value }

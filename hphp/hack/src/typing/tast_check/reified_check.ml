@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Typing_defs
 open Type_validator
@@ -22,12 +22,13 @@ let validator =
     inherit type_validator as super
 
     method! on_tapply acc r (p, h) tyl =
-      if h = SN.Classes.cTypename then
+      if String.equal h SN.Classes.cTypename then
         this#invalid acc r "a typename"
-      else if h = SN.Classes.cClassname then
+      else if String.equal h SN.Classes.cClassname then
         this#invalid acc r "a classname"
       else if
-        h = SN.Typehints.wildcard && not (Env.get_allow_wildcards acc.env)
+        String.equal h SN.Typehints.wildcard
+        && not (Env.get_allow_wildcards acc.env)
       then
         this#invalid acc r "a wildcard"
       else
@@ -39,71 +40,30 @@ let validator =
       | Nast.SoftReified -> this#invalid acc r "soft reified"
       | Nast.Reified -> acc
 
-    method! on_tarraykind acc r _ = this#invalid acc r "an array"
+    method! on_tarray acc r _ _ = this#invalid acc r "an array type"
+
+    method! on_tvarray_or_darray acc r _ _ = this#invalid acc r "an array type"
 
     method! on_tfun acc r _ = this#invalid acc r "a function type"
 
-    method! on_taccess acc r (root, ids) =
-      (* We care only about the last type constant we access in the chain
-       * this::T1::T2::Tn. So we reverse the ids to get the last one then we resolve
-       * up to that point using localize to determine the root. i.e. we resolve
-       *   root = (this::T1::T2)
-       *   id = Tn
-       *)
-      match List.rev ids with
-      | [] -> this#on_type acc root
-      | (_, tconst) :: rest ->
-        let root =
-          if rest = [] then
-            root
-          else
-            (r, Taccess (root, List.rev rest))
+    method! on_typeconst acc is_concrete typeconst =
+      match typeconst.ttc_abstract with
+      | _ when Option.is_some typeconst.ttc_reifiable || is_concrete ->
+        super#on_typeconst acc is_concrete typeconst
+      | _ ->
+        let r = Reason.Rwitness (fst typeconst.ttc_name) in
+        let kind =
+          "an abstract type constant without the __Reifiable attribute"
         in
-        let (env, root) = Env.localize acc.env acc.ety_env root in
-        let (env, tyl) = Env.get_concrete_supertypes env root in
-        List.fold tyl ~init:acc ~f:(fun acc ty ->
-            match snd ty with
-            | Typing_defs.Tclass ((_, class_name), _, _) ->
-              let ( >>= ) = Option.( >>= ) in
-              Option.value
-                ~default:acc
-                ( Env.get_class env class_name
-                >>= fun class_ ->
-                Cls.get_typeconst class_ tconst
-                >>= fun typeconst ->
-                match typeconst.ttc_abstract with
-                | _ when typeconst.ttc_reifiable <> None -> Some acc
-                | TCConcrete -> Some acc
-                (* This handles the case for partially abstract type constants. In this case
-                 * we know the assigned type will be chosen if the root is the same as the
-                 * concrete supertype of the root.
-                 *)
-                | TCPartiallyAbstract when phys_equal root ty -> Some acc
-                | _ ->
-                  let r = Reason.Rwitness (fst typeconst.ttc_name) in
-                  let kind =
-                    "an abstract type constant without the __Reifiable attribute"
-                  in
-                  Some (this#invalid acc r kind) )
-            | _ -> acc)
+        this#invalid acc r kind
 
-    method! on_tabstract acc r ak _ty_opt =
-      match ak with
-      | AKdependent DTthis ->
-        this#invalid acc r "the late static bound this type"
-      | AKgeneric _
-      | AKnewtype _
-      | AKdependent _ ->
-        acc
+    method! on_tthis acc r =
+      this#invalid acc r "the late static bound this type"
   end
 
-let tparams_has_reified tparams =
-  List.exists tparams ~f:(fun tparam -> tparam.tp_reified <> Nast.Erased)
+let is_reified tparam = not (equal_reify_kind tparam.tp_reified Erased)
 
-let check_explicit expr_pos tparams =
-  List.iter tparams ~f:(fun tparam ->
-      if Attributes.mem UA.uaExplicit tparam.tp_user_attributes then
-        Errors.require_generic_explicit tparam.tp_name expr_pos)
+let tparams_has_reified tparams = List.exists tparams ~f:is_reified
 
 let valid_newable_hint env tp (pos, hint) =
   match hint with
@@ -111,7 +71,7 @@ let valid_newable_hint env tp (pos, hint) =
     begin
       match Env.get_class env h with
       | Some cls ->
-        if Cls.kind cls <> Ast_defs.Cnormal then
+        if not Ast_defs.(equal_class_kind (Cls.kind cls) Cnormal) then
           Errors.invalid_newable_type_argument tp p
       | None ->
         (* This case should never happen *)
@@ -127,16 +87,24 @@ let verify_has_consistent_bound env (tparam : Tast.tparam) =
     Typing_set.elements (Env.get_upper_bounds env (snd tparam.tp_name))
   in
   let bound_classes =
-    List.filter_map upper_bounds ~f:(function
-        | (_, Tclass ((_, class_id), _, _)) -> Env.get_class env class_id
+    List.filter_map upper_bounds ~f:(fun ty ->
+        match get_node ty with
+        | Tclass ((_, class_id), _, _) -> Env.get_class env class_id
         | _ -> None)
   in
   let valid_classes =
     List.filter bound_classes ~f:Tast_utils.valid_newable_class
   in
-  if List.length valid_classes <> 1 then
+  if Int.( <> ) 1 (List.length valid_classes) then
     let cbs = List.map ~f:Cls.name valid_classes in
     Errors.invalid_newable_type_param_constraints tparam.tp_name cbs
+
+let is_wildcard (_, hint) =
+  match hint with
+  | (_, Aast.Happly ((_, class_id), _))
+    when String.equal class_id SN.Typehints.wildcard ->
+    true
+  | _ -> false
 
 (* When passing targs to a reified position, they must either be concrete types
  * or reified type parameters. This prevents the case of
@@ -146,47 +114,79 @@ let verify_has_consistent_bound env (tparam : Tast.tparam) =
  *
  * where Tf does not exist at runtime.
  *)
-let verify_targ_valid env tparam targ =
-  if Attributes.mem UA.uaExplicit tparam.tp_user_attributes then
-    match targ with
-    | (pos, Aast.Happly ((_, class_id), _targs))
-      when class_id = SN.Typehints.wildcard ->
-      Errors.require_generic_explicit tparam.tp_name pos
-    | _ -> ()
-  else
-    ();
+let verify_targ_valid env tparam ((_, hint) as targ) =
+  if
+    Naming_attributes.mem UA.uaExplicit tparam.tp_user_attributes
+    && is_wildcard targ
+  then
+    Errors.require_generic_explicit tparam.tp_name (fst hint);
 
   (* There is some subtlety here. If a type *parameter* is declared reified,
    * even if it is soft, we require that the argument be concrete or reified, not soft
    * reified or erased *)
-  ( if tparam.tp_reified = Nast.Erased then
-    ()
-  else
+  ( if is_reified tparam then
     match tparam.tp_reified with
     | Nast.Reified
     | Nast.SoftReified ->
       let emit_error = Errors.invalid_reified_argument tparam.tp_name in
-      validator#validate_hint env targ emit_error
+      validator#validate_hint env (snd targ) emit_error
     | Nast.Erased -> () );
 
-  if Attributes.mem UA.uaEnforceable tparam.tp_user_attributes then
+  if Naming_attributes.mem UA.uaEnforceable tparam.tp_user_attributes then
     Enforceable_hint_check.validator#validate_hint
       env
-      targ
+      (snd targ)
       (Errors.invalid_enforceable_type "parameter" tparam.tp_name);
 
-  if Attributes.mem UA.uaNewable tparam.tp_user_attributes then
-    valid_newable_hint env tparam.tp_name targ
+  if Naming_attributes.mem UA.uaNewable tparam.tp_user_attributes then
+    valid_newable_hint env tparam.tp_name (snd targ)
+
+let verify_targs env expr_pos decl_pos tparams targs =
+  let all_wildcards = List.for_all ~f:is_wildcard targs in
+  if all_wildcards && tparams_has_reified tparams then
+    Errors.require_args_reify decl_pos expr_pos
+  else
+    (* Unequal_lengths case handled elsewhere *)
+    List.iter2 tparams targs ~f:(verify_targ_valid env) |> ignore
 
 let verify_call_targs env expr_pos decl_pos tparams targs =
-  if tparams_has_reified tparams && List.is_empty targs then
-    Errors.require_args_reify decl_pos expr_pos;
-  if List.is_empty targs then check_explicit expr_pos tparams;
+  ( if tparams_has_reified tparams then
+    let check_targ_hints = function
+      | (_, (pos, Aast.Happly ((_, class_id), hints))) ->
+        let tc = Env.get_class env class_id in
+        Option.iter tc ~f:(fun tc ->
+            let tparams = Cls.tparams tc in
+            let tparams_length = List.length tparams in
+            let targs_length = List.length hints in
+            if Int.( <> ) tparams_length targs_length then
+              let c_pos = Cls.pos tc in
+              if Int.( <> ) targs_length 0 then
+                Errors.type_arity
+                  pos
+                  class_id
+                  (string_of_int tparams_length)
+                  c_pos
+              else
+                Errors.require_args_reify c_pos pos)
+      | _ -> ()
+    in
+    List.iter targs ~f:check_targ_hints );
+  verify_targs env expr_pos decl_pos tparams targs
 
-  (* Unequal_lengths case handled elsewhere *)
-  List.iter2 tparams targs ~f:(fun tparam targ ->
-      verify_targ_valid env tparam targ)
-  |> ignore
+let get_class_by_name classname =
+  match Naming_table.Types.get_filename classname with
+  | Some filename ->
+    Ide_parser_cache.with_ide_cache @@ fun () ->
+    Ast_provider.find_class_in_file filename classname
+  | _ -> None
+
+let get_static_method_by_name class_name method_name =
+  match get_class_by_name class_name with
+  | Some cls ->
+    List.hd
+    @@ List.filter cls.Nast.c_methods (fun m ->
+           String.equal (snd m.m_name) method_name && m.m_static)
+  | _ -> None
 
 let handler =
   object
@@ -195,28 +195,75 @@ let handler =
     method! at_expr env x =
       (* only considering functions where one or more params are reified *)
       match x with
-      | ((pos, _), Class_get ((_, CI (_, t)), _)) ->
-        if Env.get_reified env t = Reified then Errors.class_get_reified pos
-      | ( (pos, _),
-          Call (_, ((_, (_, Tfun { ft_pos; ft_tparams; _ })), _), targs, _, _)
-        ) ->
-        let tparams = fst ft_tparams in
-        verify_call_targs env pos ft_pos tparams targs
-      | ((pos, _), New (((_, ty), CI (_, class_id)), targs, _, _, _)) ->
+      | ((call_pos, _), Class_get ((_, CI (_, t)), _)) ->
+        if equal_reify_kind (Env.get_reified env t) Reified then
+          Errors.class_get_reified call_pos
+      (* Call of the form C::f where f is a static method:
+       * error when f uses any C's reified generic *)
+      | ( (call_pos, _),
+          Call
+            ( _,
+              ((_, fun_ty), Class_const ((_, CI (_, class_id)), (_, fname))),
+              targs,
+              _,
+              _ ) ) ->
         begin
-          match ty with
-          | (_, Tabstract (AKgeneric ci, None)) when ci = class_id ->
-            if not (Env.get_newable env ci) then
-              Errors.new_without_newable pos ci;
-            if not (List.is_empty targs) then Errors.tparam_with_tparam pos ci
-          | _ ->
+          match get_node fun_ty with
+          | Tfun { ft_tparams; _ } ->
             (match Env.get_class env class_id with
             | Some cls ->
-              let tparams = Cls.tparams cls in
-              let class_pos = Cls.pos cls in
-              verify_call_targs env pos class_pos tparams targs
-            | None -> ())
+              let tp_names =
+                List.filter_map (Cls.tparams cls) (function tp ->
+                    if is_reified tp then
+                      Some tp.tp_name
+                    else
+                      None)
+              in
+              (match Cls.get_smethod cls fname with
+              | Some ce_m ->
+                (match get_static_method_by_name ce_m.ce_origin fname with
+                | Some m ->
+                  let check_type_hint = function
+                    | (_, Some (t_pos, Habstr t))
+                    | (_, Some (_, Happly ((t_pos, t), _))) ->
+                      List.iter tp_names ~f:(function (_, name) ->
+                          if String.equal name t then
+                            Errors.static_call_with_class_level_reified_generic
+                              call_pos
+                              t_pos)
+                    | _ -> ()
+                  in
+                  List.iter m.m_params ~f:(fun param ->
+                      check_type_hint param.param_type_hint);
+                  check_type_hint m.m_ret
+                | None -> ())
+              | _ -> ())
+            | None -> ());
+            let tparams = fst ft_tparams in
+            verify_call_targs env call_pos (get_pos fun_ty) tparams targs
+          | _ -> ()
         end
+      | ((pos, _), Call (_, ((_, fun_ty), _), targs, _, _)) ->
+        begin
+          match get_node fun_ty with
+          | Tfun { ft_tparams; _ } ->
+            let tparams = fst ft_tparams in
+            verify_call_targs env pos (get_pos fun_ty) tparams targs
+          | _ -> ()
+        end
+      | ((pos, _), New (((_, ty), CI (_, class_id)), targs, _, _, _)) ->
+        let (env, ty) = Env.expand_type env ty in
+        (match get_node ty with
+        | Tgeneric ci when String.equal ci class_id ->
+          if not (Env.get_newable env ci) then Errors.new_without_newable pos ci;
+          if not (List.is_empty targs) then Errors.tparam_with_tparam pos ci
+        | _ ->
+          (match Env.get_class env class_id with
+          | Some cls ->
+            let tparams = Cls.tparams cls in
+            let class_pos = Cls.pos cls in
+            verify_call_targs env pos class_pos tparams targs
+          | None -> ()))
       | ((pos, _), New ((_, CIstatic), _, _, _, _)) ->
         Option.(
           let t =
@@ -231,20 +278,22 @@ let handler =
 
     method! at_hint env =
       function
-      | (pos, Aast.Happly ((_, class_id), targs)) ->
+      | (pos, Aast.Happly ((_, class_id), hints)) ->
         let tc = Env.get_class env class_id in
         Option.iter tc ~f:(fun tc ->
             let tparams = Cls.tparams tc in
-            ignore (List.iter2 tparams targs ~f:(verify_targ_valid env));
+            ignore
+              (List.iter2 tparams hints ~f:(fun tp hint ->
+                   verify_targ_valid env tp ((), hint)));
 
             (* TODO: This check could be unified with the existence check above,
              * but would require some consolidation T38941033. List.iter2 gives
              * a nice Or_unequal_lengths.t result that replaces this if statement *)
             let tparams_length = List.length tparams in
-            let targs_length = List.length targs in
-            if tparams_length <> targs_length then
+            let targs_length = List.length hints in
+            if Int.( <> ) tparams_length targs_length then
               let c_pos = Cls.pos tc in
-              if targs_length <> 0 then
+              if Int.( <> ) targs_length 0 then
                 Errors.type_arity
                   pos
                   class_id
@@ -255,10 +304,10 @@ let handler =
       | _ -> ()
 
     method! at_tparam env tparam =
-      (* Can't use Attributes.mem here because of a conflict between Nast.user_attributes and Tast.user_attributes *)
+      (* Can't use Naming_attributes.mem here because of a conflict between Nast.user_attributes and Tast.user_attributes *)
       if
         List.exists tparam.tp_user_attributes (fun { ua_name; _ } ->
-            UA.uaNewable = snd ua_name)
+            String.equal UA.uaNewable (snd ua_name))
       then
         verify_has_consistent_bound env tparam
 
@@ -270,7 +319,7 @@ let handler =
           | (_, Typing_defs.ConsistentConstruct) ->
             if
               List.exists
-                ~f:(fun t -> t.tp_reified <> Nast.Erased)
+                ~f:(fun t -> not (equal_reify_kind t.tp_reified Erased))
                 (Cls.tparams cls)
             then
               Errors.consistent_construct_reified pos

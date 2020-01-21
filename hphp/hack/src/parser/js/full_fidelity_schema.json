@@ -1,6 +1,6 @@
 { "description" :
   "@generated JSON schema of the Hack Full Fidelity Parser AST",
-  "version" : "2019-08-22-0001",
+  "version" : "2019-11-29-0001",
   "trivia" : [
     { "trivia_kind_name" : "WhiteSpace",
       "trivia_type_name" : "whitespace" },
@@ -155,8 +155,6 @@
       "token_text" : "isset" },
     { "token_kind" : "Keyset",
       "token_text" : "keyset" },
-    { "token_kind" : "Let",
-      "token_text" : "let" },
     { "token_kind" : "List",
       "token_text" : "list" },
     { "token_kind" : "Mixed",
@@ -389,6 +387,8 @@
       "token_text" : "?>" },
     { "token_kind" : "ColonAt",
       "token_text" : ":@" },
+    { "token_kind" : "XHP",
+      "token_text" : "xhp" },
 
     { "token_kind" : "ErrorToken",
       "token_text" : null },
@@ -547,7 +547,7 @@
         { "field_name" : "keyword" },
         { "field_name" : "name" },
         { "field_name" : "extends_keyword" },
-        { "field_name" : "extends_list" },
+        { "field_name" : "extends_opt" },
         { "field_name" : "left_brace" },
         { "field_name" : "fields" },
         { "field_name" : "right_brace" }
@@ -557,11 +557,10 @@
       "description" : "record_field",
       "prefix" : "record_field",
       "fields" : [
-        { "field_name" : "name" },
-        { "field_name" : "colon" },
         { "field_name" : "type" },
+        { "field_name" : "name" },
         { "field_name" : "init" },
-        { "field_name" : "comma" }
+        { "field_name" : "semi" }
       ] },
     { "kind_name" : "AliasDeclaration",
       "type_name" : "alias_declaration",
@@ -724,6 +723,7 @@
       "fields" : [
         { "field_name" : "attribute" },
         { "field_name" : "modifiers" },
+        { "field_name" : "xhp" },
         { "field_name" : "keyword" },
         { "field_name" : "name" },
         { "field_name" : "type_parameters" },
@@ -940,18 +940,6 @@
         { "field_name" : "left_paren" },
         { "field_name" : "variables" },
         { "field_name" : "right_paren" },
-        { "field_name" : "semicolon" }
-      ] },
-    { "kind_name" : "LetStatement",
-      "type_name" : "let_statement",
-      "description" : "let_statement",
-      "prefix" : "let_statement",
-      "fields" : [
-        { "field_name" : "keyword" },
-        { "field_name" : "name" },
-        { "field_name" : "colon" },
-        { "field_name" : "type" },
-        { "field_name" : "initializer" },
         { "field_name" : "semicolon" }
       ] },
     { "kind_name" : "UsingStatementBlockScoped",
@@ -1181,7 +1169,6 @@
       "prefix" : "break",
       "fields" : [
         { "field_name" : "keyword" },
-        { "field_name" : "level" },
         { "field_name" : "semicolon" }
       ] },
     { "kind_name" : "ContinueStatement",
@@ -1190,7 +1177,6 @@
       "prefix" : "continue",
       "fields" : [
         { "field_name" : "keyword" },
-        { "field_name" : "level" },
         { "field_name" : "semicolon" }
       ] },
     { "kind_name" : "EchoStatement",
@@ -2061,6 +2047,24 @@
         { "field_name" : "types" },
         { "field_name" : "right_paren" }
       ] },
+    { "kind_name" : "UnionTypeSpecifier",
+      "type_name" : "union_type_specifier",
+      "description" : "union_type_specifier",
+      "prefix" : "union",
+      "fields" : [
+        { "field_name" : "left_paren" },
+        { "field_name" : "types" },
+        { "field_name" : "right_paren" }
+      ] },
+    { "kind_name" : "IntersectionTypeSpecifier",
+      "type_name" : "intersection_type_specifier",
+      "description" : "intersection_type_specifier",
+      "prefix" : "intersection",
+      "fields" : [
+        { "field_name" : "left_paren" },
+        { "field_name" : "types" },
+        { "field_name" : "right_paren" }
+      ] },
     { "kind_name" : "ErrorSyntax",
       "type_name" : "error",
       "description" : "error",
@@ -2136,6 +2140,7 @@
       "fields" : [
         { "field_name" : "case" },
         { "field_name" : "type" },
+        { "field_name" : "reified" },
         { "field_name" : "name" },
         { "field_name" : "semicolon" }
       ] },

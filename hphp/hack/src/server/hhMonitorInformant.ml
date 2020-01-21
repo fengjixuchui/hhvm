@@ -9,9 +9,6 @@
 
 open Core_kernel
 include HhMonitorInformant_sig.Types
-
-let exit_on_parent_exit () = Parent.exit_on_parent_exit 10 60
-
 module WEWClient = WatchmanEventWatcherClient
 module WEWConfig = WatchmanEventWatcherConfig
 
@@ -26,7 +23,7 @@ end
 module State_loader_prefetcher_real = struct
   (* Main entry point for a new package fetcher process. Exits with 0 on success. *)
   let main (hhconfig_hash, handle, cache_limit) =
-    EventLogger.init ~exit_on_parent_exit EventLogger.Event_logger_fake 0.0;
+    EventLogger.init_fake ();
     let cached =
       State_loader.cached_state
         ~saved_state_handle:handle
@@ -182,9 +179,7 @@ module Revision_map = struct
             ~hhconfig_hash
           |> fst
         in
-        let () =
-          Caml.Hashtbl.add t.xdb_queries global_rev (future, ref None)
-        in
+        let () = Caml.Hashtbl.add t.xdb_queries global_rev (future, ref None) in
         None
     in
     let query_to_result_list future =
@@ -224,8 +219,7 @@ module Revision_map = struct
     Option.(
       (* We run the prefetcher after the XDB lookup (because we need the XDB
        * result to run the prefetcher). *)
-      query
-      >>= fun (query, prefetcher) ->
+      query >>= fun (query, prefetcher) ->
       match (query, !prefetcher) with
       | (query, Some prefetcher) ->
         begin
@@ -309,11 +303,9 @@ module Revision_map = struct
   let find_and_prefetch ~start_t hg_rev t =
     let global_rev = find_global_rev hg_rev t in
     Option.(
-      global_rev
-      >>= fun global_rev ->
+      global_rev >>= fun global_rev ->
       if t.use_xdb then
-        find_xdb_match global_rev t
-        >>= fun xdb_results ->
+        find_xdb_match global_rev t >>= fun xdb_results ->
         (* We log the mergebase after the XDB lookup and prefetch has
          * completed to avoid log spam, since the "find_global_rev" result
          * is pinged once per second until completion. *)
@@ -337,9 +329,7 @@ module Revision_map = struct
                 global_rev
                 distance
             in
-            HackEventLogger.informant_find_saved_state_success
-              ~distance
-              start_t
+            HackEventLogger.informant_find_saved_state_success ~distance start_t
         in
         Some (global_rev, xdb_results)
       else
@@ -527,8 +517,7 @@ module Revision_tracker = struct
    * xdb_results: The nearest saved states for this global_rev provided by the XDB table.
    *)
   let form_decision
-      ~start_t ~significant transition server_state xdb_results global_rev env
-      =
+      ~start_t ~significant transition server_state xdb_results global_rev env =
     let use_xdb = env.inits.use_xdb in
     Informant_sig.(
       match (significant, transition, server_state, xdb_results) with
@@ -688,26 +677,22 @@ module Revision_tracker = struct
     | Watchman.Watchman_unavailable
     | Watchman.Watchman_synchronous _ ->
       None
-    | Watchman.Watchman_pushed
-        (Watchman.Changed_merge_base (rev, files, clock)) ->
+    | Watchman.Watchman_pushed (Watchman.Changed_merge_base (rev, files, clock))
+      ->
       let () = Hh_logger.log "Changed_merge_base: %s" rev in
       Some (Changed_merge_base (rev, files, clock))
     | Watchman.Watchman_pushed (Watchman.State_enter (state, json))
       when state = "hg.update" ->
       env.is_in_hg_update_state := true;
       Option.(
-        json
-        >>= Watchman_utils.rev_in_state_change
-        >>= fun hg_rev ->
+        json >>= Watchman_utils.rev_in_state_change >>= fun hg_rev ->
         Hh_logger.log "State_enter: %s" hg_rev;
         Some (State_enter hg_rev))
     | Watchman.Watchman_pushed (Watchman.State_leave (state, json))
       when state = "hg.update" ->
       env.is_in_hg_update_state := false;
       Option.(
-        json
-        >>= Watchman_utils.rev_in_state_change
-        >>= fun hg_rev ->
+        json >>= Watchman_utils.rev_in_state_change >>= fun hg_rev ->
         Hh_logger.log "State_leave: %s" hg_rev;
         Some (State_leave hg_rev))
     | Watchman.Watchman_pushed (Watchman.State_enter (state, _))
@@ -949,9 +934,7 @@ let init
     Resigned
   (* Active informant requires Watchman subscriptions. *)
   else if not allow_subscriptions then
-    let () =
-      Printf.eprintf "Not using subscriptions - Informant resigning\n"
-    in
+    let () = Printf.eprintf "Not using subscriptions - Informant resigning\n" in
     Resigned
   else
     let watchman =

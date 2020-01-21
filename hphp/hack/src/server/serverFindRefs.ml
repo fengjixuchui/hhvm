@@ -39,15 +39,15 @@ let add_ns name =
 let strip_ns results = List.map results (fun (s, p) -> (Utils.strip_ns s, p))
 
 let search target include_defs files genv env =
+  if Hh_logger.Level.passes_min_level Hh_logger.Level.Debug then
+    List.iter files ~f:(fun file ->
+        Hh_logger.debug
+          "ServerFindRefs.search file %s"
+          (Relative_path.to_absolute file));
   (* Get all the references to the provided target in the files *)
+  let ctx = Provider_context.empty ~tcopt:env.tcopt in
   let res =
-    FindRefsService.find_references
-      env.tcopt
-      genv.workers
-      target
-      include_defs
-      env.naming_table
-      files
+    FindRefsService.find_references ctx genv.workers target include_defs files
   in
   strip_ns res
 
@@ -60,20 +60,24 @@ let handle_prechecked_files genv env dep f =
   let env = ServerPrecheckedFiles.update_after_local_changes genv env dep in
   (* If we added more things to recheck, we can't handle this command now, and
    * tell the client to retry instead. *)
-  ( env,
-    if env.full_check <> Full_check_done then
-      Retry
-    else
-      Done (f ()) )
+  if env.full_check = Full_check_done then
+    let () = Hh_logger.debug "ServerFindRefs.handle_prechecked_files: Done" in
+    let callback_result = f () in
+    (env, Done callback_result)
+  else
+    let () = Hh_logger.debug "ServerFindRefs.handle_prechecked_files: Retry" in
+    (env, Retry)
 
 let search_function function_name include_defs genv env =
   let function_name = add_ns function_name in
+  Hh_logger.debug "ServerFindRefs.search_function: %s" function_name;
   handle_prechecked_files genv env Typing_deps.Dep.(make (Fun function_name))
   @@ fun () ->
   let files =
     FindRefsService.get_dependent_files_function
       genv.ServerEnv.workers
       function_name
+    |> Relative_path.Set.elements
   in
   search (FindRefsService.IFunction function_name) include_defs files genv env
 
@@ -91,6 +95,7 @@ let search_member class_name member include_defs genv env =
   (* Get all the files that reference those classes *)
   let files =
     FindRefsService.get_dependent_files genv.ServerEnv.workers all_classes
+    |> Relative_path.Set.elements
   in
   let target =
     FindRefsService.IMember (FindRefsService.Class_set all_classes, member)
@@ -103,6 +108,7 @@ let search_gconst cst_name include_defs genv env =
   @@ fun () ->
   let files =
     FindRefsService.get_dependent_files_gconst genv.ServerEnv.workers cst_name
+    |> Relative_path.Set.elements
   in
   search (FindRefsService.IGConst cst_name) include_defs files genv env
 
@@ -114,8 +120,24 @@ let search_class class_name include_defs genv env =
     FindRefsService.get_dependent_files
       genv.ServerEnv.workers
       (SSet.singleton class_name)
+    |> Relative_path.Set.elements
   in
   search (FindRefsService.IClass class_name) include_defs files genv env
+
+let search_record record_name include_defs genv env =
+  let record_name = add_ns record_name in
+  handle_prechecked_files
+    genv
+    env
+    Typing_deps.Dep.(make (RecordDef record_name))
+  @@ fun () ->
+  let files =
+    FindRefsService.get_dependent_files
+      genv.ServerEnv.workers
+      (SSet.singleton record_name)
+    |> Relative_path.Set.elements
+  in
+  search (FindRefsService.IRecord record_name) include_defs files genv env
 
 let search_localvar path content line char env =
   let results = ServerFindLocals.go env.tcopt path content line char in
@@ -132,6 +154,7 @@ let go action include_defs genv env =
   | Function function_name ->
     search_function function_name include_defs genv env
   | Class class_name -> search_class class_name include_defs genv env
+  | Record record_name -> search_record record_name include_defs genv env
   | GConst cst_name -> search_gconst cst_name include_defs genv env
   | LocalVar { filename; file_content; line; char } ->
     (env, Done (search_localvar filename file_content line char env))
@@ -150,6 +173,7 @@ let get_action symbol (filename, file_content, line, char) =
     Some (Member (class_name, Method method_name))
   | SymbolOccurrence.Property (class_name, prop_name) ->
     Some (Member (class_name, Property prop_name))
+  | SymbolOccurrence.Record -> Some (Record name)
   | SymbolOccurrence.ClassConst (class_name, const_name) ->
     Some (Member (class_name, Class_const const_name))
   | SymbolOccurrence.Typeconst (class_name, tconst_name) ->
@@ -157,24 +181,24 @@ let get_action symbol (filename, file_content, line, char) =
   | SymbolOccurrence.GConst -> Some (GConst name)
   | SymbolOccurrence.LocalVar ->
     Some (LocalVar { filename; file_content; line; char })
+  | SymbolOccurrence.Attribute _ -> None
 
-let go_from_file (labelled_file, line, char) env =
-  let (filename, content) =
-    ServerCommandTypes.(
-      match labelled_file with
-      | LabelledFileContent { filename; content } ->
-        (filename, ServerFileSync.get_file_content (FileContent content))
-      | LabelledFileName filename ->
-        (filename, ServerFileSync.get_file_content (FileName filename)))
-  in
-  let filename = Relative_path.create_detect_prefix filename in
+let go_from_file_ctx
+    ~(ctx : Provider_context.t)
+    ~(entry : Provider_context.entry)
+    ~(line : int)
+    ~(column : int) : (string * ServerCommandTypes.Find_refs.action) option =
   (* Find the symbol at given position *)
-  ServerIdentifyFunction.go content line char env.ServerEnv.tcopt
+  ServerIdentifyFunction.go_quarantined ~ctx ~entry ~line ~column
   |> (* If there are few, arbitrarily pick the first *)
-     List.hd
+  List.hd
   >>= fun (occurrence, definition) ->
   (* Ignore symbols that lack definitions *)
-  definition
-  >>= fun definition ->
-  get_action occurrence (filename, content, line, char)
-  >>= (fun action -> Some (definition.SymbolDefinition.full_name, action))
+  definition >>= fun definition ->
+  get_action
+    occurrence
+    ( entry.Provider_context.path,
+      entry.Provider_context.source_text.Full_fidelity_source_text.text,
+      line,
+      column )
+  >>= fun action -> Some (definition.SymbolDefinition.full_name, action)

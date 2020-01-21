@@ -1,7 +1,7 @@
 <?hh
-final record A {
-  x: ?dict,
-  y: int,
+record A {
+  ?dict x;
+  int y;
 }
 <<__EntryPoint>> function main(): void {
 $a = A['x'=>null, 'y'=>1];

@@ -7,15 +7,15 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Typing_defs
 
 let conditionally_reactive_attribute_to_hint env { ua_params = l; _ } =
   match l with
   (* convert class const expression to non-generic type hint *)
-  | [(p, Class_const ((_, CI cls), (_, name)))] when name = SN.Members.mClass
-    ->
+  | [(p, Class_const ((_, CI cls), (_, name)))]
+    when String.equal name SN.Members.mClass ->
     (* set Extends dependency for between class that contains
          method and condition type *)
     Decl_env.add_extends_dependency env (snd cls);
@@ -23,14 +23,14 @@ let conditionally_reactive_attribute_to_hint env { ua_params = l; _ } =
   | _ ->
     (* error for invalid argument list was already reported during the
        naming step, do nothing *)
-    (Reason.none, Typing_defs.make_tany ())
+    mk (Reason.none, Typing_defs.make_tany ())
 
 let condition_type_from_attributes env user_attributes =
-  Attributes.find SN.UserAttributes.uaOnlyRxIfImpl user_attributes
+  Naming_attributes.find SN.UserAttributes.uaOnlyRxIfImpl user_attributes
   |> Option.map ~f:(conditionally_reactive_attribute_to_hint env)
 
 let fun_reactivity_opt env user_attributes =
-  let has attr = Attributes.mem attr user_attributes in
+  let has attr = Naming_attributes.mem attr user_attributes in
   let module UA = SN.UserAttributes in
   let rx_condition = condition_type_from_attributes env user_attributes in
   if has UA.uaReactive then
@@ -48,59 +48,60 @@ let fun_reactivity env user_attributes =
   fun_reactivity_opt env user_attributes |> Option.value ~default:Nonreactive
 
 let has_accept_disposable_attribute user_attributes =
-  Attributes.mem SN.UserAttributes.uaAcceptDisposable user_attributes
+  Naming_attributes.mem SN.UserAttributes.uaAcceptDisposable user_attributes
 
 let has_return_disposable_attribute user_attributes =
-  Attributes.mem SN.UserAttributes.uaReturnDisposable user_attributes
+  Naming_attributes.mem SN.UserAttributes.uaReturnDisposable user_attributes
 
 let fun_returns_mutable user_attributes =
-  Attributes.mem SN.UserAttributes.uaMutableReturn user_attributes
+  Naming_attributes.mem SN.UserAttributes.uaMutableReturn user_attributes
 
 let fun_returns_void_to_rx user_attributes =
-  Attributes.mem SN.UserAttributes.uaReturnsVoidToRx user_attributes
+  Naming_attributes.mem SN.UserAttributes.uaReturnsVoidToRx user_attributes
 
 let get_param_mutability user_attributes =
-  if Attributes.mem SN.UserAttributes.uaOwnedMutable user_attributes then
+  if Naming_attributes.mem SN.UserAttributes.uaOwnedMutable user_attributes then
     Some Param_owned_mutable
-  else if Attributes.mem SN.UserAttributes.uaMutable user_attributes then
+  else if Naming_attributes.mem SN.UserAttributes.uaMutable user_attributes then
     Some Param_borrowed_mutable
-  else if Attributes.mem SN.UserAttributes.uaMaybeMutable user_attributes then
+  else if Naming_attributes.mem SN.UserAttributes.uaMaybeMutable user_attributes
+  then
     Some Param_maybe_mutable
   else
     None
 
 (* If global inference is on this will create a new type variable and store it in
   the global tvenv. Otherwise we return the default type given as parameter *)
-let global_inference_create_tyvar (reason, default_ty_) =
-  let tco = GlobalNamingOptions.get () in
-  if
-    GlobalOptions.InferMissing.global_inference
-    @@ GlobalOptions.tco_infer_missing tco
-  then
-    (reason, Tvar (Ident.tmp ()))
+let global_inference_create_tyvar ~is_lambda ~default =
+  let (reason, default_ty_) = deref default in
+  let tco = Global_naming_options.get () in
+  if GlobalOptions.tco_global_inference tco && not is_lambda then
+    mk (reason, Tvar (Ident.tmp ()))
   else
-    (reason, default_ty_)
+    mk (reason, default_ty_)
 
-let make_param_ty env param =
+let make_param_ty env ~is_lambda param =
   let ty =
     match hint_of_type_hint param.param_type_hint with
     | None ->
       let r = Reason.Rwitness param.param_pos in
-      global_inference_create_tyvar (r, Typing_defs.make_tany ())
+      global_inference_create_tyvar
+        ~is_lambda
+        ~default:(mk (r, Typing_defs.make_tany ()))
     (* if the code is strict, use the type-hint *)
     | Some x -> Decl_hint.hint env x
   in
   let ty =
-    match ty with
-    | (_, t) when param.param_is_variadic ->
+    match get_node ty with
+    | t when param.param_is_variadic ->
       (* When checking a call f($a, $b) to a function f(C ...$args),
        * both $a and $b must be of type C *)
-      (Reason.Rvar_param param.param_pos, t)
-    | x -> x
+      mk (Reason.Rvar_param param.param_pos, t)
+    | _ -> ty
   in
   let module UA = SN.UserAttributes in
   let has_at_most_rx_as_func =
-    Attributes.mem UA.uaAtMostRxAsFunc param.param_user_attributes
+    Naming_attributes.mem UA.uaAtMostRxAsFunc param.param_user_attributes
   in
   let ty =
     if has_at_most_rx_as_func then
@@ -108,12 +109,12 @@ let make_param_ty env param =
     else
       ty
   in
-  let mode = get_param_mode param.param_is_reference param.param_callconv in
+  let mode = get_param_mode param.param_callconv in
   let rx_annotation =
     if has_at_most_rx_as_func then
       Some Param_rx_var
     else
-      Attributes.find UA.uaOnlyRxIfImpl param.param_user_attributes
+      Naming_attributes.find UA.uaOnlyRxIfImpl param.param_user_attributes
       |> Option.map ~f:(fun v ->
              Param_rx_if_impl (conditionally_reactive_attribute_to_hint env v))
   in
@@ -128,29 +129,31 @@ let make_param_ty env param =
     fp_rx_annotation = rx_annotation;
   }
 
-let ret_from_fun_kind ?(is_constructor = false) pos kind =
-  let default = (Reason.Rwitness pos, Typing_defs.make_tany ()) in
+let ret_from_fun_kind ?(is_constructor = false) ~is_lambda pos kind =
+  let default = mk (Reason.Rwitness pos, Typing_defs.make_tany ()) in
   let ret_ty () =
     if is_constructor then
       default
     else
-      global_inference_create_tyvar default
+      global_inference_create_tyvar ~is_lambda ~default
   in
   match kind with
   | Ast_defs.FGenerator ->
     let r = Reason.Rret_fun_kind (pos, kind) in
-    ( r,
-      Tapply ((pos, SN.Classes.cGenerator), [ret_ty (); ret_ty (); ret_ty ()])
-    )
+    mk
+      ( r,
+        Tapply ((pos, SN.Classes.cGenerator), [ret_ty (); ret_ty (); ret_ty ()])
+      )
   | Ast_defs.FAsyncGenerator ->
     let r = Reason.Rret_fun_kind (pos, kind) in
-    ( r,
-      Tapply
-        ((pos, SN.Classes.cAsyncGenerator), [ret_ty (); ret_ty (); ret_ty ()])
-    )
+    mk
+      ( r,
+        Tapply
+          ((pos, SN.Classes.cAsyncGenerator), [ret_ty (); ret_ty (); ret_ty ()])
+      )
   | Ast_defs.FAsync ->
     let r = Reason.Rret_fun_kind (pos, kind) in
-    (r, Tapply ((pos, SN.Classes.cAwaitable), [ret_ty ()]))
+    mk (r, Tapply ((pos, SN.Classes.cAwaitable), [ret_ty ()]))
   | Ast_defs.FSync
   | Ast_defs.FCoroutine ->
     ret_ty ()
@@ -176,7 +179,9 @@ let minimum_arity paraml =
   in a call to this method. Variadic "..." parameters need not be specified,
   parameters with default values need not be specified, so this method counts
   non-default-value, non-variadic parameters. *)
-  let f param = (not param.param_is_variadic) && param.param_expr = None in
+  let f param =
+    (not param.param_is_variadic) && Option.is_none param.param_expr
+  in
   List.count paraml f
 
 let check_params env paraml =
@@ -195,15 +200,16 @@ let check_params env paraml =
       (* Assume that a variadic parameter is the last one we need
             to check. We've already given a parse error if the variadic
             parameter is not last. *)
-      else if seen_default && param.param_expr = None then
+      else if seen_default && Option.is_none param.param_expr then
         Errors.previous_default param.param_pos
       (* We've seen at least one required parameter, and there's an
           optional parameter after it.  Given an error, and then stop looking
           for more errors in this parameter list. *)
       else
-        loop (param.param_expr <> None) rl
+        loop (Option.is_some param.param_expr) rl
   in
   (* PHP allows non-default valued parameters after default valued parameters. *)
-  if env.Decl_env.mode <> FileInfo.Mphp then loop false paraml
+  if not FileInfo.(equal_mode env.Decl_env.mode Mphp) then loop false paraml
 
-let make_params env paraml = List.map paraml ~f:(make_param_ty env)
+let make_params env ~is_lambda paraml =
+  List.map paraml ~f:(make_param_ty env ~is_lambda)

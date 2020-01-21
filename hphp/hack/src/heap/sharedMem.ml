@@ -97,12 +97,11 @@ let rec shm_dir_init config ~num_workers = function
                 ~shm_dir
                 ~shm_min_avail
                 ~avail));
-        if !Utils.debug then
-          Hh_logger.log
-            "Filesystem %s only has %d bytes available, which is less than the minimum %d bytes"
-            shm_dir
-            avail
-            config.shm_min_avail;
+        Hh_logger.log
+          "Filesystem %s only has %d bytes available, which is less than the minimum %d bytes"
+          shm_dir
+          avail
+          config.shm_min_avail;
         shm_dir_init config ~num_workers shm_dirs
       | Unix.Unix_error (e, fn, arg) ->
         let fn_string =
@@ -117,15 +116,13 @@ let rec shm_dir_init config ~num_workers = function
         EventLogger.(
           log_if_initialized (fun () ->
               sharedmem_failed_to_use_shm_dir ~shm_dir ~reason));
-        if !Utils.debug then
-          Hh_logger.log "Failed to use shm dir `%s`: %s" shm_dir reason;
+        Hh_logger.log "Failed to use shm dir `%s`: %s" shm_dir reason;
         shm_dir_init config ~num_workers shm_dirs
       | Failed_to_use_shm_dir reason ->
         EventLogger.(
           log_if_initialized (fun () ->
               sharedmem_failed_to_use_shm_dir ~shm_dir ~reason));
-        if !Utils.debug then
-          Hh_logger.log "Failed to use shm dir `%s`: %s" shm_dir reason;
+        Hh_logger.log "Failed to use shm dir `%s`: %s" shm_dir reason;
         shm_dir_init config ~num_workers shm_dirs
     end
 
@@ -134,7 +131,7 @@ let init config ~num_workers =
   with Failed_anonymous_memfd_init ->
     EventLogger.(
       log_if_initialized (fun () -> sharedmem_failed_anonymous_memfd_init ()));
-    if !Utils.debug then Hh_logger.log "Failed to use anonymous memfd init";
+    Hh_logger.log "Failed to use anonymous memfd init";
     shm_dir_init config ~num_workers config.shm_dirs
 
 external allow_removes : bool -> unit = "hh_allow_removes"
@@ -168,7 +165,7 @@ let loaded_dep_table_filename () =
   else
     Some fn
 
-external save_dep_table_blob_c : string -> string -> int
+external save_dep_table_blob_c : string -> string -> bool -> int
   = "hh_save_dep_table_blob"
 
 (* Returns number of dependency edges added. *)
@@ -179,23 +176,20 @@ external save_dep_table_sqlite_c : string -> string -> bool -> int
 external update_dep_table_sqlite_c : string -> string -> bool -> int
   = "hh_update_dep_table_sqlite"
 
-let save_dep_table_sqlite : string -> string -> bool -> int =
- fun fn build_revision replace_state_after_saving ->
+let save_dep_table_sqlite fn build_revision ~replace_state_after_saving =
   if loaded_dep_table_filename () <> None then
     failwith
       "save_dep_table_sqlite not supported when server is loaded from a saved state; use update_dep_table_sqlite";
   Hh_logger.log "Dumping a saved state deptable into a SQLite DB.";
   save_dep_table_sqlite_c fn build_revision replace_state_after_saving
 
-let save_dep_table_blob : string -> string -> bool -> int =
- fun fn build_revision _replace_state_after_saving ->
+let save_dep_table_blob fn build_revision ~reset_state_after_saving =
   if loaded_dep_table_filename () <> None then
     failwith
       "save_dep_table_blob not supported when the server is loaded from a saved state; use update_dep_table_sqlite";
   Hh_logger.log "Dumping a saved state deptable as a blob.";
 
-  (* TODO: use replace_state_after_saving? *)
-  save_dep_table_blob_c fn build_revision
+  save_dep_table_blob_c fn build_revision reset_state_after_saving
 
 let update_dep_table_sqlite : string -> string -> bool -> int =
  fun fn build_revision replace_state_after_saving ->
@@ -561,8 +555,7 @@ functor
       | ProfiledValue.Raw y -> y
       | ProfiledValue.Profiled { entry; write_time } ->
         EventLogger.(
-          log_if_initialized
-          @@ fun () ->
+          log_if_initialized @@ fun () ->
           sharedmem_access_sample
             ~heap_name:Value.description
             ~key:(Key.string_of_md5 x)
@@ -931,7 +924,7 @@ module type NoCache = sig
 
   module KeySet : Set.S with type elt = key
 
-  module KeyMap : MyMap.S with type key = key
+  module KeyMap : WrappedMap.S with type key = key
 
   val add : key -> t -> unit
 
@@ -1006,7 +999,7 @@ struct
   module New = New (Raw) (Key) (Value)
   module Old = Old (Raw) (Key) (Value) (New.WithLocalChanges)
   module KeySet = Set.Make (UserKeyType)
-  module KeyMap = MyMap.Make (UserKeyType)
+  module KeyMap = WrappedMap.Make (UserKeyType)
 
   type key = UserKeyType.t
 
@@ -1164,8 +1157,7 @@ end)
   CacheType with type key := Key.t and type value := Config.value = struct
   type value = Config.value
 
-  let string_of_key _key =
-    failwith "FreqCache does not support 'string_of_key'"
+  let string_of_key _key = failwith "FreqCache does not support 'string_of_key'"
 
   (* The cache itself *)
   let (cache : (Key.t, int ref * value) Hashtbl.t) =
@@ -1192,7 +1184,8 @@ end)
       let l = ref [] in
       Hashtbl.iter
         begin
-          fun key (freq, v) -> l := (key, !freq, v) :: !l
+          fun key (freq, v) ->
+          l := (key, !freq, v) :: !l
         end
         cache;
       Hashtbl.clear cache;
@@ -1248,8 +1241,7 @@ end)
   let string_of_key _key =
     failwith "OrderedCache does not support 'string_of_key'"
 
-  let (cache : (Key.t, Config.value) Hashtbl.t) =
-    Hashtbl.create Config.capacity
+  let (cache : (Key.t, Config.value) Hashtbl.t) = Hashtbl.create Config.capacity
 
   let queue = Queue.create ()
 
@@ -1434,7 +1426,8 @@ struct
   let get_batch keys =
     KeySet.fold
       begin
-        fun key acc -> KeyMap.add key (get key) acc
+        fun key acc ->
+        KeyMap.add key (get key) acc
       end
       keys
       KeyMap.empty
@@ -1454,8 +1447,10 @@ struct
   let () =
     invalidate_callback_list :=
       begin
-        fun () -> Cache.clear ()
-      end :: !invalidate_callback_list
+        fun () ->
+        Cache.clear ()
+      end
+      :: !invalidate_callback_list
 
   let remove_old_batch = Direct.remove_old_batch
 

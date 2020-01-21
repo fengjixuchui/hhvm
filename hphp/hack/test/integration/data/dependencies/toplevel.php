@@ -24,6 +24,10 @@ function generic<T>(): int {
   return 1;
 }
 
+function generic_with_bound<T as arraykey>(T $x): keyset<T> {
+  return keyset[$x];
+}
+
 function g() : void {
   $b = new B();
 }
@@ -34,6 +38,10 @@ function shallow_toplevel(C $c): void  {
 
 function with_generics<Tfirst, Tsecond>(D<Tfirst, Tsecond> $d, E<Tfirst> $e): int {
   return generic<C>();
+}
+
+function with_generics_with_bounds(int $x): keyset<int> {
+  return generic_with_bound($x);
 }
 
 function with_typedefs(Complex $c, shape('x' => int, 'y' => C) $pair) : Point {
@@ -48,6 +56,73 @@ function call_defaulted(int $arg): void {
   with_defaults();
 }
 
+function with_default_and_variadic(mixed $x, ?string $y = null, mixed ...$z): void {}
+
+function call_with_default_and_variadic(string $s): void {
+  with_default_and_variadic(42);
+  with_default_and_variadic(42, 'meaning of life');
+  with_default_and_variadic(42, '%s', $s);
+}
+
 function nonexistent_dependency(BogusType $arg): void {}
 
 function builtin_argument_types(Exception $e, keyset<string> $k): void {}
+
+function recursive_function(int $n): int {
+  if ($n <= 0) {
+    return 0;
+  }
+  return $n + recursive_function($n - 1);
+}
+
+class WithRecursiveMethods {
+  public function recursive_instance(): void {
+    $this->recursive_instance();
+  }
+  public static function recursive_static(): void {
+    WithRecursiveMethods::recursive_static();
+  }
+}
+
+function with_mapped_namespace(): void {
+  PHP\ini_set('foo', 'bar');
+}
+
+function with_built_in_constant(): int {
+  return PHP_INT_MAX;
+}
+
+<<__Rx>>
+function reactive(mixed $x = null): void {}
+
+<<__Rx>>
+function call_reactive(): void {
+  reactive();
+}
+
+<<__RxShallow>>
+function shallow_reactive(): void {}
+
+<<__RxShallow>>
+function call_shallow_reactive(): void {
+  shallow_reactive();
+}
+
+class Fred {}
+
+class Thud {
+  public int $n;
+  public function __construct(Fred $_) {
+    $this->n = 42;
+  }
+}
+
+function with_constructor_dependency(Thud $x): int {
+  return $x->n;
+}
+
+function with_newtype_with_bound(dict<N, mixed> $_): void {}
+
+newtype M as N = nothing;
+
+function with_newtype_with_newtype_bound(M $_): void {}

@@ -7,15 +7,15 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Typing_defs
 module Env = Tast_env
 
 let check_xhp_children env pos ty =
   if not @@ Env.is_xhp_child env pos ty then
-    let ty_str = Env.print_error_ty env ty in
-    let msgl = Reason.to_string ("This is " ^ ty_str) (fst ty) in
+    let ty_str = Env.print_error_ty ~ignore_dynamic:true env ty in
+    let msgl = Reason.to_string ("This is " ^ ty_str) (get_reason ty) in
     Errors.illegal_xhp_child pos msgl
 
 let handler =
@@ -26,5 +26,17 @@ let handler =
       function
       | (_, Xml (_, _, tel)) ->
         List.iter tel ~f:(fun ((pos, ty), _) -> check_xhp_children env pos ty)
+      | _ -> ()
+
+    method! at_xhp_child env child =
+      match child with
+      | ChildName (p, name)
+        when (not @@ Naming_special_names.XHP.is_reserved name)
+             && (not @@ Naming_special_names.XHP.is_xhp_category name) ->
+        begin
+          match Env.get_class env name with
+          | Some _ -> ()
+          | None -> Errors.unbound_name p name Errors.ClassContext
+        end
       | _ -> ()
   end

@@ -40,6 +40,7 @@
 #include "hphp/runtime/base/request-event-handler.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/base/tv-array-like.h"
 #include "hphp/runtime/base/unit-cache.h"
 #include "hphp/runtime/base/zend-functions.h"
 #include "hphp/runtime/base/zend-string.h"
@@ -53,6 +54,7 @@
 #include "hphp/util/process.h"
 #include "hphp/util/rds-local.h"
 #include "hphp/util/timer.h"
+#include "hphp/util/user-info.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -121,7 +123,7 @@ static Variant HHVM_FUNCTION(assert_options,
     if (!value.isNull()) s_option_data->assertException = value.toBoolean();
     return Variant(oldValue);
   }
-  throw_invalid_argument("assert option %ld is not supported", (long)what);
+  raise_invalid_argument_warning("assert option %ld is not supported", (long)what);
   return false;
 }
 
@@ -163,10 +165,6 @@ static Variant HHVM_FUNCTION(assert, const Variant& assertion,
   return init_null();
 }
 
-static int64_t HHVM_FUNCTION(dl, const String& /*library*/) {
-  return 0;
-}
-
 static bool HHVM_FUNCTION(extension_loaded, const String& name) {
   return ExtensionRegistry::isLoaded(name);
 }
@@ -176,42 +174,39 @@ HHVM_FUNCTION(get_loaded_extensions, bool /*zend_extensions*/ /*=false */) {
   return ExtensionRegistry::getLoaded();
 }
 
-static Variant HHVM_FUNCTION(get_extension_funcs, const String& module_name) {
+static TypedValue HHVM_FUNCTION(get_extension_funcs, const String& module_name) {
   auto extension = ExtensionRegistry::get(module_name);
-  if (!extension) return Variant(false);
+  if (!extension) return make_tv<KindOfBoolean>(false);
 
   auto const& fns = extension->getExtensionFunctions();
-  PackedArrayInit result(fns.size());
+  VArrayInit result(fns.size());
   for (auto const& fn : fns) {
     result.append(Variant(fn));
   }
-  return result.toVariant();
-}
-
-static Variant HHVM_FUNCTION(get_cfg_var, const String& /*option*/) {
-  return false;
+  return make_array_like_tv(result.create());
 }
 
 static String HHVM_FUNCTION(get_current_user) {
 #ifdef _MSC_VER
   return Process::GetCurrentUser();
 #else
-  int pwbuflen = sysconf(_SC_GETPW_R_SIZE_MAX);
-  if (pwbuflen < 1) {
-    return empty_string();
-  }
-  char *pwbuf = (char*)req::malloc_noptrs(pwbuflen);
-  SCOPE_EXIT { req::free(pwbuf); };
-  struct passwd pw;
-  struct passwd *retpwptr = nullptr;
   auto uid = [] () -> uid_t {
     if (auto cred = get_cli_ucred()) return cred->uid;
     return getuid();
   }();
-  if (getpwuid_r(uid, &pw, pwbuf, pwbuflen, &retpwptr) != 0) {
+
+  auto buf = PasswdBuffer{};
+  passwd* pw;
+  if (getpwuid_r(uid, &buf.ent, buf.data.get(), buf.size, &pw) != 0) {
+    // Unable to lookup the current user.
     return empty_string();
   }
-  String ret(pw.pw_name, CopyString);
+  if (pw == nullptr) {
+    // Current user does not exist.
+    return empty_string();
+  }
+
+  String ret(pw->pw_name, CopyString);
   return ret;
 #endif
 }
@@ -237,11 +232,11 @@ static String HHVM_FUNCTION(set_include_path, const Variant& new_include_path) {
 }
 
 static Array HHVM_FUNCTION(get_included_files) {
-  PackedArrayInit pai(g_context->m_evaledFilesOrder.size());
+  VArrayInit vai{g_context->m_evaledFilesOrder.size()};
   for (auto& file : g_context->m_evaledFilesOrder) {
-    pai.append(Variant{const_cast<StringData*>(file)});
+    vai.append(Variant{const_cast<StringData*>(file)});
   }
-  return pai.toArray();
+  return vai.toArray();
 }
 
 static Variant HHVM_FUNCTION(getenv, const String& varname) {
@@ -506,6 +501,8 @@ static req::vector<opt_struct> parse_opts(const char *opts, int opts_len) {
   return paras;
 }
 
+const StaticString s_argv("argv");
+
 static Array HHVM_FUNCTION(getopt, const String& options,
                                    const Variant& longopts /*=null */) {
   auto opt_vec = parse_opts(options.data(), options.size());
@@ -547,11 +544,11 @@ static Array HHVM_FUNCTION(getopt, const String& options,
   last.need_param = 0;
   last.opt_name   = nullptr;
 
-  static const StaticString s_argv("argv");
-  Array vargv = php_global(s_argv).toArray();
+  auto const& vargv = php_global(s_argv).toArray();
   int argc = vargv.size();
   req::vector<char*> argv(argc + 1);
   req::vector<String> holders;
+  holders.reserve(argc);
   int index = 0;
   for (ArrayIter iter(vargv); iter; ++iter) {
     String arg = iter.second().toString();
@@ -568,7 +565,7 @@ static Array HHVM_FUNCTION(getopt, const String& options,
     free_longopts(opt_vec);
   };
 
-  Array ret = Array::Create();
+  Array ret = Array::CreateDArray();
 
   Variant val;
   int optchr = 0;
@@ -611,9 +608,9 @@ static Array HHVM_FUNCTION(getopt, const String& options,
       /* numeric string */
       int optname_int = atoi(optname);
       if (ret.exists(optname_int)) {
-        auto const lval = ret.lvalAt(optname_int).unboxed();
+        auto const lval = ret.lval(optname_int);
         if (!isArrayLikeType(lval.type())) {
-          ret.set(optname_int, make_packed_array(Variant::wrap(lval.tv()), val));
+          ret.set(optname_int, make_varray(Variant::wrap(lval.tv()), val));
         } else {
           asArrRef(lval).append(val);
         }
@@ -624,9 +621,9 @@ static Array HHVM_FUNCTION(getopt, const String& options,
       /* other strings */
       String key(optname, strlen(optname), CopyString);
       if (ret.exists(key)) {
-        auto const lval = ret.lvalAt(key).unboxed();
+        auto const lval = ret.lval(key);
         if (!isArrayLikeType(lval.type())) {
-          ret.set(key, make_packed_array(Variant::wrap(lval.tv()), val));
+          ret.set(key, make_varray(Variant::wrap(lval.tv()), val));
         } else {
           asArrRef(lval).append(val);
         }
@@ -688,46 +685,46 @@ static Array HHVM_FUNCTION(getrusage, int64_t who /* = 0 */) {
       folly::errnoStr(errno).c_str());
   }
 
-  return Array(ArrayInit(17, ArrayInit::Mixed{}).
-               set(PHP_RUSAGE_PARA(ru_oublock)).
-               set(PHP_RUSAGE_PARA(ru_inblock)).
-               set(PHP_RUSAGE_PARA(ru_msgsnd)).
-               set(PHP_RUSAGE_PARA(ru_msgrcv)).
-               set(PHP_RUSAGE_PARA(ru_maxrss)).
-               set(PHP_RUSAGE_PARA(ru_ixrss)).
-               set(PHP_RUSAGE_PARA(ru_idrss)).
-               set(PHP_RUSAGE_PARA(ru_minflt)).
-               set(PHP_RUSAGE_PARA(ru_majflt)).
-               set(PHP_RUSAGE_PARA(ru_nsignals)).
-               set(PHP_RUSAGE_PARA(ru_nvcsw)).
-               set(PHP_RUSAGE_PARA(ru_nivcsw)).
-               set(PHP_RUSAGE_PARA(ru_nswap)).
-               set(s_ru_utime_tv_usec, (int64_t)usg.ru_utime.tv_usec).
-               set(s_ru_utime_tv_sec,  (int64_t)usg.ru_utime.tv_sec).
-               set(s_ru_stime_tv_usec, (int64_t)usg.ru_stime.tv_usec).
-               set(s_ru_stime_tv_sec,  (int64_t)usg.ru_stime.tv_sec).
-               toArray());
+  return make_darray(
+    PHP_RUSAGE_PARA(ru_oublock),
+    PHP_RUSAGE_PARA(ru_inblock),
+    PHP_RUSAGE_PARA(ru_msgsnd),
+    PHP_RUSAGE_PARA(ru_msgrcv),
+    PHP_RUSAGE_PARA(ru_maxrss),
+    PHP_RUSAGE_PARA(ru_ixrss),
+    PHP_RUSAGE_PARA(ru_idrss),
+    PHP_RUSAGE_PARA(ru_minflt),
+    PHP_RUSAGE_PARA(ru_majflt),
+    PHP_RUSAGE_PARA(ru_nsignals),
+    PHP_RUSAGE_PARA(ru_nvcsw),
+    PHP_RUSAGE_PARA(ru_nivcsw),
+    PHP_RUSAGE_PARA(ru_nswap),
+    s_ru_utime_tv_usec, (int64_t)usg.ru_utime.tv_usec,
+    s_ru_utime_tv_sec,  (int64_t)usg.ru_utime.tv_sec,
+    s_ru_stime_tv_usec, (int64_t)usg.ru_stime.tv_usec,
+    s_ru_stime_tv_sec,  (int64_t)usg.ru_stime.tv_sec
+  );
 }
 
 static bool HHVM_FUNCTION(clock_getres,
-                          int64_t clk_id, VRefParam sec, VRefParam nsec) {
+                          int64_t clk_id, int64_t& sec, int64_t& nsec) {
 #if defined(__APPLE__)
   throw_not_supported(__func__, "feature not supported on OSX");
 #else
   struct timespec ts;
   int ret = clock_getres(clk_id, &ts);
-  sec.assignIfRef((int64_t)ts.tv_sec);
-  nsec.assignIfRef((int64_t)ts.tv_nsec);
+  sec = ts.tv_sec;
+  nsec = ts.tv_nsec;
   return ret == 0;
 #endif
 }
 
 static bool HHVM_FUNCTION(clock_gettime,
-                          int64_t clk_id, VRefParam sec, VRefParam nsec) {
+                          int64_t clk_id, int64_t& sec, int64_t& nsec) {
   struct timespec ts;
   int ret = gettime(clockid_t(clk_id), &ts);
-  sec.assignIfRef((int64_t)ts.tv_sec);
-  nsec.assignIfRef((int64_t)ts.tv_nsec);
+  sec = ts.tv_sec;
+  nsec = ts.tv_nsec;
   return ret == 0;
 }
 
@@ -974,6 +971,20 @@ static void HHVM_FUNCTION(set_time_limit, int64_t seconds) {
   }
 }
 
+static void HHVM_FUNCTION(set_pre_timeout_handler,
+  int64_t seconds,
+  const Variant& callback
+) {
+  auto& req_data = RID();
+  if (callback.isNull() || !callback.isObject()) {
+    // We use 0 to signify no callback
+    req_data.setUserTimeout(0);
+  } else {
+    req_data.setUserTimeout(seconds);
+  }
+  g_context->m_timeThresholdCallback = callback;
+}
+
 String HHVM_FUNCTION(sys_get_temp_dir) {
 #ifdef WIN32
   char buf[PATH_MAX];
@@ -1191,11 +1202,9 @@ Variant HHVM_FUNCTION(version_compare,
 void StandardExtension::initOptions() {
   HHVM_FE(assert_options);
   HHVM_FE(assert);
-  HHVM_FE(dl);
   HHVM_FE(extension_loaded);
   HHVM_FE(get_loaded_extensions);
   HHVM_FE(get_extension_funcs);
-  HHVM_FE(get_cfg_var);
   HHVM_FE(get_current_user);
   HHVM_FE(get_defined_constants);
   HHVM_FE(get_include_path);
@@ -1235,6 +1244,7 @@ void StandardExtension::initOptions() {
   HHVM_FE(phpversion);
   HHVM_FE(putenv);
   HHVM_FE(set_time_limit);
+  HHVM_FE(set_pre_timeout_handler);
   HHVM_FE(sys_get_temp_dir);
   HHVM_FE(version_compare);
 

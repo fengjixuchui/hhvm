@@ -1,6 +1,5 @@
 <?hh
-final record A {
-  x: parent,
+record A {
+  parent x;
 }
 
-<<__EntryPoint>> function main(): void {}

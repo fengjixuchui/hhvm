@@ -198,14 +198,6 @@ inline bool ExecutionContext::hasRequestEventHandlers() const {
   return !m_requestEventHandlers.empty();
 }
 
-inline const Variant& ExecutionContext::getSoftLateInitDefault() const {
-  return m_softLateInitDefault;
-}
-
-inline void ExecutionContext::setSoftLateInitDefault(Variant d) {
-  m_softLateInitDefault = std::move(d);
-}
-
 inline const RepoOptions* ExecutionContext::getRepoOptionsForRequest() const {
   return m_requestOptions.get_pointer();
 }
@@ -225,7 +217,7 @@ inline TypedValue ExecutionContext::invokeFunc(
 
 inline TypedValue ExecutionContext::invokeFuncFew(
   const Func* f,
-  void* thisOrCls,
+  ExecutionContext::ThisOrClass thisOrCls,
   StringData* invName
 ) {
   return invokeFuncFew(f, thisOrCls, invName, 0, nullptr);
@@ -233,12 +225,12 @@ inline TypedValue ExecutionContext::invokeFuncFew(
 
 inline TypedValue ExecutionContext::invokeFuncFew(
   const CallCtx& ctx,
-  int argc,
+  uint32_t numArgs,
   const TypedValue* argv
 ) {
-  auto const thisOrCls = [&] () -> void* {
-    if (ctx.this_) return (void*)(ctx.this_);
-    if (ctx.cls) return (void*)((char*)(ctx.cls) + 1);
+  auto const thisOrCls = [&] () -> ExecutionContext::ThisOrClass {
+    if (ctx.this_) return ctx.this_;
+    if (ctx.cls) return ctx.cls;
     return nullptr;
   }();
 
@@ -246,7 +238,7 @@ inline TypedValue ExecutionContext::invokeFuncFew(
     ctx.func,
     thisOrCls,
     ctx.invName,
-    argc,
+    numArgs,
     argv,
     ctx.dynamic
   );
@@ -260,11 +252,12 @@ inline TypedValue ExecutionContext::invokeMethod(
 ) {
   return invokeFuncFew(
     meth,
-    ActRec::encodeThis(obj),
+    obj,
     nullptr /* invName */,
     args.size(),
     args.start(),
-    dynamic
+    dynamic,
+    false
   );
 }
 
@@ -284,7 +277,7 @@ inline ActRec* ExecutionContext::getOuterVMFrame(const ActRec* ar) {
   return LIKELY(!m_nestedVMs.empty()) ? m_nestedVMs.back().fp : nullptr;
 }
 
-inline Cell ExecutionContext::lookupClsCns(const StringData* cls,
+inline TypedValue ExecutionContext::lookupClsCns(const StringData* cls,
                                       const StringData* cns) {
   return lookupClsCns(NamedEntity::get(cls), cls, cns);
 }

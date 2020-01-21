@@ -50,7 +50,7 @@ let xhp_attribute_declaration_method
       m_doc_comment = None;
     }
 
-let emit_xhp_attribute_array ~ns xal =
+let emit_xhp_attribute_array xal =
   (* Taken from hphp/parser/hphp.y *)
   let hint_to_num id =
     match id with
@@ -74,8 +74,7 @@ let emit_xhp_attribute_array ~ns xal =
     | Some (_, es) -> Tast_annotate.make (T.Varray (None, es))
   in
   let get_attribute_array_values id enumo =
-    let id = Hhbc_id.Class.elaborate_id ns (p, id) in
-    let id = Hhbc_id.Class.to_raw_string id in
+    let id = Hhbc_id.Class.(from_ast_name id |> to_raw_string) in
     let type_ = hint_to_num id in
     let type_ident = Tast_annotate.make (T.Int (string_of_int type_)) in
     let class_name =
@@ -98,7 +97,7 @@ let emit_xhp_attribute_array ~ns xal =
       match ho with
       | None when enumo = None ->
         (* attribute declared with the var identifier - we treat it as mixed *)
-        get_attribute_array_values "mixed" enumo
+        get_attribute_array_values "\\HH\\mixed" enumo
       | None -> get_attribute_array_values "enum" enumo
       (* As it turns out, if there is a type list, HHVM discards it *)
       | Some (_, Aast.Happly ((_, id), _))
@@ -123,9 +122,7 @@ let emit_xhp_attribute_array ~ns xal =
     let expo = cv.T.cv_expr in
     let enumo =
       (* TODO(T23734724): Properly deal with codegen for optional enums. *)
-      Option.map
-        ~f:(fun (p, _, e) -> (p, e))
-        (Hhas_xhp_attribute.maybe_enum xa)
+      Option.map ~f:(fun (p, _, e) -> (p, e)) (Hhas_xhp_attribute.maybe_enum xa)
     in
     let is_req = Hhas_xhp_attribute.is_required xa in
     let k = Tast_annotate.make (T.String (SU.Xhp.clean name)) in
@@ -147,7 +144,7 @@ let emit_xhp_use_attributes xual =
              ( Tast_annotate.make (T.CIexpr (Tast_annotate.make (T.Id (p, s)))),
                (p, "__xhpAttributeDeclaration") ))
       in
-      Tast_annotate.make (T.Call (Aast.Cnormal, e, [], [], []))
+      Tast_annotate.make (T.Call (Aast.Cnormal, e, [], [], None))
     | _ -> failwith "Xhp use attribute - unexpected attribute"
   in
   List.map ~f:aux xual
@@ -171,7 +168,7 @@ let properties_for_cache ~ns class_ class_is_const =
   [prop]
 
 (* AST transformations taken from hphp/parser/hphp.y *)
-let from_attribute_declaration ~ns class_ xal xual =
+let from_attribute_declaration class_ xal xual =
   (* $r = self::$__xhpAttributeDeclarationCache; *)
   let var_r = Tast_annotate.make (T.Lvar (p, Local_id.make_unscoped "$r")) in
   let self = Tast_annotate.make (T.Id (p, "self")) in
@@ -206,10 +203,10 @@ let from_attribute_declaration ~ns class_ xal xual =
                   (p, "__xhpAttributeDeclaration") )),
            [],
            [],
-           [] ))
+           None ))
   in
   let args =
-    (arg1 :: emit_xhp_use_attributes xual) @ [emit_xhp_attribute_array ~ns xal]
+    (arg1 :: emit_xhp_use_attributes xual) @ [emit_xhp_attribute_array xal]
   in
   let array_merge_call =
     Tast_annotate.make
@@ -219,12 +216,12 @@ let from_attribute_declaration ~ns class_ xal xual =
              (T.Id (p, "__SystemLib\\merge_xhp_attr_declarations")),
            [],
            args,
-           [] ))
+           None ))
   in
   let set_cache =
     ( p,
-      T.Expr
-        (Tast_annotate.make (T.Binop (A.Eq None, cache, array_merge_call))) )
+      T.Expr (Tast_annotate.make (T.Binop (A.Eq None, cache, array_merge_call)))
+    )
   in
   let set_r =
     (p, T.Expr (Tast_annotate.make (T.Binop (A.Eq None, var_r, cache))))

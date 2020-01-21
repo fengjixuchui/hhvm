@@ -33,8 +33,7 @@ struct StringData;
  * TypedValue conversions that update `tv' in place (decrefing the old value,
  * if necessary).
  *
- * We have two kinds of type conversions, both of which unbox their argument
- * before doing anything:
+ * We have two kinds of type conversions:
  *
  * - Cast forcibly changes the value to the new type and will not fail (though
  *   the result may be silly).
@@ -55,7 +54,6 @@ Y(Array)
 X(Vec)
 X(Dict)
 X(Keyset)
-X(Shape)
 X(Object)
 X(NullableObject)
 X(Resource)
@@ -66,7 +64,8 @@ template<typename T>
 enable_if_lval_t<T, void> tvCastToVArrayInPlace(T tv);
 template<typename T>
 enable_if_lval_t<T, void> tvCastToDArrayInPlace(T tv);
-void cellCastToStringInPlace(tv_lval tv);
+template<typename T>
+enable_if_lval_t<T, void> tvCastToStringInPlace(T tv);
 
 template<typename T> ALWAYS_INLINE
 enable_if_lval_t<T, void> tvCastInPlace(T tv, DataType DType) {
@@ -98,25 +97,23 @@ Array tvCastToArrayLike(TypedValue tv);
 Object tvCastToObject(TypedValue tv);
 
 StringData* tvCastToStringData(TypedValue tv);
-StringData* cellCastToStringData(Cell c);
+StringData* tvCastToStringData(TypedValue c);
 template <IntishCast IC /* = IntishCast::None */>
 ArrayData* tvCastToArrayLikeData(TypedValue tv);
 ObjectData* tvCastToObjectData(TypedValue tv);
 
 /*
- * Convert a cell to various raw data types, without changing the Cell.
+ * Convert a cell to various raw data types, without changing the TypedValue.
  */
-bool cellToBool(Cell);
-int64_t cellToInt(Cell);
-double cellToDouble(Cell);
+bool tvToBool(TypedValue);
+int64_t tvToInt(TypedValue);
+double tvToDouble(TypedValue);
 
 /*
  * Convert `tv' or `cell' to a valid array key for `ad', or throw an exception.
  */
 template <IntishCast IC = IntishCast::None>
-Cell cellToKey(Cell cell, const ArrayData* ad);
-template <IntishCast IC = IntishCast::None>
-Cell tvToKey(TypedValue tv, const ArrayData* ad);
+TypedValue tvToKey(TypedValue cell, const ArrayData* ad);
 
 /*
  * Convert a string to a TypedNum following PHP semantics, allowing strings

@@ -35,13 +35,13 @@ function rsort<T as Container<mixed>>(
   int $sort_flags = SORT_REGULAR,
 ): bool;
 <<__PHPStdLib, __Rx, __AtMostRxAsArgs>>
-function asort<T as KeyedContainer<arraykey, mixed>>(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout T $arg,
+function asort<Tk as arraykey, Tv>(
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout KeyedContainer<Tk, Tv> $arg,
   int $sort_flags = SORT_REGULAR,
 ): bool;
 <<__PHPStdLib, __Rx, __AtMostRxAsArgs>>
-function arsort<T as KeyedContainer<arraykey, mixed>>(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout T $arg,
+function arsort<Tk as arraykey, Tv>(
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout KeyedContainer<Tk, Tv> $arg,
   int $sort_flags = SORT_REGULAR,
 ): bool;
 <<__PHPStdLib, __Rx, __AtMostRxAsArgs>>
@@ -50,24 +50,24 @@ function ksort<T as KeyedContainer<arraykey, mixed>>(
   int $sort_flags = SORT_REGULAR,
 ): bool;
 <<__PHPStdLib, __Rx, __AtMostRxAsArgs>>
-function krsort<T as KeyedContainer<arraykey, mixed>>(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout T $arg,
+function krsort<Tk as arraykey, Tv>(
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout KeyedContainer<Tk, Tv> $arg,
   int $sort_flags = SORT_REGULAR,
 ): bool;
 <<__PHPStdLib, __Rx, __AtMostRxAsArgs>>
 function usort<Tv, T as Container<Tv>>(
   <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> inout T $arg,
-  <<__AtMostRxAsFunc>> (function(Tv, Tv): int) $c,
+  <<__AtMostRxAsFunc>> (function(Tv, Tv): num) $c,
 ): bool;
 <<__PHPStdLib, __Rx, __AtMostRxAsArgs>>
-function uasort<Tv, T as KeyedContainer<arraykey, Tv>>(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout T $arg,
-  <<__AtMostRxAsFunc>> (function(Tv, Tv): int) $c,
+function uasort<Tk as arraykey, Tv>(
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout KeyedContainer<Tk, Tv> $arg,
+  <<__AtMostRxAsFunc>> (function(Tv, Tv): num) $c,
 ): bool;
 <<__PHPStdLib, __Rx, __AtMostRxAsArgs>>
-function uksort<Tk as arraykey, T as KeyedContainer<Tk, mixed>>(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout T $arg,
-  <<__AtMostRxAsFunc>> (function(Tk, Tk): int) $c,
+function uksort<Tk as arraykey, Tv>(
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout KeyedContainer<Tk, Tv> $arg,
+  <<__AtMostRxAsFunc>> (function(Tk, Tk): num) $c,
 ): bool;
 
 }

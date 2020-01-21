@@ -1,12 +1,12 @@
 <?hh
 
 abstract record Foo {
-  x: int,
+  int x;
 }
 
 type Bar = Foo;
 
-final record Baz extends Foo {
+record Baz extends Foo {
 }
 
 function foo(Bar $a) : Bar{

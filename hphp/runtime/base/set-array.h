@@ -111,10 +111,10 @@ struct SetArrayElm {
   }
 
   ALWAYS_INLINE
-  Cell getKey() const {
+  TypedValue getKey() const {
     assertx(!isInvalid());
-    Cell out;
-    cellDup(tv, out);
+    TypedValue out;
+    tvDup(tv, out);
     return out;
   }
 
@@ -234,7 +234,7 @@ private:
 // Iteration
 
 private:
-  Cell getElm(ssize_t ei) const;
+  TypedValue getElm(ssize_t ei) const;
 
 public:
   const TypedValue* tvOfPos(uint32_t) const;
@@ -370,7 +370,7 @@ private:
   using ArrayData::at;
   using ArrayData::rval;
   using ArrayData::lval;
-  using ArrayData::lvalNew;
+  using ArrayData::lvalForce;
   using ArrayData::set;
   using ArrayData::remove;
   using ArrayData::release;
@@ -411,40 +411,35 @@ public:
   static tv_rval RvalStrStrict(const ArrayData* ad, const StringData* k) {
     return NvTryGetStr(ad, k);
   }
-  static tv_rval RvalAtPos(const ArrayData* ad, ssize_t pos) {
-    return GetValueRef(ad, pos);
-  }
   static size_t Vsize(const ArrayData*);
-  static tv_rval GetValueRef(const ArrayData*, ssize_t);
+  static tv_rval RvalPos(const ArrayData*, ssize_t);
   static bool IsVectorData(const ArrayData*);
   static bool ExistsInt(const ArrayData*, int64_t);
   static bool ExistsStr(const ArrayData*, const StringData*);
   static arr_lval LvalInt(ArrayData*, int64_t, bool);
   static arr_lval LvalStr(ArrayData*, StringData*, bool);
-  static arr_lval LvalNew(ArrayData*, bool);
-  static ArrayData* SetInt(ArrayData*, int64_t, Cell);
+  static constexpr auto LvalSilentInt = &LvalInt;
+  static constexpr auto LvalSilentStr = &LvalStr;
+  static arr_lval LvalForceNew(ArrayData*, bool);
+  static ArrayData* SetInt(ArrayData*, int64_t, TypedValue);
+  static constexpr auto SetIntMove = &SetInt;
   static constexpr auto SetIntInPlace = &SetInt;
-  static ArrayData* SetStr(ArrayData*, StringData*, Cell);
+  static ArrayData* SetStr(ArrayData*, StringData*, TypedValue);
+  static constexpr auto SetStrMove = &SetStr;
   static constexpr auto SetStrInPlace = &SetStr;
-  static ArrayData* SetWithRefInt(ArrayData*, int64_t, TypedValue);
-  static constexpr auto SetWithRefIntInPlace = &SetWithRefInt;
-  static ArrayData* SetWithRefStr(ArrayData*, StringData*, TypedValue);
-  static constexpr auto SetWithRefStrInPlace = &SetWithRefStr;
   static ArrayData* RemoveInt(ArrayData*, int64_t);
   static ArrayData* RemoveIntInPlace(ArrayData*, int64_t);
   static ArrayData* RemoveStr(ArrayData*, const StringData*);
   static ArrayData* RemoveStrInPlace(ArrayData*, const StringData*);
   static ArrayData* Copy(const ArrayData*);
   static ArrayData* CopyStatic(const ArrayData*);
-  static ArrayData* Append(ArrayData*, Cell);
-  static ArrayData* AppendInPlace(ArrayData*, Cell);
-  static ArrayData* AppendWithRef(ArrayData*, TypedValue);
-  static ArrayData* AppendWithRefInPlace(ArrayData*, TypedValue);
+  static ArrayData* Append(ArrayData*, TypedValue);
+  static ArrayData* AppendInPlace(ArrayData*, TypedValue);
   static ArrayData* PlusEq(ArrayData*, const ArrayData*);
   static ArrayData* Merge(ArrayData*, const ArrayData*);
   static ArrayData* Pop(ArrayData*, Variant&);
   static ArrayData* Dequeue(ArrayData*, Variant&);
-  static ArrayData* Prepend(ArrayData*, Cell);
+  static ArrayData* Prepend(ArrayData*, TypedValue);
   static void Renumber(ArrayData*);
   static void OnSetEvalScalar(ArrayData*);
   static ArrayData* Escalate(const ArrayData*);
@@ -455,7 +450,6 @@ public:
   static ArrayData* ToKeyset(ArrayData*, bool);
   static constexpr auto ToVArray = &ArrayCommon::ToVArray;
   static ArrayData* ToDArray(ArrayData*, bool);
-  static ArrayData* ToShape(ArrayData*, bool);
   static bool Equal(const ArrayData*, const ArrayData*);
   static bool NotEqual(const ArrayData*, const ArrayData*);
   static bool Same(const ArrayData*, const ArrayData*);
@@ -466,7 +460,7 @@ public:
 private:
   template<class K>
   static ArrayData* RemoveImpl(ArrayData*, K key, bool, SetArrayElm::hash_t);
-  static ArrayData* AppendImpl(ArrayData*, Cell, bool);
+  static ArrayData* AppendImpl(ArrayData*, TypedValue, bool);
 
 private:
   struct Initializer;

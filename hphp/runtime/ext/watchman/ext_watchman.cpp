@@ -347,18 +347,22 @@ struct ActiveSubscription {
       String str_json_data(json_data.c_str());
       String str_socket_path(m_socketPath.c_str());
       TypedValue args[] = {
-        str_path.toCell(),
-        str_query.toCell(),
-        str_name.toCell(),
-        str_json_data.toCell(),
-        str_socket_path.toCell(),
+        str_path.asTypedValue(),
+        str_query.asTypedValue(),
+        str_name.asTypedValue(),
+        str_json_data.asTypedValue(),
+        str_socket_path.asTypedValue(),
       };
       tvDecRefGen(
-          context->invokeFuncFew(func,
-                                 nullptr, // thisOrCls
-                                 nullptr, // invName
-                                 5, // argc
-                                 args)
+        context->invokeFuncFew(
+          func,
+          nullptr, // thisOrCls
+          nullptr, // invName
+          5, // argc
+          args,
+          true, // dynamic
+          true  // allowDynCallNoPointer
+        )
       );
     } catch(Exception& e) {
       if (m_error.empty()) {
@@ -499,7 +503,7 @@ template <typename T> struct FutureEvent : AsioExternalThreadEvent {
   // after the markAsFinished() above which is the only place mutating the state
   // of the data used here. markAsFinished() can only be called once as it is
   // only called (indirectly) from construction of this object instance.
-  void unserialize(Cell& result) override {
+  void unserialize(TypedValue& result) override {
     if (m_exception) {
       SystemLib::throwInvalidOperationExceptionObject(
         m_exception.what().c_str());
@@ -512,25 +516,25 @@ template <typename T> struct FutureEvent : AsioExternalThreadEvent {
   // (PHP) no lock
   template<typename U = T>
   typename std::enable_if<std::is_same<U, std::string>::value>::type
-    unserializeImpl(Cell& result)
+    unserializeImpl(TypedValue& result)
   {
-    cellCopy(make_tv<KindOfString>(StringData::Make(m_result)), result);
+    tvCopy(make_tv<KindOfString>(StringData::Make(m_result)), result);
   }
 
   // (PHP) no lock
   template<typename U = T>
   typename std::enable_if<std::is_same<U, folly::Unit>::value>::type
-    unserializeImpl(Cell& result)
+    unserializeImpl(TypedValue& result)
   {
-    cellCopy(make_tv<KindOfNull>(), result);
+    tvCopy(make_tv<KindOfNull>(), result);
   }
 
   // (PHP) no lock
   template<typename U = T>
   typename std::enable_if<std::is_same<U, bool>::value>::type
-    unserializeImpl(Cell& result)
+    unserializeImpl(TypedValue& result)
   {
-    cellCopy(make_tv<KindOfBoolean>(m_result), result);
+    tvCopy(make_tv<KindOfBoolean>(m_result), result);
   }
 
   T m_result;

@@ -14,24 +14,9 @@
     buildMain))
 
 (library
-  (name debug_stubs)
-  (wrapped false)
-  (modules
-    debug
-    sof)
-  (libraries
-    full_fidelity))
-
-(library
   (name rust_ffi_stubs)
   (wrapped false)
   (modules ))
-
-(library
-  (name hackc_parse_delegator_stubs)
-  (wrapped false)
-  (modules
-    hackc_parse_delegator))
 
 (library
   (name linting_stubs)
@@ -48,12 +33,6 @@
     loadScriptUtils))
 
 (library
-  (name lru_worker_stubs)
-  (wrapped false)
-  (modules
-    lru_worker))
-
-(library
   (name messages_stubs)
   (wrapped false)
   (modules
@@ -68,16 +47,12 @@
     relative_path))
 
 (library
-  (name remote_scheduler_stubs)
+  (name typing_service_api_stubs)
   (wrapped false)
   (modules
-    remoteScheduler)
+    typing_service_delegate)
   (libraries
-    file_info
-    naming
-    procs_procs
-    relative_path
-    sys_utils))
+    typing_service_api))
 
 (library
   (name remote_worker_stubs)
@@ -87,6 +62,7 @@
   (libraries
     errors
     file_info
+    naming
     relative_path
     sys_utils))
 
@@ -104,7 +80,27 @@
     server_monitor))
 
 (library
-  (name shared_lru_stubs)
+  (name decl_ipc_ffi_externs)
   (wrapped false)
   (modules
-    shared_lru))
+    decl_ipc_ffi_externs))
+
+(library
+  (name experiments_config_file_stubs)
+  (wrapped false)
+  (modules
+    experiments_config_file))
+
+(library
+  (name glean_dependency_graph_stubs)
+  (wrapped false)
+  (modules
+    glean_dependency_graph)
+  (libraries
+    hh_json
+    collections))
+
+(library
+  (name exec_command_stubs)
+  (wrapped false)
+  (modules exec_command))

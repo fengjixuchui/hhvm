@@ -13,7 +13,8 @@ let url_scheme_regex = Str.regexp "^\\([a-zA-Z][a-zA-Z0-9+.-]+\\):"
 
 (* this requires schemes with 2+ characters, so "c:\path" isn't considered a scheme *)
 
-let lsp_uri_to_path (uri : string) : string =
+let lsp_uri_to_path (uri : documentUri) : string =
+  let uri = string_of_uri uri in
   if Str.string_match url_scheme_regex uri 0 then
     let scheme = Str.matched_group 1 uri in
     if scheme = "file" then
@@ -24,11 +25,11 @@ let lsp_uri_to_path (uri : string) : string =
   else
     uri
 
-let path_to_lsp_uri (path : string) ~(default_path : string) : string =
+let path_to_lsp_uri (path : string) ~(default_path : string) : Lsp.documentUri =
   if path = "" then
-    File_url.create default_path
+    File_url.create default_path |> uri_of_string
   else
-    File_url.create path
+    File_url.create path |> uri_of_string
 
 let lsp_textDocumentIdentifier_to_filename
     (identifier : Lsp.TextDocumentIdentifier.t) : string =
@@ -109,9 +110,7 @@ let get_range_overlap (selection : range) (squiggle : range) : range_overlap =
   let selStart_leq_squiggleEnd =
     pos_compare selection.start squiggle.end_ <= 0
   in
-  let selEnd_lt_squiggleStart =
-    pos_compare selection.end_ squiggle.start < 0
-  in
+  let selEnd_lt_squiggleStart = pos_compare selection.end_ squiggle.start < 0 in
   let selEnd_lt_squiggleEnd = pos_compare selection.end_ squiggle.end_ < 0 in
   (* Q. Why does it test "<=" for the first two and "<" for the last two? *)
   (* Intuitively you can trust that it has something to do with how ranges are *)
@@ -138,8 +137,7 @@ let get_range_overlap (selection : range) (squiggle : range) : range_overlap =
     failwith "sel.start proves squiggle.start > squiggle.end_"
   | (_, _, true, false) ->
     failwith "sel.end proves squiggle.start > squiggle.end_"
-  | (false, _, true, _) ->
-    failwith "squiggle.start proves sel.start > sel.end_"
+  | (false, _, true, _) -> failwith "squiggle.start proves sel.start > sel.end_"
   | (_, false, _, true) -> failwith "squiggle.end_ proves sel.start > sel.end_"
 
 (* this structure models a change where a certain range is replaced with
@@ -182,8 +180,7 @@ let update_pos_due_to_prior_replace (p : position) (replace : range_replace) :
   else
     (* The position is on the line where a few characters were inserted *)
     let line =
-      p.line
-      - (replace.remove_range.end_.line - replace.remove_range.start.line)
+      p.line - (replace.remove_range.end_.line - replace.remove_range.start.line)
     in
     let character =
       replace.remove_range.start.character
@@ -257,12 +254,12 @@ let update_diagnostics_due_to_change
       | _ -> None
     in
     let replaces =
-      Core_list.map change.DidChange.contentChanges ~f:replace_of_change
+      Base.List.map change.DidChange.contentChanges ~f:replace_of_change
     in
     let apply_all_replaces diagnostic =
-      Core_list.fold replaces ~init:(Some diagnostic) ~f:apply_replace
+      Base.List.fold replaces ~init:(Some diagnostic) ~f:apply_replace
     in
-    Core_list.filter_map diagnostics ~f:apply_all_replaces)
+    Base.List.filter_map diagnostics ~f:apply_all_replaces)
 
 (************************************************************************)
 (* Accessors                                                            *)
@@ -275,12 +272,6 @@ let get_root (p : Lsp.Initialize.params) : string =
     | (None, Some path) -> path
     | (None, None) -> failwith "Initialize params missing root")
 
-let supports_progress (p : Lsp.Initialize.params) : bool =
-  Lsp.Initialize.(p.client_capabilities.window.progress)
-
-let supports_actionRequired (p : Lsp.Initialize.params) : bool =
-  Lsp.Initialize.(p.client_capabilities.window.actionRequired)
-
 let supports_status (p : Lsp.Initialize.params) : bool =
   Lsp.Initialize.(p.client_capabilities.window.status)
 
@@ -291,14 +282,93 @@ let supports_snippets (p : Lsp.Initialize.params) : bool =
 let supports_connectionStatus (p : Lsp.Initialize.params) : bool =
   Lsp.Initialize.(p.client_capabilities.telemetry.connectionStatus)
 
+let get_uri_opt (m : lsp_message) : Lsp.documentUri option =
+  let open TextDocumentIdentifier in
+  match m with
+  | RequestMessage (_, DocumentCodeLensRequest p) ->
+    Some p.DocumentCodeLens.textDocument.uri
+  | RequestMessage (_, HoverRequest p) ->
+    Some p.TextDocumentPositionParams.textDocument.uri
+  | RequestMessage (_, DefinitionRequest p) ->
+    Some p.TextDocumentPositionParams.textDocument.uri
+  | RequestMessage (_, TypeDefinitionRequest p) ->
+    Some p.TextDocumentPositionParams.textDocument.uri
+  | RequestMessage (_, CodeActionRequest p) ->
+    Some p.CodeActionRequest.textDocument.uri
+  | RequestMessage (_, CompletionRequest p) ->
+    Some p.Completion.loc.TextDocumentPositionParams.textDocument.uri
+  | RequestMessage (_, DocumentSymbolRequest p) ->
+    Some p.DocumentSymbol.textDocument.uri
+  | RequestMessage (_, FindReferencesRequest p) ->
+    Some p.FindReferences.loc.TextDocumentPositionParams.textDocument.uri
+  | RequestMessage (_, ImplementationRequest p) ->
+    Some p.TextDocumentPositionParams.textDocument.uri
+  | RequestMessage (_, DocumentHighlightRequest p) ->
+    Some p.TextDocumentPositionParams.textDocument.uri
+  | RequestMessage (_, TypeCoverageRequestFB p) ->
+    Some p.TypeCoverageFB.textDocument.uri
+  | RequestMessage (_, DocumentFormattingRequest p) ->
+    Some p.DocumentFormatting.textDocument.uri
+  | RequestMessage (_, DocumentRangeFormattingRequest p) ->
+    Some p.DocumentRangeFormatting.textDocument.uri
+  | RequestMessage (_, DocumentOnTypeFormattingRequest p) ->
+    Some p.DocumentOnTypeFormatting.textDocument.uri
+  | RequestMessage (_, RenameRequest p) -> Some p.Rename.textDocument.uri
+  | RequestMessage (_, SignatureHelpRequest p) ->
+    Some p.TextDocumentPositionParams.textDocument.uri
+  | NotificationMessage (PublishDiagnosticsNotification p) ->
+    Some p.PublishDiagnostics.uri
+  | NotificationMessage (DidOpenNotification p) ->
+    Some p.DidOpen.textDocument.TextDocumentItem.uri
+  | NotificationMessage (DidCloseNotification p) ->
+    Some p.DidClose.textDocument.uri
+  | NotificationMessage (DidSaveNotification p) ->
+    Some p.DidSave.textDocument.uri
+  | NotificationMessage (DidChangeNotification p) ->
+    Some p.DidChange.textDocument.VersionedTextDocumentIdentifier.uri
+  | NotificationMessage (DidChangeWatchedFilesNotification p) ->
+    begin
+      match p.DidChangeWatchedFiles.changes with
+      | [] -> None
+      | { DidChangeWatchedFiles.uri; _ } :: _ -> Some uri
+    end
+  | RequestMessage (_, HackTestStartServerRequestFB)
+  | RequestMessage (_, HackTestStopServerRequestFB)
+  | RequestMessage (_, HackTestShutdownServerlessRequestFB)
+  | RequestMessage (_, UnknownRequest _)
+  | RequestMessage (_, InitializeRequest _)
+  | RequestMessage (_, RegisterCapabilityRequest _)
+  | RequestMessage (_, ShutdownRequest)
+  | RequestMessage (_, CodeLensResolveRequest _)
+  | RequestMessage (_, CompletionItemResolveRequest _)
+  | RequestMessage (_, WorkspaceSymbolRequest _)
+  | RequestMessage (_, ShowMessageRequestRequest _)
+  | RequestMessage (_, ShowStatusRequestFB _)
+  | RequestMessage (_, RageRequestFB)
+  | NotificationMessage ExitNotification
+  | NotificationMessage (CancelRequestNotification _)
+  | NotificationMessage (LogMessageNotification _)
+  | NotificationMessage (TelemetryNotification _)
+  | NotificationMessage (ShowMessageNotification _)
+  | NotificationMessage (ConnectionStatusNotificationFB _)
+  | NotificationMessage InitializedNotification
+  | NotificationMessage SetTraceNotification
+  | NotificationMessage LogTraceNotification
+  | NotificationMessage (ToggleTypeCoverageNotificationFB _)
+  | NotificationMessage (UnknownNotification _)
+  | ResponseMessage _ ->
+    None
+
 (************************************************************************)
 (* Wrappers for some LSP methods                                        *)
 (************************************************************************)
 
 let telemetry
-    (writer : Jsonrpc.writer) (level : MessageType.t) (message : string) : unit
+    (writer : Jsonrpc.writer) (type_ : MessageType.t) (message : string) : unit
     =
-  print_logMessage level message |> Jsonrpc.notify writer "telemetry/event"
+  let params = { LogMessage.type_; message } in
+  let notification = TelemetryNotification params in
+  notification |> print_lsp_notification |> writer
 
 let telemetry_error (writer : Jsonrpc.writer) =
   telemetry writer MessageType.ErrorMessage
@@ -306,9 +376,11 @@ let telemetry_error (writer : Jsonrpc.writer) =
 let telemetry_log (writer : Jsonrpc.writer) =
   telemetry writer MessageType.LogMessage
 
-let log (writer : Jsonrpc.writer) (level : MessageType.t) (message : string) :
+let log (writer : Jsonrpc.writer) (type_ : MessageType.t) (message : string) :
     unit =
-  print_logMessage level message |> Jsonrpc.notify writer "window/logMessage"
+  let params = { LogMessage.type_; message } in
+  let notification = LogMessageNotification params in
+  notification |> print_lsp_notification |> writer
 
 let log_error (writer : Jsonrpc.writer) = log writer MessageType.ErrorMessage
 
@@ -317,102 +389,12 @@ let log_warning (writer : Jsonrpc.writer) =
 
 let log_info (writer : Jsonrpc.writer) = log writer MessageType.InfoMessage
 
-let dismiss_diagnostics (writer : Jsonrpc.writer) (diagnostic_uris : SSet.t) :
-    SSet.t =
-  let dismiss_one (uri : string) : unit =
-    let message = { Lsp.PublishDiagnostics.uri; diagnostics = [] } in
-    message
-    |> print_diagnostics
-    |> Jsonrpc.notify writer "textDocument/publishDiagnostics"
+let dismiss_diagnostics (writer : Jsonrpc.writer) (diagnostic_uris : UriSet.t) :
+    UriSet.t =
+  let dismiss_one (uri : documentUri) : unit =
+    let params = { Lsp.PublishDiagnostics.uri; diagnostics = [] } in
+    let notification = PublishDiagnosticsNotification params in
+    notification |> print_lsp_notification |> writer
   in
-  SSet.iter dismiss_one diagnostic_uris;
-  SSet.empty
-
-let notify_connectionStatus
-    (p : Lsp.Initialize.params)
-    (writer : Jsonrpc.writer)
-    (wasConnected : bool)
-    (isConnected : bool) : bool =
-  ( if supports_connectionStatus p && wasConnected <> isConnected then
-    let message = { Lsp.ConnectionStatus.isConnected } in
-    message
-    |> print_connectionStatus
-    |> Jsonrpc.notify writer "telemetry/connectionStatus" );
-  isConnected
-
-(* notify_progress: for sending/updating/closing progress messages.         *)
-(* To start a new indicator: id=None, message=Some, and get back the new id *)
-(* To update an existing one: id=Some, message=Some, and get back same id   *)
-(* To close an existing one: id=Some, message=None, and get back None       *)
-(* No-op, for convenience: id=None, message=None, and you get back None     *)
-(* messages. To start a new progress notifier, put id=None and message=Some *)
-
-let notify_progress_raw
-    (state : 'a)
-    (p : Lsp.Initialize.params)
-    (writer : 'a -> Progress.params -> 'a)
-    (id : Progress.t)
-    (label : string option) : 'a * Progress.t =
-  match (id, label) with
-  | (Progress.Absent, Some label) ->
-    if supports_progress p then
-      let () = incr progress_and_actionRequired_counter in
-      let id = !progress_and_actionRequired_counter in
-      let msg = { Progress.id; label = Some label } in
-      let state = writer state msg in
-      (state, Progress.Present { id; label })
-    else
-      (state, Progress.Absent)
-  | (Progress.Present { id; label }, Some new_label) when label = new_label ->
-    (state, Progress.Present { id; label })
-  | (Progress.Present { id; _ }, Some label) ->
-    let msg = { Progress.id; label = Some label } in
-    let state = writer state msg in
-    (state, Progress.Present { id; label })
-  | (Progress.Present { id; _ }, None) ->
-    let msg = { Progress.id; label = None } in
-    let state = writer state msg in
-    (state, Progress.Absent)
-  | (Progress.Absent, None) -> (state, Progress.Absent)
-
-let notify_progress
-    (p : Lsp.Initialize.params)
-    (writer : Jsonrpc.writer)
-    (id : Progress.t)
-    (label : string option) : Progress.t =
-  let writer_wrapper () params =
-    let json = print_progress params.Progress.id params.Progress.label in
-    Jsonrpc.notify writer "window/progress" json
-  in
-  let ((), id) = notify_progress_raw () p writer_wrapper id label in
-  id
-
-let notify_actionRequired
-    (p : Lsp.Initialize.params)
-    (writer : Jsonrpc.writer)
-    (id : ActionRequired.t)
-    (label : string option) : ActionRequired.t =
-  match (id, label) with
-  | (ActionRequired.Absent, Some label) ->
-    if supports_actionRequired p then
-      let () = incr progress_and_actionRequired_counter in
-      let id = !progress_and_actionRequired_counter in
-      let () =
-        print_actionRequired id (Some label)
-        |> Jsonrpc.notify writer "window/actionRequired"
-      in
-      ActionRequired.Present { id; label }
-    else
-      ActionRequired.Absent
-  | (ActionRequired.Present { id; label }, Some new_label)
-    when label = new_label ->
-    ActionRequired.Present { id; label }
-  | (ActionRequired.Present { id; _ }, Some label) ->
-    print_actionRequired id (Some label)
-    |> Jsonrpc.notify writer "window/actionRequired";
-    ActionRequired.Present { id; label }
-  | (ActionRequired.Present { id; _ }, None) ->
-    print_actionRequired id None
-    |> Jsonrpc.notify writer "window/actionRequired";
-    ActionRequired.Absent
-  | (ActionRequired.Absent, None) -> ActionRequired.Absent
+  UriSet.iter dismiss_one diagnostic_uris;
+  UriSet.empty

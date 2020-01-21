@@ -1,0 +1,26 @@
+# @generated
+# @autocargo from //hphp/hack/src/parser:positioned_coroutine_parser_ffi
+# Signature<<f5249e44318743782e04ed43eade13c823a9d4bc>>
+[package]
+name = "positioned_coroutine_parser_ffi"
+edition = "2018"
+version = "0.0.0"
+include = ["../../positioned_coroutine_parser_ffi.rs"]
+
+[lib]
+path = "../../positioned_coroutine_parser_ffi.rs"
+
+[dependencies]
+ocamlpool_rust = { path = "../../../utils/ocamlpool_rust" }
+ocamlrep = { path = "../../../ocamlrep" }
+ocamlrep_ocamlpool = { path = "../../../ocamlrep_ocamlpool" }
+oxidized = { path = "../../../oxidized" }
+parser_core_types = { path = "../core_types" }
+positioned_coroutine_parser = { path = "../../api/cargo/positioned_coroutine_parser" }
+rust_parser_ffi = { path = "../rust_parser_ffi" }
+rust_to_ocaml = { path = "../rust_to_ocaml" }
+smart_constructors = { path = "../smart_constructors" }
+stack_limit = { path = "../../../utils/stack_limit" }
+libc = "0.2"
+ocaml = "0.8"
+# @end of Signature<<f5249e44318743782e04ed43eade13c823a9d4bc>>

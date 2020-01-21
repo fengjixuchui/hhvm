@@ -31,7 +31,6 @@
 #include "hphp/util/gzip.h"
 #include "hphp/util/zstd.h"
 
-using namespace brotli;
 using namespace testing;
 
 namespace HPHP {
@@ -95,6 +94,18 @@ struct MockHeaders : ITransportHeaders {
       respHeaders(std::move(resp)) {}
 
   /* Request header methods */
+  Method getMethod() override {
+    return Method::Unknown;
+  }
+
+  const char *getMethodName() override {
+    return nullptr;
+  }
+
+  const void *getPostData(size_t &size) override {
+    return nullptr;
+  }
+
   const char *getUrl() override {
     return nullptr;
   }
@@ -162,6 +173,17 @@ struct MockHeaders : ITransportHeaders {
 
   void getResponseHeaders(HeaderMap &headers) override {
     headers = respHeaders;
+  }
+
+  void addToCommaSeparatedHeader(const char* name, const char* value) override {
+    assertx(name && *name);
+    assertx(value);
+    const auto it = respHeaders.find(name);
+    if (it != respHeaders.end() && !it->second.empty()) {
+      it->second[0] = it->second[0] + std::string(", ") + value;
+    } else {
+      addHeader(name, value);
+    }
   }
 
  private:
@@ -370,6 +392,69 @@ TEST_F(ResponseCompressorTest, testAcceptEncodingOptions) {
 TEST_F(ResponseCompressorTest, testAcceptEncodingOptionsSpace) {
   mh.addRequestHeader("Accept-Encoding", "   foo \t; q=1\t;  x=y \t ");
   EXPECT_TRUE(acceptsEncoding(&mh, "foo"));
+}
+
+TEST_F(ResponseCompressorTest, testAcceptEncodingOptionsSpacedTokens) {
+  mh.addRequestHeader("Accept-Encoding", "   foo \t; q = 1\t;  x=y \t ");
+  EXPECT_TRUE(acceptsEncoding(&mh, "foo"));
+}
+
+TEST_F(ResponseCompressorTest, testAcceptEncodingWeirdHeader) {
+  mh.addRequestHeader("Accept-Encoding", ";;;;,;;;;,,,foo;;,;;,;  ;, ,;");
+  EXPECT_TRUE(acceptsEncoding(&mh, "foo"));
+}
+
+
+TEST_F(ResponseCompressorTest, testAcceptEncodingMultipleWeirdHeader) {
+  mh.addRequestHeader("Accept-Encoding", ";;,;;foo;;bar;,,yes;,;,;;,;  ;,no,;");
+  EXPECT_FALSE(acceptsEncoding(&mh, "foo"));
+  EXPECT_FALSE(acceptsEncoding(&mh, "bar"));
+  EXPECT_TRUE(acceptsEncoding(&mh, "yes"));
+  EXPECT_TRUE(acceptsEncoding(&mh, "no"));
+}
+
+TEST_F(ResponseCompressorTest, testAcceptEncodingCases) {
+  mh.addRequestHeader("Accept-Encoding", "iLoVeTOCoMPResSReSPONSES");
+  EXPECT_TRUE(acceptsEncoding(&mh, "ilovetocompressresponses"));
+  EXPECT_TRUE(acceptsEncoding(&mh, "iloVETOCOMPRESSRESPONSes"));
+}
+
+TEST_F(ResponseCompressorTest, testAcceptEncodingBrokenToken) {
+  mh.addRequestHeader("Accept-Encoding", "   fo o \t; q=1\t;  x=y \t ");
+  EXPECT_FALSE(acceptsEncoding(&mh, "foo"));
+}
+
+TEST_F(ResponseCompressorTest, testAcceptEncodingAllSemicolon) {
+  mh.addRequestHeader("Accept-Encoding", ";;;;;;;;");
+  EXPECT_FALSE(acceptsEncoding(&mh, "foo"));
+}
+
+TEST_F(ResponseCompressorTest, testAcceptEncodingAllComma) {
+  mh.addRequestHeader("Accept-Encoding", ",,,,,");
+  EXPECT_FALSE(acceptsEncoding(&mh, "foo"));
+}
+
+TEST_F(ResponseCompressorTest, testAcceptEncodingAllSemicolonSpaced) {
+  mh.addRequestHeader("Accept-Encoding", ";;; ;;   \t; ;\t;");
+  EXPECT_FALSE(acceptsEncoding(&mh, "foo"));
+}
+
+TEST_F(ResponseCompressorTest, testAcceptEncodingAllCommaSpaced) {
+  mh.addRequestHeader("Accept-Encoding", "\t\t,      \t, ,, ,");
+  EXPECT_FALSE(acceptsEncoding(&mh, "foo"));
+}
+
+TEST_F(ResponseCompressorTest, testReasonableDictionaryEncodingScenario) {
+  mh.addRequestHeader("Accept-Encoding","coolencode;d=3, zstd, gzip;q=0.5");
+  EXPECT_TRUE(acceptsEncoding(&mh, "coolencode"));
+  EXPECT_TRUE(acceptsEncoding(&mh, "zstd"));
+  EXPECT_TRUE(acceptsEncoding(&mh, "gzip"));
+}
+
+TEST_F(ResponseCompressorTest, testSemicolonCommaAdjacent) {
+  mh.addRequestHeader("Accept-Encoding","foo;d=3;, zstd;,");
+  EXPECT_TRUE(acceptsEncoding(&mh, "foo"));
+  EXPECT_TRUE(acceptsEncoding(&mh, "zstd"));
 }
 
 /**************
@@ -633,6 +718,16 @@ TEST_F(ResponseCompressorTest, testZstdChunkedCompression) {
   EXPECT_TRUE(compressor->isAccepted());
   auto compressed = compressChunked(compressor.get(), kResponse);
   decompressZstd(compressed, kResponse);
+}
+
+TEST_F(ResponseCompressorTest, testHeaderSettings) {
+  mh.addToCommaSeparatedHeader("Vary", "Accept-Encoding");
+  HeaderMap responseHeaders;
+  mh.getResponseHeaders(responseHeaders);
+  EXPECT_EQ(responseHeaders["Vary"][0], "Accept-Encoding");
+  mh.addToCommaSeparatedHeader("Vary", "Other Stuff");
+  mh.getResponseHeaders(responseHeaders);
+  EXPECT_EQ(responseHeaders["Vary"][0], "Accept-Encoding, Other Stuff");
 }
 
 /********************

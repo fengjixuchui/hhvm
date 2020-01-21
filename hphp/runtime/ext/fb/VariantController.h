@@ -17,12 +17,16 @@
 #ifndef VARIANTCONTROLLER_H
 #define VARIANTCONTROLLER_H
 
-#include <algorithm>
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/array-iterator.h"
+#include "hphp/runtime/base/array-provenance.h"
+#include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/runtime-error.h"
+
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/ext/fb/FBSerialize/FBSerialize.h"
+
+#include <algorithm>
 
 namespace HPHP {
 
@@ -74,18 +78,10 @@ struct VariantControllerImpl {
       case KindOfPersistentString:
       case KindOfString:     return HPHP::serialize::Type::STRING;
       case KindOfObject:     return HPHP::serialize::Type::OBJECT;
-      case KindOfPersistentShape:
-      case KindOfShape: { // TODO(T31134050)
-        if (RuntimeOption::EvalHackArrDVArrs &&
-            HackArraysMode == VariantControllerHackArraysMode::OFF) {
-          throw HPHP::serialize::HackArraySerializeError{};
-        }
-        return HPHP::serialize::Type::MAP;
-      }
       case KindOfPersistentArray:
       case KindOfArray:
         if (HackArraysMode == VariantControllerHackArraysMode::MIGRATORY) {
-          return obj.toCArrRef().isVecOrVArray()
+          return obj.asCArrRef().isVecOrVArray()
             ? HPHP::serialize::Type::LIST
             : HPHP::serialize::Type::MAP;
         }
@@ -95,12 +91,22 @@ struct VariantControllerImpl {
         if (HackArraysMode == VariantControllerHackArraysMode::ON) {
           return HPHP::serialize::Type::MAP;
         }
+        if (RuntimeOption::EvalHackArrCompatFBSerializeHackArraysNotices) {
+          raise_hackarr_compat_notice(
+              "attempted to fb_serialize dict without "
+              "FB_SERIALIZE_HACK_ARRAYS flag");
+        }
         throw HPHP::serialize::HackArraySerializeError{};
       }
       case KindOfPersistentVec:
       case KindOfVec: {
         if (HackArraysMode == VariantControllerHackArraysMode::ON) {
           return HPHP::serialize::Type::LIST;
+        }
+        if (RuntimeOption::EvalHackArrCompatFBSerializeHackArraysNotices) {
+          raise_hackarr_compat_notice(
+              "attempted to fb_serialize vec without "
+              "FB_SERIALIZE_HACK_ARRAYS flag");
         }
         throw HPHP::serialize::HackArraySerializeError{};
       }
@@ -115,8 +121,13 @@ struct VariantControllerImpl {
           return HPHP::serialize::Type::MAP;
         }
 
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+
       case KindOfResource:
-      case KindOfRef:
       case KindOfRecord: // TODO(T41025646): implement serialization for records
         throw HPHP::serialize::SerializeError(
           "don't know how to serialize HPHP Variant");
@@ -281,9 +292,14 @@ struct VariantControllerImpl {
   ALWAYS_INLINE
   static void traceSerialization(const_variant_ref thing) {
     if (LIKELY(!RuntimeOption::EvalLogArrayProvenance)) return;
+    if (HackArraysMode != VariantControllerHackArraysMode::ON) return;
+    if (!thing.isArray()) return;
+    auto const ad = thing.getArrayData();
 
-    if (thing.isVecArray() || thing.isDict()) {
-      raise_array_serialization_notice("fb_serialize", thing.asCArrRef().get());
+    if (arrprov::arrayWantsTag(ad) &&
+        (thing.isVecArray() || ad->isVArray())) {
+      raise_array_serialization_notice(SerializationSite::FBSerialize,
+                                       thing.asCArrRef().get());
     }
   }
 };

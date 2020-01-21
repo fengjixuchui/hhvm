@@ -44,7 +44,11 @@ type lsp_id =
   | NumberId of int
   | StringId of string
 
-type documentUri = string
+type documentUri = DocumentUri of string
+
+let uri_of_string (s : string) : documentUri = DocumentUri s
+
+let string_of_uri (DocumentUri s) : string = s
 
 (* A position is between two characters like an 'insert' cursor in a editor *)
 type position = {
@@ -204,6 +208,35 @@ end
 
 (* Represents information about programming constructs like variables etc. *)
 module SymbolInformation = struct
+  (* These numbers should match
+   * https://microsoft.github.io/language-server-protocol/specification#textDocument_documentSymbol
+   *)
+  type symbolKind =
+    | File [@value 1]
+    | Module [@value 2]
+    | Namespace [@value 3]
+    | Package [@value 4]
+    | Class [@value 5]
+    | Method [@value 6]
+    | Property [@value 7]
+    | Field [@value 8]
+    | Constructor [@value 9]
+    | Enum [@value 10]
+    | Interface [@value 11]
+    | Function [@value 12]
+    | Variable [@value 13]
+    | Constant [@value 14]
+    | String [@value 15]
+    | Number [@value 16]
+    | Boolean [@value 17]
+    | Array [@value 18]
+    | Object [@value 19]
+    | Key [@value 20]
+    | Null [@value 21]
+    | EnumMember [@value 22]
+    | Struct [@value 23]
+  [@@deriving enum]
+
   type t = {
     name: string;
     kind: symbolKind;
@@ -211,39 +244,16 @@ module SymbolInformation = struct
     (* the span of the symbol including its contents *)
     containerName: string option; (* the symbol containing this symbol *)
   }
-
-  and symbolKind =
-    | File (* 1 *)
-    | Module (* 2 *)
-    | Namespace (* 3 *)
-    | Package (* 4 *)
-    | Class (* 5 *)
-    | Method (* 6 *)
-    | Property (* 7 *)
-    | Field (* 8 *)
-    | Constructor (* 9 *)
-    | Enum (* 10 *)
-    | Interface (* 11 *)
-    | Function (* 12 *)
-    | Variable (* 13 *)
-    | Constant (* 14 *)
-    | String (* 15 *)
-    | Number (* 16 *)
-    | Boolean (* 17 *)
-    | Array
-
-  (* 18 *)
 end
 
 (* For showing messages (not diagnostics) in the user interface. *)
 module MessageType = struct
   type t =
-    | ErrorMessage (* 1 *)
-    | WarningMessage (* 2 *)
-    | InfoMessage (* 3 *)
-    | LogMessage
-
-  (* 4 *)
+    | ErrorMessage [@value 1]
+    | WarningMessage [@value 2]
+    | InfoMessage [@value 3]
+    | LogMessage [@value 4]
+  [@@deriving enum]
 end
 
 module CodeActionKind = struct
@@ -285,13 +295,12 @@ module CodeActionKind = struct
     | k :: ks -> (k, ks)
 
   (* Create the equivalent string that the spec would have required *)
-  let string_of_kind : t -> string =
-   (fun (k, ks) -> String.concat "." (k :: ks))
+  let string_of_kind : t -> string = (fun (k, ks) -> String.concat "." (k :: ks))
 
   (* Create a new sub-kind of an existing kind *)
   let sub_kind : t -> string -> t =
     let cons_to_end (ss : string list) (s : string) =
-      Core_list.(fold_right ss ~f:cons ~init:[s])
+      Base.List.(fold_right ss ~f:cons ~init:[s])
     in
     (fun (k, ks) s -> (k, cons_to_end ks s))
 
@@ -311,6 +320,14 @@ end
 
 (* Initialize request, method="initialize" *)
 module Initialize = struct
+  type textDocumentSyncKind =
+    (* docs should not be synced at all. Wire "None" *)
+    | NoSync [@value 0]
+    (* synced by always sending full content. Wire "Full" *)
+    | FullSync [@value 1]
+    | IncrementalSync [@value 2]
+  [@@deriving enum]
+
   type params = {
     processId: int option;
     (* pid of parent process *)
@@ -418,11 +435,7 @@ module Initialize = struct
 
   and windowClientCapabilities = {
     status: bool;
-    (* Nuclide-specific: client supports window/showStatusRequest *)
-    progress: bool;
-    (* Nuclide-specific: client supports window/progress *)
-    actionRequired: bool;
-        (* Nuclide-specific: client supports window/actionRequired *)
+        (* Nuclide-specific: client supports window/showStatusRequest *)
   }
 
   and telemetryClientCapabilities = {
@@ -453,9 +466,10 @@ module Initialize = struct
     renameProvider: bool;
     documentLinkProvider: documentLinkOptions option;
     executeCommandProvider: executeCommandOptions option;
-    typeCoverageProvider: bool;
-    (* Nuclide-specific feature *)
-    rageProvider: bool; (* omitted: experimental *)
+    implementationProvider: bool;
+    (* Nuclide-specific features below *)
+    typeCoverageProviderFB: bool;
+    rageProviderFB: bool;
   }
 
   and completionOptions = {
@@ -500,14 +514,6 @@ module Initialize = struct
     want_didSave: saveOptions option; (* textDocument/didSave *)
   }
 
-  and textDocumentSyncKind =
-    | NoSync (* 0 *)
-    (* docs should not be synced at all. Wire "None" *)
-    | FullSync (* 1 *)
-    (* synced by always sending full content. Wire "Full" *)
-    | IncrementalSync
-
-  (* 2 *)
   (* full only on open. Wire "Incremental" *)
   and saveOptions = {
     includeText: bool; (* the client should include content on save *)
@@ -521,7 +527,7 @@ module Shutdown = struct end
 module Exit = struct end
 
 (* Rage request, method="telemetry/rage" *)
-module Rage = struct
+module RageFB = struct
   type result = rageItem list
 
   and rageItem = {
@@ -679,6 +685,13 @@ module TypeDefinition = struct
   and result = DefinitionLocation.t list
 end
 
+(* Go To Implementation request, method="textDocument/implementation" *)
+module Implementation = struct
+  type params = TextDocumentPositionParams.t
+
+  and result = Location.t list
+end
+
 module CodeAction = struct
   (* A code action represents a change that can be performed in code, e.g. to fix a problem or
     to refactor code. *)
@@ -766,6 +779,12 @@ module Completion = struct
     | SnippetFormat [@value 2] (* wire: just "Snippet" *)
   [@@deriving enum]
 
+  type completionTriggerKind =
+    | Invoked [@value 1]
+    | TriggerCharacter [@value 2]
+    | TriggerForIncompleteCompletions [@value 3]
+  [@@deriving enum]
+
   type params = completionParams
 
   and completionParams = {
@@ -773,14 +792,11 @@ module Completion = struct
     context: completionContext option;
   }
 
-  and completionContext = { triggerKind: completionTriggerKind }
+  and completionContext = {
+    triggerKind: completionTriggerKind;
+    triggerCharacter: string option;
+  }
 
-  and completionTriggerKind =
-    | Invoked (* 1 *)
-    | TriggerCharacter (* 2 *)
-    | TriggerForIncompleteCompletions
-
-  (* 3 *)
   and result = completionList
 
   (* wire: can also be 'completionItem list' *)
@@ -866,28 +882,27 @@ end
 module DocumentHighlight = struct
   type params = TextDocumentPositionParams.t
 
-  and result = documentHighlight list
+  type documentHighlightKind =
+    (* a textual occurrence *)
+    | Text [@value 1]
+    (* read-access of a symbol, like reading a variable *)
+    | Read [@value 2]
+    (* write-access of a symbol, like writing a variable *)
+    | Write [@value 3]
+  [@@deriving enum]
+
+  type result = documentHighlight list
 
   and documentHighlight = {
     range: range;
     (* the range this highlight applies to *)
     kind: documentHighlightKind option;
   }
-
-  and documentHighlightKind =
-    | Text (* 1 *)
-    (* a textual occurrence *)
-    | Read (* 2 *)
-    (* read-access of a symbol, like reading a variable *)
-    | Write
-
-  (* 3 *)
-  (* write-access of a symbol, like writing a variable *)
 end
 
 (* Type Coverage request, method="textDocument/typeCoverage" *)
 (* THIS IS A NUCLIDE-SPECIFIC EXTENSION TO LSP.              *)
-module TypeCoverage = struct
+module TypeCoverageFB = struct
   type params = typeCoverageParams
 
   and result = {
@@ -1039,7 +1054,7 @@ module ShowMessageRequest = struct
 end
 
 (* ShowStatus request, method="window/showStatus" *)
-module ShowStatus = struct
+module ShowStatusFB = struct
   type params = showStatusParams
 
   and result = ShowMessageRequest.messageActionItem option
@@ -1052,54 +1067,15 @@ module ShowStatus = struct
   }
 end
 
-(* Progress notification, method="window/progress" *)
-module Progress = struct
-  type t =
-    | Present of {
-        id: int;
-        label: string;
-      }
-    | Absent
-
-  and params = progressParams
-
-  and progressParams = {
-    (* LSP progress notifications have a lifetime that starts with their 1st  *)
-    (* window/progress update message and ends with an update message with    *)
-    (* label = None. They use an ID number (not JsonRPC id) to associate      *)
-    (* multiple messages to a single lifetime stream.                         *)
-    id: int;
-    label: string option;
-  }
-end
-
-(* ActionRequired notification, method="window/actionRequired" *)
-module ActionRequired = struct
-  type t =
-    | Present of {
-        id: int;
-        label: string;
-      }
-    | Absent
-
-  and params = actionRequiredParams
-
-  and actionRequiredParams = {
-    (* See progressParams.id for an explanation of this field. *)
-    id: int;
-    label: string option;
-  }
-end
-
 (* ConnectionStatus notification, method="telemetry/connectionStatus" *)
-module ConnectionStatus = struct
+module ConnectionStatusFB = struct
   type params = connectionStatusParams
 
   and connectionStatusParams = { isConnected: bool }
 end
 
-(* Module for dynamic view, method="workspace/toggleTypeCoverage" *)
-module ToggleTypeCoverage = struct
+(* ToggleTypeCoverage notification, method="workspace/toggleTypeCoverage" *)
+module ToggleTypeCoverageFB = struct
   type params = toggleTypeCoverageParams
 
   and toggleTypeCoverageParams = { toggle: bool }
@@ -1203,6 +1179,7 @@ type lsp_request =
   | HoverRequest of Hover.params
   | DefinitionRequest of Definition.params
   | TypeDefinitionRequest of TypeDefinition.params
+  | ImplementationRequest of Implementation.params
   | CodeActionRequest of CodeActionRequest.params
   | CompletionRequest of Completion.params
   | CompletionItemResolveRequest of CompletionItemResolve.params
@@ -1210,15 +1187,19 @@ type lsp_request =
   | DocumentSymbolRequest of DocumentSymbol.params
   | FindReferencesRequest of FindReferences.params
   | DocumentHighlightRequest of DocumentHighlight.params
-  | TypeCoverageRequest of TypeCoverage.params
+  | TypeCoverageRequestFB of TypeCoverageFB.params
   | DocumentFormattingRequest of DocumentFormatting.params
   | DocumentRangeFormattingRequest of DocumentRangeFormatting.params
   | DocumentOnTypeFormattingRequest of DocumentOnTypeFormatting.params
   | ShowMessageRequestRequest of ShowMessageRequest.params
-  | ShowStatusRequest of ShowStatus.params
-  | RageRequest
+  | ShowStatusRequestFB of ShowStatusFB.params
+  | RageRequestFB
   | RenameRequest of Rename.params
   | DocumentCodeLensRequest of DocumentCodeLens.params
+  | SignatureHelpRequest of SignatureHelp.params
+  | HackTestStartServerRequestFB
+  | HackTestStopServerRequestFB
+  | HackTestShutdownServerlessRequestFB
   | UnknownRequest of string * Hh_json.json option
 
 type lsp_result =
@@ -1228,6 +1209,7 @@ type lsp_result =
   | HoverResult of Hover.result
   | DefinitionResult of Definition.result
   | TypeDefinitionResult of TypeDefinition.result
+  | ImplementationResult of Implementation.result
   | CodeActionResult of CodeAction.result
   | CompletionResult of Completion.result
   | CompletionItemResolveResult of CompletionItemResolve.result
@@ -1235,15 +1217,19 @@ type lsp_result =
   | DocumentSymbolResult of DocumentSymbol.result
   | FindReferencesResult of FindReferences.result
   | DocumentHighlightResult of DocumentHighlight.result
-  | TypeCoverageResult of TypeCoverage.result
+  | TypeCoverageResultFB of TypeCoverageFB.result
   | DocumentFormattingResult of DocumentFormatting.result
   | DocumentRangeFormattingResult of DocumentRangeFormatting.result
   | DocumentOnTypeFormattingResult of DocumentOnTypeFormatting.result
   | ShowMessageRequestResult of ShowMessageRequest.result
-  | ShowStatusResult of ShowStatus.result
-  | RageResult of Rage.result
+  | ShowStatusResultFB of ShowStatusFB.result
+  | RageResultFB of RageFB.result
   | RenameResult of Rename.result
   | DocumentCodeLensResult of DocumentCodeLens.result
+  | SignatureHelpResult of SignatureHelp.result
+  | HackTestStartServerResultFB
+  | HackTestStopServerResultFB
+  | HackTestShutdownServerlessResultFB
   (* the string is a stacktrace *)
   | ErrorResult of Error.t * string
 
@@ -1259,12 +1245,11 @@ type lsp_notification =
   | LogMessageNotification of LogMessage.params
   | TelemetryNotification of LogMessage.params (* LSP allows 'any' but we only send these *)
   | ShowMessageNotification of ShowMessage.params
-  | ProgressNotification of Progress.params
-  | ActionRequiredNotification of ActionRequired.params
-  | ConnectionStatusNotification of ConnectionStatus.params
+  | ConnectionStatusNotificationFB of ConnectionStatusFB.params
   | InitializedNotification
   | SetTraceNotification (* $/setTraceNotification *)
   | LogTraceNotification (* $/logTraceNotification *)
+  | ToggleTypeCoverageNotificationFB of ToggleTypeCoverageFB.params
   | UnknownNotification of string * Hh_json.json option
 
 type lsp_message =
@@ -1278,7 +1263,7 @@ and 'a lsp_error_handler = Error.t * string -> 'a -> 'a
 
 and 'a lsp_result_handler =
   | ShowMessageHandler of (ShowMessageRequest.result -> 'a -> 'a)
-  | ShowStatusHandler of (ShowStatus.result -> 'a -> 'a)
+  | ShowStatusHandler of (ShowStatusFB.result -> 'a -> 'a)
 
 module IdKey = struct
   type t = lsp_id
@@ -1292,4 +1277,13 @@ module IdKey = struct
 end
 
 module IdSet = Set.Make (IdKey)
-module IdMap = MyMap.Make (IdKey)
+module IdMap = WrappedMap.Make (IdKey)
+
+module UriKey = struct
+  type t = documentUri
+
+  let compare (DocumentUri x) (DocumentUri y) = String.compare x y
+end
+
+module UriSet = Set.Make (UriKey)
+module UriMap = WrappedMap.Make (UriKey)

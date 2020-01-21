@@ -15,16 +15,6 @@ shape. *)
 
 type callstack = Callstack of string
 
-val debug : bool ref
-
-val profile : bool ref
-
-val log : (string -> unit) ref
-
-val d : string -> unit
-
-val dn : string -> unit
-
 module Map : sig end
 
 val spf : ('a, unit, string) format -> 'a
@@ -67,8 +57,6 @@ val try_with_channel : out_channel -> (out_channel -> 'a) -> (exn -> 'a) -> 'a
 
 val try_with_stack : (unit -> 'a) -> ('a, exn * callstack) result
 
-val iter_n_acc : int -> ('a -> 'a * 'b) -> 'a -> 'a * 'b
-
 val map_of_list : (SMap.key * 'a) list -> 'a SMap.t
 
 val set_of_list : SSet.elt list -> SSet.t
@@ -85,7 +73,11 @@ val strip_both_ns : string -> string
 (* Strip All removes all backslash-based namespaces, but does nothing to XHP *)
 val strip_all_ns : string -> string
 
+(** A\B\C -> \A\B\C *)
 val add_ns : string -> string
+
+(** A:B:C -> :A:B:C *)
+val add_xhp_ns : string -> string
 
 val split_ns_from_name : string -> string * string
 

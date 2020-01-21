@@ -26,13 +26,22 @@ namespace HPHP {
 
 template<class SerDe>
 void EHEnt::serde(SerDe& sd) {
+  folly::Optional<Offset> end;
+  if (!SerDe::deserializing) {
+    end = (m_end == kInvalidOffset) ? folly::none : folly::make_optional(m_end);
+  }
+
   sd(m_base)
     (m_past)
     (m_iterId)
     (m_handler)
-    (m_end)
+    (end)
     (m_parentIndex)
     ;
+
+  if (SerDe::deserializing) {
+    m_end = end.value_or(kInvalidOffset);
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -52,12 +61,11 @@ inline void Func::ParamInfo::serde(SerDe& sd) {
     (variadic)
     (userAttributes)
     (userType)
-    (inout)
     ;
 }
 
 inline bool Func::ParamInfo::hasDefaultValue() const {
-  return funcletOff != InvalidAbsoluteOffset;
+  return funcletOff != kInvalidOffset;
 }
 
 inline bool Func::ParamInfo::hasScalarDefaultValue() const {
@@ -144,15 +152,6 @@ inline const StringData* Func::fullName() const {
 inline StrNR Func::fullNameStr() const {
   assertx(m_fullName != nullptr);
   return StrNR(fullName());
-}
-
-inline const StringData* Func::displayName() const {
-  return LIKELY(!takesInOutParams()) ? name() : stripInOutSuffix(name());
-}
-
-inline const StringData* Func::fullDisplayName() const {
-  return
-    LIKELY(!takesInOutParams()) ? fullName() : stripInOutSuffix(fullName());
 }
 
 inline const StringData* funcToStringHelper(const Func* func) {
@@ -300,6 +299,15 @@ inline const StringData* Func::returnUserType() const {
   return shared()->m_retUserType;
 }
 
+inline bool Func::hasReturnWithMultiUBs() const {
+  return shared()->m_hasReturnWithMultiUBs;
+}
+
+inline const Func::UpperBoundVec& Func::returnUBs() const {
+  assertx(hasReturnWithMultiUBs());
+  return extShared()->m_returnUBs;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Parameters.
 
@@ -319,6 +327,13 @@ inline uint32_t Func::numNonVariadicParams() const {
   return (m_paramCounts - 1) >> 1;
 }
 
+inline uint32_t Func::numRequiredParams() const {
+  for (auto i = numNonVariadicParams(); i > 0; --i) {
+    if (!params()[i - 1].hasDefaultValue()) return i;
+  }
+  return 0;
+}
+
 inline bool Func::hasVariadicCaptureParam() const {
 #ifndef NDEBUG
   assertx(bool(m_attrs & AttrVariadicParam) ==
@@ -327,25 +342,13 @@ inline bool Func::hasVariadicCaptureParam() const {
   return m_attrs & AttrVariadicParam;
 }
 
-inline bool Func::discardExtraArgs() const {
-  return !(m_attrs & (AttrMayUseVV | AttrVariadicParam));
+inline bool Func::hasParamsWithMultiUBs() const {
+  return shared()->m_hasParamsWithMultiUBs;
 }
 
-inline bool Func::takesInOutParams() const {
-  return m_attrs & AttrTakesInOutParams;
-}
-
-inline bool Func::isInOutWrapper() const {
-  return m_attrs & AttrIsInOutWrapper;
-}
-
-inline uint32_t Func::numInOutParams() const {
-  if (!takesInOutParams()) return 0;
-  uint32_t count = 0;
-  for (uint32_t i = 0; i < numParams(); ++i) {
-    if (params()[i].inout) ++count;
-  }
-  return count;
+inline const Func::ParamUBMap& Func::paramUBs() const {
+  assertx(hasParamsWithMultiUBs());
+  return extShared()->m_paramUBs;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -379,7 +382,7 @@ inline int Func::maxStackCells() const {
 inline int Func::numSlotsInFrame() const {
   return
     shared()->m_numLocals +
-    shared()->m_numIterators * (sizeof(Iter) / sizeof(Cell));
+    shared()->m_numIterators * (sizeof(Iter) / sizeof(TypedValue));
 }
 
 inline bool Func::hasForeignThis() const {
@@ -418,23 +421,15 @@ inline bool Func::isStatic() const {
 }
 
 inline bool Func::isStaticInPrologue() const {
-  return (m_attrs & (AttrStatic | AttrRequiresThis)) == AttrStatic;
+  return isStatic() && !isClosureBody();
 }
 
-inline bool Func::requiresThisInBody() const {
-  return (m_attrs & AttrRequiresThis) && !isClosureBody();
-}
-
-inline bool Func::hasThisVaries() const {
-  return mayHaveThis() && !requiresThisInBody();
+inline bool Func::hasThisInBody() const {
+  return cls() && !isStatic();
 }
 
 inline bool Func::isAbstract() const {
   return m_attrs & AttrAbstract;
-}
-
-inline bool Func::mayHaveThis() const {
-  return cls() && !isStatic();
 }
 
 inline bool Func::isPreFunc() const {

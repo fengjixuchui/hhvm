@@ -1281,14 +1281,14 @@ static xmlDocPtr serialize_response_call(
           }
         }
         hdr_ret = ht->m_data;
-        obj->setProp(nullptr, s_headerfault.get(), *hdr_ret.toCell());
+        obj->setProp(nullptr, s_headerfault.get(), *hdr_ret.asTypedValue());
       }
 
       if (h->function) {
         if (serialize_response_call2(head, h->function,
                                      h->function_name.data(), uri,
                                      hdr_ret, version, 0) == SOAP_ENCODED) {
-          obj->setProp(nullptr, s_headerfault.get(), *hdr_ret.toCell());
+          obj->setProp(nullptr, s_headerfault.get(), *hdr_ret.asTypedValue());
           use = SOAP_ENCODED;
         }
       } else {
@@ -2103,7 +2103,7 @@ Variant HHVM_METHOD(SoapServer, getfunctions) {
   } else if (!data->m_soap_functions.ft.empty()) {
     return Variant::attach(
       HHVM_FN(array_keys)(
-        make_tv<KindOfArray>(data->m_soap_functions.ftOriginal.get())
+        make_array_like_tv(data->m_soap_functions.ftOriginal.get())
       )
     );
   }
@@ -2553,7 +2553,6 @@ Variant HHVM_METHOD(SoapClient, soapcallImpl,
                     const Array& args,
                     const Array& options = null_array,
                     const Variant& input_headers = uninit_variant) {
-  SuppressHACRefBindNotices shacn;
   auto* data = Native::data<SoapClient>(this_);
   SoapClientScope ss(this_);
 
@@ -2997,18 +2996,18 @@ void HHVM_METHOD(SoapVar, __construct,
     }
   }
   this_->setProp(nullptr, s_enc_type.get(), make_tv<KindOfInt64>(ntype));
-  if (data.toBoolean()) this_->setProp(nullptr, s_enc_value.get(), *data.toCell());
+  if (data.toBoolean()) this_->setProp(nullptr, s_enc_value.get(), *data.asTypedValue());
   if (!type_name.empty()) {
-    this_->setProp(nullptr, s_enc_stype.get(), type_name.toCell());
+    this_->setProp(nullptr, s_enc_stype.get(), type_name.asTypedValue());
   }
   if (!type_namespace.empty()) {
-    this_->setProp(nullptr, s_enc_ns.get(), type_namespace.toCell());
+    this_->setProp(nullptr, s_enc_ns.get(), type_namespace.asTypedValue());
   }
   if (!node_name.empty()) {
-    this_->setProp(nullptr, s_enc_name.get(), node_name.toCell());
+    this_->setProp(nullptr, s_enc_name.get(), node_name.asTypedValue());
   }
   if (!node_namespace.empty()) {
-    this_->setProp(nullptr, s_enc_namens.get(), node_namespace.toCell());
+    this_->setProp(nullptr, s_enc_namens.get(), node_namespace.asTypedValue());
   }
 }
 
@@ -3067,9 +3066,9 @@ void HHVM_METHOD(SoapHeader, __construct,
   nativeData->m_data = data;
   nativeData->m_mustUnderstand = mustunderstand;
 
-  this_->setProp(nullptr, s_namespace.get(), ns.toCell());
-  this_->setProp(nullptr, s_name.get(), name.toCell());
-  this_->setProp(nullptr, s_data.get(), data.asInitCellTmp());
+  this_->setProp(nullptr, s_namespace.get(), ns.asTypedValue());
+  this_->setProp(nullptr, s_name.get(), name.asTypedValue());
+  this_->setProp(nullptr, s_data.get(), data.asInitTVTmp());
   this_->setProp(nullptr, s_mustUnderstand.get(),
                  make_tv<KindOfBoolean>(mustunderstand));
 

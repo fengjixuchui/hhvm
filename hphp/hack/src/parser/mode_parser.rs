@@ -4,17 +4,17 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use crate::parser_env::ParserEnv;
 use oxidized::file_info::Mode;
-use parser_core_types::lexable_token::LexableToken;
-use parser_core_types::source_text::SourceText;
-use parser_core_types::syntax::{self, SyntaxVariant};
-use parser_core_types::token_kind::TokenKind;
-
-use crate::minimal_parser::MinimalSyntaxParser;
+use parser_core_types::{
+    lexable_token::LexableToken,
+    parser_env::ParserEnv,
+    source_text::SourceText,
+    syntax::{self, SyntaxVariant},
+    token_kind::TokenKind,
+};
 
 pub fn parse_mode(text: &SourceText) -> Option<Mode> {
-    if let Some(header) = MinimalSyntaxParser::parse_header_only(ParserEnv::default(), text) {
+    if let Some(header) = minimal_parser::parse_header_only(ParserEnv::default(), text) {
         match header.syntax {
             SyntaxVariant::MarkupSection(section_children) => {
                 if let syntax::MarkupSectionChildren {
@@ -36,7 +36,7 @@ pub fn parse_mode(text: &SourceText) -> Option<Mode> {
                         SyntaxVariant::Missing => Some(Mode::Mphp),
                         SyntaxVariant::Token(t) if t.kind() == TokenKind::Equal => Some(Mode::Mphp),
                         _ => {
-                            let is_hhi = text.file_path().ends_with(".hhi");
+                            let is_hhi = text.file_path().has_extension("hhi");
                             let skip_length = pfx.value.full_width
                                 + txt.value.full_width
                                 + ltq.value.full_width

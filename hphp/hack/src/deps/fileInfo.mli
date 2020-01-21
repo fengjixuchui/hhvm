@@ -29,13 +29,15 @@ type mode =
   | Mstrict (* check everything! *)
   | Mpartial (* Don't fail if you see a function/class you don't know *)
   | Mexperimental (* Experimental mode - strict mode plus experimental features *)
-[@@deriving show]
+[@@deriving eq, show, enum]
 
 val is_strict : mode -> bool
 
 val parse_mode : string -> mode option
 
 val string_of_mode : mode -> string
+
+val is_hh_file : mode -> bool
 
 (*****************************************************************************)
 (* The record produced by the parsing phase. *)
@@ -44,16 +46,17 @@ val string_of_mode : mode -> string
 type name_type =
   | Fun
   | Class
+  | RecordDef
   | Typedef
   | Const
-[@@deriving show]
+[@@deriving eq, show]
 
 type pos =
   | Full of Pos.t
   | File of name_type * Relative_path.t
-[@@deriving show]
+[@@deriving eq, show]
 
-type id = pos * string [@@deriving show]
+type id = pos * string [@@deriving eq, show]
 
 val pos_full : Pos.t * string -> id
 
@@ -64,11 +67,12 @@ type t = {
   file_mode: mode option;
   funs: id list;
   classes: id list;
+  record_defs: id list;
   typedefs: id list;
   consts: id list;
   comments: (Pos.t * comment) list option;
 }
-[@@deriving show]
+[@@deriving eq, show]
 
 val empty_t : t
 
@@ -78,6 +82,7 @@ val empty_t : t
 type names = {
   n_funs: SSet.t;
   n_classes: SSet.t;
+  n_record_defs: SSet.t;
   n_types: SSet.t;
   n_consts: SSet.t;
 }

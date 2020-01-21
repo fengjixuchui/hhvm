@@ -1,9 +1,9 @@
 <?hh
 
-function xsort(&$a) {
+function xsort(inout $a) {
   $b = array();
   $b[0] = $a;
-  uksort(&$a, function ($i, $j) use($b) {
+  uksort(inout $a, function ($i, $j) use($b) {
       if ($b[0][$i] == $b[0][$j]) return 0;
       return $b[0][$i] < $b[0][$j] ? -1 : 1;
     }
@@ -11,7 +11,7 @@ function xsort(&$a) {
 }
 function test($x) {
   $a = array(220,250,240,$x);
-  xsort(&$a);
+  xsort(inout $a);
   var_dump($a);
 }
 

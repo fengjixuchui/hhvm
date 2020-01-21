@@ -47,13 +47,11 @@
 #include "hphp/util/atomic-vector.h"
 #include "hphp/util/build-info.h"
 #include "hphp/util/cpuid.h"
-#include "hphp/util/current-executable.h"
+#include "hphp/util/current-executable.h" // @donotremove
 #include "hphp/util/file-cache.h"
 #include "hphp/util/gzip.h"
 #include "hphp/util/hardware-counter.h"
 #include "hphp/util/hdf.h"
-#include "hphp/util/hphp-config.h"
-#include "hphp/util/hugetlb.h"
 #include "hphp/util/log-file-flusher.h"
 #include "hphp/util/logger.h"
 #include "hphp/util/network.h"
@@ -66,7 +64,6 @@
 #include "hphp/zend/zend-string.h"
 
 #include <cstdint>
-#include <libgen.h>
 #include <limits>
 #include <map>
 #include <memory>
@@ -329,27 +326,6 @@ const RepoOptions& RepoOptions::forFile(const char* path) {
   return ret ? *ret : defaults();
 }
 
-static inline std::string hhjsBabelTransformDefault() {
-  std::vector<folly::StringPiece> searchPaths;
-  folly::split(":", hhjsBabelTransform(), searchPaths);
-  std::string here = current_executable_directory();
-
-  for (folly::StringPiece searchPath : searchPaths) {
-    std::string transform = searchPath.toString();
-    std::size_t found = transform.find("{}");
-
-    if (found != std::string::npos) {
-      transform.replace(found, 2, here);
-    }
-
-    if (::access(transform.data(), X_OK) == 0) {
-      return transform;
-    }
-  }
-
-  return "";
-}
-
 std::string RepoOptions::cacheKeyRaw() const {
   return std::string("")
 #define N(_, n, ...) + mangleForKey(n)
@@ -390,7 +366,6 @@ folly::dynamic RepoOptions::toDynamic() const {
 #define H(_, n, ...) OUT("Hack.Lang." #n, n)
 #define E(_, n, ...) OUT("Eval." #n, n)
 PARSERFLAGS()
-PARSERFLAGSNOCACHEKEY()
 AUTOLOADFLAGS();
 #undef N
 #undef P
@@ -408,7 +383,6 @@ bool RepoOptions::operator==(const RepoOptions& o) const {
 #define H(_, n, ...) if (n != o.n) return false;
 #define E(_, n, ...) if (n != o.n) return false;
 PARSERFLAGS()
-PARSERFLAGSNOCACHEKEY()
 AUTOLOADFLAGS();
 #undef N
 #undef P
@@ -448,8 +422,7 @@ RepoOptions::RepoOptions(const char* file) : m_path(file) {
 #define P(_, n, ...) hdfExtract(parserConfig, "PHP7." #n, n, s_defaults.n);
 #define H(_, n, ...) hdfExtract(parserConfig, "Hack.Lang." #n, n, s_defaults.n);
 #define E(_, n, ...) hdfExtract(parserConfig, "Eval." #n, n, s_defaults.n);
-PARSERFLAGS()
-PARSERFLAGSNOCACHEKEY();
+PARSERFLAGS();
 #undef N
 #undef P
 #undef H
@@ -476,7 +449,6 @@ void RepoOptions::initDefaults(const Hdf& hdf, const IniSettingMap& ini) {
 #define H(_, n, dv) Config::Bind(n, ini, hdf, "Hack.Lang." #n, dv);
 #define E(_, n, dv) Config::Bind(n, ini, hdf, "Eval." #n, dv);
 PARSERFLAGS()
-PARSERFLAGSNOCACHEKEY()
 AUTOLOADFLAGS()
 #undef N
 #undef P
@@ -624,6 +596,7 @@ int RuntimeOption::ServerGracefulShutdownWait = 0;
 bool RuntimeOption::ServerHarshShutdown = true;
 bool RuntimeOption::ServerEvilShutdown = true;
 bool RuntimeOption::ServerKillOnTimeout = true;
+bool RuntimeOption::Server503OnShutdownAbort = false;
 int RuntimeOption::ServerPreShutdownWait = 0;
 int RuntimeOption::ServerShutdownListenWait = 0;
 int RuntimeOption::ServerShutdownEOMWait = 0;
@@ -643,6 +616,7 @@ int RuntimeOption::BrotliCompressionQuality = 6;
 int RuntimeOption::BrotliCompressionLgWindowSize = 20;
 int RuntimeOption::ZstdCompressionEnabled = -1;
 int RuntimeOption::ZstdCompressionLevel = 3;
+int RuntimeOption::ZstdChecksumRate = 0;
 int RuntimeOption::GzipCompressionLevel = 3;
 int RuntimeOption::GzipMaxCompressionLevel = 9;
 bool RuntimeOption::EnableKeepAlive = true;
@@ -687,7 +661,14 @@ std::string RuntimeOption::TLSClientCipherSpec;
 bool RuntimeOption::EnableSSLWithPlainText = false;
 int RuntimeOption::SSLClientAuthLevel = 0;
 std::string RuntimeOption::SSLClientCAFile = "";
+
+std::string RuntimeOption::ClientAuthAclIdentity;
+std::string RuntimeOption::ClientAuthAclAction;
+bool RuntimeOption::ClientAuthFailClose = false;
 uint32_t RuntimeOption::SSLClientAuthLoggingSampleRatio = 0;
+uint32_t RuntimeOption::ClientAuthSuccessLogSampleRatio = 0;
+uint32_t RuntimeOption::ClientAuthFailureLogSampleRatio = 0;
+uint32_t RuntimeOption::ClientAuthLogSampleBase = 100;
 
 std::vector<std::shared_ptr<VirtualHost>> RuntimeOption::VirtualHosts;
 std::shared_ptr<IpBlockMap> RuntimeOption::IpBlocks;
@@ -719,6 +700,7 @@ bool RuntimeOption::AutoloadEnabled;
 std::string RuntimeOption::AutoloadDBPath;
 std::string RuntimeOption::FileCache;
 std::string RuntimeOption::DefaultDocument;
+std::string RuntimeOption::GlobalDocument;
 std::string RuntimeOption::ErrorDocument404;
 bool RuntimeOption::ForbiddenAs404 = false;
 std::string RuntimeOption::ErrorDocument500;
@@ -755,6 +737,8 @@ std::string RuntimeOption::TakeoverFilename;
 std::string RuntimeOption::AdminServerIP;
 int RuntimeOption::AdminServerPort = 0;
 int RuntimeOption::AdminThreadCount = 1;
+bool RuntimeOption::AdminServerEnableSSLWithPlainText = false;
+bool RuntimeOption::AdminServerStatsNeedPassword = true;
 std::string RuntimeOption::AdminPassword;
 std::set<std::string> RuntimeOption::AdminPasswords;
 std::set<std::string> RuntimeOption::HashedAdminPasswords;
@@ -849,6 +833,7 @@ std::vector<std::string> RuntimeOption::Extensions;
 std::vector<std::string> RuntimeOption::DynamicExtensions;
 std::string RuntimeOption::DynamicExtensionPath = ".";
 
+int RuntimeOption::CheckIntOverflow = 0;
 HackStrictOption
   RuntimeOption::StrictArrayFillKeys = HackStrictOption::OFF;
 
@@ -983,6 +968,14 @@ static inline uint32_t hotTextHugePagesDefault() {
   return arch() == Arch::ARM ? 12 : 8;
 }
 
+static inline uint32_t arrayIterDefaultCount() {
+  return debug ? 0 : 10000;
+}
+
+static inline double arrayIterDefaultRate() {
+  return 0.99;
+}
+
 static inline std::string reorderPropsDefault() {
   if (isJitDeserializing()) {
     return "countedness-hotness";
@@ -1088,7 +1081,7 @@ using std::string;
 EVALFLAGS();
 #undef F
 std::set<string, stdltistr> RuntimeOption::DynamicInvokeFunctions;
-hphp_string_imap<Cell> RuntimeOption::ConstantFunctions;
+hphp_string_imap<TypedValue> RuntimeOption::ConstantFunctions;
 
 bool RuntimeOption::RecordCodeCoverage = false;
 std::string RuntimeOption::CodeCoverageOutputFile;
@@ -1099,15 +1092,16 @@ std::string RuntimeOption::RepoCentralPath;
 int32_t RuntimeOption::RepoCentralFileMode;
 std::string RuntimeOption::RepoCentralFileUser;
 std::string RuntimeOption::RepoCentralFileGroup;
-bool RuntimeOption::RepoAllowFallbackPath = true;
 std::string RuntimeOption::RepoEvalMode;
 std::string RuntimeOption::RepoJournal = "delete";
+bool RuntimeOption::RepoAllowFallbackPath = true;
 bool RuntimeOption::RepoCommit = true;
 bool RuntimeOption::RepoDebugInfo = true;
+bool RuntimeOption::RepoLitstrLazyLoad = true;
 // Missing: RuntimeOption::RepoAuthoritative's physical location is
 // perf-sensitive.
-int64_t RuntimeOption::RepoLocalReadaheadRate = 0;
 bool RuntimeOption::RepoLocalReadaheadConcurrent = false;
+int64_t RuntimeOption::RepoLocalReadaheadRate = 0;
 uint32_t RuntimeOption::RepoBusyTimeoutMS = 15000;
 
 bool RuntimeOption::HHProfEnabled = false;
@@ -1146,7 +1140,6 @@ std::string RuntimeOption::DebuggerStartupDocument;
 int RuntimeOption::DebuggerSignalTimeout = 1;
 std::string RuntimeOption::DebuggerAuthTokenScriptBin;
 std::string RuntimeOption::DebuggerSessionAuthScriptBin;
-bool RuntimeOption::ForceDebuggerBpToInterp = false;
 
 std::string RuntimeOption::SendmailPath = "sendmail -t -i";
 std::string RuntimeOption::MailForceExtraParameters;
@@ -1175,6 +1168,9 @@ int RuntimeOption::Fb303ServerPoolThreads = 1;
 double RuntimeOption::XenonPeriodSeconds = 0.0;
 uint32_t RuntimeOption::XenonRequestFreq = 1;
 bool RuntimeOption::XenonForceAlwaysOn = false;
+
+bool RuntimeOption::StrobelightEnabled = false;
+
 bool RuntimeOption::TrackPerUnitMemory = false;
 
 bool RuntimeOption::SetProfileNullThisObject = true;
@@ -1240,6 +1236,44 @@ static bool matchHdfPattern(const std::string &value,
   return true;
 }
 
+static bool matchShard(
+  const std::string& hostname,
+  const IniSetting::Map& ini, Hdf hdfPattern,
+  std::vector<std::string>& messages
+) {
+  if (!hdfPattern.exists("Shard")) return true;
+  auto const shard = Config::GetInt64(ini, hdfPattern, "Shard", -1, false);
+
+  auto const nshards =
+    Config::GetInt64(ini, hdfPattern, "ShardCount", 100, false);
+
+  if (shard < 0 || shard >= nshards) {
+    messages.push_back(folly::sformat("Invalid value for Shard: {}", shard));
+    return true;
+  }
+
+  auto input = hostname;
+  if (hdfPattern.exists("ShardSalt")) {
+    input += Config::GetString(ini, hdfPattern, "ShardSalt", "", false);
+  }
+
+  auto const md5 = Md5Digest(input.data(), input.size());
+  uint32_t seed{0};
+  memcpy(&seed, &md5.digest[0], 4);
+
+  // This shift is to match the behavior of sharding in chef which appears to
+  // have an off-by-one bug:
+  //   seed = Digest::MD5.hexdigest(seed_input)[0...7].to_i(16)
+  seed = ntohl(seed) >> 4;
+
+  messages.push_back(folly::sformat(
+    "Checking Shard = {}; Input = {}; Seed = {}; ShardCount = {}; Value = {}",
+    shard, input, seed, nshards, seed % nshards
+  ));
+
+  return seed % nshards <= shard;
+}
+
 // A machine can belong to a tier, which can overwrite
 // various settings, even if they are set in the same
 // hdf file. However, CLI overrides still win the day over
@@ -1279,6 +1313,16 @@ static std::vector<std::string> getTierOverwrites(IniSetting::Map& ini,
     }
   }
 
+  auto const checkPatterns = [&] (Hdf hdf) {
+    return
+      matchHdfPattern(hostname, ini, hdf, "machine") &
+      matchHdfPattern(tier, ini, hdf, "tier") &
+      matchHdfPattern(task, ini, hdf, "task") &
+      matchHdfPattern(tiers, ini, hdf, "tiers", "m") &
+      matchHdfPattern(tags, ini, hdf, "tags", "m") &
+      matchHdfPattern(cpu, ini, hdf, "cpu");
+  };
+
   std::vector<std::string> messages;
   // Tier overwrites
   {
@@ -1294,12 +1338,9 @@ static std::vector<std::string> getTierOverwrites(IniSetting::Map& ini,
       // Check the patterns using "&" rather than "&&" so they all get
       // evaluated; otherwise with multiple patterns, if an earlier
       // one fails to match, the later one is reported as unused.
-      if (matchHdfPattern(hostname, ini, hdf, "machine") &
-          matchHdfPattern(tier, ini, hdf, "tier") &
-          matchHdfPattern(task, ini, hdf, "task") &
-          matchHdfPattern(tiers, ini, hdf, "tiers", "m") &
-          matchHdfPattern(tags, ini, hdf, "tags", "m") &
-          matchHdfPattern(cpu, ini, hdf, "cpu")) {
+      if (checkPatterns(hdf) &
+          (!hdf.exists("exclude") || !checkPatterns(hdf["exclude"])) &
+          matchShard(hostname, ini, hdf, messages)) {
         messages.emplace_back(folly::sformat(
                                 "Matched tier: {}", hdf.getName()));
         if (hdf.exists("clear")) {
@@ -1709,6 +1750,9 @@ void RuntimeOption::Load(
     Config::Bind(RepoAllowFallbackPath, ini, config, "Repo.AllowFallbackPath",
                  RepoAllowFallbackPath);
 
+    replacePlaceholders(RepoLocalPath);
+    replacePlaceholders(RepoCentralPath);
+
     // Repo - Eval
     Config::Bind(RepoEvalMode, ini, config, "Repo.Eval.Mode");
     if (RepoEvalMode.empty()) {
@@ -1725,6 +1769,8 @@ void RuntimeOption::Load(
     Config::Bind(RepoCommit, ini, config, "Repo.Commit",
                  RepoCommit);
     Config::Bind(RepoDebugInfo, ini, config, "Repo.DebugInfo", RepoDebugInfo);
+    Config::Bind(RepoLitstrLazyLoad, ini, config, "Repo.LitstrLazyLoad",
+                 RepoLitstrLazyLoad);
     Config::Bind(RepoAuthoritative, ini, config, "Repo.Authoritative",
                  RepoAuthoritative);
     Config::Bind(RepoLocalReadaheadRate, ini, config,
@@ -1802,7 +1848,7 @@ void RuntimeOption::Load(
 #undef F
 
     if (EvalJitSerdesModeForceOff) EvalJitSerdesMode = JitSerdesMode::Off;
-    if (getenv("HHVM_DISABLE_NUMA") || (numa_num_nodes <= 1)) {
+    if (numa_num_nodes <= 1) {
       EvalEnableNuma = false;
     }
 
@@ -1816,21 +1862,10 @@ void RuntimeOption::Load(
       high_2m_pages(EvalMaxHighArenaHugePages);
     }
 
-    EvalHackCompilerExtractPath = insertSchema(
-      EvalHackCompilerExtractPath.data()
-    );
-
-    EvalHackCompilerFallbackPath = insertSchema(
-      EvalHackCompilerFallbackPath.data()
-    );
-
-    EvalEmbeddedDataExtractPath = insertSchema(
-      EvalEmbeddedDataExtractPath.data()
-    );
-
-    EvalEmbeddedDataFallbackPath = insertSchema(
-      EvalEmbeddedDataFallbackPath.data()
-    );
+    replacePlaceholders(EvalHackCompilerExtractPath);
+    replacePlaceholders(EvalHackCompilerFallbackPath);
+    replacePlaceholders(EvalEmbeddedDataExtractPath);
+    replacePlaceholders(EvalEmbeddedDataFallbackPath);
 
     if (EvalPerfRelocate > 0) {
       setRelocateRequests(EvalPerfRelocate);
@@ -1913,8 +1948,6 @@ void RuntimeOption::Load(
                    "Eval.Debugger.Auth.TokenScriptBin");
       Config::Bind(DebuggerSessionAuthScriptBin, ini, config,
                    "Eval.Debugger.Auth.SessionAuthScriptBin");
-      Config::Bind(ForceDebuggerBpToInterp, ini, config,
-                   "Eval.Debugger.ForceDebuggerBpToInterp");
     }
   }
   {
@@ -1948,6 +1981,8 @@ void RuntimeOption::Load(
   }
   {
     // Hack Language
+    Config::Bind(CheckIntOverflow, ini, config,
+                 "Hack.Lang.CheckIntOverflow", 0);
     Config::Bind(StrictArrayFillKeys, ini, config,
                  "Hack.Lang.StrictArrayFillKeys", HackStrictOption::ON);
 
@@ -2136,6 +2171,8 @@ void RuntimeOption::Load(
                  "Server.ZstdUseLocalArena", ZstdCompressor::s_useLocalArena);
     Config::Bind(ZstdCompressionLevel, ini, config,
                  "Server.ZstdCompressionLevel", 3);
+    Config::Bind(ZstdChecksumRate, ini, config,
+                "Server.ZstdChecksumRate", 0);
     Config::Bind(GzipCompressionLevel, ini, config,
                  "Server.GzipCompressionLevel", 3);
     Config::Bind(GzipMaxCompressionLevel, ini, config,
@@ -2194,13 +2231,46 @@ void RuntimeOption::Load(
           "SSLClientCAFile is required to enable client auth");
     }
 
+    Config::Bind(ClientAuthAclIdentity, ini, config,
+                 "Server.ClientAuthAclIdentity", "");
+    Config::Bind(ClientAuthAclAction, ini, config,
+                 "Server.ClientAuthAclAction", "");
+    Config::Bind(ClientAuthFailClose, ini, config,
+                 "Server.ClientAuthFailClose", false);
+
+    Config::Bind(ClientAuthLogSampleBase, ini, config,
+                 "Server.ClientAuthLogSampleBase", 100);
+    if (ClientAuthLogSampleBase < 1) {
+      ClientAuthLogSampleBase = 1;
+    }
+
     Config::Bind(SSLClientAuthLoggingSampleRatio, ini, config,
                  "Server.SSLClientAuthLoggingSampleRatio", 0);
     if (SSLClientAuthLoggingSampleRatio < 0) {
       SSLClientAuthLoggingSampleRatio = 0;
     }
-    if (SSLClientAuthLoggingSampleRatio > 100) {
-      SSLClientAuthLoggingSampleRatio = 100;
+    if (SSLClientAuthLoggingSampleRatio > ClientAuthLogSampleBase) {
+      SSLClientAuthLoggingSampleRatio = ClientAuthLogSampleBase;
+    }
+
+    Config::Bind(ClientAuthSuccessLogSampleRatio, ini, config,
+                 "Server.ClientAuthSuccessLogSampleRatio", 0);
+    if (ClientAuthSuccessLogSampleRatio <
+          SSLClientAuthLoggingSampleRatio) {
+      ClientAuthSuccessLogSampleRatio = SSLClientAuthLoggingSampleRatio;
+    }
+    if (ClientAuthSuccessLogSampleRatio > ClientAuthLogSampleBase) {
+      ClientAuthSuccessLogSampleRatio = ClientAuthLogSampleBase;
+    }
+
+    Config::Bind(ClientAuthFailureLogSampleRatio, ini, config,
+                 "Server.ClientAuthFailureLogSampleRatio", 0);
+    if (ClientAuthFailureLogSampleRatio <
+          SSLClientAuthLoggingSampleRatio) {
+      ClientAuthFailureLogSampleRatio = SSLClientAuthLoggingSampleRatio;
+    }
+    if (ClientAuthFailureLogSampleRatio > ClientAuthLogSampleBase) {
+      ClientAuthFailureLogSampleRatio = ClientAuthLogSampleBase;
     }
 
     // SourceRoot has been default to: Process::GetCurrentDirectory() + '/'
@@ -2224,6 +2294,7 @@ void RuntimeOption::Load(
     Config::Bind(FileCache, ini, config, "Server.FileCache");
     Config::Bind(DefaultDocument, ini, config, "Server.DefaultDocument",
                  "index.php");
+    Config::Bind(GlobalDocument, ini, config, "Server.GlobalDocument");
     Config::Bind(ErrorDocument404, ini, config, "Server.ErrorDocument404");
     normalizePath(ErrorDocument404);
     Config::Bind(ForbiddenAs404, ini, config, "Server.ForbiddenAs404");
@@ -2417,6 +2488,10 @@ void RuntimeOption::Load(
     Config::Bind(AdminServerIP, ini, config, "AdminServer.IP", ServerIP);
     Config::Bind(AdminServerPort, ini, config, "AdminServer.Port", 0);
     Config::Bind(AdminThreadCount, ini, config, "AdminServer.ThreadCount", 1);
+    Config::Bind(AdminServerEnableSSLWithPlainText, ini, config,
+                 "AdminServer.EnableSSLWithPlainText", false);
+    Config::Bind(AdminServerStatsNeedPassword, ini, config,
+                 "AdminServer.StatsNeedPassword", AdminServerStatsNeedPassword);
     Config::Bind(AdminPassword, ini, config, "AdminServer.Password");
     Config::Bind(AdminPasswords, ini, config, "AdminServer.Passwords");
     Config::Bind(HashedAdminPasswords, ini, config,
@@ -2558,6 +2633,10 @@ void RuntimeOption::Load(
     Config::Bind(XenonPeriodSeconds, ini, config, "Xenon.Period", 0.0);
     Config::Bind(XenonRequestFreq, ini, config, "Xenon.RequestFreq", 1);
     Config::Bind(XenonForceAlwaysOn, ini, config, "Xenon.ForceAlwaysOn", false);
+  }
+  {
+    // Strobelight
+    Config::Bind(StrobelightEnabled, ini, config, "Strobelight.Enabled", false);
   }
   {
     // Profiling

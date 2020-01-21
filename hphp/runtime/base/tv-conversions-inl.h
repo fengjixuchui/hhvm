@@ -18,7 +18,6 @@
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/double-to-int64.h"
 #include "hphp/runtime/base/object-data.h"
-#include "hphp/runtime/base/ref-data.h"
 #include "hphp/runtime/base/resource-data.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
@@ -38,8 +37,8 @@ void raiseClsMethConvertWarningHelper(const char* toType);
 
 ///////////////////////////////////////////////////////////////////////////////
 
-inline bool cellToBool(Cell cell) {
-  assertx(cellIsPlausible(cell));
+inline bool tvToBool(TypedValue cell) {
+  assertx(tvIsPlausible(cell));
 
   switch (cell.m_type) {
     case KindOfUninit:
@@ -49,20 +48,22 @@ inline bool cellToBool(Cell cell) {
     case KindOfDouble:        return cell.m_data.dbl != 0;
     case KindOfPersistentString:
     case KindOfString:        return cell.m_data.pstr->toBoolean();
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR); break;
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:         return !cell.m_data.parr->empty();
     case KindOfObject:        return cell.m_data.pobj->toBoolean();
     case KindOfResource:      return cell.m_data.pres->data()->o_toBoolean();
-    case KindOfRecord:        raise_convert_record_to_type("bool");
-    case KindOfRef:           break;
+    case KindOfRecord:        raise_convert_record_to_type("bool"); break;
     case KindOfFunc:
       if (RuntimeOption::EvalRaiseFuncConversionWarning) {
         raise_warning("Func to bool conversion");
@@ -75,8 +76,8 @@ inline bool cellToBool(Cell cell) {
   not_reached();
 }
 
-inline int64_t cellToInt(Cell cell) {
-  assertx(cellIsPlausible(cell));
+inline int64_t tvToInt(TypedValue cell) {
+  assertx(tvIsPlausible(cell));
 
   switch (cell.m_type) {
     case KindOfUninit:
@@ -86,20 +87,22 @@ inline int64_t cellToInt(Cell cell) {
     case KindOfDouble:        return double_to_int64(cell.m_data.dbl);
     case KindOfPersistentString:
     case KindOfString:        return cell.m_data.pstr->toInt64(10);
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR); break;
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:         return cell.m_data.parr->empty() ? 0 : 1;
     case KindOfObject:        return cell.m_data.pobj->toInt64();
     case KindOfResource:      return cell.m_data.pres->data()->o_toInt64();
-    case KindOfRecord:        raise_convert_record_to_type("int");
-    case KindOfRef:           break;
+    case KindOfRecord:        raise_convert_record_to_type("int"); break;
     case KindOfFunc:
       if (RuntimeOption::EvalRaiseFuncConversionWarning) {
         raise_warning("Func to int conversion");
@@ -114,9 +117,9 @@ inline int64_t cellToInt(Cell cell) {
   not_reached();
 }
 
-inline double cellToDouble(Cell cell) {
-  Cell tmp;
-  cellDup(cell, tmp);
+inline double tvToDouble(TypedValue cell) {
+  TypedValue tmp;
+  tvDup(cell, tmp);
   tvCastToDoubleInPlace(&tmp);
   return tmp.m_data.dbl;
 }
@@ -124,8 +127,8 @@ inline double cellToDouble(Cell cell) {
 ///////////////////////////////////////////////////////////////////////////////
 
 template <IntishCast IC>
-inline Cell cellToKey(Cell cell, const ArrayData* ad) {
-  assertx(cellIsPlausible(cell));
+inline TypedValue tvToKey(TypedValue cell, const ArrayData* ad) {
+  assertx(tvIsPlausible(cell));
 
   auto coerceKey = [&] (const StringData* str) {
     int64_t n;
@@ -170,9 +173,13 @@ inline Cell cellToKey(Cell cell, const ArrayData* ad) {
     case KindOfResource:
       return make_tv<KindOfInt64>(cell.m_data.pres->data()->o_toInt64());
 
+    case KindOfDArray:
+    case KindOfPersistentDArray:
+    case KindOfVArray:
+    case KindOfPersistentVArray:
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+
     case KindOfClsMeth:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfPersistentVec:
@@ -191,18 +198,10 @@ inline Cell cellToKey(Cell cell, const ArrayData* ad) {
     case KindOfPersistentString:
     case KindOfFunc:
     case KindOfClass:
-    case KindOfRef:
       break;
   }
   not_reached();
 }
-
-template <IntishCast IC>
-inline Cell tvToKey(TypedValue tv, const ArrayData* ad) {
-  assertx(tvIsPlausible(tv));
-  return cellToKey<IC>(tvToCell(tv), ad);
-}
-
 
 ///////////////////////////////////////////////////////////////////////////////
 

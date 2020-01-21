@@ -1,0 +1,21 @@
+# @generated
+# @autocargo from //hphp/hack/src/parser:aast_parser_ffi
+# Signature<<81a9cff7f10cb801e33e6f1fd522751df3faff5e>>
+[package]
+name = "aast_parser_ffi"
+edition = "2018"
+version = "0.0.0"
+include = ["../../aast_parser_ffi.rs"]
+
+[lib]
+path = "../../aast_parser_ffi.rs"
+
+[dependencies]
+aast_parser = { path = "../aast_parser" }
+ocamlrep = { path = "../../../ocamlrep" }
+ocamlrep_ocamlpool = { path = "../../../ocamlrep_ocamlpool" }
+parser_core_types = { path = "../core_types" }
+stack_limit = { path = "../../../utils/stack_limit" }
+libc = "0.2"
+ocaml = "0.8"
+# @end of Signature<<81a9cff7f10cb801e33e6f1fd522751df3faff5e>>

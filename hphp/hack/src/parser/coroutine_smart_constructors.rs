@@ -1,11 +1,18 @@
-use crate::parser_env::ParserEnv;
-use crate::syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
-use parser_core_types::lexable_token::LexableToken;
-use parser_core_types::source_text::SourceText;
-use parser_core_types::syntax::*;
-use parser_core_types::token_kind::TokenKind;
+// Copyright (c) Facebook, Inc. and its affiliates.
+//
+// This source code is licensed under the MIT license found in the
+// LICENSE file in the "hack" directory of this source tree.
 
+mod coroutine_smart_constructors_generated;
+
+use ocaml::core::mlvalues::Value;
+use parser_core_types::{
+    lexable_token::LexableToken, parser_env::ParserEnv, source_text::SourceText, syntax::*,
+    token_kind::TokenKind,
+};
+use rust_to_ocaml::{SerializationContext, ToOcaml};
 use std::marker::PhantomData;
+use syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
 
 const PPL_MACRO_STR: &str = "__PPL";
 
@@ -28,6 +35,22 @@ pub struct State<'src, S> {
     is_codegen: bool,
     phantom_s: PhantomData<*const S>,
 }
+
+impl<'src, S> State<'src, S> {
+    pub fn new(source: &SourceText<'src>, is_codegen: bool) -> Self {
+        State {
+            seen_ppl: false,
+            source: source.clone(),
+            is_codegen,
+            phantom_s: PhantomData,
+        }
+    }
+
+    pub fn seen_ppl(&self) -> bool {
+        self.seen_ppl
+    }
+}
+
 impl<'src, S> Clone for State<'src, S> {
     fn clone(&self) -> Self {
         Self {
@@ -59,12 +82,7 @@ impl<'src, S> CoroutineStateType for State<'src, S> {
 
 impl<'src, S> StateType<'src, S> for State<'src, S> {
     fn initial(env0: &ParserEnv, src: &SourceText<'src>) -> Self {
-        State {
-            seen_ppl: false,
-            source: src.clone(),
-            is_codegen: env0.codegen,
-            phantom_s: PhantomData,
-        }
+        State::new(src, env0.codegen)
     }
 
     fn next(&mut self, _inputs: &[&S]) {}
@@ -230,5 +248,11 @@ where
             argument_list,
             right_paren,
         )
+    }
+}
+
+impl<'a, S> ToOcaml for State<'a, S> {
+    unsafe fn to_ocaml(&self, _context: &SerializationContext) -> Value {
+        self.seen_ppl().to_ocaml(_context)
     }
 }

@@ -23,7 +23,6 @@
 #include "hphp/runtime/vm/vm-regs.h"
 #include "hphp/util/alloc.h"
 #include "hphp/util/cycles.h"
-#include "hphp/util/process.h"
 #include "hphp/util/ptr-map.h"
 #include "hphp/util/rds-local.h"
 #include "hphp/util/struct-log.h"
@@ -157,13 +156,11 @@ DEBUG_ONLY bool checkEnqueuedKind(const HeapObject* h) {
   switch (h->kind()) {
     case HeaderKind::Apc:
     case HeaderKind::Globals:
-    case HeaderKind::Ref:
     case HeaderKind::Resource:
     case HeaderKind::ClsMeth:
     case HeaderKind::Packed:
     case HeaderKind::Mixed:
     case HeaderKind::Dict:
-    case HeaderKind::Shape:
     case HeaderKind::VecArray:
     case HeaderKind::Keyset:
     case HeaderKind::Empty:

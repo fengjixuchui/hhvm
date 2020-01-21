@@ -11,7 +11,7 @@ module String_comparator = struct
 
   let to_string x = x
 
-  let is_equal x y = x = y
+  let is_equal x y = String.equal x y
 end
 
 module Int_comparator = struct
@@ -68,7 +68,6 @@ module Relative_path_comparator = struct
 end
 
 module type Pattern_substitutions = sig
-  val substitutions : (string * string) list
   (** List of key-value pairs. We perform these key to value
    * substitutions in-order.
    *
@@ -87,6 +86,7 @@ module type Pattern_substitutions = sig
    * Note: in actuality, the keys and values aren't treated as string literals
    * but as a pattern for regex and a template for replacement.
    *)
+  val substitutions : (string * string) list
 end
 
 (** Comparison between an expected pattern and an actual string. *)
@@ -158,9 +158,7 @@ module Make_asserter (Comp : Comparator) = struct
         exp
         actual
     else
-      let () =
-        Printf.eprintf "assert_list_equals failed. Counts not equal\n"
-      in
+      let () = Printf.eprintf "assert_list_equals failed. Counts not equal\n" in
       let exp_strs = List.map Comp.to_string exp in
       let actual_strs = List.map Comp.to_string actual in
       let () =

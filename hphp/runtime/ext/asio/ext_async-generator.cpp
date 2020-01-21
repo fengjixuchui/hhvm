@@ -50,9 +50,9 @@ AsyncGenerator::~AsyncGenerator() {
 
 ObjectData*
 AsyncGenerator::Create(const ActRec* fp, size_t numSlots,
-                       jit::TCA resumeAddr, Offset resumeOffset) {
+                       jit::TCA resumeAddr, Offset suspendOffset) {
   assertx(fp);
-  assertx(!fp->resumed());
+  assertx(!isResumed(fp));
   assertx(fp->func()->isAsyncGenerator());
   const size_t frameSz = Resumable::getFrameSize(numSlots);
   const size_t genSz = genSize(sizeof(AsyncGenerator), frameSz);
@@ -60,7 +60,7 @@ AsyncGenerator::Create(const ActRec* fp, size_t numSlots,
   auto const genData = new (Native::data<AsyncGenerator>(obj)) AsyncGenerator();
   genData->resumable()->initialize<false>(fp,
                                           resumeAddr,
-                                          resumeOffset,
+                                          suspendOffset,
                                           frameSz,
                                           genSz);
   genData->setState(State::Created);
@@ -68,21 +68,21 @@ AsyncGenerator::Create(const ActRec* fp, size_t numSlots,
 }
 
 c_StaticWaitHandle*
-AsyncGenerator::yield(Offset resumeOffset,
-                      const Cell* key, const Cell value) {
+AsyncGenerator::yield(Offset suspendOffset,
+                      const TypedValue* key, const TypedValue value) {
   assertx(isRunning());
-  resumable()->setResumeAddr(nullptr, resumeOffset);
+  resumable()->setResumeAddr(nullptr, suspendOffset);
   setState(State::Started);
 
   auto keyValueTuple = make_varray(
-    key ? Variant(tvAsCVarRef(key), Variant::CellCopy()) : init_null_variant,
-    Variant(tvAsCVarRef(&value), Variant::CellCopy()));
-  auto keyValueTupleTV = make_tv<KindOfArray>(keyValueTuple.detach());
+    key ? Variant(tvAsCVarRef(key), Variant::TVCopy()) : init_null_variant,
+    Variant(tvAsCVarRef(&value), Variant::TVCopy()));
+  auto keyValueTupleTV = make_array_like_tv(keyValueTuple.detach());
 
   if (m_waitHandle) {
     // Resumed execution.
     req::ptr<c_AsyncGeneratorWaitHandle> wh(std::move(m_waitHandle));
-    wh->ret(*tvAssertCell(&keyValueTupleTV));
+    wh->ret(*tvAssertPlausible(&keyValueTupleTV));
     return nullptr;
   }
   // Eager execution.

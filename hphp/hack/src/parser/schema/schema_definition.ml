@@ -183,7 +183,7 @@ let schema : schema_node list =
           ("keyword", Token);
           ("name", Token);
           ("extends_keyword", ZeroOrOne Token);
-          ("extends_list", ZeroOrOne (Aggregate Specifier));
+          ("extends_opt", ZeroOrOne (Just "TypeConstraint"));
           ("left_brace", Token);
           ("fields", ZeroOrMore (Just "RecordField"));
           ("right_brace", Token);
@@ -198,11 +198,10 @@ let schema : schema_node list =
       aggregates = [];
       fields =
         [
-          ("name", Token);
-          ("colon", Token);
           ("type", Just "TypeConstraint");
+          ("name", Token);
           ("init", ZeroOrOne (Just "SimpleInitializer"));
-          ("comma", Token);
+          ("semi", Token);
         ];
     };
     {
@@ -248,10 +247,7 @@ let schema : schema_node list =
       prefix = "property";
       aggregates = [];
       fields =
-        [
-          ("name", Token);
-          ("initializer", ZeroOrOne (Just "SimpleInitializer"));
-        ];
+        [("name", Token); ("initializer", ZeroOrOne (Just "SimpleInitializer"))];
     };
     {
       kind_name = "NamespaceDeclaration";
@@ -442,6 +438,7 @@ let schema : schema_node list =
         [
           ("attribute", ZeroOrOne (Aggregate AttributeSpecification));
           ("modifiers", ZeroOrMore Token);
+          ("xhp", ZeroOrOne Token);
           ("keyword", Token);
           ("name", Token);
           ("type_parameters", ZeroOrOne (Just "TypeParameters"));
@@ -565,10 +562,7 @@ let schema : schema_node list =
       prefix = "constant_declarator";
       aggregates = [];
       fields =
-        [
-          ("name", Token);
-          ("initializer", ZeroOrOne (Just "SimpleInitializer"));
-        ];
+        [("name", Token); ("initializer", ZeroOrOne (Just "SimpleInitializer"))];
     };
     {
       kind_name = "TypeConstDeclaration";
@@ -704,10 +698,7 @@ let schema : schema_node list =
       prefix = "expression_statement";
       aggregates = [TopLevelDeclaration; Statement];
       fields =
-        [
-          ("expression", ZeroOrOne (Aggregate Expression));
-          ("semicolon", Token);
-        ];
+        [("expression", ZeroOrOne (Aggregate Expression)); ("semicolon", Token)];
     };
     {
       kind_name = "MarkupSection";
@@ -746,23 +737,6 @@ let schema : schema_node list =
           ("left_paren", Token);
           ("variables", ZeroOrMore (Aggregate Expression));
           ("right_paren", Token);
-          ("semicolon", Token);
-        ];
-    };
-    {
-      kind_name = "LetStatement";
-      type_name = "let_statement";
-      func_name = "let_statement";
-      description = "let_statement";
-      prefix = "let_statement";
-      aggregates = [TopLevelDeclaration; Statement];
-      fields =
-        [
-          ("keyword", Token);
-          ("name", Token);
-          ("colon", ZeroOrOne Token);
-          ("type", ZeroOrOne (Aggregate Specifier));
-          ("initializer", Just "SimpleInitializer");
           ("semicolon", Token);
         ];
     };
@@ -1051,8 +1025,7 @@ let schema : schema_node list =
       description = "goto_statement";
       prefix = "goto_statement";
       aggregates = [TopLevelDeclaration; Statement];
-      fields =
-        [("keyword", Token); ("label_name", Token); ("semicolon", Token)];
+      fields = [("keyword", Token); ("label_name", Token); ("semicolon", Token)];
     };
     {
       kind_name = "ThrowStatement";
@@ -1075,12 +1048,7 @@ let schema : schema_node list =
       description = "break_statement";
       prefix = "break";
       aggregates = [TopLevelDeclaration; Statement];
-      fields =
-        [
-          ("keyword", Token);
-          ("level", ZeroOrOne (Just "LiteralExpression"));
-          ("semicolon", Token);
-        ];
+      fields = [("keyword", Token); ("semicolon", Token)];
     };
     {
       kind_name = "ContinueStatement";
@@ -1089,12 +1057,7 @@ let schema : schema_node list =
       description = "continue_statement";
       prefix = "continue";
       aggregates = [TopLevelDeclaration; Statement];
-      fields =
-        [
-          ("keyword", Token);
-          ("level", ZeroOrOne (Just "LiteralExpression"));
-          ("semicolon", Token);
-        ];
+      fields = [("keyword", Token); ("semicolon", Token)];
     };
     {
       kind_name = "EchoStatement";
@@ -1256,11 +1219,7 @@ let schema : schema_node list =
       prefix = "member";
       aggregates = [Expression; ConstructorExpression; LambdaBody];
       fields =
-        [
-          ("object", Aggregate Expression);
-          ("operator", Token);
-          ("name", Token);
-        ];
+        [("object", Aggregate Expression); ("operator", Token); ("name", Token)];
     };
     {
       kind_name = "SafeMemberSelectionExpression";
@@ -1270,11 +1229,7 @@ let schema : schema_node list =
       prefix = "safe_member";
       aggregates = [Expression; ConstructorExpression; LambdaBody];
       fields =
-        [
-          ("object", Aggregate Expression);
-          ("operator", Token);
-          ("name", Token);
-        ];
+        [("object", Aggregate Expression); ("operator", Token); ("name", Token)];
     };
     {
       kind_name = "EmbeddedMemberSelectionExpression";
@@ -1884,9 +1839,7 @@ let schema : schema_node list =
       aggregates = [XHPAttribute];
       fields =
         [
-          ("name", Token);
-          ("equal", Token);
-          ("expression", Aggregate Expression);
+          ("name", Token); ("equal", Token); ("expression", Aggregate Expression);
         ];
     };
     {
@@ -2349,6 +2302,34 @@ let schema : schema_node list =
         ];
     };
     {
+      kind_name = "UnionTypeSpecifier";
+      type_name = "union_type_specifier";
+      func_name = "union_type_specifier";
+      description = "union_type_specifier";
+      prefix = "union";
+      aggregates = [Specifier];
+      fields =
+        [
+          ("left_paren", Token);
+          ("types", ZeroOrMore (ZeroOrOne (Aggregate Specifier)));
+          ("right_paren", Token);
+        ];
+    };
+    {
+      kind_name = "IntersectionTypeSpecifier";
+      type_name = "intersection_type_specifier";
+      func_name = "intersection_type_specifier";
+      description = "intersection_type_specifier";
+      prefix = "intersection";
+      aggregates = [Specifier];
+      fields =
+        [
+          ("left_paren", Token);
+          ("types", ZeroOrMore (ZeroOrOne (Aggregate Specifier)));
+          ("right_paren", Token);
+        ];
+    };
+    {
       kind_name = "ErrorSyntax";
       type_name = "error";
       func_name = "error";
@@ -2399,7 +2380,7 @@ let schema : schema_node list =
         ];
     }
     (* PocketUniverse: because of the trailing ';' I didn't want to
-   add the aggragte PUField to PocketAtomExpression, so I made the ( .. )
+   add the aggragte PUField to PocketAtomExpression, so I made the ( ... )
    part optional. It will be up to the parser to only parse the two
    possible syntax:
    :@A;
@@ -2465,6 +2446,7 @@ let schema : schema_node list =
         [
           ("case", Token);
           ("type", Token);
+          ("reified", ZeroOrOne (Aggregate Specifier));
           ("name", Aggregate Expression);
           ("semicolon", Token);
         ];
@@ -2547,7 +2529,7 @@ module AggregateKey = struct
   let compare (x : t) (y : t) = compare x y
 end
 
-module AggMap = MyMap.Make (AggregateKey)
+module AggMap = WrappedMap.Make (AggregateKey)
 
 let aggregation_of_top_level_declaration =
   List.filter (fun x -> List.mem TopLevelDeclaration x.aggregates) schema

@@ -14,6 +14,7 @@
 open Core_kernel
 open Config_file.Getters
 open Reordered_argument_collections
+open ServerLocalConfig
 
 type t = {
   version: Config_file.version;
@@ -26,6 +27,7 @@ type t = {
   sharedmem_config: SharedMem.config;
   tc_options: TypecheckerOptions.t;
   parser_options: ParserOptions.t;
+  glean_options: GleanOptions.t;
   formatter_override: Path.t option;
   config_hash: string option;
   (* A list of regexps for paths to ignore *)
@@ -110,7 +112,7 @@ let process_experimental sl =
   | features -> List.fold_left features ~f:SSet.add ~init:SSet.empty
 
 let config_experimental_tc_features config =
-  match SMap.get config "enable_experimental_tc_features" with
+  match SMap.find_opt config "enable_experimental_tc_features" with
   | None -> SSet.empty
   | Some s ->
     let sl = Str.split config_list_regexp s in
@@ -127,7 +129,7 @@ let process_migration_flags sl =
     List.fold_left flags ~f:SSet.add ~init:SSet.empty
 
 let config_tc_migration_flags config =
-  SMap.get config "enable_tc_migration_flags"
+  SMap.find_opt config "enable_tc_migration_flags"
   |> Option.value_map ~f:(Str.split config_list_regexp) ~default:[]
   |> List.map ~f:String.lowercase
   |> process_migration_flags
@@ -143,7 +145,7 @@ let convert_paths str =
     l
 
 let process_ignored_paths config =
-  SMap.get config "ignored_paths"
+  SMap.find_opt config "ignored_paths"
   |> Option.value_map ~f:convert_paths ~default:[]
 
 let maybe_relative_path fn =
@@ -153,28 +155,29 @@ let maybe_relative_path fn =
     begin
       if Filename.is_relative fn then
         Relative_path.(to_absolute (from_root fn))
-      else fn
+      else
+        fn
     end
 
 let process_extra_paths config =
-  match SMap.get config "extra_paths" with
+  match SMap.find_opt config "extra_paths" with
   | Some s -> Str.split config_list_regexp s |> List.map ~f:maybe_relative_path
   | _ -> []
 
 let process_coroutine_whitelist_paths config =
-  SMap.get config "coroutine_whitelist_paths"
+  SMap.find_opt config "coroutine_whitelist_paths"
   |> Option.value_map ~f:convert_paths ~default:[]
 
 let process_untrusted_mode config =
-  match SMap.get config "untrusted_mode" with
+  match SMap.find_opt config "untrusted_mode" with
   | Some s ->
     if bool_of_string s then
       let blacklist =
         [
           (* out of tree file access*)
-            "extra_paths";
+          "extra_paths";
           (* potential resource abuse *)
-            "language_feature_logging";
+          "language_feature_logging";
         ]
       in
       let prefix_blacklist =
@@ -220,12 +223,12 @@ let convert_auto_namespace_to_map map =
 
 let prepare_auto_namespace_map config =
   Option.value_map
-    (SMap.get config "auto_namespace_map")
+    (SMap.find_opt config "auto_namespace_map")
     ~default:[]
     ~f:convert_auto_namespace_to_map
 
 let prepare_iset config config_name initial_values =
-  SMap.get config config_name
+  SMap.find_opt config config_name
   |> Option.value_map ~f:(Str.split config_list_regexp) ~default:[]
   |> List.map ~f:int_of_string
   |> List.fold_right ~init:initial_values ~f:ISet.add
@@ -247,13 +250,10 @@ let load config_filename options =
       (Relative_path.to_absolute config_filename)
   in
   let config =
-    Config_file.apply_overrides
-      ~silent:true
-      ~config
-      ~overrides:config_overrides
+    Config_file.apply_overrides ~silent:true ~config ~overrides:config_overrides
   in
   process_untrusted_mode config;
-  let version = Config_file.parse_version (SMap.get config "version") in
+  let version = Config_file.parse_version (SMap.find_opt config "version") in
   let local_config =
     ServerLocalConfig.load
       ~silent:false
@@ -284,45 +284,38 @@ let load config_filename options =
     bool_ "warn_on_non_opt_build" ~default:false config
   in
   let formatter_override =
-    Option.map (SMap.get config "formatter_override") maybe_relative_path
+    Option.map (SMap.find_opt config "formatter_override") maybe_relative_path
   in
   let global_opts =
     GlobalOptions.make
-      ?tco_safe_array:(bool_opt "safe_array" config)
-      ?tco_safe_vector_array:(bool_opt "safe_vector_array" config)
       ?po_deregister_php_stdlib:(bool_opt "deregister_php_stdlib" config)
       ?po_allow_goto:(Option.map ~f:not (bool_opt "disallow_goto" config))
       ?po_disable_static_closures:(bool_opt "disable_static_closures" config)
-      ?po_disable_halt_compiler:(bool_opt "disable_halt_compiler" config)
-      ?tco_disallow_array_as_tuple:(bool_opt "disallow_array_as_tuple" config)
       ?tco_disallow_ambiguous_lambda:
         (bool_opt "disallow_ambiguous_lambda" config)
       ?tco_disallow_array_typehint:(bool_opt "disallow_array_typehint" config)
       ?tco_disallow_array_literal:(bool_opt "disallow_array_literal" config)
       ?tco_defer_class_declaration_threshold:
-        local_config.ServerLocalConfig.defer_class_declaration_threshold
+        local_config.defer_class_declaration_threshold
       ?tco_max_times_to_defer_type_checking:
-        local_config.ServerLocalConfig.max_times_to_defer_type_checking
-      ?tco_prefetch_deferred_files:
-        (Some local_config.ServerLocalConfig.prefetch_deferred_files)
+        local_config.max_times_to_defer_type_checking
+      ?tco_prefetch_deferred_files:(Some local_config.prefetch_deferred_files)
       ?tco_remote_type_check_threshold:
-        local_config.ServerLocalConfig.remote_type_check_threshold
-      ?tco_remote_type_check:
-        (Some local_config.ServerLocalConfig.remote_type_check)
-      ?tco_remote_worker_key:local_config.ServerLocalConfig.remote_worker_key
-      ?tco_remote_check_id:local_config.ServerLocalConfig.remote_check_id
-      ?tco_num_remote_workers:
-        (Some local_config.ServerLocalConfig.num_remote_workers)
-      ?so_remote_version_specifier:
-        local_config.ServerLocalConfig.remote_version_specifier
-      ?so_remote_worker_eden_checkout_threshold:
-        (int_opt "remote_worker_eden_checkout_threshold" config)
-      ?so_naming_sqlite_path:local_config.ServerLocalConfig.naming_sqlite_path
-      ?tco_language_feature_logging:
-        (bool_opt "language_feature_logging" config)
+        local_config.remote_type_check.recheck_threshold
+      ?tco_remote_type_check:(Some local_config.remote_type_check.enabled)
+      ?tco_remote_worker_key:local_config.remote_worker_key
+      ?tco_remote_check_id:local_config.remote_check_id
+      ?tco_remote_max_batch_size:
+        (Some local_config.remote_type_check.max_batch_size)
+      ?tco_remote_min_batch_size:
+        (Some local_config.remote_type_check.min_batch_size)
+      ?tco_num_remote_workers:(Some local_config.remote_type_check.num_workers)
+      ?so_remote_version_specifier:local_config.remote_version_specifier
+      ?so_remote_worker_vfs_checkout_threshold:
+        (Some local_config.remote_type_check.worker_vfs_checkout_threshold)
+      ?so_naming_sqlite_path:local_config.naming_sqlite_path
+      ?tco_language_feature_logging:(bool_opt "language_feature_logging" config)
       ?tco_unsafe_rx:(bool_opt "unsafe_rx" config)
-      ?tco_disallow_unset_on_varray:
-        (bool_opt "disallow_unset_on_varray" config)
       ?tco_disallow_scrutinee_case_value_type_mismatch:
         (bool_opt "disallow_scrutinee_case_value_type_mismatch" config)
       ?tco_new_inference_lambda:(bool_opt "new_inference_lambda" config)
@@ -334,9 +327,6 @@ let load config_filename options =
       ?tco_disallow_byref_calls:(bool_opt "disallow_byref_calls" config)
       ?po_disable_lval_as_an_expression:
         (bool_opt "disable_lval_as_an_expression" config)
-      ?tco_typecheck_xhp_cvars:(bool_opt "typecheck_xhp_cvars" config)
-      ?tco_ignore_collection_expr_type_arguments:
-        (bool_opt "ignore_collection_expr_type_arguments" config)
       ~ignored_fixme_codes:(prepare_ignored_fixme_codes config)
       ?ignored_fixme_regex:(string_opt "ignored_fixme_regex" config)
       ~po_auto_namespace_map:(prepare_auto_namespace_map config)
@@ -347,12 +337,16 @@ let load config_filename options =
       ~tco_shallow_class_decl:local_config.ServerLocalConfig.shallow_class_decl
       ~profile_type_check_duration_threshold:
         local_config.ServerLocalConfig.profile_type_check_duration_threshold
-      ?tco_like_types:(bool_opt "like_types" config)
-      ?tco_pessimize_types:(bool_opt "pessimize_types" config)
+      ~profile_type_check_twice:
+        local_config.ServerLocalConfig.profile_type_check_twice
+      ~profile_owner:local_config.ServerLocalConfig.profile_owner
+      ~profile_desc:local_config.ServerLocalConfig.profile_desc
+      ?tco_like_type_hints:(bool_opt "like_type_hints" config)
+      ?tco_union_intersection_type_hints:
+        (bool_opt "union_intersection_type_hints" config)
+      ?tco_like_casts:(bool_opt "like_casts" config)
       ?tco_simple_pessimize:(float_opt "simple_pessimize" config)
-      ?tco_coercion_from_dynamic:(bool_opt "coercion_from_dynamic" config)
       ?tco_complex_coercion:(bool_opt "complex_coercion" config)
-      ?tco_coercion_from_union:(bool_opt "coercion_from_union" config)
       ?tco_disable_partially_abstract_typeconsts:
         (bool_opt "disable_partially_abstract_typeconsts" config)
       ~error_codes_treated_strictly:
@@ -364,12 +358,8 @@ let load config_filename options =
         (bool_opt "disallow_invalid_arraykey_constraint" config)
       ?po_enable_class_level_where_clauses:
         (bool_opt "class_level_where_clauses" config)
-      ?po_enable_constant_visibility_modifiers:
-        (bool_opt "enable_constant_visibility_modifiers" config)
       ?po_disable_legacy_soft_typehints:
         (bool_opt "disable_legacy_soft_typehints" config)
-      ?tco_use_lru_workers:
-        (Some local_config.ServerLocalConfig.use_lru_workers)
       ?po_disallow_toplevel_requires:
         (bool_opt "disallow_toplevel_requires" config)
       ~po_disallowed_decl_fixmes:(prepare_disallowed_decl_fixmes config)
@@ -380,9 +370,7 @@ let load config_filename options =
       ?tco_const_attribute:(bool_opt "const_attribute" config)
       ?po_const_default_func_args:(bool_opt "const_default_func_args" config)
       ?po_disallow_silence:(bool_opt "disallow_silence" config)
-      ~tco_infer_missing:
-        ( GlobalOptions.InferMissing.from_string_opt
-        @@ string_opt "infer_missing" config )
+      ?tco_global_inference:(bool_opt "global_inference" config)
       ?tco_const_static_props:(bool_opt "const_static_props" config)
       ?po_abstract_static_props:(bool_opt "abstract_static_props" config)
       ?po_disable_unset_class_const:
@@ -390,6 +378,18 @@ let load config_filename options =
       ~po_parser_errors_only:(ServerArgs.ai_mode options <> None)
       ?tco_check_attribute_locations:
         (bool_opt "check_attribute_locations" config)
+      ?glean_service:(string_opt "glean_service" config)
+      ?glean_hostname:(string_opt "glean_hostname" config)
+      ?glean_port:(int_opt "glean_port" config)
+      ?glean_reponame:(string_opt "glean_reponame" config)
+      ?po_disallow_func_ptrs_in_constants:
+        (bool_opt "disallow_func_ptrs_in_constants" config)
+      ?tco_error_php_lambdas:(bool_opt "error_php_lambdas" config)
+      ?tco_disallow_discarded_nullable_awaitables:
+        (bool_opt "disallow_discarded_nullable_awaitables" config)
+      ?po_rust_lowerer:(bool_opt "rust_lowerer" config)
+      ?po_enable_xhp_class_modifier:
+        (bool_opt "enable_xhp_class_modifier" config)
       ()
   in
   Errors.ignored_fixme_codes := GlobalOptions.ignored_fixme_codes global_opts;
@@ -402,6 +402,7 @@ let load config_filename options =
       sharedmem_config = make_sharedmem_config config options local_config;
       tc_options = global_opts;
       parser_options = global_opts;
+      glean_options = global_opts;
       formatter_override;
       config_hash = Some config_hash;
       ignored_paths;
@@ -419,6 +420,7 @@ let default_config =
     gc_control = GlobalConfig.gc_control;
     sharedmem_config = GlobalConfig.default_sharedmem_config;
     tc_options = TypecheckerOptions.default;
+    glean_options = GleanOptions.default;
     parser_options = ParserOptions.default;
     formatter_override = None;
     config_hash = None;
@@ -432,6 +434,8 @@ let set_parser_options config popt = { config with parser_options = popt }
 
 let set_tc_options config tcopt = { config with tc_options = tcopt }
 
+let set_glean_options config gleanopt = { config with glean_options = gleanopt }
+
 let gc_control config = config.gc_control
 
 let sharedmem_config config = config.sharedmem_config
@@ -439,6 +443,8 @@ let sharedmem_config config = config.sharedmem_config
 let typechecker_options config = config.tc_options
 
 let parser_options config = config.parser_options
+
+let glean_options config = config.glean_options
 
 let formatter_override config = config.formatter_override
 

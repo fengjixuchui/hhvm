@@ -7,8 +7,8 @@ HH\autoload_set_paths(
   __DIR__.'/'
 );
 
-final record Foo {
-  x: int,
+record Foo {
+  int x;
 }
 
 function foo(Bar $r): Bar {

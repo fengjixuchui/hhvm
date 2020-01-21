@@ -19,10 +19,12 @@
 
 #include "hphp/runtime/base/zend-string.h"
 #include "hphp/runtime/base/zend-printf.h"
-#include "hphp/runtime/base/zend-math.h"
 
 #include "hphp/util/lock.h"
 #include "hphp/util/overflow.h"
+
+#include "hphp/zend/zend-math.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -61,22 +63,22 @@ void string_charmask(const char *sinput, int len, char *mask) {
       /* Error, try to be as helpful as possible:
          (a range ending/starting with '.' won't be captured here) */
       if (end-len >= input) { /* there was no 'left' char */
-        throw_invalid_argument
+        raise_invalid_argument_warning
           ("charlist: Invalid '..'-range, missing left of '..'");
         continue;
       }
       if (input+2 >= end) { /* there is no 'right' char */
-        throw_invalid_argument
+        raise_invalid_argument_warning
           ("charlist: Invalid '..'-range, missing right of '..'");
         continue;
       }
       if (input[-1] > input[2]) { /* wrong order */
-        throw_invalid_argument
+        raise_invalid_argument_warning
           ("charlist: '..'-range needs to be incrementing");
         continue;
       }
       /* FIXME: better error (a..b..c is the only left possibility?) */
-      throw_invalid_argument("charlist: Invalid '..'-range");
+      raise_invalid_argument_warning("charlist: Invalid '..'-range");
       continue;
     } else {
       mask[c]=1;
@@ -116,7 +118,7 @@ String string_pad(const char *input, int len, int pad_length,
 
   /* Setup the padding string values if specified. */
   if (pad_str_len == 0) {
-    throw_invalid_argument("pad_string: (empty)");
+    raise_invalid_argument_warning("pad_string: (empty)");
     return String();
   }
 
@@ -139,7 +141,7 @@ String string_pad(const char *input, int len, int pad_length,
     right_pad = num_pad_chars - left_pad;
     break;
   default:
-    throw_invalid_argument("pad_type: %d", pad_type);
+    raise_invalid_argument_warning("pad_type: %d", pad_type);
     return String();
   }
 
@@ -1514,7 +1516,7 @@ static int string_similar_char(const char *txt1, int len1,
 }
 
 int string_similar_text(const char *t1, int len1,
-                        const char *t2, int len2, float *percent) {
+                        const char *t2, int len2, double *percent) {
   if (len1 == 0 && len2 == 0) {
     if (percent) *percent = 0.0;
     return 0;
@@ -1579,7 +1581,7 @@ String string_money_format(const char *format, double value) {
       check = true;
       p++;
     } else {
-      throw_invalid_argument
+      raise_invalid_argument_warning
         ("format: Only a single %%i or %%n token can be used");
       return String();
     }
@@ -1618,11 +1620,15 @@ String string_number_format(double d, int dec,
   d = php_math_round(d, dec);
 
   // departure from PHP: we got rid of dependencies on spprintf() here.
+  // This actually means 63 bytes for characters + 1 byte for '\0'
   String tmpstr(63, ReserveString);
   tmpbuf = tmpstr.mutableData();
   tmplen = snprintf(tmpbuf, 64, "%.*F", dec, d);
+  // From the man page of snprintf, the return value is:
+  // The number of characters that would have been written if n had been
+  // sufficiently large, not counting the terminating null character.
   if (tmplen < 0) return empty_string();
-  if (tmpbuf == nullptr || !isdigit((int)tmpbuf[0])) {
+  if (tmplen < 64 && (tmpbuf == nullptr || !isdigit((int)tmpbuf[0]))) {
     tmpstr.setSize(tmplen);
     return tmpstr;
   }
@@ -2388,7 +2394,7 @@ String string_convert_cyrillic_string(const String& input, char from, char to) {
   case 'K':
     break;
   default:
-    throw_invalid_argument("Unknown source charset: %c", from);
+    raise_invalid_argument_warning("Unknown source charset: %c", from);
     break;
   }
 
@@ -2401,7 +2407,7 @@ String string_convert_cyrillic_string(const String& input, char from, char to) {
   case 'K':
     break;
   default:
-    throw_invalid_argument("Unknown destination charset: %c", to);
+    raise_invalid_argument_warning("Unknown destination charset: %c", to);
     break;
   }
 

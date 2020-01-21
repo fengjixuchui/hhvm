@@ -47,10 +47,10 @@ class count_getter fixme_map =
       match expr_kind_opt with
       | None -> acc
       | Some kind ->
-        let r = fst ty in
-        let lvl = level_of_type fixme_map (pos, ty) in
+        let r = Typing_defs.get_reason ty in
+        let (_env, lvl) = level_of_type env fixme_map (pos, ty) in
         let counter =
-          match SMap.get acc kind with
+          match SMap.find_opt acc kind with
           | Some counter -> counter
           | None -> empty_counter
         in
@@ -108,7 +108,7 @@ let relativize root path =
   let root = Path.to_string root in
   (* If we're provided a file instead of a directory as the path to filter, the
      only valid value is the filename itself. *)
-  if FindUtils.is_php root && root = path then
+  if FindUtils.is_hack root && root = path then
     Some (Filename.basename path)
   else
     (* naive implementation *)
@@ -125,10 +125,8 @@ let get_coverage root tcopt neutral fnl =
   let naming_table = NamingTableStore.load () in
   let file_counts =
     List.rev_filter_map fnl (fun fn ->
-        relativize root (Relative_path.to_absolute fn)
-        >>= fun relativized_fn ->
-        Naming_table.get_file_info naming_table fn
-        >>= fun defs ->
+        relativize root (Relative_path.to_absolute fn) >>= fun relativized_fn ->
+        Naming_table.get_file_info naming_table fn >>= fun defs ->
         let (tast, _) = Typing_check_utils.type_file tcopt fn defs in
         let type_acc = accumulate_types tast fn in
         Some (relativized_fn, type_acc))

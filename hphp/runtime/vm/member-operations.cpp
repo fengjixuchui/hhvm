@@ -70,7 +70,6 @@ TypedValue objOffsetGet(
   }
 
   assertx(!base->isCollection());
-  assertx(!isRefType(offset.m_type));
 
   auto const method = base->methodNamed(s_offsetGet.get());
   assertx(method != nullptr);
@@ -88,7 +87,6 @@ static OffsetExistsResult objOffsetExists(ObjectData* base, TypedValue offset) {
   objArrayAccess(base);
 
   assertx(!base->isCollection());
-  assertx(!isRefType(offset.m_type));
 
   auto const method = base->methodNamed(s_offsetExists.get());
   assertx(method != nullptr);
@@ -132,7 +130,7 @@ bool objOffsetEmpty(ObjectData* base, TypedValue offset) {
   }
 
   auto value = objOffsetGet(base, offset, false);
-  auto result = !cellToBool(*tvToCell(&value));
+  auto result = !tvToBool(value);
   tvDecRefGen(value);
   return result;
 }
@@ -160,12 +158,11 @@ void objOffsetSet(
   }
 
   assertx(!base->isCollection());
-  assertx(!isRefType(offset.m_type));
 
   auto const method = base->methodNamed(s_offsetSet.get());
   assertx(method != nullptr);
 
-  TypedValue args[2] = { offset, *tvToCell(val) };
+  TypedValue args[2] = { offset, *val };
   g_context->invokeMethodV(base, method, folly::range(args));
 }
 
@@ -173,7 +170,6 @@ void objOffsetUnset(ObjectData* base, TypedValue offset) {
   objArrayAccess(base);
 
   assertx(!base->isCollection());
-  assertx(!isRefType(offset.m_type));
 
   auto const method = base->methodNamed(s_offsetUnset.get());
   assertx(method != nullptr);
@@ -246,43 +242,43 @@ void throw_inout_undefined_index(const StringData* sd) {
   throwArrayKeyException(sd, true);
 }
 
-Cell incDecBodySlow(IncDecOp op, tv_lval fr) {
-  assertx(cellIsPlausible(*fr));
+TypedValue incDecBodySlow(IncDecOp op, tv_lval fr) {
+  assertx(tvIsPlausible(*fr));
   assertx(type(fr) != KindOfUninit);
 
   auto dup = [&]() { tvIncRefGen(*fr); return *fr; };
 
   switch (op) {
   case IncDecOp::PreInc:
-    cellInc(fr);
+    tvInc(fr);
     return dup();
   case IncDecOp::PostInc: {
     auto const tmp = dup();
-    cellInc(fr);
+    tvInc(fr);
     return tmp;
   }
   case IncDecOp::PreDec:
-    cellDec(fr);
+    tvDec(fr);
     return dup();
   case IncDecOp::PostDec: {
     auto const tmp = dup();
-    cellDec(fr);
+    tvDec(fr);
     return tmp;
   }
   case IncDecOp::PreIncO:
-    cellIncO(fr);
+    tvIncO(fr);
     return dup();
   case IncDecOp::PostIncO: {
     auto const tmp = dup();
-    cellIncO(fr);
+    tvIncO(fr);
     return tmp;
   }
   case IncDecOp::PreDecO:
-    cellDecO(fr);
+    tvDecO(fr);
     return dup();
   case IncDecOp::PostDecO: {
     auto const tmp = dup();
-    cellDecO(fr);
+    tvDecO(fr);
     return tmp;
   }
   }
@@ -468,7 +464,6 @@ template<bool reverse>
 void SetRange(
   tv_lval base, int64_t offset, TypedValue src, int64_t count, int64_t size
 ) {
-  base = tvToCell(base);
   if (!tvIsString(base)) {
     fail_invalid("Invalid base type {} for range set operation",
                  getDataTypeString(type(base)).data());

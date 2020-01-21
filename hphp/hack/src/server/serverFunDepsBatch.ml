@@ -58,7 +58,7 @@ let collect_in_decl =
 
     method plus a b = Results.union a b
 
-    method! on_Call env ct e h el uel =
+    method! on_Call env ct e h el unpacked_element =
       let ( + ) = self#plus in
       let acc =
         match snd e with
@@ -69,28 +69,29 @@ let collect_in_decl =
         | T.Lvar (pos, id) -> process_local (pos, Local_id.get_name id)
         | _ -> self#zero
       in
-      acc + super#on_Call env ct e h el uel
+      acc + super#on_Call env ct e h el unpacked_element
 
-    method! on_New env (((p, ty), _) as c) targs el uel ctor_annot =
+    method! on_New env (((p, ty), _) as c) targs el unpacked_element ctor_annot
+        =
       let ( + ) = self#plus in
       let acc = process_method env ty (p, SN.Members.__construct) in
-      acc + super#on_New env c targs el uel ctor_annot
+      acc + super#on_New env c targs el unpacked_element ctor_annot
 
     method! on_expr env expr =
       let ( + ) = self#plus in
       let acc =
         match snd expr with
         | T.Fun_id id ->
-          process_function (fst (fst expr), "\\HH\\" ^ SN.SpecialFunctions.fun_)
+          process_function (fst (fst expr), SN.AutoimportedFunctions.fun_)
           + process_function id
         | T.Smethod_id ((p, cid), mid) ->
-          process_function (p, "\\HH\\" ^ SN.SpecialFunctions.class_meth)
+          process_function (p, SN.AutoimportedFunctions.class_meth)
           + process_method_cid mid cid
         | T.Method_caller ((p, cid), mid) ->
-          process_function (p, "\\HH\\" ^ SN.SpecialFunctions.meth_caller)
+          process_function (p, SN.AutoimportedFunctions.meth_caller)
           + process_method_cid mid cid
         | T.Method_id (((p, ty), _), mid) ->
-          process_function (p, "\\HH\\" ^ SN.SpecialFunctions.inst_meth)
+          process_function (p, SN.AutoimportedFunctions.inst_meth)
           + process_method env ty mid
         | _ -> self#zero
       in
@@ -161,9 +162,11 @@ let handlers =
         S.on_method = collect_in_decl#on_method_;
         S.on_fun = collect_in_decl#on_fun_;
       };
-    S.get_state = begin
-                    fun fn -> Ast_provider.get_ast ~full:true fn
-                  end;
+    S.get_state =
+      begin
+        fun fn ->
+        Ast_provider.get_ast ~full:true fn
+      end;
     S.map_result =
       begin
         fun ast refs ->
@@ -181,5 +184,4 @@ let go :
     (string * int * int) list ->
     ServerEnv.env ->
     _ =
- fun workers pos_list env ->
-  ServerRxApiShared.go workers pos_list env handlers
+ (fun workers pos_list env -> ServerRxApiShared.go workers pos_list env handlers)

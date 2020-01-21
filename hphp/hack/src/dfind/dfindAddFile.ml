@@ -102,8 +102,7 @@ let rec add_file links env path =
   | _ -> return ()
 
 and add_watch links env path =
-  call (add_fsnotify_watch env) path
-  >>= function
+  call (add_fsnotify_watch env) path >>= function
   | None -> return ()
   | Some _watch -> add_file links env path
 
@@ -113,8 +112,7 @@ and add_new_file links env path =
   let time = Time.get () in
   env.files <- TimeFiles.add (time, path) env.files;
   env.new_files <- SSet.add path env.new_files;
-  call (wrap Unix.lstat) path
-  >>= fun ({ Unix.st_kind = kind; _ } as st) ->
+  call (wrap Unix.lstat) path >>= fun ({ Unix.st_kind = kind; _ } as st) ->
   if ISet.mem st.Unix.st_ino links then
     return ()
   else
@@ -125,15 +123,13 @@ and add_new_file links env path =
     (* TODO add an option to support symlinks *)
     (*       call (wrap Unix.readlink) path >>= add_file links env *)
     | Unix.S_DIR ->
-      call (add_watch links env) path
-      >>= fun () ->
-      call (wrap Unix.opendir) path
-      >>= fun dir_handle ->
+      call (add_watch links env) path >>= fun () ->
+      call (wrap Unix.opendir) path >>= fun dir_handle ->
       let files = get_files path dir_handle in
       SSet.iter (fun x -> ignore (add_file links env x)) files;
       (try Unix.closedir dir_handle with _ -> ());
       let prev_files =
-        (try SMap.find_unsafe path env.dirs with Not_found -> SSet.empty)
+        (try SMap.find path env.dirs with Not_found -> SSet.empty)
       in
       let prev_files = SSet.union files prev_files in
       let files =
@@ -141,7 +137,7 @@ and add_new_file links env path =
           begin
             fun file all_files ->
             try
-              let sub_dir = SMap.find_unsafe file env.dirs in
+              let sub_dir = SMap.find file env.dirs in
               SSet.union sub_dir all_files
             with Not_found -> SSet.add file all_files
           end

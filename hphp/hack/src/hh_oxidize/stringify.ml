@@ -11,11 +11,13 @@ open Reordered_argument_collections
 open Oxidized_module
 
 (** Recursively fetch all exported types in all included modules for re-export,
-    since there is no glob-export mechanism in Rust. *)
+    since there historically was no glob-export mechanism in Rust (I think).
+    Glob-export does seem to exist now, so we may choose to use it instead (or
+    keep what we have, which is more explicit?). *)
 let get_includes modules includes =
   let get_all_exported_types directly_included_mod acc =
     let rec aux mod_name acc =
-      let included_module = SMap.find mod_name modules in
+      let included_module = SMap.find modules mod_name in
       let acc = SSet.fold included_module.includes ~init:acc ~f:aux in
       let ty_uses = List.map included_module.ty_uses snd in
       let decls = List.map included_module.decls fst in
@@ -25,8 +27,7 @@ let get_includes modules includes =
     in
     aux directly_included_mod []
     |> List.dedup_and_sort ~compare
-    |> List.fold ~init:acc ~f:(fun acc ty ->
-           (directly_included_mod, ty) :: acc)
+    |> List.fold ~init:acc ~f:(fun acc ty -> (directly_included_mod, ty) :: acc)
   in
   SSet.fold includes ~init:[] ~f:get_all_exported_types
 
@@ -36,16 +37,13 @@ let postprocess modules uses aliases includes =
   let uses =
     uses
     |> SSet.elements
-    |> List.filter ~f:(fun m ->
-           not (List.exists aliases (fun (_, a) -> m = a)))
+    |> List.filter ~f:(fun m -> not (List.exists aliases (fun (_, a) -> m = a)))
   in
   (uses, includes)
 
 let stringify modules m =
-  let { uses; extern_uses; glob_uses; aliases; includes; ty_uses; decls } =
-    m
-  in
-  let (uses, includes) = postprocess modules uses aliases includes in
+  let { uses; extern_uses; glob_uses; aliases; includes; ty_uses; decls } = m in
+  let (use_list, includes) = postprocess modules uses aliases includes in
   let extern_uses =
     extern_uses
     |> SSet.elements
@@ -53,7 +51,9 @@ let stringify modules m =
     |> String.concat ~sep:"\n"
   in
   let uses =
-    uses |> List.map ~f:(sprintf "use crate::%s;") |> String.concat ~sep:"\n"
+    use_list
+    |> List.map ~f:(sprintf "use crate::%s;")
+    |> String.concat ~sep:"\n"
   in
   let glob_uses =
     glob_uses
@@ -63,7 +63,16 @@ let stringify modules m =
   in
   let aliases =
     aliases
-    |> List.map ~f:(fun (m, a) -> sprintf "pub use crate::%s as %s;" m a)
+    |> List.map ~f:(fun (m, a) ->
+           (* If the aliased module happens to have been included in a use
+              statement already, there's no need to prefix it with "crate::". *)
+           if
+             List.mem use_list m ~equal:(fun used m ->
+                 String.is_prefix (used ^ "::") m)
+           then
+             sprintf "pub use %s as %s;" m a
+           else
+             sprintf "pub use crate::%s as %s;" m a)
     |> String.concat ~sep:"\n"
   in
   let includes =

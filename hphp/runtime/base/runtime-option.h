@@ -85,23 +85,19 @@ struct RepoOptions {
   H(bool,           ConstStaticProps,               false)            \
   H(bool,           AbstractStaticProps,            false)            \
   H(bool,           DisableUnsetClassConst,         false)            \
-  E(bool,           CreateInOutWrapperFunctions,    true)             \
-  E(std::string,    HHJSAdditionalTransform,        "")               \
-  E(bool,           HHJSNoBabel,                    false)            \
-  E(bool,           HHJSUniqueFilenames,            true)             \
-  E(bool,           HHJSSetLocs,                    false)            \
-  E(std::string,    HHJSNodeModules,                "")               \
+  H(bool,           DisallowFuncPtrsInConstants,    false)            \
   E(bool,           EmitFuncPointers,               true)             \
   E(bool,           EmitInstMethPointers,           EmitFuncPointers) \
+  E(bool,           EnforceGenericsUB,              false)            \
+  H(bool,           RustLowerer,                    true)             \
+  H(bool,           EnableXHPClassModifier,         false)            \
   /**/
 
-#define PARSERFLAGSNOCACHEKEY() \
-  E(std::string,    HHJSBabelTransform,                               \
-                                       hhjsBabelTransformDefault())   \
   /**/
 
 #define AUTOLOADFLAGS() \
   N(std::string,    Query,                                        "") \
+  N(std::string,    TrustedDBPath,                                "") \
   /**/
 
   std::string path() const { return m_path; }
@@ -111,6 +107,7 @@ struct RepoOptions {
   folly::dynamic toDynamic() const;
   struct stat stat() const { return m_stat; }
   std::string autoloadQuery() const noexcept { return Query; }
+  std::string trustedDBPath() const noexcept { return TrustedDBPath; }
 
   bool operator==(const RepoOptions& o) const;
 
@@ -131,7 +128,6 @@ private:
 #define H(t, n, ...) t n;
 #define E(t, n, ...) t n;
 PARSERFLAGS()
-PARSERFLAGSNOCACHEKEY()
 AUTOLOADFLAGS()
 #undef N
 #undef P
@@ -298,6 +294,7 @@ struct RuntimeOption {
   static bool ServerHarshShutdown;
   static bool ServerEvilShutdown;
   static bool ServerKillOnTimeout;
+  static bool Server503OnShutdownAbort;
   static int ServerPreShutdownWait;
   static int ServerShutdownListenWait;
   static int ServerShutdownEOMWait;
@@ -328,6 +325,7 @@ struct RuntimeOption {
   static int BrotliCompressionQuality;
   static int ZstdCompressionEnabled;
   static int ZstdCompressionLevel;
+  static int ZstdChecksumRate;
   static int GzipCompressionLevel;
   static int GzipMaxCompressionLevel;
   static bool EnableKeepAlive;
@@ -383,9 +381,28 @@ struct RuntimeOption {
   static int SSLClientAuthLevel;
   // CA file to verify client cert against.
   static std::string SSLClientCAFile;
-  // Sampling ratio for client auth logging. Must be an int within [0, 100].
-  // 0 => disabled; 100 => log all connections.
+  // [DEPRECATED] Sampling ratio for client auth logging.
+  // Must be an int within [0, 100]. 0 => disabled; 100 => log all connections.
   static uint32_t SSLClientAuthLoggingSampleRatio;
+
+  // Which ACL identity and action to check the client against.
+  static std::string ClientAuthAclIdentity;
+  static std::string ClientAuthAclAction;
+  // If true, terminate connection immediately if a client fails ACL,
+  // otherwise log it and let in.
+  static bool ClientAuthFailClose;
+
+  // On average, sample X connections per ClientAuthLogSampleBase connections,
+  // where X is ClientAuthSuccessLogSampleRatio for client auth successes, and
+  // ClientAuthFailureLogSampleRatio for client auth failures. Set X to 0 to
+  // disable sampling.
+  // For example, if ClientAuthLogSampleBase = 100,
+  // ClientAuthSuccessLogSampleRatio = 0, and
+  // ClientAuthFailureLogSampleRatio = 50, then no (0/100) client auth successes
+  // and half (50/100) of client auth failures will be logged.
+  static uint32_t ClientAuthLogSampleBase;
+  static uint32_t ClientAuthSuccessLogSampleRatio;
+  static uint32_t ClientAuthFailureLogSampleRatio;
 
   static int XboxServerThreadCount;
   static int XboxServerMaxQueueLength;
@@ -423,6 +440,7 @@ struct RuntimeOption {
 
   static std::string FileCache;
   static std::string DefaultDocument;
+  static std::string GlobalDocument;
   static std::string ErrorDocument404;
   static bool ForbiddenAs404;
   static std::string ErrorDocument500;
@@ -460,6 +478,8 @@ struct RuntimeOption {
   static std::string AdminServerIP;
   static int AdminServerPort;
   static int AdminThreadCount;
+  static bool AdminServerEnableSSLWithPlainText;
+  static bool AdminServerStatsNeedPassword;
   static std::string AdminPassword;
   static std::set<std::string> AdminPasswords;
   static std::set<std::string> HashedAdminPasswords;
@@ -543,6 +563,7 @@ struct RuntimeOption {
   static bool TimeoutsUseWallTime;
   static bool CheckFlushOnUserClose;
   static bool EvalAuthoritativeMode;
+  static int CheckIntOverflow;
   static HackStrictOption StrictArrayFillKeys;
   static bool LookForTypechecker;
   static bool AutoTypecheck;
@@ -611,7 +632,7 @@ struct RuntimeOption {
   static int GetScannerType();
 
   static std::set<std::string, stdltistr> DynamicInvokeFunctions;
-  static hphp_string_imap<Cell> ConstantFunctions;
+  static hphp_string_imap<TypedValue> ConstantFunctions;
 
   static const uint32_t kPCREInitialTableSize = 96 * 1024;
 
@@ -623,8 +644,6 @@ struct RuntimeOption {
   static std::vector<std::string> TzdataSearchPaths;
 
 #define HAC_CHECK_OPTS                         \
-  HC(RefBind, ref_bind)                        \
-  HC(FalseyPromote, falsey_promote)            \
   HC(EmptyStringPromote, empty_string_promote) \
   HC(Compare, compare)                         \
   HC(ArrayKeyCast, array_key_cast)             \
@@ -669,12 +688,11 @@ struct RuntimeOption {
   F(bool, FatalOnParserOptionMismatch, true)                            \
   F(bool, WarnOnSkipFrameLookup,       true)                            \
   /*                                                                    \
-   * -1 - No checks on code coverage                                    \
    *  0 - Code coverage cannot be enabled through request param         \
    *  1 - Code coverage can be enabled through request param            \
    *  2 - Code coverage enabled                                         \
    */                                                                   \
-  F(int32_t, EnableCodeCoverage,       -1)                              \
+  F(uint32_t, EnableCodeCoverage,      0)                               \
   /* Whether to use the embedded hackc binary */                        \
   F(bool, HackCompilerUseEmbedded,     facebook)                        \
   /* Whether to trust existing versions of the extracted compiler */    \
@@ -710,8 +728,6 @@ struct RuntimeOption {
   F(bool, EmitSwitch,                  true)                            \
   F(bool, LogThreadCreateBacktraces,   false)                           \
   F(bool, FailJitPrologs,              false)                           \
-  F(bool, EnableHHJS,                  false)                           \
-  F(bool, DumpHHJS,                    false)                           \
   F(bool, UseHHBBC,                    !getenv("HHVM_DISABLE_HHBBC"))   \
   F(bool, EnablePerRepoOptions,        true)                            \
   F(bool, CachePerRepoOptionsPath,     true)                            \
@@ -725,18 +741,8 @@ struct RuntimeOption {
    * 2 - Throw exception                                                \
    */                                                                   \
   F(int32_t, WarnOnUncalledPseudomain, 0)                               \
-  /* The following option enables the runtime checks for `this` typehints.
-   * There are 4 possible options:
-   * 0 - No checking of `this` typehints.
-   * 1 - Check `this` as hard `self` typehints.
-   * 2 - Check `this` typehints as soft `this` typehints
-   * 3 - Check `this` typehints as hard `this` typehints (unless explicitly
-   *     soft).  This is the only option which enable optimization in HHBBC.
-   */                                                                   \
-  F(int32_t, ThisTypeHintLevel,        3)                               \
   /* CheckReturnTypeHints:
-     0 - No checks or enforcement for return type hints.
-     1 - Raises E_WARNING if a return type hint fails.
+     <2 - Raises E_WARNING if a return type hint fails.
      2 - Raises E_RECOVERABLE_ERROR if regular return type hint fails,
          raises E_WARNING if soft return type hint fails. If a regular
          return type hint fails, it's possible for execution to resume
@@ -762,6 +768,10 @@ struct RuntimeOption {
         fatal error.
   */                                                                    \
   F(int32_t, CheckPropTypeHints,       0)                               \
+  /* Enables enforcing upper-bounds for generic types
+     1 => warning, 2 => error
+  */                                                                    \
+  F(int32_t, EnforceGenericsUB,        0)                               \
   /* WarnOnTooManyArguments:
    * 0 -> no warning, 1 -> warning, 2 -> exception
    */                                                                   \
@@ -812,6 +822,7 @@ struct RuntimeOption {
   F(uint64_t, JitGlobalTranslationLimit, -1)                            \
   F(int64_t, JitMaxRequestTranslationTime, -1)                          \
   F(uint32_t, JitMaxRegionInstrs,      1347)                            \
+  F(uint32_t, JitMaxLiveRegionInstrs,  50)                              \
   F(uint32_t, JitMaxAwaitAllUnroll,    8)                               \
   F(bool, JitProfileWarmupRequests,    false)                           \
   F(uint32_t, JitProfileRequests,      profileRequestsDefault())        \
@@ -845,7 +856,14 @@ struct RuntimeOption {
   F(int, JitRetargetJumps,             1)                               \
   /* Sync VM reg state for all native calls. */                         \
   F(bool, JitForceVMRegSync,           false)                           \
-  F(bool, HHIRLICM,                    false)                           \
+  /* ArrayIterSpecialization{Count,Rate} control profiling-based array  \
+   * iterator specialization. See irgen-iter-spec for details.          \
+   *                                                                    \
+   * We'll specialize iterators that a) are executed at least `Count`   \
+   * times and that b) have a specialization covering a fraction `Rate` \
+   * of all profiled loops. If `Rate` is > 1.0, we won't specialize. */ \
+  F(uint32_t, ArrayIterSpecializationCount, arrayIterDefaultCount())    \
+  F(double,   ArrayIterSpecializationRate,  arrayIterDefaultRate())     \
   F(bool, HHIRSimplification,          true)                            \
   F(bool, HHIRGenOpts,                 true)                            \
   F(bool, HHIRRefcountOpts,            true)                            \
@@ -866,7 +884,6 @@ struct RuntimeOption {
   F(uint32_t, HHIRInliningMaxInitObjProps, 12)                          \
   F(bool,     HHIRInliningIgnoreHints, !debug)                          \
   F(bool,     HHIRInliningUseStackedCost, true)                         \
-  F(bool,     HHIRInliningUseReachableCost, true)                       \
   F(bool,     HHIRInliningUseLayoutBlocks, false)                       \
   F(bool, HHIRInlineFrameOpts,         true)                            \
   F(bool, HHIRPartialInlineFrameOpts,  true)                            \
@@ -880,6 +897,9 @@ struct RuntimeOption {
   F(uint32_t, HHIRLoadElimMaxIters,    10)                              \
   F(bool, HHIRStorePRE,                true)                            \
   F(bool, HHIROutlineGenericIncDecRef, true)                            \
+  /* How many elements to inline for packed- or mixed-array inits. */   \
+  F(uint32_t, HHIRMaxInlineInitPackedElements, 8)                       \
+  F(uint32_t, HHIRMaxInlineInitMixedElements,  4)                       \
   F(double, HHIRMixedArrayProfileThreshold, 0.8554)                     \
   F(double, HHIRSmallArrayProfileThreshold, 0.8)                        \
   /* Register allocation flags */                                       \
@@ -917,7 +937,6 @@ struct RuntimeOption {
   F(uint32_t, JitPGORelaxPercent,      100)                             \
   F(uint32_t, JitPGORelaxUncountedToGenPercent, 20)                     \
   F(uint32_t, JitPGORelaxCountedToGenPercent, 75)                       \
-  F(uint32_t, JitPGOBindCallThreshold, 50)                              \
   F(double,   JitPGOCalledFuncCheckThreshold, 50)                       \
   F(double,   JitPGOCalledFuncExitThreshold,  99.9)                     \
   F(bool,     JitPGODumpCallGraph,     false)                           \
@@ -943,9 +962,11 @@ struct RuntimeOption {
   F(uint32_t, DumpInlDecision,         0)                               \
   F(uint32_t, DumpRegion,              0)                               \
   F(bool,     DumpCallTargets,         false)                           \
+  F(bool,     DumpLayoutCFG,           false)                           \
   F(bool, DumpAst,                     false)                           \
   F(bool, DumpTargetProfiles,          false)                           \
   F(bool, MapTgtCacheHuge,             false)                           \
+  F(bool, NewTHPHotText,               false)                           \
   F(uint32_t, MaxHotTextHugePages,     hotTextHugePagesDefault())       \
   F(uint32_t, MaxLowMemHugePages,      hugePagesSoundNice() ? 8 : 0)    \
   F(uint32_t, MaxHighArenaHugePages,   0)                               \
@@ -967,6 +988,8 @@ struct RuntimeOption {
   F(bool, FilterGCPoints,              true)                            \
   F(bool, Quarantine,                  eagerGcDefault())                \
   F(uint32_t, GCSampleRate,            0)                               \
+  F(uint32_t, HeapAllocSampleRequests, 0)                               \
+  F(uint32_t, HeapAllocSampleBytes,    256 * 1024)                      \
   F(int64_t, GCMinTrigger,             64L<<20)                         \
   F(double, GCTriggerPct,              0.5)                             \
   F(bool, GCForAPC,                    false)                           \
@@ -981,12 +1004,16 @@ struct RuntimeOption {
   F(bool, AbortBuildOnVerifyError,     true)                            \
   F(uint32_t, StaticContentsLogRate,   100)                             \
   F(uint32_t, LogUnitLoadRate,         0)                               \
+  /* The rate at which we log profiling info about loop behavior. */    \
+  F(uint32_t, ArrayIterLogRate,        0)                               \
   F(uint32_t, MaxDeferredErrors,       50)                              \
   F(bool, JitAlignMacroFusionPairs, alignMacroFusionPairs())            \
   F(bool, JitAlignUniqueStubs,         true)                            \
   F(uint32_t, SerDesSampleRate,            0)                           \
   F(bool, JitSerdesModeForceOff,       false)                           \
   F(std::set<std::string>, JitSerdesDebugFunctions, {})                 \
+  F(uint32_t, JitSerializeOptProfSeconds,  0)                           \
+  F(uint32_t, JitSerializeOptProfRequests, 0)                           \
   F(int, SimpleJsonMaxLength,        2 << 20)                           \
   F(uint32_t, JitSampleRate,               0)                           \
   F(uint32_t, TraceServerRequestRate,      0)                           \
@@ -1027,13 +1054,13 @@ struct RuntimeOption {
    * HackArrCompatNotices option, and control whether various runtime
    * checks are made; they do not affect any optimizations. */          \
   F(bool, HackArrCompatNotices, false)                                  \
-  F(bool, HackArrCompatCheckRefBind, false)                             \
-  F(bool, HackArrCompatCheckFalseyPromote, false)                       \
   F(bool, HackArrCompatCheckEmptyStringPromote, false)                  \
   F(bool, HackArrCompatCheckCompare, false)                             \
+  F(bool, HackArrCompatCheckCompareNonAnyArray, false)                  \
   F(bool, HackArrCompatCheckArrayPlus, false)                           \
   F(bool, HackArrCompatCheckArrayKeyCast, false)                        \
   F(bool, HackArrCompatCheckNullHackArrayKey, false)                    \
+  F(bool, HackArrCompatFBSerializeHackArraysNotices, false)             \
   /* Raise notices when is_array is called with any hack array */       \
   F(bool, HackArrCompatIsArrayNotices, false)                           \
   /* Raise notices when is_vec or is_dict  is called with a v/darray */ \
@@ -1067,11 +1094,22 @@ struct RuntimeOption {
   F(bool, ArrayProvenance, false)                                       \
   /* Tag _all_ empty arrays we create at runtime. */                    \
   F(bool, ArrayProvenanceEmpty, false)                                  \
+  /* Whether v/darrays and vecs/dicts (respectively) should admit       \
+   * provenance tags. */                                                \
+  F(bool, ArrProvDVArrays, false)                                       \
+  F(bool, ArrProvHackArrays, true)                                      \
   /* Enable logging the source of vecs/dicts whose vec/dict-ness is     \
    * observed, e.g. through serialization */                            \
   F(bool, LogArrayProvenance, false)                                    \
   /* Log only out out of this many array headers when serializing */    \
   F(uint32_t, LogArrayProvenanceSampleRatio, 1000)                      \
+  /* Emit values using the KindOfDArray and KindOfVArray types          |
+   * EXPERIMENTAL: Enabling this will cause undefined behvaior. */      \
+  F(bool, EmitDVArray, false)                                           \
+  /* When false, KindOfDArray and KindOfVArray behave as KindOfArray.   |
+   * When true, KindOfDArray and KindOfVArray have distinct behavior.   |
+   * EXPERIMENTAL: Enabling this will cause undefined behvaior. */      \
+  F(bool, SpecializeDVArray, false)                                     \
   /* Warn if is expression are used with type aliases that cannot be    |
    * resolved */                                                        \
   F(bool, IsExprEnableUnresolvedWarning, false)                         \
@@ -1090,13 +1128,6 @@ struct RuntimeOption {
   F(bool, NoticeOnReadDynamicProp, false)                               \
   F(bool, NoticeOnImplicitInvokeToString, false)                        \
   F(bool, FatalOnConvertObjectToString, false)                          \
-  /* Indicates whether parameters of overridden methods must match the
-     reffiness of the parent method. When set to enforcing mode, inout
-     wrappers will be created for methods.
-       0 - do nothing
-       1 - raise a warning on reffiness mismatch
-       2 - raise a fatal on reffiness mismatch */                       \
-  F(uint32_t, ReffinessInvariance, 0)                                   \
   F(bool, NoticeOnBuiltinDynamicCalls, false)                           \
   F(bool, RxPretendIsEnabled, false)                                    \
   F(bool, NoArrayAccessInIdx, false)                                    \
@@ -1120,7 +1151,6 @@ struct RuntimeOption {
   F(bool, NoticeOnSimpleXMLBehavior, false)                             \
   F(bool, NoticeOnBadMethodStaticness, true)                            \
   F(bool, ForbidDivisionByZero, true)                                   \
-  F(bool, NoticeOnByRefArgumentTypehintViolation, false)                \
   /* Enables Hack records. */                                           \
   F(bool, HackRecords, false)                                           \
   F(bool, HackRecordArrays, false)                                           \
@@ -1172,7 +1202,7 @@ struct RuntimeOption {
   F(int32_t, ServerOOMAdj, 0)                                           \
   F(std::string, PreludePath, "")                                       \
   F(uint32_t, NonSharedInstanceMemoCaches, 10)                          \
-  F(bool, UseGraphColor, false)                                         \
+  F(bool, UseGraphColor, true)                                          \
   F(std::vector<std::string>, IniGetHide, std::vector<std::string>())   \
   F(std::string, UseRemoteUnixServer, "no")                             \
   F(std::string, UnixServerPath, "")                                    \
@@ -1270,6 +1300,7 @@ public:
   static bool RepoDebugInfo;
   static bool RepoAuthoritative;
   static int64_t RepoLocalReadaheadRate;
+  static bool RepoLitstrLazyLoad;
   static bool RepoLocalReadaheadConcurrent;
   static uint32_t RepoBusyTimeoutMS;
 
@@ -1313,7 +1344,6 @@ public:
   static int DebuggerSignalTimeout;
   static std::string DebuggerAuthTokenScriptBin;
   static std::string DebuggerSessionAuthScriptBin;
-  static bool ForceDebuggerBpToInterp;
 
   // Mail options
   static std::string SendmailPath;
@@ -1344,9 +1374,14 @@ public:
   static uint32_t XenonRequestFreq;
   static bool XenonForceAlwaysOn;
 
+  // Strobelight options
+  static bool StrobelightEnabled;
+
   static bool SetProfileNullThisObject;
 };
 static_assert(sizeof(RuntimeOption) == 1, "no instance variables");
+
+using RO = RuntimeOption;
 
 inline bool isJitDeserializing() {
   auto const m = RuntimeOption::EvalJitSerdesMode;

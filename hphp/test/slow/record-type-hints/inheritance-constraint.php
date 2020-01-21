@@ -12,8 +12,8 @@ class C {
   public function __construct() { $this->x = 20; }
 }
 
-final record A {
-  f: Base,
+record A {
+  Base f;
 }
 <<__EntryPoint>> function main(): void {
 $a = A['f'=>new Derived()];

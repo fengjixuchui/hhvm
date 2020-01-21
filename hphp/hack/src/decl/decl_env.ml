@@ -7,17 +7,19 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Decl_defs
 module Dep = Typing_deps.Dep
 
 type env = {
   mode: FileInfo.mode;
-  droot: Typing_deps.Dep.variant option;
-  decl_tcopt: TypecheckerOptions.t;
+  droot: Typing_deps.Dep.dependent Typing_deps.Dep.variant option;
+  ctx: Provider_context.t;
 }
 
 let mode env = env.mode
+
+let tcopt env = env.ctx.Provider_context.tcopt
 
 let add_wclass env x =
   let dep = Dep.Class x in

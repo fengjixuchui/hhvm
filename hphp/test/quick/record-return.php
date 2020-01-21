@@ -1,11 +1,11 @@
 <?hh
 
-final record Foo {
-  f: int,
+record Foo {
+  int f;
 }
 
-final record Bar {
-  f: int,
+record Bar {
+  int f;
 }
 
 function foo(int $x): Foo {

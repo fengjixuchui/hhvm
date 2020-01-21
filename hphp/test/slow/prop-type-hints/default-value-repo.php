@@ -1,8 +1,6 @@
 <?hh
-// Copyright 2004-present Facebook. All Rights Reserved.
 
-class Cls1 {};
-
+class Cls1 {}
 enum Enum1 : int {
   VAL1 = 1;
   VAL2 = 2;
@@ -28,17 +26,11 @@ type Alias4 = Enum2;
 type Alias5 = ?dict;
 type Alias6 = ?Enum2;
 
-if (__hhvm_intrinsics\launder_value(true)) {
-  include 'redefine1.inc';
-} else {
-  include 'redefine2.inc';
-}
-
 class A {
   public int $p1;
   public string $p2;
   public bool $p3;
-  public double $p4;
+  public float $p4;
   public array $p5;
   public resource $p6;
   public nonnull $p7;
@@ -77,7 +69,7 @@ class A {
   public ?int $opt1;
   public ?string $opt2;
   public ?bool $opt3;
-  public ?double $opt4;
+  public ?float $opt4;
   public ?array $opt5;
   public ?resource $opt6;
   public ?nonnull $opt7;
@@ -109,7 +101,7 @@ class A {
   public static int $s1;
   public static string $s2;
   public static bool $s3;
-  public static double $s4;
+  public static float $s4;
   public static array $s5;
   public static resource $s6;
   public static nonnull $s7;
@@ -148,7 +140,7 @@ class A {
   public static ?int $sopt1;
   public static ?string $sopt2;
   public static ?bool $sopt3;
-  public static ?double $sopt4;
+  public static ?float $sopt4;
   public static ?array $sopt5;
   public static ?resource $sopt6;
   public static ?nonnull $sopt7;
@@ -182,7 +174,7 @@ class B extends A {
   public int $p1;
   public string $p2;
   public bool $p3;
-  public double $p4;
+  public float $p4;
   public array $p5;
   public resource $p6;
   public nonnull $p7;
@@ -221,7 +213,7 @@ class B extends A {
   public ?int $opt1;
   public ?string $opt2;
   public ?bool $opt3;
-  public ?double $opt4;
+  public ?float $opt4;
   public ?array $opt5;
   public ?resource $opt6;
   public ?nonnull $opt7;
@@ -253,7 +245,7 @@ class B extends A {
   public static int $s1;
   public static string $s2;
   public static bool $s3;
-  public static double $s4;
+  public static float $s4;
   public static array $s5;
   public static resource $s6;
   public static nonnull $s7;
@@ -292,7 +284,7 @@ class B extends A {
   public static ?int $sopt1;
   public static ?string $sopt2;
   public static ?bool $sopt3;
-  public static ?double $sopt4;
+  public static ?float $sopt4;
   public static ?array $sopt5;
   public static ?resource $sopt6;
   public static ?nonnull $sopt7;
@@ -463,5 +455,13 @@ function test($x) {
   var_dump(A::$sopt30);
   var_dump(A::$sopt31);
 }
+<<__EntryPoint>>
+function main_entry(): void {
+  if (__hhvm_intrinsics\launder_value(true)) {
+    include 'redefine1.inc';
+  } else {
+    include 'redefine2.inc';
+  }
 
-test(new A());
+  test(new A());
+}

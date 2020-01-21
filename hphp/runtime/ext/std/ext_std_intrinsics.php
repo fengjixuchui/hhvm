@@ -10,37 +10,41 @@ namespace __hhvm_intrinsics {
 <<__Native, __HipHopSpecific>>
 function trigger_oom(bool $oom): void;
 
-class ReffyNativeMeth { <<__Native>> static function meth(mixed &$i): string; }
-
 /**
  * Return the given value. This function is purposefully not optimized. It can
  * be used to hide information about values from the optimizer for unit testing.
  */
-<<__Native, __HipHopSyntax, __ProvenanceSkipFrame>>
+<<__Native, __HipHopSpecific, __ProvenanceSkipFrame>>
 function launder_value(mixed $value): mixed;
 
 /*
  * Builtins for testing array-ish builtin typehints.
  */
-<<__Native, __HipHopSyntax>>
+<<__Native, __HipHopSpecific>>
 function dummy_varray_builtin(varray $x): varray;
 
-<<__Native, __HipHopSyntax>>
+<<__Native, __HipHopSpecific>>
 function dummy_darray_builtin(darray $x): darray;
 
-<<__Native, __HipHopSyntax>>
+<<__Native, __HipHopSpecific>>
 function dummy_varr_or_darr_builtin(varray_or_darray $x): varray_or_darray;
 
-<<__Native, __HipHopSyntax>>
+<<__Native, __HipHopSpecific>>
 function dummy_arraylike_builtin(arraylike $x): arraylike;
 
-<<__Native, __HipHopSyntax>>
+<<__Native, __HipHopSpecific>>
 function dummy_array_builtin(array $x): array;
 
-<<__Native, __HipHopSyntax>>
+<<__Native, __HipHopSpecific>>
 function dummy_dict_builtin(dict $x): dict;
 
-<<__Native, __HipHopSyntax>>
+<<__Native, __HipHopSpecific>>
+function dummy_darray_await(): Awaitable;
+
+<<__Native, __HipHopSpecific>>
+function dummy_dict_await(): Awaitable;
+
+<<__Native, __HipHopSpecific>>
 function create_class_pointer(string $name): mixed;
 
 function apc_fetch_no_check(mixed $key) {
@@ -95,9 +99,6 @@ function builtin_io_no_fca(
  */
 <<__IsFoldable, __Native>>
 function serialize_keep_dvarrays(mixed $value): string;
-
-<<__Native>>
-function deserialize_keep_dvarrays(string $str): mixed;
 
 /* dummy builtin written in hack for testing param coercion */
 function id_string(string $value): string {

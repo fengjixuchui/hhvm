@@ -255,6 +255,9 @@ bool effectsImpl(const Vinstr& inst, bool pure) {
     case Vinstr::shrli:
     case Vinstr::shrqi:
     case Vinstr::spill:
+    case Vinstr::spillbi:
+    case Vinstr::spillli:
+    case Vinstr::spillqi:
     case Vinstr::sqrtsd:
     case Vinstr::srem:
     case Vinstr::ssaalias:
@@ -342,10 +345,10 @@ bool effectsImpl(const Vinstr& inst, bool pure) {
     case Vinstr::callfaststub:
     case Vinstr::callm:
     case Vinstr::callphp:
+    case Vinstr::callphpr:
     case Vinstr::callr:
     case Vinstr::calls:
     case Vinstr::callstub:
-    case Vinstr::calltc:
     case Vinstr::callunpack:
     case Vinstr::conjure:
     case Vinstr::conjureuse:
@@ -423,9 +426,10 @@ bool effectsImpl(const Vinstr& inst, bool pure) {
     case Vinstr::syncvmret:
     case Vinstr::syncvmrettype:
     case Vinstr::syncvmsp:
-    case Vinstr::tailcallphp:
     case Vinstr::tailcallstub:
+    case Vinstr::tailcallstubr:
     case Vinstr::trap:
+    case Vinstr::unstublogue:
     case Vinstr::unwind:
     case Vinstr::vcall:
     case Vinstr::vcallunpack:

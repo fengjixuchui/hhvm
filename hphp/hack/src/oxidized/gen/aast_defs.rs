@@ -3,18 +3,19 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<799befa728f17b6d95b38f72b995d659>>
+// @generated SignedSource<<38dab47bd52e39ab6cee175ce5be9b83>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
 
 use ocamlrep_derive::OcamlRep;
-use ocamlvalue_macro::Ocamlvalue;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::ast_defs;
 use crate::local_id;
 
-pub use crate::ast_defs::shape_map;
+pub use ast_defs::shape_map;
 
 pub use ast_defs::OgNullFlavor;
 pub use ast_defs::Pos;
@@ -22,16 +23,14 @@ pub use ast_defs::Pstring;
 pub use local_id::LocalId;
 pub use shape_map::ShapeMap;
 
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct Lid(pub Pos, pub LocalId);
 
 pub type Sid = ast_defs::Id;
 
-pub type IsTerminal = bool;
-
 pub type IsReified = bool;
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, Ocamlvalue, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum CallType {
     Cnormal,
     CuserFunc,
@@ -39,7 +38,7 @@ pub enum CallType {
 
 pub type IsCoroutine = bool;
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, Ocamlvalue, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum FuncReactive {
     FReactive,
     FLocal,
@@ -47,22 +46,14 @@ pub enum FuncReactive {
     FNonreactive,
 }
 
-pub type Targ = Hint;
-
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
-pub enum CollectionTarg {
-    CollectionTV(Targ),
-    CollectionTKV(Targ, Targ),
-}
-
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, Ocamlvalue, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum ParamMutability {
     PMutable,
     POwnedMutable,
     PMaybeMutable,
 }
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, Ocamlvalue, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum ImportFlavor {
     Include,
     Require,
@@ -70,7 +61,7 @@ pub enum ImportFlavor {
     RequireOnce,
 }
 
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub enum XhpChild {
     ChildName(Sid),
     ChildList(Vec<XhpChild>),
@@ -78,34 +69,37 @@ pub enum XhpChild {
     ChildBinary(Box<XhpChild>, Box<XhpChild>),
 }
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, Ocamlvalue, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum XhpChildOp {
     ChildStar,
     ChildPlus,
     ChildQuestion,
 }
 
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct Hint(pub Pos, pub Box<Hint_>);
 
 pub type MutableReturn = bool;
 
 pub type VariadicHint = Option<Hint>;
 
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+pub struct HintFun {
+    pub reactive_kind: FuncReactive,
+    pub is_coroutine: IsCoroutine,
+    pub param_tys: Vec<Hint>,
+    pub param_kinds: Vec<Option<ast_defs::ParamKind>>,
+    pub param_mutability: Vec<Option<ParamMutability>>,
+    pub variadic_ty: VariadicHint,
+    pub return_ty: Hint,
+    pub is_mutable_return: MutableReturn,
+}
+
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub enum Hint_ {
     Hoption(Hint),
     Hlike(Hint),
-    Hfun(
-        FuncReactive,
-        IsCoroutine,
-        Vec<Hint>,
-        Vec<Option<ast_defs::ParamKind>>,
-        Vec<Option<ParamMutability>>,
-        VariadicHint,
-        Hint,
-        MutableReturn,
-    ),
+    Hfun(HintFun),
     Htuple(Vec<Hint>),
     Happly(Sid, Vec<Hint>),
     Hshape(NastShapeInfo),
@@ -119,15 +113,17 @@ pub enum Hint_ {
     Harray(Option<Hint>, Option<Hint>),
     Hdarray(Hint, Hint),
     Hvarray(Hint),
-    HvarrayOrDarray(Hint),
+    HvarrayOrDarray(Option<Hint>, Hint),
     Hprim(Tprim),
     Hthis,
     Hdynamic,
     Hnothing,
     HpuAccess(Hint, Sid),
+    Hunion(Vec<Hint>),
+    Hintersection(Vec<Hint>),
 }
 
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub enum Tprim {
     Tnull,
     Tvoid,
@@ -142,27 +138,27 @@ pub enum Tprim {
     Tatom(String),
 }
 
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct ShapeFieldInfo {
     pub optional: bool,
     pub hint: Hint,
     pub name: ast_defs::ShapeFieldName,
 }
 
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct NastShapeInfo {
     pub allows_unknown_fields: bool,
     pub field_map: Vec<ShapeFieldInfo>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, Ocamlvalue, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum KvcKind {
     Map,
     ImmMap,
     Dict,
 }
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, Ocamlvalue, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum VcKind {
     Vector,
     ImmVector,
@@ -173,14 +169,14 @@ pub enum VcKind {
     Keyset,
 }
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, Ocamlvalue, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum Visibility {
     Private,
     Public,
     Protected,
 }
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, Ocamlvalue, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum UseAsVisibility {
     UseAsPublic,
     UseAsPrivate,
@@ -188,19 +184,17 @@ pub enum UseAsVisibility {
     UseAsFinal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, OcamlRep, Ocamlvalue, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
 pub enum TypedefVisibility {
     Transparent,
     Opaque,
 }
 
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct Enum_ {
     pub base: Hint,
     pub constraint: Option<Hint>,
 }
 
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct WhereConstraint(pub Hint, pub ast_defs::ConstraintKind, pub Hint);
-
-pub type Id = Lid;

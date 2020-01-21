@@ -14,7 +14,7 @@ module CLKey = struct
 end
 
 module CLMap = struct
-  include MyMap.Make (CLKey)
+  include WrappedMap.Make (CLKey)
 end
 
 type checked_stats = {
@@ -23,8 +23,7 @@ type checked_stats = {
   checked: int;
 }
 
-type result =
-  (Pos.absolute * Ide_api_types.coverage_level) list * checked_stats
+type result = (Pos.absolute * Ide_api_types.coverage_level) list * checked_stats
 
 type pos_stats_entry = {
   pos_count: int;

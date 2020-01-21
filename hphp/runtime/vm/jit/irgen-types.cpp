@@ -170,8 +170,6 @@ SSATmp* implInstanceCheck(IRGS& env, SSATmp* src, const StringData* className,
  * The lambda parameters are as follows:
  *
  * - GetVal:    Return the SSATmp of the value to test
- * - PredInner: When the value is a BoxedInitCell, return the predicted inner
- *              type of the value.
  * - FuncToStr: Emit code to deal with any func to string conversions.
  * - ClsMethToVec: Emit code to deal with any ClsMeth to array conversions
  * - Fail:      Emit code to deal with the type check failing.
@@ -188,7 +186,6 @@ SSATmp* implInstanceCheck(IRGS& env, SSATmp* src, const StringData* className,
  * runtime class of the object the property belongs to.
  */
 template <typename GetVal,
-          typename PredInner,
           typename FuncToStr,
           typename ClassToStr,
           typename ClsMethToVec,
@@ -203,7 +200,6 @@ void verifyTypeImpl(IRGS& env,
                     bool onlyCheckNullability,
                     SSATmp* propCls,
                     GetVal getVal,
-                    PredInner predInner,
                     FuncToStr funcToStr,
                     ClassToStr classToStr,
                     ClsMethToVec clsMethToVec,
@@ -213,50 +209,29 @@ void verifyTypeImpl(IRGS& env,
                     VerifyCls verifyCls,
                     VerifyRecordDesc verifyRecDesc,
                     Giveup giveup) {
-  if (!tc.isCheckable() || (RuntimeOption::EvalThisTypeHintLevel == 0
-                            && !propCls && tc.isThis())) {
-    return;
-  }
+
+  if (!tc.isCheckable()) return;
+  assertx(!tc.isUpperBound() || RuntimeOption::EvalEnforceGenericsUB != 0);
 
   auto val = getVal();
-  assertx(val->type() <= TCell || val->type() <= TBoxedCell);
+  assertx(val->type() <= TCell);
 
-  auto const valType = [&]() -> Type {
-    if (val->type() <= TCell) return val->type();
-    auto const pred = predInner(val);
-    gen(env, CheckRefInner, pred, makeExit(env), val);
-    val = gen(env, LdRef, pred, val);
-    return pred;
-  }();
+  auto const valType = val->type();
 
   if (!valType.isKnownDataType()) return giveup();
 
   if (tc.isNullable() && valType <= TInitNull) return;
 
   auto const genFail = [&] {
-    auto const thisFailsHard = [&] {
-      if (propCls) return !tc.couldSeeMockObject();
-      switch (RuntimeOption::EvalThisTypeHintLevel) {
-        case 0:
-          // We are not checking this typehints.
-        case 2:
-          // We are warning on this typehint failures.
-          return false;
-        case 1:
-          // We are checking this typehints like self typehints.
-          return true;
-        case 3:
-          // If we know there are no mock classes for the current class, it is
-          // okay to fail hard.  Otherwise, mock objects may still pass, and we
-          // have to be ready for execution to resume.
-          return !tc.couldSeeMockObject();
-      }
-      always_assert(false);
-    };
+    // If we know there are no mock classes for the current class, it is
+    // okay to fail hard.  Otherwise, mock objects may still pass, and we
+    // have to be ready for execution to resume.
+    auto const thisFailsHard = !tc.couldSeeMockObject();
 
     auto const failHard = RuntimeOption::RepoAuthoritative
       && !tc.isSoft()
-      && (!tc.isThis() || thisFailsHard());
+      && (!tc.isThis() || thisFailsHard)
+      && (!tc.isUpperBound() || RuntimeOption::EvalEnforceGenericsUB == 2);
     return fail(valType, failHard);
   };
 
@@ -355,9 +330,9 @@ void verifyTypeImpl(IRGS& env,
   }
 
   // At this point we know valType is Obj.
-  if (tc.isThis() && (propCls || RuntimeOption::EvalThisTypeHintLevel >= 2)) {
+  if (tc.isThis()) {
     // For this type checks, the class needs to be an exact match.
-    auto const ctxCls = propCls ? propCls : gen(env, LdClsCtx, ldCtx(env));
+    auto const ctxCls = propCls ? propCls : ldCtxCls(env);
     auto const objClass = gen(env, LdObjClass, val);
     ifThen(
       env,
@@ -371,8 +346,6 @@ void verifyTypeImpl(IRGS& env,
     );
     return;
   }
-  assertx(IMPLIES(tc.isThis(), RuntimeOption::EvalThisTypeHintLevel == 1));
-  assertx(IMPLIES(tc.isThis(), !propCls));
 
   // If we reach here then valType is Obj and tc is Object, Self, or Parent
   const StringData* clsName;
@@ -389,13 +362,11 @@ void verifyTypeImpl(IRGS& env,
       clsName = tc.typeName();
     }
   } else {
-    if (tc.isSelf()
-        || (tc.isThis() && RuntimeOption::EvalThisTypeHintLevel == 1)) {
-      assertx(!propCls);
+    assertx(!propCls);
+    if (tc.isSelf()) {
       knownConstraint = curFunc(env)->cls();
     } else {
       assertx(tc.isParent());
-      assertx(!propCls);
       if (auto cls = curFunc(env)->cls()) knownConstraint = cls->parent();
     }
     if (!knownConstraint) {
@@ -469,345 +440,223 @@ SSATmp* isScalarImpl(IRGS& env, SSATmp* val) {
   return gen(env, ConvIntToBool, result);
 }
 
-SSATmp* isDVArrayImpl(IRGS& env, SSATmp* val, IsTypeOp op) {
-  return cond(
-    env,
-    [&] (Block* taken) {
-      auto const arr = gen(env, CheckType, TArr, taken, val);
-      return gen(
-        env,
-        op == IsTypeOp::VArray ? CheckVArray : CheckDArray,
-        taken,
-        arr
-      );
-    },
-    [&](SSATmp*) { return cns(env, true); },
-    [&]{
-      if (RuntimeOption::EvalHackArrCompatIsVecDictNotices) {
-        ifElse(
-          env,
-          [&] (Block* taken) {
-            gen(
-              env,
-              CheckType,
-              op == IsTypeOp::VArray ? TVec : TDict,
-              taken,
-              val
-            );
-          },
-          [&] {
-            gen(
-              env,
-              RaiseHackArrCompatNotice,
-              cns(
-                env,
-                makeStaticString(
-                  op == IsTypeOp::VArray
-                  ? Strings::HACKARR_COMPAT_VEC_IS_VARR
-                  : Strings::HACKARR_COMPAT_DICT_IS_DARR
-                )
-              )
-            );
-          }
-        );
-      }
-
-      // check if type is TClsMeth and raise notice
-      if (op == IsTypeOp::VArray) {
-        return cond(
-          env,
-          [&] (Block* taken) {
-            return gen(env, CheckType, TClsMeth, taken, val);
-          },
-          [&] (SSATmp*) {
-            if (!RuntimeOption::EvalHackArrDVArrs) {
-              if (RuntimeOption::EvalIsVecNotices) {
-                gen(env, RaiseNotice, cns(env,
-                  makeStaticString(Strings::CLSMETH_COMPAT_IS_VARR)));
-              }
-              return cns(env, true);
-            }
-            return cns(env, false);
-          },
-          [&] { return cns(env, false); }
-        );
-      }
-      return cns(env, false);
-    }
-  );
-}
-
-/*
- * A helper to generate and summarize the tangled birds'-nests of type checks
- * we've developed over the last interval. Build one by passing in a list of
- * cases.
- *
- * Cases are processed in the order they appear--you must be careful to ensure
- * this produces the correct behavior. If no case matches, the generated code
- * will produce `false`.
- *
- * Each case is a tuple of (enabled, type, result, instr) and either `enabled`
- * or `result` can be omitted and default to `true` and `false` respectively.
- *
- * If a case has an `instr` that is false-y according to operator bool,
- * and a `result` of false, no code will be generated for it, even if it is
- * enabled.
- */
-template <typename InstrumentationType>
-struct InstrumentedTypecheck {
-  struct Case {
-    Case(bool enabled, Type type, bool result, InstrumentationType instr)
-      : enabled(enabled),
-        type(type),
-        result(result),
-        instr(instr) {}
-
-    template <
-      typename I,
-      typename = std::enable_if<
-        std::is_convertible<I, InstrumentationType>::value
-      >
-    >
-    Case(bool enabled, Type type, bool result, I instr)
-      : Case(enabled,
-             type,
-             result,
-             static_cast<InstrumentationType>(instr)) {}
-
-    template <typename I>
-    Case(Type type, bool result, I instr)
-      : Case(true, type, result, instr) {}
-
-    bool enabled;
-    Type type;
-    bool result;
-    InstrumentationType instr;
-
-  };
-
-  /*
-   * Build an instrumented check from the given table of cases.
-   *
-   * This should be in static storage of some kind since the table is
-   * heap-allocated.
-   */
-  explicit InstrumentedTypecheck(std::initializer_list<Case>&& ilist)
-    : cases(std::move(ilist)) {}
-
-  /*
-   * Build the typecheck into the given irgen environment.
-   *
-   * src: the SSATmp* being type-tested.
-   * impl: a function called on each Case::instr to generate the appropriate
-   *       instrumentation code
-   */
-  template <typename Impl>
-  SSATmp* go(IRGS& env, SSATmp* src, Impl&& impl) const {
-    auto done = defBlock(env);
-
-    for (auto const& k : cases) {
-      if (!k.enabled) continue;
-      if (!k.instr && !k.result) continue;
-      auto taken = defBlock(env);
-      auto const checked_src = gen(env, CheckType, k.type, taken, src);
-      impl(k.instr, checked_src);
-      gen(env, Jmp, done, cns(env, k.result));
-      env.irb->appendBlock(taken);
-    }
-
-    gen(env, Jmp, done, cns(env, false));
-    env.irb->appendBlock(done);
-    auto const label = env.unit.defLabel(1, env.irb->nextBCContext());
-    done->push_back(label);
-    auto const result = label->dst(0);
-    result->setType(TBool);
-    return result;
-  }
-
-  std::vector<Case> cases;
-};
-
-StaticString s_isDict("is_dict");
-StaticString s_isVec("is_vec");
-
-
-SSATmp* isVecImpl(IRGS& env, SSATmp* src) {
-  enum IsVecLogging {
-    None = 0,
-    ClsMethLogging = 1 << 0,
-    ProvLogging = 1 << 1,
-    DVArrayLogging = 1<< 2,
-  };
-
-  using RO = RuntimeOption;
-  static auto const mask =
-    (RO::EvalLogArrayProvenance ? ProvLogging : None) |
-    (RO::EvalHackArrCompatIsVecDictNotices ? DVArrayLogging : None) |
-    (RO::EvalIsVecNotices ? ClsMethLogging : None);
-
-  static auto const tycheck = InstrumentedTypecheck<IsVecLogging>{
-    {TVec,     true,    mask & ProvLogging},
-    {TArr,     false,   mask & DVArrayLogging},
-    {RO::EvalHackArrDVArrs,
-     TClsMeth, true,    mask & (ClsMethLogging | ProvLogging)},
-  };
-
-  return tycheck.go(env, src, [&](IsVecLogging kind, SSATmp* src) {
-    if (kind & ClsMethLogging) {
-      gen(env, RaiseNotice,
-          cns(env, makeStaticString(Strings::CLSMETH_COMPAT_IS_VEC)));
-    }
-    if (kind & ProvLogging) {
-      gen(env, RaiseArraySerializeNotice,
-          cns(env, s_isVec.get()),
-          src);
-    }
-    if (kind & DVArrayLogging) {
-      ifElse(
-        env,
-        [&](Block* taken) { return gen(env, CheckVArray, taken, src); },
-        [&]{
-          gen(
-            env,
-            RaiseHackArrCompatNotice,
-            cns(env, makeStaticString(Strings::HACKARR_COMPAT_VARR_IS_VEC))
-          );
-        }
-      );
-    }
-  });
-}
-
 const StaticString s_FUNC_CONVERSION(Strings::FUNC_TO_STRING);
 const StaticString s_FUNC_IS_STRING("Func used in is_string");
 const StaticString s_CLASS_CONVERSION(Strings::CLASS_TO_STRING);
 const StaticString s_CLASS_IS_STRING("Class used in is_string");
 
 SSATmp* isStrImpl(IRGS& env, SSATmp* src) {
-  using RO = RuntimeOption;
-  static auto const tycheck = InstrumentedTypecheck<const StringData*>{
-    {TStr,  true, nullptr },
-    {TFunc, true, RO::EvalIsStringNotices ? s_FUNC_IS_STRING.get() : nullptr },
-    {TCls,  true, RO::EvalIsStringNotices ? s_CLASS_IS_STRING.get() : nullptr },
+  MultiCond mc{env};
+
+  mc.ifTypeThen(src, TStr, [&](SSATmp*) { return cns(env, true); });
+
+  mc.ifTypeThen(src, TFunc, [&](SSATmp*) {
+    if (RuntimeOption::EvalIsStringNotices) {
+      gen(env, RaiseNotice, cns(env, s_FUNC_IS_STRING.get()));
+    }
+    return cns(env, true);
+  });
+
+  mc.ifTypeThen(src, TCls, [&](SSATmp*) {
+    if (RuntimeOption::EvalIsStringNotices) {
+      gen(env, RaiseNotice, cns(env, s_CLASS_IS_STRING.get()));
+    }
+    return cns(env, true);
+  });
+
+  return mc.elseDo([&]{ return cns(env, false); });
+}
+
+// Checks if `arr` is a darray, varray, or varray (based on op). Executes the
+// code in `next` if that is the case.
+//
+// The JIT's type system doesn't track dvarray-ness, and it's not particularly
+// useful in general, but we implement a simple optimization here based on the
+// instruction that created src. This optimization is valuable because it lets
+// us check dvarray-ness for other reasons and then call maybeLogSerialization,
+// which is the canonical safe way to do provenance-based logging.
+template <typename Next>
+void ifDVArray(IRGS& env, Opcode op, SSATmp* arr, Next next) {
+  assertx(arr->isA(TArr));
+  assertx(op == CheckDArray || op == CheckVArray || op == CheckDVArray);
+
+  if (arr->inst()->is(CheckDArray, CheckVArray, CheckDVArray)) {
+    next(arr);
+  } else {
+    ifThen(env, [&](Block* taken) { next(gen(env, op, taken, arr)); }, [&]{});
+  }
+}
+
+// Checks if the `arr` has provenance, implementing the same logic as in the
+// runtume helper arrprov::arrayWantsTag. If so, logs a serialization notice.
+void maybeLogSerialization(IRGS& env, SSATmp* arr, SerializationSite site) {
+  assertx(arr->type().isKnownDataType());
+
+  if (!RO::EvalLogArrayProvenance) return;
+
+  if (arr->isA(TArr) && RO::EvalArrProvDVArrays) {
+    ifDVArray(env, CheckDVArray, arr, [&](SSATmp* arr) {
+      gen(env, RaiseArraySerializeNotice, cns(env, site), arr);
+    });
+  } else if ((arr->isA(TVec) || arr->isA(TDict)) && RO::EvalArrProvHackArrays) {
+    gen(env, RaiseArraySerializeNotice, cns(env, site), arr);
+  }
+}
+
+SSATmp* isArrayImpl(IRGS& env, SSATmp* src) {
+  MultiCond mc{env};
+
+  mc.ifTypeThen(src, TArr, [&](SSATmp* src) {
+    maybeLogSerialization(env, src, SerializationSite::IsArray);
+    return cns(env, true);
+  });
+
+  if (!RO::EvalHackArrDVArrs && RO::EvalIsCompatibleClsMethType) {
+    mc.ifTypeThen(src, TClsMeth, [&](SSATmp*) {
+      if (RO::EvalIsVecNotices) {
+        auto const msg = makeStaticString(Strings::CLSMETH_COMPAT_IS_ARR);
+        gen(env, RaiseNotice, cns(env, msg));
+      }
+      return cns(env, true);
+    });
+  }
+
+  auto const hacLogging = [&](const char* msg) {
+    if (!RO::EvalHackArrCompatIsArrayNotices) return;
+    gen(env, RaiseHackArrCompatNotice, cns(env, makeStaticString(msg)));
   };
 
-  return tycheck.go(env, src, [&](const StringData* msg, SSATmp* src) {
-    if (msg) {
-      gen(env, RaiseNotice, cns(env, msg));
-    }
+  if (!curFunc(env)->isBuiltin() &&
+      (RO::EvalHackArrCompatIsArrayNotices ||
+      (RO::EvalLogArrayProvenance && RO::EvalArrProvHackArrays))) {
+    mc.ifTypeThen(src, TVec, [&](SSATmp* src) {
+      hacLogging(Strings::HACKARR_COMPAT_VEC_IS_ARR);
+      maybeLogSerialization(env, src, SerializationSite::IsArray);
+      return cns(env, false);
+    });
+    mc.ifTypeThen(src, TDict, [&](SSATmp* src) {
+      hacLogging(Strings::HACKARR_COMPAT_DICT_IS_ARR);
+      maybeLogSerialization(env, src, SerializationSite::IsArray);
+      return cns(env, false);
+    });
+    mc.ifTypeThen(src, TKeyset, [&](SSATmp* src) {
+      hacLogging(Strings::HACKARR_COMPAT_KEYSET_IS_ARR);
+      return cns(env, false);
+    });
+  }
+
+  return mc.elseDo([&]{ return cns(env, false); });
+}
+
+SSATmp* isVecImpl(IRGS& env, SSATmp* src) {
+  MultiCond mc{env};
+
+
+  mc.ifTypeThen(src, TVec, [&](SSATmp* src) {
+    maybeLogSerialization(env, src, SerializationSite::IsVec);
+    return cns(env, true);
   });
+
+  if (RO::EvalHackArrDVArrs && RO::EvalIsCompatibleClsMethType) {
+    mc.ifTypeThen(src, TClsMeth, [&](SSATmp* src) {
+      if (RO::EvalIsVecNotices) {
+        gen(env, RaiseNotice,
+            cns(env, makeStaticString(Strings::CLSMETH_COMPAT_IS_VEC)));
+      }
+      return cns(env, true);
+    });
+  }
+
+  auto const hacLogging = [&](const char* msg) {
+    if (!RO::EvalHackArrCompatIsVecDictNotices) return;
+    gen(env, RaiseHackArrCompatNotice, cns(env, makeStaticString(msg)));
+  };
+
+  if (RO::EvalHackArrCompatIsVecDictNotices ||
+      (RO::EvalLogArrayProvenance && RO::EvalArrProvDVArrays)) {
+    mc.ifTypeThen(src, TArr, [&](SSATmp* src) {
+      ifDVArray(env, CheckVArray, src, [&](SSATmp* src) {
+        hacLogging(Strings::HACKARR_COMPAT_VARR_IS_VEC);
+        maybeLogSerialization(env, src, SerializationSite::IsVec);
+      });
+      return cns(env, false);
+    });
+  }
+
+  return mc.elseDo([&]{ return cns(env, false); });
 }
 
 SSATmp* isDictImpl(IRGS& env, SSATmp* src) {
-  enum IsDictLogging {
-    None = 0,
-    DVArrayLogging = 1 << 0,
-    ProvLogging = 1 << 1,
-  };
+  MultiCond mc{env};
 
-  using RO = RuntimeOption;
-  static auto const mask =
-    (RO::EvalLogArrayProvenance ? ProvLogging : None) |
-    (RO::EvalHackArrCompatIsVecDictNotices ? DVArrayLogging : None);
-
-  static auto const tycheck = InstrumentedTypecheck<IsDictLogging>{
-    {TDict,  true, mask & ProvLogging},
-    {RO::EvalHackArrDVArrs,
-     TShape, true, mask & ProvLogging},
-    {TArr,   false, mask & DVArrayLogging},
-  };
-
-  return tycheck.go(env, src, [&](IsDictLogging kind, SSATmp* src) {
-    if (kind & DVArrayLogging) {
-      ifElse(
-        env,
-        [&](Block* taken) { gen(env, CheckDArray, taken, src); },
-        [&]{
-          gen(
-            env,
-            RaiseHackArrCompatNotice,
-            cns(env, makeStaticString(Strings::HACKARR_COMPAT_DARR_IS_DICT))
-          );
-        }
-      );
-    }
-    if (kind & ProvLogging) {
-      gen(env, RaiseArraySerializeNotice,
-          cns(env, s_isDict.get()),
-          src);
-    }
+  mc.ifTypeThen(src, TDict, [&](SSATmp* src) {
+    maybeLogSerialization(env, src, SerializationSite::IsDict);
+    return cns(env, true);
   });
+
+  auto const hacLogging = [&](const char* msg) {
+    if (!RO::EvalHackArrCompatIsVecDictNotices) return;
+    gen(env, RaiseHackArrCompatNotice, cns(env, makeStaticString(msg)));
+  };
+
+  if (RO::EvalHackArrCompatIsVecDictNotices ||
+      (RO::EvalLogArrayProvenance && RO::EvalArrProvDVArrays)) {
+    mc.ifTypeThen(src, TArr, [&](SSATmp* src) {
+      ifDVArray(env, CheckDArray, src, [&](SSATmp* src) {
+        hacLogging(Strings::HACKARR_COMPAT_DARR_IS_DICT);
+        maybeLogSerialization(env, src, SerializationSite::IsDict);
+      });
+      return cns(env, false);
+    });
+  }
+
+  return mc.elseDo([&]{ return cns(env, false); });
 }
 
-const StaticString s_is_array("is_array");
+SSATmp* isDVArrayImpl(IRGS& env, SSATmp* src, IsTypeOp subop) {
+  MultiCond mc{env};
 
-SSATmp* isArrayImpl(IRGS& env, SSATmp* src) {
-  enum IsArrayLogging {
-    None = 0,
-    ClsMethNotice = 1 << 0,
-    VecLogging = 1 << 1,
-    DictLogging = 1 << 2,
-    KeysetLogging = 1 << 3,
-    ProvLogging = 1 << 4,
+  assertx(subop == IsTypeOp::VArray || subop == IsTypeOp::DArray);
+  auto const varray = subop == IsTypeOp::VArray;
+  auto const check = varray ? CheckVArray : CheckDArray;
+  auto const site = varray ? SerializationSite::IsVArray
+                           : SerializationSite::IsDArray;
+
+  mc.ifTypeThen(src, TArr, [&](SSATmp* src) {
+    return cond(env,
+      [&](Block* taken) { return gen(env, check, taken, src); },
+      [&](SSATmp* src) {
+        maybeLogSerialization(env, src, site);
+        return cns(env, true);
+      },
+      [&]{ return cns(env, false); }
+    );
+  });
+
+  if (varray && RO::EvalIsCompatibleClsMethType) {
+    mc.ifTypeThen(src, TClsMeth, [&](SSATmp*) {
+      if (RO::EvalIsVecNotices) {
+        auto const msg = makeStaticString(Strings::CLSMETH_COMPAT_IS_VARR);
+        gen(env, RaiseNotice, cns(env, msg));
+      }
+      return cns(env, true);
+    });
+  }
+
+
+  auto const hacLogging = [&](const char* msg) {
+    if (!RO::EvalHackArrCompatIsVecDictNotices) return;
+    gen(env, RaiseHackArrCompatNotice, cns(env, makeStaticString(msg)));
   };
 
-  using RO = RuntimeOption;
+  mc.ifTypeThen(src, varray ? TVec : TDict, [&](SSATmp* src) {
+    hacLogging(varray ? Strings::HACKARR_COMPAT_VEC_IS_VARR
+                      : Strings::HACKARR_COMPAT_DICT_IS_DARR);
+    maybeLogSerialization(env, src, site);
+    return cns(env, false);
+  });
 
-  static auto const mask =
-    (RO::EvalIsVecNotices ? ClsMethNotice : None) |
-    (RO::EvalHackArrCompatIsArrayNotices ?
-       VecLogging | DictLogging | KeysetLogging :
-       None) |
-    (RO::EvalLogArrayProvenance ? ProvLogging : None);
-
-  static auto const tycheck = InstrumentedTypecheck<IsArrayLogging>{
-    {TArr,     true,  None},
-    /* cases for shapes and clsmeth */
-    {!RO::EvalHackArrDVArrs && RO::EvalIsCompatibleClsMethType,
-     TClsMeth, true,  mask & ClsMethNotice},
-    {!RO::EvalHackArrDVArrs,
-     TShape,   true,  None},
-    /* HAC logging */
-    {TVec,     false, mask & (ProvLogging | VecLogging)},
-    {TDict,    false, mask & (ProvLogging | DictLogging)},
-    {TKeyset,  false, mask & KeysetLogging}
-  };
-
-  /* This table is used for isBuiltin() functions and excludes HAC logging */
-  static auto const builtin_tycheck = InstrumentedTypecheck<IsArrayLogging>{
-    {TArr,     true,  None},
-    {!RO::EvalHackArrDVArrs && RO::EvalIsCompatibleClsMethType,
-     TClsMeth, true,  mask & ClsMethNotice},
-    {!RO::EvalHackArrDVArrs,
-     TShape,   true,  None},
-  };
-
-  auto const instrumentation = [&](IsArrayLogging type, SSATmp* src) {
-    if (type & ClsMethNotice) {
-      gen(env, RaiseNotice,
-          cns(env, makeStaticString(Strings::CLSMETH_COMPAT_IS_ARR)));
-    }
-    if (type & VecLogging) {
-      gen(env, RaiseHackArrCompatNotice,
-          cns(env, makeStaticString(Strings::HACKARR_COMPAT_VEC_IS_ARR)));
-    }
-    if (type & DictLogging) {
-      gen(env, RaiseHackArrCompatNotice,
-          cns(env, makeStaticString(Strings::HACKARR_COMPAT_DICT_IS_ARR)));
-    }
-    if (type & KeysetLogging) {
-      gen(env, RaiseHackArrCompatNotice,
-          cns(env, makeStaticString(Strings::HACKARR_COMPAT_KEYSET_IS_ARR)));
-    }
-    if (type & ProvLogging) {
-      gen(env, RaiseArraySerializeNotice,
-          cns(env, s_is_array.get()),
-          src);
-    }
-  };
-
-  return (curFunc(env)->isBuiltin() ? builtin_tycheck : tycheck)
-    .go(env, src, instrumentation);
+  return mc.elseDo([&]{ return cns(env, false); });
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -939,7 +788,7 @@ void emitIsLateBoundCls(IRGS& env) {
   if (isTrait(cls)) PUNT(IsLateBoundCls-Trait);
   auto const obj = popC(env);
   if (obj->isA(TObj)) {
-    auto const rhs = gen(env, LdClsCtx, ldCtx(env));
+    auto const rhs = ldCtxCls(env);
     auto const lhs  = gen(env, LdObjClass, obj);
     push(env, gen(env, InstanceOf, lhs, rhs));
   } else if (!obj->type().maybe(TObj)) {
@@ -988,7 +837,7 @@ SSATmp* resolveTypeStructImpl(
   auto const declaringCls = curFunc(env) ? curClass(env) : nullptr;
   auto const calledCls =
     declaringCls && typeStructureCouldBeNonStatic
-      ? gen(env, LdClsCtx, ldCtx(env))
+      ? ldCtxCls(env)
       : cns(env, nullptr);
   auto const result = resolveTypeStructureAndCacheInRDS(
     env,
@@ -1022,6 +871,10 @@ const ArrayData* staticallyResolveTypeStructure(
 ) {
   auto const declaringCls = curFunc(env) ? curClass(env) : nullptr;
   bool persistent = false;
+  // This shouldn't do a difference, but does on GCC 8.3 on Ubuntu 19.04;
+  // if we take the catch then return `ts`, it's a bogus value and we
+  // segfault... sometimes...
+  const ArrayData* ts_copy = ts;
   try {
     auto newTS = TypeStructure::resolvePartial(
       ArrNR(ts), nullptr, declaringCls, persistent, partial, invalidType);
@@ -1030,7 +883,7 @@ const ArrayData* staticallyResolveTypeStructure(
   // We are here because either we threw in the resolution or it wasn't
   // persistent resolution which means we didn't really resolve it
   partial = true;
-  return ts;
+  return ts_copy;
 }
 
 SSATmp* check_nullable(IRGS& env, SSATmp* res, SSATmp* var) {
@@ -1275,8 +1128,7 @@ SSATmp* handleIsResolutionAndCommonOpts(
     shouldDecRef = false;
     return gen(env, RaiseErrorOnInvalidIsAsExpressionType, popC(env));
   }
-  auto const ts =
-    RuntimeOption::EvalHackArrDVArrs ? a->dictVal() : a->arrVal();
+  auto const ts = a->arrLikeVal();
   auto maybe_resolved = ts;
   bool partial = true;
   bool invalidType = true;
@@ -1328,8 +1180,7 @@ void emitThrowAsTypeStructException(IRGS& env) {
   auto const c = topC(env, BCSPRelOffset { 1 });
   auto const tsAndBlock = [&]() -> std::pair<SSATmp*, Block*> {
     if (arr->hasConstVal(RuntimeOption::EvalHackArrDVArrs ? TDict : TArr)) {
-      auto const ts =
-        RuntimeOption::EvalHackArrDVArrs ? arr->dictVal() : arr->arrVal();
+      auto const ts = arr->arrLikeVal();
       auto maybe_resolved = ts;
       bool partial = true, invalidType = true;
       maybe_resolved =
@@ -1367,12 +1218,12 @@ void raiseClsmethCompatTypeHint(
     gen(env, RaiseNotice, cns(env, makeStaticString(
       folly::sformat("class_meth Compat: Value returned from function {}() "
       "must be of type {}, clsmeth given",
-        func->fullDisplayName(), name))));
+        func->fullName(), name))));
   } else {
     gen(env, RaiseNotice, cns(env, makeStaticString(
       folly::sformat("class_meth Compat: Argument {} passed to {}() "
       "must be of type {}, clsmeth given",
-        id + 1, func->fullDisplayName(), name))));
+        id + 1, func->fullName(), name))));
   }
 }
 
@@ -1381,196 +1232,206 @@ namespace {
 void verifyRetTypeImpl(IRGS& env, int32_t id, int32_t ind,
                        bool onlyCheckNullability) {
   auto const func = curFunc(env);
+  auto const verifyFunc = [&] (const TypeConstraint& tc) {
+    verifyTypeImpl(
+      env,
+      tc,
+      onlyCheckNullability,
+      nullptr,
+      [&] { // Get value to test
+        return topC(env, BCSPRelOffset { ind });
+      },
+      [&] (SSATmp* val) { // func to string conversions
+        auto const str = gen(env, LdFuncName, val);
+        auto const offset = offsetFromIRSP(env, BCSPRelOffset { ind });
+        gen(env, StStk, IRSPRelOffsetData{offset}, sp(env), str);
+        env.irb->exceptionStackBoundary();
+        return true;
+      },
+      [&] (SSATmp* val) { // class to string conversions
+        auto const str = gen(env, LdClsName, val);
+        auto const offset = offsetFromIRSP(env, BCSPRelOffset { ind });
+        gen(env, StStk, IRSPRelOffsetData{offset}, sp(env), str);
+        env.irb->exceptionStackBoundary();
+        return true;
+      },
+      [&] (SSATmp* val) { // clsmeth to varray/vec conversions
+        if (RuntimeOption::EvalVecHintNotices) {
+          raiseClsmethCompatTypeHint(env, id, func, tc);
+        }
+        auto clsMethArr = convertClsMethToVec(env, val);
+        discard(env, 1);
+        push(env, clsMethArr);
+        decRef(env, val);
+        return true;
+      },
+      [&] (Type, bool hard) { // Check failure
+        updateMarker(env);
+        env.irb->exceptionStackBoundary();
+        auto const failHard =
+          hard && RuntimeOption::EvalCheckReturnTypeHints >= 3;
+        gen(
+          env,
+          failHard ? VerifyRetFailHard : VerifyRetFail,
+          ParamWithTCData { id, &tc },
+          ldStkAddr(env, BCSPRelOffset { ind })
+        );
+      },
+      [&] (SSATmp* val) { // dvarray mismatch notice
+        gen(
+          env,
+          RaiseHackArrParamNotice,
+          RaiseHackArrParamNoticeData { tc, id, true },
+          val,
+          cns(env, func)
+        );
+      },
+      [&] (SSATmp* val) { // Callable check
+        gen(
+          env,
+          VerifyRetCallable,
+          ParamData { id },
+          val
+        );
+      },
+      [&] (SSATmp* val, SSATmp* objClass, SSATmp* checkCls) {
+        // Class/type-alias check
+        gen(
+          env,
+          VerifyRetCls,
+          ParamData { id },
+          objClass,
+          checkCls,
+          cns(env, uintptr_t(&tc)),
+          val
+        );
+      },
+      [&] (SSATmp* valRecDesc, SSATmp* checkRec, SSATmp* val) {
+        // Record/type-alias check
+        gen(
+          env,
+          VerifyRetRecDesc,
+          ParamData { id },
+          valRecDesc,
+          checkRec,
+          cns(env, uintptr_t(&tc)),
+          val
+        );
+      },
+      [] { // Giveup
+        PUNT(VerifyReturnType);
+      }
+    );
+  };
   auto const& tc = (id == TypeConstraint::ReturnId)
     ? func->returnTypeConstraint()
     : func->params()[id].typeConstraint;
-  bool isByRefArg = (id == TypeConstraint::ReturnId)
-    ? false
-    : func->byRef(id);
   assertx(ind >= 0);
-
-  verifyTypeImpl(
-    env,
-    tc,
-    onlyCheckNullability,
-    nullptr,
-    [&] { // Get value to test
-      return topC(env, BCSPRelOffset { ind });
-    },
-    [] (SSATmp*) -> Type { // Get boxed inner value
-      PUNT(VerifyReturnTypeBoxed);
-    },
-    [&] (SSATmp* val) { // func to string conversions
-      auto const str = gen(env, LdFuncName, val);
-      auto const offset = offsetFromIRSP(env, BCSPRelOffset { ind });
-      gen(env, StStk, IRSPRelOffsetData{offset}, sp(env), str);
-      env.irb->exceptionStackBoundary();
-      return true;
-    },
-    [&] (SSATmp* val) { // class to string conversions
-      auto const str = gen(env, LdClsName, val);
-      auto const offset = offsetFromIRSP(env, BCSPRelOffset { ind });
-      gen(env, StStk, IRSPRelOffsetData{offset}, sp(env), str);
-      env.irb->exceptionStackBoundary();
-      return true;
-    },
-    [&] (SSATmp* val) { // clsmeth to varray/vec conversions
-      if (RuntimeOption::EvalVecHintNotices) {
-        raiseClsmethCompatTypeHint(env, id, func, tc);
-      }
-      auto clsMethArr = convertClsMethToVec(env, val);
-      discard(env, 1);
-      push(env, clsMethArr);
-      decRef(env, val);
-      return true;
-    },
-    [&] (Type, bool hard) { // Check failure
-      updateMarker(env);
-      env.irb->exceptionStackBoundary();
-      auto const failHard =
-        hard && RuntimeOption::EvalCheckReturnTypeHints >= 3 &&
-        // we never hard enforce "return" typehints for by-reference arguments
-        !isByRefArg;
-      gen(
-        env,
-        failHard ? VerifyRetFailHard : VerifyRetFail,
-        ParamData { id },
-        ldStkAddr(env, BCSPRelOffset { ind })
-      );
-    },
-    [&] (SSATmp* val) { // dvarray mismatch notice
-      gen(
-        env,
-        RaiseHackArrParamNotice,
-        RaiseHackArrParamNoticeData { tc, id, true },
-        val,
-        cns(env, func)
-      );
-    },
-    [&] (SSATmp* val) { // Callable check
-      gen(
-        env,
-        VerifyRetCallable,
-        ParamData { id },
-        val
-      );
-    },
-    [&] (SSATmp* val, SSATmp* objClass, SSATmp* checkCls) {
-      // Class/type-alias check
-      gen(
-        env,
-        VerifyRetCls,
-        ParamData { id },
-        objClass,
-        checkCls,
-        cns(env, uintptr_t(&tc)),
-        val
-      );
-    },
-    [&] (SSATmp* valRecDesc, SSATmp* checkRec, SSATmp* val) {
-      // Record/type-alias check
-      gen(
-        env,
-        VerifyRetRecDesc,
-        ParamData { id },
-        valRecDesc,
-        checkRec,
-        cns(env, uintptr_t(&tc)),
-        val
-      );
-    },
-    [] { // Giveup
-      PUNT(VerifyReturnType);
+  verifyFunc(tc);
+  if (id == TypeConstraint::ReturnId && func->hasReturnWithMultiUBs()) {
+    for (auto const& ub : func->returnUBs()) verifyFunc(ub);
+  } else if (func->hasParamsWithMultiUBs()) {
+    auto const& ubs = func->paramUBs();
+    auto it = ubs.find(id);
+    if (it != ubs.end()) {
+      for (auto const& ub : it->second) verifyFunc(ub);
     }
-  );
+  }
 }
 
 void verifyParamTypeImpl(IRGS& env, int32_t id) {
   auto const func = curFunc(env);
-  auto const& tc = func->params()[id].typeConstraint;
-  verifyTypeImpl(
-    env,
-    tc,
-    false,
-    nullptr,
-    [&] { // Get value to test
-      auto const ldPMExit = makePseudoMainExit(env);
-      return ldLoc(env, id, ldPMExit, DataTypeSpecific);
-    },
-    [&] (SSATmp* val) { // Get boxed inner type
-      return env.irb->predictedLocalInnerType(id);
-    },
-    [&] (SSATmp* val) { // func to string conversions
-      auto const str = gen(env, LdFuncName, val);
-      stLocRaw(env, id, fp(env), str);
-      return true;
-    },
-    [&] (SSATmp* val) { // class to string conversions
-      auto const str = gen(env, LdClsName, val);
-      stLocRaw(env, id, fp(env), str);
-      return true;
-    },
-    [&] (SSATmp* val) { // clsmeth to varray/vec conversions
-      if (RuntimeOption::EvalVecHintNotices) {
-        raiseClsmethCompatTypeHint(env, id, func, tc);
+  auto const verifyFunc = [&](const TypeConstraint& tc) {
+    verifyTypeImpl(
+      env,
+      tc,
+      false,
+      nullptr,
+      [&] { // Get value to test
+        auto const ldPMExit = makePseudoMainExit(env);
+        return ldLoc(env, id, ldPMExit, DataTypeSpecific);
+      },
+      [&] (SSATmp* val) { // func to string conversions
+        auto const str = gen(env, LdFuncName, val);
+        stLocRaw(env, id, fp(env), str);
+        return true;
+      },
+      [&] (SSATmp* val) { // class to string conversions
+        auto const str = gen(env, LdClsName, val);
+        stLocRaw(env, id, fp(env), str);
+        return true;
+      },
+      [&] (SSATmp* val) { // clsmeth to varray/vec conversions
+        if (RuntimeOption::EvalVecHintNotices) {
+          raiseClsmethCompatTypeHint(env, id, func, tc);
+        }
+        auto clsMethArr = convertClsMethToVec(env, val);
+        stLocRaw(env, id, fp(env), clsMethArr);
+        decRef(env, val);
+        return true;
+      },
+      [&] (Type valType, bool hard) { // Check failure
+        auto const failHard = hard &&
+          !(tc.isArray() && valType.maybe(TObj));
+        gen(
+          env,
+          failHard ? VerifyParamFailHard : VerifyParamFail,
+          ParamWithTCData { id, &tc }
+        );
+      },
+      [&] (SSATmp* val) { // dvarray mismatch
+        gen(
+          env,
+          RaiseHackArrParamNotice,
+          RaiseHackArrParamNoticeData { tc, id, false },
+          val,
+          cns(env, func)
+        );
+      },
+      [&] (SSATmp* val) { // Callable check
+        gen(
+          env,
+          VerifyParamCallable,
+          val,
+          cns(env, id)
+        );
+      },
+      [&] (SSATmp*, SSATmp* objClass, SSATmp* checkCls) {
+        // Class/type-alias check
+        gen(
+          env,
+          VerifyParamCls,
+          objClass,
+          checkCls,
+          cns(env, uintptr_t(&tc)),
+          cns(env, id)
+        );
+      },
+      [&] (SSATmp* valRecDesc, SSATmp* checkRec, SSATmp*) {
+        // Record/type-alias check
+        gen(
+          env,
+          VerifyParamRecDesc,
+          valRecDesc,
+          checkRec,
+          cns(env, uintptr_t(&tc)),
+          cns(env, id)
+        );
+      },
+      [] { // Giveup
+        PUNT(VerifyParamType);
       }
-      auto clsMethArr = convertClsMethToVec(env, val);
-      stLocRaw(env, id, fp(env), clsMethArr);
-      decRef(env, val);
-      return true;
-    },
-    [&] (Type valType, bool hard) { // Check failure
-      auto const failHard = hard &&
-        !(tc.isArray() && valType.maybe(TObj));
-      gen(
-        env,
-        failHard ? VerifyParamFailHard : VerifyParamFail,
-        cns(env, id)
-      );
-    },
-    [&] (SSATmp* val) { // dvarray mismatch
-      gen(
-        env,
-        RaiseHackArrParamNotice,
-        RaiseHackArrParamNoticeData { tc, id, false },
-        val,
-        cns(env, func)
-      );
-    },
-    [&] (SSATmp* val) { // Callable check
-      gen(
-        env,
-        VerifyParamCallable,
-        val,
-        cns(env, id)
-      );
-    },
-    [&] (SSATmp*, SSATmp* objClass, SSATmp* checkCls) {
-      // Class/type-alias check
-      gen(
-        env,
-        VerifyParamCls,
-        objClass,
-        checkCls,
-        cns(env, uintptr_t(&tc)),
-        cns(env, id)
-      );
-    },
-    [&] (SSATmp* valRecDesc, SSATmp* checkRec, SSATmp*) {
-      // Record/type-alias check
-      gen(
-        env,
-        VerifyParamRecDesc,
-        valRecDesc,
-        checkRec,
-        cns(env, uintptr_t(&tc)),
-        cns(env, id)
-      );
-    },
-    [] { // Giveup
-      PUNT(VerifyParamType);
+    );
+  };
+
+  verifyFunc(func->params()[id].typeConstraint);
+  if (func->hasParamsWithMultiUBs()) {
+    auto const& ubs = func->paramUBs();
+    auto it = ubs.find(id);
+    if (it != ubs.end()) {
+      for (auto const& ub : it->second) verifyFunc(ub);
     }
-  );
+  }
 }
 
 }
@@ -1597,10 +1458,6 @@ void verifyPropType(IRGS& env,
     [&] { // Get value to check
       env.irb->constrainValue(val, DataTypeSpecific);
       return val;
-    },
-    [&] (SSATmp*) -> Type { // Get boxed inner type
-      // We've already asserted that the value is a Cell.
-      always_assert(false);
     },
     [&] (SSATmp*) { return false; }, // No func to string automatic conversions
     [&] (SSATmp*) { return false; }, // No class to string automatic conversions
@@ -1664,15 +1521,10 @@ void verifyPropType(IRGS& env,
 }
 
 void emitVerifyRetTypeC(IRGS& env) {
-  if (!RuntimeOption::EvalCheckReturnTypeHints) return;
   verifyRetTypeImpl(env, TypeConstraint::ReturnId, 0, false);
 }
 
 void emitVerifyRetTypeTS(IRGS& env) {
-  if (!RuntimeOption::EvalCheckReturnTypeHints) {
-    popC(env);
-    return;
-  }
   verifyRetTypeImpl(env, TypeConstraint::ReturnId, 1, false);
   auto const ts = popC(env);
   auto const cell = topC(env);
@@ -1689,12 +1541,10 @@ void emitVerifyRetNonNullC(IRGS& env) {
   auto const func = curFunc(env);
   auto const& tc = func->returnTypeConstraint();
   always_assert(!tc.isNullable());
-  if (!RuntimeOption::EvalCheckReturnTypeHints) return;
   verifyRetTypeImpl(env, TypeConstraint::ReturnId, 0, true);
 }
 
 void emitVerifyOutType(IRGS& env, uint32_t paramId) {
-  if (!RuntimeOption::EvalCheckReturnTypeHints) return;
   verifyRetTypeImpl(env, paramId, 0, false);
 }
 
@@ -1744,9 +1594,8 @@ void emitOODeclExists(IRGS& env, OODeclExistsOp subop) {
 }
 
 void emitIssetL(IRGS& env, int32_t id) {
-  auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
-  auto const ld = ldLocInner(env, id, ldrefExit, ldPMExit, DataTypeSpecific);
+  auto const ld = ldLoc(env, id, ldPMExit, DataTypeSpecific);
   if (ld->isA(TClsMeth)) {
     PUNT(IssetL_is_ClsMeth);
   }
@@ -1754,88 +1603,52 @@ void emitIssetL(IRGS& env, int32_t id) {
 }
 
 void emitEmptyL(IRGS& env, int32_t id) {
-  auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
-  auto const ld = ldLocInner(env, id, ldrefExit, ldPMExit, DataTypeSpecific);
+  auto const ld = ldLoc(env, id, ldPMExit, DataTypeSpecific);
   if (ld->isA(TClsMeth)) {
     PUNT(EmptyL_is_ClsMeth);
   }
   push(
     env,
-    gen(env, XorBool, gen(env, ConvCellToBool, ld), cns(env, true))
+    gen(env, XorBool, gen(env, ConvTVToBool, ld), cns(env, true))
   );
 }
 
-void emitIsTypeC(IRGS& env, IsTypeOp subop) {
-  auto const src = popC(env, DataTypeSpecific);
-
-  if (subop == IsTypeOp::VArray || subop == IsTypeOp::DArray) {
-    push(env, isDVArrayImpl(env, src, subop));
-  } else if (subop == IsTypeOp::Arr) {
-    push(env, isArrayImpl(env, src));
-  } else if (subop == IsTypeOp::Vec) {
-    push(env, isVecImpl(env, src));
-  } else if (subop == IsTypeOp::Dict) {
-    push(env, isDictImpl(env, src));
-  } else if (subop == IsTypeOp::Scalar) {
-    push(env, isScalarImpl(env, src));
-  } else if (subop == IsTypeOp::Str) {
-    push(env, isStrImpl(env, src));
-  } else {
-    if (subop == IsTypeOp::ArrLike && src->isA(TClsMeth)) {
-      // To make ClsMeth compatiable with arraylike tentitively
-      if (RuntimeOption::EvalIsVecNotices) {
-        gen(env, RaiseNotice,
-          cns(env, makeStaticString(Strings::CLSMETH_COMPAT_IS_ANY_ARR)));
-      }
-      push(env, cns(env, true));
-    } else {
-      auto const t = typeOpToType(subop);
-      if (t <= TObj) {
-        push(env, optimizedCallIsObject(env, src));
-      } else {
-        push(env, gen(env, IsType, t, src));
-      }
-    }
+SSATmp* isTypeHelper(IRGS& env, IsTypeOp subop, SSATmp* val) {
+  switch (subop) {
+    case IsTypeOp::VArray: /* intentional fallthrough */
+    case IsTypeOp::DArray: return isDVArrayImpl(env, val, subop);
+    case IsTypeOp::Arr:    return isArrayImpl(env, val);
+    case IsTypeOp::Vec:    return isVecImpl(env, val);
+    case IsTypeOp::Dict:   return isDictImpl(env, val);
+    case IsTypeOp::Scalar: return isScalarImpl(env, val);
+    case IsTypeOp::Str:    return isStrImpl(env, val);
+    default: break;
   }
-  decRef(env, src);
+
+  // We eventually want ClsMeth to be its own DataType, so we must log.
+  if (subop == IsTypeOp::ArrLike && val->isA(TClsMeth)) {
+    if (RuntimeOption::EvalIsVecNotices) {
+      auto const msg = makeStaticString(Strings::CLSMETH_COMPAT_IS_ANY_ARR);
+      gen(env, RaiseNotice, cns(env, msg));
+    }
+    return cns(env, true);
+  }
+
+  auto const t = typeOpToType(subop);
+  return t <= TObj ? optimizedCallIsObject(env, val) : gen(env, IsType, t, val);
+}
+
+void emitIsTypeC(IRGS& env, IsTypeOp subop) {
+  auto const val = popC(env, DataTypeSpecific);
+  push(env, isTypeHelper(env, subop, val));
+  decRef(env, val);
 }
 
 void emitIsTypeL(IRGS& env, int32_t id, IsTypeOp subop) {
-  auto const ldrefExit = makeExit(env);
   auto const ldPMExit = makePseudoMainExit(env);
-  auto const val =
-    ldLocInnerWarn(env, id, ldrefExit, ldPMExit, DataTypeSpecific);
-
-  if (subop == IsTypeOp::VArray || subop == IsTypeOp::DArray) {
-    push(env, isDVArrayImpl(env, val, subop));
-  } else if (subop == IsTypeOp::Arr) {
-    push(env, isArrayImpl(env, val));
-  } else if (subop == IsTypeOp::Vec) {
-    push(env, isVecImpl(env, val));
-  } else if (subop == IsTypeOp::Dict) {
-    push(env, isDictImpl(env, val));
-  } else if (subop == IsTypeOp::Scalar) {
-    push(env, isScalarImpl(env, val));
-  } else if (subop == IsTypeOp::Str) {
-    push(env, isStrImpl(env, val));
-  } else {
-    if (subop == IsTypeOp::ArrLike && val->isA(TClsMeth)) {
-      // To make ClsMeth compatiable with arraylike tentitively
-      if (RuntimeOption::EvalIsVecNotices) {
-        gen(env, RaiseNotice,
-          cns(env, makeStaticString(Strings::CLSMETH_COMPAT_IS_ANY_ARR)));
-      }
-      push(env, cns(env, true));
-    } else {
-      auto const t = typeOpToType(subop);
-      if (t <= TObj) {
-        push(env, optimizedCallIsObject(env, val));
-      } else {
-        push(env, gen(env, IsType, t, val));
-      }
-    }
-  }
+  auto const val = ldLocWarn(env, id, ldPMExit, DataTypeSpecific);
+  push(env, isTypeHelper(env, subop, val));
 }
 
 //////////////////////////////////////////////////////////////////////

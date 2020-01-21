@@ -1,6 +1,6 @@
 <?hh
-final record Foo {
-  x:int,
+record Foo {
+  int x;
 };
 
 function funn() {

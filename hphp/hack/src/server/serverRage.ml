@@ -9,8 +9,7 @@
 
 open Hh_core
 
-let go (_genv : ServerEnv.genv) (env : ServerEnv.env) : ServerRageTypes.result
-    =
+let go (_genv : ServerEnv.genv) (env : ServerEnv.env) : ServerRageTypes.result =
   ServerRageTypes.(
     (* Gather up the contents of all files that hh_server believes are in the *)
     (* IDE different from what's on disk *)
@@ -36,10 +35,10 @@ let go (_genv : ServerEnv.genv) (env : ServerEnv.env) : ServerRageTypes.result
     let paused_data =
       Printf.sprintf
         "\n%s... disk_needs_parsing:\n%s\n"
-        ( if env.ServerEnv.paused then
-          "hh --pause"
-        else
-          "hh --resume" )
+        (match env.ServerEnv.full_recheck_on_file_changes with
+        | ServerEnv.Not_paused -> "hh"
+        | ServerEnv.Paused _ -> "hh --pause"
+        | ServerEnv.Resumed -> "hh --resume")
         ( Relative_path.Set.elements env.ServerEnv.disk_needs_parsing
         |> List.map ~f:Relative_path.to_absolute
         |> String.concat "\n" )

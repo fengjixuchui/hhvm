@@ -34,21 +34,15 @@ let get_lambda_parameter_rewrite_patches env files =
         env.tcopt
         (Relative_path.from_root file))
 
-let get_return_type_rewrite_patches env files =
+let get_type_params_type_rewrite_patches env files =
   List.concat_map files (fun file ->
-      ServerRewriteReturnType.get_patches
-        env.tcopt
-        (Relative_path.from_root file))
-
-let get_parameter_types_rewrite_patches env files =
-  List.concat_map files (fun file ->
-      ServerRewriteParameterTypes.get_patches
+      ServerRewriteTypeParamsType.get_patches
         env.tcopt
         (Relative_path.from_root file))
 
 let find_def_filename current_filename definition =
   SymbolDefinition.(
-    if Pos.filename definition.pos = ServerIdeUtils.path then
+    if Pos.filename definition.pos = Relative_path.default then
       (* When the definition is in an IDE buffer with local changes, the filename
        in the definition will be empty. *)
       current_filename
@@ -203,8 +197,7 @@ let get_call_signature_for_wrap (func_decl : Full_fidelity_positioned_syntax.t)
                 that outputs only the variadic params (and dropping the
                 non-variadic ones).
             *)
-                | ParameterDeclaration { parameter_name = name; _ } ->
-                  text name
+                | ParameterDeclaration { parameter_name = name; _ } -> text name
                 | VariadicParameter _ -> "...$args"
                 | _ -> failwith "Expected some parameter type")
           in
@@ -303,15 +296,14 @@ let get_call_signature_for_wrap (func_decl : Full_fidelity_positioned_syntax.t)
       })
 
 (* Produce a "deprecated" version of the old function so that calls to it can be rerouted *)
-let get_deprecated_wrapper_patch ~filename ~definition new_name =
+let get_deprecated_wrapper_patch ~filename ~definition ~tcopt new_name =
   SymbolDefinition.(
     Full_fidelity_positioned_syntax.(
       Option.Monad_infix.(
-        filename
-        >>= fun filename ->
-        definition
-        >>= fun definition ->
+        filename >>= fun filename ->
+        definition >>= fun definition ->
         let definition = SymbolDefinition.to_relative definition in
+
         (* We need the number of spaces that the function declaration is offsetted so that we can
       format our wrapper properly with the correct indent (i.e. we need 0-indexed columns).
 
@@ -323,14 +315,18 @@ let get_deprecated_wrapper_patch ~filename ~definition new_name =
   *)
         let (_, col_start_plus1, _, _) = Pos.destruct_range definition.span in
         let col_start = col_start_plus1 - 1 in
-        let filename_server_type = ServerCommandTypes.FileName filename in
-        let cst_node =
-          ServerSymbolDefinition.get_definition_cst_node
-            filename_server_type
-            definition
+        let entry =
+          Provider_utils.get_entry_VOLATILE
+            ~ctx:(Provider_context.empty tcopt)
+            ~path:(Relative_path.create_detect_prefix filename)
         in
-        cst_node
-        >>= fun cst_node ->
+        let cst_node =
+          ServerSymbolDefinition.get_definition_cst_node_ctx
+            ~entry
+            ~kind:definition.kind
+            ~pos:definition.pos
+        in
+        cst_node >>= fun cst_node ->
         begin
           match syntax cst_node with
           | MethodishDeclaration
@@ -436,7 +432,11 @@ let go action genv env =
            match action with
            | FunctionRename { filename; definition; _ }
            | MethodRename { filename; definition; _ } ->
-             get_deprecated_wrapper_patch ~filename ~definition new_name
+             get_deprecated_wrapper_patch
+               ~filename
+               ~definition
+               ~tcopt:env.tcopt
+               new_name
            | ClassRename _
            | ClassConstRename _
            | LocalVarRename _ ->
@@ -447,13 +447,19 @@ let go action genv env =
            ~default:changes
            ~f:(fun patch -> patch :: changes))
 
-let go_ide (filename, line, char) new_name genv env =
+let go_ide (filename, line, column) new_name genv env =
   SymbolDefinition.(
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path:(Relative_path.create_detect_prefix filename)
+        ~file_input:(ServerCommandTypes.FileName filename)
+    in
     let file_content =
-      ServerFileSync.get_file_content (ServerCommandTypes.FileName filename)
+      entry.Provider_context.source_text.Full_fidelity_source_text.text
     in
     let definitions =
-      ServerIdentifyFunction.go_absolute file_content line char env.tcopt
+      ServerIdentifyFunction.go_quarantined_absolute ~ctx ~entry ~line ~column
     in
     match definitions with
     | [(_, Some definition)] ->
@@ -479,8 +485,7 @@ let go_ide (filename, line, char) new_name genv env =
         Ok (go command genv env)
       | (Const, [class_name; const_name]) ->
         let command =
-          ServerRefactorTypes.ClassConstRename
-            (class_name, const_name, new_name)
+          ServerRefactorTypes.ClassConstRename (class_name, const_name, new_name)
         in
         Ok (go command genv env)
       | (Method, [class_name; method_name]) ->
@@ -502,7 +507,7 @@ let go_ide (filename, line, char) new_name genv env =
               filename = Relative_path.create_detect_prefix filename;
               file_content;
               line;
-              char;
+              char = column;
               new_name = maybe_add_dollar new_name;
             }
         in

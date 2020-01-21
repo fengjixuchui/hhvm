@@ -12,12 +12,9 @@ val add_position_to_results : SearchUtils.si_results -> SearchUtils.result
 val autocomplete_result_to_json :
   AutocompleteTypes.complete_autocomplete_result -> Hh_json.json
 
-val go :
-  tcopt:TypecheckerOptions.t ->
-  content_funs:Reordered_argument_collections.SSet.t ->
-  content_classes:Reordered_argument_collections.SSet.t ->
+val go_ctx :
+  ctx:Provider_context.t ->
+  entry:Provider_context.entry ->
   autocomplete_context:AutocompleteTypes.legacy_autocomplete_context ->
   sienv:SearchUtils.si_env ->
-  Tast.program ->
-  AutocompleteTypes.complete_autocomplete_result list
-  Utils.With_complete_flag.t
+  AutocompleteTypes.complete_autocomplete_result list Utils.With_complete_flag.t

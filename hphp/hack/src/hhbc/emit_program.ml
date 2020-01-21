@@ -11,11 +11,12 @@ open Core_kernel
 open Instruction_sequence
 open Hhbc_ast
 
-let emit_main is_evaled debugger_modify_program popt (defs : Tast.program) =
+let emit_main is_evaled debugger_modify_program namespace (defs : Tast.program)
+    =
   let (body, _is_generator, _is_pair_generator) =
     Emit_body.emit_body
       ~pos:Pos.none
-      ~namespace:(Namespace_env.empty_from_popt popt)
+      ~namespace
       ~is_closure_body:false
       ~is_memoize:false
       ~is_native:false
@@ -55,13 +56,23 @@ let emit_fatal_program ~ignore_message op pos message =
       [] (* decl_vars *)
       false (*is_memoize_wrapper*)
       false (*is_memoize_wrapper_lsb*)
+      [] (* upper bounds *)
       [] (* params *)
       None (* return_type_info *)
       None (* doc *)
       None
     (* env *)
   in
-  Hhas_program.make true [] [] [] [] [] body Emit_symbol_refs.empty_symbol_refs
+  Hhas_program.make
+    true
+    []
+    []
+    []
+    []
+    []
+    []
+    body
+    Emit_symbol_refs.empty_symbol_refs
 
 let debugger_eval_should_modify ast =
   (* The AST currently always starts with a Markup statement, so a length of 2
@@ -81,20 +92,16 @@ let debugger_eval_should_modify ast =
     | Aast.Stmt (_, Aast.Expr _) -> true
     | _ -> false
 
-let from_ast
-    ~is_hh_file ?(is_js_file = false) ~is_evaled ~for_debugger_eval ~popt tast
-    =
+let from_ast ~is_hh_file ~is_evaled ~for_debugger_eval ~empty_namespace tast =
   Utils.try_finally
     ~f:
       begin
         fun () ->
         try
-          Emit_env.set_is_js_file is_js_file;
-
           (* Convert closures to top-level classes;
            * also hoist inner classes and functions *)
           let { ast_defs = closed_ast; global_state } =
-            convert_toplevel_prog ~popt tast
+            convert_toplevel_prog ~empty_namespace tast
           in
           Emit_env.set_global_state global_state;
           let flat_closed_ast = List.map ~f:snd closed_ast in
@@ -102,13 +109,20 @@ let from_ast
             for_debugger_eval && debugger_eval_should_modify tast
           in
           let compiled_defs =
-            emit_main is_evaled debugger_modify_program popt flat_closed_ast
+            emit_main
+              is_evaled
+              debugger_modify_program
+              empty_namespace
+              flat_closed_ast
           in
           let compiled_funs =
             Emit_function.emit_functions_from_program closed_ast
           in
           let compiled_classes =
             Emit_class.emit_classes_from_program closed_ast
+          in
+          let compiled_records =
+            Emit_record_def.emit_record_defs_from_program closed_ast
           in
           let compiled_typedefs =
             Emit_typedef.emit_typedefs_from_program flat_closed_ast
@@ -125,6 +139,7 @@ let from_ast
               adata
               compiled_funs
               compiled_classes
+              compiled_records
               compiled_typedefs
               compiled_file_attributes
               compiled_defs

@@ -21,6 +21,7 @@ let empty_file_info : FileInfo.t =
     file_mode = None;
     FileInfo.funs = [];
     classes = [];
+    record_defs = [];
     typedefs = [];
     consts = [];
     comments = Some [];
@@ -35,9 +36,7 @@ let legacy_php_file_info = ref (fun _fn -> empty_file_info)
  *)
 let process_parse_result
     ?(ide = false) ~quick (acc, errorl, error_files) fn res popt =
-  let ( errorl',
-        { Parser_return.file_mode; comments = _; ast; content; is_hh_file = _ }
-      ) =
+  let (errorl', { Parser_return.file_mode; comments = _; ast; content }) =
     res
   in
   let ast =
@@ -56,7 +55,7 @@ let process_parse_result
       File_provider.Disk content
   in
   if file_mode <> None then (
-    let (funs, classes, typedefs, consts) = Nast.get_defs ast in
+    let (funs, classes, record_defs, typedefs, consts) = Nast.get_defs ast in
     (* If this file was parsed from a tmp directory,
       save it to the main directory instead *)
     let fn =
@@ -79,7 +78,16 @@ let process_parse_result
     let comments = None in
     let hash = Some (Nast.generate_ast_decl_hash ast) in
     let defs =
-      { FileInfo.hash; funs; classes; typedefs; consts; comments; file_mode }
+      {
+        FileInfo.hash;
+        funs;
+        classes;
+        record_defs;
+        typedefs;
+        consts;
+        comments;
+        file_mode;
+      }
     in
     let acc = Relative_path.Map.add acc ~key:fn ~data:defs in
     let errorl = Errors.merge errorl' errorl in
@@ -105,8 +113,7 @@ let parse ~quick ~show_all_errors popt acc fn =
     acc
   else
     let res =
-      Errors.do_with_context fn Errors.Parsing
-      @@ fun () ->
+      Errors.do_with_context fn Errors.Parsing @@ fun () ->
       Full_fidelity_ast.defensive_from_file ~quick ~show_all_errors popt fn
     in
     process_parse_result ~quick acc fn res popt
@@ -118,21 +125,7 @@ let merge_parse (acc1, status1, files1) (acc2, status2, files2) =
     Relative_path.Set.union files1 files2 )
 
 let parse_files ?(quick = false) ?(show_all_errors = false) popt acc fnl =
-  let parse =
-    if !Utils.profile then (
-      fun acc fn ->
-    let t = Unix.gettimeofday () in
-    let result = parse ~quick ~show_all_errors popt acc fn in
-    let t' = Unix.gettimeofday () in
-    let msg =
-      Printf.sprintf "%f %s [parsing]" (t' -. t) (Relative_path.suffix fn)
-    in
-    !Utils.log msg;
-    result
-    ) else
-      parse ~quick ~show_all_errors popt
-  in
-  List.fold_left fnl ~init:acc ~f:parse
+  List.fold_left fnl ~init:acc ~f:(parse ~quick ~show_all_errors popt)
 
 let parse_parallel
     ?(quick = false) ?(show_all_errors = false) workers get_next popt =

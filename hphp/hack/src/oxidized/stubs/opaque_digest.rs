@@ -3,8 +3,9 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use ocamlrep_derive::OcamlRep;
-use ocamlvalue_macro::Ocamlvalue;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, OcamlRep, Ocamlvalue)]
+use ocamlrep_derive::OcamlRep;
+
+#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
 pub struct OpaqueDigest(());

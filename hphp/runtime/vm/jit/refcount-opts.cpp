@@ -300,13 +300,12 @@ everything alone.
 -- Effects of Pure Stores on Memory Support --
 
 There are two main kinds of stores from the perspective of this module.  There
-are lowered stores (PureStore and PureSpillFrame) that happen within our IR
-compilation unit, and don't imply reference count manipulation, and there are
-stores that happen with "hhbc semantics" outside of the visibility of this
-compilation unit, which imply decreffing the value that used to live in a
-memory location as it's replaced with a new one.  This module needs some
-understanding of both types, and both of these types of stores affect memory
-support, but in different ways.
+are lowered stores (PureStore) that happen within our IR compilation unit, and
+don't imply reference count manipulation, and there are stores that happen with
+"hhbc semantics" outside of the visibility of this compilation unit, which
+imply decreffing the value that used to live in a memory location as it's
+replaced with a new one.  This module needs some understanding of both types,
+and both of these types of stores affect memory support, but in different ways.
 
 For any instruction that may do non-lowered stores outside of our unit ("stores
 with hhbc semantics"), if the location(s) it may be storing to could be
@@ -474,15 +473,14 @@ alone (whatever was causing our lower bound to be one), and therefore a decref
 through this unknown pointer won't think it is removing the last reference.
 
 Also worth discussing is that there are several runtime objects in the VM with
-operations that have behavioral differences based on whether the reference
-count is greater than one.  For instance, types like KindOfString and
-KindOfArray do in place updates when they have a refcount of one, and KindOfRef
-is treated "observably" as a php reference only if the refcount is greater than
-one.  Making sure we don't change these situations is actually the same
-condition as discussed above: by the above scheme for not changing whether
-pointers we don't know about constitute the last counted reference to an
-object, we are both preventing decrefs from going to zero when they shouldn't,
-and modifications to objects from failing to COW when they should.
+operations that have behavioral differences based on whether the reference count
+is greater than one.  For instance, types like KindOfString and KindOfArray do
+in place updates when they have a refcount of one. Making sure we don't change
+these situations is actually the same condition as discussed above: by the above
+scheme for not changing whether pointers we don't know about constitute the last
+counted reference to an object, we are both preventing decrefs from going to
+zero when they shouldn't, and modifications to objects from failing to COW when
+they should.
 
 A fundamental meta-rule that arises out of all the above considerations is that
 we cannot move (or remove) increfs unless the lower bound on the incref node is
@@ -510,8 +508,7 @@ them when we shouldn't.
 #include <folly/Conv.h>
 #include <folly/portability/Stdlib.h>
 
-#include <boost/dynamic_bitset.hpp>
-
+#include "hphp/util/bitset-array.h"
 #include "hphp/util/bitset-utils.h"
 #include "hphp/util/dataflow-worklist.h"
 #include "hphp/util/match.h"
@@ -586,7 +583,7 @@ struct MustAliasSet {
    * information.
    *
    * Because of how we build MustAliasSets (essentially canonical(), or groups
-   * of LdCtx instructions), it is guaranteed that this widestType includes all
+   * of LdFrameThis instructions), it is guaranteed that this widestType includes all
    * possible values for the set.  However it is not the case that every tmp in
    * the set necessarily has a subtype of widestType, because of situations
    * that can occur with AssertType and interface types.  This does not affect
@@ -598,7 +595,7 @@ struct MustAliasSet {
    * A representative of the set.  This is only used for debug tracing, and is
    * currently the first instruction (in an rpo traversal) that defined a tmp
    * in the must-alias-set.  (I.e. it'll be the canonical() tmp, or the first
-   * LdCtx we saw.)
+   * LdFrameThis we saw.)
    */
   SSATmp* representative;
 
@@ -737,23 +734,47 @@ struct Env {
   jit::vector<MustAliasSet> asets;
 };
 
-using IncDecBits = boost::dynamic_bitset<>;
+using IncDecBits = BitsetRef;
 
 struct PreBlockInfo {
-  explicit PreBlockInfo(uint32_t sz) :
+  enum Bits {
+    AltLoc,
+    AvlLoc,
+    AntLoc,
+    AvlIn,
+    AvlOut,
+    PavlIn,
+    PavlOut,
+    AntIn,
+    AntOut,
+    PantIn,
+    PantOut,
+
+    NumBitsets
+  };
+  explicit PreBlockInfo(BitsetRef base) :
       rpoId(0),
-      altLoc(sz),
-      avlLoc(sz),
-      antLoc(sz),
-      avlIn(sz),
-      avlOut(sz),
-      pavlIn(sz),
-      pavlOut(sz),
-      antIn(sz),
-      antOut(sz),
-      pantIn(sz),
-      pantOut(sz)
+      altLoc{base.next(AltLoc)},
+      avlLoc{base.next(AvlLoc)},
+      antLoc{base.next(AntLoc)},
+      avlIn{base.next(AvlIn)},
+      avlOut{base.next(AvlOut)},
+      pavlIn{base.next(PavlIn)},
+      pavlOut{base.next(PavlOut)},
+      antIn{base.next(AntIn)},
+      antOut{base.next(AntOut)},
+      pantIn{base.next(PantIn)},
+      pantOut{base.next(PantOut)}
     {}
+
+  PreBlockInfo(const PreBlockInfo& o) = default;
+  PreBlockInfo& operator=(const PreBlockInfo& o) {
+    if (this != &o) {
+      this->~PreBlockInfo();
+      new (this) PreBlockInfo(o);
+    }
+    return *this;
+  }
 
   uint32_t   rpoId;
   uint32_t   genId{};
@@ -786,13 +807,31 @@ using BlockState = StateVector<Block, PreBlockInfo>;
 
 struct PreEnv {
   using IncDecKey = std::tuple<Block*,uint32_t,bool>; /* blk, id, at front */
-  using InsertMap = jit::fast_map<IncDecKey, SSATmp*>;
+  struct IDKeyCmp {
+    bool operator()(const IncDecKey& a, const IncDecKey& b) const {
+      if (std::get<0>(a)->id() != std::get<0>(b)->id()) {
+        return std::get<0>(a)->id() < std::get<0>(b)->id();
+      }
+      if (std::get<1>(a) != std::get<1>(b)) {
+        return std::get<1>(a) < std::get<1>(b);
+      }
+      return std::get<2>(a) < std::get<2>(b);
+    }
+  };
+  using InsertMap = jit::flat_map<IncDecKey, SSATmp*, IDKeyCmp>;
 
   explicit PreEnv(Env& env, RCAnalysis& rca) :
-      env(env),
-      rca(rca),
-      state(env.unit, PreBlockInfo(env.asets.size())),
-      curGen(0),
+      env{env},
+      rca{rca},
+      bits{env.unit.numBlocks() * PreBlockInfo::NumBitsets + 1,
+           env.asets.size()},
+      scratchBits{bits.row(env.unit.numBlocks() * PreBlockInfo::NumBitsets)},
+      state{env.unit,
+            [this] (size_t i) {
+              return bits.row(i * PreBlockInfo::NumBitsets);
+            }
+      },
+      curGen{0},
       avlQ(env.rpoBlocks.size()),
       antQ(env.rpoBlocks.size()) {
     uint32_t id = 0;
@@ -807,6 +846,8 @@ struct PreEnv {
 
   Env& env;
   RCAnalysis& rca;
+  BitsetArray bits;
+  BitsetRef scratchBits;
   BlockState state;
   uint32_t  curGen;
   InsertMap insMap;
@@ -992,13 +1033,6 @@ void mrinfo_step_impl(Env& env,
      */
     [&](PureLoad) {},
 
-    /*
-     * Since there's no semantically correct way to do PureLoads from the
-     * locations in a PureSpillFrame unless something must have stored over
-     * them again first, we don't need to kill anything here.
-     */
-    [&](PureSpillFrame /*x*/) {},
-
     [&](CallEffects /*x*/) {
       /*
        * Because PHP callees can side-exit (or for that matter throw from their
@@ -1135,10 +1169,14 @@ void populate_mrinfo(Env& env) {
 //////////////////////////////////////////////////////////////////////
 
 using HPHP::jit::show;
-DEBUG_ONLY std::string show(const boost::dynamic_bitset<>& bs) {
-  std::ostringstream out;
-  out << bs;
-  return out.str();
+
+DEBUG_ONLY std::string show(const BitsetRef& bs) {
+  std::string res;
+  res.reserve(bs.size());
+  for (auto i = bs.size(); i--; ) {
+    res.push_back(bs[i] ? '1' : '0');
+  }
+  return res;
 }
 
 /*
@@ -1184,19 +1222,33 @@ void weaken_decrefs(Env& env) {
    * 0. Initialize block state structures and put all blocks in the worklist.
    */
   auto incompleteQ = dataflow_worklist<uint32_t>(poBlocks.size());
+  BitsetArray bits{env.unit.numBlocks() * 3, env.asets.size()};
   struct BlockInfo {
-    BlockInfo() {}
-    uint32_t poId;
-    boost::dynamic_bitset<> in_used;
-    boost::dynamic_bitset<> out_used;
-    boost::dynamic_bitset<> gen;
+    explicit BlockInfo(BitsetRef base) :
+        in_used{base}, out_used{in_used.next()}, gen{out_used.next()} {
+    }
+    BlockInfo(const BlockInfo&) = default;
+    BlockInfo& operator=(const BlockInfo& o) {
+      if (this != &o) {
+        this->~BlockInfo();
+        new (this) BlockInfo{o};
+      }
+      return *this;
+    }
+    uint32_t poId{};
+    BitsetRef in_used;
+    BitsetRef out_used;
+    BitsetRef gen;
   };
-  StateVector<Block,BlockInfo> blockInfos(env.unit, BlockInfo{});
+  StateVector<Block,BlockInfo> blockInfos{
+    env.unit,
+    [&] (size_t i) {
+      return bits.row(i * 3);
+    }
+  };
+
   for (auto poId = uint32_t{0}; poId < poBlocks.size(); ++poId) {
     auto const blk = poBlocks[poId];
-    blockInfos[blk].out_used.resize(env.asets.size());
-    blockInfos[blk].in_used.resize(env.asets.size());
-    blockInfos[blk].gen.resize(env.asets.size());
     blockInfos[blk].poId = poId;
     incompleteQ.push(poId);
   }
@@ -1235,8 +1287,6 @@ void weaken_decrefs(Env& env) {
    *
    * Note out_used is empty if there are no successors.
    */
-  auto old_in_buf = boost::dynamic_bitset<>{};
-  old_in_buf.resize(env.asets.size());
   do {
     auto const blk = poBlocks[incompleteQ.pop()];
     auto& binfo = blockInfos[blk];
@@ -1251,13 +1301,10 @@ void weaken_decrefs(Env& env) {
     }
 
     // Propagate it to the in set.
-    old_in_buf = binfo.in_used;
-    binfo.in_used = binfo.out_used;
-    binfo.in_used |= binfo.gen;
-    auto const changed = old_in_buf != binfo.in_used;
-
+    auto const in_used = binfo.out_used | binfo.gen;
     // Schedule each predecessor if the input set changed.
-    if (changed) {
+    if (binfo.in_used != in_used) {
+      binfo.in_used.assign(in_used);
       blk->forEachPred([&] (Block* pred) {
         incompleteQ.push(blockInfos[pred].poId);
       });
@@ -1279,12 +1326,13 @@ void weaken_decrefs(Env& env) {
 
   /*
    * 3. Convert DecRefs to DecRefNZ when we've proven the tmp must be used
-   * again.
+   *    again.
+   *
+   * Note that this step clobbers out_used
    */
-  auto will_be_used = boost::dynamic_bitset<>{};
   for (auto& blk : poBlocks) {
     FTRACE(4, "B{}:\n", blk->id());
-    will_be_used = blockInfos[blk].out_used;
+    auto& will_be_used = blockInfos[blk].out_used;
     for (auto it = blk->instrs().rbegin(); it != blk->instrs().rend(); ++it) {
       auto& inst = *it;
       FTRACE(4, "  {}\n", inst);
@@ -1319,7 +1367,6 @@ bool irrelevant_inst(const IRInstruction& inst) {
     // object reference counts.
     [&] (PureLoad) { return true; },
     [&] (PureStore) { return true; },
-    [&] (PureSpillFrame) { return true; },
     [&] (IrrelevantEffects) { return true; },
     [&] (InlineEnterEffects) { return true; },
     [&] (InlineExitEffects) { return true; },
@@ -1334,11 +1381,9 @@ bool irrelevant_inst(const IRInstruction& inst) {
         return true;
       }
       if (inst.consumesReferences()) return false;
-      // IncRefs/DecRefs can only touch heap locations, so any other instruction
-      // that doesn't affect these locations is irrelevant.
-      if (!g.stores.maybe(AHeapAny) &&
-          !g.moves.maybe(AHeapAny)  &&
-          !g.kills.maybe(AHeapAny)) {
+
+      if (g.loads <= AEmpty &&
+          g.stores <= AEmpty) {
         return true;
       }
       return false;
@@ -1357,37 +1402,11 @@ bool irrelevant_inst(const IRInstruction& inst) {
 void find_alias_sets(Env& env) {
   FTRACE(2, "find_alias_sets --------------------------------------\n");
 
-  auto frame_to_ctx = sparse_idptr_map<SSATmp,ASetID>(env.unit.numTmps());
-
   auto add = [&] (SSATmp* tmp) {
     if (!tmp->type().maybe(TCounted)) return;
 
     auto& id = env.asetMap[tmp];
     if (id != -1) return;
-
-    /*
-     * There's one MustAliasSet for each frame's context, no matter how many
-     * times we see loads of it.  We take advantage of this in pure_load to
-     * bump the lower bound to at least one (if they weren't all in one set,
-     * we'd not be able to do that without violating exclusivity of lower
-     * bounds).
-     */
-    if (tmp->inst()->is(LdCtx)) {
-      assertx(tmp == canonical(tmp));
-
-      auto const fp = tmp->inst()->src(0);
-      if (frame_to_ctx.contains(fp)) {
-        id = frame_to_ctx[fp];
-      } else {
-        id = env.asets.size();
-        frame_to_ctx[fp] = id;
-        assertx(canonical(tmp) == tmp);
-        env.asets.push_back(MustAliasSet { tmp->type(), tmp });
-      }
-
-      FTRACE(2,  "  t{} -> {} ({})\n", tmp->id(), id, tmp->toString());
-      return;
-    }
 
     auto canon = canonical(tmp);
     if (env.asetMap[canon] != -1) {
@@ -1755,33 +1774,6 @@ void observe_all(Env& env, RCState& state, PreAdder add_node) {
   }
 }
 
-/*
- * When we call builtin functions, we need to make sure that we don't change
- * the return value of VRefParam::isReferenced on any possibly-KindOfRef
- * arguments.  We accomplish this with req nodes at level 2 for all asets that
- * could be boxed before we see builtin calls (we could do it only to the ones
- * that could be args, but we don't bother).
- *
- * The reason we have this unusual case only when dealing with builtin calls is
- * that in that situation, we're actually tracking references and memory
- * locations associated with the call.  This means it doesn't fall into the
- * usual category of not changing whether an "unknown pointer" could be the
- * last reference (as described in the "More about memory" section at the top
- * of this file)---we need to avoid changing whether a known pointer (the one
- * in memory for the CallBuiltin arg) is the last reference.  Basically,
- * CallBuiltin observes the reference count (at level 2) for their
- * possibly-boxed args, even though they can't decref the pointer through the
- * memory locations for those args.
- */
-void observe_for_is_referenced(Env& env, RCState& state, PreAdder add_node) {
-  FTRACE(3, "    observe_for_is_referenced\n");
-  for (auto asetID = uint32_t{0}; asetID < state.asets.size(); ++asetID) {
-    if (env.asets[asetID].widestType.maybe(TBoxedCell)) {
-      add_node(asetID, NReq{2});
-    }
-  }
-}
-
 void may_decref(Env& env, RCState& state, ASetID asetID, PreAdder add_node) {
   auto& aset = state.asets[asetID];
 
@@ -1791,9 +1783,21 @@ void may_decref(Env& env, RCState& state, ASetID asetID, PreAdder add_node) {
   FTRACE(3, "    {} lb: {}({})\n",
          asetID, aset.lower_bound, aset.unsupported_refs);
 
-  if (balanced) return;
-  FTRACE(4, "    adding unbalanced decref: {}\n", asetID);
-  state.unbalanced_decrefs.push_back(asetID);
+  if (balanced) {
+    FTRACE(4, "    adding balanced decref: {}\n", asetID);
+    if (!state.has_unsupported_refs) return;
+    for (auto may_id : env.asets[asetID].may_alias) {
+      auto& may_aset = state.asets[may_id];
+      if (!may_aset.unsupported_refs) continue;
+      may_aset.lower_bound -= 1;
+      may_aset.unsupported_refs -= 1;
+      FTRACE(5, "    dropping unsupported ref for {}: {}({})\n",
+             may_id, may_aset.lower_bound, may_aset.unsupported_refs);
+    }
+  } else {
+    FTRACE(4, "    adding unbalanced decref: {}\n", asetID);
+    state.unbalanced_decrefs.push_back(asetID);
+  }
 }
 
 void kill_unsupported_refs(RCState& state, PreAdder add_node = {}) {
@@ -1991,9 +1995,10 @@ void handle_call(Env& env, RCState& state, const IRInstruction& /*inst*/,
   // Figure out locations the call may cause stores to, then remove any memory
   // support on those locations.
   auto bset = ALocBits{};
-  bset |= env.ainfo.may_alias(e.stack);
+  bset |= env.ainfo.may_alias(e.inputs);
+  bset |= env.ainfo.may_alias(e.actrec);
+  bset |= env.ainfo.may_alias(e.outputs);
   bset |= env.ainfo.may_alias(AHeapAny);
-  bset &= ~env.ainfo.expand(e.kills);
   reduce_support_bits(env, state, bset, true, add_node);
 }
 
@@ -2048,35 +2053,22 @@ void pure_store(Env& env,
   if (tmp) create_store_support(env, state, dst, tmp, add_node);
 }
 
-void pure_spill_frame(Env& env,
-                      RCState& state,
-                      PureSpillFrame psf,
-                      SSATmp* ctx,
-                      PreAdder add_node) {
-  /*
-   * First, the effects of PureStores on memory support.  A SpillFrame will
-   * store over kNumActRecCells stack slots, and just like normal PureStores we
-   * can drop any support bits for them without reducing their lower bounds.
-   */
-  drop_support_bits(env, state, env.ainfo.expand(psf.stk));
+void inline_enter_effects(Env& env,
+                          RCState& state,
+                          InlineEnterEffects& ief,
+                          PreAdder add_node) {
+  // We're converting a pre-live actrec to a live actrec, which effectively
+  // changes some stack AliasClasses to not exist anymore.
+  observe_unbalanced_decrefs(env, state, add_node);
 
-  /*
-   * Now the effects on the set being stored.  Pre-live frames are slightly
-   * different from other pure stores, because eventually they may become live
-   * frames even within our region (via DefInlineFP).  However, in the
-   * meantime, we need to treat the store of the context like a normal
-   * pure_store, because there are various IR instructions that can decref the
-   * context on a pre-live ActRec through memory (FIXME: this may no longer
-   * be the case).
-   *
-   * If the frame becomes live via DefInlineFP, we don't need to treat it as
-   * memory support for this set anymore, for the same reason that LdCtx
-   * doesn't need that.  The only way that reference can be DecRef'd in a
-   * semantically correct program is in a return sequence, and if it's done
-   * inside this region, we will see the relevant DecRef instructions and
-   * handle that.
-   */
-  create_store_support(env, state, psf.ctx, ctx, add_node);
+  // Kill locations that are going to be overwritten by the ActRec.
+  drop_support_bits(env, state, env.ainfo.expand(ief.actrec));
+
+  // DefInlineFP may store a $this to the ActRec. We don't need to treat it
+  // as a memory support, as LdCtx doesn't need that. The only way that
+  // reference can be DecRef'd in a semantically correct program is in a return
+  // sequence, and if it's done inside this region, we will see the relevant
+  // DecRef instructions and handle that.
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -2090,14 +2082,17 @@ void analyze_mem_effects(Env& env,
   match<void>(
     effects,
     [&] (IrrelevantEffects) {},
-    [&] (InlineEnterEffects) {},
+
+    [&] (InlineEnterEffects x) {
+      inline_enter_effects(env, state, x, add_node);
+    },
+
     [&] (InlineExitEffects) {},
 
     [&] (GeneralEffects x)  {
       if (inst.is(CallBuiltin)) {
         observe_unbalanced_decrefs(env, state, add_node);
         kill_unsupported_refs(state, add_node);
-        observe_for_is_referenced(env, state, add_node);
       }
 
       // Locations that are killed don't need to be tracked as memory support
@@ -2137,11 +2132,7 @@ void analyze_mem_effects(Env& env,
       handle_call(env, state, inst, e, add_node);
     },
     [&] (PureStore x)   { pure_store(env, state, x.dst, x.value, add_node); },
-    [&] (PureLoad x)    { pure_load(env, state, x.src, inst.dst(), add_node); },
-
-    [&] (PureSpillFrame x) {
-      pure_spill_frame(env, state, x, inst.src(2), add_node);
-    }
+    [&] (PureLoad x)    { pure_load(env, state, x.src, inst.dst(), add_node); }
   );
 }
 
@@ -2258,15 +2249,6 @@ void rc_analyze_inst(Env& env,
       if (old_lb <= 1) analyze_mem_effects(env, inst, state, add_node);
     }
     return;
-  case DefInlineFP:
-    // We're converting a pre-live actrec to a live actrec, which effectively
-    // changes some stack AliasClasses to not exist anymore.  See comments in
-    // pure_spill_frame for an explanation of why we don't need any support
-    // bits on this now.
-    observe_unbalanced_decrefs(env, state, add_node);
-    drop_support_bits(env, state,
-      env.ainfo.expand(canonicalize(inline_fp_frame(&inst))));
-    break;
   default:
     if (!irrelevant_inst(inst)) {
       observe_unbalanced_decrefs(env, state, add_node);
@@ -2345,40 +2327,6 @@ void rc_analyze_inst(Env& env,
       auto& aset = state.asets[asetID];
       ++aset.lower_bound;
       FTRACE(3, "    {} produced: lb {}\n", asetID, aset.lower_bound);
-    });
-  }
-
-  /*
-   * We assume that LdCtx on the main frame requires that the $this pointer has
-   * a non-zero reference count, without any need for memory support.  The
-   * reason for this is that nothing is allowed to DecRef the context of a
-   * frame, except code that tears down that frame (either via a return or
-   * unwinding).
-   *
-   * If this IR program contains a return sequence, it might DecRef the frame
-   * context below one (possibly freeing it).  It is legal IR to have a LdCtx
-   * after this sort of decref, but it would be a semantically incorrect
-   * program if it does anything with the context after loading it that cares
-   * about whether it's freed.  So we're safe assuming any load of the context
-   * has a lower bound of one, because if it is loaded in a program position
-   * where that doesn't hold, the program can't do anything that cares about
-   * that without being broken already.
-   *
-   * One final note: because of the exclusivity rule on lower bounds, we cannot
-   * assume a lower bound of one for a LdCtx unless it comes from the main
-   * frame.  We are guaranteed (from find_alias_sets) that all the main frame
-   * contexts are in the same must alias set, but the value stored to an
-   * inlined frame may be in a different must alias set than the inlined LdCtx
-   * set, and its lower bound could still be non-zero.  In practice, we expect
-   * to rarely see LdCtx instructions inside of an inlined function---normally
-   * the actual context object should be copy propagated.
-   */
-  if (inst.is(LdCtx) && inst.src(0) == env.unit.mainFP()) {
-    if_aset(env, inst.dst(), [&] (ASetID asetID) {
-      auto& aset = state.asets[asetID];
-      aset.lower_bound = std::max(aset.lower_bound, 1);
-      FTRACE(3, "    {} lb: {}({})\n",
-             asetID, aset.lower_bound, aset.unsupported_refs);
     });
   }
 }
@@ -2785,8 +2733,8 @@ void pre_compute_available(PreEnv& penv) {
       [&] (Block* pred) {
         auto &ps = penv.state[pred];
         if (first) {
-          s.avlIn = ps.avlOut;
-          s.pavlIn = ps.pavlOut;
+          s.avlIn.assign(ps.avlOut);
+          s.pavlIn.assign(ps.pavlOut);
         } else {
           s.avlIn &= ps.avlOut;
           s.pavlIn |= ps.pavlOut;
@@ -2816,15 +2764,19 @@ void pre_compute_available(PreEnv& penv) {
         }
       );
     }
-    auto avlOut = (s.avlIn - s.altLoc) | s.avlLoc;
-    auto pavlOut = (s.pavlIn - s.altLoc) | s.avlLoc;
     auto changed = false;
-    if (s.avlOut != avlOut) {
-      s.avlOut = std::move(avlOut);
+
+    penv.scratchBits.assign_sub(s.avlIn, s.altLoc);
+    penv.scratchBits |= s.avlLoc;
+    if (s.avlOut != penv.scratchBits) {
+      s.avlOut.assign(penv.scratchBits);
       changed = true;
     }
-    if (s.pavlOut != pavlOut) {
-      s.pavlOut = std::move(pavlOut);
+
+    penv.scratchBits.assign_sub(s.pavlIn, s.altLoc);
+    penv.scratchBits |= s.avlLoc;
+    if (s.pavlOut != penv.scratchBits) {
+      s.pavlOut.assign(penv.scratchBits);
       changed = true;
     }
     if (changed) {
@@ -2852,8 +2804,8 @@ void pre_compute_anticipated(PreEnv& penv) {
           return;
         }
         first = false;
-        s.antOut = ss.antIn;
-        s.pantOut = ss.pantIn;
+        s.antOut.assign(ss.antIn);
+        s.pantOut.assign(ss.pantIn);
         if (!ss.phiPropagate.any()) return;
         bitset_for_each_set(
           ss.phiPropagate,
@@ -2869,15 +2821,17 @@ void pre_compute_anticipated(PreEnv& penv) {
         );
       }
     );
-    auto antIn = (s.antOut - s.altLoc) | s.antLoc;
-    auto pantIn = (s.pantOut - s.altLoc) | s.antLoc;
+    penv.scratchBits.assign_sub(s.antOut, s.altLoc);
+    penv.scratchBits |= s.antLoc;
     auto changed = false;
-    if (s.antIn != antIn) {
-      s.antIn = std::move(antIn);
+    if (s.antIn != penv.scratchBits) {
+      s.antIn.assign(penv.scratchBits);
       changed = true;
     }
-    if (s.pantIn != pantIn) {
-      s.pantIn = std::move(pantIn);
+    penv.scratchBits.assign_sub(s.pantOut, s.altLoc);
+    penv.scratchBits |= s.antLoc;
+    if (s.pantIn != penv.scratchBits) {
+      s.pantIn.assign(penv.scratchBits);
       changed = true;
     }
     if (changed) {
@@ -3183,8 +3137,6 @@ bool pre_apply(PreEnv& penv, bool incDec) {
   penv.insMap.clear();
   for (auto& blk : penv.env.rpoBlocks) {
     auto& s = penv.state[blk];
-    auto delBack = s.avlLoc & s.pantOut;
-    auto delFront = s.antLoc & s.pavlIn;
 
     auto remove = [&] (IncDecBits& del, IRInstruction& inst,
                        bool removeDec, bool insertAtFront) {
@@ -3210,6 +3162,8 @@ bool pre_apply(PreEnv& penv, bool incDec) {
       return false;
     };
 
+    auto& delFront = penv.scratchBits;
+    delFront.assign_and(s.antLoc, s.pavlIn);
     if (delFront.any()) {
       for (auto& inst : *blk) {
         if (remove(delFront, inst, incDec, false)) break;
@@ -3217,6 +3171,8 @@ bool pre_apply(PreEnv& penv, bool incDec) {
       always_assert(delFront.none());
     }
 
+    auto& delBack = penv.scratchBits;
+    delBack.assign_and(s.avlLoc, s.pantOut);
     if (delBack.any()) {
       for (auto it = blk->end(); it != blk->begin(); ) {
         if (remove(delBack, *--it, !incDec, true)) break;
@@ -3239,12 +3195,9 @@ bool pre_apply(PreEnv& penv, bool incDec) {
   // necessary.
   for (auto& blk : penv.env.rpoBlocks) {
     auto& s = penv.state[blk];
-    auto delBack = s.avlLoc & s.pantOut;
-    auto delFront = s.antLoc & s.pavlIn;
-
     s.phiPropagate.reset();
 
-    FTRACE(delBack.any() || delFront.any() ? 3 : 4,
+    FTRACE(4,
            "PREApply Blk(B{}) <-{}\n"
            "    antIn   : {}\n"
            "    pantIn  : {}\n"
@@ -3299,6 +3252,8 @@ bool pre_apply(PreEnv& penv, bool incDec) {
       return false;
     };
 
+    auto& delFront = penv.scratchBits;
+    delFront.assign_and(s.antLoc, s.pavlIn);
     if (delFront.any()) {
       for (auto& inst : *blk) {
         if (remove(delFront, inst, incDec, false)) break;
@@ -3307,6 +3262,8 @@ bool pre_apply(PreEnv& penv, bool incDec) {
       penv.reprocess.insert(penv.state[blk].rpoId);
     }
 
+    auto& delBack = penv.scratchBits;
+    delBack.assign_and(s.avlLoc, s.pantOut);
     if (delBack.any()) {
       for (auto it = blk->end(); it != blk->begin(); ) {
         if (remove(delBack, *--it, !incDec, true)) break;

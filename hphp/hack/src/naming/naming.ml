@@ -7,7 +7,6 @@
  *
  *)
 
-open Core_kernel
 (** Module "naming" a program.
  *
  * The naming phase consists in several things
@@ -15,6 +14,7 @@ open Core_kernel
  * 2- transform all the local names into a unique identifier
  *)
 
+open Core_kernel
 open Common
 open Utils
 open String_utils
@@ -22,7 +22,7 @@ module N = Aast
 module SN = Naming_special_names
 module NS = Namespaces
 module Partial = Partial_provider
-module GEnv = NamingGlobal.GEnv
+module GEnv = Naming_global.GEnv
 
 (*****************************************************************************)
 (* The types *)
@@ -50,11 +50,9 @@ type genv = {
   type_params: type_constraint SMap.t;
   (* The current class, None if we are in a function *)
   current_cls: (Ast_defs.id * Ast_defs.class_kind) option;
-  class_consts: (string, Pos.t) Caml.Hashtbl.t;
-  class_props: (string, Pos.t) Caml.Hashtbl.t;
   (* Normally we don't need to add dependencies at this stage, but there
    * are edge cases when we do. *)
-  droot: Typing_deps.Dep.variant;
+  droot: Typing_deps.Dep.dependent Typing_deps.Dep.variant;
   (* Namespace environment, e.g., what namespace we're in and what use
    * declarations are in play. *)
   namespace: Namespace_env.env;
@@ -106,19 +104,12 @@ module Env : sig
 
   val new_lvar : genv * lenv -> Ast_defs.id -> positioned_ident
 
-  val new_let_local : genv * lenv -> Ast_defs.id -> positioned_ident
-
-  val found_dollardollar : genv * lenv -> Pos.t -> Local_id.t
-
-  val inside_pipe : genv * lenv -> bool
-
   val lvar : genv * lenv -> Ast_defs.id -> positioned_ident
-
-  val let_local : genv * lenv -> Ast_defs.id -> positioned_ident option
 
   val global_const : genv * lenv -> Ast_defs.id -> Ast_defs.id
 
   val type_name :
+    ?context:Errors.name_context ->
     genv * lenv ->
     Ast_defs.id ->
     allow_typedef:bool ->
@@ -126,10 +117,6 @@ module Env : sig
     Ast_defs.id
 
   val fun_id : genv * lenv -> Ast_defs.id -> Ast_defs.id
-
-  val fun_id_special : genv * lenv -> Ast_defs.id -> Ast_defs.id
-
-  val bind_class_const : genv * lenv -> Ast_defs.id -> unit
 
   val goto_label : genv * lenv -> string -> Pos.t option
 
@@ -139,39 +126,16 @@ module Env : sig
 
   val check_goto_references : genv * lenv -> unit
 
-  val copy_let_locals : genv * lenv -> genv * lenv -> unit
-
   val scope : genv * lenv -> (genv * lenv -> 'a) -> 'a
 
-  val scope_lexical : genv * lenv -> (genv * lenv -> 'a) -> 'a
-
   val remove_locals : genv * lenv -> Ast_defs.id list -> unit
-
-  val pipe_scope :
-    genv * lenv -> (genv * lenv -> Nast.expr) -> Local_id.t * Nast.expr
 end = struct
   type map = positioned_ident SMap.t
-
-  type pipe_scope = {
-    (* The identifier for the special pipe variable $$ for this pipe scope. *)
-    dollardollar: Local_id.t;
-    (* Whether the current pipe scope's $$ has been used. Used to raise error
-     * if not. *)
-    used_dollardollar: bool;
-  }
 
   (* The local environment *)
   type lenv = {
     (* The set of locals *)
     locals: map ref;
-    (* The set of lexically-scoped local `let` variables *)
-    (* TODO: Currently these locals live in a separate namespace, it is
-     * worthwhile considering unified namespace for all local variables T28712009 *)
-    let_locals: map ref;
-    (* stack of pipe scopes.
-     * We use a stack (represented by a list) because pipe operators
-     * can be nested. *)
-    pipe_locals: pipe_scope list ref;
     (* Handler called when we see an unbound name.
      * This is used to compute an approximation of the list of captured
      * variables for closures: when we see an undefined variable, we add it
@@ -194,8 +158,6 @@ end = struct
   let empty_local unbound_handler =
     {
       locals = ref SMap.empty;
-      let_locals = ref SMap.empty;
-      pipe_locals = ref [];
       unbound_handler;
       goto_labels = ref SMap.empty;
       goto_targets = ref SMap.empty;
@@ -204,12 +166,10 @@ end = struct
   let make_class_genv tparams mode (cid, ckind) namespace is_ppl =
     {
       in_mode = mode;
-      tcopt = GlobalNamingOptions.get ();
+      tcopt = Global_naming_options.get ();
       in_ppl = is_ppl;
       type_params = tparams;
       current_cls = Some (cid, ckind);
-      class_consts = Caml.Hashtbl.create 0;
-      class_props = Caml.Hashtbl.create 0;
       droot = Typing_deps.Dep.Class (snd cid);
       namespace;
     }
@@ -227,9 +187,12 @@ end = struct
      * causes developers. *)
     begin
       match kind with
-      | `func -> Typing_deps.Dep.Fun name
-      | `cls -> Typing_deps.Dep.Class name
-      | `const -> Typing_deps.Dep.GConst name
+      | Errors.FunctionNamespace -> Typing_deps.Dep.Fun name
+      | Errors.TypeNamespace -> Typing_deps.Dep.Class name
+      | Errors.ConstantNamespace -> Typing_deps.Dep.GConst name
+      | Errors.TraitContext -> Typing_deps.Dep.Class name
+      | Errors.RecordContext -> Typing_deps.Dep.RecordDef name
+      | Errors.ClassContext -> Typing_deps.Dep.Class name
     end
     |> Typing_deps.add_idep genv.droot;
     Errors.unbound_name pos name kind
@@ -253,12 +216,10 @@ end = struct
   let make_typedef_genv cstrs tdef_name tdef_namespace =
     {
       in_mode = FileInfo.Mstrict;
-      tcopt = GlobalNamingOptions.get ();
+      tcopt = Global_naming_options.get ();
       in_ppl = false;
       type_params = cstrs;
       current_cls = None;
-      class_consts = Caml.Hashtbl.create 0;
-      class_props = Caml.Hashtbl.create 0;
       droot = Typing_deps.Dep.Class tdef_name;
       namespace = tdef_namespace;
     }
@@ -273,12 +234,10 @@ end = struct
   let make_fun_genv params f_mode f_name f_namespace =
     {
       in_mode = f_mode;
-      tcopt = GlobalNamingOptions.get ();
+      tcopt = Global_naming_options.get ();
       in_ppl = false;
       type_params = params;
       current_cls = None;
-      class_consts = Caml.Hashtbl.create 0;
-      class_props = Caml.Hashtbl.create 0;
       droot = Typing_deps.Dep.Fun f_name;
       namespace = f_namespace;
     }
@@ -289,12 +248,10 @@ end = struct
   let make_const_genv cst =
     {
       in_mode = cst.Aast.cst_mode;
-      tcopt = GlobalNamingOptions.get ();
+      tcopt = Global_naming_options.get ();
       in_ppl = false;
       type_params = SMap.empty;
       current_cls = None;
-      class_consts = Caml.Hashtbl.create 0;
-      class_props = Caml.Hashtbl.create 0;
       droot = Typing_deps.Dep.GConst (snd cst.Aast.cst_name);
       namespace = cst.Aast.cst_namespace;
     }
@@ -302,12 +259,10 @@ end = struct
   let make_top_level_genv () =
     {
       in_mode = FileInfo.Mpartial;
-      tcopt = GlobalNamingOptions.get ();
+      tcopt = Global_naming_options.get ();
       in_ppl = false;
       type_params = SMap.empty;
       current_cls = None;
-      class_consts = Caml.Hashtbl.create 0;
-      class_props = Caml.Hashtbl.create 0;
       droot = Typing_deps.Dep.Fun "";
       namespace = Namespace_env.empty_with_default;
     }
@@ -321,12 +276,10 @@ end = struct
   let make_file_attributes_genv mode namespace =
     {
       in_mode = mode;
-      tcopt = GlobalNamingOptions.get ();
+      tcopt = Global_naming_options.get ();
       in_ppl = false;
       type_params = SMap.empty;
       current_cls = None;
-      class_consts = Caml.Hashtbl.create 0;
-      class_props = Caml.Hashtbl.create 0;
       droot = Typing_deps.Dep.Fun "";
       namespace;
     }
@@ -349,18 +302,16 @@ end = struct
     let genv = { genv with in_ppl } in
     (genv, lenv)
 
-  let lookup genv (env : string -> FileInfo.pos option) (p, x) =
-    let v = env x in
-    match v with
-    | None ->
-      (match genv.in_mode with
+  let if_unbound_then_dep_edge_and_report
+      genv (is_defined : string -> bool) (p, x) =
+    if not (is_defined x) then
+      match genv.in_mode with
       | FileInfo.Mstrict
       | FileInfo.Mexperimental
       | FileInfo.Mpartial
       | FileInfo.Mdecl ->
-        unbound_name_error genv p x `const
-      | FileInfo.Mphp -> ())
-    | _ -> ()
+        unbound_name_error genv p x Errors.ConstantNamespace
+      | FileInfo.Mphp -> ()
 
   let handle_unbound_name genv get_full_pos get_canon (p, name) kind =
     match get_canon name with
@@ -388,11 +339,12 @@ end = struct
         unbound_name_error genv p name kind);
       (p, name)
 
-  let canonicalize genv get_pos get_full_pos get_canon (p, name) kind =
+  let canonicalize genv is_defined get_full_pos get_canon (p, name) kind =
     (* Get the canonical name to check if the name exists in the heap *)
-    match get_pos name with
-    | Some _ -> (p, name)
-    | None -> handle_unbound_name genv get_full_pos get_canon (p, name) kind
+    if is_defined name then
+      (p, name)
+    else
+      handle_unbound_name genv get_full_pos get_canon (p, name) kind
 
   (* Adds a local variable, without any check *)
   let add_lvar (_, lenv) (_, name) (p, x) =
@@ -411,7 +363,7 @@ end = struct
      1) if the local is not in the local environment then it is added.
      Return value: the given position and deduced/created identifier. *)
   let new_lvar (_, lenv) (p, x) =
-    let lcl = SMap.get x !(lenv.locals) in
+    let lcl = SMap.find_opt x !(lenv.locals) in
     let ident =
       match lcl with
       | Some lcl -> snd lcl
@@ -421,35 +373,6 @@ end = struct
         ident
     in
     (p, ident)
-
-  (* Defines a new scoped local variable
-   * Side effects:
-   * Always add a new variable in the local environment.
-   * If the variable has been defined already, shadow the previously-defined
-   * variable *)
-  (* TODO: Emit warning if names are getting shadowed T28436131 *)
-  let new_let_local (_, lenv) (p, x) =
-    let ident = Local_id.make_scoped x in
-    lenv.let_locals := SMap.add x (p, ident) !(lenv.let_locals);
-    (p, ident)
-
-  (* Check $$ is defined (i.e. we are indeed in a pipe) and if yes, mark it
-   * as used and get the identifier for it. *)
-  let found_dollardollar (_, lenv) p =
-    match !(lenv.pipe_locals) with
-    | [] ->
-      (* TODO better error *)
-      Errors.undefined ~in_rx_scope:false p SN.SpecialIdents.dollardollar None;
-      Local_id.make_scoped SN.SpecialIdents.dollardollar
-    | pipe_scope :: scopes ->
-      let pipe_scope = { pipe_scope with used_dollardollar = true } in
-      lenv.pipe_locals := pipe_scope :: scopes;
-      pipe_scope.dollardollar
-
-  let inside_pipe (_, lenv) =
-    match !(lenv.pipe_locals) with
-    | [] -> false
-    | _ -> true
 
   let handle_undefined_variable (_genv, env) (p, x) =
     match env.unbound_handler with
@@ -465,40 +388,32 @@ end = struct
       then
         (p, Local_id.make_unscoped x)
       else
-        let lcl = SMap.get x !(env.locals) in
+        let lcl = SMap.find_opt x !(env.locals) in
         match lcl with
         | Some lcl -> (p, snd lcl)
         | None -> handle_undefined_variable (genv, env) (p, x)
     in
     (p, ident)
 
-  let let_local (_genv, env) (p, x) =
-    let lcl = SMap.get x !(env.let_locals) in
-    match lcl with
-    | Some lcl -> Some (p, snd lcl)
-    | None -> None
-
-  let get_name genv get_pos x =
-    lookup genv get_pos x;
-    x
-
-  (* For dealing with namespace resolution on functions *)
-  let elaborate_and_get_name_with_canonicalized_fallback
-      genv
-      (get_pos : string -> FileInfo.pos option)
-      (get_full_pos : string -> Pos.t option)
-      get_canon
-      x =
-    let canonicalize = canonicalize genv get_pos get_full_pos get_canon in
-    let fq_x = NS.elaborate_id genv.namespace NS.ElaborateFun x in
-    canonicalize fq_x `func
-
   let global_const (genv, _env) x =
-    let fq_x = NS.elaborate_id genv.namespace NS.ElaborateConst x in
-    get_name genv Naming_table.Consts.get_pos fq_x
+    match Provider_backend.get () with
+    | Provider_backend.Shared_memory
+    | Provider_backend.Local_memory _ ->
+      if_unbound_then_dep_edge_and_report genv Naming_table.Consts.is_defined x;
+      x
+    | Provider_backend.Decl_service _ ->
+      (* TODO: we need to refactor this so naming phase doesn't report *)
+      (* unbound name errors; that should come later, during typchecking, *)
+      (* which is when we look up the decl service. The decl service *)
+      (* is the only one who'll tell us whether a name is unbound. *)
+      x
 
-  let type_name (genv, _) x ~allow_typedef ~allow_generics =
-    let (p, name) = x in
+  let type_name
+      ?(context = Errors.TypeNamespace)
+      (genv, _)
+      ((p, name) as x)
+      ~allow_typedef
+      ~allow_generics =
     match SMap.find_opt name genv.type_params with
     | Some (reified, _) ->
       if not allow_generics then Errors.generics_not_allowed p;
@@ -510,9 +425,6 @@ end = struct
       end;
       x
     | None ->
-      let ((pos, name) as x) =
-        NS.elaborate_id genv.namespace NS.ElaborateClass x
-      in
       (match Naming_table.Types.get_pos name with
       | Some (_def_pos, Naming_table.TClass) ->
         (* Don't let people use strictly internal classes
@@ -520,50 +432,33 @@ end = struct
         if
           name = SN.Classes.cHH_BuiltinEnum
           && not
-               (string_ends_with
-                  (Relative_path.suffix (Pos.filename pos))
-                  ".hhi")
+               (string_ends_with (Relative_path.suffix (Pos.filename p)) ".hhi")
         then
-          Errors.using_internal_class pos (strip_ns name);
-        (pos, name)
+          Errors.using_internal_class p (strip_ns name);
+        x
       | Some (def_pos, Naming_table.TTypedef) when not allow_typedef ->
         let (full_pos, _) = GEnv.get_full_pos (def_pos, name) in
-        Errors.unexpected_typedef pos full_pos;
-        (pos, name)
-      | Some (_def_pos, Naming_table.TTypedef) -> (pos, name)
+        Errors.unexpected_typedef p full_pos;
+        x
+      | Some (_def_pos, Naming_table.TTypedef) -> x
+      | Some (_def_pos, Naming_table.TRecordDef) -> x
       | None ->
-        handle_unbound_name genv GEnv.type_pos GEnv.type_canon_name x `cls)
+        handle_unbound_name genv GEnv.type_pos GEnv.type_canon_name x context)
 
   let fun_id (genv, _) x =
-    elaborate_and_get_name_with_canonicalized_fallback
+    canonicalize
       genv
-      Naming_table.Funs.get_pos
+      Naming_table.Funs.is_defined
       GEnv.fun_pos
       GEnv.fun_canon_name
       x
-
-  let fun_id_special (genv, _) x =
-    let ((p, name) as x) = NS.elaborate_id genv.namespace NS.ElaborateFun x in
-    match Naming_table.Funs.get_pos name with
-    | Some _ -> x
-    | None ->
-      Errors.invalid_fun_pointer p name;
-      x
-
-  let bind_class_member tbl (p, x) =
-    try
-      let p' = Caml.Hashtbl.find tbl x in
-      Errors.error_name_already_bound x x p p'
-    with Caml.Not_found -> Caml.Hashtbl.replace tbl x p
-
-  let bind_class_const (genv, _env) (p, x) =
-    if String.lowercase x = "class" then Errors.illegal_member_variable_class p;
-    bind_class_member genv.class_consts (p, x)
+      Errors.FunctionNamespace
 
   (**
    * Returns the position of the goto label declaration, if it exists.
    *)
-  let goto_label (_, { goto_labels; _ }) label = SMap.get label !goto_labels
+  let goto_label (_, { goto_labels; _ }) label =
+    SMap.find_opt label !goto_labels
 
   (**
    * Adds a goto label and the position of its declaration to the known labels.
@@ -594,10 +489,8 @@ end = struct
   let scope env f =
     let (_genv, lenv) = env in
     let lenv_copy = !(lenv.locals) in
-    let lenv_scoped_copy = !(lenv.let_locals) in
     let res = f env in
     lenv.locals := lenv_copy;
-    lenv.let_locals := lenv_scoped_copy;
     res
 
   let remove_locals env vars =
@@ -607,59 +500,14 @@ end = struct
         vars
         ~f:(fun l id -> SMap.remove (snd id) l)
         ~init:!(lenv.locals)
-
-  (* Add a new lexical scope for block-scoped `let` variables.
-     No other changes in the local environment *)
-  let scope_lexical env f =
-    let (_genv, lenv) = env in
-    let lenv_scoped_copy = !(lenv.let_locals) in
-    let res = f env in
-    lenv.let_locals := lenv_scoped_copy;
-    res
-
-  (* Copy the let locals from lenv1 to lenv2 *)
-  let copy_let_locals (_genv1, lenv1) (_genv2, lenv2) =
-    let let_locals_1 = !(lenv1.let_locals) in
-    lenv2.let_locals := let_locals_1
-
-  (** Push a new pipe scope on the stack of pipe scopes in the environment
-   * and create an identifier for the $$ variable associated to this pipe,
-   * then perform the naming function [name_e2],
-   * then finally pops the added pipe scope.
-   * Append an error if $$ was not used in the RHS.
-   *
-   * Return the identifier for the $$ of this pipe and the names RHS.
-   * *)
-  let pipe_scope env name_e2 =
-    let (_, lenv) = env in
-    let pipe_var_ident = Local_id.make_scoped SN.SpecialIdents.dollardollar in
-    let pipe_scope =
-      { dollardollar = pipe_var_ident; used_dollardollar = false }
-    in
-    lenv.pipe_locals := pipe_scope :: !(lenv.pipe_locals);
-
-    (* Name the RHS of the pipe expression. *)
-    let e2 = name_e2 env in
-    let (pipe_scope, pipe_scopes) =
-      match !(lenv.pipe_locals) with
-      | [] -> assert false
-      | pipe_scope :: pipe_scopes -> (pipe_scope, pipe_scopes)
-    in
-    if not pipe_scope.used_dollardollar then
-      Errors.dollardollar_unused (fst e2);
-    lenv.pipe_locals := pipe_scopes;
-    (pipe_var_ident, e2)
 end
 
 (*****************************************************************************)
 (* Helpers *)
 (*****************************************************************************)
 
-let check_constraint { Aast.tp_name = (pos, name); _ } =
-  if String.lowercase name = "this" then
-    Errors.this_reserved pos
-  else if name.[0] <> 'T' then
-    Errors.start_with_T pos
+let elaborate_namespaces =
+  new Naming_elaborate_namespaces_endo.generic_elaborator
 
 let check_repetition s param =
   let name = param.Aast.param_name in
@@ -670,8 +518,8 @@ let check_repetition s param =
     s
 
 let convert_shape_name env = function
-  | Ast_defs.SFlit_int (pos, s) -> (pos, Ast_defs.SFlit_int (pos, s))
-  | Ast_defs.SFlit_str (pos, s) -> (pos, Ast_defs.SFlit_str (pos, s))
+  | Ast_defs.SFlit_int (pos, s) -> Ast_defs.SFlit_int (pos, s)
+  | Ast_defs.SFlit_str (pos, s) -> Ast_defs.SFlit_str (pos, s)
   | Ast_defs.SFclass_const (x, (pos, y)) ->
     let class_name =
       if snd x = SN.Classes.cSelf then (
@@ -681,26 +529,30 @@ let convert_shape_name env = function
           Errors.self_outside_class pos;
           (pos, SN.Classes.cUnknown)
       ) else
-        Env.type_name env x ~allow_typedef:false ~allow_generics:false
+        Env.type_name
+          env
+          x
+          ~allow_typedef:false
+          ~allow_generics:false
+          ~context:Errors.ClassContext
     in
-    (pos, Ast_defs.SFclass_const (class_name, (pos, y)))
+    Ast_defs.SFclass_const (class_name, (pos, y))
 
 let arg_unpack_unexpected = function
-  | [] -> ()
-  | (pos, _) :: _ ->
+  | None -> ()
+  | Some (pos, _) ->
     Errors.naming_too_few_arguments pos;
     ()
 
 module type GetLocals = sig
-  val lvalue :
-    Namespace_env.env * Pos.t SMap.t ->
-    Nast.expr ->
-    Namespace_env.env * Pos.t SMap.t
+  type env = {
+    ctx: Provider_context.t;
+    nsenv: Namespace_env.env;
+  }
 
-  val stmt :
-    Namespace_env.env * Pos.t SMap.t ->
-    Nast.stmt ->
-    Namespace_env.env * Pos.t SMap.t
+  val lvalue : Pos.t SMap.t -> Nast.expr -> Pos.t SMap.t
+
+  val stmt : env -> Pos.t SMap.t -> Nast.stmt -> Pos.t SMap.t
 end
 
 (* This was made a functor due to the awkward nature of how our naming
@@ -741,10 +593,12 @@ module Make (GetLocals : GetLocals) = struct
    * Used with with Ast_to_nast to go from Ast_defs.hint -> Nast.hint
    *)
   let rec hint
+      ?(context = Errors.TypeNamespace)
       ?(forbid_this = false)
       ?(allow_retonly = false)
       ?(allow_typedef = true)
       ?(allow_wildcard = false)
+      ?(allow_like = false)
       ?(in_where_clause = false)
       ?(tp_depth = 0)
       env
@@ -753,10 +607,12 @@ module Make (GetLocals : GetLocals) = struct
     if Option.is_some mut then Errors.misplaced_mutability_hint p;
     ( p,
       hint_
+        ~context
         ~forbid_this
         ~allow_retonly
         ~allow_typedef
         ~allow_wildcard
+        ~allow_like
         ~in_where_clause
         ~tp_depth
         env
@@ -764,9 +620,12 @@ module Make (GetLocals : GetLocals) = struct
 
   and unwrap_mutability p =
     match p with
-    | (_, Aast.Happly ((_, "Mutable"), [t])) -> (Some N.PMutable, t)
-    | (_, Aast.Happly ((_, "MaybeMutable"), [t])) -> (Some N.PMaybeMutable, t)
-    | (_, Aast.Happly ((_, "OwnedMutable"), [t])) -> (Some N.POwnedMutable, t)
+    | (_, Aast.Happly ((_, hn), [t])) when hn = SN.Rx.hMutable ->
+      (Some N.PMutable, t)
+    | (_, Aast.Happly ((_, hn), [t])) when hn = SN.Rx.hMaybeMutable ->
+      (Some N.PMaybeMutable, t)
+    | (_, Aast.Happly ((_, hn), [t])) when hn = SN.Rx.hOwnedMutable ->
+      (Some N.POwnedMutable, t)
     | t -> (None, t)
 
   and hfun env reactivity is_coroutine hl kl variadic_hint h =
@@ -791,28 +650,44 @@ module Make (GetLocals : GetLocals) = struct
         true
     in
     N.Hfun
-      ( reactivity,
-        is_coroutine,
-        hl,
-        kl,
-        muts,
-        variadic_hint,
-        hint ~allow_retonly:true env rh,
-        ret_mut )
+      N.
+        {
+          hf_reactive_kind = reactivity;
+          hf_is_coroutine = is_coroutine;
+          hf_param_tys = hl;
+          hf_param_kinds = kl;
+          hf_param_mutability = muts;
+          hf_variadic_ty = variadic_hint;
+          hf_return_ty = hint ~allow_retonly:true env rh;
+          hf_is_mutable_return = ret_mut;
+        }
 
   and hint_
+      ~context
       ~forbid_this
       ~allow_retonly
       ~allow_typedef
       ~allow_wildcard
+      ~allow_like
       ~in_where_clause
       ?(tp_depth = 0)
       env
       (p, x) =
     let tcopt = (fst env).tcopt in
-    let like_types_enabled = TypecheckerOptions.like_types tcopt in
-    let hint = hint ~forbid_this ~allow_typedef ~allow_wildcard in
+    let like_type_hints_enabled = TypecheckerOptions.like_type_hints tcopt in
+    let union_intersection_type_hints_enabled =
+      TypecheckerOptions.union_intersection_type_hints tcopt
+    in
+    let hint = hint ~forbid_this ~allow_typedef ~allow_wildcard ~allow_like in
     match x with
+    | Aast.Hunion hl ->
+      if not union_intersection_type_hints_enabled then
+        Errors.experimental_feature p "union type hints";
+      N.Hunion (List.map hl ~f:(hint ~allow_retonly env))
+    | Aast.Hintersection hl ->
+      if not union_intersection_type_hints_enabled then
+        Errors.experimental_feature p "intersection type hints";
+      N.Hintersection (List.map hl ~f:(hint ~allow_retonly env))
     | Aast.Htuple hl ->
       N.Htuple
         (List.map hl ~f:(hint ~allow_retonly ~tp_depth:(tp_depth + 1) env))
@@ -820,39 +695,89 @@ module Make (GetLocals : GetLocals) = struct
       (* void/noreturn are permitted for Typing.option_return_only_typehint *)
       N.Hoption (hint ~allow_retonly env h)
     | Aast.Hlike h ->
-      if not like_types_enabled then Errors.experimental_feature p "like-types";
+      if not (allow_like || like_type_hints_enabled) then
+        Errors.experimental_feature p "like-types";
       N.Hlike (hint ~allow_retonly env h)
     | Aast.Hsoft h ->
       let h = hint ~allow_retonly env h in
-      let pessimize_coefficient = TypecheckerOptions.simple_pessimize tcopt in
-      let pessimize = Pos.pessimize_enabled (fst h) pessimize_coefficient in
-      if pessimize then
-        Aast.Hlike h
-      else
-        snd h
-    | Aast.Hfun (reactivity, coroutine, hl, kl, _, variadic_hint, h, _) ->
+      snd h
+    | Aast.Hfun
+        Aast.
+          {
+            hf_reactive_kind = reactivity;
+            hf_is_coroutine = coroutine;
+            hf_param_tys = hl;
+            hf_param_kinds = kl;
+            hf_param_mutability = _;
+            hf_variadic_ty = variadic_hint;
+            hf_return_ty = h;
+            hf_is_mutable_return = _;
+          } ->
       hfun env reactivity coroutine hl kl variadic_hint h
     (* Special case for Rx<function> *)
     | Aast.Happly
-        ( (_, "Rx"),
-          [(_, Aast.Hfun (_, is_coroutine, hl, kl, _, variadic_hint, h, _))] )
-      ->
-      hfun env N.FReactive is_coroutine hl kl variadic_hint h
+        ( (_, hname),
+          [
+            ( _,
+              Aast.Hfun
+                Aast.
+                  {
+                    hf_reactive_kind = _;
+                    hf_is_coroutine;
+                    hf_param_tys = hl;
+                    hf_param_kinds = kl;
+                    hf_param_mutability = _;
+                    hf_variadic_ty = variadic_hint;
+                    hf_return_ty = h;
+                    hf_is_mutable_return = _;
+                  } );
+          ] )
+      when hname = SN.Rx.hRx ->
+      hfun env N.FReactive hf_is_coroutine hl kl variadic_hint h
     (* Special case for RxShallow<function> *)
     | Aast.Happly
-        ( (_, "RxShallow"),
-          [(_, Aast.Hfun (_, is_coroutine, hl, kl, _, variadic_hint, h, _))] )
-      ->
-      hfun env N.FShallow is_coroutine hl kl variadic_hint h
+        ( (_, hname),
+          [
+            ( _,
+              Aast.Hfun
+                Aast.
+                  {
+                    hf_reactive_kind = _;
+                    hf_is_coroutine;
+                    hf_param_tys = hl;
+                    hf_param_kinds = kl;
+                    hf_param_mutability = _;
+                    hf_variadic_ty = variadic_hint;
+                    hf_return_ty = h;
+                    hf_is_mutable_return = _;
+                  } );
+          ] )
+      when hname = SN.Rx.hRxShallow ->
+      hfun env N.FShallow hf_is_coroutine hl kl variadic_hint h
     (* Special case for RxLocal<function> *)
     | Aast.Happly
-        ( (_, "RxLocal"),
-          [(_, Aast.Hfun (_, is_coroutine, hl, kl, _, variadic_hint, h, _))] )
-      ->
-      hfun env N.FLocal is_coroutine hl kl variadic_hint h
+        ( (_, hname),
+          [
+            ( _,
+              Aast.Hfun
+                Aast.
+                  {
+                    hf_reactive_kind = _;
+                    hf_is_coroutine;
+                    hf_param_tys = hl;
+                    hf_param_kinds = kl;
+                    hf_param_mutability = _;
+                    hf_variadic_ty = variadic_hint;
+                    hf_return_ty = h;
+                    hf_is_mutable_return = _;
+                  } );
+          ] )
+      when hname = SN.Rx.hRxLocal ->
+      hfun env N.FLocal hf_is_coroutine hl kl variadic_hint h
     | Aast.Happly (((p, _x) as id), hl) ->
       let hint_id =
         hint_id
+          ~context
           ~forbid_this
           ~allow_retonly
           ~allow_typedef
@@ -889,6 +814,7 @@ module Make (GetLocals : GetLocals) = struct
         | Aast.Happly (root, _) ->
           let h =
             hint_id
+              ~context
               ~forbid_this
               ~allow_retonly
               ~allow_typedef
@@ -919,7 +845,7 @@ module Make (GetLocals : GetLocals) = struct
       let nsi_field_map =
         List.map
           ~f:(fun { Aast.sfi_optional; sfi_hint; sfi_name } ->
-            let (_pos, new_key) = convert_shape_name env sfi_name in
+            let new_key = convert_shape_name env sfi_name in
             let new_field =
               {
                 N.sfi_optional;
@@ -945,13 +871,12 @@ module Make (GetLocals : GetLocals) = struct
     | Aast.Hthis
     | Aast.Hdynamic
     | Aast.Hnothing ->
-      Errors.internal_error
-        Pos.none
-        "Unexpected hint not present on legacy AST";
+      Errors.internal_error Pos.none "Unexpected hint not present on legacy AST";
       N.Herr
     | Aast.Hpu_access (h, id) -> N.Hpu_access (hint ~allow_retonly env h, id)
 
   and hint_id
+      ?(context = Errors.TypeNamespace)
       ~forbid_this
       ~allow_retonly
       ~allow_typedef
@@ -994,10 +919,7 @@ module Make (GetLocals : GetLocals) = struct
                || x = "\\" ^ SN.Typehints.mixed
                || x = "\\" ^ SN.Typehints.nonnull
                || x = "\\" ^ SN.Typehints.array
-               || x = "\\" ^ SN.Typehints.arraykey
-               || x = "\\" ^ SN.Typehints.integer
-               || x = "\\" ^ SN.Typehints.boolean
-               || x = "\\" ^ SN.Typehints.double ->
+               || x = "\\" ^ SN.Typehints.arraykey ->
           Errors.primitive_toplevel p;
           N.Herr
         | x when x = "\\" ^ SN.Typehints.nothing ->
@@ -1026,7 +948,11 @@ module Make (GetLocals : GetLocals) = struct
         | x when x = SN.Typehints.this ->
           Errors.this_type_forbidden p;
           N.Herr
-        | x when x = SN.Classes.cClassname && List.length hl <> 1 ->
+        (* TODO: Duplicate of a Typing[4101] error if namespaced correctly
+         * T56198838 *)
+        | x
+          when (x = SN.Classes.cClassname || x = "classname")
+               && List.length hl <> 1 ->
           Errors.classname_param p;
           N.Hprim N.Tstring
         | _ when String.lowercase x = SN.Typehints.this ->
@@ -1037,7 +963,7 @@ module Make (GetLocals : GetLocals) = struct
           N.Habstr x
         | _ ->
           let name =
-            Env.type_name env id ~allow_typedef ~allow_generics:false
+            Env.type_name ~context env id ~allow_typedef ~allow_generics:false
           in
           (* Note that we are intentionally setting allow_typedef to `true` here.
            * In general, generics arguments can be typedefs -- there is no
@@ -1084,8 +1010,7 @@ module Make (GetLocals : GetLocals) = struct
           (match hl with
           | [] -> N.Harray (None, None)
           | [val_] -> N.Harray (Some (hint env val_), None)
-          | [key_; val_] ->
-            N.Harray (Some (hint env key_), Some (hint env val_))
+          | [key_; val_] -> N.Harray (Some (hint env key_), Some (hint env val_))
           | _ ->
             Errors.too_many_type_arguments p;
             N.Herr)
@@ -1124,20 +1049,13 @@ module Make (GetLocals : GetLocals) = struct
             (* Warning: These Hanys are here because they produce subtle
                 errors because of interaction with tco_experimental_isarray
                 if you change them to Herr *)
-            N.Hvarray_or_darray (p, N.Hany)
-          | [val_] -> N.Hvarray_or_darray (hint env val_)
+            N.Hvarray_or_darray (None, (p, N.Hany))
+          | [val_] -> N.Hvarray_or_darray (None, hint env val_)
+          | [key; val_] ->
+            N.Hvarray_or_darray (Some (hint env key), hint env val_)
           | _ ->
             Errors.too_many_type_arguments p;
             N.Hany)
-      | nm when nm = SN.Typehints.integer ->
-        Errors.primitive_invalid_alias p nm SN.Typehints.int;
-        Some (N.Hprim N.Tint)
-      | nm when nm = SN.Typehints.boolean ->
-        Errors.primitive_invalid_alias p nm SN.Typehints.bool;
-        Some (N.Hprim N.Tbool)
-      | nm when nm = SN.Typehints.double ->
-        Errors.primitive_invalid_alias p nm SN.Typehints.float;
-        Some (N.Hprim N.Tfloat)
       | _ -> None
     in
     let () =
@@ -1148,13 +1066,8 @@ module Make (GetLocals : GetLocals) = struct
     opt_hint
 
   and hintl
-      ~forbid_this
-      ~allow_retonly
-      ~allow_typedef
-      ~allow_wildcard
-      ~tp_depth
-      env
-      l =
+      ~forbid_this ~allow_retonly ~allow_typedef ~allow_wildcard ~tp_depth env l
+      =
     List.map
       ~f:
         (hint
@@ -1169,15 +1082,16 @@ module Make (GetLocals : GetLocals) = struct
   let constraint_ ?(forbid_this = false) env (ck, h) =
     (ck, hint ~forbid_this env h)
 
-  let targ env t =
-    hint
-      ~allow_wildcard:true
-      ~forbid_this:false
-      ~allow_typedef:true
-      ~allow_retonly:true
-      ~tp_depth:1
-      env
-      t
+  let targ env (p, t) =
+    ( p,
+      hint
+        ~allow_wildcard:true
+        ~forbid_this:false
+        ~allow_typedef:true
+        ~allow_retonly:true
+        ~tp_depth:1
+        env
+        t )
 
   let targl env _ tal = List.map tal ~f:(targ env)
 
@@ -1200,34 +1114,6 @@ module Make (GetLocals : GetLocals) = struct
       let smethods = add_abstractl smethods in
       (constructor, methods, smethods)
 
-  (**************************************************************************)
-  (* Checking for collision on method names *)
-  (**************************************************************************)
-
-  let check_method acc { N.m_name = (p, x); _ } =
-    if SSet.mem x acc then Errors.method_name_already_bound p x;
-    SSet.add x acc
-
-  let check_name_collision methods =
-    ignore (List.fold_left methods ~init:SSet.empty ~f:check_method)
-
-  (**************************************************************************)
-  (* Checking for shadowing of method type parameters *)
-  (**************************************************************************)
-
-  let check_method_tparams class_tparam_names { N.m_tparams = tparams; _ } =
-    List.iter tparams (fun { N.tp_name = (p, x); _ } ->
-        List.iter class_tparam_names (fun (pc, xc) ->
-            if x = xc then Errors.shadowed_type_param p pc x))
-
-  let check_tparams_constructor class_tparam_names constructor =
-    match constructor with
-    | None -> ()
-    | Some constr -> check_method_tparams class_tparam_names constr
-
-  let check_tparams_shadow class_tparam_names methods =
-    List.iter methods (check_method_tparams class_tparam_names)
-
   let ensure_name_not_dynamic env e =
     match e with
     | (_, (Aast.Id _ | Aast.Lvar _)) -> ()
@@ -1239,13 +1125,17 @@ module Make (GetLocals : GetLocals) = struct
   let rec class_ c =
     let constraints = make_constraints c.Aast.c_tparams.Aast.c_tparam_list in
     let env = Env.make_class_env constraints c in
+    let c =
+      elaborate_namespaces#on_class_
+        (Naming_elaborate_namespaces_endo.make_env (fst env).namespace)
+        c
+    in
     let where_constraints =
       type_where_constraints env c.Aast.c_where_constraints
     in
-    (* Checking for a code smell *)
-    List.iter c.Aast.c_tparams.Aast.c_tparam_list check_constraint;
     let name =
       Env.type_name
+        ~context:Errors.ClassContext
         env
         c.Aast.c_name
         ~allow_typedef:false
@@ -1256,7 +1146,7 @@ module Make (GetLocals : GetLocals) = struct
     let (sprops, props) = Aast.split_vars c in
     let sprops = List.map ~f:(class_prop_static env) sprops in
     let attrs = user_attributes env c.Aast.c_user_attributes in
-    let const = Attributes.find SN.UserAttributes.uaConst attrs in
+    let const = Naming_attributes.find SN.UserAttributes.uaConst attrs in
     let props = List.map ~f:(class_prop_non_static ~const env) props in
     let xhp_attrs = List.map ~f:(xhp_attribute_decl env) c.Aast.c_xhp_attrs in
     (* These would be out of order with the old attributes, but that shouldn't matter? *)
@@ -1264,7 +1154,11 @@ module Make (GetLocals : GetLocals) = struct
     let parents =
       List.map
         c.Aast.c_extends
-        (hint ~allow_retonly:false ~allow_typedef:false env)
+        (hint
+           ~allow_retonly:false
+           ~allow_typedef:false
+           ~context:Errors.ClassContext
+           env)
     in
     let parents =
       match c.Aast.c_kind with
@@ -1282,8 +1176,12 @@ module Make (GetLocals : GetLocals) = struct
         parent :: parents
       | _ -> parents
     in
-    let methods = List.map ~f:(class_method env) methods in
-    let uses = List.map ~f:(hint ~allow_typedef:false env) c.Aast.c_uses in
+    let methods = List.map ~f:(method_ (fst env)) methods in
+    let uses =
+      List.map
+        ~f:(hint ~allow_typedef:false ~context:Errors.TraitContext env)
+        c.Aast.c_uses
+    in
     let pu_enums = List.map ~f:(class_pu_enum env) c.Aast.c_pu_enums in
     let redeclarations =
       List.map ~f:(method_redeclaration env) c.Aast.c_method_redeclarations
@@ -1295,7 +1193,9 @@ module Make (GetLocals : GetLocals) = struct
     if c_req_implements <> [] && c.Aast.c_kind <> Ast_defs.Ctrait then
       Errors.invalid_req_implements (fst (List.hd_exn c_req_implements));
     let req_implements =
-      List.map ~f:(hint ~allow_typedef:false env) c_req_implements
+      List.map
+        ~f:(hint ~allow_typedef:false ~context:Errors.ClassContext env)
+        c_req_implements
     in
     let req_implements = List.map ~f:(fun h -> (h, false)) req_implements in
     if
@@ -1305,7 +1205,9 @@ module Make (GetLocals : GetLocals) = struct
     then
       Errors.invalid_req_extends (fst (List.hd_exn c_req_extends));
     let req_extends =
-      List.map ~f:(hint ~allow_typedef:false env) c_req_extends
+      List.map
+        ~f:(hint ~allow_typedef:false ~context:Errors.ClassContext env)
+        c_req_extends
     in
     let req_extends = List.map ~f:(fun h -> (h, true)) req_extends in
     (* Setting a class type parameters constraint to the 'this' type is weird
@@ -1318,17 +1220,17 @@ module Make (GetLocals : GetLocals) = struct
     let typeconsts = List.map ~f:(typeconst env) c.Aast.c_typeconsts in
     let implements =
       List.map
-        ~f:(hint ~allow_retonly:false ~allow_typedef:false env)
+        ~f:
+          (hint
+             ~allow_retonly:false
+             ~context:Errors.ClassContext
+             ~allow_typedef:false
+             env)
         c.Aast.c_implements
     in
     let constructor = Option.map constructor (method_ (fst env)) in
     let (constructor, methods, smethods) =
       interface c constructor methods smethods
-    in
-    let class_tparam_names =
-      List.map
-        ~f:(fun tp -> tp.Aast.tp_name)
-        c.Aast.c_tparams.Aast.c_tparam_list
     in
     let enum = Option.map c.Aast.c_enum (enum_ env) in
     let file_attributes =
@@ -1342,17 +1244,13 @@ module Make (GetLocals : GetLocals) = struct
       | None -> smethods @ methods
       | Some c -> (c :: smethods) @ methods
     in
-    check_tparams_constructor class_tparam_names constructor;
-    check_name_collision methods;
-    check_tparams_shadow class_tparam_names methods;
-    check_name_collision smethods;
-    check_tparams_shadow class_tparam_names smethods;
     {
       N.c_annotation = ();
       N.c_span = c.Aast.c_span;
       N.c_mode = c.Aast.c_mode;
       N.c_final = c.Aast.c_final;
       N.c_is_xhp = c.Aast.c_is_xhp;
+      N.c_has_xhp_keyword = c.Aast.c_has_xhp_keyword;
       N.c_kind = c.Aast.c_kind;
       N.c_name = name;
       N.c_tparams;
@@ -1379,9 +1277,9 @@ module Make (GetLocals : GetLocals) = struct
       N.c_enum = enum;
       N.c_doc_comment = c.Aast.c_doc_comment;
       N.c_pu_enums = pu_enums;
+      N.c_xhp_children = c.Aast.c_xhp_children;
       (* Naming and typechecking shouldn't use these fields *)
       N.c_attributes = [];
-      N.c_xhp_children = [];
       N.c_xhp_attrs = [];
     }
 
@@ -1403,10 +1301,15 @@ module Make (GetLocals : GetLocals) = struct
     let on_attr acc { Aast.ua_name; ua_params } =
       let name = snd ua_name in
       let ua_name =
-        if String.is_prefix name ~prefix:"__" then
+        if SN.UserAttributes.is_reserved name then
           ua_name
         else
-          Env.type_name env ua_name ~allow_typedef:false ~allow_generics:false
+          Env.type_name
+            ~context:Errors.ClassContext
+            env
+            ua_name
+            ~allow_typedef:false
+            ~allow_generics:false
       in
       if not (validate_seen ua_name) then
         acc
@@ -1503,21 +1406,7 @@ module Make (GetLocals : GetLocals) = struct
     }
 
   and type_paraml ?(forbid_this = false) env tparams =
-    let (_, ret) =
-      List.fold_left
-        tparams
-        ~init:(SMap.empty, [])
-        ~f:(fun (seen, tparaml) tparam ->
-          let (p, name) = tparam.Aast.tp_name in
-          match SMap.get name seen with
-          | None ->
-            ( SMap.add name p seen,
-              type_param ~forbid_this env tparam :: tparaml )
-          | Some pos ->
-            Errors.shadowed_type_param p pos name;
-            (seen, tparaml))
-    in
-    List.rev ret
+    List.map tparams ~f:(type_param ~forbid_this env)
 
   and type_param ~forbid_this ((genv, _) as env) t =
     begin
@@ -1580,7 +1469,7 @@ module Make (GetLocals : GetLocals) = struct
 
   and class_prop_static env cv =
     let attrs = user_attributes env cv.Aast.cv_user_attributes in
-    let lsb = Attributes.mem SN.UserAttributes.uaLSB attrs in
+    let lsb = Naming_attributes.mem SN.UserAttributes.uaLSB attrs in
     let forbid_this = not lsb in
     let h = Option.map cv.Aast.cv_type (hint ~forbid_this env) in
     let (expr, is_xhp) = class_prop_expr_is_xhp env cv in
@@ -1603,18 +1492,11 @@ module Make (GetLocals : GetLocals) = struct
   and class_prop_non_static env ?(const = None) cv =
     let h = Option.map cv.Aast.cv_type (hint env) in
     let attrs = user_attributes env cv.Aast.cv_user_attributes in
-    let lsb_pos = Attributes.mem_pos SN.UserAttributes.uaLSB attrs in
-    (* Non-static properties cannot have attribute __LSB *)
-    let _ =
-      match lsb_pos with
-      | Some p -> Errors.nonstatic_property_with_lsb p
-      | None -> ()
-    in
     (* if class is __Const, make all member fields __Const *)
     let attrs =
       match const with
       | Some c ->
-        if not (Attributes.mem SN.UserAttributes.uaConst attrs) then
+        if not (Naming_attributes.mem SN.UserAttributes.uaConst attrs) then
           c :: attrs
         else
           attrs
@@ -1637,13 +1519,6 @@ module Make (GetLocals : GetLocals) = struct
       N.cv_span = cv.Aast.cv_span;
     }
 
-  and class_method env c_meth =
-    match (c_meth.Aast.m_name, c_meth.Aast.m_params) with
-    | ((m_pos, m_name), _ :: _) when m_name = SN.Members.__clone ->
-      Errors.clone_too_many_arguments m_pos;
-      c_meth
-    | _ -> method_ (fst env) c_meth
-
   and check_constant_expr env (pos, e) =
     match e with
     | Aast.Id _
@@ -1653,12 +1528,12 @@ module Make (GetLocals : GetLocals) = struct
     | Aast.Int _
     | Aast.Float _
     | Aast.String _ ->
-      ()
+      true
     | Aast.Class_const ((_, Aast.CIexpr (_, cls)), _)
       when match cls with
            | Aast.Id (_, "static") -> false
            | _ -> true ->
-      ()
+      true
     | Aast.Unop
         ((Ast_defs.Uplus | Ast_defs.Uminus | Ast_defs.Utild | Ast_defs.Unot), e)
       ->
@@ -1667,29 +1542,31 @@ module Make (GetLocals : GetLocals) = struct
       (* Only assignment is invalid *)
       begin
         match op with
-        | Ast_defs.Eq _ -> Errors.illegal_constant pos
-        | _ ->
-          check_constant_expr env e1;
-          check_constant_expr env e2
+        | Ast_defs.Eq _ ->
+          Errors.illegal_constant pos;
+          false
+        | _ -> check_constant_expr env e1 && check_constant_expr env e2
       end
     | Aast.Eif (e1, e2, e3) ->
-      check_constant_expr env e1;
-      Option.iter e2 (check_constant_expr env);
-      check_constant_expr env e3
-    | Aast.Array l -> List.iter l ~f:(check_afield_constant_expr env)
+      check_constant_expr env e1
+      && Option.for_all e2 (check_constant_expr env)
+      && check_constant_expr env e3
+    | Aast.Array l -> List.for_all l ~f:(check_afield_constant_expr env)
     | Aast.Darray (_, l) ->
-      List.iter l ~f:(fun (e1, e2) ->
-          check_constant_expr env e1;
-          check_constant_expr env e2)
-    | Aast.Varray (_, l) -> List.iter l ~f:(check_constant_expr env)
+      List.for_all l ~f:(fun (e1, e2) ->
+          check_constant_expr env e1 && check_constant_expr env e2)
+    | Aast.Varray (_, l) -> List.for_all l ~f:(check_constant_expr env)
     | Aast.Shape fdl ->
       (* Only check the values because shape field names are always legal *)
-      List.iter fdl ~f:(fun (_, e) -> check_constant_expr env e)
-    | Aast.Call (_, (_, Aast.Id (_, cn)), _, el, uel)
-      when cn = SN.SpecialFunctions.tuple ->
-      (* Tuples are not really function calls, they are just parsed that way*)
-      arg_unpack_unexpected uel;
-      List.iter el ~f:(check_constant_expr env)
+      List.for_all fdl ~f:(fun (_, e) -> check_constant_expr env e)
+    | Aast.Call (_, (_, Aast.Id (_, cn)), _, el, unpacked_element)
+      when cn = SN.AutoimportedFunctions.fun_
+           || cn = SN.AutoimportedFunctions.class_meth
+           || cn = SN.StdlibFunctions.mark_legacy_hack_array
+           (* Tuples are not really function calls, they are just parsed that way*)
+           || cn = SN.SpecialFunctions.tuple ->
+      arg_unpack_unexpected unpacked_element;
+      List.for_all el ~f:(check_constant_expr env)
     | Aast.Collection (id, _, l) ->
       let (p, cn) = NS.elaborate_id (fst env).namespace NS.ElaborateClass id in
       (* Only vec/keyset/dict are allowed because they are value types *)
@@ -1698,38 +1575,41 @@ module Make (GetLocals : GetLocals) = struct
         || cn = SN.Collections.cKeyset
         || cn = SN.Collections.cDict
       then
-        List.iter l ~f:(check_afield_constant_expr env)
-      else
-        Errors.illegal_constant p
+        List.for_all l ~f:(check_afield_constant_expr env)
+      else (
+        Errors.illegal_constant p;
+        false
+      )
     | Aast.As (e, (_, Aast.Hlike _), _) -> check_constant_expr env e
-    | _ -> Errors.illegal_constant pos
+    | Aast.As (e, (_, Aast.Happly (id, [_])), _) ->
+      let (p, cn) = NS.elaborate_id (fst env).namespace NS.ElaborateClass id in
+      if cn = SN.FB.cIncorrectType then
+        check_constant_expr env e
+      else (
+        Errors.illegal_constant p;
+        false
+      )
+    | _ ->
+      Errors.illegal_constant pos;
+      false
 
   and check_afield_constant_expr env afield =
     match afield with
     | Aast.AFvalue e -> check_constant_expr env e
     | Aast.AFkvalue (e1, e2) ->
-      check_constant_expr env e1;
-      check_constant_expr env e2
+      check_constant_expr env e1 && check_constant_expr env e2
 
   and constant_expr env e =
-    let valid_constant_expression =
-      Errors.try_with_error
-        (fun () ->
-          check_constant_expr env e;
-          true)
-        (fun () -> false)
-    in
+    let valid_constant_expression = check_constant_expr env e in
     if valid_constant_expression then
       expr env e
     else
       (fst e, N.Any)
 
   and class_const env cc =
-    Env.bind_class_const env cc.Aast.cc_id;
     let h = Option.map cc.Aast.cc_type (hint env) in
     let e = Option.map cc.Aast.cc_expr (constant_expr env) in
     {
-      N.cc_visibility = cc.Aast.cc_visibility;
       N.cc_type = h;
       N.cc_id = cc.Aast.cc_id;
       N.cc_expr = e;
@@ -1737,10 +1617,6 @@ module Make (GetLocals : GetLocals) = struct
     }
 
   and typeconst env t =
-    (* We use the same namespace as constants within the class so we cannot have
-     * a const and type const with the same name
-     *)
-    Env.bind_class_const env t.Aast.c_tconst_name;
     let abstract =
       match t.Aast.c_tconst_abstract with
       | Aast.TCAbstract (Some default) ->
@@ -1750,23 +1626,9 @@ module Make (GetLocals : GetLocals) = struct
     let constr = Option.map t.Aast.c_tconst_constraint (hint env) in
     let type_ = Option.map t.Aast.c_tconst_type (hint env) in
     let attrs = user_attributes env t.Aast.c_tconst_user_attributes in
-    begin
-      match abstract with
-      | Aast.TCAbstract (Some _)
-        when not
-               (TypecheckerOptions.experimental_feature_enabled
-                  (fst env).tcopt
-                  TypecheckerOptions
-                  .experimental_abstract_type_const_with_default) ->
-        Errors.experimental_feature
-          (fst t.Aast.c_tconst_name)
-          "abstract type constant with default"
-      | _ -> ()
-    end;
     N.
       {
         c_tconst_abstract = abstract;
-        c_tconst_visibility = t.Aast.c_tconst_visibility;
         c_tconst_name = t.Aast.c_tconst_name;
         c_tconst_constraint = constr;
         c_tconst_type = type_;
@@ -1781,7 +1643,6 @@ module Make (GetLocals : GetLocals) = struct
     (* Cannot use 'this' if it is a public instance method *)
     let (variadicity, paraml) = fun_paraml env m.Aast.m_params in
     let tparam_l = type_paraml env m.Aast.m_tparams in
-    List.iter tparam_l check_constraint;
     let where_constraints =
       type_where_constraints env m.Aast.m_where_constraints
     in
@@ -1843,9 +1704,7 @@ module Make (GetLocals : GetLocals) = struct
       type_where_constraints env mt.Aast.mt_where_constraints
     in
     let ret =
-      Aast.type_hint_option_map
-        ~f:(hint ~allow_retonly:true env)
-        mt.Aast.mt_ret
+      Aast.type_hint_option_map ~f:(hint ~allow_retonly:true env) mt.Aast.mt_ret
     in
     {
       N.mt_final = mt.Aast.mt_final;
@@ -1893,15 +1752,9 @@ module Make (GetLocals : GetLocals) = struct
       Aast.type_hint_option_map param.Aast.param_type_hint ~f:(hint env)
     in
     let eopt = Option.map param.Aast.param_expr (expr env) in
-    if
-      param.Aast.param_is_reference
-      && Partial.should_check_error (fst env).in_mode 2087
-    then
-      Errors.reference_in_strict_mode p;
     {
       N.param_annotation = p;
       param_type_hint = tyhi;
-      param_is_reference = param.Aast.param_is_reference;
       param_is_variadic = param.Aast.param_is_variadic;
       param_pos = p;
       param_name = name;
@@ -1940,6 +1793,12 @@ module Make (GetLocals : GetLocals) = struct
     let genv = Env.make_fun_decl_genv tparams f in
     let lenv = Env.empty_local None in
     let env = (genv, lenv) in
+    let f =
+      elaborate_namespaces#on_fun_def
+        (Naming_elaborate_namespaces_endo.make_env (fst env).namespace)
+        f
+    in
+    let name = Env.fun_id env f.Aast.f_name in
     let where_constraints =
       type_where_constraints env f.Aast.f_where_constraints
     in
@@ -1947,8 +1806,6 @@ module Make (GetLocals : GetLocals) = struct
       Aast.type_hint_option_map ~f:(hint ~allow_retonly:true env) f.Aast.f_ret
     in
     let (variadicity, paraml) = fun_paraml env f.Aast.f_params in
-    let x = Env.fun_id env f.Aast.f_name in
-    List.iter f.Aast.f_tparams check_constraint;
     let f_tparams = type_paraml env f.Aast.f_tparams in
     let f_kind = f.Aast.f_fun_kind in
     let body =
@@ -1973,7 +1830,7 @@ module Make (GetLocals : GetLocals) = struct
         f_span = f.Aast.f_span;
         f_mode = f.Aast.f_mode;
         f_ret = h;
-        f_name = x;
+        f_name = name;
         f_tparams;
         f_where_constraints = where_constraints;
         f_params = paraml;
@@ -2004,20 +1861,13 @@ module Make (GetLocals : GetLocals) = struct
   and stmt env (pos, st) =
     let stmt =
       match st with
-      | Aast.Let (x, h, e) -> let_stmt env x h e
       | Aast.Block _ -> failwith "stmt block error"
       | Aast.Fallthrough -> N.Fallthrough
       | Aast.Noop -> N.Noop
       | Aast.Markup (_, None) -> N.Noop
       | Aast.Markup (_m, Some e) -> N.Expr (expr env e)
       | Aast.Break -> Aast.Break
-      | Aast.TempBreak _ ->
-        Errors.break_continue_n_not_supported pos;
-        Aast.Break
       | Aast.Continue -> Aast.Continue
-      | Aast.TempContinue _ ->
-        Errors.break_continue_n_not_supported pos;
-        Aast.Continue
       | Aast.Throw e -> N.Throw (expr env e)
       | Aast.Return e -> N.Return (Option.map e (expr env))
       | Aast.GotoLabel label -> name_goto_label env label
@@ -2036,8 +1886,9 @@ module Make (GetLocals : GetLocals) = struct
         (* No convenient pos information on Aast *)
         Errors.experimental_feature Pos.none "inlined definitions";
         N.Expr (Pos.none, N.Any)
-      | Aast.Expr (cp, Aast.Call (_, (p, Aast.Id (fp, fn)), hl, el, uel))
-        when fn = SN.SpecialFunctions.invariant ->
+      | Aast.Expr
+          (cp, Aast.Call (_, (p, Aast.Id (fp, fn)), hl, el, unpacked_element))
+        when fn = SN.AutoimportedFunctions.invariant ->
         (* invariant is subject to a source-code transform in the HHVM
          * runtime: the arguments to invariant are lazily evaluated only in
          * the case in which the invariant condition does not hold. So:
@@ -2062,12 +1913,11 @@ module Make (GetLocals : GetLocals) = struct
                 Aast.Call
                   ( Aast.Cnormal,
                     ( p,
-                      Aast.Id
-                        (fp, "\\HH\\" ^ SN.SpecialFunctions.invariant_violation)
+                      Aast.Id (fp, SN.AutoimportedFunctions.invariant_violation)
                     ),
                     hl,
                     el,
-                    uel ) )
+                    unpacked_element ) )
             in
             if cond <> Aast.False then
               let (b1, b2) =
@@ -2083,13 +1933,6 @@ module Make (GetLocals : GetLocals) = struct
     in
     (pos, stmt)
 
-  and let_stmt env (p, lid) h e =
-    let name = Local_id.get_name lid in
-    let e = expr env e in
-    let h = Option.map h (hint env) in
-    let x = Env.new_let_local env (p, name) in
-    N.Let (x, h, e)
-
   and if_stmt env e b1 b2 =
     let e = expr env e in
     Env.scope env (fun env ->
@@ -2098,11 +1941,9 @@ module Make (GetLocals : GetLocals) = struct
         N.If (e, b1, b2))
 
   and do_stmt env b e =
-    (* lexical block of `do` is extended to the expr of loop termination *)
-    Env.scope_lexical env (fun env ->
-        let b = block ~new_scope:false env b in
-        let e = expr env e in
-        N.Do (b, e))
+    let b = block ~new_scope:false env b in
+    let e = expr env e in
+    N.Do (b, e)
 
   (* Scoping is essentially that of do: block is always executed *)
   and using_stmt env has_await e b =
@@ -2148,16 +1989,11 @@ module Make (GetLocals : GetLocals) = struct
   and as_expr env ae =
     let handle_v ev =
       match ev with
-      | (p, Aast.Id x) when (fst env).in_mode = FileInfo.Mexperimental ->
-        let x = Env.new_let_local env x in
-        let ev = (p, N.ImmutableVar x) in
-        ev
       | (p, Aast.Id _) ->
         Errors.expected_variable p;
         (p, N.Lvar (Env.new_lvar env (p, "__internal_placeholder")))
       | ev ->
-        let nsenv = (fst env).namespace in
-        let (_, vars) = GetLocals.lvalue (nsenv, SMap.empty) ev in
+        let vars = GetLocals.lvalue SMap.empty ev in
         SMap.iter (fun x p -> ignore (Env.new_lvar env (p, x))) vars;
         expr env ev
     in
@@ -2166,8 +2002,6 @@ module Make (GetLocals : GetLocals) = struct
       | (_, Aast.Lvar (p, lid)) ->
         let x = (p, Local_id.get_name lid) in
         (p, N.Lvar (Env.new_lvar env x))
-      | (p, Aast.Id x) when (fst env).in_mode = FileInfo.Mexperimental ->
-        (p, N.ImmutableVar (Env.new_let_local env x))
       | (p, _) ->
         Errors.expected_variable p;
         (p, N.Lvar (Env.new_lvar env (p, "__internal_placeholder")))
@@ -2199,8 +2033,7 @@ module Make (GetLocals : GetLocals) = struct
     match stl with
     | [] -> []
     | (_, Aast.Block b) :: rest ->
-      (* Add lexical scope for block scoped let variables *)
-      let b = Env.scope_lexical env (stmt_list b) in
+      let b = stmt_list b env in
       let rest = stmt_list rest env in
       b @ rest
     | x :: rest ->
@@ -2252,8 +2085,7 @@ module Make (GetLocals : GetLocals) = struct
             match e1 with
             | Some lid ->
               let e = (Pos.none, Aast.Lvar lid) in
-              let nsenv = (fst env).namespace in
-              let (_, vars) = GetLocals.lvalue (nsenv, SMap.empty) e in
+              let vars = GetLocals.lvalue SMap.empty e in
               SMap.iter (fun x p -> ignore (Env.new_lvar env (p, x))) vars;
               e1
             | None -> None
@@ -2343,20 +2175,12 @@ module Make (GetLocals : GetLocals) = struct
     | Aast.String s -> N.String s
     | Aast.String2 idl -> N.String2 (string2 env idl)
     | Aast.PrefixedString (n, e) -> N.PrefixedString (n, expr env e)
-    | Aast.Id x ->
-      (* TODO: Emit proper error messages T28473207. Currently the error message
-        * emitted has reason Naming[2049] unbound name for global constant *)
-      begin
-        match Env.let_local env x with
-        | Some x -> N.ImmutableVar x
-        | None -> N.Id (Env.global_const env x)
-      end
-    (* match *)
+    | Aast.Id x -> N.Id (Env.global_const env x)
     | Aast.Lvar (_, x) when Local_id.to_string x = SN.SpecialIdents.this ->
       N.This
-    | Aast.Lvar (p, x)
-      when Local_id.to_string x = SN.SpecialIdents.dollardollar ->
-      N.Dollardollar (p, Env.found_dollardollar env p)
+    | Aast.Lvar (p, x) when Local_id.to_string x = SN.SpecialIdents.dollardollar
+      ->
+      N.Dollardollar (p, Local_id.make_unscoped SN.SpecialIdents.dollardollar)
     | Aast.Lvar (p, x) when Local_id.to_string x = SN.SpecialIdents.placeholder
       ->
       N.Lplaceholder p
@@ -2376,8 +2200,8 @@ module Make (GetLocals : GetLocals) = struct
     | Aast.Array_get (e1, e2) -> N.Array_get (expr env e1, oexpr env e2)
     | Aast.Class_get ((_, Aast.CIexpr (_, Aast.Id x1)), Aast.CGstring x2) ->
       N.Class_get (make_class_id env x1, N.CGstring x2)
-    | Aast.Class_get
-        ((_, Aast.CIexpr (_, Aast.Lvar (p, lid))), Aast.CGstring x2) ->
+    | Aast.Class_get ((_, Aast.CIexpr (_, Aast.Lvar (p, lid))), Aast.CGstring x2)
+      ->
       let x1 = (p, Local_id.to_string lid) in
       N.Class_get (make_class_id env x1, N.CGstring x2)
     | Aast.Class_get ((_, Aast.CIexpr x1), Aast.CGstring _) ->
@@ -2392,10 +2216,15 @@ module Make (GetLocals : GetLocals) = struct
       let (genv, _) = env in
       let (_, name) = NS.elaborate_id genv.namespace NS.ElaborateClass x1 in
       begin
-        match Naming_table.Types.get_pos name with
-        | Some (_, Naming_table.TTypedef) when snd x2 = "class" ->
+        match Naming_table.Types.get_kind name with
+        | Some Naming_table.TTypedef when snd x2 = "class" ->
           N.Typename
-            (Env.type_name env x1 ~allow_typedef:true ~allow_generics:false)
+            (Env.type_name
+               ~context:Errors.ClassContext
+               env
+               x1
+               ~allow_typedef:true
+               ~allow_generics:false)
         | _ -> N.Class_const (make_class_id env x1, x2)
       end
     | Aast.Class_const ((_, Aast.CIexpr (_, Aast.Lvar (p, lid))), x2) ->
@@ -2403,10 +2232,15 @@ module Make (GetLocals : GetLocals) = struct
       let (genv, _) = env in
       let (_, name) = NS.elaborate_id genv.namespace NS.ElaborateClass x1 in
       begin
-        match Naming_table.Types.get_pos name with
-        | Some (_, Naming_table.TTypedef) when snd x2 = "class" ->
+        match Naming_table.Types.get_kind name with
+        | Some Naming_table.TTypedef when snd x2 = "class" ->
           N.Typename
-            (Env.type_name env x1 ~allow_typedef:true ~allow_generics:false)
+            (Env.type_name
+               ~context:Errors.ClassContext
+               env
+               x1
+               ~allow_typedef:true
+               ~allow_generics:false)
         | _ -> N.Class_const (make_class_id env x1, x2)
       end
     | Aast.Class_const _ -> (* TODO: report error in strict mode *) N.Any
@@ -2415,54 +2249,43 @@ module Make (GetLocals : GetLocals) = struct
         match c with
         | Aast.CIexpr (_, Aast.Id x1) ->
           N.PU_identifier (make_class_id env x1, s1, s2)
-        | _ ->
-          failwith "TODO(T35357243): Error during parsing of PU_identifier"
+        | _ -> failwith "TODO(T35357243): Error during parsing of PU_identifier"
       end
-    | Aast.Call (_, (_, Aast.Id (p, pseudo_func)), tal, el, uel)
+    | Aast.Call (_, (_, Aast.Id (p, pseudo_func)), tal, el, unpacked_element)
       when pseudo_func = SN.SpecialFunctions.echo ->
-      arg_unpack_unexpected uel;
+      arg_unpack_unexpected unpacked_element;
       N.Call
         ( N.Cnormal,
           (p, N.Id (p, pseudo_func)),
           targl env p tal,
           exprl env el,
-          [] )
-    | Aast.Call (_, (p, Aast.Id (_, cn)), tal, el, uel)
-      when cn = SN.SpecialFunctions.call_user_func ->
-      arg_unpack_unexpected uel;
+          None )
+    | Aast.Call (_, (p, Aast.Id (_, cn)), tal, el, unpacked_element)
+      when cn = SN.StdlibFunctions.call_user_func ->
+      arg_unpack_unexpected unpacked_element;
       begin
         match el with
         | [] ->
           Errors.naming_too_few_arguments p;
           N.Any
         | f :: el ->
-          N.Call (N.Cuser_func, expr env f, targl env p tal, exprl env el, [])
+          N.Call (N.Cuser_func, expr env f, targl env p tal, exprl env el, None)
       end
-    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, uel)
-      when cn = SN.SpecialFunctions.fun_ ->
-      arg_unpack_unexpected uel;
+    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, unpacked_element)
+      when cn = SN.AutoimportedFunctions.fun_ ->
+      arg_unpack_unexpected unpacked_element;
       let (genv, _) = env in
       begin
         match el with
         | [] ->
           Errors.naming_too_few_arguments p;
           N.Any
-        | [(_, Aast.String s)] when String.contains s ':' ->
-          Errors.illegal_meth_fun p;
-          N.Any
-        | [(_, Aast.String s)]
-          when genv.in_ppl && SN.PPLFunctions.is_reserved s ->
+        | [(_, Aast.String s)] when String.contains s ':' -> N.Any
+        | [(_, Aast.String s)] when genv.in_ppl && SN.PPLFunctions.is_reserved s
+          ->
           Errors.ppl_meth_pointer p ("fun(" ^ s ^ ")");
           N.Any
-        | [(p, Aast.String x)] ->
-          (* Functions referenced by fun() are always fully-qualified *)
-          let x =
-            if x <> "" && x.[0] <> '\\' then
-              "\\" ^ x
-            else
-              x
-          in
-          N.Fun_id (Env.fun_id_special env (p, x))
+        | [(p, Aast.String x)] -> N.Fun_id (p, x)
         | [(p, _)] ->
           Errors.illegal_fun p;
           N.Any
@@ -2470,9 +2293,9 @@ module Make (GetLocals : GetLocals) = struct
           Errors.naming_too_many_arguments p;
           N.Any
       end
-    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, uel)
-      when cn = SN.SpecialFunctions.inst_meth ->
-      arg_unpack_unexpected uel;
+    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, unpacked_element)
+      when cn = SN.AutoimportedFunctions.inst_meth ->
+      arg_unpack_unexpected unpacked_element;
       begin
         match el with
         | []
@@ -2488,9 +2311,9 @@ module Make (GetLocals : GetLocals) = struct
           Errors.naming_too_many_arguments p;
           N.Any
       end
-    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, uel)
-      when cn = SN.SpecialFunctions.meth_caller ->
-      arg_unpack_unexpected uel;
+    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, unpacked_element)
+      when cn = SN.AutoimportedFunctions.meth_caller ->
+      arg_unpack_unexpected unpacked_element;
       begin
         match el with
         | []
@@ -2503,6 +2326,7 @@ module Make (GetLocals : GetLocals) = struct
             | ((pc, N.String cl), (pm, N.String meth)) ->
               N.Method_caller
                 ( Env.type_name
+                    ~context:Errors.ClassContext
                     env
                     (pc, cl)
                     ~allow_typedef:false
@@ -2512,6 +2336,7 @@ module Make (GetLocals : GetLocals) = struct
               when mem = SN.Members.mClass ->
               N.Method_caller
                 ( Env.type_name
+                    ~context:Errors.ClassContext
                     env
                     cl
                     ~allow_typedef:false
@@ -2525,9 +2350,9 @@ module Make (GetLocals : GetLocals) = struct
           Errors.naming_too_many_arguments p;
           N.Any
       end
-    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, uel)
-      when cn = SN.SpecialFunctions.class_meth ->
-      arg_unpack_unexpected uel;
+    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, unpacked_element)
+      when cn = SN.AutoimportedFunctions.class_meth ->
+      arg_unpack_unexpected unpacked_element;
       begin
         match el with
         | []
@@ -2540,6 +2365,7 @@ module Make (GetLocals : GetLocals) = struct
             | ((pc, N.String cl), (pm, N.String meth)) ->
               N.Smethod_id
                 ( Env.type_name
+                    ~context:Errors.ClassContext
                     env
                     (pc, cl)
                     ~allow_typedef:false
@@ -2562,6 +2388,7 @@ module Make (GetLocals : GetLocals) = struct
               when mem = SN.Members.mClass ->
               N.Smethod_id
                 ( Env.type_name
+                    ~context:Errors.ClassContext
                     env
                     cl
                     ~allow_typedef:false
@@ -2583,82 +2410,64 @@ module Make (GetLocals : GetLocals) = struct
           Errors.naming_too_many_arguments p;
           N.Any
       end
-    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, uel)
+    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, unpacked_element)
       when cn = SN.SpecialFunctions.assert_ ->
-      arg_unpack_unexpected uel;
+      arg_unpack_unexpected unpacked_element;
       if List.length el <> 1 then Errors.assert_arity p;
       N.Assert
         (N.AE_assert
            (Option.value_map (List.hd el) ~default:(p, N.Any) ~f:(expr env)))
-    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, uel)
+    | Aast.Call (_, (p, Aast.Id (_, cn)), _, el, unpacked_element)
       when cn = SN.SpecialFunctions.tuple ->
-      arg_unpack_unexpected uel;
+      arg_unpack_unexpected unpacked_element;
       (match el with
       | [] ->
         Errors.naming_too_few_arguments p;
         N.Any
       | el -> N.List (exprl env el))
     (* sample, factor, observe, condition *)
-    | Aast.Call (_, (p1, Aast.Id (p2, cn)), tal, el, uel)
+    | Aast.Call (_, (p1, Aast.Id (p2, cn)), tal, el, unpacked_element)
       when Env.in_ppl env && SN.PPLFunctions.is_reserved cn ->
       let n_expr = N.Id (p2, cn) in
       N.Call
-        (N.Cnormal, (p1, n_expr), targl env p tal, exprl env el, exprl env uel)
-    | Aast.Call (_, (p, Aast.Id f), tal, el, uel) ->
-      begin
-        match Env.let_local env f with
-        | Some x ->
-          (* Translate into local id *)
-          let f = (p, N.ImmutableVar x) in
-          N.Call (N.Cnormal, f, targl env p tal, exprl env el, exprl env uel)
-        | None ->
-          (* The name is not a local `let` binding *)
-          let qualified = Env.fun_id env f in
-          let cn = snd qualified in
-          (* The above special cases (fun, inst_meth, meth_caller, class_meth,
-           * and friends) are magical language constructs, which we should
-           * check before calling fun_id and looking up the function and doing
-           * namespace normalization. However, genva, etc are actual
-           * functions that actually exist, we just need to handle them
-           * specially here, during naming. Note that most of the function
-           * special cases, such as idx, are actually handled in typing, and
-           * don't require naming magic. *)
-          if
-            cn = SN.HH.asio_va
-            || cn = SN.HH.lib_tuple_gen
-            || cn = SN.HH.lib_tuple_from_async
-          then (
-            arg_unpack_unexpected uel;
-            if List.length el < 1 then (
-              Errors.genva_arity p;
-              N.Any
-            ) else
-              N.Special_func (N.Genva (exprl env el))
-          ) else
-            N.Call
-              ( N.Cnormal,
-                (p, N.Id qualified),
-                targl env p tal,
-                exprl env el,
-                exprl env uel )
-      end
+        ( N.Cnormal,
+          (p1, n_expr),
+          targl env p tal,
+          exprl env el,
+          oexpr env unpacked_element )
+    | Aast.Call (_, (p, Aast.Id f), tal, el, unpacked_element) ->
+      let qualified = Env.fun_id env f in
+      N.Call
+        ( N.Cnormal,
+          (p, N.Id qualified),
+          targl env p tal,
+          exprl env el,
+          oexpr env unpacked_element )
     (* match *)
     (* Handle nullsafe instance method calls here. Because Obj_get is used
        for both instance property access and instance method calls, we need
        to match the entire "Call(Obj_get(..), ..)" pattern here so that we
        only match instance method calls *)
-    | Aast.Call (_, (p, Aast.Obj_get (e1, e2, Aast.OG_nullsafe)), tal, el, uel)
-      ->
+    | Aast.Call
+        ( _,
+          (p, Aast.Obj_get (e1, e2, Aast.OG_nullsafe)),
+          tal,
+          el,
+          unpacked_element ) ->
       N.Call
         ( N.Cnormal,
           (p, N.Obj_get (expr env e1, expr_obj_get_name env e2, N.OG_nullsafe)),
           targl env p tal,
           exprl env el,
-          exprl env uel )
+          oexpr env unpacked_element )
     (* Handle all kinds of calls that weren't handled by any of the cases above *)
-    | Aast.Call (_, e, tal, el, uel) ->
+    | Aast.Call (_, e, tal, el, unpacked_element) ->
       N.Call
-        (N.Cnormal, expr env e, targl env p tal, exprl env el, exprl env uel)
+        ( N.Cnormal,
+          expr env e,
+          targl env p tal,
+          exprl env el,
+          oexpr env unpacked_element )
     | Aast.Yield_break -> N.Yield_break
     | Aast.Yield e -> N.Yield (afield env e)
     | Aast.Await e -> N.Await (expr env e)
@@ -2675,48 +2484,28 @@ module Make (GetLocals : GetLocals) = struct
         match try_castable_hint ~tp_depth:1 env p x hl with
         | Some ty -> (p, ty)
         | None ->
-          begin
-            match x with
-            | x when x = SN.Typehints.object_cast ->
-              (* (object) is a valid cast but not a valid type annotation *)
-              if Partial.should_check_error (fst env).in_mode 2055 then (
-                Errors.object_cast p None;
-                (p, N.Herr)
-              ) else
-                (p, N.Hany)
-            | x when x = SN.Typehints.void ->
-              Errors.void_cast p;
-              (p, N.Herr)
-            | x when x = SN.Typehints.unset_cast ->
-              Errors.unset_cast p;
-              (p, N.Herr)
-            | _ ->
-              (* Let's just assume that any other invalid cases are attempts to
-              * cast to specific objects *)
-              let h = hint ~allow_typedef:false env ty in
-              Errors.object_cast p (Some x);
-              h
-          end
+          (* Let's just assume that any other invalid cases are attempts to
+          * cast to specific objects *)
+          let h = hint ~allow_typedef:false env ty in
+          Errors.object_cast p (Some x);
+          h
       in
       N.Cast (ty, expr env e2)
     | Aast.Unop (uop, e) -> N.Unop (uop, expr env e)
     | Aast.Binop ((Ast_defs.Eq None as op), lv, e2) ->
-      if Env.inside_pipe env then
-        Errors.unimplemented_feature p "Assignment within pipe expressions";
       let e2 = expr env e2 in
-      let nsenv = (fst env).namespace in
-      let (_, vars) = GetLocals.lvalue (nsenv, SMap.empty) lv in
+      let vars = GetLocals.lvalue SMap.empty lv in
       SMap.iter (fun x p -> ignore (Env.new_lvar env (p, x))) vars;
       N.Binop (op, expr env lv, e2)
     | Aast.Binop ((Ast_defs.Eq _ as bop), e1, e2) ->
-      if Env.inside_pipe env then
-        Errors.unimplemented_feature p "Assignment within pipe expressions";
       N.Binop (bop, expr env e1, expr env e2)
     | Aast.Binop (bop, e1, e2) -> N.Binop (bop, expr env e1, expr env e2)
-    | Aast.Pipe (_dollardollar, e1, e2) ->
-      let e1 = expr env e1 in
-      let (ident, e2) = Env.pipe_scope env (fun env -> expr env e2) in
-      N.Pipe ((p, ident), e1, e2)
+    | Aast.Pipe (dollardollar, e1, e2) ->
+      N.Pipe
+        ( ( fst dollardollar,
+            Local_id.make_unscoped SN.SpecialIdents.dollardollar ),
+          expr env e1,
+          expr env e2 )
     | Aast.Eif (e1, e2opt, e3) ->
       (* The order matters here, of course -- e1 can define vars that need to
        * be available in e2 and e3. *)
@@ -2728,39 +2517,48 @@ module Make (GetLocals : GetLocals) = struct
             (e2opt, e3))
       in
       N.Eif (e1, e2opt, e3)
-    | Aast.Is (e, h) -> N.Is (expr env e, hint ~allow_wildcard:true env h)
-    | Aast.As (e, h, b) -> N.As (expr env e, hint ~allow_wildcard:true env h, b)
-    | Aast.New ((_, Aast.CIexpr (p, Aast.Id x)), tal, el, uel, _) ->
+    | Aast.Is (e, h) ->
+      N.Is (expr env e, hint ~allow_wildcard:true ~allow_like:true env h)
+    | Aast.As (e, h, b) ->
+      N.As (expr env e, hint ~allow_wildcard:true ~allow_like:true env h, b)
+    | Aast.New ((_, Aast.CIexpr (p, Aast.Id x)), tal, el, unpacked_element, _)
+      ->
       N.New
-        (make_class_id env x, targl env p tal, exprl env el, exprl env uel, p)
-    | Aast.New ((_, Aast.CIexpr (_, Aast.Lvar (pos, x))), tal, el, uel, p) ->
+        ( make_class_id env x,
+          targl env p tal,
+          exprl env el,
+          oexpr env unpacked_element,
+          p )
+    | Aast.New
+        ((_, Aast.CIexpr (_, Aast.Lvar (pos, x))), tal, el, unpacked_element, p)
+      ->
       N.New
         ( make_class_id env (pos, Local_id.to_string x),
           targl env p tal,
           exprl env el,
-          exprl env uel,
+          oexpr env unpacked_element,
           p )
-    | Aast.New ((_, Aast.CIexpr (p, _e)), tal, el, uel, _) ->
+    | Aast.New ((_, Aast.CIexpr (p, _e)), tal, el, unpacked_element, _) ->
       if Partial.should_check_error (fst env).in_mode 2060 then
         Errors.dynamic_new_in_strict_mode p;
       N.New
         ( make_class_id env (p, SN.Classes.cUnknown),
           targl env p tal,
           exprl env el,
-          exprl env uel,
+          oexpr env unpacked_element,
           p )
     | Aast.New _ -> failwith "ast_to_nast aast.new"
-    | Aast.Record ((_, Aast.CIexpr (_, Aast.Id x)), is_array, l) ->
+    | Aast.Record (id, is_array, l) ->
+      let id =
+        Env.type_name
+          ~context:Errors.RecordContext
+          env
+          id
+          ~allow_typedef:false
+          ~allow_generics:false
+      in
       let l = List.map l (fun (e1, e2) -> (expr env e1, expr env e2)) in
-      N.Record (make_class_id env x, is_array, l)
-    | Aast.Record ((_, Aast.CIexpr (_, Aast.Lvar (pos, x))), is_array, l) ->
-      let l = List.map l (fun (e1, e2) -> (expr env e1, expr env e2)) in
-      N.Record (make_class_id env (pos, Local_id.to_string x), is_array, l)
-    | Aast.Record ((p, _e), is_array, l) ->
-      let l = List.map l (fun (e1, e2) -> (expr env e1, expr env e2)) in
-      if (fst env).in_mode = FileInfo.Mstrict then
-        Errors.dynamic_new_in_strict_mode p;
-      N.Record (make_class_id env (p, SN.Classes.cUnknown), is_array, l)
+      N.Record (id, is_array, l)
     | Aast.Efun (f, idl) ->
       let idl =
         List.fold_right idl ~init:[] ~f:(fun ((p, x) as id) acc ->
@@ -2770,9 +2568,7 @@ module Make (GetLocals : GetLocals) = struct
             ) else
               id :: acc)
       in
-      let idl =
-        List.map ~f:(fun (p, lid) -> (p, Local_id.to_string lid)) idl
-      in
+      let idl = List.map ~f:(fun (p, lid) -> (p, Local_id.to_string lid)) idl in
       let idl' = List.map idl (Env.lvar env) in
       let env = (fst env, Env.empty_local None) in
       List.iter2_exn idl idl' (Env.add_lvar env);
@@ -2789,30 +2585,25 @@ module Make (GetLocals : GetLocals) = struct
         cap
       in
       let lenv = Env.empty_local @@ Some handle_unbound in
-      (* Extend the current let binding into the scope of lambda *)
-      Env.copy_let_locals env (fst env, lenv);
       let env = (fst env, lenv) in
       let f = expr_lambda env f in
-      (* TODO T28711692: Compute the correct capture list for let variables,
-       * it does not seem to affect typechecking... *)
       N.Lfun (f, !to_capture)
     | Aast.Xml (x, al, el) ->
       N.Xml
-        ( Env.type_name env x ~allow_typedef:false ~allow_generics:false,
+        ( Env.type_name
+            ~context:Errors.ClassContext
+            env
+            x
+            ~allow_typedef:false
+            ~allow_generics:false,
           attrl env al,
           exprl env el )
     | Aast.Shape fdl ->
-      let (shp, _) =
-        List.fold_left
-          fdl
-          ~init:([], Ast_defs.ShapeSet.empty)
-          ~f:(fun (fdm, set) (pname, value) ->
-            let (pos, name) = convert_shape_name env pname in
-            if Ast_defs.ShapeSet.mem name set then
-              Errors.fd_name_already_bound pos;
-            ((name, expr env value) :: fdm, Ast_defs.ShapeSet.add name set))
+      let shp =
+        List.map fdl ~f:(fun (pname, value) ->
+            (convert_shape_name env pname, expr env value))
       in
-      N.Shape (List.rev shp)
+      N.Shape shp
     | Aast.BracedExpr _ -> N.Any
     | Aast.Yield_from e -> N.Yield_from (expr env e)
     | Aast.Import _ -> N.Any
@@ -2822,14 +2613,12 @@ module Make (GetLocals : GetLocals) = struct
     | Aast.ValCollection _
     | Aast.KeyValCollection _
     | Aast.This
-    | Aast.ImmutableVar _
     | Aast.Dollardollar _
     | Aast.Lplaceholder _
     | Aast.Fun_id _
     | Aast.Method_id _
     | Aast.Method_caller _
     | Aast.Smethod_id _
-    | Aast.Special_func _
     | Aast.Pair _
     | Aast.Assert _
     | Aast.Typename _
@@ -2906,11 +2695,17 @@ module Make (GetLocals : GetLocals) = struct
          * "$$" except in positions where a classname is expected, like in
          * static member access. So, we only reach here for things
          * like "$$::someMethod()". *)
-        N.CIexpr (p, N.Lvar (p, Env.found_dollardollar env p))
+        N.CIexpr
+          (p, N.Lvar (p, Local_id.make_unscoped SN.SpecialIdents.dollardollar))
       | x when x.[0] = '$' -> N.CIexpr (p, N.Lvar (Env.lvar env cid))
       | _ ->
-        N.CI (Env.type_name env cid ~allow_typedef:false ~allow_generics:true)
-    )
+        N.CI
+          (Env.type_name
+             ~context:Errors.ClassContext
+             env
+             cid
+             ~allow_typedef:false
+             ~allow_generics:true) )
 
   and casel env l = List.map l (case env)
 
@@ -2929,18 +2724,14 @@ module Make (GetLocals : GetLocals) = struct
   and catch env ((p1, lid1), (p2, lid2), b) =
     Env.scope env (fun env ->
         let name2 = Local_id.get_name lid2 in
-        (* If the variable does not begin with $, it is an immutable binding *)
-        let x2 =
-          if
-            name2 <> "" && name2.[0] = '$'
-            (* This is always true if not in experimental mode *)
-          then
-            Env.new_lvar env (p2, name2)
-          else
-            Env.new_let_local env (p2, name2)
-        in
+        let x2 = Env.new_lvar env (p2, name2) in
         let b = branch env b in
-        ( Env.type_name env (p1, lid1) ~allow_typedef:true ~allow_generics:false,
+        ( Env.type_name
+            ~context:Errors.ClassContext
+            env
+            (p1, lid1)
+            ~allow_typedef:true
+            ~allow_generics:false,
           x2,
           b ))
 
@@ -2978,7 +2769,7 @@ module Make (GetLocals : GetLocals) = struct
   and string2 env idl = List.map idl (expr env)
 
   and class_pu_enum env pu_enum =
-    let make_tparam sid def =
+    let make_tparam (sid, reified) def =
       Aast.
         {
           tp_variance = Ast_defs.Invariant;
@@ -2987,7 +2778,7 @@ module Make (GetLocals : GetLocals) = struct
             (match def with
             | None -> []
             | Some hint -> [(Ast_defs.Constraint_eq, hint)]);
-          tp_reified = Erased;
+          tp_reified = reified;
           tp_user_attributes = [];
         }
     in
@@ -2999,15 +2790,15 @@ module Make (GetLocals : GetLocals) = struct
     *)
     let env_with_case_types =
       let (genv, lenv) = env in
-      let make_tparam sid = make_tparam sid None in
+      let make_tparam tp = make_tparam tp None in
       (extend_params genv (List.map ~f:make_tparam pu_case_types), lenv)
     in
     let pu_case_values =
       List.map
-        ~f:(fun (sid, h) ->
-          (sid, hint ~forbid_this:true env_with_case_types h))
+        ~f:(fun (sid, h) -> (sid, hint ~forbid_this:true env_with_case_types h))
         pu_enum.Aast.pu_case_values
     in
+
     (* Now when naming each member declaration, the environment can be
        updated more precisely:
        - type constraints (type t = foo) are available to have a more precise
@@ -3069,7 +2860,7 @@ module Make (GetLocals : GetLocals) = struct
         *)
         let env_with_mapped_types =
           let (genv, lenv) = env in
-          let make_tparam (sid, h) = make_tparam sid (Some h) in
+          let make_tparam (tp, h) = make_tparam (tp, Aast.Erased) (Some h) in
           (extend_params genv (List.map ~f:make_tparam pum_types), lenv)
         in
         let pum_types =
@@ -3087,6 +2878,7 @@ module Make (GetLocals : GetLocals) = struct
       List.map ~f:compute_mapping pu_members
     in
     {
+      Aast.pu_annotation = ();
       Aast.pu_name = pu_enum.Aast.pu_name;
       Aast.pu_is_final = pu_enum.Aast.pu_is_final;
       Aast.pu_case_types = pu_enum.Aast.pu_case_types;
@@ -3158,12 +2950,44 @@ module Make (GetLocals : GetLocals) = struct
         nc.N.c_mode
         (nc.N.c_name, nc.N.c_kind)
         Namespace_env.empty_with_default
-        (Attributes.mem
+        (Naming_attributes.mem
            SN.UserAttributes.uaProbabilisticModel
            nc.N.c_user_attributes)
     in
     let methods = List.map nc.N.c_methods (meth_body genv) in
     { nc with N.c_methods = methods }
+
+  let record_field env rf =
+    let (id, h, e) = rf in
+    let h = hint env h in
+    let e = oexpr env e in
+    (id, h, e)
+
+  let record_def rd =
+    let env = Env.make_top_level_env () in
+    let rd =
+      elaborate_namespaces#on_record_def
+        (Naming_elaborate_namespaces_endo.make_env (fst env).namespace)
+        rd
+    in
+    let attrs = user_attributes env rd.Aast.rd_user_attributes in
+    let extends =
+      match rd.Aast.rd_extends with
+      | Some extends -> Some (hint ~context:Errors.RecordContext env extends)
+      | None -> None
+    in
+    let fields = List.map rd.Aast.rd_fields ~f:(record_field env) in
+    {
+      N.rd_annotation = ();
+      rd_name = rd.Aast.rd_name;
+      rd_abstract = rd.Aast.rd_abstract;
+      rd_extends = extends;
+      rd_fields = fields;
+      rd_user_attributes = attrs;
+      rd_namespace = rd.Aast.rd_namespace;
+      rd_span = rd.Aast.rd_span;
+      rd_doc_comment = rd.Aast.rd_doc_comment;
+    }
 
   (**************************************************************************)
   (* Typedefs *)
@@ -3172,8 +2996,12 @@ module Make (GetLocals : GetLocals) = struct
   let typedef tdef =
     let cstrs = make_constraints tdef.Aast.t_tparams in
     let env = Env.make_typedef_env cstrs tdef in
+    let tdef =
+      elaborate_namespaces#on_typedef
+        (Naming_elaborate_namespaces_endo.make_env (fst env).namespace)
+        tdef
+    in
     let tconstraint = Option.map tdef.Aast.t_constraint (hint env) in
-    List.iter tdef.Aast.t_tparams check_constraint;
     let tparaml = type_paraml env tdef.Aast.t_tparams in
     let attrs = user_attributes env tdef.Aast.t_user_attributes in
     {
@@ -3192,29 +3020,15 @@ module Make (GetLocals : GetLocals) = struct
   (* Global constants *)
   (**************************************************************************)
 
-  let check_constant_hint cst =
-    match cst.Aast.cst_type with
-    | None when Partial.should_check_error cst.Aast.cst_mode 2001 ->
-      Errors.const_without_typehint cst.Aast.cst_name
-    | None
-    | Some _ ->
-      ()
-
-  let check_constant_name genv cst =
-    if genv.namespace.Namespace_env.ns_name <> None then
-      let (pos, name) = cst.Aast.cst_name in
-      let name = Utils.strip_all_ns name in
-      if SN.PseudoConsts.is_pseudo_const (Utils.add_ns name) then
-        Errors.name_is_reserved name pos
-
   let global_const cst =
     let env = Env.make_const_env cst in
-    let hint = Option.map cst.Aast.cst_type (hint env) in
-    let e =
-      let _ = check_constant_name (fst env) cst in
-      let _ = check_constant_hint cst in
-      constant_expr env cst.Aast.cst_value
+    let cst =
+      elaborate_namespaces#on_gconst
+        (Naming_elaborate_namespaces_endo.make_env (fst env).namespace)
+        cst
     in
+    let hint = Option.map cst.Aast.cst_type (hint env) in
+    let e = constant_expr env cst.Aast.cst_value in
     {
       N.cst_annotation = ();
       cst_mode = cst.Aast.cst_mode;
@@ -3230,6 +3044,12 @@ module Make (GetLocals : GetLocals) = struct
   (**************************************************************************)
 
   let program ast =
+    let ast =
+      elaborate_namespaces#on_program
+        (Naming_elaborate_namespaces_endo.make_env
+           Namespace_env.empty_with_default)
+        ast
+    in
     let top_level_env = ref (Env.make_top_level_env ()) in
     let rec aux acc def =
       match def with
@@ -3239,6 +3059,7 @@ module Make (GetLocals : GetLocals) = struct
       | Aast.Stmt (_, Aast.Markup _) ->
         acc
       | Aast.Stmt s -> N.Stmt (stmt !top_level_env s) :: acc
+      | Aast.RecordDef rd -> N.RecordDef (record_def rd) :: acc
       | Aast.Typedef t -> N.Typedef (typedef t) :: acc
       | Aast.Constant cst -> N.Constant (global_const cst) :: acc
       | Aast.Namespace (_ns, aast) -> List.fold_left ~f:aux ~init:[] aast @ acc
@@ -3258,7 +3079,12 @@ module Make (GetLocals : GetLocals) = struct
 end
 
 include Make (struct
-  let stmt acc _ = acc
+  type env = {
+    ctx: Provider_context.t;
+    nsenv: Namespace_env.env;
+  }
+
+  let stmt _ acc _ = acc
 
   let lvalue acc _ = acc
 end)

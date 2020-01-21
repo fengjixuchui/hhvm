@@ -51,7 +51,7 @@ static StrNR ctxClassName() {
 static const Class* get_cls(const Variant& class_or_object) {
   Class* cls = nullptr;
   if (class_or_object.is(KindOfObject)) {
-    ObjectData* obj = class_or_object.toCObjRef().get();
+    ObjectData* obj = class_or_object.asCObjRef().get();
     cls = obj->getVMClass();
   } else if (class_or_object.isArray()) {
     // do nothing but avoid the toString conversion notice
@@ -73,16 +73,6 @@ Array HHVM_FUNCTION(get_declared_interfaces) {
 
 Array HHVM_FUNCTION(get_declared_traits) {
   return Unit::getTraitsInfo();
-}
-
-bool HHVM_FUNCTION(class_alias, const String& original, const String& alias,
-                                bool autoload /* = true */) {
-  if (RuntimeOption::EvalAuthoritativeMode) {
-    raise_warning("Cannot call class_alias dynamically "
-                  "in repo-authoritative mode");
-    return false;
-  }
-  return Unit::aliasClass(original.get(), alias.get(), autoload);
 }
 
 bool HHVM_FUNCTION(class_exists, const String& class_name,
@@ -132,13 +122,13 @@ Array HHVM_FUNCTION(get_class_constants, const String& className) {
     if (consts[i].cls == cls && !consts[i].isAbstract() &&
         !consts[i].isType()) {
       auto const name  = const_cast<StringData*>(consts[i].name.get());
-      Cell value = consts[i].val;
+      TypedValue value = consts[i].val;
       // Handle dynamically set constants
       if (value.m_type == KindOfUninit) {
         value = cls->clsCnsGet(consts[i].name);
       }
       assertx(value.m_type != KindOfUninit);
-      arrayInit.set(name, cellAsCVarRef(value));
+      arrayInit.set(name, tvAsCVarRef(value));
     }
   }
 
@@ -182,8 +172,8 @@ Variant HHVM_FUNCTION(get_class_vars, const String& className) {
     // Empty names are used for invisible/private parent properties; skip them.
     assertx(name->size() != 0);
     if (Class::IsPropAccessible(propInfo[slot], ctx)) {
-      auto const value = &((*propVals)[index]);
-      arr.set(name, tvAsCVarRef(value));
+      auto const tv = (*propVals)[index].val.tv();
+      arr.set(name, tv);
     }
   }
 
@@ -228,7 +218,7 @@ Variant HHVM_FUNCTION(get_class, const Variant& object /* = uninit_variant */) {
     logOrThrow(object);
     return false;
   }
-  return Variant{object.toCObjRef()->getVMClass()->name(),
+  return Variant{object.asCObjRef()->getVMClass()->name(),
                  Variant::PersistentStrInit{}};
 }
 
@@ -255,9 +245,9 @@ Variant HHVM_FUNCTION(get_parent_class,
     if (!cls) return false;
   } else {
     if (object.isObject()) {
-      cls = object.toCObjRef()->getVMClass();
+      cls = object.asCObjRef()->getVMClass();
     } else if (object.isString()) {
-      cls = Unit::loadClass(object.toCStrRef().get());
+      cls = Unit::loadClass(object.asCStrRef().get());
       if (!cls) return false;
     } else {
       logOrThrow(object);
@@ -350,17 +340,7 @@ Variant HHVM_FUNCTION(property_exists, const Variant& class_or_object,
 }
 
 Array HHVM_FUNCTION(get_object_vars, const Object& object) {
-  return object
-    ->o_toIterArray(ctxClassName(), ObjectData::PreserveRefs)
-    .toDArray();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-Variant HHVM_FUNCTION(call_user_method_array, const String& method_name,
-                                              VRefParam obj,
-                                              const Variant& paramarr) {
-  return obj.toObject()->o_invoke(method_name, paramarr);
+  return object->o_toIterArray(ctxClassName()).toDArray();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -440,7 +420,6 @@ void StandardExtension::initClassobj() {
   HHVM_FE(get_declared_classes);
   HHVM_FE(get_declared_interfaces);
   HHVM_FE(get_declared_traits);
-  HHVM_FE(class_alias);
   HHVM_FE(class_exists);
   HHVM_FE(interface_exists);
   HHVM_FE(trait_exists);
@@ -455,7 +434,6 @@ void StandardExtension::initClassobj() {
   HHVM_FE(method_exists);
   HHVM_FE(property_exists);
   HHVM_FE(get_object_vars);
-  HHVM_FE(call_user_method_array);
   HHVM_FALIAS(HH\\class_meth_get_class, HH_class_meth_get_class);
   HHVM_FALIAS(HH\\class_meth_get_method, HH_class_meth_get_method);
   HHVM_FALIAS(HH\\meth_caller_get_class, HH_meth_caller_get_class);

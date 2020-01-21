@@ -781,8 +781,14 @@ static int php_read_APP(const req::ptr<File>& stream,
   }
   length -= 2;                /* length includes itself */
 
-  String buffer = stream->read(length);
-  if (buffer.empty()) {
+  String buffer;
+  if (length == 0) {
+    // avoid stream reads of length 0, they trigger a notice
+    buffer = empty_string();
+  } else {
+    buffer = stream->read(length);
+  }
+  if (buffer.length() != length) {
     return 0;
   }
 
@@ -1656,30 +1662,18 @@ gdImagePtr get_valid_image_resource(const Resource& image) {
   return img_res->get();
 }
 
-Variant getImageSize(const req::ptr<File>& stream, VRefParam imageinfo) {
+Variant getImageSize(const req::ptr<File>& stream, Array& imageinfo) {
   int itype = 0;
   struct gfxinfo *result = nullptr;
-  auto imageInfoPtr = imageinfo.getVariantOrNull();
-  if (imageInfoPtr) {
-    *imageInfoPtr = Array::Create();
-  }
 
+  imageinfo = Array::Create();
   itype = php_getimagetype(stream);
   switch( itype) {
   case IMAGE_FILETYPE_GIF:
     result = php_handle_gif(stream);
     break;
   case IMAGE_FILETYPE_JPEG:
-    {
-      Array infoArr;
-      if (imageInfoPtr) {
-        infoArr = Array::Create();
-      }
-      result = php_handle_jpeg(stream, infoArr);
-      if (imageInfoPtr) {
-        *imageInfoPtr = infoArr;
-      }
-    }
+    result = php_handle_jpeg(stream, imageinfo);
     break;
   case IMAGE_FILETYPE_PNG:
     result = php_handle_png(stream);
@@ -1750,7 +1744,7 @@ Variant getImageSize(const req::ptr<File>& stream, VRefParam imageinfo) {
 }
 
 Variant HHVM_FUNCTION(getimagesize, const String& filename,
-                      VRefParam imageinfo /*=null */) {
+                      Array& imageinfo) {
   if (auto stream = File::Open(filename, "rb")) {
     return getImageSize(stream, imageinfo);
   }
@@ -1758,7 +1752,7 @@ Variant HHVM_FUNCTION(getimagesize, const String& filename,
 }
 
 Variant HHVM_FUNCTION(getimagesizefromstring, const String& imagedata,
-                      VRefParam imageinfo /*=null */) {
+                      Array& imageinfo) {
   String data = "data://text/plain;base64,";
   data += StringUtil::Base64Encode(imagedata);
   if (auto stream = File::Open(data, "r")) {
@@ -3010,7 +3004,7 @@ bool HHVM_FUNCTION(imagesetstyle, const Resource& image, const Array& style) {
   CHECK_ALLOC_R(stylearr, malloc_size, false);
   index = 0;
   for (ArrayIter iter(style); iter; ++iter) {
-    stylearr[index++] = cellToInt(tvToCell(iter.secondVal()));
+    stylearr[index++] = tvToInt(iter.secondVal());
   }
   gdImageSetStyle(im, stylearr, index);
   IM_FREE(stylearr);
@@ -3893,7 +3887,7 @@ Variant HHVM_FUNCTION(imagecolorsforindex, const Resource& image,
   if (!im) return false;
   if (index >= 0 &&
       (gdImageTrueColor(im) || index < gdImageColorsTotal(im))) {
-    return make_map_array(
+    return make_darray(
       s_red,  gdImageRed(im,index),
       s_green, gdImageGreen(im,index),
       s_blue, gdImageBlue(im,index),
@@ -4545,7 +4539,7 @@ Variant HHVM_FUNCTION(iptcembed, const String& iptcdata,
       return false;
     }
 
-    auto& stat_arr = stat.toCArrRef();
+    auto& stat_arr = stat.asCArrRef();
     auto st_size = stat_arr[s_size].toInt64();
     if (st_size < 0) {
       raise_warning("unsupported stream type");
@@ -4701,7 +4695,7 @@ Variant HHVM_FUNCTION(iptcparse, const String& iptcblock) {
     if (!ret.exists(skey)) {
       ret.set(skey, Array::CreateVArray());
     }
-    auto const lval = ret.lvalAt(skey);
+    auto const lval = ret.lval(skey);
     forceToArray(lval).append(
       String((const char *)(buffer+inx), len, CopyString));
     inx += len;
@@ -8172,9 +8166,9 @@ Variant HHVM_FUNCTION(exif_read_data,
 }
 
 Variant HHVM_FUNCTION(exif_thumbnail, const String& filename,
-                         VRefParam width /* = null */,
-                         VRefParam height /* = null */,
-                         VRefParam imagetype /* = null */) {
+                         int64_t& width,
+                         int64_t& height,
+                         int64_t& imagetype) {
   image_info_type ImageInfo;
 
   memset(&ImageInfo, 0, sizeof(ImageInfo));
@@ -8193,9 +8187,9 @@ Variant HHVM_FUNCTION(exif_thumbnail, const String& filename,
   if (!ImageInfo.Thumbnail.width || !ImageInfo.Thumbnail.height) {
     exif_scan_thumbnail(&ImageInfo);
   }
-  width.assignIfRef((int64_t)ImageInfo.Thumbnail.width);
-  height.assignIfRef((int64_t)ImageInfo.Thumbnail.height);
-  imagetype.assignIfRef(ImageInfo.Thumbnail.filetype);
+  width = ImageInfo.Thumbnail.width;
+  height = ImageInfo.Thumbnail.height;
+  imagetype = ImageInfo.Thumbnail.filetype;
   String str(ImageInfo.Thumbnail.data, ImageInfo.Thumbnail.size, CopyString);
   exif_discard_imageinfo(&ImageInfo);
   return str;

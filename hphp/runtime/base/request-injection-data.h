@@ -89,6 +89,13 @@ private:
 
 //////////////////////////////////////////////////////////////////////
 
+enum TimeoutKindFlag : uint8_t {
+  TimeoutNone          = 0,
+  TimeoutTime          = 1ull << 1,
+  TimeoutCPUTime       = 1ull << 2,
+  TimeoutSoft          = 1ull << 3
+};
+
 /*
  * General-purpose bag of data and options for a request.
  *
@@ -115,9 +122,11 @@ struct RequestInjectionData {
 #if defined(__APPLE__) || defined(_MSC_VER)
     : m_timer(this)
     , m_cpuTimer(this)
+    , m_userTimeoutTimer(this)
 #else
     : m_timer(this, CLOCK_REALTIME)
     , m_cpuTimer(this, CLOCK_THREAD_CPUTIME_ID)
+    , m_userTimeoutTimer(this, CLOCK_REALTIME)
 #endif
     {}
 
@@ -135,15 +144,28 @@ struct RequestInjectionData {
 
   int getTimeout() const;
   void setTimeout(int seconds);
+  void triggerTimeout(TimeoutKindFlag kind);
+  bool checkTimeoutKind(TimeoutKindFlag kind);
+  void clearTimeoutFlag(TimeoutKindFlag kind);
+
+  /*
+   * Sets/Returns the amount of seconds until user time based callback is fired
+   */
+  int getUserTimeout() const;
+  void setUserTimeout(int seconds);
+  /*
+   * Triggers the user time based callback
+   */
+  void invokeUserTimeoutCallback(c_WaitableWaitHandle* wh = nullptr);
 
   int getCPUTimeout() const;
   void setCPUTimeout(int seconds);
 
   int getRemainingTime() const;
   int getRemainingCPUTime() const;
+  int getUserTimeoutRemainingTime() const;
 
-  void resetTimer(int seconds = 0);
-  void resetCPUTimer(int seconds = 0);
+  void resetTimers(int time_sec = 0, int cputime_sec = 0);
 
   void onTimeout(RequestTimer*);
 
@@ -333,8 +355,12 @@ struct RequestInjectionData {
   bool logFunctionCalls() const;
 
 private:
+  void resetTimer(int seconds = 0);
+  void resetCPUTimer(int seconds = 0);
+  void resetUserTimeoutTimer(int seconds = 0);
   RequestTimer m_timer;
   RequestTimer m_cpuTimer;
+  RequestTimer m_userTimeoutTimer;
 
   bool m_debuggerAttached{false};
   bool m_coverage{false};
@@ -422,6 +448,14 @@ private:
   int64_t m_brotliLgWindowSize;
   int64_t m_brotliQuality;
   int64_t m_zstdLevel;
+  int64_t m_zstdChecksumRate;
+
+  /*
+   * Instead of using several surprise flags, we can track the timeout info
+   * in its own array of flags. This allows us to define different kind of
+   * of timeouts.
+   */
+  std::atomic<uint8_t> m_timeoutFlags;
 
   /*
    * Keep track of the open_basedir_separator that may be used so we can

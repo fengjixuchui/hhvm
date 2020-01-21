@@ -134,7 +134,7 @@ RegionDesc::Block* RegionDesc::addBlock(SrcKey      sk,
                                         FPInvOffset spOffset) {
   m_blocks.push_back(
     std::make_shared<Block>(kInvalidTransID, sk.func(), sk.resumeMode(),
-                            sk.hasThis(), sk.offset(), length, spOffset));
+                            sk.offset(), length, spOffset));
   BlockPtr block = m_blocks.back();
   m_data[block->id()] = BlockData(block);
   return block.get();
@@ -589,13 +589,11 @@ bool hasTransID(RegionDesc::BlockId blockId) {
 RegionDesc::Block::Block(BlockId     id,
                          const Func* func,
                          ResumeMode  resumeMode,
-                         bool        hasThis,
                          Offset      start,
                          int         length,
                          FPInvOffset initSpOff)
   : m_func(func)
   , m_resumeMode(resumeMode)
-  , m_hasThis(hasThis)
   , m_start(start)
   , m_last(kInvalidOffset)
   , m_length(length)
@@ -618,7 +616,7 @@ RegionDesc::Block::Block(BlockId     id,
 
   assertx(length >= 0);
   if (length > 0) {
-    SrcKey sk(func, start, resumeMode, hasThis);
+    SrcKey sk(func, start, resumeMode);
     for (unsigned i = 1; i < length; ++i) sk.advance();
     m_last = sk.offset();
   }
@@ -662,7 +660,7 @@ void RegionDesc::Block::truncateAfter(SrcKey final) {
 void RegionDesc::Block::addPredicted(TypedLocation locType) {
   FTRACE(2, "Block::addPredicted({})\n", show(locType));
   assertx(locType.type != TBottom);
-  assertx(locType.type <= TGen);
+  assertx(locType.type <= TCell);
   // type predictions should be added in order of location
   assertx(m_typePredictions.size() == 0 ||
           (m_typePredictions.back().location < locType.location));
@@ -672,7 +670,7 @@ void RegionDesc::Block::addPredicted(TypedLocation locType) {
 void RegionDesc::Block::addPreCondition(const GuardedLocation& locGuard) {
   FTRACE(2, "Block::addPreCondition({})\n", show(locGuard));
   assertx(locGuard.type != TBottom);
-  assertx(locGuard.type <= TGen);
+  assertx(locGuard.type <= TCell);
   assertx(locGuard.type.isSpecialized() ||
           typeFitsConstraint(locGuard.type, locGuard.category));
   m_typePreConditions.push_back(locGuard);
@@ -731,7 +729,8 @@ void RegionDesc::Block::checkInstruction(Op op) const {
  * 3. (Unchecked) each stack offset in the type prediction list is valid.
 */
 void RegionDesc::Block::checkMetadata() const {
-  auto checkTypedLocations = [&](const char* /*msg*/, const TypedLocVec& vec) {
+  auto checkTypedLocations = [&](const char* /*msg*/,
+                                 const TypedLocations& vec) {
     for (auto& typedLoc : vec) {
       auto& loc = typedLoc.location;
       switch (loc.tag()) {
@@ -746,7 +745,7 @@ void RegionDesc::Block::checkMetadata() const {
   };
 
   auto checkGuardedLocations = [&](const char* /*msg*/,
-                                   const GuardedLocVec& vec) {
+                                   const GuardedLocations& vec) {
     for (auto& guardedLoc : vec) {
       assertx(guardedLoc.type.isSpecialized() ||
               typeFitsConstraint(guardedLoc.type, guardedLoc.category));
@@ -782,10 +781,12 @@ RegionDescPtr selectRegion(const RegionContext& context,
           return RegionDescPtr{nullptr};
         case RegionMode::Method:
           return selectMethod(context);
-        case RegionMode::Tracelet:
-          return selectTracelet(
-            context, kind, RuntimeOption::EvalJitMaxRegionInstrs
-          );
+        case RegionMode::Tracelet: {
+          auto const maxBCInstrs = kind == TransKind::Live
+            ? RuntimeOption::EvalJitMaxLiveRegionInstrs
+            : RuntimeOption::EvalJitMaxRegionInstrs;
+          return selectTracelet(context, kind, maxBCInstrs);
+        }
       }
       not_reached();
     } catch (const std::exception& e) {
@@ -796,7 +797,10 @@ RegionDescPtr selectRegion(const RegionContext& context,
 
   if (region) {
     FTRACE(3, "{}", show(*region));
-    always_assert(region->instrSize() <= RuntimeOption::EvalJitMaxRegionInstrs);
+    always_assert(
+      region->instrSize() <= std::max(RuntimeOption::EvalJitMaxRegionInstrs,
+                                      RuntimeOption::EvalJitMaxLiveRegionInstrs)
+    );
   } else {
     FTRACE(1, "no region selectable; using tracelet compiler\n");
   }
@@ -1128,7 +1132,7 @@ std::string show(const RegionDesc::GuardedLocation& guardedLoc) {
   ).str();
 }
 
-std::string show(const RegionDesc::Block::GuardedLocVec& guardedLocVec) {
+std::string show(const GuardedLocations& guardedLocVec) {
   std::string ret;
   for (auto& guardedLoc : guardedLocVec) {
     folly::format(&ret, "{} ; ", show(guardedLoc));
@@ -1157,8 +1161,7 @@ std::string show(RegionContext::LiveType ta) {
 
 std::string show(const RegionContext& ctx) {
   std::string ret;
-  folly::toAppend(ctx.func->fullName()->data(), "@", ctx.bcOffset,
-                  resumeModeShortName(ctx.resumeMode), "\n", &ret);
+  folly::toAppend(show(ctx.sk), "\n", &ret);
   for (auto& t : ctx.liveTypes) folly::toAppend(" ", show(t), "\n", &ret);
 
   return ret;

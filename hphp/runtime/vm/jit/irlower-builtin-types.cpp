@@ -85,10 +85,6 @@ void implVerifyType(IRLS& env, const IRInstruction* inst) {
 
 IMPL_OPCODE_CALL(VerifyParamCallable)
 IMPL_OPCODE_CALL(VerifyRetCallable)
-IMPL_OPCODE_CALL(VerifyParamFail)
-IMPL_OPCODE_CALL(VerifyParamFailHard)
-IMPL_OPCODE_CALL(VerifyRetFail)
-IMPL_OPCODE_CALL(VerifyRetFailHard)
 IMPL_OPCODE_CALL(VerifyReifiedLocalType)
 IMPL_OPCODE_CALL(VerifyReifiedReturnType)
 
@@ -108,9 +104,9 @@ void cgVerifyRetRecDesc(IRLS& env, const IRInstruction* inst) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-static void verifyPropFailImpl(const Class* objCls, Cell val, Slot slot) {
+static void verifyPropFailImpl(const Class* objCls, TypedValue val, Slot slot) {
   assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
-  assertx(cellIsPlausible(val));
+  assertx(tvIsPlausible(val));
   assertx(slot < objCls->numDeclProperties());
   auto const& prop = objCls->declProperties()[slot];
   assertx(prop.typeConstraint.isCheckable());
@@ -123,9 +119,9 @@ static void verifyPropFailImpl(const Class* objCls, Cell val, Slot slot) {
   );
 }
 
-static void verifyStaticPropFailImpl(const Class* objCls, Cell val, Slot slot) {
+static void verifyStaticPropFailImpl(const Class* objCls, TypedValue val, Slot slot) {
   assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
-  assertx(cellIsPlausible(val));
+  assertx(tvIsPlausible(val));
   assertx(slot < objCls->numStaticProperties());
   auto const& sprop = objCls->staticProperties()[slot];
   assertx(sprop.typeConstraint.isCheckable());
@@ -209,10 +205,10 @@ static void verifyStaticPropClsImpl(const Class* objCls,
 
 static void verifyPropImpl(const Class* cls,
                             Slot slot,
-                            Cell val) {
+                            TypedValue val) {
   assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
   assertx(slot < cls->numDeclProperties());
-  assertx(cellIsPlausible(val));
+  assertx(tvIsPlausible(val));
   auto const& prop = cls->declProperties()[slot];
   auto const& tc = prop.typeConstraint;
   if (tc.isCheckable()) tc.verifyProperty(&val, cls, prop.cls, prop.name);
@@ -220,10 +216,10 @@ static void verifyPropImpl(const Class* cls,
 
 static void verifySPropImpl(const Class* cls,
                             Slot slot,
-                            Cell val) {
+                            TypedValue val) {
   assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
   assertx(slot < cls->numStaticProperties());
-  assertx(cellIsPlausible(val));
+  assertx(tvIsPlausible(val));
   auto const& prop = cls->staticProperties()[slot];
   auto const& tc = prop.typeConstraint;
   if (tc.isCheckable()) tc.verifyStaticProperty(&val, cls, prop.cls, prop.name);
@@ -296,6 +292,43 @@ void cgVerifyProp(IRLS& env, const IRInstruction* inst) {
       .ssa(1)
       .typedValue(2)
   );
+}
+
+void cgVerifyRetFail(IRLS& env, const IRInstruction* inst) {
+  auto const extra = inst->extra<ParamWithTCData>();
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::direct(VerifyRetTypeFail),
+    kVoidDest,
+    SyncOptions::Sync,
+    argGroup(env, inst)
+      .imm(extra->paramId)
+      .ssa(0)
+      .immPtr(extra->tc)
+  );
+}
+
+void cgVerifyRetFailHard(IRLS& env, const IRInstruction* inst) {
+  cgVerifyRetFail(env, inst);
+}
+
+void cgVerifyParamFail(IRLS& env, const IRInstruction* inst) {
+  auto const extra = inst->extra<ParamWithTCData>();
+  cgCallHelper(
+    vmain(env),
+    env,
+    CallSpec::direct(VerifyParamTypeFail),
+    kVoidDest,
+    SyncOptions::Sync,
+    argGroup(env, inst)
+      .imm(extra->paramId)
+      .immPtr(extra->tc)
+  );
+}
+
+void cgVerifyParamFailHard(IRLS& env, const IRInstruction* inst) {
+  cgVerifyParamFail(env, inst);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -445,8 +478,8 @@ void cgRaiseStrToClassNotice(IRLS& env, const IRInstruction* inst) {
   );
 }
 
-void raiseArraySerializeImpl(const StringData* source, const ArrayData* ad) {
-  raise_array_serialization_notice(source->data(), ad);
+void raiseArraySerializeImpl(SerializationSite src, const ArrayData* ad) {
+  raise_array_serialization_notice(src, ad);
 }
 
 void cgRaiseArraySerializeNotice(IRLS& env, const IRInstruction* inst) {

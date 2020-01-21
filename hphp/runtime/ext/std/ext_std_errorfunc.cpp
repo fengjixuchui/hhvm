@@ -189,12 +189,14 @@ String debug_string_backtrace(bool skip, bool ignore_args /* = false */,
 Array HHVM_FUNCTION(error_get_last) {
   String lastError = g_context->getLastError();
   if (lastError.isNull()) {
-    return Array();
+    return null_array;
   }
-  return make_map_array(s_type, g_context->getLastErrorNumber(),
-                        s_message, g_context->getLastError(),
-                        s_file, g_context->getLastErrorPath(),
-                        s_line, g_context->getLastErrorLine());
+  return make_darray(
+    s_type, g_context->getLastErrorNumber(),
+    s_message, g_context->getLastError(),
+    s_file, g_context->getLastErrorPath(),
+    s_line, g_context->getLastErrorLine()
+  );
 }
 
 bool HHVM_FUNCTION(error_log, const String& message, int message_type /* = 0 */,
@@ -366,15 +368,13 @@ Array HHVM_FUNCTION(HH_deferred_errors) {
   return g_context->releaseDeferredErrors();
 }
 
-void HHVM_FUNCTION(HH_set_soft_late_init_default, const Variant& v) {
-  return g_context->setSoftLateInitDefault(v);
-}
-
 Array HHVM_FUNCTION(SL_extract_trace, const Resource& handle) {
   auto bt = dyn_cast<CompactTrace>(handle);
   if (!bt) {
-    throw_invalid_argument("__SystemLib\\extract_trace() expects parameter 1 "
-                           "to be a CompactTrace resource.");
+    raise_invalid_argument_warning(
+        "__SystemLib\\extract_trace() expects parameter 1 "
+        "to be a CompactTrace resource.");
+    return Array::CreateVArray();
   }
 
   return bt->extract();
@@ -401,7 +401,6 @@ void StandardExtension::initErrorFunc() {
   HHVM_FE(trigger_sampled_error);
   HHVM_FE(user_error);
   HHVM_FALIAS(HH\\deferred_errors, HH_deferred_errors);
-  HHVM_FALIAS(HH\\set_soft_late_init_default, HH_set_soft_late_init_default);
   HHVM_FALIAS(__SystemLib\\extract_trace, SL_extract_trace);
   HHVM_RC_INT(DEBUG_BACKTRACE_PROVIDE_OBJECT, k_DEBUG_BACKTRACE_PROVIDE_OBJECT);
   HHVM_RC_INT(DEBUG_BACKTRACE_IGNORE_ARGS, k_DEBUG_BACKTRACE_IGNORE_ARGS);

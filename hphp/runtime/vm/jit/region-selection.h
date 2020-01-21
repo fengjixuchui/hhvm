@@ -257,7 +257,8 @@ inline bool operator==(const RegionDesc::GuardedLocation& a,
  *     corresponding translation, typically due to type checks or
  *     asserts.
  */
-using TypedLocations = std::vector<RegionDesc::TypedLocation>;
+using TypedLocations   = jit::vector<RegionDesc::TypedLocation>;
+using GuardedLocations = jit::vector<RegionDesc::GuardedLocation>;
 
 struct PostConditions {
   TypedLocations changed;
@@ -269,10 +270,8 @@ struct PostConditions {
  * at various execution points, including at entry to the block.
  */
 struct RegionDesc::Block {
-  using TypedLocVec   = jit::vector<TypedLocation>;
-  using GuardedLocVec = jit::vector<GuardedLocation>;
 
-  Block(BlockId id, const Func* func, ResumeMode resumeMode, bool hasThis,
+  Block(BlockId id, const Func* func, ResumeMode resumeMode,
         Offset start, int length, FPInvOffset initSpOff);
 
   Block& operator=(const Block&) = delete;
@@ -285,10 +284,10 @@ struct RegionDesc::Block {
   const Unit* unit()              const { return m_func->unit(); }
   const Func* func()              const { return m_func; }
   SrcKey      start()             const {
-    return SrcKey { m_func, m_start, m_resumeMode, m_hasThis };
+    return SrcKey { m_func, m_start, m_resumeMode };
   }
   SrcKey      last()              const {
-    return SrcKey { m_func, m_last, m_resumeMode, m_hasThis };
+    return SrcKey { m_func, m_last, m_resumeMode };
   }
   int         length()            const { return m_length; }
   bool        empty()             const { return length() == 0; }
@@ -340,9 +339,15 @@ struct RegionDesc::Block {
    * iterate over the information is using a MapWalker, since they're all
    * backed by a sorted map.
    */
-  const TypedLocVec&    typePredictions()   const { return m_typePredictions;  }
-  const GuardedLocVec&  typePreConditions() const { return m_typePreConditions;}
-  const PostConditions& postConds()         const { return m_postConds;        }
+  const TypedLocations& typePredictions() const {
+    return m_typePredictions;
+  }
+  const GuardedLocations& typePreConditions() const {
+    return m_typePreConditions;
+  }
+  const PostConditions& postConds() const {
+    return m_postConds;
+  }
 
 private:
   void checkInstructions() const;
@@ -353,14 +358,13 @@ private:
   BlockId          m_id;
   const Func*      m_func;
   const ResumeMode m_resumeMode;
-  const bool       m_hasThis;
   const Offset     m_start;
   Offset           m_last;
   int              m_length;
   FPInvOffset      m_initialSpOffset;
   TransID          m_profTransID;
-  TypedLocVec      m_typePredictions;
-  GuardedLocVec    m_typePreConditions;
+  TypedLocations   m_typePredictions;
+  GuardedLocations m_typePreConditions;
   PostConditions   m_postConds;
 };
 
@@ -377,15 +381,11 @@ private:
 struct RegionContext {
   struct LiveType;
 
-  RegionContext(const Func* f, Offset bcOff, FPInvOffset spOff,
-                ResumeMode rm, bool ht) :
-      func(f), bcOffset(bcOff), spOffset(spOff), resumeMode(rm), hasThis(ht) {}
+  RegionContext(SrcKey sk, FPInvOffset spOff)
+    : sk(sk), spOffset(spOff) {}
 
-  const Func* func;
-  Offset bcOffset;
+  SrcKey sk;
   FPInvOffset spOffset;
-  ResumeMode resumeMode;
-  bool hasThis;
   jit::vector<LiveType> liveTypes;
 };
 
@@ -497,7 +497,7 @@ void optimizeProfiledGuards(RegionDesc& region, const ProfData& profData);
 
 /*
  * Optimize the guards of `region', optionally in `simple' mode (where
- * guards are only relaxed if they can be relaxed all the way to TGen).
+ * guards are only relaxed if they can be relaxed all the way to TCell).
  */
 void optimizeGuards(RegionDesc& region, bool simple);
 
@@ -525,7 +525,7 @@ bool check(const RegionDesc& region, std::string& error);
  */
 std::string show(RegionDesc::TypedLocation);
 std::string show(const RegionDesc::GuardedLocation&);
-std::string show(const RegionDesc::Block::GuardedLocVec&);
+std::string show(const GuardedLocations&);
 std::string show(const PostConditions&);
 std::string show(RegionContext::LiveType);
 std::string show(const RegionContext&);

@@ -1,5 +1,5 @@
 <?hh
-final record Foo {
-  y:string,
+record Foo {
+  string y;
 }
 

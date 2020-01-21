@@ -72,7 +72,7 @@ NameValueTable::NameValueTable(const NameValueTable& nvTable, ActRec* fp)
         dst.m_tv.m_type = kNamedLocalDataType;
         dst.m_tv.m_data.num = src.m_tv.m_data.num;
       } else {
-        tvDupWithRef(src.m_tv, dst.m_tv);
+        tvDup(src.m_tv, dst.m_tv);
       }
     }
   }
@@ -94,8 +94,8 @@ NameValueTable::~NameValueTable() {
 void NameValueTable::suspend(const ActRec* oldFP, ActRec* newFP) {
   assertx(m_fp == oldFP);
   assertx(oldFP->func() == newFP->func());
-  assertx(!oldFP->resumed());
-  assertx(newFP->resumed());
+  assertx(!isResumed(oldFP));
+  assertx(isResumed(newFP));
 
   m_fp = newFP;
 }
@@ -151,7 +151,7 @@ void NameValueTable::leak() {
 
 TypedValue* NameValueTable::set(const StringData* name, tv_rval val) {
   TypedValue* target = findTypedValue(name);
-  tvSet(*tvToCell(val), *target);
+  tvSet(*val, *target);
   return target;
 }
 

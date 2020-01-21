@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Reordered_argument_collections
 open Aast
 open Typing_defs
@@ -22,7 +22,8 @@ let unwrap_class_hint = function
     Errors.expected_class ~suffix:" or interface" p;
     (Pos.none, "", [])
 
-let unwrap_class_type = function
+let unwrap_class_type ty =
+  match deref ty with
   | (r, Tapply (name, tparaml)) -> (r, name, tparaml)
   | (r, Tgeneric _) ->
     let p = Typing_reason.to_pos r in
@@ -45,6 +46,9 @@ let split_defs defs split_if_in_defs =
     let (n_classes1, n_classes2) =
       split_sets defs.n_classes split_if_in_defs.n_classes
     in
+    let (n_record_defs1, n_record_defs2) =
+      split_sets defs.n_record_defs split_if_in_defs.n_record_defs
+    in
     let (n_types1, n_types2) =
       split_sets defs.n_types split_if_in_defs.n_types
     in
@@ -55,6 +59,7 @@ let split_defs defs split_if_in_defs =
       {
         n_funs = n_funs1;
         n_classes = n_classes1;
+        n_record_defs = n_record_defs1;
         n_types = n_types1;
         n_consts = n_consts1;
       }
@@ -63,6 +68,7 @@ let split_defs defs split_if_in_defs =
       {
         n_funs = n_funs2;
         n_classes = n_classes2;
+        n_record_defs = n_record_defs2;
         n_types = n_types2;
         n_consts = n_consts2;
       }
@@ -71,12 +77,12 @@ let split_defs defs split_if_in_defs =
 
 let rec infer_const (p, expr_) =
   match expr_ with
-  | String _ -> (Reason.Rwitness p, Tprim Tstring)
+  | String _ -> mk (Reason.Rwitness p, Tprim Tstring)
   | True
   | False ->
-    (Reason.Rwitness p, Tprim Tbool)
-  | Int _ -> (Reason.Rwitness p, Tprim Tint)
-  | Float _ -> (Reason.Rwitness p, Tprim Tfloat)
+    mk (Reason.Rwitness p, Tprim Tbool)
+  | Int _ -> mk (Reason.Rwitness p, Tprim Tint)
+  | Float _ -> mk (Reason.Rwitness p, Tprim Tfloat)
   | Unop
       ((Ast_defs.Uminus | Ast_defs.Uplus | Ast_defs.Utild | Ast_defs.Unot), e2)
     ->
@@ -112,3 +118,18 @@ let coalesce_consistent parent current =
   | ConsistentConstruct -> parent
   (* This case is unreachable, because parent would have to be a final class *)
   | FinalClass -> parent
+
+let consistent_construct_kind cls =
+  Shallow_decl_defs.(
+    if cls.sc_final then
+      FinalClass
+    else
+      let consistent_attr_present =
+        Naming_attributes.mem
+          SN.UserAttributes.uaConsistentConstruct
+          cls.sc_user_attributes
+      in
+      if consistent_attr_present then
+        ConsistentConstruct
+      else
+        Inconsistent)

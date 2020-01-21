@@ -6,64 +6,42 @@
  * LICENSE file in the "hack" directory of this source tree.
  *
  *)
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 
 (* Replace unserialized information from the type with dummy information.
 
 For example, we don't currently serialize the arity of function types, so update
 the input type to set it to a default arity value. *)
-let rec strip_ty : type a. a ty -> a ty =
- fun ty ->
-  let (reason, ty) = ty in
+let rec strip_ty ty =
+  let (reason, ty) = deref ty in
   let strip_tyl tyl = List.map tyl ~f:strip_ty in
-  let strip_opt ty_opt = Option.map ty_opt ~f:strip_ty in
   let strip_possibly_enforced_ty et =
     { et with et_type = strip_ty et.et_type }
   in
   let ty =
     match ty with
-    | Tmixed -> ty
-    | Tnothing -> ty
     | Tany _
     | Tnonnull
     | Tdynamic
     | Terr ->
       ty
     | Tobject -> ty
-    | Tthis -> ty
-    | Tgeneric _ -> ty
     | Tprim _ -> ty
     | Tvar _ -> ty
     | Tanon _ -> ty
-    | Tapply (s, tyl) -> Tapply (s, strip_tyl tyl)
-    | Taccess (ty, sids) -> Taccess (strip_ty ty, sids)
-    | Tarray (ty1_opt, ty2_opt) -> Tarray (strip_opt ty1_opt, strip_opt ty2_opt)
-    | Tarraykind (AKany | AKempty) -> ty
+    | Tgeneric _ -> ty
+    | Tarraykind AKempty -> ty
     | Tarraykind (AKdarray (ty1, ty2)) ->
       Tarraykind (AKdarray (strip_ty ty1, strip_ty ty2))
-    | Tarraykind (AKmap (ty1, ty2)) ->
-      Tarraykind (AKmap (strip_ty ty1, strip_ty ty2))
-    | Tdarray (ty1, ty2) -> Tdarray (strip_ty ty1, strip_ty ty2)
     | Tarraykind (AKvarray ty) -> Tarraykind (AKvarray (strip_ty ty))
-    | Tarraykind (AKvec ty) -> Tarraykind (AKvec (strip_ty ty))
-    | Tvarray ty -> Tvarray (strip_ty ty)
-    | Tvarray_or_darray ty -> Tvarray_or_darray (strip_ty ty)
-    | Tarraykind (AKvarray_or_darray ty) ->
-      Tarraykind (AKvarray_or_darray (strip_ty ty))
+    | Tarraykind (AKvarray_or_darray (ty1, ty2)) ->
+      Tarraykind (AKvarray_or_darray (strip_ty ty1, strip_ty ty2))
     | Ttuple tyl -> Ttuple (strip_tyl tyl)
-    | Tdestructure tyl -> Tdestructure (strip_tyl tyl)
     | Toption ty -> Toption (strip_ty ty)
-    | Tlike ty -> Tlike (strip_ty ty)
-    | Tabstract (abstract_kind, ty_opt) ->
-      let abstract_kind =
-        match abstract_kind with
-        | AKnewtype (name, tparams) -> AKnewtype (name, strip_tyl tparams)
-        | AKgeneric _
-        | AKdependent _ ->
-          abstract_kind
-      in
-      Tabstract (abstract_kind, strip_opt ty_opt)
+    | Tnewtype (name, tparams, ty) ->
+      Tnewtype (name, strip_tyl tparams, strip_ty ty)
+    | Tdependent (dep, ty) -> Tdependent (dep, strip_ty ty)
     | Tunion tyl -> Tunion (strip_tyl tyl)
     | Tintersection tyl -> Tintersection (strip_tyl tyl)
     | Tclass (sid, exact, tyl) -> Tclass (sid, exact, strip_tyl tyl)
@@ -89,9 +67,6 @@ let rec strip_ty : type a. a ty -> a ty =
           ft_params;
           ft_ret;
           (* Dummy values: these aren't currently serialized. *)
-          ft_pos = Pos.none;
-          ft_deprecated = None;
-          ft_abstract = false;
           ft_arity = Fstandard (0, 0);
           ft_tparams = ([], FTKtparams);
           ft_where_constraints = [];
@@ -100,7 +75,6 @@ let rec strip_ty : type a. a ty -> a ty =
           ft_return_disposable = false;
           ft_mutability = None;
           ft_returns_mutable = false;
-          ft_decl_errors = None;
           ft_returns_void_to_rx = false;
         }
     | Tshape (shape_kind, shape_fields) ->
@@ -110,10 +84,11 @@ let rec strip_ty : type a. a ty -> a ty =
       in
       let shape_fields = Nast.ShapeMap.map strip_field shape_fields in
       Tshape (shape_kind, shape_fields)
-    | Tpu (base, enum, kind) -> Tpu (strip_ty base, enum, kind)
-    | Tpu_access (base, id) -> Tpu_access (strip_ty base, id)
+    | Tpu (base, enum) -> Tpu (strip_ty base, enum)
+    | Tpu_type_access (base, enum, member, tyname) ->
+      Tpu_type_access (strip_ty base, enum, strip_ty member, tyname)
   in
-  (reason, ty)
+  mk (reason, ty)
 
 (*
  * Check that type deserialization works correctly by examining every type of
@@ -132,7 +107,9 @@ let handler =
       try
         let ty = Tast_expand.expand_ty env ~pos:p ty in
         let serialized_ty = Tast_env.ty_to_json env ty in
-        let deserialized_ty = Tast_env.json_to_locl_ty serialized_ty in
+        let deserialized_ty =
+          Tast_env.json_to_locl_ty (Tast_env.get_ctx env) serialized_ty
+        in
         match deserialized_ty with
         | Ok deserialized_ty ->
           let ty = strip_ty ty in

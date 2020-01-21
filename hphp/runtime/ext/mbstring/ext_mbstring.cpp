@@ -908,7 +908,7 @@ static bool php_mb_parse_encoding(const Variant& encoding,
   }
   if (!ret) {
     if (return_list && *return_list) {
-      free(*return_list);
+      req::free(*return_list);
       *return_list = nullptr;
     }
     return_size = 0;
@@ -1393,7 +1393,7 @@ static Variant php_mbfl_convert(const Variant& var,
 Variant HHVM_FUNCTION(mb_convert_variables,
                       const String& to_encoding,
                       const Variant& from_encoding,
-                      VRefParam vars,
+                      Variant& vars,
                       const Array& args /* = null_array */) {
   mbfl_string string, result;
   mbfl_encoding *_from_encoding, *_to_encoding;
@@ -1432,7 +1432,7 @@ Variant HHVM_FUNCTION(mb_convert_variables,
                                         MBSTRG(strict_detection));
     if (identd != nullptr) {
       for (int n = -1; n < args.size(); n++) {
-        if (php_mbfl_encoding_detect(n < 0 ? vars.wrapped() : args[n],
+        if (php_mbfl_encoding_detect(n < 0 ? vars : args[n],
                                      identd, &string)) {
           break;
         }
@@ -1466,7 +1466,7 @@ Variant HHVM_FUNCTION(mb_convert_variables,
 
   /* convert */
   if (convd != nullptr) {
-    vars.assignIfRef(php_mbfl_convert(vars, convd, &string, &result));
+    vars = php_mbfl_convert(vars, convd, &string, &result);
     for (int n = 0; n < args.size(); n++) {
       const_cast<Array&>(args).set(n, php_mbfl_convert(args[n], convd,
                                                         &string, &result));
@@ -2261,7 +2261,7 @@ out:
 
 bool HHVM_FUNCTION(mb_parse_str,
                    const String& encoded_string,
-                   VRefParam result /* = null */) {
+                   Array& result) {
   php_mb_encoding_handler_info_t info;
   info.data_type              = PARSE_STRING;
   info.separator              = "&";
@@ -2274,11 +2274,10 @@ bool HHVM_FUNCTION(mb_parse_str,
   info.from_language          = MBSTRG(current_language);
 
   char *encstr = req::strndup(encoded_string.data(), encoded_string.size());
-  Array resultArr = Array::Create();
+  result = Array::Create();
   mbfl_encoding *detected =
-    _php_mb_encoding_handler_ex(&info, resultArr, encstr);
+    _php_mb_encoding_handler_ex(&info, result, encstr);
   req::free(encstr);
-  result.assignIfRef(resultArr);
 
   MBSTRG(http_input_identify) = detected;
   return detected != nullptr;
@@ -3610,8 +3609,9 @@ static Variant _php_mb_regex_ereg_replace_exec(const Variant& pattern,
       while (i < replacement.size()) {
         int fwd = (int)php_mb_mbchar_bytes_ex(p, enc);
         n = -1;
-        if ((replacement.size() - i) >= 2 && fwd == 1 &&
-          p[0] == '\\' && p[1] >= '0' && p[1] <= '9') {
+        auto const remaining = replacement.size() - i;
+        if (remaining >= 2 && fwd == 1 &&
+            p[0] == '\\' && p[1] >= '0' && p[1] <= '9') {
           n = p[1] - '0';
         }
         if (n >= 0 && n < regs->num_regs) {
@@ -3622,10 +3622,14 @@ static Variant _php_mb_regex_ereg_replace_exec(const Variant& pattern,
           }
           p += 2;
           i += 2;
-        } else {
+        } else if (remaining >= fwd) {
           out_buf.append(p, fwd);
           p += fwd;
           i += fwd;
+        } else {
+          raise_warning("Replacement ends with unterminated %s: 0x%hhx",
+                        enc->name, *p);
+          break;
         }
       }
       n = regs->end[0];
@@ -3818,10 +3822,10 @@ static Variant _php_mb_regex_ereg_search_exec(const String& pattern,
         beg = MBSTRG(search_regs)->beg[i];
         end = MBSTRG(search_regs)->end[i];
         if (beg >= 0 && beg <= end && end <= len) {
-          ret.toArrRef().append(
+          ret.asArrRef().append(
             String((const char *)(str + beg), end - beg, CopyString));
         } else {
-          ret.toArrRef().append(false);
+          ret.asArrRef().append(false);
         }
       }
       break;
@@ -3938,15 +3942,15 @@ static Variant _php_mb_regex_ereg_exec(const Variant& pattern, const String& str
 Variant HHVM_FUNCTION(mb_ereg,
                       const Variant& pattern,
                       const String& str,
-                      VRefParam regs /* = null */) {
-  return _php_mb_regex_ereg_exec(pattern, str, regs.getVariantOrNull(), 0);
+                      Variant& regs) {
+  return _php_mb_regex_ereg_exec(pattern, str, &regs, 0);
 }
 
 Variant HHVM_FUNCTION(mb_eregi,
                       const Variant& pattern,
                       const String& str,
-                      VRefParam regs /* = null */) {
-  return _php_mb_regex_ereg_exec(pattern, str, regs.getVariantOrNull(), 1);
+                      Variant& regs) {
+  return _php_mb_regex_ereg_exec(pattern, str, &regs, 1);
 }
 
 Variant HHVM_FUNCTION(mb_regex_encoding,

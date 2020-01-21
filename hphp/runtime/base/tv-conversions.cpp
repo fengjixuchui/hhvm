@@ -24,7 +24,6 @@
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/object-data.h"
 #include "hphp/runtime/base/packed-array.h"
-#include "hphp/runtime/base/ref-data.h"
 #include "hphp/runtime/base/resource-data.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
@@ -55,7 +54,6 @@ namespace HPHP {
 template<typename T>
 enable_if_lval_t<T, void> tvCastToBooleanInPlace(T tv) {
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
   bool b;
 
   do {
@@ -85,10 +83,16 @@ enable_if_lval_t<T, void> tvCastToBooleanInPlace(T tv) {
         tvDecRefStr(tv);
         continue;
 
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+        raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+
       case KindOfPersistentVec:
       case KindOfPersistentDict:
       case KindOfPersistentKeyset:
-      case KindOfPersistentShape:
       case KindOfPersistentArray:
         b = !val(tv).parr->empty();
         continue;
@@ -96,7 +100,6 @@ enable_if_lval_t<T, void> tvCastToBooleanInPlace(T tv) {
       case KindOfVec:
       case KindOfDict:
       case KindOfKeyset:
-      case KindOfShape:
       case KindOfArray:
         b = !val(tv).parr->empty();
         tvDecRefArr(tv);
@@ -127,9 +130,6 @@ enable_if_lval_t<T, void> tvCastToBooleanInPlace(T tv) {
 
       case KindOfRecord:
         raise_convert_record_to_type("bool");
-
-      case KindOfRef:
-        break;
     }
     not_reached();
   } while (0);
@@ -140,16 +140,12 @@ enable_if_lval_t<T, void> tvCastToBooleanInPlace(T tv) {
 
 bool tvCastToBoolean(TypedValue tv) {
   assertx(tvIsPlausible(tv));
-  if (isRefType(tv.m_type)) {
-    tv = *tv.m_data.pref->cell();
-  }
-  return cellToBool(tv);
+  return tvToBool(tv);
 }
 
 template<typename T>
 enable_if_lval_t<T, void> tvCastToDoubleInPlace(T tv) {
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
   double d;
 
   do {
@@ -178,10 +174,16 @@ enable_if_lval_t<T, void> tvCastToDoubleInPlace(T tv) {
         tvDecRefStr(tv);
         continue;
 
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+        raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+
       case KindOfPersistentVec:
       case KindOfPersistentDict:
       case KindOfPersistentKeyset:
-      case KindOfPersistentShape:
       case KindOfPersistentArray:
         d = val(tv).parr->empty() ? 0 : 1;
         continue;
@@ -189,7 +191,6 @@ enable_if_lval_t<T, void> tvCastToDoubleInPlace(T tv) {
       case KindOfVec:
       case KindOfDict:
       case KindOfKeyset:
-      case KindOfShape:
       case KindOfArray:
         d = val(tv).parr->empty() ? 0 : 1;
         tvDecRefArr(tv);
@@ -221,9 +222,6 @@ enable_if_lval_t<T, void> tvCastToDoubleInPlace(T tv) {
 
       case KindOfRecord:
         raise_convert_record_to_type("double");
-
-      case KindOfRef:
-        break;
     }
     not_reached();
   } while (0);
@@ -235,9 +233,7 @@ enable_if_lval_t<T, void> tvCastToDoubleInPlace(T tv) {
 template<typename T>
 enable_if_lval_t<T, void> tvCastToInt64InPlace(T tv) {
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
-
-  assertx(cellIsPlausible(*tv));
+  assertx(tvIsPlausible(*tv));
   int64_t i;
 
   do {
@@ -266,10 +262,16 @@ enable_if_lval_t<T, void> tvCastToInt64InPlace(T tv) {
         tvDecRefStr(tv);
         continue;
 
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+        raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+
       case KindOfPersistentVec:
       case KindOfPersistentDict:
       case KindOfPersistentKeyset:
-      case KindOfPersistentShape:
       case KindOfPersistentArray:
         i = val(tv).parr->empty() ? 0 : 1;
         continue;
@@ -277,7 +279,6 @@ enable_if_lval_t<T, void> tvCastToInt64InPlace(T tv) {
       case KindOfVec:
       case KindOfDict:
       case KindOfKeyset:
-      case KindOfShape:
       case KindOfArray:
         i = val(tv).parr->empty() ? 0 : 1;
         tvDecRefArr(tv);
@@ -309,9 +310,6 @@ enable_if_lval_t<T, void> tvCastToInt64InPlace(T tv) {
 
       case KindOfRecord:
         raise_convert_record_to_type("int");
-
-      case KindOfRef:
-        break;
     }
     not_reached();
   } while (0);
@@ -322,18 +320,11 @@ enable_if_lval_t<T, void> tvCastToInt64InPlace(T tv) {
 
 int64_t tvCastToInt64(TypedValue tv) {
   assertx(tvIsPlausible(tv));
-  if (isRefType(tv.m_type)) {
-    tv = *tv.m_data.pref->cell();
-  }
-  return cellToInt(tv);
+  return tvToInt(tv);
 }
 
 double tvCastToDouble(TypedValue tv) {
   assertx(tvIsPlausible(tv));
-  if (isRefType(tv.m_type)) {
-    tv = *tv.m_data.pref->cell();
-  }
-
   switch (tv.m_type) {
     case KindOfUninit:
     case KindOfNull:
@@ -352,14 +343,19 @@ double tvCastToDouble(TypedValue tv) {
     case KindOfString:
       return tv.m_data.pstr->toDouble();
 
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
       return tv.m_data.parr->empty() ? 0.0 : 1.0;
@@ -385,9 +381,6 @@ double tvCastToDouble(TypedValue tv) {
 
     case KindOfRecord:
       raise_convert_record_to_type("double");
-
-    case KindOfRef:
-      break;
   }
   not_reached();
 }
@@ -399,11 +392,7 @@ const StaticString
 template<typename T>
 enable_if_lval_t<T, void> tvCastToStringInPlace(T tv) {
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
-  cellCastToStringInPlace(tv);
-}
 
-void cellCastToStringInPlace(tv_lval tv) {
   auto string = [&](StringData* s) {
     type(tv) = KindOfString;
     val(tv).pstr = s;
@@ -450,14 +439,12 @@ void cellCastToStringInPlace(tv_lval tv) {
       if (type(tv) == KindOfKeyset) tvDecRefArr(*tv);
       return persistentString(keyset_string.get());
 
-    case KindOfPersistentShape:
-    case KindOfShape:
-      if (RuntimeOption::EvalHackArrDVArrs) {
-        raise_notice("Dict to string conversion");
-        if (type(tv) == KindOfShape) tvDecRefArr(*tv);
-        return persistentString(dict_string.get());
-      }
-      // Fallthrough
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
     case KindOfArray:
     case KindOfPersistentArray:
@@ -466,14 +453,14 @@ void cellCastToStringInPlace(tv_lval tv) {
       return persistentString(array_string.get());
 
     case KindOfObject:
-      cellMove(
+      tvMove(
         make_tv<KindOfString>(val(tv).pobj->invokeToString().detach()),
         tv
       );
       return;
 
     case KindOfResource:
-      cellMove(
+      tvMove(
         make_tv<KindOfString>(val(tv).pres->data()->o_toString().detach()),
         tv
       );
@@ -502,23 +489,12 @@ void cellCastToStringInPlace(tv_lval tv) {
 
     case KindOfRecord:
       raise_convert_record_to_type("string");
-
-    case KindOfRef:
-      break;
   }
   not_reached();
 }
 
 StringData* tvCastToStringData(TypedValue tv) {
   assertx(tvIsPlausible(tv));
-  if (isRefType(tv.m_type)) {
-    tv = *tv.m_data.pref->cell();
-  }
-  return cellCastToStringData(tv);
-}
-
-StringData* cellCastToStringData(Cell tv) {
-  assertx(tv.m_type != KindOfRef);
 
   switch (tv.m_type) {
     case KindOfUninit:
@@ -558,13 +534,12 @@ StringData* cellCastToStringData(Cell tv) {
       raise_notice("Keyset to string conversion");
       return keyset_string.get();
 
-    case KindOfPersistentShape:
-    case KindOfShape:
-      if (RuntimeOption::EvalHackArrDVArrs) {
-        raise_notice("Dict to string conversion");
-        return dict_string.get();
-      }
-      // Fallthrough
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
     case KindOfPersistentArray:
     case KindOfArray:
@@ -599,9 +574,6 @@ StringData* cellCastToStringData(Cell tv) {
 
     case KindOfRecord:
       raise_convert_record_to_type("string");
-
-    case KindOfRef:
-      not_reached();
   }
   not_reached();
 }
@@ -613,10 +585,6 @@ String tvCastToString(TypedValue tv) {
 template <IntishCast IC>
 ArrayData* tvCastToArrayLikeData(TypedValue tv) {
   assertx(tvIsPlausible(tv));
-  if (isRefType(tv.m_type)) {
-    tv = *tv.m_data.pref->cell();
-  }
-
   switch (tv.m_type) {
     case KindOfUninit:
     case KindOfNull:
@@ -632,14 +600,19 @@ ArrayData* tvCastToArrayLikeData(TypedValue tv) {
     case KindOfClass:
       return ArrayData::Create(tv);
 
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray: {
       auto const ad = tv.m_data.parr;
@@ -659,9 +632,6 @@ ArrayData* tvCastToArrayLikeData(TypedValue tv) {
 
     case KindOfRecord:
       raise_convert_record_to_type("array");
-
-    case KindOfRef:
-      break;
   }
   not_reached();
 }
@@ -687,24 +657,9 @@ assign(LHS lhs, T&& rhs) {
   variant_ref{lhs} = std::forward<T>(rhs);
 }
 
-template<typename T>
-enable_if_lval_t<T, void> tvCastToShapeInPlace(T tv) {
-  if (isShapeType(type(tv))) {
-    return;
-}
-  if (RuntimeOption::EvalHackArrDVArrs) {
-    tvCastToDictInPlace(tv);
-  } else {
-    tvCastToDArrayInPlace(tv);
-  }
-  auto const ad = val(tv).parr;
-  assign(tv, ad->toShape(ad->cowCheck()));
-}
-
 template<typename T, IntishCast IC /* = IntishCast::None */>
 enable_if_lval_t<T, void> tvCastToArrayInPlace(T tv) {
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
   ArrayData* a;
 
   do {
@@ -802,21 +757,12 @@ enable_if_lval_t<T, void> tvCastToArrayInPlace(T tv) {
         continue;
       }
 
-      case KindOfPersistentShape: {
-        auto const adIn = val(tv).parr;
-        assertx(adIn->isShape());
-        a = MixedArray::ToPHPArrayShape(adIn, true);
-        assertx(a != adIn);
-        continue;
-      }
-
-      case KindOfShape: {
-        auto const adIn = val(tv).parr;
-        assertx(adIn->isShape());
-        a = MixedArray::ToPHPArrayShape(adIn, adIn->cowCheck());
-        if (a != adIn) tvDecRefArr(tv);
-        continue;
-      }
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+        raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
       case KindOfPersistentArray: {
         auto* adIn = val(tv).parr;
@@ -868,9 +814,6 @@ enable_if_lval_t<T, void> tvCastToArrayInPlace(T tv) {
 
       case KindOfRecord:
         raise_convert_record_to_type("array");
-
-      case KindOfRef:
-        break;
     }
     not_reached();
   } while (0);
@@ -880,13 +823,12 @@ enable_if_lval_t<T, void> tvCastToArrayInPlace(T tv) {
 
   val(tv).parr = a;
   type(tv) = KindOfArray;
-  assertx(cellIsPlausible(*tv));
+  assertx(tvIsPlausible(*tv));
 }
 
 template<typename T>
 enable_if_lval_t<T, void> tvCastToVecInPlace(T tv) {
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
   ArrayData* a;
 
   do {
@@ -943,15 +885,12 @@ enable_if_lval_t<T, void> tvCastToVecInPlace(T tv) {
         continue;
       }
 
-      case KindOfPersistentShape:
-      case KindOfShape: {
-        auto const adIn = val(tv).parr;
-        assertx(adIn->isShape());
-        a = MixedArray::ToVecShape(adIn, adIn->cowCheck());
-        assertx(a != adIn);
-        decRefArr(adIn);
-        continue;
-      }
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+        raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
       case KindOfPersistentArray:
       case KindOfArray: {
@@ -993,22 +932,18 @@ enable_if_lval_t<T, void> tvCastToVecInPlace(T tv) {
 
       case KindOfRecord:
         raise_convert_record_to_type("vec");
-
-      case KindOfRef:
-        break;
     }
     not_reached();
   } while (0);
 
   val(tv).parr = a;
   type(tv) = KindOfVec;
-  assertx(cellIsPlausible(*tv));
+  assertx(tvIsPlausible(*tv));
 }
 
 template<typename T>
 enable_if_lval_t<T, void> tvCastToDictInPlace(T tv) {
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
   ArrayData* a;
 
   do {
@@ -1064,14 +999,12 @@ enable_if_lval_t<T, void> tvCastToDictInPlace(T tv) {
         continue;
       }
 
-      case KindOfPersistentShape:
-      case KindOfShape: {
-        auto const adIn = val(tv).parr;
-        assertx(adIn->isShape());
-        a = MixedArray::ToDictShape(adIn, adIn->cowCheck());
-        if (a != adIn) decRefArr(adIn);
-        continue;
-      }
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+        raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
       case KindOfPersistentArray:
       case KindOfArray: {
@@ -1114,22 +1047,18 @@ enable_if_lval_t<T, void> tvCastToDictInPlace(T tv) {
 
       case KindOfRecord:
         raise_convert_record_to_type("dict");
-
-      case KindOfRef:
-        break;
     }
     not_reached();
   } while (0);
 
   val(tv).parr = a;
   type(tv) = KindOfDict;
-  assertx(cellIsPlausible(*tv));
+  assertx(tvIsPlausible(*tv));
 }
 
 template<typename T>
 enable_if_lval_t<T, void> tvCastToKeysetInPlace(T tv) {
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
   ArrayData* a;
 
   do {
@@ -1185,14 +1114,12 @@ enable_if_lval_t<T, void> tvCastToKeysetInPlace(T tv) {
         continue;
       }
 
-      case KindOfPersistentShape:
-      case KindOfShape: {
-        auto const adIn = val(tv).parr;
-        assertx(adIn->isShape());
-        a = MixedArray::ToKeysetShape(adIn, adIn->cowCheck());
-        if (a != adIn) decRefArr(adIn);
-        continue;
-      }
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+        raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
       case KindOfPersistentArray:
       case KindOfArray: {
@@ -1237,23 +1164,19 @@ enable_if_lval_t<T, void> tvCastToKeysetInPlace(T tv) {
 
       case KindOfRecord:
         raise_convert_record_to_type("keyset");
-
-      case KindOfRef:
-        break;
     }
     not_reached();
   } while (0);
 
   val(tv).parr = a;
   type(tv) = KindOfKeyset;
-  assertx(cellIsPlausible(*tv));
+  assertx(tvIsPlausible(*tv));
 }
 
 template<typename T>
 enable_if_lval_t<T, void> tvCastToVArrayInPlace(T tv) {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
   ArrayData* a;
 
   do {
@@ -1319,15 +1242,12 @@ enable_if_lval_t<T, void> tvCastToVArrayInPlace(T tv) {
         continue;
       }
 
-      case KindOfPersistentShape:
-      case KindOfShape: {
-        auto const adIn = val(tv).parr;
-        assertx(adIn->isShape());
-        a = MixedArray::ToVArrayShape(adIn, adIn->cowCheck());
-        assertx(a != adIn);
-        decRefArr(adIn);
-        continue;
-      }
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+        raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
       case KindOfPersistentArray:
       case KindOfArray: {
@@ -1368,9 +1288,6 @@ enable_if_lval_t<T, void> tvCastToVArrayInPlace(T tv) {
 
       case KindOfRecord:
         raise_convert_record_to_type("varray");
-
-      case KindOfRef:
-        break;
     }
     not_reached();
   } while (0);
@@ -1380,14 +1297,13 @@ enable_if_lval_t<T, void> tvCastToVArrayInPlace(T tv) {
 
   val(tv).parr = a;
   type(tv) = KindOfArray;
-  assertx(cellIsPlausible(*tv));
+  assertx(tvIsPlausible(*tv));
 }
 
 template<typename T>
 enable_if_lval_t<T, void> tvCastToDArrayInPlace(T tv) {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
   ArrayData* a;
 
   do {
@@ -1453,14 +1369,12 @@ enable_if_lval_t<T, void> tvCastToDArrayInPlace(T tv) {
         continue;
       }
 
-      case KindOfPersistentShape:
-      case KindOfShape: {
-        auto const adIn = val(tv).parr;
-        assertx(adIn->isShape());
-        a = MixedArray::ToDArrayShape(adIn, adIn->cowCheck());
-        if (a != adIn) decRefArr(adIn);
-        continue;
-      }
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+        raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
       case KindOfPersistentArray:
       case KindOfArray: {
@@ -1502,9 +1416,6 @@ enable_if_lval_t<T, void> tvCastToDArrayInPlace(T tv) {
 
       case KindOfRecord:
         raise_convert_record_to_type("darray");
-
-      case KindOfRef:
-        break;
     }
     not_reached();
   } while (0);
@@ -1514,15 +1425,11 @@ enable_if_lval_t<T, void> tvCastToDArrayInPlace(T tv) {
 
   val(tv).parr = a;
   type(tv) = KindOfArray;
-  assertx(cellIsPlausible(*tv));
+  assertx(tvIsPlausible(*tv));
 }
 
 ObjectData* tvCastToObjectData(TypedValue tv) {
   assertx(tvIsPlausible(tv));
-  if (isRefType(tv.m_type)) {
-    tv = *tv.m_data.pref->cell();
-  }
-
   switch (tv.m_type) {
     case KindOfUninit:
     case KindOfNull:
@@ -1545,13 +1452,18 @@ ObjectData* tvCastToObjectData(TypedValue tv) {
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentKeyset:
     case KindOfKeyset: {
       auto const arr = Array::attach(tv.m_data.parr->toPHPArray(true));
       return ObjectData::FromArray(arr.get()).detach();
     }
+
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
     case KindOfPersistentArray:
     case KindOfArray:
@@ -1570,9 +1482,6 @@ ObjectData* tvCastToObjectData(TypedValue tv) {
 
     case KindOfRecord:
       raise_convert_record_to_type("object");
-
-    case KindOfRef:
-      break;
   }
   not_reached();
 }
@@ -1582,101 +1491,8 @@ Object tvCastToObject(TypedValue tv) {
 }
 
 template<typename T>
-enable_if_lval_t<T, void> tvCastToObjectInPlace(T tv) {
-  assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
-  ObjectData* o;
-
-  do {
-    switch (type(tv)) {
-      case KindOfUninit:
-      case KindOfNull:
-        o = SystemLib::AllocStdClassObject().detach();
-        continue;
-
-      case KindOfBoolean:
-      case KindOfInt64:
-      case KindOfDouble:
-      case KindOfPersistentString:
-      case KindOfFunc:
-      case KindOfClass:
-      case KindOfResource: {
-        ArrayInit props(1, ArrayInit::Map{});
-        props.set(s_scalar, *tv);
-        o = ObjectData::FromArray(props.create()).detach();
-        continue;
-      }
-
-      case KindOfString: {
-        ArrayInit props(1, ArrayInit::Map{});
-        props.set(s_scalar, *tv);
-        o = ObjectData::FromArray(props.create()).detach();
-        tvDecRefStr(tv);
-        continue;
-      }
-
-      case KindOfPersistentShape:
-      case KindOfShape:
-        if (RuntimeOption::EvalHackArrDVArrs) {
-          tvCastToArrayInPlace(tv);
-        }
-        assign(tv, ObjectData::FromArray(val(tv).parr));
-        return;
-
-      case KindOfPersistentVec:
-      case KindOfVec:
-      case KindOfPersistentDict:
-      case KindOfDict:
-      case KindOfPersistentKeyset:
-      case KindOfKeyset:
-        tvCastToArrayInPlace(tv);
-        // Fall-through to array case
-      case KindOfPersistentArray:
-      case KindOfArray:
-        // For arrays, we fall back on the Variant machinery
-        assign(tv, ObjectData::FromArray(val(tv).parr));
-        return;
-      case KindOfClsMeth:
-        raiseClsMethToVecWarningHelper();
-        tvCastToArrayInPlace(tv);
-        assign(tv, ObjectData::FromArray(val(tv).parr));
-        return;
-      case KindOfObject:
-        return;
-
-      case KindOfRecord:
-        raise_convert_record_to_type("object");
-
-      case KindOfRef:
-        break;
-    }
-    not_reached();
-  } while (0);
-
-  val(tv).pobj = o;
-  type(tv) = KindOfObject;
-  assertx(cellIsPlausible(*tv));
-}
-
-template<typename T>
-enable_if_lval_t<T, void> tvCastToNullableObjectInPlace(T tv) {
-  if (isNullType(type(tv))) {
-    // XXX(t3879280) This happens immediately before calling an extension
-    // function that takes an optional Object argument. We want to end up
-    // passing const Object& holding nullptr, so by clearing out m_data.pobj we
-    // can unconditionally treat &val(tv).pobj as a const Object& in the
-    // function being called. This violates the invariant that the value of
-    // m_data doesn't matter in a KindOfNull TypedValue.
-    val(tv).pobj = nullptr;
-  } else {
-    tvCastToObjectInPlace(tv);
-  }
-}
-
-template<typename T>
 enable_if_lval_t<T, void> tvCastToResourceInPlace(T tv) {
   assertx(tvIsPlausible(*tv));
-  tvUnboxIfNeeded(tv);
 
   do {
     switch (type(tv)) {
@@ -1686,7 +1502,8 @@ enable_if_lval_t<T, void> tvCastToResourceInPlace(T tv) {
       case KindOfVec:
       case KindOfDict:
       case KindOfKeyset:
-      case KindOfShape:
+      case KindOfDArray:
+      case KindOfVArray:
       case KindOfArray:
       case KindOfObject:
       case KindOfRecord:
@@ -1698,15 +1515,13 @@ enable_if_lval_t<T, void> tvCastToResourceInPlace(T tv) {
       case KindOfResource:
         // no op, return
         return;
-      case KindOfRef:
-        break;
     }
     not_reached();
   } while (0);
 
   type(tv) = KindOfResource;
   val(tv).pres = req::make<DummyResource>().detach()->hdr();
-  assertx(cellIsPlausible(*tv));
+  assertx(tvIsPlausible(*tv));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1721,9 +1536,6 @@ X(String)
 X(Vec)
 X(Dict)
 X(Keyset)
-X(Shape)
-X(Object)
-X(NullableObject)
 X(Resource)
 X(VArray)
 X(DArray)

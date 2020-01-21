@@ -1,0 +1,22 @@
+<?hh
+class GenericDerived<Tfirst> extends \GenericBase<Tfirst, \Mode> {
+  public function foo(): void {
+    throw new \Exception();
+  }
+}
+function with_is_refinement<Tfirst, Tsecond>(
+  GenericBase<Tfirst, Tsecond> $x,
+): void {
+  if ($x is GenericDerived<_>) {
+    $x->foo();
+  }
+}
+class GenericBase<Tfirst, Tsecond> {}
+enum Mode: int as int {
+  Two = 0;
+  One = 0;
+}
+<<__Rx>>
+function extract_standalone_make_default(): nothing {
+  throw new \Exception();
+}

@@ -17,7 +17,7 @@ open Syntax
 let is_not_acceptable ty =
   let finder =
     object
-      inherit [_] Type_visitor.type_visitor
+      inherit [_] Type_visitor.locl_type_visitor
 
       method! on_tprim acc _ =
         function
@@ -39,17 +39,15 @@ let print_ty ty =
 
 let get_first_suggested_type_as_string file type_map node =
   Option.Monad_infix.(
-    position file node
-    >>= fun pos ->
+    position file node >>= fun pos ->
     Tast_type_collector.get_from_pos_map (Pos.to_absolute pos) type_map
     >>= fun tys ->
     List.find_map tys ~f:(fun (env, phase_ty) ->
         match phase_ty with
         | Typing_defs.LoclTy ty ->
-          let (env, ty) = Tast_env.fold_unresolved env ty in
-          let (env, ty) = Tast_env.expand_type env ty in
+          let (env, ty) = Tast_env.simplify_unions env ty in
           begin
-            match ty with
+            match Typing_defs.deref ty with
             | (Typing_reason.Rsolve_fail _, ty_) ->
               begin
                 match print_ty ty with
@@ -59,7 +57,9 @@ let get_first_suggested_type_as_string file type_map node =
                     "%s failed to rewrite lambda parameter %s: the suggested type %s is non-denotable"
                     (Pos.string (Pos.to_absolute pos))
                     (text node)
-                    (Tast_env.print_ty env (Typing_reason.Rnone, ty_));
+                    (Tast_env.print_ty
+                       env
+                       (Typing_defs.mk (Typing_reason.Rnone, ty_)));
                   None
               end
             | _ -> None
@@ -68,7 +68,11 @@ let get_first_suggested_type_as_string file type_map node =
 
 let get_patches tcopt file =
   let nast = Ast_provider.get_ast ~full:true file in
-  let tast = Typing.nast_to_tast tcopt (Naming.program nast) in
+  let tast =
+    (* We don't need an accurate list of typing errors, so we can skip TAST
+    checks. *)
+    Typing.nast_to_tast ~do_tast_checks:false tcopt (Naming.program nast)
+  in
   let type_map = Tast_type_collector.collect_types tast in
   let source_text = Full_fidelity_source_text.from_file file in
   let positioned_tree = PositionedTree.make source_text in
@@ -84,8 +88,7 @@ let get_patches tcopt file =
           | Token _ ->
             get_first_suggested_type_as_string file type_map node
             >>= fun type_str ->
-            position_exclusive file node
-            >>| fun pos ->
+            position_exclusive file node >>| fun pos ->
             ServerRefactorTypes.Replace
               ServerRefactorTypes.
                 {
@@ -98,8 +101,7 @@ let get_patches tcopt file =
               | ParameterDeclaration _ ->
                 get_first_suggested_type_as_string file type_map list_item
                 >>= fun type_str ->
-                position file list_item
-                >>| fun pos ->
+                position file list_item >>| fun pos ->
                 ServerRefactorTypes.Insert
                   ServerRefactorTypes.
                     { pos = Pos.to_absolute pos; text = type_str ^ " " }

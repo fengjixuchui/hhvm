@@ -32,6 +32,7 @@ namespace HPHP {
 struct APCArray;
 struct ArrayData;
 struct StringData;
+struct c_WaitableWaitHandle;
 
 namespace arrprov {
 
@@ -45,12 +46,11 @@ namespace arrprov {
  * make this a tagged union or store a different Tag type for static arrays
  */
 struct Tag {
-  Tag() = default;
-  Tag(const StringData* filename, int line)
+  constexpr Tag() = default;
+  constexpr Tag(const StringData* filename, int line)
     : m_filename(filename)
-    , m_line(line) {
-    assertx(m_filename);
-  }
+    , m_line(line)
+  {}
 
   const StringData* filename() const { return m_filename; }
   int line() const { return m_line; }
@@ -93,12 +93,25 @@ struct ArrayProvenanceTable {
 folly::Optional<Tag> tagFromPC();
 
 /*
- * Whether `a` or `tv` admits a provenance tag---i.e., whether it's either a
- * vec or a dict.
+ * RAII struct for modifying the behavior of tagFromPC().
+ *
+ * When this is in effect, we backtrace from `wh` instead of vmfp().
+ */
+struct TagOverride {
+  explicit TagOverride(c_WaitableWaitHandle* wh);
+  ~TagOverride();
+
+private:
+  c_WaitableWaitHandle* m_saved_wh;
+};
+
+/*
+ * Whether `a` admits a provenance tag.
+ *
+ * Depends on the ArrProv.* runtime options.
  */
 bool arrayWantsTag(const ArrayData* a);
 bool arrayWantsTag(const APCArray* a);
-bool tvWantsTag(TypedValue tv);
 
 /*
  * Get the provenance tag for `a`.
@@ -143,23 +156,15 @@ TypedValue tagTV(TypedValue tv);
 TypedValue tagTVKnown(TypedValue tv, Tag tag);
 
 /*
- * Produce a static empty array (with the same kind as `base`) with the given
- * provenance tag.  If no tag is provided, we attempt to make one from vmpc(),
- * and failing that we just return the input array.
+ * Produce a static array with the given provenance tag.
  *
- * Should only be called with staticEmptyVecArray() or staticEmptyDictArray().
+ * If no tag is provided, we attempt to make one from vmpc(), and failing that
+ * we just return the input array.
  */
-const ArrayData* makeEmptyArray(const ArrayData* base,
-                          folly::Optional<Tag> tag = folly::none);
-ArrayData* makeEmptyVec(folly::Optional<Tag> tag = folly::none);
-ArrayData* makeEmptyDict(folly::Optional<Tag> tag = folly::none);
+ArrayData* tagStaticArr(ArrayData* ad, folly::Optional<Tag> tag = folly::none);
 
 ///////////////////////////////////////////////////////////////////////////////
 
 }}
-
-#define incl_HPHP_ARRAY_PROVENANCE_INL_H_
-#include "hphp/runtime/base/array-provenance-inl.h"
-#undef incl_HPHP_ARRAY_PROVENANCE_INL_H_
 
 #endif

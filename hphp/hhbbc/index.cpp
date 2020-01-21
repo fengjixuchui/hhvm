@@ -23,7 +23,6 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -65,6 +64,7 @@
 
 #include "hphp/util/algorithm.h"
 #include "hphp/util/assertions.h"
+#include "hphp/util/hash-set.h"
 #include "hphp/util/match.h"
 
 namespace HPHP { namespace HHBBC {
@@ -290,7 +290,7 @@ PropState make_unknown_propstate(const php::Class* cls,
   auto ret = PropState{};
   for (auto& prop : cls->properties) {
     if (filter(prop)) {
-      ret[prop.name].ty = TGen;
+      ret[prop.name].ty = TCell;
     }
   }
   return ret;
@@ -443,7 +443,7 @@ struct RecordInfo {
 /*
  * Known information about a particular possible instantiation of a
  * PHP class.  The php::Class will be marked AttrUnique if there is a
- * unique ClassInfo with the same name, and no interfering class_aliases.
+ * unique ClassInfo with the same name.
  */
 struct ClassInfo {
   /*
@@ -956,6 +956,30 @@ bool Func::mightBeBuiltin() const {
   );
 }
 
+uint32_t Func::minNonVariadicParams() const {
+  auto const count = [] (const php::Func& f) -> uint32_t {
+    for (size_t i = 0; i < f.params.size(); ++i) {
+      if (f.params[i].isVariadic) return i;
+    }
+    return f.params.size();
+  };
+
+  return match<uint32_t>(
+    val,
+    [&] (FuncName) { return 0; },
+    [&] (MethodName) { return 0; },
+    [&] (FuncInfo* fi) { return count(*fi->func); },
+    [&] (const MethTabEntryPair* mte) { return count(*mte->second.func); },
+    [&] (FuncFamily* fa) {
+      auto c = std::numeric_limits<uint32_t>::max();
+      for (auto const pf : fa->possibleFuncs()) {
+        c = std::min(c, count(*pf->second.func));
+      }
+      return c;
+    }
+  );
+}
+
 std::string show(const Func& f) {
   auto ret = f.name()->toCppString();
   match<void>(f.val,
@@ -995,13 +1019,12 @@ struct Index::IndexData {
 
   ISStringToMany<const php::Class>       classes;
   ISStringToMany<const php::Func>        methods;
-  ISStringToOneT<uint64_t>               method_ref_params_by_name;
+  ISStringToOneT<uint64_t>               method_inout_params_by_name;
   ISStringToMany<const php::Func>        funcs;
   ISStringToMany<const php::TypeAlias>   typeAliases;
   ISStringToMany<const php::Class>       enums;
   ConstInfoConcurrentMap                 constants;
   ISStringToMany<const php::Record>      records;
-  hphp_fast_set<SString, string_data_hash, string_data_isame> classAliases;
 
   // Map from each class to all the closures that are allocated in
   // functions of that class.
@@ -1133,13 +1156,6 @@ struct Index::IndexData {
    * that so we can return it again.
    */
   ContextRetTyMap contextualReturnTypes{};
-
-  /*
-   * Vector of class aliases that need to be added to the index when
-   * its safe to do so (see update_class_aliases).
-   */
-  std::vector<std::pair<SString, SString>> pending_class_aliases;
-  std::mutex pending_class_aliases_mutex;
 
   std::thread compute_iface_vtables;
 };
@@ -1924,22 +1940,22 @@ void add_unit_to_index(IndexData& index, const php::Unit& unit) {
 
       if (RuntimeOption::RepoAuthoritative) {
         uint64_t refs = 0, cur = 1;
-        bool anyByRef = false;
+        bool anyInOut = false;
         for (auto& p : m->params) {
-          if (p.byRef) {
+          if (p.inout) {
             refs |= cur;
-            anyByRef = true;
+            anyInOut = true;
           }
           // It doesn't matter that we lose parameters beyond the 64th,
           // for those, we'll conservatively check everything anyway.
           cur <<= 1;
         }
-        if (anyByRef) {
+        if (anyInOut) {
           // Multiple methods with the same name will be combined in the same
           // cell, thus we use |=. This only makes sense in WholeProgram mode
-          // since we use this field to check that no functions uses its n-th
-          // parameter byref, which requires global knowledge.
-          index.method_ref_params_by_name[m->name] |= refs;
+          // since we use this field to check that no functions has its n-th
+          // parameter as inout, which requires global knowledge.
+          index.method_inout_params_by_name[m->name] |= refs;
         }
       }
     }
@@ -1995,10 +2011,6 @@ void add_unit_to_index(IndexData& index, const php::Unit& unit) {
     index.records.insert({rec->name, rec.get()});
   }
 
-  for (auto& ca : unit.classAliases) {
-    index.classAliases.insert(ca.first);
-    index.classAliases.insert(ca.second);
-  }
 }
 
 template<class T>
@@ -2489,7 +2501,7 @@ void resolve_combinations(RecordNamingEnv& env,
     if (parent->rec->attrs & AttrFinal) {
       ITRACE(2,
              "Resolve combinations failed for `{}' because "
-             "its parent `{}' is a final record\n",
+             "its parent record `{}' is not abstract\n",
              rec->name, parent->rec->name);
       return;
     }
@@ -2882,15 +2894,11 @@ void define_func_families(IndexData& index) {
 struct ConflictGraph {
   void add(const php::Class* i, const php::Class* j) {
     if (i == j) return;
-    auto& conflicts = map[i];
-    if (std::find(conflicts.begin(), conflicts.end(), j) != conflicts.end()) {
-      return;
-    }
-    conflicts.push_back(j);
+    map[i].insert(j);
   }
 
   hphp_hash_map<const php::Class*,
-                     std::vector<const php::Class*>> map;
+                hphp_fast_set<const php::Class*>> map;
 };
 
 /*
@@ -2991,8 +2999,8 @@ void trace_interfaces(const IndexData& index, const ConflictGraph& cg) {
 Slot find_min_slot(const php::Class* iface,
                    const IfaceSlotMap& slots,
                    const ConflictGraph& cg) {
-  auto const& conflicts = cg.map.at(iface);
-  if (conflicts.empty()) {
+  auto const& cit = cg.map.find(iface);
+  if (cit == cg.map.end() || cit->second.empty()) {
     // No conflicts. This is the only interface implemented by the classes that
     // implement it.
     return 0;
@@ -3000,7 +3008,7 @@ Slot find_min_slot(const php::Class* iface,
 
   boost::dynamic_bitset<> used;
 
-  for (auto& c : conflicts) {
+  for (auto const& c : cit->second) {
     auto const it = slots.find(c);
     if (it == slots.end()) continue;
     auto const slot = it->second;
@@ -3487,7 +3495,15 @@ PrepKind func_param_prep(const php::Func* func,
   if (paramId >= func->params.size()) {
     return PrepKind::Val;
   }
-  return func->params[paramId].byRef ? PrepKind::Ref : PrepKind::Val;
+  return func->params[paramId].inout ? PrepKind::InOut : PrepKind::Val;
+}
+
+folly::Optional<uint32_t> func_num_inout(const php::Func* func) {
+  if (func->attrs & AttrInterceptable) return folly::none;
+  if (!func->hasInOutArgs) return 0;
+  uint32_t count = 0;
+  for (auto& p : func->params) count += p.inout;
+  return count;
 }
 
 template<class PossibleFuncRange>
@@ -3524,9 +3540,9 @@ PrepKind prep_kind_from_set(PossibleFuncRange range, uint32_t paramId) {
     switch (func_param_prep(FuncFind::get(item), paramId)) {
     case PrepKind::Unknown:
       return PrepKind::Unknown;
-    case PrepKind::Ref:
-      if (prep && *prep != PrepKind::Ref) return PrepKind::Unknown;
-      prep = PrepKind::Ref;
+    case PrepKind::InOut:
+      if (prep && *prep != PrepKind::InOut) return PrepKind::Unknown;
+      prep = PrepKind::InOut;
       break;
     case PrepKind::Val:
       if (prep && *prep != PrepKind::Val) return PrepKind::Unknown;
@@ -3535,6 +3551,45 @@ PrepKind prep_kind_from_set(PossibleFuncRange range, uint32_t paramId) {
     }
   }
   return *prep;
+}
+
+template<class PossibleFuncRange>
+folly::Optional<uint32_t> num_inout_from_set(PossibleFuncRange range) {
+
+  /*
+   * In sinlge-unit mode, the range is not complete. Without konwing all
+   * possible resolutions, HHBBC cannot deduce anything about inout args.
+   * So the caller should make sure not calling this in single-unit mode.
+   */
+  assert(RuntimeOption::RepoAuthoritative);
+
+  if (begin(range) == end(range)) {
+    /*
+     * We can assume it's by value, because either we're calling a function
+     * that doesn't exist (about to fatal), or we're going to an __call (which
+     * never takes parameters by reference).
+     *
+     * Or if we've got AllFuncsInterceptable we need to assume someone could
+     * rename a function to the new name.
+     */
+    if (RuntimeOption::EvalJitEnableRenameFunction) return folly::none;
+    return 0;
+  }
+
+  struct FuncFind {
+    using F = const php::Func*;
+    static F get(std::pair<SString,F> p) { return p.second; }
+    static F get(const MethTabEntryPair* mte) { return mte->second.func; }
+  };
+
+  folly::Optional<uint32_t> num;
+  for (auto& item : range) {
+    auto const n = func_num_inout(FuncFind::get(item));
+    if (!n.hasValue()) return folly::none;
+    if (num.hasValue() && n != num) return folly::none;
+    num = n;
+  }
+  return num;
 }
 
 template<typename F> auto
@@ -3556,7 +3611,7 @@ PublicSPropEntry lookup_public_static_impl(
   const ClassInfo* cinfo,
   SString prop
 ) {
-  auto const noInfo = PublicSPropEntry{TInitGen, TInitGen, nullptr, 0, true};
+  auto const noInfo = PublicSPropEntry{TInitCell, TInitCell, nullptr, 0, true};
 
   if (data.allPublicSPropsUnknown) return noInfo;
 
@@ -3618,7 +3673,7 @@ PublicSPropEntry lookup_public_static_impl(
   auto const classes = find_range(data.classInfo, cls->name);
   if (begin(classes) == end(classes) ||
       std::next(begin(classes)) != end(classes)) {
-    return PublicSPropEntry{TInitGen, TInitGen, nullptr, 0, true};
+    return PublicSPropEntry{TInitCell, TInitCell, nullptr, 0, true};
   }
   return lookup_public_static_impl(data, begin(classes)->second, name);
 }
@@ -3643,14 +3698,14 @@ Type lookup_public_prop_impl(
     }
   );
 
-  if (!prop) return TGen;
+  if (!prop) return TCell;
   // Make sure its non-static and public. Otherwise its another function's
   // problem.
-  if (prop->attrs & (AttrStatic | AttrPrivate | AttrLateInitSoft)) return TGen;
+  if (prop->attrs & (AttrStatic | AttrPrivate)) return TCell;
 
   // Get a type corresponding to its declared type-hint (if any).
   auto ty = adjust_type_for_prop(
-    *data.m_index, *knownCls, &prop->typeConstraint, TGen
+    *data.m_index, *knownCls, &prop->typeConstraint, TCell
   );
   // We might have to include the initial value which might be outside of the
   // type-hint.
@@ -3747,8 +3802,7 @@ void preresolveTypes(NamingEnv<T>& env,
 }
 } //namespace
 
-Index::Index(php::Program* program,
-             rebuild* rebuild_exception)
+Index::Index(php::Program* program)
   : m_data(std::make_unique<IndexData>(this))
 {
   trace_time tracer("create index");
@@ -3756,14 +3810,6 @@ Index::Index(php::Program* program,
   m_data->arrTableBuilder.reset(new ArrayTypeTable::Builder());
 
   add_system_constants_to_index(*m_data);
-
-  if (rebuild_exception) {
-    for (auto& ca : rebuild_exception->class_aliases) {
-      m_data->classAliases.insert(ca.first);
-      m_data->classAliases.insert(ca.second);
-    }
-    rebuild_exception->class_aliases.clear();
-  }
 
   {
     trace_time trace_add_units("add units to index");
@@ -3802,8 +3848,7 @@ Index::Index(php::Program* program,
                            ta->attrs,
                            flag &&
                            !m_data->classInfo.count(ta->name) &&
-                           !m_data->records.count(ta->name) &&
-                           !m_data->classAliases.count(ta->name),
+                           !m_data->records.count(ta->name),
                            AttrUnique);
                        });
 
@@ -3812,8 +3857,7 @@ Index::Index(php::Program* program,
       auto const recname = rinfo->rec->name;
       if (m_data->recordInfo.count(recname) != 1 ||
           m_data->typeAliases.count(recname) ||
-          m_data->classes.count(recname) ||
-          m_data->classAliases.count(recname)) {
+          m_data->classes.count(recname)) {
         return false;
       }
       if (rinfo->parent && !(rinfo->parent->rec->attrs & AttrUnique)) {
@@ -3831,8 +3875,7 @@ Index::Index(php::Program* program,
     auto const set = [&] {
       if (m_data->classInfo.count(cinfo->cls->name) != 1 ||
           m_data->typeAliases.count(cinfo->cls->name) ||
-          m_data->records.count(cinfo->cls->name) ||
-          m_data->classAliases.count(cinfo->cls->name)) {
+          m_data->records.count(cinfo->cls->name)) {
         return false;
       }
       if (cinfo->parent && !(cinfo->parent->cls->attrs & AttrUnique)) {
@@ -4227,32 +4270,6 @@ void Index::rewrite_default_initial_values(php::Program& program) const {
       }
     }
   }
-}
-
-bool Index::register_class_alias(SString orig, SString alias) const {
-  auto check = [&] (SString name) {
-    if (m_data->classAliases.count(name)) return true;
-
-    auto const classes = find_range(m_data->classInfo, name);
-    if (begin(classes) != end(classes)) {
-      return !(begin(classes)->second->cls->attrs & AttrUnique);
-    }
-    auto const tas = find_range(m_data->typeAliases, name);
-    if (begin(tas) == end(tas)) return true;
-    return !(begin(tas)->second->attrs & AttrUnique);
-  };
-  if (check(orig) && check(alias)) return true;
-  if (m_data->ever_frozen) return false;
-  std::lock_guard<std::mutex> lock{m_data->pending_class_aliases_mutex};
-  m_data->pending_class_aliases.emplace_back(orig, alias);
-  return true;
-}
-
-void Index::update_class_aliases() {
-  if (m_data->pending_class_aliases.empty()) return;
-  FTRACE(1, "Index needs rebuilding due to {} class aliases\n",
-         m_data->pending_class_aliases.size());
-  throw rebuild { std::move(m_data->pending_class_aliases) };
 }
 
 const CompactVector<const php::Class*>*
@@ -4831,8 +4848,12 @@ Type Index::get_type_for_constraint(Context ctx,
   if (getSuperType) {
     /*
      * Soft hints (@Foo) are not checked.
+     * Also upper-bound type hints are not checked when they do not error.
      */
-    if (tc.isSoft()) return TCell;
+    if (tc.isSoft() ||
+        (RuntimeOption::EvalEnforceGenericsUB != 2 && tc.isUpperBound())) {
+      return TCell;
+    }
   }
 
   auto const res = get_type_for_annotated_type(
@@ -4859,7 +4880,7 @@ bool Index::prop_tc_maybe_unenforced(const php::Class& propCls,
     tc.type(),
     tc.isNullable(),
     tc.typeName(),
-    TGen
+    TCell
   );
   return res.maybeMixed;
 }
@@ -4890,8 +4911,12 @@ Index::ConstraintResolution Index::get_type_for_annotated_type(
       case KindOfDict:         return TDict;
       case KindOfPersistentKeyset:
       case KindOfKeyset:       return TKeyset;
-      case KindOfPersistentShape:
-      case KindOfShape:        not_implemented();
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        always_assert_flog(false, "Unexpected DataType T58820726");
+        break;
       case KindOfPersistentArray:
       case KindOfArray:        return TPArr;
       case KindOfResource:     return TRes;
@@ -4900,7 +4925,6 @@ Index::ConstraintResolution Index::get_type_for_annotated_type(
       case KindOfObject:
         return resolve_named_type(ctx, name, candidate);
       case KindOfUninit:
-      case KindOfRef:
       case KindOfFunc:
       case KindOfClass:
         always_assert_flog(false, "Unexpected DataType");
@@ -5005,7 +5029,7 @@ bool Index::satisfies_constraint(Context ctx, const Type& t,
 bool Index::could_have_reified_type(Context ctx,
                                     const TypeConstraint& tc) const {
   if (ctx.func->isClosureBody) {
-    for (auto i = ctx.func->params.size() + 1;
+    for (auto i = ctx.func->params.size();
          i < ctx.func->locals.size();
          ++i) {
       auto const name = ctx.func->locals[i].name;
@@ -5117,8 +5141,7 @@ folly::Optional<Type> Index::lookup_constant(Context ctx,
   ConstInfoConcurrentMap::const_accessor acc;
   if (!m_data->constants.find(acc, cnsName)) {
     // flag to indicate that the constant isn't in the index yet.
-    if (options.HardConstProp) return folly::none;
-    return TInitCell;
+    return folly::none;
   }
 
   if (acc->second.func &&
@@ -5132,8 +5155,7 @@ folly::Optional<Type> Index::lookup_constant(Context ctx,
   return acc->second.type;
 }
 
-folly::Optional<Cell> Index::lookup_persistent_constant(SString cnsName) const {
-  if (!options.HardConstProp) return folly::none;
+folly::Optional<TypedValue> Index::lookup_persistent_constant(SString cnsName) const {
   ConstInfoConcurrentMap::const_accessor acc;
   if (!m_data->constants.find(acc, cnsName)) return folly::none;
   return tv(acc->second.type);
@@ -5329,7 +5351,40 @@ Type Index::lookup_return_type_raw(const php::Func* f) const {
 }
 
 bool Index::lookup_this_available(const php::Func* f) const {
-  return (f->attrs & AttrRequiresThis) && !f->isClosureBody;
+  return !(f->cls->attrs & AttrTrait) && !(f->attrs & AttrStatic);
+}
+
+folly::Optional<uint32_t> Index::lookup_num_inout_params(
+  Context,
+  res::Func rfunc
+) const {
+  return match<folly::Optional<uint32_t>>(
+    rfunc.val,
+    [&] (res::Func::FuncName s) -> folly::Optional<uint32_t> {
+      if (!RuntimeOption::RepoAuthoritative || s.renamable) return folly::none;
+      return num_inout_from_set(find_range(m_data->funcs, s.name));
+    },
+    [&] (res::Func::MethodName s) -> folly::Optional<uint32_t> {
+      if (!RuntimeOption::RepoAuthoritative) return folly::none;
+      auto const it = m_data->method_inout_params_by_name.find(s.name);
+      if (it == end(m_data->method_inout_params_by_name)) {
+        // There was no entry, so no method by this name takes a parameter
+        // by inout.
+        return 0;
+      }
+      return num_inout_from_set(find_range(m_data->methods, s.name));
+    },
+    [&] (FuncInfo* finfo) {
+      return func_num_inout(finfo->func);
+    },
+    [&] (const MethTabEntryPair* mte) {
+      return func_num_inout(mte->second.func);
+    },
+    [&] (FuncFamily* fam) {
+      assert(RuntimeOption::RepoAuthoritative);
+      return num_inout_from_set(fam->possibleFuncs());
+    }
+  );
 }
 
 PrepKind Index::lookup_param_prep(Context /*ctx*/, res::Func rfunc,
@@ -5342,14 +5397,14 @@ PrepKind Index::lookup_param_prep(Context /*ctx*/, res::Func rfunc,
     },
     [&] (res::Func::MethodName s) {
       if (!RuntimeOption::RepoAuthoritative) return PrepKind::Unknown;
-      auto const it = m_data->method_ref_params_by_name.find(s.name);
-      if (it == end(m_data->method_ref_params_by_name)) {
+      auto const it = m_data->method_inout_params_by_name.find(s.name);
+      if (it == end(m_data->method_inout_params_by_name)) {
         // There was no entry, so no method by this name takes a parameter
         // by reference.
         return PrepKind::Val;
       }
       /*
-       * If we think it's supposed to be PrepKind::Ref, we still can't be sure
+       * If we think it's supposed to be PrepKind::InOut, we still can't be sure
        * unless we go through some effort to guarantee that it can't be going
        * to an __call function magically (which will never take anything by
        * ref).
@@ -5362,7 +5417,7 @@ PrepKind Index::lookup_param_prep(Context /*ctx*/, res::Func rfunc,
         find_range(m_data->methods, s.name),
         paramId
       );
-      return kind == PrepKind::Ref ? PrepKind::Unknown : kind;
+      return kind == PrepKind::InOut ? PrepKind::Unknown : kind;
     },
     [&] (FuncInfo* finfo) {
       return func_param_prep(finfo->func, paramId);
@@ -5412,16 +5467,16 @@ Index::lookup_private_statics(const php::Class* cls,
 Type Index::lookup_public_static(Context ctx,
                                  const Type& cls,
                                  const Type& name) const {
-  if (!is_specialized_cls(cls)) return TInitGen;
+  if (!is_specialized_cls(cls)) return TInitCell;
 
   auto const vname = tv(name);
-  if (!vname || vname->m_type != KindOfPersistentString) return TInitGen;
+  if (!vname || vname->m_type != KindOfPersistentString) return TInitCell;
   auto const sname = vname->m_data.pstr;
 
   if (ctx.unit) add_dependency(*m_data, sname, ctx, Dep::PublicSPropName);
 
   auto const dcls = dcls_of(cls);
-  if (dcls.cls.val.left()) return TInitGen;
+  if (dcls.cls.val.left()) return TInitCell;
   auto const cinfo = dcls.cls.val.right();
 
   switch (dcls.type) {
@@ -5496,14 +5551,14 @@ bool Index::lookup_public_static_maybe_late_init(const Type& cls,
 }
 
 Type Index::lookup_public_prop(const Type& cls, const Type& name) const {
-  if (!is_specialized_cls(cls)) return TGen;
+  if (!is_specialized_cls(cls)) return TCell;
 
   auto const vname = tv(name);
-  if (!vname || vname->m_type != KindOfPersistentString) return TGen;
+  if (!vname || vname->m_type != KindOfPersistentString) return TCell;
   auto const sname = vname->m_data.pstr;
 
   auto const dcls = dcls_of(cls);
-  if (dcls.cls.val.left()) return TGen;
+  if (dcls.cls.val.left()) return TCell;
   auto const cinfo = dcls.cls.val.right();
 
   switch (dcls.type) {
@@ -5532,7 +5587,7 @@ Type Index::lookup_public_prop(const php::Class* cls, SString name) const {
   auto const classes = find_range(m_data->classInfo, cls->name);
   if (begin(classes) == end(classes) ||
       std::next(begin(classes)) != end(classes)) {
-    return TGen;
+    return TCell;
   }
   return lookup_public_prop_impl(*m_data, begin(classes)->second, name);
 }
@@ -5595,13 +5650,8 @@ void Index::init_public_static_prop_types() {
        * include the Uninit (which isn't really a user-visible type for the
        * property) or by the time we union things in we'll have inferred nothing
        * much.
-       *
-       * If the property is AttrLateInitSoft, it can be anything because of the
-       * default value, so give the initial value as TInitGen and don't honor
-       * the type-constraint, which will keep us from inferring anything.
        */
       auto const initial = [&] {
-        if (prop.attrs & AttrLateInitSoft) return TInitGen;
         auto const tyRaw = from_cell(prop.val);
         if (tyRaw.subtypeOf(BUninit)) return TBottom;
         if (prop.attrs & AttrSystemInitialValue) return tyRaw;
@@ -5610,18 +5660,19 @@ void Index::init_public_static_prop_types() {
         );
       }();
 
-      auto const tc = (prop.attrs & AttrLateInitSoft)
-        ? nullptr
-        : &prop.typeConstraint;
-
       cinfo->publicStaticProps[prop.name] =
         PublicSPropEntry {
           union_of(
-            adjust_type_for_prop(*this, *cinfo->cls, tc, TInitGen),
+            adjust_type_for_prop(
+              *this,
+              *cinfo->cls,
+              &prop.typeConstraint,
+              TInitCell
+            ),
             initial
           ),
           initial,
-          tc,
+          &prop.typeConstraint,
           0,
           true
         };
@@ -5735,7 +5786,7 @@ void Index::init_return_type(const php::Func* func) {
 
   auto make_type = [&] (const TypeConstraint& tc) {
     if (tc.isSoft() ||
-        (RuntimeOption::EvalThisTypeHintLevel != 3 && tc.isThis())) {
+        (RuntimeOption::EvalEnforceGenericsUB != 2 && tc.isUpperBound())) {
       return TBottom;
     }
     return loosen_dvarrayness(
@@ -5755,7 +5806,7 @@ void Index::init_return_type(const php::Func* func) {
   auto tcT = make_type(func->retTypeConstraint);
   if (tcT == TBottom) return;
 
-  if (func->attrs & AttrTakesInOutParams) {
+  if (func->hasInOutArgs) {
     std::vector<Type> types;
     types.emplace_back(intersection_of(TInitCell, std::move(tcT)));
     for (auto& p : func->params) {
@@ -5764,7 +5815,7 @@ void Index::init_return_type(const php::Func* func) {
       if (t == TBottom) return;
       types.emplace_back(intersection_of(TInitCell, std::move(t)));
     }
-    tcT = vec(std::move(types), folly::none);
+    tcT = vec(std::move(types), ProvTag::Top);
   }
 
   tcT = to_cell(std::move(tcT));
@@ -6023,7 +6074,7 @@ void Index::refine_public_statics(DependencyContextSet& deps) {
     auto it = m_data->unknownClassSProps.find(kv.first);
     if (it == end(m_data->unknownClassSProps)) {
       // If this is the first refinement, our previous state was effectively
-      // TGen for everything, so inserting a type into the map can only
+      // TCell for everything, so inserting a type into the map can only
       // refine. However, if this isn't the first refinement, a name not present
       // in the map means that its TBottom, so we shouldn't be inserting
       // anything.
@@ -6208,13 +6259,12 @@ void Index::cleanup_post_emit() {
   #define CLEAR_PARALLEL(x) clearers.push_back([&] CLEAR(x));
   CLEAR_PARALLEL(m_data->classes);
   CLEAR_PARALLEL(m_data->methods);
-  CLEAR_PARALLEL(m_data->method_ref_params_by_name);
+  CLEAR_PARALLEL(m_data->method_inout_params_by_name);
   CLEAR_PARALLEL(m_data->funcs);
   CLEAR_PARALLEL(m_data->typeAliases);
   CLEAR_PARALLEL(m_data->enums);
   CLEAR_PARALLEL(m_data->constants);
   CLEAR_PARALLEL(m_data->records);
-  CLEAR_PARALLEL(m_data->classAliases);
 
   CLEAR_PARALLEL(m_data->classClosureMap);
   CLEAR_PARALLEL(m_data->classExtraMethodMap);

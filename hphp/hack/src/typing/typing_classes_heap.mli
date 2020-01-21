@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 
 module Classes : sig
@@ -37,9 +37,9 @@ module Api : sig
 
   val ppl : t -> bool
 
-  val deferred_init_members : t -> SSet.t
   (** To be used only when {!ServerLocalConfig.shallow_class_decl} is not enabled.
       Raises [Failure] if used when shallow_class_decl is enabled. *)
+  val deferred_init_members : t -> SSet.t
 
   val kind : t -> Ast_defs.class_kind
 
@@ -51,21 +51,21 @@ module Api : sig
 
   val pos : t -> Pos.t
 
-  val tparams : t -> decl tparam list
+  val tparams : t -> decl_tparam list
 
-  val where_constraints : t -> decl where_constraint list
+  val where_constraints : t -> decl_where_constraint list
 
-  val all_where_constraints_on_this : t -> decl where_constraint list
+  val all_where_constraints_on_this : t -> decl_where_constraint list
 
-  val upper_bounds_on_this : t -> decl ty Sequence.t
+  val upper_bounds_on_this : t -> decl_ty Sequence.t
 
-  val upper_bounds_on_this_from_constraints : t -> decl ty Sequence.t
+  val upper_bounds_on_this_from_constraints : t -> decl_ty Sequence.t
 
   val has_upper_bounds_on_this_from_constraints : t -> bool
 
-  val lower_bounds_on_this : t -> decl ty Sequence.t
+  val lower_bounds_on_this : t -> decl_ty Sequence.t
 
-  val lower_bounds_on_this_from_constraints : t -> decl ty Sequence.t
+  val lower_bounds_on_this_from_constraints : t -> decl_ty Sequence.t
 
   val has_lower_bounds_on_this_from_constraints : t -> bool
 
@@ -77,7 +77,7 @@ module Api : sig
 
   val decl_errors : t -> Errors.t option
 
-  val get_ancestor : t -> string -> decl ty option
+  val get_ancestor : t -> string -> decl_ty option
 
   val has_ancestor : t -> string -> bool
 
@@ -85,7 +85,7 @@ module Api : sig
 
   val extends : t -> string -> bool
 
-  val all_ancestors : t -> (string * decl ty) Sequence.t
+  val all_ancestors : t -> (string * decl_ty) Sequence.t
 
   val all_ancestor_names : t -> string Sequence.t
 
@@ -135,7 +135,6 @@ module Api : sig
 
   val smethods : t -> (string * class_elt) Sequence.t
 
-  val all_inherited_methods : t -> string -> class_elt list
   (** The following functions return _all_ class member declarations defined in or
       inherited by this class with the given member name, including ones which
       were overridden, for purposes such as override checking. The list is ordered
@@ -144,15 +143,16 @@ module Api : sig
 
       To be used only when {!ServerLocalConfig.shallow_class_decl} is enabled.
       Raises [Failure] if used when shallow_class_decl is not enabled. *)
+  val all_inherited_methods : t -> string -> class_elt list
 
   val all_inherited_smethods : t -> string -> class_elt list
 
-  val shallow_decl : t -> Shallow_decl_defs.shallow_class
   (** Return the shallow declaration for the given class.
 
       To be used only when {!ServerLocalConfig.shallow_class_decl} is enabled.
       Raises [Failure] if used when shallow_class_decl is not enabled. *)
+  val shallow_decl : t -> Shallow_decl_defs.shallow_class
 end
 
-val compute_class_decl_no_cache : string -> Classes.t option
 (** Implementation detail, do not use. For use in [Decl_provider] only. *)
+val compute_class_decl_no_cache : string -> Classes.t option

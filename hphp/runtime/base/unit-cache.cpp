@@ -834,7 +834,6 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EvalHackCompilerVerboseErrors ? '1' : '0')
     + (RuntimeOption::EvalJitEnableRenameFunction ? '1' : '0')
     + (RuntimeOption::EvalLoadFilepathFromUnitCache ? '1' : '0')
-    + std::to_string(RuntimeOption::EvalReffinessInvariance)
     + std::to_string(RuntimeOption::EvalForbidDynamicCallsToFunc)
     + std::to_string(RuntimeOption::EvalForbidDynamicCallsToClsMeth)
     + std::to_string(RuntimeOption::EvalForbidDynamicCallsToInstMeth)
@@ -848,8 +847,7 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + RuntimeOption::EvalHackCompilerCommand + '\0'
     + RuntimeOption::EvalHackCompilerArgs + '\0'
     + (RuntimeOption::RepoDebugInfo ? '1' : '0')
-    + (RuntimeOption::EvalEnableHHJS ? '1' : '0')
-    + (RuntimeOption::EvalDumpHHJS ? '1' : '0')
+    + std::to_string(RuntimeOption::CheckIntOverflow)
     + (RuntimeOption::DisallowExecutionOperator ? '1' : '0')
     + (RuntimeOption::DisableNontoplevelDeclarations ? '1' : '0')
     + (RuntimeOption::DisableStaticClosures ? '1' : '0')
@@ -858,10 +856,10 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EvalEmitClsMethPointers ? '1' : '0')
     + (RuntimeOption::EvalIsVecNotices ? '1' : '0')
     + (RuntimeOption::EvalIsCompatibleClsMethType ? '1' : '0')
-    + (RuntimeOption::EvalNoticeOnByRefArgumentTypehintViolation ? '1' : '0')
     + (RuntimeOption::EvalHackRecords ? '1' : '0')
     + (RuntimeOption::EvalHackRecordArrays ? '1' : '0')
     + (RuntimeOption::EvalArrayProvenance ? '1' : '0')
+    + std::to_string(RuntimeOption::EvalEnforceGenericsUB)
     + std::to_string(RuntimeOption::EvalAssemblerMaxScalarSize)
     + opts.cacheKeyRaw()
     + mangleAllowHhas(fileName)
@@ -876,6 +874,19 @@ size_t numLoadedUnits() {
   }
   return s_nonRepoUnitCache.size();
 }
+
+Unit* getLoadedUnit(StringData* path) {
+  if (!RuntimeOption::RepoAuthoritative) {
+    NonRepoUnitCache::const_accessor accessor;
+    if (s_nonRepoUnitCache.find(accessor, path) ) {
+      auto cachedUnit = accessor->second.cachedUnit.copy();
+      return cachedUnit ? cachedUnit->cu.unit : nullptr;
+    }
+  }
+
+  return nullptr;
+}
+
 
 std::vector<Unit*> loadedUnitsRepoAuth() {
   always_assert(RuntimeOption::RepoAuthoritative);

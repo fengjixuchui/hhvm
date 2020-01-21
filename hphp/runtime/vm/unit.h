@@ -299,11 +299,9 @@ public:
     UniqueDefinedClass  = 1,
     Define              = 2,  // Toplevel scalar define.
     PersistentDefine    = 3,  // Cross-request persistent toplevel defines.
-    Global              = 4,  // Global variable declarations.
-    TypeAlias           = 5,
-    ReqDoc              = 6,
-    Done                = 7,
-    // We cannot add more kinds here; this has to fit in 3 bits.
+    TypeAlias           = 4,
+    Done                = 5,
+    // We can add two more kind here; this has to fit in 3 bits.
   };
 
   /*
@@ -500,7 +498,7 @@ public:
    * We clone the toplevel pseudomain for each context class and cache the
    * results in m_pseudoMainCache.
    */
-  Func* getMain(Class* cls) const;
+  Func* getMain(Class* cls, bool hasThis) const;
 
   // Return the cached EntryPoint
   Func* getCachedEntryPoint() const;
@@ -569,17 +567,6 @@ public:
    * defClass, this is a one time operation.
    */
   static Class* defClosure(const PreClass* preClass);
-
-  /*
-   * Set the NamedEntity for `alias' to refer to the class `original' in this
-   * request.
-   *
-   * Raises a warning and returns false if `alias' already refers to a
-   * Class in this request, or if original is not loaded, and autoload
-   * is false, or it can't be autoloaded. Returns true otherwise.
-   */
-  static bool aliasClass(const StringData* original, const StringData* alias,
-                         bool autoload);
 
   /*
    * Look up the Class in this request with name `name', or with the name
@@ -699,7 +686,7 @@ public:
    * Return nullptr if no such constant exists, or the constant is not
    * persistent.
    */
-  static const Cell* lookupPersistentCns(const StringData* cnsName);
+  static const TypedValue* lookupPersistentCns(const StringData* cnsName);
 
   /*
    * Look up, or autoload and define, the value of the constant with name
@@ -711,19 +698,19 @@ public:
    * Define a constant (either request-local or persistent) with name `cnsName'
    * and value `value'.
    *
-   * May raise notices or warnings if a constant with the given name is already
-   * defined or if value is invalid.
+   * Raise an error if a constant with the given name is already defined or if
+   * value is invalid.
    */
-  static bool defCns(const StringData* cnsName, const TypedValue* value);
+  static void defCns(const StringData* cnsName, const TypedValue* value);
 
   /*
    * Define a constant with name `cnsName' with a magic callback. The
-   * Cell should be KindOfUninit, with a Native::ConstantCallback in
-   * its m_data.pref.
+   * TypedValue should be KindOfUninit, with a Native::ConstantCallback in
+   * its m_data.pcnt.
    *
    * The canonical examples are STDIN, STDOUT, and STDERR.
    */
-  static bool defNativeConstantCallback(const StringData* cnsName, Cell cell);
+  static bool defNativeConstantCallback(const StringData* cnsName, TypedValue cell);
 
   /////////////////////////////////////////////////////////////////////////////
   // Type aliases.
@@ -876,11 +863,6 @@ public:
    */
   bool isInterpretOnly() const;
   void setInterpretOnly();
-
-  /*
-   * Replace the Unit?
-   */
-  void* replaceUnit() const;
 
   /*
    * Does this unit correspond to a file with "<?hh" at the top?

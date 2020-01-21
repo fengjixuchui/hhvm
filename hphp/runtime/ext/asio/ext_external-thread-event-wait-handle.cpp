@@ -17,6 +17,7 @@
 
 #include "hphp/runtime/ext/asio/ext_external-thread-event-wait-handle.h"
 
+#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/exceptions.h"
 #include "hphp/runtime/ext/asio/ext_asio.h"
 #include "hphp/runtime/ext/asio/asio-external-thread-event.h"
@@ -171,9 +172,10 @@ void c_ExternalThreadEventWaitHandle::process() {
   // clean up once event is processed
   auto exit_guard = folly::makeGuard([&] { destroyEvent(); });
 
-  Cell result;
+  TypedValue result;
   try {
     try {
+      arrprov::TagOverride tag_override { this };
       m_event->unserialize(result);
     } catch (ExtendedException& exception) {
       exception.recomputeBacktraceFromWH(this);
@@ -207,10 +209,10 @@ void c_ExternalThreadEventWaitHandle::process() {
     throw;
   }
 
-  assertx(cellIsPlausible(result));
+  assertx(tvIsPlausible(result));
   auto parentChain = getParentChain();
   setState(STATE_SUCCEEDED);
-  cellCopy(result, m_resultOrException);
+  tvCopy(result, m_resultOrException);
   parentChain.unblock();
 
   auto session = AsioSession::Get();

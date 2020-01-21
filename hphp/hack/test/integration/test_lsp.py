@@ -13,7 +13,7 @@ from typing import Iterable, List, Mapping, Tuple
 import common_tests
 from hh_paths import hh_server
 from lspcommand import LspCommandProcessor, Transcript
-from lsptestspec import LspTestSpec
+from lsptestspec import LspTestSpec, NoResponse
 from test_case import TestCase
 from utils import Json, JsonObject, interpolate_variables
 
@@ -38,6 +38,7 @@ require_mini_state = {use_saved_state}
 lazy_decl = {use_saved_state}
 lazy_parse = {use_saved_state}
 lazy_init2 = {use_saved_state}
+symbolindex_search_provider = SqliteIndex
 """.format(
                     use_saved_state=use_saved_state_str
                 )
@@ -273,19 +274,6 @@ class TestLsp(TestCase[LspTestDriver]):
         use_serverless_ide: bool,
     ) -> None:
         if wait_for_server:
-            assert not use_serverless_ide, (
-                "Warning: both `wait_for_server` and `use_serverless_ide` "
-                + "were set to `True` for testing in "
-                + self.run_lsp_test.__name__
-                + ". "
-                + "While this is a possible test case, it hasn't been written yet, "
-                + "so it's more likely that this is a mistake "
-                + "and you're accidentally relying on hh_server to fulfill "
-                + "serverless IDE requests."
-                + "(If you're writing that test, "
-                + "then it's time to remove this assertion.)"
-            )
-
             # wait until hh_server is ready before starting lsp
             self.test_driver.run_check()
         elif use_serverless_ide:
@@ -359,20 +347,2331 @@ class TestLsp(TestCase[LspTestDriver]):
             "initialize_shutdown", {"root_path": self.test_driver.repo_dir}
         )
 
-    def test_completion(self) -> None:
-        self.prepare_server_environment()
-        variables = self.setup_php_file("completion.php")
-        self.load_and_run("completion", variables)
+    def test_serverless_ide_completion(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("completion.php"))
+        self.test_driver.stop_hh_server()
+        spec = (
+            self.initialize_spec(LspTestSpec("ide_completion"), use_serverless_ide=True)
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .notification(
+                comment="Add '$x = $point1['' to test autocomplete for shapes",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 22, "character": 0},
+                                "end": {"line": 22, "character": 0},
+                            },
+                            "text": "$x = $point1['",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after user types a shape",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 22, "character": 14},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "'x'",
+                            "kind": 12,
+                            "detail": "literal",
+                            "inlineDetail": "literal",
+                            "sortText": "'x'",
+                            "insertText": "'x'",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "'x'",
+                                "filename": "${root_path}/completion.php",
+                                "line": 22,
+                                "char": 19,
+                            },
+                        },
+                        {
+                            "label": "'y'",
+                            "kind": 12,
+                            "detail": "literal",
+                            "inlineDetail": "literal",
+                            "sortText": "'y'",
+                            "insertText": "'y'",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "'y'",
+                                "filename": "${root_path}/completion.php",
+                                "line": 22,
+                                "char": 30,
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add automatically closed apostrophes when typing a shape key, the way visual studio code does it",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 22, "character": 0},
+                                "end": {"line": 22, "character": 14},
+                            },
+                            "text": "$x = $point1['']",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after a shape, with VS Code automatically closed apostrophes",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 22, "character": 14},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "'x",
+                            "kind": 12,
+                            "detail": "literal",
+                            "inlineDetail": "literal",
+                            "sortText": "'x",
+                            "insertText": "'x",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "'x'",
+                                "filename": "${root_path}/completion.php",
+                                "line": 22,
+                                "char": 19,
+                            },
+                        },
+                        {
+                            "label": "'y",
+                            "kind": 12,
+                            "detail": "literal",
+                            "inlineDetail": "literal",
+                            "sortText": "'y",
+                            "insertText": "'y",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "'y'",
+                                "filename": "${root_path}/completion.php",
+                                "line": 22,
+                                "char": 30,
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 0},
+                            },
+                            "text": "$x = <",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 6},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:alpha",
+                            "insertText": "ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": "ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:text",
+                            "insertText": "ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <a'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 6},
+                            },
+                            "text": "$x = <a",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <a'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 7},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:alpha",
+                            "insertText": "ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": "ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:text",
+                            "insertText": "ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <ab:'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 7},
+                            },
+                            "text": "$x = <ab:",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <ab:'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 9},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:alpha",
+                            "insertText": "ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": "ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:text",
+                            "insertText": "ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <ab:cd:text '",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 9},
+                            },
+                            "text": "$x = <ab:cd:text ",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <ab:cd:text '",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 17},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "width",
+                            "kind": 10,
+                            "detail": "?int",
+                            "inlineDetail": "?int",
+                            "sortText": "width",
+                            "insertText": "width",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":width",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 27,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                        {
+                            "label": "color",
+                            "kind": 10,
+                            "detail": "?string",
+                            "inlineDetail": "?string",
+                            "sortText": "color",
+                            "insertText": "color",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":color",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 13,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <ab:cd:text w'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 17},
+                            },
+                            "text": "$x = <ab:cd:text w",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <ab:cd:text w'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 18},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "width",
+                            "kind": 10,
+                            "detail": "?int",
+                            "inlineDetail": "?int",
+                            "sortText": "width",
+                            "insertText": "width",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":width",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 27,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                        {
+                            "label": "color",
+                            "kind": 10,
+                            "detail": "?string",
+                            "inlineDetail": "?string",
+                            "sortText": "color",
+                            "insertText": "color",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":color",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 13,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = new :'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 18},
+                            },
+                            "text": "$x = new :",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = new :'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 10},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": ":ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": ":ab:cd:alpha",
+                            "insertText": ":ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": ":ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": ":ab:cd:text",
+                            "insertText": ":ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = new :a'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 10},
+                            },
+                            "text": "$x = new :a",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = new :a'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 11},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": ":ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": ":ab:cd:alpha",
+                            "insertText": ":ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": ":ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": ":ab:cd:text",
+                            "insertText": ":ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            # Note that this request should match the result in the previous example
+            .request(
+                comment="autocomplete resolving after '$x = new :a'",
+                method="completionItem/resolve",
+                params={
+                    "label": ":ab:cd:alpha",
+                    "kind": 7,
+                    "detail": "class",
+                    "inlineDetail": "class",
+                    "itemType": ":ab:cd:alpha",
+                    "insertText": ":ab:cd:alpha",
+                    "insertTextFormat": 1,
+                    "data": {"fullname": ":ab:cd:alpha"},
+                },
+                result={
+                    "label": ":ab:cd:alpha",
+                    "kind": 7,
+                    "detail": "class",
+                    "inlineDetail": "class",
+                    "itemType": ":ab:cd:alpha",
+                    "documentation": {
+                        "kind": "markdown",
+                        "value": ":ab:cd:alpha docblock",
+                    },
+                    "insertText": ":ab:cd:alpha",
+                    "insertTextFormat": 1,
+                    "data": {"fullname": ":ab:cd:alpha"},
+                },
+                powered_by="serverless_ide",
+            )
+            # Try the same thing again, but this time without "new", instead using "<xhp" style
+            .notification(
+                comment="Add '$x = <a'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 11},
+                            },
+                            "text": "$x = <a",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <a'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 7},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:alpha",
+                            "insertText": "ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": "ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:text",
+                            "insertText": "ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="autocomplete resolving after '$x = <a'",
+                method="completionItem/resolve",
+                params={
+                    "label": "ab:cd:alpha",
+                    "kind": 7,
+                    "detail": "class",
+                    "inlineDetail": "class",
+                    "insertText": "ab:cd:alpha",
+                    "insertTextFormat": 1,
+                    "data": {"fullname": ":ab:cd:alpha"},
+                },
+                result={
+                    "label": "ab:cd:alpha",
+                    "kind": 7,
+                    "detail": "class",
+                    "inlineDetail": "class",
+                    "documentation": {
+                        "kind": "markdown",
+                        "value": ":ab:cd:alpha docblock",
+                    },
+                    "insertText": "ab:cd:alpha",
+                    "insertTextFormat": 1,
+                    "data": {"fullname": ":ab:cd:alpha"},
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <ab:cd:text/>; $y = $x->'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 7},
+                            },
+                            "text": "$x = <ab:cd:text/>; $y = $x->",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <ab:cd:text/>; $y = $x->'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 29},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": ":width",
+                            "kind": 10,
+                            "detail": "?int",
+                            "inlineDetail": "?int",
+                            "sortText": ":width",
+                            "insertText": ":width",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":width",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 27,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                        {
+                            "label": ":color",
+                            "kind": 10,
+                            "detail": "?string",
+                            "inlineDetail": "?string",
+                            "sortText": ":color",
+                            "insertText": ":color",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":color",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 13,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <ab:cd:text/>; $y = $x->:'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 29},
+                            },
+                            "text": "$x = <ab:cd:text/>; $y = $x->:",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <ab:cd:text/>; $y = $x->:'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 30},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": ":width",
+                            "kind": 10,
+                            "detail": "?int",
+                            "inlineDetail": "?int",
+                            "sortText": ":width",
+                            "insertText": ":width",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":width",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 27,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                        {
+                            "label": ":color",
+                            "kind": 10,
+                            "detail": "?string",
+                            "inlineDetail": "?string",
+                            "sortText": ":color",
+                            "insertText": ":color",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":color",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 13,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'test_fun'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 30},
+                            },
+                            "text": "test_fun",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after 'test_fun'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 8},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "test_function",
+                            "kind": 3,
+                            "detail": "function",
+                            "inlineDetail": "function",
+                            "sortText": "test_function",
+                            "insertText": "test_function",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": "test_function"},
+                        }
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="autocomplete resolving after 'test_fun'",
+                method="completionItem/resolve",
+                params={
+                    "label": "test_function",
+                    "kind": 3,
+                    "detail": "function(): void",
+                    "inlineDetail": "()",
+                    "itemType": "void",
+                    "insertText": "test_function",
+                    "insertTextFormat": 1,
+                    "data": {
+                        "filename": "${root_path}/completion.php",
+                        "line": 8,
+                        "char": 10,
+                    },
+                },
+                result={
+                    "label": "test_function",
+                    "kind": 3,
+                    "detail": "function(): void",
+                    "inlineDetail": "()",
+                    "itemType": "void",
+                    "documentation": {
+                        "kind": "markdown",
+                        "value": "test_function docblock.",
+                    },
+                    "insertText": "test_function",
+                    "insertTextFormat": 1,
+                    "data": {
+                        "filename": "${root_path}/completion.php",
+                        "line": 8,
+                        "char": 10,
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'switch (Elsa::Alonso) { case Elsa:'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 8},
+                            },
+                            "text": "switch (Elsa::Alonso) { case Elsa:",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after 'switch (Elsa::Alonso) { case Elsa:'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 34},
+                },
+                result={"isIncomplete": False, "items": []},
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'switch (Elsa::Alonso) { case Elsa::'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 34},
+                            },
+                            "text": "switch (Elsa::Alonso) { case Elsa::",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after 'switch (Elsa::Alonso) { case Elsa::'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 35},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "class",
+                            "kind": 21,
+                            "detail": "classname<this>",
+                            "inlineDetail": "classname<this>",
+                            "sortText": "class",
+                            "insertText": "class",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "class",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 13,
+                                "char": 6,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "Bard",
+                            "kind": 21,
+                            "detail": "Elsa",
+                            "inlineDetail": "Elsa",
+                            "sortText": "Bard",
+                            "insertText": "Bard",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "Bard",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 13,
+                                "char": 12,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "Alonso",
+                            "kind": 21,
+                            "detail": "Elsa",
+                            "inlineDetail": "Elsa",
+                            "sortText": "Alonso",
+                            "insertText": "Alonso",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "Alonso",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 13,
+                                "char": 12,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "isValid",
+                            "kind": 2,
+                            "detail": "function(mixed $value): bool",
+                            "inlineDetail": "(mixed $value)",
+                            "itemType": "bool",
+                            "sortText": "isValid",
+                            "insertText": "isValid",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "isValid",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 49,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "getValues",
+                            "kind": 2,
+                            "detail": "function(): darray<string, Elsa>",
+                            "inlineDetail": "()",
+                            "itemType": "darray<string, Elsa>",
+                            "sortText": "getValues",
+                            "insertText": "getValues",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "getValues",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 34,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "getNames",
+                            "kind": 2,
+                            "detail": "function(): darray<Elsa, string>",
+                            "inlineDetail": "()",
+                            "itemType": "darray<Elsa, string>",
+                            "sortText": "getNames",
+                            "insertText": "getNames",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "getNames",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 43,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "coerce",
+                            "kind": 2,
+                            "detail": "function(mixed $value): ?Elsa",
+                            "inlineDetail": "(mixed $value)",
+                            "itemType": "?Elsa",
+                            "sortText": "coerce",
+                            "insertText": "coerce",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "coerce",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 56,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "assertAll",
+                            "kind": 2,
+                            "detail": "function(Traversable<mixed> $values): Container<Elsa>",
+                            "inlineDetail": "(Traversable<mixed> $values)",
+                            "itemType": "Container<Elsa>",
+                            "sortText": "assertAll",
+                            "insertText": "assertAll",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "assertAll",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 70,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "assert",
+                            "kind": 2,
+                            "detail": "function(mixed $value): Elsa",
+                            "inlineDetail": "(mixed $value)",
+                            "itemType": "Elsa",
+                            "sortText": "assert",
+                            "insertText": "assert",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "assert",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 63,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'switch (Elsa::Alonso) { case Elsa::Alonso:'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 35},
+                            },
+                            "text": "switch (Elsa::Alonso) { case Elsa::Alonso:",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="docblock resolve after 'switch (Elsa::Alonso) { case Elsa::'",
+                method="completionItem/resolve",
+                params={
+                    "label": "isValid",
+                    "kind": 2,
+                    "detail": "function(mixed $value): bool",
+                    "inlineDetail": "(mixed $value)",
+                    "itemType": "bool",
+                    "insertTextFormat": 1,
+                    "textEdit": {
+                        "range": {
+                            "start": {"line": 3, "character": 35},
+                            "end": {"line": 3, "character": 35},
+                        },
+                        "newText": "isValid",
+                    },
+                    "data": {
+                        "filename": "${hhi_path}/BuiltinEnum.hhi",
+                        "line": 49,
+                        "char": 32,
+                    },
+                },
+                result={
+                    "label": "isValid",
+                    "kind": 2,
+                    "detail": "function(mixed $value): bool",
+                    "inlineDetail": "(mixed $value)",
+                    "itemType": "bool",
+                    "documentation": {
+                        "kind": "markdown",
+                        "value": "Returns whether or not the value is defined as a constant.",
+                    },
+                    "insertTextFormat": 1,
+                    "textEdit": {
+                        "range": {
+                            "start": {"line": 3, "character": 35},
+                            "end": {"line": 3, "character": 35},
+                        },
+                        "newText": "isValid",
+                    },
+                    "data": {
+                        "filename": "${hhi_path}/BuiltinEnum.hhi",
+                        "line": 49,
+                        "char": 32,
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="autocomplete after 'switch (Elsa::Alonso) { case Elsa::Alonso:'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 42},
+                },
+                result={"isIncomplete": False, "items": []},
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'TestNS\\'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 42},
+                            },
+                            "text": "TestNS\\",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after 'TestNS\\'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 7},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "test_func",
+                            "kind": 3,
+                            "detail": "function",
+                            "inlineDetail": "function",
+                            "sortText": "test_func",
+                            "insertText": "test_func",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": "TestNS\\test_func"},
+                        }
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$cc = new CompletionClass(); $cc->interfa'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 7},
+                            },
+                            "text": "$cc = new CompletionClass(); $cc->interfa",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$cc = new CompletionClass(); $cc->interfa'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 41},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "interfaceDocBlockMethod",
+                            "kind": 2,
+                            "detail": "function(): void",
+                            "inlineDetail": "()",
+                            "itemType": "void",
+                            "sortText": "interfaceDocBlockMethod",
+                            "insertText": "interfaceDocBlockMethod",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "interfaceDocBlockMethod",
+                                "filename": "${root_path}/completion.php",
+                                "line": 18,
+                                "char": 19,
+                                "base_class": "\\CompletionClass",
+                            },
+                        }
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="autocomplete resolving after '$cc = new CompletionClass(); $cc->interfa'",
+                method="completionItem/resolve",
+                params={
+                    "label": "interfaceDocBlockMethod",
+                    "kind": 2,
+                    "detail": "function(): void",
+                    "inlineDetail": "()",
+                    "itemType": "void",
+                    "insertTextFormat": 1,
+                    "textEdit": {
+                        "range": {
+                            "start": {"line": 3, "character": 34},
+                            "end": {"line": 3, "character": 41},
+                        },
+                        "newText": "interfaceDocBlockMethod",
+                    },
+                    "data": {
+                        "filename": "${root_path}/completion.php",
+                        "line": 18,
+                        "char": 19,
+                    },
+                },
+                result={
+                    "label": "interfaceDocBlockMethod",
+                    "kind": 2,
+                    "detail": "function(): void",
+                    "inlineDetail": "()",
+                    "itemType": "void",
+                    "insertTextFormat": 1,
+                    "textEdit": {
+                        "range": {
+                            "start": {"line": 3, "character": 34},
+                            "end": {"line": 3, "character": 41},
+                        },
+                        "newText": "interfaceDocBlockMethod",
+                    },
+                    "data": {
+                        "filename": "${root_path}/completion.php",
+                        "line": 18,
+                        "char": 19,
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'DeprecatedClass::'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 41},
+                            },
+                            "text": "DeprecatedClass::",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after 'DeprecatedClass::'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 17},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "class",
+                            "kind": 21,
+                            "detail": "classname<this>",
+                            "inlineDetail": "classname<this>",
+                            "sortText": "class",
+                            "insertText": "class",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "class",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 18,
+                                "char": 13,
+                                "base_class": "\\DeprecatedClass",
+                            },
+                        },
+                        {
+                            "label": "test_do_not_use",
+                            "kind": 2,
+                            "detail": "function(): void",
+                            "inlineDetail": "()",
+                            "itemType": "void",
+                            "sortText": "~test_do_not_use",
+                            "insertText": "test_do_not_use",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "test_do_not_use",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 22,
+                                "char": 26,
+                                "base_class": "\\DeprecatedClass",
+                            },
+                        },
+                        {
+                            "label": "getName",
+                            "kind": 2,
+                            "detail": "function(): void",
+                            "inlineDetail": "()",
+                            "itemType": "void",
+                            "sortText": "getName",
+                            "insertText": "getName",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "getName",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 19,
+                                "char": 26,
+                                "base_class": "\\DeprecatedClass",
+                            },
+                        },
+                        {
+                            "label": "getAttributes_DO_NOT_USE",
+                            "kind": 2,
+                            "detail": "function(): void",
+                            "inlineDetail": "()",
+                            "itemType": "void",
+                            "sortText": "~getAttributes_DO_NOT_USE",
+                            "insertText": "getAttributes_DO_NOT_USE",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "getAttributes_DO_NOT_USE",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 21,
+                                "char": 26,
+                                "base_class": "\\DeprecatedClass",
+                            },
+                        },
+                        {
+                            "label": "__getLoader",
+                            "kind": 2,
+                            "detail": "function(): void",
+                            "inlineDetail": "()",
+                            "itemType": "void",
+                            "sortText": "~__getLoader",
+                            "insertText": "__getLoader",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "__getLoader",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 20,
+                                "char": 26,
+                                "base_class": "\\DeprecatedClass",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
-    def test_completion_legacy(self) -> None:
-        self.prepare_server_environment()
-        variables = self.setup_php_file("completion.php")
-        self.load_and_run("completion_legacy", variables)
+    def test_serverless_ide_completion_legacy(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("completion.php"))
+        self.test_driver.stop_hh_server()
 
-    def test_definition(self) -> None:
-        self.prepare_server_environment()
-        variables = self.setup_php_file("definition.php")
-        self.load_and_run("definition", variables)
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_completion_legacy"), use_serverless_ide=True
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .notification(
+                comment="Add '$x = <'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 0},
+                            },
+                            "text": "$x = <",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 6},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:alpha",
+                            "insertText": "ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": "ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:text",
+                            "insertText": "ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <a'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 6},
+                            },
+                            "text": "$x = <a",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <a'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 7},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:alpha",
+                            "insertText": "ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": "ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:text",
+                            "insertText": "ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <ab:'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 7},
+                            },
+                            "text": "$x = <ab:",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <ab:'.",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 9},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:alpha",
+                            "insertText": "ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": "ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": "ab:cd:text",
+                            "insertText": "ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <ab:cd:text '",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 9},
+                            },
+                            "text": "$x = <ab:cd:text ",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <ab:cd:text '",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 17},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "width",
+                            "kind": 10,
+                            "detail": "?int",
+                            "inlineDetail": "?int",
+                            "sortText": "width",
+                            "insertText": "width",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":width",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 27,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                        {
+                            "label": "color",
+                            "kind": 10,
+                            "detail": "?string",
+                            "inlineDetail": "?string",
+                            "sortText": "color",
+                            "insertText": "color",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":color",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 13,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <ab:cd:text w'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 17},
+                            },
+                            "text": "$x = <ab:cd:text w",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <ab:cd:text w'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 18},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "width",
+                            "kind": 10,
+                            "detail": "?int",
+                            "inlineDetail": "?int",
+                            "sortText": "width",
+                            "insertText": "width",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":width",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 27,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                        {
+                            "label": "color",
+                            "kind": 10,
+                            "detail": "?string",
+                            "inlineDetail": "?string",
+                            "sortText": "color",
+                            "insertText": "color",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":color",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 13,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = new :''",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 18},
+                            },
+                            "text": "$x = new :",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = new :'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 10},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": ":ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": ":ab:cd:alpha",
+                            "insertText": ":ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": ":ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": ":ab:cd:text",
+                            "insertText": ":ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = new :a'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 10},
+                            },
+                            "text": "$x = new :a",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = new :a'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 11},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": ":ab:cd:alpha",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": ":ab:cd:alpha",
+                            "insertText": ":ab:cd:alpha",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:alpha"},
+                        },
+                        {
+                            "label": ":ab:cd:text",
+                            "kind": 7,
+                            "detail": "class",
+                            "inlineDetail": "class",
+                            "sortText": ":ab:cd:text",
+                            "insertText": ":ab:cd:text",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": ":ab:cd:text"},
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            # Note that this request sent should match the result given in the previous example
+            .request(
+                comment="autocomplete resolving after '$x = new :a'",
+                method="completionItem/resolve",
+                params={
+                    "label": ":ab:cd:alpha",
+                    "kind": 7,
+                    "detail": "class",
+                    "inlineDetail": "class",
+                    "itemType": ":ab:cd:alpha",
+                    "insertText": ":ab:cd:alpha",
+                    "insertTextFormat": 1,
+                    "data": {"fullname": ":ab:cd:alpha"},
+                },
+                result={
+                    "label": ":ab:cd:alpha",
+                    "kind": 7,
+                    "detail": "class",
+                    "inlineDetail": "class",
+                    "itemType": ":ab:cd:alpha",
+                    "documentation": {
+                        "kind": "markdown",
+                        "value": ":ab:cd:alpha docblock",
+                    },
+                    "insertText": ":ab:cd:alpha",
+                    "insertTextFormat": 1,
+                    "data": {"fullname": ":ab:cd:alpha"},
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <ab:cd:text/>; $y = $x->'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 11},
+                            },
+                            "text": "$x = <ab:cd:text/>; $y = $x->",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <ab:cd:text/>; $y = $x->'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 29},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": ":width",
+                            "kind": 10,
+                            "detail": "?int",
+                            "inlineDetail": "?int",
+                            "sortText": ":width",
+                            "insertText": ":width",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":width",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 27,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                        {
+                            "label": ":color",
+                            "kind": 10,
+                            "detail": "?string",
+                            "inlineDetail": "?string",
+                            "sortText": ":color",
+                            "insertText": ":color",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":color",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 13,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add '$x = <ab:cd:text/>; $y = $x->:'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 29},
+                            },
+                            "text": "$x = <ab:cd:text/>; $y = $x->:",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after '$x = <ab:cd:text/>; $y = $x->:'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 30},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": ":width",
+                            "kind": 10,
+                            "detail": "?int",
+                            "inlineDetail": "?int",
+                            "sortText": ":width",
+                            "insertText": ":width",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":width",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 27,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                        {
+                            "label": ":color",
+                            "kind": 10,
+                            "detail": "?string",
+                            "inlineDetail": "?string",
+                            "sortText": ":color",
+                            "insertText": ":color",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": ":color",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 5,
+                                "char": 13,
+                                "base_class": "\\:ab:cd:text",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'test_fun'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 30},
+                            },
+                            "text": "test_fun",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after 'test_fun'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 8},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "test_function",
+                            "kind": 3,
+                            "detail": "function",
+                            "inlineDetail": "function",
+                            "sortText": "test_function",
+                            "insertText": "test_function",
+                            "insertTextFormat": 1,
+                            "data": {"fullname": "test_function"},
+                        }
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="autocomplete resolving after 'test_fun'",
+                method="completionItem/resolve",
+                params={
+                    "label": "test_function",
+                    "kind": 3,
+                    "detail": "function(): void",
+                    "inlineDetail": "()",
+                    "itemType": "void",
+                    "insertText": "test_function",
+                    "insertTextFormat": 1,
+                    "data": {
+                        "filename": "${root_path}/completion.php",
+                        "line": 8,
+                        "char": 10,
+                    },
+                },
+                result={
+                    "label": "test_function",
+                    "kind": 3,
+                    "detail": "function(): void",
+                    "inlineDetail": "()",
+                    "itemType": "void",
+                    "documentation": {
+                        "kind": "markdown",
+                        "value": "test_function docblock.",
+                    },
+                    "insertText": "test_function",
+                    "insertTextFormat": 1,
+                    "data": {
+                        "filename": "${root_path}/completion.php",
+                        "line": 8,
+                        "char": 10,
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'switch (Elsa::Alonso) { case Elsa:'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 8},
+                            },
+                            "text": "switch (Elsa::Alonso) { case Elsa:",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after 'switch (Elsa::Alonso) { case Elsa:'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 34},
+                },
+                result={"isIncomplete": False, "items": []},
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'switch (Elsa::Alonso) { case Elsa::'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 34},
+                            },
+                            "text": "switch (Elsa::Alonso) { case Elsa::",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after 'switch (Elsa::Alonso) { case Elsa::'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 35},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "class",
+                            "kind": 21,
+                            "detail": "classname<this>",
+                            "inlineDetail": "classname<this>",
+                            "sortText": "class",
+                            "insertText": "class",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "class",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 13,
+                                "char": 6,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "Bard",
+                            "kind": 21,
+                            "detail": "Elsa",
+                            "inlineDetail": "Elsa",
+                            "sortText": "Bard",
+                            "insertText": "Bard",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "Bard",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 13,
+                                "char": 12,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "Alonso",
+                            "kind": 21,
+                            "detail": "Elsa",
+                            "inlineDetail": "Elsa",
+                            "sortText": "Alonso",
+                            "insertText": "Alonso",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "Alonso",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 13,
+                                "char": 12,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "isValid",
+                            "kind": 2,
+                            "detail": "function(mixed $value): bool",
+                            "inlineDetail": "(mixed $value)",
+                            "itemType": "bool",
+                            "sortText": "isValid",
+                            "insertText": "isValid",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "isValid",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 49,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "getValues",
+                            "kind": 2,
+                            "detail": "function(): darray<string, Elsa>",
+                            "inlineDetail": "()",
+                            "itemType": "darray<string, Elsa>",
+                            "sortText": "getValues",
+                            "insertText": "getValues",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "getValues",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 34,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "getNames",
+                            "kind": 2,
+                            "detail": "function(): darray<Elsa, string>",
+                            "inlineDetail": "()",
+                            "itemType": "darray<Elsa, string>",
+                            "sortText": "getNames",
+                            "insertText": "getNames",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "getNames",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 43,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "coerce",
+                            "kind": 2,
+                            "detail": "function(mixed $value): ?Elsa",
+                            "inlineDetail": "(mixed $value)",
+                            "itemType": "?Elsa",
+                            "sortText": "coerce",
+                            "insertText": "coerce",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "coerce",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 56,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "assertAll",
+                            "kind": 2,
+                            "detail": "function(Traversable<mixed> $values): Container<Elsa>",
+                            "inlineDetail": "(Traversable<mixed> $values)",
+                            "itemType": "Container<Elsa>",
+                            "sortText": "assertAll",
+                            "insertText": "assertAll",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "assertAll",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 70,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                        {
+                            "label": "assert",
+                            "kind": 2,
+                            "detail": "function(mixed $value): Elsa",
+                            "inlineDetail": "(mixed $value)",
+                            "itemType": "Elsa",
+                            "sortText": "assert",
+                            "insertText": "assert",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "assert",
+                                "filename": "${hhi_path}/BuiltinEnum.hhi",
+                                "line": 63,
+                                "char": 32,
+                                "base_class": "\\Elsa",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'switch (Elsa::Alonso) { case Elsa::Alonso:'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 35},
+                            },
+                            "text": "switch (Elsa::Alonso) { case Elsa::Alonso:",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after 'switch (Elsa::Alonso) { case Elsa::Alonso:'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 42},
+                },
+                result={"isIncomplete": False, "items": []},
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Add 'DeprecatedClass::'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 0},
+                                "end": {"line": 3, "character": 41},
+                            },
+                            "text": "DeprecatedClass::",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete after 'DeprecatedClass::'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 17},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "class",
+                            "kind": 21,
+                            "detail": "classname<this>",
+                            "inlineDetail": "classname<this>",
+                            "sortText": "class",
+                            "insertText": "class",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "class",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 18,
+                                "char": 13,
+                                "base_class": "\\DeprecatedClass",
+                            },
+                        },
+                        {
+                            "label": "test_do_not_use",
+                            "kind": 2,
+                            "detail": "function(): void",
+                            "inlineDetail": "()",
+                            "itemType": "void",
+                            "sortText": "~test_do_not_use",
+                            "insertText": "test_do_not_use",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "test_do_not_use",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 22,
+                                "char": 26,
+                                "base_class": "\\DeprecatedClass",
+                            },
+                        },
+                        {
+                            "label": "getName",
+                            "kind": 2,
+                            "detail": "function(): void",
+                            "inlineDetail": "()",
+                            "itemType": "void",
+                            "sortText": "getName",
+                            "insertText": "getName",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "getName",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 19,
+                                "char": 26,
+                                "base_class": "\\DeprecatedClass",
+                            },
+                        },
+                        {
+                            "label": "getAttributes_DO_NOT_USE",
+                            "kind": 2,
+                            "detail": "function(): void",
+                            "inlineDetail": "()",
+                            "itemType": "void",
+                            "sortText": "~getAttributes_DO_NOT_USE",
+                            "insertText": "getAttributes_DO_NOT_USE",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "getAttributes_DO_NOT_USE",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 21,
+                                "char": 26,
+                                "base_class": "\\DeprecatedClass",
+                            },
+                        },
+                        {
+                            "label": "__getLoader",
+                            "kind": 2,
+                            "detail": "function(): void",
+                            "inlineDetail": "()",
+                            "itemType": "void",
+                            "sortText": "~__getLoader",
+                            "insertText": "__getLoader",
+                            "insertTextFormat": 1,
+                            "data": {
+                                "fullname": "__getLoader",
+                                "filename": "${root_path}/completion_extras.php",
+                                "line": 20,
+                                "char": 26,
+                                "base_class": "\\DeprecatedClass",
+                            },
+                        },
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
     def test_serverless_ide_definition(self) -> None:
         variables = dict(self.prepare_serverless_ide_environment())
@@ -582,6 +2881,88 @@ class TestLsp(TestCase[LspTestDriver]):
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
+    def test_serverless_ide_overridden_definition(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("override.php"))
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_overridden_definition"),
+                use_serverless_ide=True,
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="find overridden method from trait",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 13, "character": 5},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/override.php",
+                        "range": {
+                            "start": {"line": 7, "character": 18},
+                            "end": {"line": 7, "character": 21},
+                        },
+                        "title": "MyTrait::foo",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="find overridden static method",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 26, "character": 5},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/override.php",
+                        "range": {
+                            "start": {"line": 23, "character": 25},
+                            "end": {"line": 23, "character": 28},
+                        },
+                        "title": "C2::bar",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="find overridden interface method",
+                method="textDocument/definition",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 35, "character": 5},
+                },
+                result=[
+                    {
+                        "uri": "file://${root_path}/override.php",
+                        "range": {
+                            "start": {"line": 32, "character": 18},
+                            "end": {"line": 32, "character": 22},
+                        },
+                        "title": "I1::quux",
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
     def test_serverless_ide_document_symbol(self) -> None:
         variables = dict(self.prepare_serverless_ide_environment())
         variables.update(self.setup_php_file("definition.php"))
@@ -783,18 +3164,8 @@ class TestLsp(TestCase[LspTestDriver]):
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
-    def test_type_definition(self) -> None:
-        self.prepare_server_environment()
-        variables = self.setup_php_file("type_definition.php")
-        self.load_and_run("type_definition", variables)
-
-    def test_hover(self) -> None:
-        self.prepare_server_environment()
-        variables = self.setup_php_file("hover.php")
-        self.load_and_run("hover", variables)
-
     def initialize_spec(
-        self, spec: LspTestSpec, use_serverless_ide: bool
+        self, spec: LspTestSpec, use_serverless_ide: bool, supports_status: bool = False
     ) -> LspTestSpec:
         if use_serverless_ide:
             initialization_options = {
@@ -803,13 +3174,17 @@ class TestLsp(TestCase[LspTestDriver]):
         else:
             initialization_options = {}
 
+        window_capabilities = {}
+        if supports_status:
+            window_capabilities["status"] = {"dynamicRegistration": False}
+
         spec = spec.ignore_notifications(method="telemetry/event").request(
             method="initialize",
             params={
                 "initializationOptions": initialization_options,
                 "processId": None,
                 "rootPath": "${root_path}",
-                "capabilities": {},
+                "capabilities": {"window": window_capabilities},
             },
             result={
                 "capabilities": {
@@ -840,6 +3215,7 @@ class TestLsp(TestCase[LspTestDriver]):
                         "moreTriggerCharacter": ["}"],
                     },
                     "renameProvider": True,
+                    "implementationProvider": True,
                     "typeCoverageProvider": True,
                     "rageProvider": True,
                 }
@@ -1040,6 +3416,56 @@ class TestLsp(TestCase[LspTestDriver]):
                 powered_by="serverless_ide",
             )
             .request(
+                comment="hover over string literal outside call",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 25, "character": 12},  # 9 - 16
+                },
+                result={"contents": [{"language": "hack", "value": "string"}]},
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="hover over string literal inside call",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 26, "character": 20},  # 16 - 29
+                },
+                result={"contents": [{"language": "hack", "value": "string"}]},
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="hover over int literal inside call",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 26, "character": 32},  # 31 - 33
+                },
+                result={"contents": [{"language": "hack", "value": "int"}]},
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="hover over constant reference",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 15, "character": 19},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "THE_ANSWER"},
+                        "A comment describing THE_ANSWER",
+                        "int THE_ANSWER = 42",
+                    ],
+                    "range": {
+                        "start": {"line": 15, "character": 9},
+                        "end": {"line": 15, "character": 19},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .request(
                 comment="hover over whitespace",
                 method="textDocument/hover",
                 params={
@@ -1087,6 +3513,44 @@ class TestLsp(TestCase[LspTestDriver]):
                     "position": {"line": 300, "character": 0},
                 },
                 result=None,
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="hover over class with copyright docblock",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 37, "character": 15},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "final class CopyrightClass"},
+                        "Testing copyright removal",
+                    ],
+                    "range": {
+                        "start": {"line": 37, "character": 2},
+                        "end": {"line": 37, "character": 16},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="hover over class with generated docblock",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 58, "character": 15},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "final class GeneratedClass"},
+                        "Testing generated text removal",
+                    ],
+                    "range": {
+                        "start": {"line": 58, "character": 2},
+                        "end": {"line": 58, "character": 16},
+                    },
+                },
                 powered_by="serverless_ide",
             )
             .request(method="shutdown", params={}, result=None)
@@ -1148,48 +3612,900 @@ class TestLsp(TestCase[LspTestDriver]):
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
-    def test_coverage(self) -> None:
-        self.prepare_server_environment()
-        variables = self.setup_php_file("coverage.php")
-        self.load_and_run("coverage", variables)
+    def test_serverless_ide_file_hover_with_errors(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("hover_with_errors.php"))
+        self.test_driver.stop_hh_server()
 
-    def test_highlight(self) -> None:
-        self.prepare_server_environment()
-        variables = self.setup_php_file("highlight.php")
-        self.load_and_run("highlight", variables)
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_hover_with_errors"), use_serverless_ide=True
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .notification(
+                method="workspace/didChangeWatchedFiles",
+                params={"changes": [{"uri": "${php_file_uri}", "type": 2}]},
+            )
+            .wait_for_notification(
+                comment="wait for sIDE to process file change",
+                method="telemetry/event",
+                params={
+                    "type": 4,
+                    "message": "[client-ide] Done processing file changes",
+                },
+            )
+            .request(
+                comment="Totally normal hover",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 14, "character": 37},
+                },
+                result={
+                    "contents": [
+                        {
+                            "language": "hack",
+                            "value": "public static function staticMethod(string $z): void",
+                        },
+                        'During testing, we\'ll remove the "public" tag from this '
+                        "method\n"
+                        "to ensure that we can still get IDE services",
+                        "Return type: `void`",
+                        "Full name: `HoverWithErrorsClass::staticMethod`",
+                    ],
+                    "range": {
+                        "end": {"character": 39, "line": 14},
+                        "start": {"character": 27, "line": 14},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="Remove the 'public' visibility modifier which triggers AST->AAST errors",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 10, "character": 2},
+                                "end": {"line": 10, "character": 8},
+                            },
+                            "text": "",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="Hover should still work even if visibility modifier has been removed",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 14, "character": 37},
+                },
+                result={
+                    "contents": [
+                        {
+                            "language": "hack",
+                            "value": "public static function staticMethod(string $z): void",
+                        },
+                        'During testing, we\'ll remove the "public" tag from this '
+                        "method\n"
+                        "to ensure that we can still get IDE services",
+                        "Return type: `void`",
+                        "Full name: `HoverWithErrorsClass::staticMethod`",
+                    ],
+                    "range": {
+                        "end": {"character": 39, "line": 14},
+                        "start": {"character": 27, "line": 14},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
-    def test_formatting(self) -> None:
-
+    def test_serverless_ide_formatting(self) -> None:
         # This test will fail if hackfmt can't be found
         if not self.test_driver.run_hackfmt_check():
             raise unittest.SkipTest("Hackfmt can't be found. Skipping.")
 
-        self.prepare_server_environment()
-        variables = self.setup_php_file("messy.php")
-        self.load_and_run("formatting", variables)
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("messy.php"))
 
-    def test_ontypeformatting(self) -> None:
+        self.test_driver.stop_hh_server()
 
+        spec = (
+            self.initialize_spec(LspTestSpec("formatting"), use_serverless_ide=True)
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                method="textDocument/formatting",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "options": {"tabSize": 5, "insertSpaces": True},
+                },
+                result=[
+                    {
+                        "range": {
+                            "start": {"line": 0, "character": 0},
+                            "end": {"line": 15, "character": 0},
+                        },
+                        "newText": "<?hh //strict\n\nfunction x(): string {\n"
+                        + "     /* @lint-ignore TXT2 3 tabs on purpose */\n"
+                        + '     $a = "this";\n\n'
+                        + "     /* @lint-ignore TXT2 2 tabs on purpose */\n"
+                        + '     $b = "is";\n\n'
+                        + "     /* lint-ignore TXT2 1 tab on purpose */\n"
+                        + '     $c = "messy"; // 1 tab\n\n'
+                        + '     $d = "."; // 4 spaces\n'
+                        + '     return "$a"."$b"."$c"."d";\n}\n',
+                    }
+                ],
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
+    def test_serverless_ide_rangeformatting(self) -> None:
         # This test will fail if hackfmt can't be found
         if not self.test_driver.run_hackfmt_check():
             raise unittest.SkipTest("Hackfmt can't be found. Skipping.")
 
-        self.prepare_server_environment()
-        variables = self.setup_php_file("ontypeformatting.php")
-        self.load_and_run("ontypeformatting", variables)
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("messy.php"))
+
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("range_formatting"), use_serverless_ide=True
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                method="textDocument/rangeFormatting",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "range": {
+                        "start": {"line": 4, "character": 0},
+                        "end": {"line": 5, "character": 0},
+                    },
+                    "options": {"tabSize": 5, "insertSpaces": True},
+                },
+                result=[
+                    {
+                        "range": {
+                            "start": {"line": 4, "character": 0},
+                            "end": {"line": 5, "character": 0},
+                        },
+                        "newText": '     $a = "this";\n',
+                    }
+                ],
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
+    def test_serverless_ide_ontypeformatting(self) -> None:
+        # This test will fail if hackfmt can't be found
+        if not self.test_driver.run_hackfmt_check():
+            raise unittest.SkipTest("Hackfmt can't be found. Skipping.")
+
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("ontypeformatting.php"))
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("ontypeformatting"), use_serverless_ide=True
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                method="textDocument/onTypeFormatting",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 9, "character": 58},
+                    "ch": ";",
+                    "options": {"tabSize": 2, "insertSpaces": True},
+                },
+                result=[
+                    {
+                        "range": {
+                            "start": {"line": 5, "character": 17},
+                            "end": {"line": 9, "character": 58},
+                        },
+                        "newText": "{\n  test_otf(\n"
+                        + "    '1234567890',\n"
+                        + "    '1234567890',\n"
+                        + "    '1234567890',\n"
+                        + "    '1234567890',\n"
+                        + "    '1234567890',\n"
+                        + "    '1234567890',\n  );",
+                    }
+                ],
+            )
+            .request(
+                method="textDocument/onTypeFormatting",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 13, "character": 1},
+                    "ch": "}",
+                    "options": {"tabSize": 2, "insertSpaces": True},
+                },
+                result=[
+                    {
+                        "range": {
+                            "start": {"line": 13, "character": 0},
+                            "end": {"line": 13, "character": 1},
+                        },
+                        "newText": "{",
+                    }
+                ],
+            )
+            .request(
+                method="textDocument/onTypeFormatting",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 15, "character": 16},
+                    "ch": "}",
+                    "options": {"tabSize": 2, "insertSpaces": True},
+                },
+                result=[
+                    {
+                        "range": {
+                            "start": {"line": 15, "character": 0},
+                            "end": {"line": 15, "character": 16},
+                        },
+                        "newText": "function otf() {}",
+                    }
+                ],
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
     def test_did_change(self) -> None:
-        # Disabling this test because it has a race condition:
-        # see T27194253 for transcript
-        # self.prepare_server_environment()
-        # variables = self.setup_php_file('didchange.php')
-        # self.load_and_run('didchange', variables)
-        return
+        self.prepare_server_environment()
+        variables = self.setup_php_file("didchange.php")
+        spec = (
+            self.initialize_spec(LspTestSpec("did_change"), use_serverless_ide=False)
+            .wait_for_hh_server_ready()
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .notification(
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 7, "character": 11},
+                                "end": {"line": 7, "character": 12},
+                            },
+                            "text": "a",
+                        }
+                    ],
+                },
+            )
+            .wait_for_notification(
+                method="textDocument/publishDiagnostics",
+                params={
+                    "uri": "${php_file_uri}",
+                    "diagnostics": [
+                        {
+                            "range": {
+                                "start": {"line": 7, "character": 11},
+                                "end": {"line": 7, "character": 11},
+                            },
+                            "severity": 1,
+                            "code": 1002,
+                            "source": "Hack",
+                            "message": "A semicolon (';') is expected here.",
+                            "relatedLocations": [],
+                            "relatedInformation": [],
+                        }
+                    ],
+                },
+            )
+            .request(method="shutdown", params={}, result=None)
+            .wait_for_notification(
+                comment="Hack appears to clear out diagnostics before shutting down",
+                method="textDocument/publishDiagnostics",
+                params={"uri": "${php_file_uri}", "diagnostics": []},
+            )
+        )
+        self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
+
+    def test_go_to_implementation(self) -> None:
+        self.prepare_server_environment()
+        variables = self.setup_php_file("go_to_implementation.php")
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("test_go_to_implementation"), use_serverless_ide=False
+            )
+            .wait_for_hh_server_ready()
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="go to implemenetation: abstract class",
+                method="textDocument/implementation",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 1, "character": 17},
+                },
+                result=[
+                    {
+                        "uri": "${php_file_uri}",
+                        "range": {
+                            "start": {"line": 7, "character": 6},
+                            "end": {"line": 7, "character": 9},
+                        },
+                    }
+                ],
+            )
+            .request(
+                comment="go to implemenetation: interface",
+                method="textDocument/implementation",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 13, "character": 13},
+                },
+                result=[
+                    {
+                        "uri": "${php_file_uri}",
+                        "range": {
+                            "start": {"line": 17, "character": 6},
+                            "end": {"line": 17, "character": 9},
+                        },
+                    }
+                ],
+            )
+            .request(
+                comment="go to implemenetation: trait",
+                method="textDocument/implementation",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 23, "character": 10},
+                },
+                result=[
+                    {
+                        "uri": "${php_file_uri}",
+                        "range": {
+                            "start": {"line": 30, "character": 6},
+                            "end": {"line": 30, "character": 16},
+                        },
+                    }
+                ],
+            )
+            .request(
+                comment="go to implemenetation: method",
+                method="textDocument/implementation",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 19, "character": 18},
+                },
+                result=[
+                    {
+                        "uri": "${php_file_uri}",
+                        "range": {
+                            "start": {"line": 8, "character": 18},
+                            "end": {"line": 8, "character": 22},
+                        },
+                    }
+                ],
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
 
     def test_signature_help(self) -> None:
         self.prepare_server_environment()
         variables = self.setup_php_file("signaturehelp.php")
-        self.load_and_run("signaturehelp", variables)
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("test_signature_help"), use_serverless_ide=False
+            )
+            .wait_for_hh_server_ready()
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="signature help for 0-argument constructor"
+                " (left of opening paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 16, "character": 18},
+                },
+                result=None,
+            )
+            .request(
+                comment="signature help for 0-argument constructor",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 16, "character": 19},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "public function __construct(): _",
+                            "documentation": "Constructor with doc block",
+                            "parameters": [],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 0,
+                },
+            )
+            .request(
+                comment="signature help for 0-argument constructor"
+                " (right of closing paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 16, "character": 20},
+                },
+                result=None,
+            )
+            .request(
+                comment="signature help for 2-argument instance method"
+                " (left of opening paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 17, "character": 20},
+                },
+                result=None,
+            )
+            .request(
+                comment="signature help for 2-argument instance method"
+                " (right of opening paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 17, "character": 21},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "public function instanceMethod"
+                            "(int $x1, int $x2): void",
+                            "documentation": "Instance method with doc block",
+                            "parameters": [{"label": "$x1"}, {"label": "$x2"}],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 0,
+                },
+            )
+            .request(
+                comment="signature help for 2-argument instance method"
+                " (left of first comma)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 17, "character": 22},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "public function instanceMethod"
+                            "(int $x1, int $x2): void",
+                            "documentation": "Instance method with doc block",
+                            "parameters": [{"label": "$x1"}, {"label": "$x2"}],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 1,
+                },
+            )
+            .request(
+                comment="signature help for 2-argument instance method"
+                " (right of first comma)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 17, "character": 23},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "public function instanceMethod"
+                            "(int $x1, int $x2): void",
+                            "documentation": "Instance method with doc block",
+                            "parameters": [{"label": "$x1"}, {"label": "$x2"}],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 1,
+                },
+            )
+            .request(
+                comment="signature help for 2-argument instance method"
+                " (left of closing paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 17, "character": 24},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "public function instanceMethod"
+                            "(int $x1, int $x2): void",
+                            "documentation": "Instance method with doc block",
+                            "parameters": [{"label": "$x1"}, {"label": "$x2"}],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 1,
+                },
+            )
+            .request(
+                comment="signature help for 2-argument instance method"
+                " (right of closing paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 17, "character": 25},
+                },
+                result=None,
+            )
+            .request(
+                comment="signature help for 1-argument static method"
+                " (left of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 18, "character": 23},
+                },
+                result=None,
+            )
+            .request(
+                comment="signature help for 1-argument static method"
+                " (right of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 18, "character": 24},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "public static function staticMethod"
+                            "(string $z): void",
+                            "documentation": "Static method with doc block",
+                            "parameters": [{"label": "$z"}],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 0,
+                },
+            )
+            .request(
+                comment="signature help for 2-argument global function"
+                " (left of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 19, "character": 17},
+                },
+                result=None,
+            )
+            .request(
+                comment="signature help for 2-argument global function"
+                " (right of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 19, "character": 18},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "function global_function"
+                            "(string $s, int $x): void",
+                            "documentation": "Global function with doc block",
+                            "parameters": [{"label": "$s"}, {"label": "$x"}],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 0,
+                },
+            )
+            .request(
+                comment="signature help for 1-argument namespace-aliased global"
+                " function (right of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 20, "character": 26},
+                },
+                result=None,
+            )
+            .request(
+                comment="signature help for 1-argument namespace-aliased global"
+                " function (right of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 20, "character": 26},
+                },
+                result=None,
+            )
+            .request(
+                comment="signature help for 1-argument namespace-aliased global"
+                " function (right of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 20, "character": 27},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "function Derp\\Lib\\Herp\\aliased_global_func(string $s): void",
+                            "documentation": "Namespace-aliased function with doc block",
+                            "parameters": [{"label": "$s"}],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 0,
+                },
+            )
+            .request(
+                comment="signature help for 1-argument namespace-aliased global"
+                " function (right of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 20, "character": 28},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "function Derp\\Lib\\Herp\\aliased_global_func(string $s): void",
+                            "documentation": "Namespace-aliased function with doc block",
+                            "parameters": [{"label": "$s"}],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 0,
+                },
+            )
+            .request(
+                comment="signature help for 2-argument function with params"
+                " (right of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 21, "character": 30},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "function test_signature_help_params1("
+                            "\n  string $param1,\n  string $param2\n): void",
+                            "documentation": "comment describing the method"
+                            "\n@param $param1 info1"
+                            "\n@param param2 info2",
+                            "parameters": [
+                                {"label": "$param1", "documentation": "info1"},
+                                {"label": "$param2", "documentation": "info2"},
+                            ],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 0,
+                },
+            )
+            .request(
+                comment="signature help for 2-argument function with params"
+                " (right of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 22, "character": 30},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "function test_signature_help_params2("
+                            "\n  string $param1,\n  string $param2\n): void",
+                            "documentation": "comment describing the method"
+                            "\n@param $param1 info1",
+                            "parameters": [
+                                {"label": "$param1", "documentation": "info1"},
+                                {"label": "$param2"},
+                            ],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 0,
+                },
+            )
+            .request(
+                comment="signature help for 2-argument function with params"
+                " (right of open paren)",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 23, "character": 30},
+                },
+                result={
+                    "signatures": [
+                        {
+                            "label": "function test_signature_help_params3("
+                            "\n  string $param1,\n  string $param2\n): string",
+                            "documentation": "@param $param1 info1"
+                            "\n               for param1"
+                            "\n@param $param2   info2"
+                            "\n@return the string"
+                            "\n        'hack'",
+                            "parameters": [
+                                {
+                                    "label": "$param1",
+                                    "documentation": "info1 for param1",
+                                },
+                                {"label": "$param2", "documentation": "info2"},
+                            ],
+                        }
+                    ],
+                    "activeSignature": 0,
+                    "activeParameter": 0,
+                },
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
+
+    def test_signature_help_lambda(self) -> None:
+        self.prepare_server_environment()
+        variables = self.setup_php_file("signaturehelp_lambda.php")
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("test_serverless_ide_signature_help_lambda"),
+                use_serverless_ide=False,
+            )
+            .wait_for_hh_server_ready()
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="signature help for a normal function call",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 8, "character": 29},
+                },
+                result={
+                    "activeParameter": 0,
+                    "activeSignature": 0,
+                    "signatures": [
+                        {
+                            "label": "function test_lambda_sighelp(\n"
+                            "  string $str,\n"
+                            "  (function(string): int) $f\n"
+                            "): int",
+                            "parameters": [{"label": "$str"}, {"label": "$f"}],
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="signature help for normal function call within a lambda",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 9, "character": 21},
+                },
+                result={
+                    "activeParameter": 0,
+                    "activeSignature": 0,
+                    "signatures": [
+                        {
+                            "label": "function normal_test_func(string $str): void",
+                            "parameters": [{"label": "$str"}],
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="signature help for text within a lambda, left side of an open paren",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 10, "character": 15},
+                },
+                result=None,
+            )
+            .request(
+                comment="signature help for text within a lambda, right side of an open paren",
+                method="textDocument/signatureHelp",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 10, "character": 16},
+                },
+                result=None,
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
 
     def test_rename(self) -> None:
         self.prepare_server_environment()
@@ -1312,14 +4628,6 @@ class BaseClassIncremental {
 """,
                 notify=True,
             )
-            .wait_for_notification(
-                comment="wait for sIDE to process file change",
-                method="telemetry/event",
-                params={
-                    "type": 4,
-                    "message": "[client-ide] Done processing file changes",
-                },
-            )
             .request(
                 comment="hover after change to class hierarchy should be `string`",
                 method="textDocument/hover",
@@ -1429,4 +4737,846 @@ function b_hover(): string {
             .request(method="shutdown", params={}, result=None)
         )
 
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
+    def _sanitize_gutter_line_numbers(self, s: str) -> str:
+        gutter_line_number_re = re.compile(r"^[ ]*[0-9]+ \|", re.MULTILINE)
+        return re.sub(gutter_line_number_re, " XXXX |", s)
+
+    def test_lsptestspec_incorrect_request_result(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("hover.php"))
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(LspTestSpec("bad_hover"), use_serverless_ide=True)
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="hover over function invocation",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 16},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "int"},
+                        "INCORRECT COMMENT HERE",
+                    ],
+                    "range": {
+                        "start": {"line": 3, "character": 9},
+                        "end": {"line": 3, "character": 16},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        try:
+            self.run_spec(
+                spec,
+                variables=variables,
+                wait_for_server=False,
+                use_serverless_ide=True,
+            )
+            raise AssertionError("Expected an error here")
+        except AssertionError as e:
+            self.assertEqual(
+                self._sanitize_gutter_line_numbers(str(e)),
+                """\
+Test case bad_hover failed with 1 errors:
+
+Error 1/1:
+Description: Request with ID 4 (comment: 'hover over function invocation') \
+got an incorrect result:
+
+(+ is expected lines, - is actual lines)
+- {'contents': [{'language': 'hack', 'value': 'int'},
++ {'contents': [{'language': 'hack', 'value': 'int'}, 'INCORRECT COMMENT HERE'],
+?                                                    +++++++++++++++++++++++++++
+
+-               'A comment describing b_hover.'],
+   'range': {'end': {'character': 16, 'line': 3},
+             'start': {'character': 9, 'line': 3}}}
+
+Context:
+This was the associated request:
+
+hphp/hack/test/integration/test_lsp.py
+ XXXX |             .request(
+ XXXX |                 comment="hover over function invocation",
+ XXXX |                 method="textDocument/hover",
+ XXXX |                 params={
+ XXXX |                     "textDocument": {"uri": "${php_file_uri}"},
+ XXXX |                     "position": {"line": 3, "character": 16},
+ XXXX |                 },
+ XXXX |                 result={
+ XXXX |                     "contents": [
+ XXXX |                         {"language": "hack", "value": "int"},
+ XXXX |                         "INCORRECT COMMENT HERE",
+ XXXX |                     ],
+ XXXX |                     "range": {
+ XXXX |                         "start": {"line": 3, "character": 9},
+ XXXX |                         "end": {"line": 3, "character": 16},
+ XXXX |                     },
+ XXXX |                 },
+ XXXX |                 powered_by="serverless_ide",
+ XXXX |             )
+
+Remediation:
+1) If this was unexpected, then the language server is buggy and should be
+fixed.
+
+2) If this was expected, you can update your request with the following code to
+make it match:
+
+    .request(
+        comment='hover over function invocation',
+        method='textDocument/hover',
+        params={'textDocument': {'uri': '${php_file_uri}'}, \
+'position': {'line': 3, 'character': 16}},
+        result={'contents': [{'language': 'hack', 'value': 'int'}, \
+'A comment describing b_hover.'], \
+'range': {'start': {'line': 3, 'character': 9}, \
+'end': {'line': 3, 'character': 16}}},
+        powered_by='serverless_ide',
+    )
+
+If you want to examine the raw LSP logs, you can check the `.sent.log` and
+`.received.log` files that were generated in the template repo for this test.\
+""",
+            )
+
+    def test_lsptestspec_unexpected_notification(self) -> None:
+        self.prepare_server_environment()
+        variables = self.setup_php_file("didchange.php")
+        spec = (
+            self.initialize_spec(LspTestSpec("did_change"), use_serverless_ide=False)
+            .wait_for_hh_server_ready()
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .notification(
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 7, "character": 11},
+                                "end": {"line": 7, "character": 12},
+                            },
+                            "text": "a",
+                        }
+                    ],
+                },
+            )
+            .wait_for_notification(
+                method="textDocument/publishDiagnostics",
+                params={
+                    "uri": "${php_file_uri}",
+                    "diagnostics": [
+                        {
+                            "range": {
+                                "start": {"line": 7, "character": 11},
+                                "end": {"line": 7, "character": 11},
+                            },
+                            "severity": 1,
+                            "code": 1002,
+                            "source": "Hack",
+                            "message": "A semicolon (';') is expected here.",
+                            "relatedLocations": [],
+                            "relatedInformation": [],
+                        }
+                    ],
+                },
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        try:
+            self.run_spec(
+                spec, variables, wait_for_server=True, use_serverless_ide=False
+            )
+            raise AssertionError("Expected an error here")
+        except AssertionError as e:
+            self.assertEqual(
+                self._sanitize_gutter_line_numbers(str(e)),
+                """\
+Test case did_change failed with 1 errors:
+
+Error 1/1:
+Description: An unexpected notification of type \
+'textDocument/publishDiagnostics' was sent by the language server.
+Here is the notification payload:
+
+  {'jsonrpc': '2.0',
+   'method': 'textDocument/publishDiagnostics',
+   'params': {'diagnostics': [],
+              'uri': '__PHP_FILE_URI__'}}
+
+Context:
+This was the most recent request issued from the language client before it
+received the notification:
+
+hphp/hack/test/integration/test_lsp.py
+ XXXX |             .request(method="shutdown", params={}, result=None)
+
+Remediation:
+1) If this was unexpected, then the language server is buggy and should be
+fixed.
+
+2) If all notifications of type 'textDocument/publishDiagnostics' should be \
+ignored, add this directive
+anywhere in your test:
+
+    .ignore_notifications(method='textDocument/publishDiagnostics')
+
+3) If this single instance of the notification was expected, add this directive
+to your test to wait for it before proceeding:
+
+    .wait_for_notification(
+        method='textDocument/publishDiagnostics',
+        params={'uri': '${php_file_uri}', 'diagnostics': []},
+    )
+
+If you want to examine the raw LSP logs, you can check the `.sent.log` and
+`.received.log` files that were generated in the template repo for this test.\
+"""
+                # There's an instance of a literal `${php_file_uri}` in there
+                # which we don't want to change, so use a different name than
+                # that one.
+                .replace("__PHP_FILE_URI__", variables["php_file_uri"]),
+            )
+
+    def test_serverless_ide_highlight(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("highlight.php"))
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_highlight"), use_serverless_ide=True
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="document highlight, id 2",
+                method="textDocument/documentHighlight",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 3, "character": 10},
+                },
+                result=[
+                    {
+                        "range": {
+                            "start": {"line": 3, "character": 9},
+                            "end": {"line": 3, "character": 20},
+                        }
+                    }
+                ],
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="shutdown, id 3", method="shutdown", params={}, result=None
+            )
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
+    def test_serverless_ide_coverage(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("coverage.php"))
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_coverage"), use_serverless_ide=True
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                comment="Check type coverage",
+                method="textDocument/typeCoverage",
+                params={"textDocument": {"uri": "${php_file_uri}"}},
+                result={
+                    "coveredPercent": 100,
+                    "uncoveredRanges": [],
+                    "defaultMessage": "Un-type checked code. Consider adding "
+                    "type annotations.",
+                },
+                powered_by="serverless_ide",
+            )
+            .request(comment="Shutdown", method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
+    def test_status_stopped(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("hover.php"))
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("status_stopped"),
+                use_serverless_ide=False,
+                supports_status=True,
+            )
+            .wait_for_server_request(
+                method="window/showStatus",
+                params={
+                    "message": "hh_server: stopped.",
+                    "actions": [{"title": "Restart Hack Server"}],
+                    "type": 1,
+                },
+                result=NoResponse(),
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=False)
+
+    def test_status_running(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("hover.php"))
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("status_running"),
+                use_serverless_ide=False,
+                supports_status=True,
+            )
+            .wait_for_server_request(
+                method="window/showStatus",
+                params={"actions": [], "message": "hh_server: ready.", "type": 3},
+                result=NoResponse(),
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
+
+    def test_serverless_ide_status_stopped(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("hover.php"))
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_status_stopped"),
+                use_serverless_ide=True,
+                supports_status=True,
+            )
+            .ignore_requests(
+                method="window/showStatus",
+                params={
+                    "type": 1,
+                    "actions": [{"title": "Restart Hack Server"}],
+                    "message": "IDE services: initializing. hh_server: stopped.",
+                    "shortMessage": "Hack IDE: initializing",
+                },
+            )
+            .wait_for_server_request(
+                method="window/showStatus",
+                params={
+                    "message": "IDE services: ready. hh_server: stopped.",
+                    "actions": [{"title": "Restart Hack Server"}],
+                    "type": 1,
+                },
+                result=NoResponse(),
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
+    def test_serverless_ide_status_restart(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("hover.php"))
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_status_restart"),
+                use_serverless_ide=True,
+                supports_status=True,
+            )
+            .ignore_requests(
+                method="window/showStatus",
+                params={
+                    "type": 2,
+                    "actions": [],
+                    "message": "IDE services: initializing. hh_server: ready.",
+                    "shortMessage": "Hack IDE: initializing",
+                },
+            )
+            .wait_for_server_request(
+                method="window/showStatus",
+                params={
+                    "actions": [],
+                    "message": "IDE services: ready. hh_server: ready.",
+                    "type": 3,
+                },
+                result=NoResponse(),
+            )
+            .request(
+                "$test/shutdownServerlessIde",
+                params={},
+                result=None,
+                powered_by="serverless_ide",
+            )
+            .wait_for_server_request(
+                method="window/showStatus",
+                params={
+                    "actions": [{"title": "Restart Hack IDE Services"}],
+                    "message": "IDE services stopped: testing-only, "
+                    + "you should not see this. "
+                    + "hh_server: ready.",
+                    "shortMessage": "Hack IDE: stopped",
+                    "type": 1,
+                },
+                result={"title": "Restart Hack IDE Services"},
+            )
+            .wait_for_server_request(
+                method="window/showStatus",
+                params={
+                    "actions": [],
+                    "message": "IDE services: ready. hh_server: ready.",
+                    "type": 3,
+                },
+                result=None,
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=True)
+
+    def test_serverless_ide_failed_to_load_saved_state(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("hover.php"))
+        assert "naming_table_saved_state_path" in variables
+        variables["naming_table_saved_state_path"] = "/tmp/nonexistent"
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_status_failed_to_load_saved_state"),
+                use_serverless_ide=True,
+                supports_status=True,
+            )
+            .ignore_requests(
+                method="window/showStatus",
+                params={
+                    "type": 2,
+                    "actions": [],
+                    "message": "IDE services: initializing. hh_server: ready.",
+                    "shortMessage": "Hack IDE: initializing",
+                },
+            )
+            .wait_for_server_request(
+                method="window/showStatus",
+                params={
+                    "actions": [{"title": "Restart Hack IDE Services"}],
+                    "message": "IDE services stopped: could not load "
+                    + "saved-state. hh_server: ready.",
+                    "shortMessage": "Hack IDE: stopped",
+                    "type": 1,
+                },
+                result=None,
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=True)
+
+    def test_workspace_symbol(self) -> None:
+        self.prepare_server_environment()
+        variables = self.setup_php_file("didchange.php")
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("test_workspace_symbol"), use_serverless_ide=False
+            )
+            .wait_for_hh_server_ready()
+            .request(
+                comment="Look up symbols",
+                method="workspace/symbol",
+                params={"query": "TestNS\\test"},
+                result=[
+                    {
+                        "name": "TestNS\\test_func",
+                        "kind": 12,
+                        "location": {
+                            "uri": "file://${root_path}/completion_extras_namespace.php",
+                            "range": {
+                                "start": {"line": 4, "character": 9},
+                                "end": {"line": 4, "character": 25},
+                            },
+                        },
+                    }
+                ],
+            )
+            .request(
+                comment="Look up symbols starting with 'test_f' within multiple namespaces",
+                method="workspace/symbol",
+                params={"query": "test_f"},
+                result=[
+                    {
+                        "name": "test_function",
+                        "kind": 12,
+                        "location": {
+                            "uri": "file://${root_path}/completion.php",
+                            "range": {
+                                "start": {"line": 7, "character": 9},
+                                "end": {"line": 7, "character": 22},
+                            },
+                        },
+                    },
+                    {
+                        "name": "TestNS\\test_func",
+                        "kind": 12,
+                        "location": {
+                            "uri": "file://${root_path}/completion_extras_namespace.php",
+                            "range": {
+                                "start": {"line": 4, "character": 9},
+                                "end": {"line": 4, "character": 25},
+                            },
+                        },
+                    },
+                ],
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
+
+    def test_serverless_ide_during_hh_server_restart(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("didchange.php"))
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("test_serverless_ide_during_hh_server_restart"),
+                use_serverless_ide=True,
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .notification(
+                comment="Send a 'didChange' notification before HH Server is functional.",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 7, "character": 9},
+                                "end": {"line": 7, "character": 11},
+                            },
+                            "text": "'foo'",
+                        }
+                    ],
+                },
+            )
+            .start_hh_server("Start HH Server; should detect the bad edit")
+            .wait_for_notification(
+                method="textDocument/publishDiagnostics",
+                params={
+                    "uri": "${php_file_uri}",
+                    "diagnostics": [
+                        {
+                            "code": 4110,
+                            "message": "Invalid return type",
+                            "range": {
+                                "end": {"character": 14, "line": 7},
+                                "start": {"character": 9, "line": 7},
+                            },
+                            "relatedInformation": [
+                                {
+                                    "location": {
+                                        "range": {
+                                            "end": {"character": 27, "line": 6},
+                                            "start": {"character": 24, "line": 6},
+                                        },
+                                        "uri": "${php_file_uri}",
+                                    },
+                                    "message": "Expected int",
+                                },
+                                {
+                                    "location": {
+                                        "range": {
+                                            "end": {"character": 14, "line": 7},
+                                            "start": {"character": 9, "line": 7},
+                                        },
+                                        "uri": "${php_file_uri}",
+                                    },
+                                    "message": "But got string",
+                                },
+                            ],
+                            "relatedLocations": [
+                                {
+                                    "location": {
+                                        "range": {
+                                            "end": {"character": 27, "line": 6},
+                                            "start": {"character": 24, "line": 6},
+                                        },
+                                        "uri": "${php_file_uri}",
+                                    },
+                                    "message": "Expected int",
+                                },
+                                {
+                                    "location": {
+                                        "range": {
+                                            "end": {"character": 14, "line": 7},
+                                            "start": {"character": 9, "line": 7},
+                                        },
+                                        "uri": "${php_file_uri}",
+                                    },
+                                    "message": "But got string",
+                                },
+                            ],
+                            "severity": 1,
+                            "source": "Hack",
+                        }
+                    ],
+                },
+            )
+            .stop_hh_server("Shutdown HH Server")
+            .start_hh_server("Restart HH Server")
+            .wait_for_notification(
+                comment="On startup it thinks everything is okay ...",
+                method="textDocument/publishDiagnostics",
+                params={"uri": "${php_file_uri}", "diagnostics": []},
+            )
+            .wait_for_notification(
+                comment="But then hh_server sends a hello message and it gets the edited files, which leads it to see the problem.",
+                method="textDocument/publishDiagnostics",
+                params={
+                    "uri": "${php_file_uri}",
+                    "diagnostics": [
+                        {
+                            "code": 4110,
+                            "message": "Invalid return type",
+                            "range": {
+                                "end": {"character": 14, "line": 7},
+                                "start": {"character": 9, "line": 7},
+                            },
+                            "relatedInformation": [
+                                {
+                                    "location": {
+                                        "range": {
+                                            "end": {"character": 27, "line": 6},
+                                            "start": {"character": 24, "line": 6},
+                                        },
+                                        "uri": "${php_file_uri}",
+                                    },
+                                    "message": "Expected int",
+                                },
+                                {
+                                    "location": {
+                                        "range": {
+                                            "end": {"character": 14, "line": 7},
+                                            "start": {"character": 9, "line": 7},
+                                        },
+                                        "uri": "${php_file_uri}",
+                                    },
+                                    "message": "But got string",
+                                },
+                            ],
+                            "relatedLocations": [
+                                {
+                                    "location": {
+                                        "range": {
+                                            "end": {"character": 27, "line": 6},
+                                            "start": {"character": 24, "line": 6},
+                                        },
+                                        "uri": "${php_file_uri}",
+                                    },
+                                    "message": "Expected int",
+                                },
+                                {
+                                    "location": {
+                                        "range": {
+                                            "end": {"character": 14, "line": 7},
+                                            "start": {"character": 9, "line": 7},
+                                        },
+                                        "uri": "${php_file_uri}",
+                                    },
+                                    "message": "But got string",
+                                },
+                            ],
+                            "severity": 1,
+                            "source": "Hack",
+                        }
+                    ],
+                },
+            )
+            .request(method="shutdown", params={}, result=None)
+        )
+        self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=True)
+
+    def test_serverless_ide_naming_error(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("didchange.php"))
+        variables.update(
+            {
+                "main_file": self.repo_file("main.php"),
+                "main_file_contents": """\
+<?hh
+function main(): int {
+    return aaa();
+}
+""",
+                "file_a": self.repo_file("a.php"),
+                "file_b": self.repo_file("b.php"),
+            }
+        )
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("serverless_ide_naming_error"), use_serverless_ide=True
+            )
+            .write_to_disk(
+                uri="${main_file}", contents="${main_file_contents}", notify=True
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "uri": "${main_file}",
+                    "languageId": "hack",
+                    "version": 1,
+                    "text": "${main_file_contents}",
+                },
+            )
+            # .request(
+            #     comment="Ensure that hover over `aaa` works even when the name is not yet defined",
+            #     method="textDocument/hover",
+            #     params={
+            #         "textDocument": {"uri": "${main_file}"},
+            #         "position": {"line": 2, "character": 13},
+            #     },
+            #     result={
+            #         "contents": [{"language": "hack", "value": "_"}],
+            #         "range": {
+            #             "start": {"line": 2, "character": 11},
+            #             "end": {"line": 2, "character": 14},
+            #         },
+            #     },
+            #     powered_by="serverless_ide",
+            # )
+            .write_to_disk(
+                comment="create file A",
+                uri="${file_a}",
+                contents="""\
+<?hh
+function aaa(): int {
+    return 1;
+}
+""",
+                notify=True,
+            )
+            .request(
+                comment="Ensure that hover over `aaa` works when there are no naming errors",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${main_file}"},
+                    "position": {"line": 2, "character": 13},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "function aaa(): int"},
+                        "Return type: `int`",
+                    ],
+                    "range": {
+                        "start": {"line": 2, "character": 11},
+                        "end": {"line": 2, "character": 14},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            #             .write_to_disk(
+            #                 comment="create file B",
+            #                 uri="${file_b}",
+            #                 contents="""\
+            # <?hh
+            # function aaa(): string {
+            #     return "foo";
+            # }
+            # """,
+            #                 notify=True,
+            #             )
+            #             .request(
+            #                 comment="Ensure that hover over `aaa` works even when there is a duplicate name",
+            #                 method="textDocument/hover",
+            #                 params={
+            #                     "textDocument": {"uri": "${main_file}"},
+            #                     "position": {"line": 2, "character": 13},
+            #                 },
+            #                 result={
+            #                     "contents": [
+            #                         {"language": "hack", "value": "function aaa(): int"},
+            #                         "Return type: `int`",
+            #                     ],
+            #                     "range": {
+            #                         "start": {"line": 2, "character": 11},
+            #                         "end": {"line": 2, "character": 14},
+            #                     },
+            #                 },
+            #                 powered_by="serverless_ide",
+            #             )
+            # .write_to_disk(
+            #     comment="delete file A", uri="${file_a}", contents=None, notify=True
+            # )
+            # .request(
+            #     comment="Ensure that hover over `aaa` works now that the naming error is resolved",
+            #     method="textDocument/hover",
+            #     params={
+            #         "textDocument": {"uri": "${main_file}"},
+            #         "position": {"line": 2, "character": 13},
+            #     },
+            #     result={
+            #         "contents": [
+            #             {"language": "hack", "value": "function aaa(): string"},
+            #             "Return type: `string`",
+            #         ],
+            #         "range": {
+            #             "start": {"line": 2, "character": 11},
+            #             "end": {"line": 2, "character": 14},
+            #         },
+            #     },
+            #     powered_by="serverless_ide",
+            # )
+            .request(method="shutdown", params={}, result=None)
+        )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)

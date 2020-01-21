@@ -82,7 +82,7 @@ array(4) {
       bool(true)
       ["type_hint_nullable"]=>
       bool(true)
-      ["ref"]=>
+      ["inout"]=>
       bool(true)
       ["attributes"]=>
       array(0) {
@@ -210,7 +210,7 @@ Function [ <user> function f ] {
 
   - Parameters [4] {
     Parameter #0 [ <required> $a ]
-    Parameter #1 [ <required> &$b ]
+    Parameter #1 [ <required> inout $b ]
     Parameter #2 [ <optional> $c = NULL ]
     Parameter #3 [ <optional> $d = array (
     0 => 1,

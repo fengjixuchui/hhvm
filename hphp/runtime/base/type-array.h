@@ -97,10 +97,6 @@ public:
     return Array(ArrayData::CreateDict(), NoIncRef{});
   }
 
-  static Array CreateShape() {
-    return Array(ArrayData::CreateShape(), NoIncRef{});
-  }
-
   static Array CreateKeyset() {
     return Array(ArrayData::CreateKeyset(), NoIncRef{});
   }
@@ -204,7 +200,6 @@ public:
   Array copy() const { COPY_BODY(copy(), Array{}) }
   Array toVec() const { COPY_BODY(toVec(true), CreateVec()) }
   Array toDict() const { COPY_BODY(toDict(true), CreateDict()) }
-  Array toShape() const { COPY_BODY(toShape(true), CreateShape()) }
   Array toKeyset() const { COPY_BODY(toKeyset(true), CreateKeyset()) }
   Array toPHPArray() const { COPY_BODY(toPHPArray(true), Array{}) }
   Array toPHPArrayIntishCast() const {
@@ -234,7 +229,6 @@ public:
    */
   bool isVecArray() const { return m_arr && m_arr->isVecArray(); }
   bool isDict() const { return m_arr && m_arr->isDict(); }
-  bool isShape() const { return m_arr && m_arr->isShape(); }
   bool isKeyset() const { return m_arr && m_arr->isKeyset(); }
   bool isHackArray() const { return m_arr && m_arr->isHackArray(); }
   bool isPHPArray() const { return !m_arr || m_arr->isPHPArray(); }
@@ -242,9 +236,6 @@ public:
   bool isDArray() const { return m_arr && m_arr->isDArray(); }
   bool isVecOrVArray() const { return m_arr && m_arr->isVecOrVArray(); }
   bool isDictOrDArray() const { return m_arr && m_arr->isDictOrDArray(); }
-  bool isDictOrDArrayOrShape() const {
-    return m_arr && m_arr->isDictOrDArrayOrShape();
-  }
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -259,9 +250,9 @@ public:
    * Converts `k' to a valid key for this array kind.
    */
   template <IntishCast IC = IntishCast::None>
-  Cell convertKey(Cell k) const;
+  TypedValue convertKey(TypedValue k) const;
   template <IntishCast IC = IntishCast::None>
-  Cell convertKey(const Variant& k) const;
+  TypedValue convertKey(const Variant& k) const;
 
   /*
    * Should int-like string keys be implicitly converted to integers before they
@@ -376,7 +367,7 @@ public:
    * Sort multiple arrays at once similar to how ORDER BY clause works in SQL.
    */
   struct SortData {
-    const Variant* original;
+    Variant* original;
     const Array*   array;
     bool           by_key;
     PFUNC_CMP      cmp_func;
@@ -402,6 +393,11 @@ public:
   String toString() const;
 
   /*
+   * Enable the legacy behavior bit on this array
+   */
+  void setLegacyArray(bool);
+
+  /*
    * Comparisons.
    */
   bool same(const Array& v2) const;
@@ -416,7 +412,7 @@ public:
   // Element rval/lval.
 
 #define FOR_EACH_KEY_TYPE(...)    \
-  C(Cell, __VA_ARGS__)            \
+  C(TypedValue, __VA_ARGS__)            \
   I(int, __VA_ARGS__)             \
   I(int64_t, __VA_ARGS__)         \
   V(const String&, __VA_ARGS__)   \
@@ -426,7 +422,7 @@ public:
   /*
    * Get a refcounted copy of the element at `key'.
    */
-  Variant operator[](Cell key) const;
+  Variant operator[](TypedValue key) const;
   Variant operator[](int key) const;
   Variant operator[](int64_t key) const;
   Variant operator[](const String& key) const;
@@ -444,14 +440,19 @@ public:
   /*
    * Get an rval to the element at `key'.
    */
-  FOR_EACH_KEY_TYPE(rvalAt, tv_rval, const)
+  FOR_EACH_KEY_TYPE(rval, tv_rval, const)
 
   /*
    * Get an lval to the element at `key'.
    *
-   * This is ArrayData::lval() with CoW and escalation.
+   * This is ArrayData::lval{,Silent}() with CoW and escalation.
+   *
+   * lvalForce() has the legacy lval() behavior---if the key is not present, it
+   * writes null, then returns the lval.
    */
-  FOR_EACH_KEY_TYPE(lvalAt, arr_lval, )
+  FOR_EACH_KEY_TYPE(lval, arr_lval, )
+  FOR_EACH_KEY_TYPE(lvalSilent, arr_lval, )
+  FOR_EACH_KEY_TYPE(lvalForce, arr_lval, )
 
 #undef D
 #undef I
@@ -461,7 +462,7 @@ public:
   /*
    * Get an lval to a newly created element.
    */
-  arr_lval lvalAt();
+  arr_lval lvalForce();
 
   /////////////////////////////////////////////////////////////////////////////
   // Element access and mutation.
@@ -493,14 +494,9 @@ public:
 #define D(key_t, name, value_t) void name(key_t k, value_t v) = delete;
 
   /*
-   * Set an element to `v', unboxing `v' if it's boxed.
+   * Set an element to `v'.
    */
   FOR_EACH_KEY_TYPE(set, TypedValue)
-
-  /*
-   * Set an element to `v', preserving refs unless they are singly-referenced.
-   */
-  FOR_EACH_KEY_TYPE(setWithRef, TypedValue)
 
 #undef D
 #undef I
@@ -517,7 +513,6 @@ public:
    * Variant overloads.
    */
   FOR_EACH_KEY_TYPE(set, const Variant&)
-  FOR_EACH_KEY_TYPE(setWithRef, const Variant&)
 
 #undef D
 #undef I
@@ -525,12 +520,10 @@ public:
 #undef C
 
   /*
-   * Append or prepend an element, with semantics like set{,WithRef}().
+   * Append or prepend an element, with semantics like set().
    */
   void append(TypedValue v);
   void append(const Variant& v);
-  void appendWithRef(TypedValue v);
-  void appendWithRef(const Variant& v);
   void prepend(TypedValue v);
   void prepend(const Variant& v);
 
@@ -558,13 +551,14 @@ private:
                  PFUNC_CMP key_cmp_function, const void* key_data,
                  PFUNC_CMP value_cmp_function, const void* value_data) const;
 
-  template<typename T> tv_rval rvalAtImpl(const T& key, Flags) const;
-  template<typename T> arr_lval lvalAtImpl(const T& key, Flags);
+  template<typename T> tv_rval rvalImpl(const T& key, Flags) const;
+  template<typename T> arr_lval lvalImpl(const T& key, Flags);
+  template<typename T> arr_lval lvalSilentImpl(const T& key, Flags);
+  template<typename T> arr_lval lvalForceImpl(const T& key, Flags);
 
   template<typename T> bool existsImpl(const T& key) const;
   template<typename T> void removeImpl(const T& key);
   template<typename T> void setImpl(const T& key, TypedValue v);
-  template<typename T> void setWithRefImpl(const T& key, TypedValue v);
 
   static void compileTimeAssertions();
 
@@ -668,17 +662,9 @@ ALWAYS_INLINE Array& asArrRef(tv_lval tv) {
   return *reinterpret_cast<Array*>(&val(tv).parr);
 }
 
-ALWAYS_INLINE Array& toArrRef(tv_lval tv) {
-  return asArrRef(isRefType(type(tv)) ? val(tv).pref->cell() : tv);
-}
-
 ALWAYS_INLINE const Array& asCArrRef(tv_rval tv) {
   assertx(tvIsArrayLike(tv));
   return *reinterpret_cast<const Array*>(&val(tv).parr);
-}
-
-ALWAYS_INLINE const Array& toCArrRef(tv_rval tv) {
-  return asCArrRef(tvIsRef(tv) ? val(tv).pref->cell() : tv);
 }
 
 template <IntishCast IC = IntishCast::None>

@@ -29,6 +29,7 @@
 #include "hphp/runtime/ext/intervaltimer/ext_intervaltimer.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/ext/std/ext_std_variable.h"
+#include "hphp/runtime/ext/strobelight/ext_strobelight.h"
 #include "hphp/runtime/ext/xenon/ext_xenon.h"
 
 #include "hphp/runtime/server/server-stats.h"
@@ -36,6 +37,7 @@
 #include "hphp/runtime/vm/jit/tc.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/vm/func.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/interp-helpers.h"
 #include "hphp/runtime/vm/unit-util.h"
@@ -227,41 +229,38 @@ void runUserProfilerOnFunctionExit(const ActRec* ar, const TypedValue* retval,
   vm_call_user_func(g_context->m_setprofileCallback, params);
 }
 
-static Array get_frame_args(const ActRec* ar, bool with_ref) {
+static Array get_frame_args(const ActRec* ar) {
   int numNonVariadic = ar->func()->numNonVariadicParams();
   int numArgs = ar->numArgs();
-
-  SuppressHACRefBindNotices _guard;
-  VArrayInit retArray(numArgs);
-
+  auto const variadic = ar->func()->hasVariadicCaptureParam();
   auto local = reinterpret_cast<TypedValue*>(
     uintptr_t(ar) - sizeof(TypedValue)
   );
+  if (variadic && numArgs > numNonVariadic) {
+    auto arr = local - numNonVariadic;
+    if (isArrayType(arr->m_type) && arr->m_data.parr->hasPackedLayout()) {
+      numArgs = numNonVariadic + arr->m_data.parr->size();
+    } else {
+      numArgs = numNonVariadic;
+    }
+  }
+
+  VArrayInit retArray(numArgs);
+
   int i = 0;
   // The function's formal parameters are on the stack
   for (; i < numArgs && i < numNonVariadic; ++i) {
-    if (with_ref) retArray.appendWithRef(tvAsCVarRef(local));
-    else          retArray.append(tvAsCVarRef(local));
+    retArray.append(tvAsCVarRef(local));
     --local;
   }
 
   if (i < numArgs) {
+    assertx(ar->func()->hasVariadicCaptureParam());
     // If there are still args that haven't been accounted for, they have
-    // either been ... :
-    if (ar->func()->hasVariadicCaptureParam()) {
-      // ... shuffled into a packed array stored in the variadic capture
-      // param on the stack
-      for (ArrayIter iter(tvAsCVarRef(local)); iter; ++iter) {
-        if (with_ref) retArray.appendWithRef(iter.secondVal());
-        else          retArray.append(iter.secondVal());
-      }
-    } else {
-      // ... or moved into the ExtraArgs datastructure.
-      for (; i < numArgs; ++i) {
-        auto const arg = ar->getExtraArg(i - numNonVariadic);
-        if (with_ref) retArray.appendWithRef(tvAsCVarRef(arg));
-        else          retArray.append(tvAsCVarRef(arg));
-      }
+    // been shuffled into a packed array stored in the variadic capture
+    // param on the stack.
+    for (ArrayIter iter(tvAsCVarRef(local)); iter; ++iter) {
+      retArray.append(iter.secondVal());
     }
   }
   return retArray.toArray();
@@ -282,70 +281,42 @@ static Variant call_intercept_handler(
   auto f = callCtx.func;
   if (!f) return uninit_null();
 
-  auto const inout = [&] {
-    std::vector<uint32_t> ind = {2};
-    if (!newCallback) ind.push_back(4);
-    if (f->isInOutWrapper()) {
-      auto const name = mangleInOutFuncName(f->name(), ind);
-      if (!f->isMethod()) {
-        f = Unit::lookupFunc(name.get());
-      } else {
-        assertx(callCtx.cls);
-        f = callCtx.cls->lookupMethod(name.get());
-      }
-      if (!f) {
-        raise_error(
-          "fb_intercept%s used with an inout handler with a bad signature "
-          "(expected parameter%s to be inout)",
-          newCallback ? "2" : "",
-          newCallback ? " three" : "s three and five"
-        );
-      }
-      return true;
-    } else if (f->isClosureBody() && f->anyByRef()) {
-      auto const name = mangleInOutFuncName(f->name(), ind);
-      auto const impl = f->implCls();
-      assertx(impl);
-
-      if (auto const invoke = impl->lookupMethod(name.get())) {
-        f = invoke;
-        return true;
-      }
-    }
-    return f->takesInOutParams();
+  auto const okay = [&] {
+    if (f->numInOutParams() != (newCallback ? 1 : 2)) return false;
+    if (newCallback) return f->params().size() >= 3 && f->isInOut(2);
+    return
+      f->params().size() >= 5 && f->isInOut(2) && f->isInOut(4);
   }();
 
-  args = get_frame_args(ar, !inout);
+  if (!okay) {
+    raise_error(
+      "fb_intercept%s used with an inout handler with a bad signature "
+      "(expected parameter%s to be inout)",
+      newCallback ? "2" : "",
+      newCallback ? " three" : "s three and five"
+    );
+  }
 
-  PackedArrayInit par(newCallback ? 3 : 5);
+  args = get_frame_args(ar);
+
+  VArrayInit par{newCallback ? 3u : 5u};
   par.append(called);
   par.append(called_on);
   par.append(args);
-  if (!newCallback) par.append(ctx);
-
-  Variant intArgs = [&] {
-    if (newCallback) return par.toArray();
-    if (inout) return par.append(done).toArray();
-    SuppressHACRefBindNotices _guard;
-    Variant tmp;
-    tmp.assignRef(done);
-    return par.appendWithRef(tmp).toArray();
-  }();
+  if (!newCallback) {
+    par.append(ctx);
+    par.append(done);
+  }
 
   auto ret = Variant::attach(
-    g_context->invokeFunc(f, intArgs, callCtx.this_, callCtx.cls,
+    g_context->invokeFunc(f, par.toVariant(), callCtx.this_, callCtx.cls,
                           callCtx.invName, callCtx.dynamic)
   );
 
-  if (inout) {
-    auto& arr = ret.asCArrRef();
-    if (arr[1].isArray()) args = arr[1].toArray();
-    if (!newCallback && arr[2].isBoolean()) done = arr[2].toBoolean();
-    return arr[0];
-  } else if (!ar->func()->takesInOutParams()) {
-    args.reset();
-  }
-  return ret;
+  auto& arr = ret.asCArrRef();
+  if (arr[1].isArray()) args = arr[1].toArray();
+  if (!newCallback && arr[2].isBoolean()) done = arr[2].toBoolean();
+  return arr[0];
 }
 
 const StaticString
@@ -360,14 +331,6 @@ static Variant call_intercept_handler_callback(
 ) {
   CallCtx callCtx;
   auto const origCallee = ar->func();
-  auto const reifiedGenerics = [&]() -> ArrayData* {
-    if (!origCallee->hasReifiedGenerics()) return nullptr;
-    // Reified generics is the first non param local
-    auto const tv =
-      reinterpret_cast<TypedValue*>(ar) - origCallee->numParams() - 1;
-    assertx(tvIsVecOrVArray(tv));
-    return tv->m_data.parr;
-  }();
   vm_decode_function(function, callCtx, DecodeFlags::Warn, true);
   auto f = callCtx.func;
   if (!f) return uninit_null();
@@ -375,12 +338,12 @@ static Variant call_intercept_handler_callback(
     SystemLib::throwRuntimeExceptionObject(
       Variant("Mismatch between reifiedness of callee and callback"));
   }
-  if (f->takesInOutParams() || f->isInOutWrapper()) {
+  if (f->takesInOutParams()) {
     //TODO(T52751806): Support inout arguments on fb_intercept2 callback
     SystemLib::throwRuntimeExceptionObject(
       Variant("The callback for fb_intercept2 cannot have inout parameters"));
   }
-  auto const curArgs = get_frame_args(ar, false);
+  auto const curArgs = get_frame_args(ar);
   PackedArrayInit args(prepend_this + curArgs.size());
   if (prepend_this) {
     auto const thiz = [&] {
@@ -391,10 +354,18 @@ static Variant call_intercept_handler_callback(
     args.append(thiz);
   }
   IterateV(curArgs.get(), [&](TypedValue v) { args.append(v); });
+  auto reifiedGenerics = [&] {
+    if (!origCallee->hasReifiedGenerics()) return Array();
+    // Reified generics is the first non param local
+    auto const tv =
+      reinterpret_cast<TypedValue*>(ar) - origCallee->numParams() - 1;
+    assertx(tvIsVecOrVArray(tv));
+    return Array(tv->m_data.parr);
+  }();
   auto ret = Variant::attach(
     g_context->invokeFunc(f, args.toArray(), callCtx.this_, callCtx.cls,
                           callCtx.invName, callCtx.dynamic, false, false,
-                          Array::attach(reifiedGenerics))
+                          std::move(reifiedGenerics))
   );
   return ret;
 }
@@ -406,14 +377,9 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
   if (LIKELY(func->maybeIntercepted() == 0)) return true;
 
   // Intercept only original generator / async function calls, not resumption.
-  if (ar->resumed()) return true;
+  if (isResumed(ar)) return true;
 
-  // Don't intercept inout wrappers. We'll intercept the inner function.
-  if (func->isInOutWrapper()) return true;
-
-  auto const name = func->takesInOutParams()
-    ? stripInOutSuffix(func->fullName())
-    : func->fullName();
+  auto const name = func->fullName();
 
   Variant* h = get_intercept_handler(StrNR(name), &func->maybeIntercepted());
   if (!h) return true;
@@ -430,8 +396,6 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
                   "in RepoAuthoritative mode", func->fullName()->data());
     }
   }
-
-  checkForRequiredCallM(ar);
 
   VMRegAnchor _;
 
@@ -450,7 +414,7 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
   }();
 
   Array args;
-  VarNR called(ar->func()->fullDisplayName());
+  VarNR called(ar->func()->fullName());
 
   auto const& hArr = h->asCArrRef();
   auto const newCallback = hArr[2].toBoolean();
@@ -481,21 +445,6 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
     }
   }
 
-  auto const rebind_locals = [&] {
-    auto local = reinterpret_cast<TypedValue*>(
-      uintptr_t(ar) - sizeof(TypedValue)
-    );
-    uint32_t param = 0;
-    IterateKV(args.get(), [&] (Cell, TypedValue v) {
-      if (param < func->numParams() && func->byRef(param++)) {
-        if (tvIsReferenced(*local)) {
-          cellSet(tvToCell(v), val(local).pref->cell());
-        }
-      }
-      --local;
-    });
-  };
-
   if (doneFlag.toBoolean()) {
     Offset pcOff;
     bool vmEntry;
@@ -507,7 +456,7 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
       frame_free_locals_no_hook(ar);
 
       // Tear down the callee frame, then push the return value.
-      stack.trim((Cell*)(ar + 1));
+      stack.trim((TypedValue*)(ar + 1));
     };
 
     if (UNLIKELY(func->takesInOutParams())) {
@@ -519,29 +468,25 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
       auto const end = start + count;
 
       auto push = [&] (TypedValue v) {
-        auto const c = tvToCell(v);
         assertx(start < end);
-        tvIncRefGen(c);
-        *start++ = c;
+        tvIncRefGen(v);
+        *start++ = v;
       };
 
       uint32_t param = 0;
-      IterateKV(args.get(), [&] (Cell, TypedValue v) {
-        if (param >= func->numParams() || !func->params()[param++].inout) {
+      IterateKV(args.get(), [&] (TypedValue, TypedValue v) {
+        if (param >= func->numParams() || !func->isInOut(param++)) {
           return;
         }
         push(v);
       });
 
       while (start < end) push(make_tv<KindOfNull>());
-    } else if (!args.isNull()) {
-      rebind_locals();
-      trim(); // discard the callee frame after binding refs
     } else {
       trim(); // nothing to do throw away the frame
     }
 
-    cellDup(*ret.toCell(), *stack.allocTV());
+    tvDup(*ret.asTypedValue(), *stack.allocTV());
     stack.topTV()->m_aux.u_asyncEagerReturnFlag = 0;
 
     vmfp() = outer;
@@ -549,8 +494,6 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
     if (vmpc() && !vmEntry) vmpc() = skipCall(vmpc());
 
     return false;
-  } else if (!func->takesInOutParams() && !args.isNull()) {
-    rebind_locals();
   }
   vmfp() = ar;
   vmpc() = savePc;
@@ -605,6 +548,10 @@ void logCommon(StructuredLogEntry sample, const ActRec* ar, ssize_t flags) {
 
 void EventHook::onFunctionEnter(const ActRec* ar, int funcType,
                                 ssize_t flags, bool isResume) {
+  if (flags & HeapSamplingFlag) {
+    gather_alloc_stack(/* skipTop */ true);
+  }
+
   // User profiler
   if (flags & EventHookFlag) {
     if (shouldRunUserProfiler(ar->func())) {
@@ -643,7 +590,15 @@ void EventHook::onFunctionExit(const ActRec* ar, const TypedValue* retval,
 
   // Xenon
   if (flags & XenonSignalFlag) {
-    Xenon::getInstance().log(Xenon::ExitSample);
+    if (Strobelight::active()) {
+      Strobelight::getInstance().log();
+    } else {
+      Xenon::getInstance().log(Xenon::ExitSample);
+    }
+  }
+
+  if (flags & HeapSamplingFlag) {
+    gather_alloc_stack();
   }
 
   // Run callbacks only if it's safe to do so, i.e., not when
@@ -654,6 +609,10 @@ void EventHook::onFunctionExit(const ActRec* ar, const TypedValue* retval,
     // Memory Threhsold
     if (flags & MemThresholdFlag) {
       DoMemoryThresholdCallback();
+    }
+    // Time Thresholds
+    if (flags & TimedOutFlag) {
+      RID().invokeUserTimeoutCallback();
     }
 
     // Interval timer
@@ -710,12 +669,20 @@ bool EventHook::onFunctionCall(const ActRec* ar, int funcType) {
 
   // Xenon
   if (flags & XenonSignalFlag) {
-    Xenon::getInstance().log(Xenon::EnterSample);
+    if (Strobelight::active()) {
+      Strobelight::getInstance().log();
+    } else {
+      Xenon::getInstance().log(Xenon::EnterSample);
+    }
   }
 
   // Memory Threhsold
   if (flags & MemThresholdFlag) {
     DoMemoryThresholdCallback();
+  }
+  // Time Thresholds
+  if (flags & TimedOutFlag) {
+    RID().invokeUserTimeoutCallback();
   }
 
   if (flags & IntervalTimerFlag) {
@@ -731,12 +698,20 @@ void EventHook::onFunctionResumeAwait(const ActRec* ar) {
 
   // Xenon
   if (flags & XenonSignalFlag) {
-    Xenon::getInstance().log(Xenon::ResumeAwaitSample);
+    if (Strobelight::active()) {
+      Strobelight::getInstance().log();
+    } else {
+      Xenon::getInstance().log(Xenon::ResumeAwaitSample);
+    }
   }
 
   // Memory Threhsold
   if (flags & MemThresholdFlag) {
     DoMemoryThresholdCallback();
+  }
+  // Time Thresholds
+  if (flags & TimedOutFlag) {
+    RID().invokeUserTimeoutCallback();
   }
 
   if (flags & IntervalTimerFlag) {
@@ -751,12 +726,20 @@ void EventHook::onFunctionResumeYield(const ActRec* ar) {
 
   // Xenon
   if (flags & XenonSignalFlag) {
-    Xenon::getInstance().log(Xenon::EnterSample);
+    if (Strobelight::active()) {
+      Strobelight::getInstance().log();
+    } else {
+      Xenon::getInstance().log(Xenon::EnterSample);
+    }
   }
 
   // Memory Threhsold
   if (flags & MemThresholdFlag) {
     DoMemoryThresholdCallback();
+  }
+  // Time Thresholds
+  if (flags & TimedOutFlag) {
+    RID().invokeUserTimeoutCallback();
   }
 
   if (flags & IntervalTimerFlag) {
@@ -771,7 +754,7 @@ void EventHook::onFunctionSuspendAwaitEF(ActRec* suspending,
                                          const ActRec* resumableAR) {
   assertx(suspending->func()->isAsyncFunction());
   assertx(suspending->func() == resumableAR->func());
-  assertx(resumableAR->resumed());
+  assertx(isResumed(resumableAR));
 
   // The locals were already teleported from suspending to resumableAR.
   suspending->setLocalsDecRefd();
@@ -799,7 +782,7 @@ void EventHook::onFunctionSuspendAwaitEF(ActRec* suspending,
 // at Await.
 void EventHook::onFunctionSuspendAwaitEG(ActRec* suspending) {
   assertx(suspending->func()->isAsyncGenerator());
-  assertx(suspending->resumed());
+  assertx(isResumed(suspending));
 
   // The generator is still being executed eagerly, make it look like that.
   auto const gen = frame_async_generator(suspending);
@@ -827,7 +810,7 @@ void EventHook::onFunctionSuspendAwaitEG(ActRec* suspending) {
 // is the WH we are going to block on.
 void EventHook::onFunctionSuspendAwaitR(ActRec* suspending, ObjectData* child) {
   assertx(suspending->func()->isAsync());
-  assertx(suspending->resumed());
+  assertx(isResumed(suspending));
   assertx(child->isWaitHandle());
 
   auto const flags = handle_request_surprise();
@@ -857,7 +840,7 @@ void EventHook::onFunctionSuspendCreateCont(ActRec* suspending,
                                             const ActRec* resumableAR) {
   assertx(suspending->func()->isGenerator());
   assertx(suspending->func() == resumableAR->func());
-  assertx(resumableAR->resumed());
+  assertx(isResumed(resumableAR));
 
   // The locals were already teleported from suspending to resumableAR.
   suspending->setLocalsDecRefd();
@@ -881,7 +864,7 @@ void EventHook::onFunctionSuspendCreateCont(ActRec* suspending,
 // Generator or async generator suspending at Yield.
 void EventHook::onFunctionSuspendYield(ActRec* suspending) {
   assertx(suspending->func()->isGenerator());
-  assertx(suspending->resumed());
+  assertx(isResumed(suspending));
 
   auto const flags = handle_request_surprise();
   onFunctionExit(suspending, nullptr, false, nullptr, flags, true);
@@ -909,12 +892,12 @@ void EventHook::onFunctionReturn(ActRec* ar, TypedValue retval) {
     onFunctionExit(ar, &retval, false, nullptr, flags, false);
 
     // Async profiler
-    if ((flags & AsyncEventHookFlag) && ar->resumed() &&
+    if ((flags & AsyncEventHookFlag) && isResumed(ar) &&
         ar->func()->isAsync()) {
       auto session = AsioSession::Get();
       if (session->hasOnResumableSuccess()) {
         if (!ar->func()->isGenerator()) {
-          session->onResumableSuccess(frame_afwh(ar), cellAsCVarRef(retval));
+          session->onResumableSuccess(frame_afwh(ar), tvAsCVarRef(retval));
         } else {
           auto ag = frame_async_generator(ar);
           if (!ag->isEagerlyExecuted()) {

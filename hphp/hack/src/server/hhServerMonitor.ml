@@ -18,8 +18,6 @@
       hh_server (detached mode).
 *)
 
-let exit_on_parent_exit () = Parent.exit_on_parent_exit 10 60
-
 let () = Random.self_init ()
 
 module SM =
@@ -42,13 +40,12 @@ let monitor_daemon_main
   let init_id = Random_id.short_string () in
   let (config, local_config) = ServerConfig.(load filename options) in
   ( if Sys_utils.is_test_mode () then
-    EventLogger.init ~exit_on_parent_exit EventLogger.Event_logger_fake 0.0
+    EventLogger.init_fake ()
   else
     let max_typechecker_worker_memory_mb =
       local_config.ServerLocalConfig.max_typechecker_worker_memory_mb
     in
     HackEventLogger.init_monitor
-      ~exit_on_parent_exit
       ~from:(ServerArgs.from options)
       ~proc_stack
       ~search_chunk_size:local_config.ServerLocalConfig.search_chunk_size
@@ -59,7 +56,6 @@ let monitor_daemon_main
       init_id
       (Unix.gettimeofday ())
       false );
-  Utils.profile := ServerArgs.profile_log options;
   Sys_utils.set_signal Sys.sigpipe Sys.Signal_ignore;
 
   ( if not (ServerArgs.check_mode options) then
@@ -74,12 +70,11 @@ let monitor_daemon_main
   ignore @@ Sys_utils.setsid ();
   ignore (make_tmp_dir ());
   ignore (Hhi.get_hhi_root ());
+  Typing_global_inference.set_path ();
 
   if local_config.ServerLocalConfig.use_full_fidelity_parser then
     HackEventLogger.set_use_full_fidelity_parser true;
 
-  SymbolIndex.set_fuzzy_search_enabled
-    local_config.ServerLocalConfig.enable_fuzzy_search;
   if ServerArgs.check_mode options then
     ServerMain.run_once options config local_config
   else
@@ -152,6 +147,9 @@ let start () =
   (* TODO: Catch all exceptions that make it this high, log them, and exit with
    * the proper code *)
   try
+    (* This avoids dying if SIGUSR{1,2} is received by accident *)
+    Sys_utils.set_signal Sys.sigusr1 Sys.Signal_ignore;
+    Sys_utils.set_signal Sys.sigusr2 Sys.Signal_ignore;
     Daemon.check_entry_point ();
 
     (* this call might not return *)

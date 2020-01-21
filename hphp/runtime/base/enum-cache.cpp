@@ -135,7 +135,7 @@ const EnumValues* EnumCache::loadEnumValues(const Class* klass,
     if (consts[i].cls != klass && !recurse) {
       continue;
     }
-    Cell value = consts[i].val;
+    TypedValue value = consts[i].val;
     // Handle dynamically set constants
     if (value.m_type == KindOfUninit) {
       persist = false;
@@ -149,7 +149,7 @@ const EnumValues* EnumCache::loadEnumValues(const Class* klass,
       msg += " enum can only contain string and int values";
       EnumCache::failLookup(msg);
     }
-    values.set(StrNR(consts[i].name), cellAsCVarRef(value));
+    values.set(StrNR(consts[i].name), tvAsCVarRef(value));
 
     // Manually perform int-like key coercion even if names is a dict for
     // backwards compatibility.

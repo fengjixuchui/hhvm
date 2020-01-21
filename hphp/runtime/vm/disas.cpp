@@ -18,6 +18,7 @@
 #include <sstream>
 #include <map>
 #include <queue>
+#include <functional>
 
 #include <boost/variant.hpp>
 
@@ -33,6 +34,7 @@
 #include "hphp/runtime/vm/hhbc.h"
 #include "hphp/runtime/vm/preclass-emitter.h"
 #include "hphp/runtime/vm/repo-global-data.h"
+#include "hphp/runtime/vm/type-constraint.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/util/match.h"
 
@@ -121,8 +123,8 @@ std::string escaped_long(const ArrayData* ad) {
   return escaped_long(str.get());
 }
 
-std::string escaped_long(Cell cell) {
-  assertx(cellIsPlausible(cell));
+std::string escaped_long(TypedValue cell) {
+  assertx(tvIsPlausible(cell));
   auto const str = internal_serialize(tvAsCVarRef(&cell));
   return escaped_long(str.get());
 }
@@ -153,6 +155,9 @@ struct FuncInfo {
 
   // Try/catch protected region starts in order.
   std::vector<std::pair<Offset,const EHEnt*>> ehStarts;
+
+  // Upper-bounds for params and return types
+  std::unordered_map<std::string, std::vector<TypeConstraint>> ubs;
 };
 
 FuncInfo find_func_info(const Func* func) {
@@ -204,9 +209,27 @@ FuncInfo find_func_info(const Func* func) {
     }
   };
 
+  auto find_upper_bounds = [&] {
+    if (func->hasParamsWithMultiUBs()) {
+      auto const& params = func->params();
+      for (auto const& p : func->paramUBs()) {
+        auto const& userType = params[p.first].userType;
+        auto& v = finfo.ubs[userType->data()];
+        if (v.empty()) v.assign(std::begin(p.second), std::end(p.second));
+      }
+    }
+    if (func->hasReturnWithMultiUBs()) {
+      auto& v = finfo.ubs[func->returnUserType()->data()];
+      if (v.empty()) {
+        v.assign(std::begin(func->returnUBs()), std::end(func->returnUBs()));
+      }
+    }
+  };
+
   find_jump_targets();
   find_eh_entries();
   find_dv_entries();
+  find_upper_bounds();
   return finfo;
 }
 
@@ -266,43 +289,6 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
     out.fmt(">");
   };
 
-  auto print_itertab = [&] {
-    auto const vecLen = decode_iva(pc);
-    out.fmt(" <");
-    for (auto i = int32_t{0}; i < vecLen; ++i) {
-      auto const kind = static_cast<IterKind>(decode_iva(pc));
-      auto const id   = decode_iva(pc);
-      auto const kindStr = [&]() -> const char* {
-        switch (kind) {
-        case KindOfIter:   return "(Iter)";
-        case KindOfLIter:  return "(LIter)";
-        }
-        not_reached();
-      }();
-      if (kind == KindOfLIter) {
-        out.fmt(
-          "{}{} {} {}",
-          i != 0 ? ", " : " ",
-          kindStr, id, loc_name(finfo, decode_iva(pc))
-        );
-      } else {
-        out.fmt("{}{} {}", i != 0 ? ", " : " ", kindStr, id);
-      }
-    }
-    out.fmt(">");
-  };
-
-  auto print_argv32 = [&] {
-    auto const vecLen = decode_iva(pc);
-    if (!vecLen) return;
-    out.fmt(" <");
-    for (auto i = uint32_t{0}; i < vecLen; ++i) {
-      auto const num = decode<uint32_t>(pc);
-      out.fmt("{}{}", i != 0 ? ", " : "", num);
-    }
-    out.fmt(">");
-  };
-
   auto print_stringvec = [&] {
     auto const vecLen = decode_iva(pc);
     out.fmt(" <");
@@ -322,17 +308,20 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
     return show(m);
   };
 
+  // The HHAS format for IterArgs doesn't include flags, so we drop them.
+  auto print_ita = [&](const IterArgs& ita) {
+    return show(ita, [&](int32_t id) { return loc_name(finfo, id); });
+  };
+
   auto print_fca = [&] (FCallArgs fca) {
     auto const aeLabel = fca.asyncEagerOffset != kInvalidOffset
       ? rel_label(fca.asyncEagerOffset)
       : "-";
-    return show(fca, fca.byRefs, aeLabel);
+    return show(fca, fca.inoutArgs, aeLabel);
   };
 
 #define IMM_BLA    print_switch();
 #define IMM_SLA    print_sswitch();
-#define IMM_ILA    print_itertab();
-#define IMM_I32LA  print_argv32();
 #define IMM_IVA    out.fmt(" {}", decode_iva(pc));
 #define IMM_I64A   out.fmt(" {}", decode<int64_t>(pc));
 #define IMM_LA     out.fmt(" {}", loc_name(finfo, decode_iva(pc)));
@@ -348,14 +337,16 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
 #define IMM_VSA    print_stringvec();
 #define IMM_KA     out.fmt(" {}", print_mk(decode_member_key(pc, finfo.unit)));
 #define IMM_LAR    out.fmt(" {}", show(decodeLocalRange(pc)));
+#define IMM_ITA    out.fmt(" {}", print_ita(decodeIterArgs(pc)));
 #define IMM_FCA    out.fmt(" {}", print_fca(decodeFCallArgs(thisOpcode, pc)));
 
 #define IMM_NA
 #define IMM_ONE(x)           IMM_##x
-#define IMM_TWO(x,y)         IMM_ONE(x)       IMM_ONE(y)
-#define IMM_THREE(x,y,z)     IMM_TWO(x,y)     IMM_ONE(z)
-#define IMM_FOUR(x,y,z,l)    IMM_THREE(x,y,z) IMM_ONE(l)
-#define IMM_FIVE(x,y,z,l,m)  IMM_FOUR(x,y,z,l) IMM_ONE(m)
+#define IMM_TWO(x,y)         IMM_ONE(x)          IMM_ONE(y)
+#define IMM_THREE(x,y,z)     IMM_TWO(x,y)        IMM_ONE(z)
+#define IMM_FOUR(x,y,z,l)    IMM_THREE(x,y,z)    IMM_ONE(l)
+#define IMM_FIVE(x,y,z,l,m)  IMM_FOUR(x,y,z,l)   IMM_ONE(m)
+#define IMM_SIX(x,y,z,l,m,n) IMM_FIVE(x,y,z,l,m) IMM_ONE(n)
 
   out.indent();
 #define O(opcode, imms, ...)                              \
@@ -377,11 +368,10 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
 #undef IMM_THREE
 #undef IMM_FOUR
 #undef IMM_FIVE
+#undef IMM_SIX
 
 #undef IMM_BLA
 #undef IMM_SLA
-#undef IMM_ILA
-#undef IMM_I32LA
 #undef IMM_IVA
 #undef IMM_I64A
 #undef IMM_LA
@@ -395,6 +385,7 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
 #undef IMM_VSA
 #undef IMM_KA
 #undef IMM_LAR
+#undef IMM_ITA
 #undef IMM_FCA
 
   out.nl();
@@ -565,12 +556,11 @@ std::string func_param_list(const FuncInfo& finfo) {
     if (func->params()[i].variadic) {
       ret += "...";
     }
-    if (func->params()[i].inout) {
+    if (func->isInOut(i)) {
       ret += "inout ";
     }
     ret += opt_type_info(func->params()[i].userType,
                          func->params()[i].typeConstraint);
-    if (func->byRef(i)) ret += "&";
     ret += folly::format("{}", loc_name(finfo, i)).str();
     if (func->params()[i].hasDefaultValue()) {
       auto const off = func->params()[i].funcletOff;
@@ -599,13 +589,34 @@ std::string func_flag_list(const FuncInfo& finfo) {
   return " ";
 }
 
+std::string opt_ubs(const FuncInfo& finfo) {
+  std::string ret = {};
+  if (finfo.ubs.empty()) return ret;
+  ret += "{";
+  for (auto const& p : finfo.ubs) {
+    ret += "(";
+    ret += p.first;
+    ret += " as ";
+    bool first = true;
+    for (auto const& ub : p.second) {
+      if (!first) ret += ", ";
+      ret += opt_type_info(nullptr, ub);
+      first = false;
+    }
+    ret += ")";
+  }
+  ret += "}";
+  return ret;
+}
+
 void print_func(Output& out, const Func* func) {
   auto const finfo = find_func_info(func);
 
   if (func->isPseudoMain()) {
     out.fmtln(".main{} {{", format_line_pair(func));
   } else {
-    out.fmtln(".function{}{} {}{}({}){}{{",
+    out.fmtln(".function{}{}{} {}{}({}){}{{",
+      opt_ubs(finfo),
       opt_attrs(AttrContext::Func, func->attrs(), &func->userAttributes(),
                 func->top()),
       format_line_pair(func),
@@ -622,8 +633,8 @@ void print_func(Output& out, const Func* func) {
   out.nl();
 }
 
-std::string member_tv_initializer(Cell cell) {
-  assertx(cellIsPlausible(cell));
+std::string member_tv_initializer(TypedValue cell) {
+  assertx(tvIsPlausible(cell));
   if (cell.m_type == KindOfUninit) return "uninit";
   return escaped_long(cell);
 }
@@ -664,7 +675,8 @@ void print_property(Output& out, const PreClass::Prop* prop) {
 
 void print_method(Output& out, const Func* func) {
   auto const finfo = find_func_info(func);
-  out.fmtln(".method{}{} {}{}({}){}{{",
+  out.fmtln(".method{}{}{} {}{}({}){}{{",
+    opt_ubs(finfo),
     opt_attrs(AttrContext::Func, func->attrs(), &func->userAttributes()),
     format_line_pair(func),
     opt_type_info(func->returnUserType(), func->returnTypeConstraint()),

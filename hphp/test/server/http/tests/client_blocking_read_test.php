@@ -4,8 +4,14 @@ require_once('test_base.inc');
 
 
 function createSocketStream($serverPort) {
-  $stream = stream_socket_client(php_uname('n').":".$serverPort,
-    &$errorCode, &$errorMessage, 3.0);
+  $errorCode = null;
+  $errorMessage = null;
+  $stream = stream_socket_client(
+    php_uname('n').":".$serverPort,
+    inout $errorCode,
+    inout $errorMessage,
+    3.0
+  );
   if (!$stream) {
       die($errorMessage);
   }
@@ -18,7 +24,7 @@ function createReq(){
              "Host: $host_name\r\nContent-Length:0\r\n\r\n";
   return $message;
 }
-
+<<__EntryPoint>> function main(): void {
 runTest(function ($serverPort) {
   $stream = createSocketStream($serverPort);
   fwrite($stream, createReq());
@@ -34,3 +40,4 @@ runTest(function ($serverPort) {
   var_dump(strlen($data));
   fclose($stream);
 });
+}

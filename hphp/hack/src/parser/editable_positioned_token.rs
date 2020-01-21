@@ -3,29 +3,28 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use parser_rust as parser;
-
-use parser::lexable_token::LexableToken;
-use parser::positioned_token::PositionedToken;
-use parser::source_text::SourceText;
-use parser::token_kind::TokenKind;
-use parser_rust::positioned_trivia::PositionedTrivia;
+use parser_core_types::lexable_token::LexableToken;
+use parser_core_types::positioned_token::PositionedToken;
+use parser_core_types::positioned_trivia::PositionedTrivia;
+use parser_core_types::source_text::SourceText;
+use parser_core_types::token_kind::TokenKind;
+use parser_core_types::trivia_kind::TriviaKind;
 
 use crate::editable_positioned_original_source_data::SourceData;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SyntheticTokenData {
     pub text: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum TokenData<'a> {
     Original(SourceData<'a>),
     SynthesizedFromOriginal(SyntheticTokenData, SourceData<'a>),
     Synthetic(SyntheticTokenData),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EditablePositionedToken<'a> {
     pub kind: TokenKind,
     pub leading_text: String,
@@ -90,6 +89,10 @@ impl<'a> LexableToken<'a> for EditablePositionedToken<'a> {
     fn with_kind(self, _kind: TokenKind) -> Self {
         panic!("TODO")
     }
+
+    fn has_trivia_kind(&self, _kind: TriviaKind) -> bool {
+        panic!("TODO")
+    }
 }
 
 impl<'a> EditablePositionedToken<'a> {
@@ -109,6 +112,38 @@ impl<'a> EditablePositionedToken<'a> {
                 positioned_token,
                 source_text,
             )),
+        }
+    }
+
+    pub fn synthesize_new(
+        kind: TokenKind,
+        leading_text: String,
+        trailing_text: String,
+        text: String,
+    ) -> Self {
+        let token_data = TokenData::Synthetic(SyntheticTokenData { text });
+        Self {
+            kind,
+            leading_text,
+            trailing_text,
+            token_data,
+        }
+    }
+
+    pub fn full_text(token: &Self) -> String {
+        [
+            token.leading_text.to_string(),
+            Self::text(token),
+            token.trailing_text.to_string(),
+        ]
+        .join("")
+    }
+
+    pub fn text(token: &Self) -> String {
+        match &token.token_data {
+            TokenData::Original(source_data) => SourceData::text(source_data),
+            TokenData::SynthesizedFromOriginal(token_data, _)
+            | TokenData::Synthetic(token_data) => token_data.text.clone(),
         }
     }
 }

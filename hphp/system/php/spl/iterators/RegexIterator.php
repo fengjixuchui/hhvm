@@ -78,7 +78,7 @@ class RegexIterator extends FilterIterator
    *                         - RegexIterator::REPLACE: none.
    *                         - RegexIterator::SPLIT: See preg_split().
    */
-  public function __construct(\Iterator $iterator, $regex, $mode = self::MATCH,
+  public function __construct(\HH\Iterator $iterator, $regex, $mode = self::MATCH,
                               $flags = 0, $preg_flags = 0) {
     parent::__construct($iterator);
 
@@ -263,7 +263,7 @@ class RegexIterator extends FilterIterator
    * @throws InvalidArgumentException
    */
   public function setMode($mode) {
-    $mode = (integer) $mode;
+    $mode = (int)$mode;
 
     if ($mode < self::MATCH || $mode > self::REPLACE) {
       throw new InvalidArgumentException(sprintf('Illegal mode %ld', $mode));
@@ -297,7 +297,7 @@ class RegexIterator extends FilterIterator
    *                            of available flags.
    */
   public function setPregFlags($preg_flags) {
-    $preg_flags = (integer) $preg_flags;
+    $preg_flags = (int) $preg_flags;
 
     $this->pregFlags = $preg_flags;
   }

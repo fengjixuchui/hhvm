@@ -19,6 +19,7 @@
 
 #include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
@@ -40,7 +41,7 @@ namespace {
 c_ResumableWaitHandle* GetResumedWaitHandle() {
   c_ResumableWaitHandle* ret = nullptr;
   walkStack([&] (const ActRec* fp, Offset) {
-    if (fp->resumed() && fp->func()->isAsync()) {
+    if (isResumed(fp) && fp->func()->isAsync()) {
       if (fp->func()->isGenerator()) {
         // async generator
         auto generator = frame_async_generator(fp);
@@ -103,7 +104,7 @@ Variant HHVM_FUNCTION(join, const Object& obj) {
   }
 
   if (LIKELY(handle->isSucceeded())) {
-    return cellAsCVarRef(handle->getResult());
+    return tvAsCVarRef(handle->getResult());
   } else {
     throw_object(Object{handle->getException()});
   }
@@ -173,11 +174,14 @@ void AsioExtension::moduleInit() {
   initSleepWaitHandle();
   initRescheduleWaitHandle();
   initExternalThreadEventWaitHandle();
+  initStaticWaitHandle();
 
   loadSystemlib();
 
   finishClasses();
 }
+
+void AsioExtension::requestInit() { requestInitSingletons(); }
 
 void AsioExtension::initFunctions() {
   HHVM_FALIAS(

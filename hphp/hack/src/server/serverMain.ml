@@ -17,8 +17,6 @@ open Option.Monad_infix
 (* Main initialization *)
 (*****************************************************************************)
 
-let exit_on_parent_exit () = Parent.exit_on_parent_exit 10 60
-
 let () = Printexc.record_backtrace true
 
 let force_break_recheck_loop_for_test_ref = ref false
@@ -218,8 +216,7 @@ let handle_connection_try return client env f =
 let handle_connection_ genv env client =
   ServerCommandTypes.(
     let t = Unix.gettimeofday () in
-    handle_connection_try (fun x -> ServerUtils.Done x) client env
-    @@ fun () ->
+    handle_connection_try (fun x -> ServerUtils.Done x) client env @@ fun () ->
     match ClientProvider.read_connection_type client with
     | Persistent ->
       let f env =
@@ -313,8 +310,7 @@ let handle_persistent_connection_ genv env client =
     | Some reason -> ServerUtils.Needs_writes (env, f, true, reason)
     | None -> ServerUtils.Done (f env)
   in
-  handle_persistent_connection_try return client env
-  @@ fun () ->
+  handle_persistent_connection_try return client env @@ fun () ->
   let env = { env with ide_idle = false } in
   ServerCommand.handle genv env client
 
@@ -336,7 +332,7 @@ let handle_connection genv env client client_kind =
 let recheck genv old_env check_kind =
   let can_interrupt = check_kind = ServerTypeCheck.Full_check in
   let old_env = { old_env with can_interrupt } in
-  let (new_env, res) = ServerTypeCheck.check genv old_env check_kind in
+  let (new_env, res) = ServerTypeCheck.type_check genv old_env check_kind in
   let new_env = { new_env with can_interrupt = true } in
   if old_env.init_env.needs_full_init && not new_env.init_env.needs_full_init
   then
@@ -399,8 +395,7 @@ let query_notifier genv env query_kind t =
  * The above doesn't apply in presence of interruptions / cancellations -
  * it's possible for client to request current recheck to be stopped.
  *)
-let rec recheck_loop acc genv env new_client has_persistent_connection_request
-    =
+let rec recheck_loop acc genv env select_outcome =
   let t = Unix.gettimeofday () in
   (* When a new client connects, we use the synchronous notifier.
    * This is to get synchronous file system changes when invoking
@@ -409,21 +404,25 @@ let rec recheck_loop acc genv env new_client has_persistent_connection_request
    * NB: This also uses synchronous notify on establishing a persistent
    * connection. This is harmless, but could maybe be filtered away. *)
   let query_kind =
-    match (new_client, has_persistent_connection_request) with
-    | (Some _, false) -> `Sync
-    | (None, false) when t -. env.last_notifier_check_time > 0.5 -> `Async
+    match select_outcome with
+    | ClientProvider.Select_new _ -> `Sync
+    | ClientProvider.Select_nothing ->
+      if t -. env.last_notifier_check_time > 0.5 then
+        `Async
+      else
+        `Skip
     (* Do not process any disk changes when there are pending persistent
     * client requests - some of them might be edits, and we don't want to
     * do analysis on mid-edit state of the world *)
-    | _ -> `Skip
+    | ClientProvider.Select_persistent -> `Skip
   in
   let (env, updates, updates_stale) = query_notifier genv env query_kind t in
   let acc = { acc with updates_stale } in
   let is_idle =
-    (not has_persistent_connection_request)
+    select_outcome <> ClientProvider.Select_persistent
     && (* "average person types [...] between 190 and 200 characters per minute"
         * 60/200 = 0.3 *)
-       t -. env.last_command_time > 0.3
+    t -. env.last_command_time > 0.3
   in
   (* saving any file is our trigger to start full recheck *)
   let env =
@@ -433,11 +432,11 @@ let rec recheck_loop acc genv env new_client has_persistent_connection_request
       let disk_needs_parsing =
         Relative_path.Set.union updates env.disk_needs_parsing
       in
-      if env.paused then
+      match env.full_recheck_on_file_changes with
+      | Paused _ ->
         let () = Hh_logger.log "Skipping full check due to `hh --pause`" in
         { env with disk_needs_parsing; full_check = Full_check_needed }
-      else
-        { env with disk_needs_parsing; full_check = Full_check_started }
+      | _ -> { env with disk_needs_parsing; full_check = Full_check_started }
   in
   let env =
     match env.default_client_pending_command_needs_full_check with
@@ -518,16 +517,11 @@ let rec recheck_loop acc genv env new_client has_persistent_connection_request
     then
       (acc, env)
     else
-      recheck_loop acc genv env new_client has_persistent_connection_request
+      recheck_loop acc genv env select_outcome
 
-let recheck_loop genv env client has_persistent_connection_request =
+let recheck_loop genv env select_outcome =
   let (stats, env) =
-    recheck_loop
-      empty_recheck_loop_stats
-      genv
-      env
-      client
-      has_persistent_connection_request
+    recheck_loop empty_recheck_loop_stats genv env select_outcome
   in
   { env with recent_recheck_loop_stats = stats }
 
@@ -611,9 +605,9 @@ let serve_one_iteration genv env client_provider =
     | (false, true) -> None
     | (false, false) -> Some `Force_dormant_start_only
   in
-  let (client, has_persistent_connection_request) =
+  let select_outcome =
     match client_kind with
-    | None -> (None, false)
+    | None -> ClientProvider.Select_nothing
     | Some client_kind ->
       ClientProvider.sleep_and_check
         client_provider
@@ -622,12 +616,8 @@ let serve_one_iteration genv env client_provider =
         ~idle_gc_slice
         client_kind
   in
-  (* client here is "None" if we should either handle from our existing  *)
-  (* persistent client (i.e. has_persistent_connection_request), or if   *)
-  (* there's nothing to handle. It's "Some ..." if we should handle from *)
-  (* a new client.                                                       *)
   let env =
-    if (not has_persistent_connection_request) && client = None then (
+    if select_outcome = ClientProvider.Select_nothing then (
       let last_stats = env.recent_recheck_loop_stats in
       (* Ugly hack: We want GC_SHAREDMEM_RAN to record the last rechecked
        * count so that we can figure out if the largest reclamations
@@ -655,11 +645,10 @@ let serve_one_iteration genv env client_provider =
     else
       `Recheck
   in
-  HackEventLogger.with_id ~stage recheck_id
-  @@ fun () ->
+  HackEventLogger.with_id ~stage recheck_id @@ fun () ->
   (* We'll first do "recheck_loop" to handle all outstanding changes, so that *)
   (* after that we'll be able to give an up-to-date answer to the client. *)
-  let env = recheck_loop genv env client has_persistent_connection_request in
+  let env = recheck_loop genv env select_outcome in
   let env = update_recheck_values env start_t recheck_id in
   (* if actual work was done, log whether anything got communicated to client *)
   let log_diagnostics =
@@ -689,9 +678,7 @@ let serve_one_iteration genv env client_provider =
           Hh_logger.log "Finished recheck_loop; has_pending_disk_changes";
         env
       ) else
-        let (sub, errors) =
-          Diagnostic_subscription.pop_errors sub env.errorl
-        in
+        let (sub, errors) = Diagnostic_subscription.pop_errors sub env.errorl in
         ( if SMap.is_empty errors then (
           if log_diagnostics then
             Hh_logger.log "Finished recheck_loop; is_empty errors"
@@ -707,9 +694,10 @@ let serve_one_iteration genv env client_provider =
         { env with diag_subscribe = Some sub }
   in
   let env =
-    match client with
-    | None -> env
-    | Some client ->
+    match select_outcome with
+    | ClientProvider.Select_persistent -> env
+    | ClientProvider.Select_nothing -> env
+    | ClientProvider.Select_new client ->
       begin
         try
           (* client here is the new client (not the existing persistent client) *)
@@ -770,10 +758,7 @@ let serve_one_iteration genv env client_provider =
   let env =
     match env.persistent_client_pending_command_needs_full_check with
     | Some (f, _reason) when env.full_check = Full_check_done ->
-      {
-        (f env) with
-        persistent_client_pending_command_needs_full_check = None;
-      }
+      { (f env) with persistent_client_pending_command_needs_full_check = None }
     | _ -> env
   in
   let env =
@@ -820,9 +805,9 @@ let priority_client_interrupt_handler genv client_provider env =
       MultiThreadedCall.Cancel )
   ) else
     let idle_gc_slice = genv.local_config.ServerLocalConfig.idle_gc_slice in
-    let (client, has_persistent_connection_request) =
+    let select_outcome =
       if ServerRevisionTracker.is_hg_updating () then
-        (None, false)
+        ClientProvider.Select_nothing
       else
         ClientProvider.sleep_and_check
           client_provider
@@ -831,15 +816,15 @@ let priority_client_interrupt_handler genv client_provider env =
           ~idle_gc_slice
           `Priority
     in
-    (* we should only be looking at new priority clients, not existing persistent
-     * connection *)
-    assert (not has_persistent_connection_request);
     let env =
-      match client with
-      (* This is possible because client might have went away during
-       * sleep_and_check. *)
-      | None -> env
-      | Some client ->
+      match select_outcome with
+      | ClientProvider.Select_persistent ->
+        failwith "should only be looking at new priority clients"
+      | ClientProvider.Select_nothing ->
+        (* This is possible because client might have went away during
+         * sleep_and_check. *)
+        env
+      | ClientProvider.Select_new client ->
         (match handle_connection genv env client `Non_persistent with
         | ServerUtils.Needs_full_recheck (_, _, reason) ->
           failwith
@@ -850,7 +835,34 @@ let priority_client_interrupt_handler genv client_provider env =
             ("unexpected command needing writes in priority channel: " ^ reason)
         | ServerUtils.Done env -> env)
     in
-    (env, MultiThreadedCall.Continue)
+
+    (* Global rechecks in response to file changes can be paused.
+      Here, we check if the user requested global rechecks to be paused during
+      the current recheck (the one that we're in the middle of). The above call
+      to `handle_connection` could have resulted in this state change if
+      the RPC was `PAUSE true`.
+
+      If the state did change to `Paused` during the current recheck,
+      we should cancel the current recheck.
+
+      Note that `PAUSE false`, which resumes global rechecks in response to
+      file changes, requires a full recheck by policy - see ServerCommand's
+      `rpc_command_needs_full_check`. Commands that require a full recheck
+      do not use `priority pipe`, so they don't end up handled here.
+      Such commands don't interrupt MultiWorker calls, by design.
+
+      The effect of `PAUSE true` during a recheck is that the recheck will be
+      canceled, while the result of `PAUSE false` is that the client will wait
+      for the recheck to be finished. *)
+    let decision =
+      match (env.full_recheck_on_file_changes, env.init_env.recheck_id) with
+      | ( Paused { paused_recheck_id = Some paused_recheck_id; _ },
+          Some recheck_id )
+        when paused_recheck_id = recheck_id ->
+        MultiThreadedCall.Cancel
+      | _ -> MultiThreadedCall.Continue
+    in
+    (env, decision)
 
 let persistent_client_interrupt_handler genv env =
   match env.persistent_client with
@@ -863,8 +875,7 @@ let persistent_client_interrupt_handler genv env =
       (* This should not be possible, because persistent client will not send
        * the next command before receiving results from the previous one. *)
       assert (
-        Option.is_none env.persistent_client_pending_command_needs_full_check
-      );
+        Option.is_none env.persistent_client_pending_command_needs_full_check );
       ( {
           env with
           persistent_client_pending_command_needs_full_check = Some (f, reason);
@@ -1007,8 +1018,7 @@ let resolve_init_approach genv : ServerInit.init_approach * string =
         (* Use native loading only if the config specifies a load script,
          * and the local config prefers native. *)
         let use_canary = ServerArgs.load_state_canary genv.options in
-        ( ServerInit.Saved_state_init
-            (ServerInit.Load_state_natively use_canary),
+        ( ServerInit.Saved_state_init (ServerInit.Load_state_natively use_canary),
           "Load_state_natively" )
     )
 
@@ -1138,29 +1148,28 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
     ServerPrecheckedFiles.should_use options local_config
   in
   let logging_init init_id ~is_worker =
-    (* It's OK to unconditionally initialize profile logging; actual logging to
-        Scuba will only occur if we were started with --profile-log *)
-    let profile_threshold =
-      local_config.ServerLocalConfig.profile_type_check_duration_threshold
-    in
     let max_times_to_defer =
       local_config.ServerLocalConfig.max_times_to_defer_type_checking
     in
-    TypingLogger.ProfileTypeCheck.init
-      ~threshold:profile_threshold
-      ~max_times_to_defer
-      ~root:(Path.to_string root);
+    let profile_type_check_duration_threshold =
+      local_config.ServerLocalConfig.profile_type_check_duration_threshold
+    in
+    let profile_owner = local_config.ServerLocalConfig.profile_owner in
+    let profile_desc = local_config.ServerLocalConfig.profile_desc in
+    Hh_logger.Level.set_min_level local_config.ServerLocalConfig.min_log_level;
     if Sys_utils.is_test_mode () then
-      EventLogger.init ~exit_on_parent_exit EventLogger.Event_logger_fake 0.0
+      EventLogger.init_fake ()
     else if is_worker then
       HackEventLogger.init_worker
-        ~exit_on_parent_exit
         ~root
         ~init_id
         ~time:(Unix.gettimeofday ())
+        ~profile_type_check_duration_threshold
+        ~profile_owner
+        ~profile_desc
+        ~max_times_to_defer
     else
       HackEventLogger.init
-        ~exit_on_parent_exit
         ~root
         ~init_id
         ~informant_managed
@@ -1174,9 +1183,15 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
         ~prechecked_files
         ~predeclare_ide
         ~max_typechecker_worker_memory_mb
+        ~profile_type_check_duration_threshold
+        ~profile_owner
+        ~profile_desc
+        ~max_times_to_defer
   in
   logging_init init_id ~is_worker:false;
-  HackEventLogger.init_start ();
+  HackEventLogger.init_start
+    ~experiments_config_meta:
+      local_config.ServerLocalConfig.experiments_config_meta;
   let root_s = Path.to_string root in
   let check_mode = ServerArgs.check_mode options in
   if (not check_mode) && Sys_utils.is_nfs root_s && not enable_on_nfs then (
@@ -1186,8 +1201,7 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
   );
 
   ( if
-    ServerConfig.warn_on_non_opt_build config
-    && not Build_id.is_build_optimized
+    ServerConfig.warn_on_non_opt_build config && not Build_id.is_build_optimized
   then
     let msg =
       Printf.sprintf
@@ -1233,25 +1247,7 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
       handle
       ~logging_init:worker_logging_init
   in
-  let lru_cache_directory = ServerArgs.lru_cache_directory options in
-  let lru_host_env =
-    match lru_cache_directory with
-    | Some cache_dir_path ->
-      Provider_config.set_lru_shared_memory_backend ();
-      let host_env =
-        Shared_lru.init
-          ~cache_name:"hack_server_lru"
-          ~cache_size_in_bytes:(15 * 1024 * 1024) (* 15 MBs *)
-          ~cache_dir_path
-          ~num_workers
-          ~shm_handle:(Some handle)
-      in
-      Some host_env
-    | None -> None
-  in
-  let genv =
-    ServerEnvBuild.make_genv options config local_config workers lru_host_env
-  in
+  let genv = ServerEnvBuild.make_genv options config local_config workers in
   (genv, ServerEnvBuild.make_env genv.config ~init_id)
 
 let run_once options config local_config =
@@ -1311,8 +1307,7 @@ let daemon_main_exn ~informant_managed options monitor_pid in_fds =
     Hh_logger.log "Invalid program args - can't run daemon in check mode.";
     Exit_status.(exit Input_error)
   );
-  HackEventLogger.with_id ~stage:`Init env.init_env.init_id
-  @@ fun () ->
+  HackEventLogger.with_id ~stage:`Init env.init_env.init_id @@ fun () ->
   let env = MainInit.go genv options (fun () -> program_init genv env) in
   serve genv env in_fds
 
@@ -1332,14 +1327,13 @@ let daemon_main
   ServerProgress.make_pipe_to_monitor default_out_fd;
 
   (* Restore the root directory and other global states from monitor *)
-  ServerGlobalState.restore state;
+  ServerGlobalState.restore state 0;
 
   (* Restore hhi files every time the server restarts
     in case the tmp folder changes *)
   ignore (Hhi.get_hhi_root ());
 
-  ServerUtils.with_exit_on_exception
-  @@ fun () ->
+  ServerUtils.with_exit_on_exception @@ fun () ->
   daemon_main_exn
     ~informant_managed
     options

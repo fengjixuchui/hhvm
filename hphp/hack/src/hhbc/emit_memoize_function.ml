@@ -118,6 +118,7 @@ let make_memoize_function_with_params_code
         ~pos
         ~params
         ~ast_params
+        ~tparams:[]
         ~should_emit_init_this:false;
       deprecation_body;
       param_code_sets params param_count;
@@ -135,10 +136,8 @@ let make_memoize_function_with_params_code
           ]
       else
         gather
-          [
-            instr_memoget notfound (Some (first_local, param_count));
-            instr_retc;
-          ] );
+          [instr_memoget notfound (Some (first_local, param_count)); instr_retc]
+      );
       instr_label notfound;
       instr_nulluninit;
       instr_nulluninit;
@@ -200,6 +199,7 @@ let make_wrapper_body env return_type params instrs is_reified =
     (* decl_vars *) )
     true (* is_memoize_wrapper *)
     false (* is_memoize_wrapper_lsb *)
+    []
     params
     (Some return_type)
     None (* doc *)
@@ -230,9 +230,7 @@ let emit_wrapper_function
     Emit_attribute.from_asts namespace ast_fun.T.f_user_attributes
   in
   let function_attributes =
-    Emit_attribute.add_reified_attribute
-      function_attributes
-      ast_fun.T.f_tparams
+    Emit_attribute.add_reified_attribute function_attributes ast_fun.T.f_tparams
   in
   let function_is_async = ast_fun.T.f_fun_kind = Ast_defs.FAsync in
   let scope = [Ast_scope.ScopeItem.Function ast_fun] in
@@ -240,13 +238,11 @@ let emit_wrapper_function
     Emit_body.emit_return_type_info
       ~scope
       ~skipawaitable:function_is_async
-      ~namespace
       (T.hint_of_type_hint ast_fun.T.f_ret)
   in
   let is_reified =
     List.exists
-      ~f:(fun t ->
-        t.T.tp_reified = T.Reified || t.T.tp_reified = T.SoftReified)
+      ~f:(fun t -> t.T.tp_reified = T.Reified || t.T.tp_reified = T.SoftReified)
       ast_fun.T.f_tparams
   in
   let body_instrs =
@@ -268,9 +264,7 @@ let emit_wrapper_function
   let memoized_body =
     make_wrapper_body env return_type_info params body_instrs is_reified
   in
-  let is_interceptable =
-    Interceptable.is_function_interceptable namespace ast_fun
-  in
+  let is_interceptable = Interceptable.is_function_interceptable ast_fun in
   Hhas_function.make
     function_attributes
     original_id
@@ -281,7 +275,6 @@ let emit_wrapper_function
     false (* is_pair_generator *)
     Closure_convert.TopLevel
     false (* no_injection *)
-    false (* inout_wrapper *)
     is_interceptable
     false (* is_memoize_impl *)
     function_rx_level

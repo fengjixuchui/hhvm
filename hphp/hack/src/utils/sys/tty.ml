@@ -100,13 +100,12 @@ let emoji_spinner =
     [
       "\xF0\x9F\x98\xA1";
       (* Angry Face *)
-        "\xF0\x9F\x98\x82";
+      "\xF0\x9F\x98\x82";
       (* Face With Tears of Joy *)
-        "\xF0\x9F\xA4\x94";
+      "\xF0\x9F\xA4\x94";
       (* Thinking Face *)
-        "\xF0\x9F\x92\xAF";
-        (* Hundred Points *)
-      
+      "\xF0\x9F\x92\xAF";
+      (* Hundred Points *)
     ]
 
 (* See https://github.com/yarnpkg/yarn/issues/405. *)
@@ -175,7 +174,7 @@ let read_choice message choices =
       (String.concat "|" (List.map choices String_utils.string_of_char));
     let choice = read_char () in
     print_newline ();
-    if List.mem choices choice then
+    if List.mem ~equal:Char.equal choices choice then
       choice
     else
       loop ()

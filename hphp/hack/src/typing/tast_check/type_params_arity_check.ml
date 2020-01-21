@@ -7,11 +7,12 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 open String_utils
 open Aast
 module Env = Tast_env
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 module ShapeMap = Aast.ShapeMap
 module Partial = Partial_provider
@@ -20,7 +21,7 @@ let rec check_hint env (pos, hint) =
   match hint with
   | Aast.Happly ((_, x), hl) when Typing_env.is_typedef x ->
     begin
-      match Decl_provider.get_typedef x with
+      match Decl_provider.get_typedef (Env.get_ctx env) x with
       | Some { td_tparams; td_pos; _ } as _ty ->
         check_tparams env pos x td_tparams hl td_pos
       | None -> ()
@@ -41,15 +42,30 @@ let rec check_hint env (pos, hint) =
   | Aast.Hdarray (ty1, ty2) ->
     check_hint env ty1;
     check_hint env ty2
-  | Aast.Hvarray_or_darray ty
-  | Aast.Hvarray ty ->
-    check_hint env ty
-  | Aast.Htuple hl -> List.iter hl (check_hint env)
+  | Aast.Hvarray_or_darray (ty1, ty2) ->
+    Option.iter ty1 (check_hint env);
+    check_hint env ty2
+  | Aast.Hvarray ty -> check_hint env ty
+  | Aast.Htuple hl
+  | Aast.Hunion hl
+  | Aast.Hintersection hl ->
+    List.iter hl (check_hint env)
   | Aast.Hoption h
   | Aast.Hsoft h
   | Aast.Hlike h ->
     check_hint env h
-  | Aast.Hfun (_, _, hl, _, _, variadic_hint, h, _) ->
+  | Aast.Hfun
+      Aast.
+        {
+          hf_reactive_kind = _;
+          hf_is_coroutine = _;
+          hf_param_tys = hl;
+          hf_param_kinds = _;
+          hf_param_mutability = _;
+          hf_variadic_ty = variadic_hint;
+          hf_return_ty = h;
+          hf_is_mutable_return = _;
+        } ->
     List.iter hl (check_hint env);
     check_hint env h;
     Option.iter variadic_hint (check_hint env)
@@ -74,10 +90,10 @@ and check_tparams env p x tparams hl c_pos =
   List.iter hl (check_hint env)
 
 and check_arity env pos tname arity size c_pos =
-  if size = arity then
+  if Int.equal size arity then
     ()
   else if
-    size = 0
+    Int.equal size 0
     && (not (Partial.should_check_error (Env.get_mode env) 4101))
     && not
          (TypecheckerOptions.experimental_feature_enabled
@@ -100,6 +116,7 @@ let handler =
     inherit Tast_visitor.handler_base
 
     method! at_class_ env c =
+      List.iter c.c_uses (check_hint env);
       List.iter c.c_extends (check_hint env);
       List.iter c.c_implements (check_hint env);
       let c_tparam_list = c.c_tparams.c_tparam_list in
@@ -108,11 +125,12 @@ let handler =
       List.iter c.c_typeconsts (fun t ->
           Option.iter t.c_tconst_type (check_hint env);
           Option.iter t.c_tconst_constraint (check_hint env));
-      let check_var v =
-        if TypecheckerOptions.typecheck_xhp_cvars (Env.get_tcopt env) then
-          Option.iter v.cv_type (check_hint env)
-      in
-      List.iter c.c_vars check_var
+      List.iter c.c_vars (fun v -> Option.iter v.cv_type (check_hint env));
+      Option.iter c.c_enum (fun e ->
+          check_hint env e.e_base;
+          Option.iter e.e_constraint (check_hint env));
+      List.iter c.c_consts (fun const ->
+          Option.iter const.cc_type (check_hint env))
 
     method! at_method_ env m =
       Option.iter (hint_of_type_hint m.m_ret) (check_hint env);
@@ -136,7 +154,10 @@ let handler =
             let tparams_length = List.length (Cls.tparams class_) in
             let hargs_length = List.length targs in
             let c_pos = Cls.pos class_ in
-            if hargs_length <> tparams_length && hargs_length <> 0 then
+            if
+              Int.( <> ) hargs_length tparams_length
+              && Int.( <> ) 0 hargs_length
+            then
               Errors.type_arity p cid (string_of_int tparams_length) c_pos
         end
       | _ -> ()

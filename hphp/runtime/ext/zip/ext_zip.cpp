@@ -500,7 +500,7 @@ static bool addPattern(zip* zipStruct, const String& pattern, const Array& optio
                        std::string path, int64_t flags, bool glob) {
   std::string removePath;
   if (options->exists(String("remove_path"))) {
-    auto const rval = options->get(String("remove_path")).unboxed();
+    auto const rval = options->get(String("remove_path"));
     if (isStringType(rval.type())) {
       auto const sd = rval.val().pstr;
       removePath.append(sd->data(), sd->size());
@@ -509,7 +509,7 @@ static bool addPattern(zip* zipStruct, const String& pattern, const Array& optio
 
   bool removeAllPath = false;
   if (options->exists(String("remove_all_path"))) {
-    auto const rval = options->get(String("remove_all_path")).unboxed();
+    auto const rval = options->get(String("remove_all_path"));
     if (isBoolType(rval.type())) {
       removeAllPath = rval.val().num;
     }
@@ -517,7 +517,7 @@ static bool addPattern(zip* zipStruct, const String& pattern, const Array& optio
 
   std::string addPath;
   if (options->exists(String("add_path"))) {
-    auto const rval = options->get(String("add_path")).unboxed();
+    auto const rval = options->get(String("add_path"));
     if (isStringType(rval.type())) {
       auto const sd = rval.val().pstr;
       addPath.append(sd->data(), sd->size());
@@ -528,7 +528,7 @@ static bool addPattern(zip* zipStruct, const String& pattern, const Array& optio
   if (glob) {
     auto match = HHVM_FN(glob)(pattern, flags);
     if (match.isArray()) {
-      files = match.toArrRef();
+      files = match.asArrRef();
     } else {
       return false;
     }
@@ -538,7 +538,7 @@ static bool addPattern(zip* zipStruct, const String& pattern, const Array& optio
     }
     auto allFiles = HHVM_FN(scandir)(path);
     if (allFiles.isArray()) {
-      files = allFiles.toArrRef();
+      files = allFiles.asArrRef();
     } else {
       return false;
     }

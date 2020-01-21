@@ -57,12 +57,16 @@ type by_refs = bool list
 type fcall_args =
   fcall_flags * num_params * num_params * by_refs * Label.t option
 
+type iter_args = {
+  iter_id: Iterator.t;
+  key_id: local_id option;
+  val_id: local_id;
+}
+
 type classref_id = int
 
 (* Conventionally this is "A_" followed by an integer *)
 type adata_id = string
-
-type param_locations = int list
 
 module SpecialClsRef = struct
   type t =
@@ -126,6 +130,10 @@ module CollectionType = struct
     | ImmVector
     | ImmMap
     | ImmSet
+    | Dict
+    | Array
+    | Keyset
+    | Vec
 
   let to_string = function
     | Vector -> "Vector"
@@ -135,6 +143,10 @@ module CollectionType = struct
     | ImmVector -> "ImmVector"
     | ImmMap -> "ImmMap"
     | ImmSet -> "ImmSet"
+    | Dict -> "dict"
+    | Array -> "array"
+    | Keyset -> "keyset"
+    | Vec -> "vec"
 end
 
 (* of CollectionType *)
@@ -173,7 +185,6 @@ type instruct_basic =
   | Nop
   | EntryNop
   | PopC
-  | PopV
   | PopU
   | Dup
 
@@ -274,7 +285,6 @@ type instruct_operator =
   | CastDouble
   | CastString
   | CastArray
-  | CastObject
   | CastVec
   | CastDict
   | CastKeyset
@@ -325,7 +335,6 @@ type instruct_get =
   | PushL of local_id
   | CGetG
   | CGetS
-  | VGetL of local_id
   | ClassGetC
   | ClassGetTS
 
@@ -411,6 +420,10 @@ type instruct_mutator =
   | CheckProp of prop_id
   | InitProp of prop_id * initprop_op
 
+type obj_null_flavor =
+  | Obj_null_throws
+  | Obj_null_safe
+
 type instruct_call =
   | NewObj
   | NewObjR
@@ -419,15 +432,15 @@ type instruct_call =
   | NewObjS of SpecialClsRef.t
   | FCall of fcall_args
   | FCallBuiltin of num_params * num_params * num_params * string
-  | FCallClsMethod of fcall_args * param_locations * is_log_as_dynamic_call_op
+  | FCallClsMethod of fcall_args * is_log_as_dynamic_call_op
   | FCallClsMethodD of fcall_args * class_id * method_id
   | FCallClsMethodS of fcall_args * SpecialClsRef.t
   | FCallClsMethodSD of fcall_args * SpecialClsRef.t * method_id
   | FCallCtor of fcall_args
-  | FCallFunc of fcall_args * param_locations
+  | FCallFunc of fcall_args
   | FCallFuncD of fcall_args * function_id
-  | FCallObjMethod of fcall_args * Ast_defs.og_null_flavor * param_locations
-  | FCallObjMethodD of fcall_args * Ast_defs.og_null_flavor * method_id
+  | FCallObjMethod of fcall_args * obj_null_flavor
+  | FCallObjMethodD of fcall_args * obj_null_flavor * method_id
 
 type instruct_base =
   | BaseGC of stack_index * MemberOpMode.t
@@ -446,22 +459,10 @@ type instruct_final =
   | UnsetM of num_params * MemberKey.t
   | SetRangeM of num_params * setrange_op * int
 
-type iter_kind =
-  | Iter
-  | LIter
-
 type instruct_iterator =
-  | IterInit of Iterator.t * Label.t * local_id
-  | IterInitK of Iterator.t * Label.t * local_id * local_id
-  | LIterInit of Iterator.t * local_id * Label.t * local_id
-  | LIterInitK of Iterator.t * local_id * Label.t * local_id * local_id
-  | IterNext of Iterator.t * Label.t * local_id
-  | IterNextK of Iterator.t * Label.t * local_id * local_id
-  | LIterNext of Iterator.t * local_id * Label.t * local_id
-  | LIterNextK of Iterator.t * local_id * Label.t * local_id * local_id
+  | IterInit of iter_args * Label.t
+  | IterNext of iter_args * Label.t
   | IterFree of Iterator.t
-  | LIterFree of Iterator.t * local_id
-  | IterBreak of Label.t * (iter_kind * Iterator.t) list
 
 type instruct_include_eval_define =
   | Incl
@@ -470,7 +471,6 @@ type instruct_include_eval_define =
   | ReqOnce
   | ReqDoc
   | Eval
-  | AliasCls of string * string
   | DefCls of class_num
   | DefClsNop of class_num
   | DefRecord of record_num

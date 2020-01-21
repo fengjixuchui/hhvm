@@ -1,13 +1,13 @@
 <?hh /* destructor */
 
-function foo() {
+function foo(...$args) {
  var_dump('failed');
  return 12;
 }
 
 class lol {}
-function bar(...$args) {
-  var_dump($args);
+function bar($_1, $_2, inout $_3, $_4, inout $_5) {
+  var_dump([$_1, $_2, $_3, $_4, $_5]);
   $x = new lol();
   return $x;
 }

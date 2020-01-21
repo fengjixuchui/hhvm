@@ -23,10 +23,12 @@
 #include <string>
 #include <functional>
 
+#include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/vm/jit/bc-marker.h"
 #include "hphp/runtime/vm/jit/inline-state.h"
 #include "hphp/runtime/vm/jit/ir-builder.h"
 #include "hphp/runtime/vm/jit/ir-unit.h"
+#include "hphp/runtime/vm/jit/irgen-iter-spec.h"
 #include "hphp/runtime/vm/jit/translator.h"
 #include "hphp/runtime/vm/jit/types.h"
 
@@ -52,7 +54,8 @@ namespace irgen {
  */
 struct IRGS {
   explicit IRGS(IRUnit& unit, const RegionDesc* region, int32_t budgetBCInstrs,
-                TranslateRetryContext* retryContext);
+                TranslateRetryContext* retryContext,
+                bool prologueSetup = false);
 
   TransContext context;
   TransFlags transFlags;
@@ -110,9 +113,10 @@ struct IRGS {
   TranslateRetryContext* retryContext;
 
   /*
-   * Annotations.
+   * Used to reuse blocks of code between specialized IterInits and IterNexts.
+   * See irgen-iter-spec for details.
    */
-  Annotations annotations;
+  jit::fast_map<Block*, std::unique_ptr<SpecializedIterator>> iters;
 };
 
 //////////////////////////////////////////////////////////////////////

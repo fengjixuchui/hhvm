@@ -31,6 +31,7 @@
 #include "hphp/runtime/base/dummy-resource.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/runtime-error.h"
+#include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/struct-log-util.h"
 #include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/variable-serializer.h"
@@ -242,11 +243,6 @@ VariableUnserializer::RefInfo::makeDictValue(tv_lval v) {
   return RefInfo{v, Type::DictValue};
 }
 
-VariableUnserializer::RefInfo
-VariableUnserializer::RefInfo::makeShapeValue(tv_lval v) {
-  return RefInfo{v, Type::ShapeValue};
-}
-
 tv_lval VariableUnserializer::RefInfo::var() const {
   return m_data.drop_tag();
 }
@@ -265,6 +261,7 @@ bool VariableUnserializer::RefInfo::isColValue() const {
 }
 
 const StaticString s_force_darrays{"force_darrays"};
+const StaticString s_legacy_hack_arrays{"legacy_hack_arrays"};
 
 VariableUnserializer::VariableUnserializer(
   const char* str,
@@ -280,6 +277,7 @@ VariableUnserializer::VariableUnserializer(
     , m_options(options)
     , m_begin(str)
     , m_forceDArrays{m_options[s_force_darrays].toBoolean()}
+    , m_legacyHackArrays{m_options[s_legacy_hack_arrays].toBoolean()}
 {}
 
 VariableUnserializer::Type VariableUnserializer::type() const {
@@ -331,8 +329,6 @@ void VariableUnserializer::add(tv_lval v, UnserializeMode mode) {
     m_refs.emplace_back(RefInfo::makeDictValue(v));
   } else if (mode == UnserializeMode::ColValue) {
     m_refs.emplace_back(RefInfo::makeColValue(v));
-  } else if (mode == UnserializeMode::ShapeValue) {
-    m_refs.emplace_back(RefInfo::makeShapeValue(v));
   } else {
     assertx(mode == UnserializeMode::ColKey);
     // We don't currently support using the 'R' encoding to refer to collection
@@ -349,26 +345,6 @@ tv_lval VariableUnserializer::getByVal(int id) {
   if (id <= 0 || id > (int)m_refs.size()) return nullptr;
   auto ret = m_refs[id-1].var();
   if (!ret) throwColRKey();
-  return ret;
-}
-
-tv_lval VariableUnserializer::getByRef(int id) {
-  if (id <= 0 || id > (int)m_refs.size()) return nullptr;
-  auto const& info = m_refs[id-1];
-  if (UNLIKELY(!info.canBeReferenced())) {
-    if (info.isColValue()) {
-      throwColRefValue();
-    } else if (info.isVecValue()) {
-      throwVecRefValue();
-    } else {
-      assertx(info.isDictValue());
-      throwDictRefValue();
-    }
-  } else if (checkHACRefBind()) {
-    raiseHackArrCompatRefNew();
-  }
-  auto ret = info.var();
-  if (!ret) throwColRefKey();
   return ret;
 }
 
@@ -605,7 +581,6 @@ void VariableUnserializer::unserializeProp(ObjectData* obj,
     // Unserialize as a dynamic property. If this is the first, we need to
     // pre-allocate space in the array to ensure the elements don't move during
     // unserialization.
-    SuppressHACFalseyPromoteNotices shacn;
     t = obj->makeDynProp(realKey.get());
   } else {
     // We'll check if this doesn't violate the type-hint once we're done
@@ -820,27 +795,12 @@ void VariableUnserializer::unserializeVariant(
 
   switch (type) {
   case 'r':
+  case 'R':
     {
       int64_t id = readInt();
       auto v = getByVal(id);
       if (!v) throwOutOfRange(id);
-      tvSet(tvToInitCell(*v), self);
-    }
-    break;
-  case 'R':
-    {
-      if (UNLIKELY(mode == UnserializeMode::VecValue)) {
-        throwVecRefValue();
-      } else if (UNLIKELY(mode == UnserializeMode::DictValue)) {
-        throwDictRefValue();
-      } else if (checkHACRefBind()) {
-        raiseHackArrCompatRefNew();
-      }
-
-      int64_t id = readInt();
-      auto v = getByRef(id);
-      if (!v) throwOutOfRange(id);
-      tvSetRef(v, self);
+      tvSet(tvToInit(*v), self);
     }
     break;
   case 'b':
@@ -908,13 +868,6 @@ void VariableUnserializer::unserializeVariant(
       throwUnknownType(type);
     }
     break;
-  case 'H': // Shape
-    {
-      check_recursion_throw();
-      auto a = unserializeShape();
-      tvMove(make_array_like_tv(a.detach()), self);
-    }
-    return; // Shape has '}' terminating
   case 'a': // PHP array
   case 'D': // Dict
     {
@@ -922,7 +875,21 @@ void VariableUnserializer::unserializeVariant(
       check_recursion_throw();
       // It seems silly to check this here, but GCC actually generates much
       // better code this way.
-      auto a = (type == 'a') ? unserializeArray() : unserializeDict();
+      auto a = (type == 'a') ?
+        unserializeArray() :
+        unserializeDict();
+      if (UNLIKELY(m_legacyHackArrays && type == 'D') || (type == 'x')) {
+        a.setLegacyArray(true);
+      }
+      tvMove(make_array_like_tv(a.detach()), self);
+    }
+    return; // array has '}' terminating
+  case 'x': // legacy dict
+    {
+      // Check stack depth to avoid overflow.
+      check_recursion_throw();
+      auto a = unserializeDict();
+      a.setLegacyArray(true);
       tvMove(make_array_like_tv(a.detach()), self);
     }
     return; // array has '}' terminating
@@ -947,9 +914,21 @@ void VariableUnserializer::unserializeVariant(
       // Check stack depth to avoid overflow.
       check_recursion_throw();
       auto a = unserializeVec();
+      if (UNLIKELY(m_legacyHackArrays)) {
+        a.setLegacyArray(true);
+      }
       tvMove(make_tv<KindOfVec>(a.detach()), self);
     }
     return; // array has '}' terminating
+  case 'X': // legacy vec
+  {
+    // Check stack depth to avoid overflow.
+    check_recursion_throw();
+    auto a = unserializeVec();
+    a.setLegacyArray(true);
+    tvMove(make_tv<KindOfVec>(a.detach()), self);
+  }
+  return; // array has '}' terminating
   case 'k':
     {
       // Check stack depth to avoid overflow.
@@ -1064,7 +1043,7 @@ void VariableUnserializer::unserializeVariant(
         warnOrThrowUnknownClass(clsName);
         obj = Object{SystemLib::s___PHP_Incomplete_ClassClass};
         obj->setProp(nullptr, s_PHP_Incomplete_Class_Name.get(),
-                     clsName.toCell());
+                     clsName.asTypedValue());
       }
       assertx(!obj.isNull());
       tvSet(make_tv<KindOfObject>(obj.get()), self);
@@ -1089,7 +1068,7 @@ void VariableUnserializer::unserializeVariant(
           if (remainingProps >= objCls->numDeclProperties() -
                                 (objCls->hasReifiedGenerics() ? 1 : 0)) {
             auto mismatch = false;
-            auto const objProps = obj->propVecForConstruct();
+            auto const objProps = obj->props();
 
             auto const declProps = objCls->declProperties();
             for (auto const& p : declProps) {
@@ -1105,12 +1084,11 @@ void VariableUnserializer::unserializeVariant(
               // don't need to worry about overwritten list, because
               // this is definitely the first time we're setting this
               // property.
-              TypedValue* tv = objProps + index;
-              auto const t = tv_lval{tv};
+              auto const t = objProps->at(index);
               unserializePropertyValue(t, remainingProps--);
 
               if (UNLIKELY(checkRepoAuthType &&
-                           !tvMatchesRepoAuthType(*tv, prop.repoAuthType))) {
+                           !tvMatchesRepoAuthType(*t, prop.repoAuthType))) {
                 throwUnexpectedType(prop.name, obj.get(), *t);
               }
             }
@@ -1149,9 +1127,8 @@ void VariableUnserializer::unserializeVariant(
                     obj->raiseCreateDynamicProp(key.get());
                   }
                   auto t = [&]() {
-                    SuppressHACFalseyPromoteNotices shacn;
                     auto& arr = obj->dynPropArray();
-                    return arr.lvalAt(key, AccessFlags::Key);
+                    return arr.lvalForce(key, AccessFlags::Key);
                   }();
                   if (UNLIKELY(isRefcountedType(t.type()))) {
                     putInOverwrittenList(t);
@@ -1241,8 +1218,8 @@ void VariableUnserializer::unserializeVariant(
         warnOrThrowUnknownClass(clsName);
         Object ret = create_object_only(s_PHP_Incomplete_Class);
         ret->setProp(nullptr, s_PHP_Incomplete_Class_Name.get(),
-                     clsName.toCell());
-        ret->setProp(nullptr, s_serialized.get(), serialized.toCell());
+                     clsName.asTypedValue());
+        ret->setProp(nullptr, s_serialized.get(), serialized.asTypedValue());
         return ret;
       }();
 
@@ -1268,7 +1245,9 @@ Array VariableUnserializer::unserializeArray() {
   expectChar('{');
   if (size == 0) {
     expectChar('}');
-    return m_forceDArrays ? Array::CreateDArray() : Array::Create();
+    return m_forceDArrays || type() == Type::Serialize
+      ? Array::CreateDArray()
+      : Array::Create();
   }
   if (UNLIKELY(size < 0 || size > std::numeric_limits<int>::max())) {
     throwArraySizeOutOfBounds();
@@ -1283,7 +1262,7 @@ Array VariableUnserializer::unserializeArray() {
 
   // Pre-allocate an ArrayData of the given size, to avoid escalation in the
   // middle, which breaks references.
-  auto arr = m_forceDArrays
+  auto arr = m_forceDArrays || type() == Type::Serialize
     ? DArrayInit(size).toArray()
     : MixedArrayInit(size).toArray();
   reserveForAdd(size);
@@ -1299,10 +1278,7 @@ Array VariableUnserializer::unserializeArray() {
     assertx(type() != VariableUnserializer::Type::APCSerialize ||
            !arr.exists(key, true));
 
-    auto value = [&]() {
-      SuppressHACFalseyPromoteNotices shacn;
-      return arr.lvalAt(key, AccessFlags::Key);
-    }();
+    auto value = arr.lvalForce(key, AccessFlags::Key);
     if (UNLIKELY(isRefcountedType(value.type()))) {
       putInOverwrittenList(value);
     }
@@ -1335,7 +1311,7 @@ folly::Optional<arrprov::Tag> VariableUnserializer::unserializeProvenanceTag() {
   auto const filename = unserializeString();
   expectChar(';');
   if (!RuntimeOption::EvalArrayProvenance) return {};
-  return arrprov::Tag{ makeStaticString(filename.get()), line };
+  return arrprov::Tag { makeStaticString(filename.get()), line };
 }
 
 Array VariableUnserializer::unserializeDict() {
@@ -1345,12 +1321,13 @@ Array VariableUnserializer::unserializeDict() {
   expectChar(':');
   expectChar('{');
 
-  auto const provTag = unserializeProvenanceTag();
+  auto provTag = unserializeProvenanceTag();
+  if (!RO::EvalArrProvHackArrays) provTag = folly::none;
 
   if (size == 0) {
     expectChar('}');
     return Array::attach(provTag
-      ? arrprov::makeEmptyDict(provTag)
+      ? arrprov::tagStaticArr(staticEmptyDictArray(), provTag)
       : staticEmptyDictArray()
     );
   }
@@ -1369,7 +1346,7 @@ Array VariableUnserializer::unserializeDict() {
   for (int64_t i = 0; i < size; i++) {
     Variant key;
     unserializeVariant(key.asTypedValue(), UnserializeMode::Key);
-    auto const rawType = key.getRawType();
+    auto const rawType = key.getType();
     if (UNLIKELY(!isIntType(rawType) && !isStringType(rawType))) {
       throwInvalidKey();
     }
@@ -1378,19 +1355,13 @@ Array VariableUnserializer::unserializeDict() {
     assertx(type() != VariableUnserializer::Type::APCSerialize ||
            !arr.exists(key, true));
 
-    auto const lval = [&] {
-      SuppressHACFalseyPromoteNotices shacn;
-      return key.isInteger()
-        ? MixedArray::LvalIntDict(arr.get(), key.asInt64Val(), false)
-        : MixedArray::LvalStrDict(arr.get(), key.asCStrRef().get(), false);
-    }();
+    auto const lval = MixedArray::LvalForce(arr.get(), key, false);
     assertx(lval.arr == arr.get());
 
     if (UNLIKELY(isRefcountedType(lval.type()))) {
       putInOverwrittenList(lval);
     }
     unserializeVariant(lval, UnserializeMode::DictValue);
-    assertx(!tvIsRef(lval));
 
     if (i < (size - 1)) {
       auto lastChar = peekBack();
@@ -1413,12 +1384,13 @@ Array VariableUnserializer::unserializeVec() {
   expectChar(':');
   expectChar('{');
 
-  auto const provTag = unserializeProvenanceTag();
+  auto provTag = unserializeProvenanceTag();
+  if (!RO::EvalArrProvHackArrays) provTag = folly::none;
 
   if (size == 0) {
     expectChar('}');
     return Array::attach(provTag
-      ? arrprov::makeEmptyVec(provTag)
+      ? arrprov::tagStaticArr(staticEmptyVecArray(), provTag)
       : staticEmptyVecArray()
     );
   }
@@ -1437,13 +1409,9 @@ Array VariableUnserializer::unserializeVec() {
   reserveForAdd(size);
 
   for (int64_t i = 0; i < size; i++) {
-    auto const lval = [&] {
-      SuppressHACFalseyPromoteNotices shacn;
-      return PackedArray::LvalNewVec(arr.get(), false);
-    }();
+    auto const lval = PackedArray::LvalForceNewVec(arr.get(), false);
     assertx(lval.arr == arr.get());
     unserializeVariant(lval, UnserializeMode::VecValue);
-    assertx(!tvIsRef(lval));
 
     if (i < (size - 1)) {
       auto lastChar = peekBack();
@@ -1464,14 +1432,29 @@ Array VariableUnserializer::unserializeVArray() {
   int64_t size = readInt();
   expectChar(':');
   expectChar('{');
+
+  auto provTag = unserializeProvenanceTag();
+  if (!RO::EvalArrProvDVArrays) provTag = folly::none;
+
   if (size == 0) {
     expectChar('}');
-    if (m_type != Type::Serialize) return Array::CreateVArray();
+    if (m_type != Type::Serialize) {
+      return Array::attach(
+        provTag
+          ? arrprov::tagStaticArr(staticEmptyVArray(), provTag)
+          : staticEmptyVArray()
+      );
+    }
     return m_forceDArrays
-      ? Array::CreateDArray()
-      : (RuntimeOption::EvalHackArrDVArrs
-         ? Array::CreateVec()
-         : Array::Create()
+      ? Array::attach(
+          provTag
+            ? arrprov::tagStaticArr(staticEmptyDArray(), provTag)
+            : staticEmptyDArray()
+        )
+      : Array::attach(
+          provTag
+            ? arrprov::tagStaticArr(staticEmptyVArray(), provTag)
+            : staticEmptyVArray()
         );
   }
   if (UNLIKELY(size < 0 || size > std::numeric_limits<int>::max())) {
@@ -1486,28 +1469,16 @@ Array VariableUnserializer::unserializeVArray() {
   };
 
   auto arr = [&]{
-    if (m_type != Type::Serialize) {
+    if (m_type != Type::Serialize || !m_forceDArrays) {
       oomCheck(
         kSizeIndex2PackedArrayCapacity[PackedArray::capacityToSizeIndex(size)]
       );
       return VArrayInit(size).toArray();
     }
-    if (m_forceDArrays) {
-      oomCheck(
-        MixedArray::computeAllocBytes(MixedArray::computeScaleFromSize(size))
-      );
-      return DArrayInit(size).toArray();
-    }
-    if (RuntimeOption::EvalHackArrDVArrs) {
-      oomCheck(
-        kSizeIndex2PackedArrayCapacity[PackedArray::capacityToSizeIndex(size)]
-      );
-      return VecArrayInit(size).toArray();
-    }
     oomCheck(
-      kSizeIndex2PackedArrayCapacity[PackedArray::capacityToSizeIndex(size)]
+      MixedArray::computeAllocBytes(MixedArray::computeScaleFromSize(size))
     );
-    return PackedArrayInit(size).toArray();
+    return DArrayInit(size).toArray();
   }();
   reserveForAdd(size);
 
@@ -1518,14 +1489,9 @@ Array VariableUnserializer::unserializeVArray() {
        : UnserializeMode::DictValue);
 
   for (int64_t i = 0; i < size; i++) {
-    auto lval = [&]() -> decltype(auto) {
-      SuppressHACFalseyPromoteNotices shacn;
-      return arr.lvalAt();
-    }();
+    auto const lval = arr.lvalForce();
     assertx(lval.arr == arr.get());
-
     unserializeVariant(lval, mode);
-    assertx(!arr.isHackArray() || !tvIsRef(lval));
 
     if (i < (size - 1)) {
       auto lastChar = peekBack();
@@ -1537,6 +1503,7 @@ Array VariableUnserializer::unserializeVArray() {
 
   check_non_safepoint_surprise();
   expectChar('}');
+  if (provTag) arrprov::setTag<arrprov::Mode::Emplace>(arr.get(), *provTag);
   return arr;
 }
 
@@ -1546,13 +1513,17 @@ Array VariableUnserializer::unserializeDArray() {
   int64_t size = readInt();
   expectChar(':');
   expectChar('{');
+
+  auto provTag = unserializeProvenanceTag();
+  if (!RO::EvalArrProvDVArrays) provTag = folly::none;
+
   if (size == 0) {
     expectChar('}');
-    return (m_type != Type::Serialize ||
-            m_forceDArrays ||
-            RuntimeOption::EvalHackArrDVArrs)
-      ? Array::CreateDArray()
-      : Array::Create();
+    return Array::attach(
+      provTag
+        ? arrprov::tagStaticArr(staticEmptyDArray(), provTag)
+        : staticEmptyDArray()
+    );
   }
   if (UNLIKELY(size < 0 || size > std::numeric_limits<int>::max())) {
     throwArraySizeOutOfBounds();
@@ -1565,11 +1536,7 @@ Array VariableUnserializer::unserializeDArray() {
     check_non_safepoint_surprise();
   }
 
-  auto arr = (m_type != Type::Serialize ||
-              m_forceDArrays ||
-              RuntimeOption::EvalHackArrDVArrs)
-    ? DArrayInit(size).toArray()
-    : MixedArrayInit(size).toArray();
+  auto arr = DArrayInit(size).toArray();
   reserveForAdd(size);
 
   auto const mode = arr.isPHPArray()
@@ -1587,16 +1554,12 @@ Array VariableUnserializer::unserializeDArray() {
     assertx(type() != VariableUnserializer::Type::APCSerialize ||
            !arr.exists(key, true));
 
-    auto value = [&]() {
-      SuppressHACFalseyPromoteNotices shacn;
-      return arr.lvalAt(key, AccessFlags::Key);
-    }();
+    auto value = arr.lvalForce(key, AccessFlags::Key);
     if (UNLIKELY(isRefcountedType(value.type()))) {
       putInOverwrittenList(value);
     }
 
     unserializeVariant(value, mode);
-    assertx(!arr.isHackArray() || !tvIsRef(value));
 
     if (i < (size - 1)) {
       auto lastChar = peekBack();
@@ -1608,14 +1571,7 @@ Array VariableUnserializer::unserializeDArray() {
 
   check_non_safepoint_surprise();
   expectChar('}');
-  return arr;
-}
-
-Array VariableUnserializer::unserializeShape() {
-  // Shapes need to behave like DArrays externally in the serializer. Calling
-  // unserializeDict here produces incompatible behaviour with getDefaultValueText()
-  auto arr = unserializeDArray();
-  arr = arr->toShapeInPlaceIfCompatible();
+  if (provTag) arrprov::setTag<arrprov::Mode::Emplace>(arr.get(), *provTag);
   return arr;
 }
 
@@ -1645,7 +1601,7 @@ Array VariableUnserializer::unserializeKeyset() {
     // variant (since its stack-allocated).
     unserializeVariant(key.asTypedValue(), UnserializeMode::Key);
 
-    auto const type = key.getRawType();
+    auto const type = key.getType();
     if (UNLIKELY(!isStringType(type) && !isIntType(type))) {
       throwKeysetValue();
     }
@@ -1841,7 +1797,7 @@ void VariableUnserializer::unserializeSet(ObjectData* obj, int64_t sz,
       if (UNLIKELY(!tv)) continue;
       // This increments the string's refcount twice, once for
       // the key and once for the value
-      cellDup(make_tv<KindOfString>(key), *tv);
+      tvDup(make_tv<KindOfString>(key), *tv);
     } else {
       throwInvalidHashKey(obj);
     }

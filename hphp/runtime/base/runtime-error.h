@@ -168,14 +168,6 @@ void raise_record_init_error(const StringData* recName,
                                            const StringData* fieldName);
 
 /*
- * Raise the appropriate warning or error if we try to bind a property to a ref,
- * and that property has a type-hint which we're enforcing.
- */
-void raise_property_typehint_binding_error(const Class* declCls,
-                                           const StringData* propName,
-                                           bool isSoft);
-
-/*
  * Raise the appropriate warning or error if we try to unset a property, and
  * that property has a type-hint which we're enforcing.
  */
@@ -189,6 +181,8 @@ void raise_resolve_undefined(const StringData* name, const Class* c = nullptr);
 
 void raise_convert_object_to_string(const char* cls_name);
 void raise_convert_record_to_type(const char* typeName);
+void raise_recordarray_promotion_notice(const std::string& op);
+void raise_recordarray_unsupported_op_notice(const std::string& op);
 
 ///////////////////////////////////////////////////////////////////////////////
 /*
@@ -224,7 +218,29 @@ void raise_hackarr_compat_is_operator(const char* source, const char* target);
 
 void raise_hackarr_compat_notice(const std::string& msg);
 
-void raise_array_serialization_notice(const char* src, const ArrayData* arr);
+
+enum class SerializationSite {
+  IsDict,
+  IsVec,
+  IsTuple,
+  IsShape,
+  IsArray,
+  IsVArray,
+  IsDArray,
+  FBSerialize,
+  FBCompactSerialize,
+  Gettype,
+  Serialize,
+  VarExport,
+  PrintR,
+  JsonEncode,
+  Count
+};
+
+void raise_array_serialization_notice(SerializationSite src,
+                                      const ArrayData* arr);
+
+[[noreturn]] void raise_use_of_specialized_array();
 
 #define HC(Opt, opt) void raise_hac_##opt##_notice(const std::string& msg);
 HAC_CHECK_OPTS

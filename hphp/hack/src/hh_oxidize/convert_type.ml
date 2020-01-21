@@ -20,15 +20,15 @@ open State
    (for instances of mutual recursion where we would otherwise define types of
    infinite size). *)
 let add_box_between =
-  [
-    ("typing_defs", "Ty", "Ty_");
-    ("aast_defs", "Hint", "Hint_");
-    ("aast", "Expr", "Expr_");
-    ("aast", "Stmt", "Stmt_");
-  ]
+  [("typing_defs", "Ty", "Ty_"); ("aast_defs", "Hint", "Hint_")]
 
 let should_add_box ty =
   List.mem add_box_between (curr_module_name (), self (), ty) ~equal:( = )
+
+let add_rc_between = [("file_info", "Pos", "relative_path::RelativePath")]
+
+let should_add_rc ty =
+  List.mem add_rc_between (curr_module_name (), self (), ty) ~equal:( = )
 
 (* These types inherently add an indirection, so we don't need to box instances
    of recursion in their type arguments. *)
@@ -61,13 +61,19 @@ let rec core_type ?(seen_indirection = false) ct =
       (* HACK: consider only decl tys for now by eliminating the phase tparam *)
       match args with
       | [{ ptyp_desc = Ptyp_var "phase"; _ }] -> []
-      | [{ ptyp_desc = Ptyp_constr ({ txt = Lident "decl"; _ }, _); _ }] -> []
-      | [{ ptyp_desc = Ptyp_constr ({ txt = Lident "locl"; _ }, _); _ }] -> []
+      | [{ ptyp_desc = Ptyp_constr ({ txt = Lident "decl_phase"; _ }, _); _ }]
+        ->
+        []
+      | [{ ptyp_desc = Ptyp_constr ({ txt = Lident "locl_phase"; _ }, _); _ }]
+        ->
+        []
       | _ -> args
     in
     let args = type_args ~seen_indirection args in
+    if should_add_rc id then
+      sprintf "ocamlrep::rc::RcOc<%s%s>" id args
     (* Direct or indirect recursion *)
-    if (not seen_indirection) && (self () = id || should_add_box id) then
+    else if (not seen_indirection) && (self () = id || should_add_box id) then
       sprintf "Box<%s%s>" id args
     else
       id ^ args

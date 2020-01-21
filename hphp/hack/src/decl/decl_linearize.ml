@@ -6,7 +6,7 @@
  * LICENSE file in the "hack" directory of this source tree.
  *
  *)
-open Core_kernel
+open Hh_prelude
 open Decl_defs
 open Reordered_argument_collections
 open Shallow_decl_defs
@@ -14,10 +14,14 @@ open Typing_defs
 
 (* Module calculating the Member Resolution Order of a class *)
 
+(* NB: For incremental typechecking to be correct, every bit of information from
+   shallow classes used in this module must be accounted for in the function
+   Shallow_class_diff.mro_unchanged! *)
+
 type linearization_kind =
   | Member_resolution
   | Ancestor_types
-[@@deriving show]
+[@@deriving show, ord]
 
 type env = {
   class_stack: SSet.t;
@@ -57,9 +61,7 @@ type state =
       current linearization sequence. *)
 
 module CacheKey = struct
-  type t = string * linearization_kind [@@deriving show]
-
-  let compare = compare
+  type t = string * linearization_kind [@@deriving show, ord]
 
   let to_string = show
 end
@@ -100,13 +102,13 @@ module LocalCache =
       let description = "LazyLinearization"
     end)
 
-let ancestor_from_ty (source : source_type) (ty : decl ty) :
-    Pos.t * (Pos.t * string) * decl ty list * source_type =
+let ancestor_from_ty (source : source_type) (ty : decl_ty) :
+    Pos.t * (Pos.t * string) * decl_ty list * source_type =
   let (r, class_name, type_args) = Decl_utils.unwrap_class_type ty in
   let ty_pos = Typing_reason.to_pos r in
   (ty_pos, class_name, type_args, source)
 
-let from_parent (c : shallow_class) : decl ty list =
+let from_parent (c : shallow_class) : decl_ty list =
   (* In an abstract class or a trait, we assume the interfaces
    * will be implemented in the future, so we take them as
    * part of the class (as requested by dependency injection implementers)
@@ -118,9 +120,9 @@ let from_parent (c : shallow_class) : decl ty list =
 
 let normalize_for_comparison x =
   if
-    x.mro_use_pos = Pos.none
-    && x.mro_ty_pos = Pos.none
-    && x.mro_required_at = None
+    Pos.equal Pos.none x.mro_use_pos
+    && Pos.equal Pos.none x.mro_ty_pos
+    && Option.is_none x.mro_required_at
   then
     x
   else
@@ -135,7 +137,7 @@ let mro_elements_equal a =
   let a = normalize_for_comparison a in
   fun b ->
     let b = normalize_for_comparison b in
-    a = b
+    equal_mro_element a b
 
 let empty_mro_element =
   {
@@ -157,7 +159,7 @@ let empty_mro_element =
 
 let no_trait_reuse_enabled env =
   TypecheckerOptions.experimental_feature_enabled
-    env.decl_env.Decl_env.decl_tcopt
+    (Decl_env.tcopt env.decl_env)
     TypecheckerOptions.experimental_no_trait_reuse
 
 let is_requirement (source : source_type) =
@@ -187,7 +189,7 @@ let is_interface (source : source_type) =
 let rec ancestor_linearization
     (env : env)
     (child_class_concrete : bool)
-    (ancestor : Pos.t * (Pos.t * string) * decl ty list * source_type) :
+    (ancestor : Pos.t * (Pos.t * string) * decl_ty list * source_type) :
     string * linearization =
   let (ty_pos, (use_pos, class_name), type_args, source) = ancestor in
   Decl_env.add_extends_dependency env.decl_env class_name;
@@ -195,13 +197,17 @@ let rec ancestor_linearization
   let lin =
     Sequence.map lin ~f:(fun c ->
         let mro_via_req_extends =
-          c.mro_via_req_extends || source = ReqExtends
+          c.mro_via_req_extends || equal_source_type source ReqExtends
         in
-        let mro_via_req_impl = c.mro_via_req_impl || source = ReqImpl in
-        let mro_xhp_attrs_only = c.mro_xhp_attrs_only || source = XHPAttr in
+        let mro_via_req_impl =
+          c.mro_via_req_impl || equal_source_type source ReqImpl
+        in
+        let mro_xhp_attrs_only =
+          c.mro_xhp_attrs_only || equal_source_type source XHPAttr
+        in
         let mro_consts_only = c.mro_consts_only || is_interface source in
         let mro_copy_private_members =
-          c.mro_copy_private_members && source = Trait
+          c.mro_copy_private_members && equal_source_type source Trait
         in
         let mro_passthrough_abstract_typeconst =
           c.mro_passthrough_abstract_typeconst && not child_class_concrete
@@ -242,7 +248,7 @@ let rec ancestor_linearization
       Shallow_classes_heap.get class_name
       |> Option.value_map ~default:[] ~f:(fun c -> c.sc_tparams)
     in
-    let subst = Decl_subst.make tparams type_args in
+    let subst = Decl_subst.make_decl tparams type_args in
     let rest =
       Sequence.map rest ~f:(fun c ->
           {
@@ -253,8 +259,7 @@ let rec ancestor_linearization
               List.map c.mro_type_args ~f:(Decl_instantiate.instantiate subst);
             (* Update positions of requirements in the remainder of the
            linearization to reflect their immediate provenance as well. *)
-            mro_required_at =
-              Option.map c.mro_required_at ~f:(fun _ -> use_pos);
+            mro_required_at = Option.map c.mro_required_at ~f:(fun _ -> use_pos);
           })
     in
     let rest =
@@ -266,7 +271,7 @@ let rec ancestor_linearization
         |> Option.value_map ~default:false ~f:(fun c ->
                match c.sc_kind with
                | Ast_defs.(Cnormal | Cabstract) -> true
-               | Ast_defs.(Ctrait | Cinterface | Cenum | Crecord) -> false)
+               | Ast_defs.(Ctrait | Cinterface | Cenum) -> false)
       in
       if not ancestor_checks_requirements then
         rest
@@ -285,8 +290,10 @@ and linearize (env : env) (c : shallow_class) : linearization =
       mro_name;
       mro_use_pos = fst c.sc_name;
       mro_ty_pos = fst c.sc_name;
-      mro_copy_private_members = c.sc_kind = Ast_defs.Ctrait;
-      mro_passthrough_abstract_typeconst = c.sc_kind <> Ast_defs.Cnormal;
+      mro_copy_private_members =
+        Ast_defs.equal_class_kind c.sc_kind Ast_defs.Ctrait;
+      mro_passthrough_abstract_typeconst =
+        not Ast_defs.(equal_class_kind c.sc_kind Cnormal);
     }
   in
   let get_ancestors kind = List.map ~f:(ancestor_from_ty kind) in
@@ -302,15 +309,15 @@ and linearize (env : env) (c : shallow_class) : linearization =
      to also implement this interface. *)
   let stringish_interface c =
     let module SN = Naming_special_names in
-    if mro_name = SN.Classes.cStringish then
+    if String.equal mro_name SN.Classes.cStringish then
       []
     else
-      let is_to_string m = snd m.sm_name = SN.Members.__toString in
+      let is_to_string m = String.equal (snd m.sm_name) SN.Members.__toString in
       match List.find c.sc_methods is_to_string with
       | None -> []
-      | Some { sm_type = { ft_pos = pos; _ }; _ } ->
+      | Some { sm_name = (pos, _); _ } ->
         let ty =
-          (Typing_reason.Rhint pos, Tapply ((pos, SN.Classes.cStringish), []))
+          mk (Typing_reason.Rhint pos, Tapply ((pos, SN.Classes.cStringish), []))
         in
         [ancestor_from_ty Interface ty]
   in
@@ -355,7 +362,9 @@ and next_state
     (child_class_kind : Ast_defs.class_kind)
     (state, ancestors, acc, synths) =
   Sequence.Step.(
-    let child_class_concrete = child_class_kind = Ast_defs.Cnormal in
+    let child_class_concrete =
+      Ast_defs.equal_class_kind child_class_kind Ast_defs.Cnormal
+    in
     match (state, ancestors) with
     | (Child child, _) ->
       Yield (child, (Next_ancestor, ancestors, child :: acc, synths))
@@ -382,7 +391,7 @@ and next_state
           in
           Yield (next, (Next_ancestor, ancestors, next :: acc, synths))
         | Some (next, rest) ->
-          let names_equal a b = a.mro_name = b.mro_name in
+          let names_equal a b = String.equal a.mro_name b.mro_name in
           let skip_or_mark_trait_reuse equals_next =
             let is_trait class_name =
               match Shallow_classes_heap.get class_name with
@@ -419,9 +428,7 @@ and next_state
                   | (_, Ast_defs.(Ctrait | Cinterface))
                   (* Otherwise, keep them only if they represent a requirement that
                  we will need to validate later. *)
-                  
-                  | (Some _, Ast_defs.(Cnormal | Cabstract | Cenum | Crecord))
-                    ->
+                  | (Some _, Ast_defs.(Cnormal | Cabstract | Cenum)) ->
                     if List.exists synths ~f:(mro_elements_equal next) then
                       synths
                     else
@@ -430,9 +437,7 @@ and next_state
                 in
                 (None, synths)
               else
-                let next =
-                  skip_or_mark_trait_reuse (mro_elements_equal next)
-                in
+                let next = skip_or_mark_trait_reuse (mro_elements_equal next) in
                 (next, synths)
             | Ancestor_types ->
               (* For ancestor types, we don't care about require-extends or
@@ -441,7 +446,7 @@ and next_state
              it. *)
               let should_skip =
                 (next.mro_via_req_extends || next.mro_via_req_impl)
-                && next.mro_name <> SN.Classes.cStringish
+                && String.( <> ) next.mro_name SN.Classes.cStringish
               in
               let next =
                 if should_skip then
@@ -454,8 +459,7 @@ and next_state
           (match next with
           | None -> Skip (Ancestor (name, rest), ancestors, acc, synths)
           | Some next ->
-            Yield
-              (next, (Ancestor (name, rest), ancestors, next :: acc, synths)))
+            Yield (next, (Ancestor (name, rest), ancestors, next :: acc, synths)))
       end
     | (Next_ancestor, []) ->
       let synths = List.rev synths in
@@ -506,8 +510,7 @@ and get_linearization (env : env) (class_name : string) : linearization =
             {
               empty_mro_element with
               mro_name = class_name;
-              mro_class_not_found =
-                true (* This class is not known to exist! *);
+              mro_class_not_found = true (* This class is not known to exist! *);
             }))
 
 let get_linearization ?(kind = Member_resolution) class_name =
@@ -515,10 +518,8 @@ let get_linearization ?(kind = Member_resolution) class_name =
     {
       Decl_env.mode = FileInfo.Mstrict;
       droot = Some (Typing_deps.Dep.Class class_name);
-      decl_tcopt = GlobalNamingOptions.get ();
+      ctx = Provider_context.get_global_context_or_empty_FOR_MIGRATION ();
     }
   in
-  let env =
-    { class_stack = SSet.empty; decl_env; linearization_kind = kind }
-  in
+  let env = { class_stack = SSet.empty; decl_env; linearization_kind = kind } in
   get_linearization env class_name

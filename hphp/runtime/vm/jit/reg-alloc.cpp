@@ -34,8 +34,6 @@
 
 namespace HPHP { namespace jit {
 
-using namespace jit::reg;
-using NativeCalls::CallMap;
 
 TRACE_SET_MOD(hhir);
 
@@ -59,7 +57,7 @@ bool loadsCell(const IRInstruction& inst) {
 
   switch (inst.op()) {
   case LdMem:
-    return arch_allows && (!wide_tv_val || inst.src(0)->isA(TPtrToGen));
+    return arch_allows && (!wide_tv_val || inst.src(0)->isA(TPtrToCell));
 
   case LdVecElem:
   case LdPackedElem:
@@ -69,8 +67,6 @@ bool loadsCell(const IRInstruction& inst) {
   case LdStk:
   case LdLoc:
   case LdContField:
-  case LdElem:
-  case LdRef:
   case InitClsCns:
   case CGetProp:
   case ArrayGet:
@@ -114,17 +110,18 @@ bool storesCell(const IRInstruction& inst, uint32_t srcIdx) {
   // may give it an XMM register, and the instruction will store the whole 16
   // bytes into memory.  Therefore it's important *not* to return true if the
   // TypedValue.m_aux field in memory has important data.  This is the case for
-  // MixedArray elements, Map elements, and RefData inner values.  We don't
-  // have StMem in here since it sometimes stores to RefDatas.
+  // MixedArray elements, and Map elements.
   switch (inst.op()) {
   case StLoc:
     return srcIdx == 1;
-  case StElem:
-    return srcIdx == 2;
   case StStk:
+    return srcIdx == 1;
+  case StClsInitElem:
     return srcIdx == 1;
   case InitPackedLayoutArray:
     return srcIdx == 1;
+  case StMem:
+    return srcIdx == 1 && (!wide_tv_val || inst.src(0)->isA(TPtrToCell));
   default:
     return false;
   }
@@ -241,6 +238,7 @@ void getEffects(const Abi& abi, const Vinstr& i,
       break;
 
     case Vinstr::callphp:
+    case Vinstr::callphpr:
       defs = abi.all() - RegSet(rvmtl());
       break;
 

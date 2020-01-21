@@ -244,12 +244,6 @@ void callFunc(const Func* func, const void* ctx,
               const TypedValue* args, int32_t numNonDefault,
               TypedValue& ret, bool isFCallBuiltin);
 
-/**
- * Extract the name used to invoke the function from the ActRec where name
- * maybe be stored in invName, or may include the classname (e.g. Class::func)
- */
-const StringData* getInvokeName(ActRec* ar);
-
 #define NATIVE_TYPES                                  \
   /* kind       arg type              return type */  \
   X(Int32,      int32_t,              int32_t)        \
@@ -268,9 +262,7 @@ const StringData* getInvokeName(ActRec* ar);
   X(StringArg,  StringArg,            StringArg)      \
   X(ArrayArg,   ArrayArg,             ArrayArg)       \
   X(ResourceArg,ResourceArg,          ResourceArg)    \
-  X(OutputArg,  OutputArg,            OutputArg)      \
   X(MixedTV,    TypedValue,           TypedValue)     \
-  X(MixedRef,   const VRefParamValue&,VRefParamValue) \
   X(This,       ObjectData*,          ObjectData*)    \
   X(Void,       void,                 void)           \
   X(IntIO,      int64_t&,             int64_t&)       \
@@ -311,7 +303,6 @@ using ObjectArg   = Native::NativeArg<ObjectData>;
 using StringArg   = Native::NativeArg<StringData>;
 using ArrayArg    = Native::NativeArg<ArrayData>;
 using ResourceArg = Native::NativeArg<ResourceData>;
-using OutputArg   = Native::NativeArg<RefData>;
 
 namespace Native {
 
@@ -474,7 +465,7 @@ void getFunctionPointers(const NativeFunctionInfo& info,
  * Fallback method bound to declared methods with no matching
  * internal implementation.
  */
-TypedValue* unimplementedWrapper(ActRec* ar);
+[[noreturn]] TypedValue* unimplementedWrapper(ActRec* ar);
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -600,11 +591,11 @@ typedef std::map<const StringData*,TypedValueAux> ConstantMap;
 extern ConstantMap s_constant_map;
 
 inline
-bool registerConstant(const StringData* cnsName, Cell cns,
+bool registerConstant(const StringData* cnsName, TypedValue cns,
                       bool dynamic = false) {
-  assertx(cellIsPlausible(cns) && cns.m_type != KindOfUninit);
+  assertx(tvIsPlausible(cns) && cns.m_type != KindOfUninit);
   auto& dst = s_constant_map[cnsName];
-  *static_cast<Cell*>(&dst) = cns;
+  *static_cast<TypedValue*>(&dst) = cns;
   dst.dynamic() = dynamic;
   return bindPersistentCns(cnsName, cns);
 }
@@ -644,11 +635,11 @@ extern ClassConstantMapMap s_class_constant_map;
 inline
 bool registerClassConstant(const StringData *clsName,
                            const StringData *cnsName,
-                           Cell cns) {
-  assertx(cellIsPlausible(cns));
+                           TypedValue cns) {
+  assertx(tvIsPlausible(cns));
   auto &cls = s_class_constant_map[clsName];
   assertx(cls.find(cnsName) == cls.end());
-  *static_cast<Cell*>(&cls[cnsName]) = cns;
+  *static_cast<TypedValue*>(&cls[cnsName]) = cns;
   return true;
 }
 

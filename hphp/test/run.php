@@ -58,9 +58,10 @@ function jit_serialize_option($cmd, $test, $options, $serialize) {
   $serialized = "$test.repo/jit.dump";
   $cmds = explode(' -- ', $cmd, 2);
   $cmds[0] .=
-    ' --count=' . ($serialize ? $options['jit-serialize'] : 1) .
+    ' --count=' . ($serialize ? $options['jit-serialize'] + 1 : 1) .
     " -vEval.JitSerdesFile=" . $serialized .
-    " -vEval.JitSerdesMode=" . ($serialize ? 'Serialize' : 'DeserializeOrFail');
+    " -vEval.JitSerdesMode=" . ($serialize ? 'Serialize' : 'DeserializeOrFail').
+    ($serialize ? " -vEval.JitSerializeOptProfRequests=1" : '');
   if (isset($options['jitsample']) && $serialize) {
     $cmds[0] .= ' -vDeploymentId="' . $options['jitsample'] . '-serialize"';
   }
@@ -139,9 +140,9 @@ Examples:
   # run the test n more on the new code.
   % {$argv[0]} --retranslate-all 2 quick
 
-  # Use jit-serialize.  Run the test n times, then run retranslate all,
-  # serialize the state, and then restart hhvm, load the serialized state and
-  # run retranslate-all before starting the test.
+  # Use jit-serialize.  Run the test n times, then run retranslate all, run the
+  # test once more, serialize all profile data, and then restart hhvm, load the
+  # serialized state and run retranslate-all before starting the test.
   % {$argv[0]} --jit-serialize  2 -r quick
 
   # Run the Hack typechecker against quick typechecker.expect[f] files
@@ -178,7 +179,8 @@ function check_executable($path, $typechecker) {
     error($msg);
   }
   $output = array();
-  exec($rpath . " --help 2> /dev/null", &$output);
+  $return_var = -1;
+  exec($rpath . " --help 2> /dev/null", inout $output, inout $return_var);
   $str = implode($output);
   $msg = "Provided file (".$rpath.") is not a/an ".$type." executable.\n"
        . "If using ".$type."_BIN, make sure that is set correctly.";
@@ -267,7 +269,9 @@ function hhvm_path() {
 
   if (!is_file($file)) {
     if (is_testing_dso_extension()) {
-      exec("which hhvm 2> /dev/null", &$output);
+      $output = null;
+      $return_var = -1;
+      exec("which hhvm 2> /dev/null", inout $output, inout $return_var);
       if (isset($output[0]) && $output[0]) {
         return $output[0];
       }
@@ -666,6 +670,22 @@ function serial_only_tests($tests) {
   return $serial_tests;
 }
 
+// NOTE: If "files" is very long, then the shell may reject the desired
+// "find" command (especially because "escapeshellarg()" adds two single
+// quote characters to each file), so we split "files" into chunks below.
+function exec_find(mixed $files, string $extra): mixed {
+  $results = array();
+  foreach (array_chunk($files, 500) as $chunk) {
+    $efa = implode(' ', array_map(fun('escapeshellarg'), $chunk));
+    $output = shell_exec("find $efa $extra");
+    foreach (explode("\n", $output) as $result) {
+      // Collect the (non-empty) results, which should all be file paths.
+      if ($result !== "") $results[] = $result;
+    }
+  }
+  return $results;
+}
+
 function find_tests($files, array $options = null) {
   if (!$files) {
     $files = array('quick');
@@ -689,16 +709,14 @@ function find_tests($files, array $options = null) {
     $file = preg_replace(',^'.getcwd().'/,', '', $file);
     $files[$idx] = $file;
   }
-  $files = array_map('escapeshellarg', $files);
-  $files = implode(' ', $files);
   if (isset($options['typechecker'])) {
-    $tests = explode("\n", shell_exec(
-      "find $files ".
+    $tests = exec_find(
+      $files,
       "-name '*.php' ".
       "-o -name '*.php.type-errors' ".
       "-o -name '*.hack' ".
       "-o -name '*.hack.type-errors'"
-    ));
+    );
     // The above will get all the php files. Now filter out only the ones
     // that have a .hhconfig associated with it.
     $tests = array_filter(
@@ -710,17 +728,18 @@ function find_tests($files, array $options = null) {
       }
     );
   } else {
-    $tests = explode("\n", shell_exec(
-      "find $files '(' " .
-          "-name '*.php' " .
-          "-o -name '*.hack' " .
-          "-o -name '*.js' " .
-          "-o -name '*.php.type-errors' " .
-          "-o -name '*.hack.type-errors' " .
-          "-o -name '*.hhas' " .
-        "')' " .
-        "-not -regex '.*round_trip[.]hhas'"
-    ));
+    $tests = exec_find(
+      $files,
+      "'(' " .
+      "-name '*.php' " .
+      "-o -name '*.hack' " .
+      "-o -name '*.js' " .
+      "-o -name '*.php.type-errors' " .
+      "-o -name '*.hack.type-errors' " .
+      "-o -name '*.hhas' " .
+      "')' " .
+      "-not -regex '.*round_trip[.]hhas'"
+    );
   }
   if (!$tests) {
     error("Could not find any tests associated with your options.\n" .
@@ -728,7 +747,7 @@ function find_tests($files, array $options = null) {
           "the right expect files for the tests you are trying to run.\n" .
           usage());
   }
-  asort(&$tests);
+  asort(inout $tests);
   $tests = array_filter($tests);
   if ($options['exclude'] ?? false) {
     $exclude = $options['exclude'];
@@ -858,7 +877,10 @@ function hhvm_cmd_impl($options, $config, $test, ...$extra_args) {
       hhvm_path(),
       '-c',
       $config,
-      '-vEval.EnableArgsInBacktraces=true',
+      // EnableArgsInBacktraces disables most of HHBBC's DCE optimizations.
+      // In order to test those optimizations (which are part of a normal prod
+      // configuration) we turn this flag off by default.
+      '-vEval.EnableArgsInBacktraces=false',
       '-vEval.EnableIntrinsicsExtension=true',
       '-vEval.HHIRInliningIgnoreHints=false',
       '-vAutoload.DBPath='.escapeshellarg("$test.$mode_num.autoloadDB"),
@@ -1084,12 +1106,28 @@ function hphp_cmd($options, $test, $program) {
     ));
   }
 
+  $hdf_suffix = ".use.for.ini.migration.testing.only.hdf";
+  $hdf = file_exists($test.$hdf_suffix)
+       ? '-c ' . $test . $hdf_suffix
+       : "";
+
+  if ($hdf !== "") {
+    $contents = file_get_contents($test.$hdf_suffix);
+    if (strpos($contents, '{PWD}') !== false) {
+      $test_hdf = tempnam('/tmp', $test).$hdf_suffix;
+      file_put_contents($test_hdf,
+                        str_replace('{PWD}', dirname($test), $contents));
+      $hdf = " -c $test_hdf";
+    }
+  }
+
   return implode(" ", array(
     hhvm_path(),
     '--hphp',
     '-vUseHHBBC='. (repo_separate($options, $test) ? 'false' : 'true'),
     '--config',
     find_test_ext($test, 'ini', 'hphp_config'),
+    $hdf,
     '-vRuntime.ResourceLimit.CoreFileSize=0',
     '-vRuntime.Eval.EnableIntrinsicsExtension=true',
     '-vRuntime.Eval.EnableArgsInBacktraces=true',
@@ -1122,10 +1160,11 @@ function hhbbc_cmd($options, $test, $program) {
 // Execute $cmd and return its output, including any stacktrace.log
 // file it generated.
 function exec_with_stack($cmd) {
+  $pipes = null;
   $proc = proc_open($cmd,
                     array(0 => array('pipe', 'r'),
                           1 => array('pipe', 'w'),
-                          2 => array('pipe', 'w')), &$pipes);
+                          2 => array('pipe', 'w')), inout $pipes);
   fclose($pipes[0]);
   $s = '';
   $all_selects_failed=true;
@@ -1137,7 +1176,12 @@ function exec_with_stack($cmd) {
     $read = array($pipes[1], $pipes[2]);
     $write = null;
     $except = null;
-    $available = @stream_select(&$read, &$write, &$except, (int)($end - $now));
+    $available = @stream_select(
+      inout $read,
+      inout $write,
+      inout $except,
+      (int)($end - $now),
+    );
     if ($available === false) {
       usleep(1000);
       $s .= "select failed:\n" . print_r(error_get_last(), true);
@@ -1162,7 +1206,9 @@ function exec_with_stack($cmd) {
     $now = microtime(true);
     if ($now >= $end) {
       $timedout = true;
-      exec('pkill -P ' . $status['pid'] . ' 2> /dev/null');
+      $output = null;
+      $return_var = -1;
+      exec('pkill -P ' . $status['pid'] . ' 2> /dev/null', inout $output, inout $return_var);
       posix_kill($status['pid'], SIGTERM);
     }
     usleep(1000);
@@ -1390,8 +1436,11 @@ class Queue {
     // critical for pipe writes, to ensure that they are actually atomic.
     // See the documentation for "PlainFile::writeImpl()".  But just in
     // case, we add an explicit "fflush()" below.
-    if (fwrite($output, $packet, $n) !== $n) {
-      throw new \Exception("Failed to write $n bytes");
+    $bytes_out = fwrite($output, $packet, $n);
+    if ($bytes_out !== $n) {
+      throw new \Exception(
+        "Failed to write $n bytes; only $bytes_out were written"
+      );
     }
     fflush($output);
   }
@@ -1674,6 +1723,7 @@ class Status {
       case Status::MSG_TEST_SKIP:
         self::$skipped++;
         list($test, $reason, $time, $stime, $etime) = $message;
+        self::$skip_reasons[$reason] ??= 0;
         self::$skip_reasons[$reason]++;
 
         switch (Status::getMode()) {
@@ -1812,8 +1862,9 @@ class Status {
 
   public static function getSTTY() {
     $descriptorspec = array(1 => array("pipe", "w"), 2 => array("pipe", "w"));
+    $pipes = null;
     $process = proc_open(
-      'stty -a', $descriptorspec, &$pipes, null, null,
+      'stty -a', $descriptorspec, inout $pipes, null, null,
       array('suppress_errors' => true)
     );
     $stty = stream_get_contents($pipes[1]);
@@ -1955,7 +2006,7 @@ function skip_test($options, $test) {
     2 => array("pipe", "w"),
   );
   $pipes = null;
-  $process = proc_open("$hhvm $test 2>&1", $descriptorspec, &$pipes);
+  $process = proc_open("$hhvm $test 2>&1", $descriptorspec, inout $pipes);
   if (!is_resource($process)) {
     // This is weird. We can't run HHVM but we probably shouldn't skip the test
     // since on a broken build everything will show up as skipped and give you a
@@ -2144,7 +2195,8 @@ function dump_hhas_cmd($hhvm_cmd, $test, $hhas_file) {
 function dump_hhas_to_temp($hhvm_cmd, $test) {
   $temp_file = $test . '.round_trip.hhas';
   $cmd = dump_hhas_cmd($hhvm_cmd, $test, $temp_file);
-  system("$cmd &> /dev/null", &$ret);
+  $ret = -1;
+  system("$cmd &> /dev/null", inout $ret);
   return $ret === 0 ? $temp_file : false;
 }
 
@@ -2215,10 +2267,12 @@ function run_config_cli($options, $test, $cmd, $cmd_env) {
   $pipes = null;
   if (isset($options['typechecker'])) {
     $process = proc_open(
-      "$cmd 2>/dev/null", $descriptorspec, &$pipes, null, $cmd_env
+      "$cmd 2>/dev/null", $descriptorspec, inout $pipes, null, $cmd_env
     );
   } else {
-    $process = proc_open("$cmd 2>&1", $descriptorspec, &$pipes, null, $cmd_env);
+    $process = proc_open(
+      "$cmd 2>&1", $descriptorspec, inout $pipes, null, $cmd_env
+    );
   }
   if (!is_resource($process)) {
     file_put_contents("$test.diff", "Couldn't invoke $cmd");
@@ -2449,7 +2503,8 @@ function run_and_lock_test($options, $test) {
   $failmsg = "";
   $status = false;
   $lock = fopen($test, 'r');
-  if (!$lock || !flock($lock, LOCK_EX)) {
+  $wouldblock = false;
+  if (!$lock || !flock($lock, LOCK_EX, inout $wouldblock)) {
     $failmsg = "Failed to lock test";
     if ($lock) fclose($lock);
     $lock = null;
@@ -2470,7 +2525,7 @@ function run_and_lock_test($options, $test) {
       $failmsg = @file_get_contents("$test.diff");
       if (!$failmsg) $failmsg = "Test failed with empty diff";
     }
-    if (!flock($lock, LOCK_UN)) {
+    if (!flock($lock, LOCK_UN, inout $wouldblock)) {
       if ($failmsg !== '') $failmsg .= "\n";
       $failmsg .= "Failed to release test lock";
     }
@@ -2652,7 +2707,9 @@ function num_cpus() {
       return $cores;
     case 'Darwin':
     case 'FreeBSD':
-      return exec('sysctl -n hw.ncpu');
+      $output = null;
+      $return_var = -1;
+      return exec('sysctl -n hw.ncpu', inout $output, inout $return_var);
   }
   return 2; // default when we don't know how to detect.
 }
@@ -2722,16 +2779,13 @@ function msg_loop($num_tests, $queue) {
 
   if ($do_progress) {
     $stty = strtolower(Status::getSTTY());
-    $output = null;
-    preg_match_all_with_matches("/columns ([0-9]+);/", $stty, inout $output);
-    if (!isset($output[1][0])) {
-      // because BSD has to be different
-      preg_match_all_with_matches("/([0-9]+) columns;/", $stty, inout $output);
-    }
-    if (!isset($output[1][0])) {
-      $do_progress = false;
+    $matches = null;
+    if (preg_match_with_matches("/columns ([0-9]+);/", $stty, inout $matches) ||
+        // because BSD has to be different
+        preg_match_with_matches("/([0-9]+) columns;/", $stty, inout $matches)) {
+      $cols = $matches[1];
     } else {
-      $cols = $output[1][0];
+      $do_progress = false;
     }
   }
 
@@ -2771,7 +2825,7 @@ function msg_loop($num_tests, $queue) {
     if (Status::$skipped > 0) {
       print Status::$skipped ." tests \033[1;33mskipped\033[0m\n";
       $reasons = Status::$skip_reasons;
-      arsort(&$reasons);
+      arsort(inout $reasons);
       Status::$skip_reasons = $reasons;
       foreach (Status::$skip_reasons as $reason => $count) {
         printf("%12s: %d\n", $reason, $count);
@@ -2882,21 +2936,21 @@ function aggregate_srcloc_info($tests) {
       $all_mismatched_srcloc[] = $instr;
     }
     $all_mismatched_srcloc = array_unique($all_mismatched_srcloc);
-    sort(&$all_mismatched_srcloc);
+    sort(inout $all_mismatched_srcloc);
 
     $missing_on_lhs_srcloc = $srcloc_info['missing_on_lhs_srcloc'];
     foreach ($missing_on_lhs_srcloc as $instr) {
       $all_missing_on_lhs[] = $instr;
     }
     $all_missing_on_lhs = array_unique($all_missing_on_lhs);
-    sort(&$all_missing_on_lhs);
+    sort(inout $all_missing_on_lhs);
 
     $missing_on_rhs_srcloc = $srcloc_info['missing_on_rhs_srcloc'];
     foreach ($missing_on_rhs_srcloc as $instr) {
       $all_missing_on_rhs[] = $instr;
     }
     $all_missing_on_rhs = array_unique($all_missing_on_rhs);
-    sort(&$all_missing_on_rhs);
+    sort(inout $all_missing_on_rhs);
   }
 
   print "\nInstructions with mismatched srcloc:\n";
@@ -2919,7 +2973,7 @@ function print_failure($argv, $results, $options) {
       $passed[] = $result['name'];
     }
   }
-  asort(&$failed);
+  asort(inout $failed);
   print "\n".count($failed)." tests failed\n";
   if (!($options['no-fun'] ?? false)) {
     // Unicode for table-flipping emoticon
@@ -3034,7 +3088,8 @@ function start_server_proc($options, $config, $port) {
     2 => array('file', '/dev/null', 'w'),
   );
 
-  $proc = proc_open($command, $descriptors, &$dummy);
+  $dummy = null;
+  $proc = proc_open($command, $descriptors, inout $dummy);
   if (!$proc) {
     error("Failed to start server process");
   }
@@ -3372,7 +3427,8 @@ function main($argv) {
     // Have the parent wait for all forked children to exit.
     $return_value = 0;
     while (count($children) && $printer_pid != 0) {
-      $pid = pcntl_wait(&$status);
+      $status = null;
+      $pid = pcntl_wait(inout $status);
       if (!pcntl_wifexited($status) && !pcntl_wifsignaled($status)) {
         error("Unexpected exit status from child");
       }
@@ -3402,7 +3458,16 @@ function main($argv) {
 
   Status::finished();
 
-  // Kill the server.
+  // Wait for the printer child to die, if needed.
+  if (!Status::$nofork && $printer_pid != 0) {
+    $status = 0;
+    $pid = pcntl_waitpid($printer_pid, inout $status);
+    if (!pcntl_wifexited($status) && !pcntl_wifsignaled($status)) {
+      error("Unexpected exit status from child");
+    }
+  }
+
+  // Kill the servers.
   if ($servers) {
     foreach ($servers['pids'] as $ref) {
       proc_terminate($ref->server['proc']);
@@ -3452,7 +3517,7 @@ function main($argv) {
       "There are %d new failing tests, and %d new passing tests.\n",
       count($failed_tests), $new_fails, $new_passes
     );
-    sort(&$failed_tests);
+    sort(inout $failed_tests);
     file_put_contents($fail_file, implode("\n", $failed_tests));
   } else if (isset($options['testpilot'])) {
     Status::say(array('op' => 'all_done', 'results' => $results));

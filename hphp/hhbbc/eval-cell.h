@@ -37,7 +37,7 @@ namespace HPHP { namespace HHBBC {
 
 /*
  * When constant-evaluating certain operations, it's possible they
- * will return non-static objects, or throw exceptions (e.g. cellAdd()
+ * will return non-static objects, or throw exceptions (e.g. tvAdd()
  * with an array and an int).
  *
  * This routine converts these things back to types.  In the case of
@@ -49,7 +49,7 @@ folly::Optional<Type> eval_cell(Pred p) {
     assert(!RuntimeOption::EvalJit);
     ThrowAllErrorsSetter taes;
 
-    Cell c = p();
+    TypedValue c = p();
     if (isRefcountedType(c.m_type)) {
       if (c.m_type == KindOfString &&
           c.m_data.pstr->size() > Repo::get().stringLengthLimit()) {

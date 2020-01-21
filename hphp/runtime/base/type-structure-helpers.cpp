@@ -18,6 +18,8 @@
 #include "hphp/runtime/base/type-structure-helpers-defs.h"
 
 #include "hphp/runtime/base/array-data.h"
+#include "hphp/runtime/base/array-provenance.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/enum-util.h"
 #include "hphp/runtime/base/tv-comparisons.h"
 #include "hphp/runtime/base/typed-value.h"
@@ -38,8 +40,7 @@ const StaticString s_unresolved("[unresolved]");
 namespace {
 
 template<typename F>
-bool cellInstanceOfImpl(const Cell* tv, F lookupClass) {
-  assertx(!isRefType(tv->m_type));
+bool tvInstanceOfImpl(const TypedValue* tv, F lookupClass) {
   switch (tv->m_type) {
     case KindOfUninit:
     case KindOfNull:
@@ -100,14 +101,12 @@ bool cellInstanceOfImpl(const Cell* tv, F lookupClass) {
       return cls && interface_supports_keyset(cls->name());
     }
 
-    case KindOfPersistentShape:
-    case KindOfShape: {
-      auto const cls = lookupClass();
-      if (RuntimeOption::EvalHackArrDVArrs) {
-        return cls && interface_supports_dict(cls->name());
-      }
-      return cls && interface_supports_array(cls->name());
-    }
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
     case KindOfPersistentArray:
     case KindOfArray: {
@@ -129,21 +128,18 @@ bool cellInstanceOfImpl(const Cell* tv, F lookupClass) {
       }
       return false;
     }
-
-    case KindOfRef:
-      break;
   }
   not_reached();
 }
 
 } // namespace
 
-bool cellInstanceOf(const Cell* tv, const NamedEntity* ne) {
-  return cellInstanceOfImpl(tv, [ne]() { return Unit::lookupClass(ne); });
+bool tvInstanceOf(const TypedValue* tv, const NamedEntity* ne) {
+  return tvInstanceOfImpl(tv, [ne]() { return Unit::lookupClass(ne); });
 }
 
-bool cellInstanceOf(const Cell* tv, const Class* cls) {
-  return cellInstanceOfImpl(tv, [cls]() { return cls; });
+bool tvInstanceOf(const TypedValue* tv, const Class* cls) {
+  return tvInstanceOfImpl(tv, [cls]() { return cls; });
 }
 
 namespace {
@@ -249,11 +245,11 @@ bool typeStructureIsType(
       bool result = true;
       IterateKV(
         input,
-        [&](Cell k, TypedValue v1) {
+        [&](TypedValue k, TypedValue v1) {
           assertx(tvIsString(k));
           if (k.m_data.pstr->isame(s_alias.get())) return false;
           auto const v2 = type->rval(k.m_data.pstr);
-          if (v2.is_set() && cellEqual(v1, v2.tv())) return false;
+          if (v2.is_set() && tvEqual(v1, v2.tv())) return false;
           result = false;
           return true; // short circuit
         }
@@ -302,7 +298,7 @@ bool typeStructureIsType(
       bool willWarn = false;
       IterateKV(
         typeFields,
-        [&](Cell k, TypedValue v) {
+        [&](TypedValue k, TypedValue v) {
           assertx(tvIsDictOrDArray(v));
           auto typeField = getShapeFieldElement(v);
           if (!inputFields->exists(k)) {
@@ -420,7 +416,7 @@ bool typeStructureIsTypeList(
 ALWAYS_INLINE
 bool checkReifiedGenericsMatch(
   const Array& ts,
-  Cell c1,
+  TypedValue c1,
   const NamedEntity* ne,
   bool& warn,
   bool strict // whether to return false on erased generics
@@ -533,171 +529,133 @@ bool verifyReifiedLocalType(
       return false;
     }
   }
-  return checkTypeStructureMatchesCell(type, *param, warn);
+  return checkTypeStructureMatchesTV(type, *param, warn);
 }
 
 /*
- * Sets the warn flag if the type parameter is denoted as soft either through
- * an annotation at the declaration site or by soft type hint at the generic
- * level
- * If isOrAsOp flag is set, this means we are running this check for is
- * type testing or as type assertion operations. For these operations,
- * we reject comparisons over {v,d,}array since we do want not users to be able
- * distinguish {v,d,}arrays while HackArrayMigration is in progress.
- * Being able to tell between them cripples the ability to transparently
- * switch between them in userland.
- * When isOrAsOp is not set, we only allow being able to check {v,d,}arrays as
- * an ArrLike, i.e. we do not allow finer checks.
+ * Shared implementation for checkTypeStructureMatchesTV().
+ *
+ * If `isOrAsOp` is set, we are running this check for "is type" testing or "as
+ * type" assertion operations.  For these operations, we reject comparisons
+ * over {v,d,}array since we do want not users to be able distinguish
+ * {v,d,}arrays while HAM is in progress (i.e., we only allow checking
+ * {,v,d}arrays as ArrLike, not at any finer granularity).  Being able to tell
+ * between them cripples the ability to transparently switch between them in
+ * userland.
  */
-template <bool genErrorMessage>
-bool checkTypeStructureMatchesCellImpl(
+template <bool gen_error>
+bool checkTypeStructureMatchesTVImpl(
   const Array& ts,
-  Cell c1,
+  TypedValue c1,
   std::string& givenType,
   std::string& expectedType,
   std::string& errorKey,
   bool& warn,
   bool isOrAsOp
 ) {
-  auto errOnLen = [&givenType](auto cell, auto len) {
-    if (genErrorMessage) {
-      givenType = folly::sformat("{} of length {}",
-        describe_actual_type(&cell, true), len);
-    }
+  auto const errOnLen = [&givenType](auto cell, auto len) {
+    if (!gen_error) return;
+    givenType = folly::sformat("{} of length {}",
+      describe_actual_type(&cell), len);
   };
 
-  auto errOnKey = [&errorKey](Cell key) {
-    if (genErrorMessage) {
-      std::string escapedKey;
-      if (isStringType(key.m_type)) {
-        escapedKey = folly::sformat("\"{}\"",
-          folly::cEscape<std::string>(key.m_data.pstr->toCppString()));
-      } else {
-        assertx(isIntType(key.m_type));
-        escapedKey = std::to_string(key.m_data.num);
+  auto const errOnKey = [&errorKey](TypedValue key) {
+    if (!gen_error) return;
+    auto const escapedKey = [key] {
+      if (isStringType(type(key))) {
+        return folly::sformat("\"{}\"",
+          folly::cEscape<std::string>(val(key).pstr->toCppString()));
       }
-      errorKey = folly::sformat("[{}]{}", escapedKey, errorKey);
-    }
+      assertx(isIntType(type(key)));
+      return std::to_string(val(key).num);
+    }();
+    errorKey = folly::sformat("[{}]{}", escapedKey, errorKey);
   };
 
-  bool result = false;
-  auto type = c1.m_type;
-  auto data = c1.m_data;
+  auto const type = c1.m_type;
+  auto const data = c1.m_data;
+
   if (ts.exists(s_nullable) &&
       ts[s_nullable].asBooleanVal() &&
       isNullType(type)) {
     return true;
   }
   assertx(ts.exists(s_kind));
-  auto ts_kind = static_cast<TypeStructure::Kind>(ts[s_kind].toInt64Val());
-  switch (ts_kind) {
+
+  auto const ts_kind = static_cast<TypeStructure::Kind>(
+    ts[s_kind].toInt64Val()
+  );
+
+  auto const result = [&] {
+    switch (ts_kind) {
+    case TypeStructure::Kind::T_void:
+    case TypeStructure::Kind::T_null:
+      return isNullType(type);
+    case TypeStructure::Kind::T_nonnull:
+      return !isNullType(type);
     case TypeStructure::Kind::T_int:
-      result = isIntType(type);
-      break;
+      return isIntType(type);
     case TypeStructure::Kind::T_bool:
-      result = isBoolType(type);
-      break;
+      return isBoolType(type);
     case TypeStructure::Kind::T_float:
-      result = isDoubleType(type);
-      break;
+      return isDoubleType(type);
+    case TypeStructure::Kind::T_num:
+      return isIntType(type) || isDoubleType(type);
+    case TypeStructure::Kind::T_arraykey:
+      return isIntType(type) || isStringType(type);
+
     case TypeStructure::Kind::T_string:
       if (isFuncType(type)) {
-        if (RuntimeOption::EvalIsStringNotices) {
+        if (RO::EvalIsStringNotices) {
           raise_notice("Func used in is_string");
         }
-        result = true;
-        break;
-      } else if (isClassType(type)) {
-        if (RuntimeOption::EvalIsStringNotices) {
+        return true;
+      }
+      if (isClassType(type)) {
+        if (RO::EvalIsStringNotices) {
           raise_notice("Class used in is_string");
         }
-        result = true;
-        break;
+        return true;
       }
-      result = isStringType(type);
-      break;
+      return isStringType(type);
+
     case TypeStructure::Kind::T_resource:
-      result =
-        isResourceType(type) &&
-        !reinterpret_cast<const Resource*>(&data.pres)->isInvalid();
-      break;
-    case TypeStructure::Kind::T_num:
-      result = isIntType(type) || isDoubleType(type);
-      break;
-    case TypeStructure::Kind::T_arraykey:
-      result = isIntType(type) || isStringType(type);
-      break;
+      return isResourceType(type) &&
+             !reinterpret_cast<const Resource*>(&data.pres)->isInvalid();
+
+    case TypeStructure::Kind::T_array:
+    case TypeStructure::Kind::T_darray:
+    case TypeStructure::Kind::T_varray:
+    case TypeStructure::Kind::T_varray_or_darray:
+      return !isOrAsOp && is_array(&c1, /*logOnHackArrays=*/true);
+
     case TypeStructure::Kind::T_dict:
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatIsVecDictNotices)) {
-        if (isArrayType(type) && data.parr->isDArray()) {
-          raise_hackarr_compat_notice(Strings::HACKARR_COMPAT_DARR_IS_DICT);
-        }
-      }
-      result = isDictOrShapeType(type);
-      if (result && UNLIKELY(RuntimeOption::EvalLogArrayProvenance)) {
-        raise_array_serialization_notice("is_dict", data.parr);
-      }
-      break;
+      return is_dict(&c1);
+
     case TypeStructure::Kind::T_vec:
-      if (UNLIKELY(RuntimeOption::EvalHackArrCompatIsVecDictNotices)) {
-        if (isArrayType(type) && data.parr->isVArray()) {
-          raise_hackarr_compat_notice(Strings::HACKARR_COMPAT_VARR_IS_VEC);
-        }
-      }
-      if (isClsMethType(type)) {
-        if (RuntimeOption::EvalHackArrDVArrs) {
-          if (RuntimeOption::EvalIsVecNotices) {
-            raise_notice(Strings::CLSMETH_COMPAT_IS_VEC);
-          }
-          result = true;
-        } else {
-          result = false;
-        }
-        break;
-      }
-      result = isVecType(type);
-      if (result && UNLIKELY(RuntimeOption::EvalLogArrayProvenance)) {
-        raise_array_serialization_notice("is_vec", data.parr);
-      }
-      break;
-    case TypeStructure::Kind::T_keyset:
-      result = isKeysetType(type);
-      break;
+      return is_vec(&c1);
+
     case TypeStructure::Kind::T_vec_or_dict:
-      if (isClsMethType(type)) {
-        if (RuntimeOption::EvalHackArrDVArrs) {
-          if (RuntimeOption::EvalIsVecNotices) {
-            raise_notice(Strings::CLSMETH_COMPAT_IS_VEC);
-          }
-          result = true;
-        } else {
-          result = false;
-        }
-        break;
-      }
-      result = isVecType(type) || isDictOrShapeType(type);
-      if (result && UNLIKELY(RuntimeOption::EvalLogArrayProvenance)) {
-        raise_array_serialization_notice(isVecType(type) ? "is_vec" : "is_dict",
-                                         data.parr);
-      }
-      break;
+      return is_vec(&c1) || is_dict(&c1);
+
+    case TypeStructure::Kind::T_keyset:
+      return is_keyset(&c1);
+
     case TypeStructure::Kind::T_arraylike:
       if (isClsMethType(type)) {
         if (RuntimeOption::EvalIsVecNotices) {
           raise_notice(Strings::CLSMETH_COMPAT_IS_ANY_ARR);
         }
-        result = true;
-        break;
+        return true;
       }
-      result = isArrayType(type) || isVecType(type) ||
-               isDictType(type) || isShapeType(type) || isKeysetType(type);
-      break;
+      return isArrayLikeType(type);
+
     case TypeStructure::Kind::T_enum: {
       assertx(ts.exists(s_classname));
       auto const cls = Unit::lookupClass(ts[s_classname].asStrRef().get());
-      result = cls && enumHasValue(cls, &c1);
-      break;
+      return cls && enumHasValue(cls, &c1);
     }
+
     case TypeStructure::Kind::T_trait:
       // For is/as, we will not get here since we'll throw an error on the
       // resolution pass.
@@ -707,150 +665,219 @@ bool checkTypeStructureMatchesCellImpl(
     case TypeStructure::Kind::T_xhp: {
       assertx(ts.exists(s_classname));
       auto const ne = NamedEntity::get(ts[s_classname].asStrRef().get());
-      result = cellInstanceOf(&c1, ne);
-      if (result) result &= checkReifiedGenericsMatch(ts, c1, ne, warn,
-                                                      isOrAsOp);
-      break;
+      return tvInstanceOf(&c1, ne) &&
+             checkReifiedGenericsMatch(ts, c1, ne, warn, isOrAsOp);
     }
-    case TypeStructure::Kind::T_null:
-    case TypeStructure::Kind::T_void:
-      result = isNullType(type);
-      break;
-    case TypeStructure::Kind::T_nothing:
-    case TypeStructure::Kind::T_noreturn:
-      result = false;
-      break;
-    case TypeStructure::Kind::T_mixed:
-    case TypeStructure::Kind::T_dynamic:
-      return true;
-    case TypeStructure::Kind::T_nonnull:
-      result = !isNullType(type);
-      break;
+
     case TypeStructure::Kind::T_tuple: {
-      if (!isArrayLikeType(type)) {
-        result = false;
-        break;
+      if (!isArrayLikeType(type)) return false;
+      auto const ad = data.parr;
+
+      // A short novel about what we do for this case:
+      //
+      // Let's denote:
+      //
+      //    (*) Whether `ad` has a tuple-like structure.
+      //
+      //  - If `ad` is a regular PHP array or a darray, we return (*).  If
+      //    typehint logging is enabled for v/darrays, we log if (*) holds.
+      //
+      //  - If `ad` is a varray, we return (*).  If provenance logging is
+      //    enabled for v/darrays, we log if (*) holds (since it would no
+      //    longer hold if varrays behaved like vecs do today).
+      //
+      //  - If `ad` is a vec, we return false.  If provenance logging is
+      //    enabled for Hack arrays, we log if (*) holds (since it would hold
+      //    if vecs behaved like varrays do today).
+
+      // Whether, based on only the array kind (and not its internal
+      // structure), `ad` could possibly be a tuple.  TODO(T56477937)
+      auto const kind_supports_tuple = !RO::EvalHackArrDVArrs &&
+                                       isArrayType(type);
+
+      auto const wants_prov_logging = !gen_error && // avoid double logging :/
+                                      UNLIKELY(RO::EvalLogArrayProvenance) &&
+                                      isVecType(type);
+
+      if (!kind_supports_tuple && !wants_prov_logging) {
+        // `ad` is a Hack array and we have no logging to do; it can never be a
+        // tuple, so return false.
+        assertx(ad->isHackArray());
+        return false;
       }
-      auto const elems = data.parr;
-      if (!elems->isVecOrVArray()) {
-        if (!RuntimeOption::EvalHackArrDVArrs && elems->isPHPArray()) {
-          // TODO(T29967020) If this is pre-migration, we should allow darrays
-          // and plain PHP arrays for tuples and log a warning.
-          // Fall through here.
-        } else {
-          result = false;
-          break;
-        }
-      }
-      if (!isOrAsOp) {
-        result = true;
-        break;
-      }
-      assertx(ts.exists(s_elem_types));
-      auto const tsElems = ts[s_elem_types].getArrayData();
-      if (elems->size() != tsElems->size()) {
-        errOnLen(c1, elems->size());
-        result = false;
-        break;
-      }
-      bool elemsDidMatch = true;
-      bool keysDidMatch = true;
-      int index = 0;
-      IterateKV(
-        elems,
-        [&](Cell k, TypedValue elem) {
-          if (!isIntType(k.m_type) || k.m_data.num != index++) {
-            keysDidMatch = false;
-            return true;
-          }
-          auto const& ts2 = asCArrRef(tsElems->rval(k.m_data.num));
-          auto thisElemWarns = false;
-          if (!checkTypeStructureMatchesCellImpl<genErrorMessage>(
-              ts2, tvToCell(elem), givenType, expectedType,
-              errorKey, thisElemWarns, isOrAsOp)) {
-            errOnKey(k);
-            if (thisElemWarns) {
-              warn = true;
-              return false;
-            }
-            elemsDidMatch = false;
-            return true;
-          }
+
+      auto const with_prov_check = [&] (bool const result) {
+        if (result && wants_prov_logging) {
+          raise_array_serialization_notice(SerializationSite::IsTuple, ad);
           return false;
         }
-      );
-      // If there is an error, ignore warn
-      if (!elemsDidMatch || !keysDidMatch) warn = false;
-      if (!keysDidMatch) {
-        result = false;
-        break;
+        return result;
+      };
+
+      if (!isOrAsOp) return with_prov_check(true);
+
+      assertx(ts.exists(s_elem_types));
+      auto const ts_arr = ts[s_elem_types].getArrayData();
+      if (ad->size() != ts_arr->size()) {
+        errOnLen(c1, ad->size());
+        return false;
       }
-      if (elemsDidMatch && warn) elemsDidMatch = false;
+
+      auto const is_tuple_like = [&] {
+        bool keys_match = true; // are keys contiguous and zero-indexed?
+        bool vals_match = true; // do vals match the type structure types?
+        int index = 0;
+
+        IterateKV(ad,
+          [&](TypedValue k, TypedValue v) {
+            if (!isIntType(k.m_type) || k.m_data.num != index++) {
+              keys_match = false;
+              return true;
+            }
+            auto const& ts2 = asCArrRef(ts_arr->rval(k.m_data.num));
+            auto thisElemWarns = false;
+            if (!checkTypeStructureMatchesTVImpl<gen_error>(
+              ts2, v, givenType, expectedType, errorKey, thisElemWarns, isOrAsOp
+            )) {
+              errOnKey(k);
+              if (thisElemWarns) {
+                warn = true;
+                return false;
+              }
+              vals_match = false;
+              return true;
+            }
+            return false;
+          }
+        );
+        // If there is an error, ignore `warn`.
+        if (!vals_match || !keys_match) warn = false;
+
+        if (!keys_match || warn) return false;
+        return vals_match;
+      }();
+
       if (UNLIKELY(
         RuntimeOption::EvalHackArrCompatTypeHintNotices &&
-        elemsDidMatch &&
-        elems->isPHPArray()
+        is_tuple_like &&
+        ad->isPHPArray()
       )) {
-        if (elems->isDArray()) {
+        if (ad->isDArray()) {
           raise_hackarr_compat_is_operator("darray", "tuple");
-        } else if (!elems->isVArray()) {
+        } else if (!ad->isVArray()) {
           raise_hackarr_compat_is_operator("array", "tuple");
         }
       }
-      result = elemsDidMatch;
-      break;
+      return with_prov_check(is_tuple_like);
     }
+
     case TypeStructure::Kind::T_shape: {
-      if (!isArrayLikeType(type)) {
-        result = false;
-        break;
+      if (!isArrayLikeType(type)) return false;
+      auto const ad = data.parr;
+
+      // A sequence of haikus about what we do for this case:
+      //
+      // Let us denote, (*):
+      // Whether `ad` does admit
+      // a shape-like structure.
+      //
+      //  - Should `ad`'s sort be
+      //    PHP- or v-array
+      //    we just return (*).
+      //
+      //    If we've enabled
+      //    our typehint logging options,
+      //    log if (*) holds, too.
+      //
+      //  - Should `ad`'s sort be
+      //    darray, just return (*).
+      //    But first, if perchance
+      //
+      //    provenance logging
+      //    has been justly enabled
+      //    for v/darrays:
+      //
+      //    We log if (*) holds
+      //    (since, were darrays like dicts,
+      //    it would not be so).
+      //
+      //  - Should `ad` be dict,
+      //    return false, with no recourse.
+      //    But first, if perchance
+      //
+      //    provenance logging
+      //    has been justly enabled
+      //    for dicts (and also vecs):
+      //
+      //    We log if (*) holds
+      //    (since, were dicts like darrays,
+      //    it would not be so).
+      //
+      // In brief summary,
+      // this is all analogous
+      // to the `tuple` case.
+
+      // Whether, based on only the array kind (and not its internal
+      // structure), `ad` could possibly be a dict.  TODO(T56477937)
+      auto const kind_supports_struct = !RO::EvalHackArrDVArrs &&
+                                        isArrayType(type);
+
+      auto const wants_prov_logging = !gen_error && // avoid double logging :/
+                                      UNLIKELY(RO::EvalLogArrayProvenance) &&
+                                      isDictType(type);
+
+      if (!kind_supports_struct && !wants_prov_logging) {
+        // `ad` is a Hack array and we have no logging to do; it can never be a
+        // struct, so return false.
+        assertx(ad->isHackArray());
+        return false;
       }
-      auto const fields = data.parr;
-      if (!fields->isDictOrDArray()) {
-        if (!RuntimeOption::EvalHackArrDVArrs && fields->isPHPArray()) {
-          // TODO(T29967020) If this is pre-migration, we should allow varrays
-          // and plain PHP arrays for shapes and log a warning.
-          // Fall through here.
-        } else {
-          result = false;
-          break;
+
+      auto const with_prov_check = [&] (bool const result) {
+        if (result && wants_prov_logging) {
+          raise_array_serialization_notice(SerializationSite::IsShape, ad);
+          return false;
         }
-      }
-      if (!isOrAsOp) {
-        result = true;
-        break;
-      }
+        return result;
+      };
+
+      if (!isOrAsOp) return with_prov_check(true);
+
       assertx(ts.exists(s_fields));
-      auto const tsFields = ts[s_fields].getArrayData();
-      auto const numDefinedFields = tsFields->size();
-      auto const numFields = fields->size();
-      auto numRequiredFields = 0;
-      IterateV(
-        tsFields,
-        [&](TypedValue v) {
-          assertx(isArrayLikeType(v.m_type));
-          numRequiredFields += !isOptionalShapeField(v.m_data.parr);
-        }
-      );
-      if (numFields < numRequiredFields) {
-        errOnLen(c1, numFields);
-        result = false;
-        break;
+      auto const ts_arr = ts[s_fields].getArrayData();
+
+      auto const numRequiredFields = [&] {
+        auto n = 0;
+        IterateV(
+          ts_arr,
+          [&](TypedValue v) {
+            assertx(isArrayLikeType(v.m_type));
+            n += !isOptionalShapeField(v.m_data.parr);
+          }
+        );
+        return n;
+      }();
+
+      if (ad->size() < numRequiredFields) {
+        errOnLen(c1, ad->size());
+        return false;
       }
+
       auto const allowsUnknownFields = shapeAllowsUnknownFields(ts);
-      if (!allowsUnknownFields && numFields > numDefinedFields) {
-        errOnLen(c1, numFields);
-        result = false;
-        break;
+      if (!allowsUnknownFields && ad->size() > ts_arr->size()) {
+        errOnLen(c1, ad->size());
+        return false;
       }
+
       auto fieldsDidMatch = true;
       auto numExpectedFields = 0;
+
       IterateKV(
-        tsFields,
-        [&](Cell k, TypedValue v) {
+        ts_arr,
+        [&](TypedValue k, TypedValue v) {
           assertx(isArrayLikeType(v.m_type));
           auto const tsFieldData = v.m_data.parr;
-          if (!fields->exists(k)) {
+          if (!ad->exists(k)) {
             if (isOptionalShapeField(tsFieldData)) {
               return false;
             }
@@ -859,12 +886,13 @@ bool checkTypeStructureMatchesCellImpl(
             return true;
           }
           auto const tsField = getShapeFieldElement(v);
-          auto const field = fields->at(k);
+          auto const field = ad->at(k);
           bool thisFieldWarns = false;
           numExpectedFields++;
-          if (!checkTypeStructureMatchesCellImpl<genErrorMessage>(
-              ArrNR(tsField), tvToCell(field), givenType,
-              expectedType, errorKey, thisFieldWarns, isOrAsOp)) {
+          if (!checkTypeStructureMatchesTVImpl<gen_error>(
+            ArrNR(tsField), field, givenType,
+            expectedType, errorKey, thisFieldWarns, isOrAsOp
+          )) {
             errOnKey(k);
             if (thisFieldWarns) {
               warn = true;
@@ -877,83 +905,87 @@ bool checkTypeStructureMatchesCellImpl(
         }
       );
       if (!fieldsDidMatch ||
-          !(allowsUnknownFields || numFields == numExpectedFields)) {
+          !(allowsUnknownFields || ad->size() == numExpectedFields)) {
         warn = false;
-        result = false;
-        break;
+        return false;
       }
+
       if (UNLIKELY(
         RuntimeOption::EvalHackArrCompatTypeHintNotices &&
         !warn &&
-        fields->isPHPArray()
+        ad->isPHPArray()
       )) {
-        if (fields->isVArray()) {
+        if (ad->isVArray()) {
           raise_hackarr_compat_is_operator("varray", "shape");
-        } else if (!fields->isDArray()) {
+        } else if (!ad->isDArray()) {
           raise_hackarr_compat_is_operator("array", "shape");
         }
       }
-      result = !warn;
-      break;
+      return with_prov_check(!warn);
     }
-    case TypeStructure::Kind::T_array:
-    case TypeStructure::Kind::T_darray:
-    case TypeStructure::Kind::T_varray:
-    case TypeStructure::Kind::T_varray_or_darray:
-      result = !isOrAsOp && isArrayType(type);
-      break;
+
+    case TypeStructure::Kind::T_nothing:
+    case TypeStructure::Kind::T_noreturn:
     case TypeStructure::Kind::T_unresolved:
     case TypeStructure::Kind::T_typeaccess:
-      result = false;
-      break;
+      return false;
+
+    case TypeStructure::Kind::T_mixed:
+    case TypeStructure::Kind::T_dynamic:
+      return true;
+
     case TypeStructure::Kind::T_fun:
     case TypeStructure::Kind::T_typevar:
       // For is/as, we will not get here since we'll throw an error on the
       // resolution pass.
       // For parameter/return type verification, we don't check these types, so
       // just return true.
-      result = true;
-      break;
+      return true;
+
     case TypeStructure::Kind::T_reifiedtype:
       // This type should have been removed in the resolution phase.
       always_assert(false);
-  }
+    }
+    not_reached();
+  }();
   if (!warn && is_ts_soft(ts.get())) warn = true;
-  if (genErrorMessage && !result) {
-    if (givenType.empty()) givenType = describe_actual_type(&c1, true);
+  if (gen_error && !result) {
+    if (givenType.empty()) givenType = describe_actual_type(&c1);
     if (expectedType.empty()) {
-      expectedType = TypeStructure::toStringForDisplay(ts).toCppString();
+      expectedType =
+        TypeStructure::toString(ts,
+          TypeStructure::TSDisplayType::TSDisplayTypeUser).toCppString();
     }
   }
   return result;
 }
 
-bool checkTypeStructureMatchesCell(const Array& ts, Cell c1) {
+bool checkTypeStructureMatchesTV(const Array& ts, TypedValue c1) {
   std::string givenType, expectedType, errorKey;
   bool warn = false;
-  return checkTypeStructureMatchesCellImpl<false>(
+  return checkTypeStructureMatchesTVImpl<false>(
     ts, c1, givenType, expectedType, errorKey, warn, true);
 }
 
-bool checkTypeStructureMatchesCell(
+bool checkTypeStructureMatchesTV(
   const Array& ts,
-  Cell c1,
+  TypedValue c1,
   std::string& givenType,
   std::string& expectedType,
   std::string& errorKey
 ) {
   bool warn = false;
-  return checkTypeStructureMatchesCellImpl<true>(
+  return checkTypeStructureMatchesTVImpl<true>(
     ts, c1, givenType, expectedType, errorKey, warn, true);
 }
 
-bool checkTypeStructureMatchesCell(
+bool checkTypeStructureMatchesTV(
   const Array& ts,
-  Cell c1,
+  TypedValue c1,
   bool& warn
 ) {
   std::string givenType, expectedType, errorKey;
-  return checkTypeStructureMatchesCellImpl<false>(
+  return checkTypeStructureMatchesTVImpl<false>(
     ts, c1, givenType, expectedType, errorKey, warn, false);
 }
 
@@ -1163,7 +1195,7 @@ template Array resolveAndVerifyTypeStructure<true>(
 template Array resolveAndVerifyTypeStructure<false>(
   const Array&, const Class*, const Class*, const req::vector<Array>&, bool);
 
-void throwTypeStructureDoesNotMatchCellException(
+void throwTypeStructureDoesNotMatchTVException(
   std::string& givenType,
   std::string& expectedType,
   std::string& errorKey
@@ -1178,6 +1210,27 @@ void throwTypeStructureDoesNotMatchCellException(
       expectedType, errorKey, givenType);
   }
   SystemLib::throwTypeAssertionExceptionObject(error);
+}
+
+bool doesTypeStructureContainTUnresolved(const ArrayData* ts) {
+  bool result = false;
+  IterateKV(
+    ts,
+    [&] (TypedValue k, TypedValue v) {
+      if (tvIsInt(v) && tvIsString(k) && k.m_data.pstr->isame(s_kind.get()) &&
+          static_cast<TypeStructure::Kind>(v.m_data.num) ==
+          TypeStructure::Kind::T_unresolved) {
+        result = true;
+        return true; // short circuit
+      }
+      if (tvIsDictOrDArray(v) || tvIsVecOrVArray(v)) {
+        result |= doesTypeStructureContainTUnresolved(v.m_data.parr);
+        return result; // short circuit if need be
+      }
+      return false;
+    }
+  );
+  return result;
 }
 
 } // namespace HPHP

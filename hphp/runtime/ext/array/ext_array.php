@@ -321,7 +321,7 @@ function array_pad(
  *
  */
 <<__Native>>
-function array_pop(mixed &$array): mixed;
+function array_pop(inout mixed $array): mixed;
 
 /**
  * array_product() returns the product of values in an array.
@@ -354,7 +354,7 @@ function array_product(
  *
  */
 <<__Native>>
-function array_push(mixed &$array, mixed $var, ...$args): mixed;
+function array_push(inout mixed $array, mixed $var, ...$args): mixed;
 
 /**
  * Picks one ore more random entries out of an array, and returns the key (or
@@ -451,7 +451,7 @@ function array_search(
  *
  */
 <<__Native>>
-function array_shift(mixed &$array): mixed;
+function array_shift(inout mixed $array): mixed;
 
 /**
  * array_slice() returns the sequence of elements from the array array as
@@ -514,7 +514,7 @@ function array_slice(
  */
 <<__Native, __Rx, __AtMostRxAsArgs>>
 function array_splice(
-  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> mixed &$input,
+  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> inout mixed $input,
   int $offset,
   mixed $length = null,
   <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> mixed $replacement = null,
@@ -575,7 +575,7 @@ function array_unique(
  *
  */
 <<__Native>>
-function array_unshift(mixed &$array, mixed $var, ...$argv): mixed;
+function array_unshift(inout mixed $array, mixed $var, ...$argv): mixed;
 
 /**
  * array_values() returns all the values from the input array and indexes
@@ -601,7 +601,7 @@ function array_values(
  *
  */
 <<__Native>>
-function shuffle(mixed &$array): bool;
+function shuffle(inout mixed $array): bool;
 
 /**
  * Counts all elements in an array, or properties in an object. For objects,
@@ -680,10 +680,6 @@ function each(inout mixed $array): mixed;
 <<__Native>>
 function current(mixed $array): mixed;
 
-function current_ref(inout mixed $array): mixed {
-  return current($array);
-}
-
 /**
  * next() behaves like current(), with one difference. It advances the
  *   internal array pointer one place forward before returning the element
@@ -759,10 +755,6 @@ function end(inout mixed $array): mixed;
  */
 <<__Native>>
 function key(mixed $array): mixed;
-
-function key_ref(inout mixed $array): mixed {
-  return key($array);
-}
 
 /**
  * Searches haystack for needle.
@@ -1166,7 +1158,7 @@ function array_intersect_ukey(
  */
 <<__Native, __Rx, __AtMostRxAsArgs>>
 function sort(
-  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> mixed &$array,
+  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1182,7 +1174,7 @@ function sort(
  */
 <<__Native, __Rx, __AtMostRxAsArgs>>
 function rsort(
-  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> mixed &$array,
+  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1201,7 +1193,7 @@ function rsort(
  */
 <<__Native, __Rx, __AtMostRxAsArgs>>
 function asort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> mixed &$array,
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1220,7 +1212,7 @@ function asort(
  */
 <<__Native, __Rx, __AtMostRxAsArgs>>
 function arsort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> mixed &$array,
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1237,7 +1229,7 @@ function arsort(
  */
 <<__Native, __Rx, __AtMostRxAsArgs>>
 function ksort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> mixed &$array,
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1254,7 +1246,7 @@ function ksort(
  */
 <<__Native, __Rx, __AtMostRxAsArgs>>
 function krsort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> mixed &$array,
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1278,7 +1270,7 @@ function krsort(
  */
 <<__Native, __Rx, __AtMostRxAsArgs>>
 function usort(
-  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> mixed &$array,
+  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> inout mixed $array,
   <<__AtMostRxAsFunc>> mixed $cmp_function,
 ): bool;
 
@@ -1297,7 +1289,7 @@ function usort(
  */
 <<__Native, __Rx, __AtMostRxAsArgs>>
 function uasort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> mixed &$array,
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
   <<__AtMostRxAsFunc>> mixed $cmp_function,
 ): bool;
 
@@ -1318,7 +1310,7 @@ function uasort(
  */
 <<__Native, __Rx, __AtMostRxAsArgs>>
 function uksort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> mixed &$array,
+  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
   <<__AtMostRxAsFunc>> mixed $cmp_function,
 ): bool;
 
@@ -1335,7 +1327,7 @@ function uksort(
  *
  */
 <<__Native>>
-function natsort(mixed &$array): bool;
+function natsort(inout mixed $array): bool;
 
 /**
  * natcasesort() is a case insensitive version of natsort(). This function
@@ -1349,7 +1341,7 @@ function natsort(mixed &$array): bool;
  *
  */
 <<__Native>>
-function natcasesort(mixed &$array): bool;
+function natcasesort(inout mixed $array): bool;
 
 <<__Native>>
 function i18n_loc_get_default(): string;
@@ -1398,97 +1390,84 @@ function hphp_array_idx(
  *
  */
 <<__Native>>
-function array_multisort(
-  mixed &$arg1,
-  mixed &$arg2 = null,
-  mixed &$arg3 = null,
-  mixed &$arg4 = null,
-  mixed &$arg5 = null,
-  mixed &$arg6 = null,
-  mixed &$arg7 = null,
-  mixed &$arg8 = null,
-  mixed &$arg9 = null,
-): bool;
-
-<<__Native>>
 function array_multisort1(
-  mixed &$arg1,
+  inout mixed $arg1,
 ): bool;
 
 <<__Native>>
 function array_multisort2(
-  mixed &$arg1,
-  mixed &$arg2,
+  inout mixed $arg1,
+  inout mixed $arg2,
 ): bool;
 
 <<__Native>>
 function array_multisort3(
-  mixed &$arg1,
-  mixed &$arg2,
-  mixed &$arg3,
+  inout mixed $arg1,
+  inout mixed $arg2,
+  inout mixed $arg3,
 ): bool;
 
 <<__Native>>
 function array_multisort4(
-  mixed &$arg1,
-  mixed &$arg2,
-  mixed &$arg3,
-  mixed &$arg4,
+  inout mixed $arg1,
+  inout mixed $arg2,
+  inout mixed $arg3,
+  inout mixed $arg4,
 ): bool;
 
 <<__Native>>
 function array_multisort5(
-  mixed &$arg1,
-  mixed &$arg2,
-  mixed &$arg3,
-  mixed &$arg4,
-  mixed &$arg5,
+  inout mixed $arg1,
+  inout mixed $arg2,
+  inout mixed $arg3,
+  inout mixed $arg4,
+  inout mixed $arg5,
 ): bool;
 
 <<__Native>>
 function array_multisort6(
-  mixed &$arg1,
-  mixed &$arg2,
-  mixed &$arg3,
-  mixed &$arg4,
-  mixed &$arg5,
-  mixed &$arg6,
+  inout mixed $arg1,
+  inout mixed $arg2,
+  inout mixed $arg3,
+  inout mixed $arg4,
+  inout mixed $arg5,
+  inout mixed $arg6,
 ): bool;
 
 <<__Native>>
 function array_multisort7(
-  mixed &$arg1,
-  mixed &$arg2,
-  mixed &$arg3,
-  mixed &$arg4,
-  mixed &$arg5,
-  mixed &$arg6,
-  mixed &$arg7,
+  inout mixed $arg1,
+  inout mixed $arg2,
+  inout mixed $arg3,
+  inout mixed $arg4,
+  inout mixed $arg5,
+  inout mixed $arg6,
+  inout mixed $arg7,
 ): bool;
 
 <<__Native>>
 function array_multisort8(
-  mixed &$arg1,
-  mixed &$arg2,
-  mixed &$arg3,
-  mixed &$arg4,
-  mixed &$arg5,
-  mixed &$arg6,
-  mixed &$arg7,
-  mixed &$arg8,
+  inout mixed $arg1,
+  inout mixed $arg2,
+  inout mixed $arg3,
+  inout mixed $arg4,
+  inout mixed $arg5,
+  inout mixed $arg6,
+  inout mixed $arg7,
+  inout mixed $arg8,
 ): bool;
 
 <<__Native>>
 function array_multisort9(
-  mixed &$arg1,
-  mixed &$arg2,
-  mixed &$arg3,
-  mixed &$arg4,
-  mixed &$arg5,
-  mixed &$arg6,
-  mixed &$arg7,
-  mixed &$arg8,
-  mixed &$arg9,
+  inout mixed $arg1,
+  inout mixed $arg2,
+  inout mixed $arg3,
+  inout mixed $arg4,
+  inout mixed $arg5,
+  inout mixed $arg6,
+  inout mixed $arg7,
+  inout mixed $arg8,
+  inout mixed $arg9,
 ): bool;
 
 } // root namespace

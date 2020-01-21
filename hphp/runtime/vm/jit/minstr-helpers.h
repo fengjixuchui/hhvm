@@ -16,7 +16,6 @@
 #ifndef incl_HPHP_MINSTR_HELPERS_H_
 #define incl_HPHP_MINSTR_HELPERS_H_
 
-#include "hphp/runtime/base/ref-data.h"
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/base/tv-type.h"
 #include "hphp/runtime/base/typed-value.h"
@@ -51,7 +50,7 @@ tv_lval baseGImpl(TypedValue key) {
       return const_cast<TypedValue*>(&immutable_null_base);
     }
   }
-  return tvToCell(base);
+  return base;
 }
 
 #define BASE_G_HELPER_TABLE(m)                  \
@@ -146,18 +145,7 @@ inline tv_lval propCOQ(Class* ctx, ObjectData* base, StringData* key,
 inline TypedValue cGetRefShuffle(const TypedValue& localTvRef,
                                  tv_rval result) {
   if (LIKELY(&val(result) != &localTvRef.m_data)) {
-    result = tvToCell(result);
     tvIncRefGen(*result);
-  } else {
-    // If a magic getter or array access method returned by reference, we have
-    // to incref the inner cell and drop our reference to the RefData.
-    // Otherwise we do nothing, since we already own a reference to result.
-    if (UNLIKELY(isRefType(localTvRef.m_type))) {
-      auto inner = *localTvRef.m_data.pref->cell();
-      tvIncRefGen(inner);
-      decRefRef(localTvRef.m_data.pref);
-      return inner;
-    }
   }
 
   return *result;
@@ -220,7 +208,7 @@ inline TypedValue cGetPropSOQ(Class* ctx, ObjectData* base, StringData* key) {
 
 #define X(nm, kt)                                                       \
 inline void nm(Class* ctx, tv_lval base, key_type<kt> key,              \
-               Cell val, const MInstrPropState* pState) {               \
+               TypedValue val, const MInstrPropState* pState) {               \
   HPHP::SetProp<false, kt>(ctx, base, key, &val, pState);               \
 }
 SETPROP_HELPER_TABLE(X)
@@ -232,7 +220,7 @@ SETPROP_HELPER_TABLE(X)
   m(setPropCOS,  KeyType::Str)          \
 
 #define X(nm, kt)                                                          \
-inline void nm(Class* ctx, ObjectData* base, key_type<kt> key, Cell val) { \
+inline void nm(Class* ctx, ObjectData* base, key_type<kt> key, TypedValue val) { \
   HPHP::SetPropObj<kt>(ctx, base, key, &val);                              \
 }
 SETPROP_OBJ_HELPER_TABLE(X)
@@ -251,7 +239,7 @@ inline void unsetPropCO(Class* ctx, ObjectData* base, TypedValue key) {
 //////////////////////////////////////////////////////////////////////
 
 inline TypedValue setOpPropC(Class* ctx, tv_lval base, TypedValue key,
-                             Cell val, SetOpOp op,
+                             TypedValue val, SetOpOp op,
                              const MInstrPropState* pState) {
   TypedValue localTvRef;
   auto result = HPHP::SetOpProp(localTvRef, ctx, op, base, key, &val, pState);
@@ -259,7 +247,7 @@ inline TypedValue setOpPropC(Class* ctx, tv_lval base, TypedValue key,
 }
 
 inline TypedValue setOpPropCO(Class* ctx, ObjectData* base, TypedValue key,
-                              Cell val, SetOpOp op) {
+                              TypedValue val, SetOpOp op) {
   TypedValue localTvRef;
   auto result = SetOpPropObj(localTvRef, ctx, op, base, key, &val);
   return cGetRefShuffle(localTvRef, result);
@@ -269,16 +257,12 @@ inline TypedValue setOpPropCO(Class* ctx, ObjectData* base, TypedValue key,
 
 inline TypedValue incDecPropC(Class* ctx, tv_lval base, TypedValue key,
                               IncDecOp op, const MInstrPropState* pState) {
-  auto const result = HPHP::IncDecProp(ctx, op, base, key, pState);
-  assertx(!isRefType(result.m_type));
-  return result;
+  return HPHP::IncDecProp(ctx, op, base, key, pState);
 }
 
 inline TypedValue incDecPropCO(Class* ctx, ObjectData* base, TypedValue key,
                                IncDecOp op) {
-  auto const result = HPHP::IncDecPropObj(ctx, op, base, key);
-  assertx(!isRefType(result.m_type));
-  return result;
+  return HPHP::IncDecPropObj(ctx, op, base, key);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -463,9 +447,8 @@ ELEMD_HELPER_TABLE(X)
 
 #define X(nm, keyType)                                          \
 inline tv_lval nm(tv_lval base, key_type<keyType> key) {        \
-  auto cbase = tvToCell(base);                                  \
-  assertx(isArrayType(type(cbase)));                            \
-  return ElemDArray<MOpMode::None, keyType>(cbase, key); \
+  assertx(isArrayType(type(base)));                            \
+  return ElemDArray<MOpMode::None, keyType>(base, key); \
 }
 ELEM_ARRAY_D_HELPER_TABLE(X)
 #undef X
@@ -477,9 +460,8 @@ ELEM_ARRAY_D_HELPER_TABLE(X)
 
 #define X(nm, keyType)                                     \
 inline tv_lval nm(tv_lval base, key_type<keyType> key) {   \
-  auto cbase = tvToCell(base);                             \
-  assertx(isArrayType(type(cbase)));                       \
-  return ElemUArray<keyType>(cbase, key);                  \
+  assertx(isArrayType(type(base)));                       \
+  return ElemUArray<keyType>(base, key);                  \
 }
 ELEM_ARRAY_U_HELPER_TABLE(X)
 #undef X
@@ -546,9 +528,8 @@ ARRAYGET_HELPER_TABLE(X)
 
 #define X(nm, copyProv) \
 inline tv_lval nm(tv_lval base, int64_t key) {                 \
-  auto cbase = tvToCell(base);                                 \
-  assertx(isVecType(type(cbase)));                             \
-  return ElemDVec<KeyType::Int, copyProv>(cbase, key);  \
+  assertx(isVecType(type(base)));                             \
+  return ElemDVec<KeyType::Int, copyProv>(base, key);  \
 }
 ELEM_VEC_D_HELPER_TABLE(X)
 #undef X
@@ -564,9 +545,8 @@ ELEM_VEC_D_HELPER_TABLE(X)
 
 #define X(nm, keyType, copyProv)                          \
 inline tv_lval nm(tv_lval base, key_type<keyType> key) {  \
-  auto cbase = tvToCell(base);                            \
-  assertx(isDictType(type(cbase)));                       \
-  return ElemDDict<keyType, copyProv>(cbase, key); \
+  assertx(isDictType(type(base)));                       \
+  return ElemDDict<keyType, copyProv>(base, key); \
 }
 ELEM_DICT_D_HELPER_TABLE(X)
 #undef X
@@ -578,9 +558,8 @@ ELEM_DICT_D_HELPER_TABLE(X)
 
 #define X(nm, keyType)                                                 \
 inline tv_lval nm(tv_lval base, key_type<keyType> key) {               \
-  auto cbase = tvToCell(base);                                         \
-  assertx(isDictType(type(cbase)));                                    \
-  return ElemUDict<keyType>(cbase, key);                               \
+  assertx(isDictType(type(base)));                                    \
+  return ElemUDict<keyType>(base, key);                               \
 }
 ELEM_DICT_U_HELPER_TABLE(X)
 #undef X
@@ -610,9 +589,8 @@ ELEM_DICT_HELPER_TABLE(X)
 
 #define X(nm, keyType)                                                 \
 inline tv_lval nm(tv_lval base, key_type<keyType> key) {               \
-  auto cbase = tvToCell(base);                                         \
-  assertx(isKeysetType(type(cbase)));                                  \
-  return ElemUKeyset<keyType>(cbase, key);                             \
+  assertx(isKeysetType(type(base)));                                  \
+  return ElemUKeyset<keyType>(base, key);                             \
 }
 ELEM_KEYSET_U_HELPER_TABLE(X)
 #undef X
@@ -695,15 +673,13 @@ CGETELEM_HELPER_TABLE(X)
 
 //////////////////////////////////////////////////////////////////////
 
-template<KeyType keyType, bool setRef>
-auto arraySetImpl(ArrayData* a, key_type<keyType> key,
-                  Cell value, TypedValue* ref) {
+template<KeyType keyType>
+auto arraySetImpl(ArrayData* a, key_type<keyType> key, TypedValue value) {
   static_assert(keyType != KeyType::Any,
                 "KeyType::Any is not supported in arraySetMImpl");
-  assertx(cellIsPlausible(value));
+  assertx(tvIsPlausible(value));
   assertx(a->isPHPArray());
-  auto const ret = a->set(key, value);
-  return arrayRefShuffle<setRef, KindOfArray>(a, ret, ref);
+  return a->setMove(key, value);
 }
 
 #define ARRAYSET_HELPER_TABLE(m)  \
@@ -712,33 +688,19 @@ auto arraySetImpl(ArrayData* a, key_type<keyType> key,
   m(arraySetI,    KeyType::Int)   \
 
 #define X(nm, keyType)                                                  \
-inline ArrayData* nm(ArrayData* a, key_type<keyType> key, Cell value) { \
-  return arraySetImpl<keyType, false>(a, key, value, nullptr);          \
+inline ArrayData* nm(ArrayData* a, key_type<keyType> key, TypedValue value) { \
+  return arraySetImpl<keyType>(a, key, value);                          \
 }
 ARRAYSET_HELPER_TABLE(X)
 #undef X
 
-#define ARRAYSET_REF_HELPER_TABLE(m)  \
-  /* name         keyType */          \
-  m(arraySetSR,   KeyType::Str)       \
-  m(arraySetIR,   KeyType::Int)       \
-
-#define X(nm, keyType)                                      \
-inline void nm(ArrayData* a, key_type<keyType> key,         \
-               Cell value, RefData* ref) {                  \
-  arraySetImpl<keyType, true>(a, key, value, ref->cell());  \
-}
-ARRAYSET_REF_HELPER_TABLE(X)
-#undef X
-
 //////////////////////////////////////////////////////////////////////
 
-template<bool setRef, bool copyProv>
-auto vecSetImpl(ArrayData* a, int64_t key, Cell value, TypedValue* ref) {
-  assertx(cellIsPlausible(value));
+template<bool copyProv>
+auto vecSetImpl(ArrayData* a, int64_t key, TypedValue value) {
+  assertx(tvIsPlausible(value));
   assertx(a->isVecArray());
-  ArrayData* ret = PackedArray::SetIntVec(a, key, value);
-  return arrayRefShuffle<setRef, KindOfVec>(a, ret, ref);
+  return PackedArray::SetIntMoveVec(a, key, value);
 }
 
 #define VECSET_HELPER_TABLE(m) \
@@ -747,40 +709,26 @@ auto vecSetImpl(ArrayData* a, int64_t key, Cell value, TypedValue* ref) {
   m(vecSetIP, true)
 
 #define X(nm, copyProv)                                     \
-inline ArrayData* nm(ArrayData* a, int64_t key, Cell val) { \
-  return vecSetImpl<false, copyProv>(a, key, val, nullptr); \
+inline ArrayData* nm(ArrayData* a, int64_t key, TypedValue val) { \
+  return vecSetImpl<copyProv>(a, key, val); \
 }
 VECSET_HELPER_TABLE(X)
 #undef X
 
-#define VECSET_REF_HELPER_TABLE(m) \
-  /* name      copyProv*/       \
-  m(vecSetIRN, false) \
-  m(vecSetIRP, true)
-
-#define X(nm, copyProv)                                             \
-inline void nm(ArrayData* a, int64_t key, Cell val, RefData* ref) { \
-  vecSetImpl<true, copyProv>(a, key, val, ref->cell());             \
-}
-VECSET_REF_HELPER_TABLE(X)
-#undef X
-
 //////////////////////////////////////////////////////////////////////
 
-inline ArrayData* dictSetImplPre(ArrayData* a, int64_t i, Cell val) {
-  return MixedArray::SetIntDict(a, i, val);
+inline ArrayData* dictSetImplPre(ArrayData* a, int64_t i, TypedValue val) {
+  return MixedArray::SetIntMoveDict(a, i, val);
 }
-inline ArrayData* dictSetImplPre(ArrayData* a, StringData* s, Cell val) {
-  return MixedArray::SetStrDict(a, s, val);
+inline ArrayData* dictSetImplPre(ArrayData* a, StringData* s, TypedValue val) {
+  return MixedArray::SetStrMoveDict(a, s, val);
 }
 
-template<KeyType keyType, bool setRef, bool copyProv>
-auto
-dictSetImpl(ArrayData* a, key_type<keyType> key, Cell value, TypedValue* ref) {
-  assertx(cellIsPlausible(value));
+template<KeyType keyType, bool copyProv>
+auto dictSetImpl(ArrayData* a, key_type<keyType> key, TypedValue value) {
+  assertx(tvIsPlausible(value));
   assertx(a->isDict());
-  auto ret = dictSetImplPre(a, key, value);
-  return arrayRefShuffle<setRef, KindOfDict>(a, ret, ref);
+  return dictSetImplPre(a, key, value);
 }
 
 #define DICTSET_HELPER_TABLE(m) \
@@ -791,36 +739,21 @@ dictSetImpl(ArrayData* a, key_type<keyType> key, Cell value, TypedValue* ref) {
   m(dictSetSP,   KeyType::Str, true)
 
 #define X(nm, keyType, copyProv)                                      \
-inline ArrayData* nm(ArrayData* a, key_type<keyType> key, Cell val) { \
-  return dictSetImpl<keyType, false, copyProv>(a, key, val, nullptr); \
+inline ArrayData* nm(ArrayData* a, key_type<keyType> key, TypedValue val) { \
+  return dictSetImpl<keyType, copyProv>(a, key, val); \
 }
 DICTSET_HELPER_TABLE(X)
-#undef X
-
-#define DICTSET_REF_HELPER_TABLE(m) \
-  /* name       keyType       copyProv */ \
-  m(dictSetIRN,  KeyType::Int, false)     \
-  m(dictSetSRN,  KeyType::Str, false)     \
-  m(dictSetIRP,  KeyType::Int, true)      \
-  m(dictSetSRP,  KeyType::Str, true)
-
-#define X(nm, keyType, copyProv)                                        \
-inline                                                                  \
-void nm(ArrayData* a, key_type<keyType> key, Cell val, RefData* ref) {  \
-  dictSetImpl<keyType, true, copyProv>(a, key, val, ref->cell());       \
-}
-DICTSET_REF_HELPER_TABLE(X)
 #undef X
 
 //////////////////////////////////////////////////////////////////////
 
 template <bool copyProv>
-void setNewElem(tv_lval base, Cell val, const MInstrPropState* pState) {
+void setNewElem(tv_lval base, TypedValue val, const MInstrPropState* pState) {
   HPHP::SetNewElem<false, copyProv>(base, &val, pState);
 }
 
 template <bool copyProv>
-void setNewElemVec(tv_lval base, Cell val) {
+void setNewElemVec(tv_lval base, TypedValue val) {
   HPHP::SetNewElemVec<copyProv>(base, &val);
 }
 
@@ -835,7 +768,6 @@ inline ArrayData* keysetSetNewElemImplPre(ArrayData* a, StringData* s) {
 
 template<KeyType keyType>
 void keysetSetNewElemImpl(tv_lval base, key_type<keyType> key) {
-  base = tvToCell(base);
   assertx(tvIsPlausible(*base));
   assertx(tvIsKeyset(base));
   auto oldArr = val(base).parr;
@@ -864,7 +796,7 @@ KEYSET_SETNEWELEM_HELPER_TABLE(X)
 
 template <KeyType keyType, bool copyProv>
 StringData* setElemImpl(tv_lval base, key_type<keyType> key,
-                        Cell val, const MInstrPropState* pState) {
+                        TypedValue val, const MInstrPropState* pState) {
   return HPHP::SetElem<false, copyProv, keyType>(base, key, &val, pState);
 }
 
@@ -879,7 +811,7 @@ StringData* setElemImpl(tv_lval base, key_type<keyType> key,
 
 #define X(nm, kt, copyProv)                                      \
 inline StringData* nm(tv_lval base, key_type<kt> key,            \
-                      Cell val, const MInstrPropState* pState) { \
+                      TypedValue val, const MInstrPropState* pState) { \
   return setElemImpl<kt, copyProv>(base, key, val, pState);      \
 }
 SETELEM_HELPER_TABLE(X)
@@ -893,7 +825,7 @@ uint64_t arrayIssetImpl(ArrayData* a, key_type<keyType> key) {
   auto const rval = a->rval(key);
   return !rval
     ? 0
-    : !isNullType(rval.unboxed().type());
+    : !isNullType(rval.type());
 }
 
 #define ARRAY_ISSET_HELPER_TABLE(m) \
@@ -1005,22 +937,21 @@ TypedValue mapGetImpl(c_Map* map, key_type<keyType> key) {
 template<KeyType keyType>
 uint64_t mapIssetImpl(c_Map* map, key_type<keyType> key) {
   auto result = map->get(key);
-  return result ? !cellIsNull(result) : false;
+  return result ? !tvIsNull(result) : false;
 }
 
 template<KeyType keyType>
-void mapSetImpl(c_Map* map, key_type<keyType> key, Cell value) {
-  // XXX: we should call this directly from the TC.
-  map->set(key, value);
+void mapSetImpl(c_Map* map, key_type<keyType> key, TypedValue value) {
+  map->setMove(key, value);
 }
 
 inline
-void vectorSetImplI(c_Vector* vector, int64_t key, Cell value) {
-  vector->set(key, value);
+void vectorSetImplI(c_Vector* vector, int64_t key, TypedValue value) {
+  vector->setMove(key, value);
 }
 
 [[noreturn]] inline
-void vectorSetImplS(c_Vector* vector, StringData* key, Cell value) {
+void vectorSetImplS(c_Vector* vector, StringData* key, TypedValue value) {
   BaseVector::throwBadKeyType();
 }
 

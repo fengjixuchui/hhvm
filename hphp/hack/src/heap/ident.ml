@@ -9,7 +9,7 @@
 
 external hh_counter_next : unit -> int = "hh_counter_next"
 
-type t = int
+type t = int [@@deriving eq]
 
 let compare x y = x - y
 
@@ -24,16 +24,16 @@ let tmp () =
   res
 
 let to_string x =
-  (try IMap.find_unsafe x !trace with Not_found -> "v" ^ string_of_int x)
+  (try IMap.find x !trace with Not_found -> "v" ^ string_of_int x)
 
 let debug ?normalize:(f = (fun x -> x)) x =
   let normalized_x = string_of_int (f x) in
-  try IMap.find_unsafe x !trace ^ "[" ^ normalized_x ^ "]"
+  try IMap.find x !trace ^ "[" ^ normalized_x ^ "]"
   with Not_found -> "tvar_" ^ normalized_x
 
 let get_name x =
   assert !track_names;
-  IMap.find_unsafe x !trace
+  IMap.find x !trace
 
 let set_name x y = trace := IMap.add x y !trace
 

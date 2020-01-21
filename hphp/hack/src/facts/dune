@@ -16,6 +16,7 @@ let rust =
 (library
   (name rust_facts_ffi)
   (modules)
+  (wrapped false)
   (preprocess (pps ppx_deriving.std)) ; See T41851208
   (self_build_stubs_archive (rust_facts_ffi))
 )
@@ -25,7 +26,7 @@ let rust =
   (locks /cargo)
   (action
     (run %{workspace_root}/scripts/build_rust_to_ocaml.sh
-      hack_facts_ffi
+      rust_facts_ffi
       rust_facts_ffi
     )
   )

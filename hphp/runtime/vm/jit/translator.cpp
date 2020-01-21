@@ -18,7 +18,6 @@
 
 #include <cinttypes>
 #include <assert.h>
-#include <stdarg.h>
 #include <stdint.h>
 
 #include <algorithm>
@@ -61,7 +60,6 @@
 #include "hphp/runtime/vm/jit/prof-data.h"
 #include "hphp/runtime/vm/jit/punt.h"
 #include "hphp/runtime/vm/jit/region-selection.h"
-#include "hphp/runtime/vm/jit/timer.h"
 #include "hphp/runtime/vm/jit/translate-region.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/vm/jit/type.h"
@@ -88,8 +86,6 @@ static const struct {
   /*** 1. Basic instructions ***/
 
   { OpPopC,        {Stack1|
-                    DontGuardStack1,  None,         OutNone         }},
-  { OpPopV,        {Stack1|
                     DontGuardStack1,  None,         OutNone         }},
   { OpPopU,        {Stack1|
                     DontGuardStack1,  None,         OutNone         }},
@@ -183,7 +179,6 @@ static const struct {
   { OpCastDouble,  {Stack1,           Stack1,       OutDouble       }},
   { OpCastString,  {Stack1,           Stack1,       OutString       }},
   { OpCastArray,   {Stack1,           Stack1,       OutArray        }},
-  { OpCastObject,  {Stack1,           Stack1,       OutObject       }},
   { OpCastDict,    {Stack1,           Stack1,       OutDict         }},
   { OpCastKeyset,  {Stack1,           Stack1,       OutKeyset       }},
   { OpCastVec,     {Stack1,           Stack1,       OutVec          }},
@@ -239,7 +234,6 @@ static const struct {
   { OpPushL,       {Local,            Stack1|Local, OutCInputL      }},
   { OpCGetG,       {Stack1,           Stack1,       OutUnknown      }},
   { OpCGetS,       {StackTop2,        Stack1,       OutUnknown      }},
-  { OpVGetL,       {Local,            Stack1|Local, OutVInputL      }},
   { OpClassGetC,   {Stack1,           Stack1,       OutClass        }},
   { OpClassGetTS,  {Stack1,           StackTop2,    OutUnknown      }},
 
@@ -305,15 +299,10 @@ static const struct {
 
   { OpIterInit,    {Stack1,           Local,        OutUnknown      }},
   { OpLIterInit,   {Local,            Local,        OutUnknown      }},
-  { OpIterInitK,   {Stack1,           Local,        OutUnknown      }},
-  { OpLIterInitK,  {Local,            Local,        OutUnknown      }},
   { OpIterNext,    {None,             Local,        OutUnknown      }},
   { OpLIterNext,   {Local,            Local,        OutUnknown      }},
-  { OpIterNextK,   {None,             Local,        OutUnknown      }},
-  { OpLIterNextK,  {Local,            Local,        OutUnknown      }},
   { OpIterFree,    {None,             None,         OutNone         }},
   { OpLIterFree,   {Local,            None,         OutNone         }},
-  { OpIterBreak,   {Local,            None,         OutNone         }},
 
   /*** 12. Include, eval, and define instructions ***/
 
@@ -327,7 +316,6 @@ static const struct {
   { OpDefCls,      {None,             None,         OutNone         }},
   { OpDefRecord,   {None,             None,         OutNone         }},
   { OpDefCns,      {Stack1,           Stack1,       OutBoolean      }},
-  { OpAliasCls,    {Stack1,           Stack1,       OutBoolean      }},
 
   /*** 13. Miscellaneous instructions ***/
 
@@ -439,18 +427,9 @@ bool instrInfoInited;
 
 void initInstrInfo() {
   if (!instrInfoInited) {
+    instrInfo.reserve(sizeof(instrInfoSparse)/sizeof(*instrInfoSparse));
     for (auto& info : instrInfoSparse) {
       instrInfo[info.op] = info.info;
-    }
-    if (!RuntimeOption::EvalCheckReturnTypeHints) {
-      auto& ii = instrInfo[OpVerifyRetTypeC];
-      ii.in = ii.out = None;
-      ii.type = OutNone;
-
-      auto& ii2 = instrInfo[OpVerifyRetTypeTS];
-      ii2.in = Stack1;
-      ii2.out = None;
-      ii2.type = OutNone;
     }
     instrInfoInited = true;
   }
@@ -582,8 +561,6 @@ bool isAlwaysNop(const NormalizedInstruction& ni) {
   case Op::UGetCUNop:
   case Op::EntryNop:
     return true;
-  case Op::VerifyRetTypeC:
-    return !RuntimeOption::EvalCheckReturnTypeHints;
   default:
     return false;
   }
@@ -595,13 +572,12 @@ bool isAlwaysNop(const NormalizedInstruction& ni) {
 #define THREE(a, b, c) a(0) b(1) c(2)
 #define FOUR(a, b, c, d) a(0) b(1) c(2) d(3)
 #define FIVE(a, b, c, d, e) a(0) b(1) c(2) d(3) e(4)
+#define SIX(a, b, c, d, e, f) a(0) b(1) c(2) d(3) e(4) f(5)
 // Iterator bytecodes are handled specially here
 #define LA(n) assertx(idx == 0xff); idx = n;
 #define MA(n)
 #define BLA(n)
 #define SLA(n)
-#define ILA(n)
-#define I32LA(n)
 #define IVA(n)
 #define I64A(n)
 #define IA(n)
@@ -614,15 +590,14 @@ bool isAlwaysNop(const NormalizedInstruction& ni) {
 #define VSA(n)
 #define KA(n)
 #define LAR(n)
+#define ITA(n)
 #define FCA(n)
 #define O(name, imm, ...) case Op::name: imm break;
 
 size_t localImmIdx(Op op) {
   switch (op) {
     case Op::LIterInit:
-    case Op::LIterInitK:
     case Op::LIterNext:
-    case Op::LIterNextK:
     case Op::LIterFree:
       return 1;
     default:
@@ -655,12 +630,11 @@ size_t memberKeyImmIdx(Op op) {
 #undef THREE
 #undef FOUR
 #undef FIVE
+#undef SIX
 #undef LA
 #undef MA
 #undef BLA
 #undef SLA
-#undef ILA
-#undef I32LA
 #undef IVA
 #undef I64A
 #undef IA
@@ -673,6 +647,7 @@ size_t memberKeyImmIdx(Op op) {
 #undef VSA
 #undef KA
 #undef LAR
+#undef ITA
 #undef FCA
 #undef O
 
@@ -761,8 +736,9 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
     SKTRACE(1, sk, "getInputs: %s %d %d\n",
             opcodeToName(ni.op()), stackOff.offset, fca.numInputs());
 
-    if (fca.hasGenerics()) inputs.emplace_back(Location::Stack { stackOff });
-    stackOff -= fca.numInputs() + 2;
+    if (fca.hasGenerics()) inputs.emplace_back(Location::Stack { stackOff-- });
+    if (fca.hasUnpack()) inputs.emplace_back(Location::Stack { stackOff-- });
+    stackOff -= fca.numArgs + 2;
 
     switch (ni.op()) {
       case Op::FCallCtor:
@@ -777,19 +753,9 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
   }
 
   if (flags & Local) {
-    // (Almost) all instructions that take a Local have its index at their
-    // first immediate.
-    if (ni.op() == Op::IterBreak) {
-      for (auto const& it : ni.immIters) {
-        if (it.kind != KindOfLIter) continue;
-        SKTRACE(1, sk, "getInputs: local %d\n", it.local);
-        inputs.emplace_back(Location::Local { uint32_t(it.local) });
-      }
-    } else {
-      auto const loc = ni.imm[localImmIdx(ni.op())].u_IVA;
-      SKTRACE(1, sk, "getInputs: local %d\n", loc);
-      inputs.emplace_back(Location::Local { uint32_t(loc) });
-    }
+    auto const loc = ni.imm[localImmIdx(ni.op())].u_IVA;
+    SKTRACE(1, sk, "getInputs: local %d\n", loc);
+    inputs.emplace_back(Location::Local { uint32_t(loc) });
   }
 
   if (flags & LocalRange) {
@@ -843,14 +809,9 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
 
 bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   switch (ni.op()) {
-  case Op::IterBreak:
   case Op::IterNext:
-  case Op::IterNextK:
   case Op::LIterNext:
-  case Op::LIterNextK:
-  case Op::IterInitK:
   case Op::IterInit:
-  case Op::LIterInitK:
   case Op::LIterInit:
   case Op::JmpZ:
   case Op::JmpNZ:
@@ -876,7 +837,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::IncDecL:
   case Op::DefCls:
   case Op::DefRecord:
-  case Op::AliasCls:
   case Op::Eq:
   case Op::Neq:
   case Op::AssertRATL:
@@ -923,7 +883,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::CastArray:
   case Op::CastDouble:
   case Op::CastInt:
-  case Op::CastObject:
   case Op::CastString:
   case Op::CastDict:
   case Op::CastKeyset:
@@ -1011,7 +970,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::OODeclExists:
   case Op::Parent:
   case Op::PopC:
-  case Op::PopV:
   case Op::PopU:
   case Op::PopU2:
   case Op::PopFrame:
@@ -1032,7 +990,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::ThrowAsTypeStructException:
   case Op::True:
   case Op::UnsetL:
-  case Op::VGetL:
   case Op::VerifyParamType:
   case Op::VerifyParamTypeTS:
   case Op::VerifyRetTypeC:
@@ -1121,8 +1078,6 @@ bool instrBreaksProfileBB(const NormalizedInstruction* inst) {
 
 #define IMM_BLA(n)     ni.immVec
 #define IMM_SLA(n)     ni.immVec
-#define IMM_ILA(n)     ni.immIters
-#define IMM_I32LA(n)   ni.immVec
 #define IMM_VSA(n)     ni.immVec
 #define IMM_IVA(n)     ni.imm[n].u_IVA
 #define IMM_I64A(n)    ni.imm[n].u_I64A
@@ -1137,13 +1092,15 @@ bool instrBreaksProfileBB(const NormalizedInstruction* inst) {
 #define IMM_OA(subop)  (subop)IMM_OA_IMPL
 #define IMM_KA(n)      ni.imm[n].u_KA
 #define IMM_LAR(n)     ni.imm[n].u_LAR
+#define IMM_ITA(n)     ni.imm[n].u_ITA
 #define IMM_FCA(n)     ni.imm[n].u_FCA
 
-#define ONE(x0)           , IMM_##x0(0)
-#define TWO(x0,x1)        , IMM_##x0(0), IMM_##x1(1)
-#define THREE(x0,x1,x2)   , IMM_##x0(0), IMM_##x1(1), IMM_##x2(2)
-#define FOUR(x0,x1,x2,x3) , IMM_##x0(0), IMM_##x1(1), IMM_##x2(2), IMM_##x3(3)
-#define FIVE(x0,x1,x2,x3,x4) , IMM_##x0(0), IMM_##x1(1), IMM_##x2(2), IMM_##x3(3), IMM_##x4(4)
+#define ONE(x0)                , IMM_##x0(0)
+#define TWO(x0,x1)             , IMM_##x0(0), IMM_##x1(1)
+#define THREE(x0,x1,x2)        , IMM_##x0(0), IMM_##x1(1), IMM_##x2(2)
+#define FOUR(x0,x1,x2,x3)      , IMM_##x0(0), IMM_##x1(1), IMM_##x2(2), IMM_##x3(3)
+#define FIVE(x0,x1,x2,x3,x4)   , IMM_##x0(0), IMM_##x1(1), IMM_##x2(2), IMM_##x3(3), IMM_##x4(4)
+#define SIX(x0,x1,x2,x3,x4,x5) , IMM_##x0(0), IMM_##x1(1), IMM_##x2(2), IMM_##x3(3), IMM_##x4(4), IMM_##x5(5)
 #define NA                   /*  */
 
 static void translateDispatch(irgen::IRGS& irgs,
@@ -1153,6 +1110,7 @@ static void translateDispatch(irgen::IRGS& irgs,
 #undef O
 }
 
+#undef SIX
 #undef FIVE
 #undef FOUR
 #undef THREE
@@ -1162,8 +1120,6 @@ static void translateDispatch(irgen::IRGS& irgs,
 
 #undef IMM_BLA
 #undef IMM_SLA
-#undef IMM_ILA
-#undef IMM_I32LA
 #undef IMM_IVA
 #undef IMM_I64A
 #undef IMM_LA
@@ -1178,6 +1134,7 @@ static void translateDispatch(irgen::IRGS& irgs,
 #undef IMM_VSA
 #undef IMM_KA
 #undef IMM_LAR
+#undef IMM_ITA
 #undef IMM_FCA
 
 //////////////////////////////////////////////////////////////////////
@@ -1191,8 +1148,6 @@ Type flavorToType(FlavorDesc f) {
     case CV: return TCell;  // TODO(#3029148) this could be InitCell
     case CUV: return TCell;
     case UV: return TUninit;
-    case VV: return TBoxedInitCell;
-    case CVV: case CVUV: return TGen;
   }
   not_reached();
 }
@@ -1219,8 +1174,7 @@ void translateInstr(irgen::IRGS& irgs, const NormalizedInstruction& ni,
       break;
     }
     auto const type =
-      !builtinFunc ? flavorToType(instrInputFlavor(pc, i)) :
-      builtinFunc->byRef(num - i - 1) ? TGen : TCell;
+      !builtinFunc ? flavorToType(instrInputFlavor(pc, i)) : TCell;
     irgen::assertTypeStack(irgs, BCSPRelOffset{i}, type);
   }
 

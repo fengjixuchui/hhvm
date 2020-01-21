@@ -285,27 +285,14 @@ SSATmp* mergeBranchDests(State& env, const IRInstruction* inst) {
                    CheckInitMem,
                    CheckRDSInitialized,
                    CheckPackedArrayDataBounds,
+                   CheckMixedArrayKeys,
                    CheckMixedArrayOffset,
                    CheckDictOffset,
-                   CheckKeysetOffset,
-                   CheckRefInner,
-                   CheckCtxThis));
+                   CheckKeysetOffset));
   if (inst->next() != nullptr && inst->next() == inst->taken()) {
     return gen(env, Jmp, inst->next());
   }
   return nullptr;
-}
-
-SSATmp* simplifyCheckCtxThis(State& env, const IRInstruction* inst) {
-  auto const func = inst->marker().func();
-  auto const srcTy = inst->src(0)->type();
-  if (srcTy <= TObj || func->requiresThisInBody()) {
-    return gen(env, Nop);
-  }
-  if (!func->mayHaveThis() || !srcTy.maybe(TObj)) {
-    return gen(env, Jmp, inst->taken());
-  }
-  return mergeBranchDests(env, inst);
 }
 
 SSATmp* simplifyEqFunc(State& env, const IRInstruction* inst) {
@@ -343,66 +330,18 @@ SSATmp* simplifyLdCls(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
-SSATmp* simplifyLdClsCtx(State& env, const IRInstruction* inst) {
-  auto const ctx = inst->src(0);
-
-  if (ctx->hasConstVal(TCctx)) {
-    return cns(env, ctx->cctxVal().cls());
-  }
-  Type ctxType = ctx->type();
-  if (ctxType <= TObj) {
-    // this pointer... load its class ptr
-    return gen(env, LdObjClass, ctx);
-  }
-  if (ctxType <= TCctx) {
-    return gen(env, LdClsCctx, ctx);
-  }
-  return nullptr;
-}
-
-SSATmp* simplifyLdClsCctx(State& env, const IRInstruction* inst) {
-  SSATmp* ctx = inst->src(0);
-
-  if (ctx->hasConstVal(TCctx)) {
-    return cns(env, ctx->cctxVal().cls());
-  }
-  if (ctx->inst()->op() == ConvClsToCctx) {
-    return ctx->inst()->src(0);
-  }
-  return nullptr;
-}
-
 SSATmp* simplifyLdClsMethod(State& env, const IRInstruction* inst) {
-  auto const ctx = inst->src(0);
+  auto const clsTmp = inst->src(0);
+  auto const idxTmp = inst->src(1);
 
-  if (ctx->hasConstVal()) {
-    auto const idx = inst->src(1);
-    if (idx->hasConstVal()) {
-      auto const cls = ctx->hasConstVal(TCls) ?
-        ctx->clsVal() : ctx->cctxVal().cls();
-      return cns(env, cls->getMethod(-idx->intVal() - 1));
-    }
-    return nullptr;
-  }
-
-  if (ctx->isA(TCls)) {
-    auto const src = ctx->inst();
-    if (src->op() == LdClsCctx) {
-      return gen(env, LdClsMethod, src->src(0), inst->src(1));
+  if (clsTmp->hasConstVal() && idxTmp->hasConstVal()) {
+    auto const cls = clsTmp->clsVal();
+    auto const idx = idxTmp->intVal();
+    if (idx < cls->numMethods()) {
+      return cns(env, cls->getMethod(idx));
     }
   }
-  return nullptr;
-}
 
-SSATmp* simplifySpillFrame(State& env, const IRInstruction* inst) {
-  auto const ctx = inst->src(2);
-  if (ctx->isA(TCls)) {
-    auto const src = ctx->inst();
-    if (src->op() == LdClsCctx) {
-      return gen(env, SpillFrame, *inst->extra<SpillFrame>(),
-                 inst->src(0), inst->src(1), src->src(0), inst->src(3));
-    }
-  }
   return nullptr;
 }
 
@@ -415,35 +354,24 @@ SSATmp* simplifyLdObjClass(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
+SSATmp* simplifyLdFrameCls(State& env, const IRInstruction* inst) {
+  auto const ty = inst->typeParam();
+
+  if (!(ty < TCls)) return nullptr;
+
+  if (auto const cls = ty.clsSpec().exactCls()) {
+    return cns(env, cls);
+  }
+
+  return nullptr;
+}
+
 SSATmp* simplifyLdObjInvoke(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
   if (!src->hasConstVal(TCls)) return nullptr;
 
   auto const meth = src->clsVal()->getCachedInvoke();
   return meth == nullptr ? nullptr : cns(env, meth);
-}
-
-SSATmp* simplifyFwdCtxStaticCall(State& env, const IRInstruction* inst) {
-  auto const srcCtx = inst->src(0);
-
-  if (srcCtx->isA(TCctx)) return srcCtx;
-  if (srcCtx->isA(TObj)) {
-    auto const cls = gen(env, LdObjClass, srcCtx);
-    return gen(env, ConvClsToCctx, cls);
-  }
-  return nullptr;
-}
-
-SSATmp* simplifyConvClsToCctx(State& env, const IRInstruction* inst) {
-  auto const src = inst->src(0);
-
-  if (src->hasConstVal(TCls)) {
-    return cns(env, ConstCctx::cctx(src->clsVal()));
-  }
-
-  auto const srcInst = src->inst();
-  if (srcInst->is(LdClsCctx)) return srcInst->src(0);
-  return nullptr;
 }
 
 SSATmp* simplifyMov(State& /*env*/, const IRInstruction* inst) {
@@ -1550,14 +1478,7 @@ SSATmp* simplifyEqArrayDataPtr(State& env, const IRInstruction* inst) {
   if (left == right) return cns(env, true);
   if (!left->type().maybe(right->type())) return cns(env, false);
   if (left->hasConstVal() && right->hasConstVal()) {
-    auto const val = [&](const SSATmp* s) -> const ArrayData* {
-      if (s->hasConstVal(TArr))    return s->arrVal();
-      if (s->hasConstVal(TVec))    return s->vecVal();
-      if (s->hasConstVal(TDict))   return s->dictVal();
-      if (s->hasConstVal(TKeyset)) return s->keysetVal();
-      always_assert(false);
-    };
-    return cns(env, val(left) == val(right));
+    return cns(env, left->arrLikeVal() == right->arrLikeVal());
   }
   return nullptr;
 }
@@ -1665,7 +1586,6 @@ SSATmp* isTypeImpl(State& env, const IRInstruction* inst) {
   // the distinction matters to you here, be careful.
   assertx(IMPLIES(type <= TStr, type == TStr));
   assertx(IMPLIES(type <= TArr, type == TArr));
-  assertx(IMPLIES(type <= TShape, type == TShape));
   assertx(IMPLIES(type <= TVec, type == TVec));
   assertx(IMPLIES(type <= TDict, type == TDict));
   assertx(IMPLIES(type <= TKeyset, type == TKeyset));
@@ -2010,54 +1930,48 @@ SSATmp* simplifyConcatStrInt(State& env, const IRInstruction* inst) {
 
 namespace {
 
-template <typename G, typename C>
-SSATmp* arrayLikeConvImpl(State& env, const IRInstruction* inst,
-                          G get, C convert) {
+template <typename C>
+SSATmp* arrayLikeConvImpl(State& env, const IRInstruction* inst, C convert) {
   auto const src = inst->src(0);
   if (!src->hasConstVal()) return nullptr;
-  auto const before = get(src);
+  auto const before = src->arrLikeVal();
   auto converted = convert(const_cast<ArrayData*>(before));
   if (!converted) return nullptr;
   ArrayData::GetScalarArray(&converted);
   return cns(env, converted);
 }
 
-template <typename G>
-SSATmp* convToArrImpl(State& env, const IRInstruction* inst, G get) {
+SSATmp* convToArrImpl(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
-    env, inst, get,
+    env, inst,
     [&](ArrayData* a) { return a->toPHPArray(true); }
   );
 }
 
-template <typename G>
-SSATmp* convToVecImpl(State& env, const IRInstruction* inst, G get) {
+SSATmp* convToVecImpl(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
-    env, inst, get,
+    env, inst,
     [&](ArrayData* a) { return a->toVec(true); }
   );
 }
 
-template <typename G>
-SSATmp* convToDictImpl(State& env, const IRInstruction* inst, G get) {
+SSATmp* convToDictImpl(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
-    env, inst, get,
+    env, inst,
     [&](ArrayData* a) { return a->toDict(true); }
   );
 }
 
-template <typename G>
-SSATmp* convToNonDVArrImpl(State& env, const IRInstruction* inst, G get) {
+SSATmp* convToNonDVArrImpl(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
-    env, inst, get,
+    env, inst,
     [&](ArrayData* a) { return a->toPHPArray(true); }
   );
 }
 
-template <typename G>
-SSATmp* convToKeysetImpl(State& env, const IRInstruction* inst, G get) {
+SSATmp* convToKeysetImpl(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
-    env, inst, get,
+    env, inst,
     [&](ArrayData* a) {
       // We need to check if the array contains values suitable for keyset
       // before attempting the conversion. Otherwise, toKeyset() might re-enter
@@ -2078,18 +1992,16 @@ SSATmp* convToKeysetImpl(State& env, const IRInstruction* inst, G get) {
   );
 }
 
-template <typename G>
-SSATmp* convToVArrImpl(State& env, const IRInstruction* inst, G get) {
+SSATmp* convToVArrImpl(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
-    env, inst, get,
+    env, inst,
     [&](ArrayData* a) { return a->toVArray(true); }
   );
 }
 
-template <typename G>
-SSATmp* convToDArrImpl(State& env, const IRInstruction* inst, G get) {
+SSATmp* convToDArrImpl(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
-    env, inst, get,
+    env, inst,
     [&](ArrayData* a) { return a->toDArray(true); }
   );
 }
@@ -2105,48 +2017,45 @@ SSATmp* convNonArrToArrImpl(State& env, const IRInstruction* inst) {
 
 }
 
-#define X(FromTy, FromTy2, ToTy)                                          \
+#define X(FromTy, ToTy)                                                   \
 SSATmp*                                                                   \
 simplifyConv##FromTy##To##ToTy(State& env, const IRInstruction* inst) {   \
-  return convTo##ToTy##Impl(                                              \
-    env, inst,                                                            \
-    [&](const SSATmp* s) { return s->FromTy2(); });                       \
+  return convTo##ToTy##Impl(env, inst);                                   \
 }
 
-X(Vec, vecVal, Arr)
-X(Dict, dictVal, Arr)
-X(Keyset, keysetVal, Arr)
+X(Vec, Arr)
+X(Dict, Arr)
+X(Keyset, Arr)
 
-X(Arr, arrVal, Vec)
-X(Dict, dictVal, Vec)
-X(Keyset, keysetVal, Vec)
+X(Arr, Vec)
+X(Dict, Vec)
+X(Keyset, Vec)
 
-X(Arr, arrVal, Dict)
-X(Vec, vecVal, Dict)
-X(Keyset, keysetVal, Dict)
+X(Arr, Dict)
+X(Vec, Dict)
+X(Keyset, Dict)
 
-X(Arr, arrVal, Keyset)
-X(Vec, vecVal, Keyset)
-X(Dict, dictVal, Keyset)
+X(Arr, Keyset)
+X(Vec, Keyset)
+X(Dict, Keyset)
 
-X(Arr, arrVal, VArr)
-X(Vec, vecVal, VArr)
-X(Dict, dictVal, VArr)
-X(Keyset, keysetVal, VArr)
+X(Arr, VArr)
+X(Vec, VArr)
+X(Dict, VArr)
+X(Keyset, VArr)
 
-X(Arr, arrVal, DArr)
-X(Vec, vecVal, DArr)
-X(Dict, dictVal, DArr)
-X(Keyset, keysetVal, DArr)
+X(Arr, DArr)
+X(Vec, DArr)
+X(Dict, DArr)
+X(Keyset, DArr)
 
-X(Arr, arrVal, NonDVArr)
+X(Arr, NonDVArr)
 
 #undef X
 
-SSATmp* simplifyConvCellToArr(State& env, const IRInstruction* inst) {
+SSATmp* simplifyConvTVToArr(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
   if (src->isA(TArr))    return gen(env, ConvArrToNonDVArr, src);
-  if (src->isA(TShape))  return gen(env, ConvShapeToArr, inst->taken(), src);
   if (src->isA(TVec))    return gen(env, ConvVecToArr, src);
   if (src->isA(TDict))   return gen(env, ConvDictToArr, inst->taken(), src);
   if (src->isA(TKeyset)) return gen(env, ConvKeysetToArr, inst->taken(), src);
@@ -2370,7 +2279,7 @@ const StaticString
     s_msgClsMethToDbl("Implicit clsmeth to double conversion");
 }
 
-SSATmp* simplifyConvCellToBool(State& env, const IRInstruction* inst) {
+SSATmp* simplifyConvTVToBool(State& env, const IRInstruction* inst) {
   auto const src     = inst->src(0);
   auto const srcType = src->type();
 
@@ -2383,10 +2292,6 @@ SSATmp* simplifyConvCellToBool(State& env, const IRInstruction* inst) {
   }
   if (srcType <= TDict) {
     auto const length = gen(env, CountDict, src);
-    return gen(env, NeqInt, length, cns(env, 0));
-  }
-  if (srcType <= TShape) {
-    auto const length = gen(env, CountShape, src);
     return gen(env, NeqInt, length, cns(env, 0));
   }
   if (srcType <= TKeyset) {
@@ -2420,7 +2325,7 @@ SSATmp* simplifyConvCellToBool(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
-SSATmp* simplifyConvCellToStr(State& env, const IRInstruction* inst) {
+SSATmp* simplifyConvTVToStr(State& env, const IRInstruction* inst) {
   auto const src        = inst->src(0);
   auto const srcType    = src->type();
   auto const catchTrace = inst->taken();
@@ -2435,8 +2340,7 @@ SSATmp* simplifyConvCellToStr(State& env, const IRInstruction* inst) {
     );
   }
   if (srcType <= TNull)   return cns(env, staticEmptyString());
-  if (srcType <= TArr ||
-      (!RuntimeOption::EvalHackArrDVArrs && srcType <= TShape)) {
+  if (srcType <= TArr){
     gen(env, RaiseNotice, catchTrace, cns(env, s_msgArrToStr.get()));
     return cns(env, s_Array.get());
   }
@@ -2444,8 +2348,7 @@ SSATmp* simplifyConvCellToStr(State& env, const IRInstruction* inst) {
     gen(env, RaiseNotice, catchTrace, cns(env, s_msgVecToStr.get()));
     return cns(env, s_Vec.get());
   }
-  if (srcType <= TDict ||
-      (RuntimeOption::EvalHackArrDVArrs && srcType <= TShape)) {
+  if (srcType <= TDict) {
     gen(env, RaiseNotice, catchTrace, cns(env, s_msgDictToStr.get()));
     return cns(env, s_Dict.get());
   }
@@ -2481,7 +2384,7 @@ SSATmp* simplifyConvCellToStr(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
-SSATmp* simplifyConvCellToInt(State& env, const IRInstruction* inst) {
+SSATmp* simplifyConvTVToInt(State& env, const IRInstruction* inst) {
   auto const src      = inst->src(0);
   auto const srcType  = src->type();
   auto const catchTrace = inst->taken();
@@ -2490,10 +2393,6 @@ SSATmp* simplifyConvCellToInt(State& env, const IRInstruction* inst) {
   if (srcType <= TNull) return cns(env, 0);
   if (srcType <= TArr)  {
     auto const length = gen(env, Count, src);
-    return gen(env, Select, length, cns(env, 1), cns(env, 0));
-  }
-  if (srcType <= TShape) {
-    auto const length = gen(env, CountShape, src);
     return gen(env, Select, length, cns(env, 1), cns(env, 0));
   }
   if (srcType <= TVec) {
@@ -2528,7 +2427,7 @@ SSATmp* simplifyConvCellToInt(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
-SSATmp* simplifyConvCellToDbl(State& env, const IRInstruction* inst) {
+SSATmp* simplifyConvTVToDbl(State& env, const IRInstruction* inst) {
   auto const src      = inst->src(0);
   auto const srcType  = src->type();
   auto const catchTrace = inst->taken();
@@ -2536,10 +2435,6 @@ SSATmp* simplifyConvCellToDbl(State& env, const IRInstruction* inst) {
   if (srcType <= TDbl)  return src;
   if (srcType <= TNull) return cns(env, 0.0);
   if (srcType <= TArr)  return gen(env, ConvArrToDbl, src);
-  if (srcType <= TShape) {
-    auto const length = gen(env, CountShape, src);
-    return gen(env, ConvBoolToDbl, gen(env, ConvIntToBool, length));
-  }
   if (srcType <= TVec) {
     auto const length = gen(env, CountVec, src);
     return gen(env, ConvBoolToDbl, gen(env, ConvIntToBool, length));
@@ -2585,10 +2480,6 @@ SSATmp* simplifyConvObjToBool(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
-SSATmp* simplifyConvCellToObj(State& /*env*/, const IRInstruction* inst) {
-  if (inst->src(0)->isA(TObj)) return inst->src(0);
-  return nullptr;
-}
 
 SSATmp* simplifyDblAsBits(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
@@ -2626,23 +2517,9 @@ SSATmp* simplifyCeil(State& env, const IRInstruction* inst) {
   return roundImpl(env, inst, ceil);
 }
 
-SSATmp* simplifyUnboxPtr(State& /*env*/, const IRInstruction* inst) {
-  if (inst->src(0)->isA(TMemToCell)) {
-    return inst->src(0);
-  }
-  return nullptr;
-}
-
-SSATmp* simplifyBoxPtr(State& /*env*/, const IRInstruction* inst) {
-  if (inst->src(0)->isA(TMemToBoxedCell)) {
-    return inst->src(0);
-  }
-  return nullptr;
-}
-
 SSATmp* simplifyCheckInit(State& env, const IRInstruction* inst) {
   auto const srcType = inst->src(0)->type();
-  assertx(!srcType.maybe(TMemToGen));
+  assertx(!srcType.maybe(TMemToCell));
   assertx(inst->taken());
   if (!srcType.maybe(TUninit)) return gen(env, Nop);
   return mergeBranchDests(env, inst);
@@ -2777,17 +2654,17 @@ SSATmp* simplifyCheckNonNull(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
-SSATmp* simplifyCheckRefs(State& env, const IRInstruction* inst) {
+SSATmp* simplifyCheckInOuts(State& env, const IRInstruction* inst) {
   if (!inst->src(0)->hasConstVal()) return nullptr;
 
   auto const func = inst->src(0)->funcVal();
-  auto const extra = inst->extra<CheckRefs>();
+  auto const extra = inst->extra<CheckInOuts>();
   auto i = extra->firstBit;
   auto m = extra->mask;
   auto v = extra->vals;
   while (m) {
     if (m & 1) {
-      if (func->byRef(i) != (v & 1)) {
+      if (func->isInOut(i) != (v & 1)) {
         // This shouldn't happen - the mask/value are predictions
         // based on previously seen Funcs; but we're now claiming its
         // always this Func. But unreachable code mumble mumble.
@@ -2800,14 +2677,6 @@ SSATmp* simplifyCheckRefs(State& env, const IRInstruction* inst) {
   }
 
   return gen(env, Nop);
-}
-
-SSATmp* simplifyCheckRefInner(State& env, const IRInstruction* inst) {
-  // Ref inner cells are at worst InitCell, so don't bother checking for that.
-  if (TInitCell <= inst->typeParam()) {
-    return gen(env, Nop);
-  }
-  return mergeBranchDests(env, inst);
 }
 
 SSATmp* simplifyDefLabel(State& env, const IRInstruction* inst) {
@@ -3176,15 +3045,14 @@ SSATmp* simplifyAKExistsArr(State& env, const IRInstruction* inst) {
 
 namespace {
 
-template <typename G>
-SSATmp* arrGetKImpl(State& env, const IRInstruction* inst, G get) {
+SSATmp* arrGetKImpl(State& env, const IRInstruction* inst) {
   auto const arr = inst->src(0);
   auto const& extra = inst->extra<IndexData>();
 
   assertx(validPos(ssize_t(extra->index)));
   if (!arr->hasConstVal()) return nullptr;
 
-  auto const mixed = MixedArray::asMixed(get(arr));
+  auto const mixed = MixedArray::asMixed(arr->arrLikeVal());
   auto const tv = mixed->getArrayElmPtr(extra->index);
 
   // The array doesn't contain a valid element at that offset. Since this
@@ -3198,8 +3066,7 @@ SSATmp* arrGetKImpl(State& env, const IRInstruction* inst, G get) {
   return cns(env, *tv);
 }
 
-template <typename G>
-SSATmp* checkOffsetImpl(State& env, const IRInstruction* inst, G get) {
+SSATmp* checkOffsetImpl(State& env, const IRInstruction* inst) {
   auto const arr = inst->src(0);
   auto const key = inst->src(1);
   auto const& extra = inst->extra<IndexData>();
@@ -3207,7 +3074,7 @@ SSATmp* checkOffsetImpl(State& env, const IRInstruction* inst, G get) {
   assertx(validPos(ssize_t(extra->index)));
   if (!arr->hasConstVal()) return mergeBranchDests(env, inst);
 
-  auto const mixed = MixedArray::asMixed(get(arr));
+  auto const mixed = MixedArray::asMixed(arr->arrLikeVal());
 
   auto const dataTV = mixed->getArrayElmPtr(extra->index);
   if (!dataTV) return gen(env, Jmp, inst->taken());
@@ -3280,7 +3147,7 @@ SSATmp* hackArrIssetImpl(State& env, const IRInstruction* inst,
   return hackArrQueryImpl(
     env, inst,
     getInt, getStr,
-    [&] (tv_rval rval) { return cns(env, rval && !cellIsNull(rval.tv())); }
+    [&] (tv_rval rval) { return cns(env, rval && !tvIsNull(rval.tv())); }
   );
 }
 
@@ -3290,7 +3157,7 @@ SSATmp* hackArrEmptyElemImpl(State& env, const IRInstruction* inst,
   return hackArrQueryImpl(
     env, inst,
     getInt, getStr,
-    [&] (tv_rval rval) { return cns(env, !rval || !cellToBool(rval.tv())); }
+    [&] (tv_rval rval) { return cns(env, !rval || !tvToBool(rval.tv())); }
   );
 }
 
@@ -3361,11 +3228,11 @@ X(AKExistsKeyset, AKExists, keysetVal)
 #undef X
 
 SSATmp* simplifyMixedArrayGetK(State& env, const IRInstruction* inst) {
-  return arrGetKImpl(env, inst, [](SSATmp* a) { return a->arrVal(); });
+  return arrGetKImpl(env, inst);
 }
 
 SSATmp* simplifyDictGetK(State& env, const IRInstruction* inst) {
-  return arrGetKImpl(env, inst, [](SSATmp* a) { return a->dictVal(); });
+  return arrGetKImpl(env, inst);
 }
 
 SSATmp* simplifyKeysetGetK(State& env, const IRInstruction* inst) {
@@ -3390,12 +3257,44 @@ SSATmp* simplifyKeysetGetK(State& env, const IRInstruction* inst) {
   return cns(env, *tv);
 }
 
+SSATmp* simplifyGetMixedPtrIter(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const idx = inst->src(1);
+  if (!arr->hasConstVal(TArrLike)) return nullptr;
+  if (!idx->hasConstVal(TInt)) return nullptr;
+  auto const ad  = MixedArray::asMixed(arr->arrLikeVal());
+  auto const elm = ad->data() + idx->intVal();
+  return cns(env, Type::cns(elm, outputType(inst)));
+}
+
+SSATmp* simplifyGetPackedPtrIter(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const idx = inst->src(1);
+  if (!arr->hasConstVal(TArrLike)) return nullptr;
+  if (!idx->hasConstVal(TInt)) return nullptr;
+  auto const elm = packedData(arr->arrLikeVal()) + idx->intVal();
+  return cns(env, Type::cns(elm, outputType(inst)));
+}
+
+SSATmp* simplifyCheckMixedArrayKeys(State& env, const IRInstruction* inst) {
+  auto const src = inst->src(0);
+  if (!src->hasConstVal()) return mergeBranchDests(env, inst);
+  auto const arr = src->arrLikeVal();
+
+  auto match = true;
+  IterateKVNoInc(arr, [&](TypedValue key, TypedValue val){
+    match &= Type::cns(key) <= inst->typeParam();
+    return !match;
+  });
+  return match ? gen(env, Nop) : gen(env, Jmp, inst->taken());
+}
+
 SSATmp* simplifyCheckMixedArrayOffset(State& env, const IRInstruction* inst) {
-  return checkOffsetImpl(env, inst, [](SSATmp* a) { return a->arrVal(); });
+  return checkOffsetImpl(env, inst);
 }
 
 SSATmp* simplifyCheckDictOffset(State& env, const IRInstruction* inst) {
-  return checkOffsetImpl(env, inst, [](SSATmp* a) { return a->dictVal(); });
+  return checkOffsetImpl(env, inst);
 }
 
 SSATmp* simplifyCheckKeysetOffset(State& env, const IRInstruction* inst) {
@@ -3445,7 +3344,6 @@ SSATmp* simplifyCount(State& env, const IRInstruction* inst) {
   if (ty <= oneTy) return cns(env, 1);
 
   if (ty <= TArr) return gen(env, CountArray, val);
-  if (ty <= TShape) return gen(env, CountShape, val);
   if (ty <= TVec) return gen(env, CountVec, val);
   if (ty <= TDict) return gen(env, CountDict, val);
   if (ty <= TKeyset) return gen(env, CountKeyset, val);
@@ -3475,15 +3373,13 @@ SSATmp* simplifyCountArray(State& env, const IRInstruction* inst) {
 }
 
 namespace {
-template <class Fn>
 SSATmp* simplifyCountHelper(
   State& env,
   const IRInstruction* inst,
-  const Type& ty,
-  Fn szFn
+  const Type& ty
 ) {
   auto const src = inst->src(0);
-  if (src->hasConstVal(ty)) return cns(env, (src->*szFn)()->size());
+  if (src->hasConstVal(ty)) return cns(env, src->arrLikeVal()->size());
 
   auto const at = src->type().arrSpec().type();
   if (!at) return nullptr;
@@ -3500,23 +3396,19 @@ SSATmp* simplifyCountHelper(
 }
 
 SSATmp* simplifyCountArrayFast(State& env, const IRInstruction* inst) {
-  return simplifyCountHelper(env, inst, TArr, &SSATmp::arrVal);
+  return simplifyCountHelper(env, inst, TArr);
 }
 
 SSATmp* simplifyCountVec(State& env, const IRInstruction* inst) {
-  return simplifyCountHelper(env, inst, TVec, &SSATmp::vecVal);
+  return simplifyCountHelper(env, inst, TVec);
 }
 
 SSATmp* simplifyCountDict(State& env, const IRInstruction* inst) {
-  return simplifyCountHelper(env, inst, TDict, &SSATmp::dictVal);
-}
-
-SSATmp* simplifyCountShape(State& env, const IRInstruction* inst) {
-  return simplifyCountHelper(env, inst, TShape, &SSATmp::shapeVal);
+  return simplifyCountHelper(env, inst, TDict);
 }
 
 SSATmp* simplifyCountKeyset(State& env, const IRInstruction* inst) {
-  return simplifyCountHelper(env, inst, TKeyset, &SSATmp::keysetVal);
+  return simplifyCountHelper(env, inst, TKeyset);
 }
 
 SSATmp* simplifyLdClsName(State& env, const IRInstruction* inst) {
@@ -3552,7 +3444,7 @@ SSATmp* packedLayoutLoadImpl(State& env,
   auto const src0 = inst->src(0);
   auto const src1 = inst->src(1);
   if (src0->hasConstVal() && src1->hasConstVal(TInt)) {
-    auto const arr = isVec ? src0->vecVal() : src0->arrVal();
+    auto const arr = src0->arrLikeVal();
     auto const idx = src1->intVal();
     assertx(arr->hasPackedLayout());
     if (idx >= 0) {
@@ -3685,13 +3577,6 @@ SSATmp* simplifyHasToString(State& env, const IRInstruction* inst) {
     });
 }
 
-SSATmp* simplifyIsDVArray(State& env, const IRInstruction* inst) {
-  auto const src = inst->src(0);
-  return src->hasConstVal(TArr)
-    ? cns(env, !src->arrVal()->isNotDVArray())
-    : nullptr;
-}
-
 SSATmp* simplifyChrInt(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
   if (src->hasConstVal(TInt)) {
@@ -3769,7 +3654,7 @@ SSATmp* simplifyGetMemoKeyScalar(State& env, const IRInstruction* inst) {
       auto const key =
         HHVM_FN(serialize_memoize_param)(*src->variantVal().asTypedValue());
       SCOPE_EXIT { tvDecRefGen(key); };
-      assertx(cellIsPlausible(key));
+      assertx(tvIsPlausible(key));
       if (tvIsString(&key)) {
         return cns(env, makeStaticString(key.m_data.pstr));
       } else {
@@ -3820,8 +3705,7 @@ SSATmp* simplifyRaiseErrorOnInvalidIsAsExpressionType(
   if (!ts->hasConstVal(RuntimeOption::EvalHackArrDVArrs ? TDict : TArr)) {
     return nullptr;
   }
-  auto const tsVal = RuntimeOption::EvalHackArrDVArrs ? ts->dictVal()
-                                                      : ts->arrVal();
+  auto const tsVal = ts->arrLikeVal();
   if (errorOnIsAsExpressionInvalidTypes(ArrNR(tsVal), true)) {
     gen(env, Unreachable, ASSERT_REASON);
     return cns(env, TBottom);
@@ -3845,7 +3729,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(Lshr)
   X(AbsDbl)
   X(AssertNonNull)
-  X(BoxPtr)
   X(CallBuiltin)
   X(Ceil)
   X(CheckInit)
@@ -3854,8 +3737,7 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(MarkRDSInitialized)
   X(CheckLoc)
   X(CheckMBase)
-  X(CheckRefs)
-  X(CheckRefInner)
+  X(CheckInOuts)
   X(CheckStk)
   X(CheckType)
   X(CheckTypeMem)
@@ -3875,13 +3757,11 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(ConvBoolToArr)
   X(ConvBoolToDbl)
   X(ConvBoolToInt)
-  X(ConvCellToBool)
-  X(ConvCellToDbl)
-  X(ConvCellToInt)
-  X(ConvCellToObj)
-  X(ConvCellToStr)
-  X(ConvCellToArr)
-  X(ConvClsToCctx)
+  X(ConvTVToBool)
+  X(ConvTVToDbl)
+  X(ConvTVToInt)
+  X(ConvTVToStr)
+  X(ConvTVToArr)
   X(ConvDblToArr)
   X(ConvDblToBool)
   X(ConvDblToInt)
@@ -3928,7 +3808,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(CountArrayFast)
   X(CountVec)
   X(CountDict)
-  X(CountShape)
   X(CountKeyset)
   X(DecRef)
   X(DecRefNZ)
@@ -3940,7 +3819,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(InstanceOfBitmask)
   X(NInstanceOfBitmask)
   X(Floor)
-  X(FwdCtxStaticCall)
   X(IncRef)
   X(InitObjProps)
   X(InitObjMemoSlots)
@@ -3951,11 +3829,8 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(IsType)
   X(IsWaitHandle)
   X(IsCol)
-  X(IsDVArray)
   X(HasToString)
   X(LdCls)
-  X(LdClsCtx)
-  X(LdClsCctx)
   X(LdClsName)
   X(LdWHResult)
   X(LdWHState)
@@ -3967,14 +3842,12 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(LdVecElem)
   X(LdPackedElem)
   X(MethodExists)
-  X(CheckCtxThis)
   X(FuncHasAttr)
   X(IsClsDynConstructible)
   X(LdFuncRxLevel)
   X(LdObjClass)
   X(LdObjInvoke)
   X(Mov)
-  X(UnboxPtr)
   X(JmpZero)
   X(JmpNZero)
   X(Select)
@@ -4072,6 +3945,9 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(KeysetGet)
   X(KeysetGetQuiet)
   X(KeysetGetK)
+  X(GetMixedPtrIter)
+  X(GetPackedPtrIter)
+  X(CheckMixedArrayKeys)
   X(CheckMixedArrayOffset)
   X(CheckDictOffset)
   X(CheckKeysetOffset)
@@ -4091,11 +3967,11 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(ChrInt)
   X(JmpSwitchDest)
   X(CheckRange)
-  X(SpillFrame)
   X(GetMemoKey)
   X(GetMemoKeyScalar)
   X(StrictlyIntegerConv)
   X(RaiseErrorOnInvalidIsAsExpressionType)
+  X(LdFrameCls)
   default: break;
   }
 #undef X

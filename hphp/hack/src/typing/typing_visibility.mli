@@ -9,18 +9,24 @@
 
 open Typing_defs
 open Typing_env_types
+module Decl_provider = Decl_provider_ctx
 
 val check_class_access :
-  Pos.t ->
+  use_pos:Pos.t ->
+  def_pos:Pos.t ->
   env ->
-  Pos.t * visibility * bool ->
+  visibility * bool ->
   Nast.class_id_ ->
   Decl_provider.class_decl ->
   unit
 
-val check_obj_access : Pos.t -> env -> Pos.t * visibility -> unit
+val check_obj_access :
+  use_pos:Pos.t -> def_pos:Pos.t -> env -> visibility -> unit
 
-val check_inst_meth_access : Pos.t -> Pos.t * visibility -> unit
+val check_inst_meth_access :
+  use_pos:Pos.t -> def_pos:Pos.t -> visibility -> unit
+
+val check_deprecated : use_pos:Pos.t -> def_pos:Pos.t -> string option -> unit
 
 val is_visible :
   env ->
@@ -28,8 +34,3 @@ val is_visible :
   Nast.class_id_ option ->
   Decl_provider.class_decl ->
   bool
-
-val min_vis_opt :
-  (Pos.t * visibility) option ->
-  (Pos.t * visibility) option ->
-  (Pos.t * visibility) option

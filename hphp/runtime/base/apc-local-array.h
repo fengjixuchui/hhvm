@@ -45,54 +45,37 @@ struct APCLocalArray final : ArrayData,
   static APCLocalArray* Make(const APCArray*);
 
   static size_t Vsize(const ArrayData*);
-  static tv_rval GetValueRef(const ArrayData* ad, ssize_t pos);
+  static tv_rval RvalPos(const ArrayData* ad, ssize_t pos);
   static bool ExistsInt(const ArrayData* ad, int64_t k);
   static bool ExistsStr(const ArrayData* ad, const StringData* k);
   static arr_lval LvalInt(ArrayData*, int64_t k, bool copy);
   static arr_lval LvalStr(ArrayData*, StringData* k, bool copy);
-  static arr_lval LvalNew(ArrayData*, bool copy);
-  static ArrayData* SetInt(ArrayData*, int64_t k, Cell v);
+  static arr_lval LvalSilentInt(ArrayData*, int64_t k, bool copy);
+  static arr_lval LvalSilentStr(ArrayData*, StringData* k, bool copy);
+  static arr_lval LvalForceNew(ArrayData*, bool copy);
+  static ArrayData* SetInt(ArrayData*, int64_t k, TypedValue v);
+  static ArrayData* SetIntMove(ArrayData*, int64_t k, TypedValue v);
   static constexpr auto SetIntInPlace = &SetInt;
-  static ArrayData* SetStr(ArrayData*, StringData* k, Cell v);
+  static ArrayData* SetStr(ArrayData*, StringData* k, TypedValue v);
+  static ArrayData* SetStrMove(ArrayData*, StringData* k, TypedValue v);
   static constexpr auto SetStrInPlace = &SetStr;
-  static ArrayData* SetWithRefInt(ArrayData*, int64_t k, TypedValue v);
-  static constexpr auto SetWithRefIntInPlace = &SetWithRefInt;
-  static ArrayData* SetWithRefStr(ArrayData*, StringData* k, TypedValue v);
-  static constexpr auto SetWithRefStrInPlace = &SetWithRefStr;
   static ArrayData *RemoveInt(ArrayData* ad, int64_t k);
   static constexpr auto RemoveIntInPlace = &RemoveInt;
   static ArrayData *RemoveStr(ArrayData* ad, const StringData* k);
   static constexpr auto RemoveStrInPlace = &RemoveStr;
   static ArrayData* Copy(const ArrayData*);
-  static ArrayData* Append(ArrayData* a, Cell v);
+  static ArrayData* Append(ArrayData* a, TypedValue v);
   static constexpr auto AppendInPlace = &Append;
-  static ArrayData* AppendWithRef(ArrayData*, TypedValue v);
-  static constexpr auto AppendWithRefInPlace = &AppendWithRef;
   static ArrayData* PlusEq(ArrayData*, const ArrayData *elems);
   static ArrayData* Merge(ArrayData*, const ArrayData *elems);
-  static ArrayData* Prepend(ArrayData*, Cell v);
+  static ArrayData* Prepend(ArrayData*, TypedValue v);
   static tv_rval NvGetInt(const ArrayData*, int64_t k);
   static constexpr auto NvTryGetInt = &NvGetInt;
   static tv_rval NvGetStr(const ArrayData*, const StringData* k);
   static constexpr auto NvTryGetStr = &NvGetStr;
   static ssize_t NvGetIntPos(const ArrayData* ad, int64_t k);
   static ssize_t NvGetStrPos(const ArrayData* ad, const StringData* k);
-  static tv_rval RvalInt(const ArrayData* ad, int64_t k) {
-    return NvGetInt(ad, k);
-  }
-  static tv_rval RvalIntStrict(const ArrayData* ad, int64_t k) {
-    return NvTryGetInt(ad, k);
-  }
-  static tv_rval RvalStr(const ArrayData* ad, const StringData* k) {
-    return NvGetStr(ad, k);
-  }
-  static tv_rval RvalStrStrict(const ArrayData* ad, const StringData* k) {
-    return NvTryGetStr(ad, k);
-  }
-  static tv_rval RvalAtPos(const ArrayData* ad, ssize_t pos) {
-    return GetValueRef(ad, pos);
-  }
-  static Cell NvGetKey(const ArrayData*, ssize_t pos);
+  static TypedValue NvGetKey(const ArrayData*, ssize_t pos);
   static bool IsVectorData(const ArrayData* ad);
   static ssize_t IterBegin(const ArrayData*);
   static ssize_t IterLast(const ArrayData*);
@@ -122,7 +105,6 @@ struct APCLocalArray final : ArrayData,
   static constexpr auto ToKeyset = &ArrayCommon::ToKeyset;
   static constexpr auto ToVArray = &ArrayCommon::ToVArray;
   static constexpr auto ToDArray = &ArrayCommon::ToDArray;
-  static constexpr auto ToShape = &ArrayCommon::ToShape;
 
 public:
   using ArrayData::decRefCount;

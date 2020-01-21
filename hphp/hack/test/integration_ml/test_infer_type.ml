@@ -174,7 +174,10 @@ function nullthrows<T>(?T $x): T {
 "
 
 let nullthrows_cases =
-  [(("nullthrows.php", 3, 13), "?T"); (("nullthrows.php", 5, 10), "T")]
+  [
+    (("nullthrows.php", 3, 13), "?T");
+    (("nullthrows.php", 5, 10), "(nonnull & T)");
+  ]
 
 let nullvec =
   "<?hh // strict
@@ -306,7 +309,7 @@ function foo($x) : void {
 let dynamic_view_cases =
   [
     (("dynamic_view.php", 5, 14), "dynamic");
-    (("dynamic_view.php", 7, 3), "num");
+    (("dynamic_view.php", 7, 3), "(dynamic | int)");
     (("dynamic_view.php", 9, 3), "dynamic");
     (("dynamic_view.php", 11, 3), "dynamic");
     (("dynamic_view.php", 13, 3), "dynamic");
@@ -367,9 +370,18 @@ let test () =
       Test.assertEqual (fmt expected) (fmt ty_str)
     in
     let fn = ServerCommandTypes.FileName ("/" ^ file) in
-    let ServerEnv.{ tcopt; naming_table; _ } = env in
+    let ServerEnv.{ tcopt; _ } = env in
     let tcopt = { tcopt with GlobalOptions.tco_dynamic_view = dynamic } in
-    let (_, tast) = ServerIdeUtils.check_file_input tcopt naming_table fn in
+    let ctx = Provider_context.empty ~tcopt in
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx
+        ~path:(Relative_path.from_root file)
+        ~file_input:fn
+    in
+    let { Provider_utils.Compute_tast.tast; _ } =
+      Provider_utils.compute_tast_unquarantined ~ctx ~entry
+    in
     let ty = ServerInferType.type_at_pos tast line col in
     compare_type expected_type ty
   in

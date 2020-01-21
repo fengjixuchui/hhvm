@@ -21,6 +21,7 @@
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/ext/spl/ext_spl.h"
 #include "hphp/runtime/vm/func.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/base/stats.h"
@@ -66,22 +67,22 @@ Generator& Generator::operator=(const Generator& other) {
   node->arOff() = arOff;
   resumable()->initialize<true>(fp,
                                 other.resumable()->resumeAddr(),
-                                other.resumable()->resumeOffset(),
+                                other.resumable()->suspendOffset(),
                                 frameSz,
                                 genSz);
   copyVars(fp);
   setState(other.getState());
   m_index = other.m_index;
-  cellSet(other.m_key, m_key);
-  cellSet(other.m_value, m_value);
-  cellSet(other.m_delegate, m_delegate);
+  tvSet(other.m_key, m_key);
+  tvSet(other.m_value, m_value);
+  tvSet(other.m_delegate, m_delegate);
   return *this;
 }
 
 ObjectData* Generator::Create(const ActRec* fp, size_t numSlots,
-                              jit::TCA resumeAddr, Offset resumeOffset) {
+                              jit::TCA resumeAddr, Offset suspendOffset) {
   assertx(fp);
-  assertx(!fp->resumed());
+  assertx(!isResumed(fp));
   assertx(fp->func()->isNonAsyncGenerator());
   const size_t frameSz = Resumable::getFrameSize(numSlots);
   const size_t genSz = genSize(sizeof(Generator), frameSz);
@@ -89,7 +90,7 @@ ObjectData* Generator::Create(const ActRec* fp, size_t numSlots,
   auto const genData = new (Native::data<Generator>(obj)) Generator();
   genData->resumable()->initialize<false>(fp,
                                           resumeAddr,
-                                          resumeOffset,
+                                          suspendOffset,
                                           frameSz,
                                           genSz);
   genData->setState(State::Created);
@@ -102,7 +103,7 @@ void Generator::copyVars(const ActRec* srcFp) {
   assertx(srcFp->func() == dstFp->func());
 
   for (Id i = 0; i < func->numLocals(); ++i) {
-    tvDupWithRef(*frame_local(srcFp, i), *frame_local(dstFp, i));
+    tvDup(*frame_local(srcFp, i), *frame_local(dstFp, i));
   }
 
   if (func->cls() && dstFp->hasThis()) {
@@ -112,30 +113,26 @@ void Generator::copyVars(const ActRec* srcFp) {
   if (LIKELY(!(srcFp->func()->attrs() & AttrMayUseVV))) return;
   if (LIKELY(srcFp->m_varEnv == nullptr)) return;
 
-  if (srcFp->hasExtraArgs()) {
-    dstFp->setExtraArgs(srcFp->getExtraArgs()->clone(dstFp));
-  } else {
-    assertx(srcFp->hasVarEnv());
-    dstFp->setVarEnv(srcFp->getVarEnv()->clone(dstFp));
-  }
+  assertx(srcFp->hasVarEnv());
+  dstFp->setVarEnv(srcFp->getVarEnv()->clone(dstFp));
 }
 
-void Generator::yield(Offset resumeOffset,
-                      const Cell* key, const Cell value) {
+void Generator::yield(Offset suspendOffset,
+                      const TypedValue* key, const TypedValue value) {
   assertx(isRunning());
-  resumable()->setResumeAddr(nullptr, resumeOffset);
+  resumable()->setResumeAddr(nullptr, suspendOffset);
 
   if (key) {
-    cellSet(*key, m_key);
+    tvSet(*key, m_key);
     tvDecRefGenNZ(*key);
     if (m_key.m_type == KindOfInt64) {
       int64_t new_index = m_key.m_data.num;
       m_index = new_index > m_index ? new_index : m_index;
     }
   } else {
-    cellSet(make_tv<KindOfInt64>(++m_index), m_key);
+    tvSet(make_tv<KindOfInt64>(++m_index), m_key);
   }
-  cellSet(value, m_value);
+  tvSet(value, m_value);
   tvDecRefGenNZ(value);
 
   setState(State::Started);
@@ -143,8 +140,8 @@ void Generator::yield(Offset resumeOffset,
 
 void Generator::done(TypedValue tv) {
   assertx(isRunning());
-  cellSetNull(m_key);
-  cellSet(*tvToCell(&tv), m_value);
+  tvSetNull(m_key);
+  tvSet(tv, m_value);
   setState(State::Done);
 }
 

@@ -49,9 +49,6 @@ struct BaseGenerator {
   static constexpr ptrdiff_t resumeAddrOff() {
     return resumableOff() + Resumable::resumeAddrOff();
   }
-  static constexpr ptrdiff_t resumeOffsetOff() {
-    return resumableOff() + Resumable::resumeOffsetOff();
-  }
   static constexpr ptrdiff_t stateOff() {
     return offsetof(BaseGenerator, m_state);
   }
@@ -173,7 +170,7 @@ struct Generator final : BaseGenerator {
   Generator& operator=(const Generator& other);
 
   static ObjectData* Create(const ActRec* fp, size_t numSlots,
-                            jit::TCA resumeAddr, Offset resumeOffset);
+                            jit::TCA resumeAddr, Offset suspendOffset);
   static Class* getClass() {
     assertx(s_class);
     return s_class;
@@ -185,7 +182,7 @@ struct Generator final : BaseGenerator {
     return Native::data<Generator>(obj);
   }
 
-  void yield(Offset resumeOffset, const Cell* key, Cell value);
+  void yield(Offset suspendOffset, const TypedValue* key, TypedValue value);
   void copyVars(const ActRec *fp);
   void ret(TypedValue tv) { done(tv); }
   void fail() { done(make_tv<KindOfUninit>()); }
@@ -199,8 +196,8 @@ private:
 
 public:
   int64_t m_index;
-  Cell m_key;
-  Cell m_value;
+  TypedValue m_key;
+  TypedValue m_value;
   TypedValue m_delegate;
 
   static Class* s_class;

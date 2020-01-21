@@ -19,7 +19,6 @@
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/base/unit-cache.h"
 #include "hphp/runtime/base/rds.h"
-#include "hphp/runtime/base/strings.h"
 
 #include "hphp/runtime/vm/blob-helper.h"
 #include "hphp/runtime/vm/bytecode.h"
@@ -128,7 +127,7 @@ void FuncEmitter::commit(RepoTxn& txn) const {
 }
 
 Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
-  bool isGenerated = isdigit(name->data()[0]) || needsStripInOut(name);
+  bool isGenerated = isdigit(name->data()[0]);
 
   auto attrs = fix_attrs(this->attrs);
   if (preClass && preClass->attrs() & AttrInterface) {
@@ -181,7 +180,9 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
     isNative ||
     line2 - line1 >= Func::kSmallDeltaLimit ||
     past - base >= Func::kSmallDeltaLimit ||
-    hasReifiedGenerics;
+    hasReifiedGenerics ||
+    hasParamsWithMultiUBs ||
+    hasReturnWithMultiUBs;
 
   f->m_shared.reset(
     needsExtendedSharedData
@@ -211,7 +212,14 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
       pi.builtinType = RuntimeOption::EvalHackArrDVArrs
         ? KindOfVec : KindOfArray;
     }
-    f->appendParam(params[i].byRef, pi, fParams);
+    f->appendParam(params[i].inout, pi, fParams);
+    auto const& fromUBs = params[i].upperBounds;
+    if (!fromUBs.empty()) {
+      auto& ub = f->extShared()->m_paramUBs[i];
+      ub.resize(fromUBs.size());
+      std::copy(fromUBs.begin(), fromUBs.end(), ub.begin());
+      f->shared()->m_hasParamsWithMultiUBs = true;
+    }
   }
 
   auto const originalFullName =
@@ -234,6 +242,12 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
   f->shared()->m_userAttributes = userAttributes;
   f->shared()->m_retTypeConstraint = retTypeConstraint;
   f->shared()->m_retUserType = retUserType;
+  if (!retUpperBounds.empty()) {
+    f->extShared()->m_returnUBs.resize(retUpperBounds.size());
+    std::copy(retUpperBounds.begin(), retUpperBounds.end(),
+              f->extShared()->m_returnUBs.begin());
+    f->shared()->m_hasReturnWithMultiUBs = true;
+  }
   f->shared()->m_originalFilename = originalFullName;
   f->shared()->m_isGenerated = isGenerated;
   f->shared()->m_repoReturnType = repoReturnType;
@@ -278,7 +292,6 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */) const {
           case Native::NativeSig::Type::StringArg:
           case Native::NativeSig::Type::ArrayArg:
           case Native::NativeSig::Type::ResourceArg:
-          case Native::NativeSig::Type::OutputArg:
           case Native::NativeSig::Type::MixedTV:
             fParams[i].nativeArg = true;
             break;
@@ -301,7 +314,7 @@ String FuncEmitter::nativeFullname() const {
 Native::NativeFunctionInfo FuncEmitter::getNativeInfo() const {
   return Native::getNativeFunction(
       m_ue.m_nativeFuncs,
-      stripInOutSuffix(name),
+      name,
       m_pce ? m_pce->name() : nullptr,
       (attrs & AttrStatic)
     );
@@ -485,12 +498,10 @@ void FuncEmitter::serdeMetaData(SerDe& sd) {
   // NOTE: name, top, and a few other fields currently handled outside of this.
   Offset past_delta;
   Attr a = attrs;
-  std::vector<LowStringPtr> localNames;
 
   if (!SerDe::deserializing) {
     past_delta = past - base;
     a = fix_attrs(attrs);
-    localNames = m_localNames.list();
   }
 
   sd(line1)
@@ -508,11 +519,25 @@ void FuncEmitter::serdeMetaData(SerDe& sd) {
     (m_repoBoolBitset)
 
     (params)
-    (localNames)
-    (ehtab)
+    (m_localNames, [](auto s) { return s; })
+    (ehtab,
+      [&](const EHEnt& prev, EHEnt cur) -> EHEnt {
+        if (!SerDe::deserializing) {
+          cur.m_handler -= cur.m_past;
+          cur.m_past -= cur.m_base;
+          cur.m_base -= prev.m_base;
+        } else {
+          cur.m_base += prev.m_base;
+          cur.m_past += cur.m_base;
+          cur.m_handler += cur.m_past;
+        }
+        return cur;
+      }
+    )
     (userAttributes)
     (retTypeConstraint)
     (retUserType)
+    (retUpperBounds)
     (originalFilename)
     ;
 
@@ -521,7 +546,6 @@ void FuncEmitter::serdeMetaData(SerDe& sd) {
     repoAwaitedReturnType.resolveArray(ue());
     past = base + past_delta;
     attrs = fix_attrs(a);
-    m_localNames.fromList(std::move(localNames));
   }
 }
 

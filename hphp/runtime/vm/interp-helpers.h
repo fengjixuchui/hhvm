@@ -18,6 +18,7 @@
 #define incl_HPHP_VM_INTERP_HELPERS_H_
 
 #include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/base/exceptions.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/request-info.h"
@@ -32,12 +33,12 @@
 
 namespace HPHP {
 
-inline void callerReffinessChecks(const Func* func, const FCallArgs& fca) {
+inline void callerInOutChecks(const Func* func, const FCallArgs& fca) {
   for (auto i = 0; i < fca.numArgs; ++i) {
-    auto const byRef = func->byRef(i);
-    if (byRef != fca.byRef(i)) {
+    auto const inout = func->isInOut(i);
+    if (inout != fca.isInOut(i)) {
       SystemLib::throwInvalidArgumentExceptionObject(
-        formatParamRefMismatch(func->fullDisplayName()->data(), i, byRef));
+        formatParamInOutMismatch(func->fullName()->data(), i, inout));
     }
   }
 }
@@ -72,13 +73,13 @@ inline bool callerDynamicCallChecks(const Func* func,
     string_printf(
       msg,
       error_msg,
-      func->fullDisplayName()->data()
+      func->fullName()->data()
     );
     throw_invalid_operation_exception(makeStaticString(msg));
   } else {
     raise_notice(
       error_msg,
-      func->fullDisplayName()->data()
+      func->fullName()->data()
     );
     return false;
   }
@@ -104,11 +105,9 @@ inline void callerDynamicConstructChecks(const Class* cls) {
   }
 }
 
-inline void calleeDynamicCallChecks(const ActRec* ar,
+inline void calleeDynamicCallChecks(const Func* func, bool dynamicCall,
                                     bool allowDynCallNoPointer = false) {
-  if (!ar->isDynamicCall()) return;
-  auto const func = ar->func();
-
+  if (!dynamicCall) return;
   if (func->isDynamicallyCallable() && allowDynCallNoPointer) return;
 
   auto error_msg = func->isDynamicallyCallable() ?
@@ -118,7 +117,7 @@ inline void calleeDynamicCallChecks(const ActRec* ar,
   if (RuntimeOption::EvalNoticeOnBuiltinDynamicCalls && func->isBuiltin()) {
     raise_notice(
       error_msg,
-      func->fullDisplayName()->data()
+      func->fullName()->data()
     );
   }
 }
@@ -141,14 +140,6 @@ inline bool callerRxChecks(const ActRec* caller, const Func* callee) {
   return false;
 }
 
-inline void checkForRequiredCallM(const ActRec* ar) {
-  if (!ar->func()->takesInOutParams()) return;
-
-  if (!ar->isFCallM()) {
-    raise_error("In/out function called dynamically without inout annotations");
-  }
-}
-
 /*
  * This helper only does a stack overflow check for the native stack.
  * Both native and VM stack overflows are independently possible.
@@ -157,7 +148,7 @@ inline void checkNativeStack() {
   // Check whether we're going out of bounds of our native stack.
   if (LIKELY(stack_in_bounds())) return;
   TRACE_MOD(Trace::gc, 1, "Maximum stack depth exceeded.\n");
-  raise_error("Stack overflow");
+  throw_stack_overflow();
 }
 
 /*
@@ -182,7 +173,7 @@ void checkStack(Stack& stk, const Func* f, int32_t extraCells) {
   auto limit = f->maxStackCells() + kStackCheckPadding + extraCells;
   if (LIKELY(stack_in_bounds() && !stk.wouldOverflow(limit))) return;
   TRACE_MOD(Trace::gc, 1, "Maximum stack depth exceeded.\n");
-  raise_error("Stack overflow");
+  throw_stack_overflow();
 }
 
 }

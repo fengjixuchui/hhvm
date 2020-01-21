@@ -10,8 +10,8 @@
 #include "hphp/runtime/base/packed-array.h"
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/base/tv-type.h"
-#include "hphp/runtime/base/zend-math.h"
 #include "hphp/runtime/vm/vm-regs.h"
+#include "hphp/zend/zend-math.h"
 
 namespace HPHP { namespace collections {
 /////////////////////////////////////////////////////////////////////////////
@@ -56,14 +56,6 @@ void BaseVector::throwBadKeyType() {
 
 namespace {
 
-bool invokeAndCastToBool(const CallCtx& ctx, int argc,
-                         const TypedValue* argv) {
-  auto ret = Variant::attach(
-    g_context->invokeFuncFew(ctx, argc, argv)
-  );
-  return ret.toBoolean();
-}
-
 void copySlice(ArrayData* from, ArrayData* to,
                int64_t from_pos, int64_t to_pos, int64_t size) {
   assertx(0 < size && from_pos + size <= from->size());
@@ -73,7 +65,7 @@ void copySlice(ArrayData* from, ArrayData* to,
   do {
     auto from_elm = PackedArray::LvalUncheckedInt(from, to_pos + offset);
     auto to_elm = PackedArray::LvalUncheckedInt(to, to_pos);
-    cellDup(*from_elm, to_elm);
+    tvDup(*from_elm, to_elm);
   } while (++to_pos < to_end);
 }
 
@@ -81,74 +73,6 @@ void copySlice(ArrayData* from, ArrayData* to,
 
 /////////////////////////////////////////////////////////////////////////////
 // BaseVector
-
-template<class TVector, bool useKey>
-typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::php_map(const Variant& callback) {
-  VMRegGuard _;
-  CallCtx ctx;
-  vm_decode_function(callback, ctx);
-  if (!ctx.func) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-      "Parameter must be a valid callback");
-  }
-
-  if (m_size == 0) {
-    return Object{req::make<TVector>()};
-  }
-
-  auto nv = req::make<TVector>(m_size);
-  constexpr int64_t argc = useKey ? 2 : 1;
-  TypedValue argv[argc];
-  if (useKey) {
-    argv[0] = make_tv<KindOfInt64>(0);
-  }
-  uint32_t i = 0;
-  do {
-    argv[argc-1] = *dataAt(i);
-    tvCopy(g_context->invokeFuncFew(ctx, argc, argv), nv->dataAt(i));
-    nv->incSize();
-    if (useKey) {
-      argv[0].m_data.num++;
-    }
-  } while (++i < m_size);
-  return Object{std::move(nv)};
-}
-
-template<class TVector, bool useKey>
-typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::php_filter(const Variant& callback) {
-  VMRegGuard _;
-  CallCtx ctx;
-  vm_decode_function(callback, ctx);
-  if (!ctx.func) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-      "Parameter must be a valid callback");
-  }
-  if (m_size == 0) {
-    return Object{req::make<TVector>()};
-  }
-  auto nv = req::make<TVector>(0);
-  constexpr int64_t argc = useKey ? 2 : 1;
-  TypedValue argv[argc];
-  if (useKey) {
-    argv[0] = make_tv<KindOfInt64>(0);
-  }
-  uint32_t i = 0;
-  do {
-    argv[argc-1] = *dataAt(i);
-    bool b = invokeAndCastToBool(ctx, argc, argv);
-    if (b) {
-      nv->addRaw(*dataAt(i));
-    }
-    if (useKey) {
-      argv[0].m_data.num++;
-    }
-  } while (++i < m_size);
-  return Object{std::move(nv)};
-}
 
 template<class TVector>
 typename std::enable_if<
@@ -172,30 +96,6 @@ BaseVector::php_take(const Variant& n) {
 template<class TVector>
 typename std::enable_if<
   std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::php_takeWhile(const Variant& fn) {
-  CallCtx ctx;
-  vm_decode_function(fn, ctx);
-  if (!ctx.func) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-      "Parameter must be a valid callback");
-  }
-  if (m_size == 0) {
-    return Object{req::make<TVector>()};
-  }
-  auto vec = req::make<TVector>(0);
-  uint32_t i = 0;
-  do {
-    const auto elm = *dataAt(i);
-    bool b = invokeAndCastToBool(ctx, 1, &elm);
-    if (!b) break;
-    vec->addRaw(elm);
-  } while (++i < m_size);
-  return Object{std::move(vec)};
-}
-
-template<class TVector>
-typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
 BaseVector::php_skip(const Variant& n) {
   if (!n.isInteger()) {
     SystemLib::throwInvalidArgumentExceptionObject(
@@ -203,35 +103,6 @@ BaseVector::php_skip(const Variant& n) {
   }
   int64_t len = std::max(n.toInt64(), int64_t{0});
   uint32_t skipAmt = std::min(len, int64_t(m_size));
-  uint32_t sz = m_size - skipAmt;
-  if (sz == 0) {
-    return Object{req::make<TVector>()};
-  }
-  auto vec = req::make<TVector>(sz);
-  vec->setSize(sz);
-  copySlice(m_arr, vec->m_arr, skipAmt, 0, sz);
-  return Object{std::move(vec)};
-}
-
-template<class TVector>
-typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::php_skipWhile(const Variant& fn) {
-  CallCtx ctx;
-  vm_decode_function(fn, ctx);
-  if (!ctx.func) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-               "Parameter must be a valid callback");
-  }
-  if (m_size == 0) {
-    return Object{req::make<TVector>()};
-  }
-  uint32_t skipAmt = 0;
-  do {
-    const auto elm = *dataAt(skipAmt);
-    bool b = invokeAndCastToBool(ctx, 1, &elm);
-    if (!b) break;
-  } while (++skipAmt < m_size);
   uint32_t sz = m_size - skipAmt;
   if (sz == 0) {
     return Object{req::make<TVector>()};
@@ -299,7 +170,7 @@ BaseVector::php_zip(const Variant& iterable) {
   uint32_t i = 0;
   do {
     Variant v = iter.second();
-    auto pair = req::make<c_Pair>(*dataAt(i), *v.toCell());
+    auto pair = req::make<c_Pair>(*dataAt(i), *v.asTypedValue());
     vec->addRaw(make_tv<KindOfObject>(pair.get()));
     ++iter;
   } while (++i < m_size && iter);
@@ -328,7 +199,7 @@ void BaseVector::addAllImpl(const Variant& t) {
       return false;
     },
     [this](TypedValue v) {
-      addRaw(tvToCell(v));
+      addRaw(v);
     },
     [&, this](ObjectData* coll) {
       if (coll->collectionType() == CollectionType::Pair) {
@@ -336,7 +207,7 @@ void BaseVector::addAllImpl(const Variant& t) {
       }
     },
     [this](const TypedValue* item) {
-      add(*tvToCell(item));
+      add(*item);
     });
 
   if (UNLIKELY(!ok)) {
@@ -371,29 +242,26 @@ BaseVector::php_keys() {
 }
 
 bool BaseVector::OffsetIsset(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   if (UNLIKELY(key->m_type != KindOfInt64)) {
     throwBadKeyType();
     return false;
   }
   const auto vec = static_cast<BaseVector*>(obj);
   const auto result = vec->get(key->m_data.num);
-  return result ? !cellIsNull(*tvToCell(result)) : false;
+  return result ? !tvIsNull(*result) : false;
 }
 
 bool BaseVector::OffsetEmpty(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   if (UNLIKELY(key->m_type != KindOfInt64)) {
     throwBadKeyType();
     return false;
   }
   const auto vec = static_cast<BaseVector*>(obj);
   const auto result = vec->get(key->m_data.num);
-  return result ? !cellToBool(*result) : true;
+  return result ? !tvToBool(*result) : true;
 }
 
 bool BaseVector::OffsetContains(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   auto vec = static_cast<BaseVector*>(obj);
   if (key->m_type == KindOfInt64) {
     return vec->contains(key->m_data.num);
@@ -410,7 +278,6 @@ bool BaseVector::Equals(const ObjectData* obj1, const ObjectData* obj2) {
 }
 
 void BaseVector::addFront(TypedValue tv) {
-  assertx(!isRefType(tv.m_type));
   dropImmCopy();
   auto oldAd = arrayData();
   m_arr = PackedArray::PrependVec(oldAd, tv);
@@ -425,7 +292,7 @@ Variant BaseVector::popFront() {
     SystemLib::throwInvalidOperationExceptionObject("Cannot pop empty Vector");
   }
   const auto tv = removeKeyImpl(0);
-  return Variant(tvAsCVarRef(&tv), Variant::CellCopy());
+  return Variant(tvAsCVarRef(&tv), Variant::TVCopy());
 }
 
 TypedValue BaseVector::removeKeyImpl(int64_t k) {
@@ -512,7 +379,7 @@ BaseVector::fromKeysOf(const TypedValue& container) {
   ArrayIter iter(container);
   assertx(iter);
   do {
-    vec->addRaw(*iter.first().toCell());
+    vec->addRaw(*iter.first().asTypedValue());
     ++iter;
   } while (iter);
   return Object{std::move(vec)};
@@ -558,7 +425,7 @@ void c_Vector::removeKey(int64_t k) {
 
 void c_Vector::addAllKeysOf(const Variant& container) {
   if (container.isNull()) return;
-  const auto& containerCell = container_as_cell(container);
+  auto const& containerCell = container_as_tv(container);
 
   auto sz = getContainerSize(containerCell);
   ArrayIter iter(containerCell);
@@ -577,10 +444,10 @@ Variant c_Vector::pop() {
   mutate();
   decSize();
   const auto tv = *dataAt(m_size);
-  return Variant(tvAsCVarRef(&tv), Variant::CellCopy());
+  return Variant(tvAsCVarRef(&tv), Variant::TVCopy());
 }
 
-void c_Vector::resize(uint32_t sz, const Cell* val) {
+void c_Vector::resize(uint32_t sz, const TypedValue* val) {
   if (sz == m_size) {
     return;
   }
@@ -604,7 +471,7 @@ void c_Vector::resize(uint32_t sz, const Cell* val) {
     reserve(sz);
     uint32_t i = m_size;
     do {
-      cellDup(*val, dataAt(i));
+      tvDup(*val, dataAt(i));
     } while (++i < sz);
     setSize(sz);
   }
@@ -711,7 +578,7 @@ Object c_Vector::fromArray(const Class*, const Variant& arr) {
   ssize_t pos = ad->iter_begin();
   do {
     assertx(pos != ad->iter_end());
-    cellDup(tvToCell(ad->atPos(pos)), target->dataAt(i));
+    tvDup(ad->atPos(pos), target->dataAt(i));
     pos = ad->iter_advance(pos);
   } while (++i < sz);
   return Object{std::move(target)};
@@ -756,7 +623,7 @@ ALWAYS_INLINE typename std::enable_if<
 HHVM_STATIC_METHOD(BaseVector, fromKeysOf, const Variant& container) {
   if (container.isNull()) { return Object{req::make<TVector>()}; }
 
-  const auto& cellContainer = *container.toCell();
+  const auto& cellContainer = *container.asTypedValue();
   if (UNLIKELY(!isContainer(cellContainer))) {
     SystemLib::throwInvalidArgumentExceptionObject(
       "Parameter must be a container (array or collection)");
@@ -801,31 +668,11 @@ void CollectionsExtension::initVector() {
   HHVM_NAMED_ME(HH\\ImmVector, mn, impl<c_ImmVector>);
   TMPL_ME(keys,           &BaseVector::php_keys);
   TMPL_ME(take,           &BaseVector::php_take);
-  TMPL_ME(takeWhile,      &BaseVector::php_takeWhile);
   TMPL_ME(skip,           &BaseVector::php_skip);
-  TMPL_ME(skipWhile,      &BaseVector::php_skipWhile);
   TMPL_ME(slice,          &BaseVector::php_slice);
   TMPL_ME(concat,         &BaseVector::php_concat);
   TMPL_ME(zip,            &BaseVector::php_zip);
 #undef TMPL_ME
-
-  auto const m     = &BaseVector::php_map<c_Vector, false>;
-  auto const immm  = &BaseVector::php_map<c_ImmVector, false>;
-  auto const mk    = &BaseVector::php_map<c_Vector, true>;
-  auto const immmk = &BaseVector::php_map<c_ImmVector, true>;
-  HHVM_NAMED_ME(HH\\Vector,    map,        m);
-  HHVM_NAMED_ME(HH\\ImmVector, map,        immm);
-  HHVM_NAMED_ME(HH\\Vector,    mapWithKey, mk);
-  HHVM_NAMED_ME(HH\\ImmVector, mapWithKey, immmk);
-
-  auto const f     = &BaseVector::php_filter<c_Vector, false>;
-  auto const immf  = &BaseVector::php_filter<c_ImmVector, false>;
-  auto const fk    = &BaseVector::php_filter<c_Vector, true>;
-  auto const immfk = &BaseVector::php_filter<c_ImmVector, true>;
-  HHVM_NAMED_ME(HH\\Vector,    filter,        f);
-  HHVM_NAMED_ME(HH\\ImmVector, filter,        immf);
-  HHVM_NAMED_ME(HH\\Vector,    filterWithKey, fk);
-  HHVM_NAMED_ME(HH\\ImmVector, filterWithKey, immfk);
 
   HHVM_NAMED_STATIC_ME(HH\\Vector,    fromItems,
                        HHVM_STATIC_MN(BaseVector, fromItems)<c_Vector>);

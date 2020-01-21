@@ -16,14 +16,13 @@
  **
  *
  */
-use parser_rust as parser;
-use parser::source_text::SourceText;
-use parser::flatten_smart_constructors::*;
-use parser::smart_constructors::SmartConstructors;
-use parser::parser_env::ParserEnv;
-use parser::positioned_token::PositionedToken;
+use parser_core_types::source_text::SourceText;
+use flatten_smart_constructors::*;
+use smart_constructors::SmartConstructors;
+use parser_core_types::parser_env::ParserEnv;
+use parser_core_types::positioned_token::PositionedToken;
 
-use crate::facts_smart_constructors::*;
+use crate::*;
 
 #[derive(Clone)]
 pub struct FactsSmartConstructors<'src> {
@@ -39,6 +38,10 @@ impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstru
 
     fn state_mut(&mut self) -> &mut HasScriptContent<'src> {
         &mut self.state
+    }
+
+    fn into_state(self) -> HasScriptContent<'src> {
+      self.state
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
@@ -101,8 +104,8 @@ impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstru
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_record_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
     }
 
-    fn make_record_field(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_record_field(self, arg0, arg1, arg2, arg3, arg4)
+    fn make_record_field(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_record_field(self, arg0, arg1, arg2, arg3)
     }
 
     fn make_alias_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R) -> Self::R {
@@ -165,8 +168,8 @@ impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstru
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_methodish_trait_resolution(self, arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_classish_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_classish_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+    fn make_classish_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R, arg11: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_classish_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
     }
 
     fn make_classish_body(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
@@ -257,10 +260,6 @@ impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstru
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_unset_statement(self, arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_let_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_let_statement(self, arg0, arg1, arg2, arg3, arg4, arg5)
-    }
-
     fn make_using_statement_block_scoped(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_using_statement_block_scoped(self, arg0, arg1, arg2, arg3, arg4, arg5)
     }
@@ -345,12 +344,12 @@ impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstru
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_throw_statement(self, arg0, arg1, arg2)
     }
 
-    fn make_break_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_break_statement(self, arg0, arg1, arg2)
+    fn make_break_statement(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_break_statement(self, arg0, arg1)
     }
 
-    fn make_continue_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_continue_statement(self, arg0, arg1, arg2)
+    fn make_continue_statement(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_continue_statement(self, arg0, arg1)
     }
 
     fn make_echo_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
@@ -709,6 +708,14 @@ impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstru
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_tuple_type_specifier(self, arg0, arg1, arg2)
     }
 
+    fn make_union_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_union_type_specifier(self, arg0, arg1, arg2)
+    }
+
+    fn make_intersection_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_intersection_type_specifier(self, arg0, arg1, arg2)
+    }
+
     fn make_error(&mut self, arg0: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_error(self, arg0)
     }
@@ -737,8 +744,8 @@ impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstru
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_pocket_field_type_expr_declaration(self, arg0, arg1, arg2, arg3)
     }
 
-    fn make_pocket_field_type_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_pocket_field_type_declaration(self, arg0, arg1, arg2, arg3)
+    fn make_pocket_field_type_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_pocket_field_type_declaration(self, arg0, arg1, arg2, arg3, arg4)
     }
 
     fn make_pocket_mapping_id_declaration(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {

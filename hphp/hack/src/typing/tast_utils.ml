@@ -7,12 +7,13 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Ast_defs
 open Aast_defs
 open Typing_defs
 module Env = Tast_env
 module MakeType = Typing_make_type
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 
 (** Return true if ty definitely does not contain null.  I.e., the
@@ -21,16 +22,24 @@ module Cls = Decl_provider.Class
     newtype. *)
 let rec type_non_nullable env ty =
   let (_, ty) = Env.expand_type env ty in
-  match ty with
-  | ( _,
-      ( Tprim
-          ( Tint | Tbool | Tfloat | Tstring | Tresource | Tnum | Tarraykey
-          | Tnoreturn )
-      | Tnonnull | Tfun _ | Ttuple _ | Tshape _ | Tanon _ | Tobject | Tclass _
-      | Tarraykind _ ) ) ->
+  match get_node ty with
+  | Tprim
+      ( Tint | Tbool | Tfloat | Tstring | Tresource | Tnum | Tarraykey
+      | Tnoreturn )
+  | Tnonnull
+  | Tfun _
+  | Ttuple _
+  | Tshape _
+  | Tanon _
+  | Tobject
+  | Tclass _
+  | Tarraykind _ ->
     true
-  | (_, Tabstract (_, Some ty)) when type_non_nullable env ty -> true
-  | (_, Tunion tyl) when not (List.is_empty tyl) ->
+  | Tnewtype (_, _, ty)
+  | Tdependent (_, ty)
+    when type_non_nullable env ty ->
+    true
+  | Tunion tyl when not (List.is_empty tyl) ->
     List.for_all tyl (type_non_nullable env)
   | _ -> false
 
@@ -59,6 +68,9 @@ let fold_truthiness acc truthiness =
 
 let intersect_truthiness tr1 tr2 =
   match (tr1, tr2) with
+  | (Unknown, Possibly_falsy)
+  | (Possibly_falsy, Unknown) ->
+    Unknown
   | (Unknown, tr)
   | (tr, Unknown) ->
     tr
@@ -91,8 +103,8 @@ let (tclass_is_falsy_when_empty, is_traversable) =
     (e.g. user-defined objects) are always truthy, so testing their truthiness
     indicates a logic error. *)
 let rec truthiness env ty =
-  let (env, ty) = Env.fold_unresolved env ty in
-  match snd ty with
+  let (env, ty) = Env.expand_type env ty in
+  match get_node ty with
   | Tany _
   | Terr
   | Tdynamic
@@ -102,11 +114,11 @@ let rec truthiness env ty =
   | Tarraykind _
   | Toption _ ->
     Possibly_falsy
-  | Tabstract (AKnewtype (id, _), _) when Env.is_enum env id -> Possibly_falsy
+  | Tnewtype (id, _, _) when Env.is_enum env id -> Possibly_falsy
   | Tclass ((_, cid), _, _) ->
-    if cid = SN.Classes.cStringish then
+    if String.equal cid SN.Classes.cStringish then
       Possibly_falsy
-    else if cid = SN.Classes.cXHPChild then
+    else if String.equal cid SN.Classes.cXHPChild then
       Possibly_falsy
     else if tclass_is_falsy_when_empty env ty then
       Possibly_falsy
@@ -116,13 +128,12 @@ let rec truthiness env ty =
       (* Classes which implement Traversable but not Container will always be
        truthy when empty. If this Tclass is instead an interface type like
        KeyedTraversable, the value may or may not be truthy when empty. *)
-      match Decl_provider.get_class cid with
+      match Decl_provider.get_class (Env.get_ctx env) cid with
       | None -> Unknown
       | Some cls ->
         (match Cls.kind cls with
         | Cnormal
-        | Cabstract
-        | Crecord ->
+        | Cabstract ->
           Always_truthy
         | Cinterface
         | Cenum ->
@@ -133,8 +144,7 @@ let rec truthiness env ty =
   | Tprim Tnull -> Always_falsy
   | Tprim Tvoid -> Always_falsy
   | Tprim Tnoreturn -> Unknown
-  | Tprim (Tint | Tbool | Tfloat | Tstring | Tnum | Tarraykey) ->
-    Possibly_falsy
+  | Tprim (Tint | Tbool | Tfloat | Tstring | Tnum | Tarraykey) -> Possibly_falsy
   (* Tatom are string at runtine, but neither "0" nor "" are valid atom names *)
   | Tprim (Tatom _) -> Always_truthy
   | Tunion tyl ->
@@ -146,14 +156,16 @@ let rec truthiness env ty =
   | Tintersection tyl ->
     List.map tyl (truthiness env)
     |> List.fold ~init:Possibly_falsy ~f:intersect_truthiness
-  | Tabstract _ ->
+  | Tgeneric _
+  | Tnewtype _
+  | Tdependent _ ->
     let (env, tyl) = Env.get_concrete_supertypes env ty in
     begin
       match List.map tyl (truthiness env) with
       | [] -> Unknown
       | hd :: tl -> List.fold tl ~init:hd ~f:fold_truthiness
     end
-  | Tshape (Closed_shape, fields) when ShapeMap.cardinal fields = 0 ->
+  | Tshape (Closed_shape, fields) when Int.equal 0 (ShapeMap.cardinal fields) ->
     Always_falsy
   | Tshape (_, fields) ->
     let has_non_optional_fields =
@@ -170,13 +182,11 @@ let rec truthiness env ty =
   | Tobject
   | Tfun _
   | Ttuple _
-  | Tanon _
-  | Tdestructure _ ->
+  | Tanon _ ->
     Always_truthy
-  | Tpu _ ->
-    (* TODO(T36532263) check if that's ok *)
-    Always_truthy
-  | Tpu_access (_, _) -> (* TODO(T36532263) check if that's ok *) Unknown
+  | Tpu _
+  | Tpu_type_access _ ->
+    (* TODO(T36532263) check if that's ok *) Unknown
 
 (** When a type represented by one of these variants is used in a truthiness
     test, it indicates a potential logic error, since the truthiness of some
@@ -194,21 +204,21 @@ type sketchy_type_kind =
       always truthy, even when empty. *)
 
 let rec find_sketchy_types env acc ty =
-  let (env, ty) = Env.fold_unresolved env ty in
-  match snd ty with
+  let (env, ety) = Env.expand_type env ty in
+  match get_node ety with
   | Toption ty -> find_sketchy_types env acc ty
   | Tprim Tstring -> String :: acc
   | Tprim Tarraykey -> Arraykey :: acc
   | Tclass ((_, cid), _, _) ->
-    if cid = SN.Classes.cStringish then
+    if String.equal cid SN.Classes.cStringish then
       Stringish :: acc
-    else if cid = SN.Classes.cXHPChild then
+    else if String.equal cid SN.Classes.cXHPChild then
       XHPChild :: acc
     else if tclass_is_falsy_when_empty env ty || not (is_traversable env ty)
     then
       acc
     else (
-      match Decl_provider.get_class cid with
+      match Decl_provider.get_class (Env.get_ctx env) cid with
       | None -> acc
       | Some cls ->
         (match Cls.kind cls with
@@ -216,8 +226,7 @@ let rec find_sketchy_types env acc ty =
         | Cnormal
         | Cabstract
         | Ctrait
-        | Cenum
-        | Crecord ->
+        | Cenum ->
           acc)
     )
   | Tunion tyl -> List.fold tyl ~init:acc ~f:(find_sketchy_types env)
@@ -231,7 +240,9 @@ let rec find_sketchy_types env acc ty =
         List.fold sketchy_tys ~init:[] ~f:( @ )
     in
     sketchy_tys @ acc
-  | Tabstract _ ->
+  | Tgeneric _
+  | Tnewtype _
+  | Tdependent _ ->
     let (env, tyl) = Env.get_concrete_supertypes env ty in
     List.fold tyl ~init:acc ~f:(find_sketchy_types env)
   | Tany _
@@ -245,11 +256,10 @@ let rec find_sketchy_types env acc ty =
   | Tshape _
   | Tvar _
   | Tanon _
-  | Tarraykind _
-  | Tdestructure _ ->
+  | Tarraykind _ ->
     acc
   | Tpu _ -> acc
-  | Tpu_access _ -> acc
+  | Tpu_type_access _ -> acc
 
 let find_sketchy_types env ty = find_sketchy_types env [] ty
 
@@ -257,7 +267,8 @@ let valid_newable_class cls =
   match Cls.kind cls with
   | Ast_defs.Cnormal
   | Ast_defs.Cabstract ->
-    Cls.final cls || snd (Cls.construct cls) <> Inconsistent
+    Cls.final cls
+    || not (equal_consistent_kind (snd (Cls.construct cls)) Inconsistent)
   (* There is currently a bug with interfaces that allows constructors to change
    * their signature, so they are not considered here. TODO: T41093452 *)
   | _ -> false

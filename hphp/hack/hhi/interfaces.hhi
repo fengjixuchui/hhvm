@@ -14,6 +14,8 @@
  * YOU SHOULD NEVER INCLUDE THIS FILE ANYWHERE!!!
  */
 
+namespace HH {
+
 /**
  * Represents an entity that can be iterated over using `foreach`, without
  * requiring a key.
@@ -31,15 +33,15 @@
  * @guide /hack/collections/interfaces
  */
 <<__Sealed(
-  ArrayObject::class,
-  DOMNodeList::class,
-  Imagick::class,
+  \ArrayObject::class,
+  \DOMNodeList::class,
+  \Imagick::class,
   Iterator::class,
-  IteratorAggregate::class,
+  \IteratorAggregate::class,
   KeyedTraversable::class,
-  ResourceBundle::class,
-  SplHeap::class,
-  SplObjectStorage::class,
+  \ResourceBundle::class,
+  \SplHeap::class,
+  \SplObjectStorage::class,
   \HH\Rx\Traversable::class
 )>>
 interface Traversable<+Tv> {}
@@ -63,14 +65,14 @@ interface Traversable<+Tv> {}
  * @guide /hack/collections/interfaces
  */
 <<__Sealed(
-  ArrayIterator::class,
-  AsyncMysqlRowBlock::class,
-  DOMNamedNodeMap::class,
-  ImagickPixelIterator::class,
-  IntlBreakIterator::class,
+  \ArrayIterator::class,
+  \AsyncMysqlRowBlock::class,
+  \DOMNamedNodeMap::class,
+  \ImagickPixelIterator::class,
+  \IntlBreakIterator::class,
   KeyedIterable::class,
   KeyedIterator::class,
-  MysqlRow::class,
+  \MysqlRow::class,
   \HH\Rx\KeyedTraversable::class
 )>>
 interface KeyedTraversable<+Tk, +Tv> extends Traversable<Tv> {}
@@ -114,7 +116,7 @@ interface Container<+Tv> extends \HH\Rx\Traversable<Tv> {}
  * @guide /hack/collections/interfaces
  * @guide /hack/collections/read-write
  */
-<<__Sealed(ConstVector::class, ConstMap::class, ConstSet::class, dict::class, keyset::class, vec::class)>>
+<<__Sealed(\ConstVector::class, \ConstMap::class, \ConstSet::class, dict::class, keyset::class, vec::class)>>
 interface KeyedContainer<+Tk as arraykey, +Tv> extends \HH\Rx\KeyedTraversable<Tk, Tv>, Container<Tv> {}
 
 /**
@@ -245,6 +247,10 @@ interface KeyedIterator<+Tk, +Tv> extends KeyedTraversable<Tk,Tv>, Iterator<Tv> 
   public function key(): Tk;
 }
 
+} // namespace HH
+
+namespace {
+
 /**
  * Represents objects that can produce an `Iterator` object to iterate over
  * their contents using `foreach`.
@@ -266,6 +272,10 @@ interface IteratorAggregate<+Tv> extends Traversable<Tv> {
   public function getIterator(): Iterator<Tv>;
 }
 
+} // namespace
+
+namespace HH {
+
 /**
  * Represents any entity that can be iterated over using something like
  * `foreach`. The entity does not necessarily have to have a key, just values.
@@ -275,7 +285,7 @@ interface IteratorAggregate<+Tv> extends Traversable<Tv> {
  * @guide /hack/collections/introduction
  * @guide /hack/collections/interfaces
  */
-interface Iterable<+Tv> extends IteratorAggregate<Tv> {
+interface Iterable<+Tv> extends \IteratorAggregate<Tv> {
   /**
    * Returns an iterator that points to beginning of the current `Iterable`.
    *
@@ -298,18 +308,6 @@ interface Iterable<+Tv> extends IteratorAggregate<Tv> {
    * @return - an `array` containing the values from the current `Iterable`.
    */
   public function toValuesArray(): varray<Tv>;
-  /* HH_FIXME[4120]: While this violates our variance annotations, we are
-   * returning a copy of the underlying collection, so it is actually safe
-   * See #6853603. */
-  /**
-   * Returns a `Vector` converted from the current `Iterable`.
-   *
-   * Any keys in the current `Iterable` are discarded and replaced with integer
-   * indices, starting with 0.
-   *
-   * @return - a `Vector` converted from the current `Iterable`.
-   */
-  public function toVector(): Vector<Tv>;
   /**
    * Returns an immutable vector (`ImmVector`) converted from the current
    * `Iterable`.
@@ -320,17 +318,6 @@ interface Iterable<+Tv> extends IteratorAggregate<Tv> {
    * @return - an `ImmVector` converted from the current `Iterable`.
    */
   public function toImmVector(): ImmVector<Tv>;
-  /* HH_FIXME[4120]: While this violates our variance annotations, we are
-   * returning a copy of the underlying collection, so it is actually safe.
-   * See #6853603. */
-  /**
-   * Returns a `Set` converted from the current `Iterable`.
-   *
-   * Any keys in the current `Iterable` are discarded.
-   *
-   * @return - a `Set` converted from the current `Iterable`.
-   */
-  public function toSet(): Set<Tv> where Tv as arraykey;
   /**
    * Returns an immutable set (`ImmSet`) converted from the current `Iterable`.
    *
@@ -550,17 +537,6 @@ interface KeyedIterable<Tk, +Tv> extends KeyedTraversable<Tk, Tv>, Iterable<Tv> 
    *           `KeyedIterable`.
    */
   public function toKeysArray(): varray;
-  /* HH_FIXME[4120]: While this violates our variance annotations, we are
-   * returning a copy of the underlying collection, so it is actually safe
-   * See #6853603. */
-  /**
-   * Returns a `Map` based on the keys and values of the current
-   * `KeyedIterable`.
-   *
-   * @return - a `Map` that has the keys and associated values of the current
-   *           `KeyedIterable`.
-   */
-  public function toMap(): Map<Tk, Tv> where Tk as arraykey;
   /**
    * Returns an immutable map (`ImmMap`) based on the keys and values of the
    * current `KeyedIterable`.
@@ -815,6 +791,10 @@ interface KeyedIterable<Tk, +Tv> extends KeyedTraversable<Tk, Tv>, Iterable<Tv> 
   public function lastKey(): ?Tk;
 }
 
+} // namespace HH
+
+namespace {
+
 interface Serializable {
   public function serialize(): string;
   public function unserialize($serialized): void;
@@ -873,6 +853,10 @@ interface Stringish extends XHPChild {
   public function __toString(): string;
 }
 
+} // namespace
+
+namespace HH {
+
 /**
   * Classes that implement IMemoizeParam may be used as parameters on
   * <<__Memoize>> functions
@@ -888,6 +872,10 @@ interface IMemoizeParam {
    */
   public function getInstanceKey(): string;
 }
+
+} // namespace HH
+
+namespace {
 
 /**
   * Objects that implement IDisposable may be used in using statements
@@ -912,3 +900,5 @@ interface IAsyncDisposable {
    */
   public function __disposeAsync(): Awaitable<void>;
 }
+
+} // namespace

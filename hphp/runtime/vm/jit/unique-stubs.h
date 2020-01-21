@@ -14,9 +14,9 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_JIT_UNIQUE_STUBS_H_
-#define incl_HPHP_JIT_UNIQUE_STUBS_H_
+#pragma once
 
+#include "hphp/runtime/vm/call-flags.h"
 #include "hphp/runtime/vm/hhbc.h"
 
 #include "hphp/runtime/vm/jit/code-cache.h"
@@ -116,10 +116,10 @@ struct UniqueStubs {
   // Function entry.
 
   /*
-   * Dynamically dispatch to the appropriate func prologue, when the called
-   * function fails the prologue's func guard.
+   * Dynamically dispatch to the appropriate func prologue based on the
+   * information in php_call_regs.
    *
-   * @reached:  jmp from func guard
+   * @reached:  callphp from TC
    * @context:  func guard
    */
   TCA funcPrologueRedispatch;
@@ -208,20 +208,6 @@ struct UniqueStubs {
   TCA retInlHelper;
 
   /*
-   * Return from a function when the ActRec was called from jitted code but
-   * had its m_savedRip smashed by the debugger.
-   *
-   * These stubs call a helper that looks up the original catch trace from the
-   * call, executes it, then executes a REQ_POST_DEBUGGER_RET.
-   *
-   * @reached:  phpret from TC
-   * @context:  func body (after returning to caller)
-   */
-  TCA debuggerRetHelper;
-  TCA debuggerGenRetHelper;
-  TCA debuggerAsyncGenRetHelper;
-
-  /*
    * Return from a resumed async function.
    *
    * Store result into the AsyncFunctionWaitHandle, mark it as finished and
@@ -269,9 +255,10 @@ struct UniqueStubs {
 
   /*
    * Use interpreter functions to enter the pre-live ActRec that we place on
-   * the stack (along with the Array of parameters) in a CallUnpack instruction.
-   * The last arg specifies the total number of args, including the array
-   * parameter (which must be the last one).
+   * the stack (along with arguments, the array of arguments to unpack and
+   * optionally the array of generics) in a CallUnpack instruction. The last
+   * two args specify the total number of inputs, including unpack arguments and
+   * generics, and a call flags (see CallFlags).
    *
    * @reached:  callunpack from TC
    * @context:  func prologue
@@ -289,18 +276,11 @@ struct UniqueStubs {
    * Expects that all VM registers are synced.
    *
    * @reached:  jmp from funcBodyHelperThunk
+   *            jmp from fcallHelperThunk
    *            call from enterTCHelper
    * @context:  func body
    */
   TCA resumeHelper;
-
-  /*
-   * Like resumeHelper, but specifically for an interpreted FCall.
-   *
-   * @reached:  jmp from fcallHelperThunk
-   * @context:  func prologue
-   */
-  TCA resumeHelperRet;
 
   /*
    * Like resumeHelper, but interpret a basic block first to ensure we make
@@ -374,8 +354,8 @@ struct UniqueStubs {
    *
    * enterTCExit is the address returned to when we leave the TC.
    */
-  void (*enterTCHelper)(Cell* sp, ActRec* fp, TCA start,
-                        ActRec* firstAR, void* tl, ActRec* stashedAR);
+  void (*enterTCHelper)(TCA start, ActRec* fp, void* tl, TypedValue* sp,
+                        ActRec* firstAR);
   TCA enterTCExit;
 
   /*
@@ -393,17 +373,25 @@ struct UniqueStubs {
   /*
    * Perform dispatch at the end of a catch block.
    *
+   * The endCatchHelper passes the current vmfp() to the unwinder to determine
+   * the catch trace of the return address of the parent frame.
+   *
+   * The endCatchStublogueHelper passes the current vmfp() and RIP saved in
+   * the stublogue header. Unwinder uses it to determine the catch trace of
+   * the return adddress belonging to the same logical vmfp().
+   *
    * If the unwinder has set state indicating a return address to jump to, we
    * load vmfp and vmsp and jump there.  Otherwise, we call _Unwind_Resume.
    */
+  TCA resumeCPPUnwind;
   TCA endCatchHelper;
   TCA endCatchHelperPast;
+  TCA endCatchStublogueHelper;
 
   /*
-   * Handle unknown exceptions that are thrown across php code
+   * Throws an exception from the unwinder to enter the itanium unwinder
    */
-  TCA unknownExceptionHandler;
-  TCA unknownExceptionHandlerPast;
+  TCA throwExceptionWhileUnwinding;
 
   /*
    * Service request helper.
@@ -415,11 +403,6 @@ struct UniqueStubs {
    * @context:  func body
    */
   TCA handleSRHelper;
-
-  /*
-   * Throw a VMSwitchMode exception.  Used in switchModeForDebugger().
-   */
-  TCA throwSwitchMode;
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -484,12 +467,10 @@ void emitInterpReq(Vout& v, SrcKey sk, FPInvOffset spOff);
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
- * Wrapper around the enterTCHelper stub, called from enterTC().
+ * Wrappers around the enterTC*Helper stubs, called from enterTC*().
  */
-void enterTCImpl(TCA start, ActRec* stashedAR);
+void enterTCImpl(TCA start);
 
 ///////////////////////////////////////////////////////////////////////////////
 
 }}
-
-#endif

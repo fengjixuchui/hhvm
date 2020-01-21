@@ -5,8 +5,7 @@ let select
     (write_fds : Unix.file_descr list)
     (exn_fds : Unix.file_descr list)
     (timeout : float) :
-    (Unix.file_descr list * Unix.file_descr list * Unix.file_descr list) Lwt.t
-    =
+    (Unix.file_descr list * Unix.file_descr list * Unix.file_descr list) Lwt.t =
   let make_task
       ~(fds : Unix.file_descr list)
       ~(condition : Lwt_unix.file_descr -> bool)
@@ -113,9 +112,10 @@ end
 let exec_checked
     ?(input : string option)
     ?(env : string array option)
-    (program : string)
+    (program : Exec_command.t)
     (args : string array) : (Process_success.t, Process_failure.t) Lwt_result.t
     =
+  let program = Exec_command.to_string program in
   let command_line =
     let args =
       args |> Array.map ~f:(fun x -> " " ^ x) |> String.concat_array ~sep:""
@@ -123,7 +123,7 @@ let exec_checked
     program ^ args
   in
   let process =
-    let command = (program, Array.append [|program|] args) in
+    let command = (program, Array.append [| program |] args) in
     Lwt_process.open_process_full command ?env
   in
   (let%lwt (exn, stdout, stderr) =

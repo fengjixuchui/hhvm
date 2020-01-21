@@ -7,34 +7,60 @@
  *)
 
 open Core_kernel
+module PositionedSyntaxTree =
+  Full_fidelity_syntax_tree.WithSyntax (Full_fidelity_positioned_syntax)
 
 type entry = {
   file_input: ServerCommandTypes.file_input;
   path: Relative_path.t;
+  source_text: Full_fidelity_source_text.t;
+  comments: Parser_return.comments;
   ast: Nast.program;
+  mutable cst: PositionedSyntaxTree.t option;
+  mutable tast: Tast.program option;
+  mutable errors: Errors.t option;
+  mutable symbols: Relative_path.t SymbolOccurrence.t list option;
 }
-[@@deriving show]
 
 type t = {
   tcopt: TypecheckerOptions.t;
+  backend: Provider_backend.t;
   entries: entry Relative_path.Map.t;
 }
 
-let empty ~tcopt = { tcopt; entries = Relative_path.Map.empty }
+let empty ~tcopt =
+  (* TODO: [backend] should be provided as a parameter. The backend should likely
+  live in the [ServerEnv.env], along with the [tcopt]. *)
+  let backend = Provider_backend.get () in
+  { tcopt; backend; entries = Relative_path.Map.empty }
 
 let global_context : t option ref = ref None
 
 let get_file_input ~(ctx : t) ~(path : Relative_path.t) :
     ServerCommandTypes.file_input =
-  match Relative_path.Map.get ctx.entries path with
+  match Relative_path.Map.find_opt ctx.entries path with
   | Some { file_input; _ } -> file_input
   | None -> ServerCommandTypes.FileName (Relative_path.to_absolute path)
 
 let get_fileinfo ~(entry : entry) : FileInfo.t =
-  let (funs, classes, typedefs, consts) = Nast.get_defs entry.ast in
-  { FileInfo.empty_t with FileInfo.funs; classes; typedefs; consts }
+  let (funs, classes, record_defs, typedefs, consts) =
+    Nast.get_defs entry.ast
+  in
+  {
+    FileInfo.empty_t with
+    FileInfo.funs;
+    classes;
+    record_defs;
+    typedefs;
+    consts;
+  }
 
 let get_global_context () : t option = !global_context
+
+let get_global_context_or_empty_FOR_MIGRATION () : t =
+  match !global_context with
+  | Some global_context -> global_context
+  | None -> empty ~tcopt:(Global_naming_options.get ())
 
 let set_global_context_internal (t : t) : unit =
   match !global_context with

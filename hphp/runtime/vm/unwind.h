@@ -23,33 +23,47 @@
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/vm-regs.h"
+#include "hphp/util/either.h"
 #include "hphp/util/trace.h"
 
 namespace HPHP {
 
 //////////////////////////////////////////////////////////////////////
 
+enum UnwinderResult {
+   UnwindNone        = 0,
+   // Unwound an async function and placed the exception inside a failed static
+   // wait handle
+   UnwindFSWH        = (1u << 0),
+   // Unwound until the given fp, i.e. did not reach the end of the vm nesting
+   UnwindReachedGoal = (1u << 1),
+   // Skip call
+   UnwindSkipCall    = (1u << 2),
+};
+
+constexpr UnwinderResult operator|(UnwinderResult a, UnwinderResult b) {
+   return UnwinderResult((int)a | (int)b);
+}
+
+//////////////////////////////////////////////////////////////////////
+
+/*
+ * Locks the object on the top of the stack if the PC points to a FCallCtor and
+ * the FCallArgs indicates the necessity to lock
+ */
+void lockObjectWhileUnwinding(PC pc, Stack& stack);
+
 /*
  * Find a catch exception handler for a given raise location if the handler was
- * found or InvalidAbsoluteOffset.
+ * found or kInvalidOffset.
  */
 Offset findCatchHandler(const Func* func, Offset raiseOffset);
 
 /*
- * Unwind the PHP exception.
+ * Unwind the exception.
  */
-void unwindPhp(ObjectData* phpException);
-
-/*
- * Unwind the C++ exception.
- */
-void unwindCpp(Exception* cppException);
-
-/*
- * Unwind the frame for a builtin.  Currently only used when switching modes
- * for hphpd_break, and fb_enable_code_coverage.
- */
-void unwindBuiltinFrame();
+UnwinderResult unwindVM(Either<ObjectData*, Exception*> exception,
+                        const ActRec* fpToUnwind = nullptr);
 
 /*
  * The main entry point to the unwinder.
@@ -73,25 +87,6 @@ template<class Action> void exception_handler(Action action);
  * Either way, this function takes ownership of one existing reference to prev.
  */
 void chainFaultObjects(ObjectData* top, ObjectData* prev);
-
-//////////////////////////////////////////////////////////////////////
-
-/*
- * Thrown when we need to "switch modes" by re-starting the current VM
- * invocation.  For example, if we need to break for the debugger, or
- * enable code coverage mode.
- */
-struct VMSwitchMode : BaseException {
-  const char* what() const noexcept override { return "VMSwitchMode"; }
-};
-
-/*
- * Same as VMSwitchMode, except for use from a builtin---the frame for
- * the builtin function should be unwound before resuming the VM.
- */
-struct VMSwitchModeBuiltin : BaseException {
-  const char* what() const noexcept override { return "VMSwitchModeBuiltin"; }
-};
 
 //////////////////////////////////////////////////////////////////////
 

@@ -12,7 +12,8 @@ open Aast
 open Tast
 open Ast_defs
 
-let annotation pos = (pos, (Typing_reason.Rnone, Typing_defs.make_tany ()))
+let annotation pos =
+  (pos, Typing_defs.mk (Typing_reason.Rnone, Typing_defs.make_tany ()))
 
 let gen_fun_name field name = field ^ "##" ^ name
 
@@ -46,7 +47,7 @@ let simple_typ pos name = (pos, Happly ((pos, name), []))
 
 let create_mixed_type_hint pos =
   ( Typing_make_type.mixed (Typing_defs.Reason.Rhint pos),
-    Some (simple_typ pos "mixed") )
+    Some (simple_typ pos "\\HH\\mixed") )
 
 (* Error formatter *)
 let error_msg cls field name =
@@ -95,7 +96,7 @@ let gen_pu_accessor
       let class_id = (annotation pos, CIexpr (id pos "parent")) in
       let parent_call = Class_const (class_id, (pos, fun_name)) in
       let call =
-        Call (Aast.Cnormal, (annotation pos, parent_call), [], [var_atom], [])
+        Call (Aast.Cnormal, (annotation pos, parent_call), [], [var_atom], None)
       in
       Default (pos, [(pos, Return (Some (annotation pos, call)))])
     else
@@ -108,7 +109,7 @@ let gen_pu_accessor
               Throw
                 ( annotation pos,
                   New
-                    (class_id, [], [(annotation pos, msg)], [], annotation pos)
+                    (class_id, [], [(annotation pos, msg)], None, annotation pos)
                 ) );
           ] )
   in
@@ -127,8 +128,7 @@ let gen_pu_accessor
         {
           param_annotation = annotation pos;
           param_type_hint =
-            (snd (annotation pos), Some (simple_typ pos "string"));
-          param_is_reference = false;
+            (snd (annotation pos), Some (simple_typ pos "\\HH\\string"));
           param_is_variadic = false;
           param_pos = pos;
           param_name = "$atom";
@@ -175,10 +175,9 @@ let gen_Members field pos (fields : pu_enum) =
                 Binop
                   ( Eq None,
                     (annot, Lvar (pos, Local_id.make_unscoped "$mems")),
-                    (annot, Collection ((pos, "ImmVector"), None, mems)) ) ) );
+                    (annot, Collection ((pos, "vec"), None, mems)) ) ) );
           ( pos,
-            Return (Some (annot, Lvar (pos, Local_id.make_unscoped "$mems")))
-          );
+            Return (Some (annot, Lvar (pos, Local_id.make_unscoped "$mems"))) );
         ];
       fb_annotation = NoUnsafeBlocks;
     }
@@ -276,6 +275,7 @@ let update_def d =
   | Class c -> Class (update_class c)
   | Stmt s -> Stmt (erase_stmt s)
   | Fun f -> Fun (erase_fun f)
+  | RecordDef _
   | Typedef _
   | Constant _
   | Namespace _

@@ -7,7 +7,6 @@
  *
  *)
 
-open Core_kernel
 open Common
 open Typing_defs
 open Typing_env_types
@@ -33,25 +32,37 @@ class update_array_type_mapper : type_mapper_type =
  * to just an array.*)
 class virtual downcast_tabstract_to_array_type_mapper =
   object (this)
-    method on_tabstract env r ak cstr =
-      let ty = (r, Tabstract (ak, cstr)) in
+    method private try_super_types env ty =
       match TUtils.get_all_supertypes env ty with
       | (_, []) -> (env, ty)
       | (env, tyl) ->
-        let is_array = function
-          | (_, Tarraykind _) -> true
+        let is_array ty =
+          match get_node ty with
+          | Tarraykind _ -> true
           | _ -> false
         in
         (match List.filter tyl is_array with
         | [] -> (env, ty)
         | x :: _ ->
           (* If the abstract type has multiple concrete supertypes
-        which are arrays, just take the first one.
-        TODO(jjwu): Try all of them and find one that works
-        *)
+    which are arrays, just take the first one.
+    TODO(jjwu): Try all of them and find one that works
+    *)
           this#on_type env x)
 
-    method virtual on_type : env -> locl ty -> result
+    method on_tgeneric env r x =
+      let ty = mk (r, Tgeneric x) in
+      this#try_super_types env ty
+
+    method on_tdependent env r x ty =
+      let ty = mk (r, Tdependent (x, ty)) in
+      this#try_super_types env ty
+
+    method on_tnewtype env r x tyl ty =
+      let ty = mk (r, Tnewtype (x, tyl, ty)) in
+      this#try_super_types env ty
+
+    method virtual on_type : env -> locl_ty -> result
   end
 
 let union env tyl =
@@ -64,16 +75,14 @@ let union_keys = union
 let union_values env values =
   let unknown =
     List.find values (fun ty ->
-        match snd (snd (TUtils.fold_unresolved env ty)) with
-        | Tany _ -> true
-        | _ -> false)
+        TUtils.is_sub_type_for_union env (mk (Reason.none, make_tany ())) ty)
   in
   match unknown with
-  | Some (r, _) -> (env, (r, TUtils.tany env))
+  | Some ty -> (env, mk (get_reason ty, TUtils.tany env))
   | None -> union env values
 
 (* Apply this function to a type after lvalue array access that should update
- * array type (e.g from AKempty to AKmap after using it as a map). *)
+ * array type (e.g from AKempty to AKdarray after using it as a dict). *)
 let update_array_type p ~is_map env ty =
   let mapper =
     object
@@ -85,10 +94,10 @@ let update_array_type p ~is_map env ty =
         if is_map then
           let (env, tk) = Env.fresh_type env p in
           let (env, tv) = Env.fresh_type env p in
-          (env, (Reason.Rused_as_map p, Tarraykind (AKmap (tk, tv))))
+          (env, mk (Reason.Rused_as_map p, Tarraykind (AKdarray (tk, tv))))
         else
           let (env, tv) = Env.fresh_type env p in
-          (env, (Reason.Rappend p, Tarraykind (AKvec tv)))
+          (env, mk (Reason.Rappend p, Tarraykind (AKvarray tv)))
     end
   in
   let (env, ty) = mapper#on_type (fresh_env env) ty in

@@ -4,12 +4,14 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use crate::parser_env::ParserEnv;
-use parser_core_types::token_kind::TokenKind;
+mod operator_generated;
+
+use ocamlrep_derive::OcamlRep;
+use parser_core_types::{parser_env::ParserEnv, token_kind::TokenKind};
 
 pub use crate::operator_generated::*;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, OcamlRep)]
 pub enum Assoc {
     LeftAssociative,
     RightAssociative,
@@ -19,7 +21,10 @@ pub enum Assoc {
 use self::Operator::*;
 
 impl Operator {
-    pub fn precedence(&self, _env: &ParserEnv) -> usize {
+    // NOTE: ParserEnv is not used in operator::precedence(). The function rust_precedence_helper (defined in rust_parser_ffi.rs)
+    // assumes that ParserEnv is not used. If operator::precedence() starts using ParserEnv, the helper and the callsites in OCaml
+    // must be updated.
+    pub fn precedence(&self, _: &ParserEnv) -> usize {
         // TODO: eval
         // TODO: Comma
         // TODO: elseif
@@ -76,13 +81,12 @@ impl Operator {
             PostfixIncrementOperator | PostfixDecrementOperator | AwaitOperator => 23,
             CloneOperator => 24,
             // value 25 is reserved for assignment that appear in expressions
-            ReferenceOperator => 26,
-            FunctionCallOperator => 27,
-            NewOperator => 28,
-            MemberSelectionOperator | NullSafeMemberSelectionOperator => 29,
-            IndexingOperator => 30,
-            ScopeResolutionOperator => 31,
-            DollarOperator => 32,
+            FunctionCallOperator => 26,
+            NewOperator => 27,
+            MemberSelectionOperator | NullSafeMemberSelectionOperator => 28,
+            IndexingOperator => 29,
+            ScopeResolutionOperator => 30,
+            DollarOperator => 31,
         }
     }
 
@@ -90,7 +94,10 @@ impl Operator {
         25
     }
 
-    pub fn associativity(&self, _env: &ParserEnv) -> Assoc {
+    // NOTE: ParserEnv is not used in operator::associativity(). The function rust_associativity_helper (defined in rust_parser_ffi.rs)
+    // assumes that ParserEnv is not used. If operator::associativity() starts using ParserEnv, the function and the callsites in OCaml
+    // must be updated.
+    pub fn associativity(&self, _: &ParserEnv) -> Assoc {
         match self {
             | EqualOperator | StrictEqualOperator | NotEqualOperator | PhpNotEqualOperator
             | StrictNotEqualOperator | LessThanOperator | LessThanOrEqualOperator
@@ -114,7 +121,7 @@ impl Operator {
                 => Assoc::LeftAssociative,
             | CoalesceOperator | CoalesceAssignmentOperator | LogicalNotOperator | NotOperator | CastOperator
             | DollarOperator | UnaryPlusOperator | UnaryMinusOperator  // TODO: Correct?
-            | ErrorControlOperator | ReferenceOperator // TODO: Correct?
+            | ErrorControlOperator // TODO: Correct?
             | PostfixIncrementOperator | PostfixDecrementOperator
             | PrefixIncrementOperator | PrefixDecrementOperator | ExponentOperator
             | AssignmentOperator | AdditionAssignmentOperator
@@ -139,7 +146,6 @@ impl Operator {
             TokenKind::Dollar => DollarOperator,
             TokenKind::Plus => UnaryPlusOperator,
             TokenKind::Minus => UnaryMinusOperator,
-            TokenKind::Ampersand => ReferenceOperator,
             TokenKind::At => ErrorControlOperator,
             TokenKind::New => NewOperator,
             TokenKind::Clone => CloneOperator,

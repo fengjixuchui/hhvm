@@ -383,7 +383,6 @@ const StaticString
   s_keyset("keyset"),
   s_object("object"),
   s_resource("resource"),
-  s_ref("reference"),
   s_func("function"),
   s_class("class"),
   s_clsmeth("clsmeth"),
@@ -404,14 +403,15 @@ StaticString getDataTypeString(DataType t) {
     case KindOfDict:       return s_dict;
     case KindOfPersistentKeyset:
     case KindOfKeyset:     return s_keyset;
-    case KindOfPersistentShape:
-    case KindOfShape:
-      return RuntimeOption::EvalHackArrDVArrs ? s_dict : s_array;
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
     case KindOfPersistentArray:
     case KindOfArray:      return s_array;
     case KindOfObject:     return s_object;
     case KindOfResource:   return s_resource;
-    case KindOfRef:        return s_ref;
     case KindOfFunc:       return s_func;
     case KindOfClass:      return s_class;
     case KindOfClsMeth:    return s_clsmeth;

@@ -48,6 +48,7 @@
 #include "hphp/hhbbc/unit-util.h"
 
 #include "hphp/runtime/base/mixed-array.h"
+#include "hphp/runtime/base/runtime-option.h"
 
 namespace HPHP { namespace HHBBC {
 
@@ -186,13 +187,6 @@ uint32_t numPush(const Bytecode& bc) {
   return bc.numPush();
 }
 
-// Returns whether a set on something containing type t could have
-// side-effects (running destuctors, or modifying arbitrary things via
-// a Ref).
-bool setCouldHaveSideEffects(const Type& t) {
-  return t.couldBe(BRef);
-}
-
 // Some reads could raise warnings and run arbitrary code.
 bool readCouldHaveSideEffects(const Type& t) {
   return t.couldBe(BUninit);
@@ -289,20 +283,21 @@ struct DceAction {
     Replace,
     PopAndReplace,
     MinstrStackFinal,
-    MinstrStackFixup
+    MinstrStackFixup,
+    MinstrPushBase,
+    AdjustPop,
   } action;
-  using MaskType = uint32_t;
+  using MaskOrCountType = uint32_t;
   static constexpr size_t kMaskSize = 32;
-  MaskType mask{0};
-
+  MaskOrCountType maskOrCount{0};
 
   DceAction() = default;
   /* implicit */ DceAction(Action a) : action{a} {}
-  DceAction(Action a, MaskType m) : action{a}, mask{m} {}
+  DceAction(Action a, MaskOrCountType m) : action{a}, maskOrCount{m} {}
 };
 
 bool operator==(const DceAction& a, const DceAction& b) {
-  return a.action == b.action && a.mask == b.mask;
+  return a.action == b.action && a.maskOrCount == b.maskOrCount;
 }
 
 using DceActionMap = std::map<InstrId, DceAction>;
@@ -410,6 +405,8 @@ const char* show(DceAction action) {
     case DceAction::PopAndReplace:    return "PopAndReplace";
     case DceAction::MinstrStackFinal: return "MinstrStackFinal";
     case DceAction::MinstrStackFixup: return "MinstrStackFixup";
+    case DceAction::MinstrPushBase:   return "MinstrPushBase";
+    case DceAction::AdjustPop:        return "AdjustPop";
   };
   not_reached();
 }
@@ -573,6 +570,12 @@ void addLocGen(Env& env, uint32_t id) {
   env.dceState.liveLocals[id] = 1;
 }
 
+void addLocUse(Env& env, uint32_t id) {
+  FTRACE(2, "      loc-use: {}\n", id);
+  if (id >= kMaxTrackedLocals) return;
+  env.dceState.usedLocals[id] = 1;
+}
+
 /*
  * Indicate that this instruction will use the value of loc unless we
  * kill it. handle_push will take care of calling addLocGen if
@@ -600,40 +603,9 @@ Type locRaw(Env& env, LocalId loc) {
   return env.stateBefore.locals[loc];
 }
 
-bool setLocCouldHaveSideEffects(Env& env, LocalId loc, bool forExit = false) {
-  // A "this" local is protected by the $this in the ActRec.
-  if (loc == env.stateBefore.thisLoc) return false;
-
-  // Normally, if there's an equivLocal this isn't the last reference,
-  // so overwriting it won't run any destructors. But if we're
-  // destroying all the locals (eg RetC) they can't all protect each
-  // other; in that case we require a lower equivLoc to ensure that
-  // one local from each equivalence set will still be marked as
-  // having effects (choosing lower numbers also means we mark the
-  // params as live, which makes it more likely that we can eliminate
-  // a local).
-  static_assert(NoLocalId == std::numeric_limits<LocalId>::max(),
-                "NoLocalId must be greater than all valid local ids");
-  if (env.stateBefore.equivLocals.size() > loc) {
-    auto l = env.stateBefore.equivLocals[loc];
-    if (l != NoLocalId) {
-      if (!forExit) return false;
-      do {
-        if (l < loc) return false;
-        l = env.stateBefore.equivLocals[l];
-      } while (l != loc);
-    }
-  }
-
-  return setCouldHaveSideEffects(locRaw(env, loc));
-}
-
-void readDtorLocs(Env& env) {
-  for (auto i = LocalId{0}; i < env.stateBefore.locals.size(); ++i) {
-    if (setLocCouldHaveSideEffects(env, i, true)) {
-      addLocGen(env, i);
-    }
-  }
+bool isLocVolatile(Env& env, uint32_t id) {
+  if (id >= kMaxTrackedLocals) return true;
+  return is_volatile_local(env.dceState.ainfo.ctx.func, id);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -690,7 +662,15 @@ void combineActions(DceActionMap& dst, const DceActionMap& src) {
       if (i.second.action == DceAction::MinstrStackFixup ||
           i.second.action == DceAction::MinstrStackFinal) {
         assertx(i.second.action == ret.first->second.action);
-        ret.first->second.mask |= i.second.mask;
+        ret.first->second.maskOrCount |= i.second.maskOrCount;
+        continue;
+      }
+
+      if (i.second.action == DceAction::AdjustPop &&
+          ret.first->second.action == DceAction::AdjustPop) {
+        assertx(ret.first->second.maskOrCount > 0);
+        assertx(i.second.maskOrCount > 0);
+        ret.first->second.maskOrCount += i.second.maskOrCount;
         continue;
       }
 
@@ -716,6 +696,13 @@ void combineActions(DceActionMap& dst, const DceActionMap& src) {
         ret.first->second.action = DceAction::Kill;
         continue;
       }
+      if (ret.first->second.action == DceAction::AdjustPop ||
+          i.second.action == DceAction::AdjustPop) {
+        ret.first->second.action = DceAction::Kill;
+        ret.first->second.maskOrCount = 0;
+        continue;
+      }
+
       always_assert(false);
     }
   }
@@ -985,7 +972,6 @@ void pushRemovableIfNoThrow(Env& env) {
  */
 
 void dce(Env& env, const bc::PopC&)          { discard(env); }
-void dce(Env& env, const bc::PopV&)          { discard(env); }
 void dce(Env& env, const bc::PopU&)          { discard(env); }
 void dce(Env& env, const bc::PopU2&)         {
   auto ui = std::move(env.dceState.stack.back());
@@ -996,6 +982,8 @@ void dce(Env& env, const bc::PopU2&)         {
     // it.
     markUisLive(env, true, ui);
     ui = UseInfo { Use::Used };
+  } else {
+    ui.actions.emplace(env.id, DceAction { DceAction::AdjustPop, 1 });
   }
   discard(env);
   env.dceState.stack.push_back(std::move(ui));
@@ -1010,6 +998,8 @@ void dce(Env& env, const bc::PopFrame& op) {
     if (isLinked(uis.back())) {
       markUisLive(env, true, uis.back());
       uis.back() = UseInfo { Use::Used };
+    } else {
+      uis.back().actions.emplace(env.id, DceAction { DceAction::AdjustPop, 1 });
     }
   }
 
@@ -1084,9 +1074,8 @@ void cgetImpl(Env& env, LocalId loc, bool quiet) {
         return PushFlags::MarkUnused;
       }
       if (!isLocLive(env, loc) &&
-          !setCouldHaveSideEffects(locRaw(env, loc)) &&
           !readCouldHaveSideEffects(locRaw(env, loc)) &&
-          !is_volatile_local(env.dceState.ainfo.ctx.func, loc)) {
+          !isLocVolatile(env, loc)) {
         // note: PushL does not deal with Uninit, so we need the
         // readCouldHaveSideEffects here, regardless of quiet.
         env.dceState.replaceMap.insert({ env.id, { bc::PushL { loc } } });
@@ -1145,11 +1134,11 @@ void dce(Env& env, const bc::BareThis& op) {
     });
 }
 
-void dce(Env& env, const bc::RetC&)  { pop(env); readDtorLocs(env); }
-void dce(Env& env, const bc::RetCSuspended&) { pop(env); readDtorLocs(env); }
-void dce(Env& env, const bc::Throw&) { pop(env); readDtorLocs(env); }
-void dce(Env& env, const bc::Fatal&) { pop(env); readDtorLocs(env); }
-void dce(Env& env, const bc::Exit&)  { stack_ops(env); readDtorLocs(env); }
+void dce(Env& env, const bc::RetC&)  { pop(env); }
+void dce(Env& env, const bc::RetCSuspended&) { pop(env); }
+void dce(Env& env, const bc::Throw&) { pop(env); }
+void dce(Env& env, const bc::Fatal&) { pop(env); }
+void dce(Env& env, const bc::Exit&)  { stack_ops(env); }
 
 void dce(Env& env, const bc::IsTypeC& op) {
   stack_ops(env, [&] (UseInfo& ui) {
@@ -1345,15 +1334,13 @@ void dce(Env& env, const bc::NewPair& op)         { dceNewArrayLike(env, op); }
 void dce(Env& env, const bc::ColFromArray& op)    { dceNewArrayLike(env, op); }
 
 void dce(Env& env, const bc::PopL& op) {
-  auto const effects = setLocCouldHaveSideEffects(env, op.loc1);
-  if (!isLocLive(env, op.loc1) && !effects) {
-    assert(!locRaw(env, op.loc1).couldBe(BRef));
+  if (!isLocLive(env, op.loc1) && !isLocVolatile(env, op.loc1)) {
     discard(env);
     env.dceState.actionMap[env.id] = DceAction::PopInputs;
     return;
   }
   pop(env);
-  if (effects || locRaw(env, op.loc1).couldBe(BRef)) {
+  if (isLocVolatile(env, op.loc1)) {
     addLocGen(env, op.loc1);
   } else {
     addLocKill(env, op.loc1);
@@ -1367,9 +1354,7 @@ void dce(Env& env, const bc::InitThisLoc& op) {
 }
 
 void dce(Env& env, const bc::SetL& op) {
-  auto const effects = setLocCouldHaveSideEffects(env, op.loc1);
-  if (!isLocLive(env, op.loc1) && !effects) {
-    assert(!locRaw(env, op.loc1).couldBe(BRef));
+  if (!isLocLive(env, op.loc1) && !isLocVolatile(env, op.loc1)) {
     return markDead(env);
   }
   stack_ops(env, [&] (UseInfo& ui) {
@@ -1381,7 +1366,7 @@ void dce(Env& env, const bc::SetL& op) {
     ui.actions[env.id] = DceAction::Replace;
     return PushFlags::MarkDead;
   });
-  if (effects || locRaw(env, op.loc1).couldBe(BRef)) {
+  if (isLocVolatile(env, op.loc1)) {
     addLocGen(env, op.loc1);
   } else {
     addLocKill(env, op.loc1);
@@ -1389,13 +1374,10 @@ void dce(Env& env, const bc::SetL& op) {
 }
 
 void dce(Env& env, const bc::UnsetL& op) {
-  auto const oldTy   = locRaw(env, op.loc1);
+  auto const oldTy = locRaw(env, op.loc1);
   if (oldTy.subtypeOf(BUninit)) return markDead(env);
 
-  // Unsetting a local bound to a static never has side effects
-  // because the static itself has a reference to the value.
-  auto const effects = setLocCouldHaveSideEffects(env, op.loc1);
-
+  auto const effects = isLocVolatile(env, op.loc1);
   if (!isLocLive(env, op.loc1) && !effects) return markDead(env);
   if (effects) {
     addLocGen(env, op.loc1);
@@ -1412,8 +1394,8 @@ void dce(Env& env, const bc::UnsetL& op) {
  */
 void dce(Env& env, const bc::IncDecL& op) {
   auto const oldTy   = locRaw(env, op.loc1);
-  auto const effects = setLocCouldHaveSideEffects(env, op.loc1) ||
-                         readCouldHaveSideEffects(oldTy);
+  auto const effects = readCouldHaveSideEffects(oldTy) ||
+                       isLocVolatile(env, op.loc1);
   stack_ops(env, [&] (const UseInfo& ui) {
       scheduleGenLoc(env, op.loc1);
       if (!isLocLive(env, op.loc1) && !effects && allUnused(ui)) {
@@ -1459,13 +1441,13 @@ bool setOpLSideEffects(const bc::SetOpL& op, const Type& lhs, const Type& rhs) {
  * kill it.
  */
 void dce(Env& env, const bc::SetOpL& op) {
-  auto const oldTy   = locRaw(env, op.loc1);
+  auto const oldTy = locRaw(env, op.loc1);
 
   stack_ops(env, [&] (UseInfo& ui) {
       scheduleGenLoc(env, op.loc1);
       if (!isLocLive(env, op.loc1) && allUnused(ui)) {
-        if (!setLocCouldHaveSideEffects(env, op.loc1) &&
-            !readCouldHaveSideEffects(oldTy) &&
+        if (!readCouldHaveSideEffects(oldTy) &&
+            !isLocVolatile(env, op.loc1) &&
             !setOpLSideEffects(op, oldTy, topC(env))) {
           return PushFlags::MarkUnused;
         }
@@ -1490,7 +1472,6 @@ void dce(Env& env, const bc::CastDict&)         { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::CastDouble&)       { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::CastInt&)          { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::CastKeyset&)       { pushRemovableIfNoThrow(env); }
-void dce(Env& env, const bc::CastObject&)       { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::CastString&)       { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::CastVArray&)       { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::CastVec&)          { pushRemovableIfNoThrow(env); }
@@ -1544,14 +1525,12 @@ void no_dce(Env& env, const Op& op) {
   pop_inputs(env, op.numPop());
 }
 
-void dce(Env& env, const bc::AliasCls& op) { no_dce(env, op); }
 void dce(Env& env, const bc::AssertRATL& op) { no_dce(env, op); }
 void dce(Env& env, const bc::AssertRATStk& op) { no_dce(env, op); }
 void dce(Env& env, const bc::Await& op) { no_dce(env, op); }
 void dce(Env& env, const bc::AwaitAll& op) { no_dce(env, op); }
 void dce(Env& env, const bc::BaseGL& op) { no_dce(env, op); }
 void dce(Env& env, const bc::BaseH& op) { no_dce(env, op); }
-void dce(Env& env, const bc::BaseL& op) { no_dce(env, op); }
 void dce(Env& env, const bc::BreakTraceHint& op) { no_dce(env, op); }
 void dce(Env& env, const bc::CGetCUNop& op) { no_dce(env, op); }
 void dce(Env& env, const bc::CGetG& op) { no_dce(env, op); }
@@ -1609,21 +1588,12 @@ void dce(Env& env, const bc::InstanceOfD& op) { no_dce(env, op); }
 void dce(Env& env, const bc::IssetG& op) { no_dce(env, op); }
 void dce(Env& env, const bc::IssetL& op) { no_dce(env, op); }
 void dce(Env& env, const bc::IssetS& op) { no_dce(env, op); }
-void dce(Env& env, const bc::IterBreak& op) { no_dce(env, op); }
 void dce(Env& env, const bc::IterFree& op) { no_dce(env, op); }
-void dce(Env& env, const bc::IterInit& op) { no_dce(env, op); }
-void dce(Env& env, const bc::IterInitK& op) { no_dce(env, op); }
-void dce(Env& env, const bc::IterNext& op) { no_dce(env, op); }
-void dce(Env& env, const bc::IterNextK& op) { no_dce(env, op); }
 void dce(Env& env, const bc::Jmp& op) { no_dce(env, op); }
 void dce(Env& env, const bc::JmpNS& op) { no_dce(env, op); }
 void dce(Env& env, const bc::JmpNZ& op) { no_dce(env, op); }
 void dce(Env& env, const bc::JmpZ& op) { no_dce(env, op); }
 void dce(Env& env, const bc::LIterFree& op) { no_dce(env, op); }
-void dce(Env& env, const bc::LIterInit& op) { no_dce(env, op); }
-void dce(Env& env, const bc::LIterInitK& op) { no_dce(env, op); }
-void dce(Env& env, const bc::LIterNext& op) { no_dce(env, op); }
-void dce(Env& env, const bc::LIterNextK& op) { no_dce(env, op); }
 void dce(Env& env, const bc::MemoGet& op) { no_dce(env, op); }
 void dce(Env& env, const bc::MemoGetEager& op) { no_dce(env, op); }
 void dce(Env& env, const bc::MemoSet& op) { no_dce(env, op); }
@@ -1671,11 +1641,43 @@ void dce(Env& env, const bc::VerifyParamTypeTS& op) { no_dce(env, op); }
 void dce(Env& env, const bc::VerifyRetNonNullC& op) { no_dce(env, op); }
 void dce(Env& env, const bc::VerifyRetTypeC& op) { no_dce(env, op); }
 void dce(Env& env, const bc::VerifyRetTypeTS& op) { no_dce(env, op); }
-void dce(Env& env, const bc::VGetL& op) { no_dce(env, op); }
 void dce(Env& env, const bc::WHResult& op) { no_dce(env, op); }
 void dce(Env& env, const bc::Yield& op) { no_dce(env, op); }
 void dce(Env& env, const bc::YieldFromDelegate& op) { no_dce(env, op); }
 void dce(Env& env, const bc::YieldK& op) { no_dce(env, op); }
+
+////////////////////////////////////////////////////////////////////////////////
+
+// Iterator ops don't really read their key and value output locals; they just
+// dec-ref the old value there before storing the new one (i.e. SetL semantics).
+//
+// We have to mark these values as transiently being used (else they could be
+// completely killed - that is, loc->killed would get set to true and we would
+// try to delete the local), but we don't have to may-read them.
+void iter_dce(Env& env, const IterArgs& ita, LocalId baseId, int numPop) {
+  addLocUse(env, ita.valId);
+  if (ita.hasKey()) addLocUse(env, ita.keyId);
+  if (baseId != NoLocalId) addLocGen(env, baseId);
+  pop_inputs(env, numPop);
+}
+
+void dce(Env& env, const bc::IterInit& op) {
+  iter_dce(env, op.ita, NoLocalId, op.numPop());
+}
+
+void dce(Env& env, const bc::LIterInit& op) {
+  iter_dce(env, op.ita, op.loc2, op.numPop());
+}
+
+void dce(Env& env, const bc::IterNext& op) {
+  iter_dce(env, op.ita, NoLocalId, op.numPop());
+}
+
+void dce(Env& env, const bc::LIterNext& op) {
+  iter_dce(env, op.ita, op.loc2, op.numPop());
+}
+
+////////////////////////////////////////////////////////////////////////////////
 
 /*
  * The minstr instructions can read a cell from the stack without
@@ -1747,6 +1749,15 @@ void dce(Env& env, const bc::BaseSC& op)      {
   minstr_base(env, op, op.arg2);
 }
 
+void dce(Env& env, const bc::BaseL& op) {
+  if (!isLocLive(env, op.loc1) &&
+      !readCouldHaveSideEffects(locRaw(env, op.loc1)) &&
+      !isLocVolatile(env, op.loc1)) {
+    env.dceState.actionMap[env.id] = DceAction::MinstrPushBase;
+  }
+  no_dce(env, op);
+}
+
 void dce(Env& env, const bc::Dim& op)         { minstr_dim(env, op); }
 
 void dce(Env& env, const bc::QueryM& op) {
@@ -1784,7 +1795,7 @@ void dispatch_dce(Env& env, const Bytecode& op) {
   not_reached();
 }
 
-using MaskType = DceAction::MaskType;
+using MaskType = DceAction::MaskOrCountType;
 
 void m_adj(uint32_t& depth, MaskType mask) {
   auto i = depth;
@@ -1900,15 +1911,31 @@ dce_visit(const Index& index,
   dceState.usedLocals = dceOutState.locLive;
   dceState.isLocal    = dceOutState.isLocal;
 
+  auto const blk = fa.ctx.func->blocks[bid].get();
+  auto const dceStkSz = [&] {
+    switch (blk->hhbcs.back().op) {
+      case Op::MemoGet:
+      case Op::MemoGetEager:
+        // These only push on the "hit" path. If we can prove they
+        // never hit, the final stack state won't have an extra
+        // element. But their dce implementations assume that they
+        // push something. Fix it by just adding one to their in
+        // state.  Note that when dceState.dceStack is populated, we
+        // already did the equivalent during global analysis (see
+        // isCFPushTaken below).
+        return states[states.size() - 2].first.stack.size() + 1;
+      default:
+        return states.back().first.stack.size();
+    }
+  }();
+
   if (dceOutState.dceStack) {
     dceState.stack = *dceOutState.dceStack;
-    assert(dceState.stack.size() == states.back().first.stack.size());
+    assert(dceState.stack.size() == dceStkSz);
   } else {
-    dceState.stack.resize(states.back().first.stack.size(),
-                          UseInfo { Use::Used });
+    dceState.stack.resize(dceStkSz, UseInfo { Use::Used });
   }
 
-  auto const blk = fa.ctx.func->blocks[bid].get();
   for (uint32_t idx = blk->hhbcs.size(); idx-- > 0;) {
     auto const& op = blk->hhbcs[idx];
 
@@ -1960,9 +1987,8 @@ dce_visit(const Index& index,
       dispatch_dce(visit_env, op);
 
       /*
-       * When we see a PEI, liveness must take into account the fact
-       * that we could take an exception edge here (or'ing in the
-       * liveExn sets).
+       * When we see a PEI, liveness must take into account the fact that we
+       * could take an exception edge here by or-ing in the locLiveExn set.
        */
       if (states[idx].second.wasPEI) {
         FTRACE(2, "    <-- exceptions\n");
@@ -1972,6 +1998,8 @@ dce_visit(const Index& index,
       dceState.usedLocals |= dceState.liveLocals;
     }
 
+    FTRACE(4, "    dce frame: {}\n",
+           loc_bits_string(fa.ctx.func, dceState.liveLocals));
     FTRACE(4, "    dce stack: {}\n",
       [&] {
         using namespace folly::gen;
@@ -2022,6 +2050,47 @@ DceAnalysis analyze_dce(const Index& index,
     };
   }
   return DceAnalysis {};
+}
+
+template<class Op>
+using has_mkey = std::is_same<decltype(((Op*)0)->mkey), MKey>;
+
+template<class Op>
+void adjust_mkey(Op& bc, bool) {}
+
+template<class Op>
+typename std::enable_if<has_mkey<Op>::value>::type
+adjust_mkey(Op& bc, int64_t adj) {
+  if (bc.mkey.mcode == MEC || bc.mkey.mcode == MPC) {
+    bc.mkey.idx += adj;
+  }
+}
+
+void adjust_member_key(Bytecode& bc, int64_t adj) {
+#define O(opcode, ...) case Op::opcode: adjust_mkey(bc.opcode, adj); break;
+  switch (bc.op) { OPCODES }
+#undef O
+}
+
+template<class Op>
+using has_arg1 = std::is_same<decltype(((Op*)0)->arg1), uint32_t>;
+
+template<class Op>
+void adjust_arg1(Op& bc, bool) {}
+
+template<class Op>
+typename std::enable_if<has_arg1<Op>::value>::type
+adjust_arg1(Op& bc, int64_t adj) {
+  bc.arg1 += adj;
+}
+
+void adjust_ndiscard(Bytecode& bc, int64_t adj) {
+#define O(opcode, ...)                                            \
+  case Op::opcode:                                                \
+    if (isMemberFinalOp(Op::opcode)) adjust_arg1(bc.opcode, adj); \
+    break;
+  switch (bc.op) { OPCODES }
+#undef O
 }
 
 /*
@@ -2106,7 +2175,59 @@ void dce_perform(php::Func& func,
       case DceAction::MinstrStackFinal:
       case DceAction::MinstrStackFixup:
       {
-        adjustMinstr(b->hhbcs[id.idx], elm.second.mask);
+        adjustMinstr(b->hhbcs[id.idx], elm.second.maskOrCount);
+        break;
+      }
+      case DceAction::MinstrPushBase:
+      {
+        assertx(b->hhbcs[id.idx].op == OpBaseL);
+        auto const base = b->hhbcs[id.idx].BaseL;
+        auto const srcLoc = b->hhbcs[id.idx].srcLoc;
+        b->hhbcs[id.idx] = bc::PushL {base.loc1};
+        b->hhbcs.insert(
+          b->hhbcs.begin() + id.idx + 1, bc::BaseC{0, base.subop2});
+        setloc(srcLoc, b->hhbcs.begin() + id.idx, 2);
+        for (auto p = id.idx + 2; p < b->hhbcs.size(); ++p) {
+          auto const& bc = b->hhbcs[p];
+
+          // Sometimes parts of a minstr will be unreachable, hhbbc marks these
+          // with a fatal.
+          if (bc.op == OpFatal) break;
+
+          assertx(p + 1 < b->hhbcs.size() || isMemberFinalOp(bc.op));
+          adjust_member_key(b->hhbcs[p], 1);
+          adjust_ndiscard(b->hhbcs[p], 1);
+          if (isMemberFinalOp(bc.op)) break;
+        }
+        break;
+      }
+      case DceAction::AdjustPop:
+      {
+        auto const op = b->hhbcs[id.idx].op;
+        always_assert(op == Op::PopU2 || op == Op::PopFrame);
+        if (op == Op::PopU2) {
+          assertx(elm.second.maskOrCount == 1);
+          b->hhbcs[id.idx].PopU = bc::PopU {};
+          b->hhbcs[id.idx].op = Op::PopU;
+        } else {
+          assertx(elm.second.maskOrCount > 0);
+          auto& popFrame = b->hhbcs[id.idx].PopFrame;
+          assertx(elm.second.maskOrCount <= popFrame.arg1);
+          popFrame.arg1 -= elm.second.maskOrCount;
+          if (popFrame.arg1 <= 1) {
+            auto const remaining = popFrame.arg1;
+            auto const srcLoc = b->hhbcs[id.idx].srcLoc;
+            b->hhbcs.erase(b->hhbcs.begin() + id.idx);
+            b->hhbcs.insert(
+              b->hhbcs.begin() + id.idx,
+              3,
+              remaining == 0
+                ? Bytecode{ bc::PopU {} }
+                : Bytecode{ bc::PopU2 {} }
+            );
+            setloc(srcLoc, b->hhbcs.begin() + id.idx, 3);
+          }
+        }
         break;
       }
     }
@@ -2219,6 +2340,26 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
    * States for each block, indexed by block id.
    */
   std::vector<DceOutState> blockStates(ai.ctx.func->blocks.size());
+
+  /*
+   * If EnableArgsInBacktraces is true, then argument locals (and the reified
+   * generics local) are included in the backtrace attached to exceptions, so
+   * they are live for any instruction that may throw. In order to converge
+   * quickly in this case, we update the locLiveExn sets early.
+   */
+  if (RuntimeOption::EnableArgsInBacktraces) {
+    auto const func = ai.ctx.func;
+    auto const args = func->params.size() + (int)func->isReified;
+    auto locLiveExn = std::bitset<kMaxTrackedLocals>();
+    if (args < kMaxTrackedLocals) {
+      for (auto i = 0; i < args; i++) locLiveExn.set(i);
+    } else {
+      locLiveExn.set();
+    }
+    for (auto& blockState : blockStates) {
+      blockState.locLiveExn |= locLiveExn;
+    }
+  }
 
   /*
    * Set of block reverse post order ids that still need to be
@@ -2397,6 +2538,45 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
 
     processForcedLive(result.forcedLiveLocations);
 
+    // If blk ends with an iterator block, and succId is the loop body for
+    // this iterator, this method returns the iterator's arguments so that
+    // we can kill its key and value output locals.
+    //
+    // We can't do this optimization if succId is also the loop end block.
+    // This case should never occur, because then the iter would have to
+    // be both live and dead at succId, but we guard against it anyway.
+    //
+    // It would be nice to move this logic to the iter_dce method itself,
+    // but this analysis pass only tracks a single out-state for each block,
+    // so we must do it here to apply it to the in-state of the body and not
+    // to the in-state of the done block. (Catch blocks are handled further
+    // down and this logic never applies to them.)
+    auto const killIterOutputs = [] (const php::Block* blk, BlockId succId)
+        -> folly::Optional<IterArgs> {
+      auto const& lastOpc = blk->hhbcs.back();
+      auto const next = blk->fallthrough == succId;
+      auto ita = folly::Optional<IterArgs>{};
+      auto const kill = [&]{
+        switch (lastOpc.op) {
+          case Op::IterInit:
+            ita = lastOpc.IterInit.ita;
+            return next && lastOpc.IterInit.target2 != succId;
+          case Op::LIterInit:
+            ita = lastOpc.LIterInit.ita;
+            return next && lastOpc.LIterInit.target3 != succId;
+          case Op::IterNext:
+            ita = lastOpc.IterNext.ita;
+            return !next && lastOpc.IterNext.target2 == succId;
+          case Op::LIterNext:
+            ita = lastOpc.LIterNext.ita;
+            return !next && lastOpc.LIterNext.target3 == succId;
+          default:
+            return false;
+        }
+      }();
+      return kill ? ita : folly::none;
+    };
+
     auto const isCFPushTaken = [] (const php::Block* blk, BlockId succId) {
       auto const& lastOpc = blk->hhbcs.back();
       switch (lastOpc.op) {
@@ -2415,11 +2595,22 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
       FTRACE(2, "  -> {}\n", pid);
       auto& pbs = blockStates[pid];
       auto const oldPredLocLive = pbs.locLive;
-      pbs.locLive |= result.locLiveIn;
+      auto const pred = ai.ctx.func->blocks[pid].get();
+      if (auto const ita = killIterOutputs(pred, bid)) {
+        auto const key = ita->hasKey();
+        FTRACE(3, "    Killing iterator output locals: {}\n",
+               key ? folly::to<std::string>(ita->valId, ", ", ita->keyId)
+                   : folly::to<std::string>(ita->valId));
+        auto liveIn = result.locLiveIn;
+        if (ita->valId < kMaxTrackedLocals) liveIn[ita->valId] = false;
+        if (key && ita->keyId < kMaxTrackedLocals) liveIn[ita->keyId] = false;
+        pbs.locLive |= liveIn;
+      } else {
+        pbs.locLive |= result.locLiveIn;
+      }
       auto changed = pbs.locLive != oldPredLocLive;
 
       changed |= [&] {
-        auto const pred = ai.ctx.func->blocks[pid].get();
         if (isCFPushTaken(pred, bid)) {
           auto stack = result.stack;
           stack.insert(stack.end(), pred->hhbcs.back().numPush(),

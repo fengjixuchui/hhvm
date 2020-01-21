@@ -50,8 +50,6 @@ type genv = {
   (* Early-initialized workers to be used in MultiWorker jobs
    * They are initialized early to keep their heaps as empty as possible. *)
   workers: MultiWorker.worker list option;
-  (* Env used to access an early-init worker prototype, and to start jobs. *)
-  lru_host_env: Shared_lru.host_env option;
   (* Returns the list of files under .hhconfig, subject to a filter *)
   indexer: (string -> bool) -> unit -> string list;
   (* Each time this is called, it should return the files that have changed
@@ -96,8 +94,10 @@ type full_check_status =
  *)
 type env = {
   naming_table: Naming_table.t;
+  typing_service: typing_service;
   tcopt: TypecheckerOptions.t;
   popt: ParserOptions.t;
+  gleanopt: GleanOptions.t;
   (* Errors are indexed by files that were known to GENERATE errors in
    * corresponding phases. Note that this is different from HAVING errors -
    * it's possible for checking of A to generate error in B - in this case
@@ -149,6 +149,11 @@ type env = {
    * Full_check_started and entire thing will be retried on next iteration. *)
   needs_recheck: Relative_path.Set.t;
   init_env: init_env;
+  (* Set by `hh --pause` or `hh --resume`. Indicates whether full/global recheck
+    should be triggered on file changes. If paused, it would still be triggered
+    by commands that require a full recheck, such as STATUS, i.e., `hh`
+    on the command line. *)
+  full_recheck_on_file_changes: full_recheck_on_file_changes;
   full_check: full_check_status;
   prechecked_files: prechecked_files_status;
   (* Not every caller of rechecks expects that they can be interrupted,
@@ -158,8 +163,8 @@ type env = {
     genv ->
     env ->
     (Unix.file_descr * env MultiThreadedCall.interrupt_handler) list;
-  (* Upon `hh --pause` we no longer trigger a full check upon file changes *)
-  paused: bool;
+  (* Whether we should force remote type checking or not *)
+  remote: bool;
   (* When persistent client sends a command that cannot be handled (due to
    * thread safety) we put the continuation that finishes handling it here. *)
   pending_command_needs_writes: (env -> env) option;
@@ -182,6 +187,67 @@ type env = {
 }
 [@@deriving show]
 
+(* Global rechecks in response to file changes can be paused. If the user
+  changes the state to `Paused` during an ongoing recheck, we should cancel
+  that recheck.
+
+  The effect of the `PAUSE true` RPC during a recheck is that the recheck will
+  be canceled, while the result of `PAUSE false` is that the client will wait
+  for the recheck to be finished.
+
+  NOTE:
+  Interrupt handlers are currently set up and used during type checking.
+  MultiWorker executor (MultiThreadedCall) selects worker file descriptors as
+  well as some input channels from clients. If a client is sending an RPC over
+  such a channel, the executor will call that channel's designated handler.
+
+  `ServerMain` sets up a few of these handlers, and the one we're interested in
+  for this change is the __priority__ client interrupt handler. This handler is
+  only listening to RPCs sent over the priority channel. The client decides
+  which RPCs are sent over the priority channel vs. the default channel.
+
+  In the priority client interrupt handler, we actually handle the RPC that
+  the client is sending. We then return the updated environment to
+  the MultiWorker executor, along with the decision on whether it should
+  continue executing or cancel. We examine the environment after handling
+  the RPC to check whether the user paused file changes-driven global rechecks
+  during the *current* recheck. If that is the case, then the current recheck
+  will be canceled.
+
+  The reason we care about whether it's the current recheck that's paused or
+  some other one is because global rechecks can still happen even if
+  *file changes-driven* global rechecks are paused. This is because the user
+  can explicitly request a full recheck by running an `hh_client` command that
+  *requires* a full recheck. There are a number of such commands, but the most
+  obvious one is just `hh` (defaults to `hh check`).
+
+  It is possible to immediately set the server into paused mode AND cancel
+  the current recheck. There are two cases the user might wish to do this in:
+    1) The user notices that some change they made is taking a while to
+      recheck, so they want to cancel the recheck because they want to make
+      further changes, or retry the recheck with the `--remote` argument
+    2) While the server is in the paused state, the user explicitly starts
+      a full recheck, but then decides that they want to cancel it
+
+  In both cases, running `hh --pause` on the command line should stop
+  the recheck if it's in the middle of the type checking phase.
+
+  Note that interrupts are only getting set up for the type checking phase,
+  so if the server is in the middle of, say, the redecl phase, it's not going
+  to be interrupted until it gets to the type checking itself. In some cases,
+  redecling can be very costly. For example, if we redecl using the folded decl
+  approach, adding `extends ISomeInterface` to `IBaseInterface` that has many
+  descendants (implementers and their descendants) requires redeclaring all
+  the descendants of `IBaseInterface`. However, redecling using the shallow
+  decl approach should be considerably less costly, therefore it may not be
+  worth it to support interrupting redecling. *)
+and full_recheck_on_file_changes =
+  | Not_paused
+  | Paused of paused_env
+  | Resumed
+
+and paused_env = { paused_recheck_id: string option }
+
 and dirty_deps = {
   (* We are rechecking dirty files to bootstrap the dependency graph.
    * After this is done we need to also recheck full fan-out (in this updated
@@ -194,6 +260,11 @@ and dirty_deps = {
   (* Those deps have already been checked against their interaction with
    * dirty_master_deps. Storing them here to avoid checking it over and over *)
   clean_local_deps: Typing_deps.DepSet.t;
+}
+
+and typing_service = {
+  delegate_state: Typing_service_delegate.state; [@opaque]
+  enabled: bool;
 }
 
 (* When using prechecked files we split initial typechecking in two phases
@@ -213,6 +284,7 @@ and init_env = {
   (* Additional data associated with init that we want to log when a first full
    * check completes. *)
   state_distance: int option;
+  mergebase: string option;
   approach_name: string;
   init_error: string option;
   init_type: string;

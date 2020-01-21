@@ -7,11 +7,12 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 open Aast
 open Ast_defs
 module Reason = Typing_reason
+module MakeType = Typing_make_type
 
 exception Empty_regex_pattern
 
@@ -73,7 +74,7 @@ let keys p s ~flags =
 
 let type_match p s ~flags =
   let sft =
-    { sft_optional = false; sft_ty = (Reason.Rregex p, Tprim Tstring) }
+    { sft_optional = false; sft_ty = MakeType.string (Reason.Rregex p) }
   in
   let keys = keys p s ~flags in
   let shape_map =
@@ -84,7 +85,7 @@ let type_match p s ~flags =
   in
   (* Any Regex\Match will contain the entire matched substring at key 0 *)
   let shape_map = ShapeMap.add (SFlit_int (p, "0")) sft shape_map in
-  (Reason.Rregex p, Tshape (Closed_shape, shape_map))
+  mk (Reason.Rregex p, Tshape (Closed_shape, shape_map))
 
 let get_global_options s =
   List.fold_left (String.to_list_rev s) ~init:[] ~f:(fun acc x ->
@@ -119,8 +120,8 @@ let check_balanced_delimiters s delim =
     else if i < length then
       let (d2, i2) =
         match s.[i] with
-        | x when x = delim -> (d + 1, i + 1)
-        | x when x = delim_closed -> (d - 1, i + 1)
+        | x when Char.equal x delim -> (d + 1, i + 1)
+        | x when Char.equal x delim_closed -> (d - 1, i + 1)
         (* Skip escape characters *)
         | '\\' -> (d, i + 2)
         | _ -> (d, i + 1)
@@ -140,7 +141,7 @@ let check_and_strip_delimiters s =
   (*  Non-alphanumeric, non-whitespace, non-backslash characters are delimiter-eligible *)
   let delimiter = Str.regexp "[^a-zA-Z0-9\t\n\r\x0b\x0c \\]" in
   let length = String.length s in
-  if length = 0 then
+  if Int.equal length 0 then
     raise Empty_regex_pattern
   else
     let first = s.[0] in
@@ -153,7 +154,7 @@ let check_and_strip_delimiters s =
           get_global_options (String.sub s (i + 2) (length - i - 2))
         in
         let stripped_string = String.sub s 1 i in
-        if closed_delim <> first then
+        if not (Char.equal closed_delim first) then
           (check_balanced_delimiters stripped_string first, flags)
         else
           (stripped_string, flags)
@@ -166,8 +167,10 @@ let type_pattern (p, e_) =
   | String s ->
     let (s, flags) = check_and_strip_delimiters s in
     let match_type = type_match p s ~flags in
-    ( Reason.Rregex p,
-      Tabstract
-        ( AKnewtype (Naming_special_names.Regex.tPattern, [match_type]),
-          Some (Reason.Rregex p, Tprim Tstring) ) )
+    mk
+      ( Reason.Rregex p,
+        Tnewtype
+          ( Naming_special_names.Regex.tPattern,
+            [match_type],
+            MakeType.string (Reason.Rregex p) ) )
   | _ -> failwith "Should have caught non-Ast_defs.String prefixed expression!"

@@ -32,12 +32,12 @@ namespace HPHP {
  * Checks whether the given cell is an instance of the class referred by
  * given named entity.
  */
-bool cellInstanceOf(const Cell* tv, const NamedEntity* ne);
+bool tvInstanceOf(const TypedValue* tv, const NamedEntity* ne);
 
 /*
  * Checks whether the given cell is an instance of the given class.
  */
-bool cellInstanceOf(const Cell* tv, const Class* cls);
+bool tvInstanceOf(const TypedValue* tv, const Class* cls);
 
 /*
  * Returns true is all the generics on the type type structure are
@@ -103,36 +103,41 @@ bool typeStructureCouldBeNonStatic(const ArrayData* ts);
  * Checks whether the type of the given cell matches the type structure.
  * Expects a resolved type structure.
  */
-bool checkTypeStructureMatchesCell(const Array& ts, Cell c1);
+bool checkTypeStructureMatchesTV(const Array& ts, TypedValue c1);
 
 /*
- * In addition to regular checkTypeStructureMatchesCell, also populates the
+ * In addition to regular checkTypeStructureMatchesTV, also populates the
  * error paths
  */
-bool checkTypeStructureMatchesCell(
+bool checkTypeStructureMatchesTV(
   const Array& ts,
-  Cell c1,
+  TypedValue c1,
   std::string& givenType,
   std::string& expectedType,
   std::string& errorKey
 );
 
 /*
- * In addition to regular checkTypeStructureMatchesCell, also sets the warn flag
+ * In addition to regular checkTypeStructureMatchesTV, also sets the warn flag
  * if the type parameter is denoted as soft either through an annotation at the
  * declaration site or by soft type hint at the generic level
  */
-bool checkTypeStructureMatchesCell(const Array& ts, Cell c1, bool& warn);
+bool checkTypeStructureMatchesTV(const Array& ts, TypedValue c1, bool& warn);
 
 /*
  * Throws user catchable exception that tells the user what the given type is,
  * what the expected type is and which key it failed at, if applicable
  */
-[[noreturn]] void throwTypeStructureDoesNotMatchCellException(
+[[noreturn]] void throwTypeStructureDoesNotMatchTVException(
   std::string& givenType,
   std::string& expectedType,
   std::string& errorKey
 );
+
+/*
+ * Checks to see whether the input type structure contains a T_Unresolved
+ */
+bool doesTypeStructureContainTUnresolved(const ArrayData* ts);
 
 }
 

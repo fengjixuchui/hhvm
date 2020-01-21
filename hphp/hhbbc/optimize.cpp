@@ -83,10 +83,10 @@ folly::Optional<Bytecode> makeAssert(ArrayTypeTable::Builder& arrTable,
   auto const rat = make_repo_type(arrTable, t);
   using T = RepoAuthType::Tag;
   if (options.FilterAssertions) {
-    // Gen and InitGen don't add any useful information, so leave them
+    // Cell and InitCell don't add any useful information, so leave them
     // out entirely.
-    if (rat == RepoAuthType{T::Gen})     return folly::none;
-    if (rat == RepoAuthType{T::InitGen}) return folly::none;
+    if (rat == RepoAuthType{T::Cell})     return folly::none;
+    if (rat == RepoAuthType{T::InitCell}) return folly::none;
   }
   return Bytecode { TyBC { arg, rat } };
 }
@@ -178,13 +178,6 @@ void insert_assertions_step(ArrayTypeTable::Builder& arrTable,
  * subtypes and adding this to the opcode table.
  */
 bool hasObviousStackOutput(const Bytecode& op, const Interp& interp) {
-  // Generally consider CGetL obvious because if we knew the type of the local,
-  // we'll assert that right before the CGetL.
-  auto cgetlObvious = [&] (LocalId l, int idx) {
-    return !interp.state.locals[l].couldBe(BRef) ||
-      !interp.state.stack[interp.state.stack.size() - idx - 1].
-         type.strictSubtypeOf(TInitCell);
-  };
   switch (op.op) {
   case Op::Null:
   case Op::NullUninit:
@@ -233,7 +226,6 @@ bool hasObviousStackOutput(const Bytecode& op, const Interp& interp) {
   case Op::CastDouble:
   case Op::CastString:
   case Op::CastArray:
-  case Op::CastObject:
   case Op::CastDict:
   case Op::CastVec:
   case Op::CastKeyset:
@@ -258,7 +250,6 @@ bool hasObviousStackOutput(const Bytecode& op, const Interp& interp) {
   case Op::IsTypeC:
   case Op::IsTypeL:
   case Op::OODeclExists:
-  case Op::AliasCls:
     return true;
 
   case Op::This:
@@ -271,15 +262,11 @@ bool hasObviousStackOutput(const Bytecode& op, const Interp& interp) {
     return true;
 
   case Op::CGetL:
-    return cgetlObvious(op.CGetL.loc1, 0);
   case Op::CGetQuietL:
-    return cgetlObvious(op.CGetQuietL.loc1, 0);
   case Op::CUGetL:
-    return cgetlObvious(op.CUGetL.loc1, 0);
   case Op::CGetL2:
-    return cgetlObvious(op.CGetL2.loc1, 1);
   case Op::PushL:
-    return cgetlObvious(op.PushL.loc1, 0);
+    return true;
 
   // The output of SetL is obvious if you know what its input is
   // (which we'll assert if we know).
@@ -411,7 +398,7 @@ bool propagate_constants(const Bytecode& op, State& state, Gen gen) {
   auto const numPush = op.numPush();
   auto const stkSize = state.stack.size();
   constexpr auto numCells = 4;
-  Cell constVals[numCells];
+  TypedValue constVals[numCells];
 
   // All outputs of the instruction must have constant types for this
   // to be allowed.
@@ -428,22 +415,10 @@ bool propagate_constants(const Bytecode& op, State& state, Gen gen) {
 
   // Pop the inputs, and push the constants.
   for (auto i = size_t{0}; i < numPop; ++i) {
-    switch (op.popFlavor(i)) {
-    case Flavor::C:  gen(bc::PopC {}); break;
-    case Flavor::V:  gen(bc::PopV {}); break;
-    case Flavor::U:  not_reached();    break;
-    case Flavor::CU:
-      // We only support C's for CU right now.
-      gen(bc::PopC {});
-      break;
-    case Flavor::CV: not_reached();    break;
-    case Flavor::CVU:
-      // Note that we only support C's for CVU so far (this only comes up with
-      // FCallBuiltin)---we'll fail the verifier if something changes to send
-      // V's or U's through here.
-      gen(bc::PopC {});
-      break;
-    }
+    DEBUG_ONLY auto flavor = op.popFlavor(i);
+    assertx(flavor != Flavor::U);
+    // Even for CU we only support C's.
+    gen(bc::PopC {});
   }
 
   for (auto i = size_t{0}; i < numPush; ++i) {
@@ -589,10 +564,8 @@ void visit_blocks(const char* what,
 
 IterId iterFromInit(const php::Func& func, BlockId initBlock) {
   auto const& op = func.blocks[initBlock]->hhbcs.back();
-  if (op.op == Op::IterInit)   return op.IterInit.iter1;
-  if (op.op == Op::IterInitK)  return op.IterInitK.iter1;
-  if (op.op == Op::LIterInit)  return op.LIterInit.iter1;
-  if (op.op == Op::LIterInitK) return op.LIterInitK.iter1;
+  if (op.op == Op::IterInit)  return op.IterInit.ita.iterId;
+  if (op.op == Op::LIterInit) return op.LIterInit.ita.iterId;
   always_assert(false);
 }
 
@@ -653,6 +626,9 @@ struct OptimizeIterState {
             if (eligible[ti.initBlock] && ti.baseLocal == NoLocalId) {
               FTRACE(2, "   - blk:{} ineligible\n", ti.initBlock);
               eligible[ti.initBlock] = false;
+            } else if (ti.baseUpdated) {
+              FTRACE(2, "   - blk:{} updated\n", ti.initBlock);
+              updated[ti.initBlock] = true;
             }
           }
         );
@@ -689,23 +665,14 @@ struct OptimizeIterState {
       // transformation.
       switch (op.op) {
         case Op::IterInit:
-        case Op::IterInitK:
           assertx(opIdx == blk->hhbcs.size() - 1);
           fixupForInit();
           break;
         case Op::IterNext:
-          fixupFromState(op.IterNext.iter1);
-          break;
-        case Op::IterNextK:
-          fixupFromState(op.IterNextK.iter1);
+          fixupFromState(op.IterNext.ita.iterId);
           break;
         case Op::IterFree:
           fixupFromState(op.IterFree.iter1);
-          break;
-        case Op::IterBreak:
-          for (auto const& it : op.IterBreak.iterTab) {
-            if (it.kind == KindOfIter) fixupFromState(it.id);
-          }
           break;
         default:
           break;
@@ -737,6 +704,9 @@ struct OptimizeIterState {
   // All of the associated iterator operations within an iterator loop can be
   // optimized to liter if the iterator's initialization block is eligible.
   boost::dynamic_bitset<> eligible;
+  // For eligible blocks, the "updated" flag tracks whether there was *any*
+  // change to the base initialized in that block (including "safe" changes).
+  boost::dynamic_bitset<> updated;
 };
 
 void optimize_iterators(const Index& index,
@@ -748,9 +718,10 @@ void optimize_iterators(const Index& index,
   if (!func->numIters || !ainfo.hasInvariantIterBase) return;
 
   OptimizeIterState state;
-  // Everything starts out as eligible. We'll remove initialization blocks as we
-  // go.
+  // All blocks starts out eligible. We'll remove initialization blocks as go.
+  // Similarly, the iterator bases for all blocks start out not being updated.
   state.eligible.resize(func->blocks.size(), true);
+  state.updated.resize(func->blocks.size(), false);
 
   // Visit all the blocks and build up the fixup state.
   visit_blocks("optimize_iterators", index, ainfo, collect, state);
@@ -767,67 +738,34 @@ void optimize_iterators(const Index& index,
       continue;
     }
 
+    auto const flags = state.updated[fixup.init]
+      ? IterArgs::Flags::None
+      : IterArgs::Flags::BaseConst;
+
     BytecodeVec newOps;
     assertx(fixup.base != NoLocalId);
 
     // Rewrite the iteration op to its liter equivalent:
     switch (op.op) {
-      case Op::IterInit:
+      case Op::IterInit: {
+        auto args = op.IterInit.ita;
+        auto const target = op.IterInit.target2;
+        args.flags = flags;
         newOps = {
           bc_with_loc(op.srcLoc, bc::PopC {}),
-          bc_with_loc(
-            op.srcLoc,
-            bc::LIterInit {
-              op.IterInit.iter1,
-              fixup.base,
-              op.IterInit.target2,
-              op.IterInit.loc3
-            }
-          )
+          bc_with_loc(op.srcLoc, bc::LIterInit{args, fixup.base, target})
         };
         break;
-      case Op::IterInitK:
+      }
+      case Op::IterNext: {
+        auto args = op.IterNext.ita;
+        auto const target = op.IterNext.target2;
+        args.flags = flags;
         newOps = {
-          bc_with_loc(op.srcLoc, bc::PopC {}),
-          bc_with_loc(
-            op.srcLoc,
-            bc::LIterInitK {
-              op.IterInitK.iter1,
-              fixup.base,
-              op.IterInitK.target2,
-              op.IterInitK.loc3,
-              op.IterInitK.loc4
-            }
-          )
+          bc_with_loc(op.srcLoc, bc::LIterNext{args, fixup.base, target}),
         };
         break;
-      case Op::IterNext:
-        newOps = {
-          bc_with_loc(
-            op.srcLoc,
-            bc::LIterNext {
-              op.IterNext.iter1,
-              fixup.base,
-              op.IterNext.target2,
-              op.IterNext.loc3
-            }
-          )
-        };
-        break;
-      case Op::IterNextK:
-        newOps = {
-          bc_with_loc(
-            op.srcLoc,
-            bc::LIterNextK {
-              op.IterNextK.iter1,
-              fixup.base,
-              op.IterNextK.target2,
-              op.IterNextK.loc3,
-              op.IterNextK.loc4
-            }
-          )
-        };
-        break;
+      }
       case Op::IterFree:
         newOps = {
           bc_with_loc(
@@ -836,18 +774,6 @@ void optimize_iterators(const Index& index,
           )
         };
         break;
-      case Op::IterBreak: {
-        auto const iter = iterFromInit(*func, fixup.init);
-        newOps = { op };
-        for (auto& it : newOps.back().IterBreak.iterTab) {
-          if (it.id == iter) {
-            assertx(it.kind == KindOfIter);
-            it.kind = KindOfLIter;
-            it.local = fixup.base;
-          }
-        }
-        break;
-      }
       default:
         always_assert(false);
     }
@@ -996,7 +922,7 @@ void do_optimize(const Index& index, FuncAnalysis&& ainfo, bool isFinal) {
 
 //////////////////////////////////////////////////////////////////////
 
-Bytecode gen_constant(const Cell& cell) {
+Bytecode gen_constant(const TypedValue& cell) {
   switch (cell.m_type) {
     case KindOfUninit:
       return bc::NullUninit {};
@@ -1031,16 +957,17 @@ Bytecode gen_constant(const Cell& cell) {
     case KindOfPersistentKeyset:
       assert(cell.m_data.parr->isKeyset());
       return bc::Keyset { cell.m_data.parr };
-    case KindOfShape:
-    case KindOfPersistentShape:
-      not_implemented();
     case KindOfArray:
       assert(cell.m_data.parr->isStatic());
     case KindOfPersistentArray:
       assert(cell.m_data.parr->isPHPArray());
       return bc::Array { cell.m_data.parr };
 
-    case KindOfRef:
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
     case KindOfResource:
     case KindOfObject:
     case KindOfFunc:

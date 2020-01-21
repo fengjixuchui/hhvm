@@ -134,11 +134,11 @@ struct RequestMemoryExceededException : ResourceExceededException {
 };
 
 struct RequestOOMKilledException : ResourceExceededException {
-  RequestOOMKilledException(size_t usedBytes)
+  explicit RequestOOMKilledException(size_t usedBytes)
     : ResourceExceededException(
-        folly::sformat("request aborted due to memeory presure, "
+        folly::sformat("request aborted due to memory pressure, "
                        "used {} bytes", usedBytes),
-        empty_array())
+        empty_varray())
   {}
   EXCEPTION_COMMON_IMPL(RequestOOMKilledException);
 };
@@ -184,6 +184,7 @@ struct PhpNotSupportedException : ExtendedException {
 [[noreturn]] void throw_not_implemented(const char* feature);
 [[noreturn]]
 void throw_not_supported(const char* feature, const char* reason);
+[[noreturn]] void throw_stack_overflow();
 
 /*
  * Initialize Throwable's file name and line number assuming the stack trace

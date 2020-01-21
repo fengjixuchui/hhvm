@@ -49,16 +49,15 @@ bool typeFitsConstraint(Type t, GuardConstraint gc) {
       return true;
 
     case DataTypeCountness:
-    case DataTypeBoxAndCountness:
       // Consumers using this constraint expect the type to be relaxed to
       // Uncounted or left alone, so something like Arr|Obj isn't specific
       // enough.
       return !t.maybe(TCounted) ||
              t.subtypeOfAny(TStr, TArr, TVec, TDict, TKeyset, TObj,
-                            TRes, TBoxedCell, TClsMeth, TRecord);
+                            TRes, TClsMeth, TRecord);
 
-    case DataTypeBoxAndCountnessInit:
-      return typeFitsConstraint(t, DataTypeBoxAndCountness) &&
+    case DataTypeCountnessInit:
+      return typeFitsConstraint(t, DataTypeCountness) &&
              (t <= TUninit || !t.maybe(TUninit));
 
     case DataTypeSpecific:
@@ -99,12 +98,6 @@ GuardConstraint relaxConstraint(GuardConstraint origGc,
          origGc, knownType, toRelax);
   Trace::Indent _i;
 
-  // AssertType can be given TCtx, which should never relax.
-  if (toRelax.maybe(TCctx)) {
-    always_assert(toRelax <= TCtx);
-    return origGc;
-  }
-
   auto const dstType = knownType & toRelax;
   always_assert_flog(typeFitsConstraint(dstType, origGc),
                      "refine({}, {}) doesn't fit {}",
@@ -134,10 +127,10 @@ GuardConstraint relaxConstraint(GuardConstraint origGc,
   // optimizeProfiledGuards, so we can't rely on this category to give type
   // information through guards.  Since relaxConstraint is used to relax the
   // DataTypeCategory for guards, we cannot return DataTypeCountness unless we
-  // already had it to start with.  Instead, we return DataTypeBoxCountness,
+  // already had it to start with.  Instead, we return DataTypeCountnessInit,
   // which won't be further relaxed by optimizeProfiledGuards.
   if (newGc.category == DataTypeCountness && origGc != DataTypeCountness) {
-    newGc.category = DataTypeBoxAndCountness;
+    newGc.category = DataTypeCountnessInit;
   }
   ITRACE(4, "Returning {}\n", newGc);
   // newGc shouldn't be any more specific than origGc.

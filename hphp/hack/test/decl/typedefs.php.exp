@@ -1,0 +1,45 @@
+Parsed decls:
+
+{ Direct_decl_parser.classes = {}; funs = {};
+  typedefs =
+  { "MyBool" ->
+    { td_pos = [14:6-12]; td_vis = Transparent; td_tparams = [];
+      td_constraint = None;
+      td_type =
+      (Rhint (root|typedefs.php line 14, characters 15-18), (Tprim Tbool)) };
+    "MyFloat" ->
+    { td_pos = [12:6-13]; td_vis = Transparent; td_tparams = [];
+      td_constraint = None;
+      td_type =
+      (Rhint (root|typedefs.php line 12, characters 16-20), (Tprim Tfloat)) };
+    "MyInt" ->
+    { td_pos = [11:6-11]; td_vis = Transparent; td_tparams = [];
+      td_constraint = None;
+      td_type =
+      (Rhint (root|typedefs.php line 11, characters 14-16), (Tprim Tint)) };
+    "MyNamespace\\MyString" ->
+    { td_pos = [7:8-16]; td_vis = Transparent; td_tparams = [];
+      td_constraint = None;
+      td_type =
+      (Rhint (root|typedefs.php line 7, characters 19-24), (Tprim Tstring)) };
+    "MyNamespacedType" ->
+    { td_pos = [16:6-22]; td_vis = Transparent; td_tparams = [];
+      td_constraint = None;
+      td_type =
+      (Rhint (root|typedefs.php line 16, characters 25-45),
+       (Tapply (([16:25-46], "\\MyNamespace\\MyString"), [])))
+      };
+    "MyNum" ->
+    { td_pos = [13:6-11]; td_vis = Transparent; td_tparams = [];
+      td_constraint = None;
+      td_type =
+      (Rhint (root|typedefs.php line 13, characters 14-16), (Tprim Tnum)) };
+    "MyString" ->
+    { td_pos = [10:6-14]; td_vis = Transparent; td_tparams = [];
+      td_constraint = None;
+      td_type =
+      (Rhint (root|typedefs.php line 10, characters 17-22), (Tprim Tstring))
+      } };
+  consts = {} }
+
+They matched!

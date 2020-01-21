@@ -50,11 +50,21 @@ using HeaderMap = CaseInsenMap<std::vector<std::string>>;
 using CookieList = std::vector<std::pair<std::string, std::string>>;
 
 struct ITransportHeaders {
+  enum class Method {
+    Unknown,
+    GET,
+    POST,
+    HEAD,
+    AUTO, // check GET parameter first, then POST
+  };
   /* Request header methods */
   virtual const char *getUrl() = 0;
   virtual std::string getCommand() = 0; // URL with params stripped
   virtual std::string getHeader(const char *name) = 0;
   virtual const HeaderMap& getHeaders() = 0;
+  virtual Method getMethod() = 0;
+  virtual const char *getMethodName() = 0;
+  virtual const void *getPostData(size_t &size) = 0;
 
   /* Response header methods */
   virtual void addHeaderNoLock(const char *name, const char *value) = 0;
@@ -65,6 +75,8 @@ struct ITransportHeaders {
   virtual void removeHeader(const char *name) = 0;
   virtual void removeAllHeaders() = 0;
   virtual void getResponseHeaders(HeaderMap& headers) = 0;
+  virtual void addToCommaSeparatedHeader(
+      const char* name, const char* value) = 0;
 };
 
 /**
@@ -75,14 +87,7 @@ struct ITransportHeaders {
  * one transport is ONLY accessed from one single thread.
  */
 struct Transport : IDebuggable, ITransportHeaders {
-  enum class Method {
-    Unknown,
-
-    GET,
-    POST,
-    HEAD,
-    AUTO, // check GET parameter first, then POST
-  };
+  using Method = ITransportHeaders::Method;
 
   // TODO: add all status codes
   // (http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html)
@@ -187,7 +192,7 @@ public:
    */
   virtual Method getMethod() = 0;
   virtual const char *getExtendedMethod() { return nullptr;}
-  const char *getMethodName();
+  const char *getMethodName() override;
 
   /**
    * What version of HTTP was the request?
@@ -222,6 +227,9 @@ public:
   void getResponseHeaders(HeaderMap &headers) override;
   std::string getFirstHeaderFile() const { return m_firstHeaderFile;}
   int getFirstHeaderLine() const { return m_firstHeaderLine;}
+  // Appends value to the response header field, separated with a ", "
+  // If the value doesn't exist in m_responseHeaders[name] then, we add it
+  void addToCommaSeparatedHeader(const char* name, const char* value) override;
 
   /**
    * Content/MIME type related functions.

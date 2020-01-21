@@ -14,21 +14,33 @@ open ServerCommandTypes.Find_refs
 open Typing_defs
 module Cls = Decl_provider.Class
 
-(* The class containing the member can be specified in two ways:
- * - Class_set - as an explicit, pre-computed set of names, which are then
- *   compared using string comparison
- * - Subclasses_of - the class's name, in which comparison will use the
- *   subtyping relation
- *)
 type member_class =
   | Class_set of SSet.t
   | Subclasses_of of string
 
 type action_internal =
   | IClass of string
+  | IRecord of string
   | IMember of member_class * member
   | IFunction of string
   | IGConst of string
+
+let member_class_to_string (mc : member_class) : string =
+  match mc with
+  | Subclasses_of s -> "Subclasses_of " ^ s
+  | Class_set ss -> "Class_set " ^ (SSet.elements ss |> String.concat ~sep:",")
+
+let action_internal_to_string (action : action_internal) : string =
+  match action with
+  | IClass s -> "IClass " ^ s
+  | IRecord s -> "IRecord " ^ s
+  | IFunction s -> "IFunction " ^ s
+  | IGConst s -> "IGConst " ^ s
+  | IMember (member_class, member) ->
+    Printf.sprintf
+      "IMember(%s,%s)"
+      (member_class_to_string member_class)
+      (ServerCommandTypes.Find_refs.member_to_string member)
 
 let process_fun_id target_fun id =
   if target_fun = snd id then
@@ -81,8 +93,7 @@ let process_class_id target_class cid mid_option =
 
 let process_taccess target_classes target_typeconst (class_name, tconst_name, p)
     =
-  if
-    is_target_class target_classes class_name && target_typeconst = tconst_name
+  if is_target_class target_classes class_name && target_typeconst = tconst_name
   then
     Pos.Map.singleton p (class_name ^ "::" ^ tconst_name)
   else
@@ -138,8 +149,8 @@ let get_origin_class_name class_name member =
   Option.value origin ~default:class_name
 
 let get_child_classes_files class_name =
-  match Naming_table.Types.get_pos class_name with
-  | Some (_, Naming_table.TClass) ->
+  match Naming_table.Types.get_kind class_name with
+  | Some Naming_table.TClass ->
     (* Find the files that contain classes that extend class_ *)
     let cid_hash = Typing_deps.Dep.make (Typing_deps.Dep.Class class_name) in
     let extend_deps =
@@ -151,16 +162,12 @@ let get_child_classes_files class_name =
   | _ -> Relative_path.Set.empty
 
 let get_deps_set classes =
-  let get_filename class_name =
-    Naming_table.Types.get_pos class_name
-    >>= (fun (pos, _) -> Some (FileInfo.get_pos_filename pos))
-  in
   SSet.fold
     classes
     ~f:
       begin
         fun class_name acc ->
-        match get_filename class_name with
+        match Naming_table.Types.get_filename class_name with
         | None -> acc
         | Some fn ->
           let dep = Typing_deps.Dep.Class class_name in
@@ -172,9 +179,8 @@ let get_deps_set classes =
     ~init:Relative_path.Set.empty
 
 let get_deps_set_function f_name =
-  match Naming_table.Funs.get_pos f_name with
-  | Some pos ->
-    let fn = FileInfo.get_pos_filename pos in
+  match Naming_table.Funs.get_filename f_name with
+  | Some fn ->
     let dep = Typing_deps.Dep.Fun f_name in
     let ideps = Typing_deps.get_ideps dep in
     let files = Typing_deps.get_files ideps in
@@ -182,68 +188,112 @@ let get_deps_set_function f_name =
   | None -> Relative_path.Set.empty
 
 let get_deps_set_gconst cst_name =
-  match Naming_table.Consts.get_pos cst_name with
-  | Some pos ->
-    let fn = FileInfo.get_pos_filename pos in
+  match Naming_table.Consts.get_filename cst_name with
+  | Some fn ->
     let dep = Typing_deps.Dep.GConst cst_name in
     let ideps = Typing_deps.get_ideps dep in
     let files = Typing_deps.get_files ideps in
     Relative_path.Set.add files fn
   | None -> Relative_path.Set.empty
 
-let find_refs tcopt target acc fileinfo_l =
-  let tasts = ServerIdeUtils.recheck tcopt fileinfo_l in
-  let results =
-    let module SO = SymbolOccurrence in
-    List.fold tasts ~init:Pos.Map.empty ~f:(fun acc (_, tast) ->
-        IdentifySymbolService.all_symbols tast
-        |> List.filter ~f:(fun symbol -> not symbol.SO.is_declaration)
-        |> List.fold ~init:Pos.Map.empty ~f:(fun acc symbol ->
-               let SO.{ type_; pos; name; _ } = symbol in
-               Pos.Map.union acc
-               @@
-               match (target, type_) with
-               | ( IMember (classes, Typeconst tc),
-                   SO.Typeconst (c_name, tc_name) ) ->
-                 process_taccess classes tc (c_name, tc_name, pos)
-               | (IMember (classes, member), SO.Method (c_name, m_name))
-               | (IMember (classes, member), SO.ClassConst (c_name, m_name))
-               | (IMember (classes, member), SO.Property (c_name, m_name)) ->
-                 let mid = (pos, m_name) in
-                 let is_method =
-                   match type_ with
-                   | SO.Method _ -> true
-                   | _ -> false
-                 in
-                 let is_const =
-                   match type_ with
-                   | SO.ClassConst _ -> true
-                   | _ -> false
-                 in
-                 process_member_id
-                   classes
-                   member
-                   c_name
-                   mid
-                   ~is_method
-                   ~is_const
-               | (IFunction fun_name, SO.Function) ->
-                 process_fun_id fun_name (pos, name)
-               | (IClass c, SO.Class) -> process_class_id c (pos, name) None
-               | (IGConst cst_name, SO.GConst) ->
-                 process_gconst_id cst_name (pos, name)
-               | _ -> Pos.Map.empty)
-        |> Pos.Map.union acc)
-  in
-  Pos.Map.fold (fun p str acc -> (str, p) :: acc) results acc
+let fold_one_tast target acc symbol =
+  let module SO = SymbolOccurrence in
+  let SO.{ type_; pos; name; _ } = symbol in
+  Pos.Map.union acc
+  @@
+  match (target, type_) with
+  | (IMember (classes, Typeconst tc), SO.Typeconst (c_name, tc_name)) ->
+    process_taccess classes tc (c_name, tc_name, pos)
+  | (IMember (classes, member), SO.Method (c_name, m_name))
+  | (IMember (classes, member), SO.ClassConst (c_name, m_name))
+  | (IMember (classes, member), SO.Property (c_name, m_name)) ->
+    let mid = (pos, m_name) in
+    let is_method =
+      match type_ with
+      | SO.Method _ -> true
+      | _ -> false
+    in
+    let is_const =
+      match type_ with
+      | SO.ClassConst _ -> true
+      | _ -> false
+    in
+    process_member_id classes member c_name mid ~is_method ~is_const
+  | (IFunction fun_name, SO.Function) -> process_fun_id fun_name (pos, name)
+  | (IClass c, SO.Class) -> process_class_id c (pos, name) None
+  | (IGConst cst_name, SO.GConst) -> process_gconst_id cst_name (pos, name)
+  | _ -> Pos.Map.empty
 
-let parallel_find_refs workers fileinfo_l target tcopt =
+let find_refs
+    (ctx : Provider_context.t)
+    (target : action_internal)
+    (acc : (string * Pos.t) list)
+    (files : Relative_path.t list) : (string * Pos.t) list =
+  (* The helper function 'results_from_tast' takes a tast, looks at all *)
+  (* use-sites in the tast e.g. "foo(1)" is a use-site of symbol foo,   *)
+  (* and returns a map from use-site-position to name of the symbol.    *)
+  let results_from_tast (_file, tast) : string Pos.Map.t =
+    IdentifySymbolService.all_symbols tast
+    |> List.filter ~f:(fun symbol -> not symbol.SymbolOccurrence.is_declaration)
+    |> List.fold ~init:Pos.Map.empty ~f:(fold_one_tast target)
+  in
+  (* These are the tasts for all the 'fileinfo_l' passed in *)
+  let tasts_of_files : (Relative_path.t * Tast.program) list =
+    List.map files ~f:(fun path ->
+        let (_ctx, entry) =
+          Provider_utils.update_context
+            ~ctx
+            ~path
+            ~file_input:
+              (ServerCommandTypes.FileName (Relative_path.to_absolute path))
+        in
+        let { Provider_utils.Compute_tast.tast; _ } =
+          Provider_utils.compute_tast_unquarantined ~ctx ~entry
+        in
+        (path, tast))
+  in
+  Hh_logger.debug "find_refs.target: %s" (action_internal_to_string target);
+  if Hh_logger.Level.passes_min_level Hh_logger.Level.Debug then
+    List.iter tasts_of_files (fun (file, tast) ->
+        let fn = Relative_path.to_absolute file in
+        let tast = Tast.show_program tast in
+        let len = String.length tast in
+        let tast = String_utils.truncate 2048 tast in
+        Hh_logger.debug "find_refs.tast: %s\nlen=%d\n%s\n\n\n\n" fn len tast);
+  (* A list of all use-sites with their string-name of target *)
+  let results : string Pos.Map.t list =
+    List.map ~f:results_from_tast tasts_of_files
+  in
+  (* Turn that list into a map from use-sites to string-name-of-target *)
+  let results : string Pos.Map.t =
+    List.fold results ~init:Pos.Map.empty ~f:Pos.Map.union
+  in
+  (* We actually just want a list of string-name-of-target, use-site-position *)
+  (* Some callers e.g. LSP will simply discard the string-name-of-target.     *)
+  let acc_results : (string * Pos.t) list =
+    Pos.Map.fold (fun p str acc -> (str, p) :: acc) results acc
+  in
+  acc_results
+
+let find_refs_ctx
+    ~(ctx : Provider_context.t)
+    ~(entry : Provider_context.entry)
+    ~(target : action_internal) : (string * Pos.Map.key) list =
+  let symbols = IdentifySymbolService.all_symbols_ctx ~ctx ~entry in
+  let results =
+    symbols
+    |> List.filter ~f:(fun symbol -> not symbol.SymbolOccurrence.is_declaration)
+    |> List.fold ~init:Pos.Map.empty ~f:(fold_one_tast target)
+  in
+  Pos.Map.fold (fun p str acc -> (str, p) :: acc) results []
+
+let parallel_find_refs workers files target ctx =
   MultiWorker.call
     workers
-    ~job:(find_refs tcopt target)
+    ~job:(find_refs ctx target)
     ~neutral:[]
     ~merge:List.rev_append
-    ~next:(MultiWorker.next workers fileinfo_l)
+    ~next:(MultiWorker.next workers files)
 
 let get_definitions = function
   | IMember (Class_set classes, Method method_name) ->
@@ -253,7 +303,7 @@ let get_definitions = function
           let add_meth get acc =
             match get method_name with
             | Some meth when meth.ce_origin = Cls.name class_ ->
-              let pos = Reason.to_pos (fst @@ Lazy.force meth.ce_type) in
+              let pos = get_pos @@ Lazy.force meth.ce_type in
               (method_name, pos) :: acc
             | _ -> acc
           in
@@ -278,19 +328,27 @@ let get_definitions = function
   | IClass class_name ->
     Option.value
       ~default:[]
-      ( Naming_table.Types.get_pos class_name
-      >>= function
-      | (_, Naming_table.TClass) ->
-        Decl_provider.get_class class_name
-        >>= (fun class_ -> Some [(class_name, Cls.pos class_)])
-      | (_, Naming_table.TTypedef) ->
-        Decl_provider.get_typedef class_name
-        >>= (fun type_ -> Some [(class_name, type_.td_pos)]) )
+      (Naming_table.Types.get_kind class_name >>= function
+       | Naming_table.TClass ->
+         Decl_provider.get_class class_name >>= fun class_ ->
+         Some [(class_name, Cls.pos class_)]
+       | Naming_table.TTypedef ->
+         Decl_provider.get_typedef class_name >>= fun type_ ->
+         Some [(class_name, type_.td_pos)]
+       | Naming_table.TRecordDef ->
+         Decl_provider.get_record_def class_name >>= fun rd ->
+         Some [(class_name, rd.rdt_pos)])
+  | IRecord record_name ->
+    begin
+      match Decl_provider.get_record_def record_name with
+      | Some rd -> [(record_name, rd.rdt_pos)]
+      | None -> []
+    end
   | IFunction fun_name ->
     begin
       match Decl_provider.get_fun fun_name with
-      | Some fun_ -> [(fun_name, fun_.ft_pos)]
-      | None -> []
+      | Some { fe_pos; _ } -> [(fun_name, fe_pos)]
+      | _ -> []
     end
   | IGConst _
   | IMember (Subclasses_of _, _)
@@ -299,27 +357,21 @@ let get_definitions = function
        later time *)
     []
 
-let find_references tcopt workers target include_defs naming_table files =
-  let fileinfo_l =
-    Relative_path.Set.fold
-      files
-      ~f:
-        begin
-          fun fn acc ->
-          match Naming_table.get_file_info naming_table fn with
-          | Some fi -> (fn, fi) :: acc
-          | None -> acc
-        end
-      ~init:[]
-  in
+let find_references ctx workers target include_defs files =
+  let len = List.length files in
+  Hh_logger.debug "find_references: %d files" len;
   let results =
-    if List.length fileinfo_l < 10 then
-      find_refs tcopt target [] fileinfo_l
+    if len < 10 then
+      find_refs ctx target [] files
     else
-      parallel_find_refs workers fileinfo_l target tcopt
+      parallel_find_refs workers files target ctx
+  in
+  let () =
+    Hh_logger.debug "find_references: %d results" (List.length results)
   in
   if include_defs then
     let defs = get_definitions target in
+    let () = Hh_logger.debug "find_references: +%d defs" (List.length defs) in
     List.rev_append defs results
   else
     results
@@ -338,7 +390,5 @@ let get_dependent_files _workers input_set =
 
 let result_to_ide_message x =
   Option.map x ~f:(fun (symbol_name, references) ->
-      let references =
-        List.map references ~f:Ide_api_types.pos_to_file_range
-      in
+      let references = List.map references ~f:Ide_api_types.pos_to_file_range in
       (symbol_name, references))

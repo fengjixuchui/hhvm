@@ -62,16 +62,6 @@ public:
     return Variant(tvAsCVarRef(&tv));
   }
 
-  template<class TVector, bool useKey>
-  typename std::enable_if<
-    std::is_base_of<BaseVector, TVector>::value, Object>::type
-  php_map(const Variant& callback);
-
-  template<class TVector, bool useKey>
-  typename std::enable_if<
-    std::is_base_of<BaseVector, TVector>::value, Object>::type
-  php_filter(const Variant& callback);
-
   template<class TVector>
   typename std::enable_if<
     std::is_base_of<BaseVector, TVector>::value, Object>::type
@@ -80,17 +70,7 @@ public:
   template<class TVector>
   typename std::enable_if<
     std::is_base_of<BaseVector, TVector>::value, Object>::type
-  php_takeWhile(const Variant& fn);
-
-  template<class TVector>
-  typename std::enable_if<
-    std::is_base_of<BaseVector, TVector>::value, Object>::type
   php_skip(const Variant& n);
-
-  template<class TVector>
-  typename std::enable_if<
-    std::is_base_of<BaseVector, TVector>::value, Object>::type
-  php_skipWhile(const Variant& fn);
 
   template<class TVector>
   typename std::enable_if<
@@ -148,7 +128,6 @@ public:
 
   template <bool throwOnMiss>
   static tv_lval OffsetAt(ObjectData* obj, const TypedValue* key) {
-    assertx(!isRefType(key->m_type));
     auto vec = static_cast<BaseVector*>(obj);
     if (key->m_type == KindOfInt64) {
       return throwOnMiss ? vec->at(key->m_data.num)
@@ -172,7 +151,6 @@ public:
     return dataAt(key);
   }
   tv_lval at(const TypedValue* key) {
-    assertx(!isRefType(key->m_type));
     if (LIKELY(key->m_type == KindOfInt64)) {
       return at(key->m_data.num);
     }
@@ -188,7 +166,6 @@ public:
     return dataAt(key);
   }
   tv_lval get(const TypedValue* key) {
-    assertx(!isRefType(key->m_type));
     if (LIKELY(key->m_type == KindOfInt64)) {
       return get(key->m_data.num);
     }
@@ -229,17 +206,20 @@ public:
 
   Array toPHPArrayImpl() {
     if (!m_size) return empty_array();
-    return Array::attach(const_cast<ArrayData*>(arrayData()->toPHPArray(true)));
+    auto ad = arrayData()->toPHPArray(true);
+    return ad != arrayData() ? Array::attach(ad) : Array{ad};
   }
 
   Array toVArray() {
     if (!m_size) return empty_varray();
-    return Array::attach(arrayData()->toVArray(true));
+    auto ad = arrayData()->toVArray(true);
+    return ad != arrayData() ? Array::attach(ad) : Array{ad};
   }
 
   Array toDArray() {
     if (!m_size) return empty_darray();
-    return Array::attach(arrayData()->toDArray(true));
+    auto ad = arrayData()->toDArray(true);
+    return ad != arrayData() ? Array::attach(ad) : Array{ad};
   }
 
   static constexpr size_t sizeOffset() { return offsetof(BaseVector, m_size); }
@@ -249,30 +229,41 @@ public:
    * Append `v' to the Vector and incref it if it's refcounted.
    */
   void add(TypedValue v) { addImpl<false>(v); }
-  void add(const Variant& v) { add(*v.toCell()); }
+  void add(const Variant& v) { add(*v.asTypedValue()); }
 
   /*
    * Add `k' => `v' to the Vector, increffing `v' if it's refcounted.
    */
   void set(int64_t key, TypedValue val) {
-    mutate();
-    setRaw(key, val);
+    tvIncRefGen(val);
+    setMove(key, val);
   }
   void set(int64_t key, const TypedValue* val) {
     set(key, *val);
   }
   void set(int64_t key, const Variant& val) {
-    set(key, val.toCell());
+    set(key, val.asTypedValue());
   }
   void set(const TypedValue* key, const TypedValue* val) {
-    assertx(!isRefType(key->m_type));
     if (key->m_type != KindOfInt64) {
       throwBadKeyType();
     }
     set(key->m_data.num, val);
   }
   void set(const Variant& key, const Variant& val) {
-    set(key.toCell(), val.toCell());
+    set(key.asTypedValue(), val.asTypedValue());
+  }
+
+  /*
+   * Set a particular value in a vector without inc-ref-ing the value.
+   */
+  void setMove(int64_t key, TypedValue val) {
+    mutate();
+    // Cast to unsigned to check "0 <= key && key < m_size" in one comparison.
+    if (UNLIKELY((uint64_t)key >= (uint64_t)m_size)) {
+      collections::throwOOB(key);
+    }
+    tvMove(val, dataAt(key));
   }
 
   template<class TVector>
@@ -344,7 +335,6 @@ protected:
 
   template<bool raw> ALWAYS_INLINE
   void addImpl(TypedValue tv) {
-    assertx(!isRefType(tv.m_type));
     auto oldAd = arrayData();
     if (raw) {
       assertx(canMutateBuffer());
@@ -363,39 +353,7 @@ protected:
   // immutable buffer, so it's only safe to use in some cases. If you're not
   // sure, use add() instead.
   void addRaw(TypedValue v) { addImpl<true>(v); }
-  void addRaw(const Variant& v) { addRaw(*v.toCell()); }
-
-  // setRaw() assigns a value to the specified key in this Vector but doesn't
-  // check for an immutable buffer, so it's only safe to use in some cases.
-  // If you're not sure, use set() instead.
-  void setRaw(int64_t key, TypedValue val) {
-    assertx(!isRefType(val.m_type));
-    assertx(canMutateBuffer());
-    if (UNLIKELY((uint64_t)key >= (uint64_t)m_size)) {
-      collections::throwOOB(key);
-      return;
-    }
-    auto lval = dataAt(key);
-    auto const oldTV = *lval;
-    cellDup(val, lval);
-    tvDecRefGen(oldTV);
-  }
-  void setRaw(int64_t key, const TypedValue* val) {
-    setRaw(key, *val);
-  }
-  void setRaw(int64_t key, const Variant& val) {
-    setRaw(key, val.toCell());
-  }
-  void setRaw(const TypedValue* key, const TypedValue* val) {
-    assertx(!isRefType(key->m_type));
-    if (key->m_type != KindOfInt64) {
-      throwBadKeyType();
-    }
-    setRaw(key->m_data.num, val);
-  }
-  void setRaw(const Variant& key, const Variant& val) {
-    setRaw(key.toCell(), val.toCell());
-  }
+  void addRaw(const Variant& v) { addRaw(*v.asTypedValue()); }
 
   /**
    * Copy the buffer and reset the immutable copy.
@@ -404,11 +362,11 @@ protected:
 
   Object getIterator();
   Variant php_at(const Variant& key) {
-    const auto tv = *at(key.toCell())  ;
+    const auto tv = *at(key.asTypedValue())  ;
     return Variant(tvAsCVarRef(&tv));
   }
   Variant php_get(const Variant& key) {
-    if (const auto lval = get(key.toCell())) {
+    if (const auto lval = get(key.asTypedValue())) {
       const auto tv = *lval;
       return Variant(tvAsCVarRef(&tv));
     }
@@ -493,7 +451,7 @@ struct c_Vector : BaseVector {
   void addAllKeysOf(const Variant& val);
   void clear();
   Variant pop();
-  void resize(uint32_t sz, const Cell* val);
+  void resize(uint32_t sz, const TypedValue* val);
   void removeKey(int64_t k);
   void reverse();
   void shuffle();
@@ -573,7 +531,7 @@ struct c_Vector : BaseVector {
     return reserve(checkRequestedSize(sz));
   }
   void php_resize(const Variant& sz, const Variant& value) {
-    return resize(checkRequestedSize(sz), value.toCell());
+    return resize(checkRequestedSize(sz), value.asTypedValue());
   }
   Object php_set(const Variant& key, const Variant& value) {
     set(key, value);

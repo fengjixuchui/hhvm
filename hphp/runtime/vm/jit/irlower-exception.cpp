@@ -48,9 +48,16 @@ void cgBeginCatch(IRLS& env, const IRInstruction* /*inst*/) {
   emitIncStat(v, Stats::TC_CatchTrace);
 }
 
-void cgEndCatch(IRLS& env, const IRInstruction* /*inst*/) {
-  // endCatchHelper only expects rvmtl() and rvmfp() to be live.
-  vmain(env) << jmpi{tc::ustubs().endCatchHelper, rvmtl() | rvmfp()};
+void cgEndCatch(IRLS& env, const IRInstruction* inst) {
+  auto& v = vmain(env);
+
+  auto const helper =
+    inst->extra<EndCatch>()->stublogue == EndCatchData::FrameMode::Stublogue
+    ? tc::ustubs().endCatchStublogueHelper
+    : tc::ustubs().endCatchHelper;
+
+  // endCatch*Helpers only expect vm_regs_no_sp() to be alive.
+  v << jmpi{helper, vm_regs_no_sp()};
 }
 
 void cgUnwindCheckSideExit(IRLS& env, const IRInstruction* inst) {
@@ -67,6 +74,17 @@ void cgUnwindCheckSideExit(IRLS& env, const IRInstruction* inst) {
 void cgLdUnwinderValue(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
   loadTV(v, inst->dst(), dstLoc(env, inst, 0), rvmtl()[unwinderTVOff()]);
+}
+
+void cgEnterTCUnwind(IRLS& env, const IRInstruction* inst) {
+  auto& v = vmain(env);
+  auto const exn = srcLoc(env, inst, 0).reg();
+  v << storebi{1, rvmtl()[unwinderSideEnterOff()]};
+  v << store{exn, rvmtl()[unwinderExnOff()]};
+  v << copy{rvmfp(), rarg(0)};
+  v << call{TCA(tc_unwind_resume), arg_regs(1)};
+  v << copy{rret(1), rvmfp()};
+  v << jmpr{rret(0), vm_regs_with_sp()};
 }
 
 IMPL_OPCODE_CALL(DebugBacktrace)
@@ -103,13 +121,13 @@ static void raiseForbiddenDynCall(const Func* func) {
     string_printf(
       msg,
       error_msg,
-      func->fullDisplayName()->data()
+      func->fullName()->data()
     );
     throw_invalid_operation_exception(makeStaticString(msg));
   } else {
     raise_notice(
       error_msg,
-      func->fullDisplayName()->data()
+      func->fullName()->data()
     );
   }
 }
@@ -162,7 +180,6 @@ IMPL_OPCODE_CALL(CheckClsReifiedGenericMismatch)
 IMPL_OPCODE_CALL(CheckFunReifiedGenericMismatch)
 IMPL_OPCODE_CALL(RaiseErrorOnInvalidIsAsExpressionType)
 IMPL_OPCODE_CALL(RaiseError)
-IMPL_OPCODE_CALL(RaiseMissingArg)
 IMPL_OPCODE_CALL(RaiseTooManyArg)
 IMPL_OPCODE_CALL(RaiseNotice)
 IMPL_OPCODE_CALL(RaiseUndefProp)
@@ -179,11 +196,12 @@ IMPL_OPCODE_CALL(ThrowDivisionByZeroException)
 IMPL_OPCODE_CALL(ThrowHasThisNeedStatic)
 IMPL_OPCODE_CALL(ThrowInvalidArrayKey)
 IMPL_OPCODE_CALL(ThrowInvalidOperation)
+IMPL_OPCODE_CALL(ThrowMissingArg)
 IMPL_OPCODE_CALL(ThrowMissingThis)
 IMPL_OPCODE_CALL(ThrowOutOfBounds)
 IMPL_OPCODE_CALL(ThrowParameterWrongType)
-IMPL_OPCODE_CALL(ThrowParamRefMismatch)
-IMPL_OPCODE_CALL(ThrowParamRefMismatchRange)
+IMPL_OPCODE_CALL(ThrowParamInOutMismatch)
+IMPL_OPCODE_CALL(ThrowParamInOutMismatchRange)
 
 ///////////////////////////////////////////////////////////////////////////////
 

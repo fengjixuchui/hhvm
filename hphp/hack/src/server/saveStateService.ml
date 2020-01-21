@@ -37,7 +37,9 @@ let partition_error_files_tf
   in
   (fold_error_files errors_in_phases_t, fold_error_files errors_in_phases_f)
 
-let load_contents_exn (input_filename : string) : 'a =
+(* If the contents doesn't contain the value of the expected type, the result
+  is undefined behavior. We may crash, or we may continue with a bogus value. *)
+let load_contents_unsafe (input_filename : string) : 'a =
   let ic = Pervasives.open_in_bin input_filename in
   let contents = Marshal.from_channel ic in
   Pervasives.close_in ic;
@@ -48,7 +50,7 @@ let load_class_decls (input_filename : string) : unit =
   Hh_logger.log "Begin loading class declarations";
   try
     Hh_logger.log "Unmarshalling class declarations from %s" input_filename;
-    let decls = load_contents_exn input_filename in
+    let decls = load_contents_unsafe input_filename in
     Hh_logger.log "Importing class declarations...";
     let classes = Decl_export.import_class_decls decls in
     let num_classes = SSet.cardinal classes in
@@ -76,7 +78,7 @@ let load_saved_state
           (Printf.sprintf
              "Naming table file does not exist on disk: '%s'"
              nt_path);
-      Naming_table.load_from_sqlite ~update_reverse_entries:true nt_path
+      Naming_table.load_from_sqlite nt_path
     | None ->
       let chan = In_channel.create ~binary:true saved_state_filename in
       let (old_saved : Naming_table.saved_state_info) =
@@ -194,7 +196,6 @@ let update_save_state
 (** Saves the saved state to the given path. Returns number of dependency
 * edges dumped into the database. *)
 let save_state
-    ~(dep_table_as_blob : bool)
     ~(save_decls : bool)
     (env : ServerEnv.env)
     (output_filename : string)
@@ -221,17 +222,11 @@ let save_state
     let t = Unix.gettimeofday () in
     dump_saved_state ~save_decls output_filename naming_table errors;
 
-    let dep_table_saver =
-      if dep_table_as_blob then
-        SharedMem.save_dep_table_blob
-      else
-        SharedMem.save_dep_table_sqlite
-    in
     let dep_table_edges_added =
-      dep_table_saver
+      SharedMem.save_dep_table_sqlite
         db_name
         Build_id.build_revision
-        replace_state_after_saving
+        ~replace_state_after_saving
     in
     let (_ : float) = Hh_logger.log_duration "Saving saved state took" t in
     { dep_table_edges_added }
@@ -245,11 +240,7 @@ let save_state
     let (_ : float) =
       Hh_logger.log_duration "Made disk copy of loaded saved state. Took" t
     in
-    update_save_state
-      ~save_decls
-      env
-      output_filename
-      replace_state_after_saving
+    update_save_state ~save_decls env output_filename replace_state_after_saving
 
 let get_in_memory_dep_table_entry_count () : (int, string) result =
   Utils.try_with_stack (fun () ->
@@ -269,16 +260,10 @@ let go_naming (naming_table : Naming_table.t) (output_filename : string) :
 (* If successful, returns the # of edges from the dependency table that were written. *)
 (* TODO: write some other stats, e.g., the number of names, the number of errors, etc. *)
 let go
-    ~(dep_table_as_blob : bool)
     ~(save_decls : bool)
     (env : ServerEnv.env)
     (output_filename : string)
     ~(replace_state_after_saving : bool) : (save_state_result, string) result =
   Utils.try_with_stack (fun () ->
-      save_state
-        ~dep_table_as_blob
-        ~save_decls
-        env
-        output_filename
-        ~replace_state_after_saving)
+      save_state ~save_decls env output_filename ~replace_state_after_saving)
   |> Result.map_error ~f:(fun (exn, _stack) -> Exn.to_string exn)

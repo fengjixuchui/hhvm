@@ -18,11 +18,9 @@
 #define incl_HPHP_MEMORY_MANAGER_H_
 
 #include <array>
-#include <vector>
+#include <string>
 #include <utility>
-#include <set>
-#include <unordered_map>
-#include <bitset>
+#include <vector>
 
 #include <folly/Memory.h>
 
@@ -392,6 +390,7 @@ static_assert(kMaxSmallSize < kMaxSizeClass,
 constexpr char kSmallFreeFill   = 0x6a;
 constexpr char kRDSTrashFill    = 0x6b; // used by RDS for "normal" section
 constexpr char kIterTrashFill   = 0x6c; // used by ArrayIters at their end
+constexpr char kMixedElmFill    = 0x6d; // used for uninit MixedArrayElms
 constexpr char kTVTrashFill     = 0x7a; // used by interpreter
 constexpr char kTVTrashFill2    = 0x7b; // used by req::ptr dtors
 constexpr char kTVTrashJITStk   = 0x7c; // used by the JIT for stack slots
@@ -400,6 +399,11 @@ constexpr char kTVTrashJITHeap  = 0x7e; // used by the JIT for heap
 constexpr char kTVTrashJITRetVal = 0x7f; // used by the JIT for ActRec::m_r
 constexpr uintptr_t kSmallFreeWord = 0x6a6a6a6a6a6a6a6aLL;
 constexpr uintptr_t kMallocFreeWord = 0x5a5a5a5a5a5a5a5aLL;
+
+// In debug builds, we check if refcounts are higher than RefCountMaxRealistic.
+// This check is only useful if a trashed refcount is above the bound. We check
+// kMallocFreeWord here because it's the smallest of the trash fill bytes.
+static_assert(RefCountMaxRealistic < (kMallocFreeWord >> 4), "");
 
 //////////////////////////////////////////////////////////////////////
 
@@ -940,7 +944,7 @@ struct MemoryManager {
     void push(void*);
     FreeNode* head{nullptr};
   };
-  using FreelistArray = std::array<FreeList,kNumSmallSizes>;
+  using FreelistArray = std::array<FreeList, kNumSmallSizes + 1>;
 
   /*
    * beginQuarantine() swaps out the normal freelists. endQuarantine()
@@ -981,10 +985,9 @@ private:
 private:
   void* slabAlloc(size_t bytes, size_t index);
   void* newSlab(size_t nbytes);
-  void* mallocSmallIndexTail(size_t bytes, size_t index);
-  void* mallocSmallIndexSlow(size_t bytes, size_t index);
   void* mallocSmallSizeSlow(size_t bytes, size_t index);
   void  updateBigStats();
+  void  freeSmallIndexSlow(void* ptr, size_t index, size_t bytes);
 
   static void threadStatsInit();
   static void threadStats(uint64_t*&, uint64_t*&);
@@ -1000,6 +1003,9 @@ private:
   void requestEagerGC();
   void resetEagerGC();
   void checkGC();
+
+  // Allocation sampling
+  void checkSampling(size_t bytes);
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -1036,6 +1042,9 @@ private:
   // Peak memory threshold callback (installed via setMemThresholdCallback)
   size_t m_memThresholdCallbackPeakUsage{SIZE_MAX};
 
+  // Allocation sampling.
+  int64_t m_nextSample{std::numeric_limits<int64_t>::max()};
+
   // pointers to jemalloc-maintained allocation counters
   uint64_t* m_allocated;
   uint64_t* m_deallocated;
@@ -1070,6 +1079,10 @@ struct RequestLocalGCData {
 
 extern RDS_LOCAL_NO_CHECK(RequestLocalGCData, rl_gcdata);
 extern DECLARE_RDS_LOCAL_HOTVALUE(bool, t_eager_gc);
+
+void gather_alloc_stack(bool skipTop = false);
+void reset_alloc_sampling();
+
 //////////////////////////////////////////////////////////////////////
 
 }

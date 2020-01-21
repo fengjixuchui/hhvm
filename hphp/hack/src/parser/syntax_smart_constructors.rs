@@ -3,9 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use crate::parser_env::ParserEnv;
-use crate::smart_constructors::NoState;
-use parser_core_types::source_text::SourceText;
+mod syntax_smart_constructors_generated;
+
+use parser_core_types::{parser_env::ParserEnv, source_text::SourceText};
+use smart_constructors::NoState;
 
 pub use crate::syntax_smart_constructors_generated::*;
 

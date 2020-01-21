@@ -7,10 +7,11 @@
  *
  *)
 
-val go :
+(** Returns signature help for the given location. *)
+val go_quarantined :
   env:ServerEnv.env ->
-  file:ServerCommandTypes.file_input ->
+  ctx:Provider_context.t ->
+  entry:Provider_context.entry ->
   line:int ->
   column:int ->
   Lsp.SignatureHelp.result
-(** Returns signature help for the given location. *)

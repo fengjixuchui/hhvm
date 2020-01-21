@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 
 (* Pretty-printing for the Typing_defs.ty data structure.
@@ -23,12 +23,9 @@ open Typing_defs
  * representations of types.
  *)
 
-let pp_pu_kind fmt = function
-  | Pu_plain -> Format.pp_print_string fmt "Pu_plain"
-  | Pu_atom id -> Format.fprintf fmt "(@[<2>Pu_atom@ %S@])" id
-
 let rec pp_ty : type a. Format.formatter -> a ty -> unit =
- fun fmt (a0, a1) ->
+ fun fmt t ->
+  let (a0, a1) = deref t in
   Format.fprintf fmt "(@[";
   Reason.pp fmt a0;
   Format.fprintf fmt ",@ ";
@@ -37,8 +34,8 @@ let rec pp_ty : type a. Format.formatter -> a ty -> unit =
 
 and show_ty : type a. a ty -> string = (fun x -> Format.asprintf "%a" pp_ty x)
 
-and pp_shape_field_type :
-    type a. Format.formatter -> a shape_field_type -> unit =
+and pp_shape_field_type : type a. Format.formatter -> a shape_field_type -> unit
+    =
  fun fmt x ->
   Format.fprintf fmt "@[<2>{ ";
   Format.fprintf fmt "@[%s =@ " "sft_optional";
@@ -112,9 +109,16 @@ and pp_ty_ : type a. Format.formatter -> a ty_ -> unit =
     Format.fprintf fmt "(@[<2>Tvarray@ ";
     pp_ty fmt a0;
     Format.fprintf fmt "@])"
-  | Tvarray_or_darray a0 ->
+  | Tvarray_or_darray (a0, a1) ->
     Format.fprintf fmt "(@[<2>Tvarray_or_darray@ ";
-    pp_ty fmt a0;
+    (match a0 with
+    | None -> Format.pp_print_string fmt "None"
+    | Some x ->
+      Format.pp_print_string fmt "(Some ";
+      pp_ty fmt x;
+      Format.pp_print_string fmt ")");
+    Format.fprintf fmt ",@ ";
+    pp_ty fmt a1;
     Format.fprintf fmt "@])"
   | Toption a0 ->
     Format.fprintf fmt "(@[<2>Toption@ ";
@@ -155,17 +159,29 @@ and pp_ty_ : type a. Format.formatter -> a ty_ -> unit =
     Format.fprintf fmt "(@[<2>Tvar@ ";
     Ident.pp fmt a0;
     Format.fprintf fmt "@])"
-  | Tabstract (a0, a1) ->
-    Format.fprintf fmt "(@[<2>Tabstract (@,";
-    pp_abstract_kind fmt a0;
+  | Tnewtype (a0, a1, a2) ->
+    Format.fprintf fmt "(@[<2>Tnewtype (@,";
+    Format.fprintf fmt "%S" a0;
     Format.fprintf fmt ",@ ";
-    (match a1 with
-    | None -> Format.pp_print_string fmt "None"
-    | Some x ->
-      Format.pp_print_string fmt "(Some ";
-      pp_ty fmt x;
-      Format.pp_print_string fmt ")");
+    Format.fprintf fmt "@[<2>[";
+    ignore
+      (List.fold_left
+         ~f:(fun sep x ->
+           if sep then Format.fprintf fmt ";@ ";
+           pp_ty fmt x;
+           true)
+         ~init:false
+         a1);
+    Format.fprintf fmt "@,]@]";
+    Format.fprintf fmt ",@ ";
+    pp_ty fmt a2;
     Format.fprintf fmt "@,))@]"
+  | Tdependent (a0, a1) ->
+    Format.fprintf fmt "(@[<2>Tdependent@ ";
+    pp_dependent_type fmt a0;
+    Format.fprintf fmt ",@ ";
+    pp_ty fmt a1;
+    Format.fprintf fmt "@])"
   | Tanon (a0, a1) ->
     Format.fprintf fmt "(@[<2>Tanon (@,";
     pp_fun_arity fmt a0;
@@ -198,19 +214,8 @@ and pp_ty_ : type a. Format.formatter -> a ty_ -> unit =
     Format.fprintf fmt "(@[<2>Tarraykind@ ";
     pp_array_kind fmt a0;
     Format.fprintf fmt "@])"
-  | Tdestructure tyl ->
-    Format.fprintf fmt "(@[<2>Tdestructure@ ";
-    pp_ty_list fmt tyl
-  | Tpu (base, enum, kind) ->
-    Format.fprintf
-      fmt
-      "(@[<2>Tpu (%a@,,%a@,,%a)@])"
-      pp_ty
-      base
-      Aast.pp_sid
-      enum
-      pp_pu_kind
-      kind;
+  | Tpu (base, enum) ->
+    Format.fprintf fmt "(@[<2>Tpu (%a@,,%a)@])" pp_ty base Aast.pp_sid enum;
     Format.fprintf fmt "@])"
   | Tpu_access (base, sid) ->
     Format.fprintf fmt "(@[<2>Tpu_access (@,";
@@ -218,6 +223,19 @@ and pp_ty_ : type a. Format.formatter -> a ty_ -> unit =
     Format.fprintf fmt ",@ ";
     Aast.pp_sid fmt sid;
     Format.fprintf fmt "@,))@]"
+  | Tpu_type_access (base, enum, member, tyname) ->
+    Format.fprintf
+      fmt
+      "(@[<2>Tpu_type (%a@,,%a@,,%a@,,%a)@])"
+      pp_ty
+      base
+      Aast.pp_sid
+      enum
+      pp_ty
+      member
+      Aast.pp_sid
+      tyname;
+    Format.fprintf fmt "@])"
 
 and pp_ty_list : type a. Format.formatter -> a ty list -> unit =
  fun fmt tyl ->
@@ -233,19 +251,13 @@ and pp_ty_list : type a. Format.formatter -> a ty list -> unit =
   Format.fprintf fmt "@,]@]";
   Format.fprintf fmt "@])"
 
-and show_ty_ : type a. a ty_ -> string =
- (fun x -> Format.asprintf "%a" pp_ty_ x)
+and show_ty_ : type a. a ty_ -> string = (fun x -> Format.asprintf "%a" pp_ty_ x)
 
 and pp_array_kind : Format.formatter -> array_kind -> unit =
  fun fmt ak ->
   match ak with
-  | AKany -> Format.pp_print_string fmt "AKany"
   | AKvarray a0 ->
     Format.fprintf fmt "(@[<2>AKvarray@ ";
-    pp_ty fmt a0;
-    Format.fprintf fmt "@])"
-  | AKvec a0 ->
-    Format.fprintf fmt "(@[<2>AKvec@ ";
     pp_ty fmt a0;
     Format.fprintf fmt "@])"
   | AKdarray (a0, a1) ->
@@ -254,12 +266,8 @@ and pp_array_kind : Format.formatter -> array_kind -> unit =
     Format.fprintf fmt ",@ ";
     pp_ty fmt a1;
     Format.fprintf fmt "@,))@]"
-  | AKvarray_or_darray a0 ->
-    Format.fprintf fmt "(@[<2>AKvarray_or_darray@ ";
-    pp_ty fmt a0;
-    Format.fprintf fmt "@])"
-  | AKmap (a0, a1) ->
-    Format.fprintf fmt "(@[<2>AKmap (@,";
+  | AKvarray_or_darray (a0, a1) ->
+    Format.fprintf fmt "(@[<2>AKvarray_or_darray (@,";
     pp_ty fmt a0;
     Format.fprintf fmt ",@ ";
     pp_ty fmt a1;
@@ -268,36 +276,6 @@ and pp_array_kind : Format.formatter -> array_kind -> unit =
 
 and show_array_kind : array_kind -> string =
  (fun x -> Format.asprintf "%a" pp_array_kind x)
-
-and pp_abstract_kind : Format.formatter -> abstract_kind -> unit =
- fun fmt ak ->
-  match ak with
-  | AKnewtype (a0, a1) ->
-    Format.fprintf fmt "(@[<2>AKnewtype (@,";
-    Format.fprintf fmt "%S" a0;
-    Format.fprintf fmt ",@ ";
-    Format.fprintf fmt "@[<2>[";
-    ignore
-      (List.fold_left
-         ~f:(fun sep x ->
-           if sep then Format.fprintf fmt ";@ ";
-           pp_ty fmt x;
-           true)
-         ~init:false
-         a1);
-    Format.fprintf fmt "@,]@]";
-    Format.fprintf fmt "@,))@]"
-  | AKgeneric a0 ->
-    Format.fprintf fmt "(@[<2>AKgeneric@ ";
-    Format.fprintf fmt "%S" a0;
-    Format.fprintf fmt "@])"
-  | AKdependent a0 ->
-    Format.fprintf fmt "(@[<2>AKdependent@ ";
-    pp_dependent_type fmt a0;
-    Format.fprintf fmt "@])"
-
-and show_abstract_kind : abstract_kind -> string =
- (fun x -> Format.asprintf "%a" pp_abstract_kind x)
 
 and pp_dependent_type : Format.formatter -> dependent_type -> unit =
  fun fmt a0 ->
@@ -377,30 +355,36 @@ and show_reactivity : reactivity -> string =
  (fun x -> Format.asprintf "%a" pp_reactivity x)
 
 and pp_possibly_enforced_ty :
-    type a. Format.formatter -> a possibly_enforced_ty -> unit =
+    type a. Format.formatter -> a ty possibly_enforced_ty -> unit =
  fun fmt x ->
   Format.fprintf fmt "@[<2>{ ";
 
   Format.fprintf fmt "@[%s =@ " "et_enforced";
   Format.fprintf fmt "%B" x.et_enforced;
   Format.fprintf fmt "@]";
+  Format.fprintf fmt ";@ ";
 
   Format.fprintf fmt "@[%s =@ " "et_type";
   pp_ty fmt x.et_type;
   Format.fprintf fmt "@]";
   Format.fprintf fmt "@ }@]"
 
-and pp_fun_type : type a. Format.formatter -> a fun_type -> unit =
+and pp_fun_elt : Format.formatter -> fun_elt -> unit =
  fun fmt x ->
   Format.fprintf fmt "@[<2>{ ";
 
-  Format.fprintf fmt "@[%s =@ " "ft_pos";
-  Pos.pp fmt x.ft_pos;
+  Format.fprintf fmt "@[%s =@ " "fe_pos";
+  Pos.pp fmt x.fe_pos;
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
 
-  Format.fprintf fmt "@[%s =@ " "ft_deprecated";
-  (match x.ft_deprecated with
+  Format.fprintf fmt "@[%s =@ " "fe_type";
+  pp_ty fmt x.fe_type;
+  Format.fprintf fmt "@]";
+  Format.fprintf fmt ";@ ";
+
+  Format.fprintf fmt "@[%s =@ " "fe_deprecated";
+  (match x.fe_deprecated with
   | None -> Format.pp_print_string fmt "None"
   | Some x ->
     Format.pp_print_string fmt "(Some ";
@@ -409,10 +393,13 @@ and pp_fun_type : type a. Format.formatter -> a fun_type -> unit =
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
 
-  Format.fprintf fmt "@[%s =@ " "ft_abstract";
-  Format.fprintf fmt "%B" x.ft_abstract;
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
+  Format.fprintf fmt "@ }@]"
+
+and show_fun_elt x = Format.asprintf "%a" pp_fun_elt x
+
+and pp_fun_type : type a. Format.formatter -> a ty fun_type -> unit =
+ fun fmt x ->
+  Format.fprintf fmt "@[<2>{ ";
 
   Format.fprintf fmt "@[%s =@ " "ft_is_coroutine";
   Format.fprintf fmt "%B" x.ft_is_coroutine;
@@ -462,6 +449,11 @@ and pp_fun_type : type a. Format.formatter -> a fun_type -> unit =
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
 
+  Format.fprintf fmt "@[%s =@ " "ft_fun_kind";
+  Format.pp_print_string fmt (show_fun_kind x.ft_fun_kind);
+  Format.fprintf fmt "@]";
+  Format.fprintf fmt ";@ ";
+
   Format.fprintf fmt "@[%s =@ " "ft_reactive";
   pp_reactivity fmt x.ft_reactive;
   Format.fprintf fmt "@]";
@@ -495,10 +487,20 @@ and show_param_mutability : param_mutability -> string =
   | Param_borrowed_mutable -> "mutable"
   | Param_maybe_mutable -> "maybe-mutable"
 
-and show_fun_type : type a. a fun_type -> string =
+and show_fun_kind : Ast_defs.fun_kind -> string =
+ fun x ->
+  Ast_defs.(
+    match x with
+    | FSync -> "sync"
+    | FAsync -> "async"
+    | FGenerator -> "generator"
+    | FAsyncGenerator -> "async generator"
+    | FCoroutine -> "coroutine")
+
+and show_fun_type : type a. a ty fun_type -> string =
  (fun x -> Format.asprintf "%a" pp_fun_type x)
 
-and pp_fun_arity : type a. Format.formatter -> a fun_arity -> unit =
+and pp_fun_arity : type a. Format.formatter -> a ty fun_arity -> unit =
  fun fmt fa ->
   match fa with
   | Fstandard (a0, a1) ->
@@ -520,20 +522,19 @@ and pp_fun_arity : type a. Format.formatter -> a fun_arity -> unit =
     Pos.pp fmt a1;
     Format.fprintf fmt "@,))@]"
 
-and show_fun_arity : type a. a fun_arity -> string =
+and show_fun_arity : type a. a ty fun_arity -> string =
  (fun x -> Format.asprintf "%a" pp_fun_arity x)
 
 and pp_param_mode : Format.formatter -> param_mode -> unit =
  fun fmt mode ->
   match mode with
   | FPnormal -> Format.pp_print_string fmt "FPnormal"
-  | FPref -> Format.pp_print_string fmt "FPref"
   | FPinout -> Format.pp_print_string fmt "FPinout"
 
 and show_param_mode : param_mode -> string =
  (fun x -> Format.asprintf "%a" pp_param_mode x)
 
-and pp_fun_param : type a. Format.formatter -> a fun_param -> unit =
+and pp_fun_param : type a. Format.formatter -> a ty fun_param -> unit =
  fun fmt x ->
   Format.fprintf fmt "@[<2>{ ";
 
@@ -573,10 +574,10 @@ and pp_fun_param : type a. Format.formatter -> a fun_param -> unit =
 
   Format.fprintf fmt "@ }@]"
 
-and show_fun_param : type a. a fun_param -> string =
+and show_fun_param : type a. a ty fun_param -> string =
  (fun x -> Format.asprintf "%a" pp_fun_param x)
 
-and pp_fun_params : type a. Format.formatter -> a fun_params -> unit =
+and pp_fun_params : type a. Format.formatter -> a ty fun_params -> unit =
  fun fmt x ->
   Format.fprintf fmt "@[<2>[";
   ignore
@@ -589,7 +590,7 @@ and pp_fun_params : type a. Format.formatter -> a fun_params -> unit =
        x);
   Format.fprintf fmt "@,]@]"
 
-and show_fun_params : type a. a fun_params -> string =
+and show_fun_params : type a. a ty fun_params -> string =
  (fun x -> Format.asprintf "%a" pp_fun_params x)
 
 and pp_xhp_attr : Format.formatter -> xhp_attr -> unit =
@@ -1053,7 +1054,7 @@ and pp_typedef_type : Format.formatter -> typedef_type -> unit =
 and show_typedef_type : typedef_type -> string =
  (fun x -> Format.asprintf "%a" pp_typedef_type x)
 
-and pp_tparam : type a. Format.formatter -> a tparam -> unit =
+and pp_tparam : type a. Format.formatter -> a ty tparam -> unit =
  fun fmt
      {
        tp_variance;
@@ -1084,11 +1085,11 @@ and pp_tparam : type a. Format.formatter -> a tparam -> unit =
   Format.fprintf fmt "@,]@]";
   Format.fprintf fmt "@])"
 
-and show_tparam : type a. a tparam -> string =
+and show_tparam : type a. a ty tparam -> string =
  (fun x -> Format.asprintf "%a" pp_tparam x)
 
 and pp_where_constraint :
-    type a. Format.formatter -> a where_constraint -> unit =
+    type a. Format.formatter -> a ty where_constraint -> unit =
  fun fmt (a0, a1, a2) ->
   Format.fprintf fmt "(@[";
   pp_ty fmt a0;
@@ -1098,12 +1099,24 @@ and pp_where_constraint :
   pp_ty fmt a2;
   Format.fprintf fmt "@])"
 
-and show_where_constraint : type a. a where_constraint -> string =
+and show_where_constraint : type a. a ty where_constraint -> string =
  (fun x -> Format.asprintf "%a" pp_where_constraint x)
 
 let pp_decl _ _ = ()
 
 let pp_locl _ _ = ()
+
+let pp_decl_phase _ _ = ()
+
+let pp_locl_phase _ _ = ()
+
+let pp_decl_ty fmt ty = pp_ty fmt ty
+
+let show_decl_ty x = show_ty x
+
+let pp_locl_ty fmt ty = pp_ty fmt ty
+
+let show_locl_ty x = show_ty x
 
 let pp_ty _ fmt ty = pp_ty fmt ty
 
@@ -1116,6 +1129,10 @@ let show_shape_field_type _ x = show_shape_field_type x
 let pp_ty_ _ fmt x = pp_ty_ fmt x
 
 let show_ty_ _ x = show_ty_ x
+
+let pp_decl_fun_type fmt x = pp_fun_type fmt x
+
+let pp_locl_fun_type fmt x = pp_fun_type fmt x
 
 let pp_fun_type _ fmt x = pp_fun_type fmt x
 
@@ -1135,9 +1152,13 @@ let pp_fun_params _ fmt x = pp_fun_params fmt x
 
 let show_fun_params _ x = show_fun_params x
 
+let pp_decl_tparam fmt x = pp_tparam fmt x
+
 let pp_tparam _ fmt x = pp_tparam fmt x
 
 let show_tparam _ x = show_tparam x
+
+let pp_decl_where_constraint fmt x = pp_where_constraint fmt x
 
 let pp_where_constraint _ fmt x = pp_where_constraint fmt x
 

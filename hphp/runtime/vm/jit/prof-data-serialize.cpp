@@ -31,6 +31,7 @@
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/instance-bits.h"
 #include "hphp/runtime/vm/jit/array-access-profile.h"
+#include "hphp/runtime/vm/jit/array-iter-profile.h"
 #include "hphp/runtime/vm/jit/array-kind-profile.h"
 #include "hphp/runtime/vm/jit/call-target-profile.h"
 #include "hphp/runtime/vm/jit/cls-cns-profile.h"
@@ -238,7 +239,6 @@ RegionDesc::BlockPtr read_region_block(ProfDataDeserializer& ser) {
   auto const block = std::make_shared<RegionDesc::Block>(id,
                                                          start.func(),
                                                          start.resumeMode(),
-                                                         start.hasThis(),
                                                          start.offset(),
                                                          length,
                                                          initialSpOffset);
@@ -372,7 +372,7 @@ std::unique_ptr<ProfTransRec> read_prof_trans_rec(ProfDataDeserializer& ser) {
   return ret;
 }
 
-bool write_type_alias(ProfDataSerializer& ser, const TypeAliasReq* td);
+bool write_type_alias(ProfDataSerializer&, const TypeAliasReq*);
 
 bool write_type_alias_or_class(ProfDataSerializer& ser, const NamedEntity* ne) {
   if (!ne) return false;
@@ -482,18 +482,6 @@ Class* read_class_internal(ProfDataDeserializer& ser) {
                    assertx(ne->m_cachedClass.bound());
                    if (ne->m_cachedClass.isNormal()) {
                      ne->setCachedClass(dep);
-                   }
-                   auto const depName = read_string(ser);
-                   if (!dep->name()->isame(depName)) {
-                     // this dependent was referred to via a
-                     // class_alias, so we need to make sure
-                     // *that* points to the class too
-                     auto const aliasNe = NamedEntity::get(depName);
-                     aliasNe->m_cachedClass.bind(rds::Mode::Normal);
-                     if (aliasNe->m_cachedClass.isNormal()) {
-                       aliasNe->m_cachedClass.markUninit();
-                     }
-                     aliasNe->setCachedClass(dep);
                    }
                  });
 
@@ -860,15 +848,24 @@ void merge_loaded_units(int numWorkers) {
 ////////////////////////////////////////////////////////////////////////////////
 }
 
-ProfDataSerializer::ProfDataSerializer(const std::string& name)
-  : fileName(name) {
-  // Delete old profile data to avoid confusion.  This should've happened from
-  // outside the process, but in case it didn't happen, try to do it here.
-  unlink(name.c_str());
+ProfDataSerializer::ProfDataSerializer(const std::string& name, FileMode mode)
+  : fileName(name)
+  , fileMode(mode) {
 
   std::string partialFile = name + ".part";
-  fd = open(partialFile.c_str(),
-            O_CLOEXEC | O_CREAT | O_TRUNC | O_WRONLY, 0644);
+
+  if (fileMode == FileMode::Append) {
+    fd = open(partialFile.c_str(),
+              O_CLOEXEC | O_APPEND | O_WRONLY, 0644);
+  } else {
+    // Delete old profile data to avoid confusion.  This should've happened from
+    // outside the process, but in case it didn't happen, try to do it here.
+    unlink(name.c_str());
+
+    fd = open(partialFile.c_str(),
+              O_CLOEXEC | O_CREAT | O_TRUNC | O_WRONLY, 0644);
+  }
+
   if (fd == -1) {
     auto const msg =
       folly::sformat("Failed to open file for write {}, {}", name,
@@ -885,14 +882,20 @@ void ProfDataSerializer::finalize() {
   close(fd);
   fd = -1;
   std::string partialFile = fileName + ".part";
-  if (rename(partialFile.c_str(), fileName.c_str()) == -1) {
-    auto const msg =
-      folly::sformat("Failed to rename {} to {}, {}",
-                     partialFile, fileName, folly::errnoStr(errno));
-    Logger::Error(msg);
-    throw std::runtime_error(msg);
+  if (fileMode == FileMode::Create && serializeOptProfEnabled()) {
+    // Don't rename the file to it's final name yet as we're still going to
+    // append the profile data collected for the optimized code to it.
+    FTRACE(1, "Finished serializing base profile data to {}\n", partialFile);
   } else {
-    FTRACE(1, "Finished serializing profile data to " + fileName);
+    if (rename(partialFile.c_str(), fileName.c_str()) == -1) {
+      auto const msg =
+        folly::sformat("Failed to rename {} to {}, {}",
+                       partialFile, fileName, folly::errnoStr(errno));
+      Logger::Error(msg);
+      throw std::runtime_error(msg);
+    } else {
+      FTRACE(1, "Finished serializing all profile data to {}\n", fileName);
+    }
   }
 }
 
@@ -918,8 +921,10 @@ ProfDataDeserializer::~ProfDataDeserializer() {
 }
 
 bool ProfDataDeserializer::done() {
-  char byte;
-  return offset == buffer_size && ::read(fd, &byte, 1) == 0;
+  auto const pos = lseek(fd, 0, SEEK_CUR);
+  auto const end = lseek(fd, 0, SEEK_END);
+  lseek(fd, pos, SEEK_SET); // go back to original position
+  return offset == buffer_size && pos == end;
 }
 
 void write_raw(ProfDataSerializer& ser, const void* data, size_t sz) {
@@ -1090,16 +1095,6 @@ Unit* read_unit(ProfDataDeserializer& ser) {
   );
 }
 
-template<typename C1, typename C2, typename F>
-void visit_deps(const C1& c1, const C2& c2, F& f) {
-  auto it = c2.begin();
-  auto const DEBUG_ONLY end = c2.end();
-  for (auto const& dep : c1) {
-    assertx(it != end);
-    f(dep.get(), *it++);
-  }
-}
-
 void write_class(ProfDataSerializer& ser, const Class* cls) {
   SCOPE_EXIT {
     ITRACE(2, "Class: {}\n", cls ? cls->name() : staticEmptyString());
@@ -1113,44 +1108,35 @@ void write_class(ProfDataSerializer& ser, const Class* cls) {
   write_raw(ser, cls->preClass()->id());
   write_unit(ser, cls->preClass()->unit());
 
-  jit::vector<std::pair<const Class*, const StringData*>> dependents;
-  auto record_dep = [&] (const Class* dep, const StringData* depName) {
+  jit::vector<const Class*> dependents;
+  auto record_dep = [&] (const Class* dep) {
     if (!dep) return;
-    if (!dep->wasSerialized() ||
-        !classHasPersistentRDS(dep) ||
-        !dep->name()->isame(depName)) {
-      dependents.emplace_back(dep, depName);
+    if (!dep->wasSerialized() || !classHasPersistentRDS(dep)) {
+      dependents.emplace_back(dep);
     }
   };
-  record_dep(cls->parent(), cls->preClass()->parent());
-
-  visit_deps(cls->declInterfaces(), cls->preClass()->interfaces(), record_dep);
+  record_dep(cls->parent());
+  for (auto const& iface : cls->declInterfaces()) {
+    record_dep(iface.get());
+  }
 
   if (cls->preClass()->attrs() & AttrNoExpandTrait) {
     for (auto const tName : cls->preClass()->usedTraits()) {
       auto const trait = Unit::lookupUniqueClassInContext(tName, nullptr);
       assertx(trait);
-      record_dep(trait, tName);
+      record_dep(trait);
     }
   } else {
-    visit_deps(cls->usedTraitClasses(),
-               cls->preClass()->usedTraits(),
-               record_dep);
+    for (auto const& trait : cls->usedTraitClasses()) {
+      record_dep(trait.get());
+    }
   }
 
-  write_container(ser, dependents,
-                  [&] (const std::pair<const Class*, const StringData*> &dep) {
-                    write_class(ser, dep.first);
-                    write_string(ser, dep.second);
-                  });
+  write_container(ser, dependents, write_class);
 
   if (cls->attrs() & AttrEnum &&
       cls->preClass()->enumBaseTy().isObject()) {
-    if (cls->enumBaseTy()) {
-      write_raw(ser, *cls->enumBaseTy());
-    } else {
-      write_raw(ser, KindOfUninit);
-    }
+    write_raw(ser, cls->enumBaseTy().value_or(KindOfUninit));
   }
 
   if (cls->parent() == c_Closure::classof()) {
@@ -1199,8 +1185,10 @@ void write_func(ProfDataSerializer& ser, const Func* func) {
   write_raw(ser, fid);
   if (func->isPseudoMain()) {
     const uint32_t zero = 0;
+    auto const isStatic = func->isStatic();
     write_raw(ser, zero);
     write_unit(ser, func->unit());
+    write_raw(ser, isStatic);
     return write_class(ser, func->cls());
   }
 
@@ -1246,8 +1234,10 @@ Func* read_func(ProfDataDeserializer& ser) {
         }
         auto const id = read_raw<uint32_t>(ser);
         if (!id) {
+          bool isStatic = false;
           auto const unit = read_unit(ser);
-          return unit->getMain(read_class(ser));
+          read_raw(ser, isStatic);
+          return unit->getMain(read_class(ser), !isStatic);
         }
         if (id & 0x80000000) {
           auto const cls = read_class(ser);
@@ -1314,7 +1304,7 @@ ClsMethDataRef read_clsmeth(ProfDataDeserializer& ser) {
 
 std::string serializeProfData(const std::string& filename) {
   try {
-    ProfDataSerializer ser{filename};
+    ProfDataSerializer ser{filename, ProfDataSerializer::FileMode::Create};
 
     write_raw(ser, kMagic);
     write_raw(ser, Repo::get().global().Signature);
@@ -1362,6 +1352,21 @@ std::string serializeProfData(const std::string& filename) {
     return "";
   } catch (std::runtime_error& err) {
     return folly::sformat("Failed to serialize profile data: {}", err.what());
+  }
+}
+
+std::string serializeOptProfData(const std::string& filename) {
+  try {
+    ProfDataSerializer ser(filename, ProfDataSerializer::FileMode::Append);
+
+    // The profile data collected for the optimized code should be serialized
+    // here.
+
+    ser.finalize();
+
+    return "";
+  } catch (std::runtime_error& err) {
+    return folly::sformat("Failed serializeOptProfData: {}", err.what());
   }
 }
 
@@ -1421,6 +1426,10 @@ std::string deserializeProfData(const std::string& filename, int numWorkers) {
 
     read_classes_and_type_aliases(ser);
 
+    if (!ser.done()) {
+      // We have profile data for the optimized code, so deserialize it too.
+    }
+
     always_assert(ser.done());
 
     // During deserialization we didn't merge the loaded units because
@@ -1439,6 +1448,11 @@ std::string deserializeProfData(const std::string& filename, int numWorkers) {
     return folly::sformat("Failed to deserialize profile data {}: {}",
                           filename, err.what());
   }
+}
+
+bool serializeOptProfEnabled() {
+  return RuntimeOption::EvalJitSerializeOptProfSeconds  > 0 ||
+         RuntimeOption::EvalJitSerializeOptProfRequests > 0;
 }
 
 //////////////////////////////////////////////////////////////////////

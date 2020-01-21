@@ -26,6 +26,8 @@
 #include <folly/small_vector.h>
 
 #include <cstdint>
+#include <limits>
+#include <memory>
 #include <type_traits>
 
 namespace HPHP {
@@ -44,46 +46,70 @@ struct c_WaitableWaitHandle;
 
 ///////////////////////////////////////////////////////////////////////////////
 
-struct CompactTrace : SweepableResourceData {
-  Array extract() const;
-  void insert(const ActRec* fp, int32_t prevPc) { m_key.insert(fp, prevPc); }
+struct CompactFrame final {
+  CompactFrame(const Func* f = nullptr, int32_t ppc = 0, bool ht = false)
+    : func(LowPtr<const Func>::Unchecked{}, f)
+    , prevPc(ppc)
+    , hasThis(ht) {}
 
-  DECLARE_RESOURCE_ALLOCATION(CompactTrace)
-
-  struct Frame final {
-    Frame() = default;
-    Frame(const Func* f, int32_t ppc, bool ht)
-      : func(f)
-      , prevPc(ppc)
-      , hasThis(ht)
-    {}
-
-    LowPtr<const Func> func;
-    union {
-      struct {
-        int32_t prevPc : 31;
-        bool hasThis   : 1;
-      };
-      uint32_t prevPcAndHasThis;
-    };
-  };
-
-  struct Key final {
-    Array extract() const;
-    void insert(const ActRec* fp, int32_t prevPc);
-
-    TYPE_SCAN_IGNORE_ALL;
-
-    uint64_t m_hash{0x9e3779b9};
-    folly::small_vector<Frame, 16> m_frames;
-  };
-
-  const folly::small_vector<Frame, 16>& frames() const {
-    return m_key.m_frames;
+  uint64_t hash() const {
+    auto const f = reinterpret_cast<uintptr_t>(func.get());
+    return hash_int64_pair(prevPcAndHasThis, f >> 4);
   }
 
-private:
-  Key m_key;
+  const LowPtr<const Func> func;
+  union {
+    struct {
+      int32_t prevPc : 31;
+      bool hasThis   : 1;
+    };
+    uint32_t prevPcAndHasThis;
+  };
+};
+
+struct CompactTraceData {
+  Array extract() const;
+  void insert(const ActRec* fp, int32_t prevPc);
+  uint64_t hash() const;
+  const auto& frames() const { return m_frames; }
+  auto size() const { return m_frames.size(); }
+
+  using Ptr = std::shared_ptr<CompactTraceData>;
+  static Ptr Create() {
+    return std::make_shared<CompactTraceData>();
+  }
+
+ private:
+  folly::small_vector<CompactFrame, 16> m_frames;
+  mutable uint64_t m_hash{0};
+};
+
+struct CompactTrace : SweepableResourceData {
+  Array extract() const;
+
+  CompactTraceData* get() const {
+    if (!m_backtrace) m_backtrace = CompactTraceData::Create();
+    return m_backtrace.get();
+  }
+
+  void insert(const ActRec* fp, int32_t prevPc) {
+    get()->insert(fp, prevPc);
+  }
+
+  DECLARE_RESOURCE_ALLOCATION(CompactTrace)
+  TYPE_SCAN_IGNORE_ALL;
+
+  uint32_t size() const {
+    if (!m_backtrace) return 0;
+    return m_backtrace->size();
+  }
+
+  const auto& frames() const {
+    return get()->frames();
+  }
+
+ private:
+  mutable CompactTraceData::Ptr m_backtrace;
 };
 
 struct BacktraceArgs {
@@ -198,7 +224,6 @@ struct BacktraceArgs {
   bool isCompact() const {
     return
       RuntimeOption::EvalEnableCompactBacktrace &&
-      !m_skipTop &&
       !m_skipInlined &&
       !m_withSelf &&
       !m_withThis &&
@@ -226,12 +251,66 @@ private:
 };
 
 ///////////////////////////////////////////////////////////////////////////////
+/*
+ * Inline stacktrace fragments.
+ *
+ * For your enjoyment, please peruse the following ASCII art diagram:
+ *
+ *    ActRec:  ________________
+ *            |                |
+ *            |  func: top     |
+ *            |  callOffset()  |
+ *            |________________|
+ *                     |
+ *                     | <---------+
+ *    ActRec:  ________v_______    |
+ *            |                |   | (relative to top->base())
+ * vmfp() --> |  func: caller  |   |
+ *            |  callOffset() -+---+
+ *            |________________|
+ *                     |
+ *                     | <---------+
+ *    IFrame:  ________v_______    |
+ *            |                |   | (relative to caller->base())
+ *            |  func: inl1    |   |
+ *            |  callOff ------+---+
+ *            |________________|
+ *                     |
+ *                     | <---------+
+ *    IFrame:  ________v_______    |
+ *            |                |   | (relative to inl1->base())
+ *            |  func: inl2    |   |
+ *            |  callOff ------+---+
+ *            |________________|
+ *                     |
+ *                     | <---------------------------------+
+ *                     v                                   |
+ *            some native function                         |
+ *                                                         |
+ *    IStack corresponding to the TCA of the native call:  | (relative to
+ *             ________________                            |  inl2->base())
+ *            |                |                           |
+ *            |  frame: inl2   |                           |
+ *            |  nframes: 2    |                           |
+ *            |  callOff ------+---------------------------+
+ *            |________________|
+ *
+ *
+ * In the presence of inline frame elision, there are no ActRecs corresponding
+ * to the inlined callee frames.  Instead, we maintain IFrame structs which we
+ * use to construct the backtrace.
+ *
+ * The value of vmpc() is undocumented, because sometimes it appears to point
+ * to the call from `caller` to `inl1`, and sometimes it seems to point to the
+ * call from `inl2` to the native function.
+ */
 
 using IFrameID = int32_t;
+constexpr IFrameID kInvalidIFrameID = std::numeric_limits<IFrameID>::max();
 
 struct IFrame {
   const Func* func; // callee (m_func)
-  int32_t callOff;  // caller offset (m_callOff)
+  int32_t callOff;  // caller offset (callOffset())
   IFrameID parent;  // parent frame (m_sfp)
 };
 
@@ -250,10 +329,30 @@ struct IStack {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+/*
+ * Everything we need to represent a frame in the backtrace.
+ */
+struct BTFrame {
+  ActRec* fp{nullptr};
+  Offset pc{kInvalidOffset};
+
+  operator bool() const { return fp != nullptr; }
+};
+
 Array createBacktrace(const BacktraceArgs& backtraceArgs);
 void addBacktraceToStructLog(const Array& bt, StructuredLogEntry& cols);
 int64_t createBacktraceHash(bool consider_metadata);
-req::ptr<CompactTrace> createCompactBacktrace();
+void fillCompactBacktrace(CompactTraceData* trace, bool skipTop);
+req::ptr<CompactTrace> createCompactBacktrace(bool skipTop = false);
+std::pair<const Func*, Offset> getCurrentFuncAndOffset();
+
+/*
+ * Walk up the dependency chain for `wh` and return the first frame found.
+ */
+BTFrame getARFromWH(
+  c_WaitableWaitHandle* currentWaitHandle,
+  folly::small_vector<c_WaitableWaitHandle*, 64>& visitedWHs
+);
 
 /*
  * Walk the logical VM stack, including inlined frames.
@@ -300,8 +399,18 @@ backtrace_detail::from_ret_t<F> fromCaller(
 );
 
 /*
- * Like fromLeaf() and fromCaller(), but for the first function whose frame
- * satisfies `pred(fp)`.
+ * Like fromLeaf(), but with the first frame pointer and PC in the dependency
+ * chain of `wh` instead of the current Hack function.
+ */
+template<typename F>
+backtrace_detail::from_ret_t<F> fromLeafWH(
+  c_WaitableWaitHandle* wh, F f,
+  backtrace_detail::from_ret_t<F> def = backtrace_detail::from_ret_t<F>{}
+);
+
+/*
+ * Like the above functions, but for the first function whose frame satisfies
+ * `pred(fp)`.
  */
 template<typename F, typename Pred>
 backtrace_detail::from_ret_t<F> fromLeaf(
@@ -311,6 +420,11 @@ backtrace_detail::from_ret_t<F> fromLeaf(
 template<typename F, typename Pred>
 backtrace_detail::from_ret_t<F> fromCaller(
   F f, Pred pred,
+  backtrace_detail::from_ret_t<F> def = backtrace_detail::from_ret_t<F>{}
+);
+template<typename F, typename Pred>
+backtrace_detail::from_ret_t<F> fromLeafWH(
+  c_WaitableWaitHandle* wh, F f, Pred pred,
   backtrace_detail::from_ret_t<F> def = backtrace_detail::from_ret_t<F>{}
 );
 

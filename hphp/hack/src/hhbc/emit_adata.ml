@@ -69,14 +69,14 @@ let rec adata_to_buffer b argument =
   | TV.HhasAdata data -> Acc.add b (String.escaped data)
   | TV.Array pairs ->
     adata_dict_collection_argument_to_buffer b adata_array_prefix None pairs
-  | TV.VArray values ->
-    adata_collection_argument_to_buffer b adata_varray_prefix None values
+  | TV.VArray (values, loc) ->
+    adata_collection_argument_to_buffer b adata_varray_prefix loc values
   | TV.Vec (values, loc) ->
     adata_collection_argument_to_buffer b adata_vec_prefix loc values
   | TV.Dict (pairs, loc) ->
     adata_dict_collection_argument_to_buffer b adata_dict_prefix loc pairs
-  | TV.DArray pairs ->
-    adata_dict_collection_argument_to_buffer b adata_darray_prefix None pairs
+  | TV.DArray (pairs, loc) ->
+    adata_dict_collection_argument_to_buffer b adata_darray_prefix loc pairs
   | TV.Keyset values ->
     adata_collection_argument_to_buffer b adata_keyset_prefix None values
 
@@ -144,7 +144,7 @@ let get_array_identifier tv =
   if arrprov_enabled () then
     next_adata_id tv
   else
-    match TVMap.get tv !array_identifier_map with
+    match TVMap.find_opt tv !array_identifier_map with
     | None ->
       let id = next_adata_id tv in
       array_identifier_map := TVMap.add tv id !array_identifier_map;
@@ -191,5 +191,13 @@ let rewrite_typed_value tv =
     | TV.Vec _ -> Vec (get_array_identifier tv)
     | TV.Keyset _ -> Keyset (get_array_identifier tv)
     | TV.Dict _ -> Dict (get_array_identifier tv))
+
+let rewrite_tv instruction =
+  match instruction with
+  | ILitConst (TypedValue tv) -> rewrite_typed_value tv
+  | _ -> instruction
+
+let rewrite_typed_values instrseq =
+  Instruction_sequence.InstrSeq.map instrseq rewrite_tv
 
 let get_adata () = List.rev !adata

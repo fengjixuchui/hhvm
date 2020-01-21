@@ -50,8 +50,8 @@ SHA1SUM="openssl dgst -sha1 -r"
 if [ -z "${HHVM_REPO_SCHEMA}" ] ; then
   # Use Perl as BSD grep (MacOS) does not support negated groups
   HHVM_REPO_SCHEMA=$(sh -c "$find_files" | \
-      perl -ne 'print unless m#^hphp/(bin|facebook(?!/extensions)|hack/facebook/flow|neo|public_tld|test|tools|util|vixl|zend)#' | \
-      tr '\n' '\0' | xargs -0 cat | $SHA1SUM | cut -b-40)
+      perl -ne 'chomp; print "$_\n" if -f && !m#^hphp/(bin|facebook(?!/extensions)|hack/facebook/flow|neo|public_tld|test|tools|util|vixl|zend)#' | \
+      xargs -d'\n' cat | $SHA1SUM | cut -b-40)
 fi
 
 ################################################################################
@@ -76,12 +76,10 @@ fi
 COMPILER_FILE="${INSTALL_DIR}/generated-compiler-id.txt"
 REPO_SCHEMA_FILE="${INSTALL_DIR}/generated-repo-schema-id.txt"
 BUILD_ID_FILE="${INSTALL_DIR}/generated-build-id.txt"
-HHJS_BABEL_TRANSFORM_PATH_FILE="${INSTALL_DIR}/generated-hhjs-babel-transform.txt"
 
 echo -n "${COMPILER_ID}" > "${COMPILER_FILE}"
 echo -n "${HHVM_REPO_SCHEMA}" > "${REPO_SCHEMA_FILE}"
 echo -n "${BUILD_ID}" > "${BUILD_ID_FILE}"
-echo -n "${HHJS_BABEL_TRANSFORM}" > "${HHJS_BABEL_TRANSFORM_PATH_FILE}"
 
 if [ -z "${COMPILER_ID}" ]; then
   exit 1

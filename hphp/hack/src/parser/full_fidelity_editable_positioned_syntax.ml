@@ -207,10 +207,7 @@ module ValueBuilder = struct
       | (f, _) -> (f, value child)
     in
     let (first, last) =
-      Syntax.fold_over_children
-        folder
-        (Value.Synthetic, Value.Synthetic)
-        syntax
+      Syntax.fold_over_children folder (Value.Synthetic, Value.Synthetic) syntax
     in
     pr first last
 end
@@ -236,14 +233,11 @@ let is_in_body node position =
   let rec aux parents =
     match parents with
     | [] -> false
-    | h1 :: t1 ->
-      if is_compound_statement h1 then
-        match t1 with
-        | [] -> false
-        | h2 :: _ ->
-          is_methodish_declaration h2 || is_function_declaration h2 || aux t1
-      else
-        aux t1
+    | h1 :: h2 :: _
+      when is_compound_statement h1
+           && (is_methodish_declaration h2 || is_function_declaration h2) ->
+      true
+    | _ :: rest -> aux rest
   in
   let parents = parentage node position in
   aux parents

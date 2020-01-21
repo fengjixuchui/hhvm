@@ -18,6 +18,8 @@ let hack_arr_dv_arrs () =
 let from_variadic_param_hint_opt ho =
   let p = Pos.none in
   match ho with
+  (* `"array"` here is intentionally not namespaced because for variadic params
+   * `"array"` is added to the list of tparams (see from_ast below) *)
   | None -> Some (p, Aast.Happly ((p, "array"), []))
   | Some h -> Some (p, Aast.Happly ((p, "array"), [h]))
 
@@ -138,12 +140,7 @@ let from_ast ~tparams ~namespace ~generate_defaults ~scope p =
     Option.map
       param_hint
       Emit_type_hint.(
-        hint_to_type_info
-          ~kind:Param
-          ~skipawaitable:false
-          ~nullable
-          ~namespace
-          ~tparams)
+        hint_to_type_info ~kind:Param ~skipawaitable:false ~nullable ~tparams)
   in
   (* Do the type check for default value type and hint type *)
   let _ =
@@ -167,7 +164,6 @@ let from_ast ~tparams ~namespace ~generate_defaults ~scope p =
     Some
       (Hhas_param.make
          param_name
-         p.A.param_is_reference
          param_is_variadic
          param_is_inout
          param_user_attributes
@@ -181,7 +177,7 @@ let rename_params params =
   in
   let rec rename param_counts param =
     let name = Hhas_param.name param in
-    match SMap.get name param_counts with
+    match SMap.find_opt name param_counts with
     | None -> (SMap.add name 0 param_counts, param)
     | Some count ->
       let param_counts = SMap.add name (count + 1) param_counts in
@@ -213,11 +209,7 @@ let emit_param_default_value_setter ?(is_native = false) env pos params =
       | _ -> (false, false, false)
     in
     let nop_requirements e =
-      is_native
-      && snd e = A.Null
-      && ( is_mixed
-         || Hhas_param.is_reference param
-         || (is_optional && is_callable) )
+      is_native && snd e = A.Null && (is_mixed || (is_optional && is_callable))
     in
     let dvo = Hhas_param.default_value param in
     Option.map dvo ~f:(fun (l, e) ->
@@ -249,10 +241,8 @@ let emit_reified_params tparams =
     | (_, (_, s), _, true) ->
       let param_name = SU.Reified.mangle_reified_param s in
       let type_name = Some "HH\\darray" in
-      let tc =
-        Hhas_type_constraint.make type_name [Hhas_type_constraint.HHType]
-      in
+      let tc = Hhas_type_constraint.make type_name [] in
       let ti = Some (Hhas_type_info.make type_name tc) in
-      Some (Hhas_param.make param_name false false false [] ti None)
+      Some (Hhas_param.make param_name false false [] ti None)
   in
   List.filter_map tparams ~f:convert_reified_params

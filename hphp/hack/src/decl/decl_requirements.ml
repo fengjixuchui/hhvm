@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Decl_defs
 open Shallow_decl_defs
 open Typing_defs
@@ -50,9 +50,7 @@ let flatten_parent_class_reqs
         SSet.union parent_type.dc_req_ancestors_extends req_ancestors_extends
       in
       (req_ancestors, req_ancestors_extends)
-    | Ast_defs.Cenum
-    | Ast_defs.Crecord ->
-      assert false)
+    | Ast_defs.Cenum -> assert false)
 
 let declared_class_req env (requirements, req_extends) req_ty =
   let (_, (req_pos, req_name), _) = Decl_utils.unwrap_class_type req_ty in
@@ -94,13 +92,13 @@ let naive_dedup req_extends =
   (* maps class names to type params *)
   let h = Caml.Hashtbl.create 0 in
   List.rev_filter_map req_extends (fun (parent_pos, ty) ->
-      match ty with
-      | (_r, Tapply (name, hl)) ->
+      match get_node ty with
+      | Tapply (name, hl) ->
         let hl = List.map hl Decl_pos_utils.NormalizeSig.ty in
         begin
           try
             let hl' = Caml.Hashtbl.find h name in
-            if List.compare Pervasives.compare hl hl' <> 0 then
+            if not (List.equal hl hl' equal_decl_ty) then
               raise Exit
             else
               None
@@ -137,7 +135,7 @@ let get_class_requirements env shallow_class =
     List.fold_left
       ~f:(flatten_parent_class_reqs env shallow_class)
       ~init:acc
-      ( if shallow_class.sc_kind = Ast_defs.Cinterface then
+      ( if Ast_defs.(equal_class_kind shallow_class.sc_kind Cinterface) then
         shallow_class.sc_extends
       else
         shallow_class.sc_implements )

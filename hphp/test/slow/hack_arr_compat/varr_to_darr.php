@@ -26,7 +26,7 @@ function test_implicit_append() {
 
 function test_sort() {
   $x = varray[1, 2, 3];
-  asort(&$x);
+  asort(inout $x);
 }
 
 function test_unset() {
@@ -41,7 +41,7 @@ function test_unset() {
 function test_serialization($x) {
   $str = fb_serialize($x);
   $success = false;
-  $_ = fb_unserialize($str, &$success);
+  $_ = fb_unserialize($str, inout $success);
   invariant($success, 'unable to round-trip %s', var_export($x, true));
 }
 

@@ -178,7 +178,7 @@ void cgConvObjToBool(IRLS& env, const IRInstruction* inst) {
   );
 }
 
-IMPL_OPCODE_CALL(ConvCellToBool);
+IMPL_OPCODE_CALL(ConvTVToBool);
 
 ///////////////////////////////////////////////////////////////////////////////
 // ConvToInt
@@ -263,7 +263,7 @@ void cgConvDblToInt(IRLS& env, const IRInstruction* inst) {
 IMPL_OPCODE_CALL(ConvStrToInt);
 IMPL_OPCODE_CALL(ConvObjToInt);
 IMPL_OPCODE_CALL(ConvResToInt);
-IMPL_OPCODE_CALL(ConvCellToInt);
+IMPL_OPCODE_CALL(ConvTVToInt);
 
 ///////////////////////////////////////////////////////////////////////////////
 // ConvToDbl
@@ -299,7 +299,7 @@ IMPL_OPCODE_CALL(ConvStrToDbl);
 IMPL_OPCODE_CALL(ConvArrToDbl);
 IMPL_OPCODE_CALL(ConvObjToDbl);
 IMPL_OPCODE_CALL(ConvResToDbl);
-IMPL_OPCODE_CALL(ConvCellToDbl);
+IMPL_OPCODE_CALL(ConvTVToDbl);
 
 ///////////////////////////////////////////////////////////////////////////////
 // ConvToVArray
@@ -328,17 +328,6 @@ static ArrayData* convDictToVArrImpl(ArrayData* adIn) {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
   assertx(adIn->isDict());
   auto a = MixedArray::ToVArrayDict(adIn, adIn->cowCheck());
-  assertx(a != adIn);
-  assertx(a->isPacked());
-  assertx(a->isVArray());
-  decRefArr(adIn);
-  return a;
-}
-
-static ArrayData* convShapeToVArrImpl(ArrayData* adIn) {
-  ArrayData* a;
-  assertx(adIn->isShape());
-  a = MixedArray::ToVArrayShape(adIn, adIn->cowCheck());
   assertx(a != adIn);
   assertx(a->isPacked());
   assertx(a->isVArray());
@@ -395,10 +384,6 @@ void cgConvDictToVArr(IRLS& env, const IRInstruction* inst) {
   convToVArrHelper(env, inst, CallSpec::direct(convDictToVArrImpl), false);
 }
 
-void cgConvShapeToVArr(IRLS& env, const IRInstruction* inst) {
-  convToVArrHelper(env, inst, CallSpec::direct(convShapeToVArrImpl), false);
-}
-
 void cgConvKeysetToVArr(IRLS& env, const IRInstruction* inst) {
   convToVArrHelper(env, inst, CallSpec::direct(convKeysetToVArrImpl), false);
 }
@@ -435,15 +420,6 @@ static ArrayData* convDictToDArrImpl(ArrayData* adIn) {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
   assertx(adIn->isDict());
   auto a = MixedArray::ToDArrayDict(adIn, adIn->cowCheck());
-  assertx(a->isMixed());
-  assertx(a->isDArray());
-  if (a != adIn) decRefArr(adIn);
-  return a;
-}
-
-static ArrayData* convShapeToDArrImpl(ArrayData* adIn) {
-  assertx(adIn->isShape());
-  auto a = MixedArray::ToDArrayShape(adIn, adIn->cowCheck());
   assertx(a->isMixed());
   assertx(a->isDArray());
   if (a != adIn) decRefArr(adIn);
@@ -500,10 +476,6 @@ void cgConvDictToDArr(IRLS& env, const IRInstruction* inst) {
   convToDArrHelper(env, inst, CallSpec::direct(convDictToDArrImpl), true);
 }
 
-void cgConvShapeToDArr(IRLS& env, const IRInstruction* inst) {
-  convToDArrHelper(env, inst, CallSpec::direct(convShapeToDArrImpl), true);
-}
-
 void cgConvKeysetToDArr(IRLS& env, const IRInstruction* inst) {
   // These have to sync because of Hack array compat notices
   convToDArrHelper(env, inst, CallSpec::direct(convKeysetToDArrImpl), true);
@@ -520,7 +492,7 @@ IMPL_OPCODE_CALL(ConvIntToStr);
 IMPL_OPCODE_CALL(ConvDblToStr);
 IMPL_OPCODE_CALL(ConvObjToStr);
 IMPL_OPCODE_CALL(ConvResToStr);
-IMPL_OPCODE_CALL(ConvCellToStr);
+IMPL_OPCODE_CALL(ConvTVToStr);
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -531,11 +503,10 @@ IMPL_OPCODE_CALL(ConvStrToArr);
 IMPL_OPCODE_CALL(ConvFuncToArr);
 IMPL_OPCODE_CALL(ConvVecToArr);
 IMPL_OPCODE_CALL(ConvDictToArr);
-IMPL_OPCODE_CALL(ConvShapeToArr);
 IMPL_OPCODE_CALL(ConvKeysetToArr);
 IMPL_OPCODE_CALL(ConvClsMethToArr);
 IMPL_OPCODE_CALL(ConvObjToArr);
-IMPL_OPCODE_CALL(ConvCellToArr);
+IMPL_OPCODE_CALL(ConvTVToArr);
 IMPL_OPCODE_CALL(ConvArrToNonDVArr);
 
 IMPL_OPCODE_CALL(ConvClsMethToVArr);
@@ -543,13 +514,11 @@ IMPL_OPCODE_CALL(ConvClsMethToDArr);
 
 IMPL_OPCODE_CALL(ConvArrToVec);
 IMPL_OPCODE_CALL(ConvDictToVec);
-IMPL_OPCODE_CALL(ConvShapeToVec);
 IMPL_OPCODE_CALL(ConvKeysetToVec);
 IMPL_OPCODE_CALL(ConvClsMethToVec);
 IMPL_OPCODE_CALL(ConvObjToVec);
 
 IMPL_OPCODE_CALL(ConvArrToDict);
-IMPL_OPCODE_CALL(ConvShapeToDict);
 IMPL_OPCODE_CALL(ConvVecToDict);
 IMPL_OPCODE_CALL(ConvKeysetToDict);
 IMPL_OPCODE_CALL(ConvClsMethToDict);
@@ -558,11 +527,8 @@ IMPL_OPCODE_CALL(ConvObjToDict);
 IMPL_OPCODE_CALL(ConvArrToKeyset);
 IMPL_OPCODE_CALL(ConvVecToKeyset);
 IMPL_OPCODE_CALL(ConvDictToKeyset);
-IMPL_OPCODE_CALL(ConvShapeToKeyset);
 IMPL_OPCODE_CALL(ConvClsMethToKeyset);
 IMPL_OPCODE_CALL(ConvObjToKeyset);
-
-IMPL_OPCODE_CALL(ConvCellToObj);
 
 ///////////////////////////////////////////////////////////////////////////////
 

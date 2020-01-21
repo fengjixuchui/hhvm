@@ -29,7 +29,6 @@
 #include "hphp/runtime/vm/jit/vasm-visit.h"
 
 #include "hphp/util/dataflow-worklist.h"
-#include "hphp/util/either.h"
 #include "hphp/util/trace.h"
 
 #include <boost/dynamic_bitset.hpp>
@@ -350,11 +349,14 @@ bool analyze_phys_callseq(const Env& /*env*/, Vreg d, const Vinstr& inst,
    * rvmfp() arg to it, but the program is ill-formed if it's not doing
    * that so it's ok to just ignore that definition here.
    */
-  if (next && next->op == Vinstr::callphp) {
+  if (next &&
+      (next->op == Vinstr::callphp ||
+       next->op == Vinstr::callphpr)) {
     FTRACE(3, "      post-dominated by callphp---preserving frame ptr\n");
     return true;
   }
-  if (inst.op == Vinstr::callphp) return true;
+  if (inst.op == Vinstr::callphp ||
+      inst.op == Vinstr::callphpr) return true;
 
   return false;
 }
@@ -789,6 +791,11 @@ void optimize_copy(const Env& env, const RegState& state, Vinstr& inst) {
  * Rewrite the srcs of `inst' as the expressions used to def them.
  */
 void optimize_inst(const Env& env, const RegState& state, Vinstr& inst) {
+  // For specialized iterators, we'd like to use a physical single register for
+  // the position. On exit traces, we intentionally recompute the old position
+  // in order to avoid extending Vreg lifetimes. Don't overoptimize this case.
+  if (inst.origin != nullptr && inst.origin->is(StIterPos)) return;
+
   auto visit = OptVisit { env, state };
   visitOperands(inst, visit);
 
@@ -839,8 +846,8 @@ void optimize(Env& env) {
  * when a register holds a value that is the same as another register plus some
  * offset.  It then folds offsets in memory operands to try to require fewer
  * registers.  The main motivation for this is to generally eliminate the need
- * for a separate stack pointer (the result of HHIR's DefSP instruction, which
- * will just be an lea off of the rvmfp() physical register).
+ * for a separate stack pointer (the result of HHIR's DefFrameRelSP instruction,
+ * which will just be an lea off of the rvmfp() physical register).
  */
 void optimizeCopies(Vunit& unit, const Abi& abi) {
   Timer timer(Timer::vasm_copy);

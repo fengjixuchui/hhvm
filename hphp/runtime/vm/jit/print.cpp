@@ -24,7 +24,6 @@
 #include <vector>
 #include <algorithm>
 
-#include "hphp/util/abi-cxx.h"
 #include "hphp/util/arch.h"
 #include "hphp/util/disasm.h"
 #include "hphp/util/struct-log.h"
@@ -36,6 +35,7 @@
 
 #include "hphp/runtime/vm/jit/array-access-profile.h"
 #include "hphp/runtime/vm/jit/array-kind-profile.h"
+#include "hphp/runtime/vm/jit/array-iter-profile.h"
 #include "hphp/runtime/vm/jit/asm-info.h"
 #include "hphp/runtime/vm/jit/block.h"
 #include "hphp/runtime/vm/jit/call-target-profile.h"
@@ -309,44 +309,6 @@ dynamic getTCRange(const AreaIndex area,
                         ("disasm", disasmStr.str());
 }
 
-namespace {
-// TODO(T52856776) - move into AnnotationData class
-struct TargetProfileVisitor {
-  explicit TargetProfileVisitor(const TransContext& ctx) : ctx(ctx) {}
-
-  template<typename T>
-  dynamic getProfileDynamic(const rds::Profile<T>& prof,
-                            const dynamic& linkObj) {
-    return dynamic::object("offset", prof.bcOff)
-                          ("name", folly::sformat("{}", prof.name))
-                          ("data", linkObj);
-  }
-
-  dynamic operator() (const rds::Profile<jit::SwitchProfile>& prof) {
-    auto const link = rds::bind<jit::SwitchProfile, rds::Mode::Local>(prof);
-    auto const func = ctx.initSrcKey.func();
-    assert(func->contains(prof.bcOff));
-    auto const funcBCOffset = func->unit()->at(func->base() + prof.bcOff);
-    auto const bcSize = getImmVector(funcBCOffset).size();
-    return getProfileDynamic(prof, link.get()->toDynamic(bcSize));
-  }
-
-  template<typename T>
-  dynamic operator() (const rds::Profile<T>& prof) {
-    auto const link = rds::bind<T, rds::Mode::Local>(prof);
-    return getProfileDynamic(prof, link.get()->toDynamic());;
-  }
-
-  template<typename T>
-  dynamic operator() (T&&) {
-    assertx(false);
-    return dynamic();
-  }
-
-  const TransContext& ctx;
-};
-}
-
 dynamic getBlock(const Block* block,
                  const TransKind kind,
                  const AsmInfo* asmInfo,
@@ -491,18 +453,6 @@ dynamic getBlock(const Block* block,
     }
   }
 
-  auto const& ctx = unit.context();
-
-  for (auto& inst : result["instrs"]) {
-    auto const& offset = inst["offset"].asInt();
-    dynamic profileObjs = dynamic::array;
-    for (auto const& key : unit.annotationData->profileKeys) {
-      auto const profile = boost::apply_visitor(TargetProfileVisitor(ctx), key);
-      if (profile["offset"].asInt() == offset) profileObjs.push_back(profile);
-    }
-    inst["profileData"] = profileObjs;
-  }
-
   return result;
 }
 
@@ -521,7 +471,7 @@ dynamic getTransContext(const TransContext& ctx) {
                         ("id", ctx.transID)
                         ("optIndex", ctx.optIndex)
                         ("srcKey", getSrcKey(ctx.initSrcKey))
-                        ("funcName", func->fullDisplayName()->data())
+                        ("funcName", func->fullName()->data())
                         ("sourceFile", func->filename()->data())
                         ("startLine", func->line1())
                         ("endLine", func->line2());

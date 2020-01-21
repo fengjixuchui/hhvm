@@ -19,6 +19,7 @@ include Aast_defs
 type ('ex, 'fb, 'en, 'hi) program = ('ex, 'fb, 'en, 'hi) def list
 [@@deriving
   show { with_path = false },
+    eq,
     visitors
       {
         variety = "iter";
@@ -54,18 +55,13 @@ and ('ex, 'fb, 'en, 'hi) stmt_ =
   | Fallthrough
   | Expr of ('ex, 'fb, 'en, 'hi) expr
   | Break
-  (* Temporarily need to support `break int` for codegen but not typecheck *)
-  | TempBreak of ('ex, 'fb, 'en, 'hi) expr
   | Continue
-  (* Temporarily need to support `continue int` for codegen but not typecheck *)
-  | TempContinue of ('ex, 'fb, 'en, 'hi) expr
   | Throw of ('ex, 'fb, 'en, 'hi) expr
   | Return of ('ex, 'fb, 'en, 'hi) expr option
   | GotoLabel of pstring
   | Goto of pstring
   | Awaitall of
-      ( (lid option * ('ex, 'fb, 'en, 'hi) expr) list
-      * ('ex, 'fb, 'en, 'hi) block )
+      (lid option * ('ex, 'fb, 'en, 'hi) expr) list * ('ex, 'fb, 'en, 'hi) block
   | If of
       ('ex, 'fb, 'en, 'hi) expr
       * ('ex, 'fb, 'en, 'hi) block
@@ -89,7 +85,6 @@ and ('ex, 'fb, 'en, 'hi) stmt_ =
       * ('ex, 'fb, 'en, 'hi) catch list
       * ('ex, 'fb, 'en, 'hi) block
   | Def_inline of ('ex, 'fb, 'en, 'hi) def
-  | Let of lid * hint option * ('ex, 'fb, 'en, 'hi) expr
   | Noop
   | Block of ('ex, 'fb, 'en, 'hi) block
   | Markup of pstring * ('ex, 'fb, 'en, 'hi) expr option
@@ -122,18 +117,22 @@ and ('ex, 'fb, 'en, 'hi) class_id_ =
 
 and ('ex, 'fb, 'en, 'hi) expr = 'ex * ('ex, 'fb, 'en, 'hi) expr_
 
+and 'hi collection_targ =
+  | CollectionTV of 'hi targ
+  | CollectionTKV of 'hi targ * 'hi targ
+
 and ('ex, 'fb, 'en, 'hi) expr_ =
   | Array of ('ex, 'fb, 'en, 'hi) afield list
   | Darray of
-      (targ * targ) option
+      ('hi targ * 'hi targ) option
       * (('ex, 'fb, 'en, 'hi) expr * ('ex, 'fb, 'en, 'hi) expr) list
-  | Varray of targ option * ('ex, 'fb, 'en, 'hi) expr list
+  | Varray of 'hi targ option * ('ex, 'fb, 'en, 'hi) expr list
   | Shape of (Ast_defs.shape_field_name * ('ex, 'fb, 'en, 'hi) expr) list
   (* TODO: T38184446 Consolidate collections in AAST *)
-  | ValCollection of vc_kind * targ option * ('ex, 'fb, 'en, 'hi) expr list
+  | ValCollection of vc_kind * 'hi targ option * ('ex, 'fb, 'en, 'hi) expr list
   (* TODO: T38184446 Consolidate collections in AAST *)
   | KeyValCollection of
-      kvc_kind * (targ * targ) option * ('ex, 'fb, 'en, 'hi) field list
+      kvc_kind * ('hi targ * 'hi targ) option * ('ex, 'fb, 'en, 'hi) field list
   | Null
   | This
   | True
@@ -141,7 +140,6 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   | Omitted
   | Id of sid
   | Lvar of lid
-  | ImmutableVar of lid
   | Dollardollar of lid
   | Clone of ('ex, 'fb, 'en, 'hi) expr
   | Obj_get of
@@ -154,11 +152,11 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
       call_type
       * ('ex, 'fb, 'en, 'hi) expr
       (* function *)
-      * targ list
+      * 'hi targ list
       (* explicit type annotations *)
       * ('ex, 'fb, 'en, 'hi) expr list
       (* positional args *)
-      * ('ex, 'fb, 'en, 'hi) expr list (* unpacked args *)
+      * ('ex, 'fb, 'en, 'hi) expr option (* unpacked arg *)
   | Int of string
   | Float of string
   | String of string
@@ -185,12 +183,12 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   | As of ('ex, 'fb, 'en, 'hi) expr * hint * (* is nullable *) bool
   | New of
       ('ex, 'fb, 'en, 'hi) class_id
-      * targ list
+      * 'hi targ list
       * ('ex, 'fb, 'en, 'hi) expr list
-      * ('ex, 'fb, 'en, 'hi) expr list
+      * ('ex, 'fb, 'en, 'hi) expr option
       * 'ex (* constructor *)
   | Record of
-      ('ex, 'fb, 'en, 'hi) class_id
+      sid
       * (* is array *) bool
       * (('ex, 'fb, 'en, 'hi) expr * ('ex, 'fb, 'en, 'hi) expr) list
   | Efun of ('ex, 'fb, 'en, 'hi) fun_ * lid list
@@ -203,7 +201,7 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   | Import of import_flavor * ('ex, 'fb, 'en, 'hi) expr
   (* TODO: T38184446 Consolidate collections in AAST *)
   | Collection of
-      sid * collection_targ option * ('ex, 'fb, 'en, 'hi) afield list
+      sid * 'hi collection_targ option * ('ex, 'fb, 'en, 'hi) afield list
   | BracedExpr of ('ex, 'fb, 'en, 'hi) expr
   | ParenthesizedExpr of ('ex, 'fb, 'en, 'hi) expr
   (* None of these constructors exist in the AST *)
@@ -213,7 +211,6 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   (* meth_caller('Class name', 'method name') *)
   | Method_caller of sid * pstring
   | Smethod_id of sid * pstring
-  | Special_func of ('ex, 'fb, 'en, 'hi) special_func
   | Pair of ('ex, 'fb, 'en, 'hi) expr * ('ex, 'fb, 'en, 'hi) expr
   | Assert of ('ex, 'fb, 'en, 'hi) assert_expr
   | Typename of sid
@@ -250,17 +247,11 @@ and ('ex, 'fb, 'en, 'hi) xhp_attribute =
   | Xhp_simple of pstring * ('ex, 'fb, 'en, 'hi) expr
   | Xhp_spread of ('ex, 'fb, 'en, 'hi) expr
 
-and ('ex, 'fb, 'en, 'hi) special_func =
-  | Genva of ('ex, 'fb, 'en, 'hi) expr list
-
-and is_reference = bool
-
 and is_variadic = bool
 
 and ('ex, 'fb, 'en, 'hi) fun_param = {
   param_annotation: 'ex;
   param_type_hint: 'hi type_hint;
-  param_is_reference: is_reference;
   param_is_variadic: is_variadic;
   param_pos: pos;
   param_name: string;
@@ -280,7 +271,7 @@ and ('ex, 'fb, 'en, 'hi) fun_variadicity =
 and ('ex, 'fb, 'en, 'hi) fun_ = {
   f_span: pos;
   f_annotation: 'en;
-  f_mode: FileInfo.mode; [@opaque]
+  f_mode: FileInfo.mode; [@visitors.opaque]
   f_ret: 'hi type_hint;
   f_name: sid;
   f_tparams: ('ex, 'fb, 'en, 'hi) tparam list;
@@ -299,10 +290,6 @@ and ('ex, 'fb, 'en, 'hi) fun_ = {
   f_static: bool;
 }
 
-and ('ex, 'fb, 'en, 'hi) func_body = {
-  fb_ast: ('ex, 'fb, 'en, 'hi) block;
-  fb_annotation: 'fb;
-}
 (**
  * Naming has two phases and the annotation helps to indicate the phase.
  * In the first pass, it will perform naming on everything except for function
@@ -311,11 +298,22 @@ and ('ex, 'fb, 'en, 'hi) func_body = {
  * have named and unnamed variants of the annotation.
  * See BodyNamingAnnotation in nast.ml and the comment in naming.ml
  *)
+and ('ex, 'fb, 'en, 'hi) func_body = {
+  fb_ast: ('ex, 'fb, 'en, 'hi) block;
+  fb_annotation: 'fb;
+}
 
 (* A type annotation is two things:
   - the localized hint, or if the hint is missing, the inferred type
   - The typehint associated to this expression if it exists *)
 and 'hi type_hint = 'hi * type_hint_
+
+(* Explicit type argument to function, constructor, or collection literal.
+ * 'hi = unit in NAST
+ * 'hi = Typing_defs.(locl ty) in TAST,
+ * and is used to record inferred type arguments, with wildcard hint.
+ *)
+and 'hi targ = 'hi * hint
 
 and type_hint_ = hint option
 
@@ -345,7 +343,7 @@ and ('ex, 'fb, 'en, 'hi) class_tparams = {
    * for the purposes of Naming.class_meth_bodies *)
   c_tparam_constraints:
     (reify_kind * (Ast_defs.constraint_kind * hint) list) SMap.t;
-      [@opaque]
+      [@visitors.opaque]
 }
 
 and use_as_alias = sid option * pstring * sid option * use_as_visibility list
@@ -357,9 +355,10 @@ and is_extends = bool
 and ('ex, 'fb, 'en, 'hi) class_ = {
   c_span: pos;
   c_annotation: 'en;
-  c_mode: FileInfo.mode; [@opaque]
+  c_mode: FileInfo.mode; [@visitors.opaque]
   c_final: bool;
   c_is_xhp: bool;
+  c_has_xhp_keyword: bool;
   c_kind: Ast_defs.class_kind;
   c_name: sid;
   (* The type parameters of a class A<T> (T is the parameter) *)
@@ -416,7 +415,6 @@ and ca_type =
 
 (* expr = None indicates an abstract const *)
 and ('ex, 'fb, 'en, 'hi) class_const = {
-  cc_visibility: visibility;
   cc_type: hint option;
   cc_id: sid;
   cc_expr: ('ex, 'fb, 'en, 'hi) expr option;
@@ -436,7 +434,6 @@ and typeconst_abstract_kind =
  *)
 and ('ex, 'fb, 'en, 'hi) class_typeconst = {
   c_tconst_abstract: typeconst_abstract_kind;
-  c_tconst_visibility: visibility;
   c_tconst_name: sid;
   c_tconst_constraint: hint option;
   c_tconst_type: hint option;
@@ -500,7 +497,7 @@ and ('ex, 'fb, 'en, 'hi) method_redeclaration = {
   mt_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
 }
 
-and nsenv = (Namespace_env.env[@opaque])
+and nsenv = (Namespace_env.env[@visitors.opaque])
 
 and ('ex, 'fb, 'en, 'hi) typedef = {
   t_annotation: 'en;
@@ -509,19 +506,31 @@ and ('ex, 'fb, 'en, 'hi) typedef = {
   t_constraint: hint option;
   t_kind: hint;
   t_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
-  t_mode: FileInfo.mode; [@opaque]
+  t_mode: FileInfo.mode; [@visitors.opaque]
   t_vis: typedef_visibility;
   t_namespace: nsenv;
 }
 
 and ('ex, 'fb, 'en, 'hi) gconst = {
   cst_annotation: 'en;
-  cst_mode: FileInfo.mode; [@opaque]
+  cst_mode: FileInfo.mode; [@visitors.opaque]
   cst_name: sid;
   cst_type: hint option;
   cst_value: ('ex, 'fb, 'en, 'hi) expr;
   cst_namespace: nsenv;
   cst_span: pos;
+}
+
+and ('ex, 'fb, 'en, 'hi) record_def = {
+  rd_annotation: 'en;
+  rd_name: sid;
+  rd_extends: hint option;
+  rd_abstract: bool;
+  rd_fields: (sid * hint * ('ex, 'fb, 'en, 'hi) expr option) list;
+  rd_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
+  rd_namespace: nsenv;
+  rd_span: pos;
+  rd_doc_comment: string option;
 }
 
 (* Pocket Universe Enumeration, e.g.
@@ -549,9 +558,10 @@ and ('ex, 'fb, 'en, 'hi) gconst = {
    }
 *)
 and ('ex, 'fb, 'en, 'hi) pu_enum = {
+  pu_annotation: 'en;
   pu_name: sid;
   pu_is_final: bool;
-  pu_case_types: sid list;
+  pu_case_types: (sid * reify_kind) list;
   pu_case_values: (sid * hint) list;
   pu_members: ('ex, 'fb, 'en, 'hi) pu_member list;
 }
@@ -567,6 +577,7 @@ and ('ex, 'fb, 'en, 'hi) fun_def = ('ex, 'fb, 'en, 'hi) fun_
 and ('ex, 'fb, 'en, 'hi) def =
   | Fun of ('ex, 'fb, 'en, 'hi) fun_def
   | Class of ('ex, 'fb, 'en, 'hi) class_
+  | RecordDef of ('ex, 'fb, 'en, 'hi) record_def
   | Stmt of ('ex, 'fb, 'en, 'hi) stmt
   | Typedef of ('ex, 'fb, 'en, 'hi) typedef
   | Constant of ('ex, 'fb, 'en, 'hi) gconst

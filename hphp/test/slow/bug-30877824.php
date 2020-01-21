@@ -9,7 +9,7 @@ class C {
       unset($frame['file']);
       unset($frame['line']);
       unset($frame['args']);
-      ksort(&$frame);
+      ksort(inout $frame);
       $bt[$k] = $frame;
     }
     var_dump($bt);
@@ -18,8 +18,10 @@ class C {
     $this->g();
   }
 }
+<<__EntryPoint>> function main(): void {
 $obj = new C;
 $obj->f();
 echo "------------------------\n";
 Exception::setTraceOptions(DEBUG_BACKTRACE_PROVIDE_OBJECT);
 $obj->f();
+}

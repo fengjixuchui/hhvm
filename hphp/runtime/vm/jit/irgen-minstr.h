@@ -158,14 +158,14 @@ SSATmp* profiledArrayAccess(IRGS& env, SSATmp* arr, SSATmp* key,
  * the heap) and emit a type check in optimizing translations to
  * refine some properties of the types observed during profiling.
  * Such refinements include checking a specific type in case it's
- * monomorphic, or checking that it's uncounted or unboxed.  In case
+ * monomorphic, or checking that it's uncounted.  In case
  * the check fails dynamically, a side exit is taken.  The `finish'
  * lambda is invoked to emit code before exiting the region at the
  * next bytecode-instruction boundary.
  */
 template<class Finish>
 SSATmp* profiledType(IRGS& env, SSATmp* tmp, Finish finish) {
-  if (tmp->type() <= TGen && tmp->type().isKnownDataType()) {
+  if (tmp->type() <= TCell && tmp->type().isKnownDataType()) {
     return tmp;
   }
 
@@ -188,7 +188,7 @@ SSATmp* profiledType(IRGS& env, SSATmp* tmp, Finish finish) {
 
   Type typeToCheck = relaxToGuardable(reducedType);
 
-  if (typeToCheck == TGen) return tmp;
+  if (typeToCheck == TCell) return tmp;
 
   SSATmp* ptmp{nullptr};
 

@@ -1,0 +1,11 @@
+<?hh
+function with_generic_interface<T>(IGenericDerived<T> $arg): void {}
+interface IGenericDerived<T> extends \GenericInterface<T, int> {
+  require extends \GenericBase<float, T>;
+}
+interface GenericInterface<Tfirst, Tsecond> {}
+class GenericBase<Tfirst, Tsecond> {}
+<<__Rx>>
+function extract_standalone_make_default(): nothing {
+  throw new \Exception();
+}

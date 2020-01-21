@@ -16,26 +16,26 @@
 
 namespace HH\Rx;
 
-/* See documentation for \Traversable */
+/* See documentation for \HH\Traversable */
 <<__Sealed(
   namespace\KeyedTraversable::class,
   namespace\Iterator::class,
   namespace\IteratorAggregate::class,
-  \Container::class
+  \HH\Container::class
 )>>
-interface Traversable<+Tv> extends \Traversable<Tv> {}
+interface Traversable<+Tv> extends \HH\Traversable<Tv> {}
 
-/* See documentation for \KeyedTraversable */
+/* See documentation for \HH\KeyedTraversable */
 <<__Sealed(
   namespace\KeyedIterable::class,
   namespace\KeyedIterator::class,
-  \KeyedContainer::class
+  \HH\KeyedContainer::class
 )>>
 interface KeyedTraversable<+Tk, +Tv>
-  extends namespace\Traversable<Tv>, \KeyedTraversable<Tk, Tv> {}
+  extends namespace\Traversable<Tv>, \HH\KeyedTraversable<Tk, Tv> {}
 
-/* See documentation for \Iterator */
-interface Iterator<+Tv> extends namespace\Traversable<Tv>, \Iterator<Tv> {
+/* See documentation for \HH\Iterator */
+interface Iterator<+Tv> extends namespace\Traversable<Tv>, \HH\Iterator<Tv> {
   /**
    * Return the current value at the current iterator position.
    *
@@ -72,7 +72,7 @@ interface KeyedIterator<+Tk, +Tv>
   extends
     namespace\KeyedTraversable<Tk, Tv>,
     namespace\Iterator<Tv>,
-    \KeyedIterator<Tk, Tv> {
+    \HH\KeyedIterator<Tk, Tv> {
   /**
    * Return the current key at the current iterator position.
    *
@@ -83,7 +83,7 @@ interface KeyedIterator<+Tk, +Tv>
 }
 
 /* See documentation for \AsyncIterator */
-interface AsyncIterator<+Tv> extends \AsyncIterator<Tv> {
+interface AsyncIterator<+Tv> extends \HH\AsyncIterator<Tv> {
   /**
    * Move the async iterator to the next `Awaitable` position.
    *
@@ -101,7 +101,7 @@ interface AsyncIterator<+Tv> extends \AsyncIterator<Tv> {
 
 /* See documentation for \AsyncKeyedIterator */
 interface AsyncKeyedIterator<+Tk, +Tv>
-  extends namespace\AsyncIterator<Tv>, \AsyncKeyedIterator<Tk, Tv> {
+  extends namespace\AsyncIterator<Tv>, \HH\AsyncKeyedIterator<Tk, Tv> {
   /**
    * Move the async iterator to the next `Awaitable` position.
    *
@@ -130,7 +130,7 @@ interface IteratorAggregate<+Tv>
 }
 
 interface Iterable<+Tv>
-  extends namespace\IteratorAggregate<Tv>, \Iterable<Tv> {
+  extends namespace\IteratorAggregate<Tv>, \HH\Iterable<Tv> {
   /**
    * Returns an iterator that points to beginning of the current `Iterable`.
    *
@@ -156,19 +156,6 @@ interface Iterable<+Tv>
   <<__Rx, __MaybeMutable>>
   public function toValuesArray(): varray<Tv>;
   /**
-   * Returns a `Vector` converted from the current `Iterable`.
-   *
-   * Any keys in the current `Iterable` are discarded and replaced with integer
-   * indices, starting with 0.
-   *
-   * @return - a `Vector` converted from the current `Iterable`.
-   */
-  <<__Rx, __MutableReturn, __MaybeMutable>>
-  /* HH_FIXME[4120]: While this violates our variance annotations, we are
-   * returning a copy of the underlying collection, so it is actually safe
-   * See #6853603. */
-  public function toVector(): Vector<Tv>;
-  /**
    * Returns an immutable vector (`ImmVector`) converted from the current
    * `Iterable`.
    *
@@ -179,18 +166,6 @@ interface Iterable<+Tv>
    */
   <<__Rx, __MaybeMutable>>
   public function toImmVector(): ImmVector<Tv>;
-  /**
-   * Returns a `Set` converted from the current `Iterable`.
-   *
-   * Any keys in the current `Iterable` are discarded.
-   *
-   * @return - a `Set` converted from the current `Iterable`.
-   */
-  <<__Rx, __MutableReturn, __MaybeMutable>>
-  /* HH_FIXME[4120]: While this violates our variance annotations, we are
-   * returning a copy of the underlying collection, so it is actually safe.
-   * See #6853603. */
-  public function toSet(): Set<Tv> where Tv as arraykey;
   /**
    * Returns an immutable set (`ImmSet`) converted from the current `Iterable`.
    *
@@ -280,7 +255,7 @@ interface Iterable<+Tv>
    */
   <<__Rx, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function zip<Tu>(
-    <<__OnlyRxIfImpl(namespace\Traversable::class)>> \Traversable<Tu> $traversable,
+    <<__OnlyRxIfImpl(namespace\Traversable::class)>> \HH\Traversable<Tu> $traversable,
   ): namespace\Iterable<Pair<Tv, Tu>>;
   /**
    * Returns an `Iterable` containing the first `n` values of the current
@@ -389,7 +364,7 @@ interface Iterable<+Tv>
    */
   <<__Rx, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function concat<Tu super Tv>(
-    <<__OnlyRxIfImpl(namespace\Traversable::class)>> \Traversable<Tu> $traversable,
+    <<__OnlyRxIfImpl(namespace\Traversable::class)>> \HH\Traversable<Tu> $traversable,
   ): namespace\Iterable<Tu>;
   /**
    * Returns the first value in the current `Iterable`.
@@ -413,7 +388,7 @@ interface KeyedIterable<Tk, +Tv>
   extends
     namespace\KeyedTraversable<Tk, Tv>,
     namespace\Iterable<Tv>,
-    \KeyedIterable<Tk, Tv> {
+    \HH\KeyedIterable<Tk, Tv> {
   /**
    * Returns an iterator that points to beginning of the current
    * `KeyedIterable`.
@@ -431,19 +406,7 @@ interface KeyedIterable<Tk, +Tv>
    */
   <<__Rx, __MaybeMutable>>
   public function toKeysArray(): varray;
-  /**
-   * Returns a `Map` based on the keys and values of the current
-   * `KeyedIterable`.
-   *
-   * @return - a `Map` that has the keys and associated values of the current
-   *           `KeyedIterable`.
-   */
-  <<__Rx, __MutableReturn, __MaybeMutable>>
-  /* HH_FIXME[4120]: While this violates our variance annotations, we are
-   * returning a copy of the underlying collection, so it is actually safe
-   * See #6853603. */
-  public function toMap(): \Map<Tk, Tv> where Tk as arraykey;
-  /**
+ /**
    * Returns an immutable map (`ImmMap`) based on the keys and values of the
    * current `KeyedIterable`.
    *
@@ -451,7 +414,7 @@ interface KeyedIterable<Tk, +Tv>
    *           current `KeyedIterable`.
    */
   <<__Rx, __MaybeMutable>>
-  public function toImmMap(): \ImmMap<Tk, Tv> where Tk as arraykey;
+  public function toImmMap(): ImmMap<Tk, Tv> where Tk as arraykey;
   /**
    * Returns a lazy, access elements only when needed view of the current
    * `KeyedIterable`.
@@ -581,7 +544,7 @@ interface KeyedIterable<Tk, +Tv>
    */
   <<__Rx, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function zip<Tu>(
-    <<__OnlyRxIfImpl(namespace\Traversable::class)>> \Traversable<Tu> $traversable,
+    <<__OnlyRxIfImpl(namespace\Traversable::class)>> \HH\Traversable<Tu> $traversable,
   ): namespace\KeyedIterable<Tk, Pair<Tv, Tu>>;
   /**
    * Returns a `KeyedIterable` containing the first `n` values of the current
@@ -691,7 +654,7 @@ interface KeyedIterable<Tk, +Tv>
    */
   <<__Rx, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function concat<Tu super Tv>(
-    <<__OnlyRxIfImpl(namespace\Traversable::class)>> \Traversable<Tu> $traversable,
+    <<__OnlyRxIfImpl(namespace\Traversable::class)>> \HH\Traversable<Tu> $traversable,
   ): namespace\Iterable<Tu>;
   /**
    * Returns the first value in the current `KeyedIterable`.

@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 
 type collected_type = Tast_env.env * Typing_defs.phase_ty [@@deriving show]
 
@@ -42,21 +42,13 @@ let type_collector =
 
 let collect_types tast = Errors.ignore_ (fun () -> type_collector#go tast)
 
-let collected_types_to_json (collected_types : collected_type list) :
-    Hh_json.json list =
-  List.map collected_types ~f:(fun (env, ty) ->
-      match ty with
-      | Typing_defs.DeclTy ty -> Tast_env.ty_to_json env ty
-      | Typing_defs.LoclTy ty -> Tast_env.ty_to_json env ty)
-
 (*
-  Ideally this would be just Pos.AbsolutePosMap.get, however the positions
+  Ideally this would be just Pos.AbsolutePosMap.find_opt, however the positions
   in the Tast are off by 1 from positions in the full fidelity parse trees.
 
   TODO: Fix this when the full fidelity parse tree becomes the parser for type checking.
 *)
 let get_from_pos_map
-    (position : Pos.absolute) (map : collected_type list Pos.AbsolutePosMap.t)
-    =
+    (position : Pos.absolute) (map : collected_type list Pos.AbsolutePosMap.t) =
   let position = Pos.advance_one position in
-  Pos.AbsolutePosMap.get position map
+  Pos.AbsolutePosMap.find_opt position map

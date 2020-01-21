@@ -7,19 +7,14 @@
  *
  *)
 
-val fuzzy_search_enabled : unit -> bool
-
-val set_fuzzy_search_enabled : bool -> unit
-
-(* Trie-based search indices need to be built on server initialization *)
-val init_needs_search_updates : provider_name:string -> bool
-
 (* Get or set the currently selected search provider *)
 val initialize :
-  globalrev_opt:int option ->
+  globalrev:int option ->
+  gleanopt:GleanOptions.t ->
   namespace_map:(string * string) list ->
   provider_name:string ->
   quiet:bool ->
+  ignore_hh_version:bool ->
   savedstate_file_opt:string option ->
   workers:MultiWorker.worker list option ->
   SearchUtils.si_env
@@ -45,30 +40,18 @@ val find_matching_symbols :
   kind_filter:SearchUtils.si_kind option ->
   SearchUtils.si_results
 
-(* Legacy query interface for "Symbol Search", depends on multiworker *)
-val query_for_symbol_search :
-  MultiWorker.worker list option ->
-  string ->
-  string ->
-  fuzzy:bool ->
-  (Pos.t, SearchUtils.si_kind) SearchUtils.term list
-
-(* Legacy query interface for LSP autocomplete, depends on filter-map *)
-val query_for_autocomplete :
-  string ->
-  limit:int option ->
-  filter_map:
-    (string ->
-    string ->
-    (FileInfo.pos, SearchUtils.si_kind) SearchUtils.term ->
-    'a option) ->
-  'a list Utils.With_complete_flag.t
-
-(* Notify the search service that certain files have been updated locally *)
+(* SLOWER: Update from a FileInfo.t object.  May need to do extra work to parse
+ * into a usable format. *)
 val update_files :
   sienv:SearchUtils.si_env ref ->
-  workers:MultiWorker.worker list option ->
   paths:(Relative_path.t * SearchUtils.info * SearchUtils.file_source) list ->
+  unit
+
+(* FASTER: Update from facts directly *)
+val update_from_facts :
+  sienv:SearchUtils.si_env ref ->
+  path:Relative_path.t ->
+  facts:Facts.facts ->
   unit
 
 (* Notify the search service that certain files have been removed locally *)

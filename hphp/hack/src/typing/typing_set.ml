@@ -11,13 +11,13 @@
  * Typing-rule-equivalent types may get duplicated, as the equality induced
  * by ty_compare does not expand Tvars and type aliases.
  *)
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 
 module Ty_ = struct
-  type t = locl ty
+  type t = locl_ty
 
-  let compare r1 r2 = ty_compare r1 r2
+  let compare r1 r2 = Typing_defs.ty_compare r1 r2
 end
 
 include Caml.Set.Make (Ty_)

@@ -259,13 +259,11 @@ inline size_t allocSize(const HeapObject* h) {
     0, /* APCLocalArray */
     sizeClass<GlobalsArray>(),
     0, /* RecordArray */
-    0, /* Shape */
     0, /* Dict */
     0, /* VecArray */
     0, /* KeySet */
     0, /* String */
     0, /* Resource */
-    sizeClass<RefData>(),
     sizeClass<ClsMethData>(),
     0, /* Record */
     0, /* Object */
@@ -296,7 +294,6 @@ inline size_t allocSize(const HeapObject* h) {
   static_assert(kind_sizes[(int)HeaderKind::knd] == sizeClass<type>(), #knd);
   CHECKSIZE(Empty, ArrayData)
   CHECKSIZE(Globals, GlobalsArray)
-  CHECKSIZE(Ref, RefData)
   CHECKSIZE(ClsMeth, ClsMethData)
   CHECKSIZE(AsyncFuncWH, c_AsyncFunctionWaitHandle)
   CHECKSIZE(Vector, c_Vector)
@@ -355,7 +352,6 @@ inline size_t allocSize(const HeapObject* h) {
       assertx(size == MemoryManager::sizeClass(size));
       return size;
     case HeaderKind::Mixed:
-    case HeaderKind::Shape:
     case HeaderKind::Dict:
       // size = fn of h->m_scale
       size = static_cast<const MixedArray*>(h)->heapSize();
@@ -453,7 +449,6 @@ inline size_t allocSize(const HeapObject* h) {
     case HeaderKind::ImmVector:
     case HeaderKind::ImmMap:
     case HeaderKind::ImmSet:
-    case HeaderKind::Ref:
     case HeaderKind::ClsMeth:
       not_reached();
   }

@@ -16,6 +16,10 @@
  **
  *
  */
+
+use ocamlrep_derive::OcamlRep;
+
+#[derive(OcamlRep)]
 pub enum Operator {
     DollarOperator,
     ScopeResolutionOperator,
@@ -24,7 +28,6 @@ pub enum Operator {
     MemberSelectionOperator,
     NewOperator,
     FunctionCallOperator,
-    ReferenceOperator,
     CloneOperator,
     PostfixIncrementOperator,
     PostfixDecrementOperator,

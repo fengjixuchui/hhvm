@@ -4,14 +4,15 @@ version = "3.49.0"
 edition = "2018"
 
 [dependencies]
-parser_rust = { path = "..", package = "hack_parser" }
-parser_core_types = { path = "../core_types", package = "hack_parser_core_types" }
-ocamlpool_rust = { path = "../../utils/ocamlpool_rust", package = "hack_utils_ocamlpool" }
-libc = "^0.2.60"
-ocaml = "^0.7"
-oxidized = {path = "../../oxidized", package = "hack_oxidized" }
+positioned_coroutine_parser_ffi = { path = "../cargo/positioned_coroutine_parser_ffi", package = "positioned_coroutine_parser_ffi" }
+minimal_parser_ffi = { path = "../cargo/minimal_parser_ffi", package = "minimal_parser_ffi" }
+decl_mode_parser_ffi = { path = "../cargo/decl_mode_parser_ffi", package = "decl_mode_parser_ffi" }
+coroutine_parser_leak_tree_ffi = { path = "../cargo/coroutine_parser_leak_tree_ffi", package = "coroutine_parser_leak_tree_ffi" }
+verify_parser_ffi = { path = "../cargo/verify_parser_ffi", package = "verify_parser_ffi" }
+positioned_parser_ffi = { path = "../cargo/positioned_parser_ffi", package = "positioned_parser_ffi" }
+aast_parser_ffi = { path = "../cargo/aast_parser_ffi", package = "aast_parser_ffi" }
 
 [lib]
 name = "rust_parser_ffi"
-path = "../rust_parser_ffi.rs"
+path = "lib.rs"
 crate-type = ["lib", "staticlib"]

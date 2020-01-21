@@ -34,13 +34,10 @@ let rec collect_valid_target_labels_aux acc s =
   | T.If (_, then_block, else_block) ->
     let acc = collect_valid_target_labels_for_block_aux acc then_block in
     collect_valid_target_labels_for_block_aux acc else_block
-  | T.Let _
   | T.Fallthrough
   | T.Expr _
   | T.Break
-  | T.TempBreak _
   | T.Continue
-  | T.TempContinue _
   | T.Throw _
   | T.Return _
   | T.Goto _
@@ -120,7 +117,8 @@ type id_key =
   | IdReturn
   | IdLabel of Label.t
 
-module LabelIdMap : MyMap.S with type key = id_key = MyMap.Make (struct
+module LabelIdMap : WrappedMap.S with type key = id_key =
+WrappedMap.Make (struct
   type t = id_key
 
   let compare = Pervasives.compare
@@ -188,7 +186,7 @@ end)
 let label_to_id = ref LabelIdMap.empty
 
 let new_id k =
-  match LabelIdMap.get k !label_to_id with
+  match LabelIdMap.find_opt k !label_to_id with
   | Some id -> id
   | None ->
     let rec aux n =
@@ -315,8 +313,7 @@ let get_target_for_level ~is_break level t =
               }
           | _ -> failwith "impossible: TryFinally should be skipped"
         end
-    | Switch (end_label, _) :: _ when n = 1 ->
-      ResolvedRegular (end_label, iters)
+    | Switch (end_label, _) :: _ when n = 1 -> ResolvedRegular (end_label, iters)
     | Loop ({ label_break; label_continue; iterator }, _) :: _ when n = 1 ->
       let (label, iters) =
         if is_break then

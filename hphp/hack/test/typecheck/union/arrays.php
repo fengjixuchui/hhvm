@@ -37,7 +37,7 @@ function test1(
   if ($b) {
     $x = []; // AKempty
   } else {
-    $x = [1]; // AKvec
+    $x = [1]; // AKvarray
   }
   hh_show($x);
   hh_show($x[0]);
@@ -53,17 +53,17 @@ function test1(
   expect_array($x);
 
   if ($b) {
-    $x = [1]; // AKvec
+    $x = [1]; // AKvarray
   } else {
     $x = $array; // AKany
   }
   hh_show($x);
   hh_show($x[0]);
-  // no safe array mode, so this unions as AKvec
+  // no safe array mode, so this unions as AKvarray
   expect_int_array($x);
 
   if ($b) {
-    $x = $arrayint; // AKvec
+    $x = $arrayint; // AKvarray
   } else {
     $x = $array; // AKany
   }
@@ -100,9 +100,9 @@ function test1(
   hh_show($x[0]);
 
   if ($b) {
-    $x = $arrayint; // AKvec
+    $x = $arrayint; // AKvarray
   } else {
-    $x = [1]; // AKvec
+    $x = [1]; // AKvarray
   }
   hh_show($x);
   hh_show($x[0]);
@@ -111,7 +111,7 @@ function test1(
   if ($b) {
     $x = varray[0]; // AKvarray
   } else {
-    $x = [""]; // AKvec
+    $x = [""]; // AKvarray
   }
   hh_show($x);
   hh_show($x[0]);
@@ -160,23 +160,23 @@ function test1(
   hh_show($x);
   hh_show($x[0]);
 
-  $x = ($b ? [1 => true, 2 => ""] : [1 => true, 2 => ""]); // AKmap \/ AKmap
+  $x = ($b ? [1 => true, 2 => ""] : [1 => true, 2 => ""]); // AKdarray \/ AKdarray
   hh_show($x);
   hh_show($x[0]);
 
-  $x = ($b ? [1 => true, 2 => false] : $arrayIntBool); // AKmap \/ AKmap
+  $x = ($b ? [1 => true, 2 => false] : $arrayIntBool); // AKdarray \/ AKdarray
   hh_show($x);
   hh_show($x[0]);
 
-  $x = ($b ? [1 => true, 2 => false] : darray[0 => true]); // AKmap \/ AKdarray
+  $x = ($b ? [1 => true, 2 => false] : darray[0 => true]); // AKdarray \/ AKdarray
   hh_show($x);
   hh_show($x[0]);
 
-  $x = ($b ? $arrayIntBool : darray[0 => true]); // AKmap \/ AKdarray
+  $x = ($b ? $arrayIntBool : darray[0 => true]); // AKdarray \/ AKdarray
   hh_show($x);
   hh_show($x[0]);
 
-  $x = ($b ? $arrayIntBool : $arrayIntBool2); // AKmap \/ AKmap
+  $x = ($b ? $arrayIntBool : $arrayIntBool2); // AKdarray \/ AKdarray
   hh_show($x);
   hh_show($x[0]);
 }

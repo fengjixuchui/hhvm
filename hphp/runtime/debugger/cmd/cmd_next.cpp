@@ -21,6 +21,7 @@
 #include "hphp/runtime/ext/generator/ext_generator.h"
 #include "hphp/runtime/vm/debugger-hook.h"
 #include "hphp/runtime/vm/hhbc-codec.h"
+#include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
@@ -166,9 +167,9 @@ void CmdNext::onBeginInterrupt(DebuggerProxy& proxy, CmdInterrupt& interrupt) {
     return;
   }
 
-  if (m_skippingAwait) {
-    m_skippingAwait = false;
-    stepAfterAwait();
+  if (m_steppingWhileSuspendingFrame) {
+    m_steppingWhileSuspendingFrame = false;
+    stepIntoSuspendedFrame();
     return;
   }
 
@@ -212,33 +213,35 @@ void CmdNext::stepCurrentLine(CmdInterrupt& interrupt, ActRec* fp, PC pc) {
   auto const op = peek_op(pc);
   if (op == OpAwait) {
     assertx(fp->func()->isAsync());
-    auto wh = c_Awaitable::fromCell(*vmsp());
+    auto wh = c_Awaitable::fromTV(*vmsp());
     if (wh && !wh->isFinished()) {
       TRACE(2, "CmdNext: encountered blocking await\n");
-      if (fp->resumed()) {
+      if (isResumed(fp)) {
         setupStepSuspend(fp, pc);
         removeLocationFilter();
       } else {
         // Eager execution in non-resumed mode is supported only by async
-        // functions. We need to step over this opcode, then grab the created
-        // AsyncFunctionWaitHandle and setup stepping like we do for
-        // OpAwait.
+        // functions. We need to step over this opcode, but that will cause this
+        // frame to be moved off of the stack onto the heap, and will put us
+        // in the caller with a new AsyncFunctionWaitHandle on the stack. We
+        // will inspect that AsyncFunctionWaitHandle and run until the moved
+        // frame it refers to resumes.
         assertx(fp->func()->isAsyncFunction());
-        m_skippingAwait = true;
+        m_steppingWhileSuspendingFrame = true;
         m_needsVMInterrupt = true;
         removeLocationFilter();
       }
       return;
     }
   } else if (op == OpYield || op == OpYieldK) {
-    assertx(fp->resumed());
+    assertx(isResumed(fp));
     assertx(fp->func()->isGenerator());
     TRACE(2, "CmdNext: encountered yield from generator\n");
     setupStepOuts();
     setupStepSuspend(fp, pc);
     removeLocationFilter();
     return;
-  } else if (op == OpRetC && fp->resumed()) {
+  } else if (op == OpRetC && isResumed(fp)) {
     assertx(fp->func()->isResumable());
     TRACE(2, "CmdNext: encountered return from resumed resumable\n");
     setupStepOuts();
@@ -269,26 +272,24 @@ void CmdNext::setupStepSuspend(ActRec* fp, PC pc) {
     decode_iva(pc);
   }
   Offset nextInst = fp->func()->unit()->offsetOf(pc);
-  assertx(nextInst != InvalidAbsoluteOffset);
+  assertx(nextInst != kInvalidOffset);
   m_stepResumableId = fp;
   TRACE(2, "CmdNext: patch for resumable step at '%s' offset %d\n",
         fp->m_func->fullName()->data(), nextInst);
   m_stepResumable = StepDestination(fp->m_func->unit(), nextInst);
 }
 
-// An Await opcode is used in the codegen for an async function to suspend
-// execution until the given wait handle is finished. In eager execution,
-// the state is suspended into a new AsyncFunctionWaitHandle object so that
-// the execution can continue later. We have just completed an Await, so
-// the new AsyncFunctionWaitHandle is now available, and it can predict
-// where execution will resume.
-void CmdNext::stepAfterAwait() {
+// We were trying to step over an Await in an eagerly executed frame, and the
+// frame we were in was moved from the stack to the heap. We are now in the
+// callee with the AsyncFunctionWaitHandle for the frame we were in on top of
+// the stack. Run until the now suspended frame resumes after the Await we were
+// stepping over.
+void CmdNext::stepIntoSuspendedFrame() {
   auto topObj = vmsp()->m_data.pobj;
   assertx(topObj->instanceof(c_AsyncFunctionWaitHandle::classof()));
   auto wh = static_cast<c_AsyncFunctionWaitHandle*>(topObj);
   auto func = wh->actRec()->func();
   Offset nextInst = wh->getNextExecutionOffset();
-  assertx(nextInst != InvalidAbsoluteOffset);
   m_stepResumableId = wh->actRec();
   TRACE(2,
         "CmdNext: patch for cont step after Await at '%s' offset %d\n",
@@ -309,7 +310,7 @@ void CmdNext::cleanupStepResumable() {
 // resumable, or we'll stop when we get back into it, we know the object
 // will remain alive.
 void* CmdNext::getResumableId(ActRec* fp) {
-  assertx(fp->resumed());
+  assertx(isResumed(fp));
   assertx(fp->func()->isResumable());
   TRACE(2, "CmdNext: resumable tag %p for %s\n", fp,
         fp->func()->name()->data());

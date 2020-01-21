@@ -11,7 +11,7 @@
 namespace {
 
 <<__PHPStdLib>>
-function get_defined_functions(): array<string, array<string>>;
+function get_defined_functions(): darray<string, varray<string>>;
 <<__PHPStdLib, __Rx>>
 function function_exists(string $function_name, bool $autoload = true): bool;
 <<__PHPStdLib, __Rx>>
@@ -21,9 +21,9 @@ function is_callable_with_name($v, bool $syntax, inout $name): bool;
 function call_user_func_array($function, Container<mixed> $params);
 function call_user_func($function, ...$args);
 <<__PHPStdLib>>
-function register_postsend_function($function, ...$args);
+function register_postsend_function<T>((function(): T) $function): void;
 <<__PHPStdLib>>
-function register_shutdown_function($function, ...$args);
+function register_shutdown_function<T>((function(): T) $function): void;
 }
 
 namespace HH {

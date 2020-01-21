@@ -25,7 +25,6 @@
 #include "hphp/runtime/vm/vm-regs.h"
 
 #include "hphp/runtime/vm/jit/code-cache.h"
-#include "hphp/runtime/vm/jit/debugger.h"
 #include "hphp/runtime/vm/jit/guard-type-profile.h"
 #include "hphp/runtime/vm/jit/mcgen-translate.h"
 #include "hphp/runtime/vm/jit/mcgen.h"
@@ -42,7 +41,6 @@
 
 #include "hphp/util/disasm.h"
 #include "hphp/util/mutex.h"
-#include "hphp/util/process.h"
 #include "hphp/util/rds-local.h"
 #include "hphp/util/trace.h"
 
@@ -246,12 +244,29 @@ bool newTranslation() {
   return true;
 }
 
-std::unique_lock<SimpleMutex> lockCode() {
-  return std::unique_lock<SimpleMutex>{s_codeLock};
+std::unique_lock<SimpleMutex> lockCode(bool lock) {
+  if (lock) return std::unique_lock<SimpleMutex>{ s_codeLock };
+  return std::unique_lock<SimpleMutex>{s_codeLock, std::defer_lock};
 }
 
-std::unique_lock<SimpleMutex> lockMetadata() {
-  return std::unique_lock<SimpleMutex>{s_metadataLock};
+std::unique_lock<SimpleMutex> lockMetadata(bool lock) {
+  if (lock) return std::unique_lock<SimpleMutex>{s_metadataLock};
+  return std::unique_lock<SimpleMutex>{s_metadataLock, std::defer_lock};
+}
+
+CodeMetaLock::CodeMetaLock(bool f) :
+    m_code(lockCode(f)),
+    m_meta(lockMetadata(f)) {
+}
+
+void CodeMetaLock::lock() {
+  m_code.lock();
+  m_meta.lock();
+}
+
+void CodeMetaLock::unlock() {
+  m_meta.unlock();
+  m_code.unlock();
 }
 
 void assertOwnsCodeLock(OptView v) {
@@ -292,8 +307,6 @@ void requestExit() {
     }
     Trace::traceRelease("\n");
   }
-
-  clearDebuggerCatches();
 }
 
 void codeEmittedThisRequest(size_t& requestEntry, size_t& now) {
@@ -308,13 +321,14 @@ void processInit() {
   g_code = new(low_malloc(sizeof(CodeCache))) CodeCache();
   g_ustubs.emitAll(*g_code, *Debug::DebugInfo::Get());
 
-  // Write an .eh_frame section that covers the whole TC.
+  // Write an .eh_frame section that covers the JIT portion of the TC.
   initUnwinder(g_code->base(), g_code->tcSize(),
                tc_unwind_personality);
 
-  // write an .eh_frame for cti code using default personality
-  initUnwinder(g_code->bytecode().base(), g_code->bytecode().capacity(),
-               __gxx_personality_v0);
+  if (auto cti_cap = g_code->bytecode().capacity()) {
+    // write an .eh_frame for cti code using default personality
+    initUnwinder(g_code->bytecode().base(), cti_cap, __gxx_personality_v0);
+  }
 
   Disasm::ExcludedAddressRange(g_code->base(), g_code->codeSize());
 

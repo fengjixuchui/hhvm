@@ -55,7 +55,7 @@ struct LocationState {
                 false,
                 "invalid LTag for LocationState");
 
-  static constexpr Type default_type() { return TGen; }
+  static constexpr Type default_type() { return TCell; }
 
   template<LTag other>
   LocationState<tag>& operator=(const LocationState<other>& o) {
@@ -120,7 +120,7 @@ using MBaseState = LocationState<LTag::MBase>;
 struct MBRState {
   SSATmp* ptr{nullptr};
   AliasClass pointee{AEmpty}; // defaults to "invalid", not "Top"
-  Type ptrType{TLvalToGen};
+  Type ptrType{TLvalToCell};
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -149,6 +149,13 @@ struct FrameState {
   FPInvOffset bcSPOff{0};
 
   /*
+   * Tracks whether we are currently in the stublogue context. This is set in
+   * prologues prior to spilling the ActRec and used by catch blocks to ensure
+   * the proper alignment of native stack.
+   */
+  bool stublogue{false};
+
+  /*
    * Tracks whether we will need to ratchet tvRef and tvRef2 after emitting an
    * intermediate member instruction.
    */
@@ -158,12 +165,6 @@ struct FrameState {
    * ctx tracks the current ActRec's this/ctx field
    */
   SSATmp* ctx{nullptr};
-
-  /*
-   * frameMaySpan is true iff a Call instruction has been seen on any path
-   * since the definition of the current frame pointer.
-   */
-  bool frameMaySpanCall{false};
 
   /*
    * stackModified is reset to false by exceptionStackBoundary() and set to
@@ -230,6 +231,11 @@ struct FrameStateMgr final {
   FrameStateMgr(FrameStateMgr&&) = default;
   FrameStateMgr& operator=(const FrameStateMgr&) = delete;
   FrameStateMgr& operator=(FrameStateMgr&&) = default;
+
+  /*
+   * Called when we are manually creating diamonds in the CFG.
+   */
+  void clearForUnprocessedPred();
 
   /*
    * Update state by computing the effects of an instruction.
@@ -310,8 +316,8 @@ struct FrameStateMgr final {
   SSATmp*     ctx()               const { return cur().ctx; }
   FPInvOffset irSPOff()           const { return cur().irSPOff; }
   FPInvOffset bcSPOff()           const { return cur().bcSPOff; }
+  bool        stublogue()         const { return cur().stublogue; }
   bool        needRatchet()       const { return cur().needRatchet; }
-  bool        frameMaySpanCall()  const { return cur().frameMaySpanCall; }
   bool        stackModified()     const { return cur().stackModified; }
 
   /*
@@ -411,7 +417,6 @@ private:
    * Per-block state helpers.
    */
   bool save(Block* b, Block* pred = nullptr);
-  void clearForUnprocessedPred();
   void collectPostConds(Block* exitBlock);
 
   /*
@@ -421,7 +426,6 @@ private:
   void setType(Location l, Type type);
   void widenType(Location l, Type type);
   void refineType(Location l, Type type, TypeSource typeSrc);
-  void setBoxedPrediction(Location l, Type type);
   void refinePredictedTmpType(SSATmp*, Type);
 
   template<LTag tag>
@@ -439,9 +443,7 @@ private:
    * Local state update helpers.
    */
   void setLocalPredictedType(uint32_t id, Type type);
-  void updateLocalRefPredictions(SSATmp*, SSATmp*);
   void killLocalsForCall(bool);
-  void dropLocalRefsInnerTypes();
   void clearLocals();
 
 private:

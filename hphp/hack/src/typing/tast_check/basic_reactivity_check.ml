@@ -1,4 +1,4 @@
-open Core_kernel
+open Hh_prelude
 open Aast
 open Tast
 open Typing_defs
@@ -12,7 +12,7 @@ include TM.Shared (Env)
 let expr_is_valid_owned_arg (e : expr) : bool =
   match snd e with
   | Call (_, (_, Id (_, id)), _, _, _) ->
-    id = SN.Rx.mutable_ || id = SN.Rx.move
+    String.equal id SN.Rx.mutable_ || String.equal id SN.Rx.move
   | _ -> false
 
 (* true if expression is valid argument for __Mutable parameter:
@@ -26,7 +26,12 @@ let expr_is_valid_borrowed_arg env (e : expr) : bool =
   | Callconv (Ast_defs.Pinout, (_, Lvar (_, id)))
   | Lvar (_, id) ->
     Env.local_is_mutable ~include_borrowed:true env id
-  | This when Env.function_is_mutable env = Some Param_borrowed_mutable -> true
+  | This
+    when Option.equal
+           equal_param_mutability
+           (Env.function_is_mutable env)
+           (Some Param_borrowed_mutable) ->
+    true
   | _ -> false
 
 (* basic reactivity checks:
@@ -34,21 +39,41 @@ let expr_is_valid_borrowed_arg env (e : expr) : bool =
   X no static property accesses
   X no append calls *)
 let rec is_byval_collection_or_string_or_any_type env ty =
-  let check t =
-    match t with
-    | (_, Toption inner) -> is_byval_collection_or_string_or_any_type env inner
-    | (_, Tclass ((_, x), _, _)) ->
-      x = SN.Collections.cVec
-      || x = SN.Collections.cDict
-      || x = SN.Collections.cKeyset
-    | (_, (Tarraykind _ | Ttuple _ | Tshape _)) -> true
-    | (_, Tprim Tstring)
-    | (_, Tdynamic)
-    | (_, Tany _) ->
+  let check ty =
+    let (env, ty) = Env.expand_type env ty in
+    match get_node ty with
+    | Toption inner -> is_byval_collection_or_string_or_any_type env inner
+    | Tclass ((_, x), _, _) ->
+      String.equal x SN.Collections.cVec
+      || String.equal x SN.Collections.cDict
+      || String.equal x SN.Collections.cKeyset
+    | Tarraykind _
+    | Ttuple _
+    | Tshape _ ->
       true
-    | (_, Tunion tl) ->
-      List.for_all tl ~f:(is_byval_collection_or_string_or_any_type env)
-    | _ -> false
+    | Tprim Tstring
+    | Tdynamic
+    | Tany _ ->
+      true
+    | Tunion tyl ->
+      List.for_all tyl ~f:(is_byval_collection_or_string_or_any_type env)
+    | Tintersection tyl ->
+      List.exists tyl ~f:(is_byval_collection_or_string_or_any_type env)
+    | Tgeneric _
+    | Tnewtype _
+    | Tdependent _ ->
+      (* FIXME we should probably look at the upper bounds here. *)
+      false
+    | Terr
+    | Tnonnull
+    | Tprim _
+    | Tobject
+    | Tfun _
+    | Tanon _
+    | Tvar _
+    | Tpu _
+    | Tpu_type_access _ ->
+      false
   in
   let (_, tl) = Tast_env.get_concrete_supertypes env ty in
   List.for_all tl ~f:check
@@ -65,15 +90,17 @@ let rec is_valid_mutable_subscript_expression_target env v =
        || expr_is_valid_borrowed_arg env e )
   | _ -> false
 
-let is_valid_append_target ty =
-  match ty with
-  | (_, Tclass ((_, n), _, [])) ->
-    n <> SN.Collections.cVector
-    && n <> SN.Collections.cSet
-    && n <> SN.Collections.cMap
-  | (_, Tclass ((_, n), _, [_])) ->
-    n <> SN.Collections.cVector && n <> SN.Collections.cSet
-  | (_, Tclass ((_, n), _, [_; _])) -> n <> SN.Collections.cMap
+let is_valid_append_target env ty =
+  let (_env, ty) = Env.expand_type env ty in
+  match get_node ty with
+  | Tclass ((_, n), _, []) ->
+    String.( <> ) n SN.Collections.cVector
+    && String.( <> ) n SN.Collections.cSet
+    && String.( <> ) n SN.Collections.cMap
+  | Tclass ((_, n), _, [_]) ->
+    String.( <> ) n SN.Collections.cVector
+    && String.( <> ) n SN.Collections.cSet
+  | Tclass ((_, n), _, [_; _]) -> String.( <> ) n SN.Collections.cMap
   | _ -> true
 
 let check_assignment_or_unset_target
@@ -84,9 +111,9 @@ let check_assignment_or_unset_target
   (* Setting mutable locals is okay *)
   | Obj_get (e1, _, _) when expr_is_valid_borrowed_arg env e1 -> ()
   | Array_get (e1, i)
-    when is_assignment && not (is_valid_append_target (get_type e1)) ->
+    when is_assignment && not (is_valid_append_target env (get_type e1)) ->
     Errors.nonreactive_indexing
-      (i = None)
+      (Option.is_none i)
       (Option.value append_pos_opt ~default:p)
   | Array_get (e1, _)
     when expr_is_valid_borrowed_arg env e1
@@ -109,7 +136,7 @@ let check_non_rx =
 
     method! on_expr env expr =
       match snd expr with
-      | Id (p, n) when n = SN.Rx.is_enabled ->
+      | Id (p, n) when String.equal n SN.Rx.is_enabled ->
         Errors.rx_enabled_in_non_rx_context p
       | _ -> super#on_expr env expr
   end
@@ -117,9 +144,9 @@ let check_non_rx =
 let check_escaping_mutable env (pos, x) =
   let mut_env = Env.get_env_mutability env in
   let is_mutable =
-    (x = this && Env.function_is_mutable env <> None)
+    (Local_id.equal x this && Option.is_some (Env.function_is_mutable env))
     ||
-    match Local_id.Map.get x mut_env with
+    match Local_id.Map.find_opt x mut_env with
     | Some (_, TME.Immutable)
     | None ->
       false
@@ -130,11 +157,10 @@ let check_escaping_mutable env (pos, x) =
 type borrowable_args =
   | Arg_this
   | Arg_local of Local_id.S.t
+[@@deriving ord]
 
 module Borrowable_args = Caml.Map.Make (struct
-  type t = borrowable_args
-
-  let compare (a : t) (b : t) = compare a b
+  type t = borrowable_args [@@deriving ord]
 end)
 
 type args_mut_map = (Pos.t * param_mutability option) Borrowable_args.t
@@ -142,7 +168,7 @@ type args_mut_map = (Pos.t * param_mutability option) Borrowable_args.t
 let with_mutable_value env e ~default ~f =
   match snd e with
   (* invoke f only for mutable values *)
-  | This when Env.function_is_mutable env <> None -> f Arg_this
+  | This when Option.is_some (Env.function_is_mutable env) -> f Arg_this
   | Callconv (Ast_defs.Pinout, (_, Lvar (_, id)))
   | Lvar (_, id)
     when Env.local_is_mutable ~include_borrowed:true env id ->
@@ -150,10 +176,8 @@ let with_mutable_value env e ~default ~f =
   | _ -> default
 
 let check_borrowing
-    (env : Tast_env.env)
-    (p : 'a fun_param)
-    (mut_args : args_mut_map)
-    (e : expr) : args_mut_map =
+    (env : Tast_env.env) (p : 'a fun_param) (mut_args : args_mut_map) (e : expr)
+    : args_mut_map =
   let mut_to_string m =
     match m with
     | None -> "immutable"
@@ -194,7 +218,7 @@ let expr_is_maybe_mutable (env : Env.env) (e : expr) : bool =
   | (_, Lvar (_, id)) ->
     let mut_env = Env.get_env_mutability env in
     begin
-      match LMap.get id mut_env with
+      match LMap.find_opt id mut_env with
       | Some (_, TME.MaybeMutable) -> true
       | _ -> false
     end
@@ -214,7 +238,13 @@ let rec check_param_mutability
     (mut_args, el)
   | (param :: ps, e :: es) ->
     (* maybe mutable parameters allow anything *)
-    ( if param.fp_mutability <> Some Param_maybe_mutable then
+    ( if
+      not
+        (Option.equal
+           equal_param_mutability
+           param.fp_mutability
+           (Some Param_maybe_mutable))
+    then
       match param.fp_mutability with
       (* maybe-mutable argument value *)
       | _ when expr_is_maybe_mutable env e ->
@@ -240,59 +270,65 @@ let rec check_param_mutability
     (* Check the rest *)
     check_param_mutability env mut_args ps es
 
-let check_mutability_fun_params env mut_args fty el =
-  (* exit early if when calling non-reactive function *)
-  if fty.ft_reactive = Nonreactive then
-    ()
-  else
-    let params = fty.ft_params in
-    let (mut_args, remaining_exprs) =
-      check_param_mutability env mut_args params el
-    in
-    let rec error_on_first_mismatched_argument ~req_mut param es =
-      match es with
-      | [] -> ()
-      | e :: es ->
-        if expr_is_maybe_mutable env e then
-          Errors.maybe_mutable_argument_mismatch param.fp_pos (get_position e)
-        else (
-          match req_mut with
-          (* non mutable parameter - disallow anythin mutable *)
-          | None when expr_is_valid_borrowed_arg env e ->
-            Errors.immutable_argument_mismatch param.fp_pos (get_position e)
-          | Some Param_borrowed_mutable
-            when not (expr_is_valid_borrowed_arg env e) ->
-            (* mutably borrowed parameter - complain on immutable or mutably owned parameters.
-          mutably owned are not allowed because Rx\move will unset the original local *)
-            Errors.mutable_argument_mismatch param.fp_pos (get_position e)
-          | Some Param_owned_mutable when not (expr_is_valid_owned_arg e) ->
-            (* mutably owned parameter - all arguments need to be passed with Rx\move *)
-            Errors.mutably_owned_argument_mismatch
-              ~arg_is_owned_local:(is_owned_local env e)
-              param.fp_pos
-              (get_position e)
-          | _ -> error_on_first_mismatched_argument ~req_mut param es
-        )
-    in
-    begin
-      match fty.ft_arity with
-      (* maybe mutable variadic parameter *)
-      | Fvariadic (_, { fp_mutability = Some Param_maybe_mutable; _ }) -> ()
-      | Fvariadic (_, ({ fp_mutability = req_mut; _ } as param)) ->
-        error_on_first_mismatched_argument ~req_mut param remaining_exprs
-      | _ -> ()
-    end;
-    match fty.ft_arity with
-    | Fvariadic (_, p) ->
-      List.fold_left ~init:mut_args ~f:(check_borrowing env p) remaining_exprs
-      |> ignore
-    | _ -> ()
+let check_mutability_fun_params env mut_args call_ty el =
+  match get_node call_ty with
+  | Tfun fty ->
+    (* exit early if when calling non-reactive function *)
+    if equal_reactivity fty.ft_reactive Nonreactive then
+      ()
+    else
+      let params = fty.ft_params in
+      let (mut_args, remaining_exprs) =
+        check_param_mutability env mut_args params el
+      in
+      let rec error_on_first_mismatched_argument ~req_mut param es =
+        match es with
+        | [] -> ()
+        | e :: es ->
+          if expr_is_maybe_mutable env e then
+            Errors.maybe_mutable_argument_mismatch param.fp_pos (get_position e)
+          else (
+            match req_mut with
+            (* non mutable parameter - disallow anythin mutable *)
+            | None when expr_is_valid_borrowed_arg env e ->
+              Errors.immutable_argument_mismatch param.fp_pos (get_position e)
+            | Some Param_borrowed_mutable
+              when not (expr_is_valid_borrowed_arg env e) ->
+              (* mutably borrowed parameter - complain on immutable or mutably owned parameters.
+            mutably owned are not allowed because Rx\move will unset the original local *)
+              Errors.mutable_argument_mismatch param.fp_pos (get_position e)
+            | Some Param_owned_mutable when not (expr_is_valid_owned_arg e) ->
+              (* mutably owned parameter - all arguments need to be passed with Rx\move *)
+              Errors.mutably_owned_argument_mismatch
+                ~arg_is_owned_local:(is_owned_local env e)
+                param.fp_pos
+                (get_position e)
+            | _ -> error_on_first_mismatched_argument ~req_mut param es
+          )
+      in
+      begin
+        match fty.ft_arity with
+        (* maybe mutable variadic parameter *)
+        | Fvariadic (_, { fp_mutability = Some Param_maybe_mutable; _ }) -> ()
+        | Fvariadic (_, ({ fp_mutability = req_mut; _ } as param)) ->
+          error_on_first_mismatched_argument ~req_mut param remaining_exprs
+        | _ -> ()
+      end;
+      begin
+        match fty.ft_arity with
+        | Fvariadic (_, p) ->
+          List.fold_left
+            ~init:mut_args
+            ~f:(check_borrowing env p)
+            remaining_exprs
+          |> ignore
+        | _ -> ()
+      end
+  | _ -> ()
 
 let enforce_mutable_constructor_call env ctor_fty el =
-  match ctor_fty with
-  | (_, Tfun fty) ->
-    check_mutability_fun_params env Borrowable_args.empty fty el
-  | _ -> ()
+  let (env, ctor_fty) = Env.expand_type env ctor_fty in
+  check_mutability_fun_params env Borrowable_args.empty ctor_fty el
 
 (* Returns true if the expression is valid argument for Rx\mutable *)
 let is_valid_rx_mutable_arg env e =
@@ -319,58 +355,72 @@ let enforce_mutable_call (env : Env.env) (te : expr) =
   match snd te with
   | Call (_, (_, Id ((_, s) as id)), _, el, _)
   | Call (_, (_, Fun_id ((_, s) as id)), _, el, _)
-    when s <> SN.Rx.move && s <> SN.Rx.freeze ->
+    when String.( <> ) s SN.Rx.move && String.( <> ) s SN.Rx.freeze ->
     begin
       match Env.get_fun env (snd id) with
-      | Some fty ->
-        check_mutability_fun_params env Borrowable_args.empty fty el
-      | None -> ()
+      | Some { fe_type; _ } ->
+        check_mutability_fun_params env Borrowable_args.empty fe_type el
+      | _ -> ()
     end
   (* static methods/lambdas *)
-  | Call (_, ((_, (_, Tfun fty)), Class_const _), _, el, _)
-  | Call (_, ((_, (_, Tfun fty)), Lvar _), _, el, _) ->
-    check_mutability_fun_params env Borrowable_args.empty fty el
+  | Call (_, ((_, fun_ty), Class_const _), _, el, _)
+  | Call (_, ((_, fun_ty), Lvar _), _, el, _) ->
+    check_mutability_fun_params env Borrowable_args.empty fun_ty el
   (* $x->method() where method is mutable *)
-  | Call (_, ((pos, (r, Tfun fty)), Obj_get (expr, _, _)), _, el, _) ->
-    (* do not check receiver mutability when calling non-reactive function *)
-    if fty.ft_reactive <> Nonreactive then (
-      let fpos = Reason.to_pos r in
-      (* OwnedMutable annotation is not allowed on methods so
+  | Call (_, ((pos, fun_ty), Obj_get (expr, _, _)), _, el, _) ->
+    begin
+      match get_node fun_ty with
+      | Tfun fty ->
+        (* do not check receiver mutability when calling non-reactive function *)
+        if not (equal_reactivity fty.ft_reactive Nonreactive) then (
+          let fpos = get_pos fun_ty in
+          (* OwnedMutable annotation is not allowed on methods so
        we ignore it here since it already syntax error *)
-      begin
-        match fty.ft_mutability with
-        (* mutable-or-immutable function - ok *)
-        | Some Param_maybe_mutable -> ()
-        (* mutable call on mutable-or-immutable value - error *)
-        | Some Param_borrowed_mutable when expr_is_maybe_mutable env expr ->
-          Errors.invalid_call_on_maybe_mutable ~fun_is_mutable:true pos fpos
-        (* non-mutable call on mutable-or-immutable value - error *)
-        | None when expr_is_maybe_mutable env expr ->
-          Errors.invalid_call_on_maybe_mutable ~fun_is_mutable:false pos fpos
-        (* mutable call on immutable value - error *)
-        | Some Param_borrowed_mutable
-          when not (expr_is_valid_borrowed_arg env expr) ->
-          let rx_mutable_hint_pos =
-            if is_valid_rx_mutable_arg env expr then
-              Some (get_position expr)
-            else
-              None
-          in
-          Errors.mutable_call_on_immutable fpos pos rx_mutable_hint_pos
-        (* immutable call on mutable value - error *)
-        | None when expr_is_valid_borrowed_arg env expr ->
-          Errors.immutable_call_on_mutable fpos pos
-        (* anything else - ok *)
-        | _ -> ()
-      end;
+          begin
+            match fty.ft_mutability with
+            (* mutable-or-immutable function - ok *)
+            | Some Param_maybe_mutable -> ()
+            (* mutable call on mutable-or-immutable value - error *)
+            | Some Param_borrowed_mutable when expr_is_maybe_mutable env expr ->
+              Errors.invalid_call_on_maybe_mutable ~fun_is_mutable:true pos fpos
+            (* non-mutable call on mutable-or-immutable value - error *)
+            | None when expr_is_maybe_mutable env expr ->
+              Errors.invalid_call_on_maybe_mutable
+                ~fun_is_mutable:false
+                pos
+                fpos
+            (* mutable call on immutable value - error *)
+            | Some Param_borrowed_mutable
+              when not (expr_is_valid_borrowed_arg env expr) ->
+              let rx_mutable_hint_pos =
+                if is_valid_rx_mutable_arg env expr then
+                  Some (get_position expr)
+                else
+                  None
+              in
+              Errors.mutable_call_on_immutable fpos pos rx_mutable_hint_pos
+            (* immutable call on mutable value - error *)
+            | None when expr_is_valid_borrowed_arg env expr ->
+              Errors.immutable_call_on_mutable fpos pos
+            (* anything else - ok *)
+            | _ -> ()
+          end;
 
-      (* record mutability for the receiver *)
-      let mut_args =
-        with_mutable_value env expr ~default:Borrowable_args.empty ~f:(fun k ->
-            Borrowable_args.singleton k (get_position expr, fty.ft_mutability))
-      in
-      check_mutability_fun_params env mut_args fty el
-    )
+          (* record mutability for the receiver *)
+          let mut_args =
+            with_mutable_value
+              env
+              expr
+              ~default:Borrowable_args.empty
+              ~f:(fun k ->
+                Borrowable_args.singleton
+                  k
+                  (get_position expr, fty.ft_mutability))
+          in
+          check_mutability_fun_params env mut_args fun_ty el
+        )
+      | _ -> ()
+    end
   (* TAny, T.Calls that don't have types, etc *)
   | _ -> ()
 
@@ -449,13 +499,13 @@ let get_reactivity_from_user_attributes user_attributes =
     match attrs with
     | [] -> None
     | { ua_name = (_, n); _ } :: tl ->
-      if n = UA.uaReactive then
+      if String.equal n UA.uaReactive then
         Some (Reactive None)
-      else if n = UA.uaShallowReactive then
+      else if String.equal n UA.uaShallowReactive then
         Some (Shallow None)
-      else if n = UA.uaLocalReactive then
+      else if String.equal n UA.uaLocalReactive then
         Some (Local None)
-      else if n = UA.uaNonRx then
+      else if String.equal n UA.uaNonRx then
         Some Nonreactive
       else
         go tl
@@ -481,36 +531,36 @@ let check =
     inherit [ctx] Tast_visitor.iter_with_state as super
 
     method handle_body env ctx b =
-      if ctx.reactivity = Nonreactive then
+      if equal_reactivity ctx.reactivity Nonreactive then
         List.iter b.fb_ast (check_non_rx#on_stmt env)
       else
         match b.fb_ast with
         | [(_, If ((_, Id (_, c)), then_stmt, else_stmt))]
-          when c = SN.Rx.is_enabled ->
+          when String.equal c SN.Rx.is_enabled ->
           List.iter then_stmt (self#on_stmt (env, ctx));
           List.iter else_stmt ~f:(check_non_rx#on_stmt env)
         | _ -> List.iter b.fb_ast (self#on_stmt (env, ctx))
 
     method! on_Expr (env, ctx) e = self#on_expr (env, set_expr_statement ctx) e
 
-    method! on_Awaitall (env, ctx) (els, b) =
+    method! on_Awaitall (env, ctx) els b =
       let allow_awaitable_s = (env, allow_awaitable ctx) in
       List.iter els ~f:(fun (_, rhs) -> super#on_expr allow_awaitable_s rhs);
       self#on_block (env, ctx) b
 
     method! on_expr (env, ctx) expr =
       let check_reactivity =
-        ctx.reactivity <> Nonreactive
+        (not (equal_reactivity ctx.reactivity Nonreactive))
         && not (TypecheckerOptions.unsafe_rx (Env.get_tcopt env))
       in
       if check_reactivity then (
         let is_expr_statement = ctx.is_expr_statement in
         let ctx = set_nested_expr ctx in
         ( if not ctx.allow_awaitable then
-          match (get_type expr, expr) with
-          | ( (_, Tclass ((_, cls), _, _)),
-              (_, (Call _ | Special_func _ | Pipe _)) )
-            when cls = SN.Classes.cAwaitable ->
+          let (_env, ty) = Env.expand_type env (get_type expr) in
+          match (get_node ty, expr) with
+          | (Tclass ((_, cls), _, _), (_, (Call _ | Pipe _)))
+            when String.equal cls SN.Classes.cAwaitable ->
             Errors.non_awaited_awaitable_in_rx (get_position expr)
           | _ -> () );
         let ctx =
@@ -522,7 +572,7 @@ let check =
               | (_, Lvar (p, id)) ->
                 let mut_env = Env.get_env_mutability env in
                 begin
-                  match LMap.get id mut_env with
+                  match LMap.find_opt id mut_env with
                   | Some (_, TME.Immutable)
                   | None ->
                     ()
@@ -531,9 +581,12 @@ let check =
                   | Some (_, (TME.Borrowed | TME.Mutable)) ->
                     Errors.reassign_mutable_var ~in_collection:true p
                 end
-              | (_, This) when Env.function_is_mutable env <> None ->
+              | (_, This) when Option.is_some (Env.function_is_mutable env) ->
                 let is_maybe_mutable =
-                  Env.function_is_mutable env = Some Param_maybe_mutable
+                  Option.equal
+                    equal_param_mutability
+                    (Env.function_is_mutable env)
+                    (Some Param_maybe_mutable)
                 in
                 Errors.reassign_mutable_this
                   ~in_collection:true
@@ -569,9 +622,6 @@ let check =
         | (_, Pipe (_, l, r)) ->
           self#on_expr (env, ctx) l;
           self#on_expr (env, allow_awaitable ctx) r
-        | (_, Special_func (Genva args)) ->
-          let ctx = allow_awaitable ctx in
-          List.iter args ~f:(self#on_expr (env, ctx))
         | (_, Eif (cond, e1, e2)) ->
           self#on_expr (env, disallow_awaitable ctx) cond;
           let ctx = allow_awaitable ctx in
@@ -592,7 +642,7 @@ let check =
               let local_id = Local_id.to_string id in
               if
                 SN.Superglobals.is_superglobal local_id
-                || local_id = SN.Superglobals.globals
+                || String.equal local_id SN.Superglobals.globals
               then
                 Errors.superglobal_in_reactive_context p local_id
             | (_, Class_get _) ->
@@ -602,12 +652,15 @@ let check =
               super#on_expr (env, ctx) expr
             | (_, This) when ctx.disallow_this ->
               Errors.escaping_mutable_object (get_position e)
-            | ((_, (_, Tfun _)), Efun (f, idl))
-            | ((_, (_, Tfun _)), Lfun (f, idl)) ->
+            | ((_, fun_ty), Efun (f, idl))
+            | ((_, fun_ty), Lfun (f, idl))
+              when is_fun fun_ty ->
               List.iter idl (check_escaping_mutable env);
 
               let ctx =
-                if ctx.disallow_this || Env.function_is_mutable env <> None
+                if
+                  ctx.disallow_this
+                  || Option.is_some (Env.function_is_mutable env)
                 then
                   disallow_this ctx
                 else
@@ -635,31 +688,31 @@ let check =
 
               (* dive into subnodes *)
               super#on_expr (env, ctx) expr
-            | (_, Call (_, (_, Id (_, f)), _, el, []))
-              when f = SN.PseudoFunctions.unset ->
+            | (_, Call (_, (_, Id (_, f)), _, el, None))
+              when String.equal f SN.PseudoFunctions.unset ->
               List.iter
                 el
                 ~f:(check_assignment_or_unset_target ~is_assignment:false env);
 
               (* dive into subnodes *)
               super#on_expr (env, ctx) expr
-            | (_, Call (_, (_, Id (_, f)), _, el, [])) when f = SN.Rx.mutable_
-              ->
+            | (_, Call (_, (_, Id (_, f)), _, el, None))
+              when String.equal f SN.Rx.mutable_ ->
               check_rx_mutable_arguments (get_position expr) env el;
               super#on_expr (env, ctx) expr
-            | (_, Call (_, (_, Id (p, f)), _, _, []))
-              when f = SN.SpecialFunctions.echo ->
+            | (_, Call (_, (_, Id (p, f)), _, _, None))
+              when String.equal f SN.SpecialFunctions.echo ->
               Errors.echo_in_reactive_context p;
               super#on_expr (env, ctx) expr
             | (_, Call (_, f, _, _, _)) ->
               enforce_mutable_call env expr;
               ( if not is_expr_statement then
-                match get_type f with
-                | (_, Tfun fty) when fty.ft_returns_void_to_rx ->
-                  Errors
-                  .returns_void_to_rx_function_as_non_expression_statement
+                let (_env, fun_ty) = Env.expand_type env (get_type f) in
+                match get_node fun_ty with
+                | Tfun fty when fty.ft_returns_void_to_rx ->
+                  Errors.returns_void_to_rx_function_as_non_expression_statement
                     (get_position expr)
-                    fty.ft_pos
+                    (get_pos fun_ty)
                 | _ -> () );
               super#on_expr (env, ctx) expr
             | (_, New (_, _, el, _, (_, ctor_fty))) ->
@@ -679,12 +732,14 @@ let check_redundant_rx_condition env pos r =
   | Local (Some cond_ty)
   | Shallow (Some cond_ty) ->
     let (env, cond_ty) = Tast_env.localize_with_self env cond_ty in
-    if Tast_env.can_subtype env (Tast_env.get_self_exn env) cond_ty then
+    if Tast_env.can_subtype env (Tast_env.get_self_ty_exn env) cond_ty then
       Errors.redundant_rx_condition pos
   | _ -> ()
 
 let error_on_attr env attrs attr f =
-  let find x xs = List.find xs (fun { ua_name; _ } -> x = snd ua_name) in
+  let find x xs =
+    List.find xs (fun { ua_name; _ } -> String.equal x (snd ua_name))
+  in
   if not (TypecheckerOptions.unsafe_rx (Env.get_tcopt env)) then
     match find attr attrs with
     | Some { ua_name = (p, _); _ } -> f p
@@ -697,14 +752,6 @@ let check_has_at_most_rx_as_rxfunc_attribute env attrs =
     SN.UserAttributes.uaAtMostRxAsFunc
     Errors.atmost_rx_as_rxfunc_invalid_location
 
-let check_reference_in_rx env ctx pos param =
-  let check_reactivity =
-    ctx.reactivity <> Nonreactive
-    && not (TypecheckerOptions.unsafe_rx (Env.get_tcopt env))
-  in
-  if check_reactivity && param.param_is_reference then
-    Errors.reference_in_rx pos
-
 let handler =
   object
     inherit Tast_visitor.handler_base
@@ -715,10 +762,7 @@ let handler =
       check#handle_body env ctx f.f_body
 
     method! at_fun_ env f =
-      check_has_at_most_rx_as_rxfunc_attribute env f.f_user_attributes;
-      let ctx = new_ctx (Env.env_reactivity env) in
-      let pos = fst f.f_name in
-      List.iter f.f_params (check_reference_in_rx env ctx pos)
+      check_has_at_most_rx_as_rxfunc_attribute env f.f_user_attributes
 
     method! at_method_ env m =
       check_has_at_most_rx_as_rxfunc_attribute env m.m_user_attributes;

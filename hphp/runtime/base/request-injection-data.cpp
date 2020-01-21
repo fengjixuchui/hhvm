@@ -29,6 +29,8 @@
 #include <folly/portability/SysTime.h>
 
 #include "hphp/util/logger.h"
+#include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/file.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/rds-header.h"
@@ -36,7 +38,9 @@
 #include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/runtime/vm/debugger-hook.h"
+#include "hphp/runtime/vm/vm-regs.h"
 #include "hphp/runtime/ext/std/ext_std_file.h"
+#include "hphp/runtime/ext/asio/ext_waitable-wait-handle.h"
 
 namespace HPHP {
 
@@ -516,6 +520,12 @@ void RequestInjectionData::threadInit() {
       "zstd.compression_level",
       std::to_string(RuntimeOption::ZstdCompressionLevel).c_str(),
       &m_zstdLevel);
+  IniSetting::Bind(
+      IniSetting::CORE,
+      IniSetting::PHP_INI_ALL,
+      "zstd.checksum_rate",
+      std::to_string(RuntimeOption::ZstdChecksumRate).c_str(),
+      &m_zstdChecksumRate);
 
   // Assertions
   IniSetting::Bind(IniSetting::CORE, IniSetting::PHP_INI_ALL,
@@ -571,14 +581,19 @@ void RequestInjectionData::onSessionInit() {
 
 void RequestInjectionData::onTimeout(RequestTimer* timer) {
   if (timer == &m_timer) {
-    setFlag(TimedOutFlag);
+    triggerTimeout(TimeoutTime);
 #if !defined(__APPLE__) && !defined(_MSC_VER)
     m_timer.m_timerActive.store(false, std::memory_order_relaxed);
 #endif
   } else if (timer == &m_cpuTimer) {
-    setFlag(CPUTimedOutFlag);
+    triggerTimeout(TimeoutCPUTime);
 #if !defined(__APPLE__) && !defined(_MSC_VER)
     m_cpuTimer.m_timerActive.store(false, std::memory_order_relaxed);
+#endif
+  } else if (timer == &m_userTimeoutTimer) {
+    triggerTimeout(TimeoutSoft);
+#if !defined(__APPLE__) && !defined(_MSC_VER)
+    m_userTimeoutTimer.m_timerActive.store(false, std::memory_order_relaxed);
 #endif
   } else {
     always_assert(false && "Unknown timer fired");
@@ -593,12 +608,68 @@ void RequestInjectionData::setCPUTimeout(int seconds) {
   m_cpuTimer.setTimeout(seconds);
 }
 
+void RequestInjectionData::setUserTimeout(int seconds) {
+  if (seconds == 0) {
+    #if !defined(__APPLE__) && !defined(_MSC_VER)
+      m_userTimeoutTimer.m_timerActive.store(false, std::memory_order_relaxed);
+    #endif
+  }
+
+  m_userTimeoutTimer.setTimeout(seconds);
+}
+
+void RequestInjectionData::invokeUserTimeoutCallback(c_WaitableWaitHandle* wh) {
+  clearTimeoutFlag(TimeoutSoft);
+  if (!g_context->m_timeThresholdCallback.isNull()) {
+    VMRegAnchor _;
+    try {
+      auto args = make_vec_array(Object { wh });
+      vm_call_user_func(g_context->m_timeThresholdCallback, args);
+    } catch (Object& ex) {
+      raise_error("Uncaught exception escaping pre timeout callback: %s",
+                  ex.toString().data());
+    }
+  }
+}
+
+void RequestInjectionData::triggerTimeout(TimeoutKindFlag kind) {
+  // Add the flags. The surprise handling queries those in a certain order
+  m_timeoutFlags.fetch_or(kind);
+  setFlag(TimedOutFlag);
+}
+
+bool RequestInjectionData::checkTimeoutKind(TimeoutKindFlag kind) {
+  return m_timeoutFlags.load() & kind;
+}
+
+/*
+ * Clear the specific flag. If new timeout flags are 0, remove the surprise.
+ */
+void RequestInjectionData::clearTimeoutFlag(TimeoutKindFlag kind) {
+  if (m_timeoutFlags.fetch_and(~kind) == kind) {
+    clearFlag(TimedOutFlag);
+  }
+}
+
 int RequestInjectionData::getRemainingTime() const {
   return m_timer.getRemainingTime();
 }
 
 int RequestInjectionData::getRemainingCPUTime() const {
   return m_cpuTimer.getRemainingTime();
+}
+
+int RequestInjectionData::getUserTimeoutRemainingTime() const {
+  return m_userTimeoutTimer.getRemainingTime();
+}
+
+// Called on fatal error, PSP and hphp_invoke
+void RequestInjectionData::resetTimers(int time_sec, int cputime_sec) {
+  resetTimer(time_sec);
+  resetCPUTimer(cputime_sec);
+
+  // Keep the pre-timeout timer the same
+  resetUserTimeoutTimer(0);
 }
 
 /*
@@ -616,7 +687,7 @@ void RequestInjectionData::resetTimer(int seconds /* = 0 */) {
     if (seconds < getRemainingTime()) return;
   }
   setTimeout(seconds);
-  clearFlag(TimedOutFlag);
+  clearTimeoutFlag(TimeoutTime);
 }
 
 void RequestInjectionData::resetCPUTimer(int seconds /* = 0 */) {
@@ -628,11 +699,24 @@ void RequestInjectionData::resetCPUTimer(int seconds /* = 0 */) {
     if (seconds < getRemainingCPUTime()) return;
   }
   setCPUTimeout(seconds);
-  clearFlag(CPUTimedOutFlag);
+  clearTimeoutFlag(TimeoutCPUTime);
+}
+
+void RequestInjectionData::resetUserTimeoutTimer(int seconds /* = 0 */) {
+  if (seconds == 0) {
+    seconds = getUserTimeout();
+  } else if (seconds < 0) {
+    if (!getUserTimeout()) return;
+    seconds = -seconds;
+    if (seconds < getUserTimeoutRemainingTime()) return;
+  }
+  setUserTimeout(seconds);
+  clearTimeoutFlag(TimeoutSoft);
 }
 
 void RequestInjectionData::reset() {
   m_sflagsAndStkPtr->fetch_and(kSurpriseFlagStackMask);
+  m_timeoutFlags.fetch_and(TimeoutNone);
   m_hostOutOfMemory.store(false, std::memory_order_relaxed);
   m_OOMAbort = false;
   m_coverage = RuntimeOption::RecordCodeCoverage;

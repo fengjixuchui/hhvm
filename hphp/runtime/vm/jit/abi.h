@@ -108,6 +108,18 @@ PhysReg r_svcreq_stub();
 PhysReg r_svcreq_sf();
 PhysReg r_svcreq_arg(size_t i);
 
+/*
+ * PHP call registers (used by Call IR).
+ *
+ * - r_php_call_flags: see struct CallFlags
+ * - r_php_call_func: the func being called
+ * - r_php_call_num_args: the number of arguments being passed
+ * - r_php_call_ctx: the $this/static:class context (TCtx)
+ */
+inline PhysReg r_php_call_flags() { return rarg(0); }
+inline PhysReg r_php_call_func() { return rarg(1); }
+inline PhysReg r_php_call_num_args() { return rarg(2); }
+inline PhysReg r_php_call_ctx() { return rarg(3); }
 
 ///////////////////////////////////////////////////////////////////////////////
 // JIT and TC boundary ABI registers.
@@ -121,6 +133,12 @@ PhysReg r_svcreq_arg(size_t i);
  */
 RegSet vm_regs_with_sp();
 RegSet vm_regs_no_sp();
+
+/*
+ * Registers that need to be preserved across enterTC. Should not
+ * include rvmfp, or anything else that is "naturally" preserved.
+ */
+RegSet cross_jit_save();
 
 /*
  * Registers that are live between tracelets, in two flavors, depending whether
@@ -139,7 +157,15 @@ inline RegSet leave_trace_regs() { return vm_regs_with_sp(); }
  * Registers that are live between the caller and the callee when making a PHP
  * function call.
  */
-inline RegSet php_call_regs() { return cross_trace_regs(); }
+inline RegSet php_call_regs(bool withCtx) {
+  auto regs =
+    vm_regs_with_sp() |
+    r_php_call_flags() |
+    r_php_call_func() |
+    r_php_call_num_args();
+  if (withCtx) regs |= r_php_call_ctx();
+  return regs;
+}
 
 /*
  * Registers that are live after a PHP function return.

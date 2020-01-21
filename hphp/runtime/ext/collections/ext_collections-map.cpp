@@ -16,15 +16,6 @@ namespace HPHP {
 Class* c_Map::s_cls;
 Class* c_ImmMap::s_cls;
 
-inline
-bool invokeAndCastToBool(const CallCtx& ctx, int argc,
-                         const TypedValue* argv) {
-  auto ret = Variant::attach(
-      g_context->invokeFuncFew(ctx, argc, argv)
-  );
-  return ret.toBoolean();
-}
-
 /////////////////////////////////////////////////////////////////////////////
 // BaseMap
 
@@ -82,23 +73,14 @@ void BaseMap::addAllImpl(const Variant& iterable) {
         replaceArray(adata);
         return true;
       } else {
-        ArrayData* dict;
-        try {
-          dict = adata->toDict(adata->cowCheck());
-        } catch (Object& e) {
-          // the array contained references, can't be turned into a dict as is
-          // we'll have to proceed one element at a time, unboxing as we go
-          reserve(sz);
-          mutate();
-          return false;
-        }
+        auto dict = adata->toDict(adata->cowCheck());
         replaceArray(dict);
         if (dict != adata) dict->decRefCount();
         return true;
       }
     },
-    [this](Cell k, TypedValue v) {
-      setRaw(k, tvToCell(v));
+    [this](TypedValue k, TypedValue v) {
+      setRaw(k, v);
     },
     [this](ObjectData* coll) {
       switch (coll->collectionType()) {
@@ -252,13 +234,7 @@ Array BaseMap::toPHPArray() {
   return toPHPArrayImpl<IntishCast::None>();
 }
 
-template <bool raw>
-ALWAYS_INLINE
 void BaseMap::setImpl(int64_t k, TypedValue tv) {
-  if (!raw) {
-    mutate();
-  }
-  assertx(!isRefType(tv.m_type));
   assertx(canMutateBuffer());
   auto h = hash_int64(k);
 retry:
@@ -266,9 +242,7 @@ retry:
   assertx(MixedArray::isValidIns(p));
   if (MixedArray::isValidPos(*p)) {
     auto& e = data()[(int32_t)*p];
-    auto const old = e.data;
-    cellDup(tv, e.data);
-    tvDecRefGen(old);
+    tvMove(tv, e.data);
     return;
   }
   if (UNLIKELY(isFull())) {
@@ -276,19 +250,13 @@ retry:
     goto retry;
   }
   auto& e = allocElm(p);
-  cellDup(tv, e.data);
+  tvCopy(tv, e.data);
   e.setIntKey(k, h);
-  arrayData()->recordIntKey();
+  arrayData()->mutableKeyTypes()->recordInt();
   updateNextKI(k);
 }
 
-template <bool raw>
-ALWAYS_INLINE
 void BaseMap::setImpl(StringData* key, TypedValue tv) {
-  if (!raw) {
-    mutate();
-  }
-  assertx(!isRefType(tv.m_type));
   assertx(canMutateBuffer());
 retry:
   strhash_t h = key->hash();
@@ -296,9 +264,7 @@ retry:
   assertx(MixedArray::isValidIns(p));
   if (MixedArray::isValidPos(*p)) {
     auto& e = data()[(int32_t)*p];
-    auto const old = e.data;
-    cellDup(tv, e.data);
-    tvDecRefGen(old);
+    tvMove(tv, e.data);
     return;
   }
   if (UNLIKELY(isFull())) {
@@ -306,15 +272,39 @@ retry:
     goto retry;
   }
   auto& e = allocElm(p);
-  cellDup(tv, e.data);
+  tvCopy(tv, e.data);
   e.setStrKey(key, h);
-  arrayData()->recordStrKey(key);
+  arrayData()->mutableKeyTypes()->recordStr(key);
 }
 
-void BaseMap::setRaw(int64_t k, TypedValue val) { setImpl<true>(k, val); }
-void BaseMap::setRaw(StringData* k, TypedValue val) { setImpl<true>(k, val); }
-void BaseMap::set(int64_t k, TypedValue val) { setImpl<false>(k, val); }
-void BaseMap::set(StringData* k, TypedValue val) { setImpl<false>(k, val); }
+void BaseMap::set(int64_t k, TypedValue val) {
+  mutate();
+  tvIncRefGen(val);
+  setImpl(k, val);
+}
+void BaseMap::set(StringData* k, TypedValue val) {
+  mutate();
+  tvIncRefGen(val);
+  setImpl(k, val);
+}
+
+void BaseMap::setMove(int64_t k, TypedValue val) {
+  mutate();
+  setImpl(k, val);
+}
+void BaseMap::setMove(StringData* k, TypedValue val) {
+  mutate();
+  setImpl(k, val);
+}
+
+void BaseMap::setRaw(int64_t k, TypedValue val) {
+  tvIncRefGen(val);
+  setImpl(k, val);
+}
+void BaseMap::setRaw(StringData* k, TypedValue val) {
+  tvIncRefGen(val);
+  setImpl(k, val);
+}
 
 bool BaseMap::ToBool(const ObjectData* obj) {
   return static_cast<const BaseMap*>(obj)->toBoolImpl();
@@ -326,7 +316,6 @@ void BaseMap::OffsetSet(ObjectData* obj, const TypedValue* key,
 }
 
 bool BaseMap::OffsetIsset(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   auto map = static_cast<BaseMap*>(obj);
   TypedValue* result;
   if (key->m_type == KindOfInt64) {
@@ -337,11 +326,10 @@ bool BaseMap::OffsetIsset(ObjectData* obj, const TypedValue* key) {
     throwBadKeyType();
     result = nullptr;
   }
-  return result ? !cellIsNull(result) : false;
+  return result ? !tvIsNull(result) : false;
 }
 
 bool BaseMap::OffsetEmpty(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   auto map = static_cast<BaseMap*>(obj);
   TypedValue* result;
   if (key->m_type == KindOfInt64) {
@@ -352,11 +340,10 @@ bool BaseMap::OffsetEmpty(ObjectData* obj, const TypedValue* key) {
     throwBadKeyType();
     result = nullptr;
   }
-  return result ? !cellToBool(*result) : true;
+  return result ? !tvToBool(*result) : true;
 }
 
 bool BaseMap::OffsetContains(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   auto map = static_cast<BaseMap*>(obj);
   if (key->m_type == KindOfInt64) {
     return map->contains(key->m_data.num);
@@ -368,7 +355,6 @@ bool BaseMap::OffsetContains(ObjectData* obj, const TypedValue* key) {
 }
 
 void BaseMap::OffsetUnset(ObjectData* obj, const TypedValue* key) {
-  assertx(!isRefType(key->m_type));
   auto map = static_cast<BaseMap*>(obj);
   if (key->m_type == KindOfInt64) {
     map->remove(key->m_data.num);
@@ -426,47 +412,6 @@ BaseMap::php_differenceByKey(const Variant& it) {
   return ret;
 }
 
-template<bool useKey>
-Object BaseMap::php_retain(const Variant& callback) {
-  CallCtx ctx;
-  vm_decode_function(callback, ctx);
-  if (!ctx.func) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-               "Parameter must be a valid callback");
-  }
-  auto size = m_size;
-  if (!size) { return Object{this}; }
-  constexpr int64_t argc = useKey ? 2 : 1;
-  TypedValue argv[argc];
-  for (ssize_t pos = iter_begin(); iter_valid(pos); pos = iter_next(pos)) {
-    auto e = iter_elm(pos);
-    if (useKey) {
-      if (e->hasIntKey()) {
-        argv[0].m_type = KindOfInt64;
-        argv[0].m_data.num = e->ikey;
-      } else {
-        argv[0].m_type = KindOfString;
-        argv[0].m_data.pstr = e->skey;
-      }
-    }
-    argv[argc-1] = e->data;
-    bool b = invokeAndCastToBool(ctx, argc, argv);
-    if (b) {
-      continue;
-    }
-    mutate();
-    e = iter_elm(pos);
-    auto h = e->hash();
-    auto pp = e->hasIntKey() ? findForRemove(e->ikey, h) :
-              findForRemove(e->skey, h);
-    eraseNoCompact(pp);
-  }
-
-  assertx(m_size <= size);
-  compactOrShrinkIfDensityTooLow();
-  return Object{this};
-}
-
 template<typename TMap>
 ALWAYS_INLINE
 typename std::enable_if<
@@ -484,7 +429,7 @@ BaseMap::php_zip(const Variant& iterable) {
     if (isTombstone(i)) continue;
     const Elm& e = data()[i];
     Variant v = iter.second();
-    auto pair = req::make<c_Pair>(e.data, *v.toCell());
+    auto pair = req::make<c_Pair>(e.data, *v.asTypedValue());
     auto const tv = make_tv<KindOfObject>(pair.get());
     if (e.hasIntKey()) {
       map->setRaw(e.ikey, tv);
@@ -522,7 +467,8 @@ BaseMap::php_take(const Variant& n) {
   map->reserve(sz);
   map->setSize(sz);
   map->setPosLimit(sz);
-  map->arrayData()->copyKeyTypes(*arrayData(), /*compact=*/true);
+  map->arrayData()->mutableKeyTypes()->copyFrom(
+    arrayData()->keyTypes(), /*compact=*/true);
   auto table = map->hashTab();
   auto mask = map->tableMask();
   for (uint32_t frPos = 0, toPos = 0; toPos < sz; ++toPos, ++frPos) {
@@ -565,7 +511,8 @@ BaseMap::php_skip(const Variant& n) {
   map->reserve(sz);
   map->setSize(sz);
   map->setPosLimit(sz);
-  map->arrayData()->copyKeyTypes(*arrayData(), /*compact=*/true);
+  map->arrayData()->mutableKeyTypes()->copyFrom(
+    arrayData()->keyTypes(), /*compact=*/true);
   uint32_t frPos = nthElmPos(len);
   auto table = map->hashTab();
   auto mask = map->tableMask();
@@ -578,40 +525,6 @@ BaseMap::php_skip(const Variant& n) {
       map->updateNextKI(toE.ikey);
     } else {
       assertx(toE.hasStrKey());
-    }
-  }
-  return Object{std::move(map)};
-}
-
-template<class TMap>
-ALWAYS_INLINE
-typename std::enable_if<
-  std::is_base_of<BaseMap, TMap>::value, Object>::type
-BaseMap::php_skipWhile(const Variant& fn) {
-  CallCtx ctx;
-  vm_decode_function(fn, ctx);
-  if (!ctx.func) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-               "Parameter must be a valid callback");
-  }
-  auto map = req::make<TMap>();
-  if (!m_size) return Object{std::move(map)};
-  ssize_t pos;
-  for (pos = iter_begin(); iter_valid(pos); pos = iter_next(pos)) {
-    auto e = iter_elm(pos);
-    bool b = invokeAndCastToBool(ctx, 1, &e->data);
-    if (!b) break;
-  }
-  if (iter_valid(pos)) {
-    auto eLimit = elmLimit();
-    auto e = iter_elm(pos);
-    for (; e != eLimit; e = nextElm(e, eLimit)) {
-      if (e->hasIntKey()) {
-        map->set(e->ikey, e->data);
-      } else {
-        assertx(e->hasStrKey());
-        map->set(e->skey, e->data);
-      }
     }
   }
   return Object{std::move(map)};
@@ -638,7 +551,8 @@ BaseMap::php_slice(const Variant& start, const Variant& len) {
   map->reserve(sz);
   map->setSize(sz);
   map->setPosLimit(sz);
-  map->arrayData()->copyKeyTypes(*arrayData(), /*compact=*/true);
+  map->arrayData()->mutableKeyTypes()->copyFrom(
+    arrayData()->keyTypes(), /*compact=*/true);
   uint32_t frPos = nthElmPos(skipAmt);
   auto table = map->hashTab();
   auto mask = map->tableMask();
@@ -673,7 +587,7 @@ BaseMap::php_concat(const Variant& iterable) {
     if (isTombstone(i)) {
       continue;
     }
-    cellDup(data()[i].data, vec->dataAt(j));
+    tvDup(data()[i].data, vec->dataAt(j));
     ++j;
   }
   for (; iter; ++iter) {
@@ -696,7 +610,7 @@ BaseMap::FromItems(const Class*, const Variant& iterable) {
   target->reserve(sz);
   for (; iter; ++iter) {
     Variant v = iter.second();
-    TypedValue* tv = v.toCell();
+    TypedValue* tv = v.asTypedValue();
     if (UNLIKELY(tv->m_type != KindOfObject ||
                  tv->m_data.pobj->getVMClass() != c_Pair::classof())) {
       SystemLib::throwInvalidArgumentExceptionObject(
@@ -723,7 +637,7 @@ BaseMap::FromArray(const Class*, const Variant& arr) {
   for (ssize_t pos = ad->iter_begin(), limit = ad->iter_end(); pos != limit;
        pos = ad->iter_advance(pos)) {
     Variant k = ad->getKey(pos);
-    auto const tv = tvToCell(ad->atPos(pos));
+    auto const tv = ad->atPos(pos);
     if (k.isInteger()) {
       map->setRaw(k.toInt64(), tv);
     } else {
@@ -848,7 +762,6 @@ void CollectionsExtension::initMap() {
   TMPL_ME(differenceByKey, Map);
   TMPL_ME(slice,           Map);
   TMPL_ME(skip,            Map);
-  TMPL_ME(skipWhile,       Map);
   TMPL_ME(take,            Map);
   TMPL_ME(zip,             Map);
   TMPL_ME(keys,            Vector);
@@ -881,8 +794,6 @@ void CollectionsExtension::initMap() {
   HHVM_NAMED_ME(HH\\Map, reserve,       &c_Map::php_reserve);
 
   HHVM_NAMED_ME(HH\\Map, toImmMap,      &c_Map::getImmutableCopy);
-  HHVM_NAMED_ME(HH\\Map, retain,        &c_Map::php_retain<false>);
-  HHVM_NAMED_ME(HH\\Map, retainWithKey, &c_Map::php_retain<true>);
 
   loadSystemlib("collections-map");
 

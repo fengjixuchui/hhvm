@@ -4,12 +4,15 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use crate::parser_env::ParserEnv;
-use crate::syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
-use parser_core_types::lexable_token::LexableToken;
-use parser_core_types::source_text::SourceText;
-use parser_core_types::syntax::*;
-use parser_core_types::token_kind::TokenKind;
+mod decl_mode_smart_constructors_generated;
+
+use ocaml::core::mlvalues::Value;
+use parser_core_types::{
+    lexable_token::LexableToken, parser_env::ParserEnv, source_text::SourceText, syntax::*,
+    token_kind::TokenKind,
+};
+use rust_to_ocaml::{SerializationContext, ToOcaml};
+use syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
 
 pub struct State<'src, S> {
     source: SourceText<'src>,
@@ -208,7 +211,7 @@ where
         SyntaxVariant::CompoundStatement(children) => {
             let stmts = if saw_yield {
                 let token = Token::make(TokenKind::Yield, &st.source, 0, 0, vec![], vec![]);
-                let yield_ = Syntax::<Token, Value>::make_token(st, token);
+                let yield_ = Syntax::<Token, Value>::make_token(token);
                 Syntax::make_list(st, vec![yield_], 0)
             } else {
                 Syntax::make_missing(st, 0)
@@ -221,5 +224,11 @@ where
             )
         }
         _ => body,
+    }
+}
+
+impl<S> ToOcaml for State<'_, S> {
+    unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
+        self.stack().to_ocaml(context)
     }
 }

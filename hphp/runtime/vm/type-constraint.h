@@ -51,12 +51,6 @@ struct TypeConstraint {
     Nullable = 0x1,
 
     /*
-     * This flag indicates either EnableHipHopSyntax was true, or the
-     * type came from a <?hh file and EnableHipHopSyntax was false.
-     */
-    HHType = 0x2,
-
-    /*
      * Extended hints are hints that do not apply to normal, vanilla
      * php.  For example "?Foo".
      */
@@ -108,6 +102,11 @@ struct TypeConstraint {
      * type-constraints even when resolved.
      */
     DisplayNullable = 0x100,
+
+    /*
+     * Indicates that a type-constraint came from an upper-bound constraint.
+     */
+    UpperBound = 0x200,
   };
 
   /*
@@ -233,11 +232,11 @@ struct TypeConstraint {
    */
   bool isNullable() const { return m_flags & Nullable; }
   bool isSoft()     const { return m_flags & Soft; }
-  bool isHHType()   const { return m_flags & HHType; }
   bool isExtended() const { return m_flags & ExtendedHint; }
   bool isTypeVar()  const { return m_flags & TypeVar; }
   bool isTypeConstant() const { return m_flags & TypeConstant; }
   bool isResolved() const { return m_flags & Resolved; }
+  bool isUpperBound() const { return m_flags & UpperBound; }
   bool couldSeeMockObject() const { return !(m_flags & NoMockObjects); }
 
   bool isPrecise()  const { return metaType() == MetaType::Precise; }
@@ -337,7 +336,7 @@ struct TypeConstraint {
    * the initial value is chosen to satisfy the type-constraint, but this isn't
    * always possible (for example, for objects).
    */
-  Cell defaultValue() const {
+  TypedValue defaultValue() const {
     // Nullable type-constraints should always default to null, as Hack
     // guarantees this.
     if (!isCheckable() || isNullable()) return make_tv<KindOfNull>();
@@ -519,7 +518,7 @@ enum class MemoKeyConstraint {
 };
 MemoKeyConstraint memoKeyConstraintFromTC(const TypeConstraint&);
 
-std::string describe_actual_type(tv_rval val, bool isHHType);
+std::string describe_actual_type(tv_rval val);
 
 bool tcCouldBeReified(const Func*, uint32_t);
 

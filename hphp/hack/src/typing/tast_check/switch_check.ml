@@ -7,25 +7,23 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Typing_defs
 open Utils
 module Env = Tast_env
+module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 module MakeType = Typing_make_type
 
 let get_constant tc (seen, has_default) = function
   | Default _ -> (seen, true)
   | Case (((pos, _), Class_const ((_, CI (_, cls)), (_, const))), _) ->
-    if cls <> Cls.name tc then (
-      Errors.enum_switch_wrong_class
-        pos
-        (strip_ns (Cls.name tc))
-        (strip_ns cls);
+    if String.( <> ) cls (Cls.name tc) then (
+      Errors.enum_switch_wrong_class pos (strip_ns (Cls.name tc)) (strip_ns cls);
       (seen, has_default)
     ) else (
-      match SMap.get const seen with
+      match SMap.find_opt const seen with
       | None -> (SMap.add const pos seen, has_default)
       | Some old_pos ->
         Errors.enum_switch_redundant const old_pos pos;
@@ -44,7 +42,7 @@ let check_enum_exhaustiveness pos tc caselist coming_from_unresolved =
   let unhandled =
     Cls.consts tc
     |> Sequence.map ~f:fst
-    |> Sequence.filter ~f:(( <> ) SN.Members.mClass)
+    |> Sequence.filter ~f:(fun id -> String.( <> ) id SN.Members.mClass)
     |> Sequence.filter ~f:(fun id -> not (SMap.mem id seen))
     |> Sequence.to_list_rev
   in
@@ -52,8 +50,7 @@ let check_enum_exhaustiveness pos tc caselist coming_from_unresolved =
   match (all_cases_handled, has_default, coming_from_unresolved) with
   | (false, false, _) ->
     Errors.enum_switch_nonexhaustive pos unhandled (Cls.pos tc)
-  | (true, true, false) ->
-    Errors.enum_switch_redundant_default pos (Cls.pos tc)
+  | (true, true, false) -> Errors.enum_switch_redundant_default pos (Cls.pos tc)
   | _ -> ()
 
 let rec check_exhaustiveness_ env pos ty caselist enum_coming_from_unresolved =
@@ -61,16 +58,16 @@ let rec check_exhaustiveness_ env pos ty caselist enum_coming_from_unresolved =
   (* This function has a built in hack where if Tunion has an enum
      inside then it tells the enum exhaustiveness checker to
      not punish for extra default *)
-  let (env, (_, ty)) = Env.expand_type env ty in
-  match ty with
+  let (env, ty) = Env.expand_type env ty in
+  match get_node ty with
   | Tunion tyl ->
     let new_enum =
       enum_coming_from_unresolved
       || List.length tyl > 1
          && List.exists tyl ~f:(fun cur_ty ->
-                let (_, (_, cur_ty)) = Env.expand_type env cur_ty in
-                match cur_ty with
-                | Tabstract (AKnewtype (cid, _), _) -> Env.is_enum env cid
+                let (_, cur_ty) = Env.expand_type env cur_ty in
+                match get_node cur_ty with
+                | Tnewtype (cid, _, _) -> Env.is_enum env cid
                 | _ -> false)
     in
     List.fold_left tyl ~init:env ~f:(fun env ty ->
@@ -85,7 +82,7 @@ let rec check_exhaustiveness_ env pos ty caselist enum_coming_from_unresolved =
                caselist
                enum_coming_from_unresolved,
              () ))
-  | Tabstract (AKnewtype (id, _), _) when Env.is_enum env id ->
+  | Tnewtype (id, _, _) when Env.is_enum env id ->
     let dep = Typing_deps.Dep.AllMembers id in
     let decl_env = Env.get_decl_env env in
     Option.iter decl_env.Decl_env.droot (fun root ->
@@ -94,7 +91,7 @@ let rec check_exhaustiveness_ env pos ty caselist enum_coming_from_unresolved =
     check_enum_exhaustiveness pos tc caselist enum_coming_from_unresolved;
     env
   | Tpu _
-  | Tpu_access _ ->
+  | Tpu_type_access _ ->
     (* TODO(T36532263)
      * we can implement exhaustiveness check here if need be *)
     env
@@ -107,13 +104,14 @@ let rec check_exhaustiveness_ env pos ty caselist enum_coming_from_unresolved =
   | Tprim _
   | Tvar _
   | Tfun _
-  | Tabstract (_, _)
+  | Tgeneric _
+  | Tnewtype _
+  | Tdependent _
   | Ttuple _
   | Tanon (_, _)
   | Tobject
   | Tshape _
-  | Tdynamic
-  | Tdestructure _ ->
+  | Tdynamic ->
     env
 
 let check_exhaustiveness env pos ty caselist =
@@ -121,8 +119,8 @@ let check_exhaustiveness env pos ty caselist =
 
 let ensure_valid_switch_case_value_types env scrutinee_ty casel errorf =
   let is_subtype ty_sub ty_super = Env.can_subtype env ty_sub ty_super in
-  let ty_num = (Reason.Rnone, Tprim Tnum) in
-  let ty_arraykey = (Reason.Rnone, Tprim Tarraykey) in
+  let ty_num = MakeType.num Reason.Rnone in
+  let ty_arraykey = MakeType.arraykey Reason.Rnone in
   let ty_mixed = MakeType.mixed Reason.Rnone in
   let ty_traversable = MakeType.traversable Typing_reason.Rnone ty_mixed in
   let compatible_types ty1 ty2 =

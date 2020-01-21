@@ -7,8 +7,8 @@
  *
  *)
 
-type 'a deserializer = string -> 'a
 (** Deserializes the byte sequence. *)
+type 'a deserializer = string -> 'a
 
 module Types = struct
   type error_mode =
@@ -21,7 +21,8 @@ module Types = struct
         stderr: string;
       }
     | Process_aborted
-    | Transformer_raised of exn * Utils.callstack
+    | Continuation_raised of Exception.t
+    | Transformer_raised of Exception.t
 
   type error = Process_types.invocation_info * error_mode
 
@@ -71,6 +72,8 @@ module type S = sig
 
   (* Just wrap a value inside a future. *)
   val of_value : 'a -> 'a t
+
+  val of_error : string -> 'a t
 
   (* Like of_value, except returns false "delays" number of times of
    * calling is_ready on it before returning true. *)

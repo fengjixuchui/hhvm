@@ -4,6 +4,9 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
+use ocamlrep::ptr::UnsafeOcamlPtr;
+use ocamlrep::rc::RcOc;
+use ocamlrep::OcamlRep;
 use oxidized::relative_path::RelativePath;
 use std::rc::Rc;
 
@@ -20,32 +23,40 @@ struct SourceTextImpl<'a> {
     // with compiler trying to guide us towards unicode semantics.
     text: &'a [u8],
 
-    file_path: RelativePath,
+    file_path: RcOc<RelativePath>,
 
-    ocaml_source_text: usize,
+    ocaml_source_text: Option<UnsafeOcamlPtr>,
 }
 #[derive(Debug, Clone)]
 pub struct SourceText<'a>(Rc<SourceTextImpl<'a>>);
 
 impl<'a> SourceText<'a> {
-    pub fn make(file_path: &RelativePath, text: &'a [u8]) -> Self {
+    pub fn make(file_path: RcOc<RelativePath>, text: &'a [u8]) -> Self {
         Self::make_with_raw(file_path, text, 0)
     }
 
     pub fn make_with_raw(
-        file_path: &RelativePath,
+        file_path: RcOc<RelativePath>,
         text: &'a [u8],
         ocaml_source_text: usize,
     ) -> Self {
         Self(Rc::new(SourceTextImpl {
-            file_path: file_path.clone(),
+            file_path,
             text,
-            ocaml_source_text,
+            ocaml_source_text: if ocaml_source_text == 0 {
+                None
+            } else {
+                unsafe { Some(UnsafeOcamlPtr::new(ocaml_source_text)) }
+            },
         }))
     }
 
     pub fn file_path(&self) -> &RelativePath {
-        &self.0.file_path
+        self.0.file_path.as_ref()
+    }
+
+    pub fn file_path_rc(&self) -> RcOc<RelativePath> {
+        RcOc::clone(&self.0.file_path)
     }
 
     pub fn text(&self) -> &'a [u8] {
@@ -56,7 +67,7 @@ impl<'a> SourceText<'a> {
         self.text().len()
     }
 
-    pub fn ocaml_source_text(&self) -> usize {
+    pub fn ocaml_source_text(&self) -> Option<UnsafeOcamlPtr> {
         self.0.ocaml_source_text
     }
 
@@ -81,5 +92,37 @@ impl<'a> SourceText<'a> {
 
     pub fn sub_as_str(&self, start: usize, length: usize) -> &'a str {
         unsafe { std::str::from_utf8_unchecked(self.sub(start, length)) }
+    }
+}
+
+impl<'content> OcamlRep for SourceText<'content> {
+    fn to_ocamlrep<'a, A: ocamlrep::Allocator<'a>>(&self, alloc: &A) -> ocamlrep::Value<'a> {
+        // A SourceText with no associated ocaml_source_text cannot be converted
+        // to OCaml yet (we'd need to construct the OffsetMap). We still
+        // construct some in test cases, so just panic upon attempts to convert.
+        alloc.add(&self.0.ocaml_source_text.unwrap())
+    }
+
+    fn from_ocamlrep(value: ocamlrep::Value<'_>) -> Result<Self, ocamlrep::FromError> {
+        let block = ocamlrep::from::expect_tuple(value, 4)?;
+        let file_path: RcOc<RelativePath> = ocamlrep::from::field(block, 0)?;
+        // Unsafely transmute away the lifetime of `value` and allow the caller
+        // to choose the lifetime. This is no more unsafe than what we already
+        // do by storing the ocaml_source_text pointer--if the OCaml source text
+        // is collected, our text field and ocaml_source_text field will both be
+        // invalid. The caller must take care not to let the OCaml source text
+        // be collected while a Rust SourceText exists.
+        let text: &'content [u8] = unsafe {
+            std::mem::transmute(
+                ocamlrep::bytes_from_ocamlrep(block[2])
+                    .map_err(|e| ocamlrep::FromError::ErrorInField(2, Box::new(e)))?,
+            )
+        };
+        let ocaml_source_text = Some(UnsafeOcamlPtr::from_ocamlrep(value)?);
+        Ok(Self(Rc::new(SourceTextImpl {
+            file_path,
+            text,
+            ocaml_source_text,
+        })))
     }
 }

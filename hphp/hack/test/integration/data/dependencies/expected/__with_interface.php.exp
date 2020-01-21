@@ -2,15 +2,11 @@
 function with_interface(DerivedInterface $arg): void {
   $arg->routine();
 }
-interface DerivedInterface extends BaseInterface {
-
+interface DerivedInterface extends \BaseInterface {
   public function routine(): void;
 }
-interface BaseInterface {
-
+interface BaseInterface {}
+<<__Rx>>
+function extract_standalone_make_default(): nothing {
+  throw new \Exception();
 }
-function extract_standalone_make_default<T>(): T {
-  throw new Exception();
-}
-
-

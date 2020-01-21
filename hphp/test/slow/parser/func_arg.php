@@ -7,3 +7,4 @@ class A {
   public function take_int(int $a = A::get_int()): void{}
 
 }
+

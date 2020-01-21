@@ -23,7 +23,7 @@ struct SetIterator;
  * any PHP-land class. That job is delegated to its c_-prefixed child classes.
  */
 struct BaseSet : HashCollection {
-  void addAllKeysOf(Cell container);
+  void addAllKeysOf(TypedValue container);
   void addAll(const Variant& t);
 
   void init(const Variant& t) {
@@ -37,8 +37,7 @@ protected:
 
   void addRaw(int64_t k);
   void addRaw(StringData* k);
-  void addRaw(Cell tv) {
-    assertx(!isRefType(tv.m_type));
+  void addRaw(TypedValue tv) {
     if (tv.m_type == KindOfInt64) {
       addRaw(tv.m_data.num);
     } else if (isStringType(tv.m_type)) {
@@ -47,7 +46,7 @@ protected:
       throwBadValueType();
     }
   }
-  void addRaw(const Variant& v) { addRaw(*v.toCell()); }
+  void addRaw(const Variant& v) { addRaw(*v.asTypedValue()); }
 
 public:
   /*
@@ -55,8 +54,7 @@ public:
    */
   void add(int64_t k);
   void add(StringData* k);
-  void add(Cell tv) {
-    assertx(!isRefType(tv.m_type));
+  void add(TypedValue tv) {
     if (tv.m_type == KindOfInt64) {
       add(tv.m_data.num);
     } else if (isStringType(tv.m_type)) {
@@ -65,7 +63,7 @@ public:
       throwBadValueType();
     }
   }
-  void add(const Variant& v) { add(*v.toCell()); }
+  void add(const Variant& v) { add(*v.asTypedValue()); }
 
   /*
    * Prepend an element to the Set, increffing it if it's refcounted.
@@ -106,7 +104,6 @@ public:
 
   template <bool throwOnMiss>
   static TypedValue* OffsetAt(ObjectData* obj, const TypedValue* key) {
-    assertx(!isRefType(key->m_type));
     auto set = static_cast<BaseSet*>(obj);
     ssize_t p;
     if (key->m_type == KindOfInt64) {
@@ -144,19 +141,6 @@ protected:
     return Object{std::move(vec)};
   }
 
-  template<class TSet, bool useKey>
-  typename std::enable_if<
-    std::is_base_of<BaseSet, TSet>::value, Object>::type
-  php_map(const Variant& callback);
-
-  template<class TSet, bool useKey>
-  typename std::enable_if<
-    std::is_base_of<BaseSet, TSet>::value, Object>::type
-  php_filter(const Variant& callback);
-
-  template<bool useKey>
-  Object php_retain(const Variant& callback);
-
   template<class TSet>
   typename std::enable_if<
     std::is_base_of<BaseSet, TSet>::value, Object>::type
@@ -170,17 +154,7 @@ protected:
   template<class TSet>
   typename std::enable_if<
     std::is_base_of<BaseSet, TSet>::value, Object>::type
-  php_takeWhile(const Variant& fn);
-
-  template<class TSet>
-  typename std::enable_if<
-    std::is_base_of<BaseSet, TSet>::value, Object>::type
   php_skip(const Variant& n);
-
-  template<class TSet>
-  typename std::enable_if<
-    std::is_base_of<BaseSet, TSet>::value, Object>::type
-  php_skipWhile(const Variant& fn);
 
   template<class TSet>
   typename std::enable_if<
@@ -208,7 +182,7 @@ protected:
     if (container.isNull()) {
       return Object(req::make<TSet>());
     }
-    const auto& cellContainer = container_as_cell(container);
+    auto const& cellContainer = container_as_tv(container);
     auto target = req::make<TSet>();
     target->addAllKeysOf(cellContainer);
     return Object(std::move(target));
@@ -229,7 +203,7 @@ protected:
     ssize_t pos_limit = ad->iter_end();
     for (ssize_t pos = ad->iter_begin(); pos != pos_limit;
          pos = ad->iter_advance(pos)) {
-      set->addRaw(tvToCell(ad->atPos(pos)));
+      set->addRaw(ad->atPos(pos));
     }
     set->shrinkIfCapacityTooHigh(oldCap); // ... and shrink if we were wrong
     return Object(std::move(set));
@@ -306,7 +280,7 @@ struct c_Set : BaseSet {
   }
   Object php_addAllKeysOf(const Variant& container) {
     if (!container.isNull()) {
-      const auto& containerCell = container_as_cell(container);
+      auto const& containerCell = container_as_tv(container);
       addAllKeysOf(containerCell);
     }
     return Object{this};

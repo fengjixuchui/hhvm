@@ -56,13 +56,14 @@ struct Repo::GlobalData {
   int32_t CheckPropTypeHints = 0;
 
   /*
-   * Indicates whether a repo was compiled assumming that `this` types will be
-   * verified by Verify*Type instructions at runtime.
+   * Indicates whether a repo was compiled assumming that UpperBound type-hints
+   * will be verified by VerifyParamType and VerifyReturnType instructions
+   * at runtime.
    *
    * This changes program behavior because this type hints that are checked
    * at runtime will enable additional HHBBC optimizations.
    */
-  int32_t ThisTypeHintLevel = 0;
+  int32_t EnforceGenericsUB = 0;
 
   /*
    * Indicates whether a repo was compiled with HardPrivatePropInference.
@@ -155,12 +156,6 @@ struct Repo::GlobalData {
   bool NoticeOnBuiltinDynamicCalls = false;
 
   /*
-   * Should we enforce that reffiness annotations are invaraint in overridden
-   * methods?
-   */
-  uint32_t ReffinessInvariance = 0;
-
-  /*
    * Should HHBBC do build time verification?
    */
   bool AbortBuildOnVerifyError = false;
@@ -196,12 +191,12 @@ struct Repo::GlobalData {
 
   std::vector<const StringData*> APCProfile;
 
-  std::vector<std::pair<std::string,Cell>> ConstantFunctions;
+  std::vector<std::pair<std::string,TypedValue>> ConstantFunctions;
 
   template<class SerDe> void serde(SerDe& sd) {
     sd(InitialNamedEntityTableSize)
       (InitialStaticStringTableSize)
-      (ThisTypeHintLevel)
+      (EnforceGenericsUB)
       (HardReturnTypeHints)
       (CheckPropTypeHints)
       (HardPrivatePropInference)
@@ -219,7 +214,6 @@ struct Repo::GlobalData {
       (HackArrCompatSerializeNotices)
       (HackArrDVArrs)
       (EnableIntrinsicsExtension)
-      (ReffinessInvariance)
       (ForbidDynamicCallsToFunc)
       (ForbidDynamicCallsToClsMeth)
       (ForbidDynamicCallsToInstMeth)

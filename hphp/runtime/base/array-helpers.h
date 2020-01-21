@@ -23,41 +23,39 @@
 
 namespace HPHP {
 
+// TODO(#3888164): These helpers only exist because we might try to set an
+// Uninit value in an array. We should restructure code-gen to guard against
+// this possibility so we can eliminate these checks.
+
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
  * Initialize a new array element.
  */
-ALWAYS_INLINE void initElem(TypedValue& elem, Cell v) {
-  cellDup(v, elem);
-  if (UNLIKELY(elem.m_type == KindOfUninit)) {
+ALWAYS_INLINE void initElem(TypedValue& elem, TypedValue v, bool move = false) {
+  if (UNLIKELY(v.m_type == KindOfUninit)) {
     elem.m_type = KindOfNull;
+  } else if (move) {
+    tvCopy(v, elem);
+  } else {
+    tvDup(v, elem);
   }
 }
 
 /*
- * Modify an array element, with semantics like those in tv-mutate.h.
- *
- * These functions all promote uninit null values to init null values, except
- * for setElemWithRef() which asserts that `v' is init instead.
+ * Modify an array element, with semantics like those in tv-mutate.h
+ * (i.e. promote uninit null values to init null values).
  */
 template<typename C> ALWAYS_INLINE
-enable_if_lval_t<C&&, void> setElemNoRef(C&& elem, Cell v) {
+enable_if_lval_t<C&&, void> setElem(C&& elem, TypedValue v, bool move = false) {
   if (UNLIKELY(v.m_type == KindOfUninit)) {
     v.m_type = KindOfNull;
   }
-  cellSet(v, elem);
-}
-
-template<typename C> ALWAYS_INLINE
-enable_if_lval_t<C&&, void> setElem(C&& elem, Cell v) {
-  setElemNoRef(tvToCell(elem), v);
-}
-
-template<typename C> ALWAYS_INLINE
-enable_if_lval_t<C&&, void> setElemWithRef(C&& elem, TypedValue v) {
-  assertx(LIKELY(v.m_type != KindOfUninit));
-  tvSetWithRef(v, elem);
+  if (move) {
+    tvMove(v, elem);
+  } else {
+    tvSet(v, elem);
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

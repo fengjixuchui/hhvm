@@ -16,9 +16,10 @@
 */
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/ext/extension.h"
-#include "hphp/runtime/base/externals.h"
+#include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/enum-cache.h"
 #include "hphp/runtime/base/enum-util.h"
+#include "hphp/runtime/base/type-variant.h"
 
 namespace HPHP {
 
@@ -30,13 +31,17 @@ static Array HHVM_STATIC_METHOD(BuiltinEnum, getValues) {
   return values->values;
 }
 
-const StaticString s_overlappingErrorMessage("Enum has overlapping values");
+const StaticString
+  s_invariant_violation("HH\\invariant_violation"),
+  s_overlappingErrorMessage("Enum has overlapping values");
 
 static Array HHVM_STATIC_METHOD(BuiltinEnum, getNames) {
   const EnumValues* values = EnumCache::getValuesBuiltin(self_);
   if (values->names.size() != values->values.size()) {
-    invoke("\\HH\\invariant_violation",
-           make_vec_array(s_overlappingErrorMessage));
+    vm_call_user_func(
+      Unit::lookupFunc(s_invariant_violation.get()),
+      make_vec_array(s_overlappingErrorMessage)
+    );
   }
 
   assertx(values->names.isDictOrDArray());
@@ -44,12 +49,12 @@ static Array HHVM_STATIC_METHOD(BuiltinEnum, getNames) {
 }
 
 static bool HHVM_STATIC_METHOD(BuiltinEnum, isValid, const Variant &value) {
-  return enumHasValue(self_, value.toCell());
+  return enumHasValue(self_, value.asTypedValue());
 }
 
 static Variant HHVM_STATIC_METHOD(BuiltinEnum, coerce, const Variant &value) {
   if (UNLIKELY(!value.isInteger() && !value.isString())) {
-    return Variant(Variant::NullInit{});
+    return init_null();
   }
 
   auto res = value;
@@ -65,7 +70,7 @@ static Variant HHVM_STATIC_METHOD(BuiltinEnum, coerce, const Variant &value) {
 
   auto values = EnumCache::getValuesBuiltin(self_);
   if (!values->names.exists(res)) {
-    res = Variant(Variant::NullInit{});
+    res = init_null();
   } else if (auto base = self_->enumBaseTy()) {
     if (isStringType(*base) && res.isInteger()) {
       res = Variant(res.toString());

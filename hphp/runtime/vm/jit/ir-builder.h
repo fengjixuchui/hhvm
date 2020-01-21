@@ -120,16 +120,6 @@ struct IRBuilder {
   SSATmp* valueOf(Location l, GuardConstraint gc);
   Type     typeOf(Location l, GuardConstraint gc);
 
-  /*
-   * Helper for unboxing predicted types.
-   *
-   * @returns: ldRefReturn(fs().predictedTypeOf(location).unbox())
-   */
-  Type predictedInnerType(Location l) const;
-  Type predictedLocalInnerType(uint32_t id) const;
-  Type predictedStackInnerType(IRSPRelOffset) const;
-  Type predictedMBaseInnerType() const;
-
   /////////////////////////////////////////////////////////////////////////////
   /*
    * Guard relaxation.
@@ -307,9 +297,6 @@ private:
   SSATmp* preOptimizeCheckLoc(IRInstruction*);
   SSATmp* preOptimizeCheckStk(IRInstruction*);
   SSATmp* preOptimizeCheckMBase(IRInstruction*);
-  SSATmp* preOptimizeHintInner(IRInstruction*, Location);
-  SSATmp* preOptimizeHintLocInner(IRInstruction*);
-  SSATmp* preOptimizeHintMBaseInner(IRInstruction*);
   SSATmp* preOptimizeAssertTypeOp(IRInstruction* inst,
                                   Type oldType,
                                   SSATmp* oldVal,
@@ -318,18 +305,17 @@ private:
   SSATmp* preOptimizeAssertLocation(IRInstruction*, Location);
   SSATmp* preOptimizeAssertLoc(IRInstruction*);
   SSATmp* preOptimizeAssertStk(IRInstruction*);
-  SSATmp* preOptimizeCheckCtxThis(IRInstruction*);
-  SSATmp* preOptimizeLdCtxHelper(IRInstruction*);
-  SSATmp* preOptimizeLdCtx(IRInstruction* i) {
-    return preOptimizeLdCtxHelper(i);
-  }
-  SSATmp* preOptimizeLdCctx(IRInstruction* i) {
-    return preOptimizeLdCtxHelper(i);
-  }
   SSATmp* preOptimizeLdLocation(IRInstruction*, Location);
   SSATmp* preOptimizeLdLoc(IRInstruction*);
   SSATmp* preOptimizeLdStk(IRInstruction*);
   SSATmp* preOptimizeLdMBase(IRInstruction*);
+  SSATmp* preOptimizeLdClosureCtx(IRInstruction*);
+  SSATmp* preOptimizeLdClosureThis(IRInstruction*);
+  SSATmp* preOptimizeLdClosureCls(IRInstruction*);
+  SSATmp* preOptimizeLdFrameCtx(IRInstruction*);
+  SSATmp* preOptimizeLdFrameThis(IRInstruction*);
+  SSATmp* preOptimizeLdFrameCls(IRInstruction*);
+  SSATmp* preOptimizeLdObjClass(IRInstruction*);
   SSATmp* preOptimize(IRInstruction*);
 
   void appendInstruction(IRInstruction* inst);

@@ -54,15 +54,10 @@ inline ControlFlowInfo opcodeControlFlowInfo(const Op op, bool inlining) {
     case Op::RetCSuspended:
     case Op::Exit:
     case Op::Fatal:
-    case Op::IterNext:
-    case Op::IterNextK:
-    case Op::LIterNext:
-    case Op::LIterNextK:
-    case Op::IterInit: // May branch to fail case.
-    case Op::IterInitK: // Ditto
+    case Op::IterInit:  // May branch to fail case.
     case Op::LIterInit: // Ditto
-    case Op::LIterInitK: // Ditto
-    case Op::IterBreak:
+    case Op::IterNext:  // Ditto
+    case Op::LIterNext: // Ditto
     case Op::Throw:
     case Op::Eval:
     case Op::NativeImpl:
@@ -116,7 +111,6 @@ inline bool opcodeBreaksBB(const Op op, bool inlining) {
 
 inline bool opcodeIgnoresInnerType(const Op op) {
   switch (op) {
-    case Op::PopV:
     case Op::RetC:
     case Op::RetCSuspended:
     case Op::RetM:
@@ -133,7 +127,6 @@ inline std::string InputInfo::pretty() const {
   std::string p = show(loc);
   if (dontBreak) p += ":dc";
   if (dontGuard) p += ":dg";
-  if (dontGuardInner) p += ":dgi";
   return p;
 }
 

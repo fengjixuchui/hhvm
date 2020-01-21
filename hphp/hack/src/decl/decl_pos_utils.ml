@@ -7,8 +7,9 @@
 *
 *)
 
-open Core_kernel
+open Hh_prelude
 open Decl_defs
+open Shallow_decl_defs
 open Typing_defs
 module ShapeMap = Nast.ShapeMap
 
@@ -74,7 +75,7 @@ struct
     | Rdynamic_yield (p1, p2, s1, s2) -> Rdynamic_yield (pos p1, pos p2, s1, s2)
     | Rmap_append p -> Rmap_append (pos p)
     | Rvar_param p -> Rvar_param (pos p)
-    | Runpack_param p -> Runpack_param (pos p)
+    | Runpack_param (p1, p2, i) -> Runpack_param (pos p1, pos p2, i)
     | Rinout_param p -> Rinout_param (pos p)
     | Rinstantiate (r1, x, r2) -> Rinstantiate (reason r1, x, reason r2)
     | Rarray_filter (p, r) -> Rarray_filter (pos p, reason r)
@@ -108,7 +109,7 @@ struct
     | Rarith_ret_int p -> Rarith_ret_int (pos p)
     | Rarith_ret_float (p, r, s) -> Rarith_ret_float (pos p, reason r, s)
     | Rarith_ret_num (p, r, s) -> Rarith_ret_num (pos p, reason r, s)
-    | Rsum_dynamic p -> Rsum_dynamic (pos p)
+    | Rarith_dynamic p -> Rarith_dynamic (pos p)
     | Rbitwise_dynamic p -> Rbitwise_dynamic (pos p)
     | Rincdec_dynamic p -> Rincdec_dynamic (pos p)
     | Rtype_variable p -> Rtype_variable (pos p)
@@ -118,7 +119,8 @@ struct
     | Rlambda_param (p, r) -> Rlambda_param (pos p, reason r)
     | Rshape (p, fun_name) -> Rshape (pos p, fun_name)
     | Renforceable p -> Renforceable (pos p)
-    | Rdestructure (p, l) -> Rdestructure (pos p, l)
+    | Rdestructure p -> Rdestructure (pos p)
+    | Rkey_value_collection_key p -> Rkey_value_collection_key (pos p)
 
   let pos_mapper =
     object
@@ -135,19 +137,24 @@ struct
       method on_'hi _ hi = hi
     end
 
-  let rec ty (p, x) = (reason p, ty_ x)
+  let rec ty t =
+    let (p, x) = deref t in
+    mk (reason p, ty_ x)
 
-  and ty_ : decl ty_ -> decl ty_ = function
+  and ty_ : decl_phase ty_ -> decl_phase ty_ = function
     | (Tany _ | Tthis | Terr | Tmixed | Tnonnull | Tdynamic | Tnothing | Tvar _)
       as x ->
       x
     | Tarray (ty1, ty2) -> Tarray (ty_opt ty1, ty_opt ty2)
     | Tdarray (ty1, ty2) -> Tdarray (ty ty1, ty ty2)
     | Tvarray root_ty -> Tvarray (ty root_ty)
-    | Tvarray_or_darray root_ty -> Tvarray_or_darray (ty root_ty)
+    | Tvarray_or_darray (ty1_opt, ty2) ->
+      Tvarray_or_darray (ty_opt ty1_opt, ty ty2)
     | Tprim _ as x -> x
     | Tgeneric _ as x -> x
     | Ttuple tyl -> Ttuple (List.map tyl ty)
+    | Tunion tyl -> Tunion (List.map tyl ty)
+    | Tintersection tyl -> Tintersection (List.map tyl ty)
     | Toption x -> Toption (ty x)
     | Tlike x -> Tlike (ty x)
     | Tfun ft -> Tfun (fun_type ft)
@@ -176,10 +183,16 @@ struct
       ft_where_constraints = List.map ft.ft_where_constraints where_constraint;
       ft_params = List.map ft.ft_params fun_param;
       ft_ret = possibly_enforced_ty ft.ft_ret;
-      ft_pos = pos ft.ft_pos;
       ft_arity = fun_arity ft.ft_arity;
       ft_reactive = fun_reactive ft.ft_reactive;
-      ft_decl_errors = None;
+    }
+
+  and fun_elt fe =
+    {
+      fe with
+      fe_type = ty fe.fe_type;
+      fe_pos = pos fe.fe_pos;
+      fe_decl_errors = None;
     }
 
   and fun_reactive = function
@@ -210,7 +223,6 @@ struct
   and class_const cc =
     {
       cc_synthesized = cc.cc_synthesized;
-      cc_visibility = cc.cc_visibility;
       cc_abstract = cc.cc_abstract;
       cc_pos = pos cc.cc_pos;
       cc_type = ty cc.cc_type;
@@ -231,7 +243,6 @@ struct
       ttc_type = ty_opt tc.ttc_type;
       ttc_origin = tc.ttc_origin;
       ttc_enforceable = Tuple.T2.map_fst ~f:pos tc.ttc_enforceable;
-      ttc_visibility = tc.ttc_visibility;
       ttc_reifiable = Option.map tc.ttc_reifiable pos;
     }
 
@@ -239,20 +250,32 @@ struct
     {
       tpum_atom = string_id pum.tpum_atom;
       tpum_types =
-        SMap.map begin
-                   fun (id, t) -> (string_id id, ty t)
-                 end pum.tpum_types;
+        SMap.map
+          begin
+            fun (id, t) ->
+            (string_id id, ty t)
+          end
+          pum.tpum_types;
+      tpum_exprs =
+        SMap.map
+          begin
+            fun id ->
+            string_id id
+          end
+          pum.tpum_exprs;
     }
 
   and pu_enum pu =
     {
       tpu_name = string_id pu.tpu_name;
       tpu_is_final = pu.tpu_is_final;
-      tpu_case_types = SMap.map string_id pu.tpu_case_types;
+      tpu_case_types =
+        SMap.map (fun (sid, k) -> (string_id sid, k)) pu.tpu_case_types;
       tpu_case_values =
         SMap.map
           begin
-            fun (id, t) -> (string_id id, ty t)
+            fun (id, t) ->
+            (string_id id, ty t)
           end
           pu.tpu_case_values;
       tpu_members = SMap.map pu_enum_member pu.tpu_members;
@@ -283,6 +306,7 @@ struct
       dc_members_fully_known = dc.dc_members_fully_known;
       dc_kind = dc.dc_kind;
       dc_is_xhp = dc.dc_is_xhp;
+      dc_has_xhp_keyword = dc.dc_has_xhp_keyword;
       dc_is_disposable = dc.dc_is_disposable;
       dc_name = dc.dc_name;
       dc_pos = dc.dc_pos;
@@ -327,6 +351,100 @@ struct
       td_constraint = ty_opt tdef.td_constraint;
       td_type = ty tdef.td_type;
       td_decl_errors = None;
+    }
+
+  and shallow_class sc =
+    {
+      sc_mode = sc.sc_mode;
+      sc_final = sc.sc_final;
+      sc_is_xhp = sc.sc_is_xhp;
+      sc_has_xhp_keyword = sc.sc_has_xhp_keyword;
+      sc_kind = sc.sc_kind;
+      sc_name = string_id sc.sc_name;
+      sc_tparams = List.map sc.sc_tparams type_param;
+      sc_where_constraints = List.map sc.sc_where_constraints where_constraint;
+      sc_extends = List.map sc.sc_extends ty;
+      sc_uses = List.map sc.sc_uses ty;
+      sc_method_redeclarations = sc.sc_method_redeclarations;
+      sc_xhp_attr_uses = List.map sc.sc_xhp_attr_uses ty;
+      sc_req_extends = List.map sc.sc_req_extends ty;
+      sc_req_implements = List.map sc.sc_req_implements ty;
+      sc_implements = List.map sc.sc_implements ty;
+      sc_consts = List.map sc.sc_consts shallow_class_const;
+      sc_typeconsts = List.map sc.sc_typeconsts shallow_typeconst;
+      sc_pu_enums = List.map sc.sc_pu_enums shallow_pu_enum;
+      sc_props = List.map sc.sc_props shallow_prop;
+      sc_sprops = List.map sc.sc_sprops shallow_prop;
+      sc_constructor = Option.map sc.sc_constructor shallow_method;
+      sc_static_methods = List.map sc.sc_static_methods shallow_method;
+      sc_methods = List.map sc.sc_methods shallow_method;
+      sc_user_attributes = List.map sc.sc_user_attributes user_attribute;
+      sc_enum_type = Option.map sc.sc_enum_type enum_type;
+      sc_decl_errors = Errors.empty;
+    }
+
+  and shallow_class_const scc =
+    {
+      scc_abstract = scc.scc_abstract;
+      scc_expr = Option.map scc.scc_expr (pos_mapper#on_expr ());
+      scc_name = string_id scc.scc_name;
+      scc_type = ty scc.scc_type;
+    }
+
+  and shallow_typeconst stc =
+    {
+      stc_abstract = typeconst_abstract_kind stc.stc_abstract;
+      stc_constraint = Option.map stc.stc_constraint ty;
+      stc_name = string_id stc.stc_name;
+      stc_type = Option.map stc.stc_type ty;
+      stc_enforceable = (pos (fst stc.stc_enforceable), snd stc.stc_enforceable);
+      stc_reifiable = Option.map stc.stc_reifiable pos;
+    }
+
+  and shallow_pu_member spum =
+    {
+      spum_atom = string_id spum.spum_atom;
+      spum_types = List.map spum.spum_types (fun (s, t) -> (string_id s, ty t));
+      spum_exprs = List.map spum.spum_exprs string_id;
+    }
+
+  and shallow_pu_enum spu =
+    {
+      spu_name = string_id spu.spu_name;
+      spu_is_final = spu.spu_is_final;
+      spu_case_types =
+        List.map ~f:(fun (sid, k) -> (string_id sid, k)) spu.spu_case_types;
+      spu_case_values =
+        List.map spu.spu_case_values (fun (s, t) -> (string_id s, ty t));
+      spu_members = List.map spu.spu_members shallow_pu_member;
+    }
+
+  and shallow_prop sp =
+    {
+      sp_const = sp.sp_const;
+      sp_xhp_attr = sp.sp_xhp_attr;
+      sp_lateinit = sp.sp_lateinit;
+      sp_lsb = sp.sp_lsb;
+      sp_name = string_id sp.sp_name;
+      sp_needs_init = sp.sp_needs_init;
+      sp_type = Option.map sp.sp_type ty;
+      sp_abstract = sp.sp_abstract;
+      sp_visibility = sp.sp_visibility;
+      sp_fixme_codes = ISet.empty;
+    }
+
+  and shallow_method sm =
+    {
+      sm_abstract = sm.sm_abstract;
+      sm_final = sm.sm_final;
+      sm_memoizelsb = sm.sm_memoizelsb;
+      sm_name = string_id sm.sm_name;
+      sm_override = sm.sm_override;
+      sm_reactivity = sm.sm_reactivity;
+      sm_type = ty sm.sm_type;
+      sm_visibility = sm.sm_visibility;
+      sm_fixme_codes = ISet.empty;
+      sm_deprecated = sm.sm_deprecated;
     }
 end
 

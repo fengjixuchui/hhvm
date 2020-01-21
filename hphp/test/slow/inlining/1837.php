@@ -3,7 +3,7 @@
 /* Compile only: verify no c++ compilation errors */function foo($a) {
   return $a[1];
 }
-function baz(&$x) {
+function baz(inout $x) {
  if ($x) $x++;
  }
 function bar($a) {
@@ -11,4 +11,4 @@ function bar($a) {
   foo($a)->bar = 1;
 }
 
-<<__EntryPoint>> function main(): void {}
+<<__EntryPoint>> function main(): void { echo "Done.\n"; }

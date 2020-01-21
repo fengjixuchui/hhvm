@@ -6,15 +6,13 @@
  * LICENSE file in the "hack" directory of this source tree.
  *
 */
-use parser_rust as parser;
+mod facts_smart_constructors_generated;
 
-use parser::flatten_smart_constructors::{FlattenOp, FlattenSmartConstructors};
-use parser::lexable_token::LexableToken;
-use parser::source_text::SourceText;
-use parser::token_kind::TokenKind;
-use utils_rust::extract_unquoted_string;
-use utils_rust::unescape_double;
-use utils_rust::unescape_single;
+use escaper::{extract_unquoted_string, unescape_double, unescape_single};
+use flatten_smart_constructors::{FlattenOp, FlattenSmartConstructors};
+use parser_core_types::{
+    lexable_token::LexableToken, source_text::SourceText, token_kind::TokenKind,
+};
 
 pub use crate::facts_smart_constructors_generated::*;
 
@@ -66,6 +64,7 @@ pub enum Node {
     Static,
     QualifiedName(Vec<Node>),
     ScopeResolutionExpression(Box<(Node, Node)>),
+    FileAttributeSpecification(Box<Node>),
     // declarations
     ClassDecl(Box<ClassDeclChildren>),
     FunctionDecl(Box<Node>),
@@ -84,6 +83,7 @@ pub enum Node {
 #[derive(Debug)]
 pub struct ClassDeclChildren {
     pub modifiers: Node,
+    pub xhp: Node,
     pub kind: Node,
     pub name: Node,
     pub attributes: Node,
@@ -431,6 +431,7 @@ impl<'a> FlattenSmartConstructors<'a, HasScriptContent<'a>> for FactsSmartConstr
         &mut self,
         attributes: Self::R,
         modifiers: Self::R,
+        xhp: Self::R,
         keyword: Self::R,
         name: Self::R,
         _type_params: Self::R,
@@ -445,6 +446,7 @@ impl<'a> FlattenSmartConstructors<'a, HasScriptContent<'a>> for FactsSmartConstr
             Node::Ignored => Node::Ignored,
             _ => Node::ClassDecl(Box::new(ClassDeclChildren {
                 modifiers,
+                xhp,
                 kind: keyword,
                 name,
                 attributes,
@@ -503,5 +505,16 @@ impl<'a> FlattenSmartConstructors<'a, HasScriptContent<'a>> for FactsSmartConstr
         name: Self::R,
     ) -> Self::R {
         Node::ScopeResolutionExpression(Box::new((qualifier, name)))
+    }
+
+    fn make_file_attribute_specification(
+        &mut self,
+        _left_double_angle: Self::R,
+        _keyword: Self::R,
+        _colon: Self::R,
+        attributes: Self::R,
+        _right_double_angle: Self::R,
+    ) -> Self::R {
+        Node::FileAttributeSpecification(Box::new(attributes))
     }
 }

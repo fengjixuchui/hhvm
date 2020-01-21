@@ -11,7 +11,8 @@ module Class : sig
   (* Class name as represented in assembler syntax. *)
   type t
 
-  (* TODO: remove this and use elaborate_id everywhere *)
+  (* Given a qualified identifier, determine the HHAS representation
+   * Does XHP mangling. Removes initial backslash. *)
   val from_ast_name : string -> t
 
   (* For use only in assembler. Quotes have been removed already *)
@@ -22,16 +23,13 @@ module Class : sig
 
   (* Without mangled XHP *)
   val to_unmangled_string : t -> string
-
-  (* Given a namespace environment and a possibly-qualified identifier,
-   * determine the HHAS representation of the identifier, with
-   * namespace qualification but no initial backslash, and XHP
-   * mangling. *)
-  val elaborate_id : Namespace_env.env -> Ast_defs.id -> t
 end
 
 module Function : sig
   type t
+
+  (* From identifier in parse tree: remove initial backslash *)
+  val from_ast_name : string -> t
 
   (* For use only in assembler. Quotes have been removed already *)
   val from_raw_string : string -> t
@@ -41,8 +39,6 @@ module Function : sig
 
   (* Used to add suffixes for memoized functions *)
   val add_suffix : t -> string -> t
-
-  val elaborate_id : Namespace_env.env -> Ast_defs.id -> t
 end
 
 module Prop : sig
@@ -79,6 +75,14 @@ module Const : sig
   val from_raw_string : string -> t
 
   val to_raw_string : t -> string
+end
 
-  val elaborate_id : Namespace_env.env -> Ast_defs.id -> t
+module Record : sig
+  type t
+
+  val from_ast_name : string -> t
+
+  val from_raw_string : string -> t
+
+  val to_raw_string : t -> string
 end

@@ -50,7 +50,8 @@ std::vector<AliasClass> specialized_classes(IRUnit& unit) {
   // make some instructions.
   auto const mainFP = unit.gen(DefFP, bcctx)->dst();
   auto const SP = unit.gen(
-    DefSP, bcctx, FPInvOffsetData { FPInvOffset { 10 } }, mainFP)->dst();
+    DefFrameRelSP, bcctx, FPInvOffsetData { FPInvOffset { 10 } }, mainFP
+  )->dst();
 
   return {
     // Frame locals.
@@ -215,7 +216,7 @@ TEST(AliasClass, StackBasics) {
   auto const bcctx = BCContext { BCMarker::Dummy(), 0 };
   auto const FP = unit.gen(DefFP, bcctx)->dst();
   auto const SP = unit.gen(
-    DefSP, bcctx, FPInvOffsetData { FPInvOffset { 5 } }, FP)->dst();
+    DefFrameRelSP, bcctx, FPInvOffsetData { FPInvOffset { 5 } }, FP)->dst();
 
   // Some basic canonicalization and maybe.
   {
@@ -335,7 +336,7 @@ TEST(AliasClass, StackUnions) {
   auto const bcctx = BCContext { BCMarker::Dummy(), 0 };
   auto const FP = unit.gen(DefFP, bcctx)->dst();
   auto const SP = unit.gen(
-    DefSP, bcctx, FPInvOffsetData { FPInvOffset { 1 } }, FP)->dst();
+    DefFrameRelSP, bcctx, FPInvOffsetData { FPInvOffset { 1 } }, FP)->dst();
 
   {
     AliasClass const stk1  = AStack { FP, FPRelOffset { -3 }, 1 };
@@ -393,23 +394,55 @@ TEST(AliasClass, IterUnion) {
   }
 
   {
-    AliasClass const iterP0 = AIterPos { FP, 0 };
     AliasClass const iterB0 = AIterBase { FP, 0 };
+    AliasClass const iterP0 = AIterPos { FP, 0 };
+    AliasClass const iterE0 = AIterEnd { FP, 0 };
     AliasClass const iterP1 = AIterPos { FP, 1 };
-    auto const u1 = iterP0 | iterB0;
-    EXPECT_TRUE(iterP0 <= u1);
+
+    // All the alias classes should be distinct to start.
+    auto const classes = std::vector{iterB0, iterP0, iterE0, iterP1};
+    for (auto const cls1 : classes) {
+      for (auto const cls2 : classes) {
+        if (cls1 == cls2) continue;
+        EXPECT_FALSE(cls1 <= cls2);
+      }
+    }
+
+    // If we union a base and a pos of the same iterator, we'll get the
+    // class of all fields of that iterator, which we can still distinguish
+    // from fields of other iterators.
+    auto const u1 = iterB0 | iterP0;
     EXPECT_TRUE(iterB0 <= u1);
+    EXPECT_TRUE(iterP0 <= u1);
+    EXPECT_TRUE(iterE0 <= u1);
+    EXPECT_FALSE(iterP1 <= u1);
     EXPECT_FALSE(u1 <= AIterPosAny);
     EXPECT_FALSE(u1 <= AIterBaseAny);
-    EXPECT_TRUE(u1 <= (AIterPosAny | AIterBaseAny));
-    EXPECT_FALSE(iterP1 <= u1);
-    EXPECT_FALSE(iterP1 <= iterP0);
-    EXPECT_FALSE(iterP1 <= iterB0);
+    EXPECT_FALSE(u1 <= (AIterBaseAny | AIterPosAny));
+    EXPECT_TRUE(u1 <= AIterAny);
 
     EXPECT_TRUE(!!u1.iterPos());
     EXPECT_TRUE(!!u1.iterBase());
     EXPECT_TRUE(!u1.is_iterPos());
     EXPECT_TRUE(!u1.is_iterBase());
+
+    // If we union a base and a pos of different iterators, we'll get the
+    // class of all iter bases and positions, which we can still distinguish
+    // from other iterator fields like iterator ends.
+    auto const u2 = iterB0 | iterP1;
+    EXPECT_TRUE(iterP0 <= u2);
+    EXPECT_TRUE(iterB0 <= u2);
+    EXPECT_TRUE(iterP1 <= u2);
+    EXPECT_FALSE(iterE0 <= u2);
+    EXPECT_FALSE(u2 <= AIterPosAny);
+    EXPECT_FALSE(u2 <= AIterBaseAny);
+    EXPECT_TRUE(u2 <= (AIterBaseAny | AIterPosAny));
+    EXPECT_TRUE(u2 <= AIterAny);
+
+    EXPECT_TRUE(!u2.iterPos());
+    EXPECT_TRUE(!!u2.iterBase());
+    EXPECT_TRUE(!u2.is_iterPos());
+    EXPECT_TRUE(!u2.is_iterBase());
   }
 
   {
@@ -463,7 +496,7 @@ TEST(AliasClass, IterUnion) {
 TEST(AliasClass, Pointees) {
   IRUnit unit{test_context};
   auto const bcctx = BCContext { BCMarker::Dummy(), 0 };
-  auto ptr = unit.gen(LdMBase, bcctx, TLvalToGen)->dst();
+  auto ptr = unit.gen(LdMBase, bcctx, TLvalToCell)->dst();
   auto const acls = pointee(ptr);
   EXPECT_EQ(AHeapAny | AFrameAny | AStackAny | AMIStateTV | ARdsAny, acls);
 }

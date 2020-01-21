@@ -60,7 +60,7 @@ function debug_print_backtrace(int $options = 0,
  *   name. Returns NULL if there hasn't been an error yet.
  */
 <<__Native>>
-function error_get_last(): array<string, mixed>;
+function error_get_last(): darray<string, mixed>;
 
 /**
  * Send an error message to the defined error handling routines
@@ -283,15 +283,6 @@ namespace HH {
    */
   <<__Native>>
   function deferred_errors(): vec;
-
-  /*
-   * Set the default value to return when accessing a __SoftLateInit property
-   * before it's assigned a value. Such an access will raise a notice, set the
-   * property to the default value, and then return it. If not explicitly set,
-   * the default value will be null.
-   */
-  <<__Native>>
-  function set_soft_late_init_default(mixed $default): void;
 }
 
 namespace __SystemLib {

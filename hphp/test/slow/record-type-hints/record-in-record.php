@@ -1,10 +1,10 @@
 <?hh
-final record Foo {
-  y: int,
+record Foo {
+  int y;
 }
 
-final record Bar {
-  x:Foo,
+record Bar {
+  Foo x;
 }
 <<__EntryPoint>> function main(): void {
 $z = Foo['y'=>42];

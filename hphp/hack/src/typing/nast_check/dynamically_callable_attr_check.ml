@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 module SN = Naming_special_names
 
@@ -20,9 +20,9 @@ let handler =
       let vis = m.m_visibility in
       let attr = m.m_user_attributes in
       match
-        Attributes.mem_pos SN.UserAttributes.uaDynamicallyCallable attr
+        Naming_attributes.mem_pos SN.UserAttributes.uaDynamicallyCallable attr
       with
-      | Some p when vis <> Public ->
+      | Some p when not (Aast.equal_visibility vis Public) ->
         Errors.illegal_use_of_dynamically_callable
           p
           pos

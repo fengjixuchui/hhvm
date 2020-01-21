@@ -219,21 +219,6 @@ abstract class ReflectionFunctionAbstract implements Reflector {
   <<__Native, __Rx, __MaybeMutable>>
   public function getDocComment(): mixed;
 
-  /**
-   * ( excerpt from
-   * http://php.net/manual/en/reflectionfunctionabstract.returnsreference.php
-   * )
-   *
-   * Checks whether the function returns a reference. Warning: This function
-   * is currently not documented; only its argument list is available.
-   *
-   * @return     mixed   TRUE if it returns a reference, otherwise FALSE
-   */
-  <<__Rx, __MaybeMutable>>
-  public function returnsReference(): bool {
-    return false;
-  }
-
   <<__Native, __Rx, __MaybeMutable>>
   private function getRetTypeInfo(): array;
 
@@ -301,34 +286,6 @@ abstract class ReflectionFunctionAbstract implements Reflector {
   final public function getAttributesNamespaced(): darray<arraykey, varray<mixed>>;
 
   use ReflectionLegacyAttribute;
-
-  /**
-   * ( excerpt from
-   *   http://php.net/manual/en/reflectionclass.getattributes.php )
-   *
-   * Gets all attributes
-   *
-   * @return  array<arraykey, array<int, mixed>>
-   */
-  <<__Deprecated("This function is being removed as it has been broken for some time")>>
-  public function getAttributesRecursive(
-  ): darray<arraykey, varray<mixed>> {
-    return $this->getAttributes();
-  }
-
-  /**
-   * ( excerpt from
-   *   http://php.net/manual/en/reflectionclass.getattributerecursive.php
-   * )
-   *
-   * Returns all attributes with given key from a class and its parents.
-   *
-   * @return array<arraykey, array<mixed>>
-   */
-  <<__Deprecated("This function is being removed as it has been broken for some time")>>
-  public function getAttributeRecursive($name) {
-    return $this->getAttribute($name);
-  }
 
   <<__Native, __Rx, __MaybeMutable>>
   public function getNumberOfParameters(): int;
@@ -1083,41 +1040,6 @@ class ReflectionMethod extends ReflectionFunctionAbstract {
 
   <<__Native, __Rx, __MaybeMutable>>
   private function getPrototypeClassname(): string; // ?string
-
-  <<__Deprecated("This function is being removed as it has been broken for some time")>>
-  public function getAttributeRecursive($name) {
-    $attrs = $this->getAttributes();
-    if (isset($attrs[$name])) {
-      return $attrs[$name];
-    }
-    $p = get_parent_class($this->getDeclaringClassname());
-    if ($p === false) {
-      return null;
-    }
-    $rm = new ReflectionMethod($p, $this->getName());
-    if ($rm->isPrivate()) {
-      return null;
-    }
-    return $rm->getAttributeRecursive($name);
-  }
-
-  <<__Deprecated("This function is being removed as it has been broken for some time")>>
-  public function getAttributesRecursive(
-  ): darray<arraykey, array<int, mixed>> {
-    $attrs = $this->getAttributes();
-    $p = get_parent_class($this->getDeclaringClassname());
-    if ($p !== false) {
-      $rm = new ReflectionMethod($p, $this->getName());
-      if (!$rm->isPrivate()) {
-        foreach ($rm->getAttributesRecursive() as $name => $value) {
-          if (!array_key_exists($name, $attrs)) {
-            $attrs[$name] = $value;
-          }
-        }
-      }
-    }
-    return $attrs;
-  }
 
   use ReflectionTypedAttribute;
 }
@@ -2111,7 +2033,7 @@ class ReflectionClass implements Reflector {
    */
   <<__Rx, __MaybeMutable>>
   public function isIterateable(): bool {
-    return $this->isSubclassOf(\Traversable::class);
+    return $this->isSubclassOf(\HH\Traversable::class);
   }
 
   /**
@@ -2253,27 +2175,10 @@ class ReflectionClass implements Reflector {
 
   use ReflectionLegacyAttribute;
 
-  <<__Deprecated("This function is being removed as it has been broken for some time")>>
-  public function getAttributeRecursive($name) {
-    // Note: not particularly optimal ... could be a fast-terminating
-    // __Native loop
-    return hphp_array_idx($this->getAttributesRecursive(), $name, null);
-  }
-
   <<__Native>>
   public function getAttributesRecursiveNamespaced(
   ): darray<string, varray<mixed>>;
 
-  <<__Deprecated("This function is being removed as it has been broken for some time")>>
-  public function getAttributesRecursive() {
-    $denamespaced = darray[];
-    foreach ($this->getAttributesRecursiveNamespaced() as $name => $args) {
-      $pos = strrpos($name, '\\');
-      $name = ($pos === false) ? $name : substr($name, $pos + 1);
-      $denamespaced[$name] = $args;
-    }
-    return $denamespaced;
-  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

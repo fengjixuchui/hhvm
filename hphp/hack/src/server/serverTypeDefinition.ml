@@ -15,25 +15,25 @@ let go_common (tast : Tast.program) ~(line : int) ~(column : int) :
   let env_and_ty = ServerInferType.type_at_pos tast line column in
   match env_and_ty with
   | None -> []
-  | Some (env, (reason, ty)) ->
+  | Some (env, ty) ->
     let rec handle_type acc ty =
-      match ty with
+      match get_node ty with
       | Tclass ((_, str), _, _) ->
         begin
-          match NamingGlobal.GEnv.type_pos str with
+          match Naming_global.GEnv.type_pos str with
           | None -> acc
           | Some pos -> (pos, str) :: acc
         end
-      | Toption (_, ty') -> handle_type acc ty'
+      | Toption ty' -> handle_type acc ty'
       | Tunion ty_lst ->
-        List.fold ty_lst ~init:acc ~f:(fun a (_, y) -> handle_type a y)
+        List.fold ty_lst ~init:acc ~f:(fun a y -> handle_type a y)
       | Tfun fn_type ->
-        let (_, ret_type) = fn_type.ft_ret.et_type in
+        let ret_type = fn_type.ft_ret.et_type in
         begin
-          match ret_type with
+          match get_node ret_type with
           | Tprim _ ->
             (* default to function definition *)
-            (fn_type.ft_pos, Tast_env.print_ty env (reason, ty)) :: acc
+            (get_pos ty, Tast_env.print_ty env ty) :: acc
           | _ -> handle_type acc ret_type
         end
       | _ -> acc
@@ -41,19 +41,12 @@ let go_common (tast : Tast.program) ~(line : int) ~(column : int) :
     List.map (handle_type [] ty) ~f:(fun (pos, s) -> (Pos.to_absolute pos, s))
 
 (* For serverless ide *)
-let go_ctx
+let go_quarantined
     ~(ctx : Provider_context.t)
     ~(entry : Provider_context.entry)
     ~(line : int)
     ~(column : int) : ServerCommandTypes.Go_to_type_definition.result =
-  let tast = Provider_utils.compute_tast ~ctx ~entry in
-  go_common tast ~line ~column
-
-let go
-    (env : ServerEnv.env)
-    (position : ServerCommandTypes.file_input * int * int) :
-    ServerCommandTypes.Go_to_type_definition.result =
-  let (file, line, column) = position in
-  let ServerEnv.{ tcopt; naming_table; _ } = env in
-  let (_, tast) = ServerIdeUtils.check_file_input tcopt naming_table file in
+  let { Provider_utils.Compute_tast.tast; _ } =
+    Provider_utils.compute_tast_quarantined ~ctx ~entry
+  in
   go_common tast ~line ~column

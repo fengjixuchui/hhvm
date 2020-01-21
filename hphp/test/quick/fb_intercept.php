@@ -1,12 +1,12 @@
 <?hh
-
-function handler($name, $obj, $args, $data, &$done) {
+function mkh($c) { return ($_1, $_2, inout $_3, $_4, inout $_5) ==> $c(); }
+function handler($name, $obj, inout $args, $data, inout $done) {
   echo "----HANDLER----\n";
   var_dump($name, $obj, $args, $data, $done);
   echo "---------------\n";
 }
 
-function passthrough_handler($name, $obj, $args, $data, &$done) {
+function passthrough_handler($name, $obj, inout $args, $data, inout $done) {
   echo "----HANDLER----\n";
   var_dump($name, $obj, $args, $data, $done);
   $done = false;
@@ -40,12 +40,7 @@ function test_standard_function() {
   call_user_func(fun('frap'), 'callfunc');
 
   // Replace with closure
-  fb_intercept('frap', function () { echo "Closure! wooooo\n"; });
-  frap('claptrap');
-
-  // Replace with __call-having object
-  $mc = new MagicCall();
-  fb_intercept('frap', array($mc, 'i_dont_exist'));
+  fb_intercept('frap', mkh(function () { echo "Closure! wooooo\n"; }));
   frap('claptrap');
 
   // Reset
@@ -73,12 +68,7 @@ function test_variadic_function() {
   call_user_func(fun('var_frap'), 'callfunc');
 
   // Replace with closure
-  fb_intercept('var_frap', function () { echo "Closure! wooooo\n"; });
-  var_frap('claptrap', 'blah');
-
-  // Replace with __call-having object
-  $mc = new MagicCall();
-  fb_intercept('var_frap', array($mc, 'i_dont_exist'));
+  fb_intercept('var_frap', mkh(function () { echo "Closure! wooooo\n"; }));
   var_frap('claptrap', 'blah');
 
   // Reset
@@ -123,10 +113,6 @@ function test_methods() {
   Blark::sfrap();
   call_user_func(array('Blark', 'sfrap'));
 
-  fb_intercept('Blark::sfrap', array($mc, 'i_dont_exist_either'));
-  Blark::sfrap();
-  call_user_func(array('Blark', 'sfrap'));
-
   // Intercept non-static method
   $b = new Blark();
   fb_intercept('Blark::frap', 'handler');
@@ -134,10 +120,6 @@ function test_methods() {
   call_user_func(array($b, 'frap'));
 
   fb_intercept('Blark::frap', 'passthrough_handler');
-  $b->frap();
-  call_user_func(array($b, 'frap'));
-
-  fb_intercept('Blark::frap', array($mc, 'i_dont_exist_either'));
   $b->frap();
   call_user_func(array($b, 'frap'));
 

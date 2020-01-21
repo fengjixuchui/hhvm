@@ -7,33 +7,35 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 module SN = Naming_special_names
 module Subst = Decl_subst
 
-let make_subst tparams tyl = Subst.make tparams tyl
+let make_subst tparams tyl = Subst.make_decl tparams tyl
 
 (*****************************************************************************)
 (* Code dealing with instantiation. *)
 (*****************************************************************************)
 
-let rec instantiate subst ((r, ty) : decl ty) =
+let rec instantiate subst (ty : decl_ty) =
   (* PERF: If subst is empty then instantiation is a no-op. We can save a
    * significant amount of CPU by avoiding recursively deconstructing the ty
    * data type.
    *)
   if SMap.is_empty subst then
-    (r, ty)
+    ty
   else
-    match ty with
-    | Tgeneric x ->
-      (match SMap.get x subst with
-      | Some x_ty -> (Reason.Rinstantiate (fst x_ty, x, r), snd x_ty)
-      | None -> (r, Tgeneric x))
-    | _ ->
+    match deref ty with
+    | (r, Tgeneric x) ->
+      (match SMap.find_opt x subst with
+      | Some x_ty ->
+        let (r', ty_) = deref x_ty in
+        mk (Reason.Rinstantiate (r', x, r), ty_)
+      | None -> mk (r, Tgeneric x))
+    | (r, ty) ->
       let ty = instantiate_ subst ty in
-      (r, ty)
+      mk (r, ty)
 
 and instantiate_ subst x =
   match x with
@@ -50,18 +52,27 @@ and instantiate_ subst x =
     Tarray (ty1, ty2)
   | Tdarray (ty1, ty2) -> Tdarray (instantiate subst ty1, instantiate subst ty2)
   | Tvarray ty -> Tvarray (instantiate subst ty)
-  | Tvarray_or_darray ty -> Tvarray_or_darray (instantiate subst ty)
+  | Tvarray_or_darray (ty1, ty2) ->
+    let ty1 = Option.map ty1 (instantiate subst) in
+    let ty2 = instantiate subst ty2 in
+    Tvarray_or_darray (ty1, ty2)
   | ( Tthis | Tvar _ | Tmixed | Tdynamic | Tnonnull | Tany _ | Terr | Tprim _
     | Tnothing ) as x ->
     x
   | Ttuple tyl ->
     let tyl = List.map tyl (instantiate subst) in
     Ttuple tyl
+  | Tunion tyl ->
+    let tyl = List.map tyl (instantiate subst) in
+    Tunion tyl
+  | Tintersection tyl ->
+    let tyl = List.map tyl (instantiate subst) in
+    Tintersection tyl
   | Toption ty ->
     let ty = instantiate subst ty in
     (* we want to avoid double option: ??T *)
-    (match ty with
-    | (_, Toption _) -> snd ty
+    (match get_node ty with
+    | Toption _ as ty_node -> ty_node
     | _ -> Toption ty)
   | Tlike ty -> Tlike (instantiate subst ty)
   | Tfun ft ->
@@ -69,9 +80,11 @@ and instantiate_ subst x =
     let outer_subst = subst in
     let subst =
       List.fold_left
-        ~f:begin
-             fun subst t -> SMap.remove (snd t.tp_name) subst
-           end
+        ~f:
+          begin
+            fun subst t ->
+            SMap.remove (snd t.tp_name) subst
+          end
         ~init:subst
         tparams
     in

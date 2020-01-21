@@ -103,7 +103,7 @@ bool GlobalsArray::keyExists(const StringData* k) {
   return this->m_tab->lookup(k) != nullptr;
 }
 
-Cell GlobalsArray::NvGetKey(const ArrayData* ad, ssize_t pos) {
+TypedValue GlobalsArray::NvGetKey(const ArrayData* ad, ssize_t pos) {
   auto a = asGlobals(ad);
   NameValueTable::Iterator iter(a->m_tab, pos);
   if (iter.valid()) {
@@ -117,7 +117,7 @@ Cell GlobalsArray::NvGetKey(const ArrayData* ad, ssize_t pos) {
   return make_tv<KindOfUninit>();
 }
 
-tv_rval GlobalsArray::GetValueRef(const ArrayData* ad, ssize_t pos) {
+tv_rval GlobalsArray::RvalPos(const ArrayData* ad, ssize_t pos) {
   auto a = asGlobals(ad);
   NameValueTable::Iterator iter(a->m_tab, pos);
   return iter.valid() ? iter.curVal() : uninit_variant.asTypedValue();
@@ -164,29 +164,36 @@ arr_lval GlobalsArray::LvalStr(ArrayData* ad, StringData* k, bool /*copy*/) {
   return arr_lval { ad, tv };
 }
 
-arr_lval GlobalsArray::LvalNew(ArrayData* ad, bool /*copy*/) {
+arr_lval GlobalsArray::LvalSilentInt(ArrayData* ad, int64_t k, bool copy) {
+  return LvalSilentStr(ad, String(k).get(), copy);
+}
+
+arr_lval GlobalsArray::LvalSilentStr(ArrayData* ad, StringData* k, bool copy) {
+  auto a = asGlobals(ad);
+  auto const tv = a->m_tab->lookup(k);
+  return arr_lval { ad, tv };
+}
+
+arr_lval GlobalsArray::LvalForceNew(ArrayData* ad, bool /*copy*/) {
   return arr_lval { ad, lvalBlackHole().asTypedValue() };
 }
 
-ArrayData* GlobalsArray::SetIntInPlace(ArrayData* ad, int64_t k, Cell v) {
+ArrayData* GlobalsArray::SetIntMove(ArrayData* ad, int64_t k, TypedValue v) {
+  return SetStrMove(ad, String(k).get(), v);
+}
+
+ArrayData* GlobalsArray::SetIntInPlace(ArrayData* ad, int64_t k, TypedValue v) {
   return SetStrInPlace(ad, String(k).get(), v);
 }
 
-ArrayData*
-GlobalsArray::SetStrInPlace(ArrayData* ad, StringData* k, Cell v) {
-  auto a = asGlobals(ad);
-  cellSet(v, *tvToCell(a->m_tab->lookupAdd(k)));
-  return a;
+ArrayData* GlobalsArray::SetStrMove(ArrayData* ad, StringData* k, TypedValue v) {
+  tvMove(v, *asGlobals(ad)->m_tab->lookupAdd(k));
+  return ad;
 }
 
-ArrayData*
-GlobalsArray::SetWithRefIntInPlace(ArrayData*, int64_t, TypedValue) {
-  throw_not_implemented("references not allowed in $GLOBALS");
-}
-
-ArrayData*
-GlobalsArray::SetWithRefStrInPlace(ArrayData*,  StringData*, TypedValue) {
-  throw_not_implemented("references not allowed in $GLOBALS");
+ArrayData* GlobalsArray::SetStrInPlace(ArrayData* ad, StringData* k, TypedValue v) {
+  tvSet(v, *asGlobals(ad)->m_tab->lookupAdd(k));
+  return ad;
 }
 
 ArrayData*
@@ -207,12 +214,8 @@ GlobalsArray::RemoveStrInPlace(ArrayData* ad, const StringData* k) {
  * is currently $GLOBALS.
  */
 
-ArrayData* GlobalsArray::AppendInPlace(ArrayData*, Cell /*v*/) {
+ArrayData* GlobalsArray::AppendInPlace(ArrayData*, TypedValue /*v*/) {
   throw_not_implemented("append on $GLOBALS");
-}
-
-ArrayData* GlobalsArray::AppendWithRefInPlace(ArrayData*, TypedValue) {
-  throw_not_implemented("appendWithRef on $GLOBALS");
 }
 
 ArrayData* GlobalsArray::PlusEq(ArrayData*, const ArrayData*) {
@@ -223,7 +226,7 @@ ArrayData* GlobalsArray::Merge(ArrayData*, const ArrayData*) {
   throw_not_implemented("merge on $GLOBALS");
 }
 
-ArrayData* GlobalsArray::Prepend(ArrayData*, Cell) {
+ArrayData* GlobalsArray::Prepend(ArrayData*, TypedValue) {
   throw_not_implemented("prepend on $GLOBALS");
 }
 

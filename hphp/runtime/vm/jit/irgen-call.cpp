@@ -44,29 +44,29 @@ namespace HPHP { namespace jit { namespace irgen {
 
 namespace {
 
-bool emitCallerReffinessChecksKnown(IRGS& env, const Func* callee,
+bool emitCallerInOutChecksKnown(IRGS& env, const Func* callee,
                                     const FCallArgs& fca) {
-  if (!fca.enforceReffiness()) return true;
+  if (!fca.enforceInOut()) return true;
 
   for (auto i = 0; i < fca.numArgs; ++i) {
-    if (callee->byRef(i) != fca.byRef(i)) {
+    if (callee->isInOut(i) != fca.isInOut(i)) {
       auto const func = cns(env, callee);
-      gen(env, ThrowParamRefMismatch, ParamData { i }, func);
+      gen(env, ThrowParamInOutMismatch, ParamData { i }, func);
       return false;
     }
   }
   return true;
 }
 
-void emitCallerReffinessChecksUnknown(IRGS& env, SSATmp* callee,
+void emitCallerInOutChecksUnknown(IRGS& env, SSATmp* callee,
                                       const FCallArgs& fca) {
-  if (!fca.enforceReffiness()) return;
+  if (!fca.enforceInOut()) return;
 
   SSATmp* numParams = nullptr;
   for (uint32_t i = 0; i * 8 < fca.numArgs; i += 8) {
     uint64_t vals = 0;
     for (uint32_t j = 0; j < 8 && (i + j) * 8 < fca.numArgs; ++j) {
-      vals |= ((uint64_t)fca.byRefs[i + j]) << (8 * j);
+      vals |= ((uint64_t)fca.inoutArgs[i + j]) << (8 * j);
     }
 
     uint64_t bits = fca.numArgs - i * 8;
@@ -74,7 +74,7 @@ void emitCallerReffinessChecksUnknown(IRGS& env, SSATmp* callee,
       ? std::numeric_limits<uint64_t>::max()
       : (1UL << bits) - 1;
 
-    // CheckRefs only needs to know the number of parameters when there are more
+    // CheckInOuts only needs to know the number of parameters when there are more
     // than 64 args.
     if (i == 0) {
       numParams = cns(env, 64);
@@ -82,15 +82,15 @@ void emitCallerReffinessChecksUnknown(IRGS& env, SSATmp* callee,
       numParams = gen(env, LdFuncNumParams, callee);
     }
 
-    auto const crData = CheckRefsData { i * 8, mask, vals };
+    auto const crData = CheckInOutsData { i * 8, mask, vals };
     ifThen(
       env,
       [&] (Block* taken) {
-        gen(env, CheckRefs, taken, crData, callee, numParams);
+        gen(env, CheckInOuts, taken, crData, callee, numParams);
       },
       [&] {
         hint(env, Block::Hint::Unlikely);
-        gen(env, ThrowParamRefMismatchRange, crData, callee);
+        gen(env, ThrowParamInOutMismatchRange, crData, callee);
       }
     );
   }
@@ -178,68 +178,75 @@ void emitCallerRxChecksUnknown(IRGS& env, SSATmp* callee) {
 
 //////////////////////////////////////////////////////////////////////
 
-IRSPRelOffset fsetActRec(
-  IRGS& env,
-  SSATmp* func,
-  const FCallArgs& fca,
-  SSATmp* objOrClass,
-  bool dynamicCall
-) {
-  auto const generics = fca.hasGenerics() ? popC(env) : cns(env, TNullptr);
-  auto const numArgs = fca.numArgs + (fca.hasUnpack() ? 1 : 0);
-  auto const arOffset =
-    offsetFromIRSP(env, BCSPRelOffset{static_cast<int32_t>(numArgs)});
+void callUnpack(IRGS& env, SSATmp* callee, const FCallArgs& fca,
+                SSATmp* objOrClass, bool dynamicCall, bool unlikely) {
+  assertx(fca.hasUnpack());
 
-  gen(
-    env,
-    SpillFrame,
-    ActRecInfo { arOffset, numArgs, dynamicCall },
-    sp(env),
-    func,
-    objOrClass ? objOrClass : cns(env, TNullptr),
-    generics
-  );
+  if (objOrClass == nullptr) objOrClass = cns(env, TNullptr);
+  assertx(objOrClass->isA(TNullptr) || objOrClass->isA(TObj|TCls));
 
-  return arOffset;
-}
-
-//////////////////////////////////////////////////////////////////////
-
-void callUnpack(IRGS& env, const Func* callee, const FCallArgs& fca,
-                bool unlikely) {
   auto const data = CallUnpackData {
     spOffBCFromIRSP(env),
-    fca.numArgs + 1,
+    fca.numArgs,
     fca.numRets - 1,
     bcOff(env),
-    callee,
+    fca.hasGenerics(),
+    dynamicCall,
+    env.formingRegion
   };
-  push(env, gen(env, CallUnpack, data, sp(env), fp(env)));
+  push(env, gen(env, CallUnpack, data, sp(env), fp(env), callee, objOrClass));
   if (unlikely) gen(env, Jmp, makeExit(env, nextBcOff(env)));
 }
 
-SSATmp* callImpl(IRGS& env, const Func* callee, const FCallArgs& fca,
-                 bool asyncEagerReturn) {
+SSATmp* callImpl(IRGS& env, SSATmp* callee, const FCallArgs& fca,
+                 SSATmp* objOrClass, bool dynamicCall, bool asyncEagerReturn) {
+  assertx(!fca.hasUnpack() ||
+          callee->funcVal()->numNonVariadicParams() == fca.numArgs);
+
+  // TODO: extend hhbc with bitmap of passed generics, or even better, use one
+  // stack value per generic argument and extend hhbc with their count
+  auto const genericsBitmap = [&] {
+    if (!fca.hasGenerics()) return uint32_t{0};
+    auto const type = RuntimeOption::EvalHackArrDVArrs ? TVec : TArr;
+    auto const generics = topC(env);
+    // Do not bother calculating the bitmap using a C++ helper if generics are
+    // not statically known, as the prologue already has the same logic.
+    if (!generics->hasConstVal(type)) return uint32_t{0};
+    auto const genericsArr = generics->arrLikeVal();
+    return getGenericsBitmap(genericsArr);
+  }();
+
+  if (objOrClass == nullptr) objOrClass = cns(env, TNullptr);
+  assertx(objOrClass->isA(TNullptr) || objOrClass->isA(TObj|TCls));
+
   auto const data = CallData {
     spOffBCFromIRSP(env),
     fca.numArgs,
     fca.numRets - 1,
     bcOff(env) - curFunc(env)->base(),
-    callee,
+    genericsBitmap,
+    fca.hasGenerics(),
+    fca.hasUnpack(),
+    dynamicCall,
     asyncEagerReturn,
+    env.formingRegion,
+    fca.skipNumArgsCheck
   };
-  return gen(env, Call, data, sp(env), fp(env));
+  return gen(env, Call, data, sp(env), fp(env), callee, objOrClass);
 }
 
-void callRegular(IRGS& env, const Func* callee, const FCallArgs& fca,
-                 bool unlikely) {
-  push(env, callImpl(env, callee, fca, false));
-  if (unlikely) gen(env, Jmp, makeExit(env, nextBcOff(env)));
-}
+void handleCallReturn(IRGS& env, const Func* callee, const FCallArgs& fca,
+                      SSATmp* retVal, bool asyncEagerReturn, bool unlikely) {
+  if (!asyncEagerReturn) {
+    push(env, retVal);
+    if (unlikely) gen(env, Jmp, makeExit(env, nextBcOff(env)));
+    return;
+  }
 
-void callWithAsyncEagerReturn(IRGS& env, const Func* callee,
-                              const FCallArgs& fca, bool unlikely) {
-  auto const retVal = callImpl(env, callee, fca, true);
+  if (env.formingRegion) {
+    // See callReturn() in ir-instruction.cpp.
+    callee = nullptr;
+  }
 
   ifThenElse(
     env,
@@ -265,33 +272,6 @@ void callWithAsyncEagerReturn(IRGS& env, const Func* callee,
       if (unlikely) gen(env, Jmp, makeExit(env, nextBcOff(env)));
     }
   );
-}
-
-void callKnown(IRGS& env, const Func* callee, const FCallArgs& fca) {
-  assertx(callee);
-  if (fca.hasUnpack()) {
-    return callUnpack(env, callee, fca, false /* unlikely */);
-  }
-
-  if (fca.asyncEagerOffset != kInvalidOffset &&
-      callee->supportsAsyncEagerReturn()) {
-    return callWithAsyncEagerReturn(env, callee, fca, false /* unlikely */);
-  }
-
-  callRegular(env, callee, fca, false /* unlikely */);
-}
-
-void callUnknown(IRGS& env, SSATmp* callee, const FCallArgs& fca,
-                 bool unlikely) {
-  assertx(!callee->hasConstVal() || env.formingRegion);
-  if (fca.hasUnpack()) return callUnpack(env, nullptr, fca, unlikely);
-
-  if (fca.asyncEagerOffset != kInvalidOffset) {
-    // Okay to request async eager return even if it is not supported.
-    return callWithAsyncEagerReturn(env, nullptr, fca, unlikely);
-  }
-
-  callRegular(env, nullptr, fca, unlikely);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -325,7 +305,7 @@ void callProfiledFunc(IRGS& env, SSATmp* callee,
   // Dump annotations if requested.
   if (RuntimeOption::EvalDumpCallTargets) {
     auto const fnName = curFunc(env)->fullName()->data();
-    env.annotations.emplace_back(
+    env.unit.annotationData->add(
       "CallTargets",
       folly::sformat("BC={} FN={}: {}\n", bcOff(env), fnName, data.toString())
     );
@@ -372,33 +352,102 @@ void prepareAndCallKnown(IRGS& env, const Func* callee, const FCallArgs& fca,
   assertx(callee);
 
   // Caller checks
-  if (!emitCallerReffinessChecksKnown(env, callee, fca)) return;
+  if (!emitCallerInOutChecksKnown(env, callee, fca)) return;
   if (dynamicCall) emitCallerDynamicCallChecksKnown(env, callee);
   emitCallerRxChecksKnown(env, callee);
 
-  if (isFCall(curSrcKey(env).op())) {
-    auto const inlined = irGenTryInlineFCall(
-      env, callee, fca, objOrClass, dynamicCall);
-    if (inlined) return;
+  auto const doCall = [&](const FCallArgs& fca) {
+    assertx(fca.numArgs <= callee->numNonVariadicParams());
+    assertx(!fca.hasUnpack() || fca.numArgs == callee->numNonVariadicParams());
+
+    // We may have updated the stack, make sure Call can set up its Catch.
+    updateMarker(env);
+    env.irb->exceptionStackBoundary();
+
+    if (isFCall(curSrcKey(env).op())) {
+      if (irGenTryInlineFCall(env, callee, fca, objOrClass, dynamicCall)) {
+        return;
+      }
+    }
+
+    auto const asyncEagerReturn =
+      fca.asyncEagerOffset != kInvalidOffset &&
+      callee->supportsAsyncEagerReturn();
+    auto const retVal = callImpl(env, cns(env, callee), fca, objOrClass,
+                                 dynamicCall, asyncEagerReturn);
+    handleCallReturn(env, callee, fca, retVal, asyncEagerReturn,
+                     false /* unlikely */);
+  };
+
+  if (fca.hasUnpack()) {
+    // We may have updated the stack, make sure the conversions below plus
+    // CallUnpack can set up its Catch.
+    updateMarker(env);
+    env.irb->exceptionStackBoundary();
+
+    if (fca.numArgs == callee->numNonVariadicParams()) {
+      auto const unpackOff = BCSPRelOffset{fca.hasGenerics() ? 1 : 0};
+      auto const unpack = topC(env, unpackOff);
+      auto const doConvertAndCallImpl = [&](SSATmp* converted) {
+        auto const offset = offsetFromIRSP(env, unpackOff);
+        gen(env, StStk, IRSPRelOffsetData{offset}, sp(env), converted);
+        doCall(fca);
+      };
+      auto const doConvertAndCall = [&](Opcode op) {
+        doConvertAndCallImpl(gen(env, op, unpack));
+      };
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        if (unpack->isA(TVec)) return doCall(fca);
+        if (unpack->isA(TArr)) return doConvertAndCall(ConvArrToVec);
+        if (unpack->isA(TDict)) return doConvertAndCall(ConvDictToVec);
+        if (unpack->isA(TKeyset)) return doConvertAndCall(ConvKeysetToVec);
+      } else {
+        if (unpack->isA(TArr)) {
+          return doConvertAndCallImpl(cond(
+            env,
+            [&](Block* taken) { return gen(env, CheckVArray, taken, unpack); },
+            [&](SSATmp* varr) { return varr; },
+            [&] { return gen(env, ConvArrToVArr, unpack); }
+          ));
+        }
+        if (unpack->isA(TVec)) return doConvertAndCall(ConvVecToVArr);
+        if (unpack->isA(TDict)) return doConvertAndCall(ConvDictToVArr);
+        if (unpack->isA(TKeyset)) return doConvertAndCall(ConvKeysetToVArr);
+      }
+    }
+
+    // Slow path. TODO: remove and use interpreter once confirmed this is cold
+    return callUnpack(env, cns(env, callee), fca, objOrClass, dynamicCall,
+                      false /* unlikely */);
   }
 
-  fsetActRec(env, cns(env, callee), fca, objOrClass, dynamicCall);
+  if (fca.numArgs <= callee->numNonVariadicParams()) {
+    return doCall(fca);
+  }
 
-  // We just wrote to the stack, make sure Call opcode can set up its Catch.
-  updateMarker(env);
-  env.irb->exceptionStackBoundary();
-
-  if (!env.formingRegion) {
-    callKnown(env, callee, fca);
+  // Pack extra arguments. The prologue can handle this even if the function
+  // does not accept variadic arguments.
+  auto const generics = fca.hasGenerics() ? popC(env) : nullptr;
+  auto const numToPack = fca.numArgs - callee->numNonVariadicParams();
+  for (auto i = 0; i < numToPack; ++i) {
+    assertTypeStack(env, BCSPRelOffset{i}, TInitCell);
+  }
+  if (RuntimeOption::EvalHackArrDVArrs) {
+    emitNewVecArray(env, numToPack);
   } else {
-    // Do not use the inferred Func* if we are forming a region. We may have
-    // inferred the target of the call based on specialized type information
-    // that won't be available when the region is translated. If we allow the
-    // FCall to specialize using this information, we may infer narrower type
-    // for the return value, erroneously preventing the region from breaking
-    // on unknown type.
-    callUnknown(env, cns(env, callee), fca, false);
+    emitNewVArray(env, numToPack);
   }
+  if (generics) push(env, generics);
+
+  doCall(FCallArgs(
+    static_cast<FCallArgs::Flags>(fca.flags | FCallArgs::Flags::HasUnpack),
+    callee->numNonVariadicParams(),
+    fca.numRets,
+    nullptr,  // inout-ness already checked
+    fca.asyncEagerOffset,
+    fca.lockWhileUnwinding,
+    fca.skipNumArgsCheck
+  ));
 }
 
 void prepareAndCallUnknown(IRGS& env, SSATmp* callee, const FCallArgs& fca,
@@ -411,19 +460,25 @@ void prepareAndCallUnknown(IRGS& env, SSATmp* callee, const FCallArgs& fca,
   }
 
   // Caller checks
-  emitCallerReffinessChecksUnknown(env, callee, fca);
+  emitCallerInOutChecksUnknown(env, callee, fca);
   if (dynamicCall) {
     emitCallerDynamicCallChecksUnknown(env, callee, mightCareAboutDynCall);
   }
   emitCallerRxChecksUnknown(env, callee);
 
-  fsetActRec(env, callee, fca, objOrClass, dynamicCall);
-
-  // We just wrote to the stack, make sure Call opcode can set up its Catch.
+  // We may have updated the stack, make sure Call opcode can set up its Catch.
   updateMarker(env);
   env.irb->exceptionStackBoundary();
 
-  callUnknown(env, callee, fca, unlikely);
+  if (fca.hasUnpack()) {
+    return callUnpack(env, callee, fca, objOrClass, dynamicCall, unlikely);
+  }
+
+  // Okay to request async eager return even if it is not supported.
+  auto const asyncEagerReturn = fca.asyncEagerOffset != kInvalidOffset;
+  auto const retVal = callImpl(env, callee, fca, objOrClass, dynamicCall,
+                               asyncEagerReturn);
+  handleCallReturn(env, nullptr, fca, retVal, asyncEagerReturn, unlikely);
 }
 
 void prepareAndCallProfiled(IRGS& env, SSATmp* callee, const FCallArgs& fca,
@@ -519,8 +574,8 @@ SSATmp* lookupObjMethodNonExactFunc(IRGS& env, SSATmp* obj,
                                     const Func* superFunc) {
   implIncStat(env, Stats::ObjMethod_methodslot);
   auto const cls = gen(env, LdObjClass, obj);
-  auto const methSlot = -(superFunc->methodSlot() + 1);
-  auto const func = gen(env, LdClsMethod, cls, cns(env, methSlot));
+  auto const slot = cns(env, superFunc->methodSlot());
+  auto const func = gen(env, LdClsMethod, cls, slot);
   if (superFunc->isStaticInPrologue()) {
     gen(env, ThrowHasThisNeedStatic, func);
   }
@@ -555,7 +610,7 @@ inline SSATmp* ldCtxForClsMethod(IRGS& env,
   }
 
   auto skipAT = [] (SSATmp* val) {
-    while (val->inst()->is(AssertType, CheckType, CheckCtxThis)) {
+    while (val->inst()->is(AssertType, CheckType)) {
       val = val->inst()->src(0);
     }
     return val;
@@ -565,15 +620,15 @@ inline SSATmp* ldCtxForClsMethod(IRGS& env,
     // A static::foo() call can always pass through a $this
     // from the caller (if it has one). Match the common patterns
     auto cc = skipAT(callCtx);
-    if (cc->inst()->is(LdObjClass, LdClsCtx, LdClsCctx)) {
+    if (cc->inst()->is(LdFrameCls)) return true;
+    if (cc->inst()->is(LdObjClass)) {
       cc = skipAT(cc->inst()->src(0));
-      if (cc->inst()->is(LdCtx, LdCctx)) return true;
+      if (cc->inst()->is(LdFrameThis)) return true;
     }
     return maybeUseThis && (exact || cls->attrs() & AttrNoOverride);
   }();
 
-  auto const ctx = gen(env, LdCtx, fp(env));
-  auto thiz = castCtxThis(env, ctx);
+  auto thiz = ldThis(env);
 
   if (canUseThis) {
     gen(env, IncRef, thiz);
@@ -595,8 +650,7 @@ inline SSATmp* ldCtxForClsMethod(IRGS& env,
     },
     [&] {
       hint(env, Block::Hint::Unlikely);
-      gen_missing_this();
-      return gen(env, ConvClsToCctx, callCtx);
+      return gen_missing_this();
     });
 }
 
@@ -676,13 +730,12 @@ void optimizeProfiledCallMethod(IRGS& env,
       env,
       [&] (Block* sideExit) {
         auto const slot = cns(env, uniqueMeth->methodSlot());
-        auto const negSlot = cns(env, -(uniqueMeth->methodSlot() + 1));
         auto const cls = isStaticCall
           ? objOrCls : gen(env, LdObjClass, objOrCls);
         auto const len = gen(env, LdFuncVecLen, cls);
         auto const cmp = gen(env, LteInt, len, slot);
         gen(env, JmpNZero, sideExit, cmp);
-        auto const meth = gen(env, LdClsMethod, cls, negSlot);
+        auto const meth = gen(env, LdClsMethod, cls, slot);
         auto const same = gen(env, EqFunc, meth, cns(env, uniqueMeth));
         gen(env, JmpZero, sideExit, same);
         auto const ctx = getCtx(uniqueMeth, objOrCls, nullptr);
@@ -710,8 +763,8 @@ void optimizeProfiledCallMethod(IRGS& env,
         auto const ecData = ExtendsClassData{baseMeth->cls(), true};
         auto const flag = gen(env, ExtendsClass, ecData, cls);
         gen(env, JmpZero, sideExit, flag);
-        auto const negSlot = cns(env, -(baseMeth->methodSlot() + 1));
-        auto const meth = gen(env, LdClsMethod, cls, negSlot);
+        auto const slot = cns(env, baseMeth->methodSlot());
+        auto const meth = gen(env, LdClsMethod, cls, slot);
         auto const ctx = getCtx(baseMeth, objOrCls, nullptr);
         auto const mightCareAboutDynCall =
           RuntimeOption::EvalForbidDynamicCallsToClsMeth > 0
@@ -778,10 +831,10 @@ void fcallObjMethodMagic(IRGS& env, const Func* callee, const FCallArgs& fca,
                          SSATmp* obj, const StringData* methodName,
                          bool dynamic, uint32_t numExtraInputs) {
   if (fca.hasUnpack() || fca.numRets != 1) return interpOne(env);
-  if (fca.enforceReffiness()) {
+  if (fca.enforceInOut()) {
     for (auto i = 0; i < fca.numArgs; ++i) {
-      if (fca.byRef(i)) {
-        gen(env, ThrowParamRefMismatch, ParamData { i }, cns(env, callee));
+      if (fca.isInOut(i)) {
+        gen(env, ThrowParamInOutMismatch, ParamData { i }, cns(env, callee));
         return;
       }
     }
@@ -804,7 +857,8 @@ void fcallObjMethodMagic(IRGS& env, const Func* callee, const FCallArgs& fca,
   env.irb->exceptionStackBoundary();
 
   assertx(!fca.supportsAsyncEagerReturn());
-  auto const fca2 = FCallArgs(fca.flags, 2, 1, nullptr, kInvalidOffset, false);
+  auto const fca2 =
+    FCallArgs(fca.flags, 2, 1, nullptr, kInvalidOffset, false, false);
   prepareAndCallKnown(env, callee, fca2, obj, dynamic);
 }
 
@@ -1004,8 +1058,7 @@ void emitFCallFuncD(IRGS& env, FCallArgs fca, const StringData* funcName) {
   prepareAndCallProfiled(env, func, fca, nullptr, false, false);
 }
 
-void emitFCallFunc(IRGS& env, FCallArgs fca, const ImmVector& v) {
-  if (v.size() != 0) return interpOne(env);
+void emitFCallFunc(IRGS& env, FCallArgs fca) {
   auto const callee = topC(env);
   if (callee->isA(TObj)) return fcallFuncObj(env, fca);
   if (callee->isA(TFunc)) return fcallFuncFunc(env, fca);
@@ -1036,7 +1089,7 @@ SSATmp* specialClsRefToCls(IRGS& env, SpecialClsRef ref) {
   switch (ref) {
     case SpecialClsRef::Static:
       if (!curClass(env)) return nullptr;
-      return gen(env, LdClsCtx, ldCtx(env));
+      return ldCtxCls(env);
     case SpecialClsRef::Self:
       if (auto const clss = curClass(env)) return cns(env, clss);
       return nullptr;
@@ -1186,7 +1239,7 @@ void emitNewObjS(IRGS& env, SpecialClsRef ref) {
   auto const addr = gen(
     env,
     LdPropAddr,
-    ByteOffsetData { (ptrdiff_t)curClass(env)->declPropOffset(*slot) },
+    IndexData { curClass(env)->propSlotToIndex(*slot) },
     ty.lval(Ptr::Prop),
     this_
   );
@@ -1261,9 +1314,9 @@ void fcallObjMethod(IRGS& env, const FCallArgs& fca, const StringData* clsHint,
 } // namespace
 
 void emitFCallObjMethod(IRGS& env, FCallArgs fca, const StringData* clsHint,
-                        ObjMethodOp subop, const ImmVector& v) {
+                        ObjMethodOp subop) {
   auto const methodName = topC(env);
-  if (v.size() != 0 || !methodName->isA(TStr)) return interpOne(env);
+  if (!methodName->isA(TStr)) return interpOne(env);
   fcallObjMethod(env, fca, clsHint, subop, methodName, true, true);
 }
 
@@ -1369,7 +1422,11 @@ void emitResolveObjMethod(IRGS& env) {
   }
 
   assertx(func);
-  auto methPair = gen(env, AllocVArray, PackedArrayData { 2 });
+  auto methPair = gen(
+    env,
+    RuntimeOption::EvalHackArrDVArrs ? AllocVecArray : AllocVArray,
+    PackedArrayData { 2 }
+  );
   gen(env, InitPackedLayoutArray, IndexData { 0 }, methPair, obj);
   gen(env, InitPackedLayoutArray, IndexData { 1 }, methPair, func);
   decRef(env, name);
@@ -1437,16 +1494,16 @@ SSATmp* forwardCtx(IRGS& env, const Func* parentFunc, SSATmp* funcTmp) {
   assertx(funcTmp->type() <= TFunc);
 
   if (parentFunc->isStatic()) {
-    return gen(env, FwdCtxStaticCall, ldCtx(env));
+    return ldCtxCls(env);
   }
 
   if (!hasThis(env)) {
     assertx(!parentFunc->isStaticInPrologue());
     gen(env, ThrowMissingThis, funcTmp);
-    return ldCtx(env);
+    return cns(env, TBottom);
   }
 
-  auto const obj = castCtxThis(env, ldCtx(env));
+  auto const obj = ldThis(env);
   gen(env, IncRef, obj);
   return obj;
 }
@@ -1462,9 +1519,9 @@ SSATmp* lookupClsMethodKnown(IRGS& env,
     baseClass, methodName, curFunc(env), exact);
   if (!func) return nullptr;
 
-  auto funcTmp = exact || func->isImmutableFrom(baseClass) ?
-    cns(env, func) :
-    gen(env, LdClsMethod, callerCtx, cns(env, -(func->methodSlot() + 1)));
+  auto funcTmp = exact || func->isImmutableFrom(baseClass)
+    ? cns(env, func)
+    : gen(env, LdClsMethod, callerCtx, cns(env, func->methodSlot()));
 
   calleeCtx = forward
     ? forwardCtx(env, func, funcTmp)
@@ -1497,7 +1554,7 @@ void fcallClsMethodCommon(IRGS& env,
       gen(env, ProfileMethod, pctData, clsVal, func);
     }
 
-    auto const ctx = forward ? gen(env, FwdCtxStaticCall, ldCtx(env)) : clsVal;
+    auto const ctx = forward ? ldCtxCls(env) : clsVal;
     auto const mightCareAboutDynCall = allowLogAsDynCall &&
       RuntimeOption::EvalForbidDynamicCallsToClsMeth > 0;
     decRef(env, methVal);
@@ -1559,10 +1616,10 @@ void fcallClsMethodCommon(IRGS& env,
 }
 
 void emitFCallClsMethod(IRGS& env, FCallArgs fca, const StringData* clsHint,
-                        const ImmVector& v, IsLogAsDynamicCallOp op) {
+                        IsLogAsDynamicCallOp op) {
   auto const cls = topC(env);
   auto const methName = topC(env, BCSPRelOffset { 1 });
-  if (v.size() != 0 || !cls->isA(TCls) || !methName->isA(TStr)) {
+  if (!cls->isA(TCls) || !methName->isA(TStr)) {
     return interpOne(env);
   }
 
@@ -1574,10 +1631,10 @@ void emitFCallClsMethod(IRGS& env, FCallArgs fca, const StringData* clsHint,
 }
 
 void emitFCallClsMethodS(IRGS& env, FCallArgs fca, const StringData* clsHint,
-                         SpecialClsRef ref, const ImmVector& v) {
+                         SpecialClsRef ref) {
   auto const cls = specialClsRefToCls(env, ref);
   auto const methName = topC(env);
-  if (v.size() != 0 || !cls || !methName->isA(TStr)) return interpOne(env);
+  if (!cls || !methName->isA(TStr)) return interpOne(env);
 
   auto const fwd = ref == SpecialClsRef::Self || ref == SpecialClsRef::Parent;
   fcallClsMethodCommon(env, fca, clsHint, cls, methName, fwd, true, true, 1);
@@ -1603,7 +1660,7 @@ void emitDirectCall(IRGS& env, Func* callee, uint32_t numParams,
   }
 
   auto const fca = FCallArgs(FCallArgs::Flags::None, numParams, 1, nullptr,
-                             kInvalidOffset, false);
+                             kInvalidOffset, false, false);
   prepareAndCallKnown(env, callee, fca, nullptr, false);
 }
 
@@ -1647,7 +1704,7 @@ Type callOutType(const Func* callee, uint32_t index) {
   if (callee->isCPPBuiltin()) {
     uint32_t param_idx = 0;
     for (; param_idx < callee->numParams(); param_idx++) {
-      if (!callee->params()[param_idx].inout) continue;
+      if (!callee->isInOut(param_idx)) continue;
       if (!index) break;
       index--;
     }

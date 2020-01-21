@@ -47,12 +47,14 @@ let identify_symbol_response_to_json results =
       match x.type_ with
       | Class -> "class"
       | Method _ -> "method"
+      | Record -> "record"
       | Function -> "function"
       | LocalVar -> "local"
       | Property _ -> "property"
       | ClassConst _ -> "class_const"
       | Typeconst _ -> "typeconst"
-      | GConst -> "global_const")
+      | GConst -> "global_const"
+      | Attribute _ -> "attribute")
   in
   let symbol_to_json (occurrence, definition) =
     let (definition_pos, definition_span, definition_id) =
@@ -75,16 +77,11 @@ let rec definition_to_json def =
   SymbolDefinition.(
     let modifiers =
       JSON_Array
-        (List.map def.modifiers ~f:(fun x ->
-             JSON_String (string_of_modifier x)))
+        (List.map def.modifiers ~f:(fun x -> JSON_String (string_of_modifier x)))
     in
-    let children =
-      opt_field def.children "children" outline_response_to_json
-    in
+    let children = opt_field def.children "children" outline_response_to_json in
     let params = opt_field def.params "params" outline_response_to_json in
-    let docblock =
-      opt_field def.docblock "docblock" (fun x -> JSON_String x)
-    in
+    let docblock = opt_field def.docblock "docblock" (fun x -> JSON_String x) in
     JSON_Object
       ( [
           ("kind", JSON_String (string_of_kind def.kind));

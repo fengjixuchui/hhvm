@@ -185,6 +185,7 @@ let make_memoize_instance_method_with_params_code
         ~pos
         ~params
         ~ast_params
+        ~tparams:[]
         ~should_emit_init_this:false;
       deprecation_body;
       instr_checkthis;
@@ -203,10 +204,8 @@ let make_memoize_instance_method_with_params_code
           ]
       else
         gather
-          [
-            instr_memoget notfound (Some (first_local, param_count));
-            instr_retc;
-          ] );
+          [instr_memoget notfound (Some (first_local, param_count)); instr_retc]
+      );
       instr_label notfound;
       instr_this;
       instr_nulluninit;
@@ -334,6 +333,7 @@ let make_memoize_static_method_with_params_code
         ~pos
         ~params
         ~ast_params
+        ~tparams:[]
         ~should_emit_init_this:false;
       deprecation_body;
       param_code_sets params param_count;
@@ -351,10 +351,8 @@ let make_memoize_static_method_with_params_code
           ]
       else
         gather
-          [
-            instr_memoget notfound (Some (first_local, param_count));
-            instr_retc;
-          ] );
+          [instr_memoget notfound (Some (first_local, param_count)); instr_retc]
+      );
       instr_label notfound;
       instr_nulluninit;
       instr_nulluninit;
@@ -449,6 +447,7 @@ let make_wrapper env return_type params instrs with_lsb is_reified =
     (* decl_vars *) )
     true (* is_memoize_wrapper *)
     with_lsb (* is_memoize_wrapper_lsb *)
+    []
     params
     (Some return_type)
     None (* doc *)
@@ -514,11 +513,7 @@ let emit_memoize_wrapper_body
     List.map (Ast_scope.Scope.get_tparams scope) ~f:(fun t -> snd t.T.tp_name)
   in
   let return_type_info =
-    Emit_body.emit_return_type_info
-      ~scope
-      ~skipawaitable:is_async
-      ~namespace
-      ret
+    Emit_body.emit_return_type_info ~scope ~skipawaitable:is_async ret
   in
   let params =
     Emit_param.from_asts
@@ -562,14 +557,11 @@ let make_memoize_wrapper_method env info ast_class ast_method =
   in
   let method_id = Hhbc_id.Method.from_ast_name original_name in
   let scope =
-    [
-      Ast_scope.ScopeItem.Method ast_method;
-      Ast_scope.ScopeItem.Class ast_class;
-    ]
+    [Ast_scope.ScopeItem.Method ast_method; Ast_scope.ScopeItem.Class ast_class]
   in
   let namespace = ast_class.T.c_namespace in
   let method_is_interceptable =
-    Interceptable.is_method_interceptable namespace ast_class method_id
+    Interceptable.is_method_interceptable ast_class method_id
   in
   let method_attributes =
     Emit_attribute.from_asts namespace ast_method.T.m_user_attributes
@@ -590,8 +582,7 @@ let make_memoize_wrapper_method env info ast_class ast_method =
   let env = Emit_env.with_rx_body (method_rx_level <> Rx.NonRx) env in
   let is_reified =
     List.exists
-      ~f:(fun t ->
-        t.T.tp_reified = T.Reified || t.T.tp_reified = T.SoftReified)
+      ~f:(fun t -> t.T.tp_reified = T.Reified || t.T.tp_reified = T.SoftReified)
       ast_method.T.m_tparams
   in
   let method_body =
@@ -614,7 +605,6 @@ let make_memoize_wrapper_method env info ast_class ast_method =
     ast_method.T.m_final
     ast_method.T.m_abstract
     false (*method_no_injection*)
-    false (*method_inout_wrapper*)
     method_id
     method_body
     (Hhas_pos.pos_to_span ast_method.T.m_span)
@@ -633,8 +623,7 @@ let emit_wrapper_methods env info ast_class ast_methods =
   Iterator.reset_iterator ();
   let hhas_methods =
     List.fold_left ast_methods ~init:[] ~f:(fun acc ast_method ->
-        if Emit_attribute.ast_any_is_memoize ast_method.T.m_user_attributes
-        then
+        if Emit_attribute.ast_any_is_memoize ast_method.T.m_user_attributes then
           let scope =
             Ast_scope.ScopeItem.Method ast_method :: Emit_env.get_scope env
           in

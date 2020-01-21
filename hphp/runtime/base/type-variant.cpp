@@ -75,7 +75,7 @@ Variant::Variant(StringData *v) noexcept {
 namespace {
 ALWAYS_INLINE
 void implCopyConstruct(TypedValue tv, Variant& v) {
-  cellDup(tvToInitCell(tv), v.asTypedValue());
+  tvDup(tvToInit(tv), v.asTypedValue());
 }
 }
 
@@ -90,15 +90,6 @@ Variant::Variant(const_variant_ref v) noexcept {
   implCopyConstruct(*v.rval(), *this);
 }
 
-/*
- * The destruct functions below all arbitrarily take RefData* as an
- * example of a refcounted object, then just cast to the proper type.
- * This is safe because we have compile time assertions that guarantee that
- * the _count field will always be exactly FAST_REFCOUNT_OFFSET bytes from
- * the beginning of the object for the StringData, ArrayData, ObjectData,
- * ResourceHdr, and RefData classes.
- */
-
 namespace {
 
 void objReleaseWrapper(ObjectData* obj) noexcept {
@@ -108,16 +99,16 @@ void objReleaseWrapper(ObjectData* obj) noexcept {
 
 }
 
-static_assert(typeToDestrIdx(KindOfArray)    == 0, "Array destruct index");
-static_assert(typeToDestrIdx(KindOfShape)    == 1, "Shape destruct index");
-static_assert(typeToDestrIdx(KindOfKeyset)   == 2, "Keyset destruct index");
-static_assert(typeToDestrIdx(KindOfDict)     == 3, "Dict destruct index");
-static_assert(typeToDestrIdx(KindOfVec)      == 4, "Vec destruct index");
-static_assert(typeToDestrIdx(KindOfRecord)   == 5, "Record destruct index");
-static_assert(typeToDestrIdx(KindOfString)   == 6, "String destruct index");
-static_assert(typeToDestrIdx(KindOfObject)   == 8, "Object destruct index");
-static_assert(typeToDestrIdx(KindOfResource) == 9, "Resource destruct index");
-static_assert(typeToDestrIdx(KindOfRef)      == 10, "Ref destruct index");
+static_assert(typeToDestrIdx(KindOfDArray)   == 0, "Array destruct index");
+static_assert(typeToDestrIdx(KindOfVArray)   == 1, "Array destruct index");
+static_assert(typeToDestrIdx(KindOfArray)    == 2, "Array destruct index");
+static_assert(typeToDestrIdx(KindOfKeyset)   == 3, "Keyset destruct index");
+static_assert(typeToDestrIdx(KindOfDict)     == 4, "Dict destruct index");
+static_assert(typeToDestrIdx(KindOfVec)      == 5, "Vec destruct index");
+static_assert(typeToDestrIdx(KindOfRecord)   == 6, "Record destruct index");
+static_assert(typeToDestrIdx(KindOfString)   == 7, "String destruct index");
+static_assert(typeToDestrIdx(KindOfObject)   == 9, "Object destruct index");
+static_assert(typeToDestrIdx(KindOfResource) == 10, "Resource destruct index");
 #ifndef USE_LOWPTR
 static_assert(typeToDestrIdx(KindOfClsMeth)  == 11, "ClsMeth destruct index");
 #endif
@@ -126,8 +117,9 @@ static_assert(kDestrTableSize == (use_lowptr ? 11 : 12),
               "size of g_destructors[] must be kDestrTableSize");
 
 RawDestructor g_destructors[] = {
+  (RawDestructor)getMethodPtr(&ArrayData::release),   // KindOfDArray
+  (RawDestructor)getMethodPtr(&ArrayData::release),   // KindOfVArray
   (RawDestructor)getMethodPtr(&ArrayData::release),   // KindOfArray
-  (RawDestructor)&MixedArray::Release,                // KindOfShape
   (RawDestructor)&SetArray::Release,                  // KindOfKeyset
   (RawDestructor)&MixedArray::Release,                // KindOfDict
   (RawDestructor)&PackedArray::Release,               // KindOfVec
@@ -136,7 +128,6 @@ RawDestructor g_destructors[] = {
   nullptr, // hole
   (RawDestructor)&objReleaseWrapper,                  // KindOfObject
   (RawDestructor)getMethodPtr(&ResourceHdr::release), // KindOfResource
-  (RawDestructor)getMethodPtr(&RefData::release),     // KindOfRef
 #ifndef USE_LOWPTR
   (RawDestructor)&ClsMethDataRef::Release,            // KindOfClsMeth
 #endif
@@ -146,8 +137,6 @@ RawDestructor g_destructors[] = {
   void Variant::set(argType v) noexcept {                 \
     if (isPrimitive()) {                                  \
       setOp;                                              \
-    } else if (isRefType(m_type)) {                       \
-      m_data.pref->var()->set(v);                         \
     } else {                                              \
       auto const old = *asTypedValue();                   \
       setOp;                                              \
@@ -159,8 +148,6 @@ RawDestructor g_destructors[] = {
     DataType& m_type = type(m_val);                       \
     if (isPrimitive()) {                                  \
       setOp;                                              \
-    } else if (isRefType(m_type)) {                       \
-      m_data.pref->var()->set(v);                         \
     } else {                                              \
       auto const old = m_val.tv();                        \
       setOp;                                              \
@@ -182,40 +169,25 @@ IMPLEMENT_SET(const StaticString&,
 
 #define IMPLEMENT_PTR_SET(ptr, member, dtype)                           \
   void Variant::set(ptr *v) noexcept {                                  \
-    Variant *self = isRefType(m_type) ? m_data.pref->var() : this;      \
     if (UNLIKELY(!v)) {                                                 \
-      self->setNull();                                                  \
+      this->setNull();                                                  \
     } else {                                                            \
       v->incRefCount();                                                 \
-      const TypedValue old = *self->asTypedValue();                     \
-      self->m_type = dtype;                                             \
-      self->m_data.member = v;                                          \
+      const TypedValue old = *this->asTypedValue();                     \
+      this->m_type = dtype;                                             \
+      this->m_data.member = v;                                          \
       tvDecRefGen(old);                                                 \
     }                                                                   \
   }                                                                     \
   void variant_ref::set(ptr *v) noexcept {                              \
-    if (isRefType(type(m_val))) {                                       \
-      Variant *self = val(m_val).pref->var();                           \
-      if (UNLIKELY(!v)) {                                               \
-        self->setNull();                                                \
-      } else {                                                          \
-        v->incRefCount();                                               \
-        const TypedValue old = *self->asTypedValue();                   \
-        self->m_type = dtype;                                           \
-        self->m_data.member = v;                                        \
-        tvDecRefGen(old);                                               \
-      }                                                                 \
-    }                                                                   \
-    else {                                                              \
-      if (UNLIKELY(!v)) {                                               \
-        this->setNull();                                                \
-      } else {                                                          \
-        v->incRefCount();                                               \
-        const TypedValue old = this->m_val.tv();                        \
-        type(this->m_val) = dtype;                                      \
-        val(this->m_val).member = v;                                    \
-        tvDecRefGen(old);                                               \
-      }                                                                 \
+    if (UNLIKELY(!v)) {                                                 \
+      this->setNull();                                                  \
+    } else {                                                            \
+      v->incRefCount();                                                 \
+      const TypedValue old = this->m_val.tv();                          \
+      type(this->m_val) = dtype;                                        \
+      val(this->m_val).member = v;                                      \
+      tvDecRefGen(old);                                                 \
     }                                                                   \
   }
 
@@ -231,37 +203,23 @@ IMPLEMENT_PTR_SET(ResourceHdr, pres, KindOfResource)
 
 #define IMPLEMENT_STEAL(ptr, member, dtype)                             \
   void Variant::steal(ptr* v) noexcept {                                \
-    Variant *self = isRefType(m_type) ? m_data.pref->var() : this;      \
     if (UNLIKELY(!v)) {                                                 \
-      self->setNull();                                                  \
+      this->setNull();                                                  \
     } else {                                                            \
-      const TypedValue old = *self->asTypedValue();                     \
-      self->m_type = dtype;                                             \
-      self->m_data.member = v;                                          \
+      const TypedValue old = *this->asTypedValue();                     \
+      this->m_type = dtype;                                             \
+      this->m_data.member = v;                                          \
       tvDecRefGen(old);                                                 \
     }                                                                   \
   }                                                                     \
   void variant_ref::steal(ptr* v) noexcept {                            \
-    if (isRefType(type(m_val))) {                                       \
-      Variant *self = val(m_val).pref->var();                           \
-      if (UNLIKELY(!v)) {                                               \
-        self->setNull();                                                \
-      } else {                                                          \
-        const TypedValue old = *self->asTypedValue();                   \
-        self->m_type = dtype;                                           \
-        self->m_data.member = v;                                        \
-        tvDecRefGen(old);                                               \
-      }                                                                 \
-    }                                                                   \
-    else {                                                              \
-      if (UNLIKELY(!v)) {                                               \
-        this->setNull();                                                \
-      } else {                                                          \
-        const TypedValue old = this->m_val.tv();                        \
-        type(this->m_val) = dtype;                                      \
-        val(this->m_val).member = v;                                    \
-        tvDecRefGen(old);                                               \
-      }                                                                 \
+    if (UNLIKELY(!v)) {                                                 \
+      this->setNull();                                                  \
+    } else {                                                            \
+      const TypedValue old = this->m_val.tv();                          \
+      type(this->m_val) = dtype;                                        \
+      val(this->m_val).member = v;                                      \
+      tvDecRefGen(old);                                                 \
     }                                                                   \
   }
 
@@ -297,8 +255,6 @@ DataType Variant::toNumeric(int64_t &ival, double &dval,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfObject:
@@ -320,9 +276,11 @@ DataType Variant::toNumeric(int64_t &ival, double &dval,
     case KindOfPersistentString:
     case KindOfString:
       return checkString ? m_data.pstr->toNumeric(ival, dval) : m_type;
-
-    case KindOfRef:
-      return m_data.pref->var()->toNumeric(ival, dval, checkString);
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
   }
   not_reached();
 }
@@ -337,8 +295,10 @@ bool Variant::isScalar() const noexcept {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfObject:
@@ -355,9 +315,6 @@ bool Variant::isScalar() const noexcept {
     case KindOfFunc:
     case KindOfClass:
       return true;
-
-    case KindOfRef:
-      always_assert(false && "isScalar() called on a boxed value");
   }
   not_reached();
 }
@@ -374,14 +331,21 @@ static bool isAllowedAsConstantValueImpl(TypedValue tv) {
     case KindOfPersistentDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
     case KindOfPersistentArray:
     case KindOfResource:
+    case KindOfFunc:
+    case KindOfClsMeth:
       return true;
+
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      return false;
 
     case KindOfVec:
     case KindOfDict:
-    case KindOfShape:
     case KindOfArray: {
       if (tv.m_data.parr->isGlobalsArray()) return false;
 
@@ -398,10 +362,7 @@ static bool isAllowedAsConstantValueImpl(TypedValue tv) {
 
     case KindOfUninit:
     case KindOfObject:
-    case KindOfRef:
-    case KindOfFunc:
     case KindOfClass:
-    case KindOfClsMeth:
     case KindOfRecord:
       return false;
   }
@@ -432,14 +393,18 @@ bool Variant::toBooleanHelper() const {
     case KindOfDouble:        return m_data.dbl != 0;
     case KindOfPersistentString:
     case KindOfString:        return m_data.pstr->toBoolean();
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+      return false;
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:         return !m_data.parr->empty();
     case KindOfObject:        return m_data.pobj->toBoolean();
@@ -449,7 +414,6 @@ bool Variant::toBooleanHelper() const {
     case KindOfClass:
       return classToStringHelper(m_data.pclass)->toBoolean();
     case KindOfClsMeth:       return true;
-    case KindOfRef:           return m_data.pref->var()->toBoolean();
     case KindOfRecord:
       raise_convert_record_to_type("bool");
       return false;
@@ -466,14 +430,18 @@ int64_t Variant::toInt64Helper(int base /* = 10 */) const {
     case KindOfDouble:        return double_to_int64(m_data.dbl);
     case KindOfPersistentString:
     case KindOfString:        return m_data.pstr->toInt64(base);
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+      return 0;
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:         return m_data.parr->empty() ? 0 : 1;
     case KindOfObject:        return m_data.pobj->toInt64();
@@ -485,7 +453,6 @@ int64_t Variant::toInt64Helper(int base /* = 10 */) const {
     case KindOfClsMeth:
       raiseClsMethConvertWarningHelper("int");
       return 1;
-    case KindOfRef:           return m_data.pref->var()->toInt64(base);
     case KindOfRecord:
       raise_convert_record_to_type("int");
       return 0;
@@ -502,14 +469,18 @@ double Variant::toDoubleHelper() const {
     case KindOfDouble:        return m_data.dbl;
     case KindOfPersistentString:
     case KindOfString:        return m_data.pstr->toDouble();
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
+      return 0.0;
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:         return (double)toInt64();
     case KindOfObject:        return m_data.pobj->toDouble();
@@ -521,7 +492,6 @@ double Variant::toDoubleHelper() const {
     case KindOfClsMeth:
       raiseClsMethConvertWarningHelper("double");
       return 1.0;
-    case KindOfRef:           return m_data.pref->var()->toDouble();
     case KindOfRecord:
       raise_convert_record_to_type("double");
       return 0.0;
@@ -544,10 +514,13 @@ Array Variant::toPHPArrayHelper() const {
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentKeyset:
     case KindOfKeyset:        return ArrNR{m_data.parr}.asArray().toPHPArray();
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
     case KindOfPersistentArray:
     case KindOfArray:         return Array(m_data.parr);
     case KindOfObject:        return m_data.pobj->toArray();
@@ -562,7 +535,6 @@ Array Variant::toPHPArrayHelper() const {
       raiseClsMethToVecWarningHelper();
       return make_packed_array(
         m_data.pclsmeth->getCls(), m_data.pclsmeth->getFunc());
-    case KindOfRef:           return m_data.pref->var()->toArray();
     case KindOfRecord:
       raise_convert_record_to_type("array");
       return empty_array();
@@ -585,8 +557,10 @@ Resource Variant::toResourceHelper() const {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
     case KindOfPersistentArray:
     case KindOfArray:
     case KindOfObject:
@@ -598,9 +572,6 @@ Resource Variant::toResourceHelper() const {
 
     case KindOfResource:
       return Resource{m_data.pres};
-
-    case KindOfRef:
-      return m_data.pref->var()->toResource();
   }
   not_reached();
 }
@@ -626,7 +597,7 @@ Variant& lvalBlackHole() {
 }
 
 void Variant::setEvalScalar() {
-  assertx(cellIsPlausible(*this));
+  assertx(tvIsPlausible(*this));
 
   auto const do_array = [this]{
     if (!m_data.parr->isStatic()) {
@@ -674,11 +645,11 @@ void Variant::setEvalScalar() {
       do_array();
       return;
 
-    case KindOfShape:
-      m_type = KindOfPersistentShape;
-    case KindOfPersistentShape:
-      do_array();
-      return;
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
     case KindOfArray:
       m_type = KindOfPersistentArray;
@@ -688,7 +659,6 @@ void Variant::setEvalScalar() {
 
     case KindOfObject:
     case KindOfResource:
-    case KindOfRef:
     case KindOfFunc:
     case KindOfClass:
       break;

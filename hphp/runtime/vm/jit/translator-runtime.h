@@ -54,35 +54,27 @@ ArrayData* addElemStringKeyHelper(ArrayData* ad, StringData* key,
 ArrayData* dictAddElemIntKeyHelper(ArrayData* ad, int64_t key, TypedValue val);
 ArrayData* dictAddElemStringKeyHelper(ArrayData* ad, StringData* key,
                                       TypedValue val);
-RefData* boxValue(TypedValue tv);
 ArrayData* arrayAdd(ArrayData* a1, ArrayData* a2);
 /* Helper functions for conversion instructions that are too
  * complicated to inline
  */
-ArrayData* convCellToArrHelper(TypedValue tv);
+ArrayData* convTVToArrHelper(TypedValue tv);
 ArrayData* convArrToNonDVArrHelper(ArrayData* a);
 ArrayData* convVecToArrHelper(ArrayData* a);
 ArrayData* convDictToArrHelper(ArrayData* a);
-ArrayData* convShapeToArrHelper(ArrayData* a);
 ArrayData* convKeysetToArrHelper(ArrayData* a);
 ArrayData* convArrToVecHelper(ArrayData* a);
 ArrayData* convDictToVecHelper(ArrayData* a);
-ArrayData* convShapeToVecHelper(ArrayData* a);
 ArrayData* convKeysetToVecHelper(ArrayData* a);
 ArrayData* convObjToVecHelper(ObjectData* o);
-ArrayData* convCellToVecHelper(TypedValue tv);
 ArrayData* convArrToDictHelper(ArrayData* a);
-ArrayData* convShapeToDictHelper(ArrayData* a);
 ArrayData* convVecToDictHelper(ArrayData* a);
 ArrayData* convKeysetToDictHelper(ArrayData* a);
 ArrayData* convObjToDictHelper(ObjectData* o);
-ArrayData* convCellToDictHelper(TypedValue tv);
 ArrayData* convArrToKeysetHelper(ArrayData* a);
 ArrayData* convVecToKeysetHelper(ArrayData* a);
 ArrayData* convDictToKeysetHelper(ArrayData* a);
-ArrayData* convShapeToKeysetHelper(ArrayData* a);
 ArrayData* convObjToKeysetHelper(ObjectData* o);
-ArrayData* convCellToKeysetHelper(TypedValue tv);
 ArrayData* convClsMethToArrHealper(ClsMethDataRef clsmeth);
 ArrayData* convClsMethToVArrHealper(ClsMethDataRef clsmeth);
 ArrayData* convClsMethToVecHealper(ClsMethDataRef clsmeth);
@@ -93,8 +85,7 @@ double convObjToDblHelper(const ObjectData* o);
 double convArrToDblHelper(ArrayData* a);
 double convStrToDblHelper(const StringData* s);
 double convResToDblHelper(const ResourceHdr* r);
-double convCellToDblHelper(TypedValue tv);
-ObjectData* convCellToObjHelper(TypedValue tv);
+double convTVToDblHelper(TypedValue tv);
 StringData* convDblToStrHelper(double i);
 StringData* convIntToStrHelper(int64_t i);
 StringData* convObjToStrHelper(ObjectData* o);
@@ -107,14 +98,14 @@ void VerifyParamTypeSlow(const Class* cls,
                          const TypeConstraint* expected,
                          int param);
 void VerifyParamTypeCallable(TypedValue value, int param);
-void VerifyParamTypeFail(int param);
+void VerifyParamTypeFail(int param, const TypeConstraint*);
 void VerifyRetTypeSlow(int32_t id,
                        const Class* cls,
                        const Class* constraint,
                        const TypeConstraint* expected,
                        const TypedValue value);
 void VerifyRetTypeCallable(int32_t id, TypedValue value);
-void VerifyRetTypeFail(int32_t id, TypedValue* value);
+void VerifyRetTypeFail(int32_t id, TypedValue* value, const TypeConstraint* tc);
 
 void VerifyReifiedLocalTypeImpl(int32_t, ArrayData*);
 void VerifyReifiedReturnTypeImpl(TypedValue, ArrayData*);
@@ -165,7 +156,7 @@ int64_t switchDoubleHelper(double val, int64_t base, int64_t nTargets);
 int64_t switchStringHelper(StringData* s, int64_t base, int64_t nTargets);
 int64_t switchObjHelper(ObjectData* o, int64_t base, int64_t nTargets);
 
-void checkFrame(ActRec* fp, Cell* sp, bool fullCheck);
+void checkFrame(ActRec* fp, TypedValue* sp, bool fullCheck);
 
 void loadArrayFunctionContext(ArrayData*, ActRec* preLiveAR, ActRec* fp);
 
@@ -176,12 +167,11 @@ const Func* lookupClsMethodHelper(const Class* cls, const StringData* methName,
 // These shuffle* functions are the JIT's version of bytecode.cpp's
 // shuffleExtraStackArgs
 void trimExtraArgs(ActRec* ar);
-void shuffleExtraArgsMayUseVV(ActRec* ar);
 void shuffleExtraArgsVariadic(ActRec* ar);
-void shuffleExtraArgsVariadicAndVV(ActRec* ar);
 
-void raiseMissingArgument(const Func* func, int got);
+[[noreturn]] void throwMissingArgument(const Func* func, int got);
 void raiseTooManyArguments(const Func* func, int got);
+void raiseTooManyArgumentsPrologue(const Func* func, ArrayData* unpackArgs);
 
 Class* lookupClsRDS(const StringData* name);
 
@@ -197,27 +187,23 @@ ArrayData* resolveTypeStructHelper(
   bool suppress,
   bool isOrAsOp
 );
-bool isTypeStructHelper(ArrayData*, Cell);
-[[noreturn]] void throwAsTypeStructExceptionHelper(ArrayData*, Cell);
+bool isTypeStructHelper(ArrayData*, TypedValue);
+[[noreturn]] void throwAsTypeStructExceptionHelper(ArrayData*, TypedValue);
 ArrayData* errorOnIsAsExpressionInvalidTypesHelper(ArrayData*);
 
 /* Reified generics helpers
  * Both functions decref the input array by turning it into a static array
  */
 ArrayData* recordReifiedGenericsAndGetTSList(ArrayData*);
-/*
- * Throw a VMSwitchMode exception.
- */
-[[noreturn]] void throwSwitchMode();
 
 [[noreturn]] void throwOOBException(TypedValue base, TypedValue key);
 [[noreturn]] void invalidArrayKeyHelper(const ArrayData* ad, TypedValue key);
 
 namespace MInstrHelpers {
-void setNewElem(tv_lval base, Cell val, const MInstrPropState*);
-void setNewElemArray(tv_lval base, Cell val);
-void setNewElemVec(tv_lval base, Cell val);
-TypedValue setOpElem(tv_lval base, TypedValue key, Cell val, SetOpOp op,
+void setNewElem(tv_lval base, TypedValue val, const MInstrPropState*);
+void setNewElemArray(tv_lval base, TypedValue val);
+void setNewElemVec(tv_lval base, TypedValue val);
+TypedValue setOpElem(tv_lval base, TypedValue key, TypedValue val, SetOpOp op,
                      const MInstrPropState*);
 StringData* stringGetI(StringData*, uint64_t);
 uint64_t pairIsset(c_Pair*, int64_t);

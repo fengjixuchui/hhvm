@@ -52,7 +52,6 @@ module LazyTrivia : sig
     int ->
     Trivia.t list
 end = struct
-  type t = Obj.t
   (** This looks horrifying, but allow me to explain. For most trivia, we really
     don't care what it is, and even if we do, we can find out what it is by
     running the lexer over the trivia range again. To optimize for this case,
@@ -82,6 +81,7 @@ end = struct
       store whether a trivia of the [n]th [TriviaKind] is present.
     Special case: [trivia] is [(Trivia.t list * Trivia.t list)], corresponding
       to the leading and trailing trivia. *)
+  type t = Obj.t
 
   (** Internal representation used for printing and pattern matching. *)
   type internal_t =
@@ -329,9 +329,7 @@ let trailing_end_offset token =
   leading_start_offset token + w
 
 let leading_start_position token =
-  SourceText.offset_to_position
-    (source_text token)
-    (leading_start_offset token)
+  SourceText.offset_to_position (source_text token) (leading_start_offset token)
 
 let leading_end_position token =
   SourceText.offset_to_position (source_text token) (leading_end_offset token)
@@ -358,8 +356,7 @@ let span token = (start_position token, end_position token)
 let trailing_span token =
   (trailing_start_position token, trailing_end_position token)
 
-let full_span token =
-  (leading_start_position token, trailing_end_position token)
+let full_span token = (leading_start_position token, trailing_end_position token)
 
 let full_text token =
   SourceText.sub

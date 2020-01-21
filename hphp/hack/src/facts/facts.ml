@@ -16,11 +16,12 @@ module InvStringKey = struct
   let compare (x : t) (y : t) = Pervasives.compare y x
 end
 
-module InvSMap = MyMap.Make (InvStringKey)
+module InvSMap = WrappedMap.Make (InvStringKey)
 module InvSSet = Caml.Set.Make (InvStringKey)
 
 type type_kind =
   | TKClass
+  | TKRecord
   | TKInterface
   | TKEnum
   | TKTrait
@@ -30,6 +31,7 @@ type type_kind =
 
 let type_kind_to_string = function
   | TKClass -> "class"
+  | TKRecord -> "record"
   | TKInterface -> "interface"
   | TKEnum -> "enum"
   | TKTrait -> "trait"
@@ -40,6 +42,8 @@ let type_kind_to_string = function
 let type_kind_from_string s =
   if s = "class" then
     TKClass
+  else if s = "record" then
+    TKRecord
   else if s = "interface" then
     TKInterface
   else if s = "enum" then

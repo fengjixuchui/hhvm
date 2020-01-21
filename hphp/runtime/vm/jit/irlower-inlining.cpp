@@ -18,12 +18,14 @@
 
 #include "hphp/runtime/base/attr.h"
 #include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/func.h"
 
 #include "hphp/runtime/vm/jit/types.h"
 #include "hphp/runtime/vm/jit/abi.h"
 #include "hphp/runtime/vm/jit/analysis.h"
 #include "hphp/runtime/vm/jit/dce.h"
+#include "hphp/runtime/vm/jit/code-gen-cf.h"
 #include "hphp/runtime/vm/jit/code-gen-helpers.h"
 #include "hphp/runtime/vm/jit/extra-data.h"
 #include "hphp/runtime/vm/jit/ir-instruction.h"
@@ -54,6 +56,7 @@ void cgDefInlineFP(IRLS& env, const IRInstruction* inst) {
   auto const extra = inst->extra<DefInlineFP>();
   auto const callerSP = srcLoc(env, inst, 0).reg();
   auto const callerFP = srcLoc(env, inst, 1).reg();
+  auto const ctx = srcLoc(env, inst, 2).reg();
   auto& v = vmain(env);
 
   auto const ar = callerSP[cellsToBytes(extra->spOffset.offset)];
@@ -62,16 +65,51 @@ void cgDefInlineFP(IRLS& env, const IRInstruction* inst) {
   v << store{callerFP, ar + AROFF(m_sfp)};
   emitImmStoreq(v, uintptr_t(tc::ustubs().retInlHelper),
                 ar + AROFF(m_savedRip));
-  v << storeli{extra->callBCOff, ar + AROFF(m_callOff)};
-  if (extra->target->attrs() & AttrMayUseVV) {
-    v << storeqi{0, ar + AROFF(m_invName)};
+  emitImmStoreq(v, uintptr_t(extra->target), ar + AROFF(m_func));
+
+  // Set m_callOffAndFlags.
+  auto const coaf = safe_cast<int32_t>(ActRec::encodeCallOffsetAndFlags(
+    extra->callBCOff,
+    extra->asyncEagerReturn ? (1 << ActRec::AsyncEagerRet) : 0
+  ));
+  v << storeli{coaf, ar + AROFF(m_callOffAndFlags)};
+
+  // Set m_numArgs.
+  v << storeli{safe_cast<int32_t>(extra->numArgs), ar + AROFF(m_numArgs)};
+
+  // Set m_this/m_cls.
+  auto const ctxTmp = inst->src(2);
+  assertx(ctxTmp->isA(TCls) || ctxTmp->isA(TObj) || ctxTmp->isA(TNullptr));
+  if (ctxTmp->hasConstVal(TCls)) {
+    auto const ctxVal = uintptr_t(ctxTmp->clsVal());
+    emitImmStoreq(v, ctxVal, ar + AROFF(m_thisUnsafe));
+  } else if (ctxTmp->isA(TCls) || ctxTmp->isA(TObj)) {
+    // Store the ObjectData* or Class*
+    v << store{ctx, ar + AROFF(m_thisUnsafe)};
+  } else if (RuntimeOption::EvalHHIRGenerateAsserts) {
+    // No $this or class; this happens in FCallFunc*.
+    emitImmStoreq(v, ActRec::kTrashedThisSlot, ar + AROFF(m_thisUnsafe));
   }
-  if (extra->asyncEagerReturn) {
-    v << orlim{
-      static_cast<int32_t>(ActRec::Flags::AsyncEagerRet),
-      ar + AROFF(m_numArgsAndFlags),
-      v.makeReg()
-    };
+
+  if (extra->target->attrs() & AttrMayUseVV) {
+    v << storeqi{0, ar + AROFF(m_varEnv)};
+  } else if (RuntimeOption::EvalHHIRGenerateAsserts) {
+    emitImmStoreq(v, ActRec::kTrashedVarEnvSlot, ar + AROFF(m_varEnv));
+  }
+
+  if (extra->syncVmfp) {
+    // If we are in a catch block, update the vmfp() to point to the inlined
+    // frame if it was pointing to the parent frame, letting the unwinder see
+    // the inlined frame.
+    auto const newFP = v.makeReg();
+    auto const sf = v.makeReg();
+    v << lea{ar, newFP};
+    v << cmpqm{callerFP, rvmtl()[rds::kVmfpOff], sf};
+    ifThen(v, CC_E, sf, [&](Vout& v) {
+      v << store{newFP, rvmtl()[rds::kVmfpOff]};
+      emitImmStoreq(v, intptr_t(inst->marker().sk().pc()),
+                    rvmtl()[rds::kVmpcOff]);
+    });
   }
 
   v << pushframe{};
@@ -91,7 +129,7 @@ bool isResumedParent(const IRInstruction* inst) {
       i = resolveFpDefLabel(s);
       assertx(i);
     }
-    always_assert(i->is(DefFP, DefInlineFP));
+    always_assert(i->is(DefInlineFP));
     return i->dst();
   };
 
@@ -148,13 +186,20 @@ void cgInlineReturnNoFrame(IRLS& env, const IRInstruction* inst) {
 
 void cgSyncReturnBC(IRLS& env, const IRInstruction* inst) {
   auto const extra = inst->extra<SyncReturnBC>();
+  auto const coaf = extra->callBCOffset << ActRec::CallOffsetStart;
   auto const spOffset = cellsToBytes(extra->spOffset.offset);
-  auto const callBCOffset = safe_cast<int32_t>(extra->callBCOffset);
   auto const sp = srcLoc(env, inst, 0).reg();
   auto const fp = srcLoc(env, inst, 1).reg();
+  auto const mask = (1 << ActRec::CallOffsetStart) - 1;
 
   auto& v = vmain(env);
-  v << storeli{callBCOffset, sp[spOffset + AROFF(m_callOff)]};
+  auto const oldCoaf = v.makeReg();
+  auto const newCoaf = v.makeReg();
+  auto const flags = v.makeReg();
+  v << loadl{sp[spOffset + AROFF(m_callOffAndFlags)], oldCoaf};
+  v << andli{mask, oldCoaf, flags, v.makeReg()};
+  v << orli{coaf, flags, newCoaf, v.makeReg()};
+  v << storel{newCoaf, sp[spOffset + AROFF(m_callOffAndFlags)]};
   v << store{fp, sp[spOffset + AROFF(m_sfp)]};
 }
 

@@ -129,7 +129,7 @@ bool interface_supports_vec(std::string const&);
 bool interface_supports_dict(std::string const&);
 bool interface_supports_keyset(std::string const&);
 
-Cell annotDefaultValue(AnnotType at);
+TypedValue annotDefaultValue(AnnotType at);
 
 enum class AnnotAction {
   Pass,
@@ -197,7 +197,6 @@ enum class AnnotAction {
  */
 inline AnnotAction
 annotCompat(DataType dt, AnnotType at, const StringData* annotClsName) {
-  assertx(!isRefType(dt));
   assertx(IMPLIES(at == AnnotType::Object, annotClsName != nullptr));
 
   auto const metatype = getAnnotMetaType(at);
@@ -221,8 +220,7 @@ annotCompat(DataType dt, AnnotType at, const StringData* annotClsName) {
     case AnnotMetaType::This:
       return (dt == KindOfObject)
         ? AnnotAction::ObjectCheck
-        : (RuntimeOption::EvalThisTypeHintLevel == 0)
-          ? AnnotAction::Pass : AnnotAction::Fail;
+        : AnnotAction::Fail;
     case AnnotMetaType::Callable:
       // For "callable", if `dt' is not string/array/object/func we know
       // it's not compatible, otherwise more checks are required
@@ -326,11 +324,12 @@ annotCompat(DataType dt, AnnotType at, const StringData* annotClsName) {
       case KindOfString:
         return interface_supports_string(annotClsName)
           ? AnnotAction::Pass : AnnotAction::Fail;
-      case KindOfPersistentShape:
-      case KindOfShape:
-        // TODO(T31025155): Emit a warning.
-        return interface_supports_shape(annotClsName)
-          ? AnnotAction::Pass : AnnotAction::Fail;
+      case KindOfPersistentDArray:
+      case KindOfDArray:
+      case KindOfPersistentVArray:
+      case KindOfVArray:
+        // TODO(T58820726)
+        not_reached();
       case KindOfPersistentArray:
       case KindOfArray:
         return interface_supports_array(annotClsName)
@@ -374,7 +373,6 @@ annotCompat(DataType dt, AnnotType at, const StringData* annotClsName) {
       case KindOfRecord:
         return AnnotAction::Fail;
       case KindOfObject:
-      case KindOfRef:
         not_reached();
         break;
     }

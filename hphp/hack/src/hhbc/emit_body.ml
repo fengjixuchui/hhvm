@@ -20,7 +20,29 @@ let has_type_constraint env ti ast_param =
     (RGH.has_reified_type_constraint env h, Some h)
   | _ -> (RGH.NoConstraint, None)
 
-let emit_method_prolog ~env ~pos ~params ~ast_params ~should_emit_init_this =
+let emit_generics_upper_bounds tparams ~skipawaitable =
+  List.filter_map tparams ~f:(fun t ->
+      let ubs =
+        List.filter_map t.A.tp_constraints ~f:(fun c ->
+            match c with
+            | (Ast_defs.Constraint_as, h) ->
+              let tparams = List.map tparams (fun t -> snd t.A.tp_name) in
+              Some
+                (Emit_type_hint.hint_to_type_info
+                   ~kind:Emit_type_hint.UpperBound
+                   ~tparams
+                   ~nullable:false
+                   ~skipawaitable
+                   h)
+            | _ -> None)
+      in
+      if ubs = [] then
+        None
+      else
+        Some (snd t.A.tp_name, ubs))
+
+let emit_method_prolog
+    ~env ~pos ~params ~ast_params ~tparams ~should_emit_init_this =
   let init_this =
     if not should_emit_init_this then
       empty
@@ -39,15 +61,14 @@ let emit_method_prolog ~env ~pos ~params ~ast_params ~should_emit_init_this =
       let param_name = Param_named (Hhas_param.name param) in
       match has_type_constraint env param_type_info ast_param with
       | (RGH.NoConstraint, _) -> None
-      | (RGH.NotReified, _) ->
-        Some (instr (IMisc (VerifyParamType param_name)))
+      | (RGH.NotReified, _) -> Some (instr (IMisc (VerifyParamType param_name)))
       | (RGH.MaybeReified, Some h) ->
         Some
           (gather
              [
                Emit_expression.get_type_structure_for_hint
-                 env
                  ~targ_map:SMap.empty
+                 ~tparams
                  h;
                instr (IMisc (VerifyParamTypeTS param_name));
              ])
@@ -87,37 +108,10 @@ let rec emit_def env def =
   | A.Namespace (_, defs) -> emit_defs env defs
   | _ -> empty
 
-and check_namespace_update env ns =
-  let p = Pos.none in
-  let prev_ns = Emit_env.get_namespace env in
-  let check_map2 prev curr =
-    (* Check whether any definition updates an earlier definition *)
-    SMap.iter
-      (fun key value ->
-        match SMap.get key prev with
-        | None -> () (* new element, it is fine *)
-        | Some v ->
-          if v = value then
-            ()
-          (* same element, it is fine *)
-          else
-            Emit_fatal.raise_fatal_parse p
-            @@ Printf.sprintf
-                 "Cannot use namespace %s as %s because the name is already in use"
-                 (SU.strip_global_ns value)
-                 key)
-      curr
-  in
-  check_map2 prev_ns.Namespace_env.ns_ns_uses ns.Namespace_env.ns_ns_uses;
-  check_map2 prev_ns.Namespace_env.ns_class_uses ns.Namespace_env.ns_class_uses;
-  check_map2 prev_ns.Namespace_env.ns_fun_uses ns.Namespace_env.ns_fun_uses;
-  check_map2 prev_ns.Namespace_env.ns_const_uses ns.Namespace_env.ns_const_uses
-
 and emit_defs env defs =
   let rec aux env defs =
     match defs with
     | A.SetNamespaceEnv ns :: defs ->
-      check_namespace_update env ns;
       let env = Emit_env.with_namespace ns env in
       aux env defs
     | [] -> Emit_statement.emit_dropthrough_return env
@@ -125,11 +119,9 @@ and emit_defs env defs =
     | [A.Stmt s]
     (* emit statement as final if it is one before the last and last statement is
        empty markup (which will be no-op) *)
-    
     | [A.Stmt s; A.Stmt (_, A.Markup ((_, ""), None))] ->
       Emit_statement.emit_final_statement env s
-    | [d] ->
-      gather [emit_def env d; Emit_statement.emit_dropthrough_return env]
+    | [d] -> gather [emit_def env d; Emit_statement.emit_dropthrough_return env]
     | d :: defs ->
       let i1 = emit_def env d in
       let i2 = aux env defs in
@@ -160,12 +152,13 @@ let make_body
     decl_vars
     is_memoize_wrapper
     is_memoize_wrapper_lsb
+    upper_bounds
     params
     return_type_info
     doc_comment
     env =
   let body_instrs = rewrite_user_labels body_instrs in
-  let body_instrs = rewrite_tvs body_instrs in
+  let body_instrs = Emit_adata.rewrite_typed_values body_instrs in
   let (params, body_instrs) =
     if Hhbc_options.relabel !Hhbc_options.compiler_options then
       Label_rewriter.relabel_function params body_instrs
@@ -184,12 +177,13 @@ let make_body
     num_iters
     is_memoize_wrapper
     is_memoize_wrapper_lsb
+    upper_bounds
     params
     return_type_info
     doc_comment
     env
 
-let emit_return_type_info ~scope ~skipawaitable ~namespace ret =
+let emit_return_type_info ~scope ~skipawaitable ret =
   let tparams =
     List.map (Ast_scope.Scope.get_tparams scope) (fun t -> snd t.A.tp_name)
   in
@@ -201,7 +195,6 @@ let emit_return_type_info ~scope ~skipawaitable ~namespace ret =
       ~nullable:false
       ~skipawaitable
       ~tparams
-      ~namespace
       h
 
 let emit_deprecation_warning scope deprecation_info =
@@ -265,8 +258,8 @@ let emit_deprecation_warning scope deprecation_info =
 
 let rec is_awaitable h =
   match snd h with
-  | Aast.Happly ((_, "Awaitable"), [])
-  | Aast.Happly ((_, "Awaitable"), [_]) ->
+  | Aast.Happly ((_, s), ([] | [_]))
+    when s = Naming_special_names.Classes.cAwaitable ->
     true
   | Aast.Hsoft h
   | Aast.Hoption h ->
@@ -284,9 +277,6 @@ let emit_verify_out params =
     | Some { Hhas_type_info.type_info_user_type = Some t; _ } ->
       not @@ is_mixed_or_dynamic t
     | _ -> true
-  and emit_verify_out_type_for_refs =
-    Hhbc_options.notice_on_byref_argument_typehint_violation
-      !Hhbc_options.compiler_options
   in
   let param_instrs =
     List.filter_mapi params ~f:(fun i p ->
@@ -299,18 +289,6 @@ let emit_verify_out params =
                    instr_verifyOutType (Param_unnamed i)
                  else
                    empty );
-               ])
-        else if
-          Hhas_param.is_reference p
-          && is_verifiable p
-          && emit_verify_out_type_for_refs
-        then
-          Some
-            (gather
-               [
-                 instr_cgetl (Local.Named (Hhas_param.name p));
-                 instr_verifyOutType (Param_unnamed i);
-                 instr_popc;
                ])
         else
           None)
@@ -367,8 +345,8 @@ let emit_body
             match scope with
             | Ast_scope.ScopeItem.Function fd :: _ ->
               ("function", Utils.strip_ns (snd fd.A.f_name))
-            | Ast_scope.ScopeItem.Method md
-              :: Ast_scope.ScopeItem.Class cd :: _ ->
+            | Ast_scope.ScopeItem.Method md :: Ast_scope.ScopeItem.Class cd :: _
+              ->
               ( "method",
                 Utils.strip_ns (snd cd.A.c_name) ^ "::" ^ snd md.A.m_name )
             | _ -> assert false
@@ -384,9 +362,7 @@ let emit_body
   in
   Label.reset_label ();
   Iterator.reset_iterator ();
-  let return_type_info =
-    emit_return_type_info ~scope ~skipawaitable ~namespace ret
-  in
+  let return_type_info = emit_return_type_info ~scope ~skipawaitable ret in
   let return_type_info =
     if not is_native then
       return_type_info
@@ -425,18 +401,7 @@ let emit_body
       ~scope
       ast_params
   in
-  let params =
-    if is_closure_body then
-      List.map ~f:Hhas_param.switch_inout_to_reference params
-    else
-      params
-  in
-  let (num_out, verify_out) =
-    if is_closure_body then
-      (0, empty)
-    else
-      emit_verify_out params
-  in
+  let (num_out, verify_out) = emit_verify_out params in
   Emit_statement.set_verify_return verify_return;
   Emit_statement.set_verify_out verify_out;
   Emit_statement.set_num_out num_out;
@@ -485,7 +450,7 @@ let emit_body
         List.map ~f:aux cvl
       in
       let captured_vars = filter_vars ast_class.A.c_vars in
-      ("$0Closure" :: captured_vars)
+      captured_vars
       @ List.filter (move_this decl_vars) ~f:(fun v ->
             not (List.mem ~equal:( = ) captured_vars v))
     else
@@ -510,8 +475,7 @@ let emit_body
       match scope with
       | [] -> Emit_env.get_unique_id_for_main ()
       | ScopeItem.Method md :: ScopeItem.Class cls :: _
-      | ScopeItem.Lambda _ :: ScopeItem.Method md :: ScopeItem.Class cls :: _
-        ->
+      | ScopeItem.Lambda _ :: ScopeItem.Method md :: ScopeItem.Class cls :: _ ->
         Emit_env.get_unique_id_for_method cls md
       | ScopeItem.Function fd :: _ -> Emit_env.get_unique_id_for_function fd
       | _ ->
@@ -527,7 +491,7 @@ let emit_body
   in
   begin
     match
-      SMap.get function_state_key @@ Emit_env.get_function_to_labels_map ()
+      SMap.find_opt function_state_key @@ Emit_env.get_function_to_labels_map ()
     with
     | Some s ->
       Jump_targets.set_function_has_goto true;
@@ -589,14 +553,14 @@ let emit_body
               ~pos
               ~params
               ~ast_params
+              ~tparams
               ~should_emit_init_this );
           emit_deprecation_warning scope deprecation_info;
           generator_instr;
         ]
     in
     if
-      first_instruction_is_label
-      && Instruction_sequence.is_empty header_content
+      first_instruction_is_label && Instruction_sequence.is_empty header_content
     then
       gather [begin_label; instr_entrynop]
     else
@@ -609,11 +573,18 @@ let emit_body
     else
       body_instrs
   in
+  let upper_bounds =
+    if Hhbc_options.enforce_generics_ub !Hhbc_options.compiler_options then
+      emit_generics_upper_bounds immediate_tparams ~skipawaitable
+    else
+      []
+  in
   ( make_body
       body_instrs
       decl_vars
       false (*is_memoize_wrapper*)
       false (*is_memoize_wrapper_lsb*)
+      upper_bounds
       params
       (Some return_type_info)
       doc_comment

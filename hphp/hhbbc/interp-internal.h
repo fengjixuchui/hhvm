@@ -107,7 +107,7 @@ void rewind(ISS& env, const Bytecode&);
 void rewind(ISS& env, int);
 const Bytecode* last_op(ISS& env, int idx = 0);
 const Bytecode* op_from_slot(ISS& env, int, int prev = 0);
-ArrayData* resolveTSStatically(ISS& env, SArray, const php::Class*, bool);
+ArrayData* resolveTSStatically(ISS& env, SArray, const php::Class*);
 
 //////////////////////////////////////////////////////////////////////
 
@@ -273,7 +273,7 @@ Type popT(ISS& env) {
   assert(!env.state.stack.empty());
   auto const ret = env.state.stack.back().type;
   FTRACE(2, "    pop:  {}\n", show(ret));
-  assert(ret.subtypeOf(BGen));
+  assert(ret.subtypeOf(BCell));
   env.state.stack.pop_elem();
   return ret;
 }
@@ -281,12 +281,6 @@ Type popT(ISS& env) {
 Type popC(ISS& env) {
   auto const v = popT(env);
   assert(v.subtypeOf(BInitCell));
-  return v;
-}
-
-Type popV(ISS& env) {
-  auto const v = popT(env);
-  assert(v.subtypeOf(BRef));
   return v;
 }
 
@@ -322,11 +316,6 @@ const Type& topC(ISS& env, uint32_t i = 0) {
 
 const Type& topCV(ISS& env, uint32_t i = 0) { return topT(env, i); }
 
-const Type& topV(ISS& env, uint32_t i = 0) {
-  assert(topT(env, i).subtypeOf(BRef));
-  return topT(env, i);
-}
-
 void push(ISS& env, Type t) {
   FTRACE(2, "    push: {}\n", show(t));
   env.state.stack.push_elem(std::move(t), NoLocalId,
@@ -335,11 +324,8 @@ void push(ISS& env, Type t) {
 
 void push(ISS& env, Type t, LocalId l) {
   if (l == NoLocalId) return push(env, t);
-  if (l <= MaxLocalId) {
-    if (peekLocRaw(env, l).couldBe(BRef)) {
-      return push(env, t);
-    }
-    assertx(!is_volatile_local(env.ctx.func, l)); // volatiles are TGen
+  if (l <= MaxLocalId && is_volatile_local(env.ctx.func, l)) {
+    return push(env, t);
   }
   FTRACE(2, "    push: {} (={})\n", show(t), local_string(*env.ctx.func, l));
   env.state.stack.push_elem(std::move(t), l,
@@ -451,7 +437,9 @@ bool canFold(ISS& env, const php::Func* func, const FCallArgs& fca,
   // TODO(T31677864): Detect the arity mismatch at HHBBC and enable them to
   // be foldable
   if (func->isReified) return false;
-  if (func->attrs & AttrTakesInOutParams) return false;
+
+  // We only fold functions when numRets == 1
+  if (func->hasInOutArgs) return false;
 
   // Foldable builtins are always worth trying
   if (func->attrs & AttrIsFoldable) return true;
@@ -673,6 +661,7 @@ void killIterEquivs(ISS& env, LocalId l, LocalId key = NoLocalId) {
       [&] (LiveIter& iter) {
         if (iter.keyLocal == l) iter.keyLocal = NoLocalId;
         if (iter.baseLocal == l) {
+          iter.baseUpdated = true;
           if (key == NoLocalId || key != iter.keyLocal) {
             iter.baseLocal = NoLocalId;
           }
@@ -688,6 +677,7 @@ void killAllIterEquivs(ISS& env) {
       i,
       [] (DeadIter) {},
       [] (LiveIter& iter) {
+        iter.baseUpdated = true;
         iter.baseLocal = NoLocalId;
         iter.keyLocal = NoLocalId;
       }
@@ -706,7 +696,7 @@ void setIterKey(ISS& env, IterId id, LocalId key) {
 Type peekLocRaw(ISS& env, LocalId l) {
   auto ret = env.state.locals[l];
   if (is_volatile_local(env.ctx.func, l)) {
-    always_assert_flog(ret == TGen, "volatile local was not TGen");
+    always_assert_flog(ret == TCell, "volatile local was not TCell");
   }
   return ret;
 }
@@ -724,7 +714,7 @@ void setLocRaw(ISS& env, LocalId l, Type t) {
   killThisLoc(env, l);
   if (is_volatile_local(env.ctx.func, l)) {
     auto current = env.state.locals[l];
-    always_assert_flog(current == TGen, "volatile local was not TGen");
+    always_assert_flog(current == TCell, "volatile local was not TCell");
     return;
   }
   env.state.locals[l] = std::move(t);
@@ -753,10 +743,6 @@ bool locCouldBeUninit(ISS& env, LocalId l) {
   return locRaw(env, l).couldBe(BUninit);
 }
 
-bool locCouldBeRef(ISS& env, LocalId l) {
-  return locRaw(env, l).couldBe(BRef);
-}
-
 /*
  * Update the known type of a local, based on assertions
  * (VerifyParamType; or IsType/JmpCC), rather than an actual
@@ -764,7 +750,9 @@ bool locCouldBeRef(ISS& env, LocalId l) {
  */
 void refineLocHelper(ISS& env, LocalId l, Type t) {
   auto v = peekLocRaw(env, l);
-  if (v.subtypeOf(BCell)) env.state.locals[l] = std::move(t);
+  if (!is_volatile_local(env.ctx.func, l) && v.subtypeOf(BCell)) {
+    env.state.locals[l] = std::move(t);
+  }
 }
 
 template<typename F>
@@ -856,24 +844,10 @@ LocalId findLocal(ISS& env, SString name) {
   return NoLocalId;
 }
 
-// Force non-ref locals to TCell.  Used when something modifies an
-// unknown local's value, without changing reffiness.
-void loseNonRefLocalTypes(ISS& env) {
-  readUnknownLocals(env);
-  FTRACE(2, "    loseNonRefLocalTypes\n");
-  for (auto& l : env.state.locals) {
-    if (l.subtypeOf(BCell)) l = TCell;
-  }
-  killAllLocEquiv(env);
-  killAllStkEquiv(env);
-  killAllIterEquivs(env);
-  killThisLoc(env, NoLocalId);
-}
-
 void killLocals(ISS& env) {
   FTRACE(2, "    killLocals\n");
   readUnknownLocals(env);
-  for (auto& l : env.state.locals) l = TGen;
+  for (auto& l : env.state.locals) l = TCell;
   killAllLocEquiv(env);
   killAllStkEquiv(env);
   killAllIterEquivs(env);
@@ -942,7 +916,7 @@ void killThisProps(ISS& env) {
   FTRACE(2, "    killThisProps\n");
   for (auto& kv : env.collect.props.privateProperties()) {
     kv.second.ty |=
-      adjust_type_for_prop(env.index, *env.ctx.cls, kv.second.tc, TGen);
+      adjust_type_for_prop(env.index, *env.ctx.cls, kv.second.tc, TCell);
   }
 }
 
@@ -988,7 +962,7 @@ void mergeThisProp(ISS& env, SString name, Type type) {
  * predicate that returns TBottom when some condition doesn't hold.
  *
  * The types given to the map function are the raw tracked types
- * (i.e. could be TRef or TUninit).
+ * (i.e. could be TUninit).
  */
 template<class MapFn>
 void mergeEachThisPropRaw(ISS& env, MapFn fn) {
@@ -1004,22 +978,6 @@ void unsetThisProp(ISS& env, SString name) {
 void unsetUnknownThisProp(ISS& env) {
   for (auto& kv : env.collect.props.privateProperties()) {
     mergeThisProp(env, kv.first, TUninit);
-  }
-}
-
-/*
- * Forces non-ref property types up to TCell.  This is used when an
- * operation affects an unknown property on $this, but can't change
- * its reffiness.  This could only do TInitCell, but we're just
- * going to gradually get rid of the callsites of this.
- */
-void loseNonRefThisPropTypes(ISS& env) {
-  FTRACE(2, "    loseNonRefThisPropTypes\n");
-  for (auto& kv : env.collect.props.privateProperties()) {
-    if (kv.second.ty.subtypeOf(BCell)) {
-      kv.second.ty |=
-        adjust_type_for_prop(env.index, *env.ctx.cls, kv.second.tc, TCell);
-    }
   }
 }
 
@@ -1042,14 +1000,14 @@ void killSelfProps(ISS& env) {
   FTRACE(2, "    killSelfProps\n");
   for (auto& kv : env.collect.props.privateStatics()) {
     kv.second.ty |=
-      adjust_type_for_prop(env.index, *env.ctx.cls, kv.second.tc, TGen);
+      adjust_type_for_prop(env.index, *env.ctx.cls, kv.second.tc, TCell);
   }
 }
 
 void killSelfProp(ISS& env, SString name) {
   FTRACE(2, "    killSelfProp {}\n", name->data());
   if (auto elem = selfPropRaw(env, name)) {
-    elem->ty |= adjust_type_for_prop(env.index, *env.ctx.cls, elem->tc, TGen);
+    elem->ty |= adjust_type_for_prop(env.index, *env.ctx.cls, elem->tc, TCell);
   }
 }
 
@@ -1081,25 +1039,6 @@ template<class MapFn>
 void mergeEachSelfPropRaw(ISS& env, MapFn fn) {
   for (auto& kv : env.collect.props.privateStatics()) {
     mergeSelfProp(env, kv.first, fn(kv.second.ty));
-  }
-}
-
-/*
- * Forces non-ref static properties up to TCell.  This is used when
- * an operation affects an unknown static property on self::, but
- * can't change its reffiness.
- *
- * This could only do TInitCell because static properties can never
- * be unset.  We're just going to get rid of the callers of this
- * function over a few more changes, though.
- */
-void loseNonRefSelfPropTypes(ISS& env) {
-  FTRACE(2, "    loseNonRefSelfPropTypes\n");
-  for (auto& kv : env.collect.props.privateStatics()) {
-    if (kv.second.ty.subtypeOf(BInitCell)) {
-      kv.second.ty |=
-        adjust_type_for_prop(env.index, *env.ctx.cls, kv.second.tc, TCell);
-    }
   }
 }
 
@@ -1141,18 +1080,18 @@ bool canSkipMergeOnConstProp(ISS&env, Type tcls, SString propName) {
 //////////////////////////////////////////////////////////////////////
 // misc
 
-folly::Optional<arrprov::Tag> provTagHere(ISS& env) {
-  if (!RuntimeOption::EvalArrayProvenance) return folly::none;
+ProvTag provTagHere(ISS& env) {
+  if (!RuntimeOption::EvalArrayProvenance) return ProvTag::Top;
   auto const idx = env.srcLoc;
   // We might have a negative index into the srcLoc table if the
   // bytecode was copied from another unit, e.g. from a trait ${X}inits
-  if (idx < 0) return arrprov::Tag{env.ctx.unit->filename, -1};
+  if (idx < 0) return ProvTag { env.ctx.unit->filename, -1 };
   auto const unit = env.ctx.func && env.ctx.func->originalUnit
     ? env.ctx.func->originalUnit
     : env.ctx.unit;
-  return arrprov::Tag{
+  return ProvTag {
     unit->filename,
-    static_cast<int>(unit->srcLocs[idx].start.line)
+    static_cast<int>(unit->srcLocs[idx].past.line)
   };
 }
 

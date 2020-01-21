@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 Assorted utilities for HHVM GDB bindings.
 """
@@ -330,6 +332,17 @@ def deref(val):
         return val.cast(rawtype(val.type))
     else:
         return deref(p.referenced_value())
+
+
+#------------------------------------------------------------------------------
+# TV helpers.
+
+def hallucinate_tv(ty, val):
+    ty = int(ty.cast(T("uint8_t")))
+    val = int(val.cast(T("uintptr_t")))
+    return gdb.parse_and_eval(
+        "*(HPHP::TypedValue*)(uint64_t[2]){0x%08x, 0x%02x}" % (val, ty)
+    )
 
 
 #------------------------------------------------------------------------------

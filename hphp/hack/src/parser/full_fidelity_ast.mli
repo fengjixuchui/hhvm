@@ -11,13 +11,11 @@ include module type of struct
   include Full_fidelity_ast_types
 end
 
-type lifted_awaits [@@deriving show]
-
-type env [@@deriving show]
 (**
  * The `env` of the lowerer is "full request." It provides all the settings the
  * lowerer needs to produce an AST.
  *)
+type env [@@deriving show]
 
 val make_env (* Optional parts *) :
   ?codegen:bool ->
@@ -25,59 +23,27 @@ val make_env (* Optional parts *) :
   ?elaborate_namespaces:bool ->
   ?include_line_comments:bool ->
   ?keep_errors:bool ->
-  ?ignore_pos:bool ->
   ?quick_mode:bool ->
   ?show_all_errors:bool ->
   ?lower_coroutines:bool ->
   ?fail_open:bool ->
   ?parser_options:ParserOptions.t ->
-  ?fi_mode:FileInfo.mode ->
-  ?is_hh_file:bool ->
   ?hacksperimental:bool (* Required parts *) ->
+  ?disable_global_state_mutation:bool ->
   Relative_path.t ->
   env
 
-type result = {
-  fi_mode: FileInfo.mode;
-  is_hh_file: bool;
-  ast: Ast.program;
-  content: string;
-  file: Relative_path.t;
-  comments: (Pos.t * Prim_defs.comment) list;
-}
-[@@deriving show]
-(**
- * A `result` contains some information from the original `env`; the information
- * that is typically required later. This is still quite ad-hoc and should be
- * redesigned properly at some point.
- *)
-
-module WithPositionedSyntax (Syntax : Positioned_syntax_sig.PositionedSyntax_S) : sig
-  val lower :
-    env ->
-    source_text:Full_fidelity_source_text.t ->
-    script:Syntax.t ->
-    (Pos.t * Prim_defs.comment) list ->
-    result
-end
+val from_text_with_legacy : env -> string -> Parser_return.t
 
 val parse_text :
   env ->
   Full_fidelity_source_text.t ->
   FileInfo.mode option * PositionedSyntaxTree.t
 
-val lower_tree :
-  env ->
-  Full_fidelity_source_text.t ->
-  FileInfo.mode option ->
-  PositionedSyntaxTree.t ->
-  result
+(* Only for hh_single_compile at the moment. *)
+val from_text_to_empty_tast :
+  env -> Full_fidelity_source_text.t -> Rust_aast_parser_types.tast_result
 
-val from_text : env -> Full_fidelity_source_text.t -> result
-
-val from_file : env -> result
-
-val from_text_with_legacy : env -> string -> Parser_return.t
 (**
  * Here only for backward compatibility. Consider these deprecated.
  *)
@@ -117,8 +83,12 @@ val defensive_program_with_default_popt :
   string ->
   Parser_return.t
 
-val scour_comments_and_add_fixmes :
-  env ->
-  Full_fidelity_source_text.t ->
-  Full_fidelity_positioned_syntax.t ->
-  (Pos.t * Prim_defs.comment) list
+(*
+  from_text_rust are only used for testing
+*)
+val from_text_rust :
+  env -> Full_fidelity_source_text.t -> Rust_aast_parser_types.result
+
+val aast_to_tast : (Pos.t, unit, unit, unit) Aast.program -> Tast.program
+
+val tast_to_aast : Tast.program -> (Pos.t, unit, unit, unit) Aast.program

@@ -36,21 +36,21 @@ let rec expr_requires_deep_init (_, expr_) =
     List.exists fields aexpr_requires_deep_init
   | T.Varray (_, fields) -> List.exists fields expr_requires_deep_init
   | T.Darray (_, fields) -> List.exists fields expr_pair_requires_deep_init
-  | T.Id (_, ("__FILE__" | "__DIR__")) -> false
+  | T.Id (_, name)
+    when name = SN.PseudoConsts.g__FILE__ || name = SN.PseudoConsts.g__DIR__ ->
+    false
   | T.Class_const ((_, T.CIexpr (_, T.Id (_, s))), (_, p)) ->
     class_const_requires_deep_init s p
   | T.Shape fields -> List.exists fields shape_field_requires_deep_init
   | T.Typename _
   | T.Assert _
   | T.Pair _
-  | T.Special_func _
   | T.Smethod_id _
   | T.Method_caller _
   | T.Method_id _
   | T.Fun_id _
   | T.Dollardollar _
   | T.Lplaceholder _
-  | T.ImmutableVar _
   | T.This
   | T.KeyValCollection _
   | T.ValCollection _
@@ -78,17 +78,6 @@ and aexpr_requires_deep_init aexpr =
   | T.AFkvalue (expr1, expr2) ->
     expr_requires_deep_init expr1 || expr_requires_deep_init expr2
 
-let valid_tc_for_record_field tc =
-  match TC.name tc with
-  | None -> true
-  | Some name ->
-    (not (is_self name))
-    && (not (is_parent name))
-    && (not (String.lowercase name = "hh\\this"))
-    && (not (String.lowercase name = "callable"))
-    && (not (String.lowercase name = "hh\\nothing"))
-    && not (String.lowercase name = "hh\\noreturn")
-
 let valid_tc_for_prop tc =
   match TC.name tc with
   | None -> true
@@ -98,12 +87,6 @@ let valid_tc_for_prop tc =
     && (not (String.lowercase name = "callable"))
     && (not (String.lowercase name = "hh\\nothing"))
     && not (String.lowercase name = "hh\\noreturn")
-
-let valid_tc_prop_field tc class_is_record =
-  if class_is_record then
-    valid_tc_for_record_field tc
-  else
-    valid_tc_for_prop tc
 
 let from_ast
     class_
@@ -119,7 +102,6 @@ let from_ast
     (_, (pos, cv_name), initial_value) =
   (* TODO: Hack allows a property to be marked final, which is nonsensical.
   HHVM does not allow this.  Fix this in the Hack parser? *)
-  let class_is_record = class_.T.c_kind = Ast_defs.Crecord in
   let pid = Hhbc_id.Prop.from_ast_name cv_name in
   let attributes = Emit_attribute.from_asts namespace cv_user_attributes in
   let is_const =
@@ -127,11 +109,9 @@ let from_ast
   in
   let is_lsb = Hhas_attribute.has_lsb attributes in
   let is_late_init = Hhas_attribute.has_late_init attributes in
-  let is_soft_late_init = Hhas_attribute.has_soft_late_init attributes in
   let visibility = cv_visibility in
   let is_private = cv_visibility = Aast.Private in
-  if
-    (not is_static) && class_.T.c_final && class_.T.c_kind = Ast_defs.Cabstract
+  if (not is_static) && class_.T.c_final && class_.T.c_kind = Ast_defs.Cabstract
   then
     Emit_fatal.raise_fatal_parse
       pos
@@ -149,23 +129,13 @@ let from_ast
           ~nullable:false
           ~skipawaitable:false
           ~tparams
-          ~namespace
           h
       in
-      if
-        not
-          (valid_tc_prop_field
-             (Hhas_type_info.type_constraint tc)
-             class_is_record)
-      then
+      if not (valid_tc_for_prop (Hhas_type_info.type_constraint tc)) then
         Emit_fatal.raise_fatal_parse
           pos
           (Printf.sprintf
-             "Invalid %s type hint for '%s::$%s'"
-             ( if class_is_record then
-               "record field"
-             else
-               "property" )
+             "Invalid property type hint for '%s::$%s'"
              (Utils.strip_ns (snd class_.T.c_name))
              (Hhbc_id.Prop.to_raw_string pid))
       else
@@ -176,22 +146,18 @@ let from_ast
     match initial_value with
     | None ->
       let v =
-        if is_late_init || is_soft_late_init then
+        if is_late_init then
           Some Typed_value.Uninit
         else
           None
       in
       (v, false, true, None)
     | Some expr ->
-      if is_late_init || is_soft_late_init then
+      if is_late_init then
         Emit_fatal.raise_fatal_parse
           pos
           (Printf.sprintf
-             "<<__%sLateInit>> property '%s::$%s' cannot have an initial value"
-             ( if is_soft_late_init then
-               "Soft"
-             else
-               "" )
+             "<<__LateInit>> property '%s::$%s' cannot have an initial value"
              (Utils.strip_ns (snd class_.T.c_name))
              (Hhbc_id.Prop.to_raw_string pid));
       let is_collection_map =
@@ -249,7 +215,6 @@ let from_ast
     false (*no_implicit_null*)
     false (*initial_satisfies_tc*)
     is_late_init
-    is_soft_late_init
     pid
     initial_value
     initializer_instrs

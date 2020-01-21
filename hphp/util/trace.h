@@ -177,6 +177,7 @@ namespace Trace {
       TM(stat)          \
       TM(statgroups)    \
       TM(stats)         \
+      TM(strobelight)   \
       TM(targetcache)   \
       TM(tcspace)       \
       TM(trans)         \
@@ -308,6 +309,10 @@ struct BumpRelease {
 
   ~BumpRelease() {
     if (m_live) tl_levels[m_mod] += m_adjust;
+  }
+
+  BumpRelease negate() const {
+    return BumpRelease{ m_mod, -m_adjust, m_live };
   }
 
   BumpRelease(const BumpRelease&) = delete;

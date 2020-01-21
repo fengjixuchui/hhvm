@@ -100,6 +100,10 @@ String HHVM_FUNCTION(server_warmup_status) {
     return folly::sformat("Interpreted {} non-forced basic blocks.", tpc_diff);
   }
 
+  if (RuntimeOption::EvalJitSerdesMode == JitSerdesMode::SerializeAndExit) {
+    return "JitSerdesMode is SerializeAndExit";
+  }
+
   return empty_string();
 }
 
@@ -125,7 +129,7 @@ String HHVM_FUNCTION(execution_context) {
 TypedValue HHVM_FUNCTION(sequence, const Array& args) {
   if (args.empty()) return make_tv<KindOfNull>();
   int64_t idx = args.size() - 1;
-  auto ret = args.rvalAt(idx).tv();
+  auto ret = args.rval(idx).tv();
   tvIncRefGen(ret);
   return ret;
 }
@@ -221,8 +225,11 @@ void StandardExtension::initMisc() {
     HHVM_FE(unpack);
     HHVM_FE(sys_getloadavg);
     HHVM_FE(hphp_to_string);
-    HHVM_FALIAS(HH\\enable_legacy_behavior, enable_legacy_behavior);
-    HHVM_FALIAS(HH\\is_legacy_behavior_enabled, is_legacy_behavior_enabled);
+    HHVM_FALIAS(HH\\mark_legacy_hack_array, mark_legacy_hack_array);
+    HHVM_FALIAS(HH\\is_marked_legacy_hack_array, is_marked_legacy_hack_array);
+    // TODO T54978012 remove next 2 after removing refs in WWW
+    HHVM_FALIAS(HH\\enable_legacy_behavior, mark_legacy_hack_array);
+    HHVM_FALIAS(HH\\is_legacy_behavior_enabled, is_marked_legacy_hack_array);
     HHVM_FALIAS(__SystemLib\\max2, SystemLib_max2);
     HHVM_FALIAS(__SystemLib\\min2, SystemLib_min2);
 
@@ -380,9 +387,9 @@ Variant HHVM_FUNCTION(constant, const String& name) {
     Class* cls = getClassByName(data, classNameLen);
     if (cls) {
       String cnsName(constantName, data + len - constantName, CopyString);
-      Cell cns = cls->clsCnsGet(cnsName.get());
+      TypedValue cns = cls->clsCnsGet(cnsName.get());
       if (cns.m_type != KindOfUninit) {
-        return cellAsCVarRef(cns);
+        return tvAsCVarRef(cns);
       }
     }
   } else {
@@ -477,11 +484,11 @@ const StaticString
 
 Variant HHVM_FUNCTION(time_nanosleep, int seconds, int nanoseconds) {
   if (seconds < 0) {
-    throw_invalid_argument("seconds: cannot be negative");
+    raise_invalid_argument_warning("seconds: cannot be negative");
     return false;
   }
   if (nanoseconds < 0 || nanoseconds > 999999999) {
-    throw_invalid_argument("nanoseconds: has to be 0 to 999999999");
+    raise_invalid_argument_warning("nanoseconds: has to be 0 to 999999999");
     return false;
   }
 
@@ -497,8 +504,10 @@ Variant HHVM_FUNCTION(time_nanosleep, int seconds, int nanoseconds) {
 
   recordNanosleepTime(req, &rem);
   if (errno == EINTR) {
-    return make_map_array(s_seconds, (int64_t)rem.tv_sec,
-                          s_nanoseconds, (int64_t)rem.tv_nsec);
+    return make_darray(
+      s_seconds, (int64_t)rem.tv_sec,
+      s_nanoseconds, (int64_t)rem.tv_nsec
+    );
   }
   return false;
 }
@@ -511,7 +520,7 @@ bool HHVM_FUNCTION(time_sleep_until, double timestamp) {
 
   double c_ts = (double)(timestamp - tm.tv_sec - tm.tv_usec / 1000000.0);
   if (c_ts < 0) {
-    throw_invalid_argument
+    raise_invalid_argument_warning
       ("timestamp: Sleep until to time is less than current time");
     return false;
   }
@@ -575,20 +584,20 @@ Array HHVM_FUNCTION(sys_getloadavg) {
   return make_varray(load[0], load[1], load[2]);
 }
 
-Variant HHVM_FUNCTION(enable_legacy_behavior, const Variant& v) {
+Variant HHVM_FUNCTION(mark_legacy_hack_array, const Variant& v) {
   if (v.isVecArray() || v.isDict()) {
-    auto arr = v.toCArrRef().copy();
+    auto arr = v.asCArrRef().copy();
     arr->setLegacyArray(true);
     return arr;
   } else {
-    raise_warning("enable_legacy_behavior expects a dict or vec");
+    raise_warning("mark_legacy_hack_array expects a dict or vec");
     return v;
   }
 }
 
-bool HHVM_FUNCTION(is_legacy_behavior_enabled, const Variant& v) {
+bool HHVM_FUNCTION(is_marked_legacy_hack_array, const Variant& v) {
   if (!v.isVecArray() && !v.isDict()) {
-    raise_warning("is_legacy_behavior_enabled expects a dict or vec");
+    raise_warning("is_marked_legacy_hack_array expects a dict or vec");
     return false;
   }
   return v.asCArrRef()->isLegacyArray();

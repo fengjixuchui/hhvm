@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """
 GDB pretty printers for HHVM types.
 """
@@ -137,9 +139,6 @@ class TypedValuePrinter(object):
 
         elif t == DT('HPHP::KindOfResource'):
             val = data['pres']
-
-        elif t == DT('HPHP::KindOfRef'):
-            val = data['pref'].dereference()
 
         else:
             t = 'Invalid(%d)' % t.cast(T('int8_t'))
@@ -402,7 +401,7 @@ class ObjectDataPrinter(object):
                 name = '<invalid>'
 
             try:
-                val = idx.object_data_at(self.obj, self.cur)
+                val = idx.object_data_at(self.obj, self.cls, self.cur)
             except gdb.MemoryError:
                 val = '<unknown>'
 
@@ -421,20 +420,6 @@ class ObjectDataPrinter(object):
 
     def children(self):
         return self._iterator(self.val)
-
-
-#------------------------------------------------------------------------------
-# RefData.
-
-class RefDataPrinter(object):
-    RECOGNIZE = '^HPHP::RefData$'
-
-    def __init__(self, val):
-        self.val = val
-
-    def to_string(self):
-        return "RefData { %s }" % self.val['m_tv']
-
 
 #------------------------------------------------------------------------------
 # HHBBC::Bytecode
@@ -519,7 +504,6 @@ class SrcKeyPrinter(object):
 
         func = nameof(lookup_func(func_id))
         offset = self.val['m_offset']
-        this = 't' if self.val['m_hasThis'] else ''
 
         rmp = self.val['m_resumeModeAndPrologue']
         resume = prologue = ''
@@ -533,7 +517,7 @@ class SrcKeyPrinter(object):
         elif rmp == 3:
             prologue = 'p'
 
-        return '%s@%d%s%s%s' % (func, offset, resume, this, prologue)
+        return '%s@%d%s%s' % (func, offset, resume, prologue)
 
 #------------------------------------------------------------------------------
 # Lookup function.
@@ -549,7 +533,6 @@ printer_classes = [
     StringDataPrinter,
     ArrayDataPrinter,
     ObjectDataPrinter,
-    RefDataPrinter,
     HhbbcBytecodePrinter,
     CompactVectorPrinter,
     SrcKeyPrinter,

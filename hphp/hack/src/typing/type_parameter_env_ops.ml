@@ -6,10 +6,11 @@
  * LICENSE file in the "hack" directory of this source tree.
  *
  *)
+
 module TP = Type_parameter_env
 module TySet = Typing_set
 module Env = Typing_env
-open Core_kernel
+open Hh_prelude
 open Common
 open Typing_defs
 
@@ -85,7 +86,7 @@ type parameters by looking for a type to which they are equal in the tpenv.
 If such a type exists, remove the type parameter from the tpenv.
 Returns a set of substitutions mapping each type parameter name to the type
 to which it is equal if found, otherwise to itself. *)
-let simplify_tpenv env (tparams : ((_ * string) option * locl ty) list) r =
+let simplify_tpenv env (tparams : ((_ * string) option * locl_ty) list) r =
   let old_env = env in
   let tpenv = Env.get_tpenv env in
   (* For each tparam, "solve" it if it falls in any of those categories:
@@ -98,7 +99,8 @@ let simplify_tpenv env (tparams : ((_ * string) option * locl ty) list) r =
     List.fold
       tparams
       ~init:(tpenv, SMap.empty)
-      ~f:(fun (tpenv, substs) (p_opt, (reason, _)) ->
+      ~f:(fun (tpenv, substs) (p_opt, ty) ->
+        let reason = get_reason ty in
         match p_opt with
         | None -> (tpenv, substs)
         | Some (tp, tparam_name) ->
@@ -132,7 +134,7 @@ let simplify_tpenv env (tparams : ((_ * string) option * locl ty) list) r =
             let substs = SMap.add tparam_name lower_bound substs in
             (tpenv, substs)
           | _ ->
-            let tparam_ty = (r, Tabstract (AKgeneric tparam_name, None)) in
+            let tparam_ty = mk (r, Tgeneric tparam_name) in
             let substs = SMap.add tparam_name tparam_ty substs in
             (tpenv, substs)))
   in
@@ -147,17 +149,18 @@ let simplify_tpenv env (tparams : ((_ * string) option * locl ty) list) r =
   let rec reduce substs tparam =
     match SMap.find_opt tparam substs with
     | None -> (substs, None)
-    | Some ((_, Tabstract (AKgeneric tparam', _)) as subst)
-      when tparam' <> tparam ->
-      let (substs, new_subst_opt) = reduce substs tparam' in
-      begin
-        match new_subst_opt with
-        | None -> (substs, Some subst)
-        | Some new_subst ->
-          let substs = SMap.add tparam new_subst substs in
-          (substs, Some new_subst)
-      end
-    | Some subst -> (substs, Some subst)
+    | Some subst ->
+      (match get_node subst with
+      | Tgeneric tparam' when String.( <> ) tparam' tparam ->
+        let (substs, new_subst_opt) = reduce substs tparam' in
+        begin
+          match new_subst_opt with
+          | None -> (substs, Some subst)
+          | Some new_subst ->
+            let substs = SMap.add tparam new_subst substs in
+            (substs, Some new_subst)
+        end
+      | _ -> (substs, Some subst))
   in
   let reduce substs (p_opt, _) =
     match p_opt with

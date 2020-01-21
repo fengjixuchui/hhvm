@@ -44,8 +44,8 @@ module Types = struct
     subscription_prefix: string;
   }
 
-  type clock = string
   (** The message's clock. *)
+  type clock = string
 
   type pushed_changes =
     (*
@@ -105,9 +105,7 @@ module type WATCHMAN_PROCESS = sig
   val return : 'a -> 'a result
 
   val catch :
-    f:(unit -> 'b result) ->
-    catch:(stack:string -> exn -> 'b result) ->
-    'b result
+    f:(unit -> 'b result) -> catch:(Exception.t -> 'b result) -> 'b result
 
   val list_fold_values :
     'a list -> init:'b -> f:('b -> 'a -> 'b result) -> 'b result
@@ -157,9 +155,7 @@ module type S = sig
   val get_mergebase : ?timeout:timeout -> env -> string result
 
   val get_changes :
-    ?deadline:float ->
-    watchman_instance ->
-    (watchman_instance * changes) result
+    ?deadline:float -> watchman_instance -> (watchman_instance * changes) result
 
   val get_changes_synchronously :
     timeout:int ->

@@ -4,7 +4,9 @@ open Procs_test_utils
 let pipe_path = ref ""
 
 let entry =
-  WorkerController.register_entry_point ~restore:(fun s -> pipe_path := s)
+  WorkerController.register_entry_point ~restore:(fun s ~(worker_id : int) ->
+      pipe_path := s;
+      Hh_logger.set_id (Printf.sprintf "test_cancel_env %d" worker_id))
 
 let make_workers n =
   let handle =
@@ -91,8 +93,7 @@ let interrupt_handler fd env =
   (env, result)
 
 let test_cancel_env () =
-  Tempfile.with_tempdir
-  @@ fun tempdir ->
+  Tempfile.with_tempdir @@ fun tempdir ->
   (* must set this before spawning workers *)
   (pipe_path := Path.(concat tempdir "mypipe" |> to_string));
   let workers = make_workers num_workers_and_jobs in

@@ -31,10 +31,10 @@ module SourceData = Full_fidelity_editable_positioned_original_source_data
 module TokenKind = Full_fidelity_token_kind
 module Trivia = Full_fidelity_positioned_trivia
 
-type synthetic_token_data = { text: string } [@@deriving show]
 (**
  * Data about the token with respect to the original source text.
  *)
+type synthetic_token_data = { text: string } [@@deriving show]
 
 type token_data =
   | Original of SourceData.t
@@ -42,6 +42,9 @@ type token_data =
   | Synthetic of synthetic_token_data
 [@@deriving show]
 
+(**
+ * Data common to all EditablePositionedTokens.
+ *)
 type t = {
   kind: TokenKind.t;
   leading_text: string;
@@ -49,9 +52,6 @@ type t = {
   token_data: token_data;
 }
 [@@deriving show]
-(**
- * Data common to all EditablePositionedTokens.
- *)
 
 let from_positioned_token positioned_token =
   {
@@ -140,8 +140,7 @@ let start_offset token =
 
 let leading token = SourceData.leading (original_source_data_or_default token)
 
-let trailing token =
-  SourceData.trailing (original_source_data_or_default token)
+let trailing token = SourceData.trailing (original_source_data_or_default token)
 
 let with_updated_original_source_data token update_original_source_data =
   let token_data =
@@ -171,8 +170,8 @@ let concatenate b e =
     | (Original b_source_data, Original e_source_data) ->
       Original (SourceData.spanning_between b_source_data e_source_data)
     | ( (SynthesizedFromOriginal (_, b_source_data) | Original b_source_data),
-        (SynthesizedFromOriginal (_, e_source_data) | Original e_source_data)
-      ) ->
+        (SynthesizedFromOriginal (_, e_source_data) | Original e_source_data) )
+      ->
       SynthesizedFromOriginal
         ( { text = text b ^ text e },
           SourceData.spanning_between b_source_data e_source_data )

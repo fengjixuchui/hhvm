@@ -350,6 +350,107 @@ void ifNonNull(IRGS& env, SSATmp* tmp, Then then) {
 }
 
 //////////////////////////////////////////////////////////////////////
+// Multi cond (Chonky cond)
+
+/* This is a helper for generating multi-branch diamonds, or 'chonky conds'
+ *
+ * Usage is something like this:
+ *
+ *
+ *   MultiCond mc{env};
+ *   mc.ifThen(
+ *     [&](Block* taken) { return gen(env, CheckType, TInt, tmp, taken); },
+ *     [&](SSATmp* refined) {
+ *       // this code is executed when we ***don't*** jump to `taken`
+ *       ...
+ *     });
+ *   mc.ifTypeThen( // equivalent to passing a lambda that does CheckType on src
+ *     src, TBool
+ *     [&](SSATmp* refined) {
+ *       ...
+ *     });
+ *   SSATmp* result = mc.elseDo([&]{ return cns(env, false); });
+ *   // mc is logically dead here
+ *
+ *
+ * This will produce the following control flow:
+ *
+ *
+ * B0:
+ *  x1 : Int := CheckType<Int>(x0 : Cell) -> B1
+ *  [ here refined === x1 ]
+ *  phijmp <something> -> B3
+ *
+ * B1:
+ *  x2 : Bool := CheckType<Bool>(x0 : Cell) -> B2
+ *  ...
+ *  phijmp <something> -> B3
+ *
+ * B2:
+ *   phijmp (false : Bool) -> B3
+ *
+ * B3:
+ *   x3 := DefLabel<Bool>
+ *
+ *
+ *
+ * While it won't _necessarily_ break anything to use the IRGS outside of
+ * `if(Type)Then` and `elseDo` while there's a live MultiCond, you are cautioned
+ * to do so at your own peril
+ */
+
+struct MultiCond {
+  explicit MultiCond(IRGS& env)
+    : env{env}
+    , done{defBlock(env)} {}
+
+  ~MultiCond() {
+    assertx(finished);
+  }
+
+  template <typename Branch, typename Then>
+  void ifThen(Branch&& branch, Then&& then) {
+    assertx(!finished);
+    auto const taken = defBlock(env);
+    auto const refined = branch(taken);
+    auto const result = then(refined);
+    resultTy |= result->type();
+    gen(env, Jmp, done, result);
+    env.irb->appendBlock(taken);
+  }
+
+  template <typename Then>
+  void ifTypeThen(SSATmp* src, Type type, Then&& then) {
+    ifThen([&](Block* taken) { return gen(env, CheckType, type, taken, src); },
+           std::forward<Then>(then));
+  }
+
+  template <typename Else>
+  SSATmp* elseDo(Else&& els) {
+    assertx(!finished);
+    auto const result = els();
+    assertx(result);
+    resultTy |= result->type();
+    gen(env, Jmp, done, result);
+    finished = true;
+
+    env.irb->appendBlock(done);
+    auto const label = env.unit.defLabel(1, env.irb->nextBCContext());
+    done->push_back(label);
+    auto const finalResult = label->dst(0);
+    finalResult->setType(resultTy);
+    return finalResult;
+  }
+
+private:
+  IRGS& env;
+  Block* done;
+  Type resultTy{TBottom};
+  bool finished{false};
+};
+
+
+//////////////////////////////////////////////////////////////////////
 // Eval stack manipulation
 
 inline SSATmp* assertType(SSATmp* tmp, Type type) {
@@ -415,8 +516,6 @@ inline SSATmp* popC(IRGS& env, GuardConstraint gc = DataTypeSpecific) {
 }
 
 inline SSATmp* popCU(IRGS& env) { return assertType(pop(env), TCell); }
-inline SSATmp* popV(IRGS& env) { return assertType(pop(env), TBoxedInitCell); }
-inline SSATmp* popF(IRGS& env) { return assertType(pop(env), TGen); }
 inline SSATmp* popU(IRGS& env) { return assertType(pop(env), TUninit); }
 
 inline void discard(IRGS& env, uint32_t n = 1) {
@@ -469,19 +568,6 @@ inline SSATmp* topC(IRGS& env, BCSPRelOffset i = BCSPRelOffset{0},
   return assertType(top(env, i, gc), TCell);
 }
 
-inline SSATmp* topF(IRGS& env, BCSPRelOffset i = BCSPRelOffset{0},
-                    GuardConstraint gc = DataTypeSpecific) {
-  return assertType(top(env, i, gc), TGen);
-}
-
-inline SSATmp* topV(IRGS& env, BCSPRelOffset i = BCSPRelOffset{0}) {
-  return assertType(top(env, i), TBoxedCell);
-}
-
-inline SSATmp* topR(IRGS& env, BCSPRelOffset i = BCSPRelOffset{0}) {
-  return assertType(top(env, i), TGen);
-}
-
 //////////////////////////////////////////////////////////////////////
 
 inline BCMarker makeMarker(IRGS& env, Offset bcOff) {
@@ -505,52 +591,27 @@ inline void updateMarker(IRGS& env) {
 //////////////////////////////////////////////////////////////////////
 // Frame
 
-inline SSATmp* castCtxThis(IRGS& env, SSATmp* val) {
-  assertx(val->isA(TCtx));
+inline SSATmp* ldThis(IRGS& env) {
+  assertx(hasThis(env));
   auto const func = curFunc(env);
   auto const thisType = func ? thisTypeFromFunc(func) : TObj;
-  return gen(env, AssertType, thisType, val);
-}
-
-inline SSATmp* ldThis(IRGS& env) {
-  auto const ctx = gen(env, LdCtx, fp(env));
-  return castCtxThis(env, ctx);
+  return gen(env, LdFrameThis, thisType, fp(env));
 }
 
 inline SSATmp* ldCtx(IRGS& env) {
   if (!curClass(env))                return cns(env, nullptr);
   if (hasThis(env))                  return ldThis(env);
-  return gen(env, LdCctx, fp(env));
+
+  auto const func = curFunc(env);
+  auto const clsType = func ? Type::SubCls(func->cls()) : TCls;
+  return gen(env, LdFrameCls, clsType, fp(env));
 }
 
-inline SSATmp* unbox(IRGS& env, SSATmp* val, Block* exit) {
-  auto const type = val->type();
-  // If we don't have an exit the LdRef can't be a guard.
-  auto const inner = exit ? (type & TBoxedCell).inner() : TInitCell;
-
-  if (type <= TCell) {
-    env.irb->constrainValue(val, DataTypeBoxAndCountness);
-    return val;
-  }
-  if (type <= TBoxedCell) {
-    gen(env, CheckRefInner, inner, exit, val);
-    return gen(env, LdRef, inner, val);
-  }
-
-  return cond(
-    env,
-    [&](Block* taken) {
-      return gen(env, CheckType, TBoxedCell, taken, val);
-    },
-    [&](SSATmp* box) { // Next: val is a ref
-      env.irb->constrainValue(box, DataTypeBoxAndCountness);
-      gen(env, CheckRefInner, inner, exit, box);
-      return gen(env, LdRef, inner, box);
-    },
-    [&] { // Taken: val is unboxed
-      return gen(env, AssertType, TCell, val);
-    }
-  );
+inline SSATmp* ldCtxCls(IRGS& env) {
+  auto const ctx = ldCtx(env);
+  if (ctx->isA(TCls) || ctx->isA(TNullptr)) return ctx;
+  assertx(ctx->isA(TObj));
+  return gen(env, LdObjClass, ctx);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -594,7 +655,9 @@ inline SSATmp* ldCls(IRGS& env, SSATmp* className, Block* ctrace = nullptr) {
     }
     return gen(env, LdClsCached, ctrace, className);
   }
-  return gen(env, LdCls, ctrace, className, cns(env, curClass(env)));
+  auto const ctxClass = curClass(env);
+  auto const ctxTmp = ctxClass ? cns(env, ctxClass) : cns(env, nullptr);
+  return gen(env, LdCls, ctrace, className, ctxTmp);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -617,46 +680,10 @@ inline SSATmp* ldLoc(IRGS& env,
     assertx(!type.isSpecialized());
     assertx(type == type.dropConstVal());
 
-    // We don't support locals being type Gen, so if we ever get into such a
-    // case, we need to punt.
-    if (type == TGen) PUNT(LdGbl-Gen);
     return gen(env, LdLocPseudoMain, type, exit, LocalId(locId), fp(env));
   }
 
-  return gen(env, LdLoc, TGen, LocalId(locId), fp(env));
-}
-
-/*
- * Load a local, and if it's boxed dereference to get the inner cell.
- *
- * Note: For boxed values, this will generate a LdRef instruction which takes
- *       the given exit trace in case the inner type doesn't match the tracked
- *       type for this local.  This check may be optimized away if we can
- *       determine that the inner type must match the tracked type.
- */
-inline SSATmp* ldLocInner(IRGS& env,
-                          uint32_t locId,
-                          Block* ldrefExit,
-                          Block* ldPMExit,
-                          GuardConstraint gc) {
-  // We only care if the local is KindOfRef or not. DataTypeBoxAndCountness
-  // gets us that.
-  auto const loc = ldLoc(env, locId, ldPMExit, DataTypeBoxAndCountness);
-
-  if (loc->type() <= TCell) {
-    env.irb->constrainValue(loc, gc);
-    return loc;
-  }
-
-  // Handle the Boxed case manually outside of unbox() so we can use the
-  // local's predicted type.
-  if (loc->type() <= TBoxedCell) {
-    auto const predTy = env.irb->predictedLocalInnerType(locId);
-    gen(env, CheckRefInner, predTy, ldrefExit, loc);
-    return gen(env, LdRef, predTy, loc);
-  };
-
-  return unbox(env, loc, ldrefExit);
+  return gen(env, LdLoc, TCell, LocalId(locId), fp(env));
 }
 
 /*
@@ -665,12 +692,11 @@ inline SSATmp* ldLocInner(IRGS& env,
  * caller requires the catch trace to be generated at a point earlier than when
  * it calls this function.
  */
-inline SSATmp* ldLocInnerWarn(IRGS& env,
-                              uint32_t id,
-                              Block* ldrefExit,
-                              Block* ldPMExit,
-                              GuardConstraint gc) {
-  auto const locVal = ldLocInner(env, id, ldrefExit, ldPMExit, gc);
+inline SSATmp* ldLocWarn(IRGS& env,
+                         uint32_t id,
+                         Block* ldPMExit,
+                         GuardConstraint gc) {
+  auto const locVal = ldLoc(env, id, ldPMExit, gc);
   auto const varName = curFunc(env)->localVarName(id);
 
   auto warnUninit = [&] {
@@ -680,7 +706,7 @@ inline SSATmp* ldLocInnerWarn(IRGS& env,
     return cns(env, TInitNull);
   };
 
-  env.irb->constrainLocal(id, DataTypeBoxAndCountnessInit, "ldLocInnerWarn");
+  env.irb->constrainLocal(id, DataTypeCountnessInit, "ldLocWarn");
 
   if (locVal->type() <= TUninit) return warnUninit();
   if (!locVal->type().maybe(TUninit)) return locVal;
@@ -722,147 +748,52 @@ inline SSATmp* stLocRaw(IRGS& env, uint32_t id, SSATmp* fp, SSATmp* newVal) {
  * increment. If the caller of this function needs to push the stored value on
  * stack, it should set 'incRefNew' so that 'newVal' will have its ref-count
  * incremented.
- *
- * Pre: !newVal->type().maybe(TBoxedCell)
- * Pre: exit != nullptr if the local may be boxed
  */
 inline SSATmp* stLocImpl(IRGS& env,
                          uint32_t id,
-                         Block* ldrefExit,
                          Block* ldPMExit,
                          SSATmp* newVal,
                          bool decRefOld,
                          bool incRefNew) {
-  assertx(!newVal->type().maybe(TBoxedCell));
-
-  auto const cat = decRefOld ? DataTypeBoxAndCountness : DataTypeGeneric;
+  auto const cat = decRefOld ? DataTypeCountness : DataTypeGeneric;
   auto const oldLoc = ldLoc(env, id, ldPMExit, cat);
 
-  auto unboxed_case = [&] {
-    stLocRaw(env, id, fp(env), newVal);
-    if (incRefNew) gen(env, IncRef, newVal);
-    if (decRefOld) decRef(env, oldLoc);
-    return newVal;
-  };
-
-  auto boxed_case = [&] (SSATmp* box) {
-    // It's important that the IncRef happens after the guard on the inner type
-    // of the ref, since it may side-exit.
-    auto const predTy = env.irb->predictedLocalInnerType(id);
-
-    // We may not have a ldrefExit, but if so we better not be loading the inner
-    // ref.
-    if (ldrefExit == nullptr) always_assert(!decRefOld);
-    if (ldrefExit != nullptr) gen(env, CheckRefInner, predTy, ldrefExit, box);
-
-    auto const innerCell = decRefOld ? gen(env, LdRef, predTy, box) : nullptr;
-    gen(env, StRef, box, newVal);
-    if (incRefNew) gen(env, IncRef, newVal);
-    if (decRefOld) {
-      decRef(env, innerCell);
-      env.irb->constrainValue(box, DataTypeBoxAndCountness);
-    }
-    return newVal;
-  };
-
-  if (oldLoc->type() <= TCell) return unboxed_case();
-  if (oldLoc->type() <= TBoxedCell) return boxed_case(oldLoc);
-
-  return cond(
-    env,
-    [&] (Block* taken) {
-      return gen(env, CheckType, TBoxedCell, taken, oldLoc);
-    },
-    boxed_case,
-    unboxed_case
-  );
+  stLocRaw(env, id, fp(env), newVal);
+  if (incRefNew) gen(env, IncRef, newVal);
+  if (decRefOld) decRef(env, oldLoc);
+  return newVal;
 }
 
 inline SSATmp* stLoc(IRGS& env,
                      uint32_t id,
-                     Block* ldrefExit,
                      Block* ldPMExit,
                      SSATmp* newVal) {
   constexpr bool decRefOld = true;
   constexpr bool incRefNew = true;
-  return stLocImpl(env, id, ldrefExit, ldPMExit, newVal, decRefOld, incRefNew);
+  return stLocImpl(env, id, ldPMExit, newVal, decRefOld, incRefNew);
 }
 
 inline SSATmp* stLocNRC(IRGS& env,
                         uint32_t id,
-                        Block* ldrefExit,
                         Block* ldPMExit,
                         SSATmp* newVal) {
   constexpr bool decRefOld = false;
   constexpr bool incRefNew = false;
-  return stLocImpl(env, id, ldrefExit, ldPMExit, newVal, decRefOld, incRefNew);
+  return stLocImpl(env, id, ldPMExit, newVal, decRefOld, incRefNew);
 }
 
 inline void stLocMove(IRGS& env,
                       uint32_t id,
-                      Block* ldrefExit,
                       Block* ldPMExit,
                       SSATmp* newVal) {
-  assertx(!newVal->type().maybe(TBoxedCell));
+  auto const oldLoc = ldLoc(env, id, ldPMExit, DataTypeCountness);
 
-  auto const oldLoc = ldLoc(env, id, ldPMExit, DataTypeBoxAndCountness);
-
-  // If the local isn't a ref and we're not in a pseudo-main, we can just move
-  // newValue into the local without manipulating its ref-count.
-  auto unboxed_case = [&] {
-    if (curFunc(env)->isPseudoMain()) gen(env, IncRef, newVal);
-    stLocRaw(env, id, fp(env), newVal);
-    decRef(env, oldLoc);
-    if (curFunc(env)->isPseudoMain()) decRef(env, newVal);
-    return nullptr;
-  };
-
-  // However, if the local is a ref, we'll manipulate the ref-counts as if this
-  // was a SetL, PopC pair. Otherwise, overwriting the ref's inner value can
-  // trigger a destructor, which can then overwrite the ref's inner value
-  // again. If we don't increment newVal's ref-count, this second overwrite
-  // might trigger newVal's destructor, where it wouldn't otherwise. So, to keep
-  // destructor ordering consistent with SetL, PopC, we'll emulate its ref-count
-  // behavior.
-  auto boxed_case = [&] (SSATmp* box) {
-    // It's important that the IncRef happens after the guard on the inner type
-    // of the ref, since it may side-exit.
-    auto const predTy = env.irb->predictedLocalInnerType(id);
-
-    assertx(ldrefExit);
-    gen(env, CheckRefInner, predTy, ldrefExit, box);
-
-    auto const innerCell = gen(env, LdRef, predTy, box);
-    gen(env, StRef, box, newVal);
-    gen(env, IncRef, newVal);
-    decRef(env, innerCell);
-    decRef(env, newVal);
-    env.irb->constrainValue(box, DataTypeBoxAndCountness);
-    return nullptr;
-  };
-
-  if (oldLoc->type() <= TCell) {
-    unboxed_case();
-    return;
-  }
-  if (oldLoc->type() <= TBoxedCell) {
-    boxed_case(oldLoc);
-    return;
-  }
-
-  cond(
-    env,
-    [&] (Block* taken) {
-      return gen(env, CheckType, TBoxedCell, taken, oldLoc);
-    },
-    boxed_case,
-    unboxed_case
-  );
+  stLocRaw(env, id, fp(env), newVal);
+  decRef(env, oldLoc);
 }
 
 inline SSATmp* pushStLoc(IRGS& env,
                          uint32_t id,
-                         Block* ldrefExit,
                          Block* ldPMExit,
                          SSATmp* newVal) {
   constexpr bool decRefOld = true;
@@ -870,14 +801,13 @@ inline SSATmp* pushStLoc(IRGS& env,
   auto const ret = stLocImpl(
     env,
     id,
-    ldrefExit,
     ldPMExit,
     newVal,
     decRefOld,
     incRefNew
   );
 
-  env.irb->constrainValue(ret, DataTypeBoxAndCountness);
+  env.irb->constrainValue(ret, DataTypeCountness);
   return push(env, ret);
 }
 
@@ -906,41 +836,9 @@ inline void decRefLocalsInline(IRGS& env) {
 }
 
 inline void decRefThis(IRGS& env) {
-  if (!curFunc(env)->mayHaveThis()) return;
+  if (!curFunc(env)->hasThisInBody()) return;
   auto const ctx = ldCtx(env);
   decRef(env, ctx);
-}
-
-template<class F>
-SSATmp* boxHelper(IRGS& env, SSATmp* value, F rewrite) {
-  auto const t = value->type();
-  if (t <= TCell) {
-    if (t <= TUninit) {
-      value = cns(env, TInitNull);
-    }
-    value = gen(env, Box, value);
-    rewrite(value);
-  } else if (t.maybe(TCell)) {
-    value = cond(env,
-                 [&](Block* taken) {
-                   auto const ret = gen(env, CheckType, TBoxedInitCell,
-                                        taken, value);
-                   env.irb->constrainValue(ret, DataTypeSpecific);
-                   return ret;
-                 },
-                 [&](SSATmp* box) { // Next: value is Boxed
-                   return box;
-                 },
-                 [&] { // Taken: value is not Boxed
-                   auto const tmpType = t - TBoxedInitCell;
-                   assertx(tmpType <= TCell);
-                   auto const tmp = gen(env, AssertType, tmpType, value);
-                   auto const ret = gen(env, Box, tmp);
-                   rewrite(ret);
-                   return ret;
-                 });
-  }
-  return value;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -951,18 +849,25 @@ SSATmp* boxHelper(IRGS& env, SSATmp* value, F rewrite) {
 template<class Body>
 Block* create_catch_block(
     IRGS& env, Body body,
-    EndCatchData::CatchMode mode = EndCatchData::UnwindOnly) {
- auto const catchBlock = defBlock(env, Block::Hint::Unused);
- BlockPusher bp(*env.irb, env.irb->curMarker(), catchBlock);
+    EndCatchData::CatchMode mode = EndCatchData::CatchMode::UnwindOnly) {
+  auto const catchBlock = defBlock(env, Block::Hint::Unused);
+  BlockPusher bp(*env.irb, env.irb->curMarker(), catchBlock);
 
- auto const& exnState = env.irb->exceptionStackState();
- env.irb->fs().setBCSPOff(exnState.syncedSpLevel);
+  auto const& exnState = env.irb->exceptionStackState();
+  env.irb->fs().setBCSPOff(exnState.syncedSpLevel);
 
- gen(env, BeginCatch);
- body();
- gen(env, EndCatch, EndCatchData { spOffBCFromIRSP(env), mode },
-     fp(env), sp(env));
- return catchBlock;
+  gen(env, BeginCatch);
+  body();
+  auto const stublogue = env.irb->fs().stublogue();
+  auto const data = EndCatchData {
+    spOffBCFromIRSP(env),
+    mode,
+    stublogue ?
+      EndCatchData::FrameMode::Stublogue : EndCatchData::FrameMode::Phplogue,
+    stublogue ? EndCatchData::Teardown::NA : EndCatchData::Teardown::Full
+  };
+  gen(env, EndCatch, data, fp(env), sp(env));
+  return catchBlock;
 }
 
 //////////////////////////////////////////////////////////////////////

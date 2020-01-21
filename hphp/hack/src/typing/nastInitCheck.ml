@@ -10,7 +10,7 @@
 (* Module checking that all the class members are properly initialized.
  * To be more precise, this checks that if the constructor does not throw,
  * it initializes all members. *)
-open Core_kernel
+open Hh_prelude
 open Aast
 open Nast
 module DICheck = Decl_init_check
@@ -18,7 +18,7 @@ module DeferredMembers = Typing_deferred_members
 module SN = Naming_special_names
 
 let shallow_decl_enabled () =
-  TypecheckerOptions.shallow_class_decl (GlobalNamingOptions.get ())
+  TypecheckerOptions.shallow_class_decl (Global_naming_options.get ())
 
 module SSetWTop = struct
   type t =
@@ -101,18 +101,7 @@ module Env = struct
     class_init_props: SSet.t;
   }
 
-  let parent_id c =
-    match c.c_extends with
-    | [(_, Happly ((_, parent_id), _))] -> Some parent_id
-    | _ -> None
-
   let rec make tenv c =
-    let tenv = Typing_env.set_self_id tenv (snd c.c_name) in
-    let tenv =
-      match parent_id c with
-      | None -> tenv
-      | Some parent_id -> Typing_env.set_parent_id tenv parent_id
-    in
     let (_, _, methods) = split_methods c in
     let methods = List.fold_left ~f:method_ ~init:SMap.empty methods in
     let sc = Shallow_decl.class_ c in
@@ -121,8 +110,7 @@ module Env = struct
          When shallow_class_decl is disabled, these are emitted by Decl. *)
       let (_ : SSet.t) = DeferredMembers.class_ tenv sc in
       () );
-    let (add_initialized_props, add_trait_props, add_parent_props, add_parent)
-        =
+    let (add_initialized_props, add_trait_props, add_parent_props, add_parent) =
       if shallow_decl_enabled () then
         ( DeferredMembers.initialized_props,
           DeferredMembers.trait_props tenv,
@@ -149,14 +137,14 @@ module Env = struct
     { methods; props; tenv; class_init_props }
 
   and method_ acc m =
-    if m.m_visibility <> Private then
+    if not (Aast.equal_visibility m.m_visibility Private) then
       acc
     else
       let name = snd m.m_name in
       let acc = SMap.add name (ref (Todo m.m_body)) acc in
       acc
 
-  let get_method env m = SMap.get m env.methods
+  let get_method env m = SMap.find_opt m env.methods
 end
 
 open Env
@@ -168,16 +156,16 @@ open Env
 (*****************************************************************************)
 
 let is_whitelisted = function
-  | x when x = SN.StdlibFunctions.get_class -> true
+  | x when String.equal x SN.StdlibFunctions.get_class -> true
   | _ -> false
 
 let rec class_ tenv c =
-  if c.c_mode = FileInfo.Mdecl then
+  if FileInfo.(equal_mode c.c_mode Mdecl) then
     ()
   else
     let (c_constructor, _, _) = split_methods c in
     match c_constructor with
-    | _ when c.c_kind = Ast_defs.Cinterface -> ()
+    | _ when Ast_defs.(equal_class_kind c.c_kind Cinterface) -> ()
     | Some { m_body = { fb_annotation = Nast.NamedWithUnsafeBlocks; _ }; _ } ->
       ()
     | _ ->
@@ -190,7 +178,7 @@ let rec class_ tenv c =
       let inits = constructor env c_constructor in
       let check_inits inits =
         let uninit_props = SSet.diff env.props inits in
-        if SSet.empty <> uninit_props then
+        if not (SSet.is_empty uninit_props) then
           if SSet.mem DeferredMembers.parent_init_prop uninit_props then
             Errors.no_construct_parent p
           else
@@ -199,7 +187,7 @@ let rec class_ tenv c =
                 (fun v -> not (SSet.mem v env.class_init_props))
                 uninit_props
             in
-            if SSet.empty <> class_uninit_props then
+            if not (SSet.is_empty class_uninit_props) then
               Errors.not_initialized
                 (p, snd c.c_name)
                 (SSet.elements class_uninit_props)
@@ -212,7 +200,10 @@ let rec class_ tenv c =
           ()
         | S.Set inits -> check_inits inits
       in
-      if c.c_kind = Ast_defs.Ctrait || c.c_kind = Ast_defs.Cabstract then
+      if
+        Ast_defs.(equal_class_kind c.c_kind Ctrait)
+        || Ast_defs.(equal_class_kind c.c_kind Cabstract)
+      then
         let has_constructor =
           match c_constructor with
           | None -> false
@@ -283,7 +274,7 @@ and stmt env acc st =
   match snd st with
   | Expr
       (_, Call (Cnormal, (_, Class_const ((_, CIparent), (_, m))), _, el, _uel))
-    when m = SN.Members.__construct ->
+    when String.equal m SN.Members.__construct ->
     let acc = List.fold_left ~f:expr ~init:acc el in
     assign env acc DeferredMembers.parent_init_prop
   | Expr e ->
@@ -293,16 +284,9 @@ and stmt env acc st =
       expr acc e
   | GotoLabel _
   | Goto _
-  (* Naming will catch errors with TempBreak *)
-  
-  | TempBreak _
   | Break ->
     acc
-  | Continue
-  (* Naming will catch errors with TempContinue *)
-  
-  | TempContinue _ ->
-    acc
+  | Continue -> acc
   | Throw _ -> S.Top
   | Return None ->
     if are_all_init env acc then
@@ -316,9 +300,7 @@ and stmt env acc st =
     else
       raise (InitReturn acc)
   | Awaitall (el, b) ->
-    let acc =
-      List.fold_left el ~init:acc ~f:(fun acc (_, e2) -> expr acc e2)
-    in
+    let acc = List.fold_left el ~init:acc ~f:(fun acc (_, e2) -> expr acc e2) in
     let acc = block acc b in
     acc
   | If (e1, b1, b2) ->
@@ -356,9 +338,6 @@ and stmt env acc st =
   | Def_inline _
   | Noop ->
     acc
-  | Let (_, _, e) ->
-    (* Scoped local variable cannot escape the block *)
-    expr acc e
   | Block b -> block acc b
   | Markup (_, eopt) ->
     (match eopt with
@@ -381,7 +360,8 @@ and are_all_init env set =
 and check_all_init p env acc =
   SSet.iter
     begin
-      fun cv -> if not (S.mem cv acc) then Errors.call_before_init p cv
+      fun cv ->
+      if not (S.mem cv acc) then Errors.call_before_init p cv
     end
     env.props
 
@@ -414,7 +394,6 @@ and expr_ env acc p e =
   | Id _ ->
     acc
   | Lvar _
-  | ImmutableVar _
   | Lplaceholder _
   | Dollardollar _ ->
     acc
@@ -449,8 +428,7 @@ and expr_ env acc p e =
         method_ := Done;
         let fb = Nast.assert_named_body b in
         toplevel env acc fb.fb_ast))
-  | Call (_, e, _, el, uel) ->
-    let el = el @ uel in
+  | Call (_, e, _, el, unpacked_element) ->
     let el =
       match e with
       | (_, Id (_, fun_name)) when is_whitelisted fun_name ->
@@ -460,6 +438,7 @@ and expr_ env acc p e =
       | _ -> el
     in
     let acc = List.fold_left ~f:expr ~init:acc el in
+    let acc = Option.value_map ~f:(expr acc) ~default:acc unpacked_element in
     expr acc e
   | True
   | False
@@ -480,8 +459,10 @@ and expr_ env acc p e =
     (* List is always an lvalue *)
     acc
   | Expr_list el -> exprl acc el
-  | Special_func (Genva el) -> exprl acc el
-  | New (_, _, el, uel, _) -> exprl acc (el @ uel)
+  | New (_, _, el, unpacked_element, _) ->
+    let acc = exprl acc el in
+    let acc = Option.value_map ~default:acc ~f:(expr acc) unpacked_element in
+    acc
   | Record (_, _, fdl) -> List.fold_left ~f:field ~init:acc fdl
   | Pair (e1, e2) ->
     let acc = expr acc e1 in
@@ -521,9 +502,14 @@ and expr_ env acc p e =
     exprl acc el
   | Callconv (_, e) -> expr acc e
   | Shape fdm ->
-    List.fold_left ~f:begin
-                        fun acc (_, v) -> expr acc v
-                      end ~init:acc fdm
+    List.fold_left
+      ~f:
+        begin
+          fun acc (_, v) ->
+          expr acc v
+        end
+      ~init:acc
+      fdm
   | Omitted -> acc
   | Import _ -> acc
   | Collection _ -> acc

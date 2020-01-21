@@ -176,15 +176,20 @@ LocalRange decodeLocalRange(const unsigned char*&);
 
 //////////////////////////////////////////////////////////////////////
 
+void encodeIterArgs(UnitEmitter&, const IterArgs&);
+IterArgs decodeIterArgs(const unsigned char*&);
+
+//////////////////////////////////////////////////////////////////////
+
 void encodeFCallArgsBase(UnitEmitter&, const FCallArgsBase&, const uint8_t*,
                          bool hasAsyncEagerOffset);
 FCallArgs decodeFCallArgs(Op, PC&);
 
 template<typename T>
 void encodeFCallArgs(UnitEmitter& ue, const FCallArgsBase& fca,
-                     const uint8_t* byRefs, bool hasAsyncEagerOffset,
+                     const uint8_t* inoutArgs, bool hasAsyncEagerOffset,
                      T emitAsyncEagerOffset) {
-  encodeFCallArgsBase(ue, fca, byRefs, hasAsyncEagerOffset);
+  encodeFCallArgsBase(ue, fca, inoutArgs, hasAsyncEagerOffset);
   if (hasAsyncEagerOffset) emitAsyncEagerOffset();
 }
 

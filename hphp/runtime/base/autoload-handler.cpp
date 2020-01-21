@@ -131,10 +131,7 @@ void AutoloadHandler::requestInit() {
 
   auto* factory = AutoloadMapFactory::getInstance();
   if (factory) {
-    auto* map = getAutoloadMapFromFactory(*factory);
-    if (map && map->ensureUpdated()) {
-      m_map = map;
-    }
+    setAutoloadMapFromFactory(*factory);
   }
 }
 
@@ -275,7 +272,7 @@ AutoloadHandler::loadFromMapImpl(const String& clsName,
                                  RuntimeOption::TrustAutoloaderPath);
     if (unit) {
       if (initial) {
-        tvDecRefGen(ec->invokePseudoMain(unit->getMain(nullptr)));
+        tvDecRefGen(ec->invokePseudoMain(unit->getMain(nullptr, false)));
       }
       ok = true;
     }
@@ -331,31 +328,44 @@ AutoloadHandler::loadFromMap(const String& clsName,
   }
 }
 
-AutoloadMap* AutoloadHandler::getAutoloadMapFromFactory(
-    AutoloadMapFactory& factory) const {
+void AutoloadHandler::setAutoloadMapFromFactory(
+    AutoloadMapFactory& factory) {
 
   if (g_context.isNull()) {
-    return nullptr;
+    return;
   }
 
   auto* repoOptions = g_context->getRepoOptionsForRequest();
   if (!repoOptions) {
-    return nullptr;
+    return;
   }
 
   auto repoRoot = folly::fs::canonical(repoOptions->path()).parent_path();
 
   auto queryExprStr = repoOptions->autoloadQuery();
   if (queryExprStr.empty()) {
-    return nullptr;
+    return;
   }
 
-  return factory.getForRoot(queryExprStr, std::move(repoRoot));
+  auto* map = factory.getForRoot(queryExprStr, repoRoot);
+  if (!map) {
+    return;
+  }
+
+  try {
+    map->ensureUpdated();
+    m_map = map;
+  } catch (const std::exception& e) {
+    Logger::Error(
+        "Failed to update native autoloader, not natively autoloading %s. %s\n",
+        repoRoot.generic().c_str(),
+        e.what());
+  }
 }
 
 bool AutoloadHandler::autoloadFunc(StringData* name) {
   return m_map &&
-    loadFromMap(String{stripInOutSuffix(name)},
+    loadFromMap(String{name},
                 AutoloadMap::KindOf::Function,
                 true,
                 FuncExistsChecker(name)) != AutoloadMap::Result::Failure;

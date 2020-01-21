@@ -53,12 +53,8 @@ Variant HHVM_FUNCTION(base64_decode, const String& data,
   return decoded;
 }
 
-Variant HHVM_FUNCTION(base64_encode, const String& data) {
-  String encoded = StringUtil::Base64Encode(data);
-  if (encoded.isNull()) {
-    return false;
-  }
-  return encoded;
+String HHVM_FUNCTION(base64_encode, const String& data) {
+  return StringUtil::Base64Encode(data);
 }
 
 Variant HHVM_FUNCTION(get_headers, const String& url, int format /* = 0 */) {
@@ -209,7 +205,7 @@ Variant HHVM_FUNCTION(http_build_query, const Variant& formdata,
                            const String& arg_separator /* = null_string */,
                            int enc_type /* = k_PHP_QUERY_RFC1738 */) {
   if (!formdata.isArray() && !formdata.is(KindOfObject)) {
-    throw_invalid_argument("formdata: (need Array or Object)");
+    raise_invalid_argument_warning("formdata: (need Array or Object)");
     return false;
   }
 
@@ -225,7 +221,7 @@ Variant HHVM_FUNCTION(http_build_query, const Variant& formdata,
 
   String num_prefix;
   if (!numeric_prefix.isNull()) {
-    num_prefix = numeric_prefix.toCStrRef();
+    num_prefix = numeric_prefix.asCStrRef();
   }
   url_encode_array(ret, formdata, seen_arrs,
                    num_prefix, String(), String(), arg_sep,

@@ -7,12 +7,13 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Typing_defs
 module Env = Tast_env
 module TCO = TypecheckerOptions
 module MakeType = Typing_make_type
+open String.Replace_polymorphic_compare
 
 let should_enforce env = TCO.disallow_invalid_arraykey (Env.get_tcopt env)
 
@@ -28,22 +29,20 @@ let rec array_get ~array_pos ~expr_pos ~index_pos env array_ty index_ty =
   let type_index env ty_have ty_expect reason =
     let t_env = Env.tast_env_as_typing_env env in
     match
-      Typing_coercion.try_coerce
-        index_pos
-        Reason.URnone
-        t_env
-        ty_have
-        (MakeType.unenforced ty_expect)
+      Typing_coercion.try_coerce t_env ty_have (MakeType.unenforced ty_expect)
     with
     | Some _ -> ()
     | None ->
       if
-        ( Env.can_subtype env ty_have (fst ty_have, Tdynamic)
+        ( Env.can_subtype env ty_have (MakeType.dynamic (get_reason ty_have))
         (* Terrible heuristic to agree with legacy: if we inferred `nothing` for
          * the key type of the array, just let it pass *)
-        || Env.can_subtype env ty_expect (fst ty_expect, Tunion []) )
+        || Env.can_subtype
+             env
+             ty_expect
+             (MakeType.nothing (get_reason ty_expect)) )
         (* If the key is not even an arraykey, we've already produced an error *)
-        || (not (Env.can_subtype env ty_have (Reason.Rnone, Tprim Tarraykey)))
+        || (not (Env.can_subtype env ty_have (MakeType.arraykey Reason.Rnone)))
            && should_enforce env
       then
         ()
@@ -52,29 +51,24 @@ let rec array_get ~array_pos ~expr_pos ~index_pos env array_ty index_ty =
         let (_, ty_expect) = Env.expand_type env ty_expect in
         let ty_expect_str = Env.print_error_ty env ty_expect in
         let ty_have_str = Env.print_error_ty env ty_have in
-        Errors.try_add_err
-          expr_pos
-          (Reason.string_of_ureason reason)
-          (fun () ->
-            Errors.index_type_mismatch
-              (Typing_reason.to_string
+        Errors.index_type_mismatch
+          ( (expr_pos, Reason.string_of_ureason reason)
+            :: Typing_reason.to_string
                  ("This is " ^ ty_expect_str)
-                 (fst ty_expect))
-              (Typing_reason.to_string
-                 ("It is incompatible with " ^ ty_have_str)
-                 (fst ty_have)))
-          (fun () -> ())
+                 (get_reason ty_expect)
+          @ Typing_reason.to_string
+              ("It is incompatible with " ^ ty_have_str)
+              (get_reason ty_have) )
   in
   let (_, ety) = Env.expand_type env array_ty in
-  match snd ety with
+  match get_node ety with
   | Tunion tyl ->
     List.iter tyl (fun ty ->
         array_get ~array_pos ~expr_pos ~index_pos env ty index_ty)
-  | Tarraykind (AKdarray (key_ty, _) | AKmap (key_ty, _)) ->
+  | Tarraykind (AKdarray (key_ty, _)) ->
     type_index env index_ty key_ty Reason.index_array
   | Tclass ((_, cn), _, key_ty :: _)
     when cn = SN.Collections.cMap
-         || cn = SN.Collections.cStableMap
          || cn = SN.Collections.cConstMap
          || cn = SN.Collections.cImmMap
          || cn = SN.Collections.cKeyedContainer
@@ -96,7 +90,8 @@ let rec array_get ~array_pos ~expr_pos ~index_pos env array_ty index_ty =
   | Tdynamic
   | Tany _
   | Tarraykind _
-  | Tabstract _
+  | Tnewtype _
+  | Tdependent _
   | _ ->
     ()
 

@@ -51,12 +51,20 @@ struct AutoloadMap {
   virtual ~AutoloadMap() = default;
 
   /**
-   * Block until the AutoloadMap is up-to-date. Return true on success and
-   * false on failure.
+   * Block until the AutoloadMap is up-to-date.
+   *
+   * May throw an exception if updating failed.
    */
-  virtual bool ensureUpdated() {
-    return true;
+  virtual void ensureUpdated() {
   }
+
+  /**
+   * True iff this AutoloadMap knows which files contain which symbols without
+   * needing to query userland Hack code. If we're using a native AutoloadMap,
+   * we'll be able to use any symbol when the very first line of Hack code is
+   * run.
+   */
+  virtual bool isNative() const noexcept = 0;
 
   /**
    * Given the name of a type and the kind of type we're looking for,

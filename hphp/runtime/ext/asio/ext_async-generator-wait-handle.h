@@ -62,14 +62,14 @@ struct c_AsyncGeneratorWaitHandle final : c_ResumableWaitHandle {
   static c_AsyncGeneratorWaitHandle* Create(
     const ActRec* fp,
     jit::TCA resumeAddr,
-    Offset resumeOffset,
+    Offset suspendOffset,
     c_WaitableWaitHandle* child
   ); // nothrow
 
   void resume();
   void onUnblocked();
   void await(req::ptr<c_WaitableWaitHandle>&& child);
-  void ret(Cell& result);
+  void ret(TypedValue& result);
   void fail(ObjectData* exception);
   void failCpp();
   String getName();

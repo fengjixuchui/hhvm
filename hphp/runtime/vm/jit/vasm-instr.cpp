@@ -51,9 +51,7 @@ bool isBlockEnd(const Vinstr& inst) {
     case Vinstr::debugguardjmp:
     // terminal calls
     case Vinstr::tailcallstub:
-    case Vinstr::callphp:
-    case Vinstr::tailcallphp:
-    case Vinstr::calltc:
+    case Vinstr::tailcallstubr:
     case Vinstr::resumetc:
     // exception edges
     case Vinstr::unwind:
@@ -80,12 +78,12 @@ bool isCall(Vinstr::Opcode op) {
     case Vinstr::callfaststub:
     case Vinstr::callm:
     case Vinstr::callphp:
+    case Vinstr::callphpr:
     case Vinstr::callr:
     case Vinstr::calls:
     case Vinstr::callstub:
-    case Vinstr::calltc:
-    case Vinstr::tailcallphp:
     case Vinstr::tailcallstub:
+    case Vinstr::tailcallstubr:
     case Vinstr::vcall:
     case Vinstr::vcallunpack:
     case Vinstr::vinvoke:
@@ -129,6 +127,9 @@ Width width(Vinstr::Opcode op) {
     case Vinstr::popframe:
     case Vinstr::recordstack:
     case Vinstr::spill:
+    case Vinstr::spillbi:
+    case Vinstr::spillli:
+    case Vinstr::spillqi:
     case Vinstr::reload:
     case Vinstr::ssaalias:
     // native function abi
@@ -141,10 +142,12 @@ Width width(Vinstr::Opcode op) {
     case Vinstr::ret:
     // stub function abi
     case Vinstr::stublogue:
+    case Vinstr::unstublogue:
     case Vinstr::stubret:
     case Vinstr::callstub:
     case Vinstr::callfaststub:
     case Vinstr::tailcallstub:
+    case Vinstr::tailcallstubr:
     case Vinstr::stubunwind:
     // php function abi
     case Vinstr::defvmsp:
@@ -158,12 +161,11 @@ Width width(Vinstr::Opcode op) {
     case Vinstr::loadstubret:
     case Vinstr::phpret:
     case Vinstr::callphp:
-    case Vinstr::tailcallphp:
+    case Vinstr::callphpr:
     case Vinstr::callunpack:
     case Vinstr::vcallunpack:
     case Vinstr::contenter:
     // vm entry abi
-    case Vinstr::calltc:
     case Vinstr::resumetc:
     case Vinstr::inittc:
     case Vinstr::leavetc:

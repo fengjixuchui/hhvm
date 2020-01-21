@@ -52,6 +52,21 @@ type remote_exception_data = {
   stack: string;
 }
 
+type error =
+  | Rpc_absent of Exception.t
+  | Rpc_disconnected of Exception.t
+  | Rpc_malformed of string * Utils.callstack
+  | Rpc_remote_panic of remote_exception_data
+
+let error_to_verbose_string (err : error) : string =
+  match err with
+  | Rpc_absent e -> "Absent: " ^ Exception.to_string e
+  | Rpc_disconnected e -> "Disconnected: " ^ Exception.to_string e
+  | Rpc_malformed (s, Utils.Callstack stack) ->
+    Printf.sprintf "Malformed: %s\n%s" s stack
+  | Rpc_remote_panic { message; stack } ->
+    Printf.sprintf "Remote panic: %s\n%s" message stack
+
 module type WRITER_READER = sig
   type 'a result
 
@@ -214,13 +229,13 @@ end = struct
     let payload = Marshal.to_bytes obj flags in
     let size = Bytes.length payload in
     let preamble = make_preamble size in
-    write_payload ?timeout fd preamble 0 expected_preamble_size
-    >>= (fun preamble_bytes_written ->
-          if preamble_bytes_written <> expected_preamble_size then
-            WriterReader.fail Writing_Preamble_Exception
-          else
-            WriterReader.return ())
-    >>= (fun () -> write_payload ?timeout fd payload 0 size)
+    ( ( write_payload ?timeout fd preamble 0 expected_preamble_size
+      >>= fun preamble_bytes_written ->
+        if preamble_bytes_written <> expected_preamble_size then
+          WriterReader.fail Writing_Preamble_Exception
+        else
+          WriterReader.return () )
+    >>= fun () -> write_payload ?timeout fd payload 0 size )
     >>= fun bytes_written ->
     if bytes_written <> size then
       WriterReader.fail Writing_Payload_Exception
@@ -245,31 +260,28 @@ end = struct
 
   let from_fd_with_preamble ?timeout fd =
     let preamble = Bytes.create expected_preamble_size in
-    WriterReader.read
-      ?timeout
-      fd
-      ~buffer:preamble
-      ~offset:0
-      ~size:expected_preamble_size
-    >>= (fun bytes_read ->
-          if
-            bytes_read = 0
-            (* Unix manpage for read says 0 bytes read indicates end of file. *)
-          then
-            WriterReader.fail End_of_file
-          else if bytes_read <> expected_preamble_size then (
-            WriterReader.log
-              (Printf.sprintf
-                 "Error, only read %d bytes for preamble."
-                 bytes_read);
-            WriterReader.fail Reading_Preamble_Exception
-          ) else
-            WriterReader.return ())
+    ( WriterReader.read
+        ?timeout
+        fd
+        ~buffer:preamble
+        ~offset:0
+        ~size:expected_preamble_size
+    >>= fun bytes_read ->
+      if
+        bytes_read = 0
+        (* Unix manpage for read says 0 bytes read indicates end of file. *)
+      then
+        WriterReader.fail End_of_file
+      else if bytes_read <> expected_preamble_size then (
+        WriterReader.log
+          (Printf.sprintf "Error, only read %d bytes for preamble." bytes_read);
+        WriterReader.fail Reading_Preamble_Exception
+      ) else
+        WriterReader.return () )
     >>= fun () ->
     let payload_size = parse_preamble preamble in
     let payload = Bytes.create payload_size in
-    read_payload ?timeout fd payload 0 payload_size
-    >>= fun payload_size_read ->
+    read_payload ?timeout fd payload 0 payload_size >>= fun payload_size_read ->
     if payload_size_read <> payload_size then
       WriterReader.fail Reading_Payload_Exception
     else

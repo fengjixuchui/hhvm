@@ -123,13 +123,6 @@ let summarize_typeconst class_name t =
     | TCAbstract _ -> [Abstract]
     | _ -> []
   in
-  let visibility_modifier =
-    match t.c_tconst_visibility with
-    | Public -> SymbolDefinition.Public
-    | Private -> SymbolDefinition.Private
-    | Protected -> SymbolDefinition.Protected
-  in
-  let modifiers = visibility_modifier :: modifiers in
   let full_name = get_full_name (Some class_name) name in
   {
     kind;
@@ -340,6 +333,27 @@ let summarize_class class_ ~no_children =
     reactivity_attributes = [];
   }
 
+let summarize_record_decl rd =
+  let kind = SymbolDefinition.RecordDef in
+  let name = Utils.strip_ns (snd rd.rd_name) in
+  let id = get_symbol_id kind None name in
+  let full_name = get_full_name None name in
+  let pos = fst rd.rd_name in
+  let span = rd.rd_span in
+  {
+    kind;
+    name;
+    full_name;
+    id;
+    pos;
+    span;
+    modifiers = [];
+    children = None;
+    params = None;
+    docblock = None;
+    reactivity_attributes = [];
+  }
+
 let summarize_typedef tdef =
   let kind = SymbolDefinition.Typedef in
   let name = Utils.strip_ns (snd tdef.t_name) in
@@ -442,7 +456,8 @@ let should_add_docblock = function
   | Interface
   | Trait
   | Typeconst
-  | Typedef ->
+  | Typedef
+  | RecordDef ->
     true
   | LocalVar
   | Param ->
@@ -486,19 +501,32 @@ let add_docblocks defs comments =
 
 let outline popt content =
   let { Parser_return.ast; comments; _ } =
-    if Ide_parser_cache.is_enabled () then
-      Ide_parser_cache.(
-        with_ide_cache @@ (fun () -> get_ast popt Relative_path.default content))
-    else
-      let env =
-        Parser.make_env
-          ~parser_options:popt
-          ~include_line_comments:true
-          ~keep_errors:false
-          Relative_path.default
-      in
-      Parser.from_text_with_legacy env content
+    let ast =
+      Errors.ignore_ (fun () ->
+          if Ide_parser_cache.is_enabled () then
+            Ide_parser_cache.(
+              with_ide_cache @@ fun () ->
+              get_ast popt Relative_path.default content)
+          else
+            let env =
+              Parser.make_env
+                ~parser_options:popt
+                ~include_line_comments:true
+                ~keep_errors:false
+                Relative_path.default
+            in
+            Parser.from_text_with_legacy env content)
+    in
+    ast
   in
+  let result = outline_ast ast in
+  add_docblocks result comments
+
+let outline_ctx ~(ctx : Provider_context.t) ~(entry : Provider_context.entry) :
+    string SymbolDefinition.t list =
+  let _ = ctx in
+  let ast = entry.Provider_context.ast in
+  let comments = entry.Provider_context.comments in
   let result = outline_ast ast in
   add_docblocks result comments
 

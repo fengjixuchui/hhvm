@@ -29,11 +29,19 @@ end
 
 (* a function type *)
 module Fun = struct
-  type t = decl Typing_defs.fun_type
+  type t = fun_elt
 
   let prefix = Prefix.make ()
 
   let description = "Fun"
+end
+
+module RecordDef = struct
+  type t = Typing_defs.record_def_type
+
+  let prefix = Prefix.make ()
+
+  let description = "RecordDef"
 end
 
 module Typedef = struct
@@ -45,7 +53,7 @@ module Typedef = struct
 end
 
 module GConst = struct
-  type t = decl ty * Errors.t
+  type t = decl_ty * Errors.t
 
   let prefix = Prefix.make ()
 
@@ -56,13 +64,15 @@ module Funs =
   SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Fun)
 module Classes =
   SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Class)
+module RecordDefs =
+  SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (RecordDef)
 module Typedefs =
   SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Typedef)
 module GConsts =
   SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (GConst)
 
 module Property = struct
-  type t = decl ty
+  type t = decl_ty
 
   let prefix = Prefix.make ()
 
@@ -70,7 +80,7 @@ module Property = struct
 end
 
 module StaticProperty = struct
-  type t = decl ty
+  type t = decl_ty
 
   let prefix = Prefix.make ()
 
@@ -78,7 +88,7 @@ module StaticProperty = struct
 end
 
 module Method = struct
-  type t = decl fun_type
+  type t = fun_elt
 
   let prefix = Prefix.make ()
 
@@ -86,7 +96,7 @@ module Method = struct
 end
 
 module StaticMethod = struct
-  type t = decl fun_type
+  type t = fun_elt
 
   let prefix = Prefix.make ()
 
@@ -94,7 +104,7 @@ module StaticMethod = struct
 end
 
 module Constructor = struct
-  type t = decl fun_type
+  type t = fun_elt
 
   let prefix = Prefix.make ()
 
@@ -106,7 +116,7 @@ module ClassEltKey = struct
 
   let compare (cls1, elt1) (cls2, elt2) =
     let r = String.compare cls1 cls2 in
-    if r <> 0 then
+    if not (Core_kernel.Int.equal r 0) then
       r
     else
       String.compare elt1 elt2
@@ -122,7 +132,6 @@ module StaticProps =
 module Methods =
   SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey) (Method)
 module StaticMethods =
-  SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey)
-    (StaticMethod)
+  SharedMem.WithCache (SharedMem.ProfiledImmediate) (ClassEltKey) (StaticMethod)
 module Constructors =
   SharedMem.WithCache (SharedMem.ProfiledImmediate) (StringKey) (Constructor)

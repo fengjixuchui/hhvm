@@ -18,19 +18,18 @@
 #define incl_HPHP_TV_TYPE_H_
 
 #include "hphp/runtime/base/datatype.h"
-#include "hphp/runtime/base/ref-data.h"
 #include "hphp/runtime/base/typed-value.h"
 
 namespace HPHP {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-ALWAYS_INLINE bool cellIsNull(Cell tv) {
-  assertx(cellIsPlausible(tv));
+ALWAYS_INLINE bool tvIsNull(TypedValue tv) {
+  assertx(tvIsPlausible(tv));
   return isNullType(tv.m_type);
 }
-ALWAYS_INLINE bool cellIsNull(const Cell* tv) {
-  return cellIsNull(*tv);
+ALWAYS_INLINE bool tvIsNull(const TypedValue* tv) {
+  return tvIsNull(*tv);
 }
 
 #define CASE(ty)                                                        \
@@ -45,9 +44,6 @@ CASE(Int)
 CASE(Double)
 CASE(String)
 CASE(Array)
-CASE(Shape)
-CASE(ArrayOrShape)
-CASE(DictOrShape)
 CASE(ArrayLike)
 CASE(HackArray)
 CASE(Vec)
@@ -55,18 +51,12 @@ CASE(Dict)
 CASE(Keyset)
 CASE(Object)
 CASE(Resource)
-CASE(Ref)
 CASE(Func)
 CASE(Class)
 CASE(ClsMeth)
 CASE(Record)
 
 #undef CASE
-
-ALWAYS_INLINE bool tvIsReferenced(TypedValue tv) {
-  return isRefType(tv.m_type) &&
-         tv.m_data.pref->isReferenced();
-}
 
 template<typename T>
 ALWAYS_INLINE bool tvIsVecOrVArray(T&& tv) {

@@ -153,6 +153,7 @@ way to determine how much progress the server made.
 #include "hphp/util/logger.h"
 #include "hphp/util/process.h"
 #include "hphp/util/trace.h"
+#include "hphp/util/user-info.h"
 
 #include <folly/io/async/AsyncServerSocket.h>
 #include <folly/io/async/EventBaseManager.h>
@@ -653,7 +654,7 @@ void define_stdio_constants() {
     auto cns = rds::handleToPtr<TypedValue, rds::Mode::NonLocal>(handle);
 
     cns->m_type = KindOfUninit;
-    cns->m_data.pref = reinterpret_cast<RefData*>(func);
+    cns->m_data.pcnt = reinterpret_cast<MaybeCountable*>(func);
   };
 
   defcns(s_STDIN.get(),  BuiltinFiles::GetSTDIN);
@@ -726,67 +727,6 @@ Array init_ini_settings(const std::string& settings) {
 std::unordered_set<uid_t> s_allowedUsers;
 std::unordered_set<gid_t> s_allowedGroups;
 
-struct UserInfo final {
-  explicit UserInfo(const char* name) {
-    passwd* retpwptr = nullptr;
-    int pwbuflen = sysconf(_SC_GETPW_R_SIZE_MAX);
-    if (pwbuflen < 1)   {
-      throw Exception("Could not get _SC_GETPW_R_SIZE_MAX");
-    }
-    pwbuf.reset(new char[pwbuflen]);
-
-    if (getpwnam_r(name, &pwd, pwbuf.get(), pwbuflen, &retpwptr)) {
-      throw Exception("getpwnam_r: %s", folly::errnoStr(errno).c_str());
-    }
-
-    if (!retpwptr) {
-      throw Exception("getpwnam_r: no such user: %s", name);
-    }
-  }
-
-  explicit UserInfo(uid_t uid) {
-    passwd* retpwptr = nullptr;
-    int pwbuflen = sysconf(_SC_GETPW_R_SIZE_MAX);
-    if (pwbuflen < 1)   {
-      throw Exception("Could not get _SC_GETPW_R_SIZE_MAX");
-    }
-    pwbuf.reset(new char[pwbuflen]);
-
-    if (getpwuid_r(uid, &pwd, pwbuf.get(), pwbuflen, &retpwptr)) {
-      throw Exception("getpwuid_r: %s", folly::errnoStr(errno).c_str());
-    }
-
-    if (!retpwptr) {
-      throw Exception("getpwuid_r: no such uid: %u", uid);
-    }
-  }
-
-  passwd pwd;
-  std::unique_ptr<char[]> pwbuf;
-};
-
-struct GroupInfo final {
-  explicit GroupInfo(const char* name) {
-    group* retgrptr = nullptr;
-    int grbuflen = sysconf(_SC_GETGR_R_SIZE_MAX);
-    if (grbuflen < 1)   {
-      throw Exception("Could not get _SC_GETGR_R_SIZE_MAX");
-    }
-    grbuf.reset(new char[grbuflen]);
-
-    if (getgrnam_r(name, &gr, grbuf.get(), grbuflen, &retgrptr)) {
-      throw Exception("getgrnam_r: %s", folly::errnoStr(errno).c_str());
-    }
-
-    if (!retgrptr) {
-      throw Exception("getgrnam_r: no such group: %s", name);
-    }
-  }
-
-  group gr;
-  std::unique_ptr<char[]> grbuf;
-};
-
 void check_cli_server_access(ucred& cred) {
   // Fail closed
   if (s_allowedUsers.empty() && s_allowedGroups.empty()) {
@@ -812,14 +752,14 @@ void check_cli_server_access(ucred& cred) {
 #endif
       int ngroups = 0;
       UserInfo user(cred.uid);
-      if (getgrouplist(user.pwd.pw_name, cred.gid, nullptr, &ngroups) != -1) {
+      if (getgrouplist(user.pw->pw_name, cred.gid, nullptr, &ngroups) != -1) {
         FTRACE(2, "check_cli_server_access: oops 1...\n");
         throw Exception("getgrouplist: could not get ngroups");
       }
       FTRACE(2, "Will check {} groups for user {}\n",
-             ngroups, user.pwd.pw_name);
+             ngroups, user.pw->pw_name);
       groups.resize(ngroups);
-      if (getgrouplist(user.pwd.pw_name, cred.gid, &groups[0], &ngroups) < 0) {
+      if (getgrouplist(user.pw->pw_name, cred.gid, &groups[0], &ngroups) < 0) {
         FTRACE(2, "check_cli_server_access: oops 2...\n");
         throw Exception("getgrouplist: invalid return value");
       }
@@ -910,37 +850,40 @@ private:
 
 struct MonitorThread final {
   explicit MonitorThread(int client);
-  void detach() {
+  MonitorThread(const MonitorThread&) = delete;
+  MonitorThread& operator=(const MonitorThread&) = delete;
+  ~MonitorThread() {
+    join();
+    ::close(m_rpipe);
+    ::close(m_wpipe);
+  }
+  void join() {
     if (m_monitor.joinable()) {
-      write(m_wpipe, "stop", 5);
+      ::write(m_wpipe, "stop", 5);
       m_monitor.join();
     }
   }
-  ~MonitorThread() { detach(); }
 
 private:
+  int m_rpipe{-1};
   int m_wpipe{-1};
   std::thread m_monitor;
 };
 
 MonitorThread::MonitorThread(int client) {
   int monitor_pipe[2];
-  if (pipe(monitor_pipe) == -1) {
+  if (::pipe(monitor_pipe) == -1) {
     throw Exception("Unable to construct pipe for monitor: %s",
                     folly::errnoStr(errno).c_str());
   }
 
-  int rpipe = monitor_pipe[0];
-  int wpipe = monitor_pipe[1];
+  m_rpipe = monitor_pipe[0];
+  m_wpipe = monitor_pipe[1];
   auto flags = &stackLimitAndSurprise();
   try {
-    m_monitor = std::thread([wpipe,rpipe,client,flags] {
-      SCOPE_EXIT {
-        close(rpipe);
-        close(wpipe);
-      };
+    m_monitor = std::thread([this,client,flags] {
       int ret = 0;
-      pollfd pfd[] = {{client, 0, 0}, {rpipe, POLLIN, 0}};
+      ::pollfd pfd[] = {{client, 0, 0}, {m_rpipe, POLLIN, 0}};
       while ((ret = poll(pfd, 2, -1)) != -1) {
         if (ret == 0) continue;
         if (pfd[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
@@ -963,12 +906,8 @@ MonitorThread::MonitorThread(int client) {
              client, folly::errnoStr(errno));
     });
   } catch (const std::system_error& err) {
-    close(rpipe);
-    close(wpipe);
     throw Exception("Could not start monitor thread: %s", err.what());
   }
-
-  m_wpipe = wpipe;
 }
 
 const StaticString s_hhvm_prelude_path("hhvm.prelude_path");
@@ -1128,7 +1067,7 @@ void CLIWorker::doJob(int client) {
         args[0],
         false,
         null_array,
-        uninit_null(),
+        nullptr,
         "",
         "",
         error,
@@ -1142,7 +1081,7 @@ void CLIWorker::doJob(int client) {
       if (invoke_result) {
         ret = *rl_exit_code;
       }
-      monitor.detach();
+      monitor.join();
       guard.dismiss();
       finish();
       FTRACE(2, "CLIWorker::doJob({}): waiting for monitor...\n", client);
@@ -1321,7 +1260,7 @@ bool CLIWrapper::chown(const String& path, const String& user) {
   uid_t id;
   try {
     UserInfo info(user.data());
-    id = info.pwd.pw_uid;
+    id = info.pw->pw_uid;
   } catch (const Exception& ex) {
     return false;
   }
@@ -1334,7 +1273,7 @@ bool CLIWrapper::chgrp(const String& path, const String& group) {
   gid_t id;
   try {
     GroupInfo info(group.data());
-    id = info.gr.gr_gid;
+    id = info.gr->gr_gid;
   } catch (const Exception& ex) {
     return false;
   }
@@ -1701,7 +1640,7 @@ void init_cli_server(const char* socket_path) {
   for (auto user : RuntimeOption::EvalUnixServerAllowedUsers) {
     try {
       UserInfo info(user.c_str());
-      s_allowedUsers.emplace(info.pwd.pw_uid);
+      s_allowedUsers.emplace(info.pw->pw_uid);
     } catch (const Exception& ex) {
       Logger::Warning(
         "Could not get uid for user %s in Eval.UnixServerAllowedUsers: %s",
@@ -1713,7 +1652,7 @@ void init_cli_server(const char* socket_path) {
   for (auto group : RuntimeOption::EvalUnixServerAllowedGroups) {
     try {
       GroupInfo info(group.c_str());
-      s_allowedGroups.emplace(info.gr.gr_gid);
+      s_allowedGroups.emplace(info.gr->gr_gid);
     } catch (const Exception& ex) {
       Logger::Warning(
         "Could not get gid for group %s in Eval.UnixServerAllowedGroups: %s",

@@ -551,8 +551,8 @@ CAMLprim value hh_hash_used_slots(void) {
   CAMLlocal1(connector);
 
   connector = caml_alloc_tuple(2);
-  Field(connector, 0) = Val_long(*hcounter_filled);
-  Field(connector, 1) = Val_long(*hcounter);
+  Store_field(connector, 0, Val_long(*hcounter_filled));
+  Store_field(connector, 1, Val_long(*hcounter));
 
   CAMLreturn(connector);
 }
@@ -818,7 +818,11 @@ static void memfd_reserve(char * mem, size_t sz) {
 
 static void memfd_reserve(char *mem, size_t sz) {
   off_t offset = (off_t)(mem - shared_mem);
-  if(posix_fallocate(memfd, offset, sz)) {
+  int err;
+  do {
+    err = posix_fallocate(memfd, offset, sz);
+  } while (err == EINTR);
+  if (err) {
     raise_out_of_shared_memory();
   }
 }
@@ -983,7 +987,7 @@ static void set_sizes(
 
   size_t page_size = getpagesize();
 
-  global_size_b = config_global_size;
+  global_size_b = sizeof(global_storage[0]) + config_global_size;
   heap_size = config_heap_size;
 
   dep_size        = 1ul << config_dep_table_pow;
@@ -1074,12 +1078,12 @@ CAMLprim value hh_shared_init(
 #endif
 
   connector = caml_alloc_tuple(6);
-  Field(connector, 0) = Val_handle(memfd);
-  Field(connector, 1) = config_global_size_val;
-  Field(connector, 2) = config_heap_size_val;
-  Field(connector, 3) = config_dep_table_pow_val;
-  Field(connector, 4) = config_hash_table_pow_val;
-  Field(connector, 5) = num_workers_val;
+  Store_field(connector, 0, Val_handle(memfd));
+  Store_field(connector, 1, config_global_size_val);
+  Store_field(connector, 2, config_heap_size_val);
+  Store_field(connector, 3, config_dep_table_pow_val);
+  Store_field(connector, 4, config_hash_table_pow_val);
+  Store_field(connector, 5, num_workers_val);
 
   CAMLreturn(connector);
 }
@@ -1213,8 +1217,13 @@ CAMLprim value hh_assert_allow_dependency_table_reads (void) {
 }
 
 void check_should_exit(void) {
-  assert(workers_should_exit != NULL);
-  if(worker_can_exit && *workers_should_exit) {
+  if (workers_should_exit == NULL) {
+    caml_failwith(
+      "`check_should_exit` failed: `workers_should_exit` was uninitialized. "
+      "Did you forget to call one of `hh_connect` or `hh_shared_init` "
+      "to initialize shared memory before accessing it?"
+    );
+  } else if (*workers_should_exit) {
     static value *exn = NULL;
     if (!exn) exn = caml_named_value("worker_should_exit");
     caml_raise_constant(*exn);
@@ -1237,7 +1246,7 @@ void hh_shared_store(value data) {
 
   assert_master();                               // only the master can store
   assert(global_storage[0] == 0);                // Is it clear?
-  assert(size < global_size_b - sizeof(value));  // Do we have enough space?
+  assert(size < global_size_b - sizeof(global_storage[0])); // Do we have enough space?
 
   global_storage[0] = size;
   memfd_reserve((char *)&global_storage[1], size);
@@ -1473,6 +1482,7 @@ void hh_add_dep(value ocaml_dep) {
 
 void kill_dep_used_slots(void) {
   CAMLparam0();
+  *dcounter = 0;
   memset(deptbl, 0, dep_size_b);
   memset(deptbl_bindings, 0, bindings_size_b);
 }
@@ -1527,15 +1537,15 @@ CAMLprim value hh_get_dep(value ocaml_key) {
         slotval = table[slotval.s.next.num];
 
         cell = caml_alloc_tuple(2);
-        Field(cell, 0) = Val_long(slotval.s.key.num);
-        Field(cell, 1) = result;
+        Store_field(cell, 0, Val_long(slotval.s.key.num));
+        Store_field(cell, 1, result);
         result = cell;
       }
 
       // The tail of the list is special, "next" is really a value.
       cell = caml_alloc_tuple(2);
-      Field(cell, 0) = Val_long(slotval.s.next.num);
-      Field(cell, 1) = result;
+      Store_field(cell, 0, Val_long(slotval.s.next.num));
+      Store_field(cell, 1, result);
       result = cell;
 
       // We are done!
@@ -1797,12 +1807,12 @@ static value write_at(unsigned int slot, value data) {
     size_t alloc_size = 0;
     size_t orig_size = 0;
     hashtbl[slot].addr = hh_store_ocaml(data, &alloc_size, &orig_size);
-    Field(result, 0) = Val_long(alloc_size);
-    Field(result, 1) = Val_long(orig_size);
+    Store_field(result, 0, Val_long(alloc_size));
+    Store_field(result, 1, Val_long(orig_size));
     __sync_fetch_and_add(hcounter_filled, 1);
   } else {
-    Field(result, 0) = Min_long;
-    Field(result, 1) = Min_long;
+    Store_field(result, 0, Min_long);
+    Store_field(result, 1, Min_long);
   }
   CAMLreturn(result);
 }
@@ -2027,7 +2037,7 @@ CAMLprim value hh_get_size(value key) {
 
   unsigned int slot = find_slot(key);
   assert(hashtbl[slot].hash == get_hash(key));
-  CAMLreturn(Long_val(Entry_size(hashtbl[slot].addr->header)));
+  CAMLreturn(Val_long(Entry_size(hashtbl[slot].addr->header)));
 }
 
 /*****************************************************************************/
@@ -2104,7 +2114,9 @@ size_t deptbl_entry_count_for_slot(size_t slot) {
 // use the same format as what's in the hashtable, but compact
 // Question: is it better to deserialize into hashtbl or an OCaml Hashtable or
 // into SQLite?
-size_t hh_save_dep_table_blob_helper(const char* const out_filename) {
+size_t hh_save_dep_table_blob_helper(
+      const char* const out_filename,
+      const size_t reset_state_after_saving) {
   struct timeval start_t = { 0 };
   gettimeofday(&start_t, NULL);
 
@@ -2172,6 +2184,10 @@ size_t hh_save_dep_table_blob_helper(const char* const out_filename) {
 
   fprintf(stderr, "Wrote %lu new rows\n", new_rows_count);
   fclose(dep_table_blob_file);
+
+  if (reset_state_after_saving) {
+    kill_dep_used_slots();
+  }
 
   log_duration("Finished writing the file", start_t);
 
@@ -2262,14 +2278,18 @@ void hh_load_dep_table_blob_helper(const char* const in_filename) {
  */
 CAMLprim value hh_save_dep_table_blob(
     value out_filename,
-    value build_revision
+    value build_revision,
+    value reset_state_after_saving
 ) {
-  CAMLparam2(out_filename, build_revision);
+  CAMLparam3(out_filename, build_revision, reset_state_after_saving);
   char *out_filename_raw = String_val(out_filename);
+  size_t reset_state_after_saving_raw = Bool_val(reset_state_after_saving);
 
   // TODO: use build_revision
-  size_t edges_added =
-    hh_save_dep_table_blob_helper(out_filename_raw);
+  size_t edges_added = hh_save_dep_table_blob_helper(
+    out_filename_raw,
+    reset_state_after_saving_raw);
+
   CAMLreturn(Val_long(edges_added));
 }
 
@@ -2320,7 +2340,7 @@ value Val_some(value v)
     CAMLparam1(v);
     CAMLlocal1(some);
     some = caml_alloc_small(1, 0);
-    Field(some, 0) = v;
+    Store_field(some, 0, v);
     CAMLreturn(some);
 }
 
@@ -2330,7 +2350,9 @@ value Val_some(value v)
 
 // ------------------------ START OF SQLITE3 SECTION --------------------------
 
-void assert_sql_with_line(
+#define assert_sql(db, x, y) (assert_sql_with_line((db), (x), (y), __LINE__))
+
+static void assert_sql_with_line(
   sqlite3 *db,
   int result,
   int correct_result,
@@ -2415,8 +2437,14 @@ static void verify_sqlite_header(sqlite3 *db, int ignore_hh_version) {
       // Columns are 0 indexed
       assert(sqlite3_column_int64(select_stmt, 0) == MAGIC_CONSTANT);
       if (!ignore_hh_version) {
-        assert(strcmp((char *)sqlite3_column_text(select_stmt, 1),
-                      BuildInfo_kRevision) == 0);
+        if (strcmp((char *)sqlite3_column_text(select_stmt, 1),
+            BuildInfo_kRevision) != 0) {
+          caml_failwith(
+            "There was a build version mismatch when loading "
+            "dep table SQLite database (and `ignore_hh_version` is not set). "
+            "Not continuing with loading. "
+          );
+        }
       }
   }
   assert_sql(db, sqlite3_finalize(select_stmt), SQLITE_OK);
@@ -2891,8 +2919,8 @@ CAMLprim value hh_get_dep_sqlite(value ocaml_key) {
 
   for (size_t i = 0; i < count; i++) {
     cell = caml_alloc_tuple(2);
-    Field(cell, 0) = Val_long(values[i]);
-    Field(cell, 1) = result;
+    Store_field(cell, 0, Val_long(values[i]));
+    Store_field(cell, 1, result);
     result = cell;
   }
   CAMLreturn(result);

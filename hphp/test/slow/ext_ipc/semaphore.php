@@ -3,9 +3,8 @@
 
 <<__EntryPoint>>
 function main_semaphore() {
-$ret = sem_get(0xDEADBEEF);
-if ($ret === false) { echo "failed\n"; exit(1); }
-$sem = $ret;
+$sem = sem_get(0xDEADBEEF);
+if ($sem === false) { echo "failed\n"; exit(1); }
 $now = microtime(true);
 var_dump(sem_acquire($sem, false));
 var_dump(sem_acquire($sem, true));
@@ -32,5 +31,6 @@ if ($pid == 0) {
 
 sleep(3); // aha
 sem_release($sem);
-pcntl_waitpid($pid, &$status);
+$status = null;
+pcntl_waitpid($pid, inout $status);
 }

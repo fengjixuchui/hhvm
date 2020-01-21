@@ -22,7 +22,6 @@ let set_from _ = ()
 let bad_exit _ _ _ ~is_oom:_ = ()
 
 let init
-    ~exit_on_parent_exit:_
     ~root:_
     ~init_id:_
     ~informant_managed:_
@@ -35,13 +34,24 @@ let init
     ~interrupt_on_client:_
     ~prechecked_files:_
     ~predeclare_ide:_
-    ~max_typechecker_worker_memory_mb:_ =
+    ~max_typechecker_worker_memory_mb:_
+    ~profile_type_check_duration_threshold:_
+    ~profile_owner:_
+    ~profile_desc:_
+    ~max_times_to_defer:_ =
   ()
 
-let init_worker ?exit_on_parent_exit:_ ~root:_ ~init_id:_ ~time:_ = ()
+let init_worker
+    ~root:_
+    ~init_id:_
+    ~time:_
+    ~profile_type_check_duration_threshold:_
+    ~profile_owner:_
+    ~profile_desc:_
+    ~max_times_to_defer:_ =
+  ()
 
 let init_monitor
-    ?exit_on_parent_exit:_
     ~from:_
     ~proc_stack:_
     ~search_chunk_size:_
@@ -71,7 +81,7 @@ let server_is_ready () = ()
 
 let load_deptable_end _ = ()
 
-let init_start _ = ()
+let init_start ~experiments_config_meta = ignore experiments_config_meta
 
 let nfs_root _ = ()
 
@@ -85,9 +95,13 @@ let out_of_date _ = ()
 
 let lock_stolen _ = ()
 
-let client_init ?exit_on_parent_exit:_ _ = ()
+let client_init ~init_id:_ _ = ()
+
+let serverless_ide_init ~init_id:_ = ()
 
 let client_set_mode _ = ()
+
+let serverless_ide_set_root _ = ()
 
 let client_check () = ()
 
@@ -103,31 +117,56 @@ let client_lsp_method_handled
     ~root:_
     ~method_:_
     ~kind:_
+    ~path_opt:_
+    ~tracking_id:_
     ~start_queue_time:_
     ~start_hh_server_state:_
     ~start_handle_time:_
-    ~serverless_ide_flag
-    ~json:_
-    ~json_response:_ =
+    ~serverless_ide_flag:_ =
   ()
 
 let client_lsp_method_exception
     ~root:_
     ~method_:_
     ~kind:_
+    ~path_opt:_
+    ~tracking_id:_
     ~start_queue_time:_
     ~start_hh_server_state:_
     ~start_handle_time:_
-    ~serverless_ide_flag
-    ~json:_
-    ~message:_
+    ~serverless_ide_flag:_
+    ~reason:_
     ~stack:_
     ~source:_ =
   ()
 
-let client_lsp_exception ~root:_ ~message:_ ~stack:_ ~source:_ = ()
+let serverless_ide_crash ~message:_ ~stack:_ = ()
+
+let client_lsp_exception ~root:_ ~reason:_ ~stack:_ ~source:_ = ()
+
+let serverless_ide_startup ~component:_ ~start_time:_ = ()
+
+let serverless_ide_local_files ~local_file_count:_ = ()
+
+let serverless_ide_destroy_ok _ = ()
+
+let serverless_ide_destroy_error _ _ = ()
 
 let client_bad_exit ~command _ = ()
+
+let glean_globalrev_supplied ~globalrev:_ = ()
+
+let glean_globalrev_from_hg ~globalrev:_ ~start_time:_ = ()
+
+let glean_globalrev_error _ = ()
+
+let glean_init _ ~start_time:_ = ()
+
+let glean_init_failure _ ~stack:_ = ()
+
+let glean_fetch_namespaces ~count:_ ~start_time:_ = ()
+
+let glean_fetch_namespaces_error _ = ()
 
 let monitor_dead_but_typechecker_alive () = ()
 
@@ -161,6 +200,12 @@ let handle_persistent_connection_exception _ _ = ()
 
 let handled_command _ ~start_t ~major_gc_time ~minor_gc_time ~parsed_files = ()
 
+let remote_scheduler_save_naming_end _ = ()
+
+let remote_worker_type_check_end _ = ()
+
+let remote_worker_load_naming_end _ = ()
+
 let recheck_end _ _ _ _ = ()
 
 let indexing_end _ = ()
@@ -185,7 +230,7 @@ let first_redecl_end _ _ = ()
 
 let second_redecl_end _ _ = ()
 
-let type_check_end _ _ _ = ()
+let type_check_end _ _ _ _ = ()
 
 let notifier_returned _ _ = ()
 
@@ -215,8 +260,12 @@ let save_decls_failure _ _ = ()
 
 let load_decls_failure _ _ = ()
 
+let saved_state_load_ok _ ~start_time:_ = ()
+
+let saved_state_load_failure _ ~start_time:_ = ()
+
 (** Informant events *)
-let init_informant_prefetcher_runner ?exit_on_parent_exit _ = ()
+let init_informant_prefetcher_runner _ = ()
 
 let informant_decision_on_saved_state
     ~start_t:_ ~state_distance:_ ~incremental_distance:_ =
@@ -301,3 +350,29 @@ let search_symbol_index
     ~(caller : string)
     ~(search_provider : string) =
   ()
+
+module ProfileTypeCheck = struct
+  let process_file
+      ~recheck_id:_
+      ~time_decl_and_typecheck:_
+      ~time_typecheck_opt:_
+      ~times_checked:_
+      ~files_to_declare:_
+      ~decl_cache_misses:_
+      ~decl_cache_misses_time:_
+      ~path:_ =
+    ()
+
+  let compute_tast
+      ~provider_backend:_
+      ~time_decl_and_typecheck:_
+      ~decl_cache_misses:_
+      ~decl_cache_misses_time:_
+      ~cache_overhead_time_opt:_
+      ~cache_peak_bytes_opt:_
+      ~filesize_opt:_
+      ~path:_ =
+    ()
+
+  let get_telemetry_url_opt ~profile_log:_ ~init_id:_ ~recheck_id:_ = None
+end

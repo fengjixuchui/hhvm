@@ -30,11 +30,13 @@ namespace HPHP {
 
 struct ZstdCompressor {
  public:
-  explicit ZstdCompressor(int compression_level);
+  explicit ZstdCompressor(int compression_level, bool should_checksum = false);
 
   StringHolder compress(const void* data, size_t& len, bool last);
 
- private:
+  void setChecksum(bool should_checksum);
+
+ protected:
   static void zstd_cctx_deleter(ZSTD_CCtx* ctx);
 
   using ContextPool = CompressionContextPool<
@@ -52,8 +54,9 @@ struct ZstdCompressor {
 
  public:
   static bool s_useLocalArena;
- private:
+ protected:
   int compression_level_;
+  bool should_checksum_;
   ContextPool::Ref ctx_;
 };
 

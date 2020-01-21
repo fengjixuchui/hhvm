@@ -7,8 +7,12 @@
  *)
 
 type command =
-  | CSchedule of RemoteScheduler.schedule_env
-  | CWork of RemoteWorker.work_env
+  | CSchedule of {
+      bin_root: Path.t;
+      root: Path.t;
+      timeout: int;
+    }
+  | CWork of unit RemoteWorker.work_env
 
 type command_keyword =
   | CKSchedule
@@ -45,9 +49,7 @@ let parse_root (args : string list) : Path.t =
   | [] -> Wwwroot.get None
   | [x] -> Wwwroot.get (Some x)
   | _ ->
-    Printf.fprintf
-      stderr
-      "Error: please provide at most one root directory\n%!";
+    Printf.fprintf stderr "Error: please provide at most one root directory\n%!";
     exit 1
 
 let parse_schedule_args () : command =
@@ -59,9 +61,25 @@ let parse_schedule_args () : command =
   let args = parse_without_command options usage ~keyword:CKSchedule in
   let (root : Path.t) = parse_root args in
   let bin_root = Path.make (Filename.dirname Sys.argv.(0)) in
-  CSchedule
-    RemoteScheduler.
-      { (RemoteScheduler.default_env ~bin_root ~root) with timeout = !timeout }
+  CSchedule { bin_root; root; timeout = !timeout }
+
+let make_remote_server_api () :
+    (module RemoteWorker.RemoteServerApi with type naming_table = unit) =
+  ( module struct
+    type naming_table = unit
+
+    let type_check files_to_check ~state_filename =
+      ignore (files_to_check, state_filename);
+      Errors.empty
+
+    let load_naming_table_base ~naming_table_base =
+      Ok (ignore naming_table_base)
+
+    let load_naming_table_changes_since_baseline
+        ~naming_table ~naming_table_diff =
+      Ok (ignore (naming_table, naming_table_diff))
+  end : RemoteWorker.RemoteServerApi
+    with type naming_table = unit )
 
 let parse_work_args () : command =
   let key = ref "" in
@@ -84,8 +102,9 @@ let parse_work_args () : command =
         check_id;
         key = !key;
         root;
+        naming_table_base = ();
         timeout = !timeout;
-        type_check = None;
+        server = make_remote_server_api ();
       }
 
 let parse_args () =
@@ -100,9 +119,9 @@ let () =
   let command = parse_args () in
   let _errors =
     match command with
-    | CSchedule schedule_env ->
-      (* TODO: RemoteScheduler.go schedule_env *)
-      ignore schedule_env
+    | CSchedule _schedule_env ->
+      (* TODO: use schedule_env *)
+      ()
     | CWork work_env ->
       (* TODO: RemoteWorker.go work_env *)
       ignore work_env

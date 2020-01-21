@@ -7,30 +7,30 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
-open Nast_check_env
 module SN = Naming_special_names
 
 let check_param _env params p user_attributes f_type name =
-  let byref = List.find params (fun x -> x.param_is_reference) in
   List.iter params (fun param ->
       match param.param_callconv with
       | Some Ast_defs.Pinout ->
         let pos = param.param_pos in
-        if f_type <> Ast_defs.FSync then
+        if not Ast_defs.(equal_fun_kind f_type FSync) then
           Errors.inout_params_outside_of_sync pos;
-        if SSet.mem name SN.Members.as_set then Errors.inout_params_special pos;
-        Option.iter byref ~f:(fun p ->
-            Errors.inout_params_mix_byref pos p.param_pos)
+        if SSet.mem name SN.Members.as_set then Errors.inout_params_special pos
       | None -> ());
   let inout =
-    List.find params (fun x -> x.param_callconv = Some Ast_defs.Pinout)
+    List.find params (fun x ->
+        Option.equal
+          Ast_defs.equal_param_kind
+          x.param_callconv
+          (Some Ast_defs.Pinout))
   in
   match inout with
   | Some param ->
     if
-      Attributes.mem2
+      Naming_attributes.mem2
         SN.UserAttributes.uaMemoize
         SN.UserAttributes.uaMemoizeLSB
         user_attributes
@@ -49,26 +49,15 @@ let is_dynamic_call func_expr =
   (* everything else *)
   | _ -> true
 
-let check_call_expr env func_expr func_args =
-  List.iter func_args (fun (arg_pos, arg) ->
-      match arg with
-      | Unop (Ast_defs.Uref, _)
-        when TypecheckerOptions.disallow_byref_calls env.tcopt ->
-        Errors.byref_call arg_pos
-      | Unop (Ast_defs.Uref, (_, (Class_get _ | Obj_get _))) ->
-        Errors.byref_on_property arg_pos
-      | Unop (Ast_defs.Uref, _) when is_dynamic_call func_expr ->
-        if TypecheckerOptions.disallow_byref_dynamic_calls env.tcopt then
-          Errors.byref_dynamic_call arg_pos
-      | _ -> ())
-
 let check_callconv_expr e =
   let rec check_callconv_expr_helper e1 =
     match snd e1 with
     | Lvar (_, x)
       when not
-             ( Local_id.to_string x = SN.SpecialIdents.this
-             || Local_id.to_string x = SN.SpecialIdents.dollardollar ) ->
+             ( String.equal (Local_id.to_string x) SN.SpecialIdents.this
+             || String.equal
+                  (Local_id.to_string x)
+                  SN.SpecialIdents.dollardollar ) ->
       ()
     | Array_get (e2, Some _) -> check_callconv_expr_helper e2
     | _ -> Errors.inout_argument_bad_expr (fst e)
@@ -89,10 +78,8 @@ let handler =
       let f_type = m.m_fun_kind in
       check_param env m.m_params p m.m_user_attributes f_type name
 
-    method! at_expr env (_, e) =
+    method! at_expr _ (_, e) =
       match e with
-      | Call (_, (_, func_expr), _, func_args, _) ->
-        check_call_expr env func_expr func_args
       | Callconv (_, e) -> check_callconv_expr e
       | _ -> ()
   end

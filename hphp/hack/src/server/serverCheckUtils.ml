@@ -10,6 +10,32 @@ open Core_kernel
 open ServerEnv
 open ServerLocalConfig
 
+let should_do_remote
+    (opts : TypecheckerOptions.t) (fnl : Relative_path.Set.t) ~(t : float) :
+    bool * float =
+  let remote_type_check = TypecheckerOptions.remote_type_check opts in
+  let remote_type_check_threshold =
+    TypecheckerOptions.remote_type_check_threshold opts
+  in
+  let file_count = Relative_path.Set.cardinal fnl in
+  let do_remote =
+    match (remote_type_check, remote_type_check_threshold) with
+    | (true, Some remote_type_check_threshold)
+      when file_count >= remote_type_check_threshold ->
+      Hh_logger.log
+        "Going to schedule work because file count %d >= threshold %d"
+        file_count
+        remote_type_check_threshold;
+      true
+    | _ -> false
+  in
+  ( do_remote,
+    Hh_logger.log_duration
+      (Printf.sprintf
+         "Calculated whether should do remote type checking (%B)"
+         do_remote)
+      t )
+
 let get_naming_table_fallback_path genv (naming_table_fn : string option) :
     string option =
   Hh_logger.log "Figuring out naming table SQLite path...";
@@ -24,7 +50,7 @@ let get_naming_table_fallback_path genv (naming_table_fn : string option) :
 let extend_fast_sequential fast naming_table additional_files =
   Hh_logger.log "Extending FAST sequentially (in memory)...";
   Relative_path.Set.fold additional_files ~init:fast ~f:(fun x acc ->
-      match Relative_path.Map.get fast x with
+      match Relative_path.Map.find_opt fast x with
       | None ->
         (try
            let info = Naming_table.get_file_info_unsafe naming_table x in
@@ -91,44 +117,21 @@ let global_typecheck_kind genv env =
   else
     ServerCommandTypes.Blocking
 
-let maybe_remote_type_check genv env fnl =
-  let t = Unix.gettimeofday () in
-  let (do_remote, _t) =
-    if genv.ServerEnv.options |> ServerArgs.remote then
-      (true, t)
-    else
-      Typing_remote_check_service.should_do_remote env.tcopt fnl t
-  in
-  if do_remote then
-    let eden_threshold =
-      genv.local_config.remote_worker_eden_checkout_threshold
-    in
-    let remote_errors =
-      Typing_remote_check_service.go
-        genv.workers
-        env.tcopt
-        ~naming_table:(Some env.naming_table)
-        ~naming_sqlite_path:(get_naming_table_fallback_path genv None)
-        ~eden_threshold
-        fnl
-    in
-    Some remote_errors
-  else
-    None
-
-let maybe_remote_type_check_without_interrupt genv env fnl ~local =
-  match maybe_remote_type_check genv env fnl with
-  | Some remote_errors -> remote_errors
-  | None -> local ()
-
-let maybe_remote_type_check_with_interrupt genv env fnl ~local =
-  (* TODO: remote type check should actually respond to interruption *)
-  match maybe_remote_type_check genv env fnl with
-  | Some remote_errors -> (remote_errors, env, [])
-  | None -> local ()
-
-let get_check_info env =
+let get_check_info genv env =
   ServerEnv.(
     let init_id = env.init_env.init_id in
     let recheck_id = env.init_env.recheck_id in
-    { Typing_check_service.init_id; recheck_id })
+    let profile_log = ServerArgs.profile_log genv.options in
+    let profile_type_check_twice =
+      genv.local_config.ServerLocalConfig.profile_type_check_twice
+    in
+    let profile_type_check_duration_threshold =
+      genv.local_config.ServerLocalConfig.profile_type_check_duration_threshold
+    in
+    {
+      Typing_check_service.init_id;
+      recheck_id;
+      profile_log;
+      profile_type_check_twice;
+      profile_type_check_duration_threshold;
+    })

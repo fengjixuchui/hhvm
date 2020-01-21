@@ -121,7 +121,7 @@ using ContextSet = hphp_hash_set<Context, ContextHash>;
 
 std::string show(Context);
 
-using ConstantMap = hphp_hash_map<SString, Cell>;
+using ConstantMap = hphp_hash_map<SString, TypedValue>;
 
 /*
  * State of properties on a class.  Map from property name to its
@@ -347,6 +347,12 @@ struct Func {
    */
   bool mightBeBuiltin() const;
 
+  /*
+   * Minimum bound on the number of non-variadic parameters of the
+   * function.
+   */
+  uint32_t minNonVariadicParams() const;
+
   struct FuncInfo;
   struct MethTabEntryPair;
   struct FuncFamily;
@@ -402,25 +408,12 @@ std::string show(const Class&);
  * "update" step in between whole program analysis rounds).
  */
 struct Index {
-  /*
-   * Throwing a rebuild exception indicates that the index needs to
-   * be rebuilt.
-   *
-   * The exception should be passed to the Index constructor.
-   */
-  struct rebuild : std::exception {
-    explicit rebuild(std::vector<std::pair<SString, SString>> ca) :
-        class_aliases(std::move(ca)) {}
-  private:
-    friend struct Index;
-    std::vector<std::pair<SString, SString>> class_aliases;
-  };
 
   /*
    * Create an Index for a php::Program.  Performs some initial
    * analysis of the program.
    */
-  explicit Index(php::Program*, rebuild* = nullptr);
+  explicit Index(php::Program*);
 
   /*
    * This class must not be destructed after its associated
@@ -491,21 +484,6 @@ struct Index {
    */
   const hphp_fast_set<php::Func*>*
     lookup_extra_methods(const php::Class*) const;
-
-  /*
-   * Attempt to record a new alias in the index. May be called from
-   * multi-threaded contexts, so doesn't actually update the index
-   * (call update_class_aliases to do that). Returns false if it would
-   * violate any current uniqueness assumptions.
-   */
-  bool register_class_alias(SString orig, SString alias) const;
-
-  /*
-   * Add any aliases that have been registered since the last call to
-   * update_class_aliases to the index. Must be called from a single
-   * threaded context.
-   */
-  void update_class_aliases();
 
   /*
    * Try to find a res::Class for a given php::Class.
@@ -661,7 +639,7 @@ struct Index {
    * See if the named constant has a unique scalar definition, and
    * return its value if so.
    */
-  folly::Optional<Cell> lookup_persistent_constant(SString cnsName) const;
+  folly::Optional<TypedValue> lookup_persistent_constant(SString cnsName) const;
 
   /*
    * Return true if the return value of the function might depend on arg.
@@ -678,13 +656,13 @@ struct Index {
                                    CompactVector<Type> args) const;
   /*
    * Return the best known return type for a resolved function, in a
-   * context insensitive way.  Returns TInitGen at worst.
+   * context insensitive way.  Returns TInitCell at worst.
    */
   Type lookup_return_type(Context, res::Func) const;
 
   /*
    * Return the best known return type for a resolved function, given
-   * the supplied calling context.  Returns TInitGen at worst.
+   * the supplied calling context.  Returns TInitCell at worst.
    *
    * During analyze phases, this function may re-enter analyze in
    * order to interpret the callee with these argument types.
@@ -732,6 +710,11 @@ struct Index {
   PrepKind lookup_param_prep(Context, res::Func, uint32_t paramId) const;
 
   /*
+   * Returns the number of inout parameters expected by func (if known).
+   */
+  folly::Optional<uint32_t> lookup_num_inout_params(Context, res::Func) const;
+
+  /*
    * Returns the control-flow insensitive inferred private instance
    * property types for a Class.  The Class doesn't need to be
    * resolved, because private properties don't depend on the
@@ -770,7 +753,7 @@ struct Index {
    * Lookup the best known type for a public static property, with a given
    * class and name.
    *
-   * This function will always return TInitGen before refine_public_statics has
+   * This function will always return TInitCell before refine_public_statics has
    * been called, or if the AnalyzePublicStatics option is off.
    */
   Type lookup_public_static(Context ctx, const Type& cls,

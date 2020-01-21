@@ -7,9 +7,10 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Nast_check_env
+module SN = Naming_special_names
 
 class virtual iter =
   object (self)
@@ -36,8 +37,7 @@ class virtual iter =
     method! on_While env =
       super#on_While { env with control_context = LoopContext }
 
-    method! on_For env =
-      super#on_For { env with control_context = LoopContext }
+    method! on_For env = super#on_For { env with control_context = LoopContext }
 
     method! on_Foreach env =
       super#on_Foreach { env with control_context = LoopContext }
@@ -68,7 +68,7 @@ class virtual iter =
       match fb.fb_ast with
       | [(_, If (((_, Id (_, c)) as id), then_stmt, else_stmt))] ->
         super#on_expr
-          { env with rx_is_enabled_allowed = c = SN.Rx.is_enabled }
+          { env with rx_is_enabled_allowed = String.equal c SN.Rx.is_enabled }
           id;
         self#on_block env then_stmt;
         self#on_block env else_stmt
@@ -76,10 +76,23 @@ class virtual iter =
 
     method! on_expr env e =
       match e with
-      | (_, Call (ct, e1, ta, el, uel)) when Nast_check_env.is_rx_move e1 ->
-        self#on_Call { env with rx_move_allowed = false } ct e1 ta el uel
-      | (_, Call (ct, e1, ta, el, uel)) ->
-        self#on_Call { env with rx_move_allowed = true } ct e1 ta el uel
+      | (_, Call (ct, ((_, Id (_, cn)) as e1), ta, el, unpacked_element))
+        when String.equal cn SN.Rx.move ->
+        self#on_Call
+          { env with rx_move_allowed = false }
+          ct
+          e1
+          ta
+          el
+          unpacked_element
+      | (_, Call (ct, e1, ta, el, unpacked_element)) ->
+        self#on_Call
+          { env with rx_move_allowed = true }
+          ct
+          e1
+          ta
+          el
+          unpacked_element
       | (_, Binop (Ast_defs.Eq None, e1, rhs)) ->
         self#on_Binop
           { env with rx_move_allowed = true }
@@ -110,11 +123,19 @@ class type handler =
 
     method at_method_ : env -> Nast.method_ -> unit
 
+    method at_record_def : env -> Nast.record_def -> unit
+
     method at_expr : env -> Nast.expr -> unit
 
     method at_stmt : env -> Nast.stmt -> unit
 
     method at_hint : env -> hint -> unit
+
+    method at_typedef : env -> Nast.typedef -> unit
+
+    method at_method_redeclaration : env -> Nast.method_redeclaration -> unit
+
+    method at_gconst : env -> Nast.gconst -> unit
   end
 
 class virtual handler_base : handler =
@@ -125,11 +146,19 @@ class virtual handler_base : handler =
 
     method at_method_ _ _ = ()
 
+    method at_record_def _ _ = ()
+
     method at_expr _ _ = ()
 
     method at_stmt _ _ = ()
 
     method at_hint _ _ = ()
+
+    method at_typedef _ _ = ()
+
+    method at_method_redeclaration _ _ = ()
+
+    method at_gconst _ _ = ()
   end
 
 let iter_with (handlers : handler list) : iter =
@@ -148,6 +177,10 @@ let iter_with (handlers : handler list) : iter =
       List.iter handlers (fun v -> v#at_method_ env x);
       super#on_method_ env x
 
+    method! on_record_def env x =
+      List.iter handlers (fun v -> v#at_record_def env x);
+      super#on_record_def env x
+
     method! on_expr env x =
       List.iter handlers (fun v -> v#at_expr env x);
       super#on_expr env x
@@ -159,4 +192,16 @@ let iter_with (handlers : handler list) : iter =
     method! on_hint env h =
       List.iter handlers (fun v -> v#at_hint env h);
       super#on_hint env h
+
+    method! on_typedef env t =
+      List.iter handlers (fun v -> v#at_typedef env t);
+      super#on_typedef env t
+
+    method! on_method_redeclaration env mr =
+      List.iter handlers (fun v -> v#at_method_redeclaration env mr);
+      super#on_method_redeclaration env mr
+
+    method! on_gconst env gconst =
+      List.iter handlers (fun v -> v#at_gconst env gconst);
+      super#on_gconst env gconst
   end

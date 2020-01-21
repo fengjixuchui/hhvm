@@ -35,15 +35,15 @@
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-int numImmediates(Op opcode) {
-  assertx(isValidOpcode(opcode));
-  static const int8_t values[] = {
+EXTERNALLY_VISIBLE
+extern const int8_t numImmediatesTable[] = {
 #define NA         0
 #define ONE(...)   1
 #define TWO(...)   2
 #define THREE(...) 3
 #define FOUR(...)  4
 #define FIVE(...)  5
+#define SIX(...)   6
 #define O(name, imm, unusedPop, unusedPush, unusedFlags) imm,
     OPCODES
 #undef O
@@ -53,21 +53,23 @@ int numImmediates(Op opcode) {
 #undef THREE
 #undef FOUR
 #undef FIVE
-  };
-  return values[size_t(opcode)];
+#undef SIX
+};
+
+int numImmediates(Op opcode) {
+  assertx(isValidOpcode(opcode));
+  return numImmediatesTable[size_t(opcode)];
 }
 
-ArgType immType(const Op opcode, int idx) {
-  assertx(isValidOpcode(opcode));
-  assertx(idx >= 0 && idx < numImmediates(opcode));
-  always_assert(idx < kMaxHhbcImms); // No opcodes have more than 5 immediates
-  static const int8_t argTypes[][kMaxHhbcImms] = {
-#define NA                  {-1, -1, -1, -1, -1},
-#define ONE(a)              { a, -1, -1, -1, -1},
-#define TWO(a, b)           { a,  b, -1, -1, -1},
-#define THREE(a, b, c)      { a,  b,  c, -1, -1},
-#define FOUR(a, b, c, d)    { a,  b,  c,  d, -1},
-#define FIVE(a, b, c, d, e) { a,  b,  c,  d,  e},
+EXTERNALLY_VISIBLE
+extern const int8_t immTypeTable[][kMaxHhbcImms] = {
+#define NA                    {-1, -1, -1, -1, -1, -1},
+#define ONE(a)                { a, -1, -1, -1, -1, -1},
+#define TWO(a, b)             { a,  b, -1, -1, -1, -1},
+#define THREE(a, b, c)        { a,  b,  c, -1, -1, -1},
+#define FOUR(a, b, c, d)      { a,  b,  c,  d, -1, -1},
+#define FIVE(a, b, c, d, e)   { a,  b,  c,  d,  e, -1},
+#define SIX(a, b, c, d, e, f) { a,  b,  c,  d,  e,  f},
 #define OA(x) OA
 #define O(name, imm, unusedPop, unusedPush, unusedFlags) imm
     OPCODES
@@ -79,9 +81,15 @@ ArgType immType(const Op opcode, int idx) {
 #undef THREE
 #undef FOUR
 #undef FIVE
-  };
+#undef SIX
+};
+
+ArgType immType(const Op opcode, int idx) {
+  assertx(isValidOpcode(opcode));
+  assertx(idx >= 0 && idx < numImmediates(opcode));
+  always_assert(idx < kMaxHhbcImms); // No opcodes have more than 6 immediates
   auto opInt = size_t(opcode);
-  return (ArgType)argTypes[opInt][idx];
+  return (ArgType)immTypeTable[opInt][idx];
 }
 
 static size_t encoded_iva_size(uint8_t lowByte) {
@@ -89,22 +97,24 @@ static size_t encoded_iva_size(uint8_t lowByte) {
   return int8_t(lowByte) >= 0 ? 1 : 4;
 }
 
-namespace {
-
-bool argTypeIsVector(ArgType type) {
-  return
-    type == BLA || type == SLA || type == VSA || type == I32LA;
-}
-
-int immSize(Op op, ArgType type, PC immPC) {
-  auto pc = immPC;
-  static const int8_t argTypeToSizes[] = {
+EXTERNALLY_VISIBLE
+extern const int8_t immSizeTable[] = {
 #define ARGTYPE(nm, type) sizeof(type),
 #define ARGTYPEVEC(nm, type) 0,
     ARGTYPES
 #undef ARGTYPE
 #undef ARGTYPEVEC
-  };
+};
+
+namespace {
+
+bool argTypeIsVector(ArgType type) {
+  return
+    type == BLA || type == SLA || type == VSA;
+}
+
+int immSize(Op op, ArgType type, PC immPC) {
+  auto pc = immPC;
 
   if (type == IVA || type == LA || type == IA) {
     return encoded_iva_size(decode_raw<uint8_t>(pc));
@@ -134,6 +144,11 @@ int immSize(Op op, ArgType type, PC immPC) {
     return pc - immPC;
   }
 
+  if (type == ITA) {
+    decodeIterArgs(pc);
+    return pc - immPC;
+  }
+
   if (type == FCA) {
     decodeFCallArgs(op, pc);
     return pc - immPC;
@@ -145,7 +160,6 @@ int immSize(Op op, ArgType type, PC immPC) {
     switch (type) {
       case BLA:   vecElemSz = sizeof(Offset);     break;
       case SLA:   vecElemSz = sizeof(StrVecItem); break;
-      case I32LA: vecElemSz = sizeof(uint32_t);   break;
       case VSA:   vecElemSz = sizeof(Id);         break;
       default: not_reached();
     }
@@ -153,17 +167,7 @@ int immSize(Op op, ArgType type, PC immPC) {
     return pc - immPC + vecElemSz * size;
   }
 
-  if (type == ILA) {
-    auto const size = decode_iva(pc);
-    for (int i = 0; i < size; ++i) {
-      auto const kind = static_cast<IterKind>(decode_iva(pc));
-      decode_iva(pc);
-      if (kind == KindOfLIter) decode_iva(pc);
-    }
-    return pc - immPC;
-  }
-
-  return (type >= 0) ? argTypeToSizes[type] : 0;
+  return (type >= 0) ? immSizeTable[type] : 0;
 }
 
 }
@@ -172,14 +176,6 @@ bool hasImmVector(Op opcode) {
   const int num = numImmediates(opcode);
   for (int i = 0; i < num; ++i) {
     if (argTypeIsVector(immType(opcode, i))) return true;
-  }
-  return false;
-}
-
-bool hasIterTable(Op opcode) {
-  auto const num = numImmediates(opcode);
-  for (int i = 0; i < num; ++i) {
-    if (immType(opcode, i) == ILA) return true;
   }
   return false;
 }
@@ -204,6 +200,8 @@ ArgUnion getImm(const PC origPC, int idx, const Unit* unit) {
     retval.u_KA = decode_member_key(pc, unit);
   } else if (type == LAR) {
     retval.u_LAR = decodeLocalRange(pc);
+  } else if (type == ITA) {
+    retval.u_ITA = decodeIterArgs(pc);
   } else if (type == FCA) {
     retval.u_FCA = decodeFCallArgs(op, pc);
   } else if (type == RATA) {
@@ -257,8 +255,6 @@ OffsetList instrJumpOffsets(const PC origPC) {
 #define IMM_RATA 0
 #define IMM_BA 1
 #define IMM_BLA 2
-#define IMM_ILA 0
-#define IMM_I32LA 0
 #define IMM_SLA 3
 #define IMM_LA 0
 #define IMM_IA 0
@@ -266,13 +262,15 @@ OffsetList instrJumpOffsets(const PC origPC) {
 #define IMM_VSA 0
 #define IMM_KA 0
 #define IMM_LAR 0
+#define IMM_ITA 0
 #define IMM_FCA 0
-#define NA                  { 0,        0,        0,        0,        0      },
-#define ONE(a)              { IMM_##a,  0,        0,        0,        0      },
-#define TWO(a, b)           { IMM_##a,  IMM_##b,  0,        0,        0      },
-#define THREE(a, b, c)      { IMM_##a,  IMM_##b,  IMM_##c,  0,        0      },
-#define FOUR(a, b, c, d)    { IMM_##a,  IMM_##b,  IMM_##c,  IMM_##d,  0      },
-#define FIVE(a, b, c, d, e) { IMM_##a,  IMM_##b,  IMM_##c,  IMM_##d,  IMM_##e},
+#define NA                    { 0,        0,        0,        0,        0,       0      },
+#define ONE(a)                { IMM_##a,  0,        0,        0,        0,       0      },
+#define TWO(a, b)             { IMM_##a,  IMM_##b,  0,        0,        0,       0      },
+#define THREE(a, b, c)        { IMM_##a,  IMM_##b,  IMM_##c,  0,        0,       0      },
+#define FOUR(a, b, c, d)      { IMM_##a,  IMM_##b,  IMM_##c,  IMM_##d,  0,       0      },
+#define FIVE(a, b, c, d, e)   { IMM_##a,  IMM_##b,  IMM_##c,  IMM_##d,  IMM_##e, 0      },
+#define SIX(a, b, c, d, e, f) { IMM_##a,  IMM_##b,  IMM_##c,  IMM_##d,  IMM_##e, IMM_##f},
 #define OA(x) OA
 #define O(name, imm, unusedPop, unusedPush, unusedFlags) imm
     OPCODES
@@ -287,13 +285,12 @@ OffsetList instrJumpOffsets(const PC origPC) {
 #undef IMM_IA
 #undef IMM_BA
 #undef IMM_BLA
-#undef IMM_ILA
-#undef IMM_I32LA
 #undef IMM_SLA
 #undef IMM_OA
 #undef IMM_VSA
 #undef IMM_KA
 #undef IMM_LAR
+#undef IMM_ITA
 #undef IMM_FCA
 #undef O
 #undef OA
@@ -303,6 +300,7 @@ OffsetList instrJumpOffsets(const PC origPC) {
 #undef THREE
 #undef FOUR
 #undef FIVE
+#undef SIX
   };
 
   auto pc = origPC;
@@ -369,7 +367,7 @@ OffsetSet instrSuccOffsets(PC opc, const Func* func) {
 
   if (op == Op::Await || op == Op::Throw) {
     auto const target = findCatchHandler(func, opc - bcStart);
-    if (target != InvalidAbsoluteOffset) offsetsSet.emplace(target);
+    if (target != kInvalidOffset) offsetsSet.emplace(target);
   }
 
   return offsetsSet;
@@ -400,6 +398,7 @@ int instrNumPops(PC pc) {
 #define THREE(...) 3
 #define FOUR(...) 4
 #define FIVE(...) 5
+#define SIX(...) 6
 #define MFINAL -3
 #define C_MFINAL(n) -10 - (n)
 #define CUMANY -3
@@ -416,6 +415,7 @@ int instrNumPops(PC pc) {
 #undef THREE
 #undef FOUR
 #undef FIVE
+#undef SIX
 #undef MFINAL
 #undef C_MFINAL
 #undef CUMANY
@@ -469,6 +469,7 @@ int instrNumPushes(PC pc) {
 #define THREE(...) 3
 #define FOUR(...) 4
 #define FIVE(...) 5
+#define SIX(...) 6
 #define CMANY -2
 #define FCALL -1
 #define CALLNATIVE -3
@@ -480,6 +481,7 @@ int instrNumPushes(PC pc) {
 #undef THREE
 #undef FOUR
 #undef FIVE
+#undef SIX
 #undef CMANY
 #undef FCALL
 #undef CALLNATIVE
@@ -522,7 +524,7 @@ FlavorDesc fcallFlavor(PC op, uint32_t i) {
   i -= fca.hasGenerics() ? 1 : 0;
   if (i == 0 && fca.hasUnpack()) return CV;
   i -= fca.hasUnpack() ? 1 : 0;
-  if (i < fca.numArgs) return CVV;
+  if (i < fca.numArgs) return CV;
   i -= fca.numArgs;
   if (i == 2 && nobj) return CV;
   return UV;
@@ -531,7 +533,7 @@ FlavorDesc fcallFlavor(PC op, uint32_t i) {
 FlavorDesc fcallBuiltinFlavor(PC op, uint32_t i) {
   assertx(i < getImm(op, 0).u_IVA + getImm(op, 2).u_IVA);
   auto const nargs = getImm(op, 0).u_IVA;
-  if (i < nargs) return CVUV;
+  if (i < nargs) return CUV;
   return UV;
 }
 
@@ -547,6 +549,7 @@ FlavorDesc instrInputFlavor(PC op, uint32_t idx) {
 #define THREE(f1, f2, f3) return doFlavor(idx, f1, f2, f3);
 #define FOUR(f1, f2, f3, f4) return doFlavor(idx, f1, f2, f3, f4);
 #define FIVE(f1, f2, f3, f4, f5) return doFlavor(idx, f1, f2, f3, f4, f5);
+#define SIX(f1, f2, f3, f4, f5, f6) return doFlavor(idx, f1, f2, f3, f4, f5, f6);
 #define MFINAL return manyFlavor(op, idx, CV);
 #define C_MFINAL(n) return manyFlavor(op, idx, CV);
 #define CUMANY return manyFlavor(op, idx, CUV);
@@ -566,6 +569,7 @@ FlavorDesc instrInputFlavor(PC op, uint32_t idx) {
 #undef THREE
 #undef FOUR
 #undef FIVE
+#undef SIX
 #undef MFINAL
 #undef C_MFINAL
 #undef CUMANY
@@ -580,7 +584,6 @@ FlavorDesc instrInputFlavor(PC op, uint32_t idx) {
 void staticArrayStreamer(const ArrayData* ad, std::string& out) {
   if (ad->isVecArray()) out += "vec(";
   else if (ad->isDict()) out += "dict(";
-  else if (ad->isShape()) out += "shape(";
   else if (ad->isKeyset()) out += "keyset(";
   else {
     assertx(ad->isPHPArray());
@@ -641,14 +644,18 @@ void staticStreamer(const TypedValue* tv, std::string& out) {
                     escapeStringForCPP(tv->m_data.pstr->data(),
                                        tv->m_data.pstr->size()));
       return;
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      // TODO(T58820726)
+      break;
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentShape:
-    case KindOfShape:
     case KindOfPersistentArray:
     case KindOfArray:
       staticArrayStreamer(tv->m_data.parr, out);
@@ -656,7 +663,6 @@ void staticStreamer(const TypedValue* tv, std::string& out) {
     case KindOfClsMeth:
     case KindOfObject:
     case KindOfResource:
-    case KindOfRef:
     case KindOfFunc:
     case KindOfClass:
     case KindOfRecord:
@@ -701,6 +707,10 @@ std::string instrToString(PC it, Either<const Unit*, const UnitEmitter*> u) {
       [id](const Unit* u) { return u->lookupArrayId(id); },
       [id](const UnitEmitter* ue) { return ue->lookupArray(id); }
     );
+  };
+
+  auto printLocal = [](int32_t local) {
+    return folly::to<std::string>(local);
   };
 
   auto showOffset = [&](Offset offset) {
@@ -760,47 +770,15 @@ std::string instrToString(PC it, Either<const Unit*, const UnitEmitter*> u) {
   out += ">";                                           \
 } while (false)
 
-#define READI32VEC() do {                                      \
-  int sz = decode_iva(it);                                     \
-  out += " <";                                                 \
-  const char* sep = "";                                        \
-  for (int i = 0; i < sz; ++i) {                               \
-    folly::format(&out, "{}{}", sep, decode_raw<uint32_t>(it));\
-    sep = ", ";                                                \
-  }                                                            \
-  out += ">";                                                  \
-} while (false)
-
-#define READITERTAB() do {                              \
-  auto const sz = decode_iva(it);                       \
-  out += " <";                                          \
-  const char* sep = "";                                 \
-  for (int i = 0; i < sz; ++i) {                        \
-    out += sep;                                         \
-    auto const k = (IterKind)decode_iva(it);            \
-    switch (k) {                                        \
-      case KindOfIter:  out += "(Iter) ";  break;       \
-      case KindOfLIter: out += "(LIter) "; break;       \
-    }                                                   \
-    folly::format(&out, "{}", decode_iva(it));           \
-    if (k == KindOfLIter) {                             \
-      folly::format(&out, " L:{}", decode_iva(it));     \
-    }                                                   \
-    sep = ", ";                                         \
-  }                                                     \
-  out += ">";                                           \
-} while (false)
-
 #define ONE(a) H_##a
 #define TWO(a, b) H_##a; H_##b
 #define THREE(a, b, c) H_##a; H_##b; H_##c;
 #define FOUR(a, b, c, d) H_##a; H_##b; H_##c; H_##d;
 #define FIVE(a, b, c, d, e) H_##a; H_##b; H_##c; H_##d; H_##e;
+#define SIX(a, b, c, d, e, f) H_##a; H_##b; H_##c; H_##d; H_##e; H_##f;
 #define NA
 #define H_BLA READSVEC()
 #define H_SLA READSVEC()
-#define H_ILA READITERTAB()
-#define H_I32LA READI32VEC()
 #define H_IVA READIVA()
 #define H_I64A READ(int64_t)
 #define H_LA READLA()
@@ -824,13 +802,14 @@ std::string instrToString(PC it, Either<const Unit*, const UnitEmitter*> u) {
 } while (false)
 #define H_KA (out += ' ', out += show(decode_member_key(it, u)))
 #define H_LAR (out += ' ', out += show(decodeLocalRange(it)))
+#define H_ITA (out += ' ', out += show(decodeIterArgs(it), printLocal))
 #define H_FCA do {                                               \
   auto const fca = decodeFCallArgs(thisOpcode, it);              \
   auto const aeOffset = fca.asyncEagerOffset != kInvalidOffset   \
     ? showOffset(fca.asyncEagerOffset)                           \
     : "-";                                                       \
   out += ' ';                                                    \
-  out += show(fca, fca.byRefs, aeOffset);                        \
+  out += show(fca, fca.inoutArgs, aeOffset);                        \
 } while (false)
 
 #define O(name, imm, push, pop, flags)       \
@@ -851,11 +830,10 @@ OPCODES
 #undef THREE
 #undef FOUR
 #undef FIVE
+#undef SIX
 #undef NA
 #undef H_BLA
 #undef H_SLA
-#undef H_ILA
-#undef H_I32LA
 #undef H_IVA
 #undef H_I64A
 #undef H_LA
@@ -868,21 +846,24 @@ OPCODES
 #undef H_VSA
 #undef H_KA
 #undef H_LAR
+#undef H_ITA
 #undef H_FCA
     default: assertx(false);
   };
   return out;
 }
 
-const char* opcodeToName(Op op) {
-  static const char* namesArr[] = {
+EXTERNALLY_VISIBLE
+extern const char* const opcodeToNameTable[] = {
 #define O(name, imm, inputs, outputs, flags) \
     #name ,
     OPCODES
 #undef O
-  };
+};
+
+const char* opcodeToName(Op op) {
   if (size_t(op) < Op_count) {
-    return namesArr[size_t(op)];
+    return opcodeToNameTable[size_t(op)];
   }
   return "Invalid";
 }
@@ -1146,7 +1127,7 @@ ImmVector getImmVector(PC opcode) {
   int numImm = numImmediates(op);
   for (int k = 0; k < numImm; ++k) {
     ArgType t = immType(op, k);
-    if (t == BLA || t == SLA || t == I32LA || t == VSA) {
+    if (t == BLA || t == SLA || t == VSA) {
       PC vp = getImmPtr(opcode, k)->bytes;
       auto const size = decode_iva(vp);
       return ImmVector(vp, size, t == VSA ? size : 0);
@@ -1156,33 +1137,22 @@ ImmVector getImmVector(PC opcode) {
   not_reached();
 }
 
-IterTable iterTableFromStream(PC& pc) {
-  IterTable ret;
-  auto const length = decode_iva(pc);
-  for (int32_t i = 0; i < length; ++i) {
-    auto const kind = static_cast<IterKind>(decode_iva(pc));
-    auto const id = decode_iva(pc);
-    auto const local = (kind == KindOfLIter)
-      ? static_cast<int32_t>(decode_iva(pc))
-      : kInvalidId;
-    ret.push_back(IterTableEnt{kind, static_cast<int32_t>(id), local});
-  }
-  return ret;
-}
-
-IterTable getIterTable(PC opcode) {
-  auto const op = peek_op(opcode);
-  auto const numImm = numImmediates(op);
-  for (int k = 0; k < numImm; ++k) {
-    auto const type = immType(op, k);
-    if (type != ILA) continue;
-    auto ptr = reinterpret_cast<PC>(getImmPtr(opcode, k));
-    return iterTableFromStream(ptr);
-  }
-  not_reached();
-}
-
 ///////////////////////////////////////////////////////////////////////////////
+
+std::string show(const IterArgs& ita, PrintLocal print_local) {
+  auto const flags = [&]{
+    auto parts = std::vector<std::string>{};
+    if (ita.flags & IterArgs::Flags::BaseConst) parts.push_back("BaseConst");
+    if (parts.empty()) return std::string{};
+    return folly::sformat("<{}> ", folly::join(' ', parts));
+  }();
+
+  auto const key = ita.hasKey()
+    ? folly::to<std::string>("K:", print_local(ita.keyId))
+    : folly::to<std::string>("NK");
+  auto const val = "V:" + print_local(ita.valId);
+  return folly::sformat("{}{} {} {}", flags, ita.iterId, key, val);
+}
 
 std::string show(const LocalRange& range) {
   return folly::sformat(
@@ -1190,14 +1160,14 @@ std::string show(const LocalRange& range) {
   );
 }
 
-std::string show(const FCallArgsBase& fca, const uint8_t* byRefsRaw,
+std::string show(const FCallArgsBase& fca, const uint8_t* inoutArgsRaw,
                  std::string asyncEagerLabel) {
-  auto const byRefs = [&] {
-    if (!byRefsRaw) return std::string{"\"\""};
+  auto const inoutArgs = [&] {
+    if (!inoutArgsRaw) return std::string{"\"\""};
     std::string out = "\"";
     uint8_t tmp = 0;
     for (int i = 0; i < fca.numArgs; ++i) {
-      if (i % 8 == 0) tmp = *(byRefsRaw++);
+      if (i % 8 == 0) tmp = *(inoutArgsRaw++);
       out += ((tmp >> (i % 8)) & 1) ? "1" : "0";
     }
     out += "\"";
@@ -1209,9 +1179,10 @@ std::string show(const FCallArgsBase& fca, const uint8_t* byRefsRaw,
   if (fca.hasGenerics()) flags.push_back("Generics");
   if (fca.supportsAsyncEagerReturn()) flags.push_back("SupportsAER");
   if (fca.lockWhileUnwinding) flags.push_back("LockWhileUnwinding");
+  if (fca.skipNumArgsCheck) flags.push_back("SkipNumArgsCheck");
   return folly::sformat(
     "<{}> {} {} {} {}",
-    folly::join(' ', flags), fca.numArgs, fca.numRets, byRefs, asyncEagerLabel
+    folly::join(' ', flags), fca.numArgs, fca.numRets, inoutArgs, asyncEagerLabel
   );
 }
 

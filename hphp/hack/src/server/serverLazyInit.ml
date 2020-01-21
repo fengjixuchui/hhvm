@@ -33,8 +33,7 @@ module Dep = Typing_deps.Dep
 module SLC = ServerLocalConfig
 
 let lock_and_load_deptable
-    (fn : string) ~(ignore_hh_version : bool) ~(fail_if_missing : bool) : unit
-    =
+    (fn : string) ~(ignore_hh_version : bool) ~(fail_if_missing : bool) : unit =
   if String.length fn = 0 && not fail_if_missing then
     Hh_logger.log "The dependency file was not specified - ignoring"
   else
@@ -87,9 +86,7 @@ let download_and_load_state_exn
           }
     in
     let ignore_hh_version = ServerArgs.ignore_hh_version genv.options in
-    let ignore_hhconfig =
-      ServerArgs.saved_state_ignore_hhconfig genv.options
-    in
+    let ignore_hhconfig = ServerArgs.saved_state_ignore_hhconfig genv.options in
     let use_prechecked_files =
       ServerPrecheckedFiles.should_use genv.options genv.local_config
     in
@@ -99,6 +96,7 @@ let download_and_load_state_exn
         Some
           (State_loader_futures.load
              ~repo:root
+             ~ignore_hh_version
              ~saved_state_type:Saved_state_loader.Naming_table)
       ) else
         None
@@ -175,9 +173,7 @@ let download_and_load_state_exn
         let list_to_set x =
           List.map x Relative_path.from_root |> Relative_path.set_of_list
         in
-        let dirty_naming_files =
-          Relative_path.Set.of_list dirty_naming_files
-        in
+        let dirty_naming_files = Relative_path.Set.of_list dirty_naming_files in
         let dirty_master_files = list_to_set dirty_master_files in
         let dirty_local_files = list_to_set dirty_local_files in
         Ok
@@ -187,6 +183,7 @@ let download_and_load_state_exn
             naming_table_fn = naming_table_fallback_path;
             corresponding_rev = result.State_loader.corresponding_rev;
             mergebase_rev = result.State_loader.mergebase_rev;
+            mergebase = result.State_loader.mergebase;
             dirty_naming_files;
             dirty_master_files;
             dirty_local_files;
@@ -208,9 +205,7 @@ let use_precomputed_state_exn
   } =
     info
   in
-  let ignore_hh_version =
-    ServerArgs.ignore_hh_version genv.ServerEnv.options
-  in
+  let ignore_hh_version = ServerArgs.ignore_hh_version genv.ServerEnv.options in
   let fail_if_missing = not genv.local_config.SLC.can_skip_deptable in
   lock_and_load_deptable deptable_fn ~ignore_hh_version ~fail_if_missing;
   let changes = Relative_path.set_of_list changes in
@@ -231,6 +226,7 @@ let use_precomputed_state_exn
     corresponding_rev =
       Hg.Global_rev (int_of_string corresponding_base_revision);
     mergebase_rev = None;
+    mergebase = Future.of_value None;
     dirty_naming_files = naming_changes;
     dirty_master_files = prechecked_changes;
     dirty_local_files = changes;
@@ -248,13 +244,20 @@ let naming_with_fast (fast : FileInfo.names Relative_path.Map.t) (t : float) :
   Relative_path.Map.iter fast ~f:(fun k info ->
       let {
         FileInfo.n_classes = classes;
+        n_record_defs = record_defs;
         n_types = typedefs;
         n_funs = funs;
         n_consts = consts;
       } =
         info
       in
-      NamingGlobal.ndecl_file_fast k ~funs ~classes ~typedefs ~consts);
+      Naming_global.ndecl_file_fast
+        k
+        ~funs
+        ~classes
+        ~record_defs
+        ~typedefs
+        ~consts);
   HackEventLogger.fast_naming_end t;
   let hs = SharedMem.heap_size () in
   Hh_logger.log "Heap size: %d" hs;
@@ -295,45 +298,6 @@ let naming_from_saved_state
     in
     naming_with_fast (Naming_table.to_fast old_hack_names) t
 
-(*
- * In eager initialization, this is done at the parsing step with
- * parsing hooks. During lazy init, need to do it manually from the fast
- * instead since we aren't parsing the codebase.
- *)
-let update_search
-    (genv : ServerEnv.genv) (naming_table : Naming_table.t) (t : float) : float
-    =
-  (* Don't update search index when in check mode (type check once and exit) *)
-  let provider_name =
-    genv.local_config.ServerLocalConfig.symbolindex_search_provider
-  in
-  let index_needs_updates =
-    SymbolIndex.init_needs_search_updates ~provider_name
-  in
-  let check_mode = ServerArgs.check_mode genv.options in
-  if (not check_mode) && index_needs_updates then (
-    Hh_logger.log "Load search indices...";
-
-    (* Filter out non php files *)
-    let naming_table =
-      Naming_table.filter naming_table ~f:(fun s _ -> FindUtils.path_filter s)
-    in
-    Naming_table.iter naming_table ~f:(fun fn fi ->
-        let names = FileInfo.simplify fi in
-        SearchServiceRunner.internal_ssr_update
-          fn
-          (SearchUtils.Fast names)
-          SearchUtils.Init);
-    HackEventLogger.update_search_end t;
-    Hh_logger.log_duration "Loaded search indices" t
-  ) else (
-    Hh_logger.log
-      "Skipped loading search indices (check mode: %B, index provider: %s)"
-      check_mode
-      provider_name;
-    t
-  )
-
 (* Prechecked files are gated with a flag and not supported in AI/check/saving
  * of saved state modes. *)
 let use_prechecked_files (genv : ServerEnv.genv) : bool =
@@ -352,7 +316,7 @@ let get_dirty_fast
     ~f:
       begin
         fun fn acc ->
-        let dirty_fast = Relative_path.Map.get fast fn in
+        let dirty_fast = Relative_path.Map.find_opt fast fn in
         let dirty_old_fast =
           Naming_table.get_file_info old_naming_table fn
           |> Option.map ~f:FileInfo.simplify
@@ -367,7 +331,9 @@ let get_dirty_fast
     ~init:Relative_path.Map.empty
 
 let names_to_deps (names : FileInfo.names) : DepSet.t =
-  let { FileInfo.n_funs; n_classes; n_types; n_consts } = names in
+  let { FileInfo.n_funs; n_classes; n_record_defs; n_types; n_consts } =
+    names
+  in
   let add_deps_of_sset dep_ctor sset depset =
     SSet.fold sset ~init:depset ~f:(fun n acc ->
         DepSet.add acc (Dep.make (dep_ctor n)))
@@ -375,6 +341,7 @@ let names_to_deps (names : FileInfo.names) : DepSet.t =
   let deps = add_deps_of_sset (fun n -> Dep.Fun n) n_funs DepSet.empty in
   let deps = add_deps_of_sset (fun n -> Dep.FunName n) n_funs deps in
   let deps = add_deps_of_sset (fun n -> Dep.Class n) n_classes deps in
+  let deps = add_deps_of_sset (fun n -> Dep.RecordDef n) n_record_defs deps in
   let deps = add_deps_of_sset (fun n -> Dep.Class n) n_types deps in
   let deps = add_deps_of_sset (fun n -> Dep.GConst n) n_consts deps in
   let deps = add_deps_of_sset (fun n -> Dep.GConstName n) n_consts deps in
@@ -396,7 +363,7 @@ let get_files_to_recheck
       files_to_redeclare
       ~init:Relative_path.Map.empty
       ~f:(fun path acc ->
-        match Relative_path.Map.get dirty_fast path with
+        match Relative_path.Map.find_opt dirty_fast path with
         | Some info -> Relative_path.Map.add acc path info
         | None -> acc)
   in
@@ -405,7 +372,7 @@ let get_files_to_recheck
       Naming_table.get_file_info old_naming_table path
       |> Option.map ~f:FileInfo.simplify
     in
-    let new_names = Relative_path.Map.get new_fast path in
+    let new_names = Relative_path.Map.find_opt new_fast path in
     let classes_from_names x = x.FileInfo.n_classes in
     let old_classes = Option.map old_names classes_from_names in
     let new_classes = Option.map new_names classes_from_names in
@@ -427,6 +394,7 @@ let get_files_to_recheck
       ~conservative_redecl:false
       ~bucket_size
       genv.workers
+      get_classes
       dirty_names
       fast
   in
@@ -583,23 +551,20 @@ let initialize_naming_table
 
 let load_naming_table (genv : ServerEnv.genv) (env : ServerEnv.env) :
     ServerEnv.env * float =
+  let ignore_hh_version = ServerArgs.ignore_hh_version genv.options in
   let loader_future =
     State_loader_futures.load
       ~repo:(Path.make Relative_path.(path_of_prefix Root))
+      ~ignore_hh_version
       ~saved_state_type:Saved_state_loader.Naming_table
   in
   match State_loader_futures.wait_for_finish loader_future with
   | Ok (info, fnl) ->
-    let { Saved_state_loader.Naming_table_saved_state_info.naming_table_path }
-        =
+    let { Saved_state_loader.Naming_table_saved_state_info.naming_table_path } =
       info
     in
     let naming_table_path = Path.to_string naming_table_path in
-    let naming_table =
-      Naming_table.load_from_sqlite
-        ~update_reverse_entries:true
-        naming_table_path
-    in
+    let naming_table = Naming_table.load_from_sqlite naming_table_path in
     let fnl =
       List.map fnl ~f:(fun path ->
           Relative_path.from_root (Path.to_string path))
@@ -652,11 +617,11 @@ let write_symbol_info_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
       ~f:(fun x m -> Relative_path.Map.remove m x)
       ~init:fast
   in
-  let file_tuples =
+  let files =
     Relative_path.Map.fold fast ~init:[] ~f:(fun path _ acc ->
         match Naming_table.get_file_info env.naming_table path with
         | None -> acc
-        | Some info -> (path, info) :: acc)
+        | Some _ -> path :: acc)
   in
   (* ensuring we are writing to fresh files *)
   let dir_exists = (try Sys.is_directory out_dir with _ -> false) in
@@ -665,7 +630,8 @@ let write_symbol_info_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
   else
     Sys_utils.mkdir_p out_dir;
 
-  Typing_symbol_info_writer.go genv.workers env.tcopt out_dir file_tuples;
+  let ctx = Provider_context.empty ~tcopt:env.tcopt in
+  Typing_symbol_info_writer.go genv.workers ctx out_dir files;
 
   (env, t)
 
@@ -673,7 +639,10 @@ let write_symbol_info_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
 let full_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
     ServerEnv.env * float =
   let (env, t) =
-    if genv.ServerEnv.local_config.SLC.remote_type_check_threshold = None then
+    if
+      genv.ServerEnv.local_config.SLC.remote_type_check.SLC.recheck_threshold
+      = None
+    then
       initialize_naming_table ~do_naming:true "full initialization" genv env
     else
       load_naming_table genv env
@@ -694,12 +663,30 @@ let parse_only_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
     ServerEnv.env * float =
   initialize_naming_table "parse-only initialization" genv env
 
+let get_mergebase (mergebase_future : Hg.hg_rev option Future.t) :
+    Hg.hg_rev option =
+  match Future.get mergebase_future with
+  | Ok mergebase ->
+    let () =
+      match mergebase with
+      | Some mergebase -> Hh_logger.log "Got mergebase hash: %s" mergebase
+      | None -> Hh_logger.log "No mergebase hash"
+    in
+    mergebase
+  | Error error ->
+    Hh_logger.log
+      "Getting mergebase hash failed: %s"
+      (Future.error_to_string error);
+    None
+
 let post_saved_state_initialization
     ~(genv : ServerEnv.genv)
     ~(env : ServerEnv.env)
     ~(state_result : loaded_info * Relative_path.Set.t) : ServerEnv.env * float
     =
-  let (loaded_info, changed_while_parsing) = state_result in
+  let ((loaded_info : ServerInitTypes.loaded_info), changed_while_parsing) =
+    state_result
+  in
   let trace = genv.local_config.SLC.trace_parsing in
   let hg_aware = genv.local_config.SLC.hg_aware in
   let {
@@ -709,13 +696,19 @@ let post_saved_state_initialization
     dirty_master_files;
     old_naming_table;
     mergebase_rev;
+    mergebase;
     old_errors;
     _;
   } =
     loaded_info
   in
-  if hg_aware then
-    Option.iter mergebase_rev ~f:ServerRevisionTracker.initialize;
+  if hg_aware then Option.iter mergebase_rev ~f:ServerRevisionTracker.initialize;
+  let env =
+    {
+      env with
+      init_env = { env.init_env with mergebase = get_mergebase mergebase };
+    }
+  in
   Bad_files.check dirty_local_files;
   Bad_files.check changed_while_parsing;
 
@@ -757,9 +750,7 @@ let post_saved_state_initialization
       ]
   in
   let t = Unix.gettimeofday () in
-  let dirty_files =
-    Relative_path.Set.union dirty_files changed_while_parsing
-  in
+  let dirty_files = Relative_path.Set.union dirty_files changed_while_parsing in
   let parsing_files =
     Relative_path.Set.filter dirty_files ~f:FindUtils.path_filter
   in
@@ -844,7 +835,6 @@ let post_saved_state_initialization
   in
   (* Update the fileinfo object's dependencies now that we have full fast *)
   let t = update_files genv env.naming_table t in
-  let t = update_search genv old_naming_table t in
   type_check_dirty
     genv
     env

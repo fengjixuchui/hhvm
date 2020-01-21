@@ -208,13 +208,13 @@ Variant binary_deserialize(int8_t thrift_typeID, PHPInputTransport& transport,
       uint32_t size = transport.readU32();
 
       auto keyspec = tvCastToArrayLike(
-        fieldspec.rvalAt(s_key, AccessFlags::ErrorKey).tv()
+        fieldspec.rval(s_key, AccessFlags::ErrorKey).tv()
       );
       auto valspec = tvCastToArrayLike(
-        fieldspec.rvalAt(s_val, AccessFlags::ErrorKey).tv()
+        fieldspec.rval(s_val, AccessFlags::ErrorKey).tv()
       );
       auto format = tvCastToString(
-        fieldspec.rvalAt(s_format, AccessFlags::None).tv()
+        fieldspec.rval(s_format, AccessFlags::None).tv()
       );
       if (format.equal(s_harray)) {
         DictInit arr(size);
@@ -249,7 +249,7 @@ Variant binary_deserialize(int8_t thrift_typeID, PHPInputTransport& transport,
         for (uint32_t s = 0; s < size; ++s) {
           Variant key = binary_deserialize(types[0], transport, keyspec);
           Variant value = binary_deserialize(types[1], transport, valspec);
-          collections::set(obj.get(), key.toCell(), value.toCell());
+          collections::set(obj.get(), key.asTypedValue(), value.asTypedValue());
         }
         return Variant(std::move(obj));
       } else {
@@ -266,10 +266,10 @@ Variant binary_deserialize(int8_t thrift_typeID, PHPInputTransport& transport,
       int8_t type = transport.readI8();
       uint32_t size = transport.readU32();
       auto elemspec = tvCastToArrayLike(
-        fieldspec.rvalAt(s_elem, AccessFlags::ErrorKey).tv()
+        fieldspec.rval(s_elem, AccessFlags::ErrorKey).tv()
       );
       auto format = tvCastToString(
-        fieldspec.rvalAt(s_format, AccessFlags::None).tv()
+        fieldspec.rval(s_format, AccessFlags::None).tv()
       );
 
       if (format.equal(s_harray)) {
@@ -286,7 +286,7 @@ Variant binary_deserialize(int8_t thrift_typeID, PHPInputTransport& transport,
         int64_t i = 0;
         do {
           auto val = binary_deserialize(type, transport, elemspec);
-          cellDup(*val.toCell(), vec->appendForUnserialize(i));
+          tvDup(*val.asTypedValue(), vec->appendForUnserialize(i));
         } while (++i < size);
         return Variant(std::move(vec));
       } else {
@@ -304,10 +304,10 @@ Variant binary_deserialize(int8_t thrift_typeID, PHPInputTransport& transport,
       transport.readBytes(&size, 4);
       size = ntohl(size);
       auto elemspec = tvCastToArrayLike(
-        fieldspec.rvalAt(s_elem, AccessFlags::ErrorKey).tv()
+        fieldspec.rval(s_elem, AccessFlags::ErrorKey).tv()
       );
       auto format = tvCastToString(
-        fieldspec.rvalAt(s_format, AccessFlags::None).tv()
+        fieldspec.rval(s_format, AccessFlags::None).tv()
       );
       if (format.equal(s_harray)) {
         KeysetInit arr(size);
@@ -439,15 +439,15 @@ void binary_deserialize_slow(const Object& zthis, const Array& spec,
     if (!(val = spec[fieldno]).isNull()) {
       Array fieldspec = val.toArray();
       // pull the field name
-      auto varname = tvCastToString(fieldspec.rvalAt(s_var).tv());
+      auto varname = tvCastToString(fieldspec.rval(s_var).tv());
 
       // and the type
-      int8_t expected_ttype = tvCastToInt64(fieldspec.rvalAt(s_type).tv());
+      int8_t expected_ttype = tvCastToInt64(fieldspec.rval(s_type).tv());
 
       if (ttypes_are_compatible(ttype, expected_ttype)) {
         Variant rv = binary_deserialize(ttype, transport, fieldspec);
         zthis->o_set(varname, rv, zthis->getClassName());
-        bool isUnion = tvCastToBoolean(fieldspec.rvalAt(s_union).tv());
+        bool isUnion = tvCastToBoolean(fieldspec.rval(s_union).tv());
         if (isUnion) {
           zthis->o_set(s__type, Variant(fieldno), zthis->getClassName());
         }
@@ -475,7 +475,7 @@ void binary_deserialize_spec(const Object& dest, PHPInputTransport& transport,
     int16_t fieldNum = transport.readI16();
     return binary_deserialize_slow(dest, spec, fieldNum, fieldType, transport);
   }
-  auto objProp = dest->propVecForConstruct();
+  auto objProps = dest->props();
   auto prop = cls->declProperties().begin();
   int i = -1;
   TType fieldType = static_cast<TType>(transport.readI8());
@@ -495,7 +495,7 @@ void binary_deserialize_spec(const Object& dest, PHPInputTransport& transport,
     if (fields[i].isUnion) {
       if (s__type.equal(prop[numFields].name)) {
         auto index = cls->propSlotToIndex(numFields);
-        tvAsVariant(&objProp[index]) = Variant(fieldNum);
+        tvSetInt(fieldNum, objProps->at(index));
       } else {
         return binary_deserialize_slow(
           dest, spec, fieldNum, fieldType, transport);
@@ -503,8 +503,10 @@ void binary_deserialize_spec(const Object& dest, PHPInputTransport& transport,
     }
     ArrNR fieldSpec(fields[i].spec);
     auto index = cls->propSlotToIndex(i);
-    tvAsVariant(&objProp[index]) =
-      binary_deserialize(fieldType, transport, fieldSpec.asArray());
+    tvSet(*binary_deserialize(fieldType, transport, fieldSpec.asArray())
+            .asTypedValue(),
+          objProps->at(index));
+
     if (!fields[i].noTypeCheck) {
       dest->verifyPropTypeHint(i);
       if (fields[i].isUnion) dest->verifyPropTypeHint(numFields);
@@ -527,8 +529,8 @@ void binary_serialize(int8_t thrift_typeID, PHPOutputTransport& transport,
         throw_tprotocolexception("Attempt to send non-object "
                                  "type as a T_STRUCT", INVALID_DATA);
       }
-      Variant spec(get_tspec(value.toCObjRef()->getVMClass()));
-      binary_serialize_spec(value.toCObjRef(), transport, spec.toArray());
+      Variant spec(get_tspec(value.asCObjRef()->getVMClass()));
+      binary_serialize_spec(value.asCObjRef(), transport, spec.toArray());
     } return;
     case T_BOOL:
       transport.writeI8(value.toBoolean() ? 1 : 0);
@@ -572,16 +574,16 @@ void binary_serialize(int8_t thrift_typeID, PHPOutputTransport& transport,
     case T_MAP: {
       Array ht = value.toArray<IntishCast::Cast>();
       uint8_t keytype = (char)tvCastToInt64(
-        fieldspec.rvalAt(s_ktype, AccessFlags::ErrorKey).tv()
+        fieldspec.rval(s_ktype, AccessFlags::ErrorKey).tv()
       );
       transport.writeI8(keytype);
       uint8_t valtype = (char)tvCastToInt64(
-        fieldspec.rvalAt(s_vtype, AccessFlags::ErrorKey).tv()
+        fieldspec.rval(s_vtype, AccessFlags::ErrorKey).tv()
       );
       transport.writeI8(valtype);
 
       auto valspec = tvCastToArrayLike(
-        fieldspec.rvalAt(s_val, AccessFlags::ErrorKey).tv()
+        fieldspec.rval(s_val, AccessFlags::ErrorKey).tv()
       );
 
       transport.writeI32(ht.size());
@@ -595,11 +597,11 @@ void binary_serialize(int8_t thrift_typeID, PHPOutputTransport& transport,
       Variant val;
 
       uint8_t valtype = tvCastToInt64(
-        fieldspec.rvalAt(s_etype, AccessFlags::ErrorKey).tv()
+        fieldspec.rval(s_etype, AccessFlags::ErrorKey).tv()
       );
       transport.writeI8(valtype);
       auto valspec = tvCastToArrayLike(
-        fieldspec.rvalAt(s_elem, AccessFlags::ErrorKey).tv()
+        fieldspec.rval(s_elem, AccessFlags::ErrorKey).tv()
       );
       transport.writeI32(ht.size());
       for (ArrayIter key_ptr = ht.begin(); !key_ptr.end(); ++key_ptr) {
@@ -610,7 +612,7 @@ void binary_serialize(int8_t thrift_typeID, PHPOutputTransport& transport,
       Array ht = value.toArray<IntishCast::Cast>();
 
       uint8_t keytype = (char)tvCastToInt64(
-        fieldspec.rvalAt(s_etype, AccessFlags::ErrorKey).tv()
+        fieldspec.rval(s_etype, AccessFlags::ErrorKey).tv()
       );
       transport.writeI8(keytype);
 
@@ -645,14 +647,15 @@ void binary_serialize_spec(const Object& obj, PHPOutputTransport& transport,
   const auto& fields = specHolder.getSpec(spec, obj, true);
   Class* cls = obj->getVMClass();
   auto prop = cls->declProperties().begin();
-  auto objProp = obj->propVec();
+  auto objProps = obj->props();
   const size_t numProps = cls->numDeclProperties();
   const size_t numFields = fields.size();
   // Write each member
   for (int slot = 0; slot < numFields; ++slot) {
     if (slot < numProps && fields[slot].name == prop[slot].name) {
       auto index = cls->propSlotToIndex(slot);
-      auto const& fieldVal = tvAsCVarRef(&objProp[index]);
+      VarNR fieldWrapper(objProps->at(index).tv());
+      const Variant& fieldVal = fieldWrapper;
       if (!fieldVal.isNull()) {
         TType fieldType = fields[slot].type;
         ArrNR fieldSpec(fields[slot].spec);
@@ -661,18 +664,7 @@ void binary_serialize_spec(const Object& obj, PHPOutputTransport& transport,
         binary_serialize(fieldType, transport, fieldVal, fieldSpec);
       } else if (UNLIKELY(fieldVal.is(KindOfUninit)) &&
                  (prop[slot].attrs & AttrLateInit)) {
-        if (prop[slot].attrs & AttrLateInitSoft) {
-          raise_soft_late_init_prop(prop[slot].cls, prop[slot].name, false);
-          tvDup(
-            *g_context->getSoftLateInitDefault().asTypedValue(),
-            *const_cast<TypedValue*>(&objProp[index])
-          );
-          // Loop over this property again
-          --slot;
-          continue;
-        } else {
-          throw_late_init_prop(prop[slot].cls, prop[slot].name, false);
-        }
+        throw_late_init_prop(prop[slot].cls, prop[slot].name, false);
       }
     } else {
       binary_serialize_slow(fields[slot], obj, transport);

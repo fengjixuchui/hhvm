@@ -58,7 +58,7 @@ class Node {
       return;
     }
 
-    usort(&$items, ($a, $b) ==> $b[1]->count - $a[1]->count);
+    usort(inout $items, ($a, $b) ==> $b[1]->count - $a[1]->count);
     foreach ($items as $pair) {
       $pair[1]->show($total_count, $indent);
     }
@@ -146,7 +146,7 @@ function main($argv) {
     usage($argv[0]);
     return 1;
   }
-  array_shift(&$argv);
+  array_shift(inout $argv);
 
   $reverse = false;
   $root_last = false;

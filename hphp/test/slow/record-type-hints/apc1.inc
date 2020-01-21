@@ -1,5 +1,5 @@
 <?hh
 
-final record A {
-  x: MaybeBool,
+record A {
+  MaybeBool x;
 }

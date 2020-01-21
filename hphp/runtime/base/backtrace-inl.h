@@ -56,50 +56,58 @@ struct BTContext {
   // thus we introduce an m_sfp cycle between these frames.
   ActRec fakeAR[2];
   IStack inlineStack;
+  IFrameID prevIFID{kInvalidIFrameID};
 
-  // stashedAR stores a pointer to the frame that should be returned after the
-  // inlined stack has been traversed and stashedPC stores the corresponding PC.
-  ActRec* stashedAR{nullptr};
-  Offset stashedPC{kInvalidOffset};
+  // The frame we should resume at after unwinding the inlined stack.
+  BTFrame stashedFrm{};
 };
 
-ActRec* getPrevActRec(
-  BTContext& ctx,
-  const ActRec* fp,
-  Offset* prevPc,
+BTFrame getPrevActRec(
+  BTContext& ctx, BTFrame frm,
   folly::small_vector<c_WaitableWaitHandle*, 64>& visitedWHs
 );
 
-ActRec* initBTContextAt(BTContext& ctx, jit::CTCA ip,
-                        ActRec* fp, Offset* prevPc);
+/*
+ * Take a `frm` cursor and perform miscellaneous preprocessing on it.
+ *
+ * Preprocessing includes:
+ *  - Setting up virtual inline stack frames.
+ *  - Setting up virtual FCallBuiltin inline frames.
+ *  - Coalescing kInvalidOffset `pc` values to `pcOff()`.
+ */
+BTFrame initBTContextAt(BTContext& ctx, jit::CTCA ip, BTFrame frm);
 
 }
 
 template<class L>
-void walkStack(L func, bool skipTop) {
+void walkStack(L func, c_WaitableWaitHandle* wh, bool skipTop) {
   using namespace backtrace_detail;
 
   VMRegAnchor _;
+
   folly::small_vector<c_WaitableWaitHandle*, 64> visitedWHs;
-  auto fp = vmfp();
+
+  auto frm = wh != nullptr
+    ? getARFromWH(wh, visitedWHs)
+    : BTFrame { vmfp() };
 
   // If there are no VM frames, we're done.
-  if (!fp || !rds::header()) return;
+  if (!frm || !rds::header()) return;
 
   BTContext ctx;
 
-  // Handle the subsequent VM frames.
-  auto prevPc = pcOff();
-  auto const addr = vmJitReturnAddr();
-  if (auto const inl = initBTContextAt(ctx, addr, fp, &prevPc)) {
-    fp = inl;
-  }
+  frm = initBTContextAt(ctx, vmJitReturnAddr(), frm);
 
-  if (skipTop) fp = getPrevActRec(ctx, fp, &prevPc, visitedWHs);
+  if (skipTop) frm = getPrevActRec(ctx, frm, visitedWHs);
 
-  for (; fp != nullptr; fp = getPrevActRec(ctx, fp, &prevPc, visitedWHs)) {
-    if (ArrayData::call_helper(func, fp, prevPc)) return;
+  for (; frm; frm = getPrevActRec(ctx, frm, visitedWHs)) {
+    if (ArrayData::call_helper(func, frm.fp, frm.pc)) return;
   }
+}
+
+template<class L>
+void walkStack(L func, bool skipTop) {
+  walkStack(func, nullptr, skipTop);
 }
 
 namespace backtrace_detail {
@@ -107,13 +115,14 @@ namespace backtrace_detail {
 template<typename F, typename Pred>
 from_ret_t<F> fromLeafImpl(F f, Pred pred,
                            from_ret_t<F> def,
+                           c_WaitableWaitHandle* wh,
                            bool skipTop) {
   auto ret = def;
   walkStack([&] (const ActRec* fp, Offset off) {
     if (!pred(fp)) return false;
     ret = f(fp, off);
     return true;
-  }, skipTop);
+  }, wh, skipTop);
   return ret;
 }
 
@@ -126,7 +135,7 @@ backtrace_detail::from_ret_t<F> fromLeaf(
   F f, backtrace_detail::from_ret_t<F> def
 ) {
   return backtrace_detail::fromLeafImpl(
-    f, backtrace_detail::true_pred, def, false
+    f, backtrace_detail::true_pred, def, nullptr, false
   );
 }
 
@@ -135,7 +144,17 @@ backtrace_detail::from_ret_t<F> fromCaller(
   F f, backtrace_detail::from_ret_t<F> def
 ) {
   return backtrace_detail::fromLeafImpl(
-    f, backtrace_detail::true_pred, def, true
+    f, backtrace_detail::true_pred, def, nullptr, true
+  );
+}
+
+template<typename F>
+backtrace_detail::from_ret_t<F> fromLeafWH(
+  c_WaitableWaitHandle* wh, F f,
+  backtrace_detail::from_ret_t<F> def
+) {
+  return backtrace_detail::fromLeafImpl(
+    f, backtrace_detail::true_pred, def, wh, false
   );
 }
 
@@ -143,14 +162,22 @@ template<typename F, typename Pred>
 backtrace_detail::from_ret_t<F> fromLeaf(
   F f, Pred pred, backtrace_detail::from_ret_t<F> def
 ) {
-  return backtrace_detail::fromLeafImpl(f, pred, def, false);
+  return backtrace_detail::fromLeafImpl(f, pred, def, nullptr, false);
 }
 
 template<typename F, typename Pred>
 backtrace_detail::from_ret_t<F> fromCaller(
   F f, Pred pred, backtrace_detail::from_ret_t<F> def
 ) {
-  return backtrace_detail::fromLeafImpl(f, pred, def, true);
+  return backtrace_detail::fromLeafImpl(f, pred, def, nullptr, true);
+}
+
+template<typename F, typename Pred>
+backtrace_detail::from_ret_t<F> fromLeafWH(
+  c_WaitableWaitHandle* wh, F f, Pred pred,
+  backtrace_detail::from_ret_t<F> def
+) {
+  return backtrace_detail::fromLeafImpl(f, pred, def, wh, false);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

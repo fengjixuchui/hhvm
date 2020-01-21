@@ -23,7 +23,6 @@
 #include "hphp/runtime/ext/generator/ext_generator.h"
 #include "hphp/runtime/vm/async-flow-stepper.h"
 #include "hphp/runtime/vm/hhbc-codec.h"
-#include "hphp/runtime/vm/jit/debugger.h"
 #include "hphp/runtime/vm/jit/mcgen.h"
 #include "hphp/runtime/vm/jit/tc.h"
 #include "hphp/runtime/vm/pc-filter.h"
@@ -71,33 +70,12 @@ void DebuggerHook::detach(RequestInfo* ti /* = nullptr */) {
   Lock lock(s_lock);
   if (--s_numAttached == 0) {
     s_activeHook = nullptr;
-    jit::clearDbgBL();
   }
 }
 
 Mutex DebuggerHook::s_lock;
 int DebuggerHook::s_numAttached {0};
 DebuggerHook* DebuggerHook::s_activeHook {nullptr};
-
-//////////////////////////////////////////////////////////////////////////
-// Helpers
-
-namespace {
-
-// Ensure we interpret an entire function when the debugger is attached.
-void blacklistFuncInJit(const Func* f) {
-  if (jit::addDbgBLFunc(f)) {
-    if (!jit::tc::addDbgGuards(f)) {
-      Logger::Warning("Failed to set breakpoints in Jitted code");
-    }
-    // In this case, we may be setting a breakpoint in a tracelet which could
-    // already be jitted, and present on the stack. Make sure we don't return
-    // to it so we have a chance to honor breakpoints.
-    debuggerPreventReturnsToTC();
-  }
-}
-
-}
 
 //////////////////////////////////////////////////////////////////////////
 // Hooks
@@ -336,9 +314,6 @@ void phpDebuggerErrorHook(const ExtendedException& ee,
 
 void phpDebuggerEvalHook(const Func* f) {
   VMRegAnchor anchor;
-  if (RuntimeOption::EvalJit) {
-    blacklistFuncInJit(f);
-  }
   getDebuggerHook()->onEval(f);
 }
 
@@ -487,20 +462,6 @@ void phpDebuggerNext() {
 void phpAddBreakPoint(const Unit* unit, Offset offset) {
   PC pc = unit->at(offset);
   getBreakPointFilter()->addPC(pc);
-  if (RuntimeOption::EvalJit && !RuntimeOption::ForceDebuggerBpToInterp) {
-    auto const func = unit->getFunc(offset);
-    always_assert(func);
-    if (jit::addDbgBLFunc(func)) {
-      // if a new entry is added in blacklist
-      if (!jit::tc::addDbgGuards(func)) {
-        Logger::Warning("Failed to set breakpoints in Jitted code");
-      }
-      // In this case, we may be setting a breakpoint in a tracelet which could
-      // already be jitted, and present on the stack. Make sure we don't return
-      // to it so we have a chance to honor breakpoints.
-      debuggerPreventReturnsToTC();
-    }
-  }
 }
 
 void phpAddBreakPointFuncEntry(const Func* f) {
@@ -516,16 +477,6 @@ void phpAddBreakPointFuncEntry(const Func* f) {
   // Add to the breakpoint filter and the func entry filter
   getBreakPointFilter()->addPC(pc);
   RID().m_callBreakPointFilter.addPC(pc);
-
-  // Blacklist the location
-  if (RuntimeOption::EvalJit && !RuntimeOption::ForceDebuggerBpToInterp) {
-    if (jit::addDbgBLFunc(f)) {
-      // if a new entry is added in blacklist
-      if (!jit::tc::addDbgGuards(f)) {
-        Logger::Warning("Failed to set breakpoints in Jitted code");
-      }
-    }
-  }
 }
 
 void phpAddBreakPointFuncExit(const Func* f) {
@@ -541,14 +492,6 @@ void phpAddBreakPointFuncExit(const Func* f) {
     // Add pc to the breakpoint filter and the func exit filter
     getBreakPointFilter()->addPC(pc);
     RID().m_retBreakPointFilter.addPC(pc);
-
-    // Blacklist the location
-    if (RuntimeOption::EvalJit && !RuntimeOption::ForceDebuggerBpToInterp &&
-        jit::addDbgBLFunc(f)) {
-      if (!jit::tc::addDbgGuards(f)) {
-        Logger::Warning("Failed to set breakpoints in Jitted code");
-      }
-    }
   }
 }
 

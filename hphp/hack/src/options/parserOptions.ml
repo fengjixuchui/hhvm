@@ -41,16 +41,10 @@ let with_disable_lval_as_an_expression po b =
 let disable_lval_as_an_expression =
   GlobalOptions.po_disable_lval_as_an_expression
 
-let rust_parser_errors = GlobalOptions.po_rust_parser_errors
-
-let enable_constant_visibility_modifiers =
-  GlobalOptions.po_enable_constant_visibility_modifiers
+let rust_lowerer = GlobalOptions.po_rust_lowerer
 
 let enable_class_level_where_clauses =
   GlobalOptions.po_enable_class_level_where_clauses
-
-let with_enable_constant_visibility_modifiers po b =
-  { po with GlobalOptions.po_enable_constant_visibility_modifiers = b }
 
 let disable_legacy_soft_typehints =
   GlobalOptions.po_disable_legacy_soft_typehints
@@ -87,10 +81,19 @@ let disable_unset_class_const = GlobalOptions.po_disable_unset_class_const
 
 let parser_errors_only = GlobalOptions.po_parser_errors_only
 
-let disable_halt_compiler = GlobalOptions.po_disable_halt_compiler
+let with_parser_errors_only po b =
+  { po with GlobalOptions.po_parser_errors_only = b }
 
-let with_disable_halt_compiler po b =
-  { po with GlobalOptions.po_disable_halt_compiler = b }
+let disallow_func_ptrs_in_constants =
+  GlobalOptions.po_disallow_func_ptrs_in_constants
+
+let with_disallow_func_ptrs_in_constants po b =
+  { po with GlobalOptions.po_disallow_func_ptrs_in_constants = b }
+
+let enable_xhp_class_modifier = GlobalOptions.po_enable_xhp_class_modifier
+
+let with_enable_xhp_class_modifier po b =
+  { po with GlobalOptions.po_enable_xhp_class_modifier = b }
 
 let make
     ~auto_namespace_map
@@ -99,7 +102,6 @@ let make
     ~disable_nontoplevel_declarations
     ~disable_static_closures
     ~disable_lval_as_an_expression
-    ~enable_constant_visibility_modifiers
     ~enable_class_level_where_clauses
     ~disable_legacy_soft_typehints
     ~allow_new_attribute_syntax
@@ -109,7 +111,9 @@ let make
     ~const_static_props
     ~abstract_static_props
     ~disable_unset_class_const
-    ~disable_halt_compiler =
+    ~disallow_func_ptrs_in_constants
+    ~enable_xhp_class_modifier
+    ~rust_lowerer =
   GlobalOptions.
     {
       default with
@@ -119,8 +123,6 @@ let make
       po_disable_nontoplevel_declarations = disable_nontoplevel_declarations;
       po_disable_static_closures = disable_static_closures;
       po_disable_lval_as_an_expression = disable_lval_as_an_expression;
-      po_enable_constant_visibility_modifiers =
-        enable_constant_visibility_modifiers;
       po_enable_class_level_where_clauses = enable_class_level_where_clauses;
       po_disable_legacy_soft_typehints = disable_legacy_soft_typehints;
       po_allow_new_attribute_syntax = allow_new_attribute_syntax;
@@ -130,5 +132,24 @@ let make
       tco_const_static_props = const_static_props;
       po_abstract_static_props = abstract_static_props;
       po_disable_unset_class_const = disable_unset_class_const;
-      po_disable_halt_compiler = disable_halt_compiler;
+      po_disallow_func_ptrs_in_constants = disallow_func_ptrs_in_constants;
+      po_enable_xhp_class_modifier = enable_xhp_class_modifier;
+      po_rust_lowerer = rust_lowerer;
     }
+
+(* Changes here need to be synchronized with rust_parser_errors_ffi.rs *)
+type ffi_t =
+  bool * bool * bool * bool * bool * bool * bool * bool * bool * bool * bool
+
+let to_rust_ffi_t po ~hhvm_compat_mode ~hhi_mode ~codegen =
+  ( hhvm_compat_mode,
+    hhi_mode,
+    codegen,
+    disable_lval_as_an_expression po,
+    disable_legacy_soft_typehints po,
+    const_static_props po,
+    disable_legacy_attribute_syntax po,
+    const_default_func_args po,
+    abstract_static_props po,
+    disallow_func_ptrs_in_constants po,
+    enable_xhp_class_modifier po )

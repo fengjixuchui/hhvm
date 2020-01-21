@@ -79,6 +79,7 @@ bool merge_into(Iter& dst, const Iter& src, JoinOp join) {
             diter.types.mayThrowOnInit || siter.types.mayThrowOnInit;
           auto const throws2 =
             diter.types.mayThrowOnNext || siter.types.mayThrowOnNext;
+          auto const baseUpdated = diter.baseUpdated || siter.baseUpdated;
           auto const baseLocal = (diter.baseLocal != siter.baseLocal)
             ? NoLocalId
             : diter.baseLocal;
@@ -88,6 +89,8 @@ bool merge_into(Iter& dst, const Iter& src, JoinOp join) {
           auto const initBlock = (diter.initBlock != siter.initBlock)
             ? NoBlockId
             : diter.initBlock;
+          auto const baseCannotBeObject =
+            diter.baseCannotBeObject && siter.baseCannotBeObject;
           auto const changed =
             !equivalently_refined(key, diter.types.key) ||
             !equivalently_refined(value, diter.types.value) ||
@@ -96,7 +99,9 @@ bool merge_into(Iter& dst, const Iter& src, JoinOp join) {
             throws2 != diter.types.mayThrowOnNext ||
             keyLocal != diter.keyLocal ||
             baseLocal != diter.baseLocal ||
-            initBlock != diter.initBlock;
+            baseUpdated != diter.baseUpdated ||
+            initBlock != diter.initBlock ||
+            baseCannotBeObject != diter.baseCannotBeObject;
           diter.types =
             IterTypes {
               std::move(key),
@@ -105,9 +110,11 @@ bool merge_into(Iter& dst, const Iter& src, JoinOp join) {
               throws1,
               throws2
             };
+          diter.baseUpdated = baseUpdated;
           diter.baseLocal = baseLocal;
           diter.keyLocal = keyLocal;
           diter.initBlock = initBlock;
+          diter.baseCannotBeObject = baseCannotBeObject;
           return changed;
         }
       );
@@ -138,6 +145,7 @@ std::string show(const php::Func& f, const Iter& iter) {
       if (ti.keyLocal != NoLocalId) {
         folly::format(&str, " (key={})", local_string(f, ti.keyLocal));
       }
+      if (ti.baseUpdated) folly::format(&str, " (updated)");
       return str;
     }
   );

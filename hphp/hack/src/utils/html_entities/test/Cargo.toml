@@ -1,0 +1,22 @@
+# @generated
+# @autocargo from //hphp/hack/src/utils/html_entities/test:[bench,tests]
+# Signature<<29074ef743858400a9f8003908389c92629a9667>>
+[package]
+name = "tests"
+edition = "2018"
+version = "0.0.0"
+include = ["bench.rs", "utf32_to_utf8.rs"]
+
+[lib]
+path = "utf32_to_utf8.rs"
+
+[[bin]]
+name = "bench"
+path = "bench.rs"
+
+[dependencies]
+html_entities = { path = ".." }
+
+[dev-dependencies]
+pretty_assertions = "0.6"
+# @end of Signature<<29074ef743858400a9f8003908389c92629a9667>>

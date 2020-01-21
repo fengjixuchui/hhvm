@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Decl_defs
 open Decl_subst
 open Reordered_argument_collections
@@ -34,12 +34,12 @@ type inherited_members = {
     shallow class (this should only happen in partial-mode files when the
     assume_php setting is enabled). *)
 let get_shallow_classes_and_substs (lin : linearization) :
-    (mro_element * shallow_class * decl subst) Sequence.t =
+    (mro_element * shallow_class * decl_subst) Sequence.t =
   Sequence.filter_map lin (fun mro ->
       match Shallow_classes_heap.get mro.mro_name with
       | None -> None
       | Some cls ->
-        let subst = Decl_subst.make cls.sc_tparams mro.mro_type_args in
+        let subst = Decl_subst.make_decl cls.sc_tparams mro.mro_type_args in
         Some (mro, cls, subst))
 
 (** Return a linearization suitable for method lookup, where ancestors are
@@ -67,7 +67,7 @@ module SPairSet = Reordered_argument_set (Caml.Set.Make (struct
   (* Equivalent to polymorphic compare; written explicitly for perf reasons *)
   let compare (a1, a2) (b1, b2) =
     let r = String.compare a1 b1 in
-    if r <> 0 then
+    if Int.( <> ) r 0 then
       r
     else
       String.compare a2 b2
@@ -91,7 +91,7 @@ let methods ~static child_class_name lin =
         in
         let redecls = cls.sc_method_redeclarations in
         let redecls =
-          List.filter ~f:(fun x -> x.smr_static = static) redecls
+          List.filter ~f:(fun x -> Bool.equal x.smr_static static) redecls
         in
         let methods_from_redecls = DTT.redecl_list_to_method_seq redecls in
         let cid = mro.mro_name in
@@ -162,7 +162,7 @@ let filter_or_chown_privates
   Sequence.filter_map lin (fun DTT.{ id; inherit_when_private; elt } ->
       let ancestor_name = elt.ce_origin in
       let is_private_and_inherited =
-        ancestor_name <> child_class_name && is_private elt
+        String.( <> ) ancestor_name child_class_name && is_private elt
       in
       if is_private_and_inherited && not inherit_when_private then
         None
@@ -175,7 +175,7 @@ let filter_or_chown_privates
 let should_use_ancestor_sig child_class_name descendant_sig ancestor_sig =
   (* Any member directly declared in the child class overrides ancestor members,
      even if it is abstract and an ancestor member is concrete. *)
-  child_class_name <> descendant_sig.ce_origin
+  String.( <> ) child_class_name descendant_sig.ce_origin
   (* Otherwise, concrete members take priority over abstract members. *)
   && (not ancestor_sig.ce_abstract)
   && descendant_sig.ce_abstract
@@ -207,7 +207,7 @@ let merge_elts child_class_name ~earlier:descendant_sig ~later:ancestor_sig =
 let is_elt_canonical child_class_name elt =
   match elt.ce_visibility with
   | Vprotected _ -> false
-  | _ -> child_class_name = elt.ce_origin || not elt.ce_abstract
+  | _ -> String.equal child_class_name elt.ce_origin || not elt.ce_abstract
 
 let make_elt_cache class_name seq =
   LSTable.make
@@ -265,11 +265,12 @@ let consts child_class_name get_ancestor lin =
 let make_consts_cache class_name lin =
   LSTable.make
     lin
-    ~is_canonical:(fun cc -> cc.cc_origin = class_name || not cc.cc_abstract)
+    ~is_canonical:(fun cc ->
+      String.equal cc.cc_origin class_name || not cc.cc_abstract)
     ~merge:
       begin
         fun ~earlier ~later ->
-        if earlier.cc_origin = class_name then
+        if String.equal earlier.cc_origin class_name then
           earlier
         else if not earlier.cc_abstract then
           earlier
@@ -308,7 +309,8 @@ let make_typeconst_cache class_name lin =
   LSTable.make
     lin
     ~is_canonical:(fun t ->
-      t.ttc_origin = class_name || t.ttc_abstract = TCConcrete)
+      String.equal t.ttc_origin class_name
+      || equal_typeconst_abstract_kind t.ttc_abstract TCConcrete)
     ~merge:
       begin
         fun ~earlier:descendant_tc ~later:ancestor_tc ->
@@ -384,25 +386,14 @@ let make_pu_enum_cache lin =
   LSTable.make
     lin
     ~is_canonical:(fun _ -> false)
-    ~merge:begin
-             fun ~earlier:descendant_pu ~later:_ -> descendant_pu
-           end
+    ~merge:
+      begin
+        fun ~earlier:descendant_pu ~later:_ ->
+        descendant_pu
+      end
 
 let constructor_elt child_class_name (mro, cls, subst) =
-  let consistent =
-    if cls.sc_final then
-      FinalClass
-    else
-      let consistent_attr_present =
-        Attributes.mem
-          SN.UserAttributes.uaConsistentConstruct
-          cls.sc_user_attributes
-      in
-      if consistent_attr_present then
-        ConsistentConstruct
-      else
-        Inconsistent
-  in
+  let consistent = Decl_utils.consistent_construct_kind cls in
   let elt =
     Option.map
       cls.sc_constructor

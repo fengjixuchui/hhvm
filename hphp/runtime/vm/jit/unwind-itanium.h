@@ -47,31 +47,29 @@ namespace jit {
  * Used to pass values between unwinder code and catch traces.
  */
 struct UnwindRDS {
-  /* When a cleanup (non-side-exiting) catch trace is executing, this will
-   * point to the currently propagating exception, to be passed to
-   * _Unwind_Resume at the end of cleanup. */
-  _Unwind_Exception* exn;
+  /* PHP exception or nullptr if C++/SetM exception */
+  ObjectData* exn;
 
   /* Some helpers need to signal an error along with a TypedValue to be pushed
    * on the eval stack. When present, that value lives here. */
   TypedValue tv;
 
-  union {
-    /* When returning from a frame that had its m_savedRip smashed by
-     * the debugger, the return stub stashes values here to be used
-     * after running the appropriate catch trace. In addition, a
-     * non-nullptr debuggerReturnSP is used as the flag to
-     * endCatchHelper that it should perform a REQ_POST_DEBUGGER_RET
-     * rather than resuming the unwind process. */
-    TypedValue* debuggerReturnSP;
-    void* originalRip;
-  };
-  TYPE_SCAN_IGNORE_FIELD(originalRip);
-  Offset debuggerCallOff;
-
   /* This will be true iff the currently executing catch trace should side exit
    * to somewhere else in the TC, rather than resuming the unwind process. */
   bool doSideExit;
+
+  /* Whether the tc_unwind_resume should resume from resumeHandler unique stub
+   */
+  bool shouldCallResume;
+
+  /* Whether tc_unwind_resume should increment the vmpc
+   */
+  bool shouldSkipCall;
+
+  /* Indicates that we entered tc_unwind_resume directly rather than through
+   * itanium ABI
+   */
+  bool sideEnter;
 };
 extern rds::Link<UnwindRDS, rds::Mode::Normal> g_unwind_rds;
 
@@ -82,9 +80,7 @@ extern rds::Link<UnwindRDS, rds::Mode::Normal> g_unwind_rds;
 IMPLEMENT_OFF(Exn, exn)
 IMPLEMENT_OFF(TV, tv)
 IMPLEMENT_OFF(SideExit, doSideExit)
-IMPLEMENT_OFF(DebuggerCallOff, debuggerCallOff)
-IMPLEMENT_OFF(DebuggerReturnSP, debuggerReturnSP)
-IMPLEMENT_OFF(OriginalRip, originalRip)
+IMPLEMENT_OFF(SideEnter, sideEnter)
 #undef IMPLEMENT_OFF
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -116,17 +112,13 @@ struct TCUnwindInfo {
   ActRec* fp;
 };
 TCUnwindInfo tc_unwind_resume(ActRec* fp);
+TCUnwindInfo tc_unwind_resume_stublogue(ActRec* fp, TCA savedRip);
 
 /*
  * Called to initialize the unwinder and register an .eh_frame that covers the
  * TC.
  */
 void initUnwinder(TCA base, size_t size, PersonalityFunc fn);
-
-/*
- * Handle unknown exceptions for tc_unwind_personality
- */
-[[noreturn]] void unknownExceptionHandler();
 
 ///////////////////////////////////////////////////////////////////////////////
 

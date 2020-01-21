@@ -23,7 +23,7 @@ let run_search
       !sienv.SearchUtils.sie_provider
   then (
     (* The duration is already logged by SearchServiceRunner *)
-    SearchServiceRunner.run_completely genv sienv;
+    SearchServiceRunner.run_completely sienv;
     HackEventLogger.update_search_end t
   ) else
     ()
@@ -65,17 +65,11 @@ let save_state
     let save_decls =
       genv.local_config.ServerLocalConfig.store_decls_in_saved_state
     in
-    let dep_table_as_blob =
-      match ServerArgs.save_with_spec genv.ServerEnv.options with
-      | None -> false
-      | Some _ -> true
-    in
     let replace_state_after_saving =
       ServerArgs.replace_state_after_saving genv.ServerEnv.options
     in
     let result =
       SaveStateService.save_state
-        ~dep_table_as_blob
         ~save_decls
         env
         output_filename
@@ -101,25 +95,32 @@ let init
   let lazy_lev = get_lazy_level genv in
   (* Save the global settings for parsing, naming, and declaration.
      These settings cannot be changed during the lifetime of the server. *)
-  GlobalParserOptions.set env.popt;
-  GlobalNamingOptions.set env.tcopt;
+  Parser_options_provider.set env.popt;
+  Global_naming_options.set env.tcopt;
   let root = ServerArgs.root genv.options in
+  let (lazy_lev, init_approach) =
+    if GlobalOptions.tco_global_inference env.tcopt then (
+      Typing_global_inference.init ();
+      (Off, Full_init)
+    ) else
+      (lazy_lev, init_approach)
+  in
   let ((env, t), init_result, skip_post_init) =
     match (lazy_lev, init_approach) with
     | (_, Remote_init { worker_key; check_id }) ->
       if not (ServerArgs.check_mode genv.options) then
         failwith "Remote init is only supported in check (run once) mode";
       let bin_root = Path.make (Filename.dirname Sys.argv.(0)) in
-      let (errorl, t) =
-        ServerRemoteInit.init
-          genv.workers
-          env.tcopt
-          ~worker_key
-          ~check_id
-          ~bin_root
-          ~root
-      in
-      ( ({ env with errorl }, t),
+      let t = Unix.gettimeofday () in
+      ServerRemoteInit.init
+        genv.workers
+        env.tcopt
+        ~worker_key
+        ~check_id
+        ~bin_root
+        ~root;
+      let t = Hh_logger.log_duration "Remote type check" t in
+      ( (env, t),
         Load_state_declined "Out-of-band naming table initialization only",
         true )
     | (Init, Full_init) ->
@@ -203,11 +204,13 @@ let init
     let namespace_map = GlobalOptions.po_auto_namespace_map env.tcopt in
     env.local_symbol_table :=
       SymbolIndex.initialize
-        ~globalrev_opt:None
+        ~globalrev:None
+        ~gleanopt:env.gleanopt
         ~namespace_map
         ~provider_name:
           genv.local_config.ServerLocalConfig.symbolindex_search_provider
         ~quiet:genv.local_config.ServerLocalConfig.symbolindex_quiet
+        ~ignore_hh_version:(ServerArgs.ignore_hh_version genv.options)
         ~savedstate_file_opt:
           genv.local_config.ServerLocalConfig.symbolindex_file
         ~workers:genv.workers;

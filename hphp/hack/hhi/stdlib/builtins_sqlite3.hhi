@@ -47,7 +47,6 @@ class SQLite3Stmt {
   public function close();
   public function reset();
   public function clear();
-  public function bindparam($name, &$parameter, int $type = SQLITE3_TEXT);
   public function bindvalue($name, $parameter, int $type = SQLITE3_TEXT);
   public function execute();
 }

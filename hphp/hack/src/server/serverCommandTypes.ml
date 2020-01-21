@@ -87,8 +87,7 @@ module Done_or_retry = struct
       else
         Lwt.return_unit )
       >>= fun () ->
-      f ()
-      >>= fun result ->
+      f () >>= fun result ->
       match result with
       | Done x -> Lwt.return x
       | Retry -> call ~f ~depth:(depth + 1))
@@ -114,6 +113,7 @@ module Find_refs = struct
 
   type action =
     | Class of string
+    | Record of string
     | Member of string * member
     | Function of string
     | GConst of string
@@ -135,6 +135,13 @@ module Find_refs = struct
   type result_or_retry = result Done_or_retry.t
 
   type ide_result_or_retry = ide_result Done_or_retry.t
+
+  let member_to_string member =
+    match member with
+    | Method s -> "Method " ^ s
+    | Property s -> "Property " ^ s
+    | Class_const s -> "Class_consts " ^ s
+    | Typeconst s -> "Typeconst " ^ s
 end
 
 module Refactor = struct
@@ -203,6 +210,12 @@ module Go_to_type_definition = struct
   type result = (Pos.absolute * string) list
 end
 
+module Extract_standalone = struct
+  type target =
+    | Function of string
+    | Method of string * string
+end
+
 type file_input =
   | FileName of string
   | FileContent of string
@@ -230,7 +243,12 @@ type cst_search_input = {
 (* The following datatypes can be interpreted as follows:
  * MESSAGE_TAG : Argument type (sent from client to server) -> return type t *)
 type _ t =
-  | STATUS : bool * int option -> Server_status.t t
+  | STATUS : {
+      ignore_ide: bool;
+      remote: bool;
+      max_errors: int option;
+    }
+      -> Server_status.t t
   | STATUS_SINGLE :
       file_input * int option
       -> (Pos.absolute Errors.error_ list * int) t
@@ -238,21 +256,19 @@ type _ t =
   | INFER_TYPE_BATCH :
       (string * int * int * (int * int) option) list * bool
       -> string list t
-  | TYPED_AST : string -> string t
   | IDE_HOVER : string * int * int -> HoverService.result t
-  | LOCATE_SYMBOL :
-      (string * SearchUtils.si_kind)
-      -> (string * int * int * string option) option t
   | DOCBLOCK_AT :
       (string * int * int * string option * SearchUtils.si_kind)
       -> DocblockService.result t
   | DOCBLOCK_FOR_SYMBOL :
       (string * SearchUtils.si_kind)
       -> DocblockService.result t
-  | IDE_SIGNATURE_HELP : (file_input * int * int) -> Lsp.SignatureHelp.result t
-  | COVERAGE_LEVELS : file_input -> Coverage_level_defs.result t
-  | AUTOCOMPLETE : string -> AutocompleteTypes.result t
-  | IDENTIFY_FUNCTION : file_input * int * int -> Identify_symbol.result t
+  | IDE_SIGNATURE_HELP : (string * int * int) -> Lsp.SignatureHelp.result t
+  | COVERAGE_LEVELS : string * file_input -> Coverage_level_defs.result t
+  | COMMANDLINE_AUTOCOMPLETE : string -> AutocompleteTypes.result t
+  | IDENTIFY_FUNCTION :
+      string * file_input * int * int
+      -> Identify_symbol.result t
   | METHOD_JUMP :
       (string * Method_jumps.filter * bool)
       -> Method_jumps.result list t
@@ -260,11 +276,15 @@ type _ t =
       (string list * Method_jumps.filter)
       -> Method_jumps.result list t
   | FIND_REFS : Find_refs.action -> Find_refs.result_or_retry t
+  | GO_TO_IMPL : Find_refs.action -> Find_refs.result_or_retry t
   | IDE_FIND_REFS :
       labelled_file * int * int * bool
       -> Find_refs.ide_result_or_retry t
+  | IDE_GO_TO_IMPL :
+      labelled_file * int * int
+      -> Find_refs.ide_result_or_retry t
   | IDE_HIGHLIGHT_REFS :
-      file_input * int * int
+      string * file_input * int * int
       -> ServerHighlightRefsTypes.result t
   | REFACTOR : ServerRefactorTypes.action -> Refactor.result_or_retry t
   | IDE_REFACTOR : Ide_refactor_type.t -> Refactor.ide_result_or_retry t
@@ -273,8 +293,7 @@ type _ t =
       int list
       -> [ `Ok of ServerRefactorTypes.patch list | `Error of string ] t
   | REWRITE_LAMBDA_PARAMETERS : string list -> ServerRefactorTypes.patch list t
-  | REWRITE_RETURN_TYPE : string list -> ServerRefactorTypes.patch list t
-  | REWRITE_PARAMETER_TYPES : string list -> ServerRefactorTypes.patch list t
+  | REWRITE_TYPE_PARAMS_TYPE : string list -> ServerRefactorTypes.patch list t
   | IN_MEMORY_DEP_TABLE_SIZE : (int, string) Pervasives.result t
   | SAVE_NAMING :
       string
@@ -315,12 +334,17 @@ type _ t =
   | FUN_DEPS_BATCH : (string * int * int) list * bool -> string list t
   | FUN_IS_LOCALLABLE_BATCH : (string * int * int) list -> string list t
   | LIST_FILES_WITH_ERRORS : string list t
-  | FILE_DEPENDENCIES : string list -> string list t
-  | IDENTIFY_TYPES : file_input * int * int -> (Pos.absolute * string) list t
-  | EXTRACT_STANDALONE : Find_refs.action -> string t
+  | FILE_DEPENDENTS : string list -> string list t
+  | IDENTIFY_TYPES : labelled_file * int * int -> (Pos.absolute * string) list t
+  | EXTRACT_STANDALONE : Extract_standalone.target -> string t
+  | CONCATENATE_ALL : string list -> string t
   | GO_TO_DEFINITION : labelled_file * int * int -> Go_to_definition.result t
   | BIGCODE : string -> string t
   | PAUSE : bool -> unit t
+  | GLOBAL_INFERENCE :
+      ServerGlobalInferenceTypes.mode * string list
+      -> ServerGlobalInferenceTypes.result t
+  | VERBOSE : bool -> unit t
 
 let is_disconnect_rpc : type a. a t -> bool = function
   | DISCONNECT -> true
@@ -382,8 +406,8 @@ type 'a message_type =
    * sending RPC response. *)
   | Ping
 
-exception Read_command_timeout
 (** Timeout on reading the command from the client - client probably frozen. *)
+exception Read_command_timeout
 
 (* This data is marshalled by the server to a <pid>.fin file in certain cases *)
 (* of a controlled exit, so the client can know about it. *)

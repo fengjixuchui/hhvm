@@ -75,8 +75,8 @@ Type get_type_of_reified_list(const UserAttributeMap& ua) {
   assertx(numGenerics > 0);
   std::vector<Type> types(numGenerics,
                           RuntimeOption::EvalHackArrDVArrs ? TDictN : TDArrN);
-  return RuntimeOption::EvalHackArrDVArrs ? vec(types, folly::none)
-                                          : arr_packed_varray(types);
+  return RO::EvalHackArrDVArrs ? vec(types, ProvTag::Top)
+                               : arr_packed_varray(types, ProvTag::Top);
 }
 
 State pseudomain_entry_state(const php::Func* func) {
@@ -87,7 +87,7 @@ State pseudomain_entry_state(const php::Func* func) {
   ret.iters.resize(func->numIters);
   for (auto i = 0; i < ret.locals.size(); ++i) {
     // Named pseudomain locals are bound to $GLOBALS.
-    ret.locals[i] = func->locals[i].name ? TGen : TUninit;
+    ret.locals[i] = func->locals[i].name ? TCell : TUninit;
   }
   return ret;
 }
@@ -118,8 +118,6 @@ State entry_state(const Index& index, Context const ctx,
 
   auto locId = uint32_t{0};
   for (; locId < ctx.func->params.size(); ++locId) {
-    // Parameters may be Uninit (i.e. no InitCell).  Also note that if
-    // a function takes a param by ref, it might come in as a Cell.
     if (knownArgs) {
       if (locId < knownArgs->args.size()) {
         if (ctx.func->params[locId].isVariadic) {
@@ -127,8 +125,8 @@ State entry_state(const Index& index, Context const ctx,
                                  knownArgs->args.end());
           for (auto& p : pack) p = unctx(std::move(p));
           ret.locals[locId] = RuntimeOption::EvalHackArrDVArrs
-            ? vec(std::move(pack), folly::none)
-            : arr_packed_varray(std::move(pack));
+            ? vec(std::move(pack), ProvTag::Top)
+            : arr_packed_varray(std::move(pack), ProvTag::Top);
         } else {
           ret.locals[locId] = unctx(knownArgs->args[locId]);
         }
@@ -140,7 +138,7 @@ State entry_state(const Index& index, Context const ctx,
       continue;
     }
     auto const& param = ctx.func->params[locId];
-    if (ctx.func->isMemoizeImpl && !param.byRef) {
+    if (ctx.func->isMemoizeImpl) {
       auto const& constraint = param.typeConstraint;
       if (constraint.hasConstraint() && !constraint.isTypeVar() &&
           !constraint.isTypeConstant()) {
@@ -149,25 +147,14 @@ State entry_state(const Index& index, Context const ctx,
         continue;
       }
     }
-    ret.locals[locId] = param.byRef
-      ? TGen
-      : ctx.func->params[locId].isVariadic
-        ? (RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr)
-        : TCell;
+    // Because we throw a non-recoverable error for having fewer than the
+    // required number of args, all function parameters must be initialized.
+    ret.locals[locId] = ctx.func->params[locId].isVariadic
+      ? (RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr)
+      : TInitCell;
   }
 
-  /*
-   * Closures have a hidden local that's always the first (non-parameter)
-   * local, which stores the closure itself. Due to Class rescoping in the
-   * runtime, the strongest type we can assert here is <= Closure. We also need
-   * to look up the types of use vars from the index.
-   */
-  if (ctx.func->isClosureBody) {
-    assert(locId < ret.locals.size());
-    assert(ctx.func->cls);
-    auto const rcls = index.builtin_class(s_Closure.get());
-    ret.locals[locId++] = subObj(rcls);
-  }
+  // Closures have use vars, we need to look up their types from the index.
   auto const useVars = ctx.func->isClosureBody
     ? index.lookup_closure_use_vars(ctx.func)
     : CompactVector<Type>{};
@@ -204,7 +191,7 @@ State entry_state(const Index& index, Context const ctx,
   // parameters.
   for (auto locId = uint32_t{0}; locId < ctx.func->locals.size(); ++locId) {
     if (is_volatile_local(ctx.func, locId)) {
-      ret.locals[locId] = TGen;
+      ret.locals[locId] = TCell;
     }
   }
 
@@ -472,7 +459,7 @@ FuncAnalysis do_analyze_collect(const Index& index,
    * In this case, we leave the return type as TBottom, to indicate
    * the same to callers.
    */
-  assert(ai.inferredReturn.subtypeOf(BGen));
+  assert(ai.inferredReturn.subtypeOf(BCell));
 
   // For debugging, print the final input states for each block.
   FTRACE(2, "{}", [&] {
@@ -559,7 +546,7 @@ void expand_hni_prop_types(ClassAnalysis& clsAnalysis) {
      */
     auto const hniTy =
       clsAnalysis.anyInterceptable
-        ? TGen
+        ? TCell
         : from_hni_constraint(prop.userType);
     if (it->second.ty.subtypeOf(hniTy)) {
       it->second.ty = hniTy;
@@ -671,17 +658,6 @@ ClassAnalysis analyze_class(const Index& index, Context const ctx) {
     }
 
     if (!(prop.attrs & AttrPrivate)) continue;
-
-    // LateInitSoft properties can be anything because of the default value, so
-    // don't try to infer its type or use its type-constraint.
-    if (prop.attrs & AttrLateInitSoft) {
-      auto& elem = (prop.attrs & AttrStatic)
-        ? clsAnalysis.privateStatics[prop.name]
-        : clsAnalysis.privateProperties[prop.name];
-      elem.ty = TGen;
-      elem.tc = nullptr;
-      continue;
-    }
 
     if (isHNIBuiltin) {
       auto const hniTy = from_hni_constraint(prop.userType);

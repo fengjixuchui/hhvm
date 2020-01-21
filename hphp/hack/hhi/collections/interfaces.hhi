@@ -1,5 +1,7 @@
 <?hh
 
+namespace {
+
 /**
  * The base interface implemented for a collection type so that base information
  * such as count and its items are available. Every concrete class indirectly
@@ -79,6 +81,10 @@ interface OutputCollection<-Te> {
   public function addAll(<<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\Traversable::class)>> ?Traversable<Te> $traversable): this;
 }
 
+} // namespace
+
+namespace HH {
+
 /**
  * `Collection` is the primary collection interface for mutable collections.
  *
@@ -90,15 +96,19 @@ interface OutputCollection<-Te> {
  * @guide /hack/collections/introduction
  * @guide /hack/collections/interfaces
  */
-<<__Sealed(MutableMap::class, MutableSet::class, MutableVector::class)>>
-interface Collection<Te> extends ConstCollection<Te>,
-                                 OutputCollection<Te> {
+<<__Sealed(\MutableMap::class, \MutableSet::class, \MutableVector::class)>>
+interface Collection<Te> extends \ConstCollection<Te>,
+                                 \OutputCollection<Te> {
   /**
    * Removes all items from the collection.
    */
   <<__Rx, __Mutable, __ReturnsVoidToRx>>
   public function clear();
 }
+
+} // namespace HH
+
+namespace {
 
 /**
  * The interface for all `Set`s to enable access its values.
@@ -1525,9 +1535,7 @@ interface ConstSet<+Tv as arraykey> extends ConstCollection<Tv>,
   <<__Rx, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function zip<Tu>(
     <<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\Traversable::class)>> Traversable<Tu> $traversable
-  /* HH_FIXME[4110] need bottom type as generic */
-  /* HH_FIXME[4323] */
-  ): ConstSet<Pair<Tv, Tu>>;
+  ): ConstSet<nothing>;
   /**
    * Returns a `ConstSet` containing the first `n` values of the current
    * `ConstSet`.
@@ -1807,9 +1815,7 @@ interface MutableSet<Tv as arraykey> extends ConstSet<Tv>,
    */
   <<__Rx, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function zip<Tu>(<<__MaybeMutable, __OnlyRxIfImpl(HH\Rx\Traversable::class)>> Traversable<Tu> $traversable):
-  /* HH_FIXME[4110] need bottom type as generic */
-  /* HH_FIXME[4323] */
-  MutableSet<Pair<Tv, Tu>>;
+  MutableSet<nothing>;
   /**
    * Returns a `MutableSet` containing the first `n` values of the current
    * `MutableSet`.
@@ -1959,3 +1965,5 @@ interface MutableSet<Tv as arraykey> extends ConstSet<Tv>,
   <<__Rx, __MaybeMutable>> /* HH_FIXME[0001] */
   public function toDArray(): darray<Tv, Tv>;
 }
+
+} // namespace

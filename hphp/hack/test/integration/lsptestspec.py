@@ -5,18 +5,31 @@ import copy
 import difflib
 import inspect
 import itertools
-import lib2to3.patcomp  # pyre-ignore: Pyre can't find this
-import lib2to3.pgen2
-import lib2to3.pygram
-import lib2to3.pytree as pytree
-import operator
 import os.path
 import pprint
 import textwrap
-from typing import AbstractSet, Iterable, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    AbstractSet,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
+import libcst
+from libcst.metadata.position_provider import SyntacticPositionProvider
+from libcst.metadata.wrapper import MetadataWrapper
 from lspcommand import LspCommandProcessor, Transcript, TranscriptEntry
-from utils import Json, VariableMap, interpolate_variables, uninterpolate_variables
+from utils import (
+    Json,
+    VariableMap,
+    fixup_hhi_json,
+    interpolate_variables,
+    uninterpolate_variables,
+)
 
 
 _MessageSpec = Union[
@@ -35,6 +48,13 @@ _LspIdMap = Mapping[_MessageSpec, Json]
 _Traceback = Sequence[inspect.FrameInfo]
 
 
+class NoResponse:
+    """Indicates that no response should be sent (different from `None` since
+    `None` is a valid JSON value)."""
+
+    pass
+
+
 class LspTestSpec:
     """Represents an LSP test to be run, in a declarative fashion.
 
@@ -47,11 +67,17 @@ class LspTestSpec:
         self.name = name
         self._messages: Sequence["_MessageSpec"] = []
         self._ignored_notification_methods: AbstractSet[str] = set()
+        self._ignored_requests: Sequence[Tuple[str, Json]] = []
 
     def ignore_notifications(self, *, method: str) -> "LspTestSpec":
         ignored_notification_methods = set(self._ignored_notification_methods)
         ignored_notification_methods.add(method)
         return self._update(ignored_notification_methods=ignored_notification_methods)
+
+    def ignore_requests(self, *, method: str, params: Json) -> "LspTestSpec":
+        ignored_requests = list(self._ignored_requests)
+        ignored_requests.append((method, params))
+        return self._update(ignored_requests=ignored_requests)
 
     def request(
         self,
@@ -111,7 +137,12 @@ class LspTestSpec:
         return self._update(messages=messages)
 
     def wait_for_server_request(
-        self, method: str, params: Json, *, result: Json, comment: Optional[str] = None
+        self,
+        method: str,
+        params: Json,
+        *,
+        result: Union[Json, NoResponse],
+        comment: Optional[str] = None,
     ) -> "LspTestSpec":
         messages = list(self._messages)
         messages.append(
@@ -140,20 +171,41 @@ class LspTestSpec:
         messages.append(_WaitForHhServerReadySpec())
         return self._update(messages=messages)
 
+    def start_hh_server(self, comment: str) -> "LspTestSpec":
+        return self.request(
+            comment=comment,
+            method="$test/startHhServer",
+            params=None,
+            result=None,
+            powered_by="serverless_ide",
+        )
+
+    def stop_hh_server(self, comment: str) -> "LspTestSpec":
+        return self.request(
+            comment=comment,
+            method="$test/stopHhServer",
+            params=None,
+            result=None,
+            powered_by="serverless_ide",
+        )
+
     def write_to_disk(
-        self, *, comment: Optional[str] = None, uri: str, contents: str, notify: bool
+        self,
+        *,
+        comment: Optional[str] = None,
+        uri: str,
+        contents: Optional[str],
+        notify: bool,
+        wait: Optional[bool] = None,
     ) -> "LspTestSpec":
         """Write a file to disk in the middle of the LSP test.
 
-        Due to the asynchronous nature of these LSP tests, it may be a good idea
-        to add a `wait=True` to the previous request(s) you sent. Otherwise, the
-        request will be sent and the file will be written to disk almost
-        simultaneously, and the language server may read the new file from disk
-        by the time it processes the request, rather than the old file.
+        If `contents` is `None`, delete the file from disk.
 
         If `notify` is `True`, also send a `workspace/didChangeWatchedFiles`
         notification to the language server corresponding to the file you just
-        changed.
+        changed. The test will then wait for serverless IDE to process the file
+        change before proceeding, unless `wait` is set to `False`.
         """
         messages = list(self._messages)
         messages.append(
@@ -171,6 +223,23 @@ class LspTestSpec:
                     comment=comment,
                 )
             )
+            if wait is None:
+                wait = True
+            if wait:
+                messages.append(
+                    _WaitForNotificationSpec(
+                        comment=(
+                            f"Waiting for change to URI {uri} to be processed... "
+                            + "(set wait=False on the corresponding `write_to_disk` call "
+                            + "if this is undesirable)"
+                        ),
+                        method="telemetry/event",
+                        params={
+                            "type": 4,
+                            "message": "[client-ide] Done processing file changes",
+                        },
+                    )
+                )
         return self._update(messages=messages)
 
     def run(
@@ -207,12 +276,15 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
         self,
         messages: Optional[Sequence["_MessageSpec"]] = None,
         ignored_notification_methods: Optional[AbstractSet[str]] = None,
+        ignored_requests: Optional[Sequence[Tuple[str, Json]]] = None,
     ) -> "LspTestSpec":
         spec = copy.copy(self)
         if messages is not None:
             spec._messages = messages
         if ignored_notification_methods is not None:
             spec._ignored_notification_methods = ignored_notification_methods
+        if ignored_requests is not None:
+            spec._ignored_requests = ignored_requests
         return spec
 
     def _get_json_commands(
@@ -271,16 +343,20 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                     }
                 )
             elif isinstance(message, _WaitForRequestSpec):
+                params = {
+                    "method": message.method,
+                    "params": interpolate_variables(
+                        message.params, variables=variables
+                    ),
+                }
+                if not isinstance(message.result, NoResponse):
+                    params["result"] = message.result
                 json_commands.append(
                     {
                         "jsonrpc": "2.0",
                         "comment": message.comment,
                         "method": "$test/waitForRequest",
-                        "params": {
-                            "method": message.method,
-                            "params": message.params,
-                            "result": message.result,
-                        },
+                        "params": params,
                     }
                 )
             elif isinstance(message, _WaitForNotificationSpec):
@@ -289,16 +365,27 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                         "jsonrpc": "2.0",
                         "comment": message.comment,
                         "method": "$test/waitForNotification",
-                        "params": {"method": message.method, "params": message.params},
+                        "params": {
+                            "method": message.method,
+                            "params": interpolate_variables(
+                                message.params, variables=variables
+                            ),
+                        },
                     }
                 )
             elif isinstance(message, _WaitForResponseSpec):
-                [lsp_id] = [
+                lsp_ids = [
                     lsp_id
                     for previous_message, lsp_id in lsp_id_map.items()
                     if isinstance(previous_message, _RequestSpec)
                     and previous_message.wait_id == message.wait_id
                 ]
+                assert len(lsp_ids) == 1, (
+                    f"Should have had exactly one previous message with wait ID {message.wait_id!r}, "
+                    + "but got {len(lsp_ids)}"
+                )
+                [lsp_id] = lsp_ids
+
                 json_commands.append(
                     {
                         "jsonrpc": "2.0",
@@ -375,8 +462,8 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 raise ValueError(f"unhandled message type {message.__class__.__name__}")
 
         handled_entries |= set(self._find_ignored_transcript_ids(transcript))
-        yield from self._flag_unhandled_notifications(
-            handled_entries, transcript, lsp_id_map
+        yield from self._flag_unhandled_messages(
+            handled_entries, variables, transcript, lsp_id_map
         )
 
     def _verify_request(
@@ -396,9 +483,13 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
         else:
             request_description = f"Request with ID {lsp_id!r}"
 
+        # Because of the way hack allocates a different HHI folder for each running
+        # process, let's replace the standard HHI foldername
+        actual_result = fixup_hhi_json(actual_result)
         expected_result = interpolate_variables(
             payload=request.result, variables=variables
         )
+        expected_result = fixup_hhi_json(expected_result)
 
         if actual_result != expected_result:
             error_description = self._pretty_print_diff(
@@ -460,58 +551,22 @@ This was the associated request:
     def _find_line_range_for_function_call(
         self, file_contents: str, line_num_1idx: int
     ) -> Tuple[int, int]:
-        driver = lib2to3.pgen2.driver.Driver(
-            grammar=lib2to3.pygram.python_grammar, convert=pytree.convert
-        )
-        tree = driver.parse_string(file_contents)
-
-        function_call_pattern = lib2to3.patcomp.compile_pattern(  # pyre-ignore
-            # For arithmetic precedence reasons, any regular, non-arithmetic
-            # expression node is a 'power' node, since that has the most extreme
-            # precedence in some respect. The 'trailer' denotes that it's
-            # followed by an argument list.
-            "power< any* trailer< '(' [any] ')' > >"
-        )
-        all_function_call_chains = [
-            # For similar arithmetic precedence reasons, consecutive function
-            # call and member access expressions appear to form one big n-ary
-            # node, instead of a sequence of nested binary nodes.
-            node
-            for node in tree.pre_order()
-            if function_call_pattern.match(node)
-        ]
-        all_function_calls = [
-            # Flatten all elements of all chains into one list.
-            child
-            for chain in all_function_call_chains
-            for child in chain.children
-        ]
-        function_calls_with_line_ranges = [
-            (node, self._line_range_of_node(node)) for node in all_function_calls
-        ]
+        tree = libcst.parse_module(file_contents)
+        function_call_finder = _FunctionCallFinder()
+        MetadataWrapper(tree).visit(function_call_finder)
         function_calls_containing_line = [
-            (node, (max_line_num_1idx_incl - min_line_num_1idx_incl))
-            for (
-                node,
-                (min_line_num_1idx_incl, max_line_num_1idx_incl),
-            ) in function_calls_with_line_ranges
-            if min_line_num_1idx_incl <= line_num_1idx <= max_line_num_1idx_incl
+            (node, node_range)
+            for node, node_range in function_call_finder.function_calls
+            if node_range.start.line <= line_num_1idx <= node_range.end.line
         ]
-        innermost_function_call = min(
-            function_calls_containing_line, key=operator.itemgetter(1)
-        )[0]
-        (start_line_num_1idx_incl, end_line_num_1idx_incl) = self._line_range_of_node(
-            innermost_function_call
-        )
-        start_line_num_0idx_incl = start_line_num_1idx_incl - 1
-        end_line_num_0idx_incl = end_line_num_1idx_incl - 1
+        node_range = min(
+            function_calls_containing_line,
+            key=lambda node_with_range: node_with_range[1].end.line
+            - node_with_range[1].start.line,
+        )[1]
+        start_line_num_0idx_incl = node_range.start.line - 1
+        end_line_num_0idx_incl = node_range.end.line - 1
         return (start_line_num_0idx_incl, end_line_num_0idx_incl)
-
-    def _line_range_of_node(self, node: pytree.Base) -> Tuple[int, int]:
-        min_line_num_1idx_incl = node.get_lineno()
-        num_lines_in_node = str(node).strip().count("\n")
-        max_line_num_1idx_incl = node.get_lineno() + num_lines_in_node
-        return (min_line_num_1idx_incl, max_line_num_1idx_incl)
 
     def _pretty_print_file_context(
         self,
@@ -524,10 +579,9 @@ This was the associated request:
         context_lines = source_lines[
             start_line_num_0idx_incl : end_line_num_0idx_incl + 1
         ]
-        vertical_bar = "\N{BOX DRAWINGS LIGHT VERTICAL}"
         context_lines = [
             # Include the line number in a gutter for display.
-            f"{line_num:>5} {vertical_bar} {line_contents}"
+            f"{line_num:>5} | {line_contents}"
             for line_num, line_contents in enumerate(
                 context_lines, start=start_line_num_0idx_incl + 1
             )
@@ -583,13 +637,25 @@ make it match:
         for transcript_id, entry in transcript.items():
             if (
                 entry.received is not None
+                and "id" not in entry.received
                 and entry.received.get("method") in self._ignored_notification_methods
             ):
                 yield transcript_id
 
-    def _flag_unhandled_notifications(
+            if (
+                entry.received is not None
+                and "id" in entry.received
+                and "method" in entry.received
+                and "params" in entry.received
+                and (entry.received["method"], entry.received["params"])
+                in self._ignored_requests
+            ):
+                yield transcript_id
+
+    def _flag_unhandled_messages(
         self,
         handled_entries: AbstractSet[str],
+        variables: VariableMap,
         transcript: Transcript,
         lsp_id_map: _LspIdMap,
     ) -> Iterable["_ErrorDescription"]:
@@ -602,7 +668,7 @@ make it match:
                 continue
 
             if entry.sent is not None:
-                # We received a request and responded it it.
+                # We received a request and responded to it.
                 continue
 
             method = received["method"]
@@ -620,7 +686,12 @@ Here is the request payload:
 1) If this was unexpected, then the language server is buggy and should be
 fixed.
 
-2) To handle this request, add this directive to your test to wait for it and
+2) If all requests of type {method!r} with theses params should be ignored,
+add this directive anywhere in your test:
+
+    .{self.ignore_requests.__name__}(method={method!r}, params={params!r})
+
+3) To handle this request, add this directive to your test to wait for it and
 respond to it before proceeding:
 
     .{self.wait_for_server_request.__name__}(
@@ -632,6 +703,22 @@ respond to it before proceeding:
     )
 """
             else:
+                if any(
+                    isinstance(message, _WaitForNotificationSpec)
+                    and message.method == method
+                    and interpolate_variables(
+                        payload=message.params, variables=variables
+                    )
+                    == params
+                    for message in self._messages
+                ):
+                    # This was a notification we we explicitly waiting for, so skip
+                    # it.
+                    continue
+
+                uninterpolated_params = uninterpolate_variables(
+                    payload=params, variables=variables
+                )
                 description = f"""\
 An unexpected notification of type {method!r} was sent by the language server.
 Here is the notification payload:
@@ -652,7 +739,7 @@ to your test to wait for it before proceeding:
 
     .{self.wait_for_notification.__name__}(
         method={method!r},
-        params={params!r},
+        params={uninterpolated_params!r},
     )
 """
 
@@ -753,6 +840,38 @@ Remove this `debug` request once you're done debugging.
 ### Internal. ###
 
 
+class _FunctionCallFinder(libcst.CSTVisitor):
+    """Find function calls and their locations in the given syntax tree.
+
+    Chained function calls include the entire chain as the callee. For example,
+    the chain `x().y().z()` might include `x().y().z` as the callee and `()` as
+    the function call itself. But in the case of function call chains, we really
+    want just the range covered by the parentheses.
+
+    However, that's not directly available in `libcst`, so we approximate this
+    by finding the location of `z` and assume that's where the function call
+    starts.
+    """
+
+    METADATA_DEPENDENCIES = (SyntacticPositionProvider,)
+
+    def __init__(self) -> None:
+        self.function_calls: List[Tuple[libcst.Call, libcst.CodeRange]] = []
+
+    def visit_Call(self, node: libcst.Call) -> None:
+        node_range = self.get_metadata(SyntacticPositionProvider, node)
+
+        start_node = node.func
+        while isinstance(start_node, libcst.Attribute):
+            start_node = start_node.attr
+        start_node_range = self.get_metadata(SyntacticPositionProvider, start_node)
+        start_position = start_node_range.start
+        end_position = node_range.end
+        node_range = libcst.CodeRange(start=start_position, end=end_position)
+
+        self.function_calls.append((node, node_range))
+
+
 class _RequestSpec:
     __slots__ = [
         "method",
@@ -801,7 +920,12 @@ class _WaitForRequestSpec:
     __slots__ = ["method", "params", "result", "comment"]
 
     def __init__(
-        self, *, method: str, params: Json, result: Json, comment: Optional[str]
+        self,
+        *,
+        method: str,
+        params: Json,
+        result: Union[Json, NoResponse],
+        comment: Optional[str],
     ) -> None:
         self.method = method
         self.params = params

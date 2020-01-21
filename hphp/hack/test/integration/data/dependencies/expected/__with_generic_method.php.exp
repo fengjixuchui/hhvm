@@ -1,17 +1,14 @@
 <?hh
 class Regular {
-
-
   public function generic_method<T>(T $arg): void {
-    throw new Exception();
+    throw new \Exception();
   }
 }
 function with_generic_method(int $arg): void {
   $r = new Regular();
   $r->generic_method($arg);
 }
-function extract_standalone_make_default<T>(): T {
-  throw new Exception();
+<<__Rx>>
+function extract_standalone_make_default(): nothing {
+  throw new \Exception();
 }
-
-

@@ -1,13 +1,5 @@
 <?hh
 
-/*
-   +-------------------------------------------------------------+
-   | Copyright (c) 2015 Facebook, Inc. (http://www.facebook.com) |
-   +-------------------------------------------------------------+
-*/
-
-error_reporting(-1);
-
 class Widget
 {
     public function iDoit()
@@ -23,7 +15,6 @@ class Widget
     }
 ///*
     public function __call($name, $arguments)
-//    public function __call(&$name, &$arguments)
     {
         echo "Calling instance method >$name<\n";
         var_dump($arguments);
@@ -32,14 +23,18 @@ class Widget
     }
 //*/
 }
+<<__EntryPoint>>
+function main_entry(): void {
+  error_reporting(-1);
 
-$obj = new Widget;
-$v = $obj->iDoit();
-$obj->__call('iDoit', []);
+  $obj = new Widget;
+  $v = $obj->iDoit();
+  $obj->__call('iDoit', []);
 
-$v = $obj->iMethod(10, TRUE, "abc");
-var_dump($v);
-$obj->__call('iMethod', array(10, TRUE, "abc"));
-$obj->__call('123#$%', []);
+  $v = $obj->iMethod(10, TRUE, "abc");
+  var_dump($v);
+  $obj->__call('iMethod', array(10, TRUE, "abc"));
+  $obj->__call('123#$%', []);
 
-$v = Widget::sDoit();
+  $v = Widget::sDoit();
+}

@@ -17,7 +17,6 @@
 #include "hphp/runtime/vm/jit/irlower-internal.h"
 
 #include "hphp/runtime/base/memory-manager.h"
-#include "hphp/runtime/base/ref-data.h"
 
 #include "hphp/runtime/vm/jit/abi.h"
 #include "hphp/runtime/vm/jit/analysis.h"
@@ -89,7 +88,7 @@ void cgStLocRange(IRLS& env, const IRInstruction* inst) {
       auto const sf = v.makeReg();
 
       storeTV(v, i[0], loc, val);
-      v << subqi{int32_t{sizeof(Cell)}, i, res, v.makeReg()};
+      v << subqi{int32_t{sizeof(TypedValue)}, i, res, v.makeReg()};
       v << cmpq{res, nreg, sf};
       return sf;
     },
@@ -181,8 +180,9 @@ const Func* funcFromFp(const SSATmp* fp) {
     inst = resolveFpDefLabel(fp);
     assertx(inst);
   }
-  assertx(inst->is(DefFP, DefInlineFP));
+  assertx(inst->is(DefFP, DefFuncEntryFP, DefInlineFP));
   if (inst->is(DefFP)) return inst->marker().func();
+  if (inst->is(DefFuncEntryFP)) return inst->extra<DefFuncEntryFP>()->func;
   if (inst->is(DefInlineFP)) return inst->extra<DefInlineFP>()->target;
   always_assert(false);
 }
@@ -221,46 +221,29 @@ void cgDbgTrashMem(IRLS& env, const IRInstruction* inst) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void cgLdRef(IRLS& env, const IRInstruction* inst) {
-  auto const ptr = srcLoc(env, inst, 0).reg();
-  loadTV(vmain(env), inst->dst(), dstLoc(env, inst, 0),
-         ptr[RefData::cellOffset()]);
-}
-
-void cgStRef(IRLS& env, const IRInstruction* inst) {
-  auto const ptr = srcLoc(env, inst, 0).reg();
-  auto const valLoc = srcLoc(env, inst, 1);
-  always_assert(!srcLoc(env, inst, 1).isFullSIMD());
-
-  storeTV(vmain(env), ptr[RefData::cellOffset()], valLoc, inst->src(1));
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-void cgLdElem(IRLS& env, const IRInstruction* inst) {
-  auto const rbase = srcLoc(env, inst, 0).reg();
-  auto const ridx = srcLoc(env, inst, 1).reg();
-  auto const idx = inst->src(1);
+void cgLdClsInitElem(IRLS& env, const IRInstruction* inst) {
+  auto const base = srcLoc(env, inst, 0).reg();
+  auto const idx = inst->extra<IndexData>()->index;
   auto& v = vmain(env);
 
-  if (idx->hasConstVal() && deltaFits(idx->intVal(), sz::dword)) {
-    loadTV(v, inst->dst(), dstLoc(env, inst, 0), rbase[idx->intVal()]);
-  } else {
-    loadTV(v, inst->dst(), dstLoc(env, inst, 0), rbase[ridx]);
-  }
+  auto const lval_offset = ObjectProps::offsetOf(idx);
+
+  loadTV(v, inst->dst()->type(), dstLoc(env, inst, 0),
+         base[lval_offset.typeOffset()],
+         base[lval_offset.dataOffset()]);
 }
 
-void cgStElem(IRLS& env, const IRInstruction* inst) {
-  auto const rbase = srcLoc(env, inst, 0).reg();
-  auto const ridx = srcLoc(env, inst, 1).reg();
-  auto const idx = inst->src(1);
+void cgStClsInitElem(IRLS& env, const IRInstruction* inst) {
+  auto const base = srcLoc(env, inst, 0).reg();
+  auto const idx = inst->extra<IndexData>()->index;
   auto& v = vmain(env);
 
-  if (idx->hasConstVal() && deltaFits(idx->intVal(), sz::dword)) {
-    storeTV(v, rbase[idx->intVal()], srcLoc(env, inst, 2), inst->src(2));
-  } else {
-    storeTV(v, rbase[ridx], srcLoc(env, inst, 2), inst->src(2));
-  }
+  auto const lval_offset = ObjectProps::offsetOf(idx);
+
+  storeTV(v, inst->src(1)->type(),
+          srcLoc(env, inst, 1),
+          base[lval_offset.typeOffset()],
+          base[lval_offset.dataOffset()]);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -359,13 +342,15 @@ void cgLdPropAddr(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
   auto const dstLoc = irlower::dstLoc(env, inst, 0);
   auto const valReg = dstLoc.reg(tv_lval::val_idx);
-  auto const propPtr =
-    srcLoc(env, inst, 0).reg()[inst->extra<LdPropAddr>()->offsetBytes];
 
-  v << lea{propPtr, valReg};
+  auto const src = srcLoc(env, inst, 0).reg();
+  auto const offs = ObjectProps::offsetOf(inst->extra<LdPropAddr>()->index)
+    .shift(sizeof(ObjectData));
+
+  v << lea{src[offs.dataOffset()], valReg};
   if (wide_tv_val) {
     static_assert(TVOFF(m_data) == 0, "");
-    v << lea{propPtr + TVOFF(m_type), dstLoc.reg(tv_lval::type_idx)};
+    v << lea{src[offs.typeOffset()], dstLoc.reg(tv_lval::type_idx)};
   }
 }
 
@@ -374,18 +359,19 @@ void cgLdInitPropAddr(IRLS& env, const IRInstruction* inst) {
   auto const obj = srcLoc(env, inst, 0).reg();
   auto& v = vmain(env);
 
-  auto const propPtr = obj[inst->extra<LdInitPropAddr>()->offsetBytes];
+  auto const offs = ObjectProps::offsetOf(inst->extra<LdInitPropAddr>()->index)
+    .shift(sizeof(ObjectData));
 
   if (dstLoc.hasReg(tv_lval::val_idx)) {
-    v << lea{propPtr, dstLoc.reg(tv_lval::val_idx)};
+    v << lea{obj[offs.dataOffset()], dstLoc.reg(tv_lval::val_idx)};
   }
   if (wide_tv_val && dstLoc.hasReg(tv_lval::type_idx)) {
     static_assert(TVOFF(m_data) == 0, "");
-    v << lea{propPtr + TVOFF(m_type), dstLoc.reg(tv_lval::type_idx)};
+    v << lea{obj[offs.typeOffset()], dstLoc.reg(tv_lval::type_idx)};
   }
 
   auto const sf = v.makeReg();
-  emitCmpTVType(v, sf, KindOfUninit, propPtr + TVOFF(m_type));
+  emitCmpTVType(v, sf, KindOfUninit, obj[offs.typeOffset()]);
   v << jcc{CC_Z, sf, {label(env, inst->next()), label(env, inst->taken())}};
 }
 

@@ -84,7 +84,7 @@ Object createAndConstructThrowable(Class* cls, const Variant& message) {
   auto const message_prop = inst->propLvalAtOffset(s_messageIdx);
   assertx(isStringType(message_prop.type()));
   assertx(message_prop.val().pstr == staticEmptyString());
-  cellDup(*message.toCell(), message_prop);
+  tvDup(*message.asTypedValue(), message_prop);
   return inst;
 }
 
@@ -105,6 +105,11 @@ Func* s_nullCtor = nullptr;
   Class* s_ ## cls ## Class = nullptr;
 SYSTEMLIB_CLASSES(DEFINE_SYSTEMLIB_CLASS)
 #undef DEFINE_SYSTEMLIB_CLASS
+
+#define DEFINE_SYSTEMLIB_HH_CLASS(cls)       \
+  Class* s_HH_ ## cls ## Class = nullptr;
+SYSTEMLIB_HH_CLASSES(DEFINE_SYSTEMLIB_HH_CLASS)
+#undef DEFINE_SYSTEMLIB_HH_CLASS
 
 Class* s_ThrowableClass;
 Class* s_BaseExceptionClass;
@@ -327,8 +332,7 @@ Func* setupNullClsMethod(Func* f, Class* cls, StringData* name) {
   auto clone = f->clone(cls, name);
   clone->setNewFuncId();
   clone->setAttrs(static_cast<Attr>(
-                    AttrPublic | AttrNoInjection | AttrRequiresThis |
-                    AttrDynamicallyCallable) |
+                    AttrPublic | AttrNoInjection | AttrDynamicallyCallable) |
                     rxMakeAttr(RxLevel::Rx, false));
   return clone;
 }

@@ -157,11 +157,12 @@ static bool variantToGMPData(const char* const fnCaller,
   case KindOfDict:
   case KindOfPersistentKeyset:
   case KindOfKeyset:
-  case KindOfPersistentShape:
-  case KindOfShape:
+  case KindOfPersistentDArray:
+  case KindOfDArray:
+  case KindOfPersistentVArray:
+  case KindOfVArray:
   case KindOfPersistentArray:
   case KindOfArray:
-  case KindOfRef:
   case KindOfResource:
   case KindOfFunc:
   case KindOfClass:
@@ -249,7 +250,7 @@ static Variant HHVM_FUNCTION(gmp_and,
 
 
 static void HHVM_FUNCTION(gmp_clrbit,
-                          VRefParam& data,
+                          Variant& data,
                           int64_t index) {
 
   if (index < 0) {
@@ -1119,7 +1120,7 @@ static Variant HHVM_FUNCTION(gmp_scan1,
 
 
 static void HHVM_FUNCTION(gmp_setbit,
-                          VRefParam& data,
+                          Variant& data,
                           int64_t index,
                           bool bitOn /* = true*/) {
   if (index < 0) {

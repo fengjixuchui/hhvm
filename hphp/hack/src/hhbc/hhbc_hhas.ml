@@ -55,7 +55,6 @@ let string_of_basic instruction =
   | Nop -> "Nop"
   | EntryNop -> "EntryNop"
   | PopC -> "PopC"
-  | PopV -> "PopV"
   | PopU -> "PopU"
   | Dup -> "Dup"
 
@@ -187,7 +186,6 @@ let string_of_operator instruction =
   | CastDouble -> "CastDouble"
   | CastString -> "CastString"
   | CastArray -> "CastArray"
-  | CastObject -> "CastObject"
   | CastVec -> "CastVec"
   | CastDict -> "CastDict"
   | CastKeyset -> "CastKeyset"
@@ -219,7 +217,6 @@ let string_of_get x =
   | PushL id -> sep ["PushL"; string_of_local_id id]
   | CGetG -> "CGetG"
   | CGetS -> "CGetS"
-  | VGetL id -> sep ["VGetL"; string_of_local_id id]
   | ClassGetC -> "ClassGetC"
   | ClassGetTS -> "ClassGetTS"
 
@@ -300,8 +297,7 @@ let string_of_mutator x =
   | PopL id -> sep ["PopL"; string_of_local_id id]
   | SetG -> "SetG"
   | SetS -> "SetS"
-  | SetOpL (id, op) ->
-    sep ["SetOpL"; string_of_local_id id; string_of_eq_op op]
+  | SetOpL (id, op) -> sep ["SetOpL"; string_of_local_id id; string_of_eq_op op]
   | SetOpG op -> sep ["SetOpG"; string_of_eq_op op]
   | SetOpS op -> sep ["SetOpS"; string_of_eq_op op]
   | IncDecL (id, op) ->
@@ -345,13 +341,13 @@ let string_of_list_of_bools l =
   "\"" ^ String.concat ~sep:"" (List.map ~f:bool_to_str l) ^ "\""
 
 let string_of_fcall_args fcall_args =
-  let (flags, num_args, num_rets, by_refs, async_eager_label) = fcall_args in
+  let (flags, num_args, num_rets, inouts, async_eager_label) = fcall_args in
   sep
     [
       string_of_fcall_flags flags;
       string_of_int num_args;
       string_of_int num_rets;
-      string_of_list_of_bools by_refs;
+      string_of_list_of_bools inouts;
       string_of_optional_label async_eager_label;
     ]
 
@@ -394,10 +390,20 @@ let string_of_control_flow instruction =
 
 let string_of_iterator_id i = Iterator.to_string i
 
+let string_of_iter_args iter_args =
+  let iter_id = string_of_iterator_id iter_args.iter_id in
+  let key_id =
+    match iter_args.key_id with
+    | Some k -> "K:" ^ string_of_local_id k
+    | None -> "NK"
+  in
+  let val_id = "V:" ^ string_of_local_id iter_args.val_id in
+  sep [iter_id; key_id; val_id]
+
 let string_of_null_flavor nf =
   match nf with
-  | Ast_defs.OG_nullthrows -> "NullThrows"
-  | Ast_defs.OG_nullsafe -> "NullSafe"
+  | Hhbc_ast.Obj_null_throws -> "NullThrows"
+  | Hhbc_ast.Obj_null_safe -> "NullSafe"
 
 let string_of_class_kind ck =
   match ck with
@@ -444,15 +450,9 @@ let string_of_final instruction =
   match instruction with
   | QueryM (n, op, mk) ->
     sep
-      [
-        "QueryM";
-        string_of_int n;
-        QueryOp.to_string op;
-        string_of_member_key mk;
-      ]
+      ["QueryM"; string_of_int n; QueryOp.to_string op; string_of_member_key mk]
   | UnsetM (n, mk) -> sep ["UnsetM"; string_of_int n; string_of_member_key mk]
-  | SetM (i, mk) ->
-    sep ["SetM"; string_of_param_num i; string_of_member_key mk]
+  | SetM (i, mk) -> sep ["SetM"; string_of_param_num i; string_of_member_key mk]
   | SetOpM (i, op, mk) ->
     sep
       [
@@ -478,12 +478,6 @@ let string_of_final instruction =
 | SetOpM of num_params  * eq_op * MemberKey.t
 *)
 
-let string_of_param_locations pl =
-  if List.length pl = 0 then
-    ""
-  else
-    "<" ^ String.concat ~sep:", " (List.map ~f:string_of_int pl) ^ ">"
-
 let string_of_call instruction =
   match instruction with
   | NewObj -> "NewObj"
@@ -502,13 +496,12 @@ let string_of_call instruction =
         string_of_int n3;
         SU.quote_string id;
       ]
-  | FCallClsMethod (fcall_args, pl, is_log_as_dynamic_call) ->
+  | FCallClsMethod (fcall_args, is_log_as_dynamic_call) ->
     sep
       [
         "FCallClsMethod";
         string_of_fcall_args fcall_args;
         "\"\"";
-        string_of_param_locations pl;
         string_of_is_log_as_dynamic_call_op is_log_as_dynamic_call;
       ]
   | FCallClsMethodD (fcall_args, cid, mid) ->
@@ -539,24 +532,17 @@ let string_of_call instruction =
       ]
   | FCallCtor fcall_args ->
     sep ["FCallCtor"; string_of_fcall_args fcall_args; "\"\""]
-  | FCallFunc (fcall_args, pl) ->
-    sep
-      [
-        "FCallFunc";
-        string_of_fcall_args fcall_args;
-        string_of_param_locations pl;
-      ]
+  | FCallFunc fcall_args -> sep ["FCallFunc"; string_of_fcall_args fcall_args]
   | FCallFuncD (fcall_args, id) ->
     sep
       ["FCallFuncD"; string_of_fcall_args fcall_args; string_of_function_id id]
-  | FCallObjMethod (fcall_args, nf, pl) ->
+  | FCallObjMethod (fcall_args, nf) ->
     sep
       [
         "FCallObjMethod";
         string_of_fcall_args fcall_args;
         "\"\"";
         string_of_null_flavor nf;
-        string_of_param_locations pl;
       ]
   | FCallObjMethodD (fcall_args, nf, id) ->
     sep
@@ -648,109 +634,21 @@ let iterator_instruction_name_prefix instruction =
   let iterator_instruction_name =
     match instruction with
     | IterInit _ -> "IterInit"
-    | LIterInit _ -> "LIterInit"
-    | IterInitK _ -> "IterInitK"
-    | LIterInitK _ -> "LIterInitK"
     | IterNext _ -> "IterNext"
-    | LIterNext _ -> "LIterNext"
-    | IterNextK _ -> "IterNextK"
-    | LIterNextK _ -> "LIterNextK"
     | IterFree _ -> "IterFree"
-    | LIterFree _ -> "LIterFree"
-    | _ -> failwith "invalid iterator instruction"
   in
   iterator_instruction_name ^ " "
 
 let string_of_iterator instruction =
   match instruction with
-  | IterInit (id, label, value) ->
+  | IterInit (iter_args, label)
+  | IterNext (iter_args, label) ->
     iterator_instruction_name_prefix instruction
-    ^ string_of_iterator_id id
+    ^ string_of_iter_args iter_args
     ^ " "
     ^ string_of_label label
-    ^ " "
-    ^ string_of_local_id value
-  | LIterInit (id, base, label, value) ->
-    iterator_instruction_name_prefix instruction
-    ^ string_of_iterator_id id
-    ^ " "
-    ^ string_of_local_id base
-    ^ " "
-    ^ string_of_label label
-    ^ " "
-    ^ string_of_local_id value
-  | IterInitK (id, label, key, value) ->
-    iterator_instruction_name_prefix instruction
-    ^ string_of_iterator_id id
-    ^ " "
-    ^ string_of_label label
-    ^ " "
-    ^ string_of_local_id key
-    ^ " "
-    ^ string_of_local_id value
-  | LIterInitK (id, base, label, key, value) ->
-    iterator_instruction_name_prefix instruction
-    ^ string_of_iterator_id id
-    ^ " "
-    ^ string_of_local_id base
-    ^ " "
-    ^ string_of_label label
-    ^ " "
-    ^ string_of_local_id key
-    ^ " "
-    ^ string_of_local_id value
-  | IterNext (id, label, value) ->
-    iterator_instruction_name_prefix instruction
-    ^ string_of_iterator_id id
-    ^ " "
-    ^ string_of_label label
-    ^ " "
-    ^ string_of_local_id value
-  | LIterNext (id, base, label, value) ->
-    iterator_instruction_name_prefix instruction
-    ^ string_of_iterator_id id
-    ^ " "
-    ^ string_of_local_id base
-    ^ " "
-    ^ string_of_label label
-    ^ " "
-    ^ string_of_local_id value
-  | IterNextK (id, label, key, value) ->
-    iterator_instruction_name_prefix instruction
-    ^ string_of_iterator_id id
-    ^ " "
-    ^ string_of_label label
-    ^ " "
-    ^ string_of_local_id key
-    ^ " "
-    ^ string_of_local_id value
-  | LIterNextK (id, base, label, key, value) ->
-    iterator_instruction_name_prefix instruction
-    ^ string_of_iterator_id id
-    ^ " "
-    ^ string_of_local_id base
-    ^ " "
-    ^ string_of_label label
-    ^ " "
-    ^ string_of_local_id key
-    ^ " "
-    ^ string_of_local_id value
   | IterFree id ->
     iterator_instruction_name_prefix instruction ^ string_of_iterator_id id
-  | LIterFree (id, base) ->
-    iterator_instruction_name_prefix instruction
-    ^ string_of_iterator_id id
-    ^ " "
-    ^ string_of_local_id base
-  | IterBreak (label, iterlist) ->
-    let map_item (kind, id) =
-      let id = string_of_iterator_id id in
-      match kind with
-      | Iter -> "(Iter) " ^ id
-      | LIter -> "(LIter) " ^ id
-    in
-    let values = String.concat ~sep:", " (List.rev_map ~f:map_item iterlist) in
-    "IterBreak " ^ string_of_label label ^ " <" ^ values ^ ">"
 
 let string_of_try instruction =
   match instruction with
@@ -786,8 +684,6 @@ let string_of_include_eval_define = function
   | ReqOnce -> "ReqOnce"
   | ReqDoc -> "ReqDoc"
   | Eval -> "Eval"
-  | AliasCls (c1, c2) ->
-    sep ["AliasCls"; SU.quote_string c1; SU.quote_string c2]
   | DefCls id -> sep ["DefCls"; string_of_class_num id]
   | DefClsNop id -> sep ["DefClsNop"; string_of_class_num id]
   | DefRecord id -> sep ["DefRecord"; string_of_class_num id]
@@ -982,19 +878,13 @@ and string_of_uop = function
   | Ast_defs.Uminus -> "-"
   | Ast_defs.Uincr -> "++"
   | Ast_defs.Udecr -> "--"
-  | Ast_defs.Uref -> "&"
   | Ast_defs.Usilence -> "@"
   | Ast_defs.Upincr
   | Ast_defs.Updecr ->
     failwith "string_of_uop - should have been captures earlier"
 
 and string_of_hint ~ns h =
-  let h =
-    Emit_type_hint.fmt_hint
-      ~tparams:[]
-      ~namespace:Namespace_env.empty_with_default
-      h
-  in
+  let h = Emit_type_hint.fmt_hint ~tparams:[] h in
   let h =
     if ns then
       h
@@ -1013,12 +903,6 @@ and string_of_import_flavor import_flavor =
 and string_of_is_variadic b =
   if b then
     "..."
-  else
-    ""
-
-and string_of_is_reference b =
-  if b then
-    "&"
   else
     ""
 
@@ -1054,9 +938,7 @@ and string_of_fun ~env f use_list =
         else
           param_text ^ " "
       in
-      let param_text =
-        param_text ^ string_of_is_reference p.A.param_is_reference ^ name
-      in
+      let param_text = param_text ^ name in
       Some (param_text ^ default_val)
   in
   let args =
@@ -1197,6 +1079,23 @@ and string_of_param_default_value ~env expr =
     let e2 = string_of_param_default_value ~env e2 in
     e1 ^ s ^ e2
   in
+  (* If we are in the global namespace and the id is a global id, strip \ *)
+  let adjust_id id =
+    let id =
+      match env.codegen_env with
+      | Some env ->
+        let nsenv = Emit_env.get_namespace env in
+        if
+          nsenv.Namespace_env.ns_name = None
+          && (not @@ String.contains (SU.strip_global_ns id) '\\')
+        then
+          SU.strip_global_ns id
+        else
+          Utils.add_ns id
+      | _ -> id
+    in
+    Php_escaping.escape id
+  in
   let fmt_class_name ~is_class_constant cn =
     let cn =
       if SU.Xhp.is_xhp (Utils.strip_ns cn) then
@@ -1237,9 +1136,7 @@ and string_of_param_default_value ~env expr =
     else
       let id =
         match env with
-        | Some env ->
-          Hhbc_id.Class.to_raw_string
-          @@ Hhbc_id.Class.elaborate_id (Emit_env.get_namespace env) (p, id)
+        | Some _ -> Hhbc_id.Class.(from_ast_name id |> to_raw_string)
         | _ -> id
       in
       if should_format then
@@ -1289,17 +1186,7 @@ and string_of_param_default_value ~env expr =
   in
   let escape_fn c = escape_char_for_printing c ^ Php_escaping.escape_char c in
   match snd expr with
-  | A.Id (p, id) ->
-    let id =
-      match env.codegen_env with
-      | Some env when SU.has_ns id ->
-        let id =
-          Hhbc_id.Const.elaborate_id (Emit_env.get_namespace env) (p, id)
-        in
-        "\\" ^ Hhbc_id.Const.to_raw_string id
-      | _ -> id
-    in
-    Php_escaping.escape id
+  | A.Id (_, id) -> adjust_id id
   | A.Lvar (_, litstr) -> Php_escaping.escape (Local_id.get_name litstr)
   | A.Float litstr -> SU.Float.with_scientific_notation litstr
   | A.Int litstr -> SU.Integer.to_decimal litstr
@@ -1345,27 +1232,49 @@ and string_of_param_default_value ~env expr =
     let e1 = string_of_param_default_value ~env e1 in
     let e2 = string_of_param_default_value ~env e2 in
     e1 ^ " " ^ bop ^ " " ^ e2
-  | A.New ((_, A.CIexpr e), _, es, ues, _)
-  | A.Call (_, e, _, es, ues) ->
-    let e =
-      String_utils.lstrip (string_of_param_default_value ~env e) "\\\\"
+  | A.Call (_, (_, A.Id (_, call_id)), _, es, unpacked_element) ->
+    let call_id = adjust_id call_id in
+    let call_id = String_utils.lstrip call_id "\\\\" in
+    let es =
+      match unpacked_element with
+      | None -> es
+      | Some e -> es @ [e]
     in
-    let es = List.map ~f:(string_of_param_default_value ~env) (es @ ues) in
+    let es = List.map ~f:(string_of_param_default_value ~env) es in
+    call_id ^ "(" ^ String.concat ~sep:", " es ^ ")"
+  | A.New ((_, A.CIexpr (_, A.Id (_, cname))), _, es, unpacked_element, _) ->
+    let class_id =
+      adjust_id
+        (Hhbc_id.Class.from_ast_name cname |> Hhbc_id.Class.to_raw_string)
+    in
+    let class_id = String_utils.lstrip class_id "\\\\" in
+    let es =
+      match unpacked_element with
+      | None -> es
+      | Some e -> es @ [e]
+    in
+    let es = List.map ~f:(string_of_param_default_value ~env) es in
+    "new " ^ class_id ^ "(" ^ String.concat ~sep:", " es ^ ")"
+  | A.New ((_, A.CIexpr e), _, es, unpacked_element, _)
+  | A.Call (_, e, _, es, unpacked_element) ->
+    let e = String_utils.lstrip (string_of_param_default_value ~env e) "\\\\" in
+    let es =
+      match unpacked_element with
+      | None -> es
+      | Some e -> es @ [e]
+    in
+    let es = List.map ~f:(string_of_param_default_value ~env) es in
     let prefix =
       match snd expr with
       | A.New (_, _, _, _, _) -> "new "
       | _ -> ""
     in
     prefix ^ e ^ "(" ^ String.concat ~sep:", " es ^ ")"
-  | A.Record (e, _, es) ->
+  | A.Record ((_, record_id), _, es) ->
+    let record_id = adjust_id record_id in
+    let record_id = String_utils.lstrip record_id "\\\\" in
     let es = List.map ~f:(fun (e1, e2) -> A.AFkvalue (e1, e2)) es in
-    let e =
-      match e with
-      | (_, A.CIexpr e) ->
-        String_utils.lstrip (string_of_param_default_value ~env e) "\\\\"
-      | _ -> failwith "Expected CIexpr in ast_to_aast"
-    in
-    e ^ string_of_afield_list ~env es
+    record_id ^ string_of_afield_list ~env es
   | A.Class_get (cid, cge) ->
     let s1 =
       match snd cid with
@@ -1437,10 +1346,7 @@ and string_of_param_default_value ~env expr =
   | A.Eif (cond, etrue, efalse) ->
     let cond = string_of_param_default_value ~env cond in
     let etrue =
-      Option.value_map
-        etrue
-        ~default:""
-        ~f:(string_of_param_default_value ~env)
+      Option.value_map etrue ~default:"" ~f:(string_of_param_default_value ~env)
     in
     let efalse = string_of_param_default_value ~env efalse in
     cond ^ " \\? " ^ etrue ^ " : " ^ efalse
@@ -1529,12 +1435,21 @@ let string_of_param env p =
   ^ string_of_is_inout (Hhas_param.is_inout p)
   ^ string_of_is_variadic (Hhas_param.is_variadic p)
   ^ string_of_type_info_option param_type_info
-  ^ string_of_is_reference (Hhas_param.is_reference p)
   ^ param_name
   ^ string_of_param_default_value_option env param_default_value
 
 let string_of_params env ps =
   "(" ^ String.concat ~sep:", " (List.map ~f:(string_of_param env) ps) ^ ")"
+
+let string_of_upper_bound ub =
+  "("
+  ^ fst ub
+  ^ " as "
+  ^ String.concat ~sep:", " (List.map ~f:string_of_type_info (snd ub))
+  ^ ")"
+
+let string_of_upper_bounds ubs =
+  "{" ^ String.concat ~sep:", " (List.map ~f:string_of_upper_bound ubs) ^ "} "
 
 let add_indent buf indent = Acc.add buf (String.make indent ' ')
 
@@ -1625,12 +1540,6 @@ let function_attributes f =
       attrs
   in
   let attrs =
-    if Hhas_function.inout_wrapper f then
-      "inout_wrapper" :: attrs
-    else
-      attrs
-  in
-  let attrs =
     if Hhas_function.no_injection f then
       "no_injection" :: attrs
     else
@@ -1677,12 +1586,15 @@ let add_fun_def buf fun_def =
   let function_span = Hhas_function.span fun_def in
   let function_return_type = Hhas_body.return_type function_body in
   let env = Hhas_body.env function_body in
+  let function_upper_bounds = Hhas_body.upper_bounds function_body in
   let function_params = Hhas_body.params function_body in
   let function_is_async = Hhas_function.is_async fun_def in
   let function_is_generator = Hhas_function.is_generator fun_def in
   let function_is_pair_generator = Hhas_function.is_pair_generator fun_def in
   let function_rx_disabled = Hhas_function.rx_disabled fun_def in
   Acc.add buf "\n.function ";
+  if Hhbc_options.enforce_generics_ub !Hhbc_options.compiler_options then
+    Acc.add buf (string_of_upper_bounds function_upper_bounds);
   Acc.add buf (function_attributes fun_def);
   if Hhbc_options.source_mapping !Hhbc_options.compiler_options then
     Acc.add buf (string_of_span function_span ^ " ");
@@ -1710,9 +1622,7 @@ let attributes_to_string attrs =
 let method_attributes (m : Hhas_method.t) =
   let user_attrs = Hhas_method.attributes m in
   let attrs = Emit_adata.attributes_to_strings user_attrs in
-  let is_native_opcode_impl =
-    Hhas_attribute.is_native_opcode_impl user_attrs
-  in
+  let is_native_opcode_impl = Hhas_attribute.is_native_opcode_impl user_attrs in
   let is_native =
     (not is_native_opcode_impl) && Hhas_attribute.has_native user_attrs
   in
@@ -1742,12 +1652,6 @@ let method_attributes (m : Hhas_method.t) =
   let attrs =
     if is_systemlib && is_native then
       "unique" :: attrs
-    else
-      attrs
-  in
-  let attrs =
-    if Hhas_method.inout_wrapper m then
-      "inout_wrapper" :: attrs
     else
       attrs
   in
@@ -1789,6 +1693,12 @@ let method_attributes (m : Hhas_method.t) =
       attrs
   in
   let attrs =
+    if Hhas_attribute.has_provenance_skip_frame user_attrs then
+      "prov_skip_frame" :: attrs
+    else
+      attrs
+  in
+  let attrs =
     match Rx.rx_level_to_attr_string (Hhas_method.rx_level m) with
     | Some s -> s :: attrs
     | None -> attrs
@@ -1810,6 +1720,7 @@ let add_method_def buf method_def =
   let method_name = Hhas_method.name method_def in
   let method_body = Hhas_method.body method_def in
   let method_return_type = Hhas_body.return_type method_body in
+  let method_upper_bounds = Hhas_body.upper_bounds method_body in
   let method_params = Hhas_body.params method_body in
   let env = Hhas_body.env method_body in
   let method_span = Hhas_method.span method_def in
@@ -1819,6 +1730,8 @@ let add_method_def buf method_def =
   let method_is_closure_body = Hhas_method.is_closure_body method_def in
   let method_rx_disabled = Hhas_method.rx_disabled method_def in
   Acc.add buf "\n  .method ";
+  if Hhbc_options.enforce_generics_ub !Hhbc_options.compiler_options then
+    Acc.add buf (string_of_upper_bounds method_upper_bounds);
   Acc.add buf (method_attributes method_def);
   if Hhbc_options.source_mapping !Hhbc_options.compiler_options then
     Acc.add buf (string_of_span method_span ^ " ");
@@ -1936,12 +1849,12 @@ let class_special_attributes c =
   in
   text
 
-let add_extends buf class_base =
-  match class_base with
+let add_extends buf name =
+  match name with
   | None -> ()
   | Some name ->
     Acc.add buf " extends ";
-    Acc.add buf (Hhbc_id.Class.to_raw_string name)
+    Acc.add buf name
 
 let add_implements buf class_implements =
   match class_implements with
@@ -1962,12 +1875,6 @@ let property_attributes p =
   let attrs =
     if P.is_late_init p then
       "late_init" :: attrs
-    else
-      attrs
-  in
-  let attrs =
-    if P.is_soft_late_init p then
-      "late_init_soft" :: attrs
     else
       attrs
   in
@@ -2050,8 +1957,6 @@ let add_property (class_def : Hhas_class.t) buf property =
     Hhas_class.is_closure_class class_def
     || initial_value = Some Typed_value.Uninit
   then
-    Acc.add buf "uninit;"
-  else if Hhas_class.is_record class_def && initial_value = None then
     Acc.add buf "uninit;"
   else (
     Acc.add buf "\"\"\"";
@@ -2189,17 +2094,16 @@ let add_uses buf c =
 let add_class_def buf class_def =
   let class_name = Hhas_class.name class_def in
   (* TODO: user attributes *)
-  Acc.add
-    buf
-    ( if Hhas_class.is_record class_def then
-      "\n.record "
-    else
-      "\n.class " );
+  Acc.add buf "\n.class ";
+  if Hhbc_options.enforce_generics_ub !Hhbc_options.compiler_options then
+    Acc.add buf (string_of_upper_bounds (Hhas_class.upper_bounds class_def));
   Acc.add buf (class_special_attributes class_def);
   Acc.add buf (Hhbc_id.Class.to_raw_string class_name);
   if Hhbc_options.source_mapping !Hhbc_options.compiler_options then
     Acc.add buf (" " ^ string_of_span (Hhas_class.span class_def));
-  add_extends buf (Hhas_class.base class_def);
+  add_extends
+    buf
+    (Option.map ~f:Hhbc_id.Class.to_raw_string (Hhas_class.base class_def));
   add_implements buf (Hhas_class.implements class_def);
   Acc.add buf " {";
   add_doc buf 2 (Hhas_class.doc_comment class_def);
@@ -2212,6 +2116,40 @@ let add_class_def buf class_def =
   List.iter ~f:(add_method_def buf) (Hhas_class.methods class_def);
 
   (* TODO: other members *)
+  Acc.add buf "\n}\n"
+
+let record_field_attributes init_val =
+  match init_val with
+  | Some _ -> "[public] "
+  | None -> "[public sys_initial_val] "
+
+let record_field_type_info tinfo =
+  string_of_type_info ~is_enum:false tinfo ^ " "
+
+let add_record_field buf field =
+  let (name, type_info, initial_value) = field in
+  Acc.add buf "\n  .property ";
+  Acc.add buf (record_field_attributes initial_value);
+  Acc.add buf (record_field_type_info type_info);
+  Acc.add buf name;
+  Acc.add buf " =\n    ";
+  match initial_value with
+  | None -> Acc.add buf "uninit;"
+  | Some value ->
+    Acc.add buf "\"\"\"";
+    Emit_adata.adata_to_buffer buf value;
+    Acc.add buf "\"\"\";"
+
+let add_record_def buf rd =
+  let name = Hhas_record_def.name rd in
+  Acc.add buf "\n.record ";
+  if not (Hhas_record_def.is_abstract rd) then Acc.add buf "[final] ";
+  Acc.add buf (Hhbc_id.Record.to_raw_string name);
+  add_extends
+    buf
+    (Option.map ~f:Hhbc_id.Record.to_raw_string (Hhas_record_def.base rd));
+  Acc.add buf " {";
+  List.iter ~f:(add_record_field buf) (Hhas_record_def.fields rd);
   Acc.add buf "\n}\n"
 
 let add_data_region_element buf argument =
@@ -2336,12 +2274,14 @@ let add_program_content ?path dump_symbol_refs buf hhas_prog =
   let functions = Hhas_program.functions hhas_prog in
   let top_level_body = Hhas_program.main hhas_prog in
   let classes = Hhas_program.classes hhas_prog in
+  let records = Hhas_program.record_defs hhas_prog in
   let adata = Hhas_program.adata hhas_prog in
   let symbol_refs = Hhas_program.symbol_refs hhas_prog in
   add_data_region buf adata;
   add_top_level buf top_level_body;
   List.iter ~f:(add_fun_def buf) functions;
   List.iter ~f:(add_class_def buf) classes;
+  List.iter ~f:(add_record_def buf) records;
   List.iter ~f:(add_typedef buf) (Hhas_program.typedefs hhas_prog);
   add_file_attributes buf (Hhas_program.file_attributes hhas_prog);
   if dump_symbol_refs then (

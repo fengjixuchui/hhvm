@@ -40,19 +40,13 @@ let empty_global_state =
     global_lambda_rx_of_scope = SMap.empty;
   }
 
-let is_js_file_ = ref false
-
 let is_systemlib_ = ref false
 
 let global_state_ = ref empty_global_state
 
-let set_is_js_file v = is_js_file_ := v
-
 let set_is_systemlib v = is_systemlib_ := v
 
 let is_systemlib () = !is_systemlib_
-
-let is_js () = !is_js_file_
 
 let get_explicit_use_set () = !global_state_.global_explicit_use_set
 
@@ -61,11 +55,9 @@ let get_closure_namespaces () = !global_state_.global_closure_namespaces
 let get_closure_enclosing_classes () =
   !global_state_.global_closure_enclosing_classes
 
-let get_functions_with_finally () =
-  !global_state_.global_functions_with_finally
+let get_functions_with_finally () = !global_state_.global_functions_with_finally
 
-let get_function_to_labels_map () =
-  !global_state_.global_function_to_labels_map
+let get_function_to_labels_map () = !global_state_.global_function_to_labels_map
 
 let get_unique_id_for_main () = "|"
 
@@ -76,7 +68,7 @@ let get_unique_id_for_method cls mthd =
 
 let get_lambda_rx_of_scope cd md =
   let key = get_unique_id_for_method cd md in
-  SMap.get key !global_state_.global_lambda_rx_of_scope
+  SMap.find_opt key !global_state_.global_lambda_rx_of_scope
   |> Option.value ~default:Rx.NonRx
 
 let set_global_state s = global_state_ := s
@@ -141,24 +133,24 @@ let with_rx_body rx_body env = { env with env_in_rx_body = rx_body }
 
 let do_in_loop_body break_label continue_label ?iter env s f =
   Jump_targets.with_loop break_label continue_label iter env.env_jump_targets s
-  @@ (fun env_jump_targets s -> f { env with env_jump_targets } s)
+  @@ fun env_jump_targets s -> f { env with env_jump_targets } s
 
 let do_in_switch_body end_label env s f =
   Jump_targets.with_switch end_label env.env_jump_targets s
-  @@ (fun env_jump_targets s -> f { env with env_jump_targets } s)
+  @@ fun env_jump_targets s -> f { env with env_jump_targets } s
 
 let do_in_try_body finally_label env s f =
   Jump_targets.with_try finally_label env.env_jump_targets s
-  @@ (fun env_jump_targets s -> f { env with env_jump_targets } s)
+  @@ fun env_jump_targets s -> f { env with env_jump_targets } s
 
 let do_in_finally_body env s f =
-  Jump_targets.with_finally env.env_jump_targets s
-  @@ (fun env_jump_targets s -> f { env with env_jump_targets } s)
+  Jump_targets.with_finally env.env_jump_targets s @@ fun env_jump_targets s ->
+  f { env with env_jump_targets } s
 
 let do_in_using_body finally_label env s f =
   Jump_targets.with_using finally_label env.env_jump_targets s
-  @@ (fun env_jump_targets s -> f { env with env_jump_targets } s)
+  @@ fun env_jump_targets s -> f { env with env_jump_targets } s
 
 let do_function (env : t) (s : Tast.program) f =
-  Jump_targets.with_function env.env_jump_targets s
-  @@ (fun env_jump_targets s -> f { env with env_jump_targets } s)
+  Jump_targets.with_function env.env_jump_targets s @@ fun env_jump_targets s ->
+  f { env with env_jump_targets } s

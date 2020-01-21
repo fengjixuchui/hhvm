@@ -44,7 +44,7 @@ module Parsing = struct
     | UnterminatedCommentDEPRECATED
     | UnterminatedXhpCommentDEPRECATED
     | CallTimePassByReferenceDEPRECATED
-  (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | XhpParsingError (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -71,7 +71,7 @@ module Naming = struct
     | GenArrayVaRecArityDEPRECATED
     | GenaArityDEPRECATED
     | GenericClassVarDEPRECATED
-    | GenvaArity
+    | GenvaArityDEPRECATED
     | IllegalClass
     | IllegalClassMeth
     | IllegalConstant
@@ -138,8 +138,8 @@ module Naming = struct
     | WildcardDisallowed
     | AttributeClassNameConflict
     | MethodNeedsVisibility
-    | ReferenceInStrictMode
-    | ReferenceInRx
+    | ReferenceInStrictModeDEPRECATED
+    | ReferenceInRxDEPRECATED
     | DeclareStatementDEPRECATED
     | MisplacedRxOfScopeDEPRECATED
     | RxOfScopeAndExplicitRxDEPRECATED
@@ -158,7 +158,10 @@ module Naming = struct
     | InvalidTraitUseAsVisibility
     | InvalidFunPointer
     | IllegalUseOfDynamicallyCallable
-  (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | PocketUniversesNotInClass
+    | PocketUniversesAtomMissing
+    | PocketUniversesAtomUnknown
+    | PocketUniversesLocalization (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -172,7 +175,7 @@ module NastCheck = struct
     | CallBeforeInit
     | CaseFallthrough
     | ContinueInSwitch
-    | DangerousMethodName
+    | DangerousMethodNameDEPRECATED
     | DefaultFallthrough
     | InterfaceWithMemberVariable
     | InterfaceWithStaticMemberVariable
@@ -205,11 +208,11 @@ module NastCheck = struct
     | YieldInCoroutine
     | SuspendOutsideOfCoroutine
     | SuspendInFinally
-    | BreakContinueNNotSupported
+    | BreakContinueNNotSupportedDEPRECATED
     | StaticMemoizedFunction
     | InoutParamsOutsideOfSync
     | InoutParamsSpecial
-    | InoutParamsMixByref
+    | InoutParamsMixByrefDEPRECATED
     | InoutParamsMemoize
     | InoutParamsRetByRefDEPRECATED
     | ReadingFromAppend
@@ -232,8 +235,8 @@ module NastCheck = struct
     | NoOnlyrxIfRxfuncForRxIfArgs
     | CoroutineInConstructor
     | IllegalReturnByRefDEPRECATED
-    | IllegalByRefExpr
-    | VariadicByRefParam
+    | IllegalByRefExprDEPRECATED
+    | VariadicByRefParamDEPRECATED
     | MaybeMutableAttributeOnFunction
     | ConflictingMutableAndMaybeMutableAttributes
     | MaybeMutableMethodsMustBeReactive
@@ -242,13 +245,14 @@ module NastCheck = struct
     | NonstaticMethodInAbstractFinalClass
     | MutableOnStaticDEPRECATED
     | ClassnameConstInstanceOfDEPRECATED
-    | ByRefParamOnConstruct
-    | ByRefDynamicCall
-    | ByRefProperty
-    | ByRefCall
+    | ByRefParamOnConstructDEPRECATED
+    | ByRefDynamicCallDEPRECATED
+    | ByRefPropertyDEPRECATED
+    | ByRefCallDEPRECATED
     | SwitchNonTerminalDefault
     | SwitchMultipleDefault
-  (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | RepeatedRecordFieldName
+    | PhpLambdaDisallowed (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -286,9 +290,9 @@ module Typing = struct
     | ExpectedStaticIntDEPRECATED
     | ExpectedTparam
     | ExpectingReturnTypeHint
-    | ExpectingReturnTypeHintSuggest
+    | ExpectingReturnTypeHintSuggestDEPRECATED
     | ExpectingTypeHint
-    | ExpectingTypeHintSuggest
+    | ExpectingTypeHintVariadic
     | RetiredError4034DEPRECATED
     | ExtendFinal
     | FieldKinds
@@ -423,20 +427,20 @@ module Typing = struct
     | ArrayGetWithOptionalField
     | UnknownFieldDisallowedInShape
     | NullableCast
-    | PassByRefAnnotationMissing
+    | PassByRefAnnotationMissingDEPRECATED
     | NonCallArgumentInSuspend
     | NonCoroutineCallInSuspend
     | CoroutineCallOutsideOfSuspend
     | FunctionIsNotCoroutine
     | CoroutinnessMismatch
     | ExpectingAwaitableReturnTypeHint
-    | ReffinessInvariant
+    | ReffinessInvariantDEPRECATED
     | DollardollarLvalue
     | StaticMethodOnInterfaceDEPRECATED
     | DuplicateUsingVar
     | IllegalDisposable
     | EscapingDisposable
-    | PassByRefAnnotationUnexpected
+    | PassByRefAnnotationUnexpectedDEPRECATED
     | InoutAnnotationMissing
     | InoutAnnotationUnexpected
     | InoutnessMismatch
@@ -480,7 +484,7 @@ module Typing = struct
     | AmbiguousLambda
     | EllipsisStrictMode
     | UntypedLambdaStrictMode
-    | BindingRefInArray
+    | BindingRefInArrayDEPRECATED
     | EchoInReactiveContext
     | SuperglobalInReactiveContext
     | StaticPropertyInReactiveContext
@@ -508,7 +512,7 @@ module Typing = struct
     | ShapesKeyExistsAlwaysFalse
     | ShapesMethodAccessWithNonExistentField
     | NonClassMember
-    | PassingArrayCellByRef
+    | PassingArrayCellByRefDEPRECATED
     | CallSiteReactivityMismatch
     | RxParameterConditionMismatch
     | AmbiguousObjectAccess
@@ -554,7 +558,7 @@ module Typing = struct
     | UnknownObjectMember
     | UnknownType
     | InvalidArrayKey
-    | ReferenceExprNotFunctionArg
+    | ReferenceExprNotFunctionArgDEPRECATED
     | RedundantRxCondition
     | RedeclaringMissingMethod
     | InvalidEnforceableTypeArgument
@@ -606,7 +610,16 @@ module Typing = struct
     | ClassConstantTypeMismatch
     | PocketUniversesExpansion
     | PocketUniversesTyping
-  (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | RecordInitValueDoesNotMatchHint
+    | AbstractTconstNotAllowed
+    | NewAbstractRecord
+    | RecordMissingRequiredField
+    | RecordUnknownField
+    | CyclicRecordDef
+    | InvalidDestructure
+    | StaticCallWithClassLevelReifiedGeneric
+    | SplatArrayRequired
+    | SplatArrayVariadic (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum

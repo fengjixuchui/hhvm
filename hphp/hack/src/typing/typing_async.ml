@@ -6,7 +6,7 @@
  * LICENSE file in the "hack" directory of this source tree.
  *
  *)
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 module Reason = Typing_reason
 module Type = Typing_ops
@@ -31,55 +31,64 @@ let overload_extract_from_awaitable env ~p opt_ty_maybe =
         opt_ty_maybe
         Errors.unify_error
     in
-    match e_opt_ty with
-    | (_, Tunion tyl) ->
-      (* If we cannot fold the union into a single type, we need to look at
-       * all the types *)
-      let (env, rtyl) =
-        List.fold_right
-          ~f:
-            begin
-              fun ty (env, rtyl) ->
-              let (env, rty) = extract_inner env ty in
-              (* We have the invariant we'll never have Tunion[Tunion], but
-               * the recursive call above can remove a layer of Awaitable, so we need
-               * to flatten any Tunion that may have been inside. *)
-              let (env, rtyl) = TUtils.flatten_unresolved env rty rtyl in
-              (env, rtyl)
-            end
-          tyl
-          ~init:(env, [])
-      in
-      (env, (r, Tunion rtyl))
-    | (_, Toption ty) ->
+    match get_node e_opt_ty with
+    | Tunion tyl ->
+      let (env, tyl) = List.fold_map ~init:env ~f:extract_inner tyl in
+      TUtils.union_list env r tyl
+    | Toption ty ->
       (* We want to try to avoid easy double nullables here, so we handle Toption
        * with some special logic. *)
       let (env, ty) = extract_inner env ty in
       TUtils.union env (MakeType.null r) ty
-    | (_, Tintersection tyl) ->
-      let (env, rtyl) = List.fold_map ~init:env tyl ~f:extract_inner in
-      (env, (r, Tintersection rtyl))
-    | (r, Tprim Aast.Tnull) -> (env, (r, Tprim Aast.Tnull))
-    | (_, Tdynamic) ->
+    | Tintersection tyl ->
+      let (env, rtyl) = TUtils.run_on_intersection env tyl ~f:extract_inner in
+      (env, MakeType.intersection r rtyl)
+    | Tprim Aast.Tnull -> (env, e_opt_ty)
+    | Tdynamic ->
       (* Awaiting a dynamic results in a new dynamic *)
-      (env, (r, Tdynamic))
-    | ( _,
-        ( Terr | Tany _ | Tarraykind _ | Tnonnull | Tprim _ | Tvar _ | Tfun _
-        | Tabstract _ | Tclass _ | Ttuple _
-        | Tanon (_, _)
-        | Tobject | Tshape _ | Tdestructure _ | Tpu _ | Tpu_access _ ) ) ->
+      (env, MakeType.dynamic r)
+    | Terr
+    | Tany _
+    | Tarraykind _
+    | Tnonnull
+    | Tprim _
+    | Tvar _
+    | Tfun _
+    | Tgeneric _
+    | Tnewtype _
+    | Tdependent _
+    | Tclass _
+    | Ttuple _
+    | Tanon (_, _)
+    | Tobject
+    | Tshape _
+    | Tpu _
+    | Tpu_type_access _ ->
       let (env, type_var) = Env.fresh_type env p in
       let expected_type = MakeType.awaitable r type_var in
       let return_type =
-        match e_opt_ty with
-        | (_, Tany _) -> (r, Typing_defs.make_tany ())
-        | (_, Terr) -> (r, Terr)
-        | (_, Tdynamic) -> (r, Tdynamic)
-        | ( _,
-            ( Tnonnull | Tarraykind _ | Tprim _ | Tvar _ | Tfun _ | Tabstract _
-            | Tclass _ | Ttuple _ | Tanon _ | Tintersection _ | Toption _
-            | Tunion _ | Tobject | Tshape _ | Tdestructure _ | Tpu _
-            | Tpu_access _ ) ) ->
+        match get_node e_opt_ty with
+        | Tany _ -> mk (r, Typing_defs.make_tany ())
+        | Terr -> mk (r, Terr)
+        | Tdynamic -> MakeType.dynamic r
+        | Tnonnull
+        | Tarraykind _
+        | Tprim _
+        | Tvar _
+        | Tfun _
+        | Tgeneric _
+        | Tnewtype _
+        | Tdependent _
+        | Tclass _
+        | Ttuple _
+        | Tanon _
+        | Tintersection _
+        | Toption _
+        | Tunion _
+        | Tobject
+        | Tshape _
+        | Tpu _
+        | Tpu_type_access _ ->
           type_var
       in
       let env =
@@ -95,7 +104,9 @@ let overload_extract_from_awaitable env ~p opt_ty_maybe =
   in
   let env = Env.open_tyvars env p in
   let (env, ty) = extract_inner env opt_ty_maybe in
-  let env = Typing_solver.close_tyvars_and_solve env Errors.unify_error in
+  let env =
+    Typing_solver.close_tyvars_and_solve env (Errors.unify_error_at p)
+  in
   (env, ty)
 
 let overload_extract_from_awaitable_list env p tyl =
@@ -118,8 +129,3 @@ let overload_extract_from_awaitable_shape env p fdm =
     end
     env
     fdm
-
-let genva env p tyl =
-  let (env, rtyl) = overload_extract_from_awaitable_list env p tyl in
-  let inner_type = (Reason.Rwitness p, Ttuple rtyl) in
-  (env, inner_type)

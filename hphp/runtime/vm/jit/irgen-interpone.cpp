@@ -39,7 +39,6 @@ Type arithOpResult(Type t1, Type t2) {
   auto both = t1 | t2;
   if (both.maybe(TDbl)) return TDbl;
   if (both.maybe(TArr)) return TArr;
-  if (both.maybe(TShape)) return TShape;
   if (both.maybe(TVec)) return TVec;
   if (both.maybe(TDict)) return TDict;
   if (both.maybe(TKeyset)) return TKeyset;
@@ -69,17 +68,17 @@ Type setOpResult(Type locType, Type valType, SetOpOp op) {
   switch (op) {
   case SetOpOp::PlusEqual:
   case SetOpOp::MinusEqual:
-  case SetOpOp::MulEqual:    return arithOpResult(locType.unbox(), valType);
+  case SetOpOp::MulEqual:    return arithOpResult(locType, valType);
   case SetOpOp::PlusEqualO:
   case SetOpOp::MinusEqualO:
-  case SetOpOp::MulEqualO:   return arithOpOverResult(locType.unbox(), valType);
+  case SetOpOp::MulEqualO:   return arithOpOverResult(locType, valType);
   case SetOpOp::ConcatEqual: return TStr;
   case SetOpOp::PowEqual:
   case SetOpOp::DivEqual:
   case SetOpOp::ModEqual:    return TUncountedInit;
   case SetOpOp::AndEqual:
   case SetOpOp::OrEqual:
-  case SetOpOp::XorEqual:    return bitOpResult(locType.unbox(), valType);
+  case SetOpOp::XorEqual:    return bitOpResult(locType, valType);
   case SetOpOp::SlEqual:
   case SetOpOp::SrEqual:     return TInt;
   }
@@ -100,13 +99,6 @@ folly::Optional<Type> interpOutputType(IRGS& env,
                   "locId should be unsigned");
     assertx(locId < curFunc(env)->numLocals());
     return env.irb->local(locId, DataTypeSpecific).type;
-  };
-
-  auto boxed = [&] (Type t) -> Type {
-    if (t == TGen) return TBoxedInitCell;
-    assertx(t <= TCell || t <= TBoxedCell);
-    checkTypeType = t <= TBoxedCell ? t : boxType(t);
-    return TBoxedInitCell;
   };
 
   switch (getInstrInfo(sk.op()).type) {
@@ -142,7 +134,6 @@ folly::Optional<Type> interpOutputType(IRGS& env,
     case OutSameAsInput2: return topType(env, BCSPRelOffset{1});
     case OutModifiedInput2: return topType(env, BCSPRelOffset{1}).modified();
     case OutModifiedInput3: return topType(env, BCSPRelOffset{2}).modified();
-    case OutVInputL:     return boxed(localType());
 
     case OutArith:
       return arithOpResult(topType(env, BCSPRelOffset{0}),
@@ -150,7 +141,7 @@ folly::Optional<Type> interpOutputType(IRGS& env,
     case OutArithO:
       return arithOpOverResult(topType(env, BCSPRelOffset{0}),
                                topType(env, BCSPRelOffset{1}));
-    case OutUnknown:     return TGen;
+    case OutUnknown:     return TCell;
 
     case OutBitOp:
       return bitOpResult(topType(env, BCSPRelOffset{0}),
@@ -160,27 +151,20 @@ folly::Optional<Type> interpOutputType(IRGS& env,
                           topType(env, BCSPRelOffset{0}),
                           SetOpOp(getImm(sk.pc(), 1).u_OA));
     case OutIncDec: {
-      auto ty = localType().unbox();
+      auto ty = localType();
       return ty <= TDbl ? ty : TCell;
     }
     case OutNone:       return folly::none;
 
     case OutCInput: {
-      auto ttype = topType(env, BCSPRelOffset{0});
-      if (ttype <= TCell) return ttype;
-      // All instructions that are OutCInput or OutCInputL cannot push uninit or
-      // a ref, so only specific inner types need to be checked.
-      if (ttype.unbox() < TInitCell) {
-        checkTypeType = ttype.unbox();
-      }
-      return TCell;
+      return topType(env, BCSPRelOffset{0});
     }
 
     case OutCInputL: {
       auto ltype = localType();
       if (ltype <= TCell) return ltype;
-      if (ltype.unbox() < TInitCell) {
-        checkTypeType = ltype.unbox();
+      if (ltype < TInitCell) {
+        checkTypeType = ltype;
       }
       return TCell;
     }
@@ -213,11 +197,6 @@ interpOutputLocals(IRGS& env,
     assertx(id < kMaxHhbcImms);
     setLocType(getImm(sk.pc(), id).u_LA, t);
   };
-  auto handleBoxiness = [&] (Type testTy, Type useTy) {
-    return testTy <= TBoxedCell ? TBoxedInitCell :
-           testTy.maybe(TBoxedCell) ? TGen :
-           useTy;
-  };
 
   auto const mDefine = static_cast<unsigned char>(MOpMode::Define);
 
@@ -225,11 +204,9 @@ interpOutputLocals(IRGS& env,
     case OpSetOpL:
     case OpIncDecL: {
       assertx(pushedType.hasValue());
-      auto locType = env.irb->local(localInputId(sk), DataTypeSpecific).type;
-      assertx(locType < TGen || curFunc(env)->isPseudoMain());
 
       auto stackType = pushedType.value();
-      setImmLocType(0, handleBoxiness(locType, stackType));
+      setImmLocType(0, stackType);
       break;
     }
 
@@ -239,16 +216,8 @@ interpOutputLocals(IRGS& env,
 
     case OpSetL:
     case OpPopL: {
-      auto locType = env.irb->local(localInputId(sk), DataTypeSpecific).type;
       auto stackType = topType(env, BCSPRelOffset{0});
-      // [Set,Pop]L preserves reffiness of a local.
-      setImmLocType(0, handleBoxiness(locType, stackType));
-      break;
-    }
-    case OpVGetL: {
-      assertx(pushedType.hasValue());
-      assertx(*pushedType <= TBoxedCell);
-      setImmLocType(0, pushedType.value());
+      setImmLocType(0, stackType);
       break;
     }
 
@@ -274,28 +243,19 @@ interpOutputLocals(IRGS& env,
       smashesAllLocals = true;
       break;
 
-    case OpIterInitK:
-    case OpIterNextK:
-      setImmLocType(3, TCell);
-      /* fallthrough */
     case OpIterInit:
-    case OpIterNext:
-      setImmLocType(2, TGen);
-      break;
-
-    case OpLIterInitK:
-    case OpLIterNextK:
-      setImmLocType(4, TCell);
-      /* fallthrough */
     case OpLIterInit:
-    case OpLIterNext:
-      setImmLocType(3, TGen);
+    case OpIterNext:
+    case OpLIterNext: {
+      auto const ita = getImm(sk.pc(),  0).u_ITA;
+      setLocType(ita.valId, TCell);
+      if (ita.hasKey()) setLocType(ita.keyId, TCell);
       break;
+    }
 
     case OpVerifyParamTypeTS:
     case OpVerifyParamType: {
-      auto locType = env.irb->local(localInputId(sk), DataTypeSpecific).type;
-      setImmLocType(0, handleBoxiness(locType, TCell));
+      setImmLocType(0, TCell);
       break;
     }
 
@@ -402,9 +362,6 @@ void emitDefTypeAlias(IRGS& env, uint32_t)    { interpOne(env); }
 void emitDefCns(IRGS& env, const StringData*) { interpOne(env); }
 void emitDefCls(IRGS& env, uint32_t)          { interpOne(env); }
 void emitDefRecord(IRGS& env, uint32_t)       { interpOne(env); }
-void emitAliasCls(IRGS& env,
-                  const StringData*,
-                  const StringData*)          { interpOne(env); }
 void emitChainFaults(IRGS& env)               { interpOne(env); }
 void emitContGetReturn(IRGS& env)             { interpOne(env); }
 void emitContAssignDelegate(IRGS& env, int32_t)

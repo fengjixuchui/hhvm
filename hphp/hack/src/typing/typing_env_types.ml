@@ -8,12 +8,12 @@
  *)
 
 (* cf: typing_env_types_sig.mli - These files should be the same *)
-open Core_kernel
+open Hh_prelude
 open Typing_defs
 module TPEnv = Type_parameter_env
-module TySet = Typing_set
+module ITySet = Internal_type_set
 
-type locl_ty = locl ty
+type locl_ty = Typing_defs.locl_ty
 
 [@@@warning "-32"]
 
@@ -55,59 +55,9 @@ let pp_tfun _ _ = Printf.printf "%s\n" "<tfun>"
 
 [@@@warning "+32"]
 
-type tyvar_info_ = {
-  (* Where was the type variable introduced? (e.g. generic method invocation,
-   * new object construction)
-   *)
-  tyvar_pos: Pos.t;
-  (* Set to true if a call to expand_type_and_solve on this variable cannot resolve
-   *)
-  eager_solve_fail: bool;
-  (* Does this type variable appear covariantly in the type of the expression?
-   *)
-  appears_covariantly: bool;
-  (* Does this type variable appear contravariantly in the type of the expression?
-   * If it appears in an invariant position then both will be true; if it doesn't
-   * appear at all then both will be false
-   *)
-  appears_contravariantly: bool;
-  lower_bounds: TySet.t;
-  upper_bounds: TySet.t;
-  (* Map associating a type to each type constant id of this variable.
-  Whenever we localize "T1::T" in a constraint, we add a fresh type variable
-  indexed by "T" in the type_constants of the type variable representing T1.
-  This allows to properly check constraints on "T1::T". *)
-  type_constants:
-    ( Aast.sid (* id of the type constant "T", containing its position. *)
-    * locl_ty )
-    SMap.t;
-}
-
-(* For global inference we are distinguishing global tyvars and local tyvars.
-Global tyvars are tyvars which have to remain unsolved until all of the files
-are done typechecking. Thus, global tyvars are going possess their own constraint
-graph which is global_tvenv. Local tyvars have the same behavior as a "normal"
-tyvar.
-
-Concerning the implementation, the tvenv can now hold either "LocalTyvar tyvar_info"
-if the tyvar is local or a "GlobalTyvar" atom if the tyvar is global and thus
-can be found in the globalenv.
-*)
-type tyvar_info =
-  | LocalTyvar of tyvar_info_
-  | GlobalTyvar
-
-type tvenv = tyvar_info IMap.t
-
-type global_tvenv = tyvar_info_ IMap.t
-
 type env = {
   (* position of the function/method being checked *)
   function_pos: Pos.t;
-  (* Mapping of type variables to types. *)
-  tenv: locl_ty IMap.t;
-  (* Mapping of type variables to other type variables *)
-  subst: int IMap.t;
   fresh_typarams: SSet.t;
   lenv: local_env;
   genv: genv;
@@ -119,11 +69,8 @@ type env = {
   inside_ppl_class: bool;
   (* A set of constraints that are global to a given method *)
   global_tpenv: TPEnv.t;
-  subtype_prop: Typing_logic.subtype_prop;
   log_levels: int SMap.t;
-  tvenv: tvenv;
-  global_tvenv: global_tvenv;
-  tyvars_stack: (Pos.t * Ident.t list) list;
+  inference_env: Typing_inference_env.t;
   allow_wildcards: bool;
   big_envs: (Pos.t * env) list ref;
   pessimize: bool;
@@ -138,13 +85,12 @@ and genv = {
      For every mayberx parameter that has condition type we create
      fresh type parameter (see: make_local_param_ty) and store mapping
      fresh type name -> condition type in env so it can be retrieved later *)
-  condition_types: decl ty SMap.t;
-  parent_id: string;
-  parent: decl ty;
-  (* Identifier of the enclosing class *)
-  self_id: string;
-  (* Type of the enclosing class, instantiated at its generic parameters *)
-  self: locl_ty;
+  condition_types: decl_ty SMap.t;
+  (* Identifier and type of the parent class if it exists *)
+  parent: (string * decl_ty) option;
+  (* Identifier and type (instatiated at its generic parameters) of
+     the enclosing class if there is one *)
+  self: (string * locl_ty) option;
   static: bool;
   fun_kind: Ast_defs.fun_kind;
   val_kind: Typing_defs.val_kind;
@@ -160,7 +106,7 @@ and genv = {
  * - the arity of the function
  * - the expected return type of the body (optional)
  *)
-and anon_log = locl_ty list * locl ty list
+and anon_log = locl_ty list * locl_ty list
 
 and anon = {
   rx: reactivity;
@@ -171,15 +117,9 @@ and anon = {
     ?el:Nast.expr list ->
     ?ret_ty:locl_ty ->
     env ->
-    locl fun_params ->
-    locl fun_arity ->
+    locl_fun_params ->
+    locl_fun_arity ->
     env * Tast.expr * locl_ty;
 }
-
-let get_fun env x =
-  let dep = Typing_deps.Dep.Fun x in
-  Option.iter env.decl_env.Decl_env.droot (fun root ->
-      Typing_deps.add_idep root dep);
-  Decl_provider.get_fun x
 
 let env_reactivity env = env.lenv.local_reactive

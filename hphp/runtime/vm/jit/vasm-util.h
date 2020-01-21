@@ -93,6 +93,11 @@ LoopBlocks findLoopBlocks(const Vunit&,
  * definition. This lets one do transformations that may not preserve SSA form,
  * and restore it after the fact.
  *
+ * `blocksWithTargets' is a bitset indicating which blocks contains
+ * target Vregs. Any target Vregs in blocks not marked as such will be
+ * unchanged. `blocksWithTargets' will be modified as necessary to
+ * reflect any Vregs added.
+ *
  * A mapping of new Vregs to the Vreg they replaced is returned.
  *
  * The `ssaalias' pseudo-instruction can be used to control what a Vreg is
@@ -113,7 +118,9 @@ LoopBlocks findLoopBlocks(const Vunit&,
 jit::fast_map<Vreg, Vreg>
 restoreSSA(Vunit& unit,
            const VregSet& targets,
+           boost::dynamic_bitset<>& blocksWithTargets,
            const jit::vector<Vlabel>& rpo,
+           const PredVector& preds,
            MaybeVinstrId = {});
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -183,6 +190,20 @@ bool vmodify(Vunit& unit, Vlabel b, size_t i, Modify modify) {
   vector_splice(blocks[b].code, i, nremove, blocks[scratch].code);
   return true;
 }
+
+///////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Determine whether any VregSF is live at the beginning of each block.
+ */
+std::vector<Vreg> compute_sf_livein(const Vunit& unit,
+                                    const jit::vector<Vlabel>& rpo,
+                                    const PredVector& preds);
+
+/*
+ * Rename all VregSFs in unit to the physical flags reg.
+ */
+void rename_sf_regs(Vunit& unit, const jit::fast_set<unsigned>& sf_renames);
 
 ///////////////////////////////////////////////////////////////////////////////
 

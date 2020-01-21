@@ -1,6 +1,5 @@
 <?hh
-final record A {
-  x: this,
+record A {
+  this x;
 }
 
-<<__EntryPoint>> function main(): void {}

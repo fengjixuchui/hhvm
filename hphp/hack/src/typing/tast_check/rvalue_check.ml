@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Typing_defs
 module Env = Tast_env
@@ -19,7 +19,7 @@ let check_valid_rvalue p env ty =
     | [] -> env
     | ty :: tyl ->
       let (env, ety) = Env.expand_type env ty in
-      (match ety with
+      (match deref ety with
       | (r, Tprim Tnoreturn) ->
         Errors.noreturn_usage
           p

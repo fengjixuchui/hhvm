@@ -25,7 +25,7 @@ let take_max_errors error_list max_errors =
 
 let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
  fun genv env ~is_stale -> function
-  | STATUS (_, max_errors) ->
+  | STATUS { max_errors; _ } ->
     HackEventLogger.check_response (Errors.get_error_list env.errorl);
     let error_list = Errors.get_sorted_error_list env.errorl in
     let error_list = List.map ~f:Errors.to_absolute error_list in
@@ -59,16 +59,40 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
       } )
   | STATUS_SINGLE (fn, max_errors) ->
     (env, take_max_errors (ServerStatusSingle.go fn env.tcopt) max_errors)
-  | COVERAGE_LEVELS fn ->
-    (env, ServerColorFile.go env.ServerEnv.tcopt env.ServerEnv.naming_table fn)
-  | INFER_TYPE (fn, line, char, dynamic_view) ->
-    (env, ServerInferType.go env (fn, line, char, dynamic_view))
+  | COVERAGE_LEVELS (path, file_input) ->
+    let path = Relative_path.create_detect_prefix path in
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path
+        ~file_input
+    in
+    (env, ServerColorFile.go_quarantined ~ctx ~entry)
+  | INFER_TYPE (file_input, line, column, dynamic_view) ->
+    let tcopt =
+      { env.ServerEnv.tcopt with GlobalOptions.tco_dynamic_view = dynamic_view }
+    in
+    let path =
+      match file_input with
+      | FileName fn -> Relative_path.create_detect_prefix fn
+      | FileContent _ -> Relative_path.create_detect_prefix ""
+    in
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt)
+        ~path
+        ~file_input
+    in
+    let result =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerInferType.go_ctx ~ctx ~entry ~line ~column)
+    in
+    (env, result)
   | INFER_TYPE_BATCH (positions, dynamic_view) ->
     let tcopt = env.ServerEnv.tcopt in
     let tcopt = { tcopt with GlobalOptions.tco_dynamic_view = dynamic_view } in
     let env = { env with tcopt } in
     (env, ServerInferTypeBatch.go genv.workers positions env)
-  | TYPED_AST filename -> (env, ServerTypedAst.go env filename)
   | IDE_HOVER (path, line, column) ->
     let relative_path = Relative_path.create_detect_prefix path in
     let (ctx, entry) =
@@ -77,32 +101,33 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         ~path:relative_path
         ~file_input:(ServerCommandTypes.FileName path)
     in
-    let result = ServerHover.go_ctx ~ctx ~entry ~line ~column in
+    let result = ServerHover.go_quarantined ~ctx ~entry ~line ~column in
     (env, result)
   | DOCBLOCK_AT (filename, line, column, _, kind) ->
-    let r = ServerDocblockAt.go_docblock_at ~filename ~line ~column ~kind in
+    let ctx = Provider_context.empty ~tcopt:env.ServerEnv.tcopt in
+    let entry =
+      Provider_utils.get_entry_VOLATILE
+        ~ctx
+        ~path:(Relative_path.create_detect_prefix filename)
+    in
+    let r = ServerDocblockAt.go_docblock_ctx ~ctx ~entry ~line ~column ~kind in
     (env, r)
   | DOCBLOCK_FOR_SYMBOL (symbol, kind) ->
-    let r = ServerDocblockAt.go_docblock_for_symbol ~env ~symbol ~kind in
+    let ctx = Provider_context.empty ~tcopt:env.ServerEnv.tcopt in
+    let r = ServerDocblockAt.go_docblock_for_symbol ~env ~ctx ~symbol ~kind in
     (env, r)
-  | LOCATE_SYMBOL (symbol, kind) ->
-    let loc_opt = ServerDocblockAt.go_locate_symbol ~env ~symbol ~kind in
-    let r =
-      match loc_opt with
-      | None -> (env, None)
-      | Some loc ->
-        DocblockService.
-          ( env,
-            Some
-              ( loc.dbs_filename,
-                loc.dbs_line,
-                loc.dbs_column,
-                loc.dbs_base_class ) )
+  | IDE_SIGNATURE_HELP (path, line, column) ->
+    let file_input = ServerCommandTypes.FileName path in
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path:(Relative_path.create_detect_prefix path)
+        ~file_input
     in
-    r
-  | IDE_SIGNATURE_HELP (file, line, column) ->
-    (env, ServerSignatureHelp.go ~env ~file ~line ~column)
-  | AUTOCOMPLETE content ->
+    (env, ServerSignatureHelp.go_quarantined ~env ~ctx ~entry ~line ~column)
+  | COMMANDLINE_AUTOCOMPLETE content ->
+    (* For command line autocomplete, we assume the AUTO332 text has
+    already been inserted, and we fake the rest of this information. *)
     let autocomplete_context =
       {
         AutocompleteTypes.is_manually_invoked = false;
@@ -112,49 +137,141 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         is_after_double_right_angle_bracket = false;
         is_after_open_square_bracket = false;
         is_after_quote = false;
+        is_before_apostrophe = false;
+        char_at_pos = ' ';
       }
     in
+    (* Since this is being executed from the command line,
+     * let's turn on the flags that increase accuracy but slow it down *)
+    let old_sienv = env.ServerEnv.local_symbol_table in
+    let sienv =
+      ref
+        {
+          !old_sienv with
+          SearchUtils.sie_resolve_signatures = true;
+          SearchUtils.sie_resolve_positions = true;
+          SearchUtils.sie_resolve_local_decl = true;
+        }
+    in
     (* feature not implemented here; it only works for LSP *)
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path:(Relative_path.create_detect_prefix "")
+        ~file_input:(ServerCommandTypes.FileContent content)
+    in
+    (* Update the symbol index from this file *)
+    Facts_parser.mangle_xhp_mode := false;
+    let facts_opt =
+      Facts_parser.from_text
+        ~php5_compat_mode:false
+        ~hhvm_compat_mode:true
+        ~disable_nontoplevel_declarations:false
+        ~disable_legacy_soft_typehints:false
+        ~allow_new_attribute_syntax:false
+        ~disable_legacy_attribute_syntax:false
+        ~filename:Relative_path.default
+        ~text:content
+    in
+    (match facts_opt with
+    | None -> ()
+    | Some facts ->
+      SymbolIndex.update_from_facts ~sienv ~path:Relative_path.default ~facts);
     let result =
-      ServerAutoComplete.auto_complete
-        ~tcopt:env.tcopt
+      ServerAutoComplete.go_at_auto332_ctx
+        ~ctx
+        ~entry
+        ~sienv:!sienv
         ~autocomplete_context
-        ~sienv:!(env.ServerEnv.local_symbol_table)
-        content
     in
     (env, result.With_complete_flag.value)
-  | IDENTIFY_FUNCTION (file_input, line, char) ->
-    let content = ServerFileSync.get_file_content file_input in
-    (env, ServerIdentifyFunction.go_absolute content line char env.tcopt)
+  | IDENTIFY_FUNCTION (filename, file_input, line, column) ->
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path:(Relative_path.create_detect_prefix filename)
+        ~file_input
+    in
+    let result =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerIdentifyFunction.go_quarantined_absolute
+            ~ctx
+            ~entry
+            ~line
+            ~column)
+    in
+    (env, result)
   | METHOD_JUMP (class_, filter, find_children) ->
+    let ctx = Provider_context.empty ~tcopt:env.tcopt in
     ( env,
       MethodJumps.get_inheritance
+        ctx
         class_
         ~filter
         ~find_children
         env.naming_table
         genv.workers )
   | METHOD_JUMP_BATCH (classes, filter) ->
-    (env, ServerMethodJumpsBatch.go genv.workers classes filter)
+    let ctx = Provider_context.empty ~tcopt:env.tcopt in
+    (env, ServerMethodJumpsBatch.go ctx genv.workers classes filter)
   | FIND_REFS find_refs_action ->
     Done_or_retry.(
       let include_defs = false in
       ServerFindRefs.(
         go find_refs_action include_defs genv env |> map_env ~f:to_absolute))
-  | IDE_FIND_REFS (labelled_file, line, char, include_defs) ->
+  | GO_TO_IMPL go_to_impl_action ->
     Done_or_retry.(
-      ServerFindRefs.(
-        (match go_from_file (labelled_file, line, char) env with
-        | None -> (env, Done None)
-        | Some (name, action) ->
-          map_env ~f:(to_ide name) (go action include_defs genv env))))
-  | IDE_HIGHLIGHT_REFS (input, line, char) ->
-    let content = ServerFileSync.get_file_content input in
-    (env, ServerHighlightRefs.go (content, line, char) env.tcopt)
+      ServerGoToImpl.go go_to_impl_action genv env
+      |> map_env ~f:ServerFindRefs.to_absolute)
+  | IDE_FIND_REFS (labelled_file, line, column, include_defs) ->
+    Done_or_retry.(
+      let (path, file_input) =
+        ServerCommandTypesUtils.extract_labelled_file labelled_file
+      in
+      let (ctx, entry) =
+        Provider_utils.update_context
+          ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+          ~path
+          ~file_input
+      in
+      (match ServerFindRefs.go_from_file_ctx ~ctx ~entry ~line ~column with
+      | None -> (env, Done None)
+      | Some (name, action) ->
+        map_env
+          ~f:(ServerFindRefs.to_ide name)
+          (ServerFindRefs.go action include_defs genv env)))
+  | IDE_GO_TO_IMPL (labelled_file, line, column) ->
+    Done_or_retry.(
+      let (path, file_input) =
+        ServerCommandTypesUtils.extract_labelled_file labelled_file
+      in
+      let (ctx, entry) =
+        Provider_utils.update_context
+          ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+          ~path
+          ~file_input
+      in
+      (match ServerFindRefs.go_from_file_ctx ~ctx ~entry ~line ~column with
+      | None -> (env, Done None)
+      | Some (name, action) ->
+        map_env
+          ~f:(ServerFindRefs.to_ide name)
+          (ServerGoToImpl.go ~action ~genv ~env)))
+  | IDE_HIGHLIGHT_REFS (path, file_input, line, column) ->
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path:(Relative_path.create_detect_prefix path)
+        ~file_input
+    in
+    let r =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          (env, ServerHighlightRefs.go_quarantined ~ctx ~entry ~line ~column))
+    in
+    r
   | REFACTOR refactor_action -> ServerRefactor.go refactor_action genv env
   | IDE_REFACTOR
-      { ServerCommandTypes.Ide_refactor_type.filename; line; char; new_name }
-    ->
+      { ServerCommandTypes.Ide_refactor_type.filename; line; char; new_name } ->
     Done_or_retry.(
       begin
         match
@@ -171,10 +288,8 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
       (env, `Error remove_dead_fixme_warning)
   | REWRITE_LAMBDA_PARAMETERS files ->
     (env, ServerRefactor.get_lambda_parameter_rewrite_patches env files)
-  | REWRITE_RETURN_TYPE files ->
-    (env, ServerRefactor.get_return_type_rewrite_patches env files)
-  | REWRITE_PARAMETER_TYPES files ->
-    (env, ServerRefactor.get_parameter_types_rewrite_patches env files)
+  | REWRITE_TYPE_PARAMS_TYPE files ->
+    (env, ServerRefactor.get_type_params_type_rewrite_patches env files)
   | DUMP_SYMBOL_INFO file_list ->
     (env, SymbolInfoService.go genv.workers file_list env)
   | IN_MEMORY_DEP_TABLE_SIZE ->
@@ -188,22 +303,23 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         genv.local_config.ServerLocalConfig.store_decls_in_saved_state
       in
       ( env,
-        SaveStateService.go
-          ~dep_table_as_blob:false
-          ~save_decls
-          env
-          filename
-          ~replace_state_after_saving )
+        SaveStateService.go ~save_decls env filename ~replace_state_after_saving
+      )
     else
       (env, Error "There are typecheck errors; cannot generate saved state.")
   | SEARCH (query, type_) ->
     let lst = env.ServerEnv.local_symbol_table in
-    (env, ServerSearch.go genv.workers query type_ !lst)
+    (env, ServerSearch.go query type_ !lst)
   | COVERAGE_COUNTS path -> (env, ServerCoverageMetric.go path genv env)
-  | LINT fnl -> (env, ServerLint.go genv env fnl)
+  | LINT fnl ->
+    let ctx = Provider_context.empty ~tcopt:env.tcopt in
+    (env, ServerLint.go genv ctx fnl)
   | LINT_STDIN { filename; contents } ->
-    (env, ServerLint.go_stdin env ~filename ~contents)
-  | LINT_ALL code -> (env, ServerLint.lint_all genv env code)
+    let ctx = Provider_context.empty ~tcopt:env.tcopt in
+    (env, ServerLint.go_stdin ctx ~filename ~contents)
+  | LINT_ALL code ->
+    let ctx = Provider_context.empty ~tcopt:env.tcopt in
+    (env, ServerLint.lint_all genv ctx code)
   | LINT_XCONTROLLER fnl -> (env, ServerLint.go_xcontroller genv env fnl)
   | CREATE_CHECKPOINT x -> (env, ServerCheckpoint.create_checkpoint x)
   | RETRIEVE_CHECKPOINT x -> (env, ServerCheckpoint.retrieve_checkpoint x)
@@ -224,26 +340,28 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let predeclare = genv.local_config.ServerLocalConfig.predeclare_ide in
     let edits = List.map edits ~f:Ide_api_types.ide_text_edit_to_fc in
     (ServerFileSync.edit_file ~predeclare env path edits, ())
-  | IDE_AUTOCOMPLETE (path, pos, is_manually_invoked) ->
-    With_complete_flag.(
-      let pos = pos |> Ide_api_types.ide_pos_to_fc in
-      let file_content =
-        ServerFileSync.get_file_content (ServerCommandTypes.FileName path)
-      in
-      let offset = File_content.get_offset file_content pos in
-      (* will raise if out of bounds *)
-      let char_at_pos = File_content.get_char file_content offset in
-      let results =
-        ServerAutoComplete.auto_complete_at_position
-          ~is_manually_invoked
-          ~file_content
-          ~pos
-          ~tcopt:env.tcopt
-          ~sienv:!(env.ServerEnv.local_symbol_table)
-      in
-      let completions = results.value in
-      let is_complete = results.is_complete in
-      (env, { AutocompleteTypes.completions; char_at_pos; is_complete }))
+  | IDE_AUTOCOMPLETE (filename, pos, is_manually_invoked) ->
+    let pos = pos |> Ide_api_types.ide_pos_to_fc in
+    let content =
+      ServerFileSync.get_file_content (ServerCommandTypes.FileName filename)
+    in
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path:(Relative_path.create_detect_prefix filename)
+        ~file_input:(ServerCommandTypes.FileContent content)
+    in
+    let results =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerAutoComplete.go_ctx
+            ~ctx
+            ~entry
+            ~sienv:!(env.ServerEnv.local_symbol_table)
+            ~is_manually_invoked
+            ~line:pos.File_content.line
+            ~column:pos.File_content.column)
+    in
+    (env, results)
   | IDE_FFP_AUTOCOMPLETE (path, pos) ->
     let pos = pos |> Ide_api_types.ide_pos_to_fc in
     let content =
@@ -275,10 +393,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         Errors.empty
     in
     let new_env =
-      {
-        env with
-        diag_subscribe = Some (Diagnostic_subscription.of_id id init);
-      }
+      { env with diag_subscribe = Some (Diagnostic_subscription.of_id id init) }
     in
     let () = Hh_logger.log "Diag_subscribe: SUBSCRIBE %d" id in
     (new_env, ())
@@ -335,13 +450,27 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let env = { env with tcopt = env.ServerEnv.tcopt } in
     (env, ServerFunIsLocallableBatch.go genv.workers positions env)
   | LIST_FILES_WITH_ERRORS -> (env, ServerEnv.list_files env)
-  | FILE_DEPENDENCIES filenames ->
-    let files = ServerFileDependencies.go genv env filenames in
+  | FILE_DEPENDENTS filenames ->
+    let files = ServerFileDependents.go genv env filenames in
     (env, files)
-  | IDENTIFY_TYPES (filename, line, char) ->
-    (env, ServerTypeDefinition.go env (filename, line, char))
-  | EXTRACT_STANDALONE to_extract ->
-    (env, ServerExtractStandalone.go env.tcopt to_extract)
+  | IDENTIFY_TYPES (labelled_file, line, column) ->
+    let (path, file_input) =
+      ServerCommandTypesUtils.extract_labelled_file labelled_file
+    in
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path
+        ~file_input
+    in
+    let result =
+      ServerTypeDefinition.go_quarantined ~ctx ~entry ~line ~column
+    in
+    (env, result)
+  | EXTRACT_STANDALONE target ->
+    let ctx = Provider_context.empty ~tcopt:env.tcopt in
+    (env, ServerExtractStandalone.go ctx target)
+  | CONCATENATE_ALL paths -> (env, ServerConcatenateAll.go genv env paths)
   | GO_TO_DEFINITION (labelled_file, line, column) ->
     let (path, file_input) =
       ServerCommandTypesUtils.extract_labelled_file labelled_file
@@ -352,7 +481,37 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         ~path
         ~file_input
     in
-    Provider_utils.with_context ~ctx ~f:(fun () ->
-        (env, ServerGoToDefinition.go_ctx ~ctx ~entry ~line ~column))
-  | BIGCODE filename -> (env, ServerBigCode.go env filename)
-  | PAUSE pause -> ({ env with paused = pause }, ())
+    Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+        (env, ServerGoToDefinition.go_quarantined ~ctx ~entry ~line ~column))
+  | BIGCODE filename ->
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path:(Relative_path.create_detect_prefix filename)
+        ~file_input:(ServerCommandTypes.FileName filename)
+    in
+    let result = ServerBigCode.go_ctx ~ctx ~entry in
+    (env, result)
+  | VERBOSE verbose ->
+    if verbose then
+      Hh_logger.Level.set_min_level Hh_logger.Level.Debug
+    else
+      Hh_logger.Level.set_min_level
+        genv.local_config.ServerLocalConfig.min_log_level;
+    (env, ())
+  | PAUSE pause ->
+    let env =
+      if pause then
+        {
+          env with
+          full_recheck_on_file_changes =
+            Paused { paused_recheck_id = env.init_env.recheck_id };
+        }
+      else
+        { env with full_recheck_on_file_changes = Resumed }
+    in
+    (env, ())
+  | GLOBAL_INFERENCE (submode, files) ->
+    (* We are getting files in the reverse order*)
+    let files = List.rev files in
+    (env, ServerGlobalInference.execute submode files)

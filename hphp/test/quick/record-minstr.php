@@ -1,19 +1,19 @@
 <?hh
 
-final record Foo {
-  x: vec,
+record Foo {
+  vec x;
 }
 
 class A {
   public Foo $f;
 }
 
-final record Bar {
-  y: A,
+record Bar {
+  A y;
 }
 
-final record Baz {
-  z: int,
+record Baz {
+  int z;
 }
 <<__EntryPoint>> function main(): void {
 $a = vec[Foo['x' => vec[10]], Foo['x' => vec[42]]];

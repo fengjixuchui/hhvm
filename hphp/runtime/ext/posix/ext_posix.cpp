@@ -33,6 +33,7 @@
 #include <folly/portability/Unistd.h>
 #include <pwd.h>
 
+#include <folly/container/Array.h>
 #include <folly/String.h>
 
 #include "hphp/runtime/base/array-init.h"
@@ -41,6 +42,7 @@
 #include "hphp/runtime/base/request-injection-data.h"
 #include "hphp/runtime/server/cli-server.h"
 #include "hphp/util/sync-signal.h"
+#include "hphp/util/user-info.h"
 
 namespace HPHP {
 
@@ -188,59 +190,47 @@ const StaticString
   s_dir("dir"),
   s_shell("shell");
 
-static Variant php_posix_group_to_array(int gid,
-                   const String& gname = uninit_variant.toString()) {
-  // Don't pass a gid *and* a gname to this.
-  assertx((gid <  0) || gname.size() == 0);
+static Variant php_posix_group_to_array(group* gr) {
+  // Invalid user.
+  if (gr == nullptr) return false;
 
-  if ((gid < 0) && (gname.size() == 0)) {
-    return false;
+  auto members = Array::CreateVArray();
+  for (int count=0; gr->gr_mem[count] != NULL; count++) {
+    members.append(String(gr->gr_mem[count], CopyString));
   }
 
-  int grbuflen = sysconf(_SC_GETGR_R_SIZE_MAX);
-  if (grbuflen < 1) {
-    return false;
-  }
-
-  std::unique_ptr<char[]> grbuf(new char[grbuflen]);
-  struct group gr;
-  struct group *retgrptr = NULL;
-
-  // If we somehow reach this point and both gname and gid were
-  // passed, then the gid values will override the gname values,
-  // but it will otherwise function just fine.
-  // The assertx() clause above should prevent that, however.
-  if ((gname.size() > 0) &&
-      (getgrnam_r(gname.data(), &gr, grbuf.get(), grbuflen, &retgrptr) != 0 ||
-      retgrptr == nullptr)) {
-    return false;
-  } else if ((gid >= 0) &&
-      (getgrgid_r(gid, &gr, grbuf.get(), grbuflen, &retgrptr) != 0 ||
-      retgrptr == nullptr)) {
-    return false;
-  }
-
-  Array members = Array::Create();
-  for (int count=0; gr.gr_mem[count] != NULL; count++) {
-    members.append(String(gr.gr_mem[count], CopyString));
-  }
-
-  return make_map_array(
-    s_name, String(gr.gr_name, CopyString),
-    s_passwd, String(gr.gr_passwd, CopyString),
+  return make_darray(
+    s_name, String(gr->gr_name, CopyString),
+    s_passwd, String(gr->gr_passwd, CopyString),
     s_members, members,
-    s_gid, (int)gr.gr_gid
+    s_gid, (int)gr->gr_gid
   );
 }
 
 Variant HHVM_FUNCTION(posix_getgrgid,
                       int gid) {
-  return php_posix_group_to_array(gid);
+  if (gid < 0) return false;
+
+  auto buf = GroupBuffer{};
+  group* gr;
+  if (getgrgid_r(gid, &buf.ent, buf.data.get(), buf.size, &gr)) {
+    // Failed to obtain the record.
+    return false;
+  }
+  return php_posix_group_to_array(gr);
 }
 
 Variant HHVM_FUNCTION(posix_getgrnam,
                       const String& name) {
-  return php_posix_group_to_array(-1, name.data());
+  if (name.size() == 0) return false;
+
+  auto buf = GroupBuffer{};
+  group* gr;
+  if (getgrnam_r(name.data(), &buf.ent, buf.data.get(), buf.size, &gr)) {
+    // Failed to obtain the record.
+    return false;
+  }
+  return php_posix_group_to_array(gr);
 }
 
 Variant HHVM_FUNCTION(posix_getgroups) {
@@ -250,11 +240,11 @@ Variant HHVM_FUNCTION(posix_getgroups) {
     return false;
   }
 
-  Array ret;
+  VArrayInit ret(result);
   for (int i = 0; i < result; i++) {
     ret.append((int)gidlist[i]);
   }
-  return ret;
+  return ret.toVariant();
 }
 
 Variant HHVM_FUNCTION(posix_getlogin) {
@@ -288,60 +278,53 @@ int64_t HHVM_FUNCTION(posix_getppid) {
   return getppid();
 }
 
-static Variant php_posix_passwd_to_array(int uid,
-                   const String& name = uninit_variant.toString()) {
-  // Don't pass a uid *and* a name to this.
-  assertx((uid <  0) || name.size() == 0);
+static Variant php_posix_passwd_to_array(passwd* pw) {
+  // Invalid user.
+  if (pw == nullptr) return false;
 
-  if ((uid < 0) && name.size() == 0) {
-    return false;
-  }
-
-  int pwbuflen = sysconf(_SC_GETPW_R_SIZE_MAX);
-  if (pwbuflen < 1) {
-    return false;
-  }
-
-  std::unique_ptr<char[]> pwbuf(new char[pwbuflen]);
-  struct passwd pw;
-  struct passwd *retpwptr = NULL;
-
-  // If we somehow reach this point and both name and uid were
-  // passed, then the uid values will override the name values,
-  // but it will otherwise function just fine.
-  // The assertx() clauses above should prevent that, however.
-  if ((name.size() > 0) &&
-      getpwnam_r(name.data(), &pw, pwbuf.get(), pwbuflen, &retpwptr)) {
-    return false;
-  } else if ((uid >= 0) &&
-      getpwuid_r(uid, &pw, pwbuf.get(), pwbuflen, &retpwptr)) {
-    return false;
-  }
-
-  if (!retpwptr) return false;
-
-  return make_map_array(
-    s_name,   String(pw.pw_name,   CopyString),
-    s_passwd, String(pw.pw_passwd, CopyString),
-    s_uid,    (int)pw.pw_uid,
-    s_gid,    (int)pw.pw_gid,
-    s_gecos,  String(pw.pw_gecos,  CopyString),
-    s_dir,    String(pw.pw_dir,    CopyString),
-    s_shell,  String(pw.pw_shell,  CopyString)
+  return make_darray(
+    s_name,   String(pw->pw_name,   CopyString),
+    s_passwd, String(pw->pw_passwd, CopyString),
+    s_uid,    (int)pw->pw_uid,
+    s_gid,    (int)pw->pw_gid,
+    s_gecos,  String(pw->pw_gecos,  CopyString),
+    s_dir,    String(pw->pw_dir,    CopyString),
+    s_shell,  String(pw->pw_shell,  CopyString)
   );
 }
 
 Variant HHVM_FUNCTION(posix_getpwnam,
                       const String& username) {
-  return php_posix_passwd_to_array(-1, username);
+  if (username.size() == 0) return false;
+
+  auto buf = PasswdBuffer{};
+  passwd* pw;
+  if (getpwnam_r(username.data(), &buf.ent, buf.data.get(), buf.size, &pw)) {
+    // Failed to obtain the record.
+    return false;
+  }
+  return php_posix_passwd_to_array(pw);
 }
 
 Variant HHVM_FUNCTION(posix_getpwuid,
                       int uid) {
-  return php_posix_passwd_to_array(uid);
+  if (uid < 0) return false;
+
+  auto buf = PasswdBuffer{};
+  passwd* pw;
+  if (getpwuid_r(uid, &buf.ent, buf.data.get(), buf.size, &pw)) {
+    // Failed to obtain the record.
+    return false;
+  }
+  return php_posix_passwd_to_array(pw);
 }
 
-static bool posix_addlimit(int limit, const char *name, Array &ret) {
+namespace {
+
+const StaticString s_unlimited{"unlimited"};
+
+template <class T>
+bool posix_addlimit(int limit, const char *name, T &ret) {
   char hard[80]; snprintf(hard, 80, "hard %s", name);
   char soft[80]; snprintf(soft, 80, "soft %s", name);
 
@@ -355,13 +338,13 @@ static bool posix_addlimit(int limit, const char *name, Array &ret) {
   String hardStr(hard, CopyString);
 
   if (rl.rlim_cur == RLIM_INFINITY) {
-    ret.set(softStr, "unlimited");
+    ret.set(softStr, s_unlimited);
   } else {
     ret.set(softStr, (int)rl.rlim_cur);
   }
 
   if (rl.rlim_max == RLIM_INFINITY) {
-    ret.set(hardStr, "unlimited");
+    ret.set(hardStr, s_unlimited);
   } else {
     ret.set(hardStr, (int)rl.rlim_max);
   }
@@ -369,38 +352,36 @@ static bool posix_addlimit(int limit, const char *name, Array &ret) {
   return true;
 }
 
-static struct limitlist {
-  int limit;
-  const char *name;
-} limits[] = {
-  { RLIMIT_CORE,    "core" },
-  { RLIMIT_DATA,    "data" },
-  { RLIMIT_STACK,   "stack" },
+constexpr auto limits = folly::make_array<std::pair<int, const char *>>(
+  std::make_pair(RLIMIT_CORE,    "core"),
+  std::make_pair(RLIMIT_DATA,    "data"),
+  std::make_pair(RLIMIT_STACK,   "stack"),
   //{ RLIMIT_VMEM,    "virtualmem" },
-  { RLIMIT_AS,      "totalmem" },
+  std::make_pair(RLIMIT_AS,      "totalmem"),
 #ifdef RLIMIT_RSS
-  { RLIMIT_RSS,     "rss" },
+  std::make_pair(RLIMIT_RSS,     "rss"),
 #endif
 #ifdef RLIMIT_NPROC
-  { RLIMIT_NPROC,   "maxproc" },
+  std::make_pair(RLIMIT_NPROC,   "maxproc"),
 #endif
 #ifdef RLIMIT_MEMLOCK
-  { RLIMIT_MEMLOCK, "memlock" },
+  std::make_pair(RLIMIT_MEMLOCK, "memlock"),
 #endif
-  { RLIMIT_CPU,     "cpu" },
-  { RLIMIT_FSIZE,   "filesize" },
-  { RLIMIT_NOFILE,  "openfiles" },
-  { 0, NULL }
-};
+  std::make_pair(RLIMIT_CPU,     "cpu"),
+  std::make_pair(RLIMIT_FSIZE,   "filesize"),
+  std::make_pair(RLIMIT_NOFILE,  "openfiles")
+);
+
+} // namespace
 
 Variant HHVM_FUNCTION(posix_getrlimit) {
-  Array ret;
-  for (struct limitlist *l = limits; l->name; l++) {
-    if (!posix_addlimit(l->limit, l->name, ret)) {
+  DArrayInit ret{2 * limits.size()};
+  for (auto const l : limits) {
+    if (!posix_addlimit(l.first, l.second, ret)) {
       return false;
     }
   }
-  return ret;
+  return ret.toVariant();
 }
 
 Variant HHVM_FUNCTION(posix_getsid,
@@ -542,7 +523,7 @@ Variant HHVM_FUNCTION(posix_times) {
     return false;
   }
 
-  return make_map_array(
+  return make_darray(
     s_ticks,  (int)ticks,        /* clock ticks */
     s_utime,  (int)t.tms_utime,  /* user time */
     s_stime,  (int)t.tms_stime,  /* system time */
@@ -581,16 +562,16 @@ Variant HHVM_FUNCTION(posix_uname) {
     return false;
   }
 
-  Array ret;
-  ret.set(s_sysname,    String(u.sysname,    CopyString));
-  ret.set(s_nodename,   String(u.nodename,   CopyString));
-  ret.set(s_release,    String(u.release,    CopyString));
-  ret.set(s_version,    String(u.version,    CopyString));
-  ret.set(s_machine,    String(u.machine,    CopyString));
+  return make_darray(
+    s_sysname,      String(u.sysname,    CopyString)
+    , s_nodename,   String(u.nodename,   CopyString)
+    , s_release,    String(u.release,    CopyString)
+    , s_version,    String(u.version,    CopyString)
+    , s_machine,    String(u.machine,    CopyString)
 #if defined(_GNU_SOURCE)
-  ret.set(s_domainname, String(u.domainname, CopyString));
+    , s_domainname, String(u.domainname, CopyString)
 #endif
-  return ret;
+  );
 }
 
 ///////////////////////////////////////////////////////////////////////////////

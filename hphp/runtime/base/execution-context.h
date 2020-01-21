@@ -62,6 +62,8 @@ struct VMState {
   MInstrState mInstrState;
   ActRec* jitCalledFrame;
   jit::TCA jitReturnAddr;
+  ObjectData* exn;
+  bool unwinderSideEnter;
 };
 
 enum class InclOpFlags {
@@ -106,7 +108,7 @@ inline bool any(OBFlags f) { return f != OBFlags::None; }
 inline bool operator!(OBFlags f) { return f == OBFlags::None; }
 
 struct VMParserFrame {
-  std::string filename;
+  LowStringPtr filename;
   int lineNumber;
 };
 
@@ -248,9 +250,7 @@ public:
   std::size_t registerRequestEventHandler(RequestEventHandler* handler);
   void unregisterRequestEventHandler(RequestEventHandler* handler,
                                      std::size_t index);
-  void registerShutdownFunction(const Variant& function, Array arguments,
-                                ShutdownType type);
-  bool removeShutdownFunction(const Variant& function, ShutdownType type);
+  void registerShutdownFunction(const Variant& function, ShutdownType type);
   void onRequestShutdown();
   void onShutdownPreSend();
   void onShutdownPostSend();
@@ -321,9 +321,6 @@ public:
 
   bool hasRequestEventHandlers() const;
 
-  const Variant& getSoftLateInitDefault() const;
-  void setSoftLateInitDefault(Variant);
-
   const RepoOptions& getRepoOptionsForCurrentFrame() const;
 
   const RepoOptions* getRepoOptionsForRequest() const;
@@ -376,14 +373,14 @@ public:
   /*
    * Look up a class constant.
    *
-   * The returned Cell is guaranteed not to hold a reference counted
+   * The returned TypedValue is guaranteed not to hold a reference counted
    * type.  Raises an error if the class has no constant with that
    * name, or if the class is not defined.
    */
-  Cell lookupClsCns(const NamedEntity* ne,
+  TypedValue lookupClsCns(const NamedEntity* ne,
                     const StringData* cls,
                     const StringData* cns);
-  Cell lookupClsCns(const StringData* cls,
+  TypedValue lookupClsCns(const StringData* cls,
                     const StringData* cns);
 
   // Get the next outermost VM frame, even across re-entry
@@ -414,7 +411,7 @@ public:
   void debuggerExecutePsps();
 
   bool isNested() { return m_nesting != 0; }
-  void pushVMState(Cell* savedSP);
+  void pushVMState(TypedValue* savedSP);
   void popVMState();
 
   /*
@@ -467,6 +464,8 @@ public:
                               ObjectData* this_ = nullptr,
                               Class* class_ = nullptr);
 
+  using ThisOrClass = Either<ObjectData*, Class*>;
+
   TypedValue invokeFunc(const Func* f,
                         const Variant& args_ = init_null_variant,
                         ObjectData* this_ = nullptr,
@@ -481,18 +480,19 @@ public:
                         const Variant& args_);
 
   TypedValue invokeFuncFew(const Func* f,
-                           void* thisOrCls,
+                           ThisOrClass thisOrCls,
                            StringData* invName,
-                           int argc,
+                           uint32_t numArgs,
                            const TypedValue* argv,
-                           bool dynamic = true);
+                           bool dynamic = true,
+                           bool allowDynCallNoPointer = false);
 
   TypedValue invokeFuncFew(const Func* f,
-                           void* thisOrCls,
+                           ThisOrClass thisOrCls,
                            StringData* invName = nullptr);
 
   TypedValue invokeFuncFew(const CallCtx& ctx,
-                           int argc,
+                           uint32_t numArgs,
                            const TypedValue* argv);
 
   TypedValue invokeMethod(
@@ -510,7 +510,7 @@ public:
   );
 
   void resumeAsyncFunc(Resumable* resumable, ObjectData* freeObj,
-                       Cell awaitResult);
+                       TypedValue awaitResult);
   void resumeAsyncFuncThrow(Resumable* resumable, ObjectData* freeObj,
                             ObjectData* exception);
 
@@ -519,15 +519,11 @@ public:
   template<class Fn> void sweepDynPropTable(Fn);
 
 private:
-  template<class FStackCheck, class FInitArgs, class FEnterVM>
+  template<class FEnterVM>
   TypedValue invokeFuncImpl(const Func* f,
-                            ObjectData* thiz, Class* cls, uint32_t argc,
-                            StringData* invName,
-                            bool dynamic, bool allowDynCallNoPointer,
-                            FStackCheck doStackCheck,
-                            FInitArgs doInitArgs,
-                            FEnterVM doEnterVM,
-                            Array&& reifiedGenerics);
+                            ObjectData* thiz, Class* cls,
+                            uint32_t numArgsInclUnpack,
+                            FEnterVM doEnterVM);
 
   struct ExcLoggerHook final : LoggerHook {
     explicit ExcLoggerHook(ExecutionContext& ec) : ec(ec) {}
@@ -575,7 +571,6 @@ private:
   String m_timezone;
   bool m_throwAllErrors;
   req::ptr<StreamContext> m_streamContext;
-  Variant m_softLateInitDefault;
 
   // session backup/restore for RPCRequestHandler
   std::array<Array, 2> m_shutdownsBackup;
@@ -612,7 +607,6 @@ public:
   TYPE_SCAN_IGNORE_FIELD(m_nestedVMs); // handled explicitly in heap-scan.h
   int m_nesting;
   bool m_dbgNoBreak;
-  bool m_unwindingCppException;
 private:
   Array m_evaledArgs;
   String m_lastErrorPath;
@@ -620,11 +614,12 @@ private:
 public:
   Variant m_setprofileCallback;
   Variant m_memThresholdCallback;
+  Variant m_timeThresholdCallback;
   uint64_t m_setprofileFlags;
   bool m_executingSetprofileCallback;
   hphp_fast_set<std::string> m_setprofileFunctions;
 public:
-  Cell m_headerCallback;
+  TypedValue m_headerCallback;
   bool m_headerCallbackDone{false}; // used to prevent infinite loops
 private:
   ExcLoggerHook m_logger_hook;

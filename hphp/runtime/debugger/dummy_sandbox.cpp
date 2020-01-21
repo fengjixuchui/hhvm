@@ -22,7 +22,6 @@
 #include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/server/source-root-info.h"
-#include "hphp/runtime/base/externals.h"
 #include "hphp/runtime/base/php-globals.h"
 #include "hphp/runtime/base/file-util.h"
 
@@ -96,7 +95,7 @@ void DummySandbox::run() {
         } else {
           auto server = php_global_exchange(s__SERVER, init_null());
           forceToDArray(server);
-          Array arr = server.toArrRef();
+          Array arr = server.asArrRef();
           server.unset();
           php_global_set(s__SERVER, sri.setServerVariables(std::move(arr)));
         }
@@ -111,7 +110,7 @@ void DummySandbox::run() {
                        doc.c_str(), cwd);
           bool error; std::string errorMsg;
           bool ret = hphp_invoke(g_context.getNoCheck(), doc, false, null_array,
-                                 uninit_null(), "", "", error, errorMsg, true,
+                                 nullptr, "", "", error, errorMsg, true,
                                  false, true, RuntimeOption::EvalPreludePath);
           if (!ret || error) {
             msg += "Unable to pre-load " + doc;

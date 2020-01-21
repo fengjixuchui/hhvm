@@ -69,7 +69,7 @@ TypedValue HHVM_FUNCTION(array_pad,
 TypedValue HHVM_FUNCTION(array_product,
                          const Variant& array);
 TypedValue HHVM_FUNCTION(array_push,
-                         VRefParam container,
+                         Variant& container,
                          const Variant& var,
                          const Array& args = null_array);
 TypedValue HHVM_FUNCTION(array_rand,
@@ -80,9 +80,9 @@ TypedValue HHVM_FUNCTION(array_search,
                          const Variant& haystack,
                          bool strict = false);
 TypedValue HHVM_FUNCTION(array_shift,
-                         VRefParam array);
+                         Variant& array);
 TypedValue HHVM_FUNCTION(array_splice,
-                         VRefParam input,
+                         Variant& input,
                          int offset,
                          const Variant& length = uninit_variant,
                          const Variant& replacement = uninit_variant);
@@ -92,13 +92,13 @@ TypedValue HHVM_FUNCTION(array_unique,
                          const Variant& array,
                          int sort_flags = 2);
 TypedValue HHVM_FUNCTION(array_unshift,
-                         VRefParam array,
+                         Variant& array,
                          const Variant& var,
                          const Array& args = null_array);
 TypedValue HHVM_FUNCTION(array_values,
                          const Variant& input);
 bool HHVM_FUNCTION(shuffle,
-                   VRefParam array);
+                   Variant& array);
 int64_t HHVM_FUNCTION(count,
                       const Variant& var,
                       int64_t mode = 0);
@@ -203,36 +203,36 @@ TypedValue HHVM_FUNCTION(array_intersect_ukey,
                          const Variant& key_compare_func,
                          const Array& args = null_array);
 bool HHVM_FUNCTION(sort,
-                   VRefParam array,
+                   Variant& array,
                    int sort_flags = 0);
 bool HHVM_FUNCTION(rsort,
-                   VRefParam array,
+                   Variant& array,
                    int sort_flags = 0);
 bool HHVM_FUNCTION(asort,
-                   VRefParam array,
+                   Variant& array,
                    int sort_flags = 0);
 bool HHVM_FUNCTION(arsort,
-                   VRefParam array,
+                   Variant& array,
                    int sort_flags = 0);
 bool HHVM_FUNCTION(ksort,
-                   VRefParam array,
+                   Variant& array,
                    int sort_flags = 0);
 bool HHVM_FUNCTION(krsort,
-                   VRefParam array,
+                   Variant& array,
                    int sort_flags = 0);
 bool HHVM_FUNCTION(usort,
-                   VRefParam array,
+                   Variant& array,
                    const Variant& cmp_function);
 bool HHVM_FUNCTION(uasort,
-                   VRefParam array,
+                   Variant& array,
                    const Variant& cmp_function);
 bool HHVM_FUNCTION(uksort,
-                   VRefParam array,
+                   Variant& array,
                    const Variant& cmp_function);
 bool HHVM_FUNCTION(natsort,
-                   VRefParam array);
+                   Variant& array);
 bool HHVM_FUNCTION(natcasesort,
-                   VRefParam array);
+                   Variant& array);
 String HHVM_FUNCTION(i18n_loc_get_default);
 bool HHVM_FUNCTION(i18n_loc_set_default,
                    const String& locale);
@@ -246,16 +246,6 @@ TypedValue HHVM_FUNCTION(hphp_array_idx,
                          const Variant& search,
                          const Variant& key,
                          const Variant& def);
-bool HHVM_FUNCTION(array_multisort,
-                   VRefParam arg1,
-                   VRefParam arg2 = uninit_null(),
-                   VRefParam arg3 = uninit_null(),
-                   VRefParam arg4 = uninit_null(),
-                   VRefParam arg5 = uninit_null(),
-                   VRefParam arg6 = uninit_null(),
-                   VRefParam arg7 = uninit_null(),
-                   VRefParam arg8 = uninit_null(),
-                   VRefParam arg9 = uninit_null());
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -265,29 +255,29 @@ inline int64_t countHelper(TypedValue tv) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#define getCheckedArrayRet(input, fail)                                  \
-  auto const cell_##input = static_cast<const Variant&>(input).toCell(); \
-  if (UNLIKELY(!isArrayLikeType(cell_##input->m_type) &&                 \
-    !isClsMethType(cell_##input->m_type))) {                             \
-    throw_expected_array_exception();                                    \
-    return fail;                                                         \
-  }                                                                      \
-  if (isClsMethType(cell_##input->m_type)) raiseClsMethToVecWarningHelper(); \
-  ArrNR arrNR_##input{isClsMethType(cell_##input->m_type) ?              \
-    clsMethToVecHelper(cell_##input->m_data.pclsmeth).detach() :         \
-    cell_##input->m_data.parr};                                          \
+#define getCheckedArrayRet(input, fail)                                        \
+  auto const cell_##input = static_cast<const Variant&>(input).asTypedValue(); \
+  if (UNLIKELY(!isArrayLikeType(cell_##input->m_type) &&                       \
+    !isClsMethType(cell_##input->m_type))) {                                   \
+    raise_expected_array_warning();                                            \
+    return fail;                                                               \
+  }                                                                            \
+  if (isClsMethType(cell_##input->m_type)) raiseClsMethToVecWarningHelper();   \
+  ArrNR arrNR_##input{isClsMethType(cell_##input->m_type) ?                    \
+    clsMethToVecHelper(cell_##input->m_data.pclsmeth).detach() :               \
+    cell_##input->m_data.parr};                                                \
   const Array& arr_##input = arrNR_##input.asArray();
 
-#define getCheckedContainer(input)                                       \
-  if (UNLIKELY(!isContainer(input) && !input.isClsMeth())) {             \
-    throw_expected_array_or_collection_exception();                      \
-    return make_tv<KindOfNull>();                                        \
-  }                                                                      \
-  Variant var_##input(input);                                            \
-  tvCastToArrayInPlace<TypedValue*, IntishCast::Cast>(           \
-    var_##input.asTypedValue()                                           \
-  );                                                                     \
-  assertx(var_##input.isArray());                                        \
+#define getCheckedContainer(input)                                             \
+  if (UNLIKELY(!isContainer(input) && !input.isClsMeth())) {                   \
+    raise_expected_array_or_collection_warning();                              \
+    return make_tv<KindOfNull>();                                              \
+  }                                                                            \
+  Variant var_##input(input);                                                  \
+  tvCastToArrayInPlace<TypedValue*, IntishCast::Cast>(                         \
+    var_##input.asTypedValue()                                                 \
+  );                                                                           \
+  assertx(var_##input.isArray());                                              \
   auto arr_##input = var_##input.toArray<IntishCast::Cast>();
 
 #define getCheckedArray(input)        \

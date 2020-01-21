@@ -167,6 +167,8 @@ ObjectData* nativeDataInstanceCopyCtor(ObjectData* src, Class* cls,
       HeaderKind::NativeObject);
   assertx(obj->hasExactlyOneRef());
 
+  obj->props()->init(cls->numDeclProperties());
+
   if (UNLIKELY(cls->hasMemoSlots())) {
     std::memset(node + 1, 0, nativeDataSize - sizeof(NativeNode));
   }
@@ -185,11 +187,9 @@ void nativeDataInstanceDtor(ObjectData* obj, const Class* cls) {
   obj->~ObjectData();
 
   auto const nProps = size_t{cls->numDeclProperties()};
-  auto prop = reinterpret_cast<TypedValue*>(obj + 1);
-  auto const stop = prop + nProps;
-  for (; prop != stop; ++prop) {
-    tvDecRefGen(prop);
-  }
+  obj->props()->foreach(nProps, [&](tv_lval lval) {
+    tvDecRefGen(lval);
+  });
 
   auto ndi = cls->getNativeDataInfo();
 

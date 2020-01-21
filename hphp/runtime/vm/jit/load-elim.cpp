@@ -184,7 +184,6 @@ struct Global {
   size_t loadsRemoved  = 0;
   size_t loadsRefined  = 0;
   size_t jumpsRemoved  = 0;
-  size_t callsResolved = 0;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -265,11 +264,6 @@ struct FReducible { ValueInfo knownValue; Type knownType; uint32_t aloc; };
 struct FRefinableLoad { Type refinedType; };
 
 /*
- * The instruction is a call to a callee who's identity has been determined.
- */
-struct FResolvable { const Func* callee; };
-
-/*
  * The instruction can be replaced with a nop.
  */
 struct FRemovable {};
@@ -282,7 +276,7 @@ struct FJmpNext {};
 struct FJmpTaken {};
 
 using Flags = boost::variant<FNone,FRedundant,FReducible,FRefinableLoad,
-                             FResolvable,FRemovable,FJmpNext,FJmpTaken>;
+                             FRemovable,FJmpNext,FJmpTaken>;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -293,7 +287,8 @@ bool refinable_load_eligible(const IRInstruction& inst) {
     case LdStk:
     case LdMBase:
     case LdMem:
-    case LdARCtx:
+    case LdIterPos:
+    case LdIterEnd:
       assertx(inst.hasTypeParam());
       return true;
     default:
@@ -406,6 +401,13 @@ void store(Local& env, AliasClass acls, SSATmp* value) {
 Flags handle_general_effects(Local& env,
                              const IRInstruction& inst,
                              GeneralEffects m) {
+  if (inst.is(DecRef, DecRefNZ)) {
+    // DecRef can only free things, which means from load-elim's point
+    // of view it only has a kill set, which load-elim
+    // ignores. DecRefNZ is always a no-op.
+    return FNone{};
+  }
+
   auto handleCheck = [&](Type typeParam) -> folly::Optional<Flags> {
     auto const meta = env.global.ainfo.find(canonicalize(m.loads));
     if (!meta) return folly::none;
@@ -440,13 +442,21 @@ Flags handle_general_effects(Local& env,
   case CheckLoc:
   case CheckStk:
   case CheckMBase:
-  case CheckRefInner:
     if (auto flags = handleCheck(inst.typeParam())) return *flags;
     break;
 
   case CheckInitMem:
-    if (auto flags = handleCheck(TInitGen)) return *flags;
+    if (auto flags = handleCheck(TInitCell)) return *flags;
     break;
+
+  case CheckIter: {
+    auto const meta = env.global.ainfo.find(canonicalize(m.loads));
+    if (!meta || !env.state.avail[meta->index]) break;
+    auto const& type = env.state.tracked[meta->index].knownType;
+    if (!type.hasConstVal(TInt)) break;
+    auto const match = type.intVal() == inst.extra<CheckIter>()->type.as_byte;
+    return match ? Flags{FJmpNext{}} : Flags{FJmpTaken{}};
+  }
 
   case InitSProps: {
     auto const handle = inst.extra<ClassData>()->cls->sPropInitHandle();
@@ -478,6 +488,22 @@ Flags handle_general_effects(Local& env,
     break;
   }
 
+  case CheckPackedArrayDataBounds: {
+    if (!(inst.src(0)->type() <= (TVec|Type::Array(ArrayData::kPackedKind)))) {
+      break;
+    }
+    if (!inst.src(1)->hasConstVal(TInt)) break;
+
+    auto const idx = inst.src(1)->intVal();
+    auto const acls = canonicalize(AElemI { inst.src(0), idx });
+    auto const meta = env.global.ainfo.find(acls);
+    if (!meta) break;
+    if (!env.state.avail[meta->index]) break;
+    if (env.state.tracked[meta->index].knownType.maybe(TUninit)) break;
+
+    return Flags{FJmpNext{}};
+  }
+
   default:
     break;
   }
@@ -487,39 +513,20 @@ Flags handle_general_effects(Local& env,
   return FNone{};
 }
 
-Flags handle_call_effects(Local& env,
-                          const IRInstruction& inst,
-                          CallEffects effects) {
-  // If the callee isn't already known, see if we can determine it. We can
-  // determine it if we know the precise type of the Func stored in the spilled
-  // frame.
-  auto const knownCallee = [&]() -> const Func* {
-    if (inst.is(Call)) return inst.extra<Call>()->callee;
-    if (inst.is(CallUnpack)) return inst.extra<CallUnpack>()->callee;
-    return nullptr;
-  }();
-
-  Flags flags = FNone{};
-  if (!knownCallee) {
-    if (auto const meta = env.global.ainfo.find(canonicalize(effects.callee))) {
-      assertx(meta->index < kMaxTrackedALocs);
-      if (env.state.avail[meta->index]) {
-        auto const& tracked = env.state.tracked[meta->index];
-        if (tracked.knownType.hasConstVal(TFunc)) {
-          auto const callee = tracked.knownType.funcVal();
-          flags = FResolvable { callee };
-        }
-      }
-    }
-  }
-
+void handle_call_effects(Local& env,
+                         const IRInstruction& inst,
+                         CallEffects effects) {
   /*
    * Keep types for stack, locals, and iterators, and throw away the
    * values.  We are just doing this to avoid extending lifetimes
    * across php calls, which currently always leads to spilling.
    */
-  auto const keep = env.global.ainfo.all_stack          |
-                    env.global.ainfo.all_frame;
+  auto const keep = env.global.ainfo.all_stack    |
+                    env.global.ainfo.all_frame    |
+                    env.global.ainfo.all_iterBase |
+                    env.global.ainfo.all_iterType |
+                    env.global.ainfo.all_iterPos  |
+                    env.global.ainfo.all_iterEnd;
   env.state.avail &= keep;
   for (auto aloc = uint32_t{0};
       aloc < env.global.ainfo.locations.size();
@@ -529,9 +536,10 @@ Flags handle_call_effects(Local& env,
   }
 
   // Any stack locations modified by the callee are no longer valid
-  store(env, effects.stack, nullptr);
-
-  return flags;
+  store(env, effects.kills, nullptr);
+  store(env, effects.inputs, nullptr);
+  store(env, effects.actrec, nullptr);
+  store(env, effects.outputs, nullptr);
 }
 
 Flags handle_assert(Local& env, const IRInstruction& inst) {
@@ -603,20 +611,19 @@ Flags analyze_inst(Local& env, const IRInstruction& inst) {
     [&] (ReturnEffects)     {},
 
     [&] (PureStore m)       { store(env, m.dst, m.value); },
-    [&] (PureSpillFrame m)  { store(env, m.stk, nullptr);
-                              store(env, m.callee, m.calleeValue); },
-
     [&] (PureLoad m)        { flags = load(env, inst, m.src); },
 
     [&] (InlineEnterEffects m) { store(env, m.inlFrame, nullptr);
-                                 store(env, m.inlStack, nullptr); },
+                                 store(env, m.inlStack, nullptr);
+                                 store(env, m.actrec, nullptr); },
     [&] (InlineExitEffects m) { store(env, m.inlFrame, nullptr);
                                 store(env, m.inlMeta, nullptr); },
     [&] (GeneralEffects m)  { flags = handle_general_effects(env, inst, m); },
-    [&] (CallEffects x)     { flags = handle_call_effects(env, inst, x); }
+    [&] (CallEffects x)     { handle_call_effects(env, inst, x); }
   );
 
   switch (inst.op()) {
+  case AssertType:
   case CheckType:
   case CheckNonNull:
   case CheckVArray:
@@ -627,6 +634,32 @@ Flags analyze_inst(Local& env, const IRInstruction& inst) {
   case AssertStk:
     flags = handle_assert(env, inst);
     break;
+  case LdIterPos: {
+    // For pointer iters, the type of the pointee of the pos is a lower bound
+    // on the union of the types of the base's values. The same is true for the
+    // pointee type of the end.
+    //
+    // Since the end is loop-invariant, we can use its type to refine the pos
+    // and so avoid value type-checks. Here, "dropConstVal" drops the precise
+    // value of the end (for static bases) but preserves the pointee type.
+    auto const iter = inst.extra<LdIterPos>()->iterId;
+    auto const end_cls = canonicalize(AIterEnd{inst.src(0), iter});
+    auto const end = find_tracked(env, env.global.ainfo.find(end_cls));
+    if (end != nullptr) {
+      auto const end_type = end->knownType.dropConstVal();
+      if (end_type < inst.typeParam()) return FRefinableLoad { end_type };
+    }
+    break;
+  }
+  case StIterType: {
+    // StIterType stores an immediate to the iter's type fields. We construct a
+    // tmp to represent the immediate. (memory-effects can't do so w/o a unit.)
+    auto const iter = inst.extra<StIterType>()->iterId;
+    auto const type = inst.extra<StIterType>()->type;
+    auto const acls = canonicalize(AIterType{inst.src(0), iter});
+    store(env, acls, env.global.unit.cns(type.as_byte));
+    break;
+  }
   default:
     break;
   }
@@ -804,7 +837,6 @@ void reduce_inst(Global& env, IRInstruction& inst, const FReducible& flags) {
   case CheckLoc:
   case CheckStk:
   case CheckMBase:
-  case CheckRefInner:
     reduce_to(CheckType, inst.typeParam());
     break;
 
@@ -844,32 +876,6 @@ void refine_load(Global& env,
   ++env.loadsRefined;
 }
 
-void resolve_call(Global& env,
-                  IRInstruction& inst,
-                  const FResolvable& flags) {
-  FTRACE(2, "      resolvable: {} -> {}\n",
-         inst.toString(),
-         flags.callee->fullName());
-
-  if (inst.is(Call)) {
-    auto& extra = *inst.extra<Call>();
-    assertx(extra.callee == nullptr);
-    extra.callee = flags.callee;
-    retypeDests(&inst, &env.unit);
-    ++env.callsResolved;
-    return;
-  }
-
-  if (inst.is(CallUnpack)) {
-    auto& extra = *inst.extra<CallUnpack>();
-    assertx(extra.callee == nullptr);
-    extra.callee = flags.callee;
-    retypeDests(&inst, &env.unit);
-    ++env.callsResolved;
-    return;
-  }
-}
-
 //////////////////////////////////////////////////////////////////////
 
 void optimize_inst(Global& env, IRInstruction& inst, Flags flags) {
@@ -886,7 +892,7 @@ void optimize_inst(Global& env, IRInstruction& inst, Flags flags) {
              redundantFlags.knownType.toString(),
              resolved->toString());
 
-      if (resolved->type().subtypeOfAny(TGen, TCls)) {
+      if (resolved->type() <= TCell) {
         env.unit.replace(&inst, AssertType, redundantFlags.knownType, resolved);
       } else {
         env.unit.replace(&inst, Mov, resolved);
@@ -898,8 +904,6 @@ void optimize_inst(Global& env, IRInstruction& inst, Flags flags) {
     [&] (FReducible reducibleFlags) { reduce_inst(env, inst, reducibleFlags); },
 
     [&] (FRefinableLoad f) { refine_load(env, inst, f); },
-
-    [&] (FResolvable f) { resolve_call(env, inst, f); },
 
     [&] (FRemovable) {
       FTRACE(2, "      removable\n");
@@ -1213,7 +1217,6 @@ void optimizeLoads(IRUnit& unit) {
   size_t loadsRemoved = 0;
   size_t loadsRefined = 0;
   size_t jumpsRemoved = 0;
-  size_t callsResolved = 0;
   do {
     auto genv = Global { unit };
     if (genv.ainfo.locations.size() == 0) {
@@ -1244,8 +1247,7 @@ void optimizeLoads(IRUnit& unit) {
     if (!genv.instrsReduced &&
         !genv.loadsRemoved &&
         !genv.loadsRefined &&
-        !genv.jumpsRemoved &&
-        !genv.callsResolved) {
+        !genv.jumpsRemoved) {
       // Nothing changed so we're done
       break;
     }
@@ -1253,7 +1255,6 @@ void optimizeLoads(IRUnit& unit) {
     loadsRemoved += genv.loadsRemoved;
     loadsRefined += genv.loadsRefined;
     jumpsRemoved += genv.jumpsRemoved;
-    callsResolved += genv.callsResolved;
 
     FTRACE(2, "reflowing types\n");
     reflowTypes(genv.unit);
@@ -1284,7 +1285,6 @@ void optimizeLoads(IRUnit& unit) {
     entry->setInt("optimize_loads_loads_removed", loadsRemoved);
     entry->setInt("optimize_loads_loads_refined", loadsRefined);
     entry->setInt("optimize_loads_jumps_removed", jumpsRemoved);
-    entry->setInt("optimize_loads_calls_resolved", callsResolved);
   }
 }
 

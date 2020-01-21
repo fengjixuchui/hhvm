@@ -32,8 +32,8 @@ struct c_Pair : ObjectData {
                  HeaderKind::Pair)
     , m_size(2)
   {
-    cellDup(e0, elm0);
-    cellDup(e1, elm1);
+    tvDup(e0, elm0);
+    tvDup(e1, elm1);
   }
   enum class NoIncRef {};
   explicit c_Pair(const TypedValue& e0, const TypedValue& e1, NoIncRef)
@@ -41,8 +41,8 @@ struct c_Pair : ObjectData {
                  HeaderKind::Pair)
     , m_size(2)
   {
-    cellCopy(e0, elm0);
-    cellCopy(e1, elm1);
+    tvCopy(e0, elm0);
+    tvCopy(e1, elm1);
   }
   ~c_Pair();
 
@@ -87,7 +87,6 @@ struct c_Pair : ObjectData {
 
   template <bool throwOnMiss>
   static TypedValue* OffsetAt(ObjectData* obj, const TypedValue* key) {
-    assertx(!isRefType(key->m_type));
     auto pair = static_cast<c_Pair*>(obj);
     if (key->m_type == KindOfInt64) {
       return throwOnMiss ? pair->at(key->m_data.num)
@@ -109,17 +108,17 @@ struct c_Pair : ObjectData {
 
  private:
   Variant php_at(const Variant& key) const {
-    auto* k = key.toCell();
+    auto* k = key.asTypedValue();
     if (k->m_type == KindOfInt64) {
-      return Variant(tvAsCVarRef(at(k->m_data.num)), Variant::CellDup());
+      return Variant(tvAsCVarRef(at(k->m_data.num)), Variant::TVDup());
     }
     throwBadKeyType();
   }
   Variant php_get(const Variant& key) const {
-    auto* k = key.toCell();
+    auto* k = key.asTypedValue();
     if (k->m_type == KindOfInt64) {
       if (auto tv = get(k->m_data.num)) {
-        return Variant(tvAsCVarRef(tv), Variant::CellDup());
+        return Variant(tvAsCVarRef(tv), Variant::TVDup());
       } else {
         return init_null_variant;
       }

@@ -41,13 +41,21 @@ type 'a promise =
   | Bound : ('a t * (('a, error) result -> 'b t)) -> 'b promise
   | Incomplete of Process_types.t * (string -> 'a)
 
-and 'a t = 'a promise ref * float
 (** float is the time the Future was constructed. *)
+and 'a t = 'a promise ref * float
 
 let make process transformer =
   (ref (Incomplete (process, transformer)), Unix.gettimeofday ())
 
 let of_value v = (ref @@ Complete v, Unix.gettimeofday ())
+
+let of_error (e : string) =
+  try failwith e
+  with e ->
+    let e = Exception.wrap e in
+    let info = Process_types.dummy.Process_types.info in
+    ( ref @@ Complete_but_failed (info, Continuation_raised e),
+      Unix.gettimeofday () )
 
 let delayed_value ~delays v =
   ( ref (Delayed { tapped = 0; remaining = delays; value = v }),
@@ -75,8 +83,13 @@ let error_to_string (info, e) =
   | Timed_out { stdout; stderr } ->
     Printf.sprintf "Timed_out(%s (stdout: %s) (stderr: %s))" info stdout stderr
   | Process_aborted -> Printf.sprintf "Process_aborted(%s)" info
-  | Transformer_raised (e, _stack) ->
-    Printf.sprintf "Transformer_raised(%s %s)" info (Exn.to_string e)
+  | Continuation_raised e ->
+    Printf.sprintf "Continuation_raised(%s)" (Exception.get_ctor_string e)
+  | Transformer_raised e ->
+    Printf.sprintf
+      "Transformer_raised(%s %s)"
+      info
+      (Exception.get_ctor_string e)
 
 let error_to_string_verbose (error : error) : string * Utils.callstack =
   let (invocation_info, error_mode) = error in
@@ -105,16 +118,18 @@ let error_to_string_verbose (error : error) : string * Utils.callstack =
   | Timed_out { stdout; stderr } ->
     ( Printf.sprintf "%s timed out" cmd_and_args,
       Utils.Callstack
-        (Printf.sprintf "STDOUT:\n%s\n\nSTDERR:\n%s\n%s" stdout stderr stack)
-    )
+        (Printf.sprintf "STDOUT:\n%s\n\nSTDERR:\n%s\n%s" stdout stderr stack) )
   | Process_aborted ->
     (Printf.sprintf "%s aborted" cmd_and_args, Utils.Callstack stack)
-  | Transformer_raised (exn, Utils.Callstack substack) ->
+  | Continuation_raised e ->
+    ( Printf.sprintf "Continuation failure - %s" (Exception.get_ctor_string e),
+      Utils.Callstack (Exception.get_backtrace_string e) )
+  | Transformer_raised e ->
     ( Printf.sprintf
         "%s - unable to process output - %s"
         cmd_and_args
-        (Exn.to_string exn),
-      Utils.Callstack (substack ^ "\n" ^ stack) )
+        (Exception.get_ctor_string e),
+      Utils.Callstack (Exception.get_backtrace_string e ^ "\n" ^ stack) )
 
 let error_to_exn e = raise (Failure e)
 
@@ -145,7 +160,14 @@ let rec get : 'a. ?timeout:int -> 'a t -> ('a, error) result =
     let a = get ~timeout a in
     let consumed_t = int_of_float @@ (Unix.time () -. start_t) in
     let timeout = timeout - consumed_t in
-    get ~timeout (f a)
+    begin
+      try get ~timeout (f a)
+      with e ->
+        let e = Exception.wrap e in
+        let info = Process_types.dummy.Process_types.info in
+        promise := Complete_but_failed (info, Continuation_raised e);
+        Error (info, Continuation_raised e)
+    end
   | Incomplete (process, transformer) ->
     let info = process.Process_types.info in
     (match Process.read_and_wait_pid ~timeout process with
@@ -156,9 +178,9 @@ let rec get : 'a. ?timeout:int -> 'a t -> ('a, error) result =
           promise := Complete result;
           Ok result
         with e ->
-          let stack = Utils.Callstack (Printexc.get_backtrace ()) in
-          promise := Complete_but_failed (info, Transformer_raised (e, stack));
-          Error (info, Transformer_raised (e, stack))
+          let e = Exception.wrap e in
+          promise := Complete_but_failed (info, Transformer_raised e);
+          Error (info, Transformer_raised e)
       end
     | Error (Process_types.Abnormal_exit { status; stderr; _ }) ->
       Error (info, Process_failure { status; stderr })
@@ -178,8 +200,7 @@ let rec is_ready : 'a. 'a t -> bool =
     true
   | Delayed { remaining; _ } when remaining <= 0 -> true
   | Delayed { tapped; remaining; value } ->
-    promise :=
-      Delayed { tapped = tapped + 1; remaining = remaining - 1; value };
+    promise := Delayed { tapped = tapped + 1; remaining = remaining - 1; value };
     false
   | Merged (a, b, _) -> is_ready a && is_ready b
   | Bound (a, f) ->
@@ -233,8 +254,7 @@ let rec check_status : 'a. 'a t -> 'a status =
   | Delayed { value; remaining; _ } when remaining <= 0 ->
     Complete_with_result (Ok value)
   | Delayed { tapped; remaining; value } ->
-    promise :=
-      Delayed { tapped = tapped + 1; remaining = remaining - 1; value };
+    promise := Delayed { tapped = tapped + 1; remaining = remaining - 1; value };
     In_progress { age = float_of_int tapped }
   | Merged (a, b, handler) ->
     merge_status (check_status a) (check_status b) handler

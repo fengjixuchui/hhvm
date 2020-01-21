@@ -20,8 +20,8 @@ function test_COW( $locale, $test_array )
     $copy2 = $test_array;
 
     // Sort given array and the first copy of it.
-    ut_coll_sort_with_sort_keys( $coll, &$test_array );
-    ut_coll_sort_with_sort_keys( $coll, &$copy1      );
+    ut_coll_sort_with_sort_keys( $coll, inout $test_array );
+    ut_coll_sort_with_sort_keys( $coll, inout $copy1      );
 
     // Return contents of all the arrays.
     // The second copy should remain unsorted.
@@ -44,6 +44,9 @@ function ut_main()
 
     return $res_str;
 }
+<<__EntryPoint>>
+function main_entry(): void {
 
-require_once( 'ut_common.inc' );
-ut_run();
+  require_once( 'ut_common.inc' );
+  ut_run();
+}

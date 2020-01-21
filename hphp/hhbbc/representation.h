@@ -143,7 +143,7 @@ struct Param {
    * Default value for this parameter, or KindOfUninit if it has no
    * default value.
    */
-  Cell defaultValue;
+  TypedValue defaultValue;
 
   /*
    * Pointer to the block we'll enter for default-value initialization
@@ -165,6 +165,8 @@ struct Param {
    * Propagated for reflection.
    */
   LSString userTypeConstraint;
+
+  CompactVector<TypeConstraint> upperBounds;
 
   /*
    * Evalable php code that will give the default argument.  This is
@@ -189,11 +191,6 @@ struct Param {
    * Whether this parameter is passed as inout.
    */
   bool inout: 1;
-
-  /*
-   * Whether this parameter is passed by reference.
-   */
-  bool byRef: 1;
 
   /*
    * Whether this parameter is a variadic capture.
@@ -336,6 +333,10 @@ struct Func : FuncBase {
    */
   LSString returnUserType;
 
+  bool hasParamsWithMultiUBs : 1;
+  bool hasReturnWithMultiUBs : 1;
+  CompactVector<TypeConstraint> returnUBs;
+
   /*
    * If traits are being flattened by hphpc, we keep the original
    * filename of a function (the file that defined the trait) so
@@ -389,6 +390,8 @@ struct Func : FuncBase {
 
   bool noContextSensitiveAnalysis: 1;
 
+  bool hasInOutArgs : 1;
+
   /*
    * Return type specified in the source code (ex. "function foo(): Bar").
    * HHVM checks if the a function's return value matches it's return type
@@ -423,7 +426,7 @@ struct Prop {
    * initializers.  May be KindOfUninit in some cases where the
    * property should not have an initial value (i.e. not even null).
    */
-  Cell val;
+  TypedValue val;
 };
 
 /*
@@ -441,7 +444,7 @@ struct Const {
    *
    * The lack of a value represents an abstract class constant.
    */
-  folly::Optional<Cell> val;
+  folly::Optional<TypedValue> val;
 
   /*
    * We pass through eval'able php code and a string type constraint,
@@ -574,7 +577,7 @@ struct RecordField {
   Attr attrs;
   LSString userType;
   LSString docComment;
-  Cell val;
+  TypedValue val;
   TypeConstraint typeConstraint;
   UserAttributeMap userAttributes;
 };
@@ -607,7 +610,6 @@ struct Unit {
   CompactVector<std::unique_ptr<Class>> classes;
   CompactVector<std::unique_ptr<Record>> records;
   CompactVector<std::unique_ptr<TypeAlias>> typeAliases;
-  CompactVector<std::pair<SString,SString>> classAliases;
   CompactVector<SrcLoc> srcLocs;
   UserAttributeMap metaData;
   UserAttributeMap fileAttributes;
@@ -617,16 +619,10 @@ struct Unit {
  * A php Program is a set of compilation units.
  */
 struct Program {
-  explicit Program(size_t numUnitsGuess) :
-      nextFuncId(0),
-      nextConstInit(0),
-      constInits(100 + (numUnitsGuess / 4), 0) {
-  }
-
+  std::mutex lock;
+  std::atomic<uint32_t> nextFuncId{};
   std::vector<std::unique_ptr<Unit>> units;
-  std::atomic<uint32_t> nextFuncId;
-  std::atomic<size_t> nextConstInit;
-  AtomicVector<php::Func*> constInits;
+  std::vector<php::Func*> constInits;
 };
 
 //////////////////////////////////////////////////////////////////////

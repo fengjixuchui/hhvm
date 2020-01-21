@@ -67,8 +67,8 @@ public:
     return const_cast<ArrayData*>(ad);
   }
   static size_t Vsize(const ArrayData*);
-  static Cell NvGetKey(const ArrayData* ad, ssize_t pos);
-  static tv_rval GetValueRef(const ArrayData*, ssize_t pos);
+  static TypedValue NvGetKey(const ArrayData* ad, ssize_t pos);
+  static tv_rval RvalPos(const ArrayData*, ssize_t pos);
 
   static bool ExistsInt(const ArrayData* ad, int64_t k);
   static bool ExistsStr(const ArrayData* ad, const StringData* k);
@@ -83,29 +83,27 @@ public:
 
   static arr_lval LvalInt(ArrayData*, int64_t k, bool copy);
   static arr_lval LvalStr(ArrayData*, StringData* k, bool copy);
-  static arr_lval LvalNew(ArrayData*, bool copy);
+  static arr_lval LvalSilentInt(ArrayData*, int64_t k, bool copy);
+  static arr_lval LvalSilentStr(ArrayData*, StringData* k, bool copy);
+  static arr_lval LvalForceNew(ArrayData*, bool copy);
 
-  static ArrayData* SetIntInPlace(ArrayData*, int64_t k, Cell v);
+  static ArrayData* SetIntMove(ArrayData*, int64_t k, TypedValue v);
+  static ArrayData* SetIntInPlace(ArrayData*, int64_t k, TypedValue v);
   static constexpr auto SetInt = &SetIntInPlace;
-  static ArrayData* SetStrInPlace(ArrayData*, StringData* k, Cell v);
+  static ArrayData* SetStrMove(ArrayData*, StringData* k, TypedValue v);
+  static ArrayData* SetStrInPlace(ArrayData*, StringData* k, TypedValue v);
   static constexpr auto SetStr = &SetStrInPlace;
-  static ArrayData* SetWithRefIntInPlace(ArrayData*, int64_t k, TypedValue v);
-  static constexpr auto SetWithRefInt = &SetWithRefIntInPlace;
-  static ArrayData* SetWithRefStrInPlace(ArrayData*, StringData*, TypedValue);
-  static constexpr auto SetWithRefStr = &SetWithRefStrInPlace;
   static ArrayData* RemoveIntInPlace(ArrayData*, int64_t k);
   static constexpr auto RemoveInt = &RemoveIntInPlace;
   static ArrayData* RemoveStrInPlace(ArrayData*, const StringData* k);
   static constexpr auto RemoveStr = &RemoveStrInPlace;
 
-  static ArrayData* AppendInPlace(ArrayData*, Cell v);
+  static ArrayData* AppendInPlace(ArrayData*, TypedValue v);
   static constexpr auto Append = &AppendInPlace;
-  static ArrayData* AppendWithRefInPlace(ArrayData*, TypedValue v);
-  static constexpr auto AppendWithRef = &AppendWithRefInPlace;
 
   static ArrayData* PlusEq(ArrayData*, const ArrayData* elems);
   static ArrayData* Merge(ArrayData*, const ArrayData* elems);
-  static ArrayData* Prepend(ArrayData*, Cell v);
+  static ArrayData* Prepend(ArrayData*, TypedValue v);
 
   static ssize_t IterBegin(const ArrayData*);
   static ssize_t IterLast(const ArrayData*);
@@ -141,7 +139,6 @@ public:
   static constexpr auto ToKeyset = &ArrayCommon::ToKeyset;
   static constexpr auto ToVArray = &ArrayCommon::ToVArray;
   static constexpr auto ToDArray = &ArrayCommon::ToDArray;
-  static constexpr auto ToShape = &ArrayCommon::ToShape;
 
 private:
   static GlobalsArray* asGlobals(ArrayData* ad);

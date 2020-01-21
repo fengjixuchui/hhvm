@@ -17,6 +17,7 @@
 #include "hphp/runtime/vm/jit/irlower-internal.h"
 
 #include "hphp/runtime/base/object-data.h"
+#include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/resumable.h"
 
 #include "hphp/runtime/vm/jit/types.h"
@@ -37,6 +38,7 @@
 #include "hphp/runtime/ext/asio/ext_await-all-wait-handle.h"
 #include "hphp/runtime/ext/asio/ext_async-function-wait-handle.h"
 #include "hphp/runtime/ext/asio/ext_async-generator.h"
+#include "hphp/runtime/ext/asio/ext_static-wait-handle.h"
 #include "hphp/runtime/ext/asio/ext_wait-handle.h"
 #include "hphp/runtime/ext/asio/ext_waitable-wait-handle.h"
 #include "hphp/runtime/ext/generator/ext_generator.h"
@@ -55,9 +57,9 @@ void cgStArResumeAddr(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
 
   auto const addrOff = Resumable::resumeAddrOff() - Resumable::arOff();
-  auto const offsetOff = Resumable::resumeOffsetOff() - Resumable::arOff();
+  auto const offsetOff = Resumable::suspendOffsetOff() - Resumable::arOff();
   v << store{srcLoc(env, inst, 1).reg(), ar[addrOff]};
-  v << storeli{inst->extra<ResumeOffset>()->off, ar[offsetOff]};
+  v << storeli{inst->extra<SuspendOffset>()->off, ar[offsetOff]};
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -81,14 +83,15 @@ void cgContEnter(IRLS& env, const IRInstruction* inst) {
 
   auto const extra = inst->extra<ContEnter>();
   auto const spOff = extra->spOffset;
-  auto const callOff = extra->callBCOffset;
+  auto const callOffAndFlags = safe_cast<int32_t>(
+    ActRec::encodeCallOffsetAndFlags(extra->callBCOffset, 0));
 
   auto& v = vmain(env);
 
   auto const next = v.makeBlock();
 
   v << store{fp, genFP[AROFF(m_sfp)]};
-  v << storeli{callOff, genFP[AROFF(m_callOff)]};
+  v << storeli{callOffAndFlags, genFP[AROFF(m_callOffAndFlags)]};
 
   v << copy{genFP, fp};
   auto const sync_sp = v.makeReg();
@@ -308,8 +311,49 @@ void emitIsAwaitable(Vout& v, Vreg obj, Vreg sf) {
 IMPL_OPCODE_CALL(CreateAFWH)
 IMPL_OPCODE_CALL(CreateAFWHNoVV)
 IMPL_OPCODE_CALL(CreateAGWH)
-IMPL_OPCODE_CALL(CreateSSWH)
 IMPL_OPCODE_CALL(AFWHPrepareChild)
+
+void cgCreateSSWH(IRLS& env, const IRInstruction* inst) {
+  auto& v = vmain(env);
+  auto const val = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+
+  if (inst->src(0)->type() <= TNull) {
+    auto const handle = c_StaticWaitHandle::NullHandle.handle();
+    v << load{rvmtl()[handle], dst};
+    emitIncRef(v, dst, TRAP_REASON);
+    return;
+  }
+
+  if (inst->src(0)->type() <= TBool) {
+    auto const trueHandle = c_StaticWaitHandle::TrueHandle.handle();
+    auto const falseHandle = c_StaticWaitHandle::FalseHandle.handle();
+
+    if (inst->src(0)->hasConstVal(TBool)) {
+      auto const handle = inst->src(0)->boolVal() ? trueHandle : falseHandle;
+      v << load{rvmtl()[handle], dst};
+      emitIncRef(v, dst, TRAP_REASON);
+      return;
+    }
+
+    auto const sf = v.makeReg();
+    auto const hreg = v.makeReg();
+    v << testb{val, val, sf};
+    v << cmovq{CC_NZ, sf, v.cns(falseHandle), v.cns(trueHandle), hreg};
+    v << load{hreg[rvmtl()], dst};
+    emitIncRef(v, dst, TRAP_REASON);
+    return;
+  }
+
+  cgCallHelper(
+    v,
+    env,
+    CallSpec::direct(c_StaticWaitHandle::CreateSucceeded),
+    callDest(env, inst),
+    SyncOptions::None,
+    argGroup(env, inst).typedValue(0)
+  );
+}
 
 void cgCreateAAWH(IRLS& env, const IRInstruction* inst) {
   auto const fp = srcLoc(env, inst, 0).reg();

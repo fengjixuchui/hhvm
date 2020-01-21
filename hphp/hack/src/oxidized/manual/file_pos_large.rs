@@ -3,12 +3,11 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use ocamlrep_derive::OcamlRep;
-use ocamlvalue_macro::Ocamlvalue;
+use serde::{Deserialize, Serialize};
 
-#[derive(
-    Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, OcamlRep, Ocamlvalue
-)]
+use ocamlrep_derive::OcamlRep;
+
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, OcamlRep, Serialize)]
 pub struct FilePosLarge {
     lnum: usize,
     bol: usize,
@@ -106,5 +105,17 @@ impl FilePosLarge {
     #[inline]
     pub const fn line_beg_offset(self) -> (usize, usize, usize) {
         (self.lnum, self.bol, self.cnum)
+    }
+}
+
+impl Ord for FilePosLarge {
+    fn cmp(&self, other: &FilePosLarge) -> std::cmp::Ordering {
+        self.offset().cmp(&other.offset())
+    }
+}
+
+impl PartialOrd for FilePosLarge {
+    fn partial_cmp(&self, other: &FilePosLarge) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }

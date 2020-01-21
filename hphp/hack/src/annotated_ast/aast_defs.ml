@@ -10,17 +10,15 @@
 include Aast_defs_visitors_ancestors
 module ShapeMap = Ast_defs.ShapeMap
 
-type 'a shape_map = 'a ShapeMap.t [@@deriving show]
+type 'a shape_map = 'a ShapeMap.t [@@deriving eq, show]
 
-type pos = Ast_defs.pos [@@deriving show]
+type pos = Ast_defs.pos [@@deriving eq, show]
 
 type local_id = (Local_id.t[@visitors.opaque])
 
 and lid = pos * local_id
 
 and sid = Ast_defs.id
-
-and is_terminal = bool
 
 and is_reified = bool
 
@@ -37,12 +35,6 @@ and func_reactive =
   | FLocal
   | FShallow
   | FNonreactive
-
-and targ = hint
-
-and collection_targ =
-  | CollectionTV of targ
-  | CollectionTKV of targ * targ
 
 and param_mutability =
   | PMutable
@@ -72,18 +64,21 @@ and mutable_return = bool
 
 and variadic_hint = hint option
 
+and hint_fun = {
+  hf_reactive_kind: func_reactive;
+  hf_is_coroutine: is_coroutine;
+  hf_param_tys: hint list;
+  hf_param_kinds: Ast_defs.param_kind option list;
+  hf_param_mutability: param_mutability option list;
+  hf_variadic_ty: variadic_hint;
+  hf_return_ty: hint;
+  hf_is_mutable_return: mutable_return;
+}
+
 and hint_ =
   | Hoption of hint
   | Hlike of hint
-  | Hfun of
-      func_reactive
-      * is_coroutine
-      * hint list
-      * Ast_defs.param_kind option list
-      * param_mutability option list
-      * variadic_hint
-      * hint
-      * mutable_return
+  | Hfun of hint_fun
   | Htuple of hint list
   | Happly of sid * hint list
   | Hshape of nast_shape_info
@@ -117,12 +112,14 @@ and hint_ =
   | Harray of hint option * hint option
   | Hdarray of hint * hint
   | Hvarray of hint
-  | Hvarray_or_darray of hint
+  | Hvarray_or_darray of hint option * hint
   | Hprim of tprim
   | Hthis
   | Hdynamic
   | Hnothing
   | Hpu_access of hint * sid
+  | Hunion of hint list
+  | Hintersection of hint list
 
 (* AST types such as Happly("int", []) are resolved to Hprim values *)
 and tprim =
@@ -190,6 +187,7 @@ and enum_ = {
 and where_constraint = hint * Ast_defs.constraint_kind * hint
 [@@deriving
   show { with_path = false },
+    eq,
     visitors
       {
         name = "iter_defs";
@@ -236,13 +234,12 @@ let string_of_use_as_visibility vis =
   | UseAsProtected -> "protected"
   | UseAsFinal -> "final"
 
-type id = lid [@@deriving show]
-
-type pstring = Ast_defs.pstring [@@deriving show]
+type pstring = Ast_defs.pstring [@@deriving eq, show]
 
 type og_null_flavor = Ast_defs.og_null_flavor =
   | OG_nullthrows
   | OG_nullsafe
+[@@deriving eq]
 
 let pp_og_null_flavor fmt flavor =
   Format.pp_print_string fmt

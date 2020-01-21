@@ -20,14 +20,12 @@ var_dump((bool)$foo);
 var_dump((bool)$people);
 var_dump((int)$foo);
 var_dump((int)$people);
-var_dump((double)$foo);
-var_dump((double)$people);
+var_dump((float)$foo);
+var_dump((float)$people);
 var_dump((string)$foo);
 var_dump((string)$people);
 var_dump((array)$foo);
 var_dump((array)$people);
-var_dump((object)$foo);
-var_dump((object)$people);
 
 echo "===DONE===\n";
 }

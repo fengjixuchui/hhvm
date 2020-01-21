@@ -4,46 +4,37 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use std::rc::Rc;
-
 use crate::{
     indexed_source_text::IndexedSourceText, lexable_token::LexableToken,
     positioned_token::PositionedToken, source_text::SourceText, syntax::*, syntax_kind::SyntaxKind,
     syntax_trait::SyntaxTrait, token_kind::TokenKind,
 };
 
+use ocamlrep::rc::RcOc;
 use oxidized::pos::Pos;
+
+#[derive(Debug, Clone)]
+pub struct Span {
+    pub left: PositionedToken,
+    pub right: PositionedToken,
+}
 
 #[derive(Debug, Clone)]
 pub enum PositionedValue {
     /// value for a token node is token itself
     TokenValue(PositionedToken),
     /// value for a range denoted by pair of tokens
-    TokenSpan {
-        left: PositionedToken,
-        right: PositionedToken,
-    },
+    TokenSpan(Box<Span>),
     Missing {
         offset: usize,
     },
 }
 
-// Use alias to short the type, current rustc complains
-// type association with generic(lifetime) in `impl`.
-type Acc<'a> = (
-    Option<&'a PositionedValue>,
-    Option<&'a PositionedValue>,
-    Option<&'a PositionedValue>,
-    Option<&'a PositionedValue>,
-);
-
 impl PositionedValue {
     pub fn width(&self) -> usize {
         match self {
             PositionedValue::TokenValue(t) => t.width(),
-            PositionedValue::TokenSpan { left, right } => {
-                (right.end_offset() - left.start_offset()) + 1
-            }
+            PositionedValue::TokenSpan(x) => (x.right.end_offset() - x.left.start_offset()) + 1,
             PositionedValue::Missing { .. } => 0,
         }
     }
@@ -51,7 +42,11 @@ impl PositionedValue {
     fn start_offset(&self) -> usize {
         use PositionedValue::*;
         match &self {
-            TokenValue(t) | TokenSpan { left: t, .. } => t
+            TokenValue(t) => t
+                .leading_start_offset()
+                .expect("invariant violation for Positioned Syntax"),
+            TokenSpan(x) => x
+                .left
                 .leading_start_offset()
                 .expect("invariant violation for Positioned Syntax"),
             Missing { offset, .. } => *offset,
@@ -61,7 +56,8 @@ impl PositionedValue {
     fn leading_width(&self) -> usize {
         use PositionedValue::*;
         match self {
-            TokenValue(t) | TokenSpan { left: t, .. } => t.leading_width(),
+            TokenValue(t) => t.leading_width(),
+            TokenSpan(x) => x.left.leading_width(),
             Missing { .. } => 0,
         }
     }
@@ -69,25 +65,46 @@ impl PositionedValue {
     fn trailing_width(&self) -> usize {
         use PositionedValue::*;
         match self {
-            TokenValue(t) | TokenSpan { right: t, .. } => t.trailing_width(),
+            TokenValue(t) => t.trailing_width(),
+            TokenSpan(x) => x.right.trailing_width(),
             Missing { .. } => 0,
+        }
+    }
+
+    fn leading_token(&self) -> Option<&PositionedToken> {
+        use PositionedValue::*;
+        match self {
+            TokenValue(l) => Some(&l),
+            TokenSpan(x) => Some(&x.left),
+            _ => None,
+        }
+    }
+
+    fn trailing_token(&self) -> Option<&PositionedToken> {
+        use PositionedValue::*;
+        match self {
+            TokenValue(r) => Some(&r),
+            TokenSpan(x) => Some(&x.right),
+            _ => None,
         }
     }
 
     fn value_from_outer_children(first: &Self, last: &Self) -> Self {
         use PositionedValue::*;
         match (first, last) {
-            (TokenValue(l), TokenValue(r))
-            | (TokenSpan { left: l, .. }, TokenValue(r))
-            | (TokenValue(l), TokenSpan { right: r, .. })
-            | (TokenSpan { left: l, .. }, TokenSpan { right: r, .. }) => {
-                if Rc::ptr_eq(&l.0, &r.0) {
-                    TokenValue(PositionedToken::clone_rc(l))
+            (TokenValue(_), TokenValue(_))
+            | (TokenSpan(_), TokenValue(_))
+            | (TokenValue(_), TokenSpan(_))
+            | (TokenSpan(_), TokenSpan(_)) => {
+                let l = first.leading_token().unwrap();
+                let r = last.trailing_token().unwrap();
+                if RcOc::ptr_eq(&l, &r) {
+                    TokenValue(RcOc::clone(&l))
                 } else {
-                    TokenSpan {
-                        left: PositionedToken::clone_rc(l),
-                        right: PositionedToken::clone_rc(r),
-                    }
+                    TokenSpan(Box::new(Span {
+                        left: RcOc::clone(&l),
+                        right: RcOc::clone(&r),
+                    }))
                 }
             }
             // can have two missing nodes if first and last child nodes of
@@ -99,78 +116,57 @@ impl PositionedValue {
         }
     }
 
-    fn from_<'b, 'a: 'b, NS, F>(x: &'a NS, folder: &'b F) -> Self
-    where
-        F: for<'aa, 'bb> Fn(
-            Acc<'aa>,
-            &'aa NS,
-            &'bb dyn Fn(&'aa Self, Acc<'aa>) -> Acc<'aa>,
-        ) -> Acc<'aa>,
-        NS: ?Sized,
-    {
+    fn from_<'a>(child_values: impl Iterator<Item = &'a Self>) -> Self {
         use PositionedValue::*;
-        let f = |node: &'a Self, (first, first_not_zero, last_not_zero, _last): Acc<'a>| {
-            match (first.is_some(), first_not_zero.is_some(), node) {
+        let mut first = None;
+        let mut first_non_zero = None;
+        let mut last_non_zero = None;
+        let mut last = None;
+        for value in child_values {
+            match (first.is_some(), first_non_zero.is_some(), value) {
                 (false, false, TokenValue { .. }) | (false, false, TokenSpan { .. }) => {
                     // first iteration and first node has some token representation -
                     // record it as first, first_non_zero, last and last_non_zero
-                    (Some(node), Some(node), Some(node), Some(node))
+                    first = Some(value);
+                    first_non_zero = Some(value);
+                    last_non_zero = Some(value);
+                    last = Some(value);
                 }
-                (false, false, _) => {
+                (false, false, Missing { .. }) => {
                     // first iteration - first node is missing -
                     // record it as first and last
-                    (Some(node), None, None, Some(node))
+                    first = Some(value);
+                    first_non_zero = None;
+                    last_non_zero = None;
+                    last = Some(value);
                 }
                 (true, false, TokenValue { .. }) | (true, false, TokenSpan { .. }) => {
                     // in progress, found first node that include tokens -
                     // record it as first_non_zero, last and last_non_zero
-                    (first, Some(node), Some(node), Some(node))
+                    first_non_zero = Some(value);
+                    last_non_zero = Some(value);
+                    last = Some(value);
                 }
                 (true, true, TokenValue { .. }) | (true, true, TokenSpan { .. }) => {
-                    // in progress found Some (node) that include tokens -
+                    // in progress found some node that includes tokens -
                     // record it as last_non_zero and last
-                    (first, first_not_zero, Some(node), Some(node))
+                    last_non_zero = Some(value);
+                    last = Some(value);
                 }
                 _ => {
                     // in progress, stepped on missing node -
                     // record it as last and move on
-                    (first, first_not_zero, last_not_zero, Some(node))
+                    last = Some(value);
                 }
             }
-        };
-        let mut acc = (None, None, None, None);
-        acc = folder(acc, x, &f);
-        match acc {
-            (_, Some(first_not_zero), Some(last_not_zero), _) => {
-                Self::value_from_outer_children(first_not_zero, last_not_zero)
+        }
+        match (first, first_non_zero, last_non_zero, last) {
+            (_, Some(first_non_zero), Some(last_non_zero), _) => {
+                Self::value_from_outer_children(first_non_zero, last_non_zero)
             }
             (Some(first), None, None, Some(last)) => Self::value_from_outer_children(first, last),
             _ => panic!("how did we get a node with no children in value_from_syntax?"),
         }
-    }
-
-    // This function should be a closure in the caller,
-    // but lifetime can't be declared on closure.
-    fn from_syntax_variant_fold<'a, 'b>(
-        acc: Acc<'a>,
-        syntax_variant: &'a SyntaxVariant<PositionedToken, Self>,
-        f: &'b dyn Fn(&'a Self, Acc<'a>) -> Acc<'a>,
-    ) -> Acc<'a> {
-        let f_ = |acc: Acc<'a>, n: &'a Syntax<PositionedToken, Self>| f(&n.value, acc);
-        syntax_variant.iter_children().fold(acc, f_)
-    }
-
-    // This function should be a closure in the caller,
-    // but lifetime can't be declared on closure.
-    fn from_values_fold<'a, 'b>(
-        mut acc: Acc<'a>,
-        nodes: &'a [&Self],
-        f: &'b dyn Fn(&'a Self, Acc<'a>) -> Acc<'a>,
-    ) -> Acc<'a> {
-        for n in nodes.iter() {
-            acc = f(n, acc);
-        }
-        acc
     }
 }
 
@@ -192,12 +188,12 @@ impl SyntaxValueWithKind for PositionedValue {
 }
 
 impl SyntaxValueType<PositionedToken> for PositionedValue {
-    fn from_values(nodes: &[&Self]) -> Self {
-        Self::from_(nodes, &Self::from_values_fold)
+    fn from_values(values: &[&Self]) -> Self {
+        Self::from_(values.iter().map(|v| *v))
     }
 
     fn from_syntax(variant: &SyntaxVariant<PositionedToken, Self>) -> Self {
-        Self::from_(variant, &Self::from_syntax_variant_fold)
+        Self::from_(variant.iter_children().map(|child| &child.value))
     }
 
     fn from_children(_: SyntaxKind, offset: usize, nodes: &[&Self]) -> Self {
@@ -220,7 +216,7 @@ impl SyntaxValueType<PositionedToken> for PositionedValue {
                 offset: token.end_offset(),
             }
         } else {
-            PositionedValue::TokenValue(PositionedToken::clone_rc(token))
+            PositionedValue::TokenValue(RcOc::clone(&token))
         }
     }
 
@@ -271,7 +267,10 @@ pub trait PositionedSyntaxTrait: SyntaxTrait {
      * the last character. (the end offset is one larger than given by position)
      */
     fn position_exclusive(&self, source_text: &IndexedSourceText) -> Option<Pos>;
+    fn position(&self, source_text: &IndexedSourceText) -> Option<Pos>;
     fn text<'a>(&self, source_text: &'a SourceText) -> &'a str;
+    fn full_text<'a>(&self, source_text: &'a SourceText) -> &'a [u8];
+    fn leading_text<'a>(&self, source_text: &'a SourceText) -> &'a str;
 }
 
 impl PositionedSyntaxTrait for PositionedSyntax {
@@ -291,7 +290,21 @@ impl PositionedSyntaxTrait for PositionedSyntax {
         Some(source_text.relative_pos(start_offset, end_offset))
     }
 
+    fn position(&self, source_text: &IndexedSourceText) -> Option<Pos> {
+        let start_offset = self.start_offset();
+        let end_offset = self.end_offset();
+        Some(source_text.relative_pos(start_offset, end_offset))
+    }
+
     fn text<'a>(&self, source_text: &'a SourceText) -> &'a str {
         source_text.sub_as_str(self.start_offset(), self.width())
+    }
+
+    fn full_text<'a>(&self, source_text: &'a SourceText) -> &'a [u8] {
+        source_text.sub(self.leading_start_offset(), self.full_width())
+    }
+
+    fn leading_text<'a>(&self, source_text: &'a SourceText) -> &'a str {
+        source_text.sub_as_str(self.leading_start_offset(), self.leading_width())
     }
 }

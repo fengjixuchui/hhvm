@@ -58,17 +58,16 @@ public:
    * Append `v' to the Map and incref it if it's refcounted.
    */
   void add(TypedValue v);
-  void add(const Variant& v) { add(*v.toCell()); }
+  void add(const Variant& v) { add(*v.asTypedValue()); }
 
   /*
    * Add `k' => `v' to the Map, increffing each if it's refcounted.
    */
   void set(int64_t k, TypedValue v);
   void set(StringData* k, TypedValue v);
-  void set(int64_t k, const Variant& v) { set(k, *v.toCell()); }
-  void set(StringData* k, const Variant& v) { set(k, *v.toCell()); }
+  void set(int64_t k, const Variant& v) { set(k, *v.asTypedValue()); }
+  void set(StringData* k, const Variant& v) { set(k, *v.asTypedValue()); }
   void set(TypedValue k, TypedValue v) {
-    assertx(!isRefType(k.m_type));
     if (k.m_type == KindOfInt64) {
       set(k.m_data.num, v);
     } else if (isStringType(k.m_type)) {
@@ -78,8 +77,14 @@ public:
     }
   }
   void set(const Variant& k, const Variant& v) {
-    set(*k.toCell(), *v.toCell());
+    set(*k.asTypedValue(), *v.asTypedValue());
   }
+
+  /*
+   * Add `k` => `v` to the Map without inc-ref-ing the value.
+   */
+  void setMove(int64_t k, TypedValue v);
+  void setMove(StringData* k, TypedValue v);
 
   Variant pop();
   Variant popFront();
@@ -98,7 +103,6 @@ public:
   static bool ToBool(const ObjectData* obj);
   template <bool throwOnMiss>
   static TypedValue* OffsetAt(ObjectData* obj, const TypedValue* key) {
-    assertx(!isRefType(key->m_type));
     auto map = static_cast<BaseMap*>(obj);
     if (key->m_type == KindOfInt64) {
       return throwOnMiss ? map->at(key->m_data.num)
@@ -188,19 +192,19 @@ protected:
   void addAllImpl(const Variant& iterable);
   void setAllImpl(const Variant& iterable);
 
-  template<bool raw> void setImpl(int64_t k, TypedValue v);
-  template<bool raw> void setImpl(StringData* k, TypedValue v);
+  // Set `k` to `v` in the Map. Do not inc-ref `v`. Do not check for mutation.
+  void setImpl(int64_t k, TypedValue v);
+  void setImpl(StringData* k, TypedValue v);
 
   // setRaw() assigns a value to the specified key in this Map, but doesn't
   // check for an immutable buffer, so it's only safe to use in some cases.
   // If you're not sure, use set() instead.
   void setRaw(int64_t k, TypedValue v);
   void setRaw(StringData* key, TypedValue v);
-  void setRaw(int64_t k, const Variant& v)     { setRaw(k, *v.toCell()); }
-  void setRaw(StringData* k, const Variant& v) { setRaw(k, *v.toCell()); }
+  void setRaw(int64_t k, const Variant& v)     { setRaw(k, *v.asTypedValue()); }
+  void setRaw(StringData* k, const Variant& v) { setRaw(k, *v.asTypedValue()); }
 
   void setRaw(TypedValue k, TypedValue v) {
-    assertx(!isRefType(k.m_type));
     if (k.m_type == KindOfInt64) {
       setRaw(k.m_data.num, v);
     } else if (isStringType(k.m_type)) {
@@ -210,16 +214,13 @@ protected:
     }
   }
   void setRaw(const Variant& k, const Variant& v) {
-    setRaw(*k.toCell(), *v.toCell());
+    setRaw(*k.asTypedValue(), *v.asTypedValue());
   }
 
   template<class TMap>
   typename std::enable_if<
     std::is_base_of<BaseMap, TMap>::value, Object>::type
   php_differenceByKey(const Variant& it);
-
-  template<bool useKey>
-  Object php_retain(const Variant& callback);
 
   template<class TMap>
   typename std::enable_if<
@@ -235,11 +236,6 @@ protected:
   typename std::enable_if<
     std::is_base_of<BaseMap, TMap>::value, Object>::type
   php_skip(const Variant& n);
-
-  template<class TMap>
-  typename std::enable_if<
-    std::is_base_of<BaseMap, TMap>::value, Object>::type
-  php_skipWhile(const Variant& fn);
 
   template<class TMap>
   typename std::enable_if<
@@ -271,7 +267,7 @@ protected:
     int64_t out = 0;
     auto* eLimit = elmLimit();
     for (auto* e = firstElm(); e != eLimit; e = nextElm(e, eLimit), ++out) {
-      cellDup(e->data, target->dataAt(out));
+      tvDup(e->data, target->dataAt(out));
     }
     return Object{std::move(target)};
   }
@@ -289,7 +285,7 @@ protected:
         tvCopy(make_tv<KindOfInt64>(e->ikey), vec->dataAt(j));
       } else {
         assertx(e->hasStrKey());
-        cellDup(make_tv<KindOfString>(e->skey), vec->dataAt(j));
+        tvDup(make_tv<KindOfString>(e->skey), vec->dataAt(j));
       }
     }
     return Object{std::move(vec)};

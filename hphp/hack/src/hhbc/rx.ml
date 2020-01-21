@@ -34,8 +34,7 @@ let any_attr_is_rx_shallow ast_attrs =
   List.exists ast_attrs ~f:attr_is_rx_shallow
 
 let attr_is_rx_local ast_attr =
-  snd ast_attr.Ast.ua_name
-  = Naming_special_names.UserAttributes.uaLocalReactive
+  snd ast_attr.Ast.ua_name = Naming_special_names.UserAttributes.uaLocalReactive
 
 let any_attr_is_rx_local ast_attrs = List.exists ast_attrs ~f:attr_is_rx_local
 
@@ -96,14 +95,11 @@ let rx_level_from_attr_string s =
   | "rx" -> Some Rx
   | _ -> None
 
-let halves_of_is_enabled_body namespace ast_body =
+let halves_of_is_enabled_body ast_body =
   let block = ast_body.T.fb_ast in
   match block with
-  | [(_, T.If ((_, T.Id const), enabled, disabled))] ->
-    let fq_const =
-      Namespaces.elaborate_id namespace Namespaces.ElaborateConst const
-    in
-    if snd fq_const <> Naming_special_names.Rx.is_enabled then
+  | [(_, T.If ((_, T.Id (_, const)), enabled, disabled))] ->
+    if const <> Naming_special_names.Rx.is_enabled then
       None
     else (
       match disabled with

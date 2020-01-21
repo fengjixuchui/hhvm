@@ -46,7 +46,6 @@ let rec empty_stk (stk : stack) (remaining : int) : instruct list =
   match stk with
   | [] -> []
   | "C" :: t -> IBasic PopC :: empty_stk t remaining
-  | "V" :: t -> IBasic PopV :: empty_stk t remaining
   | "U" :: t -> IBasic PopU :: empty_stk t remaining
   | _   :: t -> remaining - 1 |> empty_stk t
 
@@ -82,16 +81,13 @@ let stk_data : instruct -> stack_sig = function
   | IMutator UnsetG
   | IMutator InitProp _
   | IIterator IterInit _
-  | IIterator IterInitK _
   | IMisc CheckReifiedGenericMismatch
   | IBasic PopC                            -> ["C"], []
   | IBasic PopU                            -> ["U"], []
-  | IBasic PopV                            -> ["V"], []
   | IGet CGetL2 _
   | IBasic Dup                             -> ["C"], ["C"; "C"]
   | IMisc CGetCUNop                        -> ["U"], ["C"]
   | IMisc UGetCUNop                        -> ["C"], ["U"]
-  | IGet VGetL _                           -> [], ["V"]
   | ILitConst NullUninit                   -> [], ["U"]
   | ILitConst NewVecArray n
   | ILitConst NewKeysetArray n
@@ -141,7 +137,6 @@ let stk_data : instruct -> stack_sig = function
   | IOp CastDouble
   | IOp CastString
   | IOp CastArray
-  | IOp CastObject
   | IOp CastVec
   | IOp CastDict
   | IOp CastKeyset

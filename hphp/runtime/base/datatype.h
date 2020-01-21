@@ -56,10 +56,12 @@ namespace HPHP {
  * - Audit jit::emitTypeTest().
  */
 #define DATATYPES \
-  DT(PersistentArray,  -14) \
-  DT(Array,            -13) \
-  DT(PersistentShape,  -12) \
-  DT(Shape,            -11) \
+  DT(PersistentDArray, -16) \
+  DT(DArray,           -15) \
+  DT(PersistentVArray, -14) \
+  DT(VArray,           -13) \
+  DT(PersistentArray,  -12) \
+  DT(Array,            -11) \
   DT(PersistentKeyset, -10) \
   DT(Keyset,            -9) \
   DT(PersistentDict,    -8) \
@@ -76,11 +78,10 @@ namespace HPHP {
   DT(Boolean,            4) \
   DT(Resource,           5) \
   DT(Int64,              6) \
-  DT(Ref,                7) \
   DT(Double,             8) \
   DT(Func,              10) \
   DT(Class,             12) \
-  DT(ClsMeth,           use_lowptr ? 14 : 9)
+  DT(ClsMeth,           use_lowptr ? 14 : 7)
 
 enum class DataType : int8_t {
 #define DT(name, value) name = value,
@@ -118,11 +119,11 @@ constexpr DataType kExtraInvalidDataType = static_cast<DataType>(-127);
 /*
  * DataType limits.
  */
-auto constexpr kMinDataType = dt_t(KindOfPersistentArray);
+auto constexpr kMinDataType = dt_t(KindOfPersistentDArray);
 auto constexpr kMaxDataType = dt_t(use_lowptr ? KindOfClsMeth : KindOfClass);
-auto constexpr kMinRefCountedDataType = dt_t(KindOfArray);
+auto constexpr kMinRefCountedDataType = dt_t(KindOfDArray);
 auto constexpr kMaxRefCountedDataType =
-  dt_t(use_lowptr ? KindOfRef : KindOfClsMeth);
+  dt_t(use_lowptr ? KindOfResource : KindOfClsMeth);
 
 /*
  * A DataType is a refcounted type if and only if it has this bit set.
@@ -137,6 +138,15 @@ constexpr DataType dt_with_rc(DataType dt) {
 }
 constexpr DataType dt_with_persistence(DataType dt) {
   return static_cast<DataType>(dt_t(dt) & ~kRefCountedBit);
+}
+
+/*
+ * Return the ref-counted flavor of `dt` if it has both a KindOf$x and a
+ * KindOfPersistent$x flavor
+ */
+constexpr DataType dt_modulo_persistence(DataType dt) {
+  auto const rep = dt_t(dt);
+  return static_cast<DataType>(rep < 0 ? rep | kRefCountedBit : rep);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -173,8 +183,7 @@ MaybeDataType get_datatype(
 #define DT_CATEGORIES(func)                     \
   func(Generic)                                 \
   func(Countness)                               \
-  func(BoxAndCountness)                         \
-  func(BoxAndCountnessInit)                     \
+  func(CountnessInit)                           \
   func(Specific)                                \
   func(Specialized)
 
@@ -304,6 +313,23 @@ inline bool isHackArrayType(MaybeDataType t) {
   return t && isHackArrayType(*t);
 }
 
+constexpr bool isVArrayType(DataType t) {
+  return
+    static_cast<DataType>(dt_t(t) & ~kRefCountedBit) == KindOfPersistentVArray;
+}
+
+inline bool isVArrayType(MaybeDataType t) {
+  return t && isVArrayType(*t);
+}
+
+constexpr bool isDArrayType(DataType t) {
+  return
+    static_cast<DataType>(dt_t(t) & ~kRefCountedBit) == KindOfPersistentDArray;
+}
+inline bool isDArrayType(MaybeDataType t) {
+  return t && isDArrayType(*t);
+}
+
 constexpr bool isVecType(DataType t) {
   return
     static_cast<DataType>(dt_t(t) & ~kRefCountedBit) == KindOfPersistentVec;
@@ -320,36 +346,11 @@ inline bool isDictType(MaybeDataType t) {
   return t && isDictType(*t);
 }
 
-constexpr bool isShapeType(DataType t) {
-  return
-    static_cast<DataType>(dt_t(t) & ~kRefCountedBit) == KindOfPersistentShape;
-}
-inline bool isShapeType(MaybeDataType t) {
-  return t && isShapeType(*t);
-}
-
-/*
- * isArrayOrShapeType checks whether DataType is an Array or a Shape that
- * behaves like an Array. This is important because this check is often used
- * to check that a piece of code is only operating on array-like objects and
- * not dict-like objects.
- */
-bool isArrayOrShapeType(DataType);
-bool isArrayOrShapeType(MaybeDataType);
-
 /*
  * Based on EvalHackArrDVArrs checks whether t is vec/dict or array
  */
 bool isVecOrArrayType(DataType t);
 bool isDictOrArrayType(DataType t);
-/*
- * isDictOrShapeType checks whether DataType is a Dict or a Shape that
- * behaves like a Dict. This is important because this check is often used
- * to check that a piece of code is only operating on dict-like objects and
- * not array-like objects.
- */
-bool isDictOrShapeType(DataType);
-bool isDictOrShapeType(MaybeDataType);
 
 constexpr bool isKeysetType(DataType t) {
   return
@@ -368,7 +369,6 @@ constexpr bool isDoubleType(DataType t) { return t == KindOfDouble; }
 constexpr bool isObjectType(DataType t) { return t == KindOfObject; }
 constexpr bool isRecordType(DataType t) { return t == KindOfRecord; }
 constexpr bool isResourceType(DataType t) { return t == KindOfResource; }
-constexpr bool isRefType(DataType t) { return t == KindOfRef; }
 constexpr bool isFuncType(DataType t) { return t == KindOfFunc; }
 constexpr bool isClassType(DataType t) { return t == KindOfClass; }
 constexpr bool isClsMethType(DataType t) { return t == KindOfClsMeth; }
@@ -381,23 +381,11 @@ constexpr int kHasPersistentMask = -128;
  * strings, arrays, and Hack arrays). Note that KindOfUninit and KindOfNull are
  * not considered equivalent.
  */
-constexpr bool sameDataTypes(DataType t1, DataType t2) {
+constexpr bool equivDataTypes(DataType t1, DataType t2) {
   return t1 == t2 ||
     ((dt_t(t1) & dt_t(t2) & kHasPersistentMask) &&
      (dt_t(t1) & ~kRefCountedBit) == (dt_t(t2) & ~kRefCountedBit));
 }
-
-/*
- * Return whether two DataTypes for primitive types are "equivalent" as far as
- * user-visible PHP types are concerned (i.e. ignoring different types of
- * strings, arrays, and Hack arrays). Note that KindOfUninit and KindOfNull are
- * not considered equivalent. This function differs from sameDataTypes because
- * it considers Shapes to be equivalent to Dicts/Arrays depending on
- * RuntimeOption::EvalHackArrDVArrs. A good rule of thumb: equivDataTypes
- * should be preferred at runtime and sameDataTypes should be preferred at
- * compile time.
- */
-bool equivDataTypes(DataType t1, DataType t2);
 
 /*
  * If you think you need to do any of these operations, you should instead add
@@ -424,7 +412,8 @@ bool operator>=(DataType, DataType) = delete;
   case KindOfInt64:         \
   case KindOfDouble:        \
   case KindOfPersistentString:  \
-  case KindOfPersistentShape:   \
+  case KindOfPersistentVArray:  \
+  case KindOfPersistentDArray:  \
   case KindOfPersistentArray:   \
   case KindOfPersistentVec: \
   case KindOfPersistentDict: \

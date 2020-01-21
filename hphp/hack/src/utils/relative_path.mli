@@ -14,7 +14,7 @@ type prefix =
   | Hhi
   | Dummy
   | Tmp
-[@@deriving show, enum]
+[@@deriving eq, show, enum]
 
 val set_path_prefix : prefix -> Path.t -> unit
 
@@ -28,7 +28,7 @@ module S : sig
   val to_string : t -> string
 end
 
-type t = S.t [@@deriving show]
+type t = S.t [@@deriving eq, show]
 
 val default : t
 
@@ -62,7 +62,7 @@ module Set : sig
 end
 
 module Map : sig
-  include module type of Reordered_argument_map (MyMap.Make (S))
+  include module type of Reordered_argument_map (WrappedMap.Make (S))
 
   val pp : (Format.formatter -> 'a -> unit) -> Format.formatter -> 'a t -> unit
 

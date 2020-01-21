@@ -621,7 +621,14 @@ bool MimePart::parse(const char *buf, int bufsize) {
     if (len < bufsize && buf[len] == '\n') {
       ++len;
       m_parsedata.workbuf += String(buf, len, CopyString);
-      ProcessLine(req::ptr<MimePart>(this), m_parsedata.workbuf);
+      if (!ProcessLine(req::ptr<MimePart>(this), m_parsedata.workbuf)) {
+        // ProcessLine() only returns FAILURE in case the count of children
+        // have exceeded MAXPARTS at the very beginning, without doing any work.
+        // Short-circuit since the exceeded state won't change on subsequent
+        // calls.
+        return false;
+      }
+
       m_parsedata.workbuf.clear();
     } else {
       m_parsedata.workbuf += String(buf, len, CopyString);
@@ -697,7 +704,7 @@ bool MimePart::processHeader() {
       m_headers.set(header_arrkey, make_tv<KindOfString>(newstr.get()));
     } else {
       if (m_headers.exists(header_arrkey)) {
-        auto const zheaderval = m_headers.lvalAt(header_arrkey).unboxed();
+        auto const zheaderval = m_headers.lval(header_arrkey);
         if (isArrayLikeType(zheaderval.type())) {
           asArrRef(zheaderval).append(String(header_val, CopyString));
         } else {
@@ -705,7 +712,7 @@ bool MimePart::processHeader() {
           Array zarr = Array::Create();
           zarr.append(zheaderval.tv());
           zarr.append(String(header_val, CopyString));
-          m_headers.set(header_arrkey, make_tv<KindOfArray>(zarr.get()));
+          m_headers.set(header_arrkey, make_array_like_tv(zarr.get()));
         }
       } else {
         String str(header_val, CopyString);

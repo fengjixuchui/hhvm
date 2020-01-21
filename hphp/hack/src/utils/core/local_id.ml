@@ -10,6 +10,10 @@
 module S = struct
   type t = int * string
 
+  let equal_ref : (t -> t -> bool) ref = ref Caml.( = )
+
+  let equal x y = !equal_ref x y
+
   let compare = Pervasives.compare
 end
 
@@ -23,7 +27,10 @@ let next () =
 
 let to_string x = snd x
 
-let pp fmt x = Format.pp_print_string fmt (to_string x)
+let pp_ref : (Format.formatter -> int * string -> unit) ref =
+  ref (fun fmt x -> Format.pp_print_string fmt (to_string x))
+
+let pp fmt x = !pp_ref fmt x
 
 let to_int x = fst x
 
@@ -33,9 +40,11 @@ let make_scoped x = (next (), x)
 
 let make_unscoped x = (0, x)
 
+let make i x = (i, x)
+
 let tmp () =
   let res = next () in
   (res, "__tmp" ^ string_of_int res)
 
 module Set = Set.Make (S)
-module Map = MyMap.Make (S)
+module Map = WrappedMap.Make (S)

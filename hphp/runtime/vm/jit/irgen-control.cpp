@@ -73,7 +73,7 @@ void jmpImpl(IRGS& env, Offset offset) {
 void implCondJmp(IRGS& env, Offset taken, bool negate, SSATmp* src) {
   auto const target = getBlock(env, taken);
   assertx(target != nullptr);
-  auto const boolSrc = gen(env, ConvCellToBool, src);
+  auto const boolSrc = gen(env, ConvTVToBool, src);
   decRef(env, src);
   gen(env, negate ? JmpZero : JmpNZero, target, boolSrc);
 }
@@ -293,7 +293,7 @@ void emitSSwitch(IRGS& env, const ImmVector& iv) {
 
 void emitSelect(IRGS& env) {
   auto const condSrc = popC(env);
-  auto const boolSrc = gen(env, ConvCellToBool, condSrc);
+  auto const boolSrc = gen(env, ConvTVToBool, condSrc);
   decRef(env, condSrc);
 
   ifThenElse(
@@ -317,14 +317,21 @@ void emitThrow(IRGS& env) {
   auto const maybeThrowable =
     srcTy.maybe(Type::SubObj(SystemLib::s_ExceptionClass)) ||
     srcTy.maybe(Type::SubObj(SystemLib::s_ErrorClass));
-  if (!stackEmpty || offset == InvalidAbsoluteOffset || !maybeThrowable ||
-      !(srcTy <= TObj)) {
-    return interpOne(env);
-  }
 
-  if (srcTy <= Type::SubObj(SystemLib::s_ThrowableClass)) {
-    return jmpImpl(env, offset);
-  }
+  if (!stackEmpty || !maybeThrowable || !(srcTy <= TObj)) return interpOne(env);
+
+  auto const handleThrow = [&] {
+    if (offset != kInvalidOffset) return jmpImpl(env, offset);
+    // There are no more catch blocks in this function, we are at the top
+    // level throw
+    auto const exn = popC(env);
+    auto const spOff = IRSPRelOffsetData { spOffBCFromIRSP(env) };
+    gen(env, EagerSyncVMRegs, spOff, fp(env), sp(env));
+    updateMarker(env);
+    gen(env, EnterTCUnwind, exn);
+  };
+
+  if (srcTy <= Type::SubObj(SystemLib::s_ThrowableClass)) return handleThrow();
 
   ifThenElse(env,
     [&] (Block* taken) {
@@ -338,7 +345,7 @@ void emitThrow(IRGS& env) {
       gen(env, JmpNZero, taken, isError);
     },
     [&] { gen(env, Jmp, makeExitSlow(env)); },
-    [&] { jmpImpl(env, offset); }
+    handleThrow
   );
 }
 

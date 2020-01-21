@@ -57,9 +57,7 @@ val connect_persistent_client : ServerEnv.env -> ServerEnv.env
 val default_loop_input : ('a, 'b) loop_inputs
 
 val run_loop_once :
-  ServerEnv.env ->
-  ('a, 'b) loop_inputs ->
-  ServerEnv.env * ('a, 'b) loop_outputs
+  ServerEnv.env -> ('a, 'b) loop_inputs -> ServerEnv.env * ('a, 'b) loop_outputs
 
 (* wrappers around run_loop_once for most common operations *)
 
@@ -68,6 +66,9 @@ val subscribe_diagnostic : ?id:int -> ServerEnv.env -> ServerEnv.env
 val open_file : ServerEnv.env -> ?contents:string -> string -> ServerEnv.env
 
 val edit_file :
+  ServerEnv.env -> string -> string -> ServerEnv.env * ('a, unit) loop_outputs
+
+val save_file :
   ServerEnv.env -> string -> string -> ServerEnv.env * ('a, unit) loop_outputs
 
 val close_file :
@@ -80,7 +81,7 @@ val wait : ServerEnv.env -> ServerEnv.env
 
 val coverage_levels :
   ServerEnv.env ->
-  ServerCommandTypes.file_input ->
+  string ->
   ServerEnv.env * ('a, Coverage_level_defs.result) loop_outputs
 
 val coverage_counts :
@@ -101,6 +102,7 @@ val ide_autocomplete :
 val status :
   ?ignore_ide:bool ->
   ?max_errors:int option ->
+  ?remote:bool ->
   ServerEnv.env ->
   ServerEnv.env * (ServerCommandTypes.Server_status.t, 'a) loop_outputs
 

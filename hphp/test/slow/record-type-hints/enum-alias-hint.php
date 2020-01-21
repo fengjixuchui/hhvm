@@ -8,8 +8,8 @@ enum Enum : string {
 
 type Alias = Enum;
 
-final record A {
-  x: Alias,
+record A {
+  Alias x;
 }
 <<__EntryPoint>> function main(): void {
 $a = A['x' => Enum::V2];

@@ -14,7 +14,7 @@
  *)
 (*****************************************************************************)
 
-open Core_kernel
+open Hh_prelude
 open Decl_defs
 open Shallow_decl_defs
 open Typing_defs
@@ -57,12 +57,12 @@ let empty =
 
 let should_keep_old_sig sig_ old_sig =
   ((not old_sig.elt_abstract) && sig_.elt_abstract)
-  || old_sig.elt_abstract = sig_.elt_abstract
+  || Bool.equal old_sig.elt_abstract sig_.elt_abstract
      && (not old_sig.elt_synthesized)
      && sig_.elt_synthesized
 
 let add_method name sig_ methods =
-  match SMap.get name methods with
+  match SMap.find_opt name methods with
   | None ->
     (* The method didn't exist so far, let's add it *)
     SMap.add name sig_ methods
@@ -93,7 +93,7 @@ let add_method name sig_ methods =
 let add_methods methods' acc = SMap.fold add_method methods' acc
 
 let add_const name const acc =
-  match SMap.get name acc with
+  match SMap.find_opt name acc with
   | None -> SMap.add name const acc
   | Some existing_const ->
     (match
@@ -124,7 +124,7 @@ let add_const name const acc =
 let add_members members acc = SMap.fold SMap.add members acc
 
 let add_typeconst name sig_ typeconsts =
-  match SMap.get name typeconsts with
+  match SMap.find_opt name typeconsts with
   | None ->
     (* The type constant didn't exist so far, let's add it *)
     SMap.add name sig_ typeconsts
@@ -242,9 +242,11 @@ let remove_trait_redeclared (methods, smethods) m =
   let (pos, trait, _) = Decl_utils.unwrap_class_hint m.smr_trait in
   let (_, trait_method) = m.smr_method in
   let remove_from map =
-    match SMap.get trait_method map with
+    match SMap.find_opt trait_method map with
     | Some decls ->
-      let decls = List.filter ~f:(fun d -> d.elt_origin <> trait) decls in
+      let decls =
+        List.filter ~f:(fun d -> String.( <> ) d.elt_origin trait) decls
+      in
       SMap.add trait_method decls map
     | None ->
       Errors.redeclaring_missing_method pos trait_method;
@@ -282,7 +284,8 @@ let mark_as_synthesized inh =
     ih_substs =
       SMap.map
         begin
-          fun sc -> { sc with sc_from_req_extends = true }
+          fun sc ->
+          { sc with sc_from_req_extends = true }
         end
         inh.ih_substs;
     ih_cstr = (Option.map (fst inh.ih_cstr) mark_elt, snd inh.ih_cstr);
@@ -291,9 +294,7 @@ let mark_as_synthesized inh =
     ih_methods = SMap.map mark_elt inh.ih_methods;
     ih_smethods = SMap.map mark_elt inh.ih_smethods;
     ih_consts =
-      SMap.map
-        (fun const -> { const with cc_synthesized = true })
-        inh.ih_consts;
+      SMap.map (fun const -> { const with cc_synthesized = true }) inh.ih_consts;
   }
 
 (*****************************************************************************)
@@ -348,9 +349,7 @@ let inherit_hack_class env c class_name class_type argl =
     | Ast_defs.Cabstract
     | Ast_defs.Cinterface ->
       filter_privates class_type
-    | Ast_defs.Cenum
-    | Ast_defs.Crecord ->
-      class_type
+    | Ast_defs.Cenum -> class_type
   in
   let typeconsts =
     SMap.map (Inst.instantiate_typeconst subst) class_type.dc_typeconsts

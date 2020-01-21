@@ -17,6 +17,7 @@
 #include "hphp/runtime/vm/jit/irlower-internal.h"
 
 #include "hphp/runtime/base/array-data.h"
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/mixed-array.h"
@@ -83,8 +84,7 @@ void cgCheckPackedArrayDataBounds(IRLS& env, const IRInstruction* inst) {
 
   auto const size = [&]{
     auto const arrTmp = inst->src(0);
-    if (arrTmp->hasConstVal(TArr)) return v.cns(arrTmp->arrVal()->size());
-    if (arrTmp->hasConstVal(TVec)) return v.cns(arrTmp->vecVal()->size());
+    if (arrTmp->hasConstVal()) return v.cns(arrTmp->arrLikeVal()->size());
     auto const at = arrTmp->type().arrSpec().type();
     using A = RepoAuthType::Array;
     if (at && at->tag() == A::Tag::Packed && at->emptiness() == A::Empty::No) {
@@ -103,6 +103,43 @@ void cgCheckPackedArrayDataBounds(IRLS& env, const IRInstruction* inst) {
 }
 
 IMPL_OPCODE_CALL(ArrayAdd);
+
+////////////////////////////////////////////////////////////////////////////////
+
+namespace {
+
+ArrayData* setLegacyHelper(ArrayData* arr) {
+  if (arr->cowCheck()) {
+    auto ad = arr->copy();
+    arr->decRefCount();
+    ad->setLegacyArray(true);
+    return ad;
+  } else {
+    arr->setLegacyArray(true);
+    return arr;
+  }
+}
+
+void setLegacyImpl(IRLS& env, const IRInstruction* inst) {
+  auto const args = argGroup(env, inst).ssa(0);
+
+  cgCallHelper(vmain(env),
+               env,
+               CallSpec::direct(setLegacyHelper),
+               callDest(env, inst),
+               SyncOptions::None,
+               args);
+}
+
+}
+
+void cgSetLegacyVec(IRLS& env, const IRInstruction* inst) {
+  setLegacyImpl(env, inst);
+}
+
+void cgSetLegacyDict(IRLS& env, const IRInstruction* inst) {
+  setLegacyImpl(env, inst);
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -150,10 +187,6 @@ void cgCountVec(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgCountDict(IRLS& env, const IRInstruction* inst) {
-  implCountArrayLike(env, inst);
-}
-
-void cgCountShape(IRLS& env, const IRInstruction* inst) {
   implCountArrayLike(env, inst);
 }
 
@@ -261,10 +294,7 @@ void cgNewMixedArray(IRLS& env, const IRInstruction* inst) {
   implNewArray(env, inst, MixedArray::MakeReserveMixed);
 }
 void cgNewDictArray(IRLS& env, const IRInstruction* inst) {
-  implNewArray(
-    env, inst, MixedArray::MakeReserveDict,
-    RuntimeOption::EvalArrayProvenance ? SyncOptions::Sync : SyncOptions::None
-  );
+  implNewArray(env, inst, MixedArray::MakeReserveDict);
 }
 void cgNewDArray(IRLS& env, const IRInstruction* inst) {
   implNewArray(env, inst, MixedArray::MakeReserveDArray);
@@ -274,10 +304,7 @@ void cgAllocPackedArray(IRLS& env, const IRInstruction* inst) {
   implAllocArray(env, inst, PackedArray::MakeUninitialized);
 }
 void cgAllocVecArray(IRLS& env, const IRInstruction* inst) {
-  implAllocArray(
-    env, inst, PackedArray::MakeUninitializedVec,
-    RuntimeOption::EvalArrayProvenance ? SyncOptions::Sync : SyncOptions::None
-  );
+  implAllocArray(env, inst, PackedArray::MakeUninitializedVec);
 }
 void cgAllocVArray(IRLS& env, const IRInstruction* inst) {
   implAllocArray(env, inst, PackedArray::MakeUninitializedVArray);
@@ -340,6 +367,69 @@ void cgNewKeysetArray(IRLS& env, const IRInstruction* inst) {
 
   cgCallHelper(v, env, CallSpec::direct(SetArray::MakeSet),
                callDest(env, inst), SyncOptions::Sync, args);
+}
+
+namespace {
+
+template<typename ArrayInit>
+void allocStructImpl(
+  IRLS& env,
+  const IRInstruction* inst,
+  MixedArray* (*f)(uint32_t, const int32_t*),
+  SyncOptions sync = SyncOptions::None
+) {
+  auto const extra = inst->extra<NewStructData>();
+  auto init = ArrayInit{extra->numKeys};
+  for (auto i = 0; i < extra->numKeys; ++i) {
+    init.set(extra->keys[i], make_tv<KindOfNull>());
+  }
+  auto const array = init.toArray();
+  auto const ad = MixedArray::asMixed(array.get());
+
+  auto const scale = MixedArray::computeScaleFromSize(extra->numKeys);
+  always_assert(MixedArray::HashSize(scale) == ad->hashSize());
+
+  using HashTableEntry = std::remove_pointer_t<decltype(ad->hashTab())>;
+
+  auto& v = vmain(env);
+  auto table = v.allocData<HashTableEntry>(ad->hashSize());
+  memcpy(table, ad->hashTab(), ad->hashSize() * sizeof(HashTableEntry));
+
+  auto const args = argGroup(env, inst).imm(extra->numKeys).dataPtr(table);
+  cgCallHelper(v, env, CallSpec::direct(f), callDest(env, inst), sync, args);
+}
+
+}
+
+void cgAllocStructArray(IRLS& env, const IRInstruction* inst) {
+  allocStructImpl<MixedArrayInit>(env, inst, MixedArray::AllocStruct);
+}
+
+void cgAllocStructDArray(IRLS& env, const IRInstruction* inst) {
+  allocStructImpl<DArrayInit>(env, inst, MixedArray::AllocStructDArray);
+}
+
+void cgAllocStructDict(IRLS& env, const IRInstruction* inst) {
+  allocStructImpl<DictInit>(
+    env, inst, MixedArray::AllocStructDict,
+    RuntimeOption::EvalArrayProvenance ? SyncOptions::Sync : SyncOptions::None
+  );
+}
+
+void cgInitMixedLayoutArray(IRLS& env, const IRInstruction* inst) {
+  auto const arr = srcLoc(env, inst, 0).reg();
+  auto const key = inst->extra<InitMixedLayoutArray>()->key;
+  auto const idx = inst->extra<InitMixedLayoutArray>()->index;
+
+  auto const elm_off  = MixedArray::elmOff(idx);
+  auto const key_ptr  = arr[elm_off + MixedArrayElm::keyOff()];
+  auto const data_ptr = arr[elm_off + MixedArrayElm::dataOff()];
+  auto const hash_ptr = arr[elm_off + MixedArrayElm::hashOff()];
+
+  auto& v = vmain(env);
+  storeTV(v, data_ptr, srcLoc(env, inst, 1), inst->src(1));
+  v << storeli { key->hash(), hash_ptr };
+  v << store { v.cns(key), key_ptr };
 }
 
 void cgInitPackedLayoutArray(IRLS& env, const IRInstruction* inst) {

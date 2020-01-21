@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Decl_defs
 open Decl_heap
 open Reordered_argument_collections
@@ -15,19 +15,18 @@ open Pp_type
 open Typing_defs
 
 module CEKMap = struct
-  include Reordered_argument_map (MyMap.Make (ClassEltKey))
+  include Reordered_argument_map (WrappedMap.Make (ClassEltKey))
 
-  let pp ppd =
-    make_pp (fun fmt (c, m) -> Format.fprintf fmt "(%S, %S)" c m) ppd
+  let pp ppd = make_pp (fun fmt (c, m) -> Format.fprintf fmt "(%S, %S)" c m) ppd
 end
 
 type saved_decls = {
   classes: decl_class_type SMap.t;
-  props: decl ty CEKMap.t;
-  sprops: decl ty CEKMap.t;
-  meths: decl fun_type CEKMap.t;
-  smeths: decl fun_type CEKMap.t;
-  cstrs: decl fun_type SMap.t;
+  props: decl_ty CEKMap.t;
+  sprops: decl_ty CEKMap.t;
+  meths: fun_elt CEKMap.t;
+  smeths: fun_elt CEKMap.t;
+  cstrs: fun_elt SMap.t;
   fixmes: Pos.t IMap.t IMap.t Relative_path.Map.t;
   decl_fixmes: Pos.t IMap.t IMap.t Relative_path.Map.t;
 }
@@ -49,11 +48,12 @@ let keys_to_sset smap =
   SMap.fold smap ~init:SSet.empty ~f:(fun k _ s -> SSet.add s k)
 
 let get_class_filename cid =
-  match Naming_table.Types.get_pos cid with
+  match Naming_table.Types.get_filename_and_kind cid with
   | None
+  | Some (_, Naming_table.TRecordDef)
   | Some (_, Naming_table.TTypedef) ->
     None
-  | Some (pos, Naming_table.TClass) -> Some (FileInfo.get_pos_filename pos)
+  | Some (fn, Naming_table.TClass) -> Some fn
 
 let rec collect_class
     ?(fail_if_missing = false)
@@ -104,46 +104,40 @@ let rec collect_class
     | Some data ->
       let decls = { decls with classes = SMap.add decls.classes cid data } in
       let collect_elt add mid { elt_origin; _ } decls =
-        if cid = elt_origin then
+        if String.equal cid elt_origin then
           add decls cid mid
         else
           decls
       in
       let collect_elts elts init f = SMap.fold elts ~init ~f:(collect_elt f) in
       let decls =
-        collect_elts data.dc_props decls
-        @@ fun decls cid mid ->
+        collect_elts data.dc_props decls @@ fun decls cid mid ->
         match Props.get (cid, mid) with
         | None -> failwith @@ "Missing property " ^ cid ^ "::" ^ mid
         | Some x -> { decls with props = CEKMap.add decls.props (cid, mid) x }
       in
       let decls =
-        collect_elts data.dc_sprops decls
-        @@ fun decls cid mid ->
+        collect_elts data.dc_sprops decls @@ fun decls cid mid ->
         match StaticProps.get (cid, mid) with
         | None -> failwith @@ "Missing static property " ^ cid ^ "::" ^ mid
-        | Some x ->
-          { decls with sprops = CEKMap.add decls.sprops (cid, mid) x }
+        | Some x -> { decls with sprops = CEKMap.add decls.sprops (cid, mid) x }
       in
       let decls =
-        collect_elts data.dc_methods decls
-        @@ fun decls cid mid ->
+        collect_elts data.dc_methods decls @@ fun decls cid mid ->
         match Methods.get (cid, mid) with
         | None -> failwith @@ "Missing method " ^ cid ^ "::" ^ mid
         | Some x -> { decls with meths = CEKMap.add decls.meths (cid, mid) x }
       in
       let decls =
-        collect_elts data.dc_smethods decls
-        @@ fun decls cid mid ->
+        collect_elts data.dc_smethods decls @@ fun decls cid mid ->
         match StaticMethods.get (cid, mid) with
         | None -> failwith @@ "Missing static method " ^ cid ^ "::" ^ mid
-        | Some x ->
-          { decls with smeths = CEKMap.add decls.smeths (cid, mid) x }
+        | Some x -> { decls with smeths = CEKMap.add decls.smeths (cid, mid) x }
       in
       let decls =
         fst data.dc_construct
         |> Option.value_map ~default:decls ~f:(fun { elt_origin; _ } ->
-               if cid <> elt_origin then
+               if String.( <> ) cid elt_origin then
                  decls
                else
                  match Constructors.get cid with
@@ -153,11 +147,7 @@ let rec collect_class
       let filename =
         match get_class_filename cid with
         | None ->
-          failwith
-          @@ "Could not look up filename for "
-          ^ kind
-          ^ " class "
-          ^ cid
+          failwith @@ "Could not look up filename for " ^ kind ^ " class " ^ cid
         | Some f -> f
       in
       let decls =

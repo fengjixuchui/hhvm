@@ -164,15 +164,24 @@
     promise))
 
 (library
+  (name signed_source)
+  (wrapped false)
+  (preprocess (pps lwt_ppx ppx_deriving.std ppx_deriving.enum)) ; See T41851208
+  (libraries utils_core)
+  (modules signed_source))
+
+(library
   (name lwt_utils)
   (wrapped false)
   (modules
     lwt_message_queue
     lwt_utils)
   (libraries
+    core_kernel
+    exec_command
     lwt
     lwt.unix
-    core_kernel
+    process
     promise
     utils_core)
   (preprocess

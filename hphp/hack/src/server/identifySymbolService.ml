@@ -10,7 +10,6 @@
 open Core_kernel
 open SymbolOccurrence
 open Typing_defs
-module Tast = Aast
 
 module Result_set = Caml.Set.Make (struct
   type t = Relative_path.t SymbolOccurrence.t
@@ -24,6 +23,16 @@ let is_target target_line target_char { pos; _ } =
 
 let process_class_id ?(is_declaration = false) (pos, cid) =
   Result_set.singleton { name = cid; type_ = Class; is_declaration; pos }
+
+let process_attribute (pos, name) class_name method_ =
+  let type_ =
+    match (name, class_name, method_) with
+    | (name, Some (_, class_name), Some ((_, method_name), is_static))
+      when name = Naming_special_names.UserAttributes.uaOverride ->
+      Attribute (Some { class_name; method_name; is_static })
+    | _ -> Attribute None
+  in
+  Result_set.singleton { name; type_; is_declaration = false; pos }
 
 let clean_member_name name = String_utils.lstrip name "$"
 
@@ -57,8 +66,7 @@ let process_lvar_id ?(is_declaration = false) id =
   Result_set.singleton
     { name = snd id; type_ = LocalVar; is_declaration; pos = fst id }
 
-let process_typeconst ?(is_declaration = false) (class_name, tconst_name, pos)
-    =
+let process_typeconst ?(is_declaration = false) (class_name, tconst_name, pos) =
   Result_set.singleton
     {
       name = class_name ^ "::" ^ tconst_name;
@@ -68,51 +76,51 @@ let process_typeconst ?(is_declaration = false) (class_name, tconst_name, pos)
     }
 
 let process_class class_ =
-  let acc = process_class_id ~is_declaration:true class_.Tast.c_name in
-  let c_name = snd class_.Tast.c_name in
-  let (constructor, static_methods, methods) = Tast.split_methods class_ in
+  let acc = process_class_id ~is_declaration:true class_.Aast.c_name in
+  let c_name = snd class_.Aast.c_name in
+  let (constructor, static_methods, methods) = Aast.split_methods class_ in
   let all_methods = static_methods @ methods in
   let acc =
     List.fold all_methods ~init:acc ~f:(fun acc method_ ->
         Result_set.union acc
         @@ process_member
              c_name
-             method_.Tast.m_name
+             method_.Aast.m_name
              ~is_declaration:true
              ~is_method:true
              ~is_const:false)
   in
-  let all_props = class_.Tast.c_vars in
+  let all_props = class_.Aast.c_vars in
   let acc =
     List.fold all_props ~init:acc ~f:(fun acc prop ->
         Result_set.union acc
         @@ process_member
              c_name
-             prop.Tast.cv_id
+             prop.Aast.cv_id
              ~is_declaration:true
              ~is_method:false
              ~is_const:false)
   in
   let acc =
-    List.fold class_.Tast.c_consts ~init:acc ~f:(fun acc const ->
+    List.fold class_.Aast.c_consts ~init:acc ~f:(fun acc const ->
         Result_set.union acc
         @@ process_member
              c_name
-             const.Tast.cc_id
+             const.Aast.cc_id
              ~is_declaration:true
              ~is_method:false
              ~is_const:true)
   in
   let acc =
-    List.fold class_.Tast.c_typeconsts ~init:acc ~f:(fun acc typeconst ->
-        let (pos, tconst_name) = typeconst.Tast.c_tconst_name in
+    List.fold class_.Aast.c_typeconsts ~init:acc ~f:(fun acc typeconst ->
+        let (pos, tconst_name) = typeconst.Aast.c_tconst_name in
         Result_set.union acc
         @@ process_typeconst ~is_declaration:true (c_name, tconst_name, pos))
   in
   (* We don't check anything about xhp attributes, so the hooks won't fire when
      typechecking the class. Need to look at them individually. *)
   let acc =
-    List.fold class_.Tast.c_xhp_attr_uses ~init:acc ~f:(fun acc attr ->
+    List.fold class_.Aast.c_xhp_attr_uses ~init:acc ~f:(fun acc attr ->
         match attr with
         | (_, Aast.Happly (cid, _)) ->
           Result_set.union acc @@ process_class_id cid
@@ -120,7 +128,7 @@ let process_class class_ =
   in
   match constructor with
   | Some method_ ->
-    let id = (fst method_.Tast.m_name, SN.Members.__construct) in
+    let id = (fst method_.Aast.m_name, SN.Members.__construct) in
     Result_set.union acc
     @@ process_member
          c_name
@@ -163,6 +171,8 @@ let remove_apostrophes_from_function_eval (mid : Ast_defs.pstring) :
   (new_pos, member_name)
 
 let visitor =
+  let class_name = ref None in
+  let method_name = ref None in
   object (self)
     inherit [_] Tast_visitor.reduce as super
 
@@ -175,29 +185,29 @@ let visitor =
       let ( + ) = self#plus in
       let acc =
         match snd expr with
-        | Tast.New (((p, ty), _), _, _, _, _) -> typed_constructor env ty p
-        | Tast.Obj_get (((_, ty), _), (_, Tast.Id mid), _) ->
+        | Aast.New (((p, ty), _), _, _, _, _) -> typed_constructor env ty p
+        | Aast.Obj_get (((_, ty), _), (_, Aast.Id mid), _) ->
           typed_property env ty mid
-        | Tast.Class_const (((_, ty), _), mid) -> typed_const env ty mid
-        | Tast.Class_get (((_, ty), _), Tast.CGstring mid) ->
+        | Aast.Class_const (((_, ty), _), mid) -> typed_const env ty mid
+        | Aast.Class_get (((_, ty), _), Aast.CGstring mid) ->
           typed_property env ty mid
-        | Tast.Xml (cid, _, _) -> process_class_id cid
-        | Tast.Fun_id id ->
-          process_fun_id (pos, "\\HH\\" ^ SN.SpecialFunctions.fun_)
+        | Aast.Xml (cid, _, _) -> process_class_id cid
+        | Aast.Fun_id id ->
+          process_fun_id (pos, SN.AutoimportedFunctions.fun_)
           + process_fun_id (remove_apostrophes_from_function_eval id)
-        | Tast.Method_id (((_, ty), _), mid) ->
-          process_fun_id (pos, "\\HH\\" ^ SN.SpecialFunctions.inst_meth)
+        | Aast.Method_id (((_, ty), _), mid) ->
+          process_fun_id (pos, SN.AutoimportedFunctions.inst_meth)
           + typed_method env ty (remove_apostrophes_from_function_eval mid)
-        | Tast.Smethod_id (((_, cid) as pcid), mid) ->
-          process_fun_id (pos, "\\HH\\" ^ SN.SpecialFunctions.class_meth)
+        | Aast.Smethod_id (((_, cid) as pcid), mid) ->
+          process_fun_id (pos, SN.AutoimportedFunctions.class_meth)
           + process_class_id pcid
           + process_member
               cid
               (remove_apostrophes_from_function_eval mid)
               ~is_method:true
               ~is_const:false
-        | Tast.Method_caller (((_, cid) as pcid), mid) ->
-          process_fun_id (pos, "\\HH\\" ^ SN.SpecialFunctions.meth_caller)
+        | Aast.Method_caller (((_, cid) as pcid), mid) ->
+          process_fun_id (pos, SN.AutoimportedFunctions.meth_caller)
           + process_class_id pcid
           + process_member
               cid
@@ -210,7 +220,7 @@ let visitor =
 
     method! on_class_id env ((p, ty), cid) =
       match cid with
-      | Tast.CIexpr expr ->
+      | Aast.CIexpr expr ->
         (* We want to special case this because we want to get the type of the
          inner expression, which will have a type like `classname<Foo>`, rather
          than the resolved type of the class ID, which will have a type like
@@ -219,7 +229,7 @@ let visitor =
         self#on_expr env expr
       | _ -> typed_class_id env ty p
 
-    method! on_Call env ct e tal el uel =
+    method! on_Call env ct e tal el unpacked_element =
       (* For Id, Obj_get (with an Id member), and Class_const, we don't want to
        * use the result of `self#on_expr env e`, since it would record a
        * property, class const, or global const access instead of a method call.
@@ -229,17 +239,22 @@ let visitor =
       let cta = self#on_call_type env ct in
       let ea =
         match snd e with
-        | Tast.Id id -> process_fun_id id
-        | Tast.Obj_get ((((_, ty), _) as obj), (_, Tast.Id mid), _) ->
+        | Aast.Id id -> process_fun_id id
+        | Aast.Obj_get ((((_, ty), _) as obj), (_, Aast.Id mid), _) ->
           self#on_expr env obj + typed_method env ty mid
-        | Tast.Class_const ((((_, ty), _) as cid), mid) ->
+        | Aast.Class_const ((((_, ty), _) as cid), mid) ->
           self#on_class_id env cid + typed_method env ty mid
         | _ -> self#on_expr env e
       in
       let tala = self#on_list self#on_targ env tal in
       let ela = self#on_list self#on_expr env el in
-      let uela = self#on_list self#on_expr env uel in
-      cta + ea + tala + ela + uela
+      let uea =
+        Option.value_map
+          ~default:Result_set.empty
+          ~f:(self#on_expr env)
+          unpacked_element
+      in
+      cta + ea + tala + ela + uea
 
     method! on_Haccess env root ids =
       let acc =
@@ -254,9 +269,7 @@ let visitor =
       self#plus acc (super#on_Lvar env (pos, id))
 
     method! on_fun_param env param =
-      let acc =
-        process_lvar_id (param.Tast.param_pos, param.Tast.param_name)
-      in
+      let acc = process_lvar_id (param.Aast.param_pos, param.Aast.param_name) in
       self#plus acc (super#on_fun_param env param)
 
     method! on_Happly env sid hl =
@@ -269,7 +282,9 @@ let visitor =
 
     method! on_class_ env class_ =
       Aast.(
+        class_name := Some class_.c_name;
         let acc = process_class class_ in
+
         (*
       Enums implicitly extend BuiltinEnum. However, BuiltinEnums also extend
       the same Enum as a type parameter.
@@ -288,18 +303,20 @@ let visitor =
             { class_ with c_extends = [] }
           | _ -> class_
         in
-        self#plus acc (super#on_class_ env class_))
+        let acc = self#plus acc (super#on_class_ env class_) in
+        class_name := None;
+        acc)
 
     method! on_fun_ env fun_ =
-      let acc = process_fun_id ~is_declaration:true fun_.Tast.f_name in
+      let acc = process_fun_id ~is_declaration:true fun_.Aast.f_name in
       self#plus acc (super#on_fun_ env fun_)
 
     method! on_typedef env typedef =
-      let acc = process_class_id ~is_declaration:true typedef.Tast.t_name in
+      let acc = process_class_id ~is_declaration:true typedef.Aast.t_name in
       self#plus acc (super#on_typedef env typedef)
 
     method! on_gconst env cst =
-      let acc = process_global_const ~is_declaration:true cst.Tast.cst_name in
+      let acc = process_global_const ~is_declaration:true cst.Aast.cst_name in
       self#plus acc (super#on_gconst env cst)
 
     method! on_Id env id =
@@ -308,7 +325,7 @@ let visitor =
 
     method! on_Obj_get env obj member ognf =
       match snd member with
-      | Tast.Id _ ->
+      | Aast.Id _ ->
         (* Don't visit this Id, since we would record it as a gconst access. *)
         let obja = self#on_expr env obj in
         let ognfa = self#on_og_null_flavor env ognf in
@@ -320,9 +337,36 @@ let visitor =
       process_class_id cid
       + process_member (snd cid) mid ~is_method:false ~is_const:true
       + super#on_SFclass_const env cid mid
+
+    method! on_method_ env m =
+      method_name := Some (m.Aast.m_name, m.Aast.m_static);
+      let acc = super#on_method_ env m in
+      method_name := None;
+      acc
+
+    method! on_user_attribute env ua =
+      let acc = process_attribute ua.Aast.ua_name !class_name !method_name in
+      self#plus acc (super#on_user_attribute env ua)
   end
 
 let all_symbols tast = visitor#go tast |> Result_set.elements
 
-let go tast line char =
-  all_symbols tast |> List.filter ~f:(is_target line char)
+let all_symbols_ctx
+    ~(ctx : Provider_context.t) ~(entry : Provider_context.entry) :
+    Result_set.elt list =
+  match entry.Provider_context.symbols with
+  | None ->
+    let { Provider_utils.Compute_tast.tast; _ } =
+      Provider_utils.compute_tast_quarantined ~ctx ~entry
+    in
+    let symbols = all_symbols tast in
+    entry.Provider_context.symbols <- Some symbols;
+    symbols
+  | Some symbols -> symbols
+
+let go_quarantined
+    ~(ctx : Provider_context.t)
+    ~(entry : Provider_context.entry)
+    ~(line : int)
+    ~(column : int) : Relative_path.t SymbolOccurrence.t list =
+  all_symbols_ctx ~ctx ~entry |> List.filter ~f:(is_target line column)

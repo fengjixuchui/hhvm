@@ -12,8 +12,6 @@ module Bucket = Hack_bucket
 open Hh_core
 open ServerEnv
 
-type file_info = Relative_path.t * FileInfo.names
-
 let no_incremental_check (options : ServerArgs.options) : bool =
   let in_check_mode = ServerArgs.check_mode options in
   let full_init = Option.is_none (SharedMem.loaded_dep_table_filename ()) in
@@ -88,7 +86,7 @@ let naming (env : ServerEnv.env) (t : float) : ServerEnv.env * float =
       ~f:
         begin
           fun k v env ->
-          let (errorl, failed_naming) = NamingGlobal.ndecl_file k v in
+          let (errorl, failed_naming) = Naming_global.ndecl_file k v in
           {
             env with
             errorl = Errors.merge errorl env.errorl;
@@ -103,8 +101,8 @@ let naming (env : ServerEnv.env) (t : float) : ServerEnv.env * float =
   HackEventLogger.global_naming_end t;
   (env, Hh_logger.log_duration "Naming" t)
 
-let is_path_in_range (path : string) (range : ServerArgs.files_to_check_range)
-    : bool =
+let is_path_in_range (path : string) (range : ServerArgs.files_to_check_range) :
+    bool =
   (* TODO: not sure how to include the prefix - should we just have these as strings? *)
   let is_from_prefix_incl =
     match range.ServerArgs.from_prefix_incl with
@@ -133,10 +131,10 @@ let does_path_match_specs path (specs : ServerArgs.files_to_check_spec list) :
   | Some _ -> true
 
 let filter_filenames_by_spec
-    (fnl : file_info list) (spec : ServerArgs.save_state_spec_info) :
-    file_info list =
+    (fnl : Relative_path.t list) (spec : ServerArgs.save_state_spec_info) :
+    Relative_path.t list =
   let filtered_filenames =
-    List.filter fnl ~f:(fun ((fn : Relative_path.t), _names) ->
+    List.filter fnl ~f:(fun (fn : Relative_path.t) ->
         (* TODO: not sure how to include the prefix *)
         does_path_match_specs
           (Relative_path.suffix fn)
@@ -166,8 +164,8 @@ let type_check
     let logstring = Printf.sprintf "Filter %d files" count in
     Hh_logger.log "Begin %s" logstring;
 
-    let (files_to_check : file_info list) = Relative_path.Map.elements fast in
-    let (files_to_check : file_info list) =
+    let (files_to_check : Relative_path.t list) = Relative_path.Map.keys fast in
+    let (files_to_check : Relative_path.t list) =
       match ServerArgs.save_with_spec genv.options with
       | None -> files_to_check
       | Some (spec : ServerArgs.save_state_spec_info) ->
@@ -177,36 +175,32 @@ let type_check
     let count = List.length files_to_check in
     let logstring = Printf.sprintf "Type-check %d files" count in
     Hh_logger.log "Begin %s" logstring;
-    let (errorl : Errors.t) =
-      ServerCheckUtils.maybe_remote_type_check_without_interrupt
-        genv
-        env
+    let ( (errorl : Errors.t),
+          (delegate_state : Typing_service_delegate.state),
+          (telemetry : Telemetry.t) ) =
+      let memory_cap =
+        genv.local_config.ServerLocalConfig.max_typechecker_worker_memory_mb
+      in
+      Typing_check_service.go
+        genv.workers
+        env.typing_service.delegate_state
+        (Telemetry.create ())
+        env.tcopt
+        Relative_path.Set.empty
         files_to_check
-        ~local:(fun () ->
-          let memory_cap =
-            genv.local_config
-              .ServerLocalConfig.max_typechecker_worker_memory_mb
-          in
-          match genv.lru_host_env with
-          | Some lru_host_env ->
-            Typing_lru_check_service.go
-              lru_host_env
-              env.tcopt
-              Relative_path.Set.empty
-              files_to_check
-          | None ->
-            Typing_check_service.go
-              genv.workers
-              env.tcopt
-              Relative_path.Set.empty
-              files_to_check
-              ~memory_cap
-              ~check_info:(ServerCheckUtils.get_check_info env))
+        ~memory_cap
+        ~check_info:(ServerCheckUtils.get_check_info genv env)
     in
     let hs = SharedMem.heap_size () in
     Hh_logger.log "Heap size: %d" hs;
-    HackEventLogger.type_check_end count count t;
-    let env = { env with errorl = Errors.merge errorl env.errorl } in
+    HackEventLogger.type_check_end telemetry count count t;
+    let env =
+      {
+        env with
+        typing_service = { env.typing_service with delegate_state };
+        errorl = Errors.merge errorl env.errorl;
+      }
+    in
     (env, Hh_logger.log_duration logstring t)
   ) else
     let needs_recheck =

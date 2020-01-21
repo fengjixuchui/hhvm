@@ -323,21 +323,19 @@ Array HHVM_FUNCTION(headers_list) {
 }
 
 bool HHVM_FUNCTION(headers_sent_with_file_line,
-                   VRefParam file,
-                   VRefParam line) {
- Transport *transport = g_context->getTransport();
+                   Variant& file,
+                   Variant& line) {
+  Transport *transport = g_context->getTransport();
   if (transport) {
-    file.assignIfRef(String(transport->getFirstHeaderFile()));
-    line.assignIfRef(transport->getFirstHeaderLine());
+    file = String(transport->getFirstHeaderFile());
+    line = transport->getFirstHeaderLine();
     return transport->headersSent();
-  } else {
-    return g_context->getStdoutBytesWritten() > 0;
   }
-  return false;
+  return g_context->getStdoutBytesWritten() > 0;
 }
 
-bool HHVM_FUNCTION(headers_sent, VRefParam file /* = null */,
-                                 VRefParam line /* = null */) {
+bool HHVM_FUNCTION(headers_sent) {
+  Variant file, line;
   return HHVM_FN(headers_sent_with_file_line)(file, line);
 }
 
@@ -439,7 +437,7 @@ bool validate_dns_arguments(const String& host, const String& type,
     stype = type.data();
   }
   if (host.empty()) {
-    throw_invalid_argument("host: [empty]");
+    raise_invalid_argument_warning("host: [empty]");
   }
 
   if (!strcasecmp("A", stype)) ntype = DNS_T_A;
@@ -455,7 +453,7 @@ bool validate_dns_arguments(const String& host, const String& type,
   else if (!strcasecmp("NAPTR", stype)) ntype = DNS_T_NAPTR;
   else if (!strcasecmp("A6",    stype)) ntype = DNS_T_A6;
   else {
-    throw_invalid_argument("type: %s", stype);
+    raise_invalid_argument_warning("type: %s", stype);
     return false;
   }
 

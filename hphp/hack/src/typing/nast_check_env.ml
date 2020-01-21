@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 module SN = Naming_special_names
 
@@ -17,7 +17,7 @@ type control_context =
   | SwitchContext
 
 type env = {
-  tcopt: TypecheckerOptions.t;
+  ctx: Provider_context.t;
   is_reactive: bool;
   class_kind: Ast_defs.class_kind option;
   class_name: string option;
@@ -31,10 +31,12 @@ type env = {
   rx_move_allowed: bool;
 }
 
+let get_tcopt env = env.ctx.Provider_context.tcopt
+
 let is_some_reactivity_attribute { ua_name = (_, name); _ } =
-  name = SN.UserAttributes.uaReactive
-  || name = SN.UserAttributes.uaLocalReactive
-  || name = SN.UserAttributes.uaShallowReactive
+  String.equal name SN.UserAttributes.uaReactive
+  || String.equal name SN.UserAttributes.uaLocalReactive
+  || String.equal name SN.UserAttributes.uaShallowReactive
 
 (* During NastCheck, all reactivity kinds are the same *)
 let fun_is_reactive user_attributes =
@@ -69,7 +71,7 @@ let typedef_env env t = { env with file_mode = t.t_mode }
 
 let get_empty_env () =
   {
-    tcopt = GlobalNamingOptions.get ();
+    ctx = Provider_context.get_global_context_or_empty_FOR_MIGRATION ();
     is_reactive = false;
     class_kind = None;
     class_name = None;
@@ -89,6 +91,7 @@ let def_env x =
   | Fun f -> fun_env empty_env f
   | Class c -> class_env empty_env c
   | Typedef t -> typedef_env empty_env t
+  | RecordDef _
   | Constant _
   | Stmt _
   | Namespace _
@@ -96,8 +99,3 @@ let def_env x =
   | SetNamespaceEnv _
   | FileAttributes _ ->
     empty_env
-
-let is_rx_move e =
-  match e with
-  | (_, Id (_, v)) -> Utils.add_ns v = SN.Rx.move
-  | _ -> false

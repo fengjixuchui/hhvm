@@ -3,21 +3,21 @@ File "arrays.php", line 33, characters 3-13:
 File "arrays.php", line 34, characters 3-16:
   _
 File "arrays.php", line 42, characters 3-13:
-  array<int>
+  varray<int>
 File "arrays.php", line 43, characters 3-16:
   int
 File "arrays.php", line 51, characters 3-13:
-  array
+  varray_or_darray<arraykey, _>
 File "arrays.php", line 52, characters 3-16:
   _
 File "arrays.php", line 60, characters 3-13:
-  array
+  (varray<int> | varray_or_darray<arraykey, _>)
 File "arrays.php", line 61, characters 3-16:
-  _
+  (_ | int)
 File "arrays.php", line 70, characters 3-13:
-  ~array<int>
+  ~(varray<int> | varray_or_darray<arraykey, _>)
 File "arrays.php", line 71, characters 3-16:
-  ~int
+  ~(_ | int)
 File "arrays.php", line 75, characters 3-13:
   varray<int>
 File "arrays.php", line 76, characters 3-16:
@@ -35,15 +35,15 @@ File "arrays.php", line 91, characters 3-13:
 File "arrays.php", line 92, characters 3-16:
   (int | string)
 File "arrays.php", line 99, characters 3-13:
-  array<int>
+  varray<int>
 File "arrays.php", line 100, characters 3-16:
   int
 File "arrays.php", line 107, characters 3-13:
-  ~array<int>
+  ~varray<int>
 File "arrays.php", line 108, characters 3-16:
   ~int
 File "arrays.php", line 116, characters 3-13:
-  array<(int | string)>
+  varray<(int | string)>
 File "arrays.php", line 117, characters 3-16:
   (int | string)
 File "arrays.php", line 128, characters 3-13:
@@ -65,13 +65,13 @@ File "arrays.php", line 153, characters 3-16:
 File "arrays.php", line 160, characters 3-13:
   ~darray<int, (int | string)>
 File "arrays.php", line 161, characters 3-16:
-  ~?(int | string)
+  ~(int | string)
 File "arrays.php", line 164, characters 3-13:
-  array<int, (bool | string)>
+  darray<int, (bool | string)>
 File "arrays.php", line 165, characters 3-16:
   (bool | string)
 File "arrays.php", line 168, characters 3-13:
-  ~array<int, bool>
+  ~darray<int, bool>
 File "arrays.php", line 169, characters 3-16:
   ~bool
 File "arrays.php", line 172, characters 3-13:
@@ -79,11 +79,11 @@ File "arrays.php", line 172, characters 3-13:
 File "arrays.php", line 173, characters 3-16:
   bool
 File "arrays.php", line 176, characters 3-13:
-  ~array<int, bool>
+  ~darray<int, bool>
 File "arrays.php", line 177, characters 3-16:
   ~bool
 File "arrays.php", line 180, characters 3-13:
-  ~array<int, bool>
+  ~darray<int, bool>
 File "arrays.php", line 181, characters 3-16:
   ~bool
 File "arrays.php", line 14, characters 3-7:
@@ -94,30 +94,48 @@ File "arrays.php", line 14, characters 3-7:
 You cannot have an array without generics in strict mode (Typing[4045])
 File "arrays.php", line 15, characters 3-7:
 You cannot have an array without generics in strict mode (Typing[4045])
+File "arrays.php", line 53, characters 16-17:
+Invalid argument (Typing[4110])
+File "arrays.php", line 184, characters 26-33:
+Expected varray<[unresolved]>
+File "arrays.php", line 14, characters 3-7:
+But got varray_or_darray<arraykey, _>
+File "arrays.php", line 63, characters 20-21:
+Invalid argument (Typing[4110])
+File "arrays.php", line 185, characters 27-36:
+Expected varray<int>
+File "arrays.php", line 14, characters 3-7:
+But got varray_or_darray<arraykey, _>
+File "arrays.php", line 72, characters 20-21:
+Invalid argument (Typing[4110])
+File "arrays.php", line 185, characters 27-36:
+Expected varray<int>
+File "arrays.php", line 14, characters 3-7:
+But got varray_or_darray<arraykey, _>
 File "arrays.php", line 95, characters 20-21:
 Invalid argument (Typing[4110])
-File "arrays.php", line 185, characters 27-36:
-Expected ~array<int> because it is an unenforceable type
-File "arrays.php", line 87, characters 10-18:
-But got varray<(int | string)>
+File "arrays.php", line 185, characters 33-35:
+Expected int
+File "arrays.php", line 89, characters 17-18:
+But got string
 File "arrays.php", line 96, characters 23-24:
 Invalid argument (Typing[4110])
-File "arrays.php", line 186, characters 30-42:
-Expected ~array<string> because it is an unenforceable type
-File "arrays.php", line 87, characters 10-18:
-But got varray<(int | string)>
+File "arrays.php", line 186, characters 36-41:
+Expected string
+File "arrays.php", line 87, characters 17-17:
+But got int
 File "arrays.php", line 120, characters 20-21:
 Invalid argument (Typing[4110])
-File "arrays.php", line 185, characters 27-36:
-Expected ~array<int> because it is an unenforceable type
-File "arrays.php", line 112, characters 10-18:
-But got array<(int | string)>
+File "arrays.php", line 185, characters 33-35:
+Expected int
+File "arrays.php", line 114, characters 11-12:
+But got string
 File "arrays.php", line 121, characters 23-24:
 Invalid argument (Typing[4110])
-File "arrays.php", line 186, characters 30-42:
-Expected ~array<string> because it is an unenforceable type
-File "arrays.php", line 112, characters 10-18:
-But got array<(int | string)>
+File "arrays.php", line 186, characters 36-41:
+Expected string
+File "arrays.php", line 112, characters 17-17:
+But got int
 File "arrays.php", line 4, characters 16-16:
 Wrong type hint (Typing[4338])
 File "arrays.php", line 4, characters 9-14:

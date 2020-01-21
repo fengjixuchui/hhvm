@@ -1,10 +1,10 @@
 Errors:
   [4:15-28] Unbound name: NoSuchClass (an object type)
   [3:10-14] Invalid return type
-  [3:10-14] Expected void because this function implicitly returns void
+  [3:10-14] Expected void because this function does not always return a value
   [3:18-23] But got mixed
 [(Fun
-    { f_span = [3:1-5:2]; f_annotation = (); f_mode = <opaque>;
+    { f_span = [3:1-5:2]; f_annotation = (); f_mode = Mpartial;
       f_ret = ((mixed), (Some ([3:18-23], Hmixed)));
       f_name = ([3:10-14], "\\test"); f_tparams = [];
       f_where_constraints = []; f_variadic = FVnonVariadic; f_params = [];
@@ -18,6 +18,11 @@ Errors:
           ];
         fb_annotation = No unsafe blocks };
       f_fun_kind = FSync; f_user_attributes = []; f_file_attributes = [];
-      f_external = false; f_namespace = <opaque>; f_doc_comment = None;
-      f_static = false })
+      f_external = false;
+      f_namespace =
+      { Namespace_env.ns_ns_uses = <opaque>; ns_class_uses = <opaque>;
+        ns_record_def_uses = <opaque>; ns_fun_uses = <opaque>;
+        ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
+        ns_is_codegen = false };
+      f_doc_comment = None; f_static = false })
   ]

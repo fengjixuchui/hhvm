@@ -52,6 +52,7 @@ let sql_insert_kinds =
   ^ "INSERT OR IGNORE INTO kinds (id, description) VALUES (8, 'Typedef');"
   ^ "INSERT OR IGNORE INTO kinds (id, description) VALUES (9, 'Constant');"
   ^ "INSERT OR IGNORE INTO kinds (id, description) VALUES (10, 'XHP Class');"
+  ^ "INSERT OR IGNORE INTO kinds (id, description) VALUES (11, 'Record Definition');"
 
 let sql_insert_symbol =
   "INSERT INTO symbols "
@@ -115,10 +116,7 @@ let record_in_db (filename : string) (symbols : si_scan_result) : unit =
           4
           (Sqlite3.Data.INT (Int64.of_int (kind_to_int symbol.sif_kind)))
         |> check_rc db;
-        Sqlite3.bind
-          stmt
-          5
-          (bool_to_sqlite (SearchUtils.valid_for_acid symbol))
+        Sqlite3.bind stmt 5 (bool_to_sqlite (SearchUtils.valid_for_acid symbol))
         |> check_rc db;
         Sqlite3.bind
           stmt

@@ -17,6 +17,7 @@ let test_valid () =
       ("file:///etc/fstab", "/etc/fstab");
       ("file://localhost/c:/WINDOWS/clock.avi", "c:/WINDOWS/clock.avi");
       ("file:///c:/WINDOWS/clock.avi", "c:/WINDOWS/clock.avi");
+      ("file:///c%3A/WINDOWS/clock.avi", "c:/WINDOWS/clock.avi");
       ("file:///c|/WINDOWS/clock.avi", "c:/WINDOWS/clock.avi");
       ("file://localhost/path/to/the%20file.txt", "/path/to/the file.txt");
       ("file:///c:/path/to/the%20file.txt", "c:/path/to/the file.txt");
@@ -142,17 +143,27 @@ let test_invalid_parse () =
   true
 
 let test_create () =
+  (* on Windows, `/` and `\` are both path separators that get encoded to `/`.
+     on POSIX, `\` is a normal character and so it gets %-encoded to %5C. *)
   let examples =
     [
-      ("c:\\autoexec.bat", "file:///c:/autoexec.bat");
-      ("c:/autoexec.bat", "file:///c:/autoexec.bat");
-      ("c:\\\\autoexec.bat", "file:///c://autoexec.bat");
-      ("c://autoexec.bat", "file:///c://autoexec.bat");
+      ( "c:\\autoexec.bat",
+        if Sys.win32 then
+          "file:///c%3A/autoexec.bat"
+        else
+          "file:///c%3A%5Cautoexec.bat" );
+      ("c:/autoexec.bat", "file:///c%3A/autoexec.bat");
+      ( "c:\\\\autoexec.bat",
+        if Sys.win32 then
+          "file:///c%3A//autoexec.bat"
+        else
+          "file:///c%3A%5C%5Cautoexec.bat" );
+      ("c://autoexec.bat", "file:///c%3A//autoexec.bat");
       ("/etc/dollar$dollar", "file:///etc/dollar$dollar");
       ("/etc/hash#hash", "file:///etc/hash%23hash");
-      ("/etc/question?question", "file:///etc/question%3fquestion");
+      ("/etc/question?question", "file:///etc/question%3Fquestion");
       ( "/etc/braces{}/backtick`/caret^/space /file",
-        "file:///etc/braces%7b%7d/backtick%60/caret%5e/space%20/file" );
+        "file:///etc/braces%7B%7D/backtick%60/caret%5E/space%20/file" );
     ]
   in
   let do_example (file, expected) =

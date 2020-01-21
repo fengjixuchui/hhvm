@@ -18,7 +18,7 @@ function assert_options(int $what, $value = null);
 <<__PHPStdLib>>
 function assert($assertion);
 <<__PHPStdLib>>
-function dl(string $library);
+function dl(string $_library);
 <<__PHPStdLib>>
 function extension_loaded(string $name);
 <<__PHPStdLib>>
@@ -26,7 +26,7 @@ function get_loaded_extensions(bool $zend_extensions = false);
 <<__PHPStdLib>>
 function get_extension_funcs(string $module_name);
 <<__PHPStdLib>>
-function get_cfg_var(string $option);
+function get_cfg_var(string $_option);
 <<__PHPStdLib>>
 function get_current_user();
 <<__PHPStdLib>>
@@ -58,9 +58,9 @@ function getopt(string $options, $longopts = null);
 <<__PHPStdLib>>
 function getrusage(int $who = 0);
 <<__PHPStdLib>>
-function clock_getres(int $clk_id, &$sec, &$nsec);
+function clock_getres(int $clk_id, inout $sec, inout $nsec);
 <<__PHPStdLib>>
-function clock_gettime(int $clk_id, &$sec, &$nsec);
+function clock_gettime(int $clk_id, inout $sec, inout $nsec);
 <<__PHPStdLib>>
 function clock_gettime_ns(int $clk_id): int;
 <<__PHPStdLib>>
@@ -107,6 +107,8 @@ function phpversion(string $extension = "");
 function putenv(string $setting);
 <<__PHPStdLib>>
 function set_time_limit(int $seconds);
+function set_pre_timeout_handler(
+  int $seconds, (function(HH\Awaitable<mixed>): void) $callback): void;
 <<__PHPStdLib>>
 function sys_get_temp_dir();
 <<__PHPStdLib, __Rx>>

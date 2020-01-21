@@ -11,9 +11,8 @@ type t = {
   saved_root: Path.t;
   saved_hhi: Path.t;
   saved_tmp: Path.t;
+  saved_gi_tmp: string;
   trace: bool;
-  fuzzy: bool;
-  profile_log: bool;
   fixme_codes: ISet.t;
   strict_codes: ISet.t;
   paths_to_ignore: Str.regexp list;
@@ -26,9 +25,8 @@ let save ~logging_init =
     saved_root = Path.make Relative_path.(path_of_prefix Root);
     saved_hhi = Path.make Relative_path.(path_of_prefix Hhi);
     saved_tmp = Path.make Relative_path.(path_of_prefix Tmp);
+    saved_gi_tmp = Typing_global_inference.get_path ();
     trace = !Typing_deps.trace;
-    fuzzy = SymbolIndex.fuzzy_search_enabled ();
-    profile_log = !Utils.profile;
     fixme_codes = !Errors.ignored_fixme_codes;
     strict_codes = !Errors.error_codes_treated_strictly;
     paths_to_ignore = FilesToIgnore.get_paths_to_ignore ();
@@ -36,13 +34,19 @@ let save ~logging_init =
     logging_init;
   }
 
-let restore state =
+let worker_id_str ~(worker_id : int) =
+  if worker_id = 0 then
+    "master"
+  else
+    Printf.sprintf "worker-%d" worker_id
+
+let restore state ~(worker_id : int) =
+  Hh_logger.set_id (worker_id_str ~worker_id);
   Relative_path.(set_path_prefix Root state.saved_root);
   Relative_path.(set_path_prefix Hhi state.saved_hhi);
   Relative_path.(set_path_prefix Tmp state.saved_tmp);
+  Typing_global_inference.restore_path state.saved_gi_tmp;
   Typing_deps.trace := state.trace;
-  SymbolIndex.set_fuzzy_search_enabled state.fuzzy;
-  Utils.profile := state.profile_log;
   Errors.ignored_fixme_codes := state.fixme_codes;
   Errors.error_codes_treated_strictly := state.strict_codes;
   FilesToIgnore.set_paths_to_ignore state.paths_to_ignore;
@@ -60,18 +64,6 @@ let to_string state =
     else
       "false"
   in
-  let fuzzy =
-    if state.fuzzy then
-      "true"
-    else
-      "false"
-  in
-  let profile_log =
-    if state.profile_log then
-      "true"
-    else
-      "false"
-  in
   let fixme_codes = ISet.to_string state.fixme_codes in
   let strict_codes = ISet.to_string state.strict_codes in
   (* OCaml regexps cannot be re-serialized to strings *)
@@ -80,9 +72,8 @@ let to_string state =
     ("saved_root", saved_root);
     ("saved_hhi", saved_hhi);
     ("saved_tmp", saved_tmp);
+    ("saved_gi_tmp", state.saved_gi_tmp);
     ("trace", trace);
-    ("fuzzy", fuzzy);
-    ("profile_log", profile_log);
     ("fixme_codes", fixme_codes);
     ("strict_codes", strict_codes);
     ("paths_to_ignore", paths_to_ignore);

@@ -10,6 +10,7 @@ open Core_kernel
 open Instruction_sequence
 module A = Ast_defs
 module T = Aast
+module SN = Naming_special_names
 
 type type_constraint =
   | DefinitelyReified (* There is a reified generic *)
@@ -71,6 +72,8 @@ let rec has_reified_type_constraint env h =
   | Aast.Hnothing
   | Aast.Hdynamic
   | Aast.Htuple _
+  | Aast.Hunion _
+  | Aast.Hintersection _
   | Aast.Hshape _
   | Aast.Hfun _
   | Aast.Haccess _
@@ -84,7 +87,9 @@ let rec has_reified_type_constraint env h =
 
 let rec remove_awaitable ((pos, h_) as h) =
   match h_ with
-  | Aast.Happly ((_, id), [h]) when String.lowercase id = "awaitable" -> h
+  | Aast.Happly ((_, id), [h]) when String.Caseless.(id = SN.Classes.cAwaitable)
+    ->
+    h
   (* For @Awaitable<T>, the soft type hint is moved to the inner type, i.e @T *)
   | Aast.Hsoft h -> (pos, Aast.Hsoft (remove_awaitable h))
   (* For ~Awaitable<T>, the like-type hint is moved to the inner type, i.e ~T *)
@@ -92,6 +97,8 @@ let rec remove_awaitable ((pos, h_) as h) =
   (* For ?Awaitable<T>, the optional is dropped *)
   | Aast.Hoption h -> remove_awaitable h
   | Aast.Htuple _
+  | Aast.Hunion _
+  | Aast.Hintersection _
   | Aast.Hshape _
   | Aast.Hfun _
   | Aast.Haccess _
@@ -154,6 +161,8 @@ let remove_erased_generics env h =
       | Aast.Hlike h -> Aast.Hlike (aux h)
       | Aast.Hoption h -> Aast.Hoption (aux h)
       | Aast.Htuple hl -> Aast.Htuple (List.map ~f:aux hl)
+      | Aast.Hunion hl -> Aast.Hunion (List.map ~f:aux hl)
+      | Aast.Hintersection hl -> Aast.Hintersection (List.map ~f:aux hl)
       | Aast.Hshape si ->
         let modify_sfi sfi =
           { sfi with Aast.sfi_hint = aux sfi.Aast.sfi_hint }
@@ -167,6 +176,8 @@ let remove_erased_generics env h =
       | Aast.Hfun _
       | Aast.Haccess _ ->
         h
+      | Aast.Hpu_access (h, (pos, id)) ->
+        Aast.Hpu_access (aux h, (pos, modify id))
       | Aast.Herr
       | Aast.Hany
       | Aast.Hmixed
@@ -180,9 +191,6 @@ let remove_erased_generics env h =
       | Aast.Hthis
       | Aast.Hnothing
       | Aast.Hdynamic ->
-        failwith "TODO Unimplemented Did not exist on legacy AST"
-      | Aast.Hpu_access _ ->
-        failwith "TODO(T36532263) erased generics in pocket universe type hint"
-    )
+        failwith "TODO Unimplemented Did not exist on legacy AST" )
   in
   aux h

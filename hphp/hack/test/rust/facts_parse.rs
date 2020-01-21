@@ -4,16 +4,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.;
 
+extern crate clap;
+
 use std::fs;
 use std::path::PathBuf;
 
-extern crate clap;
 use clap::{App, Arg};
-
-extern crate facts_rust;
 use facts_rust::facts_parser::*;
-
-extern crate oxidized;
 use oxidized::relative_path::*;
 
 fn main() {
@@ -47,11 +44,10 @@ fn parse(file_path: String, parse_only: bool) {
     };
 
     let content = fs::read(&file_path).expect("failed to read file");
-    let content_str = &String::from_utf8_lossy(&content);
     if parse_only {
-        println!("{}", from_text(content_str, opts).is_some());
+        println!("{}", from_text(&content, opts).is_some());
         return;
     }
-    let json = extract_as_json(content_str, opts).unwrap_or("{}".to_owned());
+    let json = extract_as_json(&content, opts).unwrap_or("{}".to_owned());
     println!("{}", json);
 }

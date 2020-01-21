@@ -23,7 +23,6 @@
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/static-string-table.h"
 #include "hphp/runtime/base/string-data.h"
-#include "hphp/runtime/base/strings.h"
 #include "hphp/runtime/base/tv-mutate.h"
 #include "hphp/runtime/base/tv-variant.h"
 #include "hphp/runtime/base/type-variant.h"
@@ -111,17 +110,18 @@ void cgLdCns(IRLS& env, const IRInstruction* inst) {
       case KindOfPersistentVec:
       case KindOfPersistentDict:
       case KindOfPersistentKeyset:
-      case KindOfPersistentShape:
+      case KindOfPersistentDArray:
+      case KindOfPersistentVArray:
       case KindOfPersistentArray:
       case KindOfString:
       case KindOfVec:
       case KindOfDict:
       case KindOfKeyset:
-      case KindOfShape:
+      case KindOfDArray:
+      case KindOfVArray:
       case KindOfArray:
       case KindOfObject:
       case KindOfResource:
-      case KindOfRef:
       case KindOfFunc:
       case KindOfClass:
       case KindOfClsMeth:
@@ -140,40 +140,28 @@ void cgLdCns(IRLS& env, const IRInstruction* inst) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-ALWAYS_INLINE
-tv_rval lookupCnsImpl(StringData* nm) {
-  tv_rval cns;
-
-  if (UNLIKELY(rds::s_constants().get() != nullptr)) {
-    cns = rds::s_constants()->rval(nm);
-  }
-  if (!cns) {
-    cns = Unit::loadCns(const_cast<StringData*>(nm));
-  }
-  return cns;
-}
-
-Cell lookupCnsEHelper(StringData* nm) {
-  auto const cns = lookupCnsImpl(nm);
+TypedValue lookupCnsEHelper(StringData* nm) {
+  auto const cns = Unit::loadCns(nm);
   if (LIKELY(cns != nullptr)) {
-    Cell c1;
-    cellDup(*cns, c1);
+    TypedValue c1;
+    tvDup(*cns, c1);
     return c1;
   }
   raise_error("Undefined constant '%s'", nm->data());
 }
 
-Cell lookupCnsEHelperNormal(rds::Handle tv_handle,
+TypedValue lookupCnsEHelperNormal(rds::Handle tv_handle,
                            StringData* nm) {
   assertx(rds::isNormalHandle(tv_handle));
   if (UNLIKELY(rds::isHandleInit(tv_handle))) {
     auto const tv = rds::handleToPtr<TypedValue, rds::Mode::Normal>(tv_handle);
-    if (tv->m_data.pref != nullptr) {
-      auto callback = (Native::ConstantCallback)(tv->m_data.pref);
-      const Cell* cns = callback().asTypedValue();
+    if (tv->m_data.pcnt != nullptr) {
+      auto callback =
+        reinterpret_cast<Native::ConstantCallback>(tv->m_data.pcnt);
+      const TypedValue* cns = callback().asTypedValue();
       if (LIKELY(cns->m_type != KindOfUninit)) {
-        Cell c1;
-        cellDup(*cns, c1);
+        TypedValue c1;
+        tvDup(*cns, c1);
         return c1;
       }
     }
@@ -183,19 +171,19 @@ Cell lookupCnsEHelperNormal(rds::Handle tv_handle,
   return lookupCnsEHelper(nm);
 }
 
-Cell lookupCnsEHelperPersistent(rds::Handle tv_handle,
+TypedValue lookupCnsEHelperPersistent(rds::Handle tv_handle,
                                StringData* nm) {
   assertx(rds::isPersistentHandle(tv_handle));
   auto tv = rds::handleToPtr<TypedValue, rds::Mode::Persistent>(tv_handle);
   assertx(tv->m_type == KindOfUninit);
 
   // Deferred system constants.
-  if (UNLIKELY(tv->m_data.pref != nullptr)) {
-    auto callback = (Native::ConstantCallback)(tv->m_data.pref);
-    const Cell* cns = callback().asTypedValue();
+  if (UNLIKELY(tv->m_data.pcnt != nullptr)) {
+    auto callback = reinterpret_cast<Native::ConstantCallback>(tv->m_data.pcnt);
+    const TypedValue* cns = callback().asTypedValue();
     if (LIKELY(cns->m_type != KindOfUninit)) {
-      Cell c1;
-      cellDup(*cns, c1);
+      TypedValue c1;
+      tvDup(*cns, c1);
       return c1;
     }
   }
@@ -315,10 +303,10 @@ void cgProfileSubClsCns(IRLS& env, const IRInstruction* inst) {
 }
 
 
-Cell lookupClsCnsHelper(TypedValue* cache, const NamedEntity* ne,
+TypedValue lookupClsCnsHelper(TypedValue* cache, const NamedEntity* ne,
                         const StringData* cls, const StringData* cns) {
   auto const clsCns = g_context->lookupClsCns(ne, cls, cns);
-  cellDup(clsCns, *cache);
+  tvDup(clsCns, *cache);
   return clsCns;
 }
 

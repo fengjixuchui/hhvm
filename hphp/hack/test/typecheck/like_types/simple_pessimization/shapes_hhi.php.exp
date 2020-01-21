@@ -10,4 +10,8 @@ File "shapes_hhi.php", line 10, characters 3-29:
   ~dict<arraykey, mixed>
 File "shapes_hhi.php", line 11, characters 3-30:
   ~int
+File "shapes_hhi.php", line 15, characters 3-30:
+  dynamic
+File "shapes_hhi.php", line 16, characters 3-29:
+  dynamic
 No errors

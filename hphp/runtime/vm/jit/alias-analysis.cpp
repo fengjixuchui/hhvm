@@ -51,18 +51,16 @@ void visit_locations(const BlockList& blocks, Visit visit) {
         [&] (UnknownEffects)      {},
         [&] (ReturnEffects x)     { visit(x.kills); },
         [&] (CallEffects x)       { visit(x.kills);
-                                    visit(x.stack);
-                                    visit(x.locals);
-                                    visit(x.callee); },
+                                    visit(x.inputs);
+                                    visit(x.actrec);
+                                    visit(x.outputs);
+                                    visit(x.locals); },
         [&] (GeneralEffects x)    { visit(x.loads);
                                     visit(x.stores);
                                     visit(x.moves);
                                     visit(x.kills); },
         [&] (PureLoad x)          { visit(x.src); },
         [&] (PureStore x)         { visit(x.dst); },
-        [&] (PureSpillFrame x)    { visit(x.stk);
-                                    visit(x.ctx);
-                                    visit(x.callee); },
         [&] (ExitEffects x)       { visit(x.live); visit(x.kills); },
         [&] (InlineEnterEffects x) { visit(x.inlFrame);
                                      visit(x.inlStack);
@@ -265,10 +263,12 @@ ALocBits AliasAnalysis::may_alias(AliasClass acls) const {
   ret |= may_alias_part(*this, acls, acls.prop(), APropAny, all_props);
   ret |= may_alias_part(*this, acls, acls.elemI(), AElemIAny, all_elemIs);
   ret |= may_alias_part(*this, acls, acls.elemS(), AElemSAny, all_elemSs);
-  ret |= may_alias_part(*this, acls, acls.ref(), ARefAny, all_ref);
+  ret |= may_alias_part(*this, acls, acls.iterBase(),
+                        AIterBaseAny, all_iterBase);
+  ret |= may_alias_part(*this, acls, acls.iterType(),
+                        AIterTypeAny, all_iterType);
   ret |= may_alias_part(*this, acls, acls.iterPos(), AIterPosAny, all_iterPos);
-  ret |= may_alias_part(*this, acls, acls.iterBase(), AIterBaseAny,
-                        all_iterBase);
+  ret |= may_alias_part(*this, acls, acls.iterEnd(), AIterEndAny, all_iterEnd);
 
   return ret;
 }
@@ -317,9 +317,10 @@ ALocBits AliasAnalysis::expand(AliasClass acls) const {
   ret |= expand_part(*this, acls, acls.prop(), APropAny, all_props);
   ret |= expand_part(*this, acls, acls.elemI(), AElemIAny, all_elemIs);
   ret |= expand_part(*this, acls, acls.elemS(), AElemSAny, all_elemSs);
-  ret |= expand_part(*this, acls, acls.ref(), ARefAny, all_ref);
-  ret |= expand_part(*this, acls, acls.iterPos(), AIterPosAny, all_iterPos);
   ret |= expand_part(*this, acls, acls.iterBase(), AIterBaseAny, all_iterBase);
+  ret |= expand_part(*this, acls, acls.iterType(), AIterTypeAny, all_iterType);
+  ret |= expand_part(*this, acls, acls.iterPos(), AIterPosAny, all_iterPos);
+  ret |= expand_part(*this, acls, acls.iterEnd(), AIterEndAny, all_iterEnd);
 
   return ret;
 }
@@ -370,19 +371,13 @@ AliasAnalysis collect_aliases(const IRUnit& unit, const BlockList& blocks) {
       return;
     }
 
-    if (acls.is_ref()) {
-      if (auto const index = add_class(ret, acls)) {
-        ret.all_ref.set(*index);
-      }
-      return;
-    }
-
     if (acls.is_mis() && acls.isSingleLocation()) {
       add_class(ret, acls);
       return;
     }
 
-    if (acls.is_iterPos() || acls.is_iterBase()) {
+    if (acls.is_iterBase() || acls.is_iterType() ||
+        acls.is_iterPos() || acls.is_iterEnd()) {
       add_class(ret, acls);
       return;
     }
@@ -488,19 +483,23 @@ AliasAnalysis collect_aliases(const IRUnit& unit, const BlockList& blocks) {
       return;
     }
 
-    if (acls.is_iterPos()) {
-      ret.all_iterPos.set(meta.index);
-      return;
-    }
-
     if (acls.is_iterBase()) {
       ret.all_iterBase.set(meta.index);
       return;
     }
 
-    if (acls.is_ref()) {
-      meta.conflicts = ret.all_ref;
-      meta.conflicts.reset(meta.index);
+    if (acls.is_iterType()) {
+      ret.all_iterType.set(meta.index);
+      return;
+    }
+
+    if (acls.is_iterPos()) {
+      ret.all_iterPos.set(meta.index);
+      return;
+    }
+
+    if (acls.is_iterEnd()) {
+      ret.all_iterEnd.set(meta.index);
       return;
     }
 
@@ -601,29 +600,38 @@ std::string show(const AliasAnalysis& ainfo) {
       " {: <20}       : {}\n"
       " {: <20}       : {}\n"
       " {: <20}       : {}\n"
+      " {: <20}       : {}\n"
       " {: <20}       : {}\n",
 
       "all props",          show(ainfo.all_props),
       "all elemIs",         show(ainfo.all_elemIs),
       "all elemSs",         show(ainfo.all_elemSs),
-      "all refs",           show(ainfo.all_ref),
-      "all iterPos",        show(ainfo.all_iterPos),
       "all iterBase",       show(ainfo.all_iterBase),
+      "all iterType",       show(ainfo.all_iterType),
+      "all iterPos",        show(ainfo.all_iterPos),
+      "all iterEnd",        show(ainfo.all_iterEnd),
       "all frame",          show(ainfo.all_frame),
       "all rds",            show(ainfo.all_rds)
   );
+  std::vector<std::string> tmp;
   for (auto& kv : ainfo.loc_expand_map) {
-    folly::format(&ret, " ex {: <17}       : {}\n",
-      show(kv.first),
-      show(kv.second));
+    tmp.push_back(folly::sformat(" ex {: <17}       : {}\n",
+                                 show(kv.first),
+                                 show(kv.second)));
   }
+  std::sort(tmp.begin(), tmp.end());
+  for (auto& s : tmp) ret += s;
+  tmp.clear();
   folly::format(&ret, " {: <20}       : {}\n",
      "all stack",  show(ainfo.all_stack));
   for (auto& kv : ainfo.stack_ranges) {
-    folly::format(&ret, " ex {: <17}       : {}\n",
-      show(kv.first),
-      show(kv.second));
+    tmp.push_back(folly::sformat(" ex {: <17}       : {}\n",
+                                 show(kv.first),
+                                 show(kv.second)));
   }
+  std::sort(tmp.begin(), tmp.end());
+  for (auto& s : tmp) ret += s;
+  tmp.clear();
   return ret;
 }
 

@@ -11,6 +11,8 @@ open Core_kernel
 open File_content
 open String_utils
 open Sys_utils
+open Typing_env_types
+module Inf = Typing_inference_env
 module TNBody = Typing_naming_body
 
 module StringAnnotation = struct
@@ -21,8 +23,6 @@ end
 
 module PS = Full_fidelity_positioned_syntax
 module PositionedTree = Full_fidelity_syntax_tree.WithSyntax (PS)
-module TS = Full_fidelity_typed_positioned_syntax
-module TypedTree = Full_fidelity_syntax_tree.WithSyntax (TS)
 
 (*****************************************************************************)
 (* Types, constants *)
@@ -48,11 +48,13 @@ type mode =
   | Dump_stripped_tast
   | Dump_tast
   | Check_tast
-  | Dump_typed_full_fidelity_json
   | Find_refs of int * int
   | Highlight_refs of int * int
   | Decl_compare
+  | Shallow_class_diff
   | Linearization
+  | Go_to_impl of int * int
+  | Dump_glean_deps
 
 type options = {
   files: string list;
@@ -63,6 +65,7 @@ type options = {
   tcopt: GlobalOptions.t;
   batch_mode: bool;
   out_extension: string;
+  verbosity: int;
 }
 
 (* Canonical builtins from our hhi library *)
@@ -92,8 +95,6 @@ let magic_builtins =
 (*****************************************************************************)
 (* Helpers *)
 (*****************************************************************************)
-
-let exit_on_parent_exit () = Parent.exit_on_parent_exit 10 60
 
 let die str =
   let oc = stderr in
@@ -153,6 +154,14 @@ let print_error_list format errors max_errors =
 let print_errors format (errors : Errors.t) max_errors : unit =
   print_error_list format (Errors.get_error_list errors) max_errors
 
+let print_errors_if_present (errors : Errors.error list) =
+  if not (List.is_empty errors) then (
+    let errors_output = Errors.convert_errors_to_string errors in
+    Printf.printf "Errors:\n";
+    List.iter errors_output (fun err_output ->
+        Printf.printf "  %s\n" err_output)
+  )
+
 let parse_options () =
   let fn_ref = ref [] in
   let usage = Printf.sprintf "Usage: %s filename\n" Sys.argv.(0) in
@@ -171,8 +180,6 @@ let parse_options () =
   in
   let set_ai x = set_mode (Ai (Ai_options.prepare ~server:false x)) () in
   let error_format = ref Errors.Context in
-  let safe_array = ref (Some false) in
-  let safe_vector_array = ref (Some false) in
   let forbid_nullable_cast = ref false in
   let deregister_attributes = ref None in
   let disallow_ambiguous_lambda = ref None in
@@ -180,40 +187,37 @@ let parse_options () =
   let disallow_array_literal = ref None in
   let no_fallback_in_namespaces = ref None in
   let dynamic_view = ref None in
-  let allow_array_as_tuple = ref (Some false) in
   let allow_user_attributes = ref None in
-  let disallow_unset_on_varray = ref None in
   let auto_namespace_map = ref None in
   let unsafe_rx = ref (Some false) in
   let log_inference_constraints = ref None in
   let new_inference_lambda = ref (Some false) in
   let timeout = ref None in
   let disallow_invalid_arraykey = ref None in
-  let typecheck_xhp_cvars = ref (Some false) in
-  let ignore_collection_expr_type_arguments = ref (Some false) in
   let allow_ref_param_on_constructor = ref (Some false) in
   let disallow_byref_dynamic_calls = ref (Some false) in
   let disallow_byref_calls = ref (Some false) in
   let set_bool x () = x := Some true in
+  let set_bool_ x () = x := true in
+  let set_float_ x f = x := f in
   let shallow_class_decl = ref false in
   let out_extension = ref ".out" in
-  let like_types = ref false in
-  let pessimize_types = ref false in
+  let like_type_hints = ref false in
+  let union_intersection_type_hints = ref false in
+  let like_casts = ref false in
   let simple_pessimize = ref 0.0 in
-  let coercion_from_dynamic = ref false in
-  let coercion_from_union = ref false in
   let complex_coercion = ref false in
   let disable_partially_abstract_typeconsts = ref false in
   let rust_parser_errors = ref false in
+  let rust_lowerer = ref true in
   let symbolindex_file = ref None in
   let check_xhp_attribute = ref false in
   let disallow_invalid_arraykey_constraint = ref None in
   let enable_class_level_where_clauses = ref false in
-  let enable_constant_visibility_modifiers = ref false in
   let disable_legacy_soft_typehints = ref false in
   let allow_new_attribute_syntax = ref false in
   let allow_toplevel_requires = ref false in
-  let infer_missing = ref GlobalOptions.InferMissing.Deactivated in
+  let global_inference = ref false in
   let const_static_props = ref false in
   let disable_legacy_attribute_syntax = ref false in
   let const_attribute = ref false in
@@ -223,6 +227,15 @@ let parse_options () =
   let abstract_static_props = ref false in
   let disable_halt_compiler = ref false in
   let disable_unset_class_const = ref false in
+  let glean_service = ref (GleanOptions.service GlobalOptions.default) in
+  let glean_hostname = ref (GleanOptions.hostname GlobalOptions.default) in
+  let glean_port = ref (GleanOptions.port GlobalOptions.default) in
+  let glean_reponame = ref (GleanOptions.reponame GlobalOptions.default) in
+  let disallow_func_ptrs_in_constants = ref false in
+  let error_php_lambdas = ref false in
+  let disallow_discarded_nullable_awaitables = ref false in
+  let enable_xhp_class_modifier = ref false in
+  let verbosity = ref 0 in
   let options =
     [
       ("--ai", Arg.String set_ai, " Run the abstract interpreter (Zoncolan)");
@@ -276,6 +289,9 @@ let parse_options () =
         Arg.String (fun s -> out_extension := s),
         "output file extension (default .out)" );
       ("--dump-deps", Arg.Unit (set_mode Dump_deps), " Print dependencies");
+      ( "--dump-glean-deps",
+        Arg.Unit (set_mode Dump_glean_deps),
+        " Print dependencies in the Glean format" );
       ( "--dump-inheritance",
         Arg.Unit (set_mode Dump_inheritance),
         " Print inheritance" );
@@ -305,9 +321,9 @@ let parse_options () =
         Arg.Unit (set_mode Dump_stripped_tast),
         " Print out the typed AST, stripped of type information."
         ^ " This can be compared against the named AST to look for holes." );
-      ( "--typed-full-fidelity-json",
-        Arg.Unit (set_mode Dump_typed_full_fidelity_json),
-        " (mode) show full fidelity parse tree with types in json format." );
+      ( "--global-inference",
+        Arg.Set global_inference,
+        "Global type inference to infer missing type annotations." );
       ( "--find-refs",
         Arg.Tuple
           [
@@ -315,25 +331,27 @@ let parse_options () =
             Arg.Int (fun column -> set_mode (Find_refs (!line, column)) ());
           ],
         "<pos> Find all usages of a symbol at given line and column" );
+      ( "--go-to-impl",
+        Arg.Tuple
+          [
+            Arg.Int (fun x -> line := x);
+            Arg.Int (fun column -> set_mode (Go_to_impl (!line, column)) ());
+          ],
+        "<pos> Find all implementations of a symbol at given line and column" );
       ( "--highlight-refs",
         Arg.Tuple
           [
             Arg.Int (fun x -> line := x);
-            Arg.Int
-              (fun column -> set_mode (Highlight_refs (!line, column)) ());
+            Arg.Int (fun column -> set_mode (Highlight_refs (!line, column)) ());
           ],
         "<pos> Highlight all usages of a symbol at given line and column" );
       ( "--decl-compare",
         Arg.Unit (set_mode Decl_compare),
         " Test comparison functions used in incremental mode on declarations"
         ^ " in provided file" );
-      ( "--safe_array",
-        Arg.Unit (set_bool safe_array),
-        " Enforce array subtyping relationships so that array<T> and array<Tk, Tv> are each subtypes of array but not vice-versa."
-      );
-      ( "--safe_vector_array",
-        Arg.Unit (set_bool safe_vector_array),
-        " Enforce array subtyping relationships so that array<T> is not a of array<int, T>."
+      ( "--shallow-class-diff",
+        Arg.Unit (set_mode Shallow_class_diff),
+        " Test shallow class comparison used in incremental mode on shallow class declarations"
       );
       ( "--forbid_nullable_cast",
         Arg.Set forbid_nullable_cast,
@@ -354,12 +372,6 @@ let parse_options () =
       ( "--dynamic-view",
         Arg.Unit (set_bool dynamic_view),
         " Turns on dynamic view, replacing Tany with dynamic" );
-      ( "--allow-array-as-tuple",
-        Arg.Unit (set_bool allow_array_as_tuple),
-        " Allow tuples to be passed as untyped arrays and vice versa" );
-      ( "--disallow-unset-on-varray",
-        Arg.Unit (set_bool disallow_unset_on_varray),
-        " Disallow unsetting indices from varrays" );
       ( "--unsafe-rx",
         Arg.Unit (set_bool unsafe_rx),
         " Disables reactivity related errors" );
@@ -393,107 +405,126 @@ let parse_options () =
       ( "--disallow-invalid-arraykey-constraint",
         Arg.Unit (set_bool disallow_invalid_arraykey_constraint),
         " Disallow using non-string, non-int types as array key constraints" );
-      ( "--check-xhp-cvar-arity",
-        Arg.Unit (set_bool typecheck_xhp_cvars),
-        "Typechecks xhp cvar arity" );
       ( "--check-xhp-attribute",
         Arg.Set check_xhp_attribute,
-        "Typechecks xhp required attributes" );
-      ( "--ignore-collection-expr-type-arguments",
-        Arg.Unit (set_bool ignore_collection_expr_type_arguments),
-        "Typechecker ignores type arguments to vec<T>[...] style expressions"
-      );
+        " Typechecks xhp required attributes" );
       ( "--allow-ref-param-on-constructor",
         Arg.Unit (set_bool allow_ref_param_on_constructor),
         "Allow class constructors to take reference parameters" );
       ( "--disallow-byref-dynamic-calls",
         Arg.Unit (set_bool disallow_byref_dynamic_calls),
-        "Disallow passing arguments by reference to dynamically called functions [e.g. $foo(&$bar)]"
+        " Disallow passing arguments by reference to dynamically called functions [e.g. $foo(&$bar)]"
       );
       ( "--disallow-byref-calls",
         Arg.Unit (set_bool disallow_byref_calls),
-        "Disallow passing arguments by reference in any form [e.g. foo(&$bar)]"
+        " Disallow passing arguments by reference in any form [e.g. foo(&$bar)]"
       );
       ( "--shallow-class-decl",
         Arg.Set shallow_class_decl,
-        "Look up class members lazily from shallow declarations" );
-      ( "--like-types",
-        Arg.Set like_types,
-        "Allows deeper like types features like inferring trust" );
-      ( "--pessimize-types",
-        Arg.Set pessimize_types,
-        "When unenforceable types are encountered, convert them to like types"
+        " Look up class members lazily from shallow declarations" );
+      ( "--union-intersection-type-hints",
+        Arg.Set union_intersection_type_hints,
+        " Allows union and intersection types to be written in type hint positions"
       );
+      ( "--like-type-hints",
+        Arg.Set like_type_hints,
+        " Allows like types to be written in type hint positions" );
+      ( "--like-casts",
+        Arg.Set like_casts,
+        " Allows like types to be written in as expressions" );
       ( "--simple-pessimize",
         Arg.Set_float simple_pessimize,
-        "At coercion points, if a type is not enforceable, wrap it in like. Float argument 0.0 to 1.0 sets frequency"
+        " At coercion points, if a type is not enforceable, wrap it in like. Float argument 0.0 to 1.0 sets frequency"
       );
-      ( "--coercion-from-dynamic",
-        Arg.Set coercion_from_dynamic,
-        "Allows coercion from dynamic to enforceable types at positions that HHVM enforces"
-      );
-      ( "--coercion-from-union",
-        Arg.Set coercion_from_union,
-        "Allows coercion from union types" );
       ( "--complex-coercion",
         Arg.Set complex_coercion,
-        "Allows complex coercions that involve like types" );
+        " Allows complex coercions that involve like types" );
+      ( "--like-types-all",
+        Arg.Unit
+          (fun () ->
+            set_bool_ like_type_hints ();
+            set_bool_ like_casts ();
+            set_float_ simple_pessimize 1.0;
+            set_bool_ complex_coercion ()),
+        " Enables all like types features" );
       ( "--disable-partially-abstract-typeconsts",
         Arg.Set disable_partially_abstract_typeconsts,
-        "Treat partially abstract type constants as concrete type constants" );
+        " Treat partially abstract type constants as concrete type constants" );
       ( "--rust-parser-errors",
         Arg.Bool (fun x -> rust_parser_errors := x),
-        "Use rust parser error checker" );
+        " Use rust parser error checker" );
+      ( "--rust-lowerer",
+        Arg.Bool (fun x -> rust_lowerer := x),
+        " Use rust lowerer" );
       ( "--symbolindex-file",
         Arg.String (fun str -> symbolindex_file := Some str),
-        "Load the symbol index from this file" );
+        " Load the symbol index from this file" );
       ( "--enable-class-level-where-clauses",
         Arg.Set enable_class_level_where_clauses,
         "Enables support for class-level where clauses" );
-      ( "--enable-constant-visibility-modifiers",
-        Arg.Set enable_constant_visibility_modifiers,
-        "Enable constant visibility modifiers" );
       ( "--disable-legacy-soft-typehints",
         Arg.Set disable_legacy_soft_typehints,
-        "Disables the legacy @ syntax for soft typehints (use __Soft instead)"
+        " Disables the legacy @ syntax for soft typehints (use __Soft instead)"
       );
       ( "--allow-new-attribute-syntax",
         Arg.Set allow_new_attribute_syntax,
-        "Allow the new @ attribute syntax (disables legacy soft typehints)" );
+        " Allow the new @ attribute syntax (disables legacy soft typehints)" );
       ( "--allow-toplevel-requires",
         Arg.Set allow_toplevel_requires,
-        "Allow `require()` and similar at the top-level" );
-      ( "--infer-missing",
-        Arg.String
-          (fun s -> infer_missing := GlobalOptions.InferMissing.from_string s),
-        "<return|params|global> Deduce more information about unannotated types in the tast"
-      );
+        " Allow `require()` and similar at the top-level" );
       ( "--const-static-props",
         Arg.Set const_static_props,
-        "Enable static properties to be const" );
+        " Enable static properties to be const" );
       ( "--disable-legacy-attribute-syntax",
         Arg.Set disable_legacy_attribute_syntax,
-        "Disable the legacy <<...>> user attribute syntax" );
-      ("--const-attribute", Arg.Set const_attribute, "Allow __Const attribute");
+        " Disable the legacy <<...>> user attribute syntax" );
+      ("--const-attribute", Arg.Set const_attribute, " Allow __Const attribute");
       ( "--disallow-goto",
         Arg.Set disallow_goto,
-        "Forbid the goto operator and goto labels in the parser" );
+        " Forbid the goto operator and goto labels in the parser" );
       ( "--const-default-func-args",
         Arg.Set const_default_func_args,
-        "Statically check default function arguments are constant initializers"
+        " Statically check default function arguments are constant initializers"
       );
       ( "--disallow-silence",
         Arg.Set disallow_silence,
-        "Disallow the error suppression operator, @" );
+        " Disallow the error suppression operator, @" );
       ( "--abstract-static-props",
         Arg.Set abstract_static_props,
-        "Static properties can be abstract" );
+        " Static properties can be abstract" );
       ( "--disable-unset-class-const",
         Arg.Set disable_unset_class_const,
-        "Make unsetting a class const a parse error" );
+        " Make unsetting a class const a parse error" );
       ( "--disable-halt-compiler",
         Arg.Set disable_halt_compiler,
-        "Disable using PHP __halt_compiler()" );
+        " Disable using PHP __halt_compiler()" );
+      ( "--glean-service",
+        Arg.String (fun str -> glean_service := str),
+        " glean service name" );
+      ( "--glean-hostname",
+        Arg.String (fun str -> glean_hostname := str),
+        " glean hostname" );
+      ("--glean-port", Arg.Int (fun x -> glean_port := x), " glean port number");
+      ( "--glean-reponame",
+        Arg.String (fun str -> glean_reponame := str),
+        "glean repo name" );
+      ( "--disallow-func-ptrs-in-constants",
+        Arg.Set disallow_func_ptrs_in_constants,
+        " Disallow use of HH\\fun and HH\\class_meth in constants and constant initializers"
+      );
+      ( "--disallow-php-lambdas",
+        Arg.Set error_php_lambdas,
+        "Disallow php style anonymous functions." );
+      ( "--disallow-discarded-nullable-awaitables",
+        Arg.Set disallow_discarded_nullable_awaitables,
+        "Error on using discarded nullable awaitables" );
+      ( "--enable-xhp-class-modifier",
+        Arg.Set enable_xhp_class_modifier,
+        "Enable the XHP class modifier, xhp class name {} will define an xhp class."
+      );
+      ( "--verbose",
+        Arg.Int (fun v -> verbosity := v),
+        "Verbosity as an integer." );
     ]
   in
   let options = Arg.align ~limit:25 options in
@@ -503,51 +534,41 @@ let parse_options () =
     | [] -> die usage
     | x -> x
   in
-  let not_ = Option.map ~f:not in
   let tcopt =
     GlobalOptions.make
       ?tco_unsafe_rx:!unsafe_rx
-      ?tco_safe_array:!safe_array
-      ?tco_safe_vector_array:!safe_vector_array
       ?po_deregister_php_stdlib:!deregister_attributes
       ?tco_disallow_ambiguous_lambda:!disallow_ambiguous_lambda
       ?tco_disallow_array_typehint:!disallow_array_typehint
       ?tco_disallow_array_literal:!disallow_array_literal
       ?tco_dynamic_view:!dynamic_view
-      ?tco_disallow_array_as_tuple:(not_ !allow_array_as_tuple)
-      ?tco_disallow_unset_on_varray:!disallow_unset_on_varray
       ?tco_log_inference_constraints:!log_inference_constraints
       ?tco_new_inference_lambda:!new_inference_lambda
       ?tco_timeout:!timeout
       ?tco_disallow_invalid_arraykey:!disallow_invalid_arraykey
       ?po_auto_namespace_map:!auto_namespace_map
-      ?tco_typecheck_xhp_cvars:!typecheck_xhp_cvars
-      ?tco_ignore_collection_expr_type_arguments:
-        !ignore_collection_expr_type_arguments
       ?tco_disallow_byref_dynamic_calls:!disallow_byref_dynamic_calls
       ?tco_disallow_byref_calls:!disallow_byref_calls
       ?tco_disallow_invalid_arraykey_constraint:
         !disallow_invalid_arraykey_constraint
       ~tco_check_xhp_attribute:!check_xhp_attribute
       ~tco_shallow_class_decl:!shallow_class_decl
-      ~tco_like_types:!like_types
-      ~tco_pessimize_types:!pessimize_types
+      ~tco_like_type_hints:!like_type_hints
+      ~tco_union_intersection_type_hints:!union_intersection_type_hints
+      ~tco_like_casts:!like_casts
       ~tco_simple_pessimize:!simple_pessimize
-      ~tco_coercion_from_dynamic:!coercion_from_dynamic
-      ~tco_coercion_from_union:!coercion_from_union
       ~tco_complex_coercion:!complex_coercion
       ~tco_disable_partially_abstract_typeconsts:
         !disable_partially_abstract_typeconsts
       ~log_levels:!log_levels
       ~po_rust_parser_errors:!rust_parser_errors
+      ~po_rust_lowerer:!rust_lowerer
       ~po_enable_class_level_where_clauses:!enable_class_level_where_clauses
-      ~po_enable_constant_visibility_modifiers:
-        !enable_constant_visibility_modifiers
       ~po_disable_legacy_soft_typehints:!disable_legacy_soft_typehints
       ~po_allow_new_attribute_syntax:!allow_new_attribute_syntax
       ~po_disallow_toplevel_requires:(not !allow_toplevel_requires)
       ~tco_const_static_props:!const_static_props
-      ~tco_infer_missing:!infer_missing
+      ~tco_global_inference:!global_inference
       ~po_disable_legacy_attribute_syntax:!disable_legacy_attribute_syntax
       ~tco_const_attribute:!const_attribute
       ~po_allow_goto:(not !disallow_goto)
@@ -555,8 +576,16 @@ let parse_options () =
       ~po_disallow_silence:!disallow_silence
       ~po_abstract_static_props:!abstract_static_props
       ~po_disable_unset_class_const:!disable_unset_class_const
-      ~po_disable_halt_compiler:!disable_halt_compiler
+      ~po_disallow_func_ptrs_in_constants:!disallow_func_ptrs_in_constants
       ~tco_check_attribute_locations:true
+      ~tco_error_php_lambdas:!error_php_lambdas
+      ~tco_disallow_discarded_nullable_awaitables:
+        !disallow_discarded_nullable_awaitables
+      ~glean_service:!glean_service
+      ~glean_hostname:!glean_hostname
+      ~glean_port:!glean_port
+      ~glean_reponame:!glean_reponame
+      ~po_enable_xhp_class_modifier:!enable_xhp_class_modifier
       ()
   in
   let tcopt =
@@ -578,14 +607,23 @@ let parse_options () =
   let namespace_map = GlobalOptions.po_auto_namespace_map tcopt in
   let sienv =
     SymbolIndex.initialize
-      ~globalrev_opt:None
+      ~globalrev:None
+      ~gleanopt:tcopt
       ~namespace_map
       ~provider_name:"LocalIndex"
       ~quiet:true
+      ~ignore_hh_version:false
       ~savedstate_file_opt:!symbolindex_file
       ~workers:None
   in
-  let sienv = { sienv with SearchUtils.sie_resolve_signatures = true } in
+  let sienv =
+    {
+      sienv with
+      SearchUtils.sie_resolve_signatures = true;
+      SearchUtils.sie_resolve_positions = true;
+      SearchUtils.sie_resolve_local_decl = true;
+    }
+  in
   ( {
       files = fns;
       mode = !mode;
@@ -595,6 +633,7 @@ let parse_options () =
       tcopt;
       batch_mode = !batch_mode;
       out_extension = !out_extension;
+      verbosity = !verbosity;
     },
     sienv )
 
@@ -616,21 +655,124 @@ let print_colored fn type_acc =
     print_string (List.map ~f:replace_color results |> String.concat ~sep:"")
 
 let print_coverage type_acc =
-  ClientCoverageMetric.go
-    ~json:false
-    (Some (Coverage_level_defs.Leaf type_acc))
+  ClientCoverageMetric.go ~json:false (Some (Coverage_level_defs.Leaf type_acc))
 
-let check_file opts errors files_info =
-  Relative_path.Map.fold
-    files_info
-    ~f:
-      begin
-        fun fn fileinfo errors ->
-        errors
-        @ Errors.get_error_list
-            (Typing_check_utils.check_defs opts fn fileinfo)
-      end
-    ~init:errors
+let print_global_inference_envs tcopt ~verbosity gienvs =
+  let tco_global_inference = TypecheckerOptions.global_inference tcopt in
+  if verbosity >= 2 && tco_global_inference then
+    let should_log (pos, gienv) =
+      let file_relevant =
+        match verbosity with
+        | 1
+          when Filename.check_suffix
+                 (Relative_path.suffix (Pos.filename pos))
+                 ".hhi" ->
+          false
+        | _ -> true
+      in
+      file_relevant && (not @@ List.is_empty @@ Inf.get_vars_g gienv)
+    in
+    let env = Typing_env.empty tcopt Relative_path.default ~droot:None in
+
+    List.filter gienvs ~f:should_log
+    |> List.iter ~f:(fun (pos, gienv) ->
+           Typing_log.log_global_inference_env pos env gienv)
+
+let merge_global_inference_envs_opt tcopt gienvs =
+  if TypecheckerOptions.global_inference tcopt then
+    let open Typing_global_inference in
+    let env =
+      Typing_env.empty GlobalOptions.default Relative_path.default None
+    in
+    let state_errors = StateErrors.mk_empty () in
+    let (env, state_errors) =
+      StateConstraintGraph.merge_subgraphs (env, state_errors) gienvs
+    in
+    (* we are not going to print type variables without any bounds *)
+    let env = { env with inference_env = Inf.compress env.inference_env } in
+    Some (env, state_errors)
+  else
+    None
+
+let print_global_inference_env
+    env ~step_name state_errors error_format max_errors =
+  let print_header s =
+    print_endline "";
+    print_endline (String.map s (const '='));
+    print_endline s;
+    print_endline (String.map s (const '='))
+  in
+  print_header (Printf.sprintf "%sd environment" step_name);
+  Typing_log.hh_show_env Pos.none env;
+
+  print_header (Printf.sprintf "%s errors" step_name);
+  List.iter
+    (Typing_global_inference.StateErrors.elements state_errors)
+    ~f:(fun (var, errl) ->
+      Printf.fprintf stderr "#%d\n" var;
+      print_error_list error_format errl max_errors);
+  Out_channel.flush stderr
+
+let print_merged_global_inference_env ~verbosity gienv error_format max_errors =
+  if verbosity >= 1 then
+    match gienv with
+    | None -> ()
+    | Some (gienv, state_errors) ->
+      print_global_inference_env
+        gienv
+        ~step_name:"Merge"
+        state_errors
+        error_format
+        max_errors
+
+let print_solved_global_inference_env ~verbosity gienv error_format max_errors =
+  if verbosity >= 1 then
+    match gienv with
+    | None -> ()
+    | Some (gienv, state_errors, _) ->
+      print_global_inference_env
+        gienv
+        ~step_name:"Solve"
+        state_errors
+        error_format
+        max_errors
+
+let solve_global_inference_env gienv =
+  Typing_global_inference.StateSolvedGraph.from_constraint_graph gienv
+
+let global_inference_merge_and_solve
+    opts ~verbosity ?(error_format = Errors.Raw) ?max_errors gienvs =
+  print_global_inference_envs opts ~verbosity gienvs;
+  let gienv = merge_global_inference_envs_opt opts gienvs in
+  print_merged_global_inference_env ~verbosity gienv error_format max_errors;
+  let gienv = Option.map gienv solve_global_inference_env in
+  print_solved_global_inference_env ~verbosity gienv error_format max_errors;
+  gienv
+
+let check_file opts ~verbosity errors files_info error_format max_errors =
+  let (errors, gienvs) =
+    Relative_path.Map.fold
+      files_info
+      ~f:
+        begin
+          fun fn fileinfo (errors, global_tvenvs) ->
+          let (_, lazy_global_tvenvs, new_errors) =
+            Typing_check_utils.type_file_with_global_tvenvs opts fn fileinfo
+          in
+          ( errors @ Errors.get_error_list new_errors,
+            global_tvenvs @ Lazy.force lazy_global_tvenvs )
+        end
+      ~init:(errors, [])
+  in
+  let _gienv =
+    global_inference_merge_and_solve
+      opts
+      ~verbosity:(verbosity + 1)
+      gienvs
+      ~error_format
+      ?max_errors
+  in
+  errors
 
 let create_nasts files_info =
   let build_nast fn _ =
@@ -639,57 +781,95 @@ let create_nasts files_info =
   in
   Relative_path.Map.mapi ~f:build_nast files_info
 
+let parse_and_name popt files_contents =
+  let parsed_files =
+    Relative_path.Map.mapi files_contents ~f:(fun fn contents ->
+        Errors.run_in_context fn Errors.Parsing (fun () ->
+            let parsed_file =
+              Full_fidelity_ast.defensive_program popt fn contents
+            in
+            let ast =
+              let { Parser_return.ast; _ } = parsed_file in
+              if ParserOptions.deregister_php_stdlib popt then
+                Nast.deregister_ignored_attributes ast
+              else
+                ast
+            in
+            Ast_provider.provide_ast_hint fn ast Ast_provider.Full;
+            { parsed_file with Parser_return.ast }))
+  in
+  let files_info =
+    Relative_path.Map.mapi
+      ~f:
+        begin
+          fun _fn parsed_file ->
+          let { Parser_return.file_mode; comments; ast; _ } = parsed_file in
+          (* If the feature is turned on, deregister functions with attribute
+             __PHPStdLib. This does it for all functions, not just hhi files *)
+          let (funs, classes, record_defs, typedefs, consts) =
+            Nast.get_defs ast
+          in
+          {
+            FileInfo.file_mode;
+            funs;
+            classes;
+            record_defs;
+            typedefs;
+            consts;
+            comments = Some comments;
+            hash = None;
+          }
+        end
+      parsed_files
+  in
+  Relative_path.Map.iter files_info (fun fn fileinfo ->
+      Errors.run_in_context fn Errors.Naming (fun () ->
+          let { FileInfo.funs; classes; record_defs; typedefs; consts; _ } =
+            fileinfo
+          in
+          Naming_global.make_env ~funs ~classes ~record_defs ~typedefs ~consts));
+  (parsed_files, files_info)
+
 let parse_name_and_decl popt files_contents =
   Errors.do_ (fun () ->
-      let parsed_files =
-        Relative_path.Map.mapi files_contents ~f:(fun fn contents ->
-            Errors.run_in_context fn Errors.Parsing (fun () ->
-                let parsed_file =
-                  Full_fidelity_ast.defensive_program popt fn contents
-                in
-                let ast =
-                  let { Parser_return.ast; _ } = parsed_file in
-                  if ParserOptions.deregister_php_stdlib popt then
-                    Nast.deregister_ignored_attributes ast
-                  else
-                    ast
-                in
-                Ast_provider.provide_ast_hint fn ast Ast_provider.Full;
-                { parsed_file with Parser_return.ast }))
-      in
-      let files_info =
-        Relative_path.Map.mapi
-          ~f:
-            begin
-              fun _fn parsed_file ->
-              let { Parser_return.file_mode; comments; ast; _ } =
-                parsed_file
-              in
-              (* If the feature is turned on, deregister functions with attribute
-        __PHPStdLib. This does it for all functions, not just hhi files *)
-              let (funs, classes, typedefs, consts) = Nast.get_defs ast in
-              {
-                FileInfo.file_mode;
-                funs;
-                classes;
-                typedefs;
-                consts;
-                comments = Some comments;
-                hash = None;
-              }
-            end
-          parsed_files
-      in
-      Relative_path.Map.iter files_info (fun fn fileinfo ->
-          Errors.run_in_context fn Errors.Naming (fun () ->
-              let { FileInfo.funs; classes; typedefs; consts; _ } = fileinfo in
-              NamingGlobal.make_env ~funs ~classes ~typedefs ~consts));
-
+      let (parsed_files, files_info) = parse_and_name popt files_contents in
       Relative_path.Map.iter parsed_files (fun fn parsed_file ->
           Errors.run_in_context fn Errors.Decl (fun () ->
               Decl.name_and_declare_types_program parsed_file.Parser_return.ast));
 
       files_info)
+
+let parse_name_and_shallow_decl popt filename file_contents :
+    Shallow_decl_defs.shallow_class SMap.t =
+  Errors.ignore_ (fun () ->
+      let files_contents = Relative_path.Map.singleton filename file_contents in
+      let (parsed_files, _) = parse_and_name popt files_contents in
+      let parsed_file = Relative_path.Map.values parsed_files |> List.hd_exn in
+      parsed_file.Parser_return.ast
+      |> List.filter_map ~f:(function
+             | Aast.Class c -> Some (Shallow_decl.class_ c)
+             | _ -> None)
+      |> List.fold ~init:SMap.empty ~f:(fun acc c ->
+             SMap.add (snd c.Shallow_decl_defs.sc_name) c acc))
+
+let test_shallow_class_diff popt filename =
+  let filename_after = Relative_path.to_absolute filename ^ ".after" in
+  let contents1 = Sys_utils.cat (Relative_path.to_absolute filename) in
+  let contents2 = Sys_utils.cat filename_after in
+  let decls1 = parse_name_and_shallow_decl popt filename contents1 in
+  let decls2 = parse_name_and_shallow_decl popt filename contents2 in
+  let decls =
+    SMap.merge (fun _ a b -> Some (a, b)) decls1 decls2 |> SMap.bindings
+  in
+  let diffs =
+    List.map decls (fun (cid, old_and_new) ->
+        ( Utils.strip_ns cid,
+          match old_and_new with
+          | (Some c1, Some c2) -> Shallow_class_diff.diff_class c1 c2
+          | _ -> ClassDiff.Major_change ))
+  in
+  List.iter diffs (fun (cid, diff) ->
+      Format.printf "%s: %a@." cid ClassDiff.pp diff)
 
 let add_newline contents =
   (* this is used for incremental mode to change all the positions, so we
@@ -746,8 +926,8 @@ let compare_typedefs t1 t2 =
   if t1 <> t2 then fail_comparison "typedefs"
 
 let compare_funs f1 f2 =
-  let f1 = Decl_pos_utils.NormalizeSig.fun_type f1 in
-  let f2 = Decl_pos_utils.NormalizeSig.fun_type f2 in
+  let f1 = Decl_pos_utils.NormalizeSig.fun_elt f1 in
+  let f2 = Decl_pos_utils.NormalizeSig.fun_elt f2 in
   if f1 <> f2 then fail_comparison "funs"
 
 let compare_classes c1 c2 =
@@ -774,9 +954,11 @@ let test_decl_compare filenames popt builtins files_contents files_info =
     let files_info =
       Relative_path.Map.fold
         builtins
-        ~f:begin
-             fun k _ acc -> Relative_path.Map.remove acc k
-           end
+        ~f:
+          begin
+            fun k _ acc ->
+            Relative_path.Map.remove acc k
+          end
         ~init:files_info
     in
     let files =
@@ -800,7 +982,7 @@ let test_decl_compare filenames popt builtins files_contents files_info =
     Ast_provider.remove_batch files;
 
     let get_classes path =
-      match Relative_path.Map.get files_info path with
+      match Relative_path.Map.find_opt files_info path with
       | None -> SSet.empty
       | Some info -> SSet.of_list @@ List.map info.FileInfo.classes snd
     in
@@ -823,7 +1005,9 @@ let test_decl_compare filenames popt builtins files_contents files_info =
 
 (* Returns a list of Tast defs, along with associated type environments. *)
 let compute_tasts opts files_info interesting_files :
-    Errors.t * Tast.program Relative_path.Map.t =
+    Errors.t
+    * ( Tast.program Relative_path.Map.t
+      * Typing_inference_env.t_global_with_pos list ) =
   let _f _k nast x =
     match (nast, x) with
     | (Some nast, Some _) -> Some nast
@@ -839,13 +1023,49 @@ let compute_tasts opts files_info interesting_files :
             | _ -> None)
       in
       let nasts = filter_non_interesting nasts in
-      Relative_path.Map.map nasts ~f:(Typing.nast_to_tast opts))
+      let tasts_envs =
+        Relative_path.Map.map
+          nasts
+          ~f:(Typing.nast_to_tast_gienv ~do_tast_checks:true opts)
+      in
+      let tasts = Relative_path.Map.map tasts_envs ~f:fst in
+      let genvs =
+        List.concat
+        @@ Relative_path.Map.values
+        @@ Relative_path.Map.map tasts_envs ~f:snd
+      in
+      (tasts, genvs))
+
+let merge_global_inference_env_in_tast gienv tast =
+  let env_merger =
+    object
+      inherit Tast_visitor.endo
+
+      method! on_'en _ env =
+        {
+          env with
+          Tast.inference_env =
+            Typing_inference_env.simple_merge
+              env.Tast.inference_env
+              gienv.inference_env;
+        }
+    end
+  in
+  env_merger#go tast
 
 (**
  * Compute TASTs for some files, then expand all type variables.
  *)
-let compute_tasts_expand_types opts files_info interesting_files =
-  let (errors, tasts) = compute_tasts opts files_info interesting_files in
+let compute_tasts_expand_types opts ~verbosity files_info interesting_files =
+  let (errors, (tasts, gienvs)) =
+    compute_tasts opts files_info interesting_files
+  in
+  let tasts =
+    match global_inference_merge_and_solve opts ~verbosity gienvs with
+    | None -> tasts
+    | Some (gienv, _, _) ->
+      Relative_path.Map.map tasts (merge_global_inference_env_in_tast gienv)
+  in
   let tasts = Relative_path.Map.map tasts Tast_expand.expand_program in
   (errors, tasts)
 
@@ -914,6 +1134,17 @@ let sort_debug_deps deps =
 let dump_debug_deps dbg_deps =
   dbg_deps |> sort_debug_deps |> show_debug_deps |> Printf.printf "%s\n"
 
+let dump_debug_glean_deps
+    (deps :
+      ( Typing_deps.Dep.dependency Typing_deps.Dep.variant
+      * Typing_deps.Dep.dependent Typing_deps.Dep.variant )
+      HashSet.t) =
+  let json_opt = Glean_dependency_graph.convert_deps_to_json ~deps in
+  match json_opt with
+  | Some json_obj ->
+    Printf.printf "%s\n" (Hh_json.json_to_string ~pretty:true json_obj)
+  | None -> Printf.printf "No dependencies\n"
+
 let scan_files_for_symbol_index
     (filename : Relative_path.t)
     (popt : ParserOptions.t)
@@ -926,10 +1157,7 @@ let scan_files_for_symbol_index
         (filename, SearchUtils.Full fileinfo, SearchUtils.TypeChecker))
   in
   let sienv_ref = ref sienv in
-  SymbolIndex.update_files
-    ~sienv:sienv_ref
-    ~workers:None
-    ~paths:transformed_list;
+  SymbolIndex.update_files ~sienv:sienv_ref ~paths:transformed_list;
   !sienv_ref
 
 let handle_mode
@@ -946,6 +1174,8 @@ let handle_mode
     batch_mode
     out_extension
     dbg_deps
+    dbg_glean_deps
+    ~verbosity
     (sienv : SearchUtils.si_env) =
   let expect_single_file () : Relative_path.t =
     match filenames with
@@ -954,31 +1184,59 @@ let handle_mode
   in
   let iter_over_files f : unit = List.iter filenames f in
   match mode with
-  | Ai _ -> ()
+  | Ai ai_options ->
+    if parse_errors <> [] then
+      List.iter ~f:(print_error error_format) parse_errors
+    else
+      let to_check =
+        Relative_path.Map.filter files_info ~f:(fun _p i ->
+            let open FileInfo in
+            match i.file_mode with
+            | None
+            | Some Mstrict ->
+              true
+            | _ -> false)
+      in
+      let errors =
+        check_file ~verbosity tcopt [] to_check error_format max_errors
+      in
+      if errors <> [] then
+        List.iter ~f:(print_error error_format) errors
+      else
+        Ai.do_ Typing_check_utils.type_file files_info ai_options tcopt
   | Autocomplete
   | Autocomplete_manually_invoked ->
-    let filename = expect_single_file () in
-    let sienv = scan_files_for_symbol_index filename popt sienv in
-    let token = "AUTO332" in
-    let token_len = String.length token in
-    let file = cat (Relative_path.to_absolute filename) in
+    let path = expect_single_file () in
+    let sienv = scan_files_for_symbol_index path popt sienv in
+    let content = cat (Relative_path.to_absolute path) in
     (* Search backwards: there should only be one /real/ case. If there's multiple, *)
     (* guess that the others are preceding explanation comments *)
     let offset =
-      Str.search_backward (Str.regexp token) file (String.length file)
+      Str.search_backward
+        (Str.regexp AutocompleteTypes.autocomplete_token)
+        content
+        (String.length content)
     in
-    let pos = File_content.offset_to_position file offset in
-    let file =
-      Str.string_before file offset ^ Str.string_after file (offset + token_len)
-    in
+    let pos = File_content.offset_to_position content offset in
     let is_manually_invoked = mode = Autocomplete_manually_invoked in
-    let result =
-      ServerAutoComplete.auto_complete_at_position
-        ~tcopt
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty tcopt)
+        ~path
+        ~file_input:(ServerCommandTypes.FileContent content)
+    in
+    let autocomplete_context =
+      ServerAutoComplete.get_autocomplete_context
+        ~file_content:content
         ~pos
         ~is_manually_invoked
-        ~file_content:file
+    in
+    let result =
+      ServerAutoComplete.go_at_auto332_ctx
+        ~ctx
+        ~entry
         ~sienv
+        ~autocomplete_context
     in
     List.iter
       ~f:
@@ -1040,35 +1298,34 @@ let handle_mode
           let type_acc = ServerCoverageMetric.accumulate_types tast fn in
           print_coverage type_acc)
   | Cst_search ->
-    let filename = expect_single_file () in
-    let fileinfo =
-      match Relative_path.Map.get files_info filename with
-      | Some fileinfo -> fileinfo
-      | None ->
-        failwith
-          (Printf.sprintf
-             "Missing fileinfo for path %s"
-             (Relative_path.to_absolute filename))
+    let path = expect_single_file () in
+    let ctx = Provider_context.empty ~tcopt in
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx
+        ~path
+        ~file_input:
+          (ServerCommandTypes.FileName (Relative_path.to_absolute path))
     in
-    Result.Monad_infix.(
-      let result =
-        Sys_utils.read_stdin_to_string ()
-        |> Hh_json.json_of_string
-        |> CstSearchService.compile_pattern
-        >>| CstSearchService.search tcopt filename fileinfo
-        >>| CstSearchService.result_to_json ~sort_results:true
-        >>| Hh_json.json_to_string ~pretty:true
-      in
-      begin
-        match result with
-        | Ok result -> Printf.printf "%s\n" result
-        | Error message ->
-          Printf.printf "%s\n" message;
-          exit 1
-      end)
+    let result =
+      let open Result.Monad_infix in
+      Sys_utils.read_stdin_to_string ()
+      |> Hh_json.json_of_string
+      |> CstSearchService.compile_pattern ctx
+      >>| CstSearchService.search ctx entry
+      >>| CstSearchService.result_to_json ~sort_results:true
+      >>| Hh_json.json_to_string ~pretty:true
+    in
+    begin
+      match result with
+      | Ok result -> Printf.printf "%s\n" result
+      | Error message ->
+        Printf.printf "%s\n" message;
+        exit 1
+    end
   | Dump_symbol_info ->
     iter_over_files (fun filename ->
-        match Relative_path.Map.get files_info filename with
+        match Relative_path.Map.find_opt files_info filename with
         | Some fileinfo ->
           let raw_result =
             SymbolInfoService.helper tcopt [] [(filename, fileinfo)]
@@ -1078,20 +1335,22 @@ let handle_mode
           print_endline (Hh_json.json_to_multiline result_json)
         | None -> ())
   | Lint ->
+    let ctx = Provider_context.empty ~tcopt in
     let lint_errors =
       Relative_path.Map.fold
         files_contents
         ~init:[]
         ~f:(fun fn content lint_errors ->
           lint_errors
-          @ fst (Lint.do_ (fun () -> Linting_service.lint tcopt fn content)))
+          @ fst (Lint.do_ (fun () -> Linting_service.lint ctx fn content)))
     in
     if lint_errors <> [] then (
       let lint_errors =
         List.sort
           ~compare:
             begin
-              fun x y -> Pos.compare (Lint.get_pos x) (Lint.get_pos y)
+              fun x y ->
+              Pos.compare (Lint.get_pos x) (Lint.get_pos y)
             end
           lint_errors
       in
@@ -1101,56 +1360,54 @@ let handle_mode
     ) else
       Printf.printf "No lint errors\n"
   | Dump_deps ->
-    (* Don't typecheck builtins *)
-    let files_info =
-      Relative_path.Map.fold
-        builtins
-        ~f:begin
-             fun k _ acc -> Relative_path.Map.remove acc k
-           end
-        ~init:files_info
-    in
     Relative_path.Map.iter files_info (fun fn fileinfo ->
         ignore @@ Typing_check_utils.check_defs tcopt fn fileinfo);
     if Caml.Hashtbl.length dbg_deps > 0 then dump_debug_deps dbg_deps
+  | Dump_glean_deps ->
+    Relative_path.Map.iter files_info (fun fn fileinfo ->
+        ignore @@ Typing_check_utils.check_defs tcopt fn fileinfo);
+    dump_debug_glean_deps dbg_glean_deps
   | Dump_inheritance ->
-    ServerCommandTypes.Method_jumps.(
-      let naming_table = Naming_table.create files_info in
-      Naming_table.iter naming_table Typing_deps.update_file;
-      Naming_table.iter naming_table (fun fn fileinfo ->
-          if Relative_path.Map.mem builtins fn then
-            ()
-          else (
-            List.iter fileinfo.FileInfo.classes (fun (_p, class_) ->
-                Printf.printf
-                  "Ancestors of %s and their overridden methods:\n"
-                  class_;
-                let ancestors =
-                  MethodJumps.get_inheritance
-                    class_
-                    ~filter:No_filter
-                    ~find_children:false
-                    naming_table
-                    None
-                in
-                ClientMethodJumps.print_readable ancestors ~find_children:false;
-                Printf.printf "\n");
-            Printf.printf "\n";
-            List.iter fileinfo.FileInfo.classes (fun (_p, class_) ->
-                Printf.printf
-                  "Children of %s and the methods they override:\n"
-                  class_;
-                let children =
-                  MethodJumps.get_inheritance
-                    class_
-                    ~filter:No_filter
-                    ~find_children:true
-                    naming_table
-                    None
-                in
-                ClientMethodJumps.print_readable children ~find_children:true;
-                Printf.printf "\n")
-          )))
+    let open ServerCommandTypes.Method_jumps in
+    let ctx = Provider_context.empty ~tcopt in
+    let naming_table = Naming_table.create files_info in
+    Naming_table.iter naming_table Typing_deps.update_file;
+    Naming_table.iter naming_table (fun fn fileinfo ->
+        if Relative_path.Map.mem builtins fn then
+          ()
+        else (
+          List.iter fileinfo.FileInfo.classes (fun (_p, class_) ->
+              Printf.printf
+                "Ancestors of %s and their overridden methods:\n"
+                class_;
+              let ancestors =
+                MethodJumps.get_inheritance
+                  ctx
+                  class_
+                  ~filter:No_filter
+                  ~find_children:false
+                  naming_table
+                  None
+              in
+              ClientMethodJumps.print_readable ancestors ~find_children:false;
+              Printf.printf "\n");
+          Printf.printf "\n";
+          List.iter fileinfo.FileInfo.classes (fun (_p, class_) ->
+              Printf.printf
+                "Children of %s and the methods they override:\n"
+                class_;
+              let children =
+                MethodJumps.get_inheritance
+                  ctx
+                  class_
+                  ~filter:No_filter
+                  ~find_children:true
+                  naming_table
+                  None
+              in
+              ClientMethodJumps.print_readable children ~find_children:true;
+              Printf.printf "\n")
+        ))
   | Identify_symbol (line, column) ->
     let path = expect_single_file () in
     let file_input =
@@ -1162,9 +1419,14 @@ let handle_mode
         ~path
         ~file_input
     in
+    (* TODO(ljw): surely this doesn't need quarantine? *)
     let result =
-      Provider_utils.with_context ~ctx ~f:(fun () ->
-          ServerIdentifyFunction.go_ctx_absolute ~ctx ~entry ~line ~column)
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerIdentifyFunction.go_quarantined_absolute
+            ~ctx
+            ~entry
+            ~line
+            ~column)
     in
     begin
       match result with
@@ -1185,20 +1447,13 @@ let handle_mode
   | Dump_nast ->
     iter_over_files (fun filename ->
         let nasts = create_nasts files_info in
-        let nast = Relative_path.Map.find filename nasts in
+        let nast = Relative_path.Map.find nasts filename in
         Printf.printf "%s\n" (Nast.show_program nast))
   | Dump_tast ->
     let (errors, tasts) =
-      compute_tasts_expand_types tcopt files_info files_contents
+      compute_tasts_expand_types tcopt ~verbosity files_info files_contents
     in
-    (match parse_errors @ Errors.get_error_list errors with
-    | [] -> ()
-    | errors ->
-      Printf.printf "Errors:\n";
-      List.iter errors (fun err ->
-          List.iter (Errors.to_list err) (fun (pos, msg) ->
-              Format.printf "  %a %s" Pos.pp pos msg;
-              Format.print_newline ())));
+    print_errors_if_present (parse_errors @ Errors.get_error_list errors);
     print_tasts tasts tcopt
   | Check_tast ->
     iter_over_files (fun filename ->
@@ -1206,49 +1461,26 @@ let handle_mode
           Relative_path.Map.filter files_contents ~f:(fun k _v -> k = filename)
         in
         let (errors, tasts) =
-          compute_tasts_expand_types tcopt files_info files_contents
+          compute_tasts_expand_types tcopt ~verbosity files_info files_contents
         in
         print_tasts tasts tcopt;
         if not @@ Errors.is_empty errors then (
           print_errors error_format errors max_errors;
-          Printf.printf
-            "Did not typecheck the TAST as there are typing errors.";
+          Printf.printf "Did not typecheck the TAST as there are typing errors.";
           exit 2
         ) else
           let tast_check_errors = typecheck_tasts tasts tcopt filename in
           print_error_list error_format tast_check_errors max_errors;
           if tast_check_errors <> [] then exit 2)
-  | Dump_typed_full_fidelity_json ->
-    iter_over_files (fun filename ->
-        (*
-      Ideally we'd reuse ServerTypedAst.go here. Unfortunately relative file
-      paths are not compatible between hh_single_type_check and server modules.
-      So we copy here instead.
-    *)
-        (* get the typed ast *)
-        let files_contents =
-          Relative_path.Map.filter files_contents ~f:(fun k _v -> k = filename)
-        in
-        let (_, tasts) = compute_tasts tcopt files_info files_contents in
-        (* get the parse tree *)
-        let source_text = Full_fidelity_source_text.from_file filename in
-        let positioned_tree = PositionedTree.make source_text in
-        Relative_path.Map.iter tasts ~f:(fun _k tast ->
-            let typed_tree =
-              ServerTypedAst.create_typed_parse_tree
-                ~filename
-                ~positioned_tree
-                ~tast
-            in
-            let result = ServerTypedAst.typed_parse_tree_to_json typed_tree in
-            Printf.printf "%s\n" (Hh_json.json_to_string result)))
   | Dump_stripped_tast ->
     iter_over_files (fun filename ->
         let files_contents =
           Relative_path.Map.filter files_contents ~f:(fun k _v -> k = filename)
         in
-        let (_, tasts) = compute_tasts tcopt files_info files_contents in
-        let tast = Relative_path.Map.find_unsafe tasts filename in
+        let (_, (tasts, _gienvs)) =
+          compute_tasts tcopt files_info files_contents
+        in
+        let tast = Relative_path.Map.find tasts filename in
         let nast = Tast.to_nast tast in
         Printf.printf "%s\n" (Nast.show_program nast))
   | Find_refs (line, column) ->
@@ -1266,18 +1498,18 @@ let handle_mode
     let filename = Relative_path.to_absolute filename in
     let content = cat filename in
     let include_defs = true in
-    let labelled_file =
-      ServerCommandTypes.LabelledFileContent { filename; content }
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path:(Relative_path.create_detect_prefix filename)
+        ~file_input:(ServerCommandTypes.FileContent content)
     in
     Option.Monad_infix.(
       ServerCommandTypes.Done_or_retry.(
         let results =
           ServerFindRefs.(
-            go_from_file (labelled_file, line, column) env
-            >>= fun (name, action) ->
-            go action include_defs genv env
-            |> map_env ~f:(to_ide name)
-            |> snd
+            go_from_file_ctx ~ctx ~entry ~line ~column >>= fun (name, action) ->
+            go action include_defs genv env |> map_env ~f:(to_ide name) |> snd
             |> function
             | Done r -> r
             | Retry ->
@@ -1286,18 +1518,63 @@ let handle_mode
               ^ "which are not a thing in hh_single_type_check")
         in
         ClientFindRefs.print_ide_readable results))
-  | Highlight_refs (line, column) ->
+  | Go_to_impl (line, column) ->
     let filename = expect_single_file () in
-    let file = cat (Relative_path.to_absolute filename) in
-    let results = ServerHighlightRefs.go (file, line, column) tcopt in
+    let naming_table = Naming_table.create files_info in
+    Naming_table.iter naming_table Typing_deps.update_file;
+    let genv = ServerEnvBuild.default_genv in
+    let env =
+      {
+        (ServerEnvBuild.make_env genv.ServerEnv.config) with
+        ServerEnv.naming_table;
+        ServerEnv.tcopt;
+      }
+    in
+    let filename = Relative_path.to_absolute filename in
+    let content = cat filename in
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt:env.ServerEnv.tcopt)
+        ~path:(Relative_path.create_detect_prefix filename)
+        ~file_input:(ServerCommandTypes.FileContent content)
+    in
+    Option.Monad_infix.(
+      ServerCommandTypes.Done_or_retry.(
+        let results =
+          ServerFindRefs.go_from_file_ctx ~ctx ~entry ~line ~column
+          >>= fun (name, action) ->
+          ServerGoToImpl.go ~action ~genv ~env
+          |> map_env ~f:(ServerFindRefs.to_ide name)
+          |> snd
+          |> function
+          | Done r -> r
+          | Retry ->
+            failwith
+            @@ "should only happen with prechecked files "
+            ^ "which are not a thing in hh_single_type_check"
+        in
+        ClientFindRefs.print_ide_readable results))
+  | Highlight_refs (line, column) ->
+    let path = expect_single_file () in
+    let file_input =
+      ServerCommandTypes.FileName (Relative_path.to_absolute path)
+    in
+    let (ctx, entry) =
+      Provider_utils.update_context
+        ~ctx:(Provider_context.empty ~tcopt)
+        ~path
+        ~file_input
+    in
+    let results =
+      ServerHighlightRefs.go_quarantined ~ctx ~entry ~line ~column
+    in
     ClientHighlightRefs.go results ~output_json:false
   | Errors when batch_mode ->
     (* For each file in our batch, run typechecking serially.
       Reset the heaps every time in between. *)
     iter_over_files (fun filename ->
         let oc =
-          Out_channel.create
-            (Relative_path.to_absolute filename ^ out_extension)
+          Out_channel.create (Relative_path.to_absolute filename ^ out_extension)
         in
         (* This means builtins had errors, so lets just print those if we see them *)
         if parse_errors <> [] then
@@ -1305,19 +1582,23 @@ let handle_mode
           write_error_list error_format parse_errors oc max_errors
         else (
           Typing_log.out_channel := oc;
-          ServerIdeUtils.make_local_changes ();
-          let files_contents = Multifile.file_to_files filename in
-          let (parse_errors, individual_file_info) =
-            parse_name_and_decl popt files_contents
-          in
-          let errors =
-            check_file
-              tcopt
-              (Errors.get_error_list parse_errors)
-              individual_file_info
-          in
-          write_error_list error_format errors oc max_errors;
-          ServerIdeUtils.revert_local_changes ()
+          Provider_utils.respect_but_quarantine_unsaved_changes
+            ~ctx:(Provider_context.empty ~tcopt)
+            ~f:(fun () ->
+              let files_contents = Multifile.file_to_files filename in
+              let (parse_errors, individual_file_info) =
+                parse_name_and_decl popt files_contents
+              in
+              let errors =
+                check_file
+                  tcopt
+                  ~verbosity
+                  (Errors.get_error_list parse_errors)
+                  individual_file_info
+                  error_format
+                  max_errors
+              in
+              write_error_list error_format errors oc max_errors)
         ))
   | Decl_compare when batch_mode ->
     (* For each file in our batch, run typechecking serially.
@@ -1326,34 +1607,48 @@ let handle_mode
         let oc =
           Out_channel.create (Relative_path.to_absolute filename ^ ".decl_out")
         in
-        ServerIdeUtils.make_local_changes ();
-        let files_contents =
-          Relative_path.Map.filter files_contents ~f:(fun k _v -> k = filename)
-        in
-        let (_, individual_file_info) =
-          parse_name_and_decl popt files_contents
-        in
-        (try
-           test_decl_compare
-             filename
-             popt
-             builtins
-             files_contents
-             individual_file_info;
-           Out_channel.output_string oc ""
-         with e ->
-           let msg = Exn.to_string e in
-           Out_channel.output_string oc msg);
-        ServerIdeUtils.revert_local_changes ();
+        Provider_utils.respect_but_quarantine_unsaved_changes
+          ~ctx:(Provider_context.empty ~tcopt)
+          ~f:(fun () ->
+            let files_contents =
+              Relative_path.Map.filter files_contents ~f:(fun k _v ->
+                  k = filename)
+            in
+            let (_, individual_file_info) =
+              parse_name_and_decl popt files_contents
+            in
+            try
+              test_decl_compare
+                filename
+                popt
+                builtins
+                files_contents
+                individual_file_info;
+              Out_channel.output_string oc ""
+            with e ->
+              let msg = Exn.to_string e in
+              Out_channel.output_string oc msg);
         Out_channel.close oc)
   | Errors ->
     (* Don't typecheck builtins *)
-    let errors = check_file tcopt parse_errors files_info in
+    let errors =
+      check_file
+        tcopt
+        ~verbosity
+        parse_errors
+        files_info
+        error_format
+        max_errors
+    in
     print_error_list error_format errors max_errors;
     if errors <> [] then exit 2
   | Decl_compare ->
     let filename = expect_single_file () in
     test_decl_compare filename popt builtins files_contents files_info
+  | Shallow_class_diff ->
+    print_errors_if_present parse_errors;
+    let filename = expect_single_file () in
+    test_shallow_class_diff popt filename
   | Linearization ->
     if parse_errors <> [] then (
       print_error error_format (List.hd_exn parse_errors);
@@ -1362,12 +1657,15 @@ let handle_mode
     let files_info =
       Relative_path.Map.fold
         builtins
-        ~f:begin
-             fun k _ acc -> Relative_path.Map.remove acc k
-           end
+        ~f:
+          begin
+            fun k _ acc ->
+            Relative_path.Map.remove acc k
+          end
         ~init:files_info
     in
-    Relative_path.Map.iter files_info ~f:(fun file info ->
+    let ctx = Provider_context.empty ~tcopt in
+    Relative_path.Map.iter files_info ~f:(fun _file info ->
         let { FileInfo.classes; _ } = info in
         List.iter classes ~f:(fun (_, classname) ->
             Printf.printf "Linearization for class %s:\n" classname;
@@ -1376,9 +1674,9 @@ let handle_mode
               Sequence.map linearization (fun mro ->
                   let name = mro.Decl_defs.mro_name in
                   let targs =
-                    List.map mro.Decl_defs.mro_type_args (fun ty ->
-                        let tenv = Typing_env.empty tcopt ~droot:None file in
-                        Typing_print.full tenv ty)
+                    List.map
+                      mro.Decl_defs.mro_type_args
+                      (Typing_print.full_decl ctx)
                   in
                   let targs =
                     if targs = [] then
@@ -1422,7 +1720,7 @@ let handle_mode
                       "%s%s%s"
                       name
                       targs
-                      ( if modifiers = "" then
+                      ( if String.equal modifiers "" then
                         ""
                       else
                         Printf.sprintf "(%s)" modifiers )))
@@ -1444,6 +1742,7 @@ let decl_and_run_mode
       max_errors;
       batch_mode;
       out_extension;
+      verbosity;
     }
     (popt : TypecheckerOptions.t)
     (hhi_root : Path.t)
@@ -1452,9 +1751,14 @@ let decl_and_run_mode
   let builtins =
     if no_builtins then
       Relative_path.Map.empty
-    else (
+    else
       (* Note that the regular `.hhi` files have already been written to disk
       with `Hhi.get_root ()` *)
+      let magic_builtins =
+        match mode with
+        | Ai _ -> Array.append magic_builtins Ai.magic_builtins
+        | _ -> magic_builtins
+      in
       Array.iter magic_builtins ~f:(fun (file_name, file_contents) ->
           let file_path = Path.concat hhi_root file_name in
           let file = Path.to_string file_path in
@@ -1473,7 +1777,6 @@ let decl_and_run_mode
         end
         Relative_path.Map.empty
         (Array.append magic_builtins hhi_builtins)
-    )
   in
   let files = List.map ~f:(Relative_path.create Relative_path.Dummy) files in
   let files_contents =
@@ -1488,9 +1791,11 @@ let decl_and_run_mode
   let files_contents_with_builtins =
     Relative_path.Map.fold
       builtins
-      ~f:begin
-           fun k src acc -> Relative_path.Map.add acc ~key:k ~data:src
-         end
+      ~f:
+        begin
+          fun k src acc ->
+          Relative_path.Map.add acc ~key:k ~data:src
+        end
       ~init:files_contents
   in
   (* Don't declare all the filenames in batch_errors mode *)
@@ -1516,6 +1821,15 @@ let decl_and_run_mode
         Caml.Hashtbl.replace dbg_deps obj set
     in
     Typing_deps.add_dependency_callback "get_debug_trace" get_debug_trace );
+  let dbg_glean_deps = HashSet.create 0 in
+  ( if mode = Dump_glean_deps then
+    (* In addition to actually recording the dependencies in shared memory,
+     we build a non-hashed respresentation of the dependency graph
+     for printing. In the callback we receive this as dep_right uses dep_left. *)
+    let get_debug_trace dep_right dep_left =
+      HashSet.add dbg_glean_deps (dep_left, dep_right)
+    in
+    Typing_deps.add_dependency_callback "get_debug_trace" get_debug_trace );
   let (errors, files_info) = parse_name_and_decl popt to_decl in
   handle_mode
     mode
@@ -1531,13 +1845,14 @@ let decl_and_run_mode
     batch_mode
     out_extension
     dbg_deps
+    dbg_glean_deps
     sienv
+    ~verbosity
 
-let main_hack ({ files; mode; tcopt; _ } as opts) (sienv : SearchUtils.si_env)
-    : unit =
+let main_hack ({ tcopt; _ } as opts) (sienv : SearchUtils.si_env) : unit =
   (* TODO: We should have a per file config *)
   Sys_utils.signal Sys.sigusr1 (Sys.Signal_handle Typing.debug_print_last_pos);
-  EventLogger.init ~exit_on_parent_exit EventLogger.Event_logger_fake 0.0;
+  EventLogger.init_fake ();
 
   let (_handle : SharedMem.handle) =
     SharedMem.init ~num_workers:0 GlobalConfig.default_sharedmem_config
@@ -1547,24 +1862,10 @@ let main_hack ({ files; mode; tcopt; _ } as opts) (sienv : SearchUtils.si_env)
       Relative_path.set_path_prefix Relative_path.Root (Path.make "/");
       Relative_path.set_path_prefix Relative_path.Hhi hhi_root;
       Relative_path.set_path_prefix Relative_path.Tmp (Path.make "tmp");
-      GlobalParserOptions.set tcopt;
-      GlobalNamingOptions.set tcopt;
-      match mode with
-      | Ai ai_options ->
-        begin
-          match files with
-          | [filename] ->
-            let filecontents =
-              filename
-              |> Relative_path.create Relative_path.Dummy
-              |> Multifile.file_to_files
-            in
-            Ai.do_ Typing_check_utils.type_file filecontents ai_options tcopt
-          | _ -> die "Ai mode does not support multiple files"
-        end
-      | _ ->
-        decl_and_run_mode opts tcopt hhi_root sienv;
-        TypingLogger.flush_buffers ())
+      Parser_options_provider.set tcopt;
+      Global_naming_options.set tcopt;
+      decl_and_run_mode opts tcopt hhi_root sienv;
+      TypingLogger.flush_buffers ())
 
 (* command line driver *)
 let () =

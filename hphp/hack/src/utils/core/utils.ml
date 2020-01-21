@@ -14,25 +14,6 @@ type callstack = Callstack of string
 
 let () = Random.self_init ()
 
-let debug = ref false
-
-let profile = ref false
-
-let log = ref (fun (_ : string) -> ())
-
-let d s =
-  if !debug then (
-    print_string s;
-    flush stdout
-  )
-
-let dn s =
-  if !debug then (
-    print_string s;
-    print_newline ();
-    flush stdout
-  )
-
 module Map = struct end
 
 let spf = Printf.sprintf
@@ -140,13 +121,6 @@ let try_with_stack (f : unit -> 'a) : ('a, exn * callstack) result =
     let stack = Callstack (Printexc.get_backtrace ()) in
     Error (exn, stack)
 
-let iter_n_acc n f acc =
-  let acc = ref acc in
-  for i = 1 to n - 1 do
-    acc := fst (f !acc)
-  done;
-  f !acc
-
 let map_of_list list =
   List.fold_left ~f:(fun m (k, v) -> SMap.add k v m) ~init:SMap.empty list
 
@@ -171,6 +145,13 @@ let strip_both_ns s = s |> strip_ns |> strip_xhp_ns
 let add_ns s =
   if String.length s = 0 || s.[0] <> '\\' then
     "\\" ^ s
+  else
+    s
+
+(* A:B:C -> :A:B:C *)
+let add_xhp_ns s =
+  if String.length s = 0 || s.[0] <> ':' then
+    ":" ^ s
   else
     s
 

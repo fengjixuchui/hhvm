@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Aast
 open Nast_check_env
 module SN = Naming_special_names
@@ -16,8 +16,7 @@ module SN = Naming_special_names
 let check_conditionally_reactive_annotation_params p params ~is_method =
   match params with
   | [(_, Class_const (_, (_, "class")))] -> ()
-  | _ ->
-    Errors.conditionally_reactive_annotation_invalid_arguments ~is_method p
+  | _ -> Errors.conditionally_reactive_annotation_invalid_arguments ~is_method p
 
 let check_conditionally_reactive_annotations
     is_reactive p method_name user_attributes =
@@ -25,7 +24,7 @@ let check_conditionally_reactive_annotations
     match l with
     | [] -> ()
     | { ua_name = (_, name); ua_params } :: xs
-      when name = SN.UserAttributes.uaOnlyRxIfImpl ->
+      when String.equal name SN.UserAttributes.uaOnlyRxIfImpl ->
       if seen then
         Errors.multiple_conditionally_reactive_annotations p method_name
       else if is_reactive then
@@ -40,24 +39,26 @@ let check_conditionally_reactive_annotations
 
 let check_maybe_rx_attributes_on_params is_reactive parent_attrs params =
   let parent_only_rx_if_args =
-    Attributes.find SN.UserAttributes.uaAtMostRxAsArgs parent_attrs
+    Naming_attributes.find SN.UserAttributes.uaAtMostRxAsArgs parent_attrs
   in
   let check_param seen_atmost_rx_as_rxfunc p =
     let only_rx_if_rxfunc_attr =
-      Attributes.find
+      Naming_attributes.find
         SN.UserAttributes.uaAtMostRxAsFunc
         p.param_user_attributes
     in
     let only_rx_if_impl_attr =
-      Attributes.find SN.UserAttributes.uaOnlyRxIfImpl p.param_user_attributes
+      Naming_attributes.find
+        SN.UserAttributes.uaOnlyRxIfImpl
+        p.param_user_attributes
     in
     match (only_rx_if_rxfunc_attr, only_rx_if_impl_attr) with
     | (Some { ua_name = (p, _); _ }, _) ->
-      if parent_only_rx_if_args = None || not is_reactive then
+      if Option.is_none parent_only_rx_if_args || not is_reactive then
         Errors.atmost_rx_as_rxfunc_invalid_location p;
       true
     | (_, Some { ua_name = (p, _); ua_params; _ }) ->
-      if parent_only_rx_if_args = None || not is_reactive then
+      if Option.is_none parent_only_rx_if_args || not is_reactive then
         Errors.atmost_rx_as_rxfunc_invalid_location p
       else
         check_conditionally_reactive_annotation_params
@@ -88,12 +89,12 @@ let handler =
     method! at_expr env (_, e) =
       match e with
       | Id (pos, const) ->
-        let const = Utils.add_ns const in
-        if const = SN.Rx.is_enabled && not env.rx_is_enabled_allowed then
+        if String.equal const SN.Rx.is_enabled && not env.rx_is_enabled_allowed
+        then
           Errors.rx_is_enabled_invalid_location pos
-      | Call (_, e1, _, _, _)
-        when Nast_check_env.is_rx_move e1 && not env.rx_move_allowed ->
-        Errors.rx_move_invalid_location (fst e1)
+      | Call (_, (p, Id (_, cn)), _, _, _)
+        when String.equal cn SN.Rx.move && not env.rx_move_allowed ->
+        Errors.rx_move_invalid_location p
       | _ -> ()
 
     method! at_method_ _env m =

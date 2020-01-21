@@ -59,7 +59,8 @@ struct TypedValue;
   INVOKE_FEW_ARGS_HELPER(INVOKE_FEW_ARGS_##kind,num)
 #define INVOKE_FEW_ARGS_DECL_ARGS INVOKE_FEW_ARGS(DECL,INVOKE_FEW_ARGS_COUNT)
 
-void deepInitHelper(TypedValue* propVec, const TypedValueAux* propData,
+void deepInitHelper(ObjectProps* propVec,
+                    const Class::PropInitVec* propInitVec,
                     size_t nProps);
 
 namespace Native {
@@ -67,14 +68,14 @@ namespace Native {
                                          size_t nProps);
 }
 
-// A slot to store memoization data in. This can be either a Cell storing a
+// A slot to store memoization data in. This can be either a TypedValue storing a
 // single value, or a pointer to a memoization cache.
 struct MemoSlot {
 public:
   /*
-   * We use the type field of the Cell to determine whether this is a single
+   * We use the type field of the TypedValue to determine whether this is a single
    * value or a memo cache. If the type is kInvalidDataType (which cannot occur
-   * for a valid Cell), its a memo cache. As a special case, if type is Uninit,
+   * for a valid TypedValue), its a memo cache. As a special case, if type is Uninit,
    * and the pointer is null, it can also be a cache (its also a value). This
    * lets us initialize the slots with zero regardless of how it will be
    * used. When its actually used, the correct type will be filed in. The
@@ -106,14 +107,14 @@ public:
     return value.m_data.pcache;
   }
 
-  Cell* getValue() {
+  TypedValue* getValue() {
     assertx(isValue());
-    assertx(cellIsPlausible(value));
+    assertx(tvIsPlausible(value));
     return &value;
   }
-  const Cell* getValue() const {
+  const TypedValue* getValue() const {
     assertx(isValue());
-    assertx(cellIsPlausible(value));
+    assertx(tvIsPlausible(value));
     return &value;
   }
 
@@ -127,9 +128,9 @@ private:
     isCache() ? scanner.scan(value.m_data.pcache) : scanner.scan(value);
   }
 
-  Cell value;
+  TypedValue value;
 };
-static_assert(sizeof(MemoSlot) == sizeof(Cell), "");
+static_assert(sizeof(MemoSlot) == sizeof(TypedValue), "");
 
 struct InvokeResult {
   TypedValue val;
@@ -155,7 +156,15 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
                                // finished. Set during construction to
                                // temporarily allow writing to const props.
     UsedMemoCache      = 0x10, // Object has had data set in its memo slots
-    HasUninitProps     = 0x20  // The object's properties are being initialized
+    HasUninitProps     = 0x20, // The object's properties are being initialized
+    BigAllocSize       = 0x40, // The object was allocated using Big Size
+#ifndef NDEBUG
+    SmallAllocSize     = 0x80, // For Debug, the object was allocated with
+                               // small buffers. If needed can be removed to
+                               // free up Attribute bits.
+#else
+    SmallAllocSize     = NoAttrs,
+#endif
   };
 
   static constexpr size_t offsetofAttrs() {
@@ -174,9 +183,9 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   ObjectData(const ObjectData&) = delete;
   ObjectData& operator=(const ObjectData&) = delete;
 
+  enum class InitRaw {};
  protected:
   enum class NoInit {};
-  enum class InitRaw {};
 
   // for JIT-generated instantiation with inlined property init
   explicit ObjectData(Class* cls, InitRaw, uint8_t flags = 0,
@@ -208,6 +217,25 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
 
   void setReifiedGenerics(Class*, ArrayData*);
 
+
+  /*
+   * Allocate space for an object data of type `cls`.  If it should have a
+   * Memo header create space for that and initialize it.
+   *
+   * Return the pointer to address where the object-data should start (`mem`),
+   * along with flags indicating if the allocation was a small or big size
+   * class alloc (`flags`).  These flags ultimately must be incorporated into
+   * the object-data's attributes in order for the deallocation to follow the
+   * correct path.
+   */
+  struct Alloc {
+    void* mem;
+    uint8_t flags;
+  };
+  static Alloc allocMemoInit(Class* cls);
+
+  template <bool Unlocked>
+  static ObjectData* newInstanceSlow(Class*);
  public:
   /*
    * Call newInstance() to instantiate a PHP object. The initial ref-count will
@@ -254,15 +282,11 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   static ObjectData* newInstanceRawMemoBig(Class*, size_t size, size_t objoff);
 
   /*
-   * Templated release() method, which makes different calls to free memory
-   * MemoryManager::freeBigSize() - for big object, or
-   * MemoryManager::freeSmallIndex() - for small objects
+   * Default release function, used for non-closure, non-native objects.
    */
-  template<bool isSmallObject>
   static void release(ObjectData* obj, const Class* cls) noexcept;
 
   Class* getVMClass() const;
-  void setVMClass(Class* cls);
   StrNR getClassName() const;
 
   // instanceof() can be used for both classes and interfaces.
@@ -347,15 +371,7 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
 
  public:
 
-  enum IterMode { EraseRefs, PreserveRefs };
-  /*
-   * Create an array of object properties suitable for iteration.
-   *
-   * EraseRefs    - array should contain unboxed properties
-   * PreserveRefs - reffiness of properties should be preserved in returned
-   *                array
-   */
-  Array o_toIterArray(const String& context, IterMode mode);
+  Array o_toIterArray(const String& context);
 
   Variant o_get(const String& s, bool error = true,
                 const String& context = null_string);
@@ -423,8 +439,8 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   // to these properties, they are responsible for validating the values with
   // any type-hints on the properties. Likewise the caller is responsible for
   // enforcing AttrLateInit.
-  TypedValue* propVecForConstruct();
-  const TypedValue* propVec() const;
+  ObjectProps* props();
+  const ObjectProps* props() const;
 
   void verifyPropTypeHints() const;
   void verifyPropTypeHints(size_t end) const;
@@ -512,14 +528,14 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
 
   bool propEmptyImpl(const Class* ctx, const StringData* key);
 
-  void setDynProp(const StringData* key, Cell val);
+  void setDynProp(const StringData* key, TypedValue val);
 
-  bool invokeSet(const StringData* key, Cell val);
+  bool invokeSet(const StringData* key, TypedValue val);
   InvokeResult invokeGet(const StringData* key);
   InvokeResult invokeIsset(const StringData* key);
   bool invokeUnset(const StringData* key);
   InvokeResult invokeNativeGetProp(const StringData* key);
-  bool invokeNativeSetProp(const StringData* key, Cell val);
+  bool invokeNativeSetProp(const StringData* key, TypedValue val);
   InvokeResult invokeNativeIssetProp(const StringData* key);
   bool invokeNativeUnsetProp(const StringData* key);
 
@@ -533,11 +549,11 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   bool propIsset(const Class* ctx, const StringData* key);
   bool propEmpty(const Class* ctx, const StringData* key);
 
-  void setProp(Class* ctx, const StringData* key, Cell val);
+  void setProp(Class* ctx, const StringData* key, TypedValue val);
   tv_lval setOpProp(TypedValue& tvRef, Class* ctx, SetOpOp op,
-                    const StringData* key, Cell* val);
+                    const StringData* key, TypedValue* val);
 
-  Cell incDecProp(Class* ctx, IncDecOp op, const StringData* key);
+  TypedValue incDecProp(Class* ctx, IncDecOp op, const StringData* key);
 
   void unsetProp(Class* ctx, const StringData* key);
 
@@ -577,7 +593,7 @@ private:
 // lowptr:  header  cls     [subclass][props...]
 
 private:
-  LowPtr<Class> m_cls;
+  const LowPtr<Class> m_cls;
 };
 #ifdef _MSC_VER
 #pragma pack(pop)

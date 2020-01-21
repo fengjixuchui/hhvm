@@ -148,11 +148,10 @@ void all_unit_contexts(const php::Unit* u, F&& fun) {
 std::vector<Context> const_pass_contexts(const php::Program& program) {
   std::vector<Context> ret;
   ret.reserve(program.constInits.size());
-  program.constInits.foreach([&](auto func) {
-      if (func) {
-        ret.push_back(Context { func->unit, func, func->cls });
-      }
-    });
+  for (auto func : program.constInits) {
+    assertx(func);
+    ret.push_back(Context { func->unit, func, func->cls });
+  }
   return ret;
 }
 
@@ -409,17 +408,10 @@ void analyze_iteratively(Index& index, php::Program& program,
       index.refine_public_statics(deps);
     }
 
-    index.update_class_aliases();
     work.clear();
     work.reserve(deps.size());
     for (auto& d : deps) work.push_back(work_item_for(d, mode));
   }
-}
-
-void constant_pass(Index& index, php::Program& program) {
-  if (!options.HardConstProp) return;
-  index.use_class_dependencies(false);
-  analyze_iteratively(index, program, AnalyzeMode::ConstPass);
 }
 
 void prop_type_hint_pass(Index& index, php::Program& program) {
@@ -495,21 +487,6 @@ void final_pass(Index& index,
 
 //////////////////////////////////////////////////////////////////////
 
-template<class Container>
-std::unique_ptr<php::Program> parse_program(Container units) {
-  trace_time tracer("parse");
-  auto ret = std::make_unique<php::Program>(units.size());
-  ret->units = parallel::map(
-    units,
-    [&] (std::unique_ptr<UnitEmitter>& ue) {
-      return parse_unit(*ret, std::move(ue));
-    }
-  );
-  return ret;
-}
-
-//////////////////////////////////////////////////////////////////////
-
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -549,13 +526,23 @@ void UnitEmitterQueue::reset() {
   m_done.store(false, std::memory_order_relaxed);
 }
 
-void hard_constprop(bool f) {
-  options.HardConstProp = f;
-}
-
 //////////////////////////////////////////////////////////////////////
 
-void whole_program(std::vector<std::unique_ptr<UnitEmitter>> ues,
+namespace php {
+
+void ProgramPtr::clear() { delete m_program; }
+
+}
+
+php::ProgramPtr make_program() {
+  return php::ProgramPtr{ new php::Program };
+}
+
+void add_unit_to_program(const UnitEmitter* ue, php::Program& program) {
+  parse_unit(program, ue);
+}
+
+void whole_program(php::ProgramPtr program,
                    UnitEmitterQueue& ueq,
                    std::unique_ptr<ArrayTypeTable::Builder>& arrTable,
                    int num_threads) {
@@ -567,18 +554,15 @@ void whole_program(std::vector<std::unique_ptr<UnitEmitter>> ues,
     parallel::num_threads = num_threads;
   }
 
-  auto program = parse_program(std::move(ues));
-
   state_after("parse", *program);
 
-  folly::Optional<Index> index;
-  index.emplace(program.get());
+  Index index(program.get());
   auto stats = allocate_stats();
   auto freeFuncMem = [&] (php::Func* fun) {
     fun->blocks = {};
   };
   auto emitUnit = [&] (php::Unit& unit) {
-    auto ue = emit_unit(*index, unit);
+    auto ue = emit_unit(index, unit);
     if (RuntimeOption::EvalAbortBuildOnVerifyError && !ue->check(false)) {
       fprintf(
         stderr,
@@ -602,38 +586,30 @@ void whole_program(std::vector<std::unique_ptr<UnitEmitter>> ues,
 
   std::thread cleanup_pre;
   if (!options.NoOptimizations) {
-    while (true) {
-      try {
-        assert(check(*program));
-        prop_type_hint_pass(*index, *program);
-        index->rewrite_default_initial_values(*program);
-        constant_pass(*index, *program);
-        // Defer initializing public static property types until after the
-        // constant pass, to try to get better initial values.
-        index->init_public_static_prop_types();
-        index->use_class_dependencies(options.HardPrivatePropInference);
-        analyze_iteratively(*index, *program, AnalyzeMode::NormalPass);
-        break;
-      } catch (Index::rebuild& rebuild) {
-        FTRACE(1, "whole_program: rebuilding index\n");
-        index.emplace(program.get(), &rebuild);
-        continue;
-      }
-    }
-    cleanup_pre = std::thread([&] { index->cleanup_for_final(); });
-    index->mark_persistent_types_and_functions(*program);
-    index->join_iface_vtable_thread();
+    assert(check(*program));
+    prop_type_hint_pass(index, *program);
+    index.rewrite_default_initial_values(*program);
+    index.use_class_dependencies(false);
+    analyze_iteratively(index, *program, AnalyzeMode::ConstPass);
+    // Defer initializing public static property types until after the
+    // constant pass, to try to get better initial values.
+    index.init_public_static_prop_types();
+    index.use_class_dependencies(options.HardPrivatePropInference);
+    analyze_iteratively(index, *program, AnalyzeMode::NormalPass);
+    cleanup_pre = std::thread([&] { index.cleanup_for_final(); });
+    index.mark_persistent_types_and_functions(*program);
+    index.join_iface_vtable_thread();
     if (parallel::num_threads > parallel::final_threads) {
       parallel::num_threads = parallel::final_threads;
     }
-    final_pass(*index, *program, stats, emitUnit);
+    final_pass(index, *program, stats, emitUnit);
   } else {
-    debug_dump_program(*index, *program);
-    index->join_iface_vtable_thread();
+    debug_dump_program(index, *program);
+    index.join_iface_vtable_thread();
     parallel::for_each(
       program->units,
       [&] (const std::unique_ptr<php::Unit>& unit) {
-        collect_stats(stats, *index, unit.get());
+        collect_stats(stats, index, unit.get());
         emitUnit(*unit);
       }
     );
@@ -646,13 +622,13 @@ void whole_program(std::vector<std::unique_ptr<UnitEmitter>> ues,
       auto const enable =
         logging && !Trace::moduleEnabledRelease(Trace::hhbbc_time, 1);
       Trace::BumpRelease bumper(Trace::hhbbc_time, -1, enable);
-      index->cleanup_post_emit();
+      index.cleanup_post_emit();
     }
   );
 
   print_stats(stats);
 
-  arrTable = std::move(index->array_table_builder());
+  arrTable = std::move(index.array_table_builder());
   ueq.push(nullptr);
   cleanup_pre.join();
   cleanup_post.join();

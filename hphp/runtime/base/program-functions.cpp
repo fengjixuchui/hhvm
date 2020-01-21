@@ -24,7 +24,6 @@
 #include "hphp/runtime/base/exceptions.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/extended-logger.h"
-#include "hphp/runtime/base/externals.h"
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/runtime/base/file-util-defs.h"
 #include "hphp/runtime/base/hhprof.h"
@@ -43,7 +42,6 @@
 #include "hphp/runtime/base/thread-safe-setlocale.h"
 #include "hphp/runtime/base/unit-cache.h"
 #include "hphp/runtime/base/variable-serializer.h"
-#include "hphp/runtime/base/zend-math.h"
 #include "hphp/runtime/debugger/debugger.h"
 #include "hphp/runtime/debugger/debugger_client.h"
 #include "hphp/runtime/debugger/debugger_hook_handler.h"
@@ -53,6 +51,7 @@
 #include "hphp/runtime/ext/std/ext_std_file.h"
 #include "hphp/runtime/ext/std/ext_std_function.h"
 #include "hphp/runtime/ext/std/ext_std_variable.h"
+#include "hphp/runtime/ext/strobelight/ext_strobelight.h"
 #include "hphp/runtime/ext/xenon/ext_xenon.h"
 #include "hphp/runtime/ext/xhprof/ext_xhprof.h"
 #include "hphp/runtime/server/admin-request-handler.h"
@@ -80,7 +79,6 @@
 #include "hphp/runtime/vm/runtime-compiler.h"
 #include "hphp/runtime/vm/treadmill.h"
 
-#include "hphp/util/abi-cxx.h"
 #include "hphp/util/alloc.h"
 #include "hphp/util/arch.h"
 #include "hphp/util/boot-stats.h"
@@ -89,7 +87,6 @@
 #include "hphp/util/compatibility.h"
 #include "hphp/util/embedded-data.h"
 #include "hphp/util/hardware-counter.h"
-#include "hphp/util/hphp-config.h"
 #include "hphp/util/kernel-version.h"
 #ifndef _MSC_VER
 #include "hphp/util/light-process.h"
@@ -107,6 +104,7 @@
 #include "hphp/util/timer.h"
 #include "hphp/util/type-scan.h"
 
+#include "hphp/zend/zend-math.h"
 #include "hphp/zend/zend-string.h"
 #include "hphp/zend/zend-strtod.h"
 
@@ -120,7 +118,6 @@
 #include <folly/portability/Stdlib.h>
 #include <folly/portability/Unistd.h>
 
-#include <boost/algorithm/string/replace.hpp>
 #include <boost/program_options/options_description.hpp>
 #include <boost/program_options/positional_options.hpp>
 #include <boost/program_options/variables_map.hpp>
@@ -314,15 +311,9 @@ void register_variable(Array& variables, char *name, const Variant& value,
     return;
   }
 
-  // GPC elements holds Variants that are acting as smart pointers to
-  // RefDatas that we've created in the process of a multi-dim key.
-  std::vector<Variant> gpc_elements;
-  if (is_array) gpc_elements.reserve(MAX_INPUT_NESTING_LEVEL);
-
   // The array pointer we're currently adding to.  If we're doing a
-  // multi-dimensional set, this will point at the m_data.parr inside
-  // of a RefData sometimes (via toArrRef on the variants in
-  // gpc_elements).
+  // multi-dimensional set. Note that as we're essentially using this as an
+  // interior array pointer it's not safe to allow reentry here.
   Array* symtable = &variables;
 
   char* index = var;
@@ -362,24 +353,20 @@ void register_variable(Array& variables, char *name, const Variant& value,
       }
 
       if (!index) {
-        SuppressHACFalseyPromoteNotices shacn;
-        auto lval = symtable->lvalAt();
+        auto lval = symtable->lvalForce();
         type(lval) = KindOfPersistentArray;
         val(lval).parr = ArrayData::Create();
-        gpc_elements.push_back(uninit_null());
-        gpc_elements.back().assignRef(lval);
+        symtable = &asArrRef(lval);
       } else {
         String key_str(index, index_len, CopyString);
         auto const key =
-          symtable->convertKey<IntishCast::Cast>(key_str.toCell());
-        auto const v = symtable->rvalAt(key).unboxed();
+          symtable->convertKey<IntishCast::Cast>(key_str.asTypedValue());
+        auto const v = symtable->rval(key);
         if (isNullType(v.type()) || !isArrayLikeType(v.type())) {
-          symtable->set(key, make_tv<KindOfPersistentArray>(ArrayData::Create()));
+          symtable->set(key, make_persistent_array_like_tv(ArrayData::Create()));
         }
-        gpc_elements.push_back(uninit_null());
-        gpc_elements.back().assignRef(symtable->lvalAt(key));
+        symtable = &asArrRef(symtable->lval(key));
       }
-      symtable = &gpc_elements.back().toArrRef();
       /* ip pointed to the '[' character, now obtain the key */
       index = index_s;
       index_len = new_idx_len;
@@ -399,9 +386,9 @@ void register_variable(Array& variables, char *name, const Variant& value,
     } else {
       String key_str(index, index_len, CopyString);
       auto key =
-        symtable->convertKey<IntishCast::Cast>(key_str.toCell());
+        symtable->convertKey<IntishCast::Cast>(key_str.asTypedValue());
       if (overwrite || !symtable->exists(key)) {
-        symtable->set(key, *value.toCell(), true);
+        symtable->set(key, *value.asTypedValue(), true);
       }
     }
   }
@@ -615,9 +602,9 @@ static void handle_resource_exceeded_exception() {
   try {
     throw;
   } catch (RequestTimeoutException&) {
-    setSurpriseFlag(TimedOutFlag);
+    RID().triggerTimeout(TimeoutTime);
   } catch (RequestCPUTimeoutException&) {
-    setSurpriseFlag(CPUTimedOutFlag);
+    RID().triggerTimeout(TimeoutCPUTime);
   } catch (RequestMemoryExceededException&) {
     setSurpriseFlag(MemExceededFlag);
   } catch (...) {}
@@ -787,13 +774,6 @@ void execute_command_line_begin(int argc, char **argv, int xhprof) {
 }
 
 void execute_command_line_end(int xhprof, bool coverage, const char *program) {
-  if (RuntimeOption::EvalDumpTC ||
-      RuntimeOption::EvalDumpIR ||
-      RuntimeOption::EvalDumpInlDecision ||
-      RuntimeOption::EvalDumpRegion) {
-    jit::mcgen::joinWorkerThreads();
-    jit::tc::dump();
-  }
   if (xhprof) {
     Variant profileData = HHVM_FN(xhprof_disable)();
     if (!profileData.isNull()) {
@@ -835,8 +815,30 @@ hugifyText(char* from, char* to) {
     // zero size or negative sizes.
     return;
   }
-
   size_t sz = to - from;
+
+#ifdef FACEBOOK
+  if (RuntimeOption::EvalNewTHPHotText) {
+    auto const hasKernelSupport = [] () -> bool {
+      KernelVersion version;
+      if (version.m_major < 5) return false;
+      if (version.m_major > 5) return true;
+      if (version.m_minor > 2) return true;
+      if ((version.m_minor == 2) && (version.m_fbk >= 5)) return true;
+      return false;
+    };
+    if (hasKernelSupport()) {
+      // The new way doesn't work if the region is locked. Note that this means
+      // Server.LockCodeMemory won't be applied to the region--there is no
+      // guarantee that the region would stay in memory, especially if the
+      // kernel fails to find huge pages for us.
+      munlock(from, sz);
+      madvise(from, sz, MADV_HUGEPAGE);
+      return;
+    }
+  }
+#endif
+
   void* mem = malloc(sz);
   memcpy(mem, from, sz);
 
@@ -990,7 +992,8 @@ static bool set_execution_mode(folly::StringPiece mode) {
     Logger::Escape = true;
     return true;
   } else if (mode == "run" || mode == "debug" || mode == "translate" ||
-             mode == "dumphhas" || mode == "verify" || mode == "vsdebug") {
+             mode == "dumphhas" || mode == "verify" || mode == "vsdebug" ||
+             mode == "getoption") {
     // We don't run PHP in "translate" mode, so just treat it like cli mode.
     RuntimeOption::ServerMode = false;
     Logger::Escape = false;
@@ -1425,26 +1428,6 @@ static void set_stack_size() {
   }
 }
 
-#if defined(BOOST_VERSION) && BOOST_VERSION <= 105400
-std::string get_right_option_name(const basic_parsed_options<char>& opts,
-                                  std::string& wrong_name) {
-  // Remove any - from the wrong name for better comparing
-  // since it will probably come prepended with --
-  wrong_name.erase(
-    std::remove(wrong_name.begin(), wrong_name.end(), '-'), wrong_name.end());
-  for (basic_option<char> opt : opts.options) {
-    std::string s_opt = opt.string_key;
-    // We are only dealing with options that have a - in them.
-    if (s_opt.find("-") != std::string::npos) {
-      if (s_opt.find(wrong_name) != std::string::npos) {
-        return s_opt;
-      }
-    }
-  }
-  return "";
-}
-#endif
-
 static int execute_program_impl(int argc, char** argv) {
   std::string usage = "Usage:\n\n   ";
   usage += argv[0];
@@ -1462,7 +1445,7 @@ static int execute_program_impl(int argc, char** argv) {
     ("repo-schema", "display the repository schema id")
     ("mode,m", value<std::string>(&po.mode)->default_value("run"),
      "run | debug (d) | vsdebug | server (s) | daemon | replay | "
-     "translate (t) | verify")
+     "translate (t) | verify | getoption")
     ("interactive,a", "Shortcut for --mode debug") // -a is from PHP5
     ("config,c", value<std::vector<std::string>>(&po.config)->composing(),
      "load specified config file")
@@ -1614,20 +1597,6 @@ static int execute_program_impl(int argc, char** argv) {
           }
         );
       }
-// When we upgrade boost, we can remove this and also get rid of the parent
-// try statement and move opts back into the original try block
-#if defined(BOOST_VERSION) && BOOST_VERSION >= 105000 && BOOST_VERSION <= 105400
-    } catch (const error_with_option_name &e) {
-      std::string wrong_name = e.get_option_name();
-      std::string right_name = get_right_option_name(opts, wrong_name);
-      std::string message = e.what();
-      if (right_name != "") {
-        boost::replace_all(message, wrong_name, right_name);
-      }
-      Logger::Error("Error in command line: %s", message.c_str());
-      cout << desc << "\n";
-      return -1;
-#endif
     } catch (const error &e) {
       Logger::Error("Error in command line: %s", e.what());
       cout << desc << "\n";
@@ -1762,6 +1731,25 @@ static int execute_program_impl(int argc, char** argv) {
       const auto msg = "Possible bad config node: " + badnode;
       fprintf(stderr, "%s\n", msg.c_str());
       messages.push_back(msg);
+    }
+
+    if (po.mode == "getoption") {
+      if (po.args.size() < 1) {
+        fprintf(stderr, "Must specify an option to load\n");
+        return 1;
+      }
+      Variant value;
+      bool ret = IniSetting::Get(po.args[0], value);
+      if (!ret) {
+        fprintf(stderr, "No such option: %s\n", po.args[0].data());
+        return 1;
+      }
+      if (!value.isString()) {
+        VariableSerializer vs{VariableSerializer::Type::JSON};
+        value = vs.serializeValue(value, false);
+      }
+      printf("%s\n", value.toString().data());
+      return 0;
     }
   }
 
@@ -1980,9 +1968,9 @@ static int execute_program_impl(int argc, char** argv) {
     SCOPE_EXIT { hphp_process_exit(); };
 
     try {
-      auto const unit = lookupUnit(
-        makeStaticString(po.lint.c_str()), "", nullptr,
-        Native::s_noNativeFuncs, false);
+      auto const filename = makeStaticString(po.lint.c_str());
+      auto const unit = lookupUnit(filename, "", nullptr,
+                                   Native::s_noNativeFuncs, false);
       if (unit == nullptr) {
         throw FileOpenException(po.lint);
       }
@@ -1990,7 +1978,7 @@ static int execute_program_impl(int argc, char** argv) {
       int line;
       if (unit->compileTimeFatal(msg, line)) {
         VMParserFrame parserFrame;
-        parserFrame.filename = po.lint.c_str();
+        parserFrame.filename = filename;
         parserFrame.lineNumber = line;
         Array bt = createBacktrace(BacktraceArgs()
                                    .withSelf()
@@ -2123,6 +2111,11 @@ static int execute_program_impl(int argc, char** argv) {
         if (hphp_invoke_simple(file, false /* warmup only */)) {
           ret = *rl_exit_code;
         }
+        const bool last = i == po.count - 1;
+        if (last && jit::tc::dumpEnabled()) {
+          jit::mcgen::joinWorkerThreads();
+          jit::tc::dump();
+        }
         execute_command_line_end(po.xhprofFlags, true, file.c_str());
       }
     }
@@ -2217,13 +2210,17 @@ std::string get_systemlib(std::string* hhas,
 // C++ ffi
 
 #ifndef _MSC_VER
-static void on_timeout(int sig, siginfo_t* info, void* /*context*/) {
+namespace {
+
+void on_timeout(int sig, siginfo_t* info, void* /*context*/) {
   if (sig == SIGVTALRM && info && info->si_code == SI_TIMER) {
     auto data = (RequestTimer*)info->si_value.sival_ptr;
     if (data) {
       data->onTimeout();
     }
   }
+}
+
 }
 #endif
 
@@ -2240,12 +2237,10 @@ static void update_constants_and_options() {
   // have been now bound to their proper value.
   IniSettingMap ini = IniSettingMap();
   for (auto& filename: s_config_files) {
-    SuppressHACFalseyPromoteNotices shacn;
     Config::ParseIniFile(filename, ini, true);
   }
   // Reset the INI settings from the CLI.
   for (auto& iniStr: s_ini_strings) {
-    SuppressHACFalseyPromoteNotices shacn;
     Config::ParseIniString(iniStr, ini, true);
   }
 
@@ -2338,12 +2333,16 @@ void hphp_process_init() {
 #ifndef _MSC_VER
   struct sigaction action = {};
   action.sa_sigaction = on_timeout;
-  action.sa_flags = SA_SIGINFO | SA_NODEFER;
+  action.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESTART;
   sigaction(SIGVTALRM, &action, nullptr);
 #endif
   // start takes milliseconds, Period is a double in seconds
   Xenon::getInstance().start(1000 * RuntimeOption::XenonPeriodSeconds);
   BootStats::mark("xenon");
+
+  // set up strobelight signal handling
+  Strobelight::getInstance().init();
+  BootStats::mark("strobelight");
 
   // reinitialize pcre table
   pcre_reinit();
@@ -2468,10 +2467,7 @@ void hphp_process_init() {
           if (RuntimeOption::ServerExecutionMode()) {
             Logger::Info("JitDeserialize finished; exiting");
           }
-          if (RuntimeOption::EvalDumpTC ||
-              RuntimeOption::EvalDumpIR ||
-              RuntimeOption::EvalDumpRegion ||
-              RuntimeOption::EvalDumpInlDecision) {
+          if (jit::tc::dumpEnabled()) {
             jit::mcgen::joinWorkerThreads();
             jit::tc::dump();
           }
@@ -2600,7 +2596,7 @@ static bool hphp_warmup(ExecutionContext *context,
       include_impl_invoke(reqInitDoc, true, "", runEntryPoint);
     }
     if (!reqInitFunc.empty()) {
-      invoke(reqInitFunc.c_str(), Array());
+      invoke(reqInitFunc, Array());
     }
     context->backupSession();
   } catch (...) {
@@ -2655,7 +2651,7 @@ bool hphp_invoke_simple(const std::string& filename, bool warmupOnly) {
   bool error;
   std::string errorMsg;
   return hphp_invoke(g_context.getNoCheck(), filename, false, null_array,
-                     uninit_null(), "", "", error, errorMsg,
+                     nullptr, "", "", error, errorMsg,
                      true /* once */,
                      warmupOnly,
                      false /* richErrorMsg */,
@@ -2663,7 +2659,7 @@ bool hphp_invoke_simple(const std::string& filename, bool warmupOnly) {
 }
 
 bool hphp_invoke(ExecutionContext *context, const std::string &cmd,
-                 bool func, const Array& funcParams, VRefParam funcRet,
+                 bool func, const Array& funcParams, Variant* funcRet,
                  const std::string &reqInitFunc, const std::string &reqInitDoc,
                  bool &error, std::string &errorMsg,
                  bool once, bool warmupOnly,
@@ -2691,7 +2687,7 @@ bool hphp_invoke(ExecutionContext *context, const std::string &cmd,
   }
 
   tl_heap->resetCouldOOM(isStandardRequest());
-  RID().resetTimer();
+  RID().resetTimers();
 
   bool ret = true;
   if (!warmupOnly) {
@@ -2703,8 +2699,8 @@ bool hphp_invoke(ExecutionContext *context, const std::string &cmd,
                 context->getCwd().data(), true);
       }
       if (func) {
-        funcRet.assignIfRef(invoke(cmd.c_str(), funcParams, -1,
-                                   true, true, allowDynCallNoPointer));
+        auto const ret = invoke(cmd, funcParams, allowDynCallNoPointer);
+        if (funcRet) *funcRet = ret;
       } else {
         if (isServer) hphp_chdir_file(cmd);
         include_impl_invoke(cmd.c_str(), once, "", true);
@@ -2788,6 +2784,7 @@ void hphp_session_exit(Transport* transport) {
   // In JitPGO mode, check if it's time to schedule the retranslation of all
   // profiled functions and, if so, schedule it.
   jit::mcgen::checkRetranslateAll();
+  jit::mcgen::checkSerializeOptProf();
   jit::tc::requestExit();
   // Similarly, apc strings could be in the ServerNote array, and
   // it's possible they are scheduled to be destroyed after this request
