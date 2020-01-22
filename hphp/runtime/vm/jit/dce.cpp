@@ -312,13 +312,9 @@ bool canDCE(IRInstruction* inst) {
   case ConcatStrStr:
   case ConcatStr3:
   case ConcatStr4:
-  case AddElemStrKey:
-  case AddElemIntKey:
   case AddNewElem:
   case AddNewElemKeyset:
   case AddNewElemVec:
-  case DictAddElemStrKey:
-  case DictAddElemIntKey:
     return true;
 
   // Some of these conversion functions can run arbitrary PHP code.
@@ -1453,6 +1449,7 @@ void convertToStackInst(IRUnit& unit, IRInstruction& inst) {
         &inst,
         LdStkAddr,
         IRSPRelOffsetData { locToStkOff(*inst.extra<LocalId>(), inst.src(0)) },
+        inst.typeParam().deref().mem(Mem::Ptr, Ptr::Stk),
         mainSP
       );
       retypeDests(&inst, &unit);

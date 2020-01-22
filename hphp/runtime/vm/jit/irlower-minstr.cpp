@@ -565,12 +565,21 @@ void cgCheckMixedArrayKeys(IRLS& env, const IRInstruction* inst) {
 namespace {
 
 void implArraySet(IRLS& env, const IRInstruction* inst) {
-  BUILD_OPTAB(ARRAYSET_HELPER_TABLE, getKeyType(inst->src(1)));
+  auto const& arr_type = inst->src(0)->type();
+  auto const& key_type = inst->src(1)->type();
 
-  auto args = argGroup(env, inst).ssa(0).ssa(1);
-  args.typedValue(2);
+  using SetIntMove = ArrayData* (ArrayData::*)(int64_t, TypedValue);
+  using SetStrMove = ArrayData* (ArrayData::*)(StringData*, TypedValue);
+
+  assertx(key_type.subtypeOfAny(TInt, TStr));
+  auto const target = (key_type <= TInt)
+    ? CallSpec::array(arr_type, &g_array_funcs.setIntMove,
+                      static_cast<SetIntMove>(&ArrayData::setMove))
+    : CallSpec::array(arr_type, &g_array_funcs.setStrMove,
+                      static_cast<SetStrMove>(&ArrayData::setMove));
 
   auto& v = vmain(env);
+  auto const args = argGroup(env, inst).ssa(0).ssa(1).typedValue(2);
   cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
@@ -734,8 +743,6 @@ void cgMixedArrayGetK(IRLS& env, const IRInstruction* inst) {
 void cgArraySet(IRLS& env, const IRInstruction* i)    { implArraySet(env, i); }
 
 IMPL_OPCODE_CALL(SetNewElemArray);
-
-IMPL_OPCODE_CALL(AddElemIntKey);
 IMPL_OPCODE_CALL(AddNewElem);
 
 static ArrayData* addNewElemKeysetImpl(ArrayData* keyset, TypedValue v) {
@@ -772,16 +779,6 @@ void cgAddNewElemVec(IRLS& env, const IRInstruction* inst) {
     SyncOptions::None,
     argGroup(env, inst).ssa(0).typedValue(1)
   );
-}
-
-void cgAddElemStrKey(IRLS& env, const IRInstruction* inst) {
-  auto& v = vmain(env);
-
-  auto const target = CallSpec::direct(addElemStringKeyHelper);
-
-  cgCallHelper(v, env, target,
-               callDest(env, inst), SyncOptions::Sync,
-               argGroup(env, inst).ssa(0).ssa(1).typedValue(2));
 }
 
 void cgArrayIsset(IRLS& env, const IRInstruction* inst) {
@@ -1166,9 +1163,6 @@ void cgDictGetK(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgDictSet(IRLS& env, const IRInstruction* i)    { implDictSet(env, i); }
-
-IMPL_OPCODE_CALL(DictAddElemIntKey);
-IMPL_OPCODE_CALL(DictAddElemStrKey);
 
 void cgDictIsset(IRLS& env, const IRInstruction* inst) {
   implDictIsset(env, inst);
