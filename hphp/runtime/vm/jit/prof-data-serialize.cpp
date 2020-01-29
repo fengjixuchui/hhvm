@@ -41,10 +41,12 @@
 #include "hphp/runtime/vm/jit/inlining-decider.h"
 #include "hphp/runtime/vm/jit/meth-profile.h"
 #include "hphp/runtime/vm/jit/prof-data.h"
+#include "hphp/runtime/vm/jit/region-selection.h"
 #include "hphp/runtime/vm/jit/release-vv-profile.h"
 #include "hphp/runtime/vm/jit/switch-profile.h"
 #include "hphp/runtime/vm/jit/trans-cfg.h"
 #include "hphp/runtime/vm/jit/type-profile.h"
+#include "hphp/runtime/vm/jit/vasm-block-counters.h"
 #include "hphp/runtime/vm/named-entity-defs.h"
 #include "hphp/runtime/vm/named-entity.h"
 #include "hphp/runtime/vm/property-profile.h"
@@ -56,6 +58,7 @@
 
 #include "hphp/util/boot-stats.h"
 #include "hphp/util/build-info.h"
+#include "hphp/util/job-queue.h"
 #include "hphp/util/logger.h"
 #include "hphp/util/managed-arena.h"
 #include "hphp/util/numa.h"
@@ -139,6 +142,80 @@ template<typename F>
 void read_container(ProfDataDeserializer& ser, F f) {
   auto sz = read_raw<uint32_t>(ser);
   while (sz--) { f(); }
+}
+
+void write_unit_preload(ProfDataSerializer& ser, Unit* unit) {
+  write_raw_string(ser, unit->filepath());
+}
+
+struct UnitPreloader : JobQueueWorker<StringData*, void*> {
+  virtual void onThreadEnter() override {
+    rl_typeProfileLocals->nonVMThread = true;
+    hphp_session_init(Treadmill::SessionKind::PreloadRepo);
+  }
+  virtual void onThreadExit() override {
+    hphp_context_exit();
+    hphp_session_exit();
+  }
+  virtual void doJob(StringData* path) override {
+    auto& nativeFuncs = Native::s_noNativeFuncs;
+    DEBUG_ONLY auto unit = lookupUnit(path, "", nullptr, nativeFuncs, false);
+    FTRACE(2, "Preloaded unit with path {}\n", path->data());
+    assertx(unit->filepath() == path);  // both static
+  }
+};
+using UnitPreloadDispatcher = JobQueueDispatcher<UnitPreloader>;
+UnitPreloadDispatcher* s_preload_dispatcher;
+
+void read_unit_preload(ProfDataDeserializer& ser) {
+  auto const path =
+    read_raw_string(ser, /* skip = */ !RuntimeOption::EvalJitDesUnitPreload);
+  // path may be nullptr when JitDesUnitPreload isn't set.
+  if (RuntimeOption::EvalJitDesUnitPreload) {
+    assertx(path);
+    s_preload_dispatcher->enqueue(path);
+  }
+}
+
+void write_units_preload(ProfDataSerializer& ser) {
+  auto const maxFuncId = profData()->maxProfilingFuncId();
+  std::vector<Unit*> units;
+  hphp_fast_set<Unit*, pointer_hash<Unit>> seen;
+  auto const check_unit =
+    [] (Unit* unit) -> bool {
+      if (!unit) return false;
+      auto const filepath = unit->filepath();
+      if (filepath->empty()) return false;
+      // skip systemlib
+      if (filepath->size() >= 2 && filepath->data()[1] == ':') return false;
+      return true;
+    };
+  for (FuncId fid = 0; fid <= maxFuncId; fid++) {
+    if (!Func::isFuncIdValid(fid) || !profData()->profiling(fid)) continue;
+    auto const u = Func::fromFuncId(fid)->unit();
+    if (!check_unit(u)) continue;
+    if (seen.insert(u).second) units.push_back(u);
+  }
+  auto all_loaded = loadedUnitsRepoAuth();
+  for (auto u : all_loaded) {
+    if (!check_unit(u)) continue;
+    if (seen.insert(u).second) units.push_back(u);
+  }
+  write_container(ser, units, write_unit_preload);
+}
+
+void read_units_preload(ProfDataDeserializer& ser) {
+  BootStats::Block timer("DES_read_units_preload",
+                         RuntimeOption::ServerExecutionMode());
+  if (RuntimeOption::EvalJitDesUnitPreload) {
+    auto const threads =
+      std::max(RuntimeOption::EvalJitWorkerThreadsForSerdes, 1);
+    s_preload_dispatcher = new UnitPreloadDispatcher(
+        threads, threads, 0, false, nullptr
+    );
+    s_preload_dispatcher->start();
+  }
+  read_container(ser, [&] { read_unit_preload(ser); });
 }
 
 void write_srckey(ProfDataSerializer& ser, SrcKey sk) {
@@ -1023,25 +1100,39 @@ bool ProfDataSerializer::serialize(const Class* cls) {
   return cls->serialize();
 }
 
-void write_string(ProfDataSerializer& ser, const StringData* str) {
-  if (!ser.serialize(str)) return write_raw(ser, str);
-  write_serialized_ptr(ser, str);
+void write_raw_string(ProfDataSerializer& ser, const StringData* str) {
   uint32_t sz = str->size();
   write_raw(ser, sz);
   write_raw(ser, str->data(), sz);
 }
 
+StringData* read_raw_string(ProfDataDeserializer& ser,
+                            bool skip /* = false */) {
+  auto const sz = read_raw<uint32_t>(ser);
+  constexpr uint32_t kMaxStringLen = 2 << 20;
+  if (sz > kMaxStringLen) {
+    throw std::runtime_error("string too long, likely corrupt");
+  }
+  constexpr uint32_t kBufLen = 8192;
+  char buffer[kBufLen];
+  char* ptr = buffer;
+  if (sz > kBufLen) ptr = (char*)malloc(sz);
+  SCOPE_EXIT { if (ptr != buffer) free(ptr); };
+  read_raw(ser, ptr, sz);
+  if (!skip) return makeStaticString(ptr, sz);
+  return nullptr;
+}
+
+void write_string(ProfDataSerializer& ser, const StringData* str) {
+  if (!ser.serialize(str)) return write_raw(ser, str);
+  write_serialized_ptr(ser, str);
+  write_raw_string(ser, str);
+}
+
 StringData* read_string(ProfDataDeserializer& ser) {
   return deserialize(
     ser,
-    [&] () -> StringData* {
-      auto const sz = read_raw<uint32_t>(ser);
-      String s{sz, ReserveStringMode{}};
-      auto const range = s.bufferSlice();
-      read_raw(ser, range.begin(), sz);
-      s.setSize(sz);
-      return makeStaticString(s);
-    }
+    [&] { return read_raw_string(ser); }
   );
 }
 
@@ -1302,6 +1393,21 @@ ClsMethDataRef read_clsmeth(ProfDataDeserializer& ser) {
   return ClsMethDataRef::create(cls, func);
 }
 
+void write_regionkey(ProfDataSerializer& ser, const RegionEntryKey& regionkey) {
+  write_srckey(ser, regionkey.srcKey());
+  write_container(ser, regionkey.guards(), write_guarded_location);
+}
+
+RegionEntryKey read_regionkey(ProfDataDeserializer& des) {
+  auto srcKey = read_srckey(des);
+  GuardedLocations guards;
+  read_container(des,
+                 [&] {
+                   guards.push_back(read_guarded_location(des));
+                 });
+  return RegionEntryKey(srcKey, guards);
+}
+
 std::string serializeProfData(const std::string& filename) {
   try {
     ProfDataSerializer ser{filename, ProfDataSerializer::FileMode::Create};
@@ -1331,6 +1437,7 @@ std::string serializeProfData(const std::string& filename) {
       Func::s_treadmill = false;
     };
 
+    write_units_preload(ser);
     PropertyProfile::serialize(ser);
     InstanceBits::init();
     InstanceBits::serialize(ser);
@@ -1359,8 +1466,7 @@ std::string serializeOptProfData(const std::string& filename) {
   try {
     ProfDataSerializer ser(filename, ProfDataSerializer::FileMode::Append);
 
-    // The profile data collected for the optimized code should be serialized
-    // here.
+    VasmBlockCounters::serialize(ser);
 
     ser.finalize();
 
@@ -1413,6 +1519,7 @@ std::string deserializeProfData(const std::string& filename, int numWorkers) {
                          buildTime, currTime).c_str());
     }
 
+    read_units_preload(ser);
     PropertyProfile::deserialize(ser);
     InstanceBits::deserialize(ser);
     read_global_array_map(ser);
@@ -1428,8 +1535,16 @@ std::string deserializeProfData(const std::string& filename, int numWorkers) {
 
     if (!ser.done()) {
       // We have profile data for the optimized code, so deserialize it too.
+      VasmBlockCounters::deserialize(ser);
     }
 
+    if (s_preload_dispatcher) {
+      BootStats::Block timer("DES_wait_for_units_preload",
+                             RuntimeOption::ServerExecutionMode());
+      s_preload_dispatcher->waitEmpty(true);
+      delete s_preload_dispatcher;
+      s_preload_dispatcher = nullptr;
+    }
     always_assert(ser.done());
 
     // During deserialization we didn't merge the loaded units because

@@ -90,19 +90,20 @@ let expand_var env r v =
   wrap_inference_env_call env (fun env -> Inf.expand_var env r v)
 
 let fresh_type_reason ?variance env r =
-  log_env_change_ "fresh_type" env
+  log_env_change_ "fresh_type_reason" env
   @@ wrap_inference_env_call env (fun env ->
          Inf.fresh_type_reason ?variance env r)
 
 let fresh_type env p =
-  wrap_inference_env_call env (fun env -> Inf.fresh_type env p)
+  log_env_change_ "fresh_type" env
+  @@ wrap_inference_env_call env (fun env -> Inf.fresh_type env p)
 
 let fresh_invariant_type_var env p =
-  wrap_inference_env_call env (fun env -> Inf.fresh_invariant_type_var env p)
+  log_env_change_ "fresh_invariant_type_var" env
+  @@ wrap_inference_env_call env (fun env -> Inf.fresh_invariant_type_var env p)
 
-let new_global_tyvar ?variance env v p =
-  wrap_inference_env_call_env env (fun env ->
-      Inf.new_global_tyvar env v ?variance p)
+let new_global_tyvar env v r =
+  wrap_inference_env_call env (fun env -> Inf.new_global_tyvar env v r)
 
 let add_subtype_prop env prop =
   log_env_change "add_subtype_prop" env
@@ -119,8 +120,90 @@ let make_tyvar_no_more_occur_in_tyvar env v ~no_more_in:v' =
   wrap_inference_env_call_env env (fun env ->
       Inf.make_tyvar_no_more_occur_in_tyvar env v ~no_more_in:v')
 
+let not_implemented s _ =
+  failwith (Printf.sprintf "Function %s not implemented" s)
+
+type simplify_unions = env -> locl_ty -> env * locl_ty
+
+let (simplify_unions_ref : simplify_unions ref) =
+  ref (not_implemented "simplify_unions")
+
+let simplify_unions x = !simplify_unions_ref x
+
+let bind env v ty =
+  wrap_inference_env_call_env env (fun env -> Inf.bind env v ty)
+
+(** Unions and intersections containing unsolved type variables may remain
+in an unsimplified form once those type variables get solved.
+
+For example, consider the union (#1 | int) where #1 is an unsolved type variable.
+If #1 gets solved to int, then this union will remain in the unsimplified form
+(int | int) which compromise the robustness of some of our logic and might
+cause performance issues (by creating big unsimplified unions).
+
+To solve this problem, we wrap each union and intersection in a type var,
+so we'd get `#2 -> (#1 | int)` (This is done in Typing_union and
+Typing_intersection), and register that #1 occurs in #2 in
+[env.tyvar_occurrences]. Then when #1 gets solved, we simplify #2.
+
+This function deals with this simplification.
+
+The simplification is recursive: simplifying a type variable will
+trigger simplification of its own occurrences. *)
+let simplify_occurrences env v =
+  let rec simplify_occurrences env v ~seen_tyvars =
+    let vars = Inf.get_tyvar_occurrences env.inference_env v in
+    let (env, seen_tyvars) =
+      ISet.fold
+        (fun v' (env, seen_tyvars) ->
+          (* This type variable is now solved and does not contain any unsolved
+          type variable, so we can remove it from its occurrences. *)
+          let env = make_tyvar_no_more_occur_in_tyvar env v ~no_more_in:v' in
+          (* Only simplify when the type of v' does not contain any more
+          unsolved type variables. *)
+          if not @@ Inf.contains_unsolved_tyvars env.inference_env v' then
+            simplify_type_of_var env v' ~seen_tyvars
+          else
+            (env, seen_tyvars))
+        vars
+        (env, seen_tyvars)
+    in
+    (env, seen_tyvars)
+  and simplify_type_of_var env v ~seen_tyvars =
+    if ISet.mem v seen_tyvars then
+      (* TODO raise exception. *)
+      (env, seen_tyvars)
+    else
+      let seen_tyvars = ISet.add v seen_tyvars in
+      match Inf.get_direct_binding env.inference_env v with
+      | None -> failwith "Can only simplify type of bounded variables"
+      | Some ty ->
+        (* Only simplify the type of variables which are bound directly to a
+      concrete type to preserve the variable aliasings and save some memory. *)
+        let env =
+          match get_node ty with
+          | Tvar _ -> env
+          | _ ->
+            let (env, ty) = simplify_unions env ty in
+            (* we only call this function when v does not recursively contain unsolved
+          type variables, so ty here should not contain unsolved type variables and
+          it is safe to simply bind it without reupdating the type var occurrences. *)
+            let env = bind env v ty in
+            env
+        in
+        simplify_occurrences env v ~seen_tyvars
+  in
+  if not @@ Inf.contains_unsolved_tyvars env.inference_env v then
+    fst @@ simplify_occurrences env v ~seen_tyvars:ISet.empty
+  else
+    env
+
 let add env ?(tyvar_pos = Pos.none) v ty =
-  wrap_inference_env_call_env env (fun env -> Inf.add env ~tyvar_pos v ty)
+  let env =
+    wrap_inference_env_call_env env (fun env -> Inf.add env ~tyvar_pos v ty)
+  in
+  let env = simplify_occurrences env v in
+  env
 
 let get_type env r var =
   wrap_inference_env_call env (fun env -> Inf.get_type env r var)
@@ -208,9 +291,7 @@ let extract_global_inference_env env =
   wrap_inference_env_call env (fun env -> Inf.extract_global_inference_env env)
 
 let wrap_ty_in_var env r ty =
-  let v = Ident.tmp () in
-  let env = add env v ty in
-  (env, mk (r, Tvar v))
+  wrap_inference_env_call env (fun env -> Inf.wrap_ty_in_var env r ty)
 
 let get_shape_field_name = function
   | Ast_defs.SFlit_int (_, s)
@@ -1520,9 +1601,24 @@ let add_tyvar_lower_bound ?union env var ty =
   else
     env
 
+let initialize_tyvar_as_in ~as_in:genv env v =
+  log_env_change "initialize_tyvar_as_in" env
+  @@ wrap_inference_env_call_env env (fun env ->
+         Inf.initialize_tyvar_as_in ~as_in:genv env v)
+
 let copy_tyvar_from_genv_to_env var ~to_:env ~from:genv =
-  wrap_inference_env_call env (fun env ->
-      Inf.copy_tyvar_from_genv_to_env var ~to_:env ~from:genv)
+  log_env_change_ "copy_tyvar_from_genv_to_env" env
+  @@ wrap_inference_env_call env (fun env ->
+         Inf.copy_tyvar_from_genv_to_env var ~to_:env ~from:genv)
 
 let get_all_tyvars env =
   wrap_inference_env_call_res env (fun env -> Inf.get_vars env)
+
+let remove_var env var ~search_in_upper_bounds_of ~search_in_lower_bounds_of =
+  log_env_change "remove_var" env
+  @@ wrap_inference_env_call_env env (fun env ->
+         Inf.remove_var
+           env
+           var
+           ~search_in_upper_bounds_of
+           ~search_in_lower_bounds_of)

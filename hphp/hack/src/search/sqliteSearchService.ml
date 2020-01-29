@@ -31,9 +31,12 @@ let sql_select_all_symbols =
  * It allows us to use LIKE "%\Foo%" to find both "\FooClass" and "\HH\Lib\FooTrait".
  * This feature should be removed if we decide to add back in the original backslash when generating
  * symbol indexes.
+ *
+ * In SQLite, `||` is the string concatentation operator; it is not the logical OR operator you
+ * might be expecting.
  *)
 let sql_select_namespaced_symbols =
-  "SELECT name, kind, filename_hash FROM symbols WHERE '\\' || name LIKE ? ESCAPE '\\' LIMIT ?"
+  "SELECT name, kind, filename_hash FROM symbols WHERE ('\\' || name) LIKE ? ESCAPE '\\' LIMIT ?"
 
 let sql_check_alive = "SELECT name FROM symbols LIMIT 1"
 
@@ -67,7 +70,7 @@ let find_saved_symbolindex ~(ignore_hh_version : bool) :
            info
              .Saved_state_loader.Symbol_index_saved_state_info.symbol_index_path)
     | Error load_error ->
-      Error (Saved_state_loader.load_error_to_string load_error)
+      Error (Saved_state_loader.user_message_of_error load_error)
   with _ -> Error "Exception searching for saved state"
 
 (* Determine the correct filename to use for the db_path or build it *)

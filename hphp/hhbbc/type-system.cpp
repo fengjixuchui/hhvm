@@ -3768,7 +3768,9 @@ folly::Optional<IsTypeOp> type_to_istypeop(const Type& t) {
   return folly::none;
 }
 
-folly::Optional<Type> type_of_type_structure(SArray ts) {
+folly::Optional<Type> type_of_type_structure(const Index& index,
+                                             Context ctx,
+                                             SArray ts) {
   auto const is_nullable = is_ts_nullable(ts);
   switch (get_ts_kind(ts)) {
     case TypeStructure::Kind::T_int:
@@ -3798,7 +3800,8 @@ folly::Optional<Type> type_of_type_structure(SArray ts) {
       auto const tsElems = get_ts_elem_types(ts);
       std::vector<Type> v;
       for (auto i = 0; i < tsElems->size(); i++) {
-        auto t = type_of_type_structure(tsElems->getValue(i).getArrayData());
+        auto t = type_of_type_structure(
+          index, ctx, tsElems->getValue(i).getArrayData());
         if (!t) return folly::none;
         v.emplace_back(std::move(t.value()));
       }
@@ -3813,11 +3816,33 @@ folly::Optional<Type> type_of_type_structure(SArray ts) {
       auto map = MapElems{};
       auto const fields = get_ts_fields(ts);
       for (auto i = 0; i < fields->size(); i++) {
-        auto const key = fields->getKey(i).getStringData();
+        auto key = fields->getKey(i).getStringData();
         auto const wrapper = fields->getValue(i).getArrayData();
+
+        // Shapes can be defined using class constants, these keys must be
+        // resolved, and to side-step the issue of shapes potentially being
+        // packed arrays if the keys are consecutive integers beginning with 0,
+        // we allow only keys that resolve to strings here.
+        if (wrapper->exists(s_is_cls_cns)) {
+          std::string cls, cns;
+          auto const matched = folly::split("::", key->data(), cls, cns);
+          always_assert(matched);
+
+          auto const rcls = index.resolve_class(ctx, makeStaticString(cls));
+          if (!rcls || index.lookup_class_init_might_raise(ctx, *rcls)) {
+            return folly::none;
+          }
+          auto const tcns = index.lookup_class_constant(
+            ctx, *rcls, makeStaticString(cns), false);
+
+          auto const vcns = tv(tcns);
+          if (!vcns || !isStringType(type(*vcns))) return folly::none;
+          key = val(*vcns).pstr;
+        }
+
         // Optional fields are hard to represent as a type
         if (is_optional_ts_shape_field(wrapper)) return folly::none;
-        auto t = type_of_type_structure(get_ts_value(wrapper));
+        auto t = type_of_type_structure(index, ctx, get_ts_value(wrapper));
         if (!t) return folly::none;
         map.emplace_back(
           make_tv<KindOfPersistentString>(key), std::move(t.value()));
@@ -4733,11 +4758,69 @@ Type loosen_emptiness(Type t) {
   return project_data(t, t.m_bits);
 }
 
+Type loosen_string_like(Type t) {
+  if (t.couldBe(BFunc | BCls)) t = union_of(std::move(t), TUncStrLike);
+
+  switch (t.m_dataTag) {
+  case DataTag::None:
+  case DataTag::Str:
+  case DataTag::Int:
+  case DataTag::Dbl:
+  case DataTag::Cls:
+    break;
+
+  case DataTag::ArrLikeVal:
+    // Static arrays cannot currently contain function or class pointers.
+    break;
+
+  case DataTag::Obj:
+    if (t.m_data.dobj.whType) {
+      auto whType = t.m_data.dobj.whType.mutate();
+      *whType = loosen_string_like(std::move(*whType));
+    }
+    break;
+
+  case DataTag::ArrLikePacked: {
+    auto& packed = *t.m_data.packed.mutate();
+    for (auto& e : packed.elems) {
+      e = loosen_string_like(std::move(e));
+    }
+    break;
+  }
+
+  case DataTag::ArrLikePackedN: {
+    auto& packed = *t.m_data.packedn.mutate();
+    packed.type = loosen_string_like(std::move(packed.type));
+    break;
+  }
+
+  case DataTag::ArrLikeMap: {
+    auto& map = *t.m_data.map.mutate();
+    for (auto it = map.map.begin(); it != map.map.end(); it++) {
+      map.map.update(it, loosen_string_like(it->second));
+    }
+    map.optKey = loosen_string_like(std::move(map.optKey));
+    map.optVal = loosen_string_like(std::move(map.optVal));
+    break;
+  }
+
+  case DataTag::ArrLikeMapN: {
+    auto& map = *t.m_data.mapn.mutate();
+    map.key = loosen_string_like(std::move(map.key));
+    map.val = loosen_string_like(std::move(map.val));
+    break;
+  }
+  }
+  return t;
+}
+
 Type loosen_all(Type t) {
   return loosen_dvarrayness(
     loosen_staticness(
       loosen_emptiness(
-        loosen_values(std::move(t))
+        loosen_values(
+          loosen_string_like(std::move(t))
+        )
       )
     )
   );

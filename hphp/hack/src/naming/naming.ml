@@ -1567,6 +1567,8 @@ module Make (GetLocals : GetLocals) = struct
            || cn = SN.SpecialFunctions.tuple ->
       arg_unpack_unexpected unpacked_element;
       List.for_all el ~f:(check_constant_expr env)
+    | Aast.FunctionPointer (((_, Aast.Id _) | (_, Aast.Class_const _)), _) ->
+      true
     | Aast.Collection (id, _, l) ->
       let (p, cn) = NS.elaborate_id (fst env).namespace NS.ElaborateClass id in
       (* Only vec/keyset/dict are allowed because they are value types *)
@@ -2468,6 +2470,11 @@ module Make (GetLocals : GetLocals) = struct
           targl env p tal,
           exprl env el,
           oexpr env unpacked_element )
+    | Aast.FunctionPointer ((p, Aast.Id fid), targs) ->
+      let e = N.Id (Env.fun_id env fid) in
+      N.FunctionPointer ((p, e), targl env p targs)
+    | Aast.FunctionPointer (e, targs) ->
+      N.FunctionPointer (expr env e, targl env p targs)
     | Aast.Yield_break -> N.Yield_break
     | Aast.Yield e -> N.Yield (afield env e)
     | Aast.Await e -> N.Await (expr env e)

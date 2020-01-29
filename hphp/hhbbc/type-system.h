@@ -780,6 +780,7 @@ private:
   friend Type loosen_provenance(Type);
   friend Type loosen_values(Type);
   friend Type loosen_emptiness(Type);
+  friend Type loosen_string_like(Type);
   friend Type add_nonemptiness(Type);
   friend Type assert_emptiness(Type);
   friend Type assert_nonemptiness(Type);
@@ -1403,7 +1404,7 @@ folly::Optional<IsTypeOp> type_to_istypeop(const Type& t);
  * no matching Type is found.
  *
  */
-folly::Optional<Type> type_of_type_structure(SArray ts);
+folly::Optional<Type> type_of_type_structure(const Index&, Context, SArray ts);
 
 /*
  * Return the DObj structure for a strict subtype of TObj or TOptObj.
@@ -1565,6 +1566,11 @@ Type loosen_values(Type t);
  * type otherwise.
  */
 Type loosen_emptiness(Type t);
+
+/*
+ * Force all TFunc and TCls types to TUncStrLike.
+ */
+Type loosen_string_like(Type t);
 
 /*
  * Loosens staticness, emptiness, and values from the type. This forces a type

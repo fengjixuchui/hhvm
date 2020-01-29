@@ -4,15 +4,11 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 use crate::datatypes::*;
+use crate::Names;
+use crate::Result;
 
 use oxidized::relative_path::RelativePath;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::sync::{Arc, Mutex};
-
-#[derive(Clone, Debug)]
-pub(crate) struct ConstsTable {
-    connection: Arc<Mutex<Connection>>,
-}
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConstItem {
@@ -22,28 +18,19 @@ pub(crate) struct ConstItem {
 
 // TODO: some functions is only used in unit tests for now
 #[allow(dead_code)]
-impl ConstsTable {
-    pub fn new(connection: Arc<Mutex<Connection>>) -> Self {
-        ConstsTable {
-            connection: connection.clone(),
-        }
-    }
-
-    pub fn create(&self) {
+impl Names {
+    pub(crate) fn create_consts_table(connection: &Connection) -> Result<()> {
         let statement = "
             CREATE TABLE IF NOT EXISTS NAMING_CONSTS (
                 HASH INTEGER PRIMARY KEY NOT NULL,
                 FILE_INFO_ID INTEGER NOT NULL
             );";
 
-        self.connection
-            .lock()
-            .unwrap()
-            .execute(&statement, params![])
-            .unwrap();
+        connection.execute(&statement, params![])?;
+        Ok(())
     }
 
-    pub fn insert(&self, items: &[ConstItem]) {
+    fn insert_consts(&self, items: &[ConstItem]) -> Result<()> {
         let insert_statement = "
             INSERT INTO NAMING_CONSTS (
                 HASH,
@@ -52,22 +39,18 @@ impl ConstsTable {
                 ?, ?
             );";
 
-        let connection = self.connection.lock().unwrap();
-        let mut insert_statement = connection.prepare(&insert_statement).unwrap();
+        let connection = &self.connection;
+        let mut insert_statement = connection.prepare(&insert_statement)?;
 
         for item in items {
-            let hash = Convert::name_to_hash(&item.name);
+            let hash = convert::name_to_hash(&item.name);
 
-            let result = insert_statement.execute(params![hash, item.file_info_id]);
-
-            match result {
-                Ok(_v) => println!("Inserted row OK"),
-                Err(e) => println!("Error: {:?}", e),
-            }
+            insert_statement.execute(params![hash, item.file_info_id])?;
         }
+        Ok(())
     }
 
-    pub fn map_names_to_paths(&self, names: &[&str]) -> Vec<Option<RelativePath>> {
+    pub fn paths_of_consts(&self, names: &[&str]) -> Result<Vec<Option<RelativePath>>> {
         let select_statement = "
             SELECT
                 NAMING_FILE_INFO.PATH_PREFIX_TYPE,
@@ -82,22 +65,19 @@ impl ConstsTable {
                 NAMING_CONSTS.HASH = ?
             ";
 
-        let connection = self.connection.lock().unwrap();
-        let mut select_statement = connection.prepare(&select_statement).unwrap();
+        let connection = &self.connection;
+        let mut select_statement = connection.prepare(&select_statement)?;
         names
             .into_iter()
             .map(|name| {
-                let hash = Convert::name_to_hash(&name);
-                let path = &select_statement
+                let hash = convert::name_to_hash(&name);
+                select_statement
                     .query_row::<RelativePath, _, _>(params![hash], |row| {
-                        let prefix: SqlitePrefix = row.get(0).unwrap();
-                        let suffix: SqlitePathBuf = row.get(1).unwrap();
+                        let prefix: SqlitePrefix = row.get(0)?;
+                        let suffix: SqlitePathBuf = row.get(1)?;
                         Ok(RelativePath::make(prefix.value, suffix.value))
                     })
                     .optional()
-                    .unwrap();
-
-                path.clone()
             })
             .collect()
     }
@@ -109,15 +89,11 @@ mod tests {
 
     #[test]
     fn test_add_const() {
-        let const_table =
-            ConstsTable::new(Arc::new(Mutex::new(Connection::open_in_memory().unwrap())));
-        const_table.create();
+        let names = Names::new_in_memory().unwrap();
         let consts = [ConstItem {
             name: "Foo".to_string(),
             file_info_id: 123,
         }];
-        const_table.insert(&consts);
-
-        assert!(true)
+        names.insert_consts(&consts).unwrap();
     }
 }

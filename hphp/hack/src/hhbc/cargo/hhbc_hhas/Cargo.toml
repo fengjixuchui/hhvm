@@ -1,16 +1,19 @@
 # @generated
 # @autocargo from //hphp/hack/src/hhbc:hhbc_hhas_rust
-# Signature<<4a8bacd4d58f24766f56f52846a190cf0305cd4f>>
+# Signature
 [package]
 name = "hhbc_hhas_rust"
 edition = "2018"
 version = "0.0.0"
-include = ["../../hhbc_hhas.rs"]
+include = ["../../print.rs", "../../print_env.rs", "../../write.rs"]
 
 [lib]
-path = "../../hhbc_hhas.rs"
+path = "../../print.rs"
 
 [dependencies]
 hhas_program_rust = { path = "../hhas_program" }
+hhas_record_def_rust = { path = "../hhas_record_def" }
+hhbc_id_rust = { path = "../hhbc_id" }
 oxidized = { path = "../../../oxidized" }
-# @end of Signature<<4a8bacd4d58f24766f56f52846a190cf0305cd4f>>
+thiserror = "1.0"
+# @end of Signature

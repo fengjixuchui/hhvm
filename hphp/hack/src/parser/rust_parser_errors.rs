@@ -13,6 +13,7 @@ use oxidized::parser_options::ParserOptions;
 use parser_core_types::{
     indexed_source_text::IndexedSourceText,
     lexable_token::LexableToken,
+    positioned_syntax::PositionedSyntax,
     syntax::{ListItemChildren, Syntax, SyntaxValueType, SyntaxVariant, SyntaxVariant::*},
     syntax_error::{self as errors, Error, ErrorType, SyntaxError},
     syntax_trait::SyntaxTrait,
@@ -220,7 +221,7 @@ fn make_first_use_or_def(
 
     res
 }
-pub struct ParserErrors<'a, Token, Value, State> {
+struct ParserErrors<'a, Token, Value, State> {
     phantom: std::marker::PhantomData<(*const Token, *const Value, *const State)>,
 
     env: Env<'a, Syntax<Token, Value>, SyntaxTree<'a, Syntax<Token, Value>, State>>,
@@ -4535,7 +4536,12 @@ where
                     _ => default(self),
                 }
             }
-
+            FunctionPointerExpression(_) => {
+                // Bans the equivalent of inst_meth as well as class_meth and fun
+                if self.env.parser_options.po_disallow_func_ptrs_in_constants {
+                    default(self)
+                }
+            }
             _ => default(self),
         }
     }
@@ -5126,6 +5132,21 @@ where
         }
     }
 
+    fn disabled_function_pointer_expression_error(&mut self, node: &'a Syntax<Token, Value>) {
+        if let FunctionPointerExpression(_) = &node.syntax {
+            if !self
+                .env
+                .parser_options
+                .po_enable_first_class_function_pointers
+            {
+                self.errors.push(Self::make_error_from_node(
+                    node,
+                    errors::function_pointers_disabled,
+                ))
+            }
+        }
+    }
+
     fn strip_ns(name: &str) -> &str {
         match name.chars().next() {
             Some('\\') => &name[1..],
@@ -5306,6 +5327,7 @@ where
             }
             OldAttributeSpecification(_) => self.disabled_legacy_attribute_syntax_errors(node),
             SoftTypeSpecifier(_) => self.disabled_legacy_soft_typehint_errors(node),
+            FunctionPointerExpression(_) => self.disabled_function_pointer_expression_error(node),
             _ => {}
         }
         self.lval_errors(node);
@@ -5469,4 +5491,14 @@ where
             }
         }
     }
+}
+
+pub fn parse_errors<'a>(
+    tree: &'a SyntaxTree<'a, PositionedSyntax, ()>,
+    parser_options: ParserOptions,
+    hhvm_compat_mode: bool,
+    hhi_mode: bool,
+    codegen: bool,
+) -> Vec<SyntaxError> {
+    ParserErrors::parse_errors(tree, parser_options, hhvm_compat_mode, hhi_mode, codegen)
 }

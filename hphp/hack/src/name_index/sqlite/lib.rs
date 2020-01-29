@@ -6,7 +6,10 @@
 mod consts;
 mod datatypes;
 mod file_infos;
+mod funs;
 
 pub mod names;
 
 pub use names::Names;
+
+pub use rusqlite::Result;

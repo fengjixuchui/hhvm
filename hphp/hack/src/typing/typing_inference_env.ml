@@ -13,6 +13,8 @@ module ITySet = Internal_type_set
 module Occ = Typing_tyvar_occurrences
 module TL = Typing_logic
 
+exception InconsistentTypeVarState of string
+
 [@@@warning "-32"]
 
 let pp _ _ = Printf.printf "%s\n" "<inference_env>"
@@ -319,29 +321,44 @@ let make_tyvar_no_more_occur_in_tyvar env v ~no_more_in:v' =
         ~no_more_in:v';
   }
 
-let add env ?(tyvar_pos = Pos.none) v ty =
+let get_direct_binding env v =
+  match get_solving_info_opt env v with
+  | None
+  | Some (TVIConstraints _) ->
+    None
+  | Some (TVIType ty) -> Some ty
+
+let bind env ?(tyvar_pos = Pos.none) v ty =
+  set_solving_info env ~tyvar_pos v (TVIType ty)
+
+let update_tyvar_occurrences env v ty =
   let env =
     { env with tyvar_occurrences = Occ.unbind_tyvar env.tyvar_occurrences v }
   in
-  let env =
-    let unsolved_vars_in_ty = get_unsolved_vars_in_ty env ty in
-    make_tyvars_occur_in_tyvar env unsolved_vars_in_ty ~occur_in:v
-  in
-  set_solving_info env ~tyvar_pos v (TVIType ty)
+  let unsolved_vars_in_ty = get_unsolved_vars_in_ty env ty in
+  let env = make_tyvars_occur_in_tyvar env unsolved_vars_in_ty ~occur_in:v in
+  env
+
+let add env ?(tyvar_pos = Pos.none) v ty =
+  let env = bind env ~tyvar_pos v ty in
+  let env = update_tyvar_occurrences env v ty in
+  env
 
 let get_type env r v =
-  let rec get v aliases =
+  let rec get r v aliases =
     let shorten_paths () =
       ISet.fold (fun v' env -> add env v' (mk (r, Tvar v))) aliases env
     in
     match get_solving_info_opt env v with
     | Some (TVIType ty) ->
       begin
-        match get_node ty with
-        | Tvar v' ->
+        match deref ty with
+        | (r, Tvar v') ->
           if ISet.mem v aliases then
-            failwith "Two type variables are aliasing each other!";
-          get v' (ISet.add v aliases)
+            raise
+            @@ InconsistentTypeVarState
+                 "Two type variables are aliasing each other!";
+          get r v' (ISet.add v aliases)
         | _ ->
           let env = shorten_paths () in
           (env, ty)
@@ -351,7 +368,7 @@ let get_type env r v =
       let env = shorten_paths () in
       (env, mk (r, Tvar v))
   in
-  get v ISet.empty
+  get r v ISet.empty
 
 let create_tyvar_constraints variance =
   let (appears_covariantly, appears_contravariantly) =
@@ -394,7 +411,31 @@ let fresh_type ?variance env p =
 
 let fresh_invariant_type_var = fresh_type ~variance:Ast_defs.Invariant
 
-let new_global_tyvar = fresh_unsolved_tyvar ~is_global:true
+let new_global_tyvar env v r =
+  let env =
+    let p = Reason.to_pos r in
+    match get_tyvar_info_opt env v with
+    | Some tvinfo ->
+      assert tvinfo.is_global;
+      assert (Pos.equal tvinfo.tyvar_pos p);
+      env
+    | None -> fresh_unsolved_tyvar env v ~is_global:true p
+  in
+  (env, mk (r, Tvar v))
+
+let wrap_ty_in_var env r ty =
+  let v = Ident.tmp () in
+  let tvinfo =
+    {
+      tyvar_pos = Reason.to_pos r;
+      is_global = false;
+      eager_solve_failed = false;
+      solving_info = TVIType ty;
+    }
+  in
+  let env = set_tyvar_info env v tvinfo in
+  let env = update_tyvar_occurrences env v ty in
+  (env, mk (r, Tvar v))
 
 let is_global_tyvar env v =
   match get_tyvar_info_opt env v with
@@ -405,7 +446,7 @@ let open_tyvars env p = { env with tyvars_stack = (p, []) :: env.tyvars_stack }
 
 let close_tyvars env =
   match env.tyvars_stack with
-  | [] -> failwith "close_tyvars: empty stack"
+  | [] -> raise @@ InconsistentTypeVarState "close_tyvars: empty stack"
   | _ :: rest -> { env with tyvars_stack = rest }
 
 let get_current_tyvars env =
@@ -420,10 +461,21 @@ let get_tyvar_constraints_opt env var =
   | Some (TVIType _) ->
     None
 
-let get_tyvar_constraints_or_empty env var =
-  match get_tyvar_constraints_opt env var with
-  | Some constraints -> constraints
-  | None -> empty_tyvar_constraints
+let get_tyvar_constraints_exn env var =
+  match get_solving_info_opt env var with
+  | None ->
+    raise
+    @@ InconsistentTypeVarState
+         (Printf.sprintf
+            "Attempting to get constraints for non-existing type variable #%d."
+            var)
+  | Some (TVIType _) ->
+    raise
+    @@ InconsistentTypeVarState
+         (Printf.sprintf
+            "Attempting to get constraints for already solved type variable #%d."
+            var)
+  | Some (TVIConstraints constraints) -> constraints
 
 let set_tyvar_constraints env v tyvar_constraints =
   set_solving_info env v (TVIConstraints tyvar_constraints)
@@ -472,6 +524,12 @@ let get_tyvar_pos env var =
   | None -> Pos.none
   | Some tvinfo -> tvinfo.tyvar_pos
 
+let get_tyvar_lower_bounds_opt env v =
+  Option.map (get_tyvar_constraints_opt env v) (fun x -> x.lower_bounds)
+
+let get_tyvar_upper_bounds_opt env v =
+  Option.map (get_tyvar_constraints_opt env v) (fun x -> x.upper_bounds)
+
 let get_tyvar_lower_bounds env var : ITySet.t =
   match get_solving_info_opt env var with
   | None -> ITySet.empty
@@ -489,13 +547,13 @@ let get_tyvar_upper_bounds env var : ITySet.t =
     | TVIConstraints cstr -> cstr.upper_bounds)
 
 let set_tyvar_lower_bounds env var lower_bounds =
-  let tyvar_constraints = get_tyvar_constraints_or_empty env var in
+  let tyvar_constraints = get_tyvar_constraints_exn env var in
   let tyvar_constraints = { tyvar_constraints with lower_bounds } in
   let env = set_tyvar_constraints env var tyvar_constraints in
   env
 
 let set_tyvar_upper_bounds env var upper_bounds =
-  let tyvar_constraints = get_tyvar_constraints_or_empty env var in
+  let tyvar_constraints = get_tyvar_constraints_exn env var in
   let tyvar_constraints = { tyvar_constraints with upper_bounds } in
   let env = set_tyvar_constraints env var tyvar_constraints in
   env
@@ -522,7 +580,7 @@ let get_tyvar_appears_invariantly env var =
   && get_tyvar_appears_contravariantly env var
 
 let set_tyvar_appears_covariantly env v =
-  let tyvar_constraints = get_tyvar_constraints_or_empty env v in
+  let tyvar_constraints = get_tyvar_constraints_exn env v in
   let tyvar_constraints =
     { tyvar_constraints with appears_covariantly = true }
   in
@@ -530,7 +588,7 @@ let set_tyvar_appears_covariantly env v =
   env
 
 let set_tyvar_appears_contravariantly env v =
-  let tyvar_constraints = get_tyvar_constraints_or_empty env v in
+  let tyvar_constraints = get_tyvar_constraints_exn env v in
   let tyvar_constraints =
     { tyvar_constraints with appears_contravariantly = true }
   in
@@ -554,14 +612,14 @@ let get_tyvar_pu_access env var (_, typ_name) =
   SMap.find_opt typ_name (get_tyvar_pu_accesses env var)
 
 let set_tyvar_type_const env var ((_, tyconstid_) as tyconstid) ty =
-  let tvinfo = get_tyvar_constraints_or_empty env var in
+  let tvinfo = get_tyvar_constraints_exn env var in
   let type_constants =
     SMap.add tyconstid_ (tyconstid, ty) tvinfo.type_constants
   in
   set_tyvar_constraints env var { tvinfo with type_constants }
 
 let set_tyvar_pu_access env var base enum new_var name =
-  let tvinfo = get_tyvar_constraints_or_empty env var in
+  let tvinfo = get_tyvar_constraints_exn env var in
   let pu_accesses =
     SMap.add (snd name) (base, enum, new_var, name) tvinfo.pu_accesses
   in
@@ -585,7 +643,7 @@ let get_current_pos_from_tyvar_stack env =
  *   v <: (t1 & ... & tn)
  *)
 let add_tyvar_upper_bound ?intersect env var (ty : internal_type) =
-  let tvconstraints = get_tyvar_constraints_or_empty env var in
+  let tvconstraints = get_tyvar_constraints_exn env var in
   let upper_bounds =
     match intersect with
     | None -> ITySet.add ty tvconstraints.upper_bounds
@@ -604,7 +662,7 @@ let add_tyvar_upper_bound ?intersect env var (ty : internal_type) =
  *   (t1 | ... | tn) <: v
  *)
 let add_tyvar_lower_bound ?union env var ty =
-  let tvconstraints = get_tyvar_constraints_or_empty env var in
+  let tvconstraints = get_tyvar_constraints_exn env var in
   let lower_bounds =
     match union with
     | None -> ITySet.add ty tvconstraints.lower_bounds
@@ -623,14 +681,8 @@ let remove_tyvar_upper_bound env var upper_var =
     let upper_bounds =
       ITySet.filter
         (fun ty ->
-          match expand_internal_type env ty with
-          | (_, LoclType ty) ->
-            begin
-              match get_node ty with
-              | Tvar v -> not (Ident.equal v upper_var)
-              | _ -> true
-            end
-          | _ -> true)
+          let (_env, ty) = expand_internal_type env ty in
+          not @@ InternalType.is_var_v ty upper_var)
         tvconstraints.upper_bounds
     in
     set_tyvar_constraints env var { tvconstraints with upper_bounds }
@@ -644,14 +696,8 @@ let remove_tyvar_lower_bound env var lower_var =
     let lower_bounds =
       ITySet.filter
         (fun ty ->
-          match expand_internal_type env ty with
-          | (_, LoclType ty) ->
-            begin
-              match get_node ty with
-              | Tvar v -> not (Ident.equal v lower_var)
-              | _ -> true
-            end
-          | _ -> true)
+          let (_env, ty) = expand_internal_type env ty in
+          not @@ InternalType.is_var_v ty lower_var)
         tvconstraints.lower_bounds
     in
     set_tyvar_constraints env var { tvconstraints with lower_bounds }
@@ -707,6 +753,14 @@ let get_tyvar_info_exn_g (genv : t_global) v = IMap.find v genv
 
 let has_var env v = Option.is_some (get_tyvar_info_opt env v)
 
+let initialize_tyvar_as_in ~as_in:(genv : t_global) (env : t) v =
+  match get_tyvar_info_opt env v with
+  | Some _ -> env
+  | None ->
+    get_tyvar_info_exn_g genv v
+    |> global_tyvar_info_to_dummy_tyvar_info
+    |> set_tyvar_info env v
+
 let copy_tyvar_from_genv_to_env v ~to_:(env : t) ~from:(genv : t_global) =
   let tvinfo =
     get_tyvar_info_exn_g genv v |> global_tyvar_info_to_dummy_tyvar_info
@@ -739,7 +793,7 @@ module Size = struct
     ty_size_visitor#on_type 0 ty
 
   let rec constraint_type_size env ty =
-    match ty with
+    match deref_constraint_type ty with
     | (_, Tdestructure d) ->
       let { d_required; d_optional; d_variadic; _ } = d in
       1
@@ -1073,3 +1127,91 @@ let connected_components_g genvs =
       []
   in
   List.map components ~f:component_to_subgraph
+
+let remove_var_from_bounds
+    env v ~search_in_upper_bounds_of ~search_in_lower_bounds_of =
+  let env =
+    ISet.fold
+      (fun v' env ->
+        Option.fold
+          (get_tyvar_upper_bounds_opt env v')
+          ~init:env
+          ~f:(fun env bounds ->
+            ITySet.filter (InternalType.is_not_var_v ~v) bounds
+            |> set_tyvar_upper_bounds env v'))
+      search_in_upper_bounds_of
+      env
+  in
+  let env =
+    ISet.fold
+      (fun v' env ->
+        Option.fold
+          (get_tyvar_lower_bounds_opt env v')
+          ~init:env
+          ~f:(fun env bounds ->
+            ITySet.filter (InternalType.is_not_var_v ~v) bounds
+            |> set_tyvar_lower_bounds env v'))
+      search_in_lower_bounds_of
+      env
+  in
+  env
+
+let remove_var_from_tyvars_stack tyvars_stack var =
+  List.map tyvars_stack ~f:(fun (p, vars) ->
+      (p, List.filter vars ~f:(Ident.not_equal var)))
+
+let replace_var_by_ty_in_prop prop v ty =
+  let rec replace prop =
+    match prop with
+    | TL.IsSubtype (ty1, ty2) ->
+      let ty1 =
+        if InternalType.is_var_v ty1 v then
+          LoclType ty
+        else
+          ty1
+      in
+      let ty2 =
+        if InternalType.is_var_v ty2 v then
+          LoclType ty
+        else
+          ty2
+      in
+      TL.IsSubtype (ty1, ty2)
+    | TL.Coerce (ty1, ty2) ->
+      let ty1 =
+        if is_var_v ty1 v then
+          ty
+        else
+          ty1
+      in
+      let ty2 =
+        if is_var_v ty2 v then
+          ty
+        else
+          ty2
+      in
+      TL.Coerce (ty1, ty2)
+    | TL.Disj (f, props) ->
+      let props = List.map props ~f:replace in
+      TL.Disj (f, props)
+    | TL.Conj props ->
+      let props = List.map props ~f:replace in
+      TL.Conj props
+  in
+  replace prop
+
+let remove_var env var ~search_in_upper_bounds_of ~search_in_lower_bounds_of =
+  let env =
+    remove_var_from_bounds
+      env
+      var
+      ~search_in_upper_bounds_of
+      ~search_in_lower_bounds_of
+  in
+  let (env, ty) = expand_var env Reason.none var in
+  let { tvenv; tyvars_stack; tyvar_occurrences; subtype_prop } = env in
+  let tyvar_occurrences = Occ.remove_var tyvar_occurrences var in
+  let tvenv = IMap.remove var tvenv in
+  let tyvars_stack = remove_var_from_tyvars_stack tyvars_stack var in
+  let subtype_prop = replace_var_by_ty_in_prop subtype_prop var ty in
+  { tvenv; tyvars_stack; tyvar_occurrences; subtype_prop }

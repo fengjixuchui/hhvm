@@ -40,8 +40,6 @@
 
 namespace HPHP {
 
-const StaticString s_storage("storage");
-
 struct InvalidSetMException : std::runtime_error {
   InvalidSetMException()
     : std::runtime_error("Empty InvalidSetMException")
@@ -619,7 +617,8 @@ inline tv_lval ElemDArrayPre(tv_lval base, int64_t key, bool& defined) {
   auto const lval = oldArr->lval(key, oldArr->cowCheck());
 
   if (lval.arr != oldArr) {
-    type(base) = KindOfArray;
+    assertx(lval.arr->isPHPArray());
+    type(base) = lval.arr->toDataType();
     val(base).parr = lval.arr;
     assertx(tvIsPlausible(*base));
     decRefArr(oldArr);
@@ -640,7 +639,8 @@ inline tv_lval ElemDArrayPre(tv_lval base, StringData* key,
   }();
 
   if (lval.arr != oldArr) {
-    type(base) = KindOfArray;
+    assertx(lval.arr->isPHPArray());
+    type(base) = lval.arr->toDataType();
     val(base).parr = lval.arr;
     assertx(tvIsPlausible(*base));
     decRefArr(oldArr);
@@ -918,22 +918,6 @@ inline tv_lval ElemDObject(TypedValue& tvRef, tv_lval base,
 
   if (LIKELY(obj->isCollection())) {
     return collections::atLval(obj, &scratchKey);
-  } else if (obj->getVMClass()->classof(SystemLib::s_ArrayObjectClass)) {
-    auto storage = obj->getPropLval(SystemLib::s_ArrayObjectClass,
-                                    s_storage.get());
-    if (debug) {
-      // ArrayObject should always have the 'storage' property, it shouldn't
-      // have a type-hint on it, nor should it be LateInit.
-      always_assert(storage);
-      auto const slot = obj->getVMClass()->getDeclPropSlot(
-        SystemLib::s_ArrayObjectClass,
-        s_storage.get()
-      ).slot;
-      auto const& prop = obj->getVMClass()->declProperties()[slot];
-      always_assert(!prop.typeConstraint.isCheckable());
-      always_assert(!(prop.attrs & AttrLateInit));
-    }
-    return ElemDArray<mode, keyType>(storage, key);
   }
 
   tvRef = objOffsetGet(instanceFromTv(base), scratchKey);
@@ -1004,7 +988,8 @@ inline tv_lval ElemUArrayImpl(tv_lval base, int64_t key) {
   if (!oldArr->exists(key)) return ElemUEmptyish();
   auto const lval = oldArr->lval(key, oldArr->cowCheck());
   if (lval.arr != oldArr) {
-    type(base) = KindOfArray;
+    assertx(lval.arr->isPHPArray());
+    type(base) = lval.arr->toDataType();
     val(base).parr = lval.arr;
     assertx(tvIsPlausible(*base));
     decRefArr(oldArr);
@@ -1018,7 +1003,8 @@ inline tv_lval ElemUArrayImpl(tv_lval base, StringData* key) {
 
   auto const lval = arr->lval(key, arr->cowCheck());
   if (lval.arr != arr) {
-    type(base) = KindOfArray;
+    assertx(lval.arr->isPHPArray());
+    type(base) = lval.arr->toDataType();
     val(base).parr = lval.arr;
     assertx(tvIsPlausible(*base));
     decRefArr(arr);
@@ -1556,6 +1542,7 @@ void arraySetUpdateBase(ArrayData* oldData, ArrayData* newData, tv_lval base) {
   assertx(val(base).parr == oldData);
   type(base) = dt;
   val(base).parr = newData;
+  assertx(dt == newData->toDataType());
   assertx(tvIsPlausible(*base));
 
   decRefArr(oldData);
@@ -1637,6 +1624,15 @@ inline void SetElemArray(tv_lval base, key_type<keyType> key, TypedValue* value)
   // 'newData' if its not equal to 'a'.
   assertx(a == newData || newData->isPHPArray());
 
+  if (UNLIKELY(RuntimeOption::EvalEmitDVArray)) {
+    if (newData->toDataType() == KindOfDArray) {
+      arraySetUpdateBase<KindOfDArray>(a, newData, base);
+      return;
+    } else if (newData->toDataType() == KindOfVArray) {
+      arraySetUpdateBase<KindOfVArray>(a, newData, base);
+      return;
+    }
+  }
   arraySetUpdateBase<KindOfArray>(a, newData, base);
 }
 
@@ -1880,7 +1876,8 @@ inline void SetNewElemArray(tv_lval base, TypedValue* value) {
   auto a = val(base).parr;
   auto a2 = a->append(*value);
   if (a2 != a) {
-    type(base) = KindOfArray;
+    assertx(a2->isPHPArray());
+    type(base) = a2->toDataType();
     val(base).parr = a2;
     a->decRefAndRelease();
   }
@@ -2513,7 +2510,8 @@ inline void UnsetElemArray(tv_lval base, key_type<keyType> key) {
   ArrayData* a2 = UnsetElemArrayPre(a, key);
 
   if (a2 != a) {
-    type(base) = KindOfArray;
+    assertx(a2->isPHPArray());
+    type(base) = a2->toDataType();
     val(base).parr = a2;
     assertx(tvIsPlausible(*base));
     a->decRefAndRelease();

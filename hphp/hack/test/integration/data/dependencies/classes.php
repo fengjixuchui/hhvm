@@ -65,7 +65,7 @@ class WithProperties {
   }
 
   public int $first;
-  public int $second = 0;
+  public int $second = 42;
   public static int $third = 7;
 }
 
@@ -130,5 +130,18 @@ class WithReactiveMethods {
   <<__RxShallow>>
   public function call_shallow_reactive(): void {
     $this->shallow_reactive();
+  }
+}
+
+class WithLateInit {
+  <<__LateInit>>
+  private int $count;
+
+  public function getCount(): int {
+    return $this->count;
+  }
+
+  public function setCount(int $count): void {
+    $this->count = $count;
   }
 }

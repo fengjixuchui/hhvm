@@ -10,9 +10,20 @@ use label_rust as label;
 use label_rust::Label;
 use local_rust as local;
 use runtime::TypedValue;
+use thiserror::Error;
 
-use std::collections::HashMap;
-use std::convert::TryInto;
+use std::{collections::HashMap, convert::TryInto};
+
+pub type Result<T = InstrSeq> = std::result::Result<T, Error>;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("IncludeTimeFatalException: FatalOp={0:?}, {1}")]
+    IncludeTimeFatalException(FatalOp, String),
+
+    #[error("Unrecoverable: {0}")]
+    Unrecoverable(String),
+}
 
 /// The various from_X functions below take some kind of AST (expression,
 /// statement, etc.) and produce what is logically a sequence of instructions.
@@ -377,6 +388,14 @@ impl InstrSeq {
 
     pub fn make_popl(l: local::Type) -> Self {
         Self::make_instr(Instruct::IMutator(InstructMutator::PopL(l)))
+    }
+
+    pub fn make_initprop(pid: PropId, op: InitpropOp) -> Self {
+        Self::make_instr(Instruct::IMutator(InstructMutator::InitProp(pid, op)))
+    }
+
+    pub fn make_checkprop(pid: PropId) -> Self {
+        Self::make_instr(Instruct::IMutator(InstructMutator::CheckProp(pid)))
     }
 
     pub fn make_pushl(local: local::Type) -> Self {
@@ -954,6 +973,10 @@ impl InstrSeq {
         }
     }
 
+    pub fn rewrite_user_labels(&mut self, label_gen: &mut label::Gen) {
+        *self = Self::rewrite_user_labels_aux(label_gen, self, &HashMap::new()).0
+    }
+
     fn rewrite_user_labels_aux<'a>(
         label_gen: &mut label::Gen,
         instrseq: &Self,
@@ -997,7 +1020,7 @@ impl InstrSeq {
         }
     }
 
-    fn first(&self) -> Option<&Instruct> {
+    pub fn first(&self) -> Option<&Instruct> {
         match self {
             Self::Empty => None,
             Self::One(i) => {
@@ -1015,7 +1038,7 @@ impl InstrSeq {
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         match self {
             Self::Empty => true,
             Self::One(i) => Self::is_srcloc(i),

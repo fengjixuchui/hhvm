@@ -9,14 +9,13 @@ use ast_scope_rust::{Scope, ScopeItem};
 use closure_convert_rust::HoistKind;
 use emit_attribute_rust as emit_attribute;
 use emit_body_rust::{self as emit_body};
-use emit_fatal_rust as emit_fatal;
 use emit_memoize_helpers_rust as emit_memoize_helpers;
 use env::emitter::Emitter;
 use hhas_attribute_rust::{self as hhas_attribute, HhasAttribute};
 use hhas_body_rust::HhasBody;
 use hhas_function_rust::{self as hhas_function, HhasFunction};
 use hhbc_id_rust::{self as hhbc_id, Id};
-use instruction_sequence_rust::InstrSeq;
+use instruction_sequence_rust::{InstrSeq, Result};
 use naming_special_names_rust::user_attributes as ua;
 use options::HhvmFlags;
 use oxidized::{aast as a, ast as tast, ast_defs, pos::Pos};
@@ -28,7 +27,7 @@ pub fn emit_function(
     e: &mut Emitter,
     f: tast::Fun_,
     hoisted: HoistKind,
-) -> Result<Vec<HhasFunction>, emit_fatal::Error> {
+) -> Result<Vec<HhasFunction>> {
     use ast_defs::FunKind;
     use hhas_function::Flags;
     // TODO(hrust) ideally, we should be able to break f into parts and avoid cloning
@@ -85,7 +84,7 @@ pub fn emit_function(
     };
 
     let deprecation_info = hhas_attribute::deprecation_info(attrs.iter());
-    let (body, is_gen, is_pair_gen): (HhasBody, bool, bool) = {
+    let (body, is_gen, is_pair_gen): (Result<HhasBody>, bool, bool) = {
         let deprecation_info = if memoized { None } else { deprecation_info };
         let native = attrs.iter().any(|a| ua::is_native(&a.name));
         use emit_body::{Args as EmitBodyArgs, Flags as EmitBodyFlags};
@@ -100,12 +99,12 @@ pub fn emit_function(
         emit_body::emit_body(
             e,
             &f.namespace,
-            InstrSeq::make_null(),
             &vec![a::Def::mk_stmt(a::Stmt(
                 Pos::make_none(),
                 a::Stmt_::Block(ast_body.clone()),
             ))],
-            EmitBodyArgs {
+            InstrSeq::make_null(),
+            &mut EmitBodyArgs {
                 flags,
                 deprecation_info: &deprecation_info,
                 default_dropthrough: None,
@@ -131,6 +130,7 @@ pub fn emit_function(
         None
     };
     let name: String = renamed_id.into();
+    let body = body?;
     let normal_function = HhasFunction {
         attributes: attrs,
         name: name.into(),

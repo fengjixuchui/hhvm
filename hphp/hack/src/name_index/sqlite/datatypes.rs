@@ -25,9 +25,10 @@ pub(crate) struct SqlitePathBuf {
 impl FromSql for SqlitePrefix {
     fn column_result(value: ValueRef) -> FromSqlResult<Self> {
         match value {
-            ValueRef::Integer(i) => Ok(SqlitePrefix {
-                value: Prefix::try_from(i as usize).unwrap(),
-            }),
+            ValueRef::Integer(i) => match Prefix::try_from(i as usize) {
+                Ok(value) => Ok(SqlitePrefix { value }),
+                Err(_) => Err(FromSqlError::OutOfRange(i)),
+            },
             _ => Err(FromSqlError::InvalidType),
         }
     }
@@ -44,9 +45,9 @@ impl FromSql for SqlitePathBuf {
     }
 }
 
-pub(crate) struct Convert;
+pub(crate) mod convert {
+    use super::*;
 
-impl Convert {
     pub fn ids_to_string(ids: &[Id]) -> String {
         let ids = ids
             .into_iter()

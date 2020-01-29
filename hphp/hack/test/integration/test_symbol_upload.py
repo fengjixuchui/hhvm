@@ -46,11 +46,19 @@ max_workers = 2
 
         # hardcoded map of valid keys
         cls.valid_keys = {
-            "hack.ClassDeclaration.1": ["name", "is_abstract", "is_final"],
+            "hack.ClassDeclaration.1": ["name"],
+            "hack.ClassDefinition.1": [
+                "declaration",
+                "is_abstract",
+                "is_final",
+                "members",
+            ],
             "hack.DeclarationLocation.1": ["declaration", "file", "span"],
             "hack.FileXRefs.1": ["file", "xrefs"],
+            "hack.InterfaceDeclaration.1": ["name"],
             "name": ["key"],
-            "declaration": ["class_"],
+            "declaration": ["container", int],
+            "container": ["class_", "interface_"],
             "id": [int],
             "key": [str],
         }
@@ -68,8 +76,10 @@ max_workers = 2
         # starts off as json array
         all_preds = [
             "hack.ClassDeclaration.1",
+            "hack.ClassDefinition.1",
             "hack.DeclarationLocation.1",
             "hack.FileXRefs.1",
+            "hack.InterfaceDeclaration.1",
         ]
 
         for json_obj in json_array:

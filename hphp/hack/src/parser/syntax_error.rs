@@ -695,7 +695,7 @@ pub const global_in_const_decl: Error =
 pub const parent_static_const_decl: Error =
     Cow::Borrowed("Cannot use static or parent::class in constant declaration");
 pub const no_async_before_lambda_body: Error =
-    Cow::Borrowed("Unexpected use of async {...} as lambda expression");
+    Cow::Borrowed("Don't use () ==> async { ... }. Instead, use: async () ==> { ... }");
 pub const halt_compiler_top_level_only: Error =
     Cow::Borrowed("__halt_compiler function should appear only at the top level");
 pub fn invalid_number_of_args(name: &str, n: usize) -> Error {
@@ -917,3 +917,13 @@ pub fn invalid_typehint_alias(alias: &str, hint: &str) -> Error {
 }
 pub const halt_compiler_is_disabled: Error =
     Cow::Borrowed("__halt_compiler() is not supported in Hack");
+
+pub const function_pointer_bad_recv: Error =
+    Cow::Borrowed("Function pointers must be explicitly specified");
+
+pub const local_variable_with_type: Error =
+    Cow::Borrowed("Local variables cannot have type annotations in Hack.");
+
+pub const function_pointers_disabled: Error = Cow::Borrowed(
+    "Function pointers are not enabled. Use the hhvm.hack.lang.enable_first_class_function_pointers parser flag",
+);

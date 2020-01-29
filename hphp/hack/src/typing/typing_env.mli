@@ -12,6 +12,8 @@ open Decl_provider
 open Typing_defs
 module TPEnv = Type_parameter_env
 
+val simplify_unions_ref : (env -> locl_ty -> env * locl_ty) ref
+
 val show_env : env -> string
 
 val pp_env : Format.formatter -> env -> unit
@@ -112,6 +114,8 @@ val set_log_level : env -> string -> int -> env
 val get_log_level : env -> string -> int
 
 val set_env_log_function : (Pos.t -> string -> env -> env -> unit) -> unit
+
+val log_env_change_ : string -> ?level:int -> env -> env * 'res -> env * 'res
 
 val log_env_change : string -> ?level:int -> env -> env -> env
 
@@ -313,8 +317,7 @@ val get_tyvar_appears_invariantly : env -> Ident.t -> bool
 
 val is_global_tyvar : env -> Ident.t -> bool
 
-val new_global_tyvar :
-  ?variance:Ast_defs.variance -> env -> Ident.t -> Pos.t -> env
+val new_global_tyvar : env -> Ident.t -> Typing_reason.t -> env * locl_ty
 
 (** At the end of typechecking a function body, extract the remaining
 inference env, which should only contain global type variables. *)
@@ -333,6 +336,9 @@ val set_tyvar_pu_access :
   env -> int -> locl_ty -> Aast.sid -> locl_ty -> Aast.sid -> env
 
 val get_tyvar_type_consts : env -> int -> (Aast.sid * locl_ty) SMap.t
+
+val initialize_tyvar_as_in :
+  as_in:Typing_inference_env.t_global -> env -> int -> env
 
 val copy_tyvar_from_genv_to_env :
   Ident.t -> to_:env -> from:Typing_inference_env.t_global -> env * Ident.t
@@ -405,3 +411,11 @@ val update_variance_after_bind : env -> int -> Typing_defs.locl_ty -> env
 val is_consistent : env -> bool
 
 val mark_inconsistent : env -> env
+
+(** Remove solved variable from environment by replacing it by its binding. *)
+val remove_var :
+  env ->
+  Ident.t ->
+  search_in_upper_bounds_of:ISet.t ->
+  search_in_lower_bounds_of:ISet.t ->
+  env

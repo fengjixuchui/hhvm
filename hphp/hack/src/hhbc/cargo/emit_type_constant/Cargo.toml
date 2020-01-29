@@ -1,6 +1,6 @@
 # @generated
 # @autocargo from //hphp/hack/src/hhbc:emit_type_constant_rust
-# Signature<<89196afd6e6d681569f11d2b7e07f5ccfcc1ae75>>
+# Signature
 [package]
 name = "emit_type_constant_rust"
 edition = "2018"
@@ -13,8 +13,9 @@ path = "../../emit_type_constant.rs"
 [dependencies]
 hhbc_id_rust = { path = "../hhbc_id" }
 hhbc_string_utils_rust = { path = "../string_utils" }
+instruction_sequence_rust = { path = "../instruction_sequence" }
 naming_special_names_rust = { path = "../../../naming" }
 options = { path = "../options" }
 oxidized = { path = "../../../oxidized" }
 runtime = { path = "../runtime" }
-# @end of Signature<<89196afd6e6d681569f11d2b7e07f5ccfcc1ae75>>
+# @end of Signature

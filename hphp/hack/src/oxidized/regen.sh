@@ -21,8 +21,8 @@ BUILD_AND_RUN="hphp/hack/scripts/build_and_run.sh"
   --rustfmt-path "$RUSTFMT_PATH"                                              \
   hphp/hack/src/annotated_ast/aast_defs.ml                                    \
   hphp/hack/src/annotated_ast/aast.ml                                         \
+  hphp/hack/src/annotated_ast/namespace_env.ml                                \
   hphp/hack/src/ast/ast_defs.ml                                               \
-  hphp/hack/src/ast/namespace_env.ml                                          \
   hphp/hack/src/decl/decl_defs.ml                                             \
   hphp/hack/src/decl/direct_decl_parser.ml                                    \
   hphp/hack/src/decl/shallow_decl_defs.ml                                     \
@@ -36,6 +36,7 @@ BUILD_AND_RUN="hphp/hack/scripts/build_and_run.sh"
   hphp/hack/src/options/typecheckerOptions.ml                                 \
   hphp/hack/src/parser/full_fidelity_parser_env.ml                            \
   hphp/hack/src/typing/typing_defs.ml                                         \
+  hphp/hack/src/typing/typing_defs_core.ml                                    \
   hphp/hack/src/typing/typing_reason.ml                                       \
   hphp/hack/src/utils/core/prim_defs.ml                                       \
   hphp/hack/src/parser/scoured_comments.ml                                    \

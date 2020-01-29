@@ -63,7 +63,11 @@ val contains_unsolved_tyvars : t -> Ident.t -> bool
 
 val make_tyvar_no_more_occur_in_tyvar : t -> int -> no_more_in:int -> t
 
+val bind : t -> ?tyvar_pos:Pos.t -> Ident.t -> locl_ty -> t
+
 val add : t -> ?tyvar_pos:Pos.t -> Ident.t -> locl_ty -> t
+
+val get_direct_binding : t -> Ident.t -> locl_ty option
 
 val get_type : t -> Reason.t -> Ident.t -> t * locl_ty
 
@@ -117,7 +121,9 @@ val get_tyvar_appears_invariantly : t -> Ident.t -> bool
 
 val is_global_tyvar : t -> Ident.t -> bool
 
-val new_global_tyvar : t -> Ident.t -> ?variance:Ast_defs.variance -> Pos.t -> t
+val new_global_tyvar : t -> Ident.t -> Typing_reason.t -> t * locl_ty
+
+val wrap_ty_in_var : t -> Typing_reason.t -> locl_ty -> t * locl_ty
 
 val get_tyvar_eager_solve_fail : t -> Ident.t -> bool
 
@@ -146,6 +152,8 @@ val get_vars : t -> Ident.t list
 
 val get_vars_g : t_global -> Ident.t list
 
+val initialize_tyvar_as_in : as_in:t_global -> t -> int -> t
+
 val copy_tyvar_from_genv_to_env :
   Ident.t -> to_:t -> from:t_global -> t * Ident.t
 
@@ -173,3 +181,11 @@ val compress_g : t_global -> t_global
 (** Split multiple global environments into (weakly) connected components. *)
 val connected_components_g :
   t_global_with_pos list -> t_global_with_pos list list
+
+(** Remove solved variable from environment by replacing it by its binding. *)
+val remove_var :
+  t ->
+  Ident.t ->
+  search_in_upper_bounds_of:ISet.t ->
+  search_in_lower_bounds_of:ISet.t ->
+  t

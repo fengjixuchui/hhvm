@@ -575,6 +575,7 @@ struct RuntimeOption {
   static std::string ProfDataTag;
   static bool DumpPreciseProfData;
   static bool EnablePocketUniverses;
+  static bool EnableFirstClassFunctionPointers;
 
   // ENABLED (1) selects PHP7 behavior.
   static bool PHP7_IntSemantics;
@@ -831,6 +832,7 @@ struct RuntimeOption {
   F(uint32_t, JitRetranslateAllRequest, retranslateAllRequestDefault()) \
   F(uint32_t, JitRetranslateAllSeconds, retranslateAllSecondsDefault()) \
   F(bool,     JitPGOLayoutSplitHotCold, pgoLayoutSplitHotColdDefault()) \
+  F(bool,     JitPGOVasmBlockCounters, true)                            \
   F(bool, JitLayoutPrologueSplitHotCold, layoutPrologueSplitHotColdDefault()) \
   F(bool, JitLayoutProfileSplitHotCold, true)                           \
   F(double,   JitLayoutHotThreshold,   0.05)                            \
@@ -963,6 +965,7 @@ struct RuntimeOption {
   F(uint32_t, DumpRegion,              0)                               \
   F(bool,     DumpCallTargets,         false)                           \
   F(bool,     DumpLayoutCFG,           false)                           \
+  F(bool,     DumpVBC,                 false)                           \
   F(bool, DumpAst,                     false)                           \
   F(bool, DumpTargetProfiles,          false)                           \
   F(bool, MapTgtCacheHuge,             false)                           \
@@ -1011,8 +1014,9 @@ struct RuntimeOption {
   F(bool, JitAlignUniqueStubs,         true)                            \
   F(uint32_t, SerDesSampleRate,            0)                           \
   F(bool, JitSerdesModeForceOff,       false)                           \
+  F(bool, JitDesUnitPreload,           false)                           \
   F(std::set<std::string>, JitSerdesDebugFunctions, {})                 \
-  F(uint32_t, JitSerializeOptProfSeconds,  0)                           \
+  F(uint32_t, JitSerializeOptProfSeconds, ServerExecutionMode() ? 300 : 0)\
   F(uint32_t, JitSerializeOptProfRequests, 0)                           \
   F(int, SimpleJsonMaxLength,        2 << 20)                           \
   F(uint32_t, JitSampleRate,               0)                           \

@@ -1239,6 +1239,10 @@ val class_get_reified : Pos.t -> unit
 
 val consistent_construct_reified : Pos.t -> unit
 
+val reified_generics_not_allowed : Pos.t -> unit
+
+val bad_function_pointer_construction : Pos.t -> unit
+
 val new_without_newable : Pos.t -> string -> unit
 
 val mutably_owned_argument_mismatch :
@@ -1285,3 +1289,5 @@ val invalid_sub_string : Pos.t -> string -> unit
 val php_lambda_disallowed : Pos.t -> unit
 
 val static_call_with_class_level_reified_generic : Pos.t -> Pos.t -> unit
+
+val exception_occurred : Pos.t -> unit

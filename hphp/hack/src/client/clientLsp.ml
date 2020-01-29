@@ -1392,6 +1392,8 @@ let do_definition_local
     Lwt.return results
   | Error edata -> raise (Server_nonfatal_exception edata)
 
+let snippet_re = Str.regexp {|[\$}]|} (* snippets must backslash-escape "$\}" *)
+
 let make_ide_completion_response
     (result : AutocompleteTypes.ide_result) (filename : string) :
     Completion.completionList Lwt.t =
@@ -1441,7 +1443,10 @@ let make_ide_completion_response
            && (not is_caret_followed_by_lparen)
            && completion.res_kind <> SearchUtils.SI_LocalVariable ->
       (* "method(${1:arg1}, ...)" but for args we just use param names. *)
-      let f i param = Printf.sprintf "${%i:%s}" (i + 1) param.param_name in
+      let f i param =
+        let name = Str.global_replace snippet_re "\\\\\\0" param.param_name in
+        Printf.sprintf "${%i:%s}" (i + 1) name
+      in
       let params = String.concat ~sep:", " (List.mapi details.params ~f) in
       ( `InsertText (Printf.sprintf "%s(%s)" completion.res_name params),
         SnippetFormat )
@@ -2433,13 +2438,13 @@ let get_client_ide_status (ide_service : ClientIdeService.t) :
       total = None;
       shortMessage = None;
     }
-  | ClientIdeService.Status.Stopped { Marshal_tools.message; _ } ->
+  | ClientIdeService.Status.Stopped { ClientIdeMessage.user_message; _ } ->
     {
       ShowStatusFB.request =
         ShowMessageRequest.
           {
             type_ = MessageType.ErrorMessage;
-            message = "IDE services stopped: " ^ message ^ ".";
+            message = "IDE services stopped: " ^ user_message ^ ".";
             actions = [{ title = client_ide_restart_button_text }];
           };
       progress = None;
@@ -3251,8 +3256,11 @@ let run_ide_service (env : env) (ide_service : ClientIdeService.t) : unit Lwt.t
     | Ok () ->
       let%lwt () = ClientIdeService.serve ide_service in
       Lwt.return_unit
-    | Error { Marshal_tools.message; _ } ->
-      log "IDE services could not be initialized: %s" message;
+    | Error { ClientIdeMessage.user_message; log_string; is_actionable; _ } ->
+      log "IDE services could not be initialized: %s" log_string;
+      Lsp_helpers.log_error to_stdout user_message;
+      if is_actionable then
+        Lsp_helpers.showMessage_error to_stdout ("Hack failure: " ^ user_message);
       Lwt.return_unit
   ) else
     Lwt.return_unit
@@ -3418,6 +3426,7 @@ let handle_client_message
         let id = NumberId (Jsonrpc.get_next_request_id ()) in
         let request = do_didChangeWatchedFiles_registerCapability () in
         to_stdout (print_lsp_request id request);
+        (* TODO: our handler should really handle an error response properly *)
         let handler _response state = Lwt.return state in
         requests_outstanding :=
           IdMap.add id (request, handler) !requests_outstanding
@@ -3928,6 +3937,8 @@ let handle_tick
 
 let main (init_id : string) (env : env) : Exit_status.t Lwt.t =
   Printexc.record_backtrace true;
+  Hh_logger.Level.set_min_level_file Hh_logger.Level.Info;
+  Hh_logger.Level.set_min_level_stderr Hh_logger.Level.Error;
   if env.verbose then Hh_logger.Level.set_min_level Hh_logger.Level.Debug;
   ref_from := env.from;
   HackEventLogger.set_from env.from;

@@ -390,11 +390,7 @@ let make_param_local_ty env decl_hint param =
   let r = Reason.Rwitness param.param_pos in
   let (env, ty) =
     match decl_hint with
-    | None ->
-      if TCO.global_inference (Env.get_tcopt env) then
-        Env.fresh_type_reason ~variance:Ast_defs.Contravariant env r
-      else
-        (env, mk (r, TUtils.tany env))
+    | None -> (env, mk (r, TUtils.tany env))
     | Some ty ->
       let { et_type = ty; _ } =
         Typing_enforceability.compute_enforced_and_pessimize_ty
@@ -696,11 +692,7 @@ and fun_def tcopt f :
       let (env, locl_ty) =
         match decl_ty with
         | None ->
-          Typing_return.make_default_return
-            ~is_method:false
-            ~is_global_inference_on:(TCO.global_inference (Env.get_tcopt env))
-            env
-            f.f_name
+          (env, Typing_return.make_default_return ~is_method:false env f.f_name)
         | Some ty ->
           let localize env ty = Phase.localize_with_self env ty in
           Typing_return.make_return_type localize env ty
@@ -1607,7 +1599,10 @@ and expr
       (Printf.sprintf
          "Exception while typechecking expression at position %s"
          pos);
-    Caml.Printexc.raise_with_backtrace e stack
+    prerr_endline (Caml.Printexc.to_string e);
+    Caml.Printexc.print_raw_backtrace stderr stack;
+    Errors.exception_occurred p;
+    make_result env p Aast.Any @@ err_witness env p
 
 and raw_expr
     ?(accept_using_var = false)
@@ -2199,6 +2194,45 @@ and expr_
     | Some (ty, _) ->
       let (env, ty) = Phase.localize_with_self ~pos:p env ty in
       make_result env p (Aast.Id id) ty)
+  | FunctionPointer
+      ((pos_obj, Obj_get (e1, (pos_id, Id sid), null_flavor)), targs) ->
+    let (env, te, ty1) = expr env e1 in
+    let nullsafe =
+      match null_flavor with
+      | OG_nullsafe -> Some pos_obj (* What is the correct position to give? *)
+      | OG_nullthrows -> None
+    in
+    let (env, (result, tal)) =
+      TOG.obj_get_
+        ~inst_meth:false (* Allow private and public I guess *)
+        ~obj_pos:p
+        ~is_method:true
+        ~nullsafe (* Why is this is a pos option? *)
+        ~coerce_from_ty:None (* What's coerce_from_ty actually mean? *)
+        ~pos_params:None (* No idea what this means either *)
+        ~explicit_targs:targs
+        ~is_nonnull:false (* Hmmm: No idea here. Does this depend on nullsafe *)
+        env
+        ty1
+        (CIexpr e1)
+        sid
+        (fun x -> x) (* Not sure what this is either *)
+        (* Sure why not? *)
+        Errors.unify_error
+    in
+    let (env, result) =
+      Env.FakeMembers.check_instance_invalid env e1 (snd sid) result
+    in
+    let id =
+      Tast.make_typed_expr
+        pos_id
+        (mk (Reason.Rnone, TUtils.tany env))
+        (Aast.Id sid)
+    in
+    let (env, result, ty) =
+      make_result env pos_obj (Aast.Obj_get (te, id, null_flavor)) result
+    in
+    make_result env p (Aast.FunctionPointer (result, tal)) ty
   | Method_id (instance, meth) ->
     (* Method_id is used when creating a "method pointer" using the magic
      * inst_meth function.
@@ -2321,6 +2355,26 @@ and expr_
           p
           (Aast.Method_caller (pos_cname, meth_name))
           (mk (Reason.Rwitness pos, Typing_utils.tany env))))
+  | FunctionPointer ((pos_cc, Class_const ((cpos, cid), meth)), targs) ->
+    let (env, _, ce, cty) =
+      static_class_id ~check_constraints:true cpos env [] cid
+    in
+    let (env, (fpty, tal)) =
+      class_get
+        ~is_method:true
+        ~is_const:false
+        ~incl_tc:false (* What is this? *)
+        ~coerce_from_ty:None (* What is this? *)
+        ~explicit_targs:targs
+        env
+        cty
+        meth
+        cid
+    in
+    let (env, result, ty) =
+      make_result env pos_cc (Aast.Class_const (ce, meth)) fpty
+    in
+    make_result env p (Aast.FunctionPointer (result, tal)) ty
   | Smethod_id (c, meth) ->
     (* Smethod_id is used when creating a "method pointer" using the magic
      * class_meth function.
@@ -2553,6 +2607,20 @@ and expr_
         ~in_suspend:false
     in
     (env, te, ty)
+  | FunctionPointer ((pos_id, Id fid), targs) ->
+    let (env, fty, targs) = fun_type_of_id env fid targs [] in
+    let id =
+      Tast.make_typed_expr
+        pos_id
+        (mk (Reason.Rnone, TUtils.tany env))
+        (Aast.Id fid)
+    in
+    let e = Aast.FunctionPointer (id, targs) in
+    make_result env p e fty
+  | FunctionPointer (_e, _targs) ->
+    (* Also a parse error *)
+    Errors.bad_function_pointer_construction p;
+    expr_error env Reason.Rnone outer
   | Binop (Ast_defs.QuestionQuestion, e1, e2) ->
     let (env, te1, ty1) = raw_expr ~lhs_of_null_coalesce:true env e1 in
     let (env, te2, ty2) = expr ?expected env e2 in
@@ -3644,7 +3712,7 @@ and anon_bind_param params (env, t_params) ty : env * Tast.fun_param list =
         { (Phase.env_with_self env) with from_class = Some CIstatic }
       in
       let (env, h) = Phase.localize ~ety_env env h in
-      let pos = get_pos ty in
+      let pos = get_pos h in
       let env =
         Typing_coercion.coerce_type
           pos
@@ -3685,7 +3753,7 @@ and anon_bind_variadic env vparam variadic_ty =
         { (Phase.env_with_self env) with from_class = Some CIstatic }
       in
       let (env, h) = Phase.localize ~ety_env env h in
-      let pos = get_pos variadic_ty in
+      let pos = get_pos h in
       let env =
         Typing_coercion.coerce_type
           pos
@@ -3772,23 +3840,23 @@ and stash_conts_for_anon env p is_anon captured f =
   (env, tfun, result)
 
 (* Make a type-checking function for an anonymous function. *)
-and anon_make tenv p f ft idl is_anon outer =
+and anon_make tenv lambda_pos f ft idl is_anon outer =
   let anon_lenv = tenv.lenv in
   let is_typing_self = ref false in
   let nb = Nast.assert_named_body f.f_body in
   let is_coroutine = Ast_defs.(equal_fun_kind f.f_fun_kind FCoroutine) in
   ( is_coroutine,
     ref ([], []),
-    p,
+    lambda_pos,
     (* Here ret_ty should include Awaitable wrapper *)
     fun ?el ?ret_ty env supplied_params supplied_arity ->
       if !is_typing_self then (
-        Errors.anonymous_recursive p;
-        expr_error env (Reason.Rwitness p) outer
+        Errors.anonymous_recursive lambda_pos;
+        expr_error env (Reason.Rwitness lambda_pos) outer
       ) else (
         is_typing_self := true;
         Env.anon anon_lenv env (fun env ->
-            stash_conts_for_anon env p is_anon idl (fun env ->
+            stash_conts_for_anon env lambda_pos is_anon idl (fun env ->
                 let env = Env.clear_params env in
                 let make_variadic_arg env varg tyl =
                   let remaining_types =
@@ -3891,11 +3959,11 @@ and anon_make tenv p f ft idl is_anon outer =
                     begin
                       match ret_ty with
                       | None ->
-                        let (env, ret_ty) = Env.fresh_type env p in
-                        (env, Typing_return.wrap_awaitable env p ret_ty)
+                        let (env, ret_ty) = Env.fresh_type env lambda_pos in
+                        (env, Typing_return.wrap_awaitable env lambda_pos ret_ty)
                       | Some ret_ty ->
                         (* We might need to force it to be Awaitable if it is a type variable *)
-                        Typing_return.force_awaitable env p ret_ty
+                        Typing_return.force_awaitable env lambda_pos ret_ty
                     end
                   | Some ret ->
                     (* If a 'this' type appears it needs to be compatible with the
@@ -3938,7 +4006,7 @@ and anon_make tenv p f ft idl is_anon outer =
                   if (not implicit_return) || Nast.named_body_is_unsafe nb then
                     env
                   else
-                    fun_implicit_return env p hret f.f_fun_kind
+                    fun_implicit_return env lambda_pos hret f.f_fun_kind
                 in
                 is_typing_self := false;
                 let annotation =
@@ -3974,12 +4042,15 @@ and anon_make tenv p f ft idl is_anon outer =
                     Aast.f_static = f.f_static;
                   }
                 in
-                let ty = mk (Reason.Rwitness p, Tfun ft) in
+                let ty = mk (Reason.Rwitness lambda_pos, Tfun ft) in
                 let te =
-                  if is_anon then
-                    Tast.make_typed_expr p ty (Aast.Efun (tfun_, idl))
-                  else
-                    Tast.make_typed_expr p ty (Aast.Lfun (tfun_, idl))
+                  Tast.make_typed_expr
+                    lambda_pos
+                    ty
+                    ( if is_anon then
+                      Aast.Efun (tfun_, idl)
+                    else
+                      Aast.Lfun (tfun_, idl) )
                 in
                 let env = Env.set_tyvar_variance env ty in
                 (env, te, hret)))
@@ -5588,14 +5659,11 @@ and dispatch_call
                 match SMap.find_opt case et.tpu_case_values with
                 | Some (_, case) -> case
                 | None ->
-                  failwithf
-                    "TODO(T36532263): PU_identifier: %s has no case value %s"
-                    enum
-                    case
-                    ()
+                  Errors.pu_typing cpos "identifier" case;
+                  mk (Reason.Rwitness cpos, Terr)
               in
               (* Type variable to type the parameter of the Pu expression call.
-                 We use a variable in case there is some dependency *)
+                     We use a variable in case there is some dependency *)
               (* let (env, fresh_ty) = Env.fresh_invariant_type_var env cpos in *)
               let (env, fresh_ty) = Env.fresh_type env cpos in
               (* It's original upper bound is the PU enum itself *)
@@ -6766,14 +6834,15 @@ and call
                 in
                 let destructure_ty =
                   ConstraintType
-                    ( Reason.Runpack_param (fst e, pos_def, consumed),
-                      Tdestructure
-                        {
-                          d_required;
-                          d_optional;
-                          d_variadic;
-                          d_kind = SplatUnpack;
-                        } )
+                    (mk_constraint_type
+                       ( Reason.Runpack_param (fst e, pos_def, consumed),
+                         Tdestructure
+                           {
+                             d_required;
+                             d_optional;
+                             d_variadic;
+                             d_kind = SplatUnpack;
+                           } ))
                 in
                 let (env, te, ty) = expr env e in
                 (* Populate the type variables from the expression in the splat *)
@@ -6861,8 +6930,7 @@ and call
                 let (env, ty) = Env.fresh_type env pos in
                 let destructure_ty =
                   MakeType.simple_variadic_splat
-                    (Reason.Runpack_param
-                       (Reason.to_pos (fst ety), Reason.to_pos r2, 0))
+                    (Reason.Runpack_param (get_pos ety, Reason.to_pos r2, 0))
                     ty
                 in
                 let env =
@@ -6935,21 +7003,14 @@ and call
               (env, (tel, typed_unpack_element, ty)))
           | _ ->
             bad_call env pos efty;
-            let env =
-              call_untyped_unpack
-                env
-                (Reason.to_pos (fst efty))
-                unpacked_element
-            in
+            let env = call_untyped_unpack env (get_pos efty) unpacked_element in
             (env, ([], None, err_witness env pos)))
     in
     match resl with
     | [res] -> res
     | _ ->
       bad_call env pos fty;
-      let env =
-        call_untyped_unpack env (Reason.to_pos (fst fty)) unpacked_element
-      in
+      let env = call_untyped_unpack env (get_pos fty) unpacked_element in
       (env, ([], None, err_witness env pos))
 
 and split_remaining_params_required_optional ft remaining_params =
@@ -7216,7 +7277,6 @@ and condition
       { (Phase.env_with_self env) with from_class = Some CIstatic }
     in
     let (env, hint_ty) = Phase.localize_hint ~ety_env env h in
-    let (env, hint_ty) = Env.expand_type env hint_ty in
     let reason = Reason.Ris (fst h) in
     let refine_type env hint_ty =
       let (ivar_pos, ivar_ty) = fst ivar in
@@ -7236,8 +7296,10 @@ and condition
     refine_type env hint_ty
   | _ -> env
 
-(** Transform a hint like `A<_>` to a localized type like `A<T#1>` *)
+(** Transform a hint like `A<_>` to a localized type like `A<T#1>` for refinment of
+an instance variable. ivar_ty is the previous type of that instance variable. *)
 and class_for_refinement env p reason ivar_pos ivar_ty hint_ty =
+  let (env, hint_ty) = Env.expand_type env hint_ty in
   match (get_node ivar_ty, get_node hint_ty) with
   | (_, Tclass (((_, cid) as _c), _, tyl)) ->
     begin
@@ -7381,7 +7443,7 @@ and safely_refine_class_type
    * We take a simple approach:
    *    For a fresh type parameter T#1, if
    *      - There is an eqality constraint T#1 = t,
-   *      - T#1 is covariant, and T# has upper bound t (or mixed if absent)
+   *      - T#1 is covariant, and T#1 has upper bound t (or mixed if absent)
    *      - T#1 is contravariant, and T#1 has lower bound t (or nothing if absent)
    *    then replace T#1 with t.
    * This is done in Type_parameter_env_ops.simplify_tpenv
@@ -7619,10 +7681,10 @@ and class_def tcopt c =
 (* The two following functions enable us to retrieve the function (or class)
   header from the shared mem. Note that they only return a non None value if
   global inference is on *)
-and get_decl_method_header tcopt cls method_id =
+and get_decl_method_header tcopt cls method_id ~is_static =
   let is_global_inference_on = TCO.global_inference tcopt in
   if is_global_inference_on then
-    match Cls.get_method cls method_id with
+    match Cls.get_any_method ~is_static cls method_id with
     | Some { ce_type = (lazy ty); _ } ->
       begin
         match get_node ty with
@@ -7764,6 +7826,13 @@ and class_def_ env c tc =
     && Cls.members_fully_known tc
   then (
     check_extend_abstract_meth ~is_final pc (Cls.methods tc);
+    (match fst (Cls.construct tc) with
+    | Some constr ->
+      check_extend_abstract_meth
+        ~is_final
+        pc
+        (Sequence.singleton (SN.Members.__construct, constr))
+    | None -> ());
     check_extend_abstract_meth ~is_final pc (Cls.smethods tc);
     check_extend_abstract_prop ~is_final pc (Cls.sprops tc);
     check_extend_abstract_const ~is_final pc (Cls.consts tc);
@@ -8078,7 +8147,7 @@ and pu_enum_def
           in
           (env, ty, Some (ExpectedTy.make (fst sid) Reason.URhint ty))
         in
-        let (_env, expr, ty') = expr ?expected env map_expr in
+        let (env, expr, ty') = expr ?expected env map_expr in
         ignore
           (Typing_ops.sub_type
              (fst sid)
@@ -8351,6 +8420,7 @@ and class_type_param env ct =
   The same goes for parameter types, but this time we force them to be contravariant
 *)
 and set_tyvars_variance_in_callable env return_ty param_tys =
+  let (env, return_ty) = Env.expand_type env return_ty in
   let env =
     match get_node return_ty with
     | Tvar v -> Env.set_tyvar_appears_covariantly env v
@@ -8359,6 +8429,7 @@ and set_tyvars_variance_in_callable env return_ty param_tys =
   List.fold
     ~init:env
     ~f:(fun env ty ->
+      let (env, ty) = Env.expand_type env ty in
       match get_node ty with
       | Tvar v -> Env.set_tyvar_appears_contravariantly env v
       | _ -> env)
@@ -8413,10 +8484,15 @@ and merge_decl_header_with_hints ~params ~ret ~variadic decl_header env =
 
 and method_def env cls m =
   with_timeout env m.m_name ~do_:(fun env ->
+      let initial_env = env in
       (* reset the expression dependent display ids for each method body *)
       Reason.expr_display_id_map := IMap.empty;
       let decl_header =
-        get_decl_method_header (Env.get_tcopt env) cls (snd m.m_name)
+        get_decl_method_header
+          (Env.get_tcopt env)
+          cls
+          (snd m.m_name)
+          ~is_static:m.m_static
       in
       let pos = fst m.m_name in
       let env = Env.open_tyvars env (fst m.m_name) in
@@ -8476,7 +8552,7 @@ and method_def env cls m =
             env
       in
       let env = Env.clear_params env in
-      let (decl_ty, params_decl_ty, variadicity_decl_ty) =
+      let (ret_decl_ty, params_decl_ty, variadicity_decl_ty) =
         merge_decl_header_with_hints
           ~params:m.m_params
           ~ret:m.m_ret
@@ -8486,13 +8562,9 @@ and method_def env cls m =
       in
       let env = Env.set_fn_kind env m.m_fun_kind in
       let (env, locl_ty) =
-        match decl_ty with
+        match ret_decl_ty with
         | None ->
-          Typing_return.make_default_return
-            ~is_method:true
-            ~is_global_inference_on:(TCO.global_inference (Env.get_tcopt env))
-            env
-            m.m_name
+          (env, Typing_return.make_default_return ~is_method:true env m.m_name)
         | Some ret ->
           (* If a 'this' type appears it needs to be compatible with the
            * late static type
@@ -8509,7 +8581,7 @@ and method_def env cls m =
           env
           ~is_explicit:(Option.is_some (hint_of_type_hint m.m_ret))
           locl_ty
-          decl_ty
+          ret_decl_ty
       in
       let (env, param_tys) =
         List.zip_exn m.m_params params_decl_ty
@@ -8594,6 +8666,7 @@ and method_def env cls m =
         }
       in
       let (env, global_inference_env) = Env.extract_global_inference_env env in
+      let env = Env.log_env_change "method_def" initial_env env in
       ( Typing_lambda_ambiguous.suggest_method_def env method_def,
         (pos, global_inference_env) ))
 

@@ -185,16 +185,13 @@ let parse_options () =
   let disallow_ambiguous_lambda = ref None in
   let disallow_array_typehint = ref None in
   let disallow_array_literal = ref None in
-  let no_fallback_in_namespaces = ref None in
   let dynamic_view = ref None in
-  let allow_user_attributes = ref None in
   let auto_namespace_map = ref None in
   let unsafe_rx = ref (Some false) in
   let log_inference_constraints = ref None in
   let new_inference_lambda = ref (Some false) in
   let timeout = ref None in
   let disallow_invalid_arraykey = ref None in
-  let allow_ref_param_on_constructor = ref (Some false) in
   let disallow_byref_dynamic_calls = ref (Some false) in
   let disallow_byref_calls = ref (Some false) in
   let set_bool x () = x := Some true in
@@ -236,12 +233,10 @@ let parse_options () =
   let disallow_discarded_nullable_awaitables = ref false in
   let enable_xhp_class_modifier = ref false in
   let verbosity = ref 0 in
+  let enable_first_class_function_pointers = ref false in
   let options =
     [
       ("--ai", Arg.String set_ai, " Run the abstract interpreter (Zoncolan)");
-      ( "--allow-user-attributes",
-        Arg.Unit (set_bool allow_user_attributes),
-        " Allow all user attributes" );
       ( "--deregister-attributes",
         Arg.Unit (set_bool deregister_attributes),
         " Ignore all functions with attribute '__PHPStdLib'" );
@@ -365,10 +360,6 @@ let parse_options () =
       ( "--disallow-array-literal",
         Arg.Unit (set_bool disallow_array_literal),
         " Disallow usage of array literals." );
-      ( "--no-fallback-in-namespaces",
-        Arg.Unit (set_bool no_fallback_in_namespaces),
-        " Treat foo() as namespace\\foo() and MY_CONST as namespace\\MY_CONST."
-      );
       ( "--dynamic-view",
         Arg.Unit (set_bool dynamic_view),
         " Turns on dynamic view, replacing Tany with dynamic" );
@@ -408,9 +399,6 @@ let parse_options () =
       ( "--check-xhp-attribute",
         Arg.Set check_xhp_attribute,
         " Typechecks xhp required attributes" );
-      ( "--allow-ref-param-on-constructor",
-        Arg.Unit (set_bool allow_ref_param_on_constructor),
-        "Allow class constructors to take reference parameters" );
       ( "--disallow-byref-dynamic-calls",
         Arg.Unit (set_bool disallow_byref_dynamic_calls),
         " Disallow passing arguments by reference to dynamically called functions [e.g. $foo(&$bar)]"
@@ -525,6 +513,9 @@ let parse_options () =
       ( "--verbose",
         Arg.Int (fun v -> verbosity := v),
         "Verbosity as an integer." );
+      ( "--enable-first-class-function-pointers",
+        Arg.Set enable_first_class_function_pointers,
+        "Enable first class funciton pointers using <> syntax" );
     ]
   in
   let options = Arg.align ~limit:25 options in
@@ -586,6 +577,8 @@ let parse_options () =
       ~glean_port:!glean_port
       ~glean_reponame:!glean_reponame
       ~po_enable_xhp_class_modifier:!enable_xhp_class_modifier
+      ~po_enable_first_class_function_pointers:
+        !enable_first_class_function_pointers
       ()
   in
   let tcopt =
@@ -681,9 +674,7 @@ let print_global_inference_envs tcopt ~verbosity gienvs =
 let merge_global_inference_envs_opt tcopt gienvs =
   if TypecheckerOptions.global_inference tcopt then
     let open Typing_global_inference in
-    let env =
-      Typing_env.empty GlobalOptions.default Relative_path.default None
-    in
+    let env = Typing_env.empty tcopt Relative_path.default None in
     let state_errors = StateErrors.mk_empty () in
     let (env, state_errors) =
       StateConstraintGraph.merge_subgraphs (env, state_errors) gienvs
@@ -703,7 +694,7 @@ let print_global_inference_env
     print_endline (String.map s (const '='))
   in
   print_header (Printf.sprintf "%sd environment" step_name);
-  Typing_log.hh_show_env Pos.none env;
+  Typing_log.hh_show_full_env Pos.none env;
 
   print_header (Printf.sprintf "%s errors" step_name);
   List.iter
@@ -1148,7 +1139,8 @@ let dump_debug_glean_deps
 let scan_files_for_symbol_index
     (filename : Relative_path.t)
     (popt : ParserOptions.t)
-    (sienv : SearchUtils.si_env) : SearchUtils.si_env =
+    (sienv : SearchUtils.si_env)
+    (ctx : Provider_context.t) : SearchUtils.si_env =
   let files_contents = Multifile.file_to_files filename in
   let (_, individual_file_info) = parse_name_and_decl popt files_contents in
   let fileinfo_list = Relative_path.Map.values individual_file_info in
@@ -1156,9 +1148,7 @@ let scan_files_for_symbol_index
     List.map fileinfo_list ~f:(fun fileinfo ->
         (filename, SearchUtils.Full fileinfo, SearchUtils.TypeChecker))
   in
-  let sienv_ref = ref sienv in
-  SymbolIndex.update_files ~sienv:sienv_ref ~paths:transformed_list;
-  !sienv_ref
+  SymbolIndex.update_files ~ctx ~sienv ~paths:transformed_list
 
 let handle_mode
     mode
@@ -1207,7 +1197,6 @@ let handle_mode
   | Autocomplete
   | Autocomplete_manually_invoked ->
     let path = expect_single_file () in
-    let sienv = scan_files_for_symbol_index path popt sienv in
     let content = cat (Relative_path.to_absolute path) in
     (* Search backwards: there should only be one /real/ case. If there's multiple, *)
     (* guess that the others are preceding explanation comments *)
@@ -1231,6 +1220,7 @@ let handle_mode
         ~pos
         ~is_manually_invoked
     in
+    let sienv = scan_files_for_symbol_index path popt sienv ctx in
     let result =
       ServerAutoComplete.go_at_auto332_ctx
         ~ctx
@@ -1248,7 +1238,8 @@ let handle_mode
   | Ffp_autocomplete ->
     iter_over_files (fun filename ->
         try
-          let sienv = scan_files_for_symbol_index filename popt sienv in
+          let ctx = Provider_context.empty ~tcopt in
+          let sienv = scan_files_for_symbol_index filename popt sienv ctx in
           let file_text = cat (Relative_path.to_absolute filename) in
           (* TODO: Use a magic word/symbol to identify autocomplete location instead *)
           let args_regex = Str.regexp "AUTOCOMPLETE [1-9][0-9]* [1-9][0-9]*" in
@@ -1504,20 +1495,23 @@ let handle_mode
         ~path:(Relative_path.create_detect_prefix filename)
         ~file_input:(ServerCommandTypes.FileContent content)
     in
-    Option.Monad_infix.(
-      ServerCommandTypes.Done_or_retry.(
-        let results =
+    let open Option.Monad_infix in
+    let open ServerCommandTypes.Done_or_retry in
+    let results =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
           ServerFindRefs.(
             go_from_file_ctx ~ctx ~entry ~line ~column >>= fun (name, action) ->
-            go action include_defs genv env |> map_env ~f:(to_ide name) |> snd
+            go ctx action include_defs genv env
+            |> map_env ~f:(to_ide name)
+            |> snd
             |> function
             | Done r -> r
             | Retry ->
               failwith
               @@ "should only happen with prechecked files "
-              ^ "which are not a thing in hh_single_type_check")
-        in
-        ClientFindRefs.print_ide_readable results))
+              ^ "which are not a thing in hh_single_type_check"))
+    in
+    ClientFindRefs.print_ide_readable results
   | Go_to_impl (line, column) ->
     let filename = expect_single_file () in
     let naming_table = Naming_table.create files_info in

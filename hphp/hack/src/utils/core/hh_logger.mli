@@ -9,11 +9,8 @@
 
 val timestamp_string : unit -> string
 
-val dupe_log : (string * out_channel) option ref
-
+(** enables logging to a file (in addition to stderr which is always enabled) *)
 val set_log : string -> out_channel -> unit
-
-val get_log_name : unit -> string option
 
 val set_id : string -> unit
 
@@ -35,10 +32,16 @@ module Level : sig
     | Info
     | Debug
 
-  val min_level : unit -> t
-
+  (** overwrites min level for both stderr and file (if enabled) *)
   val set_min_level : t -> unit
 
+  (** overwrites min level for file (if enabled), but leaves stderr as is *)
+  val set_min_level_file : t -> unit
+
+  (** overwrites min level for stderr, but leaves file (if enabled) as is *)
+  val set_min_level_stderr : t -> unit
+
+  (** returns true if t passes either stderr or file min level (regardless whether file is enabled) *)
   val passes_min_level : t -> bool
 
   val log_duration : t -> string -> float -> float

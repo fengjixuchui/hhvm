@@ -5,7 +5,7 @@
 use crate::iterator::Iter;
 use label_rust::Label;
 use oxidized::aast::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 type Id = usize;
 type LabelSet = HashSet<String>;
@@ -27,7 +27,7 @@ pub enum Region {
     Using(Label, LabelSet),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct JumpTargets(Vec<Region>);
 impl JumpTargets {
     pub fn as_slice(&self) -> &[Region] {
@@ -183,16 +183,16 @@ impl JumpTargets {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, std::cmp::Ord, std::cmp::PartialOrd, Debug)]
 pub enum IdKey {
     IdReturn,
     IdLabel(Label),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Gen {
-    label_id_map: HashMap<IdKey, Id>,
-    labels_in_function: HashMap<String, bool>,
+    label_id_map: BTreeMap<IdKey, Id>,
+    labels_in_function: BTreeMap<String, bool>,
     function_has_goto: bool,
     jump_targets: JumpTargets,
 }
@@ -212,7 +212,7 @@ impl Gen {
         }
     }
 
-    pub fn get_labels_in_function(&self) -> &HashMap<String, bool> {
+    pub fn get_labels_in_function(&self) -> &BTreeMap<String, bool> {
         &self.labels_in_function
     }
 
@@ -220,7 +220,7 @@ impl Gen {
         self.function_has_goto
     }
 
-    pub fn set_labels_in_function(&mut self, labels_in_function: HashMap<String, bool>) {
+    pub fn set_labels_in_function(&mut self, labels_in_function: BTreeMap<String, bool>) {
         self.labels_in_function = labels_in_function;
     }
 

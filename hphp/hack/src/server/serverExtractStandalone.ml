@@ -18,8 +18,6 @@ module SN = Naming_special_names
 module Decl_provider = Decl_provider_ctx
 module Class = Decl_provider.Class
 
-exception NotFound
-
 (* Internal error: for example, we are generating code for a dependency on an enum,
    but the passed dependency is not an enum *)
 exception UnexpectedDependency
@@ -86,8 +84,13 @@ let global_dep_name dep =
 let get_fun_pos ctx name =
   Decl_provider.get_fun ctx name |> Option.map ~f:(fun decl -> decl.fe_pos)
 
+let get_fun_pos_exn ctx name = value_or_not_found name (get_fun_pos ctx name)
+
 let get_class_pos ctx name =
   Decl_provider.get_class ctx name |> Option.map ~f:(fun decl -> Class.pos decl)
+
+let get_class_pos_exn ctx name =
+  value_or_not_found name (get_class_pos ctx name)
 
 let get_typedef_pos ctx name =
   Decl_provider.get_typedef ctx name |> Option.map ~f:(fun decl -> decl.td_pos)
@@ -120,51 +123,114 @@ let get_dep_pos ctx dep =
     get_gconst_pos ctx name
   | RecordDef _ -> records_not_supported ()
 
-let make_mode_getter ~ctx ~get_pos ~find_in_file ~get_mode name =
-  let open Option in
-  get_pos ctx name >>= fun pos ->
-  find_in_file (Pos.filename pos) name >>| get_mode
+let make_nast_getter ~get_pos ~find_in_file ~naming =
+  let nasts = ref SMap.empty in
+  fun ctx name ->
+    if SMap.mem name !nasts then
+      Some (SMap.find name !nasts)
+    else
+      let open Option in
+      get_pos ctx name >>= fun pos ->
+      find_in_file (Pos.filename pos) name >>= fun nast ->
+      let nast = naming nast in
+      nasts := SMap.add name nast !nasts;
+      Some nast
 
-let get_fun_mode ctx =
-  make_mode_getter
-    ~ctx
+let get_fun_nast =
+  make_nast_getter
     ~get_pos:get_fun_pos
     ~find_in_file:Ast_provider.find_fun_in_file
-    ~get_mode:(fun fun_ -> fun_.Aast.f_mode)
+    ~naming:Naming.fun_
 
-let get_class_mode ctx =
-  make_mode_getter
-    ~ctx
+let get_fun_nast_exn ctx name = value_or_not_found name (get_fun_nast ctx name)
+
+let get_class_nast =
+  make_nast_getter
     ~get_pos:get_class_pos
     ~find_in_file:Ast_provider.find_class_in_file
-    ~get_mode:(fun class_ -> class_.Aast.c_mode)
+    ~naming:Naming.class_
 
-let get_typedef_mode ctx =
-  make_mode_getter
-    ~ctx
+let get_typedef_nast =
+  make_nast_getter
     ~get_pos:get_typedef_pos
     ~find_in_file:Ast_provider.find_typedef_in_file
-    ~get_mode:(fun typedef -> typedef.Aast.t_mode)
+    ~naming:Naming.typedef
 
-let get_gconst_mode ctx =
-  make_mode_getter
-    ~ctx
+let get_typedef_nast_exn ctx name =
+  value_or_not_found name (get_typedef_nast ctx name)
+
+let get_gconst_nast =
+  make_nast_getter
     ~get_pos:get_gconst_pos
     ~find_in_file:Ast_provider.find_gconst_in_file
-    ~get_mode:(fun gconst -> gconst.Aast.cst_mode)
+    ~naming:Naming.global_const
+
+let get_gconst_nast_exn ctx name =
+  value_or_not_found name (get_gconst_nast ctx name)
+
+let make_class_element_nast_getter ~get_elements ~get_element_name =
+  let elements_by_class_name = ref SMap.empty in
+  fun ctx class_name element_name ->
+    if SMap.mem class_name !elements_by_class_name then
+      SMap.find_opt element_name (SMap.find class_name !elements_by_class_name)
+    else
+      let open Option in
+      get_class_nast ctx class_name >>= fun class_ ->
+      let elements_by_element_name =
+        List.fold_left
+          (get_elements class_)
+          ~f:(fun elements element ->
+            SMap.add (get_element_name element) element elements)
+          ~init:SMap.empty
+      in
+      elements_by_class_name :=
+        SMap.add class_name elements_by_element_name !elements_by_class_name;
+      SMap.find_opt element_name elements_by_element_name
+
+let get_method_nast =
+  make_class_element_nast_getter
+    ~get_elements:(fun class_ -> class_.c_methods)
+    ~get_element_name:(fun method_ -> snd method_.m_name)
+
+let get_method_nast_exn ctx class_name method_name =
+  value_or_not_found
+    (class_name ^ "::" ^ method_name)
+    (get_method_nast ctx class_name method_name)
+
+let get_const_nast =
+  make_class_element_nast_getter
+    ~get_elements:(fun class_ -> class_.c_consts)
+    ~get_element_name:(fun const -> snd const.cc_id)
+
+let get_typeconst_nast =
+  make_class_element_nast_getter
+    ~get_elements:(fun class_ -> class_.c_typeconsts)
+    ~get_element_name:(fun typeconst -> snd typeconst.c_tconst_name)
+
+let get_prop_nast =
+  make_class_element_nast_getter
+    ~get_elements:(fun class_ -> class_.c_vars)
+    ~get_element_name:(fun class_var -> snd class_var.cv_id)
+
+let get_prop_nast_exn ctx class_name prop_name =
+  value_or_not_found
+    (class_name ^ "::" ^ prop_name)
+    (get_prop_nast ctx class_name prop_name)
+
+let get_fun_mode ctx name =
+  get_fun_nast ctx name |> Option.map ~f:(fun fun_ -> fun_.f_mode)
+
+let get_class_mode ctx name =
+  get_class_nast ctx name |> Option.map ~f:(fun class_ -> class_.c_mode)
+
+let get_typedef_mode ctx name =
+  get_typedef_nast ctx name |> Option.map ~f:(fun typedef -> typedef.t_mode)
+
+let get_gconst_mode ctx name =
+  get_gconst_nast ctx name |> Option.map ~f:(fun gconst -> gconst.cst_mode)
 
 let get_class_or_typedef_mode ctx name =
   Option.first_some (get_class_mode ctx name) (get_typedef_mode ctx name)
-
-let get_fun_nast ctx name =
-  let open Option in
-  get_fun_pos ctx name >>= fun pos ->
-  Ast_provider.find_fun_in_file (Pos.filename pos) name >>| Naming.fun_
-
-let get_class_nast ctx name =
-  let open Option in
-  get_class_pos ctx name >>= fun pos ->
-  Ast_provider.find_class_in_file (Pos.filename pos) name >>| Naming.class_
 
 let get_dep_mode ctx dep =
   let open Typing_deps.Dep in
@@ -211,38 +277,25 @@ let is_relevant_dependency
 let get_filename ctx target =
   let pos =
     match target with
-    | Function func ->
-      let f = value_exn NotFound @@ Decl_provider.get_fun ctx func in
-      Typing_defs.get_pos f.fe_type
-    | Method (cls, _) ->
-      let cls = value_exn NotFound @@ Decl_provider.get_class ctx cls in
-      Class.pos cls
+    | Function name -> get_fun_pos_exn ctx name
+    | Method (name, _) -> get_class_pos_exn ctx name
   in
   Pos.filename pos
 
-let extract_body ctx target =
+let extract_target ctx target =
   let filename = get_filename ctx target in
   let abs_filename = Relative_path.to_absolute filename in
   let file_content = In_channel.read_all abs_filename in
-  Aast.(
-    let pos =
-      match target with
-      | Function func ->
-        let ast_function =
-          value_exn NotFound @@ Ast_provider.find_fun_in_file filename func
-        in
-        ast_function.f_span
-      | Method (cls, name) ->
-        let ast_class =
-          value_exn NotFound @@ Ast_provider.find_class_in_file filename cls
-        in
-        let m =
-          value_exn NotFound
-          @@ List.find ast_class.c_methods (fun meth -> snd meth.m_name = name)
-        in
-        m.m_span
-    in
-    Pos.get_text_from_pos file_content pos)
+  let pos =
+    match target with
+    | Function name ->
+      let fun_ = get_fun_nast_exn ctx name in
+      fun_.f_span
+    | Method (class_name, method_name) ->
+      let method_ = get_method_nast_exn ctx class_name method_name in
+      method_.m_span
+  in
+  Pos.get_text_from_pos file_content pos
 
 let print_error source_text error =
   let text =
@@ -279,8 +332,6 @@ let strip_ns obj_name =
 
 let concat_map ~sep ~f list = String.concat ~sep (List.map ~f list)
 
-let tparam_name (tp : Typing_defs.decl_tparam) = snd tp.tp_name
-
 let function_make_default = "extract_standalone_make_default"
 
 let call_make_default = Printf.sprintf "\\%s()" function_make_default
@@ -297,6 +348,11 @@ let string_of_tprim = function
   | Tresource -> "resource"
   | Tnoreturn -> "noreturn"
   | Tatom s -> ":@" ^ s
+
+let string_of_shape_field_name = function
+  | Ast_defs.SFlit_int (_, s) -> s
+  | Ast_defs.SFlit_str (_, s) -> Printf.sprintf "'%s'" s
+  | Ast_defs.SFclass_const ((_, c), (_, s)) -> Printf.sprintf "%s::%s" c s
 
 let rec string_of_hint hint =
   match snd hint with
@@ -354,14 +410,11 @@ let rec string_of_hint hint =
         else
           ""
       in
-      let name =
-        match sfi_name with
-        | Ast_defs.SFlit_int (_, str_i) -> str_i
-        | Ast_defs.SFlit_str (_, str) -> "\"" ^ str ^ "\""
-        | Ast_defs.SFclass_const ((_, class_name), (_, const_name)) ->
-          class_name ^ "::" ^ const_name
-      in
-      optional_prefix ^ name ^ " => " ^ string_of_hint sfi_hint
+      Printf.sprintf
+        "%s%s => %s"
+        optional_prefix
+        (string_of_shape_field_name sfi_name)
+        (string_of_hint sfi_hint)
     in
     let shape_fields = List.map nsi_field_map ~f:string_of_shape_field in
     let shape_suffix =
@@ -410,18 +463,19 @@ let rec string_of_hint hint =
   | Hany -> failwith "unprintable type hint: Hany"
   | Herr -> failwith "unprintable type hint: Herr"
 
-let string_of_user_attribute { ua_name; ua_params } =
+let maybe_string_of_user_attribute { ua_name; ua_params } =
+  let name = snd ua_name in
   match ua_params with
-  | [] -> snd ua_name
-  | _ -> failwith "user attributes with parameters not supported"
+  | [] when SMap.mem name SN.UserAttributes.as_map -> Some name
+  | _ -> None
 
 let string_of_user_attributes user_attributes =
+  let user_attributes =
+    List.filter_map ~f:maybe_string_of_user_attribute user_attributes
+  in
   match user_attributes with
   | [] -> ""
-  | _ ->
-    Printf.sprintf
-      "<<%s>>"
-      (concat_map ~sep:", " ~f:string_of_user_attribute user_attributes)
+  | _ -> Printf.sprintf "<<%s>>" (String.concat ~sep:", " user_attributes)
 
 let string_of_variance = function
   | Ast_defs.Covariant -> "+"
@@ -446,9 +500,9 @@ let string_of_tparam
   let user_attributes = string_of_user_attributes tp_user_attributes in
   let reified =
     match tp_reified with
-    | Aast.Erased -> ""
-    | Aast.SoftReified
-    | Aast.Reified ->
+    | Erased -> ""
+    | SoftReified
+    | Reified ->
       "refied"
   in
   String.concat
@@ -503,7 +557,7 @@ let string_of_fun_param
     default
 
 let get_fun_declaration ctx name =
-  let fun_ = value_or_not_found name @@ get_fun_nast ctx name in
+  let fun_ = get_fun_nast_exn ctx name in
   let user_attributes = string_of_user_attributes fun_.f_user_attributes in
   let tparams = string_of_tparams fun_.f_tparams in
   let variadic =
@@ -523,7 +577,7 @@ let get_fun_declaration ctx name =
     | (_, None) -> ""
   in
   Printf.sprintf
-    "%s function %s%s(%s)%s"
+    "%s function %s%s(%s)%s {throw new \\Exception();}"
     user_attributes
     (strip_ns name)
     tparams
@@ -540,123 +594,126 @@ let get_init_for_prim = function
   | Aast_defs.Tstring
   | Aast_defs.Tarraykey ->
     "\"\""
+  | Aast_defs.Tatom s -> s
   | Aast_defs.Tvoid
   | Aast_defs.Tresource
-  | Aast_defs.Tnoreturn
-  | Aast_defs.Tatom _ ->
+  | Aast_defs.Tnoreturn ->
     raise Unsupported
 
-let get_enum_value ctx enum_name =
-  let enum =
-    value_exn UnexpectedDependency @@ Decl_provider.get_class ctx enum_name
-  in
-  if Class.kind enum <> Ast_defs.Cenum then
-    raise Unsupported
-  else
-    Class.consts enum
-    |> Sequence.map ~f:fst
-    |> Sequence.find ~f:(fun name -> name <> "class")
-    |> value_exn UnexpectedDependency
-
-let get_init_from_type ctx ty =
-  let open Typing_defs in
-  let rec get_ (_, ty) =
-    match ty with
-    | Tprim prim -> get_init_for_prim prim
-    | Toption _ -> "null"
-    | Tarray _ -> "[]"
-    | Tdarray _ -> "darray[]"
-    | Tvarray _
-    | Tvarray_or_darray _ ->
-      "varray[]"
-    | Ttuple elems ->
-      Printf.sprintf "tuple(%s)" (concat_map ~sep:", " ~f:get_ elems)
-    (* Must be an enum, a containter type or a typedef for another supported type since those are the only
-       cases we can have a constant value of some class *)
-    | Tapply ((_, name), targs) ->
-      (match name with
-      | x
-        when x = SN.Collections.cVec
-             || x = SN.Collections.cKeyset
-             || x = SN.Collections.cDict ->
-        Printf.sprintf "%s[]" (strip_ns name)
-      | x
-        when x = SN.Collections.cVector
-             || x = SN.Collections.cImmVector
-             || x = SN.Collections.cMap
-             || x = SN.Collections.cImmMap
-             || x = SN.Collections.cSet
-             || x = SN.Collections.cImmSet ->
-        Printf.sprintf "%s {}" (strip_ns name)
-      | x when x = SN.Collections.cPair ->
-        (match targs with
-        | [first; second] ->
-          Printf.sprintf "Pair {%s, %s}" (get_ first) (get_ second)
-        | _ -> raise UnexpectedDependency)
-      | x when x = SN.Classes.cClassname ->
-        (match targs with
-        | [cls] -> Printf.sprintf "%s::class" (Typing_print.full_decl ctx cls)
-        | _ -> raise Unsupported)
-      | _ ->
-        (match Decl_provider.get_class ctx name with
-        | Some _ -> Printf.sprintf "%s::%s" name (get_enum_value ctx name)
-        | None ->
-          let typedef =
-            value_exn UnexpectedDependency @@ Decl_provider.get_typedef ctx name
+let rec get_init_from_hint ctx hint =
+  match snd hint with
+  | Hprim prim -> get_init_for_prim prim
+  | Hoption _ -> "null"
+  | Hlike hint -> get_init_from_hint ctx hint
+  | Harray _ -> "[]"
+  | Hdarray _ -> "darray[]"
+  | Hvarray_or_darray _
+  | Hvarray _ ->
+    "varray[]"
+  | Htuple hints ->
+    Printf.sprintf
+      "tuple(%s)"
+      (concat_map ~sep:", " ~f:(get_init_from_hint ctx) hints)
+  | Happly ((_, name), hints) ->
+    (match () with
+    | _
+      when name = SN.Collections.cVec
+           || name = SN.Collections.cKeyset
+           || name = SN.Collections.cDict ->
+      Printf.sprintf "%s[]" (strip_ns name)
+    | _
+      when name = SN.Collections.cVector
+           || name = SN.Collections.cImmVector
+           || name = SN.Collections.cMap
+           || name = SN.Collections.cImmMap
+           || name = SN.Collections.cSet
+           || name = SN.Collections.cImmSet ->
+      Printf.sprintf "%s {}" (strip_ns name)
+    | _ when name = SN.Collections.cPair ->
+      (match hints with
+      | [first; second] ->
+        Printf.sprintf
+          "Pair {%s, %s}"
+          (get_init_from_hint ctx first)
+          (get_init_from_hint ctx second)
+      | _ -> failwith "malformed hint")
+    | _ when name = SN.Classes.cClassname ->
+      (match hints with
+      | [(_, Happly ((_, class_name), _))] ->
+        Printf.sprintf "%s::class" class_name
+      | _ -> raise UnexpectedDependency)
+    | _ ->
+      (match get_class_nast ctx name with
+      | Some class_ ->
+        if class_.c_kind = Ast_defs.Cenum then
+          let const_name =
+            match class_.c_consts with
+            | [] -> failwith "empty enum"
+            | const :: _ -> snd const.cc_id
           in
-          get_ typedef.td_type))
-    | Tshape (_, fields) ->
-      let print_shape_field name sft acc =
-        (* Omit all optional fields *)
-        if sft.sft_optional then
-          acc
+          Printf.sprintf "%s::%s" name const_name
         else
-          let name =
-            match name with
-            | Ast_defs.SFlit_int (_, s) -> s
-            | Ast_defs.SFlit_str (_, s) -> Printf.sprintf "'%s'" s
-            | Ast_defs.SFclass_const ((_, c), (_, s)) ->
-              Printf.sprintf "%s::%s" c s
-          in
-          Printf.sprintf "%s => %s" name (get_ sft.sft_ty) :: acc
-      in
+          raise Unsupported
+      | None ->
+        let typedef = get_typedef_nast_exn ctx name in
+        get_init_from_hint ctx typedef.t_kind))
+  | Hshape { nsi_field_map; _ } ->
+    let non_optional_fields =
+      List.filter nsi_field_map ~f:(fun shape_field_info ->
+          not shape_field_info.sfi_optional)
+    in
+    let get_init_shape_field { sfi_hint; sfi_name; _ } =
       Printf.sprintf
-        "shape(%s)"
-        ( String.concat ~sep:", "
-        @@ Nast.ShapeMap.fold print_shape_field fields [] )
-    | _ -> raise Unsupported
-  in
-  get_ ty
+        "%s => %s"
+        (string_of_shape_field_name sfi_name)
+        (get_init_from_hint ctx sfi_hint)
+    in
+    Printf.sprintf
+      "shape(%s)"
+      (concat_map ~sep:", " ~f:get_init_shape_field non_optional_fields)
+  | _ -> raise Unsupported
 
-let get_const_declaration ctx ?abstract:(is_abstract = false) ty name =
+let get_gconst_declaration ctx name =
+  let gconst = get_gconst_nast_exn ctx name in
+  let hint = value_or_not_found ("type of " ^ name) gconst.cst_type in
+  let init = get_init_from_hint ctx hint in
+  Printf.sprintf "const %s %s = %s;" (string_of_hint hint) (strip_ns name) init
+
+let get_const_declaration ctx const =
+  let name = snd const.cc_id in
   let abstract =
-    if is_abstract then
-      "abstract "
-    else
-      ""
+    match const.cc_expr with
+    | Some _ -> ""
+    | None -> "abstract"
   in
-  let typ = Typing_print.full_decl ctx ty in
-  let init = get_init_from_type ctx ty in
-  Printf.sprintf "%sconst %s %s = %s;" abstract typ name init
+  let (type_, init) =
+    match (const.cc_type, const.cc_expr) with
+    | (Some hint, _) ->
+      (string_of_hint hint, " = " ^ get_init_from_hint ctx hint)
+    | (None, Some e) ->
+      (match Decl_utils.infer_const e with
+      | Some tprim ->
+        let hint = (fst e, Hprim tprim) in
+        ("", " = " ^ get_init_from_hint ctx hint)
+      | None -> raise Unsupported)
+    | (None, None) -> ("", "")
+  in
+  Printf.sprintf "%s const %s %s%s;" abstract type_ name init
 
 let get_global_object_declaration ctx obj =
   Typing_deps.Dep.(
-    let description = to_string obj in
     match obj with
     | Fun f
     | FunName f ->
-      Printf.sprintf "%s {throw new \\Exception();}" (get_fun_declaration ctx f)
+      get_fun_declaration ctx f
     | GConst c
     | GConstName c ->
-      let (const_type, _) =
-        value_or_not_found description @@ Decl_provider.get_gconst ctx c
-      in
-      get_const_declaration ctx const_type (strip_ns c)
+      get_gconst_declaration ctx c
     (* No other global declarations *)
     | _ -> raise UnexpectedDependency)
 
-let get_class_declaration ctx name =
-  let class_ = value_or_not_found name @@ get_class_nast ctx name in
+let get_class_declaration class_ =
+  let name = snd class_.c_name in
   let user_attributes = string_of_user_attributes class_.c_user_attributes in
   let final =
     if class_.c_final then
@@ -689,7 +746,6 @@ let get_class_declaration ctx name =
         "implements %s"
         (concat_map ~sep:", " ~f:string_of_hint class_.c_implements)
   in
-  (* TODO: traits, records *)
   Printf.sprintf
     "%s %s %s %s%s %s %s"
     user_attributes
@@ -702,10 +758,16 @@ let get_class_declaration ctx name =
 
 let get_method_declaration method_ ~from_interface =
   let abstract =
-    if (not method_.m_abstract) || from_interface then
-      ""
-    else
+    if method_.m_abstract && not from_interface then
       "abstract"
+    else
+      ""
+  in
+  let final =
+    if method_.m_final then
+      "final"
+    else
+      ""
   in
   let visibility = string_of_visibility method_.m_visibility in
   let static =
@@ -733,295 +795,220 @@ let get_method_declaration method_ ~from_interface =
     | (_, Some hint) -> ": " ^ string_of_hint hint
     | (_, None) -> ""
   in
+  let body =
+    if method_.m_abstract || from_interface then
+      ";"
+    else
+      "{throw new \\Exception();}"
+  in
   Printf.sprintf
-    "%s %s %s %s function %s%s(%s)%s"
+    "%s %s %s %s %s function %s%s(%s)%s%s"
     user_attributes
     abstract
+    final
     visibility
     static
     name
     tparams
     params
     ret
+    body
 
-let get_property_declaration ctx (prop : Typing_defs.class_elt) ~is_static name
-    =
-  let visibility = Typing_utils.string_of_visibility prop.ce_visibility in
+let get_prop_declaration ctx prop =
+  let name = snd prop.cv_id in
+  let user_attributes = string_of_user_attributes prop.cv_user_attributes in
+  let visibility = string_of_visibility prop.cv_visibility in
   let static =
-    if is_static then
-      "static "
+    if prop.cv_is_static then
+      "static"
     else
       ""
   in
-  let ty = Lazy.force prop.ce_type in
-  let prop_type = Typing_print.full_decl ctx ty in
-  let init =
-    if is_static && not prop.ce_abstract then
-      Printf.sprintf " = %s" (get_init_from_type ctx ty)
-    else
-      ""
+  let (type_, init) =
+    match (prop.cv_type, prop.cv_expr) with
+    | (Some hint, Some _) ->
+      (string_of_hint hint, Printf.sprintf " = %s" (get_init_from_hint ctx hint))
+    | (Some hint, None) -> (string_of_hint hint, "")
+    | (None, None) -> ("", "")
+    (* Untyped prop, not supported for now *)
+    | (None, Some _) -> raise Unsupported
   in
-  Printf.sprintf "%s %s%s $%s%s;" visibility static prop_type name init
+  Printf.sprintf
+    "%s %s %s %s $%s%s;"
+    user_attributes
+    visibility
+    static
+    type_
+    name
+    init
 
-let get_typeconst_declaration ctx tconst name =
+let get_typeconst_declaration typeconst =
   let abstract =
-    match tconst.ttc_abstract with
-    | Typing_defs.TCAbstract _ -> "abstract "
+    match typeconst.c_tconst_abstract with
+    | TCAbstract _ -> "abstract"
     | TCPartiallyAbstract
     | TCConcrete ->
       ""
   in
-  let typ =
-    match tconst.ttc_type with
-    | Some t -> Printf.sprintf " = %s" (Typing_print.full_decl ctx t)
+  let name = snd typeconst.c_tconst_name in
+  let type_ =
+    match typeconst.c_tconst_type with
+    | Some hint -> " = " ^ string_of_hint hint
     | None -> ""
   in
-  let constr =
-    match tconst.ttc_constraint with
-    | Some t -> Printf.sprintf " as %s" (Typing_print.full_decl ctx t)
+  let constraint_ =
+    match typeconst.c_tconst_constraint with
+    | Some hint -> " as " ^ string_of_hint hint
     | None -> ""
   in
-  Printf.sprintf "%s const type %s%s%s;" abstract name constr typ
+  Printf.sprintf "%s const type %s%s%s;" abstract name constraint_ type_
+
+let get_method_declaration ctx target class_name method_name =
+  match target with
+  | ServerCommandTypes.Extract_standalone.Method
+      (target_class_name, target_method_name)
+    when class_name = target_class_name && method_name = target_method_name ->
+    None
+  | _ ->
+    let open Option in
+    get_class_nast ctx class_name >>= fun class_ ->
+    let from_interface = class_.c_kind = Ast_defs.Cinterface in
+    get_method_nast ctx class_name method_name >>= fun method_ ->
+    Some (get_method_declaration method_ ~from_interface)
 
 let get_class_elt_declaration
-    ctx
-    (cls : Decl_provider.class_decl)
-    target
-    (class_elt : 'a Typing_deps.Dep.variant) =
-  Typing_deps.Dep.(
-    Decl_provider.(
-      let from_interface = Class.kind cls = Ast_defs.Cinterface in
-      let description = to_string class_elt in
-      match class_elt with
-      | Const (_, const_name) ->
-        if Class.has_typeconst cls const_name then
-          let tconst =
-            value_or_not_found description @@ Class.get_typeconst cls const_name
-          in
-          Some (get_typeconst_declaration ctx tconst const_name)
-        else
-          let cons =
-            value_or_not_found description @@ Class.get_const cls const_name
-          in
-          Some
-            (get_const_declaration
-               ctx
-               ~abstract:cons.cc_abstract
-               cons.cc_type
-               const_name)
-      | Method (class_name, method_name) ->
-        (match target with
-        | ServerCommandTypes.Extract_standalone.Method
-            (target_class_name, target_method_name)
-          when class_name = target_class_name
-               && method_name = target_method_name ->
-          None
-        | _ ->
-          let class_ =
-            value_or_not_found class_name @@ get_class_nast ctx class_name
-          in
-          let method_ =
-            value_or_not_found method_name
-            @@ List.find class_.c_methods ~f:(fun method_ ->
-                   snd method_.m_name = method_name)
-          in
-          let decl = get_method_declaration method_ ~from_interface in
-          let body =
-            if method_.m_abstract then
-              ";"
-            else
-              "{throw new \\Exception();}"
-          in
-          Some (decl ^ body))
-      | SMethod (class_name, method_name) ->
-        (match target with
-        | ServerCommandTypes.Extract_standalone.Method
-            (target_class_name, target_method_name)
-          when class_name = target_class_name
-               && method_name = target_method_name ->
-          None
-        | _ ->
-          let class_ =
-            value_or_not_found class_name @@ get_class_nast ctx class_name
-          in
-          let method_ =
-            value_or_not_found method_name
-            @@ List.find class_.c_methods ~f:(fun method_ ->
-                   snd method_.m_name = method_name)
-          in
-          let decl = get_method_declaration method_ ~from_interface in
-          let body =
-            if method_.m_abstract then
-              ";"
-            else
-              "{throw new \\Exception();}"
-          in
-          Some (decl ^ body))
-      | Prop (_, prop_name) ->
-        let p =
-          value_or_not_found description @@ Class.get_prop cls prop_name
-        in
-        Some (get_property_declaration ctx p ~is_static:false prop_name)
-      | SProp (_, sprop_name) ->
-        let sp =
-          value_or_not_found description @@ Class.get_sprop cls sprop_name
-        in
-        Some
-          (get_property_declaration
-             ctx
-             sp
-             ~is_static:true
-             (String.lstrip ~drop:(fun c -> c = '$') sprop_name))
-      (* Constructor should've been tackled earlier, and all other dependencies aren't class elements *)
-      | Cstr _
-      | Extends _
-      | AllMembers _
-      | Class _
-      | Fun _
-      | FunName _
-      | GConst _
-      | GConstName _ ->
-        raise UnexpectedDependency
-      | RecordDef _ -> records_not_supported ()))
+    ctx target (class_elt : 'a Typing_deps.Dep.variant) =
+  let open Typing_deps.Dep in
+  match class_elt with
+  | Const (class_name, const_name) ->
+    (match get_typeconst_nast ctx class_name const_name with
+    | Some typeconst -> Some (get_typeconst_declaration typeconst)
+    | None ->
+      (match get_const_nast ctx class_name const_name with
+      | Some const -> Some (get_const_declaration ctx const)
+      | None -> raise (DependencyNotFound (class_name ^ "::" ^ const_name))))
+  | Method (class_name, method_name)
+  | SMethod (class_name, method_name) ->
+    get_method_declaration ctx target class_name method_name
+  | Cstr class_name ->
+    get_method_declaration ctx target class_name "__construct"
+  | Prop (class_name, prop_name) ->
+    let prop = get_prop_nast_exn ctx class_name prop_name in
+    Some (get_prop_declaration ctx prop)
+  | SProp (class_name, sprop_name) ->
+    let sprop_name = String.lstrip ~drop:(fun c -> c = '$') sprop_name in
+    let prop = get_prop_nast_exn ctx class_name sprop_name in
+    Some (get_prop_declaration ctx prop)
+  (* Constructor should've been tackled earlier, and all other dependencies aren't class elements *)
+  | Extends _
+  | AllMembers _
+  | Class _
+  | Fun _
+  | FunName _
+  | GConst _
+  | GConstName _ ->
+    raise UnexpectedDependency
+  | RecordDef _ -> records_not_supported ()
 
-let construct_enum ctx enum fields =
-  let enum_name = Decl_provider.Class.name enum in
-  let enum_type =
-    value_exn UnexpectedDependency @@ Decl_provider.Class.enum_type enum
+let construct_enum ctx class_ =
+  let name = snd class_.c_name in
+  let enum =
+    match class_.c_enum with
+    | Some enum -> enum
+    | None -> failwith ("not an enum: " ^ snd class_.c_name)
   in
-  let string_enum_const = function
-    | Typing_deps.Dep.Const (_, name) when name <> "class" ->
-      Some
-        (Printf.sprintf
-           "%s = %s;"
-           name
-           (get_init_from_type ctx enum_type.te_base))
-    | _ -> None
-  in
-  let base = Typing_print.full_decl ctx enum_type.te_base in
-  let cons =
-    match enum_type.te_constraint with
-    | Some c -> " as " ^ Typing_print.full_decl ctx c
+  let constraint_ =
+    match enum.e_constraint with
+    | Some hint -> " as " ^ string_of_hint hint
     | None -> ""
   in
-  let enum_decl =
-    Printf.sprintf "enum %s: %s%s" (strip_ns enum_name) base cons
+  let string_of_enum_const const =
+    Printf.sprintf
+      "%s = %s;"
+      (snd const.cc_id)
+      (get_init_from_hint ctx enum.e_base)
   in
-  let constants = List.filter_map fields ~f:string_enum_const in
-  Printf.sprintf "%s {%s}" enum_decl (String.concat ~sep:"\n" constants)
+  Printf.sprintf
+    "enum %s: %s%s {%s}"
+    (strip_ns name)
+    (string_of_hint enum.e_base)
+    constraint_
+    (concat_map ~sep:"\n" ~f:string_of_enum_const class_.c_consts)
 
-let get_constructor_declaration ctx name prop_names =
-  let class_ = value_or_not_found name @@ get_class_nast ctx name in
-  let construct_opt =
-    List.find class_.c_methods ~f:(fun method_ ->
-        snd method_.m_name = "__construct")
-  in
-  match construct_opt with
-  | None ->
-    if List.is_empty prop_names then
-      None
-    else
-      Some "public function __construct() {throw new \\Exception();}"
-  | Some construct ->
-    let from_interface = class_.c_kind = Ast_defs.Cinterface in
-    let decl = get_method_declaration construct ~from_interface in
-    let body =
-      (* An interface may inherit a non-abstract constructor
-         through a `require extends` declaration. *)
-      if construct.m_abstract || from_interface then
-        ";"
-      else
-        "{throw new \\Exception();}"
-    in
-    Some (decl ^ body)
-
-let get_class_body ctx cls target class_elts =
-  let name = Decl_provider.Class.name cls in
-  let nast = value_or_not_found name @@ get_class_nast ctx name in
+let get_class_body ctx class_ target class_elts =
+  let name = snd class_.c_name in
   let uses =
-    List.map nast.c_uses ~f:(fun s ->
+    List.map class_.c_uses ~f:(fun s ->
         Printf.sprintf "use %s;" (string_of_hint s))
   in
   let (req_extends, req_implements) =
-    List.partition_map nast.c_reqs ~f:(fun (s, extends) ->
+    List.partition_map class_.c_reqs ~f:(fun (s, extends) ->
         if extends then
           `Fst (Printf.sprintf "require extends %s;" (string_of_hint s))
         else
           `Snd (Printf.sprintf "require implements %s;" (string_of_hint s)))
   in
   let open Typing_deps in
-  let prop_names =
-    List.filter_map class_elts ~f:(function
-        | Dep.Prop (_, p) -> Some p
-        | _ -> None)
-  in
   let body =
     List.filter_map class_elts ~f:(function
         | Dep.AllMembers _
         | Dep.Extends _ ->
           raise UnexpectedDependency
-        (* Constructor needs special treatment because we need
-           information about properties. *)
-        | Dep.Cstr _ -> get_constructor_declaration ctx name prop_names
         | Dep.Const (_, "class") -> None
-        | class_elt -> get_class_elt_declaration ctx cls target class_elt)
+        | class_elt -> get_class_elt_declaration ctx target class_elt)
   in
   (* If we are extracting a method of this class, we should declare it
      here, with stubs of other class elements. *)
   let extracted_method =
     match target with
-    | Method (cls_name, _) when cls_name = Decl_provider.Class.name cls ->
-      [extract_body ctx target]
+    | Method (cls_name, _) when cls_name = name -> [extract_target ctx target]
     | _ -> []
   in
   String.concat
     ~sep:"\n"
     (req_extends @ req_implements @ uses @ body @ extracted_method)
 
-let construct_class ctx cls target fields =
-  (* Enum declaration have a very different format: for example, no 'const' keyword
-     for values, which are actually just class constants *)
-  if Class.kind cls = Ast_defs.Cenum then
-    construct_enum ctx cls fields
-  else
-    let decl = get_class_declaration ctx (Class.name cls) in
-    let body = get_class_body ctx cls target fields in
-    Printf.sprintf "%s {%s}" decl body
+let construct_class ctx class_ target fields =
+  let decl = get_class_declaration class_ in
+  let body = get_class_body ctx class_ target fields in
+  Printf.sprintf "%s {%s}" decl body
 
-let construct_typedef ctx t =
-  let not_found_msg = Printf.sprintf "typedef %s" t in
-  let td =
-    value_or_not_found not_found_msg @@ Decl_provider.get_typedef ctx t
+let construct_enum_or_class ctx class_ target fields =
+  match class_.c_kind with
+  | Ast_defs.Cabstract
+  | Ast_defs.Cnormal
+  | Ast_defs.Cinterface
+  | Ast_defs.Ctrait ->
+    construct_class ctx class_ target fields
+  | Ast_defs.Cenum -> construct_enum ctx class_
+
+let construct_typedef typedef =
+  let name = snd typedef.t_name in
+  let keyword =
+    match typedef.t_vis with
+    | Aast_defs.Transparent -> "type"
+    | Aast_defs.Opaque -> "newtype"
   in
-  let typ =
-    if td.td_vis = Aast_defs.Transparent then
-      "type"
-    else
-      "newtype"
-  in
-  let tparams =
-    if List.is_empty td.td_tparams then
-      ""
-    else
-      Printf.sprintf "<%s>" (concat_map ~sep:", " ~f:tparam_name td.td_tparams)
-  in
+  let tparams = string_of_tparams typedef.t_tparams in
   let constraint_ =
-    match td.td_constraint with
-    | Some ty -> " as " ^ Typing_print.full_decl ctx ty
+    match typedef.t_constraint with
+    | Some hint -> " as " ^ string_of_hint hint
     | None -> ""
   in
   Printf.sprintf
     "%s %s%s%s = %s;"
-    typ
-    (strip_ns t)
+    keyword
+    (strip_ns name)
     tparams
     constraint_
-    (Typing_print.full_decl ctx td.td_type)
+    (string_of_hint typedef.t_kind)
 
 let construct_type_declaration ctx t target fields =
-  match Decl_provider.get_class ctx t with
-  | Some cls -> construct_class ctx cls target fields
-  | None -> construct_typedef ctx t
+  match get_class_nast ctx t with
+  | Some class_ -> construct_enum_or_class ctx class_ target fields
+  | None ->
+    let typedef = get_typedef_nast_exn ctx t in
+    construct_typedef typedef
 
 let rec do_add_dep ctx deps dep =
   if
@@ -1045,22 +1032,7 @@ and add_dep ctx deps ~this ty : unit =
         (* If we have a constant of a generic type, it can only be an
            array type, e.g., vec<A>, for which don't need values of A
            to generate an initializer. *)
-        List.iter tyl ~f:(add_dep ctx deps ~this);
-
-        (* When adding a dependency on an enum, also add dependencies
-           on all its values.  We need all the values and not only the
-           ones used by the extracted code.  See the \with_switch test
-           case. *)
-        match Decl_provider.get_class ctx name with
-        | Some enum when Class.kind enum = Ast_defs.Cenum ->
-          Class.consts enum
-          |> Sequence.iter ~f:(fun (const_name, _) ->
-                 if const_name <> "class" then
-                   do_add_dep
-                     ctx
-                     deps
-                     (Typing_deps.Dep.Const (name, const_name)))
-        | _ -> ()
+        List.iter tyl ~f:(add_dep ctx deps ~this)
 
       method! on_tshape _ _ _ fdm =
         Nast.ShapeMap.iter
@@ -1552,7 +1524,7 @@ let get_declarations ctx target class_dependencies global_dependencies =
   in
   match target with
   | Function name ->
-    let decl = extract_body ctx target in
+    let decl = extract_target ctx target in
     if is_strict_fun ctx name then
       (add_declaration strict_declarations name decl, partial_declarations)
     else
@@ -1575,7 +1547,6 @@ let go ctx target =
     in
     get_code strict_declarations partial_declarations
   with
-  | NotFound -> "Not found!"
   | DependencyNotFound d -> Printf.sprintf "Dependency not found: %s" d
   | Unsupported
   | UnexpectedDependency ->

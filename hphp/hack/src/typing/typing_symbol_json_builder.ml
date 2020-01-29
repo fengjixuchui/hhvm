@@ -28,13 +28,21 @@ type symbol_occurrences = {
 
 type predicate =
   | ClassDeclaration
+  | ClassDefinition
   | DeclarationLocation
   | FileXRefs
+  | InterfaceDeclaration
+
+type container_type =
+  | ClassContainer
+  | InterfaceContainer
 
 type glean_json = {
   classDeclaration: json list;
+  classDefinition: json list;
   declarationLocation: json list;
   fileXRefs: json list;
+  interfaceDeclaration: json list;
 }
 
 type result_progress = {
@@ -45,7 +53,13 @@ type result_progress = {
 
 let init_progress =
   let default_json =
-    { classDeclaration = []; declarationLocation = []; fileXRefs = [] }
+    {
+      classDeclaration = [];
+      classDefinition = [];
+      declarationLocation = [];
+      fileXRefs = [];
+      interfaceDeclaration = [];
+    }
   in
   { resultJson = default_json; factIds = JMap.empty }
 
@@ -74,6 +88,11 @@ let update_json_data predicate json progress =
         progress.resultJson with
         classDeclaration = json :: progress.resultJson.classDeclaration;
       }
+    | ClassDefinition ->
+      {
+        progress.resultJson with
+        classDefinition = json :: progress.resultJson.classDefinition;
+      }
     | DeclarationLocation ->
       {
         progress.resultJson with
@@ -83,6 +102,11 @@ let update_json_data predicate json progress =
       {
         progress.resultJson with
         fileXRefs = json :: progress.resultJson.fileXRefs;
+      }
+    | InterfaceDeclaration ->
+      {
+        progress.resultJson with
+        interfaceDeclaration = json :: progress.resultJson.interfaceDeclaration;
       }
   in
   { resultJson = json; factIds = progress.factIds }
@@ -112,6 +136,17 @@ let glean_json predicate json progress =
   in
   (json_fact, id, progress)
 
+let container_decl_predicate container_type =
+  match container_type with
+  | ClassContainer -> ("class_", ClassDeclaration)
+  | InterfaceContainer -> ("interface_", InterfaceDeclaration)
+
+let get_container_kind clss =
+  match clss.c_kind with
+  | Cinterface -> InterfaceContainer
+  (* TODO: process enum kind here *)
+  | _ -> ClassContainer
+
 let json_of_bytespan pos =
   let start = fst (Pos.info_raw pos) in
   let length = Pos.length pos in
@@ -130,39 +165,49 @@ let json_of_rel_bytespan offset len =
 
 let json_of_file filepath = JSON_Object [("key", JSON_String filepath)]
 
-let json_of_class class_name is_abstract is_final progress =
+let json_of_container_defn clss decl_id progress =
+  match get_container_kind clss with
+  | ClassContainer ->
+    let is_abstract =
+      match clss.c_kind with
+      | Cabstract -> true
+      | _ -> false
+    in
+    let json_fact =
+      JSON_Object
+        [
+          ("declaration", JSON_Number (string_of_int decl_id));
+          ("is_abstract", JSON_Bool is_abstract);
+          ("is_final", JSON_Bool clss.c_final);
+        ]
+    in
+    let (_, _, progress) = glean_json ClassDefinition json_fact progress in
+    progress
+  | _ ->
+    (* TODO: implement other container definitions *)
+    progress
+
+let json_of_container_decl (container_type, decl_pred) _ctx name _elem progress
+    =
   let json_fact =
-    JSON_Object
-      [
-        ("name", JSON_Object [("key", JSON_String class_name)]);
-        ("is_abstract", JSON_Bool is_abstract);
-        ("is_final", JSON_Bool is_final);
-      ]
+    JSON_Object [("name", JSON_Object [("key", JSON_String name)])]
   in
-  glean_json ClassDeclaration json_fact progress
-
-let json_of_class_from_node _ class_name clss progress =
-  let is_abstract =
-    match clss.c_kind with
-    | Cabstract -> true
-    | _ -> false
+  let (_, fact_id, progress) = glean_json decl_pred json_fact progress in
+  let container_decl =
+    JSON_Object [(container_type, JSON_Number (string_of_int fact_id))]
   in
-  json_of_class class_name is_abstract clss.c_final progress
+  (container_decl, fact_id, progress)
 
-let json_of_class_from_symbol _ class_name mods progress =
-  let is_abstract = List.mem mods SymbolDefinition.Abstract ~equal:phys_equal in
-  let is_final = List.mem mods SymbolDefinition.Final ~equal:phys_equal in
-  json_of_class class_name is_abstract is_final progress
-
-let json_of_decl tcopt decl_type json_fun id elem progress =
-  let (_, fact_id, progress) = json_fun tcopt id elem progress in
-  let json = JSON_Object [(decl_type, JSON_Number (string_of_int fact_id))] in
+let json_of_decl ctx decl_type json_decl_fun id elem progress =
+  let (decl_json, fact_id, progress) = json_decl_fun ctx id elem progress in
+  let json = JSON_Object [(decl_type, decl_json)] in
   (json, fact_id, progress)
 
-let json_of_decl_loc tcopt decl_type pos json_fun id elem progress =
-  let (decl_json, _, progress) =
-    json_of_decl tcopt decl_type json_fun id elem progress
+let json_of_decl_loc ctx decl_type pos decl_fun defn_fun id elem progress =
+  let (decl_json, decl_id, progress) =
+    json_of_decl ctx decl_type decl_fun id elem progress
   in
+  let progress = defn_fun elem decl_id progress in
   let filepath = Relative_path.S.to_string (Pos.filename pos) in
   let json_fact =
     JSON_Object
@@ -173,6 +218,8 @@ let json_of_decl_loc tcopt decl_type pos json_fun id elem progress =
       ]
   in
   glean_json DeclarationLocation json_fact progress
+
+let json_of_decl_target json = JSON_Object [("declaration", json)]
 
 let json_of_xrefs xref_map =
   let xrefs =
@@ -203,18 +250,60 @@ let json_of_file_xrefs filepath xref_map progress =
   in
   glean_json FileXRefs json_fact progress
 
-let build_json tcopt symbols =
+let add_xref target_json target_id ref_pos xrefs =
+  let filepath = Relative_path.S.to_string (Pos.filename ref_pos) in
+  SMap.update
+    filepath
+    (fun file_map ->
+      let new_ref = (target_json, [ref_pos]) in
+      match file_map with
+      | None -> Some (IMap.singleton target_id new_ref)
+      | Some map ->
+        let updated_xref_map =
+          IMap.update
+            target_id
+            (fun target_tuple ->
+              match target_tuple with
+              | None -> Some new_ref
+              | Some (json, refs) -> Some (json, ref_pos :: refs))
+            map
+        in
+        Some updated_xref_map)
+    xrefs
+
+let add_container_xref
+    ctx
+    (symbol_def : Relative_path.t SymbolDefinition.t)
+    symbol_pos
+    decl_pred
+    (xrefs, progress) =
+  let (decl_json, target_id, prog) =
+    json_of_decl
+      ctx
+      "container"
+      (json_of_container_decl decl_pred)
+      symbol_def.name
+      symbol_def
+      progress
+  in
+  let target_json = json_of_decl_target decl_json in
+  let xrefs = add_xref target_json target_id symbol_pos xrefs in
+  (xrefs, prog)
+
+let build_json ctx symbols =
   let progress =
     List.fold symbols.decls ~init:init_progress ~f:(fun acc symbol ->
         match symbol with
         | Class cd ->
           let (pos, id) = cd.c_name in
+          let decl_pred = container_decl_predicate (get_container_kind cd) in
           let (_, _, res) =
             json_of_decl_loc
-              tcopt
-              "class_"
+              ctx
+              "container"
               pos
-              json_of_class_from_node
+              (json_of_container_decl decl_pred)
+              json_of_container_defn
               id
               cd
               acc
@@ -223,55 +312,26 @@ let build_json tcopt symbols =
         | _ -> acc)
   in
   (* file_xrefs : Hh_json.json * Relative_path.t Pos.pos list) IMap.t SMap.t *)
-  let (progress, file_xrefs) =
+  let (file_xrefs, progress) =
     List.fold
       symbols.occurrences
-      ~init:(progress, SMap.empty)
-      ~f:(fun (prog, xrefs) occ ->
+      ~init:(SMap.empty, progress)
+      ~f:(fun (xrefs, prog) occ ->
         if occ.is_declaration then
-          (prog, xrefs)
+          (xrefs, prog)
         else
-          let symbol_def_res = ServerSymbolDefinition.go None occ in
-          let filepath = Relative_path.S.to_string (Pos.filename occ.pos) in
+          let symbol_def_res = ServerSymbolDefinition.go ctx None occ in
           match symbol_def_res with
-          | None -> (prog, xrefs)
+          | None -> (xrefs, prog)
           | Some symbol_def ->
             (match symbol_def.kind with
             | Class ->
-              let (decl_json, target_id, prog) =
-                json_of_decl
-                  tcopt
-                  "class_"
-                  json_of_class_from_symbol
-                  symbol_def.name
-                  symbol_def.modifiers
-                  prog
-              in
-              let xrefs =
-                SMap.update
-                  filepath
-                  (fun file_map ->
-                    let target_json =
-                      JSON_Object [("declaration", decl_json)]
-                    in
-                    let new_ref = (target_json, [occ.pos]) in
-                    match file_map with
-                    | None -> Some (IMap.singleton target_id new_ref)
-                    | Some map ->
-                      let updated_xref_map =
-                        IMap.update
-                          target_id
-                          (fun target_tuple ->
-                            match target_tuple with
-                            | None -> Some new_ref
-                            | Some (json, refs) -> Some (json, occ.pos :: refs))
-                          map
-                      in
-                      Some updated_xref_map)
-                  xrefs
-              in
-              (prog, xrefs)
-            | _ -> (prog, xrefs)))
+              let decl_pred = container_decl_predicate ClassContainer in
+              add_container_xref ctx symbol_def occ.pos decl_pred (xrefs, prog)
+            | Interface ->
+              let decl_pred = container_decl_predicate InterfaceContainer in
+              add_container_xref ctx symbol_def occ.pos decl_pred (xrefs, prog)
+            | _ -> (xrefs, prog)))
   in
   let progress =
     SMap.fold
@@ -287,8 +347,10 @@ let build_json tcopt symbols =
     by id only *)
     [
       ("hack.FileXRefs.1", progress.resultJson.fileXRefs);
+      ("hack.ClassDefinition.1", progress.resultJson.classDefinition);
       ("hack.DeclarationLocation.1", progress.resultJson.declarationLocation);
       ("hack.ClassDeclaration.1", progress.resultJson.classDeclaration);
+      ("hack.InterfaceDeclaration.1", progress.resultJson.interfaceDeclaration);
     ]
   in
   let json_array =

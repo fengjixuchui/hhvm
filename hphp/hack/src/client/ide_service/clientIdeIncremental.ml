@@ -253,34 +253,48 @@ let update_naming_table
   in
   { env with ServerEnv.naming_table }
 
-let invalidate_decls ~(old_file_info : FileInfo.t option) : unit =
+let invalidate_decls
+    (ctx : Provider_context.t) ~(old_file_info : FileInfo.t option) : unit =
   match old_file_info with
   | None -> ()
   | Some { FileInfo.funs; classes; record_defs; typedefs; consts; _ } ->
-    funs |> strip_positions |> SSet.iter ~f:Decl_provider.invalidate_fun;
-    classes |> strip_positions |> SSet.iter ~f:Decl_provider.invalidate_class;
+    funs |> strip_positions |> SSet.iter ~f:(Decl_provider.invalidate_fun ctx);
+    classes
+    |> strip_positions
+    |> SSet.iter ~f:(Decl_provider.invalidate_class ctx);
     record_defs
     |> strip_positions
-    |> SSet.iter ~f:Decl_provider.invalidate_record_def;
-    typedefs |> strip_positions |> SSet.iter ~f:Decl_provider.invalidate_typedef;
-    consts |> strip_positions |> SSet.iter ~f:Decl_provider.invalidate_gconst;
+    |> SSet.iter ~f:(Decl_provider.invalidate_record_def ctx);
+    typedefs
+    |> strip_positions
+    |> SSet.iter ~f:(Decl_provider.invalidate_typedef ctx);
+    consts
+    |> strip_positions
+    |> SSet.iter ~f:(Decl_provider.invalidate_gconst ctx);
     ()
 
 let update_symbol_index
     ~(env : ServerEnv.env)
     ~(path : Relative_path.t)
-    ~(facts : Facts.facts option) : unit =
+    ~(facts : Facts.facts option) : ServerEnv.env =
   match facts with
   | None ->
     let paths = Relative_path.Set.singleton path in
-    SymbolIndex.remove_files ~sienv:env.ServerEnv.local_symbol_table ~paths
+    let local_symbol_table =
+      SymbolIndex.remove_files ~sienv:env.ServerEnv.local_symbol_table ~paths
+    in
+    { env with ServerEnv.local_symbol_table }
   | Some facts ->
-    SymbolIndex.update_from_facts
-      ~sienv:env.ServerEnv.local_symbol_table
-      ~path
-      ~facts
+    let local_symbol_table =
+      SymbolIndex.update_from_facts
+        ~sienv:env.ServerEnv.local_symbol_table
+        ~path
+        ~facts
+    in
+    { env with ServerEnv.local_symbol_table }
 
-let process_changed_file (env : ServerEnv.env) (path : Path.t) :
+let process_changed_file
+    (env : ServerEnv.env) (ctx : Provider_context.t) (path : Path.t) :
     ServerEnv.env Lwt.t =
   let str_path = Path.to_string path in
   match Relative_path.strip_root_if_possible str_path with
@@ -295,7 +309,7 @@ let process_changed_file (env : ServerEnv.env) (path : Path.t) :
       let%lwt (old_file_info, new_file_info, facts) =
         compute_fileinfo_for_path env path
       in
-      invalidate_decls ~old_file_info;
+      invalidate_decls ctx ~old_file_info;
       let env = update_naming_table ~env ~path ~old_file_info ~new_file_info in
-      update_symbol_index ~env ~path ~facts;
+      let env = update_symbol_index ~env ~path ~facts in
       Lwt.return env

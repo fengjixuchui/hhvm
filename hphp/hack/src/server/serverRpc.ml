@@ -143,15 +143,13 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     in
     (* Since this is being executed from the command line,
      * let's turn on the flags that increase accuracy but slow it down *)
-    let old_sienv = env.ServerEnv.local_symbol_table in
     let sienv =
-      ref
-        {
-          !old_sienv with
-          SearchUtils.sie_resolve_signatures = true;
-          SearchUtils.sie_resolve_positions = true;
-          SearchUtils.sie_resolve_local_decl = true;
-        }
+      {
+        env.ServerEnv.local_symbol_table with
+        SearchUtils.sie_resolve_signatures = true;
+        SearchUtils.sie_resolve_positions = true;
+        SearchUtils.sie_resolve_local_decl = true;
+      }
     in
     (* feature not implemented here; it only works for LSP *)
     let (ctx, entry) =
@@ -173,15 +171,17 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         ~filename:Relative_path.default
         ~text:content
     in
-    (match facts_opt with
-    | None -> ()
-    | Some facts ->
-      SymbolIndex.update_from_facts ~sienv ~path:Relative_path.default ~facts);
+    let sienv =
+      match facts_opt with
+      | None -> sienv
+      | Some facts ->
+        SymbolIndex.update_from_facts ~sienv ~path:Relative_path.default ~facts
+    in
     let result =
       ServerAutoComplete.go_at_auto332_ctx
         ~ctx
         ~entry
-        ~sienv:!sienv
+        ~sienv
         ~autocomplete_context
     in
     (env, result.With_complete_flag.value)
@@ -215,10 +215,13 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let ctx = Provider_context.empty ~tcopt:env.tcopt in
     (env, ServerMethodJumpsBatch.go ctx genv.workers classes filter)
   | FIND_REFS find_refs_action ->
-    Done_or_retry.(
-      let include_defs = false in
-      ServerFindRefs.(
-        go find_refs_action include_defs genv env |> map_env ~f:to_absolute))
+    let ctx = Provider_context.empty ~tcopt:env.tcopt in
+    Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+        let open Done_or_retry in
+        let include_defs = false in
+        ServerFindRefs.(
+          go ctx find_refs_action include_defs genv env
+          |> map_env ~f:to_absolute))
   | GO_TO_IMPL go_to_impl_action ->
     Done_or_retry.(
       ServerGoToImpl.go go_to_impl_action genv env
@@ -234,12 +237,13 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
           ~path
           ~file_input
       in
-      (match ServerFindRefs.go_from_file_ctx ~ctx ~entry ~line ~column with
-      | None -> (env, Done None)
-      | Some (name, action) ->
-        map_env
-          ~f:(ServerFindRefs.to_ide name)
-          (ServerFindRefs.go action include_defs genv env)))
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          match ServerFindRefs.go_from_file_ctx ~ctx ~entry ~line ~column with
+          | None -> (env, Done None)
+          | Some (name, action) ->
+            map_env
+              ~f:(ServerFindRefs.to_ide name)
+              (ServerFindRefs.go ctx action include_defs genv env)))
   | IDE_GO_TO_IMPL (labelled_file, line, column) ->
     Done_or_retry.(
       let (path, file_input) =
@@ -269,17 +273,20 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
           (env, ServerHighlightRefs.go_quarantined ~ctx ~entry ~line ~column))
     in
     r
-  | REFACTOR refactor_action -> ServerRefactor.go refactor_action genv env
+  | REFACTOR refactor_action ->
+    let ctx = Provider_context.empty ~tcopt:env.tcopt in
+    Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+        ServerRefactor.go ctx refactor_action genv env)
   | IDE_REFACTOR
       { ServerCommandTypes.Ide_refactor_type.filename; line; char; new_name } ->
-    Done_or_retry.(
-      begin
+    let ctx = Provider_context.empty ~tcopt:env.tcopt in
+    Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+        let open Done_or_retry in
         match
-          ServerRefactor.go_ide (filename, line, char) new_name genv env
+          ServerRefactor.go_ide ctx (filename, line, char) new_name genv env
         with
         | Error e -> (env, Done (Error e))
-        | Ok r -> map_env r ~f:(fun x -> Ok x)
-      end)
+        | Ok r -> map_env r ~f:(fun x -> Ok x))
   | REMOVE_DEAD_FIXMES codes ->
     if genv.ServerEnv.options |> ServerArgs.no_load then (
       HackEventLogger.check_response (Errors.get_error_list env.errorl);
@@ -309,7 +316,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
       (env, Error "There are typecheck errors; cannot generate saved state.")
   | SEARCH (query, type_) ->
     let lst = env.ServerEnv.local_symbol_table in
-    (env, ServerSearch.go query type_ !lst)
+    (env, ServerSearch.go query type_ lst)
   | COVERAGE_COUNTS path -> (env, ServerCoverageMetric.go path genv env)
   | LINT fnl ->
     let ctx = Provider_context.empty ~tcopt:env.tcopt in
@@ -356,7 +363,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
           ServerAutoComplete.go_ctx
             ~ctx
             ~entry
-            ~sienv:!(env.ServerEnv.local_symbol_table)
+            ~sienv:env.ServerEnv.local_symbol_table
             ~is_manually_invoked
             ~line:pos.File_content.line
             ~column:pos.File_content.column)
@@ -376,7 +383,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         content
         pos
         ~filter_by_token:false
-        ~sienv:!(env.ServerEnv.local_symbol_table)
+        ~sienv:env.ServerEnv.local_symbol_table
     in
     ( env,
       {
