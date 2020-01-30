@@ -32,10 +32,14 @@ type predicate =
   | DeclarationLocation
   | FileXRefs
   | InterfaceDeclaration
+  | InterfaceDefinition
+  | TraitDeclaration
+  | TraitDefinition
 
 type container_type =
   | ClassContainer
   | InterfaceContainer
+  | TraitContainer
 
 type glean_json = {
   classDeclaration: json list;
@@ -43,6 +47,9 @@ type glean_json = {
   declarationLocation: json list;
   fileXRefs: json list;
   interfaceDeclaration: json list;
+  interfaceDefinition: json list;
+  traitDeclaration: json list;
+  traitDefinition: json list;
 }
 
 type result_progress = {
@@ -59,6 +66,9 @@ let init_progress =
       declarationLocation = [];
       fileXRefs = [];
       interfaceDeclaration = [];
+      interfaceDefinition = [];
+      traitDeclaration = [];
+      traitDefinition = [];
     }
   in
   { resultJson = default_json; factIds = JMap.empty }
@@ -108,6 +118,21 @@ let update_json_data predicate json progress =
         progress.resultJson with
         interfaceDeclaration = json :: progress.resultJson.interfaceDeclaration;
       }
+    | InterfaceDefinition ->
+      {
+        progress.resultJson with
+        interfaceDefinition = json :: progress.resultJson.interfaceDefinition;
+      }
+    | TraitDeclaration ->
+      {
+        progress.resultJson with
+        traitDeclaration = json :: progress.resultJson.traitDeclaration;
+      }
+    | TraitDefinition ->
+      {
+        progress.resultJson with
+        traitDefinition = json :: progress.resultJson.traitDefinition;
+      }
   in
   { resultJson = json; factIds = progress.factIds }
 
@@ -140,10 +165,12 @@ let container_decl_predicate container_type =
   match container_type with
   | ClassContainer -> ("class_", ClassDeclaration)
   | InterfaceContainer -> ("interface_", InterfaceDeclaration)
+  | TraitContainer -> ("trait", TraitDeclaration)
 
 let get_container_kind clss =
   match clss.c_kind with
   | Cinterface -> InterfaceContainer
+  | Ctrait -> TraitContainer
   (* TODO: process enum kind here *)
   | _ -> ClassContainer
 
@@ -166,7 +193,16 @@ let json_of_rel_bytespan offset len =
 let json_of_file filepath = JSON_Object [("key", JSON_String filepath)]
 
 let json_of_container_defn clss decl_id progress =
+  let base_defn defn_pred =
+    let json_fact =
+      JSON_Object [("declaration", JSON_Number (string_of_int decl_id))]
+    in
+    let (_, _, prog) = glean_json defn_pred json_fact progress in
+    prog
+  in
   match get_container_kind clss with
+  | InterfaceContainer -> base_defn InterfaceDefinition
+  | TraitContainer -> base_defn TraitDefinition
   | ClassContainer ->
     let is_abstract =
       match clss.c_kind with
@@ -182,9 +218,6 @@ let json_of_container_defn clss decl_id progress =
         ]
     in
     let (_, _, progress) = glean_json ClassDefinition json_fact progress in
-    progress
-  | _ ->
-    (* TODO: implement other container definitions *)
     progress
 
 let json_of_container_decl (container_type, decl_pred) _ctx name _elem progress
@@ -331,6 +364,9 @@ let build_json ctx symbols =
             | Interface ->
               let decl_pred = container_decl_predicate InterfaceContainer in
               add_container_xref ctx symbol_def occ.pos decl_pred (xrefs, prog)
+            | Trait ->
+              let decl_pred = container_decl_predicate TraitContainer in
+              add_container_xref ctx symbol_def occ.pos decl_pred (xrefs, prog)
             | _ -> (xrefs, prog)))
   in
   let progress =
@@ -348,8 +384,11 @@ let build_json ctx symbols =
     [
       ("hack.FileXRefs.1", progress.resultJson.fileXRefs);
       ("hack.ClassDefinition.1", progress.resultJson.classDefinition);
+      ("hack.TraitDefinition.1", progress.resultJson.traitDefinition);
+      ("hack.InterfaceDefinition.1", progress.resultJson.interfaceDefinition);
       ("hack.DeclarationLocation.1", progress.resultJson.declarationLocation);
       ("hack.ClassDeclaration.1", progress.resultJson.classDeclaration);
+      ("hack.TraitDeclaration.1", progress.resultJson.traitDeclaration);
       ("hack.InterfaceDeclaration.1", progress.resultJson.interfaceDeclaration);
     ]
   in

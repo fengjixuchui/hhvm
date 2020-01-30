@@ -25,6 +25,7 @@ module Reason = Typing_reason
 module Inst = Decl_instantiate
 module Type = Typing_ops
 module Env = Typing_env
+module Inf = Typing_inference_env
 module LEnv = Typing_lenv
 module Async = Typing_async
 module SubType = Typing_subtype
@@ -124,7 +125,7 @@ let with_expr_hook hook f =
 (* Helpers *)
 (*****************************************************************************)
 
-let err_witness env p = mk (Reason.Rwitness p, Typing_utils.terr env)
+let err_witness env p = TUtils.terr env (Reason.Rwitness p)
 
 (* Set all the types in an expression to the given type. *)
 let with_type ty env (e : Nast.expr) : Tast.expr =
@@ -144,7 +145,7 @@ let with_type ty env (e : Nast.expr) : Tast.expr =
   visitor#on_expr () e
 
 let expr_error env (r : Reason.t) (e : Nast.expr) =
-  let ty = mk (r, Typing_utils.terr env) in
+  let ty = TUtils.terr env r in
   (env, with_type ty Tast.dummy_saved_env e, ty)
 
 let expr_any env r e =
@@ -1592,7 +1593,8 @@ and expr
       ?expected
       env
       e
-  with e ->
+  with Inf.InconsistentTypeVarState _ as e ->
+    (* we don't want to catch unwanted exceptions here, eg Timeouts *)
     let stack = Caml.Printexc.get_raw_backtrace () in
     let pos = Pos.string (Pos.to_absolute p) in
     prerr_endline
@@ -1762,8 +1764,8 @@ and expr_
    * Given a list of types, computes their supertype. If any of the types are
    * unknown (e.g., comes from PHP), the supertype will be Typing_utils.tany env.
    *)
-  let compute_supertype ~(expected : ExpectedTy.t option) ~reason r env tys =
-    let p = Reason.to_pos r in
+  let compute_supertype
+      ~(expected : ExpectedTy.t option) ~reason ~use_pos r env tys =
     let (env, supertype) =
       match expected with
       | None -> Env.fresh_type_reason env r
@@ -1774,7 +1776,7 @@ and expr_
     | Tany _ -> (env, supertype)
     | _ ->
       let subtype_value env ty =
-        Type.sub_type p reason env ty supertype Errors.unify_error
+        Type.sub_type use_pos reason env ty supertype Errors.unify_error
       in
       let env = List.fold_left tys ~init:env ~f:subtype_value in
       if
@@ -1783,7 +1785,7 @@ and expr_
       then
         (* If one of the values comes from PHP land, we have to be conservative
          * and consider that we don't know what the type of the values are. *)
-        (env, mk (Reason.Rwitness p, Typing_utils.tany env))
+        (env, mk (Reason.Rwitness use_pos, Typing_utils.tany env))
       else
         (env, supertype)
   in
@@ -1795,6 +1797,7 @@ and expr_
   let compute_exprs_and_supertype
       ~(expected : ExpectedTy.t option)
       ?(reason = Reason.URarray_value)
+      ~use_pos
       r
       env
       l
@@ -1803,7 +1806,9 @@ and expr_
       List.map_env env l (extract_expr_and_ty ~expected)
     in
     let (exprs, tys) = List.unzip exprs_and_tys in
-    let (env, supertype) = compute_supertype ~expected ~reason r env tys in
+    let (env, supertype) =
+      compute_supertype ~expected ~reason ~use_pos r env tys
+    in
     (env, exprs, supertype)
   in
   let forget_fake_members env p callexpr =
@@ -1892,6 +1897,7 @@ and expr_
         let (env, tel, value_ty) =
           compute_exprs_and_supertype
             ~expected:elem_expected
+            ~use_pos:p
             (Reason.Rtype_variable_generics (p, "T", "array"))
             env
             l
@@ -1920,6 +1926,7 @@ and expr_
       let (env, _value_exprs, value_ty) =
         compute_exprs_and_supertype
           ~expected:vexpected
+          ~use_pos:p
           (Reason.Rtype_variable_generics (p, "T", "array"))
           env
           l
@@ -1948,6 +1955,7 @@ and expr_
       let (env, key_exprs, key_ty) =
         compute_exprs_and_supertype
           ~expected:kexpected
+          ~use_pos:p
           (Reason.Rtype_variable_generics (p, "Tk", "array"))
           env
           l
@@ -1955,6 +1963,7 @@ and expr_
       in
       let (env, value_exprs, value_ty) =
         compute_exprs_and_supertype
+          ~use_pos:p
           ~expected:vexpected
           (Reason.Rtype_variable_generics (p, "Tv", "array"))
           env
@@ -2024,6 +2033,7 @@ and expr_
     let (env, tel, elem_ty) =
       compute_exprs_and_supertype
         ~expected:elem_expected
+        ~use_pos:p
         ~reason:Reason.URvector
         (Reason.Rtype_variable_generics (p, "T", strip_ns name))
         env
@@ -2078,6 +2088,7 @@ and expr_
     let (env, tkl, k) =
       compute_exprs_and_supertype
         ~expected:kexpected
+        ~use_pos:p
         ~reason:Reason.URkey
         (Reason.Rtype_variable_generics (p, "Tk", strip_ns name))
         env
@@ -2087,6 +2098,7 @@ and expr_
     let (env, tvl, v) =
       compute_exprs_and_supertype
         ~expected:vexpected
+        ~use_pos:p
         ~reason:Reason.URvalue
         (Reason.Rtype_variable_generics (p, "Tv", strip_ns name))
         env
@@ -2183,7 +2195,7 @@ and expr_
     (match Env.get_gconst env cst_name with
     | None when Partial.should_check_error (Env.get_mode env) 4106 ->
       Errors.unbound_global cst_pos;
-      let ty = mk (Reason.Rwitness cst_pos, Typing_utils.terr env) in
+      let ty = err_witness env cst_pos in
       make_result env cst_pos (Aast.Id id) ty
     | None ->
       make_result
@@ -2533,7 +2545,7 @@ and expr_
     let env = might_throw env in
     (* NAST check reports an error if [] is used for reading in an
          lvalue context. *)
-    let ty = mk (Reason.Rwitness p, Typing_utils.terr env) in
+    let ty = err_witness env p in
     make_result env p (Aast.Array_get (te, None)) ty
   | Array_get (e1, Some e2) ->
     let (env, te1, ty1) =
@@ -3620,7 +3632,7 @@ and expr_
 
     expr_error env (Reason.Rwitness p) outer
 
-(* let ty = (Reason.Rwitness cst_pos, Typing_utils.terr env) in *)
+(* let ty = err_witness env cst_pos in *)
 and class_const ?(incl_tc = false) env p ((cpos, cid), mid) =
   let (env, _tal, ce, cty) =
     static_class_id ~check_constraints:true cpos env [] cid
@@ -4163,7 +4175,7 @@ and new_object
             tel
             typed_unpack_element
             (mk (r, Tobject))
-            (mk (r, TUtils.terr env))
+            (TUtils.terr env r)
         | [(ty, ctor_fty)] ->
           finish env tcid tel typed_unpack_element ty ctor_fty
         | l ->
@@ -4774,7 +4786,7 @@ and call_parent_construct pos env el unpacked_element =
     | Tpu _
     | Tpu_type_access _ ->
       Errors.parent_outside_class pos;
-      let ty = mk (Reason.Rwitness pos, Typing_utils.terr env) in
+      let ty = err_witness env pos in
       (env, [], None, ty, ty, ty))
 
 (* Depending on the kind of expression we are dealing with
@@ -4817,7 +4829,7 @@ and dispatch_call
     let ty =
       match get_node fty with
       | Tfun ft -> ft.ft_ret.et_type
-      | _ -> mk (Reason.Rwitness p, ty_)
+      | _ -> ty_ (Reason.Rwitness p)
     in
     make_call env (Tast.make_typed_expr fpos fty (Aast.Id id)) tal tel None ty
   in
@@ -4920,7 +4932,7 @@ and dispatch_call
     in
     if Option.is_some unpacked_element then
       Errors.unpacking_disallowed_builtin_function p pseudo_func;
-    make_call_special_from_def env id tel (Tprim Tbool)
+    make_call_special_from_def env id tel MakeType.bool
   (* Special function `unset` *)
   | Id ((_, pseudo_func) as id)
     when String.equal pseudo_func SN.PseudoFunctions.unset ->
@@ -4970,7 +4982,7 @@ and dispatch_call
     | [(p, Obj_get (_, _, OG_nullsafe))] ->
       Errors.nullsafe_property_write_context p;
       make_call_special_from_def env id tel (TUtils.terr env)
-    | _ -> make_call_special_from_def env id tel (Tprim Tvoid))
+    | _ -> make_call_special_from_def env id tel MakeType.void)
   (* Special function `array_filter` *)
   | Id ((_, array_filter) as id)
     when String.equal array_filter SN.StdlibFunctions.array_filter
@@ -5013,7 +5025,7 @@ and dispatch_call
         let (env, tyl) = List.map_env env tyl get_array_filter_return_type in
         Inter.intersect_list env r tyl
       | (r, Tany _) -> (env, mk (r, Typing_utils.tany env))
-      | (r, Terr) -> (env, mk (r, Typing_utils.terr env))
+      | (r, Terr) -> (env, TUtils.terr env r)
       | (r, _) ->
         let (env, tk) = Env.fresh_type env p in
         let (env, tv) = Env.fresh_type env p in
@@ -5113,7 +5125,7 @@ and dispatch_call
       | (r, Tarraykind (AKvarray _)) ->
         (env, (fun env tr -> (env, mk (r, Tarraykind (AKvarray tr)))))
       | (r, Tany _) -> (env, (fun env _ -> (env, mk (r, Typing_utils.tany env))))
-      | (r, Terr) -> (env, (fun env _ -> (env, mk (r, Typing_utils.terr env))))
+      | (r, Terr) -> (env, (fun env _ -> (env, TUtils.terr env r)))
       | (r, Tunion tyl) ->
         let (env, builders) = List.map_env env tyl build_output_container in
         ( env,
@@ -5660,7 +5672,7 @@ and dispatch_call
                 | Some (_, case) -> case
                 | None ->
                   Errors.pu_typing cpos "identifier" case;
-                  mk (Reason.Rwitness cpos, Terr)
+                  MakeType.err (Reason.Rwitness cpos)
               in
               (* Type variable to type the parameter of the Pu expression call.
                      We use a variable in case there is some dependency *)
@@ -5738,8 +5750,8 @@ and fun_type_of_id env x tal el =
     let (env, _, ty) = unbound_name env x (Pos.none, Aast.Null) in
     (env, ty, [])
   | Some { fe_type; fe_pos; fe_deprecated; _ } ->
-    (match deref fe_type with
-    | (r, Tfun ft) ->
+    (match get_node fe_type with
+    | Tfun ft ->
       let ft =
         Typing_special_fun.transform_special_fun_ty ft x (List.length el)
       in
@@ -5758,18 +5770,18 @@ and fun_type_of_id env x tal el =
         Typing_enforceability.compute_enforced_and_pessimize_fun_type env ft
       in
       let use_pos = fst x in
+      let def_pos = fe_pos in
       let (env, ft) =
         Phase.(
           localize_ft
             ~instantiation:
               { use_name = strip_ns (snd x); use_pos; explicit_targs = tal }
-            ~def_pos:fe_pos
+            ~def_pos
             ~ety_env
             env
             ft)
       in
       let fty = mk (get_reason fe_type, Tfun ft) in
-      let def_pos = Reason.to_pos r in
       TVis.check_deprecated ~use_pos ~def_pos fe_deprecated;
       (env, fty, tal)
     | _ -> failwith "Expected function type")
@@ -5973,7 +5985,7 @@ and class_get_
               class_info
               mid
               Errors.unify_error;
-            (env, (mk (Reason.Rnone, Typing_utils.terr env), [])))
+            (env, (TUtils.terr env Reason.Rnone, [])))
       in
       if is_const then (
         let const =
@@ -5997,7 +6009,7 @@ and class_get_
             class_
             mid
             Errors.unify_error;
-          (env, (mk (Reason.Rnone, Typing_utils.terr env), []))
+          (env, (TUtils.terr env Reason.Rnone, []))
         | Some { cc_type; cc_abstract; cc_pos; _ } ->
           let (env, cc_locl_type) = Phase.localize ~ety_env env cc_type in
           ( if cc_abstract then
@@ -6024,7 +6036,7 @@ and class_get_
             class_
             mid
             Errors.unify_error;
-          (env, (mk (Reason.Rnone, Typing_utils.terr env), []))
+          (env, (TUtils.terr env Reason.Rnone, []))
         | Some
             ( {
                 ce_visibility = vis;
@@ -6254,11 +6266,7 @@ and static_class_id ?(exact = Nonexact) ~check_constraints p env tal =
         (match trait_most_concrete_req_class trait env with
         | None ->
           Errors.parent_in_trait p;
-          make_result
-            env
-            []
-            Aast.CIparent
-            (mk (Reason.Rwitness p, Typing_utils.terr env))
+          make_result env [] Aast.CIparent (err_witness env p)
         | Some (_, parent_ty) ->
           (* inside a trait, parent is SN.Typehints.this, but with the
            * type of the most concrete class that the trait has
@@ -6393,10 +6401,10 @@ and static_class_id ?(exact = Nonexact) ~check_constraints p env tal =
       | (_, Tdynamic) -> (env, base_ty)
       | (_, (Tany _ | Tprim Tstring | Tobject)) when not (Env.is_strict env) ->
         (env, mk (Reason.Rwitness p, Typing_utils.tany env))
-      | (_, Terr) -> (env, mk (Reason.Rwitness p, Typing_utils.terr env))
+      | (_, Terr) -> (env, err_witness env p)
       | (r, Tvar _) ->
         Errors.unknown_type "an object" p (Reason.to_string "It is unknown" r);
-        (env, mk (Reason.Rwitness p, Typing_utils.terr env))
+        (env, err_witness env p)
       | ( _,
           ( Tany _ | Tnonnull | Tarraykind _ | Toption _ | Tprim _ | Tfun _
           | Ttuple _ | Tnewtype _ | Tdependent _
@@ -6405,7 +6413,7 @@ and static_class_id ?(exact = Nonexact) ~check_constraints p env tal =
         Errors.expected_class
           ~suffix:(", but got " ^ Typing_print.error env base_ty)
           p;
-        (env, mk (Reason.Rwitness p, Typing_utils.terr env))
+        (env, err_witness env p)
     in
     let (env, result_ty) = resolve_ety env ty in
     make_result env [] (Aast.CIexpr te) result_ty
@@ -6456,7 +6464,7 @@ and call_construct p env class_ params el unpacked_element cid =
       then
         Errors.constructor_no_args p;
       let (env, tel, _tyl) = exprs env el in
-      (env, tcid, tel, None, mk (Reason.Rnone, TUtils.terr env))
+      (env, tcid, tel, None, TUtils.terr env Reason.Rnone)
     | Some { ce_visibility = vis; ce_type = (lazy m); ce_deprecated; _ } ->
       let def_pos = get_pos m in
       TVis.check_obj_access ~use_pos:p ~def_pos env vis;
