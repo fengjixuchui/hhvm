@@ -18,7 +18,6 @@ open Typing_logic
 module SN = Naming_special_names
 module Reason = Typing_reason
 module TySet = Typing_set
-module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 module Nast = Aast
 
@@ -1536,15 +1535,15 @@ module PrintClass = struct
     synth ^ vis ^ " " ^ type_
 
   let class_elts tcopt m =
-    Sequence.fold m ~init:"" ~f:(fun acc (field, v) ->
+    List.fold m ~init:"" ~f:(fun acc (field, v) ->
         "(" ^ field ^ ": " ^ class_elt tcopt v ^ ") " ^ acc)
 
   let class_elts_with_breaks tcopt m =
-    Sequence.fold m ~init:"" ~f:(fun acc (field, v) ->
+    List.fold m ~init:"" ~f:(fun acc (field, v) ->
         "\n" ^ indent ^ field ^ ": " ^ class_elt tcopt v ^ acc)
 
   let class_consts tcopt m =
-    Sequence.fold m ~init:"" ~f:(fun acc (field, cc) ->
+    List.fold m ~init:"" ~f:(fun acc (field, cc) ->
         let synth =
           if cc.cc_synthesized then
             "synthetic "
@@ -1599,7 +1598,7 @@ module PrintClass = struct
       ""
 
   let typeconsts tcopt m =
-    Sequence.fold m ~init:"" ~f:(fun acc (_, v) ->
+    List.fold m ~init:"" ~f:(fun acc (_, v) ->
         "\n(" ^ typeconst tcopt v ^ ")" ^ acc)
 
   let ancestors ctx m =
@@ -1610,7 +1609,7 @@ module PrintClass = struct
      *
      * ParentPartiallyKnown must inherit one of the ! Unknown parents, so that
      * sigil could be omitted *)
-    Sequence.fold m ~init:"" ~f:(fun acc (field, v) ->
+    List.fold m ~init:"" ~f:(fun acc (field, v) ->
         let (sigil, kind) =
           match Decl_provider.get_class ctx field with
           | None -> ("!", "")
@@ -1636,7 +1635,7 @@ module PrintClass = struct
     ce_str ^ consist_str
 
   let req_ancestors tcopt xs =
-    Sequence.fold xs ~init:"" ~f:(fun acc (_p, x) ->
+    List.fold xs ~init:"" ~f:(fun acc (_p, x) ->
         acc ^ Full.to_string_decl tcopt x ^ ", ")
 
   let class_type ctx c =

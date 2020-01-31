@@ -10,7 +10,6 @@
 open Base
 open Aast
 open Typing_defs
-module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 
 let build ?(sep = ":@") prefix name = prefix ^ sep ^ name
@@ -38,14 +37,14 @@ let check_parent
     seen_types
     seen_values
     c_extends =
-  Sequence.iter
+  List.iter
     ~f:(fun parent ->
       match Decl_provider.get_class ctx parent with
       | None -> ()
       | Some cls ->
         let c_name = Cls.name cls in
         let c_pu_enums = Cls.pu_enums cls in
-        Sequence.iter
+        List.iter
           ~f:(fun (enum_name, pu_enum) ->
             begin
               match SMap.find_opt enum_name seen_types with
@@ -175,7 +174,7 @@ let handler =
 
         (* Gather information about atoms definitions and instances to check
          * if they are correct *)
-        Sequence.iter
+        List.iter
           ~f:
             (fun (enum_name, { tpu_case_types; tpu_case_values; tpu_members; _ })
                  ->

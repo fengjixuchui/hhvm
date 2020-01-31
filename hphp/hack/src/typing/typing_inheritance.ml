@@ -15,7 +15,6 @@ open Decl_defs
 open Reordered_argument_collections
 open Shallow_decl_defs
 open Typing_defs
-module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 module Env = Typing_env
 
@@ -61,7 +60,7 @@ let check_trait_override_annotations env cls ~static =
     else
       (Cls.methods, Cls.all_inherited_methods)
   in
-  Sequence.iter (methods cls) (fun (id, meth) ->
+  List.iter (methods cls) (fun (id, meth) ->
       if not meth.ce_override then
         ()
       else if String.equal meth.ce_origin (Cls.name cls) then

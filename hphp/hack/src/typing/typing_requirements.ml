@@ -10,7 +10,6 @@
 open Hh_prelude
 module Reason = Typing_reason
 module TUtils = Typing_utils
-module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 
 (* Only applied to classes. Checks that all the requirements of the traits
@@ -31,7 +30,7 @@ let check_class env tc =
   match Cls.kind tc with
   | Ast_defs.Cnormal
   | Ast_defs.Cabstract ->
-    Sequence.iter
+    List.iter
       (Cls.all_ancestor_reqs tc)
       (check_fulfillment env (Cls.get_ancestor tc))
   | Ast_defs.Ctrait

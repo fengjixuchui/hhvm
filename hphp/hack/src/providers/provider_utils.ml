@@ -6,7 +6,6 @@
  *
  *)
 open Core_kernel
-module Decl_provider = Decl_provider_ctx
 
 module Compute_tast = struct
   type t = {
@@ -22,6 +21,9 @@ module Compute_tast_and_errors = struct
     decl_cache_misses: int;
   }
 end
+
+let ctx_from_server_env (env : ServerEnv.env) : Provider_context.t =
+  Provider_context.empty ~tcopt:env.ServerEnv.tcopt
 
 let respect_but_quarantine_unsaved_changes
     ~(ctx : Provider_context.t) ~(f : unit -> 'a) : 'a =

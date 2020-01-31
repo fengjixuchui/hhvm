@@ -57,15 +57,15 @@ module Api : sig
 
   val all_where_constraints_on_this : t -> decl_where_constraint list
 
-  val upper_bounds_on_this : t -> decl_ty Sequence.t
+  val upper_bounds_on_this : t -> decl_ty list
 
-  val upper_bounds_on_this_from_constraints : t -> decl_ty Sequence.t
+  val upper_bounds_on_this_from_constraints : t -> decl_ty list
 
   val has_upper_bounds_on_this_from_constraints : t -> bool
 
-  val lower_bounds_on_this : t -> decl_ty Sequence.t
+  val lower_bounds_on_this : t -> decl_ty list
 
-  val lower_bounds_on_this_from_constraints : t -> decl_ty Sequence.t
+  val lower_bounds_on_this_from_constraints : t -> decl_ty list
 
   val has_lower_bounds_on_this_from_constraints : t -> bool
 
@@ -85,11 +85,11 @@ module Api : sig
 
   val extends : t -> string -> bool
 
-  val all_ancestors : t -> (string * decl_ty) Sequence.t
+  val all_ancestors : t -> (string * decl_ty) list
 
-  val all_ancestor_names : t -> string Sequence.t
+  val all_ancestor_names : t -> string list
 
-  val all_ancestor_reqs : t -> requirement Sequence.t
+  val all_ancestor_reqs : t -> requirement list
 
   val all_ancestor_req_names : t -> string Sequence.t
 
@@ -123,19 +123,19 @@ module Api : sig
 
   val has_smethod : t -> string -> bool
 
-  val consts : t -> (string * class_const) Sequence.t
+  val consts : t -> (string * class_const) list
 
-  val typeconsts : t -> (string * typeconst_type) Sequence.t
+  val typeconsts : t -> (string * typeconst_type) list
 
-  val pu_enums : t -> (string * pu_enum_type) Sequence.t
+  val pu_enums : t -> (string * pu_enum_type) list
 
-  val props : t -> (string * class_elt) Sequence.t
+  val props : t -> (string * class_elt) list
 
-  val sprops : t -> (string * class_elt) Sequence.t
+  val sprops : t -> (string * class_elt) list
 
-  val methods : t -> (string * class_elt) Sequence.t
+  val methods : t -> (string * class_elt) list
 
-  val smethods : t -> (string * class_elt) Sequence.t
+  val smethods : t -> (string * class_elt) list
 
   (** The following functions return _all_ class member declarations defined in or
       inherited by this class with the given member name, including ones which

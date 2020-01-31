@@ -335,6 +335,8 @@ let function_make_default = "extract_standalone_make_default"
 
 let call_make_default = Printf.sprintf "\\%s()" function_make_default
 
+let extract_standalone_any = "EXTRACT_STANDALONE_ANY"
+
 let string_of_tprim = function
   | Tbool -> "bool"
   | Tint -> "int"
@@ -459,8 +461,8 @@ let rec string_of_hint hint =
     Printf.sprintf "(%s)" (concat_map ~sep:" | " ~f:string_of_hint hints)
   | Hintersection hints ->
     Printf.sprintf "(%s)" (concat_map ~sep:" & " ~f:string_of_hint hints)
-  | Hany -> failwith "unprintable type hint: Hany"
-  | Herr -> failwith "unprintable type hint: Herr"
+  | Hany -> extract_standalone_any
+  | Herr -> extract_standalone_any
 
 let maybe_string_of_user_attribute { ua_name; ua_params } =
   let name = snd ua_name in
@@ -1124,7 +1126,7 @@ and add_signature_dependencies ctx deps obj =
         let m = value_or_not_found description @@ Class.get_method cls name in
         add_dep @@ Lazy.force m.ce_type;
         Class.all_ancestor_names cls
-        |> Sequence.iter ~f:(fun ancestor_name ->
+        |> List.iter ~f:(fun ancestor_name ->
                match Decl_provider.get_class ctx ancestor_name with
                | Some ancestor when Class.has_method ancestor name ->
                  do_add_dep ctx deps (Method (ancestor_name, name))
@@ -1134,7 +1136,7 @@ and add_signature_dependencies ctx deps obj =
         | Some sm ->
           add_dep @@ Lazy.force sm.ce_type;
           Class.all_ancestor_names cls
-          |> Sequence.iter ~f:(fun ancestor_name ->
+          |> List.iter ~f:(fun ancestor_name ->
                  match Decl_provider.get_class ctx ancestor_name with
                  | Some ancestor when Class.has_smethod ancestor name ->
                    do_add_dep ctx deps (SMethod (ancestor_name, name))
@@ -1160,14 +1162,14 @@ and add_signature_dependencies ctx deps obj =
         | (Some constr, _) -> add_dep @@ Lazy.force constr.ce_type
         | _ -> ())
       | Class _ ->
-        Sequence.iter (Class.all_ancestors cls) (fun (_, ty) -> add_dep ty);
-        Sequence.iter (Class.all_ancestor_reqs cls) (fun (_, ty) -> add_dep ty);
+        List.iter (Class.all_ancestors cls) (fun (_, ty) -> add_dep ty);
+        List.iter (Class.all_ancestor_reqs cls) (fun (_, ty) -> add_dep ty);
         Option.iter (Class.enum_type cls) ~f:(fun { te_base; te_constraint } ->
             add_dep te_base;
             Option.iter te_constraint ~f:add_dep)
       | AllMembers _ ->
         (* AllMembers is used for dependencies on enums, so we should depend on all constants *)
-        Sequence.iter (Class.consts cls) (fun (name, c) ->
+        List.iter (Class.consts cls) (fun (name, c) ->
             if name <> "class" then add_dep c.cc_type)
       (* Ignore, we fetch class hierarchy when we call add_signature_dependencies on a class dep *)
       | Extends _ -> ()
@@ -1218,26 +1220,26 @@ let get_implementation_dependencies ctx deps cls_name =
       let ancestor = get_class_exn ctx ancestor_name in
       if is_builtin_dep ctx (Class ancestor_name) then
         let acc =
-          Sequence.fold
+          List.fold
             (Class.smethods ancestor)
             ~init:acc
             ~f:(fun acc (smethod_name, _) -> add_smethod_impl acc smethod_name)
         in
         let acc =
-          Sequence.fold
+          List.fold
             (Class.methods ancestor)
             ~init:acc
             ~f:(fun acc (method_name, _) -> add_method_impl acc method_name)
         in
         let acc =
-          Sequence.fold
+          List.fold
             (Class.typeconsts ancestor)
             ~init:acc
             ~f:(fun acc (typeconst_name, _) ->
               add_typeconst_impl acc typeconst_name)
         in
         let acc =
-          Sequence.fold
+          List.fold
             (Class.consts ancestor)
             ~init:acc
             ~f:(fun acc (const_name, _) -> add_const_impl acc const_name)
@@ -1264,12 +1266,13 @@ let get_implementation_dependencies ctx deps cls_name =
           deps
           acc
     in
-    Sequence.fold
-      (Sequence.append
-         (Class.all_ancestor_names cls)
-         (Class.all_ancestor_req_names cls))
-      ~init:[]
-      ~f:add_impls
+    let result =
+      List.fold ~init:[] ~f:add_impls (Class.all_ancestor_names cls)
+    in
+    let result =
+      Sequence.fold ~init:result ~f:add_impls (Class.all_ancestor_req_names cls)
+    in
+    result
 
 let rec add_implementation_dependencies ctx deps =
   let open Typing_deps.Dep in
@@ -1455,17 +1458,24 @@ let get_code strict_declarations partial_declarations =
   in
   let (strict_toplevel, strict_namespaces) = get_code strict_declarations in
   let (partial_toplevel, partial_namespaces) = get_code partial_declarations in
-  let helper =
-    Printf.sprintf
-      "<<__Rx>> function %s(): nothing {throw new \\Exception();}"
-      function_make_default
+  let helpers =
+    [
+      Printf.sprintf
+        "<<__Rx>> function %s(): nothing {throw new \\Exception();}"
+        function_make_default;
+      "/* HH_FIXME[4101] */";
+      Printf.sprintf
+        "type %s = \\%s_;"
+        extract_standalone_any
+        extract_standalone_any;
+      Printf.sprintf "type %s_<T> = T;" extract_standalone_any;
+    ]
   in
   let strict_hh_prefix = "<?hh" in
   let partial_hh_prefix = "<?hh // partial" in
   let sections =
     [
-      ( "//// strict_toplevel.php",
-        (strict_hh_prefix, strict_toplevel @ [helper]) );
+      ("//// strict_toplevel.php", (strict_hh_prefix, strict_toplevel @ helpers));
       ("//// partial_toplevel.php", (partial_hh_prefix, partial_toplevel));
       ("//// strict_namespaces.php", (strict_hh_prefix, strict_namespaces));
       ("//// partial_namespaces.php", (partial_hh_prefix, partial_namespaces));

@@ -12,7 +12,6 @@ open Aast
 open Typing_defs
 open Utils
 module Env = Tast_env
-module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 module MakeType = Typing_make_type
 
@@ -41,10 +40,10 @@ let check_enum_exhaustiveness pos tc caselist coming_from_unresolved =
   in
   let unhandled =
     Cls.consts tc
-    |> Sequence.map ~f:fst
-    |> Sequence.filter ~f:(fun id -> String.( <> ) id SN.Members.mClass)
-    |> Sequence.filter ~f:(fun id -> not (SMap.mem id seen))
-    |> Sequence.to_list_rev
+    |> List.map ~f:fst
+    |> List.filter ~f:(fun id -> String.( <> ) id SN.Members.mClass)
+    |> List.filter ~f:(fun id -> not (SMap.mem id seen))
+    |> List.rev
   in
   let all_cases_handled = List.is_empty unhandled in
   match (all_cases_handled, has_default, coming_from_unresolved) with

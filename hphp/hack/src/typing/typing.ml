@@ -46,7 +46,6 @@ module Try = Typing_try
 module TR = Typing_reactivity
 module FL = FeatureLogging
 module MakeType = Typing_make_type
-module Decl_provider = Decl_provider_ctx
 module Cls = Decl_provider.Class
 module Partial = Partial_provider
 module Fake = Typing_fake_members
@@ -5952,8 +5951,7 @@ and class_get_
       in
       let get_smember_from_constraints env class_info =
         let upper_bounds =
-          Sequence.to_list
-            (Cls.upper_bounds_on_this_from_constraints class_info)
+          Cls.upper_bounds_on_this_from_constraints class_info
         in
         let (env, upper_bounds) =
           List.map_env env upper_bounds ~f:(fun env up ->
@@ -6192,7 +6190,7 @@ and class_id_for_new ~exact p env cid explicit_targs =
  * the 'require extends' must belong to the same inheritance hierarchy
  * and one of them should be the child of all the others *)
 and trait_most_concrete_req_class trait env =
-  Sequence.fold
+  List.fold
     (Cls.all_ancestor_reqs trait)
     ~f:
       begin
@@ -7661,7 +7659,7 @@ and check_const_trait_members pos env use_list =
   let (_, trait, _) = Decl_utils.unwrap_class_hint use_list in
   match Env.get_class env trait with
   | Some c when Ast_defs.(equal_class_kind (Cls.kind c) Ctrait) ->
-    Sequence.iter (Cls.props c) (fun (x, ce) ->
+    List.iter (Cls.props c) (fun (x, ce) ->
         if not ce.ce_const then Errors.trait_prop_const_class pos x)
   | _ -> ()
 
@@ -7752,8 +7750,8 @@ and class_def_ env c tc =
         let pos = method_pos ~is_static ce.ce_origin id in
         Errors.override_per_trait c.c_name id pos
     in
-    Sequence.iter (Cls.methods tc) (check_override ~is_static:false);
-    Sequence.iter (Cls.smethods tc) (check_override ~is_static:true)
+    List.iter (Cls.methods tc) (check_override ~is_static:false);
+    List.iter (Cls.smethods tc) (check_override ~is_static:true)
   );
   let env =
     {
@@ -7836,10 +7834,7 @@ and class_def_ env c tc =
     check_extend_abstract_meth ~is_final pc (Cls.methods tc);
     (match fst (Cls.construct tc) with
     | Some constr ->
-      check_extend_abstract_meth
-        ~is_final
-        pc
-        (Sequence.singleton (SN.Members.__construct, constr))
+      check_extend_abstract_meth ~is_final pc [(SN.Members.__construct, constr)]
     | None -> ());
     check_extend_abstract_meth ~is_final pc (Cls.smethods tc);
     check_extend_abstract_prop ~is_final pc (Cls.sprops tc);
@@ -7994,14 +7989,14 @@ and check_static_class_element get_dyn_elt element_name static_pos ~elt_type =
       ~elt_type
 
 and check_extend_abstract_meth ~is_final p seq =
-  Sequence.iter seq (fun (x, ce) ->
+  List.iter seq (fun (x, ce) ->
       match ce.ce_type with
       | (lazy ty) when ce.ce_abstract && is_fun ty ->
         Errors.implement_abstract ~is_final p (get_pos ty) "method" x
       | _ -> ())
 
 and check_extend_abstract_prop ~is_final p seq =
-  Sequence.iter seq (fun (x, ce) ->
+  List.iter seq (fun (x, ce) ->
       if ce.ce_abstract then
         let ce_pos = Lazy.force ce.ce_type |> get_pos in
         Errors.implement_abstract ~is_final p ce_pos "property" x)
@@ -8009,7 +8004,7 @@ and check_extend_abstract_prop ~is_final p seq =
 (* Type constants must be bound to a concrete type for non-abstract classes.
  *)
 and check_extend_abstract_typeconst ~is_final p seq =
-  Sequence.iter seq (fun (x, tc) ->
+  List.iter seq (fun (x, tc) ->
       if Option.is_none tc.ttc_type then
         Errors.implement_abstract
           ~is_final
@@ -8019,7 +8014,7 @@ and check_extend_abstract_typeconst ~is_final p seq =
           x)
 
 and check_extend_abstract_const ~is_final p seq =
-  Sequence.iter seq (fun (x, cc) ->
+  List.iter seq (fun (x, cc) ->
       if cc.cc_abstract && not cc.cc_synthesized then
         let cc_pos = get_pos cc.cc_type in
         Errors.implement_abstract ~is_final p cc_pos "constant" x)
@@ -9038,10 +9033,11 @@ let nast_to_tast_gienv ~(do_tast_checks : bool) opts nast :
       failwith
         "Invalid nodes in NAST. These nodes should be removed during naming."
   in
-  Nast_check.program nast;
+  let ctx = Provider_context.get_global_context_or_empty_FOR_MIGRATION () in
+  Nast_check.program ctx nast;
   let (tast, envs) = List.unzip @@ List.map nast convert_def in
   let envs = List.concat envs in
-  if do_tast_checks then Tast_check.program opts tast;
+  if do_tast_checks then Tast_check.program ctx.Provider_context.tcopt tast;
   (tast, envs)
 
 let nast_to_tast ~do_tast_checks opts nast =

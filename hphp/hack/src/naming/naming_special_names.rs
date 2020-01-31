@@ -436,7 +436,7 @@ pub mod special_idents {
     pub const TMP_VAR_PREFIX: &str = "__tmp$";
 
     pub fn is_tmp_var(name: &str) -> bool {
-        name.len() > 6 && &name[..6] == TMP_VAR_PREFIX
+        name.len() > 6 && &name.as_bytes()[..6] == TMP_VAR_PREFIX.as_bytes()
     }
 
     pub fn assert_tmp_var(name: &str) {
@@ -466,6 +466,10 @@ pub mod pseudo_functions {
 
     pub const ECHO: &str = "\\echo";
 
+    pub const ECHO_NO_NS: &str = "echo";
+
+    pub const EMPTY: &str = "\\empty";
+
     pub const EXIT: &str = "\\exit";
 
     pub const DIE: &str = "\\die";
@@ -481,6 +485,7 @@ pub mod pseudo_functions {
             HH_LOOP_FOREVER,
             ASSERT,
             ECHO,
+            EMPTY,
             EXIT,
             DIE,
         ];
@@ -861,6 +866,11 @@ pub mod regex {
     pub const T_PATTERN: &str = "\\HH\\Lib\\Regex\\Pattern";
 }
 
+pub mod emitter_special_functions {
+    pub const EVAL: &str = "\\eval";
+    pub const SET_FRAME_METADATA: &str = "\\HH\\set_frame_metadata";
+}
+
 pub mod math {
     pub const NAN: &str = "NAN";
     pub const INF: &str = "INF";
@@ -881,6 +891,7 @@ mod test {
     fn test_special_idents_is_tmp_var() {
         assert!(!is_tmp_var("_tmp$Blah"));
         assert!(!is_tmp_var("__tmp$"));
+        assert!(!is_tmp_var("О БОЖЕ"));
 
         assert!(is_tmp_var("__tmp$Blah"));
     }
