@@ -1,13 +1,8 @@
 <?hh
 class :xhp implements \XHPChild {}
-class :foo extends :xhp {}
+class :foo extends :xhp {
+  attribute int bar @required;
+}
 function with_xhp(): :xhp {
-  return <foo />;
+  return <foo bar={42} />;
 }
-<<__Rx>>
-function extract_standalone_make_default(): nothing {
-  throw new \Exception();
-}
-/* HH_FIXME[4101] */
-type EXTRACT_STANDALONE_ANY = \EXTRACT_STANDALONE_ANY_;
-type EXTRACT_STANDALONE_ANY_<T> = T;

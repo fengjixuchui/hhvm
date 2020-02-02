@@ -18,9 +18,10 @@
       [{ cv_final = false; cv_xhp_attr = None; cv_abstract = false;
          cv_visibility = Private;
          cv_type =
-         (Some ([13:11-20],
-                (Happly (([13:11-17], "\\HH\\Vector"),
-                   [([13:18-19], (Habstr "T"))]))));
+         ((Vector<T>),
+          (Some ([13:11-20],
+                 (Happly (([13:11-17], "\\HH\\Vector"),
+                    [([13:18-19], (Habstr "T"))])))));
          cv_id = ([13:21-23], "x"); cv_expr = None; cv_user_attributes = [];
          cv_doc_comment = None; cv_is_promoted_variadic = false;
          cv_is_static = false; cv_span = [13:21-23] }
@@ -202,7 +203,7 @@
                       (([33:12-25], MyPhonyVector<X>),
                        (CI ([33:12-25], "\\MyPhonyVector"))),
                       [((X), ([33:12-25], (Happly (([Pos.none], "_"), []))))],
-                      [], None, ([33:12-25], (function(): _)))))
+                      [], None, ([33:12-25], (function(): void)))))
                   )))));
            ([34:3-20],
             (Expr

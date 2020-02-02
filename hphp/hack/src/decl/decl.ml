@@ -265,7 +265,7 @@ and fun_decl_in_env env ~is_lambda f =
   let params = make_params env ~is_lambda f.f_params in
   let ret_ty =
     match hint_of_type_hint f.f_ret with
-    | None -> ret_from_fun_kind (fst f.f_name) ~is_lambda f.f_fun_kind
+    | None -> ret_from_fun_kind ~is_lambda env (fst f.f_name) f.f_fun_kind
     | Some ty -> Decl_hint.hint env ty
   in
   let arity =
@@ -603,11 +603,6 @@ and class_decl c =
   let ext_strict =
     List.fold_left c.sc_uses ~f:(trait_exists env) ~init:ext_strict
   in
-  if (not ext_strict) && Partial.should_check_error env.Decl_env.mode 4117 then
-    let (p, name) = c.sc_name in
-    Errors.strict_members_not_known p name
-  else
-    ();
   let enum = c.sc_enum_type in
   let consts =
     Decl_enum.rewrite_class

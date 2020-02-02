@@ -40,7 +40,7 @@ let ensure_count (count : int) : unit =
     "The number of deferred items should match the expected value"
 
 let test_deferred_decl_add () =
-  let _old_state = Deferred_decl.reset ~enable:true ~threshold_opt:None in
+  Deferred_decl.reset ~enable:true ~threshold_opt:None;
   ensure_count 0;
 
   Deferred_decl.add_deferment (Relative_path.create Relative_path.Dummy "foo");
@@ -52,16 +52,14 @@ let test_deferred_decl_add () =
   Deferred_decl.add_deferment (Relative_path.create Relative_path.Dummy "bar");
   ensure_count 2;
 
-  let _old_state = Deferred_decl.reset ~enable:true ~threshold_opt:None in
+  Deferred_decl.reset ~enable:true ~threshold_opt:None;
   ensure_count 0;
 
   true
 
 let ensure_threshold ~(threshold : int) ~(limit : int) ~(expected : int) : unit
     =
-  let _old_state =
-    Deferred_decl.reset ~enable:true ~threshold_opt:(Some threshold)
-  in
+  Deferred_decl.reset ~enable:true ~threshold_opt:(Some threshold);
   ensure_count 0;
 
   let deferred_count = ref 0 in
@@ -70,7 +68,7 @@ let ensure_threshold ~(threshold : int) ~(limit : int) ~(expected : int) : unit
     let relative_path = Relative_path.create Relative_path.Dummy path in
     try
       Deferred_decl.raise_if_should_defer ~d:relative_path;
-      Deferred_decl.count_decl_cache_miss "test_symbol" 0.1
+      Deferred_decl.increment_counter ()
     with Deferred_decl.Defer d ->
       Asserter.Bool_asserter.assert_equals
         (i >= threshold)
@@ -181,17 +179,18 @@ let test_process_file_deferring () =
   let errors = Errors.empty in
 
   (* Finally, this is what all the setup was for: process this file *)
-  let { Typing_check_service.computation; decl_cache_misses; _ } =
+  let { Typing_check_service.computation; counters; _ } =
     Typing_check_service.process_file dynamic_view_files opts errors file
   in
   Asserter.Int_asserter.assert_equals
     2
     (List.length computation)
     "Should be two file computations";
+
   (* this test doesn't write back to cache, so num of decl_fetches isn't solid *)
   Asserter.Bool_asserter.assert_equals
     true
-    (decl_cache_misses > 0)
+    (Telemetry_test_utils.int_exn counters "decl_accessors.count" > 0)
     "Should be at least one decl fetched";
 
   (* Validate the deferred type check computation *)
@@ -244,25 +243,34 @@ let test_compute_tast_counting () =
   let ctx = Provider_context.empty ~tcopt in
   let file_input = ServerCommandTypes.FileContent content in
   let (ctx, entry) = Provider_utils.update_context ctx path file_input in
-  let { Provider_utils.Compute_tast_and_errors.decl_cache_misses; _ } =
+  let { Provider_utils.Compute_tast_and_errors.telemetry; _ } =
     Provider_utils.compute_tast_and_errors_unquarantined ~ctx ~entry
   in
+
   Asserter.Int_asserter.assert_equals
-    1
-    decl_cache_misses
-    "There should be 1 decl_cache_misses for shared_mem provider";
+    82
+    (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
+    "There should be 82 decl_accessor_count for shared_mem provider";
+  Asserter.Int_asserter.assert_equals
+    0
+    (Telemetry_test_utils.int_exn telemetry "disk_cat.count")
+    "There should be 0 disk_cat_count for shared_mem provider";
 
   (* Now try the same with local_memory backend *)
   Provider_backend.set_local_memory_backend ~max_num_decls:1000;
   Parser_options_provider.set ParserOptions.default;
   let (ctx, entry) = Provider_utils.update_context ctx path file_input in
-  let { Provider_utils.Compute_tast_and_errors.decl_cache_misses; _ } =
+  let { Provider_utils.Compute_tast_and_errors.telemetry; _ } =
     Provider_utils.compute_tast_and_errors_unquarantined ~ctx ~entry
   in
   Asserter.Int_asserter.assert_equals
-    4
-    decl_cache_misses
-    "There should be 4 decl_cache_misses for local_memory provider";
+    58
+    (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
+    "There should be 58 decl_accessor_count for local_memory provider";
+  Asserter.Int_asserter.assert_equals
+    2
+    (Telemetry_test_utils.int_exn telemetry "disk_cat.count")
+    "There should be 2 disk_cat_count for local_memory_provider";
 
   (* restore it back to shared_mem for the rest of the tests *)
   Provider_backend.set_shared_memory_backend ();
