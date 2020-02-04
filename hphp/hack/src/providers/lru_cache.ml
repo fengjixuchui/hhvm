@@ -17,7 +17,7 @@ module type Entry = sig
 
   type 'a value = 'a
 
-  val get_size : 'a value -> size
+  val get_size : key:'a key -> value:'a value -> size
 end
 
 module Cache (Entry : Entry) = struct
@@ -115,16 +115,16 @@ module Cache (Entry : Entry) = struct
     incr_timestamp t;
     let entry =
       {
-        size = Entry.get_size value;
+        size = Entry.get_size ~key ~value;
         last_used_timestamp = t.timestamp;
         value = Value_wrapper value;
       }
     in
     Hashtbl.add_exn t.entries (Key key) entry;
     t.total_size <- t.total_size + entry.size;
+    trim_to_memory_limit t;
     t.telemetry <-
       { t.telemetry with peak_size = max t.telemetry.peak_size t.total_size };
-    trim_to_memory_limit t;
     entry
 
   let add (t : t) ~(key : 'a Entry.key) ~(value : 'a Entry.value) : unit =
@@ -175,7 +175,8 @@ module Cache (Entry : Entry) = struct
     time_internal t start_time;
     ()
 
-  let reset_telemetry (t : t) : unit = t.telemetry <- empty_telemetry
+  let reset_telemetry (t : t) : unit =
+    t.telemetry <- { empty_telemetry with peak_size = length t }
 
   let get_telemetry (t : t) : telemetry = t.telemetry
 end
