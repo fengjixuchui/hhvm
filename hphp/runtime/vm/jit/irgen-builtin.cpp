@@ -89,7 +89,7 @@ const StaticString
   s_shapes_idx("HH\\Shapes::idx"),
   s_is_meth_caller("HH\\is_meth_caller"),
   s_tag_provenance_here("HH\\tag_provenance_here"),
-  s_mark_legacy_hack_array("HH\\mark_legacy_hack_array"),
+  s_array_mark_legacy("HH\\array_mark_legacy"),
   s_meth_caller_get_class("HH\\meth_caller_get_class"),
   s_meth_caller_get_method("HH\\meth_caller_get_method");
 
@@ -225,13 +225,32 @@ SSATmp* opt_method_exists(IRGS& env, const ParamPrep& params) {
   return gen(env, MethodExists, cls, meth);
 }
 
+const StaticString
+  s_conv_clsmeth_to_varray("Implicit clsmeth to varray conversion"),
+  s_conv_clsmeth_to_vec("Implicit clsmeth to vec conversion");
+
+void raiseClsMethToVecWarningHelper(IRGS& env, const ParamPrep& params) {
+  if (RuntimeOption::EvalRaiseClsMethConversionWarning) {
+    gen(
+      env,
+      RaiseNotice,
+      make_opt_catch(env, params),
+      cns(env, RuntimeOption::EvalHackArrDVArrs ?
+        s_conv_clsmeth_to_vec.get() : s_conv_clsmeth_to_varray.get())
+    );
+  }
+}
+
 SSATmp* opt_count(IRGS& env, const ParamPrep& params) {
   if (params.size() != 2) return nullptr;
 
   auto const mode = params[1].value;
   auto const val = params[0].value;
 
-  if (val->isA(TClsMeth)) return cns(env, 2);
+  if (val->isA(TClsMeth)) {
+    raiseClsMethToVecWarningHelper(env, params);
+    return cns(env, 2);
+  }
 
   // Bail if we're trying to do a recursive count()
   if (!mode->hasConstVal(0)) return nullptr;
@@ -601,7 +620,10 @@ SSATmp* opt_is_list_like(IRGS& env, const ParamPrep& params) {
   // Type might be a Ptr here, so the maybe() below will go wrong if we don't
   // bail out here.
   if (!(type <= TInitCell)) return nullptr;
-  if (type <= TClsMeth) return cns(env, true);
+  if (type <= TClsMeth) {
+    raiseClsMethToVecWarningHelper(env, params);
+    return cns(env, true);
+  }
   if (!type.maybe(TArrLike)) return cns(env, false);
   if (type <= TVec || type <= Type::Array(ArrayData::kPackedKind)) {
     return cns(env, true);
@@ -715,14 +737,10 @@ SSATmp* opt_foldable(IRGS& env,
           env,
           make_tv<KindOfPersistentKeyset>(scalar_array())
         );
-
       case KindOfPersistentDArray:
       case KindOfDArray:
       case KindOfPersistentVArray:
       case KindOfVArray:
-        // TODO(T58820726)
-        return nullptr;
-
       case KindOfPersistentArray:
       case KindOfArray:
         return cns(
@@ -1055,9 +1073,24 @@ SSATmp* opt_tag_provenance_here(IRGS& env, const ParamPrep& params) {
   return result;
 }
 
-SSATmp* opt_mark_legacy_hack_array(IRGS& env, const ParamPrep& params) {
+StaticString s_ARRAY_MARK_LEGACY_VEC(Strings::ARRAY_MARK_LEGACY_VEC);
+StaticString s_ARRAY_MARK_LEGACY_DICT(Strings::ARRAY_MARK_LEGACY_DICT);
+
+SSATmp* opt_array_mark_legacy(IRGS& env, const ParamPrep& params) {
   if (params.size() != 1) return nullptr;
   auto const value = params[0].value;
+  if (!RO::EvalHackArrDVArrs) {
+    // if we're using NativeImpl, we receive the value as a stack pointer and we
+    // shouldn't bother with any optimizations here
+    if (!value->isA(TCell)) return nullptr;
+    // the machinery below constrains the parameters to DataTypeSpecific so
+    // these checks should be sufficient to correctly implement the logging
+    if (value->isA(TVec)) {
+      gen(env, RaiseWarning, cns(env, s_ARRAY_MARK_LEGACY_VEC.get()));
+    } else if (value->isA(TDict)) {
+      gen(env, RaiseWarning, cns(env, s_ARRAY_MARK_LEGACY_DICT.get()));
+    }
+  }
   if (value->isA(TVec)) {
     return gen(env, SetLegacyVec, value);
   } else if (value->isA(TDict)) {
@@ -1176,7 +1209,7 @@ SSATmp* optimizedFCallBuiltin(IRGS& env,
     X(shapes_idx)
     X(is_meth_caller)
     X(tag_provenance_here)
-    X(mark_legacy_hack_array)
+    X(array_mark_legacy)
     X(meth_caller_get_class)
     X(meth_caller_get_method)
 

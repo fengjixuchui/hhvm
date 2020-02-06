@@ -2911,7 +2911,9 @@ where
                 IfStatement(x) if node as *const _ == &x.if_condition as *const _ => break,
                 ForStatement(x) if node as *const _ == &x.for_initializer as *const _ => break,
                 SwitchStatement(x) if node as *const _ == &x.switch_expression as *const _ => break,
-                ForeachStatement(x) if node as *const _ == &x.foreach_collection as *const _ => break,
+                ForeachStatement(x) if node as *const _ == &x.foreach_collection as *const _ => {
+                    break
+                }
                 UsingStatementBlockScoped(x)
                     if node as *const _ == &x.using_block_expressions as *const _ =>
                 {
@@ -2934,7 +2936,9 @@ where
                     break;
                 }
                 // Unary based expressions have their own custom fanout
-                PrefixUnaryExpression(x) if Self::unop_allows_await(&x.prefix_unary_operator) => continue,
+                PrefixUnaryExpression(x) if Self::unop_allows_await(&x.prefix_unary_operator) => {
+                    continue
+                }
                 PostfixUnaryExpression(x) if Self::unop_allows_await(&x.postfix_unary_operator) => {
                     continue
                 }
@@ -3011,7 +3015,6 @@ where
                 | ConstructorCall(_)
                 | ShapeExpression(_)
                 | TupleExpression(_)
-                | ArrayCreationExpression(_)
                 | ArrayIntrinsicExpression(_)
                 | DarrayIntrinsicExpression(_)
                 | DictionaryIntrinsicExpression(_)
@@ -3551,7 +3554,6 @@ where
             // If the name is empty, then there was an earlier
             // parsing error that should supercede this one.
             if name == "" {
-
             } else if names.contains(name) {
                 self.errors.push(Self::make_error_from_node(
                     prop,
@@ -4331,6 +4333,7 @@ where
                 && (text == Self::strip_hh_ns(sn::autoimported_functions::FUN_)
                     || text == Self::strip_hh_ns(sn::autoimported_functions::CLASS_METH)))
                 || (text == sn::std_lib_functions::MARK_LEGACY_HACK_ARRAY)
+                || (text == sn::std_lib_functions::ARRAY_MARK_LEGACY)
         };
 
         let is_namey = |self_: &Self, token: &Token| -> bool {
@@ -4491,7 +4494,6 @@ where
             ArrayIntrinsicExpression(x) => {
                 check_collection_members(self, &x.array_intrinsic_members)
             }
-            ArrayCreationExpression(x) => check_collection_members(self, &x.array_creation_members),
             ShapeExpression(x) => check_collection_members(self, &x.shape_expression_fields),
             ElementInitializer(x) => {
                 self.check_constant_expression(&x.element_key);
@@ -4926,7 +4928,6 @@ where
             | AnonymousFunction(_)
             | AwaitableCreationExpression(_)
             | ArrayIntrinsicExpression(_)
-            | ArrayCreationExpression(_)
             | DarrayIntrinsicExpression(_)
             | VarrayIntrinsicExpression(_)
             | ShapeExpression(_)
@@ -5241,9 +5242,7 @@ where
                 self.methodish_errors(node);
             }
 
-            ArrayCreationExpression(_) | ArrayIntrinsicExpression(_) => {
-                self.expression_errors(node)
-            }
+            ArrayIntrinsicExpression(_) => self.expression_errors(node),
             LiteralExpression(_)
             | SafeMemberSelectionExpression(_)
             | HaltCompilerExpression(_)

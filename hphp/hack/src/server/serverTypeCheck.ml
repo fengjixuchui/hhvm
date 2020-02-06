@@ -800,17 +800,20 @@ functor
 
     let do_redecl_phase1
         (genv : genv)
+        (env : env)
         ~(fast : FileInfo.names Relative_path.Map.t)
         ~(naming_table : Naming_table.t)
         ~(oldified_defs : FileInfo.names) : redecl_phase1_result =
       let bucket_size = genv.local_config.SLC.type_decl_bucket_size in
       let defs_to_redecl = get_defs fast in
+      let ctx = Provider_utils.ctx_from_server_env env in
       let (_, changes, to_redecl_phase2_deps, to_recheck1) =
         Decl_redecl_service.redo_type_decl
           ~conservative_redecl:
             (not
                genv.local_config.ServerLocalConfig.disable_conservative_redecl)
           ~bucket_size
+          ctx
           genv.workers
           (get_classes naming_table)
           oldified_defs
@@ -848,12 +851,14 @@ functor
         oldified_defs
         defs_to_oldify;
       let oldified_defs = FileInfo.merge_names oldified_defs defs_to_oldify in
+      let ctx = Provider_utils.ctx_from_server_env env in
       let (errorl', _changes, _to_redecl2, to_recheck2) =
         Decl_redecl_service.redo_type_decl
           ~conservative_redecl:
             (not
                genv.local_config.ServerLocalConfig.disable_conservative_redecl)
           ~bucket_size
+          ctx
           genv.workers
           (get_classes naming_table)
           oldified_defs
@@ -1016,6 +1021,10 @@ functor
       let min_batch_size =
         ServerLocalConfig.(genv.local_config.remote_type_check.min_batch_size)
       in
+      let worker_min_log_level =
+        ServerLocalConfig.(
+          genv.local_config.remote_type_check.worker_min_log_level)
+      in
       let root = Relative_path.path_of_prefix Relative_path.Root in
       {
         env with
@@ -1037,6 +1046,7 @@ functor
                         ~ignore_hh_version:
                           (ServerArgs.ignore_hh_version genv.options);
                     version_specifier;
+                    worker_min_log_level;
                   }
                 (* TODO: use env.typing_service.delegate_state when cancellation
                   implementation is finished *)
@@ -1175,7 +1185,7 @@ functor
        These are invalidated by Decl_redecl_service.redo_type_decl in phase 1,
        and are lazily recomputed as needed. *)
       let { changes; oldified_defs; to_recheck1; to_redecl_phase2_deps } =
-        do_redecl_phase1 genv ~fast ~naming_table ~oldified_defs
+        do_redecl_phase1 genv env ~fast ~naming_table ~oldified_defs
       in
       let to_redecl_phase2 = Typing_deps.get_files to_redecl_phase2_deps in
       let hs = SharedMem.heap_size () in

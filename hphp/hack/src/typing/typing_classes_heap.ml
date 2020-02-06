@@ -29,7 +29,7 @@ type class_type_variant =
   | Lazy of lazy_class_type
   | Eager of class_type
 
-let make_lazy_class_type class_name sc =
+let make_lazy_class_type ctx class_name sc =
   let Decl_ancestors.
         {
           ancestors;
@@ -38,10 +38,10 @@ let make_lazy_class_type class_name sc =
           req_ancestor_names;
           all_requirements;
         } =
-    Decl_ancestors.make class_name
+    Decl_ancestors.make ctx class_name
   in
   let get_ancestor = LSTable.get ancestors in
-  let inherited_members = Decl_inheritance.make class_name get_ancestor in
+  let inherited_members = Decl_inheritance.make ctx class_name get_ancestor in
   {
     sc;
     ih = inherited_members;
@@ -71,7 +71,9 @@ module Classes = struct
 
   type t = class_type_variant
 
-  let compute_class_decl ~(use_cache : bool) (class_name : string) : t option =
+  let compute_class_decl
+      ~(use_cache : bool) (ctx : Provider_context.t) (class_name : string) :
+      t option =
     try
       let get_eager_class_type class_name =
         Decl_class.to_class_type
@@ -94,7 +96,7 @@ module Classes = struct
             Deferred_decl.raise_if_should_defer ~d:file;
             let class_type =
               Errors.run_in_decl_mode file (fun () ->
-                  Decl.declare_class_in_file file class_name)
+                  Decl.declare_class_in_file ctx file class_name)
             in
             Deferred_decl.increment_counter ();
             (match class_type with
@@ -112,9 +114,9 @@ module Classes = struct
          shallow_class_decl is enabled. *)
       let class_type_variant =
         if shallow_decl_enabled () then
-          match Shallow_classes_heap.get class_name with
+          match Shallow_classes_heap.get ctx class_name with
           | None -> raise Exit
-          | Some sc -> Lazy (make_lazy_class_type class_name sc)
+          | Some sc -> Lazy (make_lazy_class_type ctx class_name sc)
         else
           Eager (get_eager_class_type class_name)
       in
@@ -127,19 +129,19 @@ module Classes = struct
       None
     | Exit -> None
 
-  let get class_name =
+  let get ctx class_name =
     Counters.count_decl_accessor @@ fun () ->
     match Cache.get class_name with
     | Some t -> Some t
-    | None -> compute_class_decl ~use_cache:true class_name
+    | None -> compute_class_decl ~use_cache:true ctx class_name
 
-  let find_unsafe key =
-    match get key with
+  let find_unsafe ctx key =
+    match get ctx key with
     | None -> raise Caml.Not_found
     | Some x -> x
 
-  let mem key =
-    match get key with
+  let mem ctx key =
+    match get ctx key with
     | None -> false
     | Some _ -> true
 end

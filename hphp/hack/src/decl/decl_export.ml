@@ -57,6 +57,7 @@ let get_class_filename cid =
 
 let rec collect_class
     ?(fail_if_missing = false)
+    (ctx : Provider_context.t)
     (requested_classes : SSet.t)
     (cid : string)
     (decls : saved_decls) : saved_decls =
@@ -84,9 +85,9 @@ let rec collect_class
           the inheritance hierarchy into the shared memory heaps. When that
           invariant no longer holds, the following will no longer work. *)
             let (_ : Decl_defs.decl_class_type option) =
-              Decl.declare_class_in_file filename cid
+              Decl.declare_class_in_file ctx filename cid
             in
-            collect_class requested_classes cid decls ~fail_if_missing:true
+            collect_class ctx requested_classes cid decls ~fail_if_missing:true
         with
         | Exit
         | Decl_not_found _ ->
@@ -178,10 +179,10 @@ let rec collect_class
         |> SSet.union data.dc_xhp_attr_deps
         |> SSet.union data.dc_req_ancestors_extends
       in
-      collect_classes requested_classes decls ancestors
+      collect_classes ctx requested_classes decls ancestors
 
-and collect_classes requested_classes decls =
-  SSet.fold ~init:decls ~f:(collect_class requested_classes)
+and collect_classes ctx requested_classes decls =
+  SSet.fold ~init:decls ~f:(collect_class ctx requested_classes)
 
 let restore_decls decls =
   let { classes; props; sprops; meths; smeths; cstrs; fixmes; decl_fixmes } =
@@ -196,7 +197,8 @@ let restore_decls decls =
   Relative_path.Map.iter fixmes Fixme_provider.provide_hh_fixmes;
   Relative_path.Map.iter decl_fixmes Fixme_provider.provide_decl_hh_fixmes
 
-let export_class_decls classes = collect_classes classes empty_decls classes
+let export_class_decls ctx classes =
+  collect_classes ctx classes empty_decls classes
 
 let import_class_decls decls =
   restore_decls decls;

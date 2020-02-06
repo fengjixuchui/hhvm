@@ -61,10 +61,10 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, bool val) {
     if (RuntimeOption::EvalHackArrDVArrs) {
       return op.clsmethVsNonClsMeth();
     } else {
-      if (UNLIKELY(op.noticeOnArrNonArr())) {
-        raiseHackArrCompatArrNonArrCmp();
+      if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+        raiseClsMethNonClsMethRelCompareWarning();
       }
-      return op(tvToBool(cell), val);
+      return op(true, val);
     }
   } else {
     if (UNLIKELY(op.noticeOnArrNonArr() && isArrayType(cell.m_type))) {
@@ -120,9 +120,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, int64_t val) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
     case KindOfPersistentArray:
     case KindOfArray:
       if (UNLIKELY(op.noticeOnArrNonArr())) {
@@ -148,8 +145,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, int64_t val) {
       if (RuntimeOption::EvalHackArrDVArrs) {
         return op.clsmethVsNonClsMeth();
       } else {
-        if (UNLIKELY(op.noticeOnArrNonArr())) {
-          raiseHackArrCompatArrNonArrCmp();
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
         }
         return op(true, false);
       }
@@ -198,9 +195,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, double val) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
     case KindOfPersistentArray:
     case KindOfArray:
       if (UNLIKELY(op.noticeOnArrNonArr())) {
@@ -226,8 +220,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, double val) {
       if (RuntimeOption::EvalHackArrDVArrs) {
         return op.clsmethVsNonClsMeth();
       } else {
-        if (UNLIKELY(op.noticeOnArrNonArr())) {
-          raiseHackArrCompatArrNonArrCmp();
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
         }
         return op(true, false);
       }
@@ -284,9 +278,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const StringData* val) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
     case KindOfPersistentArray:
     case KindOfArray:
       if (UNLIKELY(op.noticeOnArrNonArr())) {
@@ -319,8 +310,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const StringData* val) {
       if (RuntimeOption::EvalHackArrDVArrs) {
         return op.clsmethVsNonClsMeth();
       } else {
-        if (UNLIKELY(op.noticeOnArrNonArr())) {
-          raiseHackArrCompatArrNonArrCmp();
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
         }
         return op(true, false);
       }
@@ -391,9 +382,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ArrayData* ad) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
     case KindOfPersistentArray:
     case KindOfArray:
       return op(cell.m_data.parr, ad);
@@ -474,9 +462,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ObjectData* od) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
     case KindOfPersistentArray:
     case KindOfArray:
       if (UNLIKELY(op.noticeOnArrNonArr())) {
@@ -500,8 +485,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ObjectData* od) {
       if (RuntimeOption::EvalHackArrDVArrs) {
         return op.clsmethVsNonClsMeth();
       } else {
-        if (UNLIKELY(op.noticeOnArrNonArr())) {
-          raiseHackArrCompatArrNonArrCmp();
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
         }
         return od->isCollection() ? op.collectionVsNonObj() : op(false, true);
       }
@@ -560,9 +545,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ResourceData* rd) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
     case KindOfPersistentArray:
     case KindOfArray:
       if (UNLIKELY(op.noticeOnArrNonArr())) {
@@ -587,12 +569,11 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ResourceData* rd) {
     }
 
     case KindOfClsMeth:
-      raiseClsMethToVecWarningHelper();
       if (RuntimeOption::EvalHackArrDVArrs) {
-        return op.vecVsNonVec();
+        return op.clsmethVsNonClsMeth();
       } else {
-        if (UNLIKELY(op.noticeOnArrNonArr())) {
-          raiseHackArrCompatArrNonArrCmp();
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
         }
         return op(true, false);
       }
@@ -617,6 +598,10 @@ typename Op::RetType tvRelOpVec(Op op, TypedValue cell, const ArrayData* a) {
       raiseClsMethToVecWarningHelper();
       return op.vec(clsMethToVecHelper(cell.m_data.pclsmeth).get(), a);
     } else {
+      if (UNLIKELY(op.noticeOnArrHackArr())) {
+        raiseHackArrCompatArrHackArrCmp();
+      }
+      raiseClsMethVecCompareWarningHelper();
       return op.vecVsNonVec();
     }
   }
@@ -629,6 +614,7 @@ typename Op::RetType tvRelOpVec(Op op, TypedValue cell, const ArrayData* a) {
     }
     return op.vecVsNonVec();
   }
+
   return op.vec(cell.m_data.parr, a);
 }
 
@@ -680,24 +666,53 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
     case KindOfFunc:
     case KindOfClass:
     case KindOfResource:
-      if (RuntimeOption::EvalHackArrDVArrs) return op.clsmethVsNonClsMeth();
-      else return op(false, true);
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        return op.clsmethVsNonClsMeth();
+      } else {
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
+        }
+        return op(false, true);
+      }
+
     case KindOfBoolean:
-      if (RuntimeOption::EvalHackArrDVArrs) return op.clsmethVsNonClsMeth();
-      else return op(cell.m_data.num, true);
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        return op.clsmethVsNonClsMeth();
+      } else {
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
+        }
+        return op(cell.m_data.num, true);
+      }
+
     case KindOfClsMeth:  return op(cell.m_data.pclsmeth, clsMeth);
+
     case KindOfPersistentDict:
-    case KindOfDict:     return op.dictVsNonDict();
+    case KindOfDict:
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        return op.clsmethVsNonClsMeth();
+      } else {
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
+        }
+        return op.dictVsNonDict();
+      }
+
     case KindOfPersistentKeyset:
-    case KindOfKeyset:   return op.keysetVsNonKeyset();
+    case KindOfKeyset:
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        return op.clsmethVsNonClsMeth();
+      } else {
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
+        }
+        return op.keysetVsNonKeyset();
+      }
 
     case KindOfPersistentDArray:
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
     case KindOfPersistentArray:
     case KindOfArray: {
       if (RuntimeOption::EvalHackArrDVArrs) {
@@ -713,18 +728,27 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
       if (RuntimeOption::EvalHackArrDVArrs) {
         raiseClsMethToVecWarningHelper();
         return op.vec(cell.m_data.parr, clsMethToVecHelper(clsMeth).get());
-      } else return op.vecVsNonVec();
+      } else {
+        if (UNLIKELY(op.noticeOnArrHackArr())) {
+          raiseHackArrCompatArrHackArrCmp();
+        }
+        raiseClsMethVecCompareWarningHelper();
+        return op.vecVsNonVec();
+      }
     }
 
     case KindOfObject: {
       if (RuntimeOption::EvalHackArrDVArrs) {
         return op.clsmethVsNonClsMeth();
       } else {
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
+        }
         auto const od = cell.m_data.pobj;
         return od->isCollection() ? op.collectionVsNonObj() : op(true, false);
       }
-
     }
+
     case KindOfRecord:
       return op.recordVsNonRecord();
   }
@@ -777,9 +801,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const Func* val) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
     case KindOfPersistentArray:
     case KindOfArray:
       if (UNLIKELY(op.noticeOnArrNonArr())) {
@@ -811,12 +832,11 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const Func* val) {
         classToStringHelper(cell.m_data.pclass), funcToStringHelper(val));
 
     case KindOfClsMeth:
-      raiseClsMethToVecWarningHelper();
       if (RuntimeOption::EvalHackArrDVArrs) {
-        return op.vecVsNonVec();
+        return op.clsmethVsNonClsMeth();
       } else {
-        if (UNLIKELY(op.noticeOnArrNonArr())) {
-          raiseHackArrCompatArrNonArrCmp();
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
         }
         funcToStringHelper(val); // warn
         return op(true, false);
@@ -874,9 +894,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const Class* val) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
     case KindOfPersistentArray:
     case KindOfArray:
       if (UNLIKELY(op.noticeOnArrNonArr())) {
@@ -908,12 +925,11 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const Class* val) {
       return op(cell.m_data.pclass, val);
 
     case KindOfClsMeth:
-      raiseClsMethToVecWarningHelper();
       if (RuntimeOption::EvalHackArrDVArrs) {
-        return op.vecVsNonVec();
+        return op.clsmethVsNonClsMeth();
       } else {
-        if (UNLIKELY(op.noticeOnArrNonArr())) {
-          raiseHackArrCompatArrNonArrCmp();
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
         }
         classToStringHelper(val); // warn
         return op(true, false);
@@ -948,13 +964,10 @@ typename Op::RetType tvRelOp(Op op, TypedValue c1, TypedValue c2) {
   case KindOfDict:         return tvRelOpDict(op, c1, c2.m_data.parr);
   case KindOfPersistentKeyset:
   case KindOfKeyset:       return tvRelOpKeyset(op, c1, c2.m_data.parr);
-
-  // TODO(T58820726)
   case KindOfPersistentDArray:
   case KindOfDArray:
   case KindOfPersistentVArray:
-  case KindOfVArray:       raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
+  case KindOfVArray:
   case KindOfPersistentArray:
   case KindOfArray:        return tvRelOp(op, c1, c2.m_data.parr);
   case KindOfObject:       return tvRelOp(op, c1, c2.m_data.pobj);
@@ -1046,6 +1059,7 @@ struct Eq {
   bool noticeOnArrHackArr() const {
     return checkHACCompare();
   }
+  bool warnOnClsMethNonClsMeth() const { return false; }
 
   bool operator()(ClsMethDataRef c1, ClsMethDataRef c2) const {
     return c1 == c2;
@@ -1113,6 +1127,9 @@ struct CompareBase {
   }
   bool noticeOnArrHackArr() const {
     return checkHACCompare();
+  }
+  bool warnOnClsMethNonClsMeth() const {
+    return RuntimeOption::EvalRaiseClsMethComparisonWarning;
   }
 
   bool operator()(const Func* f1, const Func* f2) const {
@@ -1334,10 +1351,17 @@ bool tvSame(TypedValue c1, TypedValue c2) {
     case KindOfPersistentVec:
     case KindOfVec:
       if (isClsMethType(c2.m_type)) {
-        if (!RuntimeOption::EvalHackArrDVArrs) return false;
-        raiseClsMethToVecWarningHelper();
-        return PackedArray::VecSame(
-          c1.m_data.parr, clsMethToVecHelper(c2.m_data.pclsmeth).get());
+        if (RuntimeOption::EvalHackArrDVArrs) {
+          raiseClsMethToVecWarningHelper();
+          return PackedArray::VecSame(
+            c1.m_data.parr, clsMethToVecHelper(c2.m_data.pclsmeth).get());
+        } else {
+          if (UNLIKELY(checkHACCompare())) {
+            raiseHackArrCompatArrHackArrCmp();
+          }
+          raiseClsMethVecCompareWarningHelper();
+          return false;
+        }
       }
       if (!isVecType(c2.m_type)) {
         phpArrayCheck();
@@ -1365,9 +1389,6 @@ bool tvSame(TypedValue c1, TypedValue c2) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
-
     case KindOfPersistentArray:
     case KindOfArray:
       if (isClsMethType(c2.m_type)) {
@@ -1400,7 +1421,12 @@ bool tvSame(TypedValue c1, TypedValue c2) {
             clsMethToVecHelper(c1.m_data.pclsmeth).get(), c2.m_data.parr);
         }
       } else {
-        if (isArrayType(c2.m_type)) {
+        if (isVecType(c2.m_type)) {
+          if (UNLIKELY(checkHACCompare())) {
+            raiseHackArrCompatArrHackArrCmp();
+          }
+          raiseClsMethVecCompareWarningHelper();
+        } else if (isArrayType(c2.m_type)) {
           raiseClsMethToVecWarningHelper();
           return ArrayData::Same(
             clsMethToVecHelper(c1.m_data.pclsmeth).get(), c2.m_data.parr);

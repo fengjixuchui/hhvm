@@ -557,20 +557,27 @@ SSATmp* isVecImpl(IRGS& env, SSATmp* src) {
     return cns(env, true);
   });
 
-  if (RO::EvalHackArrDVArrs && RO::EvalIsCompatibleClsMethType) {
-    mc.ifTypeThen(src, TClsMeth, [&](SSATmp* src) {
-      if (RO::EvalIsVecNotices) {
-        gen(env, RaiseNotice,
-            cns(env, makeStaticString(Strings::CLSMETH_COMPAT_IS_VEC)));
-      }
-      return cns(env, true);
-    });
-  }
-
   auto const hacLogging = [&](const char* msg) {
     if (!RO::EvalHackArrCompatIsVecDictNotices) return;
     gen(env, RaiseHackArrCompatNotice, cns(env, makeStaticString(msg)));
   };
+
+  if (RO::EvalIsCompatibleClsMethType) {
+    if (RO::EvalHackArrDVArrs) {
+      mc.ifTypeThen(src, TClsMeth, [&](SSATmp* src) {
+        if (RO::EvalIsVecNotices) {
+          gen(env, RaiseNotice,
+              cns(env, makeStaticString(Strings::CLSMETH_COMPAT_IS_VEC)));
+        }
+        return cns(env, true);
+      });
+    } else {
+      mc.ifTypeThen(src, TClsMeth, [&](SSATmp* src) {
+        hacLogging(Strings::HACKARR_COMPAT_VARR_IS_VEC);
+        return cns(env, false);
+      });
+    }
+  }
 
   if (RO::EvalHackArrCompatIsVecDictNotices ||
       (RO::EvalLogArrayProvenance && RO::EvalArrProvDVArrays)) {
@@ -1259,6 +1266,17 @@ void verifyRetTypeImpl(IRGS& env, int32_t id, int32_t ind,
         if (RuntimeOption::EvalVecHintNotices) {
           raiseClsmethCompatTypeHint(env, id, func, tc);
         }
+        if (RuntimeOption::EvalHackArrCompatTypeHintNotices) {
+          if (getAnnotMetaType(tc.type()) == AnnotMetaType::DArray) {
+            gen(
+              env,
+              RaiseHackArrParamNotice,
+              RaiseHackArrParamNoticeData { tc, id, true },
+              cns(env, empty_varray().get()),
+              cns(env, func)
+            );
+          }
+        }
         auto clsMethArr = convertClsMethToVec(env, val);
         discard(env, 1);
         push(env, clsMethArr);
@@ -1365,6 +1383,17 @@ void verifyParamTypeImpl(IRGS& env, int32_t id) {
         if (RuntimeOption::EvalVecHintNotices) {
           raiseClsmethCompatTypeHint(env, id, func, tc);
         }
+        if (RuntimeOption::EvalHackArrCompatTypeHintNotices) {
+          if (getAnnotMetaType(tc.type()) == AnnotMetaType::DArray) {
+            gen(
+              env,
+              RaiseHackArrParamNotice,
+              RaiseHackArrParamNoticeData { tc, id, false },
+              cns(env, empty_varray().get()),
+              cns(env, func)
+            );
+          }
+        }
         auto clsMethArr = convertClsMethToVec(env, val);
         stLocRaw(env, id, fp(env), clsMethArr);
         decRef(env, val);
@@ -1442,10 +1471,12 @@ void verifyPropType(IRGS& env,
                     Slot slot,
                     SSATmp* val,
                     SSATmp* name,
-                    bool isSProp) {
+                    bool isSProp,
+                    SSATmp** coerce /* = nullptr */) {
   assertx(cls->isA(TCls));
   assertx(val->isA(TCell));
 
+  if (coerce) *coerce = val;
   if (RuntimeOption::EvalCheckPropTypeHints <= 0) return;
   if (!tc || !tc->isCheckable()) return;
   assertx(tc->validForProp());
@@ -1461,7 +1492,47 @@ void verifyPropType(IRGS& env,
     },
     [&] (SSATmp*) { return false; }, // No func to string automatic conversions
     [&] (SSATmp*) { return false; }, // No class to string automatic conversions
-    [&] (SSATmp*) { return false; }, // No clsmeth to vec automatic conversions
+    [&] (SSATmp* val) {
+      if (!coerce) return false;
+      // If we're not hard enforcing property type mismatches don't coerce
+      if (RO::EvalCheckPropTypeHints < 3) return false;
+      if (RuntimeOption::EvalVecHintNotices) {
+        if (cls->hasConstVal(TCls) && name->hasConstVal(TStr)) {
+          auto const msg = makeStaticString(folly::sformat(
+            "class_meth Compat: {} '{}::{}' declared as type {}, clsmeth "
+            "assigned",
+            isSProp ? "Static property" : "Property",
+            cls->clsVal()->name()->data(),
+            name->strVal()->data(),
+            tc->displayName().c_str()
+          ));
+          gen(env, RaiseNotice, cns(env, msg));
+        } else {
+          gen(
+            env,
+            RaiseClsMethPropConvertNotice,
+            RaiseClsMethPropConvertNoticeData{tc, isSProp},
+            cls,
+            name
+          );
+        }
+      }
+      if (RuntimeOption::EvalHackArrCompatTypeHintNotices) {
+        if (getAnnotMetaType(tc->type()) == AnnotMetaType::DArray) {
+          gen(
+            env,
+            RaiseHackArrPropNotice,
+            RaiseHackArrTypehintNoticeData { *tc },
+            cls,
+            cns(env, empty_varray().get()),
+            cns(env, slot),
+            cns(env, isSProp)
+          );
+        }
+      }
+      *coerce = convertClsMethToVec(env, val);
+      return true;
+    },
     [&] (Type, bool hard) { // Check failure
       auto const failHard =
         hard && RuntimeOption::EvalCheckPropTypeHints >= 3;
@@ -1515,7 +1586,18 @@ void verifyPropType(IRGS& env,
       // the check using a runtime helper. This gives us the freedom to call
       // verifyPropType without us worrying about it punting the entire
       // operation.
-      gen(env, VerifyProp, cls, cns(env, slot), val, cns(env, isSProp));
+      if (coerce && (tc->isArray() || (tc->isObject() && !tc->isResolved()))) {
+        *coerce = gen(
+          env,
+          VerifyPropCoerce,
+          cls,
+          cns(env, slot),
+          val,
+          cns(env, isSProp)
+        );
+      } else {
+        gen(env, VerifyProp, cls, cns(env, slot), val, cns(env, isSProp));
+      }
     }
   );
 }
@@ -1627,12 +1709,14 @@ SSATmp* isTypeHelper(IRGS& env, IsTypeOp subop, SSATmp* val) {
   }
 
   // We eventually want ClsMeth to be its own DataType, so we must log.
-  if (subop == IsTypeOp::ArrLike && val->isA(TClsMeth)) {
-    if (RuntimeOption::EvalIsVecNotices) {
-      auto const msg = makeStaticString(Strings::CLSMETH_COMPAT_IS_ANY_ARR);
-      gen(env, RaiseNotice, cns(env, msg));
+  if (RO::EvalIsCompatibleClsMethType && subop == IsTypeOp::ArrLike) {
+    if (val->isA(TClsMeth)) {
+      if (RuntimeOption::EvalIsVecNotices) {
+        auto const msg = makeStaticString(Strings::CLSMETH_COMPAT_IS_ANY_ARR);
+        gen(env, RaiseNotice, cns(env, msg));
+      }
+      return cns(env, true);
     }
-    return cns(env, true);
   }
 
   auto const t = typeOpToType(subop);

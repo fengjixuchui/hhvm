@@ -3968,8 +3968,6 @@ Type from_cell(TypedValue cell) {
   case KindOfDArray:
   case KindOfPersistentVArray:
   case KindOfVArray:
-    not_implemented(); // TODO(T58820726)
-
   case KindOfPersistentArray:
   case KindOfArray:
     always_assert(cell.m_data.parr->isStatic());
@@ -4003,9 +4001,9 @@ Type from_DataType(DataType dt) {
   case KindOfKeyset:   return TKeyset;
   case KindOfRecord:   return TRecord;
   case KindOfPersistentDArray:
-  case KindOfDArray:
+  case KindOfDArray:   return TDArr;
   case KindOfPersistentVArray:
-  case KindOfVArray:   return TBottom; // TODO(T58820726)
+  case KindOfVArray:   return TVArr;
   case KindOfPersistentArray:
   case KindOfArray:    return TArr;
   case KindOfObject:   return TObj;
@@ -4732,10 +4730,11 @@ Type loosen_provenance(Type t) {
 }
 
 Type loosen_arrays(Type a) {
-  if (a.couldBe(BArr))    a |= TArr;
-  if (a.couldBe(BVec))    a |= TVec;
-  if (a.couldBe(BDict))   a |= TDict;
-  if (a.couldBe(BKeyset)) a |= TKeyset;
+  if (a.couldBe(BArr))     a |= TArr;
+  if (a.couldBe(BVec))     a |= TVec;
+  if (a.couldBe(BDict))    a |= TDict;
+  if (a.couldBe(BKeyset))  a |= TKeyset;
+  if (a.couldBe(BClsMeth)) a |= RO::EvalHackArrDVArrs ? TVecLike : TPArrLike;
   return a;
 }
 
@@ -4784,7 +4783,9 @@ Type loosen_emptiness(Type t) {
 Type loosen_likeness(Type t) {
   if (RuntimeOption::EvalIsCompatibleClsMethType && t.couldBe(BClsMeth)) {
     if (!RuntimeOption::EvalHackArrDVArrs) {
-      t = union_of(std::move(t), TVArrLike);
+      // Ideally we would loosen to TVArrLike, however, varray and darray need
+      // to behave the same in most instances.
+      t = union_of(std::move(t), TPArrLike);
     } else {
       t = union_of(std::move(t), TVecLike);
     }
@@ -6115,12 +6116,12 @@ bool inner_types_might_raise(const Type& t1, const Type& t2) {
         sz = t.m_data.packed->elems.size();
         return true;
       case DataTag::ArrLikePackedN:
-        return t.m_data.packedn->type.couldBe(BArrLike | BObj);
+        return t.m_data.packedn->type.couldBe(BArrLike | BObj | BClsMeth);
       case DataTag::ArrLikeMap:
         if (!t.m_data.map->hasOptElements()) sz = t.m_data.map->map.size();
         return true;
       case DataTag::ArrLikeMapN:
-        return t.m_data.mapn->val.couldBe(BArrLike | BObj);
+        return t.m_data.mapn->val.couldBe(BArrLike | BObj | BClsMeth);
     }
     not_reached();
   };
@@ -6197,7 +6198,8 @@ bool inner_types_might_raise(const Type& t1, const Type& t2) {
 
 bool compare_might_raise(const Type& t1, const Type& t2) {
   if (!RuntimeOption::EvalHackArrCompatNotices &&
-      !RuntimeOption::EvalHackArrCompatDVCmpNotices) {
+      !RuntimeOption::EvalHackArrCompatDVCmpNotices &&
+      !RuntimeOption::EvalEmitClsMethPointers) {
     return false;
   }
 
@@ -6220,6 +6222,17 @@ bool compare_might_raise(const Type& t1, const Type& t2) {
   if (auto const f = checkOne(BDict)) return *f;
   if (auto const f = checkOne(BVec)) return *f;
   if (auto const f = checkOne(BKeyset)) return *f;
+
+  if (RuntimeOption::EvalHackArrCompatDVCmpNotices ||
+      RuntimeOption::EvalEmitClsMethPointers) {
+    if (!RuntimeOption::EvalHackArrDVArrs) {
+      if (t1.couldBe(TClsMeth) && t2.couldBe(TArr))     return true;
+      if (t1.couldBe(TArr)     && t2.couldBe(TClsMeth)) return true;
+    } else if (RuntimeOption::EvalEmitClsMethPointers) {
+      if (t1.couldBe(TClsMeth) && t2.couldBe(TVec))     return true;
+      if (t1.couldBe(TVec)     && t2.couldBe(TClsMeth)) return true;
+    }
+  }
 
   return t1.couldBe(BObj) && t2.couldBe(BObj);
 }
@@ -6536,12 +6549,13 @@ Type adjust_type_for_prop(const Index& index,
                           const php::Class& propCls,
                           const TypeConstraint* tc,
                           const Type& ty) {
+  auto ret = loosen_likeness(ty);
   // If the type-hint might not be enforced, we must be conservative.
-  if (!tc || index.prop_tc_maybe_unenforced(propCls, *tc)) return ty;
+  if (!tc || index.prop_tc_maybe_unenforced(propCls, *tc)) return ret;
   auto const ctx = Context { nullptr, nullptr, &propCls };
   // Otherwise lookup what we know about the constraint.
   auto tcType = unctx(
-    loosen_dvarrayness(remove_uninit(index.lookup_constraint(ctx, *tc, ty)))
+    loosen_dvarrayness(remove_uninit(index.lookup_constraint(ctx, *tc, ret)))
   );
   // For the same reason as property/return type enforcement, we have to be
   // pessimistic with interfaces to ensure that types in the index always
@@ -6552,7 +6566,7 @@ Type adjust_type_for_prop(const Index& index,
   }
   // The adjusted type is the intersection of the constraint and the type (which
   // might not exist).
-  return intersection_of(tcType, ty);
+  return intersection_of(tcType, std::move(ret));
 }
 
 //////////////////////////////////////////////////////////////////////

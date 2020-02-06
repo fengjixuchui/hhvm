@@ -690,6 +690,10 @@ static std::string toStringElm(const TypedValue* tv) {
       print_count();
       os << ":Keyset";
       continue;
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
     case KindOfPersistentArray:
     case KindOfArray:
       assertx(tv->m_data.parr->isPHPArray());
@@ -739,11 +743,6 @@ static std::string toStringElm(const TypedValue* tv) {
        << tv->m_data.pclsmeth->getFunc()->fullName()->data()
        << ")";
        continue;
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
     }
     not_reached();
   } while (0);
@@ -2491,8 +2490,12 @@ void iopSwitch(PC origpc, PC& pc, SwitchKind kind, int64_t base,
           match = SwitchMatch::DEFAULT;
           return;
 
+        case KindOfDArray:
+        case KindOfVArray:
         case KindOfArray:
           tvDecRefArr(val);
+        case KindOfPersistentDArray:
+        case KindOfPersistentVArray:
         case KindOfPersistentArray:
           match = SwitchMatch::DEFAULT;
           return;
@@ -2511,13 +2514,6 @@ void iopSwitch(PC origpc, PC& pc, SwitchKind kind, int64_t base,
           intval = val->m_data.pres->data()->o_toInt64();
           tvDecRefRes(val);
           return;
-
-        case KindOfPersistentDArray:
-        case KindOfDArray:
-        case KindOfPersistentVArray:
-        case KindOfVArray:
-          // TODO(T58820726)
-          raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
 
         case KindOfRecord: // TODO (T41029094)
           raise_error(Strings::RECORD_NOT_SUPPORTED);
@@ -3649,7 +3645,8 @@ OPTBLD_INLINE static bool isTypeHelper(TypedValue* val, IsTypeOp op) {
   case IsTypeOp::Res:    return val->m_type == KindOfResource;
   case IsTypeOp::Scalar: return HHVM_FN(is_scalar)(tvAsCVarRef(val));
   case IsTypeOp::ArrLike:
-    if (isClsMethType(val->m_type)) {
+    if (RuntimeOption::EvalIsCompatibleClsMethType &&
+        isClsMethType(val->m_type)) {
       if (RO::EvalIsVecNotices) {
         raise_notice(Strings::CLSMETH_COMPAT_IS_ANY_ARR);
       }
@@ -4493,7 +4490,7 @@ OPTBLD_INLINE void iopResolveClsMethod(ClsMethResolveOp op) {
 
   if (!isStringType(func->m_type) || !isStringType(cls->m_type)) {
     raise_error(!isStringType(func->m_type) ?
-      Strings::METHOD_NAME_MUST_BE_STRING : "class name must be a string.");
+      Strings::METHOD_NAME_MUST_BE_STRING : Strings::CLASS_NAME_MUST_BE_STRING);
   }
 
   StringData* invName = nullptr;
@@ -5149,7 +5146,7 @@ OPTBLD_INLINE void iopVerifyParamType(local_var param) {
     auto it = ubs.find(param.index);
     if (it != ubs.end()) {
       for (auto const& ub : it->second) {
-        ub.verifyParam(param.ptr, func, param.index);
+        if (ub.isCheckable()) ub.verifyParam(param.ptr, func, param.index);
       }
     }
   }
@@ -5188,7 +5185,9 @@ OPTBLD_INLINE void iopVerifyOutType(uint32_t paramId) {
     auto it = ubs.find(paramId);
     if (it != ubs.end()) {
       for (auto const& ub : it->second) {
-        ub.verifyOutParam(vmStack().topTV(), func, paramId);
+        if (ub.isCheckable()) {
+          ub.verifyOutParam(vmStack().topTV(), func, paramId);
+        }
       }
     }
   }
@@ -5202,7 +5201,7 @@ OPTBLD_INLINE void verifyRetTypeImpl(size_t ind) {
   if (tc.isCheckable()) tc.verifyReturn(vmStack().indC(ind), func);
   if (func->hasReturnWithMultiUBs()) {
     for (auto const& ub : func->returnUBs()) {
-      ub.verifyReturn(vmStack().indC(ind), func);
+      if (ub.isCheckable()) ub.verifyReturn(vmStack().indC(ind), func);
     }
   }
 }
@@ -5460,6 +5459,10 @@ OPTBLD_INLINE TCA iopYieldK(PC origpc, PC& pc) {
 OPTBLD_INLINE bool typeIsValidGeneratorDelegate(DataType type) {
   return type == KindOfArray           ||
          type == KindOfPersistentArray ||
+         type == KindOfDArray           ||
+         type == KindOfPersistentDArray ||
+         type == KindOfVArray           ||
+         type == KindOfPersistentVArray ||
          type == KindOfObject;
 }
 

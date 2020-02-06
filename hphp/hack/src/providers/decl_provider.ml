@@ -31,7 +31,7 @@ type gconst_decl = Typing_defs.decl_ty * Errors.t
 
 let get_fun (ctx : Provider_context.t) (fun_name : fun_key) : fun_decl option =
   match ctx.Provider_context.backend with
-  | Provider_backend.Shared_memory -> Typing_lazy_heap.get_fun fun_name
+  | Provider_backend.Shared_memory -> Typing_lazy_heap.get_fun ctx fun_name
   | Provider_backend.Local_memory { decl_cache } ->
     Provider_backend.Decl_cache.find_or_add
       decl_cache
@@ -41,7 +41,7 @@ let get_fun (ctx : Provider_context.t) (fun_name : fun_key) : fun_decl option =
         | Some filename ->
           let ft =
             Errors.run_in_decl_mode filename (fun () ->
-                Decl.declare_fun_in_file filename fun_name)
+                Decl.declare_fun_in_file ctx filename fun_name)
           in
           Some ft
         | None -> None)
@@ -51,7 +51,7 @@ let get_fun (ctx : Provider_context.t) (fun_name : fun_key) : fun_decl option =
 let get_class (ctx : Provider_context.t) (class_name : class_key) :
     class_decl option =
   match ctx.Provider_context.backend with
-  | Provider_backend.Shared_memory -> Typing_lazy_heap.get_class class_name
+  | Provider_backend.Shared_memory -> Typing_lazy_heap.get_class ctx class_name
   | Provider_backend.Local_memory { decl_cache } ->
     let result : Obj.t option =
       Provider_backend.Decl_cache.find_or_add
@@ -59,7 +59,7 @@ let get_class (ctx : Provider_context.t) (class_name : class_key) :
         ~key:(Provider_backend.Decl_cache_entry.Class_decl class_name)
         ~default:(fun () ->
           let result : class_decl option =
-            Typing_classes_heap.compute_class_decl_no_cache class_name
+            Typing_classes_heap.compute_class_decl_no_cache ctx class_name
           in
           Option.map result ~f:Obj.repr)
     in
@@ -115,7 +115,8 @@ let get_type_id_filename x expected_kind =
 let get_typedef (ctx : Provider_context.t) (typedef_name : string) :
     typedef_decl option =
   match ctx.Provider_context.backend with
-  | Provider_backend.Shared_memory -> Typing_lazy_heap.get_typedef typedef_name
+  | Provider_backend.Shared_memory ->
+    Typing_lazy_heap.get_typedef ctx typedef_name
   | Provider_backend.Local_memory { decl_cache } ->
     Provider_backend.Decl_cache.find_or_add
       decl_cache
@@ -125,7 +126,7 @@ let get_typedef (ctx : Provider_context.t) (typedef_name : string) :
         | Some filename ->
           let tdecl =
             Errors.run_in_decl_mode filename (fun () ->
-                Decl.declare_typedef_in_file filename typedef_name)
+                Decl.declare_typedef_in_file ctx filename typedef_name)
           in
           Some tdecl
         | None -> None)
@@ -136,7 +137,7 @@ let get_record_def (ctx : Provider_context.t) (record_name : string) :
     record_def_decl option =
   match ctx.Provider_context.backend with
   | Provider_backend.Shared_memory ->
-    Typing_lazy_heap.get_record_def record_name
+    Typing_lazy_heap.get_record_def ctx record_name
   | Provider_backend.Local_memory { decl_cache } ->
     Provider_backend.Decl_cache.find_or_add
       decl_cache
@@ -146,7 +147,7 @@ let get_record_def (ctx : Provider_context.t) (record_name : string) :
         | Some filename ->
           let rdecl =
             Errors.run_in_decl_mode filename (fun () ->
-                Decl.declare_record_def_in_file filename record_name)
+                Decl.declare_record_def_in_file ctx filename record_name)
           in
           Some rdecl
         | None -> None)
@@ -157,7 +158,8 @@ let get_record_def (ctx : Provider_context.t) (record_name : string) :
 let get_gconst (ctx : Provider_context.t) (gconst_name : string) :
     gconst_decl option =
   match ctx.Provider_context.backend with
-  | Provider_backend.Shared_memory -> Typing_lazy_heap.get_gconst gconst_name
+  | Provider_backend.Shared_memory ->
+    Typing_lazy_heap.get_gconst ctx gconst_name
   | Provider_backend.Local_memory { decl_cache } ->
     Provider_backend.Decl_cache.find_or_add
       decl_cache
@@ -167,12 +169,12 @@ let get_gconst (ctx : Provider_context.t) (gconst_name : string) :
         | Some filename ->
           let gconst =
             Errors.run_in_decl_mode filename (fun () ->
-                Decl.declare_const_in_file filename gconst_name)
+                Decl.declare_const_in_file ctx filename gconst_name)
           in
           Some gconst
         | None -> None)
   | Provider_backend.Decl_service decl ->
-    decl.Decl_service_client.rpc_get_gconst gconst_name
+    Decl_service_client.rpc_get_gconst decl gconst_name
     |> Option.map ~f:(fun decl -> (decl, Errors.empty))
 
 let invalidate_fun (ctx : Provider_context.t) (fun_name : fun_key) : unit =

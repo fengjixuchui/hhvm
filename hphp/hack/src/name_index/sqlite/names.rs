@@ -6,11 +6,13 @@
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 
-use crate::Result;
+use oxidized::relative_path::RelativePath;
+
+use crate::{consts, file_infos, funs, types, Result};
 
 #[derive(Debug)]
 pub struct Names {
-    pub(crate) connection: Connection,
+    connection: Connection,
 }
 
 impl Names {
@@ -27,10 +29,23 @@ impl Names {
     }
 
     fn create_tables(connection: &Connection) -> Result<()> {
-        Self::create_file_info_table(connection)?;
-        Self::create_funs_table(connection)?;
-        Self::create_consts_table(connection)?;
+        file_infos::create_table(connection)?;
+        funs::create_table(connection)?;
+        types::create_table(connection)?;
+        consts::create_table(connection)?;
         Ok(())
+    }
+
+    pub fn get_fun_path(&self, name: &str) -> Result<Option<RelativePath>> {
+        funs::get_path(&self.connection, name)
+    }
+
+    pub fn get_type_path(&self, name: &str) -> Result<Option<RelativePath>> {
+        types::get_path(&self.connection, name)
+    }
+
+    pub fn get_const_path(&self, name: &str) -> Result<Option<RelativePath>> {
+        consts::get_path(&self.connection, name)
     }
 }
 
@@ -42,18 +57,11 @@ mod tests {
     fn test_get_non_existent_const() {
         let names = Names::new_in_memory().unwrap();
 
-        let result = names.paths_of_consts(&["\\Foo"]).unwrap();
+        let result = names.get_const_path("\\Foo").unwrap();
 
-        assert_eq!(
-            1,
-            result.len(),
-            "The result vec must have exactly 1 element"
-        );
-
-        match result.first() {
-            Some(Some(path)) => assert!(false, format!("Unexpected path: {:?}", path)),
-            Some(None) => assert!(true),
-            None => assert!(false, "Expected an element but got none"),
+        match result {
+            Some(path) => assert!(false, format!("Unexpected path: {:?}", path)),
+            None => assert!(true),
         }
     }
 }

@@ -88,7 +88,6 @@ struct RepoOptions {
   H(bool,           DisallowFuncPtrsInConstants,    false)            \
   E(bool,           EmitFuncPointers,               true)             \
   E(bool,           EmitInstMethPointers,           EmitFuncPointers) \
-  E(bool,           EnforceGenericsUB,              false)            \
   H(bool,           RustLowerer,                    true)             \
   H(bool,           EnableXHPClassModifier,         false)            \
   /**/
@@ -1145,6 +1144,8 @@ struct RuntimeOption {
   F(bool, EmitClsMethPointers, false)                                   \
   /* false to skip type refinement for ClsMeth type at HHBBC. */        \
   F(bool, IsCompatibleClsMethType, false)                               \
+  /* Raise warning if a ClsMeth type is compared to other types. */     \
+  F(bool, RaiseClsMethComparisonWarning, false)                         \
   /* Raise warning when ClsMethDataRef is used as varray/vec. */        \
   F(bool, RaiseClsMethConversionWarning, false)                         \
   /* Raise warning when strings are used as classes. */                 \
@@ -1274,6 +1275,10 @@ struct RuntimeOption {
      2 - throw */                                                       \
   F(uint64_t, DynamicClsMethLevel, 1)                                   \
   F(bool, APCSerializeFuncs, true)                                      \
+  /* When set, `is_array` becomes equivalent to `is_any_array` or
+   * `isTvArrayLike` instead of being a strict KindOfArray check.
+   */                                                                   \
+  F(bool, WidenIsArray, false)                                          \
   /* */
 
 private:

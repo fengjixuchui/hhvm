@@ -287,6 +287,9 @@ let hack_arr_dv_arrs () =
 let php7_ltr_assign () =
   Hhbc_options.php7_ltr_assign !Hhbc_options.compiler_options
 
+let widen_is_array () =
+  Hhbc_options.widen_is_array !Hhbc_options.compiler_options
+
 (* Strict binary operations; assumes that operands are already on stack *)
 let from_binop op =
   let check_int_overflow =
@@ -413,7 +416,14 @@ let istype_op id =
   | "is_double" ->
     Some OpDbl
   | "is_string" -> Some OpStr
-  | "is_array" -> Some OpArr
+  | "is_array" ->
+    Some
+      begin
+        if widen_is_array () then
+          OpArrLike
+        else
+          OpArr
+      end
   | "is_object" -> Some OpObj
   | "is_null" -> Some OpNull
   (* We don't use IsType with the resource type because `is_resource()` does
@@ -1015,8 +1025,6 @@ and emit_call_expr env pos e targs args uarg async_eager_label =
     emit_pos_then pos @@ instr (ILitConst (TypedValue v))
   | (A.Id (_, id), _, _, None) when id = SN.PseudoFunctions.isset ->
     emit_call_isset_exprs env pos args
-  | (A.Id (_, id), _, [arg1], None) when id = SN.PseudoFunctions.empty ->
-    emit_call_empty_expr env pos arg1
   | (A.Id (_, id), _, ([_; _] | [_; _; _]), None)
     when id = SN.FB.idx && not (jit_enable_rename_function ()) ->
     emit_idx env pos args
@@ -1110,7 +1118,6 @@ and emit_class_get env qop (cid : Tast.class_id) (prop : Tast.class_get_expr) =
       | QueryOp.CGet -> instr_cgets
       | QueryOp.CGetQuiet -> failwith "emit_class_get: CGetQuiet"
       | QueryOp.Isset -> instr_issets
-      | QueryOp.Empty -> instr_emptys
       | QueryOp.InOut -> failwith "emit_class_get: InOut");
     ]
 
@@ -1315,40 +1322,6 @@ and emit_call_isset_expr env outer_pos (expr : Tast.expr) =
     emit_pos_then outer_pos
     @@ instr (IIsset (IssetL (get_local env (pos, Local_id.get_name id))))
   | _ -> gather [emit_expr env expr; instr_istypec OpNull; instr_not]
-
-and emit_call_empty_expr env outer_pos ((annot, expr_) as expr) =
-  let (pos, _) = annot in
-  match expr_ with
-  | A.Array_get ((_, A.Lvar (_, x)), Some e)
-    when Local_id.get_name x = SN.Superglobals.globals ->
-    gather [emit_expr env e; emit_pos outer_pos; instr_emptyg]
-  | A.Array_get (base_expr, opt_elem_expr) ->
-    fst (emit_array_get env pos QueryOp.Empty base_expr opt_elem_expr)
-  | A.Class_get (cid, id) -> emit_class_get env QueryOp.Empty cid id
-  | A.Obj_get (expr, prop, nullflavor) ->
-    fst (emit_obj_get env pos QueryOp.Empty expr prop nullflavor)
-  | A.Lvar (_, id)
-    when SN.Superglobals.is_superglobal (Local_id.get_name id)
-         || Local_id.get_name id = SN.Superglobals.globals ->
-    gather
-      [
-        instr_string @@ SU.Locals.strip_dollar (Local_id.get_name id);
-        emit_pos outer_pos;
-        instr_emptyg;
-      ]
-  | A.Lvar (pos, id) ->
-    if (not (is_local_this env id)) || Emit_env.get_needs_local_this env then
-      emit_pos_then outer_pos
-      @@ instr_emptyl (get_local env (pos, Local_id.get_name id))
-    else
-      gather
-        [
-          emit_pos pos;
-          instr (IMisc (BareThis NoNotice));
-          emit_pos outer_pos;
-          instr_not;
-        ]
-  | _ -> gather [emit_expr env expr; instr_not]
 
 and emit_unset_expr env expr =
   emit_lval_op_nonlist env (fst (fst expr)) LValOp.Unset expr empty 0

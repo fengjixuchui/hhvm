@@ -913,7 +913,7 @@ void TypeConstraint::verifyOutParam(TypedValue* tv,
   }
 }
 
-void TypeConstraint::verifyProperty(tv_rval val,
+void TypeConstraint::verifyProperty(tv_lval val,
                                     const Class* thisCls,
                                     const Class* declCls,
                                     const StringData* propName) const {
@@ -924,7 +924,7 @@ void TypeConstraint::verifyProperty(tv_rval val,
   }
 }
 
-void TypeConstraint::verifyStaticProperty(tv_rval val,
+void TypeConstraint::verifyStaticProperty(tv_lval val,
                                           const Class* thisCls,
                                           const Class* declCls,
                                           const StringData* propName) const {
@@ -976,6 +976,10 @@ std::string describe_actual_type(tv_rval val) {
     case KindOfDict:          return "HH\\dict";
     case KindOfPersistentKeyset:
     case KindOfKeyset:        return "HH\\keyset";
+    case KindOfPersistentDArray:
+    case KindOfDArray:        return "darray";
+    case KindOfPersistentVArray:
+    case KindOfVArray:        return "varray";
     case KindOfPersistentArray:
     case KindOfArray:         return "array";
     case KindOfResource:
@@ -993,11 +997,6 @@ std::string describe_actual_type(tv_rval val) {
       auto const generics = getClsReifiedGenericsProp(cls, obj);
       return folly::sformat("{}{}", name, mangleReifiedGenericsName(generics));
     }
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
-      return "premature use of datatype-specialized php arrays";
   }
   not_reached();
 }
@@ -1051,8 +1050,8 @@ void TypeConstraint::verifyParamFail(const Func* func, TypedValue* tv,
 }
 
 namespace {
-template<class F>
-void castClsMeth(TypedValue* c, F make) {
+template<class T, class F>
+void castClsMeth(T c, F make) {
   auto const a =
     make(val(c).pclsmeth->getClsStr(), val(c).pclsmeth->getFuncStr()).detach();
   tvDecRefClsMeth(c);
@@ -1105,6 +1104,11 @@ void TypeConstraint::verifyOutParamFail(const Func* func,
             func, displayName(func->cls()), paramNum);
         }
         castClsMeth(c, make_varray<String,String>);
+        if (RuntimeOption::EvalHackArrCompatTypeHintNotices && isDArray()) {
+          raise_hackarr_compat_type_hint_outparam_notice(
+            func, c->m_data.parr, displayName(func->cls()).c_str(), paramNum
+          );
+        }
         return;
       }
     }
@@ -1153,7 +1157,7 @@ void TypeConstraint::verifyRecFieldFail(tv_rval val,
 }
 void TypeConstraint::verifyPropFail(const Class* thisCls,
                                     const Class* declCls,
-                                    tv_rval val,
+                                    tv_lval val,
                                     const StringData* propName,
                                     bool isStatic) const {
   assertx(RuntimeOption::EvalCheckPropTypeHints > 0);
@@ -1181,7 +1185,10 @@ void TypeConstraint::verifyPropFail(const Class* thisCls,
           raise_clsmeth_compat_type_hint_property_notice(
             declCls, propName, displayName(nullptr), isStatic);
         }
-        // No clsmeth to vec/varr converison for prop type
+        // Only trigger coercion logic if property type hints are soft
+        if (RO::EvalCheckPropTypeHints == 3) {
+          castClsMeth(val, make_vec_array<String,String>);
+        }
         return;
       }
     } else {
@@ -1190,7 +1197,15 @@ void TypeConstraint::verifyPropFail(const Class* thisCls,
           raise_clsmeth_compat_type_hint_property_notice(
             declCls, propName, displayName(nullptr), isStatic);
         }
-        // No clsmeth to vec/varr converison for prop type
+        // Only trigger coercion logic if property type hints are soft
+        if (RO::EvalCheckPropTypeHints == 3) {
+          castClsMeth(val, make_varray<String,String>);
+        }
+        if (RuntimeOption::EvalHackArrCompatTypeHintNotices && isDArray()) {
+          raise_hackarr_compat_type_hint_property_notice(
+            declCls, val.val().parr, displayName().c_str(), propName, isStatic
+          );
+        }
         return;
       }
     }
@@ -1278,6 +1293,22 @@ void TypeConstraint::verifyFail(const Func* func, TypedValue* c,
             id != ReturnId ? folly::make_optional(id) : folly::none);
         }
         castClsMeth(c, make_varray<String,String>);
+        if (RuntimeOption::EvalHackArrCompatTypeHintNotices && isDArray()) {
+          if (id == ReturnId) {
+            raise_hackarr_compat_type_hint_ret_notice(
+              func,
+              c->m_data.parr,
+              name.c_str()
+            );
+          } else {
+            raise_hackarr_compat_type_hint_param_notice(
+              func,
+              c->m_data.parr,
+              name.c_str(),
+              id
+            );
+          }
+        }
         return;
       }
     }
@@ -1399,16 +1430,16 @@ MemoKeyConstraint memoKeyConstraintFromTC(const TypeConstraint& tc) {
         case KindOfDict:
         case KindOfPersistentKeyset:
         case KindOfKeyset:
+        case KindOfPersistentDArray:
+        case KindOfDArray:
+        case KindOfPersistentVArray:
+        case KindOfVArray:
         case KindOfPersistentArray:
         case KindOfArray:
         case KindOfClsMeth:
         case KindOfResource:
         case KindOfRecord:
         case KindOfNull:         return MK::None;
-        case KindOfPersistentDArray:
-        case KindOfDArray:
-        case KindOfPersistentVArray:
-        case KindOfVArray:
         case KindOfUninit:
         case KindOfFunc:
         case KindOfClass:

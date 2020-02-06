@@ -16,9 +16,10 @@ type entry = {
   source_text: Full_fidelity_source_text.t;
   comments: Parser_return.comments;
   ast: Nast.program;
+  ast_errors: Errors.t;
   mutable cst: PositionedSyntaxTree.t option;
   mutable tast: Tast.program option;
-  mutable errors: Errors.t option;
+  mutable tast_errors: Errors.t option;
   mutable symbols: Relative_path.t SymbolOccurrence.t list option;
 }
 
@@ -33,6 +34,9 @@ let empty ~tcopt =
   live in the [ServerEnv.env], along with the [tcopt]. *)
   let backend = Provider_backend.get () in
   { tcopt; backend; entries = Relative_path.Map.empty }
+
+let map_tcopt (t : t) ~(f : TypecheckerOptions.t -> TypecheckerOptions.t) : t =
+  { t with tcopt = f t.tcopt }
 
 let global_context : t option ref = ref None
 

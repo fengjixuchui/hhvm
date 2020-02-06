@@ -106,92 +106,81 @@ let handle_exn_as_error : type res. Pos.t -> (unit -> res option) -> res option
     Errors.exception_occurred pos;
     None
 
-let type_fun (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string) :
+let type_fun (ctx : Provider_context.t) (fn : Relative_path.t) (x : string) :
     (Tast.def * Typing_inference_env.t_global_with_pos) option =
   match Ast_provider.find_fun_in_file ~full:true fn x with
   | Some f ->
     handle_exn_as_error f.Aast.f_span (fun () ->
         let fun_ = Naming.fun_ f in
-        let ctx =
-          Provider_context.get_global_context_or_empty_FOR_MIGRATION ()
-        in
         Nast_check.def ctx (Aast.Fun fun_);
         let def_opt =
-          Typing.fun_def opts fun_
+          Typing.fun_def ctx.Provider_context.tcopt fun_
           |> Option.map ~f:(fun (f, global_tvenv) -> (Aast.Fun f, global_tvenv))
         in
-        Option.iter def_opt (fun (f, _) -> Tast_check.def opts f);
+        Option.iter def_opt (fun (f, _) ->
+            Tast_check.def ctx.Provider_context.tcopt f);
         def_opt)
   | None -> None
 
-let type_class (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string)
-    : (Tast.def * Typing_inference_env.t_global_with_pos list) option =
+let type_class (ctx : Provider_context.t) (fn : Relative_path.t) (x : string) :
+    (Tast.def * Typing_inference_env.t_global_with_pos list) option =
   match Ast_provider.find_class_in_file ~full:true fn x with
   | Some cls ->
     handle_exn_as_error cls.Aast.c_span (fun () ->
         let class_ = Naming.class_ cls in
-        let ctx =
-          Provider_context.get_global_context_or_empty_FOR_MIGRATION ()
-        in
         Nast_check.def ctx (Aast.Class class_);
         let def_opt =
-          Typing.class_def opts class_
+          Typing.class_def ctx.Provider_context.tcopt class_
           |> Option.map ~f:(fun (c, global_tvenv) ->
                  (Aast.Class c, global_tvenv))
         in
-        Option.iter def_opt (fun (f, _) -> Tast_check.def opts f);
+        Option.iter def_opt (fun (f, _) ->
+            Tast_check.def ctx.Provider_context.tcopt f);
         def_opt)
   | None -> None
 
 let type_record_def
-    (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string) :
+    (ctx : Provider_context.t) (fn : Relative_path.t) (x : string) :
     Tast.def option =
   match Ast_provider.find_record_def_in_file ~full:true fn x with
   | Some rd ->
     handle_exn_as_error rd.Aast.rd_span (fun () ->
         let rd = Naming.record_def rd in
-        let ctx =
-          Provider_context.get_global_context_or_empty_FOR_MIGRATION ()
-        in
         Nast_check.def ctx (Aast.RecordDef rd);
 
-        let def = Aast.RecordDef (Typing.record_def_def opts rd) in
-        Tast_check.def opts def;
+        let def =
+          Aast.RecordDef (Typing.record_def_def ctx.Provider_context.tcopt rd)
+        in
+        Tast_check.def ctx.Provider_context.tcopt def;
         Some def)
   | None -> None
 
-let check_typedef
-    (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string) :
-    Tast.def option =
+let check_typedef (ctx : Provider_context.t) (fn : Relative_path.t) (x : string)
+    : Tast.def option =
   match Ast_provider.find_typedef_in_file ~full:true fn x with
   | Some t ->
     handle_exn_as_error Pos.none (fun () ->
         let typedef = Naming.typedef t in
-        let ctx =
-          Provider_context.get_global_context_or_empty_FOR_MIGRATION ()
-        in
         Nast_check.def ctx (Aast.Typedef typedef);
-        let ret = Typing.typedef_def opts typedef in
+        let ret = Typing.typedef_def ctx.Provider_context.tcopt typedef in
         Typing_variance.typedef ctx x;
         let def = Aast.Typedef ret in
-        Tast_check.def opts def;
+        Tast_check.def ctx.Provider_context.tcopt def;
         Some def)
   | None -> None
 
-let check_const
-    (opts : TypecheckerOptions.t) (fn : Relative_path.t) (x : string) :
+let check_const (ctx : Provider_context.t) (fn : Relative_path.t) (x : string) :
     Tast.def option =
   match Ast_provider.find_gconst_in_file ~full:true fn x with
   | None -> None
   | Some cst ->
     handle_exn_as_error cst.Aast.cst_span (fun () ->
         let cst = Naming.global_const cst in
-        let ctx =
-          Provider_context.get_global_context_or_empty_FOR_MIGRATION ()
-        in
         Nast_check.def ctx (Aast.Constant cst);
-        let def = Aast.Constant (Typing.gconst_def opts cst) in
-        Tast_check.def opts def;
+        let def =
+          Aast.Constant (Typing.gconst_def ctx.Provider_context.tcopt cst)
+        in
+        Tast_check.def ctx.Provider_context.tcopt def;
         Some def)
 
 let should_enable_deferring
@@ -208,23 +197,25 @@ type process_file_results = {
 
 let process_file
     (dynamic_view_files : Relative_path.Set.t)
-    (opts : GlobalOptions.t)
+    (ctx : Provider_context.t)
+    ~(profile_log : bool)
     (errors : Errors.t)
     (file : check_file_computation) : process_file_results =
   let fn = file.path in
   let ast = Ast_provider.get_ast ~full:true fn in
-  Deferred_decl.reset
-    ~enable:(should_enable_deferring opts file)
-    ~threshold_opt:(GlobalOptions.tco_defer_class_declaration_threshold opts);
-  let prev_counters_state = Counters.reset ~enable:true in
-  let (funs, classes, record_defs, typedefs, gconsts) = Nast.get_defs ast in
   let opts =
     {
-      opts with
+      ctx.Provider_context.tcopt with
       GlobalOptions.tco_dynamic_view =
         Relative_path.Set.mem dynamic_view_files fn;
     }
   in
+  Deferred_decl.reset
+    ~enable:(should_enable_deferring opts file)
+    ~threshold_opt:(GlobalOptions.tco_defer_class_declaration_threshold opts);
+  let prev_counters_state = Counters.reset ~enable:profile_log in
+  let (funs, classes, record_defs, typedefs, gconsts) = Nast.get_defs ast in
+  let ctx = Provider_context.map_tcopt ctx ~f:(fun _tcopt -> opts) in
   let ignore_type_record_def opts fn name =
     ignore (type_record_def opts fn name)
   in
@@ -235,20 +226,19 @@ let process_file
       Errors.do_with_context fn Errors.Typing (fun () ->
           let fun_global_tvenvs =
             List.map funs ~f:snd
-            |> List.filter_map ~f:(type_fun opts fn)
+            |> List.filter_map ~f:(type_fun ctx fn)
             |> List.map ~f:snd
           in
           let class_global_tvenvs =
             List.map classes ~f:snd
-            |> List.filter_map ~f:(type_class opts fn)
+            |> List.filter_map ~f:(type_class ctx fn)
             |> List.map ~f:snd
             |> List.concat
           in
           List.map record_defs ~f:snd
-          |> List.iter ~f:(ignore_type_record_def opts fn);
-          List.map typedefs ~f:snd
-          |> List.iter ~f:(ignore_check_typedef opts fn);
-          List.map gconsts ~f:snd |> List.iter ~f:(ignore_check_const opts fn);
+          |> List.iter ~f:(ignore_type_record_def ctx fn);
+          List.map typedefs ~f:snd |> List.iter ~f:(ignore_check_typedef ctx fn);
+          List.map gconsts ~f:snd |> List.iter ~f:(ignore_check_const ctx fn);
           fun_global_tvenvs @ class_global_tvenvs)
     in
     if GlobalOptions.tco_global_inference opts then
@@ -292,7 +282,7 @@ let should_exit ~(memory_cap : int option) =
 
 let process_files
     (dynamic_view_files : Relative_path.Set.t)
-    (opts : GlobalOptions.t)
+    (ctx : Provider_context.t)
     (errors : Errors.t)
     (progress : computation_progress)
     ~(memory_cap : int option)
@@ -365,13 +355,27 @@ let process_files
         match fn with
         | Check file ->
           let start_time = Unix.gettimeofday () in
-          let result = process_file dynamic_view_files opts errors file in
+          let result =
+            process_file
+              dynamic_view_files
+              ctx
+              check_info.profile_log
+              errors
+              file
+          in
           let second_start_time =
             if check_info.profile_type_check_twice then
               let t = Unix.gettimeofday () in
               (* we're running this routine solely for the side effect *)
               (* of seeing how long it takes to run. *)
-              let _ignored = process_file dynamic_view_files opts errors file in
+              let (_ignored : process_file_results) =
+                process_file
+                  dynamic_view_files
+                  ctx
+                  ~profile_log:false
+                  errors
+                  file
+              in
               Some t
             else
               None
@@ -380,7 +384,7 @@ let process_files
             profile_log start_time second_start_time file result;
           (result.errors, result.computation)
         | Declare path ->
-          let errors = Decl_service.decl_file errors path in
+          let errors = Decl_service.decl_file ctx errors path in
           (errors, [])
         | Prefetch paths ->
           Vfs.prefetch paths;
@@ -417,7 +421,8 @@ let load_and_process_files
   Sys_utils.set_signal
     Sys.sigusr1
     (Sys.Signal_handle Typing.debug_print_last_pos);
-  process_files dynamic_view_files opts errors progress ~memory_cap ~check_info
+  let ctx = Provider_context.empty ~tcopt:opts in
+  process_files dynamic_view_files ctx errors progress ~memory_cap ~check_info
 
 (*****************************************************************************)
 (* Let's go! That's where the action is *)
@@ -730,6 +735,7 @@ let go_with_interrupt
     (Errors.t, Delegate.state, Telemetry.t, 'a) job_result =
   let fnl = List.map fnl ~f:(fun path -> Check { path; deferred_count = 0 }) in
   Mocking.with_test_mocking fnl @@ fun fnl ->
+  let ctx = Provider_context.empty ~tcopt:opts in
   let result =
     if should_process_sequentially opts fnl then (
       Hh_logger.log "Type checking service will process files sequentially";
@@ -737,7 +743,7 @@ let go_with_interrupt
       let (errors, _) =
         process_files
           dynamic_view_files
-          opts
+          ctx
           neutral
           progress
           ~memory_cap:None
@@ -751,7 +757,7 @@ let go_with_interrupt
         workers
         delegate_state
         telemetry
-        opts
+        ctx.Provider_context.tcopt
         fnl
         ~interrupt
         ~memory_cap

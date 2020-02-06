@@ -1698,14 +1698,6 @@ where
                     env,
                 )?))
             }
-            ArrayCreationExpression(c) => {
-                /* TODO: Or tie in with other intrinsics and post-process to Array */
-                Ok(E_::Array(Self::could_map(
-                    Self::p_afield,
-                    &c.array_creation_members,
-                    env,
-                )?))
-            }
             ListExpression(c) => {
                 /* TODO: Or tie in with other intrinsics and post-process to List */
                 let p_binder_or_ignore = |n: &Syntax<T, V>, e: &mut Env| -> Result<ast::Expr> {

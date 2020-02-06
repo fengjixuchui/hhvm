@@ -120,7 +120,16 @@ bool HHVM_FUNCTION(is_scalar, const Variant& v) {
   return v.isScalar();
 }
 
+bool HHVM_FUNCTION(HH_is_php_array, const Variant& v) {
+  // We want this set to false as this is meant to be the "this can receive
+  // both PHP and Hack arrays" version of `is_array`.
+  return is_array(v.asTypedValue(), /* logOnHackArrays = */ false);
+}
+
 bool HHVM_FUNCTION(is_array, const Variant& v) {
+  if (UNLIKELY(RuntimeOption::EvalWidenIsArray)) {
+    return HHVM_FUNCTION(HH_is_any_array, v);
+  }
   return is_array(v.asTypedValue(), /*logOnHackArrays=*/true);
 }
 
@@ -159,8 +168,13 @@ bool HHVM_FUNCTION(HH_is_any_array, const Variant& val) {
 }
 
 bool HHVM_FUNCTION(HH_is_list_like, const Variant& val) {
-  if (val.isClsMeth()) return true;
-  if (!val.isArray()) return false;
+  if (val.isClsMeth()) {
+    raiseClsMethToVecWarningHelper();
+    return true;
+  }
+  auto const& ty = val.getType();
+  if (!isArrayLikeType(ty)) return false;
+  if (isVecType(ty) || isVArrayType(ty)) return true;
   auto const& arr = val.asCArrRef();
   return arr->isVectorData();
 }
@@ -489,6 +503,10 @@ ALWAYS_INLINE String serialize_impl(const Variant& value,
       break;
     }
 
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
     case KindOfPersistentArray:
     case KindOfArray: {
       ArrayData *arr = value.getArrayData();
@@ -507,12 +525,6 @@ ALWAYS_INLINE String serialize_impl(const Variant& value,
       }
       break;
     }
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
-      // TODO(T58820726)
-      raise_error(Strings::DATATYPE_SPECIALIZED_DVARR);
     case KindOfDouble:
     case KindOfObject:
     case KindOfClsMeth:
@@ -677,6 +689,7 @@ void StandardExtension::initVariable() {
   HHVM_FALIAS(HH\\is_varray, HH_is_varray);
   HHVM_FALIAS(HH\\is_darray, HH_is_darray);
   HHVM_FALIAS(HH\\is_any_array, HH_is_any_array);
+  HHVM_FALIAS(HH\\is_php_array, HH_is_php_array);
   HHVM_FALIAS(HH\\is_list_like, HH_is_list_like);
   HHVM_FALIAS(HH\\is_meth_caller, HH_is_meth_caller);
   HHVM_FE(is_object);

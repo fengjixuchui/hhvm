@@ -75,12 +75,12 @@ ArrayData* convArrToKeysetHelper(ArrayData* a);
 ArrayData* convVecToKeysetHelper(ArrayData* a);
 ArrayData* convDictToKeysetHelper(ArrayData* a);
 ArrayData* convObjToKeysetHelper(ObjectData* o);
-ArrayData* convClsMethToArrHealper(ClsMethDataRef clsmeth);
-ArrayData* convClsMethToVArrHealper(ClsMethDataRef clsmeth);
-ArrayData* convClsMethToVecHealper(ClsMethDataRef clsmeth);
-ArrayData* convClsMethToDArrHealper(ClsMethDataRef clsmeth);
-ArrayData* convClsMethToDictHealper(ClsMethDataRef clsmeth);
-ArrayData* convClsMethToKeysetHealper(ClsMethDataRef clsmeth);
+ArrayData* convClsMethToArrHelper(ClsMethDataRef clsmeth);
+ArrayData* convClsMethToVArrHelper(ClsMethDataRef clsmeth);
+ArrayData* convClsMethToVecHelper(ClsMethDataRef clsmeth);
+ArrayData* convClsMethToDArrHelper(ClsMethDataRef clsmeth);
+ArrayData* convClsMethToDictHelper(ClsMethDataRef clsmeth);
+ArrayData* convClsMethToKeysetHelper(ClsMethDataRef clsmeth);
 double convObjToDblHelper(const ObjectData* o);
 double convArrToDblHelper(ArrayData* a);
 double convStrToDblHelper(const StringData* s);
@@ -121,6 +121,9 @@ void VerifyRetRecDescImpl(int32_t id,
                           TypedValue val);
 
 void raise_error_sd(const StringData* sd);
+
+void raiseClsMethPropConvertNotice(
+  const TypeConstraint*, bool, const Class*, const StringData*);
 
 TypedValue arrayIdxI(ArrayData*, int64_t, TypedValue);
 TypedValue arrayIdxS(ArrayData*, StringData*, TypedValue);

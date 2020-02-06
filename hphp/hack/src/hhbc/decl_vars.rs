@@ -163,7 +163,6 @@ impl<'a> Visitor for DeclvarVisitor<'a> {
                 match &receiver_e.1 {
                     Lvar(id) if id.name() == "$this" => {
                         if self.context.is_in_static_method && !self.context.is_closure_body {
-
                         } else {
                             self.locals.add(id.name().into())
                         }
@@ -234,7 +233,6 @@ impl<'a> Visitor for DeclvarVisitor<'a> {
                 let barethis = match &func_e.1 {
                     Id(name)
                         if &name.1 == pseudo_functions::ISSET
-                            || &name.1 == pseudo_functions::EMPTY
                             || &name.1 == pseudo_functions::ECHO_NO_NS =>
                     {
                         BareThis

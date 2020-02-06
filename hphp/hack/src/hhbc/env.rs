@@ -18,8 +18,6 @@ use bitflags::bitflags;
 
 use std::borrow::Cow;
 
-static SEP: &'static str = "|";
-
 bitflags! {
     #[derive(Default)]
     pub struct Flags: u8 {
@@ -30,7 +28,7 @@ bitflags! {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Env {
     pub flags: Flags,
     pub jump_targets_gen: jump_targets::Gen,

@@ -70,7 +70,7 @@ const StaticString
 ALWAYS_INLINE
 void verifyTypeHint(const Class* thisCls,
                     const Class::Prop* prop,
-                    tv_rval val) {
+                    tv_lval val) {
   assertx(tvIsPlausible(*val));
   assertx(type(val) != KindOfUninit);
   if (RuntimeOption::EvalCheckPropTypeHints <= 0) return;
@@ -439,7 +439,7 @@ void ObjectData::o_set(const String& propName, const Variant& v,
       if (UNLIKELY(lookup.isConst) && !isBeingConstructed()) {
         throwMutateConstProp(lookup.slot);
       }
-      auto const val = tvToInit(*v.asTypedValue());
+      auto val = tvToInit(*v.asTypedValue());
       verifyTypeHint(m_cls, lookup.prop, &val);
       tvSet(val, prop);
       return;
@@ -561,7 +561,7 @@ Array ObjectData::toArray(bool pubOnly /* = false */,
     assertx(flags.is_set());
     if (UNLIKELY(flags.type() == KindOfInt64 &&
                  flags.val().num == ARRAY_OBJ_ITERATOR_STD_PROP_LIST)) {
-      auto ret = Array::Create();
+      auto ret = Array::CreateDArray();
       o_getArray(ret, true, ignoreLateInit);
       return ret;
     }
@@ -572,11 +572,11 @@ Array ObjectData::toArray(bool pubOnly /* = false */,
     assertx(storage.is_set());
     return tvCastToArrayLike(storage.tv());
   } else if (UNLIKELY(instanceof(c_Closure::classof()))) {
-    return make_packed_array(Object(const_cast<ObjectData*>(this)));
+    return make_varray(Object(const_cast<ObjectData*>(this)));
   } else if (UNLIKELY(instanceof(DateTimeData::getClass()))) {
     return Native::data<DateTimeData>(this)->getDebugInfo();
   } else {
-    auto ret = Array::Create();
+    auto ret = Array::CreateDArray();
     o_getArray(ret, pubOnly, ignoreLateInit);
     return ret;
   }
@@ -1614,8 +1614,11 @@ void ObjectData::setProp(Class* ctx, const StringData* key, TypedValue val) {
       if (UNLIKELY(lookup.isConst) && !isBeingConstructed()) {
         throwMutateConstProp(lookup.slot);
       }
-      verifyTypeHint(m_cls, lookup.prop, &val);
-      tvSet(val, prop);
+      // TODO(T61738946): We can remove the temporary here once we no longer
+      // coerce class_meth types.
+      Variant tmp = tvAsVariant(&val);
+      verifyTypeHint(m_cls, lookup.prop, tmp.asTypedValue());
+      tvMove(tmp.detach(), prop);
     }
     return;
   }
