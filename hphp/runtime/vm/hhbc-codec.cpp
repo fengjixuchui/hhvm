@@ -20,12 +20,23 @@
 
 namespace HPHP {
 
+NamedLocal decode_named_local(PC& pc) {
+  LocalName lname = decode_iva(pc) - 1;
+  int32_t id = decode_iva(pc);
+  return NamedLocal{lname, id};
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 MemberKey decode_member_key(PC& pc, Either<const Unit*, const UnitEmitter*> u) {
   auto const mcode = static_cast<MemberCode>(decode_byte(pc));
 
   switch (mcode) {
-    case MEC: case MEL: case MPC: case MPL:
-      return MemberKey{mcode, decode_iva(pc)};
+    case MEC: case MPC:
+      return MemberKey{mcode, static_cast<int32_t>(decode_iva(pc))};
+
+    case MEL: case MPL:
+      return MemberKey{mcode, decode_named_local(pc)};
 
     case MEI:
       return MemberKey{mcode, decode_raw<int64_t>(pc)};
@@ -49,8 +60,12 @@ void encode_member_key(MemberKey mk, UnitEmitter& ue) {
   ue.emitByte(mk.mcode);
 
   switch (mk.mcode) {
-    case MEC: case MEL: case MPC: case MPL:
+    case MEC: case MPC:
       ue.emitIVA(mk.iva);
+      break;
+
+    case MEL: case MPL:
+      ue.emitNamedLocal(mk.local);
       break;
 
     case MEI:
@@ -100,7 +115,7 @@ IterArgs decodeIterArgs(PC& pc) {
 ///////////////////////////////////////////////////////////////////////////////
 
 void encodeFCallArgsBase(UnitEmitter& ue, const FCallArgsBase& fca,
-                         const uint8_t* inoutArgs, bool hasAsyncEagerOffset) {
+                         bool hasInoutArgs, bool hasAsyncEagerOffset) {
   auto constexpr kFirstNumArgsBit = FCallArgsBase::kFirstNumArgsBit;
   bool smallNumArgs =
     fca.skipNumArgsCheck && (((fca.numArgs + 1) << kFirstNumArgsBit) <= 0xff);
@@ -108,7 +123,7 @@ void encodeFCallArgsBase(UnitEmitter& ue, const FCallArgsBase& fca,
   assertx(!(flags & ~FCallArgsBase::kInternalFlags));
   if (smallNumArgs) flags |= (fca.numArgs + 1) << kFirstNumArgsBit;
   if (fca.numRets != 1) flags |= FCallArgsBase::HasInOut;
-  if (inoutArgs != nullptr) flags |= FCallArgsBase::EnforceInOut;
+  if (hasInoutArgs) flags |= FCallArgsBase::EnforceInOut;
   if (hasAsyncEagerOffset) flags |= FCallArgsBase::HasAsyncEagerOffset;
   if (fca.lockWhileUnwinding) {
     // intentionally re-using the SupportsAsyncEagerReturn bit
@@ -121,11 +136,11 @@ void encodeFCallArgsBase(UnitEmitter& ue, const FCallArgsBase& fca,
     ue.emitIVA((uint64_t)fca.numArgs * 2 + fca.skipNumArgsCheck);
   }
   if (fca.numRets != 1) ue.emitIVA(fca.numRets);
+}
 
-  if (inoutArgs != nullptr) {
-    auto const numBytes = (fca.numArgs + 7) / 8;
-    for (auto i = 0; i < numBytes; ++i) ue.emitByte(inoutArgs[i]);
-  }
+void encodeFCallArgsIO(UnitEmitter& ue, int numBytes,
+                       const uint8_t* inoutArgs) {
+  for (auto i = 0; i < numBytes; ++i) ue.emitByte(inoutArgs[i]);
 }
 
 FCallArgs decodeFCallArgs(Op thisOpcode, PC& pc) {

@@ -231,7 +231,7 @@ void verifyTypeImpl(IRGS& env,
     auto const failHard = RuntimeOption::RepoAuthoritative
       && !tc.isSoft()
       && (!tc.isThis() || thisFailsHard)
-      && (!tc.isUpperBound() || RuntimeOption::EvalEnforceGenericsUB == 2);
+      && (!tc.isUpperBound() || RuntimeOption::EvalEnforceGenericsUB >= 2);
     return fail(valType, failHard);
   };
 
@@ -409,6 +409,7 @@ Type typeOpToType(IsTypeOp op) {
   case IsTypeOp::Dbl:     return TDbl;
   case IsTypeOp::Bool:    return TBool;
   case IsTypeOp::Str:     return TStr;
+  case IsTypeOp::PHPArr:
   case IsTypeOp::Arr:     return TArr;
   case IsTypeOp::Keyset:  return TKeyset;
   case IsTypeOp::Obj:     return TObj;
@@ -503,7 +504,7 @@ void maybeLogSerialization(IRGS& env, SSATmp* arr, SerializationSite site) {
   }
 }
 
-SSATmp* isArrayImpl(IRGS& env, SSATmp* src) {
+SSATmp* isArrayImpl(IRGS& env, SSATmp* src, bool log_on_hack_arrays) {
   MultiCond mc{env};
 
   mc.ifTypeThen(src, TArr, [&](SSATmp* src) {
@@ -528,7 +529,8 @@ SSATmp* isArrayImpl(IRGS& env, SSATmp* src) {
 
   if (!curFunc(env)->isBuiltin() &&
       (RO::EvalHackArrCompatIsArrayNotices ||
-      (RO::EvalLogArrayProvenance && RO::EvalArrProvHackArrays))) {
+      (RO::EvalLogArrayProvenance && RO::EvalArrProvHackArrays)) &&
+      log_on_hack_arrays) {
     mc.ifTypeThen(src, TVec, [&](SSATmp* src) {
       hacLogging(Strings::HACKARR_COMPAT_VEC_IS_ARR);
       maybeLogSerialization(env, src, SerializationSite::IsArray);
@@ -1688,7 +1690,10 @@ SSATmp* isTypeHelper(IRGS& env, IsTypeOp subop, SSATmp* val) {
   switch (subop) {
     case IsTypeOp::VArray: /* intentional fallthrough */
     case IsTypeOp::DArray: return isDVArrayImpl(env, val, subop);
-    case IsTypeOp::Arr:    return isArrayImpl(env, val);
+    case IsTypeOp::PHPArr:
+      return isArrayImpl(env, val, /*log_on_hack_arrays=*/false);
+    case IsTypeOp::Arr:
+      return isArrayImpl(env, val, /*log_on_hack_arrays=*/true);
     case IsTypeOp::Vec:    return isVecImpl(env, val);
     case IsTypeOp::Dict:   return isDictImpl(env, val);
     case IsTypeOp::Scalar: return isScalarImpl(env, val);
@@ -1717,9 +1722,9 @@ void emitIsTypeC(IRGS& env, IsTypeOp subop) {
   decRef(env, val);
 }
 
-void emitIsTypeL(IRGS& env, int32_t id, IsTypeOp subop) {
+void emitIsTypeL(IRGS& env, NamedLocal loc, IsTypeOp subop) {
   auto const ldPMExit = makePseudoMainExit(env);
-  auto const val = ldLocWarn(env, id, ldPMExit, DataTypeSpecific);
+  auto const val = ldLocWarn(env, loc, ldPMExit, DataTypeSpecific);
   push(env, isTypeHelper(env, subop, val));
 }
 
