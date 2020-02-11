@@ -9,6 +9,7 @@ use emit_fatal_rust::{emit_fatal_runtimeomitframe, raise_fatal_parse};
 use emit_memoize_helpers_rust as emit_memoize_helpers;
 use emit_native_opcode_rust as emit_native_opcode;
 use env::emitter::Emitter;
+use global_state::LazyState;
 use hhas_attribute_rust as hhas_attribute;
 use hhas_method_rust::{HhasMethod, HhasMethodFlags};
 use hhas_pos_rust::Span;
@@ -47,7 +48,7 @@ pub fn from_ast<'a>(
     let mut attributes =
         emit_attribute::from_asts(emitter, &class.namespace, &method.user_attributes)?;
     if is_closure_body {
-        emit_attribute::add_reified_attribute(&mut attributes, &method.tparams[..]);
+        attributes.extend(emit_attribute::add_reified_attribute(&method.tparams[..]));
     };
 
     let is_native = attributes
@@ -62,10 +63,7 @@ pub fn from_ast<'a>(
     if !(method.static_ || is_closure_body) {
         for p in method.params.iter() {
             if p.name == special_idents::THIS {
-                return Err(raise_fatal_parse(
-                    &method.name.0,
-                    "Cannot re-assign $this".into(),
-                ));
+                return Err(raise_fatal_parse(&method.name.0, "Cannot re-assign $this"));
             }
         }
     };
@@ -134,7 +132,7 @@ pub fn from_ast<'a>(
         })))
     };
     let namespace = emitter
-        .state()
+        .emit_state()
         .closure_namespaces
         .get(&class_name)
         .unwrap_or(&class.namespace)
@@ -142,7 +140,7 @@ pub fn from_ast<'a>(
     let rx_level = rx::Level::from_ast(&method.user_attributes).unwrap_or_else(|| {
         if is_closure_body {
             emitter
-                .state()
+                .emit_state()
                 .get_lambda_rx_of_scope(&class.name.1, &method.name.1)
         } else {
             rx::Level::NonRx

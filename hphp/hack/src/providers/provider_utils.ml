@@ -23,7 +23,12 @@ module Compute_tast_and_errors = struct
 end
 
 let ctx_from_server_env (env : ServerEnv.env) : Provider_context.t =
-  Provider_context.empty ~tcopt:env.ServerEnv.tcopt
+  {
+    Provider_context.tcopt = env.ServerEnv.tcopt;
+    (* TODO: backend should be stored in [env]. *)
+    backend = Provider_backend.get ();
+    entries = Relative_path.Map.empty;
+  }
 
 let respect_but_quarantine_unsaved_changes
     ~(ctx : Provider_context.t) ~(f : unit -> 'a) : 'a =
@@ -82,6 +87,7 @@ let respect_but_quarantine_unsaved_changes
                  ~typedefs:(get_names typedefs)
                  ~consts:(get_names consts);
                Naming_global.make_env
+                 ctx
                  ~funs
                  ~classes
                  ~record_defs
@@ -179,7 +185,7 @@ let compute_tast_and_errors_unquarantined_internal
       Errors.do_with_context
         entry.Provider_context.path
         Errors.Naming
-        (fun () -> Naming.program entry.Provider_context.ast)
+        (fun () -> Naming.program ctx entry.Provider_context.ast)
     in
     let (tast_errors, tast) =
       let do_tast_checks =

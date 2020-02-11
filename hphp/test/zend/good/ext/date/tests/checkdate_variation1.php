@@ -29,24 +29,24 @@ hello world
 EOT;
 
 // add arrays
-$index_array = array (1, 2, 3);
-$assoc_array = array ('one' => 1, 'two' => 2);
+$index_array = varray [1, 2, 3];
+$assoc_array = darray ['one' => 1, 'two' => 2];
 
 // resource
 $file_handle = fopen(__FILE__, 'r');
 
 //array of values to iterate over
-$inputs = array(
+$inputs = darray[
       // float data
       'float 10.5' => 10.5,
       'float -10.5' => -10.5,
       'float .5' => .5,
 
       // array data
-      'empty array' => array(),
+      'empty array' => varray[],
       'int indexed array' => $index_array,
       'associative array' => $assoc_array,
-      'nested arrays' => array('foo', $index_array, $assoc_array),
+      'nested arrays' => varray['foo', $index_array, $assoc_array],
 
       // null data
       'uppercase NULL' => NULL,
@@ -80,7 +80,7 @@ $inputs = array(
       
       // resource 
       'resource' => $file_handle
-);
+];
 
 $day = 2;
 $year = 1963;

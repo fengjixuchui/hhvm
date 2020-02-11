@@ -21,10 +21,24 @@ let parse_id (json : json) : lsp_id =
   | JSON_Number s ->
     begin
       try NumberId (int_of_string s)
-      with Failure _ -> raise (Error.Parse ("float ids not allowed: " ^ s))
+      with Failure _ ->
+        raise
+          (Error.LspException
+             {
+               Error.code = Error.ParseError;
+               message = "float ids not allowed: " ^ s;
+               data = None;
+             })
     end
   | JSON_String s -> StringId s
-  | _ -> raise (Error.Parse ("not an id: " ^ Hh_json.json_to_string json))
+  | _ ->
+    raise
+      (Error.LspException
+         {
+           Error.code = Error.ParseError;
+           message = "not an id: " ^ Hh_json.json_to_string json;
+           data = None;
+         })
 
 let parse_id_opt (json : json option) : lsp_id option =
   Option.map json ~f:parse_id
@@ -429,11 +443,22 @@ let parse_diagnostic (j : json option) : PublishDiagnostics.diagnostic =
         begin
           try IntCode (int_of_string s)
           with Failure _ ->
-            let msg = "Diagnostic code expected to be an int: " ^ s in
-            raise (Error.Parse msg)
+            raise
+              (Error.LspException
+                 {
+                   Error.code = Error.ParseError;
+                   message = "Diagnostic code expected to be an int: " ^ s;
+                   data = None;
+                 })
         end
       | _ ->
-        raise (Error.Parse "Diagnostic code expected to be an int or string")
+        raise
+          (Error.LspException
+             {
+               Error.code = Error.ParseError;
+               message = "Diagnostic code expected to be an int or string";
+               data = None;
+             })
     in
     let parse_info j =
       {
@@ -1075,72 +1100,56 @@ let parse_didChangeWatchedFiles (json : Hh_json.json option) :
 (************************************************************************)
 
 let error_of_exn (e : exn) : Lsp.Error.t =
-  Lsp.Error.(
-    match e with
-    | Error.Parse message -> { code = Code.parseError; message; data = None }
-    | Error.InvalidRequest message ->
-      { code = Code.invalidRequest; message; data = None }
-    | Error.MethodNotFound message ->
-      { code = Code.methodNotFound; message; data = None }
-    | Error.InvalidParams message ->
-      { code = Code.invalidParams; message; data = None }
-    | Error.InternalError message ->
-      { code = Code.internalError; message; data = None }
-    | Error.ServerErrorStart (message, data) ->
-      {
-        code = Code.serverErrorStart;
-        message;
-        data = Some (print_initializeError data);
-      }
-    | Error.ServerErrorEnd message ->
-      { code = Code.serverErrorEnd; message; data = None }
-    | Error.ServerNotInitialized message ->
-      { code = Code.serverNotInitialized; message; data = None }
-    | Error.Unknown message ->
-      { code = Code.unknownErrorCode; message; data = None }
-    | Error.RequestCancelled message ->
-      { code = Code.requestCancelled; message; data = None }
-    | Exit_status.Exit_with code ->
-      {
-        code = Code.unknownErrorCode;
-        message = Exit_status.to_string code;
-        data = None;
-      }
-    | _ ->
-      {
-        code = Code.unknownErrorCode;
-        message = Printexc.to_string e;
-        data = None;
-      })
+  let open Lsp.Error in
+  match e with
+  | LspException e -> e
+  | Exit_status.Exit_with code ->
+    {
+      code = UnknownErrorCode;
+      message = Exit_status.to_string code;
+      data = None;
+    }
+  | _ ->
+    { code = UnknownErrorCode; message = Printexc.to_string e; data = None }
 
-let print_error
-    ?(include_error_stack_trace = true) (e : Error.t) (stack : string) : json =
-  Hh_json.(
-    Error.(
-      let entries =
-        if include_error_stack_trace then
-          let stack_json_property = ("stack", string_ stack) in
-          (* We'd like to add a stack-trace. The only place we can fit it, that will *)
-          (* be respected by vscode-jsonrpc, is inside the 'data' field. And we can  *)
-          (* do that only if data is an object. We can synthesize one if needed.     *)
-          let data =
-            match e.data with
-            | None -> JSON_Object [stack_json_property]
-            | Some (JSON_Object o) -> JSON_Object (stack_json_property :: o)
-            | Some primitive -> primitive
-          in
-          [("data", data)]
-        else
-          []
-      in
-      let entries =
-        ("code", int_ e.code) :: ("message", string_ e.message) :: entries
-      in
-      JSON_Object entries))
+let error_data_of_string ~(key : string) (value : string) : Hh_json.json option
+    =
+  Some (Hh_json.JSON_Object [(key, Hh_json.JSON_String value)])
+
+let error_data_of_stack (stack : string) : Hh_json.json option =
+  stack |> Exception.clean_stack |> error_data_of_string ~key:"stack"
+
+let print_error (e : Error.t) : json =
+  let open Hh_json in
+  let data =
+    match e.Error.data with
+    | None -> []
+    | Some data -> [("data", data)]
+  in
+  let entries =
+    ("code", int_ (Error.code_to_enum e.Error.code))
+    :: ("message", string_ e.Error.message)
+    :: data
+  in
+  JSON_Object entries
+
+let error_to_log_string (e : Error.t) : string =
+  let data =
+    Option.value_map e.Error.data ~f:Hh_json.json_to_multiline ~default:""
+  in
+  Printf.sprintf
+    "%s [%s]\n%s"
+    e.Error.message
+    (Error.show_code e.Error.code)
+    data
 
 let parse_error (error : json) : Error.t =
   let json = Some error in
-  let code = Jget.int_exn json "code" in
+  let code =
+    Jget.int_exn json "code"
+    |> Error.code_of_enum
+    |> Option.value ~default:Error.UnknownErrorCode
+  in
   let message = Jget.string_exn json "message" in
   let data = Jget.val_opt json "data" in
   { Error.code; message; data }
@@ -1211,7 +1220,7 @@ let result_name_to_string (result : lsp_result) : string =
   | HackTestStopServerResultFB -> "$test/stopHhServer"
   | HackTestShutdownServerlessResultFB -> "$test/shutdownServerlessIde"
   | RegisterCapabilityRequestResult -> "client/registerCapability"
-  | ErrorResult (e, _stack) -> "ERROR/" ^ e.Error.message
+  | ErrorResult e -> "ERROR/" ^ e.Error.message
 
 let notification_name_to_string (notification : lsp_notification) : string =
   match notification with
@@ -1245,7 +1254,7 @@ let denorm_message_to_string (message : lsp_message) : string =
     Printf.sprintf "request %s %s" (id_to_string id) (request_name_to_string r)
   | NotificationMessage n ->
     Printf.sprintf "notification %s" (notification_name_to_string n)
-  | ResponseMessage (id, ErrorResult (e, _stack)) ->
+  | ResponseMessage (id, ErrorResult e) ->
     Printf.sprintf "error %s %s" (id_to_string id) e.Error.message
   | ResponseMessage (id, r) ->
     Printf.sprintf "result %s %s" (id_to_string id) (result_name_to_string r)
@@ -1356,7 +1365,13 @@ let parse_lsp_result (request : lsp_request) (result : json) : lsp_result =
   | HackTestStopServerRequestFB
   | HackTestShutdownServerlessRequestFB
   | UnknownRequest _ ->
-    raise (Error.Parse ("Don't know how to parse LSP response " ^ method_))
+    raise
+      (Error.LspException
+         {
+           Error.code = Error.ParseError;
+           message = "Don't know how to parse LSP response " ^ method_;
+           data = None;
+         })
 
 (* parse_lsp: non-jsonrpc inputs - will raise an exception                    *)
 (* requests and notifications - will raise an exception if they're malformed, *)
@@ -1380,8 +1395,11 @@ let parse_lsp (json : json) (outstanding : lsp_id -> lsp_request) : lsp_message
     let request = outstanding id in
     ResponseMessage (id, parse_lsp_result request result)
   | (Some id, _, _, Some error) ->
-    ResponseMessage (id, ErrorResult (parse_error error, ""))
-  | (_, _, _, _) -> raise (Error.Parse "Not JsonRPC")
+    ResponseMessage (id, ErrorResult (parse_error error))
+  | (_, _, _, _) ->
+    raise
+      (Error.LspException
+         { Error.code = Error.ParseError; message = "Not JsonRPC"; data = None })
 
 let print_lsp_request (id : lsp_id) (request : lsp_request) : json =
   let method_ = request_name_to_string request in
@@ -1426,8 +1444,7 @@ let print_lsp_request (id : lsp_id) (request : lsp_request) : json =
       ("params", params);
     ]
 
-let print_lsp_response
-    ?include_error_stack_trace (id : lsp_id) (result : lsp_result) : json =
+let print_lsp_response (id : lsp_id) (result : lsp_result) : json =
   let method_ = result_name_to_string result in
   let json =
     match result with
@@ -1460,7 +1477,7 @@ let print_lsp_response
     | ShowStatusResultFB _
     | RegisterCapabilityRequestResult ->
       failwith ("Don't know how to print result " ^ method_)
-    | ErrorResult (e, stack) -> print_error ?include_error_stack_trace e stack
+    | ErrorResult e -> print_error e
   in
   match result with
   | ErrorResult _ ->
@@ -1503,9 +1520,8 @@ let print_lsp_notification (notification : lsp_notification) : json =
       ("params", params);
     ]
 
-let print_lsp ?include_error_stack_trace (message : lsp_message) : json =
+let print_lsp (message : lsp_message) : json =
   match message with
   | RequestMessage (id, request) -> print_lsp_request id request
-  | ResponseMessage (id, result) ->
-    print_lsp_response ?include_error_stack_trace id result
+  | ResponseMessage (id, result) -> print_lsp_response id result
   | NotificationMessage notification -> print_lsp_notification notification

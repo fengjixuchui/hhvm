@@ -10,8 +10,9 @@ use aast_parser::{
 };
 use anyhow;
 use bitflags::bitflags;
-use emit_program_rust::{emit_program, FromAstFlags};
+use emit_program_rust::{emit_fatal_program, emit_program, FromAstFlags};
 use hhas_program_rust::HhasProgram;
+use hhbc_ast_rust::FatalOp;
 use hhbc_hhas_rust::{print_program, Context, Write};
 use instruction_sequence_rust::Error;
 use itertools::{Either, Either::*};
@@ -29,7 +30,7 @@ use stack_limit::StackLimit;
 /// until the migration from OCaml is fully complete
 pub struct Env {
     pub filepath: RelativePath,
-    pub empty_namespace: NamespaceEnv,
+    pub empty_namespace: ocamlrep::rc::RcOc<NamespaceEnv>,
     pub config_jsons: Vec<String>,
     pub config_list: Vec<String>,
     pub flags: EnvFlags,
@@ -88,14 +89,19 @@ where
         printing_t: IGNORED_DURATION,
     };
 
-    let ast = profile(log_extern_compiler_perf, &mut ret.parsing_t, || {
+    let mut parse_result = profile(log_extern_compiler_perf, &mut ret.parsing_t, || {
         parse_file(&opts, stack_limit, &env.filepath, text)
     });
 
-    let (program, codegen_t) = match ast {
+    let (program, codegen_t) = match &mut parse_result {
         // TODO(shiqicao): change opts to Rc<Option> to avoid cloning
-        Either::Right((ast, is_hh_file)) => emit(&env, opts.clone(), is_hh_file, &ast),
-        Either::Left((pos, msg, is_runtime_error)) => emit_fatal(&env, is_runtime_error, pos, msg),
+        Either::Right((ast, is_hh_file)) => {
+            elaborate_namespaces_visitor::elaborate_program(env.empty_namespace.clone(), ast);
+            emit(&env, opts.clone(), *is_hh_file, ast)
+        }
+        Either::Left((pos, msg, is_runtime_error)) => {
+            emit_fatal(&env, *is_runtime_error, opts.clone(), pos, msg)
+        }
     };
     let program = program?;
     ret.codegen_t = codegen_t;
@@ -118,7 +124,7 @@ fn emit<'p>(
     env: &Env,
     opts: Options,
     is_hh: bool,
-    ast: &Tast::Program,
+    ast: &'p Tast::Program,
 ) -> (Result<HhasProgram<'p>, Error>, f64) {
     let mut flags = FromAstFlags::empty();
     if is_hh {
@@ -140,14 +146,23 @@ fn emit<'p>(
     (r, t)
 }
 
-fn emit_fatal(
+fn emit_fatal<'a>(
     env: &Env,
     is_runtime_error: bool,
-    pos: Pos,
-    msg: String,
-) -> (Result<HhasProgram, Error>, f64) {
-    //TODO(hrust): enable emit_program::emit_fatal_program
-    unimplemented!()
+    opts: Options,
+    pos: &Pos,
+    msg: impl AsRef<str>,
+) -> (Result<HhasProgram<'a>, Error>, f64) {
+    let op = if is_runtime_error {
+        FatalOp::Runtime
+    } else {
+        FatalOp::Parse
+    };
+    let mut t = 0f64;
+    let r = profile(opts.log_extern_compiler_perf(), &mut t, || {
+        emit_fatal_program(opts, env.flags.contains(EnvFlags::IS_SYSTEMLIB), op, msg)
+    });
+    (r, t)
 }
 
 fn create_parser_options(opts: &Options) -> ParserOptions {

@@ -361,8 +361,7 @@ let handle_message :
         initialized_state.peak_changed_files_queue_size + 1
       in
       let ctx =
-        Provider_context.empty
-          ~tcopt:initialized_state.server_env.ServerEnv.tcopt
+        Provider_utils.ctx_from_server_env initialized_state.server_env
       in
       let state =
         Initialized
@@ -465,7 +464,6 @@ let handle_message :
     ClientIdeMessage.Completion_resolve.(
       let result =
         ServerDocblockAt.go_docblock_for_symbol
-          ~env:initialized_state.server_env
           ~ctx
           ~symbol:param.symbol
           ~kind:param.kind

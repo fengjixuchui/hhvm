@@ -910,6 +910,7 @@ struct RuntimeOption {
   F(bool, HHIREnableCoalescing,        true)                            \
   F(bool, HHIRAllocSIMDRegs,           true)                            \
   F(bool, HHIRStressSpill,             false)                           \
+  F(bool, JitStressTestLiveness,       false)                           \
   /* Region compiler flags */                                           \
   F(string,   JitRegionSelector,       regionSelectorDefault())         \
   F(bool,     JitPGO,                  pgoDefault())                    \
@@ -1083,6 +1084,7 @@ struct RuntimeOption {
   F(bool, HackArrCompatTypeHintNotices, false)                          \
   F(bool, HackArrCompatTypeHintPolymorphism, false)                     \
   F(bool, HackArrCompatDVCmpNotices, false)                             \
+  F(bool, HackArrCompatHackArrCmpNotices, false)                        \
   F(bool, HackArrCompatSerializeNotices, false)                         \
   /* Raise notices when fb_compact_*() would change behavior */         \
   F(bool, HackArrCompatCompactSerializeNotices, false)                  \
@@ -1280,6 +1282,7 @@ struct RuntimeOption {
    * `isTvArrayLike` instead of being a strict KindOfArray check.
    */                                                                   \
   F(bool, WidenIsArray, false)                                          \
+  F(bool, EnablePerFileCoverage, false)                                 \
   /* */
 
 private:

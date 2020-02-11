@@ -37,11 +37,11 @@ hello world
 EOT;
 
 // add arrays
-$index_array = array (1, 2, 3);
-$assoc_array = array ('one' => 1, 'two' => 2);
+$index_array = varray [1, 2, 3];
+$assoc_array = darray ['one' => 1, 'two' => 2];
 
 //array of values to iterate over
-$values = array(
+$values = darray[
 
       // int data
       'int 0' => 0,
@@ -57,10 +57,10 @@ $values = array(
       'float .5' => .5,
 
       // array data
-      'empty array' => array(),
+      'empty array' => varray[],
       'int indexed array' => $index_array,
       'associative array' => $assoc_array,
-	  'nested arrays' => array('foo', $index_array, $assoc_array),
+	  'nested arrays' => varray['foo', $index_array, $assoc_array],
       
       // null data
 	  'uppercase NULL' => NULL,
@@ -94,7 +94,7 @@ $values = array(
       
       //resource 
       "file resource" => $fp
-);
+];
 
 // loop through each element of the array for im
 foreach($values as $key => $value) {

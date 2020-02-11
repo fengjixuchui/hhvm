@@ -85,7 +85,7 @@ struct Vgen {
   void emit(const copy& i);
   void emit(const copy2& i);
   void emit(const debugtrap& /*i*/) { a.int3(); }
-  void emit(const fallthru& /*i*/) {}
+  void emit(const fallthru&);
   void emit(const ldimmb& i);
   void emit(const ldimml& i);
   void emit(const ldimmq& i);
@@ -759,6 +759,13 @@ void Vgen<X64Asm>::emit(const unwind& i) {
 ///////////////////////////////////////////////////////////////////////////////
 
 template<class X64Asm>
+void Vgen<X64Asm>::emit(const fallthru&) {
+  a.nop();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+template<class X64Asm>
 void Vgen<X64Asm>::emit(andqi i) {
   if (magFits(i.s0.q(), sz::dword)) {
     emit(andli{int32_t(i.s0.q()), Reg32(i.s1), Reg32(i.d), i.sf});
@@ -1150,6 +1157,38 @@ void lowerForX64(Vunit& unit) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+
+void stressTestLiveness(Vunit& unit) {
+  auto const blocks = sortBlocks(unit);
+  auto const livein = computeLiveness(unit, abi(), blocks);
+  auto const gp_regs = abi().gpUnreserved;
+
+  for (auto b : blocks) {
+    auto& block = unit.blocks[b];
+    auto const& live_set = livein[b];
+    jit::vector<Vinstr> new_insts;
+    const uint64_t trash = 0xbad;
+    gp_regs.forEach([&](PhysReg r) {
+                      if (!live_set[Vreg(r)]) {
+                        new_insts.insert(new_insts.end(), ldimmq{trash, r});
+                      }
+                    });
+
+    // set irctx for the newly added instructions
+    auto const irctx = block.code.front().irctx();
+    for (auto& ni : new_insts) {
+      ni.set_irctx(irctx);
+    }
+
+    // insert new instructions in the beginning of the block, but after any
+    // existing phidef
+    auto insertPt = block.code.begin();
+    while (insertPt->op == Vinstr::phidef) insertPt++;
+    block.code.insert(insertPt, new_insts.begin(), new_insts.end());
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
 }
 
 void optimizeX64(Vunit& unit, const Abi& abi, bool regalloc) {
@@ -1207,6 +1246,12 @@ void optimizeX64(Vunit& unit, const Abi& abi, bool regalloc) {
     }
   }
   if (unit.needsRegAlloc() && regalloc) {
+    if (RuntimeOption::EvalJitStressTestLiveness && unit.context &&
+        (unit.context->kind == TransKind::Live ||
+         unit.context->kind == TransKind::Profile ||
+         unit.context->kind == TransKind::Optimize)) {
+      doPass("STRESS_TEST_LIVENESS", stressTestLiveness);
+    }
     doPass("VOPT_BLOCK_WEIGHTS",
            [] (Vunit& u) { VasmBlockCounters::profileGuidedUpdate(u); });
   }

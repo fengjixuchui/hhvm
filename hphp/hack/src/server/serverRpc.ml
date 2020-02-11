@@ -58,7 +58,8 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         last_recheck_stats;
       } )
   | STATUS_SINGLE (fn, max_errors) ->
-    (env, take_max_errors (ServerStatusSingle.go fn env.tcopt) max_errors)
+    let ctx = Provider_utils.ctx_from_server_env env in
+    (env, take_max_errors (ServerStatusSingle.go fn ctx) max_errors)
   | COVERAGE_LEVELS (path, file_input) ->
     let path = Relative_path.create_detect_prefix path in
     let (ctx, entry) =
@@ -111,7 +112,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     (env, r)
   | DOCBLOCK_FOR_SYMBOL (symbol, kind) ->
     let ctx = Provider_utils.ctx_from_server_env env in
-    let r = ServerDocblockAt.go_docblock_for_symbol ~env ~ctx ~symbol ~kind in
+    let r = ServerDocblockAt.go_docblock_for_symbol ~ctx ~symbol ~kind in
     (env, r)
   | IDE_SIGNATURE_HELP (path, line, column) ->
     let file_input = ServerCommandTypes.FileName path in
@@ -314,8 +315,9 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     else
       (env, Error "There are typecheck errors; cannot generate saved state.")
   | SEARCH (query, type_) ->
+    let ctx = Provider_utils.ctx_from_server_env env in
     let lst = env.ServerEnv.local_symbol_table in
-    (env, ServerSearch.go query type_ lst)
+    (env, ServerSearch.go ctx query type_ lst)
   | COVERAGE_COUNTS path -> (env, ServerCoverageMetric.go path genv env)
   | LINT fnl ->
     let ctx = Provider_utils.ctx_from_server_env env in
@@ -336,7 +338,9 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
       { Lsp.DocumentFormatting.tabSize = 2; insertSpaces = true }
     in
     (env, ServerFormat.go content from to_ legacy_format_options)
-  | AI_QUERY json -> (env, Ai.QueryService.go json)
+  | AI_QUERY json ->
+    let ctx = Provider_utils.ctx_from_server_env env in
+    (env, Ai.QueryService.go ctx json)
   | DUMP_FULL_FIDELITY_PARSE file -> (env, FullFidelityParseService.go file)
   | OPEN_FILE (path, contents) ->
     let predeclare = genv.local_config.ServerLocalConfig.predeclare_ide in
@@ -376,9 +380,10 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let offset = File_content.get_offset content pos in
     (* will raise if out of bounds *)
     let char_at_pos = File_content.get_char content offset in
+    let ctx = Provider_utils.ctx_from_server_env env in
     let result =
       FfpAutocompleteService.auto_complete
-        env.tcopt
+        ctx
         content
         pos
         ~filter_by_token:false

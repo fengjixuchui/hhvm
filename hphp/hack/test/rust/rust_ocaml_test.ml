@@ -663,7 +663,7 @@ end
 module LowererTest = Runner (LowererTest_)
 
 external rust_closure_convert_from_text :
-  SourceText.t -> (Pos.t, unit, unit, unit) Aast.program
+  SourceText.t -> (Pos.t, unit, unit, unit) Aast.program * Emit_env.global_state
   = "rust_closure_convert_from_text"
 
 module ClosureConvertTest_ = struct
@@ -698,20 +698,41 @@ module ClosureConvertTest_ = struct
         ~parser_options
     in
 
-    let ocaml_tast =
+    let elaborator = new Naming_elaborate_namespaces_endo.generic_elaborator in
+
+    let (ocaml_tast, ocaml_state) =
       let open Rust_aast_parser_types in
       (match (LowererTest_.lower lower_env source_text).aast with
       | Ok x -> x
       | Error x -> failwith x)
       |> Full_fidelity_ast.aast_to_tast
+      |> elaborator#on_program
+           (Naming_elaborate_namespaces_endo.make_env empty_namespace)
       |> Closure_convert.convert_toplevel_prog ~empty_namespace
       |> fun x ->
       x.Closure_convert.ast_defs
       |> List.map ~f:snd
       |> Full_fidelity_ast.tast_to_aast
+      |> fun y -> (y, x.Closure_convert.global_state)
     in
 
-    let rust_tast = rust_closure_convert_from_text source_text in
+    let (rust_tast, rust_state) = rust_closure_convert_from_text source_text in
+
+    let ocaml_state = Emit_env.global_state_to_string ocaml_state in
+    let rust_state = Emit_env.global_state_to_string rust_state in
+
+    if ocaml_state <> rust_state then begin
+      let oc = Pervasives.open_out "/tmp/ocaml.state" in
+      Printf.fprintf oc "%s\n" ocaml_state;
+      close_out oc;
+
+      let oc = Pervasives.open_out "/tmp/rust.state" in
+      Printf.fprintf oc "%s\n" rust_state;
+      close_out oc;
+
+      Printf.printf "FAILED global_state: %s\n" path;
+      exit 0
+    end;
 
     let ocaml_tast = print_result "/tmp/ocaml.tast" ocaml_tast in
     let rust_tast = print_result "/tmp/rust.tast" rust_tast in
