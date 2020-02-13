@@ -2,9 +2,13 @@
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
+
+use closure_convert_rust as closure_convert;
 use emit_body_rust::{emit_body_with_default_args, make_body};
+use emit_class_rust::emit_classes_from_program;
 use emit_fatal_rust::emit_fatal;
 use emit_file_attributes_rust::emit_file_attributes_from_program;
+use emit_function_rust::emit_functions_from_program;
 use emit_record_def_rust::emit_record_defs_from_program;
 use env::{self, emitter::Emitter};
 use hhas_body_rust::HhasBody;
@@ -53,7 +57,7 @@ pub fn emit_program<'p>(
     options: Options,
     flags: FromAstFlags,
     namespace: &namespace_env::Env,
-    tast: &'p Tast::Program,
+    tast: &'p mut Tast::Program,
 ) -> Result<HhasProgram<'p>> {
     let result = emit_program_(options.clone(), flags, namespace, tast);
     match result {
@@ -68,26 +72,29 @@ fn emit_program_<'p>(
     options: Options,
     flags: FromAstFlags,
     namespace: &namespace_env::Env,
-    prog: &'p Tast::Program,
+    prog: &'p mut Tast::Program,
 ) -> Result<HhasProgram<'p>> {
-    // TODO(hrust) real code in closure_convert.rs
-    fn closure_convert() -> ((), global_state::GlobalState) {
-        ((), global_state::GlobalState::default())
-    }
-
-    let (_ast_defs, _global_state) = closure_convert();
     let mut emitter = Emitter::new(options);
+    closure_convert::convert_toplevel_prog(&mut emitter, prog);
     emitter
         .context_mut()
         .set_systemlib(flags.contains(FromAstFlags::IS_SYSTEMLIB));
 
+    let ast_defs = prog
+        .iter()
+        .map(|d| (closure_convert::HoistKind::TopLevel, d))
+        .collect::<Vec<_>>();
     let main = emit_main(&mut emitter, flags, namespace, prog)?;
     let record_defs = emit_record_defs_from_program(&mut emitter, prog)?;
+    let classes = emit_classes_from_program(&mut emitter, prog)?;
     let file_attributes = emit_file_attributes_from_program(&mut emitter, prog)?;
+    let functions = emit_functions_from_program(&mut emitter, ast_defs)?;
 
     Ok(HhasProgram {
         main,
         record_defs,
+        classes,
+        functions,
         is_hh: flags.contains(FromAstFlags::IS_HH_FILE),
         file_attributes,
         ..HhasProgram::default()
@@ -104,12 +111,12 @@ bitflags! {
 }
 
 // IMPLEMENTATION DETAILS
-fn emit_main(
+fn emit_main<'a>(
     emitter: &mut Emitter,
     flags: FromAstFlags,
     namespace: &namespace_env::Env,
-    prog: &Tast::Program,
-) -> Result<HhasBody> {
+    prog: &'a Tast::Program,
+) -> Result<HhasBody<'a>> {
     let return_value = if flags.contains(FromAstFlags::IS_EVALED) {
         InstrSeq::make_null()
     } else {

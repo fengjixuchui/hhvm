@@ -236,8 +236,7 @@ and _ ty_ =
   (* All the primitive types: int, string, void, etc. *)
   | Tprim : Aast.tprim -> 'phase ty_
   (* A wrapper around fun_type, which contains the full type information for a
-   * function, method, lambda, etc. Note that lambdas have an additional layer
-   * of indirection before you get to Tfun -- see Tanon below. *)
+   * function, method, lambda, etc. *)
   | Tfun : 'phase ty fun_type -> 'phase ty_
   (* Tuple, with ordered list of the types of the elements of the tuple. *)
   | Ttuple : 'phase ty list -> 'phase ty_
@@ -275,10 +274,6 @@ and _ ty_ =
   | Tnewtype : string * locl_ty list * locl_ty -> locl_phase ty_
   (* see dependent_type *)
   | Tdependent : dependent_type * locl_ty -> locl_phase ty_
-  (* An anonymous function, including the fun arity, and the identifier to
-   * type the body of the function. (The actual closure is stored in
-   * Typing_env.env.genv.anons) *)
-  | Tanon : locl_fun_arity * Ident.t -> locl_phase ty_
   (* Union type.
    * The values that are members of this type are the union of the values
    * that are members of the components of the union.
@@ -291,9 +286,7 @@ and _ ty_ =
   | Tintersection : 'phase ty list -> 'phase ty_
   (* Tobject is an object type compatible with all objects. This type is also
    * compatible with some string operations (since a class might implement
-   * __toString), but not with string type hints. In a similar way, Tobject
-   * is compatible with some array operations (since a class might implement
-   * ArrayAccess), but not with array type hints.
+   * __toString), but not with string type hints.
    *
    * Tobject is currently used to type code like:
    *   ../test/typecheck/return_unknown_class.php

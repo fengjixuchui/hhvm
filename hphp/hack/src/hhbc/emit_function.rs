@@ -23,14 +23,13 @@ use rx_rust as rx;
 
 use std::borrow::Cow;
 
-pub fn emit_function(
+pub fn emit_function<'a>(
     e: &mut Emitter,
-    f: tast::Fun_,
+    f: &'a tast::Fun_,
     hoisted: HoistKind,
-) -> Result<Vec<HhasFunction>> {
+) -> Result<Vec<HhasFunction<'a>>> {
     use ast_defs::FunKind;
     use hhas_function::Flags;
-    // TODO(hrust) ideally, we should be able to break f into parts and avoid cloning
     let original_id = hhbc_id::function::Type::from_ast_name(&f.name.1);
     let mut flags = Flags::empty();
     flags.set(
@@ -46,10 +45,7 @@ pub fn emit_function(
     attrs.extend(emit_attribute::add_reified_attribute(&f.tparams));
     let memoized = attrs.iter().any(|a| ua::is_memoized(&a.name));
     flags.set(Flags::MEMOIZE_IMPL, memoized);
-    flags.set(
-        Flags::NO_INJECTION,
-        hhas_attribute::is_no_injection(attrs.as_slice()),
-    );
+    flags.set(Flags::NO_INJECTION, hhas_attribute::is_no_injection(&attrs));
 
     let renamed_id = {
         let mut id = original_id.clone();
@@ -101,10 +97,11 @@ pub fn emit_function(
             &f.namespace,
             &vec![a::Def::mk_stmt(a::Stmt(
                 Pos::make_none(),
+                // TODO(shiqicao): T62049979 we should avoid cloning
                 a::Stmt_::Block(ast_body.clone()),
             ))],
             InstrSeq::make_null(),
-            &mut EmitBodyArgs {
+            &EmitBodyArgs {
                 flags,
                 deprecation_info: &deprecation_info,
                 default_dropthrough: None,
@@ -134,7 +131,7 @@ pub fn emit_function(
     let normal_function = HhasFunction {
         attributes: attrs,
         name: name.into(),
-        span: f.span.into(),
+        span: (&f.span).clone().into(),
         rx_level,
         body,
         hoisted,
@@ -148,15 +145,15 @@ pub fn emit_function(
     })
 }
 
-// TODO(hrust) figure out the mismatched lifetime issue here
-// pub fn emit_functions_from_program(
-//     e: &mut Emitter,
-//     prog: Vec<(HoistKind, tast::Def)>,
-// ) -> Vec<HhasFunction> {
-//     prog.into_iter()
-//         .flat_map(|(is_top, d)| match d {
-//             tast::Def::Fun(fd) => emit_function(e, *fd, is_top),
-//             _ => vec![],
-//         })
-//         .collect()
-// }
+pub fn emit_functions_from_program<'a>(
+    e: &mut Emitter,
+    prog: Vec<(HoistKind, &'a tast::Def)>,
+) -> Result<Vec<HhasFunction<'a>>> {
+    Ok(prog
+        .into_iter()
+        .filter_map(|(hoist_kind, d)| d.as_fun().map(|f| emit_function(e, f, hoist_kind)))
+        .collect::<Result<Vec<Vec<_>>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>())
+}

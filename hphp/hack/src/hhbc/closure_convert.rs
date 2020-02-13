@@ -28,7 +28,7 @@ use oxidized::{
 use rx_rust as rx;
 use unique_list_rust::UniqueList;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum HoistKind {
     /// Def that is already at top-level
     TopLevel,
@@ -1130,6 +1130,7 @@ pub fn convert_toplevel_prog(e: &mut Emitter, defs: &mut Program) {
                     Stmt_::mk_def_inline(Def::Typedef(stub_td)),
                 )));
             }
+            Def::Namespace(x) => new_defs.extend_from_slice((*x).1.as_slice()),
             Def::SetNamespaceEnv(_) => panic!("TODO, can't test yet without porting namespaces.ml"),
             def => new_defs.push(def),
         }

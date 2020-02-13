@@ -343,9 +343,8 @@ bool HHVM_FUNCTION(array_key_exists,
   switch (cell->m_type) {
     case KindOfUninit:
     case KindOfNull:
-      if (checkHACNullHackArrayKey() && ad->isHackArray()) {
-        raise_hackarr_compat_notice(
-          getHackArrCompatNullHackArrayKeyMsg()->data());
+      if (ad->isHackArray()) {
+        throwInvalidArrayKeyException(cell, ad);
       } else if (checkHACArrayKeyCast() && ad->useWeakKeys()) {
         raiseHackArrCompatImplicitArrayKey(cell);
       }
@@ -2928,10 +2927,6 @@ bool HHVM_FUNCTION(krsort,
   return php_ksort(array, sort_flags, false);
 }
 
-// NOTE: PHP's implementation of natsort and natcasesort accepts ArrayAccess
-// objects as well, which does not make much sense, and which is not supported
-// here.
-
 bool HHVM_FUNCTION(natsort, Variant& array) {
   if (checkIsClsMethAndRaise( __FUNCTION__+2, array)) return false;
   return php_asort(array, SORT_NATURAL, true);
@@ -3021,8 +3016,6 @@ bool HHVM_FUNCTION(uksort,
 TypedValue HHVM_FUNCTION(array_unique,
                          const Variant& array,
                          int sort_flags /* = 2 */) {
-  // NOTE, PHP array_unique accepts ArrayAccess objects as well,
-  // which is not supported here.
   getCheckedArray(array);
   switch (sort_flags) {
   case SORT_STRING:
@@ -3371,18 +3364,7 @@ String HHVM_FUNCTION(HH_get_provenance, const Variant& in) {
 }
 
 TypedValue HHVM_FUNCTION(HH_tag_provenance_here, TypedValue in) {
-  if (!RuntimeOption::EvalArrayProvenance ||
-      !isArrayLikeType(type(in)) ||
-      !arrprov::arrayWantsTag(val(in).parr)) {
-    return tvReturn(tvAsCVarRef(&in));
-  }
-
-  auto const ad = in.m_data.parr->copy();
-  if (auto const tag = arrprov::tagFromPC()) {
-    arrprov::setTag<arrprov::Mode::Emplace>(ad, *tag);
-  }
-  assertx(ad->hasExactlyOneRef());
-  return make_array_like_tv(ad);
+  return arrprov::tagTvRecursively(in);
 }
 
 Array HHVM_FUNCTION(merge_xhp_attr_declarations,

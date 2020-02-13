@@ -832,8 +832,8 @@ struct RuntimeOption {
   F(uint32_t, JitRetranslateAllSeconds, retranslateAllSecondsDefault()) \
   F(bool,     JitPGOLayoutSplitHotCold, pgoLayoutSplitHotColdDefault()) \
   F(bool,     JitPGOVasmBlockCounters, true)                            \
-  F(bool,     JitPGOVasmBlockCountersForceSaveSF, true)                 \
-  F(bool,     JitPGOVasmBlockCountersForceSaveGP, true)                 \
+  F(bool,     JitPGOVasmBlockCountersForceSaveSF, false)                \
+  F(bool,     JitPGOVasmBlockCountersForceSaveGP, false)                \
   F(bool, JitLayoutPrologueSplitHotCold, layoutPrologueSplitHotColdDefault()) \
   F(bool, JitLayoutProfileSplitHotCold, true)                           \
   F(double,   JitLayoutHotThreshold,   0.05)                            \
@@ -1066,7 +1066,6 @@ struct RuntimeOption {
   F(bool, HackArrCompatCheckCompareNonAnyArray, false)                  \
   F(bool, HackArrCompatCheckArrayPlus, false)                           \
   F(bool, HackArrCompatCheckArrayKeyCast, false)                        \
-  F(bool, HackArrCompatCheckNullHackArrayKey, false)                    \
   F(bool, HackArrCompatFBSerializeHackArraysNotices, false)             \
   /* Raise notices when is_array is called with any hack array */       \
   F(bool, HackArrCompatIsArrayNotices, false)                           \
@@ -1139,7 +1138,6 @@ struct RuntimeOption {
   F(bool, NoticeOnBuiltinDynamicCalls, false)                           \
   F(bool, RxPretendIsEnabled, false)                                    \
   F(bool, NoArrayAccessInIdx, false)                                    \
-  F(bool, NoticeOnArrayAccessUse, false)                                \
   /* Raise warning when function pointers are used as strings. */       \
   F(bool, RaiseFuncConversionWarning, false)                            \
   /* Raise warning when class pointers are used as strings. */          \

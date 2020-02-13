@@ -8,6 +8,7 @@ pub mod iterator;
 pub mod jump_targets;
 
 use ast_scope_rust::{Scope, ScopeItem};
+use emitter::Emitter;
 use iterator::Iter;
 use label_rust::Label;
 use oxidized::{ast as tast, ast_defs::Id, namespace_env::Env as NamespaceEnv};
@@ -28,18 +29,17 @@ bitflags! {
 }
 
 #[derive(Default, Debug)]
-pub struct Env {
+pub struct Env<'a> {
     pub flags: Flags,
     pub jump_targets_gen: jump_targets::Gen,
-    // Scope is owned (not borrowed) here
-    pub scope: Scope<'static>,
+    pub scope: Scope<'a>,
     pub namespace: NamespaceEnv,
     // TODO(hrust)
     // - pipe_var after porting Local
     // - namespace after porting Namespace_env
 }
 
-impl Env {
+impl<'a> Env<'a> {
     pub fn with_need_local_this(&mut self, need_local_this: bool) {
         if need_local_this {
             self.flags = self.flags | Flags::NEEDS_LOCAL_THIS;
@@ -52,12 +52,12 @@ impl Env {
         }
     }
 
-    fn with_scope(mut self, scope: Scope<'static>) -> Env {
+    fn with_scope(mut self, scope: Scope<'a>) -> Env {
         self.scope = scope;
         self
     }
 
-    pub fn make_class_env(class: &'static tast::Class_) -> Env {
+    pub fn make_class_env(class: &'a tast::Class_) -> Env {
         Env::default().with_scope(Scope {
             items: vec![ScopeItem::Class(Cow::Borrowed(class))],
         })
@@ -66,6 +66,7 @@ impl Env {
 
     pub fn do_in_loop_body<R, F>(
         &mut self,
+        e: &mut Emitter,
         label_break: Label,
         label_continue: Label,
         iterator: Option<Iter>,
@@ -73,58 +74,76 @@ impl Env {
         f: F,
     ) -> R
     where
-        F: FnOnce(&mut Self, &tast::Stmt) -> R,
+        F: FnOnce(&mut Self, &mut Emitter, &tast::Stmt) -> R,
     {
         self.jump_targets_gen
             .with_loop(label_break, label_continue, iterator, s);
-        self.run_and_release_ids(s, f)
+        self.run_and_release_ids(e, s, f)
     }
 
-    pub fn do_in_switch_body<R, F>(&mut self, end_label: Label, cases: &Vec<tast::Case>, f: F) -> R
+    pub fn do_in_switch_body<R, F>(
+        &mut self,
+        e: &mut Emitter,
+        end_label: Label,
+        cases: &Vec<tast::Case>,
+        f: F,
+    ) -> R
     where
-        F: FnOnce(&mut Self, &Vec<tast::Case>) -> R,
+        F: FnOnce(&mut Self, &mut Emitter, &Vec<tast::Case>) -> R,
     {
         self.jump_targets_gen.with_switch(end_label, cases);
-        self.run_and_release_ids(cases, f)
+        self.run_and_release_ids(e, cases, f)
     }
 
-    pub fn do_in_try_body<R, F>(&mut self, finally_label: Label, stmt: &tast::Stmt, f: F) -> R
+    pub fn do_in_try_body<R, F>(
+        &mut self,
+        e: &mut Emitter,
+        finally_label: Label,
+        stmt: &tast::Stmt,
+        f: F,
+    ) -> R
     where
-        F: FnOnce(&mut Self, &tast::Stmt) -> R,
+        F: FnOnce(&mut Self, &mut Emitter, &tast::Stmt) -> R,
     {
         self.jump_targets_gen.with_try(finally_label, stmt);
-        self.run_and_release_ids(stmt, f)
+        self.run_and_release_ids(e, stmt, f)
     }
 
-    pub fn do_in_finally_body<R, F>(&mut self, stmt: &tast::Stmt, f: F) -> R
+    pub fn do_in_finally_body<R, F>(&mut self, e: &mut Emitter, stmt: &tast::Stmt, f: F) -> R
     where
-        F: FnOnce(&mut Self, &tast::Stmt) -> R,
+        F: FnOnce(&mut Self, &mut Emitter, &tast::Stmt) -> R,
     {
         self.jump_targets_gen.with_finally(stmt);
-        self.run_and_release_ids(stmt, f)
+        self.run_and_release_ids(e, stmt, f)
     }
 
-    pub fn do_in_using_body<R, F>(&mut self, finally_label: Label, stmt: &tast::Stmt, f: F) -> R
+    pub fn do_in_using_body<R, F>(
+        &mut self,
+        e: &mut Emitter,
+        finally_label: Label,
+        stmt: &tast::Stmt,
+        f: F,
+    ) -> R
     where
-        F: FnOnce(&mut Self, &tast::Stmt) -> R,
+        F: FnOnce(&mut Self, &mut Emitter, &tast::Stmt) -> R,
     {
         self.jump_targets_gen.with_using(finally_label, stmt);
-        self.run_and_release_ids(stmt, f)
+        self.run_and_release_ids(e, stmt, f)
     }
 
-    pub fn do_function<R, F>(&mut self, defs: &tast::Program, f: F) -> R
+    pub fn do_function<R, F>(&mut self, e: &mut Emitter, defs: &tast::Program, f: F) -> R
     where
-        F: FnOnce(&mut Self, &tast::Program) -> R,
+        F: FnOnce(&mut Self, &mut Emitter, &[tast::Def]) -> R,
     {
         self.jump_targets_gen.with_function(defs);
-        self.run_and_release_ids(defs, f)
+        self.run_and_release_ids(e, defs.as_slice(), f)
     }
 
-    fn run_and_release_ids<X, R, F>(&mut self, x: X, f: F) -> R
+    fn run_and_release_ids<X, R, F>(&mut self, e: &mut Emitter, x: X, f: F) -> R
     where
-        F: FnOnce(&mut Self, X) -> R,
+        F: FnOnce(&mut Self, &mut Emitter, X) -> R,
     {
-        let res = f(self, x);
+        let res = f(self, e, x);
         self.jump_targets_gen.release_ids();
         res
     }

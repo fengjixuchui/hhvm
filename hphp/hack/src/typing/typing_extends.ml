@@ -122,7 +122,7 @@ let should_check_params parent_class class_ =
   else
     Cls.members_fully_known class_
 
-let check_final_method member_source parent_class_elt class_elt =
+let check_final_method member_source parent_class_elt class_elt on_error =
   (* we only check for final overrides on methods, not properties *)
   (* we don't check constructors, as they are already checked
    * in the decl phase *)
@@ -141,7 +141,10 @@ let check_final_method member_source parent_class_elt class_elt =
     (* we have a final method being overridden by a user-declared method *)
     let (lazy parent_pos) = parent_class_elt.ce_pos in
     let (lazy pos) = class_elt.ce_pos in
-    Errors.override_final parent_pos pos
+    Errors.override_final
+      ~parent:parent_pos
+      ~child:pos
+      ~on_error:(Some on_error)
 
 let check_memoizelsb_method member_source parent_class_elt class_elt =
   let is_method =
@@ -246,7 +249,7 @@ let check_override
       on_error
   in
   (* We first verify that we aren't overriding a final method *)
-  check_final_method mem_source parent_class_elt class_elt;
+  check_final_method mem_source parent_class_elt class_elt on_error;
   check_memoizelsb_method mem_source parent_class_elt class_elt;
 
   (* Verify that we are not overriding an __LSB property *)
@@ -376,8 +379,7 @@ let check_override
           env
           on_error
           fty_parent
-          fty_child;
-      env
+          fty_child
   ) else
     env
 
@@ -644,7 +646,7 @@ let check_constructors
       match (fst (Cls.construct parent_class), fst (Cls.construct class_)) with
       | (Some parent_cstr, _) when parent_cstr.ce_synthesized -> ()
       | (Some parent_cstr, Some child_cstr) ->
-        check_final_method `FromMethod parent_cstr child_cstr;
+        check_final_method `FromMethod parent_cstr child_cstr on_error;
         check_class_elt_visibility parent_cstr child_cstr on_error
       | (_, _) -> ()
     end;
@@ -673,7 +675,8 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
   in
   match (parent_typeconst.ttc_abstract, child_typeconst.ttc_abstract) with
   | (TCAbstract (Some _), TCAbstract None) ->
-    Errors.override_no_default_typeconst pos parent_pos
+    Errors.override_no_default_typeconst pos parent_pos;
+    env
   | _ ->
     (* Check that the child's constraint is compatible with the parent. If the
      * parent has a constraint then the child must also have a constraint if it
@@ -705,28 +708,32 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
       else
         child_typeconst.ttc_constraint
     in
-    ignore
-    @@ Option.map2
-         child_cstr
-         parent_typeconst.ttc_constraint
-         ~f:
-           (Typing_ops.sub_type_decl_on_error
-              pos
-              Reason.URsubsume_tconst_cstr
-              env
-              on_error);
+    let env =
+      Option.value ~default:env
+      @@ Option.map2
+           child_cstr
+           parent_typeconst.ttc_constraint
+           ~f:
+             (Typing_ops.sub_type_decl_on_error
+                pos
+                Reason.URsubsume_tconst_cstr
+                env
+                on_error)
+    in
 
     (* Check that the child's assigned type satisifies parent constraint *)
-    ignore
-    @@ Option.map2
-         child_typeconst.ttc_type
-         parent_typeconst.ttc_constraint
-         ~f:
-           (Typing_ops.sub_type_decl_on_error
-              pos
-              Reason.URtypeconst_cstr
-              env
-              on_error);
+    let env =
+      Option.value ~default:env
+      @@ Option.map2
+           child_typeconst.ttc_type
+           parent_typeconst.ttc_constraint
+           ~f:
+             (Typing_ops.sub_type_decl_on_error
+                pos
+                Reason.URtypeconst_cstr
+                env
+                on_error)
+    in
 
     begin
       match
@@ -758,7 +765,7 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
 
     (* If the parent cannot be overridden, we unify the types otherwise we ensure
      * the child's assigned type is compatible with the parent's *)
-    let check x y =
+    let check env x y =
       if is_final then
         Typing_ops.unify_decl
           pos
@@ -776,8 +783,11 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
           y
           x
     in
-    ignore
-    @@ Option.map2 parent_typeconst.ttc_type child_typeconst.ttc_type ~f:check
+    Option.value ~default:env
+    @@ Option.map2
+         parent_typeconst.ttc_type
+         child_typeconst.ttc_type
+         ~f:(check env)
 
 (* For type constants we need to check that a child respects the
  * constraints specified by its parent. *)
@@ -788,7 +798,7 @@ let check_typeconsts env parent_class class_ on_error =
   let tconst_check parent_tconst tconst () =
     tconst_subsumption env (Cls.name class_) parent_tconst tconst on_error
   in
-  List.iter ptypeconsts (fun (tconst_name, parent_tconst) ->
+  List.fold ptypeconsts ~init:env ~f:(fun env (tconst_name, parent_tconst) ->
       match Cls.get_typeconst class_ tconst_name with
       | Some tconst ->
         check_ambiguous_inheritance
@@ -804,7 +814,8 @@ let check_typeconsts env parent_class class_ on_error =
           tconst_name
           parent_pos
           pos
-          (fst parent_tconst.ttc_name))
+          (fst parent_tconst.ttc_name);
+        env)
 
 let check_consts env parent_class class_ psubst subst on_error =
   let (pconsts, consts) = (Cls.consts parent_class, Cls.consts class_) in
@@ -813,8 +824,8 @@ let check_consts env parent_class class_ psubst subst on_error =
   let consts =
     List.fold consts ~init:SMap.empty ~f:(fun m (k, v) -> SMap.add k v m)
   in
-  List.iter pconsts (fun (const_name, parent_const) ->
-      if String.( <> ) const_name SN.Members.mClass then
+  List.fold pconsts ~init:env ~f:(fun env (const_name, parent_const) ->
+      if String.( <> ) const_name SN.Members.mClass then (
         match SMap.find_opt const_name consts with
         | Some const ->
           (* skip checks for typeconst derived class constants *)
@@ -828,14 +839,16 @@ let check_consts env parent_class class_ psubst subst on_error =
               parent_const
               const
               on_error
-          | Some _ -> ())
+          | Some _ -> env)
         | None ->
           Errors.member_not_implemented
             const_name
             parent_const.cc_pos
             (Cls.pos class_)
-            (Cls.pos parent_class));
-  ()
+            (Cls.pos parent_class);
+          env
+      ) else
+        env)
 
 (* Use the [on_error] callback if we need to wrap the basic error with a
  *   "Class ... does not correctly implement all required members"
@@ -843,13 +856,13 @@ let check_consts env parent_class class_ psubst subst on_error =
  *)
 let check_class_implements
     env removals (parent_class, parent_ty) (class_, class_ty) on_error =
-  check_typeconsts env parent_class class_ on_error;
+  let env = check_typeconsts env parent_class class_ on_error in
   let (parent_pos, parent_class, parent_tparaml) = parent_class in
   let (pos, class_, tparaml) = class_ in
   let fully_known = Cls.members_fully_known class_ in
   let psubst = Inst.make_subst (Cls.tparams parent_class) parent_tparaml in
   let subst = Inst.make_subst (Cls.tparams class_) tparaml in
-  check_consts env parent_class class_ psubst subst on_error;
+  let env = check_consts env parent_class class_ psubst subst on_error in
   let memberl = make_all_members ~parent_class ~child_class:class_ in
   let env =
     check_constructors
