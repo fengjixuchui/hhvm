@@ -259,13 +259,14 @@ let parallel_otf_decl ~conservative_redecl ctx workers bucket_size fast fnl =
 (* Code invalidating the heap *)
 (*****************************************************************************)
 let oldify_defs
+    (ctx : Provider_context.t)
     { FileInfo.n_funs; n_classes; n_record_defs; n_types; n_consts }
     elems
     ~collect_garbage =
   Decl_heap.Funs.oldify_batch n_funs;
   Decl_class_elements.oldify_all elems;
   Decl_heap.Classes.oldify_batch n_classes;
-  Shallow_classes_heap.oldify_batch n_classes;
+  Shallow_classes_provider.oldify_batch ctx n_classes;
   Decl_heap.RecordDefs.oldify_batch n_record_defs;
   Decl_heap.Typedefs.oldify_batch n_types;
   Decl_heap.GConsts.oldify_batch n_consts;
@@ -273,11 +274,13 @@ let oldify_defs
   ()
 
 let remove_old_defs
-    { FileInfo.n_funs; n_classes; n_record_defs; n_types; n_consts } elems =
+    (ctx : Provider_context.t)
+    { FileInfo.n_funs; n_classes; n_record_defs; n_types; n_consts }
+    elems =
   Decl_heap.Funs.remove_old_batch n_funs;
   Decl_class_elements.remove_old_all elems;
   Decl_heap.Classes.remove_old_batch n_classes;
-  Shallow_classes_heap.remove_old_batch n_classes;
+  Shallow_classes_provider.remove_old_batch ctx n_classes;
   Decl_heap.RecordDefs.remove_old_batch n_record_defs;
   Decl_heap.Typedefs.remove_old_batch n_types;
   Decl_heap.GConsts.remove_old_batch n_consts;
@@ -285,13 +288,14 @@ let remove_old_defs
   ()
 
 let remove_defs
+    (ctx : Provider_context.t)
     { FileInfo.n_funs; n_classes; n_record_defs; n_types; n_consts }
     elems
     ~collect_garbage =
   Decl_heap.Funs.remove_batch n_funs;
   Decl_class_elements.remove_all elems;
   Decl_heap.Classes.remove_batch n_classes;
-  Shallow_classes_heap.remove_batch n_classes;
+  Shallow_classes_provider.remove_batch ctx n_classes;
   Decl_linearize.remove_batch n_classes;
   Decl_heap.RecordDefs.remove_batch n_record_defs;
   Decl_heap.Typedefs.remove_batch n_types;
@@ -418,7 +422,7 @@ let redo_type_decl
   (* Oldify the remaining defs along with their elements *)
   let get_elems = get_elems workers ~bucket_size in
   let current_elems = get_elems current_defs ~old:false in
-  oldify_defs current_defs current_elems ~collect_garbage:true;
+  oldify_defs ctx current_defs current_elems ~collect_garbage:true;
 
   (* Fetch the already oldified elements too so we can remove them later *)
   let oldified_elems = get_elems oldified_defs ~old:true in
@@ -438,7 +442,7 @@ let redo_type_decl
   let (changed, to_recheck) =
     if shallow_decl_enabled () then (
       let AffectedDeps.{ changed = changed'; mro_invalidated; needs_recheck } =
-        Shallow_decl_compare.compute_class_fanout get_classes fnl
+        Shallow_decl_compare.compute_class_fanout ctx get_classes fnl
       in
       let changed = DepSet.union changed changed' in
       let to_recheck = DepSet.union to_recheck needs_recheck in
@@ -453,7 +457,7 @@ let redo_type_decl
     ) else
       (changed, to_recheck)
   in
-  remove_old_defs defs all_elems;
+  remove_old_defs ctx defs all_elems;
 
   Hh_logger.log "Finished recomputing type declarations:";
   Hh_logger.log "  changed: %d" (DepSet.cardinal changed);
@@ -463,6 +467,7 @@ let redo_type_decl
   (errors, changed, to_redecl, to_recheck)
 
 let oldify_type_decl
+    (ctx : Provider_context.t)
     ?(collect_garbage = true)
     workers
     get_classes
@@ -476,11 +481,11 @@ let oldify_type_decl
   let get_elems = get_elems workers ~bucket_size in
   (* Oldify things that are not oldified yet *)
   let current_elems = get_elems current_defs ~old:false in
-  oldify_defs current_defs current_elems ~collect_garbage;
+  oldify_defs ctx current_defs current_elems ~collect_garbage;
 
   (* For the rest, just invalidate their current versions *)
   let oldified_elems = get_elems oldified_defs ~old:false in
-  remove_defs oldified_defs oldified_elems ~collect_garbage;
+  remove_defs ctx oldified_defs oldified_elems ~collect_garbage;
 
   (* Oldifying/removing classes also affects their elements
    * (see Decl_class_elements), which might be shared with other classes. We
@@ -493,8 +498,8 @@ let oldify_type_decl
     FileInfo.
       { empty_names with n_classes = SSet.diff dependent_classes all_classes }
   in
-  remove_defs dependent_classes SMap.empty ~collect_garbage
+  remove_defs ctx dependent_classes SMap.empty ~collect_garbage
 
-let remove_old_defs ~bucket_size workers names =
+let remove_old_defs (ctx : Provider_context.t) ~bucket_size workers names =
   let elems = get_elems workers ~bucket_size names ~old:true in
-  remove_old_defs names elems
+  remove_old_defs ctx names elems

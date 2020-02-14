@@ -229,6 +229,7 @@ let parse_options () =
   let disallow_func_ptrs_in_constants = ref false in
   let error_php_lambdas = ref false in
   let disallow_discarded_nullable_awaitables = ref false in
+  let disable_xhp_element_mangling = ref false in
   let enable_xhp_class_modifier = ref false in
   let verbosity = ref 0 in
   let enable_first_class_function_pointers = ref false in
@@ -498,6 +499,10 @@ let parse_options () =
       ( "--disallow-discarded-nullable-awaitables",
         Arg.Set disallow_discarded_nullable_awaitables,
         "Error on using discarded nullable awaitables" );
+      ( "--disable-xhp-element-mangling",
+        Arg.Set disable_xhp_element_mangling,
+        "Disable mangling of XHP elements :foo. That is, :foo:bar is now \\foo\\bar, not xhp_foo__bar"
+      );
       ( "--enable-xhp-class-modifier",
         Arg.Set enable_xhp_class_modifier,
         "Enable the XHP class modifier, xhp class name {} will define an xhp class."
@@ -566,6 +571,7 @@ let parse_options () =
       ~glean_hostname:!glean_hostname
       ~glean_port:!glean_port
       ~glean_reponame:!glean_reponame
+      ~po_disable_xhp_element_mangling:!disable_xhp_element_mangling
       ~po_enable_xhp_class_modifier:!enable_xhp_class_modifier
       ~po_enable_first_class_function_pointers:
         !enable_first_class_function_pointers
@@ -666,10 +672,10 @@ let print_global_inference_envs ctx ~verbosity gienvs =
 let merge_global_inference_envs_opt ctx gienvs =
   if TypecheckerOptions.global_inference ctx.Provider_context.tcopt then
     let open Typing_global_inference in
-    let env = Typing_env.empty ctx Relative_path.default None in
-    let state_errors = StateErrors.mk_empty () in
     let (env, state_errors) =
-      StateConstraintGraph.merge_subgraphs (env, state_errors) gienvs
+      StateConstraintGraph.merge_subgraphs
+        ~tcopt:ctx.Provider_context.tcopt
+        gienvs
     in
     (* we are not going to print type variables without any bounds *)
     let env = { env with inference_env = Inf.compress env.inference_env } in
@@ -935,7 +941,7 @@ let compare_classes c1 c2 =
   let (_, is_unchanged) = Decl_compare.ClassEltDiff.compare c1 c2 in
   if is_unchanged = `Changed then fail_comparison "ClassEltDiff"
 
-let test_decl_compare filenames popt builtins files_contents files_info =
+let test_decl_compare ctx filenames builtins files_contents files_info =
   (* skip some edge cases that we don't handle now... ugly! *)
   if Relative_path.suffix filenames = "capitalization3.php" then
     ()
@@ -980,6 +986,7 @@ let test_decl_compare filenames popt builtins files_contents files_info =
     in
     (* We need to oldify, not remove, for ClassEltDiff to work *)
     Decl_redecl_service.oldify_type_decl
+      ctx
       None
       get_classes
       ~bucket_size:1
@@ -988,7 +995,7 @@ let test_decl_compare filenames popt builtins files_contents files_info =
       ~collect_garbage:false;
 
     let files_contents = Relative_path.Map.map files_contents ~f:add_newline in
-    let (_, _) = parse_name_and_decl popt files_contents in
+    let (_, _) = parse_name_and_decl ctx files_contents in
     let (typedefs2, funs2, classes2) = get_decls defs in
     List.iter2_exn typedefs1 typedefs2 compare_typedefs;
     List.iter2_exn funs1 funs2 compare_funs;
@@ -1602,8 +1609,8 @@ let handle_mode
             in
             try
               test_decl_compare
-                filename
                 ctx
+                filename
                 builtins
                 files_contents
                 individual_file_info;
@@ -1621,7 +1628,7 @@ let handle_mode
     if errors <> [] then exit 2
   | Decl_compare ->
     let filename = expect_single_file () in
-    test_decl_compare filename ctx builtins files_contents files_info
+    test_decl_compare ctx filename builtins files_contents files_info
   | Shallow_class_diff ->
     print_errors_if_present parse_errors;
     let filename = expect_single_file () in

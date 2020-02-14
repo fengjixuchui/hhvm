@@ -156,9 +156,15 @@ val extract_global_inference_env : t -> t * t_global
 
 val get_vars : t -> Ident.t list
 
+val is_empty_g : t_global -> bool
+
 val get_vars_g : t_global -> Ident.t list
 
 val initialize_tyvar_as_in : as_in:t_global -> t -> int -> t
+
+val get_tyvar_reason_exn_g : t_global -> Ident.t -> Reason.t
+
+val get_tyvar_pos_exn_g : t_global -> Ident.t -> Pos.t
 
 val copy_tyvar_from_genv_to_env :
   Ident.t -> to_:t -> from:t_global -> t * Ident.t
@@ -167,6 +173,8 @@ module Size : sig
   val ty_size : t -> locl_ty -> int
 
   val inference_env_size : t -> int
+
+  val global_inference_env_size : t_global -> int
 end
 
 (** Only merge the tvenv parts. Resolve conflicts stupidly by taking the first mapping of the two. *)
@@ -195,3 +203,18 @@ val remove_var :
   search_in_upper_bounds_of:ISet.t ->
   search_in_lower_bounds_of:ISet.t ->
   t
+
+(** Remove any occurence of the tyvar from the global environment *)
+val forget_tyvar_g : t_global -> Ident.t -> t_global
+
+(** Visit all types in the global inference environment.
+  *
+  * This functions takes a type mapper, instead of a type visitor, as it
+  * will also visit constraint types.
+  *
+  * Localized type constants and PU-related types are ignored.
+  *
+  * Types returned by the type mapper are ignored.
+  *)
+val visit_types_g :
+  t_global -> 'a Type_mapper_generic.internal_type_mapper_type -> 'a -> 'a

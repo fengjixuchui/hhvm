@@ -5,6 +5,7 @@
     decl_service_client
     heap_shared_mem
     lru_cache
+    shallow_decl_defs
     typing_defs)
   (preprocess (pps ppx_deriving.std)))
 
@@ -28,7 +29,8 @@
   (name lru_cache)
   (modules lru_cache)
   (libraries
-    core_kernel)
+    core_kernel
+    utils_core)
   (preprocess (pps ppx_deriving.std)))
 
 (library
@@ -79,6 +81,7 @@
     decl_service_client
     global_naming_options
     provider_backend
+    shallow_classes_provider
     typing_heap)
   (preprocess (pps ppx_deriving.std)))
 
@@ -127,4 +130,13 @@
     counters
     typechecker_options
     typing)
+  (preprocess (pps ppx_deriving.std)))
+
+(library
+  (name shallow_classes_provider)
+  (modules shallow_classes_provider)
+  (libraries
+    provider_backend
+    provider_context
+    shallow_classes_heap)
   (preprocess (pps ppx_deriving.std)))

@@ -54,17 +54,13 @@ module type Entry = sig
   measure its size in bytes. If the size is always [1], this causes the cache to
   act as a regular LRU cache. *)
   val get_size : key:'a key -> value:'a value -> size
+
+  (** For logging/debugging *)
+  val key_to_log_string : 'a key -> string
 end
 
 module Cache (Entry : Entry) : sig
   type t
-
-  (** The cache keeps a mutable record of its performance. You can reset it. *)
-  type telemetry = {
-    time_spent: float;
-    peak_size: size;
-    num_evictions: int;
-  }
 
   (** Construct a new cache which can store up to [max_size] of values. *)
   val make : max_size:size -> t
@@ -101,7 +97,7 @@ module Cache (Entry : Entry) : sig
   val remove : t -> key:'a Entry.key -> unit
 
   (** The cache keeps track of how long it's spent doing cache overhead *)
-  val get_telemetry : t -> telemetry
+  val get_telemetry : t -> Telemetry.t
 
   (** You can reset the timer. *)
   val reset_telemetry : t -> unit

@@ -18,16 +18,17 @@ module type Entry = sig
   type 'a value = 'a
 
   val get_size : key:'a key -> value:'a value -> size
+
+  val key_to_log_string : 'a key -> string
 end
 
 module Cache (Entry : Entry) = struct
   type telemetry = {
     time_spent: float;
-    peak_size: size;
     num_evictions: int;
   }
 
-  let empty_telemetry = { peak_size = 0; time_spent = 0.; num_evictions = 0 }
+  let empty_telemetry = { time_spent = 0.; num_evictions = 0 }
 
   type key_wrapper = Key : 'a Entry.key -> key_wrapper
 
@@ -123,8 +124,6 @@ module Cache (Entry : Entry) = struct
     Hashtbl.add_exn t.entries (Key key) entry;
     t.total_size <- t.total_size + entry.size;
     trim_to_memory_limit t;
-    t.telemetry <-
-      { t.telemetry with peak_size = max t.telemetry.peak_size t.total_size };
     entry
 
   let add (t : t) ~(key : 'a Entry.key) ~(value : 'a Entry.value) : unit =
@@ -175,8 +174,12 @@ module Cache (Entry : Entry) = struct
     time_internal t start_time;
     ()
 
-  let reset_telemetry (t : t) : unit =
-    t.telemetry <- { empty_telemetry with peak_size = length t }
+  let reset_telemetry (t : t) : unit = t.telemetry <- empty_telemetry
 
-  let get_telemetry (t : t) : telemetry = t.telemetry
+  let get_telemetry (t : t) : Telemetry.t =
+    Telemetry.create ()
+    |> Telemetry.float_ ~key:"time_spent" ~value:t.telemetry.time_spent
+    |> Telemetry.int_ ~key:"num_evictions" ~value:t.telemetry.num_evictions
+    |> Telemetry.int_ ~key:"length" ~value:(length t)
+    |> Telemetry.int_ ~key:"total_size" ~value:t.total_size
 end

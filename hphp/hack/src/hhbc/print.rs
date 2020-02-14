@@ -11,11 +11,14 @@ use indexmap::IndexSet;
 use itertools::Itertools;
 pub use write::{Error, IoWrite, Result, Write};
 
+use context::Context;
+use core_utils_rust::add_ns;
 use env::Env as BodyEnv;
 use escaper::escape;
 use hhas_attribute_rust::{self as hhas_attribute, HhasAttribute};
 use hhas_body_rust::HhasBody;
 use hhas_class_rust::{self as hhas_class, HhasClass};
+use hhas_constant_rust::HhasConstant;
 use hhas_function_rust::HhasFunction;
 use hhas_method_rust::HhasMethod;
 use hhas_param_rust::HhasParam;
@@ -28,14 +31,16 @@ use hhas_type_const::HhasTypeConstant;
 use hhbc_ast_rust::*;
 use hhbc_id_rust::{class, Id};
 use hhbc_string_utils_rust::{
-    float, quote_string_with_escape, strip_global_ns, triple_quote_string,
+    float, integer, lstrip, quote_string_with_escape, strip_global_ns, strip_ns,
+    triple_quote_string, types,
 };
 use instruction_sequence_rust::InstrSeq;
 use label_rust::Label;
-use options::Options;
-use oxidized::{ast, ast_defs, doc_comment::DocComment, relative_path::RelativePath};
+use oxidized::{ast, ast_defs, doc_comment::DocComment};
 use runtime::TypedValue;
 use write::*;
+
+use std::{borrow::Cow, convert::TryInto};
 
 const ADATA_ARRAY_PREFIX: &str = "a";
 const ADATA_VARRAY_PREFIX: &str = "y";
@@ -44,82 +49,99 @@ const ADATA_DICT_PREFIX: &str = "D";
 const ADATA_DARRAY_PREFIX: &str = "Y";
 const ADATA_KEYSET_PREFIX: &str = "k";
 
-/// Indent is an abstraction of indentation. Configurable indentation
-/// and perf tweaking will be easier.
-pub struct Indent(usize);
+pub mod context {
+    use crate::write::*;
+    use options::Options;
+    use oxidized::relative_path::RelativePath;
 
-impl Indent {
-    pub fn new() -> Self {
-        Self(0)
-    }
+    /// Indent is an abstraction of indentation. Configurable indentation
+    /// and perf tweaking will be easier.
+    struct Indent(usize);
 
-    pub fn inc(&mut self) {
-        self.0 += 1;
-    }
+    impl Indent {
+        pub fn new() -> Self {
+            Self(0)
+        }
 
-    pub fn dec(&mut self) {
-        self.0 -= 1;
-    }
+        pub fn inc(&mut self) {
+            self.0 += 1;
+        }
 
-    pub fn write<W: Write>(&self, w: &mut W) -> Result<(), W::Error> {
-        Ok(for _ in 0..self.0 {
-            w.write("  ")?;
-        })
-    }
-}
+        pub fn dec(&mut self) {
+            self.0 -= 1;
+        }
 
-pub struct Context<'a> {
-    pub opts: &'a Options,
-    pub path: Option<&'a RelativePath>,
-
-    dump_symbol_refs: bool,
-    indent: Indent,
-}
-
-impl<'a> Context<'a> {
-    pub fn new(opts: &'a Options, path: Option<&'a RelativePath>, dump_symbol_refs: bool) -> Self {
-        Self {
-            opts,
-            path,
-            dump_symbol_refs,
-            indent: Indent::new(),
+        pub fn write<W: Write>(&self, w: &mut W) -> Result<(), W::Error> {
+            Ok(for _ in 0..self.0 {
+                w.write("  ")?;
+            })
         }
     }
 
-    fn dump_symbol_refs(&self) -> bool {
-        self.dump_symbol_refs
+    pub struct Context<'a> {
+        pub opts: &'a Options,
+        pub path: Option<&'a RelativePath>,
+
+        dump_symbol_refs: bool,
+        indent: Indent,
+        is_system_lib: bool,
     }
 
-    /// Insert a newline with indentation
-    pub fn newline<W: Write>(&self, w: &mut W) -> Result<(), W::Error> {
-        newline(w)?;
-        self.indent.write(w)
-    }
+    impl<'a> Context<'a> {
+        pub fn new(
+            opts: &'a Options,
+            path: Option<&'a RelativePath>,
+            dump_symbol_refs: bool,
+            is_system_lib: bool,
+        ) -> Self {
+            Self {
+                opts,
+                path,
+                dump_symbol_refs,
+                indent: Indent::new(),
+                is_system_lib,
+            }
+        }
 
-    /// Start a new indented block
-    pub fn block<W, F>(&mut self, w: &mut W, f: F) -> Result<(), W::Error>
-    where
-        W: Write,
-        F: FnOnce(&mut Self, &mut W) -> Result<(), W::Error>,
-    {
-        self.indent.inc();
-        let r = f(self, w);
-        self.indent.dec();
-        r
-    }
+        pub fn dump_symbol_refs(&self) -> bool {
+            self.dump_symbol_refs
+        }
 
-    /// Printing instruction list requies manually control indentation,
-    /// where indent_inc/indent_dec are called
-    pub fn indent_inc(&mut self) {
-        self.indent.inc();
-    }
+        /// Insert a newline with indentation
+        pub fn newline<W: Write>(&self, w: &mut W) -> Result<(), W::Error> {
+            newline(w)?;
+            self.indent.write(w)
+        }
 
-    pub fn indent_dec(&mut self) {
-        self.indent.dec();
+        /// Start a new indented block
+        pub fn block<W, F>(&mut self, w: &mut W, f: F) -> Result<(), W::Error>
+        where
+            W: Write,
+            F: FnOnce(&mut Self, &mut W) -> Result<(), W::Error>,
+        {
+            self.indent.inc();
+            let r = f(self, w);
+            self.indent.dec();
+            r
+        }
+
+        /// Printing instruction list requies manually control indentation,
+        /// where indent_inc/indent_dec are called
+        pub fn indent_inc(&mut self) {
+            self.indent.inc();
+        }
+
+        pub fn indent_dec(&mut self) {
+            self.indent.dec();
+        }
+
+        pub fn is_system_lib(&self) -> bool {
+            self.is_system_lib
+        }
     }
 }
 
-struct DefaultValuePrintingEnv<'e> {
+struct ExprEnv<'e> {
     pub codegen_env: Option<&'e BodyEnv<'e>>,
     pub is_xhp: bool,
 }
@@ -212,11 +234,12 @@ fn print_fun_def<W: Write>(
     fun_def: &HhasFunction,
 ) -> Result<(), W::Error> {
     let body = &fun_def.body;
+    newline(w)?;
     w.write(".function ")?;
     if ctx.opts.enforce_generic_ub() {
         print_upper_bounds(w, &body.upper_bounds)?;
     }
-    print_fun_attrs(w, fun_def)?;
+    print_fun_attrs(ctx, w, fun_def)?;
     if ctx.opts.source_map() {
         w.write(string_of_span(&fun_def.span))?;
         w.write(" ")?;
@@ -238,7 +261,11 @@ fn print_fun_def<W: Write>(
         w.write(" isRxDisabled")?;
     }
     w.write(" ")?;
-    wrap_by_braces(w, |w| print_body(ctx, w, body))
+    wrap_by_braces(w, |w| {
+        ctx.block(w, |c, w| print_body(c, w, body))?;
+        newline(w)
+    })?;
+    newline(w)
 }
 
 fn print_requirement<W: Write>(
@@ -367,6 +394,25 @@ fn print_property<W: Write>(
     }
 }
 
+fn print_constant<W: Write>(
+    ctx: &mut Context,
+    w: &mut W,
+    c: &HhasConstant,
+) -> Result<(), W::Error> {
+    w.write("\n  .const ")?;
+    w.write(c.name.to_raw_string())?;
+    match c.value.as_ref() {
+        Some(TypedValue::Uninit) => w.write(" = uninit")?,
+        Some(value) => {
+            w.write(" = \"\"\"")?;
+            print_adata(ctx, w, value)?;
+            w.write("\"\"\"")?
+        }
+        None => (),
+    }
+    w.write(";")
+}
+
 fn print_enum_ty<W: Write>(ctx: &mut Context, w: &mut W, c: &HhasClass) -> Result<(), W::Error> {
     if let Some(et) = c.enum_type.as_ref() {
         newline(w)?;
@@ -383,10 +429,8 @@ fn print_doc_comment<W: Write>(
     doc_comment: &Option<DocComment>,
 ) -> Result<(), W::Error> {
     if let Some(cmt) = doc_comment {
-        ctx.block(w, |ctx, w| {
-            ctx.newline(w)?;
-            w.write(format!(".doc {};", triple_quote_string(&cmt.0)))
-        })?;
+        ctx.newline(w)?;
+        w.write(format!(".doc {};", triple_quote_string(&cmt.0)))?;
     }
     Ok(())
 }
@@ -470,7 +514,7 @@ fn print_class_special_attributes<W: Write>(
     c: &HhasClass,
 ) -> Result<(), W::Error> {
     let user_attrs = &c.attributes;
-    let is_system_lib = false; // TODO(hrust)
+    let is_system_lib = ctx.is_system_lib();
 
     let mut special_attributes: Vec<&str> = vec![];
     if c.needs_no_reifiedinit() {
@@ -583,21 +627,27 @@ fn print_class_def<W: Write>(
     print_extends(w, class_def.base.as_ref().map(|x| x.to_raw_string()))?;
     print_implements(w, &class_def.implements)?;
     w.write(" {")?;
-    print_doc_comment(ctx, w, &class_def.doc_comment)?;
-    print_uses(ctx, w, class_def)?;
-    print_enum_ty(ctx, w, class_def)?;
-    for x in &class_def.requirements {
-        print_requirement(ctx, w, x)?;
-    }
-    for x in &class_def.type_constants {
-        print_type_constant(ctx, w, x)?;
-    }
-    for x in &class_def.properties {
-        print_property(ctx, w, class_def, x)?;
-    }
-    for m in &class_def.methods {
-        print_method_def(ctx, w, m)?;
-    }
+    ctx.block(w, |c, w| {
+        print_doc_comment(c, w, &class_def.doc_comment)?;
+        print_uses(c, w, class_def)?;
+        print_enum_ty(c, w, class_def)?;
+        for x in &class_def.requirements {
+            print_requirement(c, w, x)?;
+        }
+        for x in &class_def.constants {
+            print_constant(c, w, x)?;
+        }
+        for x in &class_def.type_constants {
+            print_type_constant(c, w, x)?;
+        }
+        for x in &class_def.properties {
+            print_property(c, w, class_def, x)?;
+        }
+        for m in &class_def.methods {
+            print_method_def(c, w, m)?;
+        }
+        Ok(())
+    })?;
     newline(w)?;
     w.write("}")?;
     newline(w)
@@ -703,10 +753,11 @@ fn print_attribute<W: Write>(
 fn print_attributes<W: Write>(
     ctx: &mut Context,
     w: &mut W,
-    al: &Vec<HhasAttribute>,
+    al: impl AsRef<[HhasAttribute]>,
 ) -> Result<(), W::Error> {
     // Adjust for underscore coming before alphabet
     let al: Vec<&HhasAttribute> = al
+        .as_ref()
         .iter()
         .sorted_by_key(|a| (!a.name.starts_with("__"), &a.name))
         .collect();
@@ -740,8 +791,15 @@ fn print_main<W: Write>(ctx: &mut Context, w: &mut W, body: &HhasBody) -> Result
     newline(w)
 }
 
+fn is_bareword_char(c: &u8) -> bool {
+    match *c {
+        b'_' | b'.' | b'$' | b'\\' => true,
+        c => (c >= b'0' && c <= b'9') || (c >= b'a' && c <= b'z') || (c >= b'A' && c <= b'Z'),
+    }
+}
+
 fn print_body<W: Write>(ctx: &mut Context, w: &mut W, body: &HhasBody) -> Result<(), W::Error> {
-    // TODO(hrust): add `add_doc buf indent (Hhas_body.doc_comment body);`
+    print_doc_comment(ctx, w, &body.doc_comment)?;
     if body.is_memoize_wrapper {
         ctx.newline(w)?;
         w.write(".ismemoizewrapper;")?;
@@ -750,9 +808,22 @@ fn print_body<W: Write>(ctx: &mut Context, w: &mut W, body: &HhasBody) -> Result
         ctx.newline(w)?;
         w.write(".ismemoizewrapperlsb;")?;
     }
-    // TODO(hrust):
-    // add_num_iters buf indent (Hhas_body.num_iters body);
-    // add_decl_vars buf indent (Hhas_body.decl_vars body);
+    if body.num_iters > 0 {
+        ctx.newline(w)?;
+        w.write(format!(".number {};", body.num_iters))?;
+    }
+    if !body.decl_vars.is_empty() {
+        ctx.newline(w)?;
+        w.write(".declvars ")?;
+        concat_by(w, " ", &body.decl_vars, |w, var| {
+            if var.as_bytes().iter().all(is_bareword_char) {
+                w.write(var)
+            } else {
+                wrap_by_quotes(w, |w| w.write(escaper::escape(var)))
+            }
+        })?;
+        w.write(";")?;
+    }
     print_instructions(ctx, w, &body.body_instrs)
 }
 
@@ -825,7 +896,7 @@ fn print_instr<W: Write>(w: &mut W, instr: &Instruct) -> Result<(), W::Error> {
         IGenerator(_) => not_impl!(),
         IIncludeEvalDefine(ed) => print_include_eval_define(w, ed),
         IGenDelegation(_) => not_impl!(),
-        _ => Err(Error::Fail("invalid instruction".into())),
+        _ => Err(Error::fail("invalid instruction")),
     }
 }
 
@@ -930,16 +1001,14 @@ fn print_param_default_value<W: Write>(
     body_env: Option<&BodyEnv>,
     default_val: &(Label, ast::Expr),
 ) -> Result<(), W::Error> {
-    let default_value_env = DefaultValuePrintingEnv {
+    let expr_env = ExprEnv {
         codegen_env: body_env,
         is_xhp: false,
     };
     w.write(" = ")?;
     print_label(w, &default_val.0)?;
     wrap_by_paren(w, |w| {
-        wrap_by_(w, "\"\"\"", "\"\"\"", |w| {
-            print_expr(w, default_value_env, &default_val.1)
-        })
+        wrap_by_triple_quotes(w, |w| print_expr(w, &expr_env, &default_val.1))
     })
 }
 
@@ -962,25 +1031,250 @@ fn print_int<W: Write>(w: &mut W, i: &usize) -> Result<(), W::Error> {
     w.write(format!("{}", i))
 }
 
+fn print_key_value<W: Write>(
+    w: &mut W,
+    env: &ExprEnv,
+    k: &ast::Expr,
+    v: &ast::Expr,
+) -> Result<(), W::Error> {
+    print_expr(w, env, k)?;
+    w.write(" => ")?;
+    print_expr(w, env, v)
+}
+
+fn print_afield<W: Write>(w: &mut W, env: &ExprEnv, afield: &ast::Afield) -> Result<(), W::Error> {
+    use ast::Afield as A;
+    match afield {
+        A::AFvalue(e) => print_expr(w, env, &e),
+        A::AFkvalue(k, v) => print_key_value(w, env, &k, &v),
+    }
+}
+
+fn print_afields<W: Write>(
+    w: &mut W,
+    env: &ExprEnv,
+    afields: impl AsRef<[ast::Afield]>,
+) -> Result<(), W::Error> {
+    concat_by(w, ", ", afields, |w, i| print_afield(w, env, i))
+}
+
+fn print_uop<W: Write>(w: &mut W, op: ast::Uop) -> Result<(), W::Error> {
+    use ast::Uop as U;
+    w.write(match op {
+        U::Utild => "~",
+        U::Unot => "!",
+        U::Uplus => "+",
+        U::Uminus => "-",
+        U::Uincr => "++",
+        U::Udecr => "--",
+        U::Usilence => "@",
+        U::Upincr | U::Updecr => {
+            return Err(Error::fail(
+                "string_of_uop - should have been captures earlier",
+            ))
+        }
+    })
+}
+
+fn print_key_values<W: Write>(
+    w: &mut W,
+    env: &ExprEnv,
+    kvs: impl AsRef<[(ast::Expr, ast::Expr)]>,
+) -> Result<(), W::Error> {
+    concat_by(w, ", ", kvs, |w, (k, v)| print_key_value(w, env, k, v))
+}
+
 fn print_expr<W: Write>(
     w: &mut W,
-    env: DefaultValuePrintingEnv,
+    env: &ExprEnv,
     ast::Expr(p, expr): &ast::Expr,
 ) -> Result<(), W::Error> {
-    // TODO(shiqicao): avoid allocating string, fix escape
-    /* let adjust_id = |id: String| -> String {
-        match env.codegen_env {
+    fn adjust_id<'a>(env: &ExprEnv, id: &'a String) -> String {
+        let s: Cow<'a, str> = match env.codegen_env {
             Some(env) => {
-                if env.namespace.ns_name.is_none() &&
-            },
-            _ => id
-        }
-    };
+                if env.namespace.name.is_none()
+                    && id
+                        .as_bytes()
+                        .iter()
+                        .rposition(|c| *c == b'\\')
+                        .map_or(true, |i| i < 1)
+                {
+                    strip_global_ns(id).into()
+                } else {
+                    add_ns(id)
+                }
+            }
+            _ => id.into(),
+        };
+        // TODO(shiqicao): avoid allocating string, fix escape
+        escaper::escape(s.as_ref())
+    }
+    use ast::Expr_ as E_;
     match expr {
-        ast::Expr_::Id(id) => w.write(adjust_id(id)),
-        _ => not_impl!(),
-    } */
+        E_::Id(id) => w.write(adjust_id(env, &id.1)),
+        E_::Lvar(lid) => w.write(escaper::escape(&(lid.1).1)),
+        E_::Float(f) => not_impl!(),
+        E_::Int(i) => {
+            w.write(integer::to_decimal(i.as_str()).map_err(|_| Error::fail("ParseIntError"))?)
+        }
+        E_::String(s) => not_impl!(),
+        E_::Null => w.write("NULL"),
+        E_::True => w.write("true"),
+        E_::False => w.write("false"),
+        // For arrays and collections, we are making a conscious decision to not
+        // match HHMV has HHVM's emitter has inconsistencies in the pretty printer
+        // https://fburl.com/tzom2qoe
+        E_::Array(afl) => wrap_by_(w, "array(", ")", |w| print_afields(w, env, afl)),
+        E_::Collection(c) if (c.0).1 == "vec" || (c.0).1 == "dict" || (c.0).1 == "keyset" => {
+            w.write(&(c.0).1)?;
+            wrap_by_square(w, |w| print_afields(w, env, &c.2))
+        }
+        E_::Collection(c) => {
+            let name = strip_ns((c.0).1.as_str());
+            let name = types::fix_casing(&name);
+            match name {
+                "Set" | "Pair" | "Vector" | "Map" | "ImmSet" | "ImmVector" | "ImmMap" => {
+                    w.write("HH\\\\")?;
+                    w.write(name)?;
+                    wrap_by_(w, " {", "}", |w| {
+                        Ok(if !c.2.is_empty() {
+                            w.write(" ")?;
+                            print_afields(w, env, &c.2)?;
+                            w.write(" ")?;
+                        })
+                    })
+                }
+                _ => Err(Error::fail(format!(
+                    "Default value for an unknow collection - {}",
+                    name
+                ))),
+            }
+        }
+        E_::Shape(_) | E_::Binop(_) | E_::Call(_) | E_::New(_) => not_impl!(),
+        E_::Record(r) => {
+            w.write(lstrip(adjust_id(env, &(r.0).1).as_str(), "\\\\"))?;
+            print_key_values(w, env, &r.2)
+        }
+        E_::ClassConst(cc) => {
+            if let Some(e1) = (cc.0).1.as_ciexpr() {
+                not_impl!()
+            } else {
+                Err(Error::fail("TODO: Only expected CIexpr in class_const"))
+            }
+        }
+        E_::Unop(u) => match u.0 {
+            ast::Uop::Upincr => {
+                print_expr(w, env, &u.1)?;
+                w.write("++")
+            }
+            ast::Uop::Updecr => {
+                print_expr(w, env, &u.1)?;
+                w.write("--")
+            }
+            _ => {
+                print_uop(w, u.0)?;
+                print_expr(w, env, &u.1)
+            }
+        },
+        E_::ObjGet(og) => {
+            print_expr(w, env, &og.0)?;
+            w.write(match og.2 {
+                ast::OgNullFlavor::OGNullthrows => "->",
+                ast::OgNullFlavor::OGNullsafe => "\\?->",
+            })?;
+            print_expr(w, env, &og.1)
+        }
+        E_::Clone(e) => {
+            w.write("clone ")?;
+            print_expr(w, env, e)
+        }
+        E_::ArrayGet(ag) => not_impl!(),
+        E_::String2(ss) => concat_by(w, " . ", ss, |w, s| print_expr(w, env, s)),
+        E_::PrefixedString(s) => {
+            w.write(&s.0)?;
+            w.write(" . ")?;
+            print_expr(w, env, &s.1)
+        }
+        E_::Eif(eif) => {
+            print_expr(w, env, &eif.0)?;
+            w.write(" \\? ")?;
+            option(w, &eif.1, |w, etrue| print_expr(w, env, etrue))?;
+            w.write(" : ")?;
+            print_expr(w, env, &eif.2)
+        }
+        E_::BracedExpr(e) => wrap_by_braces(w, |w| print_expr(w, env, e)),
+        E_::ParenthesizedExpr(e) => wrap_by_paren(w, |w| print_expr(w, env, e)),
+        E_::Cast(c) => {
+            wrap_by_paren(w, |w| print_hint(w, &c.0))?;
+            print_expr(w, env, &c.1)
+        }
+        E_::Pipe(p) => {
+            print_expr(w, env, &p.1)?;
+            w.write(" |> ")?;
+            print_expr(w, env, &p.2)
+        }
+        E_::Is(i) => {
+            print_expr(w, env, &i.0)?;
+            w.write(" is ")?;
+            print_hint(w, &i.1)
+        }
+        E_::As(a) => {
+            print_expr(w, env, &a.0)?;
+            w.write(if a.2 { " ?as " } else { " as " })?;
+            print_hint(w, &a.1)
+        }
+        E_::Varray(va) => wrap_by_(w, "varray[", "]", |w| {
+            concat_by(w, ", ", &va.1, |w, e| print_expr(w, env, e))
+        }),
+        E_::Darray(da) => wrap_by_(w, "darray[", "]", |w| print_key_values(w, env, &da.1)),
+        E_::List(l) => wrap_by_(w, "list(", ")", |w| {
+            concat_by(w, ", ", l, |w, i| print_expr(w, env, i))
+        }),
+        E_::Yield(y) => {
+            w.write("yield ")?;
+            print_afield(w, env, y)
+        }
+        E_::Await(e) => {
+            w.write("await ")?;
+            print_expr(w, env, e)
+        }
+        E_::YieldBreak => w.write("return"),
+        E_::YieldFrom(e) => {
+            w.write("yield from ")?;
+            print_expr(w, env, e)
+        }
+        E_::Import(i) => {
+            print_import_flavor(w, &i.0)?;
+            w.write(" ")?;
+            print_expr(w, env, &i.1)
+        }
+        E_::Xml(_) => not_impl!(),
+        E_::Efun(_) => not_impl!(),
+        E_::Omitted => Ok(()),
+        E_::Lfun(_) => Err(Error::fail(
+            "expected Lfun to be converted to Efun during closure conversion print_expr",
+        )),
+        E_::Suspend(_) | E_::Callconv(_) | E_::ExprList(_) => {
+            Err(Error::fail("illegal default value"))
+        },
+        _ => Err(Error::fail(
+            "TODO Unimplemented: We are missing a lot of cases in the case match. Delete this catchall"
+        ))
+    }
+}
+
+fn print_hint<W: Write>(w: &mut W, hint: &ast::Hint) -> Result<(), W::Error> {
     not_impl!()
+}
+
+fn print_import_flavor<W: Write>(w: &mut W, flavor: &ast::ImportFlavor) -> Result<(), W::Error> {
+    use ast::ImportFlavor as F;
+    w.write(match flavor {
+        F::Include => "include",
+        F::Require => "require",
+        F::IncludeOnce => "include_once",
+        F::RequireOnce => "require_once",
+    })
 }
 
 fn print_param_user_attributes<W: Write>(w: &mut W, param: &HhasParam) -> Result<(), W::Error> {
@@ -994,8 +1288,58 @@ fn string_of_span(&Span(line_begin, line_end): &Span) -> String {
     format!("({},{})", line_begin, line_end)
 }
 
-fn print_fun_attrs<W: Write>(w: &mut W, fun_def: &HhasFunction) -> Result<(), W::Error> {
-    not_impl!()
+fn print_fun_attrs<W: Write>(
+    ctx: &mut Context,
+    w: &mut W,
+    f: &HhasFunction,
+) -> Result<(), W::Error> {
+    use hhas_attribute::*;
+    let user_attrs = &f.attributes;
+    let mut special_attrs = vec![];
+    if let Ok(attr) = f.rx_level.try_into() {
+        special_attrs.push(attr);
+    }
+    if has_meth_caller(user_attrs) {
+        special_attrs.push("builtin");
+        special_attrs.push("is_meth_caller");
+    }
+    if f.is_interceptable() {
+        special_attrs.push("interceptable");
+    }
+    if has_foldable(user_attrs) {
+        special_attrs.push("foldable");
+    }
+    if has_provenance_skip_frame(user_attrs) {
+        special_attrs.push("prov_skip_frame");
+    }
+    if f.is_no_injection() {
+        special_attrs.push("no_injection");
+    }
+    if !f.is_top() {
+        special_attrs.push("nontop");
+    }
+    if ctx.is_system_lib() || (has_dynamically_callable(user_attrs) && !f.is_memoize_impl()) {
+        special_attrs.push("dyn_callable")
+    }
+    print_special_and_user_attrs(ctx, w, &special_attrs, user_attrs)
+}
+
+fn print_special_and_user_attrs<W: Write>(
+    ctx: &mut Context,
+    w: &mut W,
+    specials: &[&str],
+    users: &[HhasAttribute],
+) -> Result<(), W::Error> {
+    if !users.is_empty() || !specials.is_empty() {
+        wrap_by_square(w, |w| {
+            concat_str_by(w, " ", specials)?;
+            if !specials.is_empty() && !users.is_empty() {
+                w.write(" ")?;
+            }
+            print_attributes(ctx, w, users)
+        })?;
+    }
+    Ok(())
 }
 
 fn print_upper_bounds<W: Write>(

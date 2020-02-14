@@ -108,7 +108,7 @@ let make_remote_server_api
       recheck. In order to do this cleaning, we need a list of files that
       changed.
       *)
-    let clean_changed_files_state naming_table changed_files ~t =
+    let clean_changed_files_state ctx naming_table changed_files ~t =
       let (changed_names : FileInfo.names) =
         List.fold changed_files ~init:FileInfo.empty_names ~f:(fun names file ->
             match Naming_table.get_file_info naming_table file with
@@ -124,12 +124,14 @@ let make_remote_server_api
       Ast_provider.remove_batch changed_files;
       Fixme_provider.remove_batch changed_files;
       Decl_redecl_service.remove_old_defs
+        ctx
         ~bucket_size:1000
         workers
         changed_names;
       Hh_logger.log_duration "Cleaned state associated with changed files" t
 
     let load_naming_table_changes_since_baseline
+        (ctx : Provider_context.t)
         ~(naming_table : Naming_table.t option)
         ~(naming_table_diff : Naming_table.changes_since_baseline) :
         (Naming_table.t option, string) result =
@@ -153,7 +155,7 @@ let make_remote_server_api
                    t
                in
                let t =
-                 clean_changed_files_state naming_table changed_files ~t
+                 clean_changed_files_state ctx naming_table changed_files ~t
                in
                Hh_logger.log "Prefetching naming dirty files...";
                Vfs.prefetch changed_files;

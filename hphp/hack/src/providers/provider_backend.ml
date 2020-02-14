@@ -31,13 +31,43 @@ module Decl_cache_entry = struct
   type 'a value = 'a
 
   let get_size ~key:_ ~value:_ = 1
+
+  let key_to_log_string : type a. a key -> string =
+   fun key ->
+    match key with
+    | Fun_decl s -> "FunDecl" ^ s
+    | Class_decl s -> "ClassDecl" ^ s
+    | Record_decl s -> "RecordDecl" ^ s
+    | Typedef_decl s -> "TypedefDecl" ^ s
+    | Gconst_decl s -> "GconstDecl" ^ s
 end
 
 module Decl_cache = Lru_cache.Cache (Decl_cache_entry)
 
+module Shallow_decl_cache_entry = struct
+  type _ t = Shallow_class_decl : string -> Shallow_decl_defs.shallow_class t
+
+  type 'a key = 'a t
+
+  type 'a value = 'a
+
+  let get_size ~key:_ ~value =
+    let words = Obj.reachable_words (Obj.repr value) in
+    let bytes = words * Sys.word_size / 8 in
+    bytes
+
+  let key_to_log_string : type a. a key -> string =
+   (fun (Shallow_class_decl key) -> "ClasssShallow" ^ key)
+end
+
+module Shallow_decl_cache = Lru_cache.Cache (Shallow_decl_cache_entry)
+
 type t =
   | Shared_memory
-  | Local_memory of { decl_cache: Decl_cache.t }
+  | Local_memory of {
+      decl_cache: Decl_cache.t;
+      shallow_decl_cache: Shallow_decl_cache.t;
+    }
   | Decl_service of Decl_service_client.t
 
 let t_to_string (t : t) : string =
@@ -50,9 +80,23 @@ let backend_ref = ref Shared_memory
 
 let set_shared_memory_backend () : unit = backend_ref := Shared_memory
 
-let set_local_memory_backend ~(max_num_decls : int) : unit =
+let set_local_memory_backend
+    ~(max_num_decls : int) ~(max_bytes_shallow_decls : int) : unit =
   backend_ref :=
-    Local_memory { decl_cache = Decl_cache.make ~max_size:max_num_decls }
+    Local_memory
+      {
+        decl_cache = Decl_cache.make ~max_size:max_num_decls;
+        shallow_decl_cache =
+          Shallow_decl_cache.make ~max_size:max_bytes_shallow_decls;
+      }
+
+let set_local_memory_backend_with_defaults () : unit =
+  (* TODO(ljw): Figure out a good size. Some files read ~5k shallow
+  decls to typecheck, at about 16k / shallow decl, fitting into 73Mb.
+  I figure that 140Mb feels right. *)
+  let max_bytes_shallow_decls = 140 * 1024 * 1024 in
+  let max_num_decls = 5000 in
+  set_local_memory_backend ~max_num_decls ~max_bytes_shallow_decls
 
 let set_decl_service_backend (decl : Decl_service_client.t) : unit =
   backend_ref := Decl_service decl
