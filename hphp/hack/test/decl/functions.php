@@ -29,3 +29,25 @@ function test_constrained_generic_fun<T1 super int, T2 as string>(
 function test_returns_generic(): HH\Traversable<int> {
   return vec[5];
 }
+
+function takes_optional(?int $x): void {}
+
+function in_out(inout int $x): void {}
+
+function takes_returns_function_type<Tu>(
+  Tu $x,
+  (function(Tu): void) $unused,
+): (function((function(Tu): void)): void) {
+  return $x ==> {
+    return;
+  };
+}
+
+<<__Rx>>
+function reactive_function(): void {}
+
+<<__RxShallow>>
+function shallow_reactive_function(): void {}
+
+<<__RxLocal>>
+function local_reactive_function(): void {}

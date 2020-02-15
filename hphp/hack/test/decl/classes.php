@@ -4,6 +4,7 @@ class MyClass {
   private static string $staticProperty;
   public string $instanceProperty;
   protected int $protectedProperty;
+  <<__LateInit>> public arraykey $p;
 
   public function __construct(): void {}
 
@@ -17,6 +18,15 @@ class MyClass {
     await HH\Asio\usleep(500000);
     yield 0 => "test";
   }
+
+  <<__Rx>>
+  public function reactive_function(): void {}
+
+  <<__RxShallow>>
+  public function shallow_reactive_function(): void {}
+
+  <<__RxLocal>>
+  public function local_reactive_function(): void {}
 }
 
 abstract class MyAbstractClass {}
