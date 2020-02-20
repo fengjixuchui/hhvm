@@ -23,8 +23,6 @@ class type ['a] decl_type_visitor_type =
 
     method on_tdynamic : 'a -> Reason.t -> 'a
 
-    method on_tnothing : 'a -> Reason.t -> 'a
-
     method on_tthis : 'a -> Reason.t -> 'a
 
     method on_tarray : 'a -> Reason.t -> decl_ty option -> decl_ty option -> 'a
@@ -75,8 +73,6 @@ class virtual ['a] decl_type_visitor : ['a] decl_type_visitor_type =
     method on_tnonnull acc _ = acc
 
     method on_tdynamic acc _ = acc
-
-    method on_tnothing acc _ = acc
 
     method on_tthis acc _ = acc
 
@@ -140,7 +136,6 @@ class virtual ['a] decl_type_visitor : ['a] decl_type_visitor_type =
       | Tmixed -> this#on_tmixed acc r
       | Tnonnull -> this#on_tnonnull acc r
       | Tdynamic -> this#on_tdynamic acc r
-      | Tnothing -> this#on_tnothing acc r
       | Tthis -> this#on_tthis acc r
       | Tarray (ty1_opt, ty2_opt) -> this#on_tarray acc r ty1_opt ty2_opt
       | Tdarray (ty1, ty2) ->
@@ -313,4 +308,83 @@ class virtual ['a] locl_type_visitor : ['a] locl_type_visitor_type =
       | Tpu_type_access (base, _, member, _) ->
         let acc = this#on_type acc base in
         this#on_type acc member
+  end
+
+class type ['a] internal_type_visitor_type =
+  object
+    inherit ['a] locl_type_visitor_type
+
+    method on_internal_type : 'a -> internal_type -> 'a
+
+    method on_constraint_type : 'a -> constraint_type -> 'a
+
+    method on_locl_type : 'a -> locl_ty -> 'a
+
+    method on_locl_type_list : 'a -> locl_ty list -> 'a
+
+    method on_locl_type_option : 'a -> locl_ty option -> 'a
+
+    method on_thas_member : 'a -> Reason.t -> has_member -> 'a
+
+    method on_has_member : 'a -> Reason.t -> has_member -> 'a
+
+    method on_tdestructure : 'a -> Reason.t -> destructure -> 'a
+
+    method on_destructure : 'a -> Reason.t -> destructure -> 'a
+
+    method on_tcunion : 'a -> Reason.t -> locl_ty -> constraint_type -> 'a
+
+    method on_tcintersection :
+      'a -> Reason.t -> locl_ty -> constraint_type -> 'a
+  end
+
+class ['a] internal_type_visitor : ['a] internal_type_visitor_type =
+  object (this)
+    method on_internal_type acc ty =
+      match ty with
+      | LoclType ty -> this#on_locl_type acc ty
+      | ConstraintType ty -> this#on_constraint_type acc ty
+
+    method on_constraint_type acc ty =
+      let (r, ty) = deref_constraint_type ty in
+      match ty with
+      | Thas_member hm -> this#on_thas_member acc r hm
+      | Tdestructure des -> this#on_tdestructure acc r des
+      | TCunion (lty, cty) -> this#on_tcunion acc r lty cty
+      | TCintersection (lty, cty) -> this#on_tcintersection acc r lty cty
+
+    method on_locl_type acc ty = this#on_type acc ty
+
+    method on_locl_type_list acc tyl =
+      List.fold tyl ~init:acc ~f:this#on_locl_type
+
+    method on_locl_type_option acc ty =
+      Option.fold ty ~init:acc ~f:this#on_locl_type
+
+    method on_thas_member acc r hm = this#on_has_member acc r hm
+
+    method on_has_member acc _r hm =
+      let { hm_name = _; hm_type; hm_class_id = _ } = hm in
+      this#on_locl_type acc hm_type
+
+    method on_tdestructure acc r des = this#on_destructure acc r des
+
+    method on_destructure acc _r des =
+      let { d_required; d_optional; d_variadic; d_kind = _ } = des in
+      let acc = this#on_locl_type_list acc d_required in
+      let acc = this#on_locl_type_list acc d_optional in
+      let acc = this#on_locl_type_option acc d_variadic in
+      acc
+
+    method on_tcunion acc _r lty cty =
+      let acc = this#on_locl_type acc lty in
+      let acc = this#on_constraint_type acc cty in
+      acc
+
+    method on_tcintersection acc _r lty cty =
+      let acc = this#on_locl_type acc lty in
+      let acc = this#on_constraint_type acc cty in
+      acc
+
+    inherit ['a] locl_type_visitor
   end

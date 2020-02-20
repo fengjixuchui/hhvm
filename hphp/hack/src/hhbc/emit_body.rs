@@ -12,11 +12,15 @@ use ast_scope_rust::{Scope, ScopeItem};
 use decl_vars_rust as decl_vars;
 use emit_adata_rust as emit_adata;
 use emit_expression_rust as emit_expression;
+use emit_fatal_rust::raise_fatal_runtime;
 use emit_param_rust as emit_param;
 use emit_pos_rust as emit_pos;
 use emit_pos_rust::emit_pos;
 use emit_type_hint_rust as emit_type_hint;
-use env::{emitter::Emitter, Env};
+use env::{
+    emitter::{Context, Emitter},
+    Env,
+};
 use generator_rust as generator;
 use global_state::LazyState;
 use hhas_body_rust::HhasBody;
@@ -83,7 +87,7 @@ pub fn emit_body_with_default_args<'a, 'b>(
         default_dropthrough: None,
         flags: Flags::empty(),
     };
-    emit_body(emitter, namespace, body, return_value, &args).0
+    emit_body(emitter, namespace, body, return_value, &args).map(|r| r.0)
 }
 
 pub fn emit_body<'a, 'b>(
@@ -92,7 +96,7 @@ pub fn emit_body<'a, 'b>(
     body: &'b tast::Program,
     return_value: InstrSeq,
     args: &Args<'a, '_>,
-) -> (Result<HhasBody<'a>>, bool, bool) {
+) -> Result<(HhasBody<'a>, bool, bool)> {
     if args.flags.contains(Flags::ASYNC)
         && args.flags.contains(Flags::SKIP_AWAITABLE)
         && args.ret.map_or(false, |hint| !is_awaitable(&hint))
@@ -101,7 +105,7 @@ pub fn emit_body<'a, 'b>(
             args.flags.contains(Flags::CLOSURE_BODY),
             args.scope,
             args.pos,
-        );
+        )?
     };
 
     let tparams = args
@@ -116,25 +120,15 @@ pub fn emit_body<'a, 'b>(
     emitter.label_gen_mut().reset();
     emitter.iterator_mut().reset();
 
-    let return_type_info = match make_return_type_info(
+    let return_type_info = make_return_type_info(
         args.flags.contains(Flags::SKIP_AWAITABLE),
         args.flags.contains(Flags::NATIVE),
         args.ret,
         &tp_names,
-    ) {
-        Err(x) => return (Err(x), is_generator, is_pair_generator),
-        Ok(x) => x,
-    };
-    let params = match make_params(
-        emitter,
-        namespace,
-        &mut tp_names,
-        args,
-        !args.flags.contains(Flags::MEMOIZE),
-    ) {
-        Err(x) => return (Err(x), is_generator, is_pair_generator),
-        Ok(x) => x,
-    };
+    )?;
+
+    let params = make_params(emitter, namespace, &mut tp_names, args)?;
+
     let upper_bounds = make_upper_bounds(
         emitter,
         args.immediate_tparams,
@@ -172,7 +166,7 @@ pub fn emit_body<'a, 'b>(
         local_gen.reserve_retval_and_label_id_locals();
     };
 
-    let body_instrs = match make_body_instrs(
+    let body_instrs = make_body_instrs(
         emitter,
         &mut env,
         &args,
@@ -182,15 +176,9 @@ pub fn emit_body<'a, 'b>(
         &body,
         need_local_this,
         is_generator,
-        args.flags.contains(Flags::NATIVE),
-        args.flags.contains(Flags::DEBUGGER_MODIFY_PROGRAM),
-    ) {
-        Err(x) => return (Err(x), is_generator, is_pair_generator),
-        Ok(x) => x,
-    };
-
-    (
-        Ok(make_body(
+    )?;
+    Ok((
+        make_body(
             emitter,
             body_instrs,
             decl_vars,
@@ -201,10 +189,10 @@ pub fn emit_body<'a, 'b>(
             Some(return_type_info),
             args.doc_comment.to_owned(),
             Some(env),
-        )),
+        ),
         is_generator,
         is_pair_generator,
-    )
+    ))
 }
 
 fn make_body_instrs(
@@ -216,18 +204,21 @@ fn make_body_instrs(
     decl_vars: &[String],
     body: &tast::Program,
     need_local_this: bool,
-    is_native: bool,
     is_generator: bool,
-    debugger_modify_program: bool,
 ) -> Result {
-    let stmt_instrs = if is_native {
+    let stmt_instrs = if args.flags.contains(Flags::NATIVE) {
         InstrSeq::make_nativeimpl()
     } else {
         env.do_function(emitter, body, emit_defs)?
     };
 
-    let (begin_label, default_value_setters) =
-        emit_param::emit_param_default_value_setter(emitter, env, is_native, args.pos, params)?;
+    let (begin_label, default_value_setters) = emit_param::emit_param_default_value_setter(
+        emitter,
+        env,
+        args.flags.contains(Flags::NATIVE),
+        args.pos,
+        params,
+    )?;
 
     let header_content = make_header_content(
         emitter,
@@ -237,7 +228,6 @@ fn make_body_instrs(
         tparams,
         decl_vars,
         need_local_this,
-        is_native,
         is_generator,
     )?;
     let first_instr_is_label = match InstrSeq::first(&stmt_instrs) {
@@ -251,7 +241,7 @@ fn make_body_instrs(
     };
 
     let mut body_instrs = InstrSeq::gather(vec![header, stmt_instrs, default_value_setters]);
-    if debugger_modify_program {
+    if args.flags.contains(Flags::DEBUGGER_MODIFY_PROGRAM) {
         modify_prog_for_debugger_eval(&mut body_instrs);
     };
     Ok(body_instrs)
@@ -265,10 +255,9 @@ fn make_header_content(
     tparams: &[tast::Tparam],
     decl_vars: &[String],
     need_local_this: bool,
-    is_native: bool,
     is_generator: bool,
 ) -> Result {
-    let method_prolog = if is_native {
+    let method_prolog = if args.flags.contains(Flags::NATIVE) {
         InstrSeq::Empty
     } else {
         let should_emit_init_this = !args.scope.is_in_static_method()
@@ -285,7 +274,8 @@ fn make_header_content(
         )?
     };
 
-    let deprecation_warning = emit_deprecation_info(args.scope, args.deprecation_info);
+    let deprecation_warning =
+        emit_deprecation_info(args.scope, args.deprecation_info, emitter.systemlib())?;
 
     let generator_info = if is_generator {
         InstrSeq::gather(vec![InstrSeq::make_createcont(), InstrSeq::make_popc()])
@@ -403,8 +393,8 @@ fn make_params(
     namespace: &namespace_env::Env,
     tp_names: &mut Vec<&str>,
     args: &Args,
-    generate_defaults: bool,
 ) -> Result<Vec<HhasParam>> {
+    let generate_defaults = !args.flags.contains(Flags::MEMOIZE);
     emit_param::from_asts(
         emitter,
         tp_names,
@@ -482,10 +472,19 @@ fn emit_defs(env: &mut Env, emitter: &mut Emitter, prog: &[tast::Def]) -> Result
                 aux(env, emitter, &defs[1..])
             }
             [] => emit_statement::emit_dropthrough_return(emitter, env),
-            [Def::Stmt(s)] => emit_statement::emit_final_stmt(emitter, env, &s),
-            [Def::Stmt(s1), Def::Stmt(s2)] if s2.1.is_markup() => {
-                emit_statement::emit_final_stmt(emitter, env, &s1)
+            [Def::Stmt(s)] => {
+                // emit last statement in the list as final statement
+                emit_statement::emit_final_stmt(emitter, env, &s)
             }
+            [Def::Stmt(s1), Def::Stmt(s2)] => match s2.1.as_markup() {
+                Some((id, None)) if id.1.is_empty() => {
+                    emit_statement::emit_final_stmt(emitter, env, &s1)
+                }
+                _ => Ok(InstrSeq::gather(vec![
+                    emit_statement::emit_stmt(emitter, env, s1)?,
+                    emit_statement::emit_final_stmt(emitter, env, &s2)?,
+                ])),
+            },
             [def, ..] => Ok(InstrSeq::gather(vec![
                 emit_def(env, emitter, def)?,
                 aux(env, emitter, &defs[1..])?,
@@ -494,17 +493,18 @@ fn emit_defs(env: &mut Env, emitter: &mut Emitter, prog: &[tast::Def]) -> Result
     };
     match prog {
         [Def::Stmt(s), ..] if s.1.is_markup() => Ok(InstrSeq::gather(vec![
-            emit_statement::emit_markup(emitter, env, &s.1)?,
+            emit_statement::emit_markup(emitter, env, s.1.as_markup().unwrap(), true)?,
             aux(env, emitter, &prog[1..])?,
         ])),
         [] | [_] => aux(env, emitter, &prog[..]),
-        [def, ..] => match emit_def(env, emitter, def)? {
-            InstrSeq::Empty => emit_defs(env, emitter, &prog[1..]),
-            instr => Ok(InstrSeq::gather(vec![
-                instr,
-                aux(env, emitter, &prog[1..])?,
-            ])),
-        },
+        [def, ..] => {
+            let i1 = emit_def(env, emitter, def)?;
+            if i1.is_empty() {
+                emit_defs(env, emitter, &prog[1..])
+            } else {
+                Ok(InstrSeq::gather(vec![i1, aux(env, emitter, &prog[1..])?]))
+            }
+        }
     }
 }
 
@@ -602,11 +602,84 @@ pub fn emit_method_prolog(
 }
 
 pub fn emit_deprecation_info(
-    _scope: &Scope,
-    _deprecation_info: &Option<&[TypedValue]>,
-) -> InstrSeq {
-    //TODO(hrust) implement
-    InstrSeq::Empty
+    scope: &Scope,
+    deprecation_info: &Option<&[TypedValue]>,
+    is_systemlib: bool,
+) -> Result<InstrSeq> {
+    Ok(match deprecation_info {
+        None => InstrSeq::Empty,
+        Some(args) => {
+            fn strip_id<'a>(id: &'a tast::Id) -> &'a str {
+                string_utils::strip_global_ns(id.1.as_str())
+            }
+            let (class_name, trait_instrs, concat_instruction): (String, _, _) =
+                match scope.get_class() {
+                    None => ("".into(), InstrSeq::Empty, InstrSeq::Empty),
+                    Some(c) if c.kind == tast::ClassKind::Ctrait => (
+                        "::".into(),
+                        InstrSeq::gather(vec![InstrSeq::make_self(), InstrSeq::make_classname()]),
+                        InstrSeq::make_concat(),
+                    ),
+                    Some(c) => (
+                        strip_id(&c.name).to_string() + "::",
+                        InstrSeq::Empty,
+                        InstrSeq::Empty,
+                    ),
+                };
+
+            let fn_name = match scope.items.get(0) {
+                Some(ScopeItem::Function(f)) => strip_id(&f.name),
+                Some(ScopeItem::Method(m)) => strip_id(&m.name),
+                _ => {
+                    return Err(Error::Unrecoverable(
+                        "deprecated functions must have names".into(),
+                    ))
+                }
+            };
+            let deprecation_string = class_name
+                + fn_name
+                + ": "
+                + (if args.is_empty() {
+                    "deprecated function"
+                } else if let TypedValue::String(s) = &args[0] {
+                    s.as_str()
+                } else {
+                    return Err(Error::Unrecoverable(
+                        "deprecated attribute first argument is not a string".into(),
+                    ));
+                });
+            let sampling_rate = if args.len() <= 1 {
+                1i64
+            } else if let Some(TypedValue::Int(i)) = args.get(1) {
+                *i
+            } else {
+                return Err(Error::Unrecoverable(
+                    "deprecated attribute second argument is not an integer".into(),
+                ));
+            };
+            let error_code = if is_systemlib {
+                /*E_DEPRECATED*/
+                8192
+            } else {
+                /*E_USER_DEPRECATED*/
+                16384
+            };
+
+            if sampling_rate <= 0 {
+                InstrSeq::Empty
+            } else {
+                InstrSeq::gather(vec![
+                    trait_instrs,
+                    InstrSeq::make_string(deprecation_string),
+                    concat_instruction,
+                    InstrSeq::make_int64(sampling_rate),
+                    InstrSeq::make_int(error_code),
+                    InstrSeq::make_trigger_sampled_error(),
+                    InstrSeq::make_popc(),
+                ])
+            }
+        }
+    })
 }
 
 fn set_emit_statement_state(
@@ -779,6 +852,26 @@ fn is_awaitable(hint: &tast::Hint) -> bool {
     }
 }
 
-fn report_error(_is_closure_body: bool, _scope: &Scope, _pos: &Pos) {
-    //TODO(hrust) implement
+fn report_error(is_closure_body: bool, scope: &Scope, pos: &Pos) -> Result<()> {
+    let msg: String = if is_closure_body {
+        "Return type hint for async closure must be awaitable".into()
+    } else {
+        let mut scope = scope.items.iter();
+        let s1 = scope.next();
+        let s2 = scope.next();
+        use ScopeItem as S;
+        let (kind, name) = match (s1, s2) {
+            (Some(S::Function(f)), _) => ("function", string_utils::strip_ns(&f.name.1).to_owned()),
+            (Some(S::Method(m)), Some(S::Class(c))) => (
+                "method",
+                string_utils::strip_ns(&c.name.1).to_owned() + "::" + m.name.1.as_str(),
+            ),
+            _ => return Err(Error::Unrecoverable("Unexpected".into())),
+        };
+        format!(
+            "Return type hint for async {} {}() must be awaitable",
+            kind, name
+        )
+    };
+    Err(raise_fatal_runtime(pos, msg))
 }

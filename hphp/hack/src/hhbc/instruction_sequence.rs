@@ -136,9 +136,10 @@ impl InstrSeq {
         Self::make_instr(Instruct::ILitConst(l))
     }
 
-    pub fn make_lit_empty_varray() -> Self {
+    /* TODO(hrust): re-enable it with arg
+     pub fn make_lit_empty_varray() -> Self {
         Self::make_lit_const(InstructLitConst::TypedValue(TypedValue::VArray(vec![])))
-    }
+    } */
 
     pub fn make_iterinit(args: IterArgs, label: Label) -> Self {
         Self::make_instr(Instruct::IIterator(InstructIterator::IterInit(args, label)))
@@ -327,10 +328,8 @@ impl InstrSeq {
         )))
     }
 
-    pub fn make_string(litstr: &str) -> Self {
-        Self::make_instr(Instruct::ILitConst(InstructLitConst::String(
-            litstr.to_string(),
-        )))
+    pub fn make_string(litstr: impl Into<String>) -> Self {
+        Self::make_instr(Instruct::ILitConst(InstructLitConst::String(litstr.into())))
     }
 
     pub fn make_this() -> Self {
@@ -1171,7 +1170,7 @@ impl InstrSeq {
         match self {
             Self::Empty => Self::Empty,
             Self::One(x) => match f(x) {
-                Some(x) => Self::make_instr(x.clone()),
+                Some(x) => Self::make_instr(x),
                 None => Self::Empty,
             },
             Self::List(instr_lst) => Self::List(instr_lst.iter().filter_map(f).collect::<Vec<_>>()),
@@ -1181,6 +1180,25 @@ impl InstrSeq {
                     .map(|x| x.filter_map(f))
                     .collect::<Vec<_>>(),
             ),
+        }
+    }
+
+    pub fn filter_map_mut<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut Instruct) -> Option<Instruct>,
+    {
+        match self {
+            Self::Empty => (),
+            Self::One(x) => {
+                *self = match f(x) {
+                    Some(x) => Self::make_instr(x),
+                    None => Self::Empty,
+                }
+            }
+            Self::List(instr_lst) => {
+                *instr_lst = instr_lst.iter_mut().filter_map(f).collect::<Vec<_>>()
+            }
+            Self::Concat(instrseq_lst) => instrseq_lst.iter_mut().for_each(|x| x.filter_map_mut(f)),
         }
     }
 

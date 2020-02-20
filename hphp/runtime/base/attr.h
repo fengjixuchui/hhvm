@@ -37,6 +37,15 @@ enum Attr {
   // Class forbids dynamic properties?   //       |          |         //
   AttrForbidDynamicProps   = (1u <<  0), //   X   |          |         //
                                          //       |          |         //
+  // Indicates that this property cannot be initialized on an ObjectData by
+  // simply memcpy-ing from the initializer vector.          |         //
+  AttrDeepInit             = (1u <<  0), //       |    X     |         //
+                                         //       |          |         //
+  // Indicates that a function may need to use a VarEnv or varargs (i.e.,
+  // extraArgs) at runtime.  If the debugger is enabled, all functions
+  // must be treated as having this flag.
+  AttrMayUseVV             = (1u <<  0), //       |          |    X    //
+                                         //       |          |         //
   // Method visibility.  The relative ordering of these is important.  //
   // N.B. the values are overlayed with some of the no-override bits for magic
   // class methods (next), since they don't apply to classes.
@@ -130,20 +139,12 @@ enum Attr {
   // of a function. RxNonConditional indicates level conditionality.
   AttrRxLevel0             = (1u << 14), //       |          |    X    //
   AttrRxLevel1             = (1u << 15), //       |          |    X    //
-  AttrRxNonConditional     = (1u << 16), //       |          |    X    //
+  AttrRxLevel2             = (1u << 16), //       |          |    X    //
+  AttrRxNonConditional     = (1u << 17), //       |          |    X    //
                                          //       |          |         //
   // Indicates that the function, class or static property can be loaded
   // once and then persisted across all requests. |          |         //
-  AttrPersistent           = (1u << 17), //    X  |    X     |    X    //
-                                         //       |          |         //
-  // Indicates that this property cannot be initialized on an ObjectData by
-  // simply memcpy-ing from the initializer vector.          |         //
-  AttrDeepInit             = (1u << 18), //       |    X     |         //
-                                         //       |          |         //
-  // Indicates that a function may need to use a VarEnv or varargs (i.e.,
-  // extraArgs) at runtime.  If the debugger is enabled, all functions
-  // must be treated as having this flag.
-  AttrMayUseVV             = (1u << 18), //       |          |    X    //
+  AttrPersistent           = (1u << 18), //    X  |    X     |    X    //
                                          //       |          |         //
   // Set on functions to mark them as being able to be dynamically called
   AttrDynamicallyCallable  = (1u << 19), //       |          |    X    //
