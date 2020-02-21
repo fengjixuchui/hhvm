@@ -2336,8 +2336,8 @@ To string conversions:
 
 | AKExistsObj, D(Bool), S(Obj) S(Int,Str), NF
 
-  Has the effects of array_key_exists(S0, S1) on an object S0. This either does
-  collection accesses, or uses the ArrayAccess API.
+  Has the effects of array_key_exists(S0, S1) on an object S0. This does
+  collection accesses.
 
 | GetMemoKey, DMemoKey, S(Cell), PRc
 
@@ -3260,14 +3260,6 @@ fields of that struct for holding intermediate values.
 | ThrowInvalidOperation, ND, S(Str), T
 
   Throws an InvalidOperationException with a message indicating S0.
-
-| ThrowArithmeticError, ND, S(Str), T
-
-  Throws an ArithmeticError with a message indicating S0.
-
-| ThrowDivisionByZeroError, ND, S(Str), T
-
-  Throws a DivisionByZeroError with a message indicating S0.
 
 | ThrowDivisionByZeroException, ND, NA, T
 

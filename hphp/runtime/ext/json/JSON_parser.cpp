@@ -342,8 +342,8 @@ struct SimpleParser {
                        JSONContainerType container_type, bool is_tsimplejson) {
     SimpleParser parser(inp, length, buf, container_type, is_tsimplejson);
     bool ok = parser.parseValue();
-    parser.skipSpace();
-    if (!ok || parser.p != inp + length) {
+    if (!ok ||
+        (parser.skipSpace(), parser.p != inp + length)) {
       // Unsupported, malformed, or trailing garbage. Release entire stack.
       tvDecRefRange(buf, parser.top);
       return false;
@@ -453,12 +453,13 @@ struct SimpleParser {
       case 'u': {
         if (UNLIKELY(is_tsimplejson)) {
           auto const ch1 = *p++;
+          if (UNLIKELY(ch1 != '0')) return false;
           auto const ch2 = *p++;
+          if (UNLIKELY(ch2 != '0')) return false;
           auto const dch3 = dehexchar(*p++);
+          if (UNLIKELY(dch3 < 0)) return false;
           auto const dch4 = dehexchar(*p++);
-          if (UNLIKELY(ch1 != '0' || ch2 != '0' || dch3 < 0 || dch4 < 0)) {
-            return false;
-          }
+          if (UNLIKELY(dch4 < 0)) return false;
           out = (dch3 << 4) | dch4;
           return true;
         } else {
@@ -1148,6 +1149,10 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
   // they exceed kMaxPersistentStringBufferCapacity at exit or if the thread
   // is explicitly flushed (e.g., due to being idle).
   json->initSb(length);
+  if (depth <= 0) {
+    json->error_code = json_error_codes::JSON_ERROR_DEPTH;
+    return false;
+  }
   SCOPE_EXIT {
     constexpr int kMaxPersistentStringBufferCapacity = 256 * 1024;
     if (json->sb_cap > kMaxPersistentStringBufferCapacity) json->flushSb();

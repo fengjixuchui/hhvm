@@ -12,7 +12,6 @@ use emit_body_rust::{self as emit_body};
 use emit_memoize_helpers_rust as emit_memoize_helpers;
 use env::emitter::Emitter;
 use hhas_attribute_rust::{self as hhas_attribute, HhasAttribute};
-use hhas_body_rust::HhasBody;
 use hhas_function_rust::{self as hhas_function, HhasFunction};
 use hhbc_id_rust::{self as hhbc_id, Id};
 use instruction_sequence_rust::{InstrSeq, Result};
@@ -150,10 +149,12 @@ pub fn emit_function<'a>(
 
 pub fn emit_functions_from_program<'a>(
     e: &mut Emitter,
-    prog: Vec<(HoistKind, &'a tast::Def)>,
+    hoist_kinds: Vec<HoistKind>,
+    prog: &'a tast::Program,
 ) -> Result<Vec<HhasFunction<'a>>> {
-    Ok(prog
+    Ok(hoist_kinds
         .into_iter()
+        .zip(prog)
         .filter_map(|(hoist_kind, d)| d.as_fun().map(|f| emit_function(e, f, hoist_kind)))
         .collect::<Result<Vec<Vec<_>>>>()?
         .into_iter()

@@ -13,7 +13,7 @@ pub use write::{Error, IoWrite, Result, Write};
 
 use context::Context;
 use core_utils_rust::add_ns;
-use env::Env as BodyEnv;
+use env::{local::Type as Local, Env as BodyEnv};
 use escaper::escape;
 use hhas_attribute_rust::{self as hhas_attribute, HhasAttribute};
 use hhas_body_rust::HhasBody;
@@ -37,7 +37,6 @@ use hhbc_string_utils_rust::{
 };
 use instruction_sequence_rust::InstrSeq;
 use label_rust::Label;
-use local_rust::Type as Local;
 use oxidized::{ast, ast_defs, doc_comment::DocComment};
 use runtime::TypedValue;
 use write::*;
@@ -263,7 +262,11 @@ fn print_fun_def<W: Write>(
     let body = &fun_def.body;
     newline(w)?;
     w.write(".function ")?;
-    if ctx.opts.enforce_generic_ub() {
+    if ctx
+        .opts
+        .hack_compiler_flags
+        .contains(options::CompilerFlags::EMIT_GENERICS_UB)
+    {
         print_upper_bounds(w, &body.upper_bounds)?;
     }
     print_fun_attrs(ctx, w, fun_def)?;
@@ -643,7 +646,11 @@ fn print_class_def<W: Write>(
 ) -> Result<(), W::Error> {
     newline(w)?;
     w.write(".class ")?;
-    if ctx.opts.enforce_generic_ub() {
+    if ctx
+        .opts
+        .hack_compiler_flags
+        .contains(options::CompilerFlags::EMIT_GENERICS_UB)
+    {
         print_upper_bounds(w, &class_def.upper_bounds)?;
     }
     print_class_special_attributes(ctx, w, class_def)?;

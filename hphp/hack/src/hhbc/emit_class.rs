@@ -635,7 +635,11 @@ pub fn emit_class<'a>(
     let mut methods = emit_method::from_asts(emitter, ast_class, &ast_class.methods)?;
     methods.extend(additional_methods.into_iter());
     let type_constants = from_class_elt_typeconsts(emitter, ast_class)?;
-    let upper_bounds = if emitter.options().enforce_generic_ub() {
+    let upper_bounds = if emitter
+        .options()
+        .hack_compiler_flags
+        .contains(options::CompilerFlags::EMIT_GENERICS_UB)
+    {
         emit_body::emit_generics_upper_bounds(&ast_class.tparams.list, false)
     } else {
         vec![]
@@ -694,17 +698,14 @@ pub fn emit_class<'a>(
 
 pub fn emit_classes_from_program<'a>(
     emitter: &mut Emitter,
+    hoist_kinds: Vec<closure_convert::HoistKind>,
     tast: &'a tast::Program,
 ) -> Result<Vec<HhasClass<'a>>> {
     tast.iter()
-        .filter_map(|x| {
-            if let tast::Def::Class(cd) = x {
-                Some(emit_class(
-                    emitter,
-                    cd,
-                    // TODO(hrust): pass the real hoist kind
-                    closure_convert::HoistKind::TopLevel,
-                ))
+        .zip(hoist_kinds)
+        .filter_map(|(class, hoist_kind)| {
+            if let tast::Def::Class(cd) = class {
+                Some(emit_class(emitter, cd, hoist_kind))
             } else {
                 None
             }

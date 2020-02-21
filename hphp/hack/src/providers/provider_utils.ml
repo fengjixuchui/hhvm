@@ -122,7 +122,7 @@ let internal_load_entry
     symbols = None;
   }
 
-let update_context
+let add_entry_from_file_input
     ~(ctx : Provider_context.t)
     ~(path : Relative_path.t)
     ~(file_input : ServerCommandTypes.file_input) :
@@ -137,19 +137,22 @@ let update_context
   in
   (ctx, entry)
 
+let add_entry ~(ctx : Provider_context.t) ~(path : Relative_path.t) :
+    Provider_context.t * Provider_context.entry =
+  let file_input =
+    ServerCommandTypes.FileName (Relative_path.to_absolute path)
+  in
+  add_entry_from_file_input ~ctx ~path ~file_input
+
+let add_entry_from_file_contents
+    ~(ctx : Provider_context.t) ~(path : Relative_path.t) ~(contents : string) :
+    Provider_context.t * Provider_context.entry =
+  let file_input = ServerCommandTypes.FileContent contents in
+  add_entry_from_file_input ~ctx ~path ~file_input
+
 let find_entry ~(ctx : Provider_context.t) ~(path : Relative_path.t) :
     Provider_context.entry option =
   Relative_path.Map.find_opt ctx.Provider_context.entries path
-
-let get_entry_VOLATILE ~(ctx : Provider_context.t) ~(path : Relative_path.t) :
-    Provider_context.entry =
-  match find_entry ~ctx ~path with
-  | Some entry -> entry
-  | None ->
-    let file_input =
-      ServerCommandTypes.FileName (Relative_path.to_absolute path)
-    in
-    internal_load_entry ~path ~file_input
 
 type _ compute_tast_mode =
   | Compute_tast_only : Compute_tast.t compute_tast_mode

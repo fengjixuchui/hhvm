@@ -90,22 +90,6 @@ let from_extends ~is_enum extends =
 let from_implements implements =
   List.map implements Emit_type_hint.hint_to_class
 
-let from_constant env (_, name) expr =
-  let (value, init_instrs) =
-    match expr with
-    | None -> (None, None)
-    | Some init ->
-      (match
-         Ast_constant_folder.expr_to_opt_typed_value
-           (Emit_env.get_namespace env)
-           init
-       with
-      | Some v -> (Some v, None)
-      | None ->
-        (Some Typed_value.Uninit, Some (Emit_expression.emit_expr env init)))
-  in
-  Hhas_constant.make name value init_instrs
-
 let from_type_constant tc =
   let type_constant_name = snd tc.A.c_tconst_name in
   match (tc.A.c_tconst_abstract, tc.A.c_tconst_type) with
@@ -154,7 +138,7 @@ let from_class_elt_classvars ast_class class_is_const tparams =
 
 let from_class_elt_constants env class_ =
   let map_aux (c : Tast.class_const) =
-    from_constant env c.A.cc_id c.A.cc_expr
+    Hhas_constant.from_ast env c.A.cc_id c.A.cc_expr
   in
   List.map ~f:map_aux class_.A.c_consts
 
@@ -558,16 +542,16 @@ let emit_class (ast_class, hoisted) =
       let return_label = Label.next_regular () in
       let rec make_cinit_instrs cs =
         match cs with
-        | [] -> Emit_pos.emit_pos_then ast_class.A.c_span @@ instr_retc
+        | [] ->
+          gather
+            [
+              instr_label return_label;
+              Emit_pos.emit_pos ast_class.A.c_span;
+              instr_retc;
+            ]
         | (_, label, instrs) :: cs ->
           if List.is_empty cs then
-            gather
-              [
-                instr_label label;
-                instrs;
-                instr_label return_label;
-                make_cinit_instrs cs;
-              ]
+            gather [instr_label label; instrs; make_cinit_instrs cs]
           else
             gather
               [
@@ -578,13 +562,13 @@ let emit_class (ast_class, hoisted) =
                 make_cinit_instrs cs;
               ]
       in
-      let cases =
-        List.filter_map initialized_class_constants (fun p ->
-            match p with
-            | (name, label, _) -> Some (name, label))
-      in
       let body_instrs =
         if List.length initialized_class_constants > 1 then
+          let cases =
+            List.filter_map initialized_class_constants (fun p ->
+                match p with
+                | (name, label, _) -> Some (name, label))
+          in
           gather
             [
               instr_cgetl (Local.Named "$constName");
