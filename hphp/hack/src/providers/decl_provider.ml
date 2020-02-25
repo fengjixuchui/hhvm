@@ -173,7 +173,7 @@ let get_gconst (ctx : Provider_context.t) (gconst_name : string) :
           in
           Some gconst
         | None -> None)
-  | Provider_backend.Decl_service decl ->
+  | Provider_backend.Decl_service { decl; _ } ->
     Decl_service_client.rpc_get_gconst decl gconst_name
     |> Option.map ~f:(fun decl -> (decl, Errors.empty))
 
@@ -244,9 +244,10 @@ let invalidate_gconst (ctx : Provider_context.t) (gconst_name : gconst_key) :
 let invalidate_context_decls ~(ctx : Provider_context.t) =
   match ctx.Provider_context.backend with
   | Provider_backend.Local_memory _ ->
-    Relative_path.Map.iter ctx.Provider_context.entries ~f:(fun _ entry ->
+    Relative_path.Map.iter ctx.Provider_context.entries ~f:(fun path _entry ->
+        let ast = Ast_provider.get_ast ctx path in
         let (funs, classes, record_defs, typedefs, gconsts) =
-          Nast.get_defs entry.Provider_context.ast
+          Nast.get_defs ast
         in
         List.iter funs ~f:(fun (_, fun_name) -> invalidate_fun ctx fun_name);
         List.iter classes ~f:(fun (_, class_name) ->

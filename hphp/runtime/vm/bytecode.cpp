@@ -621,35 +621,7 @@ static std::string toStringElm(const TypedValue* tv) {
     }
   };
 
-  switch (tv->m_type) {
-  case KindOfUninit:
-  case KindOfNull:
-  case KindOfBoolean:
-  case KindOfInt64:
-  case KindOfDouble:
-  case KindOfPersistentString:
-  case KindOfString:
-  case KindOfPersistentVec:
-  case KindOfVec:
-  case KindOfPersistentDict:
-  case KindOfDict:
-  case KindOfPersistentKeyset:
-  case KindOfKeyset:
-  case KindOfPersistentDArray:
-  case KindOfDArray:
-  case KindOfPersistentVArray:
-  case KindOfVArray:
-  case KindOfPersistentArray:
-  case KindOfArray:
-  case KindOfObject:
-  case KindOfResource:
-  case KindOfFunc:
-  case KindOfClass:
-  case KindOfClsMeth:
-  case KindOfRecord:
-    os << "C:";
-    break;
-  }
+  os << "C:";
 
   do {
     switch (tv->m_type) {
@@ -956,24 +928,6 @@ Array getDefinedVariables(const ActRec* fp) {
   return ret.toArray();
 }
 
-namespace {
-
-TypedValue popUnpackArgs() {
-  auto& stack = vmStack();
-  TypedValue unpackArgs = *stack.topC();
-  if (LIKELY(isContainer(unpackArgs))) {
-    stack.discard();
-    return unpackArgs;
-  }
-
-  // argument_unpacking RFC dictates "containers and Traversables"
-  stack.popC();
-  raise_warning_unsampled("Only containers may be unpacked");
-  return make_persistent_array_like_tv(ArrayData::CreateVArray());
-}
-
-}
-
 void shuffleMagicArgs(String&& invName, uint32_t numArgs, bool hasUnpack) {
   assertx(!invName.isNull());
   auto& stack = vmStack();
@@ -994,9 +948,10 @@ void shuffleMagicArgs(String&& invName, uint32_t numArgs, bool hasUnpack) {
 
   // Unpack arguments to the end of the argument array.
   if (UNLIKELY(hasUnpack)) {
-    auto const args = popUnpackArgs();
+    auto const args = *stack.topC();
+    if (!isContainer(args)) throwInvalidUnpackArgs();
+    stack.discard();
     SCOPE_EXIT { tvDecRefGen(args); };
-    assertx(isContainer(args));
     IterateV(
       args,
       [](ArrayData*) { return false; },
@@ -1054,11 +1009,12 @@ static void shuffleExtraStackArgs(ActRec* ar) {
 // The stack contains numArgs arguments plus an extra cell containing
 // arguments to unpack.
 uint32_t prepareUnpackArgs(const Func* func, uint32_t numArgs,
-                           bool checkInOutAnnot, ActRec* ar) {
+                           bool checkInOutAnnot) {
   auto& stack = vmStack();
-  auto unpackArgs = popUnpackArgs();
+  auto unpackArgs = *stack.topC();
+  if (!isContainer(unpackArgs)) throwInvalidUnpackArgs();
+  stack.discard();
   SCOPE_EXIT { tvDecRefGen(unpackArgs); };
-  assertx(isContainer(unpackArgs));
 
   auto const numUnpackArgs = getContainerSize(unpackArgs);
   auto const numParams = func->numNonVariadicParams();
@@ -1082,7 +1038,6 @@ uint32_t prepareUnpackArgs(const Func* func, uint32_t numArgs,
   if (LIKELY(numArgs < numParams)) {
     for (auto i = numArgs; iter && (i < numParams); ++i, ++iter) {
       if (UNLIKELY(checkInOutAnnot && func->isInOut(i))) {
-        if (ar) ar->setNumArgs(i);
         throwParamInOutMismatch(func, i);
       }
       auto const from = iter.secondValPlus();
@@ -4053,8 +4008,8 @@ bool doFCall(ActRec* ar, uint32_t numArgs, bool hasUnpack,
 
     if (hasUnpack) {
       checkStack(vmStack(), ar->func(), 0);
-      numArgs = prepareUnpackArgs(ar->func(), numArgs, true, ar);
-      ar->setNumArgs(numArgs);
+      auto const newNumArgs = prepareUnpackArgs(ar->func(), numArgs, true);
+      ar->setNumArgs(newNumArgs);
     }
 
     prepareFuncEntry(
@@ -4075,7 +4030,7 @@ bool doFCall(ActRec* ar, uint32_t numArgs, bool hasUnpack,
     auto const numInOutParams = [&] () -> uint32_t {
       if (!func->takesInOutParams()) return 0;
       uint32_t i = 0;
-      for (int p = 0; p < ar->numArgs(); ++p) i += func->isInOut(p);
+      for (int p = 0; p < numArgs; ++p) i += func->isInOut(p);
       return i;
     }();
 
@@ -5066,7 +5021,6 @@ OPTBLD_INLINE void iopDefCls(uint32_t cid) {
 
 OPTBLD_INLINE void iopDefRecord(uint32_t cid) {
   auto const r = vmfp()->m_func->unit()->lookupPreRecordId(cid);
-  r->checkFieldDefaultValues();
   Unit::defRecordDesc(r);
 }
 

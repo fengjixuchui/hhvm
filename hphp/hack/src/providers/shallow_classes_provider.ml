@@ -102,7 +102,7 @@ let invalidate_class (ctx : Provider_context.t) (class_name : string) : unit =
   match ctx.Provider_context.backend with
   | Provider_backend.Shared_memory ->
     remove_batch ctx (SSet.singleton class_name)
-  | Provider_backend.Local_memory { decl_cache = _; shallow_decl_cache } ->
+  | Provider_backend.Local_memory { shallow_decl_cache; _ } ->
     Provider_backend.Shallow_decl_cache.remove
       shallow_decl_cache
       ~key:
@@ -112,9 +112,10 @@ let invalidate_class (ctx : Provider_context.t) (class_name : string) : unit =
       "Decl_provider.invalidate_class not yet impl. for decl memory provider"
 
 let invalidate_context_decls ~(ctx : Provider_context.t) : unit =
-  Relative_path.Map.iter ctx.Provider_context.entries ~f:(fun _ entry ->
+  Relative_path.Map.iter ctx.Provider_context.entries ~f:(fun path _entry ->
+      let ast = Ast_provider.get_ast ctx path in
       let (_funs, classes, _record_defs, _typedefs, _gconsts) =
-        Nast.get_defs entry.Provider_context.ast
+        Nast.get_defs ast
       in
       List.iter classes ~f:(fun (_, class_name) ->
           invalidate_class ctx class_name))

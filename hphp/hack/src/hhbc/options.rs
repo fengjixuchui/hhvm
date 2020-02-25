@@ -175,6 +175,7 @@ prefixed_flags!(
     JIT_ENABLE_RENAME_FUNCTION,
     LOG_EXTERN_COMPILER_PERF,
     RX_IS_ENABLED,
+    WIDEN_IS_ARRAY,
 );
 impl Default for HhvmFlags {
     fn default() -> HhvmFlags {
@@ -224,6 +225,7 @@ prefixed_flags!(
     DISABLE_LEGACY_SOFT_TYPEHINTS,
     DISABLE_LVAL_AS_AN_EXPRESSION,
     DISABLE_UNSET_CLASS_CONST,
+    DISABLE_XHP_ELEMENT_MANGLING,
     DISALLOW_FUNC_PTRS_IN_CONSTANTS,
     ENABLE_CLASS_LEVEL_WHERE_CLAUSES,
     ENABLE_COROUTINES,
@@ -630,6 +632,9 @@ mod tests {
   "hhvm.hack.lang.disable_unset_class_const": {
     "global_value": false
   },
+  "hhvm.hack.lang.disable_xhp_element_mangling": {
+    "global_value": false
+  },
   "hhvm.hack.lang.disallow_func_ptrs_in_constants": {
     "global_value": false
   },
@@ -667,6 +672,9 @@ mod tests {
     "global_value": false
   },
   "hhvm.rx_is_enabled": {
+    "global_value": false
+  },
+  "hhvm.widen_is_array": {
     "global_value": false
   }
 }"#;
@@ -1018,5 +1026,9 @@ bitflags! {
         const CHECK_INT_OVERFLOW = 1 << 45;
         const ENABLE_XHP_CLASS_MODIFIER = 1 << 46;
         const ENABLE_FIRST_CLASS_FUNCTION_POINTERS = 1 << 47;
+        /// Widen the default behavior of `is_array` from "is exactly a PHP array" to
+        /// "is any kind of CoW container" (i.e. `HH\is_any_array`)
+        const WIDEN_IS_ARRAY = 1 << 48;
+        const DISABLE_XHP_ELEMENT_MANGLING = 1 << 49;
     }
 }

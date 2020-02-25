@@ -336,6 +336,11 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState,
         euState.processedTypeAlias.insert(tid);
         return;
       }
+      case Op::DefRecord: {
+        auto rid = bc.DefRecord.arg1;
+        ue.pushMergeableRecord(rid);
+        return;
+      }
 
       case Op::Null:   tos = TInitNull; return;
       case Op::True:   tos = TTrue; return;
@@ -1269,6 +1274,7 @@ void emit_func(EmitUnitState& state, UnitEmitter& ue,
   emit_finish_func(state, func, *fe, info);
 }
 
+const StaticString s___HasTopLevelCode("__HasTopLevelCode");
 void emit_pseudomain(EmitUnitState& state,
                      UnitEmitter& ue,
                      const php::Unit& unit) {
@@ -1284,8 +1290,10 @@ void emit_pseudomain(EmitUnitState& state,
     auto const tv = make_tv<KindOfInt64>(1);
     ue.m_mainReturn = tv;
   } else {
-    ue.m_mergeOnly =
-      ue.m_returnSeen && ue.m_mainReturn.m_type != KindOfUninit;
+    ue.m_mergeOnly = ue.m_returnSeen
+      && ue.m_mainReturn.m_type != KindOfUninit
+      && ue.m_fileAttributes.find(s___HasTopLevelCode.get())
+         == ue.m_fileAttributes.end();
   }
 
   emit_finish_func(state, pm, *fe, info);

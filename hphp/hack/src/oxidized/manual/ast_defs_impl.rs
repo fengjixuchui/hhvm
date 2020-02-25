@@ -34,40 +34,10 @@ impl Id {
     }
 }
 
-impl ClassKind {
-    pub fn is_cabstract(&self) -> bool {
+impl Bop {
+    pub fn is_any_eq(&self) -> bool {
         match self {
-            ClassKind::Cabstract => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_cinterface(&self) -> bool {
-        match self {
-            ClassKind::Cinterface => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_ctrait(&self) -> bool {
-        match self {
-            ClassKind::Ctrait => true,
-            _ => false,
-        }
-    }
-}
-
-impl FunKind {
-    pub fn is_fasync(&self) -> bool {
-        match self {
-            FunKind::FAsync => true,
-            _ => false,
-        }
-    }
-
-    pub fn is_fasync_generator(&self) -> bool {
-        match self {
-            FunKind::FAsyncGenerator => true,
+            Self::Eq(_) => true,
             _ => false,
         }
     }

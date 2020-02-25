@@ -293,6 +293,8 @@ AutoloadHandler::loadFromMapImpl(const String& clsName,
     throw;
   } catch (PhpNotSupportedException&) {
     throw;
+  } catch (TopLevelCodeBannedException&) {
+    throw;
   } catch (ExtendedException& ee) {
     auto fileAndLine = ee.getFileAndLine();
     err = (fileAndLine.first.empty())
@@ -353,12 +355,7 @@ void AutoloadHandler::setAutoloadMapFromFactory(
 
   auto repoRoot = folly::fs::canonical(repoOptions->path()).parent_path();
 
-  auto queryExprStr = repoOptions->autoloadQuery();
-  if (queryExprStr.empty()) {
-    return;
-  }
-
-  auto* map = factory.getForRoot(queryExprStr, repoRoot);
+  auto* map = factory.getForRoot(repoRoot);
   if (!map) {
     return;
   }
