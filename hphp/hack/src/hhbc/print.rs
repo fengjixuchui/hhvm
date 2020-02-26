@@ -14,7 +14,7 @@ pub use write::{Error, IoWrite, Result, Write};
 use context::Context;
 use core_utils_rust::add_ns;
 use env::{local::Type as Local, Env as BodyEnv};
-use escaper::escape;
+use escaper::{escape, escape_by, is_lit_printable};
 use hhas_attribute_rust::{self as hhas_attribute, HhasAttribute};
 use hhas_body_rust::HhasBody;
 use hhas_class_rust::{self as hhas_class, HhasClass};
@@ -41,7 +41,7 @@ use oxidized::{ast, ast_defs, doc_comment::DocComment};
 use runtime::TypedValue;
 use write::*;
 
-use std::{borrow::Cow, convert::TryInto};
+use std::{borrow::Cow, convert::TryInto, io::Write as _};
 
 const ADATA_ARRAY_PREFIX: &str = "a";
 const ADATA_VARRAY_PREFIX: &str = "y";
@@ -165,9 +165,10 @@ pub fn print_program<W: Write>(
 ) -> Result<(), W::Error> {
     match ctx.path {
         Some(p) => {
-            let p = &escape(p.to_absoute().to_str().ok_or(Error::InvalidUTF8)?);
+            let abs = p.to_absoute();
+            let p = escape(abs.to_str().ok_or(Error::InvalidUTF8)?);
 
-            concat_str_by(w, " ", ["#", p, "starts here"])?;
+            concat_str_by(w, " ", ["#", p.as_ref(), "starts here"])?;
 
             newline(w)?;
 
@@ -178,7 +179,7 @@ pub fn print_program<W: Write>(
             handle_not_impl(|| print_program_(ctx, w, prog))?;
 
             newline(w)?;
-            concat_str_by(w, " ", ["#", p, "ends here"])?;
+            concat_str_by(w, " ", ["#", p.as_ref(), "ends here"])?;
 
             newline(w)
         }
@@ -209,8 +210,9 @@ fn print_program_<W: Write>(
     print_data_region(w, vec![])?;
     print_main(ctx, w, &prog.main)?;
     concat(w, &prog.functions, |w, f| print_fun_def(ctx, w, f))?;
-    concat(w, &prog.record_defs, |w, rd| print_record_def(ctx, w, rd))?;
     concat(w, &prog.classes, |w, cd| print_class_def(ctx, w, cd))?;
+    concat(w, &prog.record_defs, |w, rd| print_record_def(ctx, w, rd))?;
+    concat(w, &prog.constants, |w, c| print_constant(ctx, w, c))?;
     concat(w, &prog.typedefs, |w, td| print_typedef(ctx, w, td))?;
     print_file_attributes(ctx, w, &prog.file_attributes)?;
 
@@ -288,7 +290,7 @@ fn print_fun_def<W: Write>(
     option(w, &body.return_type_info, print_type_info)?;
     w.write(" ")?;
     w.write(fun_def.name.to_raw_string())?;
-    print_params(w, fun_def.body.env.as_ref(), fun_def.params())?;
+    print_params(ctx, w, fun_def.body.env.as_ref(), fun_def.params())?;
     if fun_def.is_generator() {
         w.write(" isGenerator")?;
     }
@@ -440,7 +442,8 @@ fn print_constant<W: Write>(
     w: &mut W,
     c: &HhasConstant,
 ) -> Result<(), W::Error> {
-    w.write("\n  .const ")?;
+    ctx.newline(w)?;
+    w.write(".const ")?;
     w.write(c.name.to_raw_string())?;
     match c.value.as_ref() {
         Some(TypedValue::Uninit) => w.write(" = uninit")?,
@@ -703,6 +706,10 @@ fn pos_to_prov_tag(ctx: &Context, loc: &Option<ast_defs::Pos>) -> String {
         Some(_) if ctx.opts.array_provenance() => unimplemented!(),
         _ => "".into(),
     }
+}
+
+fn print_function_id<W: Write>(w: &mut W, id: &FunctionId) -> Result<(), W::Error> {
+    wrap_by_quotes(w, |w| w.write(escape(id.to_raw_string())))
 }
 
 fn print_class_id<W: Write>(w: &mut W, id: &ClassId) -> Result<(), W::Error> {
@@ -1057,10 +1064,7 @@ fn print_include_eval_define<W: Write>(
         DefCls(n) => concat_str_by(w, " ", ["DefCls", n.to_string().as_str()]),
         DefClsNop(n) => concat_str_by(w, " ", ["DefClsNop", n.to_string().as_str()]),
         DefRecord(n) => concat_str_by(w, " ", ["DefRecord", n.to_string().as_str()]),
-        DefCns(id) => {
-            w.write("DefCns ")?;
-            print_hhbc_id(w, id)
-        }
+        DefCns(n) => concat_str_by(w, " ", ["DefCns", n.to_string().as_str()]),
         DefTypeAlias(id) => w.write(format!("DefTypeAlias {}", id)),
     }
 }
@@ -1209,8 +1213,91 @@ fn print_shape_fields<W: Write>(w: &mut W, sf: &Vec<String>) -> Result<(), W::Er
 fn print_op<W: Write>(w: &mut W, op: &InstructOperator) -> Result<(), W::Error> {
     use InstructOperator as I;
     match op {
+        I::Concat => w.write("Concat"),
+        I::ConcatN(n) => concat_str_by(w, " ", ["ConcatN", n.to_string().as_str()]),
+        I::Abs => w.write("Abs"),
+        I::Add => w.write("Add"),
+        I::Sub => w.write("Sub"),
+        I::Mul => w.write("Mul"),
+        I::AddO => w.write("AddO"),
+        I::SubO => w.write("SubO"),
+        I::MulO => w.write("MulO"),
+        I::Div => w.write("Div"),
+        I::Mod => w.write("Mod"),
+        I::Pow => w.write("Pow"),
+        I::Sqrt => w.write("Sqrt"),
+        I::Xor => w.write("Xor"),
+        I::Not => w.write("Not"),
+        I::Same => w.write("Same"),
+        I::NSame => w.write("NSame"),
+        I::Eq => w.write("Eq"),
+        I::Neq => w.write("Neq"),
+        I::Lt => w.write("Lt"),
+        I::Lte => w.write("Lte"),
+        I::Gt => w.write("Gt"),
+        I::Gte => w.write("Gte"),
+        I::Cmp => w.write("Cmp"),
+        I::BitAnd => w.write("BitAnd"),
+        I::BitOr => w.write("BitOr"),
+        I::BitXor => w.write("BitXor"),
+        I::BitNot => w.write("BitNot"),
+        I::Shl => w.write("Shl"),
+        I::Shr => w.write("Shr"),
+        I::Floor => w.write("Floor"),
+        I::Ceil => w.write("Ceil"),
+        I::CastBool => w.write("CastBool"),
+        I::CastInt => w.write("CastInt"),
+        I::CastDouble => w.write("CastDouble"),
+        I::CastString => w.write("CastString"),
+        I::CastArray => w.write("CastArray"),
+        I::CastVec => w.write("CastVec"),
+        I::CastDict => w.write("CastDict"),
+        I::CastKeyset => w.write("CastKeyset"),
+        I::CastVArray => w.write("CastVArray"),
+        I::CastDArray => w.write("CastDArray"),
+        I::InstanceOf => w.write("InstanceOf"),
+        I::InstanceOfD(id) => {
+            w.write("InstanceOfD ")?;
+            print_class_id(w, id)
+        }
+        I::IsLateBoundCls => w.write("IsLateBoundCls"),
+        I::IsTypeStructC(op) => concat_str_by(
+            w,
+            " ",
+            [
+                "IsTypeStructC",
+                match op {
+                    TypestructResolveOp::Resolve => "Resolve",
+                    TypestructResolveOp::DontResolve => "DontResolve",
+                },
+            ],
+        ),
+        I::ThrowAsTypeStructException => w.write("ThrowAsTypeStructException"),
+        I::CombineAndResolveTypeStruct(n) => concat_str_by(
+            w,
+            " ",
+            ["CombineAndResolveTypeStruct", n.to_string().as_str()],
+        ),
+        I::Print => w.write("Print"),
+        I::Clone => w.write("Clone"),
+        I::Exit => w.write("Exit"),
+        I::ResolveFunc(id) => {
+            w.write("ResolveFunc")?;
+            print_function_id(w, id)
+        }
+        I::ResolveObjMethod => w.write("ResolveObjMethod"),
+        I::ResolveClsMethod(op) => concat_str_by(
+            w,
+            " ",
+            [
+                "ResolveClsMethod",
+                match op {
+                    ClsMethResolveOp::Warn => "Warn",
+                    ClsMethResolveOp::NoWarn => "NoWarn",
+                },
+            ],
+        ),
         I::Fatal(fatal_op) => print_fatal_op(w, fatal_op),
-        _ => not_impl!(),
     }
 }
 
@@ -1223,21 +1310,23 @@ fn print_fatal_op<W: Write>(w: &mut W, f: &FatalOp) -> Result<(), W::Error> {
 }
 
 fn print_params<W: Write>(
+    ctx: &mut Context,
     w: &mut W,
     body_env: Option<&BodyEnv>,
     params: &[HhasParam],
 ) -> Result<(), W::Error> {
     wrap_by_paren(w, |w| {
-        concat_by(w, ", ", params, |w, i| print_param(w, body_env, i))
+        concat_by(w, ", ", params, |w, i| print_param(ctx, w, body_env, i))
     })
 }
 
 fn print_param<W: Write>(
+    ctx: &mut Context,
     w: &mut W,
     body_env: Option<&BodyEnv>,
     param: &HhasParam,
 ) -> Result<(), W::Error> {
-    print_param_user_attributes(w, param)?;
+    print_param_user_attributes(ctx, w, param)?;
     if param.is_inout {
         w.write("inout ")?;
     }
@@ -1357,7 +1446,7 @@ fn print_expr<W: Write>(
     env: &ExprEnv,
     ast::Expr(p, expr): &ast::Expr,
 ) -> Result<(), W::Error> {
-    fn adjust_id<'a>(env: &ExprEnv, id: &'a String) -> String {
+    fn adjust_id<'a>(env: &ExprEnv, id: &'a String) -> Cow<'a, str> {
         let s: Cow<'a, str> = match env.codegen_env {
             Some(env) => {
                 if env.namespace.name.is_none()
@@ -1374,8 +1463,7 @@ fn print_expr<W: Write>(
             }
             _ => id.into(),
         };
-        // TODO(shiqicao): avoid allocating string, fix escape
-        escaper::escape(s.as_ref())
+        escaper::escape(s)
     }
     use ast::Expr_ as E_;
     match expr {
@@ -1385,7 +1473,26 @@ fn print_expr<W: Write>(
         E_::Int(i) => {
             w.write(integer::to_decimal(i.as_str()).map_err(|_| Error::fail("ParseIntError"))?)
         }
-        E_::String(s) => not_impl!(),
+        E_::String(s) => {
+            fn escape_char(c: u8) -> Option<Cow<'static, [u8]>> {
+                match c {
+                    b'\n' => Some((&b"\\\\n"[..]).into()),
+                    b'\r' => Some((&b"\\\\r"[..]).into()),
+                    b'\t' => Some((&b"\\\\t"[..]).into()),
+                    b'\\' => Some((&b"\\\\\\\\"[..]).into()),
+                    b'"' => Some((&b"\\\\\\\""[..]).into()),
+                    b'$' => Some((&b"\\\\$"[..]).into()),
+                    b'?' => Some((&b"\\?"[..]).into()),
+                    c if is_lit_printable(c) => None,
+                    c => {
+                        let mut r = vec![];
+                        write!(r, "\\\\{:03o}", c).unwrap();
+                        Some(r.into())
+                    }
+                }
+            }
+            wrap_by(w, "\\\"", |w| w.write( escape_by(s.into(), escape_char ) )  )
+        }
         E_::Null => w.write("NULL"),
         E_::True => w.write("true"),
         E_::False => w.write("false"),
@@ -1420,7 +1527,7 @@ fn print_expr<W: Write>(
         }
         E_::Shape(_) | E_::Binop(_) | E_::Call(_) | E_::New(_) => not_impl!(),
         E_::Record(r) => {
-            w.write(lstrip(adjust_id(env, &(r.0).1).as_str(), "\\\\"))?;
+            w.write(lstrip(adjust_id(env, &(r.0).1).as_ref(), "\\\\"))?;
             print_key_values(w, env, &r.2)
         }
         E_::ClassConst(cc) => {
@@ -1545,10 +1652,14 @@ fn print_import_flavor<W: Write>(w: &mut W, flavor: &ast::ImportFlavor) -> Resul
     })
 }
 
-fn print_param_user_attributes<W: Write>(w: &mut W, param: &HhasParam) -> Result<(), W::Error> {
+fn print_param_user_attributes<W: Write>(
+    ctx: &mut Context,
+    w: &mut W,
+    param: &HhasParam,
+) -> Result<(), W::Error> {
     match &param.user_attributes[..] {
         [] => Ok(()),
-        _ => not_impl!(),
+        _ => wrap_by_square(w, |w| print_attributes(ctx, w, &param.user_attributes)),
     }
 }
 
@@ -1681,7 +1792,7 @@ fn print_type_info_<W: Write>(w: &mut W, is_enum: bool, ti: &HhasTypeInfo) -> Re
         option_or(
             w,
             opt,
-            |w, s: &String| wrap_by_quotes(w, |w| w.write(escape(s.as_ref()))),
+            |w, s: &String| wrap_by_quotes(w, |w| w.write(escape(s))),
             "N",
         )
     };
@@ -1764,8 +1875,4 @@ fn print_record_def<W: Write>(
         ctx.newline(w)
     })?;
     newline(w)
-}
-
-fn print_hhbc_id<'a, W: Write, I: Id<'a>>(w: &mut W, id: &I) -> Result<(), W::Error> {
-    wrap_by_quotes(w, |w| w.write(escape(id.to_raw_string())))
 }

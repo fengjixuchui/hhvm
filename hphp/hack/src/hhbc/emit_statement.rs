@@ -116,7 +116,8 @@ fn emit_def_inline<Ex, Fb, En, Hi>(e: &mut Emitter, def: &a::Def<Ex, Fb, En, Hi>
 
 fn set_bytes_kind(name: &str) -> Option<Setrange> {
     lazy_static! {
-        static ref RE: Regex = Regex::new("(?i)^hh\\set_bytes(_rev|)_([a-z0-9]+)(_vec|)$").unwrap();
+        static ref RE: Regex =
+            Regex::new(r#"(?i)^hh\\set_bytes(_rev)_([a-z0-9]+)(_vec)$"#).unwrap();
     }
     RE.captures(name).map_or(None, |groups| {
         let op = if !groups.get(1).unwrap().as_str().is_empty() {
@@ -186,7 +187,7 @@ pub fn emit_stmt(e: &mut Emitter, env: &mut Env, stmt: &tast::Stmt) -> Result {
                             };
                             emit_expr::emit_set_range_expr(e, env, pos, fname, kind, args, arg)
                         } else {
-                            emit_expr::emit_ignored_expr(e, env, pos, expr)
+                            emit_expr::emit_ignored_expr(e, env, pos, e_)
                         }
                     }
                 } else {
