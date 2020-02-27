@@ -328,6 +328,8 @@ val get_tyvar_appears_invariantly : env -> Ident.t -> bool
 
 val is_global_tyvar : env -> Ident.t -> bool
 
+val get_global_tyvar_reason : env -> Ident.t -> Reason.t option
+
 val new_global_tyvar : env -> Ident.t -> Typing_reason.t -> env * locl_ty
 
 (** At the end of typechecking a function body, extract the remaining
@@ -413,9 +415,11 @@ val get_condition_type : env -> SMap.key -> Typing_defs.decl_ty option
 
 val add_subtype_prop : env -> Typing_logic.subtype_prop -> env
 
-val set_tyvar_variance_i : env -> ?flip:bool -> Typing_defs.internal_type -> env
+val set_tyvar_variance_i :
+  env -> ?flip:bool -> ?for_all_vars:bool -> Typing_defs.internal_type -> env
 
-val set_tyvar_variance : env -> ?flip:bool -> Typing_defs.locl_ty -> env
+val set_tyvar_variance :
+  env -> ?flip:bool -> ?for_all_vars:bool -> Typing_defs.locl_ty -> env
 
 val update_variance_after_bind : env -> int -> Typing_defs.locl_ty -> env
 

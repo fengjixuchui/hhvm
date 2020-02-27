@@ -746,7 +746,7 @@ let print_solved_global_inference_env
   if verbosity >= 1 then
     match gienv with
     | None -> ()
-    | Some (gienv, state_errors, _, _) ->
+    | Some (gienv, state_errors, _type_map) ->
       print_global_inference_env
         gienv
         ~step_name:"Solve"
@@ -785,7 +785,7 @@ let check_file ctx ~verbosity errors files_info error_format max_errors =
       ~init:(errors, [], [])
   in
   let gienvs =
-    Typing_global_inference.StateSubConstraintGraphs.build tasts genvs
+    Typing_global_inference.StateSubConstraintGraphs.build ctx tasts genvs
   in
   let _gienv =
     global_inference_merge_and_solve
@@ -1095,13 +1095,14 @@ let compute_tasts_expand_types ctx ~verbosity files_info interesting_files =
   in
   let subconstraints =
     Typing_global_inference.StateSubConstraintGraphs.build
+      ctx
       (List.concat (Relative_path.Map.values tasts))
       gienvs
   in
   let (tasts, gi_solved) =
     match global_inference_merge_and_solve ctx ~verbosity subconstraints with
     | None -> (tasts, None)
-    | Some ((gienv, _, _, _) as gi_solved) ->
+    | Some ((gienv, _, _) as gi_solved) ->
       let tasts =
         Relative_path.Map.map
           tasts

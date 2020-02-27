@@ -125,6 +125,14 @@ impl InstrSeq {
         }
     }
 
+    pub fn optional(pred: bool, instrs: Vec<Self>) -> Self {
+        if pred {
+            Self::gather(instrs)
+        } else {
+            Self::Empty
+        }
+    }
+
     pub fn iter(&self) -> InstrIter {
         InstrIter::new(self)
     }
@@ -1334,6 +1342,21 @@ impl InstrSeq {
             Self::One(x) => f(x),
             Self::List(instr_lst) => instr_lst.iter_mut().for_each(f),
             Self::Concat(instrseq_lst) => instrseq_lst.iter_mut().for_each(|x| x.map_mut(f)),
+        }
+    }
+
+    pub fn map_result_mut<F>(&mut self, f: &mut F) -> Result<()>
+    where
+        F: FnMut(&mut Instruct) -> Result<()>,
+    {
+        match self {
+            Self::Empty => Ok(()),
+            Self::One(x) => f(x),
+            Self::List(instr_lst) => instr_lst.iter_mut().map(|x| f(x)).collect::<Result<()>>(),
+            Self::Concat(instrseq_lst) => instrseq_lst
+                .iter_mut()
+                .map(|x| x.map_result_mut(f))
+                .collect::<Result<()>>(),
         }
     }
 

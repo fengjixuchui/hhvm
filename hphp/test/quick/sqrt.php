@@ -46,12 +46,12 @@ function main($f) {
     var_dump($e->getMessage());
   }
   try {
-    var_dump(sqrt(array()));
+    var_dump(sqrt(varray[]));
   } catch (Exception $e) {
     var_dump($e->getMessage());
   }
   try {
-    var_dump(sqrt(array(2,3,4)));
+    var_dump(sqrt(varray[2,3,4]));
   } catch (Exception $e) {
     var_dump($e->getMessage());
   }

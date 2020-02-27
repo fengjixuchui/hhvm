@@ -112,6 +112,10 @@ let add_subtype_prop env prop =
 let is_global_tyvar env var =
   wrap_inference_env_call_res env (fun env -> Inf.is_global_tyvar env var)
 
+let get_global_tyvar_reason env var =
+  wrap_inference_env_call_res env (fun env ->
+      Inf.get_global_tyvar_reason env var)
+
 let empty_bounds = TySet.empty
 
 let tyvar_is_solved_or_skip_global env var =
@@ -624,8 +628,8 @@ let get_typedef env x =
   Decl_provider.get_typedef (get_ctx env) x
 
 let is_typedef x =
-  match Naming_table.Types.get_kind x with
-  | Some Naming_table.TTypedef -> true
+  match Naming_heap.Types.get_kind x with
+  | Some Naming_types.TTypedef -> true
   | _ -> false
 
 let get_class env x =
@@ -1505,16 +1509,21 @@ let update_variance_after_bind env var ty =
   in
   env
 
-let set_tyvar_variance_i env ?(flip = false) ty =
+let set_tyvar_variance_i env ?(flip = false) ?(for_all_vars = false) ty =
   log_env_change "set_tyvar_variance" env
   @@
-  let tyvars = get_current_tyvars env in
   let (env, positive, negative) = get_tyvars_i env ty in
   let (positive, negative) =
     if flip then
       (negative, positive)
     else
       (positive, negative)
+  in
+  let tyvars =
+    if for_all_vars then
+      ISet.union positive negative |> ISet.elements
+    else
+      get_current_tyvars env
   in
   List.fold_left tyvars ~init:env ~f:(fun env var ->
       let env =
@@ -1531,8 +1540,8 @@ let set_tyvar_variance_i env ?(flip = false) ty =
       in
       env)
 
-let set_tyvar_variance env ?(flip = false) ty =
-  set_tyvar_variance_i env ~flip (LoclType ty)
+let set_tyvar_variance env ?(flip = false) ?(for_all_vars = false) ty =
+  set_tyvar_variance_i env ~flip ~for_all_vars (LoclType ty)
 
 let add_tyvar_upper_bound ?intersect env var (ty : internal_type) =
   log_env_change "add_tyvar_upper_bound" env

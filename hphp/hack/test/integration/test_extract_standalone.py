@@ -178,6 +178,8 @@ class TestExtractStandalone(TestCase[ExtractStandaloneDriver]):
             "\\:foo::render",
             "\\with_unsafe_type_hh_fixme",
             "\\with_reified_generics",
+            "\\SealedInterface::method",
+            "\\WithTypeAliasHint::getX",
         ]
 
         for function_name in function_names:

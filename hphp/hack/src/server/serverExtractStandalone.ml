@@ -607,11 +607,18 @@ let get_init_for_prim = function
   | Aast_defs.Tnoreturn ->
     raise Unsupported
 
-let rec get_init_from_hint ctx hint =
+let rec get_init_from_hint ctx tparams_stack hint =
+  let unsupported_hint () =
+    Hh_logger.log
+      "%s: get_init_from_hint: unsupported hint: %s"
+      (Pos.string (Pos.to_absolute (fst hint)))
+      (Aast_defs.show_hint hint);
+    raise Unsupported
+  in
   match snd hint with
   | Hprim prim -> get_init_for_prim prim
   | Hoption _ -> "null"
-  | Hlike hint -> get_init_from_hint ctx hint
+  | Hlike hint -> get_init_from_hint ctx tparams_stack hint
   | Harray _ -> "array()"
   | Hdarray _ -> "darray[]"
   | Hvarray_or_darray _
@@ -620,7 +627,7 @@ let rec get_init_from_hint ctx hint =
   | Htuple hints ->
     Printf.sprintf
       "tuple(%s)"
-      (concat_map ~sep:", " ~f:(get_init_from_hint ctx) hints)
+      (concat_map ~sep:", " ~f:(get_init_from_hint ctx tparams_stack) hints)
   | Happly ((_, name), hints) ->
     (match () with
     | _
@@ -641,8 +648,8 @@ let rec get_init_from_hint ctx hint =
       | [first; second] ->
         Printf.sprintf
           "Pair {%s, %s}"
-          (get_init_from_hint ctx first)
-          (get_init_from_hint ctx second)
+          (get_init_from_hint ctx tparams_stack first)
+          (get_init_from_hint ctx tparams_stack second)
       | _ -> failwith "malformed hint")
     | _ when name = SN.Classes.cClassname ->
       (match hints with
@@ -660,10 +667,18 @@ let rec get_init_from_hint ctx hint =
           in
           Printf.sprintf "%s::%s" name const_name
         else
-          raise Unsupported
+          unsupported_hint ()
       | None ->
         let typedef = get_typedef_nast_exn ctx name in
-        get_init_from_hint ctx typedef.t_kind))
+        let tparams =
+          List.fold2_exn
+            typedef.t_tparams
+            hints
+            ~init:SMap.empty
+            ~f:(fun tparams tparam hint ->
+              SMap.add (snd tparam.tp_name) hint tparams)
+        in
+        get_init_from_hint ctx (tparams :: tparams_stack) typedef.t_kind))
   | Hshape { nsi_field_map; _ } ->
     let non_optional_fields =
       List.filter nsi_field_map ~f:(fun shape_field_info ->
@@ -673,12 +688,24 @@ let rec get_init_from_hint ctx hint =
       Printf.sprintf
         "%s => %s"
         (string_of_shape_field_name sfi_name)
-        (get_init_from_hint ctx sfi_hint)
+        (get_init_from_hint ctx tparams_stack sfi_hint)
     in
     Printf.sprintf
       "shape(%s)"
       (concat_map ~sep:", " ~f:get_init_shape_field non_optional_fields)
-  | _ -> raise Unsupported
+  | Habstr name ->
+    let rec loop tparams_stack =
+      match tparams_stack with
+      | tparams :: tparams_stack' ->
+        (match SMap.find_opt name tparams with
+        | Some hint -> get_init_from_hint ctx tparams_stack' hint
+        | None -> loop tparams_stack')
+      | [] -> unsupported_hint ()
+    in
+    loop tparams_stack
+  | _ -> unsupported_hint ()
+
+let get_init_from_hint ctx hint = get_init_from_hint ctx [] hint
 
 let get_gconst_declaration ctx name =
   let gconst = get_gconst_nast_exn ctx name in
@@ -1378,6 +1405,7 @@ let collect_dependencies ctx target =
         let (_ : (Tast.def * Typing_inference_env.t_global_with_pos) option) =
           Typing_check_service.type_fun ctx filename func
         in
+        add_implementation_dependencies ctx env;
         HashSet.remove env.dependencies (Fun func);
         HashSet.remove env.dependencies (FunName func)
       | Method (cls, m) ->
@@ -1386,10 +1414,12 @@ let collect_dependencies ctx target =
             =
           Typing_check_service.type_class ctx filename cls
         in
+        HashSet.add env.dependencies (Method (cls, m));
+        HashSet.add env.dependencies (SMethod (cls, m));
+        add_implementation_dependencies ctx env;
         HashSet.remove env.dependencies (Method (cls, m));
         HashSet.remove env.dependencies (SMethod (cls, m)))
   in
-  add_implementation_dependencies ctx env;
   env
 
 let group_class_dependencies_by_class ctx dependencies =
