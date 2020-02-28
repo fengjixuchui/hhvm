@@ -273,6 +273,10 @@ impl InstrSeq {
         Self::make_instr(Instruct::IOp(InstructOperator::CastDict))
     }
 
+    pub fn make_cast_string() -> Self {
+        Self::make_instr(Instruct::IOp(InstructOperator::CastString))
+    }
+
     pub fn make_retc() -> Self {
         Self::make_instr(Instruct::IContFlow(InstructControlFlow::RetC))
     }
@@ -525,10 +529,6 @@ impl InstrSeq {
         Self::make_instr(Instruct::IGet(InstructGet::CUGetL(local)))
     }
 
-    pub fn make_vgetl(local: local::Type) -> Self {
-        Self::make_instr(Instruct::IGet(InstructGet::VGetL(local)))
-    }
-
     pub fn make_cgetl2(local: local::Type) -> Self {
         Self::make_instr(Instruct::IGet(InstructGet::CGetL2(local)))
     }
@@ -729,6 +729,10 @@ impl InstrSeq {
         Self::make_instr(Instruct::IMisc(InstructMisc::GetMemoKeyL(local)))
     }
 
+    pub fn make_barethis(notice: BareThisOp) -> Self {
+        Self::make_instr(Instruct::IMisc(InstructMisc::BareThis(notice)))
+    }
+
     pub fn make_checkthis() -> Self {
         Self::make_instr(Instruct::IMisc(InstructMisc::CheckThis))
     }
@@ -768,11 +772,9 @@ impl InstrSeq {
     pub fn make_fcallclsmethod(
         is_log_as_dynamic_call: IsLogAsDynamicCallOp,
         fcall_args: FcallArgs,
-        pl: ParamLocations,
     ) -> Self {
         Self::make_instr(Instruct::ICall(InstructCall::FCallClsMethod(
             fcall_args,
-            pl,
             is_log_as_dynamic_call,
         )))
     }
@@ -819,13 +821,9 @@ impl InstrSeq {
         Self::make_instr(Instruct::ICall(InstructCall::FCallFuncD(fcall_args, id)))
     }
 
-    pub fn make_fcallobjmethod(
-        fcall_args: FcallArgs,
-        flavor: ObjNullFlavor,
-        pl: ParamLocations,
-    ) -> Self {
+    pub fn make_fcallobjmethod(fcall_args: FcallArgs, flavor: ObjNullFlavor) -> Self {
         Self::make_instr(Instruct::ICall(InstructCall::FCallObjMethod(
-            fcall_args, flavor, pl,
+            fcall_args, flavor,
         )))
     }
 
@@ -938,8 +936,18 @@ impl InstrSeq {
         Self::make_instr(Instruct::IMisc(InstructMisc::ArrayIdx))
     }
 
-    pub fn make_fcallbuiltin(n: NumParams, un: NumParams, io: NumParams, s: String) -> Self {
-        Self::make_instr(Instruct::ICall(InstructCall::FCallBuiltin(n, un, io, s)))
+    pub fn make_fcallbuiltin(
+        n: NumParams,
+        un: NumParams,
+        io: NumParams,
+        s: impl Into<String>,
+    ) -> Self {
+        Self::make_instr(Instruct::ICall(InstructCall::FCallBuiltin(
+            n,
+            un,
+            io,
+            s.into(),
+        )))
     }
 
     pub fn make_defcls(n: ClassNum) -> Self {

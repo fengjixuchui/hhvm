@@ -52,7 +52,7 @@ $arrays = varray [
 /*5*/  varray[NULL], // with NULL
        varray["a\v\f","aaaa\r","b","b\tbbb","c","\[\]\!\@\#\$\%\^\&\*\(\)\{\}"],  // with double quoted strings
        varray['a\v\f','aaaa\r','b','b\tbbb','c','\[\]\!\@\#\$\%\^\&\*\(\)\{\}'],  // with single quoted strings
-       array("h1" => $blank_line, "h2" => $multiline_string, "h3" => $diff_whitespaces, $numeric_string),  // with heredocs
+       darray["h1" => $blank_line, "h2" => $multiline_string, "h3" => $diff_whitespaces, 0 => $numeric_string],  // with heredocs
 
        // associative arrays
 /*9*/  darray[1 => "one", 2 => "two", 3 => "three"],  // explicit numeric keys, string values
@@ -74,13 +74,13 @@ $arrays = varray [
 
 
 // array to be passsed to $arr2 argument
-$arr2 = array (
-  1, 1.1, 2.2, "hello", "one", NULL, 2,
-  'world', true,5 => false, 1 => 'aaaa\r', "aaaa\r",
-  'h3' => $diff_whitespaces, $numeric_string,
+$arr2 = darray [
+  0 => 1, 1 => 1.1, 2 => 2.2, 3 => "hello", 4 => "one", 5 => NULL, 6 => 2,
+  7 => 'world', 8 => true,5 => false, 1 => 'aaaa\r', 9 => "aaaa\r",
+  'h3' => $diff_whitespaces, 10 => $numeric_string,
   "one" => "ten", 4 => "four", "two" => 2,
-  '', null => "null", '' => 'emptys', "emptyd" => "",
-);
+  11 => '', null => "null", '' => 'emptys', "emptyd" => "",
+];
 
 // loop through each sub-array within $arrrays to check the behavior of array_intersect_assoc()
 $iterator = 1;

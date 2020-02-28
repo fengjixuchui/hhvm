@@ -127,9 +127,9 @@ public:
   }
 
   /**
-   * Put a job into the queue and notify a worker to pick it up.
+   * Put a job into the queue and notify a worker to pick it up if requested.
    */
-  void enqueue(TJob job, int priority=0) {
+  void enqueue(TJob job, int priority = 0, bool eagerNotify = true) {
     assertx(priority >= 0);
     assertx(priority < m_jobQueues.size());
     timespec enqueueTime;
@@ -137,7 +137,7 @@ public:
     Lock lock(this);
     m_jobQueues[priority].emplace_back(job, enqueueTime);
     ++m_jobCount;
-    notify();
+    if (eagerNotify) notify();
   }
 
   /**
@@ -189,10 +189,12 @@ public:
     return m_jobCount;
   }
 
-  int releaseQueuedJobs() {
+  int releaseQueuedJobs(int target = 0) {
     if (m_jobCount) {
       Lock lock(this);
-      auto const toRelease = std::min(3, m_jobCount);
+      const int active = getActiveWorker();
+      auto const toRelease =
+        std::max(1, std::min(target - active, m_jobCount));
       for (int i = 0; i < toRelease; ++i) {
         notify();
       }
@@ -209,10 +211,10 @@ public:
     *expired = false;
     Lock lock(this);
     bool flushed = false;
-    bool ableToDeque = m_healthStatus == nullptr ||
-      m_healthStatus->getHealthLevel() < HealthLevel::NoMore;
 
-    while (m_jobCount == 0 || !ableToDeque) {
+    while (m_jobCount == 0 ||
+           (m_healthStatus &&
+            m_healthStatus->getHealthLevel() >= HealthLevel::NoMore)) {
       uint32_t kNumPriority = m_jobQueues.size();
       if (m_jobQueues[kNumPriority - 1].size() > 0) {
         break;
@@ -247,10 +249,6 @@ public:
         // m_dropCacheTimeout <= 0, a thread that starts waiting more recently
         // should be given a task first (LIFO), same as unflushed threads.
         wait(id, q, highPri ? Priority::Highest : Priority::Normal);
-      }
-
-      if (!ableToDeque) {
-        ableToDeque = m_healthStatus->getHealthLevel() < HealthLevel::NoMore;
       }
     }
     // Stop immediately if the worker has been asked to stop, due to thread
@@ -590,7 +588,12 @@ struct JobQueueDispatcher : IHostHealthObserver {
    * Enqueue a new job.
    */
   void enqueue(typename TWorker::JobType job, int priority = 0) {
-    m_queue.enqueue(job, priority);
+    auto const level = getHealthLevel();
+    auto const eagerNotify =
+      (level < HealthLevel::Cautious) ||
+      ((level == HealthLevel::Cautious) &&
+       (m_queue.getActiveWorker() * 2 <= m_currThreadCountLimit));
+    m_queue.enqueue(job, priority, eagerNotify);
 
     // Spin up another worker thread if appropriate.
     auto const target = getTargetNumWorkers();
@@ -700,11 +703,12 @@ struct JobQueueDispatcher : IHostHealthObserver {
   void notifyNewStatus(HealthLevel newStatus) override {
     if (m_healthStatus >= HealthLevel::NoMore &&
         newStatus < HealthLevel::NoMore) {
+      m_healthStatus = newStatus;
       // release blocked requests in queue if any
-      m_queue.releaseQueuedJobs();
+      m_queue.releaseQueuedJobs(m_currThreadCountLimit / 4);
+    } else {
+      m_healthStatus = newStatus;
     }
-
-    m_healthStatus = newStatus;
   }
 
   HealthLevel getHealthLevel() override {
