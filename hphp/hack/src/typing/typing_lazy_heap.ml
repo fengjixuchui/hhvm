@@ -28,7 +28,7 @@ let check_cache_consistency x expected_kind expected_result =
 
 let get_type_id_filename x expected_kind =
   Counters.count_decl_accessor @@ fun () ->
-  match Naming_heap.Types.get_filename_and_kind x with
+  match Naming_provider.get_type_path_and_kind x with
   | Some (fn, kind) when Naming_types.equal_kind_of_type kind expected_kind ->
     check_cache_consistency x expected_kind fn;
     Some fn
@@ -41,7 +41,7 @@ let get_fun ctx x =
   match Typing_heap.Funs.get x with
   | Some c -> Some c
   | None ->
-    (match Naming_heap.Funs.get_filename x with
+    (match Naming_provider.get_fun_path x with
     | Some filename ->
       let ft =
         Errors.run_in_decl_mode filename (fun () ->

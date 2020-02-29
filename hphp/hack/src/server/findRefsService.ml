@@ -151,7 +151,7 @@ let get_origin_class_name ctx class_name member =
   Option.value origin ~default:class_name
 
 let get_child_classes_files class_name =
-  match Naming_heap.Types.get_kind class_name with
+  match Naming_provider.get_type_kind class_name with
   | Some Naming_types.TClass ->
     (* Find the files that contain classes that extend class_ *)
     let cid_hash = Typing_deps.Dep.make (Typing_deps.Dep.Class class_name) in
@@ -181,7 +181,7 @@ let get_deps_set classes =
     ~init:Relative_path.Set.empty
 
 let get_deps_set_function f_name =
-  match Naming_heap.Funs.get_filename f_name with
+  match Naming_provider.get_fun_path f_name with
   | Some fn ->
     let dep = Typing_deps.Dep.Fun f_name in
     let ideps = Typing_deps.get_ideps dep in
@@ -324,7 +324,7 @@ let get_definitions ctx = function
   | IClass class_name ->
     Option.value
       ~default:[]
-      (Naming_heap.Types.get_kind class_name >>= function
+      (Naming_provider.get_type_kind class_name >>= function
        | Naming_types.TClass ->
          Decl_provider.get_class ctx class_name >>= fun class_ ->
          Some [(class_name, Cls.pos class_)]

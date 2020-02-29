@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<0ecc7fa29391c2c20e1878225a4b6490>>
+// @generated SignedSource<<0959df24ec8c375d80220f3c12f72518>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -12,7 +12,22 @@ use ocamlrep_derive::OcamlRep;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
+#[allow(unused_imports)]
+use crate::*;
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum Parsing {
     FixmeFormat = 1001,
     ParsingError,
@@ -23,7 +38,19 @@ pub enum Parsing {
     XhpParsingError,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum Naming {
     AddATypehint = 2001,
     TypeparamAlokDEPRECATED,
@@ -137,7 +164,19 @@ pub enum Naming {
     PocketUniversesLocalization,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum NastCheck {
     AbstractBody = 3001,
     AbstractWithBody,
@@ -225,7 +264,19 @@ pub enum NastCheck {
     PhpLambdaDisallowed,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum Typing {
     AbstractClassFinalDEPRECATED = 4001,
     UninstantiableClass,
@@ -592,7 +643,19 @@ pub enum Typing {
     BadFunctionPointerConstruction,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum Init {
     ForwardCompatibilityNotCurrent = 8001,
     ForwardCompatibilityBelowMinimum,

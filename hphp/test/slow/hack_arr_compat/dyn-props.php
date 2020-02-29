@@ -6,7 +6,7 @@ class D {
   private $array;
 
   function __construct() {
-    $this->array = array();
+    $this->array = darray[];
   }
 
   function __get($key) {
@@ -17,7 +17,7 @@ class D {
 
 function main() {
   $c = new C();
-  $c->foo = varray[42];
+  $c->foo = __hhvm_intrinsics\dummy_cast_to_kindofarray(vec[42]);
   $c->bar += 42;
   $c->baz++;
   var_dump($c);

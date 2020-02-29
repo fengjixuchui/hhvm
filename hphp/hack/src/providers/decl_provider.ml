@@ -37,7 +37,7 @@ let get_fun (ctx : Provider_context.t) (fun_name : fun_key) : fun_decl option =
       decl_cache
       ~key:(Provider_backend.Decl_cache_entry.Fun_decl fun_name)
       ~default:(fun () ->
-        match Naming_heap.Funs.get_filename fun_name with
+        match Naming_provider.get_fun_path fun_name with
         | Some filename ->
           let ft =
             Errors.run_in_decl_mode filename (fun () ->
@@ -108,8 +108,8 @@ let get_static_method
     convert_class_elt_to_fun_decl smeth
 
 let get_type_id_filename x expected_kind =
-  match Naming_heap.Types.get_filename_and_kind x with
-  | Some (fn, kind) when kind = expected_kind -> Some fn
+  match Naming_provider.get_type_path_and_kind x with
+  | Some (pos, kind) when kind = expected_kind -> Some pos
   | _ -> None
 
 let get_typedef (ctx : Provider_context.t) (typedef_name : string) :

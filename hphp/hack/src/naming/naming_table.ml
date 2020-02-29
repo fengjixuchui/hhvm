@@ -139,7 +139,18 @@
        (although they do still occupy a hash slot).
 *)
 
-type changes_since_baseline = Naming_sqlite.local_changes
+(* Changes since baseline can be None if there was no baseline to begin with.
+  The scenario where we apply changes since baseline instead of relying on
+  the packaged local changes in the LOCAL_CHANGES table is this:
+    1) Load the naming table baseline (may include local changes if it was
+      incrementally updated at some point - not currently done in practice,
+      but possible and likely to happen in the future)
+    2) Load the changes since baseline that include naming changes processed
+      at another time (perhaps, on another host)
+  In the scenario where the naming table is saved to SQLite from an Unbacked
+  naming table, there is no baseline to speak of
+  *)
+type changes_since_baseline = Naming_sqlite.local_changes option
 
 type t =
   | Unbacked of FileInfo.t Relative_path.Map.t
@@ -203,7 +214,10 @@ let get_files a =
 
 let get_files_changed_since_baseline
     (changes_since_baseline : changes_since_baseline) : Relative_path.t list =
-  Relative_path.Map.keys changes_since_baseline.Naming_sqlite.file_deltas
+  match changes_since_baseline with
+  | Some changes_since_baseline ->
+    Relative_path.Map.keys changes_since_baseline.Naming_sqlite.file_deltas
+  | None -> []
 
 let get_file_info a key =
   match a with
@@ -298,12 +312,8 @@ let combine a b =
 let save_changes_since_baseline naming_table ~destination_path =
   let snapshot =
     match naming_table with
-    | Unbacked _ ->
-      {
-        Naming_sqlite.file_deltas = Relative_path.Map.empty;
-        base_content_version = "";
-      }
-    | Backed local_changes -> local_changes
+    | Unbacked _ -> None
+    | Backed local_changes -> Some local_changes
   in
   let contents = Marshal.to_string snapshot [Marshal.No_sharing] in
   Disk.write_file ~file:destination_path ~contents
@@ -403,7 +413,7 @@ let update_reverse_entries file_deltas =
             (fi.FileInfo.classes |> List.map snd |> SSet.of_list);
           Naming_heap.Types.remove_batch
             (fi.FileInfo.typedefs |> List.map snd |> SSet.of_list);
-          Naming_heap.Funs.remove_batch
+          Naming_provider.remove_fun_batch
             (fi.FileInfo.funs |> List.map snd |> SSet.of_list);
           Naming_provider.remove_const_batch
             (fi.FileInfo.consts |> List.map snd |> SSet.of_list)
@@ -420,7 +430,7 @@ let update_reverse_entries file_deltas =
             Naming_heap.Types.add name (pos, Naming_types.TTypedef))
           fi.FileInfo.typedefs;
         List.iter
-          (fun (pos, name) -> Naming_heap.Funs.add name pos)
+          (fun (pos, name) -> Naming_provider.add_fun name pos)
           fi.FileInfo.funs;
         List.iter
           (fun (pos, name) -> Naming_provider.add_const name pos)
@@ -479,11 +489,11 @@ let load_from_sqlite_for_type_checking
   Backed local_changes
 
 let load_from_sqlite_with_changes_since_baseline
-    (changes_since_baseline : Naming_sqlite.local_changes) (db_path : string) :
-    t =
+    (changes_since_baseline : Naming_sqlite.local_changes option)
+    (db_path : string) : t =
   load_from_sqlite_for_type_checking
     ~should_update_reverse_entries:true
-    ~custom_local_changes:(Some changes_since_baseline)
+    ~custom_local_changes:changes_since_baseline
     db_path
 
 let load_from_sqlite_for_batch_update (db_path : string) : t =

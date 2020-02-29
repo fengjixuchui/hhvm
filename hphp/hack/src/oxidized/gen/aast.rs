@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<bc1de51854744bc67eef6f9539e1826f>>
+// @generated SignedSource<<0c7cb356f12109b33826d88b0c5fbfd8>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -12,44 +12,10 @@ use ocamlrep_derive::OcamlRep;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::aast_defs;
-use crate::ast_defs;
-use crate::doc_comment::DocComment;
-use crate::file_info;
-use crate::namespace_env;
-use crate::s_map;
+#[allow(unused_imports)]
+use crate::*;
 
-pub use aast_defs::CallType;
-pub use aast_defs::Enum_;
-pub use aast_defs::FuncReactive;
-pub use aast_defs::Hint;
-pub use aast_defs::HintFun;
-pub use aast_defs::Hint_;
-pub use aast_defs::ImportFlavor;
-pub use aast_defs::IsCoroutine;
-pub use aast_defs::IsReified;
-pub use aast_defs::KvcKind;
-pub use aast_defs::Lid;
-pub use aast_defs::LocalId;
-pub use aast_defs::MutableReturn;
-pub use aast_defs::NastShapeInfo;
-pub use aast_defs::OgNullFlavor;
-pub use aast_defs::ParamMutability;
-pub use aast_defs::Pos;
-pub use aast_defs::Pstring;
-pub use aast_defs::PuLoc;
-pub use aast_defs::ShapeFieldInfo;
-pub use aast_defs::ShapeMap;
-pub use aast_defs::Sid;
-pub use aast_defs::Tprim;
-pub use aast_defs::TypedefVisibility;
-pub use aast_defs::UseAsVisibility;
-pub use aast_defs::VariadicHint;
-pub use aast_defs::VcKind;
-pub use aast_defs::Visibility;
-pub use aast_defs::WhereConstraint;
-pub use aast_defs::XhpChild;
-pub use aast_defs::XhpChildOp;
+pub use aast_defs::*;
 
 /// Aast.program represents the top-level definitions in a Hack program.
 /// ex: Expression annotation type (when typechecking, the inferred dtype)
@@ -59,10 +25,32 @@ pub use aast_defs::XhpChildOp;
 /// inferred missing type if the hint is missing)
 pub type Program<Ex, Fb, En, Hi> = Vec<Def<Ex, Fb, En, Hi>>;
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Stmt<Ex, Fb, En, Hi>(pub Pos, pub Stmt_<Ex, Fb, En, Hi>);
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum Stmt_<Ex, Fb, En, Hi> {
     Fallthrough,
     Expr(Box<Expr<Ex, Fb, En, Hi>>),
@@ -117,7 +105,18 @@ pub enum Stmt_<Ex, Fb, En, Hi> {
     Markup(Box<(Pstring, Option<Expr<Ex, Fb, En, Hi>>)>),
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct UsingStmt<Ex, Fb, En, Hi> {
     pub is_block_scoped: bool,
     pub has_await: bool,
@@ -125,7 +124,18 @@ pub struct UsingStmt<Ex, Fb, En, Hi> {
     pub block: Block<Ex, Fb, En, Hi>,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum AsExpr<Ex, Fb, En, Hi> {
     AsV(Expr<Ex, Fb, En, Hi>),
     AsKv(Expr<Ex, Fb, En, Hi>, Expr<Ex, Fb, En, Hi>),
@@ -135,10 +145,32 @@ pub enum AsExpr<Ex, Fb, En, Hi> {
 
 pub type Block<Ex, Fb, En, Hi> = Vec<Stmt<Ex, Fb, En, Hi>>;
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct ClassId<Ex, Fb, En, Hi>(pub Ex, pub ClassId_<Ex, Fb, En, Hi>);
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum ClassId_<Ex, Fb, En, Hi> {
     CIparent,
     CIself,
@@ -147,16 +179,49 @@ pub enum ClassId_<Ex, Fb, En, Hi> {
     CI(Sid),
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Expr<Ex, Fb, En, Hi>(pub Ex, pub Expr_<Ex, Fb, En, Hi>);
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum CollectionTarg<Hi> {
     CollectionTV(Targ<Hi>),
     CollectionTKV(Targ<Hi>, Targ<Hi>),
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum Expr_<Ex, Fb, En, Hi> {
     Array(Vec<Afield<Ex, Fb, En, Hi>>),
     Darray(
@@ -265,36 +330,113 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     Any,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum ClassGetExpr<Ex, Fb, En, Hi> {
     CGstring(Pstring),
     CGexpr(Expr<Ex, Fb, En, Hi>),
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum AssertExpr<Ex, Fb, En, Hi> {
     AEAssert(Expr<Ex, Fb, En, Hi>),
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum Case<Ex, Fb, En, Hi> {
     Default(Pos, Block<Ex, Fb, En, Hi>),
     Case(Expr<Ex, Fb, En, Hi>, Block<Ex, Fb, En, Hi>),
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Catch<Ex, Fb, En, Hi>(pub Sid, pub Lid, pub Block<Ex, Fb, En, Hi>);
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Field<Ex, Fb, En, Hi>(pub Expr<Ex, Fb, En, Hi>, pub Expr<Ex, Fb, En, Hi>);
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum Afield<Ex, Fb, En, Hi> {
     AFvalue(Expr<Ex, Fb, En, Hi>),
     AFkvalue(Expr<Ex, Fb, En, Hi>, Expr<Ex, Fb, En, Hi>),
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum XhpAttribute<Ex, Fb, En, Hi> {
     XhpSimple(Pstring, Expr<Ex, Fb, En, Hi>),
     XhpSpread(Expr<Ex, Fb, En, Hi>),
@@ -302,7 +444,18 @@ pub enum XhpAttribute<Ex, Fb, En, Hi> {
 
 pub type IsVariadic = bool;
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct FunParam<Ex, Fb, En, Hi> {
     pub annotation: Ex,
     pub type_hint: TypeHint<Hi>,
@@ -316,7 +469,18 @@ pub struct FunParam<Ex, Fb, En, Hi> {
 }
 
 /// does function take varying number of args?
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum FunVariadicity<Ex, Fb, En, Hi> {
     /// PHP5.6 ...$args finishes the func declaration
     FVvariadicArg(FunParam<Ex, Fb, En, Hi>),
@@ -326,7 +490,18 @@ pub enum FunVariadicity<Ex, Fb, En, Hi> {
     FVnonVariadic,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Fun_<Ex, Fb, En, Hi> {
     pub span: Pos,
     pub annotation: En,
@@ -345,7 +520,7 @@ pub struct Fun_<Ex, Fb, En, Hi> {
     /// external function declaration (e.g. from an HHI file)
     pub external: bool,
     pub namespace: Nsenv,
-    pub doc_comment: Option<DocComment>,
+    pub doc_comment: Option<doc_comment::DocComment>,
     pub static_: bool,
 }
 
@@ -355,7 +530,18 @@ pub struct Fun_<Ex, Fb, En, Hi> {
 /// naming is performed where function bodies are named. Thus, naming will
 /// have named and unnamed variants of the annotation.
 /// See BodyNamingAnnotation in nast.ml and the comment in naming.ml
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct FuncBody<Ex, Fb, En, Hi> {
     pub ast: Block<Ex, Fb, En, Hi>,
     pub annotation: Fb,
@@ -364,32 +550,87 @@ pub struct FuncBody<Ex, Fb, En, Hi> {
 /// A type annotation is two things:
 /// - the localized hint, or if the hint is missing, the inferred type
 /// - The typehint associated to this expression if it exists
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct TypeHint<Hi>(pub Hi, pub TypeHint_);
 
 /// Explicit type argument to function, constructor, or collection literal.
 /// 'hi = unit in NAST
 /// 'hi = Typing_defs.(locl ty) in TAST,
 /// and is used to record inferred type arguments, with wildcard hint.
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Targ<Hi>(pub Hi, pub Hint);
 
 pub type TypeHint_ = Option<Hint>;
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct UserAttribute<Ex, Fb, En, Hi> {
     pub name: Sid,
     /// user attributes are restricted to scalar values
     pub params: Vec<Expr<Ex, Fb, En, Hi>>,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct FileAttribute<Ex, Fb, En, Hi> {
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
     pub namespace: Nsenv,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Tparam<Ex, Fb, En, Hi> {
     pub variance: ast_defs::Variance,
     pub name: Sid,
@@ -398,7 +639,18 @@ pub struct Tparam<Ex, Fb, En, Hi> {
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct ClassTparams<Ex, Fb, En, Hi> {
     pub list: Vec<Tparam<Ex, Fb, En, Hi>>,
     /// keeping around the ast version of the constraint only
@@ -407,7 +659,18 @@ pub struct ClassTparams<Ex, Fb, En, Hi> {
     pub constraints: s_map::SMap<(ReifyKind, Vec<(ast_defs::ConstraintKind, Hint)>)>,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct UseAsAlias(
     pub Option<Sid>,
     pub Pstring,
@@ -415,12 +678,34 @@ pub struct UseAsAlias(
     pub Vec<UseAsVisibility>,
 );
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct InsteadofAlias(pub Sid, pub Pstring, pub Vec<Sid>);
 
 pub type IsExtends = bool;
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Class_<Ex, Fb, En, Hi> {
     pub span: Pos,
     pub annotation: En,
@@ -454,16 +739,39 @@ pub struct Class_<Ex, Fb, En, Hi> {
     pub file_attributes: Vec<FileAttribute<Ex, Fb, En, Hi>>,
     pub enum_: Option<Enum_>,
     pub pu_enums: Vec<PuEnum<Ex, Fb, En, Hi>>,
-    pub doc_comment: Option<DocComment>,
+    pub doc_comment: Option<doc_comment::DocComment>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum XhpAttrTag {
     Required,
     LateInit,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct XhpAttr<Ex, Fb, En, Hi>(
     pub TypeHint<Hi>,
     pub ClassVar<Ex, Fb, En, Hi>,
@@ -471,13 +779,35 @@ pub struct XhpAttr<Ex, Fb, En, Hi>(
     pub Option<(Pos, bool, Vec<Expr<Ex, Fb, En, Hi>>)>,
 );
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum ClassAttr<Ex, Fb, En, Hi> {
     CAName(Sid),
     CAField(CaField<Ex, Fb, En, Hi>),
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct CaField<Ex, Fb, En, Hi> {
     pub type_: CaType,
     pub id: Sid,
@@ -485,22 +815,55 @@ pub struct CaField<Ex, Fb, En, Hi> {
     pub required: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum CaType {
     CAHint(Hint),
     CAEnum(Vec<String>),
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct ClassConst<Ex, Fb, En, Hi> {
     pub type_: Option<Hint>,
     pub id: Sid,
     /// expr = None indicates an abstract const
     pub expr: Option<Expr<Ex, Fb, En, Hi>>,
-    pub doc_comment: Option<DocComment>,
+    pub doc_comment: Option<doc_comment::DocComment>,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum TypeconstAbstractKind {
     TCAbstract(Option<Hint>),
     TCPartiallyAbstract,
@@ -512,7 +875,18 @@ pub enum TypeconstAbstractKind {
 /// type const must satisfy the constraint.
 ///
 /// If the type const is not abstract then a type must be specified.
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct ClassTypeconst<Ex, Fb, En, Hi> {
     pub abstract_: TypeconstAbstractKind,
     pub name: Sid,
@@ -520,15 +894,37 @@ pub struct ClassTypeconst<Ex, Fb, En, Hi> {
     pub type_: Option<Hint>,
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
     pub span: Pos,
-    pub doc_comment: Option<DocComment>,
+    pub doc_comment: Option<doc_comment::DocComment>,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct XhpAttrInfo {
     pub xai_tag: Option<XhpAttrTag>,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct ClassVar<Ex, Fb, En, Hi> {
     pub final_: bool,
     pub xhp_attr: Option<XhpAttrInfo>,
@@ -538,13 +934,24 @@ pub struct ClassVar<Ex, Fb, En, Hi> {
     pub id: Sid,
     pub expr: Option<Expr<Ex, Fb, En, Hi>>,
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
-    pub doc_comment: Option<DocComment>,
+    pub doc_comment: Option<doc_comment::DocComment>,
     pub is_promoted_variadic: bool,
     pub is_static: bool,
     pub span: Pos,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Method_<Ex, Fb, En, Hi> {
     pub span: Pos,
     pub annotation: En,
@@ -564,10 +971,21 @@ pub struct Method_<Ex, Fb, En, Hi> {
     /// true if this declaration has no body because it is an external method
     /// declaration (e.g. from an HHI file)
     pub external: bool,
-    pub doc_comment: Option<DocComment>,
+    pub doc_comment: Option<doc_comment::DocComment>,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct MethodRedeclaration<Ex, Fb, En, Hi> {
     pub final_: bool,
     pub abstract_: bool,
@@ -587,7 +1005,18 @@ pub struct MethodRedeclaration<Ex, Fb, En, Hi> {
 
 pub type Nsenv = ocamlrep::rc::RcOc<namespace_env::Env>;
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Typedef<Ex, Fb, En, Hi> {
     pub annotation: En,
     pub name: Sid,
@@ -600,7 +1029,18 @@ pub struct Typedef<Ex, Fb, En, Hi> {
     pub namespace: Nsenv,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct Gconst<Ex, Fb, En, Hi> {
     pub annotation: En,
     pub mode: file_info::Mode,
@@ -611,7 +1051,18 @@ pub struct Gconst<Ex, Fb, En, Hi> {
     pub span: Pos,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct RecordDef<Ex, Fb, En, Hi> {
     pub annotation: En,
     pub name: Sid,
@@ -621,7 +1072,7 @@ pub struct RecordDef<Ex, Fb, En, Hi> {
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
     pub namespace: Nsenv,
     pub span: Pos,
-    pub doc_comment: Option<DocComment>,
+    pub doc_comment: Option<doc_comment::DocComment>,
 }
 
 /// Pocket Universe Enumeration, e.g.
@@ -650,7 +1101,18 @@ pub struct RecordDef<Ex, Fb, En, Hi> {
 ///     ...
 ///   }
 /// ```
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct PuEnum<Ex, Fb, En, Hi> {
     pub annotation: En,
     pub name: Sid,
@@ -660,7 +1122,18 @@ pub struct PuEnum<Ex, Fb, En, Hi> {
     pub members: Vec<PuMember<Ex, Fb, En, Hi>>,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct PuMember<Ex, Fb, En, Hi> {
     pub atom: Sid,
     pub types: Vec<(Sid, Hint)>,
@@ -669,7 +1142,18 @@ pub struct PuMember<Ex, Fb, En, Hi> {
 
 pub type FunDef<Ex, Fb, En, Hi> = Fun_<Ex, Fb, En, Hi>;
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum Def<Ex, Fb, En, Hi> {
     Fun(Box<FunDef<Ex, Fb, En, Hi>>),
     Class(Box<Class_<Ex, Fb, En, Hi>>),
@@ -683,7 +1167,19 @@ pub enum Def<Ex, Fb, En, Hi> {
     FileAttributes(Box<FileAttribute<Ex, Fb, En, Hi>>),
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum NsKind {
     NSNamespace,
     NSClass,
@@ -692,14 +1188,37 @@ pub enum NsKind {
     NSConst,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, OcamlRep, PartialEq, Serialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum ReifyKind {
     Erased,
     SoftReified,
     Reified,
 }
 
-#[derive(Clone, Debug, Deserialize, OcamlRep, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    OcamlRep,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum BreakContinueLevel {
     LevelOk(Option<isize>),
     LevelNonLiteral,

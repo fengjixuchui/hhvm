@@ -23,6 +23,7 @@ let module_blacklist =
     "aast_defs_visitors_ancestors";
     "ast_defs_visitors_ancestors";
     "core_kernel";
+    "common";
     "hh_core";
     "hh_prelude";
     "naming_special_names";
@@ -135,7 +136,7 @@ let structure_item si =
       "Not converting submodule %s: importing crate::%s instead"
       mod_name
       rust_mod_name;
-    add_alias rust_mod_name rust_mod_name
+    add_alias ("crate::" ^ rust_mod_name) rust_mod_name
   | Pstr_module
       {
         pmb_name = { txt = mod_name; _ };
