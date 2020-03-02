@@ -131,7 +131,7 @@ val is_global_tyvar : t -> Ident.t -> bool
 
 val get_global_tyvar_reason : t -> Ident.t -> Reason.t option
 
-val new_global_tyvar : t -> Ident.t -> Typing_reason.t -> t * locl_ty
+val new_global_tyvar : t -> ?i:int -> Typing_reason.t -> t * locl_ty
 
 val wrap_ty_in_var : t -> Typing_reason.t -> locl_ty -> t * locl_ty
 
@@ -215,7 +215,9 @@ val compress_g : t_global -> t_global
 
 (** Split multiple global environments into (weakly) connected components. *)
 val connected_components_g :
-  t_global_with_pos list -> (ISet.t * t_global_with_pos list) list
+  t_global_with_pos list ->
+  additional_edges:ISet.t list ->
+  (ISet.t * t_global_with_pos list) list
 
 (** Remove solved variable from environment by replacing it by its binding. *)
 val remove_var :

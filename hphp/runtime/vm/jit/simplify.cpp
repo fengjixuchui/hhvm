@@ -1932,8 +1932,13 @@ namespace {
 
 template <typename C>
 SSATmp* arrayLikeConvImpl(State& env, const IRInstruction* inst, C convert) {
+  arrprov::TagOverride ap_override{arrprov::tagFromSK(inst->marker().sk())};
   auto const src = inst->src(0);
   if (!src->hasConstVal()) return nullptr;
+  /* we can't fold the conversion if this function is skip frame
+   * and we would assign a new tag at this location */
+  if (RO::EvalArrayProvenance &&
+      inst->func()->isProvenanceSkipFrame()) return nullptr;
   auto const before = src->arrLikeVal();
   auto converted = convert(const_cast<ArrayData*>(before));
   if (!converted) return nullptr;
@@ -2582,7 +2587,8 @@ SSATmp* simplifyCheckType(State& env, const IRInstruction* inst) {
 
 SSATmp* simplifyCheckVArray(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
-  if (!src->type().maybe(Type::Array(ArrayData::kPackedKind))) {
+  // TODO(kshaunak): This logic needs to account for bespoke array-likes.
+  if (!src->type().maybe(TPackedArr)) {
     gen(env, Jmp, inst->taken());
     return cns(env, TBottom);
   }
@@ -2596,7 +2602,8 @@ SSATmp* simplifyCheckVArray(State& env, const IRInstruction* inst) {
 
 SSATmp* simplifyCheckDArray(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
-  if (!src->type().maybe(Type::Array(ArrayData::kMixedKind))) {
+  // TODO(kshaunak): This logic needs to account for bespoke array-likes.
+  if (!src->type().maybe(TMixedArr)) {
     gen(env, Jmp, inst->taken());
     return cns(env, TBottom);
   }
@@ -3331,10 +3338,10 @@ SSATmp* simplifyCount(State& env, const IRInstruction* inst) {
   auto const oneTy = TBool | TInt | TDbl | TStr | TRes;
   if (ty <= oneTy) return cns(env, 1);
 
-  if (ty <= TArr) return gen(env, CountArray, val);
-  if (ty <= TVec) return gen(env, CountVec, val);
-  if (ty <= TDict) return gen(env, CountDict, val);
-  if (ty <= TKeyset) return gen(env, CountKeyset, val);
+  if (ty <= TVanillaArr) return gen(env, CountArray, val);
+  if (ty <= TVanillaVec) return gen(env, CountVec, val);
+  if (ty <= TVanillaDict) return gen(env, CountDict, val);
+  if (ty <= TVanillaKeyset) return gen(env, CountKeyset, val);
 
   if (ty < TObj) {
     auto const cls = ty.clsSpec().cls();

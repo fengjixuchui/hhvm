@@ -9,9 +9,9 @@ from compatibility import *
 import gdb
 import re
 
+import gdbutils
 from gdbutils import *
 from lookup import lookup_func
-from nameof import nameof
 from sizeof import sizeof
 import idx
 
@@ -49,11 +49,9 @@ class StringDataPrinter(object):
 #------------------------------------------------------------------------------
 # TypedValue.
 
-_tv_recurse = False
-
 
 class SetTVRecurseCommand(gdb.Command):
-    """Whether to recurse into TypedValue data ptrs when pretty-printing."""
+    """How many levels to recurse into TypedValue data ptrs when pretty-printing."""
 
     def __init__(self):
         super(SetTVRecurseCommand, self).__init__('set tv-recurse',
@@ -63,25 +61,26 @@ class SetTVRecurseCommand(gdb.Command):
     def invoke(self, args, from_tty):
         argv = gdb.string_to_argv(args)
 
-        if len(argv) != 1:
-            print('Requires an argument. Valid arguments are true, false.')
-            return
+        if len(argv) == 1:
+            if argv[0] == 'true':
+                gdbutils.tv_recurse = 1
+                return
 
-        global _tv_recurse
+            if argv[0] == 'false':
+                gdbutils.tv_recurse = 0
+                return
 
-        if argv[0] == 'true':
-            _tv_recurse = True
-        elif argv[0] == 'false':
-            _tv_recurse = False
-        else:
-            print('Undefined item: "{}"'.format(argv[0]))
+            try:
+                gdbutils.tv_recurse = int(argv[0])
+                return
+            except:
+                pass
+
+        print('Requires an argument. '
+              'Valid arguments are true, false or an integer depth')
 
 
 SetTVRecurseCommand()
-
-
-def DT(kind):
-    return V(kind, 'DataType')
 
 
 class TypedValuePrinter(object):
@@ -91,71 +90,7 @@ class TypedValuePrinter(object):
         self.val = val.cast(T('HPHP::TypedValue'))
 
     def to_string(self):
-        global _tv_recurse
-
-        data = self.val['m_data']
-        t = self.val['m_type']
-        val = None
-        name = None
-
-        if t == DT('HPHP::KindOfUninit') or t == DT('HPHP::KindOfNull'):
-            pass
-
-        elif t == DT('HPHP::KindOfBoolean'):
-            if data['num'] == 0:
-                val = False
-            elif data['num'] == 1:
-                val = True
-            else:
-                val = data['num']
-
-        elif t == DT('HPHP::KindOfInt64'):
-            val = data['num']
-
-        elif t == DT('HPHP::KindOfDouble'):
-            val = data['dbl']
-
-        elif (t == DT('HPHP::KindOfString') or
-              t == DT('HPHP::KindOfPersistentString')):
-            val = data['pstr'].dereference()
-
-        elif (t == V('HPHP::KindOfArray') or
-              t == V('HPHP::KindOfPersistentArray') or
-              t == V('HPHP::KindOfDArray') or
-              t == V('HPHP::KindOfPersistentDArray') or
-              t == V('HPHP::KindOfVArray') or
-              t == V('HPHP::KindOfPersistentVArray') or
-              t == V('HPHP::KindOfDict') or
-              t == V('HPHP::KindOfPersistentDict') or
-              t == V('HPHP::KindOfVec') or
-              t == V('HPHP::KindOfPersistentVec') or
-              t == V('HPHP::KindOfKeyset') or
-              t == V('HPHP::KindOfPersistentKeyset')):
-            val = data['parr']
-            if _tv_recurse:
-                val = val.dereference()
-
-        elif t == DT('HPHP::KindOfObject'):
-            val = data['pobj']
-            if _tv_recurse:
-                val = val.dereference()
-            name = nameof(val)
-
-        elif t == DT('HPHP::KindOfResource'):
-            val = data['pres']
-
-        else:
-            t = 'Invalid(%d)' % t.cast(T('int8_t'))
-            val = "0x%x" % int(data['num'])
-
-        if val is None:
-            out = '{ %s }' % t
-        elif name is None:
-            out = '{ %s, %s }' % (t, str(val))
-        else:
-            out = '{ %s, %s ("%s") }' % (t, str(val), name)
-
-        return out
+        return pretty_tv(self.val['m_type'], self.val['m_data'])
 
 
 #------------------------------------------------------------------------------

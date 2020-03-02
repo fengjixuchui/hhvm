@@ -54,47 +54,6 @@ namespace {
 
 //////////////////////////////////////////////////////////////////////
 
-const StaticString
-  s_is_a("is_a"),
-  s_is_subclass_of("is_subclass_of"),
-  s_method_exists("method_exists"),
-  s_count("count"),
-  s_sizeof("sizeof"),
-  s_ini_get("ini_get"),
-  s_in_array("in_array"),
-  s_get_class("get_class"),
-  s_sqrt("sqrt"),
-  s_strlen("strlen"),
-  s_clock_gettime_ns("clock_gettime_ns"),
-  s_microtime("microtime"),
-  s_max2("__SystemLib\\max2"),
-  s_min2("__SystemLib\\min2"),
-  s_ceil("ceil"),
-  s_floor("floor"),
-  s_abs("abs"),
-  s_ord("ord"),
-  s_chr("chr"),
-  s_array_key_cast("hh\\array_key_cast"),
-  s_type_structure("hh\\type_structure"),
-  s_type_structure_classname("hh\\type_structure_classname"),
-  s_is_list_like("hh\\is_list_like"),
-  s_one("1"),
-  s_container_first("HH\\Lib\\_Private\\Native\\first"),
-  s_container_last("HH\\Lib\\_Private\\Native\\last"),
-  s_container_first_key("HH\\Lib\\_Private\\Native\\first_key"),
-  s_container_last_key("HH\\Lib\\_Private\\Native\\last_key"),
-  s_fun_get_function("HH\\fun_get_function"),
-  s_class_meth_get_class("HH\\class_meth_get_class"),
-  s_class_meth_get_method("HH\\class_meth_get_method"),
-  s_shapes_idx("HH\\Shapes::idx"),
-  s_is_meth_caller("HH\\is_meth_caller"),
-  s_tag_provenance_here("HH\\tag_provenance_here"),
-  s_array_mark_legacy("HH\\array_mark_legacy"),
-  s_meth_caller_get_class("HH\\meth_caller_get_class"),
-  s_meth_caller_get_method("HH\\meth_caller_get_method");
-
-//////////////////////////////////////////////////////////////////////
-
 struct ParamPrep {
   explicit ParamPrep(size_t count, const Func* callee) : info{count} {}
 
@@ -328,10 +287,8 @@ SSATmp* opt_ini_get(IRGS& env, const ParamPrep& params) {
     return cns(env, makeStaticString(folly::to<std::string>(value.toInt64())));
   }
   if (value.isBoolean()) {
-    return cns(
-      env,
-      value.toBoolean() ? s_one.get() : staticEmptyString()
-    );
+    static auto const s_one = makeStaticString("1");
+    return cns(env, value.toBoolean() ? s_one : staticEmptyString());
   }
   // ini_get() is now enhanced to return more than strings.
   // Get out of here if we are something else like an array.
@@ -625,10 +582,7 @@ SSATmp* opt_is_list_like(IRGS& env, const ParamPrep& params) {
     return cns(env, true);
   }
   if (!type.maybe(TArrLike)) return cns(env, false);
-  if (type <= TVec || type <= Type::Array(ArrayData::kPackedKind)) {
-    return cns(env, true);
-  }
-
+  if (type.subtypeOfAny(TVec, TPackedArr)) return cns(env, true);
   return nullptr;
 }
 
@@ -636,6 +590,7 @@ SSATmp* opt_foldable(IRGS& env,
                      const Func* func,
                      const ParamPrep& params,
                      uint32_t numNonDefaultArgs) {
+  ARRPROV_USE_RUNTIME_LOCATION();
   if (!func->isFoldable()) return nullptr;
 
   const Class* cls = nullptr;
@@ -772,17 +727,15 @@ SSATmp* opt_container_first(IRGS& env, const ParamPrep& params) {
   }
   auto const value = params[0].value;
   auto const type = value->type();
-  if (type <= TVec || type <= Type::Array(ArrayData::kPackedKind)) {
+  if (type.subtypeOfAny(TVec, TPackedArr)) {
     auto const r = gen(env, VecFirst, value);
     gen(env, IncRef, r);
     return r;
-  }
-  if (type <= TDict || type <= Type::Array(ArrayData::kMixedKind)) {
+  } else if (type.subtypeOfAny(TDict, TMixedArr)) {
     auto const r = gen(env, DictFirst, value);
     gen(env, IncRef, r);
     return r;
-  }
-  if (type <= TKeyset) {
+  } else if (type <= TKeyset) {
     auto const r = gen(env, KeysetFirst, value);
     gen(env, IncRef, r);
     return r;
@@ -796,17 +749,15 @@ SSATmp* opt_container_last(IRGS& env, const ParamPrep& params) {
   }
   auto const value = params[0].value;
   auto const type = value->type();
-  if (type <= TVec || type <= Type::Array(ArrayData::kPackedKind)) {
+  if (type.subtypeOfAny(TVec, TPackedArr)) {
     auto const r = gen(env, VecLast, value);
     gen(env, IncRef, r);
     return r;
-  }
-  if (type <= TDict || type <= Type::Array(ArrayData::kMixedKind)) {
+  } else if (type.subtypeOfAny(TDict, TMixedArr)) {
     auto const r = gen(env, DictLast, value);
     gen(env, IncRef, r);
     return r;
-  }
-  if (type <= TKeyset) {
+  } else if (type <= TKeyset) {
     auto const r = gen(env, KeysetLast, value);
     gen(env, IncRef, r);
     return r;
@@ -821,7 +772,7 @@ SSATmp* opt_container_first_key(IRGS& env, const ParamPrep& params) {
   auto const value = params[0].value;
   auto const type = value->type();
 
-  if (type <= TVec || type <= Type::Array(ArrayData::kPackedKind)) {
+  if (type.subtypeOfAny(TVec, TPackedArr)) {
     return cond(
       env,
       [&](Block* taken) {
@@ -829,20 +780,14 @@ SSATmp* opt_container_first_key(IRGS& env, const ParamPrep& params) {
           gen(env, CountVec, value) : gen(env, CountArray, value);
         gen(env, JmpZero, taken, length);
       },
-      [&] {
-        return cns(env, 0);
-       },
-      [&] {
-        return cns(env, TInitNull);
-       }
+      [&] { return cns(env, 0); },
+      [&] { return cns(env, TInitNull); }
     );
-  }
-  if (type <= TDict || type <= Type::Array(ArrayData::kMixedKind)) {
+  } else if (type.subtypeOfAny(TDict, TMixedArr)) {
     auto const r = gen(env, DictFirstKey, value);
     gen(env, IncRef, r);
     return r;
-  }
-  if (type <= TKeyset) {
+  } else if (type <= TKeyset) {
     auto const r = gen(env, KeysetFirst, value);
     gen(env, IncRef, r);
     return r;
@@ -857,7 +802,7 @@ SSATmp* opt_container_last_key(IRGS& env, const ParamPrep& params) {
   auto const value = params[0].value;
   auto const type = value->type();
 
-  if (type <= TVec || type <= Type::Array(ArrayData::kPackedKind)) {
+  if (type.subtypeOfAny(TVec, TPackedArr)) {
     return cond(
       env,
       [&](Block* taken) {
@@ -866,20 +811,14 @@ SSATmp* opt_container_last_key(IRGS& env, const ParamPrep& params) {
         gen(env, JmpZero, taken, length);
         return length;
       },
-      [&] (SSATmp* next) {
-        return gen(env, SubInt, next, cns(env, 1));
-       },
-      [&] {
-        return cns(env, TInitNull);
-       }
+      [&] (SSATmp* next) { return gen(env, SubInt, next, cns(env, 1)); },
+      [&] { return cns(env, TInitNull); }
     );
-  }
-  if (type <= TDict || type <= Type::Array(ArrayData::kMixedKind)) {
+  } else if (type.subtypeOfAny(TDict, TMixedArr)) {
     auto const r = gen(env, DictLastKey, value);
     gen(env, IncRef, r);
     return r;
-  }
-  if (type <= TKeyset) {
+  } else if (type <= TKeyset) {
     auto const r = gen(env, KeysetLast, value);
     gen(env, IncRef, r);
     return r;
@@ -1127,6 +1066,65 @@ SSATmp* opt_meth_caller_get_method(IRGS& env, const ParamPrep& params) {
 
 //////////////////////////////////////////////////////////////////////
 
+// Whitelists of builtins that we have optimized HHIR emitters for.
+// The first whitelist here simply lets us look up the functions above.
+
+using OptEmitFn = SSATmp* (*)(IRGS& env, const ParamPrep& params);
+
+const hphp_fast_string_imap<OptEmitFn> s_opt_emit_fns{
+  {"is_a", opt_is_a},
+  {"is_subclass_of", opt_is_subclass_of},
+  {"method_exists", opt_method_exists},
+  {"count", opt_count},
+  {"sizeof", opt_sizeof},
+  {"ini_get", opt_ini_get},
+  {"in_array", opt_in_array},
+  {"get_class", opt_get_class},
+  {"sqrt", opt_sqrt},
+  {"strlen", opt_strlen},
+  {"clock_gettime_ns", opt_clock_gettime_ns},
+  {"microtime", opt_microtime},
+  {"__SystemLib\\max2", opt_max2},
+  {"__SystemLib\\min2", opt_min2},
+  {"ceil", opt_ceil},
+  {"floor", opt_floor},
+  {"abs", opt_abs},
+  {"ord", opt_ord},
+  {"chr", opt_chr},
+  {"hh\\array_key_cast", opt_array_key_cast},
+  {"hh\\type_structure", opt_type_structure},
+  {"hh\\type_structure_classname", opt_type_structure_classname},
+  {"hh\\is_list_like", opt_is_list_like},
+  {"HH\\Lib\\_Private\\Native\\first", opt_container_first},
+  {"HH\\Lib\\_Private\\Native\\last", opt_container_last},
+  {"HH\\Lib\\_Private\\Native\\first_key", opt_container_first_key},
+  {"HH\\Lib\\_Private\\Native\\last_key", opt_container_last_key},
+  {"HH\\fun_get_function", opt_fun_get_function},
+  {"HH\\class_meth_get_class", opt_class_meth_get_class},
+  {"HH\\class_meth_get_method", opt_class_meth_get_method},
+  {"HH\\Shapes::idx", opt_shapes_idx},
+  {"HH\\is_meth_caller", opt_is_meth_caller},
+  {"HH\\tag_provenance_here", opt_tag_provenance_here},
+  {"HH\\array_mark_legacy", opt_array_mark_legacy},
+  {"HH\\meth_caller_get_class", opt_meth_caller_get_class},
+  {"HH\\meth_caller_get_method", opt_meth_caller_get_method},
+};
+
+// This second whitelist, a subset of the first, records which parameter
+// (if any) we need a vanilla input for to generate optimized HHIR.
+
+const hphp_fast_string_imap<int> s_vanilla_params{
+  {"count", 0},
+  {"sizeof", 0},
+  {"HH\\Shapes::idx", 0},
+  {"HH\\Lib\\_Private\\Native\\first", 0},
+  {"HH\\Lib\\_Private\\Native\\last", 0},
+  {"HH\\Lib\\_Private\\Native\\first_key", 0},
+  {"HH\\Lib\\_Private\\Native\\last_key", 0},
+};
+
+//////////////////////////////////////////////////////////////////////
+
 SSATmp* optimizedFCallBuiltin(IRGS& env,
                               const Func* func,
                               const ParamPrep& params,
@@ -1171,48 +1169,9 @@ SSATmp* optimizedFCallBuiltin(IRGS& env,
       // return.
       return cns(env, ad->atPos(0));
     }
-#define X(x) \
-    if (fname->isame(s_##x.get())) return opt_##x(env, params);
 
-    X(get_class)
-    X(in_array)
-    X(ini_get)
-    X(count)
-    X(sizeof)
-    X(is_a)
-    X(is_subclass_of)
-    X(method_exists)
-    X(sqrt)
-    X(strlen)
-    X(clock_gettime_ns)
-    X(microtime)
-    X(max2)
-    X(ceil)
-    X(floor)
-    X(abs)
-    X(ord)
-    X(chr)
-    X(min2)
-    X(array_key_cast)
-    X(type_structure)
-    X(type_structure_classname)
-    X(is_list_like)
-    X(container_first)
-    X(container_last)
-    X(container_first_key)
-    X(container_last_key)
-    X(fun_get_function)
-    X(class_meth_get_class)
-    X(class_meth_get_method)
-    X(shapes_idx)
-    X(is_meth_caller)
-    X(tag_provenance_here)
-    X(array_mark_legacy)
-    X(meth_caller_get_class)
-    X(meth_caller_get_method)
-
-#undef X
-
+    auto const it = s_opt_emit_fns.find(fname->data());
+    if (it != s_opt_emit_fns.end()) return it->second(env, params);
     return nullptr;
   }();
 
@@ -1933,6 +1892,11 @@ void nativeImplInlined(IRGS& env) {
 
 //////////////////////////////////////////////////////////////////////
 
+int getBuiltinVanillaParam(const char* name) {
+  auto const it = s_vanilla_params.find(name);
+  return it != s_vanilla_params.end() ? it->second : -1;
+}
+
 SSATmp* optimizedCallIsObject(IRGS& env, SSATmp* src) {
   if (src->isA(TObj) && src->type().clsSpec()) {
     auto const cls = src->type().clsSpec().cls();
@@ -2169,8 +2133,8 @@ Type builtinReturnType(const Func* builtin) {
     if (auto const hniType = builtin->hniReturnType()) {
       if (isArrayType(*hniType)) {
         auto const& constraint = builtin->returnTypeConstraint();
-        if (constraint.isVArray()) return Type::Array(ArrayData::kPackedKind);
-        if (constraint.isDArray()) return Type::Array(ArrayData::kMixedKind);
+        if (constraint.isVArray()) return TPackedArr;
+        if (constraint.isDArray()) return TMixedArr;
       }
       return Type{*hniType};
     }
