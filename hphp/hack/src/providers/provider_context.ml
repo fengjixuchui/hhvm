@@ -23,30 +23,34 @@ type entry = {
 }
 
 type t = {
+  popt: ParserOptions.t;
   tcopt: TypecheckerOptions.t;
   backend: Provider_backend.t;
   entries: entry Relative_path.Map.t;
 }
 
-let empty_for_tool ~tcopt ~backend =
-  { tcopt; backend; entries = Relative_path.Map.empty }
+let empty_for_tool ~popt ~tcopt ~backend =
+  { popt; tcopt; backend; entries = Relative_path.Map.empty }
 
-let empty_for_worker ~tcopt =
+let empty_for_worker ~popt ~tcopt =
   {
+    popt;
     tcopt;
     backend = Provider_backend.Shared_memory;
     entries = Relative_path.Map.empty;
   }
 
-let empty_for_test ~tcopt =
+let empty_for_test ~popt ~tcopt =
   {
+    popt;
     tcopt;
     backend = Provider_backend.Shared_memory;
     entries = Relative_path.Map.empty;
   }
 
-let empty_for_debugging ~tcopt =
+let empty_for_debugging ~popt ~tcopt =
   {
+    popt;
     tcopt;
     backend = Provider_backend.Shared_memory;
     entries = Relative_path.Map.empty;
@@ -76,9 +80,14 @@ let get_telemetry (t : t) (telemetry : Telemetry.t) : Telemetry.t =
     |> Telemetry.string_
          ~key:"backend"
          ~value:(t.backend |> Provider_backend.t_to_string)
+    |> Telemetry.object_ ~key:"SharedMem" ~value:(SharedMem.get_telemetry ())
+    (* We get SharedMem telemetry for all providers, not just the SharedMem
+  provider, just in case there are code paths which use SharedMem despite
+  it not being the intended provider. *)
   in
   match t.backend with
-  | Provider_backend.Local_memory { decl_cache; shallow_decl_cache; _ } ->
+  | Provider_backend.Local_memory
+      { decl_cache; shallow_decl_cache; linearization_cache; _ } ->
     telemetry
     |> Telemetry.object_
          ~key:"decl_cache"
@@ -88,6 +97,11 @@ let get_telemetry (t : t) (telemetry : Telemetry.t) : Telemetry.t =
          ~value:
            (Provider_backend.Shallow_decl_cache.get_telemetry
               shallow_decl_cache)
+    |> Telemetry.object_
+         ~key:"linearization_cache"
+         ~value:
+           (Provider_backend.Linearization_cache.get_telemetry
+              linearization_cache)
   | _ -> telemetry
 
 let reset_telemetry (t : t) : unit =

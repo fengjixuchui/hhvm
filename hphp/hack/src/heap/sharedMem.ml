@@ -9,6 +9,8 @@
 
 open Hh_core
 
+let ref_has_done_init = ref false
+
 (* Don't change the ordering of this record without updating hh_shared_init in
  * hh_shared.c, which indexes into config objects *)
 type config = {
@@ -91,15 +93,21 @@ let () =
 
 let get_telemetry_list = ref []
 
-let get_telemetry ~(costly : bool) : Telemetry.t =
-  let start_time = Unix.gettimeofday () in
-  let telemetry =
-    List.fold
-      !get_telemetry_list
-      ~init:(Telemetry.create ())
-      ~f:(fun acc get_telemetry -> get_telemetry ~costly acc)
-  in
-  telemetry |> Telemetry.duration ~start_time
+let get_telemetry () : Telemetry.t =
+  (* This function gets called by compute_tast, even in places which
+  deliberately don't initialize shared memory. In these places, no-op,
+  since otherwise reading from hh_log_level would segfault. *)
+  if !ref_has_done_init = false then
+    Telemetry.create ()
+  else
+    let start_time = Unix.gettimeofday () in
+    let telemetry =
+      List.fold
+        !get_telemetry_list
+        ~init:(Telemetry.create ())
+        ~f:(fun acc get_telemetry -> get_telemetry acc)
+    in
+    telemetry |> Telemetry.duration ~start_time
 
 (*****************************************************************************)
 (* Initializes the shared memory. Must be called before forking. *)
@@ -162,6 +170,7 @@ let rec shm_dir_init config ~num_workers = function
     end
 
 let init config ~num_workers =
+  ref_has_done_init := true;
   try anonymous_init config ~num_workers
   with Failed_anonymous_memfd_init ->
     EventLogger.(
@@ -480,7 +489,7 @@ end = struct
   external hh_get_and_deserialize : Key.md5 -> Value.t
     = "hh_get_and_deserialize"
 
-  external hh_remove : Key.md5 -> unit = "hh_remove"
+  external hh_remove : Key.md5 -> int = "hh_remove"
 
   external hh_move : Key.md5 -> Key.md5 -> unit = "hh_move"
 
@@ -496,14 +505,17 @@ end = struct
   let hh_get_and_deserialize x =
     WorkerCancel.with_worker_exit (fun () -> hh_get_and_deserialize x)
 
+  let measure_add = Value.description ^ " (bytes serialized into shared heap)"
+
+  let measure_remove =
+    Value.description ^ " (compressed bytes removed from shared heap)"
+
   let log_serialize compressed original =
     let compressed = float compressed in
     let original = float original in
     let saved = original -. compressed in
     let ratio = compressed /. original in
-    Measure.sample
-      (Value.description ^ " (bytes serialized into shared heap)")
-      compressed;
+    Measure.sample measure_add compressed;
     Measure.sample "ALL bytes serialized into shared heap" compressed;
     Measure.sample
       (Value.description ^ " (bytes saved in shared heap due to compression)")
@@ -530,8 +542,15 @@ end = struct
       Measure.sample "ALL bytes allocated for deserialized value" localheap
     )
 
+  let log_remove compressed =
+    let compressed = float compressed in
+    Measure.sample measure_remove compressed;
+    Measure.sample "ALL compressed bytes removed from shared heap" compressed;
+    ()
+
   let add key value =
     let (compressed_size, original_size) = hh_add key value in
+    (* compressed_size is a negative number if nothing new was added *)
     if hh_log_level () > 0 && compressed_size > 0 then
       log_serialize compressed_size original_size
 
@@ -542,14 +561,40 @@ end = struct
     if hh_log_level () > 0 then log_deserialize (hh_get_size key) (Obj.repr v);
     v
 
-  let remove key = hh_remove key
+  let remove key =
+    let compressed_size = hh_remove key in
+    (* hh_remove assumes the key is present *)
+    if hh_log_level () > 0 then log_remove compressed_size;
+    ()
 
   let move from_key to_key = hh_move from_key to_key
 
-  let get_telemetry ~(costly : bool) (telemetry : Telemetry.t) : Telemetry.t =
-    ignore costly;
-    (* we don't have anything to say about this heap yet *)
-    telemetry
+  let get_telemetry (telemetry : Telemetry.t) : Telemetry.t =
+    let count =
+      Option.merge
+        (Measure.get_count measure_add)
+        ~f:( -. )
+        (Measure.get_count measure_remove)
+    in
+    let bytes =
+      Option.merge
+        (Measure.get_sum measure_add)
+        ~f:( -. )
+        (Measure.get_sum measure_remove)
+    in
+    match (count, bytes) with
+    | (None, _)
+    | (_, None)
+    | (Some 0., _) ->
+      telemetry
+    | (Some count, Some bytes) ->
+      telemetry
+      |> Telemetry.object_
+           ~key:(Value.description ^ ".shared")
+           ~value:
+             ( Telemetry.create ()
+             |> Telemetry.int_ ~key:"count" ~value:(int_of_float count)
+             |> Telemetry.int_ ~key:"bytes" ~value:(int_of_float bytes) )
 
   let () =
     get_telemetry_list := get_telemetry :: !get_telemetry_list;
@@ -826,8 +871,7 @@ functor
         | Some changeset ->
           Hashtbl.iter (commit_action changeset.prev) changeset.current
 
-      let get_telemetry ~(costly : bool) (telemetry : Telemetry.t) : Telemetry.t
-          =
+      let get_telemetry (telemetry : Telemetry.t) : Telemetry.t =
         let rec rec_actions_and_depth acc_count acc_depth changeset_opt =
           match changeset_opt with
           | Some changeset ->
@@ -843,7 +887,7 @@ functor
         If instead we added up reachable words from each frame separately,
         then an item reachable from two frames would be double-counted. *)
         let bytes =
-          if costly then
+          if hh_log_level () > 0 then
             Some (Obj.reachable_words (Obj.repr !stack) * (Sys.word_size / 8))
           else
             None
@@ -1426,7 +1470,7 @@ module LocalCache (UserKeyType : UserKeyType) (Value : Value.Type) = struct
     L1.clear ();
     L2.clear ()
 
-  let get_telemetry ~(costly : bool) (telemetry : Telemetry.t) : Telemetry.t =
+  let get_telemetry (telemetry : Telemetry.t) : Telemetry.t =
     (* Many items are stored in both L1 (ordered) and L2 (freq) caches.
     We don't want to double-count them.
     So: we'll figure out the reachable words of the (L1,L2) tuple,
@@ -1443,7 +1487,7 @@ module LocalCache (UserKeyType : UserKeyType) (Value : Value.Type) = struct
       telemetry
     else
       let bytes =
-        if costly then
+        if hh_log_level () > 0 then
           Some (Obj.reachable_words (Obj.repr (obj1, obj2)) * Sys.word_size / 8)
         else
           None

@@ -24,7 +24,8 @@ end
 
 let ctx_from_server_env (env : ServerEnv.env) : Provider_context.t =
   {
-    Provider_context.tcopt = env.ServerEnv.tcopt;
+    Provider_context.popt = env.ServerEnv.popt;
+    tcopt = env.ServerEnv.tcopt;
     (* TODO: backend should be stored in [env]. *)
     backend = Provider_backend.get ();
     entries = Relative_path.Map.empty;
@@ -254,6 +255,9 @@ let compute_tast_and_errors_unquarantined_internal
     (* prepare logging *)
     Deferred_decl.reset ~enable:false ~threshold_opt:None;
     Provider_context.reset_telemetry ctx;
+    let prev_telemetry =
+      Telemetry.create () |> Provider_context.get_telemetry ctx
+    in
     let prev_tally_state = Counters.reset ~enable:true in
     let t = Unix.gettimeofday () in
 
@@ -289,6 +293,7 @@ let compute_tast_and_errors_unquarantined_internal
       |> Telemetry.float_
            ~key:"duration_decl_and_typecheck"
            ~value:(Unix.gettimeofday () -. t)
+      |> Telemetry.object_ ~key:"prev" ~value:prev_telemetry
     in
     (* File size. *)
     let telemetry =

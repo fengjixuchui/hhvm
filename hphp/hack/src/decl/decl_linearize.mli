@@ -7,18 +7,7 @@
  *
  *)
 
-open Decl_defs
-
-type linearization_kind =
-  | Member_resolution
-  | Ancestor_types
-[@@deriving show]
-
 val get_linearization :
-  ?kind:linearization_kind -> Provider_context.t -> string -> linearization
-
-val push_local_changes : unit -> unit
-
-val pop_local_changes : unit -> unit
-
-val remove_batch : SSet.t -> unit
+  Provider_context.t ->
+  string * Decl_defs.linearization_kind ->
+  Decl_defs.linearization
