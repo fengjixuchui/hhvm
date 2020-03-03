@@ -12,33 +12,51 @@ val with_expr_hook :
 
 val debug_print_last_pos : 'a -> unit
 
-val fun_def :
-  Provider_context.t ->
-  Nast.fun_ ->
-  (Tast.fun_ * Typing_inference_env.t_global_with_pos) option
-
 val class_def :
   Provider_context.t ->
   Nast.class_ ->
   (Tast.class_ * Typing_inference_env.t_global_with_pos list) option
 
-val record_def_def : Provider_context.t -> Nast.record_def -> Tast.record_def
-
 val typedef_def : Provider_context.t -> Nast.typedef -> Tast.typedef
 
-val gconst_def : Provider_context.t -> Nast.gconst -> Tast.gconst
+val expr :
+  ?expected:Typing_helpers.ExpectedTy.t ->
+  Typing_env_types.env ->
+  Nast.expr ->
+  Typing_env_types.env * Tast.expr * Typing_defs.locl_ty
 
-val nast_to_tast_gienv :
-  do_tast_checks:bool ->
-  Provider_context.t ->
-  Nast.program ->
-  Tast.program * Typing_inference_env.t_global_with_pos list
+val user_attribute :
+  Typing_env_types.env ->
+  Nast.user_attribute ->
+  Typing_env_types.env * Tast.user_attribute
 
-(** Run typing on the given named AST (NAST) to produced a typed AST (TAST).
+val stmt : Typing_env_types.env -> Nast.stmt -> Typing_env_types.env * Tast.stmt
 
-Set [do_tast_checks] to [false] to skip running TAST checks on the resulting
-TAST. This means that the associated list of errors may be incomplete. This is
-useful for performance in cases where we want the TAST, but don't need a correct
-list of errors. *)
-val nast_to_tast :
-  do_tast_checks:bool -> Provider_context.t -> Nast.program -> Tast.program
+val bind_param :
+  Typing_env_types.env ->
+  Typing_defs.locl_ty * Nast.fun_param ->
+  Typing_env_types.env * Tast.fun_param
+
+val fun_ :
+  ?abstract:bool ->
+  ?disable:bool ->
+  Typing_env_types.env ->
+  Typing_env_return_info.t ->
+  Pos.t ->
+  Nast.func_body ->
+  Ast_defs.fun_kind ->
+  Typing_env_types.env * Tast.stmt list
+
+val attributes_check_def :
+  Typing_env_types.env ->
+  string ->
+  Nast.user_attribute list ->
+  Typing_env_types.env
+
+val file_attributes :
+  Typing_env_types.env ->
+  Nast.file_attribute list ->
+  Typing_env_types.env * Tast.file_attribute list
+
+val type_param :
+  Typing_env_types.env -> Nast.tparam -> Typing_env_types.env * Tast.tparam

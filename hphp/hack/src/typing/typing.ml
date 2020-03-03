@@ -19,6 +19,7 @@ open Tast
 open Typing_defs
 open Typing_env_types
 open Utils
+open Typing_helpers
 module TFTerm = Typing_func_terminality
 module TUtils = Typing_utils
 module Reason = Typing_reason
@@ -54,46 +55,7 @@ module TPEnv = Type_parameter_env
 
 exception InvalidPocketUniverse
 
-module ExpectedTy : sig
-  [@@@warning "-32"]
-
-  type t = private {
-    pos: Pos.t;
-    reason: Typing_reason.ureason;
-    ty: locl_possibly_enforced_ty;
-  }
-  [@@deriving show]
-
-  [@@@warning "+32"]
-
-  val make : Pos.t -> Typing_reason.ureason -> locl_ty -> t
-
-  (* We will allow coercion to this expected type, if et_enforced=true *)
-  val make_and_allow_coercion :
-    Pos.t -> Typing_reason.ureason -> locl_possibly_enforced_ty -> t
-end = struct
-  (* Some mutually recursive inference functions in typing.ml pass around an ~expected argument that
-   * enables bidirectional type checking. This module abstracts away that type so that it can be
-   * extended and modified without having to touch every consumer. *)
-  type t = {
-    pos: Pos.t;
-    reason: Typing_reason.ureason;
-    ty: locl_possibly_enforced_ty;
-        [@printer Pp_type.pp_possibly_enforced_ty Pp_type.pp_locl]
-  }
-  [@@deriving show]
-
-  let make_and_allow_coercion pos reason ty = { pos; reason; ty }
-
-  let make pos reason locl_ty =
-    make_and_allow_coercion pos reason (MakeType.unenforced locl_ty)
-end
-
-let map_funcbody_annotation an =
-  match an with
-  | Nast.NamedWithUnsafeBlocks -> Tast.HasUnsafeBlocks
-  | Nast.Named -> Tast.NoUnsafeBlocks
-  | Nast.Unnamed _ -> failwith "Should not map over unnamed body"
+module ExpectedTy = Typing_helpers.ExpectedTy
 
 (*****************************************************************************)
 (* Debugging *)
@@ -252,43 +214,6 @@ let get_darray_inst p ty =
   (* It's darray<kty, vty> *)
   | Tarraykind (AKdarray (kty, vty)) -> Some (kty, vty)
   | _ -> get_key_value_collection_inst p ty
-
-let with_timeout env fun_name ~(do_ : env -> 'b) : 'b option =
-  let timeout = (Env.get_tcopt env).GlobalOptions.tco_timeout in
-  if Int.equal timeout 0 then
-    Some (do_ env)
-  else
-    let big_envs = ref [] in
-    let env = { env with big_envs } in
-    Timeout.with_timeout
-      ~timeout
-      ~on_timeout:(fun _ ->
-        List.iter !big_envs (fun (p, env) ->
-            Typing_log.log_key "WARN: environment is too big.";
-            Typing_log.hh_show_env p env);
-        Errors.typechecker_timeout fun_name timeout;
-        None)
-      ~do_:(fun _ -> Some (do_ env))
-
-(*****************************************************************************)
-(* Handling function/method arguments *)
-(*****************************************************************************)
-let param_has_attribute param attr =
-  List.exists param.param_user_attributes (fun { ua_name; _ } ->
-      String.equal attr (snd ua_name))
-
-let has_accept_disposable_attribute param =
-  param_has_attribute param SN.UserAttributes.uaAcceptDisposable
-
-let get_param_mutability param =
-  if param_has_attribute param SN.UserAttributes.uaMutable then
-    Some Param_borrowed_mutable
-  else if param_has_attribute param SN.UserAttributes.uaMaybeMutable then
-    Some Param_maybe_mutable
-  else if param_has_attribute param SN.UserAttributes.uaOwnedMutable then
-    Some Param_owned_mutable
-  else
-    None
 
 (* Check whether this is a function type that (a) either returns a disposable
  * or (b) has the <<__ReturnDisposable>> attribute
@@ -450,33 +375,6 @@ let make_param_local_ty env decl_hint param =
   Typing_reactivity.disallow_atmost_rx_as_rxfunc_on_non_functions env param ty;
   (env, ty)
 
-(* Return a map describing all the fields in this record, including
-   inherited fields, and whether they have a default value. *)
-let all_record_fields (env : env) (rd : Decl_provider.record_def_decl) :
-    (sid * Typing_defs.record_field_req) SMap.t =
-  let record_fields rd =
-    List.fold
-      rd.rdt_fields
-      ~init:SMap.empty
-      ~f:(fun acc (((_, name), _) as f) -> SMap.add name f acc)
-  in
-  let rec loop rd fields decls_seen =
-    match rd.rdt_extends with
-    | Some (_, parent_name) when SSet.mem parent_name decls_seen ->
-      (* Inheritance loop, so we've seen all the records. *)
-      fields
-    | Some (_, parent_name) ->
-      (match Decl_provider.get_record_def (Env.get_ctx env) parent_name with
-      | Some rd ->
-        loop
-          rd
-          (SMap.union fields (record_fields rd))
-          (SSet.add (snd rd.rdt_name) decls_seen)
-      | None -> fields)
-    | None -> fields
-  in
-  loop rd (record_fields rd) (SSet.singleton (snd rd.rdt_name))
-
 (* Given a localized parameter type and parameter information, infer
  * a type for the parameter default expression (if present) and check that
  * it is a subtype of the parameter type (if present). If no parameter type
@@ -585,9 +483,8 @@ let rec bind_param env (ty1, param) =
 and check_param_has_hint env param ty is_code_error =
   let env =
     if is_code_error 4231 then
-      Typing_attributes.check_def
+      attributes_check_def
         env
-        new_object
         SN.AttributeKinds.parameter
         param.param_user_attributes
     else
@@ -623,10 +520,6 @@ and check_inout_return env =
           Errors.inout_return_type_mismatch
       | _ -> env)
 
-and add_decl_errors = function
-  | None -> ()
-  | Some errors -> Errors.merge_into_current errors
-
 and get_callable_variadicity
     ?(is_function = false) ~partial_callback ~pos env variadicity_decl_ty =
   function
@@ -640,156 +533,6 @@ and get_callable_variadicity
       Errors.ellipsis_strict_mode ~require:`Type_and_param_name pos;
     (env, Aast.FVellipsis p)
   | FVnonVariadic -> (env, Aast.FVnonVariadic)
-
-(*****************************************************************************)
-(* Now we are actually checking stuff! *)
-(*****************************************************************************)
-and fun_def ctx f :
-    (Tast.fun_def * Typing_inference_env.t_global_with_pos) option =
-  let env = EnvFromDef.fun_env ctx f in
-  with_timeout env f.f_name ~do_:(fun env ->
-      (* reset the expression dependent display ids for each function body *)
-      Reason.expr_display_id_map := IMap.empty;
-      let pos = fst f.f_name in
-      let decl_header = get_decl_function_header env (snd f.f_name) in
-      let nb = TNBody.func_body ctx f in
-      add_decl_errors
-        (Option.map
-           (Env.get_fun env (snd f.f_name))
-           ~f:(fun x -> Option.value_exn x.fe_decl_errors));
-      let env = Env.open_tyvars env (fst f.f_name) in
-      let env = Env.set_env_function_pos env pos in
-      let env = Env.set_env_pessimize env in
-      let env =
-        Typing_attributes.check_def
-          env
-          new_object
-          SN.AttributeKinds.fn
-          f.f_user_attributes
-      in
-      let reactive =
-        fun_reactivity env.decl_env f.f_user_attributes f.f_params
-      in
-      let mut = TUtils.fun_mutable f.f_user_attributes in
-      let env = Env.set_env_reactive env reactive in
-      let env = Env.set_fun_mutable env mut in
-      NastCheck.fun_ env f;
-      let ety_env = Phase.env_with_self env in
-      let f_tparams : decl_tparam list =
-        List.map
-          f.f_tparams
-          ~f:(Decl_hint.aast_tparam_to_decl_tparam env.decl_env)
-      in
-      let (env, constraints) =
-        Phase.localize_generic_parameters_with_bounds env f_tparams ~ety_env
-      in
-      let env = SubType.add_constraints pos env constraints in
-      let env =
-        Phase.localize_where_constraints ~ety_env env f.f_where_constraints
-      in
-      let env = Env.set_fn_kind env f.f_fun_kind in
-      let (return_decl_ty, params_decl_ty, variadicity_decl_ty) =
-        merge_decl_header_with_hints
-          ~params:f.f_params
-          ~ret:f.f_ret
-          ~variadic:f.f_variadic
-          decl_header
-          env
-      in
-      let (env, return_ty) =
-        match return_decl_ty with
-        | None ->
-          (env, Typing_return.make_default_return ~is_method:false env f.f_name)
-        | Some ty ->
-          let localize env ty = Phase.localize_with_self env ty in
-          Typing_return.make_return_type localize env ty
-      in
-      let return =
-        Typing_return.make_info
-          f.f_fun_kind
-          f.f_user_attributes
-          env
-          ~is_explicit:(Option.is_some (hint_of_type_hint f.f_ret))
-          return_ty
-          return_decl_ty
-      in
-      let (env, param_tys) =
-        List.zip_exn f.f_params params_decl_ty
-        |> List.map_env env ~f:(fun env (param, hint) ->
-               make_param_local_ty env hint param)
-      in
-      let partial_callback = Partial.should_check_error (Env.get_mode env) in
-      let check_has_hint p t = check_param_has_hint env p t partial_callback in
-      List.iter2_exn ~f:check_has_hint f.f_params param_tys;
-      Typing_memoize.check_function env f;
-      let (env, typed_params) =
-        List.map_env env (List.zip_exn param_tys f.f_params) bind_param
-      in
-      let (env, t_variadic) =
-        get_callable_variadicity
-          ~is_function:true
-          ~pos
-          ~partial_callback
-          env
-          variadicity_decl_ty
-          f.f_variadic
-      in
-      let env =
-        set_tyvars_variance_in_callable env return_ty param_tys t_variadic
-      in
-      let local_tpenv = Env.get_tpenv env in
-      let disable =
-        Naming_attributes.mem
-          SN.UserAttributes.uaDisableTypecheckerInternal
-          f.f_user_attributes
-      in
-      let (env, tb) = fun_ ~disable env return pos nb f.f_fun_kind in
-      (* restore original reactivity *)
-      let env = Env.set_env_reactive env reactive in
-      begin
-        match hint_of_type_hint f.f_ret with
-        | None ->
-          if partial_callback 4030 then Errors.expecting_return_type_hint pos
-        | Some hint -> Typing_return.async_suggest_return f.f_fun_kind hint pos
-      end;
-      let (env, file_attrs) = file_attributes env f.f_file_attributes in
-      let (env, tparams) = List.map_env env f.f_tparams type_param in
-      let (env, user_attributes) =
-        List.map_env env f.f_user_attributes user_attribute
-      in
-      let env =
-        Typing_solver.close_tyvars_and_solve env Errors.bad_function_typevar
-      in
-      let env =
-        Typing_solver.solve_all_unsolved_tyvars env Errors.bad_function_typevar
-      in
-      let fundef =
-        {
-          Aast.f_annotation = Env.save local_tpenv env;
-          Aast.f_span = f.f_span;
-          Aast.f_mode = f.f_mode;
-          Aast.f_ret = (return_ty, hint_of_type_hint f.f_ret);
-          Aast.f_name = f.f_name;
-          Aast.f_tparams = tparams;
-          Aast.f_where_constraints = f.f_where_constraints;
-          Aast.f_variadic = t_variadic;
-          Aast.f_params = typed_params;
-          Aast.f_fun_kind = f.f_fun_kind;
-          Aast.f_file_attributes = file_attrs;
-          Aast.f_user_attributes = user_attributes;
-          Aast.f_body =
-            {
-              Aast.fb_ast = tb;
-              fb_annotation = map_funcbody_annotation nb.fb_annotation;
-            };
-          Aast.f_external = f.f_external;
-          Aast.f_namespace = f.f_namespace;
-          Aast.f_doc_comment = f.f_doc_comment;
-          Aast.f_static = f.f_static;
-        }
-      in
-      let (_env, global_inference_env) = Env.extract_global_inference_env env in
-      (fundef, (pos, global_inference_env)))
 
 (*****************************************************************************)
 (* function used to type closures, functions and methods *)
@@ -3111,7 +2854,7 @@ and expr_
           (* TODO T44306013: Ensure that other values for field names are banned. *)
           None
       in
-      let fields_declared = all_record_fields env rd in
+      let fields_declared = Typing_helpers.all_record_fields env rd in
       let fields_present =
         List.map field_values ~f:(fun (name, _value) -> field_name name)
         |> List.filter_opt
@@ -4240,6 +3983,9 @@ and new_object
         gather env tel typed_unpack_element ((c_ty, ctor_fty) :: res) classes)
   in
   gather env [] None [] classes
+
+and attributes_check_def env kind attrs =
+  Typing_attributes.check_def env new_object kind attrs
 
 (* FIXME: we need to separate our instantiability into two parts. Currently,
  * all this function is doing is checking if a given type is inhabited --
@@ -7480,7 +7226,8 @@ and class_def ctx c =
   let env = EnvFromDef.class_env ctx c in
   let tc = Env.get_class env (snd c.c_name) in
   let env = Env.set_env_pessimize env in
-  add_decl_errors Option.(map tc (fun tc -> value_exn (Cls.decl_errors tc)));
+  Typing_helpers.add_decl_errors
+    Option.(map tc (fun tc -> value_exn (Cls.decl_errors tc)));
   let c = TNBody.class_meth_bodies ctx c in
   NastCheck.class_ env c;
   NastInitCheck.class_ env c;
@@ -7511,20 +7258,6 @@ and get_decl_method_header tcopt cls method_id ~is_static =
   else
     None
 
-and get_decl_function_header env function_id =
-  let is_global_inference_on = TCO.global_inference (Env.get_tcopt env) in
-  if is_global_inference_on then
-    match Decl_provider.get_fun (Env.get_ctx env) function_id with
-    | Some { fe_type; _ } ->
-      begin
-        match get_node fe_type with
-        | Tfun fun_type -> Some fun_type
-        | _ -> None
-      end
-    | _ -> None
-  else
-    None
-
 and get_decl_prop_ty env cls ~is_static prop_id =
   let is_global_inference_on = TCO.global_inference (Env.get_tcopt env) in
   if is_global_inference_on then
@@ -7548,7 +7281,7 @@ and class_def_ env c tc =
       | Ast_defs.Cenum -> SN.AttributeKinds.enum
       | _ -> SN.AttributeKinds.cls
     in
-    Typing_attributes.check_def env new_object kind c.c_user_attributes
+    attributes_check_def env kind c.c_user_attributes
   in
   let ctx = Env.get_ctx env in
   if
@@ -7878,9 +7611,8 @@ and typeconst_def
     | _ -> env
   in
   let env =
-    Typing_attributes.check_def
+    attributes_check_def
       env
-      new_object
       SN.AttributeKinds.typeconst
       c_tconst_user_attributes
   in
@@ -8141,15 +7873,13 @@ and class_var_def ~is_static cls env cv =
   in
   let env =
     if is_static then
-      Typing_attributes.check_def
+      attributes_check_def
         env
-        new_object
         SN.AttributeKinds.staticProperty
         cv.cv_user_attributes
     else
-      Typing_attributes.check_def
+      attributes_check_def
         env
-        new_object
         SN.AttributeKinds.instProperty
         cv.cv_user_attributes
   in
@@ -8240,11 +7970,17 @@ and supertype_redeclared_method tc env m =
         | _ -> env)
     |> Option.value ~default:env)
 
+and user_attribute env ua =
+  let (env, typed_ua_params) =
+    List.map_env env ua.ua_params (fun env e ->
+        let (env, te, _) = expr env e in
+        (env, te))
+  in
+  (env, { Aast.ua_name = ua.ua_name; Aast.ua_params = typed_ua_params })
+
 and file_attributes env file_attrs =
   let uas = List.concat_map ~f:(fun fa -> fa.fa_user_attributes) file_attrs in
-  let env =
-    Typing_attributes.check_def env new_object SN.AttributeKinds.file uas
-  in
+  let env = attributes_check_def env SN.AttributeKinds.file uas in
   List.map_env env file_attrs (fun env fa ->
       let (env, user_attributes) =
         List.map_env env fa.fa_user_attributes user_attribute
@@ -8255,14 +7991,6 @@ and file_attributes env file_attrs =
           Aast.fa_namespace = fa.fa_namespace;
         } ))
 
-and user_attribute env ua =
-  let (env, typed_ua_params) =
-    List.map_env env ua.ua_params (fun env e ->
-        let (env, te, _) = expr env e in
-        (env, te))
-  in
-  (env, { Aast.ua_name = ua.ua_name; Aast.ua_params = typed_ua_params })
-
 and reify_kind = function
   | Erased -> Aast.Erased
   | SoftReified -> Aast.SoftReified
@@ -8270,11 +7998,7 @@ and reify_kind = function
 
 and type_param env t =
   let env =
-    Typing_attributes.check_def
-      env
-      new_object
-      SN.AttributeKinds.typeparam
-      t.tp_user_attributes
+    attributes_check_def env SN.AttributeKinds.typeparam t.tp_user_attributes
   in
   let (env, user_attributes) =
     List.map_env env t.tp_user_attributes user_attribute
@@ -8296,26 +8020,6 @@ and class_type_param env ct =
       Aast.c_tparam_constraints =
         SMap.map (Tuple.T2.map_fst ~f:reify_kind) ct.c_tparam_constraints;
     } )
-
-(* If the localized types of the return type is a tyvar we force it to be covariant.
-  The same goes for parameter types, but this time we force them to be contravariant
-*)
-and set_tyvars_variance_in_callable env return_ty param_tys variadic_param_ty =
-  Env.log_env_change "set_tyvars_variance_in_callable" env
-  @@
-  let set_variance = Env.set_tyvar_variance ~for_all_vars:true in
-  let env = set_variance env return_ty in
-  let env = List.fold param_tys ~init:env ~f:(set_variance ~flip:true) in
-  let env =
-    match variadic_param_ty with
-    | FVvariadicArg vparam ->
-      let (_p, ty) = vparam.param_annotation in
-      set_variance env ty ~flip:true
-    | FVellipsis _
-    | FVnonVariadic ->
-      env
-  in
-  env
 
 (* During the decl phase we can, for global inference, add "improved type hints".
    That is we can say that some missing type hints are in fact global tyvars.
@@ -8381,11 +8085,7 @@ and method_def env cls m =
       let env = Env.reinitialize_locals env in
       let env = Env.set_env_function_pos env pos in
       let env =
-        Typing_attributes.check_def
-          env
-          new_object
-          SN.AttributeKinds.mthd
-          m.m_user_attributes
+        attributes_check_def env SN.AttributeKinds.mthd m.m_user_attributes
       in
       let reactive =
         fun_reactivity env.decl_env m.m_user_attributes m.m_params
@@ -8556,7 +8256,7 @@ and method_def env cls m =
 and typedef_def ctx typedef =
   let env = EnvFromDef.typedef_env ctx typedef in
   let tdecl = Env.get_typedef env (snd typedef.t_name) in
-  add_decl_errors
+  Typing_helpers.add_decl_errors
     Option.(map tdecl (fun tdecl -> value_exn tdecl.td_decl_errors));
   let t_tparams : decl_tparam list =
     List.map
@@ -8608,9 +8308,8 @@ and typedef_def ctx typedef =
     | _ -> env
   in
   let env =
-    Typing_attributes.check_def
+    attributes_check_def
       env
-      new_object
       SN.AttributeKinds.typealias
       typedef.t_user_attributes
   in
@@ -8628,48 +8327,6 @@ and typedef_def ctx typedef =
     Aast.t_kind = typedef.t_kind;
     Aast.t_tparams = tparams;
     Aast.t_namespace = typedef.t_namespace;
-  }
-
-and gconst_def ctx cst =
-  let env = EnvFromDef.gconst_env ctx cst in
-  let env = Env.set_env_pessimize env in
-  add_decl_errors (Option.map (Env.get_gconst env (snd cst.cst_name)) ~f:snd);
-
-  let (typed_cst_value, env) =
-    let value = cst.cst_value in
-    match cst.cst_type with
-    | Some hint ->
-      let ty = Decl_hint.hint env.decl_env hint in
-      let ty = Typing_enforceability.compute_enforced_ty env ty in
-      let (env, dty) = Phase.localize_possibly_enforced_with_self env ty in
-      let (env, te, value_type) =
-        let expected =
-          ExpectedTy.make_and_allow_coercion (fst hint) Reason.URhint dty
-        in
-        expr ~expected env value
-      in
-      let env =
-        Typing_coercion.coerce_type
-          (fst hint)
-          Reason.URhint
-          env
-          value_type
-          dty
-          Errors.unify_error
-      in
-      (te, env)
-    | None ->
-      let (env, te, _value_type) = expr env value in
-      (te, env)
-  in
-  {
-    Aast.cst_annotation = Env.save (Env.get_tpenv env) env;
-    Aast.cst_mode = cst.cst_mode;
-    Aast.cst_name = cst.cst_name;
-    Aast.cst_type = cst.cst_type;
-    Aast.cst_value = typed_cst_value;
-    Aast.cst_namespace = cst.cst_namespace;
-    Aast.cst_span = cst.cst_span;
   }
 
 (* Calls the method of a class, but allows the f callback to override the
@@ -8779,149 +8436,5 @@ and class_get_pu_ env cty name =
         | None -> (env, None))
     end
 
-let record_field env f =
-  let (id, hint, e) = f in
-  let ((p, _) as cty) = hint in
-  let (env, cty) =
-    let cty = Decl_hint.hint env.decl_env cty in
-    Phase.localize_with_self env cty
-  in
-  let expected = ExpectedTy.make p Reason.URhint cty in
-  match e with
-  | Some e ->
-    let (env, te, ty) = expr ~expected env e in
-    let env =
-      Typing_coercion.coerce_type
-        p
-        Reason.URhint
-        env
-        ty
-        (MakeType.unenforced cty)
-        Errors.record_init_value_does_not_match_hint
-    in
-    (env, (id, hint, Some te))
-  | None -> (env, (id, hint, None))
-
-let record_def_parent env rd parent_hint =
-  match snd parent_hint with
-  | Aast.Happly ((parent_pos, parent_name), []) ->
-    (match Decl_provider.get_record_def (Env.get_ctx env) parent_name with
-    | Some parent_rd ->
-      (* We can only inherit from abstract records. *)
-      ( if not parent_rd.rdt_abstract then
-        let (parent_pos, parent_name) = parent_rd.rdt_name in
-        Errors.extend_non_abstract_record
-          parent_name
-          (fst rd.rd_name)
-          parent_pos );
-
-      (* Ensure we aren't defining fields that overlap with
-         inherited fields. *)
-      let inherited_fields = all_record_fields env parent_rd in
-      List.iter rd.rd_fields ~f:(fun ((pos, name), _, _) ->
-          match SMap.find_opt name inherited_fields with
-          | Some ((prev_pos, _), _) ->
-            Errors.repeated_record_field name pos prev_pos
-          | None -> ())
-    | None ->
-      (* Something exists with this name (naming succeeded), but it's
-         not a record. *)
-      Errors.unbound_name parent_pos parent_name Errors.RecordContext)
-  | _ ->
-    failwith
-      "Record parent was not an Happly. This should have been a syntax error."
-
-(* Report an error if we have inheritance cycles in record declarations. *)
-let check_record_inheritance_cycle env ((rd_pos, rd_name) : Aast.sid) : unit =
-  let rec worker name trace seen =
-    match Decl_provider.get_record_def (Env.get_ctx env) name with
-    | Some rd ->
-      (match rd.rdt_extends with
-      | Some (_, parent_name) when String.equal parent_name rd_name ->
-        (* This record is in an inheritance cycle.*)
-        Errors.cyclic_record_def trace rd_pos
-      | Some (_, parent_name) when SSet.mem parent_name seen ->
-        (* There's an inheritance cycle higher in the chain. *)
-        ()
-      | Some (_, parent_name) ->
-        worker parent_name (parent_name :: trace) (SSet.add parent_name seen)
-      | None -> ())
-    | None -> ()
-  in
-  worker rd_name [rd_name] (SSet.singleton rd_name)
-
-let record_def_def ctx rd =
-  let env = EnvFromDef.record_def_env ctx rd in
-  (match rd.rd_extends with
-  | Some parent -> record_def_parent env rd parent
-  | None -> ());
-
-  check_record_inheritance_cycle env rd.rd_name;
-
-  let (env, attributes) =
-    List.map_env env rd.rd_user_attributes user_attribute
-  in
-  let (_env, fields) = List.map_env env rd.rd_fields record_field in
-  {
-    Aast.rd_annotation = Env.save (Env.get_tpenv env) env;
-    Aast.rd_name = rd.rd_name;
-    Aast.rd_extends = rd.rd_extends;
-    Aast.rd_abstract = rd.rd_abstract;
-    Aast.rd_fields = fields;
-    Aast.rd_user_attributes = attributes;
-    Aast.rd_namespace = rd.rd_namespace;
-    Aast.rd_span = rd.rd_span;
-    Aast.rd_doc_comment = rd.rd_doc_comment;
-  }
-
-let nast_to_tast_gienv ~(do_tast_checks : bool) ctx nast :
-    _ * Typing_inference_env.t_global_with_pos list =
-  let convert_def = function
-    | Fun f ->
-      begin
-        match fun_def ctx f with
-        | Some (f, env) -> (Aast.Fun f, [env])
-        | None ->
-          failwith
-          @@ Printf.sprintf
-               "Error when typechecking function: %s"
-               (snd f.f_name)
-      end
-    | Constant gc -> (Aast.Constant (gconst_def ctx gc), [])
-    | Typedef td -> (Aast.Typedef (typedef_def ctx td), [])
-    | Class c ->
-      begin
-        match class_def ctx c with
-        | Some (c, envs) -> (Aast.Class c, envs)
-        | None ->
-          failwith
-          @@ Printf.sprintf
-               "Error in declaration of class: %s\n%s"
-               (snd c.c_name)
-               ( Caml.Printexc.get_callstack 99
-               |> Caml.Printexc.raw_backtrace_to_string )
-      end
-    | RecordDef rd -> (Aast.RecordDef (record_def_def ctx rd), [])
-    (* We don't typecheck top level statements:
-     * https://docs.hhvm.com/hack/unsupported/top-level
-     * so just create the minimal env for us to construct a Stmt.
-     *)
-    | Stmt s ->
-      let env = Env.empty ctx Relative_path.default None in
-      (Aast.Stmt (snd (stmt env s)), [])
-    | Namespace _
-    | NamespaceUse _
-    | SetNamespaceEnv _
-    | FileAttributes _ ->
-      failwith
-        "Invalid nodes in NAST. These nodes should be removed during naming."
-  in
-  Nast_check.program ctx nast;
-  let (tast, envs) = List.unzip @@ List.map nast convert_def in
-  let envs = List.concat envs in
-  if do_tast_checks then Tast_check.program ctx tast;
-  (tast, envs)
-
-let nast_to_tast ~do_tast_checks ctx nast =
-  let (tast, _gienvs) = nast_to_tast_gienv ~do_tast_checks ctx nast in
-  tast
+(* External API *)
+let expr ?expected env e = expr ?expected env e
