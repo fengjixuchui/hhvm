@@ -61,6 +61,7 @@ type t = {
   option_rust_lowerer: bool;
   option_enable_first_class_function_pointers: bool;
   option_widen_is_array: bool;
+  option_disable_partial: bool;
 }
 
 let default =
@@ -117,6 +118,7 @@ let default =
     option_rust_lowerer = true;
     option_enable_first_class_function_pointers = false;
     option_widen_is_array = false;
+    option_disable_partial = false;
   }
 
 let constant_folding o = o.option_constant_folding
@@ -220,6 +222,8 @@ let rust_lowerer o = o.option_rust_lowerer
 
 let enable_first_class_function_pointers o =
   o.option_enable_first_class_function_pointers
+
+let disable_partial o = o.option_disable_partial
 
 (**
  * Widen the default behavior of `is_array` from "is exactly a PHP array to"
@@ -406,7 +410,7 @@ let set_option options name value =
   | "hhvm.hack.lang.enable_xhp_class_modifier" ->
     { options with option_enable_xhp_class_modifier = as_bool value }
   | "hhvm.emit_generics_ub" ->
-    { options with option_emit_generics_ub = int_of_string value > 0 }
+    { options with option_emit_generics_ub = as_bool value }
   | "hhvm.hack.lang.disable_xhp_element_mangling" ->
     { options with option_disable_xhp_element_mangling = as_bool value }
   | "hhvm.hack.lang.check_int_overflow" ->
@@ -647,22 +651,29 @@ let extract_config_options_from_json ~init config_json =
     List.fold_left value_setters ~init ~f:(fun opts setter ->
         setter config opts)
 
-(* Construct an instance of Hhbc_options.t from the options passed in as well as
- * as specified in `-v str` on the command line.
- *)
-let get_options_from_config ?(init = default) ?(config_list = []) config_json =
-  let init = extract_config_options_from_json ~init config_json in
+(* Apply overrides by parsing CLI arguments in format `-vNAME=VALUE` *)
+let override_from_cli config_list init =
   List.fold_left config_list ~init ~f:(fun options str ->
       match Str.split_delim (Str.regexp "=") str with
       | [name; value] -> set_option options name value
       | _ -> options)
 
+(* Construct an instance of Hhbc_options.t from the options passed in as well as
+ * as specified in `-v str` on the command line.
+ *)
+let get_options_from_config ?(init = default) ?(config_list = []) config_json =
+  extract_config_options_from_json ~init config_json
+  |> override_from_cli config_list
+
 let apply_config_overrides_statelessly config_list config_jsons =
   List.fold_right
     ~init:default
     ~f:(fun config_json init ->
-      get_options_from_config config_json ~init ~config_list)
+      extract_config_options_from_json
+        ~init
+        (Some (J.json_of_string config_json)))
     config_jsons
+  |> override_from_cli config_list
 
 let compiler_options = ref default
 

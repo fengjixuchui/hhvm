@@ -177,6 +177,8 @@ struct RuntimeOption {
   static folly::Optional<folly::fs::path> GetHomePath(
     const folly::StringPiece user);
 
+  static std::string GetDefaultUser();
+
   /**
    * Find a config file corresponding to the given user and parse its
    * settings into the given ini and hdf objects.
@@ -793,6 +795,7 @@ struct RuntimeOption {
   F(uint32_t, WarnOnIncDecInvalidType, 0)                               \
   F(bool, PromoteEmptyObject,          false)                           \
   F(bool, LibXMLUseSafeSubtrees,       true)                            \
+  F(bool, MoreAccurateMemStats,        true)                            \
   F(bool, AllowScopeBinding,           false)                           \
   F(bool, JitNoGdb,                    true)                            \
   F(bool, SpinOnCrash,                 false)                           \
@@ -1348,6 +1351,8 @@ public:
   static bool SandboxFromCommonRoot;
   static std::string SandboxDirectoriesRoot;
   static std::string SandboxLogsRoot;
+  static std::string SandboxDefaultUserFile;
+  static std::string SandboxHostAlias;
 
   // Debugger options
   static bool EnableHphpdDebugger;
