@@ -43,10 +43,16 @@ let add_type
     unit =
   Naming_heap.Types.add name (pos, kind)
 
+let remove_type_batch (names : SSet.t) : unit =
+  Naming_heap.Types.remove_batch names
+
 let get_type_pos (name : string) : FileInfo.pos option =
   match Naming_heap.Types.get_pos name with
   | Some (pos, _kind) -> Some pos
   | None -> None
+
+let get_type_path (name : string) : Relative_path.t option =
+  Naming_heap.Types.get_filename name
 
 let get_type_pos_and_kind (name : string) :
     (FileInfo.pos * Naming_types.kind_of_type) option =
@@ -62,3 +68,33 @@ let get_type_kind (name : string) : Naming_types.kind_of_type option =
 let get_type_canon_name (ctx : Provider_context.t) (name : string) :
     string option =
   Naming_heap.Types.get_canon_name ctx name
+
+let get_class_path (name : string) : Relative_path.t option =
+  match Naming_heap.Types.get_filename_and_kind name with
+  | Some (fn, Naming_types.TClass) -> Some fn
+  | Some (_, (Naming_types.TRecordDef | Naming_types.TTypedef))
+  | None ->
+    None
+
+let add_class (name : string) (pos : FileInfo.pos) : unit =
+  add_type name pos Naming_types.TClass
+
+let get_record_def_path (name : string) : Relative_path.t option =
+  match Naming_heap.Types.get_filename_and_kind name with
+  | Some (fn, Naming_types.TRecordDef) -> Some fn
+  | Some (_, (Naming_types.TClass | Naming_types.TTypedef))
+  | None ->
+    None
+
+let add_record_def (name : string) (pos : FileInfo.pos) : unit =
+  add_type name pos Naming_types.TRecordDef
+
+let get_typedef_path (name : string) : Relative_path.t option =
+  match Naming_heap.Types.get_filename_and_kind name with
+  | Some (fn, Naming_types.TTypedef) -> Some fn
+  | Some (_, (Naming_types.TClass | Naming_types.TRecordDef))
+  | None ->
+    None
+
+let add_typedef (name : string) (pos : FileInfo.pos) : unit =
+  add_type name pos Naming_types.TTypedef

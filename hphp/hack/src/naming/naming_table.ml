@@ -409,9 +409,9 @@ let update_reverse_entries file_deltas =
       begin
         match Naming_sqlite.get_file_info path with
         | Some fi ->
-          Naming_heap.Types.remove_batch
+          Naming_provider.remove_type_batch
             (fi.FileInfo.classes |> List.map snd |> SSet.of_list);
-          Naming_heap.Types.remove_batch
+          Naming_provider.remove_type_batch
             (fi.FileInfo.typedefs |> List.map snd |> SSet.of_list);
           Naming_provider.remove_fun_batch
             (fi.FileInfo.funs |> List.map snd |> SSet.of_list);
@@ -422,12 +422,13 @@ let update_reverse_entries file_deltas =
       match delta with
       | Naming_sqlite.Modified fi ->
         List.iter
-          (fun (pos, name) ->
-            Naming_heap.Types.add name (pos, Naming_types.TClass))
+          (fun (pos, name) -> Naming_provider.add_class name pos)
           fi.FileInfo.classes;
         List.iter
-          (fun (pos, name) ->
-            Naming_heap.Types.add name (pos, Naming_types.TTypedef))
+          (fun (pos, name) -> Naming_provider.add_record_def name pos)
+          fi.FileInfo.record_defs;
+        List.iter
+          (fun (pos, name) -> Naming_provider.add_typedef name pos)
           fi.FileInfo.typedefs;
         List.iter
           (fun (pos, name) -> Naming_provider.add_fun name pos)
