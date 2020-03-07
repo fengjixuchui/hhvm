@@ -115,6 +115,7 @@ pub fn strip_global_ns(s: &str) -> &str {
     s.trim_start_matches("\\")
 }
 
+// TODO(hrust): improve perf: don't use regex and reutrn &str
 pub fn strip_ns(s: &str) -> Cow<str> {
     NS_RE.replace(&s, "")
 }
@@ -247,7 +248,8 @@ pub mod float {
         }
     }
 
-    pub fn to_string(f: f64) -> String {
+    pub fn to_string(f: impl Into<f64>) -> String {
+        let f = f.into();
         // or_else should not happen, but just in case it does fall back
         // to Rust native formatting
         let res = sprintf(f).unwrap_or_else(|| f.to_string());

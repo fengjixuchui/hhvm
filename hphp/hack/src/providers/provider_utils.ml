@@ -117,7 +117,8 @@ let compute_parser_return_and_ast_errors
       Errors.do_with_context
         entry.Provider_context.path
         Errors.Parsing
-        (fun () -> Ast_provider.parse ~full:true ~keep_errors:true ~source_text)
+        (fun () ->
+          Ast_provider.parse ctx ~full:true ~keep_errors:true ~source_text)
     in
     entry.Provider_context.ast_errors <- Some ast_errors;
     entry.Provider_context.parser_return <- Some parser_return;
@@ -179,7 +180,7 @@ let respect_but_quarantine_unsaved_changes
 
         Ide_parser_cache.activate ();
 
-        Naming_heap.push_local_changes ())
+        Naming_provider.push_local_changes ())
       ~exit:(fun () ->
         Errors.set_allow_errors_in_default_path false;
         SharedMem.allow_hashtable_writes_by_current_process true;
@@ -191,7 +192,7 @@ let respect_but_quarantine_unsaved_changes
 
         Ide_parser_cache.deactivate ();
 
-        Naming_heap.pop_local_changes ();
+        Naming_provider.pop_local_changes ();
 
         SharedMem.invalidate_caches ();
 
