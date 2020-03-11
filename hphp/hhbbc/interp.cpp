@@ -168,16 +168,16 @@ bool start_add_elem(ISS& env, Type& ty, Op op) {
   auto const arr = value->m_data.parr;
   env.replacedBcs.push_back(
     [&] () -> Bytecode {
-      if (arr->isKeyset()) {
+      if (arr->isKeysetType()) {
         return bc::Keyset { arr };
       }
-      if (arr->isVecArray()) {
+      if (arr->isVecArrayType()) {
         return bc::Vec { arr };
       }
-      if (arr->isDict()) {
+      if (arr->isDictType()) {
         return bc::Dict { arr };
       }
-      if (arr->isPHPArray()) {
+      if (arr->isPHPArrayType()) {
         return bc::Array { arr };
       }
 
@@ -906,26 +906,26 @@ void in(ISS& env, const bc::String& op) {
 }
 
 void in(ISS& env, const bc::Array& op) {
-  assert(op.arr1->isPHPArray());
+  assert(op.arr1->isPHPArrayType());
   assertx(!RuntimeOption::EvalHackArrDVArrs || op.arr1->isNotDVArray());
   effect_free(env);
   push(env, aval(op.arr1));
 }
 
 void in(ISS& env, const bc::Vec& op) {
-  assert(op.arr1->isVecArray());
+  assert(op.arr1->isVecArrayType());
   effect_free(env);
   push(env, vec_val(op.arr1));
 }
 
 void in(ISS& env, const bc::Dict& op) {
-  assert(op.arr1->isDict());
+  assert(op.arr1->isDictType());
   effect_free(env);
   push(env, dict_val(op.arr1));
 }
 
 void in(ISS& env, const bc::Keyset& op) {
-  assert(op.arr1->isKeyset());
+  assert(op.arr1->isKeysetType());
   effect_free(env);
   push(env, keyset_val(op.arr1));
 }
@@ -4046,12 +4046,10 @@ void in(ISS& env, const bc::FCallFunc& op) {
 }
 
 void in(ISS& env, const bc::ResolveFunc& op) {
-  // TODO (T29639296)
   push(env, TFunc);
 }
 
 void in(ISS& env, const bc::ResolveObjMethod& op) {
-  // TODO (T29639296)
   popC(env);
   popC(env);
   if (RuntimeOption::EvalHackArrDVArrs) {
@@ -4061,9 +4059,45 @@ void in(ISS& env, const bc::ResolveObjMethod& op) {
   }
 }
 
+namespace {
+
+Type ctxCls(ISS& env) {
+  auto const s = selfCls(env);
+  return setctx(s ? *s : TCls);
+}
+
+Type specialClsRefToCls(ISS& env, SpecialClsRef ref) {
+  if (!env.ctx.cls) return TCls;
+  auto const op = [&]()-> folly::Optional<Type> {
+    switch (ref) {
+      case SpecialClsRef::Static: return ctxCls(env);
+      case SpecialClsRef::Self:   return selfClsExact(env);
+      case SpecialClsRef::Parent: return parentClsExact(env);
+    }
+    always_assert(false);
+  }();
+  return op ? *op : TCls;
+}
+
+} // namespace
+
 void in(ISS& env, const bc::ResolveClsMethod& op) {
   popC(env);
-  popC(env);
+  push(env, TClsMeth);
+}
+
+void in(ISS& env, const bc::ResolveClsMethodD& op) {
+  push(env, TClsMeth);
+}
+
+void in(ISS& env, const bc::ResolveClsMethodS& op) {
+  auto const clsTy = specialClsRefToCls(env, op.subop1);
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, op.str2);
+  if (is_specialized_cls(clsTy) && dcls_of(clsTy).type == DCls::Exact &&
+      !rfunc.couldHaveReifiedGenerics()) {
+    auto const clsName = dcls_of(clsTy).cls.name();
+    return reduce(env, bc::ResolveClsMethodD { clsName, op.str2 });
+  }
   push(env, TClsMeth);
 }
 
@@ -4302,24 +4336,6 @@ void in(ISS& env, const bc::FCallClsMethod& op) {
 }
 
 namespace {
-
-Type ctxCls(ISS& env) {
-  auto const s = selfCls(env);
-  return setctx(s ? *s : TCls);
-}
-
-Type specialClsRefToCls(ISS& env, SpecialClsRef ref) {
-  if (!env.ctx.cls) return TCls;
-  auto const op = [&]()-> folly::Optional<Type> {
-    switch (ref) {
-      case SpecialClsRef::Static: return ctxCls(env);
-      case SpecialClsRef::Self:   return selfClsExact(env);
-      case SpecialClsRef::Parent: return parentClsExact(env);
-    }
-    always_assert(false);
-  }();
-  return op ? *op : TCls;
-}
 
 template <typename Op, class UpdateBC>
 void fcallClsMethodSImpl(ISS& env, const Op& op, SString methName, bool dynamic,

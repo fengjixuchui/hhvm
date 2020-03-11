@@ -23,25 +23,29 @@ trait NodeTrait {
         let receiver = Self::receiver();
         let visitor = Self::visitor();
         let use_visitor = Self::use_visitor();
-        let context = format_ident!("{}", ctx.context);
+        let context = ctx.context_ident();
+        let error = ctx.error_ident();
         Ok(quote! {
             #![allow(unused_variables)]
             #use_visitor
+            use super::type_params::Params;
 
-            pub trait #trait_name#ty_params {
+            pub trait #trait_name<P: Params> {
                 fn accept(
                     #receiver,
-                    ctx: &mut #context,
-                    v: &mut dyn #visitor#ty_param_bindings,
-                ) {
+                    ctx: &mut P::#context,
+                    v: &mut dyn #visitor<P = P>,
+                ) -> Result<(), P::#error> {
                     self.recurse(ctx, v)
                 }
 
                 fn recurse(
                     #receiver,
-                    ctx: &mut #context,
-                    v: &mut dyn #visitor#ty_param_bindings,
-                ) { }
+                    ctx: &mut P::#context,
+                    v: &mut dyn #visitor<P = P>,
+                ) -> Result<(), P::#error> {
+                    Ok(())
+                }
             }
         })
     }

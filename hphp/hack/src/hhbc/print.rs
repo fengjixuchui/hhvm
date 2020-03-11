@@ -292,10 +292,8 @@ fn print_fun_def<W: Write>(
         print_upper_bounds(w, &body.upper_bounds)?;
     }
     print_fun_attrs(ctx, w, fun_def)?;
-    if ctx.opts.source_map() {
-        w.write(string_of_span(&fun_def.span))?;
-        w.write(" ")?;
-    }
+    w.write(string_of_span(&fun_def.span))?;
+    w.write(" ")?;
     option(w, &body.return_type_info, print_type_info)?;
     w.write(" ")?;
     w.write(fun_def.name.to_raw_string())?;
@@ -678,9 +676,7 @@ fn print_class_def<W: Write>(
     }
     print_class_special_attributes(ctx, w, class_def)?;
     w.write(class_def.name.to_raw_string())?;
-    if ctx.opts.source_map() {
-        w.write(format!(" {}", string_of_span(&class_def.span)))?;
-    }
+    w.write(format!(" {}", string_of_span(&class_def.span)))?;
     print_extends(w, class_def.base.as_ref().map(|x| x.to_raw_string()))?;
     print_implements(w, &class_def.implements)?;
     w.write(" {")?;
@@ -815,7 +811,7 @@ fn print_adata<W: Write>(ctx: &mut Context, w: &mut W, tv: &TypedValue) -> Resul
         TypedValue::VArray((values, loc)) => {
             print_adata_collection_argument(ctx, w, VARRAY_PREFIX, loc, values)
         }
-        TypedValue::HhasAdata(_) => not_impl!(),
+        TypedValue::HhasAdata(s) => not_impl!(),
     }
 }
 
@@ -865,9 +861,7 @@ fn print_file_attributes<W: Write>(
 
 fn print_main<W: Write>(ctx: &mut Context, w: &mut W, body: &HhasBody) -> Result<(), W::Error> {
     w.write(".main ")?;
-    if ctx.opts.source_map() {
-        w.write("(1,1) ")?;
-    }
+    w.write("(1,1) ")?;
     wrap_by_braces(w, |w| {
         ctx.block(w, |c, w| print_body(c, w, body))?;
         newline(w)
@@ -1816,17 +1810,20 @@ fn print_op<W: Write>(w: &mut W, op: &InstructOperator) -> Result<(), W::Error> 
             print_function_id(w, id)
         }
         I::ResolveObjMethod => w.write("ResolveObjMethod"),
-        I::ResolveClsMethod(op) => concat_str_by(
-            w,
-            " ",
-            [
-                "ResolveClsMethod",
-                match op {
-                    ClsMethResolveOp::Warn => "Warn",
-                    ClsMethResolveOp::NoWarn => "NoWarn",
-                },
-            ],
-        ),
+        I::ResolveClsMethod(mid) => {
+            w.write("ResolveClsMethod")?;
+            print_method_id(w, mid)
+        }
+        I::ResolveClsMethodD(cid, mid) => {
+            w.write("ResolveClsMethodD")?;
+            print_class_id(w, cid)?;
+            print_method_id(w, mid)
+        }
+        I::ResolveClsMethodS(r, mid) => {
+            w.write("ResolveClsMethodS")?;
+            print_special_cls_ref(w, r)?;
+            print_method_id(w, mid)
+        }
         I::Fatal(fatal_op) => print_fatal_op(w, fatal_op),
     }
 }
@@ -2006,7 +2003,13 @@ fn print_expr<W: Write>(
     match expr {
         E_::Id(id) => w.write(adjust_id(env, &id.1)),
         E_::Lvar(lid) => w.write(escaper::escape(&(lid.1).1)),
-        E_::Float(f) => not_impl!(),
+        E_::Float(f) => {
+            w.write(if f.contains('E') || f.contains('e') {
+                format!("{:.1}E", f.parse::<f64>().map_err(|_| Error::fail(format!("ParseFloatError: {}", f)))?)
+            } else {
+                f.into()
+            })
+        }
         E_::Int(i) => {
             w.write(integer::to_decimal(i.as_str()).map_err(|_| Error::fail("ParseIntError"))?)
         }

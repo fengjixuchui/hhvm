@@ -100,8 +100,8 @@ let compute_fileinfo_for_path (env : ServerEnv.env) (path : Relative_path.t) :
     match contents with
     | None -> (None, None)
     (* The file couldn't be read from disk. Assume it's been deleted or is
-      otherwise inaccessible. We've already deleted the entries from the naming
-      table and reverse naming table, so there's nothing left to do here. *)
+      otherwise inaccessible. Our caller will delete the entries from the
+      naming and reverse naming table; there's nothing for us to do here. *)
     | Some contents ->
       (* We don't want our symbols to be mangled for export.  Mangling would
        * convert :xhp:myclass to __xhp_myclass, which would fail name lookup *)
@@ -207,6 +207,7 @@ let compute_fileinfo_for_path (env : ServerEnv.env) (path : Relative_path.t) :
 
 let update_naming_table
     ~(env : ServerEnv.env)
+    ~(ctx : Provider_context.t)
     ~(path : Relative_path.t)
     ~(old_file_info : FileInfo.t option)
     ~(new_file_info : FileInfo.t option) : ServerEnv.env =
@@ -219,6 +220,7 @@ let update_naming_table
       (* Update reverse naming table *)
       FileInfo.(
         Naming_global.remove_decls
+          ~ctx
           ~funs:(strip_positions old_file_info.funs)
           ~classes:(strip_positions old_file_info.classes)
           ~record_defs:(strip_positions old_file_info.record_defs)
@@ -243,15 +245,15 @@ let update_naming_table
       is. *)
       let open FileInfo in
       List.iter new_file_info.funs ~f:(fun (pos, fun_name) ->
-          Naming_provider.add_fun fun_name pos);
+          Naming_provider.add_fun ctx fun_name pos);
       List.iter new_file_info.classes ~f:(fun (pos, class_name) ->
-          Naming_provider.add_class class_name pos);
+          Naming_provider.add_class ctx class_name pos);
       List.iter new_file_info.record_defs ~f:(fun (pos, record_def_name) ->
-          Naming_provider.add_record_def record_def_name pos);
+          Naming_provider.add_record_def ctx record_def_name pos);
       List.iter new_file_info.typedefs ~f:(fun (pos, typedef_name) ->
-          Naming_provider.add_typedef typedef_name pos);
+          Naming_provider.add_typedef ctx typedef_name pos);
       List.iter new_file_info.consts ~f:(fun (pos, const_name) ->
-          Naming_provider.add_const const_name pos);
+          Naming_provider.add_const ctx const_name pos);
 
       (* Update and return the forward naming table *)
       Naming_table.update naming_table path new_file_info
@@ -320,6 +322,8 @@ let process_changed_file
         compute_fileinfo_for_path env path
       in
       invalidate_decls ~ctx ~old_file_info;
-      let env = update_naming_table ~env ~path ~old_file_info ~new_file_info in
+      let env =
+        update_naming_table ~env ~ctx ~path ~old_file_info ~new_file_info
+      in
       let env = update_symbol_index ~env ~path ~facts in
       Lwt.return env

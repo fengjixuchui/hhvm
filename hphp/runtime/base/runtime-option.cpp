@@ -888,8 +888,8 @@ static inline bool eagerGcDefault() {
 
 static inline std::string hackCompilerArgsDefault() {
   return RuntimeOption::RepoAuthoritative
-    ? "-v Hack.Compiler.SourceMapping=1 --daemon --dump-symbol-refs"
-    : "-v Hack.Compiler.SourceMapping=1 --daemon";
+    ? "--daemon --dump-symbol-refs"
+    : "--daemon";
 }
 
 static inline std::string hackCompilerCommandDefault() {
@@ -2780,7 +2780,7 @@ void RuntimeOption::Load(
                    "hphp.cli_server_api_version",
                    IniSetting::SetAndGet<uint64_t>(
                      [](const uint64_t /*value*/) { return false; },
-                     []() { return CLI_SERVER_API_VERSION; }));
+                     []() { return cli_server_api_version(); }));
   IniSetting::Bind(
     IniSetting::CORE, IniSetting::PHP_INI_NONE, "hphp.build_id",
     IniSetting::SetAndGet<std::string>(

@@ -52,13 +52,12 @@ let text_with_formatted_ranges
     ?(range : Interval.t option)
     (text : string)
     (formatted_ranges : (Interval.t * string) list) : Buffer.t =
-  let (start_offset, length) =
+  let (start_offset, end_offset) =
     match range with
-    | Some (start_offset, end_offset) ->
-      (start_offset, end_offset - start_offset)
+    | Some (start_offset, end_offset) -> (start_offset, end_offset)
     | None -> (0, String.length text)
   in
-  let buf = Buffer.create (length + 256) in
+  let buf = Buffer.create (end_offset - start_offset + 256) in
   let bytes_seen = ref start_offset in
   List.iter formatted_ranges (fun ((st, ed), formatted) ->
       for i = !bytes_seen to st - 1 do
@@ -66,7 +65,7 @@ let text_with_formatted_ranges
       done;
       Buffer.add_string buf formatted;
       bytes_seen := ed);
-  for i = !bytes_seen to length - 1 do
+  for i = !bytes_seen to end_offset - 1 do
     Buffer.add_char buf text.[i]
   done;
   buf
@@ -159,20 +158,20 @@ let format_intervals ?config intervals tree =
   in
   let noformat_ranges = get_suppressed_formatting_ranges line_boundaries tree in
   let ranges = Interval.diff_sorted_lists ranges noformat_ranges in
-  let solve_states =
-    Line_splitter.find_solve_states
-      env
-      ~source_text:(SourceText.text source_text)
-      chunk_groups
-  in
   let formatted_ranges =
     List.map ranges (fun range ->
         ( range,
-          Line_splitter.print
+          Line_splitter.solve
             env
             ~range
-            ~include_surrounding_whitespace:false
-            solve_states ))
+            ~include_leading_whitespace:
+              (not
+                 (List.exists atom_boundaries ~f:(fun (st, _) -> fst range = st)))
+            ~include_trailing_whitespace:
+              (not
+                 (List.exists atom_boundaries ~f:(fun (_, ed) -> snd range = ed)))
+            ~source_text:text
+            chunk_groups ))
   in
   let buf = text_with_formatted_ranges text formatted_ranges in
   (* Dirty hack: Since we don't print the whitespace surrounding formatted
@@ -240,7 +239,8 @@ let format_at_offset ?config (tree : SyntaxTree.t) offset =
     Line_splitter.solve
       env
       ~range
-      ~include_surrounding_whitespace:false
+      ~include_leading_whitespace:false
+      ~include_trailing_whitespace:false
       ~source_text:(SourceText.text source_text)
       chunk_groups
   in

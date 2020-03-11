@@ -177,7 +177,8 @@ mod inout_locals {
                     },
                     &mut Ctx { state: acc, env, i },
                     arg,
-                );
+                )
+                .unwrap();
             }
         }
     }
@@ -193,27 +194,15 @@ mod inout_locals {
     }
 
     impl<'a> aast_visitor::Visitor for Visitor<'a> {
-        type Context = Ctx<'a>;
-        type Ex = ast_defs::Pos;
-        type Fb = ();
-        type En = ();
-        type Hi = ();
+        type P = aast_visitor::AstParams<Ctx<'a>, ()>;
 
-        fn object(
-            &mut self,
-        ) -> &mut dyn aast_visitor::Visitor<
-            Context = Self::Context,
-            Ex = Self::Ex,
-            Fb = Self::Fb,
-            En = Self::En,
-            Hi = Self::Hi,
-        > {
+        fn object(&mut self) -> &mut dyn aast_visitor::Visitor<P = Self::P> {
             self
         }
 
-        fn visit_expr_(&mut self, c: &mut Self::Context, p: &tast::Expr_) {
-            p.recurse(c, self.object());
-            match p {
+        fn visit_expr_(&mut self, c: &mut Ctx<'a>, p: &tast::Expr_) -> std::result::Result<(), ()> {
+            p.recurse(c, self.object())?;
+            Ok(match p {
                 tast::Expr_::Binop(expr) => {
                     let (bop, left, _) = &**expr;
                     if let ast_defs::Bop::Eq(_) = bop {
@@ -239,7 +228,7 @@ mod inout_locals {
                         .map(|arg| handle_arg(&c.env, false, c.i, arg, &mut c.state));
                 }
                 _ => (),
-            }
+            })
         }
     }
 
@@ -536,7 +525,19 @@ fn emit_xhp(
 }
 
 fn emit_yield(e: &mut Emitter, env: &Env, pos: &Pos, af: &tast::Afield) -> Result {
-    unimplemented!("TODO(hrust)")
+    Ok(match af {
+        tast::Afield::AFvalue(v) => InstrSeq::gather(vec![
+            emit_expr(e, env, v)?,
+            emit_pos(e, pos)?,
+            InstrSeq::make_yield(),
+        ]),
+        tast::Afield::AFkvalue(k, v) => InstrSeq::gather(vec![
+            emit_expr(e, env, k)?,
+            emit_expr(e, env, v)?,
+            emit_pos(e, pos)?,
+            InstrSeq::make_yieldk(),
+        ]),
+    })
 }
 
 fn emit_import(env: &Env, pos: &Pos, (flavor, expr): &(tast::ImportFlavor, tast::Expr)) -> Result {

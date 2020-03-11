@@ -472,7 +472,7 @@ ALWAYS_INLINE String serialize_impl(const Variant& value,
     case KindOfPersistentVec:
     case KindOfVec: {
       ArrayData* arr = value.getArrayData();
-      assertx(arr->isVecArray());
+      assertx(arr->isVecArrayType());
       if (arr->empty()) {
         return UNLIKELY(RuntimeOption::EvalHackArrDVArrs &&
                         !arr->isLegacyArray())
@@ -485,7 +485,7 @@ ALWAYS_INLINE String serialize_impl(const Variant& value,
     case KindOfPersistentDict:
     case KindOfDict: {
       ArrayData* arr = value.getArrayData();
-      assertx(arr->isDict());
+      assertx(arr->isDictType());
       if (arr->empty()) {
         return UNLIKELY(RuntimeOption::EvalHackArrDVArrs &&
                         !arr->isLegacyArray())
@@ -498,7 +498,7 @@ ALWAYS_INLINE String serialize_impl(const Variant& value,
     case KindOfPersistentKeyset:
     case KindOfKeyset: {
       ArrayData* arr = value.getArrayData();
-      assertx(arr->isKeyset());
+      assertx(arr->isKeysetType());
       if (arr->empty()) return empty_hack(arr, s_EmptyKeysetArray);
       break;
     }
@@ -510,7 +510,7 @@ ALWAYS_INLINE String serialize_impl(const Variant& value,
     case KindOfPersistentArray:
     case KindOfArray: {
       ArrayData *arr = value.getArrayData();
-      assertx(arr->isPHPArray());
+      assertx(arr->isPHPArrayType());
       assertx(!RuntimeOption::EvalHackArrDVArrs || arr->isNotDVArray());
       if (arr->empty()) {
         if (UNLIKELY(RuntimeOption::EvalHackArrCompatSerializeNotices &&
@@ -605,13 +605,6 @@ void HHVM_FUNCTION(parse_str,
                    Array& arr) {
   arr = Array::Create();
   HttpProtocol::DecodeParameters(arr, str.data(), str.size());
-}
-
-/////////////////////////////////////////////////////////////////////////////
-
-Variant HHVM_FUNCTION(hhvm_intrinsics_create_class_pointer, StringArg name) {
-  auto const cls = Unit::loadClass(name.get());
-  return cls ? Variant{cls} : init_null();
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -722,8 +715,6 @@ void StandardExtension::initVariable() {
   if (RuntimeOption::EnableIntrinsicsExtension) {
     HHVM_FALIAS(__hhvm_intrinsics\\serialize_keep_dvarrays,
                 hhvm_intrinsics_serialize_keep_dvarrays);
-    HHVM_FALIAS(__hhvm_intrinsics\\create_class_pointer,
-                hhvm_intrinsics_create_class_pointer);
   }
 
   loadSystemlib("std_variable");

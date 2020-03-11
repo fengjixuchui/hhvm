@@ -2,7 +2,7 @@
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
-use crate::iterator::Iter;
+use crate::iterator;
 use label_rust::Label;
 use oxidized::aast::*;
 use std::collections::{BTreeMap, HashSet};
@@ -14,7 +14,7 @@ type LabelSet = HashSet<String>;
 pub struct LoopLabels {
     label_break: Label,
     label_continue: Label,
-    iterator: Option<Iter>,
+    iterator: Option<iterator::Id>,
 }
 
 #[derive(Clone, Debug)]
@@ -34,7 +34,7 @@ impl JumpTargets {
         self.0.as_slice()
     }
 
-    pub fn get_closest_enclosing_finally_label(&self) -> Option<(Label, Vec<Iter>)> {
+    pub fn get_closest_enclosing_finally_label(&self) -> Option<(Label, Vec<iterator::Id>)> {
         let mut iters = vec![];
         for r in self.0.iter().rev() {
             match r {
@@ -51,7 +51,7 @@ impl JumpTargets {
     }
 
     // NOTE(hrust) this corresponds to collect_iterators in OCaml but doesn't allocate/clone
-    pub fn iterators(&self) -> impl Iterator<Item = &Iter> {
+    pub fn iterators(&self) -> impl Iterator<Item = &iterator::Id> {
         self.0.iter().rev().filter_map(|r| {
             if let Region::Loop(LoopLabels { iterator, .. }, _) = r {
                 iterator.as_ref()
@@ -129,10 +129,13 @@ impl JumpTargets {
         //  }
         for r in self.0.iter().rev() {
             match r {
+                Region::Function(_) | Region::Finally(_) => return ResolvedJumpTarget::NotFound,
                 Region::Using(finally_label, _) | Region::TryFinally(finally_label, _) => {
                     // we need to jump out of try body in try/finally - in order to do this
                     // we should go through the finally block first
-                    skip_try_finally = Some(finally_label);
+                    if skip_try_finally.is_none() {
+                        skip_try_finally = Some((finally_label, level, iters.clone()));
+                    }
                 }
                 Region::Switch(end_label, _) => {
                     if level == 1 {
@@ -165,10 +168,9 @@ impl JumpTargets {
                         level -= 1;
                     }
                 }
-                _ => (),
             }
         }
-        if let Some(finally_label) = skip_try_finally {
+        if let Some((finally_label, level, iters)) = skip_try_finally {
             if let Some(target_label) = label {
                 return ResolvedJumpTarget::ResolvedTryFinally(ResolvedTryFinally {
                     target_label: target_label.clone(),
@@ -249,7 +251,7 @@ impl Gen {
         &mut self,
         label_break: Label,
         label_continue: Label,
-        iterator: Option<Iter>,
+        iterator: Option<iterator::Id>,
         block: &Block<Ex, Fb, En, Hi>,
     ) {
         let labels = self.collect_valid_target_labels_for_block(block);
@@ -275,8 +277,12 @@ impl Gen {
         self.jump_targets.0.push(Region::Switch(end_label, labels));
     }
 
-    pub fn with_try<Ex, Fb, En, Hi>(&mut self, finally_label: Label, stmt: &Stmt<Ex, Fb, En, Hi>) {
-        let labels = self.collect_valid_target_labels_for_stmt(stmt);
+    pub fn with_try<Ex, Fb, En, Hi>(
+        &mut self,
+        finally_label: Label,
+        block: &Block<Ex, Fb, En, Hi>,
+    ) {
+        let labels = self.collect_valid_target_labels_for_block(block);
         self.jump_targets
             .0
             .push(Region::TryFinally(finally_label, labels));
@@ -312,22 +318,22 @@ pub struct ResolvedTryFinally {
     pub target_label: Label,
     pub finally_label: Label,
     pub adjusted_level: usize,
-    pub iterators_to_release: Vec<Iter>,
+    pub iterators_to_release: Vec<iterator::Id>,
 }
 
 pub enum ResolvedJumpTarget {
     NotFound,
     ResolvedTryFinally(ResolvedTryFinally),
-    ResolvedRegular(Label, Vec<Iter>),
+    ResolvedRegular(Label, Vec<iterator::Id>),
 }
 
 pub struct ResolvedGotoFinally {
     pub rgf_finally_start_label: Label,
-    pub rgf_iterators_to_release: Vec<Iter>,
+    pub rgf_iterators_to_release: Vec<iterator::Id>,
 }
 
 pub enum ResolvedGotoTarget {
-    Label(Vec<Iter>),
+    Label(Vec<iterator::Id>),
     Finally(ResolvedGotoFinally),
     GotoFromFinally,
     GotoInvalidLabel,
@@ -494,7 +500,7 @@ impl Gen {
     }
 }
 
-fn add_iterator(it_opt: Option<Iter>, iters: &mut Vec<Iter>) {
+fn add_iterator(it_opt: Option<iterator::Id>, iters: &mut Vec<iterator::Id>) {
     if let Some(it) = it_opt {
         iters.push(it);
     }

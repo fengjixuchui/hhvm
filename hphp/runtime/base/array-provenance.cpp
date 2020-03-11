@@ -21,6 +21,7 @@
 #include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/init-fini-node.h"
 #include "hphp/runtime/base/mixed-array.h"
+#include "hphp/runtime/base/string-data.h"
 #include "hphp/runtime/base/packed-array.h"
 #include "hphp/runtime/vm/vm-regs.h"
 #include "hphp/runtime/vm/srckey.h"
@@ -42,6 +43,13 @@ namespace HPHP { namespace arrprov {
 TRACE_SET_MOD(runtime);
 
 ////////////////////////////////////////////////////////////////////////////////
+
+Tag::Tag(const StringData* filename, int32_t line)
+    : m_filename(ptrAndKind(Kind::Known, filename))
+    , m_line(line)
+  {
+    assertx(IMPLIES(line >= 0, filename && !filename->empty()));
+  }
 
 std::string Tag::toString() const {
   switch (kind()) {
@@ -76,7 +84,7 @@ folly::SharedMutex s_static_provenance_lock;
 
 /*
  * Flush the table after each request since none of the ArrayData*s will be
- * valid anymore 
+ * valid anymore
  */
 InitFiniNode flushTable([]{
   if (!RO::EvalArrayProvenance) return;
@@ -107,7 +115,7 @@ constexpr bool wants_local_prov(const APCArray* a) { return false; }
 
 bool arrayWantsTag(const ArrayData* ad) {
   return !ad->isLegacyArray() && (
-    (RO::EvalArrProvHackArrays && (ad->isVecArray() || ad->isDict())) ||
+    (RO::EvalArrProvHackArrays && (ad->isVecArrayType() || ad->isDictType())) ||
     (RO::EvalArrProvDVArrays && (ad->isVArray() || ad->isDArray()))
   );
 }
@@ -319,9 +327,7 @@ Tag tagFromPC() {
 
   VMRegAnchor _(VMRegAnchor::Soft);
 
-  if (tl_regState != VMRegState::CLEAN ||
-
-      vmfp() == nullptr) {
+  if (tl_regState != VMRegState::CLEAN || vmfp() == nullptr) {
     log_violation("no_fixup");
     return {};
   }
@@ -332,11 +338,11 @@ Tag tagFromPC() {
   ) {
     auto const func = fp->func();
     auto const unit = fp->unit();
-    // grab the filename off the Func* since it might be different
-    // from the unit's for flattened trait methods
-    auto const filename = func->filename();
+    // Builtins have empty filenames, so use the unit; else use func->filename
+    // in order to resolve the original filenames of flattened traits.
+    auto const file = func->isBuiltin() ? unit->filepath() : func->filename();
     auto const line = unit->getLineNumber(offset);
-    return Tag { filename, line };
+    return Tag { file, line };
   };
 
   auto const skip_frame = [] (const ActRec* fp) {
@@ -353,9 +359,11 @@ Tag tagFromSK(SrcKey sk) {
   assert(sk.valid());
   auto const unit = sk.unit();
   auto const func = sk.func();
-  auto const filename = func->filename();
+  // Builtins have empty filenames, so use the unit; else use func->filename
+  // in order to resolve the original filenames of flattened traits.
+  auto const file = func->isBuiltin() ? unit->filepath() : func->filename();
   auto const line = unit->getLineNumber(sk.offset());
-  return Tag { filename, line };
+  return Tag { file, line };
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -464,10 +472,10 @@ TypedValue markTvImpl(TypedValue in, bool recursive) {
   // post-HAM, tag vecs and dicts and notice on any other array-like inputs.
   auto const mark_tv = [&](ArrayData* ad, bool cow) -> ArrayData* {
     if (!RO::EvalHackArrDVArrs) {
-      if (ad->isVecArray()) {
+      if (ad->isVecArrayType()) {
         warn_once(raised_hack_array_notice, Strings::ARRAY_MARK_LEGACY_VEC);
         return nullptr;
-      } else if (ad->isDict()) {
+      } else if (ad->isDictType()) {
         warn_once(raised_hack_array_notice, Strings::ARRAY_MARK_LEGACY_DICT);
         return nullptr;
       } else if (ad->isNotDVArray()) {
@@ -475,14 +483,14 @@ TypedValue markTvImpl(TypedValue in, bool recursive) {
                   "array_mark_legacy expects a varray or darray");
         return nullptr;
       }
-    } else if (!ad->isVecArray() && !ad->isDict()) {
+    } else if (!ad->isVecArrayType() && !ad->isDictType()) {
       warn_once(raised_non_hack_array_notice,
                 "array_mark_legacy expects a dict or vec");
       return nullptr;
     }
 
     if (!RO::EvalHackArrDVArrs) assertx(ad->isDVArray());
-    if (RO::EvalHackArrDVArrs) assertx(ad->isVecArray() || ad->isDict());
+    if (RO::EvalHackArrDVArrs) assertx(ad->isVecArrayType() || ad->isDictType());
     if (ad->isLegacyArray()) return ad;
 
     auto result = copy_if_needed(ad, cow);

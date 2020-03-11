@@ -13,7 +13,9 @@ use emit_pos_rust::{emit_pos, emit_pos_then};
 use env::{emitter::Emitter, local, Env};
 use hhbc_ast_rust::*;
 use hhbc_id_rust::{self as hhbc_id, Id};
+use hhbc_string_utils_rust as string_utils;
 use instruction_sequence_rust::{Error::Unrecoverable, InstrSeq, Result};
+use label_rewriter_rust as label_rewriter;
 use label_rust::Label;
 use naming_special_names_rust::{special_functions, special_idents, superglobals};
 use oxidized::{aast as a, ast as tast, ast_defs, local_id, pos::Pos};
@@ -306,8 +308,36 @@ pub fn emit_stmt(e: &mut Emitter, env: &mut Env, stmt: &tast::Stmt) -> Result {
         a::Stmt_::Continue => Ok(emit_continue(e, env, pos)),
         a::Stmt_::Do(x) => emit_do(e, env, &x.0, &x.1),
         a::Stmt_::For(x) => emit_for(e, env, pos, &x.0, &x.1, &x.2, &x.3),
-        a::Stmt_::Throw(_) => unimplemented!("TODO(hrust)"),
-        a::Stmt_::Try(_) => unimplemented!("TODO(hrust)"),
+        a::Stmt_::Throw(x) => Ok(InstrSeq::gather(vec![
+            emit_expr::emit_expr(e, env, x)?,
+            emit_pos(e, pos),
+            InstrSeq::make_throw(),
+        ])),
+        a::Stmt_::Try(x) => {
+            if env.jump_targets_gen.get_function_has_goto() {
+                tfr::fail_if_goto_from_try_to_finally(&x.0, &x.2)?;
+            }
+            let (try_block, catch_list, finally_block) = &**x;
+            if catch_list.is_empty() {
+                emit_try_finally(e, env, pos, &try_block, &finally_block)
+            } else if finally_block.is_empty() {
+                emit_try_catch(e, env, pos, &try_block, &catch_list[..])
+            } else {
+                //TODO(hrust): avoid cloning block
+                let try_catch_finally = tast::Stmt(
+                    pos.clone(),
+                    tast::Stmt_::mk_try(
+                        vec![tast::Stmt(
+                            pos.clone(),
+                            tast::Stmt_::mk_try(try_block.clone(), catch_list.clone(), vec![]),
+                        )],
+                        vec![],
+                        finally_block.clone(),
+                    ),
+                );
+                emit_stmt(e, env, &try_catch_finally)
+            }
+        }
         a::Stmt_::Switch(_) => unimplemented!("TODO(hrust)"),
         a::Stmt_::Foreach(x) => emit_foreach(e, env, pos, &x.0, &x.1, &x.2),
         a::Stmt_::DefInline(def) => emit_def_inline(e, &**def),
@@ -315,6 +345,206 @@ pub fn emit_stmt(e: &mut Emitter, env: &mut Env, stmt: &tast::Stmt) -> Result {
         a::Stmt_::Markup(x) => emit_markup(e, env, (&x.0, &x.1), false),
         a::Stmt_::Fallthrough | a::Stmt_::Noop => Ok(InstrSeq::Empty),
     }
+}
+
+fn is_empty_block(b: &tast::Block) -> bool {
+    b.iter().all(|s| s.1.is_noop())
+}
+
+fn emit_try_finally(
+    e: &mut Emitter,
+    env: &mut Env,
+    pos: &Pos,
+    try_block: &tast::Block,
+    finally_block: &tast::Block,
+) -> Result {
+    e.local_scope(|e| emit_try_finally_(e, env, pos, try_block, finally_block))
+}
+
+fn emit_try_finally_(
+    e: &mut Emitter,
+    env: &mut Env,
+    pos: &Pos,
+    try_block: &tast::Block,
+    finally_block: &tast::Block,
+) -> Result {
+    if is_empty_block(try_block) {
+        return env.do_in_finally_body(e, finally_block, emit_block);
+    };
+    // We need to generate four things:
+    // (1) the try-body, which will be followed by
+    // (2) the normal-continuation finally body, and
+    // (3) an epilogue to the finally body that deals with finally-blocked
+    //     break and continue
+    // (4) the exceptional-continuation catch body.
+    //
+
+    //     (1) Try body
+
+    // The try body might have un-rewritten continues and breaks which
+    // branch to a label outside of the try. This means that we must
+    // first run the normal-continuation finally, and then branch to the
+    // appropriate label.
+
+    // We do this by running a rewriter which turns continues and breaks
+    // inside the try body into setting temp_local to an integer which indicates
+    // what action the finally must perform when it is finished, followed by a
+    // jump directly to the finally.
+    let finally_start = e.label_gen_mut().next_regular();
+    let finally_end = e.label_gen_mut().next_regular();
+    let mut try_env = env.clone();
+    try_env.flags.set(env::Flags::IN_TRY, true);
+    let try_body = try_env.do_in_try_body(e, finally_start.clone(), try_block, emit_block)?;
+    let jump_instrs = tfr::JumpInstructions::collect(&try_body, &mut env.jump_targets_gen);
+    let jump_instrs_is_empty = jump_instrs.is_empty();
+
+    //  (2) Finally body
+
+    // Note that this is used both in the normal-continuation and
+    // exceptional-continuation cases; we generate the same code twice.
+
+    // TODO: We might consider changing the codegen so that the finally block
+    // is only generated once. We could do this by making the catch block set a
+    // temp local to -1, and then branch to the finally block. In the finally block
+    // epilogue it can check to see if the local is -1, and if so, issue an unwind
+    // instruction.
+
+    // It is illegal to have a continue or break which branches out of a finally.
+    // Unfortunately we at present do not detect this at parse time; rather, we
+    // generate an exception at run-time by rewriting continue and break
+    // instructions found inside finally blocks.
+
+    // TODO: If we make this illegal at parse time then we can remove this pass.
+    let exn_local = e.local_gen_mut().get_unnamed();
+    let finally_body = env.do_in_finally_body(e, finally_block, emit_block)?;
+    let mut finally_body_for_catch = finally_body.clone();
+    label_rewriter::clone_with_fresh_regular_labels(e, &mut finally_body_for_catch);
+
+    //  (3) Finally epilogue
+    let finally_epilogue =
+        tfr::emit_finally_epilogue(e, env, pos, jump_instrs, finally_end.clone())?;
+
+    //  (4) Catch body
+
+    // We now emit the catch body; it is just cleanup code for the temp_local,
+    // a copy of the finally body (without the branching epilogue, since we are
+    // going to unwind rather than branch), and an unwind instruction.
+
+    // TODO: The HHVM emitter sometimes emits seemingly spurious
+    // unset-unnamed-local instructions into the catch block.  These look
+    // like bugs in the emitter. Investigate; if they are bugs in the HHVM
+    // emitter, get them fixed there. If not, get a clear explanation of
+    // what they are for and why they are required.
+
+    let enclosing_span = env.scope.get_span();
+    let try_instrs = if jump_instrs_is_empty {
+        try_body
+    } else {
+        tfr::cleanup_try_body(&try_body)
+    };
+    let catch_instrs = InstrSeq::gather(vec![
+        emit_pos(e, &enclosing_span),
+        make_finally_catch(e, exn_local, finally_body_for_catch),
+    ]);
+    let middle =
+        InstrSeq::create_try_catch(e.label_gen_mut(), None, true, try_instrs, catch_instrs);
+
+    // Putting it all together
+    Ok(InstrSeq::gather(vec![
+        middle,
+        InstrSeq::make_label(finally_start),
+        emit_pos(e, pos),
+        finally_body,
+        finally_epilogue,
+        InstrSeq::make_label(finally_end),
+    ]))
+}
+
+fn make_finally_catch(e: &mut Emitter, exn_local: local::Type, finally_body: InstrSeq) -> InstrSeq {
+    InstrSeq::gather(vec![
+        InstrSeq::make_popl(exn_local.clone()),
+        InstrSeq::make_unsetl(e.local_gen_mut().get_label().clone()),
+        InstrSeq::make_unsetl(e.local_gen_mut().get_retval().clone()),
+        InstrSeq::create_try_catch(
+            e.label_gen_mut(),
+            None,
+            false,
+            finally_body,
+            InstrSeq::gather(vec![
+                InstrSeq::make_pushl(exn_local.clone()),
+                InstrSeq::make_chain_faults(),
+            ]),
+        ),
+        InstrSeq::make_pushl(exn_local),
+        InstrSeq::make_throw(),
+    ])
+}
+
+fn emit_try_catch(
+    e: &mut Emitter,
+    env: &mut Env,
+    pos: &Pos,
+    try_block: &tast::Block,
+    catch_list: &[tast::Catch],
+) -> Result {
+    e.local_scope(|e| emit_try_catch_(e, env, pos, try_block, catch_list))
+}
+
+fn emit_try_catch_(
+    e: &mut Emitter,
+    env: &mut Env,
+    pos: &Pos,
+    try_block: &tast::Block,
+    catch_list: &[tast::Catch],
+) -> Result {
+    if is_empty_block(&try_block) {
+        return Ok(InstrSeq::Empty);
+    };
+    let end_label = e.label_gen_mut().next_regular();
+    let mut try_env = env.clone();
+    try_env.flags.set(env::Flags::IN_TRY, true);
+    let catch_instrs = InstrSeq::gather(
+        catch_list
+            .iter()
+            .map(|catch| emit_catch(e, env, pos, &end_label, catch))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    let try_instrs = InstrSeq::gather(vec![emit_stmts(e, &try_env, try_block)?, emit_pos(e, pos)]);
+    Ok(InstrSeq::create_try_catch(
+        e.label_gen_mut(),
+        Some(end_label.clone()),
+        false,
+        try_instrs,
+        catch_instrs,
+    ))
+}
+
+fn emit_catch(
+    e: &mut Emitter,
+    env: &mut Env,
+    pos: &Pos,
+    end_label: &Label,
+    catch: &tast::Catch,
+) -> Result {
+    // Note that this is a "regular" label; we're not going to branch to
+    // it directly in the event of an exception.
+    let next_catch = e.label_gen_mut().next_regular();
+    // TODO(hrust) enabel `let id = hhbc_id::class::Type::from_ast_name(&(catch.0).1);`,
+    // `from_ast_name` should be able to accpet Cow<str>
+    let id: hhbc_id::class::Type = string_utils::strip_global_ns(&(catch.0).1)
+        .to_string()
+        .into();
+    Ok(InstrSeq::gather(vec![
+        InstrSeq::make_dup(),
+        InstrSeq::make_instanceofd(id),
+        InstrSeq::make_jmpz(next_catch.clone()),
+        InstrSeq::make_setl(local::Type::Named((&((catch.1).1).1).to_string())),
+        InstrSeq::make_popc(),
+        emit_stmts(e, env, &catch.2)?,
+        emit_pos(e, pos),
+        InstrSeq::make_jmp(end_label.clone()),
+        InstrSeq::make_label(next_catch),
+    ]))
 }
 
 fn emit_foreach(
@@ -357,8 +587,7 @@ fn emit_foreach_(
             e,
             loop_break_label.clone(),
             loop_continue_label.clone(),
-            //TODO(hrust): change this to Some(iter_id) once Iter is corrected to IterId in jump_targets
-            None,
+            Some(iter_id),
             block,
             emit_block,
         )?;
@@ -554,7 +783,7 @@ fn emit_iterator_lvalue_storage(
             let (preamble, load_values) = emit_load_list_elements(
                 e,
                 env,
-                &mut vec![InstrSeq::make_basel(local.clone(), MemberOpMode::Warn)],
+                vec![InstrSeq::make_basel(local.clone(), MemberOpMode::Warn)],
                 es,
             )?;
             let load_values = vec![
@@ -590,13 +819,13 @@ fn emit_iterator_lvalue_storage(
 fn emit_load_list_elements(
     e: &mut Emitter,
     env: &mut Env,
-    path: &mut Vec<InstrSeq>,
+    path: Vec<InstrSeq>,
     es: &[tast::Expr],
 ) -> Result<(Vec<InstrSeq>, Vec<InstrSeq>)> {
     let (preamble, load_value): (Vec<Vec<InstrSeq>>, Vec<Vec<InstrSeq>>) = es
         .iter()
         .enumerate()
-        .map(|(i, x)| emit_load_list_element(e, env, path, i, x))
+        .map(|(i, x)| emit_load_list_element(e, env, path.clone(), i, x))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .unzip();
@@ -609,30 +838,29 @@ fn emit_load_list_elements(
 fn emit_load_list_element(
     e: &mut Emitter,
     env: &mut Env,
-    path: &mut Vec<InstrSeq>,
+    mut path: Vec<InstrSeq>,
     i: usize,
     elem: &tast::Expr,
 ) -> Result<(Vec<InstrSeq>, Vec<InstrSeq>)> {
-    if let tast::Expr_::List(es) = &elem.1 {
-        let instr_dim = InstrSeq::make_dim(MemberOpMode::Warn, MemberKey::EI(i as i64));
-        path.push(instr_dim);
-        return emit_load_list_elements(e, env, path, es);
+    let query_value = |path| {
+        InstrSeq::gather(vec![
+            InstrSeq::gather(path),
+            InstrSeq::make_querym(0, QueryOp::CGet, MemberKey::EI(i as i64)),
+        ])
     };
-
-    assert_eq!(elem.1.is_list(), false);
-
-    let query_value = InstrSeq::gather(vec![
-        InstrSeq::gather(path.to_vec()),
-        InstrSeq::make_querym(0, QueryOp::CGet, MemberKey::EI(i as i64)),
-    ]);
     Ok(match &elem.1 {
         tast::Expr_::Lvar(lid) => {
             let load_value = InstrSeq::gather(vec![
-                query_value,
+                query_value(path),
                 InstrSeq::make_setl(local::Type::Named(local_id::get_name(&lid.1).into())),
                 InstrSeq::make_popc(),
             ]);
             (vec![], vec![load_value])
+        }
+        tast::Expr_::List(es) => {
+            let instr_dim = InstrSeq::make_dim(MemberOpMode::Warn, MemberKey::EI(i as i64));
+            path.push(instr_dim);
+            emit_load_list_elements(e, env, path, es)?
         }
         _ => {
             let set_instrs = emit_expr::emit_lval_op_nonlist(
@@ -641,7 +869,7 @@ fn emit_load_list_element(
                 &elem.0,
                 LValOp::Set,
                 elem,
-                query_value,
+                query_value(path),
                 1,
                 false,
             )?;

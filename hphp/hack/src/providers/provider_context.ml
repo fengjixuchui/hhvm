@@ -59,20 +59,30 @@ let empty_for_debugging ~popt ~tcopt =
 let map_tcopt (t : t) ~(f : TypecheckerOptions.t -> TypecheckerOptions.t) : t =
   { t with tcopt = f t.tcopt }
 
-let global_context : t option ref = ref None
+(** ref_is_quarantined stores the stack at which it was last changed,
+so we can give better failwith error messages where appropriate. *)
+let ref_is_quarantined : (bool * Utils.callstack) ref =
+  ref (false, Utils.Callstack "init")
 
-let get_global_context () : t option = !global_context
+let is_quarantined () : bool = !ref_is_quarantined |> fst
 
-let set_global_context_internal (t : t) : unit =
-  match !global_context with
-  | Some _ ->
-    failwith "set_global_context_internal: a global context is already set"
-  | None -> global_context := Some t
+let set_is_quarantined_internal () : unit =
+  match !ref_is_quarantined with
+  | (true, Utils.Callstack stack) ->
+    failwith ("set_is_quarantined: was already quarantined at\n" ^ stack)
+  | (false, _) ->
+    ref_is_quarantined :=
+      (true, Utils.Callstack (Exception.get_current_callstack_string 99))
 
-let unset_global_context_internal () : unit =
-  match !global_context with
-  | Some _ -> global_context := None
-  | None -> failwith "unset_global_context_internal: no global context is set"
+let unset_is_quarantined_internal () : unit =
+  match !ref_is_quarantined with
+  | (true, _) ->
+    ref_is_quarantined :=
+      (false, Utils.Callstack (Exception.get_current_callstack_string 99))
+  | (false, Utils.Callstack stack) ->
+    failwith
+      ( "unset_is_quarantined: but quarantine had already been released at\n"
+      ^ stack )
 
 let get_telemetry (t : t) (telemetry : Telemetry.t) : Telemetry.t =
   let telemetry =

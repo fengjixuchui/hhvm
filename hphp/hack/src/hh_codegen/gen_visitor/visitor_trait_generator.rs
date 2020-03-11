@@ -36,14 +36,14 @@ pub trait VisitorTrait {
 
             #uses
             #use_node
+            use super::type_params::Params;
 
             #node_dispatcher_function
 
             pub trait #trait_name {
+                type P: Params;
 
-                #(#associate_ty_decls)*
-
-                fn object(&mut self) -> &mut dyn #trait_name<#(#associate_ty_bindings)*>;
+                fn object(&mut self) -> &mut dyn #trait_name<P = Self::P>;
 
                 #(#visit_ty_params)*
 
@@ -54,13 +54,16 @@ pub trait VisitorTrait {
 
     fn gen_visit_ty_params(ctx: &Context) -> Result<Vec<TokenStream>> {
         let ref_kind = Self::node_ref_kind();
-        let context = ctx.visitor_context();
+        let context = ctx.context_ident();
+        let error = ctx.error_ident();
         Ok(ctx
             .root_ty_params_()
             .map(|ty| {
                 let name = gen_visit_fn_name(ty.to_string());
                 quote! {
-                    fn #name(&mut self, c: &mut Self::#context, p: #ref_kind Self::#ty) {}
+                    fn #name(&mut self, c: &mut <Self::P as Params>::#context, p: #ref_kind <Self::P as Params>::#ty) ->  Result<(), <Self::P as Params>::#error> {
+                        Ok(())
+                    }
                 }
             })
             .collect())
@@ -68,7 +71,8 @@ pub trait VisitorTrait {
 
     fn gen_visit_functions(ctx: &Context) -> Result<Vec<TokenStream>> {
         let ref_kind = Self::node_ref_kind();
-        let context = ctx.visitor_context();
+        let context = ctx.context_ident();
+        let error = ctx.error_ident();
         let mut visit_fn = vec![];
         for ty in ctx.non_alias_types() {
             let ty = ty.as_ref();
@@ -81,7 +85,7 @@ pub trait VisitorTrait {
             let name = gen_visit_fn_name(ty);
             let ty = format_ident!("{}", ty);
             visit_fn.push(quote! {
-                fn #name(&mut self, c: &mut Self::#context, p: #ref_kind #ty#ty_args) {
+                fn #name(&mut self, c: &mut <Self::P as Params>::#context, p: #ref_kind #ty#ty_args) -> Result<(), <Self::P as Params>::#error> {
                     p.recurse(c, self.object())
                 }
             });
@@ -93,17 +97,18 @@ pub trait VisitorTrait {
         let ty_params = &gen_ty_params(ctx.root_ty_params_with_context());
         let visitor_trait_name = Self::trait_name();
         let visitor_ty_param_bindings = gen_ty_param_bindings(ctx.root_ty_params_with_context());
-        let context = ctx.visitor_context();
+        let context = ctx.context_ident();
+        let error = ctx.error_ident();
         let node_ref_kind = Self::node_ref_kind();
         let node_trait_name = Self::node_trait_name();
 
         Ok(quote! {
-            pub fn visit#ty_params(
-                v: &mut impl #visitor_trait_name#visitor_ty_param_bindings,
-                c: &mut #context,
-                p: #node_ref_kind impl #node_trait_name#ty_params,
-            ) {
-                p.accept(c, v);
+            pub fn visit<P: Params>(
+                v: &mut impl #visitor_trait_name<P = P>,
+                c: &mut P::#context,
+                p: #node_ref_kind impl #node_trait_name<P>,
+            ) -> Result<(), P::#error> {
+                p.accept(c, v)
             }
         })
     }

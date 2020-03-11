@@ -63,7 +63,7 @@ val empty :
   droot:Typing_deps.Dep.dependent Typing_deps.Dep.variant option ->
   env
 
-val is_typedef : typedef_key -> bool
+val is_typedef : env -> typedef_key -> bool
 
 val get_enum : env -> class_key -> class_decl option
 
@@ -439,3 +439,13 @@ val remove_var :
   env
 
 val unsolve : env -> Ident.t -> env
+
+module Log : sig
+  (** Convert a type variable from an environment into json *)
+  val tyvar_to_json :
+    (locl_ty -> string) ->
+    (internal_type -> string) ->
+    env ->
+    Ident.t ->
+    Hh_json.json
+end

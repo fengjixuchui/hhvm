@@ -12,12 +12,16 @@ use ast_scope_rust as ast_scope;
 use emit_expression_rust as emit_expression;
 use emit_fatal_rust as emit_fatal;
 use emit_pos_rust::emit_pos;
-use env::{emitter::Emitter, iterator::Iter, jump_targets as jt, local, Env};
+use env::{emitter::Emitter, iterator, jump_targets as jt, local, Env};
 use hhbc_ast_rust::{self as hhbc_ast, Instruct};
-use instruction_sequence_rust::{InstrSeq, Result};
+use instruction_sequence_rust::{Error, InstrSeq, Result};
 use label::Label;
 use label_rust as label;
-use oxidized::pos::Pos;
+use oxidized::{
+    aast_visitor::{visit, AstParams, Node, Visitor},
+    ast as tast,
+    pos::Pos,
+};
 
 use bitflags::bitflags;
 
@@ -27,6 +31,10 @@ type LabelMap<'a> = BTreeMap<label::Id, &'a Instruct>;
 
 pub(super) struct JumpInstructions<'a>(LabelMap<'a>);
 impl JumpInstructions<'_> {
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// Collects list of Ret* and non rewritten Break/Continue instructions inside try body.
     pub(super) fn collect<'a>(is: &'a InstrSeq, jt_gen: &mut jt::Gen) -> JumpInstructions<'a> {
         fn get_label_id(jt_gen: &mut jt::Gen, is_break: bool, level: Level) -> label::Id {
@@ -83,11 +91,11 @@ pub(super) fn cleanup_try_body(is: &InstrSeq) -> InstrSeq {
     })
 }
 
-pub(super) fn emit_jump_to_label(l: Label, iters: Vec<Iter>) -> InstrSeq {
+pub(super) fn emit_jump_to_label(l: Label, iters: Vec<iterator::Id>) -> InstrSeq {
     if iters.is_empty() {
         InstrSeq::make_jmp(l)
     } else {
-        InstrSeq::make_iter_break(l, iters.iter().map(|i| i.next).collect())
+        InstrSeq::make_iter_break(l, iters)
     }
 }
 
@@ -163,7 +171,7 @@ pub fn emit_goto(
                         InstrSeq::make_goto(label),
                     ]))
                 }
-                jt::ResolvedGotoTarget::GotoFromFinally => Err(emit_fatal::raise_fatal_parse(
+                jt::ResolvedGotoTarget::GotoFromFinally => Err(emit_fatal::raise_fatal_runtime(
                     &get_pos_for_error(env),
                     "Goto to a label outside a finally block is not supported",
                 )),
@@ -178,6 +186,57 @@ pub fn emit_goto(
             }
         }
     }
+}
+
+pub fn fail_if_goto_from_try_to_finally(
+    try_block: &tast::Block,
+    finally_block: &tast::Block,
+) -> Result<()> {
+    fn find_gotos_in(block: &tast::Block) -> Vec<tast::Pstring> {
+        struct State(Vec<tast::Pstring>);
+        impl Visitor for State {
+            type P = AstParams<(), ()>;
+
+            fn object(&mut self) -> &mut dyn Visitor<P = Self::P> {
+                self
+            }
+
+            fn visit_stmt_(&mut self, c: &mut (), s: &tast::Stmt_) -> std::result::Result<(), ()> {
+                match s {
+                    tast::Stmt_::Goto(l) => Ok(self.0.push((&**l).clone())),
+                    _ => s.recurse(c, self),
+                }
+            }
+        }
+        let mut state = State(vec![]);
+        visit(&mut state, &mut (), block).unwrap();
+        state.0
+    };
+
+    struct GotoVisitor {};
+    impl Visitor for GotoVisitor {
+        type P = AstParams<Vec<tast::Pstring>, Error>;
+
+        fn object(&mut self) -> &mut dyn Visitor<P = Self::P> {
+            self
+        }
+
+        fn visit_stmt_(&mut self, c: &mut Vec<tast::Pstring>, s: &tast::Stmt_) -> Result<()> {
+            match s {
+                tast::Stmt_::GotoLabel(l) => match c.iter().rev().find(|label| label.1 == l.1) {
+                    Some((pos, _)) => Err(emit_fatal::raise_fatal_parse(
+                        pos,
+                        "'goto' into finally statement is disallowed",
+                    )),
+                    _ => Ok(()),
+                },
+                _ => s.recurse(c, self.object()),
+            }
+        }
+    }
+    let mut visitor = GotoVisitor {};
+    let mut goto_labels = find_gotos_in(try_block);
+    visit(&mut visitor, &mut goto_labels, finally_block)
 }
 
 pub(super) fn emit_return(e: &mut Emitter, in_finally_epilogue: bool, env: &mut Env) -> Result {
@@ -195,7 +254,7 @@ pub(super) fn emit_return(e: &mut Emitter, in_finally_epilogue: bool, env: &mut 
                 jt_gen
                     .jump_targets()
                     .iterators()
-                    .map(|i| InstrSeq::make_iterfree(i.next))
+                    .map(|i| InstrSeq::make_iterfree(*i))
                     .collect(),
             );
             let mut instrs = Vec::with_capacity(5);
@@ -338,7 +397,7 @@ pub(super) fn emit_break_or_continue(
     }
 }
 
-fn emit_finally_epilogue(
+pub(super) fn emit_finally_epilogue(
     e: &mut Emitter,
     env: &mut Env,
     pos: &Pos,

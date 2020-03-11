@@ -7,7 +7,7 @@
 use naming_special_names_rust::special_idents;
 use oxidized::{
     aast,
-    aast_visitor::{visit, Node, Visitor},
+    aast_visitor::{visit, AstParams, Node, Visitor},
     pos::Pos,
 };
 use parser_core_types::{
@@ -44,37 +44,31 @@ impl Checker {
 }
 
 impl Visitor for Checker {
-    type Context = Context;
-    type Ex = Pos;
-    type Fb = ();
-    type En = ();
-    type Hi = ();
+    type P = AstParams<Context, ()>;
 
-    fn object(
-        &mut self,
-    ) -> &mut dyn Visitor<Context = Self::Context, Ex = Pos, Fb = (), En = (), Hi = ()> {
+    fn object(&mut self) -> &mut dyn Visitor<P = Self::P> {
         self
     }
 
     fn visit_class_(
         &mut self,
-        c: &mut Self::Context,
-        p: &aast::Class_<Self::Ex, Self::Fb, Self::En, Self::Hi>,
-    ) {
+        c: &mut Context,
+        p: &aast::Class_<Pos, (), (), ()>,
+    ) -> Result<(), ()> {
         p.recurse(
             &mut Context {
                 in_classish: true,
                 ..*c
             },
             self,
-        );
+        )
     }
 
     fn visit_method_(
         &mut self,
-        c: &mut Self::Context,
-        p: &aast::Method_<Self::Ex, Self::Fb, Self::En, Self::Hi>,
-    ) {
+        c: &mut Context,
+        p: &aast::Method_<Pos, (), (), ()>,
+    ) -> Result<(), ()> {
         p.recurse(
             &mut Context {
                 in_methodish: true,
@@ -82,14 +76,10 @@ impl Visitor for Checker {
                 ..*c
             },
             self,
-        );
+        )
     }
 
-    fn visit_fun_(
-        &mut self,
-        c: &mut Self::Context,
-        p: &aast::Fun_<Self::Ex, Self::Fb, Self::En, Self::Hi>,
-    ) {
+    fn visit_fun_(&mut self, c: &mut Context, p: &aast::Fun_<Pos, (), (), ()>) -> Result<(), ()> {
         p.recurse(
             &mut Context {
                 in_methodish: true,
@@ -97,14 +87,10 @@ impl Visitor for Checker {
                 ..*c
             },
             self,
-        );
+        )
     }
 
-    fn visit_expr(
-        &mut self,
-        c: &mut Self::Context,
-        p: &aast::Expr<Self::Ex, Self::Fb, Self::En, Self::Hi>,
-    ) {
+    fn visit_expr(&mut self, c: &mut Context, p: &aast::Expr<Pos, (), (), ()>) -> Result<(), ()> {
         use aast::{ClassId, ClassId_::*, Expr, Expr_::*, Lid};
 
         if let Await(_) = p.1 {
@@ -122,7 +108,7 @@ impl Visitor for Checker {
                 self.add_error(pos, syntax_error::this_in_static);
             }
         }
-        p.recurse(c, self);
+        p.recurse(c, self)
     }
 }
 
@@ -133,6 +119,6 @@ pub fn check_program(program: &aast::Program<Pos, (), (), ()>) -> Vec<SyntaxErro
         in_classish: false,
         in_static_methodish: false,
     };
-    visit(&mut checker, &mut context, program);
+    visit(&mut checker, &mut context, program).unwrap();
     checker.errors
 }

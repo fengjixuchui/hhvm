@@ -74,7 +74,7 @@ module GEnv = struct
 
   let type_pos ctx name =
     let name = Option.value (type_canon_name ctx name) ~default:name in
-    match Naming_provider.get_type_pos name with
+    match Naming_provider.get_type_pos ctx name with
     | Some pos ->
       let (p, _) = get_full_pos ctx (pos, name) in
       Some p
@@ -85,7 +85,7 @@ module GEnv = struct
     type_pos ctx name
 
   let type_info ctx name =
-    match Naming_provider.get_type_pos_and_kind name with
+    match Naming_provider.get_type_pos_and_kind ctx name with
     | Some
         ( pos,
           ( ( Naming_types.TClass | Naming_types.TTypedef
@@ -98,7 +98,7 @@ module GEnv = struct
     Naming_provider.get_fun_canon_name ctx (canon_key name)
 
   let fun_pos ctx name =
-    match Naming_provider.get_fun_pos name with
+    match Naming_provider.get_fun_pos ctx name with
     | Some pos ->
       let (p, _) = get_full_pos ctx (pos, name) in
       Some p
@@ -109,7 +109,7 @@ module GEnv = struct
     fun_pos ctx name
 
   let typedef_pos ctx name =
-    match Naming_provider.get_type_pos_and_kind name with
+    match Naming_provider.get_type_pos_and_kind ctx name with
     | Some (pos, Naming_types.TTypedef) ->
       let (p, _) = get_full_pos ctx (pos, name) in
       Some p
@@ -119,7 +119,7 @@ module GEnv = struct
       None
 
   let gconst_pos ctx name =
-    match Naming_provider.get_const_pos name with
+    match Naming_provider.get_const_pos ctx name with
     | Some pos ->
       let (p, _) = get_full_pos ctx (pos, name) in
       Some p
@@ -155,7 +155,8 @@ module Env = struct
     let name_key = canon_key name in
     match Naming_provider.get_fun_canon_name ctx name_key with
     | Some _ -> ()
-    | None -> Naming_provider.add_fun name (FileInfo.File (FileInfo.Fun, fn))
+    | None ->
+      Naming_provider.add_fun ctx name (FileInfo.File (FileInfo.Fun, fn))
 
   let new_cid_fast ctx fn name cid_kind =
     let name_key = canon_key name in
@@ -170,7 +171,7 @@ module Env = struct
     | None ->
       (* We store redundant info in this case, but if the position is a *)
       (* Full position, we don't store the kind, so this is necessary *)
-      Naming_provider.add_type name (FileInfo.File (mode, fn)) cid_kind
+      Naming_provider.add_type ctx name (FileInfo.File (mode, fn)) cid_kind
 
   let new_class_fast ctx fn name = new_cid_fast ctx fn name Naming_types.TClass
 
@@ -180,19 +181,19 @@ module Env = struct
   let new_typedef_fast ctx fn name =
     new_cid_fast ctx fn name Naming_types.TTypedef
 
-  let new_global_const_fast fn name =
-    Naming_provider.add_const name (FileInfo.File (FileInfo.Const, fn))
+  let new_global_const_fast ctx fn name =
+    Naming_provider.add_const ctx name (FileInfo.File (FileInfo.Const, fn))
 
   let new_fun ctx (p, name) =
     let name_key = canon_key name in
     match Naming_provider.get_fun_canon_name ctx name_key with
     | Some canonical ->
-      let p' = Option.value_exn (Naming_provider.get_fun_pos canonical) in
+      let p' = Option.value_exn (Naming_provider.get_fun_pos ctx canonical) in
       if not @@ GEnv.compare_pos ctx p' p canonical then
         let (p, name) = GEnv.get_full_pos ctx (p, name) in
         let (p', canonical) = GEnv.get_full_pos ctx (p', canonical) in
         Errors.error_name_already_bound name canonical p p'
-    | None -> Naming_provider.add_fun name p
+    | None -> Naming_provider.add_fun ctx name p
 
   let (attr_prefix, attr_prefix_len) =
     let a = "\\__attribute__" in
@@ -202,7 +203,7 @@ module Env = struct
   let new_cid ctx cid_kind (p, name) =
     let validate canonical error =
       let p' =
-        match Naming_provider.get_type_pos canonical with
+        match Naming_provider.get_type_pos ctx canonical with
         | Some x -> x
         | None ->
           failwith
@@ -242,7 +243,7 @@ module Env = struct
             validate alt_canonical Errors.error_class_attribute_already_bound
           | None -> ()
         end;
-        Naming_provider.add_type name p cid_kind
+        Naming_provider.add_type ctx name p cid_kind
 
   let new_class ctx = new_cid ctx Naming_types.TClass
 
@@ -251,24 +252,24 @@ module Env = struct
   let new_typedef ctx = new_cid ctx Naming_types.TTypedef
 
   let new_global_const ctx (p, x) =
-    match Naming_provider.get_const_pos x with
+    match Naming_provider.get_const_pos ctx x with
     | Some p' ->
       if not @@ GEnv.compare_pos ctx p' p x then
         let (p, x) = GEnv.get_full_pos ctx (p, x) in
         let (p', x) = GEnv.get_full_pos ctx (p', x) in
         Errors.error_name_already_bound x x p p'
-    | None -> Naming_provider.add_const x p
+    | None -> Naming_provider.add_const ctx x p
 end
 
 (*****************************************************************************)
 (* Updating the environment *)
 (*****************************************************************************)
-let remove_decls ~funs ~classes ~record_defs ~typedefs ~consts =
+let remove_decls ~ctx ~funs ~classes ~record_defs ~typedefs ~consts =
   let types = SSet.union classes typedefs in
   let types = SSet.union types record_defs in
-  Naming_provider.remove_type_batch types;
-  Naming_provider.remove_fun_batch funs;
-  Naming_provider.remove_const_batch consts
+  Naming_provider.remove_type_batch ctx types;
+  Naming_provider.remove_fun_batch ctx funs;
+  Naming_provider.remove_const_batch ctx consts
 
 (*****************************************************************************)
 (* The entry point to build the naming environment *)
@@ -286,7 +287,7 @@ let make_env_from_fast ctx fn ~funs ~classes ~record_defs ~typedefs ~consts =
   SSet.iter (Env.new_class_fast ctx fn) classes;
   SSet.iter (Env.new_record_decl_fast ctx fn) record_defs;
   SSet.iter (Env.new_typedef_fast ctx fn) typedefs;
-  SSet.iter (Env.new_global_const_fast fn) consts
+  SSet.iter (Env.new_global_const_fast ctx fn) consts
 
 (*****************************************************************************)
 (* Declaring the names in a list of files *)

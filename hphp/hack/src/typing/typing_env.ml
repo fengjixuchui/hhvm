@@ -630,8 +630,8 @@ let get_typedef env x =
   add_wclass env x;
   Decl_provider.get_typedef (get_ctx env) x
 
-let is_typedef x =
-  match Naming_provider.get_type_kind x with
+let is_typedef env x =
+  match Naming_provider.get_type_kind (get_ctx env) x with
   | Some Naming_types.TTypedef -> true
   | _ -> false
 
@@ -1241,6 +1241,7 @@ let save local_tpenv env =
     Tast.local_mutability = get_env_mutability env;
     Tast.fun_mutable = function_is_mutable env;
     Tast.condition_types = env.genv.condition_types;
+    Tast.pessimize = env.pessimize;
   }
 
 (* Compute the type variables appearing covariantly (positively)
@@ -1628,3 +1629,14 @@ let remove_var env var ~search_in_upper_bounds_of ~search_in_lower_bounds_of =
 
 let unsolve env v =
   wrap_inference_env_call_env env (fun env -> Inf.unsolve env v)
+
+module Log = struct
+  (** Convert a type variable from an environment into json *)
+  let tyvar_to_json
+      (p_locl_ty : locl_ty -> string)
+      (p_internal_type : internal_type -> string)
+      (env : env)
+      (v : Ident.t) =
+    wrap_inference_env_call_res env (fun env ->
+        Inf.Log.tyvar_to_json p_locl_ty p_internal_type env v)
+end

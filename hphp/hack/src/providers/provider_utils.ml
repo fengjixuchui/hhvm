@@ -168,7 +168,7 @@ let respect_but_quarantine_unsaved_changes
   let make_then_revert_local_changes f () =
     Utils.with_context
       ~enter:(fun () ->
-        Provider_context.set_global_context_internal ctx;
+        Provider_context.set_is_quarantined_internal ();
 
         Errors.set_allow_errors_in_default_path true;
         SharedMem.allow_hashtable_writes_by_current_process false;
@@ -180,7 +180,7 @@ let respect_but_quarantine_unsaved_changes
 
         Ide_parser_cache.activate ();
 
-        Naming_provider.push_local_changes ())
+        Naming_provider.push_local_changes ctx)
       ~exit:(fun () ->
         Errors.set_allow_errors_in_default_path false;
         SharedMem.allow_hashtable_writes_by_current_process true;
@@ -192,11 +192,11 @@ let respect_but_quarantine_unsaved_changes
 
         Ide_parser_cache.deactivate ();
 
-        Naming_provider.pop_local_changes ();
+        Naming_provider.pop_local_changes ctx;
 
         SharedMem.invalidate_caches ();
 
-        Provider_context.unset_global_context_internal ())
+        Provider_context.unset_is_quarantined_internal ())
       ~do_:f
   in
   let (_errors, result) =
@@ -210,11 +210,12 @@ let respect_but_quarantine_unsaved_changes
                  Nast.get_defs ast
                in
                (* Update the positions of the symbols present in the AST by redeclaring
-        them. Note that this doesn't handle *removing* any entries from the
-        naming table if they've disappeared since the last time we updated the
-        naming table. *)
+               them. Note that this doesn't handle *removing* any entries from the
+               naming table if they've disappeared since the last time we updated the
+               naming table. *)
                let get_names ids = List.map ~f:snd ids |> SSet.of_list in
                Naming_global.remove_decls
+                 ~ctx
                  ~funs:(get_names funs)
                  ~classes:(get_names classes)
                  ~record_defs:(get_names record_defs)
@@ -352,10 +353,9 @@ let compute_tast_and_errors_quarantined
   (* Okay, we don't have memoized results, let's ensure we are quarantined before computing *)
   | _ ->
     let f () = compute_tast_and_errors_unquarantined ~ctx ~entry in
-    (* If global context is not set, set it and proceed *)
-    (match Provider_context.get_global_context () with
-    | None -> respect_but_quarantine_unsaved_changes ~ctx ~f
-    | Some _ -> f ())
+    (match Provider_context.is_quarantined () with
+    | false -> respect_but_quarantine_unsaved_changes ~ctx ~f
+    | true -> f ())
 
 let compute_tast_quarantined
     ~(ctx : Provider_context.t) ~(entry : Provider_context.entry) :
@@ -371,7 +371,6 @@ let compute_tast_quarantined
         ~entry
         ~mode:Compute_tast_only
     in
-    (* If global context is not set, set it and proceed *)
-    (match Provider_context.get_global_context () with
-    | None -> respect_but_quarantine_unsaved_changes ~ctx ~f
-    | Some _ -> f ())
+    (match Provider_context.is_quarantined () with
+    | false -> respect_but_quarantine_unsaved_changes ~ctx ~f
+    | true -> f ())

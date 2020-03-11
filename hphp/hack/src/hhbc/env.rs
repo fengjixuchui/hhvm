@@ -10,7 +10,6 @@ pub mod local;
 
 use ast_scope_rust::{Scope, ScopeItem};
 use emitter::Emitter;
-use iterator::Iter;
 use label_rust::Label;
 use oxidized::{ast as tast, ast_defs::Id, namespace_env::Env as NamespaceEnv};
 
@@ -82,7 +81,7 @@ impl<'a> Env<'a> {
         e: &mut Emitter,
         label_break: Label,
         label_continue: Label,
-        iterator: Option<Iter>,
+        iterator: Option<iterator::Id>,
         b: &tast::Block,
         f: F,
     ) -> R
@@ -112,14 +111,14 @@ impl<'a> Env<'a> {
         &mut self,
         e: &mut Emitter,
         finally_label: Label,
-        stmt: &tast::Stmt,
+        block: &tast::Block,
         f: F,
     ) -> R
     where
-        F: FnOnce(&mut Self, &mut Emitter, &tast::Stmt) -> R,
+        F: FnOnce(&mut Self, &mut Emitter, &tast::Block) -> R,
     {
-        self.jump_targets_gen.with_try(finally_label, stmt);
-        self.run_and_release_ids(e, stmt, f)
+        self.jump_targets_gen.with_try(finally_label, block);
+        self.run_and_release_ids(e, block, f)
     }
 
     pub fn do_in_finally_body<R, F>(&mut self, e: &mut Emitter, block: &tast::Block, f: F) -> R

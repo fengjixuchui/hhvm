@@ -40,6 +40,7 @@ pub trait NodeImpl {
             #use_node
             #use_visitor
             #uses
+            use super::type_params::Params;
 
             #(#impls)*
         })
@@ -55,22 +56,23 @@ pub trait NodeImpl {
         let node_trait_name = Self::node_trait_name();
         let self_ref_kind = Self::self_ref_kind();
         let visitor_trait_name = Self::visitor_trait_name();
-        let context = ctx.visitor_context();
+        let context = ctx.context_ident();
+        let error = ctx.error_ident();
         Ok(quote! {
-            impl#root_ty_params #node_trait_name#root_ty_params for #ty_name#ty_params {
+            impl<P: Params> #node_trait_name<P> for #ty_name#ty_params {
                 fn accept(
                     #self_ref_kind self,
-                    c: &mut #context,
-                    v: &mut dyn #visitor_trait_name#visitor_ty_param_bindings
-                ) {
-                    v.#visit_fn(c, self);
+                    c: &mut P::#context,
+                    v: &mut dyn #visitor_trait_name<P = P>
+                ) -> Result<(), P::#error> {
+                    v.#visit_fn(c, self)
                 }
 
                 fn recurse(
                     #self_ref_kind self,
-                    c: &mut #context,
-                    v: &mut dyn #visitor_trait_name#visitor_ty_param_bindings
-                ) {
+                    c: &mut P::#context,
+                    v: &mut dyn #visitor_trait_name<P = P>
+                ) -> Result<(), P::#error> {
                     #recurse_body
                 }
             }
@@ -91,7 +93,7 @@ pub trait NodeImpl {
             .filter(|t| ctx.is_root_ty_param(t))
             .map(|ty| {
                 let fn_name = visitor_trait_generator::gen_visit_fn_name(ty);
-                quote! {v.#fn_name( c, #ref_kind #accessor );}
+                quote! {v.#fn_name( c, #ref_kind #accessor )?;}
             })
     }
 
@@ -104,18 +106,24 @@ pub trait NodeImpl {
                     let calls = fields.iter().map(|(name, ty)| {
                         let accessor = format_ident!("{}", name);
                         Self::try_gen_simple_ty_param_visit_call(ctx, ty, quote! { self.#accessor})
-                            .unwrap_or(quote! {self.#accessor.accept(c, v);})
+                            .unwrap_or(quote! {self.#accessor.accept(c, v)?;})
                     });
-                    Ok(quote! {#(#calls)*})
+                    Ok(quote! {
+                        #(#calls)*
+                        Ok(())
+                    })
                 }
                 Fields::Unnamed(fields) => {
                     let fields = get_field_and_type_from_unnamed(fields);
                     let calls = fields.map(|(i, ty)| {
                         let accessor = Index::from(i);
                         Self::try_gen_simple_ty_param_visit_call(ctx, ty, quote! { self.#accessor})
-                            .unwrap_or(quote! {self.#accessor.accept(c, v);})
+                            .unwrap_or(quote! {self.#accessor.accept(c, v)?;})
                     });
-                    Ok(quote! {#(#calls)*})
+                    Ok(quote! {
+                        #(#calls)*
+                        Ok(())
+                    })
                 }
                 Fields::Unit => Ok(quote! {}),
             },
@@ -149,7 +157,7 @@ pub trait NodeImpl {
                                         ty,
                                         quote! { #v.#accessor },
                                     )
-                                    .unwrap_or(quote! {#v.#accessor.accept(c, v);})
+                                    .unwrap_or(quote! {#v.#accessor.accept(c, v)?;})
                                 }));
                             } else {
                                 let fields =
@@ -163,16 +171,19 @@ pub trait NodeImpl {
                                             ty,
                                             quote! { #v },
                                         )
-                                        .unwrap_or(quote! { #v.accept(c, v); }),
+                                        .unwrap_or(quote! { #v.accept(c, v)?; }),
                                     );
                                 }
                             }
                             arms.push(quote! {
-                                #ty_name::#variant_name(#(# pattern)*) => { #(#calls)* }
+                                #ty_name::#variant_name(#(# pattern)*) => {
+                                    #(#calls)*
+                                    Ok(())
+                                }
                             });
                         }
                         Fields::Unit => arms.push(quote! {
-                            #ty_name::#variant_name => { }
+                            #ty_name::#variant_name => { {Ok(())} }
                         }),
                     }
                 }

@@ -5,8 +5,9 @@
 
 use bumpalo::collections::Vec;
 pub use oxidized::typing_defs_core::*;
-use oxidized::typing_reason as reason;
 use oxidized::{ident, nast, tany_sentinel};
+
+use crate::typing_reason::*;
 
 /// A type as used during type inference.
 ///
@@ -162,8 +163,69 @@ pub enum Ty_<'a> {
 /// is to have a pointer to a pointer to a
 /// (reason ptr, inlined type). Which reduces the size of
 /// Ty_ and decreases stack usage.
-pub struct Ty<'a>(pub &'a reason::Reason, pub &'a Ty_<'a>);
+pub struct Ty<'a>(pub PReason<'a>, pub &'a Ty_<'a>);
 
+impl<'a> Ty<'a> {
+    pub fn get_node(&self) -> &Ty_<'a> {
+        let Ty(_r, t) = self;
+        t
+    }
+    pub fn get_reason(&self) -> &PReason<'a> {
+        let Ty(r, _t) = self;
+        r
+    }
+    pub fn get_pos(&self) -> Option<&oxidized::pos::Pos> {
+        self.get_reason().pos
+    }
+    pub fn is_tyvar(&self) -> bool {
+        match self.get_node() {
+            Ty_::Tvar(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_generic(&self) -> bool {
+        match self.get_node() {
+            Ty_::Tgeneric(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_dynamic(&self) -> bool {
+        match self.get_node() {
+            Ty_::Tdynamic => true,
+            _ => false,
+        }
+    }
+    pub fn is_nonnull(&self) -> bool {
+        match self.get_node() {
+            Ty_::Tnonnull => true,
+            _ => false,
+        }
+    }
+    pub fn is_any(&self) -> bool {
+        match self.get_node() {
+            Ty_::Tany(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_prim(&self, kind: PrimKind) -> bool {
+        match self.get_node() {
+            Ty_::Tprim(k) => kind == *k,
+            _ => false,
+        }
+    }
+    pub fn is_union(&self) -> bool {
+        match self.get_node() {
+            Ty_::Tunion(_) => true,
+            _ => false,
+        }
+    }
+    pub fn is_intersection(&self) -> bool {
+        match self.get_node() {
+            Ty_::Tintersection(_) => true,
+            _ => false,
+        }
+    }
+}
 /// This is a direct translation of oxidized::gen::typing_defs_core::TaccessType.
 ///
 /// We need this because it wraps Tys
@@ -192,6 +254,7 @@ pub enum ArrayKind<'a> {
 ///      type checking.
 ///   2. Additionally, I (hverr) think the aast::Tprim -> Tprim conversion
 ///      is cheaper than dereferencing a pointer to aast::Tprim.
+#[derive(Eq, PartialEq)]
 pub enum PrimKind<'a> {
     Tnull,
     Tvoid,
@@ -213,3 +276,51 @@ pub struct PossiblyEnforcedTy<'a> {
     pub enforced: bool,
     pub type_: Ty<'a>,
 }
+
+pub enum ConstraintType_<'a> {
+    ThasMember(HasMember<'a>),
+    /// The type of container destructuring via list() or splat `...`
+    Tdestructure, // TODO: Tdestructure(Destructure),
+    TCunion(Ty<'a>, ConstraintType<'a>),
+    TCintersection(Ty<'a>, ConstraintType<'a>),
+}
+
+pub struct ConstraintType<'a>(pub PReason<'a>, pub &'a ConstraintType_<'a>);
+
+pub struct HasMember<'a> {
+    pub name: &'a nast::Sid,
+    pub member_type: Ty<'a>,
+    /// This is required to check ambiguous object access, where sometimes
+    /// HHVM would access the private member of a parent class instead of the
+    /// one from the current class.
+    pub class_id: &'a nast::ClassId_,
+}
+
+pub struct Destructure<'a> {
+    /// This represents the standard parameters of a function or the fields in a list
+    /// destructuring assignment. Example:
+    ///
+    /// function take(bool $b, float $f = 3.14, arraykey ...$aks): void {}
+    /// function f((bool, float, int, string) $tup): void {
+    ///   take(...$tup);
+    /// }
+    ///
+    /// corresponds to the subtyping assertion
+    ///
+    /// (bool, float, int, string) <: splat([#1], [opt#2], ...#3)
+    pub required: Vec<'a, Ty<'a>>,
+    /// Represents the optional parameters in a function, only used for splats
+    pub optional: Vec<'a, Ty<'a>>,
+    /// Represents a function's variadic parameter, also only used for splats
+    pub variadic: Option<Ty<'a>>,
+    /// list() destructuring allows for partial matches on lists, even when the operation
+    /// might throw i.e. list($a) = vec[];
+    pub kind: DestructureKind,
+}
+
+pub enum InternalType_<'a> {
+    LoclType(Ty<'a>),
+    ConstraintType(ConstraintType<'a>),
+}
+
+pub type InternalType<'a> = &'a InternalType_<'a>;

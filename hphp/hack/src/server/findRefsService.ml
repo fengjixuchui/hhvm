@@ -150,8 +150,8 @@ let get_origin_class_name ctx class_name member =
   in
   Option.value origin ~default:class_name
 
-let get_child_classes_files class_name =
-  match Naming_provider.get_type_kind class_name with
+let get_child_classes_files ctx class_name =
+  match Naming_provider.get_type_kind ctx class_name with
   | Some Naming_types.TClass ->
     (* Find the files that contain classes that extend class_ *)
     let cid_hash = Typing_deps.Dep.make (Typing_deps.Dep.Class class_name) in
@@ -163,13 +163,13 @@ let get_child_classes_files class_name =
     Typing_deps.get_files extend_deps
   | _ -> Relative_path.Set.empty
 
-let get_deps_set classes =
+let get_deps_set ctx classes =
   SSet.fold
     classes
     ~f:
       begin
         fun class_name acc ->
-        match Naming_provider.get_type_path class_name with
+        match Naming_provider.get_type_path ctx class_name with
         | None -> acc
         | Some fn ->
           let dep = Typing_deps.Dep.Class class_name in
@@ -180,8 +180,8 @@ let get_deps_set classes =
       end
     ~init:Relative_path.Set.empty
 
-let get_deps_set_function f_name =
-  match Naming_provider.get_fun_path f_name with
+let get_deps_set_function ctx f_name =
+  match Naming_provider.get_fun_path ctx f_name with
   | Some fn ->
     let dep = Typing_deps.Dep.Fun f_name in
     let ideps = Typing_deps.get_ideps dep in
@@ -189,8 +189,8 @@ let get_deps_set_function f_name =
     Relative_path.Set.add files fn
   | None -> Relative_path.Set.empty
 
-let get_deps_set_gconst cst_name =
-  match Naming_provider.get_const_path cst_name with
+let get_deps_set_gconst ctx cst_name =
+  match Naming_provider.get_const_path ctx cst_name with
   | Some fn ->
     let dep = Typing_deps.Dep.GConst cst_name in
     let ideps = Typing_deps.get_ideps dep in
@@ -324,7 +324,7 @@ let get_definitions ctx = function
   | IClass class_name ->
     Option.value
       ~default:[]
-      (Naming_provider.get_type_kind class_name >>= function
+      (Naming_provider.get_type_kind ctx class_name >>= function
        | Naming_types.TClass ->
          Decl_provider.get_class ctx class_name >>= fun class_ ->
          Some [(class_name, Cls.pos class_)]
@@ -372,17 +372,17 @@ let find_references ctx workers target include_defs files =
   else
     results
 
-let get_dependent_files_function _workers f_name =
+let get_dependent_files_function ctx _workers f_name =
   (* This is performant enough to not need to go parallel for now *)
-  get_deps_set_function f_name
+  get_deps_set_function ctx f_name
 
-let get_dependent_files_gconst _workers cst_name =
+let get_dependent_files_gconst ctx _workers cst_name =
   (* This is performant enough to not need to go parallel for now *)
-  get_deps_set_gconst cst_name
+  get_deps_set_gconst ctx cst_name
 
-let get_dependent_files _workers input_set =
+let get_dependent_files ctx _workers input_set =
   (* This is performant enough to not need to go parallel for now *)
-  get_deps_set input_set
+  get_deps_set ctx input_set
 
 let result_to_ide_message x =
   Option.map x ~f:(fun (symbol_name, references) ->

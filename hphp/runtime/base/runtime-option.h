@@ -684,7 +684,6 @@ struct RuntimeOption {
   F(int, JitPrintOptimizedIR,          0)                               \
   F(bool, RecordSubprocessTimes,       false)                           \
   F(bool, AllowHhas,                   false)                           \
-  F(bool, DisassemblerSourceMapping,   true)                            \
   F(bool, GenerateDocComments,         true)                            \
   F(bool, DisassemblerDocComments,     true)                            \
   F(bool, DisassemblerPropDocComments, true)                            \
@@ -1198,7 +1197,6 @@ struct RuntimeOption {
    * __DynamicallyCallable attribute is present at declaration.         \
    */                                                                   \
   F(bool, ForbidDynamicCallsWithAttr, false)                            \
-  F(bool, WarnOnNonLiteralClsMeth, false)                               \
   /* Toggles logging for expressions of type $var::name() */            \
   F(bool, LogKnownMethodsAsDynamicCalls, true)                          \
   /*                                                                    \
@@ -1299,6 +1297,7 @@ struct RuntimeOption {
    */                                                                   \
   F(bool, WidenIsArray, false)                                          \
   F(bool, EnablePerFileCoverage, false)                                 \
+  F(bool, NoUseMagicMethods, false)                                     \
   /* */
 
 private:
