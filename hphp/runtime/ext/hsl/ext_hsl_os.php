@@ -37,20 +37,22 @@ final class ErrnoException extends \Exception {}
 <<__Native>>
 function open(string $path, int $flags, int $mode = 0): FileDescriptor;
 
-/*
 <<__Native>>
-function pipe(): (FileDescriptor, FileDescriptor);
- */
+function read(
+  FileDescriptor $fd,
+  int $max_to_read,
+): string;
 
 <<__Native>>
 function write(FileDescriptor $fd, string $data): int;
 
-/*
-<<__Native>>
-function pwrite(FileDescriptor $fd, string $data, int $offset);
- */
-
 <<__Native>>
 function close(FileDescriptor $fd): void;
+
+<<__Native>>
+function pipe(): varray<FileDescriptor>;
+
+<<__Native>>
+function poll_async(FileDescriptor $fd, int $events, int $timeout_ns): Awaitable<int>;
 
 }
