@@ -18,7 +18,7 @@ use hhbc_hhas_rust::{context::Context, print_program, Write};
 use instruction_sequence_rust::Error;
 use itertools::{Either, Either::*};
 use ocamlrep::rc::RcOc;
-use options::{LangFlags, Options, PhpismFlags};
+use options::{LangFlags, Options, Php7Flags, PhpismFlags};
 use oxidized::{
     ast as Tast, namespace_env::Env as NamespaceEnv, parser_options::ParserOptions, pos::Pos,
     relative_path::RelativePath,
@@ -33,7 +33,6 @@ use stack_limit::StackLimit;
 /// until the migration from OCaml is fully complete
 pub struct Env {
     pub filepath: RelativePath,
-    pub empty_namespace: ocamlrep::rc::RcOc<NamespaceEnv>,
     pub config_jsons: Vec<String>,
     pub config_list: Vec<String>,
     pub flags: EnvFlags,
@@ -97,10 +96,20 @@ where
     });
 
     let (program, codegen_t) = match &mut parse_result {
-        // TODO(shiqicao): change opts to Rc<Option> to avoid cloning
         Either::Right((ast, is_hh_file)) => {
-            elaborate_namespaces_visitor::elaborate_program(env.empty_namespace.clone(), ast);
-            emit(&env, opts.clone(), *is_hh_file, ast)
+            let namespace = NamespaceEnv::empty(
+                opts.hhvm.aliased_namespaces_cloned().collect(),
+                true, /* is_codegen */
+                opts.hhvm
+                    .hack_lang_flags
+                    .contains(LangFlags::DISABLE_XHP_ELEMENT_MANGLING),
+            );
+            // TODO(shiqicao): change opts to Rc<Option> to avoid cloning
+            elaborate_namespaces_visitor::elaborate_program(
+                ocamlrep::rc::RcOc::new(namespace.clone()),
+                ast,
+            );
+            emit(&env, &namespace, opts.clone(), *is_hh_file, ast)
         }
         Either::Left((pos, msg, is_runtime_error)) => {
             emit_fatal(&env, *is_runtime_error, opts.clone(), pos, msg)
@@ -126,6 +135,7 @@ where
 
 fn emit<'p>(
     env: &Env,
+    namespace: &NamespaceEnv,
     opts: Options,
     is_hh: bool,
     ast: &'p mut Tast::Program,
@@ -152,7 +162,7 @@ fn emit<'p>(
     }
     let mut t = 0f64;
     let r = profile(opts.log_extern_compiler_perf(), &mut t, move || {
-        emit_program(opts, flags, &env.empty_namespace, ast)
+        emit_program(opts, flags, &namespace, ast)
     });
     (r, t)
 }
@@ -186,13 +196,7 @@ fn create_parser_options(opts: &Options) -> ParserOptions {
     let hack_lang_flags = |flag| opts.hhvm.hack_lang_flags.contains(flag);
     let phpism_flags = |flag| opts.phpism_flags.contains(flag);
     let mut popt = ParserOptions::default();
-    popt.po_auto_namespace_map = match opts.hhvm.aliased_namespaces.get() {
-        options::BTreeMapOrEmptyVec::Nonempty(m) => m
-            .iter()
-            .map(|(x, y)| (x.to_owned(), y.to_owned()))
-            .collect(),
-        _ => vec![],
-    };
+    popt.po_auto_namespace_map = opts.hhvm.aliased_namespaces_cloned().collect();
     popt.po_codegen = true;
     popt.po_disallow_silence = false;
     popt.po_disallow_execution_operator = phpism_flags(PhpismFlags::DISALLOW_EXECUTION_OPERATOR);
@@ -215,6 +219,7 @@ fn create_parser_options(opts: &Options) -> ParserOptions {
     popt.po_disallow_func_ptrs_in_constants =
         hack_lang_flags(LangFlags::DISALLOW_FUNC_PTRS_IN_CONSTANTS);
     popt.po_enable_xhp_class_modifier = hack_lang_flags(LangFlags::ENABLE_XHP_CLASS_MODIFIER);
+    popt.po_disable_xhp_element_mangling = hack_lang_flags(LangFlags::DISABLE_XHP_ELEMENT_MANGLING);
     popt
 }
 
@@ -229,10 +234,19 @@ fn parse_file(
 ) -> Either<(Pos, String, bool), (Tast::Program, bool)> {
     let mut aast_env = AastEnv::default();
     aast_env.codegen = true;
-    aast_env.keep_errors = true;
-    aast_env.show_all_errors = true;
-    aast_env.fail_open = true;
+    aast_env.fail_open = false;
+    // Ocaml's implementation
+    // let enable_uniform_variable_syntax o = o.option_php7_uvs in
+    // php5_compat_mode:
+    //   (not (Hhbc_options.enable_uniform_variable_syntax hhbc_options))
+    aast_env.php5_compat_mode = !opts.php7_flags.contains(Php7Flags::UVS);
+    aast_env.hacksperimental = opts
+        .hhvm
+        .hack_lang_flags
+        .contains(LangFlags::HACKSPERIMENTAL);
+    aast_env.keep_errors = false;
     aast_env.parser_options = create_parser_options(opts);
+
     let source_text = SourceText::make(RcOc::new(filepath.clone()), text);
     let indexed_source_text = IndexedSourceText::new(source_text);
     let ast_result = AastParser::from_text(&aast_env, &indexed_source_text, Some(stack_limit));
