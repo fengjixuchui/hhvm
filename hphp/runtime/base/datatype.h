@@ -165,9 +165,6 @@ using MaybeDataType = folly::Optional<DataType>;
 MaybeDataType get_datatype(
   const std::string& name,
   bool can_be_collection,
-  bool is_function,
-  bool is_xhp,
-  bool is_tuple,
   bool is_nullable,
   bool is_soft
 );
@@ -299,6 +296,20 @@ inline bool isArrayLikeType(MaybeDataType t) {
   return t && isArrayLikeType(*t);
 }
 
+/*
+ * When any PHP (d|v|)array will do.
+ */
+constexpr bool isPHPArrayType(DataType t) {
+  return t <= KindOfArray;
+}
+inline bool isPHPArrayType(MaybeDataType t) {
+  return t && isPHPArrayType(*t);
+}
+
+/*
+ * Currently matches any PHP (d|v|)array.
+ * Eventually will only match arrays without dvarray-ness.
+ */
 constexpr bool isArrayType(DataType t) {
   return t <= KindOfArray;
 }

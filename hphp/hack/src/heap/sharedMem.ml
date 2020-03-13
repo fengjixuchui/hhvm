@@ -519,6 +519,8 @@ end = struct
   let measure_remove =
     Value.description ^ " (compressed bytes removed from shared heap)"
 
+  let measure_get = Value.description ^ " (bytes deserialized from shared heap)"
+
   let log_serialize compressed original =
     let compressed = float compressed in
     let original = float original in
@@ -537,9 +539,7 @@ end = struct
 
   let log_deserialize l r =
     let sharedheap = float l in
-    Measure.sample
-      (Value.description ^ " (bytes deserialized from shared heap)")
-      sharedheap;
+    Measure.sample measure_get sharedheap;
     Measure.sample "ALL bytes deserialized from shared heap" sharedheap;
 
     if hh_log_level () > 1 then (
@@ -579,31 +579,42 @@ end = struct
   let move from_key to_key = hh_move from_key to_key
 
   let get_telemetry (telemetry : Telemetry.t) : Telemetry.t =
-    let count =
-      Option.merge
-        (Measure.get_count measure_add)
-        ~f:( -. )
-        (Measure.get_count measure_remove)
+    let simple_metric name = (Measure.get_count name, Measure.get_sum name) in
+    let diff_metric left_name right_name =
+      let diff left right = Option.merge left ~f:( -. ) right in
+      let (left_count, left_bytes) = simple_metric left_name in
+      let (right_count, right_bytes) = simple_metric right_name in
+      (diff left_count right_count, diff left_bytes right_bytes)
     in
-    let bytes =
-      Option.merge
-        (Measure.get_sum measure_add)
-        ~f:( -. )
-        (Measure.get_sum measure_remove)
+    (* Gather counts and sums for these metrics *)
+    let metrics =
+      [
+        ("get", simple_metric measure_get);
+        ("add", simple_metric measure_add);
+        ("remove", simple_metric measure_remove);
+        ("entries", diff_metric measure_add measure_remove);
+      ]
     in
-    match (count, bytes) with
-    | (None, _)
-    | (_, None)
-    | (Some 0., _) ->
+    let is_none = function
+      | (_, (None, None)) -> true
+      | _ -> false
+    in
+    if List.for_all ~f:is_none metrics then
       telemetry
-    | (Some count, Some bytes) ->
-      telemetry
-      |> Telemetry.object_
-           ~key:(Value.description ^ ".shared")
-           ~value:
-             ( Telemetry.create ()
-             |> Telemetry.int_ ~key:"count" ~value:(int_of_float count)
-             |> Telemetry.int_ ~key:"bytes" ~value:(int_of_float bytes) )
+    else
+      let make_obj t (key, (count, bytes)) =
+        let count_val = Option.value_map ~default:0 ~f:int_of_float count in
+        let bytes_val = Option.value_map ~default:0 ~f:int_of_float bytes in
+        Telemetry.object_
+          ~key
+          ~value:
+            ( Telemetry.create ()
+            |> Telemetry.int_ ~key:"count" ~value:count_val
+            |> Telemetry.int_ ~key:"bytes" ~value:bytes_val )
+          t
+      in
+      let value = List.fold ~f:make_obj ~init:(Telemetry.create ()) metrics in
+      telemetry |> Telemetry.object_ ~key:(Value.description ^ ".shared") ~value
 
   let () =
     get_telemetry_list := get_telemetry :: !get_telemetry_list;

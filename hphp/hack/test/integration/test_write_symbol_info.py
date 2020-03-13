@@ -14,10 +14,15 @@ from glean.schema.hack.types import (
     EnumDeclaration,
     EnumDefinition,
     FileXRefs,
+    FunctionDeclaration,
+    FunctionDefinition,
+    GlobalConstDeclaration,
+    GlobalConstDefinition,
     InterfaceDeclaration,
     InterfaceDefinition,
     TraitDeclaration,
     TraitDefinition,
+    TypedefDeclaration,
 )
 from hh_paths import hh_server
 from thrift.py3 import Protocol, Struct, deserialize
@@ -100,10 +105,15 @@ max_workers = 2
             "hack.EnumDeclaration.1": EnumDeclaration,
             "hack.EnumDefinition.1": EnumDefinition,
             "hack.FileXRefs.1": FileXRefs,
+            "hack.FunctionDeclaration.1": FunctionDeclaration,
+            "hack.FunctionDefinition.1": FunctionDefinition,
+            "hack.GlobalConstDeclaration.1": GlobalConstDeclaration,
+            "hack.GlobalConstDefinition.1": GlobalConstDefinition,
             "hack.InterfaceDeclaration.1": InterfaceDeclaration,
             "hack.InterfaceDefinition.1": InterfaceDefinition,
             "hack.TraitDeclaration.1": TraitDeclaration,
             "hack.TraitDefinition.1": TraitDefinition,
+            "hack.TypedefDeclaration.1": TypedefDeclaration,
         }
         return predicate_dict.get(predicate_name)
 

@@ -34,10 +34,15 @@ type predicate =
   | EnumDeclaration
   | EnumDefinition
   | FileXRefs
+  | FunctionDeclaration
+  | FunctionDefinition
+  | GlobalConstDeclaration
+  | GlobalConstDefinition
   | InterfaceDeclaration
   | InterfaceDefinition
   | TraitDeclaration
   | TraitDefinition
+  | TypedefDeclaration
 
 (* Containers that can be in inheritance relationships *)
 type container_type =
@@ -52,16 +57,21 @@ type glean_json = {
   enumDeclaration: json list;
   enumDefinition: json list;
   fileXRefs: json list;
+  functionDeclaration: json list;
+  functionDefinition: json list;
+  globalConstDeclaration: json list;
+  globalConstDefinition: json list;
   interfaceDeclaration: json list;
   interfaceDefinition: json list;
   traitDeclaration: json list;
   traitDefinition: json list;
+  typedefDeclaration: json list;
 }
 
 type result_progress = {
   resultJson: glean_json;
-  (* Maps fact JSON to fact id *)
-  factIds: int JMap.t;
+  (* Maps fact JSON key to a list of predicate/fact id pairs *)
+  factIds: (predicate * int) list JMap.t;
 }
 
 let init_progress =
@@ -73,13 +83,27 @@ let init_progress =
       enumDeclaration = [];
       enumDefinition = [];
       fileXRefs = [];
+      functionDeclaration = [];
+      functionDefinition = [];
+      globalConstDeclaration = [];
+      globalConstDefinition = [];
       interfaceDeclaration = [];
       interfaceDefinition = [];
       traitDeclaration = [];
       traitDefinition = [];
+      typedefDeclaration = [];
     }
   in
   { resultJson = default_json; factIds = JMap.empty }
+
+let rec find_fid fid_list pred =
+  match fid_list with
+  | [] -> None
+  | (p, fid) :: tail ->
+    if phys_equal p pred then
+      Some fid
+    else
+      find_fid tail pred
 
 let get_type_from_hint ctx h =
   let mode = FileInfo.Mdecl in
@@ -129,6 +153,28 @@ let update_json_data predicate json progress =
         progress.resultJson with
         fileXRefs = json :: progress.resultJson.fileXRefs;
       }
+    | FunctionDeclaration ->
+      {
+        progress.resultJson with
+        functionDeclaration = json :: progress.resultJson.functionDeclaration;
+      }
+    | FunctionDefinition ->
+      {
+        progress.resultJson with
+        functionDefinition = json :: progress.resultJson.functionDefinition;
+      }
+    | GlobalConstDeclaration ->
+      {
+        progress.resultJson with
+        globalConstDeclaration =
+          json :: progress.resultJson.globalConstDeclaration;
+      }
+    | GlobalConstDefinition ->
+      {
+        progress.resultJson with
+        globalConstDefinition =
+          json :: progress.resultJson.globalConstDefinition;
+      }
     | InterfaceDeclaration ->
       {
         progress.resultJson with
@@ -149,6 +195,11 @@ let update_json_data predicate json progress =
         progress.resultJson with
         traitDefinition = json :: progress.resultJson.traitDefinition;
       }
+    | TypedefDeclaration ->
+      {
+        progress.resultJson with
+        typedefDeclaration = json :: progress.resultJson.typedefDeclaration;
+      }
   in
   { resultJson = json; factIds = progress.factIds }
 
@@ -156,18 +207,28 @@ let update_json_data predicate json progress =
  fact has not yet been added. Return the fact's id (which can be referenced in
  other facts), and the updated result. *)
 let add_fact predicate json_key progress =
+  let add_id =
+    let newFactId = json_element_id () in
+    let progress =
+      {
+        resultJson = progress.resultJson;
+        factIds =
+          JMap.add
+            json_key
+            [(predicate, newFactId)]
+            progress.factIds
+            ~combine:List.append;
+      }
+    in
+    (newFactId, true, progress)
+  in
   let (id, is_new, progress) =
     match JMap.find_opt json_key progress.factIds with
-    | Some fid -> (fid, false, progress)
-    | None ->
-      let newFactId = json_element_id () in
-      let progress =
-        {
-          resultJson = progress.resultJson;
-          factIds = JMap.add json_key newFactId progress.factIds;
-        }
-      in
-      (newFactId, true, progress)
+    | None -> add_id
+    | Some fid_list ->
+      (match find_fid fid_list predicate with
+      | None -> add_id
+      | Some fid -> (fid, false, progress))
   in
   let json_fact =
     JSON_Object [("id", JSON_Number (string_of_int id)); ("key", json_key)]
@@ -201,11 +262,13 @@ nested facts. *)
 let build_name_json_nested name =
   (* Remove leading slash, if present, so names such as
   Exception and \Exception are captured by the same fact *)
-  let basename = String_utils.lstrip name "\\" in
+  let basename = Utils.strip_ns name in
   JSON_Object [("key", JSON_String basename)]
 
 let build_type_json_nested type_name =
-  JSON_Object [("key", JSON_String type_name)]
+  (* Remove namespace slash from type, if present *)
+  let ty = Utils.strip_ns type_name in
+  JSON_Object [("key", JSON_String ty)]
 
 let build_enumerator_json_nested const_name decl_ref =
   JSON_Object
@@ -218,8 +281,26 @@ let build_enumerator_json_nested const_name decl_ref =
           ] );
     ]
 
+let build_signature_json_nested parameters return_type_name =
+  let fields =
+    let params = [("parameters", JSON_Array parameters)] in
+    match return_type_name with
+    | None -> params
+    | Some ty -> ("returns", build_type_json_nested ty) :: params
+  in
+  JSON_Object [("key", JSON_Object fields)]
+
 let build_id_json fact_id =
   JSON_Object [("id", JSON_Number (string_of_int fact_id))]
+
+let build_parameter_json param_name param_type_name =
+  let fields =
+    let name_field = [("name", build_name_json_nested param_name)] in
+    match param_type_name with
+    | None -> name_field
+    | Some ty -> ("type", build_type_json_nested ty) :: name_field
+  in
+  JSON_Object fields
 
 let build_bytespan_json pos =
   let start = fst (Pos.info_raw pos) in
@@ -272,6 +353,15 @@ let build_container_decl_json_ref container_type fact_id =
 
 let build_enum_decl_json_ref fact_id =
   JSON_Object [("enum_", build_id_json fact_id)]
+
+let build_func_decl_json_ref fact_id =
+  JSON_Object [("function_", build_id_json fact_id)]
+
+let build_typedef_decl_json_ref fact_id =
+  JSON_Object [("typedef_", build_id_json fact_id)]
+
+let build_gconst_decl_json_ref fact_id =
+  JSON_Object [("global_const", build_id_json fact_id)]
 
 (* These functions build up the JSON necessary and then add facts
 to the running result. *)
@@ -332,6 +422,73 @@ let add_enum_defn_fact ctx elem decl_id progress =
         :: json_fields)
   in
   add_fact EnumDefinition (JSON_Object json_fields) progress
+
+let add_func_decl_fact name _elem progress =
+  let json_fact = JSON_Object [("name", build_name_json_nested name)] in
+  add_fact FunctionDeclaration json_fact progress
+
+let add_func_defn_fact ctx elem decl_id progress =
+  let parameters =
+    List.map elem.f_params (fun param ->
+        let ty =
+          match hint_of_type_hint param.param_type_hint with
+          | None -> None
+          | Some h -> Some (get_type_from_hint ctx h)
+        in
+        build_parameter_json param.param_name ty)
+  in
+  let return_type_name =
+    match hint_of_type_hint elem.f_ret with
+    | None -> None
+    | Some h -> Some (get_type_from_hint ctx h)
+  in
+  let signature = build_signature_json_nested parameters return_type_name in
+  let is_async =
+    match elem.f_fun_kind with
+    | FAsync -> true
+    | FAsyncGenerator -> true
+    | _ -> false
+  in
+  let json_fact =
+    JSON_Object
+      [
+        ("declaration", build_id_json decl_id);
+        ("signature", signature);
+        ("isAsync", JSON_Bool is_async);
+      ]
+  in
+  add_fact FunctionDefinition json_fact progress
+
+let add_typedef_decl_fact name elem progress =
+  let is_transparent =
+    match elem.t_vis with
+    | Transparent -> true
+    | Opaque -> false
+  in
+  let json_fact =
+    JSON_Object
+      [
+        ("name", build_name_json_nested name);
+        ("is_transparent", JSON_Bool is_transparent);
+      ]
+  in
+  add_fact TypedefDeclaration json_fact progress
+
+let add_gconst_decl_fact name _elem progress =
+  let json_fact = JSON_Object [("name", build_name_json_nested name)] in
+  add_fact GlobalConstDeclaration json_fact progress
+
+let add_gconst_defn_fact ctx elem decl_id progress =
+  let req_fields = [("declaration", build_id_json decl_id)] in
+  let json_fields =
+    match elem.cst_type with
+    | None -> req_fields
+    | Some h ->
+      let ty = get_type_from_hint ctx h in
+      ("type", build_type_json_nested ty) :: req_fields
+  in
+  let json_fact = JSON_Object json_fields in
+  add_fact GlobalConstDefinition json_fact progress
 
 let add_decl_loc_fact pos decl_json progress =
   let filepath = Relative_path.to_absolute (Pos.filename pos) in
@@ -430,6 +587,35 @@ let process_enum_decl ctx elem progress =
     elem
     progress
 
+let process_gconst_decl ctx elem progress =
+  let (pos, id) = elem.cst_name in
+  process_decl_loc
+    add_gconst_decl_fact
+    (add_gconst_defn_fact ctx)
+    build_gconst_decl_json_ref
+    pos
+    id
+    elem
+    progress
+
+let process_func_decl ctx elem progress =
+  let (pos, id) = elem.f_name in
+  process_decl_loc
+    add_func_decl_fact
+    (add_func_defn_fact ctx)
+    build_func_decl_json_ref
+    pos
+    id
+    elem
+    progress
+
+let process_typedef_decl elem progress =
+  let (pos, id) = elem.t_name in
+  let (decl_id, prog) = add_typedef_decl_fact id elem progress in
+  let ref_json = build_typedef_decl_json_ref decl_id in
+  let (_, prog) = add_decl_loc_fact pos ref_json prog in
+  prog
+
 (* This function walks over the symbols in each file and gleans
  facts along the way. *)
 let build_json ctx symbols =
@@ -439,6 +625,9 @@ let build_json ctx symbols =
         | Class en when phys_equal en.c_kind Cenum ->
           process_enum_decl ctx en acc
         | Class cd -> process_container_decl cd acc
+        | Constant gd -> process_gconst_decl ctx gd acc
+        | Fun fd -> process_func_decl ctx fd acc
+        | Typedef td -> process_typedef_decl td acc
         | _ -> acc)
   in
   (* file_xrefs : (Hh_json.json * Relative_path.t Pos.pos list) IMap.t SMap.t *)
@@ -464,10 +653,24 @@ let build_json ctx symbols =
             | Trait ->
               let con_kind = container_decl_predicate TraitContainer in
               process_container_xref con_kind symbol_def occ.pos (xrefs, prog)
+            | Const when phys_equal occ.type_ GConst ->
+              process_xref
+                add_gconst_decl_fact
+                build_gconst_decl_json_ref
+                symbol_def
+                occ.pos
+                (xrefs, prog)
             | Enum ->
               process_xref
                 add_enum_decl_fact
                 build_enum_decl_json_ref
+                symbol_def
+                occ.pos
+                (xrefs, prog)
+            | Function ->
+              process_xref
+                add_func_decl_fact
+                build_func_decl_json_ref
                 symbol_def
                 occ.pos
                 (xrefs, prog)
@@ -487,15 +690,21 @@ let build_json ctx symbols =
     by id only *)
     [
       ("hack.FileXRefs.1", progress.resultJson.fileXRefs);
+      ("hack.FunctionDefinition.1", progress.resultJson.functionDefinition);
       ("hack.EnumDefinition.1", progress.resultJson.enumDefinition);
       ("hack.ClassDefinition.1", progress.resultJson.classDefinition);
       ("hack.TraitDefinition.1", progress.resultJson.traitDefinition);
       ("hack.InterfaceDefinition.1", progress.resultJson.interfaceDefinition);
+      ("hack.GlobalConstDefinition.1", progress.resultJson.globalConstDefinition);
       ("hack.DeclarationLocation.1", progress.resultJson.declarationLocation);
+      ("hack.FunctionDeclaration.1", progress.resultJson.functionDeclaration);
       ("hack.EnumDeclaration.1", progress.resultJson.enumDeclaration);
       ("hack.ClassDeclaration.1", progress.resultJson.classDeclaration);
       ("hack.TraitDeclaration.1", progress.resultJson.traitDeclaration);
       ("hack.InterfaceDeclaration.1", progress.resultJson.interfaceDeclaration);
+      ("hack.TypedefDeclaration.1", progress.resultJson.typedefDeclaration);
+      ( "hack.GlobalConstDeclaration.1",
+        progress.resultJson.globalConstDeclaration );
     ]
   in
   let json_array =

@@ -492,6 +492,7 @@ struct PackedArrayInitBase final : ArrayInitBase<TArray, DT> {
 
 /*
  * Initializer for a PHP vector-shaped array.
+ * TODO(T58820726): Remove by migrating remaining callers.
  */
 using PackedArrayInit = PackedArrayInitBase<PackedArray, KindOfArray>;
 
@@ -934,15 +935,13 @@ namespace make_array_detail {
 }
 
 /*
- * Helper for creating packed arrays (vector-like) that don't contain
- * references.
+ * Helper for creating packed arrays (vector-like).
  *
  * Usage:
  *
  *   auto newArray = make_packed_array(1, 2, 3, 4);
  *
- * If you need to deal with references, you currently have to use
- * PackedArrayInit directly.
+ * TODO(T58820726): Remove by migrating remaining callers.
  */
 template<class... Vals>
 Array make_packed_array(Vals&&... vals) {
@@ -953,14 +952,11 @@ Array make_packed_array(Vals&&... vals) {
 }
 
 /*
- * Helper for creating packed varrays that don't contain references.
+ * Helper for creating packed varrays.
  *
  * Usage:
  *
  *   auto newArray = make_varray(1, 2, 3, 4);
- *
- * If you need to deal with references, you currently have to use
- * VArrayInit directly.
  */
 template<class... Vals>
 Array make_varray(Vals&&... vals) {
@@ -971,8 +967,7 @@ Array make_varray(Vals&&... vals) {
 }
 
 /*
- * Helper for creating Hack vec arrays (vector-like). Vec arrays can't contain
- * references.
+ * Helper for creating Hack vec arrays (vector-like).
  *
  * Usage:
  *
@@ -1003,6 +998,7 @@ Array make_vec_array_tagged(arrprov::Tag tag, Vals&&... vals) {
  *   auto newArray = make_map_array(keyOne, valueOne,
  *                                  otherKey, otherValue);
  *
+ * TODO(T58820726): Remove by migrating remaining callers.
  */
 template<class... KVPairs>
 Array make_map_array(KVPairs&&... kvpairs) {
@@ -1070,6 +1066,7 @@ template <typename TArray>
 MixedPHPArrayInitBase<TArray>::MixedPHPArrayInitBase(size_t n,
                                                      Map,
                                                      CheckAllocation)
+  // TODO(T58820726): Remove by migrating remaining callers.
   : ArrayInitBase<TArray, KindOfArray>(n, CheckAllocation{})
 {
   if (n > std::numeric_limits<int>::max()) {

@@ -347,25 +347,23 @@ static_assert(KindOfUninit == static_cast<DataType>(0),
 MaybeDataType get_datatype(
   const std::string& name,
   bool can_be_collection,
-  bool is_function,
-  bool is_xhp,
-  bool is_tuple,
   bool is_nullable,
   bool is_soft
 ) {
-  if (is_function || is_xhp || is_tuple) {
-    return KindOfObject;
-  }
   if (can_be_collection) {
     if (!strcasecmp(name.c_str(), "array"))      return KindOfArray;
     if (!strcasecmp(name.c_str(), "HH\\vec"))    return KindOfVec;
     if (!strcasecmp(name.c_str(), "HH\\dict"))   return KindOfDict;
     if (!strcasecmp(name.c_str(), "HH\\keyset")) return KindOfKeyset;
     if (!strcasecmp(name.c_str(), "HH\\varray")) {
-      return RuntimeOption::EvalHackArrDVArrs ? KindOfVec : KindOfArray;
+      return RuntimeOption::EvalHackArrDVArrs
+        ? KindOfVec : RuntimeOption::EvalSpecializeDVArray
+        ? KindOfVArray : KindOfArray;
     }
     if (!strcasecmp(name.c_str(), "HH\\darray")) {
-      return RuntimeOption::EvalHackArrDVArrs ? KindOfDict : KindOfArray;
+      return RuntimeOption::EvalHackArrDVArrs
+        ? KindOfDict : RuntimeOption::EvalSpecializeDVArray
+        ? KindOfDArray : KindOfArray;
     }
     if (!strcasecmp(name.c_str(), "HH\\varray_or_darray")) return folly::none;
     if (!strcasecmp(name.c_str(), "HH\\vec_or_dict")) return folly::none;
@@ -391,10 +389,14 @@ MaybeDataType get_datatype(
   if (!strcasecmp(name.c_str(), "HH\\vec"))      return KindOfVec;
   if (!strcasecmp(name.c_str(), "HH\\keyset"))   return KindOfKeyset;
   if (!strcasecmp(name.c_str(), "HH\\varray")) {
-    return RuntimeOption::EvalHackArrDVArrs ? KindOfVec : KindOfArray;
+    return RuntimeOption::EvalHackArrDVArrs
+      ? KindOfVec : RuntimeOption::EvalSpecializeDVArray
+      ? KindOfVArray : KindOfArray;
   }
   if (!strcasecmp(name.c_str(), "HH\\darray")) {
-    return RuntimeOption::EvalHackArrDVArrs ? KindOfDict : KindOfArray;
+    return RuntimeOption::EvalHackArrDVArrs
+      ? KindOfDict : RuntimeOption::EvalSpecializeDVArray
+      ? KindOfDArray : KindOfArray;
   }
   if (!strcasecmp(name.c_str(), "HH\\varray_or_darray")) return folly::none;
   if (!strcasecmp(name.c_str(), "HH\\vec_or_dict")) return folly::none;

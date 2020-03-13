@@ -8,7 +8,7 @@ use bumpalo::{vec, Bump};
 
 use naming_special_names_rust::{classes, collections};
 use oxidized::pos::Pos;
-use oxidized::{aast_defs::*, ast_defs::*, ident};
+use oxidized::{aast_defs::Sid, ast_defs::Id, ident};
 
 use crate::typing_defs_core::{Ty, *};
 use crate::typing_logic::{SubtypeProp, SubtypePropEnum};
@@ -83,6 +83,10 @@ impl<'a> TypeBuilder<'a> {
 
 /// All type builders go here
 impl<'a> TypeBuilder<'a> {
+    pub fn alloc<T>(&self, x: T) -> &T {
+        self.alloc.alloc(x)
+    }
+
     // All type construction should go through here
     fn mk(&'a self, reason: PReason<'a>, ty_: Ty_<'a>) -> Ty<'a> {
         Ty(reason, self.alloc.alloc(ty_))
