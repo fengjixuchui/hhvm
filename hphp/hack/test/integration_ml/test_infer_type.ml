@@ -348,10 +348,10 @@ let test () =
              { tcopt with GlobalOptions.tco_dynamic_view = dynamic })
     in
     let (ctx, entry) =
-      Provider_utils.add_entry ~ctx ~path:(Relative_path.from_root file)
+      Provider_context.add_entry ~ctx ~path:(Relative_path.from_root file)
     in
-    let { Provider_utils.Compute_tast.tast; _ } =
-      Provider_utils.compute_tast_unquarantined ~ctx ~entry
+    let { Tast_provider.Compute_tast.tast; _ } =
+      Tast_provider.compute_tast_unquarantined ~ctx ~entry
     in
     let ty = ServerInferType.type_at_pos ctx tast line col in
     compare_type expected_type ty

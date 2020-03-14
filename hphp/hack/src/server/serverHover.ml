@@ -389,11 +389,10 @@ let go_quarantined
   let identities =
     ServerIdentifyFunction.go_quarantined ~ctx ~entry ~line ~column
   in
-  let { Provider_utils.Compute_tast.tast; _ } =
-    Provider_utils.compute_tast_quarantined ~ctx ~entry
+  let { Tast_provider.Compute_tast.tast; _ } =
+    Tast_provider.compute_tast_quarantined ~ctx ~entry
   in
-  let env_and_ty =
-    ServerInferType.expanded_type_at_pos ctx tast line column in
+  let env_and_ty = ServerInferType.expanded_type_at_pos ctx tast line column in
   (* There are legitimate cases where we expect to have no identities returned,
      so just format the type. *)
   match identities with
@@ -414,6 +413,6 @@ let go_quarantined
              |> Option.map ~f:Pos.filename
              |> Option.value ~default:entry.Provider_context.path
            in
-           let (ctx, entry) = Provider_utils.add_entry ~ctx ~path in
+           let (ctx, entry) = Provider_context.add_entry ~ctx ~path in
            make_hover_info ctx env_and_ty entry occurrence def_opt)
     |> List.remove_consecutive_duplicates ~equal:( = )

@@ -264,10 +264,10 @@ let test_compute_tast_counting () =
   EventLogger.init_fake ();
 
   let (ctx, entry) =
-    Provider_utils.add_entry_from_file_contents ~ctx ~path ~contents
+    Provider_context.add_entry_from_file_contents ~ctx ~path ~contents
   in
-  let { Provider_utils.Compute_tast_and_errors.telemetry; _ } =
-    Provider_utils.compute_tast_and_errors_unquarantined ~ctx ~entry
+  let { Tast_provider.Compute_tast_and_errors.telemetry; _ } =
+    Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
   in
 
   Asserter.Int_asserter.assert_equals
@@ -292,9 +292,9 @@ let test_compute_tast_counting () =
           ~tcopt:TypecheckerOptions.default
           ~backend:(Provider_backend.get ())
       in
-      let (ctx, entry) = Provider_utils.add_entry ~ctx ~path in
-      let { Provider_utils.Compute_tast_and_errors.telemetry; _ } =
-        Provider_utils.compute_tast_and_errors_unquarantined ~ctx ~entry
+      let (ctx, entry) = Provider_context.add_entry ~ctx ~path in
+      let { Tast_provider.Compute_tast_and_errors.telemetry; _ } =
+        Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
       in
       Asserter.Int_asserter.assert_equals
         84

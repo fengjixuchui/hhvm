@@ -1076,7 +1076,6 @@ struct RuntimeOption {
   F(bool, HackArrCompatNotices, false)                                  \
   F(bool, HackArrCompatCheckEmptyStringPromote, false)                  \
   F(bool, HackArrCompatCheckCompare, false)                             \
-  F(bool, HackArrCompatCheckCompareNonAnyArray, false)                  \
   F(bool, HackArrCompatCheckArrayPlus, false)                           \
   F(bool, HackArrCompatCheckArrayKeyCast, false)                        \
   F(bool, HackArrCompatFBSerializeHackArraysNotices, false)             \
@@ -1104,6 +1103,9 @@ struct RuntimeOption {
   /* a v/darray, is called */                                           \
   F(bool, HackArrCompatArrayProducingFuncNotices, false)                \
   F(bool, HackArrDVArrs, false)                                         \
+  /* Changes Hack arrays so they == true when not empty and == false    \
+   * when empty, instead of always being != any boolean or null. */     \
+  F(bool, HackArrEmptyBasedBoolEqCmp, false)                            \
   /* Enable instrumentation and information in the repo for tracking    \
    * the source of vecs and dicts whose vec/dict-ness is observed       \
    * during program execution                                           \

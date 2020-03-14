@@ -280,7 +280,6 @@ std::vector<SString> load_input(F&& fun) {
   RO::EvalJitEnableRenameFunction = gd.EnableRenameFunction;
   RO::EvalHackArrCompatNotices =
     RO::EvalHackArrCompatCheckCompare =
-    RO::EvalHackArrCompatCheckCompareNonAnyArray =
     RO::EvalHackArrCompatCheckArrayPlus =
     RO::EvalHackArrCompatCheckArrayKeyCast =
       gd.HackArrCompatNotices;
@@ -307,6 +306,7 @@ std::vector<SString> load_input(F&& fun) {
   RO::EvalHackArrCompatSerializeNotices =
     gd.HackArrCompatSerializeNotices;
   RO::EvalHackArrDVArrs = gd.HackArrDVArrs;
+  RO::EvalHackArrEmptyBasedBoolEqCmp = gd.HackArrEmptyBasedBoolEqCmp;
   RO::EvalAbortBuildOnVerifyError = gd.AbortBuildOnVerifyError;
   RO::EnableArgsInBacktraces = gd.EnableArgsInBacktraces;
   RO::EvalEmitClsMethPointers = gd.EmitClsMethPointers;
@@ -408,6 +408,7 @@ void write_global_data(
   gd.HackArrCompatSerializeNotices =
     RuntimeOption::EvalHackArrCompatSerializeNotices;
   gd.HackArrDVArrs = RuntimeOption::EvalHackArrDVArrs;
+  gd.HackArrEmptyBasedBoolEqCmp = RuntimeOption::EvalHackArrEmptyBasedBoolEqCmp;
   gd.InitialNamedEntityTableSize  =
     RuntimeOption::EvalInitialNamedEntityTableSize;
   gd.InitialStaticStringTableSize =

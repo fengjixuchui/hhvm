@@ -512,7 +512,9 @@ let type_check_dirty
   (* We still need to typecheck files whose declarations did not change *)
   let to_recheck = Relative_path.Set.union to_recheck similar_files in
   let fast = extend_fast genv dirty_fast env.naming_table to_recheck in
-  let result = type_check genv env fast t in
+  let files_to_check = Relative_path.Map.keys fast in
+  let env = { env with changed_files = dirty_files } in
+  let result = type_check genv env files_to_check t in
   HackEventLogger.type_check_dirty
     ~start_t
     ~dirty_count:(Relative_path.Set.cardinal dirty_files)
@@ -666,7 +668,7 @@ let full_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
   let (env, t) =
     if
       genv.ServerEnv.local_config.SLC.remote_type_check
-        .SLC.load_naming_table_on_full_init
+        .SLC.RemoteTypeCheck.load_naming_table_on_full_init
       = false
     then
       initialize_naming_table ~do_naming:true "full initialization" genv env
@@ -675,7 +677,8 @@ let full_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
   in
   let env =
     let remote_enabled =
-      genv.ServerEnv.local_config.SLC.remote_type_check.SLC.enabled
+      genv.ServerEnv.local_config.SLC.remote_type_check
+        .SLC.RemoteTypeCheck.enabled
     in
     if remote_enabled && is_check_mode then
       start_typing_delegate genv env
@@ -692,7 +695,7 @@ let full_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
       ~f:(fun x m -> Relative_path.Map.remove m x)
       ~init:fast
   in
-  type_check genv env fast t
+  type_check genv env (Relative_path.Map.keys fast) t
 
 let parse_only_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
     ServerEnv.env * float =
