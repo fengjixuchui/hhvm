@@ -303,7 +303,7 @@ pub fn emit_stmt(e: &mut Emitter, env: &mut Env, stmt: &tast::Stmt) -> Result {
         a::Stmt_::Block(b) => emit_block(env, e, &b),
         a::Stmt_::If(f) => emit_if(e, env, pos, &f.0, &f.1, &f.2),
         a::Stmt_::While(x) => emit_while(e, env, &x.0, &x.1),
-        a::Stmt_::Using(_) => unimplemented!("TODO(hrust)"),
+        a::Stmt_::Using(x) => emit_using(e, env, pos, &**x),
         a::Stmt_::Break => Ok(emit_break(e, env, pos)),
         a::Stmt_::Continue => Ok(emit_continue(e, env, pos)),
         a::Stmt_::Do(x) => emit_do(e, env, &x.0, &x.1),
@@ -338,13 +338,339 @@ pub fn emit_stmt(e: &mut Emitter, env: &mut Env, stmt: &tast::Stmt) -> Result {
                 emit_stmt(e, env, &try_catch_finally)
             }
         }
-        a::Stmt_::Switch(_) => unimplemented!("TODO(hrust)"),
+        a::Stmt_::Switch(x) => emit_switch(e, env, pos, &x.0, &x.1),
         a::Stmt_::Foreach(x) => emit_foreach(e, env, pos, &x.0, &x.1, &x.2),
         a::Stmt_::DefInline(def) => emit_def_inline(e, &**def),
         a::Stmt_::Awaitall(_) => unimplemented!("TODO(hrust)"),
         a::Stmt_::Markup(x) => emit_markup(e, env, (&x.0, &x.1), false),
         a::Stmt_::Fallthrough | a::Stmt_::Noop => Ok(InstrSeq::Empty),
     }
+}
+
+fn emit_case(
+    e: &mut Emitter,
+    env: &mut Env,
+    pos: &Pos,
+    scrutinee_expr: &tast::Expr,
+    case: &tast::Case,
+    emit_exhaustiveness: bool,
+) -> Result<((InstrSeq, InstrSeq), Option<Label>)> {
+    Ok(match case {
+        tast::Case::Case(case_expr, b) => {
+            let case_handler_label = e.label_gen_mut().next_regular();
+
+            let instr_check_case = if scrutinee_expr.1.is_lvar() {
+                InstrSeq::gather(vec![
+                    emit_expr::emit_two_exprs(e, env, &case_expr.0, scrutinee_expr, &case_expr)?,
+                    InstrSeq::make_eq(),
+                    InstrSeq::make_jmpnz(case_handler_label.clone()),
+                ])
+            } else {
+                let next_case_label = e.label_gen_mut().next_regular();
+                InstrSeq::gather(vec![
+                    InstrSeq::make_dup(),
+                    emit_expr::emit_expr(e, env, &case_expr)?,
+                    emit_pos(e, &case_expr.0),
+                    InstrSeq::make_eq(),
+                    InstrSeq::make_jmpz(next_case_label.clone()),
+                    InstrSeq::make_popc(),
+                    InstrSeq::make_jmp(case_handler_label.clone()),
+                    InstrSeq::make_label(next_case_label),
+                ])
+            };
+            (
+                (
+                    instr_check_case,
+                    InstrSeq::gather(vec![
+                        InstrSeq::make_label(case_handler_label),
+                        emit_block(env, e, b)?,
+                    ]),
+                ),
+                None,
+            )
+        }
+        tast::Case::Default(_, b) => {
+            let l = e.label_gen_mut().next_regular();
+            (
+                (
+                    InstrSeq::Empty,
+                    InstrSeq::gather(vec![
+                        InstrSeq::make_label(l.clone()),
+                        emit_block(env, e, b)?,
+                    ]),
+                ),
+                Some(l),
+            )
+        }
+    })
+}
+
+fn emit_using(e: &mut Emitter, env: &mut Env, pos: &Pos, using: &tast::UsingStmt) -> Result {
+    let block_pos = block_pos(&using.block)?;
+    match (using.expr).1.as_expr_list() {
+        // TODO(hrust): avoid cloning blocks and expressions
+        Some(es) => emit_stmts(
+            e,
+            env,
+            es.iter()
+                .rev()
+                .fold(using.block.clone(), |block, expr| {
+                    vec![tast::Stmt(
+                        expr.0.clone(),
+                        tast::Stmt_::mk_using(tast::UsingStmt {
+                            has_await: using.has_await,
+                            is_block_scoped: using.is_block_scoped,
+                            expr: expr.clone(),
+                            block,
+                        }),
+                    )]
+                })
+                .as_slice(),
+        ),
+        _ => e.local_scope(|e| {
+            let (local, preamble) = match &(using.expr).1 {
+                tast::Expr_::Binop(x) if x.0.is_eq() && (x.1).1.is_lvar() => {
+                    match (x.1).1.as_lvar() {
+                        Some(tast::Lid(_, id)) => (
+                            local::Type::Named(local_id::get_name(&id).into()),
+                            InstrSeq::gather(vec![
+                                emit_expr::emit_expr(e, env, &using.expr)?,
+                                emit_pos(e, &block_pos),
+                                InstrSeq::make_popc(),
+                            ]),
+                        ),
+                        None => {
+                            let l = e.local_gen_mut().get_unnamed();
+                            (
+                                l.clone(),
+                                InstrSeq::gather(vec![
+                                    emit_expr::emit_expr(e, env, &using.expr)?,
+                                    InstrSeq::make_setl(l),
+                                    InstrSeq::make_popc(),
+                                ]),
+                            )
+                        }
+                    }
+                }
+                tast::Expr_::Lvar(lid) => (
+                    local::Type::Named(local_id::get_name(&lid.1).into()),
+                    InstrSeq::gather(vec![
+                        emit_expr::emit_expr(e, env, &using.expr)?,
+                        emit_pos(e, &block_pos),
+                        InstrSeq::make_popc(),
+                    ]),
+                ),
+                _ => {
+                    let l = e.local_gen_mut().get_unnamed();
+                    (
+                        l.clone(),
+                        InstrSeq::gather(vec![
+                            emit_expr::emit_expr(e, env, &using.expr)?,
+                            InstrSeq::make_setl(l),
+                            InstrSeq::make_popc(),
+                        ]),
+                    )
+                }
+            };
+            let finally_start = e.label_gen_mut().next_regular();
+            let finally_end = e.label_gen_mut().next_regular();
+            let body = env.do_in_using_body(e, finally_start.clone(), &using.block, emit_block)?;
+            let jump_instrs = tfr::JumpInstructions::collect(&body, &mut env.jump_targets_gen);
+            let jump_instrs_is_empty = jump_instrs.is_empty();
+            let finally_epilogue =
+                tfr::emit_finally_epilogue(e, env, pos, jump_instrs, finally_end.clone())?;
+            let try_instrs = if jump_instrs_is_empty {
+                body
+            } else {
+                tfr::cleanup_try_body(&body)
+            };
+
+            let emit_finally = |e: &mut Emitter,
+                                local: local::Type,
+                                has_await: bool,
+                                is_block_scoped: bool|
+             -> InstrSeq {
+                let (epilogue, async_eager_label) = if has_await {
+                    let after_await = e.label_gen_mut().next_regular();
+                    (
+                        InstrSeq::gather(vec![
+                            InstrSeq::make_await(),
+                            InstrSeq::make_label(after_await.clone()),
+                            InstrSeq::make_popc(),
+                        ]),
+                        Some(after_await),
+                    )
+                } else {
+                    (InstrSeq::make_popc(), None)
+                };
+                let fn_name = hhbc_id::method::from_raw_string(if has_await {
+                    "__disposeAsync"
+                } else {
+                    "__dispose"
+                });
+                InstrSeq::gather(vec![
+                    InstrSeq::make_cgetl(local.clone()),
+                    InstrSeq::make_nulluninit(),
+                    InstrSeq::make_nulluninit(),
+                    InstrSeq::make_fcallobjmethodd(
+                        FcallArgs::new(FcallFlags::empty(), 1, vec![], async_eager_label, 0),
+                        fn_name,
+                        ObjNullFlavor::NullThrows,
+                    ),
+                    epilogue,
+                    if is_block_scoped {
+                        InstrSeq::make_unsetl(local)
+                    } else {
+                        InstrSeq::Empty
+                    },
+                ])
+            };
+            let exn_local = e.local_gen_mut().get_unnamed();
+            let middle = if is_empty_block(&using.block) {
+                InstrSeq::Empty
+            } else {
+                let finally_instrs =
+                    emit_finally(e, local.clone(), using.has_await, using.is_block_scoped);
+                let catch_instrs = InstrSeq::gather(vec![
+                    emit_pos(e, &block_pos),
+                    make_finally_catch(e, exn_local, finally_instrs),
+                    emit_pos(e, pos),
+                ]);
+                InstrSeq::create_try_catch(e.label_gen_mut(), None, true, try_instrs, catch_instrs)
+            };
+            Ok(InstrSeq::gather(vec![
+                preamble,
+                middle,
+                InstrSeq::make_label(finally_start),
+                emit_finally(e, local, using.has_await, using.is_block_scoped),
+                finally_epilogue,
+                InstrSeq::make_label(finally_end),
+            ]))
+        }),
+    }
+}
+
+fn block_pos(block: &tast::Block) -> Result<Pos> {
+    if block.iter().all(|b| b.0.is_none()) {
+        return Ok(Pos::make_none());
+    }
+    let mut first = 0;
+    let mut last = block.len() - 1;
+    loop {
+        if !block[first].0.is_none() && !block[last].0.is_none() {
+            return Pos::btw(&block[first].0, &block[last].0).map_err(|s| Unrecoverable(s));
+        }
+        if block[first].0.is_none() {
+            first += 1;
+        }
+        if block[last].0.is_none() {
+            last -= 1;
+        }
+    }
+}
+
+fn emit_switch(
+    e: &mut Emitter,
+    env: &mut Env,
+    pos: &Pos,
+    scrutinee_expr: &tast::Expr,
+    cl: &Vec<tast::Case>,
+) -> Result {
+    let (instr_init, instr_free) = if scrutinee_expr.1.is_lvar() {
+        (InstrSeq::Empty, InstrSeq::Empty)
+    } else {
+        (
+            emit_expr::emit_expr(e, env, scrutinee_expr)?,
+            InstrSeq::make_popc(),
+        )
+    };
+    let break_label = e.label_gen_mut().next_regular();
+    let has_default = cl.iter().any(|c| c.is_default());
+
+    let emit_cases = |env: &mut Env,
+                      e: &mut Emitter,
+                      cases: &[tast::Case]|
+     -> Result<(InstrSeq, InstrSeq, Label)> {
+        match cases.split_last() {
+            None => {
+                return Err(Unrecoverable(
+                    "impossible - switch statements must have at least one case".into(),
+                ))
+            }
+            Some((last, rest)) => {
+                // Emit all the cases except the last one
+                let mut res = rest
+                    .iter()
+                    .map(|case| emit_case(e, env, pos, scrutinee_expr, case, !has_default))
+                    .collect::<Vec<_>>();
+
+                if has_default {
+                    // If there is a default, emit the last case as usual
+                    res.push(emit_case(e, env, pos, scrutinee_expr, last, !has_default))
+                } else {
+                    // Otherwise, emit the last case with an added break
+                    let last = &mut last.clone();
+                    match last {
+                        tast::Case::Case(expr, block) => {
+                            block.push(tast::Stmt(Pos::make_none(), tast::Stmt_::Break));
+                            res.push(emit_case(e, env, pos, scrutinee_expr, last, !has_default))
+                        }
+                        tast::Case::Default(_, _) => {
+                            return Err(Unrecoverable(
+                                "impossible - there shouldn't be a default".into(),
+                            ))
+                        }
+                    };
+                    // ...and emit warning/exception for missing default
+                    let l = e.label_gen_mut().next_regular();
+                    res.push(Ok((
+                        (
+                            InstrSeq::Empty,
+                            emit_pos_then(e, pos, InstrSeq::make_throw_non_exhaustive_switch()),
+                        ),
+                        Some(l),
+                    )))
+                };
+                let (case_instrs, default_labels): (Vec<(InstrSeq, InstrSeq)>, Vec<_>) = res
+                    .into_iter()
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .unzip();
+                let (case_expr_instrs, case_body_instrs) = case_instrs.into_iter().unzip();
+                let default_label = match default_labels
+                    .iter()
+                    .filter_map(|lopt| lopt.as_ref())
+                    .collect::<Vec<_>>()
+                    .as_slice()
+                {
+                    [] => break_label.clone(),
+                    [l] => l.to_owned().clone(),
+                    _ => {
+                        return Err(emit_fatal::raise_fatal_runtime(
+                            pos,
+                            "Switch statements may only contain one 'default' clause.",
+                        ))
+                    }
+                };
+                Ok((
+                    InstrSeq::gather(case_expr_instrs),
+                    InstrSeq::gather(case_body_instrs),
+                    default_label,
+                ))
+            }
+        }
+    };
+
+    let (case_expr_instrs, case_body_instrs, default_label) =
+        env.do_in_switch_body(e, break_label.clone(), cl, emit_cases)?;
+    Ok(InstrSeq::gather(vec![
+        instr_init,
+        case_expr_instrs,
+        instr_free,
+        InstrSeq::make_jmp(default_label),
+        case_body_instrs,
+        InstrSeq::make_label(break_label),
+    ]))
 }
 
 fn is_empty_block(b: &tast::Block) -> bool {
