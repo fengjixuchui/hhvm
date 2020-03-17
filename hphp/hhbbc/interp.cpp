@@ -4045,6 +4045,11 @@ void in(ISS& env, const bc::ResolveFunc& op) {
   push(env, TFunc);
 }
 
+void in(ISS& env, const bc::ResolveMethCaller& op) {
+  // TODO (T29639296)
+  push(env, TFunc);
+}
+
 void in(ISS& env, const bc::ResolveObjMethod& op) {
   popC(env);
   popC(env);
@@ -4168,9 +4173,20 @@ void fcallObjMethodImpl(ISS& env, const Op& op, SString methName, bool dynamic,
     return unknown();
   }
 
+  auto const ctx = [&] {
+    if (auto const name = op.fca.context()) {
+      auto const rcls = env.index.resolve_class(env.ctx, name);
+      if (rcls && rcls->cls()) {
+        return Context { env.ctx.unit, env.ctx.func, rcls->cls() };
+      }
+      return Context { env.ctx.unit, env.ctx.func, nullptr };
+    }
+    return env.ctx;
+  }();
+
   auto const ctxTy = intersection_of(input, TObj);
   auto const clsTy = objcls(ctxTy);
-  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, methName);
+  auto const rfunc = env.index.resolve_method(ctx, clsTy, methName);
 
   auto const canFold = !mayUseNullsafe && !mayThrowNonObj;
   if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC) ||
@@ -4249,7 +4265,18 @@ template <typename Op, class UpdateBC>
 void fcallClsMethodImpl(ISS& env, const Op& op, Type clsTy, SString methName,
                         bool dynamic, uint32_t numExtraInputs,
                         UpdateBC updateBC) {
-  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, methName);
+  auto const ctx = [&] {
+    if (auto const name = op.fca.context()) {
+      auto const rcls = env.index.resolve_class(env.ctx, name);
+      if (rcls && rcls->cls()) {
+        return Context { env.ctx.unit, env.ctx.func, rcls->cls() };
+      }
+      return Context { env.ctx.unit, env.ctx.func, nullptr };
+    }
+    return env.ctx;
+  }();
+
+  auto const rfunc = env.index.resolve_method(ctx, clsTy, methName);
 
   if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC) ||
       fcallTryFold(env, op.fca, rfunc, clsTy, dynamic, numExtraInputs)) {

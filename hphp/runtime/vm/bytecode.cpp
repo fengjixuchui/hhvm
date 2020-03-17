@@ -4074,7 +4074,7 @@ void fcallImpl(PC origpc, PC& pc, const FCallArgs& fca, const Func* func,
   auto const flags = static_cast<FCallArgs::Flags>(
     fca.flags & ~(FCallArgs::Flags::HasUnpack | FCallArgs::Flags::HasGenerics));
   auto const fca2 =
-    FCallArgs(flags, 2, 1, nullptr, kInvalidOffset, false, false);
+    FCallArgs(flags, 2, 1, nullptr, kInvalidOffset, false, false, fca.context);
   fcallImpl<dynamic>(origpc, pc, fca2, func, std::forward<Ctx>(ctx),
                      logAsDynamicCall);
 }
@@ -4214,6 +4214,15 @@ OPTBLD_INLINE void iopResolveFunc(Id id) {
   vmStack().pushFunc(func);
 }
 
+OPTBLD_INLINE void iopResolveMethCaller(Id id) {
+  auto unit = vmfp()->m_func->unit();
+  auto const nep = unit->lookupNamedEntityPairId(id);
+  auto func = Unit::loadFunc(nep.second, nep.first);
+  assertx(func && func->isMethCaller());
+  checkMethCaller(func, arGetContextClass(vmfp()));
+  vmStack().pushFunc(func);
+}
+
 OPTBLD_INLINE void iopFCallFunc(PC origpc, PC& pc, FCallArgs fca) {
   auto const type = vmStack().topC()->m_type;
   if (isObjectType(type)) return fcallFuncObj(origpc, pc, fca);
@@ -4245,9 +4254,12 @@ void fcallObjMethodImpl(PC origpc, PC& pc, const FCallArgs& fca,
   assertx(tvIsObject(vmStack().indC(fca.numInputs() + 2)));
   auto const obj = vmStack().indC(fca.numInputs() + 2)->m_data.pobj;
   auto cls = obj->getVMClass();
+  auto const ctx = [&] {
+    if (!fca.context) return arGetContextClass(vmfp());
+    return Unit::loadClass(fca.context);
+  }();
   // if lookup throws, obj will be decref'd via stack
-  res = lookupObjMethod(
-    func, cls, methName, arGetContextClass(vmfp()), true);
+  res = lookupObjMethod(func, cls, methName, ctx, true);
   assertx(func);
   if (res == LookupResult::MethodFoundNoThis) {
     throw_has_this_need_static(func);
@@ -4473,8 +4485,11 @@ template<bool dynamic>
 void fcallClsMethodImpl(PC origpc, PC& pc, const FCallArgs& fca, Class* cls,
                         StringData* methName, bool forwarding,
                         bool logAsDynamicCall = true) {
-  auto const ctx = liveClass();
-  auto obj = ctx && vmfp()->hasThis() ? vmfp()->getThis() : nullptr;
+  auto const ctx = [&] {
+    if (!fca.context) return liveClass();
+    return Unit::loadClass(fca.context);
+  }();
+  auto obj = liveClass() && vmfp()->hasThis() ? vmfp()->getThis() : nullptr;
   const Func* func;
   auto const res = lookupClsMethod(func, cls, methName, obj, ctx, true);
   assertx(func);
@@ -6038,7 +6053,7 @@ struct litstr_id {
 #define DECODE_KA decode_member_key(pc, liveUnit())
 #define DECODE_LAR decodeLocalRange(pc)
 #define DECODE_ITA decodeIterArgs(pc)
-#define DECODE_FCA decodeFCallArgs(op, pc)
+#define DECODE_FCA decodeFCallArgs(op, pc, liveUnit())
 #define DECODE_BLA decode_imm_array<Offset>(pc)
 #define DECODE_SLA decode_imm_array<StrVecItem>(pc)
 #define DECODE_VSA decode_imm_array<Id>(pc)

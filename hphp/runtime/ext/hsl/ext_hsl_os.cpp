@@ -23,6 +23,9 @@
 #include "hphp/runtime/server/cli-server-ext.h"
 #include "hphp/system/systemlib.h"
 
+#include <folly/functional/Invoke.h>
+#include <type_traits>
+
 #include <fcntl.h>
 #include <stdio.h>
 
@@ -57,15 +60,35 @@ void throw_errno_if_minus_one(T var) {
   }
 }
 
+template<class TRet, class ...Args, class TFn>
+std::enable_if_t<folly::is_invocable_r_v<TRet, TFn, Args...>, TRet>
+retry_on_eintr(TRet failureValue, TFn impl, Args... args) {
+  TRet ret;
+  for (int i = 0; i < 5; ++i) {
+    ret = impl(args...);
+    if (!(ret == failureValue && errno == EINTR)) {
+      break;
+    }
+  }
+  return ret;
+}
+
 } // namespace
 
 struct HSLFileDescriptor {
+  enum class Awaitability {
+    UNKNOWN,
+    AWAITABLE,
+    NOT_AWAITABLE
+  };
+
   static Object newInstance(int fd) {
     assertx(s_FileDescriptorClass);
     Object obj { s_FileDescriptorClass };
 
     auto* data = Native::data<HSLFileDescriptor>(obj);
     data->m_fd = fd;
+    data->m_awaitability = Awaitability::UNKNOWN;
 
     s_fds_to_close->insert(fd);
     return obj;
@@ -99,6 +122,8 @@ struct HSLFileDescriptor {
     );
   }
 
+  Awaitability m_awaitability;
+
  private:
    // intentionally not closed by destructor: that would introduce observable
    // refcounting behavior. Instead, it's closed at end of request from
@@ -121,7 +146,12 @@ T hsl_cli_unwrap(CLISrvResult<T, int> res) {
 }
 
 CLISrvResult<FdData, int> CLI_CLIENT_HANDLER(HSL_os_open, std::string path, int64_t flags, int64_t mode) {
-  auto fd = ::open(path.c_str(), flags, mode);
+  auto const fd = [&] {
+    if (flags & O_CREAT) {
+      return retry_on_eintr(-1, ::open, path.c_str(), flags, mode);
+    }
+    return retry_on_eintr(-1, ::open, path.c_str(), flags);
+  }();
   if (fd == -1) {
     return { CLIError {}, errno };
   }
@@ -139,7 +169,7 @@ Object HHVM_FUNCTION(HSL_os_open, const String& path, int64_t flags, int64_t mod
   return HSLFileDescriptor::newInstance(fd);
 }
 
-String HHVM_FUNCTION(HSL_os_read, const Object& obj, int max) {
+String HHVM_FUNCTION(HSL_os_read, const Object& obj, int64_t max) {
   if (max <= 0) {
     throw_errno_exception(EINVAL, "Max bytes can not be negative");
   }
@@ -148,7 +178,7 @@ String HHVM_FUNCTION(HSL_os_read, const Object& obj, int max) {
   }
   String buf(max, ReserveString);
   auto fd = HSLFileDescriptor::fd(obj);
-  ssize_t read = ::read(fd, buf.mutableData(), max);
+  ssize_t read = retry_on_eintr(-1, ::read, fd, buf.mutableData(), max);
   if (read < 0) {
     buf.clear();
     throw_errno_exception(errno);
@@ -159,7 +189,7 @@ String HHVM_FUNCTION(HSL_os_read, const Object& obj, int max) {
 
 int64_t HHVM_FUNCTION(HSL_os_write, const Object& obj, const String& data) {
   auto fd = HSLFileDescriptor::fd(obj);
-  ssize_t written = ::write(fd, data.data(), data.length());
+  ssize_t written = retry_on_eintr(-1, ::write, fd, data.data(), data.length());
   throw_errno_if_minus_one(written);
   return written;
 }
@@ -170,7 +200,7 @@ void HHVM_FUNCTION(HSL_os_close, const Object& obj) {
 
 Array HHVM_FUNCTION(HSL_os_pipe) {
   int fds[2];
-  throw_errno_if_minus_one(::pipe(fds));
+  throw_errno_if_minus_one(retry_on_eintr(-1, ::pipe, fds));
   return make_varray(
     HSLFileDescriptor::newInstance(fds[0]),
     HSLFileDescriptor::newInstance(fds[1])
@@ -182,22 +212,40 @@ Object HHVM_FUNCTION(HSL_os_poll_async,
                      int64_t events,
                      int64_t timeout_ns) {
   if (!(events & FileEventHandler::READ_WRITE)) {
-    SystemLib::throwExceptionObject("Must poll for read, write, or both");
+    throw_errno_exception(
+      EINVAL,
+      "Must poll for read, write, or both"
+    );
   }
   if (timeout_ns< 0) {
-    SystemLib::throwExceptionObject("Poll timeout must be >= 0");
+    throw_errno_exception(
+      EINVAL,
+      "Poll timeout must be >= 0"
+    );
   }
-  auto fd = HSLFileDescriptor::fd(fd_wrapper);
-
-  const auto originalFlags = ::fcntl(fd, F_GETFL);
-  // This always succeeds...
-  ::fcntl(fd, F_SETFL, originalFlags | O_ASYNC);
-  // ... but sometimes doesn't actually do anything
-  const bool isAsyncableFd = ::fcntl(fd, F_GETFL) & O_ASYNC;
-  ::fcntl(fd, F_SETFL, originalFlags);
-  if (!isAsyncableFd) {
-    throw_errno_exception(ENOTSUP);
+  auto hslfd = HSLFileDescriptor::get(fd_wrapper);
+  auto fd = hslfd->fd();
+  if (hslfd->m_awaitability == HSLFileDescriptor::Awaitability::NOT_AWAITABLE) {
+    throw_errno_exception(
+      ENOTSUP,
+      "Attempted to await a known-non-awaitable File Descriptor"
+    );
+  } else if (
+    hslfd->m_awaitability == HSLFileDescriptor::Awaitability::UNKNOWN
+  ) {
+    const auto originalFlags = ::fcntl(fd, F_GETFL);
+    // This always succeeds...
+    ::fcntl(fd, F_SETFL, originalFlags | O_ASYNC);
+    // ... but sometimes doesn't actually do anything
+    const bool isAsyncableFd = ::fcntl(fd, F_GETFL) & O_ASYNC;
+    ::fcntl(fd, F_SETFL, originalFlags);
+    if (!isAsyncableFd) {
+      hslfd->m_awaitability = HSLFileDescriptor::Awaitability::NOT_AWAITABLE;
+      throw_errno_exception(ENOTSUP, "File descriptor is not awaitable");
+    }
+    hslfd->m_awaitability = HSLFileDescriptor::Awaitability::AWAITABLE;
   }
+  // now known to be awaitable
 
   auto ev = new FileAwait(
     fd,

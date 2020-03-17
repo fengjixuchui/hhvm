@@ -57,7 +57,12 @@ type fcall_flags = {
 type by_refs = bool list
 
 type fcall_args =
-  fcall_flags * num_params * num_params * by_refs * Label.t option
+  fcall_flags
+  * num_params
+  * num_params
+  * by_refs
+  * Label.t option
+  * string option
 
 type iter_args = {
   iter_id: Iterator.t;
@@ -297,6 +302,7 @@ type instruct_operator =
   | Exit
   | Fatal of FatalOp.t
   | ResolveFunc of function_id
+  | ResolveMethCaller of function_id
   | ResolveObjMethod
   | ResolveClsMethod of method_id
   | ResolveClsMethodD of class_id * method_id

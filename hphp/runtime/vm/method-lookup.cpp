@@ -215,7 +215,7 @@ LookupResult lookupObjMethod(const Func*& f,
 
 ImmutableObjMethodLookup
 lookupImmutableObjMethod(const Class* cls, const StringData* name,
-                         const Func* ctxFunc, bool exactClass) {
+                         const Class* ctx, bool exactClass) {
   auto constexpr notFound = ImmutableObjMethodLookup {
     ImmutableObjMethodLookup::Type::NotFound,
     nullptr
@@ -231,7 +231,7 @@ lookupImmutableObjMethod(const Class* cls, const StringData* name,
   }
 
   const Func* func;
-  LookupResult res = lookupObjMethod(func, cls, name, ctxFunc->cls(), false);
+  LookupResult res = lookupObjMethod(func, cls, name, ctx, false);
   if (res == LookupResult::MethodNotFound) {
     if (exactClass) return notFound;
     if (auto const func = lookupIfaceMethod(cls, name)) {
@@ -290,10 +290,9 @@ LookupResult lookupClsMethod(const Func*& f,
 }
 
 const Func* lookupImmutableClsMethod(const Class* cls, const StringData* name,
-                                     const Func* ctxFunc, bool exactClass) {
+                                     const Class* ctx, bool exactClass) {
   if (!cls) return nullptr;
   if (cls->attrs() & AttrInterface) return nullptr;
-  auto ctx = ctxFunc->cls();
   const Func* func;
   LookupResult res = lookupClsMethod(func, cls, name, nullptr, ctx, false);
   if (res == LookupResult::MethodNotFound) return nullptr;
@@ -341,9 +340,6 @@ const Func* lookupImmutableCtor(const Class* cls, const Class* ctx) {
 
 ImmutableFuncLookup lookupImmutableFunc(const Unit* unit,
                                         const StringData* name) {
-  // Trust nothing if we can rename functions
-  if (RuntimeOption::EvalJitEnableRenameFunction) return {nullptr, true};
-
   auto const ne = NamedEntity::get(name);
   if (auto const f = ne->uniqueFunc()) {
     // We have an unique function. However, it may be conditionally defined
@@ -354,10 +350,19 @@ ImmutableFuncLookup lookupImmutableFunc(const Unit* unit,
     // in the same unit as the caller, its also safe to use unconditionally. By
     // virtue of the fact that we're already in the unit, we know its already
     // defined.
-    if (f->isPersistent() || f->unit() == unit) return {f, false};
+    if (f->isPersistent() || f->unit() == unit) {
+      if (!RO::EvalJitEnableRenameFunction || f->isMethCaller()) {
+        return {f, false};
+      }
+    } else if (RO::EvalJitEnableRenameFunction) {
+      return {nullptr, true};
+    }
     // Use the function, but ensure its unit is loaded.
     return {f, true};
   }
+
+  // Trust nothing if we can rename functions
+  if (RuntimeOption::EvalJitEnableRenameFunction) return {nullptr, true};
 
   // There's no unique function currently known for this name. However, if the
   // current unit defines a single top-level function with this name, we can use

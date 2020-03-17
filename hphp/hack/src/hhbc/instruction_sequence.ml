@@ -66,10 +66,11 @@ let make_fcall_args
     ?(num_rets = 1)
     ?(inouts = [])
     ?async_eager_label
+    ?context
     num_args =
   if inouts <> [] && List.length inouts <> num_args then
     failwith "length of inouts must be either zero or num_args";
-  (flags, num_args, num_rets, inouts, async_eager_label)
+  (flags, num_args, num_rets, inouts, async_eager_label, context)
 
 let instr_lit_const l = instr (ILitConst l)
 
@@ -340,6 +341,8 @@ let instr_setm num_params key = instr (IFinal (SetM (num_params, key)))
 let instr_setm_pt num_params key = instr_setm num_params (MemberKey.PT key)
 
 let instr_resolve_func func_id = instr (IOp (ResolveFunc func_id))
+
+let instr_resolve_meth_caller func_id = instr (IOp (ResolveMethCaller func_id))
 
 let instr_resolve_obj_method = instr (IOp ResolveObjMethod)
 

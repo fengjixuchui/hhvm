@@ -341,7 +341,7 @@ pub fn emit_stmt(e: &mut Emitter, env: &mut Env, stmt: &tast::Stmt) -> Result {
         a::Stmt_::Switch(x) => emit_switch(e, env, pos, &x.0, &x.1),
         a::Stmt_::Foreach(x) => emit_foreach(e, env, pos, &x.0, &x.1, &x.2),
         a::Stmt_::DefInline(def) => emit_def_inline(e, &**def),
-        a::Stmt_::Awaitall(_) => unimplemented!("TODO(hrust)"),
+        a::Stmt_::Awaitall(x) => emit_awaitall(e, env, pos, &x.0, &x.1),
         a::Stmt_::Markup(x) => emit_markup(e, env, (&x.0, &x.1), false),
         a::Stmt_::Fallthrough | a::Stmt_::Noop => Ok(InstrSeq::Empty),
     }
@@ -402,6 +402,116 @@ fn emit_case(
                 Some(l),
             )
         }
+    })
+}
+
+fn emit_awaitall(
+    e: &mut Emitter,
+    env: &mut Env,
+    pos: &Pos,
+    el: &[(Option<tast::Lid>, tast::Expr)],
+    block: &tast::Block,
+) -> Result {
+    match el {
+        [] => Ok(InstrSeq::Empty),
+        [(lvar, expr)] => emit_awaitall_single(e, env, pos, lvar, expr, block),
+        _ => emit_awaitall_multi(e, env, el, block),
+    }
+}
+
+fn emit_awaitall_single(
+    e: &mut Emitter,
+    env: &mut Env,
+    pos: &Pos,
+    lval: &Option<tast::Lid>,
+    expr: &tast::Expr,
+    block: &tast::Block,
+) -> Result {
+    scope::with_unnamed_locals(e, |e| {
+        let load_arg = emit_expr::emit_await(e, env, pos, expr)?;
+        let (load, unset) = match lval {
+            None => (InstrSeq::make_popc(), InstrSeq::Empty),
+            Some(tast::Lid(_, id)) => {
+                let l = e
+                    .local_gen_mut()
+                    .init_unnamed_for_tempname(local_id::get_name(&id));
+                (
+                    InstrSeq::make_popl(l.clone()),
+                    InstrSeq::make_unsetl(l.clone()),
+                )
+            }
+        };
+        Ok((
+            InstrSeq::gather(vec![load_arg, load]),
+            emit_stmts(e, env, block)?,
+            unset,
+        ))
+    })
+}
+
+fn emit_awaitall_multi(
+    e: &mut Emitter,
+    env: &mut Env,
+    el: &[(Option<tast::Lid>, tast::Expr)],
+    block: &tast::Block,
+) -> Result {
+    scope::with_unnamed_locals(e, |e| {
+        let load_args = InstrSeq::gather(
+            el.iter()
+                .map(|(_, expr)| emit_expr::emit_expr(e, env, expr))
+                .collect::<Result<Vec<_>>>()?,
+        );
+        let locals: Vec<local::Type> = el
+            .iter()
+            .map(|(lvar, _)| match lvar {
+                None => e.local_gen_mut().get_unnamed(),
+                Some(tast::Lid(_, id)) => e
+                    .local_gen_mut()
+                    .init_unnamed_for_tempname(local_id::get_name(&id))
+                    .to_owned(),
+            })
+            .collect();
+        let init_locals = InstrSeq::gather(
+            locals
+                .iter()
+                .rev()
+                .map(|l| InstrSeq::make_popl(l.clone()))
+                .collect(),
+        );
+        let unset_locals = InstrSeq::gather(
+            locals
+                .iter()
+                .rev()
+                .map(|l| InstrSeq::make_unsetl(l.clone()))
+                .collect(),
+        );
+        let unpack = InstrSeq::gather(
+            locals
+                .iter()
+                .map(|l| {
+                    let label_done = e.label_gen_mut().next_regular();
+                    InstrSeq::gather(vec![
+                        InstrSeq::make_pushl(l.clone()),
+                        InstrSeq::make_dup(),
+                        InstrSeq::make_istypec(IstypeOp::OpNull),
+                        InstrSeq::make_jmpnz(label_done.clone()),
+                        InstrSeq::make_whresult(),
+                        InstrSeq::make_jmpnz(label_done),
+                        InstrSeq::make_popl(l.clone()),
+                    ])
+                })
+                .collect(),
+        );
+        let await_all = InstrSeq::gather(vec![
+            InstrSeq::make_awaitall_list(locals),
+            InstrSeq::make_popc(),
+        ]);
+        let block_instrs = emit_stmts(e, env, block)?;
+        Ok((
+            InstrSeq::gather(vec![load_args, init_locals]),
+            InstrSeq::gather(vec![await_all, unpack, block_instrs]),
+            unset_locals,
+        ))
     })
 }
 
@@ -835,7 +945,10 @@ fn emit_try_catch_(
             .map(|catch| emit_catch(e, env, pos, &end_label, catch))
             .collect::<Result<Vec<_>>>()?,
     );
-    let try_instrs = InstrSeq::gather(vec![emit_stmts(e, &try_env, try_block)?, emit_pos(e, pos)]);
+    let try_instrs = InstrSeq::gather(vec![
+        emit_stmts(e, &mut try_env, try_block)?,
+        emit_pos(e, pos),
+    ]);
     Ok(InstrSeq::create_try_catch(
         e.label_gen_mut(),
         Some(end_label.clone()),
@@ -1261,15 +1374,10 @@ fn emit_foreach_await_lvalue_storage(
     })
 }
 
-fn emit_stmts(e: &mut Emitter, env: &Env, stl: &[tast::Stmt]) -> Result {
-    // TODO(shiqicao):
-    //     Ocaml's env is immutable, we need to match the same behavior
-    //     during porting. Simulating immutability will change every `&Env`
-    //     to `&mut Env`. The following is a hack to build.
-    let mut new_env: Env = env.clone();
+fn emit_stmts(e: &mut Emitter, env: &mut Env, stl: &[tast::Stmt]) -> Result {
     Ok(InstrSeq::gather(
         stl.iter()
-            .map(|s| emit_stmt(e, &mut new_env, s))
+            .map(|s| emit_stmt(e, env, s))
             .collect::<Result<Vec<_>>>()?,
     ))
 }
@@ -1580,12 +1688,41 @@ fn emit_await_assignment(
     lval: &tast::Expr,
     r: &tast::Expr,
 ) -> Result {
-    unimplemented!()
+    match lval.1.as_lvar() {
+        Some(tast::Lid(_, id)) if !emit_expr::is_local_this(env, &id) => {
+            Ok(InstrSeq::gather(vec![
+                emit_expr::emit_await(e, env, pos, r)?,
+                emit_pos(e, pos),
+                InstrSeq::make_popl(emit_expr::get_local(e, env, pos, local_id::get_name(&id))?),
+            ]))
+        }
+        _ => {
+            let awaited_instrs = emit_await(e, env, pos, r)?;
+            scope::with_unnamed_local(e, |e, temp| {
+                let rhs_instrs = InstrSeq::make_pushl(temp.clone());
+                let (lhs, rhs, setop) = emit_expr::emit_lval_op_nonlist_steps(
+                    e,
+                    env,
+                    pos,
+                    LValOp::Set,
+                    lval,
+                    rhs_instrs,
+                    1,
+                    false,
+                )?;
+                Ok((
+                    InstrSeq::gather(vec![awaited_instrs, InstrSeq::make_popl(temp)]),
+                    lhs,
+                    InstrSeq::gather(vec![rhs, setop, InstrSeq::make_popc()]),
+                ))
+            })
+        }
+    }
 }
 
 fn emit_if(
     e: &mut Emitter,
-    env: &Env,
+    env: &mut Env,
     pos: &Pos,
     condition: &tast::Expr,
     consequence: &[tast::Stmt],
