@@ -26,6 +26,8 @@ module type RemoteServerApi = sig
     (i.e., the dependency graph) *)
   val type_check :
     Provider_context.t ->
+    init_id:string ->
+    check_id:string ->
     Relative_path.t list ->
     state_filename:string ->
     Errors.t
@@ -34,7 +36,10 @@ end
 type 'naming_table work_env = {
   bin_root: Path.t;
   check_id: string;
+  ci_info: Ci_util.info option Future.t option;
   ctx: Provider_context.t;
+  init_id: string;
+  init_start_t: float;
   key: string;
   root: Path.t;
   naming_table_base: 'naming_table;
@@ -46,6 +51,9 @@ let make_env
     (ctx : Provider_context.t)
     ~(bin_root : Path.t)
     ~(check_id : string)
+    ~(ci_info : Ci_util.info option Future.t option)
+    ~(init_id : string)
+    ~(init_start_t : float)
     ~(key : string)
     ~(root : Path.t)
     ?(timeout = (600 : int))
@@ -53,9 +61,12 @@ let make_env
     'naming_table work_env =
   {
     bin_root;
-    key;
     check_id;
+    ci_info;
     ctx;
+    init_id;
+    init_start_t;
+    key;
     naming_table_base = None;
     root;
     timeout;

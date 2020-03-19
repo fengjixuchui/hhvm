@@ -914,6 +914,20 @@ impl InstrSeq {
         Self::make_instr(Instruct::IFinal(InstructFinal::SetM(num_params, key)))
     }
 
+    pub fn make_unsetm(num_params: NumParams, key: MemberKey) -> Self {
+        Self::make_instr(Instruct::IFinal(InstructFinal::UnsetM(num_params, key)))
+    }
+
+    pub fn make_setopm(num_params: NumParams, op: EqOp, key: MemberKey) -> Self {
+        Self::make_instr(Instruct::IFinal(InstructFinal::SetOpM(num_params, op, key)))
+    }
+
+    pub fn make_incdecm(num_params: NumParams, op: IncdecOp, key: MemberKey) -> Self {
+        Self::make_instr(Instruct::IFinal(InstructFinal::IncDecM(
+            num_params, op, key,
+        )))
+    }
+
     pub fn make_setm_pt(num_params: NumParams, key: PropId) -> Self {
         Self::make_setm(num_params, MemberKey::PT(key))
     }
@@ -1056,6 +1070,34 @@ impl InstrSeq {
     pub fn make_eval() -> Self {
         Self::make_instr(Instruct::IIncludeEvalDefine(
             InstructIncludeEvalDefine::Eval,
+        ))
+    }
+
+    pub fn make_incl() -> Self {
+        Self::make_instr(Instruct::IIncludeEvalDefine(
+            InstructIncludeEvalDefine::Incl,
+        ))
+    }
+
+    pub fn make_inclonce() -> Self {
+        Self::make_instr(Instruct::IIncludeEvalDefine(
+            InstructIncludeEvalDefine::InclOnce,
+        ))
+    }
+
+    pub fn make_req() -> Self {
+        Self::make_instr(Instruct::IIncludeEvalDefine(InstructIncludeEvalDefine::Req))
+    }
+
+    pub fn make_reqdoc() -> Self {
+        Self::make_instr(Instruct::IIncludeEvalDefine(
+            InstructIncludeEvalDefine::ReqDoc,
+        ))
+    }
+
+    pub fn make_reqonce() -> Self {
+        Self::make_instr(Instruct::IIncludeEvalDefine(
+            InstructIncludeEvalDefine::ReqOnce,
         ))
     }
 

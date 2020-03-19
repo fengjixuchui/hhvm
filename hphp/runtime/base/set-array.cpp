@@ -143,9 +143,7 @@ ArrayData* SetArray::MakeUncounted(ArrayData* array,
   auto const scale = src->scale();
   auto const used = src->m_used;
   auto const extra = withApcTypedValue ? sizeof(APCTypedValue) : 0;
-  auto const mem =
-    static_cast<char*>(uncounted_malloc(extra + computeAllocBytes(scale)));
-  auto const dest = reinterpret_cast<SetArray*>(mem + extra);
+  auto const dest = uncountedAlloc(scale, extra);
 
   assertx(reinterpret_cast<uintptr_t>(dest) % 16 == 0);
   assertx(reinterpret_cast<uintptr_t>(src) % 16 == 0);
@@ -587,19 +585,6 @@ const TypedValue* SetArray::tvOfPos(uint32_t pos) const {
   return !elm.isTombstone() ? &elm.tv : nullptr;
 }
 
-tv_rval SetArray::NvTryGetInt(const ArrayData* ad, int64_t ki) {
-  auto const tv = SetArray::NvGetInt(ad, ki);
-  if (UNLIKELY(!tv)) throwOOBArrayKeyException(ki, ad);
-  return tv;
-}
-
-tv_rval SetArray::NvTryGetStr(const ArrayData* ad,
-                                        const StringData* ks) {
-  auto const ptr = SetArray::NvGetStr(ad, ks);
-  if (UNLIKELY(!ptr)) throwOOBArrayKeyException(ks, ad);
-  return ptr;
-}
-
 size_t SetArray::Vsize(const ArrayData*) { not_reached(); }
 
 tv_rval SetArray::RvalPos(const ArrayData* ad, ssize_t pos) {
@@ -682,16 +667,8 @@ ArrayData* SetArray::RemoveInt(ArrayData* ad, int64_t k) {
   return RemoveImpl(ad, k, ad->cowCheck(), hash_int64(k));
 }
 
-ArrayData* SetArray::RemoveIntInPlace(ArrayData* ad, int64_t k) {
-  return RemoveImpl(ad, k, false/*copy*/, hash_int64(k));
-}
-
 ArrayData* SetArray::RemoveStr(ArrayData* ad, const StringData* k) {
   return RemoveImpl(ad, k, ad->cowCheck(), k->hash());
-}
-
-ArrayData* SetArray::RemoveStrInPlace(ArrayData* ad, const StringData* k) {
-  return RemoveImpl(ad, k, false/*copy*/, k->hash());
 }
 
 void SetArray::Sort(ArrayData*, int, bool) {
@@ -732,10 +709,6 @@ ArrayData* SetArray::AppendImpl(ArrayData* ad, TypedValue v, bool copy) {
 
 ArrayData* SetArray::Append(ArrayData* ad, TypedValue v) {
   return AppendImpl(ad, v, ad->cowCheck());
-}
-
-ArrayData* SetArray::AppendInPlace(ArrayData* ad, TypedValue v) {
-  return AppendImpl(ad, v, false);
 }
 
 ArrayData* SetArray::PlusEq(ArrayData* ad, const ArrayData*) {

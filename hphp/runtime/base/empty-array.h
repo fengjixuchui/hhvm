@@ -52,17 +52,13 @@ struct EmptyArray final : type_scan::MarkCollectable<EmptyArray> {
   static tv_rval NvGetInt(const ArrayData*, int64_t) {
     return nullptr;
   }
-  static constexpr auto NvTryGetInt = &NvGetInt;
-
   static tv_rval NvGetStr(const ArrayData*, const StringData*) {
     return nullptr;
   }
-  static constexpr auto NvTryGetStr = &NvGetStr;
 
   static ssize_t NvGetIntPos(const ArrayData* ad, int64_t) {
     return ArrayCommon::ReturnInvalidIndex(ad);
   }
-
   static ssize_t NvGetStrPos(const ArrayData* ad, const StringData*) {
     return ArrayCommon::ReturnInvalidIndex(ad);
   }
@@ -70,14 +66,10 @@ struct EmptyArray final : type_scan::MarkCollectable<EmptyArray> {
   static TypedValue NvGetKey(const ArrayData*, ssize_t pos);
   static ArrayData* SetInt(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetIntMove(ArrayData*, int64_t k, TypedValue v);
-  static constexpr auto SetIntInPlace = &SetInt;
   static ArrayData* SetStr(ArrayData*, StringData* k, TypedValue v);
   static ArrayData* SetStrMove(ArrayData*, StringData* k, TypedValue v);
-  static constexpr auto SetStrInPlace = &SetStr;
   static ArrayData* RemoveInt(ArrayData* ad, int64_t);
-  static constexpr auto RemoveIntInPlace = &RemoveInt;
   static ArrayData* RemoveStr(ArrayData* ad, const StringData*);
-  static constexpr auto RemoveStrInPlace = &RemoveStr;
   static size_t Vsize(const ArrayData*);
   static tv_rval RvalPos(const ArrayData* ad, ssize_t pos);
   static bool IsVectorData(const ArrayData*) {
@@ -121,7 +113,6 @@ struct EmptyArray final : type_scan::MarkCollectable<EmptyArray> {
   static ArrayData* Copy(const ArrayData* ad);
   static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* Append(ArrayData*, TypedValue v);
-  static constexpr auto AppendInPlace = &Append;
   static ArrayData* PlusEq(ArrayData*, const ArrayData* elems);
   static ArrayData* Merge(ArrayData*, const ArrayData* elems);
   static ArrayData* Prepend(ArrayData*, TypedValue v);

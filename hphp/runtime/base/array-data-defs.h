@@ -137,14 +137,6 @@ inline tv_rval ArrayData::rval(const StringData* k) const {
   return g_array_funcs.nvGetStr[kind()](this, k);
 }
 
-inline tv_rval ArrayData::rvalStrict(int64_t k) const {
-  return g_array_funcs.nvTryGetInt[kind()](this, k);
-}
-
-inline tv_rval ArrayData::rvalStrict(const StringData* k) const {
-  return g_array_funcs.nvTryGetStr[kind()](this, k);
-}
-
 inline ssize_t ArrayData::nvGetIntPos(int64_t k) const {
   return g_array_funcs.nvGetIntPos[kind()](this, k);
 }
@@ -167,12 +159,6 @@ inline ArrayData* ArrayData::set(int64_t k, TypedValue v) {
   return g_array_funcs.setInt[kind()](this, k, v);
 }
 
-inline ArrayData* ArrayData::setInPlace(int64_t k, TypedValue v) {
-  assertx(tvIsPlausible(v));
-  assertx(notCyclic(v));
-  return g_array_funcs.setIntInPlace[kind()](this, k, v);
-}
-
 inline ArrayData* ArrayData::setMove(int64_t k, TypedValue v) {
   assertx(tvIsPlausible(v));
   assertx(cowCheck() || notCyclic(v));
@@ -183,12 +169,6 @@ inline ArrayData* ArrayData::set(StringData* k, TypedValue v) {
   assertx(tvIsPlausible(v));
   assertx(cowCheck() || notCyclic(v));
   return g_array_funcs.setStr[kind()](this, k, v);
-}
-
-inline ArrayData* ArrayData::setInPlace(StringData* k, TypedValue v) {
-  assertx(tvIsPlausible(v));
-  assertx(notCyclic(v));
-  return g_array_funcs.setStrInPlace[kind()](this, k, v);
 }
 
 inline ArrayData* ArrayData::setMove(StringData* k, TypedValue v) {
@@ -209,38 +189,18 @@ inline ArrayData* ArrayData::set(StringData* k, const Variant& v) {
   return g_array_funcs.setStr[kind()](this, k, c);
 }
 
-inline ArrayData* ArrayData::setInPlace(StringData* k, const Variant& v) {
-  auto c = *v.asTypedValue();
-  assertx(notCyclic(c));
-  return g_array_funcs.setStrInPlace[kind()](this, k, c);
-}
-
 inline ArrayData* ArrayData::remove(int64_t k) {
   return g_array_funcs.removeInt[kind()](this, k);
-}
-
-inline ArrayData* ArrayData::removeInPlace(int64_t k) {
-  return g_array_funcs.removeIntInPlace[kind()](this, k);
 }
 
 inline ArrayData* ArrayData::remove(const StringData* k) {
   return g_array_funcs.removeStr[kind()](this, k);
 }
 
-inline ArrayData* ArrayData::removeInPlace(const StringData* k) {
-  return g_array_funcs.removeStrInPlace[kind()](this, k);
-}
-
 inline ArrayData* ArrayData::append(TypedValue v) {
   assertx(v.m_type != KindOfUninit);
   assertx(cowCheck() || notCyclic(v));
   return g_array_funcs.append[kind()](this, v);
-}
-
-inline ArrayData* ArrayData::appendInPlace(TypedValue v) {
-  assertx(v.m_type != KindOfUninit);
-  assertx(notCyclic(v));
-  return g_array_funcs.appendInPlace[kind()](this, v);
 }
 
 inline ssize_t ArrayData::iter_begin() const {
@@ -366,12 +326,12 @@ inline arr_lval ArrayData::lvalSilent(TypedValue k, bool copy) {
 }
 
 inline tv_rval ArrayData::get(int64_t k, bool error) const {
-  auto r = error ? rvalStrict(k) : rval(k);
+  auto const r = rval(k);
   return r ? r : getNotFound(k, error);
 }
 
 inline tv_rval ArrayData::get(const StringData* k, bool error) const {
-  auto r = error ? rvalStrict(k) : rval(k);
+  auto const r = rval(k);
   return r ? r : getNotFound(k, error);
 }
 
@@ -406,15 +366,6 @@ inline ArrayData* ArrayData::set(TypedValue k, TypedValue v) {
 
   return detail::isIntKey(k) ? set(detail::getIntKey(k), v)
                              : set(detail::getStringKey(k), v);
-}
-
-inline ArrayData* ArrayData::setInPlace(TypedValue k, TypedValue v) {
-  assertx(tvIsPlausible(k));
-  assertx(tvIsPlausible(v));
-  assertx(IsValidKey(k));
-
-  return detail::isIntKey(k) ? setInPlace(detail::getIntKey(k), v)
-                             : setInPlace(detail::getStringKey(k), v);
 }
 
 inline ArrayData* ArrayData::remove(TypedValue k) {
@@ -467,26 +418,12 @@ inline ArrayData* ArrayData::set(const String& k, TypedValue v) {
   return set(k.get(), v);
 }
 
-inline ArrayData* ArrayData::setInPlace(const String& k, TypedValue v) {
-  assertx(tvIsPlausible(v));
-  assertx(IsValidKey(k));
-  return setInPlace(k.get(), v);
-}
-
 inline ArrayData* ArrayData::set(const String& k, const Variant& v) {
   return set(k, *v.asTypedValue());
 }
 
-inline ArrayData* ArrayData::setInPlace(const String& k, const Variant& v) {
-  return setInPlace(k, *v.asTypedValue());
-}
-
 inline ArrayData* ArrayData::set(const Variant& k, const Variant& v) {
   return set(*k.asTypedValue(), *v.asTypedValue());
-}
-
-inline ArrayData* ArrayData::setInPlace(const Variant& k, const Variant& v) {
-  return setInPlace(*k.asTypedValue(), *v.asTypedValue());
 }
 
 inline ArrayData* ArrayData::remove(const String& k) {

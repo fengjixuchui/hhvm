@@ -20,6 +20,8 @@ type schedule_args = {
   num_remote_workers: int;
   num_local_workers: int;
   batch_size: int option;
+  min_log_level: Hh_logger.Level.t option;
+  version_specifier: string option;
   timeout: int;
 }
 
@@ -72,11 +74,13 @@ let validate_required_arg arg_ref arg_name =
 
 let parse_schedule_args () : command =
   let timeout = ref 9999 in
+  let min_log_level_str_ref = ref "" in
   let naming_table = ref None in
   let num_remote_workers = ref 1 in
   let num_local_workers = ref Sys_utils.nbr_procs in
   let batch_size = ref None in
   let input_file = ref None in
+  let version_specifier = ref None in
   let set_option_arg name reference value =
     match !reference with
     | None -> reference := Some value
@@ -85,6 +89,9 @@ let parse_schedule_args () : command =
   let options =
     [
       ("--timeout", Arg.Int (fun x -> timeout := x), "The timeout");
+      ( "--min-log-level",
+        Arg.String (fun x -> min_log_level_str_ref := x),
+        "minimal log level (debug, error, fatal etc...)" );
       ( "--naming-table",
         Arg.String (set_option_arg "naming table file" naming_table),
         "input naming table SQLlite file path (required)." );
@@ -100,13 +107,15 @@ let parse_schedule_args () : command =
       ( "--input-file",
         Arg.String (set_option_arg "input file" input_file),
         "Input file path that contains the list of files to type check." );
+      ( "--version-specifier",
+        Arg.String (set_option_arg "version specifier" version_specifier),
+        "hh_server version that the remote hosts should install." );
     ]
   in
   let usage = "Usage: " ^ Sys.executable_name ^ " schedule <repo_root>" in
   let args = parse_without_command options usage ~keyword:CKSchedule in
   let (root : Path.t) = parse_root args in
   let bin_root = Path.make (Filename.dirname Sys.argv.(0)) in
-
   CSchedule
     {
       bin_root;
@@ -116,6 +125,10 @@ let parse_schedule_args () : command =
       num_remote_workers = !num_remote_workers;
       num_local_workers = !num_local_workers;
       batch_size = !batch_size;
+      min_log_level =
+        Hh_logger.Level.of_enum_string
+          (Caml.String.lowercase_ascii !min_log_level_str_ref);
+      version_specifier = !version_specifier;
       timeout = !timeout;
     }
 
@@ -124,8 +137,8 @@ let make_remote_server_api () :
   ( module struct
     type naming_table = unit option
 
-    let type_check ctx files_to_check ~state_filename =
-      ignore (ctx, files_to_check, state_filename);
+    let type_check ctx ~init_id ~check_id files_to_check ~state_filename =
+      ignore (ctx, init_id, check_id, files_to_check, state_filename);
       Errors.empty
 
     let load_naming_table_base ~naming_table_base =
@@ -160,11 +173,15 @@ let parse_work_args () : command =
       ~backend:Provider_backend.Shared_memory
   in
   let server = make_remote_server_api () in
+  let init_id = Random_id.short_string () in
   CWork
     (RemoteWorker.make_env
        ctx
        ~bin_root
+       ~ci_info:None
        ~check_id
+       ~init_id
+       ~init_start_t:(Unix.gettimeofday ())
        ~key:!key
        ~root
        ~timeout:!timeout
@@ -246,12 +263,24 @@ let get_batch_size genv (batch_size : int option) =
 (*
   Start remote checking service with number of remote workers specified by num_remote_workers.
 *)
-let start_remote_checking_service genv env num_remote_workers batch_size =
-  let version_specifier = genv.local_config.remote_version_specifier in
-
-  let (max_batch_size, min_batch_size) = get_batch_size genv batch_size in
+let start_remote_checking_service genv env schedule_env =
+  let version_specifier =
+    match schedule_env.version_specifier with
+    | Some version -> Some version
+    | None -> ServerLocalConfig.(genv.local_config.remote_version_specifier)
+  in
+  let (max_batch_size, min_batch_size) =
+    get_batch_size genv schedule_env.batch_size
+  in
   let worker_min_log_level =
-    genv.local_config.remote_type_check.worker_min_log_level
+    match schedule_env.min_log_level with
+    | Some min_level ->
+      (* Set client min log level if available *)
+      Hh_logger.Level.set_min_level min_level;
+      min_level
+    | None ->
+      ServerLocalConfig.(
+        genv.local_config.remote_type_check.worker_min_log_level)
   in
   let root = Relative_path.path_of_prefix Relative_path.Root in
   let delegate_state =
@@ -262,7 +291,7 @@ let start_remote_checking_service genv env num_remote_workers batch_size =
             ServerLocalConfig.default.remote_type_check.declaration_threshold;
           init_id = env.init_env.init_id;
           mergebase = env.init_env.mergebase;
-          num_workers = num_remote_workers;
+          num_workers = schedule_env.num_remote_workers;
           recheck_id =
             Option.value env.init_env.recheck_id ~default:env.init_env.init_id;
           root;
@@ -289,13 +318,7 @@ let create_service_delegate (schedule_env : schedule_args) =
       schedule_env.naming_table
       schedule_env.num_local_workers
   in
-  let delegate_state =
-    start_remote_checking_service
-      genv
-      env
-      schedule_env.num_remote_workers
-      schedule_env.batch_size
-  in
+  let delegate_state = start_remote_checking_service genv env schedule_env in
   (env, genv, delegate_state)
 
 (* Parse input_file which should contain a list of php files relative to root *)

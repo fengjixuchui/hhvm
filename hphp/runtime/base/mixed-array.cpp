@@ -486,8 +486,9 @@ MixedArray* MixedArray::CopyMixed(const MixedArray& other,
   }
 
   auto const scale = other.m_scale;
-  auto const ad = mode == AllocMode::Request ? reqAlloc(scale)
-                                             : staticAlloc(scale);
+  auto const ad = mode == AllocMode::Request
+    ? reqAlloc(scale)
+    : staticAlloc(scale, arrprov::tagSize(&other));
 #ifdef USE_JEMALLOC
   // Copy everything including tombstones.  We want to copy the elements and
   // the hash separately, because the array may not be very full.
@@ -580,11 +581,8 @@ ArrayData* MixedArray::MakeUncounted(ArrayData* array,
   }
   auto a = asMixed(array);
   assertx(!a->empty());
-  auto const extra = withApcTypedValue ? sizeof(APCTypedValue) : 0;
-  auto const scale = a->scale();
-  auto const allocSize = extra + computeAllocBytes(scale);
-  auto const mem = static_cast<char*>(uncounted_malloc(allocSize));
-  auto const ad = reinterpret_cast<MixedArray*>(mem + extra);
+  auto const extra = uncountedAllocExtra(array, withApcTypedValue);
+  auto const ad = uncountedAlloc(a->scale(), extra);
   auto const used = a->m_used;
   // Do a raw copy first, without worrying about counted types or refcount
   // manipulation.  To copy in 32-byte chunks, we add 24 bytes to the length.
@@ -601,7 +599,7 @@ ArrayData* MixedArray::MakeUncounted(ArrayData* array,
   }
   ad->m_aux16 &= ~kHasProvenanceData;
   assertx(ad->keyTypes() == a->keyTypes());
-  CopyHash(ad->hashTab(), a->hashTab(), scale);
+  CopyHash(ad->hashTab(), a->hashTab(), a->scale());
   ad->mutableKeyTypes()->makeStatic();
 
   // Need to make sure keys and values are all uncounted.
@@ -740,7 +738,7 @@ void MixedArray::ReleaseUncounted(ArrayData* in) {
       ReleaseUncountedTv(&ptr->data);
     }
   }
-  auto const extra = ad->hasApcTv() ? sizeof(APCTypedValue) : 0;
+  auto const extra = uncountedAllocExtra(ad, ad->hasApcTv());
   uncounted_sized_free(reinterpret_cast<char*>(ad) - extra,
                        computeAllocBytes(ad->scale()) + extra);
   if (APCStats::IsCreated()) {
@@ -1198,6 +1196,7 @@ ArrayData* MixedArray::SetIntMove(ArrayData* ad, int64_t k, TypedValue v) {
 }
 
 ArrayData* MixedArray::SetIntInPlace(ArrayData* ad, int64_t k, TypedValue v) {
+  assertx(!ad->cowCheck());
   assertx(ad->notCyclic(v));
   return asMixed(ad)->prepareForInsert(false/*copy*/)->update(k, v);
 }
@@ -1216,6 +1215,7 @@ ArrayData* MixedArray::SetStrMove(ArrayData* ad, StringData* k, TypedValue v) {
 }
 
 ArrayData* MixedArray::SetStrInPlace(ArrayData* ad, StringData* k, TypedValue v) {
+  assertx(!ad->cowCheck());
   assertx(ad->notCyclic(v));
   return asMixed(ad)->prepareForInsert(false/*copy*/)->update(k, v);
 }
@@ -1270,10 +1270,6 @@ ArrayData* MixedArray::RemoveInt(ArrayData* ad, int64_t k) {
   return RemoveIntImpl(ad, k, ad->cowCheck());
 }
 
-ArrayData* MixedArray::RemoveIntInPlace(ArrayData* ad, int64_t k) {
-  return RemoveIntImpl(ad, k, false/*copy*/);
-}
-
 ArrayData*
 MixedArray::RemoveStrImpl(ArrayData* ad, const StringData* key, bool copy) {
   auto a = asMixed(ad);
@@ -1285,10 +1281,6 @@ MixedArray::RemoveStrImpl(ArrayData* ad, const StringData* key, bool copy) {
 
 ArrayData* MixedArray::RemoveStr(ArrayData* ad, const StringData* key) {
   return RemoveStrImpl(ad, key, ad->cowCheck());
-}
-
-ArrayData* MixedArray::RemoveStrInPlace(ArrayData* ad, const StringData* key) {
-  return RemoveStrImpl(ad, key, false/*copy*/);
 }
 
 ArrayData* MixedArray::Copy(const ArrayData* ad) {
@@ -1310,10 +1302,6 @@ ArrayData* MixedArray::AppendImpl(ArrayData* ad, TypedValue v, bool copy) {
 
 ArrayData* MixedArray::Append(ArrayData* ad, TypedValue v) {
   return AppendImpl(ad, v, ad->cowCheck());
-}
-
-ArrayData* MixedArray::AppendInPlace(ArrayData* ad, TypedValue v) {
-  return AppendImpl(ad, v, false);
 }
 
 /*
@@ -1815,25 +1803,6 @@ void MixedArray::OnSetEvalScalar(ArrayData* ad) {
 
 //////////////////////////////////////////////////////////////////////
 
-tv_rval MixedArray::NvTryGetIntDict(const ArrayData* ad, int64_t k) {
-  assertx(asMixed(ad)->checkInvariants());
-  assertx(ad->isDictKind());
-  auto const ptr = MixedArray::NvGetInt(ad, k);
-  if (UNLIKELY(!ptr)) throwOOBArrayKeyException(k, ad);
-  return ptr;
-}
-
-tv_rval MixedArray::NvTryGetStrDict(const ArrayData* ad,
-                                               const StringData* k) {
-  assertx(asMixed(ad)->checkInvariants());
-  assertx(ad->isDictKind());
-  auto const ptr = MixedArray::NvGetStr(ad, k);
-  if (UNLIKELY(!ptr)) throwOOBArrayKeyException(k, ad);
-  return ptr;
-}
-
-//////////////////////////////////////////////////////////////////////
-
 ALWAYS_INLINE
 bool MixedArray::DictEqualHelper(const ArrayData* ad1, const ArrayData* ad2,
                                  bool strict) {
@@ -1904,10 +1873,10 @@ bool MixedArray::DictEqualHelper(const ArrayData* ad1, const ArrayData* ad2,
       if (UNLIKELY(elm->isTombstone())) continue;
       auto const other_rval = [&] {
         if (elm->hasIntKey()) {
-          return RvalIntDict(ad2, elm->ikey);
+          return NvGetIntDict(ad2, elm->ikey);
         } else {
           assertx(elm->hasStrKey());
-          return RvalStrDict(ad2, elm->skey);
+          return NvGetStrDict(ad2, elm->skey);
         }
       }();
       if (!other_rval ||

@@ -78,11 +78,15 @@ PackedArray::VArrayInitializer PackedArray::s_varr_initializer;
 
 namespace {
 
-inline ArrayData* alloc_packed_static(size_t cap) {
-  auto size = sizeof(ArrayData) + cap * sizeof(TypedValue);
-  auto ret = RuntimeOption::EvalLowStaticArrays ? low_malloc(size)
-                                                : uncounted_malloc(size);
-  return static_cast<ArrayData*>(ret);
+inline ArrayData* alloc_packed_static(const ArrayData* ad) {
+  auto const extra = arrprov::tagSize(ad);
+  auto const size = sizeof(ArrayData)
+                  + ad->getSize() * sizeof(TypedValue)
+                  + extra;
+  auto const ret = RuntimeOption::EvalLowStaticArrays
+    ? low_malloc(size)
+    : uncounted_malloc(size);
+  return reinterpret_cast<ArrayData*>(reinterpret_cast<char*>(ret) + extra);
 }
 
 }
@@ -326,7 +330,7 @@ ArrayData* PackedArray::CopyStatic(const ArrayData* adIn) {
   assertx(checkInvariants(adIn));
 
   auto const sizeIndex = capacityToSizeIndex(adIn->m_size);
-  auto ad = alloc_packed_static(adIn->m_size);
+  auto ad = alloc_packed_static(adIn);
   // CopyPackedHelper will copy the header and m_sizeAndPos. All we have to do
   // afterwards is fix the capacity and refcount on the copy; it's easiest to do
   // that by reinitializing the whole header.
@@ -363,7 +367,7 @@ ArrayData* PackedArray::ConvertStatic(const ArrayData* arr) {
   assertx(!arr->isDArray());
 
   auto const sizeIndex = capacityToSizeIndex(arr->m_size);
-  auto ad = alloc_packed_static(arr->m_size);
+  auto ad = alloc_packed_static(arr);
   ad->initHeader_16(
     HeaderKind::Packed,
     StaticValue,
@@ -632,7 +636,7 @@ void PackedArray::ReleaseUncounted(ArrayData* ad) {
   }
 
   static_assert(PackedArray::stores_typed_values, "");
-  auto const extra = (ad->hasApcTv() ? sizeof(APCTypedValue) : 0);
+  auto const extra = uncountedAllocExtra(ad, ad->hasApcTv());
   auto const allocSize = extra + sizeof(PackedArray) +
                          ad->m_size * sizeof(TypedValue);
   uncounted_sized_free(reinterpret_cast<char*>(ad) - extra, allocSize);
@@ -659,19 +663,6 @@ ssize_t PackedArray::NvGetIntPos(const ArrayData* ad, int64_t k) {
 ssize_t PackedArray::NvGetStrPos(const ArrayData* ad, const StringData* k) {
   assertx(checkInvariants(ad));
   return ad->m_size;
-}
-
-tv_rval PackedArray::NvTryGetIntVec(const ArrayData* ad, int64_t k) {
-  assertx(checkInvariants(ad));
-  assertx(ad->isVecArrayKind());
-  if (LIKELY(size_t(k) < ad->m_size)) return RvalPos(ad, k);
-  throwOOBArrayKeyException(k, ad);
-}
-
-tv_rval PackedArray::NvTryGetStrVec(const ArrayData* ad, const StringData* s) {
-  assertx(checkInvariants(ad));
-  assertx(ad->isVecArrayKind());
-  throwInvalidArrayKeyException(s, ad);
 }
 
 TypedValue PackedArray::NvGetKey(const ArrayData* ad, ssize_t pos) {
@@ -852,14 +843,6 @@ ArrayData* PackedArray::SetIntMove(ArrayData* adIn, int64_t k, TypedValue v) {
   return result;
 }
 
-ArrayData* PackedArray::SetIntInPlace(ArrayData* adIn, int64_t k, TypedValue v) {
-  return MutableOpInt(adIn, k, false,
-    [&] (ArrayData* ad) { setElem(LvalUncheckedInt(ad, k), v); return ad; },
-    [&] { return AppendInPlace(adIn, v); },
-    [&] (MixedArray* mixed) { return mixed->addVal(k, v); }
-  );
-}
-
 ArrayData* PackedArray::SetIntVec(ArrayData* adIn, int64_t k, TypedValue v) {
   assertx(adIn->cowCheck() || adIn->notCyclic(v));
   return MutableOpIntVec(adIn, k, adIn->cowCheck(),
@@ -880,13 +863,6 @@ ArrayData* PackedArray::SetIntMoveVec(ArrayData* adIn, int64_t k, TypedValue v) 
   );
 }
 
-ArrayData* PackedArray::SetIntInPlaceVec(ArrayData* adIn, int64_t k, TypedValue v) {
-  assertx(adIn->notCyclic(v));
-  return MutableOpIntVec(adIn, k, false,
-    [&] (ArrayData* ad) { setElem(LvalUncheckedInt(ad, k), v); return ad; }
-  );
-}
-
 ArrayData* PackedArray::SetStr(ArrayData* adIn, StringData* k, TypedValue v) {
   return MutableOpStr(adIn, k, adIn->cowCheck(),
     [&] (MixedArray* mixed) { return mixed->addVal(k, v); }
@@ -899,12 +875,6 @@ ArrayData* PackedArray::SetStrMove(ArrayData* adIn, StringData* k, TypedValue v)
   if (adIn->decReleaseCheck()) PackedArray::Release(adIn);
   tvDecRefGen(v);
   return result;
-}
-
-ArrayData* PackedArray::SetStrInPlace(ArrayData* adIn, StringData* k, TypedValue v) {
-  return MutableOpStr(adIn, k, false/*copy*/,
-    [&] (MixedArray* mixed) { return mixed->addVal(k, v); }
-  );
 }
 
 ArrayData* PackedArray::SetStrVec(ArrayData* adIn, StringData* k, TypedValue v) {
@@ -928,7 +898,7 @@ ArrayData* PackedArray::RemoveImpl(ArrayData* adIn, int64_t k, bool copy) {
     // TODO(#2606310): if we're removing the /last/ element, we
     // probably could stay packed, but this needs to be verified.
     auto const mixed = copy ? ToMixedCopy(adIn) : ToMixed(adIn);
-    return MixedArray::RemoveIntInPlace(mixed, k);
+    return MixedArray::RemoveInt(mixed, k);
   }
   // Key doesn't exist---we're still packed.
   return copy ? Copy(adIn) : adIn;
@@ -936,10 +906,6 @@ ArrayData* PackedArray::RemoveImpl(ArrayData* adIn, int64_t k, bool copy) {
 
 ArrayData* PackedArray::RemoveInt(ArrayData* adIn, int64_t k) {
   return RemoveImpl(adIn, k, adIn->cowCheck());
-}
-
-ArrayData* PackedArray::RemoveIntInPlace(ArrayData* adIn, int64_t k) {
-  return RemoveImpl(adIn, k, false/*copy*/);
 }
 
 ArrayData*
@@ -962,10 +928,6 @@ PackedArray::RemoveImplVec(ArrayData* adIn, int64_t k, bool copy) {
 
 ArrayData* PackedArray::RemoveIntVec(ArrayData* adIn, int64_t k) {
   return RemoveImplVec(adIn, k, adIn->cowCheck());
-}
-
-ArrayData* PackedArray::RemoveIntInPlaceVec(ArrayData* adIn, int64_t k) {
-  return RemoveImplVec(adIn, k, false/*copy*/);
 }
 
 ArrayData*
@@ -1019,6 +981,7 @@ ArrayData* PackedArray::Append(ArrayData* adIn, TypedValue v) {
 }
 
 ArrayData* PackedArray::AppendInPlace(ArrayData* adIn, TypedValue v) {
+  assertx(!adIn->cowCheck());
   return AppendImpl(adIn, v, false);
 }
 
@@ -1280,7 +1243,7 @@ ArrayData* PackedArray::MakeUncounted(ArrayData* array,
     APCStats::getAPCStats().addAPCUncountedBlock();
   }
 
-  auto const extra = withApcTypedValue ? sizeof(APCTypedValue) : 0;
+  auto const extra = uncountedAllocExtra(array, withApcTypedValue);
   auto const size = array->m_size;
   auto const sizeIndex = capacityToSizeIndex(size);
   auto const mem = static_cast<char*>(

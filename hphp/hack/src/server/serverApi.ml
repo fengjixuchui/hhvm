@@ -62,10 +62,19 @@ let make_local_server_api
 
     let begin_get_changed_files ~(mergebase : string option) :
         string list Future.t =
-      (* TODO: capture the current timestamp so it can be used for logging
-        when the promise is fulfilled and retrieved. *)
+      let t = Unix.gettimeofday () in
       match mergebase with
-      | Some mergebase -> Hg.files_changed_since_rev (Hg.Hg_rev mergebase) root
+      | Some mergebase ->
+        let hg_future = Hg.files_changed_since_rev (Hg.Hg_rev mergebase) root in
+        Future.continue_with hg_future @@ fun changed_files ->
+        let telemetry =
+          Telemetry.create ()
+          |> Telemetry.int_
+               ~key:"changed_files"
+               ~value:(List.length changed_files)
+        in
+        HackEventLogger.remote_scheduler_get_dirty_files_end telemetry t;
+        changed_files
       | None -> Future.of_error "Expected a non-empty mergebase"
 
     let write_changed_files
@@ -178,14 +187,14 @@ let make_remote_server_api
              with e -> Error (Exn.to_string e))
         end
 
-    let type_check ctx files_to_check ~state_filename =
+    let type_check ctx ~init_id ~check_id files_to_check ~state_filename =
       let t = Unix.gettimeofday () in
       Hh_logger.log "Type checking a batch...";
       Typing_check_service.(
         let check_info =
           {
-            init_id = Random_id.short_string ();
-            recheck_id = None;
+            init_id;
+            recheck_id = Some check_id;
             profile_log = true;
             profile_type_check_twice = false;
             profile_type_check_duration_threshold = 0.0;

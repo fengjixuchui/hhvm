@@ -60,8 +60,10 @@
   (modules
     remoteWorker)
   (libraries
+    ci_util_stubs
     errors
     file_info
+    future
     naming
     relative_path
     sys_utils))
@@ -90,6 +92,14 @@
   (wrapped false)
   (modules
     experiments_config_file))
+
+(library
+  (name ci_util_stubs)
+  (wrapped false)
+  (modules
+    ci_util)
+  (libraries
+    future))
 
 (library
   (name glean_dependency_graph_stubs)

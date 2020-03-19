@@ -126,7 +126,16 @@ let bar_contents =
   }
 |}
 
-let server_setup_for_deferral_tests () =
+type server_setup = {
+  ctx: Provider_context.t;
+  foo_path: Relative_path.t;
+  foo_contents: string;
+  bar_path: Relative_path.t;
+  bar_contents: string;
+  nonexistent_path: Relative_path.t;
+}
+
+let server_setup_for_deferral_tests () : server_setup =
   (* Set up a simple fake repo *)
   Disk.mkdir_p @@ in_fake_dir "root/";
   Relative_path.set_path_prefix
@@ -137,12 +146,9 @@ let server_setup_for_deferral_tests () =
     will be used for look up of symbols in type checking. *)
   Disk.write_file ~file:(in_fake_dir "root/Foo.php") ~contents:foo_contents;
   Disk.write_file ~file:(in_fake_dir "root/Bar.php") ~contents:bar_contents;
-  let foo_path =
-    Relative_path.create Relative_path.Root @@ in_fake_dir "root/Foo.php"
-  in
-  let bar_path =
-    Relative_path.create Relative_path.Root @@ in_fake_dir "root/Bar.php"
-  in
+  let foo_path = Relative_path.from_root "Foo.php" in
+  let bar_path = Relative_path.from_root "Bar.php" in
+  let nonexistent_path = Relative_path.from_root "Nonexistent.php" in
   (* Parsing produces the file infos that the naming table module can use
     to construct the forward naming table (files-to-symbols) *)
   let popt = ParserOptions.default in
@@ -161,7 +167,12 @@ let server_setup_for_deferral_tests () =
     GlobalOptions.
       { default with tco_defer_class_declaration_threshold = Some 1 }
   in
-  let ctx = Provider_context.empty_for_test ~popt ~tcopt in
+  let ctx =
+    Provider_context.empty_for_tool
+      ~popt
+      ~tcopt
+      ~backend:(Provider_backend.get ())
+  in
   Relative_path.Map.iter fast ~f:(fun name info ->
       let {
         FileInfo.n_classes = classes;
@@ -186,14 +197,14 @@ let server_setup_for_deferral_tests () =
     two computations:
       - a declaration of \Bar
       - a (deferred) type check of \Foo *)
-  (ctx, foo_path, foo_contents)
+  { ctx; foo_path; foo_contents; bar_path; bar_contents; nonexistent_path }
 
 (* In this test, we wish to establish that we enable deferring type checking
   for files that have undeclared dependencies, UNLESS we've already deferred
   those files a certain number of times. *)
 let test_process_file_deferring () =
-  let (ctx, path, _contents) = server_setup_for_deferral_tests () in
-  let file = Typing_check_service.{ path; deferred_count = 0 } in
+  let { ctx; foo_path; _ } = server_setup_for_deferral_tests () in
+  let file = Typing_check_service.{ path = foo_path; deferred_count = 0 } in
   let dynamic_view_files = Relative_path.Set.empty in
   let errors = Errors.empty in
 
@@ -260,11 +271,14 @@ let test_process_file_deferring () =
 (* This test verifies that the deferral/counting machinery works for
    ProviderUtils.compute_tast_and_errors_unquarantined. *)
 let test_compute_tast_counting () =
-  let (ctx, path, contents) = server_setup_for_deferral_tests () in
+  let { ctx; foo_path; foo_contents; _ } = server_setup_for_deferral_tests () in
   EventLogger.init_fake ();
 
   let (ctx, entry) =
-    Provider_context.add_entry_from_file_contents ~ctx ~path ~contents
+    Provider_context.add_entry_from_file_contents
+      ~ctx
+      ~path:foo_path
+      ~contents:foo_contents
   in
   let { Tast_provider.Compute_tast_and_errors.telemetry; _ } =
     Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
@@ -281,7 +295,8 @@ let test_compute_tast_counting () =
 
   (* Now try the same with local_memory backend *)
   Utils.with_context
-    ~enter:(fun () -> Provider_backend.set_local_memory_backend_with_defaults)
+    ~enter:(fun () ->
+      Provider_backend.set_local_memory_backend_with_defaults ())
     ~exit:(fun () ->
       (* restore it back to shared_mem for the rest of the tests *)
       Provider_backend.set_shared_memory_backend ())
@@ -292,18 +307,18 @@ let test_compute_tast_counting () =
           ~tcopt:TypecheckerOptions.default
           ~backend:(Provider_backend.get ())
       in
-      let (ctx, entry) = Provider_context.add_entry ~ctx ~path in
+      let (ctx, entry) = Provider_context.add_entry ~ctx ~path:foo_path in
       let { Tast_provider.Compute_tast_and_errors.telemetry; _ } =
         Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
       in
       Asserter.Int_asserter.assert_equals
-        84
+        59
         (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
-        "There should be 82 decl_accessor_count for local_memory provider";
+        "There should be 59 decl_accessor_count for local_memory provider";
       Asserter.Int_asserter.assert_equals
-        0
+        1
         (Telemetry_test_utils.int_exn telemetry "disk_cat.count")
-        "There should be 0 disk_cat_count for local_memory_provider");
+        "There should be 1 disk_cat_count for local_memory_provider");
 
   true
 
@@ -350,6 +365,84 @@ let test_should_enable_deferring () =
 
   true
 
+(* This test verifies quarantine. *)
+let test_quarantine () =
+  EventLogger.init_fake ();
+  Utils.with_context
+    ~enter:Provider_backend.set_local_memory_backend_with_defaults
+    ~exit:Provider_backend.set_shared_memory_backend
+    ~do_:(fun () ->
+      let { ctx; foo_path; foo_contents; nonexistent_path; _ } =
+        server_setup_for_deferral_tests ()
+      in
+
+      (* simple case *)
+      let (ctx, _foo_entry) =
+        Provider_context.add_entry_from_file_contents
+          ~ctx
+          ~path:foo_path
+          ~contents:foo_contents
+      in
+      let can_quarantine =
+        try
+          Provider_utils.respect_but_quarantine_unsaved_changes
+            ~ctx
+            ~f:(fun () -> "ok")
+        with e -> e |> Exception.wrap |> Exception.to_string
+      in
+      Asserter.String_asserter.assert_equals
+        "ok"
+        can_quarantine
+        "Should be able to quarantine foo";
+
+      (* repeat of simple case *)
+      let can_quarantine =
+        try
+          Provider_utils.respect_but_quarantine_unsaved_changes
+            ~ctx
+            ~f:(fun () -> "ok")
+        with e -> e |> Exception.wrap |> Exception.to_string
+      in
+      Asserter.String_asserter.assert_equals
+        "ok"
+        can_quarantine
+        "Should be able to quarantine foo a second time";
+
+      (* add a non-existent file; should fail *)
+      let (ctx2, _nonexistent_entry) =
+        Provider_context.add_entry_from_file_contents
+          ~ctx
+          ~path:nonexistent_path
+          ~contents:""
+      in
+      let can_quarantine =
+        try
+          Provider_utils.respect_but_quarantine_unsaved_changes
+            ~ctx:ctx2
+            ~f:(fun () -> "ok")
+        with e -> e |> Exception.wrap |> Exception.to_string
+      in
+      Asserter.String_asserter.assert_equals
+        "ok"
+        can_quarantine
+        "Should be able to quarantine nonexistent_file";
+
+      (* repeat of simple case, back with original ctx *)
+      let can_quarantine =
+        try
+          Provider_utils.respect_but_quarantine_unsaved_changes
+            ~ctx
+            ~f:(fun () -> "ok")
+        with e -> e |> Exception.wrap |> Exception.to_string
+      in
+      Asserter.String_asserter.assert_equals
+        "ok"
+        can_quarantine
+        "Should be able to quarantine foo a third time";
+
+      ());
+  true
+
 let tests =
   [
     ("test_deferred_decl_add", test_deferred_decl_add);
@@ -358,6 +451,7 @@ let tests =
     ("test_compute_tast_counting", test_compute_tast_counting);
     ("test_dmesg_parser", test_dmesg_parser);
     ("test_should_enable_deferring", test_should_enable_deferring);
+    ("test_quarantine", test_quarantine);
   ]
 
 let () =

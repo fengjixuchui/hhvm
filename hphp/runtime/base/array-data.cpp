@@ -327,14 +327,6 @@ const ArrayFunctions g_array_funcs = {
   DISPATCH(NvGetInt)
 
   /*
-   * tv_rval NvTryGetInt(const ArrayData*, int64_t key)
-   *
-   *   Lookup a value in an array using an integer key.  Either throws or
-   *   returns nullptr if the key is not in the array.
-   */
-  DISPATCH(NvTryGetInt)
-
-  /*
    * tv_rval NvGetStr(const ArrayData*, const StringData*)
    *
    *   Lookup a value in an array using a string key.  The string key must not
@@ -342,14 +334,6 @@ const ArrayFunctions g_array_funcs = {
    *   array.
    */
   DISPATCH(NvGetStr)
-
-  /*
-   * tv_rval NvTryGetStr(const ArrayData*, const StringData*)
-   *
-   *   Lookup a value in an array using a string key.  Either throws or returns
-   *   nullptr if the key is not in the array.
-   */
-  DISPATCH(NvTryGetStr)
 
   /*
    * ssize_t NvGetIntPos(const ArrayData*, int64_t k)
@@ -378,22 +362,22 @@ const ArrayFunctions g_array_funcs = {
   /*
    * ArrayData* SetInt(ArrayData*, int64_t key, TypedValue v)
    *
-   *   Set a value in the array for an integer key. SetInt() and SetIntMove()
-   *   have copy/grow semantics; SetIntInPlace() may only escalate or grow.
+   *   Set a value in the array for an integer key, with copies / escalation.
+   *   SetIntMove is equivalent to SetInt, followed by a dec-ref of the value,
+   *   followed by a dec-ref of the old array (if it was copied or escalated).
    */
   DISPATCH(SetInt)
   DISPATCH(SetIntMove)
-  DISPATCH(SetIntInPlace)
 
   /*
    * ArrayData* SetStr(ArrayData*, StringData*, TypedValue v)
    *
-   *   Set a value in the array for an string key. SetStr() and SetStrMove()
-   *   have copy/grow semantics; SetStrInPlace() may only escalate or grow.
+   *   Set a value in the array for a string key, with copies / escalation.
+   *   SetStrMove is equivalent to SetStr, followed by a dec-ref of the value,
+   *   followed by a dec-ref of the old array (if it was copied or escalated).
    */
   DISPATCH(SetStr)
   DISPATCH(SetStrMove)
-  DISPATCH(SetStrInPlace)
 
   /*
    * size_t Vsize(const ArrayData*)
@@ -475,24 +459,20 @@ const ArrayFunctions g_array_funcs = {
   /*
    * ArrayData* RemoveInt(ArrayData*, int64_t key)
    *
-   *   Remove an array element with an integer key.  If there was no
-   *   entry for that element, this function does not remove it, but
-   *   may still copy first. RemoveInt can copy or escalate,
-   *   but RemoveIntInPlace may only escalate.
+   *   Remove an array element with an integer key, copying or escalating
+   *   as necessary. If there was no entry for that element, this function
+   *   will not remove it, but it may still copy the array in that case.
    */
   DISPATCH(RemoveInt)
-  DISPATCH(RemoveIntInPlace)
 
   /*
    * ArrayData* RemoveStr(ArrayData*, const StringData*)
    *
-   *   Remove an array element with a string key.  If there was no
-   *   entry for that element, this function does not remove it, but
-   *   may still copy first. RemoveStr has copy/grow semantics;
-   *   RemoveStrInPlace may only reallocate or escalate.
+   *   Remove an array element with a string key, copying or escalating
+   *   as necessary. If there was no entry for that element, this function
+   *   will not remove it, but it may still copy the array in that case.
    */
   DISPATCH(RemoveStr)
-  DISPATCH(RemoveStrInPlace)
 
   /*
    * ssize_t IterEnd(const ArrayData*)
@@ -620,14 +600,11 @@ const ArrayFunctions g_array_funcs = {
   /*
    * ArrayData* Append(ArrayData*, TypedValue v);
    *
-   *   Append a new value to the array, with the next available
-   *   integer key.  If there is no next available integer key, no
-   *   value is appended.  Append has copy/grow semantics;
-   *   AppendInPlace may only escalate or grow. The value must not be
-   *   KindOfUninit.
+   *   Append a new value to the array, with the next available integer key,
+   *   copying or escalating as necessary. If there is no available integer
+   *   key, no value is appended, but this method may still copy the array.
    */
   DISPATCH(Append)
-  DISPATCH(AppendInPlace)
 
   /*
    * ArrayData* PlusEq(ArrayData*, const ArrayData* elems)
@@ -1054,21 +1031,26 @@ Variant ArrayData::each() {
 ///////////////////////////////////////////////////////////////////////////////
 // helpers
 
-void ArrayData::getNotFound(int64_t k) {
+void ArrayData::getNotFound(int64_t k) const {
+  assertx(kind() != kGlobalsKind);
+  if (isHackArrayType()) throwOOBArrayKeyException(k, this);
   throwArrayIndexException(k, false);
 }
 
-void ArrayData::getNotFound(const StringData* k) {
+void ArrayData::getNotFound(const StringData* k) const {
+  assertx(kind() != kGlobalsKind);
+  if (isVecArrayType()) throwInvalidArrayKeyException(k, this);
+  if (isHackArrayType()) throwOOBArrayKeyException(k, this);
   throwArrayKeyException(k, false);
 }
 
 tv_rval ArrayData::getNotFound(int64_t k, bool error) const {
-  if (error && kind() != kGlobalsKind) getNotFound(k);
+  if (error) getNotFound(k);
   return tv_rval::dummy();
 }
 
 tv_rval ArrayData::getNotFound(const StringData* k, bool error) const {
-  if (error && kind() != kGlobalsKind) getNotFound(k);
+  if (error) getNotFound(k);
   return tv_rval::dummy();
 }
 

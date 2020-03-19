@@ -67,33 +67,19 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
                                            APCHandle* rootAPCHandle);
   static void ReleaseUncounted(ArrayData*);
   static tv_rval NvGetInt(const ArrayData*, int64_t ki);
-  static constexpr auto NvTryGetInt = &NvGetInt;
   static tv_rval NvGetStr(const ArrayData*, const StringData*);
-  static constexpr auto NvTryGetStr = &NvGetStr;
   static ssize_t NvGetIntPos(const ArrayData*, int64_t k);
   static constexpr auto NvGetIntPosVec = &NvGetIntPos;
   static ssize_t NvGetStrPos(const ArrayData*, const StringData* k);
   static constexpr auto NvGetStrPosVec = &NvGetStrPos;
-  static tv_rval RvalInt(const ArrayData* ad, int64_t k) {
-    assertx(ad->isPackedKind());
-    return NvGetInt(ad, k);
-  }
-  static tv_rval RvalIntStrict(const ArrayData* ad, int64_t k) {
-    assertx(ad->isPackedKind());
-    return NvTryGetInt(ad, k);
-  }
   static TypedValue NvGetKey(const ArrayData*, ssize_t pos);
   static ArrayData* SetInt(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetIntMove(ArrayData*, int64_t k, TypedValue v);
-  static ArrayData* SetIntInPlace(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetStr(ArrayData*, StringData* k, TypedValue v);
   static ArrayData* SetStrMove(ArrayData*, StringData* k, TypedValue v);
-  static ArrayData* SetStrInPlace(ArrayData*, StringData* k, TypedValue v);
   static size_t Vsize(const ArrayData*);
   static tv_rval RvalPos(const ArrayData* ad, ssize_t pos);
-  static bool IsVectorData(const ArrayData*) {
-    return true;
-  }
+  static bool IsVectorData(const ArrayData*) { return true; }
   static bool ExistsInt(const ArrayData* ad, int64_t k);
   static bool ExistsStr(const ArrayData*, const StringData*);
   static arr_lval LvalInt(ArrayData*, int64_t k, bool copy);
@@ -102,9 +88,7 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static arr_lval LvalSilentStr(ArrayData*, StringData*, bool copy);
   static arr_lval LvalForceNew(ArrayData*, bool copy);
   static ArrayData* RemoveInt(ArrayData*, int64_t k);
-  static ArrayData* RemoveIntInPlace(ArrayData*, int64_t k);
   static ArrayData* RemoveStr(ArrayData*, const StringData* k);
-  static constexpr auto RemoveStrInPlace = &RemoveStr;
   static ssize_t IterBegin(const ArrayData*);
   static ssize_t IterLast(const ArrayData*);
   static ssize_t IterEnd(const ArrayData*);
@@ -120,7 +104,6 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static bool Usort(ArrayData*, const Variant&);
   static bool Uasort(ArrayData*, const Variant&);
   static ArrayData* Append(ArrayData*, TypedValue v);
-  static ArrayData* AppendInPlace(ArrayData*, TypedValue v);
   static ArrayData* PlusEq(ArrayData*, const ArrayData* elems);
   static ArrayData* Merge(ArrayData*, const ArrayData* elems);
   static ArrayData* Pop(ArrayData*, Variant& value);
@@ -137,16 +120,11 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
 
   static constexpr auto ToKeyset = &ArrayCommon::ToKeyset;
 
-  static tv_rval NvTryGetIntVec(const ArrayData*, int64_t);
-  static tv_rval NvTryGetStrVec(const ArrayData*, const StringData*);
   static ArrayData* SetIntVec(ArrayData*, int64_t, TypedValue);
   static ArrayData* SetIntMoveVec(ArrayData*, int64_t, TypedValue);
-  static ArrayData* SetIntInPlaceVec(ArrayData*, int64_t, TypedValue);
   static ArrayData* SetStrVec(ArrayData*, StringData*, TypedValue);
   static constexpr auto SetStrMoveVec = &SetStrVec;
-  static constexpr auto SetStrInPlaceVec = &SetStrVec;
   static ArrayData* RemoveIntVec(ArrayData*, int64_t);
-  static ArrayData* RemoveIntInPlaceVec(ArrayData*, int64_t);
   static arr_lval LvalIntVec(ArrayData*, int64_t, bool);
   static arr_lval LvalStrVec(ArrayData*, StringData*, bool);
   static constexpr auto LvalSilentIntVec = &LvalSilentInt;
@@ -170,7 +148,6 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static constexpr auto ExistsStrVec = &ExistsStr;
   static constexpr auto LvalForceNewVec = &LvalForceNew;
   static constexpr auto RemoveStrVec = &RemoveStr;
-  static constexpr auto RemoveStrInPlaceVec = &RemoveStr;
   static constexpr auto IterBeginVec = &IterBegin;
   static constexpr auto IterLastVec = &IterLast;
   static constexpr auto IterEndVec = &IterEnd;
@@ -186,7 +163,6 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static constexpr auto CopyVec = &Copy;
   static constexpr auto CopyStaticVec = &CopyStatic;
   static constexpr auto AppendVec = &Append;
-  static constexpr auto AppendInPlaceVec = &AppendInPlace;
   static constexpr auto PopVec = &Pop;
   static constexpr auto DequeueVec = &Dequeue;
   static constexpr auto PrependVec = &Prepend;
@@ -195,14 +171,11 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static constexpr auto ToKeysetVec = &ArrayCommon::ToKeyset;
   static constexpr auto ToDArrayVec = &ToDArray;
 
-  static tv_rval RvalIntVec(const ArrayData* ad, int64_t k) {
-    assertx(ad->isVecArrayKind());
-    return NvGetIntVec(ad, k);
-  }
-  static tv_rval RvalIntStrictVec(const ArrayData* ad, int64_t k) {
-    assertx(ad->isVecArrayKind());
-    return NvTryGetIntVec(ad, k);
-  }
+  //////////////////////////////////////////////////////////////////////
+
+  // Like append but without COW checks. Used to implement ArrayInit helpers.
+  static ArrayData* AppendInPlace(ArrayData*, TypedValue v);
+  static constexpr auto AppendInPlaceVec = &AppendInPlace;
 
   //////////////////////////////////////////////////////////////////////
 

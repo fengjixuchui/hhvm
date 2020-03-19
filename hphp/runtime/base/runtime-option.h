@@ -92,6 +92,7 @@ struct RepoOptions {
   H(bool,           EnableXHPClassModifier,         false)            \
   E(bool,           EmitGenericsUB,                 false)            \
   H(bool,           DisableXHPElementMangling,      false)            \
+  H(bool,           DisableArray,                   false)            \
   /**/
 
   /**/
@@ -1033,6 +1034,17 @@ struct RuntimeOption {
   F(int, SimpleJsonMaxLength,        2 << 20)                           \
   F(uint32_t, JitSampleRate,               0)                           \
   F(uint32_t, TraceServerRequestRate,      0)                           \
+  /* Tracing Options */                                                 \
+  /* Base tracing sample rate for all requests */                       \
+  F(uint32_t, TracingSampleRate,              0)                        \
+  /* Tracing sample rate for first N requests */                        \
+  F(uint32_t, TracingPerRequestCount,         0)                        \
+  F(uint32_t, TracingPerRequestSampleRate,    0)                        \
+  /* Tracing sample rate for first N requests per URL */                \
+  F(uint32_t, TracingFirstRequestsCount,      0)                        \
+  F(uint32_t, TracingFirstRequestsSampleRate, 0)                        \
+  /* Empty string disables any Artillery tracing */                     \
+  F(std::string, ArtilleryTracePolicy, "")                              \
   /* Log the sizes and metadata for all translations in the TC broken
    * down by function and inclusive/exclusive size for inlined regions.
    * When set to "" TC size data will be sampled on a per function basis
@@ -1106,6 +1118,8 @@ struct RuntimeOption {
   /* Changes Hack arrays so they == true when not empty and == false    \
    * when empty, instead of always being != any boolean or null. */     \
   F(bool, HackArrEmptyBasedBoolEqCmp, false)                            \
+  /* Raise a notice for `$dict is shape` and `$vec is tuple`. */        \
+  F(bool, HackArrIsShapeTupleNotices, false)                            \
   /* Enable instrumentation and information in the repo for tracking    \
    * the source of vecs and dicts whose vec/dict-ness is observed       \
    * during program execution                                           \

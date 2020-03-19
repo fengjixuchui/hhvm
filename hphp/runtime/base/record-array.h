@@ -53,18 +53,14 @@ struct RecordArray : ArrayData,
   // Array interface
   static void Release(ArrayData*);
   static tv_rval NvGetInt(const ArrayData*, int64_t key);
-  static constexpr auto NvTryGetInt = &NvGetInt;
   static tv_rval NvGetStr(const ArrayData*, const StringData*);
-  static constexpr auto NvTryGetStr = &NvGetStr;
   static ssize_t NvGetIntPos(const ArrayData*, int64_t k);
   static ssize_t NvGetStrPos(const ArrayData*, const StringData* k);
   static TypedValue NvGetKey(const ArrayData*, ssize_t pos);
   static ArrayData* SetInt(ArrayData*, int64_t key, TypedValue v);
   static ArrayData* SetIntMove(ArrayData*, int64_t key, TypedValue v);
-  static constexpr auto SetIntInPlace = &SetInt;
   static ArrayData* SetStr(ArrayData*, StringData*, TypedValue v);
   static ArrayData* SetStrMove(ArrayData*, StringData*, TypedValue v);
-  static ArrayData* SetStrInPlace(ArrayData*, StringData*, TypedValue v);
   static size_t Vsize(const ArrayData*);
   static tv_rval RvalPos(const ArrayData*, ssize_t pos);
   static bool IsVectorData(const ArrayData*);
@@ -76,9 +72,7 @@ struct RecordArray : ArrayData,
   static arr_lval LvalSilentStr(ArrayData*, StringData* key, bool copy);
   static arr_lval LvalForceNew(ArrayData*, bool copy);
   static ArrayData* RemoveInt(ArrayData*, int64_t key);
-  static constexpr auto RemoveIntInPlace = &RemoveInt;
   static ArrayData* RemoveStr(ArrayData*, const StringData*);
-  static constexpr auto RemoveStrInPlace = &RemoveStr;
   static ssize_t IterEnd(const ArrayData*);
   static ssize_t IterBegin(const ArrayData*);
   static ssize_t IterLast(const ArrayData*);
@@ -94,7 +88,6 @@ struct RecordArray : ArrayData,
   static ArrayData* Copy(const ArrayData*);
   static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* Append(ArrayData*, TypedValue v);
-  static constexpr auto AppendInPlace = &Append;
   static ArrayData* PlusEq(ArrayData*, const ArrayData* elems);
   static ArrayData* Merge(ArrayData*, const ArrayData* elems);
   static ArrayData* Pop(ArrayData*, Variant& value);

@@ -403,14 +403,6 @@ private:
 // ArrayData API
 
 public:
-  static tv_rval NvTryGetInt(const ArrayData*, int64_t);
-  static tv_rval NvTryGetStr(const ArrayData*, const StringData*);
-  static tv_rval RvalIntStrict(const ArrayData* ad, int64_t k) {
-    return NvTryGetInt(ad, k);
-  }
-  static tv_rval RvalStrStrict(const ArrayData* ad, const StringData* k) {
-    return NvTryGetStr(ad, k);
-  }
   static size_t Vsize(const ArrayData*);
   static tv_rval RvalPos(const ArrayData*, ssize_t);
   static bool IsVectorData(const ArrayData*);
@@ -423,18 +415,13 @@ public:
   static arr_lval LvalForceNew(ArrayData*, bool);
   static ArrayData* SetInt(ArrayData*, int64_t, TypedValue);
   static constexpr auto SetIntMove = &SetInt;
-  static constexpr auto SetIntInPlace = &SetInt;
   static ArrayData* SetStr(ArrayData*, StringData*, TypedValue);
   static constexpr auto SetStrMove = &SetStr;
-  static constexpr auto SetStrInPlace = &SetStr;
   static ArrayData* RemoveInt(ArrayData*, int64_t);
-  static ArrayData* RemoveIntInPlace(ArrayData*, int64_t);
   static ArrayData* RemoveStr(ArrayData*, const StringData*);
-  static ArrayData* RemoveStrInPlace(ArrayData*, const StringData*);
   static ArrayData* Copy(const ArrayData*);
   static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* Append(ArrayData*, TypedValue);
-  static ArrayData* AppendInPlace(ArrayData*, TypedValue);
   static ArrayData* PlusEq(ArrayData*, const ArrayData*);
   static ArrayData* Merge(ArrayData*, const ArrayData*);
   static ArrayData* Pop(ArrayData*, Variant&);

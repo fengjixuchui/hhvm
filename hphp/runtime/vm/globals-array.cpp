@@ -182,8 +182,8 @@ ArrayData* GlobalsArray::SetIntMove(ArrayData* ad, int64_t k, TypedValue v) {
   return SetStrMove(ad, String(k).get(), v);
 }
 
-ArrayData* GlobalsArray::SetIntInPlace(ArrayData* ad, int64_t k, TypedValue v) {
-  return SetStrInPlace(ad, String(k).get(), v);
+ArrayData* GlobalsArray::SetInt(ArrayData* ad, int64_t k, TypedValue v) {
+  return SetStr(ad, String(k).get(), v);
 }
 
 ArrayData* GlobalsArray::SetStrMove(ArrayData* ad, StringData* k, TypedValue v) {
@@ -191,18 +191,18 @@ ArrayData* GlobalsArray::SetStrMove(ArrayData* ad, StringData* k, TypedValue v) 
   return ad;
 }
 
-ArrayData* GlobalsArray::SetStrInPlace(ArrayData* ad, StringData* k, TypedValue v) {
+ArrayData* GlobalsArray::SetStr(ArrayData* ad, StringData* k, TypedValue v) {
   tvSet(v, *asGlobals(ad)->m_tab->lookupAdd(k));
   return ad;
 }
 
 ArrayData*
-GlobalsArray::RemoveIntInPlace(ArrayData* ad, int64_t k) {
-  return RemoveStrInPlace(ad, String(k).get());
+GlobalsArray::RemoveInt(ArrayData* ad, int64_t k) {
+  return RemoveStr(ad, String(k).get());
 }
 
 ArrayData*
-GlobalsArray::RemoveStrInPlace(ArrayData* ad, const StringData* k) {
+GlobalsArray::RemoveStr(ArrayData* ad, const StringData* k) {
   auto a = asGlobals(ad);
   a->m_tab->unset(k);
   return a;
@@ -214,7 +214,7 @@ GlobalsArray::RemoveStrInPlace(ArrayData* ad, const StringData* k) {
  * is currently $GLOBALS.
  */
 
-ArrayData* GlobalsArray::AppendInPlace(ArrayData*, TypedValue /*v*/) {
+ArrayData* GlobalsArray::Append(ArrayData*, TypedValue /*v*/) {
   throw_not_implemented("append on $GLOBALS");
 }
 

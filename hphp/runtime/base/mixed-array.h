@@ -341,38 +341,25 @@ public:
   static bool IsStrictVector(const ArrayData* ad) {
     return ad->m_size == asMixed(ad)->m_nextKI && IsVectorData(ad);
   }
-  static constexpr auto NvTryGetInt = &NvGetInt;
-  static constexpr auto NvTryGetStr = &NvGetStr;
-  static tv_rval RvalIntStrict(const ArrayData* ad, int64_t k) {
-    assertx(ad->isMixedKind());
-    return NvTryGetInt(ad, k);
-  }
-  static tv_rval RvalStrStrict(const ArrayData* ad, const StringData* k) {
-    assertx(ad->isMixedKind());
-    return NvTryGetStr(ad, k);
-  }
   static bool ExistsInt(const ArrayData*, int64_t k);
   static bool ExistsStr(const ArrayData*, const StringData* k);
   static arr_lval LvalInt(ArrayData* ad, int64_t k, bool copy);
+  static arr_lval LvalSilentInt(ArrayData*, int64_t, bool);
   static arr_lval LvalStr(ArrayData* ad, StringData* k, bool copy);
+  static arr_lval LvalSilentStr(ArrayData*, StringData*, bool);
   static arr_lval LvalForceNew(ArrayData*, bool copy);
   static arr_lval LvalForce(ArrayData* ad, const Variant& k, bool copy);
   static ArrayData* SetInt(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetIntMove(ArrayData*, int64_t k, TypedValue v);
-  static ArrayData* SetIntInPlace(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetStr(ArrayData*, StringData* k, TypedValue v);
   static ArrayData* SetStrMove(ArrayData*, StringData* k, TypedValue v);
-  static ArrayData* SetStrInPlace(ArrayData*, StringData* k, TypedValue v);
   static ArrayData* AddInt(ArrayData*, int64_t k, TypedValue v, bool copy);
   static ArrayData* AddStr(ArrayData*, StringData* k, TypedValue v, bool copy);
   static ArrayData* RemoveInt(ArrayData*, int64_t k);
-  static ArrayData* RemoveIntInPlace(ArrayData*, int64_t k);
   static ArrayData* RemoveStr(ArrayData*, const StringData* k);
-  static ArrayData* RemoveStrInPlace(ArrayData*, const StringData* k);
   static ArrayData* Copy(const ArrayData*);
   static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* Append(ArrayData*, TypedValue v);
-  static ArrayData* AppendInPlace(ArrayData*, TypedValue v);
   static ArrayData* PlusEq(ArrayData*, const ArrayData* elems);
   static ArrayData* Merge(ArrayData*, const ArrayData* elems);
   static ArrayData* Pop(ArrayData*, Variant& value);
@@ -402,38 +389,16 @@ public:
   static bool Usort(ArrayData*, const Variant& cmp_function);
   static bool Uasort(ArrayData*, const Variant& cmp_function);
 
-  static tv_rval NvTryGetIntDict(const ArrayData*, int64_t);
   static constexpr auto NvGetIntDict = &NvGetInt;
-  static tv_rval NvTryGetStrDict(const ArrayData*,
-                                            const StringData*);
   static constexpr auto NvGetStrDict = &NvGetStr;
   static constexpr auto NvGetIntPosDict = &NvGetIntPos;
   static constexpr auto NvGetStrPosDict = &NvGetStrPos;
-  static tv_rval RvalIntDict(const ArrayData* ad, int64_t k) {
-    assertx(ad->isDictKind());
-    return NvGetIntDict(ad, k);
-  }
-  static tv_rval RvalIntStrictDict(const ArrayData* ad, int64_t k) {
-    assertx(ad->isDictKind());
-    return NvTryGetIntDict(ad, k);
-  }
-  static tv_rval RvalStrDict(const ArrayData* ad, const StringData* k) {
-    assertx(ad->isDictKind());
-    return NvGetStrDict(ad, k);
-  }
-  static tv_rval RvalStrStrictDict(const ArrayData* ad,
-                                       const StringData* k) {
-    assertx(ad->isDictKind());
-    return NvTryGetStrDict(ad, k);
-  }
   static constexpr auto ReleaseDict = &Release;
   static constexpr auto NvGetKeyDict = &NvGetKey;
   static constexpr auto SetIntDict = &SetInt;
   static constexpr auto SetIntMoveDict = &SetIntMove;
-  static constexpr auto SetIntInPlaceDict = &SetIntInPlace;
   static constexpr auto SetStrDict = &SetStr;
   static constexpr auto SetStrMoveDict = &SetStrMove;
-  static constexpr auto SetStrInPlaceDict = &SetStrInPlace;
   static constexpr auto AddIntDict = &AddInt;
   static constexpr auto AddStrDict = &AddStr;
   static constexpr auto VsizeDict = &Vsize;
@@ -442,12 +407,12 @@ public:
   static constexpr auto ExistsIntDict = &ExistsInt;
   static constexpr auto ExistsStrDict = &ExistsStr;
   static constexpr auto LvalIntDict = &LvalInt;
+  static constexpr auto LvalSilentIntDict = &LvalSilentInt;
   static constexpr auto LvalStrDict = &LvalStr;
+  static constexpr auto LvalSilentStrDict = &LvalSilentStr;
   static constexpr auto LvalForceNewDict = &LvalForceNew;
   static constexpr auto RemoveIntDict = &RemoveInt;
-  static constexpr auto RemoveIntInPlaceDict = &RemoveIntInPlace;
   static constexpr auto RemoveStrDict = &RemoveStr;
-  static constexpr auto RemoveStrInPlaceDict = &RemoveStrInPlace;
   static constexpr auto IterBeginDict = &IterBegin;
   static constexpr auto IterLastDict = &IterLast;
   static constexpr auto IterEndDict = &IterEnd;
@@ -463,7 +428,6 @@ public:
   static constexpr auto CopyDict = &Copy;
   static constexpr auto CopyStaticDict = &CopyStatic;
   static constexpr auto AppendDict = &Append;
-  static constexpr auto AppendInPlaceDict = &AppendInPlace;
   static constexpr auto PlusEqDict = &PlusEq;
   static constexpr auto MergeDict = &Merge;
   static constexpr auto PopDict = &Pop;
@@ -481,13 +445,10 @@ public:
 
   //////////////////////////////////////////////////////////////////////
 
-  // Like Lval[Int,Str], but silently does nothing if the element does not
-  // exist. Not part of the ArrayData interface, but used for member operations.
-  static arr_lval LvalSilentInt(ArrayData*, int64_t, bool);
-  static arr_lval LvalSilentStr(ArrayData*, StringData*, bool);
-
-  static constexpr auto LvalSilentIntDict = &LvalSilentInt;
-  static constexpr auto LvalSilentStrDict = &LvalSilentStr;
+  // Helpers used by ArrayInit to update MixedArrays without refcount ops.
+  // These helpers work for both mixed PHP arrays and dicts.
+  static ArrayData* SetIntInPlace(ArrayData*, int64_t k, TypedValue v);
+  static ArrayData* SetStrInPlace(ArrayData*, StringData* k, TypedValue v);
 
   //////////////////////////////////////////////////////////////////////
 

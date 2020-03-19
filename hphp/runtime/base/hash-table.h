@@ -201,11 +201,20 @@ struct HashTable : HashTableCommon {
   }
 
   static ALWAYS_INLINE
-  ArrayType* staticAlloc(uint32_t scale) {
-    auto const size = computeAllocBytes(scale);
-    auto mem = RuntimeOption::EvalLowStaticArrays ? lower_malloc(size)
-                                                  : uncounted_malloc(size);
-    return static_cast<ArrayType*>(mem);
+  ArrayType* staticAlloc(uint32_t scale, size_t extra = 0) {
+    extra = (extra + 15) & ~15ull;
+    auto const size = computeAllocBytes(scale) + extra;
+    auto const mem = RuntimeOption::EvalLowStaticArrays
+      ? lower_malloc(size)
+      : uncounted_malloc(size);
+    return reinterpret_cast<ArrayType*>(reinterpret_cast<char*>(mem) + extra);
+  }
+
+  static ALWAYS_INLINE
+  ArrayType* uncountedAlloc(uint32_t scale, size_t extra = 0) {
+    auto const size = computeAllocBytes(scale) + extra;
+    auto const mem = uncounted_malloc(size);
+    return reinterpret_cast<ArrayType*>(reinterpret_cast<char*>(mem) + extra);
   }
 
   static ALWAYS_INLINE
@@ -235,13 +244,6 @@ struct HashTable : HashTableCommon {
 
   static ssize_t NvGetIntPos(const ArrayData* ad, int64_t k);
   static ssize_t NvGetStrPos(const ArrayData* ad, const StringData* k);
-
-  static tv_rval RvalInt(const ArrayData* ad, int64_t k) {
-    return NvGetInt(ad, k);
-  }
-  static tv_rval RvalStr(const ArrayData* ad, const StringData* k) {
-    return NvGetStr(ad, k);
-  }
 
   static TypedValue NvGetKey(const ArrayData* ad, ssize_t pos);
 
