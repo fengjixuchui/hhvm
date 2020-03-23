@@ -23,7 +23,7 @@ namespace HH {
  * definition below is not actually used at run time; it is simply
  * provided for the typechecker and for developer reference.
  */
-abstract class BuiltinEnum<T> {
+abstract class BuiltinEnum<+T> {
   /**
    * Get the values of the public consts defined on this class,
    * indexed by the string name of those consts.
@@ -74,5 +74,5 @@ abstract class BuiltinEnum<T> {
 
 type enumname<T> = classname<BuiltinEnum<T>>;
 
-const enumname<mixed> BUILTIN_ENUM = BuiltinEnum::class;
+const enumname<arraykey> BUILTIN_ENUM = BuiltinEnum::class;
 }

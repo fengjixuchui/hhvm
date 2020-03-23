@@ -122,6 +122,11 @@ let run_naming_table_test f =
           ~tcopt
           ~backend:(Provider_backend.get ())
       in
+      (* load_from_sqlite will call set_naming_db_path for the ctx it's given, but
+      here is a fresh ctx with a fresh backend so we have to set it again. *)
+      Db_path_provider.set_naming_db_path
+        ctx
+        (Some (Naming_sqlite.Db_path db_name));
       (try f ~ctx ~unbacked_naming_table ~backed_naming_table ~db_name
        with e ->
          Printf.eprintf
@@ -134,6 +139,9 @@ let run_naming_table_test f =
           ~tcopt
           ~backend:(Provider_backend.get ())
       in
+      Db_path_provider.set_naming_db_path
+        ctx
+        (Some (Naming_sqlite.Db_path db_name));
       (try f ~ctx ~unbacked_naming_table ~backed_naming_table ~db_name
        with e ->
          Printf.eprintf
@@ -215,10 +223,10 @@ let test_remove () =
 
 let test_get_sqlite_paths () =
   run_naming_table_test
-    (fun ~ctx:_ ~unbacked_naming_table:_ ~backed_naming_table ~db_name ->
+    (fun ~ctx ~unbacked_naming_table:_ ~backed_naming_table ~db_name ->
       Asserter.String_asserter.assert_option_equals
         (Some db_name)
-        (Naming_table.get_reverse_naming_fallback_path ())
+        (Naming_table.get_reverse_naming_fallback_path ctx)
         "get_reverse_naming_fallback_path should return the expected value";
 
       Asserter.String_asserter.assert_option_equals
@@ -343,7 +351,7 @@ let test_context_changes_funs () =
         (Naming_provider.get_fun_canon_name ctx "\\BAR")
         "Old function in context should NOT be accessible by canon name")
 
-let text_context_changes_classes () =
+let test_context_changes_classes () =
   run_naming_table_test
     (fun ~ctx ~unbacked_naming_table:_ ~backed_naming_table:_ ~db_name:_ ->
       let (ctx, _entry) =
@@ -377,7 +385,7 @@ let text_context_changes_classes () =
         (Naming_provider.get_type_canon_name ctx "\\FOO")
         "Old class in context should NOT be accessible by canon name")
 
-let text_context_changes_typedefs () =
+let test_context_changes_typedefs () =
   run_naming_table_test
     (fun ~ctx ~unbacked_naming_table:_ ~backed_naming_table:_ ~db_name:_ ->
       let (ctx, _entry) =
@@ -435,6 +443,6 @@ let () =
       ("test_local_changes", test_local_changes);
       ("test_context_changes_consts", test_context_changes_consts);
       ("test_context_changes_funs", test_context_changes_funs);
-      ("text_context_changes_classes", text_context_changes_classes);
-      ("text_context_changes_typedefs", text_context_changes_typedefs);
+      ("test_context_changes_classes", test_context_changes_classes);
+      ("test_context_changes_typedefs", test_context_changes_typedefs);
     ]

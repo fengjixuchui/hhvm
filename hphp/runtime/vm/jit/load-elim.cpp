@@ -32,6 +32,9 @@
 
 #include "hphp/runtime/base/perf-warning.h"
 
+#include "hphp/runtime/vm/hhbc-codec.h"
+#include "hphp/runtime/vm/unwind.h"
+
 #include "hphp/runtime/vm/jit/alias-analysis.h"
 #include "hphp/runtime/vm/jit/analysis.h"
 #include "hphp/runtime/vm/jit/cfg.h"
@@ -185,6 +188,7 @@ struct Global {
   size_t loadsRemoved  = 0;
   size_t loadsRefined  = 0;
   size_t jumpsRemoved  = 0;
+  size_t stackTeardownsOptimized = 0;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -276,8 +280,18 @@ struct FRemovable {};
 struct FJmpNext {};
 struct FJmpTaken {};
 
+/*
+ * The instruction can be turned into specialized frame teardown instructions
+ * followed by an EndCatch or an EnterTCUnwind that will omit the teardown
+ */
+constexpr uint32_t kMaxTrackedFrameElems = 64;
+struct FFrameTeardown {
+  int32_t numStackElems;
+  CompactVector<std::pair<uint32_t, Type>> elems;
+};
+
 using Flags = boost::variant<FNone,FRedundant,FReducible,FRefinableLoad,
-                             FRemovable,FJmpNext,FJmpTaken>;
+                             FRemovable,FJmpNext,FJmpTaken,FFrameTeardown>;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -610,6 +624,173 @@ Flags handle_assert(Local& env, const IRInstruction& inst) {
   return FNone{};
 }
 
+void check_decref_eligible(
+  Local& env,
+  CompactVector<std::pair<uint32_t, Type>>& elems,
+  size_t index,
+  AliasClass acls) {
+    auto const meta = env.global.ainfo.find(canonicalize(acls));
+    auto const tloc = find_tracked(env, meta);
+    FTRACE(5, "    {}: {}\n", index, tloc ? show(*tloc) : "x");
+    if (!tloc) {
+      elems.push_back({index, TCell});
+    } else if (tloc->knownType.maybe(TCounted)) {
+      // The type needs to be at least a TCell for LdStk and LdLoc to work
+      auto const type = tloc->knownType <= TCell ? tloc->knownType : TCell;
+      elems.push_back({index, type});
+    }
+  };
+
+Flags handle_end_catch(Local& env, const IRInstruction& inst) {
+  if (!RuntimeOption::EvalHHIRLoadEnableTeardownOpts) return FNone{};
+  assertx(inst.op() == EndCatch);
+  auto const data = inst.extra<EndCatchData>();
+  if (data->teardown != EndCatchData::Teardown::Full ||
+      inst.func()->attrs() & AttrMayUseVV ||
+      findCatchHandler(inst.func(), inst.marker().bcOff()) != kInvalidOffset) {
+    FTRACE(4, "      non-reducible EndCatch\n");
+    return FNone{};
+  }
+  auto pc = inst.marker().fixupSk().unit()->entry() + inst.marker().bcOff();
+  auto const op = decode_op(pc);
+  if (op == OpFCallCtor &&
+      decodeFCallArgs(op, pc, nullptr /* StringDecoder */).lockWhileUnwinding) {
+    FTRACE(4, "      non-reducible EndCatch -- lock while unwinding\n");
+    return FNone{};
+  }
+  assertx(data->stublogue != EndCatchData::FrameMode::Stublogue);
+  auto const numLocals = inst.func()->numLocals();
+  auto const astk = AStack { inst.src(1), data->offset, 0 };
+  auto const numStackElemsWithInlining =
+    inst.marker().resumeMode() != ResumeMode::None
+      ? -astk.offset.offset
+      : -astk.offset.offset - inst.func()->numSlotsInFrame();
+  assertx(numStackElemsWithInlining >= 0);
+
+  /*
+
+  Reference to guide around stack offset calculations:
+
+  +---------------------------------+
+  | ActRec for outer Func           |
+  +---------------------------------+ <-+ DefFp    <-+          <-+
+  | Local1 for outer Func           |   |            |            |
+  | Local2 for outer Func           |   |            |            |
+  | Local3 for outer Func           |   |            | defSP      |
+  | Local4 for outer Func           |   |            |  ->spOff   | findSpOffset
+  +---------------------------------+   |            |            |
+  |                                 |   |            |            |
+  | Stack slots for outer Func      |   |            |            |
+  |                                 | <-] inst.src(0) [ sp ]      | <-+
+  +---------------------------------+   |                         |   |
+  | ActRec for inlined func one     |   |                         |   |
+  +---------------------------------+ <-+ DefInlineFp             |   |
+  | Locals for inlined func one     |   |                         |   |
+  +---------------------------------+   |                         |   |
+  | Stack slots for inlined func one|   |                         |   |
+  +---------------------------------+   |                         |   | EndCatch
+  | ActRec for inlined func two     |   |                         |   |  .offset
+  +---------------------------------+ <-+ inst.src(1) [ fp ]    <-+   |
+  | Local1 for inlined func two     |   |                         |   |
+  | Local2 for inlined func two     |   |                         |   |
+  +---------------------------------+ <-+                         |   |
+  | Stack slots for inlined func two|                                 |
+  +---------------------------------+                               <-+
+
+  */
+
+  auto const adjustSP = [&]() -> int32_t {
+    SSATmpSet visited;
+    auto const fpReg = inst.src(0);
+    auto const defSP = inst.src(1)->inst();
+    auto const spOff = findSPOffset(env.global.unit, fpReg, visited);
+    if (!spOff) return 0;
+    auto const defSPOff = defSP->extra<FPInvOffsetData>()->offset.offset;
+    assertx(!fpReg->inst()->is(DefFP, DefFuncEntryFP) || defSPOff == *spOff);
+    return *spOff - defSPOff;
+  }();
+
+  // We need to adjust the number of stack elements since we only want to emit
+  // decrefs for the most inlined frame
+  auto const numStackElems = numStackElemsWithInlining + adjustSP;
+
+  if (numStackElems + numLocals > kMaxTrackedFrameElems) {
+    FTRACE(4, "      non-reducible EndCatch - too many values\n");
+    return FNone{};
+  }
+
+  FTRACE(4, "      reducible EndCatch\n");
+  FTRACE(4, "Optimize EndCatch {}, num locals {}, num stack {}\n{}\n",
+    inst.func()->fullName()->data(), numLocals, numStackElems,
+    inst.marker().show());
+
+  CompactVector<std::pair<uint32_t, Type>> elems;
+
+  // If locals are decreffed, we shouldn't decref them again. This also implies
+  // that there are no stack elements.
+  if (data->mode != EndCatchData::CatchMode::LocalsDecRefd) {
+    for (uint32_t i = 0; i < numLocals; ++i) {
+      check_decref_eligible(
+        env,
+        elems,
+        i,
+        AliasClass { AFrame { inst.marker().fp(), i }});
+    }
+
+    // Iterate from higher addresses to lower so that tracing prints them in
+    // the memory layout order
+    for (int32_t i = numStackElems - 1; i >= 0; --i) {
+      auto const astk_ = AStack { inst.src(1), data->offset + i, 1 };
+      check_decref_eligible(
+        env,
+        elems,
+        numLocals + numStackElems - 1 - i,
+        AliasClass { astk_ });
+    }
+  }
+
+  if (elems.size() > RuntimeOption::EvalHHIRLoadStackTeardownMaxDecrefs) {
+    FTRACE(2, "      handle_end_catch: refusing -- too many decrefs {}\n",
+           elems.size());
+    return FNone{};
+  }
+
+  return FFrameTeardown { numStackElems, std::move(elems) };
+}
+
+Flags handle_enter_tc_unwind(Local& env, const IRInstruction& inst) {
+  if (!RuntimeOption::EvalHHIRLoadEnableTeardownOpts) return FNone{};
+  assertx(inst.op() == EnterTCUnwind);
+  auto const data = inst.extra<EnterTCUnwindData>();
+  if (!data->teardown || inst.func()->attrs() & AttrMayUseVV) {
+    FTRACE(4, "      non-reducible EnterTCUnwind\n");
+    return FNone{};
+  }
+  auto const numLocals = inst.func()->numLocals();
+  if (numLocals > kMaxTrackedFrameElems) {
+    FTRACE(4, "      non-reducible EnterTCUnwind - too many locals\n");
+    return FNone{};
+  }
+
+  FTRACE(4, "      reducible EnterTCUnwind\n");
+  CompactVector<std::pair<uint32_t, Type>> locals;
+  for (uint32_t i = 0; i < numLocals; ++i) {
+    check_decref_eligible(
+      env,
+      locals,
+      i,
+      AliasClass { AFrame { inst.marker().fp(), i }});
+  }
+
+  if (locals.size() > RuntimeOption::EvalHHIRLoadThrowMaxDecrefs) {
+    FTRACE(2, "      handle_enter_tc_unwind: refusing -- too many decrefs {}\n",
+           locals.size());
+    return FNone{};
+  }
+
+  return FFrameTeardown { 0, std::move(locals) };
+}
+
 void refine_value(Local& env, SSATmp* newVal, SSATmp* oldVal) {
   bitset_for_each_set(
     env.state.avail,
@@ -637,7 +818,11 @@ Flags analyze_inst(Local& env, const IRInstruction& inst) {
     effects,
     [&] (IrrelevantEffects) {},
     [&] (UnknownEffects)    { clear_everything(env); },
-    [&] (ExitEffects)       { clear_everything(env); },
+    [&] (ExitEffects)       {
+      if (inst.op() == EndCatch) flags = handle_end_catch(env, inst);
+      if (inst.op() == EnterTCUnwind) flags = handle_enter_tc_unwind(env, inst);
+      clear_everything(env);
+    },
     [&] (ReturnEffects)     {},
 
     [&] (PureStore m)       { store(env, m.dst, m.value); },
@@ -910,6 +1095,86 @@ void refine_load(Global& env,
   ++env.loadsRefined;
 }
 
+void optimize_end_catch(Global& env, IRInstruction& inst,
+                        int32_t numStackElems,
+                        CompactVector<std::pair<uint32_t, Type>>& elems) {
+  FTRACE(3, "Optimizing EndCatch\n{}\nNumStackElems: {}\n",
+            inst.marker().show(), numStackElems);
+
+  auto const numLocals = inst.func()->numLocals();
+  auto const block = inst.block();
+
+  auto add = [&](IRInstruction* loadInst, int locId = -1) {
+    block->insert(block->iteratorTo(&inst), loadInst);
+    auto const decref =
+      env.unit.gen(DecRef, inst.bcctx(), DecRefData{locId}, loadInst->dst());
+    block->insert(block->iteratorTo(&inst), decref);
+  };
+
+  auto const original = inst.extra<EndCatchData>();
+  if (original->mode != EndCatchData::CatchMode::LocalsDecRefd) {
+    block->insert(block->iteratorTo(&inst),
+      env.unit.gen(DbgCheckLocalsDecRefd, inst.bcctx(), inst.src(0)));
+  }
+
+  for (auto elem : elems) {
+    auto const i = elem.first;
+    auto const type = elem.second;
+    if (i < numLocals) {
+      FTRACE(5, "    Emitting decref for LocalId {}\n", i);
+      add(env.unit.gen(LdLoc, inst.bcctx(), type, LocalId{i}, inst.src(0)),
+          i);
+      continue;
+    }
+    auto const index = i - numLocals;
+    auto const offset = IRSPRelOffsetData {
+      inst.extra<EndCatchData>()->offset + numStackElems - 1 - index
+    };
+    FTRACE(5, "    Emitting decref for StackElem {} at IRSPRel {}\n",
+            index, offset.offset.offset);
+    add(env.unit.gen(LdStk, inst.bcctx(), type, offset, inst.src(1)));
+  }
+
+  auto const teardownMode =
+    original->mode != EndCatchData::CatchMode::LocalsDecRefd &&
+    inst.func()->hasThisInBody()
+      ? EndCatchData::Teardown::OnlyThis
+      : EndCatchData::Teardown::None;
+  auto const data = EndCatchData {
+    original->offset + numStackElems,
+    original->mode,
+    original->stublogue,
+    teardownMode
+  };
+  env.unit.replace(&inst, EndCatch, data, inst.src(0), inst.src(1));
+  env.stackTeardownsOptimized++;
+}
+
+void optimize_enter_tc_unwind(
+  Global& env,
+  IRInstruction& inst,
+  CompactVector<std::pair<uint32_t, Type>>& locals) {
+  FTRACE(3, "Optimizing EnterTCUnwind\n{}\n", inst.marker().show());
+
+  auto const block = inst.block();
+
+  for (auto local : locals) {
+    int locId = local.first;
+    auto const type = local.second;
+    FTRACE(5, "    Emitting decref for LocalId {}\n", locId);
+    auto const loadInst =
+      env.unit.gen(LdLoc, inst.bcctx(), type,
+                   LocalId{(uint32_t)locId}, inst.marker().fp());
+    block->insert(block->iteratorTo(&inst), loadInst);
+    auto const decref =
+      env.unit.gen(DecRef, inst.bcctx(), DecRefData{locId}, loadInst->dst());
+    block->insert(block->iteratorTo(&inst), decref);
+  }
+  auto const data = EnterTCUnwindData { false };
+  env.unit.replace(&inst, EnterTCUnwind, data, inst.src(0));
+  env.stackTeardownsOptimized++;
+}
+
 //////////////////////////////////////////////////////////////////////
 
 void optimize_inst(Global& env, IRInstruction& inst, Flags flags) {
@@ -955,6 +1220,19 @@ void optimize_inst(Global& env, IRInstruction& inst, Flags flags) {
       FTRACE(2, "      unnecessary\n");
       env.unit.replace(&inst, Jmp, inst.taken());
       ++env.jumpsRemoved;
+    },
+
+    [&] (FFrameTeardown f) {
+      FTRACE(2, "      frame teardown\n");
+      if (inst.op() == EndCatch) {
+        DEBUG_ONLY auto const data = inst.extra<EndCatchData>();
+        assertx(data->teardown == EndCatchData::Teardown::Full);
+        assertx(data->stublogue == EndCatchData::FrameMode::Phplogue);
+        optimize_end_catch(env, inst, f.numStackElems, f.elems);
+        return;
+      }
+      assertx(inst.op() == EnterTCUnwind && f.numStackElems == 0);
+      optimize_enter_tc_unwind(env, inst, f.elems);
     }
   );
 
@@ -1251,6 +1529,7 @@ void optimizeLoads(IRUnit& unit) {
   size_t loadsRemoved = 0;
   size_t loadsRefined = 0;
   size_t jumpsRemoved = 0;
+  size_t stackTeardownsOptimized = 0;
   do {
     auto genv = Global { unit };
     if (genv.ainfo.locations.size() == 0) {
@@ -1281,7 +1560,8 @@ void optimizeLoads(IRUnit& unit) {
     if (!genv.instrsReduced &&
         !genv.loadsRemoved &&
         !genv.loadsRefined &&
-        !genv.jumpsRemoved) {
+        !genv.jumpsRemoved &&
+        !genv.stackTeardownsOptimized) {
       // Nothing changed so we're done
       break;
     }
@@ -1289,6 +1569,7 @@ void optimizeLoads(IRUnit& unit) {
     loadsRemoved += genv.loadsRemoved;
     loadsRefined += genv.loadsRefined;
     jumpsRemoved += genv.jumpsRemoved;
+    stackTeardownsOptimized += genv.stackTeardownsOptimized;
 
     FTRACE(2, "reflowing types\n");
     reflowTypes(genv.unit);
@@ -1319,6 +1600,8 @@ void optimizeLoads(IRUnit& unit) {
     entry->setInt("optimize_loads_loads_removed", loadsRemoved);
     entry->setInt("optimize_loads_loads_refined", loadsRefined);
     entry->setInt("optimize_loads_jumps_removed", jumpsRemoved);
+    entry->setInt("optimize_loads_stack_teardowns_optimized",
+      stackTeardownsOptimized);
   }
 }
 

@@ -1602,7 +1602,7 @@ struct AssertReason : IRExtraData {
 #define ASSERT_REASON AssertReason{Reason{__FILE__, __LINE__}}
 
 struct EndCatchData : IRSPRelOffsetData {
-  enum class CatchMode { UnwindOnly, CallCatch, SideExit };
+  enum class CatchMode { UnwindOnly, CallCatch, SideExit, LocalsDecRefd };
   enum class FrameMode { Phplogue, Stublogue };
   enum class Teardown  { NA, None, Full, OnlyThis };
 
@@ -1618,7 +1618,8 @@ struct EndCatchData : IRSPRelOffsetData {
     return folly::to<std::string>(
       IRSPRelOffsetData::show(), ",",
       mode == CatchMode::UnwindOnly ? "UnwindOnly" :
-        mode == CatchMode::CallCatch ? "CallCatch" : "SideExit", ",",
+        mode == CatchMode::CallCatch ? "CallCatch" :
+          mode == CatchMode::SideExit ? "SideExit" : "LocalsDecRefd", ",",
       stublogue == FrameMode::Stublogue ? "Stublogue" : "Phplogue", ",",
       teardown == Teardown::NA ? "NA" :
         teardown == Teardown::None ? "None" :
@@ -1628,6 +1629,16 @@ struct EndCatchData : IRSPRelOffsetData {
   CatchMode mode;
   FrameMode stublogue;
   Teardown teardown;
+};
+
+struct EnterTCUnwindData : IRExtraData {
+  explicit EnterTCUnwindData(bool teardown) : teardown{teardown} {}
+
+  std::string show() const {
+    return folly::to<std::string>(teardown ? "" : "no-", "teardown");
+  }
+
+  bool teardown;
 };
 
 /*
@@ -1874,6 +1885,7 @@ X(VerifyRetFail,                ParamWithTCData);
 X(VerifyRetFailHard,            ParamWithTCData);
 X(VerifyReifiedLocalType,       ParamData);
 X(EndCatch,                     EndCatchData);
+X(EnterTCUnwind,                EnterTCUnwindData);
 X(FuncHasAttr,                  AttrData);
 X(LdMethCallerName,             MethCallerData);
 X(LdRecDescCached,              RecNameData);

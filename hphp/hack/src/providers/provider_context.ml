@@ -91,6 +91,14 @@ let add_entry ~(ctx : t) ~(path : Relative_path.t) : t * entry =
   let contents = Sys_utils.cat (Relative_path.to_absolute path) in
   make_entry ~ctx ~path ~contents
 
+let try_add_entry_from_disk ~(ctx : t) ~(path : Relative_path.t) :
+    (t * entry) option =
+  let absolute_path = Relative_path.to_absolute path in
+  try
+    let contents = Sys_utils.cat absolute_path in
+    Some (make_entry ~ctx ~path ~contents)
+  with _ -> None
+
 let add_entry_from_file_contents
     ~(ctx : t) ~(path : Relative_path.t) ~(contents : string) : t * entry =
   make_entry ~ctx ~path ~contents
@@ -135,22 +143,20 @@ let get_telemetry (t : t) (telemetry : Telemetry.t) : Telemetry.t =
   it not being the intended provider. *)
   in
   match t.backend with
-  | Provider_backend.Local_memory
-      { decl_cache; shallow_decl_cache; linearization_cache; _ } ->
+  | Provider_backend.Local_memory lmem ->
+    let open Provider_backend in
     telemetry
-    |> Telemetry.object_
-         ~key:"decl_cache"
-         ~value:(Provider_backend.Decl_cache.get_telemetry decl_cache)
-    |> Telemetry.object_
+    |> Decl_cache.get_telemetry lmem.decl_cache ~key:"decl_cache"
+    |> Shallow_decl_cache.get_telemetry
+         lmem.shallow_decl_cache
          ~key:"shallow_decl_cache"
-         ~value:
-           (Provider_backend.Shallow_decl_cache.get_telemetry
-              shallow_decl_cache)
-    |> Telemetry.object_
+    |> Linearization_cache.get_telemetry
+         lmem.linearization_cache
          ~key:"linearization_cache"
-         ~value:
-           (Provider_backend.Linearization_cache.get_telemetry
-              linearization_cache)
+    |> Reverse_naming_table_delta.get_telemetry
+         lmem.reverse_naming_table_delta
+         ~key:"reverse_naming_table_delta"
+    |> Fixmes.get_telemetry lmem.fixmes ~key:"fixmes"
   | _ -> telemetry
 
 let reset_telemetry (t : t) : unit =

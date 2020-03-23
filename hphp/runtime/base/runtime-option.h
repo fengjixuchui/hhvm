@@ -650,7 +650,6 @@ struct RuntimeOption {
   static std::vector<std::string> TzdataSearchPaths;
 
 #define HAC_CHECK_OPTS                         \
-  HC(EmptyStringPromote, empty_string_promote) \
   HC(Compare, compare)                         \
   HC(ArrayKeyCast, array_key_cast)             \
   HC(ArrayPlus, array_plus)
@@ -908,6 +907,11 @@ struct RuntimeOption {
   F(bool, AssemblerFoldDefaultValues,  true)                            \
   F(uint64_t, AssemblerMaxScalarSize,  1073741824) /* 1GB */            \
   F(uint32_t, HHIRLoadElimMaxIters,    10)                              \
+  /* Temporarily only enable in debug builds so the optimizations get
+   * tested */                                                          \
+  F(bool, HHIRLoadEnableTeardownOpts, debug)                            \
+  F(uint32_t, HHIRLoadStackTeardownMaxDecrefs, 8)                       \
+  F(uint32_t, HHIRLoadThrowMaxDecrefs, 64)                              \
   F(bool, HHIRStorePRE,                true)                            \
   F(bool, HHIROutlineGenericIncDecRef, true)                            \
   /* How many elements to inline for packed- or mixed-array inits. */   \
@@ -1086,7 +1090,6 @@ struct RuntimeOption {
    * HackArrCompatNotices option, and control whether various runtime
    * checks are made; they do not affect any optimizations. */          \
   F(bool, HackArrCompatNotices, false)                                  \
-  F(bool, HackArrCompatCheckEmptyStringPromote, false)                  \
   F(bool, HackArrCompatCheckCompare, false)                             \
   F(bool, HackArrCompatCheckArrayPlus, false)                           \
   F(bool, HackArrCompatCheckArrayKeyCast, false)                        \

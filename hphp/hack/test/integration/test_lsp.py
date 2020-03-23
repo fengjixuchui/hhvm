@@ -1717,6 +1717,97 @@ class TestLsp(TestCase[LspTestDriver]):
                 },
                 powered_by="serverless_ide",
             )
+            .notification(
+                comment="Add 'call_lambda(3, $m'",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "contentChanges": [
+                        {
+                            "range": {
+                                "start": {"line": 30, "character": 0},
+                                "end": {"line": 30, "character": 0},
+                            },
+                            "text": "  call_lambda(3, $m",
+                        }
+                    ],
+                },
+            )
+            .request(
+                comment="autocomplete results for 'call_lambda(3, $m'",
+                method="textDocument/completion",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 30, "character": 19},
+                },
+                result={
+                    "isIncomplete": False,
+                    "items": [
+                        {
+                            "label": "$mylambda",
+                            "kind": 6,
+                            "detail": "local variable",
+                            "inlineDetail": "(num $n)",
+                            "itemType": "int",
+                            "sortText": "$mylambda",
+                            "insertText": "$mylambda",
+                            "insertTextFormat": InsertTextFormat.PlainText.value,
+                            "data": {
+                                "fullname": "$mylambda",
+                                "filename": "${root_path}/completion.php",
+                                "line": 30,
+                                "char": 15,
+                            },
+                        }
+                    ],
+                },
+                powered_by="serverless_ide",
+            )
+            .request(
+                comment="resolve autocompletion for $mylambda'",
+                method="completionItem/resolve",
+                params={
+                    "label": "$mylambda",
+                    "kind": 6,
+                    "detail": "local variable",
+                    "inlineDetail": "(num $n)",
+                    "itemType": "int",
+                    "insertTextFormat": InsertTextFormat.PlainText.value,
+                    "textEdit": {
+                        "range": {
+                            "start": {"line": 30, "character": 17},
+                            "end": {"line": 30, "character": 19},
+                        },
+                        "newText": "$mylambda",
+                    },
+                    "data": {
+                        "filename": "${root_path}/completion.php",
+                        "line": 30,
+                        "char": 15,
+                    },
+                },
+                result={
+                    "label": "$mylambda",
+                    "kind": 6,
+                    "detail": "local variable",
+                    "inlineDetail": "(num $n)",
+                    "itemType": "int",
+                    "insertTextFormat": InsertTextFormat.PlainText.value,
+                    "textEdit": {
+                        "range": {
+                            "start": {"line": 30, "character": 17},
+                            "end": {"line": 30, "character": 19},
+                        },
+                        "newText": "$mylambda",
+                    },
+                    "data": {
+                        "filename": "${root_path}/completion.php",
+                        "line": 30,
+                        "char": 15,
+                    },
+                },
+                powered_by="serverless_ide",
+            )
             .request(method="shutdown", params={}, result=None)
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
@@ -5088,7 +5179,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 method="window/showStatus",
                 params={
                     "message": "hh_server: stopped.",
-                    "actions": [{"title": "Restart Hack Server"}],
+                    "actions": [{"title": "Restart hh_server"}],
                     "type": 1,
                 },
                 result=NoResponse(),
@@ -5131,16 +5222,17 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 method="window/showStatus",
                 params={
                     "type": 1,
-                    "actions": [{"title": "Restart Hack Server"}],
-                    "message": "IDE services: initializing. hh_server: stopped.",
-                    "shortMessage": "Hack IDE: initializing",
+                    "actions": [{"title": "Restart hh_server"}],
+                    "message": "Hack IDE: initializing. hh_server: stopped.",
+                    "shortMessage": "Hack: initializing",
                 },
             )
             .wait_for_server_request(
                 method="window/showStatus",
                 params={
-                    "message": "IDE services: ready. hh_server: stopped.",
-                    "actions": [{"title": "Restart Hack Server"}],
+                    "message": "Hack IDE: ready. hh_server: stopped.",
+                    "shortMessage": "Hack ✓",
+                    "actions": [{"title": "Restart hh_server"}],
                     "type": 1,
                 },
                 result=NoResponse(),
@@ -5164,15 +5256,16 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 params={
                     "type": 2,
                     "actions": [],
-                    "message": "IDE services: initializing. hh_server: ready.",
-                    "shortMessage": "Hack IDE: initializing",
+                    "message": "Hack IDE: initializing. hh_server: ready.",
+                    "shortMessage": "Hack: initializing",
                 },
             )
             .wait_for_server_request(
                 method="window/showStatus",
                 params={
                     "actions": [],
-                    "message": "IDE services: ready. hh_server: ready.",
+                    "message": "Hack IDE: ready. hh_server: ready.",
+                    "shortMessage": "Hack ✓",
                     "type": 3,
                 },
                 result=NoResponse(),
@@ -5186,20 +5279,20 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
             .wait_for_server_request(
                 method="window/showStatus",
                 params={
-                    "actions": [{"title": "Restart Hack IDE Services"}],
-                    "message": "IDE services stopped: testing-only, "
-                    + "you should not see this. Stopped. "
-                    + "hh_server: ready.",
-                    "shortMessage": "Hack IDE: stopped",
+                    "actions": [{"title": "Restart Hack IDE"}],
+                    "message": "Hack IDE has failed. "
+                    + "See Output>Hack for details. hh_server: ready.",
+                    "shortMessage": "Hack: failed",
                     "type": 1,
                 },
-                result={"title": "Restart Hack IDE Services"},
+                result={"title": "Restart Hack IDE"},
             )
             .wait_for_server_request(
                 method="window/showStatus",
                 params={
                     "actions": [],
-                    "message": "IDE services: ready. hh_server: ready.",
+                    "message": "Hack IDE: ready. hh_server: ready.",
+                    "shortMessage": "Hack ✓",
                     "type": 3,
                 },
                 result=None,
@@ -5225,24 +5318,28 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 params={
                     "type": 2,
                     "actions": [],
-                    "message": "IDE services: initializing. hh_server: ready.",
-                    "shortMessage": "Hack IDE: initializing",
+                    "message": "Hack IDE: initializing. hh_server: ready.",
+                    "shortMessage": "Hack: initializing",
                 },
             )
             .wait_for_notification(
                 method="window/logMessage",
                 params={
                     "type": 1,
-                    "message": "Uncaught exception in client IDE services",
+                    "message": "Hack IDE has failed.\n"
+                    + "This is unexpected.\n"
+                    + "Please file a bug within your IDE.\n"
+                    + "More details: http://dummy",
                 },
             )
             .wait_for_server_request(
                 method="window/showStatus",
                 params={
-                    "actions": [{"title": "Restart Hack IDE Services"}],
-                    "message": "IDE services stopped: Uncaught exception "
-                    + "in client IDE services. hh_server: ready.",
-                    "shortMessage": "Hack IDE: stopped",
+                    "actions": [{"title": "Restart Hack IDE"}],
+                    "message": "Hack IDE has failed. "
+                    + "See Output>Hack for details. "
+                    + "hh_server: ready.",
+                    "shortMessage": "Hack: failed",
                     "type": 1,
                 },
                 result=None,

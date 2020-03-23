@@ -56,9 +56,9 @@ type hh_server_state =
   | Hh_server_stolen
   | Hh_server_forgot
 
-let hh_server_restart_button_text = "Restart Hack Server"
+let hh_server_restart_button_text = "Restart hh_server"
 
-let client_ide_restart_button_text = "Restart Hack IDE Services"
+let client_ide_restart_button_text = "Restart Hack IDE"
 
 type incoming_metadata = {
   (* time this message arrived at stdin *)
@@ -2423,24 +2423,24 @@ let get_client_ide_status (ide_service : ClientIdeService.t) :
         ShowMessageRequest.
           {
             type_ = MessageType.ErrorMessage;
-            message = "IDE services: not started.";
+            message = "Hack IDE: not started.";
             actions = [{ title = client_ide_restart_button_text }];
           };
       progress = None;
       total = None;
-      shortMessage = None;
+      shortMessage = Some "Hack: not started";
     }
   | ClientIdeService.Status.Initializing ->
     {
       ShowStatusFB.request =
         {
           ShowMessageRequest.type_ = MessageType.WarningMessage;
-          message = "IDE services: initializing.";
+          message = "Hack IDE: initializing.";
           actions = [];
         };
       progress = None;
       total = None;
-      shortMessage = Some "Hack IDE: initializing";
+      shortMessage = Some "Hack: initializing";
     }
   | ClientIdeService.Status.Processing_files _
   | ClientIdeService.Status.Ready ->
@@ -2448,25 +2448,26 @@ let get_client_ide_status (ide_service : ClientIdeService.t) :
       ShowStatusFB.request =
         {
           ShowMessageRequest.type_ = MessageType.InfoMessage;
-          message = "IDE services: ready.";
+          message = "Hack IDE: ready.";
           actions = [];
         };
       progress = None;
       total = None;
-      shortMessage = None;
+      shortMessage = Some "Hack \xE2\x9C\x93" (* check mark *);
     }
-  | ClientIdeService.Status.Stopped { ClientIdeMessage.user_message; _ } ->
+  | ClientIdeService.Status.Stopped
+      { ClientIdeMessage.short_user_message; medium_user_message; _ } ->
     {
       ShowStatusFB.request =
         ShowMessageRequest.
           {
             type_ = MessageType.ErrorMessage;
-            message = "IDE services stopped: " ^ user_message ^ ".";
+            message = medium_user_message ^ " See Output>Hack for details.";
             actions = [{ title = client_ide_restart_button_text }];
           };
       progress = None;
       total = None;
-      shortMessage = Some "Hack IDE: stopped";
+      shortMessage = Some ("Hack: " ^ short_user_message);
     }
 
 let merge_statuses
@@ -3310,11 +3311,34 @@ let run_ide_service (env : env) (ide_service : ClientIdeService.t) : unit Lwt.t
            num_changed_files_to_process);
       let%lwt () = ClientIdeService.serve ide_service in
       Lwt.return_unit
-    | Error { ClientIdeMessage.user_message; log_string; is_actionable; _ } ->
-      log "IDE services could not be initialized: %s" log_string;
-      Lsp_helpers.log_error to_stdout user_message;
+    | Error
+        {
+          ClientIdeMessage.medium_user_message;
+          long_user_message;
+          debug_details;
+          is_actionable;
+          _;
+        } ->
+      let input = Printf.sprintf "%s\n\n%s" long_user_message debug_details in
+      let%lwt upload_result = Clowder_paste.clowder_paste ~timeout:10. input in
+      let append_to_log =
+        match upload_result with
+        | Ok url -> Printf.sprintf "\nMore details: %s" url
+        | Error message ->
+          Printf.sprintf
+            "\n\nMore details:\n%s\n\nTried to upload those details but it didn't work...\n%s"
+            debug_details
+            message
+      in
+      log
+        "IDE services could not be initialized.\n%s\n%s"
+        long_user_message
+        debug_details;
+      Lsp_helpers.log_error to_stdout (long_user_message ^ append_to_log);
       if is_actionable then
-        Lsp_helpers.showMessage_error to_stdout ("Hack failure: " ^ user_message);
+        Lsp_helpers.showMessage_error
+          to_stdout
+          (medium_user_message ^ " See Output>Hack for details.");
       Lwt.return_unit
   ) else
     Lwt.return_unit

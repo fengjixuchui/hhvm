@@ -24,7 +24,7 @@ use hhas_body_rust::HhasBody;
 use hhas_class_rust::{self as hhas_class, HhasClass};
 use hhas_constant_rust::HhasConstant;
 use hhas_function_rust::HhasFunction;
-use hhas_method_rust::HhasMethod;
+use hhas_method_rust::{HhasMethod, HhasMethodFlags};
 use hhas_param_rust::HhasParam;
 use hhas_pos_rust::Span;
 use hhas_program_rust::HhasProgram;
@@ -41,7 +41,7 @@ use hhbc_string_utils_rust::{
 };
 use instruction_sequence_rust::InstrSeq;
 use label_rust::Label;
-use oxidized::{ast, ast_defs, doc_comment::DocComment};
+use oxidized::{ast, ast_defs, doc_comment::DocComment, local_id};
 use runtime::TypedValue;
 use write::*;
 
@@ -647,17 +647,108 @@ fn print_implements<W: Write>(
     w.write(")")
 }
 
+fn print_shadowed_tparams<W: Write>(
+    w: &mut W,
+    shadowed_tparams: &[String],
+) -> Result<(), W::Error> {
+    wrap_by_braces(w, |w| concat_str_by(w, ", ", shadowed_tparams))
+}
+
 fn print_method_def<W: Write>(
     ctx: &mut Context,
     w: &mut W,
     method_def: &HhasMethod,
 ) -> Result<(), W::Error> {
+    let body = &method_def.body;
     newline(w)?;
     w.write("  .method ")?;
+    if ctx
+        .opts
+        .hack_compiler_flags
+        .contains(options::CompilerFlags::EMIT_GENERICS_UB)
+    {
+        print_upper_bounds(w, &body.upper_bounds)?;
+    }
+    print_method_attrs(ctx, w, method_def)?;
+    w.write(string_of_span(&method_def.span))?;
+    w.write(" ")?;
+    option(w, &body.return_type_info, print_type_info)?;
+    w.write(" ")?;
     w.write(method_def.name.to_raw_string())?;
-    w.write(" {")?;
-    w.write("  }")?;
-    not_impl!()
+    print_params(ctx, w, body.env.as_ref(), &body.params)?;
+    if method_def.flags.contains(HhasMethodFlags::IS_GENERATOR) {
+        w.write(" isGenerator")?;
+    }
+    if method_def.flags.contains(HhasMethodFlags::IS_ASYNC) {
+        w.write(" isAsync")?;
+    }
+    if method_def
+        .flags
+        .contains(HhasMethodFlags::IS_PAIR_GENERATOR)
+    {
+        w.write(" isPairGenerator")?;
+    }
+    if method_def.flags.contains(HhasMethodFlags::IS_CLOSURE_BODY) {
+        w.write(" isClosureBody")?;
+    }
+    if method_def.flags.contains(HhasMethodFlags::RX_DISABLED) {
+        w.write(" isRxDisabled")?;
+    }
+    w.write(" ")?;
+    wrap_by_braces(w, |w| {
+        ctx.block(w, |c, w| print_body(c, w, body))?;
+        newline(w)?;
+        w.write("  ")
+    })
+}
+
+fn print_method_attrs<W: Write>(
+    ctx: &mut Context,
+    w: &mut W,
+    m: &HhasMethod,
+) -> Result<(), W::Error> {
+    use hhas_attribute::*;
+    let user_attrs = &m.attributes;
+    let mut special_attrs = vec![];
+    if let Ok(attr) = m.rx_level.try_into() {
+        special_attrs.push(attr);
+    }
+    if has_provenance_skip_frame(user_attrs) {
+        special_attrs.push("prov_skip_frame")
+    }
+    if m.is_interceptable() {
+        special_attrs.push("interceptable");
+    }
+    let visibility = m.visibility.to_string();
+    special_attrs.push(&visibility);
+    if m.flags.contains(HhasMethodFlags::IS_STATIC) {
+        special_attrs.push("static");
+    }
+    if m.flags.contains(HhasMethodFlags::IS_FINAL) {
+        special_attrs.push("final");
+    }
+    if m.flags.contains(HhasMethodFlags::IS_ABSTRACT) {
+        special_attrs.push("abstract");
+    }
+    if has_foldable(user_attrs) {
+        special_attrs.push("foldable");
+    }
+    if m.is_no_injection() {
+        special_attrs.push("no_injection");
+    }
+    if ctx.is_system_lib() && has_native(user_attrs) && !is_native_opcode_impl(user_attrs) {
+        special_attrs.push("unique");
+    }
+    if ctx.is_system_lib() {
+        special_attrs.push("builtin");
+    }
+    if ctx.is_system_lib() && has_native(user_attrs) && !is_native_opcode_impl(user_attrs) {
+        special_attrs.push("persistent");
+    }
+    if ctx.is_system_lib() || (has_dynamically_callable(user_attrs) && !m.is_memoize_impl()) {
+        special_attrs.push("dyn_callable")
+    }
+    print_special_and_user_attrs(ctx, w, &special_attrs, user_attrs)
 }
 
 fn print_class_def<W: Write>(
@@ -1627,6 +1718,11 @@ fn print_misc<W: Write>(w: &mut W, misc: &InstructMisc) -> Result<(), W::Error> 
             w.write("VerifyOutType ")?;
             print_param_id(w, id)
         }
+        M::CreateCl(n, cid) => concat_str_by(
+            w,
+            " ",
+            ["CreateCl", n.to_string().as_str(), cid.to_string().as_str()],
+        ),
         _ => not_impl!(),
     }
 }
@@ -2274,7 +2370,7 @@ fn print_expr<W: Write>(
             print_expr(w, env, &i.1)
         }
         E_::Xml(_) => not_impl!(),
-        E_::Efun(_) => not_impl!(),
+        E_::Efun(f) => print_efun(w, env, &f.0, &f.1),
         E_::Omitted => Ok(()),
         E_::Lfun(_) => Err(Error::fail(
             "expected Lfun to be converted to Efun during closure conversion print_expr",
@@ -2286,6 +2382,56 @@ fn print_expr<W: Write>(
             "TODO Unimplemented: We are missing a lot of cases in the case match. Delete this catchall"
         ))
     }
+}
+
+fn print_efun<W: Write>(
+    w: &mut W,
+    env: &ExprEnv,
+    f: &ast::Fun_,
+    use_list: &[ast::Lid],
+) -> Result<(), W::Error> {
+    if f.static_ {
+        w.write("static ")?;
+    }
+    if f.fun_kind.is_fasync() || f.fun_kind.is_fasync_generator() {
+        w.write("async ")?;
+    }
+    w.write("function ")?;
+    wrap_by_paren(w, |w| {
+        concat_by(w, ", ", &f.params, |w, p| print_fparam(w, env, p))
+    })?;
+    w.write(" ")?;
+    if !use_list.is_empty() {
+        w.write("use ")?;
+        wrap_by_paren(w, |w| {
+            concat_by(w, ", ", use_list, |w: &mut W, ast::Lid(_, id)| {
+                w.write(local_id::get_name(id))
+            })
+        })?;
+    }
+    print_block(w, env, &f.body.ast)
+}
+
+fn print_block<W: Write>(w: &mut W, env: &ExprEnv, block: &ast::Block) -> Result<(), W::Error> {
+    not_impl!()
+}
+
+fn print_fparam<W: Write>(w: &mut W, env: &ExprEnv, param: &ast::FunParam) -> Result<(), W::Error> {
+    if let Some(ast_defs::ParamKind::Pinout) = param.callconv {
+        w.write("inout ")?;
+    }
+    if param.is_variadic {
+        w.write("...")?;
+    }
+    option(w, &(param.type_hint).1, |w, h| {
+        print_hint(w, h)?;
+        w.write(" ")
+    })?;
+    w.write(&param.name)?;
+    option(w, &param.expr, |w, e| {
+        w.write(" = ")?;
+        print_expr(w, env, e)
+    })
 }
 
 fn print_bop<W: Write>(w: &mut W, bop: &ast_defs::Bop) -> Result<(), W::Error> {

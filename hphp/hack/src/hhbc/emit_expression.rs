@@ -148,7 +148,7 @@ mod inout_locals {
         aliases.get(name).map_or(false, |alias| alias.in_range(i))
     }
 
-    fn should_move_local_value(local: &local::Type, aliases: &AliasInfoMap) -> bool {
+    pub(super) fn should_move_local_value(local: &local::Type, aliases: &AliasInfoMap) -> bool {
         match local {
             local::Type::Named(name) => aliases
                 .get(&**name)
@@ -157,7 +157,7 @@ mod inout_locals {
         }
     }
 
-    fn collect_written_variables(env: &Env, args: &Vec<tast::Expr>) -> AliasInfoMap {
+    pub(super) fn collect_written_variables(env: &Env, args: &[tast::Expr]) -> AliasInfoMap {
         let mut acc = HashMap::new();
         args.iter()
             .enumerate()
@@ -481,7 +481,10 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::Shape(e) => emit_pos_then(emitter, pos, emit_shape(env, expression, e)?),
         Expr_::Await(e) => emit_await(emitter, env, pos, e),
         Expr_::Yield(e) => emit_yield(emitter, env, pos, e),
-        Expr_::Efun(e) => emit_pos_then(emitter, pos, emit_lambda(env, e)?),
+        Expr_::Efun(e) => {
+            let lambda = emit_lambda(emitter, env, &e.0, &e.1)?;
+            emit_pos_then(emitter, pos, lambda)
+        }
         Expr_::ClassGet(e) => emit_class_get(env, QueryOp::CGet, e),
         Expr_::String2(es) => emit_string2(emitter, env, pos, es),
         Expr_::BracedExpr(e) => emit_expr(emitter, env, e),
@@ -707,8 +710,51 @@ fn emit_clone(e: &mut Emitter, env: &Env, expr: &tast::Expr) -> Result {
     ]))
 }
 
-fn emit_lambda(env: &Env, (fndef, ids): &(tast::Fun_, Vec<aast_defs::Lid>)) -> Result {
-    unimplemented!("TODO(hrust)")
+fn emit_lambda(e: &mut Emitter, env: &Env, fndef: &tast::Fun_, ids: &[aast_defs::Lid]) -> Result {
+    use global_state::LazyState;
+    // Closure conversion puts the class number used for CreateCl in the "name"
+    // of the function definition
+    let fndef_name = &(fndef.name).1;
+    let cls_num = fndef_name
+        .parse::<isize>()
+        .map_err(|err| Unrecoverable(err.to_string()))?;
+    let explicit_use = e.emit_state().explicit_use_set.contains(fndef_name);
+    let is_in_lambda = env.scope.is_in_lambda();
+    Ok(InstrSeq::gather(vec![
+        InstrSeq::gather(
+            ids.iter()
+                .map(|tast::Lid(pos, id)| {
+                    match string_utils::reified::is_captured_generic(local_id::get_name(id)) {
+                        Some((is_fun, i)) => {
+                            if is_in_lambda {
+                                Ok(InstrSeq::make_cgetl(local::Type::Named(
+                                    string_utils::reified::reified_generic_captured_name(
+                                        is_fun, i as usize,
+                                    ),
+                                )))
+                            } else {
+                                emit_reified_generic_instrs(
+                                    e,
+                                    &Pos::make_none(),
+                                    is_fun,
+                                    i as usize,
+                                )
+                            }
+                        }
+                        None => Ok({
+                            let lid = get_local(e, env, pos, local_id::get_name(id))?;
+                            if explicit_use {
+                                InstrSeq::make_cgetl(lid)
+                            } else {
+                                InstrSeq::make_cugetl(lid)
+                            }
+                        }),
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        InstrSeq::make_createcl(ids.len(), cls_num),
+    ]))
 }
 
 pub fn emit_await(emitter: &mut Emitter, env: &Env, pos: &Pos, expr: &tast::Expr) -> Result {
@@ -1581,20 +1627,103 @@ fn emit_args_inout_setters(
     env: &Env,
     args: &[tast::Expr],
 ) -> Result<(InstrSeq, InstrSeq)> {
+    let aliases = if has_inout_arg(args) {
+        inout_locals::collect_written_variables(env, args)
+    } else {
+        inout_locals::AliasInfoMap::new()
+    };
     fn emit_arg_and_inout_setter(
         e: &mut Emitter,
         env: &Env,
         i: usize,
         arg: &tast::Expr,
+        aliases: &inout_locals::AliasInfoMap,
     ) -> Result<(InstrSeq, InstrSeq)> {
         use tast::Expr_ as E_;
         match &arg.1 {
-            E_::Callconv(cc) => {
+            E_::Callconv(cc) if (cc.0).is_pinout() => {
                 match &(cc.1).1 {
                     // inout $var
-                    E_::Lvar(l) => unimplemented!(),
+                    E_::Lvar(l) => {
+                        let local = get_local(e, env, &l.0, local_id::get_name(&l.1))?;
+                        let move_instrs = if !env.flags.contains(env::Flags::IN_TRY)
+                            && inout_locals::should_move_local_value(&local, aliases)
+                        {
+                            InstrSeq::gather(vec![
+                                InstrSeq::make_null(),
+                                InstrSeq::make_popl(local.clone()),
+                            ])
+                        } else {
+                            InstrSeq::Empty
+                        };
+                        Ok((
+                            InstrSeq::gather(vec![
+                                InstrSeq::make_cgetl(local.clone()),
+                                move_instrs,
+                            ]),
+                            InstrSeq::make_popl(local),
+                        ))
+                    }
                     // inout $arr[...][...]
-                    E_::ArrayGet(ag) => unimplemented!(),
+                    E_::ArrayGet(ag) => {
+                        let array_get_result = emit_array_get_(
+                            e,
+                            env,
+                            &(cc.1).0,
+                            None,
+                            QueryOp::InOut,
+                            &ag.0,
+                            ag.1.as_ref(),
+                            false,
+                            false,
+                            Some((i, aliases)),
+                        )?
+                        .0;
+                        Ok(match array_get_result {
+                            ArrayGetInstr::Regular(instrs) => {
+                                let setter_base = emit_array_get(
+                                    e,
+                                    env,
+                                    &(cc.1).0,
+                                    Some(MemberOpMode::Define),
+                                    QueryOp::InOut,
+                                    &ag.0,
+                                    ag.1.as_ref(),
+                                    true,
+                                    false,
+                                )?
+                                .0;
+                                let setter = InstrSeq::gather(vec![
+                                    setter_base,
+                                    InstrSeq::make_setm(
+                                        0,
+                                        get_elem_member_key(e, env, 0, ag.1.as_ref(), false)?,
+                                    ),
+                                    InstrSeq::make_popc(),
+                                ]);
+                                (instrs, setter)
+                            }
+                            ArrayGetInstr::Inout { load, store } => {
+                                let (mut ld, mut st) = (vec![], vec![store]);
+                                for (instr, local_kind_opt) in load.into_iter() {
+                                    match local_kind_opt {
+                                        None => ld.push(instr),
+                                        Some((l, kind)) => {
+                                            let unset = InstrSeq::make_unsetl(l.clone());
+                                            let set = match kind {
+                                                StoredValueKind::Expr => InstrSeq::make_setl(l),
+                                                _ => InstrSeq::make_popl(l),
+                                            };
+                                            ld.push(instr);
+                                            ld.push(set);
+                                            st.push(unset);
+                                        }
+                                    }
+                                }
+                                (InstrSeq::gather(ld), InstrSeq::gather(st))
+                            }
+                        })
+                    }
                     _ => Err(unrecoverable(
                         "emit_arg_and_inout_setter: Unexpected inout expression type",
                     )),
@@ -1606,7 +1735,7 @@ fn emit_args_inout_setters(
     let (instr_args, instr_setters): (Vec<InstrSeq>, Vec<InstrSeq>) = args
         .iter()
         .enumerate()
-        .map(|(i, arg)| emit_arg_and_inout_setter(e, env, i, arg))
+        .map(|(i, arg)| emit_arg_and_inout_setter(e, env, i, arg, &aliases))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .unzip();
@@ -2210,7 +2339,7 @@ fn emit_array_get_(
     elem: Option<&tast::Expr>,
     no_final: bool,
     null_coalesce_assignment: bool,
-    inout_param_info: Option<&(usize, inout_locals::AliasInfoMap)>,
+    inout_param_info: Option<(usize, &inout_locals::AliasInfoMap)>,
 ) -> Result<(ArrayGetInstr, Option<usize>)> {
     use tast::{Expr as E, Expr_ as E_};
     match (base_expr, elem) {
@@ -3086,13 +3215,13 @@ fn is_trivial(env: &Env, is_base: bool, expr: &tast::Expr) -> bool {
 fn get_local_temp_kind(
     env: &Env,
     is_base: bool,
-    inout_param_info: Option<&(usize, inout_locals::AliasInfoMap)>,
+    inout_param_info: Option<(usize, &inout_locals::AliasInfoMap)>,
     expr: Option<&tast::Expr>,
 ) -> Option<StoredValueKind> {
     match (expr, inout_param_info) {
         (_, None) => None,
         (Some(tast::Expr(_, tast::Expr_::Lvar(id))), Some((i, aliases)))
-            if inout_locals::should_save_local_value(id.name(), *i, &aliases) =>
+            if inout_locals::should_save_local_value(id.name(), i, aliases) =>
         {
             Some(StoredValueKind::Local)
         }
@@ -3117,7 +3246,7 @@ fn emit_base_(
     null_coalesce_assignment: bool,
     base_offset: StackIndex,
     rhs_stack_size: StackIndex,
-    inout_param_info: Option<&(usize, inout_locals::AliasInfoMap)>,
+    inout_param_info: Option<(usize, &inout_locals::AliasInfoMap)>,
 ) -> Result<ArrayGetBase> {
     let pos = &expr.0;
     let expr_ = &expr.1;

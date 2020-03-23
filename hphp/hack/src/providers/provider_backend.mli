@@ -99,6 +99,8 @@ module Fixmes : sig
     decl_hh_fixmes: Fixme_store.t;
     disallowed_fixmes: Fixme_store.t;
   }
+
+  val get_telemetry : key:string -> t -> Telemetry.t -> Telemetry.t
 end
 
 module Reverse_naming_table_delta : sig
@@ -112,6 +114,8 @@ module Reverse_naming_table_delta : sig
     mutable types:
       (FileInfo.pos * Naming_types.kind_of_type) pos_or_deleted SMap.t;
   }
+
+  val get_telemetry : key:string -> t -> Telemetry.t -> Telemetry.t
 end
 
 type t =
@@ -122,6 +126,7 @@ type t =
       linearization_cache: Linearization_cache.t;
       reverse_naming_table_delta: Reverse_naming_table_delta.t;
       fixmes: Fixmes.t;
+      naming_db_path_ref: Naming_sqlite.db_path option ref;
     }
   | Decl_service of {
       decl: Decl_service_client.t;

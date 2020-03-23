@@ -51,10 +51,33 @@ void cgBeginCatch(IRLS& env, const IRInstruction* /*inst*/) {
 void cgEndCatch(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
 
-  auto const helper =
-    inst->extra<EndCatch>()->stublogue == EndCatchData::FrameMode::Stublogue
-    ? tc::ustubs().endCatchStublogueHelper
-    : tc::ustubs().endCatchHelper;
+  auto const data = inst->extra<EndCatch>();
+  if (data->teardown == EndCatchData::Teardown::None ||
+      data->teardown == EndCatchData::Teardown::OnlyThis) {
+    auto const vmsp = v.makeReg();
+    auto const spReg = srcLoc(env, inst, 1).reg();
+    auto const offset = data->offset.offset;
+    v << lea{spReg[offset * static_cast<int32_t>(sizeof(TypedValue))], vmsp};
+    v << store{vmsp, rvmtl()[rds::kVmspOff]};
+  }
+
+  auto const helper = [&]() -> TCA {
+    if (data->stublogue == EndCatchData::FrameMode::Stublogue) {
+      assertx(data->teardown == EndCatchData::Teardown::NA);
+      return tc::ustubs().endCatchStublogueHelper;
+    }
+    switch (data->teardown) {
+      case EndCatchData::Teardown::None:
+        return tc::ustubs().endCatchSkipTeardownHelper;
+      case EndCatchData::Teardown::OnlyThis:
+        return tc::ustubs().endCatchTeardownThisHelper;
+      case EndCatchData::Teardown::Full:
+        return tc::ustubs().endCatchHelper;
+      case EndCatchData::Teardown::NA:
+        always_assert(false && "Stublogue should not be emitting vasm");
+    }
+    not_reached();
+  }();
 
   // endCatch*Helpers only expect vm_regs_no_sp() to be alive.
   v << jmpi{helper, vm_regs_no_sp()};
@@ -81,10 +104,17 @@ void cgEnterTCUnwind(IRLS& env, const IRInstruction* inst) {
   auto const exn = srcLoc(env, inst, 0).reg();
   v << storebi{1, rvmtl()[unwinderSideEnterOff()]};
   v << store{exn, rvmtl()[unwinderExnOff()]};
-  v << copy{rvmfp(), rarg(0)};
-  v << call{TCA(tc_unwind_resume), arg_regs(1)};
-  v << copy{rret(1), rvmfp()};
-  v << jmpr{rret(0), vm_regs_with_sp()};
+
+  auto const target = [&] {
+    auto const extra = inst->extra<EnterTCUnwindData>();
+    if (extra->teardown) return tc::ustubs().endCatchHelper;
+    if (inst->func()->hasThisInBody()) {
+      return tc::ustubs().endCatchTeardownThisHelper;
+    }
+    return tc::ustubs().endCatchSkipTeardownHelper;
+  }();
+
+  v << jmpi{target, vm_regs_with_sp()};
 }
 
 IMPL_OPCODE_CALL(DebugBacktrace)

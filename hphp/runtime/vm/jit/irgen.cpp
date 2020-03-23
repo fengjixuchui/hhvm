@@ -15,13 +15,13 @@
 */
 #include "hphp/runtime/vm/jit/irgen.h"
 
-#include "hphp/runtime/vm/jit/irgen-exit.h"
-#include "hphp/runtime/vm/jit/irgen-control.h"
 #include "hphp/runtime/vm/jit/cfg.h"
 #include "hphp/runtime/vm/jit/dce.h"
-#include "hphp/runtime/vm/jit/prof-data.h"
-
+#include "hphp/runtime/vm/jit/irgen-control.h"
+#include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-internal.h"
+#include "hphp/runtime/vm/jit/normalized-instruction.h"
+#include "hphp/runtime/vm/jit/prof-data.h"
 
 namespace HPHP { namespace jit { namespace irgen {
 
@@ -105,16 +105,22 @@ SSATmp* genInstruction(IRGS& env, IRInstruction* inst) {
       }
       return 0;
     }();
-    inst->setTaken(
-      create_catch_block(
-        env,
-        []{},
-        inst->is(Call) || inst->is(CallUnpack)
-          ? EndCatchData::CatchMode::CallCatch
-          : EndCatchData::CatchMode::UnwindOnly,
-        offsetToAdjustSPForCall
-      )
-    );
+    auto const catchMode = [&]() {
+      if (inst->is(Call, CallUnpack)) {
+        return EndCatchData::CatchMode::CallCatch;
+      }
+      if (inst->is(ReturnHook,
+                   SuspendHookAwaitEF,
+                   SuspendHookAwaitEG,
+                   SuspendHookCreateCont,
+                   CheckSurpriseAndStack,
+                   CheckSurpriseFlagsEnter)) {
+        return EndCatchData::CatchMode::LocalsDecRefd;
+      }
+      return EndCatchData::CatchMode::UnwindOnly;
+    }();
+    inst->setTaken(create_catch_block(env, []{}, catchMode,
+                                      offsetToAdjustSPForCall));
   }
 
   if (inst->mayRaiseError()) {
@@ -261,6 +267,9 @@ void prepareForNextHHBC(IRGS& env, SrcKey newSk) {
   always_assert(env.inlineState.bcStateStack.size() == inlineDepth(env));
   always_assert_flog(curFunc(env) == newSk.func(),
                      "Tried to update current SrcKey with a different func");
+
+  FTRACE(1, "Next instruction: {}: {}\n", newSk.offset(),
+         NormalizedInstruction(newSk, curUnit(env)).toString());
 
   env.bcState.setOffset(newSk.offset());
   updateMarker(env);

@@ -984,24 +984,15 @@ and case_list parent_locals ty env switch_pos cl =
           ty
           Errors.unify_error
     in
-    let rec is_enum env ty =
-      let (env, ty) = Env.expand_type env ty in
-      let is_enum =
-        match get_node ty with
-        | Tunion [ty; ty'] ->
-          let (env, ty_is_enum) = is_enum env ty in
-          let (env, ty'_is_enum) = is_enum env ty' in
-          let is_sub_dyn env ty =
-            SubType.is_sub_type_for_union env ty (MakeType.dynamic Reason.Rnone)
-          in
-          (ty_is_enum && is_sub_dyn env ty')
-          || (is_sub_dyn env ty && ty'_is_enum)
-        | Tnewtype (cid, _, _) -> Env.is_enum env cid
-        | _ -> false
+    let is_enum =
+      let top_type =
+        MakeType.class_type
+          Reason.Rnone
+          SN.Classes.cHH_BuiltinEnum
+          [MakeType.mixed Reason.Rnone]
       in
-      (env, is_enum)
+      Typing_subtype.is_sub_type_for_coercion env ty top_type
     in
-    let (env, is_enum) = is_enum env ty in
     (* If there is no default case and this is not a switch on enum (since
      * exhaustiveness is garanteed elsewhere on enums),
      * then add a default case for control flow correctness
@@ -1426,13 +1417,13 @@ and expr_
     let (env, te, ty) = expr env e in
     make_result env p (Aast.ParenthesizedExpr te) ty
   | Any -> expr_error env (Reason.Rwitness p) outer
+  (* This is actually now outlawed in the parser but until we remove it completely
+   * let's default to varray 
+   *)
   | Array [] ->
-    (* TODO: use expected type to determine expected element type *)
-    make_result
-      env
-      p
-      (Aast.Array [])
-      (mk (Reason.Rwitness p, Tarraykind AKempty))
+    let (env, tv) = Env.fresh_type env p in
+    let ty = mk (Reason.Rwitness p, Tarraykind (AKvarray tv)) in
+    make_result env p (Aast.Array []) ty
   | Array (x :: rl as l) ->
     (* True if all fields are values, or all fields are key => value *)
     let fields_consistent = check_consistent_fields x rl in
@@ -2111,7 +2102,7 @@ and expr_
     let ty = MakeType.tuple (Reason.Rwitness p) tyl in
     make_result env p (Aast.Expr_list tel) ty
   | Array_get (e, None) ->
-    let (env, te, _) = update_array_type p env e None valkind in
+    let (env, te, _) = update_array_type p env e valkind in
     let env = might_throw env in
     (* NAST check reports an error if [] is used for reading in an
          lvalue context. *)
@@ -2119,7 +2110,7 @@ and expr_
     make_result env p (Aast.Array_get (te, None)) ty
   | Array_get (e1, Some e2) ->
     let (env, te1, ty1) =
-      update_array_type ?lhs_of_null_coalesce p env e1 (Some e2) valkind
+      update_array_type ?lhs_of_null_coalesce p env e1 valkind
     in
     let (env, te2, ty2) = expr env e2 in
     let env = might_throw env in
@@ -4053,7 +4044,7 @@ and assign_ p ur env e1 ty2 =
     let env = set_valid_rvalue p env local ty2 in
     (env, te1, ty2)
   | (pos, Array_get (e1, None)) ->
-    let (env, te1, ty1) = update_array_type pos env e1 None `lvalue in
+    let (env, te1, ty1) = update_array_type pos env e1 `lvalue in
     let (env, ty1') =
       Typing_array_access.assign_array_append
         ~array_pos:(fst e1)
@@ -4072,7 +4063,7 @@ and assign_ p ur env e1 ty2 =
     in
     make_result env pos (Aast.Array_get (te1, None)) ty2
   | (pos, Array_get (e1, Some e)) ->
-    let (env, te1, ty1) = update_array_type pos env e1 (Some e) `lvalue in
+    let (env, te1, ty1) = update_array_type pos env e1 `lvalue in
     let (env, te, ty) = expr env e in
     let (env, ty1') =
       Typing_array_access.assign_array_get
@@ -4477,7 +4468,6 @@ and dispatch_call
     let rec get_array_filter_return_type env ty =
       let (env, ety) = Env.expand_type env ty in
       match deref ety with
-      | (_, Tarraykind AKempty) -> (env, ety)
       | (r, Tarraykind (AKvarray tv)) ->
         let (env, tv) = get_value_type env tv in
         (env, mk (r, Tarraykind (AKvarray tv)))
@@ -4584,7 +4574,6 @@ and dispatch_call
         env * (env -> locl_ty -> env * locl_ty) =
       let (env, x) = Env.expand_type env x in
       match deref x with
-      | (_, Tarraykind AKempty) -> (env, (fun env _ -> (env, x)))
       | (r, Tarraykind (AKvarray _)) ->
         (env, (fun env tr -> (env, mk (r, Tarraykind (AKvarray tr)))))
       | (r, Tany _) -> (env, (fun env _ -> (env, mk (r, Typing_utils.tany env))))
@@ -5941,7 +5930,7 @@ and call_construct p env class_ params el unpacked_element cid =
     match fst cstr with
     | None ->
       if
-        (not (List.is_empty el))
+        ((not (List.is_empty el)) || Option.is_some unpacked_element)
         && (FileInfo.is_strict mode || FileInfo.(equal_mode mode Mpartial))
         && Cls.members_fully_known class_
       then
@@ -6577,9 +6566,7 @@ and condition
   | Aast.Binop (Ast_defs.Eq None, _, _) ->
     let (env, ety) = Env.expand_type env ty in
     (match deref ety with
-    | (_, Tarraykind AKempty)
-    | (_, Tprim Tbool) ->
-      env
+    | (_, Tprim Tbool) -> env
     | ( _,
         ( Terr | Tany _ | Tnonnull | Tarraykind _ | Toption _ | Tdynamic
         | Tprim _ | Tvar _ | Tfun _ | Tgeneric _ | Tnewtype _ | Tdependent _
@@ -7095,17 +7082,13 @@ and overload_function
   let te = Tast.make_typed_expr fpos fty (Aast.Class_const (tcid, method_id)) in
   make_call env te tal tel typed_unpack_element ty
 
-and update_array_type ?lhs_of_null_coalesce p env e1 e2 valkind =
-  let type_mapper =
-    Typing_arrays.update_array_type p ~is_map:(Option.is_some e2)
-  in
+and update_array_type ?lhs_of_null_coalesce p env e1 valkind =
   match valkind with
   | `lvalue
   | `lvalue_subexpr ->
     let (env, te1, ty1) =
       raw_expr ~valkind:`lvalue_subexpr ~check_defined:true env e1
     in
-    let (env, ty1) = type_mapper env ty1 in
     begin
       match e1 with
       | (_, Lvar (_, x)) ->

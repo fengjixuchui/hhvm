@@ -1029,8 +1029,8 @@ let test_decl_compare ctx filenames builtins files_contents files_info =
       None
       get_classes
       ~bucket_size:1
-      FileInfo.empty_names
-      defs
+      ~previously_oldified_defs:FileInfo.empty_names
+      ~defs
       ~collect_garbage:false;
 
     let files_contents = Relative_path.Map.map files_contents ~f:add_newline in
@@ -1857,8 +1857,8 @@ let decl_and_run_mode
      we build a non-hashed respresentation of the dependency graph
      for printing. *)
     let get_debug_trace root obj =
-      let root = Typing_deps.Dep.to_string root in
-      let obj = Typing_deps.Dep.to_string obj in
+      let root = Typing_deps.Dep.variant_to_string root in
+      let obj = Typing_deps.Dep.variant_to_string obj in
       match Hashtbl.find dbg_deps obj with
       | Some set -> HashSet.add set root
       | None ->

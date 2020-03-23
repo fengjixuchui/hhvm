@@ -1059,12 +1059,17 @@ TCA emitEndCatchHelper(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
 
   alignJmpTarget(cb);
 
-  return vwrap(cb, data, [&] (Vout& v) {
+  auto const teardownEnter = vwrap(cb, data, [&] (Vout& v) {
+    v << copy{v.cns(true), rarg(1)};
+    v << fallthru{RegSet{} | rarg(1)};
+  });
+
+  auto const body = vwrap(cb, data, [&] (Vout& v) {
     // Normal end catch situation: call back to tc_unwind_resume, which returns
     // the catch trace (or null) in the first return register, and the new vmfp
     // in the second.
     v << copy{rvmfp(), rarg(0)};
-    v << call{TCA(tc_unwind_resume), arg_regs(1)};
+    v << call{TCA(tc_unwind_resume), arg_regs(2)};
     v << copy{rret(1), rvmfp()};
 
     auto const done = v.makeBlock();
@@ -1076,6 +1081,24 @@ TCA emitEndCatchHelper(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
 
     v << jmpr{rret(0), vm_regs_with_sp()};
   });
+
+  us.endCatchTeardownThisHelper = vwrap(cb, data, meta, [&] (Vout& v) {
+    auto const thiz = v.makeReg();
+    v << load{rvmfp()[AROFF(m_thisUnsafe)], thiz};
+    emitDecRefWorkObj(v, thiz, TRAP_REASON);
+    v << fallthru{RegSet{}};
+  });
+
+  us.endCatchSkipTeardownHelper = vwrap(cb, data, meta, [&] (Vout& v) {
+    if (debug) {
+      emitImmStoreq(v, ActRec::kTrashedThisSlot, rvmfp()[AROFF(m_thisUnsafe)]);
+      emitImmStoreq(v, ActRec::kTrashedVarEnvSlot, rvmfp()[AROFF(m_varEnv)]);
+    }
+    v << copy{v.cns(false), rarg(1)};
+    v << jmpi{body, RegSet{} | rarg(1)};
+  });
+
+  return teardownEnter;
 }
 
 TCA emitEndCatchStublogueHelper(CodeBlock& cb, DataBlock& data,

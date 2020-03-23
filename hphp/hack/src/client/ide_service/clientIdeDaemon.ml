@@ -118,26 +118,25 @@ let load_saved_state
                peak_changed_files_queue_size = List.length changed_files;
              })
       | Error load_error ->
-        let user_message =
-          Saved_state_loader.user_message_of_error load_error
-        in
-        let log_string = Saved_state_loader.log_string_of_error load_error in
-        let is_actionable = Saved_state_loader.is_error_actionable load_error in
         Lwt.return_error
-          { ClientIdeMessage.user_message; log_string; is_actionable }
+          ClientIdeMessage.
+            {
+              short_user_message =
+                Saved_state_loader.short_user_message_of_error load_error;
+              medium_user_message =
+                Saved_state_loader.medium_user_message_of_error load_error;
+              long_user_message =
+                Saved_state_loader.long_user_message_of_error load_error;
+              debug_details =
+                Saved_state_loader.debug_details_of_error load_error;
+              is_actionable = Saved_state_loader.is_error_actionable load_error;
+            }
     with e ->
-      let e = Exception.wrap e in
-      Hh_logger.exc
-        (Exception.to_exn e)
-        ~prefix:"Uncaught exception in client IDE services"
-        ~stack:(Exception.get_backtrace_string e);
-      let user_message = "Uncaught exception in client IDE services" in
-      Lwt.return_error
-        {
-          ClientIdeMessage.user_message;
-          log_string = Exception.to_string e;
-          is_actionable = false;
-        }
+      let stack = e |> Exception.wrap |> Exception.get_backtrace_string in
+      let prefix = "Uncaught exception in client IDE services" in
+      Hh_logger.exc e ~prefix ~stack;
+      let debug_details = prefix ^ ": " ^ Exn.to_string e in
+      Lwt.return_error (ClientIdeMessage.make_error_data debug_details ~stack)
   in
   Lwt.return result
 
@@ -352,17 +351,14 @@ let handle_message :
     Lwt.return (state, Handle_message_result.Notification)
   | ((Failed_to_initialize _ | Initializing), File_changed _) ->
     (* Should not happen. *)
-    let error_data =
-      {
-        ClientIdeMessage.user_message =
-          "IDE services could not process file change because "
-          ^ "it failed to initialize or was still initializing. The caller "
-          ^ "should have waited for the IDE services to become ready before "
-          ^ "sending file-change notifications.";
-        log_string = Exception.get_current_callstack_string 99;
-        is_actionable = false;
-      }
+    let user_message =
+      "IDE services could not process file change because "
+      ^ "it failed to initialize or was still initializing. The caller "
+      ^ "should have waited for the IDE services to become ready before "
+      ^ "sending file-change notifications."
     in
+    let stack = Exception.get_current_callstack_string 99 in
+    let error_data = ClientIdeMessage.make_error_data user_message ~stack in
     Lwt.return (state, Handle_message_result.Error error_data)
   | (Initialized initialized_state, File_changed path) ->
     (* Only invalidate when a hack file changes *)
@@ -413,30 +409,23 @@ let handle_message :
     end
   | (Initialized _, Initialize_from_saved_state _) ->
     let error_data =
-      {
-        ClientIdeMessage.user_message =
-          "Tried to initialize when already initialized";
-        log_string = Exception.get_current_callstack_string 100;
-        is_actionable = false;
-      }
+      ClientIdeMessage.make_error_data
+        "Tried to initialize when already initialized"
+        ~stack:(Exception.get_current_callstack_string 100)
     in
     Lwt.return (state, Handle_message_result.Error error_data)
   | (Initializing, _) ->
     let error_data =
-      {
-        ClientIdeMessage.user_message =
-          "IDE services have not yet been initialized";
-        log_string = Exception.get_current_callstack_string 100;
-        is_actionable = false;
-      }
+      ClientIdeMessage.make_error_data
+        "IDE services have not yet been initialized"
+        ~stack:(Exception.get_current_callstack_string 100)
     in
     Lwt.return (state, Handle_message_result.Error error_data)
   | (Failed_to_initialize error_data, _) ->
     let error_data =
       {
         error_data with
-        ClientIdeMessage.user_message =
-          "IDE services failed to initialize: " ^ error_data.user_message;
+        debug_details = "Failed to initialize: " ^ error_data.debug_details;
       }
     in
     Lwt.return (state, Handle_message_result.Error error_data)
@@ -742,15 +731,12 @@ let serve ~(in_fd : Lwt_unix.file_descr) ~(out_fd : Lwt_unix.file_descr) :
               let%lwt () = write_message ~out_fd ~message in
               Lwt.return state
           with e ->
-            let e = Exception.wrap e in
-            let user_message = Exception.to_string e in
-            log "Exception: %s" user_message;
+            let stack = e |> Exception.wrap |> Exception.get_backtrace_string in
+            let prefix = "Exception while handling message" in
+            Hh_logger.exc e ~prefix ~stack;
+            let debug_details = prefix ^ ": " ^ Exn.to_string e in
             let error_data =
-              {
-                ClientIdeMessage.user_message;
-                log_string = Exception.get_backtrace_string e;
-                is_actionable = false;
-              }
+              ClientIdeMessage.make_error_data debug_details ~stack
             in
 
             (* If we were responding to a message, but threw an exception, write
