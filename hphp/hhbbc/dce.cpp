@@ -286,7 +286,8 @@ struct DceAction {
     MinstrStackFixup,
     MinstrPushBase,
     AdjustPop,
-    InsertBefore,
+    UnsetLocalsAfter,
+    UnsetLocalsBefore,
   } action;
   using MaskOrCountType = uint32_t;
   static constexpr size_t kMaskSize = 32;
@@ -321,6 +322,20 @@ struct UseInfo {
    * If its not live across blocks, location.blk will stay NoBlockId.
    */
   LocationId location { NoBlockId, 0, false };
+};
+
+struct LocalRemappingIndex {
+  // `mrl` is the maximum number of locals we will remap.
+  explicit LocalRemappingIndex(size_t mrl) : localInterference(mrl) {
+    assertx(mrl <= kMaxTrackedLocals);
+  }
+  // localInterference[i][j] == true iff the locals i and j are both live at a
+  // program point, and therefore cannot share a local slot.
+  std::vector<std::bitset<kMaxTrackedLocals>> localInterference;
+  // pinnedLocal[i] == true iff the local i depends on its order in the local
+  // slots.  This is for keeping local ranges intact for bytecodes that take
+  // such immediates.
+  std::bitset<kMaxTrackedLocals> pinnedLocals{};
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -365,12 +380,29 @@ struct DceState {
   DceReplaceMap replaceMap;
 
   /*
-   * The set of locals and that were ever live in this block.  (This
-   * includes ones that were live going out of this block.)  This set
-   * is used by global DCE to remove locals that are completely unused
+   * Dead across Call, Yield or Await.
+   *
+   * At a given instruction during the DCE analysis a local is dead across if
+   * it is dead after the current instruction, and remains dead through the
+   * next Call, Yield or Await opcode along some possible control flow path.
+   * This information is useful in deciding if an UnsetL may be advantageous
+   * vs. when it should be DCEd.  We take this a step further and use this
+   * information to insert UnsetL where we believe they are advantageous.
+   */
+  std::bitset<kMaxTrackedLocals> deadAcrossLocals;
+
+  /*
+   * The set of local names thate were ever referenced in this block.  This set
+   * is used by global DCE to remove local names that are completely unused
    * in the entire function.
    */
-  std::bitset<kMaxTrackedLocals> usedLocals;
+  std::bitset<kMaxTrackedLocals> usedLocalNames;
+
+  /*
+   * Interference graph between local slots we build up over the course of
+   * Global DCE and then use to share local slots to reduce frame size.
+   */
+  LocalRemappingIndex* remappingIndex{nullptr};
 
   /*
    * Can be set by a minstr-final instruction to indicate the actions
@@ -408,7 +440,8 @@ const char* show(DceAction action) {
     case DceAction::MinstrStackFixup: return "MinstrStackFixup";
     case DceAction::MinstrPushBase:   return "MinstrPushBase";
     case DceAction::AdjustPop:        return "AdjustPop";
-    case DceAction::InsertBefore:     return "InsertBefore";
+    case DceAction::UnsetLocalsAfter: return "UnsetLocalsAfter";
+    case DceAction::UnsetLocalsBefore:return "UnsetLocalsBefore";
   };
   not_reached();
 }
@@ -479,6 +512,18 @@ struct Env {
   const State& stateBefore;
   const StepFlags& flags;
   const State& stateAfter;
+  /*
+   * A local is "liveInside" an op if the local is used in the op, but is not
+   * live before or after the op.  This is used to ensure the local slot is
+   * usable during the op unless the op is DCEd away.  When building an
+   * interference graph it is important to know which instruction has the op
+   * "live inside", vs just knowing the local is used at some point.
+   *
+   * An example of such an op is UnsetL.  It stores to a local slot, but its
+   * behavior is unaltered by the contents of the local slot.  So we need the
+   * local slot to exist, but don't need it to exist before or after the Op.
+   */
+  std::bitset<kMaxTrackedLocals> liveInside;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -560,6 +605,27 @@ Type topC(Env& env, uint32_t idx = 0) {
 //////////////////////////////////////////////////////////////////////
 // locals
 
+void addInterference(Env& env, std::bitset<kMaxTrackedLocals> live) {
+  // We don't track interfrence until the optimize round of the global dce.
+  if (!env.dceState.remappingIndex) return;
+
+  auto& li = env.dceState.remappingIndex->localInterference;
+  for (auto i = li.size(); i-- > 0;) {
+    if (live[i]) {
+      li[i] |= live;
+    }
+  }
+}
+
+void pinLocals(Env& env, std::bitset<kMaxTrackedLocals> pinned) {
+  // We mark pinned locals to guarantee their index does not change during
+  // remapping.
+  if (!env.dceState.remappingIndex) return;
+
+  env.dceState.remappingIndex->pinnedLocals |= pinned;
+}
+
+
 void addLocGenSet(Env& env, std::bitset<kMaxTrackedLocals> locs) {
   FTRACE(4, "      loc-conservative: {}\n",
          loc_bits_string(env.dceState.ainfo.ctx.func, locs));
@@ -572,10 +638,20 @@ void addLocGen(Env& env, uint32_t id) {
   env.dceState.liveLocals[id] = 1;
 }
 
+/*
+ * This is marking an op that logically kills a local (like a def), but we
+ * cannot remove the write to the slot, so we mark it as used so the local is
+ * not killed and removed.
+ */
 void addLocUse(Env& env, uint32_t id) {
   FTRACE(2, "      loc-use: {}\n", id);
   if (id >= kMaxTrackedLocals) return;
-  env.dceState.usedLocals[id] = 1;
+  env.liveInside[id] = 1;
+}
+
+void addLocNameUse(Env& env, NamedLocal nloc) {
+  if (nloc.name >= kMaxTrackedLocals || nloc.name < 0) return;
+  env.dceState.usedLocalNames[nloc.name] = 1;
 }
 
 /*
@@ -591,6 +667,8 @@ void addLocKill(Env& env, uint32_t id) {
   FTRACE(2, "     loc-kill: {}\n", id);
   if (id >= kMaxTrackedLocals) return;
   env.dceState.liveLocals[id] = 0;
+  // Logically unless this op is markedDead we need the local to exist.
+  env.liveInside[id] = 1;
 }
 
 bool isLocLive(Env& env, uint32_t id) {
@@ -599,6 +677,14 @@ bool isLocLive(Env& env, uint32_t id) {
     return true;
   }
   return env.dceState.liveLocals[id];
+}
+
+bool isDeadAcross(Env& env, uint32_t id) {
+  if (id >= kMaxTrackedLocals) {
+    // Conservatively assume it is not dead across.
+    return false;
+  }
+  return env.dceState.deadAcrossLocals[id];
 }
 
 Type locRaw(Env& env, LocalId loc) {
@@ -661,6 +747,23 @@ void combineActions(DceActionMap& dst, const DceActionMap& src) {
   for (auto& i : src) {
     auto ret = dst.insert(i);
     if (!ret.second) {
+      if (i.second.action == DceAction::UnsetLocalsBefore ||
+          i.second.action == DceAction::UnsetLocalsAfter) {
+        continue;
+      }
+
+      if (ret.first->second.action == DceAction::UnsetLocalsBefore ||
+          ret.first->second.action == DceAction::UnsetLocalsAfter) {
+        if (i.second.action == DceAction::Replace ||
+            i.second.action == DceAction::PopAndReplace) {
+          // The UnsetLocals replace map will take precedence, so leave the
+          // action as UnsetLocals.
+          continue;
+        }
+        ret.first->second = i.second;
+        continue;
+      }
+
       if (i.second.action == DceAction::MinstrStackFixup ||
           i.second.action == DceAction::MinstrStackFinal) {
         assertx(i.second.action == ret.first->second.action);
@@ -829,33 +932,6 @@ void popOutputs(Env& env, bool linked, const Args&... args) {
 void markDead(Env& env) {
   env.dceState.actionMap[env.id] = DceAction::Kill;
   FTRACE(2, "     Killing {}\n", show(env.id));
-}
-
-void unsetCountedDeadLocals(Env& env) {
-  CompactVector<Bytecode> bcs;
-  auto const func = env.dceState.ainfo.ctx.func;
-  auto loc = std::min(safe_cast<uint32_t>(func->locals.size()),
-                      safe_cast<uint32_t>(kMaxTrackedLocals));
-  auto const end = RuntimeOption::EnableArgsInBacktraces
-                   ? func->params.size() + (uint32_t)func->isReified
-                   : 0;
-  while (loc-- > end) {
-    if (!isLocLive(env, loc) && !isLocVolatile(env, loc)) {
-      auto const t = locRaw(env, loc);
-      if (!t.subtypeOf(TUnc)) {
-        // Not live and could be counted.  Unset it.
-        bcs.emplace_back(bc::UnsetL { loc });
-      }
-    }
-  }
-  if (!bcs.empty()) {
-    env.dceState.replaceMap.emplace(env.id, std::move(bcs));
-    env.dceState.actionMap[env.id] = DceAction::InsertBefore;
-
-    // We flag that we shoud rerun DCE since this Unset might be redudant if
-    // a CGetL gets replaced with a PushL.
-    env.dceState.didAddOpts = true;
-  }
 }
 
 void pop_inputs(Env& env, uint32_t numPop) {
@@ -1115,6 +1191,7 @@ void cgetImpl(Env& env, LocalId loc, bool quiet) {
 }
 
 void dce(Env& env, const bc::CGetL& op) {
+  addLocNameUse(env, op.nloc1);
   cgetImpl(env, op.nloc1.id, false);
 }
 
@@ -1142,6 +1219,7 @@ void dce(Env& env, const bc::PushL& op) {
 }
 
 void dce(Env& env, const bc::CGetL2& op) {
+  addLocNameUse(env, op.nloc1);
   auto const ty = locRaw(env, op.nloc1.id);
 
   stack_ops(env, [&] (const UseInfo& u1, const UseInfo& u2) {
@@ -1180,6 +1258,7 @@ void dce(Env& env, const bc::IsTypeC& op) {
 }
 
 void dce(Env& env, const bc::IsTypeL& op) {
+  addLocNameUse(env, op.nloc1);
   auto const ty = locRaw(env, op.nloc1.id);
   stack_ops(env, [&] (UseInfo& ui) {
       scheduleGenLoc(env, op.nloc1.id);
@@ -1406,9 +1485,17 @@ void dce(Env& env, const bc::UnsetL& op) {
   auto const oldTy = locRaw(env, op.loc1);
   if (oldTy.subtypeOf(BUninit)) return markDead(env);
 
+  // During local dce we assume all unsets that could free heap objects are
+  // beneficial.  This prevents local dce from removing UnsetLs that global
+  // dce inserted using global knowledge.  This is unnecessary right now,
+  // because local dce assumes that all locals are live at the end of the
+  // block, but this future proofs the UnsetL insertion logic in the event this
+  // changes.
   auto const couldFreeHeapObj = !oldTy.subtypeOf(TUnc);
+  auto const beneficial = couldFreeHeapObj &&
+                          (env.dceState.isLocal || isDeadAcross(env, op.loc1));
   auto const effects = isLocVolatile(env, op.loc1);
-  if (!isLocLive(env, op.loc1) && !effects && !couldFreeHeapObj) {
+  if (!isLocLive(env, op.loc1) && !effects && !beneficial) {
     return markDead(env);
   }
   if (effects) {
@@ -1425,6 +1512,7 @@ void dce(Env& env, const bc::UnsetL& op) {
  * set of upward exposed uses.
  */
 void dce(Env& env, const bc::IncDecL& op) {
+  addLocNameUse(env, op.nloc1);
   auto const oldTy   = locRaw(env, op.nloc1.id);
   auto const effects = readCouldHaveSideEffects(oldTy) ||
                        isLocVolatile(env, op.nloc1.id);
@@ -1560,7 +1648,10 @@ void no_dce(Env& env, const Op& op) {
 void dce(Env& env, const bc::AssertRATL& op) { no_dce(env, op); }
 void dce(Env& env, const bc::AssertRATStk& op) { no_dce(env, op); }
 void dce(Env& env, const bc::Await& op) { no_dce(env, op); }
-void dce(Env& env, const bc::AwaitAll& op) { no_dce(env, op); }
+void dce(Env& env, const bc::AwaitAll& op) {
+  pinLocals(env, env.flags.mayReadLocalSet);
+  no_dce(env, op);
+}
 void dce(Env& env, const bc::BaseGL& op) { no_dce(env, op); }
 void dce(Env& env, const bc::BaseH& op) { no_dce(env, op); }
 void dce(Env& env, const bc::BreakTraceHint& op) { no_dce(env, op); }
@@ -1623,10 +1714,22 @@ void dce(Env& env, const bc::JmpNS& op) { no_dce(env, op); }
 void dce(Env& env, const bc::JmpNZ& op) { no_dce(env, op); }
 void dce(Env& env, const bc::JmpZ& op) { no_dce(env, op); }
 void dce(Env& env, const bc::LIterFree& op) { no_dce(env, op); }
-void dce(Env& env, const bc::MemoGet& op) { no_dce(env, op); }
-void dce(Env& env, const bc::MemoGetEager& op) { no_dce(env, op); }
-void dce(Env& env, const bc::MemoSet& op) { no_dce(env, op); }
-void dce(Env& env, const bc::MemoSetEager& op) { no_dce(env, op); }
+void dce(Env& env, const bc::MemoGet& op) {
+  pinLocals(env, env.flags.mayReadLocalSet);
+  no_dce(env, op);
+}
+void dce(Env& env, const bc::MemoGetEager& op) {
+  pinLocals(env, env.flags.mayReadLocalSet);
+  no_dce(env, op);
+}
+void dce(Env& env, const bc::MemoSet& op) {
+  pinLocals(env, env.flags.mayReadLocalSet);
+  no_dce(env, op);
+}
+void dce(Env& env, const bc::MemoSetEager& op) {
+  pinLocals(env, env.flags.mayReadLocalSet);
+  no_dce(env, op);
+}
 void dce(Env& env, const bc::Method& op) { no_dce(env, op); }
 void dce(Env& env, const bc::NativeImpl& op) { no_dce(env, op); }
 void dce(Env& env, const bc::NewLikeArrayL& op) { no_dce(env, op); }
@@ -1658,7 +1761,10 @@ void dce(Env& env, const bc::SetOpG& op) { no_dce(env, op); }
 void dce(Env& env, const bc::SetOpS& op) { no_dce(env, op); }
 void dce(Env& env, const bc::SetRangeM& op) { no_dce(env, op); }
 void dce(Env& env, const bc::SetS& op) { no_dce(env, op); }
-void dce(Env& env, const bc::Silence& op) { no_dce(env, op); }
+void dce(Env& env, const bc::Silence& op) {
+  pinLocals(env, env.flags.mayReadLocalSet);
+  no_dce(env, op);
+}
 void dce(Env& env, const bc::SSwitch& op) { no_dce(env, op); }
 void dce(Env& env, const bc::Switch& op) { no_dce(env, op); }
 void dce(Env& env, const bc::This& op) { no_dce(env, op); }
@@ -1684,9 +1790,9 @@ void dce(Env& env, const bc::YieldK& op) { no_dce(env, op); }
 // Iterator ops don't really read their key and value output locals; they just
 // dec-ref the old value there before storing the new one (i.e. SetL semantics).
 //
-// We have to mark these values as transiently being used (else they could be
-// completely killed - that is, loc->killed would get set to true and we would
-// try to delete the local), but we don't have to may-read them.
+// We have to mark these values as live inside (else they could be
+// completely killed - that is, remap locals could reused their local
+// slot), but we don't have to may-read them.
 void iter_dce(Env& env, const IterArgs& ita, LocalId baseId, int numPop) {
   addLocUse(env, ita.valId);
   if (ita.hasKey()) addLocUse(env, ita.keyId);
@@ -1762,11 +1868,18 @@ void minstr_dim(Env& env, const Op& op) {
   if (op.mkey.mcode == MEC || op.mkey.mcode == MPC) {
     minstr_touch(env, op.mkey.idx);
   }
+  if (op.mkey.mcode == MEL || op.mkey.mcode == MPL) {
+    addLocNameUse(env, op.mkey.local);
+  }
 }
 
 template<class Op>
 void minstr_final(Env& env, const Op& op, int32_t ndiscard) {
   addLocGenSet(env, env.flags.mayReadLocalSet);
+  if (op.mkey.mcode == MEL || op.mkey.mcode == MPL) {
+    addLocNameUse(env, op.mkey.local);
+  }
+
   push_outputs(env, op.numPush());
   auto const numPop = op.numPop();
   auto const stackRead = op.mkey.mcode == MEC || op.mkey.mcode == MPC ?
@@ -1795,6 +1908,7 @@ void dce(Env& env, const bc::BaseSC& op)      {
 }
 
 void dce(Env& env, const bc::BaseL& op) {
+  addLocNameUse(env, op.nloc1);
   if (!isLocLive(env, op.nloc1.id) &&
       !readCouldHaveSideEffects(locRaw(env, op.nloc1.id)) &&
       !isLocVolatile(env, op.nloc1.id)) {
@@ -1894,6 +2008,26 @@ void adjustMinstr(Bytecode& op, MaskType m) {
   not_reached();
 }
 
+template<typename LocRaw>
+CompactVector<Bytecode> eager_unsets(std::bitset<kMaxTrackedLocals> candidates,
+                                     const php::Func* func,
+                                     LocRaw type) {
+  auto loc = std::min(safe_cast<uint32_t>(func->locals.size()),
+                      safe_cast<uint32_t>(kMaxTrackedLocals));
+  auto const end = RuntimeOption::EnableArgsInBacktraces
+                   ? func->params.size() + (uint32_t)func->isReified
+                   : 0;
+  CompactVector<Bytecode> bcs;
+  while (loc-- > end) {
+    if (candidates[loc] && !is_volatile_local(func, loc)) {
+      auto const t = type(loc);
+      if (!t.subtypeOf(TUnc)) {
+        bcs.emplace_back(bc::UnsetL { loc });
+      }
+    }
+  }
+  return bcs;
+}
 
 //////////////////////////////////////////////////////////////////////
 
@@ -1918,6 +2052,12 @@ struct DceOutState {
   std::bitset<kMaxTrackedLocals>             locLiveExn;
 
   /*
+   * The union of the deadAcrossIn states of each normal successor for
+   * locals.
+   */
+  std::bitset<kMaxTrackedLocals>             locDeadAcross;
+
+  /*
    * The union of the dceStacks from the start of the normal successors.
    */
   folly::Optional<std::vector<UseInfo>>      dceStack;
@@ -1934,7 +2074,8 @@ dce_visit(const Index& index,
           CollectedInfo& collect,
           BlockId bid,
           const State& stateIn,
-          const DceOutState& dceOutState) {
+          const DceOutState& dceOutState,
+          LocalRemappingIndex* localRemappingIndex = nullptr) {
   if (!stateIn.initialized) {
     /*
      * Skip unreachable blocks.
@@ -1953,8 +2094,9 @@ dce_visit(const Index& index,
 
   auto dceState = DceState{ index, fa };
   dceState.liveLocals = dceOutState.locLive;
-  dceState.usedLocals = dceOutState.locLive;
+  dceState.deadAcrossLocals = dceOutState.locDeadAcross;
   dceState.isLocal    = dceOutState.isLocal;
+  dceState.remappingIndex = localRemappingIndex;
 
   auto const blk = fa.ctx.func->blocks[bid].get();
   auto const dceStkSz = [&] {
@@ -1994,6 +2136,7 @@ dce_visit(const Index& index,
       states[idx].first,
       states[idx].second,
       states[idx+1].first,
+      {},
     };
     auto const handled = [&] {
       if (dceState.minstrUI) {
@@ -2040,12 +2183,39 @@ dce_visit(const Index& index,
         dceState.liveLocals |= dceOutState.locLiveExn;
       }
 
-      dceState.usedLocals |= dceState.liveLocals;
+      addInterference(visit_env, dceState.liveLocals | visit_env.liveInside);
     }
+
+    // Any local that is live before this op, dead after this op, and remains
+    // dead through a Call, Await or Yield may be worth unsetting.  We also
+    // check that we won't be inserting these UnsetLs as the last op in a
+    // block to prevent a control flow ops from becoming non terminal.
+    auto const unsetable = dceState.deadAcrossLocals & dceState.liveLocals;
+    if (unsetable.any() && idx != blk->hhbcs.size() - 1) {
+      auto bcs = eager_unsets(unsetable, fa.ctx.func, [&](uint32_t i) {
+        return visit_env.stateAfter.locals[i];
+      });
+      if (!bcs.empty()) {
+        dceState.replaceMap.emplace(visit_env.id, std::move(bcs));
+        dceState.actionMap.emplace(visit_env.id, DceAction::UnsetLocalsAfter);
+
+        // We flag that we shoud rerun DCE since this Unset might be redudant if
+        // a CGetL gets replaced with a PushL.
+        visit_env.dceState.didAddOpts = true;
+      }
+    }
+
+    // Clear out anything live.
+    dceState.deadAcrossLocals &= ~(dceState.liveLocals | visit_env.liveInside);
     switch (op.op) {
       case Op::Await: case Op::AwaitAll: case Op::Yield:
       case Op::YieldK: case Op::YieldFromDelegate:
-        unsetCountedDeadLocals(visit_env);
+      case Op::FCallBuiltin: case Op::FCallClsMethod:
+      case Op::FCallClsMethodD: case Op::FCallClsMethodS:
+      case Op::FCallClsMethodSD: case Op::FCallCtor:
+      case Op::FCallFunc: case Op::FCallFuncD:
+      case Op::FCallObjMethod: case Op::FCallObjMethodD:
+        dceState.deadAcrossLocals |= ~dceState.liveLocals;
         break;
       default:
         break;
@@ -2084,6 +2254,7 @@ dce_visit(const Index& index,
 
 struct DceAnalysis {
   std::bitset<kMaxTrackedLocals>      locLiveIn;
+  std::bitset<kMaxTrackedLocals>      locDeadAcrossIn;
   std::vector<UseInfo>                stack;
   LocationIdSet                       forcedLiveLocations;
 };
@@ -2093,11 +2264,14 @@ DceAnalysis analyze_dce(const Index& index,
                         CollectedInfo& collect,
                         BlockId bid,
                         const State& stateIn,
-                        const DceOutState& dceOutState) {
+                        const DceOutState& dceOutState,
+                        LocalRemappingIndex* localRemappingIndex = nullptr) {
   if (auto dceState = dce_visit(index, fa, collect,
-                                bid, stateIn, dceOutState)) {
+                                bid, stateIn, dceOutState,
+                                localRemappingIndex)) {
     return DceAnalysis {
       dceState->liveLocals,
+      dceState->deadAcrossLocals,
       dceState->stack,
       dceState->forcedLiveLocations
     };
@@ -2159,6 +2333,7 @@ void dce_perform(php::Func& func,
       start++->srcLoc = srcLoc;
     }
   };
+
   for (auto const& elm : actionMap) {
     auto const& id = elm.first;
     auto const b = func.blocks[id.blk].mutate();
@@ -2283,8 +2458,8 @@ void dce_perform(php::Func& func,
         }
         break;
       }
-      case DceAction::InsertBefore:
-      {
+      case DceAction::UnsetLocalsBefore: {
+        assertx(id.idx == 0);
         auto it = replaceMap.find(id);
         always_assert(it != end(replaceMap) && !it->second.empty());
         auto const srcLoc = b->hhbcs[id.idx].srcLoc;
@@ -2293,14 +2468,41 @@ void dce_perform(php::Func& func,
         setloc(srcLoc, b->hhbcs.begin() + id.idx, it->second.size());
         break;
       }
+      case DceAction::UnsetLocalsAfter:
+      {
+        auto it = replaceMap.find(id);
+        always_assert(it != end(replaceMap) && !it->second.empty());
+        // If this is in the middle of a member op sequence, we walk to the
+        // end, and place the UnsetLs there.
+        auto idx = id.idx;
+        for (auto bc = b->hhbcs[idx];
+             (isMemberBaseOp(bc.op) || isMemberDimOp(bc.op)) &&
+              idx < b->hhbcs.size();
+             bc = b->hhbcs[++idx]) {
+          if (b->hhbcs[idx + 1].op == OpFatal) {
+            // We should not have tried to insert UnsetLs in a member op
+            // sequence that is known to fatal.
+            always_assert(false);
+          }
+        }
+        // The MBR must not be alive across control flow edges.
+        always_assert(idx < b->hhbcs.size());
+        assertx(idx == id.idx || isMemberFinalOp(b->hhbcs[idx].op));
+        auto const srcLoc = b->hhbcs[idx].srcLoc;
+        b->hhbcs.insert(b->hhbcs.begin() + idx + 1,
+                        begin(it->second), end(it->second));
+        setloc(srcLoc, b->hhbcs.begin() + idx + 1, it->second.size());
+        break;
+      }
     }
   }
 }
 
 struct DceOptResult {
-  std::bitset<kMaxTrackedLocals> usedLocals;
+  std::bitset<kMaxTrackedLocals> usedLocalNames;
   DceActionMap actionMap;
   DceReplaceMap replaceMap;
+  std::bitset<kMaxTrackedLocals> deadAcrossLocals;
   bool didAddOpts{false};
 };
 
@@ -2318,22 +2520,177 @@ optimize_dce(const Index& index,
   }
 
   return {
-    std::move(dceState->usedLocals),
+    std::move(dceState->usedLocalNames),
     std::move(dceState->actionMap),
     std::move(dceState->replaceMap),
+    std::move(dceState->deadAcrossLocals),
     dceState->didAddOpts
   };
 }
 
 //////////////////////////////////////////////////////////////////////
 
-void remove_unused_locals(Context const ctx,
-                          std::bitset<kMaxTrackedLocals> usedLocals) {
-  if (!options.RemoveUnusedLocals) return;
-  auto const func = ctx.func;
-
+void remove_unused_local_names(const FuncAnalysis& ainfo,
+                               std::bitset<kMaxTrackedLocals> usedLocalNames) {
+  if (!options.RemoveUnusedLocalNames) return;
+  auto const func = ainfo.ctx.func;
   /*
-   * Removing unused locals in closures requires checking which ones
+   * Closures currently rely on name information being available.
+   */
+  if (func->isClosureBody) return;
+  if (is_pseudomain(func) || ainfo.mayUseVV) return;
+
+  // For reified functions, skip the first non-param local
+  auto loc = func->locals.begin() + func->params.size() + (int)func->isReified;
+  for (; loc != func->locals.end(); ++loc) {
+    // We can't remove the names of volatile locals, as they can be accessed by
+    // name.
+    assertx(loc->id == loc->nameId);
+    if (is_volatile_local(func, loc->id)) continue;
+    if (loc->unusedName) {
+      assertx(loc->id < kMaxTrackedLocals && !usedLocalNames.test(loc->id));
+    }
+    if (loc->id < kMaxTrackedLocals && !usedLocalNames.test(loc->id)) {
+      FTRACE(2, "  killing: {}\n", local_string(*func, loc->id));
+      const_cast<php::Local&>(*loc).unusedName = true;
+    }
+  }
+}
+
+// Take a vector mapping local ids to new local ids, and apply it to the
+// function passed in via ainfo.
+void apply_remapping(const FuncAnalysis& ainfo,
+                     std::vector<LocalId>&& remapping) {
+  auto const maxRemappedLocals = remapping.size();
+  // During Global DCE we are for the most part free to modify the BCs since
+  // we have frozen the index, and are no longer performing context sensitive
+  // interps.
+  // Walk the bytecode modifying the local usage according to the mapping.
+  for (auto const bid : ainfo.rpoBlocks) {
+    FTRACE(2, "Remapping block #{}\n", bid);
+
+    auto const blk = ainfo.ctx.func->blocks[bid].mutate();
+    for (uint32_t idx = blk->hhbcs.size(); idx-- > 0;) {
+      auto& o = blk->hhbcs[idx];
+
+      auto const fixupLoc = [&](LocalId& id) {
+        if (0 <= id && id < maxRemappedLocals) {
+          id = remapping[id];
+        }
+      };
+
+      auto const fixupMKey = [&](MKey& mk) {
+        switch (mk.mcode) {
+          case MemberCode::MEL:
+          case MemberCode::MPL:
+            fixupLoc(mk.local.id);
+            break;
+          default:
+            break;
+        }
+      };
+
+      auto const fixupLAR = [&](const LocalRange& lr) {
+        // LAR are pinned.
+        if (lr.first < maxRemappedLocals) {
+          assertx(lr.first == remapping[lr.first]);
+        }
+      };
+
+      auto const fixupITA = [&](IterArgs& ita) {
+        if (ita.hasKey()) {
+          if (0 <= ita.keyId && ita.keyId < maxRemappedLocals) {
+            ita.keyId = remapping[ita.keyId];
+          }
+        }
+        if (0 <= ita.valId && ita.valId < maxRemappedLocals) {
+          ita.valId = remapping[ita.valId];
+        }
+      };
+
+#define IMM_BLA(n)
+#define IMM_SLA(n)
+#define IMM_IVA(n)
+#define IMM_I64A(n)
+#define IMM_LA(n)       fixupLoc(op.loc##n)
+#define IMM_NLA(n)      fixupLoc(op.nloc##n.id)
+#define IMM_ILA(n)      fixupLoc(op.loc##n)
+#define IMM_IA(n)
+#define IMM_DA(n)
+#define IMM_SA(n)
+#define IMM_RATA(n)
+#define IMM_AA(n)
+#define IMM_BA(n)
+#define IMM_OA_IMPL(n)
+#define IMM_OA(type)
+#define IMM_VSA(n)
+#define IMM_KA(n)      fixupMKey(op.mkey)
+#define IMM_LAR(n)     fixupLAR(op.locrange)
+#define IMM_ITA(n)     fixupITA(op.ita)
+#define IMM_FCA(n)
+
+#define IMM(which, n)             IMM_##which(n)
+#define IMM_NA
+#define IMM_ONE(x)                IMM(x, 1);
+#define IMM_TWO(x, y)             IMM(x, 1); IMM(y, 2);
+#define IMM_THREE(x, y, z)        IMM(x, 1); IMM(y, 2); \
+                                  IMM(z, 3);
+#define IMM_FOUR(x, y, z, l)      IMM(x, 1); IMM(y, 2); \
+                                  IMM(z, 3); IMM(l, 4);
+#define IMM_FIVE(x, y, z, l, m)   IMM(x, 1); IMM(y, 2); \
+                                  IMM(z, 3); IMM(l, 4); \
+                                  IMM(m, 5);
+#define IMM_SIX(x, y, z, l, m, n) IMM(x, 1); IMM(y, 2); \
+                                  IMM(z, 3); IMM(l, 4); \
+                                  IMM(m, 5); IMM(n, 6);
+
+#define O(opcode, imms, ...) \
+      case Op::opcode: {\
+        UNUSED auto& op = o.opcode; IMM_##imms; \
+        break; \
+      }
+      switch (o.op) { OPCODES }
+#undef O
+
+#undef IMM_BLA
+#undef IMM_SLA
+#undef IMM_IVA
+#undef IMM_I64A
+#undef IMM_LA
+#undef IMM_NLA
+#undef IMM_ILA
+#undef IMM_IA
+#undef IMM_DA
+#undef IMM_SA
+#undef IMM_RATA
+#undef IMM_AA
+#undef IMM_BA
+#undef IMM_OA_IMPL
+#undef IMM_OA
+#undef IMM_VSA
+#undef IMM_KA
+#undef IMM_LAR
+#undef IMM_ITA
+#undef IMM_FCA
+
+#undef IMM
+#undef IMM_NA
+#undef IMM_ONE
+#undef IMM_TWO
+#undef IMM_THREE
+#undef IMM_FOUR
+#undef IMM_FIVE
+#undef IMM_SIX
+    }
+  }
+}
+
+void remap_locals(const FuncAnalysis& ainfo,
+                  LocalRemappingIndex&& remappingIndex) {
+  if (!options.CompactLocalSlots) return;
+  auto const func = ainfo.ctx.func;
+  /*
+   * Remapping locals in closures requires checking which ones
    * are captured variables so we can remove the relevant properties,
    * and then we'd have to mutate the CreateCl callsite, so we don't
    * bother for now.
@@ -2342,18 +2699,86 @@ void remove_unused_locals(Context const ctx,
    * some emitter quirk, so this might be worthwhile.
    */
   if (func->isClosureBody) return;
+  if (is_pseudomain(func) || ainfo.mayUseVV) return;
 
-  // For reified functions, skip the first non-param local
-  auto loc = func->locals.begin() + func->params.size() + (int)func->isReified;
-  for (; loc != func->locals.end(); ++loc) {
-    if (loc->killed) {
-      assert(loc->id < kMaxTrackedLocals && !usedLocals.test(loc->id));
+  auto& localInterference = remappingIndex.localInterference;
+  auto const& pinned = remappingIndex.pinnedLocals;
+  auto const maxRemappedLocals = localInterference.size();
+
+  auto const localsInterfere = [&](LocalId l1, LocalId l2) -> bool {
+    if (l1 >= maxRemappedLocals || l2 >= maxRemappedLocals) return true;
+    if (is_volatile_local(func, l1) || is_volatile_local(func, l2)) return true;
+    assertx(l1 != l2);
+    assertx(localInterference[l1][l2] == localInterference[l2][l1]);
+    return localInterference[l1][l2];
+  };
+
+  // Unify locals
+  // It's worth noting this invalidates the localInterference
+  // info for the larger id of l1, l2.
+  auto const unifyLocals = [&](LocalId l1, LocalId l2) {
+    // We can't join locals that interfere.
+    assertx(!localsInterfere(l1, l2));
+
+    // We unify into the smaller localid.  The larger one will no longer be
+    // valid.
+    assert(l1 < l2);
+
+    // Everything that was uniquely a conflict to l2 is now also a conflict to
+    // l1 and should be updated.
+    auto const newConflicts = localInterference[l2] ^
+      (localInterference[l1] & localInterference[l2]);
+    for (auto i = maxRemappedLocals; i-- > 0;) {
+      if (newConflicts[i]) {
+        localInterference[i][l1] = true;
+      }
+    }
+    localInterference[l1] |= localInterference[l2];
+  };
+
+  auto const isParam = [&](uint32_t i) {
+    return i < (func->params.size() + (int)func->isReified);
+  };
+
+  std::vector<LocalId> remapping(maxRemappedLocals);
+  // Greedy merge the locals.  This could probably be sorted by live range
+  // length or something to achieve better coalescing.  Or if live range
+  // splitting is added, even be guided by profile info.
+  for (auto i = maxRemappedLocals; i-- > 0;) {
+    remapping[i] = i;
+    if (func->locals[i].killed) {
+      // Killed in a previous round of DCE.
+      assertx(localInterference[i].none());
       continue;
     }
-    if (loc->id < kMaxTrackedLocals && !usedLocals.test(loc->id)) {
-      FTRACE(2, "  killing: {}\n", local_string(*func, loc->id));
-      const_cast<php::Local&>(*loc).killed = true;
+    if (isParam(i) || pinned[i]) continue;
+    for (auto j = i; j-- > 0;) {
+      if (func->locals[j].killed) continue;
+      if (RuntimeOption::EnableArgsInBacktraces && isParam(j)) continue;
+      if (localsInterfere(i, j)) continue;
+      // Remap the local and update interference sets.
+      func->locals[i].killed = true;
+      remapping[i] = j;
+      unifyLocals(j, i);
+      break;
     }
+  }
+
+  bool identityMapping = true;
+  // Canonicalize the local remapping.
+  for (auto i = 0; i < maxRemappedLocals; i++) {
+    if (remapping[i] != i) {
+      identityMapping = false;
+      // We only have to check one deep because we know that all earlier locals
+      // are already cononicalized.
+      auto const newId = remapping[remapping[i]];
+      assertx(remapping[newId] == newId);
+      remapping[i] = newId;
+    }
+  }
+
+  if (!identityMapping) {
+    apply_remapping(ainfo, std::move(remapping));
   }
 }
 
@@ -2567,6 +2992,17 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
   };
 
   /*
+   * We track interfering locals in order to compact the number of them.
+   * This is useful to reduce fame space at runtime.  The decision made
+   * later could benefit from profile info, but HHBBC currently doesn't
+   * get fed any such information.
+   */
+  auto const maxRemappedLocals = std::min(
+      (size_t)ai.ctx.func->locals.size(),
+      (size_t)kMaxTrackedLocals);
+  LocalRemappingIndex localRemappingIndex(maxRemappedLocals);
+
+  /*
    * Iterate on live out states until we reach a fixed point.
    *
    * This algorithm treats the exceptional live-out states differently
@@ -2589,7 +3025,8 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
       collect,
       bid,
       ai.bdata[bid].stateIn,
-      blockState
+      blockState,
+      &localRemappingIndex
     );
 
     FTRACE(2, "loc live out  : {}\n"
@@ -2658,6 +3095,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
       FTRACE(2, "  -> {}\n", pid);
       auto& pbs = blockStates[pid];
       auto const oldPredLocLive = pbs.locLive;
+      auto const oldPredLocDeadAcross = pbs.locDeadAcross;
       auto const pred = ai.ctx.func->blocks[pid].get();
       if (auto const ita = killIterOutputs(pred, bid)) {
         auto const key = ita->hasKey();
@@ -2671,7 +3109,10 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
       } else {
         pbs.locLive |= result.locLiveIn;
       }
-      auto changed = pbs.locLive != oldPredLocLive;
+      pbs.locDeadAcross |= result.locDeadAcrossIn;
+      pbs.locDeadAcross &= ~pbs.locLive;
+      auto changed = pbs.locLive != oldPredLocLive ||
+                     pbs.locDeadAcross != oldPredLocDeadAcross;
 
       changed |= [&] {
         if (isCFPushTaken(pred, bid)) {
@@ -2707,12 +3148,21 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
     }
   }
 
+  auto const predLiveLocals = [&] (BlockId bid){
+    std::bitset<kMaxTrackedLocals> live;
+    for (auto const pid : nonThrowPreds[bid]) {
+      auto const& pbs = blockStates[pid];
+      live |= pbs.locLive;
+    }
+    return live;
+  };
+
   /*
    * Now that we're at a fixed point, use the propagated states to
    * remove instructions that don't need to be there.
    */
   FTRACE(1, "|---- global DCE optimize ({})\n", show(ai.ctx));
-  std::bitset<kMaxTrackedLocals> usedLocals;
+  std::bitset<kMaxTrackedLocals> usedLocalNames;
   DceActionMap actionMap;
   DceReplaceMap replaceMap;
   bool didAddOpts = false;
@@ -2726,8 +3176,24 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
       ai.bdata[bid].stateIn,
       blockStates[bid]
     );
+
+    auto const unsetable = ret.deadAcrossLocals & predLiveLocals(bid);
+    if (unsetable.any()) {
+      auto bcs = eager_unsets(unsetable, ai.ctx.func, [&](uint32_t i) {
+        return ai.bdata[bid].stateIn.locals[i];
+      });
+      if (!bcs.empty()) {
+        ret.replaceMap.emplace(InstrId { bid, 0 }, std::move(bcs));
+        ret.actionMap.emplace(InstrId { bid, 0 }, DceAction::UnsetLocalsBefore);
+
+        // We flag that we shoud rerun DCE since this Unset might be redudant if
+        // a CGetL gets replaced with a PushL.
+        didAddOpts = true;
+      }
+    }
+
     didAddOpts = didAddOpts || ret.didAddOpts;
-    usedLocals |= ret.usedLocals;
+    usedLocalNames |= ret.usedLocalNames;
     if (ret.actionMap.size()) {
       if (!actionMap.size()) {
         actionMap = std::move(ret.actionMap);
@@ -2748,8 +3214,8 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
 
   dce_perform(*ai.ctx.func, actionMap, replaceMap);
 
-  FTRACE(1, "  used locals: {}\n", loc_bits_string(ai.ctx.func, usedLocals));
-  remove_unused_locals(ai.ctx, usedLocals);
+  remove_unused_local_names(ai, usedLocalNames);
+  remap_locals(ai, std::move(localRemappingIndex));
 
   return didAddOpts;
 }

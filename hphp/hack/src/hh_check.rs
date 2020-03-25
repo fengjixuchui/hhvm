@@ -59,6 +59,10 @@ impl decl_provider::DeclProvider for TestDeclProvider {
     fn get_fun(&self, s: &str) -> Option<&decl_provider::FunDecl> {
         self.decls.funs.get(s)
     }
+
+    fn get_class(&self, name: &str) -> Option<&decl_provider::ClassDecl> {
+        self.decls.classes.get(name)
+    }
 }
 
 fn read_file(filepath: &Path) -> anyhow::Result<Vec<u8>> {
@@ -154,4 +158,15 @@ fn main() -> anyhow::Result<()> {
         eprintln!("Error in file: {}", e);
     }
     Ok(())
+}
+
+#[no_mangle]
+pub extern "C" fn hh_check_main() {
+    match main() {
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1)
+        }
+        Ok(()) => (),
+    }
 }
