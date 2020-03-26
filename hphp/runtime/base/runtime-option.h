@@ -88,7 +88,7 @@ struct RepoOptions {
   H(bool,           DisallowFuncPtrsInConstants,    false)            \
   E(bool,           EmitFuncPointers,               true)             \
   E(bool,           EmitInstMethPointers,           EmitFuncPointers) \
-  H(bool,           RustLowerer,                    true)             \
+  H(bool,           RustTopLevelElaborator,         true)             \
   H(bool,           EnableXHPClassModifier,         false)            \
   E(bool,           EmitGenericsUB,                 false)            \
   H(bool,           DisableXHPElementMangling,      false)            \
@@ -1318,6 +1318,10 @@ struct RuntimeOption {
   F(bool, EnablePerFileCoverage, false)                                 \
   F(bool, NoUseMagicMethods, false)                                     \
   F(bool, NoAppendToMap, false)                                         \
+  /* Should build an autoload map when we build the repo */             \
+  F(bool, BuildRepoAutoloadMap, false)                                  \
+  /* Should we use the autoload map from the repo */                    \
+  F(bool, UseRepoAutoloadMap, false)                                    \
   /* */
 
 private:
