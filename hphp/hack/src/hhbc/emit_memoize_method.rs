@@ -25,7 +25,7 @@ use hhas_type::Info as HhasTypeInfo;
 use hhbc_ast_rust::{FcallArgs, FcallFlags, SpecialClsRef};
 use hhbc_id_rust::{class, method, Id};
 use hhbc_string_utils_rust::reified;
-use instruction_sequence_rust::{InstrSeq, Result};
+use instruction_sequence_rust::{instr, InstrSeq, Result};
 use naming_special_names_rust::{members, user_attributes as ua};
 use options::{HhvmFlags, Options};
 use oxidized::{ast as T, namespace_env::Env as NamespaceEnv, pos::Pos};
@@ -57,6 +57,13 @@ fn is_memoize(method: &T::Method_) -> bool {
         .any(|a| ua::is_memoized(&a.name.1))
 }
 
+fn is_memoize_lsb(method: &T::Method_) -> bool {
+    method
+        .user_attributes
+        .iter()
+        .any(|a| ua::MEMOIZE_LSB == &a.name.1)
+}
+
 pub fn make_info<'a>(
     class: &T::Class_,
     class_id: class::Type<'a>,
@@ -68,7 +75,7 @@ pub fn make_info<'a>(
             emit_memoize_helpers::check_memoize_possible(&m.name.0, &m.params[..], true)?;
             let pos = &m.name.0;
             if class.kind.is_cinterface() {
-                return Err(emit_fatal::raise_fatal_parse(
+                return Err(emit_fatal::raise_fatal_runtime(
                     pos,
                     "<<__Memoize>> cannot be used in interfaces",
                 ));
@@ -212,7 +219,7 @@ fn emit_memoize_wrapper_body<'a>(
         args.scope,
         args.params,
     )?;
-    args.flags.set(Flags::WITH_LSB, is_memoize(args.method));
+    args.flags.set(Flags::WITH_LSB, is_memoize_lsb(args.method));
     args.flags.set(Flags::IS_STATIC, args.method.static_);
     emit(emitter, env, hhas_params, return_type_info, args)
 }
@@ -237,7 +244,7 @@ fn make_memoize_method_code(
     hhas_params: &[HhasParam],
     args: &Args,
 ) -> Result<InstrSeq> {
-    if !args.params.is_empty() && !args.flags.contains(Flags::IS_REFIED) {
+    if args.params.is_empty() && !args.flags.contains(Flags::IS_REFIED) {
         make_memoize_method_no_params_code(emitter, args)
     } else {
         make_memoize_method_with_params_code(emitter, env, pos, hhas_params, args)
@@ -283,11 +290,11 @@ fn make_memoize_method_with_params_code(
             FcallArgs::new(fcall_flags, 1, vec![], None, param_count, None)
         }
     };
-    let (reified_get, reified_memokeym) = if !args.flags.contains(Flags::IS_ASYNC) {
-        (InstrSeq::Empty, InstrSeq::Empty)
+    let (reified_get, reified_memokeym) = if !args.flags.contains(Flags::IS_REFIED) {
+        (instr::empty(), instr::empty())
     } else {
         (
-            InstrSeq::make_cgetl(local::Type::Named(reified::GENERICS_LOCAL_NAME.into())),
+            instr::cgetl(local::Type::Named(reified::GENERICS_LOCAL_NAME.into())),
             InstrSeq::gather(emit_memoize_helpers::get_memo_key_list(
                 param_count,
                 param_count + add_refied,
@@ -301,40 +308,40 @@ fn make_memoize_method_with_params_code(
         emit_body::emit_method_prolog(emitter, env, pos, hhas_params, args.params, &[], false)?,
         deprecation_body,
         if args.method.static_ {
-            InstrSeq::Empty
+            instr::empty()
         } else {
-            InstrSeq::make_checkthis()
+            instr::checkthis()
         },
         emit_memoize_helpers::param_code_sets(hhas_params, param_count),
         reified_memokeym,
         if args.flags.contains(Flags::IS_ASYNC) {
             InstrSeq::gather(vec![
-                InstrSeq::make_memoget_eager(
+                instr::memoget_eager(
                     notfound.clone(),
                     suspended_get.clone(),
                     Some((first_local.clone(), param_count.try_into().unwrap())),
                 ),
-                InstrSeq::make_retc(),
-                InstrSeq::make_label(suspended_get),
-                InstrSeq::make_retc_suspended(),
+                instr::retc(),
+                instr::label(suspended_get),
+                instr::retc_suspended(),
             ])
         } else {
             InstrSeq::gather(vec![
-                InstrSeq::make_memoget(
+                instr::memoget(
                     notfound.clone(),
                     Some((first_local.clone(), param_count.try_into().unwrap())),
                 ),
-                InstrSeq::make_retc(),
+                instr::retc(),
             ])
         },
-        InstrSeq::make_label(notfound),
+        instr::label(notfound),
         if args.method.static_ {
-            InstrSeq::make_nulluninit()
+            instr::nulluninit()
         } else {
-            InstrSeq::make_this()
+            instr::this()
         },
-        InstrSeq::make_nulluninit(),
-        InstrSeq::make_nulluninit(),
+        instr::nulluninit(),
+        instr::nulluninit(),
         emit_memoize_helpers::param_code_gets(hhas_params),
         reified_get,
         if args.method.static_ {
@@ -343,18 +350,18 @@ fn make_memoize_method_with_params_code(
             let mut renamed_method_id: method::Type<'static> =
                 args.method_id.to_raw_string().to_owned().into();
             renamed_method_id.add_suffix(emit_memoize_helpers::MEMOIZE_SUFFIX);
-            InstrSeq::make_fcallobjmethodd_nullthrows(fcall_args, renamed_method_id)
+            instr::fcallobjmethodd_nullthrows(fcall_args, renamed_method_id)
         },
-        InstrSeq::make_memoset(Some((first_local.clone(), param_count.try_into().unwrap()))),
+        instr::memoset(Some((first_local.clone(), param_count.try_into().unwrap()))),
         if args.flags.contains(Flags::IS_ASYNC) {
             InstrSeq::gather(vec![
-                InstrSeq::make_retc_suspended(),
-                InstrSeq::make_label(eager_set),
-                InstrSeq::make_memoset_eager(Some((first_local, param_count.try_into().unwrap()))),
-                InstrSeq::make_retc(),
+                instr::retc_suspended(),
+                instr::label(eager_set),
+                instr::memoset_eager(Some((first_local, param_count.try_into().unwrap()))),
+                instr::retc(),
             ])
         } else {
-            InstrSeq::gather(vec![InstrSeq::make_retc()])
+            InstrSeq::gather(vec![instr::retc()])
         },
         default_value_setters,
     ]))
@@ -382,49 +389,46 @@ fn make_memoize_method_no_params_code(emitter: &mut Emitter, args: &Args) -> Res
     Ok(InstrSeq::gather(vec![
         deprecation_body,
         if args.method.static_ {
-            InstrSeq::Empty
+            instr::empty()
         } else {
-            InstrSeq::make_checkthis()
+            instr::checkthis()
         },
         if args.flags.contains(Flags::IS_ASYNC) {
             InstrSeq::gather(vec![
-                InstrSeq::make_memoget_eager(notfound.clone(), suspended_get.clone(), None),
-                InstrSeq::make_retc(),
-                InstrSeq::make_label(suspended_get),
-                InstrSeq::make_retc_suspended(),
+                instr::memoget_eager(notfound.clone(), suspended_get.clone(), None),
+                instr::retc(),
+                instr::label(suspended_get),
+                instr::retc_suspended(),
             ])
         } else {
-            InstrSeq::gather(vec![
-                InstrSeq::make_memoget(notfound.clone(), None),
-                InstrSeq::make_retc(),
-            ])
+            InstrSeq::gather(vec![instr::memoget(notfound.clone(), None), instr::retc()])
         },
-        InstrSeq::make_label(notfound),
+        instr::label(notfound),
         if args.method.static_ {
-            InstrSeq::make_nulluninit()
+            instr::nulluninit()
         } else {
-            InstrSeq::make_this()
+            instr::this()
         },
-        InstrSeq::make_nulluninit(),
-        InstrSeq::make_nulluninit(),
+        instr::nulluninit(),
+        instr::nulluninit(),
         if args.method.static_ {
             call_cls_method(fcall_args, args)
         } else {
             let mut renamed_method_id: method::Type<'static> =
                 args.method_id.to_raw_string().to_owned().into();
             renamed_method_id.add_suffix(emit_memoize_helpers::MEMOIZE_SUFFIX);
-            InstrSeq::make_fcallobjmethodd_nullthrows(fcall_args, renamed_method_id)
+            instr::fcallobjmethodd_nullthrows(fcall_args, renamed_method_id)
         },
-        InstrSeq::make_memoset(None),
+        instr::memoset(None),
         if args.flags.contains(Flags::IS_ASYNC) {
             InstrSeq::gather(vec![
-                InstrSeq::make_retc_suspended(),
-                InstrSeq::make_label(eager_set),
-                InstrSeq::make_memoset_eager(None),
-                InstrSeq::make_retc(),
+                instr::retc_suspended(),
+                instr::label(eager_set),
+                instr::memoset_eager(None),
+                instr::retc(),
             ])
         } else {
-            InstrSeq::gather(vec![InstrSeq::make_retc()])
+            InstrSeq::gather(vec![instr::retc()])
         },
     ]))
 }
@@ -485,10 +489,10 @@ fn call_cls_method(fcall_args: FcallArgs, args: &Args) -> InstrSeq {
     let mut method_id: method::Type<'static> = args.method_id.to_raw_string().to_owned().into();
     method_id.add_suffix(emit_memoize_helpers::MEMOIZE_SUFFIX);
     if args.info.is_trait || args.flags.contains(Flags::WITH_LSB) {
-        InstrSeq::make_fcallclsmethodsd(fcall_args, SpecialClsRef::Self_, method_id.clone())
+        instr::fcallclsmethodsd(fcall_args, SpecialClsRef::Self_, method_id.clone())
     } else {
         let class_id: class::Type<'static> = args.info.class_id.to_raw_string().to_owned().into();
-        InstrSeq::make_fcallclsmethodd(fcall_args, method_id, class_id)
+        instr::fcallclsmethodd(fcall_args, method_id, class_id)
     }
 }
 

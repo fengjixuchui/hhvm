@@ -14,7 +14,7 @@ use hhas_type::{constraint, Info as TypeInfo};
 use hhbc_ast_rust::InitpropOp;
 use hhbc_id_rust::{prop, Id};
 use hhbc_string_utils_rust as string_utils;
-use instruction_sequence_rust::{InstrSeq, Result};
+use instruction_sequence_rust::{instr, InstrSeq, Result};
 use naming_special_names_rust::{pseudo_consts, user_attributes as ua};
 use oxidized::{aast_defs, ast as tast, ast_defs, doc_comment, namespace_env};
 use runtime::TypedValue;
@@ -51,7 +51,7 @@ pub fn from_ast<'a>(
 
     if !args.is_static && class.final_ && class.kind.is_cabstract() {
         return Err(emit_fatal::raise_fatal_parse(&pos, format!(
-            "Class {} contains non-static property declaration and therefore cannot ve declared as 'abstract final'",
+            "Class {} contains non-static property declaration and therefore cannot be declared 'abstract final'",
             string_utils::strip_ns(&class.name.1)
         )));
     };
@@ -109,36 +109,38 @@ pub fn from_ast<'a>(
                 }
                 _ => {
                     let label = emitter.label_gen_mut().next_regular();
-                    let (prolog, epilog) = if !args.is_static {
+                    let (prolog, epilog) = if args.is_static {
                         (
-                            InstrSeq::Empty,
+                            instr::empty(),
                             emit_pos::emit_pos_then(
                                 &class.span,
-                                InstrSeq::make_initprop(pid.clone(), InitpropOp::Static),
+                                instr::initprop(pid.clone(), InitpropOp::Static),
                             ),
                         )
                     } else if args.visibility.is_private() {
                         (
-                            InstrSeq::Empty,
+                            instr::empty(),
                             emit_pos::emit_pos_then(
                                 &class.span,
-                                InstrSeq::make_initprop(pid.clone(), InitpropOp::NonStatic),
+                                instr::initprop(pid.clone(), InitpropOp::NonStatic),
                             ),
                         )
                     } else {
                         (
                             InstrSeq::gather(vec![
                                 emit_pos::emit_pos(&class.span),
-                                InstrSeq::make_checkprop(pid.clone()),
-                                InstrSeq::make_jmpnz(label.clone()),
+                                instr::checkprop(pid.clone()),
+                                instr::jmpnz(label.clone()),
                             ]),
                             InstrSeq::gather(vec![
                                 emit_pos::emit_pos(&class.span),
-                                InstrSeq::make_initprop(pid.clone(), InitpropOp::NonStatic),
-                                InstrSeq::make_label(label),
+                                instr::initprop(pid.clone(), InitpropOp::NonStatic),
+                                instr::label(label),
                             ]),
                         )
                     };
+                    let mut flags = HhasPropertyFlags::empty();
+                    flags.set(HhasPropertyFlags::IS_DEEP_INIT, deep_init);
                     (
                         Some(TypedValue::Uninit),
                         Some(InstrSeq::gather(vec![
@@ -146,7 +148,7 @@ pub fn from_ast<'a>(
                             emit_expression::emit_expr(emitter, &env, e)?,
                             epilog,
                         ])),
-                        HhasPropertyFlags::IS_DEEP_INIT,
+                        flags,
                     )
                 }
             }

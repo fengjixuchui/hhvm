@@ -161,7 +161,11 @@ let get_fun_pos (ctx : Provider_context.t) (name : string) : FileInfo.pos option
           ~get_from_sqlite:(fun name ->
             Naming_sqlite.get_fun_pos ~case_insensitive:false name)
         >>| attach_name_type FileInfo.Fun
-      | Provider_backend.Decl_service _ as backend -> not_implemented backend)
+      | Provider_backend.Decl_service { decl; _ } ->
+        Decl_service_client.rpc_get_fun decl name
+        |> Option.map ~f:(fun fun_elt ->
+               FileInfo.Full fun_elt.Typing_defs.fe_pos
+               |> attach_name_type FileInfo.Fun))
   >>| remove_name_type
 
 let fun_exists (ctx : Provider_context.t) (name : string) : bool =
@@ -214,7 +218,12 @@ let get_fun_canon_name (ctx : Provider_context.t) (name : string) :
         ~get_from_sqlite:(fun name ->
           Naming_sqlite.get_fun_pos ~case_insensitive:true name)
       >>= fun pos -> compute_symbol_canon_name (FileInfo.get_pos_filename pos)
-    | Provider_backend.Decl_service _ as backend -> not_implemented backend)
+    | Provider_backend.Decl_service _ ->
+      (* FIXME: Not correct! We need to add a canon-name API to the decl service. *)
+      if fun_exists ctx name then
+        Some name
+      else
+        None)
 
 let add_fun (ctx : Provider_context.t) (name : string) (pos : FileInfo.pos) :
     unit =
@@ -224,7 +233,11 @@ let add_fun (ctx : Provider_context.t) (name : string) (pos : FileInfo.pos) :
     let open Provider_backend.Reverse_naming_table_delta in
     reverse_naming_table_delta.funs <-
       SMap.add reverse_naming_table_delta.funs ~key:name ~data:(Pos pos)
-  | Provider_backend.Decl_service _ as backend -> not_implemented backend
+  | Provider_backend.Decl_service _ ->
+    (* Do nothing. All naming table updates are expected to have happened
+       already--we should have sent a control request to the decl service asking
+       it to update in response to the list of changed files. *)
+    ()
 
 let remove_fun_batch (ctx : Provider_context.t) (names : SSet.t) : unit =
   match ctx.Provider_context.backend with
@@ -234,7 +247,9 @@ let remove_fun_batch (ctx : Provider_context.t) (names : SSet.t) : unit =
     reverse_naming_table_delta.funs <-
       SSet.fold names ~init:reverse_naming_table_delta.funs ~f:(fun name acc ->
           SMap.add acc ~key:name ~data:Deleted)
-  | Provider_backend.Decl_service _ as backend -> not_implemented backend
+  | Provider_backend.Decl_service _ as backend ->
+    (* Removing cache items is not the responsibility of hh_worker. *)
+    not_implemented backend
 
 let add_type
     (ctx : Provider_context.t)
@@ -250,7 +265,9 @@ let add_type
         reverse_naming_table_delta.types
         ~key:name
         ~data:(Pos (pos, kind))
-  | Provider_backend.Decl_service _ as backend -> not_implemented backend
+  | Provider_backend.Decl_service _ ->
+    (* Do nothing. Naming table updates should be done already. *)
+    ()
 
 let remove_type_batch (ctx : Provider_context.t) (names : SSet.t) : unit =
   match ctx.Provider_context.backend with
@@ -260,7 +277,9 @@ let remove_type_batch (ctx : Provider_context.t) (names : SSet.t) : unit =
     reverse_naming_table_delta.types <-
       SSet.fold names ~init:reverse_naming_table_delta.types ~f:(fun name acc ->
           SMap.add acc ~key:name ~data:Deleted)
-  | Provider_backend.Decl_service _ as backend -> not_implemented backend
+  | Provider_backend.Decl_service _ as backend ->
+    (* Removing cache items is not the responsibility of hh_worker. *)
+    not_implemented backend
 
 let get_entry_symbols_for_type { FileInfo.classes; typedefs; record_defs; _ } =
   let classes = List.map classes ~f:(attach_name_type FileInfo.Class) in
@@ -314,7 +333,20 @@ let get_type_pos_and_kind (ctx : Provider_context.t) (name : string) :
           ~get_from_sqlite:(fun name ->
             Naming_sqlite.get_type_pos ~case_insensitive:false name)
         >>| fun (pos, kind) -> (pos, kind_to_name_type kind)
-      | Provider_backend.Decl_service _ as backend -> not_implemented backend)
+      | Provider_backend.Decl_service { decl; _ } ->
+        (* TODO: We probably want to provide a decl service API for this. *)
+        (match Decl_service_client.rpc_get_class decl name with
+        | Some sc ->
+          Some (FileInfo.Full (fst sc.Shallow_decl_defs.sc_name), FileInfo.Class)
+        | None ->
+          (match Decl_service_client.rpc_get_typedef decl name with
+          | Some td ->
+            Some (FileInfo.Full td.Typing_defs.td_pos, FileInfo.Typedef)
+          | None ->
+            (match Decl_service_client.rpc_get_record_def decl name with
+            | Some rdt ->
+              Some (FileInfo.Full rdt.Typing_defs.rdt_pos, FileInfo.RecordDef)
+            | None -> None))))
   >>| fun (pos, name_type) -> (pos, name_type_to_kind name_type)
 
 let get_type_pos (ctx : Provider_context.t) (name : string) :
@@ -401,7 +433,12 @@ let get_type_canon_name (ctx : Provider_context.t) (name : string) :
           Naming_sqlite.get_type_pos ~case_insensitive:true name)
       >>= fun (pos, kind) ->
       compute_symbol_canon_name (FileInfo.get_pos_filename pos) kind
-    | Provider_backend.Decl_service _ as backend -> not_implemented backend)
+    | Provider_backend.Decl_service _ ->
+      (* FIXME: Not correct! We need to add a canon-name API to the decl service. *)
+      if Option.is_some (get_type_kind ctx name) then
+        Some name
+      else
+        None)
 
 let get_class_path (ctx : Provider_context.t) (name : string) :
     Relative_path.t option =

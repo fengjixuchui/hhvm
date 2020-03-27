@@ -34,7 +34,9 @@ let send_version oc =
   |> ignore;
 
   (* For backwards-compatibility, newline has always followed the version *)
-  let _ = Unix.write (Unix.descr_of_out_channel oc) "\n" 0 1 in
+  let (_ : int) =
+    Unix.write (Unix.descr_of_out_channel oc) (Bytes.of_string "\n") 0 1
+  in
   ()
 
 let send_server_handoff_rpc handoff_options oc =
@@ -116,10 +118,8 @@ let verify_cstate ic cstate =
 
 (* Consume sequence of Prehandoff messages. *)
 let rec consume_prehandoff_messages
-    ~(timeout : Timeout.t)
-    (ic : Timeout.in_channel)
-    (oc : Pervasives.out_channel) :
-    ( Timeout.in_channel * Pervasives.out_channel * string,
+    ~(timeout : Timeout.t) (ic : Timeout.in_channel) (oc : Stdlib.out_channel) :
+    ( Timeout.in_channel * Stdlib.out_channel * string,
       ServerMonitorUtils.connection_error )
     result =
   let module PH = Prehandoff in
@@ -157,8 +157,8 @@ let rec consume_prehandoff_messages
     Error Server_died
 
 let consume_prehandoff_messages
-    ~(timeout : int) (ic : Timeout.in_channel) (oc : Pervasives.out_channel) :
-    ( Timeout.in_channel * Pervasives.out_channel * string,
+    ~(timeout : int) (ic : Timeout.in_channel) (oc : Stdlib.out_channel) :
+    ( Timeout.in_channel * Stdlib.out_channel * string,
       ServerMonitorUtils.connection_error )
     result =
   Timeout.with_timeout

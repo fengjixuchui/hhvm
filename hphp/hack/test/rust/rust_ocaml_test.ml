@@ -7,10 +7,8 @@
  *
  *)
 
-module OcamlPervasives = Pervasives
 module OcamlPrintf = Printf
 open Core_kernel
-module Pervasives = OcamlPervasives
 module Printf = OcamlPrintf
 
 [@@@warning "-3"]
@@ -47,7 +45,6 @@ type mode =
 type args = {
   mode: mode;
   parser: parser;
-  is_experimental: bool;
   hhvm_compat_mode: bool;
   php5_compat_mode: bool;
   codegen: bool;
@@ -161,10 +158,10 @@ module WithSyntax (Syntax : Syntax_sig.Syntax_S) = struct
             with
             | (Some text_from_ocaml, Some text_from_rust)
               when text_from_ocaml <> text_from_rust ->
-              let oc = Pervasives.open_out "/tmp/rust.php" in
+              let oc = Stdlib.open_out "/tmp/rust.php" in
               Printf.fprintf oc "%s\n" text_from_rust;
               close_out oc;
-              let oc = Pervasives.open_out "/tmp/ocaml.php" in
+              let oc = Stdlib.open_out "/tmp/ocaml.php" in
               Printf.fprintf oc "%s\n" text_from_ocaml;
               close_out oc;
               Printf.printf "Printed tree not equal: %s\n" path;
@@ -178,10 +175,10 @@ module WithSyntax (Syntax : Syntax_sig.Syntax_S) = struct
             if syntax_from_rust <> syntax_from_ocaml then (
               let syntax_from_rust_as_json = to_json syntax_from_rust in
               let syntax_from_ocaml_as_json = to_json syntax_from_ocaml in
-              let oc = Pervasives.open_out "/tmp/rust.json" in
+              let oc = Stdlib.open_out "/tmp/rust.json" in
               Printf.fprintf oc "%s\n" syntax_from_rust_as_json;
               close_out oc;
-              let oc = Pervasives.open_out "/tmp/ocaml.json" in
+              let oc = Stdlib.open_out "/tmp/ocaml.json" in
               Printf.fprintf oc "%s\n" syntax_from_ocaml_as_json;
               close_out oc;
 
@@ -360,7 +357,6 @@ let get_files args =
 let parse_args () =
   let mode = ref COMPARE in
   let parser = ref MINIMAL in
-  let is_experimental = ref false in
   let codegen = ref false in
   let hhvm_compat_mode = ref false in
   let php5_compat_mode = ref false in
@@ -386,7 +382,6 @@ let parse_args () =
             check_json_equal_only := true),
         "" );
       ("--ppl-rewriter", Arg.Unit (fun () -> parser := PPL_REWRITER), "");
-      ("--experimental", Arg.Set is_experimental, "");
       ("--lower", Arg.Unit (fun () -> parser := LOWERER), "");
       ("--closure-convert", Arg.Unit (fun () -> parser := CLOSURE_CONVERT), "");
       ("--codegen", Arg.Set codegen, "");
@@ -409,7 +404,6 @@ let parse_args () =
   {
     mode = !mode;
     parser = !parser;
-    is_experimental = !is_experimental;
     codegen = !codegen;
     hhvm_compat_mode = !hhvm_compat_mode;
     php5_compat_mode = !php5_compat_mode;
@@ -493,7 +487,7 @@ module LowererTest_ = struct
     | Skip
 
   let print_err path s =
-    let oc = Pervasives.open_out path in
+    let oc = Stdlib.open_out path in
     Printf.fprintf oc "%s\n" s
 
   let print_lid ~skip_lid fmt lid =
@@ -531,7 +525,7 @@ module LowererTest_ = struct
       String.concat ~sep:"\n"
       @@ List.map ~f:Full_fidelity_syntax_error.show errs
     in
-    let oc = Pervasives.open_out path in
+    let oc = Stdlib.open_out path in
     Rust_aast_parser_types.(
       Printf.fprintf
         oc
@@ -677,9 +671,9 @@ module ClosureConvertTest_ = struct
 
   let print_result path aast =
     let res = LowererTest_.print_aast_result ~skip_lid:true (Ok aast) in
-    let oc = Pervasives.open_out path in
+    let oc = Stdlib.open_out path in
     Printf.fprintf oc "%s" res;
-    Pervasives.close_out oc;
+    Stdlib.close_out oc;
     res
 
   let test (args : args) file contents =
@@ -725,11 +719,11 @@ module ClosureConvertTest_ = struct
     let rust_state = Emit_env.global_state_to_string rust_state in
 
     if ocaml_state <> rust_state then begin
-      let oc = Pervasives.open_out "/tmp/ocaml.state" in
+      let oc = Stdlib.open_out "/tmp/ocaml.state" in
       Printf.fprintf oc "%s\n" ocaml_state;
       close_out oc;
 
-      let oc = Pervasives.open_out "/tmp/rust.state" in
+      let oc = Stdlib.open_out "/tmp/rust.state" in
       Printf.fprintf oc "%s\n" rust_state;
       close_out oc;
 
@@ -770,19 +764,12 @@ let () =
   let files = get_files args in
   Hh_logger.log "Starting...";
   let t = Unix.gettimeofday () in
-  let mode =
-    if args.is_experimental then
-      Some FileInfo.Mexperimental
-    else
-      None
-  in
   let make_env =
     Full_fidelity_parser_env.make
       ~hhvm_compat_mode:args.hhvm_compat_mode
       ~php5_compat_mode:args.php5_compat_mode
       ~codegen:args.codegen
       ~leak_rust_tree:(args.parser = COROUTINE_ERRORS)
-      ?mode
   in
   let ocaml_env = make_env ~rust:false () in
   let rust_env = make_env ~rust:true () in

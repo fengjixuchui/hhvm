@@ -27,15 +27,10 @@ pub enum Reason<'a> {
     Ridx(PReason<'a>),
     /// Used as an index, in the Vector case
     RidxVector,
-    /// Used to append element to an array
-    Rappend,
-    /// Array accessed with a static string index
-    Rfield,
     /// Because it is iterated in a foreach loop
     Rforeach,
     /// Because it is iterated "await as" in foreach
     Rasyncforeach,
-    Raccess,
     Rarith,
     RarithInt,
     RarithRet,
@@ -47,25 +42,17 @@ pub enum Reason<'a> {
     RarithDynamic,
     RbitwiseDynamic,
     RincdecDynamic,
-    Rstring2,
     Rcomp,
-    Rconcat,
     RconcatRet,
-    Rlogic,
     RlogicRet,
     Rbitwise,
     RbitwiseRet,
-    Rstmt,
     RnoReturn,
     RnoReturnAsync,
     RretFunKind(ast_defs::FunKind),
     Rhint,
-    RnullCheck,
-    RnotInCstr,
     Rthrow,
     Rplaceholder,
-    Rattr,
-    Rxhp,
     RretDiv,
     RyieldGen,
     RyieldAsyncgen,
@@ -73,7 +60,6 @@ pub enum Reason<'a> {
     RyieldSend,
     /// true if due to lambda
     RlostInfo(&'a str, PReason<'a>, &'a Pos, bool),
-    Rcoerced(PReason<'a>, &'a Pos, &'a str),
     Rformat(&'a str, PReason<'a>),
     RclassClass(&'a str),
     RunknownClass,
@@ -91,12 +77,9 @@ pub enum Reason<'a> {
     /// ?-> operator is used
     RnullsafeOp,
     RtconstNoCstr(&'a aast::Sid),
-    RusedAsMap,
-    RusedAsShape,
     Rpredicated(&'a str),
     Ris,
     Ras,
-    RfinalProperty,
     RvarrayOrDarrayKey,
     Rusing,
     RdynamicProp,
@@ -141,6 +124,42 @@ impl<'a> PReason_<'a> {
                 reason: Reason::Rhint,
             },
             _ => panic!("Did not expect anything else than Rhint from the decl provider."),
+        }
+    }
+}
+
+impl<'a> PReason_<'a> {
+    pub fn to_oxidized(&self) -> OxReason {
+        use OxReason as O;
+        use Reason as R;
+
+        let pos = match self.pos {
+            Some(pos) => pos.clone(),
+            None => Pos::make_none(),
+        };
+        match self.reason {
+            R::Rnone => O::Rnone,
+            R::Rwitness => O::Rwitness(pos),
+            R::RnoReturn => O::RnoReturn(pos),
+            R::Rhint => O::Rhint(pos),
+            R::Rinstantiate(r_orig, generic_name, r_inst) => O::Rinstantiate(
+                Box::new(r_orig.to_oxidized()),
+                generic_name.to_string(),
+                Box::new(r_inst.to_oxidized()),
+            ),
+            R::RcontravariantGeneric(r_orig, class_name) => {
+                O::RcontravariantGeneric(Box::new(r_orig.to_oxidized()), class_name.to_string())
+            }
+            R::RinvariantGeneric(r_orig, class_name) => {
+                O::RinvariantGeneric(Box::new(r_orig.to_oxidized()), class_name.to_string())
+            }
+            R::RtypeVariable => O::RtypeVariable(pos),
+            R::RtypeVariableGenerics(tp_name, s) => {
+                O::RtypeVariableGenerics(pos, tp_name.to_string(), s.to_string())
+            }
+            R::RsolveFail => O::RsolveFail(pos),
+            R::RcstrOnGenerics(sid) => O::RcstrOnGenerics(pos, sid.clone()),
+            _ => unimplemented!("{:?}", &self.reason),
         }
     }
 }

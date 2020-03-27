@@ -25,7 +25,7 @@ use hhas_param_rust::HhasParam;
 use hhas_type::Info as HhasTypeInfo;
 use hhbc_ast_rust::{Instruct, IstypeOp, ParamId};
 use hhbc_string_utils_rust as string_utils;
-use instruction_sequence_rust::{unrecoverable, Error, InstrSeq, Result};
+use instruction_sequence_rust::{instr, unrecoverable, Error, InstrSeq, Result};
 use label_rewriter_rust as label_rewriter;
 use naming_special_names_rust::classes;
 use options::CompilerFlags;
@@ -216,7 +216,7 @@ fn make_body_instrs(
     flags: Flags,
 ) -> Result {
     let stmt_instrs = if flags.contains(Flags::NATIVE) {
-        InstrSeq::make_nativeimpl()
+        instr::nativeimpl()
     } else {
         env.do_function(emitter, body, emit_defs)?
     };
@@ -247,7 +247,7 @@ fn make_body_instrs(
         _ => false,
     };
     let header = if first_instr_is_label && InstrSeq::is_empty(&header_content) {
-        InstrSeq::gather(vec![begin_label, InstrSeq::make_entrynop()])
+        InstrSeq::gather(vec![begin_label, instr::entrynop()])
     } else {
         InstrSeq::gather(vec![begin_label, header_content])
     };
@@ -273,7 +273,7 @@ fn make_header_content(
     flags: Flags,
 ) -> Result {
     let method_prolog = if flags.contains(Flags::NATIVE) {
-        InstrSeq::Empty
+        instr::empty()
     } else {
         let should_emit_init_this = !env.scope.is_in_static_method()
             && (need_local_this
@@ -293,9 +293,9 @@ fn make_header_content(
         emit_deprecation_info(&env.scope, deprecation_info, emitter.systemlib())?;
 
     let generator_info = if is_generator {
-        InstrSeq::gather(vec![InstrSeq::make_createcont(), InstrSeq::make_popc()])
+        InstrSeq::gather(vec![instr::createcont(), instr::popc()])
     } else {
-        InstrSeq::Empty
+        instr::empty()
     };
 
     Ok(InstrSeq::gather(vec![
@@ -330,21 +330,28 @@ fn make_decl_vars(
     let (need_local_this, mut decl_vars) =
         decl_vars::from_ast(params, body, flags, explicit_use_set).map_err(unrecoverable)?;
 
-    Ok((
-        need_local_this,
-        if arg_flags.contains(Flags::CLOSURE_BODY) {
-            let mut captured_vars = scope.get_captured_vars();
-            move_this(&mut decl_vars);
-            decl_vars.retain(|v| !captured_vars.contains(v));
-            captured_vars.extend_from_slice(&decl_vars.as_slice());
-            captured_vars
-        } else {
-            if has_reified(immediate_tparams) {
-                decl_vars.push(String::from(string_utils::reified::GENERICS_LOCAL_NAME));
-            }
-            decl_vars
-        },
-    ))
+    let mut decl_vars = if arg_flags.contains(Flags::CLOSURE_BODY) {
+        let mut captured_vars = scope.get_captured_vars();
+        move_this(&mut decl_vars);
+        decl_vars.retain(|v| !captured_vars.contains(v));
+        captured_vars.extend_from_slice(&decl_vars.as_slice());
+        captured_vars
+    } else {
+        match &scope.items[..] {
+            [] | [.., ScopeItem::Class(_), _] => move_this(&mut decl_vars),
+            _ => (),
+        };
+        decl_vars
+    };
+
+    if !arg_flags.contains(Flags::CLOSURE_BODY)
+        && immediate_tparams
+            .iter()
+            .any(|t| t.reified != tast::ReifyKind::Erased)
+    {
+        decl_vars.insert(0, string_utils::reified::GENERICS_LOCAL_NAME.into());
+    }
+    Ok((need_local_this, decl_vars))
 }
 
 pub fn emit_return_type_info(
@@ -478,7 +485,7 @@ fn emit_defs(env: &mut Env, emitter: &mut Emitter, prog: &[tast::Def]) -> Result
         match def {
             Def::Stmt(s) => emit_statement::emit_stmt(emitter, env, s),
             Def::Namespace(ns) => emit_defs(env, emitter, &ns.1),
-            _ => Ok(InstrSeq::Empty),
+            _ => Ok(instr::empty()),
         }
     };
     fn aux(env: &mut Env, emitter: &mut Emitter, defs: &[tast::Def]) -> Result {
@@ -559,7 +566,7 @@ pub fn emit_method_prolog(
                 use RGH::ReificationLevel as L;
                 match has_type_constraint(env, param.type_info.as_ref(), ast_param) {
                     (L::Unconstrained, _) => Ok(None),
-                    (L::Not, _) => Ok(Some(InstrSeq::make_verify_param_type(param_name()))),
+                    (L::Not, _) => Ok(Some(instr::verify_param_type(param_name()))),
                     (L::Maybe, Some(h)) => Ok(Some(InstrSeq::gather(vec![
                         emit_expression::get_type_structure_for_hint(
                             emitter,
@@ -571,14 +578,14 @@ pub fn emit_method_prolog(
                             &IndexSet::new(),
                             &h,
                         )?,
-                        InstrSeq::make_verify_param_type_ts(param_name()),
+                        instr::verify_param_type_ts(param_name()),
                     ]))),
                     (L::Definitely, Some(h)) => {
-                        let check = InstrSeq::make_istypel(
+                        let check = instr::istypel(
                             local::Type::Named((&param.name).into()),
                             IstypeOp::OpNull,
                         );
-                        let verify_instr = InstrSeq::make_verify_param_type_ts(param_name());
+                        let verify_instr = instr::verify_param_type_ts(param_name());
                         RGH::simplify_verify_type(emitter, env, pos, check, &h, verify_instr)
                             .map(Some)
                     }
@@ -602,7 +609,7 @@ pub fn emit_method_prolog(
 
     let mut instrs = vec![emit_pos(pos)];
     if should_emit_init_this {
-        instrs.push(InstrSeq::make_initthisloc(local::Type::Named(THIS.into())))
+        instrs.push(instr::initthisloc(local::Type::Named(THIS.into())))
     }
     instrs.extend_from_slice(param_instrs.as_slice());
     Ok(InstrSeq::gather(instrs))
@@ -614,23 +621,23 @@ pub fn emit_deprecation_info(
     is_systemlib: bool,
 ) -> Result<InstrSeq> {
     Ok(match deprecation_info {
-        None => InstrSeq::Empty,
+        None => instr::empty(),
         Some(args) => {
             fn strip_id<'a>(id: &'a tast::Id) -> &'a str {
                 string_utils::strip_global_ns(id.1.as_str())
             }
             let (class_name, trait_instrs, concat_instruction): (String, _, _) =
                 match scope.get_class() {
-                    None => ("".into(), InstrSeq::Empty, InstrSeq::Empty),
+                    None => ("".into(), instr::empty(), instr::empty()),
                     Some(c) if c.kind == tast::ClassKind::Ctrait => (
                         "::".into(),
-                        InstrSeq::gather(vec![InstrSeq::make_self(), InstrSeq::make_classname()]),
-                        InstrSeq::make_concat(),
+                        InstrSeq::gather(vec![instr::self_(), instr::classname()]),
+                        instr::concat(),
                     ),
                     Some(c) => (
                         strip_id(&c.name).to_string() + "::",
-                        InstrSeq::Empty,
-                        InstrSeq::Empty,
+                        instr::empty(),
+                        instr::empty(),
                     ),
                 };
 
@@ -673,16 +680,16 @@ pub fn emit_deprecation_info(
             };
 
             if sampling_rate <= 0 {
-                InstrSeq::Empty
+                instr::empty()
             } else {
                 InstrSeq::gather(vec![
                     trait_instrs,
-                    InstrSeq::make_string(deprecation_string),
+                    instr::string(deprecation_string),
                     concat_instruction,
-                    InstrSeq::make_int64(sampling_rate),
-                    InstrSeq::make_int(error_code),
-                    InstrSeq::make_trigger_sampled_error(),
-                    InstrSeq::make_popc(),
+                    instr::int64(sampling_rate),
+                    instr::int(error_code),
+                    instr::trigger_sampled_error(),
+                    instr::popc(),
                 ])
             }
         }
@@ -711,9 +718,9 @@ fn set_emit_statement_state(
         default_dropthrough
     } else if flags.contains(Flags::ASYNC) && verify_return.is_some() {
         Some(InstrSeq::gather(vec![
-            InstrSeq::make_null(),
-            InstrSeq::make_verify_ret_type_c(),
-            InstrSeq::make_retc(),
+            instr::null(),
+            instr::verify_ret_type_c(),
+            instr::retc(),
         ]))
     } else {
         None
@@ -740,16 +747,16 @@ fn emit_verify_out(params: &[HhasParam]) -> (usize, InstrSeq) {
         .filter_map(|(i, p)| {
             if p.is_inout {
                 Some(InstrSeq::gather(vec![
-                    InstrSeq::make_cgetl(local::Type::Named(p.name.clone())),
+                    instr::cgetl(local::Type::Named(p.name.clone())),
                     match p.type_info.as_ref() {
                         Some(HhasTypeInfo { user_type, .. })
                             if user_type.as_ref().map_or(true, |t| {
                                 !(t.ends_with("HH\\mixed") || t.ends_with("HH\\dynamic"))
                             }) =>
                         {
-                            InstrSeq::make_verify_out_type(ParamId::ParamUnnamed(i as isize))
+                            instr::verify_out_type(ParamId::ParamUnnamed(i as isize))
                         }
-                        _ => InstrSeq::Empty,
+                        _ => instr::empty(),
                     },
                 ]))
             } else {
@@ -796,22 +803,10 @@ pub fn emit_generics_upper_bounds(
 }
 
 fn move_this(vars: &mut Vec<String>) {
-    let this_keyword = String::from(THIS);
-    if vars.contains(&this_keyword) {
+    if vars.iter().any(|v| v == &THIS) {
         vars.retain(|s| s != THIS);
-        vars.insert(0, this_keyword);
+        vars.push(String::from(THIS));
     }
-}
-
-fn has_reified(tparams: &[tast::Tparam]) -> bool {
-    use aast::ReifyKind;
-    for tparam in tparams.iter() {
-        match tparam.reified {
-            ReifyKind::SoftReified | ReifyKind::Reified => return true,
-            _ => (),
-        }
-    }
-    false
 }
 
 fn get_tp_name(tparam: &tast::Tparam) -> &str {
@@ -824,7 +819,7 @@ pub fn get_tp_names(tparams: &[tast::Tparam]) -> Vec<&str> {
 }
 
 fn modify_prog_for_debugger_eval(_body_instrs: &mut InstrSeq) {
-    //TODO(hrust) implement
+    unimplemented!()
 }
 
 fn set_function_jmp_targets(emitter: &mut Emitter, env: &mut Env) -> bool {
