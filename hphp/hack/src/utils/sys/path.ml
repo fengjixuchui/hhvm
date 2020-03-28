@@ -11,20 +11,20 @@ open Reordered_argument_collections
 include Sys
 
 module S = struct
-  type t = string
+  type t = string [@@deriving show]
 
-  let compare = Pervasives.compare
+  let compare = String.compare
 
   let to_string x = x
 end
 
-type t = S.t
+type t = S.t [@@deriving show]
 
 let dummy_path : t = ""
 
 let cat = Sys_utils.cat
 
-let compare = Pervasives.compare
+let compare = S.compare
 
 let dirname = Filename.dirname
 

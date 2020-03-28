@@ -27,7 +27,7 @@ use itertools::{Either, Itertools};
 use label_rust::Label;
 use naming_special_names_rust::{
     emitter_special_functions, fb, pseudo_consts, pseudo_functions, special_functions,
-    special_idents, superglobals, user_attributes,
+    special_idents, superglobals, typehints, user_attributes,
 };
 use ocaml_helper::int_of_str_opt;
 use options::{CompilerFlags, HhvmFlags, LangFlags, Options};
@@ -390,11 +390,11 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
             let (e, h) = &**is_expr;
             Ok(InstrSeq::gather(vec![
                 emit_expr(emitter, env, e)?,
-                emit_is_hint(env, pos, h)?,
+                emit_is(emitter, env, pos, h)?,
             ]))
         }
         Expr_::As(e) => emit_as(env, pos, e),
-        Expr_::Cast(e) => emit_cast(env, pos, e),
+        Expr_::Cast(e) => emit_cast(emitter, env, pos, &(e.0).1, &e.1),
         Expr_::Eif(e) => emit_conditional_expr(emitter, env, pos, &e.0, &e.1, &e.2),
         Expr_::ExprList(es) => Ok(InstrSeq::gather(
             es.iter()
@@ -2146,7 +2146,22 @@ fn get_call_builtin_func_info(opts: &Options, id: impl AsRef<str>) -> Option<(us
 }
 
 fn emit_is(e: &mut Emitter, env: &Env, pos: &Pos, h: &tast::Hint) -> Result {
-    unimplemented!()
+    let (ts_instrs, is_static) = emit_reified_arg(e, env, pos, true, h)?;
+    Ok(if is_static {
+        match &*h.1 {
+            aast_defs::Hint_::Happly(ast_defs::Id(_, id), hs)
+                if hs.is_empty() && string_utils::strip_hh_ns(&id) == typehints::THIS =>
+            {
+                instr::is_late_bound_cls()
+            }
+            _ => InstrSeq::gather(vec![
+                get_type_structure_for_hint(e, &[], &IndexSet::new(), h)?,
+                instr::is_type_structc_resolve(),
+            ]),
+        }
+    } else {
+        InstrSeq::gather(vec![ts_instrs, instr::is_type_structc_dontresolve()])
+    })
 }
 
 fn istype_op(opts: &Options, id: impl AsRef<str>) -> Option<IstypeOp> {
@@ -3439,10 +3454,6 @@ fn emit_pipe(env: &Env, (_, e1, e2): &(aast_defs::Lid, tast::Expr, tast::Expr)) 
     unimplemented!("TODO(hrust)")
 }
 
-fn emit_is_hint(env: &Env, pos: &Pos, h: &aast_defs::Hint) -> Result {
-    unimplemented!("TODO(hrust)")
-}
-
 fn emit_as(
     env: &Env,
     pos: &Pos,
@@ -3451,8 +3462,38 @@ fn emit_as(
     unimplemented!("TODO(hrust)")
 }
 
-fn emit_cast(env: &Env, pos: &Pos, (h, e): &(aast_defs::Hint, tast::Expr)) -> Result {
-    unimplemented!("TODO(hrust)")
+fn emit_cast(
+    e: &mut Emitter,
+    env: &Env,
+    pos: &Pos,
+    hint: &aast_defs::Hint_,
+    expr: &tast::Expr,
+) -> Result {
+    use aast_defs::Hint_ as H_;
+    let op = match hint {
+        H_::Happly(ast_defs::Id(_, id), hints) if hints.is_empty() => {
+            let id = string_utils::strip_ns(id);
+            match string_utils::strip_hh_ns(&id).as_ref() {
+                typehints::INT => instr::cast_int(),
+                typehints::BOOL => instr::cast_bool(),
+                typehints::STRING => instr::cast_string(),
+                typehints::ARRAY => instr::cast_array(),
+                typehints::FLOAT => instr::cast_double(),
+                _ => {
+                    return Err(emit_fatal::raise_fatal_parse(
+                        pos,
+                        format!("Invalid cast type: {}", id),
+                    ))
+                }
+            }
+        }
+        _ => return Err(emit_fatal::raise_fatal_parse(pos, "Invalid cast type")),
+    };
+    Ok(InstrSeq::gather(vec![
+        emit_expr(e, env, expr)?,
+        emit_pos(pos),
+        op,
+    ]))
 }
 
 pub fn emit_unset_expr(e: &mut Emitter, env: &Env, expr: &tast::Expr) -> Result {
