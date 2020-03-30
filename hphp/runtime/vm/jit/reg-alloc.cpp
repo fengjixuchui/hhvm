@@ -224,27 +224,24 @@ void getEffects(const Abi& abi, const Vinstr& i,
     case Vinstr::callm:
     case Vinstr::callr:
     case Vinstr::calls:
-      defs = abi.all() - (abi.calleeSaved | rvmfp());
+      defs = abi.all() - (abi.calleeSaved | rvmfp() | rsp());
       break;
 
     case Vinstr::callstub:
       defs =
-        (abi.all() - (abi.calleeSaved | rvmfp()))
+        (abi.all() - (abi.calleeSaved | rvmfp() | rsp()))
         | jit::abi(CodeKind::CrossTrace).unreserved();
       break;
 
     case Vinstr::callfaststub:
-      defs = abi.all() - abi.calleeSaved - abi.gpUnreserved;
+      defs = abi.all() - abi.calleeSaved - abi.gpUnreserved - (rvmfp() | rsp());
       break;
 
     case Vinstr::callphp:
     case Vinstr::callphpr:
-      defs = abi.all() - RegSet(rvmtl());
-      break;
-
     case Vinstr::callunpack:
     case Vinstr::contenter:
-      defs = abi.all() - (rvmfp() | rvmtl());
+      defs = abi.all() - (rvmfp() | rvmtl() | rsp());
       break;
 
     case Vinstr::cqo:
@@ -257,6 +254,19 @@ void getEffects(const Abi& abi, const Vinstr& i,
     case Vinstr::shlq:
     case Vinstr::sarq:
       across = RegSet(reg::rcx);
+      break;
+
+    case Vinstr::pop:
+    case Vinstr::popf:
+    case Vinstr::popm:
+    case Vinstr::popp:
+    case Vinstr::poppm:
+    case Vinstr::push:
+    case Vinstr::pushf:
+    case Vinstr::pushm:
+    case Vinstr::pushp:
+    case Vinstr::pushpm:
+      uses = defs = RegSet(rsp());
       break;
 
     case Vinstr::vcall:
