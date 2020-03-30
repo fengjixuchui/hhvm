@@ -8,6 +8,8 @@ from typing import ClassVar, Dict, List, Optional, Type
 import test_case
 from common_tests import CommonTestDriver
 from glean.schema.hack.types import (
+    ClassConstDeclaration,
+    ClassConstDefinition,
     ClassDeclaration,
     ClassDefinition,
     DeclarationLocation,
@@ -24,6 +26,8 @@ from glean.schema.hack.types import (
     PropertyDefinition,
     TraitDeclaration,
     TraitDefinition,
+    TypeConstDeclaration,
+    TypeConstDefinition,
     TypedefDeclaration,
 )
 from hh_paths import hh_server
@@ -101,6 +105,8 @@ max_workers = 2
 
     def predicate_name_to_type(self, predicate_name: str) -> Optional[Type[Struct]]:
         predicate_dict = {
+            "hack.ClassConstDeclaration.1": ClassConstDeclaration,
+            "hack.ClassConstDefinition.1": ClassConstDefinition,
             "hack.ClassDeclaration.1": ClassDeclaration,
             "hack.ClassDefinition.1": ClassDefinition,
             "hack.DeclarationLocation.1": DeclarationLocation,
@@ -117,6 +123,8 @@ max_workers = 2
             "hack.PropertyDefinition.1": PropertyDefinition,
             "hack.TraitDeclaration.1": TraitDeclaration,
             "hack.TraitDefinition.1": TraitDefinition,
+            "hack.TypeConstDeclaration.1": TypeConstDeclaration,
+            "hack.TypeConstDefinition.1": TypeConstDefinition,
             "hack.TypedefDeclaration.1": TypedefDeclaration,
         }
         return predicate_dict.get(predicate_name)

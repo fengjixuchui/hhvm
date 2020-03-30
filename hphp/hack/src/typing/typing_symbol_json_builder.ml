@@ -28,6 +28,8 @@ type symbol_occurrences = {
 
 (* Predicate types for the JSON facts emitted *)
 type predicate =
+  | ClassConstDeclaration
+  | ClassConstDefinition
   | ClassDeclaration
   | ClassDefinition
   | DeclarationLocation
@@ -44,6 +46,8 @@ type predicate =
   | PropertyDefinition
   | TraitDeclaration
   | TraitDefinition
+  | TypeConstDeclaration
+  | TypeConstDefinition
   | TypedefDeclaration
 
 (* Containers that can be in inheritance relationships *)
@@ -53,6 +57,8 @@ type container_type =
   | TraitContainer
 
 type glean_json = {
+  classConstDeclaration: json list;
+  classConstDefinition: json list;
   classDeclaration: json list;
   classDefinition: json list;
   declarationLocation: json list;
@@ -69,6 +75,8 @@ type glean_json = {
   propertyDefinition: json list;
   traitDeclaration: json list;
   traitDefinition: json list;
+  typeConstDeclaration: json list;
+  typeConstDefinition: json list;
   typedefDeclaration: json list;
 }
 
@@ -81,6 +89,8 @@ type result_progress = {
 let init_progress =
   let default_json =
     {
+      classConstDeclaration = [];
+      classConstDefinition = [];
       classDeclaration = [];
       classDefinition = [];
       declarationLocation = [];
@@ -97,6 +107,8 @@ let init_progress =
       propertyDefinition = [];
       traitDeclaration = [];
       traitDefinition = [];
+      typeConstDeclaration = [];
+      typeConstDefinition = [];
       typedefDeclaration = [];
     }
   in
@@ -129,6 +141,17 @@ let json_element_id = get_next_elem_id ()
 let update_json_data predicate json progress =
   let json =
     match predicate with
+    | ClassConstDeclaration ->
+      {
+        progress.resultJson with
+        classConstDeclaration =
+          json :: progress.resultJson.classConstDeclaration;
+      }
+    | ClassConstDefinition ->
+      {
+        progress.resultJson with
+        classConstDefinition = json :: progress.resultJson.classConstDefinition;
+      }
     | ClassDeclaration ->
       {
         progress.resultJson with
@@ -210,6 +233,16 @@ let update_json_data predicate json progress =
       {
         progress.resultJson with
         traitDefinition = json :: progress.resultJson.traitDefinition;
+      }
+    | TypeConstDeclaration ->
+      {
+        progress.resultJson with
+        typeConstDeclaration = json :: progress.resultJson.typeConstDeclaration;
+      }
+    | TypeConstDefinition ->
+      {
+        progress.resultJson with
+        typeConstDefinition = json :: progress.resultJson.typeConstDefinition;
       }
     | TypedefDeclaration ->
       {
@@ -347,6 +380,15 @@ let build_visibility_json (visibility : Aast.visibility) =
   in
   JSON_Number (string_of_int num)
 
+let build_type_const_kind_json kind =
+  let num =
+    match kind with
+    | TCAbstract _ -> 0
+    | TCConcrete -> 1
+    | TCPartiallyAbstract -> 2
+  in
+  JSON_Number (string_of_int num)
+
 let build_xrefs_json xref_map =
   let xrefs =
     IMap.fold
@@ -394,6 +436,12 @@ let build_gconst_decl_json_ref fact_id =
 let build_property_decl_json_ref fact_id =
   JSON_Object [("property_", build_id_json fact_id)]
 
+let build_class_const_decl_json_ref fact_id =
+  JSON_Object [("classConst", build_id_json fact_id)]
+
+let build_type_const_decl_json_ref fact_id =
+  JSON_Object [("typeConst", build_id_json fact_id)]
+
 (* These functions build up the JSON necessary and then add facts
 to the running result. *)
 
@@ -439,6 +487,26 @@ let add_property_decl_fact con_type decl_id name progress =
   in
   add_fact PropertyDeclaration json_fact progress
 
+let add_class_const_decl_fact con_type decl_id name progress =
+  let json_fact =
+    JSON_Object
+      [
+        ("name", build_name_json_nested name);
+        ("container", build_container_json_ref con_type decl_id);
+      ]
+  in
+  add_fact ClassConstDeclaration json_fact progress
+
+let add_type_const_decl_fact con_type decl_id name progress =
+  let json_fact =
+    JSON_Object
+      [
+        ("name", build_name_json_nested name);
+        ("container", build_container_json_ref con_type decl_id);
+      ]
+  in
+  add_fact TypeConstDeclaration json_fact progress
+
 let add_property_defn_fact ctx prop decl_id progress =
   let base_fields =
     [
@@ -457,6 +525,38 @@ let add_property_defn_fact ctx prop decl_id progress =
       ("type", build_type_json_nested ty) :: base_fields
   in
   add_fact PropertyDefinition (JSON_Object json_fields) progress
+
+let add_class_const_defn_fact ctx const decl_id progress =
+  let base_fields =
+    [
+      ("declaration", build_id_json decl_id);
+      ("isAbstract", JSON_Bool (is_none const.cc_expr));
+    ]
+  in
+  let json_fields =
+    match const.cc_type with
+    | None -> base_fields
+    | Some h ->
+      let ty = get_type_from_hint ctx h in
+      ("type", build_type_json_nested ty) :: base_fields
+  in
+  add_fact ClassConstDefinition (JSON_Object json_fields) progress
+
+let add_type_const_defn_fact ctx tc decl_id progress =
+  let base_fields =
+    [
+      ("declaration", build_id_json decl_id);
+      ("kind", build_type_const_kind_json tc.c_tconst_abstract);
+    ]
+  in
+  let json_fields =
+    match tc.c_tconst_type with
+    | None -> base_fields
+    | Some h ->
+      let ty = get_type_from_hint ctx h in
+      ("type", build_type_json_nested ty) :: base_fields
+  in
+  add_fact TypeConstDefinition (JSON_Object json_fields) progress
 
 let add_enum_decl_fact name progress =
   let json_fact = JSON_Object [("name", build_name_json_nested name)] in
@@ -684,7 +784,38 @@ let process_container_decl ctx elem progress =
         in
         (build_property_decl_json_ref decl_id :: decls, prog))
   in
-  let (_, prog) = add_container_defn_fact elem decl_id prop_decls prog in
+  let (class_const_decls, prog) =
+    List.fold elem.c_consts ~init:([], prog) ~f:(fun (decls, prog) const ->
+        let (pos, id) = const.cc_id in
+        let (decl_id, prog) =
+          process_decl_loc
+            (add_class_const_decl_fact con_type decl_id)
+            (add_class_const_defn_fact ctx)
+            build_class_const_decl_json_ref
+            pos
+            id
+            const
+            prog
+        in
+        (build_class_const_decl_json_ref decl_id :: decls, prog))
+  in
+  let (type_const_decls, prog) =
+    List.fold elem.c_typeconsts ~init:([], prog) ~f:(fun (decls, prog) tc ->
+        let (pos, id) = tc.c_tconst_name in
+        let (decl_id, prog) =
+          process_decl_loc
+            (add_type_const_decl_fact con_type decl_id)
+            (add_type_const_defn_fact ctx)
+            build_type_const_decl_json_ref
+            pos
+            id
+            tc
+            prog
+        in
+        (build_type_const_decl_json_ref decl_id :: decls, prog))
+  in
+  let members = prop_decls @ class_const_decls @ type_const_decls in
+  let (_, prog) = add_container_defn_fact elem decl_id members prog in
   let ref_json = build_container_decl_json_ref con_type decl_id in
   let (_, prog) = add_decl_loc_fact pos ref_json prog in
   prog
@@ -805,13 +936,17 @@ let build_json ctx symbols =
       ("hack.FileXRefs.1", progress.resultJson.fileXRefs);
       ("hack.FunctionDefinition.1", progress.resultJson.functionDefinition);
       ("hack.EnumDefinition.1", progress.resultJson.enumDefinition);
+      ("hack.ClassConstDefinition.1", progress.resultJson.classConstDefinition);
       ("hack.PropertyDefinition.1", progress.resultJson.propertyDefinition);
+      ("hack.TypeConstDefinition.1", progress.resultJson.typeConstDefinition);
       ("hack.ClassDefinition.1", progress.resultJson.classDefinition);
       ("hack.TraitDefinition.1", progress.resultJson.traitDefinition);
       ("hack.InterfaceDefinition.1", progress.resultJson.interfaceDefinition);
       ("hack.GlobalConstDefinition.1", progress.resultJson.globalConstDefinition);
       ("hack.DeclarationLocation.1", progress.resultJson.declarationLocation);
+      ("hack.ClassConstDeclaration.1", progress.resultJson.classConstDeclaration);
       ("hack.PropertyDeclaration.1", progress.resultJson.propertyDeclaration);
+      ("hack.TypeConstDeclaration.1", progress.resultJson.typeConstDeclaration);
       ("hack.FunctionDeclaration.1", progress.resultJson.functionDeclaration);
       ("hack.EnumDeclaration.1", progress.resultJson.enumDeclaration);
       ("hack.ClassDeclaration.1", progress.resultJson.classDeclaration);
