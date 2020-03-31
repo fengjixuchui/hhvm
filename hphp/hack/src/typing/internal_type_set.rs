@@ -5,6 +5,6 @@
 
 use crate::InternalType;
 
-use im_rc::OrdSet;
+use typing_collections_rust::Set;
 
-pub type ITySet<'a> = OrdSet<InternalType<'a>>;
+pub type ITySet<'a> = Set<'a, InternalType<'a>>;

@@ -10,10 +10,10 @@ use structopt::StructOpt;
 use typing_check_service_rust::{typing_check_utils::from_text, typing_check_utils::*};
 
 use typing_defs_rust::typing_make_type;
-use typing_env_rust::empty_global_env;
 
 use decl_provider_rust as decl_provider;
 use oxidized::relative_path::{self, RelativePath};
+use oxidized::typing_defs::{Ty, Ty_};
 use stack_limit::{StackLimit, KI, MI};
 
 use std::{
@@ -59,9 +59,26 @@ impl decl_provider::DeclProvider for TestDeclProvider {
     fn get_fun(&self, s: &str) -> Option<&decl_provider::FunDecl> {
         self.decls.funs.get(s)
     }
-
     fn get_class(&self, name: &str) -> Option<&decl_provider::ClassDecl> {
-        self.decls.classes.get(name)
+        // Unlike the existing OCaml decl provider, classes in the direct decl parser don't seem to
+        // have namespace qualification
+        // TODO: fix this
+        let stripped = name.trim_start_matches("\\");
+        self.decls.classes.get(stripped)
+    }
+    fn get_ancestor<'a>(&self, t: &'a decl_provider::ClassDecl, name: &str) -> Option<&'a Ty> {
+        // TODO(hrust): transitively close the hierarchy.
+        // Right now, this just gets the direct ancestor
+        t.extends.iter().find_map(|ty| match ty.1.as_ref() {
+            Ty_::Tapply(sid, _) => {
+                if name == sid.1 {
+                    Some(ty)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
     }
 }
 
@@ -86,8 +103,7 @@ fn process_single_file_impl(
     let arena = Bump::new();
     let builder = typing_make_type::TypeBuilder::new(&arena);
     let provider = TestDeclProvider::new(&rel_path, content);
-    let env = empty_global_env(&builder, &provider, rel_path);
-    let profile = from_text(env, stack_limit, content)?;
+    let profile = from_text(&builder, &provider, stack_limit, &rel_path, content)?;
     Ok(profile)
 }
 

@@ -43,6 +43,10 @@ function takes_returns_function_type<Tu>(
   };
 }
 
+function takes_returns_dict(dict<string, bool> $m): dict<string, bool> {
+  return $m;
+}
+
 <<__Rx>>
 function reactive_function(): void {}
 
@@ -51,3 +55,17 @@ function shallow_reactive_function(): void {}
 
 <<__RxLocal>>
 function local_reactive_function(): void {}
+
+<<__Rx>>
+function reactive_function_mutable_args(
+  <<__Mutable>> Typedef $a,
+  <<__Mutable>> Typedef $b,
+): void {
+}
+
+class C {}
+
+<<__Rx, __MutableReturn>>
+function make(): C {
+  return \HH\Rx\mutable(new C());
+}

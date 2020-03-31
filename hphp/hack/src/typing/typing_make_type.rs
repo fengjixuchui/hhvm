@@ -250,11 +250,20 @@ impl<'a> TypeBuilder<'a> {
     pub fn generic(&'a self, reason: PReason<'a>, name: &'a str) -> Ty<'a> {
         self.mk(reason, Ty_::Tgeneric(name))
     }
+    pub fn fun(&'a self, reason: PReason<'a>, ft: FunType<'a>) -> Ty<'a> {
+        self.mk(reason, Ty_::Tfun(ft))
+    }
     pub fn loclty(&'a self, ty: Ty<'a>) -> InternalType<'a> {
         self.alloc(InternalType_::LoclType(ty))
     }
     pub fn constraintty(&'a self, ty: ConstraintType<'a>) -> InternalType<'a> {
         self.alloc(InternalType_::ConstraintType(ty))
+    }
+    pub fn funtype(&'a self, return_: Ty<'a>) -> FunType<'a> {
+        self.alloc(FunType_ {
+            return_,
+            params: vec![in self.alloc],
+        })
     }
 }
 
@@ -294,6 +303,18 @@ impl<'a> TypeBuilder<'a> {
 
     pub fn mk_rinstantiate(&self, r0: PReason<'a>, name: &'a str, r1: PReason<'a>) -> PReason {
         self.mk_reason(r1.pos, Reason::Rinstantiate(r0, name, r1))
+    }
+
+    pub fn mk_rtype_variable_generics(
+        &self,
+        pos: &'a Pos,
+        param_name: &'a str,
+        fn_name: &'a str,
+    ) -> PReason {
+        self.mk_reason(
+            Some(pos),
+            Reason::RtypeVariableGenerics(param_name, fn_name),
+        )
     }
 }
 

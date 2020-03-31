@@ -7,26 +7,15 @@
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
-pub mod typing_phase;
 
+use crate::typing_phase;
+use crate::typing_subtype;
+use crate::{Env, LocalId, ParamMode};
 use oxidized::typing_defs_core::Ty_ as DTy_;
 use oxidized::{ast, pos::Pos};
 use typing_defs_rust::{tast, FunParam, FuncBodyAnn, SavedEnv, Ty, Ty_};
-use typing_env_rust::{Env, LocalId, ParamMode};
 
-pub fn program<'a>(env: &mut Env<'a>, ast: &ast::Program) -> tast::Program<'a> {
-    ast.iter().filter_map(|x| def(env, x)).collect()
-}
-
-fn def<'a>(env: &mut Env<'a>, def: &ast::Def) -> Option<tast::Def<'a>> {
-    match def {
-        ast::Def::Fun(x) => Some(tast::Def::mk_fun(fun(env, x))),
-        ast::Def::Stmt(x) => Some(tast::Def::mk_stmt(stmt(env, x))),
-        _ => unimplemented!(),
-    }
-}
-
-fn fun<'a>(env: &mut Env<'a>, f: &ast::Fun_) -> tast::Fun_<'a> {
+pub fn fun<'a>(env: &mut Env<'a>, f: &'a ast::Fun_) -> tast::Fun_<'a> {
     let ast = f.body.ast.iter().map(|x| stmt(env, x)).collect();
 
     // We put empty vec below for all of those, since real conversion is unimplemented
@@ -61,27 +50,32 @@ fn fun<'a>(env: &mut Env<'a>, f: &ast::Fun_) -> tast::Fun_<'a> {
     }
 }
 
-fn stmt<'a>(env: &mut Env<'a>, ast::Stmt(pos, s): &ast::Stmt) -> tast::Stmt<'a> {
+pub fn stmt<'a>(env: &mut Env<'a>, ast::Stmt(pos, s): &'a ast::Stmt) -> tast::Stmt<'a> {
     tast::Stmt(pos.clone(), stmt_(env, s))
 }
 
-fn stmt_<'a>(env: &mut Env<'a>, s: &ast::Stmt_) -> tast::Stmt_<'a> {
+fn stmt_<'a>(env: &mut Env<'a>, s: &'a ast::Stmt_) -> tast::Stmt_<'a> {
     match s {
         ast::Stmt_::Noop => tast::Stmt_::Noop,
-        ast::Stmt_::Markup(x) => markup(&x.0, &x.1),
+        ast::Stmt_::Markup(x) => markup(&x),
         ast::Stmt_::Expr(x) => tast::Stmt_::mk_expr(expr(env, x)),
+        ast::Stmt_::Return(e) => match e.as_ref() {
+            None => unimplemented!("return; not yet implemented"),
+            Some(e) => {
+                let te = expr(env, e);
+                typing_subtype::sub_type(env, (te.0).1, env.genv.return_info.type_.type_);
+                tast::Stmt_::mk_return(Some(te))
+            }
+        },
         x => unimplemented!("{:#?}", x),
     }
 }
 
-fn markup<'a>(s: &ast::Pstring, e: &Option<ast::Expr>) -> tast::Stmt_<'a> {
-    match e {
-        None => tast::Stmt_::mk_markup(s.clone(), None),
-        x => unimplemented!("{:#?}", x),
-    }
+fn markup<'a>(s: &ast::Pstring) -> tast::Stmt_<'a> {
+    tast::Stmt_::mk_markup(s.clone())
 }
 
-fn expr<'a>(env: &mut Env<'a>, ast::Expr(pos, e): &ast::Expr) -> tast::Expr<'a> {
+fn expr<'a>(env: &mut Env<'a>, ast::Expr(pos, e): &'a ast::Expr) -> tast::Expr<'a> {
     let (ty, e) = match e {
         ast::Expr_::Call(x) => {
             // TODO(hrust) pseudo functions, might_throw
@@ -107,9 +101,9 @@ fn check_call<'a>(
     env: &mut Env<'a>,
     pos: &Pos,
     call_type: &ast::CallType,
-    e: &ast::Expr,
+    e: &'a ast::Expr,
     explicit_targs: &Vec<ast::Targ>,
-    el: &Vec<ast::Expr>,
+    el: &'a Vec<ast::Expr>,
     unpacked_element: &Option<ast::Expr>,
     in_suspend: bool,
 ) -> (Ty<'a>, tast::Expr_<'a>) {
@@ -130,9 +124,9 @@ fn dispatch_call<'a>(
     env: &mut Env<'a>,
     pos: &Pos,
     _call_type: &ast::CallType,
-    ast::Expr(_fpos, fun_expr): &ast::Expr,
+    ast::Expr(_fpos, fun_expr): &'a ast::Expr,
     explicit_targs: &Vec<ast::Targ>,
-    el: &Vec<ast::Expr>,
+    el: &'a Vec<ast::Expr>,
     unpacked_element: &Option<ast::Expr>,
     _in_suspend: bool,
 ) -> (Ty<'a>, tast::Expr_<'a>) {
@@ -153,9 +147,9 @@ fn dispatch_call<'a>(
 
 fn fun_type_of_id<'a>(
     env: &mut Env<'a>,
-    ast::Id(_pos, id): &ast::Sid,
+    ast::Id(pos, id): &'a ast::Sid,
     targs: &Vec<ast::Targ>,
-    _el: &Vec<ast::Expr>,
+    _el: &'a Vec<ast::Expr>,
 ) -> (Ty<'a>, Vec<tast::Targ<'a>>) {
     let bld = env.builder();
     match env.provider().get_fun(id) {
@@ -166,7 +160,8 @@ fn fun_type_of_id<'a>(
                 DTy_::Tfun(ft) => {
                     // TODO(hrust) transform_special_fun_ty
                     let ety_env = bld.env_with_self();
-                    let targs = typing_phase::localize_targs(env, &ft.tparams.0, targs);
+                    // TODO(hrust) below: strip_ns id
+                    let targs = typing_phase::localize_targs(env, pos, id, &ft.tparams.0, targs);
                     // TODO(hrust) pessimize
                     (typing_phase::localize(&ety_env, env, fty), targs)
                     // TODO(hrust) check deprecated
@@ -181,7 +176,7 @@ fn call<'a>(
     env: &mut Env<'a>,
     _pos: &Pos,
     fty: Ty<'a>,
-    el: &Vec<ast::Expr>,
+    el: &'a Vec<ast::Expr>,
     _unpacked_element: &Option<ast::Expr>,
 ) -> (Vec<tast::Expr<'a>>, Ty<'a>) {
     // TODO(hrust) missing bits
@@ -200,7 +195,7 @@ fn call<'a>(
     }
 }
 
-fn check_arg<'a>(env: &mut Env<'a>, e: &ast::Expr, param: &FunParam<'a>) -> tast::Expr<'a> {
+fn check_arg<'a>(env: &mut Env<'a>, e: &'a ast::Expr, param: &FunParam<'a>) -> tast::Expr<'a> {
     // TODO(hrust) derive expected arg
     let te = expr(env, e);
     call_param(env, &te, param);

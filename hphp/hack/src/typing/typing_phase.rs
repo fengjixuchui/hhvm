@@ -2,17 +2,20 @@
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
-use bumpalo::collections::vec::Vec as BVec;
+use bumpalo::collections::Vec as BVec;
 
+use crate::typing_env_types::Env;
+use naming_special_names_rust::typehints;
+use oxidized::aast::{Hint, Hint_};
+use oxidized::aast_defs::Tprim;
 use oxidized::ast;
 use oxidized::ast_defs::Id;
 use oxidized::pos::Pos;
-use oxidized::typing_defs_core::{Tparam as DTparam, Ty as DTy, Ty_ as DTy_};
+use oxidized::typing_defs_core::{FunType as DFunType, Tparam as DTparam, Ty as DTy, Ty_ as DTy_};
 use typing_defs_rust::tast;
 use typing_defs_rust::typing_defs::ExpandEnv_;
-use typing_defs_rust::typing_defs_core::Ty;
+use typing_defs_rust::typing_defs_core::{FunType, PrimKind, Ty};
 use typing_defs_rust::typing_reason::PReason_;
-use typing_env_rust::typing_env_types::Env;
 
 /// Transforms a declaration phase type into a localized type. This performs
 /// common operations that are necessary for this operation, specifically:
@@ -23,6 +26,7 @@ use typing_env_rust::typing_env_types::Env;
 ///
 /// When keep track of additional information while localizing a type such as
 /// what type defs were expanded to detect potentially recursive definitions..
+
 pub fn localize<'a>(ety_env: &'a ExpandEnv_<'a>, env: &mut Env<'a>, dty: &'a DTy) -> Ty<'a> {
     let bld = env.builder();
     let DTy(r0, dty) = dty;
@@ -30,6 +34,7 @@ pub fn localize<'a>(ety_env: &'a ExpandEnv_<'a>, env: &mut Env<'a>, dty: &'a DTy
         .builder()
         .alloc_reason(PReason_::from_decl_provided_reason(&r0));
     match &**dty {
+        DTy_::Tprim(p) => bld.prim(r, localize_prim(env, p)),
         // TODO(hrust) missing matches
         DTy_::Tgeneric(name) => match ety_env.substs.find(&&name[..]) {
             None => bld.generic(r, &name),
@@ -53,6 +58,10 @@ pub fn localize<'a>(ety_env: &'a ExpandEnv_<'a>, env: &mut Env<'a>, dty: &'a DTy
             };
             bld.class(r, &cls, tys)
         }
+        DTy_::Tfun(ft) => {
+            let ft = localize_ft(ety_env, env, ft);
+            bld.fun(r, ft)
+        }
         _ => {
             // TODO(hrust) missing matches
             unimplemented!("{:#?}", dty)
@@ -67,11 +76,65 @@ pub fn localize<'a>(ety_env: &'a ExpandEnv_<'a>, env: &mut Env<'a>, dty: &'a DTy
 /// Report arity errors using `def_pos` (for the declared parameters), `use_pos`
 /// (for the use-site) and `use_name` (the name of the constructor or function).
 pub fn localize_targs<'a>(
-    _env: &mut Env<'a>,
-    _tparams: &Vec<DTparam>,
-    _targs: &Vec<ast::Targ>,
+    env: &mut Env<'a>,
+    use_pos: &'a Pos,
+    use_name: &'a String,
+    tparams: &'a Vec<DTparam>,
+    targs: &Vec<ast::Targ>,
 ) -> Vec<tast::Targ<'a>> {
-    vec![] // TODO(hrust) fill in here
+    if targs.len() != 0 {
+        unimplemented!("Explicit type arguments not supported")
+    }
+    // TODO(hrust) localize explicit type arguments
+    let explicit_targs = std::iter::empty();
+    // Generate fresh type variables for the remainder
+    let implicit_targs = tparams[targs.len()..].iter().map(|tparam| {
+        let tvar = env
+            .inference_env
+            .fresh_type_reason(env.bld().mk_rtype_variable_generics(
+                use_pos,
+                tparam.name.name(),
+                use_name,
+            ));
+        // TODO(hrust) logging
+        tast::Targ(
+            tvar,
+            Hint(
+                use_pos.clone(),
+                Box::new(Hint_::Happly(
+                    Id(Pos::make_none(), typehints::WILDCARD.to_string()),
+                    vec![],
+                )),
+            ),
+        )
+    });
+
+    explicit_targs.chain(implicit_targs).collect()
+}
+
+fn localize_prim<'a>(_env: &mut Env<'a>, prim: &Tprim) -> PrimKind<'a> {
+    match prim {
+        Tprim::Tnull => PrimKind::Tnull,
+        Tprim::Tvoid => PrimKind::Tvoid,
+        Tprim::Tint => PrimKind::Tint,
+        Tprim::Tbool => PrimKind::Tbool,
+        Tprim::Tfloat => PrimKind::Tfloat,
+        Tprim::Tstring => PrimKind::Tstring,
+        Tprim::Tresource => PrimKind::Tresource,
+        Tprim::Tnum => PrimKind::Tnum,
+        Tprim::Tarraykey => PrimKind::Tarraykey,
+        Tprim::Tnoreturn => PrimKind::Tnoreturn,
+        Tprim::Tatom(_s) => panic!("Tatom NYI"),
+    }
+}
+
+fn localize_ft<'a>(
+    ety_env: &'a ExpandEnv_<'a>,
+    env: &mut Env<'a>,
+    ft: &'a DFunType,
+) -> FunType<'a> {
+    let ret = localize(ety_env, env, &ft.ret.type_);
+    env.bld().funtype(ret)
 }
 
 fn localize_tparams<'a>(

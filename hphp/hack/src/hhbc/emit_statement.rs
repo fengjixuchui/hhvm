@@ -336,7 +336,7 @@ pub fn emit_stmt(e: &mut Emitter, env: &mut Env, stmt: &tast::Stmt) -> Result {
         a::Stmt_::Foreach(x) => emit_foreach(e, env, pos, &x.0, &x.1, &x.2),
         a::Stmt_::DefInline(def) => emit_def_inline(e, &**def),
         a::Stmt_::Awaitall(x) => emit_awaitall(e, env, pos, &x.0, &x.1),
-        a::Stmt_::Markup(x) => emit_markup(e, env, (&x.0, &x.1), false),
+        a::Stmt_::Markup(x) => emit_markup(e, env, &x, false),
         a::Stmt_::Fallthrough | a::Stmt_::Noop => Ok(instr::empty()),
     }
 }
@@ -944,11 +944,7 @@ fn emit_catch(
     // Note that this is a "regular" label; we're not going to branch to
     // it directly in the event of an exception.
     let next_catch = e.label_gen_mut().next_regular();
-    // TODO(hrust) enabel `let id = hhbc_id::class::Type::from_ast_name(&(catch.0).1);`,
-    // `from_ast_name` should be able to accpet Cow<str>
-    let id: hhbc_id::class::Type = string_utils::strip_global_ns(&(catch.0).1)
-        .to_string()
-        .into();
+    let id = hhbc_id::class::Type::from_ast_name_and_mangle(&(catch.0).1);
     Ok(InstrSeq::gather(vec![
         instr::dup(),
         instr::instanceofd(id),
@@ -1575,7 +1571,7 @@ fn emit_final_stmts(e: &mut Emitter, env: &mut Env, block: &[tast::Stmt]) -> Res
 pub fn emit_markup(
     e: &mut Emitter,
     env: &mut Env,
-    ((_, s), echo_expr_opt): (&tast::Pstring, &Option<tast::Expr>),
+    (_, s): &tast::Pstring,
     check_for_hashbang: bool,
 ) -> Result {
     let mut emit_ignored_call_expr = |fname: String, expr: tast::Expr| {
@@ -1622,13 +1618,7 @@ pub fn emit_markup(
         });
         emit_ignored_call_expr_for_nonempty_str(special_functions::ECHO.into(), tail)?
     };
-    let echo = match echo_expr_opt {
-        None => instr::empty(),
-        Some(echo_expr) => {
-            emit_ignored_call_expr(special_functions::ECHO.into(), echo_expr.clone())?
-        }
-    };
-    Ok(InstrSeq::gather(vec![markup, echo]))
+    Ok(markup)
 }
 
 fn emit_break(e: &mut Emitter, env: &mut Env, pos: &Pos) -> InstrSeq {
