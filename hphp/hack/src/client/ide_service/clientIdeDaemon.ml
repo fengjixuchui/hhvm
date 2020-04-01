@@ -14,12 +14,18 @@ type message = Message : 'a ClientIdeMessage.tracked_t -> message
 type message_queue = message Lwt_message_queue.t
 
 type initialized_state = {
-  saved_state_info: Saved_state_loader.Naming_table_saved_state_info.t;
   hhi_root: Path.t;
   server_env: ServerEnv.env;
   ctx: Provider_context.t;
   changed_files_to_process: Path.Set.t;
-  peak_changed_files_queue_size: int;
+      (** changed_files_to_process is grown during File_changed events, and steadily
+  whittled down one by one in `serve` as we get around to processing them
+  via `process_changed_files`. *)
+  changed_files_denominator: int;
+      (** the user likes to see '5/10' for how many changed files has been processed
+  in the current batch of changes. The denominator counts up for every new file
+  that has to be processed, until the batch ends - i.e. changed_files_to_process
+  becomes empty - and we reset the denominator. *)
 }
 
 type state =
@@ -47,27 +53,13 @@ let set_up_hh_logger_for_client_ide_service ~(root : Path.t) : unit =
     (Out_channel.create client_ide_log_fn ~append:true);
   log "Starting client IDE service at %s" client_ide_log_fn
 
-let load_naming_table_from_saved_state_info
-    (server_env : ServerEnv.env)
-    (ctx : Provider_context.t)
-    (saved_state_info : Saved_state_loader.Naming_table_saved_state_info.t) :
-    ServerEnv.env Lwt.t =
-  let path =
-    Saved_state_loader.Naming_table_saved_state_info.(
-      Path.to_string saved_state_info.naming_table_path)
-  in
-  let naming_table = Naming_table.load_from_sqlite ctx path in
-  log "Loaded naming table from SQLite database at %s" path;
-  let server_env = { server_env with ServerEnv.naming_table } in
-  Lwt.return server_env
-
 let load_saved_state
-    (env : ServerEnv.env)
     (ctx : Provider_context.t)
     ~(root : Path.t)
-    ~(hhi_root : Path.t)
     ~(naming_table_saved_state_path : Path.t option) :
-    (state, ClientIdeMessage.error_data) Lwt_result.t =
+    ( Naming_table.t * Saved_state_loader.changed_files,
+      ClientIdeMessage.error_data )
+    Lwt_result.t =
   log "[saved-state] Starting load in root %s" (Path.to_string root);
   let%lwt result =
     try%lwt
@@ -95,28 +87,20 @@ let load_saved_state
       in
       match result with
       | Ok (saved_state_info, changed_files) ->
-        log
-          "[saved-state] Naming table path: %s"
-          Saved_state_loader.Naming_table_saved_state_info.(
-            Path.to_string saved_state_info.naming_table_path);
-
-        let%lwt server_env =
-          load_naming_table_from_saved_state_info env ctx saved_state_info
+        let path =
+          Path.to_string
+            saved_state_info
+              .Saved_state_loader.Naming_table_saved_state_info
+               .naming_table_path
         in
+        log "[saved-state] Loading naming-table... %s" path;
+        let naming_table = Naming_table.load_from_sqlite ctx path in
+        log "[saved-state] Loaded naming-table.";
         (* Track how many files we have to change locally *)
         HackEventLogger.serverless_ide_local_files
           ~local_file_count:(List.length changed_files);
 
-        Lwt.return_ok
-          (Initialized
-             {
-               saved_state_info;
-               hhi_root;
-               server_env;
-               changed_files_to_process = Path.Set.of_list changed_files;
-               ctx;
-               peak_changed_files_queue_size = List.length changed_files;
-             })
+        Lwt.return_ok (naming_table, changed_files)
       | Error load_error ->
         Lwt.return_error
           ClientIdeMessage.
@@ -231,16 +215,22 @@ let initialize
   let start_time = log_startup_time "symbol_index" start_time in
   if use_ranked_autocomplete then AutocompleteRankService.initialize ();
   let%lwt load_state_result =
-    load_saved_state
-      server_env
-      ctx
-      ~root
-      ~hhi_root
-      ~naming_table_saved_state_path
+    load_saved_state ctx ~root ~naming_table_saved_state_path
   in
   let _ = log_startup_time "saved_state" start_time in
   match load_state_result with
-  | Ok state ->
+  | Ok (naming_table, changed_files) ->
+    let server_env = { server_env with ServerEnv.naming_table } in
+    let state =
+      Initialized
+        {
+          hhi_root;
+          server_env;
+          changed_files_to_process = Path.Set.of_list changed_files;
+          ctx;
+          changed_files_denominator = List.length changed_files;
+        }
+    in
     log "Serverless IDE has completed initialization";
     Lwt.return_ok state
   | Error error_data ->
@@ -366,8 +356,8 @@ let handle_message :
       let changed_files_to_process =
         Path.Set.add initialized_state.changed_files_to_process path
       in
-      let peak_changed_files_queue_size =
-        initialized_state.peak_changed_files_queue_size + 1
+      let changed_files_denominator =
+        initialized_state.changed_files_denominator + 1
       in
       let ctx =
         Provider_utils.ctx_from_server_env initialized_state.server_env
@@ -376,9 +366,9 @@ let handle_message :
         Initialized
           {
             initialized_state with
-            changed_files_to_process;
             ctx;
-            peak_changed_files_queue_size;
+            changed_files_to_process;
+            changed_files_denominator;
           }
       in
       Lwt.return (state, Handle_message_result.Notification)
@@ -524,7 +514,6 @@ let handle_message :
     let results =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
           ServerSignatureHelp.go_quarantined
-            ~env:initialized_state.server_env
             ~ctx
             ~entry
             ~line:document_location.line
@@ -596,8 +585,7 @@ let write_status ~(out_fd : Lwt_unix.file_descr) (state : state) : unit Lwt.t =
   | Initializing
   | Failed_to_initialize _ ->
     Lwt.return_unit
-  | Initialized { changed_files_to_process; peak_changed_files_queue_size; _ }
-    ->
+  | Initialized { changed_files_to_process; changed_files_denominator; _ } ->
     if Path.Set.is_empty changed_files_to_process then
       let%lwt () =
         write_message
@@ -607,7 +595,7 @@ let write_status ~(out_fd : Lwt_unix.file_descr) (state : state) : unit Lwt.t =
       in
       Lwt.return_unit
     else
-      let total = peak_changed_files_queue_size in
+      let total = changed_files_denominator in
       let processed = total - Path.Set.cardinal changed_files_to_process in
       let%lwt () =
         write_message
@@ -667,8 +655,16 @@ let serve ~(in_fd : Lwt_unix.file_descr) ~(out_fd : Lwt_unix.file_descr) :
       in
       let%lwt server_env =
         try%lwt
-          let%lwt server_env =
-            ClientIdeIncremental.process_changed_file server_env ctx next_file
+          let { ServerEnv.naming_table; local_symbol_table; _ } = server_env in
+          let%lwt (naming_table, local_symbol_table) =
+            ClientIdeIncremental.process_changed_file
+              ~ctx
+              ~naming_table
+              ~sienv:local_symbol_table
+              ~path:next_file
+          in
+          let server_env =
+            { server_env with ServerEnv.naming_table; local_symbol_table }
           in
           Lwt.return server_env
         with exn ->
@@ -690,7 +686,7 @@ let serve ~(in_fd : Lwt_unix.file_descr) ~(out_fd : Lwt_unix.file_descr) :
                  state with
                  server_env;
                  changed_files_to_process;
-                 peak_changed_files_queue_size = 0;
+                 changed_files_denominator = 0;
                })
         else
           Lwt.return

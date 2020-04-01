@@ -482,7 +482,7 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::Await(e) => emit_await(emitter, env, pos, e),
         Expr_::Yield(e) => emit_yield(emitter, env, pos, e),
         Expr_::Efun(e) => Ok(emit_pos_then(pos, emit_lambda(emitter, env, &e.0, &e.1)?)),
-        Expr_::ClassGet(e) => emit_class_get(env, QueryOp::CGet, e),
+        Expr_::ClassGet(e) => emit_class_get(emitter, env, QueryOp::CGet, &e.0, &e.1),
         Expr_::String2(es) => emit_string2(emitter, env, pos, es),
         Expr_::BracedExpr(e) => emit_expr(emitter, env, e),
         Expr_::Id(e) => Ok(emit_pos_then(pos, emit_id(emitter, env, e)?)),
@@ -2055,7 +2055,24 @@ fn emit_special_function(
         ("exit", _) | ("die", _) if nargs == 0 || nargs == 1 => {
             Ok(Some(emit_exit(e, env, args.first())?))
         }
-        ("HH\\fun", _) => unimplemented!(),
+        ("HH\\fun", _) => {
+            if nargs != 1 {
+                Err(emit_fatal::raise_fatal_runtime(
+                    pos,
+                    "Constant string expected in fun()",
+                ))
+            } else {
+                match args {
+                    [tast::Expr(_, tast::Expr_::String(func_name))] => {
+                        Ok(Some(emit_hh_fun(e, func_name)))
+                    }
+                    _ => Err(emit_fatal::raise_fatal_runtime(
+                        pos,
+                        "Constant string expected in fun()",
+                    )),
+                }
+            }
+        }
         ("__systemlib\\fun", _) => unimplemented!(),
         ("HH\\inst_meth", _) => unimplemented!(),
         ("HH\\class_meth", _) => unimplemented!(),
@@ -2140,6 +2157,19 @@ fn get_call_builtin_func_info(opts: &Options, id: impl AsRef<str>) -> Option<(us
         "HH\\global_get" => Some((1, IGet(CGetG))),
         "HH\\global_isset" => Some((1, IIsset(IssetG))),
         _ => None,
+    }
+}
+
+fn emit_hh_fun(e: &mut Emitter, fname: &str) -> InstrSeq {
+    let fname = string_utils::strip_global_ns(fname);
+    if e.options()
+        .hhvm
+        .flags
+        .contains(HhvmFlags::EMIT_FUNC_POINTERS)
+    {
+        instr::resolve_func(fname.to_owned().into())
+    } else {
+        instr::string(fname)
     }
 }
 
@@ -2997,11 +3027,22 @@ fn get_querym_op_mode(query_op: &QueryOp) -> MemberOpMode {
 }
 
 fn emit_class_get(
+    e: &mut Emitter,
     env: &Env,
     query_op: QueryOp,
-    (cid, cls_get_expr): &(tast::ClassId, tast::ClassGetExpr),
+    cid: &tast::ClassId,
+    prop: &tast::ClassGetExpr,
 ) -> Result {
-    unimplemented!("TODO(hrust)")
+    let cexpr = ClassExpr::class_id_to_class_expr(e, false, false, &env.scope, cid);
+    Ok(InstrSeq::gather(vec![
+        InstrSeq::from(emit_class_expr(e, env, cexpr, prop)?),
+        match query_op {
+            QueryOp::CGet => instr::cgets(),
+            QueryOp::Isset => instr::issets(),
+            QueryOp::CGetQuiet => return Err(Unrecoverable("emit_class_get: CGetQuiet".into())),
+            QueryOp::InOut => return Err(Unrecoverable("emit_class_get: InOut".into())),
+        },
+    ]))
 }
 
 fn emit_conditional_expr(
@@ -4072,7 +4113,7 @@ pub fn emit_lval_op(
             } else {
                 scope::with_unnamed_local(e, |e, local| {
                     let loc = if can_use_as_rhs_in_list_assignment(&expr2.1)? {
-                        Some(local.clone())
+                        Some(&local)
                     } else {
                         None
                     };
@@ -4147,7 +4188,8 @@ fn can_use_as_rhs_in_list_assignment(expr: &tast::Expr_) -> Result<bool> {
         | E_::Clone(_)
         | E_::Unop(_)
         | E_::As(_)
-        | E_::Await(_) => true,
+        | E_::Await(_)
+        | E_::ClassConst(_) => true,
         E_::Pipe(p) => can_use_as_rhs_in_list_assignment(&(p.2).1)?,
         E_::Binop(b) if b.0.is_eq() => can_use_as_rhs_in_list_assignment(&(b.2).1)?,
         E_::Binop(b) => b.0.is_plus() || b.0.is_question_question() || b.0.is_any_eq(),
@@ -4160,16 +4202,157 @@ fn can_use_as_rhs_in_list_assignment(expr: &tast::Expr_) -> Result<bool> {
     })
 }
 
+// Given a local $local and a list of integer array indices i_1, ..., i_n,
+// generate code to extract the value of $local[i_n]...[i_1]:
+//   BaseL $local Warn
+//   Dim Warn EI:i_n ...
+//   Dim Warn EI:i_2
+//   QueryM 0 CGet EI:i_1
+fn emit_array_get_fixed(last_usage: bool, local: local::Type, indices: &[isize]) -> InstrSeq {
+    let (base, stack_count) = if last_usage {
+        (
+            InstrSeq::gather(vec![
+                instr::pushl(local),
+                instr::basec(0, MemberOpMode::Warn),
+            ]),
+            1,
+        )
+    } else {
+        (instr::basel(local, MemberOpMode::Warn), 0)
+    };
+    let indices = InstrSeq::gather(
+        indices
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(i, ix)| {
+                let mk = MemberKey::EI(*ix as i64);
+                if i == 0 {
+                    instr::querym(stack_count, QueryOp::CGet, mk)
+                } else {
+                    instr::dim(MemberOpMode::Warn, mk)
+                }
+            })
+            .collect(),
+    );
+    InstrSeq::gather(vec![base, indices])
+}
+
+// Generate code for each lvalue assignment in a list destructuring expression.
+// Lvalues are assigned right-to-left, regardless of the nesting structure. So
+//      list($a, list($b, $c)) = $d
+//  and list(list($a, $b), $c) = $d
+//  will both assign to $c, $b and $a in that order.
+//  Returns a pair of instructions:
+//  1. initialization part of the left hand side
+//  2. assignment
+//  this is necessary to handle cases like:
+//  list($a[$f()]) = b();
+//  here f() should be invoked before b()
 pub fn emit_lval_op_list(
     e: &mut Emitter,
     env: &Env,
     outer_pos: &Pos,
-    local: Option<local::Type>,
+    local: Option<&local::Type>,
     indices: &[isize],
     expr: &tast::Expr,
     last_usage: bool,
 ) -> Result<(InstrSeq, InstrSeq)> {
-    unimplemented!()
+    use options::Php7Flags;
+    use tast::Expr_ as E_;
+    let is_ltr = e.options().php7_flags.contains(Php7Flags::LTR_ASSIGN);
+    match &expr.1 {
+        E_::List(exprs) => {
+            let last_non_omitted = if last_usage {
+                // last usage of the local will happen when processing last non-omitted
+                // element in the list - find it
+                if is_ltr {
+                    exprs.iter().enumerate().fold(None, |acc, (i, v)| {
+                        if v.1.is_omitted() {
+                            acc
+                        } else {
+                            Some(i)
+                        }
+                    })
+                } else {
+                    // in right-to-left case result list will be reversed
+                    // so we need to find first non-omitted expression
+                    exprs
+                        .iter()
+                        .enumerate()
+                        .find(|(_, v)| !v.1.is_omitted())
+                        .map(|(i, _)| i)
+                }
+            } else {
+                None
+            };
+            let (lhs_instrs, set_instrs): (Vec<InstrSeq>, Vec<InstrSeq>) = exprs
+                .iter()
+                .enumerate()
+                .map(|(i, expr)| {
+                    let mut new_indices = vec![i as isize];
+                    new_indices.extend_from_slice(indices);
+                    emit_lval_op_list(
+                        e,
+                        env,
+                        outer_pos,
+                        local,
+                        &new_indices[..],
+                        expr,
+                        last_non_omitted.map_or(false, |j| j == i),
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .unzip();
+            Ok((
+                InstrSeq::gather(lhs_instrs),
+                InstrSeq::gather(if !is_ltr {
+                    set_instrs.into_iter().rev().collect()
+                } else {
+                    set_instrs
+                }),
+            ))
+        }
+        E_::Omitted => Ok((instr::empty(), instr::empty())),
+        _ => {
+            // Generate code to access the element from the array
+            let access_instrs = match (local, indices) {
+                (Some(loc), [_, ..]) => emit_array_get_fixed(last_usage, loc.to_owned(), indices),
+                (Some(loc), []) => {
+                    if last_usage {
+                        instr::pushl(loc.to_owned())
+                    } else {
+                        instr::cgetl(loc.to_owned())
+                    }
+                }
+                (None, _) => instr::null(),
+            };
+            // Generate code to assign to the lvalue *)
+            // Return pair: side effects to initialize lhs + assignment
+            let (lhs_instrs, rhs_instrs, set_op) = emit_lval_op_nonlist_steps(
+                e,
+                env,
+                outer_pos,
+                LValOp::Set,
+                expr,
+                access_instrs,
+                1,
+                false,
+            )?;
+            Ok(if is_ltr {
+                (
+                    instr::empty(),
+                    InstrSeq::gather(vec![lhs_instrs, rhs_instrs, set_op, instr::popc()]),
+                )
+            } else {
+                (
+                    lhs_instrs,
+                    InstrSeq::gather(vec![instr::empty(), rhs_instrs, set_op, instr::popc()]),
+                )
+            })
+        }
+    }
 }
 
 pub fn emit_lval_op_nonlist(

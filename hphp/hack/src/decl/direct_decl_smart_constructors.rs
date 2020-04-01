@@ -362,6 +362,7 @@ pub enum HintValue {
     Bool,
     Float,
     String,
+    Resource,
     Num,
     ArrayKey,
     NoReturn,
@@ -725,6 +726,7 @@ impl DirectDeclSmartConstructors<'_> {
                     HintValue::Bool => Ty_::Tprim(aast::Tprim::Tbool),
                     HintValue::Float => Ty_::Tprim(aast::Tprim::Tfloat),
                     HintValue::String => Ty_::Tprim(aast::Tprim::Tstring),
+                    HintValue::Resource => Ty_::Tprim(aast::Tprim::Tresource),
                     HintValue::Num => Ty_::Tprim(aast::Tprim::Tnum),
                     HintValue::ArrayKey => Ty_::Tprim(aast::Tprim::Tarraykey),
                     HintValue::NoReturn => Ty_::Tprim(aast::Tprim::Tnoreturn),
@@ -868,6 +870,56 @@ impl DirectDeclSmartConstructors<'_> {
                 Box::new(Ty_::Tarray(None, None)),
             )),
             Node_::This(pos) => Ok(Ty(Reason::Rhint(pos.clone()), Box::new(Ty_::Tthis))),
+            Node_::Expr(expr) => {
+                fn expr_to_ty(expr: &nast::Expr) -> Result<Ty_, ParseError> {
+                    use aast::Expr_::*;
+                    match &expr.1 {
+                        Null => Ok(Ty_::Tprim(aast::Tprim::Tnull)),
+                        This => Ok(Ty_::Tthis),
+                        True | False => Ok(Ty_::Tprim(aast::Tprim::Tbool)),
+                        Int(_) => Ok(Ty_::Tprim(aast::Tprim::Tint)),
+                        Float(_) => Ok(Ty_::Tprim(aast::Tprim::Tfloat)),
+                        String(_) => Ok(Ty_::Tprim(aast::Tprim::Tstring)),
+                        String2(_) => Ok(Ty_::Tprim(aast::Tprim::Tstring)),
+                        PrefixedString(_) => Ok(Ty_::Tprim(aast::Tprim::Tstring)),
+                        Unop(innards) => expr_to_ty(&innards.1),
+                        ParenthesizedExpr(expr) => expr_to_ty(&expr),
+                        Any => Ok(Ty_::Tany(TanySentinel {})),
+
+                        Array(_) | ArrayGet(_) | As(_) | Assert(_) | Await(_) | Binop(_)
+                        | BracedExpr(_) | Call(_) | Callconv(_) | Cast(_) | ClassConst(_)
+                        | ClassGet(_) | Clone(_) | Collection(_) | Darray(_) | Dollardollar(_)
+                        | Efun(_) | Eif(_) | ExprList(_) | FunctionPointer(_) | FunId(_)
+                        | Id(_) | Import(_) | Is(_) | KeyValCollection(_) | Lfun(_) | List(_)
+                        | Lplaceholder(_) | Lvar(_) | MethodCaller(_) | MethodId(_) | New(_)
+                        | ObjGet(_) | Omitted | Pair(_) | Pipe(_) | PUAtom(_) | PUIdentifier(_)
+                        | Record(_) | Shape(_) | SmethodId(_) | Suspend(_) | Typename(_)
+                        | ValCollection(_) | Varray(_) | Xml(_) | Yield(_) | YieldBreak
+                        | YieldFrom(_) => Err(format!("Cannot convert expr to type: {:?}", expr)),
+                    }
+                }
+
+                Ok(Ty(
+                    Reason::Rwitness(expr.0.clone()),
+                    Box::new(expr_to_ty(&expr)?),
+                ))
+            }
+            Node_::DecimalLiteral(_, pos) => Ok(Ty(
+                Reason::Rwitness(pos.clone()),
+                Box::new(Ty_::Tprim(aast::Tprim::Tint)),
+            )),
+            Node_::FloatingLiteral(_, pos) => Ok(Ty(
+                Reason::Rwitness(pos.clone()),
+                Box::new(Ty_::Tprim(aast::Tprim::Tfloat)),
+            )),
+            Node_::StringLiteral(_, pos) => Ok(Ty(
+                Reason::Rwitness(pos.clone()),
+                Box::new(Ty_::Tprim(aast::Tprim::Tstring)),
+            )),
+            Node_::Null(pos) => Ok(Ty(
+                Reason::Rhint(pos.clone()),
+                Box::new(Ty_::Tprim(aast::Tprim::Tnull)),
+            )),
             node => {
                 let Id(pos, name) = get_name("", node)?;
                 let reason = Reason::Rhint(pos.clone());
@@ -1316,6 +1368,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             TokenKind::Mixed => Node_::Hint(HintValue::Mixed, token_pos(self)),
             TokenKind::Void => Node_::Hint(HintValue::Void, token_pos(self)),
             TokenKind::Arraykey => Node_::Hint(HintValue::ArrayKey, token_pos(self)),
+            TokenKind::Resource => Node_::Hint(HintValue::Resource, token_pos(self)),
             TokenKind::Array => Node_::Array(token_pos(self)),
             TokenKind::Darray => Node_::Darray(token_pos(self)),
             TokenKind::Varray => Node_::Varray(token_pos(self)),
@@ -1959,6 +2012,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                         let modifiers = modifiers?;
                         let ty = self
                             .node_to_ty(&hint, &HashSet::new())
+                            .or_else(|_| self.node_to_ty(&initializer, &HashSet::new()))
                             .unwrap_or(Ty(Reason::Rnone, Box::new(Ty_::Tany(TanySentinel))));
                         Node_::Const(Box::new(ConstDecl {
                             modifiers,
@@ -1966,7 +2020,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                             ty,
                             expr: match initializer {
                                 Node_::Expr(e) => Some(e.clone()),
-                                _ => None,
+                                n => n.as_expr().ok().map(Box::new),
                             },
                         }))
                     }
@@ -2402,7 +2456,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 Ok(Node_::Property(Box::new(PropertyDecl {
                     attrs: attrs?,
                     modifiers: modifiers?,
-                    hint: hint?,
+                    hint: match hint? {
+                        Node_::Ignored => initializer.clone(),
+                        hint => hint,
+                    },
                     id: get_name("", &name)?,
                     expr: match initializer {
                         Node_::Expr(e) => Some(Box::new(*e)),
@@ -2861,17 +2918,24 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
 
     fn make_type_constant(
         &mut self,
-        this: Self::R,
+        ty: Self::R,
         coloncolon: Self::R,
         constant_name: Self::R,
     ) -> Self::R {
-        let (this, coloncolon, constant_name) = (this?, coloncolon?, constant_name?);
+        let (ty, _coloncolon, constant_name) = (ty?, coloncolon?, constant_name?);
         let id = get_name("", &constant_name)?;
-        let pos = Pos::merge(&this.get_pos()?, &coloncolon.get_pos()?)?;
-        Ok(Node_::Hint(
-            HintValue::Access(Box::new((this, vec![id]))),
-            pos,
-        ))
+        let pos = Pos::merge(&ty.get_pos()?, &constant_name.get_pos()?)?;
+        match ty {
+            Node_::Hint(HintValue::Access(mut innards), pos) => {
+                // Nested applies have to be collapsed.
+                innards.1.push(id);
+                Ok(Node_::Hint(HintValue::Access(innards), pos))
+            }
+            ty => Ok(Node_::Hint(
+                HintValue::Access(Box::new((ty, vec![id]))),
+                pos,
+            )),
+        }
     }
 
     fn make_vector_type_specifier(

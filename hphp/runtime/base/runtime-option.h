@@ -625,9 +625,6 @@ struct RuntimeOption {
   // Disables static closures
   // true => error, false => default behaviour
   static bool DisableStaticClosures;
-  // Disables __halt_compiler()
-  // true => error, false => default behaviour
-  static bool DisableHaltCompiler;
   // Enables the class-level where constraints
   // true => allow the feature, false => disable the feature
   static bool EnableClassLevelWhereClauses;
@@ -1315,7 +1312,7 @@ struct RuntimeOption {
   F(bool, NoUseMagicMethods, false)                                     \
   F(bool, NoAppendToMap, false)                                         \
   /* Should we use the autoload map from the repo */                    \
-  F(bool, UseRepoAutoloadMap, false)                                    \
+  F(bool, UseRepoAutoloadMap, true)                                     \
   /* */
 
 private:
