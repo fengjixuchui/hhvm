@@ -1440,8 +1440,46 @@ fn emit_call(
         .unwrap_or(Ok(default))
 }
 
-fn emit_reified_targs(e: &mut Emitter, env: &Env, pos: &Pos, targs: &[&tast::Hint]) -> Result {
-    unimplemented!()
+pub fn emit_reified_targs(e: &mut Emitter, env: &Env, pos: &Pos, targs: &[&tast::Hint]) -> Result {
+    let current_fun_tparams = env.scope.get_fun_tparams();
+    let current_cls_tparams = env.scope.get_class_tparams();
+    let is_in_lambda = env.scope.is_in_lambda();
+    let same_as_targs = |tparams: &[tast::Tparam]| {
+        tparams.len() == targs.len()
+            && tparams
+                .iter()
+                .zip(targs)
+                .all(|(tp, ta)| ta.1.as_happly().map_or(false, |(id, _)| id.1 == tp.name.1))
+    };
+    Ok(if !is_in_lambda && same_as_targs(&current_fun_tparams) {
+        instr::cgetl(local::Type::Named(
+            string_utils::reified::GENERICS_LOCAL_NAME.into(),
+        ))
+    } else if !is_in_lambda && same_as_targs(&current_cls_tparams.list[..]) {
+        InstrSeq::gather(vec![
+            instr::checkthis(),
+            instr::baseh(),
+            instr::querym(
+                0,
+                QueryOp::CGet,
+                MemberKey::PT(prop::from_raw_string(string_utils::reified::PROP_NAME)),
+            ),
+        ])
+    } else {
+        InstrSeq::gather(vec![
+            InstrSeq::gather(
+                targs
+                    .iter()
+                    .map(|h| Ok(emit_reified_arg(e, env, pos, false, h)?.0))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+            if hack_arr_dv_arrs(e.options()) {
+                instr::new_vec_array(targs.len() as isize)
+            } else {
+                instr::new_varray(targs.len() as isize)
+            },
+        ])
+    })
 }
 
 fn get_erased_tparams<'a>(env: &'a Env<'a>) -> Vec<&'a str> {
@@ -2424,7 +2462,29 @@ fn emit_new(
     if has_inout_arg(args) {
         return Err(unrecoverable("Unexpected inout arg in new expr"));
     }
-    let resolve_self = true;
+    let resolve_self = match &cid.1.as_ciexpr() {
+        Some(ci_expr) => match ci_expr.as_id() {
+            Some(ast_defs::Id(_, n)) if string_utils::is_self(n) => env
+                .scope
+                .get_class_tparams()
+                .list
+                .iter()
+                .all(|tp| tp.reified.is_erased()),
+            Some(ast_defs::Id(_, n)) if string_utils::is_parent(n) => {
+                env.scope
+                    .get_class()
+                    .map_or(true, |cls| match &cls.extends[..] {
+                        [h, ..] => {
+                            h.1.as_happly()
+                                .map_or(true, |(_, l)| !has_non_tparam_generics(env, l))
+                        }
+                        _ => true,
+                    })
+            }
+            _ => true,
+        },
+        _ => true,
+    };
     use HasGenericsOp as H;
     let cexpr = ClassExpr::class_id_to_class_expr(e, false, resolve_self, &env.scope, cid);
     let (cexpr, has_generics) = match &cexpr {
@@ -3602,7 +3662,7 @@ pub fn emit_set_range_expr(
 pub fn is_reified_tparam(env: &Env, is_fun: bool, name: &str) -> Option<(usize, bool)> {
     let is = |tparams: &[tast::Tparam]| {
         let is_soft = |ual: &Vec<tast::UserAttribute>| {
-            ual.iter().any(|ua| &ua.name.1 == user_attributes::SOFT)
+            ual.iter().any(|ua| user_attributes::is_soft(&ua.name.1))
         };
         use tast::ReifyKind::*;
         tparams.iter().enumerate().find_map(|(i, tp)| {
@@ -4267,21 +4327,11 @@ pub fn emit_lval_op_list(
                 // last usage of the local will happen when processing last non-omitted
                 // element in the list - find it
                 if is_ltr {
-                    exprs.iter().enumerate().fold(None, |acc, (i, v)| {
-                        if v.1.is_omitted() {
-                            acc
-                        } else {
-                            Some(i)
-                        }
-                    })
+                    exprs.iter().rposition(|v| !v.1.is_omitted())
                 } else {
                     // in right-to-left case result list will be reversed
                     // so we need to find first non-omitted expression
-                    exprs
-                        .iter()
-                        .enumerate()
-                        .find(|(_, v)| !v.1.is_omitted())
-                        .map(|(i, _)| i)
+                    exprs.iter().rev().rposition(|v| !v.1.is_omitted())
                 }
             } else {
                 None
@@ -4734,7 +4784,7 @@ pub fn fixup_type_arg<'a>(
                 {
                     return Err(Some(emit_fatal::raise_fatal_parse(
                         &h.0,
-                        "Erased generics are not allowd in is/as expressions",
+                        "Erased generics are not allowed in is/as expressions",
                     )))
                 }
                 _ => (),
