@@ -827,9 +827,6 @@ and stmt_ env pos st =
   | Try (tb, cl, fb) ->
     let (env, ttb, tcl, tfb) = try_catch env tb cl fb in
     (env, Aast.Try (ttb, tcl, tfb))
-  | Def_inline _ ->
-    (* Do nothing, this doesn't occur in Hack code. *)
-    failwith "Should never typecheck nested definitions"
   | Awaitall (el, b) ->
     let env = might_throw env in
     let (env, el) =
@@ -7003,6 +7000,7 @@ and typedef_def ctx typedef =
     t_vis = _;
     t_mode = _;
     t_namespace = _;
+    t_emit_id = _;
   } =
     typedef
   in
@@ -7049,6 +7047,7 @@ and typedef_def ctx typedef =
     Aast.t_kind = typedef.t_kind;
     Aast.t_tparams = tparams;
     Aast.t_namespace = typedef.t_namespace;
+    Aast.t_emit_id = typedef.t_emit_id;
   }
 
 (* Calls the method of a class, but allows the f callback to override the

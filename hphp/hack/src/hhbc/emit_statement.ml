@@ -53,28 +53,6 @@ let emit_return (env : Emit_env.t) =
     ~in_finally_epilogue:false
     env
 
-let emit_def_inline def =
-  match def with
-  | A.Class cd ->
-    let defcls_fn =
-      if Emit_env.is_systemlib () then
-        instr_defclsnop
-      else
-        instr_defcls
-    in
-    Emit_pos.emit_pos_then (fst cd.A.c_name)
-    @@ defcls_fn (int_of_string (snd cd.A.c_name))
-  | A.Typedef td ->
-    Emit_pos.emit_pos_then (fst td.A.t_name)
-    @@ instr_deftypealias (int_of_string (snd td.A.t_name))
-  | A.RecordDef rd ->
-    Emit_pos.emit_pos_then (fst rd.A.rd_name)
-    @@ instr_defrecord (int_of_string (snd rd.A.rd_name))
-  | A.Constant c ->
-    Emit_pos.emit_pos_then (fst c.A.cst_name)
-    @@ instr_defcns (int_of_string (snd c.A.cst_name))
-  | _ -> failwith "Define inline: Invalid inline definition"
-
 let emit_markup env s ~check_for_hashbang =
   let emit_ignored_call_expr f e =
     let p = Pos.none in
@@ -267,7 +245,6 @@ and emit_stmt env (pos, stmt) =
   | A.Switch (e, cl) -> emit_switch env pos e cl
   | A.Foreach (collection, iterator, block) ->
     emit_foreach env pos collection iterator block
-  | A.Def_inline def -> emit_def_inline def
   | A.Awaitall (el, b) -> emit_awaitall env pos el b
   | A.Markup (_, s) -> emit_markup env s ~check_for_hashbang:false
   | A.Fallthrough

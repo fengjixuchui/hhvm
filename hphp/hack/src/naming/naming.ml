@@ -1238,6 +1238,7 @@ let rec class_ ctx c =
     (* Naming and typechecking shouldn't use these fields *)
     N.c_attributes = [];
     N.c_xhp_attrs = [];
+    N.c_emit_id = c.Aast.c_emit_id;
   }
 
 and user_attributes env attrl =
@@ -1852,10 +1853,6 @@ and stmt env (pos, st) =
     | Aast.Switch (e, cl) -> switch_stmt env e cl
     | Aast.Foreach (e, ae, b) -> foreach_stmt env e ae b
     | Aast.Try (b, cl, fb) -> try_stmt env b cl fb
-    | Aast.Def_inline _ ->
-      (* No convenient pos information on Aast *)
-      Errors.experimental_feature Pos.none "inlined definitions";
-      N.Expr (Pos.none, N.Any)
     | Aast.Expr
         (cp, Aast.Call (_, (p, Aast.Id (fp, fn)), hl, el, unpacked_element))
       when fn = SN.AutoimportedFunctions.invariant ->
@@ -2894,6 +2891,7 @@ let record_def ctx rd =
     rd_namespace = rd.Aast.rd_namespace;
     rd_span = rd.Aast.rd_span;
     rd_doc_comment = rd.Aast.rd_doc_comment;
+    rd_emit_id = rd.Aast.rd_emit_id;
   }
 
 (**************************************************************************)
@@ -2921,6 +2919,7 @@ let typedef ctx tdef =
     t_mode = tdef.Aast.t_mode;
     t_namespace = tdef.Aast.t_namespace;
     t_vis = tdef.Aast.t_vis;
+    t_emit_id = tdef.Aast.t_emit_id;
   }
 
 (**************************************************************************)
@@ -2944,6 +2943,7 @@ let global_const ctx cst =
     cst_value = e;
     cst_namespace = cst.Aast.cst_namespace;
     cst_span = cst.Aast.cst_span;
+    cst_emit_id = cst.Aast.cst_emit_id;
   }
 
 (**************************************************************************)
