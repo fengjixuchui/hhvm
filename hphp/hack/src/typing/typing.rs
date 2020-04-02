@@ -21,8 +21,6 @@ pub fn fun<'a>(env: &mut Env<'a>, f: &'a ast::Fun_) -> tast::Fun_<'a> {
     let ast = f.body.ast.iter().map(|x| stmt(env, x)).collect();
 
     // We put empty vec below for all of those, since real conversion is unimplemented
-    assert!(f.tparams.is_empty());
-    assert!(f.params.is_empty());
     assert!(f.user_attributes.is_empty());
     assert!(f.file_attributes.is_empty());
 
@@ -79,6 +77,36 @@ fn markup<'a>(s: &ast::Pstring) -> tast::Stmt_<'a> {
 
 fn expr<'a>(env: &mut Env<'a>, ast::Expr(pos, e): &'a ast::Expr) -> tast::Expr<'a> {
     let (ty, e) = match e {
+        ast::Expr_::True => {
+            let ty = env.bld().bool(env.bld().mk_rwitness(pos));
+            let e = tast::Expr_::True;
+            (ty, e)
+        }
+        ast::Expr_::False => {
+            let ty = env.bld().bool(env.bld().mk_rwitness(pos));
+            let e = tast::Expr_::False;
+            (ty, e)
+        }
+        ast::Expr_::Int(s) => {
+            let ty = env.bld().int(env.bld().mk_rwitness(pos));
+            let e = tast::Expr_::Int(s.clone());
+            (ty, e)
+        }
+        ast::Expr_::Float(s) => {
+            let ty = env.bld().float(env.bld().mk_rwitness(pos));
+            let e = tast::Expr_::Float(s.clone());
+            (ty, e)
+        }
+        ast::Expr_::Null => {
+            let ty = env.bld().null(env.bld().mk_rwitness(pos));
+            let e = tast::Expr_::Null;
+            (ty, e)
+        }
+        ast::Expr_::String(s) => {
+            let ty = env.bld().string(env.bld().mk_rwitness(pos));
+            let e = tast::Expr_::String(s.clone());
+            (ty, e)
+        }
         ast::Expr_::Call(x) => {
             // TODO(hrust) pseudo functions, might_throw
             let (call_type, e, explicit_targs, el, unpacked_element) = &**x;
@@ -96,7 +124,8 @@ fn expr<'a>(env: &mut Env<'a>, ast::Expr(pos, e): &'a ast::Expr) -> tast::Expr<'
         }
         x => unimplemented!("{:#?}", x),
     };
-    ast::Expr((pos.clone(), ty), e)
+    // TODO(hrust) set_tyvar_variance
+    ast::Expr((&pos, ty), e)
 }
 
 fn check_call<'a>(
@@ -126,7 +155,7 @@ fn dispatch_call<'a>(
     env: &mut Env<'a>,
     pos: &Pos,
     _call_type: &ast::CallType,
-    ast::Expr(_fpos, fun_expr): &'a ast::Expr,
+    ast::Expr(fpos, fun_expr): &'a ast::Expr,
     explicit_targs: &Vec<ast::Targ>,
     el: &'a Vec<ast::Expr>,
     unpacked_element: &Option<ast::Expr>,
@@ -137,7 +166,7 @@ fn dispatch_call<'a>(
             let (fty, targs) = fun_type_of_id(env, x, explicit_targs, el);
             let (tel, rty) = call(env, pos, fty, el, unpacked_element);
             // TODO(hrust) reactivity stuff
-            let fte = tast::Expr((Pos::make_none(), fty), tast::Expr_::Id(x.clone()));
+            let fte = tast::Expr((fpos, fty), tast::Expr_::Id(x.clone()));
             (
                 rty,
                 tast::Expr_::mk_call(tast::CallType::Cnormal, fte, targs, tel, None),
@@ -162,7 +191,7 @@ fn fun_type_of_id<'a>(
                     // TODO(hrust) transform_special_fun_ty
                     let ety_env = bld.env_with_self();
                     // TODO(hrust) below: strip_ns id
-                    let targs = typing_phase::localize_targs(env, pos, id, &ft.tparams.0, targs);
+                    let targs = typing_phase::localize_targs(env, pos, id, &ft.tparams, targs);
                     // TODO(hrust) pessimize
                     let instantiation = MethodInstantiation {
                         use_pos: pos,
@@ -229,7 +258,7 @@ fn bind_param<'a>(env: &mut Env<'a>, ty1: Ty<'a>, param: &'a ast::FunParam) -> t
         vec![]
     };
     let tparam = tast::FunParam {
-        annotation: (param.pos.clone(), ty1),
+        annotation: (&param.pos, ty1),
         type_hint: ast::TypeHint(ty1, param.type_hint.get_hint().clone()),
         is_variadic: param.is_variadic,
         pos: param.pos.clone(),

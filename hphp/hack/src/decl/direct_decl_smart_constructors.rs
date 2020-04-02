@@ -26,10 +26,10 @@ use oxidized::{
     tany_sentinel::TanySentinel,
     typing_defs,
     typing_defs::{
-        EnumType, FunArity, FunElt, FunParam, FunParams, FunTparamsKind, FunType, ParamMode,
-        ParamMutability, PossiblyEnforcedTy, Reactivity, ShapeFieldType, ShapeKind, Tparam, Ty,
-        Ty_, TypedefType,
+        EnumType, FunArity, FunElt, FunParam, FunParams, FunType, ParamMode, ParamMutability,
+        PossiblyEnforcedTy, Reactivity, ShapeFieldType, ShapeKind, Tparam, Ty, Ty_, TypedefType,
     },
+    typing_defs_flags,
     typing_reason::Reason,
 };
 use parser_core_types::{
@@ -910,24 +910,16 @@ impl DirectDeclSmartConstructors<'_> {
                             .collect::<Result<Vec<_>, ParseError>>()?;
                         let ret = self.node_to_ty(&hint.ret_hint, type_variables)?;
                         Ty_::Tfun(FunType {
-                            is_coroutine: false,
-                            arity: FunArity::Fstandard(
-                                params.len() as isize,
-                                params.len() as isize,
-                            ),
-                            tparams: (Vec::new(), FunTparamsKind::FTKtparams),
+                            arity: FunArity::Fstandard(params.len() as isize),
+                            tparams: Vec::new(),
                             where_constraints: Vec::new(),
                             params,
                             ret: PossiblyEnforcedTy {
                                 enforced: false,
                                 type_: ret,
                             },
-                            fun_kind: FunKind::FSync,
                             reactive: Reactivity::Nonreactive,
-                            return_disposable: false,
-                            mutability: None,
-                            returns_mutable: false,
-                            returns_void_to_rx: false,
+                            flags: 0,
                         })
                     }
                 };
@@ -1109,22 +1101,30 @@ impl DirectDeclSmartConstructors<'_> {
             }
         };
         let attributes = attributes.as_attributes()?;
+        // TODO(hrust) Put this in a helper. Possibly do this for all flags.
+        let mut flags = match fun_kind {
+            FunKind::FSync => 0,
+            FunKind::FAsync => typing_defs_flags::FT_FLAGS_ASYNC,
+            FunKind::FGenerator => typing_defs_flags::FT_FLAGS_GENERATOR,
+            FunKind::FAsyncGenerator => {
+                typing_defs_flags::FT_FLAGS_ASYNC | typing_defs_flags::FT_FLAGS_GENERATOR
+            }
+            FunKind::FCoroutine => typing_defs_flags::FT_FLAGS_IS_COROUTINE,
+        };
+        if attributes.returns_mutable {
+            flags |= typing_defs_flags::FT_FLAGS_RETURNS_MUTABLE;
+        }
         let ft = FunType {
-            is_coroutine,
             arity,
-            tparams: (type_params, FunTparamsKind::FTKtparams),
+            tparams: type_params,
             where_constraints: Vec::new(),
             params,
             ret: PossiblyEnforcedTy {
                 enforced: false,
                 type_,
             },
-            fun_kind,
             reactive: attributes.reactivity,
-            return_disposable: false,
-            mutability: None,
-            returns_mutable: attributes.returns_mutable,
-            returns_void_to_rx: false,
+            flags,
         };
 
         let ty = Ty(Reason::Rwitness(id.0.clone()), Box::new(Ty_::Tfun(ft)));
@@ -1150,7 +1150,7 @@ impl DirectDeclSmartConstructors<'_> {
     ) -> Result<(FunParams, Vec<PropertyDecl>, FunArity), ParseError> {
         match list {
             Node_::List(nodes) => nodes.into_iter().fold(
-                Ok((Vec::new(), Vec::new(), FunArity::Fstandard(0, 0))),
+                Ok((Vec::new(), Vec::new(), FunArity::Fstandard(0))),
                 |acc, variable| match (acc, variable) {
                     (Ok((mut variables, mut properties, arity)), Node_::Variable(innards)) => {
                         let VariableDecl {
@@ -1192,16 +1192,16 @@ impl DirectDeclSmartConstructors<'_> {
                             rx_annotation: None,
                         };
                         let arity = match (arity, initializer, variadic) {
-                            (FunArity::Fstandard(min, max), Node_::Ignored, false) => {
+                            (FunArity::Fstandard(min), Node_::Ignored, false) => {
                                 variables.push(param);
-                                FunArity::Fstandard(min + 1, max + 1)
+                                FunArity::Fstandard(min + 1)
                             }
-                            (FunArity::Fstandard(min, _), Node_::Ignored, true) => {
+                            (FunArity::Fstandard(min), Node_::Ignored, true) => {
                                 FunArity::Fvariadic(min, param)
                             }
-                            (FunArity::Fstandard(min, max), _, _) => {
+                            (FunArity::Fstandard(min), _, _) => {
                                 variables.push(param);
-                                FunArity::Fstandard(min, max + 1)
+                                FunArity::Fstandard(min)
                             }
                             (arity, _, _) => {
                                 variables.push(param);
@@ -1214,7 +1214,7 @@ impl DirectDeclSmartConstructors<'_> {
                     (acc @ Err(_), _) => acc,
                 },
             ),
-            Node_::Ignored => Ok((Vec::new(), Vec::new(), FunArity::Fstandard(0, 0))),
+            Node_::Ignored => Ok((Vec::new(), Vec::new(), FunArity::Fstandard(0))),
             n => Err(format!("Expected a list of variables, but got {:?}", n)),
         }
     }

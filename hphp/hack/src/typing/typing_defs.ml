@@ -8,34 +8,122 @@
  *)
 
 open Hh_prelude
+open Typing_defs_flags
 include Typing_defs_core
 
+let xhp_attr_to_ce_flags xa =
+  match xa with
+  | None -> 0x0
+  | Some { xa_tag; xa_has_default } ->
+    Int.bit_or
+      ( if xa_has_default then
+        ce_flags_xa_has_default
+      else
+        0x0 )
+    @@
+    (match xa_tag with
+    | None -> ce_flags_xa_tag_none
+    | Some Required -> ce_flags_xa_tag_required
+    | Some Lateinit -> ce_flags_xa_tag_lateinit)
+
+let get_ce_flags_xhp_attr flags =
+  let tag_flags = Int.bit_and ce_flags_xa_tag_mask flags in
+  if Int.equal tag_flags 0 then
+    None
+  else
+    Some
+      {
+        xa_has_default = is_set ce_flags_xa_has_default flags;
+        xa_tag =
+          ( if Int.equal tag_flags ce_flags_xa_tag_none then
+            None
+          else if Int.equal tag_flags ce_flags_xa_tag_required then
+            Some Required
+          else
+            Some Lateinit );
+      }
+
+let get_ft_return_disposable ft = is_set ft.ft_flags ft_flags_return_disposable
+
+let get_ft_returns_void_to_rx ft =
+  is_set ft.ft_flags ft_flags_returns_void_to_rx
+
+let get_ft_returns_mutable ft = is_set ft.ft_flags ft_flags_returns_mutable
+
+let get_ft_is_coroutine ft = is_set ft.ft_flags ft_flags_is_coroutine
+
+let get_ft_async ft = is_set ft.ft_flags ft_flags_async
+
+let get_ft_generator ft = is_set ft.ft_flags ft_flags_generator
+
+let get_ft_ftk ft =
+  if is_set ft.ft_flags ft_flags_instantiated_targs then
+    FTKinstantiated_targs
+  else
+    FTKtparams
+
+let set_ft_ftk ft ftk =
+  {
+    ft with
+    ft_flags =
+      set_bit
+        ft_flags_instantiated_targs
+        (match ftk with
+        | FTKinstantiated_targs -> true
+        | FTKtparams -> false)
+        ft.ft_flags;
+  }
+
+let get_ft_fun_kind ft =
+  if get_ft_is_coroutine ft then
+    Ast_defs.FCoroutine
+  else
+    match (get_ft_async ft, get_ft_generator ft) with
+    | (false, false) -> Ast_defs.FSync
+    | (true, false) -> Ast_defs.FAsync
+    | (false, true) -> Ast_defs.FGenerator
+    | (true, true) -> Ast_defs.FAsyncGenerator
+
+let get_ft_param_mutable ft =
+  match Int.bit_and ft.ft_flags 0xC0 with
+  | 0x0 -> None
+  | 0x40 -> Some Param_owned_mutable
+  | 0x80 -> Some Param_borrowed_mutable
+  | 0xC0 -> Some Param_maybe_mutable
+  | _ -> failwith "get_ft_param_mutable"
+
+let param_mutable_to_flags m =
+  match m with
+  | None -> 0x0
+  | Some Param_owned_mutable -> 0x40
+  | Some Param_borrowed_mutable -> 0x80
+  | Some Param_maybe_mutable -> 0xC0
+
+let fun_kind_to_flags kind =
+  match kind with
+  | Ast_defs.FSync -> 0
+  | Ast_defs.FAsync -> ft_flags_async
+  | Ast_defs.FGenerator -> ft_flags_generator
+  | Ast_defs.FAsyncGenerator -> Int.bit_or ft_flags_async ft_flags_generator
+  | Ast_defs.FCoroutine -> ft_flags_is_coroutine
+
+let make_ft_flags
+    kind param_mutable ~return_disposable ~returns_mutable ~returns_void_to_rx =
+  let flags =
+    Int.bit_or (param_mutable_to_flags param_mutable) (fun_kind_to_flags kind)
+  in
+  let flags = set_bit ft_flags_return_disposable return_disposable flags in
+  let flags = set_bit ft_flags_returns_mutable returns_mutable flags in
+  let flags = set_bit ft_flags_returns_void_to_rx returns_void_to_rx flags in
+  flags
+
 type class_elt = {
-  ce_abstract: bool;
-  ce_final: bool;
-  ce_xhp_attr: xhp_attr option;
-  ce_override: bool;
-      (** This field has different meanings in shallow mode and eager mode:
-       * In shallow mode, true if this method has attribute __Override.
-       * In eager mode, true if this method is originally defined in a trait,
-       * AND has the override attribute, AND the trait does not inherit any
-       * other method of that name. *)
-  ce_dynamicallycallable: bool;
-  ce_lsb: bool;  (** true if this static property has attribute __LSB *)
-  ce_memoizelsb: bool;  (** true if this method has attribute __MemoizeLSB *)
-  ce_synthesized: bool;
-      (** true if this elt arose from require-extends or other mechanisms
-          of hack "synthesizing" methods that were not written by the
-          programmer. The eventual purpose of this is to make sure that
-          elts that *are* written by the programmer take precedence over
-          synthesized elts. *)
   ce_visibility: visibility;
-  ce_const: bool;
-  ce_lateinit: bool;
   ce_type: decl_ty Lazy.t;
   ce_origin: string;  (** identifies the class from which this elt originates *)
   ce_deprecated: string option;
   ce_pos: Pos.t Lazy.t;
+  ce_flags: int;
 }
 
 and fun_elt = {
@@ -344,7 +432,7 @@ let make_tany () = Tany TanySentinel.value
 
 let arity_min ft_arity : int =
   match ft_arity with
-  | Fstandard (min, _)
+  | Fstandard min
   | Fvariadic (min, _)
   | Fellipsis (min, _) ->
     min
@@ -550,18 +638,8 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
         match ft_params_compare fty1.ft_params fty2.ft_params with
         | 0 ->
           compare
-            ( fty1.ft_is_coroutine,
-              fty1.ft_arity,
-              fty1.ft_reactive,
-              fty1.ft_return_disposable,
-              fty1.ft_mutability,
-              fty1.ft_returns_mutable )
-            ( fty2.ft_is_coroutine,
-              fty2.ft_arity,
-              fty2.ft_reactive,
-              fty2.ft_return_disposable,
-              fty2.ft_mutability,
-              fty2.ft_returns_mutable )
+            (fty1.ft_arity, fty1.ft_reactive, fty1.ft_flags)
+            (fty2.ft_arity, fty2.ft_reactive, fty2.ft_flags)
         | n -> n
       end
     | n -> n
@@ -708,10 +786,11 @@ let equal_locl_ty ty1 ty2 = ty_equal ty1 ty2
 
 let equal_locl_ty_ ty_1 ty_2 = Int.equal 0 (ty__compare ty_1 ty_2)
 
-let equal_locl_fun_arity a1 a2 =
-  match (a1, a2) with
-  | (Fstandard (min1, max1), Fstandard (min2, max2)) ->
-    Int.equal min1 min2 && Int.equal max1 max2
+let equal_locl_fun_arity ft1 ft2 =
+  match (ft1.ft_arity, ft2.ft_arity) with
+  | (Fstandard min1, Fstandard min2) ->
+    Int.equal min1 min2
+    && Int.equal (List.length ft1.ft_params) (List.length ft2.ft_params)
   | (Fvariadic (min1, param1), Fvariadic (min2, param2)) ->
     Int.equal min1 min2 && Int.equal 0 (ft_params_compare [param1] [param2])
   | (Fellipsis (min1, pos1), Fellipsis (min2, pos2)) ->
@@ -804,10 +883,11 @@ and equal_shape_field_type sft1 sft2 =
   equal_decl_ty sft1.sft_ty sft2.sft_ty
   && Bool.equal sft1.sft_optional sft2.sft_optional
 
-and equal_decl_fun_arity a1 a2 =
-  match (a1, a2) with
-  | (Fstandard (min1, max1), Fstandard (min2, max2)) ->
-    Int.equal min1 min2 && Int.equal max1 max2
+and equal_decl_fun_arity ft1 ft2 =
+  match (ft1.ft_arity, ft2.ft_arity) with
+  | (Fstandard min1, Fstandard min2) ->
+    Int.equal min1 min2
+    && Int.equal (List.length ft1.ft_params) (List.length ft2.ft_params)
   | (Fvariadic (min1, param1), Fvariadic (min2, param2)) ->
     Int.equal min1 min2 && equal_decl_ft_params [param1] [param2]
   | (Fellipsis (min1, pos1), Fellipsis (min2, pos2)) ->
@@ -820,12 +900,9 @@ and equal_decl_fun_arity a1 a2 =
 and equal_decl_fun_type fty1 fty2 =
   equal_decl_possibly_enforced_ty fty1.ft_ret fty2.ft_ret
   && equal_decl_ft_params fty1.ft_params fty2.ft_params
-  && Bool.equal fty1.ft_is_coroutine fty2.ft_is_coroutine
-  && equal_decl_fun_arity fty1.ft_arity fty2.ft_arity
+  && equal_decl_fun_arity fty1 fty2
   && equal_reactivity fty1.ft_reactive fty2.ft_reactive
-  && Bool.equal fty1.ft_return_disposable fty2.ft_return_disposable
-  && Option.equal equal_param_mutability fty1.ft_mutability fty2.ft_mutability
-  && Bool.equal fty1.ft_returns_mutable fty2.ft_returns_mutable
+  && Int.equal fty1.ft_flags fty2.ft_flags
 
 and equal_reactivity r1 r2 =
   match (r1, r2) with
@@ -911,3 +988,46 @@ let equal_fun_elt fe1 fe2 =
   Option.equal String.equal fe1.fe_deprecated fe2.fe_deprecated
   && equal_decl_ty fe1.fe_type fe2.fe_type
   && Pos.equal fe1.fe_pos fe2.fe_pos
+
+let get_ce_abstract ce = is_set ce_flags_abstract ce.ce_flags
+
+let get_ce_final ce = is_set ce_flags_final ce.ce_flags
+
+let get_ce_override ce = is_set ce_flags_override ce.ce_flags
+
+let get_ce_lsb ce = is_set ce_flags_lsb ce.ce_flags
+
+let get_ce_memoizelsb ce = is_set ce_flags_memoizelsb ce.ce_flags
+
+let get_ce_synthesized ce = is_set ce_flags_synthesized ce.ce_flags
+
+let get_ce_const ce = is_set ce_flags_const ce.ce_flags
+
+let get_ce_lateinit ce = is_set ce_flags_lateinit ce.ce_flags
+
+let get_ce_dynamicallycallable ce =
+  is_set ce_flags_dynamicallycallable ce.ce_flags
+
+let make_ce_flags
+    ~xhp_attr
+    ~abstract
+    ~final
+    ~override
+    ~lsb
+    ~memoizelsb
+    ~synthesized
+    ~const
+    ~lateinit
+    ~dynamicallycallable =
+  let flags = 0 in
+  let flags = set_bit ce_flags_abstract abstract flags in
+  let flags = set_bit ce_flags_final final flags in
+  let flags = set_bit ce_flags_override override flags in
+  let flags = set_bit ce_flags_lsb lsb flags in
+  let flags = set_bit ce_flags_memoizelsb memoizelsb flags in
+  let flags = set_bit ce_flags_synthesized synthesized flags in
+  let flags = set_bit ce_flags_const const flags in
+  let flags = set_bit ce_flags_lateinit lateinit flags in
+  let flags = set_bit ce_flags_dynamicallycallable dynamicallycallable flags in
+  let flags = Int.bit_or flags (xhp_attr_to_ce_flags xhp_attr) in
+  flags

@@ -250,8 +250,7 @@ and obj_get_concrete_ty
               ( {
                   ce_visibility = vis;
                   ce_type = (lazy member_);
-                  ce_abstract;
-                  ce_xhp_attr;
+                  ce_flags;
                   ce_deprecated;
                   _;
                 } as member_ce ) ->
@@ -277,7 +276,10 @@ and obj_get_concrete_ty
               | _ -> () );
             TVis.check_obj_access ~use_pos:id_pos ~def_pos:mem_pos env vis;
             TVis.check_deprecated ~use_pos:id_pos ~def_pos:mem_pos ce_deprecated;
-            if Nast.equal_class_id_ class_id CIparent && ce_abstract then
+            if
+              Nast.equal_class_id_ class_id CIparent
+              && get_ce_abstract member_ce
+            then
               Errors.parent_abstract_call id_str id_pos mem_pos;
             let member_decl_ty = Typing_enum.member_type env member_ce in
             let ety_env = mk_ety_env r class_info x exact paraml in
@@ -293,7 +295,7 @@ and obj_get_concrete_ty
                     ~def_pos:mem_pos
                     ~use_name:(strip_ns id_str)
                     env
-                    (fst ft.ft_tparams)
+                    ft.ft_tparams
                     (List.map ~f:snd explicit_targs)
                 in
                 let ft =
@@ -318,7 +320,9 @@ and obj_get_concrete_ty
                 in
                 (env, mk (r, Tfun ft), explicit_targs, false)
               | _ ->
-                let is_xhp_attr = Option.is_some ce_xhp_attr in
+                let is_xhp_attr =
+                  Option.is_some (get_ce_flags_xhp_attr ce_flags)
+                in
                 let { et_type; et_enforced } =
                   Typing_enforceability.compute_enforced_and_pessimize_ty
                     env

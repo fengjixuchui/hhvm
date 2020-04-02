@@ -13,10 +13,13 @@ use oxidized::aast_defs::Tprim;
 use oxidized::ast;
 use oxidized::ast_defs::Id;
 use oxidized::pos::Pos;
-use oxidized::typing_defs_core::{FunType as DFunType, Tparam as DTparam, Ty as DTy, Ty_ as DTy_};
+use oxidized::typing_defs_core::{
+    FunParam as DFunParam, FunParams as DFunParams, FunType as DFunType, Tparam as DTparam,
+    Ty as DTy, Ty_ as DTy_,
+};
 use typing_defs_rust::tast;
 use typing_defs_rust::typing_defs::ExpandEnv;
-use typing_defs_rust::typing_defs_core::{FunType, PrimKind, Ty};
+use typing_defs_rust::typing_defs_core::{FunParam, FunType, PrimKind, Ty};
 use typing_defs_rust::typing_reason::PReason_;
 
 /// Transforms a declaration phase type into a localized type. This performs
@@ -152,20 +155,46 @@ pub fn localize_ft<'a, 'b>(
             use_name: _,
             explicit_targs,
         }) => {
-            if !explicit_targs.is_empty() && explicit_targs.len() != ft.tparams.0.len() {
+            if !explicit_targs.is_empty() && explicit_targs.len() != ft.tparams.len() {
                 unimplemented!("Wrong number of type arguments.")
             }
             let targ_tys = explicit_targs.iter().map(|targ| targ.0).collect();
-            let substs = subst::make_locl(env.bld(), &ft.tparams.0, &targ_tys);
+            let substs = subst::make_locl(env.bld(), &ft.tparams, &targ_tys);
             ety_env.substs = substs // TODO(hrust) extend substs instead of replacing
         }
         None => {
             // TODO(hrust)
         }
     };
-    // TODO(hrust): localize params and more...
+    /* TODO(hrust):
+       - set_env_reactive
+       - localize tparams
+       - localize where constraints
+       - check constraints under substs
+       - arity
+    */
+    let params = localize_funparams(ety_env, env, &ft.params);
     let ret = localize(ety_env, env, &ft.ret.type_);
-    env.bld().funtype(ret)
+    env.bld().funtype(params, ret)
+}
+
+fn localize_funparams<'a>(
+    ety_env: &mut ExpandEnv<'a>,
+    env: &mut Env<'a>,
+    params: &'a DFunParams,
+) -> BVec<'a, FunParam<'a>> {
+    env.bld()
+        .vec_from_iter(params.iter().map(|ty| localize_funparam(ety_env, env, ty)))
+}
+
+fn localize_funparam<'a>(
+    ety_env: &mut ExpandEnv<'a>,
+    env: &mut Env<'a>,
+    param: &'a DFunParam,
+) -> FunParam<'a> {
+    let type_ = &param.type_.type_;
+    let type_ = localize(ety_env, env, type_);
+    env.bld().funparam(type_)
 }
 
 fn localize_tparams<'a>(

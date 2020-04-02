@@ -6,6 +6,7 @@ use std::cmp::Ordering;
 
 use bumpalo::collections::Vec;
 use ocamlrep::{Allocator, FromError, OcamlRep, Value};
+use oxidized::pos::Pos;
 pub use oxidized::typing_defs_core::{DestructureKind, Exact, ParamMode};
 use oxidized::{aast_defs, ast_defs, ident, nast, tany_sentinel, typing_defs as oxidized_defs};
 
@@ -210,7 +211,7 @@ impl<'a> Ty<'a> {
         let Ty(r, _t) = self;
         *r
     }
-    pub fn get_pos(&self) -> Option<&'a oxidized::pos::Pos> {
+    pub fn get_pos(&self) -> Option<&'a Pos> {
         self.get_reason().pos
     }
     pub fn is_tyvar(&self) -> bool {
@@ -346,6 +347,19 @@ pub enum ConstraintType_<'a> {
     TCintersection(Ty<'a>, ConstraintType<'a>),
 }
 
+impl<'a> ConstraintType_<'a> {
+    pub fn to_oxidized(&self) -> oxidized_defs::ConstraintType_ {
+        use oxidized_defs::ConstraintType_ as O;
+        use ConstraintType_ as C;
+        match self {
+            C::ThasMember(hm) => O::ThasMember(hm.to_oxidized()),
+            C::Tdestructure => unimplemented!("{:?}", self),
+            C::TCunion(ty, ct) => O::TCunion(ty.to_oxidized(), ct.to_oxidized()),
+            C::TCintersection(ty, ct) => O::TCintersection(ty.to_oxidized(), ct.to_oxidized()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ConstraintType<'a>(pub PReason<'a>, pub &'a ConstraintType_<'a>);
 
@@ -366,6 +380,12 @@ impl Ord for ConstraintType<'_> {
     }
 }
 
+impl<'a> ConstraintType<'a> {
+    pub fn to_oxidized(&self) -> oxidized_defs::ConstraintType {
+        oxidized_defs::ConstraintType(self.0.to_oxidized(), Box::new(self.1.to_oxidized()))
+    }
+}
+
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct HasMember<'a> {
     pub name: &'a nast::Sid,
@@ -374,6 +394,16 @@ pub struct HasMember<'a> {
     /// HHVM would access the private member of a parent class instead of the
     /// one from the current class.
     pub class_id: &'a nast::ClassId_,
+}
+
+impl<'a> HasMember<'a> {
+    pub fn to_oxidized(&self) -> oxidized_defs::HasMember {
+        oxidized_defs::HasMember {
+            name: self.name.clone(),
+            type_: self.member_type.to_oxidized(),
+            class_id: self.class_id.clone(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -406,6 +436,27 @@ pub enum InternalType_<'a> {
 }
 
 pub type InternalType<'a> = &'a InternalType_<'a>;
+
+impl<'a> InternalType_<'a> {
+    pub fn to_oxidized(&self) -> oxidized_defs::InternalType {
+        use oxidized_defs::InternalType as O;
+        use InternalType_ as I;
+        match self {
+            I::LoclType(ty) => O::LoclType(ty.to_oxidized()),
+            I::ConstraintType(ct) => O::ConstraintType(ct.to_oxidized()),
+        }
+    }
+}
+
+impl OcamlRep for InternalType_<'_> {
+    fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> Value<'a> {
+        self.to_oxidized().to_ocamlrep(alloc)
+    }
+
+    fn from_ocamlrep(_value: Value<'_>) -> Result<Self, FromError> {
+        unimplemented!()
+    }
+}
 
 impl<'a> Ty<'a> {
     pub fn from_oxidized(ty: &oxidized_defs::Ty, builder: &'a TypeBuilder<'a>) -> Ty<'a> {
@@ -511,29 +562,47 @@ impl<'a> FunType_<'a> {
     pub fn to_oxidized(&self) -> oxidized_defs::FunType {
         // TODO(hrust) proper conversion
         use oxidized_defs::*;
+        let FunType_ { return_, params } = self;
 
         FunType {
-            is_coroutine: false,
-            arity: FunArity::Fstandard(0, 0),
-            tparams: (vec![], FunTparamsKind::FTKtparams),
+            arity: FunArity::Fstandard(0),
+            tparams: vec![],
             where_constraints: vec![],
-            params: vec![],
+            params: params.iter().map(|p| p.to_oxidized()).collect(),
             ret: PossiblyEnforcedTy {
                 enforced: false,
-                type_: self.return_.to_oxidized(),
+                type_: return_.to_oxidized(),
             },
-            fun_kind: ast_defs::FunKind::FSync,
             reactive: Reactivity::Nonreactive,
-            return_disposable: false,
-            mutability: None,
-            returns_mutable: false,
-            returns_void_to_rx: false,
+            flags: 0,
         }
     }
 }
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct FunParam<'a> {
+pub struct FunParam_<'a> {
     // TODO(hrust) missing fields
     pub type_: Ty<'a>, // TODO(hrust) possibly_enforced_ty
+}
+
+pub type FunParam<'a> = &'a FunParam_<'a>;
+
+impl<'a> FunParam_<'a> {
+    pub fn to_oxidized(&self) -> oxidized_defs::FunParam {
+        use oxidized_defs::*;
+        let FunParam_ { type_ } = self;
+
+        FunParam {
+            pos: Pos::make_none(),
+            name: None,
+            type_: PossiblyEnforcedTy {
+                enforced: false,
+                type_: type_.to_oxidized(),
+            },
+            kind: ParamMode::FPnormal,
+            accept_disposable: false,
+            mutability: None,
+            rx_annotation: None,
+        }
+    }
 }

@@ -214,7 +214,7 @@ let is_return_disposable_fun_type env ty =
   let (_env, ty) = Env.expand_type env ty in
   match get_node ty with
   | Tfun ft ->
-    ft.ft_return_disposable
+    get_ft_return_disposable ft
     || Option.is_some
          (Typing_disposable.is_disposable_type env ft.ft_ret.et_type)
   | _ -> false
@@ -1891,25 +1891,20 @@ and expr_
         let fty = { ftype with ft_params = local_obj_fp :: ftype.ft_params } in
         let fun_arity =
           match fty.ft_arity with
-          | Fstandard (min, max) -> Fstandard (min + 1, max + 1)
+          | Fstandard min -> Fstandard (min + 1)
           | Fvariadic (min, x) -> Fvariadic (min + 1, x)
           | Fellipsis (min, p) -> Fellipsis (min + 1, p)
         in
         let caller =
           {
-            (* propagate 'is_coroutine' from the method being called*)
-            ft_is_coroutine = fty.ft_is_coroutine;
             ft_arity = fun_arity;
             ft_tparams = fty.ft_tparams;
             ft_where_constraints = fty.ft_where_constraints;
             ft_params = fty.ft_params;
             ft_ret = fty.ft_ret;
-            ft_fun_kind = fty.ft_fun_kind;
+            (* propagate 'is_coroutine' from the method being called*)
+            ft_flags = fty.ft_flags;
             ft_reactive = fty.ft_reactive;
-            ft_mutability = fty.ft_mutability;
-            ft_returns_mutable = fty.ft_returns_mutable;
-            ft_return_disposable = fty.ft_return_disposable;
-            ft_returns_void_to_rx = fty.ft_returns_void_to_rx;
           }
         in
         make_result
@@ -1969,15 +1964,10 @@ and expr_
           (snd meth)
           Errors.unify_error;
         expr_error env Reason.Rnone outer
-      | Some
-          {
-            ce_type = (lazy ty);
-            ce_visibility;
-            ce_deprecated;
-            ce_pos = (lazy ce_pos);
-            _;
-          } ->
+      | Some ({ ce_type = (lazy ty); ce_pos = (lazy ce_pos); _ } as ce) ->
         let cid = CI c in
+        let ce_visibility = ce.ce_visibility in
+        let ce_deprecated = ce.ce_deprecated in
         let (env, _tal, _te, cid_ty) =
           static_class_id ~check_constraints:true (fst c) env [] cid
         in
@@ -2010,7 +2000,7 @@ and expr_
               ~use_pos:p
               ~use_name:(strip_ns (snd meth))
               env
-              (fst ft.ft_tparams)
+              ft.ft_tparams
               []
           in
           let (env, ft) =
@@ -2800,7 +2790,13 @@ and expr_
       let env = { env with inside_ppl_class = false } in
       let is_coroutine = Ast_defs.(equal_fun_kind f.f_fun_kind FCoroutine) in
       let ft =
-        { ft with ft_reactive = reactivity; ft_is_coroutine = is_coroutine }
+        {
+          ft with
+          ft_reactive = reactivity;
+          ft_flags =
+            Typing_defs_flags.(
+              set_bit ft_flags_is_coroutine is_coroutine ft.ft_flags);
+        }
       in
       let (env, tefun, ty) = anon_make ?ret_ty env p f ft idl is_anon in
       let env = Env.set_env_reactive env old_reactivity in
@@ -3729,7 +3725,7 @@ and new_object
       | CIparent ->
         let (env, ctor_fty) =
           match fst (Cls.construct class_info) with
-          | Some { ce_type = (lazy ty); ce_abstract; _ } ->
+          | Some ({ ce_type = (lazy ty); _ } as ce) ->
             let ety_env =
               {
                 type_expansions = [];
@@ -3740,7 +3736,7 @@ and new_object
                 on_error = Errors.unify_error_at p;
               }
             in
-            if ce_abstract then
+            if get_ce_abstract ce then
               Errors.parent_abstract_call
                 SN.Members.__construct
                 p
@@ -4167,7 +4163,7 @@ and check_parent_construct pos env el unpacked_element env_parent =
 
 and check_class_get env p def_pos cid mid ce e =
   match e with
-  | CIself when ce.ce_abstract ->
+  | CIself when get_ce_abstract ce ->
     begin
       match get_node (Env.get_self env) with
       | Tclass ((_, self), _, _) ->
@@ -4195,9 +4191,11 @@ and check_class_get env p def_pos cid mid ce e =
         end
       | _ -> ()
     end
-  | CIparent when ce.ce_abstract -> Errors.parent_abstract_call mid p def_pos
-  | CI _ when ce.ce_abstract -> Errors.classname_abstract_call cid mid p def_pos
-  | CI (_, classname) when ce.ce_synthesized ->
+  | CIparent when get_ce_abstract ce ->
+    Errors.parent_abstract_call mid p def_pos
+  | CI _ when get_ce_abstract ce ->
+    Errors.classname_abstract_call cid mid p def_pos
+  | CI (_, classname) when get_ce_synthesized ce ->
     Errors.static_synthetic_method classname mid p def_pos
   | _ -> ()
 
@@ -4316,7 +4314,7 @@ and dispatch_call
           ~description_of_expected:"a function value"
       in
       match get_node ety with
-      | Tfun { ft_is_coroutine = true; _ } -> (env, Some true)
+      | Tfun ft -> (env, Some (get_ft_is_coroutine ft))
       | Tunion ts
       | Tintersection ts ->
         are_coroutines env ts
@@ -5096,9 +5094,8 @@ and dispatch_call
           let make_fty params ft_ret =
             let len = List.length params in
             {
-              ft_is_coroutine = false;
-              ft_arity = Fstandard (len, len);
-              ft_tparams = ([], FTKtparams);
+              ft_arity = Fstandard len;
+              ft_tparams = [];
               ft_where_constraints = [];
               ft_params =
                 List.map params ~f:(fun et_type ->
@@ -5113,12 +5110,7 @@ and dispatch_call
                     });
               ft_ret = { et_enforced = false; et_type = ft_ret };
               ft_reactive = Nonreactive;
-              ft_return_disposable = false;
-              (* mutability of the receiver *)
-              ft_mutability = None;
-              ft_returns_mutable = false;
-              ft_returns_void_to_rx = false;
-              ft_fun_kind = Ast_defs.FSync;
+              ft_flags = 0;
             }
           in
           let reason = Reason.Rwitness cpos in
@@ -5242,7 +5234,7 @@ and fun_type_of_id env x tal el =
           ~use_pos:(fst x)
           ~use_name:(strip_ns (snd x))
           env
-          (fst ft.ft_tparams)
+          ft.ft_tparams
           (List.map ~f:snd tal)
       in
       let ft =
@@ -5518,13 +5510,18 @@ and class_get_
         | Some
             ( {
                 ce_visibility = vis;
-                ce_lsb = lsb;
                 ce_type = (lazy member_decl_ty);
                 ce_deprecated;
                 _;
               } as ce ) ->
           let def_pos = get_pos member_decl_ty in
-          TVis.check_class_access ~use_pos:p ~def_pos env (vis, lsb) cid class_;
+          TVis.check_class_access
+            ~use_pos:p
+            ~def_pos
+            env
+            (vis, get_ce_lsb ce)
+            cid
+            class_;
           TVis.check_deprecated ~use_pos:p ~def_pos ce_deprecated;
           check_class_get env p def_pos c mid ce cid;
           let (env, member_ty, et_enforced, tal) =
@@ -5538,7 +5535,7 @@ and class_get_
                   ~use_pos:p
                   ~use_name:(strip_ns mid)
                   env
-                  (fst ft.ft_tparams)
+                  ft.ft_tparams
                   (List.map ~f:snd explicit_targs)
               in
               let ft =
@@ -5954,11 +5951,12 @@ and call_construct p env class_ params el unpacked_element cid =
       in
       (env, tcid, tel, typed_unpack_element, m)
 
-and check_arity ?(did_unpack = false) pos pos_def (arity : int) exp_arity =
+and check_arity ?(did_unpack = false) pos pos_def ft (arity : int) exp_arity =
   let exp_min = Typing_defs.arity_min exp_arity in
   if arity < exp_min then Errors.typing_too_few_args exp_min arity pos pos_def;
   match exp_arity with
-  | Fstandard (_, exp_max) ->
+  | Fstandard _ ->
+    let exp_max = List.length ft.ft_params in
     let arity =
       if did_unpack then
         arity + 1
@@ -5974,7 +5972,7 @@ and check_arity ?(did_unpack = false) pos pos_def (arity : int) exp_arity =
 and check_lambda_arity lambda_pos def_pos lambda_arity expected_arity =
   let expected_min = Typing_defs.arity_min expected_arity in
   match (lambda_arity, expected_arity) with
-  | (Fstandard (lambda_min, _), Fstandard _) ->
+  | (Fstandard lambda_min, Fstandard _) ->
     if lambda_min < expected_min then
       Errors.typing_too_few_args expected_min lambda_min lambda_pos def_pos;
     if lambda_min > expected_min then
@@ -6361,7 +6359,7 @@ and call
              * unpacked array consumes 1 or many parameters, it is nonsensical to say
              * that not enough args were passed in (so we don't do the min check).
              *)
-            let () = check_arity ~did_unpack pos pos_def arity ft.ft_arity in
+            let () = check_arity ~did_unpack pos pos_def ft arity ft.ft_arity in
             (* Variadic params cannot be inout so we can stop early *)
             let env = wfold_left2 inout_write_back env ft.ft_params el in
             let (env, ret_ty) =
@@ -6393,7 +6391,7 @@ and split_remaining_params_required_optional ft remaining_params =
    *)
   let min_arity =
     match ft.ft_arity with
-    | Fstandard (min_arity, _)
+    | Fstandard min_arity
     | Fvariadic (min_arity, _)
     | Fellipsis (min_arity, _) ->
       min_arity

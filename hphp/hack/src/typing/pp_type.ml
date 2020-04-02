@@ -398,11 +398,6 @@ and pp_fun_type : type a. Format.formatter -> a ty fun_type -> unit =
  fun fmt x ->
   Format.fprintf fmt "@[<2>{ ";
 
-  Format.fprintf fmt "@[%s =@ " "ft_is_coroutine";
-  Format.fprintf fmt "%B" x.ft_is_coroutine;
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
   Format.fprintf fmt "@[%s =@ " "ft_arity";
   pp_fun_arity fmt x.ft_arity;
   Format.fprintf fmt "@]";
@@ -417,7 +412,7 @@ and pp_fun_type : type a. Format.formatter -> a ty fun_type -> unit =
          pp_tparam fmt x;
          true)
        ~init:false
-       (fst x.ft_tparams));
+       x.ft_tparams);
   Format.fprintf fmt "@,]@]";
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
@@ -446,29 +441,48 @@ and pp_fun_type : type a. Format.formatter -> a ty fun_type -> unit =
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
 
-  Format.fprintf fmt "@[%s =@ " "ft_fun_kind";
-  Format.pp_print_string fmt (show_fun_kind x.ft_fun_kind);
+  let pp_ft_flags fmt ft =
+    Format.fprintf fmt "@[<2>(%s@ " "make_ft_flags";
+
+    Format.fprintf fmt "@[";
+    Format.fprintf fmt "%s" (show_fun_kind (get_ft_fun_kind ft));
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[";
+    Format.fprintf
+      fmt
+      "%s"
+      (show_param_mutability_opt (get_ft_param_mutable ft));
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "return_disposable";
+    Format.fprintf fmt "%B" (get_ft_return_disposable ft);
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "returns_mutable";
+    Format.fprintf fmt "%B" (get_ft_returns_mutable ft);
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "returns_void_to_rx";
+    Format.fprintf fmt "%B" (get_ft_returns_void_to_rx ft);
+    Format.fprintf fmt "@]";
+
+    Format.fprintf fmt ")@]"
+  in
+
+  Format.fprintf fmt "@[%s =@ " "ft_flags";
+  pp_ft_flags fmt x;
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
 
   Format.fprintf fmt "@[%s =@ " "ft_reactive";
   pp_reactivity fmt x.ft_reactive;
   Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
 
-  Format.fprintf fmt "@[%s =@ " "ft_return_disposable";
-  Format.fprintf fmt "%B" x.ft_return_disposable;
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
-  Format.fprintf fmt "@[%s =@ " "ft_mutable";
-  Format.fprintf fmt "%s" (show_param_mutability_opt x.ft_mutability);
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
-  Format.fprintf fmt "@[%s =@ " "ft_returns_mutable";
-  Format.fprintf fmt "%B" x.ft_returns_mutable;
-  Format.fprintf fmt "@]";
   Format.fprintf fmt "@ }@]"
 
 and show_param_mutability_opt : param_mutability option -> string =
@@ -500,11 +514,9 @@ and show_fun_type : type a. a ty fun_type -> string =
 and pp_fun_arity : type a. Format.formatter -> a ty fun_arity -> unit =
  fun fmt fa ->
   match fa with
-  | Fstandard (a0, a1) ->
+  | Fstandard a0 ->
     Format.fprintf fmt "(@[<2>Fstandard (@,";
     Format.fprintf fmt "%d" a0;
-    Format.fprintf fmt ",@ ";
-    Format.fprintf fmt "%d" a1;
     Format.fprintf fmt "@,))@]"
   | Fvariadic (a0, a1) ->
     Format.fprintf fmt "(@[<2>Fvariadic (@,";
@@ -611,41 +623,6 @@ and pp_class_elt : Format.formatter -> class_elt -> unit =
  fun fmt x ->
   Format.fprintf fmt "@[<2>{ ";
 
-  Format.fprintf fmt "@[%s =@ " "ce_final";
-  Format.fprintf fmt "%B" x.ce_final;
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
-  Format.fprintf fmt "@[%s =@ " "ce_xhp_attr";
-  (match x.ce_xhp_attr with
-  | None -> Format.pp_print_string fmt "None"
-  | Some x ->
-    Format.pp_print_string fmt "(Some ";
-    pp_xhp_attr fmt x;
-    Format.pp_print_string fmt ")");
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
-  Format.fprintf fmt "@[%s =@ " "ce_override";
-  Format.fprintf fmt "%B" x.ce_override;
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
-  Format.fprintf fmt "@[%s =@ " "ce_lsb";
-  Format.fprintf fmt "%B" x.ce_lsb;
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
-  Format.fprintf fmt "@[%s =@ " "ce_memoizelsb";
-  Format.fprintf fmt "%B" x.ce_memoizelsb;
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
-  Format.fprintf fmt "@[%s =@ " "ce_synthesized";
-  Format.fprintf fmt "%B" x.ce_synthesized;
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
   Format.fprintf fmt "@[%s =@ " "ce_visibility";
   ( Format.pp_print_string fmt
   @@
@@ -653,11 +630,6 @@ and pp_class_elt : Format.formatter -> class_elt -> unit =
   | Vpublic -> "Vpublic"
   | Vprivate s -> "Vprivate " ^ s
   | Vprotected s -> "Vprotected " ^ s );
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
-  Format.fprintf fmt "@[%s =@ " "ce_const";
-  Format.fprintf fmt "%B" x.ce_const;
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
 
@@ -671,6 +643,61 @@ and pp_class_elt : Format.formatter -> class_elt -> unit =
 
   Format.fprintf fmt "@[%s =@ " "ce_origin";
   Format.fprintf fmt "%S" x.ce_origin;
+  Format.fprintf fmt "@]";
+  Format.fprintf fmt ";@ ";
+
+  let pp_ce_flags fmt ce =
+    Format.fprintf fmt "@[<2>(%s@ " "make_ce_flags";
+
+    Format.fprintf fmt "@[~%s:" "abstract";
+    Format.fprintf fmt "%B" (get_ce_abstract ce);
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "final";
+    Format.fprintf fmt "%B" (get_ce_final ce);
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "override";
+    Format.fprintf fmt "%B" (get_ce_override ce);
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "lsb";
+    Format.fprintf fmt "%B" (get_ce_lsb ce);
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "memoizelsb";
+    Format.fprintf fmt "%B" (get_ce_memoizelsb ce);
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "synthesized";
+    Format.fprintf fmt "%B" (get_ce_synthesized ce);
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "const";
+    Format.fprintf fmt "%B" (get_ce_const ce);
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "lateinit";
+    Format.fprintf fmt "%B" (get_ce_lateinit ce);
+    Format.fprintf fmt "@]";
+    Format.fprintf fmt "@ ";
+
+    Format.fprintf fmt "@[~%s:" "dynamicallycallable";
+    Format.fprintf fmt "%B" (get_ce_dynamicallycallable ce);
+    Format.fprintf fmt "@]";
+
+    Format.fprintf fmt ")@]"
+  in
+
+  Format.fprintf fmt "@[%s =@ " "ce_flags";
+  pp_ce_flags fmt x;
   Format.fprintf fmt "@]";
 
   Format.fprintf fmt "@ }@]"

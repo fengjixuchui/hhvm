@@ -232,25 +232,26 @@ let method_type env m =
       assert (Option.is_none param.param_expr);
       Fvariadic (arity_min, make_param_ty env ~is_lambda:false param)
     | FVellipsis p -> Fellipsis (arity_min, p)
-    | FVnonVariadic -> Fstandard (arity_min, List.length m.m_params)
+    | FVnonVariadic -> Fstandard arity_min
   in
   let tparams = List.map m.m_tparams (type_param env) in
   let where_constraints =
     List.map m.m_where_constraints (where_constraint env)
   in
   {
-    ft_is_coroutine = Ast_defs.(equal_fun_kind m.m_fun_kind FCoroutine);
     ft_arity = arity;
-    ft_tparams = (tparams, FTKtparams);
+    ft_tparams = tparams;
     ft_where_constraints = where_constraints;
     ft_params = params;
     ft_ret = { et_type = ret; et_enforced = false };
     ft_reactive = reactivity;
-    ft_mutability = mut;
-    ft_returns_mutable = returns_mutable;
-    ft_return_disposable = return_disposable;
-    ft_fun_kind = m.m_fun_kind;
-    ft_returns_void_to_rx = returns_void_to_rx;
+    ft_flags =
+      make_ft_flags
+        m.m_fun_kind
+        mut
+        ~returns_mutable
+        ~return_disposable
+        ~returns_void_to_rx;
   }
 
 let method_redeclaration_type env m =
@@ -273,25 +274,26 @@ let method_redeclaration_type env m =
       assert (Option.is_none param.param_expr);
       Fvariadic (arity_min, make_param_ty env ~is_lambda:false param)
     | FVellipsis p -> Fellipsis (arity_min, p)
-    | FVnonVariadic -> Fstandard (arity_min, List.length m.mt_params)
+    | FVnonVariadic -> Fstandard arity_min
   in
   let tparams = List.map m.mt_tparams (type_param env) in
   let where_constraints =
     List.map m.mt_where_constraints (where_constraint env)
   in
   {
-    ft_is_coroutine = Ast_defs.(equal_fun_kind m.mt_fun_kind FCoroutine);
     ft_arity = arity;
-    ft_tparams = (tparams, FTKtparams);
+    ft_tparams = tparams;
     ft_where_constraints = where_constraints;
     ft_params = params;
     ft_ret = { et_type = ret; et_enforced = false };
     ft_reactive = Nonreactive;
-    ft_mutability = None;
-    ft_returns_mutable = false;
-    ft_fun_kind = m.mt_fun_kind;
-    ft_return_disposable = false;
-    ft_returns_void_to_rx = false;
+    ft_flags =
+      make_ft_flags
+        m.mt_fun_kind
+        None
+        ~return_disposable:false
+        ~returns_void_to_rx:false
+        ~returns_mutable:false;
   }
 
 let method_ env c m =
