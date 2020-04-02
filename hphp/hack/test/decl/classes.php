@@ -31,7 +31,8 @@ class MyClass {
   <<__Rx>>
   public function reactive_function_mutable_args(
     <<__Mutable>> MyClass $a,
-    <<__Mutable>> MyClass $b,
+    <<__MaybeMutable>> MyClass $b,
+    <<__OwnedMutable>> MyClass $c,
   ): void {
   }
 
@@ -50,5 +51,6 @@ class MyConstructorPropertiesClass {
     private string $private,
     protected string $protected,
     public string $public,
+    public string $hasDefault = "has default",
   ) {}
 }

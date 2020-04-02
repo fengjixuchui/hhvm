@@ -10,6 +10,17 @@
 
 open Core_kernel
 
+let errors_to_string (errors : Errors.t) : string list =
+  let error_to_string (error : Errors.error) : string =
+    let error = Errors.to_absolute_for_test error in
+    let code = Errors.get_code error in
+    let message =
+      error |> Errors.to_list |> List.map ~f:snd |> String.concat ~sep:"; "
+    in
+    Printf.sprintf "[%d] %s" code message
+  in
+  errors |> Errors.get_sorted_error_list |> List.map ~f:error_to_string
+
 let fake_dir = Printf.sprintf "%s/fake" (Filename.get_temp_dir_name ())
 
 let in_fake_dir path = Printf.sprintf "%s/%s" fake_dir path
@@ -111,10 +122,13 @@ let test_deferred_decl_should_defer () =
 let foo_contents =
   {|<?hh //strict
   class Foo {
-    public function foo (Bar $b): int {
+    public function foo (Bar $b) : int {
       return $b->toString();
     }
   }
+
+  function f1(Foo $x) : void { }
+  function f2(foo $x) : void { }
 |}
 
 let bar_contents =
@@ -133,9 +147,13 @@ type server_setup = {
   bar_path: Relative_path.t;
   bar_contents: string;
   nonexistent_path: Relative_path.t;
+  naming_table: Naming_table.t;
 }
 
-let server_setup_for_deferral_tests () : server_setup =
+(** This lays down some files on disk. Sets up a forward naming table.
+Sets up the provider's reverse naming table. Returns an empty context, plus
+information about the files on disk. *)
+let server_setup () : server_setup =
   (* Set up a simple fake repo *)
   Disk.mkdir_p @@ in_fake_dir "root/";
   Relative_path.set_path_prefix
@@ -197,13 +215,21 @@ let server_setup_for_deferral_tests () : server_setup =
     two computations:
       - a declaration of \Bar
       - a (deferred) type check of \Foo *)
-  { ctx; foo_path; foo_contents; bar_path; bar_contents; nonexistent_path }
+  {
+    ctx;
+    foo_path;
+    foo_contents;
+    bar_path;
+    bar_contents;
+    nonexistent_path;
+    naming_table;
+  }
 
 (* In this test, we wish to establish that we enable deferring type checking
   for files that have undeclared dependencies, UNLESS we've already deferred
   those files a certain number of times. *)
 let test_process_file_deferring () =
-  let { ctx; foo_path; _ } = server_setup_for_deferral_tests () in
+  let { ctx; foo_path; _ } = server_setup () in
   let file = Typing_check_service.{ path = foo_path; deferred_count = 0 } in
   let dynamic_view_files = Relative_path.Set.empty in
   let errors = Errors.empty in
@@ -271,8 +297,7 @@ let test_process_file_deferring () =
 (* This test verifies that the deferral/counting machinery works for
    ProviderUtils.compute_tast_and_errors_unquarantined. *)
 let test_compute_tast_counting () =
-  let { ctx; foo_path; foo_contents; _ } = server_setup_for_deferral_tests () in
-  EventLogger.init_fake ();
+  let { ctx; foo_path; foo_contents; _ } = server_setup () in
 
   let (ctx, entry) =
     Provider_context.add_entry_from_file_contents
@@ -285,9 +310,9 @@ let test_compute_tast_counting () =
   in
 
   Asserter.Int_asserter.assert_equals
-    77
+    125
     (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
-    "There should be 77 decl_accessor_count for shared_mem provider";
+    "There should be this many decl_accessor_count for shared_mem provider";
   Asserter.Int_asserter.assert_equals
     0
     (Telemetry_test_utils.int_exn telemetry "disk_cat.count")
@@ -312,9 +337,9 @@ let test_compute_tast_counting () =
         Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
       in
       Asserter.Int_asserter.assert_equals
-        37
+        63
         (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
-        "There should be 37 decl_accessor_count for local_memory provider";
+        "There should be this many decl_accessor_count for local_memory provider";
       Asserter.Int_asserter.assert_equals
         0
         (Telemetry_test_utils.int_exn telemetry "disk_cat.count")
@@ -367,80 +392,281 @@ let test_should_enable_deferring () =
 
 (* This test verifies quarantine. *)
 let test_quarantine () =
-  EventLogger.init_fake ();
-  Utils.with_context
-    ~enter:Provider_backend.set_local_memory_backend_with_defaults
-    ~exit:Provider_backend.set_shared_memory_backend
-    ~do_:(fun () ->
-      let { ctx; foo_path; foo_contents; nonexistent_path; _ } =
-        server_setup_for_deferral_tests ()
-      in
+  Provider_backend.set_local_memory_backend_with_defaults ();
+  let { ctx; foo_path; foo_contents; nonexistent_path; _ } = server_setup () in
 
-      (* simple case *)
-      let (ctx, _foo_entry) =
-        Provider_context.add_entry_from_file_contents
-          ~ctx
-          ~path:foo_path
-          ~contents:foo_contents
-      in
-      let can_quarantine =
-        try
-          Provider_utils.respect_but_quarantine_unsaved_changes
-            ~ctx
-            ~f:(fun () -> "ok")
-        with e -> e |> Exception.wrap |> Exception.to_string
-      in
+  (* simple case *)
+  let (ctx, _foo_entry) =
+    Provider_context.add_entry_from_file_contents
+      ~ctx
+      ~path:foo_path
+      ~contents:foo_contents
+  in
+  let can_quarantine =
+    try
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          "ok")
+    with e -> e |> Exception.wrap |> Exception.to_string
+  in
+  Asserter.String_asserter.assert_equals
+    "ok"
+    can_quarantine
+    "Should be able to quarantine foo";
+
+  (* repeat of simple case *)
+  let can_quarantine =
+    try
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          "ok")
+    with e -> e |> Exception.wrap |> Exception.to_string
+  in
+  Asserter.String_asserter.assert_equals
+    "ok"
+    can_quarantine
+    "Should be able to quarantine foo a second time";
+
+  (* add a non-existent file; should fail *)
+  let (ctx2, _nonexistent_entry) =
+    Provider_context.add_entry_from_file_contents
+      ~ctx
+      ~path:nonexistent_path
+      ~contents:""
+  in
+  let can_quarantine =
+    try
+      Provider_utils.respect_but_quarantine_unsaved_changes
+        ~ctx:ctx2
+        ~f:(fun () -> "ok")
+    with e -> e |> Exception.wrap |> Exception.to_string
+  in
+  Asserter.String_asserter.assert_equals
+    "ok"
+    can_quarantine
+    "Should be able to quarantine nonexistent_file";
+
+  (* repeat of simple case, back with original ctx *)
+  let can_quarantine =
+    try
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          "ok")
+    with e -> e |> Exception.wrap |> Exception.to_string
+  in
+  Asserter.String_asserter.assert_equals
+    "ok"
+    can_quarantine
+    "Should be able to quarantine foo a third time";
+
+  true
+
+let test_unsaved_symbol_change () =
+  Provider_backend.set_local_memory_backend_with_defaults ();
+
+  (* We'll create a naming-table. This test suite is based on naming-table. *)
+  let { ctx; foo_path; foo_contents; naming_table; _ } = server_setup () in
+  let db_name = Filename.temp_file "server_naminng" ".sqlite" in
+  let save_results = Naming_table.save naming_table db_name in
+  Asserter.Int_asserter.assert_equals
+    2
+    save_results.Naming_sqlite.files_added
+    "unsaved: expected this many files in naming.sqlite";
+  Asserter.Int_asserter.assert_equals
+    4
+    save_results.Naming_sqlite.symbols_added
+    "unsaved: expected this many symbols in naming.sqlite";
+
+  (* Now, I want a fresh ctx with no reverse-naming entries in it,
+  and I want it to be backed by a sqlite naming database. *)
+  let (_ : Naming_table.t) = Naming_table.load_from_sqlite ctx db_name in
+  Provider_backend.set_local_memory_backend_with_defaults ();
+  let ctx =
+    Provider_context.empty_for_tool
+      ~popt:(Provider_context.get_popt ctx)
+      ~tcopt:(Provider_context.get_tcopt ctx)
+      ~backend:(Provider_backend.get ())
+  in
+
+  (* Compute tast as-is *)
+  let (ctx, entry) =
+    Provider_context.add_entry_from_file_contents
+      ~ctx
+      ~path:foo_path
+      ~contents:foo_contents
+  in
+  let { Tast_provider.Compute_tast_and_errors.telemetry; errors; _ } =
+    Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
+  in
+  Asserter.Int_asserter.assert_equals
+    8
+    (Telemetry_test_utils.int_exn telemetry "get_ast.count")
+    "unsaved: compute_tast(class Foo) should have this many calls to get_ast";
+  Asserter.Int_asserter.assert_equals
+    1
+    (Telemetry_test_utils.int_exn telemetry "disk_cat.count")
+    "unsaved: compute_tast(class Foo) should have this many calls to disk_cat";
+  Asserter.String_asserter.assert_list_equals
+    [
+      "[4110] Invalid return type; Expected int; But got string";
+      "[2006] Could not find foo; Did you mean Foo?";
+    ]
+    (errors_to_string errors)
+    "unsaved: compute_tast(class Foo) should have these errors";
+
+  (* Make an unsaved change which affects a symbol definition that's used *)
+  let foo_contents1 =
+    Str.global_replace (Str.regexp "class Foo") "class Foo1" foo_contents
+  in
+  let (ctx, entry) =
+    Provider_context.add_entry_from_file_contents
+      ~ctx
+      ~path:foo_path
+      ~contents:foo_contents1
+  in
+  let { Tast_provider.Compute_tast_and_errors.telemetry; errors; _ } =
+    Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
+  in
+  Asserter.Int_asserter.assert_equals
+    1
+    (Telemetry_test_utils.int_exn telemetry "get_ast.count")
+    "unsaved: compute_tast(class Foo1) should have this many calls to get_ast";
+  Asserter.Int_asserter.assert_equals
+    0
+    (Telemetry_test_utils.int_exn telemetry "disk_cat.count")
+    "unsaved: compute_tast(class Foo1) should have this many calls to disk_cat";
+  Asserter.String_asserter.assert_list_equals
+    [
+      "[4110] Invalid return type; Expected int; But got string";
+      "[2049] Unbound name: Foo";
+      "[2049] Unbound name: foo";
+    ]
+    (errors_to_string errors)
+    "unsaved: compute_tast(class Foo1) should have these errors";
+
+  (* go back to original unsaved content *)
+  let (ctx, entry) =
+    Provider_context.add_entry_from_file_contents
+      ~ctx
+      ~path:foo_path
+      ~contents:foo_contents
+  in
+  let { Tast_provider.Compute_tast_and_errors.telemetry; errors; _ } =
+    Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
+  in
+  Asserter.Int_asserter.assert_equals
+    2
+    (Telemetry_test_utils.int_exn telemetry "get_ast.count")
+    "unsaved: compute_tast(class Foo again) should have this many calls to get_ast";
+  Asserter.Int_asserter.assert_equals
+    0
+    (Telemetry_test_utils.int_exn telemetry "disk_cat.count")
+    "unsaved: compute_tast(class Foo again) should have this many calls to disk_cat";
+  Asserter.String_asserter.assert_list_equals
+    [
+      "[4110] Invalid return type; Expected int; But got string";
+      "[2006] Could not find foo; Did you mean Foo?";
+    ]
+    (errors_to_string errors)
+    "unsaved: compute_tast(class Foo again) should have these errors";
+
+  true
+
+let test_canon_names_internal
+    ~(ctx : Provider_context.t)
+    ~(id : string)
+    ~(canonical : string)
+    ~(uncanonical : string) : unit =
+  begin
+    match Naming_provider.get_type_pos_and_kind ctx canonical with
+    | None ->
+      Printf.eprintf "Canon[%s]: expected to find symbol '%s'\n" id canonical;
+      assert false
+    | Some _ -> ()
+  end;
+
+  begin
+    match Naming_provider.get_type_pos_and_kind ctx uncanonical with
+    | None -> ()
+    | Some _ ->
+      Printf.eprintf
+        "Canon[%s]: expected not to find symbol '%s'\n"
+        id
+        uncanonical;
+      assert false
+  end;
+
+  begin
+    match Naming_provider.get_type_canon_name ctx uncanonical with
+    | None ->
+      Printf.eprintf
+        "Canon[%s]: expected %s to have a canonical name"
+        id
+        uncanonical;
+      assert false
+    | Some canon ->
       Asserter.String_asserter.assert_equals
-        "ok"
-        can_quarantine
-        "Should be able to quarantine foo";
+        canonical
+        canon
+        (Printf.sprintf
+           "Canon[%s]: expected '%s' to have canonical name '%s'"
+           id
+           uncanonical
+           canonical)
+  end;
+  ()
 
-      (* repeat of simple case *)
-      let can_quarantine =
-        try
-          Provider_utils.respect_but_quarantine_unsaved_changes
-            ~ctx
-            ~f:(fun () -> "ok")
-        with e -> e |> Exception.wrap |> Exception.to_string
-      in
-      Asserter.String_asserter.assert_equals
-        "ok"
-        can_quarantine
-        "Should be able to quarantine foo a second time";
+let test_canon_names () =
+  Provider_backend.set_local_memory_backend_with_defaults ();
+  let { ctx; foo_path; foo_contents; _ } = server_setup () in
 
-      (* add a non-existent file; should fail *)
-      let (ctx2, _nonexistent_entry) =
-        Provider_context.add_entry_from_file_contents
-          ~ctx
-          ~path:nonexistent_path
-          ~contents:""
-      in
-      let can_quarantine =
-        try
-          Provider_utils.respect_but_quarantine_unsaved_changes
-            ~ctx:ctx2
-            ~f:(fun () -> "ok")
-        with e -> e |> Exception.wrap |> Exception.to_string
-      in
-      Asserter.String_asserter.assert_equals
-        "ok"
-        can_quarantine
-        "Should be able to quarantine nonexistent_file";
+  test_canon_names_internal
+    ~ctx
+    ~id:"ctx"
+    ~canonical:"\\Foo"
+    ~uncanonical:"\\foo";
 
-      (* repeat of simple case, back with original ctx *)
-      let can_quarantine =
-        try
-          Provider_utils.respect_but_quarantine_unsaved_changes
-            ~ctx
-            ~f:(fun () -> "ok")
-        with e -> e |> Exception.wrap |> Exception.to_string
-      in
-      Asserter.String_asserter.assert_equals
-        "ok"
-        can_quarantine
-        "Should be able to quarantine foo a third time";
+  let (ctx, _) =
+    Provider_context.add_entry_from_file_contents
+      ~ctx
+      ~path:foo_path
+      ~contents:foo_contents
+  in
+  test_canon_names_internal
+    ~ctx
+    ~id:"entry"
+    ~canonical:"\\Foo"
+    ~uncanonical:"\\foo";
 
-      ());
+  let foo_contents1 =
+    Str.global_replace (Str.regexp "class Foo") "class Foo1" foo_contents
+  in
+  let (ctx1, _) =
+    Provider_context.add_entry_from_file_contents
+      ~ctx
+      ~path:foo_path
+      ~contents:foo_contents1
+  in
+  test_canon_names_internal
+    ~ctx:ctx1
+    ~id:"entry1"
+    ~canonical:"\\Foo1"
+    ~uncanonical:"\\foo1";
+
+  begin
+    match Naming_provider.get_type_pos_and_kind ctx1 "\\Foo" with
+    | None -> ()
+    | Some _ ->
+      Printf.eprintf "Canon[entry1b]: expected not to find symbol '\\Foo'\n";
+      assert false
+  end;
+
+  begin
+    match Naming_provider.get_type_canon_name ctx1 "\\foo" with
+    | None -> ()
+    | Some _ ->
+      Printf.eprintf
+        "Canon[entry1b]: expected not to find canonical for '\\foo'\n";
+      assert false
+  end;
+
   true
 
 let tests =
@@ -452,9 +678,12 @@ let tests =
     ("test_dmesg_parser", test_dmesg_parser);
     ("test_should_enable_deferring", test_should_enable_deferring);
     ("test_quarantine", test_quarantine);
+    ("test_unsaved_symbol_change", test_unsaved_symbol_change);
+    ("test_canon_names", test_canon_names);
   ]
 
 let () =
+  EventLogger.init_fake ();
   (* The parsing service needs shared memory to be set up *)
   let config =
     SharedMem.
@@ -470,4 +699,12 @@ let () =
       }
   in
   let (_ : SharedMem.handle) = SharedMem.init config ~num_workers:0 in
-  Unit_test.run_all tests
+  tests
+  |> List.map ~f:(fun (name, do_) ->
+         ( name,
+           fun () ->
+             Utils.with_context
+               ~enter:Provider_backend.set_shared_memory_backend
+               ~exit:(fun () -> ())
+               ~do_ ))
+  |> Unit_test.run_all

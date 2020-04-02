@@ -25,6 +25,10 @@ type schedule_args = {
   timeout: int;
   (* Note: pseudo remote job runner only supports one remote worker. *)
   pseudo_remote: bool;
+  (* Result output file path. Currently only contains errors. *)
+  output_file_path: string option;
+  (* Name of the transport channel used by remote type checking. *)
+  transport_channel: string option;
 }
 
 type command =
@@ -90,6 +94,8 @@ let parse_schedule_args () : command =
   let batch_size = ref None in
   let input_file = ref None in
   let version_specifier = ref None in
+  let output_file_path = ref None in
+  let transport_channel = ref None in
   let set_option_arg name reference value =
     match !reference with
     | None -> reference := Some value
@@ -119,9 +125,15 @@ let parse_schedule_args () : command =
       ( "--input-file",
         Arg.String (set_option_arg "input file" input_file),
         "Input file path that contains the list of files to type check." );
+      ( "--transport-channel",
+        Arg.String (set_option_arg "transport channel" transport_channel),
+        "Name of the transport channel used by remote type checking." );
       ( "--version-specifier",
         Arg.String (set_option_arg "version specifier" version_specifier),
         "hh_server version that the remote hosts should install." );
+      ( "--out",
+        Arg.String (set_option_arg "output" output_file_path),
+        "type check result output file." );
     ]
   in
   let usage = "Usage: " ^ Sys.executable_name ^ " schedule <repo_root>" in
@@ -143,6 +155,8 @@ let parse_schedule_args () : command =
       version_specifier = !version_specifier;
       timeout = !timeout;
       pseudo_remote = !pseudo_remote;
+      output_file_path = !output_file_path;
+      transport_channel = !transport_channel;
     }
   in
   check_arg_conflicts schedule_args;
@@ -171,6 +185,7 @@ let make_remote_server_api () :
 let parse_work_args () : command =
   let key = ref "" in
   let timeout = ref 9999 in
+  (* TODO: provide CLI option for transport_channel *)
   let options =
     [
       ("--key", Arg.String (fun x -> key := x), " The worker's key");
@@ -196,6 +211,7 @@ let parse_work_args () : command =
        ~bin_root
        ~ci_info:None
        ~check_id
+       ~transport_channel:None
        ~init_id
        ~init_start_t:(Unix.gettimeofday ())
        ~key:!key
@@ -323,6 +339,7 @@ let start_remote_checking_service genv env schedule_env =
               JobRunner.PseudoRemote
             else
               JobRunner.Remote );
+          transport_channel = schedule_env.transport_channel;
         }
       (Typing_service_delegate.create ~max_batch_size ~min_batch_size ())
       ~recheck_id:env.init_env.recheck_id
@@ -357,6 +374,36 @@ let print_errors errors =
   List.iter ~f:print_error errors;
   ()
 
+(* Save sorted errors list to output_file_path in json format *)
+let save_result_error_list errors output_file_path =
+  let error_list =
+    errors
+    |> Errors.get_sorted_error_list
+    |> List.map ~f:Errors.to_absolute
+    |> List.map ~f:Errors.to_json
+  in
+  let (properties : (string * Hh_json.json) list) =
+    [("errors", Hh_json.JSON_Array error_list)]
+  in
+  let errors_json = Hh_json.JSON_Object properties in
+  let out_chan = Pervasives.open_out_bin output_file_path in
+
+  Hh_json.json_to_multiline_output out_chan errors_json;
+  Pervasives.close_out out_chan;
+  Hh_logger.log "Wrote %d errors to %s" (Errors.count errors) output_file_path
+
+(* Process type checking result errors. 
+  The errors list is sorted and serialized to output_path_opt in 
+  json format if specified; otherwise, printed to stdout. *)
+let process_result errors output_path_opt =
+  match output_path_opt with
+  | Some output_file_path -> save_result_error_list errors output_file_path
+  | None ->
+    let errs = Errors.get_error_list errors in
+    (match List.length errs with
+    | 0 -> Hh_logger.log "Type check finished with zero error."
+    | _ -> print_errors errs)
+
 (*
   Schedule type checking for input file.
   The type checking mode can be controlled by --num-remote-workers/--num-remote-workers options:
@@ -383,7 +430,7 @@ let schedule_type_checking schedule_env =
   in
   let ctx = Provider_utils.ctx_from_server_env env in
   (* Typing checking entry point *)
-  let (res, _delegate_state, _telemetry) =
+  let (errors, _delegate_state, _telemetry) =
     Typing_check_service.go
       ctx
       genv.workers
@@ -394,10 +441,7 @@ let schedule_type_checking schedule_env =
       ~memory_cap
       ~check_info
   in
-  let errs = Errors.get_error_list res in
-  match List.length errs with
-  | 0 -> Hh_logger.log "Type check finished with zero error."
-  | _ -> print_errors errs
+  process_result errors schedule_env.output_file_path
 
 let () =
   let () = Daemon.check_entry_point () in

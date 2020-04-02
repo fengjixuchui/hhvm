@@ -393,7 +393,7 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
                 emit_is(emitter, env, pos, h)?,
             ]))
         }
-        Expr_::As(e) => emit_as(env, pos, e),
+        Expr_::As(e) => emit_as(emitter, env, pos, e),
         Expr_::Cast(e) => emit_cast(emitter, env, pos, &(e.0).1, &e.1),
         Expr_::Eif(e) => emit_conditional_expr(emitter, env, pos, &e.0, &e.1, &e.2),
         Expr_::ExprList(es) => Ok(InstrSeq::gather(
@@ -478,7 +478,7 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
             emit_named_collection(emitter, env, pos, expression, &fields, collection_typ)
         }
         Expr_::Clone(e) => Ok(emit_pos_then(pos, emit_clone(emitter, env, e)?)),
-        Expr_::Shape(e) => Ok(emit_pos_then(pos, emit_shape(env, expression, e)?)),
+        Expr_::Shape(e) => Ok(emit_pos_then(pos, emit_shape(emitter, env, expression, e)?)),
         Expr_::Await(e) => emit_await(emitter, env, pos, e),
         Expr_::Yield(e) => emit_yield(emitter, env, pos, e),
         Expr_::Efun(e) => Ok(emit_pos_then(pos, emit_lambda(emitter, env, &e.0, &e.1)?)),
@@ -894,11 +894,53 @@ fn emit_iter<F: FnOnce(local::Type, local::Type) -> InstrSeq>(
 }
 
 fn emit_shape(
+    emitter: &mut Emitter,
     env: &Env,
     expr: &tast::Expr,
-    fl: &Vec<(ast_defs::ShapeFieldName, tast::Expr)>,
+    fl: &[(ast_defs::ShapeFieldName, tast::Expr)],
 ) -> Result {
-    unimplemented!("TODO(hrust)")
+    fn extract_shape_field_name_pstring(
+        env: &Env,
+        pos: &Pos,
+        field: &ast_defs::ShapeFieldName,
+    ) -> Result<tast::Expr_> {
+        use ast_defs::ShapeFieldName as SF;
+        Ok(match field {
+            SF::SFlitInt(s) => tast::Expr_::mk_int(s.1.clone()),
+            SF::SFlitStr(s) => tast::Expr_::mk_string(s.1.clone()),
+            SF::SFclassConst(id, p) => {
+                if is_reified_tparam(env, true, &id.1).is_some()
+                    || is_reified_tparam(env, false, &id.1).is_some()
+                {
+                    return Err(emit_fatal::raise_fatal_parse(
+                        &id.0,
+                        "Reified generics cannot be used in shape keys",
+                    ));
+                } else {
+                    tast::Expr_::mk_class_const(
+                        tast::ClassId(pos.clone(), tast::ClassId_::CI(id.clone())),
+                        p.clone(),
+                    )
+                }
+            }
+        })
+    }
+    let pos = &expr.0;
+    // TODO(hrust): avoid clone
+    let fl = fl
+        .iter()
+        .map(|(f, e)| {
+            Ok((
+                tast::Expr(pos.clone(), extract_shape_field_name_pstring(env, pos, f)?),
+                e.clone(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    emit_expr(
+        emitter,
+        env,
+        &tast::Expr(pos.clone(), tast::Expr_::mk_darray(None, fl)),
+    )
 }
 
 fn emit_vec_collection(
@@ -1129,7 +1171,7 @@ fn is_struct_init(
             if let tast::Expr(_, tast::Expr_::String(s)) = key {
                 are_all_keys_non_numeric_strings = are_all_keys_non_numeric_strings
                     && !i64::from_str(&s).is_ok()
-                    && !f64::from_str(&s).is_ok();
+                    && !(f64::from_str(&s).map_or(false, |f| f.is_finite()));
                 has_duplicate_keys = has_duplicate_keys || !uniq_keys.insert(s);
             }
             if !are_all_keys_non_numeric_strings && has_duplicate_keys {
@@ -1375,8 +1417,103 @@ fn emit_record(
     unimplemented!("TODO(hrust)")
 }
 
+fn emit_call_isset_expr(e: &mut Emitter, env: &Env, outer_pos: &Pos, expr: &tast::Expr) -> Result {
+    let pos = &expr.0;
+    if let Some((base_expr, opt_elem_expr)) = expr.1.as_array_get() {
+        return Ok(match (base_expr.1.as_lvar(), opt_elem_expr) {
+            (Some(tast::Lid(_, id)), Some(elem))
+                if local_id::get_name(&id) == superglobals::GLOBALS =>
+            {
+                InstrSeq::gather(vec![
+                    emit_expr(e, env, elem)?,
+                    emit_pos(outer_pos),
+                    instr::issetg(),
+                ])
+            }
+            _ => {
+                emit_array_get(
+                    e,
+                    env,
+                    pos,
+                    None,
+                    QueryOp::Isset,
+                    base_expr,
+                    opt_elem_expr.as_ref(),
+                    false,
+                    false,
+                )?
+                .0
+            }
+        });
+    }
+    if let Some((cid, id)) = expr.1.as_class_get() {
+        return emit_class_get(e, env, QueryOp::Isset, cid, id);
+    }
+    if let Some((expr_, prop, nullflavor)) = expr.1.as_obj_get() {
+        return Ok(emit_obj_get(e, env, pos, QueryOp::Isset, expr_, prop, nullflavor, false)?.0);
+    }
+    if let Some(lid) = expr.1.as_lvar() {
+        let name = local_id::get_name(&lid.1);
+        return Ok(if superglobals::is_any_global(&name) {
+            InstrSeq::gather(vec![
+                emit_pos(outer_pos),
+                instr::string(string_utils::locals::strip_dollar(&name)),
+                emit_pos(outer_pos),
+                instr::issetg(),
+            ])
+        } else if is_local_this(env, &lid.1) && !env.flags.contains(env::Flags::NEEDS_LOCAL_THIS) {
+            InstrSeq::gather(vec![
+                emit_pos(outer_pos),
+                emit_local(e, env, BareThisOp::NoNotice, lid)?,
+                emit_pos(outer_pos),
+                instr::istypec(IstypeOp::OpNull),
+                instr::not(),
+            ])
+        } else {
+            emit_pos_then(outer_pos, instr::issetl(get_local(e, env, &lid.0, name)?))
+        });
+    }
+    Ok(InstrSeq::gather(vec![
+        emit_expr(e, env, expr)?,
+        instr::istypec(IstypeOp::OpNull),
+        instr::not(),
+    ]))
+}
+
 fn emit_call_isset_exprs(e: &mut Emitter, env: &Env, pos: &Pos, exprs: &[tast::Expr]) -> Result {
-    unimplemented!()
+    match exprs {
+        [] => Err(emit_fatal::raise_fatal_parse(
+            pos,
+            "Cannot use isset() without any arguments",
+        )),
+        [expr] => emit_call_isset_expr(e, env, pos, expr),
+        _ => {
+            let its_done = e.label_gen_mut().next_regular();
+            Ok(InstrSeq::gather(vec![
+                InstrSeq::gather(
+                    exprs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, expr)| {
+                            Ok(InstrSeq::gather(vec![
+                                emit_call_isset_expr(e, env, pos, expr)?,
+                                if i < exprs.len() - 1 {
+                                    InstrSeq::gather(vec![
+                                        instr::dup(),
+                                        instr::jmpz(its_done.clone()),
+                                        instr::popc(),
+                                    ])
+                                } else {
+                                    instr::empty()
+                                },
+                            ]))
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                instr::label(its_done),
+            ]))
+        }
+    }
 }
 
 fn emit_idx(e: &mut Emitter, env: &Env, pos: &Pos, es: &[tast::Expr]) -> Result {
@@ -2218,7 +2355,7 @@ fn emit_is(e: &mut Emitter, env: &Env, pos: &Pos, h: &tast::Hint) -> Result {
             aast_defs::Hint_::Happly(ast_defs::Id(_, id), hs)
                 if hs.is_empty() && string_utils::strip_hh_ns(&id) == typehints::THIS =>
             {
-                instr::is_late_bound_cls()
+                instr::islateboundcls()
             }
             _ => InstrSeq::gather(vec![
                 get_type_structure_for_hint(e, &[], &IndexSet::new(), h)?,
@@ -2572,7 +2709,7 @@ fn emit_obj_get(
     prop: &tast::Expr,
     nullflavor: &ast_defs::OgNullFlavor,
     null_coalesce_assignment: bool,
-) -> Result<(InstrSeq, Option<StackIndex>)> {
+) -> Result<(InstrSeq, Option<NumParams>)> {
     if let Some(tast::Lid(pos, id)) = expr.1.as_lvar() {
         if local_id::get_name(&id) == special_idents::THIS
             && nullflavor.eq(&ast_defs::OgNullFlavor::OGNullsafe)
@@ -2618,11 +2755,11 @@ fn emit_obj_get(
         prop,
         null_coalesce_assignment,
     )?;
-    let total_stack_size = prop_stack_size + base_stack_size + cls_stack_size;
+    let total_stack_size = (prop_stack_size + base_stack_size + cls_stack_size) as usize;
     let num_params = if null_coalesce_assignment {
         0
     } else {
-        total_stack_size as usize
+        total_stack_size
     };
     let final_instr = instr::querym(num_params, query_op, mk);
     let querym_n_unpopped = if null_coalesce_assignment {
@@ -3474,7 +3611,52 @@ fn emit_quiet_expr(
     expr: &tast::Expr,
     null_coalesce_assignment: bool,
 ) -> Result<(InstrSeq, Option<NumParams>)> {
-    unimplemented!()
+    match &expr.1 {
+        tast::Expr_::Lvar(lid) if local_id::get_name(&lid.1) == superglobals::GLOBALS => Ok((
+            InstrSeq::gather(vec![
+                emit_pos(&lid.0),
+                instr::string(string_utils::locals::strip_dollar(local_id::get_name(
+                    &lid.1,
+                ))),
+                emit_pos(pos),
+                instr::cgetg(),
+            ]),
+            None,
+        )),
+        tast::Expr_::Lvar(lid) if !is_local_this(env, &lid.1) => Ok((
+            instr::cgetquietl(get_local(e, env, pos, local_id::get_name(&lid.1))?),
+            None,
+        )),
+        tast::Expr_::ArrayGet(x) => match ((x.0).1.as_lvar(), x.1.as_ref()) {
+            (Some(tast::Lid(_, id)), Some(elem))
+                if local_id::get_name(id) == superglobals::GLOBALS =>
+            {
+                Ok((
+                    InstrSeq::gather(vec![
+                        emit_expr(e, env, elem)?,
+                        emit_pos(pos),
+                        instr::cgetg(),
+                    ]),
+                    None,
+                ))
+            }
+            _ => emit_array_get(
+                e,
+                env,
+                pos,
+                None,
+                QueryOp::CGetQuiet,
+                &x.0,
+                x.1.as_ref(),
+                false,
+                false,
+            ),
+        },
+        tast::Expr_::ObjGet(x) => {
+            emit_obj_get(e, env, pos, QueryOp::CGetQuiet, &x.0, &x.1, &x.2, false)
+        }
+        _ => Ok((emit_expr(e, env, expr)?, None)),
+    }
 }
 
 fn emit_null_coalesce_assignment(
@@ -3550,11 +3732,54 @@ fn emit_pipe(env: &Env, (_, e1, e2): &(aast_defs::Lid, tast::Expr, tast::Expr)) 
 }
 
 fn emit_as(
+    e: &mut Emitter,
     env: &Env,
     pos: &Pos,
-    (e, h, is_nullable): &(tast::Expr, aast_defs::Hint, bool),
+    (expr, h, is_nullable): &(tast::Expr, aast_defs::Hint, bool),
 ) -> Result {
-    unimplemented!("TODO(hrust)")
+    e.local_scope(|e| {
+        let arg_local = e.local_gen_mut().get_unnamed();
+        let type_struct_local = e.local_gen_mut().get_unnamed();
+        let (ts_instrs, is_static) = emit_reified_arg(e, env, pos, true, h)?;
+        let then_label = e.label_gen_mut().next_regular();
+        let done_label = e.label_gen_mut().next_regular();
+        let main_block = |ts_instrs, resolve| {
+            InstrSeq::gather(vec![
+                ts_instrs,
+                instr::setl(type_struct_local.clone()),
+                match resolve {
+                    TypestructResolveOp::Resolve => instr::is_type_structc_resolve(),
+                    TypestructResolveOp::DontResolve => instr::is_type_structc_dontresolve(),
+                },
+                instr::jmpnz(then_label.clone()),
+                if *is_nullable {
+                    InstrSeq::gather(vec![instr::null(), instr::jmp(done_label.clone())])
+                } else {
+                    InstrSeq::gather(vec![
+                        instr::pushl(arg_local.clone()),
+                        instr::pushl(type_struct_local.clone()),
+                        instr::throwastypestructexception(),
+                    ])
+                },
+            ])
+        };
+        Ok(InstrSeq::gather(vec![
+            emit_expr(e, env, expr)?,
+            instr::setl(arg_local.clone()),
+            if is_static {
+                main_block(
+                    get_type_structure_for_hint(e, &[], &IndexSet::new(), h)?,
+                    TypestructResolveOp::Resolve,
+                )
+            } else {
+                main_block(ts_instrs, TypestructResolveOp::DontResolve)
+            },
+            instr::label(then_label),
+            instr::pushl(arg_local),
+            instr::unsetl(type_struct_local),
+            instr::label(done_label),
+        ]))
+    })
 }
 
 fn emit_cast(

@@ -62,26 +62,6 @@ pub fn empty_decls() -> InProgressDecls {
     }
 }
 
-fn mangle_xhp_id<'a>(name: Cow<'a, String>) -> Cow<'a, String> {
-    fn ignore_id(name: &str) -> bool {
-        name.starts_with("class@anonymous") || name.starts_with("Closure$")
-    }
-
-    fn is_xhp(name: &str) -> bool {
-        name.chars().next().map_or(false, |c| c == ':')
-    }
-
-    if !ignore_id(&name) {
-        let mut name = name.into_owned();
-        if is_xhp(&name) {
-            name.replace_range(..1, "xhp_")
-        }
-        Cow::Owned(name.replace(":", "__").replace("-", "_"))
-    } else {
-        name
-    }
-}
-
 pub fn get_name(namespace: &str, name: &Node_) -> Result<Id, ParseError> {
     fn qualified_name_from_parts(
         namespace: &str,
@@ -141,10 +121,7 @@ pub fn get_name(namespace: &str, name: &Node_) -> Result<Id, ParseError> {
         }
         Node_::XhpName(name, pos) => {
             // xhp names are always unqualified
-            Ok(Id(
-                pos.clone(),
-                mangle_xhp_id(Cow::Borrowed(name)).into_owned(),
-            ))
+            Ok(Id(pos.clone(), name.to_string()))
         }
         Node_::QualifiedName(parts, pos) => qualified_name_from_parts(namespace, &parts, pos),
         Node_::Construct(pos) => Ok(Id(
@@ -154,7 +131,7 @@ pub fn get_name(namespace: &str, name: &Node_) -> Result<Id, ParseError> {
         n => {
             return Err(format!(
                 "Expected a name, XHP name, or qualified name, but got {:?}",
-                n
+                n,
             ))
         }
     }
@@ -394,6 +371,14 @@ pub struct VariableDecl {
     kind: ParamMode,
     hint: Node_,
     id: Id,
+    variadic: bool,
+    initializer: Node_,
+}
+
+#[derive(Clone, Debug)]
+pub struct Attribute {
+    id: Id,
+    args: Vec<Node_>,
 }
 
 #[derive(Clone, Debug)]
@@ -520,12 +505,14 @@ pub enum Node_ {
     StringLiteral(String, Pos),   // For shape keys and const expressions.
     DecimalLiteral(String, Pos),  // For const expressions.
     FloatingLiteral(String, Pos), // For const expressions.
+    BooleanLiteral(String, Pos),  // For const expressions.
     Null(Pos),                    // For const expressions.
     Hint(HintValue, Pos),
     Backslash(Pos), // This needs a pos since it shows up in names.
     ListItem(Box<(Node_, Node_)>),
     Const(Box<ConstDecl>),
     Variable(Box<VariableDecl>),
+    Attribute(Box<Attribute>),
     FunctionHeader(Box<FunctionHeader>),
     Function(Box<FunctionDecl>),
     Property(Box<PropertyDecl>),
@@ -553,6 +540,7 @@ pub enum Node_ {
     Abstract,
     As,
     Async,
+    Coroutine,
     DotDotDot,
     Extends,
     Final,
@@ -576,6 +564,8 @@ impl Node_ {
         match self {
             Node_::Name(_, pos) => Ok(pos.clone()),
             Node_::Hint(_, pos) => Ok(pos.clone()),
+            Node_::XhpName(_, pos) => Ok(pos.clone()),
+            Node_::QualifiedName(_, pos) => Ok(pos.clone()),
             Node_::Backslash(pos)
             | Node_::ColonColon(pos)
             | Node_::Construct(pos)
@@ -593,6 +583,7 @@ impl Node_ {
             | Node_::FloatingLiteral(_, pos)
             | Node_::Null(pos)
             | Node_::StringLiteral(_, pos)
+            | Node_::BooleanLiteral(_, pos)
             | Node_::Operator(pos, _) => Ok(pos.clone()),
             Node_::ListItem(items) => {
                 let fst = &items.0;
@@ -674,11 +665,76 @@ impl Node_ {
             Node_::DecimalLiteral(s, _) => aast::Expr_::Int(s.to_string()),
             Node_::FloatingLiteral(s, _) => aast::Expr_::Float(s.to_string()),
             Node_::StringLiteral(s, _) => aast::Expr_::String(s.to_string()),
+            Node_::BooleanLiteral(s, _) => {
+                if s.eq_ignore_ascii_case("true") {
+                    aast::Expr_::True
+                } else {
+                    aast::Expr_::False
+                }
+            }
             Node_::Null(_) => aast::Expr_::Null,
             n => return Err(format!("Could not construct an Expr for {:?}", n)),
         };
         let pos = self.get_pos()?;
         Ok(aast::Expr(pos, expr_))
+    }
+
+    fn as_attributes(&self) -> Result<Attributes, ParseError> {
+        let mut attributes = Attributes {
+            reactivity: Reactivity::Nonreactive,
+            param_mutability: None,
+            deprecated: None,
+            reifiable: None,
+            returns_mutable: false,
+            late_init: false,
+            const_: false,
+            lsb: false,
+            override_: false,
+        };
+
+        for attribute in self.iter() {
+            if let Node_::Attribute(attribute) = attribute {
+                match attribute.id.1.as_ref() {
+                    "__Rx" => attributes.reactivity = Reactivity::Reactive(None),
+                    "__RxShallow" => attributes.reactivity = Reactivity::Shallow(None),
+                    "__RxLocal" => attributes.reactivity = Reactivity::Local(None),
+                    "__Mutable" => {
+                        attributes.param_mutability = Some(ParamMutability::ParamBorrowedMutable)
+                    }
+                    "__MaybeMutable" => {
+                        attributes.param_mutability = Some(ParamMutability::ParamMaybeMutable)
+                    }
+                    "__OwnedMutable" => {
+                        attributes.param_mutability = Some(ParamMutability::ParamOwnedMutable)
+                    }
+                    "__MutableReturn" => attributes.returns_mutable = true,
+                    "__Deprecated" => {
+                        attributes.deprecated = attribute.args.first().and_then(|node| match node {
+                            Node_::StringLiteral(val, _) => Some(val.clone()),
+                            _ => None,
+                        })
+                    }
+                    "__Reifiable" => attributes.reifiable = Some(attribute.id.0.clone()),
+                    "__LateInit" => {
+                        attributes.late_init = true;
+                    }
+                    "__Const" => {
+                        attributes.const_ = true;
+                    }
+                    "__LSB" => {
+                        attributes.lsb = true;
+                    }
+                    "__Override" => {
+                        attributes.override_ = true;
+                    }
+                    _ => (),
+                }
+            } else {
+                return Err(format!("Expected an attribute, but was {:?}", self));
+            }
+        }
+
+        Ok(attributes)
     }
 
     fn is_ignored(&self) -> bool {
@@ -690,6 +746,18 @@ impl Node_ {
 }
 
 pub type Node = Result<Node_, ParseError>;
+
+struct Attributes {
+    reactivity: Reactivity,
+    param_mutability: Option<ParamMutability>,
+    deprecated: Option<String>,
+    reifiable: Option<Pos>,
+    returns_mutable: bool,
+    late_init: bool,
+    const_: bool,
+    lsb: bool,
+    override_: bool,
+}
 
 impl DirectDeclSmartConstructors<'_> {
     fn set_mode(&mut self, token: &PositionedToken) {
@@ -916,6 +984,10 @@ impl DirectDeclSmartConstructors<'_> {
                 Reason::Rwitness(pos.clone()),
                 Box::new(Ty_::Tprim(aast::Tprim::Tstring)),
             )),
+            Node_::BooleanLiteral(_, pos) => Ok(Ty(
+                Reason::Rwitness(pos.clone()),
+                Box::new(Ty_::Tprim(aast::Tprim::Tbool)),
+            )),
             Node_::Null(pos) => Ok(Ty(
                 Reason::Rhint(pos.clone()),
                 Box::new(Ty_::Tprim(aast::Tprim::Tnull)),
@@ -987,18 +1059,17 @@ impl DirectDeclSmartConstructors<'_> {
 
     fn function_into_ty(
         &self,
+        namespace: &str,
         attributes: Node_,
         header: FunctionHeader,
         body: Node_,
         outer_type_variables: &HashSet<Rc<String>>,
     ) -> Result<Box<(Id, Ty, Vec<PropertyDecl>)>, ParseError> {
-        let id = get_name(
-            self.state.namespace_builder.current_namespace(),
-            &header.name,
-        )?;
+        let id = get_name(namespace, &header.name)?;
         let (type_params, mut type_variables) = self.into_type_params(header.type_params)?;
         type_variables.extend(outer_type_variables.into_iter().map(Rc::clone));
-        let (params, properties) = self.into_variables_list(header.param_list, &type_variables)?;
+        let (params, properties, arity) =
+            self.into_variables_list(header.param_list, &type_variables)?;
         let type_ = match header.name {
             Node_::Construct(pos) => Ty(
                 Reason::Rwitness(pos),
@@ -1009,29 +1080,38 @@ impl DirectDeclSmartConstructors<'_> {
                 Err(_) => Ty(Reason::Rnone, Box::new(Ty_::Tany(TanySentinel {}))),
             },
         };
-        let async_ = header.modifiers.iter().any(|node| match node {
-            Node_::Async => true,
-            _ => false,
-        });
-        let fun_kind = if body.iter().any(|node| match node {
-            Node_::Yield => true,
-            _ => false,
-        }) {
-            if async_ {
-                FunKind::FAsyncGenerator
-            } else {
-                FunKind::FGenerator
-            }
+        let (async_, is_coroutine) = header.modifiers.iter().fold(
+            (false, false),
+            |(async_, is_coroutine), node| match node {
+                Node_::Async => (true, is_coroutine),
+                Node_::Coroutine => (async_, true),
+                _ => (async_, is_coroutine),
+            },
+        );
+        let fun_kind = if is_coroutine {
+            FunKind::FCoroutine
         } else {
-            if async_ {
-                FunKind::FAsync
+            if body.iter().any(|node| match node {
+                Node_::Yield => true,
+                _ => false,
+            }) {
+                if async_ {
+                    FunKind::FAsyncGenerator
+                } else {
+                    FunKind::FGenerator
+                }
             } else {
-                FunKind::FSync
+                if async_ {
+                    FunKind::FAsync
+                } else {
+                    FunKind::FSync
+                }
             }
         };
-        let mut ft = FunType {
-            is_coroutine: false,
-            arity: FunArity::Fstandard(params.len() as isize, params.len() as isize),
+        let attributes = attributes.as_attributes()?;
+        let ft = FunType {
+            is_coroutine,
+            arity,
             tparams: (type_params, FunTparamsKind::FTKtparams),
             where_constraints: Vec::new(),
             params,
@@ -1040,23 +1120,12 @@ impl DirectDeclSmartConstructors<'_> {
                 type_,
             },
             fun_kind,
-            reactive: Reactivity::Nonreactive,
+            reactive: attributes.reactivity,
             return_disposable: false,
             mutability: None,
-            returns_mutable: false,
+            returns_mutable: attributes.returns_mutable,
             returns_void_to_rx: false,
         };
-        for attribute in attributes.iter() {
-            if let Node_::Name(name, _) = attribute {
-                match name.as_ref() {
-                    "__Rx" => ft.reactive = Reactivity::Reactive(None),
-                    "__RxShallow" => ft.reactive = Reactivity::Shallow(None),
-                    "__RxLocal" => ft.reactive = Reactivity::Local(None),
-                    "__MutableReturn" => ft.returns_mutable = true,
-                    _ => (),
-                }
-            }
-        }
 
         let ty = Ty(Reason::Rwitness(id.0.clone()), Box::new(Ty_::Tfun(ft)));
         Ok(Box::new((id, ty, properties)))
@@ -1078,63 +1147,74 @@ impl DirectDeclSmartConstructors<'_> {
         &self,
         list: Node_,
         type_variables: &HashSet<Rc<String>>,
-    ) -> Result<(FunParams, Vec<PropertyDecl>), ParseError> {
+    ) -> Result<(FunParams, Vec<PropertyDecl>, FunArity), ParseError> {
         match list {
-            Node_::List(nodes) => {
-                nodes
-                    .into_iter()
-                    .fold(Ok((Vec::new(), Vec::new())), |acc, variable| {
-                        match (acc, variable) {
-                            (Ok((mut variables, mut properties)), Node_::Variable(innards)) => {
-                                let VariableDecl {
-                                    attributes,
-                                    visibility,
-                                    kind,
-                                    hint,
-                                    id,
-                                } = *innards;
-                                match visibility.as_visibility() {
-                                    Ok(_) => properties.push(PropertyDecl {
-                                        attrs: attributes.clone(),
-                                        modifiers: visibility.clone(),
-                                        hint: hint.clone(),
-                                        id: id.clone(),
-                                        expr: None,
-                                    }),
-                                    Err(_) => (),
-                                };
-                                let mutability =
-                                    attributes.iter().fold(None, |mutability, node| {
-                                        if let Node_::Name(n, _) = node {
-                                            if n == "__Mutable" {
-                                                Some(ParamMutability::ParamBorrowedMutable)
-                                            } else {
-                                                mutability
-                                            }
-                                        } else {
-                                            mutability
-                                        }
-                                    });
-                                variables.push(FunParam {
-                                    pos: id.0,
-                                    name: Some(id.1),
-                                    type_: PossiblyEnforcedTy {
-                                        enforced: false,
-                                        type_: self.node_to_ty(&hint, type_variables)?,
-                                    },
-                                    kind,
-                                    accept_disposable: false,
-                                    mutability,
-                                    rx_annotation: None,
-                                });
-                                Ok((variables, properties))
+            Node_::List(nodes) => nodes.into_iter().fold(
+                Ok((Vec::new(), Vec::new(), FunArity::Fstandard(0, 0))),
+                |acc, variable| match (acc, variable) {
+                    (Ok((mut variables, mut properties, arity)), Node_::Variable(innards)) => {
+                        let VariableDecl {
+                            attributes,
+                            visibility,
+                            kind,
+                            hint,
+                            id,
+                            variadic,
+                            initializer,
+                        } = *innards;
+                        match visibility.as_visibility() {
+                            Ok(_) => properties.push(PropertyDecl {
+                                attrs: attributes.clone(),
+                                modifiers: visibility.clone(),
+                                hint: hint.clone(),
+                                id: id.clone(),
+                                expr: None,
+                            }),
+                            Err(_) => (),
+                        };
+
+                        let attributes = attributes.as_attributes()?;
+                        let param = FunParam {
+                            pos: id.0,
+                            name: Some(id.1),
+                            type_: PossiblyEnforcedTy {
+                                enforced: false,
+                                type_: match &hint {
+                                    Node_::Ignored => {
+                                        Ty(Reason::Rnone, Box::new(Ty_::Tany(TanySentinel)))
+                                    }
+                                    _ => self.node_to_ty(&hint, type_variables)?,
+                                },
+                            },
+                            kind,
+                            accept_disposable: false,
+                            mutability: attributes.param_mutability,
+                            rx_annotation: None,
+                        };
+                        let arity = match (arity, initializer, variadic) {
+                            (FunArity::Fstandard(min, max), Node_::Ignored, false) => {
+                                variables.push(param);
+                                FunArity::Fstandard(min + 1, max + 1)
                             }
-                            (Ok(_), n) => Err(format!("Expected a variable, but got {:?}", n)),
-                            (acc @ Err(_), _) => acc,
-                        }
-                    })
-            }
-            Node_::Ignored => Ok((Vec::new(), Vec::new())),
+                            (FunArity::Fstandard(min, _), Node_::Ignored, true) => {
+                                FunArity::Fvariadic(min, param)
+                            }
+                            (FunArity::Fstandard(min, max), _, _) => {
+                                variables.push(param);
+                                FunArity::Fstandard(min, max + 1)
+                            }
+                            (arity, _, _) => {
+                                variables.push(param);
+                                arity
+                            }
+                        };
+                        Ok((variables, properties, arity))
+                    }
+                    (Ok(_), n) => Err(format!("Expected a variable, but got {:?}", n)),
+                    (acc @ Err(_), _) => acc,
+                },
+            ),
+            Node_::Ignored => Ok((Vec::new(), Vec::new(), FunArity::Fstandard(0, 0))),
             n => Err(format!("Expected a list of variables, but got {:?}", n)),
         }
     }
@@ -1346,6 +1426,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             TokenKind::DecimalLiteral => Node_::DecimalLiteral(token_text(self), token_pos(self)),
             TokenKind::FloatingLiteral => Node_::FloatingLiteral(token_text(self), token_pos(self)),
             TokenKind::NullLiteral => Node_::Null(token_pos(self)),
+            TokenKind::BooleanLiteral => Node_::BooleanLiteral(token_text(self), token_pos(self)),
             TokenKind::String => Node_::Hint(HintValue::String, token_pos(self)),
             TokenKind::Int => Node_::Hint(HintValue::Int, token_pos(self)),
             TokenKind::Float => Node_::Hint(HintValue::Float, token_pos(self)),
@@ -1368,6 +1449,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             TokenKind::Mixed => Node_::Hint(HintValue::Mixed, token_pos(self)),
             TokenKind::Void => Node_::Hint(HintValue::Void, token_pos(self)),
             TokenKind::Arraykey => Node_::Hint(HintValue::ArrayKey, token_pos(self)),
+            TokenKind::Noreturn => Node_::Hint(HintValue::NoReturn, token_pos(self)),
             TokenKind::Resource => Node_::Hint(HintValue::Resource, token_pos(self)),
             TokenKind::Array => Node_::Array(token_pos(self)),
             TokenKind::Darray => Node_::Darray(token_pos(self)),
@@ -1425,6 +1507,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             TokenKind::As => Node_::As,
             TokenKind::Super => Node_::Super,
             TokenKind::Async => Node_::Async,
+            TokenKind::Coroutine => Node_::Coroutine,
             TokenKind::DotDotDot => Node_::DotDotDot,
             TokenKind::Extends => Node_::Extends,
             TokenKind::Final => Node_::Final,
@@ -1900,11 +1983,21 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         inout: Self::R,
         hint: Self::R,
         name: Self::R,
-        _arg5: Self::R,
+        initializer: Self::R,
     ) -> Self::R {
-        let id = get_name("", &name?)?;
+        let (variadic, id) = match name? {
+            Node_::ListItem(innards) => {
+                let id = get_name("", &innards.1)?;
+                match innards.0 {
+                    Node_::DotDotDot => (true, id),
+                    _ => (false, id),
+                }
+            }
+            name => (false, get_name("", &name)?),
+        };
         let attributes = attributes?;
         let visibility = visibility?;
+        let initializer = initializer?;
         let kind = match inout? {
             Node_::Inout => ParamMode::FPinout,
             _ => ParamMode::FPnormal,
@@ -1916,6 +2009,8 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             kind,
             hint,
             id,
+            variadic,
+            initializer,
         })))
     }
 
@@ -1931,14 +2026,24 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             Ok(body) => body,
             Err(_) => Node_::Ignored,
         };
+        let attributes = attributes?;
+        let parsed_attributes = attributes.as_attributes()?;
         Ok(match header? {
             Node_::FunctionHeader(decl) => {
-                let (Id(pos, name), type_, _) =
-                    *self.function_into_ty(attributes?, *decl, body, &HashSet::new())?;
+                let (Id(pos, name), type_, _) = *self.function_into_ty(
+                    self.state.namespace_builder.current_namespace(),
+                    attributes,
+                    *decl,
+                    body,
+                    &HashSet::new(),
+                )?;
+                let deprecated = parsed_attributes
+                    .deprecated
+                    .map(|msg| format!("The function {} is deprecated: {}", name, msg));
                 Rc::make_mut(&mut self.state.decls).funs.insert(
                     name,
                     Rc::new(FunElt {
-                        deprecated: None,
+                        deprecated,
                         type_,
                         // NB: We have no intention of populating this field.
                         // Any errors historically emitted during shallow decl
@@ -2147,31 +2252,6 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         _arg9: Self::R,
         body: Self::R,
     ) -> Self::R {
-        #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-        enum MemberAttribute {
-            LateInit,
-            Const,
-        }
-        fn read_member_attributes<'a>(
-            attributes: impl Iterator<Item = &'a Node_>,
-        ) -> HashSet<MemberAttribute> {
-            let mut ret = HashSet::new();
-            for attribute in attributes {
-                if let Node_::Name(name, _) = attribute {
-                    match name.as_ref() {
-                        "__LateInit" => {
-                            ret.insert(MemberAttribute::LateInit);
-                        }
-                        "__Const" => {
-                            ret.insert(MemberAttribute::Const);
-                        }
-                        _ => (),
-                    }
-                }
-            }
-            ret
-        }
-
         #[derive(Debug)]
         struct Modifiers {
             is_static: bool,
@@ -2253,9 +2333,13 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
 
         for attribute in attributes?.into_iter() {
             match attribute {
-                Node_::Name(name, pos) => cls.user_attributes.push(aast::UserAttribute {
-                    name: Id(pos, name),
-                    params: vec![],
+                Node_::Attribute(attribute) => cls.user_attributes.push(aast::UserAttribute {
+                    name: attribute.id,
+                    params: attribute
+                        .args
+                        .iter()
+                        .map(|node| node.as_expr())
+                        .collect::<Result<Vec<_>, ParseError>>()?,
                 }),
                 _ => (),
             }
@@ -2275,7 +2359,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             decl: PropertyDecl,
             type_variables: &HashSet<Rc<String>>,
         ) -> Result<(), ParseError> {
-            let attributes = read_member_attributes(decl.attrs.iter());
+            let attributes = decl.attrs.as_attributes()?;
             let modifiers = read_member_modifiers(decl.modifiers.iter());
             let Id(pos, name) = decl.id;
             let name = if modifiers.is_static {
@@ -2284,12 +2368,11 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 strip_dollar_prefix(Cow::Owned(name)).into_owned()
             };
             let ty = this.node_to_ty(&decl.hint, type_variables)?;
-            let is_const = attributes.contains(&MemberAttribute::Const);
             let prop = shallow_decl_defs::ShallowProp {
-                const_: is_const,
+                const_: attributes.const_,
                 xhp_attr: None,
-                lateinit: attributes.contains(&MemberAttribute::LateInit),
-                lsb: false,
+                lateinit: attributes.late_init,
+                lsb: attributes.lsb,
                 name: Id(pos, name),
                 needs_init: decl.expr.is_none(),
                 type_: Some(ty),
@@ -2369,24 +2452,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                                 Node_::Construct(_) => true,
                                 _ => false,
                             };
-                            let reactivity =
-                                decl.attributes.iter().fold(None, |reactivity, attribute| {
-                                    if let Node_::Name(name, _) = attribute {
-                                        match name.as_ref() {
-                                            "__Rx" => Some(MethodReactivity::MethodReactive(None)),
-                                            "__RxShallow" => {
-                                                Some(MethodReactivity::MethodShallow(None))
-                                            }
-                                            "__RxLocal" => {
-                                                Some(MethodReactivity::MethodLocal(None))
-                                            }
-                                            _ => reactivity,
-                                        }
-                                    } else {
-                                        reactivity
-                                    }
-                                });
+
+                            let attributes = decl.attributes.as_attributes()?;
                             let (id, ty, properties) = *self.function_into_ty(
+                                "",
                                 decl.attributes,
                                 decl.header,
                                 decl.body,
@@ -2395,17 +2464,35 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                             for property in properties {
                                 handle_property(self, &mut cls, property, &type_variables)?;
                             }
+                            let deprecated = attributes
+                                .deprecated
+                                .map(|msg| format!("The method {} is deprecated: {}", id.1, msg));
                             let method = shallow_decl_defs::ShallowMethod {
                                 abstract_,
                                 final_: false,
                                 memoizelsb: false,
                                 name: id,
-                                override_: false,
-                                reactivity,
+                                override_: attributes.override_,
+                                reactivity: match attributes.reactivity {
+                                    Reactivity::Local(_) => {
+                                        Some(MethodReactivity::MethodLocal(None))
+                                    }
+                                    Reactivity::Shallow(_) => {
+                                        Some(MethodReactivity::MethodShallow(None))
+                                    }
+                                    Reactivity::Reactive(_) => {
+                                        Some(MethodReactivity::MethodReactive(None))
+                                    }
+                                    Reactivity::Nonreactive
+                                    | Reactivity::MaybeReactive(_)
+                                    | Reactivity::RxVar(_)
+                                    | Reactivity::Pure(_) => None,
+                                },
+                                dynamicallycallable: false,
                                 type_: ty,
                                 visibility: modifiers.visibility,
                                 fixme_codes: ISet::new(),
-                                deprecated: None,
+                                deprecated,
                             };
                             if is_constructor {
                                 cls.constructor = Some(method);
@@ -2690,12 +2777,14 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         gt: Self::R,
     ) -> Self::R {
         let (classname, targ, gt) = (classname?, targ?, gt?);
-        let pos = Pos::merge(&classname.get_pos()?, &gt.get_pos()?)?;
         let id = get_name("\\", &classname)?;
-        Ok(Node_::Hint(
-            HintValue::Apply(Box::new((id, vec![targ]))),
-            pos,
-        ))
+        match gt {
+            Node_::Ignored => Ok(Node_::Hint(HintValue::String, id.0)),
+            gt => Ok(Node_::Hint(
+                HintValue::Apply(Box::new((id, vec![targ]))),
+                Pos::merge(&classname.get_pos()?, &gt.get_pos()?)?,
+            )),
+        }
     }
 
     fn make_scope_resolution_expression(
@@ -2815,10 +2904,14 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         &mut self,
         name: Self::R,
         _arg1: Self::R,
-        _arg2: Self::R,
+        args: Self::R,
         _arg3: Self::R,
     ) -> Self::R {
-        name
+        let id = get_name("", &name?)?;
+        Ok(Node_::Attribute(Box::new(Attribute {
+            id,
+            args: args?.into_vec(),
+        })))
     }
 
     fn make_trait_use(&mut self, _arg0: Self::R, used: Self::R, _arg2: Self::R) -> Self::R {
@@ -2891,17 +2984,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         type_: Self::R,
         _arg9: Self::R,
     ) -> Self::R {
-        let reified = attributes?.iter().fold(None, |reifiable, node| {
-            if let Node_::Name(name, pos) = node {
-                if name == "__Reifiable" {
-                    Some(pos.clone())
-                } else {
-                    reifiable
-                }
-            } else {
-                reifiable
-            }
-        });
+        let attributes = attributes?.as_attributes()?;
         let abstract_ = modifiers?.iter().fold(false, |abstract_, node| match node {
             Node_::Abstract => true,
             _ => abstract_,
@@ -2912,8 +2995,12 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             constraints: constraints?.into_vec(),
             type_: type_?,
             abstract_,
-            reified,
+            reified: attributes.reifiable,
         })))
+    }
+
+    fn make_decorated_expression(&mut self, decorator: Self::R, expr: Self::R) -> Self::R {
+        Ok(Node_::ListItem(Box::new((decorator?, expr?))))
     }
 
     fn make_type_constant(

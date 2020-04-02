@@ -59,7 +59,8 @@ function local_reactive_function(): void {}
 <<__Rx>>
 function reactive_function_mutable_args(
   <<__Mutable>> Typedef $a,
-  <<__Mutable>> Typedef $b,
+  <<__MaybeMutable>> Typedef $b,
+  <<__OwnedMutable>> Typedef $c,
 ): void {
 }
 
@@ -77,3 +78,13 @@ function null_type_hint<T as nothing>(?T $x): null {
 function resource_type_hint(resource $i): resource {
   return $i; // ok
 }
+
+function noreturn_type_hint(): noreturn {
+  while (true) {
+  }
+}
+
+function variadic_function(mixed ...$args): void {
+}
+
+coroutine function some_coroutine(): bool { return false; }
