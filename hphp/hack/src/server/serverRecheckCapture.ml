@@ -6,21 +6,41 @@
  *
  *)
 
-let update_after_recheck
+type snapshot = unit
+
+let update_env env changed_files =
+  {
+    env with
+    ServerEnv.changed_files =
+      Relative_path.Set.union env.ServerEnv.changed_files changed_files;
+  }
+
+let update_before_recheck
     genv
     env
     ~(changed_files : Relative_path.Set.t)
+    ~(to_recheck_count : int)
+    ~(parse_t : float) : ServerEnv.env * snapshot =
+  ignore (genv, to_recheck_count, parse_t);
+  (update_env env changed_files, ())
+
+let update_after_recheck
+    genv
+    env
+    snapshot
+    ~(cancelled_files : Relative_path.Set.t)
     ~(rechecked_files : Relative_path.Set.t)
-    (errors : Errors.t) : ServerEnv.env * string Future.t option =
-  ignore (genv, rechecked_files, errors);
-  let env =
-    {
-      env with
-      ServerEnv.changed_files =
-        Relative_path.Set.union env.ServerEnv.changed_files changed_files;
-    }
-  in
-  (env, None)
+    ~(changed_files : Relative_path.Set.t)
+    ~(recheck_errors : Errors.t)
+    ~(all_errors : Errors.t) : ServerEnv.env * string Future.t option =
+  ignore
+    ( genv,
+      snapshot,
+      cancelled_files,
+      rechecked_files,
+      recheck_errors,
+      all_errors );
+  (update_env env changed_files, None)
 
 let set_up_replay_environment
     ~(handle : string)

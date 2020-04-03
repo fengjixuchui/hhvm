@@ -930,6 +930,7 @@ functor
         (genv : genv)
         (env : env)
         (telemetry : Telemetry.t)
+        (capture_snapshot : ServerRecheckCapture.snapshot)
         ~(errors : Errors.t)
         ~(files_to_check : Relative_path.Set.t)
         ~(files_to_parse : Relative_path.Set.t)
@@ -987,16 +988,19 @@ functor
       (* ... leaving only things that we actually checked, and which can be
        * removed from needs_recheck *)
       let needs_recheck = Relative_path.Set.diff needs_recheck files_to_check in
+      let errors =
+        Errors.(incremental_update_set errors errorl' files_to_check Typing)
+      in
       let (env, _future) : ServerEnv.env * string Future.t option =
         ServerRecheckCapture.update_after_recheck
           genv
           env
+          capture_snapshot
           ~changed_files:files_to_parse
+          ~cancelled_files:(Relative_path.Set.of_list cancelled)
           ~rechecked_files:files_to_check
-          errorl'
-      in
-      let errors =
-        Errors.(incremental_update_set errors errorl' files_to_check Typing)
+          ~recheck_errors:errorl'
+          ~all_errors:errors
       in
       let full_check_done =
         CheckKind.is_full && Relative_path.Set.is_empty needs_recheck
@@ -1090,7 +1094,9 @@ functor
       let logstring = Printf.sprintf "Parsing %d files" reparse_count in
       Hh_logger.log "Begin %s" logstring;
 
-      (* Parse all changed files. *)
+      (* Parse all changed files. This clears the file contents cache prior
+          to parsing. *)
+      let parse_t = Unix.gettimeofday () in
       let (env, { parse_errors = errors; failed_parsing; fast_parsed }) =
         do_parsing genv env ~files_to_parse ~stop_at_errors
       in
@@ -1317,6 +1323,16 @@ functor
           failed_parsing
       in
       let to_recheck_count = Relative_path.Set.cardinal files_to_check in
+      (* The intent of capturing the snapshot here is to increase the likelihood
+          of the state-on-disk being the same as what the parser saw *)
+      let (env, capture_snapshot) =
+        ServerRecheckCapture.update_before_recheck
+          genv
+          env
+          ~to_recheck_count
+          ~changed_files:files_to_parse
+          ~parse_t
+      in
       ServerProgress.send_progress_to_monitor
         ~include_in_logs:false
         "typechecking %d files"
@@ -1347,6 +1363,7 @@ functor
           genv
           env
           telemetry
+          capture_snapshot
           ~errors
           ~files_to_check
           ~files_to_parse
