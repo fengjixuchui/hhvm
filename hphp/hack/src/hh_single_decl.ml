@@ -33,8 +33,11 @@ let init root : Provider_context.t =
   in
 
   (* Push local stacks here so we don't include shared memory in our timing. *)
-  File_provider.local_changes_push_stack ();
-  Decl_provider.local_changes_push_stack ctx;
+  File_provider.local_changes_push_sharedmem_stack ();
+  Decl_provider.local_changes_push_sharedmem_stack ();
+  Shallow_classes_provider.local_changes_push_sharedmem_stack ();
+  Linearization_provider.local_changes_push_sharedmem_stack ();
+
   ctx
 
 let time verbosity msg f =

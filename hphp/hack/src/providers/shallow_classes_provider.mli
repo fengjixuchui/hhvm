@@ -32,8 +32,6 @@ val remove_old_batch : Provider_context.t -> SSet.t -> unit
 
 val remove_batch : Provider_context.t -> SSet.t -> unit
 
-val push_local_changes : Provider_context.t -> unit
+val local_changes_push_sharedmem_stack : unit -> unit
 
-val pop_local_changes : Provider_context.t -> unit
-
-val invalidate_class : Provider_context.t -> string -> unit
+val local_changes_pop_sharedmem_stack : unit -> unit

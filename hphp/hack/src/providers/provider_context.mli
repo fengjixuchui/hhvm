@@ -46,6 +46,9 @@ type entry = {
   mutable symbols: Relative_path.t SymbolOccurrence.t list option;
 }
 
+(** We often operate on collection of entries. *)
+type entries = entry Relative_path.Map.t
+
 (** A context allowing the caller access to data for files and symbols in the
 codebase. In particular, this is used as a parameter to [Decl_provider]
 functions to access the decl for a given symbol.
@@ -88,6 +91,9 @@ there may not be a [ServerEnv.env] available. *)
 val empty_for_debugging :
   popt:ParserOptions.t -> tcopt:TypecheckerOptions.t -> t
 
+(** Creates an entry on its own *)
+val make_entry : path:Relative_path.t -> contents:string -> entry
+
 (** Read the contents at [path] from disk and create a new
 [Provider_context.entry] representing that file. The returned
 [Provider_context.t] contains that new entry.
@@ -121,6 +127,8 @@ val add_entry_from_file_input :
   file_input:ServerCommandTypes.file_input ->
   t * entry
 
+val add_existing_entry : ctx:t -> entry -> t
+
 (** Get the [ParserOptions.t] contained within the [t]. *)
 val get_popt : t -> ParserOptions.t
 
@@ -134,7 +142,7 @@ val map_tcopt : t -> f:(TypecheckerOptions.t -> TypecheckerOptions.t) -> t
 val get_backend : t -> Provider_backend.t
 
 (** Get the entries currently contained in this [t]. *)
-val get_entries : t -> entry Relative_path.Map.t
+val get_entries : t -> entries
 
 (** Are we within [Provider_utils.respect_but_quarantine_unsaved_changes] ? *)
 val is_quarantined : unit -> bool

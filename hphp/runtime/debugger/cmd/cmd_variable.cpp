@@ -17,6 +17,7 @@
 #include "hphp/runtime/debugger/cmd/cmd_variable.h"
 
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/debugger/cmd/cmd_where.h"
 #include "hphp/runtime/debugger/debugger_client.h"
 #include "hphp/runtime/vm/runtime.h"
@@ -267,6 +268,13 @@ bool CmdVariable::onServer(DebuggerProxy &proxy) {
 
   if (m_global) {
     m_variables.remove(s_GLOBALS);
+  }
+
+  auto const& denv = g_context->getDebuggerEnv();
+  if (!m_global && !denv.isNull()) {
+    IterateKVNoInc(denv.get(), [&] (TypedValue k, TypedValue v) {
+      if (!m_variables.exists(k)) m_variables.set(k, v, true);
+    });
   }
 
   // Deprecated IDE uses this, so keep it around for now.  It expects all

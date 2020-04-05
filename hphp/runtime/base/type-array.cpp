@@ -233,7 +233,7 @@ Array Array::diffImpl(const Array& array, bool by_key, bool by_value, bool match
       ssize_t pos = opaque1.positions[perm1[mid]];
       int cmp_res =  cmp(target,
                          by_key ? array->getKey(pos)
-                                : VarNR(array->atPos(pos)),
+                                : VarNR(array->nvGetVal(pos)),
                          cmp_data);
       if (cmp_res > 0) { // outer is bigger
         min = mid + 1;
@@ -256,7 +256,7 @@ Array Array::diffImpl(const Array& array, bool by_key, bool by_value, bool match
           }
           if (value_cmp_as_string_function(
                 VarNR(val),
-                VarNR(array->atPos(pos)),
+                VarNR(array->nvGetVal(pos)),
                 value_data
               ) == 0) {
             found = true;
@@ -271,7 +271,7 @@ Array Array::diffImpl(const Array& array, bool by_key, bool by_value, bool match
             }
             if (value_cmp_as_string_function(
                   VarNR(val),
-                  VarNR(array->atPos(pos)),
+                  VarNR(array->nvGetVal(pos)),
                   value_data
                 ) == 0) {
               found = true;
@@ -604,7 +604,7 @@ tv_rval Array::rvalImpl(const T& key, AccessFlags flags) const {
 }
 
 template<typename T> ALWAYS_INLINE
-arr_lval Array::lvalImpl(const T& key, AccessFlags) {
+tv_lval Array::lvalImpl(const T& key, AccessFlags) {
   if (!m_arr) m_arr = Ptr::attach(ArrayData::Create());
   auto const lval = m_arr->lval(key, m_arr->cowCheck());
   if (lval.arr != m_arr) m_arr = Ptr::attach(lval.arr);
@@ -613,22 +613,14 @@ arr_lval Array::lvalImpl(const T& key, AccessFlags) {
 }
 
 template<typename T> ALWAYS_INLINE
-arr_lval Array::lvalSilentImpl(const T& key, AccessFlags) {
+tv_lval Array::lvalForceImpl(const T& key, AccessFlags flags) {
   if (!m_arr) m_arr = Ptr::attach(ArrayData::Create());
-  auto const lval = m_arr->lvalSilent(key, m_arr->cowCheck());
-  assertx(lval.arr == m_arr);
-  return lval;
-}
-
-template<typename T> ALWAYS_INLINE
-arr_lval Array::lvalForceImpl(const T& key, AccessFlags flags) {
-  if (auto const lval = lvalSilentImpl(key, flags)) return lval;
-  setImpl(key, make_tv<KindOfNull>());
-
-  // NB: In order to preserve the old lval behavior
-  auto const lval = lvalSilentImpl(key, flags);
-  assertx(lval.arr == m_arr);
-  assertx(lval);
+  if (!m_arr->exists(key)) {
+    auto const escalated = m_arr->set(key, make_tv<KindOfNull>());
+    if (escalated != m_arr) m_arr = Ptr::attach(escalated);
+  }
+  auto const lval = m_arr->lval(key, m_arr->cowCheck());
+  if (lval.arr != m_arr) m_arr = Ptr::attach(lval.arr);
   return lval;
 }
 
@@ -674,8 +666,8 @@ template<> Variant& not_found<Variant&>() { return lvalBlackHole(); }
 template<> tv_rval not_found<tv_rval>() {
   return tv_rval::dummy();
 }
-template<> arr_lval not_found<arr_lval>() {
-  return arr_lval { nullptr, lvalBlackHole().asTypedValue() };
+template<> tv_lval not_found<tv_lval>() {
+  return lvalBlackHole().asTypedValue();
 }
 
 /*
@@ -759,9 +751,8 @@ decltype(auto) elem(const Array& arr, Fn fn, bool is_key,
   }
 
 FOR_EACH_KEY_TYPE(rval, tv_rval, const)
-FOR_EACH_KEY_TYPE(lval, arr_lval, )
-FOR_EACH_KEY_TYPE(lvalSilent, arr_lval, )
-FOR_EACH_KEY_TYPE(lvalForce, arr_lval, )
+FOR_EACH_KEY_TYPE(lval, tv_lval, )
+FOR_EACH_KEY_TYPE(lvalForce, tv_lval, )
 
 #undef I
 #undef V
@@ -871,8 +862,8 @@ static int array_compare_func(const void *n1, const void *n2, const void *op) {
                             opaque->data);
   }
   return opaque->cmp_func(
-    VarNR((*opaque->array)->atPos(pos1)),
-    VarNR((*opaque->array)->atPos(pos2)),
+    VarNR((*opaque->array)->nvGetVal(pos1)),
+    VarNR((*opaque->array)->nvGetVal(pos2)),
     opaque->data
   );
 }
@@ -893,8 +884,8 @@ static int multi_compare_func(const void *n1, const void *n2, const void *op) {
                                 opaque->data);
     } else {
       result = opaque->cmp_func(
-        VarNR((*opaque->array)->atPos(pos1)),
-        VarNR((*opaque->array)->atPos(pos2)),
+        VarNR((*opaque->array)->nvGetVal(pos1)),
+        VarNR((*opaque->array)->nvGetVal(pos2)),
         opaque->data
       );
     }
@@ -940,9 +931,9 @@ void Array::sort(PFUNC_CMP cmp_func, bool by_key, bool renumber,
   for (int i = 0; i < count; i++) {
     ssize_t pos = opaque.positions[indices[i]];
     if (renumber) {
-      sorted.append(m_arr->atPos(pos));
+      sorted.append(m_arr->nvGetVal(pos));
     } else {
-      sorted.set(m_arr->nvGetKey(pos), m_arr->atPos(pos), true);
+      sorted.set(m_arr->nvGetKey(pos), m_arr->nvGetVal(pos), true);
     }
   }
   operator=(sorted);
@@ -995,9 +986,9 @@ bool Array::MultiSort(std::vector<SortData> &data) {
       ssize_t pos = opaque.positions[indices[i]];
       Variant k(arr->getKey(pos));
       if (k.isInteger()) {
-        sorted.append(arr->atPos(pos));
+        sorted.append(arr->nvGetVal(pos));
       } else {
-        sorted.set(k, arr->atPos(pos));
+        sorted.set(k, arr->nvGetVal(pos));
       }
     }
     *opaque.original = sorted;

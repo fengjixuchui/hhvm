@@ -18,7 +18,6 @@
 #include <algorithm>
 
 #include "hphp/runtime/base/array-init.h"
-#include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/tv-val.h"
 #include "hphp/runtime/base/mixed-array-defs.h"
 #include "hphp/runtime/base/runtime-error.h"
@@ -103,24 +102,21 @@ bool GlobalsArray::keyExists(const StringData* k) {
   return this->m_tab->lookup(k) != nullptr;
 }
 
-TypedValue GlobalsArray::NvGetKey(const ArrayData* ad, ssize_t pos) {
+TypedValue GlobalsArray::GetPosKey(const ArrayData* ad, ssize_t pos) {
   auto a = asGlobals(ad);
   NameValueTable::Iterator iter(a->m_tab, pos);
   if (iter.valid()) {
-    auto k = iter.curKey();
-    if (k->isRefCounted()) {
-      k->rawIncRefCount();
-      return make_tv<KindOfString>(const_cast<StringData*>(k));
-    }
-    return make_tv<KindOfPersistentString>(k);
+    auto const k = iter.curKey();
+    return k->isRefCounted() ? make_tv<KindOfString>(const_cast<StringData*>(k))
+                             : make_tv<KindOfPersistentString>(k);
   }
   return make_tv<KindOfUninit>();
 }
 
-tv_rval GlobalsArray::RvalPos(const ArrayData* ad, ssize_t pos) {
+TypedValue GlobalsArray::GetPosVal(const ArrayData* ad, ssize_t pos) {
   auto a = asGlobals(ad);
   NameValueTable::Iterator iter(a->m_tab, pos);
-  return iter.valid() ? iter.curVal() : uninit_variant.asTypedValue();
+  return iter.valid() ? *iter.curVal() : *uninit_variant.asTypedValue();
 }
 
 bool
@@ -161,16 +157,6 @@ arr_lval GlobalsArray::LvalStr(ArrayData* ad, StringData* k, bool /*copy*/) {
     tvWriteNull(nulVal);
     tv = a->m_tab->set(k, &nulVal);
   }
-  return arr_lval { ad, tv };
-}
-
-arr_lval GlobalsArray::LvalSilentInt(ArrayData* ad, int64_t k, bool copy) {
-  return LvalSilentStr(ad, String(k).get(), copy);
-}
-
-arr_lval GlobalsArray::LvalSilentStr(ArrayData* ad, StringData* k, bool copy) {
-  auto a = asGlobals(ad);
-  auto const tv = a->m_tab->lookup(k);
   return arr_lval { ad, tv };
 }
 

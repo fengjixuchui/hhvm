@@ -259,6 +259,10 @@ pub mod instr {
         instr(Instruct::ILitConst(InstructLitConst::ClsCns(const_id)))
     }
 
+    pub fn newlikearrayl(local: local::Type, size: isize) -> InstrSeq {
+        lit_const(InstructLitConst::NewLikeArrayL(local, size))
+    }
+
     pub fn eq() -> InstrSeq {
         instr(Instruct::IOp(InstructOperator::Eq))
     }
@@ -971,6 +975,14 @@ pub mod instr {
         instr(Instruct::IOp(InstructOperator::ResolveClsMethodS(
             scref, method_id,
         )))
+    }
+
+    pub fn resolve_meth_caller(fun_id: FunctionId) -> InstrSeq {
+        instr(Instruct::IOp(InstructOperator::ResolveMethCaller(fun_id)))
+    }
+
+    pub fn oodeclexists(class_kind: ClassKind) -> InstrSeq {
+        instr(Instruct::IMisc(InstructMisc::OODeclExists(class_kind)))
     }
 
     pub fn fatal(op: FatalOp) -> InstrSeq {

@@ -27,6 +27,7 @@
 #include "hphp/util/hash-set.h"
 #include "hphp/util/trace.h"
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/static-string-table.h"
 #include "hphp/runtime/base/tv-arith.h"
@@ -2868,6 +2869,15 @@ void in(ISS& env, const bc::IssetL& op) {
   auto const loc = locAsCell(env, op.loc1);
   if (loc.subtypeOf(BNull))  return push(env, TFalse);
   if (!loc.couldBe(BNull))   return push(env, TTrue);
+  push(env, TBool);
+}
+
+void in(ISS& env, const bc::IsUnsetL& op) {
+  nothrow(env);
+  constprop(env);
+  auto const loc = locAsCell(env, op.loc1);
+  if (loc.subtypeOf(BUninit))  return push(env, TTrue);
+  if (!loc.couldBe(BUninit))   return push(env, TFalse);
   push(env, TBool);
 }
 

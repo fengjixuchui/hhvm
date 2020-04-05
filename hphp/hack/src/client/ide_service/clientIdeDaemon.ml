@@ -13,10 +13,111 @@ type message = Message : 'a ClientIdeMessage.tracked_t -> message
 
 type message_queue = message Lwt_message_queue.t
 
+(** Here are some invariants for initialized_state, concerning these data-structures:
+1. forward-naming-table-delta stored in naming_table
+2. reverse-naming-table-delta-and-cache stored in local_memory
+3. entries with source text, stored in open_files
+3. cached ASTs and TASTs, stored in open_files
+4. shallow-decl-cache, folded-decl-cache, linearization-cache stored in local-memory
+
+There are two concepts to understand.
+1. "Singleton context" (ctx). When processing IDE requests for a file, we create
+   a context object in which that entry's source text and AST and TAST
+   are present in the context, and no others are.
+2. "Quarantine with respect to an entry". We enter a quarantine while
+   computing the TAST for a singleton context entry. The invariants within
+   the quarantine are different from those without.
+
+The key algorithms which read from these data-structures are:
+1. Ast_provider.get_ast will fetch the cached AST for an entry in ctx, or if
+   the entry is present but as yet lacks an AST then it will parse and cache,
+   or if it's lookinng for the AST of a file not in ctx then it will parse
+   off disk but decline to cache.
+2. Naming_provider.get_* will get_ast for ctx entry to see if symbol is there.
+   If not it will look in reverse-delta-and-cache or read from sqlite
+   and store the answer back in reverse-delta-and-cache. But if the answer
+   to that fallback was a file in ctx, then it will say that the symbol's
+   not defined.
+3. Shallow_classes_provider.get_* will look it up in shallow-decl-cache, and otherwise
+   will ask Naming_provider and Ast_provider for the AST, will compute shallow decl,
+   and will store it in shallow-decl-cache
+4. Linearization_provider.get_* will look it up in linearization-cache. The
+   decl_provider reads and writes linearizations via the linearization_provider.
+5. Decl_provider.get_* will look it up in folded-decl-cache, computing it if
+   not there using shallow and linearization provider, and store it back in folded-decl-cache
+6. Tast_provider.compute* is only ever called on entries. It returns the cached
+   TAST if present; otherwise, it runs normal type-checking-and-inference, relies
+   upon all the other providers, and writes the answer back in the entry's TAST cache.
+
+The invariants for forward and reverse naming tables:
+1. These tables only ever reflect truth about disk files; they are unaffected
+   by open_file entries.
+2. They are updated asynchronously by update_naming_tables_for_changed_file
+   in response to DidChangeWatchedFile events. Thus, we might be asked to fetch
+   a shallow decl even before the naming-tables have been fully updated.
+   We might for instance read the naming-table and try to fetch a shallow
+   decl from a file that doesn't even exist on disk any more.
+
+The invariants for AST, TAST, shallow, folded-decl and linearization caches:
+1. AST, if present, reflects the AST of its entry's source text,
+   and is a "full" AST (not decl-only), and has errors.
+2. TAST, if present, reflects the TAST of its entry's source text computed
+   against the on-disk state of all other files
+3. Outside a quarantine, all entries in shallow cache are correct as of disk
+   (at least as far as asynchronous file updates have been processed).
+4. Likewise, all entries in folded+linearization caches are correct as
+   of disk.
+5. We only ever enter quarantine with respect to one single entry.
+   For the duration of the quarantine, an AST for that entry,
+   if present, is correct as of the entry's source text.
+6. Likewise any shallow decls for an entry are correct as of its source text.
+   Moreover, if shallow decls for an entry are present, then the entry's AST
+   is present and contains those symbols.
+7. Any shallow decls not for the entry are correct as of disk.
+8. During quarantine, the shallow-decl of all other files is correct as of disk.
+9. The entry's TAST, along with every single decl and linearization,
+   are correct as of this entry's source text plus every other file off disk.
+
+Here are the algorithms we use that satisfy those invariants.
+1. Upon a disk-file-change, we invalidate all TASTs (satisfying invariant 2).
+   We use the forward-naming-table to find all "old" symbols that were
+   defined in the file prior to the disk change, and invalidate those
+   shallow decls (satisfying invariant 3). We invalidate all
+  folded+linearization caches (satisfying invariant 4). Invariant 1 is N/A.
+2. Upon an editor change to a file, we invalidate the entry's AST and TAST
+   (satisfying invariant 1).
+3. Upon request for a TAST of a file, we create a singleton context for
+   that entry, and enter quarantine as follows. We parse the file and
+   cache its AST and invalidate shallow decls for all symbols inside
+   this new AST (satisfying invariant 6). We invalidate all decls
+   and linearizations (satisfying invariant 9). Subsequent fetches,
+   thanks to the "key algorithms for reading these datastructures" (above)
+   will only cache things in accordance with invariants 6,7,8,9.
+4. We leave quarantine as follows. We invalidate shallow decls for
+   all symbols in the entry's AST; thanks to invariant 5, this will
+   fulfill invariant 3. We invalidate all decls and linearizations
+  (satisfying invariant 4).
+*)
 type initialized_state = {
   hhi_root: Path.t;
-  server_env: ServerEnv.env;
-  ctx: Provider_context.t;
+      (** hhi_root files are written during initialize, deleted at shutdown, and
+  refreshed periodically in case the tmp-cleaner has deleted them. *)
+  naming_table: Naming_table.t;
+      (** the forward-naming-table is constructed during initialize and updated
+  during process_changed_files. It stores an in-memory map of FileInfos that
+  have changed since sqlite. When a file is changed on disk, we need this to
+  know which shallow decls to invalidate. Note: while the forward-naming-table
+  is stored here, the reverse-naming-table is instead stored in ctx. *)
+  sienv: SearchUtils.si_env;
+      (** sienv provides autocomplete and find-symbols. It is constructed during
+  initialization and stores a few in-memory structures such as namespace-list,
+  plus in-memory deltas. It is also updated during process_changed_files. *)
+  popt: ParserOptions.t;  (** parser options *)
+  tcopt: TypecheckerOptions.t;  (** typechecker options *)
+  local_memory: Provider_backend.local_memory;
+      (** Local_memory backend; includes decl caches *)
+  open_files: Provider_context.entries;
+      (** all open files, along with caches of their ASTs and TASTs and errors *)
   changed_files_to_process: Path.Set.t;
       (** changed_files_to_process is grown during File_changed events, and steadily
   whittled down one by one in `serve` as we get around to processing them
@@ -135,6 +236,7 @@ let initialize
        naming_table_saved_state_path;
        use_ranked_autocomplete;
        config;
+       open_files;
      } :
       ClientIdeMessage.Initialize_from_saved_state.t) :
     (state, ClientIdeMessage.error_data) Lwt_result.t =
@@ -167,34 +269,30 @@ let initialize
   in
 
   Provider_backend.set_local_memory_backend_with_defaults ();
-
-  let genv =
-    ServerEnvBuild.make_genv server_args server_config server_local_config []
-  in
-  let server_env = ServerEnvBuild.make_env genv.ServerEnv.config in
-  (* We need shallow class declarations so that we can invalidate individual
-  members in a class hierarchy. *)
-  let server_env =
-    {
-      server_env with
-      ServerEnv.tcopt =
-        {
-          server_env.ServerEnv.tcopt with
-          GlobalOptions.tco_shallow_class_decl = true;
-        };
-    }
+  let local_memory =
+    match Provider_backend.get () with
+    | Provider_backend.Local_memory local_memory -> local_memory
+    | _ -> failwith "expected local memory backend"
   in
 
   (* Use server_config to modify server_env with the correct symbol index *)
-  let start_time = log_startup_time "basic_startup" start_time in
-  let namespace_map =
-    GlobalOptions.po_auto_namespace_map server_env.ServerEnv.tcopt
+  let genv =
+    ServerEnvBuild.make_genv server_args server_config server_local_config []
   in
+  let { ServerEnv.tcopt; popt; gleanopt; _ } =
+    ServerEnvBuild.make_env genv.ServerEnv.config
+  in
+
+  (* We need shallow class declarations so that we can invalidate individual
+  members in a class hierarchy. *)
+  let tcopt = { tcopt with GlobalOptions.tco_shallow_class_decl = true } in
+
+  let start_time = log_startup_time "basic_startup" start_time in
   let sienv =
     SymbolIndex.initialize
       ~globalrev:None
-      ~gleanopt:server_env.ServerEnv.gleanopt
-      ~namespace_map
+      ~gleanopt
+      ~namespace_map:(GlobalOptions.po_auto_namespace_map tcopt)
       ~provider_name:
         server_local_config.ServerLocalConfig.symbolindex_search_provider
       ~quiet:server_local_config.ServerLocalConfig.symbolindex_quiet
@@ -210,24 +308,45 @@ let initialize
       SearchUtils.use_ranked_autocomplete;
     }
   in
-  let server_env = { server_env with ServerEnv.local_symbol_table = sienv } in
-  let ctx = Provider_utils.ctx_from_server_env server_env in
   let start_time = log_startup_time "symbol_index" start_time in
   if use_ranked_autocomplete then AutocompleteRankService.initialize ();
   let%lwt load_state_result =
-    load_saved_state ctx ~root ~naming_table_saved_state_path
+    load_saved_state
+      (Provider_context.empty_for_tool
+         ~popt
+         ~tcopt
+         ~backend:(Provider_backend.Local_memory local_memory))
+      ~root
+      ~naming_table_saved_state_path
   in
   let _ = log_startup_time "saved_state" start_time in
   match load_state_result with
   | Ok (naming_table, changed_files) ->
-    let server_env = { server_env with ServerEnv.naming_table } in
+    (* We only ever serve requests on files that are open. That's why our caller
+    passes an initial list of open files, the ones already open in the editor
+    at the time we were launched. We don't actually care about their contents
+    at this stage, since updated contents will be delivered upon each request.
+    (and indeed it's pointless to waste time reading existing contents off disk).
+    All we care is that every open file is listed in 'open_files'. *)
+    let open_files =
+      open_files
+      |> List.map ~f:(fun path ->
+             path |> Path.to_string |> Relative_path.create_detect_prefix)
+      |> List.map ~f:(fun path ->
+             (path, Provider_context.make_entry ~path ~contents:""))
+      |> Relative_path.Map.of_list
+    in
     let state =
       Initialized
         {
           hhi_root;
-          server_env;
+          naming_table;
+          sienv;
           changed_files_to_process = Path.Set.of_list changed_files;
-          ctx;
+          popt;
+          tcopt;
+          local_memory;
+          open_files;
           changed_files_denominator = List.length changed_files;
         }
     in
@@ -265,54 +384,77 @@ let restore_hhi_root_if_necessary (state : initialized_state) :
     Relative_path.set_path_prefix Relative_path.Hhi hhi_root;
     { state with hhi_root }
 
-let make_context_from_file_input
+(** An empty ctx with no entries *)
+let make_empty_ctx (initialized_state : initialized_state) : Provider_context.t
+    =
+  Provider_context.empty_for_tool
+    ~popt:initialized_state.popt
+    ~tcopt:initialized_state.tcopt
+    ~backend:(Provider_backend.Local_memory initialized_state.local_memory)
+
+(** Constructs a temporary ctx with just one entry. *)
+let make_singleton_ctx
+    (initialized_state : initialized_state) (entry : Provider_context.entry) :
+    Provider_context.t =
+  let ctx = make_empty_ctx initialized_state in
+  let ctx = Provider_context.add_existing_entry ~ctx entry in
+  ctx
+
+(** Opens a file, in response to DidOpen event, by putting in a new
+entry in open_files, with empty AST and TAST. If the LSP client
+happened to send us two DidOpens for a file, well, we won't complain. *)
+let open_file
     (initialized_state : initialized_state)
     (path : Relative_path.t)
-    (file_input : ServerCommandTypes.file_input) :
-    state * Provider_context.t * Provider_context.entry =
+    (contents : string) : state =
   let initialized_state = restore_hhi_root_if_necessary initialized_state in
-  let ctx = initialized_state.ctx in
-  match Relative_path.Map.find_opt (Provider_context.get_entries ctx) path with
-  | None ->
-    let (ctx, entry) =
-      Provider_context.add_entry_from_file_input ~ctx ~path ~file_input
-    in
-    (Initialized { initialized_state with ctx }, ctx, entry)
-  | Some entry ->
-    (* Only reparse the file if the contents have actually changed.
-     * If the user simply sends us a file_input variable with "FileName"
-     * we shouldn't count that as a change. *)
-    let any_changes =
-      match file_input with
-      | ServerCommandTypes.FileName _ -> false
-      | ServerCommandTypes.FileContent content ->
-        content <> entry.Provider_context.contents
-    in
-    if any_changes then
-      let (ctx, entry) =
-        Provider_context.add_entry_from_file_input ~ctx ~path ~file_input
-      in
-      (Initialized { initialized_state with ctx }, ctx, entry)
-    else
-      (Initialized initialized_state, ctx, entry)
+  let entry = Provider_context.make_entry ~path ~contents in
+  let open_files =
+    Relative_path.Map.add initialized_state.open_files path entry
+  in
+  Initialized { initialized_state with open_files }
 
-let make_context_from_document_location
+(** Closes a file, in response to DidClose event, by removing the
+entry in open_files. If the LSP client sents us multile DidCloses,
+or DidClose for an unopen file, we won't complain. *)
+let close_file (initialized_state : initialized_state) (path : Relative_path.t)
+    : state =
+  let open_files = Relative_path.Map.remove initialized_state.open_files path in
+  Initialized { initialized_state with open_files }
+
+(** Updates an existing opened file, with new contents; if the
+contents haven't changed then the existing open file's AST and TAST
+will be left intact; if the file wasn't already open then we
+throw an exception. *)
+let update_file
     (initialized_state : initialized_state)
     (document_location : ClientIdeMessage.document_location) :
     state * Provider_context.t * Provider_context.entry =
-  let (file_path, file_input) =
-    match document_location with
-    | { ClientIdeMessage.file_contents = None; file_path; _ } ->
-      let file_input = ServerCommandTypes.FileName (Path.to_string file_path) in
-      (file_path, file_input)
-    | { ClientIdeMessage.file_contents = Some file_contents; file_path; _ } ->
-      let file_input = ServerCommandTypes.FileContent file_contents in
-      (file_path, file_input)
-  in
   let path =
-    file_path |> Path.to_string |> Relative_path.create_detect_prefix
+    document_location.ClientIdeMessage.file_path
+    |> Path.to_string
+    |> Relative_path.create_detect_prefix
   in
-  make_context_from_file_input initialized_state path file_input
+  let entry =
+    match
+      ( document_location.ClientIdeMessage.file_contents,
+        Relative_path.Map.find_opt initialized_state.open_files path )
+    with
+    | (_, None) ->
+      failwith
+        ( "Attempted LSP operation on a non-open file"
+        ^ Exception.get_current_callstack_string 99 )
+    | (Some contents, Some entry)
+      when entry.Provider_context.contents = contents ->
+      entry
+    | (None, Some entry) -> entry
+    | (Some contents, _) -> Provider_context.make_entry ~path ~contents
+  in
+  let open_files =
+    Relative_path.Map.add initialized_state.open_files path entry
+  in
+  let ctx = make_singleton_ctx initialized_state entry in
+  (Initialized { initialized_state with open_files }, ctx, entry)
 
 module Handle_message_result = struct
   type 'a t =
@@ -359,14 +501,10 @@ let handle_message :
       let changed_files_denominator =
         initialized_state.changed_files_denominator + 1
       in
-      let ctx =
-        Provider_utils.ctx_from_server_env initialized_state.server_env
-      in
       let state =
         Initialized
           {
             initialized_state with
-            ctx;
             changed_files_to_process;
             changed_files_denominator;
           }
@@ -419,21 +557,20 @@ let handle_message :
       }
     in
     Lwt.return (state, Handle_message_result.Error error_data)
+  | (Initialized initialized_state, File_closed file_path) ->
+    let path =
+      file_path |> Path.to_string |> Relative_path.create_detect_prefix
+    in
+    let state = close_file initialized_state path in
+    Lwt.return (state, Handle_message_result.Notification)
   | (Initialized initialized_state, File_opened { file_path; file_contents }) ->
     let path =
       file_path |> Path.to_string |> Relative_path.create_detect_prefix
     in
-    let (state, _, _) =
-      make_context_from_file_input
-        initialized_state
-        path
-        (ServerCommandTypes.FileContent file_contents)
-    in
-    Lwt.return (state, Handle_message_result.Response ())
+    let state = open_file initialized_state path file_contents in
+    Lwt.return (state, Handle_message_result.Notification)
   | (Initialized initialized_state, Hover document_location) ->
-    let (state, ctx, entry) =
-      make_context_from_document_location initialized_state document_location
-    in
+    let (state, ctx, entry) = update_file initialized_state document_location in
     let result =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
           ServerHover.go_quarantined
@@ -449,15 +586,12 @@ let handle_message :
         { ClientIdeMessage.Completion.document_location; is_manually_invoked }
     ) ->
     (* Update the state of the world with the document as it exists in the IDE *)
-    let (state, ctx, entry) =
-      make_context_from_document_location initialized_state document_location
-    in
-    let sienv = initialized_state.server_env.ServerEnv.local_symbol_table in
+    let (state, ctx, entry) = update_file initialized_state document_location in
     let result =
       ServerAutoComplete.go_ctx
         ~ctx
         ~entry
-        ~sienv
+        ~sienv:initialized_state.sienv
         ~is_manually_invoked
         ~line:document_location.line
         ~column:document_location.column
@@ -465,7 +599,7 @@ let handle_message :
     Lwt.return (state, Handle_message_result.Response result)
   (* Autocomplete docblock resolve *)
   | (Initialized initialized_state, Completion_resolve param) ->
-    let ctx = initialized_state.ctx in
+    let ctx = make_empty_ctx initialized_state in
     ClientIdeMessage.Completion_resolve.(
       let result =
         ServerDocblockAt.go_docblock_for_symbol
@@ -476,27 +610,31 @@ let handle_message :
       Lwt.return (state, Handle_message_result.Response result))
   (* Autocomplete docblock resolve *)
   | (Initialized initialized_state, Completion_resolve_location param) ->
-    ClientIdeMessage.Completion_resolve_location.(
-      let (state, ctx, entry) =
-        make_context_from_document_location
-          initialized_state
-          param.document_location
-      in
-      let result =
-        Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
-            ServerDocblockAt.go_docblock_ctx
-              ~ctx
-              ~entry
-              ~line:param.document_location.line
-              ~column:param.document_location.column
-              ~kind:param.kind)
-      in
-      Lwt.return (state, Handle_message_result.Response result))
+    (* We're given a location but it often won't be an opened file.
+    We will only serve autocomplete docblocks as of truth on disk.
+    Hence, we construct temporary entry to reflect the file which
+    contained the target of the resolve. *)
+    let open ClientIdeMessage.Completion_resolve_location in
+    let path =
+      param.document_location.ClientIdeMessage.file_path
+      |> Path.to_string
+      |> Relative_path.create_detect_prefix
+    in
+    let ctx = make_empty_ctx initialized_state in
+    let (ctx, entry) = Provider_context.add_entry ~ctx ~path in
+    let result =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerDocblockAt.go_docblock_ctx
+            ~ctx
+            ~entry
+            ~line:param.document_location.line
+            ~column:param.document_location.column
+            ~kind:param.kind)
+    in
+    Lwt.return (state, Handle_message_result.Response result)
   (* Document highlighting *)
   | (Initialized initialized_state, Document_highlight document_location) ->
-    let (state, ctx, entry) =
-      make_context_from_document_location initialized_state document_location
-    in
+    let (state, ctx, entry) = update_file initialized_state document_location in
     let results =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
           ServerHighlightRefs.go_quarantined
@@ -508,9 +646,7 @@ let handle_message :
     Lwt.return (state, Handle_message_result.Response results)
   (* Signature help *)
   | (Initialized initialized_state, Signature_help document_location) ->
-    let (state, ctx, entry) =
-      make_context_from_document_location initialized_state document_location
-    in
+    let (state, ctx, entry) = update_file initialized_state document_location in
     let results =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
           ServerSignatureHelp.go_quarantined
@@ -522,9 +658,7 @@ let handle_message :
     Lwt.return (state, Handle_message_result.Response results)
   (* Go to definition *)
   | (Initialized initialized_state, Definition document_location) ->
-    let (state, ctx, entry) =
-      make_context_from_document_location initialized_state document_location
-    in
+    let (state, ctx, entry) = update_file initialized_state document_location in
     let result =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
           ServerGoToDefinition.go_quarantined
@@ -536,9 +670,7 @@ let handle_message :
     Lwt.return (state, Handle_message_result.Response result)
   (* Type Definition *)
   | (Initialized initialized_state, Type_definition document_location) ->
-    let (state, ctx, entry) =
-      make_context_from_document_location initialized_state document_location
-    in
+    let (state, ctx, entry) = update_file initialized_state document_location in
     let result =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
           ServerTypeDefinition.go_quarantined
@@ -550,9 +682,7 @@ let handle_message :
     Lwt.return (state, Handle_message_result.Response result)
   (* Document Symbol *)
   | (Initialized initialized_state, Document_symbol document_location) ->
-    let (state, ctx, entry) =
-      make_context_from_document_location initialized_state document_location
-    in
+    let (state, ctx, entry) = update_file initialized_state document_location in
     let result = FileOutline.outline_ctx ~ctx ~entry in
     Lwt.return (state, Handle_message_result.Response result)
   (* Type Coverage *)
@@ -565,9 +695,7 @@ let handle_message :
         column = 0;
       }
     in
-    let (state, ctx, entry) =
-      make_context_from_document_location initialized_state document_location
-    in
+    let (state, ctx, entry) = update_file initialized_state document_location in
     let result =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
           ServerColorFile.go_quarantined ~ctx ~entry)
@@ -638,7 +766,16 @@ let serve ~(in_fd : Lwt_unix.file_descr) ~(out_fd : Lwt_unix.file_descr) :
     | {
      message_queue;
      state =
-       Initialized ({ server_env; changed_files_to_process; ctx; _ } as state);
+       Initialized
+         ( {
+             naming_table;
+             sienv;
+             changed_files_to_process;
+             local_memory;
+             popt;
+             open_files;
+             _;
+           } as state );
     }
       when Lwt_message_queue.is_empty message_queue
            && (not (Lwt_unix.readable in_fd))
@@ -653,20 +790,14 @@ let serve ~(in_fd : Lwt_unix.file_descr) ~(out_fd : Lwt_unix.file_descr) :
       let changed_files_to_process =
         Path.Set.remove changed_files_to_process next_file
       in
-      let%lwt server_env =
+      let%lwt { ClientIdeIncremental.naming_table; sienv; old_file_info; _ } =
         try%lwt
-          let { ServerEnv.naming_table; local_symbol_table; _ } = server_env in
-          let%lwt (naming_table, local_symbol_table) =
-            ClientIdeIncremental.process_changed_file
-              ~ctx
-              ~naming_table
-              ~sienv:local_symbol_table
-              ~path:next_file
-          in
-          let server_env =
-            { server_env with ServerEnv.naming_table; local_symbol_table }
-          in
-          Lwt.return server_env
+          ClientIdeIncremental.update_naming_tables_for_changed_file
+            ~backend:(Provider_backend.Local_memory local_memory)
+            ~popt
+            ~naming_table
+            ~sienv
+            ~path:next_file
         with exn ->
           let e = Exception.wrap exn in
           HackEventLogger.uncaught_exception exn;
@@ -676,21 +807,33 @@ let serve ~(in_fd : Lwt_unix.file_descr) ~(out_fd : Lwt_unix.file_descr) :
               (Printf.sprintf
                  "Uncaught exception when processing changed file: %s"
                  (Path.to_string next_file));
-          Lwt.return server_env
+          Lwt.return
+            {
+              ClientIdeIncremental.naming_table;
+              sienv;
+              old_file_info = None;
+              new_file_info = None;
+            }
       in
+      Option.iter
+        old_file_info
+        ~f:(Provider_utils.invalidate_local_decl_caches_for_file local_memory);
+      Provider_utils.invalidate_tast_cache_of_entries open_files;
       let%lwt state =
         if Path.Set.is_empty changed_files_to_process then
           Lwt.return
             (Initialized
                {
                  state with
-                 server_env;
+                 naming_table;
+                 sienv;
                  changed_files_to_process;
                  changed_files_denominator = 0;
                })
         else
           Lwt.return
-            (Initialized { state with server_env; changed_files_to_process })
+            (Initialized
+               { state with naming_table; sienv; changed_files_to_process })
       in
       let%lwt () = write_status ~out_fd state in
       handle_messages { t with state }

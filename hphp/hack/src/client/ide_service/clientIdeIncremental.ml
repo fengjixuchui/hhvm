@@ -202,7 +202,7 @@ let compute_fileinfo_for_path (popt : ParserOptions.t) (path : Relative_path.t)
 
 let update_naming_table
     ~(naming_table : Naming_table.t)
-    ~(ctx : Provider_context.t)
+    ~(backend : Provider_backend.t)
     ~(path : Relative_path.t)
     ~(old_file_info : FileInfo.t option)
     ~(new_file_info : FileInfo.t option) : Naming_table.t =
@@ -214,7 +214,7 @@ let update_naming_table
       (* Update reverse naming table, which is stored in ctx *)
       let open FileInfo in
       Naming_global.remove_decls
-        ~ctx
+        ~backend
         ~funs:(strip_positions old_file_info.funs)
         ~classes:(strip_positions old_file_info.classes)
         ~record_defs:(strip_positions old_file_info.record_defs)
@@ -239,45 +239,20 @@ let update_naming_table
       is. *)
       let open FileInfo in
       List.iter new_file_info.funs ~f:(fun (pos, fun_name) ->
-          Naming_provider.add_fun ctx fun_name pos);
+          Naming_provider.add_fun backend fun_name pos);
       List.iter new_file_info.classes ~f:(fun (pos, class_name) ->
-          Naming_provider.add_class ctx class_name pos);
+          Naming_provider.add_class backend class_name pos);
       List.iter new_file_info.record_defs ~f:(fun (pos, record_def_name) ->
-          Naming_provider.add_record_def ctx record_def_name pos);
+          Naming_provider.add_record_def backend record_def_name pos);
       List.iter new_file_info.typedefs ~f:(fun (pos, typedef_name) ->
-          Naming_provider.add_typedef ctx typedef_name pos);
+          Naming_provider.add_typedef backend typedef_name pos);
       List.iter new_file_info.consts ~f:(fun (pos, const_name) ->
-          Naming_provider.add_const ctx const_name pos);
+          Naming_provider.add_const backend const_name pos);
 
       (* Update and return the forward naming table *)
       Naming_table.update naming_table path new_file_info
   in
   naming_table
-
-let invalidate_decls
-    ~(ctx : Provider_context.t) ~(old_file_info : FileInfo.t option) : unit =
-  (* TODO(ljw): this isn't right... It's correct for us to invalidate shallow
-  decls found in this file. But notionally, for correctness, we should also
-  invalidate all decls and all linearizations. *)
-  match old_file_info with
-  | None -> ()
-  | Some { FileInfo.funs; classes; record_defs; typedefs; consts; _ } ->
-    funs |> strip_positions |> SSet.iter ~f:(Decl_provider.invalidate_fun ctx);
-    classes
-    |> strip_positions
-    |> SSet.iter ~f:(fun class_name ->
-           Decl_provider.invalidate_class ctx class_name;
-           Shallow_classes_provider.invalidate_class ctx class_name);
-    record_defs
-    |> strip_positions
-    |> SSet.iter ~f:(Decl_provider.invalidate_record_def ctx);
-    typedefs
-    |> strip_positions
-    |> SSet.iter ~f:(Decl_provider.invalidate_typedef ctx);
-    consts
-    |> strip_positions
-    |> SSet.iter ~f:(Decl_provider.invalidate_gconst ctx);
-    ()
 
 let update_symbol_index
     ~(sienv : SearchUtils.si_env)
@@ -289,35 +264,42 @@ let update_symbol_index
     SymbolIndex.remove_files ~sienv ~paths
   | Some facts -> SymbolIndex.update_from_facts ~sienv ~path ~facts
 
-let process_changed_file
-    ~(ctx : Provider_context.t)
+type changed_file_results = {
+  naming_table: Naming_table.t;
+  sienv: SearchUtils.si_env;
+  old_file_info: FileInfo.t option;
+  new_file_info: FileInfo.t option;
+}
+
+let update_naming_tables_for_changed_file
+    ~(backend : Provider_backend.t)
+    ~(popt : ParserOptions.t)
     ~(naming_table : Naming_table.t)
     ~(sienv : SearchUtils.si_env)
-    ~(path : Path.t) : (Naming_table.t * SearchUtils.si_env) Lwt.t =
+    ~(path : Path.t) : changed_file_results Lwt.t =
   let str_path = Path.to_string path in
   match Relative_path.strip_root_if_possible str_path with
   | None ->
     log "Ignored change to file %s, as it is not within our repo root" str_path;
-    Lwt.return (naming_table, sienv)
+    Lwt.return
+      { naming_table; sienv; old_file_info = None; new_file_info = None }
   | Some path ->
     let path = Relative_path.from_root path in
     if not (FindUtils.path_filter path) then
-      Lwt.return (naming_table, sienv)
+      Lwt.return
+        { naming_table; sienv; old_file_info = None; new_file_info = None }
     else
       let start_time = Unix.gettimeofday () in
       let old_file_info = Naming_table.get_file_info naming_table path in
-      let%lwt (new_file_info, facts) =
-        compute_fileinfo_for_path (Provider_context.get_popt ctx) path
-      in
+      let%lwt (new_file_info, facts) = compute_fileinfo_for_path popt path in
       log_file_info_change ~old_file_info ~new_file_info ~start_time ~path;
-      invalidate_decls ~ctx ~old_file_info;
       let naming_table =
         update_naming_table
           ~naming_table
-          ~ctx
+          ~backend
           ~path
           ~old_file_info
           ~new_file_info
       in
       let sienv = update_symbol_index ~sienv ~path ~facts in
-      Lwt.return (naming_table, sienv)
+      Lwt.return { naming_table; sienv; old_file_info; new_file_info }

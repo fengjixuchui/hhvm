@@ -20,6 +20,7 @@
 #include "hphp/runtime/base/header-kind.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/packed-array.h"
+#include "hphp/runtime/base/packed-array-defs.h"
 #include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/vm/member-operations.h"
@@ -548,6 +549,18 @@ void cgCheckMixedArrayKeys(IRLS& env, const IRInstruction* inst) {
 
 namespace {
 
+void implArrayGet(IRLS& env, const IRInstruction* inst, MOpMode mode) {
+  if (inst->src(0)->isA(TMixedArr)) {
+    if (mode == MOpMode::None) return cgDictGetQuiet(env, inst);
+    if (mode == MOpMode::Warn) return cgDictGet(env, inst);
+  }
+  BUILD_OPTAB(ARRAYGET_HELPER_TABLE, getKeyType(inst->src(1)), mode);
+
+  auto& v = vmain(env);
+  cgCallHelper(v, env, target, callDestTV(env, inst),
+               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
+}
+
 void implArraySet(IRLS& env, const IRInstruction* inst) {
   auto const& arr_type = inst->src(0)->type();
   auto const& key_type = inst->src(1)->type();
@@ -610,12 +623,7 @@ void cgElemMixedArrayK(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgArrayGet(IRLS& env, const IRInstruction* inst) {
-  auto const mode = inst->extra<ArrayGet>()->mode;
-  BUILD_OPTAB(ARRAYGET_HELPER_TABLE, getKeyType(inst->src(1)), mode);
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, target, callDestTV(env, inst),
-               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
+  return implArrayGet(env, inst, inst->extra<ArrayGet>()->mode);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -774,6 +782,10 @@ void cgArrayIsset(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgArrayIdx(IRLS& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const def = inst->src(2);
+  if (arr->isA(TMixedArr)) return cgDictIdx(env, inst);
+  if (def->isA(TInitNull)) return implArrayGet(env, inst, MOpMode::None);
   auto const keyType = getKeyType(inst->src(1));
 
   auto const target = [&] () -> CallSpec {
@@ -1042,10 +1054,9 @@ void cgReservePackedArrayDataNewElem(IRLS& env, const IRInstruction* i) {
 
 namespace {
 
-void implDictGet(IRLS& env, const IRInstruction* inst) {
+void implDictGet(IRLS& env, const IRInstruction* inst, MOpMode mode) {
+  assertx(mode == MOpMode::None || mode == MOpMode::Warn);
   auto const key = inst->src(1);
-  auto const mode =
-    (inst->op() == DictGetQuiet) ? MOpMode::None : MOpMode::Warn;
   BUILD_OPTAB(DICTGET_HELPER_TABLE, getKeyType(key), mode);
 
   auto args = argGroup(env, inst).ssa(0).ssa(1);
@@ -1119,10 +1130,10 @@ void cgElemDictK(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgDictGet(IRLS& env, const IRInstruction* inst) {
-  implDictGet(env, inst);
+  implDictGet(env, inst, MOpMode::Warn);
 }
 void cgDictGetQuiet(IRLS& env, const IRInstruction* inst) {
-  implDictGet(env, inst);
+  implDictGet(env, inst, MOpMode::None);
 }
 
 void cgDictGetK(IRLS& env, const IRInstruction* inst) {
@@ -1147,6 +1158,8 @@ void cgDictIsset(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgDictIdx(IRLS& env, const IRInstruction* inst) {
+  auto const def = inst->src(2);
+  if (def->isA(TInitNull)) return implDictGet(env, inst, MOpMode::None);
   auto const keyType = getKeyType(inst->src(1));
 
   auto const target = [&] () -> CallSpec {

@@ -67,8 +67,8 @@ public:
     return const_cast<ArrayData*>(ad);
   }
   static size_t Vsize(const ArrayData*);
-  static TypedValue NvGetKey(const ArrayData* ad, ssize_t pos);
-  static tv_rval RvalPos(const ArrayData*, ssize_t pos);
+  static TypedValue GetPosKey(const ArrayData* ad, ssize_t pos);
+  static TypedValue GetPosVal(const ArrayData* ad, ssize_t pos);
 
   static bool ExistsInt(const ArrayData* ad, int64_t k);
   static bool ExistsStr(const ArrayData* ad, const StringData* k);
@@ -81,8 +81,6 @@ public:
 
   static arr_lval LvalInt(ArrayData*, int64_t k, bool copy);
   static arr_lval LvalStr(ArrayData*, StringData* k, bool copy);
-  static arr_lval LvalSilentInt(ArrayData*, int64_t k, bool copy);
-  static arr_lval LvalSilentStr(ArrayData*, StringData* k, bool copy);
 
   static ArrayData* SetInt(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetIntMove(ArrayData*, int64_t k, TypedValue v);

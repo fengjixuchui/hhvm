@@ -41,6 +41,7 @@
 #include "hphp/runtime/base/apc-stats.h"
 #include "hphp/runtime/base/apc-typed-value.h"
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/code-coverage.h"
 #include "hphp/runtime/base/collections.h"
@@ -105,6 +106,7 @@
 #include "hphp/runtime/vm/hhbc-codec.h"
 #include "hphp/runtime/vm/hhbc.h"
 #include "hphp/runtime/vm/interp-helpers.h"
+#include "hphp/runtime/vm/iter.h"
 #include "hphp/runtime/vm/member-operations.h"
 #include "hphp/runtime/vm/memo-cache.h"
 #include "hphp/runtime/vm/method-lookup.h"
@@ -3561,6 +3563,13 @@ OPTBLD_INLINE void iopIssetS() {
 
 OPTBLD_INLINE void iopIssetL(TypedValue* tv) {
   bool ret = !is_null(tv);
+  TypedValue* topTv = vmStack().allocTV();
+  topTv->m_data.num = ret;
+  topTv->m_type = KindOfBoolean;
+}
+
+OPTBLD_INLINE void iopIsUnsetL(TypedValue* tv) {
+  bool ret = type(tv) == KindOfUninit;
   TypedValue* topTv = vmStack().allocTV();
   topTv->m_data.num = ret;
   topTv->m_type = KindOfBoolean;

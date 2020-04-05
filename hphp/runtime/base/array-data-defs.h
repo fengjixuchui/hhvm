@@ -117,14 +117,6 @@ inline arr_lval ArrayData::lval(StringData* k, bool copy) {
   return g_array_funcs.lvalStr[kind()](this, k, copy);
 }
 
-inline arr_lval ArrayData::lvalSilent(int64_t k, bool copy) {
-  return g_array_funcs.lvalSilentInt[kind()](this, k, copy);
-}
-
-inline arr_lval ArrayData::lvalSilent(StringData* k, bool copy) {
-  return g_array_funcs.lvalSilentStr[kind()](this, k, copy);
-}
-
 inline tv_rval ArrayData::rval(int64_t k) const {
   return g_array_funcs.nvGetInt[kind()](this, k);
 }
@@ -141,12 +133,20 @@ inline ssize_t ArrayData::nvGetStrPos(const StringData* k) const {
   return g_array_funcs.nvGetStrPos[kind()](this, k);
 }
 
-inline tv_rval ArrayData::rvalPos(ssize_t pos) const {
-  return g_array_funcs.nvGetPos[kind()](this, pos);
+inline TypedValue ArrayData::nvGetKey(ssize_t pos) const {
+  return g_array_funcs.getPosKey[kind()](this, pos);
 }
 
-inline TypedValue ArrayData::nvGetKey(ssize_t pos) const {
-  return g_array_funcs.nvGetKey[kind()](this, pos);
+inline TypedValue ArrayData::nvGetVal(ssize_t pos) const {
+  return g_array_funcs.getPosVal[kind()](this, pos);
+}
+
+inline Variant ArrayData::getKey(ssize_t pos) const {
+  return Variant::wrap(nvGetKey(pos));
+}
+
+inline Variant ArrayData::getValue(ssize_t pos) const {
+  return Variant::wrap(nvGetVal(pos));
 }
 
 inline ArrayData* ArrayData::set(int64_t k, TypedValue v) {
@@ -315,12 +315,6 @@ inline arr_lval ArrayData::lval(TypedValue k, bool copy) {
                              : lval(detail::getStringKey(k), copy);
 }
 
-inline arr_lval ArrayData::lvalSilent(TypedValue k, bool copy) {
-  assertx(IsValidKey(k));
-  return detail::isIntKey(k) ? lvalSilent(detail::getIntKey(k), copy)
-                             : lvalSilent(detail::getStringKey(k), copy);
-}
-
 inline tv_rval ArrayData::get(int64_t k, bool error) const {
   auto const r = rval(k);
   return r ? r : getNotFound(k, error);
@@ -349,10 +343,6 @@ inline TypedValue ArrayData::at(TypedValue k) const {
   assertx(IsValidKey(k));
   return detail::isIntKey(k) ? at(detail::getIntKey(k))
                              : at(detail::getStringKey(k));
-}
-
-inline TypedValue ArrayData::atPos(ssize_t pos) const {
-  return rvalPos(pos).tv();
 }
 
 inline ArrayData* ArrayData::set(TypedValue k, TypedValue v) {
@@ -390,15 +380,6 @@ inline arr_lval ArrayData::lval(const Variant& k, bool copy) {
   return lval(*k.asTypedValue(), copy);
 }
 
-inline arr_lval ArrayData::lvalSilent(const String& k, bool copy) {
-  assertx(IsValidKey(k));
-  return lvalSilent(k.get(), copy);
-}
-
-inline arr_lval ArrayData::lvalSilent(const Variant& k, bool copy) {
-  return lvalSilent(*k.asTypedValue(), copy);
-}
-
 inline tv_rval ArrayData::get(const String& k, bool error) const {
   assertx(IsValidKey(k));
   return get(k.get(), error);
@@ -429,15 +410,6 @@ inline ArrayData* ArrayData::remove(const String& k) {
 
 inline ArrayData* ArrayData::remove(const Variant& k) {
   return remove(*k.asTypedValue());
-}
-
-inline Variant ArrayData::getValue(ssize_t pos) const {
-  return Variant{const_variant_ref{rvalPos(pos)}};
-}
-
-inline Variant ArrayData::getKey(ssize_t pos) const {
-  auto key = nvGetKey(pos);
-  return std::move(tvAsVariant(key));
 }
 
 ///////////////////////////////////////////////////////////////////////////////

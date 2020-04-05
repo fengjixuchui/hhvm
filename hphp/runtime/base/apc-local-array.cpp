@@ -170,18 +170,6 @@ APCLocalArray::LvalStr(ArrayData* ad, StringData* k, bool /*copy*/) {
   return arr_lval { helper.release(lval.arr), lval };
 }
 
-arr_lval APCLocalArray::LvalSilentInt(ArrayData* ad, int64_t k, bool copy) {
-  EscalateHelper helper{ad};
-  auto const lval = helper.escalated->lvalSilent(k, copy);
-  return arr_lval { helper.release(lval.arr), lval };
-}
-
-arr_lval APCLocalArray::LvalSilentStr(ArrayData* ad, StringData* k, bool copy) {
-  EscalateHelper helper{ad};
-  auto const lval = helper.escalated->lvalSilent(k, copy);
-  return arr_lval { helper.release(lval.arr), lval };
-}
-
 ArrayData* APCLocalArray::SetInt(ArrayData* ad, int64_t k, TypedValue v) {
   EscalateHelper helper{ad};
   return helper.release(helper.escalated->set(k, v));
@@ -276,12 +264,12 @@ ssize_t APCLocalArray::NvGetStrPos(const ArrayData* ad, const StringData* k) {
   return (index == -1) ? a->m_size : index;
 }
 
-TypedValue APCLocalArray::NvGetKey(const ArrayData* ad, ssize_t pos) {
-  auto a = asApcArray(ad);
-  Variant k = a->m_arr->getKey(pos);
-  auto const tv = *k.asTypedValue();
-  tvIncRefGen(tv);
-  return tv;
+TypedValue APCLocalArray::GetPosKey(const ArrayData* ad, ssize_t pos) {
+  return *asApcArray(ad)->m_arr->getKey(pos).asTypedValue();
+}
+
+TypedValue APCLocalArray::GetPosVal(const ArrayData* ad, ssize_t pos) {
+  return *RvalPos(ad, pos);
 }
 
 ArrayData* APCLocalArray::EscalateForSort(ArrayData* ad, SortFunction sf) {

@@ -17,6 +17,7 @@
 
 #include "hphp/util/trace.h"
 
+#include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/execution-context.h"
 
 #include "hphp/hhbbc/eval-cell.h"
@@ -514,10 +515,10 @@ void in(ISS& env, const bc::FCallBuiltin& op) {
       }
       // Push the in-out returns
       for (uint32_t i = 0; i < op.arg3; ++i) {
-        repl.push_back(gen_constant(ad->atPos(op.arg3 - i)));
+        repl.push_back(gen_constant(ad->nvGetVal(op.arg3 - i)));
       }
       // And push the actual function return
-      repl.push_back(gen_constant(ad->atPos(0)));
+      repl.push_back(gen_constant(ad->nvGetVal(0)));
 
       return reduce(env, std::move(repl));
     }

@@ -95,7 +95,8 @@ let get_const_pos (ctx : Provider_context.t) (name : string) :
       match Provider_context.get_backend ctx with
       | Provider_backend.Shared_memory ->
         Naming_heap.Consts.get_pos name >>| attach_name_type FileInfo.Const
-      | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+      | Provider_backend.Local_memory
+          { Provider_backend.reverse_naming_table_delta; _ } ->
         let open Provider_backend.Reverse_naming_table_delta in
         get_and_cache
           ~name
@@ -115,11 +116,12 @@ let get_const_path (ctx : Provider_context.t) (name : string) :
     Relative_path.t option =
   get_const_pos ctx name |> Option.map ~f:FileInfo.get_pos_filename
 
-let add_const (ctx : Provider_context.t) (name : string) (pos : FileInfo.pos) :
-    unit =
-  match Provider_context.get_backend ctx with
+let add_const
+    (backend : Provider_backend.t) (name : string) (pos : FileInfo.pos) : unit =
+  match backend with
   | Provider_backend.Shared_memory -> Naming_heap.Consts.add name pos
-  | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+  | Provider_backend.Local_memory
+      { Provider_backend.reverse_naming_table_delta; _ } ->
     let open Provider_backend.Reverse_naming_table_delta in
     let data = Pos pos in
     reverse_naming_table_delta.consts <-
@@ -131,10 +133,11 @@ let add_const (ctx : Provider_context.t) (name : string) (pos : FileInfo.pos) :
         ~data
   | Provider_backend.Decl_service _ as backend -> not_implemented backend
 
-let remove_const_batch (ctx : Provider_context.t) (names : SSet.t) : unit =
-  match Provider_context.get_backend ctx with
+let remove_const_batch (backend : Provider_backend.t) (names : SSet.t) : unit =
+  match backend with
   | Provider_backend.Shared_memory -> Naming_heap.Consts.remove_batch names
-  | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+  | Provider_backend.Local_memory
+      { Provider_backend.reverse_naming_table_delta; _ } ->
     let open Provider_backend.Reverse_naming_table_delta in
     reverse_naming_table_delta.consts <-
       SSet.fold
@@ -161,7 +164,8 @@ let get_fun_pos (ctx : Provider_context.t) (name : string) : FileInfo.pos option
       match Provider_context.get_backend ctx with
       | Provider_backend.Shared_memory ->
         Naming_heap.Funs.get_pos name >>| attach_name_type FileInfo.Fun
-      | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+      | Provider_backend.Local_memory
+          { Provider_backend.reverse_naming_table_delta; _ } ->
         let open Provider_backend.Reverse_naming_table_delta in
         get_and_cache
           ~name
@@ -217,7 +221,8 @@ let get_fun_canon_name (ctx : Provider_context.t) (name : string) :
         called in some functions in `Naming_global`, which expects the caller
         to have called `Naming_global.remove_decls` already. *)
       Naming_heap.Funs.get_canon_name ctx name
-    | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+    | Provider_backend.Local_memory
+        { Provider_backend.reverse_naming_table_delta; _ } ->
       let open Provider_backend.Reverse_naming_table_delta in
       get_and_cache
         ~name:canon_name_key
@@ -243,11 +248,12 @@ let get_fun_canon_name (ctx : Provider_context.t) (name : string) :
       else
         None)
 
-let add_fun (ctx : Provider_context.t) (name : string) (pos : FileInfo.pos) :
-    unit =
-  match Provider_context.get_backend ctx with
+let add_fun (backend : Provider_backend.t) (name : string) (pos : FileInfo.pos)
+    : unit =
+  match backend with
   | Provider_backend.Shared_memory -> Naming_heap.Funs.add name pos
-  | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+  | Provider_backend.Local_memory
+      { Provider_backend.reverse_naming_table_delta; _ } ->
     let open Provider_backend.Reverse_naming_table_delta in
     let data = Pos pos in
     reverse_naming_table_delta.funs <-
@@ -263,10 +269,11 @@ let add_fun (ctx : Provider_context.t) (name : string) (pos : FileInfo.pos) :
        it to update in response to the list of changed files. *)
     ()
 
-let remove_fun_batch (ctx : Provider_context.t) (names : SSet.t) : unit =
-  match Provider_context.get_backend ctx with
+let remove_fun_batch (backend : Provider_backend.t) (names : SSet.t) : unit =
+  match backend with
   | Provider_backend.Shared_memory -> Naming_heap.Funs.remove_batch names
-  | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+  | Provider_backend.Local_memory
+      { Provider_backend.reverse_naming_table_delta; _ } ->
     let open Provider_backend.Reverse_naming_table_delta in
     reverse_naming_table_delta.funs <-
       SSet.fold names ~init:reverse_naming_table_delta.funs ~f:(fun name acc ->
@@ -282,13 +289,14 @@ let remove_fun_batch (ctx : Provider_context.t) (names : SSet.t) : unit =
     not_implemented backend
 
 let add_type
-    (ctx : Provider_context.t)
+    (backend : Provider_backend.t)
     (name : string)
     (pos : FileInfo.pos)
     (kind : Naming_types.kind_of_type) : unit =
-  match Provider_context.get_backend ctx with
+  match backend with
   | Provider_backend.Shared_memory -> Naming_heap.Types.add name (pos, kind)
-  | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+  | Provider_backend.Local_memory
+      { Provider_backend.reverse_naming_table_delta; _ } ->
     let open Provider_backend.Reverse_naming_table_delta in
     let data = Pos (pos, kind) in
     reverse_naming_table_delta.types <-
@@ -302,10 +310,11 @@ let add_type
     (* Do nothing. Naming table updates should be done already. *)
     ()
 
-let remove_type_batch (ctx : Provider_context.t) (names : SSet.t) : unit =
-  match Provider_context.get_backend ctx with
+let remove_type_batch (backend : Provider_backend.t) (names : SSet.t) : unit =
+  match backend with
   | Provider_backend.Shared_memory -> Naming_heap.Types.remove_batch names
-  | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+  | Provider_backend.Local_memory
+      { Provider_backend.reverse_naming_table_delta; _ } ->
     let open Provider_backend.Reverse_naming_table_delta in
     reverse_naming_table_delta.types <-
       SSet.fold names ~init:reverse_naming_table_delta.types ~f:(fun name acc ->
@@ -358,7 +367,8 @@ let get_type_pos_and_kind (ctx : Provider_context.t) (name : string) :
       | Provider_backend.Shared_memory ->
         Naming_heap.Types.get_pos name >>| fun (pos, kind) ->
         (pos, kind_to_name_type kind)
-      | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+      | Provider_backend.Local_memory
+          { Provider_backend.reverse_naming_table_delta; _ } ->
         let open Provider_backend.Reverse_naming_table_delta in
         get_and_cache
           ~name
@@ -451,7 +461,8 @@ let get_type_canon_name (ctx : Provider_context.t) (name : string) :
     called in some functions in `Naming_global`, which expects the caller
     to have called `Naming_global.remove_decls` already. *)
       Naming_heap.Types.get_canon_name ctx name
-    | Provider_backend.Local_memory { reverse_naming_table_delta; _ } ->
+    | Provider_backend.Local_memory
+        { Provider_backend.reverse_naming_table_delta; _ } ->
       let open Option.Monad_infix in
       let open Provider_backend.Reverse_naming_table_delta in
       get_and_cache
@@ -494,9 +505,9 @@ let get_class_path (ctx : Provider_context.t) (name : string) :
   | None ->
     None
 
-let add_class (ctx : Provider_context.t) (name : string) (pos : FileInfo.pos) :
-    unit =
-  add_type ctx name pos Naming_types.TClass
+let add_class
+    (backend : Provider_backend.t) (name : string) (pos : FileInfo.pos) : unit =
+  add_type backend name pos Naming_types.TClass
 
 let get_record_def_path (ctx : Provider_context.t) (name : string) :
     Relative_path.t option =
@@ -507,8 +518,8 @@ let get_record_def_path (ctx : Provider_context.t) (name : string) :
     None
 
 let add_record_def
-    (ctx : Provider_context.t) (name : string) (pos : FileInfo.pos) : unit =
-  add_type ctx name pos Naming_types.TRecordDef
+    (backend : Provider_backend.t) (name : string) (pos : FileInfo.pos) : unit =
+  add_type backend name pos Naming_types.TRecordDef
 
 let get_typedef_path (ctx : Provider_context.t) (name : string) :
     Relative_path.t option =
@@ -518,18 +529,12 @@ let get_typedef_path (ctx : Provider_context.t) (name : string) :
   | None ->
     None
 
-let add_typedef (ctx : Provider_context.t) (name : string) (pos : FileInfo.pos)
-    : unit =
-  add_type ctx name pos Naming_types.TTypedef
+let add_typedef
+    (backend : Provider_backend.t) (name : string) (pos : FileInfo.pos) : unit =
+  add_type backend name pos Naming_types.TTypedef
 
-let push_local_changes (ctx : Provider_context.t) : unit =
-  match Provider_context.get_backend ctx with
-  | Provider_backend.Shared_memory -> Naming_heap.push_local_changes ()
-  | Provider_backend.Local_memory _ -> ()
-  | Provider_backend.Decl_service _ as backend -> not_implemented backend
+let local_changes_push_sharedmem_stack () : unit =
+  Naming_heap.push_local_changes ()
 
-let pop_local_changes (ctx : Provider_context.t) : unit =
-  match Provider_context.get_backend ctx with
-  | Provider_backend.Shared_memory -> Naming_heap.pop_local_changes ()
-  | Provider_backend.Local_memory _ -> ()
-  | Provider_backend.Decl_service _ as backend -> not_implemented backend
+let local_changes_pop_sharedmem_stack () : unit =
+  Naming_heap.pop_local_changes ()

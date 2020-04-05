@@ -129,12 +129,8 @@ struct MixedArrayElm {
     if (hasIntKey()) {
       return make_tv<KindOfInt64>(ikey);
     }
-    auto str = skey;
-    if (str->isRefCounted()) {
-      str->rawIncRefCount();
-      return make_tv<KindOfString>(str);
-    }
-    return make_tv<KindOfPersistentString>(str);
+    return skey->isRefCounted() ? make_tv<KindOfString>(skey)
+                                : make_tv<KindOfPersistentString>(skey);
   }
 
   ALWAYS_INLINE hash_t hash() const {
@@ -330,7 +326,7 @@ private:
 
 public:
   static size_t Vsize(const ArrayData*);
-  static tv_rval RvalPos(const ArrayData*, ssize_t pos);
+  static TypedValue GetPosVal(const ArrayData*, ssize_t pos);
   static bool IsVectorData(const ArrayData*);
   static bool IsStrictVector(const ArrayData* ad) {
     return ad->m_size == asMixed(ad)->m_nextKI && IsVectorData(ad);
@@ -338,9 +334,7 @@ public:
   static bool ExistsInt(const ArrayData*, int64_t k);
   static bool ExistsStr(const ArrayData*, const StringData* k);
   static arr_lval LvalInt(ArrayData* ad, int64_t k, bool copy);
-  static arr_lval LvalSilentInt(ArrayData*, int64_t, bool);
   static arr_lval LvalStr(ArrayData* ad, StringData* k, bool copy);
-  static arr_lval LvalSilentStr(ArrayData*, StringData*, bool);
   static ArrayData* SetInt(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetIntMove(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetStr(ArrayData*, StringData* k, TypedValue v);
@@ -386,7 +380,8 @@ public:
   static constexpr auto NvGetIntPosDict = &NvGetIntPos;
   static constexpr auto NvGetStrPosDict = &NvGetStrPos;
   static constexpr auto ReleaseDict = &Release;
-  static constexpr auto NvGetKeyDict = &NvGetKey;
+  static constexpr auto GetPosKeyDict = &GetPosKey;
+  static constexpr auto GetPosValDict = &GetPosVal;
   static constexpr auto SetIntDict = &SetInt;
   static constexpr auto SetIntMoveDict = &SetIntMove;
   static constexpr auto SetStrDict = &SetStr;
@@ -394,14 +389,11 @@ public:
   static constexpr auto AddIntDict = &AddInt;
   static constexpr auto AddStrDict = &AddStr;
   static constexpr auto VsizeDict = &Vsize;
-  static constexpr auto RvalPosDict = &RvalPos;
   static constexpr auto IsVectorDataDict = &IsVectorData;
   static constexpr auto ExistsIntDict = &ExistsInt;
   static constexpr auto ExistsStrDict = &ExistsStr;
   static constexpr auto LvalIntDict = &LvalInt;
-  static constexpr auto LvalSilentIntDict = &LvalSilentInt;
   static constexpr auto LvalStrDict = &LvalStr;
-  static constexpr auto LvalSilentStrDict = &LvalSilentStr;
   static constexpr auto RemoveIntDict = &RemoveInt;
   static constexpr auto RemoveStrDict = &RemoveStr;
   static constexpr auto IterBeginDict = &IterBegin;
@@ -446,6 +438,11 @@ public:
   //  @precondition: !isFull
   //  @precondition: !cowCheck
   static tv_lval LvalInPlace(ArrayData* ad, const Variant& k);
+
+  // If the key is not present in the array, return a null lval; else,
+  // COW the array if necessary and return an lval into the new array.
+  static arr_lval LvalSilentInt(ArrayData* ad, int64_t k);
+  static arr_lval LvalSilentStr(ArrayData* ad, StringData* k);
 
   //////////////////////////////////////////////////////////////////////
 

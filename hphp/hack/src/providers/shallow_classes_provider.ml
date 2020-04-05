@@ -40,7 +40,8 @@ let get (ctx : Provider_context.t) (name : string) : shallow_class option =
   else
     match Provider_context.get_backend ctx with
     | Provider_backend.Shared_memory -> Shallow_classes_heap.get ctx name
-    | Provider_backend.Local_memory { shallow_decl_cache; _ } ->
+    | Provider_backend.Local_memory { Provider_backend.shallow_decl_cache; _ }
+      ->
       Provider_backend.Shallow_decl_cache.find_or_add
         shallow_decl_cache
         ~key:(Provider_backend.Shallow_decl_cache_entry.Shallow_class_decl name)
@@ -95,52 +96,8 @@ let remove_batch (ctx : Provider_context.t) (names : SSet.t) : unit =
   | Provider_backend.Decl_service _ ->
     failwith "remove_batch not implemented for Decl_service"
 
-let invalidate_class (ctx : Provider_context.t) (class_name : string) : unit =
-  match Provider_context.get_backend ctx with
-  | Provider_backend.Shared_memory ->
-    remove_batch ctx (SSet.singleton class_name)
-  | Provider_backend.Local_memory { shallow_decl_cache; _ } ->
-    Provider_backend.Shallow_decl_cache.remove
-      shallow_decl_cache
-      ~key:
-        (Provider_backend.Shallow_decl_cache_entry.Shallow_class_decl class_name)
-  | Provider_backend.Decl_service _ ->
-    failwith
-      "Decl_provider.invalidate_class not yet impl. for decl memory provider"
+let local_changes_push_sharedmem_stack () : unit =
+  Shallow_classes_heap.push_local_changes ()
 
-let invalidate_context_decls_for_local_backend
-    (shallow_decl_cache : Provider_backend.Shallow_decl_cache.t)
-    (entries : Provider_context.entry Relative_path.Map.t) : unit =
-  Relative_path.Map.iter entries ~f:(fun _path entry ->
-      match entry.Provider_context.parser_return with
-      | None -> () (* hasn't been parsed, hence nothing to invalidate *)
-      | Some { Parser_return.ast; _ } ->
-        let (_funs, classes, _record_defs, _typedefs, _gconsts) =
-          Nast.get_defs ast
-        in
-        List.iter classes ~f:(fun (_, class_name) ->
-            Provider_backend.Shallow_decl_cache.remove
-              shallow_decl_cache
-              ~key:
-                (Provider_backend.Shallow_decl_cache_entry.Shallow_class_decl
-                   class_name)))
-
-let push_local_changes (ctx : Provider_context.t) : unit =
-  match Provider_context.get_backend ctx with
-  | Provider_backend.Shared_memory -> Shallow_classes_heap.push_local_changes ()
-  | Provider_backend.Local_memory { shallow_decl_cache; _ } ->
-    invalidate_context_decls_for_local_backend
-      shallow_decl_cache
-      (Provider_context.get_entries ctx)
-  | Provider_backend.Decl_service _ ->
-    failwith "push_local_changes not implemented for Decl_service"
-
-let pop_local_changes (ctx : Provider_context.t) : unit =
-  match Provider_context.get_backend ctx with
-  | Provider_backend.Shared_memory -> Shallow_classes_heap.pop_local_changes ()
-  | Provider_backend.Local_memory { shallow_decl_cache; _ } ->
-    invalidate_context_decls_for_local_backend
-      shallow_decl_cache
-      (Provider_context.get_entries ctx)
-  | Provider_backend.Decl_service _ ->
-    failwith "pop_local_changes not implemented for Decl_service"
+let local_changes_pop_sharedmem_stack () : unit =
+  Shallow_classes_heap.pop_local_changes ()

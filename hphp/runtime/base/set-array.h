@@ -110,14 +110,10 @@ struct SetArrayElm {
     return tv.m_data.num;
   }
 
-  ALWAYS_INLINE
-  TypedValue getKey() const {
+  ALWAYS_INLINE TypedValue getKey() const {
     assertx(!isInvalid());
-    TypedValue out;
-    tvDup(tv, out);
-    return out;
+    return tv;
   }
-
 
   ALWAYS_INLINE hash_t hash() const {
     return tv.hash();
@@ -402,14 +398,12 @@ private:
 
 public:
   static size_t Vsize(const ArrayData*);
-  static tv_rval RvalPos(const ArrayData*, ssize_t);
+  static TypedValue GetPosVal(const ArrayData*, ssize_t);
   static bool IsVectorData(const ArrayData*);
   static bool ExistsInt(const ArrayData*, int64_t);
   static bool ExistsStr(const ArrayData*, const StringData*);
   static arr_lval LvalInt(ArrayData*, int64_t, bool);
   static arr_lval LvalStr(ArrayData*, StringData*, bool);
-  static constexpr auto LvalSilentInt = &LvalInt;
-  static constexpr auto LvalSilentStr = &LvalStr;
   static ArrayData* SetInt(ArrayData*, int64_t, TypedValue);
   static constexpr auto SetIntMove = &SetInt;
   static ArrayData* SetStr(ArrayData*, StringData*, TypedValue);

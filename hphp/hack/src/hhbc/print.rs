@@ -1997,11 +1997,13 @@ fn print_lit_const<W: Write>(w: &mut W, lit: &InstructLitConst) -> Result<(), W:
         LC::NewRecord(cid, l) => {
             w.write("NewRecord ")?;
             print_class_id(w, cid)?;
+            w.write(" ")?;
             wrap_by_angle(w, |w| print_shape_fields(w, l))
         }
         LC::NewRecordArray(cid, l) => {
             w.write("NewRecordArray ")?;
             print_class_id(w, cid)?;
+            w.write(" ")?;
             wrap_by_angle(w, |w| print_shape_fields(w, l))
         }
         LC::CnsE(id) => {
@@ -2125,6 +2127,10 @@ fn print_op<W: Write>(w: &mut W, op: &InstructOperator) -> Result<(), W::Error> 
         I::Exit => w.write("Exit"),
         I::ResolveFunc(id) => {
             w.write("ResolveFunc ")?;
+            print_function_id(w, id)
+        }
+        I::ResolveMethCaller(id) => {
+            w.write("ResolveMethCaller ")?;
             print_function_id(w, id)
         }
         I::ResolveObjMethod => w.write("ResolveObjMethod"),

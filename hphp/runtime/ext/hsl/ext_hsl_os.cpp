@@ -29,6 +29,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 namespace HPHP {
@@ -347,7 +348,8 @@ T hsl_cli_unwrap(CLISrvResult<T, int> res) {
   throw_errno_exception(res.error());
 }
 
-CLISrvResult<FdData, int> CLI_CLIENT_HANDLER(HSL_os_open, std::string path, int64_t flags, int64_t mode) {
+CLISrvResult<ReturnedFdData, int>
+CLI_CLIENT_HANDLER(HSL_os_open, std::string path, int64_t flags, int64_t mode) {
   auto const fd = [&] {
     if (flags & O_CREAT) {
       return retry_on_eintr(-1, ::open, path.c_str(), flags, mode);
@@ -357,7 +359,7 @@ CLISrvResult<FdData, int> CLI_CLIENT_HANDLER(HSL_os_open, std::string path, int6
   if (fd == -1) {
     return { CLIError {}, errno };
   }
-  return { CLISuccess {}, FdData { fd } };
+  return { CLISuccess {}, ReturnedFdData { fd } };
 }
 
 Object HHVM_FUNCTION(HSL_os_open, const String& path, int64_t flags, int64_t mode) {
@@ -439,12 +441,13 @@ Array HHVM_FUNCTION(HSL_os_socketpair, int64_t domain, int64_t type, int64_t pro
   );
 }
 
-CLISrvResult<FdData, int> CLI_CLIENT_HANDLER(HSL_os_socket, int64_t domain, int64_t type, int64_t protocol) {
+CLISrvResult<ReturnedFdData, int>
+CLI_CLIENT_HANDLER(HSL_os_socket, int64_t domain, int64_t type, int64_t protocol) {
   auto fd = retry_on_eintr(-1, ::socket, domain, type, protocol);
   if (fd == -1) {
     return { CLIError {}, errno };
   }
-  return { CLISuccess {}, FdData { fd } };
+  return { CLISuccess {}, ReturnedFdData { fd } };
 }
 
 Object HHVM_FUNCTION(HSL_os_socket, int64_t domain, int64_t type, int64_t protocol) {
@@ -481,7 +484,7 @@ Object HHVM_FUNCTION(HSL_os_socket, int64_t domain, int64_t type, int64_t protoc
 
 #define IMPL(fun) \
 CLISrvResult<int, int> CLI_CLIENT_HANDLER(HSL_os_## fun, \
-                                          FdData fd, \
+                                          LoanedFdData fd, \
                                           sockaddr_storage ss, \
                                           int64_t ss_len) { \
   EINVAL_ON_BAD_SOCKADDR_LEN(ss, ss_len); \
@@ -498,7 +501,7 @@ void HHVM_FUNCTION(HSL_os_ ## fun, const Object& fd, const Object& hsl_sockaddr)
 \
   hsl_cli_unwrap(INVOKE_ON_CLI_CLIENT( \
     HSL_os_ ## fun, \
-    FdData { HSLFileDescriptor::fd(fd) }, \
+    LoanedFdData { HSLFileDescriptor::fd(fd) }, \
     ss, \
     static_cast<int64_t>(ss_len) \
   )); \
@@ -510,7 +513,8 @@ IMPL(bind);
 #undef IMPL
 #undef EINVAL_ON_BAD_SOCKADDR_LEN
 
-CLISrvResult<int, int> CLI_CLIENT_HANDLER(HSL_os_listen, FdData fd,
+CLISrvResult<int, int> CLI_CLIENT_HANDLER(HSL_os_listen,
+                                          LoanedFdData fd,
                                           int64_t backlog) {
   if (retry_on_eintr(-1, ::listen, fd.fd, backlog) == -1 ) {
     return { CLIError {}, errno };
@@ -521,7 +525,7 @@ CLISrvResult<int, int> CLI_CLIENT_HANDLER(HSL_os_listen, FdData fd,
 void HHVM_FUNCTION(HSL_os_listen, const Object& fd, int64_t backlog) {
   hsl_cli_unwrap(INVOKE_ON_CLI_CLIENT(
     HSL_os_listen,
-    FdData { HSLFileDescriptor::fd(fd) },
+    LoanedFdData { HSLFileDescriptor::fd(fd) },
     backlog
   ));
 }
@@ -545,7 +549,10 @@ Array HHVM_FUNCTION(HSL_os_accept, const Object& hsl_server_fd) {
   );
 }
 
-CLISrvResult<int, int> CLI_CLIENT_HANDLER(HSL_os_fcntl_intarg, FdData fd, int64_t cmd, int64_t arg) {
+CLISrvResult<int, int> CLI_CLIENT_HANDLER(HSL_os_fcntl_intarg,
+                                          LoanedFdData fd,
+                                          int64_t cmd,
+                                          int64_t arg) {
   const int result = retry_on_eintr(-1, ::fcntl, fd.fd, cmd, arg);
   if (result == -1) {
     return { CLIError {}, errno };
@@ -582,7 +589,7 @@ Variant HHVM_FUNCTION(HSL_os_fcntl,
       }
       return hsl_cli_unwrap(INVOKE_ON_CLI_CLIENT(
         HSL_os_fcntl_intarg,
-        FdData { fd },
+        LoanedFdData { fd },
         cmd,
         arg.toInt64()
       ));
@@ -599,6 +606,11 @@ int64_t HHVM_FUNCTION(HSL_os_lseek, const Object& obj, int64_t offset, int64_t w
   off_t ret = retry_on_eintr(-1, ::lseek, fd, offset, whence);
   throw_errno_if_minus_one(ret);
   return ret;
+}
+
+void HHVM_FUNCTION(HSL_os_flock, const Object& obj, int64_t operation) {
+  auto fd = HSLFileDescriptor::fd(obj);
+  throw_errno_if_minus_one(retry_on_eintr(-1, ::flock, fd, operation));
 }
 
 Object HHVM_FUNCTION(HSL_os_poll_async,
@@ -785,6 +797,14 @@ struct OSExtension final : Extension {
 
     HHVM_FALIAS(HH\\Lib\\_Private\\_OS\\lseek, HSL_os_lseek);
 
+#define LOCK_(name) HHVM_RC_INT(HH\\Lib\\_Private\\_OS\\LOCK_##name, LOCK_##name)
+    LOCK_(SH);
+    LOCK_(EX);
+    LOCK_(NB);
+    LOCK_(UN);
+#undef LOCK_
+    HHVM_FALIAS(HH\\Lib\\_Private\\_OS\\flock, HSL_os_flock);
+
 #define AF_(name) \
   HHVM_RC_INT(HH\\Lib\\_Private\\_OS\\AF_##name, AF_##name); \
   HHVM_RC_INT(HH\\Lib\\_Private\\_OS\\PF_##name, PF_##name);
@@ -805,6 +825,7 @@ struct OSExtension final : Extension {
     HHVM_FALIAS(HH\\Lib\\_Private\\_OS\\getsockname, HSL_os_getsockname);
     HHVM_FALIAS(HH\\Lib\\_Private\\_OS\\socketpair, HSL_os_socketpair);
 
+    CLI_REGISTER_HANDLER(HSL_os_socket);
     HHVM_FALIAS(HH\\Lib\\_Private\\_OS\\socket, HSL_os_socket);
     CLI_REGISTER_HANDLER(HSL_os_connect);
     HHVM_FALIAS(HH\\Lib\\_Private\\_OS\\connect, HSL_os_connect);

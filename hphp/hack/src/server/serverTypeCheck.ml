@@ -205,14 +205,13 @@ let remove_decls env fast_parsed =
             comments = _;
             hash = _;
           } ->
-        let ctx = Provider_utils.ctx_from_server_env env in
         let funs = set_of_idl funl in
         let classes = set_of_idl classel in
         let record_defs = set_of_idl record_defsl in
         let typedefs = set_of_idl typel in
         let consts = set_of_idl constl in
         Naming_global.remove_decls
-          ~ctx
+          ~backend:(Provider_backend.get ())
           ~funs
           ~classes
           ~record_defs
@@ -298,9 +297,9 @@ let parsing genv env to_check ~stop_at_errors =
   Fixme_provider.remove_batch disk_files;
 
   if stop_at_errors then (
-    File_provider.local_changes_push_stack ();
-    Ast_provider.local_changes_push_stack ();
-    Fixme_provider.local_changes_push_stack ()
+    File_provider.local_changes_push_sharedmem_stack ();
+    Ast_provider.local_changes_push_sharedmem_stack ();
+    Fixme_provider.local_changes_push_sharedmem_stack ()
   );
 
   (* Do not remove ide files from file heap *)
@@ -363,9 +362,9 @@ let parsing genv env to_check ~stop_at_errors =
     Ast_provider.local_changes_commit_batch disk_files;
     Fixme_provider.local_changes_commit_batch disk_files;
 
-    File_provider.local_changes_pop_stack ();
-    Ast_provider.local_changes_pop_stack ();
-    Fixme_provider.local_changes_pop_stack ();
+    File_provider.local_changes_pop_sharedmem_stack ();
+    Ast_provider.local_changes_pop_sharedmem_stack ();
+    Fixme_provider.local_changes_pop_sharedmem_stack ();
 
     (env, fast, errors, failed_parsing)
   ) else

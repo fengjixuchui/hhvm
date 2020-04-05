@@ -22,11 +22,13 @@ type entry = {
   mutable symbols: Relative_path.t SymbolOccurrence.t list option;
 }
 
+type entries = entry Relative_path.Map.t
+
 type t = {
   popt: ParserOptions.t;
   tcopt: TypecheckerOptions.t;
   backend: Provider_backend.t;
-  entries: entry Relative_path.Map.t;
+  entries: entries;
 }
 
 let empty_for_tool ~popt ~tcopt ~backend =
@@ -56,25 +58,21 @@ let empty_for_debugging ~popt ~tcopt =
     entries = Relative_path.Map.empty;
   }
 
-let make_entry ~(ctx : t) ~(path : Relative_path.t) ~(contents : string) :
-    t * entry =
-  let entry =
-    {
-      path;
-      contents;
-      source_text = None;
-      parser_return = None;
-      ast_errors = None;
-      cst = None;
-      tast = None;
-      tast_errors = None;
-      symbols = None;
-    }
-  in
-  let ctx =
-    { ctx with entries = Relative_path.Map.add ctx.entries path entry }
-  in
-  (ctx, entry)
+let make_entry ~(path : Relative_path.t) ~(contents : string) : entry =
+  {
+    path;
+    contents;
+    source_text = None;
+    parser_return = None;
+    ast_errors = None;
+    cst = None;
+    tast = None;
+    tast_errors = None;
+    symbols = None;
+  }
+
+let add_existing_entry ~(ctx : t) (entry : entry) : t =
+  { ctx with entries = Relative_path.Map.add ctx.entries entry.path entry }
 
 let add_entry_from_file_input
     ~(ctx : t)
@@ -85,23 +83,27 @@ let add_entry_from_file_input
     | ServerCommandTypes.FileName path -> Sys_utils.cat path
     | ServerCommandTypes.FileContent contents -> contents
   in
-  make_entry ~ctx ~path ~contents
+  let entry = make_entry ~path ~contents in
+  (add_existing_entry ctx entry, entry)
 
 let add_entry ~(ctx : t) ~(path : Relative_path.t) : t * entry =
   let contents = Sys_utils.cat (Relative_path.to_absolute path) in
-  make_entry ~ctx ~path ~contents
+  let entry = make_entry ~path ~contents in
+  (add_existing_entry ctx entry, entry)
 
 let try_add_entry_from_disk ~(ctx : t) ~(path : Relative_path.t) :
     (t * entry) option =
   let absolute_path = Relative_path.to_absolute path in
   try
     let contents = Sys_utils.cat absolute_path in
-    Some (make_entry ~ctx ~path ~contents)
+    let entry = make_entry ~path ~contents in
+    Some (add_existing_entry ctx entry, entry)
   with _ -> None
 
 let add_entry_from_file_contents
     ~(ctx : t) ~(path : Relative_path.t) ~(contents : string) : t * entry =
-  make_entry ~ctx ~path ~contents
+  let entry = make_entry ~path ~contents in
+  (add_existing_entry ctx entry, entry)
 
 let get_popt (t : t) : ParserOptions.t = t.popt
 
@@ -112,7 +114,7 @@ let map_tcopt (t : t) ~(f : TypecheckerOptions.t -> TypecheckerOptions.t) : t =
 
 let get_backend (t : t) : Provider_backend.t = t.backend
 
-let get_entries (t : t) : entry Relative_path.Map.t = t.entries
+let get_entries (t : t) : entries = t.entries
 
 (** ref_is_quarantined stores the stack at which it was last changed,
 so we can give better failwith error messages where appropriate. *)
@@ -184,7 +186,8 @@ let get_telemetry (t : t) : Telemetry.t =
 
 let reset_telemetry (t : t) : unit =
   match t.backend with
-  | Provider_backend.Local_memory { decl_cache; shallow_decl_cache; _ } ->
+  | Provider_backend.Local_memory
+      { Provider_backend.decl_cache; shallow_decl_cache; _ } ->
     Provider_backend.Decl_cache.reset_telemetry decl_cache;
     Provider_backend.Shallow_decl_cache.reset_telemetry shallow_decl_cache;
     ()

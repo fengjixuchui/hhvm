@@ -320,44 +320,33 @@ const ArrayFunctions g_array_funcs = {
 
   /*
    * tv_rval NvGetInt(const ArrayData*, int64_t key)
-   *
-   *   Lookup a value in an array using an integer key.  Returns nullptr if the
-   *   key is not in the array.  Must not throw if key isn't present.
-   */
-  DISPATCH(NvGetInt)
-
-  /*
    * tv_rval NvGetStr(const ArrayData*, const StringData*)
    *
-   *   Lookup a value in an array using a string key.  The string key must not
-   *   be an integer-like string.  Returns nullptr if the key is not in the
-   *   array.
+   *   Lookup a value in an array using an int or string key. Returns a null
+   *   tv_rval if the element is not present in the array.
    */
+  DISPATCH(NvGetInt)
   DISPATCH(NvGetStr)
 
   /*
    * ssize_t NvGetIntPos(const ArrayData*, int64_t k)
-   *
-   *   Lookup the position of an int key in the array.  Returns the canonical
-   *   invalid position if the key is not in the array.
-   */
-  DISPATCH(NvGetIntPos)
-
-  /*
    * ssize_t NvGetStrPos(const ArrayData*, const StringData* k)
    *
-   *   Lookup the position of a string key in the array.  Returns the canonical
-   *   invalid position if the key is not in the array.
+   *   Lookup the position of an int or string key in the array.  Returns the
+   *   canonical invalid position if the key is not in the array.
    */
+  DISPATCH(NvGetIntPos)
   DISPATCH(NvGetStrPos)
 
   /*
-   * TypedValue NvGetKey(const ArrayData*, ssize_t pos)
+   * TypedValue GetPosKey(const ArrayData*, ssize_t pos)
+   * TypedValue GetPosVal(const ArrayData*, ssize_t pos)
    *
-   *   Look up the key for an array position.  `pos' must be a valid
-   *   position for this array. This function must IncRef the key if needed.
+   *   Look up the key or value at a valid iterator position in this array.
+   *   Both of these methods return the result without inc-ref-ing it.
    */
-  DISPATCH(NvGetKey)
+  DISPATCH(GetPosKey)
+  DISPATCH(GetPosVal)
 
   /*
    * ArrayData* SetInt(ArrayData*, int64_t key, TypedValue v)
@@ -391,14 +380,6 @@ const ArrayFunctions g_array_funcs = {
    *   case and dispatch through this entry point.
    */
   DISPATCH(Vsize)
-
-  /*
-   * tv_rval RvalPos(const ArrayData*, ssize_t pos)
-   *
-   *   Return a reference to the value at an iterator position.  `pos' must be
-   *   a valid position for this array.
-   */
-  DISPATCH(RvalPos)
 
   /*
    * bool IsVectorData(const ArrayData*)
@@ -435,16 +416,6 @@ const ArrayFunctions g_array_funcs = {
    */
   DISPATCH(LvalInt)
   DISPATCH(LvalStr)
-
-  /*
-   * arr_lval LvalSilentInt(ArrayData*, int64_t k, bool copy)
-   * arr_lval LvalSilentStr(ArrayData*, StringData* key, bool copy)
-   *
-   *   Look up a value in the array by the supplied key and return a reference
-   *   to it, or an empty reference if it doesn't exist.
-   */
-  DISPATCH(LvalSilentInt)
-  DISPATCH(LvalSilentStr)
 
   /*
    * ArrayData* RemoveInt(ArrayData*, int64_t key)

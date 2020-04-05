@@ -53,17 +53,17 @@ void EmptyArray::Release(ArrayData*) {
   always_assert(!"never try to free the empty array");
 }
 
-TypedValue EmptyArray::NvGetKey(const ArrayData*, ssize_t /*pos*/) {
+TypedValue EmptyArray::GetPosKey(const ArrayData*, ssize_t /*pos*/) {
+  // We have no valid positions---no one should call this function.
+  not_reached();
+}
+
+TypedValue EmptyArray::GetPosVal(const ArrayData* /*ad*/, ssize_t /*pos*/) {
   // We have no valid positions---no one should call this function.
   not_reached();
 }
 
 size_t EmptyArray::Vsize(const ArrayData*) { not_reached(); }
-
-tv_rval EmptyArray::RvalPos(const ArrayData* /*ad*/, ssize_t /*pos*/) {
-  // We have no valid positions---no one should call this function.
-  not_reached();
-}
 
 // EmptyArray::IterAdvance() is reachable; see ArrayData::next() for details
 ssize_t EmptyArray::IterAdvance(const ArrayData*, ssize_t /*prev*/) {
@@ -254,14 +254,6 @@ arr_lval EmptyArray::LvalInt(ArrayData* ad, int64_t k, bool copy) {
 
 arr_lval EmptyArray::LvalStr(ArrayData* ad, StringData* k, bool copy) {
   return LvalStrImpl<true>(ad, k, copy);
-}
-
-arr_lval EmptyArray::LvalSilentInt(ArrayData* ad, int64_t k, bool copy) {
-  return arr_lval { ad, nullptr };
-}
-
-arr_lval EmptyArray::LvalSilentStr(ArrayData* ad, StringData* k, bool copy) {
-  return arr_lval { ad, nullptr };
 }
 
 ArrayData* EmptyArray::Append(ArrayData*, TypedValue v) {

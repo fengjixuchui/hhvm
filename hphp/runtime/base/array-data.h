@@ -388,29 +388,12 @@ public:
   arr_lval lval(const Variant& k, bool copy);
 
   /*
-   * Get an lval for the element at key `k', failing quietly (by returning an
-   * empty arr_lval) instead of throwing.
-   */
-  arr_lval lvalSilent(int64_t k, bool copy);
-  arr_lval lvalSilent(StringData* k, bool copy);
-  arr_lval lvalSilent(TypedValue k, bool copy);
-  arr_lval lvalSilent(const String& k, bool copy);
-  arr_lval lvalSilent(const Variant& k, bool copy);
-
-  /*
    * Get an rval for the element at key `k'.
    *
    * If the array has no element at `k', return a null tv_rval.
    */
   tv_rval rval(int64_t k) const;
   tv_rval rval(const StringData* k) const;
-
-  /*
-   * Get an rval for the element at raw position `pos'.
-   *
-   * @requires: `pos' refers to a valid array element.
-   */
-  tv_rval rvalPos(ssize_t pos) const;
 
   /*
    * Get the value of the element at key `k'.
@@ -434,16 +417,20 @@ public:
   /*
    * Get the value or key for the element at raw position `pos'.
    *
+   * nvGetKey will inc-ref the key before returning it, but nvGetVal will not
+   * do any refcount ops. TODO(kshaunak): Eliminate this discrepancy.
+   *
    * @requires: `pos' refers to a valid array element.
    */
-  TypedValue atPos(ssize_t pos) const;
   TypedValue nvGetKey(ssize_t pos) const;
+  TypedValue nvGetVal(ssize_t pos) const;
 
   /*
-   * Variant wrappers around atPos() and nvGetKey().
+   * Variant wrappers around nvGetVal() and nvGetKey(). Both of these methods
+   * will inc-ref the value before returning it (so that callers own a copy).
    */
-  Variant getValue(ssize_t pos) const;
   Variant getKey(ssize_t pos) const;
+  Variant getValue(ssize_t pos) const;
 
   /*
    * Get the value of the element at key `k'.
@@ -865,20 +852,18 @@ struct ArrayFunctions {
   tv_rval (*nvGetStr[NK])(const ArrayData*, const StringData* k);
   ssize_t (*nvGetIntPos[NK])(const ArrayData*, int64_t k);
   ssize_t (*nvGetStrPos[NK])(const ArrayData*, const StringData* k);
-  TypedValue (*nvGetKey[NK])(const ArrayData*, ssize_t pos);
+  TypedValue (*getPosKey[NK])(const ArrayData*, ssize_t pos);
+  TypedValue (*getPosVal[NK])(const ArrayData*, ssize_t pos);
   ArrayData* (*setInt[NK])(ArrayData*, int64_t k, TypedValue v);
   ArrayData* (*setIntMove[NK])(ArrayData*, int64_t k, TypedValue v);
   ArrayData* (*setStr[NK])(ArrayData*, StringData* k, TypedValue v);
   ArrayData* (*setStrMove[NK])(ArrayData*, StringData* k, TypedValue v);
   size_t (*vsize[NK])(const ArrayData*);
-  tv_rval (*nvGetPos[NK])(const ArrayData*, ssize_t pos);
   bool (*isVectorData[NK])(const ArrayData*);
   bool (*existsInt[NK])(const ArrayData*, int64_t k);
   bool (*existsStr[NK])(const ArrayData*, const StringData* k);
   arr_lval (*lvalInt[NK])(ArrayData*, int64_t k, bool copy);
   arr_lval (*lvalStr[NK])(ArrayData*, StringData* k, bool copy);
-  arr_lval (*lvalSilentInt[NK])(ArrayData*, int64_t k, bool copy);
-  arr_lval (*lvalSilentStr[NK])(ArrayData*, StringData* k, bool copy);
   ArrayData* (*removeInt[NK])(ArrayData*, int64_t k);
   ArrayData* (*removeStr[NK])(ArrayData*, const StringData* k);
   ssize_t (*iterBegin[NK])(const ArrayData*);

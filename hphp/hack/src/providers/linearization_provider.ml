@@ -42,10 +42,10 @@ module Cache =
       let capacity = 1000
     end)
 
-let push_local_changes (_ctx : Provider_context.t) : unit =
+let local_changes_push_sharedmem_stack () : unit =
   Cache.LocalChanges.push_stack ()
 
-let pop_local_changes (_ctx : Provider_context.t) : unit =
+let local_changes_pop_sharedmem_stack () : unit =
   Cache.LocalChanges.pop_stack ()
 
 let remove_batch (_ctx : Provider_context.t) (classes : SSet.t) : unit =
@@ -77,7 +77,7 @@ let add (ctx : Provider_context.t) (key : key) (value : Decl_defs.linearization)
     : unit =
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory -> LocalCache.add key value
-  | Provider_backend.Local_memory { linearization_cache; _ } ->
+  | Provider_backend.Local_memory { Provider_backend.linearization_cache; _ } ->
     let key = key_to_local_key key in
     Provider_backend.Linearization_cache.add linearization_cache ~key ~value
   | Provider_backend.Decl_service _ ->
@@ -104,7 +104,7 @@ let get (ctx : Provider_context.t) (key : key) : Decl_defs.linearization option
       | Some lin -> Some (Sequence.of_list lin)
       | None -> LocalCache.get key
     end
-  | Provider_backend.Local_memory { linearization_cache; _ } ->
+  | Provider_backend.Local_memory { Provider_backend.linearization_cache; _ } ->
     let key = key_to_local_key key in
     Provider_backend.Linearization_cache.find_or_add
       linearization_cache

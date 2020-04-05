@@ -793,13 +793,13 @@ bool MixedArray::checkInvariants() const {
 
 size_t MixedArray::Vsize(const ArrayData*) { not_reached(); }
 
-tv_rval MixedArray::RvalPos(const ArrayData* ad, ssize_t pos) {
+TypedValue MixedArray::GetPosVal(const ArrayData* ad, ssize_t pos) {
   auto a = asMixed(ad);
   assertx(a->checkInvariants());
   assertx(pos != a->m_used);
   auto const& e = a->data()[pos];
   assertx(!e.isTombstone());
-  return &e.data;
+  return e.data;
 }
 
 bool MixedArray::IsVectorData(const ArrayData* ad) {
@@ -1132,19 +1132,19 @@ tv_lval MixedArray::LvalInPlace(ArrayData* ad, const Variant& k) {
                        : arr->addLvalImpl<false>(k.asCStrRef().get());
 }
 
-arr_lval MixedArray::LvalSilentInt(ArrayData* ad, int64_t k, bool copy) {
+arr_lval MixedArray::LvalSilentInt(ArrayData* ad, int64_t k) {
   auto a = asMixed(ad);
   auto const pos = a->find(k, hash_int64(k));
   if (UNLIKELY(!validPos(pos))) return arr_lval { a, nullptr };
-  if (copy) a = a->copyMixed();
+  if (a->cowCheck()) a = a->copyMixed();
   return arr_lval { a, &a->data()[pos].data };
 }
 
-arr_lval MixedArray::LvalSilentStr(ArrayData* ad, StringData* k, bool copy) {
+arr_lval MixedArray::LvalSilentStr(ArrayData* ad, StringData* k) {
   auto a = asMixed(ad);
   auto const pos = a->find(k, k->hash());
   if (UNLIKELY(!validPos(pos))) return arr_lval { a, nullptr };
-  if (copy) a = a->copyMixed();
+  if (a->cowCheck()) a = a->copyMixed();
   return arr_lval { a, &a->data()[pos].data };
 }
 

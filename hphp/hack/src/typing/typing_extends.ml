@@ -680,34 +680,17 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
     =
   let (pos, name) = child_typeconst.ttc_name in
   let parent_pos = fst parent_typeconst.ttc_name in
-  let parent_is_concrete = Option.is_some parent_typeconst.ttc_type in
-  let disable_partially_abstract =
-    TypecheckerOptions.disable_partially_abstract_typeconsts (Env.get_tcopt env)
-  in
-  let is_final =
-    match parent_typeconst.ttc_abstract with
-    | TCPartiallyAbstract
-    | TCConcrete
-      when disable_partially_abstract ->
-      true
-    | _ -> parent_is_concrete && Option.is_none parent_typeconst.ttc_constraint
-  in
   match (parent_typeconst.ttc_abstract, child_typeconst.ttc_abstract) with
   | (TCAbstract (Some _), TCAbstract None) ->
     Errors.override_no_default_typeconst pos parent_pos;
     env
+  | ((TCConcrete | TCPartiallyAbstract), TCAbstract _) ->
+    (* It is valid for abstract class to extend a concrete class, but it cannot
+     * redefine already concrete members as abstract.
+     * See typecheck/tconst/subsume_tconst5.php test case for example. *)
+    Errors.abstract_concrete_override pos parent_pos `typeconst;
+    env
   | _ ->
-    (* Check that the child's constraint is compatible with the parent. If the
-     * parent has a constraint then the child must also have a constraint if it
-     * is abstract
-     *)
-    let child_is_abstract = Option.is_none child_typeconst.ttc_type in
-    if parent_is_concrete && child_is_abstract then
-      (* It is valid for abstract class to extend a concrete class, but it cannot
-       * redefine already concrete members as abstract.
-       * See typecheck/tconst/subsume_tconst5.php test case for example. *)
-      Errors.abstract_concrete_override pos parent_pos `typeconst;
-
     (* If the class element is defined in the class that we're checking, then
      * don't wrap with the extra
      * "Class ... does not correctly implement all required members" message *)
@@ -718,14 +701,18 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
         on_error
     in
 
+    (* Check that the child's constraint is compatible with the parent. If the
+     * parent has a constraint then the child must also have a constraint if it
+     * is abstract
+     *)
     let default =
       MakeType.generic (Reason.Rtconst_no_cstr child_typeconst.ttc_name) name
     in
     let child_cstr =
-      if child_is_abstract then
+      match child_typeconst.ttc_abstract with
+      | TCAbstract _ ->
         Some (Option.value child_typeconst.ttc_constraint ~default)
-      else
-        child_typeconst.ttc_constraint
+      | _ -> child_typeconst.ttc_constraint
     in
     let env =
       Option.value ~default:env
@@ -784,8 +771,16 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
 
     (* If the parent cannot be overridden, we unify the types otherwise we ensure
      * the child's assigned type is compatible with the parent's *)
+    let parent_is_final =
+      match parent_typeconst.ttc_abstract with
+      | TCConcrete -> true
+      | TCPartiallyAbstract ->
+        TypecheckerOptions.disable_partially_abstract_typeconsts
+          (Env.get_tcopt env)
+      | TCAbstract _ -> false
+    in
     let check env x y =
-      if is_final then
+      if parent_is_final then
         Typing_ops.unify_decl
           pos
           Reason.URsubsume_tconst_assign
