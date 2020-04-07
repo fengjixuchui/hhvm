@@ -91,43 +91,28 @@ there may not be a [ServerEnv.env] available. *)
 val empty_for_debugging :
   popt:ParserOptions.t -> tcopt:TypecheckerOptions.t -> t
 
-(** Creates an entry on its own *)
+(** Creates an entry *)
 val make_entry : path:Relative_path.t -> contents:string -> entry
 
-(** Read the contents at [path] from disk and create a new
-[Provider_context.entry] representing that file. The returned
-[Provider_context.t] contains that new entry.
+(** Adds the entry into the supplied [Provider_context.t], overwriting
+if the context already had an entry of the same path, and returns a new
+[Provider_context.t] which includes that entry. 
+Note: for most callers, [add_entry_if_missing] is more appropriate. *)
+val add_or_overwrite_entry : ctx:t -> entry -> t
 
-If an [entry] is already present for the given [path], then this function
-overwrites that entry in the returned [Provider_context.t].
-
-If the file can't be read from disk, then raises an exception.
-
-It's important to pass around the resulting [Provider_context.t]. That way, if a
-subsequent operation tries to access data about the same file, it will be
-returned the same [entry]. *)
-val add_entry : ctx:t -> path:Relative_path.t -> t * entry
-
-(** Same as [add_entry], but returns [None] instead of raising an exception
-if the file can't be read from disk. *)
-val try_add_entry_from_disk :
-  ctx:t -> path:Relative_path.t -> (t * entry) option
-
-(** Same as [add_entry], but using the provided file contents. This is primarily
-useful in the IDE (which may have unsaved changes), or for testing (to pretend
-that a certain file exists on disk). *)
-val add_entry_from_file_contents :
+(** Similar to [add_or_overwrite_entry], but makes a new entry with contents. 
+Also returns the new entry for convenience.  It's important that
+callers use the resulting [Provider_context.t]. That way, if a
+subsequent operation tries to access data about the same file, it will get
+the [entry] we just added rather than reading from disk. *)
+val add_or_overwrite_entry_contents :
   ctx:t -> path:Relative_path.t -> contents:string -> t * entry
 
-(** Same as [add_entry], but using the provided [ServerCommandTypes.file_input].
-This is useful in some IDE code paths. *)
-val add_entry_from_file_input :
-  ctx:t ->
-  path:Relative_path.t ->
-  file_input:ServerCommandTypes.file_input ->
-  t * entry
-
-val add_existing_entry : ctx:t -> entry -> t
+(** Similar to [add_entry], but (1) returns the existing entry if one
+was already there, (2) if one wasn't there, then adds a new entry
+by reading the contents of the path from disk; may throw if those
+contents can't be read. *)
+val add_entry_if_missing : ctx:t -> path:Relative_path.t -> t * entry
 
 (** Get the [ParserOptions.t] contained within the [t]. *)
 val get_popt : t -> ParserOptions.t

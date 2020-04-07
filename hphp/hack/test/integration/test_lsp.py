@@ -1,4 +1,5 @@
 # pyre-strict
+# flake8: noqa: B950
 
 from __future__ import absolute_import, division, print_function, unicode_literals
 
@@ -1835,6 +1836,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -2826,6 +2828,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -3042,6 +3045,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -3127,6 +3131,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -3329,6 +3334,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -3553,6 +3559,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -3746,6 +3753,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -3802,6 +3810,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -3908,6 +3917,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -3960,6 +3970,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 ],
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -4010,6 +4021,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 ],
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -4100,6 +4112,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 ],
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
 
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
@@ -4162,6 +4175,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 method="textDocument/publishDiagnostics",
                 params={"uri": "${php_file_uri}", "diagnostics": []},
             )
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
 
@@ -4257,6 +4271,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 ],
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
 
@@ -4647,6 +4662,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 },
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
 
@@ -4732,6 +4748,7 @@ class TestLsp(TestCase[LspTestDriver]):
                 result=None,
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
 
@@ -4801,6 +4818,7 @@ function __hh_loop_forever_foo(): int {
             )
             .wait_for_response(wait_id="definition request")
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
 
@@ -4880,6 +4898,7 @@ class BaseClassIncremental {
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
 
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
@@ -4938,7 +4957,7 @@ class BaseClassIncremental {
 function a_hover(): int {
   return b_hover();
 }
-# A comment describing b_hover.
+# A comment describing b_hover differently.
 function b_hover(): string {
   return 42;
 }
@@ -4958,7 +4977,7 @@ function b_hover(): string {
                 result={
                     "contents": [
                         {"language": "hack", "value": "string"},
-                        "A comment describing b_hover.",
+                        "A comment describing b_hover differently.",
                     ],
                     "range": {
                         "start": {"line": 3, "character": 9},
@@ -4968,6 +4987,270 @@ function b_hover(): string {
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
+        )
+
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
+    def test_serverless_ide_decl_two_unsaved_buffers(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("unsaved1.php"))
+        variables.update({"unsaved2_file_uri": self.repo_file_uri("unsaved2.php")})
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("test_serverless_ide_decl_two_unsaved_buffers"),
+                use_serverless_ide=True,
+            )
+            .notification(
+                comment="open 'unsaved1.php', since we'll be hovering in it",
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .notification(
+                comment="open 'unsaved2.php' with a bool-returning signature, different from disk",
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${unsaved2_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": """\
+<?hh  //strict
+function unsaved_bar(): bool { return true; }
+""",
+                    }
+                },
+            )
+            .request(
+                line=line(),
+                comment="hover 'unsaved1.php' is with respect to disk contents of 'unsaved2.php'",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 1, "character": 39},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "function unsaved_bar(): int"},
+                        "Return type: `int`",
+                    ],
+                    "range": {
+                        "start": {"line": 1, "character": 34},
+                        "end": {"line": 1, "character": 45},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .notification(
+                comment="change signature in 'unsaved2.php' to return string",
+                method="textDocument/didChange",
+                params={
+                    "textDocument": {"uri": "${unsaved2_file_uri}", "version": 2},
+                    "contentChanges": [
+                        {
+                            "text": """\
+<?hh  //strict
+function unsaved_bar(): string { return "hello"; }
+"""
+                        }
+                    ],
+                },
+            )
+            .request(
+                line=line(),
+                comment="this is a dummy hover in 'unsaved2.php' just to ensure its decl is cached",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${unsaved2_file_uri}"},
+                    "position": {"line": 0, "character": 0},
+                },
+                result=None,
+                powered_by="serverless_ide",
+            )
+            .request(
+                line=line(),
+                comment="hover 'unsaved1.php' is still with respect to disk contents of 'unsaved2.php'",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 1, "character": 39},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "function unsaved_bar(): int"},
+                        "Return type: `int`",
+                    ],
+                    "range": {
+                        "start": {"line": 1, "character": 34},
+                        "end": {"line": 1, "character": 45},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .write_to_disk(
+                comment="save signature in 'unsaved2' to return string",
+                uri=variables["unsaved2_file_uri"],
+                contents="""\
+<?hh // strict
+function unsaved_bar(): string { return "hello"; }
+""",
+                notify=True,
+            )
+            .request(
+                line=line(),
+                comment="hover 'unsaved1.php' gets new disk contents of 'unsaved2.php'",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 1, "character": 39},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "function unsaved_bar(): string"},
+                        "Return type: `string`",
+                    ],
+                    "range": {
+                        "start": {"line": 1, "character": 34},
+                        "end": {"line": 1, "character": 45},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
+            .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
+        )
+
+        self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
+
+    def test_hover_without_file_open(self) -> None:
+        variables = dict(self.prepare_serverless_ide_environment())
+        variables.update(self.setup_php_file("hover.php"))
+        self.test_driver.stop_hh_server()
+
+        spec = (
+            self.initialize_spec(
+                LspTestSpec("test_hover_without_file_open"),
+                use_serverless_ide=True,
+                supports_status=True,
+            )
+            .ignore_requests(
+                method="window/showStatus",
+                params={
+                    "type": 1,
+                    "actions": [{"title": "Restart hh_server"}],
+                    "message": "Hack IDE: initializing. hh_server: stopped.",
+                    "shortMessage": "Hack: initializing",
+                },
+            )
+            .wait_for_server_request(
+                method="window/showStatus",
+                params={
+                    "actions": [{"title": "Restart hh_server"}],
+                    "message": "Hack IDE: ready. hh_server: stopped.",
+                    "shortMessage": "Hack ✓",
+                    "type": 1,
+                },
+                result=NoResponse(),
+            )
+            .request(
+                line=line(),
+                comment="hover before file_open will fail",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 26, "character": 20},
+                },
+                result=None,
+            )
+            .notification(
+                method="textDocument/didOpen",
+                params={
+                    "textDocument": {
+                        "uri": "${php_file_uri}",
+                        "languageId": "hack",
+                        "version": 1,
+                        "text": "${php_file}",
+                    }
+                },
+            )
+            .request(
+                line=line(),
+                comment="hover after file_open will succeed",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 26, "character": 20},
+                },
+                result={"contents": [{"language": "hack", "value": "string"}]},
+                powered_by="serverless_ide",
+            )
+            .request(
+                line=line(),
+                method="$test/shutdownServerlessIde",
+                params={},
+                result=None,
+                powered_by="serverless_ide",
+            )
+            .wait_for_server_request(
+                method="window/showStatus",
+                params={
+                    "actions": [
+                        {"title": "Restart hh_server"},
+                        {"title": "Restart Hack IDE"},
+                    ],
+                    "message": "Hack IDE has failed. "
+                    + "See Output>Hack for details. hh_server: stopped.",
+                    "shortMessage": "Hack: failed",
+                    "type": 1,
+                },
+                result={"title": "Restart Hack IDE"},
+            )
+            .wait_for_server_request(
+                method="window/showStatus",
+                params={
+                    "actions": [{"title": "Restart hh_server"}],
+                    "message": "Hack IDE: ready. hh_server: stopped.",
+                    "shortMessage": "Hack ✓",
+                    "type": 1,
+                },
+                result=None,
+            )
+            .request(
+                line=line(),
+                comment="hover after restart will succeed",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 26, "character": 20},
+                },
+                result={"contents": [{"language": "hack", "value": "string"}]},
+                powered_by="serverless_ide",
+            )
+            .notification(
+                method="textDocument/didClose",
+                params={"textDocument": {"uri": "${php_file_uri}"}},
+            )
+            .request(
+                line=line(),
+                comment="hover after file_close will fail",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${php_file_uri}"},
+                    "position": {"line": 26, "character": 20},
+                },
+                result=None,
+            )
+            .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
 
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
@@ -5015,6 +5298,7 @@ function b_hover(): string {
                 powered_by="serverless_ide",
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         try:
             self.run_spec(
@@ -5146,6 +5430,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 },
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         try:
             self.run_spec(
@@ -5314,6 +5599,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 result=NoResponse(),
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=False)
 
@@ -5333,6 +5619,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 result=NoResponse(),
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
 
@@ -5367,6 +5654,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 result=NoResponse(),
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
@@ -5428,6 +5716,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 result=None,
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=True)
 
@@ -5475,6 +5764,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 result=None,
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=True)
 
@@ -5536,6 +5826,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 ],
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=False)
 
@@ -5708,6 +5999,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 },
             )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=True, use_serverless_ide=True)
 
@@ -5745,22 +6037,23 @@ function main(): int {
                     }
                 },
             )
-            # .request(
-            #     comment="Ensure that hover over `aaa` works even when the name is not yet defined",
-            #     method="textDocument/hover",
-            #     params={
-            #         "textDocument": {"uri": "${main_file}"},
-            #         "position": {"line": 2, "character": 13},
-            #     },
-            #     result={
-            #         "contents": [{"language": "hack", "value": "_"}],
-            #         "range": {
-            #             "start": {"line": 2, "character": 11},
-            #             "end": {"line": 2, "character": 14},
-            #         },
-            #     },
-            #     powered_by="serverless_ide",
-            # )
+            .request(
+                line=line(),
+                comment="Ensure that hover over `aaa` works even when the name is not yet defined",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${main_file}"},
+                    "position": {"line": 2, "character": 13},
+                },
+                result={
+                    "contents": [{"language": "hack", "value": "_"}],
+                    "range": {
+                        "start": {"line": 2, "character": 11},
+                        "end": {"line": 2, "character": 14},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
             .write_to_disk(
                 comment="create file A",
                 uri="${file_a}",
@@ -5792,36 +6085,37 @@ function aaa(): int {
                 },
                 powered_by="serverless_ide",
             )
-            #             .write_to_disk(
-            #                 comment="create file B",
-            #                 uri="${file_b}",
-            #                 contents="""\
-            # <?hh
-            # function aaa(): string {
-            #     return "foo";
-            # }
-            # """,
-            #                 notify=True,
-            #             )
-            #             .request(
-            #                 comment="Ensure that hover over `aaa` works even when there is a duplicate name",
-            #                 method="textDocument/hover",
-            #                 params={
-            #                     "textDocument": {"uri": "${main_file}"},
-            #                     "position": {"line": 2, "character": 13},
-            #                 },
-            #                 result={
-            #                     "contents": [
-            #                         {"language": "hack", "value": "function aaa(): int"},
-            #                         "Return type: `int`",
-            #                     ],
-            #                     "range": {
-            #                         "start": {"line": 2, "character": 11},
-            #                         "end": {"line": 2, "character": 14},
-            #                     },
-            #                 },
-            #                 powered_by="serverless_ide",
-            #             )
+            .write_to_disk(
+                comment="create file B",
+                uri="${file_b}",
+                contents="""\
+<?hh
+function aaa(): string {
+    return "foo";
+}
+""",
+                notify=True,
+            )
+            .request(
+                line=line(),
+                comment="Ensure that hover over `aaa` works even when there is a duplicate name",
+                method="textDocument/hover",
+                params={
+                    "textDocument": {"uri": "${main_file}"},
+                    "position": {"line": 2, "character": 13},
+                },
+                result={
+                    "contents": [
+                        {"language": "hack", "value": "function aaa(): int"},
+                        "Return type: `int`",
+                    ],
+                    "range": {
+                        "start": {"line": 2, "character": 11},
+                        "end": {"line": 2, "character": 14},
+                    },
+                },
+                powered_by="serverless_ide",
+            )
             # .write_to_disk(
             #     comment="delete file A", uri="${file_a}", contents=None, notify=True
             # )
@@ -5845,5 +6139,6 @@ function aaa(): int {
             #     powered_by="serverless_ide",
             # )
             .request(line=line(), method="shutdown", params={}, result=None)
+            .notification(method="exit", params={})
         )
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)

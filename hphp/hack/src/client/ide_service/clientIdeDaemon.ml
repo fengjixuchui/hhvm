@@ -397,7 +397,7 @@ let make_singleton_ctx
     (initialized_state : initialized_state) (entry : Provider_context.entry) :
     Provider_context.t =
   let ctx = make_empty_ctx initialized_state in
-  let ctx = Provider_context.add_existing_entry ~ctx entry in
+  let ctx = Provider_context.add_or_overwrite_entry ~ctx entry in
   ctx
 
 (** Opens a file, in response to DidOpen event, by putting in a new
@@ -440,10 +440,7 @@ let update_file
       ( document_location.ClientIdeMessage.file_contents,
         Relative_path.Map.find_opt initialized_state.open_files path )
     with
-    | (_, None) ->
-      failwith
-        ( "Attempted LSP operation on a non-open file"
-        ^ Exception.get_current_callstack_string 99 )
+    | (_, None) -> failwith "Attempted LSP operation on a non-open file"
     | (Some contents, Some entry)
       when entry.Provider_context.contents = contents ->
       entry
@@ -621,7 +618,7 @@ let handle_message :
       |> Relative_path.create_detect_prefix
     in
     let ctx = make_empty_ctx initialized_state in
-    let (ctx, entry) = Provider_context.add_entry ~ctx ~path in
+    let (ctx, entry) = Provider_context.add_entry_if_missing ~ctx ~path in
     let result =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
           ServerDocblockAt.go_docblock_ctx

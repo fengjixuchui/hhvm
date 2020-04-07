@@ -23,6 +23,21 @@ let take_max_errors error_list max_errors =
     (error_list, List.length dropped_errors)
   | None -> (error_list, 0)
 
+let single_ctx env path file_input =
+  let contents =
+    match file_input with
+    | ServerCommandTypes.FileName path -> Sys_utils.cat path
+    | ServerCommandTypes.FileContent contents -> contents
+  in
+  let ctx = Provider_utils.ctx_from_server_env env in
+  Provider_context.add_or_overwrite_entry_contents ~ctx ~path ~contents
+
+let single_ctx_path env path =
+  single_ctx
+    env
+    (Relative_path.create_detect_prefix path)
+    (ServerCommandTypes.FileName path)
+
 let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
  fun genv env ~is_stale -> function
   | STATUS { max_errors; _ } ->
@@ -62,26 +77,18 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     (env, take_max_errors (ServerStatusSingle.go fn ctx) max_errors)
   | COVERAGE_LEVELS (path, file_input) ->
     let path = Relative_path.create_detect_prefix path in
-    let (ctx, entry) =
-      Provider_context.add_entry_from_file_input
-        ~ctx:(Provider_utils.ctx_from_server_env env)
-        ~path
-        ~file_input
-    in
+    let (ctx, entry) = single_ctx env path file_input in
     (env, ServerColorFile.go_quarantined ~ctx ~entry)
   | INFER_TYPE (file_input, line, column, dynamic_view) ->
-    let ctx =
-      Provider_utils.ctx_from_server_env env
-      |> Provider_context.map_tcopt ~f:(fun tcopt ->
-             { tcopt with GlobalOptions.tco_dynamic_view = dynamic_view })
-    in
     let path =
       match file_input with
       | FileName fn -> Relative_path.create_detect_prefix fn
       | FileContent _ -> Relative_path.create_detect_prefix ""
     in
-    let (ctx, entry) =
-      Provider_context.add_entry_from_file_input ~ctx ~path ~file_input
+    let (ctx, entry) = single_ctx env path file_input in
+    let ctx =
+      Provider_context.map_tcopt ctx ~f:(fun tcopt ->
+          { tcopt with GlobalOptions.tco_dynamic_view = dynamic_view })
     in
     let result =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
@@ -94,21 +101,11 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let env = { env with tcopt } in
     (env, ServerInferTypeBatch.go genv.workers positions env)
   | IDE_HOVER (path, line, column) ->
-    let path = Relative_path.create_detect_prefix path in
-    let (ctx, entry) =
-      Provider_context.add_entry
-        ~ctx:(Provider_utils.ctx_from_server_env env)
-        ~path
-    in
+    let (ctx, entry) = single_ctx_path env path in
     let result = ServerHover.go_quarantined ~ctx ~entry ~line ~column in
     (env, result)
-  | DOCBLOCK_AT (filename, line, column, _, kind) ->
-    let ctx = Provider_utils.ctx_from_server_env env in
-    let (ctx, entry) =
-      Provider_context.add_entry
-        ~ctx
-        ~path:(Relative_path.create_detect_prefix filename)
-    in
+  | DOCBLOCK_AT (path, line, column, _, kind) ->
+    let (ctx, entry) = single_ctx_path env path in
     let r = ServerDocblockAt.go_docblock_ctx ~ctx ~entry ~line ~column ~kind in
     (env, r)
   | DOCBLOCK_FOR_SYMBOL (symbol, kind) ->
@@ -116,11 +113,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let r = ServerDocblockAt.go_docblock_for_symbol ~ctx ~symbol ~kind in
     (env, r)
   | IDE_SIGNATURE_HELP (path, line, column) ->
-    let (ctx, entry) =
-      Provider_context.add_entry
-        ~ctx:(Provider_utils.ctx_from_server_env env)
-        ~path:(Relative_path.create_detect_prefix path)
-    in
+    let (ctx, entry) = single_ctx_path env path in
     (env, ServerSignatureHelp.go_quarantined ~ctx ~entry ~line ~column)
   | COMMANDLINE_AUTOCOMPLETE contents ->
     (* For command line autocomplete, we assume the AUTO332 text has
@@ -150,7 +143,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     in
     (* feature not implemented here; it only works for LSP *)
     let (ctx, entry) =
-      Provider_context.add_entry_from_file_contents
+      Provider_context.add_or_overwrite_entry_contents
         ~ctx:(Provider_utils.ctx_from_server_env env)
         ~path:(Relative_path.create_detect_prefix "")
         ~contents
@@ -221,10 +214,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     (env, results)
   | IDENTIFY_FUNCTION (filename, file_input, line, column) ->
     let (ctx, entry) =
-      Provider_context.add_entry_from_file_input
-        ~ctx:(Provider_utils.ctx_from_server_env env)
-        ~path:(Relative_path.create_detect_prefix filename)
-        ~file_input
+      single_ctx env (Relative_path.create_detect_prefix filename) file_input
     in
     let result =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
@@ -265,12 +255,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
       let (path, file_input) =
         ServerCommandTypesUtils.extract_labelled_file labelled_file
       in
-      let (ctx, entry) =
-        Provider_context.add_entry_from_file_input
-          ~ctx:(Provider_utils.ctx_from_server_env env)
-          ~path
-          ~file_input
-      in
+      let (ctx, entry) = single_ctx env path file_input in
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
           match ServerFindRefs.go_from_file_ctx ~ctx ~entry ~line ~column with
           | None -> (env, Done None)
@@ -283,12 +268,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
       let (path, file_input) =
         ServerCommandTypesUtils.extract_labelled_file labelled_file
       in
-      let (ctx, entry) =
-        Provider_context.add_entry_from_file_input
-          ~ctx:(Provider_utils.ctx_from_server_env env)
-          ~path
-          ~file_input
-      in
+      let (ctx, entry) = single_ctx env path file_input in
       (match ServerFindRefs.go_from_file_ctx ~ctx ~entry ~line ~column with
       | None -> (env, Done None)
       | Some (name, action) ->
@@ -297,10 +277,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
           (ServerGoToImpl.go ~action ~genv ~env)))
   | IDE_HIGHLIGHT_REFS (path, file_input, line, column) ->
     let (ctx, entry) =
-      Provider_context.add_entry_from_file_input
-        ~ctx:(Provider_utils.ctx_from_server_env env)
-        ~path:(Relative_path.create_detect_prefix path)
-        ~file_input
+      single_ctx env (Relative_path.create_detect_prefix path) file_input
     in
     let r =
       Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
@@ -392,7 +369,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
       ServerFileSync.get_file_content (ServerCommandTypes.FileName filename)
     in
     let (ctx, entry) =
-      Provider_context.add_entry_from_file_contents
+      Provider_context.add_or_overwrite_entry_contents
         ~ctx:(Provider_utils.ctx_from_server_env env)
         ~path:(Relative_path.create_detect_prefix filename)
         ~contents
@@ -418,7 +395,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let char_at_pos = File_content.get_char contents offset in
     let ctx = Provider_utils.ctx_from_server_env env in
     let (ctx, entry) =
-      Provider_context.add_entry_from_file_contents
+      Provider_context.add_or_overwrite_entry_contents
         ~ctx
         ~path:(Relative_path.create_detect_prefix path)
         ~contents
@@ -510,12 +487,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let (path, file_input) =
       ServerCommandTypesUtils.extract_labelled_file labelled_file
     in
-    let (ctx, entry) =
-      Provider_context.add_entry_from_file_input
-        ~ctx:(Provider_utils.ctx_from_server_env env)
-        ~path
-        ~file_input
-    in
+    let (ctx, entry) = single_ctx env path file_input in
     let result =
       ServerTypeDefinition.go_quarantined ~ctx ~entry ~line ~column
     in
@@ -528,20 +500,11 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let (path, file_input) =
       ServerCommandTypesUtils.extract_labelled_file labelled_file
     in
-    let (ctx, entry) =
-      Provider_context.add_entry_from_file_input
-        ~ctx:(Provider_utils.ctx_from_server_env env)
-        ~path
-        ~file_input
-    in
+    let (ctx, entry) = single_ctx env path file_input in
     Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
         (env, ServerGoToDefinition.go_quarantined ~ctx ~entry ~line ~column))
-  | BIGCODE filename ->
-    let (ctx, entry) =
-      Provider_context.add_entry
-        ~ctx:(Provider_utils.ctx_from_server_env env)
-        ~path:(Relative_path.create_detect_prefix filename)
-    in
+  | BIGCODE path ->
+    let (ctx, entry) = single_ctx_path env path in
     let result = ServerBigCode.go_ctx ~ctx ~entry in
     (env, result)
   | VERBOSE verbose ->

@@ -283,46 +283,30 @@ void BreakpointManager::onFuncBreakpointResolved(
   );
 }
 
-bool BreakpointManager::warningSentForBp(
-  request_id_t requestId,
-  int bpId
-) const {
-  auto notifyIt = m_userNotifyBps.find(requestId);
-  if (notifyIt == m_userNotifyBps.end()) {
-    return false;
-  }
-
-  auto funcIt = notifyIt->second.find(bpId);
-  return funcIt != notifyIt->second.end();
+bool BreakpointManager::warningSentForBp(int bpId) const {
+  const auto it = m_userNotifyBps.find(bpId);
+  return it != m_userNotifyBps.end();
 }
 
 void BreakpointManager::sendWarningForBp(
-  request_id_t requestId,
   int bpId,
   std::string& warningMessage
 ) {
-  auto notifyIt = m_userNotifyBps.find(requestId);
-  if (notifyIt == m_userNotifyBps.end()) {
-    m_userNotifyBps.emplace(
-      requestId,
-      std::unordered_set<int>()
-    );
-    notifyIt = m_userNotifyBps.find(requestId);
+  const auto it = m_userNotifyBps.find(bpId);
+  if (it == m_userNotifyBps.end()) {
+    m_userNotifyBps.emplace(bpId);
   }
 
   m_debugger->sendUserMessage(
     warningMessage.c_str(),
     DebugTransport::OutputLevelWarning
   );
-
-  notifyIt->second.insert(bpId);
 }
 
 void BreakpointManager::sendMemoizeWarning(
-  request_id_t requestId,
   int bpId
 ) {
-  if (warningSentForBp(requestId, bpId)) {
+  if (warningSentForBp(bpId)) {
     return;
   }
 
@@ -334,7 +318,7 @@ void BreakpointManager::sendMemoizeWarning(
   msg += "As a result, this breakpoint might not be hit. Please see ";
   msg += "https://fburl.com/hhvm_memoize for more information.";
 
-  sendWarningForBp(requestId, bpId, msg);
+  sendWarningForBp(bpId, msg);
 }
 
 void BreakpointManager::sendBpInterceptedWarning(
@@ -344,7 +328,7 @@ void BreakpointManager::sendBpInterceptedWarning(
 ) {
 
   // Only warn once per breakpoint per request.
-  if (warningSentForBp(requestId, bpId)) {
+  if (warningSentForBp(bpId)) {
     return;
   }
 
@@ -361,7 +345,7 @@ void BreakpointManager::sendBpInterceptedWarning(
   msg += name;
   msg += " has an intercept handler registered.";
 
-  sendWarningForBp(requestId, bpId, msg);
+  sendWarningForBp(bpId, msg);
 }
 
 void BreakpointManager::onFuncIntercepted(
@@ -581,15 +565,6 @@ void BreakpointManager::onBreakpointResolved(
       msg += std::to_string(startLine);
       msg += ", which is actually where the nearest executable instruction in ";
       msg += "the source map for this file is.";
-    } else {
-      // Multi-line expression.
-      msg += " resolved to a multi-line expression. (Lines ";
-      msg += std::to_string(startLine);
-      msg += "-";
-      msg += std::to_string(endLine);
-      msg += ") The breakpoint will be displayed at the first executable ";
-      msg += "instruction of the expression that would be hit when ";
-      msg += "single-stepping through this function.";
     }
 
     m_debugger->sendUserMessage(
@@ -754,12 +729,6 @@ void BreakpointManager::onRequestShutdown(request_id_t requestId) {
   if (interceptIt != m_interceptedFuncs.end()) {
     interceptIt->second.clear();
     m_interceptedFuncs.erase(interceptIt);
-  }
-
-  auto notifyIt = m_userNotifyBps.find(requestId);
-  if (notifyIt != m_userNotifyBps.end()) {
-    notifyIt->second.clear();
-    m_userNotifyBps.erase(notifyIt);
   }
 }
 

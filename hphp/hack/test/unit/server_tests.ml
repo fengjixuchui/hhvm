@@ -235,14 +235,12 @@ let test_process_file_deferring () =
   let errors = Errors.empty in
 
   (* Finally, this is what all the setup was for: process this file *)
-  let { Typing_check_service.computation; counters; _ } =
-    Typing_check_service.process_file
-      dynamic_view_files
-      ctx
-      ~profile_log:true
-      errors
-      file
+  let prev_counter_state = Counters.reset ~enable:true in
+  let { Typing_check_service.computation; _ } =
+    Typing_check_service.process_file dynamic_view_files ctx errors file
   in
+  let counters = Counters.get_counters () in
+  Counters.restore_state prev_counter_state;
   Asserter.Int_asserter.assert_equals
     2
     (List.length computation)
@@ -300,7 +298,7 @@ let test_compute_tast_counting () =
   let { ctx; foo_path; foo_contents; _ } = server_setup () in
 
   let (ctx, entry) =
-    Provider_context.add_entry_from_file_contents
+    Provider_context.add_or_overwrite_entry_contents
       ~ctx
       ~path:foo_path
       ~contents:foo_contents
@@ -332,7 +330,9 @@ let test_compute_tast_counting () =
           ~tcopt:TypecheckerOptions.default
           ~backend:(Provider_backend.get ())
       in
-      let (ctx, entry) = Provider_context.add_entry ~ctx ~path:foo_path in
+      let (ctx, entry) =
+        Provider_context.add_entry_if_missing ~ctx ~path:foo_path
+      in
       let { Tast_provider.Compute_tast_and_errors.telemetry; _ } =
         Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
       in
@@ -397,7 +397,7 @@ let test_quarantine () =
 
   (* simple case *)
   let (ctx, _foo_entry) =
-    Provider_context.add_entry_from_file_contents
+    Provider_context.add_or_overwrite_entry_contents
       ~ctx
       ~path:foo_path
       ~contents:foo_contents
@@ -427,7 +427,7 @@ let test_quarantine () =
 
   (* add a non-existent file; should fail *)
   let (ctx2, _nonexistent_entry) =
-    Provider_context.add_entry_from_file_contents
+    Provider_context.add_or_overwrite_entry_contents
       ~ctx
       ~path:nonexistent_path
       ~contents:""
@@ -487,7 +487,7 @@ let test_unsaved_symbol_change () =
 
   (* Compute tast as-is *)
   let (ctx, entry) =
-    Provider_context.add_entry_from_file_contents
+    Provider_context.add_or_overwrite_entry_contents
       ~ctx
       ~path:foo_path
       ~contents:foo_contents
@@ -516,7 +516,7 @@ let test_unsaved_symbol_change () =
     Str.global_replace (Str.regexp "class Foo") "class Foo1" foo_contents
   in
   let (ctx, entry) =
-    Provider_context.add_entry_from_file_contents
+    Provider_context.add_or_overwrite_entry_contents
       ~ctx
       ~path:foo_path
       ~contents:foo_contents1
@@ -543,7 +543,7 @@ let test_unsaved_symbol_change () =
 
   (* go back to original unsaved content *)
   let (ctx, entry) =
-    Provider_context.add_entry_from_file_contents
+    Provider_context.add_or_overwrite_entry_contents
       ~ctx
       ~path:foo_path
       ~contents:foo_contents
@@ -624,7 +624,7 @@ let test_canon_names () =
     ~uncanonical:"\\foo";
 
   let (ctx, _) =
-    Provider_context.add_entry_from_file_contents
+    Provider_context.add_or_overwrite_entry_contents
       ~ctx
       ~path:foo_path
       ~contents:foo_contents
@@ -639,7 +639,7 @@ let test_canon_names () =
     Str.global_replace (Str.regexp "class Foo") "class Foo1" foo_contents
   in
   let (ctx1, _) =
-    Provider_context.add_entry_from_file_contents
+    Provider_context.add_or_overwrite_entry_contents
       ~ctx
       ~path:foo_path
       ~contents:foo_contents1
