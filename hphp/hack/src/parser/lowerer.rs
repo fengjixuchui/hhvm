@@ -186,7 +186,7 @@ impl<'a> Env<'a> {
     ) -> Self {
         // (hrust) Ported from namespace_env.ml
         let empty_ns_env = if use_default_namespace {
-            let mut nsenv = NamespaceEnv::default();
+            let mut nsenv = NamespaceEnv::empty(vec![], false, false);
             nsenv.is_codegen = codegen;
             nsenv.disable_xhp_element_mangling = parser_options.po_disable_xhp_element_mangling;
             nsenv
@@ -3532,18 +3532,8 @@ where
                 let function_type_parameter_list = &c.function_type_parameter_list;
                 let function_parameter_list = &c.function_parameter_list;
                 let function_type = &c.function_type;
-                let is_autoload = Self::text_str(function_name, env)
-                    .eq_ignore_ascii_case(special_functions::AUTOLOAD);
                 if function_name.value.is_missing() {
                     Self::raise_parsing_error(function_name, env, &syntax_error::empty_method_name);
-                }
-                let num_params = Self::syntax_to_list(false, function_parameter_list).len();
-                if is_autoload && num_params > 1 {
-                    Self::raise_parsing_error(
-                        node,
-                        env,
-                        &syntax_error::autoload_takes_one_argument,
-                    );
                 }
                 let kinds = Self::p_kinds(function_modifiers, env)?;
                 let has_async = kinds.has(modifier::ASYNC);
@@ -4936,6 +4926,11 @@ where
                     user_attributes: Self::p_user_attribute(node, env)?,
                     namespace: Self::mk_empty_ns_env(env),
                 })])
+            }
+            _ if env.file_mode() == file_info::Mode::Mdecl
+                || (env.file_mode() == file_info::Mode::Mphp && !env.codegen) =>
+            {
+                Ok(vec![])
             }
             _ => Ok(vec![ast::Def::mk_stmt(Self::p_stmt(node, env)?)]),
         }

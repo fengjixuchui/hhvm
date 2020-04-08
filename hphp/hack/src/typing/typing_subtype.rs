@@ -10,7 +10,7 @@ use bumpalo::collections::Vec;
 use itertools::*;
 use oxidized::ast;
 use oxidized::ident::Ident;
-use typing_collections_rust::SMap;
+use typing_collections_rust::{SMap, Vec as AVec};
 use typing_defs_rust::{avec, Ty};
 
 fn simplify_subtype_i<'a>(
@@ -97,14 +97,22 @@ fn simplify_subtype_i<'a>(
                                         type_expansions: Vec::new_in(bld.alloc),
                                         substs,
                                     });
-                                    let up_obj_opt = env.provider().get_ancestor(cd, cid_super);
-                                    match up_obj_opt {
-                                        Some(up_obj) => {
-                                            let up_obj = localize(ety_env, env, &up_obj).clone();
-                                            simplify_subtype(env, up_obj, ty_super)
+                                    // Iterate over all immediate supertypes, recursing through
+                                    // simplify_subtype on each in turn. If any succeed, return
+                                    // early, otherwise build up a disjunction
+                                    // TODO (hrust): precompute (or cache) the transitive closure of
+                                    // the extends/implements relation, so that we can instead
+                                    // query if classish C inherits from classish D
+                                    let mut props = Vec::new_in(env.bld().alloc);
+                                    for ty in cd.extends.iter().chain(cd.implements.iter()) {
+                                        let up_obj = localize(ety_env, env, ty);
+                                        let prop = simplify_subtype(env, up_obj, ty_super);
+                                        if prop.is_valid() {
+                                            return valid();
                                         }
-                                        None => invalid(),
+                                        props.push(prop);
                                     }
+                                    bld.disj(props)
                                 }
                             }
                         }
@@ -132,20 +140,8 @@ fn simplify_subtype_variance<'a>(
     let mut props = Vec::new_in(env.bld().alloc);
     for (tparam, &ty_sub, &ty_super) in izip!(tparaml.iter(), children_tyl.iter(), super_tyl.iter())
     {
-        // Direct decl parser does not yet support variance, so used naming convention instead
-        // Type parameters start "TP" are covariant, "TN" contravariant, all others invariant
-        // TODO(hrust): use actual variance when it is implemented
-        let variance = if tparam.name.1.len() < 2 {
-            ast::Variance::Invariant
-        } else {
-            match &tparam.name.1[0..2] {
-                "TP" => ast::Variance::Covariant,
-                "TN" => ast::Variance::Contravariant,
-                _ => ast::Variance::Invariant,
-            }
-        };
         // Apply subtyping according to the variance of the type parameter
-        match variance {
+        match tparam.variance {
             ast::Variance::Covariant => {
                 props.push(simplify_subtype(env, ty_sub, ty_super));
             }
@@ -199,7 +195,7 @@ pub fn sub_type_i<'a>(env: &mut Env<'a>, ty_sub: InternalType<'a>, ty_super: Int
     process_simplify_subtype_result(env, &prop);
 }
 
-fn prop_to_env<'a>(env: &Env<'a>, prop: SubtypeProp<'a>) -> SubtypeProp<'a> {
+fn prop_to_env<'a>(env: &mut Env<'a>, prop: SubtypeProp<'a>) -> SubtypeProp<'a> {
     let mut props_acc = avec![in env.bld()];
     prop_to_env_(env, prop, &mut props_acc);
     // TODO(hrust) proper conjunction
@@ -207,7 +203,7 @@ fn prop_to_env<'a>(env: &Env<'a>, prop: SubtypeProp<'a>) -> SubtypeProp<'a> {
 }
 
 fn prop_to_env_<'a>(
-    env: &Env<'a>,
+    env: &mut Env<'a>,
     prop: SubtypeProp<'a>,
     props_acc: &mut Vec<'a, SubtypeProp<'a>>,
 ) {
@@ -246,8 +242,8 @@ fn prop_to_env_<'a>(
 }
 
 fn props_to_env<'a>(
-    env: &Env<'a>,
-    props: &Vec<'a, SubtypeProp<'a>>,
+    env: &mut Env<'a>,
+    props: &AVec<'a, SubtypeProp<'a>>,
     props_acc: &mut Vec<'a, SubtypeProp<'a>>,
 ) {
     props
@@ -256,21 +252,45 @@ fn props_to_env<'a>(
 }
 
 fn add_tyvar_upper_bound_and_close<'a>(
-    env: &Env<'a>,
-    _prop: SubtypeProp<'a>,
-    _v: Ident,
-    _ty: InternalType<'a>,
+    env: &mut Env<'a>,
+    prop: SubtypeProp<'a>,
+    v: Ident,
+    ty: InternalType<'a>,
 ) -> SubtypeProp<'a> {
-    // TODO(hrust)
-    env.bld().valid()
+    let upper_bounds_before = env.inference_env.get_upper_bounds(v);
+    // TODO(hrust) add_tyvar_upper_bound_and_update_variances instead
+    env.inference_env.add_upper_bound(v, ty);
+    let upper_bounds_after = env.inference_env.get_upper_bounds(v);
+    let added_upper_bounds = upper_bounds_after.diff(env.bld(), upper_bounds_before);
+    let lower_bounds = env.inference_env.get_lower_bounds(v);
+    added_upper_bounds
+        .into_iter()
+        .fold(prop, |prop, upper_bound| {
+            // TODO(hrust) make all type consts and pu equal
+            lower_bounds.into_iter().fold(prop, |prop, lower_bound| {
+                simplify_subtype_i(env, lower_bound, upper_bound).conj(env.bld().alloc, prop)
+            })
+        })
 }
 
 fn add_tyvar_lower_bound_and_close<'a>(
-    env: &Env<'a>,
-    _prop: SubtypeProp<'a>,
-    _v: Ident,
-    _ty: InternalType<'a>,
+    env: &mut Env<'a>,
+    prop: SubtypeProp<'a>,
+    v: Ident,
+    ty: InternalType<'a>,
 ) -> SubtypeProp<'a> {
-    // TODO(hrust)
-    env.bld().valid()
+    let lower_bounds_before = env.inference_env.get_lower_bounds(v);
+    // TODO(hrust) add_tyvar_lower_bound_and_update_variances instead
+    env.inference_env.add_lower_bound(v, ty);
+    let lower_bounds_after = env.inference_env.get_lower_bounds(v);
+    let added_lower_bounds = lower_bounds_after.diff(env.bld(), lower_bounds_before);
+    let upper_bounds = env.inference_env.get_upper_bounds(v);
+    added_lower_bounds
+        .into_iter()
+        .fold(prop, |prop, lower_bound| {
+            // TODO(hrust) make all type consts and pu equal
+            upper_bounds.into_iter().fold(prop, |prop, upper_bound| {
+                simplify_subtype_i(env, upper_bound, lower_bound).conj(env.bld().alloc, prop)
+            })
+        })
 }

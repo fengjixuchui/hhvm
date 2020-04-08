@@ -28,31 +28,6 @@
 namespace HPHP {
 
 namespace tv_val_detail {
-/*
- * These structs are used to add dummy() and is_dummy() functions to tv_rval
- * only.
- */
-struct empty {};
-
-template<typename T>
-struct with_dummy {
-  /*
-   * The canonical non-null "missing" rval. Only valid for tv_rval (is_const ==
-   * true). These are actually defined in tv_val_detail::with_dummy; see above.
-   *
-   * Some users of tv_rval prefer to use a dummy rval-to-Uninit to represent a
-   * missing element, instead of a nullptr rval, so that tv() is always valid.
-   * These functions provide and test for such a value.
-   *
-   * static tv_val dummy();
-   * bool is_dummy() const;
-   */
-  INLINE_FLATTEN static T dummy() { return T { &immutable_uninit_base }; }
-  INLINE_FLATTEN bool is_dummy() const {
-    return static_cast<const T&>(*this) == dummy();
-  }
-};
-
 template<typename T>
 INLINE_FLATTEN T* get_ptr(T* ptr) {
   return ptr;
@@ -83,9 +58,7 @@ INLINE_FLATTEN T* get_ptr(CompactTaggedPtr<T, Tag> ptr) {
  * tag. This has no space overhead, but has a slight penalty at runtime.
  */
 template<bool is_const, typename tag_t = void>
-struct tv_val : std::conditional<is_const,
-                                 tv_val_detail::with_dummy<tv_val<true>>,
-                                 tv_val_detail::empty>::type {
+struct tv_val {
 private:
   template<typename T> using maybe_const_t =
     typename std::conditional<is_const, const T, T>::type;
@@ -169,6 +142,12 @@ public:
     if (isRefcountedType(type())) scanner.scan(val().pcnt);
   }
 
+  static constexpr size_t typeOff() {
+    return offsetof(tv_val, m_s) + storage_t::typeOff();
+  }
+  static constexpr size_t dataOff() {
+    return offsetof(tv_val, m_s) + storage_t::dataOff();
+  }
 private:
   template<bool, typename> friend struct tv_val;
 
@@ -211,6 +190,13 @@ private:
 
     template<typename Tag = tag_t>
     INLINE_FLATTEN with_tag_t<Tag> tag() const { return m_tv.tag(); }
+
+    static constexpr size_t typeOff() {
+      return offsetof(storage, m_tv);
+    }
+    static constexpr size_t dataOff() {
+      return offsetof(storage, m_tv);
+    }
 
    private:
     maybe_tagged_t<tv_t> m_tv;
@@ -255,6 +241,13 @@ private:
 
     template<typename Tag = tag_t>
     INLINE_FLATTEN with_tag_t<Tag> tag() const { return m_type.tag(); }
+
+    static constexpr size_t typeOff() {
+      return offsetof(wide_storage, m_type);
+    }
+    static constexpr size_t dataOff() {
+      return offsetof(wide_storage, m_val);
+    }
 
    private:
     maybe_tagged_t<type_t> m_type;
@@ -357,6 +350,53 @@ struct tv_val_offset_nonwide {
 using tv_val_offset = std::conditional<wide_tv_val,
                                        detail::tv_val_offset_wide,
                                        detail::tv_val_offset_nonwide>::type;
+
+////////////////////////////////////////////////////////////
+
+// tv_lval-like class used specifically for lvals to frame
+// locals. Contains a single pointer to the type, and recomputes the
+// pointer to the data on demand. This should only be used for
+// super-hot code where the register pressure from using a normal
+// tv_lval is too expensive.
+
+struct local_lval {
+  INLINE_FLATTEN local_lval() : m_type{nullptr} {}
+  // We don't allow implicit conversion because you need to be sure
+  // the tv_lval points at a frame local.
+  INLINE_FLATTEN explicit local_lval(tv_lval lval)
+    : m_type{lval.is_set() ? &lval.type() : nullptr}
+  {
+    assertx(!m_type || valFromType(m_type) == &lval.val());
+  }
+
+  INLINE_FLATTEN bool is_set() const { return m_type; }
+  INLINE_FLATTEN explicit operator bool() const { return is_set(); }
+
+  INLINE_FLATTEN DataType& type() const { assertx(is_set()); return *m_type; }
+  INLINE_FLATTEN Value& val() const { return *valFromType(&type()); }
+
+  INLINE_FLATTEN tv_lval lval() const { return tv_lval{&type(), &val()}; }
+  INLINE_FLATTEN TypedValue tv() const { return TypedValue{val(), type()}; }
+  INLINE_FLATTEN TypedValue operator*() const { return tv(); }
+
+  static constexpr size_t typeOff() { return offsetof(local_lval, m_type); }
+
+  static int valOffsetFromTypeOffset(int typeOffset) {
+    static_assert(TVOFF(m_type) == sizeof(Value), "");
+    return typeOffset - sizeof(Value);
+  }
+private:
+  static Value* valFromType(DataType* t) {
+    static_assert(TVOFF(m_type) == sizeof(Value), "");
+    return (Value*)t - 1;
+  }
+
+  DataType* m_type;
+};
+
+INLINE_FLATTEN auto& type(const local_lval& val) { return val.type(); }
+INLINE_FLATTEN auto& val(const local_lval& val) { return val.val(); }
+INLINE_FLATTEN TypedValue as_tv(const local_lval& val) { return val.tv(); }
 
 }
 

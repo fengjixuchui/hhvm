@@ -150,11 +150,11 @@ void cgCheckTypeMem(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgCheckLoc(IRLS& env, const IRInstruction* inst) {
-  auto const baseOff = localOffset(inst->extra<CheckLoc>()->locId);
-  auto const base = srcLoc(env, inst, 0).reg()[baseOff];
-
+  auto const loc = inst->extra<CheckLoc>()->locId;
+  auto const fp = srcLoc(env, inst, 0).reg();
   emitTypeCheck(vmain(env), env, inst->typeParam(),
-                base + TVOFF(m_type), base + TVOFF(m_data), inst->taken());
+                ptrToLocalType(fp, loc), ptrToLocalData(fp, loc),
+                inst->taken());
 }
 
 void cgCheckStk(IRLS& env, const IRInstruction* inst) {
@@ -183,10 +183,9 @@ void implIsType(IRLS& env, const IRInstruction* inst, bool negate) {
     v << setcc{negate ? ccNegate(cc) : cc, sf, dst};
   };
 
-  if (src->isA(TPtrToCell)) {
-    auto const base = loc.reg();
-    emitTypeTest(v, env, inst->typeParam(), base[TVOFF(m_type)],
-                 base[TVOFF(m_data)], v.makeReg(), doJcc);
+  if (src->isA(TPtrToCell) || src->isA(TLvalToCell)) {
+    emitTypeTest(v, env, inst->typeParam(), memTVTypePtr(src, loc),
+                 memTVValPtr(src, loc), v.makeReg(), doJcc);
     return;
   }
   assertx(src->isA(TCell));

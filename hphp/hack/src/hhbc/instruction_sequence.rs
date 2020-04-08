@@ -6,6 +6,7 @@
 
 use env::{iterator::Id as IterId, local};
 use hhbc_ast_rust::*;
+use itertools::Either;
 use label_rust as label;
 use label_rust::Label;
 use oxidized::pos::Pos;
@@ -105,7 +106,7 @@ where
 pub struct InstrIter<'i> {
     instr_seq: &'i InstrSeq,
     index: usize,
-    concat_cur: Option<Box<InstrIter<'i>>>,
+    concat_stack: Vec<Either<(&'i Vec<Instruct>, usize), (&'i Vec<InstrSeq>, usize)>>,
 }
 
 impl<'i> InstrIter<'i> {
@@ -113,7 +114,7 @@ impl<'i> InstrIter<'i> {
         Self {
             instr_seq,
             index: 0,
-            concat_cur: None,
+            concat_stack: vec![],
         }
     }
 }
@@ -134,23 +135,50 @@ impl<'i> Iterator for InstrIter<'i> {
                 self.index += 1;
                 r
             }
-            InstrSeq::Concat(ii) if self.index >= ii.len() => None,
-            InstrSeq::Concat(ii) => match &mut self.concat_cur {
-                Some(cur) => {
-                    let r = cur.as_mut().next();
-                    if r.is_some() {
-                        r
-                    } else {
+            InstrSeq::Concat(cc) => {
+                if self.concat_stack.is_empty() {
+                    if self.index == 0 {
                         self.index += 1;
-                        std::mem::replace(&mut self.concat_cur, None);
-                        self.next()
+                        self.concat_stack.push(Either::Right((cc, 0)));
+                    } else {
+                        return None;
                     }
                 }
-                None => {
-                    std::mem::replace(&mut self.concat_cur, Some(Box::new(ii[self.index].iter())));
-                    self.next()
+
+                while !self.concat_stack.is_empty() {
+                    let top = self.concat_stack.last_mut().unwrap();
+                    match top {
+                        Either::Left((list, size)) if *size >= list.len() => {
+                            self.concat_stack.pop();
+                        }
+                        Either::Left((list, size)) => {
+                            let r: &Instruct = &(list[*size]);
+                            *size += 1;
+                            return Some(&r);
+                        }
+                        Either::Right((concat, size)) if *size >= concat.len() => {
+                            self.concat_stack.pop();
+                        }
+                        Either::Right((concat, size)) => {
+                            let i: &InstrSeq = &(concat[*size]);
+                            *size += 1;
+                            match i {
+                                InstrSeq::One(ref instr) => {
+                                    return Some(instr);
+                                }
+                                InstrSeq::List(ref list) => {
+                                    self.concat_stack.push(Either::Left((list, 0)));
+                                }
+                                InstrSeq::Concat(ref concat) => {
+                                    self.concat_stack.push(Either::Right((concat, 0)));
+                                }
+                                InstrSeq::Empty => {}
+                            }
+                        }
+                    }
                 }
-            },
+                None
+            }
         }
     }
 }
@@ -1056,20 +1084,6 @@ pub mod instr {
         instr(Instruct::IMisc(InstructMisc::CreateCl(param_num, cls_num)))
     }
 
-    pub fn fcallbuiltin(
-        n: NumParams,
-        un: NumParams,
-        io: NumParams,
-        s: impl Into<String>,
-    ) -> InstrSeq {
-        instr(Instruct::ICall(InstructCall::FCallBuiltin(
-            n,
-            un,
-            io,
-            s.into(),
-        )))
-    }
-
     pub fn defcls(n: ClassNum) -> InstrSeq {
         instr(Instruct::IIncludeEvalDefine(
             InstructIncludeEvalDefine::DefCls(n),
@@ -1214,10 +1228,6 @@ pub mod instr {
         instr(Instruct::IGenerator(GenCreationExecution::ContGetReturn))
     }
 
-    pub fn trigger_sampled_error() -> InstrSeq {
-        fcallbuiltin(3, 3, 0, String::from("trigger_sampled_error"))
-    }
-
     pub fn nativeimpl() -> InstrSeq {
         instr(Instruct::IMisc(InstructMisc::NativeImpl))
     }
@@ -1307,99 +1317,56 @@ impl InstrSeq {
         ])
     }
 
-    fn get_or_put_label<'a>(
+    fn get_or_put_label<'i, 'm>(
         label_gen: &mut label::Gen,
-        name_label_map: &'a HashMap<String, Label>,
-        name: String,
-    ) -> (Label, &'a HashMap<String, Label>) {
-        match name_label_map.get(&name) {
-            Some(label) => (label.clone(), name_label_map),
-            None => (label_gen.next_regular(), name_label_map),
+        name_label_map: &'m mut HashMap<String, Label>,
+        name: &'i String,
+    ) -> Label {
+        match name_label_map.get(name.as_str()) {
+            Some(label) => label.clone(),
+            None => {
+                let l = label_gen.next_regular();
+                name_label_map.insert(name.to_string(), l.clone());
+                l
+            }
         }
     }
 
-    fn rewrite_user_labels_instr<'a>(
+    fn rewrite_user_labels_instr<'i, 'm>(
         label_gen: &mut label::Gen,
-        instruction: &Instruct,
-        name_label_map: &'a HashMap<String, Label>,
-    ) -> (Instruct, &'a HashMap<String, Label>) {
+        i: &'i mut Instruct,
+        name_label_map: &'m mut HashMap<String, Label>,
+    ) {
         use Instruct::*;
         let mut get_result = |x| InstrSeq::get_or_put_label(label_gen, name_label_map, x);
-        match instruction {
+        match i {
             IContFlow(InstructControlFlow::Jmp(Label::Named(name))) => {
-                let (label, name_label_map) = get_result(name.to_string());
-                (
-                    Instruct::IContFlow(InstructControlFlow::Jmp(label)),
-                    name_label_map,
-                )
+                let label = get_result(name);
+                *i = Instruct::IContFlow(InstructControlFlow::Jmp(label));
             }
             IContFlow(InstructControlFlow::JmpNS(Label::Named(name))) => {
-                let (label, name_label_map) = get_result(name.to_string());
-                (
-                    Instruct::IContFlow(InstructControlFlow::JmpNS(label)),
-                    name_label_map,
-                )
+                let label = get_result(name);
+                *i = Instruct::IContFlow(InstructControlFlow::JmpNS(label));
             }
             IContFlow(InstructControlFlow::JmpZ(Label::Named(name))) => {
-                let (label, name_label_map) = get_result(name.to_string());
-                (
-                    Instruct::IContFlow(InstructControlFlow::JmpZ(label)),
-                    name_label_map,
-                )
+                let label = get_result(name);
+                *i = Instruct::IContFlow(InstructControlFlow::JmpZ(label));
             }
             IContFlow(InstructControlFlow::JmpNZ(Label::Named(name))) => {
-                let (label, name_label_map) = get_result(name.to_string());
-                (
-                    Instruct::IContFlow(InstructControlFlow::JmpNZ(label)),
-                    name_label_map,
-                )
+                let label = get_result(name);
+                *i = Instruct::IContFlow(InstructControlFlow::JmpNZ(label));
             }
             ILabel(Label::Named(name)) => {
-                let (label, name_label_map) = get_result(name.to_string());
-                (ILabel(label), name_label_map)
+                let label = get_result(name);
+                *i = ILabel(label);
             }
-            i => (i.clone(), name_label_map),
-        }
+            _ => {}
+        };
     }
 
     pub fn rewrite_user_labels(&mut self, label_gen: &mut label::Gen) {
-        *self = InstrSeq::rewrite_user_labels_aux(label_gen, self, &HashMap::new()).0
-    }
-
-    fn rewrite_user_labels_aux<'a>(
-        label_gen: &mut label::Gen,
-        instrseq: &Self,
-        name_label_map: &'a HashMap<String, Label>,
-    ) -> (Self, &'a HashMap<String, Label>) {
-        match &instrseq {
-            InstrSeq::Empty => (InstrSeq::Empty, name_label_map),
-            InstrSeq::One(instr) => {
-                let (i, name_label_map) =
-                    InstrSeq::rewrite_user_labels_instr(label_gen, instr, name_label_map);
-                (instr::instr(i), name_label_map)
-            }
-            InstrSeq::Concat(instrseq) => {
-                let folder = |(mut acc, map): (Vec<Self>, &'a HashMap<String, Label>),
-                              seq: &Self| {
-                    let (l, map) = InstrSeq::rewrite_user_labels_aux(label_gen, seq, map);
-                    acc.push(l);
-                    (acc, map)
-                };
-                let (instrseq, name_label_map) =
-                    instrseq.iter().fold((vec![], name_label_map), folder);
-                (InstrSeq::Concat(instrseq), name_label_map)
-            }
-            InstrSeq::List(l) => {
-                let folder = |(mut acc, map): (Vec<Instruct>, &'a HashMap<String, Label>),
-                              instr: &Instruct| {
-                    let (i, map) = InstrSeq::rewrite_user_labels_instr(label_gen, instr, map);
-                    acc.push(i);
-                    (acc, map)
-                };
-                let (instrlst, name_label_map) = l.iter().fold((vec![], name_label_map), folder);
-                (InstrSeq::List(instrlst), name_label_map)
-            }
-        }
+        let name_label_map = &mut HashMap::new();
+        self.map_mut(&mut |i| InstrSeq::rewrite_user_labels_instr(label_gen, i, name_label_map));
     }
 
     fn is_srcloc(instruction: &Instruct) -> bool {
@@ -1537,9 +1504,9 @@ impl InstrSeq {
         }
     }
 
-    pub fn map_mut<F>(&mut self, f: &mut F)
+    pub fn map_mut<'i, F>(&'i mut self, f: &mut F)
     where
-        F: FnMut(&mut Instruct),
+        F: FnMut(&'i mut Instruct),
     {
         match self {
             InstrSeq::Empty => (),
@@ -1587,6 +1554,7 @@ mod tests {
         let list1 = || instrs(vec![mk_i()]);
         let list2 = || instrs(vec![mk_i(), mk_i()]);
         let concat0 = || InstrSeq::Concat(vec![]);
+        let concat1 = || InstrSeq::Concat(vec![one()]);
 
         assert_eq!(empty().iter().count(), 0);
         assert_eq!(one().iter().count(), 1);
@@ -1612,5 +1580,23 @@ mod tests {
 
         let concat = InstrSeq::Concat(vec![concat0(), list2(), list1()]);
         assert_eq!(concat.iter().count(), 3);
+
+        let concat = InstrSeq::Concat(vec![concat1(), concat1()]);
+        assert_eq!(concat.iter().count(), 2);
+
+        let concat = InstrSeq::Concat(vec![concat0(), concat1()]);
+        assert_eq!(concat.iter().count(), 1);
+
+        let concat = InstrSeq::Concat(vec![list2(), concat1()]);
+        assert_eq!(concat.iter().count(), 3);
+
+        let concat = InstrSeq::Concat(vec![list2(), concat0()]);
+        assert_eq!(concat.iter().count(), 2);
+
+        let concat = InstrSeq::Concat(vec![one(), concat0()]);
+        assert_eq!(concat.iter().count(), 1);
+
+        let concat = InstrSeq::Concat(vec![empty(), concat0()]);
+        assert_eq!(concat.iter().count(), 0);
     }
 }

@@ -631,7 +631,7 @@ SSATmp* opt_foldable(IRGS& env,
   }
   if (variadicArgs) {
     for (auto i = 0; i < numVariadicArgs; i++) {
-      args.append(variadicArgs->get(i).tv());
+      args.append(variadicArgs->get(i));
     }
   }
 
@@ -1650,7 +1650,7 @@ jit::vector<SSATmp*> realize_params(IRGS& env,
 
     seenBottom |= (param.value->type() == TBottom);
 
-    if (param.value->type() <= TPtrToCell) {
+    if (param.value->type() <= TMemToCell) {
       ret[argIdx++] = realize_param(
         env, param, callee, targetTy,
         [&] (const Type& ty, Block* fail) -> SSATmp* {
@@ -2600,8 +2600,8 @@ void memoGetImpl(IRGS& env,
   assertx(suspendedOff == kInvalidOffset || curFunc(env)->isAsyncFunction());
 
   CompactVector<bool> types;
-  for (auto i = keys.count; i > 0; --i) {
-    auto const type = env.irb->local(keys.first + i - 1, DataTypeSpecific).type;
+  for (size_t i = 0; i < keys.count; ++i) {
+    auto const type = env.irb->local(i + keys.first, DataTypeSpecific).type;
     if (type <= TStr) {
       types.emplace_back(true);
     } else if (type <= TInt) {
@@ -2780,8 +2780,8 @@ void memoSetImpl(IRGS& env, LocalRange keys, bool eager) {
   assertx(!eager || curFunc(env)->isAsyncFunction());
 
   CompactVector<bool> types;
-  for (auto i = keys.count; i > 0; --i) {
-    auto const type = env.irb->local(keys.first + i - 1, DataTypeSpecific).type;
+  for (size_t i = 0; i < keys.count; ++i) {
+    auto const type = env.irb->local(i + keys.first, DataTypeSpecific).type;
     if (type <= TStr) {
       types.emplace_back(true);
     } else if (type <= TInt) {

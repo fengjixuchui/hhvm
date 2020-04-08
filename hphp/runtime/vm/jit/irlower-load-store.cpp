@@ -47,22 +47,32 @@ TRACE_SET_MOD(irlower);
 
 void cgLdLoc(IRLS& env, const IRInstruction* inst) {
   auto const fp = srcLoc(env, inst, 0).reg();
-  auto const off = localOffset(inst->extra<LdLoc>()->locId);
-  loadTV(vmain(env), inst->dst(), dstLoc(env, inst, 0), fp[off]);
+  auto const loc = inst->extra<LdLoc>()->locId;
+  loadTV(
+    vmain(env),
+    inst->dst()->type(),
+    dstLoc(env, inst, 0),
+    ptrToLocalType(fp, loc),
+    ptrToLocalData(fp, loc)
+  );
 }
 
 void cgLdLocAddr(IRLS& env, const IRInstruction* inst) {
   auto const fp = srcLoc(env, inst, 0).reg();
-  auto const off = localOffset(inst->extra<LdLocAddr>()->locId);
-  if (dstLoc(env, inst, 0).hasReg()) {
-    vmain(env) << lea{fp[off], dstLoc(env, inst, 0).reg()};
-  }
+  auto const loc = inst->extra<LdLocAddr>()->locId;
+  lvalToLocal(vmain(env), fp, loc, dstLoc(env, inst, 0));
 }
 
 void cgStLoc(IRLS& env, const IRInstruction* inst) {
   auto const fp = srcLoc(env, inst, 0).reg();
-  auto const off = localOffset(inst->extra<StLoc>()->locId);
-  storeTV(vmain(env), fp[off], srcLoc(env, inst, 1), inst->src(1));
+  auto const loc = inst->extra<StLoc>()->locId;
+  storeTV(
+    vmain(env),
+    inst->src(1)->type(),
+    srcLoc(env, inst, 1),
+    ptrToLocalType(fp, loc),
+    ptrToLocalData(fp, loc)
+  );
 }
 
 void cgStLocRange(IRLS& env, const IRInstruction* inst) {
@@ -111,18 +121,39 @@ void cgDbgTrashFrame(IRLS& env, const IRInstruction* inst) {
 
 void cgLdLocPseudoMain(IRLS& env, const IRInstruction* inst) {
   auto const fp = srcLoc(env, inst, 0).reg();
-  auto const off = localOffset(inst->extra<LdLocPseudoMain>()->locId);
+  auto const loc = inst->extra<LdLocPseudoMain>()->locId;
   auto& v = vmain(env);
 
-  irlower::emitTypeCheck(v, env, inst->typeParam(), fp[off + TVOFF(m_type)],
-                         fp[off + TVOFF(m_data)], inst->taken());
-  loadTV(v, inst->dst(), dstLoc(env, inst, 0), fp[off]);
+  auto const typePtr = ptrToLocalType(fp, loc);
+  auto const valPtr = ptrToLocalData(fp, loc);
+
+  irlower::emitTypeCheck(
+    v,
+    env,
+    inst->typeParam(),
+    typePtr,
+    valPtr,
+    inst->taken()
+  );
+  loadTV(
+    v,
+    inst->dst()->type(),
+    dstLoc(env, inst, 0),
+    typePtr,
+    valPtr
+  );
 }
 
 void cgStLocPseudoMain(IRLS& env, const IRInstruction* inst) {
   auto const fp = srcLoc(env, inst, 0).reg();
-  auto const off = localOffset(inst->extra<StLocPseudoMain>()->locId);
-  storeTV(vmain(env), fp[off], srcLoc(env, inst, 1), inst->src(1));
+  auto const loc = inst->extra<StLocPseudoMain>()->locId;
+  storeTV(
+    vmain(env),
+    inst->src(1)->type(),
+    srcLoc(env, inst, 1),
+    ptrToLocalType(fp, loc),
+    ptrToLocalData(fp, loc)
+  );
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -323,19 +354,20 @@ void cgStMIPropState(IRLS& env, const IRInstruction* inst) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-static TypedValue* ldGblAddrHelper(const StringData* name) {
+static tv_lval ldGblAddrHelper(const StringData* name) {
   return g_context->m_globalVarEnv->lookup(name);
 }
 
 void cgLdGblAddr(IRLS& env, const IRInstruction* inst) {
-  auto const dst = dstLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0);
   auto& v = vmain(env);
 
-  cgCallHelper(v, env, CallSpec::direct(ldGblAddrHelper), callDest(dst),
+  cgCallHelper(v, env, CallSpec::direct(ldGblAddrHelper),
+               callDest(env, inst),
                SyncOptions::None, argGroup(env, inst).ssa(0));
 
   auto const sf = v.makeReg();
-  v << testq{dst, dst, sf};
+  v << testq{dst.reg(tv_lval::val_idx), dst.reg(tv_lval::val_idx), sf};
   v << jcc{CC_Z, sf, {label(env, inst->next()), label(env, inst->taken())}};
 }
 

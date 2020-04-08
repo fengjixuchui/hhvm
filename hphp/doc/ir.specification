@@ -892,7 +892,7 @@ To string conversions:
   Sets D to true iff S0 holds a value that is not of type T. T must not be a
   specialized type.
 
-| IsTypeMem<T>, D(Bool), S(PtrToCell), NF
+| IsTypeMem<T>, D(Bool), S(MemToCell), NF
 
   Sets D to true iff the value referenced by S0 is of type T. T must not be a
   specialized type.
@@ -900,7 +900,7 @@ To string conversions:
   The value in S0 must not be a pointer into the evaluation stack or frame
   locals.
 
-| IsNTypeMem<T>, D(Bool), S(PtrToCell), NF
+| IsNTypeMem<T>, D(Bool), S(MemToCell), NF
 
   Sets D to true iff the value referenced by S0 is not of type T. T must not be
   a specialized type.
@@ -1033,7 +1033,7 @@ To string conversions:
   Loads the address of the stack slot given by the pointer in S0 at the given
   stack offset (measured in cells).
 
-| LdLocAddr<localId>, D(PtrToFrameCell), S(FramePtr), NF
+| LdLocAddr<localId>, D(LvalToFrameCell), S(FramePtr), NF
 
   Loads the address of the local slot localId from the frame S0 into D.
 
@@ -1304,12 +1304,12 @@ To string conversions:
   Load the address of the object property at physical index `index`. Branch if
   the value at that address is Uninit. T must be a subtype of PtrToPropInitCell.
 
-| LdGblAddr, D(PtrToGblCell), S(Str), B
+| LdGblAddr, D(LvalToGblCell), S(Str), B
 
   Loads a pointer to a global. S0 is the global's name. Branches to B if the
   global is not defined.
 
-| LdGblAddrDef, D(PtrToGblCell), S(Str), NF
+| LdGblAddrDef, D(LvalToGblCell), S(Str), NF
 
   Loads a pointer to a global. S0 is the global's name. Defines the global if
   it is not already defined.
@@ -1733,7 +1733,7 @@ To string conversions:
   Execute a call to the native builtin specified by the current function. S0
   and S1 should be the current vmfp and vmsp, respectively.
 
-| CallBuiltin, DBuiltin, S(FramePtr) S(StkPtr) SVar(PtrToCell,Cell,Nullptr), PRc
+| CallBuiltin, DBuiltin, S(FramePtr) S(StkPtr) SVar(MemToCell,Cell,Nullptr), PRc
 
   Call builtin function with N arguments. S0 and S1 should be the current vmfp
   and vmsp, respectively.
@@ -2664,6 +2664,12 @@ To string conversions:
 | IncProfCounter<TransID>, ND, NA, NF
 
   Increment the profiling counter associated with translation TransID.
+
+| IncCallCounter, ND, S(FramePtr), NF
+
+  Increment the counter associated associated with the last call, namely from
+  the function containing the previous translation in the call stack into the
+  current function.
 
 | DbgAssertRefCount<AssertReason>, ND, S(Cell), NF
 

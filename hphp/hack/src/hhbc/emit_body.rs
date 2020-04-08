@@ -23,11 +23,13 @@ use global_state::LazyState;
 use hhas_body_rust::HhasBody;
 use hhas_param_rust::HhasParam;
 use hhas_type::Info as HhasTypeInfo;
-use hhbc_ast_rust::{Instruct, IstypeOp, ParamId};
+use hhbc_ast_rust::{FcallArgs, FcallFlags, Instruct, IstypeOp, ParamId};
+use hhbc_id_rust::function;
 use hhbc_string_utils_rust as string_utils;
 use instruction_sequence_rust::{instr, unrecoverable, Error, InstrSeq, Result};
 use label_rewriter_rust as label_rewriter;
 use naming_special_names_rust::classes;
+use ocamlrep::rc::RcOc;
 use options::CompilerFlags;
 use oxidized::{aast, ast as tast, ast_defs, doc_comment::DocComment, namespace_env, pos::Pos};
 use reified_generics_helpers as RGH;
@@ -66,7 +68,7 @@ bitflags! {
 
 pub fn emit_body_with_default_args<'a, 'b>(
     emitter: &mut Emitter,
-    namespace: &namespace_env::Env,
+    namespace: RcOc<namespace_env::Env>,
     body: &'b tast::Program,
     return_value: InstrSeq,
 ) -> Result<HhasBody<'a>> {
@@ -87,7 +89,7 @@ pub fn emit_body_with_default_args<'a, 'b>(
 
 pub fn emit_body<'a, 'b>(
     emitter: &mut Emitter,
-    namespace: &namespace_env::Env,
+    namespace: RcOc<namespace_env::Env>,
     body: &'b tast::Program,
     return_value: InstrSeq,
     args: Args<'a, '_>,
@@ -124,7 +126,7 @@ pub fn emit_body<'a, 'b>(
 
     let params = make_params(
         emitter,
-        namespace,
+        namespace.as_ref(),
         &mut tp_names,
         args.ast_params,
         args.scope,
@@ -392,20 +394,18 @@ fn make_return_type_info(
     return_type_info
 }
 
-#[allow(unused_variables)]
 pub fn make_env<'a>(
-    _namespace: &namespace_env::Env,
+    namespace: RcOc<namespace_env::Env>,
     need_local_this: bool,
     scope: Scope<'a>,
     call_context: Option<String>,
     is_rx_body: bool,
 ) -> Env<'a> {
-    let mut env = Env::default();
+    let mut env = Env::default(namespace);
+    env.call_context = call_context;
+    env.scope = scope;
     env.with_need_local_this(need_local_this);
     env.with_rx_body(is_rx_body);
-    env.scope = scope;
-    env.call_context = call_context;
-    //TODO(hrust) add namespace
     env
 }
 
@@ -536,7 +536,7 @@ fn emit_defs(env: &mut Env, emitter: &mut Emitter, prog: &[tast::Def]) -> Result
     fn aux(env: &mut Env, emitter: &mut Emitter, defs: &[tast::Def]) -> Result {
         match defs {
             [Def::SetNamespaceEnv(ns), ..] => {
-                env.namespace = (&**ns.as_ref()).clone();
+                env.namespace = RcOc::clone(&ns);
                 aux(env, emitter, &defs[1..])
             }
             [] => emit_statement::emit_dropthrough_return(emitter, env),
@@ -726,12 +726,18 @@ pub fn emit_deprecation_info(
                 instr::empty()
             } else {
                 InstrSeq::gather(vec![
+                    instr::nulluninit(),
+                    instr::nulluninit(),
+                    instr::nulluninit(),
                     trait_instrs,
                     instr::string(deprecation_string),
                     concat_instruction,
                     instr::int64(sampling_rate),
                     instr::int(error_code),
-                    instr::trigger_sampled_error(),
+                    instr::fcallfuncd(
+                        FcallArgs::new(FcallFlags::default(), 1, vec![], None, 3, None),
+                        function::from_raw_string("trigger_sampled_error"),
+                    ),
                     instr::popc(),
                 ])
             }

@@ -1164,17 +1164,6 @@ fn print_instr<W: Write>(w: &mut W, instr: &Instruct) -> Result<(), W::Error> {
                 print_fcall_args(w, &fcall_args)?;
                 w.write(r#" "" """#)
             }
-            I::FCallBuiltin(n, un, io, id) => concat_str_by(
-                w,
-                " ",
-                [
-                    "FCallBuiltin",
-                    n.to_string().as_str(),
-                    un.to_string().as_str(),
-                    io.to_string().as_str(),
-                    quote_string(id).as_str(),
-                ],
-            ),
             I::FCallClsMethod(fcall_args, is_log_as_dynamic_call) => {
                 w.write("FCallClsMethod ")?;
                 print_fcall_args(w, fcall_args)?;
@@ -2388,6 +2377,19 @@ fn print_expr_string<W: Write>(w: &mut W, s: &String) -> Result<(), W::Error> {
     wrap_by(w, "\\\"", |w| w.write(escape_by(s.into(), escape_char)))
 }
 
+fn print_expr_to_string<W: Write>(
+    ctx: &mut Context,
+    env: &ExprEnv,
+    expr: &ast::Expr,
+) -> Result<String, W::Error> {
+    let mut buf = String::new();
+    print_expr(ctx, &mut buf, env, expr).map_err(|e| match e {
+        Error::NotImpl(m) => Error::NotImpl(m),
+        _ => Error::Fail(format!("Failed: {}", e)),
+    })?;
+    Ok(buf)
+}
+
 fn print_expr<W: Write>(
     ctx: &mut Context,
     w: &mut W,
@@ -2584,8 +2586,7 @@ fn print_expr<W: Write>(
                     w.write(lstrip(adjust_id(env, &call_id).as_ref(), "\\\\"))?
                 }
                 None => {
-                    let mut buf = String::new();
-                    print_expr(ctx, &mut buf, env, e).map_err(|e| Error::Fail(format!("{}", e)) )?;
+                    let buf = print_expr_to_string::<W>(ctx, env, e)?;
                     w.write(lstrip(&buf, "\\\\"))?
                 }
             };
@@ -2609,8 +2610,7 @@ fn print_expr<W: Write>(
                             w.write(lstrip(&adjust_id(env, &class::Type::from_ast_name(cname).to_raw_string().into()), "\\\\"))?
                         }
                         None => {
-                            let mut buf = String::new();
-                            print_expr(ctx, &mut buf, env, ci_expr).map_err(|e| Error::Fail(format!("{}", e)) )?;
+                            let buf = print_expr_to_string::<W>(ctx, env, ci_expr)?;
                             w.write(lstrip(&buf, "\\\\"))?
                         }
                     }
