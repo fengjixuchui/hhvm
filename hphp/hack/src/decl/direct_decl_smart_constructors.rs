@@ -458,7 +458,7 @@ pub struct PropertyDecl {
     modifiers: Node_,
     hint: Node_,
     id: Id,
-    expr: Option<Box<nast::Expr>>,
+    needs_init: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -506,10 +506,18 @@ pub struct NamespaceUseClause {
 #[derive(Clone, Debug)]
 pub struct TypeConstant {
     id: Id,
-    constraints: Vec<Node_>,
+    constraint: Node_,
     type_: Node_,
-    abstract_: bool,
+    abstract_: TypeconstAbstractKind,
     reified: Option<Pos>,
+    enforceable: Option<Pos>,
+}
+
+#[derive(Clone, Debug)]
+pub enum TypeconstAbstractKind {
+    TCAbstract(Option<Node_>),
+    TCPartiallyAbstract,
+    TCConcrete,
 }
 
 #[derive(Clone, Debug)]
@@ -544,6 +552,7 @@ pub enum OperatorType {
     Xor,
     Cmp,
     QuestionQuestion,
+    Assignment,
 }
 
 #[derive(Clone, Debug)]
@@ -570,7 +579,7 @@ pub enum Node_ {
     Attribute(Box<Attribute>),
     FunctionHeader(Box<FunctionHeader>),
     Function(Box<FunctionDecl>),
-    Property(Box<PropertyDecl>),
+    Property(Vec<PropertyDecl>),
     TraitUse(Box<Node_>),
     TypeConstant(Box<TypeConstant>),
     RequireClause(Box<RequireClause>),
@@ -605,6 +614,7 @@ pub enum Node_ {
     Implements,
     Inout,
     Interface,
+    Newtype,
     Private,
     Protected,
     Public,
@@ -613,6 +623,7 @@ pub enum Node_ {
     Static,
     Super,
     Trait,
+    Type,
     XHP,
     Yield,
 }
@@ -752,6 +763,7 @@ impl Node_ {
             memoizelsb: false,
             override_: false,
             at_most_rx_as_func: false,
+            enforceable: None,
         };
 
         let mut reactivity_condition_type = None;
@@ -835,6 +847,9 @@ impl Node_ {
                     "__AtMostRxAsFunc" => {
                         attributes.at_most_rx_as_func = true;
                     }
+                    "__Enforceable" => {
+                        attributes.enforceable = Some(attribute.id.0.clone());
+                    }
                     _ => (),
                 }
             } else {
@@ -867,6 +882,7 @@ struct Attributes {
     memoizelsb: bool,
     override_: bool,
     at_most_rx_as_func: bool,
+    enforceable: Option<Pos>,
 }
 
 impl DirectDeclSmartConstructors<'_> {
@@ -1049,9 +1065,7 @@ impl DirectDeclSmartConstructors<'_> {
                                         enforced: false,
                                         type_: self.node_to_ty(node, type_variables)?,
                                     },
-                                    kind: ParamMode::FPnormal,
-                                    accept_disposable: false,
-                                    mutability: None,
+                                    flags: 0,
                                     rx_annotation: None,
                                 })
                             })
@@ -1324,7 +1338,7 @@ impl DirectDeclSmartConstructors<'_> {
                                 modifiers: visibility.clone(),
                                 hint: hint.clone(),
                                 id: id.clone(),
-                                expr: None,
+                                needs_init: true,
                             }),
                             Err(_) => (),
                         };
@@ -1342,6 +1356,24 @@ impl DirectDeclSmartConstructors<'_> {
                                 ty
                             })?,
                         };
+                        let mut flags = match attributes.param_mutability {
+                            Some(ParamMutability::ParamBorrowedMutable) => {
+                                typing_defs_flags::MUTABLE_FLAGS_BORROWED
+                            }
+                            Some(ParamMutability::ParamOwnedMutable) => {
+                                typing_defs_flags::MUTABLE_FLAGS_OWNED
+                            }
+                            Some(ParamMutability::ParamMaybeMutable) => {
+                                typing_defs_flags::MUTABLE_FLAGS_MAYBE
+                            }
+                            None => 0,
+                        };
+                        match kind {
+                            ParamMode::FPinout => {
+                                flags |= typing_defs_flags::FP_FLAGS_INOUT;
+                            }
+                            ParamMode::FPnormal => {}
+                        };
                         let param = FunParam {
                             pos: id.0,
                             name: Some(id.1),
@@ -1349,9 +1381,7 @@ impl DirectDeclSmartConstructors<'_> {
                                 enforced: false,
                                 type_,
                             },
-                            kind,
-                            accept_disposable: false,
-                            mutability: attributes.param_mutability,
+                            flags,
                             rx_annotation: None,
                         };
                         let arity = match (arity, initializer, variadic) {
@@ -1676,6 +1706,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             TokenKind::QuestionQuestion => {
                 Node_::Operator(token_pos(self), OperatorType::QuestionQuestion)
             }
+            TokenKind::Equal => Node_::Operator(token_pos(self), OperatorType::Assignment),
             TokenKind::Abstract => Node_::Abstract,
             TokenKind::As => Node_::As,
             TokenKind::Super => Node_::Super,
@@ -1687,6 +1718,8 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             TokenKind::Implements => Node_::Implements,
             TokenKind::Inout => Node_::Inout,
             TokenKind::Interface => Node_::Interface,
+            TokenKind::Newtype => Node_::Newtype,
+            TokenKind::Type => Node_::Type,
             TokenKind::XHP => Node_::XHP,
             TokenKind::Yield => Node_::Yield,
             TokenKind::Namespace => {
@@ -1763,8 +1796,15 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         arg0
     }
 
-    fn make_simple_initializer(&mut self, _arg0: Self::R, expr: Self::R) -> Self::R {
-        expr
+    fn make_simple_initializer(&mut self, equals: Self::R, expr: Self::R) -> Self::R {
+        // If the expr is Ignored, bubble up the assignment operator so that we
+        // can tell that *some* initializer was here. Useful for class
+        // properties, where we need to enforce that properties without default
+        // values are initialized in the constructor.
+        match expr? {
+            Node_::Ignored => equals,
+            expr => Ok(expr),
+        }
     }
 
     fn make_array_intrinsic_expression(
@@ -2057,10 +2097,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
     fn make_alias_declaration(
         &mut self,
         _attributes: Self::R,
-        _keyword: Self::R,
+        keyword: Self::R,
         name: Self::R,
         generic_params: Self::R,
-        _constraint: Self::R,
+        constraint: Self::R,
         _equal: Self::R,
         aliased_type: Self::R,
         _semicolon: Self::R,
@@ -2072,26 +2112,33 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 let Id(pos, name) =
                     get_name(self.state.namespace_builder.current_namespace(), &name)?;
                 let (tparams, type_variables) = self.into_type_params(generic_params?)?;
-                match self.node_to_ty(&aliased_type, &type_variables) {
-                    Ok(ty) => {
-                        Rc::make_mut(&mut self.state.decls).typedefs.insert(
-                            name,
-                            Rc::new(TypedefType {
-                                pos,
-                                vis: aast::TypedefVisibility::Transparent,
-                                tparams,
-                                constraint: None,
-                                type_: ty,
-                                // NB: We have no intention of populating this
-                                // field. Any errors historically emitted during
-                                // shallow decl should be migrated to a NAST
-                                // check.
-                                decl_errors: Some(Errors::empty()),
-                            }),
-                        );
-                    }
-                    Err(msg) => return Err(msg),
-                }
+                let ty = self.node_to_ty(&aliased_type, &type_variables)?;
+                let typedef = TypedefType {
+                    pos,
+                    vis: match keyword? {
+                        Node_::Type => aast::TypedefVisibility::Transparent,
+                        Node_::Newtype => aast::TypedefVisibility::Opaque,
+                        _ => aast::TypedefVisibility::Transparent,
+                    },
+                    tparams,
+                    constraint: match constraint? {
+                        Node_::TypeConstraint(kind_and_hint) => {
+                            let (_kind, hint) = *kind_and_hint;
+                            Some(self.node_to_ty(&hint, &type_variables)?)
+                        }
+                        _ => None,
+                    },
+                    type_: ty,
+                    // NB: We have no intention of populating this
+                    // field. Any errors historically emitted during
+                    // shallow decl should be migrated to a NAST
+                    // check.
+                    decl_errors: Some(Errors::empty()),
+                };
+
+                Rc::make_mut(&mut self.state.decls)
+                    .typedefs
+                    .insert(name, Rc::new(typedef));
             }
         };
         Ok(Node_::Ignored)
@@ -2320,12 +2367,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         })
     }
 
-    fn make_namespace_declaration(
-        &mut self,
-        _keyword: Self::R,
-        _name: Self::R,
-        _body: Self::R,
-    ) -> Self::R {
+    fn make_namespace_declaration(&mut self, _header: Self::R, _body: Self::R) -> Self::R {
         Rc::make_mut(&mut self.state.namespace_builder).pop_namespace();
         Ok(Node_::Ignored)
     }
@@ -2553,7 +2595,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 lateinit: attributes.late_init,
                 lsb: attributes.lsb,
                 name: Id(pos, name),
-                needs_init: decl.expr.is_none(),
+                needs_init: decl.needs_init,
                 type_: Some(ty),
                 abstract_: modifiers.is_abstract,
                 visibility: modifiers.visibility,
@@ -2578,25 +2620,37 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                         }
                         Node_::TypeConstant(constant) => {
                             cls.typeconsts.push(shallow_decl_defs::ShallowTypeconst {
-                                abstract_: if constant.abstract_ {
-                                    typing_defs::TypeconstAbstractKind::TCAbstract(None)
-                                } else {
-                                    typing_defs::TypeconstAbstractKind::TCConcrete
-                                },
-                                constraint: constant.constraints.first().and_then(|constraint| {
-                                    match constraint {
-                                        Node_::TypeConstraint(innards) => {
-                                            self.node_to_ty(&innards.1, &type_variables).ok()
-                                        }
-                                        _ => None,
+                                abstract_: match constant.abstract_ {
+                                    TypeconstAbstractKind::TCAbstract(Some(ty)) => {
+                                        typing_defs::TypeconstAbstractKind::TCAbstract(Some(
+                                            self.node_to_ty(&ty, &type_variables)?,
+                                        ))
                                     }
-                                }),
+                                    TypeconstAbstractKind::TCAbstract(None) => {
+                                        typing_defs::TypeconstAbstractKind::TCAbstract(None)
+                                    }
+                                    TypeconstAbstractKind::TCPartiallyAbstract => {
+                                        typing_defs::TypeconstAbstractKind::TCPartiallyAbstract
+                                    }
+                                    TypeconstAbstractKind::TCConcrete => {
+                                        typing_defs::TypeconstAbstractKind::TCConcrete
+                                    }
+                                },
+                                constraint: match constant.constraint {
+                                    Node_::TypeConstraint(innards) => {
+                                        self.node_to_ty(&innards.1, &type_variables).ok()
+                                    }
+                                    _ => None,
+                                },
                                 name: constant.id,
                                 type_: match self.node_to_ty(&constant.type_, &type_variables) {
                                     Ok(ty) => Some(ty),
                                     Err(_) => None,
                                 },
-                                enforceable: (Pos::make_none(), false),
+                                enforceable: match constant.enforceable {
+                                    Some(pos) => (pos, true),
+                                    None => (Pos::make_none(), false),
+                                },
                                 reifiable: constant.reified,
                             })
                         }
@@ -2618,8 +2672,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                                 type_: decl.ty,
                             })
                         }
-                        Node_::Property(decl) => {
-                            handle_property(self, &mut cls, *decl, &type_variables)?
+                        Node_::Property(decls) => {
+                            for decl in decls {
+                                handle_property(self, &mut cls, decl, &type_variables)?
+                            }
                         }
                         Node_::Function(decl) => {
                             let modifiers = read_member_modifiers(decl.header.modifiers.iter());
@@ -2720,44 +2776,42 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         attrs: Self::R,
         modifiers: Self::R,
         hint: Self::R,
-        declarator: Self::R,
+        declarators: Self::R,
         _arg4: Self::R,
     ) -> Self::R {
         // Sometimes the declarator is a single element list.
-        let declarator = match declarator? {
-            Node_::List(nodes) => nodes
-                .first()
-                .ok_or("Expected a declarator, but was given an empty list.".to_owned())?
-                .clone(),
-            declarator => declarator,
+        let declarators = match declarators? {
+            Node_::List(nodes) => nodes,
+            node => return Err(format!("Expected a List, but got {:?}", node)),
         };
-        match declarator {
-            Node_::ListItem(innards) => {
-                let (name, initializer) = *innards;
-                let name = match name {
-                    Node_::List(nodes) => nodes
-                        .first()
-                        .ok_or("Expected a name, but was given an empty list.".to_owned())?
-                        .clone(),
-                    name => name,
-                };
-                Ok(Node_::Property(Box::new(PropertyDecl {
-                    attrs: attrs?,
-                    modifiers: modifiers?,
-                    hint: match hint? {
-                        Node_::Ignored => initializer.clone(),
-                        hint => hint,
-                    },
-                    id: get_name("", &name)?,
-                    expr: match initializer {
-                        Node_::Expr(e) => Some(Box::new(*e)),
-                        Node_::Ignored => None,
-                        n => n.as_expr().ok().map(Box::new),
-                    },
-                })))
-            }
-            n => Err(format!("Expected a ListItem, but was {:?}", n)),
-        }
+        let attrs = attrs?;
+        let modifiers = modifiers?;
+        let hint = hint?;
+        Ok(Node_::Property(
+            declarators
+                .into_iter()
+                .map(|declarator| match declarator {
+                    Node_::ListItem(innards) => {
+                        let (name, initializer) = *innards;
+                        let needs_init = match initializer {
+                            Node_::Ignored => true,
+                            _ => false,
+                        };
+                        Ok(PropertyDecl {
+                            attrs: attrs.clone(),
+                            modifiers: modifiers.clone(),
+                            hint: match &hint {
+                                Node_::Ignored => initializer,
+                                hint => hint.clone(),
+                            },
+                            id: get_name("", &name)?,
+                            needs_init,
+                        })
+                    }
+                    n => Err(format!("Expected a ListItem, but was {:?}", n)),
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ))
     }
 
     fn make_property_declarator(&mut self, name: Self::R, initializer: Self::R) -> Self::R {
@@ -3205,23 +3259,52 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         _arg3: Self::R,
         name: Self::R,
         _arg5: Self::R,
-        constraints: Self::R,
+        constraint: Self::R,
         _arg7: Self::R,
         type_: Self::R,
-        _arg9: Self::R,
+        _semicolon: Self::R,
     ) -> Self::R {
         let attributes = attributes?.as_attributes()?;
-        let abstract_ = modifiers?.iter().fold(false, |abstract_, node| match node {
+        let has_abstract_keyword = modifiers?.iter().fold(false, |abstract_, node| match node {
             Node_::Abstract => true,
             _ => abstract_,
         });
+        let constraint = constraint?;
+        let type_ = type_?;
+        let has_constraint = !constraint.is_ignored();
+        let has_type = !type_.is_ignored();
+        let (type_, abstract_) = match (has_abstract_keyword, has_constraint, has_type) {
+            // Has no assigned type. Technically illegal, so if the constraint
+            // is present, proceed as if the constraint was the assigned type.
+            //     const type TFoo;
+            //     const type TFoo as OtherType;
+            (false, _, false) => (constraint.clone(), TypeconstAbstractKind::TCConcrete),
+            // Has no constraint, but does have an assigned type.
+            //     const type TFoo = SomeType;
+            (false, false, true) => (type_, TypeconstAbstractKind::TCConcrete),
+            // Has both a constraint and an assigned type.
+            //     const type TFoo as OtherType = SomeType;
+            (false, true, true) => (type_, TypeconstAbstractKind::TCPartiallyAbstract),
+            // Has no default type.
+            //     abstract const type TFoo;
+            //     abstract const type TFoo as OtherType;
+            (true, _, false) => (type_.clone(), TypeconstAbstractKind::TCAbstract(None)),
+            // Has a default type.
+            //     abstract const Type TFoo = SomeType;
+            //     abstract const Type TFoo as OtherType = SomeType;
+            (true, _, true) => (
+                Node_::Ignored,
+                TypeconstAbstractKind::TCAbstract(Some(type_)),
+            ),
+        };
         let id = get_name("", &name?)?;
         Ok(Node_::TypeConstant(Box::new(TypeConstant {
             id,
-            constraints: constraints?.into_vec(),
-            type_: type_?,
+            constraint,
+            type_,
             abstract_,
             reified: attributes.reifiable,
+            enforceable: attributes.enforceable,
         })))
     }
 

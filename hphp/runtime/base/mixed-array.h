@@ -332,8 +332,8 @@ public:
   }
   static bool ExistsInt(const ArrayData*, int64_t k);
   static bool ExistsStr(const ArrayData*, const StringData* k);
-  static arr_lval LvalInt(ArrayData* ad, int64_t k, bool copy);
-  static arr_lval LvalStr(ArrayData* ad, StringData* k, bool copy);
+  static arr_lval LvalInt(ArrayData* ad, int64_t k);
+  static arr_lval LvalStr(ArrayData* ad, StringData* k);
   static ArrayData* SetInt(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetIntMove(ArrayData*, int64_t k, TypedValue v);
   static ArrayData* SetStr(ArrayData*, StringData* k, TypedValue v);
@@ -615,7 +615,7 @@ private:
   ArrayData* addVal(StringData* key, TypedValue data);
   ArrayData* addValNoAsserts(StringData* key, TypedValue data);
 
-  template <bool warn, class K> arr_lval addLvalImpl(K k);
+  template <class K> arr_lval addLvalImpl(K k);
   // If "move" is false, this method will inc-ref data.
   template <class K, bool move = false> ArrayData* update(K k, TypedValue data);
 

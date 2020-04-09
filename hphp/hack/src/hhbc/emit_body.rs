@@ -6,6 +6,7 @@ mod emit_statement;
 mod reified_generics_helpers;
 mod try_finally_rewriter;
 
+use ast_body::AstBody;
 use ast_scope_rust::{Scope, ScopeItem};
 use decl_vars_rust as decl_vars;
 use emit_adata_rust as emit_adata;
@@ -13,6 +14,7 @@ use emit_expression_rust as emit_expression;
 use emit_fatal_rust::raise_fatal_runtime;
 use emit_param_rust as emit_param;
 use emit_pos_rust::{emit_pos, emit_pos_then};
+use emit_statement::emit_final_stmts;
 use emit_type_hint_rust as emit_type_hint;
 use env::{
     emitter::{Context, Emitter},
@@ -37,15 +39,16 @@ use runtime::TypedValue;
 
 use bitflags::bitflags;
 use indexmap::IndexSet;
+use itertools::Either;
 
 static THIS: &'static str = "$this";
 
 /// Optional arguments for emit_body; use Args::default() for defaults
 pub struct Args<'a, 'b> {
     pub immediate_tparams: &'b Vec<tast::Tparam>,
+    pub class_tparam_names: &'b [&'b str],
     pub ast_params: &'b Vec<tast::FunParam>,
     pub ret: Option<&'a tast::Hint>,
-    pub scope: &'b Scope<'a>,
     pub pos: &'b Pos,
     pub deprecation_info: &'b Option<&'b [TypedValue]>,
     pub doc_comment: Option<DocComment>,
@@ -74,9 +77,9 @@ pub fn emit_body_with_default_args<'a, 'b>(
 ) -> Result<HhasBody<'a>> {
     let args = Args {
         immediate_tparams: &vec![],
+        class_tparam_names: &vec![],
         ast_params: &vec![],
         ret: None,
-        scope: &Scope::toplevel(),
         pos: &Pos::make_none(),
         deprecation_info: &None,
         doc_comment: None,
@@ -84,29 +87,33 @@ pub fn emit_body_with_default_args<'a, 'b>(
         call_context: None,
         flags: Flags::empty(),
     };
-    emit_body(emitter, namespace, body, return_value, args).map(|r| r.0)
+    emit_body(
+        emitter,
+        namespace,
+        Either::Left(body),
+        return_value,
+        Scope::toplevel(),
+        args,
+    )
+    .map(|r| r.0)
 }
 
 pub fn emit_body<'a, 'b>(
     emitter: &mut Emitter,
     namespace: RcOc<namespace_env::Env>,
-    body: &'b tast::Program,
+    body: AstBody<'b>,
     return_value: InstrSeq,
+    scope: Scope<'a>,
     args: Args<'a, '_>,
 ) -> Result<(HhasBody<'a>, bool, bool)> {
     if args.flags.contains(Flags::ASYNC)
         && args.flags.contains(Flags::SKIP_AWAITABLE)
         && args.ret.map_or(false, |hint| !is_awaitable(&hint))
     {
-        report_error(
-            args.flags.contains(Flags::CLOSURE_BODY),
-            args.scope,
-            args.pos,
-        )?
+        report_error(args.flags.contains(Flags::CLOSURE_BODY), &scope, args.pos)?
     };
 
-    let tparams = args
-        .scope
+    let tparams = scope
         .get_tparams()
         .into_iter()
         .map(|tp| tp.clone())
@@ -129,18 +136,21 @@ pub fn emit_body<'a, 'b>(
         namespace.as_ref(),
         &mut tp_names,
         args.ast_params,
-        args.scope,
+        &scope,
         args.flags,
     )?;
 
     let upper_bounds = make_upper_bounds(
         emitter,
         args.immediate_tparams,
+        args.class_tparam_names,
         args.flags.contains(Flags::SKIP_AWAITABLE),
     );
+    let shadowed_tparams =
+        make_shadowed_tparams(emitter, args.immediate_tparams, args.class_tparam_names);
     let (need_local_this, decl_vars) = make_decl_vars(
         emitter,
-        args.scope,
+        &scope,
         args.immediate_tparams,
         &params,
         &body,
@@ -149,8 +159,7 @@ pub fn emit_body<'a, 'b>(
     let mut env = make_env(
         namespace,
         need_local_this,
-        // TODO(hrust): avoid clone here.
-        args.scope.clone(),
+        scope,
         args.call_context,
         args.flags.contains(Flags::RX_BODY),
     );
@@ -180,7 +189,7 @@ pub fn emit_body<'a, 'b>(
         &params,
         &tparams,
         &decl_vars,
-        &body,
+        body,
         need_local_this,
         is_generator,
         args.deprecation_info.clone(),
@@ -196,6 +205,7 @@ pub fn emit_body<'a, 'b>(
             false, // is_memoize_wrapper
             false, // is_memoize_wrapper_lsb
             upper_bounds,
+            shadowed_tparams,
             params,
             Some(return_type_info),
             args.doc_comment.to_owned(),
@@ -212,7 +222,7 @@ fn make_body_instrs(
     params: &[HhasParam],
     tparams: &[tast::Tparam],
     decl_vars: &[String],
-    body: &tast::Program,
+    body: AstBody,
     need_local_this: bool,
     is_generator: bool,
     deprecation_info: Option<&[TypedValue]>,
@@ -223,7 +233,7 @@ fn make_body_instrs(
     let stmt_instrs = if flags.contains(Flags::NATIVE) {
         instr::nativeimpl()
     } else {
-        env.do_function(emitter, body, emit_defs)?
+        env.do_function(emitter, &body, emit_ast_body)?
     };
 
     let (begin_label, default_value_setters) = emit_param::emit_param_default_value_setter(
@@ -315,7 +325,7 @@ fn make_decl_vars(
     scope: &Scope,
     immediate_tparams: &[tast::Tparam],
     params: &[HhasParam],
-    body: &tast::Program,
+    body: &AstBody,
     arg_flags: Flags,
 ) -> Result<(bool, Vec<String>)> {
     let mut flags = decl_vars::Flags::empty();
@@ -412,6 +422,7 @@ pub fn make_env<'a>(
 fn make_upper_bounds(
     emitter: &mut Emitter,
     immediate_tparams: &[tast::Tparam],
+    class_tparam_names: &[&str],
     skip_awaitable: bool,
 ) -> Vec<(String, Vec<HhasTypeInfo>)> {
     if emitter
@@ -419,7 +430,23 @@ fn make_upper_bounds(
         .hack_compiler_flags
         .contains(CompilerFlags::EMIT_GENERICS_UB)
     {
-        emit_generics_upper_bounds(immediate_tparams, skip_awaitable)
+        emit_generics_upper_bounds(immediate_tparams, class_tparam_names, skip_awaitable)
+    } else {
+        vec![]
+    }
+}
+
+fn make_shadowed_tparams(
+    emitter: &mut Emitter,
+    immediate_tparams: &[tast::Tparam],
+    class_tparam_names: &[&str],
+) -> Vec<String> {
+    if emitter
+        .options()
+        .hack_compiler_flags
+        .contains(CompilerFlags::EMIT_GENERICS_UB)
+    {
+        emit_shadowed_tparams(immediate_tparams, class_tparam_names)
     } else {
         vec![]
     }
@@ -451,6 +478,7 @@ pub fn make_body<'a>(
     is_memoize_wrapper: bool,
     is_memoize_wrapper_lsb: bool,
     upper_bounds: Vec<(String, Vec<HhasTypeInfo>)>,
+    shadowed_tparams: Vec<String>,
     mut params: Vec<HhasParam>,
     return_type_info: Option<HhasTypeInfo>,
     doc_comment: Option<DocComment>,
@@ -477,11 +505,19 @@ pub fn make_body<'a>(
         is_memoize_wrapper,
         is_memoize_wrapper_lsb,
         upper_bounds,
+        shadowed_tparams,
         params,
         return_type_info,
         doc_comment,
         env,
     })
+}
+
+fn emit_ast_body(env: &mut Env, e: &mut Emitter, body: &AstBody) -> Result {
+    match body {
+        Either::Left(p) => emit_defs(env, e, p),
+        Either::Right(b) => emit_final_stmts(e, env, b),
+    }
 }
 
 fn emit_defs(env: &mut Env, emitter: &mut Emitter, prog: &[tast::Def]) -> Result {
@@ -820,16 +856,19 @@ fn emit_verify_out(params: &[HhasParam]) -> (usize, InstrSeq) {
 }
 
 pub fn emit_generics_upper_bounds(
-    tparams: &[tast::Tparam],
+    immediate_tparams: &[tast::Tparam],
+    class_tparam_names: &[&str],
     skip_awaitable: bool,
 ) -> Vec<(String, Vec<HhasTypeInfo>)> {
     let constraint_filter = |(kind, hint): &(ast_defs::ConstraintKind, tast::Hint)| {
         if let ast_defs::ConstraintKind::ConstraintAs = &kind {
+            let mut tparam_names = get_tp_names(immediate_tparams);
+            tparam_names.extend_from_slice(class_tparam_names);
             emit_type_hint::hint_to_type_info(
                 &emit_type_hint::Kind::UpperBound,
                 skip_awaitable,
                 false, // nullable
-                get_tp_names(tparams).as_slice(),
+                &tparam_names,
                 &hint,
             )
             .ok() //TODO(hrust) propagate Err result
@@ -848,7 +887,25 @@ pub fn emit_generics_upper_bounds(
             _ => Some((get_tp_name(tparam).to_owned(), ubs)),
         }
     };
-    tparams.iter().filter_map(tparam_filter).collect::<Vec<_>>()
+    immediate_tparams
+        .iter()
+        .filter_map(tparam_filter)
+        .collect::<Vec<_>>()
+}
+
+fn emit_shadowed_tparams(
+    immediate_tparams: &[tast::Tparam],
+    class_tparam_names: &[&str],
+) -> Vec<String> {
+    use itertools::Itertools;
+    let mut shadowed_tparams = get_tp_names(immediate_tparams);
+    shadowed_tparams.extend_from_slice(class_tparam_names);
+    shadowed_tparams
+        .into_iter()
+        .map(|s| s.into())
+        .into_iter()
+        .unique()
+        .collect()
 }
 
 fn move_this(vars: &mut Vec<String>) {
