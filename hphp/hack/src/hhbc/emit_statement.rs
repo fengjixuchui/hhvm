@@ -431,13 +431,8 @@ fn emit_awaitall_multi(
                 .map(|l| instr::popl(l.clone()))
                 .collect(),
         );
-        let unset_locals = InstrSeq::gather(
-            locals
-                .iter()
-                .rev()
-                .map(|l| instr::unsetl(l.clone()))
-                .collect(),
-        );
+        let unset_locals =
+            InstrSeq::gather(locals.iter().map(|l| instr::unsetl(l.clone())).collect());
         let unpack = InstrSeq::gather(
             locals
                 .iter()
@@ -449,7 +444,7 @@ fn emit_awaitall_multi(
                         instr::istypec(IstypeOp::OpNull),
                         instr::jmpnz(label_done.clone()),
                         instr::whresult(),
-                        instr::jmpnz(label_done),
+                        instr::label(label_done),
                         instr::popl(l.clone()),
                     ])
                 })
@@ -690,7 +685,10 @@ fn emit_switch(
                     res.push(Ok((
                         (
                             instr::empty(),
-                            emit_pos_then(pos, instr::throw_non_exhaustive_switch()),
+                            InstrSeq::gather(vec![
+                                instr::label(l.clone()),
+                                emit_pos_then(pos, instr::throw_non_exhaustive_switch()),
+                            ]),
                         ),
                         Some(l),
                     )))

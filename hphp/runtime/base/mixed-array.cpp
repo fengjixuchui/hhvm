@@ -17,7 +17,6 @@
 #include "hphp/runtime/base/mixed-array.h"
 
 #include "hphp/runtime/base/apc-array.h"
-#include "hphp/runtime/base/apc-local-array.h"
 #include "hphp/runtime/base/apc-stats.h"
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/array-helpers.h"
@@ -619,7 +618,7 @@ ArrayData* MixedArray::MakeUncounted(ArrayData* array,
 }
 
 ArrayData* MixedArray::MakeDictFromAPC(const APCArray* apc) {
-  assertx(apc->isDict());
+  assertx(apc->isHashed());
   auto const apcSize = apc->size();
   DictInit init{apcSize};
   for (uint32_t i = 0; i < apcSize; ++i) {

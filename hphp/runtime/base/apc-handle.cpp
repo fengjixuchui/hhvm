@@ -23,8 +23,6 @@
 #include "hphp/runtime/base/apc-named-entity.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/ext/apc/ext_apc.h"
-#include "hphp/runtime/base/apc-local-array.h"
-#include "hphp/runtime/base/apc-local-array-defs.h"
 #include "hphp/runtime/vm/class-meth-data-ref.h"
 
 namespace HPHP {
@@ -226,7 +224,7 @@ Variant APCHandle::toLocalHelper() const {
     case APCKind::SharedArray:
     case APCKind::SharedPackedArray:
       return Variant::attach(
-        APCLocalArray::Make(APCArray::fromHandle(this))->asArrayData()
+        APCArray::fromHandle(this)->toLocalArray()
       );
     case APCKind::SharedVArray:
       assertx(!RuntimeOption::EvalHackArrDVArrs);
