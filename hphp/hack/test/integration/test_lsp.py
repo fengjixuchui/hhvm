@@ -3417,6 +3417,8 @@ class TestLsp(TestCase[LspTestDriver]):
                 },
                 result=None,
             )
+        if not supports_status:
+            spec = spec.ignore_status_diagnostics(True)
         return spec
 
     def test_serverless_ide_type_definition(self) -> None:
@@ -5142,12 +5144,14 @@ function unsaved_bar(): string { return "hello"; }
                 use_serverless_ide=True,
                 supports_status=True,
             )
+            .ignore_notifications(method="textDocument/publishDiagnostics")
             .ignore_requests(
+                comment="Ignore 'initializing...' messages since they're racy",
                 method="window/showStatus",
                 params={
-                    "type": 1,
+                    "type": 2,
                     "actions": [{"title": "Restart hh_server"}],
-                    "message": "Hack IDE: initializing. hh_server: stopped.",
+                    "message": "Hack IDE: initializing.\nhh_server: stopped.",
                     "shortMessage": "Hack: initializing",
                 },
             )
@@ -5155,9 +5159,9 @@ function unsaved_bar(): string { return "hello"; }
                 method="window/showStatus",
                 params={
                     "actions": [{"title": "Restart hh_server"}],
-                    "message": "Hack IDE: ready. hh_server: stopped.",
-                    "shortMessage": "Hack ✓",
-                    "type": 1,
+                    "message": "Hack IDE: ready.\nhh_server: stopped.",
+                    "shortMessage": "Hack",
+                    "type": 3,
                 },
                 result=NoResponse(),
             )
@@ -5204,11 +5208,10 @@ function unsaved_bar(): string { return "hello"; }
                 method="window/showStatus",
                 params={
                     "actions": [
-                        {"title": "Restart hh_server"},
                         {"title": "Restart Hack IDE"},
+                        {"title": "Restart hh_server"},
                     ],
-                    "message": "Hack IDE has failed. "
-                    + "See Output>Hack for details. hh_server: stopped.",
+                    "message": "Hack IDE has failed. See Output›Hack for details.\nhh_server: stopped.",
                     "shortMessage": "Hack: failed",
                     "type": 1,
                 },
@@ -5218,11 +5221,11 @@ function unsaved_bar(): string { return "hello"; }
                 method="window/showStatus",
                 params={
                     "actions": [{"title": "Restart hh_server"}],
-                    "message": "Hack IDE: ready. hh_server: stopped.",
-                    "shortMessage": "Hack ✓",
-                    "type": 1,
+                    "message": "Hack IDE: ready.\nhh_server: stopped.",
+                    "shortMessage": "Hack",
+                    "type": 3,
                 },
-                result=None,
+                result=NoResponse(),
             )
             .request(
                 line=line(),
@@ -5592,6 +5595,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
             .wait_for_server_request(
                 method="window/showStatus",
                 params={
+                    "shortMessage": "Hack: stopped",
                     "message": "hh_server: stopped.",
                     "actions": [{"title": "Restart hh_server"}],
                     "type": 1,
@@ -5612,6 +5616,16 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 LspTestSpec("status_running"),
                 use_serverless_ide=False,
                 supports_status=True,
+            )
+            .ignore_requests(
+                comment="Ignore initializing... requests since they're racy",
+                method="window/showStatus",
+                params={
+                    "type": 2,
+                    "shortMessage": "Hack: initializing",
+                    "message": "hh_server initializing: processing [<test> seconds]",
+                    "actions": [],
+                },
             )
             .wait_for_server_request(
                 method="window/showStatus",
@@ -5635,21 +5649,22 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 supports_status=True,
             )
             .ignore_requests(
+                comment="ignore initializing... messages since they're kind of racy",
                 method="window/showStatus",
                 params={
-                    "type": 1,
+                    "type": 2,
                     "actions": [{"title": "Restart hh_server"}],
-                    "message": "Hack IDE: initializing. hh_server: stopped.",
+                    "message": "Hack IDE: initializing.\nhh_server: stopped.",
                     "shortMessage": "Hack: initializing",
                 },
             )
             .wait_for_server_request(
                 method="window/showStatus",
                 params={
-                    "message": "Hack IDE: ready. hh_server: stopped.",
-                    "shortMessage": "Hack ✓",
+                    "message": "Hack IDE: ready.\nhh_server: stopped.",
+                    "shortMessage": "Hack",
                     "actions": [{"title": "Restart hh_server"}],
-                    "type": 1,
+                    "type": 3,
                 },
                 result=NoResponse(),
             )
@@ -5669,11 +5684,22 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 supports_status=True,
             )
             .ignore_requests(
+                comment="Ignore initializing messages since they're racy",
                 method="window/showStatus",
                 params={
                     "type": 2,
                     "actions": [],
-                    "message": "Hack IDE: initializing. hh_server: ready.",
+                    "message": "Hack IDE: initializing.\nhh_server initializing: processing [<test> seconds]",
+                    "shortMessage": "Hack: initializing",
+                },
+            )
+            .ignore_requests(
+                comment="Another form of initializing to ignore",
+                method="window/showStatus",
+                params={
+                    "type": 2,
+                    "actions": [],
+                    "message": "Hack IDE: initializing.\nhh_server: ready.",
                     "shortMessage": "Hack: initializing",
                 },
             )
@@ -5681,8 +5707,8 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 method="window/showStatus",
                 params={
                     "actions": [],
-                    "message": "Hack IDE: ready. hh_server: ready.",
-                    "shortMessage": "Hack ✓",
+                    "message": "Hack IDE: ready.\nhh_server: ready.",
+                    "shortMessage": "Hack",
                     "type": 3,
                 },
                 result=NoResponse(),
@@ -5698,8 +5724,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 method="window/showStatus",
                 params={
                     "actions": [{"title": "Restart Hack IDE"}],
-                    "message": "Hack IDE has failed. "
-                    + "See Output>Hack for details. hh_server: ready.",
+                    "message": "Hack IDE has failed. See Output›Hack for details.\nhh_server: ready.",
                     "shortMessage": "Hack: failed",
                     "type": 1,
                 },
@@ -5709,11 +5734,11 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 method="window/showStatus",
                 params={
                     "actions": [],
-                    "message": "Hack IDE: ready. hh_server: ready.",
-                    "shortMessage": "Hack ✓",
+                    "message": "Hack IDE: ready.\nhh_server: ready.",
+                    "shortMessage": "Hack",
                     "type": 3,
                 },
-                result=None,
+                result=NoResponse(),
             )
             .request(line=line(), method="shutdown", params={}, result=None)
             .notification(method="exit", params={})
@@ -5733,11 +5758,22 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 supports_status=True,
             )
             .ignore_requests(
+                comment="Ignore initializing since they're kind of racy",
                 method="window/showStatus",
                 params={
                     "type": 2,
                     "actions": [],
-                    "message": "Hack IDE: initializing. hh_server: ready.",
+                    "message": "Hack IDE: initializing.\nhh_server initializing: processing [<test> seconds]",
+                    "shortMessage": "Hack: initializing",
+                },
+            )
+            .ignore_requests(
+                comment="Ignore another form of initializing",
+                method="window/showStatus",
+                params={
+                    "type": 2,
+                    "actions": [],
+                    "message": "Hack IDE: initializing.\nhh_server: ready.",
                     "shortMessage": "Hack: initializing",
                 },
             )
@@ -5755,13 +5791,11 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 method="window/showStatus",
                 params={
                     "actions": [{"title": "Restart Hack IDE"}],
-                    "message": "Hack IDE has failed. "
-                    + "See Output>Hack for details. "
-                    + "hh_server: ready.",
+                    "message": "Hack IDE has failed. See Output›Hack for details.\nhh_server: ready.",
                     "shortMessage": "Hack: failed",
                     "type": 1,
                 },
-                result=None,
+                result=NoResponse(),
             )
             .request(line=line(), method="shutdown", params={}, result=None)
             .notification(method="exit", params={})

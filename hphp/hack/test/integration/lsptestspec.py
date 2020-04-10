@@ -93,14 +93,24 @@ class LspTestSpec:
         self._ignored_notification_methods: AbstractSet[str] = set()
         # pyre-fixme[11]: Annotation `Json` is not defined as a type.
         self._ignored_requests: Sequence[Tuple[str, Json]] = []
+        self._ignore_status_diagnostics: bool = False
 
     def ignore_notifications(self, *, method: str) -> "LspTestSpec":
         ignored_notification_methods = set(self._ignored_notification_methods)
         ignored_notification_methods.add(method)
         return self._update(ignored_notification_methods=ignored_notification_methods)
 
-    # pyre-fixme[11]: Annotation `Json` is not defined as a type.
-    def ignore_requests(self, *, method: str, params: Json) -> "LspTestSpec":
+    def ignore_status_diagnostics(self, value: bool) -> "LspTestSpec":
+        return self._update(ignore_status_diagnostics=value)
+
+    def ignore_requests(
+        self,
+        *,
+        method: str,
+        # pyre-fixme[11]: Annotation `Json` is not defined as a type.
+        params: Json,
+        comment: Optional[str] = None,
+    ) -> "LspTestSpec":
         ignored_requests = list(self._ignored_requests)
         ignored_requests.append((method, params))
         return self._update(ignored_requests=ignored_requests)
@@ -273,7 +283,7 @@ class LspTestSpec:
                     _WaitForNotificationSpec(
                         comment=(
                             f"Waiting for change to URI {uri} to be processed... "
-                            + "(set wait=False on the corresponding `write_to_disk` call "
+                            + "(set wait=False on the corresponding `write_to_disk` call "  # noqa: B950
                             + "if this is undesirable)"
                         ),
                         method="telemetry/event",
@@ -321,6 +331,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
         ignored_notification_methods: Optional[AbstractSet[str]] = None,
         # pyre-fixme[11]: Annotation `Json` is not defined as a type.
         ignored_requests: Optional[Sequence[Tuple[str, Json]]] = None,
+        ignore_status_diagnostics: Optional[bool] = None,
     ) -> "LspTestSpec":
         spec = copy.copy(self)
         if messages is not None:
@@ -329,6 +340,8 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
             spec._ignored_notification_methods = ignored_notification_methods
         if ignored_requests is not None:
             spec._ignored_requests = ignored_requests
+        if ignore_status_diagnostics:
+            spec._ignore_status_diagnostics = ignore_status_diagnostics
         return spec
 
     def _get_json_commands(
@@ -427,7 +440,7 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                     and previous_message.wait_id == message.wait_id
                 ]
                 assert len(lsp_ids) == 1, (
-                    f"Should have had exactly one previous message with wait ID {message.wait_id!r}, "
+                    f"Should have had exactly one previous message with wait ID {message.wait_id!r}, "  # noqa: B950
                     + "but got {len(lsp_ids)}"
                 )
                 [lsp_id] = lsp_ids
@@ -702,6 +715,15 @@ make it match:
                 entry.received is not None
                 and "id" not in entry.received
                 and entry.received.get("method") in self._ignored_notification_methods
+            ):
+                yield transcript_id
+
+            if (
+                entry.received is not None
+                and "id" not in entry.received
+                and self._ignore_status_diagnostics
+                and entry.received["method"] == "textDocument/publishDiagnostics"
+                and entry.received["params"].get("isStatusFB")
             ):
                 yield transcript_id
 

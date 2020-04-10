@@ -12,7 +12,7 @@ type lsp_id =
   | StringId of string
 
 (* Note: this datatype provides no invariants that the string is well-formed. *)
-type documentUri = DocumentUri of string
+type documentUri = DocumentUri of string [@@deriving eq]
 
 val uri_of_string : string -> documentUri
 
@@ -22,17 +22,20 @@ type position = {
   line: int;
   character: int;
 }
+[@@deriving eq]
 
 type range = {
   start: position;
   end_: position;
 }
+[@@deriving eq]
 
 module Location : sig
   type t = {
     uri: documentUri;
     range: range;
   }
+  [@@deriving eq]
 end
 
 module DefinitionLocation : sig
@@ -165,7 +168,7 @@ module MessageType : sig
     | WarningMessage [@value 2]
     | InfoMessage [@value 3]
     | LogMessage [@value 4]
-  [@@deriving enum]
+  [@@deriving eq, enum]
 end
 
 module CancelRequest : sig
@@ -364,26 +367,22 @@ module PublishDiagnostics : sig
     | IntCode of int
     | StringCode of string
     | NoCode
+  [@@deriving eq]
 
   type diagnosticSeverity =
     | Error
     | Warning
     | Information
     | Hint
-
-  val min_diagnosticSeverity : int
-
-  val max_diagnosticSeverity : int
-
-  val diagnosticSeverity_to_enum : diagnosticSeverity -> int
-
-  val diagnosticSeverity_of_enum : int -> diagnosticSeverity option
+  [@@deriving enum, eq]
 
   type params = publishDiagnosticsParams
 
   and publishDiagnosticsParams = {
     uri: documentUri;
     diagnostics: diagnostic list;
+    isStatusFB: bool;
+        (** FB-specific extension, for diagnostics used only to show status *)
   }
 
   and diagnostic = {
@@ -395,11 +394,13 @@ module PublishDiagnostics : sig
     relatedInformation: diagnosticRelatedInformation list;
     relatedLocations: relatedLocation list;
   }
+  [@@deriving eq]
 
   and diagnosticRelatedInformation = {
     relatedLocation: Location.t;
     relatedMessage: string;
   }
+  [@@deriving eq]
 
   and relatedLocation = diagnosticRelatedInformation
 end
