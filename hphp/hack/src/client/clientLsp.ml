@@ -710,7 +710,17 @@ let respond_to_error (event : event option) (e : Lsp.Error.t) : unit =
   match event with
   | Some (Client_message (_, RequestMessage (id, _request))) ->
     respond_jsonrpc ~powered_by:Language_server id result
-  | _ -> Lsp_helpers.telemetry_error to_stdout (Lsp_fmt.error_to_log_string e)
+  | _ ->
+    (* We want to report LSP error 'e' over jsonrpc. But jsonrpc only allows
+    errors to be reported in response to requests. So we'll stick the information
+    in a telemetry/event. The format of this event isn't defined. We're going to
+    roll our own, using ad-hoc json fields to emit all the data out of 'e' *)
+    let open Lsp.Error in
+    let extras =
+      ("code", e.code |> Error.show_code |> Hh_json.string_)
+      :: Option.value_map e.data ~default:[] ~f:(fun data -> [("data", data)])
+    in
+    Lsp_helpers.telemetry_error to_stdout e.message ~extras
 
 (** request_showStatusFB: pops up a dialog *)
 let request_showStatusFB
@@ -2626,7 +2636,7 @@ let do_initialize ~(env : env) (root : Path.t) : Initialize.result =
   let server_args = ServerArgs.default_options ~root:(Path.to_string root) in
   let server_args = ServerArgs.set_config server_args env.config in
   let server_local_config =
-    snd @@ ServerConfig.load ServerConfig.filename server_args
+    snd @@ ServerConfig.load ~silent:true ServerConfig.filename server_args
   in
   Initialize.
     {
@@ -2994,7 +3004,7 @@ let track_open_and_recent_files (state : state) (event : event) : state =
   let most_recent_file =
     match event with
     | Client_message (_metadata, message) ->
-      let uri = Lsp_helpers.get_uri_opt message in
+      let uri = Lsp_fmt.get_uri_opt message in
       if Option.is_some uri then
         uri
       else
@@ -3038,14 +3048,11 @@ let track_edits_if_necessary (state : state) (event : event) : state =
 
 let track_ide_service_open_files
     (ide_service : ClientIdeService.t) (event : event) : unit Lwt.t =
+  let uri_to_path uri = uri |> lsp_uri_to_path |> Path.make in
   match event with
   | Client_message (metadata, NotificationMessage (DidOpenNotification params))
     ->
-    let path =
-      params.DidOpen.textDocument.TextDocumentItem.uri
-      |> lsp_uri_to_path
-      |> Path.make
-    in
+    let path = uri_to_path params.DidOpen.textDocument.TextDocumentItem.uri in
     let contents = params.DidOpen.textDocument.TextDocumentItem.text in
     (* We can't do ClientIdeService.rpc directly, since that fails if the IDE service
     hasn't yet initialized. Instead, notify_file_opened will queue up the open until
@@ -3057,12 +3064,21 @@ let track_ide_service_open_files
       ~path
       ~contents;
     Lwt.return_unit
+  | Client_message (metadata, NotificationMessage (DidChangeNotification params))
+    ->
+    let path =
+      uri_to_path
+        params.DidChange.textDocument.VersionedTextDocumentIdentifier.uri
+    in
+    ClientIdeService.notify_ide_file_changed
+      ide_service
+      ~tracking_id:metadata.tracking_id
+      ~path;
+    Lwt.return_unit
   | Client_message (metadata, NotificationMessage (DidCloseNotification params))
     ->
     let path =
-      params.DidClose.textDocument.TextDocumentIdentifier.uri
-      |> lsp_uri_to_path
-      |> Path.make
+      uri_to_path params.DidClose.textDocument.TextDocumentIdentifier.uri
     in
     ClientIdeService.notify_ide_file_closed
       ide_service
@@ -3076,7 +3092,7 @@ let track_ide_service_open_files
 
 let get_filename_in_message_for_logging (message : lsp_message) :
     Relative_path.t option =
-  let uri_opt = Lsp_helpers.get_uri_opt message in
+  let uri_opt = Lsp_fmt.get_uri_opt message in
   match uri_opt with
   | None -> None
   | Some uri ->
@@ -3405,6 +3421,36 @@ let handle_client_message
       if env.use_serverless_ide then
         ClientIdeService.notify_verbose ide_service ~tracking_id !verbose;
       Lwt.return_none
+    (* test entrypoint: shutdowwn client_ide_service *)
+    | (_, RequestMessage (id, HackTestShutdownServerlessRequestFB))
+      when env.use_serverless_ide ->
+      let%lwt () =
+        stop_ide_service
+          ide_service
+          ~tracking_id
+          ~reason:ClientIdeService.Stop_reason.Testing
+      in
+      respond_jsonrpc
+        ~powered_by:Serverless_ide
+        id
+        HackTestShutdownServerlessResultFB;
+      Lwt.return_none
+    (* test entrypoint: stop hh_server *)
+    | (_, RequestMessage (id, HackTestStopServerRequestFB)) ->
+      let root_folder =
+        Path.make (Relative_path.path_of_prefix Relative_path.Root)
+      in
+      ClientStop.kill_server root_folder env.from;
+      respond_jsonrpc ~powered_by:Serverless_ide id HackTestStopServerResultFB;
+      Lwt.return_none
+    (* test entrypoint: start hh_server *)
+    | (_, RequestMessage (id, HackTestStartServerRequestFB)) ->
+      let root_folder =
+        Path.make (Relative_path.path_of_prefix Relative_path.Root)
+      in
+      start_server ~env root_folder;
+      respond_jsonrpc ~powered_by:Serverless_ide id HackTestStartServerResultFB;
+      Lwt.return_none
     (* initialize request *)
     | (Pre_init, RequestMessage (id, InitializeRequest initialize_params)) ->
       Lwt.wakeup_later initialize_params_resolver initialize_params;
@@ -3453,6 +3499,8 @@ let handle_client_message
              message = "already received shutdown request";
              data = None;
            })
+    (* initialized notification *)
+    | (_, NotificationMessage InitializedNotification) -> Lwt.return_none
     (* rage request *)
     | (_, RequestMessage (id, RageRequestFB)) ->
       let%lwt result = do_rageFB !state ref_unblocked_time in
@@ -3659,13 +3707,15 @@ let handle_client_message
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* any request/notification that we already handled in [track_open_files] *)
-    | (In_init _, NotificationMessage (DidOpenNotification _))
-    | (In_init _, NotificationMessage (DidChangeNotification _))
-    | (In_init _, NotificationMessage (DidCloseNotification _))
-    | (In_init _, NotificationMessage (DidSaveNotification _)) ->
+    | ((In_init _ | Lost_server _), NotificationMessage (DidOpenNotification _))
+    | ( (In_init _ | Lost_server _),
+        NotificationMessage (DidChangeNotification _) )
+    | ((In_init _ | Lost_server _), NotificationMessage (DidCloseNotification _))
+    | ((In_init _ | Lost_server _), NotificationMessage (DidSaveNotification _))
+      ->
       Lwt.return_none
     (* any request/notification that we can't handle yet *)
-    | (In_init _, _) ->
+    | (In_init _, message) ->
       (* we respond with Operation_cancelled so that clients don't produce *)
       (* user-visible logs/warnings. *)
       raise
@@ -3673,10 +3723,16 @@ let handle_client_message
            {
              Error.code = Error.RequestCancelled;
              message = Hh_server_initializing |> hh_server_state_to_string;
-             data = None;
+             data =
+               Some
+                 (Hh_json.JSON_Object
+                    [
+                      ("state", !state |> state_to_string |> Hh_json.string_);
+                      ( "message",
+                        Hh_json.string_
+                          (Lsp_fmt.denorm_message_to_string message) );
+                    ]);
            })
-    | (Main_loop _menv, NotificationMessage InitializedNotification) ->
-      Lwt.return_none
     (* textDocument/hover request *)
     | (Main_loop menv, RequestMessage (id, HoverRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
@@ -3828,33 +3884,6 @@ let handle_client_message
         | Some result -> List.length result.SignatureHelp.signatures
       in
       Lwt.return_some { result_count; result_extra_telemetry = None }
-    | (_, RequestMessage (id, HackTestShutdownServerlessRequestFB))
-      when env.use_serverless_ide ->
-      let%lwt () =
-        stop_ide_service
-          ide_service
-          ~tracking_id
-          ~reason:ClientIdeService.Stop_reason.Testing
-      in
-      respond_jsonrpc
-        ~powered_by:Serverless_ide
-        id
-        HackTestShutdownServerlessResultFB;
-      Lwt.return_none
-    | (_, RequestMessage (id, HackTestStopServerRequestFB)) ->
-      let root_folder =
-        Path.make (Relative_path.path_of_prefix Relative_path.Root)
-      in
-      ClientStop.kill_server root_folder env.from;
-      respond_jsonrpc ~powered_by:Serverless_ide id HackTestStopServerResultFB;
-      Lwt.return_none
-    | (_, RequestMessage (id, HackTestStartServerRequestFB)) ->
-      let root_folder =
-        Path.make (Relative_path.path_of_prefix Relative_path.Root)
-      in
-      start_server ~env root_folder;
-      respond_jsonrpc ~powered_by:Serverless_ide id HackTestStartServerResultFB;
-      Lwt.return_none
     (* catch-all for client reqs/notifications we haven't yet implemented *)
     | (Main_loop _menv, message) ->
       let method_ = Lsp_fmt.message_name_to_string message in
@@ -3880,7 +3909,15 @@ let handle_client_message
            {
              Error.code = Error.RequestCancelled;
              message = lenv.p.new_hh_server_state |> hh_server_state_to_string;
-             data = None;
+             data =
+               Some
+                 (Hh_json.JSON_Object
+                    [
+                      ("state", !state |> state_to_string |> Hh_json.string_);
+                      ( "message",
+                        Hh_json.string_
+                          (Lsp_fmt.denorm_message_to_string message) );
+                    ]);
            })
   in
   Lwt.return result_telemetry_opt
@@ -4582,24 +4619,27 @@ let main (init_id : string) (env : env) : Exit_status.t Lwt.t =
       Lsp_helpers.telemetry_error to_stdout (message ^ ", from_client\n" ^ stack);
       Lwt.return_unit
     | (Server_nonfatal_exception e | Error.LspException e) as exn ->
+      let exn = Exception.wrap exn in
       let error_source =
-        match (e.Error.code, exn) with
+        match (e.Error.code, Exception.unwrap exn) with
         | (Error.RequestCancelled, _) -> Error_from_lsp_cancelled
         | (_, Server_nonfatal_exception _) -> Error_from_server_recoverable
         | (_, _) -> Error_from_lsp_misc
       in
+      let e = Lsp_fmt.add_stack_if_absent e exn in
       respond_to_error !ref_event e;
       hack_log_error !ref_event e error_source !ref_unblocked_time env;
       Lwt.return_unit
-    | e ->
-      let e = Exception.wrap e in
+    | exn ->
+      let exn = Exception.wrap exn in
       let e =
         {
           Lsp.Error.code = Lsp.Error.UnknownErrorCode;
-          message = Exception.get_ctor_string e;
-          data = Lsp_fmt.error_data_of_stack (Exception.to_string e);
+          message = Exception.get_ctor_string exn;
+          data = None;
         }
       in
+      let e = Lsp_fmt.add_stack_if_absent e exn in
       respond_to_error !ref_event e;
       hack_log_error !ref_event e Error_from_lsp_misc !ref_unblocked_time env;
       Lwt.return_unit

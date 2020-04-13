@@ -254,7 +254,7 @@ let initialize
   let server_args = ServerArgs.default_options ~root:(Path.to_string root) in
   let server_args = ServerArgs.set_config server_args config in
   let (server_config, server_local_config) =
-    ServerConfig.load ServerConfig.filename server_args
+    ServerConfig.load ~silent:true ServerConfig.filename server_args
   in
   let hhconfig_version =
     server_config |> ServerConfig.version |> Config_file.version_to_string_opt
@@ -401,6 +401,20 @@ let make_singleton_ctx
   let ctx = Provider_context.add_or_overwrite_entry ~ctx entry in
   ctx
 
+(** This funtion is about papering over a bug. Sometimes, rarely, we're
+failing to receive DidOpen messages from clientLsp. Our model is to
+only ever answer IDE requests on open files, so we know we'll eventually
+reveive a DidClose even for them and be able to clear their TAST cache
+at that time. But for now, to paper over the bug, we'll call this
+function to log the event and we'll assume that we just missed a DidOpen. *)
+let log_missing_open_file_BUG (path : Relative_path.t) : unit =
+  let path = Relative_path.to_absolute path in
+  let message = Printf.sprintf "Error: action on non-open file %s" path in
+  log "%s" message;
+  HackEventLogger.serverless_ide_crash
+    ~message
+    ~stack:(Exception.get_current_callstack_string 99)
+
 (** Opens a file, in response to DidOpen event, by putting in a new
 entry in open_files, with empty AST and TAST. If the LSP client
 happened to send us two DidOpens for a file, well, we won't complain. *)
@@ -414,6 +428,20 @@ let open_file
     Relative_path.Map.add initialized_state.open_files path entry
   in
   Initialized { initialized_state with open_files }
+
+(** Changes a file, in response to DidChange event. For future we
+might switch ClientIdeDaemon to incremental change events. But for
+now, this is basically a no-op just with some error checking. *)
+let change_file (initialized_state : initialized_state) (path : Relative_path.t)
+    : state =
+  if Relative_path.Map.mem initialized_state.open_files path then
+    Initialized initialized_state
+  else
+    (* We'll now mark the file as opened. We'll provide empty contents for now;
+    this doesn't matter since every actual future request for the file will provide
+    actual contents. *)
+    let () = log_missing_open_file_BUG path in
+    open_file initialized_state path ""
 
 (** Closes a file, in response to DidClose event, by removing the
 entry in open_files. If the LSP client sents us multile DidCloses,
@@ -441,7 +469,13 @@ let update_file
       ( document_location.ClientIdeMessage.file_contents,
         Relative_path.Map.find_opt initialized_state.open_files path )
     with
-    | (_, None) -> failwith "Attempted LSP operation on a non-open file"
+    | (Some contents, None) ->
+      log_missing_open_file_BUG path;
+      (* TODO(ljw): failwith "Attempted LSP operation on a non-open file" *)
+      Provider_context.make_entry ~path ~contents
+    | (None, None) ->
+      log_missing_open_file_BUG path;
+      failwith "Attempted LSP operation on a non-open file"
     | (Some contents, Some entry)
       when String.equal entry.Provider_context.contents contents ->
       entry
@@ -479,7 +513,7 @@ let handle_message :
     else
       Hh_logger.Level.set_min_level Hh_logger.Level.Info;
     Lwt.return (state, Handle_message_result.Notification)
-  | ((Failed_to_initialize _ | Initializing), File_changed _) ->
+  | ((Failed_to_initialize _ | Initializing), Disk_file_changed _) ->
     (* Should not happen. *)
     let user_message =
       "IDE services could not process file change because "
@@ -490,7 +524,7 @@ let handle_message :
     let stack = Exception.get_current_callstack_string 99 in
     let error_data = ClientIdeMessage.make_error_data user_message ~stack in
     Lwt.return (state, Handle_message_result.Error error_data)
-  | (Initialized initialized_state, File_changed path) ->
+  | (Initialized initialized_state, Disk_file_changed path) ->
     (* Only invalidate when a hack file changes *)
     if FindUtils.file_filter (Path.to_string path) then
       let changed_files_to_process =
@@ -555,17 +589,25 @@ let handle_message :
       }
     in
     Lwt.return (state, Handle_message_result.Error error_data)
-  | (Initialized initialized_state, File_closed file_path) ->
+  | (Initialized initialized_state, Ide_file_closed file_path) ->
     let path =
       file_path |> Path.to_string |> Relative_path.create_detect_prefix
     in
     let state = close_file initialized_state path in
     Lwt.return (state, Handle_message_result.Notification)
-  | (Initialized initialized_state, File_opened { file_path; file_contents }) ->
+  | (Initialized initialized_state, Ide_file_opened { file_path; file_contents })
+    ->
     let path =
       file_path |> Path.to_string |> Relative_path.create_detect_prefix
     in
     let state = open_file initialized_state path file_contents in
+    Lwt.return (state, Handle_message_result.Notification)
+  | ( Initialized initialized_state,
+      Ide_file_changed { Ide_file_changed.file_path; _ } ) ->
+    let path =
+      file_path |> Path.to_string |> Relative_path.create_detect_prefix
+    in
+    let state = change_file initialized_state path in
     Lwt.return (state, Handle_message_result.Notification)
   | (Initialized initialized_state, Hover document_location) ->
     let (state, ctx, entry) = update_file initialized_state document_location in

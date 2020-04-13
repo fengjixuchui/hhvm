@@ -388,10 +388,8 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::Pipe(e) => emit_pipe(emitter, env, e),
         Expr_::Is(is_expr) => {
             let (e, h) = &**is_expr;
-            Ok(InstrSeq::gather(vec![
-                emit_expr(emitter, env, e)?,
-                emit_is(emitter, env, pos, h)?,
-            ]))
+            let is = emit_is(emitter, env, pos, h)?;
+            Ok(InstrSeq::gather(vec![emit_expr(emitter, env, e)?, is]))
         }
         Expr_::As(e) => emit_as(emitter, env, pos, e),
         Expr_::Cast(e) => emit_cast(emitter, env, pos, &(e.0).1, &e.1),
@@ -1234,12 +1232,8 @@ fn is_struct_init(
     allow_numerics: bool,
 ) -> bool {
     let mut are_all_keys_non_numeric_strings = true;
-    let mut has_duplicate_keys = false;
     let mut uniq_keys = std::collections::HashSet::<String>::new();
     for f in fields.iter() {
-        if !are_all_keys_non_numeric_strings && has_duplicate_keys {
-            break;
-        }
         if let tast::Afield::AFkvalue(key, _) = f {
             // TODO(hrust): if key is String, don't clone and call fold_expr
             let mut key = key.clone();
@@ -1248,7 +1242,7 @@ fn is_struct_init(
                 are_all_keys_non_numeric_strings = are_all_keys_non_numeric_strings
                     && !i64::from_str(&s).is_ok()
                     && !(f64::from_str(&s).map_or(false, |f| f.is_finite()));
-                has_duplicate_keys = has_duplicate_keys || !uniq_keys.insert(s);
+                uniq_keys.insert(s);
                 continue;
             }
         }
@@ -1257,7 +1251,7 @@ fn is_struct_init(
     let num_keys = fields.len();
     let limit = *(e.options().max_array_elem_size_on_the_stack.get()) as usize;
     (allow_numerics || are_all_keys_non_numeric_strings)
-        && !has_duplicate_keys
+        && uniq_keys.len() == num_keys
         && num_keys <= limit
         && num_keys != 0
 }
@@ -3586,22 +3580,27 @@ fn emit_conditional_expr(
             let false_label = e.label_gen_mut().next_regular();
             let end_label = e.label_gen_mut().next_regular();
             let r = emit_jmpz(e, env, etest, &false_label)?;
+            // only emit false branch if false_label is used
+            let false_branch = if r.is_label_used {
+                InstrSeq::gather(vec![instr::label(false_label), emit_expr(e, env, efalse)?])
+            } else {
+                instr::empty()
+            };
+            // only emit true branch if there is fallthrough from condition
+            let true_branch = if r.is_fallthrough {
+                InstrSeq::gather(vec![
+                    emit_expr(e, env, etrue)?,
+                    emit_pos(pos),
+                    instr::jmp(end_label.clone()),
+                ])
+            } else {
+                instr::empty()
+            };
             InstrSeq::gather(vec![
                 r.instrs,
-                if r.is_fallthrough {
-                    InstrSeq::gather(vec![
-                        emit_expr(e, env, etrue)?,
-                        emit_pos(pos),
-                        instr::jmp(end_label.clone()),
-                    ])
-                } else {
-                    instr::empty()
-                },
-                if r.is_label_used {
-                    InstrSeq::gather(vec![instr::label(false_label), emit_expr(e, env, efalse)?])
-                } else {
-                    instr::empty()
-                },
+                true_branch,
+                false_branch,
+                // end_label is used to jump out of true branch so they should be emitted together
                 if r.is_fallthrough {
                     instr::label(end_label)
                 } else {
@@ -5421,6 +5420,7 @@ pub fn fixup_type_arg<'a>(
                         "Erased generics are not allowed in is/as expressions",
                     )))
                 }
+                H_::Haccess(_, _) => return Ok(()),
                 _ => (),
             }
             h.recurse(c, self.object())
