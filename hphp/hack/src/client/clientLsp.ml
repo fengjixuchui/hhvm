@@ -23,6 +23,9 @@ type env = {
   verbose: bool;
 }
 
+(** This is env.from, but maybe modified in the light of the initialize request *)
+let from = ref "[init]"
+
 (** We cache the state of the typecoverageToggle button, so that when Hack restarts,
   dynamic view stays in sync with the button in Nuclide *)
 let cached_toggle_state = ref false
@@ -147,7 +150,7 @@ type state =
   | In_init of In_init_env.t
       (** In_init: we did respond to the initialize request, and now we're
           waiting for a "Hello" from the server. When that comes we'll
-          request a permanent connection from the server, and process the     
+          request a permanent connection from the server, and process the
           file_changes backlog, and switch to Main_loop. *)
   | Main_loop of Main_env.t
       (** Main_loop: we have a working connection to both server and client. *)
@@ -2610,7 +2613,7 @@ let rec connect_client ~(env : env) (root : Path.t) ~(autostart : bool) :
     let env_connect =
       {
         ClientConnect.root;
-        from = env.from;
+        from = !from;
         autostart;
         force_dormant_start = false;
         watchman_debug_logging = false;
@@ -2749,7 +2752,7 @@ let start_server ~(env : env) (root : Path.t) : unit =
   let env_start =
     {
       ClientStart.root;
-      from = env.from;
+      from = !from;
       no_load = false;
       watchman_debug_logging = false;
       log_inference_constraints = false;
@@ -3351,7 +3354,7 @@ let on_status_restart_action
     (* Belt-and-braces kill the server. This is in case the server was *)
     (* stuck in some weird state. It's also what 'hh restart' does. *)
     if MonitorConnection.server_exists (Path.to_string root) then
-      ClientStop.kill_server root env.from;
+      ClientStop.kill_server root !from;
 
     (* After that it's safe to try to reconnect! *)
     start_server ~env root;
@@ -3469,7 +3472,7 @@ let handle_client_message
       let root_folder =
         Path.make (Relative_path.path_of_prefix Relative_path.Root)
       in
-      ClientStop.kill_server root_folder env.from;
+      ClientStop.kill_server root_folder !from;
       respond_jsonrpc ~powered_by:Serverless_ide id HackTestStopServerResultFB;
       Lwt.return_none
     (* test entrypoint: start hh_server *)
@@ -3482,9 +3485,22 @@ let handle_client_message
       Lwt.return_none
     (* initialize request *)
     | (Pre_init, RequestMessage (id, InitializeRequest initialize_params)) ->
+      let open Initialize in
       Lwt.wakeup_later initialize_params_resolver initialize_params;
       let root = Path.make (Lsp_helpers.get_root initialize_params) in
       set_up_hh_logger_for_client_lsp root;
+      (* Following is a hack. Atom incorrectly passes '--from vscode', rendering us
+      unable to distinguish Atom from VSCode. But Atom is now frozen at vscode client
+      v3.14. So by looking at the version, we can at least distinguish that it's old. *)
+      if
+        (not
+           initialize_params.client_capabilities.textDocument.declaration
+             .declarationLinkSupport)
+        && String.equal env.from "vscode"
+      then begin
+        from := "vscode_pre314";
+        HackEventLogger.set_from !from
+      end;
 
       let%lwt version = read_hhconfig_version () in
       hhconfig_version := version;
@@ -4439,7 +4455,8 @@ let handle_tick
 
 let main (init_id : string) (env : env) : Exit_status.t Lwt.t =
   Printexc.record_backtrace true;
-  HackEventLogger.set_from env.from;
+  from := env.from;
+  HackEventLogger.set_from !from;
 
   if env.verbose then
     Hh_logger.Level.set_min_level_stderr Hh_logger.Level.Debug

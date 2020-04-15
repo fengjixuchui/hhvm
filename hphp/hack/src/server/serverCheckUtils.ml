@@ -48,14 +48,17 @@ let start_typing_delegate genv env : env =
   in
   let {
     declaration_threshold = defer_class_declaration_threshold;
-    num_workers;
+    heartbeat_period;
     max_batch_size;
     min_batch_size;
+    num_workers;
     worker_min_log_level;
     _;
   } =
     genv.local_config.remote_type_check
   in
+  let { init_id; mergebase; recheck_id; _ } = env.init_env in
+  let recheck_id = Option.value recheck_id ~default:init_id in
   let artifact_store_config =
     ArtifactStore.default_config ~temp_dir:(Path.make GlobalConfig.tmp_dir)
   in
@@ -76,14 +79,13 @@ let start_typing_delegate genv env : env =
               {
                 artifact_store_config;
                 defer_class_declaration_threshold;
-                init_id = env.init_env.init_id;
-                mergebase = env.init_env.mergebase;
+                heartbeat_period;
+                init_id;
+                job_runner = JobRunner.get JobRunner.Remote;
+                mergebase;
                 num_workers;
                 raise_on_failure;
-                recheck_id =
-                  Option.value
-                    env.init_env.recheck_id
-                    ~default:env.init_env.init_id;
+                recheck_id;
                 root;
                 server =
                   ServerApi.make_local_server_api
@@ -93,13 +95,11 @@ let start_typing_delegate genv env : env =
                       (ServerArgs.ignore_hh_version genv.options);
                 version_specifier;
                 worker_min_log_level;
-                remote_mode = JobRunner.Remote;
                 transport_channel;
               }
             (* TODO: use env.typing_service.delegate_state when cancellation
                     implementation is finished *)
-            (Typing_service_delegate.create ~max_batch_size ~min_batch_size ())
-            ~recheck_id:env.init_env.recheck_id;
+            (Typing_service_delegate.create ~max_batch_size ~min_batch_size ());
       };
   }
 
