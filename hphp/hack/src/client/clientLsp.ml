@@ -190,11 +190,21 @@ type result_telemetry = {
   result_extra_telemetry: Telemetry.t option;
 }
 
-(* Note: we assume that we won't ever initialize more than once, since this
-promise can only be resolved once. *)
-let ( (initialize_params_promise : Lsp.Initialize.params Lwt.t),
-      (initialize_params_resolver : Lsp.Initialize.params Lwt.u) ) =
-  Lwt.task ()
+let initialize_params_ref : Lsp.Initialize.params option ref = ref None
+
+let initialize_params_exc () : Lsp.Initialize.params =
+  match !initialize_params_ref with
+  | None -> failwith "initialize_params not yet received"
+  | Some initialize_params -> initialize_params
+
+let get_root_opt () : Path.t option =
+  match !initialize_params_ref with
+  | None -> None
+  | Some initialize_params ->
+    let path = Some (Lsp_helpers.get_root initialize_params) in
+    Some (Wwwroot.get path)
+
+let get_root_exn () : Path.t = Option.value_exn (get_root_opt ())
 
 let hhconfig_version : string ref = ref "[NotYetInitialized]"
 
@@ -207,21 +217,6 @@ so as to pass the message on to ide_service as well.
 Note: control for how much will be written to stderr is solely
 controlled by --verbose at the command-line, stored in env.verbose. *)
 let verbose_to_file : bool ref = ref false
-
-let set_verbose_to_file
-    ~(env : env)
-    ~(ide_service : ClientIdeService.t option)
-    ~(tracking_id : string)
-    (value : bool) : unit =
-  verbose_to_file := value;
-  if !verbose_to_file then
-    Hh_logger.Level.set_min_level_file Hh_logger.Level.Debug
-  else
-    Hh_logger.Level.set_min_level_file Hh_logger.Level.Info;
-  match (ide_service, env.use_serverless_ide) with
-  | (Some ide_service, true) ->
-    ClientIdeService.notify_verbose ide_service ~tracking_id !verbose_to_file
-  | _ -> ()
 
 let can_autostart_after_mismatch : bool ref = ref true
 
@@ -242,10 +237,7 @@ let log s = Hh_logger.log ("[client-lsp] " ^^ s)
 
 let log_debug s = Hh_logger.debug ("[client-lsp] " ^^ s)
 
-let initialize_params_exc () : Lsp.Initialize.params =
-  match Lwt.poll initialize_params_promise with
-  | None -> failwith "initialize_params not yet received"
-  | Some initialize_params -> initialize_params
+let log_error s = Hh_logger.error ("[client-lsp] " ^^ s)
 
 let to_stdout (json : Hh_json.json) : unit =
   let s = Hh_json.json_to_string json ^ "\r\n\r\n" in
@@ -311,6 +303,52 @@ exception
   Server_fatal_connection_exception of Marshal_tools.remote_exception_data
 
 exception Server_nonfatal_exception of Lsp.Error.t
+
+(** Use ignore_promise_but_handle_failure when you want don't care about awaiting
+results of an async piece of work, but still want any exceptions to be logged.
+This is similar to Lwt.async except (1) it logs to our HackEventLogger and
+Hh_logger rather than stderr, (2) it you can decide on a case-by-case basis what
+should happen to exceptions rather than having them all share the same
+Lwt.async_exception_hook, (3) while Lwt.async takes a lambda for creating the
+promise and so catches exceptions during promise creation, this function takes
+an already-existing promise and so the caller has to handle such exceptions
+themselves - I resent using lambdas as a control-flow primitive.
+
+You can think of this function as similar to [ignore], but enhanced because
+it's poor practice to ignore a promise. *)
+let ignore_promise_but_handle_failure
+    ~(desc : string) ~(terminate_on_failure : bool) (promise : unit Lwt.t) :
+    unit =
+  Lwt.async (fun () ->
+      try%lwt
+        let%lwt () = promise in
+        Lwt.return_unit
+      with exn ->
+        let open Hh_json in
+        let exn = Exception.wrap exn in
+        let message = "Unhandled exception: " ^ Exception.get_ctor_string exn in
+        let stack =
+          Exception.get_backtrace_string exn |> Exception.clean_stack
+        in
+        let data =
+          JSON_Object
+            [
+              ("description", string_ desc);
+              ("message", string_ message);
+              ("stack", string_ stack);
+            ]
+        in
+        HackEventLogger.client_lsp_exception
+          ~root:(get_root_opt ())
+          ~message:"Unhandled exception"
+          ~data_opt:(Some data)
+          ~source:"lsp_misc";
+        log_error "%s\n%s\n%s" message desc stack;
+        if terminate_on_failure then
+          (* exit 2 is the same as used by Lwt.async *)
+          exit 2;
+
+        Lwt.return_unit)
 
 let state_to_string (state : state) : string =
   match state with
@@ -415,20 +453,6 @@ let get_older_hh_server_state (requested_time : float) : hh_server_state =
   with
   | None -> Hh_server_forgot
   | Some (_, hh_server_state) -> hh_server_state
-
-let get_root_opt () : Path.t option =
-  match Lwt.poll initialize_params_promise with
-  | None -> None (* haven't yet received initialize so we don't know *)
-  | Some initialize_params ->
-    let path = Some (Lsp_helpers.get_root initialize_params) in
-    Some (Wwwroot.get path)
-
-let get_root_exn () : Path.t = Option.value_exn (get_root_opt ())
-
-let get_root_wait () : Path.t Lwt.t =
-  let%lwt initialize_params = initialize_params_promise in
-  let path = Lsp_helpers.get_root initialize_params in
-  Lwt.return (Wwwroot.get (Some path))
 
 let read_hhconfig_version () : string Lwt.t =
   match get_root_opt () with
@@ -550,6 +574,51 @@ let rpc_with_retry server_conn ref_unblocked_time command =
   ServerCommandTypes.Done_or_retry.call ~f:(fun () ->
       rpc server_conn ref_unblocked_time command)
 
+(** A thin wrapper around ClientIdeMessage which turns errors into exceptions *)
+let ide_rpc
+    (ide_service : ClientIdeService.t)
+    ~(tracking_id : string)
+    ~(ref_unblocked_time : float ref)
+    ~(needs_init : bool)
+    (message : 'a ClientIdeMessage.t) : 'a Lwt.t =
+  let%lwt result =
+    ClientIdeService.rpc
+      ide_service
+      ~tracking_id
+      ~ref_unblocked_time
+      ~needs_init
+      message
+  in
+  match result with
+  | Ok result -> Lwt.return result
+  | Error edata -> raise (Server_nonfatal_exception edata)
+
+let set_verbose_to_file
+    ~(ide_service : ClientIdeService.t option)
+    ~(tracking_id : string)
+    (value : bool) : unit =
+  verbose_to_file := value;
+  if !verbose_to_file then
+    Hh_logger.Level.set_min_level_file Hh_logger.Level.Debug
+  else
+    Hh_logger.Level.set_min_level_file Hh_logger.Level.Info;
+  match ide_service with
+  | Some ide_service ->
+    let ref_unblocked_time = ref 0. in
+    let (promise : unit Lwt.t) =
+      ide_rpc
+        ide_service
+        ~tracking_id
+        ~ref_unblocked_time
+        ~needs_init:false
+        (ClientIdeMessage.Verbose !verbose_to_file)
+    in
+    ignore_promise_but_handle_failure
+      promise
+      ~desc:"verbose-ide-rpc"
+      ~terminate_on_failure:false
+  | None -> ()
+
 (** Determine whether to read a message from the client (the editor) or the
 server (hh_server), or whether neither is ready within 1s. *)
 let get_message_source (server : server_conn) (client : Jsonrpc.queue) :
@@ -591,13 +660,19 @@ let get_message_source (server : server_conn) (client : Jsonrpc.queue) :
 
 (** A simplified version of get_message_source which only looks at client *)
 let get_client_message_source
-    (client : Jsonrpc.queue) (ide_service : ClientIdeService.t) :
+    (client : Jsonrpc.queue) (ide_service : ClientIdeService.t option) :
     [ `From_client | `From_ide_service of event | `No_source ] Lwt.t =
   if Jsonrpc.has_message client then
     Lwt.return `From_client
   else
     let client_read_fd =
       Jsonrpc.get_read_fd client |> Lwt_unix.of_unix_file_descr
+    in
+    let pop_from_ide_service =
+      match ide_service with
+      | None -> Lwt.wait () |> fst (* a never-fulfilled promise *)
+      | Some ide_service ->
+        Lwt_message_queue.pop (ClientIdeService.get_notifications ide_service)
     in
     let%lwt message_source =
       Lwt.pick
@@ -606,15 +681,11 @@ let get_client_message_source
            Lwt.return `No_source);
           (let%lwt () = Lwt_unix.wait_read client_read_fd in
            Lwt.return `From_client);
-          (let queue = ClientIdeService.get_notifications ide_service in
-           let%lwt (notification : ClientIdeMessage.notification option) =
-             Lwt_message_queue.pop queue
-           in
+          (let%lwt notification = pop_from_ide_service in
            match notification with
            | None ->
              let%lwt () = Lwt_unix.sleep 1.1 in
-             failwith
-               "this `sleep` should have deferred to the `No_source case above"
+             failwith "should have deferred to the `No_source case above"
            | Some message ->
              Lwt.return (`From_ide_service (Client_ide_notification message)));
         ]
@@ -648,8 +719,9 @@ from either client or server, we block until that message is completely
 received. Note: if server is None (meaning we haven't yet established
 connection with server) then we'll just block waiting for client. *)
 let get_next_event
-    (state : state) (client : Jsonrpc.queue) (ide_service : ClientIdeService.t)
-    : event Lwt.t =
+    (state : state)
+    (client : Jsonrpc.queue)
+    (ide_service : ClientIdeService.t option) : event Lwt.t =
   let from_server (server : server_conn) : event Lwt.t =
     if Queue.is_empty server.pending_messages then
       read_message_from_server server
@@ -1051,7 +1123,7 @@ let stop_ide_service
 
 let do_shutdown
     (state : state)
-    (ide_service : ClientIdeService.t)
+    (ide_service : ClientIdeService.t option)
     (tracking_id : string)
     (ref_unblocked_time : float ref) : state Lwt.t =
   log "Received shutdown request";
@@ -1080,10 +1152,13 @@ let do_shutdown
       (* No other states have a 'conn' to send any disconnect messages over.    *)
       Lwt.return_unit
   and () =
-    stop_ide_service
-      ide_service
-      ~tracking_id
-      ~reason:ClientIdeService.Stop_reason.Editor_exited
+    match ide_service with
+    | None -> Lwt.return_unit
+    | Some ide_service ->
+      stop_ide_service
+        ide_service
+        ~tracking_id
+        ~reason:ClientIdeService.Stop_reason.Editor_exited
   in
   Lwt.return Post_shutdown
 
@@ -1388,17 +1463,14 @@ let do_hover_local
     (params : Hover.params) : Hover.result Lwt.t =
   let document_location = get_document_location editor_open_files params in
   let%lwt infos =
-    ClientIdeService.rpc
+    ide_rpc
       ide_service
       ~tracking_id
       ~ref_unblocked_time
+      ~needs_init:true
       (ClientIdeMessage.Hover document_location)
   in
-  match infos with
-  | Ok infos ->
-    let infos = do_hover_common infos in
-    Lwt.return infos
-  | Error edata -> raise (Server_nonfatal_exception edata)
+  Lwt.return (do_hover_common infos)
 
 let do_typeDefinition
     (conn : server_conn)
@@ -1423,23 +1495,21 @@ let do_typeDefinition_local
     (params : Definition.params) : TypeDefinition.result Lwt.t =
   let document_location = get_document_location editor_open_files params in
   let%lwt results =
-    ClientIdeService.rpc
+    ide_rpc
       ide_service
       ~tracking_id
       ~ref_unblocked_time
+      ~needs_init:true
       (ClientIdeMessage.Type_definition document_location)
   in
-  match results with
-  | Ok results ->
-    let file = Path.to_string document_location.ClientIdeMessage.file_path in
-    let results =
-      List.map results ~f:(fun nast_sid ->
-          hack_pos_definition_to_lsp_identifier_location
-            nast_sid
-            ~default_path:file)
-    in
-    Lwt.return results
-  | Error edata -> raise (Server_nonfatal_exception edata)
+  let file = Path.to_string document_location.ClientIdeMessage.file_path in
+  let results =
+    List.map results ~f:(fun nast_sid ->
+        hack_pos_definition_to_lsp_identifier_location
+          nast_sid
+          ~default_path:file)
+  in
+  Lwt.return results
 
 let do_definition
     (conn : server_conn)
@@ -1476,23 +1546,21 @@ let do_definition_local
     (params : Definition.params) : Definition.result Lwt.t =
   let document_location = get_document_location editor_open_files params in
   let%lwt results =
-    ClientIdeService.rpc
+    ide_rpc
       ide_service
       ~tracking_id
       ~ref_unblocked_time
+      ~needs_init:true
       (ClientIdeMessage.Definition document_location)
   in
-  match results with
-  | Ok results ->
-    let results =
-      List.map results ~f:(fun (_occurrence, definition) ->
-          hack_symbol_definition_to_lsp_identifier_location
-            definition
-            ~default_path:
-              (document_location.ClientIdeMessage.file_path |> Path.to_string))
-    in
-    Lwt.return results
-  | Error edata -> raise (Server_nonfatal_exception edata)
+  let results =
+    List.map results ~f:(fun (_occurrence, definition) ->
+        hack_symbol_definition_to_lsp_identifier_location
+          definition
+          ~default_path:
+            (document_location.ClientIdeMessage.file_path |> Path.to_string))
+  in
+  Lwt.return results
 
 let snippet_re = Str.regexp {|[\$}]|} (* snippets must backslash-escape "$\}" *)
 
@@ -1733,17 +1801,19 @@ let do_completion_local
     ClientIdeMessage.Completion
       { ClientIdeMessage.Completion.document_location; is_manually_invoked }
   in
-  let%lwt result =
-    ClientIdeService.rpc ide_service ~tracking_id ~ref_unblocked_time request
+  let%lwt infos =
+    ide_rpc
+      ide_service
+      ~tracking_id
+      ~ref_unblocked_time
+      ~needs_init:true
+      request
   in
-  match result with
-  | Ok infos ->
-    let filename =
-      document_location.ClientIdeMessage.file_path |> Path.to_string
-    in
-    let%lwt response = make_ide_completion_response infos filename in
-    Lwt.return response
-  | Error edata -> raise (Server_nonfatal_exception edata)
+  let filename =
+    document_location.ClientIdeMessage.file_path |> Path.to_string
+  in
+  let%lwt response = make_ide_completion_response infos filename in
+  Lwt.return response
 
 exception NoLocationFound
 
@@ -1887,21 +1957,19 @@ let do_resolve_local
               kind = resolve_ranking_source kind ranking_source;
             }
         in
-        let%lwt location_result =
-          ClientIdeService.rpc
+        let%lwt raw_docblock =
+          ide_rpc
             ide_service
             ~tracking_id
             ~ref_unblocked_time
+            ~needs_init:true
             request
         in
-        (match location_result with
-        | Ok raw_docblock ->
-          let documentation =
-            docblock_with_ranking_detail raw_docblock ranking_detail
-            |> docblock_to_markdown
-          in
-          Lwt.return { params with Completion.documentation }
-        | Error edata -> raise (Server_nonfatal_exception edata))
+        let documentation =
+          docblock_with_ranking_detail raw_docblock ranking_detail
+          |> docblock_to_markdown
+        in
+        Lwt.return { params with Completion.documentation }
       (* If that fails, next try using symbol *)
     with _ ->
       (* The "fullname" value includes the fully qualified namespace, so
@@ -1923,18 +1991,16 @@ let do_resolve_local
             kind = resolve_ranking_source kind ranking_source;
           }
       in
-      let%lwt resolve_result =
-        ClientIdeService.rpc
+      let%lwt raw_docblock =
+        ide_rpc
           ide_service
           ~tracking_id
           ~ref_unblocked_time
+          ~needs_init:true
           request
       in
-      (match resolve_result with
-      | Ok raw_docblock ->
-        let documentation = docblock_to_markdown raw_docblock in
-        Lwt.return { params with Completion.documentation }
-      | Error edata -> raise (Server_nonfatal_exception edata))
+      let documentation = docblock_to_markdown raw_docblock in
+      Lwt.return { params with Completion.documentation }
   in
   Lwt.return result
 
@@ -2073,16 +2139,18 @@ let do_documentSymbol_local
     }
   in
   let request = ClientIdeMessage.Document_symbol document_location in
-  let%lwt results =
-    ClientIdeService.rpc ide_service ~tracking_id ~ref_unblocked_time request
+  let%lwt outline =
+    ide_rpc
+      ide_service
+      ~tracking_id
+      ~ref_unblocked_time
+      ~needs_init:true
+      request
   in
-  match results with
-  | Ok outline ->
-    let converted =
-      hack_symbol_tree_to_lsp ~filename ~accu:[] ~container_name:None outline
-    in
-    Lwt.return converted
-  | Error edata -> raise (Server_nonfatal_exception edata)
+  let converted =
+    hack_symbol_tree_to_lsp ~filename ~accu:[] ~container_name:None outline
+  in
+  Lwt.return converted
 
 let do_findReferences
     (conn : server_conn)
@@ -2156,16 +2224,15 @@ let do_highlight_local
     (editor_open_files : Lsp.TextDocumentItem.t UriMap.t)
     (params : DocumentHighlight.params) : DocumentHighlight.result Lwt.t =
   let document_location = get_document_location editor_open_files params in
-  let%lwt result =
-    ClientIdeService.rpc
+  let%lwt ranges =
+    ide_rpc
       ide_service
       ~tracking_id
       ~ref_unblocked_time
+      ~needs_init:true
       (ClientIdeMessage.Document_highlight document_location)
   in
-  match result with
-  | Ok ranges -> Lwt.return (List.map ranges ~f:hack_range_to_lsp_highlight)
-  | Error edata -> raise (Server_nonfatal_exception edata)
+  Lwt.return (List.map ranges ~f:hack_range_to_lsp_highlight)
 
 let format_typeCoverage_result ~(equal : 'a -> 'a -> bool) results counts =
   TypeCoverageFB.(
@@ -2230,15 +2297,18 @@ let do_typeCoverage_localFB
         { ClientIdeMessage.file_path; ClientIdeMessage.file_contents }
     in
     let%lwt result =
-      ClientIdeService.rpc ide_service ~tracking_id ~ref_unblocked_time request
+      ide_rpc
+        ide_service
+        ~tracking_id
+        ~ref_unblocked_time
+        ~needs_init:true
+        request
     in
-    (match result with
-    | Ok (results, counts) ->
-      let formatted =
-        format_typeCoverage_result ~equal:String.equal results counts
-      in
-      Lwt.return formatted
-    | Error edata -> raise (Server_nonfatal_exception edata))
+    let (results, counts) = result in
+    let formatted =
+      format_typeCoverage_result ~equal:String.equal results counts
+    in
+    Lwt.return formatted
 
 let do_formatting_common
     (uri : Lsp.documentUri)
@@ -2350,16 +2420,15 @@ let do_signatureHelp_local
     (editor_open_files : Lsp.TextDocumentItem.t UriMap.t)
     (params : SignatureHelp.params) : SignatureHelp.result Lwt.t =
   let document_location = get_document_location editor_open_files params in
-  let%lwt result =
-    ClientIdeService.rpc
+  let%lwt signatures =
+    ide_rpc
       ide_service
       ~tracking_id
       ~ref_unblocked_time
+      ~needs_init:true
       (ClientIdeMessage.Signature_help document_location)
   in
-  match result with
-  | Ok signatures -> Lwt.return signatures
-  | Error edata -> raise (Server_nonfatal_exception edata)
+  Lwt.return signatures
 
 let patch_to_workspace_edit_change (patch : ServerRefactorTypes.patch) :
     string * TextEdit.t =
@@ -3070,50 +3139,6 @@ let track_edits_if_necessary (state : state) (event : event) : state =
     Lost_server { lenv with Lost_env.uris_with_unsaved_changes }
   | _ -> state
 
-let track_ide_service_open_files
-    (ide_service : ClientIdeService.t) (event : event) : unit Lwt.t =
-  let uri_to_path uri = uri |> lsp_uri_to_path |> Path.make in
-  match event with
-  | Client_message (metadata, NotificationMessage (DidOpenNotification params))
-    ->
-    let path = uri_to_path params.DidOpen.textDocument.TextDocumentItem.uri in
-    let contents = params.DidOpen.textDocument.TextDocumentItem.text in
-    (* We can't do ClientIdeService.rpc directly, since that fails if the IDE service
-    hasn't yet initialized. Instead, notify_file_opened will queue up the open until
-    the IDE service is ready. The ClientIdeDaemon only delivers answers for open
-    files, which is why it's vital never to let is miss a DidOpen. *)
-    ClientIdeService.notify_ide_file_opened
-      ide_service
-      ~tracking_id:metadata.tracking_id
-      ~path
-      ~contents;
-    Lwt.return_unit
-  | Client_message (metadata, NotificationMessage (DidChangeNotification params))
-    ->
-    let path =
-      uri_to_path
-        params.DidChange.textDocument.VersionedTextDocumentIdentifier.uri
-    in
-    ClientIdeService.notify_ide_file_changed
-      ide_service
-      ~tracking_id:metadata.tracking_id
-      ~path;
-    Lwt.return_unit
-  | Client_message (metadata, NotificationMessage (DidCloseNotification params))
-    ->
-    let path =
-      uri_to_path params.DidClose.textDocument.TextDocumentIdentifier.uri
-    in
-    ClientIdeService.notify_ide_file_closed
-      ide_service
-      ~tracking_id:metadata.tracking_id
-      ~path;
-    Lwt.return_unit
-  | _ ->
-    (* Don't handle other events for now. When we show typechecking errors for
-    the open file, we'll start handling them. *)
-    Lwt.return_unit
-
 let get_filename_in_message_for_logging (message : lsp_message) :
     Relative_path.t option =
   let uri_opt = Lsp_fmt.get_uri_opt message in
@@ -3257,98 +3282,105 @@ let cancel_if_stale
   else
     Lwt.return_unit
 
+(** Like all async methods, this method has a synchronous preamble up
+to its first await point, at which point it returns a promise to its
+caller; the rest of the method will be scheduled asynchronously.
+The synchrpnous preamble sends an "initialize" request to the ide_service.
+The asynchronous continuation is triggered when the response comes back;
+it then pumps messages to and from the ide service.
+Note: the fact that the request is sent in the synchronous preamble, is
+important for correctness - the rest of the codebase can send other requests
+to the ide_service at any time, safe in the knowledge that such requests will
+necessarily be delivered after the initialize request. *)
 let run_ide_service
     (env : env)
     (ide_service : ClientIdeService.t)
+    (initialize_params : Lsp.Initialize.params)
     (editor_open_files : Lsp.TextDocumentItem.t UriMap.t option) : unit Lwt.t =
-  if env.use_serverless_ide then (
-    let%lwt root = get_root_wait () in
-    let initialize_params = initialize_params_exc () in
-    if
-      Lsp.Initialize.(
-        initialize_params.client_capabilities.workspace.didChangeWatchedFiles
-          .dynamicRegistration)
-    then
-      log "Language client reports that it supports file-watching"
-    else
-      log
-        ( "Warning: the language client does not report "
-        ^^ "that it supports file-watching; "
-        ^^ "file change notifications may not be processed, "
-        ^^ "and consequently, IDE queries may return stale results." );
+  let root = Some (Lsp_helpers.get_root initialize_params) |> Wwwroot.get in
+  if
+    Lsp.Initialize.(
+      initialize_params.client_capabilities.workspace.didChangeWatchedFiles
+        .dynamicRegistration)
+  then
+    log "Language client reports that it supports file-watching"
+  else
+    log
+      ( "Warning: the language client does not report "
+      ^^ "that it supports file-watching; "
+      ^^ "file change notifications may not be processed, "
+      ^^ "and consequently, IDE queries may return stale results." );
 
-    let naming_table_saved_state_path =
-      Lsp.Initialize.(
-        initialize_params.initializationOptions.namingTableSavedStatePath)
-      |> Option.map ~f:Path.make
-    in
-    let open_files =
-      editor_open_files
-      |> Option.value ~default:UriMap.empty
-      |> UriMap.keys
-      |> List.map ~f:(fun uri -> uri |> lsp_uri_to_path |> Path.make)
-    in
-    let%lwt result =
-      ClientIdeService.initialize_from_saved_state
-        ide_service
-        ~root
-        ~naming_table_saved_state_path
-        ~wait_for_initialization:(Option.is_some naming_table_saved_state_path)
-        ~use_ranked_autocomplete:env.use_ranked_autocomplete
-        ~config:env.config
-        ~open_files
-    in
-    match result with
-    | Ok num_changed_files_to_process ->
-      Lsp_helpers.telemetry_log
-        to_stdout
-        (Printf.sprintf
-           "[client-ide] Initialized; %d file changes to process"
-           num_changed_files_to_process);
-      let%lwt () = ClientIdeService.serve ide_service in
-      Lwt.return_unit
-    | Error
-        {
-          ClientIdeMessage.medium_user_message;
-          long_user_message;
-          debug_details;
-          is_actionable;
-          _;
-        } ->
-      let input = Printf.sprintf "%s\n\n%s" long_user_message debug_details in
-      let%lwt upload_result = Clowder_paste.clowder_paste ~timeout:10. input in
-      let append_to_log =
-        match upload_result with
-        | Ok url -> Printf.sprintf "\nMore details: %s" url
-        | Error message ->
-          Printf.sprintf
-            "\n\nMore details:\n%s\n\nTried to upload those details but it didn't work...\n%s"
-            debug_details
-            message
-      in
-      log
-        "IDE services could not be initialized.\n%s\n%s"
-        long_user_message
+  let naming_table_saved_state_path =
+    Lsp.Initialize.(
+      initialize_params.initializationOptions.namingTableSavedStatePath)
+    |> Option.map ~f:Path.make
+  in
+  let open_files =
+    editor_open_files
+    |> Option.value ~default:UriMap.empty
+    |> UriMap.keys
+    |> List.map ~f:(fun uri -> uri |> lsp_uri_to_path |> Path.make)
+  in
+  let%lwt result =
+    ClientIdeService.initialize_from_saved_state
+      ide_service
+      ~root
+      ~naming_table_saved_state_path
+      ~wait_for_initialization:(Option.is_some naming_table_saved_state_path)
+      ~use_ranked_autocomplete:env.use_ranked_autocomplete
+      ~config:env.config
+      ~open_files
+  in
+  match result with
+  | Ok num_changed_files_to_process ->
+    Lsp_helpers.telemetry_log
+      to_stdout
+      (Printf.sprintf
+         "[client-ide] Initialized; %d file changes to process"
+         num_changed_files_to_process);
+    let%lwt () = ClientIdeService.serve ide_service in
+    Lwt.return_unit
+  | Error
+      {
+        ClientIdeMessage.medium_user_message;
+        long_user_message;
         debug_details;
-      Lsp_helpers.log_error to_stdout (long_user_message ^ append_to_log);
-      if is_actionable then
-        Lsp_helpers.showMessage_error
-          to_stdout
-          (medium_user_message ^ see_output_hack);
-      (* chevron *)
-      Lwt.return_unit
-  ) else
+        is_actionable;
+        _;
+      } ->
+    let input = Printf.sprintf "%s\n\n%s" long_user_message debug_details in
+    let%lwt upload_result = Clowder_paste.clowder_paste ~timeout:10. input in
+    let append_to_log =
+      match upload_result with
+      | Ok url -> Printf.sprintf "\nMore details: %s" url
+      | Error message ->
+        Printf.sprintf
+          "\n\nMore details:\n%s\n\nTried to upload those details but it didn't work...\n%s"
+          debug_details
+          message
+    in
+    log
+      "IDE services could not be initialized.\n%s\n%s"
+      long_user_message
+      debug_details;
+    Lsp_helpers.log_error to_stdout (long_user_message ^ append_to_log);
+    if is_actionable then
+      Lsp_helpers.showMessage_error
+        to_stdout
+        (medium_user_message ^ see_output_hack);
+    (* chevron *)
     Lwt.return_unit
 
 let on_status_restart_action
     ~(env : env)
     ~(init_id : string)
-    ~(ide_service : ClientIdeService.t ref)
+    ~(ide_service : ClientIdeService.t option ref)
     (result : ShowStatusFB.result)
     (state : state) : state Lwt.t =
   let open ShowMessageRequest in
-  match (result, state) with
-  | (Some { title }, Lost_server _)
+  match (result, state, !ide_service) with
+  | (Some { title }, Lost_server _, _)
     when String.equal title hh_server_restart_button_text ->
     let root = get_root_exn () in
     (* Belt-and-braces kill the server. This is in case the server was *)
@@ -3360,27 +3392,36 @@ let on_status_restart_action
     start_server ~env root;
     let%lwt state = reconnect_from_lost_if_necessary ~env state `Force_regain in
     Lwt.return state
-  | (Some { title }, _) when String.equal title client_ide_restart_button_text
-    ->
+  | (Some { title }, _, Some old_ide_service)
+    when String.equal title client_ide_restart_button_text ->
     log "Restarting IDE service";
 
     (* It's possible that [destroy] takes a while to finish, so make
     sure to assign the new IDE service to the [ref] before attempting
     to do an asynchronous operation with the old one. *)
-    let old_ide_service = !ide_service in
     let ide_args = { ClientIdeMessage.init_id; verbose = env.verbose } in
     let new_ide_service = ClientIdeService.make ide_args in
-    ide_service := new_ide_service;
+    ide_service := Some new_ide_service;
     set_verbose_to_file
-      ~env
-      ~ide_service:(Some !ide_service)
+      ~ide_service:(Some new_ide_service)
       ~tracking_id:"[restart]"
       !verbose_to_file;
     (* Note: the env.verbose passed on init controls verbosity for stderr
     and is only ever controlled by --verbose command line, stored in env.
     But verbosity-to-file can be altered dynamically by the user. *)
-    Lwt.async (fun () ->
-        run_ide_service env new_ide_service (get_editor_open_files state));
+    let (promise : unit Lwt.t) =
+      run_ide_service
+        env
+        new_ide_service
+        (initialize_params_exc ())
+        (get_editor_open_files state)
+    in
+    ignore_promise_but_handle_failure
+      promise
+      ~desc:"run-ide-after-restart"
+      ~terminate_on_failure:true;
+    (* Invariant: at all times after InitializeRequest, ide_service has
+    already been sent an "initialize" message. *)
     let%lwt () =
       stop_ide_service
         old_ide_service
@@ -3394,6 +3435,116 @@ let on_status_restart_action
 (* Message handling                                                     *)
 (************************************************************************)
 
+(** send DidOpen/Close/Change/Save to hh_server and ide_service as needed *)
+let handle_editor_buffer_message
+    ~(state : state)
+    ~(ide_service : ClientIdeService.t option)
+    ~(metadata : incoming_metadata)
+    ~(ref_unblocked_time : float ref)
+    ~(message : lsp_message) : unit Lwt.t =
+  let uri_to_path uri = uri |> lsp_uri_to_path |> Path.make in
+  let ref_hh_unblocked_time = ref 0. in
+  let ref_ide_unblocked_time = ref 0. in
+
+  (* send to hh_server as necessary *)
+  let (hh_server_promise : unit Lwt.t) =
+    let open Main_env in
+    match (state, message) with
+    (* textDocument/didOpen notification *)
+    | (Main_loop menv, NotificationMessage (DidOpenNotification params)) ->
+      let%lwt () = do_didOpen menv.conn ref_hh_unblocked_time params in
+      Lwt.return_unit
+    (* textDocument/didClose notification *)
+    | (Main_loop menv, NotificationMessage (DidCloseNotification params)) ->
+      let%lwt () = do_didClose menv.conn ref_hh_unblocked_time params in
+      Lwt.return_unit
+    (* textDocument/didChange notification *)
+    | (Main_loop menv, NotificationMessage (DidChangeNotification params)) ->
+      let%lwt () = do_didChange menv.conn ref_hh_unblocked_time params in
+      Lwt.return_unit
+    (* textDocument/didSave notification *)
+    | (Main_loop _menv, NotificationMessage (DidSaveNotification _params)) ->
+      Lwt.return_unit
+    | (_, _) -> Lwt.return_unit
+  in
+
+  (* send to ide_service as necessary *)
+  (* For now 'ide_service_promise' is immediately fulfilled, but in future it will
+  be fulfilled only when the ide_service has finished processing the message. *)
+  let (ide_service_promise : unit Lwt.t) =
+    match (ide_service, message) with
+    | (Some ide_service, NotificationMessage (DidOpenNotification params)) ->
+      let file_path =
+        uri_to_path params.DidOpen.textDocument.TextDocumentItem.uri
+      in
+      let file_contents = params.DidOpen.textDocument.TextDocumentItem.text in
+      (* The ClientIdeDaemon only delivers answers for open files, which is why it's vital
+      never to let is miss a DidOpen. *)
+      let%lwt () =
+        ide_rpc
+          ide_service
+          ~tracking_id:metadata.tracking_id
+          ~ref_unblocked_time:ref_ide_unblocked_time
+          ~needs_init:false
+          ClientIdeMessage.(Ide_file_opened { file_path; file_contents })
+      in
+      Lwt.return_unit
+    | (Some ide_service, NotificationMessage (DidChangeNotification params)) ->
+      let file_path =
+        uri_to_path
+          params.DidChange.textDocument.VersionedTextDocumentIdentifier.uri
+      in
+      let%lwt () =
+        ide_rpc
+          ide_service
+          ~tracking_id:metadata.tracking_id
+          ~ref_unblocked_time:ref_ide_unblocked_time
+          ~needs_init:false
+          ClientIdeMessage.(Ide_file_changed { Ide_file_changed.file_path })
+      in
+      Lwt.return_unit
+    | (Some ide_service, NotificationMessage (DidCloseNotification params)) ->
+      let file_path =
+        uri_to_path params.DidClose.textDocument.TextDocumentIdentifier.uri
+      in
+      let%lwt () =
+        ide_rpc
+          ide_service
+          ~tracking_id:metadata.tracking_id
+          ~ref_unblocked_time:ref_ide_unblocked_time
+          ~needs_init:false
+          ClientIdeMessage.(Ide_file_closed file_path)
+      in
+      Lwt.return_unit
+    | _ ->
+      (* Don't handle other events for now. When we show typechecking errors for
+    the open file, we'll start handling them. *)
+      Lwt.return_unit
+  in
+
+  (* Our asynchrony deal is (1) we want to kick off notifications to
+  hh_server and ide_service at the same time, (2) we want to wait until
+  both are done, (3) an exception in one shouldn't jeapordize the other,
+  (4) our failure model only allows us to record at most one exception
+  so we'll pick one arbitrarily. *)
+  let%lwt (hh_server_e : Exception.t option) =
+    try%lwt
+      let%lwt () = hh_server_promise in
+      Lwt.return_none
+    with e -> Lwt.return_some (Exception.wrap e)
+  and (ide_service_e : Exception.t option) =
+    try%lwt
+      let%lwt () = ide_service_promise in
+      Lwt.return_none
+    with e -> Lwt.return_some (Exception.wrap e)
+  in
+  ref_unblocked_time := max !ref_hh_unblocked_time !ref_ide_unblocked_time;
+  match (hh_server_e, ide_service_e) with
+  | (_, Some e)
+  | (Some e, _) ->
+    Exception.reraise e
+  | _ -> Lwt.return_unit
+
 (* handle_event: Process and respond to a message, and update the LSP state
    machine accordingly. In case the message was a request, it returns the
    json it responded with, so the caller can log it. *)
@@ -3401,7 +3552,7 @@ let handle_client_message
     ~(env : env)
     ~(state : state ref)
     ~(client : Jsonrpc.queue)
-    ~(ide_service : ClientIdeService.t)
+    ~(ide_service : ClientIdeService.t option)
     ~(metadata : incoming_metadata)
     ~(message : lsp_message)
     ~(ref_unblocked_time : float ref) : result_telemetry option Lwt.t =
@@ -3415,15 +3566,15 @@ let handle_client_message
       | Some files -> files
       | None -> UriMap.empty
     in
-    match (!state, message) with
+    match (!state, ide_service, message) with
     (* response *)
-    | (_, ResponseMessage (id, response)) ->
+    | (_, _, ResponseMessage (id, response)) ->
       let (_, handler) = IdMap.find id !requests_outstanding in
       let%lwt new_state = handler response !state in
       state := new_state;
       Lwt.return_none
     (* shutdown request *)
-    | (_, RequestMessage (id, ShutdownRequest)) ->
+    | (_, _, RequestMessage (id, ShutdownRequest)) ->
       let%lwt new_state =
         do_shutdown !state ide_service tracking_id ref_unblocked_time
       in
@@ -3431,31 +3582,28 @@ let handle_client_message
       respond_jsonrpc ~powered_by:Language_server id ShutdownResult;
       Lwt.return_none
     (* cancel notification *)
-    | (_, NotificationMessage (CancelRequestNotification _)) ->
+    | (_, _, NotificationMessage (CancelRequestNotification _)) ->
       (* For now, we'll ignore it. *)
       Lwt.return_none
     (* exit notification *)
-    | (_, NotificationMessage ExitNotification) ->
+    | (_, _, NotificationMessage ExitNotification) ->
       if is_post_shutdown !state then
         exit_ok ()
       else
         exit_fail ()
     (* setTrace notification *)
-    | (_, NotificationMessage (SetTraceNotification params)) ->
+    | (_, _, NotificationMessage (SetTraceNotification params)) ->
       let value =
         match params with
         | SetTraceNotification.Verbose -> true
         | SetTraceNotification.Off -> false
       in
-      set_verbose_to_file
-        ~env
-        ~ide_service:(Some ide_service)
-        ~tracking_id
-        value;
+      set_verbose_to_file ~ide_service ~tracking_id value;
       Lwt.return_none
-    (* test entrypoint: shutdowwn client_ide_service *)
-    | (_, RequestMessage (id, HackTestShutdownServerlessRequestFB))
-      when env.use_serverless_ide ->
+    (* test entrypoint: shutdown client_ide_service *)
+    | ( _,
+        Some ide_service,
+        RequestMessage (id, HackTestShutdownServerlessRequestFB) ) ->
       let%lwt () =
         stop_ide_service
           ide_service
@@ -3468,7 +3616,7 @@ let handle_client_message
         HackTestShutdownServerlessResultFB;
       Lwt.return_none
     (* test entrypoint: stop hh_server *)
-    | (_, RequestMessage (id, HackTestStopServerRequestFB)) ->
+    | (_, _, RequestMessage (id, HackTestStopServerRequestFB)) ->
       let root_folder =
         Path.make (Relative_path.path_of_prefix Relative_path.Root)
       in
@@ -3476,7 +3624,7 @@ let handle_client_message
       respond_jsonrpc ~powered_by:Serverless_ide id HackTestStopServerResultFB;
       Lwt.return_none
     (* test entrypoint: start hh_server *)
-    | (_, RequestMessage (id, HackTestStartServerRequestFB)) ->
+    | (_, _, RequestMessage (id, HackTestStartServerRequestFB)) ->
       let root_folder =
         Path.make (Relative_path.path_of_prefix Relative_path.Root)
       in
@@ -3484,10 +3632,11 @@ let handle_client_message
       respond_jsonrpc ~powered_by:Serverless_ide id HackTestStartServerResultFB;
       Lwt.return_none
     (* initialize request *)
-    | (Pre_init, RequestMessage (id, InitializeRequest initialize_params)) ->
+    | (Pre_init, _, RequestMessage (id, InitializeRequest initialize_params)) ->
       let open Initialize in
-      Lwt.wakeup_later initialize_params_resolver initialize_params;
-      let root = Path.make (Lsp_helpers.get_root initialize_params) in
+      initialize_params_ref := Some initialize_params;
+      let root = get_root_exn () in
+      (* calculated from initialize_params_ref *)
       set_up_hh_logger_for_client_lsp root;
       (* Following is a hack. Atom incorrectly passes '--from vscode', rendering us
       unable to distinguish Atom from VSCode. But Atom is now frozen at vscode client
@@ -3516,24 +3665,32 @@ let handle_client_message
         | Initialize.Off -> ()
         | Initialize.Messages
         | Initialize.Verbose ->
-          set_verbose_to_file
-            ~env
-            ~ide_service:(Some ide_service)
-            ~tracking_id
-            true
+          set_verbose_to_file ~ide_service ~tracking_id true
       end;
       let result = do_initialize ~env root in
       respond_jsonrpc ~powered_by:Language_server id (InitializeResult result);
 
-      if env.use_serverless_ide then (
-        let id = NumberId (Jsonrpc.get_next_request_id ()) in
-        let request = do_didChangeWatchedFiles_registerCapability () in
-        to_stdout (print_lsp_request id request);
-        (* TODO: our handler should really handle an error response properly *)
-        let handler _response state = Lwt.return state in
-        requests_outstanding :=
-          IdMap.add id (request, handler) !requests_outstanding
-      );
+      begin
+        match ide_service with
+        | None -> ()
+        | Some ide_service ->
+          let (promise : unit Lwt.t) =
+            run_ide_service env ide_service initialize_params None
+          in
+          ignore_promise_but_handle_failure
+            promise
+            ~desc:"run-ide-after-init"
+            ~terminate_on_failure:true;
+          (* Invariant: at all times after InitializeRequest, ide_service has
+          already been sent an "initialize" message. *)
+          let id = NumberId (Jsonrpc.get_next_request_id ()) in
+          let request = do_didChangeWatchedFiles_registerCapability () in
+          to_stdout (print_lsp_request id request);
+          (* TODO: our handler should really handle an error response properly *)
+          let handler _response state = Lwt.return state in
+          requests_outstanding :=
+            IdMap.add id (request, handler) !requests_outstanding
+      end;
 
       if not @@ Sys_utils.is_test_mode () then
         Lsp_helpers.telemetry_log
@@ -3541,7 +3698,7 @@ let handle_client_message
           ("Version in hhconfig=" ^ !hhconfig_version);
       Lwt.return_some { result_count = 0; result_extra_telemetry = None }
     (* any request/notification if we haven't yet initialized *)
-    | (Pre_init, _) ->
+    | (Pre_init, _, _) ->
       raise
         (Error.LspException
            {
@@ -3549,7 +3706,7 @@ let handle_client_message
              message = "Server not yet initialized";
              data = None;
            })
-    | (Post_shutdown, _c) ->
+    | (Post_shutdown, _, _c) ->
       raise
         (Error.LspException
            {
@@ -3558,27 +3715,33 @@ let handle_client_message
              data = None;
            })
     (* initialized notification *)
-    | (_, NotificationMessage InitializedNotification) -> Lwt.return_none
+    | (_, _, NotificationMessage InitializedNotification) -> Lwt.return_none
     (* rage request *)
-    | (_, RequestMessage (id, RageRequestFB)) ->
+    | (_, _, RequestMessage (id, RageRequestFB)) ->
       let%lwt result = do_rageFB !state ref_unblocked_time in
       respond_jsonrpc ~powered_by:Language_server id (RageResultFB result);
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
-    | (_, NotificationMessage (DidChangeWatchedFilesNotification notification))
-      when env.use_serverless_ide ->
+    | ( _,
+        Some ide_service,
+        NotificationMessage (DidChangeWatchedFilesNotification notification) )
+      ->
       let open DidChangeWatchedFiles in
-      List.iter notification.changes ~f:(fun change ->
-          let path = lsp_uri_to_path change.uri in
-          let path = Path.make path in
-          ClientIdeService.notify_disk_file_changed
-            ide_service
-            ~tracking_id
-            path);
+      let changes =
+        List.map notification.changes ~f:(fun change ->
+            change.uri |> lsp_uri_to_path |> Path.make)
+      in
+      let%lwt () =
+        ide_rpc
+          ide_service
+          ~tracking_id
+          ~ref_unblocked_time
+          ~needs_init:false
+          ClientIdeMessage.(Disk_files_changed changes)
+      in
       Lwt.return_none
     (* Text document completion: "AutoComplete!" *)
-    | (_, RequestMessage (id, CompletionRequest params))
-      when env.use_serverless_ide ->
+    | (_, Some ide_service, RequestMessage (id, CompletionRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_completion_local
@@ -3595,8 +3758,9 @@ let handle_client_message
           result_extra_telemetry = None;
         }
     (* Resolve documentation for a symbol: "Autocomplete Docblock!" *)
-    | (_, RequestMessage (id, CompletionItemResolveRequest params))
-      when env.use_serverless_ide ->
+    | ( _,
+        Some ide_service,
+        RequestMessage (id, CompletionItemResolveRequest params) ) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_resolve_local
@@ -3612,8 +3776,8 @@ let handle_client_message
         (CompletionItemResolveResult result);
       Lwt.return_some { result_count = 1; result_extra_telemetry = None }
     (* Document highlighting in serverless IDE *)
-    | (_, RequestMessage (id, DocumentHighlightRequest params))
-      when env.use_serverless_ide ->
+    | (_, Some ide_service, RequestMessage (id, DocumentHighlightRequest params))
+      ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_highlight_local
@@ -3630,8 +3794,8 @@ let handle_client_message
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* Type coverage in serverless IDE *)
-    | (_, RequestMessage (id, TypeCoverageRequestFB params))
-      when env.use_serverless_ide ->
+    | (_, Some ide_service, RequestMessage (id, TypeCoverageRequestFB params))
+      ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_typeCoverage_localFB
@@ -3651,8 +3815,7 @@ let handle_client_message
           result_extra_telemetry = None;
         }
     (* Hover docblocks in serverless IDE *)
-    | (_, RequestMessage (id, HoverRequest params)) when env.use_serverless_ide
-      ->
+    | (_, Some ide_service, RequestMessage (id, HoverRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_hover_local
@@ -3669,8 +3832,8 @@ let handle_client_message
         | Some { Hover.contents; _ } -> List.length contents
       in
       Lwt.return_some { result_count; result_extra_telemetry = None }
-    | (_, RequestMessage (id, DocumentSymbolRequest params))
-      when env.use_serverless_ide ->
+    | (_, Some ide_service, RequestMessage (id, DocumentSymbolRequest params))
+      ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_documentSymbol_local
@@ -3686,8 +3849,7 @@ let handle_client_message
         (DocumentSymbolResult result);
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
-    | (_, RequestMessage (id, DefinitionRequest params))
-      when env.use_serverless_ide ->
+    | (_, Some ide_service, RequestMessage (id, DefinitionRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_definition_local
@@ -3700,8 +3862,8 @@ let handle_client_message
       respond_jsonrpc ~powered_by:Serverless_ide id (DefinitionResult result);
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
-    | (_, RequestMessage (id, TypeDefinitionRequest params))
-      when env.use_serverless_ide ->
+    | (_, Some ide_service, RequestMessage (id, TypeDefinitionRequest params))
+      ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_typeDefinition_local
@@ -3718,8 +3880,7 @@ let handle_client_message
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* Resolve documentation for a symbol: "Autocomplete Docblock!" *)
-    | (_, RequestMessage (id, SignatureHelpRequest params))
-      when env.use_serverless_ide ->
+    | (_, Some ide_service, RequestMessage (id, SignatureHelpRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_signatureHelp_local
@@ -3737,7 +3898,7 @@ let handle_client_message
       in
       Lwt.return_some { result_count; result_extra_telemetry = None }
     (* textDocument/formatting *)
-    | (_, RequestMessage (id, DocumentFormattingRequest params)) ->
+    | (_, _, RequestMessage (id, DocumentFormattingRequest params)) ->
       let result = do_documentFormatting editor_open_files params in
       respond_jsonrpc
         ~powered_by:Language_server
@@ -3746,7 +3907,7 @@ let handle_client_message
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* textDocument/rangeFormatting *)
-    | (_, RequestMessage (id, DocumentRangeFormattingRequest params)) ->
+    | (_, _, RequestMessage (id, DocumentRangeFormattingRequest params)) ->
       let result = do_documentRangeFormatting editor_open_files params in
       respond_jsonrpc
         ~powered_by:Language_server
@@ -3755,7 +3916,7 @@ let handle_client_message
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* textDocument/onTypeFormatting *)
-    | (_, RequestMessage (id, DocumentOnTypeFormattingRequest params)) ->
+    | (_, _, RequestMessage (id, DocumentOnTypeFormattingRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let result = do_documentOnTypeFormatting editor_open_files params in
       respond_jsonrpc
@@ -3764,16 +3925,23 @@ let handle_client_message
         (DocumentOnTypeFormattingResult result);
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
-    (* any request/notification that we already handled in [track_open_files] *)
-    | ((In_init _ | Lost_server _), NotificationMessage (DidOpenNotification _))
-    | ( (In_init _ | Lost_server _),
-        NotificationMessage (DidChangeNotification _) )
-    | ((In_init _ | Lost_server _), NotificationMessage (DidCloseNotification _))
-    | ((In_init _ | Lost_server _), NotificationMessage (DidSaveNotification _))
-      ->
+    (* editor buffer events *)
+    | ( _,
+        _,
+        NotificationMessage
+          ( DidOpenNotification _ | DidChangeNotification _
+          | DidCloseNotification _ | DidSaveNotification _ ) ) ->
+      let%lwt () =
+        handle_editor_buffer_message
+          ~state:!state
+          ~ide_service
+          ~metadata
+          ~ref_unblocked_time
+          ~message
+      in
       Lwt.return_none
     (* any request/notification that we can't handle yet *)
-    | (In_init _, message) ->
+    | (In_init _, _, message) ->
       (* we respond with Operation_cancelled so that clients don't produce *)
       (* user-visible logs/warnings. *)
       raise
@@ -3792,7 +3960,7 @@ let handle_client_message
                     ]);
            })
     (* textDocument/hover request *)
-    | (Main_loop menv, RequestMessage (id, HoverRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, HoverRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result = do_hover menv.conn ref_unblocked_time params in
       respond_jsonrpc ~powered_by:Hh_server id (HoverResult result);
@@ -3803,14 +3971,14 @@ let handle_client_message
       in
       Lwt.return_some { result_count; result_extra_telemetry = None }
     (* textDocument/typeDefinition request *)
-    | (Main_loop menv, RequestMessage (id, TypeDefinitionRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, TypeDefinitionRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result = do_typeDefinition menv.conn ref_unblocked_time params in
       respond_jsonrpc ~powered_by:Hh_server id (TypeDefinitionResult result);
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* textDocument/definition request *)
-    | (Main_loop menv, RequestMessage (id, DefinitionRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, DefinitionRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_definition menv.conn ref_unblocked_time editor_open_files params
@@ -3819,7 +3987,7 @@ let handle_client_message
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* textDocument/completion request *)
-    | (Main_loop menv, RequestMessage (id, CompletionRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, CompletionRequest params)) ->
       let do_completion =
         if env.use_ffp_autocomplete then
           do_completion_ffp
@@ -3835,8 +4003,9 @@ let handle_client_message
           result_extra_telemetry = None;
         }
     (* completionItem/resolve request *)
-    | (Main_loop menv, RequestMessage (id, CompletionItemResolveRequest params))
-      ->
+    | ( Main_loop menv,
+        _,
+        RequestMessage (id, CompletionItemResolveRequest params) ) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_completionItemResolve menv.conn ref_unblocked_time params
@@ -3847,26 +4016,26 @@ let handle_client_message
         (CompletionItemResolveResult result);
       Lwt.return_some { result_count = 1; result_extra_telemetry = None }
     (* workspace/symbol request *)
-    | (Main_loop menv, RequestMessage (id, WorkspaceSymbolRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, WorkspaceSymbolRequest params)) ->
       let%lwt result = do_workspaceSymbol menv.conn ref_unblocked_time params in
       respond_jsonrpc ~powered_by:Hh_server id (WorkspaceSymbolResult result);
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* textDocument/documentSymbol request *)
-    | (Main_loop menv, RequestMessage (id, DocumentSymbolRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, DocumentSymbolRequest params)) ->
       let%lwt result = do_documentSymbol menv.conn ref_unblocked_time params in
       respond_jsonrpc ~powered_by:Hh_server id (DocumentSymbolResult result);
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* textDocument/references request *)
-    | (Main_loop menv, RequestMessage (id, FindReferencesRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, FindReferencesRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp long_timeout in
       let%lwt result = do_findReferences menv.conn ref_unblocked_time params in
       respond_jsonrpc ~powered_by:Hh_server id (FindReferencesResult result);
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* textDocument/implementation request *)
-    | (Main_loop menv, RequestMessage (id, ImplementationRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, ImplementationRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp long_timeout in
       let%lwt result =
         do_goToImplementation menv.conn ref_unblocked_time params
@@ -3875,7 +4044,7 @@ let handle_client_message
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* textDocument/rename *)
-    | (Main_loop menv, RequestMessage (id, RenameRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, RenameRequest params)) ->
       let%lwt result = do_documentRename menv.conn ref_unblocked_time params in
       respond_jsonrpc ~powered_by:Hh_server id (RenameResult result);
       let result_count =
@@ -3893,7 +4062,8 @@ let handle_client_message
       Lwt.return_some
         { result_count; result_extra_telemetry = Some result_extra_telemetry }
     (* textDocument/documentHighlight *)
-    | (Main_loop menv, RequestMessage (id, DocumentHighlightRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, DocumentHighlightRequest params))
+      ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
       let%lwt result =
         do_documentHighlight menv.conn ref_unblocked_time params
@@ -3902,7 +4072,7 @@ let handle_client_message
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* textDocument/typeCoverage *)
-    | (Main_loop menv, RequestMessage (id, TypeCoverageRequestFB params)) ->
+    | (Main_loop menv, _, RequestMessage (id, TypeCoverageRequestFB params)) ->
       let%lwt result = do_typeCoverageFB menv.conn ref_unblocked_time params in
       respond_jsonrpc ~powered_by:Hh_server id (TypeCoverageResultFB result);
       Lwt.return_some
@@ -3912,28 +4082,14 @@ let handle_client_message
         }
     (* textDocument/toggleTypeCoverage *)
     | ( Main_loop menv,
+        _,
         NotificationMessage (ToggleTypeCoverageNotificationFB params) ) ->
       let%lwt () =
         do_toggleTypeCoverageFB menv.conn ref_unblocked_time params
       in
       Lwt.return_none
-    (* textDocument/didOpen notification *)
-    | (Main_loop menv, NotificationMessage (DidOpenNotification params)) ->
-      let%lwt () = do_didOpen menv.conn ref_unblocked_time params in
-      Lwt.return_none
-    (* textDocument/didClose notification *)
-    | (Main_loop menv, NotificationMessage (DidCloseNotification params)) ->
-      let%lwt () = do_didClose menv.conn ref_unblocked_time params in
-      Lwt.return_none
-    (* textDocument/didChange notification *)
-    | (Main_loop menv, NotificationMessage (DidChangeNotification params)) ->
-      let%lwt () = do_didChange menv.conn ref_unblocked_time params in
-      Lwt.return_none
-    (* textDocument/didSave notification *)
-    | (Main_loop _menv, NotificationMessage (DidSaveNotification _params)) ->
-      Lwt.return_none
     (* textDocument/signatureHelp notification *)
-    | (Main_loop menv, RequestMessage (id, SignatureHelpRequest params)) ->
+    | (Main_loop menv, _, RequestMessage (id, SignatureHelpRequest params)) ->
       let%lwt result = do_signatureHelp menv.conn ref_unblocked_time params in
       respond_jsonrpc ~powered_by:Hh_server id (SignatureHelpResult result);
       let result_count =
@@ -3943,7 +4099,7 @@ let handle_client_message
       in
       Lwt.return_some { result_count; result_extra_telemetry = None }
     (* catch-all for client reqs/notifications we haven't yet implemented *)
-    | (Main_loop _menv, message) ->
+    | (Main_loop _menv, _, message) ->
       let method_ = Lsp_fmt.message_name_to_string message in
       raise
         (Error.LspException
@@ -3954,7 +4110,7 @@ let handle_client_message
            })
     (* catch-all for requests/notifications after shutdown request *)
     (* client message when we've lost the server *)
-    | (Lost_server lenv, _) ->
+    | (Lost_server lenv, _, _) ->
       let open Lost_env in
       (* if trigger_on_lsp_method is set, our caller should already have        *)
       (* transitioned away from this state.                                     *)
@@ -3988,11 +4144,12 @@ let handle_server_message
     match (!state, message) with
     (* server busy status *)
     | (_, { push = ServerCommandTypes.BUSY_STATUS status; _ }) ->
+      (* if we're connected to hh_server, that can only be because
+      we know its root, which can only be because we received initializeParams.
+      So the following call won't fail! *)
+      let p = initialize_params_exc () in
       let should_send_status =
-        match Lwt.poll initialize_params_promise with
-        | None -> false
-        | Some p ->
-          Lsp.Initialize.(p.initializationOptions.sendServerStatusEvents)
+        Lsp.Initialize.(p.initializationOptions.sendServerStatusEvents)
       in
       ( if should_send_status then
         let status_message =
@@ -4095,47 +4252,42 @@ let handle_client_ide_notification
   in
   Lwt.return_none
 
-let get_client_ide_status
-    (env : env) (state : state) (ide_service : ClientIdeService.t) :
+let get_client_ide_status (ide_service : ClientIdeService.t) :
     ShowStatusFB.params option =
-  match (env.use_serverless_ide, state) with
-  | (false, _) -> None
-  | (_, (Pre_init | Post_shutdown)) -> None
-  | _ ->
-    let (type_, shortMessage, message, actions) =
-      match ClientIdeService.get_status ide_service with
-      | ClientIdeService.Status.Not_started ->
-        ( MessageType.ErrorMessage,
-          "Hack: not started",
-          "Hack IDE: not started.",
-          [{ ShowMessageRequest.title = client_ide_restart_button_text }] )
-      | ClientIdeService.Status.Initializing ->
-        ( MessageType.WarningMessage,
-          "Hack: initializing",
-          "Hack IDE: initializing.",
-          [] )
-      | ClientIdeService.Status.Processing_files p ->
-        let open ClientIdeMessage.Processing_files in
-        ( MessageType.WarningMessage,
-          "Hack",
-          Printf.sprintf "Hack IDE: processing %d files." p.total,
-          [] )
-      | ClientIdeService.Status.Ready ->
-        (MessageType.InfoMessage, "Hack", "Hack IDE: ready.", [])
-      | ClientIdeService.Status.Stopped s ->
-        let open ClientIdeMessage in
-        ( MessageType.ErrorMessage,
-          "Hack: " ^ s.short_user_message,
-          s.medium_user_message ^ see_output_hack,
-          [{ ShowMessageRequest.title = client_ide_restart_button_text }] )
-    in
-    Some
-      {
-        ShowStatusFB.shortMessage = Some shortMessage;
-        request = { ShowMessageRequest.type_; message; actions };
-        progress = None;
-        total = None;
-      }
+  let (type_, shortMessage, message, actions) =
+    match ClientIdeService.get_status ide_service with
+    | ClientIdeService.Status.Not_started ->
+      ( MessageType.ErrorMessage,
+        "Hack: not started",
+        "Hack IDE: not started.",
+        [{ ShowMessageRequest.title = client_ide_restart_button_text }] )
+    | ClientIdeService.Status.Initializing ->
+      ( MessageType.WarningMessage,
+        "Hack: initializing",
+        "Hack IDE: initializing.",
+        [] )
+    | ClientIdeService.Status.Processing_files p ->
+      let open ClientIdeMessage.Processing_files in
+      ( MessageType.WarningMessage,
+        "Hack",
+        Printf.sprintf "Hack IDE: processing %d files." p.total,
+        [] )
+    | ClientIdeService.Status.Ready ->
+      (MessageType.InfoMessage, "Hack", "Hack IDE: ready.", [])
+    | ClientIdeService.Status.Stopped s ->
+      let open ClientIdeMessage in
+      ( MessageType.ErrorMessage,
+        "Hack: " ^ s.short_user_message,
+        s.medium_user_message ^ see_output_hack,
+        [{ ShowMessageRequest.title = client_ide_restart_button_text }] )
+  in
+  Some
+    {
+      ShowStatusFB.shortMessage = Some shortMessage;
+      request = { ShowMessageRequest.type_; message; actions };
+      progress = None;
+      total = None;
+    }
 
 (** This function blocks while it attempts to connect to the monitor to read status.
 It normally it gets status quickly, but has a 3s timeout just in case. *)
@@ -4391,15 +4543,19 @@ let merge_statuses
 let refresh_status
     ~(env : env)
     ~(state : state ref)
-    ~(ide_service : ClientIdeService.t ref)
+    ~(ide_service : ClientIdeService.t option ref)
     ~(init_id : string) : unit =
-  if is_pre_init !state then
+  if is_pre_init !state || is_post_shutdown !state then
     (* not allowed to send anything until we've received initialize event *)
     ()
   else
     let hh_server_status = get_hh_server_status state in
+    let client_ide_status =
+      match !ide_service with
+      | None -> None
+      | Some ide_service -> get_client_ide_status ide_service
+    in
     state := publish_hh_server_status_diagnostic !state hh_server_status;
-    let client_ide_status = get_client_ide_status env !state !ide_service in
     let status = merge_statuses ~hh_server_status ~client_ide_status in
     Option.iter
       status
@@ -4444,13 +4600,15 @@ let handle_tick
         end else
           Lwt.return_unit
       in
-      Lwt.async EventLoggerLwt.flush;
       Lwt.return_unit
     (* idle tick. No-op. *)
-    | _ ->
-      Lwt.async EventLoggerLwt.flush;
-      Lwt.return_unit
+    | _ -> Lwt.return_unit
   in
+  let (promise : unit Lwt.t) = EventLoggerLwt.flush () in
+  ignore_promise_but_handle_failure
+    promise
+    ~desc:"tick-event-flush"
+    ~terminate_on_failure:false;
   Lwt.return_none
 
 let main (init_id : string) (env : env) : Exit_status.t Lwt.t =
@@ -4462,20 +4620,23 @@ let main (init_id : string) (env : env) : Exit_status.t Lwt.t =
     Hh_logger.Level.set_min_level_stderr Hh_logger.Level.Debug
   else
     Hh_logger.Level.set_min_level_stderr Hh_logger.Level.Error;
-  set_verbose_to_file
-    ~env
-    ~ide_service:None
-    ~tracking_id:"[startup]"
-    env.verbose;
-
+  set_verbose_to_file ~ide_service:None ~tracking_id:"[startup]" env.verbose;
   (* The --verbose flag in env.verbose is the only thing that controls verbosity
   to stderr. Meanwhile, verbosity-to-file can be altered dynamically by the user.
   Why are they different? because we should write to stderr under a test harness,
   but we should never write to stderr when invoked by VSCode - it's not even guaranteed
   to drain the stderr pipe. *)
+  let ide_service =
+    if env.use_serverless_ide then
+      Some
+        (ClientIdeService.make
+           { ClientIdeMessage.init_id; verbose = env.verbose })
+    else
+      None
+  in
+  let ide_service = ref ide_service in
+
   let client = Jsonrpc.make_queue () in
-  let ide_args = { ClientIdeMessage.init_id; verbose = env.verbose } in
-  let ide_service = ref (ClientIdeService.make ide_args) in
   let deferred_action : (unit -> unit Lwt.t) option ref = ref None in
   let state = ref Pre_init in
   let ref_event = ref None in
@@ -4514,15 +4675,6 @@ let main (init_id : string) (env : env) : Exit_status.t Lwt.t =
 
       (* if a message comes from the server, maybe update our record of server state *)
       update_hh_server_state_if_necessary event;
-
-      let%lwt () =
-        (* update the IDE service with the new file contents, if any *)
-        if env.use_serverless_ide then
-          let%lwt () = track_ide_service_open_files !ide_service event in
-          Lwt.return_unit
-        else
-          Lwt.return_unit
-      in
 
       (* update status immediately if warranted *)
       refresh_status ~env ~state ~ide_service ~init_id;
@@ -4714,7 +4866,6 @@ let main (init_id : string) (env : env) : Exit_status.t Lwt.t =
       hack_log_error !ref_event e Error_from_lsp_misc !ref_unblocked_time env;
       Lwt.return_unit
   in
-  Lwt.async (fun () -> run_ide_service env !ide_service None);
   let rec main_loop () : unit Lwt.t =
     let%lwt () = process_next_event () in
     main_loop ()

@@ -569,6 +569,7 @@ struct RuntimeOption {
   static bool TimeoutsUseWallTime;
   static bool CheckFlushOnUserClose;
   static bool EvalAuthoritativeMode;
+  static int CheckCLIClientCommands;
   static int CheckIntOverflow;
   static HackStrictOption StrictArrayFillKeys;
   static bool LookForTypechecker;
@@ -1018,6 +1019,7 @@ struct RuntimeOption {
   F(bool, VerifyOnly,                  false)                           \
   F(bool, FatalOnVerifyError,          !RepoAuthoritative)              \
   F(bool, AbortBuildOnVerifyError,     true)                            \
+  F(bool, AbortBuildOnCompilerError,   true)                            \
   F(uint32_t, StaticContentsLogRate,   100)                             \
   F(uint32_t, LogUnitLoadRate,         0)                               \
   /* The rate at which we log profiling info about loop behavior. */    \
