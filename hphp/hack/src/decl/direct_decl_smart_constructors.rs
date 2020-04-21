@@ -157,6 +157,10 @@ fn tany() -> Ty {
     Ty(Reason::Rnone, Box::new(Ty_::Tany(TanySentinel)))
 }
 
+fn tarraykey() -> Ty {
+    Ty(Reason::Rnone, Box::new(Ty_::Tprim(aast::Tprim::Tarraykey)))
+}
+
 #[derive(Clone, Debug)]
 struct NamespaceInfo {
     name: String,
@@ -929,15 +933,13 @@ impl DirectDeclSmartConstructors<'_> {
                         match id.1.trim_start_matches("\\") {
                             "varray_or_darray" => match inner_types.as_slice() {
                                 [tk, tv] => Ty_::TvarrayOrDarray(
-                                    Some(
-                                        self.node_to_ty(tk, type_variables)
-                                            .unwrap_or_else(|_| tany()),
-                                    ),
+                                    self.node_to_ty(tk, type_variables)
+                                        .unwrap_or_else(|_| tany()),
                                     self.node_to_ty(tv, type_variables)
                                         .unwrap_or_else(|_| tany()),
                                 ),
                                 [tv] => Ty_::TvarrayOrDarray(
-                                    None,
+                                    tarraykey(),
                                     self.node_to_ty(tv, type_variables)
                                         .unwrap_or_else(|_| tany()),
                                 ),
@@ -1123,9 +1125,10 @@ impl DirectDeclSmartConstructors<'_> {
                         | Id(_) | Import(_) | Is(_) | KeyValCollection(_) | Lfun(_) | List(_)
                         | Lplaceholder(_) | Lvar(_) | MethodCaller(_) | MethodId(_) | New(_)
                         | ObjGet(_) | Omitted | Pair(_) | Pipe(_) | PUAtom(_) | PUIdentifier(_)
-                        | Record(_) | Shape(_) | SmethodId(_) | Suspend(_) | Typename(_)
-                        | ValCollection(_) | Varray(_) | Xml(_) | Yield(_) | YieldBreak
-                        | YieldFrom(_) => Err(format!("Cannot convert expr to type: {:?}", expr)),
+                        | Record(_) | Shape(_) | SmethodId(_) | Suspend(_) | ValCollection(_)
+                        | Varray(_) | Xml(_) | Yield(_) | YieldBreak | YieldFrom(_) => {
+                            Err(format!("Cannot convert expr to type: {:?}", expr))
+                        }
                     }
                 }
 
@@ -1164,7 +1167,7 @@ impl DirectDeclSmartConstructors<'_> {
                         "nothing" => Ty_::Tunion(Vec::new()),
                         "nonnull" => Ty_::Tnonnull,
                         "dynamic" => Ty_::Tdynamic,
-                        "varray_or_darray" => Ty_::TvarrayOrDarray(None, tany()),
+                        "varray_or_darray" => Ty_::TvarrayOrDarray(tarraykey(), tany()),
                         _ => {
                             let name = self
                                 .state

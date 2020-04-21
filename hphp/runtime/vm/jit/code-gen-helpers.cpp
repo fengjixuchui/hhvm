@@ -617,11 +617,11 @@ int offsetToLocalData(int id) {
   return TVOFF(m_data) - cellsToBytes(id + 1);
 }
 
-Vptr ptrToLocalType(Vreg fp, int id) {
-  return fp[offsetToLocalType(id)];
+Vptr ptrToLocalType(Vreg fp, int id, FPInvOffset fpOffset) {
+  return fp[offsetToLocalType(id) - cellsToBytes(fpOffset.offset)];
 }
-Vptr ptrToLocalData(Vreg fp, int id) {
-  return fp[offsetToLocalData(id)];
+Vptr ptrToLocalData(Vreg fp, int id, FPInvOffset fpOffset) {
+  return fp[offsetToLocalData(id) - cellsToBytes(fpOffset.offset)];
 }
 
 void nextLocal(Vout& v,
@@ -640,17 +640,6 @@ void prevLocal(Vout& v,
                Vreg dataOut) {
   v << addqi{(int32_t)sizeof(TypedValue), typeIn, typeOut, v.makeReg()};
   v << addqi{(int32_t)sizeof(TypedValue), dataIn, dataOut, v.makeReg()};
-}
-
-void lvalToLocal(Vout& v, Vreg fp, int id, Vloc dst) {
-  if (wide_tv_val) {
-    assertx(dst.hasReg(tv_lval::type_idx));
-    assertx(dst.hasReg(tv_lval::val_idx));
-    v << lea{ptrToLocalType(fp, id), dst.reg(tv_lval::type_idx)};
-    v << lea{ptrToLocalData(fp, id), dst.reg(tv_lval::val_idx)};
-  } else {
-    v << lea{ptrToLocalData(fp, id), dst.reg()};
-  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////

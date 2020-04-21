@@ -290,8 +290,6 @@ struct RuntimeOption {
   static int PspCpuTimeoutSeconds;
   static int64_t MaxRequestAgeFactor;
   static int64_t RequestMemoryMaxBytes;
-  // Threshold for aborting when host is low on memory.
-  static int64_t RequestMemoryOOMKillBytes;
   // Approximate upper bound for thread heap that is backed by huge pages.  This
   // doesn't include the first slab colocated with thread stack, if any.
   static int64_t RequestHugeMaxBytes;
@@ -867,10 +865,12 @@ struct RuntimeOption {
   F(int, JitRetargetJumps,             1)                               \
   /* Sync VM reg state for all native calls. */                         \
   F(bool, JitForceVMRegSync,           false)                           \
+  /* Log the profile used to target iterator specialization. */         \
+  F(bool, LogArrayIterProfile,        false)                            \
   /* We use PGO to target specialization for "foreach" iterator loops.  \
    * We specialize if the chosen specialization covers this fraction    \
    * of profiled loops. If the value is > 1.0, we won't specialize. */  \
-  F(double,   ArrayIterSpecializationRate,  0.99)                       \
+  F(double, ArrayIterSpecializationRate, 0.99)                          \
   F(bool, HHIRSimplification,          true)                            \
   F(bool, HHIRGenOpts,                 true)                            \
   F(bool, HHIRRefcountOpts,            true)                            \
@@ -915,6 +915,7 @@ struct RuntimeOption {
   F(uint32_t, HHIRMaxInlineInitMixedElements,  4)                       \
   F(double, HHIRMixedArrayProfileThreshold, 0.8554)                     \
   F(double, HHIRSmallArrayProfileThreshold, 0.8)                        \
+  F(double, HHIREmptyArrayProfileThreshold, 1.2) /* disabled */         \
   /* Register allocation flags */                                       \
   F(bool, HHIREnablePreColoring,       true)                            \
   F(bool, HHIREnableCoalescing,        true)                            \
@@ -1022,8 +1023,6 @@ struct RuntimeOption {
   F(bool, AbortBuildOnCompilerError,   true)                            \
   F(uint32_t, StaticContentsLogRate,   100)                             \
   F(uint32_t, LogUnitLoadRate,         0)                               \
-  /* The rate at which we log profiling info about loop behavior. */    \
-  F(uint32_t, ArrayIterLogRate,        0)                               \
   F(uint32_t, MaxDeferredErrors,       50)                              \
   F(bool, JitAlignMacroFusionPairs, alignMacroFusionPairs())            \
   F(bool, JitAlignUniqueStubs,         true)                            \

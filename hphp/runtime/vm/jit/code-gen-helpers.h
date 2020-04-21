@@ -22,6 +22,7 @@
 
 #include "hphp/runtime/vm/jit/call-spec.h"
 #include "hphp/runtime/vm/jit/phys-reg.h"
+#include "hphp/runtime/vm/jit/stack-offsets.h"
 #include "hphp/runtime/vm/jit/type.h"
 #include "hphp/runtime/vm/jit/vasm-reg.h"
 
@@ -307,13 +308,13 @@ int offsetToLocalData(int id);
  * Obtain a pointer to a local's type or value. Since the local's
  * index is statically known, this will never emit any code.
  */
-Vptr ptrToLocalType(Vreg fp, int id);
-Vptr ptrToLocalData(Vreg fp, int id);
+Vptr ptrToLocalType(Vreg fp, int id, FPInvOffset fpOffset = FPInvOffset{0});
+Vptr ptrToLocalData(Vreg fp, int id, FPInvOffset fpOffset = FPInvOffset{0});
 
 /*
  * Given (valid) pointers to a local's type and value `typeIn' and
  * `dataIn', modify the pointers to point at the next local (by
- * increasing index) and set `typeOut' and `dataOut' to the new
+ * increasing indx) and set `typeOUt' and `dataOut' to the new
  * pointers. It is up to the caller to detect when the pointers have
  * reached the end of the frame.
  */
@@ -335,12 +336,6 @@ void prevLocal(Vout& v,
                Vreg dataIn,
                Vreg typeOut,
                Vreg dataOut);
-
-/*
- * Create a lval to the specified local and store it in the registers
- * given by `dst'.
- */
-void lvalToLocal(Vout&, Vreg fp, int id, Vloc dst);
 
 ///////////////////////////////////////////////////////////////////////////////
 

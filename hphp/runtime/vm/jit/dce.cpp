@@ -926,27 +926,26 @@ bool findWeakActRecUses(const BlockList& blocks,
     if (state[inst].isDead()) return;
 
     switch (inst->op()) {
-    // these can be made stack relative
+    // These can use a static offset from a parent FP
     case StLoc: {
       auto const id = inst->marker().func()->lookupVarId(s_86metadata.get());
-      if (inst->extra<StLoc>()->locId != id) incWeak(inst, inst->src(0));
+      if (inst->extra<StLoc>()->locId != id &&
+          !parentFpIsResumed(inst->src(0))) {
+        incWeak(inst, inst->src(0));
+      }
       break;
     }
     case LdLoc:
     case CheckLoc:
     case AssertLoc:
     case LdLocAddr:
-      incWeak(inst, inst->src(0));
-      break;
-
-    // These can be made stack relative if they haven't been already.
     case MemoGetStaticCache:
     case MemoSetStaticCache:
     case MemoGetLSBCache:
     case MemoSetLSBCache:
     case MemoGetInstanceCache:
     case MemoSetInstanceCache:
-      if (inst->src(0)->isA(TFramePtr)) incWeak(inst, inst->src(0));
+      if (!parentFpIsResumed(inst->src(0))) incWeak(inst, inst->src(0));
       break;
 
     case InlineReturn:
@@ -986,26 +985,9 @@ bool findWeakActRecUses(const BlockList& blocks,
 }
 
 /*
- * Convert a localId in a callee frame into an SP relative offset in the caller
- * frame.
- */
-IRSPRelOffset locToStkOff(LocalId locId, const SSATmp* fp) {
-  auto const fpInst = fp->inst();
-  assertx(fpInst->is(DefInlineFP));
-  return fpInst->extra<DefInlineFP>()->spOffset - locId.locId - 1;
-}
-
-/*
  * The first time through, we've counted up weak uses of the frame and then
  * finally marked it dead.  The instructions in between that were weak uses may
  * need modifications now that their frame is going away.
- *
- * Also, if we eliminated some frames, DecRef instructions (which can re-enter
- * the VM without requiring a materialized frame) need to have stack depths in
- * their markers adjusted so they can't stomp on parts of the outer function.
- * We handle this conservatively by just pushing all DecRef markers where the
- * DecRef is from a function other than the outer function down to a safe
- * re-entry depth.
  *
  * Finally, any removed frame pointers in BCMarkers must be rewritten to point
  * to the outer frame of that frame.
@@ -1014,31 +996,21 @@ void performActRecFixups(const BlockList& blocks,
                          DceState& state,
                          IRUnit& unit,
                          const UseCounts& uses) {
-  // We limit the total stack depth during inlining, so this is the deepest
-  // we'll ever have to worry about.
-  auto const outerFunc = blocks.front()->front().marker().func();
-  auto const safeDepth = outerFunc->maxStackCells() + kStackCheckLeafPadding;
-  ITRACE(3, "safeDepth: {}, outerFunc depth: {}\n",
-         safeDepth,
-         outerFunc->maxStackCells());
-
-  bool needsReflow = false;
-
   for (auto block : blocks) {
     ITRACE(2, "Visiting block {}\n", block->id());
     Trace::Indent indenter;
 
     for (auto& inst : *block) {
+      if (state[inst].isDead()) continue;
+
       ITRACE(5, "{}\n", inst.toString());
 
-      bool adjustedMarkerFp = false;
       if (auto const fp = inst.marker().fp()) {
         if (state[fp->inst()].isDead()) {
           always_assert(fp->inst()->is(DefInlineFP));
           auto const prev = fp->inst()->src(1);
           inst.marker() = inst.marker().adjustFP(prev);
           assertx(!state[prev->inst()].isDead());
-          adjustedMarkerFp = true;
         }
       }
 
@@ -1053,55 +1025,19 @@ void performActRecFixups(const BlockList& blocks,
       case LdLocAddr:
       case AssertLoc:
       case CheckLoc:
-        if (state[inst.src(0)->inst()].isDead()) {
-          if (auto const added = convertToStackInst(unit, inst)) {
-            // If we created a new instruction as part of the
-            // conversion, we need to set up its liveness state, or it
-            // will be deleted by the pass.
-            state[&inst].isDead()
-              ? state[added].setDead()
-              : state[added].setLive();
-          }
-          needsReflow = true;
-        }
-        break;
-
-      /*
-       * These are special: they're the only instructions that can reenter
-       * but not throw. This means it's safe to elide their inlined frame, as
-       * long as we adjust their markers to a depth that is guaranteed to not
-       * stomp on the caller's frame if it reenters.
-       */
-      case DecRef:
-      case MemoSetStaticValue:
-      case MemoSetLSBValue:
-      case MemoSetInstanceValue:
-        if (adjustedMarkerFp) {
-          ITRACE(3, "pushing stack depth of {} to {}\n", safeDepth, inst);
-          inst.marker() = inst.marker().adjustSP(FPInvOffset{safeDepth});
-        }
-        break;
-
       case MemoGetStaticCache:
       case MemoGetLSBCache:
       case MemoGetInstanceCache:
-        if (inst.src(0)->isA(TFramePtr) &&
-            state[inst.src(0)->inst()].isDead()) {
-          convertToStackInst(unit, inst);
-        }
-        break;
       case MemoSetStaticCache:
       case MemoSetLSBCache:
       case MemoSetInstanceCache:
-        if (inst.src(0)->isA(TFramePtr) &&
-            state[inst.src(0)->inst()].isDead()) {
-          // For the same reason as above, we need to adjust the markers for
-          // re-entracy.
-          convertToStackInst(unit, inst);
-          if (adjustedMarkerFp) {
-            ITRACE(3, "pushing stack depth of {} to {}\n", safeDepth, inst);
-            inst.marker() = inst.marker().adjustSP(FPInvOffset{safeDepth});
-          }
+        if (state[inst.src(0)->inst()].isDead()) {
+          assertx(inst.src(0)->inst()->is(DefInlineFP));
+          convertToUseParentFrameWithOffset(
+            unit,
+            inst,
+            inst.src(0)->inst()->src(1)
+          );
         }
         break;
 
@@ -1110,8 +1046,6 @@ void performActRecFixups(const BlockList& blocks,
       }
     }
   }
-
-  if (needsReflow) reflowTypes(unit);
 }
 
 /*
@@ -1421,88 +1355,50 @@ IRInstruction* resolveFpDefLabel(const SSATmp* fp) {
   return fpInst;
 }
 
-IRInstruction* convertToStackInst(IRUnit& unit, IRInstruction& inst) {
-  assertx(inst.is(CheckLoc, AssertLoc, LdLoc, StLoc, LdLocAddr,
-                  MemoGetStaticCache, MemoSetStaticCache,
-                  MemoGetLSBCache, MemoSetLSBCache,
-                  MemoGetInstanceCache, MemoSetInstanceCache));
-  assertx(inst.src(0)->inst()->is(DefInlineFP));
+bool fpIsResumed(const SSATmp* fp) {
+  fp = canonical(fp);
+  auto fpInst = fp->inst();
+  if (UNLIKELY(fpInst->is(DefLabel))) fpInst = resolveFpDefLabel(fp);
+  return fpInst->marker().resumeMode() != ResumeMode::None;
+}
 
-  auto const mainSP = unit.mainSP();
+bool parentFpIsResumed(const SSATmp* fp) {
+  if (!fp->inst()->is(DefInlineFP)) return false;
+  return fpIsResumed(fp->inst()->src(1));
+}
+
+void convertToUseParentFrameWithOffset(IRUnit& unit,
+                                       IRInstruction& inst,
+                                       SSATmp* parentFp) {
+  assertx(!inst.mayRaiseErrorWithSources());
+  assertx(inst.src(0)->inst()->is(DefInlineFP));
+  assertx(inst.src(0)->inst()->src(1) == parentFp);
+  assertx(!parentFpIsResumed(inst.src(0)));
+
+  auto const update = [&] (FPInvOffset& offset) {
+    auto const parentFpOffset =
+      inst.src(0)->inst()->extra<DefInlineFP>()->retSPOff + kNumActRecCells;
+    offset += parentFpOffset.offset;
+    inst.setSrc(0, parentFp);
+  };
 
   switch (inst.op()) {
     case StLoc:
-      unit.replace(
-        &inst,
-        StStk,
-        IRSPRelOffsetData { locToStkOff(*inst.extra<LocalId>(), inst.src(0)) },
-        mainSP,
-        inst.src(1)
-      );
-      return nullptr;
     case LdLoc:
-      unit.replace(
-        &inst,
-        LdStk,
-        IRSPRelOffsetData { locToStkOff(*inst.extra<LocalId>(), inst.src(0)) },
-        inst.typeParam(),
-        mainSP
-      );
-      return nullptr;
-    case LdLocAddr: {
-      // LdLocAddr returns a Lval, but LdStkAddr returns a Ptr, so we
-      // need to convert.
-      auto const addr = unit.gen(
-        LdStkAddr,
-        inst.bcctx(),
-        IRSPRelOffsetData { locToStkOff(*inst.extra<LocalId>(), inst.src(0)) },
-        mainSP
-      );
-      auto const block = inst.block();
-      block->insert(block->iteratorTo(&inst), addr);
-      unit.replace(&inst, ConvPtrToLval, addr->dst());
-      retypeDests(&inst, &unit);
-      return addr;
-    }
+    case CheckLoc:
     case AssertLoc:
-      unit.replace(
-        &inst,
-        AssertStk,
-        IRSPRelOffsetData { locToStkOff(*inst.extra<LocalId>(), inst.src(0)) },
-        inst.typeParam(),
-        mainSP
-      );
-      return nullptr;
-    case CheckLoc: {
-      auto next = inst.next();
-      unit.replace(
-        &inst,
-        CheckStk,
-        IRSPRelOffsetData { locToStkOff(*inst.extra<LocalId>(), inst.src(0)) },
-        inst.typeParam(),
-        inst.taken(),
-        mainSP
-      );
-      inst.setNext(next);
-      return nullptr;
-    }
+    case LdLocAddr:
+      return update(inst.extra<LocalId>()->fpOffset);
     case MemoGetStaticCache:
     case MemoSetStaticCache:
     case MemoGetLSBCache:
-    case MemoSetLSBCache: {
-      auto& extra = *inst.extra<MemoCacheStaticData>();
-      extra.stackOffset = locToStkOff(LocalId{extra.keys.first}, inst.src(0));
-      inst.setSrc(0, mainSP);
-      return nullptr;
-    }
+    case MemoSetLSBCache:
+      return update(inst.extra<MemoCacheStaticData>()->fpOffset);
     case MemoGetInstanceCache:
-    case MemoSetInstanceCache: {
-      auto& extra = *inst.extra<MemoCacheInstanceData>();
-      extra.stackOffset = locToStkOff(LocalId{extra.keys.first}, inst.src(0));
-      inst.setSrc(0, mainSP);
-      return nullptr;
-    }
-    default: break;
+    case MemoSetInstanceCache:
+      return update(inst.extra<MemoCacheInstanceData>()->fpOffset);
+    default:
+      always_assert(false);
   }
   not_reached();
 }
@@ -1510,17 +1406,14 @@ IRInstruction* convertToStackInst(IRUnit& unit, IRInstruction& inst) {
 void convertToInlineReturnNoFrame(IRUnit& unit, IRInstruction& inst) {
   assertx(inst.is(InlineReturn));
   auto const frameInst = inst.src(0)->inst();
-  auto const spInst = frameInst->src(0)->inst();
-  assertx(spInst->is(DefFrameRelSP, DefRegSP));
-
+  assertx(frameInst->is(DefInlineFP));
   auto const calleeAROff = frameInst->extra<DefInlineFP>()->spOffset;
-  auto const spOff = spInst->extra<FPInvOffsetData>()->offset;
-
-  auto const data = FPRelOffsetData {
-    // Offset of the callee's return value relative to the frame pointer.
-    calleeAROff.to<FPRelOffset>(spOff) + (kArRetOff / sizeof(TypedValue))
-  };
-  unit.replace(&inst, InlineReturnNoFrame, data);
+  unit.replace(
+    &inst,
+    InlineReturnNoFrame,
+    IRSPRelOffsetData { calleeAROff },
+    frameInst->src(0)
+  );
 }
 
 void mandatoryDCE(IRUnit& unit) {
