@@ -309,6 +309,7 @@ std::vector<SString> load_input(F&& fun) {
     gd.HackArrCompatDVCmpNotices;
   RO::EvalHackArrCompatSerializeNotices =
     gd.HackArrCompatSerializeNotices;
+  RO::EvalHackArrCompatSpecialization = gd.HackArrCompatSpecialization;
   RO::EvalHackArrDVArrs = gd.HackArrDVArrs;
   RO::EvalAbortBuildOnVerifyError = gd.AbortBuildOnVerifyError;
   RO::EnableArgsInBacktraces = gd.EnableArgsInBacktraces;
@@ -339,7 +340,8 @@ std::vector<SString> load_input(F&& fun) {
   return Repo().get().global().APCProfile;
 }
 
-void write_units(UnitEmitterQueue& ueq) {
+void write_units(UnitEmitterQueue& ueq,
+                 RepoAutoloadMapBuilder& autoloadMapBuilder) {
   folly::Optional<trace_time> timer;
 
   RuntimeOption::RepoCommit = true;
@@ -351,6 +353,7 @@ void write_units(UnitEmitterQueue& ueq) {
   std::vector<std::unique_ptr<UnitEmitter>> ues;
   while (auto ue = ueq.pop()) {
     if (!timer) timer.emplace("writing output repo");
+    autoloadMapBuilder.addUnit(*ue);
     ues.push_back(std::move(ue));
     if (ues.size() == 8) {
       auto const DEBUG_ONLY err = batchCommitWithoutRetry(ues, true);
@@ -366,7 +369,8 @@ void write_units(UnitEmitterQueue& ueq) {
 
 void write_global_data(
   std::unique_ptr<ArrayTypeTable::Builder>& arrTable,
-  std::vector<SString> apcProfile) {
+  std::vector<SString> apcProfile,
+  const RepoAutoloadMapBuilder& autoloadMapBuilder) {
 
   auto const now = std::chrono::high_resolution_clock::now();
   auto const nanos =
@@ -410,6 +414,8 @@ void write_global_data(
     RuntimeOption::EvalHackArrCompatDVCmpNotices;
   gd.HackArrCompatSerializeNotices =
     RuntimeOption::EvalHackArrCompatSerializeNotices;
+  gd.HackArrCompatSpecialization =
+    RuntimeOption::EvalHackArrCompatSpecialization;
   gd.HackArrDVArrs = RuntimeOption::EvalHackArrDVArrs;
   gd.InitialNamedEntityTableSize  =
     RuntimeOption::EvalInitialNamedEntityTableSize;
@@ -427,7 +433,7 @@ void write_global_data(
 
   globalArrayTypeTable().repopulate(*arrTable);
   // NOTE: There's no way to tell if saveGlobalData() fails for some reason.
-  Repo::get().saveGlobalData(std::move(gd));
+  Repo::get().saveGlobalData(std::move(gd), autoloadMapBuilder);
 }
 
 void compile_repo() {
@@ -456,9 +462,9 @@ void compile_repo() {
   );
   wp_thread.start();
   {
-    auto guard = RepoAutoloadMapBuilder::collect();
-    write_units(ueq);
-    write_global_data(arrTable, apcProfile);
+    RepoAutoloadMapBuilder autoloadMapBuilder;
+    write_units(ueq, autoloadMapBuilder);
+    write_global_data(arrTable, apcProfile, autoloadMapBuilder);
   }
   wp_thread.waitForEnd();
 }

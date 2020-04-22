@@ -17,20 +17,25 @@ open State
 open Convert_longident
 open Convert_type
 
-let default_derives =
-  [
-    (None, "Clone");
-    (None, "Debug");
-    (None, "Eq");
-    (None, "Hash");
-    (None, "Ord");
-    (None, "PartialEq");
-    (None, "PartialOrd");
-    (Some "ocamlrep_derive", "FromOcamlRep");
-    (Some "ocamlrep_derive", "ToOcamlRep");
-    (Some "serde", "Serialize");
-    (Some "serde", "Deserialize");
-  ]
+let default_derives () =
+  ( if Configuration.by_ref () then
+    []
+  else
+    [
+      (Some "ocamlrep_derive", "FromOcamlRep");
+      (Some "ocamlrep_derive", "ToOcamlRep");
+      (Some "serde", "Deserialize");
+    ] )
+  @ [
+      (None, "Clone");
+      (None, "Debug");
+      (None, "Eq");
+      (None, "Hash");
+      (None, "Ord");
+      (None, "PartialEq");
+      (None, "PartialOrd");
+      (Some "serde", "Serialize");
+    ]
 
 let additional_derives : (string option * string) list SMap.t =
   [
@@ -60,9 +65,9 @@ let derived_traits ty =
   let ty = sprintf "%s::%s" (curr_module_name ()) ty in
   begin
     match SMap.find_opt ty derive_blacklists with
-    | None -> default_derives
+    | None -> default_derives ()
     | Some blacklist ->
-      List.filter default_derives ~f:(fun (_, derive) ->
+      List.filter (default_derives ()) ~f:(fun (_, derive) ->
           not (List.mem blacklist derive ~equal:( = )))
   end
   |> List.append
@@ -109,30 +114,8 @@ let should_box_variant ty =
 let add_rcoc = [("aast", "Nsenv")]
 
 let should_add_rcoc ty =
-  List.mem add_rcoc (curr_module_name (), ty) ~equal:( = )
-
-let override_field_type =
-  SMap.of_list
-    [
-      ("Fun_", SMap.of_list [("doc_comment", "Option<doc_comment::DocComment>")]);
-      ( "Method_",
-        SMap.of_list [("doc_comment", "Option<doc_comment::DocComment>")] );
-      ( "Class_",
-        SMap.of_list [("doc_comment", "Option<doc_comment::DocComment>")] );
-      ( "ClassConst",
-        SMap.of_list [("doc_comment", "Option<doc_comment::DocComment>")] );
-      ( "ClassTypeconst",
-        SMap.of_list [("doc_comment", "Option<doc_comment::DocComment>")] );
-      ( "ClassVar",
-        SMap.of_list [("doc_comment", "Option<doc_comment::DocComment>")] );
-      ( "RecordDef",
-        SMap.of_list [("doc_comment", "Option<doc_comment::DocComment>")] );
-    ]
-
-let get_overrides name =
-  match SMap.find_opt name override_field_type with
-  | None -> SMap.empty
-  | Some x -> x
+  (not (Configuration.by_ref ()))
+  && List.mem add_rcoc (curr_module_name (), ty) ~equal:( = )
 
 let blacklisted ty_name =
   let ty = (curr_module_name (), ty_name) in
@@ -207,11 +190,18 @@ let type_param (ct, _) = core_type ct
 
 let type_params params =
   if List.is_empty params then
-    ""
+    if Configuration.by_ref () then
+      "<'a>"
+    else
+      ""
   else
-    params |> map_and_concat ~f:type_param ~sep:", " |> sprintf "<%s>"
+    let params = params |> map_and_concat ~f:type_param ~sep:", " in
+    if Configuration.by_ref () then
+      sprintf "<'a, %s>" params
+    else
+      sprintf "<%s>" params
 
-let record_label_declaration ?(pub = false) ?(prefix = "") overrides ld =
+let record_label_declaration ?(pub = false) ?(prefix = "") ld =
   let doc = doc_comment_of_attribute_list ld.pld_attributes in
   let pub =
     if pub then
@@ -222,14 +212,10 @@ let record_label_declaration ?(pub = false) ?(prefix = "") overrides ld =
   let name =
     ld.pld_name.txt |> String.chop_prefix_exn ~prefix |> convert_field_name
   in
-  let ty =
-    match SMap.find_opt name overrides with
-    | None -> core_type ld.pld_type
-    | Some x -> x
-  in
+  let ty = core_type ld.pld_type in
   sprintf "%s%s%s: %s,\n" doc pub name ty
 
-let record_declaration ?(pub = false) overrides labels =
+let record_declaration ?(pub = false) labels =
   let prefix =
     labels |> List.map ~f:(fun ld -> ld.pld_name.txt) |> common_prefix_of_list
   in
@@ -243,7 +229,7 @@ let record_declaration ?(pub = false) overrides labels =
     String.sub prefix 0 !idx
   in
   labels
-  |> map_and_concat ~f:(record_label_declaration ~pub ~prefix overrides)
+  |> map_and_concat ~f:(record_label_declaration ~pub ~prefix)
   |> sprintf "{\n%s}"
 
 let constructor_arguments ?(box_fields = false) = function
@@ -259,13 +245,20 @@ let constructor_arguments ?(box_fields = false) = function
           ty = "String"
           || String.is_prefix ty ~prefix:"Vec<"
           || String.is_prefix ty ~prefix:"Block<"
+          || String.is_prefix ty ~prefix:"&'a "
         then
           sprintf "(%s)" ty
+        else if Configuration.by_ref () then
+          sprintf "(&'a %s)" ty
         else
           sprintf "(Box<%s>)" ty
-      | _ -> sprintf "(Box<%s>)" (tuple types)
+      | _ ->
+        if Configuration.by_ref () then
+          sprintf "(&'a %s)" (tuple types)
+        else
+          sprintf "(Box<%s>)" (tuple types)
     )
-  | Pcstr_record labels -> record_declaration SMap.empty labels
+  | Pcstr_record labels -> record_declaration labels
 
 let variant_constructor_declaration ?(box_fields = false) cd =
   let doc = doc_comment_of_attribute_list cd.pcd_attributes in
@@ -325,7 +318,10 @@ let type_declaration name td =
     | ([({ ptyp_desc = Ptyp_var "ty"; _ }, _)], _)
       when curr_module_name () = "typing_defs_core"
            || curr_module_name () = "typing_defs" ->
-      ""
+      if Configuration.by_ref () then
+        "<'a>"
+      else
+        ""
     | (tparams, _) -> type_params tparams
   in
   match (td.ptype_kind, td.ptype_manifest) with
@@ -417,7 +413,7 @@ let type_declaration name td =
     sprintf "%s enum %s%s {\n%s}" (attrs_and_vis derives) name tparams ctors
   (* Record types. *)
   | (Ptype_record labels, None) ->
-    let labels = record_declaration (get_overrides name) labels ~pub:true in
+    let labels = record_declaration labels ~pub:true in
     sprintf "%s struct %s%s %s" (attrs_and_vis []) name tparams labels
   (* `type foo`; an abstract type with no specified implementation. This doesn't
      mean much outside of an .mli, I don't think. *)
@@ -440,6 +436,11 @@ let type_declaration td =
   if blacklisted name then
     log "Not converting type %s::%s: it was blacklisted" mod_name name
   else
-    try with_self name (fun () -> add_decl name (type_declaration name td))
-    with Skip_type_decl reason ->
-      log "Not converting type %s::%s: %s" mod_name name reason
+    match Configuration.extern_type name with
+    | Some extern_type ->
+      log "Not converting type %s::%s: re-exporting instead" mod_name name;
+      add_decl name (sprintf "pub use %s;" extern_type)
+    | None ->
+      (try with_self name (fun () -> add_decl name (type_declaration name td))
+       with Skip_type_decl reason ->
+         log "Not converting type %s::%s: %s" mod_name name reason)

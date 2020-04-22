@@ -865,6 +865,8 @@ struct RuntimeOption {
   F(int, JitRetargetJumps,             1)                               \
   /* Sync VM reg state for all native calls. */                         \
   F(bool, JitForceVMRegSync,           false)                           \
+  /* Log the profile used to optimize array-like gets and sets. */      \
+  F(bool, LogArrayAccessProfile,      false)                            \
   /* Log the profile used to target iterator specialization. */         \
   F(bool, LogArrayIterProfile,        false)                            \
   /* We use PGO to target specialization for "foreach" iterator loops.  \
@@ -1113,6 +1115,11 @@ struct RuntimeOption {
   /* Raises notice when a function that returns a PHP array, not */     \
   /* a v/darray, is called */                                           \
   F(bool, HackArrCompatArrayProducingFuncNotices, false)                \
+  /* This is the flag for "specialization", meaning that darray and     \
+   * varray are their own types, distinct from array and each other. */ \
+  F(bool, HackArrCompatSpecialization, false)                           \
+  /* This is the flag for "unification", meaning that darrays are       \
+   * replaced by dicts and varrays by vecs. */                          \
   F(bool, HackArrDVArrs, false)                                         \
   /* Raise a notice for `$dict is shape` and `$vec is tuple`. */        \
   F(bool, HackArrIsShapeTupleNotices, false)                            \
