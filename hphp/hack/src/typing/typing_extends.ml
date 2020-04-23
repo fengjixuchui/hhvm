@@ -277,6 +277,17 @@ let check_override
   check_class_elt_visibility parent_class_elt class_elt on_error;
   let (lazy pos) = class_elt.ce_pos in
   let (lazy parent_pos) = parent_class_elt.ce_pos in
+  let is_method =
+    match mem_source with
+    | `FromMethod
+    | `FromSMethod
+    | `FromConstructor ->
+      true
+    | `FromProp
+    | `FromSProp ->
+      false
+  in
+
   if Bool.( <> ) (get_ce_const class_elt) (get_ce_const parent_class_elt) then
     Errors.overriding_prop_const_mismatch
       parent_pos
@@ -291,15 +302,20 @@ let check_override
     Errors.abstract_concrete_override
       pos
       parent_pos
-      ( if
-        phys_equal mem_source `FromMethod || phys_equal mem_source `FromSMethod
-      then
+      ( if is_method then
         `method_
       else
         `property );
   if check_params then (
     let on_error ?code:_ errorl =
-      Errors.bad_method_override pos member_name errorl on_error
+      ( if is_method then
+        Errors.bad_method_override
+      else
+        Errors.bad_prop_override )
+        pos
+        member_name
+        errorl
+        on_error
     in
     let (lazy fty_child) = class_elt.ce_type in
     let (lazy fty_parent) = parent_class_elt.ce_type in

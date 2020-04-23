@@ -927,7 +927,7 @@ void Class::checkPropInitialValues() const {
   assertx(m_extra.get() != nullptr);
 
   auto extra = m_extra.get();
-  extra->m_checkedPropInitialValues.bind(rds::Mode::Normal);
+  checkedPropInitialValuesHandle(); // init handle
   if (extra->m_checkedPropInitialValues.isInit()) return;
 
   for (Slot slot = 0; slot < m_declProperties.size(); ++slot) {
@@ -956,7 +956,7 @@ void Class::checkPropTypeRedefinitions() const {
   assertx(m_extra.get() != nullptr);
 
   auto extra = m_extra.get();
-  extra->m_checkedPropTypeRedefs.bind(rds::Mode::Normal);
+  checkedPropTypeRedefinesHandle(); // init handle
   if (extra->m_checkedPropTypeRedefs.isInit()) return;
 
   if (m_parent->m_maybeRedefsPropTy) m_parent->checkPropTypeRedefinitions();
@@ -1041,17 +1041,13 @@ void Class::initSPropHandles() const {
                       "StaticPropData must be a simple wrapper "
                       "around TypedValue");
         propHandle.bind(
-          [&] {
-            auto const handle =
-              rds::alloc<StaticPropData, rds::Mode::Persistent>().handle();
-            rds::recordRds(handle, sizeof(StaticPropData),
-                           rds::SPropCache{this, slot});
-            return handle;
-          },
-          *reinterpret_cast<const StaticPropData*>(&sProp.val)
+          rds::Mode::Persistent,
+          rds::SPropCache{this, slot},
+          reinterpret_cast<const StaticPropData*>(&sProp.val)
         );
       } else {
-        propHandle = rds::bind<StaticPropData, rds::Mode::Local>(
+        propHandle.bind(
+          rds::Mode::Local,
           rds::SPropCache{this, slot}
         );
       }
@@ -1073,7 +1069,10 @@ void Class::initSPropHandles() const {
     // of them.
     m_sPropCacheInit = rds::s_persistentTrue;
   } else {
-    m_sPropCacheInit.bind(rds::Mode::Normal);
+    m_sPropCacheInit.bind(
+      rds::Mode::Normal,
+      rds::LinkName{"PropCacheInit", name()}
+    );
   }
   rds::recordRds(m_sPropCacheInit.handle(),
                  sizeof(bool), "SPropCacheInit", name()->slice());
@@ -1362,7 +1361,10 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) con
    * we'll raise an error. The globals array is never a valid value of a (type)
    * constant, so we use it as the marker.
    */
-  m_nonScalarConstantCache.bind(rds::Mode::Normal);
+  m_nonScalarConstantCache.bind(
+    rds::Mode::Normal,
+    rds::LinkName{"ClassNonScalarCnsCache", name()}
+  );
   auto& clsCnsData = *m_nonScalarConstantCache;
   if (m_nonScalarConstantCache.isInit()) {
     auto const cCns = clsCnsData->get(clsCnsName);

@@ -641,7 +641,10 @@ bool Unit::isCoverageEnabled() const {
 void Unit::enableCoverage() {
   if (!m_coverage.bound()) {
     assertx(!RO::RepoAuthoritative && RO::EvalEnablePerFileCoverage);
-    m_coverage.bind(rds::Mode::Normal);
+    m_coverage.bind(
+      rds::Mode::Normal,
+      rds::LinkName{"UnitCoverage", filepath()}
+    );
   }
   if (m_coverage.isInit()) return;
   new (m_coverage.get()) req::dynamic_bitset{};
@@ -807,29 +810,24 @@ Func* Unit::loadFunc(const StringData* name) {
 void Unit::bindFunc(Func *func) {
   assertx(!func->isMethod());
   auto const ne = func->getNamedEntity();
+
+  auto const persistent =
+    (RuntimeOption::RepoAuthoritative || !SystemLib::s_inited) &&
+    (func->attrs() & AttrPersistent);
+
+  auto const init_val = LowPtr<Func>(func);
+
   ne->m_cachedFunc.bind(
-    [&] {
-      auto const isPersistent =
-        (RuntimeOption::RepoAuthoritative || !SystemLib::s_inited) &&
-        (func->attrs() & AttrPersistent);
-
-      auto const handle = isPersistent ?
-        rds::alloc<LowPtr<const Func>, rds::Mode::Persistent>().handle() :
-        rds::alloc<LowPtr<const Func>, rds::Mode::Normal>().handle();
-
-      if (func->isUnique()) ne->setUniqueFunc(func);
-      if (RuntimeOption::EvalPerfDataMap) {
-        rds::recordRds(
-          handle,
-          sizeof(LowPtr<const Func>),
-          "Func",
-          func->name()->slice()
-        );
-      }
-      return handle;
-    },
-    func
+    persistent ? rds::Mode::Persistent : rds::Mode::Normal,
+    rds::LinkName{"Func", func->name()},
+    &init_val
   );
+  if (func->isUnique() && func == ne->getCachedFunc()) {
+    // we need to check that we actually were responsible for the bind here
+    // before we set the uniqueFunc on `ne`.  this seems strange, but it's
+    // because meth_caller funcs are unique but can have the same name.
+    ne->setUniqueFunc(func);
+  }
   func->setFuncHandle(ne->m_cachedFunc);
 }
 
@@ -925,7 +923,9 @@ void setupRecord(RecordDesc* newRecord, NamedEntity* nameList) {
     (!SystemLib::s_inited || RuntimeOption::RepoAuthoritative) &&
     newRecord->verifyPersistent();
   nameList->m_cachedRecordDesc.bind(
-      isPersistent? rds::Mode::Persistent : rds::Mode::Normal);
+    isPersistent? rds::Mode::Persistent : rds::Mode::Normal,
+    rds::LinkName{"NERecord", newRecord->name()}
+  );
   newRecord->setRecordDescHandle(nameList->m_cachedRecordDesc);
   newRecord->incAtomicCount();
   nameList->pushRecordDesc(newRecord);
@@ -936,7 +936,9 @@ void setupClass(Class* newClass, NamedEntity* nameList) {
     (!SystemLib::s_inited || RuntimeOption::RepoAuthoritative) &&
     newClass->verifyPersistent();
   nameList->m_cachedClass.bind(
-    isPersistent ? rds::Mode::Persistent : rds::Mode::Normal);
+    isPersistent ? rds::Mode::Persistent : rds::Mode::Normal,
+    rds::LinkName{"NEClass", newClass->name()}
+  );
 
   if (newClass->isBuiltin()) {
     assertx(newClass->isUnique());
@@ -1535,22 +1537,14 @@ bool Unit::defTypeAlias(Id id) {
     not_reached();
   }
 
+  auto const persistent = (thisType->attrs & AttrPersistent) &&
+    (!resolved.klass || classHasPersistentRDS(resolved.klass)) &&
+    (!resolved.rec || recordHasPersistentRDS(resolved.rec));
+
   nameList->m_cachedTypeAlias.bind(
-    [thisType, &resolved] {
-      auto const persistent = (thisType->attrs & AttrPersistent) &&
-        (!resolved.klass || classHasPersistentRDS(resolved.klass)) &&
-        (!resolved.rec || recordHasPersistentRDS(resolved.rec));
-
-      auto const handle = persistent ?
-        rds::alloc<TypeAliasReq, rds::Mode::Persistent>().handle() :
-        rds::alloc<TypeAliasReq, rds::Mode::Normal>().handle();
-
-      rds::recordRds(handle,
-                     sizeof(TypeAliasReq),
-                     "TypeAlias", thisType->value->slice());
-      return handle;
-    },
-    resolved
+    persistent ? rds::Mode::Persistent : rds::Mode::Normal,
+    rds::LinkName{"TypeAlias", thisType->value},
+    &resolved
   );
   if (nameList->m_cachedTypeAlias.isPersistent()) return true;
 
@@ -1713,7 +1707,10 @@ void Unit::initialMerge() {
   }
 
   if (!RO::RepoAuthoritative && RO::EvalEnablePerFileCoverage) {
-    m_coverage.bind(rds::Mode::Normal);
+    m_coverage.bind(
+      rds::Mode::Normal,
+      rds::LinkName{"UnitCoverage", filepath()}
+    );
   }
   m_mergeState.store(MergeState::Merged | state, std::memory_order_relaxed);
 }

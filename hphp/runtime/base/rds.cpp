@@ -63,11 +63,13 @@ std::mutex s_allocMutex;
 //////////////////////////////////////////////////////////////////////
 
 struct SymbolKind : boost::static_visitor<std::string> {
-  std::string operator()(ClsConstant /*k*/) const { return "ClsConstant"; }
-  std::string operator()(StaticMethod /*k*/) const { return "StaticMethod"; }
-  std::string operator()(StaticMethodF /*k*/) const { return "StaticMethodF"; }
-  std::string operator()(Profile /*k*/) const { return "Profile"; }
-  std::string operator()(SPropCache /*k*/) const { return "SPropCache"; }
+  std::string operator()(LinkName k) const { return k.type; }
+  std::string operator()(LinkID k) const { return k.type; }
+  std::string operator()(ClsConstant) const { return "ClsConstant"; }
+  std::string operator()(StaticMethod) const { return "StaticMethod"; }
+  std::string operator()(StaticMethodF) const { return "StaticMethodF"; }
+  std::string operator()(Profile) const { return "Profile"; }
+  std::string operator()(SPropCache) const { return "SPropCache"; }
   std::string operator()(StaticMemoValue) const { return "StaticMemoValue"; }
   std::string operator()(StaticMemoCache) const { return "StaticMemoCache"; }
   std::string operator()(LSBMemoValue) const { return "LSBMemoValue"; }
@@ -75,6 +77,9 @@ struct SymbolKind : boost::static_visitor<std::string> {
 };
 
 struct SymbolRep : boost::static_visitor<std::string> {
+  std::string operator()(LinkName k) const { return k.name->data(); }
+  std::string operator()(LinkID k) const { return ""; }
+
   std::string operator()(ClsConstant k) const {
     return k.clsName->data() + std::string("::") + k.cnsName->data();
   }
@@ -123,6 +128,13 @@ struct SymbolEq : boost::static_visitor<bool> {
     bool
   >::type operator()(const T&, const U&) const { return false; }
 
+  bool operator()(LinkName k1, LinkName k2) const {
+    return strcmp(k1.type, k2.type) == 0 && k1.name->isame(k2.name);
+  }
+  bool operator()(LinkID k1, LinkID k2) const {
+    return strcmp(k1.type, k2.type) == 0;
+  }
+
   bool operator()(ClsConstant k1, ClsConstant k2) const {
     assertx(k1.clsName->isStatic() && k1.cnsName->isStatic());
     assertx(k2.clsName->isStatic() && k2.cnsName->isStatic());
@@ -170,6 +182,14 @@ struct SymbolEq : boost::static_visitor<bool> {
 };
 
 struct SymbolHash : boost::static_visitor<size_t> {
+  size_t operator()(LinkName k) const {
+    return folly::hash::hash_combine(
+      std::string{k.type}, k.name->hash());
+  }
+  size_t operator()(LinkID k) const {
+    return folly::hash::hash_combine(std::string{k.type});
+  }
+
   size_t operator()(ClsConstant k) const {
     return folly::hash::hash_128_to_64(
       k.clsName->hash(),
@@ -519,6 +539,7 @@ Handle bindImpl(Symbol key, Mode mode, size_t sizeBytes,
   if (type_scan::hasScanner(tyIndex)) {
     s_handleTable.insert(std::make_pair(handle, key));
   }
+
   return handle;
 }
 
@@ -529,17 +550,19 @@ Handle attachImpl(Symbol key) {
 }
 
 NEVER_INLINE
-void bindOnLinkImpl(std::atomic<Handle>& handle, std::function<Handle()> fun,
-                    const void* init, size_t size,
-                    type_scan::Index /*tyIndex*/) {
+void bindOnLinkImpl(std::atomic<Handle>& handle,
+                    Symbol sym, Mode mode, size_t size, size_t align,
+                    type_scan::Index tsi, const void* init_val) {
   Handle c = kUninitHandle;
   if (handle.compare_exchange_strong(c, kBeingBound,
                                      std::memory_order_relaxed,
                                      std::memory_order_relaxed)) {
     // we flipped it from kUninitHandle, so we get to fill in the value.
-    auto const h = fun();
-    if (size && isPersistentHandle(h)) {
-      memcpy(handleToPtr<void, Mode::Persistent>(h), init, size);
+    auto const h = allocUnlocked(mode, size, align, tsi);
+    recordRds(h, size, sym);
+
+    if (init_val != nullptr && isPersistentHandle(h)) {
+      memcpy(handleToPtr<void, Mode::Persistent>(h), init_val, size);
     }
     if (handle.exchange(h, std::memory_order_relaxed) ==
         kBeingBoundWithWaiters) {
@@ -557,20 +580,6 @@ void bindOnLinkImpl(std::atomic<Handle>& handle, std::function<Handle()> fun,
     futex_wait(&handle, kBeingBoundWithWaiters);
   }
   assertx(isHandleBound(handle.load(std::memory_order_relaxed)));
-}
-
-NEVER_INLINE
-void bindOnLinkImpl(std::atomic<Handle>& handle,
-                    Mode mode,
-                    size_t sizeBytes,
-                    size_t align,
-                    type_scan::Index tyIndex) {
-  bindOnLinkImpl(handle,
-                 [&] {
-                   Guard g(s_allocMutex);
-                   return alloc(mode, sizeBytes, align, tyIndex);
-                 },
-                 nullptr, 0, tyIndex);
 }
 
 }
@@ -627,7 +636,7 @@ void processInit() {
 #endif
   addNewPersistentChunk(allocSize),
 
-  s_persistentTrue.bind(Mode::Persistent);
+  s_persistentTrue.bind(Mode::Persistent, LinkID{"RDSTrue"});
   *s_persistentTrue = true;
 
   local::RDSInit();
@@ -880,7 +889,7 @@ std::vector<void*> allTLBases() {
 }
 
 folly::Optional<Symbol> reverseLink(Handle handle) {
-  RevLinkTable::const_accessor acc;
+  decltype(s_handleTable)::const_accessor acc;
   if (s_handleTable.find(acc, handle)) {
     return acc->second;
   }
