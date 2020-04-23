@@ -12,13 +12,16 @@ open Hh_prelude
 module Initialize_from_saved_state = struct
   type t = {
     root: Path.t;
-    naming_table_saved_state_path: Path.t option;
+    naming_table_load_info: naming_table_load_info option;
     use_ranked_autocomplete: bool;
     config: (string * string) list;
     open_files: Path.t list;
   }
 
-  type result = { num_changed_files_to_process: int }
+  and naming_table_load_info = {
+    path: Path.t;
+    test_delay: float;  (** artificial delay in seconds, for test purposes *)
+  }
 end
 
 type document_location = {
@@ -124,15 +127,16 @@ end
 (* GADT for request/response types. See [ServerCommandTypes] for a discussion on
    using GADTs in this way. *)
 type _ t =
-  | Initialize_from_saved_state :
-      Initialize_from_saved_state.t
-      -> Initialize_from_saved_state.result t
+  | Initialize_from_saved_state : Initialize_from_saved_state.t -> unit t
+      (** Invariant: the client sends no messages to the daemon before
+      Initialize_from_state. And the daemon sends no messages before
+      it has responded. *)
   | Shutdown : unit -> unit t
   | Disk_files_changed : Path.t list -> unit t
   | Ide_file_opened : Ide_file_opened.request -> unit t
   | Ide_file_changed : Ide_file_changed.request -> unit t
   | Ide_file_closed : Path.t -> unit t
-  | Verbose : bool -> unit t
+  | Verbose_to_file : bool -> unit t
   | Hover : Hover.request -> Hover.result t
   | Definition : Definition.request -> Definition.result t
   | Completion : Completion.request -> Completion.result t
@@ -146,6 +150,7 @@ type _ t =
       Document_highlight.request
       -> Document_highlight.result t
   | Document_symbol : Document_symbol.request -> Document_symbol.result t
+  | Workspace_symbol : string -> SearchUtils.result t
   | Type_definition : Type_definition.request -> Type_definition.result t
   | Type_coverage : Type_coverage.request -> Type_coverage.result t
   | Signature_help : Signature_help.request -> Signature_help.result t
@@ -169,7 +174,7 @@ let t_to_string : type a. a t -> string = function
     Printf.sprintf "Ide_file_changed(%s)" (Path.to_string file_path)
   | Ide_file_closed file_path ->
     Printf.sprintf "Ide_file_closed(%s)" (Path.to_string file_path)
-  | Verbose verbose -> Printf.sprintf "Verbose(%b)" verbose
+  | Verbose_to_file verbose -> Printf.sprintf "Verbose_to_file(%b)" verbose
   | Hover { file_path; _ } ->
     Printf.sprintf "Hover(%s)" (Path.to_string file_path)
   | Definition { file_path; _ } ->
@@ -185,6 +190,7 @@ let t_to_string : type a. a t -> string = function
     Printf.sprintf "Document_highlight(%s)" (Path.to_string file_path)
   | Document_symbol { file_path; _ } ->
     Printf.sprintf "Document_symbol(%s)" (Path.to_string file_path)
+  | Workspace_symbol query -> Printf.sprintf "Workspace_symbol(%s)" query
   | Type_definition { file_path; _ } ->
     Printf.sprintf "Type_definition(%s)" (Path.to_string file_path)
   | Type_coverage { file_path; _ } ->
@@ -210,19 +216,8 @@ module Processing_files = struct
   let to_string (t : t) : string = Printf.sprintf "%d/%d" t.processed t.total
 end
 
-type notification =
-  | Initializing
-  | Processing_files of Processing_files.t
-  | Done_processing
-
-let notification_to_string (n : notification) : string =
-  match n with
-  | Initializing -> "Initializing"
-  | Processing_files p ->
-    Printf.sprintf "Processing_file(%s)" (Processing_files.to_string p)
-  | Done_processing -> "Done_processing"
-
-type error_data = {
+(** This is a user-facing structure to explain why ClientIde isn't working. *)
+type stopped_reason = {
   (* max 20 chars, for status bar. Will be prepended by "Hack:" *)
   short_user_message: string;
   (* max 10 words, for tooltip and alert. Will be postpended by " See <log>" *)
@@ -235,21 +230,25 @@ type error_data = {
   debug_details: string;
 }
 
-(** make_error_data is for reporting internal bugs, invariant
-violations, unexpected exceptions, ... *)
-let make_error_data (debug_details : string) ~(stack : string) : error_data =
-  {
-    short_user_message = "failed";
-    medium_user_message = "Hack IDE has failed.";
-    long_user_message =
-      "Hack IDE has failed.\nThis is unexpected.\nPlease file a bug within your IDE.";
-    debug_details = debug_details ^ "\nSTACK:\n" ^ stack;
-    is_actionable = false;
-  }
+type notification =
+  | Done_init of (Processing_files.t, stopped_reason) result
+  | Processing_files of Processing_files.t
+  | Done_processing
+
+let notification_to_string (n : notification) : string =
+  match n with
+  | Done_init (Ok p) ->
+    Printf.sprintf "Done_init(%s)" (Processing_files.to_string p)
+  | Done_init (Error edata) ->
+    Printf.sprintf "Done_init(%s)" edata.medium_user_message
+  | Processing_files p ->
+    Printf.sprintf "Processing_file(%s)" (Processing_files.to_string p)
+  | Done_processing -> "Done_processing"
 
 type 'a timed_response = {
   unblocked_time: float;
-  response: ('a, error_data) result;
+  tracking_id: string;
+  response: ('a, Lsp.Error.t) result;
 }
 
 type message_from_daemon =
@@ -259,11 +258,13 @@ type message_from_daemon =
 let message_from_daemon_to_string (m : message_from_daemon) : string =
   match m with
   | Notification n -> notification_to_string n
-  | Response { response = Error { short_user_message; _ }; _ } ->
-    Printf.sprintf "Response_error(%s)" short_user_message
-  | Response { response = Ok _; _ } -> Printf.sprintf "Response_ok"
+  | Response { response = Error { Lsp.Error.message; _ }; tracking_id; _ } ->
+    Printf.sprintf "#%s: Response_error(%s)" tracking_id message
+  | Response { response = Ok _; tracking_id; _ } ->
+    Printf.sprintf "#%s: Response_ok" tracking_id
 
 type daemon_args = {
   init_id: string;
-  verbose: bool;
+  verbose_to_stderr: bool;
+  verbose_to_file: bool;
 }

@@ -19,16 +19,17 @@ type t
 
 module Status : sig
   type t =
-    | Not_started
-        (** The IDE services haven't been requested to initialize yet. *)
     | Initializing
         (** The IDE services are still initializing (e.g. loading saved-state or
         building indexes.) *)
     | Processing_files of ClientIdeMessage.Processing_files.t
         (** The IDE services are available, but are also in the middle of
         processing files. *)
+    | Rpc
+        (** The IDE services will be available once they're done handling
+        an existing request *)
     | Ready  (** The IDE services are available. *)
-    | Stopped of ClientIdeMessage.error_data
+    | Stopped of ClientIdeMessage.stopped_reason
         (** The IDE services are not available. *)
 
   val to_string : t -> string
@@ -36,10 +37,14 @@ end
 
 module Stop_reason : sig
   type t =
-    | Crashed
-    | Editor_exited
+    | Crashed  (** clientIdeService encountered an unexpected bug *)
+    | Closed
+        (** clientIdeService shut down normally, although we've failed to record why *)
+    | Editor_exited  (** clientLsp decided to close in response to shutdown*)
     | Restarting
+        (** clientLsp decided to close this clientIdeService and start a new one *)
     | Testing
+        (** test harnesses can tell clientLsp to shut down clientIdeService *)
 
   val to_string : t -> string
 end
@@ -55,12 +60,12 @@ will block until the initializing is complete. *)
 val initialize_from_saved_state :
   t ->
   root:Path.t ->
-  naming_table_saved_state_path:Path.t option ->
-  wait_for_initialization:bool ->
+  naming_table_load_info:
+    ClientIdeMessage.Initialize_from_saved_state.naming_table_load_info option ->
   use_ranked_autocomplete:bool ->
   config:(string * string) list ->
   open_files:Path.t list ->
-  (int, ClientIdeMessage.error_data) Lwt_result.t
+  (unit, ClientIdeMessage.stopped_reason) Lwt_result.t
 
 (** Pump the message loop for the IDE service. Exits once the IDE service has
 been [destroy]ed. *)
@@ -69,18 +74,19 @@ val serve : t -> unit Lwt.t
 (** Clean up any resources held by the IDE service (such as the message loop
 and background processes). Mark the service's status as "shut down" for the
 given [reason]. *)
-val stop : t -> tracking_id:string -> reason:Stop_reason.t -> unit Lwt.t
-
-(** The caller is expected to call this function to notify the IDE service
-whenever a Hack file changes on disk, so that it can update its indexes
-appropriately. Will queue the notification until IDE service can handle it. *)
+val stop :
+  t ->
+  tracking_id:string ->
+  stop_reason:Stop_reason.t ->
+  exn:Exception.t option ->
+  unit Lwt.t
 
 (** Make an RPC call to the IDE service. *)
 val rpc :
   t ->
   tracking_id:string ->
   ref_unblocked_time:float ref ->
-  needs_init:bool ->
+  progress:(unit -> unit) ->
   'response ClientIdeMessage.t ->
   ('response, Lsp.Error.t) Lwt_result.t
 

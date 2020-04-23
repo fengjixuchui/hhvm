@@ -146,7 +146,7 @@ let client_lsp_method_exception
     ~source:_ =
   ()
 
-let serverless_ide_crash ~message:_ ~stack:_ = ()
+let serverless_ide_bug ~message:_ ~data:_ = ()
 
 let client_lsp_exception ~root:_ ~message:_ ~data_opt:_ ~source:_ = ()
 
