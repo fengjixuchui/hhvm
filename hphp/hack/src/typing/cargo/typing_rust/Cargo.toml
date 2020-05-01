@@ -3,7 +3,7 @@
 name = "typing_rust"
 edition = "2018"
 version = "0.0.0"
-include = ["../../typing.rs", "../../typing_env.rs", "../../typing_env_from_def.rs", "../../typing_env_return_info.rs", "../../typing_env_types.rs", "../../typing_naming.rs", "../../typing_phase.rs", "../../typing_print.rs", "../../typing_solver.rs", "../../typing_subtype.rs", "../../typing_toplevel.rs", "../../typing_union.rs"]
+include = ["../../typing.rs", "../../typing_continuations.rs", "../../typing_enum.rs", "../../typing_env.rs", "../../typing_env_from_def.rs", "../../typing_env_return_info.rs", "../../typing_env_types.rs", "../../typing_local_types.rs", "../../typing_naming.rs", "../../typing_object_get.rs", "../../typing_per_cont_env.rs", "../../typing_phase.rs", "../../typing_print.rs", "../../typing_solver.rs", "../../typing_subtype.rs", "../../typing_toplevel.rs", "../../typing_union.rs"]
 
 [lib]
 path = "../../typing_toplevel.rs"
@@ -19,6 +19,7 @@ oxidized = { path = "../../../oxidized" }
 typing_ast_rust = { path = "../typing_ast_rust" }
 typing_collections_rust = { path = "../typing_collections_rust" }
 typing_defs_rust = { path = "../typing_defs_rust" }
+typing_heap_rust = { path = "../typing_heap" }
 bumpalo = { version = "3.2.1", features = ["collections"] }
 itertools = "0.8"
 ocaml = "0.8"

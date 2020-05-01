@@ -5188,6 +5188,16 @@ function unsaved_bar(): string { return "hello"; }
                     "shortMessage": "Hack: initializing",
                 },
             )
+            .ignore_requests(
+                comment="another racy initialization to ignore, again before hh_server",
+                method="window/showStatus",
+                params={
+                    "type": 3,
+                    "actions": [],
+                    "message": "Hack IDE: ready.",
+                    "shortMessage": "Hack",
+                },
+            )
             .wait_for_server_request(
                 method="window/showStatus",
                 params={
@@ -5742,10 +5752,28 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                 method="textDocument/typeCoverage",
                 params={"textDocument": {"uri": "${php_file_uri}"}},
                 result={
-                    "coveredPercent": 100,
-                    "uncoveredRanges": [],
-                    "defaultMessage": "Un-type checked code. Consider adding "
-                    "type annotations.",
+                    "coveredPercent": 0,
+                    "uncoveredRanges": [
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 12},
+                                "end": {"line": 3, "character": 17},
+                            }
+                        },
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 8},
+                                "end": {"line": 3, "character": 10},
+                            }
+                        },
+                        {
+                            "range": {
+                                "start": {"line": 3, "character": 2},
+                                "end": {"line": 3, "character": 5},
+                            }
+                        },
+                    ],
+                    "defaultMessage": "Un-type checked code. Consider adding type annotations.",
                 },
                 powered_by="serverless_ide",
             )
@@ -5846,6 +5874,16 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                     "shortMessage": "Hack: initializing",
                 },
             )
+            .ignore_requests(
+                comment="another racy initialization to ignore, again before hh_server",
+                method="window/showStatus",
+                params={
+                    "type": 3,
+                    "actions": [],
+                    "message": "Hack IDE: ready.",
+                    "shortMessage": "Hack",
+                },
+            )
             .wait_for_server_request(
                 method="window/showStatus",
                 params={
@@ -5899,6 +5937,16 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                     "actions": [],
                     "message": "Hack IDE: initializing.",
                     "shortMessage": "Hack: initializing",
+                },
+            )
+            .ignore_requests(
+                comment="another racy initialization to ignore, again before hh_server",
+                method="window/showStatus",
+                params={
+                    "type": 3,
+                    "actions": [],
+                    "message": "Hack IDE: ready.",
+                    "shortMessage": "Hack",
                 },
             )
             .wait_for_server_request(
@@ -5984,6 +6032,16 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
                     "actions": [],
                     "message": "Hack IDE: initializing.",
                     "shortMessage": "Hack: initializing",
+                },
+            )
+            .ignore_requests(
+                comment="Ignore another form of initializing, again before hh_server",
+                method="window/showStatus",
+                params={
+                    "type": 1,
+                    "actions": [{"title": "Restart Hack IDE"}],
+                    "message": "Hack IDE has failed. See Output›Hack for details.",
+                    "shortMessage": "Hack: failed",
                 },
             )
             .wait_for_notification(

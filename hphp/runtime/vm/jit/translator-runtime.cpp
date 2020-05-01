@@ -521,15 +521,14 @@ void VerifyReifiedReturnTypeImpl(TypedValue cell, ArrayData* ts) {
 namespace {
 
 ALWAYS_INLINE
-TypedValue getDefaultIfNullTV(tv_rval rval, const TypedValue& def) {
-  return UNLIKELY(!rval) ? def : rval.tv();
+TypedValue getDefaultIfMissing(TypedValue tv, TypedValue def) {
+  return tv.is_init() ? tv : def;
 }
 
 NEVER_INLINE
 TypedValue arrayIdxSSlow(ArrayData* a, StringData* key, TypedValue def) {
   assertx(a->isPHPArrayType());
-  auto const result = a->get(key);
-  return result.is_init() ? result : def;
+  return getDefaultIfMissing(a->get(key), def);
 }
 
 ALWAYS_INLINE
@@ -549,50 +548,53 @@ TypedValue doScan(const MixedArray* arr, StringData* key, TypedValue def) {
 
 TypedValue arrayIdxI(ArrayData* a, int64_t key, TypedValue def) {
   assertx(a->isPHPArrayType());
-  auto const result = a->get(key);
-  return result.is_init() ? result : def;
+  return getDefaultIfMissing(a->get(key), def);
 }
 
 TypedValue arrayIdxS(ArrayData* a, StringData* key, TypedValue def) {
   assertx(a->isPHPArrayType());
-  if (UNLIKELY(!a->isMixedKind())) return arrayIdxSSlow(a, key, def);
-  return getDefaultIfNullTV(MixedArray::NvGetStr(a, key), def);
+  if (!a->isMixedKind()) return arrayIdxSSlow(a, key, def);
+  return dictIdxS(a, key, def);
 }
 
 TypedValue arrayIdxScan(ArrayData* a, StringData* key, TypedValue def) {
   assertx(a->isPHPArrayType());
-  return LIKELY(MixedArrayKeys::isMixedWithStaticStrKeys(a))
-    ? doScan(MixedArray::asMixed(a), key, def)
-    : arrayIdxSSlow(a, key, def);
+  if (!a->isMixedKind()) return arrayIdxSSlow(a, key, def);
+  return dictIdxScan(a, key, def);
 }
 
+// This helper may also be used when we know we have a MixedArray in the JIT.
 TypedValue dictIdxI(ArrayData* a, int64_t key, TypedValue def) {
-  assertx(a->isDictKind());
-  return getDefaultIfNullTV(MixedArray::NvGetIntDict(a, key), def);
+  assertx(a->hasVanillaMixedLayout());
+  static_assert(MixedArray::NvGetInt == MixedArray::NvGetIntDict, "");
+  return getDefaultIfMissing(MixedArray::NvGetIntDict(a, key), def);
 }
 
+// This helper is also used for MixedArrays.
 NEVER_INLINE
 TypedValue dictIdxS(ArrayData* a, StringData* key, TypedValue def) {
-  assertx(a->isDictKind());
-  return getDefaultIfNullTV(MixedArray::NvGetStrDict(a, key), def);
+  assertx(a->hasVanillaMixedLayout());
+  static_assert(MixedArray::NvGetStr == MixedArray::NvGetStrDict, "");
+  return getDefaultIfMissing(MixedArray::NvGetStrDict(a, key), def);
 }
 
+// This helper is also used for MixedArrays.
+NEVER_INLINE
 TypedValue dictIdxScan(ArrayData* a, StringData* key, TypedValue def) {
-  assertx(a->isDictKind());
-  auto ad = MixedArray::asMixed(a);
-  return LIKELY(ad->keyTypes().mustBeStaticStrs())
-    ? doScan(ad, key, def)
-    : dictIdxS(a, key, def);
+  assertx(a->hasVanillaMixedLayout());
+  auto const ad = MixedArray::asMixed(a);
+  if (!ad->keyTypes().mustBeStaticStrs()) return dictIdxS(a, key, def);
+  return doScan(ad, key, def);
 }
 
 TypedValue keysetIdxI(ArrayData* a, int64_t key, TypedValue def) {
   assertx(a->isKeysetKind());
-  return getDefaultIfNullTV(SetArray::NvGetInt(a, key), def);
+  return getDefaultIfMissing(SetArray::NvGetInt(a, key), def);
 }
 
 TypedValue keysetIdxS(ArrayData* a, StringData* key, TypedValue def) {
   assertx(a->isKeysetKind());
-  return getDefaultIfNullTV(SetArray::NvGetStr(a, key), def);
+  return getDefaultIfMissing(SetArray::NvGetStr(a, key), def);
 }
 
 template <bool isFirst>
@@ -600,7 +602,7 @@ TypedValue vecFirstLast(ArrayData* a) {
   assertx(a->isVecArrayKind() || a->isPackedKind());
   auto const size = a->getSize();
   if (UNLIKELY(size == 0)) return make_tv<KindOfNull>();
-  return *PackedArray::NvGetIntVec(a, isFirst ? 0 : size - 1);
+  return PackedArray::NvGetIntVec(a, isFirst ? 0 : size - 1);
 }
 
 template TypedValue vecFirstLast<true>(ArrayData*);
@@ -926,10 +928,10 @@ void setNewElemArray(tv_lval base, TypedValue val) {
 }
 
 TypedValue setOpElem(tv_lval base, TypedValue key,
-                     TypedValue val, SetOpOp op, const MInstrPropState* pState) {
-  TypedValue localTvRef;
-  auto result = HPHP::SetOpElem(localTvRef, op, base, key, &val, pState);
-  return cGetRefShuffle(localTvRef, result);
+                     TypedValue val, SetOpOp op) {
+  auto const result = HPHP::SetOpElem(op, base, key, &val);
+  tvIncRefGen(result);
+  return result;
 }
 
 StringData* stringGetI(StringData* base, uint64_t x) {
@@ -951,9 +953,8 @@ uint64_t vectorIsset(c_Vector* vec, int64_t index) {
   return result ? !tvIsNull(*result) : false;
 }
 
-TypedValue incDecElem(tv_lval base, TypedValue key,
-                      IncDecOp op, const MInstrPropState* pState) {
-  auto const result = HPHP::IncDecElem(op, base, key, pState);
+TypedValue incDecElem(tv_lval base, TypedValue key, IncDecOp op) {
+  auto const result = HPHP::IncDecElem(op, base, key);
   return result;
 }
 

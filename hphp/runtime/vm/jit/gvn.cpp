@@ -311,7 +311,13 @@ bool supportsGVN(const IRInstruction* inst) {
   case StrictlyIntegerConv:
   case LookupSPropSlot:
   case ConvPtrToLval:
+  case RaiseErrorOnInvalidIsAsExpressionType:
     return true;
+
+  case IsTypeStruct:
+    // Resources can change type without generating a new SSATmp,
+    // so its not safe to GVN
+    return !opcodeMayRaise(IsTypeStruct) && !inst->src(1)->type().maybe(TRes);
 
   case SameArr:
   case NSameArr:

@@ -156,7 +156,7 @@ type changes_since_baseline = Naming_sqlite.local_changes option
 
 type t =
   | Unbacked of FileInfo.t Relative_path.Map.t
-  | Backed of Naming_sqlite.local_changes
+  | Backed of Naming_sqlite.local_changes * Naming_sqlite.db_path
 [@@deriving show]
 
 type fast = FileInfo.names Relative_path.Map.t
@@ -172,33 +172,36 @@ let empty = Unbacked Relative_path.Map.empty
 let filter a ~f =
   match a with
   | Unbacked a -> Unbacked (Relative_path.Map.filter a f)
-  | Backed local_changes ->
+  | Backed (local_changes, db_path) ->
     let file_deltas = local_changes.Naming_sqlite.file_deltas in
     Backed
-      {
-        local_changes with
-        Naming_sqlite.file_deltas =
-          Naming_sqlite.fold
-            ~init:file_deltas
-            ~f:
-              begin
-                fun path fi acc ->
-                if f path fi then
-                  acc
-                else
-                  Relative_path.Map.add
+      ( {
+          local_changes with
+          Naming_sqlite.file_deltas =
+            Naming_sqlite.fold
+              ~db_path
+              ~init:file_deltas
+              ~f:
+                begin
+                  fun path fi acc ->
+                  if f path fi then
                     acc
-                    ~key:path
-                    ~data:Naming_sqlite.Deleted
-              end
-            ~file_deltas;
-      }
+                  else
+                    Relative_path.Map.add
+                      acc
+                      ~key:path
+                      ~data:Naming_sqlite.Deleted
+                end
+              ~file_deltas;
+        },
+        db_path )
 
 let fold a ~init ~f =
   match a with
   | Unbacked a -> Relative_path.Map.fold a ~init ~f
-  | Backed local_changes ->
+  | Backed (local_changes, db_path) ->
     Naming_sqlite.fold
+      ~db_path
       ~init
       ~f
       ~file_deltas:local_changes.Naming_sqlite.file_deltas
@@ -206,9 +209,10 @@ let fold a ~init ~f =
 let get_files a =
   match a with
   | Unbacked a -> Relative_path.Map.keys a
-  | Backed local_changes ->
+  | Backed (local_changes, db_path) ->
     (* Reverse at the end to preserve ascending sort order. *)
     Naming_sqlite.fold
+      ~db_path
       ~init:[]
       ~f:(fun path _ acc -> path :: acc)
       ~file_deltas:local_changes.Naming_sqlite.file_deltas
@@ -224,13 +228,13 @@ let get_files_changed_since_baseline
 let get_file_info a key =
   match a with
   | Unbacked a -> Relative_path.Map.find_opt a key
-  | Backed local_changes ->
+  | Backed (local_changes, db_path) ->
     (match
        Relative_path.Map.find_opt local_changes.Naming_sqlite.file_deltas key
      with
     | Some (Naming_sqlite.Modified fi) -> Some fi
     | Some Naming_sqlite.Deleted -> None
-    | None -> Naming_sqlite.get_file_info key)
+    | None -> Naming_sqlite.get_file_info db_path key)
 
 let get_file_info_unsafe a key =
   Core_kernel.Option.value_exn (get_file_info a key)
@@ -243,8 +247,9 @@ let has_file a key =
 let iter a ~f =
   match a with
   | Unbacked a -> Relative_path.Map.iter a ~f
-  | Backed local_changes ->
+  | Backed (local_changes, db_path) ->
     Naming_sqlite.fold
+      ~db_path
       ~init:()
       ~f:(fun path fi () -> f path fi)
       ~file_deltas:local_changes.Naming_sqlite.file_deltas
@@ -252,48 +257,51 @@ let iter a ~f =
 let remove a key =
   match a with
   | Unbacked a -> Unbacked (Relative_path.Map.remove a key)
-  | Backed local_changes ->
+  | Backed (local_changes, db_path) ->
     Backed
-      {
-        local_changes with
-        Naming_sqlite.file_deltas =
-          Relative_path.Map.add
-            local_changes.Naming_sqlite.file_deltas
-            ~key
-            ~data:Naming_sqlite.Deleted;
-      }
+      ( {
+          local_changes with
+          Naming_sqlite.file_deltas =
+            Relative_path.Map.add
+              local_changes.Naming_sqlite.file_deltas
+              ~key
+              ~data:Naming_sqlite.Deleted;
+        },
+        db_path )
 
 let update a key data =
   match a with
   | Unbacked a -> Unbacked (Relative_path.Map.add a ~key ~data)
-  | Backed local_changes ->
+  | Backed (local_changes, db_path) ->
     Backed
-      {
-        local_changes with
-        Naming_sqlite.file_deltas =
-          Relative_path.Map.add
-            local_changes.Naming_sqlite.file_deltas
-            ~key
-            ~data:(Naming_sqlite.Modified data);
-      }
+      ( {
+          local_changes with
+          Naming_sqlite.file_deltas =
+            Relative_path.Map.add
+              local_changes.Naming_sqlite.file_deltas
+              ~key
+              ~data:(Naming_sqlite.Modified data);
+        },
+        db_path )
 
 let update_many a updates =
   match a with
   | Unbacked a ->
     (* Reverse the order because union always takes the first value. *)
     Unbacked (Relative_path.Map.union updates a)
-  | Backed local_changes ->
+  | Backed (local_changes, db_path) ->
     let local_updates =
       Relative_path.Map.map updates ~f:(fun data -> Naming_sqlite.Modified data)
     in
     Backed
-      {
-        local_changes with
-        Naming_sqlite.file_deltas =
-          Relative_path.Map.union
-            local_updates
-            local_changes.Naming_sqlite.file_deltas;
-      }
+      ( {
+          local_changes with
+          Naming_sqlite.file_deltas =
+            Relative_path.Map.union
+              local_updates
+              local_changes.Naming_sqlite.file_deltas;
+        },
+        db_path )
 
 let combine a b =
   match b with
@@ -315,7 +323,7 @@ let save_changes_since_baseline naming_table ~destination_path =
   let snapshot =
     match naming_table with
     | Unbacked _ -> None
-    | Backed local_changes -> Some local_changes
+    | Backed (local_changes, _db_path) -> Some local_changes
   in
   let contents = Marshal.to_string snapshot [Marshal.No_sharing] in
   Disk.write_file ~file:destination_path ~contents
@@ -336,6 +344,7 @@ let save naming_table db_name =
     let save_result =
       Naming_sqlite.save_file_infos db_name naming_table ~base_content_version
     in
+    Naming_sqlite.free_db_cache ();
     let (_ : float) =
       let open Naming_sqlite in
       Hh_logger.log_duration
@@ -346,16 +355,12 @@ let save naming_table db_name =
         t
     in
     save_result
-  | Backed local_changes ->
+  | Backed (local_changes, db_path) ->
     let t = Unix.gettimeofday () in
-    let old_path = Naming_sqlite.get_db_path () in
-    (* Don't overwrite. *)
-    FileUtil.cp
-      ~force:(FileUtil.Ask (fun _ -> false))
-      [Core_kernel.Option.value_exn (Naming_sqlite.get_db_path ())]
-      db_name;
-    Naming_sqlite.set_db_path (Some db_name);
-    Naming_sqlite.update_file_infos db_name local_changes;
+    Naming_sqlite.copy_and_update
+      ~existing_db:db_path
+      ~new_db:(Naming_sqlite.Db_path db_name)
+      local_changes;
     let (_ : float) =
       Hh_logger.log_duration
         (Printf.sprintf
@@ -363,7 +368,6 @@ let save naming_table db_name =
            (Relative_path.Map.cardinal local_changes.Naming_sqlite.file_deltas))
         t
     in
-    Naming_sqlite.set_db_path old_path;
     { Naming_sqlite.empty_save_result with Naming_sqlite.files_added = 1 }
 
 (*****************************************************************************)
@@ -407,11 +411,16 @@ let saved_to_fast saved = Relative_path.Map.map saved FileInfo.saved_to_names
 
 let create a = Unbacked a
 
-let update_reverse_entries ctx file_deltas =
+let update_reverse_entries ctx file_deltas : unit =
   let backend = Provider_context.get_backend ctx in
+  let db_path_opt = Db_path_provider.get_naming_db_path backend in
   Relative_path.Map.iter file_deltas ~f:(fun path delta ->
+      let fi =
+        Option.bind db_path_opt ~f:(fun db_path ->
+            Naming_sqlite.get_file_info db_path path)
+      in
       begin
-        match Naming_sqlite.get_file_info path with
+        match fi with
         | Some fi ->
           Naming_provider.remove_type_batch
             backend
@@ -489,10 +498,15 @@ let load_from_sqlite_for_type_checking
     (db_path : string) : t =
   Hh_logger.log "Loading naming table from SQLite...";
   let t = Unix.gettimeofday () in
-  Naming_sqlite.set_db_path (Some db_path);
+  let db_path = Naming_sqlite.Db_path db_path in
+  Naming_sqlite.validate_can_open_db db_path;
+  (* throw in master if anything's wrong *)
+  Db_path_provider.set_naming_db_path
+    (Provider_context.get_backend ctx)
+    (Some db_path);
   let local_changes =
     choose_local_changes
-      ~local_changes:(Naming_sqlite.get_local_changes ())
+      ~local_changes:(Naming_sqlite.get_local_changes db_path)
       ~custom_local_changes
   in
   let t = Hh_logger.log_duration "Loaded local naming table changes" t in
@@ -501,7 +515,7 @@ let load_from_sqlite_for_type_checking
     let _t = Hh_logger.log_duration "Updated reverse naming table entries" t in
     ()
   end;
-  Backed local_changes
+  Backed (local_changes, db_path)
 
 let load_from_sqlite_with_changes_since_baseline
     (ctx : Provider_context.t)
@@ -528,13 +542,10 @@ let load_from_sqlite (ctx : Provider_context.t) (db_path : string) : t =
     ctx
     db_path
 
-let get_reverse_naming_fallback_path () : string option =
-  Naming_sqlite.get_db_path ()
-
 let get_forward_naming_fallback_path a : string option =
   match a with
   | Unbacked _ -> None
-  | Backed _ -> Naming_sqlite.get_db_path ()
+  | Backed (_, Naming_sqlite.Db_path db_path) -> Some db_path
 
 (*****************************************************************************)
 (* Testing functions *)

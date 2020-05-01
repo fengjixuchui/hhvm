@@ -235,6 +235,7 @@ prefixed_flags!(
     ALLOW_NEW_ATTRIBUTE_SYNTAX,
     CHECK_INT_OVERFLOW,
     CONST_DEFAULT_FUNC_ARGS,
+    CONST_DEFAULT_LAMBDA_ARGS,
     CONST_STATIC_PROPS,
     DISABLE_LEGACY_ATTRIBUTE_SYNTAX,
     DISABLE_LEGACY_SOFT_TYPEHINTS,
@@ -249,6 +250,7 @@ prefixed_flags!(
     ENABLE_XHP_CLASS_MODIFIER,
     DISABLE_ARRAY,
     RUST_TOP_LEVEL_ELABORATOR,
+    RUST_EMITTER,
 );
 impl Default for LangFlags {
     fn default() -> LangFlags {
@@ -628,6 +630,9 @@ mod tests {
   "hhvm.hack.lang.const_default_func_args": {
     "global_value": false
   },
+  "hhvm.hack.lang.const_default_lambda_args": {
+    "global_value": false
+  },
   "hhvm.hack.lang.const_static_props": {
     "global_value": false
   },
@@ -665,6 +670,9 @@ mod tests {
     "global_value": false
   },
   "hhvm.hack.lang.enable_xhp_class_modifier": {
+    "global_value": false
+  },
+  "hhvm.hack.lang.rust_emitter": {
     "global_value": false
   },
   "hhvm.hack.lang.rust_top_level_elaborator": {
@@ -1023,5 +1031,7 @@ bitflags! {
         const DISABLE_XHP_ELEMENT_MANGLING = 1 << 49;
         const DISABLE_ARRAY = 1 << 50;
         const RUST_TOP_LEVEL_ELABORATOR = 1 << 51;
+        const CONST_DEFAULT_LAMBDA_ARGS = 1 << 52;
+        const RUST_EMITTER = 1 << 53;
     }
 }

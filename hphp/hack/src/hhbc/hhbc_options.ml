@@ -46,6 +46,7 @@ type t = {
   option_allow_new_attribute_syntax: bool;
   option_disable_legacy_attribute_syntax: bool;
   option_const_default_func_args: bool;
+  option_const_default_lambda_args: bool;
   option_const_static_props: bool;
   option_abstract_static_props: bool;
   option_disable_unset_class_const: bool;
@@ -56,6 +57,7 @@ type t = {
   option_disable_xhp_children_declarations: bool;
   option_enable_xhp_class_modifier: bool;
   option_rust_top_level_elaborator: bool;
+  option_rust_emitter: bool;
   option_enable_first_class_function_pointers: bool;
   option_widen_is_array: bool;
   option_disable_partial: bool;
@@ -101,6 +103,7 @@ let default =
     option_allow_new_attribute_syntax = false;
     option_disable_legacy_attribute_syntax = false;
     option_const_default_func_args = false;
+    option_const_default_lambda_args = false;
     option_const_static_props = false;
     option_abstract_static_props = false;
     option_disable_unset_class_const = false;
@@ -111,6 +114,7 @@ let default =
     option_disable_xhp_children_declarations = false;
     option_enable_xhp_class_modifier = false;
     option_rust_top_level_elaborator = true;
+    option_rust_emitter = false;
     option_enable_first_class_function_pointers = false;
     option_widen_is_array = false;
     option_disable_partial = false;
@@ -189,6 +193,8 @@ let disable_legacy_attribute_syntax o = o.option_disable_legacy_attribute_syntax
 
 let const_default_func_args o = o.option_const_default_func_args
 
+let const_default_lambda_args o = o.option_const_default_lambda_args
+
 let const_static_props o = o.option_const_static_props
 
 let abstract_static_props o = o.option_abstract_static_props
@@ -209,6 +215,8 @@ let emit_generics_ub o = o.option_emit_generics_ub
 let check_int_overflow o = o.option_check_int_overflow
 
 let rust_top_level_elaborator o = o.option_rust_top_level_elaborator
+
+let rust_emitter o = o.option_rust_emitter
 
 let enable_first_class_function_pointers o =
   o.option_enable_first_class_function_pointers
@@ -289,6 +297,8 @@ let to_string o =
       Printf.sprintf "disable_legacy_attribute_syntax: %B"
       @@ disable_legacy_attribute_syntax o;
       Printf.sprintf "const_default_func_args: %B" @@ const_default_func_args o;
+      Printf.sprintf "const_default_lambda_args: %B"
+      @@ const_default_lambda_args o;
       Printf.sprintf "const_static_props: %B" @@ const_static_props o;
       Printf.sprintf "abstract_static_props: %B" @@ abstract_static_props o;
       Printf.sprintf "disable_unset_class_const: %B"
@@ -304,6 +314,7 @@ let to_string o =
       Printf.sprintf "rust_top_level_elaborator: %B"
       @@ rust_top_level_elaborator o;
       Printf.sprintf "disable_array: %B" @@ disable_array o;
+      Printf.sprintf "rust_emitter: %B" @@ rust_emitter o;
     ]
 
 let as_bool s =
@@ -381,6 +392,8 @@ let set_option options name value =
     { options with option_disable_legacy_attribute_syntax = as_bool value }
   | "hhvm.lang.constdefaultfuncargs" ->
     { options with option_const_default_func_args = as_bool value }
+  | "hhvm.lang.constdefaultlambdaargs" ->
+    { options with option_const_default_lambda_args = as_bool value }
   | "hhvm.lang.conststaticprops" ->
     { options with option_const_static_props = as_bool value }
   | "hhvm.lang.abstractstaticprops" ->
@@ -399,6 +412,8 @@ let set_option options name value =
     { options with option_check_int_overflow = int_of_string value > 0 }
   | "hhvm.hack.lang.rust_top_level_elaborator" ->
     { options with option_rust_top_level_elaborator = as_bool value }
+  | "hhvm.hack.lang.rust_emitter" ->
+    { options with option_rust_emitter = as_bool value }
   | "hhvm.hack.lang.enable_first_class_function_pointers" ->
     {
       options with
@@ -555,18 +570,18 @@ let value_setters =
     @@ fun opts v -> { opts with option_phpism_disable_static_closures = v = 1 }
     );
     ( set_value "hhvm.emit_func_pointers" get_value_from_config_int
-    @@ fun opts v -> { opts with option_emit_func_pointers = v > 0 } );
+    @@ fun opts v -> { opts with option_emit_func_pointers = v = 1 } );
     ( set_value "hhvm.emit_cls_meth_pointers" get_value_from_config_int
-    @@ fun opts v -> { opts with option_emit_cls_meth_pointers = v > 0 } );
+    @@ fun opts v -> { opts with option_emit_cls_meth_pointers = v = 1 } );
     ( set_value "hhvm.emit_meth_caller_func_pointers" get_value_from_config_int
-    @@ fun opts v -> { opts with option_emit_meth_caller_func_pointers = v > 0 }
+    @@ fun opts v -> { opts with option_emit_meth_caller_func_pointers = v = 1 }
     );
     ( set_value "hhvm.emit_inst_meth_pointers" get_value_from_config_int
-    @@ fun opts v -> { opts with option_emit_inst_meth_pointers = v > 0 } );
+    @@ fun opts v -> { opts with option_emit_inst_meth_pointers = v = 1 } );
     ( set_value "hhvm.rx_is_enabled" get_value_from_config_int @@ fun opts v ->
-      { opts with option_rx_is_enabled = v > 0 } );
+      { opts with option_rx_is_enabled = v = 1 } );
     ( set_value "hhvm.array_provenance" get_value_from_config_int
-    @@ fun opts v -> { opts with option_array_provenance = v > 0 } );
+    @@ fun opts v -> { opts with option_array_provenance = v = 1 } );
     ( set_value
         "hhvm.hack.lang.enable_class_level_where_clauses"
         get_value_from_config_int
@@ -590,6 +605,10 @@ let value_setters =
         "hhvm.hack.lang.const_default_func_args"
         get_value_from_config_int
     @@ fun opts v -> { opts with option_const_default_func_args = v = 1 } );
+    ( set_value
+        "hhvm.hack.lang.const_default_lambda_args"
+        get_value_from_config_int
+    @@ fun opts v -> { opts with option_const_default_lambda_args = v = 1 } );
     ( set_value "hhvm.hack.lang.const_static_props" get_value_from_config_int
     @@ fun opts v -> { opts with option_const_static_props = v = 1 } );
     ( set_value "hhvm.hack.lang.abstract_static_props" get_value_from_config_int
@@ -604,7 +623,7 @@ let value_setters =
     @@ fun opts v ->
       { opts with option_disallow_func_ptrs_in_constants = v = 1 } );
     ( set_value "hhvm.emit_generics_ub" get_value_from_config_int
-    @@ fun opts v -> { opts with option_emit_generics_ub = v > 0 } );
+    @@ fun opts v -> { opts with option_emit_generics_ub = v = 1 } );
     ( set_value "hhvm.hack.lang.check_int_overflow" get_value_from_config_int
     @@ fun opts v -> { opts with option_check_int_overflow = v > 0 } );
     ( set_value

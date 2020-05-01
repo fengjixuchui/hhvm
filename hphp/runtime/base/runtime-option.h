@@ -789,8 +789,6 @@ struct RuntimeOption {
    * 2 - Throw when incrementing or decrementing non numeric types
    */                                                                   \
   F(uint32_t, WarnOnIncDecInvalidType, 0)                               \
-  F(bool, PromoteEmptyObject,          false)                           \
-  F(bool, LibXMLUseSafeSubtrees,       true)                            \
   F(bool, MoreAccurateMemStats,        true)                            \
   F(bool, AllowScopeBinding,           false)                           \
   F(bool, JitNoGdb,                    true)                            \
@@ -1107,7 +1105,6 @@ struct RuntimeOption {
    */                                                                   \
   F(bool, HackArrCompatCheckImplicitVarrayAppend, false)                \
   F(bool, HackArrCompatTypeHintNotices, false)                          \
-  F(bool, HackArrCompatTypeHintPolymorphism, false)                     \
   F(bool, HackArrCompatDVCmpNotices, false)                             \
   F(bool, HackArrCompatSerializeNotices, false)                         \
   /* Raise notices when fb_compact_*() would change behavior */         \
@@ -1317,7 +1314,6 @@ struct RuntimeOption {
   F(bool, WidenIsArray, false)                                          \
   F(bool, EnablePerFileCoverage, false)                                 \
   F(bool, NoUseMagicMethods, false)                                     \
-  F(bool, NoAppendToMap, false)                                         \
   /* Should we use the autoload map from the repo */                    \
   F(bool, UseRepoAutoloadMap, false)                                    \
   /* */

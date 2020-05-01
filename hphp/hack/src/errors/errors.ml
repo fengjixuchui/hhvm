@@ -518,11 +518,11 @@ let format_messages (msgs : Pos.absolute message list) : string =
   let labelled_msgs = label_first msgs true in
   (* Sort messages by line number, so we can display with context. *)
   let cmp (m1, _) (m2, _) =
-    match compare (Pos.filename (fst m1)) (Pos.filename (fst m2)) with
-    | 0 -> compare (Pos.line (fst m1)) (Pos.line (fst m2))
+    match String.compare (Pos.filename (fst m1)) (Pos.filename (fst m2)) with
+    | 0 -> Int.compare (Pos.line (fst m1)) (Pos.line (fst m2))
     | _ -> 0
   in
-  let sorted_msgs = List.stable_sort cmp labelled_msgs in
+  let sorted_msgs = List.stable_sort ~compare:cmp labelled_msgs in
   (* For every message, show it alongside the relevant line. If there
      are multiple messages associated with the line, only show it once. *)
   let col_widths = col_widths msgs in
@@ -2163,15 +2163,16 @@ let bad_decl_override parent_pos parent_name pos name msgl =
   let msg2 =
     ( parent_pos,
       "Some members are incompatible with those declared in type "
-      ^ strip_ns parent_name
-      ^ "\nRead the following to see why:" )
+      ^ strip_ns parent_name )
   in
   (* This is a cascading error message *)
   add_list (Typing.err_code Typing.BadDeclOverride) (msg1 :: msg2 :: msgl)
 
 let bad_method_override pos member_name msgl (on_error : typing_error_callback)
     =
-  let msg = (pos, "Member " ^ strip_ns member_name ^ " has the wrong type") in
+  let msg =
+    (pos, "The method " ^ strip_ns member_name ^ " has the wrong type")
+  in
   (* This is a cascading error message *)
   on_error ~code:(Typing.err_code Typing.BadMethodOverride) (msg :: msgl)
 
@@ -2183,9 +2184,7 @@ let bad_prop_override pos member_name msgl (on_error : typing_error_callback) =
   on_error ~code:(Typing.err_code Typing.BadMethodOverride) (msg :: msgl)
 
 let bad_enum_decl pos msgl =
-  let msg =
-    (pos, "This enum declaration is invalid.\nRead the following to see why:")
-  in
+  let msg = (pos, "This enum declaration is invalid.") in
   (* This is a cascading error message *)
   add_list (Typing.err_code Typing.BadEnumExtends) (msg :: msgl)
 

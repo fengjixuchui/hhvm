@@ -3,11 +3,12 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<5bc1299f509824bb4c9df63f23472674>>
+// @generated SignedSource<<4c9f23cb5c52634af2cba3b8c463ca7a>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
 
+use ocamlrep_derive::ToOcamlRep;
 use serde::Serialize;
 
 #[allow(unused_imports)]
@@ -21,16 +22,18 @@ pub use ast_defs::Pstring;
 pub use local_id::LocalId;
 pub use shape_map::ShapeMap;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Lid<'a>(pub Pos<'a>, pub LocalId<'a>);
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
+pub struct Lid<'a>(pub &'a Pos<'a>, pub LocalId<'a>);
 
 pub type Sid<'a> = ast_defs::Id<'a>;
 
-pub type IsReified<'a> = bool;
+pub use oxidized::aast_defs::IsReified;
 
 pub use oxidized::aast_defs::CallType;
 
-pub type IsCoroutine<'a> = bool;
+pub use oxidized::aast_defs::IsCoroutine;
 
 pub use oxidized::aast_defs::FuncReactive;
 
@@ -38,7 +41,9 @@ pub use oxidized::aast_defs::ParamMutability;
 
 pub use oxidized::aast_defs::ImportFlavor;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub enum XhpChild<'a> {
     ChildName(Sid<'a>),
     ChildList(&'a [XhpChild<'a>]),
@@ -48,26 +53,32 @@ pub enum XhpChild<'a> {
 
 pub use oxidized::aast_defs::XhpChildOp;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Hint<'a>(pub Pos<'a>, pub &'a Hint_<'a>);
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
+pub struct Hint<'a>(pub &'a Pos<'a>, pub &'a Hint_<'a>);
 
-pub type MutableReturn<'a> = bool;
+pub use oxidized::aast_defs::MutableReturn;
 
 pub type VariadicHint<'a> = Option<Hint<'a>>;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct HintFun<'a> {
     pub reactive_kind: oxidized::aast_defs::FuncReactive,
-    pub is_coroutine: IsCoroutine<'a>,
+    pub is_coroutine: oxidized::aast_defs::IsCoroutine,
     pub param_tys: &'a [Hint<'a>],
     pub param_kinds: &'a [Option<oxidized::ast_defs::ParamKind>],
     pub param_mutability: &'a [Option<oxidized::aast_defs::ParamMutability>],
     pub variadic_ty: VariadicHint<'a>,
     pub return_ty: Hint<'a>,
-    pub is_mutable_return: MutableReturn<'a>,
+    pub is_mutable_return: oxidized::aast_defs::MutableReturn,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub enum Hint_<'a> {
     Hoption(Hint<'a>),
     Hlike(Hint<'a>),
@@ -114,7 +125,9 @@ pub enum Hint_<'a> {
 }
 
 /// AST types such as Happly("int", []) are resolved to Hprim values
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub enum Tprim<'a> {
     Tnull,
     Tvoid,
@@ -131,14 +144,18 @@ pub enum Tprim<'a> {
     Tatom(&'a str),
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct ShapeFieldInfo<'a> {
     pub optional: bool,
     pub hint: Hint<'a>,
     pub name: ast_defs::ShapeFieldName<'a>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct NastShapeInfo<'a> {
     pub allows_unknown_fields: bool,
     pub field_map: &'a [ShapeFieldInfo<'a>],
@@ -154,13 +171,17 @@ pub use oxidized::aast_defs::UseAsVisibility;
 
 pub use oxidized::aast_defs::TypedefVisibility;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct Enum_<'a> {
     pub base: Hint<'a>,
     pub constraint: Option<Hint<'a>>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct WhereConstraint<'a>(
     pub Hint<'a>,
     pub oxidized::ast_defs::ConstraintKind,

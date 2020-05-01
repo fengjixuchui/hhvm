@@ -373,13 +373,10 @@ bool opcodeMayRaise(Opcode opc) {
   case DictSet:
   case ElemArrayD:
   case ElemArrayU:
-  case ElemArrayX:
   case ElemDictD:
   case ElemDictU:
-  case ElemDictX:
   case ElemDX:
   case ElemKeysetU:
-  case ElemKeysetX:
   case ElemUX:
   case ElemVecD:
   case ElemVecU:
@@ -828,7 +825,6 @@ bool opcodeMayRaise(Opcode opc) {
   case LdMBase:
   case LdMem:
   case LdMethCallerName:
-  case LdMIPropStateAddr:
   case LdMIStateAddr:
   case LdPtrIterKey:
   case LdPtrIterVal:
@@ -974,7 +970,6 @@ bool opcodeMayRaise(Opcode opc) {
   case StLocRange:
   case StMBase:
   case StMem:
-  case StMIPropState:
   case StOutValue:
   case StrictlyIntegerConv:
   case StringIsset:

@@ -241,7 +241,6 @@ bool canDCE(IRInstruction* inst) {
   case LdWHResult:
   case LdWHNotDone:
   case LdAFWHActRec:
-  case LdMIPropStateAddr:
   case LdMIStateAddr:
   case StringIsset:
   case ColIsEmpty:
@@ -645,17 +644,14 @@ bool canDCE(IRInstruction* inst) {
   case CheckDictOffset:
   case ProfileKeysetAccess:
   case CheckKeysetOffset:
-  case ElemArrayX:
   case ElemArrayD:
   case ElemArrayU:
   case ElemMixedArrayK:
   case ElemVecD:
   case ElemVecU:
-  case ElemDictX:
   case ElemDictD:
   case ElemDictU:
   case ElemDictK:
-  case ElemKeysetX:
   case ElemKeysetU:
   case ElemKeysetK:
   case ElemDX:
@@ -720,7 +716,6 @@ bool canDCE(IRInstruction* inst) {
   case ThrowParamInOutMismatch:
   case ThrowParamInOutMismatchRange:
   case StMBase:
-  case StMIPropState:
   case FinishMemberOp:
   case InlineReturnNoFrame:
   case BeginInlining:

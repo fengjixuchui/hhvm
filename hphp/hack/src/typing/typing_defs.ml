@@ -97,13 +97,16 @@ let mode_to_flags mode =
   | FPnormal -> 0x0
   | FPinout -> fp_flags_inout
 
-let make_fp_flags ~mode ~accept_disposable ~mutability =
+let make_fp_flags ~mode ~accept_disposable ~mutability ~has_default =
   let flags = mode_to_flags mode in
   let flags = Int.bit_or (to_mutable_flags mutability) flags in
   let flags = set_bit fp_flags_accept_disposable accept_disposable flags in
+  let flags = set_bit fp_flags_has_default has_default flags in
   flags
 
 let get_fp_accept_disposable fp = is_set fp.fp_flags fp_flags_accept_disposable
+
+let get_fp_has_default fp = is_set fp.fp_flags fp_flags_has_default
 
 let get_fp_mode fp =
   if is_set fp.fp_flags fp_flags_inout then
@@ -426,11 +429,8 @@ let this = Local_id.make_scoped "$this"
  * codebase. *)
 let make_tany () = Tany TanySentinel.value
 
-let arity_min ft_arity : int =
-  match ft_arity with
-  | Fstandard min
-  | Fvariadic (min, _) ->
-    min
+let arity_min ft : int =
+  List.count ~f:(fun fp -> not (get_fp_has_default fp)) ft.ft_params
 
 let get_param_mode callconv =
   match callconv with
@@ -567,7 +567,7 @@ let decl_ty_con_ordinal ty_ =
 let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
   let rec ty__compare ty_1 ty_2 =
     match (ty_1, ty_2) with
-    | (Tprim ty1, Tprim ty2) -> compare ty1 ty2
+    | (Tprim ty1, Tprim ty2) -> Aast_defs.compare_tprim ty1 ty2
     | (Toption ty, Toption ty2)
     | (Tvarray ty, Tvarray ty2) ->
       ty_compare ty ty2
@@ -595,7 +595,7 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
       end
     | (Tdependent (d1, cstr1), Tdependent (d2, cstr2)) ->
       begin
-        match compare d1 d2 with
+        match compare_dependent_type d1 d2 with
         | 0 -> ty_compare cstr1 cstr2
         | n -> n
       end
@@ -625,10 +625,18 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
         | n -> n
       end
     | (Tvar v1, Tvar v2) -> compare v1 v2
+    | (Tpu (cls1, enum1), Tpu (cls2, enum2)) ->
+      (match ty_compare cls1 cls2 with
+      | 0 -> String.compare (snd enum1) (snd enum2)
+      | n -> n)
+    | (Tpu_type_access (n1, t1), Tpu_type_access (n2, t2)) ->
+      (match String.compare (snd n1) (snd n2) with
+      | 0 -> String.compare (snd t1) (snd t2)
+      | n -> n)
     | _ -> ty_con_ordinal ty_1 - ty_con_ordinal ty_2
   and shape_field_type_compare sft1 sft2 =
     match ty_compare sft1.sft_ty sft2.sft_ty with
-    | 0 -> compare sft1.sft_optional sft2.sft_optional
+    | 0 -> Bool.compare sft1.sft_optional sft2.sft_optional
     | n -> n
   and tfun_compare fty1 fty2 =
     match possibly_enforced_ty_compare fty1.ft_ret fty2.ft_ret with
@@ -636,7 +644,10 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
       begin
         match ft_params_compare fty1.ft_params fty2.ft_params with
         | 0 ->
-          compare
+          (* Explicit polymorphic equality. Need to write equality on
+           * locl_ty by hand if we want to make a specialized one
+           *)
+          Poly.compare
             (fty1.ft_arity, fty1.ft_reactive, fty1.ft_flags)
             (fty2.ft_arity, fty2.ft_reactive, fty2.ft_flags)
         | n -> n
@@ -651,7 +662,7 @@ and ty_compare ?(normalize_lists = false) ty1 ty2 =
 and tyl_compare ~sort ?(normalize_lists = false) tyl1 tyl2 =
   let (tyl1, tyl2) =
     if sort then
-      (List.sort ty_compare tyl1, List.sort ty_compare tyl2)
+      (List.sort ~compare:ty_compare tyl1, List.sort ~compare:ty_compare tyl2)
     else
       (tyl1, tyl2)
   in
@@ -699,7 +710,7 @@ let has_member_compare ~normalize_lists hm1 hm2 =
   let ty_compare = ty_compare ~normalize_lists in
   let { hm_name = (_, m1); hm_type = ty1; hm_class_id = cid1 } = hm1 in
   let { hm_name = (_, m2); hm_type = ty2; hm_class_id = cid2 } = hm2 in
-  match compare m1 m2 with
+  match String.compare m1 m2 with
   | 0 ->
     (match ty_compare ty1 ty2 with
     | 0 -> class_id_compare cid1 cid2
@@ -777,13 +788,12 @@ let equal_locl_ty_ ty_1 ty_2 = Int.equal 0 (ty__compare ty_1 ty_2)
 
 let equal_locl_fun_arity ft1 ft2 =
   match (ft1.ft_arity, ft2.ft_arity) with
-  | (Fstandard min1, Fstandard min2) ->
-    Int.equal min1 min2
-    && Int.equal (List.length ft1.ft_params) (List.length ft2.ft_params)
-  | (Fvariadic (min1, param1), Fvariadic (min2, param2)) ->
-    Int.equal min1 min2 && Int.equal 0 (ft_params_compare [param1] [param2])
-  | (Fstandard _, Fvariadic _)
-  | (Fvariadic _, Fstandard _) ->
+  | (Fstandard, Fstandard) ->
+    Int.equal (List.length ft1.ft_params) (List.length ft2.ft_params)
+  | (Fvariadic param1, Fvariadic param2) ->
+    Int.equal 0 (ft_params_compare [param1] [param2])
+  | (Fstandard, Fvariadic _)
+  | (Fvariadic _, Fstandard) ->
     false
 
 let is_type_no_return = equal_locl_ty_ (Tprim Aast.Tnoreturn)
@@ -871,13 +881,12 @@ and equal_shape_field_type sft1 sft2 =
 
 and equal_decl_fun_arity ft1 ft2 =
   match (ft1.ft_arity, ft2.ft_arity) with
-  | (Fstandard min1, Fstandard min2) ->
-    Int.equal min1 min2
-    && Int.equal (List.length ft1.ft_params) (List.length ft2.ft_params)
-  | (Fvariadic (min1, param1), Fvariadic (min2, param2)) ->
-    Int.equal min1 min2 && equal_decl_ft_params [param1] [param2]
-  | (Fstandard _, Fvariadic _)
-  | (Fvariadic _, Fstandard _) ->
+  | (Fstandard, Fstandard) ->
+    Int.equal (List.length ft1.ft_params) (List.length ft2.ft_params)
+  | (Fvariadic param1, Fvariadic param2) ->
+    equal_decl_ft_params [param1] [param2]
+  | (Fstandard, Fvariadic _)
+  | (Fvariadic _, Fstandard) ->
     false
 
 and equal_decl_fun_type fty1 fty2 =

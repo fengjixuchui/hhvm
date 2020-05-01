@@ -125,11 +125,17 @@ const int SEEK_END = 0;
 const int SEEK_HOLE = 0;
 const int SEEK_DATA = 0;
 
+const int STDIN_FILENO = 0;
+const int STDOUT_FILENO = 0;
+const int STDERR_FILENO = 0;
+
 final class ErrnoException extends \Exception {}
 
 function poll_async(FileDescriptor $fd, int $events, int $timeout_ns): Awaitable<int>;
 
 function open(string $path, int $flags, int $mode = 0): FileDescriptor;
+
+function request_stdio_fd(int $stdio_fileno): FileDescriptor;
 
 function read(
   FileDescriptor $fd,
@@ -154,6 +160,8 @@ const int PF_UNIX = 0;
 const int PF_INET = 0;
 const int PF_INET6 = 0;
 const int PF_MAX = 0;
+
+const int SUN_PATH_LEN = 0;
 
 const int SOCK_STREAM = 0;
 const int SOCK_DGRAM = 0;
@@ -214,7 +222,7 @@ abstract class sockaddr_un extends sockaddr {
 }
 
 final class sockaddr_un_pathname extends sockaddr_un {
-  public function __construct(public string $pathname) {
+  public function __construct(public string $sun_path) {
     parent::__construct();
   }
 }
@@ -233,4 +241,5 @@ function listen(FileDescriptor $socket, int $backlog): void;
 function accept(FileDescriptor $socket): (FileDescriptor, sockaddr);
 function fcntl(FileDescriptor $fd, int $cmd, mixed $arg = null): mixed;
 function lseek(FileDescriptor $fd, int $offset, int $whence): int;
+function ftruncate(FileDescriptor $fd, int $length): void;
 function flock(FileDescriptor $fd, int $operation): void;

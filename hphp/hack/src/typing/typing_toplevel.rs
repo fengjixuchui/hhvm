@@ -15,11 +15,16 @@ use typing_defs_rust::tast;
 use typing_defs_rust::typing_make_type::TypeBuilder;
 
 mod typing;
+mod typing_continuations;
+mod typing_enum;
 mod typing_env;
 mod typing_env_from_def;
 mod typing_env_return_info;
 mod typing_env_types;
+mod typing_local_types;
 mod typing_naming;
+mod typing_object_get;
+mod typing_per_cont_env;
 mod typing_phase;
 pub mod typing_print;
 mod typing_solver;

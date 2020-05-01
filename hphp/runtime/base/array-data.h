@@ -386,15 +386,6 @@ public:
   arr_lval lval(const Variant& k);
 
   /*
-   * Get an rval for the element at key `k'. The caller must know that the
-   * array is a "vanilla" array, which restricts callers to JIT helpers.
-   *
-   * If the array has no element at `k', return a null tv_rval.
-   */
-  tv_rval rvalVanilla(int64_t k) const;
-  tv_rval rvalVanilla(const StringData* k) const;
-
-  /*
    * Get the value of the element at key `k'.
    *
    * @requires: exists(k)
@@ -839,8 +830,8 @@ struct ArrayFunctions {
   static auto const NK = size_t{ArrayData::kNumKinds};
 
   void (*release[NK])(ArrayData*);
-  tv_rval (*nvGetInt[NK])(const ArrayData*, int64_t k);
-  tv_rval (*nvGetStr[NK])(const ArrayData*, const StringData* k);
+  TypedValue (*nvGetInt[NK])(const ArrayData*, int64_t k);
+  TypedValue (*nvGetStr[NK])(const ArrayData*, const StringData* k);
   ssize_t (*nvGetIntPos[NK])(const ArrayData*, int64_t k);
   ssize_t (*nvGetStrPos[NK])(const ArrayData*, const StringData* k);
   TypedValue (*getPosKey[NK])(const ArrayData*, ssize_t pos);

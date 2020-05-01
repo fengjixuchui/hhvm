@@ -11,7 +11,7 @@
  * Parses and gathers information from the .hhconfig in the repo.
  *)
 
-open Core_kernel
+open Hh_prelude
 open Config_file.Getters
 open Reordered_argument_collections
 open ServerLocalConfig
@@ -41,13 +41,13 @@ type t = {
 }
 
 let filename =
-  Relative_path.from_root Config_file.file_path_relative_to_repo_root
+  Relative_path.from_root ~suffix:Config_file.file_path_relative_to_repo_root
 
 let is_compatible c1 c2 =
   (* This comparison can eventually be made more complex; we may not always
    * need to restart hh_server, e.g. changing the path to the load script
    * is immaterial*)
-  c1 = c2
+  Poly.equal c1 c2
 
 let make_gc_control config =
   let { Gc.Control.minor_heap_size; space_overhead; _ } =
@@ -188,7 +188,9 @@ let process_untrusted_mode config =
         SMap.filter
           ~f:(fun ck _ ->
             let ck = String.lowercase ck in
-            let exact_match = List.find ~f:(fun bli -> bli = ck) blacklist in
+            let exact_match =
+              List.find ~f:(fun bli -> String.equal bli ck) blacklist
+            in
             let prefix_match =
               List.find
                 ~f:(fun blp -> String_utils.string_starts_with ck blp)
@@ -259,7 +261,7 @@ let load ~silent config_filename options =
     ServerLocalConfig.load ~silent ~current_version:version config_overrides
   in
   let local_config =
-    if ServerArgs.ai_mode options <> None then
+    if Option.is_some (ServerArgs.ai_mode options) then
       ServerLocalConfig.
         {
           local_config with
@@ -376,6 +378,8 @@ let load ~silent config_filename options =
         (bool_opt "disable_legacy_attribute_syntax" config)
       ?tco_const_attribute:(bool_opt "const_attribute" config)
       ?po_const_default_func_args:(bool_opt "const_default_func_args" config)
+      ?po_const_default_lambda_args:
+        (bool_opt "const_default_lambda_args" config)
       ?po_disallow_silence:(bool_opt "disallow_silence" config)
       ?tco_global_inference:(bool_opt "global_inference" config)
       ?tco_gi_reinfer_types:(string_list_opt "reinfer_types" config)
@@ -383,7 +387,7 @@ let load ~silent config_filename options =
       ?po_abstract_static_props:(bool_opt "abstract_static_props" config)
       ?po_disable_unset_class_const:
         (bool_opt "disable_unset_class_const" config)
-      ~po_parser_errors_only:(ServerArgs.ai_mode options <> None)
+      ~po_parser_errors_only:(Option.is_some (ServerArgs.ai_mode options))
       ?tco_check_attribute_locations:
         (bool_opt "check_attribute_locations" config)
       ?glean_service:(string_opt "glean_service" config)

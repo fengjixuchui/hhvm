@@ -220,6 +220,7 @@ let parse_options () =
   let const_attribute = ref false in
   let disallow_goto = ref false in
   let const_default_func_args = ref false in
+  let const_default_lambda_args = ref false in
   let disallow_silence = ref false in
   let abstract_static_props = ref false in
   let disable_unset_class_const = ref false in
@@ -478,6 +479,10 @@ let parse_options () =
         Arg.Set const_default_func_args,
         " Statically check default function arguments are constant initializers"
       );
+      ( "--const-default-lambda-args",
+        Arg.Set const_default_lambda_args,
+        " Statically check default lambda args are constant."
+        ^ " Produces a subset of errors of const-default-func-args" );
       ( "--disallow-silence",
         Arg.Set disallow_silence,
         " Disallow the error suppression operator, @" );
@@ -576,6 +581,7 @@ let parse_options () =
       ~tco_const_attribute:!const_attribute
       ~po_allow_goto:(not !disallow_goto)
       ~po_const_default_func_args:!const_default_func_args
+      ~po_const_default_lambda_args:!const_default_lambda_args
       ~po_disallow_silence:!disallow_silence
       ~po_abstract_static_props:!abstract_static_props
       ~po_disable_unset_class_const:!disable_unset_class_const
@@ -1313,7 +1319,11 @@ let handle_mode
         else
           let (tast, _) = Typing_check_utils.type_file ctx fn fileinfo in
           let result = Coverage_level.get_levels ctx tast fn in
-          print_colored fn result)
+          match result with
+          | Ok result -> print_colored fn result
+          | Error () ->
+            failwith
+              ("HH_FIXMEs not found for path " ^ Relative_path.to_absolute fn))
   | Coverage ->
     Relative_path.Map.iter files_info (fun fn fileinfo ->
         if Relative_path.Map.mem builtins fn then

@@ -831,7 +831,7 @@ void print_cls(Output& out, const PreClass* cls) {
       name = name.substr(0, p);
     }
   }
-  out.fmt(".class{} {}",
+  out.fmt(".class{} {}{}",
     opt_attrs(AttrContext::Class, cls->attrs(), &cls->userAttributes(),
               cls->hoistability() != PreClass::NotHoistable),
     name,
@@ -874,6 +874,10 @@ void print_unit_metadata(Output& out, const Unit* unit) {
 
   out.fmtln(".filepath {};", escaped(unit->filepath()));
   print_hh_file(out, unit);
+  if (!unit->fileAttributes().empty()) {
+    out.nl();
+    out.fmtln(".file_attributes [{}] ;", user_attrs(&unit->fileAttributes()));
+  }
   auto const metaData = unit->metaData();
   for (auto kv : metaData) {
     if (isStringType(kv.second.m_type)) {

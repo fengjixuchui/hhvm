@@ -302,7 +302,6 @@ fn emit_case(
     Ok(match case {
         tast::Case::Case(case_expr, b) => {
             let case_handler_label = e.label_gen_mut().next_regular();
-
             let instr_check_case = if scrutinee_expr.1.is_lvar() {
                 InstrSeq::gather(vec![
                     emit_expr::emit_two_exprs(e, env, &case_expr.0, scrutinee_expr, &case_expr)?,
@@ -984,6 +983,7 @@ fn emit_foreach_(
         let loop_break_label = e.label_gen_mut().next_regular();
         let loop_continue_label = e.label_gen_mut().next_regular();
         let loop_head_label = e.label_gen_mut().next_regular();
+        let collection_instrs = emit_expr::emit_expr(e, env, collection)?;
         let (key_id, val_id, preamble) = emit_iterator_key_value_storage(e, env, iterator)?;
         let iter_args = IterArgs {
             iter_id: iter_id.clone(),
@@ -999,7 +999,7 @@ fn emit_foreach_(
             emit_block,
         )?;
         let iter_init = InstrSeq::gather(vec![
-            emit_expr::emit_expr(e, env, collection)?,
+            collection_instrs,
             emit_pos(&collection.0),
             instr::iterinit(iter_args.clone(), loop_break_label.clone()),
         ]);
@@ -1024,6 +1024,7 @@ fn emit_foreach_await(
     iterator: &tast::AsExpr,
     block: &tast::Block,
 ) -> Result {
+    let instr_collection = emit_expr::emit_expr(e, env, collection)?;
     scope::with_unnamed_local(e, |e, iter_temp_local| {
         let input_is_async_iterator_label = e.label_gen_mut().next_regular();
         let next_label = e.label_gen_mut().next_regular();
@@ -1032,7 +1033,7 @@ fn emit_foreach_await(
         let async_eager_label = e.label_gen_mut().next_regular();
         let next_meth = hhbc_id::method::from_raw_string("next");
         let iter_init = InstrSeq::gather(vec![
-            emit_expr::emit_expr(e, env, collection)?,
+            instr_collection,
             instr::dup(),
             instr::instanceofd(hhbc_id::class::from_raw_string("HH\\AsyncIterator")),
             instr::jmpnz(input_is_async_iterator_label.clone()),
@@ -1540,10 +1541,10 @@ pub fn emit_final_stmt(e: &mut Emitter, env: &mut Env, stmt: &tast::Stmt) -> Res
         a::Stmt_::Throw(_) | a::Stmt_::Return(_) | a::Stmt_::Goto(_) => emit_stmt(e, env, stmt),
         a::Stmt_::Expr(expr) if expr.1.is_yield_break() => emit_stmt(e, env, stmt),
         a::Stmt_::Block(stmts) => emit_final_stmts(e, env, stmts),
-        _ => Ok(InstrSeq::gather(vec![
-            emit_stmt(e, env, stmt)?,
-            emit_dropthrough_return(e, env)?,
-        ])),
+        _ => {
+            let ret = emit_dropthrough_return(e, env)?;
+            Ok(InstrSeq::gather(vec![emit_stmt(e, env, stmt)?, ret]))
+        }
     }
 }
 

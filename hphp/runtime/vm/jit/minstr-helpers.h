@@ -77,10 +77,10 @@ BASE_G_HELPER_TABLE(X)
   m(propCW,    MOpMode::Warn,       KeyType::Any)   \
   m(propCWS,   MOpMode::Warn,       KeyType::Str)
 
-#define X(nm, mode, kt)                                               \
-inline tv_lval nm(Class* ctx, tv_lval base, key_type<kt> key,         \
-                  TypedValue& tvRef) {                                \
-  return Prop<mode,kt>(tvRef, ctx, base, key, nullptr);               \
+#define X(nm, mode, kt)                                       \
+inline tv_lval nm(Class* ctx, tv_lval base, key_type<kt> key, \
+                  TypedValue& tvRef) {                        \
+  return Prop<mode,kt>(tvRef, ctx, base, key);                \
 }
 PROP_HELPER_TABLE(X)
 #undef X
@@ -90,10 +90,10 @@ PROP_HELPER_TABLE(X)
   m(propCD,    KeyType::Any)                        \
   m(propCDS,   KeyType::Str)
 
-#define X(nm, kt)                                                     \
-inline tv_lval nm(Class* ctx, tv_lval base, key_type<kt> key,         \
-                  TypedValue& tvRef, MInstrPropState* pState) {       \
-  return Prop<MOpMode::Define,kt>(tvRef, ctx, base, key, pState);     \
+#define X(nm, kt)                                             \
+inline tv_lval nm(Class* ctx, tv_lval base, key_type<kt> key, \
+                  TypedValue& tvRef) {                        \
+  return Prop<MOpMode::Define,kt>(tvRef, ctx, base, key);     \
 }
 PROPD_HELPER_TABLE(X)
 #undef X
@@ -107,10 +107,10 @@ PROPD_HELPER_TABLE(X)
   m(propCWO,   MOpMode::Warn,       KeyType::Any)    \
   m(propCWOS,  MOpMode::Warn,       KeyType::Str)    \
 
-#define X(nm, mode, kt)                                               \
-inline tv_lval nm(Class* ctx, ObjectData* base, key_type<kt> key,     \
-                  TypedValue& tvRef) {                                \
-  return PropObj<mode,kt>(tvRef, ctx, base, key, nullptr);            \
+#define X(nm, mode, kt)                                           \
+inline tv_lval nm(Class* ctx, ObjectData* base, key_type<kt> key, \
+                  TypedValue& tvRef) {                            \
+  return PropObj<mode,kt>(tvRef, ctx, base, key);                 \
 }
 PROP_OBJ_HELPER_TABLE(X)
 #undef X
@@ -120,10 +120,10 @@ PROP_OBJ_HELPER_TABLE(X)
   m(propCDO,   KeyType::Any)                         \
   m(propCDOS,  KeyType::Str)                         \
 
-#define X(nm, kt)                                                     \
-inline tv_lval nm(Class* ctx, ObjectData* base, key_type<kt> key,     \
-                  TypedValue& tvRef, MInstrPropState* pState) {       \
-  return PropObj<MOpMode::Define,kt>(tvRef, ctx, base, key, pState);  \
+#define X(nm, kt)                                                 \
+inline tv_lval nm(Class* ctx, ObjectData* base, key_type<kt> key, \
+                  TypedValue& tvRef) {                            \
+  return PropObj<MOpMode::Define,kt>(tvRef, ctx, base, key);      \
 }
 PROPD_OBJ_HELPER_TABLE(X)
 #undef X
@@ -161,7 +161,7 @@ inline TypedValue cGetRefShuffle(const TypedValue& localTvRef,
 #define X(nm, kt, mode)                                                \
 inline TypedValue nm(Class* ctx, tv_lval base, key_type<kt> key) {     \
   TypedValue localTvRef;                                               \
-  auto result = Prop<mode,kt>(localTvRef, ctx, base, key, nullptr);    \
+  auto result = Prop<mode,kt>(localTvRef, ctx, base, key);             \
   return cGetRefShuffle(localTvRef, result);                           \
 }
 CGET_PROP_HELPER_TABLE(X)
@@ -177,7 +177,7 @@ CGET_PROP_HELPER_TABLE(X)
 #define X(nm, kt, mode)                                                \
 inline TypedValue nm(Class* ctx, ObjectData* base, key_type<kt> key) { \
   TypedValue localTvRef;                                               \
-  auto result = PropObj<mode,kt>(localTvRef, ctx, base, key, nullptr); \
+  auto result = PropObj<mode,kt>(localTvRef, ctx, base, key);          \
   return cGetRefShuffle(localTvRef, result);                           \
 }
 CGET_OBJ_PROP_HELPER_TABLE(X)
@@ -206,10 +206,9 @@ inline TypedValue cGetPropSOQ(Class* ctx, ObjectData* base, StringData* key) {
   m(setPropC,    KeyType::Any)           \
   m(setPropCS,   KeyType::Str)           \
 
-#define X(nm, kt)                                                       \
-inline void nm(Class* ctx, tv_lval base, key_type<kt> key,              \
-               TypedValue val, const MInstrPropState* pState) {               \
-  HPHP::SetProp<false, kt>(ctx, base, key, &val, pState);               \
+#define X(nm, kt)                                                            \
+inline void nm(Class* ctx, tv_lval base, key_type<kt> key, TypedValue val) { \
+  HPHP::SetProp<false, kt>(ctx, base, key, &val);                            \
 }
 SETPROP_HELPER_TABLE(X)
 #undef X
@@ -239,10 +238,9 @@ inline void unsetPropCO(Class* ctx, ObjectData* base, TypedValue key) {
 //////////////////////////////////////////////////////////////////////
 
 inline TypedValue setOpPropC(Class* ctx, tv_lval base, TypedValue key,
-                             TypedValue val, SetOpOp op,
-                             const MInstrPropState* pState) {
+                             TypedValue val, SetOpOp op) {
   TypedValue localTvRef;
-  auto result = HPHP::SetOpProp(localTvRef, ctx, op, base, key, &val, pState);
+  auto result = HPHP::SetOpProp(localTvRef, ctx, op, base, key, &val);
   return cGetRefShuffle(localTvRef, result);
 }
 
@@ -256,8 +254,8 @@ inline TypedValue setOpPropCO(Class* ctx, ObjectData* base, TypedValue key,
 //////////////////////////////////////////////////////////////////////
 
 inline TypedValue incDecPropC(Class* ctx, tv_lval base, TypedValue key,
-                              IncDecOp op, const MInstrPropState* pState) {
-  return HPHP::IncDecProp(ctx, op, base, key, pState);
+                              IncDecOp op) {
+  return HPHP::IncDecProp(ctx, op, base, key);
 }
 
 inline TypedValue incDecPropCO(Class* ctx, ObjectData* base, TypedValue key,
@@ -376,37 +374,21 @@ PROFILE_KEYSET_ACCESS_HELPER_TABLE(X)
 
 //////////////////////////////////////////////////////////////////////
 
-template <KeyType keyType, MOpMode mode>
-tv_lval elemImpl(tv_lval base, key_type<keyType> key, TypedValue& tvRef) {
-  static_assert(mode != MOpMode::Define, "");
-  if (mode == MOpMode::Unset) {
-    return ElemU<keyType>(tvRef, base, key);
-  }
-  // We won't really modify the TypedValue in the non-D case, so
-  // this lval cast is safe.
-  return Elem<mode, keyType>(tvRef, base, key).as_lval();
-}
-
 #define ELEM_HELPER_TABLE(m)                    \
   /* name      keyType         mode */          \
   m(elemC,     KeyType::Any,   MOpMode::None)   \
-  m(elemCU,    KeyType::Any,   MOpMode::Unset)  \
   m(elemCW,    KeyType::Any,   MOpMode::Warn)   \
   m(elemCIO,   KeyType::Any,   MOpMode::InOut)  \
   m(elemI,     KeyType::Int,   MOpMode::None)   \
-  m(elemIU,    KeyType::Int,   MOpMode::Unset)  \
   m(elemIW,    KeyType::Int,   MOpMode::Warn)   \
   m(elemIIO,   KeyType::Int,   MOpMode::InOut)  \
   m(elemS,     KeyType::Str,   MOpMode::None)   \
-  m(elemSU,    KeyType::Str,   MOpMode::Unset)  \
   m(elemSW,    KeyType::Str,   MOpMode::Warn)   \
   m(elemSIO,   KeyType::Str,   MOpMode::InOut)  \
 
-#define X(nm, keyType, mode)                        \
-inline tv_lval nm(tv_lval base,                     \
-                  key_type<keyType> key,            \
-                  TypedValue& tvRef) {              \
-  return elemImpl<keyType, mode>(base, key, tvRef); \
+#define X(nm, keyType, mode)                                \
+inline TypedValue nm(tv_lval base, key_type<keyType> key) { \
+  return Elem<mode, keyType>(base, key);                    \
 }
 ELEM_HELPER_TABLE(X)
 #undef X
@@ -414,24 +396,29 @@ ELEM_HELPER_TABLE(X)
 //////////////////////////////////////////////////////////////////////
 
 #define ELEMD_HELPER_TABLE(m) \
-  /* name      keyType        copyProv */ \
-  m(elemCDN,    KeyType::Any, false)      \
-  m(elemIDN,    KeyType::Int, false)      \
-  m(elemSDN,    KeyType::Str, false)      \
-  m(elemCDP,    KeyType::Any, true)       \
-  m(elemIDP,    KeyType::Int, true)       \
-  m(elemSDP,    KeyType::Str, true)       \
+  /* name      keyType     */ \
+  m(elemCD,    KeyType::Any)  \
+  m(elemID,    KeyType::Int)  \
+  m(elemSD,    KeyType::Str)  \
 
-#define X(nm, keyType, copyProv)                           \
-inline tv_lval nm(tv_lval base,                            \
-                  key_type<keyType> key,                   \
-                  TypedValue& tvRef,                       \
-                  const MInstrPropState* pState) {         \
-  return ElemD<MOpMode::Define, keyType, copyProv>( \
-    tvRef, base, key, pState                               \
-  );                                                       \
+#define X(nm, keyType)                                   \
+inline tv_lval nm(tv_lval base, key_type<keyType> key) { \
+  return ElemD<keyType>(base, key);                      \
 }
 ELEMD_HELPER_TABLE(X)
+#undef X
+
+#define ELEMU_HELPER_TABLE(m) \
+  /* name      keyType */     \
+  m(elemCU,    KeyType::Any)  \
+  m(elemIU,    KeyType::Int)  \
+  m(elemSU,    KeyType::Str)  \
+
+#define X(nm, keyType)                                   \
+inline tv_lval nm(tv_lval base, key_type<keyType> key) { \
+  return ElemU<keyType>(base, key);                      \
+}
+ELEMU_HELPER_TABLE(X)
 #undef X
 
 //////////////////////////////////////////////////////////////////////
@@ -441,10 +428,10 @@ ELEMD_HELPER_TABLE(X)
   m(elemArraySD,    KeyType::Str)     \
   m(elemArrayID,    KeyType::Int)     \
 
-#define X(nm, keyType)                                          \
-inline tv_lval nm(tv_lval base, key_type<keyType> key) {        \
-  assertx(isArrayType(type(base)));                            \
-  return ElemDArray<keyType>(base, key); \
+#define X(nm, keyType)                                   \
+inline tv_lval nm(tv_lval base, key_type<keyType> key) { \
+  assertx(isArrayType(type(base)));                      \
+  return ElemDArray<keyType>(base, key);                 \
 }
 ELEM_ARRAY_D_HELPER_TABLE(X)
 #undef X
@@ -460,22 +447,6 @@ inline tv_lval nm(tv_lval base, key_type<keyType> key) {   \
   return ElemUArray<keyType>(base, key);                  \
 }
 ELEM_ARRAY_U_HELPER_TABLE(X)
-#undef X
-
-#define ELEM_ARRAY_HELPER_TABLE(m)                    \
-  /* name             keyType       mode */           \
-  m(elemArrayS,       KeyType::Str, MOpMode::None)    \
-  m(elemArrayI,       KeyType::Int, MOpMode::None)    \
-  m(elemArraySW,      KeyType::Str, MOpMode::Warn)    \
-  m(elemArrayIW,      KeyType::Int, MOpMode::Warn)    \
-  m(elemArraySW_IO,   KeyType::Str, MOpMode::InOut)   \
-  m(elemArrayIW_IO,   KeyType::Int, MOpMode::InOut)   \
-
-#define X(nm, keyType, mode)                              \
-inline tv_rval nm(ArrayData* ad, key_type<keyType> key) { \
-  return ElemArray<mode, keyType>(ad, key);               \
-}
-ELEM_ARRAY_HELPER_TABLE(X)
 #undef X
 
 //////////////////////////////////////////////////////////////////////
@@ -517,32 +488,15 @@ ARRAYGET_HELPER_TABLE(X)
 
 //////////////////////////////////////////////////////////////////////
 
-#define ELEM_VEC_D_HELPER_TABLE(m) \
-  /* name          copyProv*/ \
-  m(elemVecIDN,    false)     \
-  m(elemVecIDP,    true)      \
-
-#define X(nm, copyProv) \
-inline tv_lval nm(tv_lval base, int64_t key) {                 \
-  assertx(isVecType(type(base)));                             \
-  return ElemDVec<KeyType::Int, copyProv>(base, key);  \
-}
-ELEM_VEC_D_HELPER_TABLE(X)
-#undef X
-
-//////////////////////////////////////////////////////////////////////
-
 #define ELEM_DICT_D_HELPER_TABLE(m) \
-  /* name          keyType       copyProv*/ \
-  m(elemDictSDN,    KeyType::Str, false)    \
-  m(elemDictIDN,    KeyType::Int, false)    \
-  m(elemDictSDP,    KeyType::Str, true)     \
-  m(elemDictIDP,    KeyType::Int, true)     \
+  /* name          keyType       */ \
+  m(elemDictSD,    KeyType::Str)    \
+  m(elemDictID,    KeyType::Int)    \
 
-#define X(nm, keyType, copyProv)                          \
-inline tv_lval nm(tv_lval base, key_type<keyType> key) {  \
+#define X(nm, keyType)                                   \
+inline tv_lval nm(tv_lval base, key_type<keyType> key) { \
   assertx(isDictType(type(base)));                       \
-  return ElemDDict<keyType, copyProv>(base, key); \
+  return ElemDDict<keyType>(base, key);                  \
 }
 ELEM_DICT_D_HELPER_TABLE(X)
 #undef X
@@ -552,28 +506,12 @@ ELEM_DICT_D_HELPER_TABLE(X)
   m(elemDictSU, KeyType::Str)        \
   m(elemDictIU, KeyType::Int)        \
 
-#define X(nm, keyType)                                                 \
-inline tv_lval nm(tv_lval base, key_type<keyType> key) {               \
-  assertx(isDictType(type(base)));                                    \
-  return ElemUDict<keyType>(base, key);                               \
+#define X(nm, keyType)                                   \
+inline tv_lval nm(tv_lval base, key_type<keyType> key) { \
+  assertx(isDictType(type(base)));                       \
+  return ElemUDict<keyType>(base, key);                  \
 }
 ELEM_DICT_U_HELPER_TABLE(X)
-#undef X
-
-#define ELEM_DICT_HELPER_TABLE(m)                      \
-  /* name               keyType        mode */         \
-  m(elemDictS,     KeyType::Str,       MOpMode::None)  \
-  m(elemDictI,     KeyType::Int,       MOpMode::None)  \
-  m(elemDictSW,    KeyType::Str,       MOpMode::Warn)  \
-  m(elemDictIW,    KeyType::Int,       MOpMode::Warn)  \
-  m(elemDictSIO,   KeyType::Str,       MOpMode::InOut) \
-  m(elemDictIIO,   KeyType::Int,       MOpMode::InOut) \
-
-#define X(nm, keyType, mode) \
-inline tv_rval nm(ArrayData* ad, key_type<keyType> key) { \
-  return HPHP::ElemDict<mode, keyType>(ad, key); \
-}
-ELEM_DICT_HELPER_TABLE(X)
 #undef X
 
 //////////////////////////////////////////////////////////////////////
@@ -591,22 +529,6 @@ inline tv_lval nm(tv_lval base, key_type<keyType> key) {               \
 ELEM_KEYSET_U_HELPER_TABLE(X)
 #undef X
 
-#define ELEM_KEYSET_HELPER_TABLE(m)                               \
-  /* name            keyType             mode */                  \
-  m(elemKeysetS,     KeyType::Str,       MOpMode::None)          \
-  m(elemKeysetI,     KeyType::Int,       MOpMode::None)          \
-  m(elemKeysetSW,    KeyType::Str,       MOpMode::Warn)          \
-  m(elemKeysetIW,    KeyType::Int,       MOpMode::Warn)          \
-  m(elemKeysetSIO,   KeyType::Str,       MOpMode::InOut)         \
-  m(elemKeysetIIO,   KeyType::Int,       MOpMode::InOut)         \
-
-#define X(nm, keyType, mode) \
-inline tv_rval nm(ArrayData* ad, key_type<keyType> key) { \
-  return HPHP::ElemKeyset<mode, keyType>(ad, key); \
-}
-ELEM_KEYSET_HELPER_TABLE(X)
-#undef X
-
 //////////////////////////////////////////////////////////////////////
 
 #define DICTGET_HELPER_TABLE(m)                                  \
@@ -616,9 +538,9 @@ ELEM_KEYSET_HELPER_TABLE(X)
   m(dictGetSQuiet, KeyType::Str,  MOpMode::None)                \
   m(dictGetIQuiet, KeyType::Int,  MOpMode::None)                \
 
-#define X(nm, keyType, mode) \
+#define X(nm, keyType, mode)                                \
 inline TypedValue nm(ArrayData* a, key_type<keyType> key) { \
-  return HPHP::ElemDict<mode, keyType>(a, key).tv(); \
+  return HPHP::ElemDict<mode, keyType>(a, key);             \
 }
 DICTGET_HELPER_TABLE(X)
 #undef X
@@ -632,9 +554,9 @@ DICTGET_HELPER_TABLE(X)
   m(keysetGetSQuiet, KeyType::Str,  MOpMode::None)                \
   m(keysetGetIQuiet, KeyType::Int,  MOpMode::None)                \
 
-#define X(nm, keyType, mode) \
+#define X(nm, keyType, mode)                                 \
 inline TypedValue nm(ArrayData* a, key_type<keyType> key) {  \
-  return HPHP::ElemKeyset<mode, keyType>(a, key).tv(); \
+  return HPHP::ElemKeyset<mode, keyType>(a, key);            \
 }
 KEYSETGET_HELPER_TABLE(X)
 #undef X
@@ -643,9 +565,9 @@ KEYSETGET_HELPER_TABLE(X)
 
 template <KeyType keyType, MOpMode mode>
 TypedValue cGetElemImpl(tv_lval base, key_type<keyType> key) {
-  TypedValue localTvRef;
-  auto result = Elem<mode, keyType>(localTvRef, base, key);
-  return cGetRefShuffle(localTvRef, result);
+  auto const result = Elem<mode, keyType>(base, key);
+  tvIncRefGen(result);
+  return result;
 }
 
 #define CGETELEM_HELPER_TABLE(m)                    \
@@ -669,27 +591,6 @@ CGETELEM_HELPER_TABLE(X)
 
 //////////////////////////////////////////////////////////////////////
 
-template<bool copyProv>
-auto vecSetImpl(ArrayData* a, int64_t key, TypedValue value) {
-  assertx(tvIsPlausible(value));
-  assertx(a->isVecArrayKind());
-  return PackedArray::SetIntMoveVec(a, key, value);
-}
-
-#define VECSET_HELPER_TABLE(m) \
-  /* name     copyProv */      \
-  m(vecSetIN, false)           \
-  m(vecSetIP, true)
-
-#define X(nm, copyProv)                                     \
-inline ArrayData* nm(ArrayData* a, int64_t key, TypedValue val) { \
-  return vecSetImpl<copyProv>(a, key, val); \
-}
-VECSET_HELPER_TABLE(X)
-#undef X
-
-//////////////////////////////////////////////////////////////////////
-
 inline ArrayData* dictSetImplPre(ArrayData* a, int64_t i, TypedValue val) {
   return MixedArray::SetIntMoveDict(a, i, val);
 }
@@ -697,7 +598,7 @@ inline ArrayData* dictSetImplPre(ArrayData* a, StringData* s, TypedValue val) {
   return MixedArray::SetStrMoveDict(a, s, val);
 }
 
-template<KeyType keyType, bool copyProv>
+template<KeyType keyType>
 auto dictSetImpl(ArrayData* a, key_type<keyType> key, TypedValue value) {
   assertx(tvIsPlausible(value));
   assertx(a->isDictKind());
@@ -705,29 +606,25 @@ auto dictSetImpl(ArrayData* a, key_type<keyType> key, TypedValue value) {
 }
 
 #define DICTSET_HELPER_TABLE(m) \
-  /* name       keyType        copyProv */ \
-  m(dictSetIN,   KeyType::Int, false)      \
-  m(dictSetIP,   KeyType::Int, true)       \
-  m(dictSetSN,   KeyType::Str, false)      \
-  m(dictSetSP,   KeyType::Str, true)
+  /* name       keyType      */ \
+  m(dictSetI,   KeyType::Int)   \
+  m(dictSetS,   KeyType::Str)   \
 
-#define X(nm, keyType, copyProv)                                      \
+#define X(nm, keyType)                                                      \
 inline ArrayData* nm(ArrayData* a, key_type<keyType> key, TypedValue val) { \
-  return dictSetImpl<keyType, copyProv>(a, key, val); \
+  return dictSetImpl<keyType>(a, key, val);                                 \
 }
 DICTSET_HELPER_TABLE(X)
 #undef X
 
 //////////////////////////////////////////////////////////////////////
 
-template <bool copyProv>
-void setNewElem(tv_lval base, TypedValue val, const MInstrPropState* pState) {
-  HPHP::SetNewElem<false, copyProv>(base, &val, pState);
+inline void setNewElem(tv_lval base, TypedValue val) {
+  HPHP::SetNewElem<false>(base, &val);
 }
 
-template <bool copyProv>
-void setNewElemVec(tv_lval base, TypedValue val) {
-  HPHP::SetNewElemVec<copyProv>(base, &val);
+inline void setNewElemVec(tv_lval base, TypedValue val) {
+  HPHP::SetNewElemVec(base, &val);
 }
 
 
@@ -767,25 +664,20 @@ KEYSET_SETNEWELEM_HELPER_TABLE(X)
 
 //////////////////////////////////////////////////////////////////////
 
-template <KeyType keyType, bool copyProv>
-StringData* setElemImpl(tv_lval base, key_type<keyType> key,
-                        TypedValue val, const MInstrPropState* pState) {
-  return HPHP::SetElem<false, copyProv, keyType>(base, key, &val, pState);
+template <KeyType keyType>
+StringData* setElemImpl(tv_lval base, key_type<keyType> key, TypedValue val) {
+  return HPHP::SetElem<false, keyType>(base, key, &val);
 }
 
 #define SETELEM_HELPER_TABLE(m) \
-  /* name       keyType       copyProv*/ \
-  m(setElemCN,  KeyType::Any, false)     \
-  m(setElemIN,  KeyType::Int, false)     \
-  m(setElemSN,  KeyType::Str, false)     \
-  m(setElemCP,  KeyType::Any, true)      \
-  m(setElemIP,  KeyType::Int, true)      \
-  m(setElemSP,  KeyType::Str, true)      \
+  /* name       keyType      */ \
+  m(setElemC,  KeyType::Any)    \
+  m(setElemI,  KeyType::Int)    \
+  m(setElemS,  KeyType::Str)    \
 
-#define X(nm, kt, copyProv)                                      \
-inline StringData* nm(tv_lval base, key_type<kt> key,            \
-                      TypedValue val, const MInstrPropState* pState) { \
-  return setElemImpl<kt, copyProv>(base, key, val, pState);      \
+#define X(nm, kt)                                                       \
+inline StringData* nm(tv_lval base, key_type<kt> key, TypedValue val) { \
+  return setElemImpl<kt>(base, key, val);                               \
 }
 SETELEM_HELPER_TABLE(X)
 #undef X

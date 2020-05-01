@@ -164,9 +164,9 @@ let server_setup () : server_setup =
     will be used for look up of symbols in type checking. *)
   Disk.write_file ~file:(in_fake_dir "root/Foo.php") ~contents:foo_contents;
   Disk.write_file ~file:(in_fake_dir "root/Bar.php") ~contents:bar_contents;
-  let foo_path = Relative_path.from_root "Foo.php" in
-  let bar_path = Relative_path.from_root "Bar.php" in
-  let nonexistent_path = Relative_path.from_root "Nonexistent.php" in
+  let foo_path = Relative_path.from_root ~suffix:"Foo.php" in
+  let bar_path = Relative_path.from_root ~suffix:"Bar.php" in
+  let nonexistent_path = Relative_path.from_root ~suffix:"Nonexistent.php" in
   (* Parsing produces the file infos that the naming table module can use
     to construct the forward naming table (files-to-symbols) *)
   let popt = ParserOptions.default in
@@ -308,7 +308,7 @@ let test_compute_tast_counting () =
   in
 
   Asserter.Int_asserter.assert_equals
-    125
+    126
     (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
     "There should be this many decl_accessor_count for shared_mem provider";
   Asserter.Int_asserter.assert_equals
@@ -337,7 +337,7 @@ let test_compute_tast_counting () =
         Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
       in
       Asserter.Int_asserter.assert_equals
-        63
+        64
         (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
         "There should be this many decl_accessor_count for local_memory provider";
       Asserter.Int_asserter.assert_equals
@@ -476,7 +476,6 @@ let test_unsaved_symbol_change () =
 
   (* Now, I want a fresh ctx with no reverse-naming entries in it,
   and I want it to be backed by a sqlite naming database. *)
-  let (_ : Naming_table.t) = Naming_table.load_from_sqlite ctx db_name in
   Provider_backend.set_local_memory_backend_with_defaults ();
   let ctx =
     Provider_context.empty_for_tool
@@ -484,6 +483,7 @@ let test_unsaved_symbol_change () =
       ~tcopt:(Provider_context.get_tcopt ctx)
       ~backend:(Provider_backend.get ())
   in
+  let (_ : Naming_table.t) = Naming_table.load_from_sqlite ctx db_name in
 
   (* Compute tast as-is *)
   let (ctx, entry) =

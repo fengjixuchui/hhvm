@@ -3,11 +3,12 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<ab6370be5ebda5b7d7099ea15faa693f>>
+// @generated SignedSource<<93d4a6bad22d8029ed30928927e19ca5>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
 
+use ocamlrep_derive::ToOcamlRep;
 use serde::Serialize;
 
 #[allow(unused_imports)]
@@ -17,30 +18,36 @@ pub use typing_defs_flags::*;
 
 pub use typing_defs_core::*;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct ClassElt<'a> {
     pub visibility: Visibility<'a>,
     pub type_: oxidized::lazy::Lazy<Ty<'a>>,
     /// identifies the class from which this elt originates
     pub origin: &'a str,
     pub deprecated: Option<&'a str>,
-    pub pos: oxidized::lazy::Lazy<pos::Pos<'a>>,
+    pub pos: oxidized::lazy::Lazy<&'a pos::Pos<'a>>,
     pub flags: isize,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct FunElt<'a> {
     pub deprecated: Option<&'a str>,
     pub type_: Ty<'a>,
     pub decl_errors: Option<errors::Errors<'a>>,
-    pub pos: pos::Pos<'a>,
+    pub pos: &'a pos::Pos<'a>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct ClassConst<'a> {
     pub synthesized: bool,
     pub abstract_: bool,
-    pub pos: pos::Pos<'a>,
+    pub pos: &'a pos::Pos<'a>,
     pub type_: Ty<'a>,
     pub expr: Option<nast::Expr<'a>>,
     /// identifies the class from which this const originates
@@ -60,10 +67,14 @@ pub struct ClassConst<'a> {
 /// class Baz extends Foo implements Bar { <- position of the `implements`
 /// }
 /// ```
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Requirement<'a>(pub pos::Pos<'a>, pub Ty<'a>);
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
+pub struct Requirement<'a>(pub &'a pos::Pos<'a>, pub Ty<'a>);
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct ClassType<'a> {
     pub need_init: bool,
     /// Whether the typechecker knows of all (non-interface) ancestors
@@ -82,7 +93,7 @@ pub struct ClassType<'a> {
     pub has_xhp_keyword: bool,
     pub is_disposable: bool,
     pub name: &'a str,
-    pub pos: pos::Pos<'a>,
+    pub pos: &'a pos::Pos<'a>,
     pub tparams: &'a [Tparam<'a>],
     pub where_constraints: &'a [WhereConstraint<'a>],
     pub consts: s_map::SMap<'a, ClassConst<'a>>,
@@ -106,25 +117,31 @@ pub struct ClassType<'a> {
     pub decl_errors: Option<errors::Errors<'a>>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub enum TypeconstAbstractKind<'a> {
     TCAbstract(Option<Ty<'a>>),
     TCPartiallyAbstract,
     TCConcrete,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct TypeconstType<'a> {
     pub abstract_: TypeconstAbstractKind<'a>,
     pub name: nast::Sid<'a>,
     pub constraint: Option<Ty<'a>>,
     pub type_: Option<Ty<'a>>,
     pub origin: &'a str,
-    pub enforceable: (pos::Pos<'a>, bool),
-    pub reifiable: Option<pos::Pos<'a>>,
+    pub enforceable: (&'a pos::Pos<'a>, bool),
+    pub reifiable: Option<&'a pos::Pos<'a>>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct PuEnumType<'a> {
     pub name: nast::Sid<'a>,
     pub is_final: bool,
@@ -133,14 +150,18 @@ pub struct PuEnumType<'a> {
     pub members: s_map::SMap<'a, PuMemberType<'a>>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct PuMemberType<'a> {
     pub atom: nast::Sid<'a>,
     pub types: s_map::SMap<'a, (nast::Sid<'a>, Ty<'a>)>,
     pub exprs: s_map::SMap<'a, nast::Sid<'a>>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct EnumType<'a> {
     pub base: Ty<'a>,
     pub constraint: Option<Ty<'a>>,
@@ -148,19 +169,23 @@ pub struct EnumType<'a> {
 
 pub use oxidized::typing_defs::RecordFieldReq;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct RecordDefType<'a> {
     pub name: nast::Sid<'a>,
     pub extends: Option<nast::Sid<'a>>,
     pub fields: &'a [(nast::Sid<'a>, oxidized::typing_defs::RecordFieldReq)],
     pub abstract_: bool,
-    pub pos: pos::Pos<'a>,
+    pub pos: &'a pos::Pos<'a>,
     pub errors: Option<errors::Errors<'a>>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct TypedefType<'a> {
-    pub pos: pos::Pos<'a>,
+    pub pos: &'a pos::Pos<'a>,
     pub vis: oxidized::aast::TypedefVisibility,
     pub tparams: &'a [Tparam<'a>],
     pub constraint: Option<Ty<'a>>,
@@ -168,7 +193,9 @@ pub struct TypedefType<'a> {
     pub decl_errors: Option<errors::Errors<'a>>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub enum DeserializationError<'a> {
     /// The type was valid, but some component thereof was a decl_ty when we
     /// expected a locl_phase ty, or vice versa.

@@ -513,10 +513,7 @@ bool TypeConstraint::checkNamedTypeNonObj(tv_rval val) const {
         return Assert || val.val().parr->isDArray();
       case AnnotAction::VArrayOrDArrayCheck:
         assertx(tvIsArray(val));
-        return (Assert || (
-          !RuntimeOption::EvalHackArrCompatTypeHintPolymorphism &&
-          !val.val().parr->isNotDVArray()
-        ));
+        return Assert || val.val().parr->isDVArray();
       case AnnotAction::NonVArrayOrDArrayCheck:
         assertx(tvIsArray(val));
         return Assert || val.val().parr->isNotDVArray();
@@ -757,10 +754,7 @@ bool TypeConstraint::checkImpl(tv_rval val,
       return isAssert || val.val().parr->isDArray();
     case AnnotAction::VArrayOrDArrayCheck:
       assertx(tvIsArray(val));
-      return (isAssert || (
-        !RuntimeOption::EvalHackArrCompatTypeHintPolymorphism &&
-        !val.val().parr->isNotDVArray()
-      ));
+      return isAssert || val.val().parr->isDVArray();
     case AnnotAction::NonVArrayOrDArrayCheck:
       assertx(tvIsArray(val));
       return isAssert || val.val().parr->isNotDVArray();
@@ -1019,8 +1013,7 @@ folly::Optional<AnnotType> TypeConstraint::checkDVArray(tv_rval val) const {
         assertx(!val.val().parr->isDArray());
         break;
       case AnnotType::VArrOrDArr:
-        assertx(RuntimeOption::EvalHackArrCompatTypeHintPolymorphism ||
-                val.val().parr->isNotDVArray());
+        assertx(val.val().parr->isNotDVArray());
         break;
       default:
         return folly::none;
@@ -1039,16 +1032,24 @@ folly::Optional<AnnotType> TypeConstraint::checkDVArray(tv_rval val) const {
   return folly::none;
 }
 
+bool TypeConstraint::convertClsMethToArrLike() const {
+  auto const result = annotCompat(KindOfClsMeth, type(), typeName());
+  return result == AnnotAction::ClsMethCheck;
+}
+
+bool TypeConstraint::raiseClsMethHackArrCompatNotice() const {
+  return RO::EvalHackArrCompatTypeHintNotices &&
+         (m_type == AnnotType::Array || isDArray());
+}
+
 void TypeConstraint::verifyParamFail(const Func* func, tv_lval val,
                                      int paramNums) const {
   verifyFail(func, val, paramNums);
   assertx(
     isSoft() ||
     (isThis() && couldSeeMockObject()) ||
-    (RuntimeOption::EvalHackArrCompatTypeHintNotices &&
-     (RuntimeOption::EvalHackArrCompatTypeHintPolymorphism ||
-      isArrayType(val.type()))) ||
-    (RuntimeOption::EvalEnforceGenericsUB < 2 && isUpperBound()) ||
+    (RO::EvalHackArrCompatTypeHintNotices && isArrayType(val.type())) ||
+    (RO::EvalEnforceGenericsUB < 2 && isUpperBound()) ||
     check(val, func->cls())
   );
 }
@@ -1096,31 +1097,21 @@ void TypeConstraint::verifyOutParamFail(const Func* func,
     }
   }
 
-  if (isClsMethType(c->m_type)) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
-      if (isClsMethCompactVec()) {
-        if (RuntimeOption::EvalVecHintNotices) {
-          raise_clsmeth_compat_type_hint_outparam_notice(
-            func, displayName(func->cls()), paramNum);
-        }
-        castClsMeth(c, make_vec_array<String,String>);
-        return;
-      }
+  if (isClsMethType(c->m_type) && convertClsMethToArrLike()) {
+    if (RuntimeOption::EvalVecHintNotices) {
+      raise_clsmeth_compat_type_hint_outparam_notice(
+        func, displayName(func->cls()), paramNum);
+    }
+    if (RO::EvalHackArrDVArrs) {
+      castClsMeth(c, make_vec_array<String,String>);
     } else {
-      if (isClsMethCompactVArr()) {
-        if (RuntimeOption::EvalVecHintNotices) {
-          raise_clsmeth_compat_type_hint_outparam_notice(
-            func, displayName(func->cls()), paramNum);
-        }
-        castClsMeth(c, make_varray<String,String>);
-        if (RuntimeOption::EvalHackArrCompatTypeHintNotices && isDArray()) {
-          raise_hackarr_compat_type_hint_outparam_notice(
-            func, c->m_data.parr, displayName(func->cls()).c_str(), paramNum
-          );
-        }
-        return;
+      castClsMeth(c, make_varray<String,String>);
+      if (raiseClsMethHackArrCompatNotice()) {
+        raise_hackarr_compat_type_hint_outparam_notice(
+          func, c->m_data.parr, displayName(func->cls()).c_str(), paramNum);
       }
     }
+    return;
   }
 
   std::string msg = folly::sformat(
@@ -1187,37 +1178,23 @@ void TypeConstraint::verifyPropFail(const Class* thisCls,
     }
   }
 
-  if (isClsMethType(val.type())) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
-      if (isClsMethCompactVec()) {
-        if (RuntimeOption::EvalVecHintNotices) {
-          raise_clsmeth_compat_type_hint_property_notice(
-            declCls, propName, displayName(nullptr), isStatic);
-        }
-        // Only trigger coercion logic if property type hints are soft
-        if (RO::EvalCheckPropTypeHints == 3) {
-          castClsMeth(val, make_vec_array<String,String>);
-        }
-        return;
-      }
+  if (isClsMethType(val.type()) && convertClsMethToArrLike()) {
+    if (RuntimeOption::EvalVecHintNotices) {
+      raise_clsmeth_compat_type_hint_property_notice(
+        declCls, propName, displayName(nullptr), isStatic);
+    }
+    // Only trigger coercion logic if property type hints are soft
+    if (RO::EvalCheckPropTypeHints != 3) return;
+    if (RO::EvalHackArrDVArrs) {
+      castClsMeth(val, make_vec_array<String,String>);
     } else {
-      if (isClsMethCompactVArr()) {
-        if (RuntimeOption::EvalVecHintNotices) {
-          raise_clsmeth_compat_type_hint_property_notice(
-            declCls, propName, displayName(nullptr), isStatic);
-        }
-        // Only trigger coercion logic if property type hints are soft
-        if (RO::EvalCheckPropTypeHints == 3) {
-          castClsMeth(val, make_varray<String,String>);
-        }
-        if (RuntimeOption::EvalHackArrCompatTypeHintNotices && isDArray()) {
-          raise_hackarr_compat_type_hint_property_notice(
-            declCls, val.val().parr, displayName().c_str(), propName, isStatic
-          );
-        }
-        return;
+      castClsMeth(val, make_varray<String,String>);
+      if (raiseClsMethHackArrCompatNotice()) {
+        raise_hackarr_compat_type_hint_property_notice(
+          declCls, val.val().parr, displayName().c_str(), propName, isStatic);
       }
     }
+    return;
   }
 
   raise_property_typehint_error(
@@ -1283,44 +1260,26 @@ void TypeConstraint::verifyFail(const Func* func, tv_lval c,
     }
   }
 
-  if (isClsMethType(c.type())) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
-      if (isClsMethCompactVec()) {
-        if (RuntimeOption::EvalVecHintNotices) {
-          raise_clsmeth_compat_type_hint(
-            func, name,
-            id != ReturnId ? folly::make_optional(id) : folly::none);
-        }
-        castClsMeth(c, make_vec_array<String,String>);
-        return;
-      }
+  if (isClsMethType(c.type()) && convertClsMethToArrLike()) {
+    if (RuntimeOption::EvalVecHintNotices) {
+      auto const i = id == ReturnId ? folly::none : folly::make_optional(id);
+      raise_clsmeth_compat_type_hint(func, name, i);
+    }
+    if (RO::EvalHackArrDVArrs) {
+      castClsMeth(c, make_vec_array<String,String>);
     } else {
-      if (isClsMethCompactVArr()) {
-        if (RuntimeOption::EvalVecHintNotices) {
-          raise_clsmeth_compat_type_hint(
-            func, name,
-            id != ReturnId ? folly::make_optional(id) : folly::none);
+      castClsMeth(c, make_varray<String,String>);
+      if (raiseClsMethHackArrCompatNotice()) {
+        if (id == ReturnId) {
+          raise_hackarr_compat_type_hint_ret_notice(
+            func, val(c).parr, name.c_str());
+        } else {
+          raise_hackarr_compat_type_hint_param_notice(
+            func, val(c).parr, name.c_str(), id);
         }
-        castClsMeth(c, make_varray<String,String>);
-        if (RuntimeOption::EvalHackArrCompatTypeHintNotices && isDArray()) {
-          if (id == ReturnId) {
-            raise_hackarr_compat_type_hint_ret_notice(
-              func,
-              val(c).parr,
-              name.c_str()
-            );
-          } else {
-            raise_hackarr_compat_type_hint_param_notice(
-              func,
-              val(c).parr,
-              name.c_str(),
-              id
-            );
-          }
-        }
-        return;
       }
     }
+    return;
   }
 
   // Handle return type constraint failures

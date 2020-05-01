@@ -1643,10 +1643,6 @@ const StaticString
   s_construct("__construct"),
   s_invoke("__invoke"),
   s_sleep("__sleep"),
-  s_get("__get"),
-  s_set("__set"),
-  s_isset("__isset"),
-  s_unset("__unset"),
   s_debugInfo("__debugInfo"),
   s_clone("__clone");
 
@@ -1774,12 +1770,6 @@ void checkDeclarationCompat(const PreClass* preClass,
     for (; i < imeth->numNonVariadicParams(); ++i) {
       auto const& p = params[i];
       if (p.isVariadic()) { raiseIncompat(preClass, imeth); }
-      auto const& ip = iparams[i];
-      // If the interface parameter is a type constant we require the
-      // implementer to specify a type
-      if (!p.userType && ip.typeConstraint.isTypeConstant()) {
-        raiseIncompat(preClass, imeth);
-      }
       if (!iparams[i].hasDefaultValue()) {
         // The leftmost of imeth's contiguous trailing optional parameters
         // must start somewhere to the right of this parameter (which may
@@ -2033,10 +2023,6 @@ void Class::setMethods() {
 void Class::setRTAttributes() {
   m_RTAttrs = 0;
   if (lookupMethod(s_sleep.get())) { m_RTAttrs |= Class::HasSleep; }
-  if (lookupMethod(s_get.get()  )) { m_RTAttrs |= Class::UseGet;   }
-  if (lookupMethod(s_set.get()  )) { m_RTAttrs |= Class::UseSet;   }
-  if (lookupMethod(s_isset.get())) { m_RTAttrs |= Class::UseIsset; }
-  if (lookupMethod(s_unset.get())) { m_RTAttrs |= Class::UseUnset; }
   if (lookupMethod(s_clone.get())) { m_RTAttrs |= Class::HasClone; }
 
   if ((isBuiltin() && Native::getNativePropHandler(name())) ||

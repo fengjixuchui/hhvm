@@ -152,6 +152,12 @@ function fcntl(FileDescriptor $fd, int $cmd, mixed $arg = null): mixed;
 function lseek(FileDescriptor $fd, int $offset, int $whence): int;
 
 <<__Native>>
+function ftruncate(FileDescriptor $fd, int $length): void;
+
+<<__Native>>
 function flock(FileDescriptor $fd, int $operation): void;
+
+<<__Native>>
+function request_stdio_fd(int $fd): FileDescriptor;
 
 } // namespace _OS

@@ -4,11 +4,11 @@
 // LICENSE file in the "hack" directory of this source tree.
 use std::cmp::Ordering;
 
-use bumpalo::collections::Vec;
 use ocamlrep::{Allocator, ToOcamlRep, Value};
 use oxidized::pos::Pos;
 pub use oxidized::typing_defs_core::{DestructureKind, Exact, ParamMode};
 use oxidized::{aast_defs, ast_defs, ident, nast, tany_sentinel, typing_defs as oxidized_defs};
+use typing_collections_rust::Vec;
 
 use crate::typing_make_type::TypeBuilder;
 use crate::typing_reason::*;
@@ -539,7 +539,7 @@ impl<'a> FunType_<'a> {
         let FunType_ { return_, params } = self;
 
         FunType {
-            arity: FunArity::Fstandard(0),
+            arity: FunArity::Fstandard,
             tparams: vec![],
             where_constraints: vec![],
             params: params.iter().map(|p| p.to_oxidized()).collect(),

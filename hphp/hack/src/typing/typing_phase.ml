@@ -585,15 +585,13 @@ and localize_ft ?instantiation ~ety_env ~def_pos env ft =
   in
   let (env, arity) =
     match ft.ft_arity with
-    | Fvariadic (min, ({ fp_type = var_ty; _ } as param)) ->
+    | Fvariadic ({ fp_type = var_ty; _ } as param) ->
       let (env, var_ty) = localize ~ety_env env var_ty.et_type in
       (* HHVM does not enforce types on vararg parameters yet *)
       ( env,
         Fvariadic
-          ( min,
-            { param with fp_type = { et_type = var_ty; et_enforced = false } }
-          ) )
-    | Fstandard _ as x -> (env, x)
+          { param with fp_type = { et_type = var_ty; et_enforced = false } } )
+    | Fstandard as x -> (env, x)
   in
   let (env, params) =
     List.map_env env ft.ft_params (fun env param ->
@@ -759,10 +757,9 @@ and resolve_type_arguments_and_check_constraints
       tparaml
       hintl
   in
+  let targs_tys = List.map ~f:fst type_argl in
   let this_ty =
-    mk
-      ( Reason.Rwitness (fst class_id),
-        Tclass (class_id, exact, List.map ~f:fst type_argl) )
+    mk (Reason.Rwitness (fst class_id), Tclass (class_id, exact, targs_tys))
   in
   let env =
     if check_constraints then
@@ -770,7 +767,7 @@ and resolve_type_arguments_and_check_constraints
         {
           type_expansions = [];
           this_ty;
-          substs = Subst.make_locl tparaml (List.map ~f:fst type_argl);
+          substs = Subst.make_locl tparaml targs_tys;
           from_class = Some from_class;
           quiet = false;
           on_error = Errors.unify_error_at use_pos;

@@ -114,7 +114,11 @@ static bool get_sockaddr(sockaddr *sa, socklen_t salen,
       // struct without sun_path.
       struct sockaddr_un *s_un = (struct sockaddr_un *)sa;
       if (salen > offsetof(sockaddr_un, sun_path)) {
-        address = String(s_un->sun_path, CopyString);
+        // - `sun_path` MAY have trailing nulls
+        // - `sun_len` MAY include that trailing null on Linux.
+        const auto max_path_len = salen - offsetof(struct sockaddr_un, sun_path);
+        const auto actual_path_len = ::strnlen(s_un->sun_path, max_path_len);
+        address = String(s_un->sun_path, actual_path_len, CopyString);
       } else {
         address = empty_string();
       }
@@ -148,7 +152,7 @@ static bool php_string_to_if_index(const char *val, unsigned *out)
   return false;
 #endif
 }
-}
+} // namespace {
 
 static bool php_set_inet6_addr(struct sockaddr_in6 *sin6,
                                const char *address,
@@ -230,8 +234,16 @@ static bool php_set_inet_addr(struct sockaddr_in *sin,
 }
 
 static bool set_sockaddr(sockaddr_storage &sa_storage, req::ptr<Socket> sock,
-                         const char *addr, int port,
+                         const String& addr, int port,
                          struct sockaddr *&sa_ptr, size_t &sa_size) {
+  // Always zero it out:
+  // - fields are added over time; zeroing it out is future-proofing; for
+  //   example, sockaddr_in6 did not originally include sin6_scope_id or
+  //   sin6_flowinfo.
+  // - required for all on MacOS for correct behavior
+  // - on Linux, required for sockaddr_un to deal with buggy sun_path readers
+  //   (they should look at the length)
+  memset(&sa_storage, 0, sizeof(struct sockaddr_storage));
   struct sockaddr *sock_type = (struct sockaddr*) &sa_storage;
   switch (sock->getType()) {
   case AF_UNIX:
@@ -240,21 +252,45 @@ static bool set_sockaddr(sockaddr_storage &sa_storage, req::ptr<Socket> sock,
       return false;
 #else
       struct sockaddr_un *sa = (struct sockaddr_un *)sock_type;
-      memset(sa, 0, sizeof(sa_storage));
       sa->sun_family = AF_UNIX;
-      snprintf(sa->sun_path, 108, "%s", addr);
+      if (addr.length() > sizeof(sa->sun_path)) {
+        raise_warning(
+          "Unix socket path length (%d) is larger than system limit (%lu)",
+          addr.length(),
+          sizeof(sa->sun_path)
+        );
+        return false;
+      }
+      memcpy(sa->sun_path, addr.data(), addr.length());
       sa_ptr = (struct sockaddr *)sa;
-      sa_size = SUN_LEN(sa);
+      sa_size = offsetof(struct sockaddr_un, sun_path) + addr.length();
+#ifdef __linux__
+      if (addr.length() == 0) {
+        // Linux supports 3 kinds of unix sockets; behavior of this struct
+        // is in `man 7 unix`; relevant parts:
+        // - unnamed: 0-length path. As paths are not required to be
+        //   null-terminated, this needs to be undicated by the size.
+        //   These might be created by `socketpair()`, for eaxmple.
+        // - pathname (common): nothing strange. struct size technically
+        //   indicates length, but null terminators are usually set. This
+        //   does matter if addr.length() == size of the char array though
+        // - abstract: these have a meaningful name, but start with `\0`
+        //
+        // Setting sa_size to indicate a 0-length path is required to
+        // distinguish between unnamed and abstract.
+        sa_size = offsetof(struct sockaddr_un, sun_path);
+      }
 #endif
+
+#endif // ifdef _MSC_VER
     }
     break;
   case AF_INET:
     {
       struct sockaddr_in *sa = (struct sockaddr_in *)sock_type;
-      memset(sa, 0, sizeof(sa_storage)); /* Apparently, Mac OSX needs this */
       sa->sin_family = AF_INET;
       sa->sin_port = htons((unsigned short) port);
-      if (!php_set_inet_addr(sa, addr, sock)) {
+      if (!php_set_inet_addr(sa, addr.c_str(), sock)) {
         return false;
       }
       sa_ptr = (struct sockaddr *)sa;
@@ -264,10 +300,9 @@ static bool set_sockaddr(sockaddr_storage &sa_storage, req::ptr<Socket> sock,
   case AF_INET6:
     {
       struct sockaddr_in6 *sa = (struct sockaddr_in6 *)sock_type;
-      memset(sa, 0, sizeof(sa_storage)); /* Apparently, Mac OSX needs this */
       sa->sin6_family = AF_INET6;
       sa->sin6_port = htons((unsigned short) port);
-      if (!php_set_inet6_addr(sa, addr, sock)) {
+      if (!php_set_inet6_addr(sa, addr.c_str(), sock)) {
         return false;
       }
       sa_ptr = (struct sockaddr *)sa;
@@ -279,6 +314,19 @@ static bool set_sockaddr(sockaddr_storage &sa_storage, req::ptr<Socket> sock,
                     "AF_UNIX, AF_INET, or AF_INET6", sock->getType());
     return false;
   }
+#ifdef __APPLE__
+  // This field is not in the relevant standards, not defined on Linux, but is
+  // technically required on MacOS (and other BSDs) according to the man pages:
+  // - `man 4 netintro` covers the base sa_len
+  // - `man 4 unix` and `man 4 inet6` cover AF_UNIX sun_len and AF_INET6
+  //    sin6_len
+  // - ... At least MacOS Catalina includes the wrong `man 4 inet`. Look at the
+  //   (Net|Free|Open)BSD `man 4 inet` instead.
+  //   The MacOS man page says it starts with `sin_family`, which would conflict
+  //   with the base sockaddr definition. `sin_len` is actually the first field
+  //   in the header file, matching `sa_len`.
+  sa_ptr->sa_len = sa_size;
+#endif
   return true;
 }
 
@@ -325,7 +373,8 @@ static void sock_array_from_fd_set(Variant &sockets,
   sockets = ret;
 }
 
-static int php_read(req::ptr<Socket> sock, void *buf, int maxlen, int flags) {
+static int php_read(req::ptr<Socket> sock, void *buf, int64_t maxlen,
+                    int flags) {
   int m = fcntl(sock->fd(), F_GETFL);
   if (m < 0) {
     return m;
@@ -504,7 +553,7 @@ static Variant new_socket_connect(const HostURL &hosturl, double timeout,
       fd, domain, hosturl.getHost().c_str(), hosturl.getPort(),
       0, empty_string_ref, false);
 
-    if (!set_sockaddr(sa_storage, sock, hosturl.getHost().c_str(),
+    if (!set_sockaddr(sa_storage, sock, hosturl.getHost(),
                       hosturl.getPort(), sa_ptr, sa_size)) {
       // set_sockaddr raises its own warning on failure
       return false;
@@ -876,11 +925,10 @@ bool HHVM_FUNCTION(socket_connect,
     break;
   }
 
-  const char *addr = address.data();
   sockaddr_storage sa_storage;
   struct sockaddr *sa_ptr;
   size_t sa_size;
-  if (!set_sockaddr(sa_storage, sock, addr, port, sa_ptr, sa_size)) {
+  if (!set_sockaddr(sa_storage, sock, address, port, sa_ptr, sa_size)) {
     return false;
   }
 
@@ -888,7 +936,7 @@ bool HHVM_FUNCTION(socket_connect,
   int retval = connect(sock->fd(), sa_ptr, sa_size);
   if (retval != 0) {
     std::string msg = "unable to connect to ";
-    msg += addr;
+    msg += address.data();
     msg += ":";
     msg += folly::to<std::string>(port);
     SOCKET_ERROR(sock, msg.c_str(), errno);
@@ -904,18 +952,17 @@ bool HHVM_FUNCTION(socket_bind,
                    int port /* = 0 */) {
   auto sock = cast<Socket>(socket);
 
-  const char *addr = address.data();
   sockaddr_storage sa_storage;
   struct sockaddr *sa_ptr;
   size_t sa_size;
-  if (!set_sockaddr(sa_storage, sock, addr, port, sa_ptr, sa_size)) {
+  if (!set_sockaddr(sa_storage, sock, address, port, sa_ptr, sa_size)) {
     return false;
   }
 
   long retval = ::bind(sock->fd(), sa_ptr, sa_size);
   if (retval != 0) {
     std::string msg = "unable to bind address";
-    msg += addr;
+    msg += address.data();
     msg += ":";
     msg += folly::to<std::string>(port);
     SOCKET_ERROR(sock, msg.c_str(), errno);
@@ -1065,7 +1112,7 @@ Variant socket_server_impl(
   sockaddr_storage sa_storage;
   struct sockaddr *sa_ptr;
   size_t sa_size;
-  if (!set_sockaddr(sa_storage, sock, hosturl.getHost().c_str(),
+  if (!set_sockaddr(sa_storage, sock, hosturl.getHost(),
                     hosturl.getPort(), sa_ptr, sa_size)) {
     return false;
   }
@@ -1100,7 +1147,7 @@ Variant HHVM_FUNCTION(socket_accept,
 
 Variant HHVM_FUNCTION(socket_read,
                       const Resource& socket,
-                      int length,
+                      int64_t length,
                       int type /* = 0 */) {
   if (length <= 0) {
     return false;
@@ -1112,7 +1159,7 @@ Variant HHVM_FUNCTION(socket_read,
   if (type == PHP_NORMAL_READ) {
     retval = php_read(sock, tmpbuf, length, 0);
   } else {
-    retval = recv(sock->fd(), tmpbuf, length, 0);
+    retval = recv(sock->fd(), tmpbuf, (size_t)length, 0);
   }
 
   if (retval == -1) {
@@ -1135,12 +1182,13 @@ Variant HHVM_FUNCTION(socket_read,
 Variant HHVM_FUNCTION(socket_write,
                       const Resource& socket,
                       const String& buffer,
-                      int length /* = 0 */) {
+                      int64_t length /* = 0 */) {
   auto sock = cast<Socket>(socket);
+  if (length < 0) return false;
   if (length == 0 || length > buffer.size()) {
     length = buffer.size();
   }
-  int retval = write(sock->fd(), buffer.data(), length);
+  int retval = write(sock->fd(), buffer.data(), (size_t)length);
   if (retval < 0) {
     SOCKET_ERROR(sock, "unable to write to socket", errno);
     return false;
@@ -1151,13 +1199,14 @@ Variant HHVM_FUNCTION(socket_write,
 Variant HHVM_FUNCTION(socket_send,
                       const Resource& socket,
                       const String& buf,
-                      int len,
+                      int64_t len,
                       int flags) {
   auto sock = cast<Socket>(socket);
+  if (len < 0) return false;
   if (len > buf.size()) {
     len = buf.size();
   }
-  int retval = send(sock->fd(), buf.data(), len, flags);
+  int retval = send(sock->fd(), buf.data(), (size_t)len, flags);
   if (retval == -1) {
     SOCKET_ERROR(sock, "unable to write to socket", errno);
     return false;
@@ -1168,11 +1217,12 @@ Variant HHVM_FUNCTION(socket_send,
 Variant HHVM_FUNCTION(socket_sendto,
                       const Resource& socket,
                       const String& buf,
-                      int len,
+                      int64_t len,
                       int flags,
                       const String& addr,
                       int port /* = -1 */) {
   auto sock = cast<Socket>(socket);
+  if (len < 0) return false;
   if (len > buf.size()) {
     len = buf.size();
   }
@@ -1183,13 +1233,15 @@ Variant HHVM_FUNCTION(socket_sendto,
 #ifdef _MSC_VER
       retval = -1;
 #else
-      struct sockaddr_un  s_un;
-      memset(&s_un, 0, sizeof(s_un));
-      s_un.sun_family = AF_UNIX;
-      snprintf(s_un.sun_path, 108, "%s", addr.data());
+      struct sockaddr_storage s_s;
+      struct sockaddr* sa_ptr;
+      size_t sa_size;
+      if (!set_sockaddr(s_s, sock, addr, 0, sa_ptr, sa_size)) {
+        return false;
+      }
 
-      retval = sendto(sock->fd(), buf.data(), len, flags,
-                      (struct sockaddr *)&s_un, SUN_LEN(&s_un));
+      retval = sendto(sock->fd(), buf.data(), (size_t)len, flags, sa_ptr,
+                      sa_size);
 #endif
     }
     break;
@@ -1208,7 +1260,7 @@ Variant HHVM_FUNCTION(socket_sendto,
         return false;
       }
 
-      retval = sendto(sock->fd(), buf.data(), len, flags,
+      retval = sendto(sock->fd(), buf.data(), (size_t)len, flags,
                       (struct sockaddr *)&sin, sizeof(sin));
     }
     break;
@@ -1228,7 +1280,7 @@ Variant HHVM_FUNCTION(socket_sendto,
         return false;
       }
 
-      retval = sendto(sock->fd(), buf.data(), len, flags,
+      retval = sendto(sock->fd(), buf.data(), (size_t)len, flags,
                       (struct sockaddr *)&sin6, sizeof(sin6));
     }
     break;
@@ -1248,7 +1300,7 @@ Variant HHVM_FUNCTION(socket_sendto,
 Variant HHVM_FUNCTION(socket_recv,
                       const Resource& socket,
                       Variant& buf,
-                      int len,
+                      int64_t len,
                       int flags) {
   if (len <= 0) {
     return false;
@@ -1257,7 +1309,7 @@ Variant HHVM_FUNCTION(socket_recv,
 
   char *recv_buf = (char *)malloc(len + 1);
   int retval;
-  if ((retval = recv(sock->fd(), recv_buf, len, flags)) < 1) {
+  if ((retval = recv(sock->fd(), recv_buf, (size_t)len, flags)) < 1) {
     free(recv_buf);
     buf = init_null();
   } else {
@@ -1275,7 +1327,7 @@ Variant HHVM_FUNCTION(socket_recv,
 Variant HHVM_FUNCTION(socket_recvfrom,
                       const Resource& socket,
                       Variant& buf,
-                      int len,
+                      int64_t len,
                       int flags,
                       Variant& name,
                       Variant& port) {
@@ -1299,7 +1351,7 @@ Variant HHVM_FUNCTION(socket_recvfrom,
       slen = sizeof(s_un);
       memset(&s_un, 0, slen);
       s_un.sun_family = AF_UNIX;
-      retval = recvfrom(sock->fd(), recv_buf, len, flags,
+      retval = recvfrom(sock->fd(), recv_buf, (size_t)len, flags,
                         (struct sockaddr *)&s_un, (socklen_t *)&slen);
       if (retval < 0) {
         free(recv_buf);
@@ -1309,7 +1361,11 @@ Variant HHVM_FUNCTION(socket_recvfrom,
 
       recv_buf[retval] = 0;
       buf = String(recv_buf, retval, AttachString);
-      name = String(s_un.sun_path, CopyString);
+      // - `sun_path` MAY have trailing nulls
+      // - `sun_len` MAY include that trailing null on Linux.
+      const auto max_path_len = slen - offsetof(struct sockaddr_un, sun_path);
+      const auto actual_path_len = ::strnlen(s_un.sun_path, max_path_len);
+      name = String(s_un.sun_path, actual_path_len, CopyString);
 #endif
     }
     break;
@@ -1320,7 +1376,7 @@ Variant HHVM_FUNCTION(socket_recvfrom,
       memset(&sin, 0, slen);
       sin.sin_family = AF_INET; // recvfrom doesn't fill this in
 
-      retval = recvfrom(sock->fd(), recv_buf, len, flags,
+      retval = recvfrom(sock->fd(), recv_buf, (size_t)len, flags,
                         (struct sockaddr *)&sin, (socklen_t *)&slen);
       if (retval < 0) {
         free(recv_buf);
@@ -1349,7 +1405,7 @@ Variant HHVM_FUNCTION(socket_recvfrom,
       memset(&sin6, 0, slen);
       sin6.sin6_family = AF_INET6; // recvfrom doesn't fill this in
 
-      retval = recvfrom(sock->fd(), recv_buf, len, flags,
+      retval = recvfrom(sock->fd(), recv_buf, (size_t)len, flags,
                         (struct sockaddr *)&sin6, (socklen_t *)&slen);
       if (retval < 0) {
         free(recv_buf);

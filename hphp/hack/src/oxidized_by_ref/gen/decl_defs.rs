@@ -3,11 +3,12 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<d11dfbbf61ab16e09b168ac014599e8d>>
+// @generated SignedSource<<33872a6d4742686601ecc28c93b4da1b>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
 
+use ocamlrep_derive::ToOcamlRep;
 use serde::Serialize;
 
 #[allow(unused_imports)]
@@ -45,7 +46,9 @@ pub use typing_defs::*;
 /// The `sc_from_req_extends` field is set to true if the context was inherited
 /// via a require extends type. This information is relevant when folding
 /// `dc_substs` during inheritance. See Decl_inherit module.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct SubstContext<'a> {
     pub subst: s_map::SMap<'a, Ty<'a>>,
     pub class_context: &'a str,
@@ -54,16 +57,18 @@ pub struct SubstContext<'a> {
 
 pub use oxidized::decl_defs::SourceType;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct MroElement<'a> {
     /// The class's name
     pub name: &'a str,
     /// The position at which this element was directly included in the hierarchy.
     /// If C extends B extends A, the use_pos of A in C's linearization will be the
     /// position of the class name A in the line "class B extends A".
-    pub use_pos: pos::Pos<'a>,
+    pub use_pos: &'a pos::Pos<'a>,
     /// Like mro_use_pos, but includes type arguments (if any).
-    pub ty_pos: pos::Pos<'a>,
+    pub ty_pos: &'a pos::Pos<'a>,
     /// The type arguments with which this ancestor class was instantiated. The
     /// first class in the linearization (the one which was linearized) will have
     /// an empty list here, even when it takes type parameters.
@@ -92,7 +97,7 @@ pub struct MroElement<'a> {
     /// required by some ancestor, this will be [Some], and the position will be
     /// the location where this requirement was most recently included into the
     /// hierarchy.
-    pub required_at: Option<pos::Pos<'a>>,
+    pub required_at: Option<&'a pos::Pos<'a>>,
     /// True if this element is included in the linearization (directly or
     /// indirectly) because of a require extends relationship.
     pub via_req_extends: bool,
@@ -129,14 +134,18 @@ pub use oxidized::decl_defs::LinearizationKind;
 /// If None - method is unconditionally reactive
 pub type ConditionTypeName<'a> = Option<&'a str>;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub enum MethodReactivity<'a> {
     MethodReactive(ConditionTypeName<'a>),
     MethodShallow(ConditionTypeName<'a>),
     MethodLocal(ConditionTypeName<'a>),
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct DeclClassType<'a> {
     pub need_init: bool,
     pub members_fully_known: bool,
@@ -150,7 +159,7 @@ pub struct DeclClassType<'a> {
     pub is_xhp: bool,
     pub has_xhp_keyword: bool,
     pub name: &'a str,
-    pub pos: pos::Pos<'a>,
+    pub pos: &'a pos::Pos<'a>,
     pub tparams: &'a [Tparam<'a>],
     pub where_constraints: &'a [WhereConstraint<'a>],
     /// class name to the subst_context that must be applied to that class
@@ -176,7 +185,9 @@ pub struct DeclClassType<'a> {
     pub condition_types: s_set::SSet<'a>,
 }
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
+)]
 pub struct Element<'a> {
     pub flags: isize,
     pub reactivity: Option<MethodReactivity<'a>>,

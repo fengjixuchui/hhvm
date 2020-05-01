@@ -73,6 +73,14 @@ const StaticString s_cmpWithCollection(
   "Cannot use relational comparison operators (<, <=, >, >=, <=>) to compare "
   "a collection with an integer, double, string, array, or object"
 );
+const StaticString s_cmpWithVArray(
+  "Cannot use relational comparison operators (<, <=, >, >=, <=>) to compare "
+  "a varray with a non-varray"
+);
+const StaticString s_cmpWithDArray(
+  "Cannot use relational comparison operators (<, <=, >, >=, <=>) to compare "
+  "darrays"
+);
 const StaticString s_cmpWithVec(
   "Cannot use relational comparison operators (<, <=, >, >=, <=>) to compare "
   "a vec with a non-vec"
@@ -607,10 +615,12 @@ vm_decode_function(const_variant_ref function,
         return nullptr;
       }
       assertx(f && f->preClass() == nullptr);
-      if (f->hasReifiedGenerics() && !genericsAlreadyGiven) {
-        raise_invalid_argument_warning("You may not call the reified function '%s' "
-                               "without reified arguments",
-                               f->fullName()->data());
+      if (f->hasReifiedGenerics() && !genericsAlreadyGiven &&
+          !f->getReifiedGenericsInfo().allGenericsSoft()) {
+        raise_invalid_argument_warning(
+          "You may not call the reified function '%s' "
+          "without reified arguments",
+          f->fullName()->data());
         return nullptr;
       }
       return f;
@@ -770,6 +780,14 @@ void throw_division_by_zero_exception() {
 
 void throw_collection_compare_exception() {
   SystemLib::throwInvalidOperationExceptionObject(s_cmpWithCollection);
+}
+
+void throw_varray_compare_exception() {
+  SystemLib::throwInvalidOperationExceptionObject(s_cmpWithVArray);
+}
+
+void throw_darray_compare_exception() {
+  SystemLib::throwInvalidOperationExceptionObject(s_cmpWithDArray);
 }
 
 void throw_vec_compare_exception() {

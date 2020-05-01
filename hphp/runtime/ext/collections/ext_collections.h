@@ -4,6 +4,7 @@
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/base/header-kind.h"
 #include "hphp/system/systemlib.h"
+#include "hphp/runtime/vm/native-prop-handler.h"
 
 namespace HPHP {
 /////////////////////////////////////////////////////////////////////////////
@@ -101,13 +102,20 @@ struct CollectionsExtension : Extension {
     cls->m_extra.raw()->m_instanceCtorUnlocked = T::instanceCtor;
     cls->m_extra.raw()->m_instanceDtor = T::instanceDtor;
     cls->m_releaseFunc = T::instanceDtor;
-    cls->initRTAttributes(
-        Class::UseGet |
-        Class::UseSet |
-        Class::UseIsset |
-        Class::UseUnset |
-        Class::CallToImpl
-    );
+    cls->initRTAttributes(Class::CallToImpl);
+  }
+};
+
+const StaticString s_isset{"isset"};
+
+struct CollectionPropHandler: Native::BasePropHandler {
+  static Variant issetProp(const Object&, const String&) {
+    return false;
+  }
+  static bool isPropSupported(const String&, const String& op) {
+    if (op.same(s_isset)) return true;
+    SystemLib::throwInvalidOperationExceptionObject(
+      "Cannot access a property on a collection");
   }
 };
 

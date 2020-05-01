@@ -53,6 +53,7 @@
     naming_sqlite)
   (libraries
     file_info
+    fileutils
     heap_shared_mem
     heap_shared_mem_hash
     naming_types
@@ -67,6 +68,7 @@
     naming_heap)
   (libraries
     ast_provider
+    db_path_provider
     file_info
     naming_sqlite
     naming_types
@@ -80,8 +82,8 @@
     naming_table)
   (libraries
     ast_provider
+    db_path_provider
     file_info
-    fileutils
     naming_provider
     naming_sqlite
     relative_path)

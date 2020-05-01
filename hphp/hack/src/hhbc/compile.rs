@@ -18,7 +18,8 @@ use hhbc_ast_rust::FatalOp;
 use hhbc_hhas_rust::{context::Context, print_program, Write};
 use instruction_sequence_rust::Error;
 use itertools::{Either, Either::*};
-use ocamlrep::rc::RcOc;
+use ocamlrep::{rc::RcOc, FromError, FromOcamlRep, Value};
+use ocamlrep_derive::{FromOcamlRep, ToOcamlRep};
 use options::{LangFlags, Options, Php7Flags, PhpismFlags};
 use oxidized::{
     ast as Tast, namespace_env::Env as NamespaceEnv, parser_options::ParserOptions, pos::Pos,
@@ -32,6 +33,7 @@ use stack_limit::StackLimit;
 /// Common input needed for compilation.  Extra care is taken
 /// so that everything is easily serializable at the FFI boundary
 /// until the migration from OCaml is fully complete
+#[derive(Debug, FromOcamlRep)]
 pub struct Env {
     pub filepath: RelativePath,
     pub config_jsons: Vec<String>,
@@ -52,13 +54,19 @@ bitflags! {
     }
 }
 
+impl FromOcamlRep for EnvFlags {
+    fn from_ocamlrep(value: Value<'_>) -> Result<Self, FromError> {
+        Ok(EnvFlags::from_bits(value.as_int().unwrap() as u8).unwrap())
+    }
+}
+
 /// Compilation profile. All times are in seconds,
 /// except when they are ignored and should not be reported,
 /// such as in the case hhvm.log_extern_compiler_perf is false
 /// (this avoids the need to read Options from OCaml, as
 /// they can be simply returned as NaNs to signal that
 /// they should _not_ be passed back as JSON to HHVM process)
-#[derive(Debug)]
+#[derive(Debug, ToOcamlRep)]
 pub struct Profile {
     pub parsing_t: f64,
     pub codegen_t: f64,
@@ -74,10 +82,24 @@ pub fn is_ignored_duration(dt: &f64) -> bool {
 }
 
 pub fn from_text<W>(
-    env: Env,
+    env: &Env,
     stack_limit: &StackLimit,
     writer: &mut W,
     text: &[u8],
+) -> anyhow::Result<Profile>
+where
+    W: Write,
+    W::Error: Send + Sync + 'static, // required by anyhow::Error
+{
+    let source_text = SourceText::make(RcOc::new(env.filepath.clone()), text);
+    from_text_(env, stack_limit, writer, source_text)
+}
+
+pub fn from_text_<W>(
+    env: &Env,
+    stack_limit: &StackLimit,
+    writer: &mut W,
+    source_text: SourceText,
 ) -> anyhow::Result<Profile>
 where
     W: Write,
@@ -97,8 +119,7 @@ where
         parse_file(
             &opts,
             stack_limit,
-            &env.filepath,
-            text,
+            source_text,
             !env.flags.contains(EnvFlags::DISABLE_TOPLEVEL_ELABORATION),
         )
     });
@@ -225,6 +246,7 @@ fn create_parser_options(opts: &Options) -> ParserOptions {
     popt.po_disable_legacy_attribute_syntax =
         hack_lang_flags(LangFlags::DISABLE_LEGACY_ATTRIBUTE_SYNTAX);
     popt.po_const_default_func_args = hack_lang_flags(LangFlags::CONST_DEFAULT_FUNC_ARGS);
+    popt.po_const_default_lambda_args = hack_lang_flags(LangFlags::CONST_DEFAULT_LAMBDA_ARGS);
     popt.tco_const_static_props = hack_lang_flags(LangFlags::CONST_STATIC_PROPS);
     popt.po_abstract_static_props = hack_lang_flags(LangFlags::ABSTRACT_STATIC_PROPS);
     popt.po_disable_unset_class_const = hack_lang_flags(LangFlags::DISABLE_UNSET_CLASS_CONST);
@@ -241,8 +263,7 @@ fn create_parser_options(opts: &Options) -> ParserOptions {
 fn parse_file(
     opts: &Options,
     stack_limit: &StackLimit,
-    filepath: &RelativePath,
-    text: &[u8],
+    source_text: SourceText,
     elaborate_namespaces: bool,
 ) -> Either<(Pos, String, bool), (Tast::Program, bool)> {
     let mut aast_env = AastEnv::default();
@@ -256,8 +277,11 @@ fn parse_file(
     aast_env.keep_errors = false;
     aast_env.elaborate_namespaces = elaborate_namespaces;
     aast_env.parser_options = create_parser_options(opts);
+    aast_env.lower_coroutines = opts
+        .hhvm
+        .hack_lang_flags
+        .contains(LangFlags::ENABLE_COROUTINES);
 
-    let source_text = SourceText::make(RcOc::new(filepath.clone()), text);
     let indexed_source_text = IndexedSourceText::new(source_text);
     let ast_result = AastParser::from_text(&aast_env, &indexed_source_text, Some(stack_limit));
     match ast_result {

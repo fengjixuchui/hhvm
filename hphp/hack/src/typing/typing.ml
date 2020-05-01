@@ -1762,7 +1762,6 @@ and expr_
           None
           (* This is not a nullsafe method call, just nullsafe method access *)
         ~coerce_from_ty:None (* What's coerce_from_ty actually mean? *)
-        ~pos_params:None (* No idea what this means either *)
         ~explicit_targs:targs
         ~is_nonnull:false (* Hmmm: No idea here. Does this depend on nullsafe *)
         env
@@ -1812,8 +1811,8 @@ and expr_
         ~is_method:true
         ~nullsafe:None
         ~coerce_from_ty:None
-        ~pos_params:None
         ~is_nonnull:false
+        ~explicit_targs:[]
         env
         ty1
         (CIexpr instance)
@@ -1858,6 +1857,7 @@ and expr_
           ~is_method:true
           ~nullsafe:None
           ~coerce_from_ty:None
+          ~explicit_targs:[]
           env
           local_obj_ty
           (CI (pos, class_name))
@@ -1884,14 +1884,9 @@ and expr_
         let (env, local_obj_ty) = Phase.localize ~ety_env env obj_type in
         let local_obj_fp = TUtils.default_fun_param local_obj_ty in
         let fty = { ftype with ft_params = local_obj_fp :: ftype.ft_params } in
-        let fun_arity =
-          match fty.ft_arity with
-          | Fstandard min -> Fstandard (min + 1)
-          | Fvariadic (min, x) -> Fvariadic (min + 1, x)
-        in
         let caller =
           {
-            ft_arity = fun_arity;
+            ft_arity = fty.ft_arity;
             ft_tparams = fty.ft_tparams;
             ft_where_constraints = fty.ft_where_constraints;
             ft_params = fty.ft_params;
@@ -2764,7 +2759,7 @@ and expr_
     (* Ensure lambda arity is not ellipsis in strict mode *)
     begin
       match declared_ft.ft_arity with
-      | Fvariadic (_, { fp_name = None; _ })
+      | Fvariadic { fp_name = None; _ }
         when Partial.should_check_error (Env.get_mode env) 4223 ->
         Errors.ellipsis_strict_mode ~require:`Param_name p
       | _ -> ()
@@ -2824,12 +2819,7 @@ and expr_
       match eexpected with
       | Some (_pos, _ur, ty, Tfun expected_ft) ->
         (* First check that arities match up *)
-        check_lambda_arity
-          p
-          (get_pos ty)
-          declared_ft.ft_arity
-          expected_ft.ft_arity;
-
+        check_lambda_arity p (get_pos ty) declared_ft expected_ft;
         (* Use declared types for parameters in preference to those determined
          * by the context: they might be more general. *)
         let rec replace_non_declared_types
@@ -2851,10 +2841,17 @@ and expr_
                 { declared_ft_param with fp_type = expected_ft_param.fp_type }
             in
             resolved_ft_param :: rest
+          | (_ :: params, declared_ft_param :: declared_ft_params, []) ->
+            let rest =
+              replace_non_declared_types
+                params
+                declared_ft_params
+                expected_ft_params
+            in
+            declared_ft_param :: rest
           | (_, _, _) ->
             (* This means the expected_ft params list can have more parameters
-             * than declared parameters in the lambda. For variadics, this is OK,
-             * for non-variadics, this will be caught elsewhere in arity checks.
+             * than declared parameters in the lambda. For variadics, this is OK.
              *)
             expected_ft_params
         in
@@ -2864,9 +2861,8 @@ and expr_
           | FVvariadicArg _ ->
             begin
               match (declared_arity, expected_arity) with
-              | (Fvariadic (min_arity, declared), Fvariadic (_, expected)) ->
-                Fvariadic
-                  (min_arity, { declared with fp_type = expected.fp_type })
+              | (Fvariadic declared, Fvariadic expected) ->
+                Fvariadic { declared with fp_type = expected.fp_type }
               | (_, _) -> declared_arity
             end
           | _ -> declared_arity
@@ -3037,6 +3033,7 @@ and expr_
                   ~is_method:false
                   ~nullsafe:None
                   ~coerce_from_ty:None
+                  ~explicit_targs:[]
                   env
                   obj
                   cid
@@ -3370,9 +3367,9 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
           in
           let (env, t_variadic) =
             match (f.f_variadic, ft.ft_arity) with
-            | (FVvariadicArg arg, Fvariadic (_, variadic)) ->
+            | (FVvariadicArg arg, Fvariadic variadic) ->
               make_variadic_arg env arg [variadic.fp_type.et_type]
-            | (FVvariadicArg arg, Fstandard _) -> make_variadic_arg env arg []
+            | (FVvariadicArg arg, Fstandard) -> make_variadic_arg env arg []
             | (FVellipsis pos, _) -> (env, Aast.FVellipsis pos)
             | (_, _) -> (env, Aast.FVnonVariadic)
           in
@@ -3712,11 +3709,11 @@ and new_object
       in
       ((env, tel, typed_unpack_element), (c_ty, ctor_fty))
   in
-  let ((env, tel, typed_unpack_element), res) =
+  let ((env, tel, typed_unpack_element), class_types_and_ctor_types) =
     List.fold_map classes ~init:(env, [], None) ~f:gather
   in
   let (env, tel, typed_unpack_element, ty, ctor_fty) =
-    match res with
+    match class_types_and_ctor_types with
     | [] ->
       let (env, tel, _) = exprs env el in
       let (env, typed_unpack_element, _) =
@@ -3749,15 +3746,18 @@ and new_object
 and attributes_check_def env kind attrs =
   Typing_attributes.check_def env new_object kind attrs
 
-(* FIXME: we need to separate our instantiability into two parts. Currently,
- * all this function is doing is checking if a given type is inhabited --
- * that is, whether there are runtime values of type Aast. However,
- * instantiability should be the stricter notion that T has a runtime
- * constructor; that is, `new T()` should be valid. In particular, interfaces
- * are inhabited, but not instantiable.
- * To make this work with classname, we likely need to add something like
- * concrete_classname<T>, where T cannot be an interface.
- * *)
+(** Get class infos for a class expression (e.g. `parent`, `self` or
+    regular classnames) - which might resolve to a union or intersection
+    of classes - and check they are instantiable.
+
+    FIXME: we need to separate our instantiability into two parts. Currently,
+    all this function is doing is checking if a given type is inhabited --
+    that is, whether there are runtime values of type Aast. However,
+    instantiability should be the stricter notion that T has a runtime
+    constructor; that is, `new T()` should be valid. In particular, interfaces
+    are inhabited, but not instantiable.
+    To make this work with classname, we likely need to add something like
+    concrete_classname<T>, where T cannot be an interface. *)
 and instantiable_cid ?(exact = Nonexact) p env cid explicit_targs =
   let (env, tal, te, classes) =
     class_id_for_new ~exact p env cid explicit_targs
@@ -3950,6 +3950,7 @@ and assign_ p ur env e1 ty2 =
         ~is_method:false
         ~nullsafe
         ~coerce_from_ty:(Some (p, ur, ty2))
+        ~explicit_targs:[]
         env
         obj_ty
         (CIexpr e1)
@@ -4845,8 +4846,8 @@ and dispatch_call
           ~nullsafe:None
           ~obj_pos:pos
           ~coerce_from_ty:None
-          ~pos_params:(Some el)
           ~is_nonnull:false
+          ~explicit_targs:[]
           env
           ty1
           e1
@@ -4897,7 +4898,6 @@ and dispatch_call
         ~obj_pos:p
         ~is_method:true
         ~nullsafe
-        ~pos_params:el
         ~coerce_from_ty:None
         ~explicit_targs
         env
@@ -4942,7 +4942,6 @@ and dispatch_call
         ~obj_pos:(fst e1)
         ~is_method
         ~nullsafe
-        ~pos_params:el
         ~coerce_from_ty:None
         ~explicit_targs
         env
@@ -5073,9 +5072,8 @@ and dispatch_call
       | (env, Some (ety_env, et)) ->
         let (env, fty) =
           let make_fty params ft_ret =
-            let len = List.length params in
             {
-              ft_arity = Fstandard len;
+              ft_arity = Fstandard;
               ft_tparams = [];
               ft_where_constraints = [];
               ft_params =
@@ -5088,7 +5086,8 @@ and dispatch_call
                         make_fp_flags
                           ~mode:FPnormal
                           ~accept_disposable:true
-                          ~mutability:None;
+                          ~mutability:None
+                          ~has_default:false;
                       fp_rx_annotation = None;
                     });
               ft_ret = { et_enforced = false; et_type = ft_ret };
@@ -5105,8 +5104,11 @@ and dispatch_call
                   []
                   (mk
                      ( reason,
-                       Tclass ((fst et.tpu_name, "\\vec"), Nonexact, [pu_type])
-                     )) )
+                       Tclass
+                         ( ( fst et.tpu_name,
+                             Naming_special_names.Collections.cVec ),
+                           Nonexact,
+                           [pu_type] ) )) )
             else
               let case_ty =
                 match SMap.find_opt case et.tpu_case_values with
@@ -5819,7 +5821,7 @@ and static_class_id
       let tgeneric = MakeType.generic r id in
       make_result env tal (Aast.CI c) tgeneric
     else
-      let class_ = Env.get_class env (snd c) in
+      let class_ = Env.get_class env id in
       (match class_ with
       | None -> make_result env [] (Aast.CI c) (Typing_utils.mk_tany env p)
       | Some class_ ->
@@ -5948,12 +5950,12 @@ and call_construct p env class_ params el unpacked_element cid =
       in
       (env, tel, typed_unpack_element, m)
 
-and check_arity ?(did_unpack = false) pos pos_def ft (arity : int) exp_arity =
-  let exp_min = Typing_defs.arity_min exp_arity in
+and check_arity ?(did_unpack = false) pos pos_def ft (arity : int) =
+  let exp_min = Typing_defs.arity_min ft in
   if arity < exp_min then
     Errors.typing_too_few_args exp_min arity pos pos_def None;
-  match exp_arity with
-  | Fstandard _ ->
+  match ft.ft_arity with
+  | Fstandard ->
     let exp_max = List.length ft.ft_params in
     let arity =
       if did_unpack then
@@ -5965,10 +5967,11 @@ and check_arity ?(did_unpack = false) pos pos_def ft (arity : int) exp_arity =
       Errors.typing_too_many_args exp_max arity pos pos_def None
   | Fvariadic _ -> ()
 
-and check_lambda_arity lambda_pos def_pos lambda_arity expected_arity =
-  let expected_min = Typing_defs.arity_min expected_arity in
-  match (lambda_arity, expected_arity) with
-  | (Fstandard lambda_min, Fstandard _) ->
+and check_lambda_arity lambda_pos def_pos lambda_ft expected_ft =
+  match (lambda_ft.ft_arity, expected_ft.ft_arity) with
+  | (Fstandard, Fstandard) ->
+    let expected_min = Typing_defs.arity_min expected_ft in
+    let lambda_min = Typing_defs.arity_min lambda_ft in
     if lambda_min < expected_min then
       Errors.typing_too_few_args expected_min lambda_min lambda_pos def_pos None;
     if lambda_min > expected_min then
@@ -5985,8 +5988,8 @@ and check_lambda_arity lambda_pos def_pos lambda_arity expected_arity =
  * should not unify with it *)
 and variadic_param env ft =
   match ft.ft_arity with
-  | Fvariadic (_, param) -> (env, Some param)
-  | Fstandard _ -> (env, None)
+  | Fvariadic param -> (env, Some param)
+  | Fstandard -> (env, None)
 
 and param_modes ?(is_variadic = false) ({ fp_pos; _ } as fp) (pos, e) =
   match (get_fp_mode fp, e) with
@@ -6322,7 +6325,7 @@ and call
            * unpacked array consumes 1 or many parameters, it is nonsensical to say
            * that not enough args were passed in (so we don't do the min check).
            *)
-          let () = check_arity ~did_unpack pos pos_def ft arity ft.ft_arity in
+          let () = check_arity ~did_unpack pos pos_def ft arity in
           (* Variadic params cannot be inout so we can stop early *)
           let env = wfold_left2 inout_write_back env ft.ft_params el in
           let (env, ret_ty) =
@@ -6353,10 +6356,9 @@ and split_remaining_params_required_optional ft remaining_params =
    * of this function is 2, so there is 1 required parameter remaining and 1 optional parameter.
    *)
   let min_arity =
-    match ft.ft_arity with
-    | Fstandard min_arity
-    | Fvariadic (min_arity, _) ->
-      min_arity
+    List.count
+      ~f:(fun fp -> not (Typing_defs.get_fp_has_default fp))
+      ft.ft_params
   in
   let original_params = ft.ft_params in
   let consumed = List.length original_params - List.length remaining_params in
@@ -6586,7 +6588,7 @@ and condition
     when tparamet
          && ( String.equal f SN.StdlibFunctions.is_array
             || String.equal f SN.StdlibFunctions.is_php_array ) ->
-    is_array env `PHPArray p f lv
+    safely_refine_is_array env `PHPArray p f lv
   | Aast.Call
       ( Cnormal,
         (_, Aast.Class_const ((_, Aast.CI (_, class_name)), (_, method_name))),
@@ -6813,7 +6815,7 @@ and get_instance_var env = function
  * `p` is position of the function name in the source
  * `arg_expr` is the argument to the function
  *)
-and is_array env ty p pred_name arg_expr =
+and safely_refine_is_array env ty p pred_name arg_expr =
   refine_lvalue_type env arg_expr ~refine:(fun env arg_ty ->
       let r = Reason.Rpredicated (p, pred_name) in
       let (env, tarrkey_name) =
@@ -6867,9 +6869,13 @@ and is_array env ty p pred_name arg_expr =
       in
       (* Add constraints on generic parameters that must
        * hold for refined_ty <:arg_ty. For example, if arg_ty is Traversable<T>
-       * and refined_ty is keyset<T#1> then we know T#1 <: T *)
+       * and refined_ty is keyset<T#1> then we know T#1 <: T.
+       * See analogous code in safely_refine_class_type.
+       *)
+      let (env, supertypes) = TUtils.get_concrete_supertypes env arg_ty in
       let env =
-        SubType.add_constraint p env Ast_defs.Constraint_as refined_ty arg_ty
+        List.fold_left supertypes ~init:env ~f:(fun env ty ->
+            SubType.add_constraint p env Ast_defs.Constraint_as refined_ty ty)
       in
       Inter.intersect ~r env refined_ty arg_ty)
 

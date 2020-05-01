@@ -19,7 +19,7 @@
      Full Parsing -> Naming -> Full Typecheck (with lazy decl)
 *)
 
-open Core_kernel
+open Hh_prelude
 open GlobalOptions
 open Result.Export
 open Reordered_argument_collections
@@ -174,7 +174,8 @@ let download_and_load_state_exn
       | Ok (dirty_master_files, dirty_local_files) ->
         let () = HackEventLogger.state_loader_dirty_files t in
         let list_to_set x =
-          List.map x Relative_path.from_root |> Relative_path.set_of_list
+          List.map x (fun suffix -> Relative_path.from_root ~suffix)
+          |> Relative_path.set_of_list
         in
         let dirty_naming_files = Relative_path.Set.of_list dirty_naming_files in
         let dirty_master_files = list_to_set dirty_master_files in
@@ -319,10 +320,10 @@ let naming_from_saved_state
  * of saved state modes. *)
 let use_prechecked_files (genv : ServerEnv.genv) : bool =
   ServerPrecheckedFiles.should_use genv.options genv.local_config
-  && ServerArgs.ai_mode genv.options = None
+  && Option.is_none (ServerArgs.ai_mode genv.options)
   && (not (ServerArgs.check_mode genv.options))
-  && ServerArgs.save_filename genv.options = None
-  && ServerArgs.save_with_spec genv.options = None
+  && Option.is_none (ServerArgs.save_filename genv.options)
+  && Option.is_none (ServerArgs.save_with_spec genv.options)
 
 let get_dirty_fast
     (old_naming_table : Naming_table.t)
@@ -675,9 +676,9 @@ let full_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
   let is_check_mode = ServerArgs.check_mode genv.options in
   let (env, t) =
     if
-      genv.ServerEnv.local_config.SLC.remote_type_check
-        .SLC.RemoteTypeCheck.load_naming_table_on_full_init
-      = false
+      not
+        genv.ServerEnv.local_config.SLC.remote_type_check
+          .SLC.RemoteTypeCheck.load_naming_table_on_full_init
     then
       initialize_naming_table ~do_naming:true "full initialization" genv env
     else
@@ -765,7 +766,10 @@ let post_saved_state_initialization
   in
   let (_old_parsing_phase, old_parsing_error_files) =
     match
-      List.find old_errors ~f:(fun (phase, _files) -> phase = Errors.Parsing)
+      List.find old_errors ~f:(fun (phase, _files) ->
+          match phase with
+          | Errors.Parsing -> true
+          | _ -> false)
     with
     | Some (a, b) -> (a, b)
     | None -> (Errors.Parsing, Relative_path.Set.empty)

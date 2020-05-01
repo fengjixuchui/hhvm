@@ -35,7 +35,6 @@
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
-struct MInstrPropState;
 struct TypedValue;
 
 #define INVOKE_FEW_ARGS_COUNT 6
@@ -525,15 +524,10 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   };
 
   template<PropMode mode>
-  tv_lval propImpl(TypedValue* tvRef, const Class* ctx,
-                   const StringData* key, MInstrPropState* pState);
+  tv_lval propImpl(TypedValue* tvRef, const Class* ctx, const StringData* key);
 
   void setDynProp(const StringData* key, TypedValue val);
 
-  bool invokeSet(const StringData* key, TypedValue val);
-  InvokeResult invokeGet(const StringData* key);
-  InvokeResult invokeIsset(const StringData* key);
-  bool invokeUnset(const StringData* key);
   InvokeResult invokeNativeGetProp(const StringData* key);
   bool invokeNativeSetProp(const StringData* key, TypedValue val);
   InvokeResult invokeNativeIssetProp(const StringData* key);
@@ -543,8 +537,7 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   tv_lval prop(TypedValue* tvRef, const Class* ctx, const StringData* key);
   tv_lval propW(TypedValue* tvRef, const Class* ctx, const StringData* key);
   tv_lval propU(TypedValue* tvRef, const Class* ctx, const StringData* key);
-  tv_lval propD(TypedValue* tvRef, const Class* ctx,
-                const StringData* key, MInstrPropState* pState);
+  tv_lval propD(TypedValue* tvRef, const Class* ctx, const StringData* key);
 
   bool propIsset(const Class* ctx, const StringData* key);
 

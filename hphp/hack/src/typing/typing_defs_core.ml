@@ -121,7 +121,7 @@ type dependent_type =
    *  The expression $x->foo() would have a different one
    *)
   | DTexpr of Ident.t
-[@@deriving eq]
+[@@deriving eq, ord]
 
 type destructure_kind =
   | ListDestructure
@@ -399,8 +399,8 @@ and locl_fun_type = locl_ty fun_type
  * args expected by the function and the maximum number of args for
  * standard, non-variadic functions or the type of variadic argument taken *)
 and 'ty fun_arity =
-  | Fstandard of int  (** min; max is List.length ft_params *)
-  | Fvariadic of int * 'ty fun_param
+  | Fstandard
+  | Fvariadic of 'ty fun_param
       (** PHP5.6-style ...$args finishes the func declaration.
           min ; variadic param type *)
 

@@ -210,7 +210,12 @@ let rec is_ready : 'a. 'a t -> bool =
   | Delayed { tapped; remaining; value } ->
     promise := Delayed { tapped = tapped + 1; remaining = remaining - 1; value };
     false
-  | Merged (a, b, _) -> is_ready a && is_ready b
+  | Merged (a, b, _) ->
+    (* Prevent the && operator from short-cirtuiting the is-ready check for
+        the second future: *)
+    let is_a_ready = is_ready a in
+    let is_b_ready = is_ready b in
+    is_a_ready && is_b_ready
   | Bound (curr_future, next_producer) ->
     if is_ready curr_future then begin
       let curr_result = get curr_future in
@@ -230,7 +235,8 @@ let merge_status stat_a stat_b handler =
   match (stat_a, stat_b) with
   | (Complete_with_result a, Complete_with_result b) ->
     Complete_with_result (handler a b)
-  | (In_progress { age }, In_progress { age = age_b }) when age > age_b ->
+  | (In_progress { age }, In_progress { age = age_b }) when Float.(age > age_b)
+    ->
     In_progress { age }
   | (In_progress { age }, _)
   | (_, In_progress { age }) ->
@@ -239,7 +245,7 @@ let merge_status stat_a stat_b handler =
 let start_t : 'a. 'a t -> float = (fun (_, time) -> time)
 
 let merge a b handler =
-  (ref (Merged (a, b, handler)), min (start_t a) (start_t b))
+  (ref (Merged (a, b, handler)), Float.min (start_t a) (start_t b))
 
 let make_continue (first : 'first t) next_producer : 'next t =
   (ref (Bound (first, next_producer)), start_t first)

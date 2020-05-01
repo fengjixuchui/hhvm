@@ -206,6 +206,11 @@ function error($message) {
   exit(1);
 }
 
+function success($message) {
+  print "$message\n";
+  exit(0);
+}
+
 // If a user-supplied path is provided, let's make sure we have a valid
 // executable.
 function check_executable($path, $typechecker) {
@@ -1578,10 +1583,6 @@ class Status {
   const YELLOW = 33;
   const BLUE = 34;
 
-  const PASS_SERVER = 0;
-  const SKIP_SERVER = 1;
-  const PASS_CLI = 2;
-
   public static function createTempDir(): void {
     self::$tempdir = sys_get_temp_dir();
     // Apparently some systems might not put the trailing slash
@@ -1681,15 +1682,13 @@ class Status {
     self::send(self::MSG_SERVER_RESTARTED, null);
   }
 
-  public static function pass($test, $detail, $time, $stime, $etime) {
+  public static function pass($test, $time, $stime, $etime) {
     self::$results[] = darray['name' => $test,
                              'status' => 'passed',
                              'start_time' => $stime,
                              'end_time' => $etime,
                              'time' => $time];
-    $how = $detail === 'pass-server' ? self::PASS_SERVER :
-      ($detail === 'skip-server' ? self::SKIP_SERVER : self::PASS_CLI);
-    self::send(self::MSG_TEST_PASS, varray[$test, $how, $time, $stime, $etime]);
+    self::send(self::MSG_TEST_PASS, varray[$test, $time, $stime, $etime]);
   }
 
   public static function skip($test, $reason, $time, $stime, $etime) {
@@ -1750,16 +1749,11 @@ class Status {
 
       case Status::MSG_TEST_PASS:
         self::$passed++;
-        list($test, $how, $time, $stime, $etime) = $message;
+        list($test, $time, $stime, $etime) = $message;
         switch (Status::getMode()) {
           case Status::MODE_NORMAL:
             if (!Status::hasCursorControl()) {
-              if ($how == Status::SKIP_SERVER) {
-                Status::sayColor(Status::RED, '.');
-              } else {
-                Status::sayColor(Status::GREEN,
-                                 $how == Status::PASS_SERVER ? ',' : '.');
-              }
+              Status::sayColor(Status::GREEN, '.');
             }
             break;
 
@@ -2039,20 +2033,43 @@ function is_hack_file($options, $test) {
   return false;
 }
 
-function skip_test($options, $test) {
+function skip_test($options, $test): ?string {
   if (isset($options['hack-only']) &&
       substr($test, -5) !== '.hhas' &&
       !is_hack_file($options, $test)) {
     return 'skip-hack-only';
   }
 
-  if (isset($options['cli-server']) && !can_run_server_test($test)) {
+  if ((isset($options['cli-server']) || isset($options['server'])) &&
+      !can_run_server_test($test, $options)) {
     return 'skip-server';
+  }
+
+  if (isset($options['hhas-round-trip']) && substr($test, -5) === ".hhas") {
+    return 'skip-hhas';
+  }
+
+  if (isset($options['hhbbc2']) || isset($options['hhas-round-trip'])) {
+    $no_hhas_tag = 'nodumphhas';
+    if (file_exists("$test.$no_hhas_tag") ||
+        file_exists(dirname($test).'/'.$no_hhas_tag)) {
+      return 'skip-nodumphhas';
+    }
+    if (file_exists($test . ".verify")) {
+      return 'skip-verify';
+    }
+  }
+
+  if (has_multi_request_mode($options) || isset($options['repo']) ||
+      isset($options['server'])) {
+    if (file_exists($test . ".verify")) {
+      return 'skip-verify';
+    }
   }
 
   $skipif_test = find_test_ext($test, 'skipif');
   if (!$skipif_test) {
-    return false;
+    return null;
   }
 
   // For now, run the .skipif in non-repo since building a repo for it is hard.
@@ -2073,7 +2090,7 @@ function skip_test($options, $test) {
     // This is weird. We can't run HHVM but we probably shouldn't skip the test
     // since on a broken build everything will show up as skipped and give you a
     // SHIPIT.
-    return false;
+    return null;
   }
 
   fclose($pipes[0]);
@@ -2086,10 +2103,10 @@ function skip_test($options, $test) {
   // small blacklist of things that are really bad if they are output so we
   // surface the errors in the tests themselves.
   if (stripos($output, 'segmentation fault') !== false) {
-    return false;
+    return null;
   }
 
-  return strlen($output) === 0 ? false : 'skip-skipif';
+  return strlen($output) === 0 ? null : 'skip-skipif';
 }
 
 function comp_line($l1, $l2, $is_reg) {
@@ -2263,9 +2280,10 @@ function dump_hhas_to_temp($hhvm_cmd, $test) {
 }
 
 const HHAS_EXT = '.hhas';
-function can_run_server_test($test) {
+function can_run_server_test($test, $options) {
   return
     !is_file("$test.noserver") &&
+    !(is_file("$test.nowebserver") && isset($options['server'])) &&
     !find_test_ext($test, 'opts') &&
     !is_file("$test.ini") &&
     !is_file("$test.onlyrepo") &&
@@ -2289,9 +2307,7 @@ function can_run_server_test($test) {
 
 const SERVER_TIMEOUT = 45;
 function run_config_server($options, $test) {
-  if (!isset($options['server']) || !can_run_server_test($test)) {
-    return null;
-  }
+  invariant(can_run_server_test($test, $options), "skip_test should have skipped this");
 
   $config = find_file_for_dir(dirname($test), 'config.ini');
   $port = $options['servers']['configs'][$config]->server['port'];
@@ -2300,19 +2316,14 @@ function run_config_server($options, $test) {
   curl_setopt($ch, CURLOPT_TIMEOUT, SERVER_TIMEOUT);
   curl_setopt($ch, CURLOPT_BINARYTRANSFER, true);
   $output = curl_exec($ch);
-  if ($output === false) {
-    // The server probably crashed so fall back to cli to determine if this was
-    // the test that caused the crash. Our parent process will see that the
-    // server died and restart it.
-    if (getenv('HHVM_TEST_SERVER_LOG')) {
-      printf("Curl failed: %d\n", curl_errno($ch));
-    }
-    return null;
+  if ($output is string) {
+    $output = trim($output);
+  } else {
+    $output = "Error talking to server: " . curl_error($ch);
   }
   curl_close($ch);
-  $output = trim($output);
 
-  return varray[$output, ''];
+  return run_config_post(varray[$output, ''], $test, $options);
 }
 
 function run_config_cli($options, $test, $cmd, $cmd_env) {
@@ -2518,22 +2529,20 @@ function run_config_post($outputs, $test, $options) {
   }
   if (!isset($wanted)) $wanted = $wanted_re;
   $passed = @preg_match("/^$wanted_re\$/s", $output);
+  if ($passed) return true;
   if ($passed === false && $repeats) {
     // $repeats can cause the regex to become too big, and fail
     // to compile.
     return 'skip-repeats-fail';
   }
-  if (!$passed) {
-    $diff = generate_diff($wanted_re, $wanted_re, $output);
-    if ($passed === false && $diff === "") {
-      // the preg match failed, probably because the regex was too complex,
-      // but since the line by line diff came up empty, we're fine
-      $passed = 1;
-    } else {
-      file_put_contents("$test.diff", $diff);
-    }
+  $diff = generate_diff($wanted_re, $wanted_re, $output);
+  if ($passed === false && $diff === "") {
+    // the preg match failed, probably because the regex was too complex,
+    // but since the line by line diff came up empty, we're fine
+    return true;
   }
-  return $passed;
+  file_put_contents("$test.diff", $diff);
+  return false;
 }
 
 function timeout_prefix() {
@@ -2590,31 +2599,36 @@ function run_and_lock_test($options, $test) {
     if (!flock($lock, LOCK_UN, inout $wouldblock)) {
       if ($failmsg !== '') $failmsg .= "\n";
       $failmsg .= "Failed to release test lock";
+      $status = false;
     }
     if (!fclose($lock)) {
       if ($failmsg !== '') $failmsg .= "\n";
       $failmsg .= "Failed to close lock file";
+      $status = false;
     }
   }
-  if ($failmsg !== "") {
+  if ($status === false) {
+    invariant($failmsg !== '', "test failed with empty failmsg");
     Status::fail($test, $time, $stime, $etime, $failmsg);
-  } else if (is_string($status) && substr($status, 0, 4) === 'skip') {
-    if (strlen($status) > 5 && substr($status, 0, 5) === 'skip-') {
-      Status::skip($test, substr($status, 5), $time, $stime, $etime);
-    } else {
-      Status::fail($test, $time, $stime, $etime, "invalid skip status $status");
-    }
-  } else if ($status) {
-    Status::pass($test, $status, $time, $stime, $etime);
+  } else if ($status === true) {
+    invariant($failmsg === '', "test passed with non-empty failmsg $failmsg");
+    Status::pass($test, $time, $stime, $etime);
+  } else if ($status is string) {
+    invariant(
+      preg_match('/^skip-[\w-]+$/', $status),
+      "invalid skip status $status"
+    );
+    invariant($failmsg === '', "test skipped with non-empty failmsg $failmsg");
+    Status::skip($test, substr($status, 5), $time, $stime, $etime);
   } else {
-    Status::fail($test, $time, $stime, $etime, "Unknown failure");
+    invariant_violation("invalid status type " . gettype($status));
   }
 }
 
 function run_typechecker_test($options, $test) {
   $skip_reason = skip_test($options, $test);
-  if ($skip_reason !== false) return $skip_reason;
-  if (!file_exists($test . ".hhconfig")) return 'skip-no-hhconfig';
+  if ($skip_reason !== null) return $skip_reason;
+  invariant(file_exists($test . ".hhconfig"), "find_tests filters on this");
   list($hh_server, $hh_server_env, $temp_dir) = hh_server_cmd($options, $test);
   $result =  run_one_config($options, $test, $hh_server, $hh_server_env);
   // Remove the temporary directory.
@@ -2626,18 +2640,7 @@ function run_typechecker_test($options, $test) {
 
 function run_test($options, $test) {
   $skip_reason = skip_test($options, $test);
-  if ($skip_reason !== false) return $skip_reason;
-
-  // Skip tests that don't make sense in modes where we dump/compare hhas
-  $no_hhas_tag = '.nodumphhas';
-  $no_hhas = file_exists($test.$no_hhas_tag) ||
-             file_exists(dirname($test).'/'.$no_hhas_tag);
-  if ($no_hhas && (
-    isset($options['hhbbc2']) ||
-    isset($options['hhas-round-trip'])
-  )) {
-    return 'skip-nodumphhas';
-  }
+  if ($skip_reason !== null) return $skip_reason;
 
   list($hhvm, $hhvm_env) = hhvm_cmd($options, $test);
   if (has_multi_request_mode($options)) {
@@ -2651,11 +2654,6 @@ function run_test($options, $test) {
         return 'skip-count';
       }
     }
-  }
-
-  if (file_exists($test . ".verify") && (has_multi_request_mode($options) ||
-                                         isset($options['repo']))) {
-      return 'skip-verify';
   }
 
   if (isset($options['repo'])) {
@@ -2732,12 +2730,15 @@ function run_test($options, $test) {
     return run_one_config($options, $test, $hhvm, $hhvm_env);
   }
 
-  if (file_exists($test.'.onlyrepo') || file_exists($test.'.onlyjumpstart')) {
-    return 'skip-onlyrepo or skip-onlyjumpstart';
+  if (file_exists($test.'.onlyrepo')) {
+    return 'skip-onlyrepo';
+  }
+  if (file_exists($test.'.onlyjumpstart')) {
+    return 'skip-onlyjumpstart';
   }
 
   if (isset($options['hhas-round-trip'])) {
-    if (substr($test, -5) === ".hhas") return 'skip-hhas';
+    invariant(substr($test, -5) !== ".hhas", "skip_test should have skipped");
     $hhas_temp = dump_hhas_to_temp($hhvm, $test);
     if ($hhas_temp === false) {
       $err = "system failed: " .
@@ -2749,10 +2750,8 @@ function run_test($options, $test) {
     list($hhvm, $hhvm_env) = hhvm_cmd($options, $test, $hhas_temp);
   }
 
-  if ($outputs = run_config_server($options, $test)) {
-    return run_config_post($outputs, $test, $options) ? 'pass-server'
-      : (run_one_config($options, $test, $hhvm, $hhvm_env) ? 'skip-server'
-         : false);
+  if (isset($options['server'])) {
+    return run_config_server($options, $test);
   }
   return run_one_config($options, $test, $hhvm, $hhvm_env);
 }
@@ -3217,7 +3216,7 @@ function main($argv) {
     error(help());
   }
   if (isset($options['list-tests'])) {
-    error(list_tests($files, $options));
+    success(list_tests($files, $options));
   }
 
   $tests = find_tests($files, $options);
@@ -3301,7 +3300,7 @@ function main($argv) {
     /* We need to start up a separate server process for each config file
      * found. */
     foreach ($tests as $test) {
-      if (!can_run_server_test($test)) continue;
+      if (!can_run_server_test($test, $options)) continue;
       $config = find_file_for_dir(dirname($test), 'config.ini');
       if (!$config) {
         error("Couldn't find config file for $test");
