@@ -76,6 +76,7 @@ let init_lazy_end
     ~state_distance:_
     ~approach_name:_
     ~init_error:_
+    ~init_error_stack:_
     ~init_type:_ =
   ()
 
@@ -242,11 +243,13 @@ let first_redecl_end _ _ = ()
 
 let second_redecl_end _ _ = ()
 
+let primary_position_error ~current_file:_ ~message:_ ~stack:_ = ()
+
 let type_check_end _ ~started_count:_ ~count:_ ~experiments:_ ~start_t:_ = ()
 
 let notifier_returned _ _ = ()
 
-let load_state_exn _ = ()
+let load_state_exn _ ~stack:_ = ()
 
 let prechecked_update_rechecked _ = ()
 

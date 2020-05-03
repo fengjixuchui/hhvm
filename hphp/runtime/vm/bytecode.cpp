@@ -1321,43 +1321,6 @@ static UNUSED int innerCount(TypedValue tv) {
   return isRefcountedType(tv.m_type) ? tvGetCount(tv) : -1;
 }
 
-static inline tv_lval ratchetRefs(tv_lval result,
-                                  TypedValue& tvRef,
-                                  TypedValue& tvRef2) {
-  TRACE(5, "Ratchet: result %p(k%d c%d), ref %p(k%d c%d) ref2 %p(k%d c%d)\n",
-        &val(result), static_cast<data_type_t>(result.type()),
-        innerCount(*result),
-        &tvRef, static_cast<data_type_t>(tvRef.m_type), innerCount(tvRef),
-        &tvRef2, static_cast<data_type_t>(tvRef2.m_type), innerCount(tvRef2));
-  // TODO can remove following ArrayAccess magic removal?
-  // Due to complications associated with ArrayAccess, it is possible to acquire
-  // a reference as a side effect of vector operation processing. Such a
-  // reference must be retained until after the next iteration is complete.
-  // Therefore, move the reference from tvRef to tvRef2, so that the reference
-  // will be released one iteration later. But only do this if tvRef was used in
-  // this iteration, otherwise we may wipe out the last reference to something
-  // that we need to stay alive until the next iteration.
-  if (tvRef.m_type != KindOfUninit) {
-    if (isRefcountedType(tvRef2.m_type)) {
-      tvDecRefCountable(&tvRef2);
-      TRACE(5, "Ratchet: decref tvref2\n");
-      tvWriteUninit(tvRef2);
-    }
-
-    memcpy(&tvRef2, &tvRef, sizeof(TypedValue));
-    tvWriteUninit(tvRef);
-    // Update result to point to relocated reference. This can be done
-    // unconditionally here because we maintain the invariant throughout that
-    // either tvRef is KindOfUninit, or tvRef contains a valid object that
-    // result points to.
-    assertx(&val(result) == &tvRef.m_data);
-    return tv_lval(&tvRef2);
-  }
-
-  assertx(&val(result) != &tvRef.m_data);
-  return result;
-}
-
 /*
  * One iop* function exists for every bytecode. They all take a single PC&
  * argument, which should be left pointing to the next bytecode to execute when
@@ -2914,15 +2877,8 @@ OPTBLD_INLINE void iopCGetS() {
   tvDup(*ss.val, *ss.output);
 }
 
-static inline MInstrState& initMState() {
-  auto& mstate = vmMInstrState();
-  tvWriteUninit(mstate.tvRef);
-  tvWriteUninit(mstate.tvRef2);
-  return mstate;
-}
-
 static inline void baseGImpl(tv_rval key, MOpMode mode) {
-  auto& mstate = initMState();
+  auto& mstate = vmMInstrState();
   StringData* name;
 
   auto const baseVal = (mode == MOpMode::Define)
@@ -2950,8 +2906,7 @@ OPTBLD_INLINE void iopBaseGL(tv_lval loc, MOpMode mode) {
 }
 
 OPTBLD_INLINE void iopBaseSC(uint32_t keyIdx, uint32_t clsIdx, MOpMode mode) {
-  auto& mstate = initMState();
-
+  auto& mstate = vmMInstrState();
   auto const clsCell = vmStack().indC(clsIdx);
   auto const key = vmStack().indTV(keyIdx);
 
@@ -2978,7 +2933,7 @@ OPTBLD_INLINE void iopBaseSC(uint32_t keyIdx, uint32_t clsIdx, MOpMode mode) {
 }
 
 OPTBLD_INLINE void baseLImpl(named_local_var loc, MOpMode mode) {
-  auto& mstate = initMState();
+  auto& mstate = vmMInstrState();
   auto const local = loc.lval;
   if (mode == MOpMode::Warn && type(local) == KindOfUninit) {
     raise_undefined_local(vmfp(), loc.name);
@@ -2991,12 +2946,12 @@ OPTBLD_INLINE void iopBaseL(named_local_var loc, MOpMode mode) {
 }
 
 OPTBLD_INLINE void iopBaseC(uint32_t idx, MOpMode) {
-  auto& mstate = initMState();
+  auto& mstate = vmMInstrState();
   mstate.base = vmStack().indC(idx);
 }
 
 OPTBLD_INLINE void iopBaseH() {
-  auto& mstate = initMState();
+  auto& mstate = vmMInstrState();
   mstate.tvTempBase = make_tv<KindOfObject>(vmfp()->getThis());
   mstate.base = &mstate.tvTempBase;
 }
@@ -3005,25 +2960,23 @@ static OPTBLD_INLINE void propDispatch(MOpMode mode, TypedValue key) {
   auto& mstate = vmMInstrState();
   auto ctx = arGetContextClass(vmfp());
 
-  auto const result = [&]{
+  mstate.base = [&]{
     switch (mode) {
       case MOpMode::None:
-        return Prop<MOpMode::None>(mstate.tvRef, ctx, mstate.base, key);
+        return Prop<MOpMode::None>(mstate.tvTempBase, ctx, mstate.base, key);
       case MOpMode::Warn:
-        return Prop<MOpMode::Warn>(mstate.tvRef, ctx, mstate.base, key);
+        return Prop<MOpMode::Warn>(mstate.tvTempBase, ctx, mstate.base, key);
       case MOpMode::Define:
         return Prop<MOpMode::Define,KeyType::Any>(
-          mstate.tvRef, ctx, mstate.base, key
+          mstate.tvTempBase, ctx, mstate.base, key
         );
       case MOpMode::Unset:
-        return Prop<MOpMode::Unset>(mstate.tvRef, ctx, mstate.base, key);
+        return Prop<MOpMode::Unset>(mstate.tvTempBase, ctx, mstate.base, key);
       case MOpMode::InOut:
         always_assert_flog(false, "MOpMode::InOut can only occur on Elem");
     }
     always_assert(false);
   }();
-
-  mstate.base = ratchetRefs(result, mstate.tvRef, mstate.tvRef2);
 }
 
 static OPTBLD_INLINE void propQDispatch(MOpMode mode, TypedValue key) {
@@ -3032,9 +2985,8 @@ static OPTBLD_INLINE void propQDispatch(MOpMode mode, TypedValue key) {
 
   assertx(mode == MOpMode::None || mode == MOpMode::Warn);
   assertx(key.m_type == KindOfPersistentString);
-  auto const result = nullSafeProp(mstate.tvRef, ctx, mstate.base,
-                                   key.m_data.pstr);
-  mstate.base = ratchetRefs(result, mstate.tvRef, mstate.tvRef2);
+  mstate.base = nullSafeProp(mstate.tvTempBase, ctx, mstate.base,
+                             key.m_data.pstr);
 }
 
 static OPTBLD_INLINE
@@ -3111,9 +3063,6 @@ static OPTBLD_INLINE void mFinal(MInstrState& mstate,
   auto& stack = vmStack();
   for (auto i = 0; i < nDiscard; ++i) stack.popTV();
   if (result) tvCopy(*result, *stack.allocTV());
-
-  tvDecRefGenUnlikely(mstate.tvRef);
-  tvDecRefGenUnlikely(mstate.tvRef2);
 }
 
 static OPTBLD_INLINE
@@ -3218,7 +3167,7 @@ OPTBLD_INLINE void iopSetOpM(uint32_t nDiscard, SetOpOp subop, MemberKey mk) {
   auto& mstate = vmMInstrState();
   auto const result = [&]{
     if (mcodeIsProp(mk.mcode)) {
-      return *SetOpProp(mstate.tvRef, arGetContextClass(vmfp()),
+      return *SetOpProp(mstate.tvTempBase, arGetContextClass(vmfp()),
                         subop, mstate.base, key, rhs);
     } else if (mcodeIsElem(mk.mcode)) {
       return SetOpElem(subop, mstate.base, key, rhs);

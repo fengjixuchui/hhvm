@@ -1446,7 +1446,9 @@ let announce_ide_failure (error_data : ClientIdeMessage.stopped_reason) :
       error_data.long_user_message
       error_data.debug_details
   in
-  let%lwt upload_result = Clowder_paste.clowder_paste ~timeout:10. input in
+  let%lwt upload_result =
+    Clowder_paste.clowder_upload_and_get_url ~timeout:10. input
+  in
   let append_to_log =
     match upload_result with
     | Ok url -> Printf.sprintf "\nMore details: %s" url
@@ -4712,7 +4714,8 @@ let main (env : env) : Exit_status.t Lwt.t =
       in
       deferred_action := None;
       let%lwt event = get_next_event !state client ide_service in
-      log_debug "next event: %s" (event_to_string event);
+      if not (is_tick event) then
+        log_debug "next event: %s" (event_to_string event);
       ref_event := Some event;
       ref_unblocked_time := Unix.gettimeofday ();
 
