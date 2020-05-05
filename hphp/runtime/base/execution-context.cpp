@@ -1119,7 +1119,7 @@ ObjectData* ExecutionContext::initObject(const Class* class_,
   if (!isContainerOrNull(params)) {
     throw_param_is_not_container();
   }
-  tvDecRefGen(invokeFunc(ctor, params, o, nullptr, nullptr, true, false, true));
+  tvDecRefGen(invokeFunc(ctor, params, o, nullptr, true, false, true));
   return o;
 }
 
@@ -1261,11 +1261,10 @@ TypedValue ExecutionContext::invokeUnit(const Unit* unit,
       invokeFunc(
         Unit::lookupFunc(s_enter_async_entry_point.get()),
         make_vec_array_tagged(ARRPROV_HERE(), Variant{it}),
-        nullptr, nullptr, nullptr, false
+        nullptr, nullptr, false
       );
     } else {
-      invokeFunc(it, init_null_variant, nullptr, nullptr,
-                 nullptr, false);
+      invokeFunc(it, init_null_variant, nullptr, nullptr, false);
     }
   }
   return ret;
@@ -1436,8 +1435,6 @@ void ExecutionContext::requestInit() {
 }
 
 void ExecutionContext::requestExit() {
-  apcExtension::purgeDeferred(std::move(m_apcDeferredExpire));
-
   autoTypecheckRequestExit();
   HHProf::Request::FinishProfiling();
 
@@ -1622,7 +1619,6 @@ TypedValue ExecutionContext::invokeFunc(const Func* f,
                                         const Variant& args_,
                                         ObjectData* thiz /* = NULL */,
                                         Class* cls /* = NULL */,
-                                        StringData* invName /* = NULL */,
                                         bool dynamic /* = true */,
                                         bool checkRefAnnot /* = false */,
                                         bool allowDynCallNoPointer
@@ -1654,20 +1650,10 @@ TypedValue ExecutionContext::invokeFunc(const Func* f,
   auto const& args = *args_.asTypedValue();
   assertx(isContainerOrNull(args));
   auto numArgs = tvIsNull(args) ? 0 : getContainerSize(args);
-  if (numArgs == 0) {
-    if (UNLIKELY(invName != nullptr)) {
-      shuffleMagicArgs(String::attach(invName), 0, false);
-      numArgs = 2;
-    }
-  } else {
+  if (numArgs > 0) {
     assertx(isContainer(args));
     tvDup(args, *vmStack().allocC());
-    if (LIKELY(invName == nullptr)) {
-      numArgs = prepareUnpackArgs(f, 0, checkRefAnnot);
-    } else {
-      shuffleMagicArgs(String::attach(invName), 0, true);
-      numArgs = 2;
-    }
+    numArgs = prepareUnpackArgs(f, 0, checkRefAnnot);
   }
 
   // Caller checks.
@@ -1684,7 +1670,6 @@ TypedValue ExecutionContext::invokeFunc(const Func* f,
 TypedValue ExecutionContext::invokeFuncFew(
   const Func* f,
   ExecutionContext::ThisOrClass thisOrCls,
-  StringData* invName,
   uint32_t numArgs,
   const TypedValue* argv,
   bool dynamic /* = true */,
@@ -1706,35 +1691,24 @@ TypedValue ExecutionContext::invokeFuncFew(
   for (auto i = f->numInOutParams(); i > 0; --i) stack.pushUninit();
   for (auto i = kNumActRecCells; i > 0; --i) stack.pushUninit();
 
-  auto const pushPackedArgs = [&](uint32_t from) {
-    VArrayInit ai{numArgs - from};
-    for (auto i = from; i < numArgs; ++i) ai.append(argv[i]);
+  // Push non-variadic arguments.
+  auto const numParams = f->numNonVariadicParams();
+  for (auto i = 0; i < numArgs && i < numParams; ++i) {
+    const TypedValue *from = &argv[i];
+    TypedValue* to = stack.allocTV();
+    tvDup(*from, *to);
+  }
+
+  // Push variadic arguments.
+  if (UNLIKELY(numParams < numArgs)) {
+    VArrayInit ai{numArgs - numParams};
+    for (auto i = numParams; i < numArgs; ++i) ai.append(argv[i]);
     if (RuntimeOption::EvalHackArrDVArrs) {
       stack.pushVecNoRc(ai.create());
     } else {
       stack.pushArrayNoRc(ai.create());
     }
-  };
-
-  if (LIKELY(invName == nullptr)) {
-    // Push non-variadic arguments.
-    auto const numParams = f->numNonVariadicParams();
-    for (auto i = 0; i < numArgs && i < numParams; ++i) {
-      const TypedValue *from = &argv[i];
-      TypedValue* to = stack.allocTV();
-      tvDup(*from, *to);
-    }
-
-    // Push variadic arguments.
-    if (UNLIKELY(numParams < numArgs)) {
-      pushPackedArgs(numParams);
-      numArgs = numParams + 1;
-    }
-  } else {
-    // Push method name plus varray of args for magic __call().
-    stack.pushStringNoRc(invName);
-    pushPackedArgs(0);
-    numArgs = 2;
+    numArgs = numParams + 1;
   }
 
   // Caller checks.
@@ -1992,12 +1966,6 @@ void ExecutionContext::clearLastError() {
   m_lastErrorLine = 0;
 }
 
-void ExecutionContext::enqueueAPCDeferredExpire(const String& key) {
-  auto keyStr = key.get();
-  keyStr->incRefCount();
-  m_apcDeferredExpire.push_back(keyStr);
-}
-
 void ExecutionContext::enqueueAPCHandle(APCHandle* handle, size_t size) {
   assertx(handle->isUncounted());
   if (RuntimeOption::EvalGCForAPC) {
@@ -2251,8 +2219,7 @@ ExecutionContext::evalPHPDebugger(Unit* unit, int frame) {
 
     auto const obj = ctx && fp->hasThis() ? fp->getThis() : nullptr;
     auto const cls = ctx && fp->hasClass() ? fp->getClass() : nullptr;
-    auto const arr_tv = invokeFunc(f, args.toArray(), obj, cls,
-                                   nullptr, false, false, false, Array());
+    auto const arr_tv = invokeFunc(f, args.toArray(), obj, cls, false);
     assertx(isArrayLikeType(type(arr_tv)));
     assertx(val(arr_tv).parr->size() == f->numParams() + 1);
     Array arr = Array::attach(val(arr_tv).parr);

@@ -353,7 +353,6 @@ public:
   void enqueueAPCHandle(APCHandle* handle, size_t size);
 
   void manageAPCHandle();
-  void enqueueAPCDeferredExpire(const String&);
   void cleanup();
 
 public:
@@ -473,7 +472,6 @@ public:
                         const Variant& args_ = init_null_variant,
                         ObjectData* this_ = nullptr,
                         Class* class_ = nullptr,
-                        StringData* invName = nullptr,
                         bool dynamic = true,
                         bool checkRefAnnot = false,
                         bool allowDynCallNoPointer = false,
@@ -484,15 +482,13 @@ public:
 
   TypedValue invokeFuncFew(const Func* f,
                            ThisOrClass thisOrCls,
-                           StringData* invName,
                            uint32_t numArgs,
                            const TypedValue* argv,
                            bool dynamic = true,
                            bool allowDynCallNoPointer = false);
 
   TypedValue invokeFuncFew(const Func* f,
-                           ThisOrClass thisOrCls,
-                           StringData* invName = nullptr);
+                           ThisOrClass thisOrCls);
 
   TypedValue invokeFuncFew(const CallCtx& ctx,
                            uint32_t numArgs,
@@ -588,7 +584,6 @@ public:
 private:
   size_t m_apcMemSize{0};
   std::vector<APCHandle*> m_apcHandles; // gets moved to treadmill
-  req::vector<StringData*> m_apcDeferredExpire;
 public:
   // Although the error handlers may want to access dynamic properties,
   // we cannot *call* the error handlers (or their destructors) while
