@@ -17,13 +17,10 @@
  *
  */
 use flatten_smart_constructors::*;
-use parser_core_types::source_text::SourceText;
-use parser_core_types::indexed_source_text::IndexedSourceText;
 use smart_constructors::SmartConstructors;
-use parser_core_types::parser_env::ParserEnv;
 use parser_core_types::positioned_token::PositionedToken;
 
-use crate::*;
+use crate::{State, Node};
 
 #[derive(Clone)]
 pub struct DirectDeclSmartConstructors<'src> {
@@ -31,11 +28,7 @@ pub struct DirectDeclSmartConstructors<'src> {
 }
 impl<'src> SmartConstructors<'src, State<'src>> for DirectDeclSmartConstructors<'src> {
     type Token = PositionedToken;
-    type R = Node;
-
-    fn new(_: &ParserEnv, src: &SourceText<'src>) -> Self {
-        Self { state: State::new(IndexedSourceText::new(src.clone())) }
-    }
+    type R = Node<'src>;
 
     fn state_mut(&mut self) -> &mut State<'src> {
         &mut self.state

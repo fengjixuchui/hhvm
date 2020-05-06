@@ -913,9 +913,11 @@ struct RuntimeOption {
   /* How many elements to inline for packed- or mixed-array inits. */   \
   F(uint32_t, HHIRMaxInlineInitPackedElements, 8)                       \
   F(uint32_t, HHIRMaxInlineInitMixedElements,  4)                       \
-  F(double, HHIRMixedArrayProfileThreshold, 0.8554)                     \
+  F(double, HHIROffsetArrayProfileThreshold, 0.85)                      \
   F(double, HHIRSmallArrayProfileThreshold, 0.8)                        \
-  F(double, HHIREmptyArrayProfileThreshold, 1.2) /* disabled */         \
+  F(double, HHIRMissingArrayProfileThreshold, 0.8)                      \
+  F(double, HHIRExitArrayProfileThreshold, 0.98)                        \
+  F(double, HHIROffsetExitArrayProfileThreshold, 1.2)  /* disabled */   \
   /* Register allocation flags */                                       \
   F(bool, HHIREnablePreColoring,       true)                            \
   F(bool, HHIREnableCoalescing,        true)                            \
@@ -1171,6 +1173,9 @@ struct RuntimeOption {
   F(bool, FatalOnConvertObjectToString, false)                          \
   F(bool, NoticeOnBuiltinDynamicCalls, false)                           \
   F(bool, RxPretendIsEnabled, false)                                    \
+  /* When true function pointers will pass string typehints and checks,
+     while optionally raising notices. */                               \
+  F(bool, EnableFuncStringInterop, true)                                \
   /* Raise warning when function pointers are used as strings. */       \
   F(bool, RaiseFuncConversionWarning, false)                            \
   /* Raise warning when class pointers are used as strings. */          \

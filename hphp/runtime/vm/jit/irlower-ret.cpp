@@ -160,7 +160,7 @@ void cgRetCtrl(IRLS& env, const IRInstruction* inst) {
 
   prepare_return_regs(v, inst->src(2), srcLoc(env, inst, 2),
                       inst->extra<RetCtrl>()->aux);
-  v << phpret{fp, rvmfp(), php_return_regs()};
+  v << phpret{fp, php_return_regs()};
 }
 
 void cgAsyncFuncRet(IRLS& env, const IRInstruction* inst) {
@@ -235,7 +235,7 @@ void cgReleaseVVAndSkip(IRLS& env, const IRInstruction* inst) {
   auto& vc = vcold(env);
 
   auto const profile = TargetProfile<ReleaseVVProfile> {
-    env.unit, inst->marker(), s_ReleaseVV.get()
+    env.unit.context(), inst->marker(), s_ReleaseVV.get()
   };
 
   if (profile.profiling()) {

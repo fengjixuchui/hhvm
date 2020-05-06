@@ -18,6 +18,14 @@ pub use crate::facts_smart_constructors_generated::*;
 
 pub type HasScriptContent<'a> = (bool, SourceText<'a>);
 
+impl<'src> FactsSmartConstructors<'src> {
+    pub fn new(src: &SourceText<'src>) -> Self {
+        Self {
+            state: (false, src.clone()),
+        }
+    }
+}
+
 // TODO(leoo) consider avoiding always materializing substrings using something like (hard):
 // type GetName<'a> = Box<Fn() -> &'a [u8]>;  // would require lifetime 'a param everywhere
 pub struct GetName {
@@ -108,7 +116,7 @@ pub struct TypeAliasDeclChildren {
 impl<'a> FlattenOp for FactsSmartConstructors<'_> {
     type S = Node;
 
-    fn flatten(lst: Vec<Self::S>) -> Self::S {
+    fn flatten(&self, lst: Vec<Self::S>) -> Self::S {
         let mut r = lst
             .into_iter()
             .map(|s| match s {

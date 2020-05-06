@@ -1444,12 +1444,13 @@ void VariableSerializer::serializeFunc(const Func* func) {
       m_buf->append(')');
       break;
     case Type::JSON:
-      write(StrNR(funcToStringHelper(func)));
+      write(func->nameStr());
       break;
     case Type::Serialize:
     case Type::Internal:
     case Type::APCSerialize:
     case Type::DebuggerSerialize:
+      invalidFuncConversion("string");
       write(StrNR(funcToStringHelper(func)));
       break;
   }

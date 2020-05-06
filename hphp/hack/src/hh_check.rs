@@ -41,33 +41,34 @@ struct Opts {
 }
 
 /// DeclProvider for tests - assumes that all the declarations come from a single file
-struct TestDeclProvider {
-    decls: oxidized::direct_decl_parser::Decls,
+struct TestDeclProvider<'a> {
+    decls: &'a oxidized_by_ref::direct_decl_parser::Decls<'a>,
 }
 
-impl TestDeclProvider {
-    fn new(path: &RelativePath, text: &[u8]) -> Self {
-        let decls = match decl_rust::direct_decl_parser::parse_decls(
-            path.clone(),
-            &String::from_utf8_lossy(text),
-        ) {
+impl<'a> TestDeclProvider<'a> {
+    fn new(path: &RelativePath, text: &'a [u8], arena: &'a Bump) -> Self {
+        let decls = match decl_rust::direct_decl_parser::parse_decls(path.clone(), text, arena) {
             Err(e) => panic!("{:?}", e),
-            Ok(decls) => decls,
+            Ok(decls) => arena.alloc(decls),
         };
         Self { decls }
     }
 }
 
-impl decl_provider::DeclProvider for TestDeclProvider {
-    fn get_fun(&self, s: &str) -> Option<&decl_provider::FunDecl> {
-        self.decls.funs.get(s)
-    }
-    fn get_class(&self, name: &str) -> Option<&decl_provider::ClassDecl> {
-        // Unlike the existing OCaml decl provider, classes in the direct decl parser don't seem to
-        // have namespace qualification
+impl decl_provider::DeclProvider for TestDeclProvider<'_> {
+    fn get_fun(&self, s: &str) -> Option<&decl_provider::FunDecl<'_>> {
+        // Names in function call expressions don't seem to be fully-qualified
+        // in hh_check yet.
         // TODO: fix this
-        let stripped = name.trim_start_matches("\\");
-        self.decls.classes.get(stripped)
+        let s = format!("\\{}", s);
+        self.decls.funs.get(&*s)
+    }
+    fn get_class(&self, name: &str) -> Option<&decl_provider::ClassDecl<'_>> {
+        // Class names in expressions don't seem to be fully-qualified in
+        // hh_check yet.
+        // TODO: fix this
+        let name = format!("\\{}", name);
+        self.decls.classes.get(&*name)
     }
 }
 
@@ -91,7 +92,7 @@ fn process_single_file_impl(
     let rel_path = RelativePath::make(relative_path::Prefix::Dummy, filepath.to_owned());
     let arena = Bump::new();
     let builder = typing_make_type::TypeBuilder::new(&arena);
-    let provider = TestDeclProvider::new(&rel_path, content);
+    let provider = TestDeclProvider::new(&rel_path, content, &arena);
     let profile = from_text(
         &builder,
         &provider,

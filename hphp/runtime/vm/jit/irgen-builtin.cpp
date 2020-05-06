@@ -951,19 +951,6 @@ SSATmp* opt_shapes_idx(IRGS& env, const ParamPrep& params) {
   auto const nparams = params.size();
   if (nparams != 2 && nparams != 3) return nullptr;
 
-  // params[0] is a darray, which may be a Dict or an Arr based on options.
-  // If the Hack typehint check flag is on, then we fall back to the native
-  // implementation of this method, which checks the DVArray bit in ArrayData.
-  bool is_dict;
-  auto const arrType = params[0].value->type();
-  if (RuntimeOption::EvalHackArrDVArrs && arrType <= TDict) {
-    is_dict = true;
-  } else if (!RuntimeOption::EvalHackArrDVArrs && arrType <= TArr) {
-    is_dict = false;
-  } else {
-    return nullptr;
-  }
-
   // params[1] is an arraykey. We only optimize if it's narrowed to int or str.
   auto const keyType = params[1].value->type();
   if (!(keyType <= TInt || keyType <= TStr)) return nullptr;
@@ -973,6 +960,22 @@ SSATmp* opt_shapes_idx(IRGS& env, const ParamPrep& params) {
   auto const defType = nparams == 3 ? params[2].value->type() : TUninit;
   if (!(defType <= TUninit) && defType.maybe(TUninit)) return nullptr;
   auto const def = defType <= TUninit ? cns(env, TInitNull) : params[2].value;
+
+  // params[0] is an ?darray, which may be a ?Dict or an ?Arr based on options.
+  // If the Hack typehint check flag is on, then we fall back to the native
+  // implementation of this method, which checks the DVArray bit in ArrayData.
+  bool is_dict;
+  auto const arrType = params[0].value->type();
+  if (RuntimeOption::EvalHackArrDVArrs && arrType <= TDict) {
+    is_dict = true;
+  } else if (!RuntimeOption::EvalHackArrDVArrs && arrType <= TArr) {
+    is_dict = false;
+  } else if (arrType <= TNull) {
+    gen(env, IncRef, def);
+    return def;
+  } else {
+    return nullptr;
+  }
 
   // params[0] is the array, for which we may need to do a dvarray check.
   auto const arr = [&]() -> SSATmp* {
@@ -995,6 +998,8 @@ SSATmp* opt_shapes_idx(IRGS& env, const ParamPrep& params) {
 
   // Do the array access, using array offset profiling to optimize it.
   auto const key = params[1].value;
+  // we might side-exit in profiledArrayAccess
+  env.irb->fs().incBCSPDepth(nparams);
   auto const elm = profiledArrayAccess(
     env, arr, key, MOpMode::None,
     [&] (SSATmp* arr, SSATmp* key, uint32_t pos) {
@@ -1007,6 +1012,7 @@ SSATmp* opt_shapes_idx(IRGS& env, const ParamPrep& params) {
       return gen(env, op, data, arr, key, def);
     }
   );
+  env.irb->fs().decBCSPDepth(nparams);
 
   auto const finish = [&](SSATmp* val){
     gen(env, IncRef, val);
@@ -1546,7 +1552,8 @@ SSATmp* maybeCoerceValue(
 ) {
   auto bail = [&] { fail(); return cns(env, TBottom); };
   if (target <= TStr) {
-    if (!val->type().maybe(TFunc|TCls)) return bail();
+    auto const allowedTy = RO::EvalEnableFuncStringInterop ? TFunc|TCls : TCls;
+    if (!val->type().maybe(allowedTy)) return bail();
 
     auto castW = [&] (SSATmp* val, bool isCls){
       if (RuntimeOption::EvalStringHintNotices) {
@@ -1565,21 +1572,27 @@ SSATmp* maybeCoerceValue(
       return update(val);
     };
 
+    auto checkCls = [&] {
+      return cond(
+        env,
+        [&] (Block* f) { return gen(env, CheckType, TCls, f, val); },
+        [&] (SSATmp* cval) { return castW(gen(env, LdClsName, cval), true); },
+        [&] {
+          hint(env, Block::Hint::Unlikely);
+          return bail();
+        }
+      );
+    };
+
+    if (!RO::EvalEnableFuncStringInterop) return checkCls();
+
     return cond(
       env,
       [&] (Block* f) { return gen(env, CheckType, TFunc, f, val); },
       [&] (SSATmp* fval) { return castW(gen(env, LdFuncName, fval), false); },
       [&] {
         hint(env, Block::Hint::Unlikely);
-        return cond(
-          env,
-          [&] (Block* f) { return gen(env, CheckType, TCls, f, val); },
-          [&] (SSATmp* cval) { return castW(gen(env, LdClsName, cval), true); },
-          [&] {
-            hint(env, Block::Hint::Unlikely);
-            return bail();
-          }
-        );
+        return checkCls();
       }
     );
   }
@@ -2298,11 +2311,10 @@ void implArrayIdx(IRGS& env) {
     return;
   }
 
-  auto const def = popC(env, DataTypeGeneric); // a helper will decref it but
-                                               // the translated code doesn't
-                                               // care about the type
-  auto const key = popC(env);
-  auto const base = popC(env);
+  // A helper will decref it but the translated code doesn't care about the type
+  auto const def = topC(env, BCSPRelOffset{0}, DataTypeGeneric);
+  auto const key = topC(env, BCSPRelOffset{1});
+  auto const base = topC(env, BCSPRelOffset{2});
 
   auto const elem = profiledArrayAccess(
     env, base, key, MOpMode::None,
@@ -2316,6 +2328,7 @@ void implArrayIdx(IRGS& env) {
   );
 
   auto finish = [&](SSATmp* tmp) {
+    popC(env); popC(env); popC(env);
     pushIncRef(env, tmp);
     decRef(env, base);
     decRef(env, key);
@@ -2371,11 +2384,12 @@ void implVecIdx(IRGS& env, SSATmp* loaded_collection_vec) {
 void implDictKeysetIdx(IRGS& env,
                        bool is_dict,
                        SSATmp* loaded_collection_dict) {
-  auto const def = popC(env);
-  auto const key = popC(env);
-  auto const stack_base = popC(env);
+  auto const def = topC(env, BCSPRelOffset{0});
+  auto const key = topC(env, BCSPRelOffset{1});
+  auto const stack_base = topC(env, BCSPRelOffset{2});
 
   auto const finish = [&](SSATmp* elem) {
+    popC(env); popC(env); popC(env);
     pushIncRef(env, elem);
     decRef(env, def);
     decRef(env, key);
