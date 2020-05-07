@@ -1097,31 +1097,11 @@ function hhvm_cmd($options, $test, $test_run = null, $is_temp_file = false) {
     $cmd .= " -vScribe.Tables.hhvm_jit.include.*=deployment_id";
   }
 
-  // Command line arguments
-  $cli_args = find_test_ext($test, 'cli_args');
-  if ($cli_args !== null) {
-    $cmd .= " -- " . trim(file_get_contents($cli_args));
-  }
-
   $env = $_ENV;
-  $extra_env = varray[];
 
   // Apply the --env option
   if (isset($options['env'])) {
-    $extra_env = array_merge($extra_env,
-      explode(",", $options['env']));
-  }
-
-  // If there's an <test name>.env file then inject the contents of that into
-  // the test environment.
-  $env_file = find_test_ext($test, 'env');
-  if ($env_file !== null) {
-    $extra_env = array_merge($extra_env,
-      explode("\n", trim(file_get_contents($env_file))));
-  }
-
-  if ($extra_env) {
-    foreach ($extra_env as $arg) {
+    foreach (explode(",", $options['env']) as $arg) {
       $i = strpos($arg, '=');
       if ($i) {
         $key = substr($arg, 0, $i);
@@ -2033,7 +2013,7 @@ function is_hack_file($options, $test) {
   return false;
 }
 
-function skip_test($options, $test): ?string {
+function skip_test($options, $test, $run_skipif = true): ?string {
   if (isset($options['hack-only']) &&
       substr($test, -5) !== '.hhas' &&
       !is_hack_file($options, $test)) {
@@ -2065,8 +2045,12 @@ function skip_test($options, $test): ?string {
     if (file_exists($test . ".verify")) {
       return 'skip-verify';
     }
+    if (find_debug_config($test, 'hphpd.ini')) {
+      return 'skip-debugger';
+    }
   }
 
+  if (!$run_skipif) return null;
   $skipif_test = find_test_ext($test, 'skipif');
   if (!$skipif_test) {
     return null;
@@ -2279,30 +2263,43 @@ function dump_hhas_to_temp($hhvm_cmd, $test) {
   return $ret === 0 ? $temp_file : false;
 }
 
+const SERVER_EXCLUDE_PATHS = vec[
+  'quick/xenon/',
+  'slow/streams/',
+  'slow/ext_mongo/',
+  'slow/ext_oauth/',
+  'slow/ext_vsdebug/',
+  'zend/good/ext/standard/tests/array/',
+];
 const HHAS_EXT = '.hhas';
 function can_run_server_test($test, $options) {
-  return
-    !is_file("$test.noserver") &&
-    !(is_file("$test.nowebserver") && isset($options['server'])) &&
-    !find_test_ext($test, 'opts') &&
-    !is_file("$test.ini") &&
-    !is_file("$test.onlyrepo") &&
-    !is_file("$test.onlyjumpstart") &&
-    !is_file("$test.use.for.ini.migration.testing.only.hdf") &&
-    strpos($test, 'quick/debugger') === false &&
-    strpos($test, 'quick/xenon') === false &&
-    strpos($test, 'slow/streams/') === false &&
-    strpos($test, 'slow/ext_mongo/') === false &&
-    strpos($test, 'slow/ext_oauth/') === false &&
-    strpos($test, 'slow/ext_vsdebug/') === false &&
-    strpos($test, 'slow/ext_yaml/') === false &&
-    strpos($test, 'slow/ext_xdebug/') === false &&
-    strpos($test, 'slow/debugger/') === false &&
-    strpos($test, 'slow/type_profiler/debugger/') === false &&
-    strpos($test, 'zend/good/ext/standard/tests/array/') === false &&
-    strpos($test, 'zend/good/ext/ftp') === false &&
-    strrpos($test, HHAS_EXT) !== (strlen($test) - strlen(HHAS_EXT))
-    ;
+  // explicitly disabled
+  if (is_file("$test.noserver") ||
+      (is_file("$test.nowebserver") && isset($options['server']))) {
+    return false;
+  }
+
+  // has its own config
+  if (find_test_ext($test, 'opts') || is_file("$test.ini") ||
+      is_file("$test.use.for.ini.migration.testing.only.hdf")) {
+    return false;
+  }
+
+  // we can't run repo only tests in server modes
+  if (is_file("$test.onlyrepo") || is_file("$test.onlyjumpstart")) {
+    return false;
+  }
+
+  foreach (SERVER_EXCLUDE_PATHS as $path) {
+    if (strpos($test, $path) !== false) return false;
+  }
+
+  // don't run hhas tests in server modes
+  if (strrpos($test, HHAS_EXT) === (strlen($test) - strlen(HHAS_EXT))) {
+    return false;
+  }
+
+  return true;
 }
 
 const SERVER_TIMEOUT = 45;
@@ -2643,21 +2640,22 @@ function run_test($options, $test) {
   if ($skip_reason !== null) return $skip_reason;
 
   list($hhvm, $hhvm_env) = hhvm_cmd($options, $test);
-  if (has_multi_request_mode($options)) {
-    if (isset($options['jit-serialize']) || isset($options['cli-server'])) {
-      if (preg_grep('/ --count[ =][0-9]+ /', (array)$hhvm)) {
-        return 'skip-count';
-      }
-    } else {
-      if (preg_grep('/ --count[ =][0-9]+ .* --count[ =][0-9]+ /',
-                    (array)$hhvm)) {
-        return 'skip-count';
-      }
+
+  if (preg_grep('/ --count[ =][0-9]+ .* --count[ =][0-9]+( |$)/',
+                (array)$hhvm)) {
+    // we got --count from 2 sources (e.g. .opts file and multi_request_mode)
+    // this can't work so skip the test
+    return 'skip-count';
+  } else if (isset($options['jit-serialize'])) {
+    // jit-serialize adds the --count option later, so even 1 --count in the
+    // command means we have to skip
+    if (preg_grep('/ --count[ =][0-9]+( |$)/', (array)$hhvm)) {
+      return 'skip-count';
     }
   }
 
   if (isset($options['repo'])) {
-    if (preg_grep('/-m debug/', (array)$hhvm) || file_exists($test.'.norepo')) {
+    if (file_exists($test.'.norepo')) {
       return 'skip-norepo';
     }
     if (file_exists($test.'.onlyjumpstart') &&
@@ -3295,17 +3293,18 @@ function main($argv) {
     if (isset($options['repo']) || isset($options['typechecker'])) {
       error("Server mode repo tests are not supported");
     }
-    $configs = darray[];
 
     /* We need to start up a separate server process for each config file
      * found. */
+    $configs = keyset[];
     foreach ($tests as $test) {
-      if (!can_run_server_test($test, $options)) continue;
       $config = find_file_for_dir(dirname($test), 'config.ini');
       if (!$config) {
         error("Couldn't find config file for $test");
       }
-      $configs[$config] = $config;
+      if (array_key_exists($config, $configs)) continue;
+      if (skip_test($options, $test, false) !== null) continue;
+      $configs[] = $config;
     }
 
     $max_configs = 30;
