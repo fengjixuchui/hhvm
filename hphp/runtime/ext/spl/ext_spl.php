@@ -5,7 +5,7 @@
  * @return array - Returns an array containing the currently available SPL
  * classes.
  */
-function spl_classes(): array {
+function spl_classes(): darray {
   return darray[
     AppendIterator::class => AppendIterator::class,
     ArrayIterator::class => ArrayIterator::class,
@@ -128,7 +128,7 @@ function class_uses(mixed $obj,
  * @param array $params - Arguments to pass to the callback function.
  * @return mixed - Returns the iteration count.
  */
-function iterator_apply(mixed $obj, mixed $func, array $params = varray[]): mixed {
+function iterator_apply(mixed $obj, mixed $func, varray $params = varray[]): mixed {
   if (!is_object($obj) || !($obj is \HH\Traversable)) {
     trigger_error("Argument must implement interface Traversable", E_RECOVERABLE_ERROR);
     return 0;
@@ -164,7 +164,7 @@ function iterator_count(mixed $obj): mixed {
  * @param bool $use_keys - Whether to use the iterator element keys as index.
  * @return mixed - An array containing the elements of the iterator.
  */
-function iterator_to_array(mixed $obj, bool $use_keys = true): array {
+function iterator_to_array(mixed $obj, bool $use_keys = true): darray {
   if (!is_object($obj) || !($obj is \HH\Traversable)) {
     trigger_error("Argument must implement interface Traversable", E_RECOVERABLE_ERROR);
     return 0;

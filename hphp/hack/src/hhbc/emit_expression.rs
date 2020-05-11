@@ -3,8 +3,6 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-#![allow(unused_variables, dead_code)]
-
 use ast_class_expr_rust::ClassExpr;
 use ast_constant_folder_rust as ast_constant_folder;
 use emit_adata_rust as emit_adata;
@@ -434,6 +432,7 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         }
         Expr_::Call(c) => emit_call_expr(emitter, env, pos, None, c),
         Expr_::New(e) => emit_new(emitter, env, pos, e),
+        Expr_::FunctionPointer(fp) => emit_function_pointer(emitter, env, &fp.0),
         Expr_::Record(e) => emit_record(emitter, env, pos, e),
         Expr_::Array(es) => Ok(emit_pos_then(
             pos,
@@ -491,7 +490,7 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::BracedExpr(e) => emit_expr(emitter, env, e),
         Expr_::Id(e) => Ok(emit_pos_then(pos, emit_id(emitter, env, e)?)),
         Expr_::Xml(e) => emit_xhp(emitter, env, pos, e),
-        Expr_::Callconv(e) => Err(unrecoverable(
+        Expr_::Callconv(_) => Err(unrecoverable(
             "emit_callconv: This should have been caught at emit_arg",
         )),
         Expr_::Import(e) => emit_import(emitter, env, pos, &e.0, &e.1),
@@ -810,12 +809,7 @@ fn emit_lambda(e: &mut Emitter, env: &Env, fndef: &tast::Fun_, ids: &[aast_defs:
                                     ),
                                 )))
                             } else {
-                                emit_reified_generic_instrs(
-                                    e,
-                                    &Pos::make_none(),
-                                    is_fun,
-                                    i as usize,
-                                )
+                                emit_reified_generic_instrs(&Pos::make_none(), is_fun, i as usize)
                             }
                         }
                         None => Ok({
@@ -1375,7 +1369,7 @@ fn emit_dynamic_collection(
         E_::Darray(_) => {
             if is_struct_init(e, env, fields, false /* allow_numerics */) {
                 let hack_arr_dv_arrs = hack_arr_dv_arrs(e.options());
-                emit_struct_array(e, env, pos, fields, |e, arg| {
+                emit_struct_array(e, env, pos, fields, |_, arg| {
                     let instr = if hack_arr_dv_arrs {
                         instr::newstructdict(arg)
                     } else {
@@ -1644,7 +1638,7 @@ fn emit_call(
             if lower_fq_name == "assert" {
                 emit_special_function_assert(e, env, pos, expr, targs, args, uarg, fcall_args)
             } else {
-                emit_special_function(e, env, pos, &expr.0, &id, args, uarg, lower_fq_name)
+                emit_special_function(e, env, pos, args, uarg, lower_fq_name)
                     .transpose()
                     .unwrap_or_else(|| {
                         emit_call_default(e, env, pos, expr, targs, args, uarg, fcall_args)
@@ -1888,7 +1882,7 @@ fn emit_call_lhs_and_fcall(
             let (cid, (_, id)) = &**cls_const;
             let mut cexpr = ClassExpr::class_id_to_class_expr(e, false, false, &env.scope, cid);
             if let ClassExpr::Id(ast_defs::Id(_, name)) = &cexpr {
-                if let Some(reified_var_cexpr) = get_reified_var_cexpr(e, env, pos, &name)? {
+                if let Some(reified_var_cexpr) = get_reified_var_cexpr(env, pos, &name)? {
                     cexpr = reified_var_cexpr;
                 }
             }
@@ -1974,7 +1968,7 @@ fn emit_call_lhs_and_fcall(
             let (cid, cls_get_expr) = &**class_get;
             let mut cexpr = ClassExpr::class_id_to_class_expr(e, false, false, &env.scope, cid);
             if let ClassExpr::Id(ast_defs::Id(_, name)) = &cexpr {
-                if let Some(reified_var_cexpr) = get_reified_var_cexpr(e, env, pos, &name)? {
+                if let Some(reified_var_cexpr) = get_reified_var_cexpr(env, pos, &name)? {
                     cexpr = reified_var_cexpr;
                 }
             }
@@ -2125,13 +2119,8 @@ fn emit_call_lhs_and_fcall(
     }
 }
 
-fn get_reified_var_cexpr(
-    e: &mut Emitter,
-    env: &Env,
-    pos: &Pos,
-    name: &str,
-) -> Result<Option<ClassExpr>> {
-    Ok(emit_reified_type_opt(e, env, pos, name)?.map(|instrs| {
+fn get_reified_var_cexpr(env: &Env, pos: &Pos, name: &str) -> Result<Option<ClassExpr>> {
+    Ok(emit_reified_type_opt(env, pos, name)?.map(|instrs| {
         ClassExpr::Reified(InstrSeq::gather(vec![
             instrs,
             instr::basec(0, MemberOpMode::Warn),
@@ -2303,8 +2292,6 @@ fn emit_special_function(
     e: &mut Emitter,
     env: &Env,
     pos: &Pos,
-    annot: &Pos,
-    id: &str,
     args: &[tast::Expr],
     uarg: Option<&tast::Expr>,
     lower_fq_name: &str,
@@ -2642,7 +2629,7 @@ fn emit_class_meth_native(
 ) -> Result {
     let mut cexpr = ClassExpr::class_id_to_class_expr(e, false, true, &env.scope, cid);
     if let ClassExpr::Id(ast_defs::Id(_, name)) = &cexpr {
-        if let Some(reified_var_cexpr) = get_reified_var_cexpr(e, env, pos, &name)? {
+        if let Some(reified_var_cexpr) = get_reified_var_cexpr(env, pos, &name)? {
             cexpr = reified_var_cexpr;
         }
     }
@@ -2696,6 +2683,59 @@ fn get_call_builtin_func_info(opts: &Options, id: impl AsRef<str>) -> Option<(us
         "HH\\global_get" => Some((1, IGet(CGetG))),
         "HH\\global_isset" => Some((1, IIsset(IssetG))),
         _ => None,
+    }
+}
+
+// How do we make these work with reified generics?
+fn emit_function_pointer(
+    e: &mut Emitter,
+    env: &Env,
+    tast::Expr(annot, expr_): &tast::Expr,
+) -> Result {
+    use tast::Expr_;
+    match expr_ {
+        // This is a function name. Equivalent to HH\fun('str')
+        Expr_::Id(id) => Ok(emit_hh_fun(e, id.name())),
+        // class_meth
+        Expr_::ClassConst(cc) => {
+            // TODO(hrust) should accept `let method_id = method::Type::from_ast_name(&(cc.1).1);`
+            let method_id: method::Type =
+                string_utils::strip_global_ns(&(cc.1).1).to_string().into();
+            emit_class_meth_native(e, env, annot, &cc.0, method_id)
+        }
+        Expr_::ObjGet(og) => match (og.1).1.as_id() {
+            Some(ast_defs::Id(_, method_name)) => {
+                let substitute_method_name =
+                    tast::Expr((og.1).0.clone(), Expr_::mk_string(method_name.into()));
+                if og.2.eq(&ast_defs::OgNullFlavor::OGNullsafe) {
+                    let end_label = e.label_gen_mut().next_regular();
+                    let meth_instr = emit_expr(e, env, &substitute_method_name)?;
+                    Ok(InstrSeq::gather(vec![
+                        emit_quiet_expr(e, env, &(og.1).0, &og.0, false)?.0,
+                        instr::dup(),
+                        instr::istypec(IstypeOp::OpNull),
+                        instr::jmpnz(end_label.clone()),
+                        meth_instr,
+                        if e.options()
+                            .hhvm
+                            .flags
+                            .contains(HhvmFlags::EMIT_INST_METH_POINTERS)
+                        {
+                            instr::resolve_obj_method()
+                        } else if hack_arr_dv_arrs(e.options()) {
+                            instr::new_vec_array(2)
+                        } else {
+                            instr::new_varray(2)
+                        },
+                        instr::label(end_label),
+                    ]))
+                } else {
+                    emit_inst_meth(e, env, &og.0, &substitute_method_name)
+                }
+            }
+            _ => Err(unrecoverable("What else could go here?")),
+        },
+        _ => Err(unrecoverable("What else could go here?")),
     }
 }
 
@@ -2858,7 +2898,7 @@ fn emit_call_expr(
     }
 }
 
-fn emit_reified_generic_instrs(e: &mut Emitter, pos: &Pos, is_fun: bool, index: usize) -> Result {
+fn emit_reified_generic_instrs(pos: &Pos, is_fun: bool, index: usize) -> Result {
     let base = if is_fun {
         instr::basel(
             local::Type::Named(string_utils::reified::GENERICS_LOCAL_NAME.into()),
@@ -2880,17 +2920,12 @@ fn emit_reified_generic_instrs(e: &mut Emitter, pos: &Pos, is_fun: bool, index: 
     ))
 }
 
-fn emit_reified_type(e: &mut Emitter, env: &Env, pos: &Pos, name: &str) -> Result<InstrSeq> {
-    emit_reified_type_opt(e, env, pos, name)?
+fn emit_reified_type(env: &Env, pos: &Pos, name: &str) -> Result<InstrSeq> {
+    emit_reified_type_opt(env, pos, name)?
         .ok_or_else(|| emit_fatal::raise_fatal_runtime(&Pos::make_none(), "Invalid reified param"))
 }
 
-fn emit_reified_type_opt(
-    e: &mut Emitter,
-    env: &Env,
-    pos: &Pos,
-    name: &str,
-) -> Result<Option<InstrSeq>> {
+fn emit_reified_type_opt(env: &Env, pos: &Pos, name: &str) -> Result<Option<InstrSeq>> {
     let is_in_lambda = env.scope.is_in_lambda();
     let cget_instr = |is_fun, i| {
         instr::cgetl(local::Type::Named(
@@ -2907,12 +2942,12 @@ fn emit_reified_type_opt(
             Ok(())
         }
     };
-    let mut emit = |(i, is_soft), is_fun| {
+    let emit = |(i, is_soft), is_fun| {
         check(is_soft)?;
         Ok(Some(if is_in_lambda {
             cget_instr(is_fun, i)
         } else {
-            emit_reified_generic_instrs(e, pos, is_fun, i)?
+            emit_reified_generic_instrs(pos, is_fun, i)?
         }))
     };
     match is_reified_tparam(env, true, name) {
@@ -2990,7 +3025,7 @@ fn emit_new(
     use HasGenericsOp as H;
     let cexpr = ClassExpr::class_id_to_class_expr(e, false, resolve_self, &env.scope, cid);
     let (cexpr, has_generics) = match &cexpr {
-        ClassExpr::Id(ast_defs::Id(_, name)) => match emit_reified_type_opt(e, env, pos, name)? {
+        ClassExpr::Id(ast_defs::Id(_, name)) => match emit_reified_type_opt(env, pos, name)? {
             Some(instrs) => {
                 if targs.is_empty() {
                     (ClassExpr::Reified(instrs), H::MaybeGenerics)
@@ -3264,7 +3299,7 @@ fn emit_array_get(
     )?;
     match result {
         (ArrayGetInstr::Regular(i), querym_n_unpopped) => Ok((i, querym_n_unpopped)),
-        (ArrayGetInstr::Inout { load, store }, _) => Err(unrecoverable("unexpected inout")),
+        (ArrayGetInstr::Inout { .. }, _) => Err(unrecoverable("unexpected inout")),
     }
 }
 
@@ -3712,7 +3747,7 @@ fn emit_class_const(
 ) -> Result {
     let mut cexpr = ClassExpr::class_id_to_class_expr(e, false, true, &env.scope, cid);
     if let ClassExpr::Id(ast_defs::Id(_, name)) = &cexpr {
-        if let Some(reified_var_cexpr) = get_reified_var_cexpr(e, env, pos, &name)? {
+        if let Some(reified_var_cexpr) = get_reified_var_cexpr(env, pos, &name)? {
             cexpr = reified_var_cexpr;
         }
     }
@@ -4420,7 +4455,7 @@ fn emit_base(
             i.base_stack_size as isize,
             i.cls_stack_size as isize,
         )),
-        ArrayGetBase::Inout { load, store } => Err(unrecoverable("unexpected input")),
+        ArrayGetBase::Inout { .. } => Err(unrecoverable("unexpected input")),
     }
 }
 
@@ -5155,12 +5190,7 @@ fn emit_final_member_op(stack_size: usize, op: LValOp, mk: MemberKey) -> InstrSe
     }
 }
 
-fn emit_final_static_op(
-    e: &mut Emitter,
-    cid: &tast::ClassId,
-    prop: &tast::ClassGetExpr,
-    op: LValOp,
-) -> Result {
+fn emit_final_static_op(cid: &tast::ClassId, prop: &tast::ClassGetExpr, op: LValOp) -> Result {
     use LValOp as L;
     Ok(match op {
         L::Set => instr::sets(),
@@ -5362,7 +5392,7 @@ pub fn emit_lval_op_nonlist_steps(
             E_::ClassGet(x) => {
                 let (cid, prop) = &**x;
                 let cexpr = ClassExpr::class_id_to_class_expr(e, false, false, &env.scope, cid);
-                let final_instr_ = emit_final_static_op(e, cid, prop, op)?;
+                let final_instr_ = emit_final_static_op(cid, prop, op)?;
                 let final_instr = emit_pos_then(pos, final_instr_);
                 (
                     InstrSeq::from(emit_class_expr(e, env, cexpr, prop)?),
@@ -5608,7 +5638,7 @@ pub fn emit_reified_arg(
         tast::Hint_::Happly(tast::Id(_, name), hs)
             if hs.is_empty() && current_tags.contains(name.as_str()) =>
         {
-            Ok((emit_reified_type(e, env, pos, name)?, false))
+            Ok((emit_reified_type(env, pos, name)?, false))
         }
         _ => {
             let ts = get_type_structure_for_hint(e, &[], &collector.acc, hint)?;
@@ -5618,7 +5648,7 @@ pub fn emit_reified_arg(
                 let values = collector
                     .acc
                     .iter()
-                    .map(|v| emit_reified_type(e, env, pos, v))
+                    .map(|v| emit_reified_type(env, pos, v))
                     .collect::<Result<Vec<_>>>()?;
                 InstrSeq::gather(vec![InstrSeq::gather(values), ts])
             };

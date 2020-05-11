@@ -2,8 +2,6 @@
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
-#![allow(unused_variables)]
-
 use aast_parser::{
     rust_aast_parser_types::{Env as AastEnv, Result as AastResult},
     AastParser, Error as AastError,
@@ -240,6 +238,8 @@ fn create_parser_options(opts: &Options) -> ParserOptions {
         hack_lang_flags(LangFlags::DISALLOW_FUNC_PTRS_IN_CONSTANTS);
     popt.po_enable_xhp_class_modifier = hack_lang_flags(LangFlags::ENABLE_XHP_CLASS_MODIFIER);
     popt.po_disable_xhp_element_mangling = hack_lang_flags(LangFlags::DISABLE_XHP_ELEMENT_MANGLING);
+    popt.po_enable_first_class_function_pointers =
+        hack_lang_flags(LangFlags::ENABLE_FIRST_CLASS_FUNCTION_POINTERS);
     popt
 }
 

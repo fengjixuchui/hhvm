@@ -278,20 +278,26 @@ let rec is_ready : 'a. 'a t -> bool =
   | Bound (curr_future, next_producer) ->
     if is_ready curr_future then begin
       let curr_result = get curr_future in
-      let next_future = next_producer curr_result in
-      let is_next_ready = is_ready next_future in
-      (* `is_ready` *may* change next_promise's internal state/cache, so
+      try
+        let next_future = next_producer curr_result in
+        let is_next_ready = is_ready next_future in
+        (* `is_ready` *may* change next_promise's internal state/cache, so
         the updating of the promise below should happen AFTER calling `is_ready`
         on it. *)
-      let (next_promise, _t) = next_future in
-      promise := !next_promise;
-      is_next_ready
+        let (next_promise, _t) = next_future in
+        promise := !next_promise;
+        is_next_ready
+      with e ->
+        let e = Exception.wrap e in
+        let info = Process_types.dummy.Process_types.info in
+        promise := Complete_but_failed (info, Continuation_raised e);
+        true
     end else
       false
   | Incomplete { process; deadline; _ } ->
     (* Note: if the promise's own deadline is not set, we allow the caller
         to call is_ready as long as they wish, without timing out *)
-    let timeout = timeout_of_deadline deadline ~max_timeout:Int.max_value in
+    let timeout = timeout_of_deadline deadline ~max_timeout:1 in
     if timeout > 0 then
       Process.is_ready process
     else
@@ -378,7 +384,7 @@ let rec check_status : 'a. 'a t -> 'a status =
   | Incomplete { process; deadline; _ } ->
     (* Note: if the promise's own deadline is not set, we allow the caller
         to call check_status as long as they wish, without timing out *)
-    let timeout = timeout_of_deadline deadline ~max_timeout:Int.max_value in
+    let timeout = timeout_of_deadline deadline ~max_timeout:1 in
     if Process.is_ready process || timeout <= 0 then
       Complete_with_result (get ~timeout (promise, start_t))
     else
