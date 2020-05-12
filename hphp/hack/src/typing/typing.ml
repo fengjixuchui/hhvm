@@ -1973,6 +1973,7 @@ and expr_
             this_ty = cid_ty;
             from_class = Some cid;
             quiet = true;
+            report_cycle = None;
             on_error = Errors.unify_error_at p;
           }
         in
@@ -3696,6 +3697,7 @@ and new_object
               this_ty = obj_ty;
               from_class = None;
               quiet = false;
+              report_cycle = None;
               on_error = Errors.unify_error_at p;
             }
           in
@@ -5046,8 +5048,8 @@ and dispatch_call
       tel
       typed_unpack_element
       ty
-  | PU_identifier ((cpos, cid), ((epos, enum) as enum'), ((_, case) as case'))
-    ->
+  | PU_identifier
+      ((cpos, cid), ((epos, enum) as enum'), ((case_pos, case) as case')) ->
     (* We are type checking a PU expression like MyClass:@MyEnum::MyField($x).
      * So we are crafting the right signature for such a 'function' call,
      * based on the PU definition.
@@ -5072,11 +5074,16 @@ and dispatch_call
     let (env, tal, te1, ty1) =
       static_class_id ~check_constraints:false cpos env [] cid
     in
+    let arg_pos =
+      match el with
+      | (pos, _) :: _ -> pos
+      | _ -> fpos
+    in
     if Typing_utils.is_any env ty1 then
       ( (* An error message is already printed by the Naming phase. Let's avoid
          * duplication. *)
         env,
-        Tast.make_typed_expr cpos ty1 Aast.Any,
+        Tast.make_typed_expr fpos ty1 Aast.Any,
         ty1 )
     else (
       match class_get_pu ~from_class:cid env ty1 enum with
@@ -5094,7 +5101,7 @@ and dispatch_call
               ft_params =
                 List.map params ~f:(fun et_type ->
                     {
-                      fp_pos = cpos;
+                      fp_pos = arg_pos;
                       fp_name = None;
                       fp_type = { et_enforced = false; et_type };
                       fp_flags =
@@ -5110,7 +5117,7 @@ and dispatch_call
               ft_flags = 0;
             }
           in
-          let reason = Reason.Rwitness cpos in
+          let reason = Reason.Rwitness fpos in
           let (env, fty) =
             let pu_type = mk (reason, Tpu (ty1, enum')) in
             if String.equal SN.PocketUniverses.members case then
@@ -5129,15 +5136,15 @@ and dispatch_call
                 match SMap.find_opt case et.tpu_case_values with
                 | Some (_, case) -> case
                 | None ->
-                  Errors.pu_typing cpos "identifier" case;
-                  MakeType.err (Reason.Rwitness cpos)
+                  Errors.pu_typing case_pos "identifier" case;
+                  MakeType.err (Reason.Rwitness case_pos)
               in
               (* Type variable to type the parameter of the Pu expression
                * call, e.g. the type of the atom $x in call
                * MyClass:@MyEnum::myField($x).
                *
                * We use a variable in case there is some dependency *)
-              let (env, fresh_ty) = Env.fresh_type env cpos in
+              let (env, fresh_ty) = Env.fresh_type env fpos in
               let fresh_var =
                 match get_var fresh_ty with
                 | Some v -> v
@@ -5154,9 +5161,13 @@ and dispatch_call
               in
               let (env, substs) =
                 let f env _key (pu_case_type_name, _reified) =
+                  (* Update position to point to the function call site
+                   * rather than to the PU enum definition
+                   *)
+                  let pu_case_type_name = (fpos, snd pu_case_type_name) in
                   Typing_subtype_pocket_universes.get_tyvar_pu_access
                     env
-                    reason
+                    (Reason.Rwitness arg_pos)
                     fresh_var
                     pu_case_type_name
                 in
@@ -5417,6 +5428,7 @@ and class_get_
           substs = Subst.make_locl (Cls.tparams class_) paraml;
           from_class = Some cid;
           quiet = true;
+          report_cycle = None;
           on_error = Errors.unify_error_at p;
         }
       in
@@ -5914,6 +5926,7 @@ and call_construct p env class_ params el unpacked_element cid =
       substs = Subst.make_locl (Cls.tparams class_) params;
       from_class = Some cid;
       quiet = true;
+      report_cycle = None;
       on_error = Errors.unify_error_at p;
     }
   in
@@ -6748,6 +6761,7 @@ and safely_refine_class_type
       (* In case `this` appears in constraints *)
       from_class = None;
       quiet = true;
+      report_cycle = None;
       on_error = Errors.unify_error_at p;
     }
   in
@@ -6969,7 +6983,7 @@ and typedef_def ctx typedef =
   NastCheck.typedef env typedef;
   let {
     t_annotation = ();
-    t_name = (t_pos, _);
+    t_name = (t_pos, t_name);
     t_tparams = _;
     t_constraint = tcstr;
     t_kind = hint;
@@ -6982,7 +6996,10 @@ and typedef_def ctx typedef =
     typedef
   in
   let ty = Decl_hint.hint env.decl_env hint in
-  let (env, ty) = Phase.localize_with_self ~pos:t_pos env ty in
+  (* We want to report cycles through the definition *)
+  let (env, ty) =
+    Phase.localize_with_self env ~pos:t_pos ~report_cycle:(t_pos, t_name) ty
+  in
   let env =
     match tcstr with
     | Some tcstr ->
@@ -7087,6 +7104,7 @@ and class_get_pu ?from_class env ty name =
         substs;
         from_class;
         quiet = false;
+        report_cycle = None;
         on_error = Errors.unify_error;
       }
     in
