@@ -7,9 +7,16 @@
  *
  *)
 
-type request = Request of (serializer -> unit)
+type request = Request of (serializer -> unit) * metadata_in
 
 and serializer = { send: 'a. 'a -> unit }
+
+and metadata_in = { log_globals: HackEventLogger.serialized_globals }
+
+type metadata_out = {
+  stats: Measure.record_data;
+  log_globals: HackEventLogger.serialized_globals;
+}
 
 type slave_job_status = Slave_terminated of Unix.process_status
 
