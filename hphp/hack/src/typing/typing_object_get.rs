@@ -91,7 +91,7 @@ fn obj_get_concrete_ty<'a>(
                                     // let type_arg_types = type_args.iter().map(|targ| targ.annot());
                                     let method_type_args = typing_phase::localize_targs(
                                         env,
-                                        member_id.pos(),
+                                        env.ast_pos(member_id.pos()),
                                         member_id.name(),
                                         &fun_type.tparams,
                                         method_explicit_type_args,
@@ -139,6 +139,6 @@ fn mk_ety_env<'a>(
             class_info.tparams.iter(),
             type_args.iter().copied(),
         ),
-        type_expansions: bumpalo::vec![in env.bld().alloc],
+        type_expansions: bumpalo::vec![in env.bld().bumpalo()],
     }
 }

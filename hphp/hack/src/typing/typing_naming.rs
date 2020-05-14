@@ -4,11 +4,12 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 use crate::typing_env_types::Env;
-use arena_trait::Arena;
 use naming_special_names_rust::typehints;
 use oxidized::aast::{Hint, Hint_};
 use oxidized::aast_defs::Tprim;
-use oxidized::{aast, ast};
+use oxidized::ast;
+use oxidized_by_ref::ast::ClassId_;
+use oxidized_by_ref::ast_defs::Id;
 use typing_defs_rust::tast;
 
 // In the OCaml code, this is done in naming.ml, and resolves an identifier wrt namespaces
@@ -18,14 +19,17 @@ pub fn canonicalize_sid(id: &ast::Sid) -> ast::Sid {
     tast::Id(id.0.clone(), canonicalize_str(&id.1))
 }
 
-pub fn canonicalize_class_id(id: &ast::ClassId) -> ast::ClassId {
-    use aast::ClassId_::*;
-    let id_new = match &id.1 {
-        CIparent | CIself | CIstatic => id.1.clone(),
+pub fn canonicalize_class_id<'a>(env: &Env<'a>, id: &mut ClassId_<'a>) {
+    use oxidized_by_ref::aast::ClassId_::*;
+    match id {
+        CIparent | CIself | CIstatic => (),
         CIexpr(..) => unimplemented!(),
-        CI(sid) => CI(canonicalize_sid(&sid)),
+        CI(Id(p, sid)) => {
+            let new_sid = canonicalize_str(&sid);
+            let new_sid = env.bld().str_from_str(&new_sid);
+            *id = CI(Id(p, new_sid))
+        }
     };
-    ast::ClassId(id.0.clone(), id_new)
 }
 
 pub fn canonicalize_str(id: &str) -> String {
@@ -33,8 +37,7 @@ pub fn canonicalize_str(id: &str) -> String {
 }
 
 // In the OCaml code, this is done in naming.ml, in the hint_ function
-pub fn name_hint<'a>(env: &mut Env<'a>, h: &'a Hint) -> &'a Hint {
-    let bld = env.builder();
+pub fn name_hint<'a>(h: &Hint) -> Hint {
     let Hint(pos, node) = &*h;
     // TODO(hrust): complete the cases
     let newnode = match &**node {
@@ -56,10 +59,8 @@ pub fn name_hint<'a>(env: &mut Env<'a>, h: &'a Hint) -> &'a Hint {
 
     match newnode {
         None => {
-            return h;
+            return h.clone();
         }
-        Some(node) => {
-            return bld.alloc(Hint(pos.clone(), Box::new(node)));
-        }
+        Some(node) => Hint(pos.clone(), Box::new(node)),
     }
 }

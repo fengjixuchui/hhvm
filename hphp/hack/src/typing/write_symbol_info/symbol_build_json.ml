@@ -15,7 +15,6 @@ open Ast_defs
 open Hh_json
 open Hh_prelude
 open Namespace_env
-open Symbol_builder_types
 open Symbol_json_util
 
 let build_id_json fact_id =
@@ -23,6 +22,9 @@ let build_id_json fact_id =
 
 let build_comment_json_nested comment =
   JSON_Object [("key", JSON_String comment)]
+
+let build_file_json_nested filepath =
+  JSON_Object [("key", JSON_String filepath)]
 
 let build_name_json_nested name =
   (* Remove leading slash, if present, so names such as
@@ -57,6 +59,27 @@ let build_signature_json_nested parameters return_type_name =
   in
   JSON_Object [("key", JSON_Object fields)]
 
+let build_attributes_json_nested source_map attrs =
+  let attributes =
+    List.map attrs ~f:(fun attr ->
+        let (_, name) = attr.ua_name in
+        let params =
+          List.fold_right attr.ua_params ~init:[] ~f:(fun ((pos, _), _) acc ->
+              let fp = Relative_path.to_absolute (Pos.filename pos) in
+              match SMap.find_opt fp source_map with
+              | Some st -> JSON_String (source_at_span st pos) :: acc
+              | None -> acc)
+        in
+        let fields =
+          [
+            ("name", build_name_json_nested name);
+            ("parameters", JSON_Array params);
+          ]
+        in
+        JSON_Object [("key", JSON_Object fields)])
+  in
+  JSON_Array attributes
+
 let build_bytespan_json pos =
   let start = fst (Pos.info_raw pos) in
   let length = Pos.length pos in
@@ -75,19 +98,16 @@ let build_rel_bytespan_json offset len =
 
 let build_decl_target_json json = JSON_Object [("declaration", json)]
 
-let build_file_json filepath = JSON_Object [("key", JSON_String filepath)]
-
-let build_file_lines_json file_info =
-  let file = build_file_json (Relative_path.to_absolute file_info.filepath) in
+let build_file_lines_json filepath lineLengths endsInNewline hasUnicodeOrTabs =
   let lengths =
-    List.map file_info.lineLengths (fun len -> JSON_Number (string_of_int len))
+    List.map lineLengths (fun len -> JSON_Number (string_of_int len))
   in
   JSON_Object
     [
-      ("file", file);
+      ("file", build_file_json_nested filepath);
       ("lengths", JSON_Array lengths);
-      ("endsInNewline", JSON_Bool file_info.endsInNewline);
-      ("hasUnicodeOrTabs", JSON_Bool file_info.hasUnicodeOrTabs);
+      ("endsInNewline", JSON_Bool endsInNewline);
+      ("hasUnicodeOrTabs", JSON_Bool hasUnicodeOrTabs);
     ]
 
 let build_is_async_json fun_kind =

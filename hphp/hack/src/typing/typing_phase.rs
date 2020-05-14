@@ -12,6 +12,8 @@ use oxidized::aast::{Hint, Hint_};
 use oxidized::ast;
 use oxidized::ast_defs::Id as OwnedId;
 use oxidized::pos::Pos as OwnedPos;
+use oxidized::ToOxidized;
+use oxidized_by_ref::ast::ClassId;
 use oxidized_by_ref::ast_defs::Id;
 use oxidized_by_ref::pos::Pos;
 use typing_defs_rust::tast;
@@ -78,7 +80,7 @@ pub fn localize<'a>(ety_env: &mut ExpandEnv<'a>, env: &mut Env<'a>, dty: Ty<'a>)
 /// (for the use-site) and `use_name` (the name of the constructor or function).
 pub fn localize_targs<'a>(
     env: &mut Env<'a>,
-    use_pos: &'a OwnedPos,
+    use_pos: &'a Pos,
     use_name: &'a str,
     tparams: &'a [Tparam<'a>],
     targs: &[ast::Targ],
@@ -93,7 +95,7 @@ pub fn localize_targs<'a>(
         let tvar = env
             .inference_env
             .fresh_type_reason(env.bld().mk_rtype_variable_generics(
-                Pos::from_oxidized_in(use_pos, env.bld().alloc),
+                use_pos,
                 tparam.name.name(),
                 use_name,
             ));
@@ -101,7 +103,7 @@ pub fn localize_targs<'a>(
         tast::Targ(
             tvar,
             Hint(
-                use_pos.clone(),
+                use_pos.to_oxidized(),
                 Box::new(Hint_::Happly(
                     OwnedId(OwnedPos::make_none(), typehints::WILDCARD.to_string()),
                     vec![],
@@ -141,7 +143,7 @@ pub fn localize_ft<'a, 'b>(
             }
             let targ_tys = explicit_targs.iter().map(|targ| targ.0);
             let substs = subst::make_locl(env.bld(), ft.tparams.iter(), targ_tys);
-            ety_env.substs = ety_env.substs.add_all(env.bld().alloc, substs);
+            ety_env.substs = ety_env.substs.add_all(env.bld(), substs);
         }
         None => {
             // TODO(hrust)
@@ -210,9 +212,9 @@ fn localize_tparam<'a>(
 pub fn resolve_type_arguments_and_check_constraints<'a>(
     env: &mut Env<'a>,
     check_constraints: bool,
-    use_pos: &'a OwnedPos,
-    cid: &'a OwnedId,
-    _class_id: &ast::ClassId,
+    use_pos: &'a Pos,
+    cid: &'a Id<'a>,
+    _class_id: &ClassId<'a>,
     tparams: &'a [Tparam<'a>],
     targs: &[ast::Targ],
 ) -> (Ty<'a>, Vec<tast::Targ<'a>>) {
@@ -220,13 +222,12 @@ pub fn resolve_type_arguments_and_check_constraints<'a>(
     let targs = localize_targs(env, use_pos, cid.name(), tparams, targs);
     let targs_tys = BVec::from_iter_in(
         targs.iter().map(|targ| targ.annot()).copied(),
-        env.bld().alloc,
+        env.bld().bumpalo(),
     )
     .into_bump_slice();
     let this_ty = {
-        let r = env.bld().mk_rwitness(env.ast_pos(cid.pos()));
-        let cid = Id(env.ast_pos(cid.pos()), cid.name());
-        env.bld().class(r, cid, targs_tys)
+        let r = env.bld().mk_rwitness(cid.pos());
+        env.bld().class(r, cid.clone(), targs_tys)
     };
     if check_constraints {
         // TODO(hrust) check tparam constraints
