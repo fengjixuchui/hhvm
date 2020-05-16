@@ -77,6 +77,7 @@ let init_monitor
 let starting_first_server _ = ()
 
 let init_lazy_end
+    _
     ~informant_use_xdb:_
     ~load_script_timeout:_
     ~state_distance:_
@@ -88,7 +89,7 @@ let init_lazy_end
 
 let server_is_partially_ready () = ()
 
-let server_is_ready () = ()
+let server_is_ready _ = ()
 
 let load_deptable_end _ = ()
 
@@ -278,6 +279,8 @@ let with_init_type _ f = f ()
 let with_check_kind _ f = f ()
 
 let state_loader_dirty_files _ = ()
+
+let changed_while_parsing_end _ = ()
 
 let save_decls_end _ = ()
 

@@ -724,6 +724,7 @@ let default_ignored_fixme_codes =
       Typing.err_code Typing.NewStaticClassReified;
       Typing.err_code Typing.MemoizeReified;
       Typing.err_code Typing.ClassGetReified;
+      Typing.err_code Typing.PocketUniversesReservedSyntax;
     ]
 
 let ignored_fixme_codes = ref default_ignored_fixme_codes
@@ -2060,6 +2061,12 @@ let entrypoint_arguments pos =
     (NastCheck.err_code NastCheck.EntryPointArguments)
     pos
     "__EntryPoint functions cannot take arguments."
+
+let variadic_memoize pos =
+  add
+    (NastCheck.err_code NastCheck.VariadicMemoize)
+    pos
+    "Memoized functions cannot be variadic."
 
 let inout_params_special pos =
   add
