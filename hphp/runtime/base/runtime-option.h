@@ -725,7 +725,6 @@ struct RuntimeOption {
   F(string, EmbeddedDataFallbackPath,  "/tmp/hhvm_%{type}_%{buildid}_XXXXXX") \
   /* Whether to trust existing versions of extracted embedded data. */  \
   F(bool, EmbeddedDataTrustExtract,    true)                            \
-  F(bool, EmitSwitch,                  true)                            \
   F(bool, LogThreadCreateBacktraces,   false)                           \
   F(bool, FailJitPrologs,              false)                           \
   F(bool, UseHHBBC,                    !getenv("HHVM_DISABLE_HHBBC"))   \
@@ -922,6 +921,7 @@ struct RuntimeOption {
   F(double, HHIRMissingArrayProfileThreshold, 0.8)                      \
   F(double, HHIRExitArrayProfileThreshold, 0.98)                        \
   F(double, HHIROffsetExitArrayProfileThreshold, 1.2)  /* disabled */   \
+  F(double, HHIRIsTypeStructProfileThreshold, 0.95)                     \
   /* Register allocation flags */                                       \
   F(bool, HHIREnablePreColoring,       true)                            \
   F(bool, HHIREnableCoalescing,        true)                            \

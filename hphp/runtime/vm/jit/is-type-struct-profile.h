@@ -2,7 +2,7 @@
    +----------------------------------------------------------------------+
    | HipHop for PHP                                                       |
    +----------------------------------------------------------------------+
-   | Copyright (c) 2010-2013 Facebook, Inc. (http://www.facebook.com)     |
+   | Copyright (c) 2010-present Facebook, Inc. (http://www.facebook.com)  |
    +----------------------------------------------------------------------+
    | This source file is subject to version 3.01 of the PHP license,      |
    | that is bundled with this package in the file LICENSE, and is        |
@@ -13,21 +13,36 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
-#ifndef incl_HPHP_TEST_CONTEXT_H_
-#define incl_HPHP_TEST_CONTEXT_H_
 
-#include "hphp/runtime/vm/jit/translator.h"
+#ifndef incl_HPHP_JIT_IS_TYPE_STRUCT_PROFILE_H_
+#define incl_HPHP_JIT_IS_TYPE_STRUCT_PROFILE_H_
 
-namespace HPHP { namespace jit {
+#include <cstdint>
+#include <string>
 
-//////////////////////////////////////////////////////////////////////
+namespace HPHP {
 
-// A TransContext for use in tests.
-const auto test_context =
-  TransContext { TransIDSet{}, TransKind::Live, TransFlags{},
-                 SrcKey{}, FPInvOffset{0}, 0, nullptr };
+struct ArrayData;
 
-//////////////////////////////////////////////////////////////////////
+namespace jit {
+
+///////////////////////////////////////////////////////////////////////////////
+
+struct IsTypeStructProfile {
+
+public:
+
+  bool shouldOptimize() const;
+  void update(const ArrayData* ad);
+  static void reduce(IsTypeStructProfile& l, const IsTypeStructProfile& r);
+  std::string toString() const;
+
+private:
+  uint32_t m_class{0};
+  uint32_t m_total{0};
+};
+
+///////////////////////////////////////////////////////////////////////////////
 
 }}
 
