@@ -57,12 +57,10 @@ void IncomingBranch::patch(TCA dest) {
   switch (type()) {
     case Tag::JMP:
       smashJmp(toSmash(), dest);
-      Debug::DebugInfo::Get()->recordRelocMap(toSmash(), dest, "Arc-2");
       break;
 
     case Tag::JCC:
       smashJcc(toSmash(), dest);
-      Debug::DebugInfo::Get()->recordRelocMap(toSmash(), dest, "Arc-1");
       break;
 
     case Tag::ADDR: {
@@ -86,6 +84,20 @@ TCA IncomingBranch::target() const {
     case Tag::ADDR:
       return *reinterpret_cast<TCA*>(toSmash());
   }
+  always_assert(false);
+}
+
+TCA TransLoc::entry() const {
+  if (m_mainLen)        return mainStart();
+  if (coldCodeSize())   return coldCodeStart();
+  if (frozenCodeSize()) return frozenCodeStart();
+  always_assert(false);
+}
+
+TcaRange TransLoc::entryRange() const {
+  if (auto const size = m_mainLen)        return {mainStart(), size};
+  if (auto const size = coldCodeSize())   return {coldCodeStart(), size};
+  if (auto const size = frozenCodeSize()) return {frozenCodeStart(), size};
   always_assert(false);
 }
 
@@ -152,12 +164,12 @@ void SrcRec::newTranslation(TransLoc loc,
           std::max(RuntimeOption::EvalJitMaxProfileTranslations,
                    RuntimeOption::EvalJitMaxTranslations));
 
-  TRACE(1, "SrcRec(%p)::newTranslation @%p, ", this, loc.mainStart());
+  TRACE(1, "SrcRec(%p)::newTranslation @%p, ", this, loc.entry());
 
   m_translations.push_back(loc);
   if (!m_topTranslation.get()) {
-    m_topTranslation = loc.mainStart();
-    patchIncomingBranches(loc.mainStart());
+    m_topTranslation = loc.entry();
+    patchIncomingBranches(loc.entry());
   }
 
   /*
@@ -175,7 +187,7 @@ void SrcRec::newTranslation(TransLoc loc,
    * translation possibly for this same situation.)
    */
   for (auto& br : m_tailFallbackJumps) {
-    br.patch(loc.mainStart());
+    br.patch(loc.entry());
   }
 
   // This is the new tail translation, so store the fallback jump list

@@ -547,6 +547,7 @@ int RuntimeOption::ServerBacklog = 128;
 int RuntimeOption::ServerConnectionLimit = 0;
 int RuntimeOption::ServerThreadCount = 50;
 int RuntimeOption::ServerQueueCount = 50;
+int RuntimeOption::ServerHighQueueingThreshold = 60;
 bool RuntimeOption::ServerLegacyBehavior = true;
 int RuntimeOption::ServerHugeThreadCount = 0;
 int RuntimeOption::ServerHugeStackKb = 384;
@@ -1855,6 +1856,7 @@ void RuntimeOption::Load(
 #undef F
 
     if (EvalJitSerdesModeForceOff) EvalJitSerdesMode = JitSerdesMode::Off;
+    if (!EvalEnableReusableTC) EvalReusableTCPadding = 0;
     if (numa_num_nodes <= 1) {
       EvalEnableNuma = false;
     }
@@ -1874,9 +1876,6 @@ void RuntimeOption::Load(
     replacePlaceholders(EvalEmbeddedDataExtractPath);
     replacePlaceholders(EvalEmbeddedDataFallbackPath);
 
-    if (EvalPerfRelocate > 0) {
-      setRelocateRequests(EvalPerfRelocate);
-    }
     if (!jit::mcgen::retranslateAllEnabled()) {
       EvalJitWorkerThreads = 0;
       if (EvalJitSerdesMode != JitSerdesMode::Off) {

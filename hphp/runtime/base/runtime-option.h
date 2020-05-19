@@ -246,6 +246,7 @@ struct RuntimeOption {
   static int ServerConnectionLimit;
   static int ServerThreadCount;
   static int ServerQueueCount;
+  static int ServerHighQueueingThreshold;
   static bool ServerLegacyBehavior;
   // Number of worker threads with stack partially on huge pages.
   static int ServerHugeThreadCount;
@@ -799,7 +800,6 @@ struct RuntimeOption {
   F(string, PerfJitDumpDir,            "/tmp")                          \
   F(bool, PerfDataMap,                 false)                           \
   F(bool, KeepPerfPidMap,              false)                           \
-  F(int, PerfRelocate,                 0)                               \
   F(uint32_t, ThreadTCMainBufferSize,  6 << 20)                         \
   F(uint32_t, ThreadTCColdBufferSize,  6 << 20)                         \
   F(uint32_t, ThreadTCFrozenBufferSize,4 << 20)                         \
@@ -836,8 +836,13 @@ struct RuntimeOption {
   F(bool,     JitPGOVasmBlockCountersForceSaveSF, false)                \
   F(bool,     JitPGOVasmBlockCountersForceSaveGP, false)                \
   F(uint32_t, JitPGOVasmBlockCountersMaxOpMismatches, 12)               \
+  F(bool,     JitPGOVasmBlockCountersSkipFixWeights, false)             \
+  F(bool,     JitPGOVasmBlockCountersUseHotWeight,   false)             \
+  F(bool, JitLayoutSeparateZeroWeightBlocks, false)                     \
   F(bool, JitLayoutPrologueSplitHotCold, layoutPrologueSplitHotColdDefault()) \
   F(bool, JitLayoutProfileSplitHotCold, true)                           \
+  F(uint64_t, JitLayoutMinHotThreshold,  0)                             \
+  F(uint64_t, JitLayoutMinColdThreshold, 0)                             \
   F(double,   JitLayoutHotThreshold,   0.01)                            \
   F(double,   JitLayoutColdThreshold,  0.0005)                          \
   F(int32_t,  JitLayoutMainFactor,     1000)                            \
@@ -1056,7 +1061,6 @@ struct RuntimeOption {
   F(string,   JitLogAllInlineRegions,  "")                              \
   F(bool, JitProfileGuardTypes,        false)                           \
   F(uint32_t, JitFilterLease,          1)                               \
-  F(bool, DisableSomeRepoAuthNotices,  true)                            \
   F(uint32_t, PCRETableSize, kPCREInitialTableSize)                     \
   F(uint64_t, PCREExpireInterval, 2 * 60 * 60)                          \
   F(string, PCRECacheType, std::string("static"))                       \
@@ -1071,6 +1075,8 @@ struct RuntimeOption {
   F(bool, EnableCallBuiltin, true)                                      \
   F(bool, EnableReusableTC,   reuseTCDefault())                         \
   F(bool, LogServerRestartStats, false)                                 \
+  /* Extra bytes added to each area (Hot/Cold/Frozen) of a translation. \
+   * If we don't end up using a reusable TC, we'll drop the padding. */ \
   F(uint32_t, ReusableTCPadding, 128)                                   \
   F(int64_t,  StressUnitCacheFreq, 0)                                   \
   F(int64_t, PerfWarningSampleRate, 1)                                  \
