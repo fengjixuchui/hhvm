@@ -10,7 +10,7 @@
 open Hh_core
 
 (** Callstack is simply a typed way to indicate that a string is a callstack *)
-type callstack = Callstack of string
+type callstack = Callstack of string [@@deriving show]
 
 let () = Random.self_init ()
 
@@ -21,6 +21,18 @@ let spf = Printf.sprintf
 let print_endlinef fmt = Printf.ksprintf print_endline fmt
 
 let prerr_endlinef fmt = Printf.ksprintf prerr_endline fmt
+
+let timestring (time : float) : string =
+  let tm = Unix.localtime time in
+  Printf.sprintf
+    "[%d-%02d-%02d %02d:%02d:%02d.%03d]"
+    (tm.Unix.tm_year + 1900)
+    (tm.Unix.tm_mon + 1)
+    tm.Unix.tm_mday
+    tm.Unix.tm_hour
+    tm.Unix.tm_min
+    tm.Unix.tm_sec
+    (int_of_float (time *. 1000.) mod 1000)
 
 let opt f env = function
   | None -> (env, None)

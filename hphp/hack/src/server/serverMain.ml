@@ -603,7 +603,7 @@ let serve_one_iteration genv env client_provider =
     }
   in
   ServerMonitorUtils.exit_if_parent_dead ();
-  ServerProgress.send_to_monitor (MonitorRpc.PROGRESS None);
+  ServerProgress.send_to_monitor (MonitorRpc.PROGRESS "ready");
   let has_default_client_pending =
     Option.is_some env.default_client_pending_command_needs_full_check
   in
@@ -1060,7 +1060,14 @@ let program_init genv env =
       begin
         match init_result with
         | ServerInit.Load_state_succeeded distance ->
-          (env, "state_load", None, None, distance)
+          let init_type =
+            match
+              Naming_table.get_forward_naming_fallback_path env.naming_table
+            with
+            | None -> "state_load_blob"
+            | Some _ -> "state_load_sqlite"
+          in
+          (env, init_type, None, None, distance)
         | ServerInit.Load_state_failed (err, stack) ->
           (env, "state_load_failed", Some err, Some stack, None)
         | ServerInit.Load_state_declined reason ->

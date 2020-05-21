@@ -166,7 +166,7 @@ let serverless_ide_destroy_ok _ = ()
 
 let serverless_ide_destroy_error _ _ _ = ()
 
-let client_bad_exit ~command:_ _ = ()
+let client_bad_exit ~command_name:_ _ = ()
 
 let glean_globalrev_supplied ~globalrev:_ = ()
 
@@ -258,7 +258,7 @@ let type_check_end _ ~started_count:_ ~count:_ ~experiments:_ ~start_t:_ = ()
 
 let notifier_returned _ _ = ()
 
-let load_state_exn _ ~stack:_ = ()
+let load_state_exn _ = ()
 
 let prechecked_update_rechecked _ = ()
 

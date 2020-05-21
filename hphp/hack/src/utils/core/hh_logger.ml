@@ -7,27 +7,17 @@
  *
  *)
 
-let timestamp_string () =
-  Unix.(
-    let tm = localtime (time ()) in
-    let ms = int_of_float (gettimeofday () *. 1000.) mod 1000 in
-    let year = tm.tm_year + 1900 in
-    Printf.sprintf
-      "[%d-%02d-%02d %02d:%02d:%02d.%03d]"
-      year
-      (tm.tm_mon + 1)
-      tm.tm_mday
-      tm.tm_hour
-      tm.tm_min
-      tm.tm_sec
-      ms)
+open Hh_prelude
 
 (* We might want to log to both stderr and a file. Shelling out to tee isn't cross-platform.
  * We could dup2 stderr to a pipe and have a child process write to both original stderr and the
  * file, but that's kind of overkill. This is good enough *)
-let dupe_log : out_channel option ref = ref None
+let dupe_log : Out_channel.t option ref = ref None
 
-let set_log _filename fd = dupe_log := Some fd
+let set_log filename =
+  Option.iter !dupe_log ~f:(fun fd -> Out_channel.close fd);
+  dupe_log := Some (Out_channel.create filename ~append:true);
+  ()
 
 let id : string option ref = ref None
 
@@ -54,11 +44,11 @@ let print_with_newline_internal ?category ~passes ?exn fmt =
       Option.value_map exn ~default:"" ~f:(fun exn ->
           let bt =
             String_utils.indent 8
-            @@ String.trim
+            @@ String.strip
             @@ Exception.get_backtrace_string exn
           in
           let bt =
-            if bt = "" then
+            if String.equal bt "" then
               ""
             else
               "\n    Backtrace:\n" ^ bt
@@ -68,7 +58,7 @@ let print_with_newline_internal ?category ~passes ?exn fmt =
             (Exception.get_ctor_string exn)
             bt)
     in
-    let time = timestamp_string () in
+    let time = Utils.timestring (Unix.gettimeofday ()) in
     let id_str = id_string () in
     let category_str = category_string category in
     begin
@@ -101,7 +91,7 @@ let print_duration name t =
   t2
 
 let exc ?(prefix : string = "") ~(stack : string) (e : exn) : unit =
-  print_with_newline "%s%s\n%s" prefix (Printexc.to_string e) stack
+  print_with_newline "%s%s\n%s" prefix (Exn.to_string e) stack
 
 let exception_ ?(prefix : string = "") (e : Exception.t) : unit =
   exc ~prefix ~stack:(Exception.get_backtrace_string e) (Exception.unwrap e)

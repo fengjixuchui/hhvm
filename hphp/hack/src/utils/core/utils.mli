@@ -13,7 +13,7 @@ that this interface file is a poor interface, please take a few minutes to
 clean it up manually, and then delete this comment once the interface is in
 shape. *)
 
-type callstack = Callstack of string
+type callstack = Callstack of string [@@deriving show]
 
 module Map : sig end
 
@@ -22,6 +22,8 @@ val spf : ('a, unit, string) format -> 'a
 val print_endlinef : ('a, unit, string, unit) format4 -> 'a
 
 val prerr_endlinef : ('a, unit, string, unit) format4 -> 'a
+
+val timestring : float -> string
 
 val opt : ('a -> 'b -> 'a * 'c) -> 'a -> 'b option -> 'a * 'c option
 

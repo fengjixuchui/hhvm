@@ -10,6 +10,8 @@
 open Hh_prelude
 module SMUtils = ServerMonitorUtils
 
+let log s = Hh_logger.log ("[client-connect] " ^^ s)
+
 exception Server_hung_up of ServerCommandTypes.finale_data option
 
 type env = {
@@ -69,12 +71,10 @@ let tty_progress_reporter () =
 let null_progress_reporter (_status : string option) : unit = ()
 
 (* what is the server doing? or None if nothing *)
-let progress : string option ref = ref None
+let progress : string ref = ref "connecting"
 
 (* if the server has something not going right, what? *)
 let progress_warning : string option ref = ref None
-
-let default_progress_message = "processing"
 
 let check_progress (root : Path.t) : unit =
   match ServerUtils.server_progress ~timeout:3 root with
@@ -91,7 +91,7 @@ let print_wait_msg (progress_callback : string option -> unit) (root : Path.t) :
   check_progress root;
   if not had_warning then
     Option.iter !progress_warning ~f:(Printf.eprintf "\n%s\n%!");
-  let progress = Option.value !progress ~default:default_progress_message in
+  let progress = !progress in
   let final_suffix =
     if Option.is_some !progress_warning then
       " - this can take a long time, see warning above]"
@@ -101,15 +101,13 @@ let print_wait_msg (progress_callback : string option -> unit) (root : Path.t) :
   progress_callback (Some ("[" ^ progress ^ final_suffix))
 
 let check_for_deadline deadline_opt =
-  let timed_out =
-    match deadline_opt with
-    | Some d -> Float.(Unix.time () > d)
-    | None -> false
-  in
-  if timed_out then (
+  let now = Unix.time () in
+  match deadline_opt with
+  | Some deadline when now >. deadline ->
+    log "check_for_deadline expired: %f > %f" now deadline;
     Printf.eprintf "\nError: hh_client hit timeout, giving up!\n%!";
     raise Exit_status.(Exit_with Out_of_time)
-  )
+  | _ -> ()
 
 (* Sleeps until the server sends a message. While waiting, prints out spinner
  * and progress information using the argument callback. *)
@@ -227,12 +225,14 @@ let rec connect
             HhServerMonitorConfig.Default );
     }
   in
+  log "connect: attempting connect_to_monitor";
   let conn =
     ServerUtils.connect_to_monitor ~timeout:1 env.root handoff_options
   in
   HackEventLogger.client_connect_once connect_once_start_t;
   match conn with
   | Ok (ic, oc, server_finale_file) ->
+    log "connect: successfully connected to monitor.";
     let start = Unix.gettimeofday () in
     let%lwt () =
       if env.do_post_handoff_handshake then
@@ -290,15 +290,18 @@ let rec connect
           conn_deadline = env.deadline;
         }
   | Error e ->
+    log "connect: error %s" (ServerMonitorUtils.show_connection_error e);
     if first_attempt then
       Printf.eprintf
         "For more detailed logs, try `tail -f $(hh_client --monitor-logname) $(hh_client --logname)`\n";
     (match e with
     | SMUtils.Server_died
-    | SMUtils.Monitor_connection_failure ->
+    | SMUtils.Monitor_connection_failure _ ->
       Unix.sleepf 0.1;
       connect env start_time
-    | SMUtils.Server_missing ->
+    | SMUtils.Server_missing_exn _
+    | SMUtils.Server_missing_timeout _ ->
+      log "connect: autostart=%b" env.autostart;
       if env.autostart then (
         ClientStart.start_server
           {
@@ -340,7 +343,7 @@ let rec connect
         ^^ " on next server to be started. Please wait patiently. If you really"
         ^^ " know what you're doing, maybe try --force-dormant-start\n%!" );
       raise Exit_status.(Exit_with No_server_running_should_retry)
-    | SMUtils.Monitor_socket_not_ready ->
+    | SMUtils.Monitor_socket_not_ready _ ->
       HackEventLogger.client_connect_once_busy start_time;
       Unix.sleepf 0.1;
       connect env start_time
