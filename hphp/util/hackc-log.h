@@ -14,51 +14,19 @@
    +----------------------------------------------------------------------+
 */
 
+#ifndef incl_HPHP_UTIL_HACKC_LOG_H_
+#define incl_HPHP_UTIL_HACKC_LOG_H_
 
-#ifndef incl_HPHP_MEMORYSTATS_H_
-#define incl_HPHP_MEMORYSTATS_H_
+#include <folly/dynamic.h>
 
-#include <array>
-#include <atomic>
-#include <memory>
-#include <string>
-
-#include "hphp/runtime/server/writer.h"
+#include "hphp/util/struct-log.h"
 
 namespace HPHP {
+namespace HackC {
 
-enum class AllocKind {
-  StaticString,
-  StaticArray,
-  Unit,
-  Class,
-  Func,
-  NumKinds
-};
+void logOptions(const folly::dynamic&);
 
-struct MemoryStats {
-  static void ReportMemory(std::string &out, Writer::Format format);
+} // namespace HackC
+} // namespace HPHP
 
-  static void ResetStaticStringSize() {
-    s_allocSizes[static_cast<unsigned>(AllocKind::StaticString)]
-      .store(0, std::memory_order_relaxed);
-  }
-
-  static void LogAlloc(AllocKind kind, size_t bytes) {
-    s_allocSizes[static_cast<unsigned>(kind)]
-      .fetch_add(bytes, std::memory_order_relaxed);
-  }
-
- private:
-  static size_t totalSize(AllocKind kind) {
-    return s_allocSizes[static_cast<unsigned>(kind)]
-      .load(std::memory_order_relaxed);
-  }
-
-  static auto constexpr N = static_cast<unsigned>(AllocKind::NumKinds);
-  static std::array<std::atomic_size_t, N> s_allocSizes;
-};
-
-}
-
-#endif //incl_HPHP_MEMORYSTATS_H_
+#endif // incl_HPHP_UTIL_HACKC_LOG_H_

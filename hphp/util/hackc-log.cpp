@@ -14,51 +14,28 @@
    +----------------------------------------------------------------------+
 */
 
+#include "hphp/util/hackc-log.h"
+#include "hphp/util/struct-log.h"
 
-#ifndef incl_HPHP_MEMORYSTATS_H_
-#define incl_HPHP_MEMORYSTATS_H_
-
-#include <array>
-#include <atomic>
-#include <memory>
-#include <string>
-
-#include "hphp/runtime/server/writer.h"
+#include <vector>
 
 namespace HPHP {
+namespace HackC {
 
-enum class AllocKind {
-  StaticString,
-  StaticArray,
-  Unit,
-  Class,
-  Func,
-  NumKinds
-};
+void logOptions(const folly::dynamic& config_json) {
+   // Expect a list of unmerged strings:
+   //   [ini_json; set_config1_json; ...; set_configN_json; json_overrides]
+   if (!config_json.isArray()) return;
 
-struct MemoryStats {
-  static void ReportMemory(std::string &out, Writer::Format format);
-
-  static void ResetStaticStringSize() {
-    s_allocSizes[static_cast<unsigned>(AllocKind::StaticString)]
-      .store(0, std::memory_order_relaxed);
-  }
-
-  static void LogAlloc(AllocKind kind, size_t bytes) {
-    s_allocSizes[static_cast<unsigned>(kind)]
-      .fetch_add(bytes, std::memory_order_relaxed);
-  }
-
- private:
-  static size_t totalSize(AllocKind kind) {
-    return s_allocSizes[static_cast<unsigned>(kind)]
-      .load(std::memory_order_relaxed);
-  }
-
-  static auto constexpr N = static_cast<unsigned>(AllocKind::NumKinds);
-  static std::array<std::atomic_size_t, N> s_allocSizes;
-};
-
+   std::vector<folly::StringPiece> unmerged_configs(config_json.size());
+   for (const auto& json : config_json) {
+      if (!json.isString()) continue;
+      unmerged_configs.push_back(json.stringPiece());
+   }
+   StructuredLogEntry sle;
+   sle.setVec("config_jsons", unmerged_configs);
+   StructuredLog::log("hrust_hhbc_opts", sle);
 }
 
-#endif //incl_HPHP_MEMORYSTATS_H_
+} // namespace HackC
+} // namespace HPHP
