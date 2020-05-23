@@ -511,8 +511,10 @@ bool opcodeMayRaise(Opcode opc) {
   case VerifyParamFail:
   case VerifyParamFailHard:
   case VerifyProp:
+  case VerifyPropAll:
   case VerifyPropCls:
   case VerifyPropCoerce:
+  case VerifyPropCoerceAll:
   case VerifyPropFail:
   case VerifyPropFailHard:
   case VerifyReifiedLocalType:
@@ -538,7 +540,6 @@ bool opcodeMayRaise(Opcode opc) {
   case AKExistsArr:
   case AKExistsDict:
   case AKExistsKeyset:
-  case AllocPackedArray:
   case AllocStructArray:
   case AllocStructDArray:
   case AllocStructDict:
@@ -906,14 +907,12 @@ bool opcodeMayRaise(Opcode opc) {
   case NeqRes:
   case NeqStr:
   case NeqStrInt:
-  case NewArray:
   case NewClsMeth:
   case NewCol:
   case NewColFromArray:
   case NewDArray:
   case NewDictArray:
   case NewInstanceRaw:
-  case NewLikeArray:
   case NewMixedArray:
   case NewPair:
   case NewStructArray:

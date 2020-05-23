@@ -1540,6 +1540,15 @@ struct RaiseHackArrTypehintNoticeData : IRExtraData {
   TypeConstraint tc;
 };
 
+struct TypeConstraintData : IRExtraData {
+  explicit TypeConstraintData(const TypeConstraint* tc)
+    : tc(tc) {}
+
+  std::string show() const { return tc->displayName(); }
+
+  const TypeConstraint* tc;
+};
+
 struct RaiseHackArrParamNoticeData : RaiseHackArrTypehintNoticeData {
   RaiseHackArrParamNoticeData(const TypeConstraint& tc,
                               int32_t id, bool isReturn)
@@ -1784,7 +1793,6 @@ X(NewRecordArray,               NewStructData);
 X(AllocStructArray,             NewStructData);
 X(AllocStructDArray,            NewStructData);
 X(AllocStructDict,              NewStructData);
-X(AllocPackedArray,             PackedArrayData);
 X(AllocVArray,                  PackedArrayData);
 X(AllocVecArray,                PackedArrayData);
 X(NewKeysetArray,               NewKeysetArrayData);
@@ -1872,6 +1880,12 @@ X(VerifyParamFailHard,          ParamWithTCData);
 X(VerifyRetFail,                ParamWithTCData);
 X(VerifyRetFailHard,            ParamWithTCData);
 X(VerifyReifiedLocalType,       ParamData);
+X(VerifyPropCls,                TypeConstraintData);
+X(VerifyPropRecDesc,            TypeConstraintData);
+X(VerifyPropFail,               TypeConstraintData);
+X(VerifyPropFailHard,           TypeConstraintData);
+X(VerifyProp,                   TypeConstraintData);
+X(VerifyPropCoerce,             TypeConstraintData);
 X(EndCatch,                     EndCatchData);
 X(EnterTCUnwind,                EnterTCUnwindData);
 X(FuncHasAttr,                  AttrData);

@@ -1427,16 +1427,16 @@ OPTBLD_INLINE void iopNewArray(uint32_t capacity) {
   if (capacity == 0) {
     vmStack().pushArrayNoRc(ArrayData::Create());
   } else {
-    vmStack().pushArrayNoRc(PackedArray::MakeReserve(capacity));
+    vmStack().pushArrayNoRc(MixedArray::MakeReserveMixed(capacity));
   }
 }
 
 OPTBLD_INLINE void iopNewMixedArray(uint32_t capacity) {
-  if (capacity == 0) {
-    vmStack().pushArrayNoRc(ArrayData::Create());
-  } else {
-    vmStack().pushArrayNoRc(MixedArray::MakeReserveMixed(capacity));
-  }
+  iopNewArray(capacity);
+}
+
+OPTBLD_INLINE void iopNewLikeArrayL(tv_lval /*unused*/, uint32_t capacity) {
+  iopNewArray(capacity);
 }
 
 OPTBLD_INLINE void iopNewDictArray(uint32_t capacity) {
@@ -1446,23 +1446,13 @@ OPTBLD_INLINE void iopNewDictArray(uint32_t capacity) {
   vmStack().pushDictNoRc(ad);
 }
 
-OPTBLD_INLINE
-void iopNewLikeArrayL(tv_lval fr, uint32_t capacity) {
-  ArrayData* arr;
-  if (LIKELY(isArrayType(type(fr)))) {
-    arr = MixedArray::MakeReserveLike(val(fr).parr, capacity);
-  } else {
-    if (capacity == 0) capacity = PackedArray::SmallSize;
-    arr = PackedArray::MakeReserve(capacity);
-  }
-  vmStack().pushArrayNoRc(arr);
-}
-
 OPTBLD_INLINE void iopNewPackedArray(uint32_t n) {
   // This constructor moves values, no inc/decref is necessary.
-  auto* a = PackedArray::MakePacked(n, vmStack().topC());
+  auto* vec = PackedArray::MakeVec(n, vmStack().topC());
+  auto* arr = PackedArray::ToPHPArrayVec(vec, vec->cowCheck());
+  if (arr != vec) decRefArr(vec);
   vmStack().ndiscard(n);
-  vmStack().pushArrayNoRc(a);
+  vmStack().pushArrayNoRc(arr);
 }
 
 namespace {
@@ -3683,6 +3673,13 @@ OPTBLD_INLINE void iopSetS() {
     auto const& sprop = cls->staticProperties()[slot];
     auto const& tc = sprop.typeConstraint;
     if (tc.isCheckable()) tc.verifyStaticProperty(tv1, cls, sprop.cls, name);
+    if (RuntimeOption::EvalEnforceGenericsUB > 0) {
+      for (auto const& ub : sprop.ubs) {
+        if (ub.isCheckable()) {
+          ub.verifyStaticProperty(tv1, cls, sprop.cls, name);
+        }
+      }
+    }
   }
   tvSet(*tv1, *val);
   tvDecRefGen(propn);
@@ -4906,10 +4903,11 @@ OPTBLD_INLINE void iopVerifyParamType(local_var param) {
   const TypeConstraint& tc = func->params()[param.index].typeConstraint;
   if (tc.isCheckable()) tc.verifyParam(param.lval, func, param.index);
   if (func->hasParamsWithMultiUBs()) {
-    auto const& ubs = func->paramUBs();
+    auto& ubs = const_cast<Func::ParamUBMap&>(func->paramUBs());
     auto it = ubs.find(param.index);
     if (it != ubs.end()) {
-      for (auto const& ub : it->second) {
+      for (auto& ub : it->second) {
+        applyFlagsToUB(ub, tc);
         if (ub.isCheckable()) ub.verifyParam(param.lval, func, param.index);
       }
     }
@@ -4945,10 +4943,11 @@ OPTBLD_INLINE void iopVerifyOutType(uint32_t paramId) {
   auto const& tc = func->params()[paramId].typeConstraint;
   if (tc.isCheckable()) tc.verifyOutParam(vmStack().topTV(), func, paramId);
   if (func->hasParamsWithMultiUBs()) {
-    auto const& ubs = func->paramUBs();
+    auto& ubs = const_cast<Func::ParamUBMap&>(func->paramUBs());
     auto it = ubs.find(paramId);
     if (it != ubs.end()) {
-      for (auto const& ub : it->second) {
+      for (auto& ub : it->second) {
+        applyFlagsToUB(ub, tc);
         if (ub.isCheckable()) {
           ub.verifyOutParam(vmStack().topTV(), func, paramId);
         }
@@ -4964,7 +4963,9 @@ OPTBLD_INLINE void verifyRetTypeImpl(size_t ind) {
   const auto tc = func->returnTypeConstraint();
   if (tc.isCheckable()) tc.verifyReturn(vmStack().indC(ind), func);
   if (func->hasReturnWithMultiUBs()) {
-    for (auto const& ub : func->returnUBs()) {
+    auto& ubs = const_cast<Func::UpperBoundVec&>(func->returnUBs());
+    for (auto& ub : ubs) {
+      applyFlagsToUB(ub, tc);
       if (ub.isCheckable()) ub.verifyReturn(vmStack().indC(ind), func);
     }
   }

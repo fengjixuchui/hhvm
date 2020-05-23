@@ -97,9 +97,9 @@ bool PackedArray::checkInvariants(const ArrayData* arr) {
   assertx(arr->m_size <= MixedArray::MaxSize);
   assertx(arr->m_size <= capacity(arr));
   assertx(arr->m_pos >= 0 && arr->m_pos <= arr->m_size);
-  assertx(!arr->isPackedKind() || !arr->isDArray());
-  assertx(!arr->isVecArrayKind() || arr->isNotDVArray());
-  assertx(!RuntimeOption::EvalHackArrDVArrs || arr->isNotDVArray());
+  assertx(IMPLIES(arr->isVArray(), arr->isPackedKind()));
+  assertx(IMPLIES(arr->isNotDVArray(), arr->isVecArrayKind()));
+  assertx(!RO::EvalHackArrDVArrs || arr->isVecArrayKind());
   assertx(arrprov::arrayWantsTag(arr) || !arr->hasProvenanceData());
   static_assert(ArrayData::kPackedKind == 0, "");
   // Note that m_pos < m_size is not an invariant, because an array
@@ -124,21 +124,23 @@ MixedArray* PackedArray::ToMixedHeader(const ArrayData* old,
                                        size_t neededSize) {
   assertx(checkInvariants(old));
 
-  auto const aux =
-    MixedArrayKeys::packIntsForAux() |
-    (old->isVArray() ? ArrayData::kDArray : ArrayData::kNotDVArray);
-
   auto const oldSize = old->m_size;
   auto const scale   = MixedArray::computeScaleFromSize(neededSize);
   auto const ad      = MixedArray::reqAlloc(scale);
   ad->m_sizeAndPos   = oldSize | int64_t{old->m_pos} << 32;
-  ad->initHeader_16(HeaderKind::Mixed, OneReference, aux);
+  if (old->isVArray()) {
+    auto const aux = MixedArrayKeys::packIntsForAux() | ArrayData::kDArray;
+    ad->initHeader_16(HeaderKind::Mixed, OneReference, aux);
+  } else {
+    auto const aux = MixedArrayKeys::packIntsForAux() | ArrayData::kNotDVArray;
+    ad->initHeader_16(HeaderKind::Plain, OneReference, aux);
+  }
   ad->m_scale_used   = scale | uint64_t{oldSize} << 32; // used=oldSize
   ad->m_nextKI       = oldSize;
 
   assertx(ad->m_size == oldSize);
   assertx(ad->m_pos == old->m_pos);
-  assertx(ad->kind() == ArrayData::kMixedKind);
+  assertx(ad->hasVanillaMixedLayout());
   assertx(ad->isDArray() == old->isVArray());
   assertx(ad->hasExactlyOneRef());
   assertx(ad->m_used == oldSize);
@@ -361,47 +363,6 @@ ArrayData* PackedArray::CopyStatic(const ArrayData* adIn) {
   return ad;
 }
 
-ArrayData* PackedArray::ConvertStatic(const ArrayData* arr) {
-  assertx(arr->isVectorData());
-  assertx(!RuntimeOption::EvalHackArrDVArrs || arr->isNotDVArray());
-  assertx(!arr->isDArray());
-
-  auto const sizeIndex = capacityToSizeIndex(arr->m_size);
-  auto ad = alloc_packed_static(arr);
-  ad->initHeader_16(
-    HeaderKind::Packed,
-    StaticValue,
-    packSizeIndexAndAuxBits(sizeIndex, arr->auxBits())
-  );
-  ad->m_sizeAndPos = arr->m_sizeAndPos;
-
-  uint32_t i = 0;
-  auto pos_limit = arr->iter_end();
-  for (auto pos = arr->iter_begin(); pos != pos_limit;
-       pos = arr->iter_advance(pos), ++i) {
-    tvDup(arr->nvGetVal(pos), LvalUncheckedInt(ad, i));
-  }
-
-  if (RuntimeOption::EvalArrayProvenance) {
-    assertx(!ad->hasProvenanceData());
-    auto const tag = arrprov::getTag(ad);
-    if (tag.valid()) {
-      arrprov::setTag(ad, tag);
-    }
-  }
-
-  assertx(ad->isPackedKind());
-  assertx(capacity(ad) >= arr->m_size);
-  assertx(ad->dvArray() == arr->dvArray());
-  assertx(!arrprov::arrayWantsTag(ad) ||
-          !!arrprov::getTag(ad) == !!arrprov::getTag(arr));
-  assertx(ad->m_size == arr->m_size);
-  assertx(ad->m_pos == arr->m_pos);
-  assertx(ad->isStatic());
-  assertx(checkInvariants(ad));
-  return ad;
-}
-
 /* This helper allocates an ArrayData and initializes the header (including
  * capacity, kind, and refcount). The caller is responsible for initializing
  * m_sizeAndPos, and initializing array entries (if any).
@@ -424,18 +385,6 @@ ArrayData* PackedArray::MakeReserveImpl(uint32_t cap,
   assertx(ad->dvArray() == dvarray);
   assertx(capacity(ad) >= cap);
   assertx(ad->hasExactlyOneRef());
-  return ad;
-}
-
-ArrayData* PackedArray::MakeReserve(uint32_t capacity) {
-  auto ad =
-    MakeReserveImpl(capacity, HeaderKind::Packed, ArrayData::kNotDVArray);
-  ad->m_sizeAndPos = 0;
-  assertx(ad->isPackedKind());
-  assertx(ad->isNotDVArray());
-  assertx(ad->m_size == 0);
-  assertx(ad->m_pos == 0);
-  assertx(checkInvariants(ad));
   return ad;
 }
 
@@ -492,16 +441,6 @@ ArrayData* PackedArray::MakePackedImpl(uint32_t size,
   return ad;
 }
 
-ArrayData* PackedArray::MakePacked(uint32_t size, const TypedValue* values) {
-  // Values are in reverse order since they come from the stack, which
-  // grows down.
-  auto ad = MakePackedImpl<true>(size, values, HeaderKind::Packed,
-                                 ArrayData::kNotDVArray);
-  assertx(ad->isPackedKind());
-  assertx(ad->isNotDVArray());
-  return ad;
-}
-
 ArrayData* PackedArray::MakeVArray(uint32_t size, const TypedValue* values) {
   // Values are in reverse order since they come from the stack, which
   // grows down.
@@ -522,14 +461,6 @@ ArrayData* PackedArray::MakeVec(uint32_t size, const TypedValue* values) {
   return tagArrProv(ad);
 }
 
-ArrayData* PackedArray::MakePackedNatural(uint32_t size, const TypedValue* values) {
-  auto ad = MakePackedImpl<false>(size, values, HeaderKind::Packed,
-                                  ArrayData::kNotDVArray);
-  assertx(ad->isPackedKind());
-  assertx(ad->isNotDVArray());
-  return ad;
-}
-
 ArrayData* PackedArray::MakeVArrayNatural(uint32_t size, const TypedValue* values) {
   if (RuntimeOption::EvalHackArrDVArrs) return MakeVecNatural(size, values);
 
@@ -545,17 +476,6 @@ ArrayData* PackedArray::MakeVecNatural(uint32_t size, const TypedValue* values) 
                                   ArrayData::kNotDVArray);
   assertx(ad->isVecArrayKind());
   return tagArrProv(ad);
-}
-
-ArrayData* PackedArray::MakeUninitialized(uint32_t size) {
-  auto ad = MakeReserveImpl(size, HeaderKind::Packed, ArrayData::kNotDVArray);
-  ad->m_sizeAndPos = size; // pos = 0
-  assertx(ad->isPackedKind());
-  assertx(ad->isNotDVArray());
-  assertx(ad->m_size == size);
-  assertx(ad->m_pos == 0);
-  assertx(checkInvariants(ad));
-  return ad;
 }
 
 ArrayData* PackedArray::MakeUninitializedVArray(uint32_t size) {
@@ -1018,6 +938,7 @@ ArrayData* PackedArray::Merge(ArrayData* adIn, const ArrayData* elems) {
   assertx(checkInvariants(adIn));
   auto const neededSize = adIn->m_size + elems->size();
   auto const ret = ToMixedCopyReserve(adIn, neededSize);
+  ret->m_kind = HeaderKind::Plain;
   ret->setDVArray(ArrayData::kNotDVArray);
   return MixedArray::ArrayMergeGeneric(ret, elems);
 }
@@ -1075,14 +996,13 @@ ArrayData* PackedArray::Prepend(ArrayData* adIn, TypedValue v) {
 
 ArrayData* PackedArray::ToPHPArray(ArrayData* adIn, bool copy) {
   assertx(checkInvariants(adIn));
-  assertx(adIn->isPackedKind());
-  if (adIn->isNotDVArray()) return adIn;
-  assertx(adIn->isVArray());
-  if (adIn->getSize() == 0) return ArrayData::Create();
-  ArrayData* ad = copy ? Copy(adIn) : adIn;
+  if (adIn->empty()) return ArrayData::Create();
+  auto ad = copy ? ToMixedCopy(adIn) : ToMixed(adIn);
+  ad->m_kind = HeaderKind::Plain;
   ad->setDVArray(ArrayData::kNotDVArray);
   if (RO::EvalArrayProvenance) arrprov::clearTag(ad);
-  assertx(checkInvariants(ad));
+  assertx(MixedArray::asMixed(ad));
+  assertx(!ad->isLegacyArray());
   return ad;
 }
 
@@ -1108,19 +1028,6 @@ ArrayData* PackedArray::ToDArray(ArrayData* adIn, bool /*copy*/) {
   DArrayInit init{size};
   for (int64_t i = 0; i < size; ++i) init.add(i, GetPosVal(adIn, i));
   return init.create();
-}
-
-ArrayData* PackedArray::ToPHPArrayVec(ArrayData* adIn, bool copy) {
-  assertx(checkInvariants(adIn));
-  assertx(adIn->isVecArrayKind());
-  if (adIn->empty()) return ArrayData::Create();
-  ArrayData* ad = copy ? Copy(adIn) : adIn;
-  ad->m_kind = HeaderKind::Packed;
-  assertx(ad->isNotDVArray());
-  if (RO::EvalArrayProvenance) arrprov::clearTag(ad);
-  ad->setLegacyArray(false);
-  assertx(checkInvariants(ad));
-  return ad;
 }
 
 ArrayData* PackedArray::ToVArrayVec(ArrayData* adIn, bool copy) {

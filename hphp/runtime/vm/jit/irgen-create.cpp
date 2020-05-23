@@ -208,8 +208,14 @@ void checkPropInitialValues(IRGS& env, const Class* cls) {
       for (Slot slot = 0; slot < props.size(); ++slot) {
         auto const& prop = props[slot];
         if (prop.attrs & AttrInitialSatisfiesTC) continue;
-        auto const& tc = prop.typeConstraint;
-        if (!tc.isCheckable()) continue;
+        auto const isAnyCheckable = [&] {
+          if (prop.typeConstraint.isCheckable()) return true;
+          for (auto const& ub : prop.ubs) {
+            if (ub.isCheckable()) return true;
+          }
+          return false;
+        }();
+        if (!isAnyCheckable) continue;
         auto index = cls->propSlotToIndex(slot);
         auto const tv = cls->declPropInit()[index].val.tv();
         if (tv.m_type == KindOfUninit) continue;
@@ -217,7 +223,8 @@ void checkPropInitialValues(IRGS& env, const Class* cls) {
         verifyPropType(
           env,
           cns(env, cls),
-          &tc,
+          &prop.typeConstraint,
+          &prop.ubs,
           slot,
           cns(env, tv),
           cns(env, makeStaticString(prop.name)),
@@ -386,16 +393,16 @@ void emitNewArray(IRGS& env, uint32_t capacity) {
   if (capacity == 0) {
     push(env, cns(env, ArrayData::Create()));
   } else {
-    push(env, gen(env, NewArray, cns(env, capacity)));
+    push(env, gen(env, NewMixedArray, cns(env, capacity)));
   }
 }
 
 void emitNewMixedArray(IRGS& env, uint32_t capacity) {
-  if (capacity == 0) {
-    push(env, cns(env, ArrayData::Create()));
-  } else {
-    push(env, gen(env, NewMixedArray, cns(env, capacity)));
-  }
+  emitNewArray(env, capacity);
+}
+
+void emitNewLikeArrayL(IRGS& env, int32_t /*unused*/, uint32_t capacity) {
+  emitNewArray(env, capacity);
 }
 
 void emitNewDArray(IRGS& env, uint32_t capacity) {
@@ -423,20 +430,6 @@ void emitNewKeysetArray(IRGS& env, uint32_t numArgs) {
   );
   discard(env, numArgs);
   push(env, array);
-}
-
-void emitNewLikeArrayL(IRGS& env, int32_t id, uint32_t capacity) {
-  auto const ldPMExit = makePseudoMainExit(env);
-  auto const ld = ldLoc(env, id, ldPMExit, DataTypeSpecific);
-
-  SSATmp* arr;
-  if (ld->isA(TArr)) {
-    arr = gen(env, NewLikeArray, ld, cns(env, capacity));
-  } else {
-    capacity = (capacity ? capacity : MixedArray::SmallSize);
-    arr = gen(env, NewArray, cns(env, capacity));
-  }
-  push(env, arr);
 }
 
 namespace {
@@ -479,7 +472,8 @@ void emitNewPackedLayoutArray(IRGS& env, uint32_t numArgs, Opcode op) {
 }
 
 void emitNewPackedArray(IRGS& env, uint32_t numArgs) {
-  emitNewPackedLayoutArray(env, numArgs, AllocPackedArray);
+  emitNewPackedLayoutArray(env, numArgs, AllocVecArray);
+  push(env, gen(env, ConvVecToArr, pop(env)));
 }
 
 void emitNewVecArray(IRGS& env, uint32_t numArgs) {

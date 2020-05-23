@@ -59,7 +59,9 @@ ClsPropLookup ldClsPropAddrKnown(IRGS& env,
   auto const& prop = cls->staticProperties()[slot];
 
   auto knownType = TCell;
-  if (RuntimeOption::EvalCheckPropTypeHints >= 3) {
+  if (RuntimeOption::EvalCheckPropTypeHints >= 3 &&
+      (!prop.typeConstraint.isUpperBound() ||
+       RuntimeOption::EvalEnforceGenericsUB >= 2)) {
     knownType = typeFromPropTC(prop.typeConstraint, cls, ctx, true);
     if (!(prop.attrs & AttrNoImplicitNullable)) knownType |= TInitNull;
   }
@@ -106,6 +108,7 @@ ClsPropLookup ldClsPropAddrKnown(IRGS& env,
   return {
     addr,
     &prop.typeConstraint,
+    &prop.ubs,
     slot,
   };
 
@@ -161,7 +164,7 @@ ClsPropLookup ldClsPropAddr(IRGS& env, SSATmp* ssaCls,
     cns(env, ignoreLateInit),
     cns(env, disallowConst)
   );
-  return { propAddr, nullptr, kInvalidSlot };
+  return { propAddr, nullptr, nullptr, kInvalidSlot };
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -197,6 +200,7 @@ void emitSetS(IRGS& env) {
       env,
       ssaCls,
       lookup.tc,
+      lookup.ubs,
       lookup.slot,
       value,
       ssaPropName,
@@ -205,7 +209,7 @@ void emitSetS(IRGS& env) {
     );
   } else if (RuntimeOption::EvalCheckPropTypeHints > 0) {
     auto const slot = gen(env, LookupSPropSlot, ssaCls, ssaPropName);
-    value = gen(env, VerifyPropCoerce, ssaCls, slot, value, cns(env, true));
+    value = gen(env, VerifyPropCoerceAll, ssaCls, slot, value, cns(env, true));
   }
 
   discard(env);
@@ -262,6 +266,7 @@ void emitIncDecS(IRGS& env, IncDecOp subop) {
       env,
       ssaCls,
       lookup.tc,
+      lookup.ubs,
       lookup.slot,
       result,
       ssaPropName,
@@ -269,7 +274,7 @@ void emitIncDecS(IRGS& env, IncDecOp subop) {
     );
   } else if (RuntimeOption::EvalCheckPropTypeHints > 0) {
     auto const slot = gen(env, LookupSPropSlot, ssaCls, ssaPropName);
-    gen(env, VerifyProp, ssaCls, slot, result, cns(env, true));
+    gen(env, VerifyPropAll, ssaCls, slot, result, cns(env, true));
   }
 
   discard(env);
@@ -373,6 +378,7 @@ void emitInitProp(IRGS& env, const StringData* propName, InitPropOp op) {
           env,
           cns(env, ctx),
           &prop.typeConstraint,
+          &prop.ubs,
           slot,
           val,
           cns(env, propName),
@@ -407,6 +413,7 @@ void emitInitProp(IRGS& env, const StringData* propName, InitPropOp op) {
           env,
           cls,
           &prop.typeConstraint,
+          &prop.ubs,
           slot,
           val,
           cns(env, propName),

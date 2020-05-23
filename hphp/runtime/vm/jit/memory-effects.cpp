@@ -767,7 +767,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case VerifyPropFail:
   case VerifyPropFailHard:
   case VerifyProp:
+  case VerifyPropAll:
   case VerifyPropCoerce:
+  case VerifyPropCoerceAll:
   case VerifyPropRecDesc:
     return may_load_store(AHeapAny, AHeapAny);
 
@@ -1474,7 +1476,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   // at all, so any effects they have on some types of memory locations we
   // track are isolated from anything else we care about.
 
-  case NewArray:
   case NewClsMeth:
   case NewCol:
   case NewColFromArray:
@@ -1484,7 +1485,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case NewDArray:
   case NewDictArray:
   case FuncCred:
-  case AllocPackedArray:
   case AllocVArray:
   case AllocVecArray:
   case AllocStructArray:
@@ -1722,7 +1722,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case OrdStr:
   case ChrInt:
   case CreateSSWH:
-  case NewLikeArray:
   case CheckInOuts:
   case BeginCatch:
   case CheckSurpriseFlags:

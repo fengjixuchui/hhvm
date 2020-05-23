@@ -26,7 +26,6 @@
 #include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
-#include "hphp/runtime/base/empty-array.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/packed-array.h"
@@ -241,13 +240,7 @@ void ArrayData::GetScalarArray(ArrayData** parr, arrprov::Tag tag) {
   it = s_arrayDataMap.find(arr);
   if (it != s_arrayDataMap.end()) return replace(*it);
 
-  ArrayData* ad;
-  if (((arr->isMixedKind() && !arr->isDArray()) || arr->isGlobalsArrayKind()) &&
-      arr->isVectorData()) {
-    ad = PackedArray::ConvertStatic(arr);
-  } else {
-    ad = arr->copyStatic();
-  }
+  auto ad = arr->copyStatic();
   assertx(ad->isStatic());
   MemoryStats::LogAlloc(AllocKind::StaticArray, ad->allocSize());
 
@@ -281,7 +274,7 @@ static_assert(ArrayFunctions::NK == ArrayData::ArrayKind::kNumKinds,
 #define DISPATCH(entry)                         \
   { PackedArray::entry,                         \
     MixedArray::entry,                          \
-    EmptyArray::entry,                          \
+    MixedArray::entry,                          \
     GlobalsArray::entry,                        \
     RecordArray::entry,                         \
     MixedArray::entry##Dict,   /* Dict */       \
@@ -723,7 +716,7 @@ DataType ArrayData::toDataType() const {
   switch (kind()) {
     case kPackedKind:
     case kMixedKind:
-    case kEmptyKind:
+    case kPlainKind:
     case kGlobalsKind:
     case kRecordKind:
       return KindOfArray;
@@ -754,7 +747,7 @@ DataType ArrayData::toPersistentDataType() const {
   switch (kind()) {
     case kPackedKind:
     case kMixedKind:
-    case kEmptyKind:
+    case kPlainKind:
     case kGlobalsKind:
     case kRecordKind:
       return KindOfPersistentArray;
@@ -797,7 +790,7 @@ bool ArrayData::IsValidKey(const String& k) {
 }
 
 ArrayData* ArrayData::Create(TypedValue value) {
-  PackedArrayInit pai(1);
+  MixedArrayInit pai(1);
   pai.append(value);
   return pai.create();
 }

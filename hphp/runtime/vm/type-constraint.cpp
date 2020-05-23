@@ -1197,7 +1197,8 @@ void TypeConstraint::verifyPropFail(const Class* thisCls,
         declCls, propName, displayName(nullptr), isStatic);
     }
     // Only trigger coercion logic if property type hints are soft
-    if (RO::EvalCheckPropTypeHints != 3) return;
+    if ((RO::EvalCheckPropTypeHints != 3) ||
+        (isUpperBound() && RO::EvalEnforceGenericsUB < 2)) return;
     if (RO::EvalHackArrDVArrs) {
       castClsMeth(val, make_vec_array<String,String>);
     } else {
@@ -1212,14 +1213,16 @@ void TypeConstraint::verifyPropFail(const Class* thisCls,
 
   raise_property_typehint_error(
     folly::sformat(
-      "{} '{}::{}' declared as type {}, {} assigned",
+      "{} '{}::{}' {} type {}, {} assigned",
       isStatic ? "Static property" : "Property",
       declCls->name(),
       propName,
+      isUpperBound() ? "upper-bounded by" : "declared as",
       displayName(nullptr),
       describe_actual_type(val)
     ),
-    isSoft()
+    isSoft(),
+    isUpperBound()
   );
 }
 
@@ -1482,4 +1485,8 @@ bool tcCouldBeReified(const Func* func, uint32_t paramId) {
 }
 
 //////////////////////////////////////////////////////////////////////
+void applyFlagsToUB(TypeConstraint& ub, const TypeConstraint& tc) {
+  auto const tcFlags = tc.flags() & ~TypeConstraint::Flags::TypeVar;
+  ub.addFlags(static_cast<TypeConstraint::Flags>(tcFlags));
+}
 }
