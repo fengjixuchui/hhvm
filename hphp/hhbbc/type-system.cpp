@@ -1856,8 +1856,7 @@ Type::Type(Type&& o) noexcept
   : m_bits(o.m_bits)
   , m_dataTag(o.m_dataTag)
 {
-  SCOPE_EXIT { assert(checkInvariants());
-               assert(o.checkInvariants()); };
+  SCOPE_EXIT { assert(o.checkInvariants()); };
   o.m_dataTag = DataTag::None;
   switch (m_dataTag) {
     case DataTag::None:   return;
@@ -2613,6 +2612,7 @@ bool Type::couldBe(const Type& o) const {
 }
 
 bool Type::checkInvariants() const {
+  if (!debug) return true;
   assert(isPredefined(m_bits));
   assert(!hasData() || mayHaveData(m_bits));
 
@@ -2719,9 +2719,15 @@ bool Type::checkInvariants() const {
       assert(isIntType(kv.first.m_type) ||
              kv.first.m_type == KindOfPersistentString);
       assert(kv.second.subtypeOf(valBits) && kv.second != TBottom);
-      assert(!isKeyset ||
-             loosen_staticness(from_cell(kv.first)) ==
-             loosen_staticness(kv.second));
+      if (isKeyset) {
+        if (isIntType(kv.first.m_type)) {
+          assert(kv.second.m_dataTag == DataTag::Int &&
+                 kv.first.m_data.num == kv.second.m_data.ival);
+        } else {
+          assert(kv.second.m_dataTag == DataTag::Str &&
+                 kv.first.m_data.pstr == kv.second.m_data.sval);
+        }
+      }
       if (packed) {
         packed = isIntType(kv.first.m_type) && kv.first.m_data.num == idx;
         ++idx;
@@ -5723,9 +5729,10 @@ std::pair<Type,ThrowMode> array_like_set(Type arr,
                                          const Type& valIn,
                                          ProvTag src) {
   const bool maybeEmpty = arr.couldBe(BArrLikeE);
-  const bool isVector   = arr.couldBe(BVec);
+  const bool isVector   = arr.subtypeOrNull(BVec);
   DEBUG_ONLY const bool isVArray   = arr.subtypeOrNull(BVArr);
   const bool validKey   = key.type.subtypeOf(isVector ? BInt : BArrKey);
+  assertx(isVector == arr.couldBe(BVec));
 
   trep bits = combine_dv_arr_like_bits(arr.m_bits, BArrLikeN);
   if (validKey) bits &= ~BArrLikeE;
@@ -5892,8 +5899,9 @@ std::pair<Type,Type> array_like_newelem(Type arr,
   }
 
   const bool maybeEmpty = arr.couldBe(BArrLikeE);
-  const bool isVector = arr.couldBe(BVec);
+  const bool isVector = arr.subtypeOrNull(BVec);
   const bool isVArray = arr.subtypeOrNull(BVArr);
+  assertx(isVector == arr.couldBe(BVec));
 
   trep bits = combine_dv_arr_like_bits(arr.m_bits, BArrLikeN);
   bits &= ~BArrLikeE;
