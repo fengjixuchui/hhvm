@@ -43,6 +43,7 @@ let localize env ty =
 
 let rec condition_type_from_reactivity r =
   match r with
+  | Pure (Some t)
   | Reactive (Some t)
   | Shallow (Some t)
   | Local (Some t) ->
@@ -69,6 +70,7 @@ let get_associated_condition_type env ~is_self ty =
 (* removes condition type from given reactivity flavor *)
 let rec strip_conditional_reactivity r =
   match r with
+  | Pure (Some _) -> Pure None
   | Reactive (Some _) -> Reactive None
   | Shallow (Some _) -> Shallow None
   | Local (Some _) -> Local None
@@ -175,6 +177,11 @@ let check_reactivity_matches
         | r -> r
       in
       match (caller_reactivity, callee_reactivity) with
+      (* Pure functions can only call pure functions *)
+      | ( (MaybeReactive (Pure _) | Pure _),
+          ( MaybeReactive (Reactive _ | Shallow _ | Local _ | Nonreactive)
+          | Reactive _ | Shallow _ | Local _ | Nonreactive ) )
+      (* Reactive functions can only call reactive or pure functions *)
       | ( (MaybeReactive (Reactive _) | Reactive _),
           ( MaybeReactive (Shallow _ | Local _ | Nonreactive)
           | Shallow _ | Local _ | Nonreactive ) ) ->
