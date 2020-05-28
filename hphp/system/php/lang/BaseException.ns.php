@@ -79,7 +79,7 @@ trait BaseException {
    *                     but possibly as other type in Exception descendants
    *                     (for example as string in PDOException).
    */
-  <<__Rx, __OnlyRxIfImpl(\HH\Rx\Exception::class), __MaybeMutable>>
+  <<__Rx, __MaybeMutable>>
   public function getCode() {
     return $this->code;
   }
@@ -120,6 +120,7 @@ trait BaseException {
    *
    * @return     mixed   Returns the Exception stack trace as an array.
    */
+  <<__Rx, __MaybeMutable>>
   final public function getTrace() {
     if (\is_resource($this->trace)) {
       $this->trace = \__SystemLib\extract_trace($this->trace);
@@ -148,6 +149,7 @@ trait BaseException {
    *
    * @return     mixed   Returns the Exception stack trace as a string.
    */
+  <<__Rx, __MaybeMutable>>
   final public function getTraceAsString() {
     $i = 0;
     $s = "";
