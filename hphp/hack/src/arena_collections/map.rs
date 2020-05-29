@@ -3,8 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
+use std::cmp::{Ord, Ordering, PartialOrd};
+use std::hash::{Hash, Hasher};
+
+use serde::Serialize;
+
 use arena_trait::{Arena, TrivialDrop};
-use std::cmp::{Ord, Ordering};
+use ocamlrep::ToOcamlRep;
 
 /// The maximum height difference (or balance factor) that is allowed
 /// in the implementation of the AVL tree.
@@ -22,11 +27,13 @@ const MAX_DELTA: u8 = 2;
 ///
 /// Since the whole Map is just a 1 word pointer, it implements the
 /// `Copy` trait.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 #[must_use]
 pub struct Map<'a, K, V>(Option<&'a Node<'a, K, V>>);
 
-/// Apparently, just deriving Copy and Clone does not work.
+/// The derived implementations of Copy and Clone require that K and V be
+/// Copy/Clone. We have no such requirement, since Map is just a pointer, so we
+/// manually implement them here.
 impl<'a, K, V> Clone for Map<'a, K, V> {
     fn clone(&self) -> Self {
         let Map(opt) = self;
@@ -38,13 +45,50 @@ impl<'a, K, V> Copy for Map<'a, K, V> {}
 
 impl<'a, K: PartialEq, V: PartialEq> PartialEq for Map<'a, K, V> {
     fn eq(&self, other: &Self) -> bool {
-        self.into_iter().eq(other.into_iter())
+        self.iter().eq(other.iter())
     }
 }
 
 impl<'a, K: Eq, V: Eq> Eq for Map<'a, K, V> {}
 
-#[derive(Debug)]
+impl<K: PartialOrd, V: PartialOrd> PartialOrd for Map<'_, K, V> {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.iter().partial_cmp(other.iter())
+    }
+}
+
+impl<K: Ord, V: Ord> Ord for Map<'_, K, V> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.iter().cmp(other.iter())
+    }
+}
+
+impl<K: Hash, V: Hash> Hash for Map<'_, K, V> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for elt in self {
+            elt.hash(state);
+        }
+    }
+}
+
+impl<K, V> Default for Map<'_, K, V> {
+    fn default() -> Self {
+        Map(None)
+    }
+}
+
+impl<K: ToOcamlRep + Ord, V: ToOcamlRep> ToOcamlRep for Map<'_, K, V> {
+    fn to_ocamlrep<'a, A: ocamlrep::Allocator>(&self, alloc: &'a A) -> ocamlrep::Value<'a> {
+        let len = self.count();
+        let mut iter = self.iter();
+        let (value, _) = ocamlrep::sorted_iter_to_ocaml_map(&mut iter, alloc, len);
+        value
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct Node<'a, K, V>(Map<'a, K, V>, K, V, Map<'a, K, V>, u8);
 
 impl<'a, K: TrivialDrop, V: TrivialDrop> TrivialDrop for Node<'a, K, V> {}
@@ -81,7 +125,7 @@ impl<'a, K: Ord, V> Map<'a, K, V> {
     }
 }
 
-impl<'a, K: TrivialDrop + Clone + Ord, V: TrivialDrop + Clone> Map<'a, K, V> {
+impl<'a, K: Ord, V> Map<'a, K, V> {
     /// Create a new empty map.
     ///
     /// Note that this does not require heap allocation,
@@ -90,6 +134,27 @@ impl<'a, K: TrivialDrop + Clone + Ord, V: TrivialDrop + Clone> Map<'a, K, V> {
         Map(None)
     }
 
+    /// Check whether the map is empty.
+    pub fn is_empty(self) -> bool {
+        match self {
+            Map(None) => true,
+            Map(Some(_)) => false,
+        }
+    }
+
+    /// Compute the number of entries in a map.
+    ///
+    /// Note that this function takes linear time and logarithmic
+    /// stack space in the size of the map.
+    pub fn count(self) -> usize {
+        match self {
+            Map(None) => 0,
+            Map(Some(Node(l, _, _, r, _))) => l.count() + 1 + r.count(),
+        }
+    }
+}
+
+impl<'a, K: TrivialDrop + Clone + Ord, V: TrivialDrop + Clone> Map<'a, K, V> {
     /// Returns a one-element map.
     pub fn singleton<A: Arena>(arena: &'a A, x: K, d: V) -> Self {
         let node = Node(Map(None), x, d, Map(None), 1);
@@ -110,34 +175,15 @@ impl<'a, K: TrivialDrop + Clone + Ord, V: TrivialDrop + Clone> Map<'a, K, V> {
         return m;
     }
 
-    /// Check whether the map is empty.
-    pub fn is_empty(self) -> bool {
-        match self {
-            Map(None) => true,
-            Map(Some(_)) => false,
-        }
-    }
-
-    /// Compute the number of entries in a map.
-    ///
-    /// Note that this function takes linear time and logarithmic
-    /// stack space in the size of the map.
-    pub fn count(self) -> isize {
-        match self {
-            Map(None) => 0,
-            Map(Some(Node(l, _, _, r, _))) => l.count() + 1 + r.count(),
-        }
-    }
-
     /// Returns a pointer the current entry belonging to the key,
     /// or returns None, if no such entry exists.
-    pub fn find_ref(self, x: &K) -> Option<&'a V> {
+    pub fn get(self, x: &K) -> Option<&'a V> {
         match self {
             Map(None) => None,
             Map(Some(Node(l, v, d, r, _h))) => match x.cmp(v) {
                 Ordering::Equal => Some(d),
-                Ordering::Less => l.find_ref(x),
-                Ordering::Greater => r.find_ref(x),
+                Ordering::Less => l.get(x),
+                Ordering::Greater => r.get(x),
             },
         }
     }
@@ -471,12 +517,12 @@ mod tests_arbitrary {
             let o: HashMap<u32, u32> = xs.clone().into_iter().collect();
             for (k, v) in o.iter() {
                 assert_eq!(m.mem(k), true);
-                assert_eq!(m.find_ref(k), Some(v));
+                assert_eq!(m.get(k), Some(v));
             }
             for k in ys {
                   let f = o.contains_key(&k);
                   assert_eq!(m.mem(&k), f);
-                  assert_eq!(m.find_ref(&k).is_some(), f);
+                  assert_eq!(m.get(&k).is_some(), f);
             }
             return true
         }

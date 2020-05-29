@@ -6,7 +6,6 @@
 use serde::Serialize;
 
 use ocamlrep_derive::ToOcamlRep;
-use oxidized::ToOxidized;
 
 #[derive(
     Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
@@ -30,19 +29,10 @@ impl<'a> From<&'a oxidized::local_id::LocalId> for LocalId<'a> {
     }
 }
 
-impl<'a> ToOxidized for LocalId<'a> {
-    type Target = oxidized::local_id::LocalId;
-
-    fn to_oxidized(&self) -> Self::Target {
-        let LocalId(id, name) = self;
-        (id.to_oxidized(), name.to_oxidized())
-    }
-}
-
 pub mod map {
-    pub type Map<'a, T> = arena_collections::SortedAssocList<'a, super::LocalId<'a>, T>;
+    pub type Map<'a, T> = arena_collections::map::Map<'a, super::LocalId<'a>, T>;
 }
 
 pub mod set {
-    pub type Set<'a> = arena_collections::SortedSet<'a, super::LocalId<'a>>;
+    pub type Set<'a> = arena_collections::set::Set<'a, super::LocalId<'a>>;
 }

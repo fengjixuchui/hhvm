@@ -4,8 +4,6 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 use arena_trait::Arena;
-use oxidized::ToOxidized;
-use std::collections::{BTreeMap, BTreeSet};
 use typing_collections_rust::Map;
 
 pub use crate::typing_continuations::TypingContKey;
@@ -20,16 +18,25 @@ pub struct PerContEntry<'a> {
     // TODO(hrust): tpenv
 }
 
-impl<'a> ToOxidized for PerContEntry<'a> {
-    type Target = oxidized::typing_per_cont_env::PerContEntry;
-
-    fn to_oxidized(&self) -> Self::Target {
+impl<'a> PerContEntry<'a> {
+    pub fn to_oxidized<'b>(
+        &self,
+        arena: &'b impl Arena,
+    ) -> oxidized_by_ref::typing_per_cont_env::PerContEntry<'b>
+    where
+        'a: 'b,
+    {
         let PerContEntry { local_types } = self;
-        oxidized::typing_per_cont_env::PerContEntry {
-            local_types: local_types.to_oxidized(),
-            fake_members: oxidized::typing_fake_members::TypingFakeMembers::Valid(BTreeSet::new()),
-            tpenv: oxidized::type_parameter_env::TypeParameterEnv {
-                tparams: BTreeMap::new(),
+        oxidized_by_ref::typing_per_cont_env::PerContEntry {
+            local_types: arena_collections::map::Map::from(
+                arena,
+                local_types.iter().map(|(&k, &v)| (k, v.to_oxidized())),
+            ),
+            fake_members: oxidized_by_ref::typing_fake_members::TypingFakeMembers::Valid(
+                Default::default(),
+            ),
+            tpenv: oxidized_by_ref::type_parameter_env::TypeParameterEnv {
+                tparams: Default::default(),
                 consistent: true,
             },
         }
@@ -57,12 +64,19 @@ impl<'a> PerContEntry<'a> {
 #[derive(Debug, Copy, Clone)]
 pub struct TypingPerContEnv<'a>(Map<'a, TypingContKey<'a>, &'a PerContEntry<'a>>);
 
-impl<'a> ToOxidized for TypingPerContEnv<'a> {
-    type Target = oxidized::typing_per_cont_env::TypingPerContEnv;
-
-    fn to_oxidized(&self) -> Self::Target {
+impl<'a> TypingPerContEnv<'a> {
+    pub fn to_oxidized<'b>(
+        &self,
+        arena: &'b impl Arena,
+    ) -> oxidized_by_ref::typing_per_cont_env::TypingPerContEnv<'b>
+    where
+        'a: 'b,
+    {
         let TypingPerContEnv(map) = self;
-        map.to_oxidized()
+        arena_collections::map::Map::from(
+            arena,
+            map.iter().map(|(&k, &v)| (k, v.to_oxidized(arena))),
+        )
     }
 }
 

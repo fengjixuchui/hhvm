@@ -54,11 +54,11 @@ bool APCTypedValue::checkInvariants() const {
     case APCKind::StaticString: assertx(m_data.str->isStatic()); break;
     case APCKind::UncountedString: assertx(m_data.str->isUncounted()); break;
     case APCKind::StaticArray:
-      assertx(m_data.arr->isPHPArrayKind());
+      assertx(m_data.arr->isPHPArrayType());
       assertx(m_data.arr->isStatic());
       break;
     case APCKind::StaticVec:
-      assertx(m_data.vec->isVecArrayKind());
+      assertx(m_data.vec->isVecKind());
       assertx(m_data.vec->isStatic());
       break;
     case APCKind::StaticDict:
@@ -70,11 +70,11 @@ bool APCTypedValue::checkInvariants() const {
       assertx(m_data.keyset->isStatic());
       break;
     case APCKind::UncountedArray:
-      assertx(m_data.arr->isPHPArrayKind());
+      assertx(m_data.arr->isPHPArrayType());
       assertx(m_data.arr->isUncounted());
       break;
     case APCKind::UncountedVec:
-      assertx(m_data.vec->isVecArrayKind());
+      assertx(m_data.vec->isVecKind());
       assertx(m_data.vec->isUncounted());
       break;
     case APCKind::UncountedDict:
@@ -129,7 +129,7 @@ void APCTypedValue::deleteUncounted() {
     auto const arr = [&] {
       if (kind == APCKind::UncountedArray) {
         auto const parr = m_data.arr;
-        assertx(parr->isPHPArrayKind());
+        assertx(parr->isPHPArrayType());
         if (parr->hasVanillaPackedLayout()) {
           PackedArray::ReleaseUncounted(parr);
         } else {
@@ -140,7 +140,7 @@ void APCTypedValue::deleteUncounted() {
       }
       if (kind == APCKind::UncountedVec) {
         auto const vec = m_data.vec;
-        assertx(vec->isVecArrayKind());
+        assertx(vec->isVecKind());
         PackedArray::ReleaseUncounted(vec);
         return vec;
       }

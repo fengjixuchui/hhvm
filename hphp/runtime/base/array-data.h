@@ -84,57 +84,50 @@ struct ArrayData : MaybeCountable {
    */
   enum ArrayKind : uint8_t {
     kPackedKind,        // varray: vec-like array with keys in range [0..size)
-    kMixedKind,         // darray: dict-like array int or string keys, maybe holes
-    kPlainKind,         // Plain PHP array (happens to be backed by MixedArray)
-    kGlobalsKind,       // GlobalsArray
-    kRecordKind,        // RecordArray
-    kDictKind,          // Hack dict
-    kVecKind,           // Hack vec
-    kKeysetKind,        // Hack keyset
-    kBespokeArrayKind,  // Bespoke array
-    kBespokeDictKind,   // Bespoke array
-    kBespokeVecKind,    // Bespoke array
-    kBespokeKeysetKind, // Bespoke array
-    kNumKinds           // insert new values before kNumKinds.
+    kBespokeVArrayKind,
+    kMixedKind,         // darray: dict-like array with int or string keys
+    kBespokeDArrayKind,
+    kPlainKind,         // Plain PHP array (backed by MixedArray)
+    kBespokeArrayKind,
+    kGlobalsKind,       // GlobalsArray for the awful $GLOBALS['GLOBALS']
+    kRecordKind,        // RecordArray (backed by a record and a MixedArray)
+    kVecKind,
+    kBespokeVecKind,
+    kDictKind,
+    kBespokeDictKind,
+    kKeysetKind,
+    kBespokeKeysetKind,
+    kNumKinds           // Insert new values before kNumKinds.
   };
 
   /*
-   * A secondary array kind axis for PHP arrays.
-   *
-   * We use darrays and varrays in place of regular arrays for arrays that we
-   * want to replace with Hack arrays.  These arrays will emit notices whenever
-   * we attempt to perform operations on them which would be illegal for Hack
-   * arrays.
+   * This bit is set for bespoke ArrayKinds, and not for vanilla kinds.
    */
-  enum DVArray : uint8_t {
-    kNotDVArray = 0,
-    kVArray     = 1,
-    kDArray     = 2
-  };
-  static auto constexpr kDVArrayMask = static_cast<DVArray>(3);
+  static auto constexpr kBespokeKindMask = uint8_t{0x01};
+
   /*
    * For uncounted Packed, Mixed, Dict and Vec, indicates that the
    * array was co-allocated with an APCTypedValue (at apctv+1).
    */
-  static auto constexpr kHasApcTv    = 4;
+  static auto constexpr kHasApcTv = 1;
 
   /*
    * Indicates that this dict or vec should use some legacy (i.e.,
    * PHP-compatible) behaviors, including serialization
    */
-  static auto constexpr kLegacyArray = 8;
+  static auto constexpr kLegacyArray = 2;
 
   /*
    * Indicates that this array has provenance data available in a side table
    * See array-provenance.h
    */
-  static auto constexpr kHasProvenanceData = 16;
+  static auto constexpr kHasProvenanceData = 4;
 
   /*
    * Indicates that this array has a side table that contains information about
    * its keys.
    */
-  static auto constexpr kHasStrKeyTable = 32;
+  static auto constexpr kHasStrKeyTable = 8;
 
   /////////////////////////////////////////////////////////////////////////////
   // Creation and destruction.
@@ -252,9 +245,8 @@ public:
   bool isMixedKind() const;
   bool isPlainKind() const;
   bool isGlobalsArrayKind() const;
-  bool isEmptyArrayKind() const;
   bool isDictKind() const;
-  bool isVecArrayKind() const;
+  bool isVecKind() const;
   bool isKeysetKind() const;
   bool isRecordArrayKind() const;
 
@@ -263,8 +255,8 @@ public:
    */
   bool isPHPArrayType() const;
   bool isHackArrayType() const;
+  bool isVecType() const;
   bool isDictType() const;
-  bool isVecArrayType() const;
   bool isKeysetType() const;
 
   /*
@@ -274,21 +266,10 @@ public:
   bool hasVanillaMixedLayout() const;
 
   /*
-   * Whether the array is a PHP (non-Hack) or Hack array.
-   */
-  bool isPHPArrayKind() const;
-  bool isHackArrayKind() const;
-
-  /*
    * Whether the array-like has the standard layout. This check excludes
    * array-likes with a "bespoke" hidden-class layout.
    */
   bool isVanilla() const;
-  /*
-   * The DVArray kind for the array.
-   */
-  DVArray dvArray() const;
-  void setDVArray(DVArray);
 
   /*
    * Only used for uncounted arrays. Indicates that there's a
@@ -332,11 +313,6 @@ public:
   bool isDictOrDArray() const;
 
   static bool dvArrayEqual(const ArrayData* a, const ArrayData* b);
-
-  /*
-   * Check whether the array has an sane DVArray setting for its kind.
-   */
-  bool dvArraySanityCheck() const;
 
   /*
    * Whether the array contains "vector-like" data---i.e., iteration order
@@ -693,9 +669,6 @@ public:
    */
   static constexpr size_t offsetofSize() { return offsetof(ArrayData, m_size); }
   static constexpr size_t sizeofSize() { return sizeof(m_size); }
-  static constexpr size_t offsetofDVArray() {
-    return offsetof(ArrayData, m_aux16);
-  }
 
   const StrKeyTable& missingKeySideTable() const {
     assertx(this->hasStrKeyTable());
@@ -804,7 +777,7 @@ static_assert(ArrayData::kMixedKind == uint8_t(HeaderKind::Mixed), "");
 static_assert(ArrayData::kPlainKind == uint8_t(HeaderKind::Plain), "");
 static_assert(ArrayData::kGlobalsKind == uint8_t(HeaderKind::Globals), "");
 static_assert(ArrayData::kDictKind == uint8_t(HeaderKind::Dict), "");
-static_assert(ArrayData::kVecKind == uint8_t(HeaderKind::VecArray), "");
+static_assert(ArrayData::kVecKind == uint8_t(HeaderKind::Vec), "");
 static_assert(ArrayData::kRecordKind == uint8_t(HeaderKind::RecordArray), "");
 
 //////////////////////////////////////////////////////////////////////
@@ -815,7 +788,7 @@ constexpr size_t kEmptySetArraySize = 96;
 /*
  * Storage for the static empty arrays.
  */
-extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVecArray;
+extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVec;
 extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVArray;
 extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDictArray;
 extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDArray;
@@ -832,7 +805,7 @@ extern std::aligned_storage<kEmptySetArraySize, 16>::type s_theEmptySetArray;
 ArrayData* staticEmptyArray();
 ArrayData* staticEmptyVArray();
 ArrayData* staticEmptyDArray();
-ArrayData* staticEmptyVecArray();
+ArrayData* staticEmptyVec();
 ArrayData* staticEmptyDictArray();
 ArrayData* staticEmptyKeysetArray();
 

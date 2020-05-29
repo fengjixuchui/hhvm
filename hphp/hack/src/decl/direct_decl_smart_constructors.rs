@@ -26,10 +26,8 @@ use oxidized_by_ref::{
     nast,
     pos::Pos,
     relative_path::RelativePath,
-    s_set::SSet,
     shallow_decl_defs::{self, ShallowClassConst, ShallowMethod, ShallowProp, ShallowTypeconst},
     shape_map::ShapeField,
-    tany_sentinel::TanySentinel,
     typing_defs,
     typing_defs::{
         EnumType, FunArity, FunElt, FunParam, FunParams, FunType, ParamMode, ParamMutability,
@@ -48,6 +46,8 @@ use parser_core_types::{
 mod direct_decl_smart_constructors_generated;
 
 pub use direct_decl_smart_constructors_generated::DirectDeclSmartConstructors;
+
+type SSet<'a> = arena_collections::SortedSet<'a, &'a str>;
 
 impl<'a> DirectDeclSmartConstructors<'a> {
     pub fn new(src: &SourceText<'a>, arena: &'a Bump) -> Self {
@@ -188,7 +188,8 @@ fn strip_dollar_prefix<'a>(name: &'a str) -> &'a str {
     name.trim_start_matches("$")
 }
 
-const TANY: Ty<'_> = Ty(Reason::none(), &Ty_::Tany(TanySentinel));
+const TANY_: Ty_<'_> = Ty_::Tany(oxidized_by_ref::tany_sentinel::TanySentinel);
+const TANY: Ty<'_> = Ty(Reason::none(), &TANY_);
 
 fn tany() -> Ty<'static> {
     TANY
@@ -631,26 +632,6 @@ impl<'a> Node_<'a> {
         }
     }
 
-    fn as_expr(self, arena: &'a Bump) -> Result<nast::Expr<'a>, ParseError> {
-        let expr_ = match self {
-            Node_::Expr(&expr) => return Ok(expr),
-            Node_::IntLiteral(s, _) => aast::Expr_::Int(s),
-            Node_::FloatingLiteral(s, _) => aast::Expr_::Float(s),
-            Node_::StringLiteral(s, _) => aast::Expr_::String(s),
-            Node_::BooleanLiteral(s, _) => {
-                if s.eq_ignore_ascii_case("true") {
-                    aast::Expr_::True
-                } else {
-                    aast::Expr_::False
-                }
-            }
-            Node_::Null(_) => aast::Expr_::Null,
-            n => return Err(format!("Could not construct an Expr for {:?}", n)),
-        };
-        let pos = self.get_pos(arena)?;
-        Ok(aast::Expr(pos, expr_))
-    }
-
     fn as_attributes(self, arena: &'a Bump) -> Result<Attributes<'a>, ParseError> {
         let mut attributes = Attributes {
             reactivity: Reactivity::Nonreactive,
@@ -665,6 +646,7 @@ impl<'a> Node_<'a> {
             override_: false,
             at_most_rx_as_func: false,
             enforceable: None,
+            returns_void_to_rx: false,
         };
 
         let mut reactivity_condition_type = None;
@@ -719,10 +701,26 @@ impl<'a> Node_<'a> {
                         attributes.param_mutability = Some(ParamMutability::ParamOwnedMutable)
                     }
                     "__MutableReturn" => attributes.returns_mutable = true,
+                    "__ReturnsVoidToRx" => attributes.returns_void_to_rx = true,
                     "__Deprecated" => {
+                        fn fold_string_concat<'a>(expr: &nast::Expr<'a>, acc: &mut String<'a>) {
+                            match expr {
+                                &aast::Expr(_, aast::Expr_::String(val)) => acc.push_str(val),
+                                &aast::Expr(_, aast::Expr_::Binop(&(Bop::Dot, e1, e2))) => {
+                                    fold_string_concat(&e1, acc);
+                                    fold_string_concat(&e2, acc);
+                                }
+                                _ => (),
+                            }
+                        }
                         attributes.deprecated = attribute.params.first().and_then(|expr| match expr
                         {
                             &aast::Expr(_, aast::Expr_::String(val)) => Some(val),
+                            &aast::Expr(_, aast::Expr_::Binop(_)) => {
+                                let mut acc = String::new_in(arena);
+                                fold_string_concat(expr, &mut acc);
+                                Some(acc.into_bump_str())
+                            }
                             _ => None,
                         })
                     }
@@ -781,6 +779,7 @@ struct Attributes<'a> {
     override_: bool,
     at_most_rx_as_func: bool,
     enforceable: Option<&'a Pos<'a>>,
+    returns_void_to_rx: bool,
 }
 
 impl<'a> DirectDeclSmartConstructors<'a> {
@@ -803,6 +802,47 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                 }
             }
         }
+    }
+
+    fn token_bytes(&self, token: &PositionedToken) -> &'a [u8] {
+        self.state.source_text.source_text().sub(
+            token.leading_start_offset().unwrap_or(0) + token.leading_width(),
+            token.width(),
+        )
+    }
+
+    // Check that the slice is valid UTF-8. If it is, return a &str referencing
+    // the same data. Otherwise, copy the slice into our arena using
+    // String::from_utf8_lossy_in, and return a reference to the arena str.
+    fn str_from_utf8(&self, slice: &'a [u8]) -> &'a str {
+        if let Ok(s) = std::str::from_utf8(slice) {
+            s
+        } else {
+            String::from_utf8_lossy_in(slice, self.state.arena).into_bump_str()
+        }
+    }
+
+    fn node_to_expr(&self, node: Node_<'a>) -> Result<nast::Expr<'a>, ParseError> {
+        let expr_ = match node {
+            Node_::Expr(&expr) => return Ok(expr),
+            Node_::IntLiteral(s, _) => aast::Expr_::Int(s),
+            Node_::FloatingLiteral(s, _) => aast::Expr_::Float(s),
+            Node_::StringLiteral(s, _) => aast::Expr_::String(s),
+            Node_::BooleanLiteral(s, _) => {
+                if s.eq_ignore_ascii_case("true") {
+                    aast::Expr_::True
+                } else {
+                    aast::Expr_::False
+                }
+            }
+            Node_::Null(_) => aast::Expr_::Null,
+            Node_::Name(..) | Node_::QualifiedName(..) => aast::Expr_::Id(
+                self.alloc(self.get_name(self.state.namespace_builder.current_namespace(), node)?),
+            ),
+            n => return Err(format!("Could not construct an Expr for {:?}", n)),
+        };
+        let pos = node.get_pos(self.state.arena)?;
+        Ok(aast::Expr(pos, expr_))
     }
 
     fn node_to_ty(&self, node: Node_<'a>) -> Result<Ty<'a>, ParseError> {
@@ -848,7 +888,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                         PrefixedString(_) => Ok(Ty_::Tprim(arena.alloc(aast::Tprim::Tstring))),
                         Unop(&(_op, expr)) => expr_to_ty(arena, expr),
                         ParenthesizedExpr(&expr) => expr_to_ty(arena, expr),
-                        Any => Ok(Ty_::Tany(TanySentinel)),
+                        Any => Ok(TANY_),
 
                         Array(_) | ArrayGet(_) | As(_) | Assert(_) | Await(_) | Binop(_)
                         | BracedExpr(_) | Call(_) | Callconv(_) | Cast(_) | ClassConst(_)
@@ -892,12 +932,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
             node => {
                 let Id(pos, name) = self.get_name("", node)?;
                 let reason = self.alloc(Reason::hint(pos));
-                let ty_ = if self
-                    .state
-                    .type_parameters
-                    .iter()
-                    .any(|tps| tps.contains(&name))
-                {
+                let ty_ = if self.is_type_param_in_scope(name) {
                     Ty_::Tgeneric(name)
                 } else {
                     match name.as_ref() {
@@ -921,41 +956,6 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         }
     }
 
-    /// Converts any node that can represent a list of Node_::TypeParameter
-    /// into the type parameter list and a list of all type variables. Used for
-    /// classes, methods, and functions.
-    fn as_type_params(&self, node: Node_<'a>) -> Result<(&'a [Tparam<'a>], SSet<'a>), ParseError> {
-        let mut type_variables = MultiSetMut::new_in(self.state.arena);
-        let type_params = self.map_to_slice(Ok(node), |node| {
-            let TypeParameterDecl {
-                name,
-                variance,
-                reified,
-                constraints,
-            } = match node {
-                Node_::TypeParameter(decl) => decl,
-                n => return Err(format!("Expected a type parameter, but got {:?}", n)),
-            };
-            let id = self.get_name("", *name)?;
-            let constraints_iter = constraints.iter();
-            let mut constraints = Vec::new_in(self.state.arena);
-            for constraint in constraints_iter {
-                let (kind, value) = *constraint;
-                constraints.push((kind, self.node_to_ty(value)?));
-            }
-            let constraints = constraints.into_bump_slice();
-            type_variables.insert(id.1);
-            Ok(Tparam {
-                variance: *variance,
-                name: id,
-                constraints,
-                reified: *reified,
-                user_attributes: &[],
-            })
-        })?;
-        Ok((type_params, type_variables.into()))
-    }
-
     fn pop_type_params(&mut self, node: Node_<'a>) -> Result<&'a [Tparam<'a>], ParseError> {
         match node {
             Node_::TypeParameters(tparams) => {
@@ -964,6 +964,13 @@ impl<'a> DirectDeclSmartConstructors<'a> {
             }
             _ => Ok(&[]),
         }
+    }
+
+    fn is_type_param_in_scope(&self, name: &str) -> bool {
+        self.state
+            .type_parameters
+            .iter()
+            .any(|tps| tps.contains(name))
     }
 
     fn function_into_ty(
@@ -980,7 +987,9 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                 self.alloc(Reason::witness(pos)),
                 self.alloc(Ty_::Tprim(self.alloc(aast::Tprim::Tvoid))),
             ),
-            _ => self.node_to_ty(header.ret_hint).unwrap_or_else(|_| tany()),
+            _ => self.node_to_ty(header.ret_hint).unwrap_or_else(|_| {
+                self.tany_with_pos(header.name.get_pos(self.state.arena).unwrap_or(Pos::none()))
+            }),
         };
         let (async_, is_coroutine) = header.modifiers.iter().fold(
             (false, false),
@@ -1022,6 +1031,21 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         if attributes.returns_mutable {
             flags |= FunTypeFlags::RETURNS_MUTABLE;
         }
+        if attributes.returns_void_to_rx {
+            flags |= FunTypeFlags::RETURNS_VOID_TO_RX;
+        }
+        match attributes.param_mutability {
+            Some(ParamMutability::ParamBorrowedMutable) => {
+                flags |= FunTypeFlags::MUTABLE_FLAGS_BORROWED;
+            }
+            Some(ParamMutability::ParamOwnedMutable) => {
+                flags |= FunTypeFlags::MUTABLE_FLAGS_OWNED;
+            }
+            Some(ParamMutability::ParamMaybeMutable) => {
+                flags |= FunTypeFlags::MUTABLE_FLAGS_MAYBE;
+            }
+            None => (),
+        };
         // Pop the type params stack only after creating all inner types.
         let tparams = self.pop_type_params(header.type_params)?;
         let ft = self.alloc(FunType {
@@ -1204,6 +1228,119 @@ impl<'a> DirectDeclSmartConstructors<'a> {
     fn prim_ty(&self, tprim: aast::Tprim<'a>, pos: &'a Pos<'a>) -> Node_<'a> {
         self.hint_ty(pos, Ty_::Tprim(self.alloc(tprim)))
     }
+
+    fn tany_with_pos(&self, pos: &'a Pos<'a>) -> Ty<'a> {
+        Ty(self.alloc(Reason::witness(pos)), &TANY_)
+    }
+
+    fn source_text_at_pos(&self, pos: &'a Pos<'a>) -> &'a [u8] {
+        let start = pos.start_cnum();
+        let end = pos.end_cnum();
+        self.state.source_text.source_text().sub(start, end - start)
+    }
+
+    // While we usually can tell whether to allocate a Tapply or Tgeneric based
+    // on our type_parameters stack, *constraints* on type parameters may
+    // reference type parameters which we have not parsed yet. When constructing
+    // a type parameter list, we use this function to rewrite the type of each
+    // constraint, considering the full list of type parameters to be in scope.
+    fn convert_tapply_to_tgeneric(&self, ty: Ty<'a>) -> Ty<'a> {
+        let ty_ = match *ty.1 {
+            Ty_::Tapply(&(id, [])) => {
+                // If the name contained a namespace delimiter in the original
+                // source text, then it can't have referred to a type parameter
+                // (since type parameters cannot be namespaced).
+                match ty.0.pos() {
+                    Some(pos) => {
+                        if self.source_text_at_pos(pos).contains(&b'\\') {
+                            return ty;
+                        }
+                    }
+                    None => return ty,
+                }
+                // However, the direct decl parser will unconditionally prefix
+                // the name with the current namespace (as it does for any
+                // Tapply). We need to remove it.
+                match id.1.rsplit('\\').next() {
+                    Some(name) if self.is_type_param_in_scope(name) => Ty_::Tgeneric(name),
+                    _ => return ty,
+                }
+            }
+            Ty_::Tapply(&(id, targs)) => {
+                let mut converted_targs = Vec::with_capacity_in(targs.len(), self.state.arena);
+                for &targ in targs {
+                    converted_targs.push(self.convert_tapply_to_tgeneric(targ));
+                }
+                Ty_::Tapply(self.alloc((id, converted_targs.into_bump_slice())))
+            }
+            Ty_::Tarray(&(tk, tv)) => Ty_::Tarray(self.alloc((
+                tk.map(|tk| self.convert_tapply_to_tgeneric(tk)),
+                tv.map(|tv| self.convert_tapply_to_tgeneric(tv)),
+            ))),
+            Ty_::Tlike(ty) => Ty_::Tlike(self.convert_tapply_to_tgeneric(ty)),
+            Ty_::TpuAccess(&(ty, id)) => {
+                Ty_::TpuAccess(self.alloc((self.convert_tapply_to_tgeneric(ty), id)))
+            }
+            Ty_::Toption(ty) => Ty_::Toption(self.convert_tapply_to_tgeneric(ty)),
+            Ty_::Tfun(fun_type) => {
+                let convert_param = |param: &'a FunParam<'a>| {
+                    &*self.alloc(FunParam {
+                        type_: PossiblyEnforcedTy {
+                            enforced: param.type_.enforced,
+                            type_: self.convert_tapply_to_tgeneric(param.type_.type_),
+                        },
+                        rx_annotation: param.rx_annotation.clone(),
+                        ..*param
+                    })
+                };
+                let arity = match fun_type.arity {
+                    FunArity::Fstandard => FunArity::Fstandard,
+                    FunArity::Fvariadic(param) => FunArity::Fvariadic(convert_param(param)),
+                };
+                let mut params = Vec::with_capacity_in(fun_type.params.len(), self.state.arena);
+                for &param in fun_type.params {
+                    params.push(convert_param(param));
+                }
+                let params = params.into_bump_slice();
+                let ret = PossiblyEnforcedTy {
+                    enforced: fun_type.ret.enforced,
+                    type_: self.convert_tapply_to_tgeneric(fun_type.ret.type_),
+                };
+                Ty_::Tfun(self.alloc(FunType {
+                    arity,
+                    params,
+                    ret,
+                    reactive: fun_type.reactive.clone(),
+                    ..*fun_type
+                }))
+            }
+            Ty_::Tshape(&(kind, fields)) => {
+                let mut converted_fields =
+                    AssocListMut::with_capacity_in(fields.len(), self.state.arena);
+                for (name, ty) in fields.iter() {
+                    converted_fields.insert(
+                        name.clone(),
+                        ShapeFieldType {
+                            optional: ty.optional,
+                            ty: self.convert_tapply_to_tgeneric(ty.ty),
+                        },
+                    );
+                }
+                Ty_::Tshape(self.alloc((kind, converted_fields.into())))
+            }
+            Ty_::Tdarray(&(tk, tv)) => Ty_::Tdarray(self.alloc((
+                self.convert_tapply_to_tgeneric(tk),
+                self.convert_tapply_to_tgeneric(tv),
+            ))),
+            Ty_::Tvarray(ty) => Ty_::Tvarray(self.convert_tapply_to_tgeneric(ty)),
+            Ty_::TvarrayOrDarray(&(tk, tv)) => Ty_::TvarrayOrDarray(self.alloc((
+                self.convert_tapply_to_tgeneric(tk),
+                self.convert_tapply_to_tgeneric(tv),
+            ))),
+            _ => return ty,
+        };
+        Ty(ty.0, self.alloc(ty_))
+    }
 }
 
 enum NodeIterHelper<'a: 'b, 'b> {
@@ -1277,16 +1414,7 @@ impl<'a> FlattenOp for DirectDeclSmartConstructors<'a> {
 
 impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors<'a> {
     fn make_token(&mut self, token: Self::Token) -> Self::R {
-        let token_text = |this: &Self| {
-            String::from_utf8_lossy_in(
-                this.state.source_text.source_text().sub(
-                    token.leading_start_offset().unwrap_or(0) + token.leading_width(),
-                    token.width(),
-                ),
-                this.state.arena,
-            )
-            .into_bump_str()
-        };
+        let token_text = |this: &Self| this.str_from_utf8(this.token_bytes(&token));
         let token_pos = |this: &Self| {
             let start = this
                 .state
@@ -1346,15 +1474,35 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             | TokenKind::SelfToken => Node_::Name(token_text(self), token_pos(self)),
             TokenKind::XHPClassName => Node_::XhpName(token_text(self), token_pos(self)),
             TokenKind::SingleQuotedStringLiteral => Node_::StringLiteral(
-                token_text(self)
-                    .trim_start_matches("'")
-                    .trim_end_matches("'"),
+                escaper::unescape_single_in(
+                    self.str_from_utf8(escaper::unquote_slice(self.token_bytes(&token))),
+                    self.state.arena,
+                )
+                .map_err(|e| e.to_string())?,
                 token_pos(self),
             ),
             TokenKind::DoubleQuotedStringLiteral => Node_::StringLiteral(
-                token_text(self)
-                    .trim_start_matches('"')
-                    .trim_end_matches('"'),
+                escaper::unescape_double_in(
+                    self.str_from_utf8(escaper::unquote_slice(self.token_bytes(&token))),
+                    self.state.arena,
+                )
+                .map_err(|e| e.to_string())?,
+                token_pos(self),
+            ),
+            TokenKind::HeredocStringLiteral => Node_::StringLiteral(
+                escaper::unescape_heredoc_in(
+                    self.str_from_utf8(escaper::unquote_slice(self.token_bytes(&token))),
+                    self.state.arena,
+                )
+                .map_err(|e| e.to_string())?,
+                token_pos(self),
+            ),
+            TokenKind::NowdocStringLiteral => Node_::StringLiteral(
+                escaper::unescape_nowdoc_in(
+                    self.str_from_utf8(escaper::unquote_slice(self.token_bytes(&token))),
+                    self.state.arena,
+                )
+                .map_err(|e| e.to_string())?,
                 token_pos(self),
             ),
             TokenKind::DecimalLiteral
@@ -1519,11 +1667,11 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
     ) -> Self::R {
         let fields = self.map_to_slice(fields, |node| match node {
             Node_::ListItem(&(key, value)) => {
-                let key = key.as_expr(self.state.arena)?;
-                let value = value.as_expr(self.state.arena)?;
+                let key = self.node_to_expr(key)?;
+                let value = self.node_to_expr(value)?;
                 Ok(aast::Afield::AFkvalue(key, value))
             }
-            node => Ok(aast::Afield::AFvalue(node.as_expr(self.state.arena)?)),
+            node => Ok(aast::Afield::AFvalue(self.node_to_expr(node)?)),
         })?;
         Ok(Node_::Expr(self.alloc(aast::Expr(
             Pos::merge(
@@ -1545,8 +1693,8 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
     ) -> Self::R {
         let fields = self.map_to_slice(fields, |node| match node {
             Node_::ListItem(&(key, value)) => {
-                let key = key.as_expr(self.state.arena)?;
-                let value = value.as_expr(self.state.arena)?;
+                let key = self.node_to_expr(key)?;
+                let value = self.node_to_expr(value)?;
                 Ok((key, value))
             }
             n => return Err(format!("Expected a ListItem but was {:?}", n)),
@@ -1571,8 +1719,8 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
     ) -> Self::R {
         let fields = self.map_to_slice(fields, |node| match node {
             Node_::ListItem(&(key, value)) => {
-                let key = key.as_expr(self.state.arena)?;
-                let value = value.as_expr(self.state.arena)?;
+                let key = self.node_to_expr(key)?;
+                let value = self.node_to_expr(value)?;
                 Ok(aast::Field(key, value))
             }
             n => return Err(format!("Expected a ListItem but was {:?}", n)),
@@ -1595,7 +1743,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         fields: Self::R,
         right_bracket: Self::R,
     ) -> Self::R {
-        let fields = self.map_to_slice(fields, |node| node.as_expr(self.state.arena))?;
+        let fields = self.map_to_slice(fields, |node| self.node_to_expr(node))?;
         Ok(Node_::Expr(self.alloc(aast::Expr(
             Pos::merge(
                 self.state.arena,
@@ -1614,7 +1762,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         fields: Self::R,
         right_bracket: Self::R,
     ) -> Self::R {
-        let fields = self.map_to_slice(fields, |node| node.as_expr(self.state.arena))?;
+        let fields = self.map_to_slice(fields, |node| self.node_to_expr(node))?;
         Ok(Node_::Expr(self.alloc(aast::Expr(
             Pos::merge(
                 self.state.arena,
@@ -1633,7 +1781,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         fields: Self::R,
         right_bracket: Self::R,
     ) -> Self::R {
-        let fields = self.map_to_slice(fields, |node| node.as_expr(self.state.arena))?;
+        let fields = self.map_to_slice(fields, |node| self.node_to_expr(node))?;
         Ok(Node_::Expr(self.alloc(aast::Expr(
             Pos::merge(
                 self.state.arena,
@@ -1682,7 +1830,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         };
         Ok(Node_::Expr(self.alloc(aast::Expr(
             pos,
-            aast::Expr_::Unop(self.alloc((op, value.as_expr(self.state.arena)?))),
+            aast::Expr_::Unop(self.alloc((op, self.node_to_expr(value)?))),
         ))))
     }
 
@@ -1710,7 +1858,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         };
         Ok(Node_::Expr(self.alloc(aast::Expr(
             pos,
-            aast::Expr_::Unop(self.alloc((op, value.as_expr(self.state.arena)?))),
+            aast::Expr_::Unop(self.alloc((op, self.node_to_expr(value)?))),
         ))))
     }
 
@@ -1763,11 +1911,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
 
         Ok(Node_::Expr(self.alloc(aast::Expr(
             pos,
-            aast::Expr_::Binop(self.alloc((
-                op,
-                lhs.as_expr(self.state.arena)?,
-                rhs.as_expr(self.state.arena)?,
-            ))),
+            aast::Expr_::Binop(self.alloc((op, self.node_to_expr(lhs)?, self.node_to_expr(rhs)?))),
         ))))
     }
 
@@ -1815,7 +1959,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                     tarraykey(self.state.arena),
                     self.node_to_ty(*tv).unwrap_or_else(|_| tany()),
                 ))),
-                _ => Ty_::Tany(TanySentinel),
+                _ => TANY_,
             };
             Ok(self.hint_ty(pos, ty_))
         } else {
@@ -1918,15 +2062,47 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         })))
     }
 
-    fn make_type_parameters(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
-        let node = Node_::BracketedList(self.alloc((
-            arg0?.get_pos(self.state.arena)?,
-            arg1?.as_slice(self.state.arena),
-            arg2?.get_pos(self.state.arena)?,
-        )));
-        let (tparams, tparam_names) = self.as_type_params(node)?;
-        Rc::make_mut(&mut self.state.type_parameters).push(tparam_names);
-        Ok(Node_::TypeParameters(tparams))
+    fn make_type_parameters(&mut self, _lt: Self::R, tparams: Self::R, _gt: Self::R) -> Self::R {
+        let tparams = tparams?;
+        let mut tparams_with_name = Vec::new_in(self.state.arena);
+        let mut tparam_names = MultiSetMut::new_in(self.state.arena);
+        for node in tparams.iter() {
+            match node {
+                &Node_::TypeParameter(decl) => {
+                    let name = self.get_name("", decl.name)?;
+                    tparam_names.insert(name.1);
+                    tparams_with_name.push((decl, name));
+                }
+                n => return Err(format!("Expected a type parameter, but got {:?}", n)),
+            }
+        }
+        Rc::make_mut(&mut self.state.type_parameters).push(tparam_names.into());
+        let mut tparams = Vec::with_capacity_in(tparams_with_name.len(), self.state.arena);
+        for (decl, name) in tparams_with_name.into_iter() {
+            let &TypeParameterDecl {
+                name: _,
+                variance,
+                reified,
+                constraints,
+            } = decl;
+            let constraints_iter = constraints.iter();
+            let mut constraints = Vec::new_in(self.state.arena);
+            for constraint in constraints_iter {
+                let &(kind, ty) = constraint;
+                let ty = self.node_to_ty(ty)?;
+                let ty = self.convert_tapply_to_tgeneric(ty);
+                constraints.push((kind, ty));
+            }
+            let constraints = constraints.into_bump_slice();
+            tparams.push(Tparam {
+                variance,
+                name,
+                constraints,
+                reified,
+                user_attributes: &[],
+            });
+        }
+        Ok(Node_::TypeParameters(tparams.into_bump_slice()))
     }
 
     fn make_parameter_declaration(
@@ -2095,9 +2271,9 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 {
                     Node_::Const(self.alloc(shallow_decl_defs::ShallowClassConst {
                         abstract_: modifiers.is_abstract,
-                        expr: match initializer {
-                            Node_::Expr(e) => Some(*e.clone()),
-                            n => n.as_expr(self.state.arena).ok(),
+                        expr: match *initializer {
+                            Node_::Expr(e) => Some(e.clone()),
+                            n => self.node_to_expr(n).ok(),
                         },
                         name: id,
                         type_: ty,
@@ -2533,12 +2709,12 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
 
     fn make_enum_declaration(
         &mut self,
-        _arg0: Self::R,
+        attributes: Self::R,
         _arg1: Self::R,
         name: Self::R,
         _arg3: Self::R,
         extends: Self::R,
-        _arg5: Self::R,
+        constraint: Self::R,
         _arg6: Self::R,
         cases: Self::R,
         _arg8: Self::R,
@@ -2555,12 +2731,12 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         let mut consts = Vec::new_in(self.state.arena);
         for node in cases?.iter() {
             match node {
-                Node_::ListItem(innards) => {
-                    let (name, value) = *innards;
+                Node_::ListItem(&innards) => {
+                    let (name, value) = innards;
                     consts.push(shallow_decl_defs::ShallowClassConst {
                         abstract_: false,
-                        expr: Some(value.as_expr(self.state.arena)?),
-                        name: self.get_name("", *name)?,
+                        expr: Some(self.node_to_expr(value)?),
+                        name: self.get_name("", name)?,
                         type_: Ty(
                             self.alloc(Reason::witness(value.get_pos(self.state.arena)?)),
                             hint.1,
@@ -2571,6 +2747,24 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             }
         }
         let consts = consts.into_bump_slice();
+
+        let mut user_attributes = Vec::new_in(self.state.arena);
+        for attribute in attributes?.iter() {
+            match attribute {
+                &Node_::Attribute(attr) => user_attributes.push(attr),
+                _ => (),
+            }
+        }
+        // Match ordering of attributes produced by the OCaml decl parser (even
+        // though it's the reverse of the syntactic ordering).
+        user_attributes.reverse();
+        let user_attributes = user_attributes.into_bump_slice();
+
+        let constraint = match constraint? {
+            Node_::TypeConstraint(&(_kind, ty)) => self.node_to_ty(ty).ok(),
+            _ => None,
+        };
+
         let cls = shallow_decl_defs::ShallowClass {
             mode: match self.state.file_mode_builder {
                 FileModeBuilder::None | FileModeBuilder::Pending => Mode::Mstrict,
@@ -2598,10 +2792,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             constructor: None,
             static_methods: &[],
             methods: &[],
-            user_attributes: &[],
+            user_attributes,
             enum_type: Some(EnumType {
                 base: hint,
-                constraint: None,
+                constraint,
             }),
             // NB: We have no intention of populating this field. Any errors
             // historically emitted during shallow decl should be migrated to a
@@ -2686,10 +2880,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         let mut kv_pairs = Vec::new_in(self.state.arena);
         for node in fields?.iter() {
             match node {
-                Node_::ListItem((key, value)) => {
+                Node_::ListItem(&(key, value)) => {
                     let key = match key {
-                        Node_::IntLiteral(s, p) => ShapeFieldName::SFlitInt((*p, s)),
-                        Node_::StringLiteral(s, p) => ShapeFieldName::SFlitStr((*p, s)),
+                        Node_::IntLiteral(s, p) => ShapeFieldName::SFlitInt((p, s)),
+                        Node_::StringLiteral(s, p) => ShapeFieldName::SFlitStr((p, s)),
                         n => {
                             return Err(format!(
                             "Expected an int literal, string literal, or class const, but was {:?}",
@@ -2697,7 +2891,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                         ))
                         }
                     };
-                    let value = value.as_expr(self.state.arena)?;
+                    let value = self.node_to_expr(value)?;
                     kv_pairs.push((key, value))
                 }
                 n => return Err(format!("Expected a ListItem but was {:?}", n)),
@@ -2722,8 +2916,8 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         right_paren: Self::R,
     ) -> Self::R {
         let mut field_exprs = Vec::new_in(self.state.arena);
-        for field in fields?.iter() {
-            field_exprs.push(field.as_expr(self.state.arena)?);
+        for &field in fields?.iter() {
+            field_exprs.push(self.node_to_expr(field)?);
         }
         let fields = field_exprs.into_bump_slice();
         Ok(Node_::Expr(self.alloc(aast::Expr(
@@ -2936,7 +3130,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         };
         Ok(Node_::Attribute(nast::UserAttribute {
             name,
-            params: self.map_to_slice(args, |node| node.as_expr(self.state.arena))?,
+            params: self.map_to_slice(args, |node| self.node_to_expr(node))?,
         }))
     }
 

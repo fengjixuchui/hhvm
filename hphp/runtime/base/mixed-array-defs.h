@@ -47,7 +47,7 @@ ALWAYS_INLINE
 void MixedArray::InitSmall(MixedArray* a, uint32_t size, int64_t nextIntKey) {
   InitSmallHash(a);
   a->m_sizeAndPos = size; // pos=0
-  a->initHeader_16(HeaderKind::Mixed, OneReference, ArrayData::kNotDVArray);
+  a->initHeader(HeaderKind::Mixed, OneReference);
   a->m_scale_used = MixedArray::SmallScale | uint64_t(size) << 32;
   a->m_nextKI = nextIntKey;
 }
@@ -227,7 +227,7 @@ void ConvertTvToUncounted(
       // Fall-through.
     case KindOfPersistentVec: {
       auto& ad = data.parr;
-      assertx(ad->isVecArrayKind());
+      assertx(ad->isVecKind());
       if (handlePersistent(ad)) break;
       if (ad->empty()) ad = ArrayData::CreateVec();
       else ad = PackedArray::MakeUncounted(ad, false, seen);
@@ -267,7 +267,7 @@ void ConvertTvToUncounted(
     case KindOfPersistentVArray:
     case KindOfPersistentArray: {
       auto& ad = data.parr;
-      assertx(ad->isPHPArrayKind());
+      assertx(ad->isPHPArrayType());
       assertx(!RuntimeOption::EvalHackArrDVArrs || ad->isNotDVArray());
       if (handlePersistent(ad)) break;
       if (ad->empty()) {

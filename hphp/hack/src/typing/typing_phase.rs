@@ -12,7 +12,6 @@ use oxidized::aast::{Hint, Hint_};
 use oxidized::ast;
 use oxidized::ast_defs::Id as OwnedId;
 use oxidized::pos::Pos as OwnedPos;
-use oxidized::ToOxidized;
 use oxidized_by_ref::ast::ClassId;
 use oxidized_by_ref::ast_defs::Id;
 use oxidized_by_ref::pos::Pos;
@@ -55,7 +54,7 @@ pub fn localize<'a>(ety_env: &mut ExpandEnv<'a>, env: &mut Env<'a>, dty: Ty<'a>)
                     // TODO(hrust) global inference logic
                     // TODO(hrust) will the `unwrap` below panic?
                     // Assumption: r is always Rhint or at least always has a pos
-                    localize_tparams(ety_env, env, r.pos.unwrap(), tys, class_info.tparams)
+                    localize_tparams(ety_env, env, r.pos().unwrap(), tys, class_info.tparams)
                 }
             };
             bld.class(r, cls, tys)
@@ -103,7 +102,7 @@ pub fn localize_targs<'a>(
         tast::Targ(
             tvar,
             Hint(
-                use_pos.to_oxidized(),
+                use_pos.to_owned(),
                 Box::new(Hint_::Happly(
                     OwnedId(OwnedPos::make_none(), typehints::WILDCARD.to_string()),
                     vec![],

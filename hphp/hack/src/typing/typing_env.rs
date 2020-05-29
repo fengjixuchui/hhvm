@@ -8,9 +8,9 @@ use crate::typing_local_types::Local;
 use crate::typing_per_cont_env::{PerContEntry, TypingContKey};
 
 use decl_provider_rust as decl_provider;
-use oxidized::ident::Ident;
 use oxidized::pos::Pos;
 use oxidized::relative_path::RelativePath;
+use oxidized_by_ref::ident::Ident;
 use oxidized_by_ref::shallow_decl_defs::{ShallowClass, ShallowMethod};
 use typing_collections_rust::Map;
 use typing_defs_rust as typing_defs;
@@ -58,7 +58,7 @@ impl<'a> Env<'a> {
             _ => new_type,
         };
         if let Some(next_cont) = self.next_cont_opt() {
-            let expr_id = match next_cont.local_types.find_ref(&x) {
+            let expr_id = match next_cont.local_types.get(&x) {
                 None => self.ident(),
                 Some(Local(_, y)) => *y,
             };
@@ -129,7 +129,7 @@ impl<'a> Env<'a> {
 
     pub fn set_local_expr_id(&mut self, x: LocalId<'a>, new_eid: Ident) {
         if let Some(next_cont) = self.next_cont_opt() {
-            match next_cont.local_types.find_ref(&x) {
+            match next_cont.local_types.get(&x) {
                 Some(Local(ty, eid)) if *eid != new_eid => {
                     let bld = self.bld();
                     let local = Local(*ty, new_eid);
@@ -151,7 +151,7 @@ impl<'a> Env<'a> {
                 None
             }
             Some(next_cont) => {
-                let lcl = next_cont.local_types.find_ref(&x);
+                let lcl = next_cont.local_types.get(&x);
                 lcl.map(|Local(_, x)| *x)
             }
         }
@@ -183,7 +183,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    pub fn tany(&self, r: PReason<'a>) -> Ty<'a> {
+    pub fn tany(&self, r: &'a Reason<'a>) -> Ty<'a> {
         // TODO(hrust) check dynamic view
         self.bld().any(r)
     }

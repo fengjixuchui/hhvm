@@ -5,9 +5,8 @@
 
 use std::cmp::Ordering;
 
-use oxidized::ToOxidized;
-
 use crate::aast_defs::Tprim;
+use crate::ast_defs::ParamKind;
 use crate::ident::Ident;
 use crate::pos::Pos;
 use crate::typing_defs_core::*;
@@ -54,7 +53,7 @@ impl<'a> Ty<'a> {
         r
     }
     pub fn get_pos(self) -> Option<&'a Pos<'a>> {
-        self.get_reason().pos
+        self.get_reason().pos()
     }
     pub fn is_tyvar(self) -> bool {
         match self.get_node() {
@@ -115,23 +114,6 @@ impl Ty<'_> {
     }
 }
 
-impl<'a> ToOxidized for Ty<'a> {
-    type Target = oxidized::typing_defs_core::Ty;
-
-    /// This is a wasteful implementation of to_oxidized, for debugging only. It
-    /// does not preserve sharing of filenames in positions, and it allocates an
-    /// intermediate Rust Vec to hold an OCaml representation (because we do not
-    /// currently have a generated means of directly converting an
-    /// oxidized_by_ref value to an oxidized one, so we use ToOcamlRep and
-    /// FromOcamlRep instead).
-    fn to_oxidized(&self) -> Self::Target {
-        let arena = ocamlrep::Arena::new();
-        let ocaml_ty = arena.add(self);
-        use ocamlrep::FromOcamlRep;
-        oxidized::typing_defs_core::Ty::from_ocamlrep(ocaml_ty).unwrap()
-    }
-}
-
 impl PartialEq for ConstraintType<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.1 == other.1
@@ -165,19 +147,17 @@ impl<'a> InternalType<'a> {
     }
 }
 
-impl<'a> ToOxidized for InternalType<'a> {
-    type Target = oxidized::typing_defs_core::InternalType;
+impl Default for Reactivity<'_> {
+    fn default() -> Self {
+        Reactivity::Nonreactive
+    }
+}
 
-    /// This is a wasteful implementation of to_oxidized, for debugging only. It
-    /// does not preserve sharing of filenames in positions, and it allocates an
-    /// intermediate Rust Vec to hold an OCaml representation (because we do not
-    /// currently have a generated means of directly converting an
-    /// oxidized_by_ref value to an oxidized one, so we use ToOcamlRep and
-    /// FromOcamlRep instead).
-    fn to_oxidized(&self) -> Self::Target {
-        let arena = ocamlrep::Arena::new();
-        let ocaml_ty = arena.add(self);
-        use ocamlrep::FromOcamlRep;
-        oxidized::typing_defs_core::InternalType::from_ocamlrep(ocaml_ty).unwrap()
+impl From<Option<ParamKind>> for ParamMode {
+    fn from(callconv: Option<ParamKind>) -> Self {
+        match callconv {
+            Some(ParamKind::Pinout) => ParamMode::FPinout,
+            None => ParamMode::FPnormal,
+        }
     }
 }

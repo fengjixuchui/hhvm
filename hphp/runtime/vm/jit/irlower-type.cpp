@@ -234,12 +234,14 @@ void cgIsNTypeMem(IRLS& env, const IRInstruction* inst) {
 ///////////////////////////////////////////////////////////////////////////////
 
 void cgCheckVArray(IRLS& env, const IRInstruction* inst) {
+  static_assert(ArrayData::kPackedKind == 0);
+  static_assert(ArrayData::kBespokeVArrayKind == 1);
   auto const src = srcLoc(env, inst, 0).reg();
   auto const dst = dstLoc(env, inst, 0).reg();
   auto& v = vmain(env);
   auto const sf = v.makeReg();
-  v << testbim{ArrayData::kVArray, src + ArrayData::offsetofDVArray(), sf};
-  fwdJcc(v, env, CC_Z, sf, inst->taken());
+  v << cmpbim{ArrayData::kBespokeVArrayKind, src[HeaderKindOffset], sf};
+  fwdJcc(v, env, CC_NBE, sf, inst->taken());
   v << copy{src, dst};
 }
 
@@ -248,18 +250,31 @@ void cgCheckDArray(IRLS& env, const IRInstruction* inst) {
   auto const dst = dstLoc(env, inst, 0).reg();
   auto& v = vmain(env);
   auto const sf = v.makeReg();
-  v << testbim{ArrayData::kDArray, src + ArrayData::offsetofDVArray(), sf};
-  fwdJcc(v, env, CC_Z, sf, inst->taken());
+  if (RO::EvalAllowBespokeArrayLikes && !inst->src(0)->isA(TVanillaArr)) {
+    auto const kind = v.makeReg();
+    auto const mask = v.makeReg();
+    v << loadb{src[HeaderKindOffset], kind};
+    v << andbi{~ArrayData::kBespokeKindMask, kind, mask, v.makeReg()};
+    v << cmpbi{ArrayData::kMixedKind, mask, sf};
+    fwdJcc(v, env, CC_NE, sf, inst->taken());
+  } else {
+    v << cmpbim{ArrayData::kMixedKind, src[HeaderKindOffset], sf};
+  }
+  fwdJcc(v, env, CC_NE, sf, inst->taken());
   v << copy{src, dst};
 }
 
 void cgCheckDVArray(IRLS& env, const IRInstruction* inst) {
+  static_assert(ArrayData::kPackedKind == 0);
+  static_assert(ArrayData::kBespokeVArrayKind == 1);
+  static_assert(ArrayData::kMixedKind == 2);
+  static_assert(ArrayData::kBespokeDArrayKind == 3);
   auto const src = srcLoc(env, inst, 0).reg();
   auto const dst = dstLoc(env, inst, 0).reg();
   auto& v = vmain(env);
   auto const sf = v.makeReg();
-  v << testbim{ArrayData::kDVArrayMask, src + ArrayData::offsetofDVArray(), sf};
-  fwdJcc(v, env, CC_Z, sf, inst->taken());
+  v << cmpbim{ArrayData::kBespokeDArrayKind, src[HeaderKindOffset], sf};
+  fwdJcc(v, env, CC_NBE, sf, inst->taken());
   v << copy{src, dst};
 }
 

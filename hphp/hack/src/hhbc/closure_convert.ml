@@ -799,10 +799,18 @@ let rec convert_expr env st ((p, expr_) as expr) =
           (st, Some targ)
       in
       (st, (p, ValCollection (k, targ, es)))
-    | Pair (e1, e2) ->
+    | Pair (th, e1, e2) ->
       let (st, e1) = convert_expr env st e1 in
       let (st, e2) = convert_expr env st e2 in
-      (st, (p, Pair (e1, e2)))
+      let (st, th) =
+        match th with
+        | None -> (st, None)
+        | Some (t1, t2) ->
+          let (st, t1) = convert_tyarg env st t1 in
+          let (st, t2) = convert_tyarg env st t2 in
+          (st, Some (t1, t2))
+      in
+      (st, (p, Pair (th, e1, e2)))
     | KeyValCollection (k, targ, es) ->
       let rec zip x y =
         match (x, y) with
@@ -1562,8 +1570,11 @@ and convert_class_elt_const (env : env) st cc =
   (st, { cc with cc_expr })
 
 and convert_class_elt_classvar (env : env) st cv =
+  let (st, cv_user_attributes) =
+    convert_user_attributes env st cv.cv_user_attributes
+  in
   let (st, cv_expr) = convert_opt_expr env st cv.cv_expr in
-  (st, { cv with cv_expr })
+  (st, { cv with cv_expr; cv_user_attributes })
 
 and convert_class_elt_method (env : env) st md =
   let cls =

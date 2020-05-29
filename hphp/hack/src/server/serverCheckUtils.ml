@@ -86,14 +86,23 @@ let start_typing_delegate genv env : env =
     min_batch_size;
     num_workers;
     worker_min_log_level;
+    file_system_mode;
     _;
   } =
     genv.local_config.remote_type_check
   in
   let { init_id; mergebase; recheck_id; _ } = env.init_env in
   let recheck_id = Option.value recheck_id ~default:init_id in
+  let file_system_mode =
+    match ArtifactStore.parse_file_system_mode file_system_mode with
+    | Some mode -> mode
+    | None ->
+      failwith (Printf.sprintf "Unknown file_system_mode: %s" file_system_mode)
+  in
   let artifact_store_config =
-    ArtifactStore.default_config ~temp_dir:(Path.make GlobalConfig.tmp_dir)
+    ArtifactStore.default_config
+      ~file_system_mode
+      ~temp_dir:(Path.make GlobalConfig.tmp_dir)
   in
   let raise_on_failure =
     match num_local_workers with
@@ -103,6 +112,7 @@ let start_typing_delegate genv env : env =
   let delegate_state =
     Typing_service_delegate.create
       ~job_runner:(JobRunner.get JobRunner.Remote)
+      ~artifact_store_config
       ~max_batch_size
       ~min_batch_size
       ~raise_on_failure
@@ -117,7 +127,6 @@ let start_typing_delegate genv env : env =
           Typing_service_delegate.start
             Typing_service_types.
               {
-                artifact_store_config;
                 defer_class_declaration_threshold;
                 heartbeat_period;
                 init_id;
