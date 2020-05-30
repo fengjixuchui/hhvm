@@ -449,6 +449,7 @@ function get_options($argv) {
     '*ignore-oids' => '',
     'jitsample:' => '',
     '*hh_single_type_check:' => '',
+    'write-to-checkout' => '',
   ];
   $options = darray[];
   $files = varray[];
@@ -549,6 +550,10 @@ function get_options($argv) {
     echo "The options\n -", implode("\n -", $multi_request_modes),
          "\nare mutually exclusive options\n";
     exit(1);
+  }
+
+  if (isset($options['write-to-checkout'])) {
+    Status::$write_to_checkout = true;
   }
 
   return varray[$options, $files];
@@ -852,7 +857,7 @@ function hhvm_cmd_impl(
     ];
 
     if ($autoload_db_prefix !== null) {
-      $args[] = '-vAutoload.DBPath='.escapeshellarg("$autoload_db_prefix.$mode_num.autoloadDB");
+      $args[] = '-vAutoload.DBPath='.escapeshellarg("$autoload_db_prefix.$mode_num");
     }
 
     if (isset($options['hackc'])) {
@@ -928,7 +933,7 @@ function hhvm_cmd(
   $cmds = hhvm_cmd_impl(
     $options,
     find_test_ext($test, 'ini'),
-    $test, // we put the autoload DB next to the test
+    Status::getTestTmpPath($test, 'autoloadDB'),
     $hdf,
     find_debug_config($test, 'hphpd.ini'),
     read_opts_file(find_test_ext($test, 'opts')),
@@ -1171,7 +1176,7 @@ function repo_mode_compile($options, $test, $program) {
     $result = exec_with_stack($hhbbc);
   }
   if ($result === true) return true;
-  file_put_contents("$test.diff", $result);
+  Status::writeDiff($test, $result);
 }
 
 
@@ -1365,6 +1370,11 @@ class Queue {
   }
 }
 
+enum TempDirRemove: int {
+  ALWAYS = 0;
+  ON_RUN_SUCCESS = 1;
+  NEVER = 2;
+}
 
 class Status {
   private static $results = varray[];
@@ -1375,11 +1385,14 @@ class Status {
   public static $nofork = false;
   private static ?Queue $queue = null;
   private static $killed = false;
+  public static TempDirRemove $temp_dir_remove = TempDirRemove::ALWAYS;
+  private static int $return_value = 255;
 
   private static $overall_start_time = 0;
   private static $overall_end_time = 0;
 
-  private static $tempdir = "";
+  private static $tmpdir = "";
+  public static $write_to_checkout = false;
 
   public static $passed = 0;
   public static $skipped = 0;
@@ -1403,23 +1416,50 @@ class Status {
   const YELLOW = 33;
   const BLUE = 34;
 
-  public static function createTempDir(): void {
-    self::$tempdir = sys_get_temp_dir();
-    // Apparently some systems might not put the trailing slash
-    if (substr(self::$tempdir, -1) !== "/") {
-      self::$tempdir .= "/";
+  public static function createTmpDir(): void {
+    // TODO: one day we should have hack-accessible mkdtemp
+    self::$tmpdir = tempnam(sys_get_temp_dir(), "hphp-test-");
+    unlink(self::$tmpdir);
+    mkdir(self::$tmpdir);
+  }
+
+  public static function getRunTmpDir(): string {
+    return self::$tmpdir;
+  }
+
+  // Return a path in the run tmpdir that's unique to this test and ext.
+  // Remember to teach clean_intermediate_files to clean up all the exts you use
+  public static function getTestTmpPath(string $test, string $ext): string {
+    return self::$tmpdir . '/' . $test . '.' . $ext;
+  }
+
+  // Similar to getTestTmpPath, but if we're run with --write-to-checkout
+  // then we put the files next to the test instead of in the tmpdir.
+  public static function getTestOutputPath(string $test, string $ext): string {
+    if (self::$write_to_checkout) {
+      return "$test.$ext";
     }
-    self::$tempdir .= getmypid().'-'.rand();
-    mkdir(self::$tempdir);
+    return static::getTestTmpPath($test, $ext);
   }
 
-  public static function getTestTmpDir(): string {
-    $test_tmp_dir = self::$tempdir . "/test-data";
-    mkdir($test_tmp_dir);
-    return $test_tmp_dir;
+  public static function createTestTmpDir(string $test): string {
+    $test_temp_dir = self::getTestTmpPath($test, 'tmpdir');
+    @mkdir($test_temp_dir, 0777, true);
+    return $test_temp_dir . '/';
   }
 
-  private static function removeDirectory($dir) {
+  public static function writeDiff(string $test, string $diff): void {
+    $path = Status::getTestOutputPath($test, 'diff');
+    @mkdir(dirname($path), 0777, true);
+    file_put_contents($path, $diff);
+  }
+
+  public static function diffForTest(string $test): string {
+    $diff = @file_get_contents(Status::getTestOutputPath($test, 'diff'));
+    return $diff === false ? '' : $diff;
+  }
+
+  public static function removeDirectory($dir) {
     $files = scandir($dir);
     foreach ($files as $file) {
       if ($file == '.' || $file == '..') {
@@ -1435,8 +1475,35 @@ class Status {
     rmdir($dir);
   }
 
-  private static function removeTempDir() {
-    self::removeDirectory(self::$tempdir);
+  // This is similar to removeDirectory but it only removes empty directores
+  // and won't enter directories whose names end with '.tmpdir'. This allows
+  // us to clean up paths like test/quick/vec in our run's temporary directory
+  // if all the tests in them passed, but it leaves test tmpdirs of failed
+  // tests (that we didn't remove with clean_intermediate_files because the
+  // test failed) and directores under them alone even if they're empty.
+  public static function removeEmptyTestParentDirs($dir): bool {
+    $is_now_empty = true;
+    $files = scandir($dir);
+    foreach ($files as $file) {
+      if ($file == '.' || $file == '..') {
+        continue;
+      }
+      if (strrpos($file, '.tmpdir') === (strlen($file) - strlen('.tmpdir'))) {
+        $is_now_empty = false;
+        continue;
+      }
+      $path = $dir . "/" . $file;
+      if (!is_dir($path)) {
+        $is_now_empty = false;
+        continue;
+      }
+      if (self::removeEmptyTestParentDirs($path)) {
+        rmdir($path);
+      } else {
+        $is_now_empty = false;
+      }
+    }
+    return $is_now_empty;
   }
 
   public static function setMode($mode) {
@@ -1472,18 +1539,50 @@ class Status {
     self::$overall_start_time = microtime(true);
   }
 
-  public static function finished() {
+  public static function finished(int $return_value) {
     self::$overall_end_time = microtime(true);
+    self::$return_value = $return_value;
     self::send(self::MSG_FINISHED, null);
   }
 
   public static function destroy(): void {
     if (!self::$killed) {
       self::$killed = true;
-      self::$queue->destroy();
-      self::$queue = null;
-      self::removeTempDir();
+      if (self::$queue !== null) {
+        self::$queue->destroy();
+        self::$queue = null;
+      }
+      switch (self::$temp_dir_remove) {
+        case TempDirRemove::NEVER:
+          break;
+        case TempDirRemove::ON_RUN_SUCCESS:
+          if (self::$return_value !== 0) {
+            self::removeEmptyTestParentDirs(self::$tmpdir);
+            break;
+          }
+          // FALLTHROUGH
+        case TempDirRemove::ALWAYS:
+          self::removeDirectory(self::$tmpdir);
+      }
     }
+  }
+
+  public static function destroyFromSignal($_signo): void {
+    self::destroy();
+  }
+
+  public static function registerCleanup(bool $no_clean) {
+    if (self::getMode() === self::MODE_TESTPILOT ||
+        self::getMode() === self::MODE_RECORD_FAILURES) {
+      self::$temp_dir_remove = TempDirRemove::ALWAYS;
+    } else if ($no_clean) {
+      self::$temp_dir_remove = TempDirRemove::NEVER;
+    } else {
+      self::$temp_dir_remove = TempDirRemove::ON_RUN_SUCCESS;
+    }
+    register_shutdown_function(class_meth(self::class, 'destroy'));
+    pcntl_signal(SIGTERM, class_meth(self::class, 'destroyFromSignal'));
+    pcntl_signal(SIGINT, class_meth(self::class, 'destroyFromSignal'));
   }
 
   public static function serverRestarted() {
@@ -1618,7 +1717,7 @@ class Status {
             if (Status::hasCursorControl()) {
               print "\033[2K\033[1G";
             }
-            $diff = (string)@file_get_contents($test.'.diff');
+            $diff = Status::diffForTest($test);
             Status::sayColor(Status::RED, "\nFAILED",
                              ": $test\n$diff\n");
             break;
@@ -1685,7 +1784,7 @@ class Status {
     $end = darray['op' => 'test_done', 'test' => $test, 'status' => $status,
                  'start_time' => $stime, 'end_time' => $etime];
     if ($status == 'failed') {
-      $end['details'] = self::utf8Sanitize(@file_get_contents("$test.diff"));
+      $end['details'] = self::utf8Sanitize(Status::diffForTest($test));
     }
     self::say($start, $end);
   }
@@ -1756,7 +1855,7 @@ class Status {
   public static function getQueue() {
     if (!self::$queue) {
       if (self::$killed) error("Killed!");
-      self::$queue = new Queue(self::$tempdir);
+      self::$queue = new Queue(self::$tmpdir);
     }
     return self::$queue;
   }
@@ -1767,7 +1866,7 @@ function clean_intermediate_files($test, $options) {
     return;
   }
   $exts = varray[
-    // normal test output
+    // normal test output will go here if we're run with --write-to-checkout
     'out',
     'diff',
     // repo mode tests
@@ -1777,14 +1876,6 @@ function clean_intermediate_files($test, $options) {
     // tests in --hhbbc2 mode
     'before.round_trip.hhas',
     'after.round_trip.hhas',
-    // temporary autoloader DB and associated cruft
-    // We have at most two modes for now - see hhvm_cmd_impl
-    '0.autoloadDB',
-    '0.autoloadDB-shm',
-    '0.autoloadDB-wal',
-    '1.autoloadDB',
-    '1.autoloadDB-shm',
-    '1.autoloadDB-wal',
   ];
   foreach ($exts as $ext) {
     if ($ext == 'repo') {
@@ -1792,19 +1883,35 @@ function clean_intermediate_files($test, $options) {
     } else {
       $file = "$test.$ext";
     }
-    if (file_exists($file)) {
-      if (is_dir($file)) {
-        foreach(new RecursiveIteratorIterator(new
-            RecursiveDirectoryIterator($file, FilesystemIterator::SKIP_DOTS),
-            RecursiveIteratorIterator::CHILD_FIRST) as $path) {
-          $path->isDir()
-          ? rmdir($path->getPathname())
-          : unlink($path->getPathname());
-        }
-        rmdir($file);
-      } else {
-        unlink($file);
-      }
+    if (is_dir($file)) {
+      Status::removeDirectory($file);
+    } else if (file_exists($file)) {
+      unlink($file);
+    }
+  }
+  $tmp_exts = varray[
+    // normal test output goes here by default
+    'out',
+    'diff',
+    // scratch directory the test may write to
+    'tmpdir',
+    // temporary autoloader DB and associated cruft
+    // We have at most two modes for now - see hhvm_cmd_impl
+    'autoloadDB.0',
+    'autoloadDB.0-journal',
+    'autoloadDB.0-shm',
+    'autoloadDB.0-wal',
+    'autoloadDB.1',
+    'autoloadDB.1-journal',
+    'autoloadDB.1-shm',
+    'autoloadDB.1-wal',
+  ];
+  foreach ($tmp_exts as $ext) {
+    $file = Status::getTestTmpPath($test, $ext);
+    if (is_dir($file)) {
+      Status::removeDirectory($file);
+    } else if (file_exists($file)) {
+      unlink($file);
     }
   }
 }
@@ -2135,6 +2242,7 @@ const SERVER_TIMEOUT = 45;
 function run_config_server($options, $test) {
   invariant(can_run_server_test($test, $options), "skip_test should have skipped this");
 
+  Status::createTestTmpDir($test); // force it to be created
   $config = find_file_for_dir(dirname($test), 'config.ini');
   $port = $options['servers']['configs'][$config]->server['port'];
   $ch = curl_init("localhost:$port/$test");
@@ -2160,6 +2268,7 @@ function run_config_cli(
 ) {
   $cmd = timeout_prefix() . $cmd;
 
+  $cmd_env['HPHP_TEST_TMPDIR'] = Status::createTestTmpDir($test);
   if (isset($options['log'])) {
     $cmd_env['TRACE'] = 'printir:1';
     $cmd_env['HPHP_TRACE_FILE'] = $test . '.log';
@@ -2175,7 +2284,7 @@ function run_config_cli(
     "$cmd 2>&1", $descriptorspec, inout $pipes, null, $cmd_env
   );
   if (!is_resource($process)) {
-    file_put_contents("$test.diff", "Couldn't invoke $cmd");
+    Status::writeDiff($test, "Couldn't invoke $cmd");
     return false;
   }
 
@@ -2202,14 +2311,14 @@ function replace_object_resource_ids($str, $replacement) {
 function run_config_post($outputs, $test, $options) {
   $output = $outputs[0];
   $stderr = $outputs[1];
-  file_put_contents("$test.out", $output);
+  file_put_contents(Status::getTestOutputPath($test, 'out'), $output);
 
   $error_ok = isset($options['repo']) && file_exists($test . '.hhbbc_assert');
 
   // hhvm redirects errors to stdout, so anything on stderr is really bad.
   if ($stderr && !$error_ok) {
-    file_put_contents(
-      "$test.diff",
+    Status::writeDiff(
+      $test,
       "Test failed because the process wrote on stderr:\n$stderr"
     );
     return false;
@@ -2237,11 +2346,12 @@ function run_config_post($outputs, $test, $options) {
 
   list($file, $type) = get_expect_file_and_type($test, $options);
   if ($file === null || $type === null) {
-    file_put_contents(
-      "$test.diff", "No $test.expect, $test.expectf, " .
-      "$test.hhvm.expect, $test.hhvm.expectf, " .
-      "nor $test.expectregex. If $test is meant to be included by other ".
-      "tests, use a different file extension.\n"
+    Status::writeDiff(
+      $test,
+      "No $test.expect, $test.expectf, $test.hhvm.expect, " .
+      "$test.hhvm.expectf, or $test.expectregex. " .
+      "If $test is meant to be included by other tests, " .
+      "use a different file extension.\n"
     );
     return false;
   }
@@ -2256,7 +2366,7 @@ function run_config_post($outputs, $test, $options) {
     if (!$repeats) {
       $passed = !strcmp($output, $wanted);
       if (!$passed) {
-        file_put_contents("$test.diff", generate_diff($wanted, null, $output));
+        Status::writeDiff($test, generate_diff($wanted, null, $output));
       }
       return $passed;
     }
@@ -2360,7 +2470,7 @@ function run_config_post($outputs, $test, $options) {
     // but since the line by line diff came up empty, we're fine
     return true;
   }
-  file_put_contents("$test.diff", $diff);
+  Status::writeDiff($test, $diff);
   return false;
 }
 
@@ -2408,7 +2518,7 @@ function run_and_lock_test($options, $test) {
     if ($status) {
       clean_intermediate_files($test, $options);
     } else if ($failmsg === '') {
-      $failmsg = @file_get_contents("$test.diff");
+      $failmsg = Status::diffForTest($test);
       if (!$failmsg) $failmsg = "Test failed with empty diff";
     }
     if (!flock($lock, LOCK_UN, inout $wouldblock)) {
@@ -2499,30 +2609,24 @@ function run_test($options, $test) {
       );
       $hhas_temp1 = dump_hhas_to_temp($hhvm[0], "$test.before");
       if ($hhas_temp1 === false) {
-        file_put_contents(
-          "$test.diff",
-          "dumping hhas after first hhbbc pass failed"
-        );
+        Status::writeDiff($test, "dumping hhas after first hhbbc pass failed");
         return false;
       }
       shell_exec("mv $test_repo/$program.hhbbc $test_repo/$program.hhbc");
       $hhbbc = hhbbc_cmd($options, $test, $program);
       $result = exec_with_stack($hhbbc);
       if ($result !== true) {
-        file_put_contents("$test.diff", $result);
+        Status::writeDiff($test, $result);
         return false;
       }
       $hhas_temp2 = dump_hhas_to_temp($hhvm[0], "$test.after");
       if ($hhas_temp2 === false) {
-        file_put_contents(
-          "$test.diff",
-          "dumping hhas after second hhbbc pass failed"
-        );
+        Status::writeDiff($test, "dumping hhas after second hhbbc pass failed");
         return false;
       }
-      $diff = shell_exec("diff $hhas_temp1 $hhas_temp2 | wc -l");
-      if (trim($diff) != '0') {
-        shell_exec("diff $hhas_temp1 $hhas_temp2 > $test.diff");
+      $diff = shell_exec("diff $hhas_temp1 $hhas_temp2");
+      if (trim($diff) !== '') {
+        Status::writeDiff($test, $diff);
         return false;
       }
     }
@@ -2553,7 +2657,7 @@ function run_test($options, $test) {
       $err = "system failed: " .
         dump_hhas_cmd($hhvm[0], $test, $test.'.round_trip.hhas') .
         "\n";
-      file_put_contents("$test.diff", $err);
+      Status::writeDiff($test, $err);
       return false;
     }
     list($hhvm, $hhvm_env) = hhvm_cmd($options, $test, $hhas_temp);
@@ -2590,7 +2694,13 @@ function make_header($str) {
 }
 
 function print_commands($tests, $options) {
-  print make_header("Run these by hand:");
+  if (isset($options['verbose'])) {
+    print make_header("Run these by hand:");
+  } else {
+    $test = $tests[0];
+    print make_header("Run $test by hand:");
+    $tests = varray[$test];
+  }
 
   foreach ($tests as $test) {
     list($commands, $_) = hhvm_cmd($options, $test);
@@ -2800,40 +2910,61 @@ function print_failure($argv, $results, $options) {
       $passed[] = $result['name'];
     }
   }
-  asort(inout $failed);
-  print "\n".count($failed)." tests failed\n";
-  if (!($options['no-fun'] ?? false)) {
-    // Unicode for table-flipping emoticon
-    print "(\u{256F}\u{00B0}\u{25A1}\u{00B0}\u{FF09}\u{256F}\u{FE35} \u{253B}";
-    print "\u{2501}\u{253B}\n";
-    // TODO: Google indicates that this is some old emoji-thing relating to
-    // table flipping... Maybe replace to stop other people spending time
-    // trying to decipher it?
-    // https://knowyourmeme.com/memes/flipping-tables
-  }
-
-  print make_header("See the diffs:").
-    implode("\n", array_map(
-      function($test) { return 'cat '.$test.'.diff'; },
-    $failed))."\n";
+  sort(inout $failed);
 
   $failing_tests_file = ($options['failure-file'] ?? false)
     ? $options['failure-file']
-    : tempnam('/tmp', 'test-failures');
+    : Status::getRunTmpDir() . '/test-failures';
   file_put_contents($failing_tests_file, implode("\n", $failed)."\n");
-  print make_header('For xargs, list of failures is available using:').
-    'cat '.$failing_tests_file."\n";
-
-  if ($passed ?? false) {
+  if ($passed) {
     $passing_tests_file = ($options['success-file'] ?? false)
       ? $options['success-file']
-      : tempnam('/tmp', 'tests-passed');
+      : Status::getRunTmpDir() . '/tests-passed';
     file_put_contents($passing_tests_file, implode("\n", $passed)."\n");
-    print make_header('For xargs, list of passed tests is available using:').
-      'cat '.$passing_tests_file."\n";
+  }
+
+  print "\n".count($failed)." tests failed\n";
+  if (!($options['no-fun'] ?? false)) {
+    // Unicode for table-flipping emoticon
+    // https://knowyourmeme.com/memes/flipping-tables
+    print "(\u{256F}\u{00B0}\u{25A1}\u{00B0}\u{FF09}\u{256F}\u{FE35} \u{253B}";
+    print "\u{2501}\u{253B}\n";
   }
 
   print_commands($failed, $options);
+
+  print make_header("See failed test output and expectations:");
+  foreach ($failed as $n => $test) {
+    if ($n !== 0) print "\n";
+    print 'cat ' . Status::getTestOutputPath($test, 'diff') . "\n";
+    print 'cat ' . Status::getTestOutputPath($test, 'out') . "\n";
+    $expect_file = get_expect_file_and_type($test, $options)[0];
+    if ($expect_file is null) {
+      print "# no expect file found for $test\n";
+    } else {
+      print "cat $expect_file\n";
+    }
+
+    // only print 3 tests worth unless verbose is on
+    if ($n === 2 && !isset($options['verbose'])) {
+      $remaining = count($failed) - 1 - $n;
+      if ($remaining > 0) {
+        print make_header("... and $remaining more.");
+      }
+      break;
+    }
+  }
+
+  if ($passed) {
+    print make_header(
+      'For xargs, lists of failed and passed tests are available using:'
+    );
+    print 'cat '.$failing_tests_file."\n";
+    print 'cat '.$passing_tests_file."\n";
+  } else {
+    print make_header('For xargs, list of failures is available using:').
+      'cat '.$failing_tests_file."\n";
+  }
 
   print
     make_header("Re-run just the failing tests:") .
@@ -2867,6 +2998,9 @@ function start_server_proc($options, $config, $port) {
   $thread_option = isset($options['cli-server'])
     ? '-vEval.UnixServerWorkers='.$threads
     : '-vServer.ThreadCount='.$threads;
+  $prelude = isset($options['server'])
+    ? '-vEval.PreludePath=' . Status::getRunTmpDir() . '/server-prelude.php'
+    : "";
   $command = hhvm_cmd_impl(
     $options,
     $config,
@@ -2881,6 +3015,7 @@ function start_server_proc($options, $config, $port) {
     '-vPageletServer.ThreadCount=0',
     '-vLog.UseRequestLog=1',
     '-vLog.File=/dev/null',
+    $prelude,
 
     // The server will unlink the temp file
     '-vEval.UnixServerPath='.$cli_sock,
@@ -2937,6 +3072,19 @@ final class ServerRef {
  * information about the server.
  */
 function start_servers($options, $configs) {
+  if (isset($options['server'])) {
+    $prelude = <<<'EOT'
+<?hh
+<<__EntryPoint>> function UNIQUE_NAME_I_DONT_EXIST_IN_ANY_TEST(): void {
+  putenv("HPHP_TEST_TMPDIR=BASEDIR{$_SERVER['SCRIPT_NAME']}.tmpdir/");
+}
+EOT;
+    file_put_contents(
+      Status::getRunTmpDir() . '/server-prelude.php',
+      str_replace('BASEDIR', Status::getRunTmpDir(), $prelude),
+    );
+  }
+
   $starting = varray[];
   foreach ($configs as $config) {
     $starting[] = start_server_proc($options, $config, find_open_port());
@@ -3043,6 +3191,8 @@ function main($argv) {
     print "You are using the binary located at: " . $binary_path . "\n";
   }
 
+  Status::createTmpDir();
+
   $servers = null;
   if (isset($options['server']) || isset($options['cli-server'])) {
     if (isset($options['server']) && isset($options['cli-server'])) {
@@ -3131,11 +3281,6 @@ function main($argv) {
   }
   Status::setUseColor(isset($options['color']) ? true : posix_isatty(STDOUT));
 
-  Status::createTempDir();
-
-  // NOTE: This is passed down to forked test processes.
-  $_ENV['HPHP_TEST_TMPDIR'] = Status::getTestTmpDir();
-
   Status::$nofork = count($tests) == 1 && !$servers;
 
   if (!Status::$nofork) {
@@ -3160,6 +3305,7 @@ function main($argv) {
   // A poor man's shared memory.
   $bad_test_files = varray[];
   if (Status::$nofork) {
+    Status::registerCleanup(isset($options['no-clean']));
     $bad_test_file = tempnam('/tmp', 'test-run-');
     $bad_test_files[] = $bad_test_file;
     invariant(count($test_buckets) === 1, "nofork was set erroneously");
@@ -3180,10 +3326,7 @@ function main($argv) {
 
     // Make sure to clean up on exit, or on SIGTERM/SIGINT.
     // Do this here so no children inherit this.
-    $destroy = function(): void { Status::destroy(); };
-    register_shutdown_function($destroy);
-    pcntl_signal(SIGTERM, $destroy);
-    pcntl_signal(SIGINT, $destroy);
+    Status::registerCleanup(isset($options['no-clean']));
 
     // Have the parent wait for all forked children to exit.
     $return_value = 0;
@@ -3217,7 +3360,7 @@ function main($argv) {
     }
   }
 
-  Status::finished();
+  Status::finished($return_value);
 
   // Wait for the printer child to die, if needed.
   if (!Status::$nofork && $printer_pid != 0) {

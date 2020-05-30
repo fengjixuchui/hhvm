@@ -132,6 +132,20 @@ struct SpillSlot { size_t slot; };
 struct SpillSlotWide { size_t slot; };
 using Color = boost::variant<None, PhysReg, SpillSlot, SpillSlotWide>;
 
+// Rematerialization info for a particular Vreg
+struct RematInfo {
+  // The instruction which potentially can rematerialize it. May be a
+  // reload to indicate there's no rematerialization available. The
+  // instruction may not necessarily be usuable. A context sensitive
+  // check is required.
+  Vinstr instr;
+  // The block where the instruction where the instruction came
+  // from. This may not necessarily be where the Vreg was defined, as
+  // we chain through copy-ish instructions. This is only meaningful
+  // for instructions which have physical register sources.
+  Vlabel block;
+};
+
 // State about each Vreg. Instead of separate data-structures, all Vreg
 // information is concentrated in this one data-structure.
 struct RegInfo {
@@ -144,9 +158,9 @@ struct RegInfo {
   size_t penaltyIdx = 0;
   // Can this Vreg be potentially rematerialized (instead of reloaded)
   // by this instruction? This field is calculated lazily and then
-  // cached. Even if there's an instruction here, we may still need to
-  // do context sensitive checks to see if it's usuable.
-  folly::Optional<Vinstr> cachedRemat;
+  // cached. Even if there's information here, we may still need to do
+  // context sensitive checks to see if it's usuable.
+  folly::Optional<RematInfo> cachedRemat;
 };
 
 using BlockVector = jit::vector<Vlabel>;
@@ -167,13 +181,18 @@ struct LoopInfo {
 // Cached def/use/across operands for an instruction.
 struct CachedOperands {
   CachedOperands() = default;
-  CachedOperands(VregSet&& defs, VregSet&& uses, VregSet&& acrosses) noexcept:
+  CachedOperands(VregSet&& defs, VregSet&& uses, VregSet&& acrosses,
+                 RegSet&& physDefs, RegSet&& physUses) noexcept:
     defs{std::move(defs)},
     uses{std::move(uses)},
-    acrosses{std::move(acrosses)} {}
+    acrosses{std::move(acrosses)},
+    physDefs{std::move(physDefs)},
+    physUses{std::move(physUses)} {}
   VregSet defs;
   VregSet uses;
   VregSet acrosses;
+  RegSet physDefs;
+  RegSet physUses;
 };
 
 using CachedOperandsTable = NonInvalidatingVector<CachedOperands>;
@@ -203,6 +222,25 @@ struct State {
   jit::vector<VregSet> defs;
   jit::vector<VregSet> uses;
   jit::vector<VregSet> gens;
+
+  // All physical registers (including ignored), which have a def in a
+  // block
+  jit::vector<RegSet> physDefs;
+  // If a physical register (including ignored) is in this set for a
+  // block, it means that that register is modified on some path from
+  // the entry of the unit to the *end* of the block. If not, the
+  // register is guaranteed to have the same value it did on entry to
+  // the unit.
+  jit::vector<RegSet> physChangedBefore;
+  // All physical registers (including ignored), which have a def
+  // anywhere in the unit
+  RegSet physChanged;
+  // Cached information for resolving whether a particular physical
+  // register has potentially changed in value (in a known way)
+  // between a block and where some Vreg is defined.
+  jit::fast_map<std::tuple<PhysReg, Vreg, Vlabel>,
+                std::pair<folly::Optional<int64_t>, bool>>
+  physRecoverableCache;
 
   // Loop information. A loop is represented by its header block.
   jit::fast_map<Vlabel, LoopInfo> loopInfo;
@@ -318,6 +356,10 @@ std::string show(const PenaltyVector& v) {
   return folly::sformat("[{}]", out);
 }
 
+std::string show(const Vunit& unit, const RematInfo& remat) {
+  return folly::sformat("{} [{}]", show(unit, remat.instr), remat.block);
+}
+
 std::string show(const Vunit& unit, const RegInfo& info) {
   return folly::sformat(
     "Class: {:10}, Color: {:6}, Penalty: {:3}, Mat: ({})",
@@ -363,12 +405,15 @@ std::string show(const State& state) {
     "Num Wide Spill Slots: {}\n"
     "RPO:                  {}\n"
     "Spill Colors:         {}\n"
+    "Phys Changed:         {}\n"
     "Reg Info:\n{}"
     "Live In:\n{}"
     "Live Out:\n{}"
     "Uses:\n{}"
     "Defs:\n{}"
     "Gens:\n{}"
+    "Phys Defs:\n{}"
+    "Phys Changed Before:\n{}"
     "Loop Info:\n{}"
     "Penalties:\n{}",
     show(state.gpUnreserved),
@@ -392,6 +437,7 @@ std::string show(const State& state) {
         | unsplit<std::string>(", ")
       );
     }(),
+    show(state.physChanged),
     [&]{
       std::string str;
       for (size_t i = 0; i < state.regInfo.size(); ++i) {
@@ -410,6 +456,8 @@ std::string show(const State& state) {
     dumpBlockInfo(state.uses),
     dumpBlockInfo(state.defs),
     dumpBlockInfo(state.gens),
+    dumpBlockInfo(state.physDefs),
+    dumpBlockInfo(state.physChangedBefore),
     [&]{
       using namespace folly::gen;
       return from(state.loopInfo)
@@ -671,10 +719,14 @@ struct CacheOperandsVisitor {
   CacheOperandsVisitor(VregSet& defs,
                        VregSet& uses,
                        VregSet& acrosses,
+                       RegSet& physDefs,
+                       RegSet& physUses,
                        const State& state)
     : defs{defs}
     , uses{uses}
     , acrosses{acrosses}
+    , physDefs{physDefs}
+    , physUses{physUses}
     , state{state} {}
 
   template<class T> void imm(const T&) {}
@@ -694,14 +746,17 @@ struct CacheOperandsVisitor {
   template <typename T, typename U> void useHint(T t, U) { use(t); }
 
   void addDef(Vreg r) {
+    if (r.isPhys()) physDefs |= r.physReg();
     if (is_ignored(state, r)) return;
     defs.add(r);
   }
   void addUse(Vreg r) {
+    if (r.isPhys()) physUses |= r.physReg();
     if (is_ignored(state, r)) return;
     uses.add(r);
   }
   void addAcross(Vreg r) {
+    if (r.isPhys()) physUses |= r.physReg();
     if (is_ignored(state, r)) return;
     acrosses.add(r);
     uses.add(r);
@@ -710,6 +765,8 @@ struct CacheOperandsVisitor {
   VregSet& defs;
   VregSet& uses;
   VregSet& acrosses;
+  RegSet& physDefs;
+  RegSet& physUses;
   const State& state;
 };
 
@@ -717,14 +774,20 @@ struct CacheOperandsVisitor {
 NEVER_INLINE
 void cache_operands(State& state, Vinstr& inst) {
   VregSet defs, uses, acrosses;
+  RegSet physDefs;
+  RegSet physUses;
 
   // First get the normal operands
-  CacheOperandsVisitor v{defs, uses, acrosses, state};
+  CacheOperandsVisitor v{defs, uses, acrosses, physDefs, physUses, state};
   visitOperands(inst, v);
 
   // Then add in any implicit ones
   RegSet implicitDefs, implicitUses, implicitAcrosses;
   getEffects(state.abi, inst, implicitUses, implicitAcrosses, implicitDefs);
+
+  physDefs |= implicitDefs;
+  physUses |= implicitUses;
+  physUses |= implicitAcrosses;
 
   implicitDefs.forEach(
     [&] (PhysReg r) {
@@ -758,7 +821,9 @@ void cache_operands(State& state, Vinstr& inst) {
   state.cachedOperands.emplace_back(
     std::move(defs),
     std::move(uses),
-    std::move(acrosses)
+    std::move(acrosses),
+    std::move(physDefs),
+    std::move(physUses)
   );
 }
 
@@ -785,6 +850,20 @@ const VregSet& uses_set_cached(State& state, Vinstr& inst) {
 const VregSet& acrosses_set_cached(State& state, Vinstr& inst) {
   if (!inst.id) cache_operands(state, inst);
   return state.cachedOperands[inst.id].acrosses;
+}
+
+// Unlike defs_set_cached(), this contains all physical registers,
+// including ignored ones.
+const RegSet& phys_defs_set_cached(State& state, Vinstr& inst) {
+  if (!inst.id) cache_operands(state, inst);
+  return state.cachedOperands[inst.id].physDefs;
+}
+
+// Unlike uses_set_cached(), this contains all physical registers,
+// including ignored ones.
+const RegSet& phys_uses_set_cached(State& state, Vinstr& inst) {
+  if (!inst.id) cache_operands(state, inst);
+  return state.cachedOperands[inst.id].physUses;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -828,9 +907,12 @@ bool live_in_at(State& state, Vreg reg, Vlabel b, size_t i) {
   return state.liveOut[b][reg];
 }
 
-// Calculate liveness in the traditional dataflow way. There's more efficient
-// algorithms leveraging SSA but they require tracking use and def positions and
-// it doesn't seem worth it (this is fast enough in practice).
+// Calculate liveness in the traditional dataflow way. There's more
+// efficient algorithms leveraging SSA but they require tracking use
+// and def positions and it doesn't seem worth it (this is fast enough
+// in practice). If `changed' isn't provided (indicating this is the
+// first calculation), then also calculate metadata related to
+// physical register defs.
 void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
   auto& unit = state.unit;
 
@@ -840,6 +922,8 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
     assertx(state.uses.size() == unit.blocks.size());
     assertx(state.defs.size() == unit.blocks.size());
     assertx(state.gens.size() == unit.blocks.size());
+    assertx(state.physDefs.size() == unit.blocks.size());
+    assertx(state.physChangedBefore.size() == unit.blocks.size());
     assertx(changed->size() == unit.blocks.size());
   } else {
     state.liveIn.resize(unit.blocks.size());
@@ -847,15 +931,19 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
     state.uses.resize(unit.blocks.size());
     state.defs.resize(unit.blocks.size());
     state.gens.resize(unit.blocks.size());
+    state.physDefs.resize(unit.blocks.size());
+    state.physChangedBefore.resize(unit.blocks.size());
   }
 
   auto const processBlock = [&] (Vblock& block,
                                  VregSet& g,
                                  VregSet& k,
-                                 VregSet& u) {
+                                 VregSet& u,
+                                 RegSet& r) {
     for (auto& inst : boost::adaptors::reverse(block.code)) {
       auto const& defs = defs_set_cached(state, inst);
       auto const& uses = uses_set_cached(state, inst);
+      r |= phys_defs_set_cached(state, inst);
       k |= defs;
       g -= defs;
       g |= uses;
@@ -867,6 +955,7 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
   };
 
   dataflow_worklist<size_t, std::less<size_t>> worklist(state.rpo.size());
+  dataflow_worklist<size_t> physWorklist(!changed ? state.rpo.size() : 0);
   for (size_t i = 0; i < state.rpo.size(); ++i) {
     auto const b = state.rpo[i];
 
@@ -874,24 +963,34 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
       auto& g = state.gens[b];
       auto& k = state.defs[b];
       auto& u = state.uses[b];
+      auto& r = state.physDefs[b];
       g.reset();
       k.reset();
       u.reset();
-      processBlock(unit.blocks[b], g, k, u);
+      r = RegSet{};
+      processBlock(unit.blocks[b], g, k, u, r);
     } else if (debug) {
       VregSet g;
       VregSet k;
       VregSet u;
-      processBlock(unit.blocks[b], g, k, u);
+      RegSet r;
+      processBlock(unit.blocks[b], g, k, u, r);
       always_assert(g == state.gens[b]);
       always_assert(k == state.defs[b]);
       always_assert(u == state.uses[b]);
+      always_assert(r == state.physDefs[b]);
     }
 
     state.liveIn[b].reset();
     state.liveOut[b].reset();
 
     worklist.push(i);
+    if (!changed) {
+      // If we're calculating physical register metadata, also prepare
+      // the worklist for that.
+      state.physChangedBefore[b] = RegSet{};
+      physWorklist.push(i);
+    }
   }
 
   while (!worklist.empty()) {
@@ -910,6 +1009,32 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
         worklist.push(state.rpoOrder[pred]);
       }
       state.liveIn[b] = std::move(transfer);
+    }
+  }
+
+  if (!changed) {
+    // Calculate the physical register metadata. We can't use the
+    // above dataflow, because this is a forward dataflow, and the
+    // previous is a backwards dataflow.
+    while (!physWorklist.empty()) {
+      auto const b = state.rpo[physWorklist.pop()];
+      auto const& block = unit.blocks[b];
+
+      // Flow any physical registers which have been changed into the
+      // block's successors. Also record which registers have been
+      // modified anywhere.
+      state.physChanged |= state.physDefs[b];
+      auto out = state.physDefs[b];
+      for (auto const pred : state.preds[b]) {
+        out |= state.physChangedBefore[pred];
+      }
+
+      if (out != state.physChangedBefore[b]) {
+        for (auto const s : succs(block)) {
+          physWorklist.push(state.rpoOrder[s]);
+        }
+        state.physChangedBefore[b] = out;
+      }
     }
   }
 
@@ -2603,6 +2728,10 @@ struct RematLookup {
   // should not be cached across different lookups, as their result
   // may change at different program points.
   bool recursive;
+  // The block where the defining instruction was sourced from. This
+  // is only meaningful for non-reload instructions which have
+  // physical register sources.
+  Vlabel block;
 };
 
 RematLookup find_defining_inst_for_remat_cached(State&,
@@ -2636,6 +2765,10 @@ RematLookup find_defining_inst_for_remat(State& state,
     );
   };
 
+  auto const fail = [&] {
+    return RematLookup{ reload{startR, startR}, false, b };
+  };
+
   // Record whether we passed through a copyish instruction where the
   // source and dest were not compatible (different register
   // classes). If so, we'll only report the defining instruction if
@@ -2645,6 +2778,10 @@ RematLookup find_defining_inst_for_remat(State& state,
   // because we often materialize constants into a different register
   // class than how it's ultimately used.
   auto incompatibility = false;
+
+  auto const if_compatible = [&] (const Vinstr& inst) {
+    return incompatibility ? fail() : RematLookup{inst, false, b};
+  };
 
   auto r = startR;
   while (true) {
@@ -2705,10 +2842,11 @@ RematLookup find_defining_inst_for_remat(State& state,
       switch (inst.op) {
         case Vinstr::copy:
           assertx(inst.copy_.d == r);
-          // We don't track physical registers (they're not
-          // necessarily in SSA), so we cannot proceed
-          // further. Otherwise start tracking the copy's source.
-          if (inst.copy_.s.isPhys()) return {reload{startR, startR}, false};
+          // A copy from a physical register is not considered copyish
+          // (we cannot continue because physical registers are not in
+          // SSA form, thus this algorithm won't work to find its next
+          // def). So, use this as the defining instruction.
+          if (inst.copy_.s.isPhys()) return if_compatible(inst);
           if (!compatible(inst.copy_.s, r)) incompatibility = true;
           r = inst.copy_.s;
           break;
@@ -2717,6 +2855,7 @@ RematLookup find_defining_inst_for_remat(State& state,
           r = inst.reload_.s;
           break;
         case Vinstr::spill:
+          if (inst.copy_.s.isPhys()) return if_compatible(inst);
           assertx(inst.spill_.d == r);
           r = inst.spill_.s;
           break;
@@ -2731,7 +2870,7 @@ RematLookup find_defining_inst_for_remat(State& state,
           auto DEBUG_ONLY found = false;
           for (size_t i = 0; i < dsts.size(); ++i) {
             if (dsts[i] != r) continue;
-            if (srcs[i].isPhys()) return {reload{startR, startR}, false};
+            if (srcs[i].isPhys()) return fail();
             if (!compatible(srcs[i], r)) incompatibility = true;
             r = srcs[i];
             if (debug) found = true;
@@ -2758,6 +2897,7 @@ RematLookup find_defining_inst_for_remat(State& state,
             // Found a def. Recursively find the defining instruction
             // for each predecessor Vreg.
             folly::Optional<Vinstr> common;
+            Vlabel defBlock;
             auto anyRecursive = false;
             for (auto const p : preds) {
               auto const& pred = unit.blocks[p];
@@ -2765,7 +2905,7 @@ RematLookup find_defining_inst_for_remat(State& state,
               assertx(phijmp.op == Vinstr::phijmp);
               auto const s = unit.tuples[phijmp.phijmp_.uses][i];
               // Can't track phi-ing with a physical register
-              if (s.isPhys()) return {reload{startR, startR}, false};
+              if (s.isPhys()) return fail();
               auto const result = find_defining_inst_for_remat_cached(
                 state,
                 s,
@@ -2774,7 +2914,7 @@ RematLookup find_defining_inst_for_remat(State& state,
                 recursives
               );
               anyRecursive |= result.recursive;
-              if (result.inst.op == Vinstr::reload) return {result.inst, false};
+              if (result.inst.op == Vinstr::reload) return fail();
               // Skip over recursive definitions
               if (result.inst.op == Vinstr::nop) {
                 anyRecursive = true;
@@ -2783,20 +2923,35 @@ RematLookup find_defining_inst_for_remat(State& state,
               if (!compatible(s, r) &&
                   result.inst.op != Vinstr::ldimmq &&
                   result.inst.op != Vinstr::ldimml &&
-                  result.inst.op != Vinstr::ldimmb) {
-                return {reload{startR, startR}, false};
+                  result.inst.op != Vinstr::ldimmb &&
+                  result.inst.op != Vinstr::ldundefq) {
+                return fail();
               }
               // All defining instructions should be compatible.
               if (!common) {
                 common = result.inst;
+                defBlock = result.block;
               } else if (!compare_remat_insts(unit, *common, result.inst)) {
-                return {reload{startR, startR}, false};
+                return fail();
+              } else if (!phys_uses_set_cached(state, *common).empty()) {
+                // The instructions are identical, but we require a
+                // stricter condition for instructions which use
+                // physical registers. Any rematerialization
+                // instruction which uses physical registers must have
+                // a single location. Otherwise we cannot guarantee
+                // that the involved physical registers have the same
+                // value(s) for all instructions. Non-physical Vregs
+                // do not have this problem because they're in SSA and
+                // thus only have one definition. Its possible to
+                // arrive at the same instruction even when looking
+                // through phis, so check that here.
+                if (defBlock != result.block) return fail();
               }
             }
             // This can only happen if all of the sources were
             // recursively defined.
-            if (!common) return {nop{}, true};
-            return {*common, anyRecursive};
+            if (!common) return {nop{}, true, b};
+            return {*common, anyRecursive, defBlock};
           }
 
           // We should always find a matching def because of the defs
@@ -2806,22 +2961,23 @@ RematLookup find_defining_inst_for_remat(State& state,
         case Vinstr::ldimmq:
         case Vinstr::ldimml:
         case Vinstr::ldimmb:
+        case Vinstr::ldundefq:
           // These can be used regardless of the incompatibility flag.
-          return {inst, false};
+          return {inst, false, b};
         // Treat the spill immediate instructions as being their
         // equivalent ldimm instructions.
         case Vinstr::spillbi:
-          return {ldimmb{inst.spillbi_.s, inst.spillbi_.d}, false};
+          return {ldimmb{inst.spillbi_.s, inst.spillbi_.d}, false, b};
         case Vinstr::spillli:
-          return {ldimml{inst.spillli_.s, inst.spillli_.d}, false};
+          return {ldimml{inst.spillli_.s, inst.spillli_.d}, false, b};
         case Vinstr::spillqi:
-          return {ldimmq{inst.spillqi_.s.q(), inst.spillqi_.d}, false};
+          return {ldimmq{inst.spillqi_.s.q(), inst.spillqi_.d}, false, b};
         case Vinstr::spillundefq:
-          return {ldundefq{inst.spillundefq_.d}, false};
+          return {ldundefq{inst.spillundefq_.d}, false, b};
         default:
           // The rest can only be used if we didn't encounter any
           // incompatible copies.
-          return {!incompatibility ? inst : reload{startR, startR}, false};
+          return if_compatible(inst);
       }
 
       // If we reach here, we encountered a copyish instruction which
@@ -2853,44 +3009,46 @@ RematLookup find_defining_inst_for_remat_cached(State& state,
   // Lookup the cached entry. If one exists, return it (along with
   // whether that entry came from a mutually recursive definition).
   auto& info = reg_info(state, r);
-  if (info.cachedRemat) return {*info.cachedRemat, recursives[r]};
+  if (info.cachedRemat) {
+    return {info.cachedRemat->instr, recursives[r], info.cachedRemat->block};
+  }
   assertx(!recursives[r]);
 
   // Otherwise we need to look it up. Store a nop in the cached entry
   // to catch mutual recursion, then look it up.
-  info.cachedRemat = nop{};
-  auto const result =
-    find_defining_inst_for_remat(state, b, instIdx, r, recursives);
+  info.cachedRemat = RematInfo{nop{}, b};
+  auto result = find_defining_inst_for_remat(state, b, instIdx, r, recursives);
   // Nothing should have touched the cached entry.
-  assertx(info.cachedRemat && info.cachedRemat->op == Vinstr::nop);
+  assertx(info.cachedRemat && info.cachedRemat->instr.op == Vinstr::nop);
   assertx(!recursives[r]);
 
   // Store the information in the cache, along with its recursive
   // status. Return the same data.
-  auto const cache = [&] (const Vinstr& inst, bool recursive) -> RematLookup {
-    info.cachedRemat = inst;
+  auto const cache = [&] (const Vinstr& inst,
+                          bool recursive,
+                          Vlabel defBlock) -> RematLookup {
+    info.cachedRemat = RematInfo{inst, defBlock};
     if (recursive) recursives.add(r);
-    return {inst, recursive};
+    return {inst, recursive, defBlock};
   };
 
   // No single defining instruction found:
-  if (result.inst.op == Vinstr::reload) return cache(reload{r, r}, false);
+  if (result.inst.op == Vinstr::reload) return cache(reload{r, r}, false, b);
   // Entirely mutually recursive:
-  if (result.inst.op == Vinstr::nop) return cache(nop{}, true);
+  if (result.inst.op == Vinstr::nop) return cache(nop{}, true, b);
 
-  // Not safe to rematerialize non-pure instructions
-  if (!isPure(result.inst)) return cache(reload{r, r}, false);
-
-  // Can't rematerialize instructions which define more than one Vreg,
-  // or define flags or physical registers. We can't use cached
-  // operands here because we need to take into account ignored
-  // registers.
-  size_t defCount = 0;
-  visitDefs(state.unit, result.inst, [&] (Vreg r) { ++defCount; });
-  if (defCount != 1) return cache(reload{r, r}, false);
+  // Can't rematerialize instructions which aren't pure, define more
+  // than one Vreg, or define any physical registers.
+  auto const acceptable = [&] {
+    if (!isPure(result.inst)) return false;
+    if (!phys_defs_set_cached(state, result.inst).empty()) return false;
+    if (defs_set_cached(state, result.inst).size() != 1) return false;
+    return true;
+  }();
+  if (!acceptable) return cache(reload{r, r}, false, b);
 
   // Otherwise cache it and return it
-  return cache(result.inst, result.recursive);
+  return cache(result.inst, result.recursive, result.block);
 }
 
 // Entry point for finding the defining instruction for
@@ -2898,10 +3056,10 @@ RematLookup find_defining_inst_for_remat_cached(State& state,
 // details). Given a Vreg, finding the defining instruction for that
 // Vreg (at the given block/instruction) and return it. If a single
 // defining instruction cannot be found, return reload instead.
-Vinstr find_defining_inst_for_remat_enter(State& state,
-                                          Vreg r,
-                                          Vlabel b,
-                                          size_t instIdx) {
+RematInfo find_defining_inst_for_remat_enter(State& state,
+                                             Vreg r,
+                                             Vlabel b,
+                                             size_t instIdx) {
   VregSet recursives;
   // Do the lookup
   auto const result =
@@ -2921,8 +3079,483 @@ Vinstr find_defining_inst_for_remat_enter(State& state,
   // Treat an entirely mutually recursive definition as a reload,
   // which is safe.
   return result.inst.op == Vinstr::nop
-    ? reload{r, r}
-    : result.inst;
+    ? RematInfo{reload{r, r}, b}
+    : RematInfo{result.inst, result.block};
+}
+
+// Return true if the given Vptr is "simple". That is, if it's nothing
+// but a base plus offset without any scale or index.
+bool is_simple_vptr(const Vptr& ptr) {
+  if (ptr.seg != Segment::DS) return false;
+  if (ptr.index != InvalidReg) return false;
+  if (ptr.scale != 1) return false;
+  return true;
+}
+
+// Given an instruction which writes to the given PhysReg, if the
+// instruction modifies the PhysReg in a tracked way, return the
+// inverse of that change. Return folly::none if the register is
+// changed in an unpredictable way.
+folly::Optional<int64_t> tracked_physical_register_change(const State& state,
+                                                          PhysReg r,
+                                                          const Vinstr& inst,
+                                                          Vlabel b) {
+  auto const& unit = state.unit;
+
+  // Right now we only support "simple" leas and copyish instructions
+  // (which are modeled like leas of 0) between the same register.
+
+  switch (inst.op) {
+    case Vinstr::lea: {
+      auto const& i = inst.lea_;
+      assertx(i.d == r);
+      if (i.s.base != r || !is_simple_vptr(i.s)) return folly::none;
+      return -i.s.disp;
+    }
+    case Vinstr::copy:
+      assertx(inst.copy_.d == r);
+      if (inst.copy_.s != r) return folly::none;
+      return 0;
+    case Vinstr::copyargs: {
+      auto const& srcs = unit.tuples[inst.copyargs_.s];
+      auto const& dsts = unit.tuples[inst.copyargs_.d];
+      assertx(srcs.size() == dsts.size());
+      DEBUG_ONLY size_t defCount = 0;
+      for (size_t i = 0; i < dsts.size(); ++i) {
+        if (dsts[i] != r) continue;
+        if (srcs[i] != r) return folly::none;
+        ++defCount;
+      }
+      assertx(defCount > 0);
+      return 0;
+    }
+    case Vinstr::phidef: {
+      DEBUG_ONLY size_t defCount = 0;
+      auto const& dsts = unit.tuples[inst.phidef_.defs];
+      for (size_t i = 0; i < dsts.size(); ++i) {
+        if (dsts[i] != r) continue;
+        ++defCount;
+        auto const& preds = state.preds[b];
+        assertx(!preds.empty());
+        for (auto const pred : preds) {
+          auto const& phijmp = unit.blocks[pred].code.back();
+          assertx(phijmp.op == Vinstr::phijmp);
+          auto const& srcs = unit.tuples[phijmp.phijmp_.uses];
+          assertx(srcs.size() == dsts.size());
+          if (srcs[i] != r) return folly::none;
+        }
+      }
+      assertx(defCount > 0);
+      return 0;
+    }
+    default:
+      return folly::none;
+  }
+}
+
+// Determine if the physical register `phys' is changed in only
+// recoverable ways on *all* paths from `currentBlock' and
+// `startInstIdx' backwards to `targetInst' (which must define
+// `target') in `targetBlock'. `startOffset' is the cumulative
+// modifications to `phys' already seen along this path. `inOffsets'
+// is used for store metadata during the calculation. `cleanup' will
+// be populated with the cache entries (indicated by the Vlabel) which
+// must be removed after the calculation (cannot be kept across
+// calculations).
+
+struct PhysRecoverableResult {
+  // The statically known offset of the value of `phys' at the current
+  // point to its value when 'target' was defined. folly::none if it's
+  // changed in an unrecoverable way.
+  folly::Optional<int64_t> offset;
+  // If the calculation of `offset' involved information from a
+  // loop. This implies the result is ephemeral (can change across
+  // calculations), and thus any caching of it cannot be kept across
+  // calculations.
+  bool recursive;
+};
+
+PhysRecoverableResult physical_register_is_recoverable(
+    State& state,
+    PhysReg phys,
+    Vreg target,
+    Vlabel targetBlock,
+    Vinstr& targetInst,
+    Vlabel currentBlock,
+    size_t startInstIdx,
+    int64_t startOffset,
+    jit::vector<folly::Optional<int64_t>>& inOffsets,
+    jit::vector<Vlabel>& cleanup) {
+  /*
+   * Recursively explore every path backwards from `currentBlock' at
+   * `startInstIdx' until we find our `targetInst'. If we encounter a
+   * change of `phys' before hitting the instruction, we see if the
+   * change modifies `phys' in a recoverable way. If so, we continue
+   * onwards, accumulating the changes. Otherwise if the change is
+   * unrecoverable, we return that `phys' is not recoverable. If we do
+   * not encounter any such unrecoverable changes (or any changes at
+   * all) along all paths, the register's original value can be
+   * reconstructed. We track the accumulated offset (starting with 0
+   * at the starting block), and push it to each predecessor. Once we
+   * hit the target block, that accumulated offset is the
+   * result. Unwinding the recursion is just returning that ultimate
+   * result from the target block, and making sure the result is the
+   * same at merge points.
+   *
+   * This is potentially expensive, so we imploy a number of
+   * optimizations. First we utilize some pre-calculated metadata
+   * about physical register definitions to avoid having to process
+   * every instruction in a block, or even cut the search short
+   * entirely. Second we cache the results at every block to speed up
+   * subsequent lookups of the same information. Note: the cache
+   * prevents us from a potential exponential path explosion (consider
+   * a series of diamonds).
+   *
+   * It's possible to hit a loop and attempt to process a block we
+   * already visited. We use the `inOffsets' vector to detect
+   * this. When we enter a block, the `inOffsets' vector is checked to
+   * see if an offset has been stored there. We record the
+   * `startOffset' value in the `inOffsets' vector if not, and process
+   * the block. If we loop around and attempt to process the block
+   * again, we'll see an offset in the `inOffsets' vector. If our
+   * `currentOffset' does not match what's stored in the vector, we
+   * know the final result is folly::none (no recoverable value). This
+   * mismatch means that there's two paths going into the block where
+   * `phys' has a different offset, which means the offset isn't
+   * consistent and thus not recoverable. If the offset matches the
+   * one in `inOffsets', we return a folly::none offset with the
+   * recursion flag set.
+   *
+   * We cannot return an offset in this case since the block hasn't
+   * been done processing (because we know we've looped while
+   * processing). Any attempt to continue processing the block will
+   * just result in looping again. Instead we return the special
+   * recursion value to indicate that this path should be ignored when
+   * merging paths. When we return from processing a block fully, we
+   * remove the `inOffsets' vector (and add a result to the cache).
+   *
+   * When merging results for multiple predecessors, we ignore any
+   * that don't have an offset and have a recursion flag set (if they
+   * don't have the flag set, no offset means a failure and we just
+   * return failure). If all predecessors are marked as such, we
+   * return the same. If some predecessors are recursive, and some
+   * not, we'll return the merged not recursive results, but also set
+   * the recursive flag. This helps us mark which cached entries must
+   * be cleaned up after.
+   *
+   * When each block gets its result, we cache it so that another
+   * lookup on that block can return the result immediately. Caching
+   * results with the recursive flag set take special care. Such
+   * results can be used during the calculation, but must be removed
+   * afterwards. Why? Since the recursive flag means one of the paths
+   * looped, we don't know if that path would have returned a failure
+   * or not. We simply ignored that path during the calculation, but
+   * if it *would* have returned failure, it would have made other
+   * paths return failure as well. Since we ignored it, we cached
+   * values instead of failures. This is fine for a single
+   * calculation, but we cannot keep the cached values for future
+   * calculations. We don't care about the recursive flag for failures
+   * because a failure will always be a failure. The `cleanup' vector
+   * is populated with the list of cache entires which must be removed
+   * afterwards.
+   */
+
+  assertx(!target.isPhys());
+  assertx(targetBlock.isValid());
+  assertx(startInstIdx <= state.unit.blocks[currentBlock].code.size());
+  assertx(phys_defs_set_cached(state, targetInst).empty());
+  assertx(inOffsets.empty() || inOffsets.size() == state.unit.blocks.size());
+  assertx(startOffset == 0 ||
+          startInstIdx == state.unit.blocks[currentBlock].code.size());
+
+  // Don't bother calling this if we trivially know if `phys' isn't
+  // changed anywhere in the unit.
+  assertx(state.physChanged.contains(phys));
+
+  // Short-cut: if we've pre-calculated there's no change to `phys'
+  // from this block back to the entry, we don't have to go any
+  // further.
+  if (!state.physChangedBefore[currentBlock].contains(phys)) {
+    return {startOffset, false};
+  }
+
+  auto& unit = state.unit;
+  auto const endIdx = unit.blocks[currentBlock].code.size();
+
+  if (startInstIdx == endIdx) {
+    // The cache and `inOffsets' only apply when we're starting at the
+    // end of the block (which implies this is not the starting
+    // block). If we're not at the end, we won't process all the
+    // block, so the information won't be complete. It's fine to not
+    // do this for the starting block. It just means we might
+    // potentially process it one extra time if we encounter a loop.
+
+    // See if we have an existing cache entry. The cached entry is the
+    // offset from *this* block to the target, so we need to add any
+    // accumulated offset up to this point.
+    auto const it =
+      state.physRecoverableCache.find({phys, target, currentBlock});
+    if (it != state.physRecoverableCache.end()) {
+      if (!it->second.first) return {folly::none, it->second.second};
+      return {*it->second.first + startOffset, it->second.second};
+    }
+
+    // Check for looping. If the offsets match, we'll return the
+    // recursive flag and ignore this result. If they don't we won't
+    // set the flag, and the lack of an offset indicates a failure.
+    if (!inOffsets.empty() && inOffsets[currentBlock]) {
+      return {folly::none, startOffset == *inOffsets[currentBlock]};
+    }
+
+    // No loop. Record our start offset to catch a later loop.
+    if (inOffsets.empty()) inOffsets.resize(unit.blocks.size());
+    inOffsets[currentBlock] = startOffset;
+  }
+
+  auto const cache = [&] (folly::Optional<int64_t> offset,
+                          bool recursive = false)
+    -> PhysRecoverableResult {
+
+    if (startInstIdx == endIdx) {
+      // The cache is implicitly for result starting at the end of the
+      // block. Don't cache this information if we started in the middle
+      // of the block.
+
+      // We should have our start offset recorded at this point. Since
+      // we're done with this block, remove it, and set a cache entry
+      // instead.
+      assertx(inOffsets[currentBlock]);
+      inOffsets[currentBlock].reset();
+
+      // Store our result in the cache in case we try to lookup this
+      // block again. The offset here is the final offset returned
+      // from the target block, which incorporates all the accumulated
+      // offsets so far. We want the cache entries to be independent
+      // of where we entered the block, so remove our start offset
+      // from the result.
+      DEBUG_ONLY auto const result = state.physRecoverableCache.emplace(
+        std::make_tuple(phys, target, currentBlock),
+        std::make_pair(
+          offset ? folly::make_optional(*offset - startOffset) : folly::none,
+          recursive
+        )
+      );
+      // We shouldn't have something cached already.
+      assertx(result.second);
+
+      // If recursive, we need to remove this entry once all the
+      // recursion backs out.
+      if (recursive) cleanup.emplace_back(currentBlock);
+    }
+    return {offset, recursive};
+  };
+
+  auto currentOffset = startOffset;
+
+  // Process this block, unless if we're starting at the first
+  // instruction (in which case we jump right to the predecessors).
+  if (startInstIdx > 0) {
+    // We only need to examine each instruction if we know there's a
+    // definition of `phys' in it.
+    if (state.physDefs[currentBlock].contains(phys)) {
+      // This block defs `phys' somewhere. Examine every
+      // instruction. Look for a def of `phys' before we hit the
+      // target instruction (if in the target block).
+      for (size_t idx = startInstIdx; idx > 0; --idx) {
+        auto& inst = unit.blocks[currentBlock].code[idx - 1];
+        if (phys_defs_set_cached(state, inst).contains(phys)) {
+          // `phys' is modified here, and we haven't hit the target
+          // instruction yet. Check if `phys' is modified in a
+          // recoverable way. If so, we can accumulate the change and
+          // continue onwards. Otherwise, give up.
+          auto const off =
+            tracked_physical_register_change(state, phys, inst, currentBlock);
+          if (!off) return cache(folly::none);
+          currentOffset += *off;
+          continue;
+        }
+        // If we're not in the target block, there's no point in
+        // looking for the target instruction.
+        if (currentBlock != targetBlock) continue;
+        // Otherwise we're in the target block, so check if we hit the
+        // target instruction. If we do, we're done.
+        if (!defs_set_cached(state, inst)[target]) continue;
+        if (!compare_remat_insts(unit, inst, targetInst)) continue;
+        return cache(currentOffset);
+      }
+      // If this is the target block, we should have seen the target
+      // instruction and returned by now.
+      assertx(currentBlock != targetBlock);
+    } else if (currentBlock == targetBlock) {
+      // This block does not def `phys'. If it's our target block, we
+      // know `phys' is unchanged without examining any instructions.
+      return cache(currentOffset);
+    }
+  }
+
+  // Recurse into all the predecessors of this block and combine the
+  // results:
+  auto const& preds = state.preds[currentBlock];
+  // If we're in the entry block, we should have either seen a def of
+  // 'phys' or the target instruction by now.
+  assertx(!preds.empty());
+
+  folly::Optional<int64_t> predOffset;
+  auto anyRecursive = false;
+  for (auto const pred : preds) {
+    auto const result = physical_register_is_recoverable(
+      state,
+      phys,
+      target,
+      targetBlock,
+      targetInst,
+      pred,
+      unit.blocks[pred].code.size(),
+      currentOffset,
+      inOffsets,
+      cleanup
+    );
+
+    anyRecursive |= result.recursive;
+
+    if (!result.offset) {
+      // No offset. If the recursive flag is set, just ignore
+      // it. Otherwise, we failed (note we don't care about recursive
+      // flag if we fail).
+      if (result.recursive) continue;
+      return cache(folly::none);
+    }
+
+    // Otherwise make sure the results from all predecessors are the
+    // same. If we not, fail.
+    if (!predOffset) {
+      predOffset = *result.offset;
+    } else if (*predOffset != *result.offset) {
+      return cache(folly::none);
+    }
+  }
+  // If we don't have an offset, it means every path was recursive
+  // with no offset. If so, the recursive flag should be set.
+  assertx(predOffset || anyRecursive);
+  return cache(predOffset, anyRecursive);
+}
+
+// Check if all the physical registers used by the given
+// rematerialization instruction have recoverable values. If there's
+// only one physical register with a non-zero recoverable offset,
+// return that. Note that this will return an offset of zero if the
+// instruction uses no physical registers.
+folly::Optional<int64_t> used_physical_registers_recoverable(State& state,
+                                                             RematInfo& remat,
+                                                             Vlabel b,
+                                                             size_t instIdx) {
+  // Remove any physical registers which are not modified anywhere in
+  // the unit.  There's no need to check those.
+  auto const physUses =
+    phys_uses_set_cached(state, remat.instr) & state.physChanged;
+
+  folly::Optional<int64_t> offset{0};
+  size_t count = 0;
+  physUses.forEach(
+    [&] (PhysReg phys) {
+      if (!offset) return;
+
+      auto const& defs = defs_set_cached(state, remat.instr);
+      assertx(defs.size() == 1);
+      auto const target = *defs.begin();
+
+      jit::vector<folly::Optional<int64_t>> inOffsets;
+      jit::vector<Vlabel> cleanup;
+      auto const result = physical_register_is_recoverable(
+        state,
+        phys,
+        target,
+        remat.block,
+        remat.instr,
+        b,
+        instIdx,
+        0,
+        inOffsets,
+        cleanup
+      );
+
+      // Remove any ephemeral entries in the cache which aren't safe
+      // to keep.
+      for (auto const b : cleanup) {
+        DEBUG_ONLY auto const removed =
+          state.physRecoverableCache.erase({phys, target, b});
+        assertx(removed == 1);
+      }
+
+      if (!result.offset) {
+        // No offset and the recursive flag means every path was
+        // recursive, which shouldn't happen.
+        assertx(!result.recursive);
+        offset.reset();
+        return;
+      }
+
+      // Don't return an offset if we have more than one physical
+      // register and at least one of them has a non-zero recoverable
+      // offset. We don't deal with multiple offsets right now, so
+      // that case is ambiguous. Moreover it's not a concern as we
+      // only deal with leas with non-zero offsets right now.
+      if ((*offset != 0 || *result.offset != 0) && count > 0) {
+        offset.reset();
+        return;
+      }
+      offset = *result.offset;
+      ++count;
+    }
+  );
+  return offset;
+}
+
+// Check if the two given displacements can be added together and used
+// as the displacement for a Vptr.  Namely, make sure the sum is still
+// within the allowed range for the architecture.
+bool can_merge_disps(int64_t disp1, int64_t disp2) {
+  auto const total = disp1 + disp2;
+  if (arch() == Arch::ARM) {
+    return total >= -256 && total <= 255;
+  } else {
+    using DispType = decltype(std::declval<Vptr>().disp);
+    return
+      total >= std::numeric_limits<DispType>::min() &&
+      total <= std::numeric_limits<DispType>::max();
+  }
+}
+
+// Attempt to fold the given offset into the given instruction,
+// returning true if successful (with the instruction modified). If
+// false, the instruction is not modified.
+bool fold_offset_into_instr(Vinstr& instr, int64_t offset) {
+  // A zero offset requires no changes, so always succeeds
+  if (offset == 0) return true;
+
+  if (instr.op == Vinstr::lea) {
+    // leas can just have their displacement adjusted (if the lea is
+    // simple).
+    auto& i = instr.lea_;
+    if (!is_simple_vptr(i.s)) return false;
+    if (!can_merge_disps(i.s.disp, offset)) return false;
+    i.s.disp += offset;
+    return true;
+  } else if (instr.op == Vinstr::copy) {
+    // copys can be turned into leas with the offset as the
+    // displacement
+    if (!can_merge_disps(0, offset)) return false;
+    auto const src = instr.copy_.s;
+    auto const dst = instr.copy_.d;
+    instr.op = Vinstr::lea;
+    instr.lea_.s = Vptr{};
+    instr.lea_.s.base = src;
+    instr.lea_.s.disp = offset;
+    instr.lea_.d = dst;
+    return true;
+  } else {
+    return false;
+  }
 }
 
 // Return an instruction to reload a spilled Vreg src into Vreg dst,
@@ -2941,86 +3574,247 @@ Vinstr reload_with_remat(State& state,
                          Vreg dst) {
   assertx(!src.isPhys());
 
-  auto const remat =
+  auto remat =
     find_defining_inst_for_remat_enter(state, src, b, instIdx);
 
   // If the rematerialization instruction is a reload, we'll just
   // return it, so no further checks are needed. Otherwise we can
   // cache an instruction which may be situationally usable, so we
   // need to do these checks everytime (if the instruction is never
-  // useful, we should have a reload stored here).
-  if (remat.op != Vinstr::reload) {
-    // All sources need to be available. We don't support physical
-    // register sources right now because we don't know if they contain
-    // the same value at this point as they did originally. This needs
-    // to take into account ignored registers, so we can't use cached
-    // operands.
-    auto unavailableSrc = false;
-    auto physicalSrc = false;
-    visitUses(
-      state.unit, remat,
-      [&] (Vreg r) {
-        if (r.isPhys()) physicalSrc = true;
-        if (!inReg[r]) unavailableSrc = true;
-      }
-    );
-    if (physicalSrc) {
-      // The instruction uses a physical register. This instruction
-      // will never be suitable, so turn it into a reload so we'll
-      // never check again.
-      return *(reg_info(state, src).cachedRemat = reload{src, dst});
-    } else if (unavailableSrc) {
-      // Otherwise one of the sources is unavailable. It could be
-      // available at a different program point, so keep the cached
-      // instruction, but return a reload.
-      return reload{src, dst};
-    }
+  // useful, we should have a reload stored here already).
+  if (remat.instr.op == Vinstr::reload) return reload{src, dst};
+
+  if ((uses_set_cached(state, remat.instr) - inReg).any()) {
+    // One of the sources is unavailable. Return a reload.
+    return reload{src, dst};
   }
 
-  // Copy the rematerialized instruction, rewrite the output Vreg and
-  // insert it.
-  auto copy = remat;
+  // Check if the physical registers this rematerialization
+  // instruction uses (if any) are recoverable. If not, we cannot use
+  // it.
+  auto const offset =
+    used_physical_registers_recoverable(state, remat, b, instIdx);
+  if (!offset) return reload{src, dst};
+
+  // Attempt to fold the offset into the instruction (if offset is
+  // zero, this will always succeed). If we can't, the instruction
+  // cannot be used.
+  if (!fold_offset_into_instr(remat.instr, *offset)) return reload{src, dst};
+
+  // Change the output of the rematerialized instruction (there should
+  // be only one) to the requested Vreg and return it.
   visitRegsMutable(
     state.unit,
-    copy,
+    remat.instr,
     []  (Vreg r) { return r; },
     [&] (Vreg)   { return dst; }
   );
-  invalidate_cached_operands(copy);
-  return copy;
+  invalidate_cached_operands(remat.instr);
+  return remat.instr;
 }
 
 // A Vreg is a trivial rematerialization if it can always be
 // rematerialized at any position in the unit. This usually means it
-// represents an immediate and thus has no sources to depend on. This
-// function determines if a Vreg is a trivial rematerialization. The
-// block/instruction position is used as a starting point to resolve
-// the defining instruction only (the answer should not depend on the
-// position).
-bool is_trivial_remat(State& state, Vreg r, Vlabel b, size_t instIdx) {
-  auto const remat = find_defining_inst_for_remat_enter(state, r, b, instIdx);
-  switch (remat.op) {
+// represents an immediate and thus has no sources to depend on, or it
+// only uses ignored physical registers (which haven't been modified
+// in non-recoverable ways since). This function determines if a Vreg
+// is a trivial rematerialization. The block/instruction position is
+// used as a starting point to resolve the defining instruction
+// only. If the rematerialization is trivial, it is returned,
+// folly::none otherwise.
+folly::Optional<Vinstr> is_trivial_remat(State& state,
+                                         Vreg r,
+                                         Vlabel b,
+                                         size_t instIdx) {
+  auto remat = find_defining_inst_for_remat_enter(state, r, b, instIdx);
+  switch (remat.instr.op) {
     case Vinstr::ldimmq:
     case Vinstr::ldimml:
     case Vinstr::ldimmb:
+    case Vinstr::ldundefq:
       // Immediates can always be rematerialized (this is the usual
       // case).
-      return true;
+      return remat.instr;
     case Vinstr::reload:
       // If we ever have to reload it, it's obviously not trivial.
-      return false;
+      return folly::none;
     default: {
-      assertx(isPure(remat));
-      // If it's not one of the above usual cases, check if it has any
-      // sources. If it does, assume it can't be trivial. This is a
-      // belt and suspenders approach, I'm not sure if there's any
-      // pure Vasm instructions which don't have sources right now
-      // (besides the load immediates above).
-      size_t useCount = 0;
-      visitUses(state.unit, remat, [&] (Vreg) { ++useCount; });
-      return useCount == 0;
+      assertx(isPure(remat.instr));
+      // If the instruction uses any non-ignored registers, we cannot
+      // treat it as trivial, as we do not know if they'll be
+      // available or not.
+      if (uses_set_cached(state, remat.instr).any()) return folly::none;
+      // However we can treat it as trivial if it uses only ignored
+      // physical registers, whose values are recoverable at this
+      // point.
+      auto const offset =
+        used_physical_registers_recoverable(state, remat, b, instIdx);
+      // If the physical register's value is not recoverable, we
+      // cannot rematerialize.
+      if (!offset) return folly::none;
+      // Otherwise we can only use it if we can successfully fold the
+      // offset into the instruction (if the offset is zero, this will
+      // always succeed).
+      if (fold_offset_into_instr(remat.instr, *offset)) return remat.instr;
+      return folly::none;
     }
   }
+}
+
+namespace detail {
+
+// Visitor to access a Vinstr's Vptr and Vreg operands in a generic
+// way.
+template <typename OnUse, typename OnVptr>
+struct FoldRematWithUseVisit {
+  template<typename T> void imm(const T&) {}
+  template<typename T> void def(const T&) {}
+  template <typename T, typename H> void defHint(const T&, const H&) {}
+
+  template<typename T> void across(T& t) { use(t); }
+  template<typename T, typename H> void useHint(T& t, const H&) { use(t); }
+
+  void use(RegSet) {}
+  void use(VcallArgsId) { always_assert(false); }
+
+  void use(Vtuple t) { for (auto const r : unit.tuples[t]) onUse(r); }
+  void use(Vptr& ptr) { onVptr(ptr); }
+  void use(Vreg r) { onUse(r); }
+
+  OnUse onUse;
+  OnVptr onVptr;
+  const Vunit& unit;
+};
+
+// Provides template param deduction....
+template <typename OnUse, typename OnVptr>
+FoldRematWithUseVisit<OnUse, OnVptr>
+make_fold_remat_with_use_visit(const Vunit& unit,
+                               OnUse onUse,
+                               OnVptr onVptr) {
+  return FoldRematWithUseVisit<OnUse, OnVptr>{
+    std::move(onUse),
+    std::move(onVptr),
+    unit
+  };
+}
+
+}
+
+// Returns true if the given rematerialization instruction `remat'
+// (defining `r') can be folded completely into the given instruction
+// `use'. `use' must actually use `r'.
+bool can_fold_remat_with_use(const State& state,
+                             const Vinstr& remat,
+                             Vinstr& use,
+                             Vreg r) {
+  assertx(!r.isPhys());
+
+  int64_t rematDisp = 0;
+  if (remat.op == Vinstr::lea) {
+    if (!is_simple_vptr(remat.lea_.s)) return false;
+    rematDisp = remat.lea_.s.disp;
+  } else if (remat.op != Vinstr::copy) {
+    return false;
+  }
+
+  // If the use is a copy, we can turn it into a lea as long as the
+  // displacement isn't too large.
+  if (use.op == Vinstr::copy) return can_merge_disps(0, rematDisp);
+
+  auto bad = false;
+  DEBUG_ONLY auto found = false;
+  // Iterate over the operands of `use'. `r' cannot be used as a
+  // normal operand (we cannot fold that) and can only be used as the
+  // base of a Vptr.
+  auto visit = detail::make_fold_remat_with_use_visit(
+    state.unit,
+    [&] (Vreg u) {
+      if (u != r) return;
+      bad = true;
+      found = true;
+    },
+    [&] (const Vptr& p) {
+      if (!is_simple_vptr(p)) {
+        // The Vptr isn't simple, so we cannot fold into it. However
+        // if the Vptr does not use `r' at all, we can ignore those,
+        // as its not relevant anyways.
+        if (p.base == r || p.index == r) {
+          bad = true;
+          found = true;
+        }
+        return;
+      }
+      // The Vptr is simple, but we still need to check if it uses
+      // `r'. If it does, we can fold as long as the displacements
+      // will fit.
+      if (p.base != r) return;
+      found = true;
+      if (!can_merge_disps(p.disp, rematDisp)) bad = true;
+    }
+  );
+  visitOperands(use, visit);
+  // We should have found something because its a pre-condition that
+  // `use' uses `r'.
+  assertx(found);
+  return !bad;
+}
+
+// Given the rematerialization instruction `remat' defining `r', fold
+// it into the instruction `use'. The ability to do this should have
+// already been checked.
+void fold_remat_with_use(const State& state,
+                         const Vinstr& remat,
+                         Vinstr& use,
+                         Vreg r) {
+  assertx(can_fold_remat_with_use(state, remat, use, r));
+
+  Vreg rematBase;
+  int64_t rematDisp = 0;
+  if (remat.op == Vinstr::lea) {
+    assertx(is_simple_vptr(remat.lea_.s));
+    rematBase = remat.lea_.s.base;
+    rematDisp = remat.lea_.s.disp;
+  } else {
+    assertx(remat.op == Vinstr::copy);
+    rematBase = remat.copy_.s;
+  }
+
+  // If the use is a copy, we can just turn it into a lea
+  if (use.op == Vinstr::copy) {
+    assertx(can_merge_disps(0, rematDisp));
+    if (rematDisp == 0) {
+      use.copy_.s = rematBase;
+    } else {
+      auto const dst = use.copy_.d;
+      use.op = Vinstr::lea;
+      use.lea_.s = Vptr{};
+      use.lea_.s.base = rematBase;
+      use.lea_.s.disp = rematDisp;
+      use.lea_.d = dst;
+    }
+    invalidate_cached_operands(use);
+    return;
+  }
+
+  // Otherwise see if we can fold it into any Vptrs
+  DEBUG_ONLY auto changed = false;
+  auto visit = detail::make_fold_remat_with_use_visit(
+    state.unit,
+    [&] (Vreg u) { assertx(u != r); },
+    [&] (Vptr& p) {
+      if (p.base != r) return;
+      assertx(is_simple_vptr(p));
+      assertx(can_merge_disps(p.disp, rematDisp));
+      // Do the actual folding.
+      p.base = rematBase;
+      p.disp += rematDisp;
+      changed = true;
+    }
+  );
+  visitOperands(use, visit);
+  assertx(changed);
+  invalidate_cached_operands(use);
 }
 
 namespace detail {
@@ -3147,9 +3941,17 @@ SpillWithRematResult spill_with_remat(State& state,
       // srcs lifetime in an inconvenient way for the caller.
       assertx(isPure(remat));
       if (src == dst) {
-        v << remat;
-        v << spill{dst, dst};
-        return {2, rematerialized};
+        if (remat.op == Vinstr::copy) {
+          // Special case: if the Vreg comes from a copy, we can spill
+          // directly from the copy's source, saving an intermediate
+          // Vreg.
+          v << spill{remat.copy_.s, dst};
+          return {1, rematerialized};
+        } else {
+          v << remat;
+          v << spill{dst, dst};
+          return {2, rematerialized};
+        }
       }
       if (!srcIsSpilled) {
         v << spill{src, dst};
@@ -3610,16 +4412,32 @@ spill_weight_at_impl(State& state,
   }
 
   // Record a use of the current Vreg at the given instruction
-  // index. Returns the spill weight resulting from that usage.
-  auto const recordUse = [&] (size_t idx) {
+  // index. If we can trivially rematerialize the Vreg at this point
+  // and fold it into the instruction, do not consider it as a real
+  // use and instead continue (returning folly::none). Otherwise,
+  // returns the spill weight resulting from that usage.
+  auto const recordUse = [&] (size_t idx) -> folly::Optional<SpillWeightAt> {
     auto weight = block_weight(state, b);
     auto allTrivial = true;
-    if (!is_trivial_remat(state, reg, b, idx)) {
+    if (auto const trivial = is_trivial_remat(state, reg, b, idx)) {
+      // We can rematerialize it trivially, check if we can fold the
+      // rematerialization into this using instruction. Only attempt
+      // this if we're not at the end of the block (which means
+      // there's no actual instruction).
+      if (idx < unit.blocks[b].code.size()) {
+        auto& inst = unit.blocks[b].code[idx];
+        if (can_fold_remat_with_use(state, *trivial, inst, reg)) {
+          // We can fold it, so continue on.
+          return folly::none;
+        }
+      }
+    } else {
       // If this Vreg isn't trivially rematerializable, scale this
       // weight by the relative cost of a reload.
       weight *= kSpillReloadMultiplier;
       allTrivial = false;
     }
+
     assertx(idx >= instIdx);
     return SpillWeightAt{
       SpillWeight{weight, int64_t(idx - instIdx)},
@@ -3627,16 +4445,24 @@ spill_weight_at_impl(State& state,
     };
   };
 
+  // recordUse, but for situations where we shouldn't be folding
+  // anything (for example with phis), so assert that.
+  auto const recordUseNoFold = [&] (size_t idx) {
+    auto const w = recordUse(idx);
+    assertx(w);
+    return *w;
+  };
+
   // Record a use of the current Vreg by a copy instruction. These may
   // or may not result in an actual usage. If it does, return the
   // spill weight. Otherwise return folly::none.
   auto const recordCopyUse =
-    [&] (Vreg dst, size_t idx) -> folly::Optional<SpillWeightAt> {
+    [&] (Vreg dst, size_t idx, bool copy) -> folly::Optional<SpillWeightAt> {
     // Copies are special. A copy to a physical register is treated
     // like a use. If the src is live after the copy, treat it like a
     // use as well. Otherwise we just start tracking the destination.
     if (dst.isPhys() || live_in_at(state, reg, b, idx + 1)) {
-      return recordUse(idx);
+      return copy ? recordUse(idx) : recordUseNoFold(idx);
     } else {
       reg = dst;
       return folly::none;
@@ -3671,7 +4497,7 @@ spill_weight_at_impl(State& state,
       switch (inst.op) {
         case Vinstr::copy:
           if (inst.copy_.s != reg) continue;
-          if (auto const w = recordCopyUse(inst.copy_.d, i)) return *w;
+          if (auto const w = recordCopyUse(inst.copy_.d, i, true)) return *w;
           break;
         case Vinstr::copyargs: {
           auto const& srcs = unit.tuples[inst.copyargs_.s];
@@ -3679,7 +4505,7 @@ spill_weight_at_impl(State& state,
           assertx(srcs.size() == dsts.size());
           for (size_t j = 0; j < srcs.size(); ++j) {
             if (srcs[j] != reg) continue;
-            if (auto const w = recordCopyUse(dsts[j], i)) return *w;
+            if (auto const w = recordCopyUse(dsts[j], i, false)) return *w;
             break;
           }
           break;
@@ -3714,9 +4540,9 @@ spill_weight_at_impl(State& state,
             for (size_t j = 0; j < srcs.size(); ++j) {
               if (srcs[j] != reg) continue;
               if (dsts[j].isPhys()) {
-                return recordUse(i);
+                return recordUseNoFold(i);
               } else if ((*spillerState)[j]) {
-                if (!ignoreBackEdge(srcs[j], succ)) return recordUse(i);
+                if (!ignoreBackEdge(srcs[j], succ)) return recordUseNoFold(i);
               } else {
                 SpillWeightAt weight;
                 weight.weight.usage -=
@@ -3728,13 +4554,13 @@ spill_weight_at_impl(State& state,
             // Otherwise treat it like a copyargs
             for (size_t j = 0; j < srcs.size(); ++j) {
               if (srcs[j] != reg) continue;
-              if (auto const w = recordCopyUse(dsts[j], i)) return *w;
+              if (auto const w = recordCopyUse(dsts[j], i, false)) return *w;
               break;
             }
           }
           break;
         }
-        default:
+        default: {
           // A normal instruction. Shouldn't be a spill, reload, or
           // ssaalias because we should only examine blocks that the
           // spiller hasn't visited yet.
@@ -3742,7 +4568,12 @@ spill_weight_at_impl(State& state,
                   inst.op != Vinstr::reload &&
                   inst.op != Vinstr::ssaalias);
           if (!uses_set_cached(state, inst)[reg]) continue;
-          return recordUse(i);
+          // If this use "counts", return the subsequent
+          // weight. Otherwise, if it doesn't (because we can fold the
+          // use), ignore it and continue on.
+          if (auto const w = recordUse(i)) return *w;
+          break;
+        }
       }
     }
   }
@@ -3801,7 +4632,7 @@ spill_weight_at_impl(State& state,
     auto const s = spillerState->forReg(reg);
     assertx(s);
     if (s->inReg[reg]) {
-      if (!ignoreBackEdge(reg, succ)) return recordUse(block.code.size());
+      if (!ignoreBackEdge(reg, succ)) return recordUseNoFold(block.code.size());
     } else if (s->inMem[reg]) {
       SpillWeightAt weight;
       weight.weight.usage -= block_weight(state, b) * kSpillReloadMultiplier;
@@ -5197,31 +6028,67 @@ size_t process_inst_spills(State& state,
 
   auto& unit = state.unit;
 
-  // NB: acrosses is a subset of uses at this point
-  auto uses = uses_set_cached(state, inst);
-  auto acrosses = acrosses_set_cached(state, inst);
-  auto const& defs = defs_set_cached(state, inst);
-
   // Keep track of which Vregs are not spilled so they can be used for
   // rematerialization.
   auto rematAvail = spiller.gp.inReg | spiller.simd.inReg;
 
   VregSet reloads; // Vregs we'll have to reload
   VregSet spills;  // Vregs we'll have to spill
+  VregSet folded; // Vregs which originally needed to be reloaded,
+                  // but we rematerialized and folded into the
+                  // instruction.
 
-  // First process the uses (including acrosses). If any use is currently
-  // spilled, make it non-spilled and record that it needs a reload.
-  for (auto const r : uses) {
+  // First process the uses (including acrosses). If any use is
+  // currently spilled, check if we can rematerialize it and fold it
+  // into the instruction. If not, make it non-spilled and record that
+  // it needs a reload.
+  for (auto const r : uses_set_cached(state, inst)) {
     auto s = spiller.forReg(r);
     if (!s) continue;
     assertx(s->inReg[r] || s->inMem[r]);
-    if (s->inMem[r]) {
-      assertx(!r.isPhys());
+    if (!s->inMem[r]) continue;
+    assertx(!r.isPhys());
+    auto const remat = reload_with_remat(
+      state,
+      b,
+      instIdx,
+      rematAvail,
+      r,
+      r
+    );
+    if (can_fold_remat_with_use(state, remat, inst, r)) {
+      // We can rematerialize this Vreg and fold its definition into
+      // the instruction itself. Keep the Vreg in inMem because we're
+      // not going to actually reload it.
+      fold_remat_with_use(state, remat, inst, r);
+      folded.add(r);
+      results.changed[b] = true;
+    } else {
+      // Otherwise we're going to reload it, so move it into inReg.
       reloads.add(r);
       s->inMem.remove(r);
+      s->inReg.add(r);
     }
-    s->inReg.add(r);
   }
+  results.rematerialized |= folded;
+
+  // Defer getting the cached operands until now, as folding
+  // rematerializations above may have changed them.
+  //
+  // NB: acrosses is a subset of uses at this point
+  auto uses = uses_set_cached(state, inst);
+  auto acrosses = acrosses_set_cached(state, inst);
+  auto const& defs = defs_set_cached(state, inst);
+
+  // Anything we folded away shouldn't be showing up as any of the
+  // operands anymore.
+  assertx(!uses.intersects(folded));
+  assertx(!defs.intersects(folded));
+  // Some of the Vregs which we folded away instead of reloading may
+  // be dead after this instruction, so remove them. This won't happen
+  // below because they're no longer part of the use set.
+  spiller.dropDead(folded, nullptr, b, instIdx);
+
   // Moving the uses into registers may require us to spill other Vregs (except
   // the ones we just reloaded).
   spills |= spiller.spill(
@@ -5666,9 +6533,18 @@ void hoist_spills_in_loop(State& state,
             changed |= unify(inst.reload_.s, inst.reload_.d);
             break;
           case Vinstr::spill: {
-            assertx(!inst.spill_.s.isPhys() && !inst.spill_.d.isPhys());
-            changed |= unify(inst.spill_.s, inst.spill_.d);
-            spilled.add(canonicalize(inst.spill_.s));
+            // We can sometimes spill directly from a physical
+            // register (if the spilled Vreg came from a copy from
+            // that physical register). We only do that if the spill
+            // would have been from/to the same Vreg, so we can use
+            // the dst in that case.
+            assertx(!inst.spill_.d.isPhys());
+            if (!inst.spill_.s.isPhys()) {
+              changed |= unify(inst.spill_.s, inst.spill_.d);
+              spilled.add(canonicalize(inst.spill_.s));
+            } else {
+              spilled.add(canonicalize(inst.spill_.d));
+            }
             break;
           }
           case Vinstr::ssaalias:
@@ -5769,7 +6645,7 @@ void hoist_spills_in_loop(State& state,
         for (auto const r : (out->gp.inMem | out->simd.inMem)) {
           auto const canon = canonicalize(r);
           if (!candidates[canon]) continue;
-          auto const trivial = is_trivial_remat(state, r, b, !!outPhi);
+          auto const trivial = !!is_trivial_remat(state, r, b, !!outPhi);
           credit(canon, pred, trivial, true);
         }
 
@@ -5779,7 +6655,7 @@ void hoist_spills_in_loop(State& state,
         for (auto const r : (out->gp.inReg | out->simd.inReg)) {
           auto const canon = canonicalize(r);
           if (!candidates[canon]) continue;
-          auto const trivial = is_trivial_remat(state, r, b, !!outPhi);
+          auto const trivial = !!is_trivial_remat(state, r, b, !!outPhi);
           penalty(canon, pred, trivial, false);
         }
 
@@ -5795,7 +6671,7 @@ void hoist_spills_in_loop(State& state,
           auto const r = defs[i];
           auto const canon = canonicalize(r);
           if (!candidates[canon]) continue;
-          auto const trivial = is_trivial_remat(state, r, b, 1);
+          auto const trivial = !!is_trivial_remat(state, r, b, 1);
           if ((*outPhi)[i]) {
             penalty(canon, pred, trivial, false);
           } else {
@@ -5818,7 +6694,7 @@ void hoist_spills_in_loop(State& state,
         if (!candidates[c1]) return;
         credit(
           c1, b,
-          is_trivial_remat(state, r1, b, i),
+          !!is_trivial_remat(state, r1, b, i),
           reload
         );
       };
@@ -5860,7 +6736,7 @@ void hoist_spills_in_loop(State& state,
             if (!candidates[canon]) continue;
             if (!to[r]) continue;
             auto const trivial =
-              is_trivial_remat(state, r, b, unit.blocks[b].code.size());
+              !!is_trivial_remat(state, r, b, unit.blocks[b].code.size());
             credit(canon, b, trivial, useTrivial);
           }
         };
@@ -5900,12 +6776,12 @@ void hoist_spills_in_loop(State& state,
             if (inRegOut == inRegIn) continue;
 
             auto const trivial =
-              is_trivial_remat(state, r1, b, unit.blocks[b].code.size());
+              !!is_trivial_remat(state, r1, b, unit.blocks[b].code.size());
             credit(canon1, b, trivial, !inRegOut || inRegIn);
           } else {
             if (candidates[canon1] && inRegOut) {
               auto const trivial =
-                is_trivial_remat(state, r1, b, unit.blocks[b].code.size());
+                !!is_trivial_remat(state, r1, b, unit.blocks[b].code.size());
               if (inRegIn) {
                 penalty(canon1, b, trivial, true);
               } else {
@@ -5914,7 +6790,7 @@ void hoist_spills_in_loop(State& state,
             }
 
             if (candidates[canon2] && inRegIn) {
-              auto const trivial = is_trivial_remat(state, r2, succ, 1);
+              auto const trivial = !!is_trivial_remat(state, r2, succ, 1);
               if (inRegOut) {
                 penalty(canon2, b, trivial, false);
               } else {
@@ -5945,7 +6821,7 @@ void hoist_spills_in_loop(State& state,
             auto const canon = canonicalize(r);
             if (!candidates[canon]) continue;
             auto const trivial =
-              is_trivial_remat(state, r, b, unit.blocks[b].code.size());
+              !!is_trivial_remat(state, r, b, unit.blocks[b].code.size());
             if (toReg[r]) {
               penalty(canon, succ, trivial, true);
             } else if (toMem[r]) {
@@ -6027,6 +6903,17 @@ void hoist_spills_in_loop(State& state,
     for (auto& inst : unit.blocks[b].code) {
       switch (inst.op) {
         case Vinstr::copy:
+          // Copies can handle spilled Vregs fine, but a copy from a
+          // physical register has to be removed.
+          if (!candidates[canonicalize(inst.copy_.d)]) break;
+          if (inst.copy_.s.isPhys() || inst.copy_.s == inst.copy_.d) {
+            assertx(results.rematerialized[inst.copy_.d]);
+            inst.nop_ = nop{};
+            inst.op = Vinstr::nop;
+            results.changed[b] = true;
+            invalidate_cached_operands(inst);
+          }
+          break;
         case Vinstr::copyargs:
         case Vinstr::ssaalias:
         case Vinstr::phidef:
@@ -6034,21 +6921,37 @@ void hoist_spills_in_loop(State& state,
           // These handle spilled Vregs fine, they need to be kept as
           // is.
           break;
-        case Vinstr::spill:
+        case Vinstr::spill: {
           // Spills should be removed
-          if (candidates[canonicalize(inst.spill_.s)]) {
-            inst.copy_ = copy{inst.spill_.s, inst.spill_.d};
-            inst.op = Vinstr::copy;
+          assertx(!inst.spill_.d.isPhys());
+          // If we rematerialized directly into a spill, the source
+          // can be a physical register. In that case, dest will have
+          // the original Vreg.
+          auto const r = inst.spill_.s.isPhys() ? inst.spill_.d : inst.spill_.s;
+          if (candidates[canonicalize(r)]) {
+            if (inst.spill_.s.isPhys() || inst.spill_.s == inst.spill_.d) {
+              inst.nop_ = nop{};
+              inst.op = Vinstr::nop;
+            } else {
+              inst.copy_ = copy{inst.spill_.s, inst.spill_.d};
+              inst.op = Vinstr::copy;
+            }
             results.changed[b] = true;
             invalidate_cached_operands(inst);
           }
           break;
+        }
         case Vinstr::reload:
           // Reloads should be removed
           if (candidates[canonicalize(inst.reload_.s)]) {
             assertx(candidates[canonicalize(inst.reload_.d)]);
-            inst.copy_ = copy{inst.reload_.s, inst.reload_.d};
-            inst.op = Vinstr::copy;
+            if (inst.reload_.s == inst.reload_.d) {
+              inst.nop_ = nop{};
+              inst.op = Vinstr::nop;
+            } else {
+              inst.copy_ = copy{inst.reload_.s, inst.reload_.d};
+              inst.op = Vinstr::copy;
+            }
             results.changed[b] = true;
             invalidate_cached_operands(inst);
           }
@@ -6738,11 +7641,14 @@ void set_spill_reg_classes(State& state,
           // The dest of a spill should be a spill slot, and the source should
           // not be.
           always_assert(!inst.spill_.d.isPhys());
-          auto const dCls = reg_class(state, inst.spill_.d);
-          auto const sCls = reg_class(state, inst.spill_.s);
-          always_assert(is_spill(dCls));
-          always_assert(!is_spill(sCls));
-          always_assert(appropriate(dCls, sCls));
+          // We can have spills from physical registers
+          if (!is_ignored(state, inst.spill_.s)) {
+            auto const dCls = reg_class(state, inst.spill_.d);
+            auto const sCls = reg_class(state, inst.spill_.s);
+            always_assert(is_spill(dCls));
+            always_assert(!is_spill(sCls));
+            always_assert(appropriate(dCls, sCls));
+          }
           break;
         }
         case Vinstr::spillbi:
@@ -7884,6 +8790,16 @@ BlockVector calculate_block_color_order(const State& state) {
   return order;
 }
 
+// On x86, r8-r15 and xmm8-15 require a REX prefix on any instruction
+// which uses them. This makes instructions larger, so we want to
+// prefer registers (all else being equal) which do not require them.
+bool isREXRegister(PhysReg r) {
+  if (arch() != Arch::X64) return false;
+  return
+    Vreg{r} >= Vreg{reg::r8} &&
+    (Vreg{r} < Vreg{reg::xmm0} || Vreg{r} > Vreg{reg::xmm7});
+}
+
 // FreeRegs is responsible for tracking which physical registers are free and
 // assigning them.
 
@@ -7942,10 +8858,25 @@ struct FreeRegs {
         auto const avail2 = regs.contains(r2);
         if (avail1 != avail2) return avail1 > avail2;
 
-        // If they both have the same weight and the same
-        // availability, select the lesser register.  On x86_64,
-        // this gives preference to the original x86 registers over
-        // the extended ones (x8-x15), which require a REX prefix.
+        // If they have the same availability, prefer the register
+        // which does not require a REX prefix to one that does. On
+        // x86_64, this will generate slightly smaller code.
+        auto const isREX1 = isREXRegister(r1);
+        auto const isREX2 = isREXRegister(r2);
+        if (isREX1 != isREX2) return isREX1 < isREX2;
+
+        // If they are both equal otherwise, then break the tie using
+        // a pseudo-random function. Hash the physical register and
+        // the Vreg we're selecting for. This is preferred to just
+        // using the lesser register, for example, because it helps
+        // provide a wider dispersion of register uses (which
+        // potentially prevents conflicts later).
+        auto const perturb1 = hash_int64_pair(seed, Vreg{r1});
+        auto const perturb2 = hash_int64_pair(seed, Vreg{r2});
+        if (perturb1 != perturb2) return perturb1 < perturb2;
+
+        // In the extremely rare case everything is identical, prefer
+        // the lesser register
         return Vreg{r1} < Vreg{r2};
       };
 
