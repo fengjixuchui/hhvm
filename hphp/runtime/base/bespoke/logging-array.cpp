@@ -43,7 +43,6 @@ bool LoggingArray::checkInvariants() const {
   assertx(wrapped->isVanilla());
   assertx(wrapped->kindIsValid());
   assertx(wrapped->toDataType() == toDataType());
-  assertx(wrapped->hasExactlyOneRef() || wrapped->isStatic());
   assertx(asBespoke(this)->layout() == s_layout);
   return true;
 }
@@ -89,7 +88,8 @@ void LoggingLayout::scan(const ArrayData* ad, type_scan::Scanner& scan) const {
   scan.scan(LoggingArray::asLogging(ad)->wrapped);
 }
 
-ArrayData* LoggingLayout::escalateToVanilla(const ArrayData* ad) const {
+ArrayData* LoggingLayout::escalateToVanilla(
+    const ArrayData* ad, const char* /*reason*/) const {
   auto wrapped = LoggingArray::asLogging(ad)->wrapped;
   wrapped->incRefCount();
   return wrapped;

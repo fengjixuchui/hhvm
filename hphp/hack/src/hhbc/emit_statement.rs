@@ -438,29 +438,27 @@ fn emit_using(e: &mut Emitter, env: &mut Env, pos: &Pos, using: &tast::UsingStmt
         ),
         _ => e.local_scope(|e| {
             let (local, preamble) = match &(using.expr).1 {
-                tast::Expr_::Binop(x) if x.0.is_eq() && (x.1).1.is_lvar() => {
-                    match (x.1).1.as_lvar() {
-                        Some(tast::Lid(_, id)) => (
-                            local::Type::Named(local_id::get_name(&id).into()),
+                tast::Expr_::Binop(x) => match (&x.0, (x.1).1.as_lvar()) {
+                    (ast_defs::Bop::Eq(None), Some(tast::Lid(_, id))) => (
+                        local::Type::Named(local_id::get_name(&id).into()),
+                        InstrSeq::gather(vec![
+                            emit_expr::emit_expr(e, env, &using.expr)?,
+                            emit_pos(&block_pos),
+                            instr::popc(),
+                        ]),
+                    ),
+                    _ => {
+                        let l = e.local_gen_mut().get_unnamed();
+                        (
+                            l.clone(),
                             InstrSeq::gather(vec![
                                 emit_expr::emit_expr(e, env, &using.expr)?,
-                                emit_pos(&block_pos),
+                                instr::setl(l),
                                 instr::popc(),
                             ]),
-                        ),
-                        None => {
-                            let l = e.local_gen_mut().get_unnamed();
-                            (
-                                l.clone(),
-                                InstrSeq::gather(vec![
-                                    emit_expr::emit_expr(e, env, &using.expr)?,
-                                    instr::setl(l),
-                                    instr::popc(),
-                                ]),
-                            )
-                        }
+                        )
                     }
-                }
+                },
                 tast::Expr_::Lvar(lid) => (
                     local::Type::Named(local_id::get_name(&lid.1).into()),
                     InstrSeq::gather(vec![
@@ -615,24 +613,25 @@ fn emit_switch(
                 let mut res = rest
                     .iter()
                     .map(|case| emit_case(e, env, case))
-                    .collect::<Vec<_>>();
+                    .into_iter()
+                    .collect::<Result<Vec<_>>>()?;
 
                 if has_default {
                     // If there is a default, emit the last case as usual
-                    res.push(emit_case(e, env, last))
+                    res.push(emit_case(e, env, last)?)
                 } else {
                     // Otherwise, emit the last case with an added break
                     match last {
                         tast::Case::Case(expr, block) => {
                             let l = e.label_gen_mut().next_regular();
-                            res.push(Ok((
+                            res.push((
                                 InstrSeq::gather(vec![
                                     instr::label(l.clone()),
                                     emit_block(env, e, block)?,
                                     emit_break(e, env, &Pos::make_none()),
                                 ]),
                                 (Some((expr, l)), None),
-                            )))
+                            ))
                         }
                         tast::Case::Default(_, _) => {
                             return Err(Unrecoverable(
@@ -642,25 +641,19 @@ fn emit_switch(
                     };
                     // ...and emit warning/exception for missing default
                     let l = e.label_gen_mut().next_regular();
-                    res.push(Ok((
+                    res.push((
                         InstrSeq::gather(vec![
                             instr::label(l.clone()),
                             emit_pos_then(pos, instr::throw_non_exhaustive_switch()),
                         ]),
                         (None, Some(l)),
-                    )))
+                    ))
                 };
                 let (case_body_instrs, case_exprs_and_default_labels): (Vec<InstrSeq>, Vec<_>) =
-                    res.into_iter()
-                        .collect::<Result<Vec<_>>>()?
-                        .into_iter()
-                        .unzip();
+                    res.into_iter().unzip();
                 let (case_exprs, default_labels): (Vec<Option<(&tast::Expr, Label)>>, Vec<_>) =
                     case_exprs_and_default_labels.into_iter().unzip();
-                let case_expr_instrs = case_exprs
-                    .into_iter()
-                    .filter_map(|x| x.map(|x| emit_check_case(e, env, scrutinee_expr, x)))
-                    .collect::<Result<Vec<_>>>()?;
+
                 let default_label = match default_labels
                     .iter()
                     .filter_map(|lopt| lopt.as_ref())
@@ -676,6 +669,11 @@ fn emit_switch(
                         ))
                     }
                 };
+                let case_expr_instrs = case_exprs
+                    .into_iter()
+                    .filter_map(|x| x.map(|x| emit_check_case(e, env, scrutinee_expr, x)))
+                    .collect::<Result<Vec<_>>>()?;
+
                 Ok((
                     InstrSeq::gather(case_expr_instrs),
                     InstrSeq::gather(case_body_instrs),
