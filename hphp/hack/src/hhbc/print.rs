@@ -657,11 +657,7 @@ fn print_uses<W: Write>(ctx: &mut Context, w: &mut W, c: &HhasClass) -> Result<(
     if c.uses.is_empty() && c.method_trait_resolutions.is_empty() {
         Ok(())
     } else {
-        let unique_ids: IndexSet<&str> = c
-            .uses
-            .iter()
-            .map(|e| strip_global_ns(e.to_raw_string()))
-            .collect();
+        let unique_ids: IndexSet<&str> = c.uses.iter().map(|e| strip_global_ns(e)).collect();
         let unique_ids: Vec<_> = unique_ids.into_iter().collect();
 
         newline(w)?;
@@ -2475,7 +2471,10 @@ fn print_shape_field_name<W: Write>(
 }
 
 fn print_expr_int<W: Write>(w: &mut W, i: &String) -> Result<(), W::Error> {
-    w.write(integer::to_decimal(i.as_str()).map_err(|_| Error::fail("ParseIntError"))?)
+    match integer::to_decimal(i.as_str()) {
+        Some(s) => w.write(s),
+        None => Err(Error::fail("ParseIntError")),
+    }
 }
 
 fn print_expr_string<W: Write>(w: &mut W, s: &String) -> Result<(), W::Error> {
@@ -2651,22 +2650,23 @@ fn print_expr<W: Write>(
         E_::Lvar(lid) => w.write(escaper::escape(&(lid.1).1)),
         E_::Float(f) => {
             if f.contains('E') || f.contains('e') {
-                let mut s = format!(
+                let s = format!(
                     "{:.1E}",
                     f.parse::<f64>()
                         .map_err(|_| Error::fail(format!("ParseFloatError: {}", f)))?
-                );
-                if s.contains("E-") {
-                    lazy_static! {
-                        static ref NEG_SINGLE_DIGIT_EXP: Regex = Regex::new(r".*E-\d$").unwrap();
-                    }
-                    if NEG_SINGLE_DIGIT_EXP.is_match(&s) {
-                        s.insert(s.len() - 1, '0');
-                    }
-                    w.write(s)
-                } else {
-                    w.write(s.replace('E', "E+"))
+                )
+                // to_uppercase() here because s might be "inf" or "nan"
+                .to_uppercase();
+
+                lazy_static! {
+                    static ref UNSIGNED_EXP : Regex = Regex::new(r"(?P<first>E)(?P<second>\d+)").unwrap();
+                    static ref SIGNED_SINGLE_DIGIT_EXP: Regex = Regex::new(r"(?P<first>E[+-])(?P<second>\d$)").unwrap();
                 }
+                // turn mEn into mE+n
+                let s = UNSIGNED_EXP.replace(&s, "${first}+${second}");
+                // turn mE+n or mE-n into mE+0n or mE-0n (where n is a single digit)
+                let s = SIGNED_SINGLE_DIGIT_EXP.replace(&s, "${first}0${second}");
+                w.write(s)
             } else {
                 w.write(f)
             }
@@ -2730,7 +2730,10 @@ fn print_expr<W: Write>(
                 match unpacked_element {
                     None => Ok(()),
                     Some(e) => {
-                        w.write(", ")?;
+                        if es.len() > 0 {
+                            w.write(", ")?;
+                        }
+                        // TODO: Should probably have ... also but we are not doing that in ocaml
                         print_expr(ctx, w, env, e)
                     }
                 }

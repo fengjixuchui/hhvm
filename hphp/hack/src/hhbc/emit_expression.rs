@@ -22,6 +22,7 @@ use instruction_sequence_rust::{
 };
 use itertools::{Either, Itertools};
 use label_rust::Label;
+use lazy_static::lazy_static;
 use naming_special_names_rust::{
     emitter_special_functions, fb, pseudo_consts, pseudo_functions, special_functions,
     special_idents, superglobals, typehints, user_attributes,
@@ -34,6 +35,7 @@ use oxidized::{
     ast as tast, ast_defs, local_id,
     pos::Pos,
 };
+use regex::Regex;
 use runtime::TypedValue;
 use scope_rust::scope;
 
@@ -167,38 +169,32 @@ mod inout_locals {
 
     fn handle_arg(env: &Env, is_top: bool, i: usize, arg: &tast::Expr, acc: &mut AliasInfoMap) {
         use tast::{Expr, Expr_};
-
         let Expr(_, e) = arg;
-        match e {
-            Expr_::Callconv(x) => {
-                if let (ast_defs::ParamKind::Pinout, Expr(_, Expr_::Lvar(lid))) = &**x {
-                    let Lid(_, lid) = &**lid;
-                    if !is_local_this(env, &lid) {
-                        add_use(lid.1.to_string(), acc);
-                        if is_top {
-                            add_inout(lid.1.to_string(), i, acc);
-                        } else {
-                            add_write(lid.1.to_string(), i, acc);
-                        }
-                    }
-                }
-            }
-            Expr_::Lvar(lid) => {
-                let Lid(_, (_, id)) = &**lid;
-                add_use(id.to_string(), acc);
-            }
-            _ => {
-                // dive into argument value
-                aast_visitor::visit(
-                    &mut Visitor {
-                        phantom: PhantomData,
-                    },
-                    &mut Ctx { state: acc, env, i },
-                    arg,
-                )
-                .unwrap();
+        // inout $v
+        if let Some((ast_defs::ParamKind::Pinout, Expr(_, Expr_::Lvar(lid)))) = e.as_callconv() {
+            let Lid(_, lid) = &**lid;
+            if !is_local_this(env, &lid) {
+                add_use(lid.1.to_string(), acc);
+                return if is_top {
+                    add_inout(lid.1.to_string(), i, acc);
+                } else {
+                    add_write(lid.1.to_string(), i, acc);
+                };
             }
         }
+        // $v
+        if let Some(Lid(_, (_, id))) = e.as_lvar() {
+            return add_use(id.to_string(), acc);
+        }
+        // dive into argument value
+        aast_visitor::visit(
+            &mut Visitor {
+                phantom: PhantomData,
+            },
+            &mut Ctx { state: acc, env, i },
+            arg,
+        )
+        .unwrap();
     }
 
     struct Visitor<'a> {
@@ -224,34 +220,40 @@ mod inout_locals {
             c: &mut Ctx<'a>,
             p: &'ast tast::Expr_,
         ) -> std::result::Result<(), ()> {
-            p.recurse(c, self.object())?;
-            Ok(match p {
-                tast::Expr_::Binop(expr) => {
-                    let (bop, left, _) = &**expr;
-                    if let ast_defs::Bop::Eq(_) = bop {
-                        collect_lvars_hs(c, left)
+            // f(inout $v) or f(&$v)
+            if let tast::Expr_::Call(expr) = p {
+                let (_, _, _, args, uarg) = &**expr;
+                args.iter()
+                    .for_each(|arg| handle_arg(&c.env, false, c.i, arg, &mut c.state));
+                uarg.as_ref()
+                    .map(|arg| handle_arg(&c.env, false, c.i, arg, &mut c.state));
+                Ok(())
+            } else {
+                p.recurse(c, self.object())?;
+                Ok(match p {
+                    // lhs op= _
+                    tast::Expr_::Binop(expr) => {
+                        let (bop, left, _) = &**expr;
+                        if let ast_defs::Bop::Eq(_) = bop {
+                            collect_lvars_hs(c, left)
+                        }
                     }
-                }
-                tast::Expr_::Unop(expr) => {
-                    let (uop, e) = &**expr;
-                    match uop {
-                        ast_defs::Uop::Uincr | ast_defs::Uop::Udecr => collect_lvars_hs(c, e),
-                        _ => (),
+                    // $i++ or $i--
+                    tast::Expr_::Unop(expr) => {
+                        let (uop, e) = &**expr;
+                        match uop {
+                            ast_defs::Uop::Uincr | ast_defs::Uop::Udecr => collect_lvars_hs(c, e),
+                            _ => (),
+                        }
                     }
-                }
-                tast::Expr_::Lvar(expr) => {
-                    let Lid(_, (_, id)) = &**expr;
-                    add_use(id.to_string(), &mut c.state);
-                }
-                tast::Expr_::Call(expr) => {
-                    let (_, _, _, args, uarg) = &**expr;
-                    args.iter()
-                        .for_each(|arg| handle_arg(&c.env, false, c.i, arg, &mut c.state));
-                    uarg.as_ref()
-                        .map(|arg| handle_arg(&c.env, false, c.i, arg, &mut c.state));
-                }
-                _ => (),
-            })
+                    // $v
+                    tast::Expr_::Lvar(expr) => {
+                        let Lid(_, (_, id)) = &**expr;
+                        add_use(id.to_string(), &mut c.state);
+                    }
+                    _ => (),
+                })
+            }
         }
     }
 
@@ -1223,6 +1225,72 @@ fn emit_keyvalue_collection(
     ]))
 }
 
+fn non_numeric(s: &str) -> bool {
+    // Note(hrust): OCaml Int64.of_string and float_of_string ignore underscores
+    let s = s.replace("_", "");
+    lazy_static! {
+        static ref HEX: Regex = Regex::new(r"(?P<sign>-?)0[xX](?P<digits>.*)").unwrap();
+        static ref OCTAL: Regex = Regex::new(r"(?P<sign>-?)0[oO](?P<digits>.*)").unwrap();
+        static ref BINARY: Regex = Regex::new(r"(?P<sign>-?)0[bB](?P<digits>.*)").unwrap();
+        static ref FLOAT: Regex =
+            Regex::new(r"(?P<int>\d*)\.(?P<dec>[0-9--0]*)(?P<zeros>0*)").unwrap();
+        static ref NEG_FLOAT: Regex =
+            Regex::new(r"(?P<int>-\d*)\.(?P<dec>[0-9--0]*)(?P<zeros>0*)").unwrap();
+        static ref HEX_RADIX: u32 = 16;
+        static ref OCTAL_RADIX: u32 = 8;
+        static ref BINARY_RADIX: u32 = 2;
+    }
+    fn int_from_str(s: &str) -> std::result::Result<i64, ()> {
+        // Note(hrust): OCaml Int64.of_string reads decimal, hexadecimal, octal, and binary
+        (if HEX.is_match(s) {
+            u64::from_str_radix(&HEX.replace(s, "${sign}${digits}"), *HEX_RADIX).map(|x| x as i64)
+        } else if OCTAL.is_match(s) {
+            u64::from_str_radix(&OCTAL.replace(s, "${sign}${digits}"), *OCTAL_RADIX)
+                .map(|x| x as i64)
+        } else if BINARY.is_match(s) {
+            u64::from_str_radix(&BINARY.replace(s, "${sign}${digits}"), *BINARY_RADIX)
+                .map(|x| x as i64)
+        } else {
+            i64::from_str(&s)
+        })
+        .map_err(|_| ())
+    };
+    fn float_from_str_radix(s: &str, radix: u32) -> std::result::Result<f64, ()> {
+        let i = i64::from_str_radix(&s.replace(".", ""), radix).map_err(|_| ())?;
+        Ok(match s.matches(".").count() {
+            0 => i as f64,
+            1 => {
+                let pow = s.split('.').last().unwrap().len();
+                (i as f64) / f64::from(radix).powi(pow as i32)
+            }
+            _ => return Err(()),
+        })
+    };
+    fn out_of_bounds(s: &str) -> bool {
+        // compare strings instead of floats to avoid rounding imprecision
+        FLOAT.replace(s, "${int}.${dec}").trim_end_matches(".") > &i64::MAX.to_string()
+            || NEG_FLOAT.replace(s, "${int}.${dec}").trim_end_matches(".") > &i64::MIN.to_string()
+    }
+    fn validate_float(f: f64) -> std::result::Result<f64, ()> {
+        if f.is_infinite() || f.is_nan() {
+            return Err(());
+        }
+        Ok(f)
+    }
+    fn float_from_str(s: &str) -> std::result::Result<f64, ()> {
+        // Note(hrust): OCaml float_of_string ignores leading whitespace, reads decimal and hexadecimal
+        let s = s.trim_start();
+        if HEX.is_match(s) {
+            float_from_str_radix(&HEX.replace(s, "${sign}${digits}"), *HEX_RADIX)
+        } else if out_of_bounds(s) {
+            Err(())
+        } else {
+            f64::from_str(s).map_err(|_| ()).and_then(validate_float)
+        }
+    };
+    int_from_str(&s).is_err() && float_from_str(&s).is_err()
+}
+
 fn is_struct_init(
     e: &mut Emitter,
     env: &Env,
@@ -1237,12 +1305,13 @@ fn is_struct_init(
             let mut key = key.clone();
             ast_constant_folder::fold_expr(&mut key, e, &env.namespace);
             if let tast::Expr(_, tast::Expr_::String(s)) = key {
-                are_all_keys_non_numeric_strings = are_all_keys_non_numeric_strings
-                    && !i64::from_str(&s.replace("_", "")).is_ok()
-                    && !(f64::from_str(&s).map_or(false, |f| f.is_finite()));
+                are_all_keys_non_numeric_strings =
+                    are_all_keys_non_numeric_strings && non_numeric(&s);
                 uniq_keys.insert(s);
-                continue;
+            } else {
+                are_all_keys_non_numeric_strings = false;
             }
+            continue;
         }
         are_all_keys_non_numeric_strings = false;
     }
@@ -2387,7 +2456,10 @@ fn emit_special_function(
             if nargs != 1 {
                 Err(emit_fatal::raise_fatal_runtime(
                     pos,
-                    "Constant string expected in fun()",
+                    format!(
+                        "fun() expects exactly 1 parameter, {} given",
+                        nargs.to_string()
+                    ),
                 ))
             } else {
                 match args {
@@ -4987,8 +5059,14 @@ fn can_use_as_rhs_in_list_assignment(expr: &tast::Expr_) -> Result<bool> {
         | E_::Await(_)
         | E_::ClassConst(_) => true,
         E_::Pipe(p) => can_use_as_rhs_in_list_assignment(&(p.2).1)?,
-        E_::Binop(b) if b.0.is_eq() => can_use_as_rhs_in_list_assignment(&(b.2).1)?,
-        E_::Binop(b) => b.0.is_plus() || b.0.is_question_question() || b.0.is_any_eq(),
+        E_::Binop(b) => {
+            if let ast_defs::Bop::Eq(None) = &b.0 {
+                if (b.1).1.is_list() {
+                    return can_use_as_rhs_in_list_assignment(&(b.2).1);
+                }
+            }
+            b.0.is_plus() || b.0.is_question_question() || b.0.is_any_eq()
+        }
         E_::PUIdentifier(_) => {
             return Err(Unrecoverable(
                 "TODO(T35357243): Pocket Universes syntax must be erased by now".into(),
