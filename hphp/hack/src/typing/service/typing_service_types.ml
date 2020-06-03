@@ -82,12 +82,6 @@ module type LocalServerApi = sig
     current phase of execution *)
   val send_progress : string -> unit
 
-  (* Called by the controller to update clients with its progress on
-    type checking, indicating how far along it is. `unit` represents
-    the items that are being processed, e.g., 'workers' or 'files' *)
-  val send_percentage_progress :
-    operation:string -> done_count:int -> total_count:int -> unit:string -> unit
-
   (* The state filename contains the state that should be updated.
     This function is called by the controller after it receives a response
     from a worker that contains such state.
@@ -122,6 +116,7 @@ type delegate_env = {
   init_id: string;
   mergebase: Hg.hg_rev option;
   num_workers: int;
+  prefetch_deferred_files: bool;
   recheck_id: string;
   root: string;
   (* This module exposes to the controller the limited set of operations that

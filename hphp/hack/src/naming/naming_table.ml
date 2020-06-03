@@ -239,6 +239,58 @@ let get_file_info a key =
 let get_file_info_unsafe a key =
   Core_kernel.Option.value_exn (get_file_info a key)
 
+let get_dep_set_files (naming_table : t) (deps : Typing_deps.DepSet.t) :
+    Relative_path.Set.t =
+  match naming_table with
+  | Unbacked _ ->
+    failwith
+      "get_dep_set_files not supported for unbacked naming tables. Use Typing_deps.get_ifiles instead."
+  | Backed (local_changes, db_path) ->
+    let base_results =
+      Typing_deps.DepSet.fold
+        deps
+        ~init:Relative_path.Set.empty
+        ~f:(fun dep acc ->
+          (* NOTE: currently, we issue three queries per dependency hash. If
+          there are a lot of dependency hashes, it may be necessary to
+          optimize this so that we issue larger bulk queries, with conditions
+          like
+
+            SELECT * FROM NAMING_FUNS
+            WHERE
+              HASH BETWEEN A AND B OR
+              HASH BETWEEN C AND D OR
+              HASH BETWEEN E AND F ...
+          *)
+          let consts = Naming_sqlite.get_const_paths_by_dep_hash db_path dep in
+          let funs = Naming_sqlite.get_fun_paths_by_dep_hash db_path dep in
+          let types = Naming_sqlite.get_type_paths_by_dep_hash db_path dep in
+          acc
+          |> Relative_path.Set.union consts
+          |> Relative_path.Set.union funs
+          |> Relative_path.Set.union types)
+    in
+
+    Relative_path.Map.fold
+      local_changes.Naming_sqlite.file_deltas
+      ~init:base_results
+      ~f:(fun path file_info acc ->
+        match file_info with
+        | Naming_sqlite.Deleted -> Relative_path.Set.remove acc path
+        | Naming_sqlite.Modified file_info ->
+          let file_deps = Typing_deps.deps_of_file_info file_info in
+          if
+            not
+              (Typing_deps.DepSet.is_empty
+                 (Typing_deps.DepSet.inter deps file_deps))
+          then
+            Relative_path.Set.add acc path
+          else
+            (* If this file happened to be present in the base changes, it
+            would be permissible to include it since we can return an
+            overestimate, but we may as well remove it. *)
+            Relative_path.Set.remove acc path)
+
 let has_file a key =
   match get_file_info a key with
   | Some _ -> true
@@ -302,6 +354,29 @@ let update_many a updates =
               local_changes.Naming_sqlite.file_deltas;
         },
         db_path )
+
+let update_from_deltas a file_deltas =
+  match a with
+  | Unbacked file_infos ->
+    let file_infos =
+      Relative_path.Map.fold
+        file_deltas
+        ~init:file_infos
+        ~f:(fun path file_delta acc ->
+          match file_delta with
+          | Naming_sqlite.Modified file_info ->
+            Relative_path.Map.add acc ~key:path ~data:file_info
+          | Naming_sqlite.Deleted -> Relative_path.Map.remove acc path)
+    in
+    Unbacked file_infos
+  | Backed (local_changes, db_path) ->
+    let file_deltas =
+      (* Reverse the order because union always takes the first value. *)
+      Relative_path.Map.union
+        file_deltas
+        local_changes.Naming_sqlite.file_deltas
+    in
+    Backed ({ local_changes with Naming_sqlite.file_deltas }, db_path)
 
 let combine a b =
   match b with
