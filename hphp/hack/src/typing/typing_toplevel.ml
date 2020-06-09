@@ -285,12 +285,6 @@ let merge_decl_header_with_hints ~params ~ret ~variadic decl_header env =
   in
   (ret_decl_ty, params_decl_ty, variadicity_decl_ty)
 
-let map_funcbody_annotation an =
-  match an with
-  | Nast.NamedWithUnsafeBlocks -> Tast.HasUnsafeBlocks
-  | Nast.Named -> Tast.NoUnsafeBlocks
-  | Nast.Unnamed _ -> failwith "Should not map over unnamed body"
-
 (* Given a locl_ty type of params, check, in case it is a Tpu or a
  * Tpu_type_access, if the invocation is correct:
  * - Tpu(base, enum): enum must be a valid PU in base or its upper bounds
@@ -321,25 +315,17 @@ let check_pu_in_locl_ty env lty =
       inherit [env] Type_visitor.locl_type_visitor as super
 
       method! on_tpu env r base enum =
-        let lty = mk (r, Tpu (base, enum)) in
         let (env, res) = Typing_utils.class_get_pu env base (snd enum) in
-        if Option.is_none res then
-          Errors.pu_localize_unknown
-            (Reason.to_pos r)
-            (Typing_print.full env lty);
+        if Option.is_none res then Errors.pu_invalid_access (Reason.to_pos r) "";
         super#on_type env base
 
       method! on_tpu_type_access env r tp name =
-        let lty = mk (r, Tpu_type_access (tp, name)) in
         let (env, is_pu, is_pu_type_access) = check env (snd tp) (snd name) in
+        let p = Reason.to_pos r in
         if is_pu && is_pu_type_access then
-          Errors.pu_localize_unknown
-            (Reason.to_pos r)
-            (sprintf ": %s is ambiguous" (Typing_print.full env lty))
+          Errors.pu_invalid_access p ": type is ambiguous"
         else if not (is_pu || is_pu_type_access) then
-          Errors.pu_localize_unknown
-            (Reason.to_pos r)
-            (sprintf ": %s is unknown" (Typing_print.full env lty));
+          Errors.pu_invalid_access p ": type is unknown";
         env
     end
   in
@@ -485,11 +471,7 @@ let rec fun_def ctx f :
           Aast.f_fun_kind = f.f_fun_kind;
           Aast.f_file_attributes = file_attrs;
           Aast.f_user_attributes = user_attributes;
-          Aast.f_body =
-            {
-              Aast.fb_ast = tb;
-              fb_annotation = map_funcbody_annotation f.f_body.fb_annotation;
-            };
+          Aast.f_body = { Aast.fb_ast = tb; fb_annotation = () };
           Aast.f_external = f.f_external;
           Aast.f_namespace = f.f_namespace;
           Aast.f_doc_comment = f.f_doc_comment;
@@ -663,12 +645,6 @@ and method_def env cls m =
           hint_of_type_hint m.m_ret
       in
       let m = { m with m_ret = (fst m.m_ret, type_hint') } in
-      let annotation =
-        if Nast.named_body_is_unsafe nb then
-          Tast.HasUnsafeBlocks
-        else
-          Tast.NoUnsafeBlocks
-      in
       let (env, tparams) = List.map_env env m.m_tparams Typing.type_param in
       let (env, user_attributes) =
         List.map_env env m.m_user_attributes Typing.user_attribute
@@ -695,7 +671,7 @@ and method_def env cls m =
           Aast.m_fun_kind = m.m_fun_kind;
           Aast.m_user_attributes = user_attributes;
           Aast.m_ret = (locl_ty, hint_of_type_hint m.m_ret);
-          Aast.m_body = { Aast.fb_ast = tb; fb_annotation = annotation };
+          Aast.m_body = { Aast.fb_ast = tb; fb_annotation = () };
           Aast.m_external = m.m_external;
           Aast.m_doc_comment = m.m_doc_comment;
         }
@@ -1234,15 +1210,6 @@ and pu_enum_def
       (SMap.empty, SMap.empty)
     | Some pu_enum -> (pu_enum.tpu_case_types, pu_enum.tpu_case_values)
   in
-  let make_ty_tparam (sid, reified) =
-    {
-      tp_variance = Ast_defs.Invariant;
-      tp_name = sid;
-      tp_constraints = [];
-      tp_reified = reified;
-      tp_user_attributes = [];
-    }
-  in
   let make_aast_tparam (sid, hint) =
     let hint_ty = Decl_hint.hint env.decl_env hint in
     {
@@ -1259,10 +1226,7 @@ and pu_enum_def
   (* Adds all of the PU case types as generics in the environment. *)
   let (env, constraints) =
     let case_types =
-      SMap.fold
-        (fun _ case_ty acc -> make_ty_tparam case_ty :: acc)
-        pu_enum_case_types
-        []
+      SMap.fold (fun _ case_ty acc -> case_ty :: acc) pu_enum_case_types []
     in
     Phase.localize_generic_parameters_with_bounds
       env
@@ -1338,17 +1302,21 @@ and pu_enum_def
     in
     List.fold_map ~init:env ~f:process_member pu_members
   in
+  let (env, locl_case_types) =
+    List.map_env env pu_case_types Typing.type_param
+  in
   let local_tpenv = Env.get_tpenv env in
   let local_tpenv =
     List.fold
       ~init:local_tpenv
-      ~f:(fun tpenv ((_, name), reified) ->
+      ~f:(fun tpenv { tp_name; tp_reified; _ } ->
+        let name = snd tp_name in
         let tpinfo =
           TPEnv.
             {
               lower_bounds = TySet.empty;
               upper_bounds = TySet.empty;
-              reified;
+              reified = tp_reified;
               enforceable = false;
               (* TODO(T35357243) improve to support that *)
               newable = false (* TODO(T35357243) improve to support that *);
@@ -1363,7 +1331,7 @@ and pu_enum_def
       pu_name;
       pu_user_attributes;
       pu_is_final;
-      pu_case_types;
+      pu_case_types = locl_case_types;
       pu_case_values;
       pu_members = members;
     }

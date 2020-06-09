@@ -91,7 +91,7 @@ let with_type ty env (e : Nast.expr) : Tast.expr =
 
       method on_'ex _ p = (p, ty)
 
-      method on_'fb _ _ = Tast.HasUnsafeBlocks
+      method on_'fb _ _ = ()
 
       method on_'en _ _ = env
 
@@ -3511,12 +3511,6 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
             else
               fun_implicit_return env lambda_pos hret f.f_fun_kind
           in
-          let annotation =
-            if Nast.named_body_is_unsafe nb then
-              Tast.HasUnsafeBlocks
-            else
-              Tast.NoUnsafeBlocks
-          in
           let (env, tparams) = List.map_env env f.f_tparams type_param in
           let (env, user_attributes) =
             List.map_env env f.f_user_attributes user_attribute
@@ -3533,7 +3527,7 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
               Aast.f_fun_kind = f.f_fun_kind;
               Aast.f_file_attributes = [];
               Aast.f_user_attributes = user_attributes;
-              Aast.f_body = { Aast.fb_ast = tb; fb_annotation = annotation };
+              Aast.f_body = { Aast.fb_ast = tb; fb_annotation = () };
               Aast.f_params = t_params;
               Aast.f_variadic = t_variadic;
               (* TODO TAST: Variadic efuns *)
@@ -5191,7 +5185,10 @@ and dispatch_call
                   Errors.pocket_universes_typing
               in
               let (env, substs) =
-                let f env _key (pu_case_type_name, _reified) =
+                let f
+                    env
+                    _key
+                    { tp_name = pu_case_type_name; tp_reified = _reified; _ } =
                   (* Update position to point to the function call site
                    * rather than to the PU enum definition
                    *)

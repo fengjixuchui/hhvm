@@ -380,7 +380,10 @@ auto const optionals = folly::lazy([] {
     TOptObj,
     TOptRecord,
     TOptRes,
-    TOptClsMeth
+    TOptClsMeth,
+    TOptArrLikeE,
+    TOptArrLikeN,
+    TOptArrLike
   };
 });
 
@@ -422,18 +425,22 @@ auto const non_opt_unions = folly::lazy([] {
     TKeysetN,
     TSKeyset,
     TKeyset,
+    TArrLikeE,
+    TArrLikeN,
+    TArrLike,
+    TArrLikeCompat,
     TInitPrim,
     TPrim,
     TInitUnc,
     TUnc,
     TUncArrKey,
     TArrKey,
-    TPArrLike,
-    TPArrLikeSA,
-    TVArrLike,
-    TVArrLikeSA,
-    TVecLike,
-    TVecLikeSA,
+    TPArrCompat,
+    TPArrCompatSA,
+    TVArrCompat,
+    TVArrCompatSA,
+    TVecCompat,
+    TVecCompatSA,
     TStrLike,
     TUncStrLike,
     TFuncOrCls,
@@ -677,9 +684,9 @@ TEST(Type, Prim) {
     { TRes, TPrim },
     { TObj, TPrim },
     { TPrim, dval(0.0) },
-    { TVArrLike, TPrim },
-    { TVecLike, TPrim },
-    { TPArrLike, TPrim },
+    { TVArrCompat, TPrim },
+    { TVecCompat, TPrim },
+    { TPArrCompat, TPrim },
     { TStrLike, TPrim },
   };
 
@@ -738,15 +745,15 @@ TEST(Type, Prim) {
   if (use_lowptr) {
     EXPECT_TRUE(TClsMeth.subtypeOf(TInitPrim));
     EXPECT_TRUE(TPrim.couldBe(TClsMeth));
-    EXPECT_TRUE(TPrim.couldBe(TVArrLike));
-    EXPECT_TRUE(TPrim.couldBe(TVecLike));
-    EXPECT_TRUE(TPrim.couldBe(TPArrLike));
+    EXPECT_TRUE(TPrim.couldBe(TVArrCompat));
+    EXPECT_TRUE(TPrim.couldBe(TVecCompat));
+    EXPECT_TRUE(TPrim.couldBe(TPArrCompat));
   } else {
     EXPECT_FALSE(TClsMeth.subtypeOf(TInitPrim));
     EXPECT_FALSE(TPrim.couldBe(TClsMeth));
-    EXPECT_FALSE(TPrim.couldBe(TVArrLike));
-    EXPECT_FALSE(TPrim.couldBe(TVecLike));
-    EXPECT_FALSE(TPrim.couldBe(TPArrLike));
+    EXPECT_FALSE(TPrim.couldBe(TVArrCompat));
+    EXPECT_FALSE(TPrim.couldBe(TVecCompat));
+    EXPECT_FALSE(TPrim.couldBe(TPArrCompat));
   }
 }
 
@@ -785,19 +792,19 @@ TEST(Type, Unc) {
 
   if (use_lowptr) {
     EXPECT_TRUE(TClsMeth.subtypeOf(BInitUnc));
-    EXPECT_TRUE(TVArrLikeSA.subtypeOf(BInitUnc));
-    EXPECT_TRUE(TVecLikeSA.subtypeOf(BInitUnc));
-    EXPECT_TRUE(TPArrLikeSA.subtypeOf(BInitUnc));
+    EXPECT_TRUE(TVArrCompatSA.subtypeOf(BInitUnc));
+    EXPECT_TRUE(TVecCompatSA.subtypeOf(BInitUnc));
+    EXPECT_TRUE(TPArrCompatSA.subtypeOf(BInitUnc));
   } else {
     EXPECT_FALSE(TClsMeth.subtypeOf(BInitUnc));
-    EXPECT_FALSE(TVArrLikeSA.subtypeOf(BInitUnc));
-    EXPECT_FALSE(TVecLikeSA.subtypeOf(BInitUnc));
-    EXPECT_FALSE(TPArrLikeSA.subtypeOf(BInitUnc));
+    EXPECT_FALSE(TVArrCompatSA.subtypeOf(BInitUnc));
+    EXPECT_FALSE(TVecCompatSA.subtypeOf(BInitUnc));
+    EXPECT_FALSE(TPArrCompatSA.subtypeOf(BInitUnc));
   }
 
-  EXPECT_FALSE(TVArrLike.subtypeOf(BInitUnc));
-  EXPECT_FALSE(TVecLike.subtypeOf(BInitUnc));
-  EXPECT_FALSE(TPArrLike.subtypeOf(BInitUnc));
+  EXPECT_FALSE(TVArrCompat.subtypeOf(BInitUnc));
+  EXPECT_FALSE(TVecCompat.subtypeOf(BInitUnc));
+  EXPECT_FALSE(TPArrCompat.subtypeOf(BInitUnc));
 
   const std::initializer_list<std::tuple<Type, Type, bool>> tests{
     { TUnc, TInitUnc, true },
@@ -816,12 +823,12 @@ TEST(Type, Unc) {
     { TUncStrLike, TInitUnc, true },
     { TFuncOrCls, TInitUnc, true },
     { TClsMeth, TInitUnc, use_lowptr },
-    { TVArrLike, TInitUnc, true },
-    { TVecLike, TInitUnc, true },
-    { TPArrLike, TInitUnc, true },
-    { TVArrLikeSA, TInitUnc, true },
-    { TVecLikeSA, TInitUnc, true },
-    { TPArrLikeSA, TInitUnc, true },
+    { TVArrCompat, TInitUnc, true },
+    { TVecCompat, TInitUnc, true },
+    { TPArrCompat, TInitUnc, true },
+    { TVArrCompatSA, TInitUnc, true },
+    { TVecCompatSA, TInitUnc, true },
+    { TPArrCompatSA, TInitUnc, true },
   };
   for (auto const& t : tests) {
     auto const& ty1 = std::get<0>(t);
@@ -992,14 +999,14 @@ TEST(Type, OptUnionOf) {
   EXPECT_EQ(TOptStrLike, union_of(TOptFuncOrCls, TStr));
   EXPECT_EQ(TOptUncStrLike, union_of(TOptFuncOrCls, TSStr));
 
-  EXPECT_EQ(TOptVArrLike, union_of(TOptClsMeth, TVArr));
-  EXPECT_EQ(TOptVArrLikeSA, union_of(TOptClsMeth, TSVArr));
+  EXPECT_EQ(TOptVArrCompat, union_of(TOptClsMeth, TVArr));
+  EXPECT_EQ(TOptVArrCompatSA, union_of(TOptClsMeth, TSVArr));
 
-  EXPECT_EQ(TOptPArrLike, union_of(TOptClsMeth, TPArr));
-  EXPECT_EQ(TOptPArrLikeSA, union_of(TOptClsMeth, TSPArr));
+  EXPECT_EQ(TOptPArrCompat, union_of(TOptClsMeth, TPArr));
+  EXPECT_EQ(TOptPArrCompatSA, union_of(TOptClsMeth, TSPArr));
 
-  EXPECT_EQ(TOptVecLike, union_of(TOptClsMeth, TVec));
-  EXPECT_EQ(TOptVecLikeSA, union_of(TOptClsMeth, TSVec));
+  EXPECT_EQ(TOptVecCompat, union_of(TOptClsMeth, TVec));
+  EXPECT_EQ(TOptVecCompatSA, union_of(TOptClsMeth, TSVec));
 
   auto const program = make_test_program();
   Index index { program.get() };
@@ -1145,12 +1152,12 @@ TEST(Type, SpecificExamples) {
 
   EXPECT_EQ(intersection_of(TClsMeth, TInitUnc),
             use_lowptr ? TClsMeth : TBottom);
-  EXPECT_EQ(intersection_of(TVecLike, TInitUnc),
-            use_lowptr ? TVecLikeSA : TSVec);
-  EXPECT_EQ(intersection_of(TVArrLike, TInitUnc),
-            use_lowptr ? TVArrLikeSA : TSVArr);
-  EXPECT_EQ(intersection_of(TPArrLike, TInitUnc),
-            use_lowptr ? TPArrLikeSA : TSArr);
+  EXPECT_EQ(intersection_of(TVecCompat, TInitUnc),
+            use_lowptr ? TVecCompatSA : TSVec);
+  EXPECT_EQ(intersection_of(TVArrCompat, TInitUnc),
+            use_lowptr ? TVArrCompatSA : TSVArr);
+  EXPECT_EQ(intersection_of(TPArrCompat, TInitUnc),
+            use_lowptr ? TPArrCompatSA : TSArr);
 
   auto test_map_a = MapElems{};
   test_map_a[tv(s_A)] = TDbl;
@@ -2601,9 +2608,9 @@ TEST(Type, LoosenStaticness) {
                         TOptKeyset,
                         TOptSStr,
                         TOptUncStrLike,
-                        TOptPArrLikeSA,
-                        TOptVArrLikeSA,
-                        TOptVecLikeSA) &&
+                        TOptPArrCompatSA,
+                        TOptVArrCompatSA,
+                        TOptVecCompatSA) &&
          t != TInitNull)) continue;
     EXPECT_EQ(loosen_staticness(t), t);
   }
@@ -2657,12 +2664,12 @@ TEST(Type, LoosenStaticness) {
     { TFuncOrCls, TFuncOrCls },
     { TStrLike, TStrLike },
     { TUncStrLike, TStrLike },
-    { TVArrLike, TVArrLike },
-    { TVArrLikeSA, TVArrLike },
-    { TVecLike, TVecLike },
-    { TVecLikeSA, TVecLike },
-    { TPArrLike, TPArrLike },
-    { TPArrLikeSA, TPArrLike },
+    { TVArrCompat, TVArrCompat },
+    { TVArrCompatSA, TVArrCompat },
+    { TVecCompat, TVecCompat },
+    { TVecCompatSA, TVecCompat },
+    { TPArrCompat, TPArrCompat },
+    { TPArrCompatSA, TPArrCompat },
   };
   for (auto const& p : tests) {
     EXPECT_EQ(loosen_staticness(p.first), p.second);
@@ -2682,11 +2689,7 @@ TEST(Type, LoosenEmptiness) {
   Index index{ program.get() };
 
   for (auto const& t : all_with_waithandles(index)) {
-    if (t.subtypeOfAny(TOptArrE, TOptArrN,
-                       TOptVecE, TOptVecN,
-                       TOptDictE, TOptDictN,
-                       TOptKeysetE, TOptKeysetN) &&
-        t != TInitNull) continue;
+    if (t.subtypeOfAny(TOptArrLike) && t != TInitNull) continue;
     EXPECT_EQ(loosen_emptiness(t), t);
   }
 
@@ -2724,7 +2727,9 @@ TEST(Type, LoosenEmptiness) {
     { arr_packedn(TInt), union_of(TPArrE, arr_packedn(TInt)) },
     { arr_packed({TInt, TBool}), union_of(TPArrE, arr_packed({TInt, TBool})) },
     { arr_mapn(TStr, TInt), union_of(TPArrE, arr_mapn(TStr, TInt)) },
-    { arr_map(test_map), union_of(TPArrE, arr_map(test_map)) }
+    { arr_map(test_map), union_of(TPArrE, arr_map(test_map)) },
+    { TArrLikeE, TArrLike },
+    { TArrLikeE, TArrLike },
   };
   for (auto const& p : tests) {
     EXPECT_EQ(loosen_emptiness(p.first), p.second);
@@ -2797,8 +2802,7 @@ TEST(Type, AddNonEmptiness) {
   Index index{ program.get() };
 
   for (auto const& t : all_with_waithandles(index)) {
-    if (t.subtypeOfAny(TOptArrE, TOptVecE, TOptDictE, TOptKeysetE)
-        && t != TInitNull) continue;
+    if (t.subtypeOfAny(TOptArrLikeE) && t != TInitNull) continue;
     EXPECT_EQ(add_nonemptiness(t), t);
   }
 
@@ -2817,6 +2821,8 @@ TEST(Type, AddNonEmptiness) {
     { TSDictE, TSDict },
     { TKeysetE, TKeyset },
     { TSKeysetE, TSKeyset },
+    { TSArrLikeE, TSArrLike },
+    { TArrLikeE, TArrLike },
   };
   for (auto const& p : tests) {
     EXPECT_EQ(add_nonemptiness(p.first), p.second);
@@ -2829,7 +2835,7 @@ TEST(Type, LoosenDVArrayness) {
   Index index{ program.get() };
 
   for (auto const& t : all_with_waithandles(index)) {
-    if (t.subtypeOfAny(TOptPArr, TOptVArr, TOptDArr, TOptVArrLike) &&
+    if (t.subtypeOfAny(TOptPArr, TOptVArr, TOptDArr, TOptVArrCompat) &&
         t != TInitNull) {
       continue;
     }
@@ -3115,12 +3121,12 @@ TEST(Type, RemoveCounted) {
     },
     { TClsMeth, use_lowptr ? TClsMeth : TBottom },
     { TFuncOrCls, TFuncOrCls },
-    { TVArrLike, use_lowptr ? TVArrLikeSA : TSVArr },
-    { TVArrLikeSA, use_lowptr ? TVArrLikeSA : TSVArr },
-    { TVecLike, use_lowptr ? TVecLikeSA : TSVec },
-    { TVecLikeSA, use_lowptr ? TVecLikeSA : TSVec },
-    { TPArrLike, use_lowptr ? TPArrLikeSA : TSArr },
-    { TPArrLikeSA, use_lowptr ? TPArrLikeSA : TSArr },
+    { TVArrCompat, use_lowptr ? TVArrCompatSA : TSVArr },
+    { TVArrCompatSA, use_lowptr ? TVArrCompatSA : TSVArr },
+    { TVecCompat, use_lowptr ? TVecCompatSA : TSVec },
+    { TVecCompatSA, use_lowptr ? TVecCompatSA : TSVec },
+    { TPArrCompat, use_lowptr ? TPArrCompatSA : TSArr },
+    { TPArrCompatSA, use_lowptr ? TPArrCompatSA : TSArr },
   };
   for (auto const& p : cases) {
     EXPECT_EQ(remove_counted(p.first), p.second);
@@ -3198,12 +3204,12 @@ TEST(Type, MustBeCounted) {
     { arr_map(test_map_a, TSStr, TInt), false },
     { TFuncOrCls, false },
     { TClsMeth, !use_lowptr },
-    { TVArrLike, false },
-    { TVArrLikeSA, false },
-    { TVecLike, false },
-    { TVecLikeSA, false },
-    { TPArrLike, false },
-    { TPArrLikeSA, false },
+    { TVArrCompat, false },
+    { TVArrCompatSA, false },
+    { TVecCompat, false },
+    { TVecCompatSA, false },
+    { TPArrCompat, false },
+    { TPArrCompatSA, false },
   };
   for (auto const& p : cases) {
     if (p.second) {
@@ -3852,6 +3858,70 @@ TEST(Type, ContextDependent) {
 #undef REFINE_EQ
 }
 
+TEST(Type, ArrLike) {
+  const std::initializer_list<std::pair<Type, Type>> subtype_true{
+    // Expect all static arrays to be subtypes
+    { TSArr,    TArrLike },
+    { TSKeyset, TArrLike },
+    { TSDict,   TArrLike },
+    { TSVec,    TArrLike },
+    // Expect other arrays to be subtypes
+    { TArr,     TArrLike },
+    { TKeyset,  TArrLike },
+    { TDict,    TArrLike },
+    { TVec,     TArrLike },
+    // Expect VArray and DArray to be subtypes
+    { TDArr,    TArrLike },
+    { TVArr,    TArrLike },
+    // Expect ClsMeth to be included in ArrLikeCompat
+    { TClsMeth, TArrLikeCompat },
+  };
+
+  const std::initializer_list<std::pair<Type, Type>> subtype_false{
+    // ClsMeth is not an array
+    { TClsMeth, TArrLike },
+    // Ints are not arrays
+    { TInt,     TArrLike },
+    // ArrLike doesn't contain null
+    { TOptVec,  TArrLike },
+  };
+
+  const std::initializer_list<std::pair<Type, Type>> couldbe_true{
+    { TArrLike, TVecCompat },
+    { TArrLike, TOptKeysetE },
+    { TArrLike, TPArrCompatSA },
+  };
+
+  const std::initializer_list<std::pair<Type, Type>> couldbe_false{
+    { TArrLike, TPrim },
+    { TArrLike, TNull },
+  };
+
+  for (auto kv : subtype_true) {
+    EXPECT_TRUE(kv.first.subtypeOf(kv.second))
+      << show(kv.first) << " subtypeOf " << show(kv.second);
+  }
+
+  for (auto kv : subtype_false) {
+    EXPECT_FALSE(kv.first.subtypeOf(kv.second))
+      << show(kv.first) << " !subtypeOf " << show(kv.second);
+  }
+
+  for (auto kv : couldbe_true) {
+    EXPECT_TRUE(kv.first.couldBe(kv.second))
+      << show(kv.first) << " couldbe " << show(kv.second);
+    EXPECT_TRUE(kv.second.couldBe(kv.first))
+      << show(kv.first) << " couldbe " << show(kv.second);
+  }
+
+  for (auto kv : couldbe_false) {
+    EXPECT_FALSE(kv.first.couldBe(kv.second))
+      << show(kv.first) << " !couldbe " << show(kv.second);
+    EXPECT_FALSE(kv.second.couldBe(kv.first))
+      << show(kv.first) << " !couldbe " << show(kv.second);
+  }
+
+}
 //////////////////////////////////////////////////////////////////////
 
 }}

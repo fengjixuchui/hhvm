@@ -4525,13 +4525,9 @@ where
                             case_values.push(ast::PuCaseValue(id, typ));
                         }
                         PocketFieldTypeDeclaration(c) => {
-                            let id = Self::pos_name(&c.pocket_field_type_name, env)?;
-                            let is_reified = if !&c.pocket_field_type_reified.is_missing() {
-                                ast::ReifyKind::Reified
-                            } else {
-                                ast::ReifyKind::Erased
-                            };
-                            case_types.push((id, is_reified));
+                            let case_type =
+                                Self::p_tparam(false, &c.pocket_field_type_type_parameter, env)?;
+                            case_types.push(case_type);
                         }
                         _ => {
                             Self::missing_syntax("pufield", fld, env)?;

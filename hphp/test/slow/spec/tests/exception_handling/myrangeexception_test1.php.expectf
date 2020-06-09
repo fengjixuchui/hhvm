@@ -14,7 +14,7 @@ object(MyRangeException) (11) {
   ["file":protected]=>
   string(%d) "%s/exception_handling/myrangeexception_test1.php"
   ["line":protected]=>
-  int(13)
+  int(15)
   ["trace":"Exception":private]=>
   array(0) {
   }
@@ -24,6 +24,6 @@ object(MyRangeException) (11) {
   NULL
 }
 ======
-$re = >exception 'MyRangeException' with message 'xxx' in %s/exception_handling/myrangeexception_test1.php:13
+$re = >exception 'MyRangeException' with message 'xxx' in %s/exception_handling/myrangeexception_test1.php:15
 Stack trace:
 #0 {main}, badValue: 5, lowerValue: 20, upperValue: 30<

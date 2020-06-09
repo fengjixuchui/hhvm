@@ -62,12 +62,9 @@ void visit_locations(const BlockList& blocks, Visit visit) {
         [&] (PureLoad x)          { visit(x.src); },
         [&] (PureStore x)         { visit(x.dst); },
         [&] (ExitEffects x)       { visit(x.live); visit(x.kills); },
-        [&] (InlineEnterEffects x) { visit(x.inlFrame);
-                                     visit(x.inlStack);
-                                     visit(x.actrec); },
-        [&] (InlineExitEffects x) { visit(x.inlFrame);
-                                    visit(x.inlStack);
-                                    visit(x.inlMeta); }
+        [&] (PureInlineCall x)    { visit(x.base);
+                                    visit(x.actrec); },
+        [&] (PureInlineReturn x)  { visit(x.base); }
       );
     }
   }
@@ -200,8 +197,11 @@ bool collect_component(AliasAnalysis& aa,
             }
           }
         }
-        map[AliasClass { *loc }] = range;
       }
+      // Even if we choose not to expand the entire map we can still set the
+      // locations we do see into it, similar to how the stk_expand_map is
+      // handled.
+      map[AliasClass { *loc }] = range;
     }
     return true;
   }
@@ -220,6 +220,20 @@ folly::Optional<ALocMeta> AliasAnalysis::find(AliasClass acls) const {
   return it->second;
 }
 
+#define SIMPLE_ALIAS_CLASSES(X)       \
+  X(Rds, rds, all_rds)                \
+  X(FContext, fcontext, all_fcontext) \
+  X(FFunc, ffunc, all_ffunc)          \
+  X(FMeta, fmeta, all_fmeta)          \
+/**/
+
+#define ALIAS_CLASSES(X)      \
+  X(Prop, prop, all_props)    \
+  X(ElemI, elemI, all_elemIs) \
+  X(ElemS, elemS, all_elemSs) \
+  SIMPLE_ALIAS_CLASSES(X)     \
+/**/
+
 ALocBits AliasAnalysis::may_alias(AliasClass acls) const {
   if (auto meta = find(acls)) {
     return ALocBits{meta->conflicts}.set(meta->index);
@@ -237,31 +251,36 @@ ALocBits AliasAnalysis::may_alias(AliasClass acls) const {
     ret |= may_alias_part(*this, acls, acls.stack(), AStackAny, all_stack);
   }
 
-  ret |= may_alias_component(*this, acls, acls.frame(), loc_expand_map,
-                             AFrameAny, all_frame);
+  ret |= may_alias_component(*this, acls, acls.local(), loc_expand_map,
+                             ALocalAny, all_local);
   ret |= may_alias_component(*this, acls, acls.iter(), iter_expand_map,
                              AIterAny, all_iter);
 
-  ret |= may_alias_part(*this, acls, acls.rds(), ARdsAny, all_rds);
+  auto const add_single = [&] (auto single, AliasClass cls) {
+    assertx(cls.isSingleLocation());
+    if (cls <= *single) {
+      if (auto meta = find(cls)) {
+        ret |= ALocBits{meta->conflicts}.set(meta->index);
+      }
+      // The location is untracked.
+    }
+  };
 
   if (auto const mis = acls.mis()) {
-    auto const add_mis = [&] (AliasClass cls) {
-      assertx(cls.isSingleLocation());
-      if (cls <= *mis) {
-        if (auto meta = find(cls)) {
-          ret |= ALocBits{meta->conflicts}.set(meta->index);
-        }
-        // The location is untracked.
-      }
-    };
-
-    add_mis(AMIStateTempBase);
-    add_mis(AMIStateBase);
+    add_single(mis, AMIStateTempBase);
+    add_single(mis, AMIStateBase);
   }
 
-  ret |= may_alias_part(*this, acls, acls.prop(), APropAny, all_props);
-  ret |= may_alias_part(*this, acls, acls.elemI(), AElemIAny, all_elemIs);
-  ret |= may_alias_part(*this, acls, acls.elemS(), AElemSAny, all_elemSs);
+  if (auto const fbase = acls.frame_base()) {
+    add_single(fbase, AFBasePtr);
+  }
+
+#define MAY_ALIAS(What, what, all) \
+  ret |= may_alias_part(*this, acls, acls.what(), A##What##Any, all);
+
+  ALIAS_CLASSES(MAY_ALIAS);
+
+#undef MAY_ALIAS
 
   return ret;
 }
@@ -285,30 +304,37 @@ ALocBits AliasAnalysis::expand(AliasClass acls) const {
     ret |= all_stack;
   }
 
-  ret |= expand_component(*this, acls, acls.frame(), loc_expand_map,
-                          AFrameAny, all_frame);
+  ret |= expand_component(*this, acls, acls.local(), loc_expand_map,
+                          ALocalAny, all_local);
   ret |= expand_component(*this, acls, acls.iter(), iter_expand_map,
                           AIterAny, all_iter);
 
-  ret |= expand_part(*this, acls, acls.rds(), ARdsAny, all_rds);
+  auto const add_single = [&] (auto single, AliasClass cls) {
+    assertx(cls.isSingleLocation());
+    if (cls <= *single) {
+      if (auto const meta = find(cls)) {
+        ret.set(meta->index);
+      }
+    }
+  };
 
   if (auto const mis = acls.mis()) {
-    auto const add_mis = [&] (AliasClass cls) {
-      assertx(cls.isSingleLocation());
-      if (cls <= *mis) {
-        if (auto const meta = find(cls)) {
-          ret.set(meta->index);
-        }
-      }
-    };
+    auto const add_mis = [&] (AliasClass cls) { add_single(mis, cls); };
 
     add_mis(AMIStateTempBase);
     add_mis(AMIStateBase);
   }
 
-  ret |= expand_part(*this, acls, acls.prop(), APropAny, all_props);
-  ret |= expand_part(*this, acls, acls.elemI(), AElemIAny, all_elemIs);
-  ret |= expand_part(*this, acls, acls.elemS(), AElemSAny, all_elemSs);
+  if (auto const fbase = acls.frame_base()) {
+    add_single(fbase, AFBasePtr);
+  }
+
+#define EXPAND(What, what, all) \
+  ret |= expand_part(*this, acls, acls.what(), A##What##Any, all);
+
+  ALIAS_CLASSES(EXPAND);
+
+#undef EXPAND
 
   return ret;
 }
@@ -364,8 +390,22 @@ AliasAnalysis collect_aliases(const IRUnit& unit, const BlockList& blocks) {
       return;
     }
 
+    if (auto const ar = acls.actrec()) {
+      auto const fp = ar->base;
+      if (acls.maybe(AFContext { fp })) add_class(ret, AFContext { fp });
+      if (acls.maybe(AFFunc { fp }))    add_class(ret, AFFunc { fp });
+      if (acls.maybe(AFMeta { fp }))    add_class(ret, AFMeta { fp });
+      // Fallthrough here: it's possible to share these specializations with
+      // ALocal and AIter specializations.
+    }
+
     if (collect_component(ret, acls.iter(), ret.iter_expand_map)) return;
-    if (collect_component(ret, acls.frame(), ret.loc_expand_map)) return;
+    if (collect_component(ret, acls.local(), ret.loc_expand_map)) return;
+
+    if (acls.is_frame_base() && acls.isSingleLocation()) {
+      add_class(ret, acls);
+      return;
+    }
 
     /*
      * Note that unlike the above we're going to assign location ids to the
@@ -456,8 +496,8 @@ AliasAnalysis collect_aliases(const IRUnit& unit, const BlockList& blocks) {
       return;
     }
 
-    if (auto const frame = acls.is_frame()) {
-      ret.all_frame.set(meta.index);
+    if (auto const frame = acls.is_local()) {
+      ret.all_local.set(meta.index);
       return;
     }
 
@@ -471,14 +511,25 @@ AliasAnalysis collect_aliases(const IRUnit& unit, const BlockList& blocks) {
       return;
     }
 
-    if (acls.is_rds()) {
-      ret.all_rds.set(meta.index);
-      return;
-    }
+#define SET(What, what, all) \
+  if (acls.is_##what()) {    \
+    ret.all.set(meta.index); \
+    return;                  \
+  }
+
+    SIMPLE_ALIAS_CLASSES(SET)
+
+#undef SET
 
     if (acls.is_mis()) {
       // We don't maintain an all_mistate set so there's nothing to do here but
       // avoid hitting the assert below.
+      return;
+    }
+
+    if (acls.is_frame_base()) {
+      // There's a single frame base register and it cannot conflict with any
+      // other locations.
       return;
     }
 
@@ -509,7 +560,7 @@ AliasAnalysis collect_aliases(const IRUnit& unit, const BlockList& blocks) {
           ent.second.set(kv.second.index);
         }
       }
-    } else if (kv.first.is_frame()) {
+    } else if (kv.first.is_local()) {
       for (auto& ent : ret.loc_expand_map) {
         if (kv.first <= ent.first) {
           FTRACE(2, "  ({}) {} <= {}\n",
@@ -569,19 +620,17 @@ std::string show(const AliasAnalysis& ainfo) {
       kv->second.index,
       show(conf));
   }
+
+#define FMT(...)  " {: <20}       : {}\n"
+#define SHOW(What, what, all) "all "#what, show(ainfo.all),
+
   folly::format(
       &ret,
-      " {: <20}       : {}\n"
-      " {: <20}       : {}\n"
-      " {: <20}       : {}\n"
-      " {: <20}       : {}\n"
+      ALIAS_CLASSES(FMT)
       " {: <20}       : {}\n",
 
-      "all props",          show(ainfo.all_props),
-      "all elemIs",         show(ainfo.all_elemIs),
-      "all elemSs",         show(ainfo.all_elemSs),
-      "all rds",            show(ainfo.all_rds),
-      "all frame",          show(ainfo.all_frame)
+      ALIAS_CLASSES(SHOW)
+      "all local",          show(ainfo.all_local)
   );
   std::vector<std::string> tmp;
   for (auto& kv : ainfo.loc_expand_map) {

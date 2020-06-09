@@ -390,26 +390,52 @@ enum trep : uint64_t {
   BOptStrLike    = BInitNull | BStrLike,
   BOptUncStrLike = BInitNull | BUncStrLike,
 
-  BVArrLike   = BClsMeth | BVArr,
-  BVArrLikeSA = BClsMeth | BSVArr,
+  BVArrCompat   = BClsMeth | BVArr,
+  BVArrCompatSA = BClsMeth | BSVArr,
 
-  BOptVArrLike = BInitNull | BVArrLike,
-  BOptVArrLikeSA = BInitNull | BVArrLikeSA,
+  BOptVArrCompat = BInitNull | BVArrCompat,
+  BOptVArrCompatSA = BInitNull | BVArrCompatSA,
 
-  BVecLike   = BClsMeth | BVec,
-  BVecLikeSA = BClsMeth | BSVec,
+  BVecCompat   = BClsMeth | BVec,
+  BVecCompatSA = BClsMeth | BSVec,
 
-  BOptVecLike    = BInitNull | BVecLike,
-  BOptVecLikeSA  = BInitNull | BVecLikeSA,
+  BOptVecCompat    = BInitNull | BVecCompat,
+  BOptVecCompatSA  = BInitNull | BVecCompatSA,
 
-  BPArrLike   = BClsMeth | BArr,
-  BPArrLikeSA = BClsMeth | BSArr,
+  BPArrCompat   = BClsMeth | BArr,
+  BPArrCompatSA = BClsMeth | BSArr,
 
-  BOptPArrLike   = BInitNull | BPArrLike,
-  BOptPArrLikeSA = BInitNull | BPArrLikeSA,
+  BOptPArrCompat   = BInitNull | BPArrCompat,
+  BOptPArrCompatSA = BInitNull | BPArrCompatSA,
 
   BInitPrim = BInitNull | BBool | BNum | BFunc | BCls | BFuncS |
               (use_lowptr ? BClsMeth : 0),
+
+  BSArrLikeE = BSArrE | BSVecE | BSDictE | BSKeysetE,
+  BCArrLikeE = BCArrE | BCVecE | BCDictE | BCKeysetE,
+  BSArrLikeN = BSArrN | BSVecN | BSDictN | BSKeysetN,
+  BCArrLikeN = BCArrN | BCVecN | BCDictN | BCKeysetN,
+  BSArrLike  = BSArrLikeE | BSArrLikeN,
+  BCArrLike  = BCArrLikeE | BCArrLikeN,
+  BArrLikeE  = BSArrLikeE | BCArrLikeE,
+  BArrLikeN  = BSArrLikeN | BCArrLikeN,
+  BArrLike   = BArrLikeE | BArrLikeN,
+
+  BOptSArrLikeE = BInitNull | BSArrLikeE,
+  BOptCArrLikeE = BInitNull | BCArrLikeE,
+  BOptSArrLikeN = BInitNull | BSArrLikeN,
+  BOptCArrLikeN = BInitNull | BCArrLikeN,
+  BOptSArrLike  = BInitNull | BSArrLike,
+  BOptCArrLike  = BInitNull | BCArrLike,
+  BOptArrLikeE  = BInitNull | BArrLikeE,
+  BOptArrLikeN  = BInitNull | BArrLikeN,
+  BOptArrLike   = BInitNull | BArrLike,
+
+  BArrLikeCompat    = BClsMeth | BArrLike,
+  BArrLikeCompatSA  = BClsMeth | BSArrLike,
+
+  BOptArrLikeCompat   = BInitNull | BArrLikeCompat,
+  BOptArrLikeCompatSA = BInitNull | BArrLikeCompatSA,
 
   BPrim     = BInitPrim | BUninit,
   BInitUnc  = BInitPrim | BSStr | BSArr | BSVec | BSDict | BSKeyset,
@@ -443,14 +469,6 @@ constexpr const trep& operator|=(trep&a, trep b) {
   a = a | b;
   return a;
 }
-
-// Useful constants. Don't put them in the enum itself, because they
-// can't actually occur, but are convenient masks.
-constexpr auto BArrLikeE = BArrE | BVecE | BDictE | BKeysetE;
-constexpr auto BArrLikeN = BArrN | BVecN | BDictN | BKeysetN;
-constexpr auto BArrLike = BArrLikeE | BArrLikeN;
-constexpr auto BSArrLike = BSArr | BSVec | BSDict | BSKeyset;
-constexpr auto BSArrLikeE = BSArrE | BSVecE | BSDictE | BSKeysetE;
 
 #define DATATAGS                                                \
   DT(Str, SString, sval)                                        \
@@ -1028,12 +1046,12 @@ X(ArrKey)                                       \
 X(FuncOrCls)                                    \
 X(UncStrLike)                                   \
 X(StrLike)                                      \
-X(PArrLikeSA)                                   \
-X(PArrLike)                                     \
-X(VArrLikeSA)                                   \
-X(VArrLike)                                     \
-X(VecLikeSA)                                    \
-X(VecLike)                                      \
+X(PArrCompatSA)                                 \
+X(PArrCompat)                                   \
+X(VArrCompatSA)                                 \
+X(VArrCompat)                                   \
+X(VecCompatSA)                                  \
+X(VecCompat)                                    \
 X(InitPrim)                                     \
 X(Prim)                                         \
 X(InitUnc)                                      \
@@ -1100,12 +1118,28 @@ X(OptArrKey)                                    \
 X(OptFuncOrCls)                                 \
 X(OptUncStrLike)                                \
 X(OptStrLike)                                   \
-X(OptPArrLikeSA)                                \
-X(OptPArrLike)                                  \
-X(OptVArrLikeSA)                                \
-X(OptVArrLike)                                  \
-X(OptVecLikeSA)                                 \
-X(OptVecLike)                                   \
+X(OptPArrCompatSA)                              \
+X(OptPArrCompat)                                \
+X(OptVArrCompatSA)                              \
+X(OptVArrCompat)                                \
+X(OptVecCompatSA)                               \
+X(OptVecCompat)                                 \
+X(SArrLikeE)                                    \
+X(SArrLikeN)                                    \
+X(SArrLike)                                     \
+X(ArrLikeE)                                     \
+X(ArrLikeN)                                     \
+X(ArrLike)                                      \
+X(OptSArrLikeE)                                 \
+X(OptSArrLikeN)                                 \
+X(OptSArrLike)                                  \
+X(OptArrLikeE)                                  \
+X(OptArrLikeN)                                  \
+X(OptArrLike)                                   \
+X(ArrLikeCompat)                                \
+X(ArrLikeCompatSA)                              \
+X(OptArrLikeCompat)                             \
+X(OptArrLikeCompatSA)                           \
 X(InitCell)                                     \
 X(Cell)                                         \
 X(Top)
@@ -1161,7 +1195,14 @@ TYPES(X)
   X(OptCDict)                                   \
   X(OptCKeysetE)                                \
   X(OptCKeysetN)                                \
-  X(OptCKeyset)
+  X(OptCKeyset)                                 \
+  X(CArrLikeE)                                  \
+  X(CArrLikeN)                                  \
+  X(CArrLike)                                   \
+  X(OptCArrLikeE)                               \
+  X(OptCArrLikeN)                               \
+  X(OptCArrLike)
+
 
 //////////////////////////////////////////////////////////////////////
 

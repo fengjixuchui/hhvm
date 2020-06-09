@@ -302,6 +302,9 @@ bool effectsImpl(const Vinstr& inst, bool pure) {
     case Vinstr::defvmretdata:
     case Vinstr::defvmrettype:
     case Vinstr::defvmsp:
+    case Vinstr::defvmfp:
+    case Vinstr::pushvmfp:
+    case Vinstr::popvmfp:
     case Vinstr::leap:
     case Vinstr::leav:
     case Vinstr::load:

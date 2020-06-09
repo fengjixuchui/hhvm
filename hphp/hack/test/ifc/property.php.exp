@@ -1,103 +1,136 @@
 Policy signature for \My:
-* Policied properties:
-  mInt
-  other
-  
+* Policied properties: mInt, other
+* Unpolicied properties: mBool
+
 Policy signature for \Other:
-* Policied properties:
-  oBool
-  
+* Policied properties: oBool
+* Unpolicied properties: oString
+
 Analyzing __construct:
-* pc: v1
-* This: \My<v2, other -> \Other<v4, oBool -> <v5>>, mInt -> <v3>>
-* Return: <v6>
-* Params: { $o -> \Other<v7, oBool -> <v8>> }
+* pc: pc
+* This:
+    \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+    oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>>
+* Return: <ret>
+* Params:
+    { $o -> \Other<\Other'1, lump'2, oString -> <lump'2>,
+      oBool -> <.oBool'1>> }
 * Final environment:
-  Locals: { $o -> \Other<v7, oBool -> <v8>> }
+  Locals:
+    { $o -> \Other<\Other'1, lump'2, oString -> <lump'2>,
+      oBool -> <.oBool'1>> }
   Constraints:
-    [v2 < v4, v5 < v8, v8 < v5, v7 < v4, v1 < v4]
+    [\My < \Other, lump < lump'2, lump'2 < lump, .oBool < .oBool'1,
+     .oBool'1 < .oBool, lump'2 = lump, \Other'1 < \Other, pc < \Other]
 
 Analyzing getMInt:
-* pc: v9
-* This: \My<v10, other -> \Other<v12, oBool -> <v13>>, mInt -> <v11>>
-* Return: <v14>
+* pc: pc
+* This:
+    \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+    oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>>
+* Return: <ret>
 * Params: {}
 * Final environment:
   Locals: {}
   Constraints:
-    [v11 < v15, v10 < v15, v15 < v14]
+    [.mInt < .mInt'1, \My < .mInt'1, .mInt'1 < ret]
 
 Analyzing setMInt:
-* pc: v16
-* This: \My<v17, other -> \Other<v19, oBool -> <v20>>, mInt -> <v18>>
-* Return: <v21>
-* Params: { $candidate -> <v22> }
+* pc: pc
+* This:
+    \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+    oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>>
+* Return: <ret>
+* Params: { $candidate -> <$candidate> }
 * Final environment:
-  Locals: { $candidate -> <v22> }
+  Locals: { $candidate -> <$candidate> }
   Constraints:
-    [v17 < v18, v22 < v18, v16 < v18]
+    [\My < .mInt, $candidate < .mInt, pc < .mInt]
 
 Analyzing \tlGetMyInt:
-* pc: v23
+* pc: pc
 * This: None
-* Return: <v24>
+* Return: <ret>
 * Params:
-    { $obj -> \My<v25, other -> \Other<v27, oBool -> <v28>>, mInt -> <v26>> }
+    { $obj ->
+      \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+      oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>> }
 * Final environment:
   Locals:
-    { $obj -> \My<v25, other -> \Other<v27, oBool -> <v28>>, mInt -> <v26>> }
+    { $obj ->
+      \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+      oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>> }
   Constraints:
-    [v26 < v29, v25 < v29, v29 < v24]
+    [.mInt < .mInt'1, \My < .mInt'1, .mInt'1 < ret]
 
 Analyzing \tlSetMyInt:
-* pc: v30
+* pc: pc
 * This: None
-* Return: <v31>
+* Return: <ret>
 * Params:
-    { $obj -> \My<v32, other -> \Other<v34, oBool -> <v35>>, mInt -> <v33>>;
-      $val -> <v36> }
+    { $obj ->
+      \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+      oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>>;
+      $val -> <$val> }
 * Final environment:
   Locals:
-    { $obj -> \My<v32, other -> \Other<v34, oBool -> <v35>>, mInt -> <v33>>;
-      $val -> <v36> }
+    { $obj ->
+      \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+      oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>>;
+      $val -> <$val> }
   Constraints:
-    [v32 < v33, v36 < v33, v30 < v33]
+    [\My < .mInt, $val < .mInt, pc < .mInt]
 
 Analyzing \tlGetOther:
-* pc: v37
+* pc: pc
 * This: None
-* Return: \Other<v38, oBool -> <v39>>
+* Return: \Other<\Other, lump, oString -> <lump>, oBool -> <.oBool>>
 * Params:
-    { $obj -> \My<v40, other -> \Other<v42, oBool -> <v43>>, mInt -> <v41>> }
+    { $obj ->
+      \My<\My, lump'2, other -> \Other<\Other'1, lump'1, oString -> <lump'1>,
+      oBool -> <.oBool'1>>, mInt -> <.mInt>, mBool -> <lump'2>> }
 * Final environment:
   Locals:
-    { $obj -> \My<v40, other -> \Other<v42, oBool -> <v43>>, mInt -> <v41>> }
+    { $obj ->
+      \My<\My, lump'2, other -> \Other<\Other'1, lump'1, oString -> <lump'1>,
+      oBool -> <.oBool'1>>, mInt -> <.mInt>, mBool -> <lump'2>> }
   Constraints:
-    [v42 < v44, v40 < v44, v39 < v43, v43 < v39, v44 < v38]
+    [\Other'1 < .other, \My < .other, lump < lump'1, lump'1 < lump,
+     .oBool < .oBool'1, .oBool'1 < .oBool, lump'1 = lump, .other < \Other]
 
 Analyzing \tlGetOtherBool:
-* pc: v45
+* pc: pc
 * This: None
-* Return: <v46>
+* Return: <ret>
 * Params:
-    { $obj -> \My<v47, other -> \Other<v49, oBool -> <v50>>, mInt -> <v48>> }
+    { $obj ->
+      \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+      oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>> }
 * Final environment:
   Locals:
-    { $obj -> \My<v47, other -> \Other<v49, oBool -> <v50>>, mInt -> <v48>> }
+    { $obj ->
+      \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+      oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>> }
   Constraints:
-    [v49 < v51, v47 < v51, v50 < v52, v51 < v52, v52 < v46]
+    [\Other < .other, \My < .other, .oBool < .oBool'1, .other < .oBool'1,
+     .oBool'1 < ret]
 
 Analyzing \tlSetOtherBool:
-* pc: v53
+* pc: pc
 * This: None
-* Return: <v54>
+* Return: <ret>
 * Params:
-    { $bool -> <v59>;
-      $obj -> \My<v55, other -> \Other<v57, oBool -> <v58>>, mInt -> <v56>> }
+    { $bool -> <$bool>;
+      $obj ->
+      \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+      oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>> }
 * Final environment:
   Locals:
-    { $bool -> <v59>;
-      $obj -> \My<v55, other -> \Other<v57, oBool -> <v58>>, mInt -> <v56>> }
+    { $bool -> <$bool>;
+      $obj ->
+      \My<\My, lump'1, other -> \Other<\Other, lump, oString -> <lump>,
+      oBool -> <.oBool>>, mInt -> <.mInt>, mBool -> <lump'1>> }
   Constraints:
-    [v57 < v60, v55 < v60, v60 < v58, v59 < v58, v53 < v58]
+    [\Other < .other, \My < .other, .other < .oBool, $bool < .oBool,
+     pc < .oBool]
 

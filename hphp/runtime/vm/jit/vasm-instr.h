@@ -120,6 +120,9 @@ struct Vunit;
   O(loadstubret, Inone, Un, D(d))\
   /* php function abi */\
   O(defvmsp, Inone, Un, D(d))\
+  O(defvmfp, Inone, Un, D(d))\
+  O(pushvmfp, Inone, U(s), Dn)\
+  O(popvmfp, Inone, U(s), Dn)\
   O(syncvmsp, Inone, U(s), Dn)\
   O(defvmretdata, Inone, Un, D(data))\
   O(defvmrettype, Inone, Un, D(type))\
@@ -780,6 +783,31 @@ struct loadstubret { Vreg d; };
  * boundary.
  */
 struct defvmsp { Vreg d; };
+
+/*
+ * Copy rvmfp() into `d'.
+ *
+ * Used once per region to define the initial value of the fp register.
+ */
+struct defvmfp { Vreg d; };
+
+/*
+ * Copy `s` into rvmfp().
+ *
+ * Used to store a new FP value into rvmfp linked to the current vmfp value. If
+ * offset is non-zero it indicates the offset of `s` from the current value of
+ * rvmfp.
+ */
+struct pushvmfp { Vreg s; int32_t offset; };
+
+/*
+ * Copy `s` into rvmfp().
+ *
+ * Used to restore the previous value of rvmfp after a pushvmfp{} was performed.
+ * The value `s` does not need to be the same register used to initialize rvmfp
+ * but it must contain the same value.
+ */
+struct popvmfp { Vreg s; };
 
 /*
  * Copy `s' into rvmsp().
