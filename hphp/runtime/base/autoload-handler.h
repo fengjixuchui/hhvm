@@ -17,6 +17,7 @@
 #define incl_HPHP_AUTOLOAD_HANDLER_H_
 
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include <folly/experimental/io/FsUtil.h>
@@ -99,11 +100,11 @@ struct AutoloadHandler final : RequestEventHandler {
     return m_map;
   }
 
-  Facts* getFacts() {
+  FactsStore* getFacts() {
     return m_facts;
   }
 
-  folly::Optional<String> getFile(const String& name,
+  std::optional<String> getFile(const String& name,
                                   AutoloadMap::KindOf kind,
                                   bool toLower);
 
@@ -158,7 +159,7 @@ private:
   // as m_req_map (a request-scoped AutoloadMap set from userland) or m_facts
   // (a statically-scoped native AutoloadMap that can answer additional
   // queries about the codebase).
-  Facts* m_facts = nullptr;
+  FactsStore* m_facts = nullptr;
   req::unique_ptr<UserAutoloadMap> m_req_map;
   AutoloadMap* m_map = nullptr;
 };
@@ -180,7 +181,7 @@ struct FactsFactory {
    * Return a Facts corresponding to the given root. If one doesn't exist yet,
    * create it.
    */
-  virtual Facts* getForRoot(const folly::fs::path& root) = 0;
+  virtual FactsStore* getForRoot(const folly::fs::path& root) = 0;
 };
 
 }
