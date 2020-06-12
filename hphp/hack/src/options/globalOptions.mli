@@ -124,6 +124,8 @@ type t = {
   tco_disallow_byref_calls: bool;
   (* Error codes for which we do not allow HH_FIXMEs *)
   ignored_fixme_codes: ISet.t;
+  (* Error codes for which we allow HH_FIXMEs in strict mode *)
+  allowed_fixme_codes_strict: ISet.t;
   (* Initial hh_log_level settings *)
   log_levels: int SMap.t;
   (* Flag to disable using lvals as expressions. *)
@@ -178,7 +180,7 @@ type t = {
   (* Disable legacy soft typehint syntax (@int) and only allow the __Soft attribute. *)
   po_disable_legacy_soft_typehints: bool;
   (* Set of error codes disallowed in decl positions *)
-  po_disallowed_decl_fixmes: ISet.t;
+  po_allowed_decl_fixme_codes: ISet.t;
   (* Enable @ attribute syntax *)
   po_allow_new_attribute_syntax: bool;
   (* Perform global inference globally on the code base to infer missing type annotations. *)
@@ -293,6 +295,7 @@ val make :
   ?tco_disallow_byref_dynamic_calls:bool ->
   ?tco_disallow_byref_calls:bool ->
   ?ignored_fixme_codes:ISet.t ->
+  ?allowed_fixme_codes_strict:ISet.t ->
   ?log_levels:int SMap.t ->
   ?po_disable_lval_as_an_expression:bool ->
   ?tco_shallow_class_decl:bool ->
@@ -315,7 +318,7 @@ val make :
   ?tco_disallow_invalid_arraykey_constraint:bool ->
   ?po_enable_class_level_where_clauses:bool ->
   ?po_disable_legacy_soft_typehints:bool ->
-  ?po_disallowed_decl_fixmes:ISet.t ->
+  ?po_allowed_decl_fixme_codes:ISet.t ->
   ?po_allow_new_attribute_syntax:bool ->
   ?tco_global_inference:bool ->
   ?tco_gi_reinfer_types:string list ->
@@ -447,6 +450,8 @@ val tco_migration_flags_all : SSet.t
 
 val ignored_fixme_codes : t -> ISet.t
 
+val allowed_fixme_codes_strict : t -> ISet.t
+
 val log_levels : t -> int SMap.t
 
 val po_disable_lval_as_an_expression : t -> bool
@@ -491,7 +496,7 @@ val po_enable_class_level_where_clauses : t -> bool
 
 val po_disable_legacy_soft_typehints : t -> bool
 
-val po_disallowed_decl_fixmes : t -> ISet.t
+val po_allowed_decl_fixme_codes : t -> ISet.t
 
 val po_allow_new_attribute_syntax : t -> bool
 

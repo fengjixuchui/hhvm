@@ -242,6 +242,8 @@ let parse_options () =
   let disable_hh_ignore_error = ref false in
   let enable_systemlib_annotations = ref false in
   let enable_pocket_universes_syntax = ref false in
+  let allowed_fixme_codes_strict = ref ISet.empty in
+  let allowed_decl_fixme_codes = ref ISet.empty in
   let options =
     [
       ("--ifc", Arg.String set_ifc, " Run the flow analysis");
@@ -544,6 +546,22 @@ let parse_options () =
       ( "--enable-pocket-universes-syntax",
         Arg.Set enable_pocket_universes_syntax,
         "Enable the pocket universes syntax" );
+      ( "--allowed-fixme-codes-strict",
+        Arg.String
+          (fun s ->
+            allowed_fixme_codes_strict :=
+              Str.split (Str.regexp ", *") s
+              |> List.map ~f:int_of_string
+              |> ISet.of_list),
+        "List of fixmes that are allowed in strict mode." );
+      ( "--allowed-decl-fixme-codes",
+        Arg.String
+          (fun s ->
+            allowed_decl_fixme_codes :=
+              Str.split (Str.regexp ", *") s
+              |> List.map ~f:int_of_string
+              |> ISet.of_list),
+        "List of fixmes that are allowed in declarations." );
     ]
   in
   let options = Arg.align ~limit:25 options in
@@ -565,6 +583,7 @@ let parse_options () =
       ?po_auto_namespace_map:!auto_namespace_map
       ?tco_disallow_byref_dynamic_calls:!disallow_byref_dynamic_calls
       ?tco_disallow_byref_calls:!disallow_byref_calls
+      ~allowed_fixme_codes_strict:!allowed_fixme_codes_strict
       ?tco_disallow_invalid_arraykey_constraint:
         !disallow_invalid_arraykey_constraint
       ?tco_disallow_trait_reuse:!disallow_trait_reuse
@@ -614,8 +633,11 @@ let parse_options () =
       ~po_disable_hh_ignore_error:!disable_hh_ignore_error
       ~tco_enable_systemlib_annotations:!enable_systemlib_annotations
       ~tco_pu_enabled_paths:(!enable_pocket_universes_syntax, [])
+      ~po_allowed_decl_fixme_codes:!allowed_decl_fixme_codes
       ()
   in
+  Errors.allowed_fixme_codes_strict :=
+    GlobalOptions.allowed_fixme_codes_strict tcopt;
   let tcopt =
     {
       tcopt with

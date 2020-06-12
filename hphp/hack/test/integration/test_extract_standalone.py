@@ -21,6 +21,8 @@ class ExtractStandaloneDriver(CommonTestDriver):
             f.write(
                 """
 auto_namespace_map = {}
+allowed_fixme_codes_strict = 4101
+allowed_decl_fixme_codes = 4101
 """.format(
                     self.auto_namespace_map
                 )
@@ -79,6 +81,10 @@ auto_namespace_map = {}
         self.proc_call(
             [
                 hh_paths.hh_single_type_check,
+                "--allowed-fixme-codes-strict",
+                "4101",
+                "--allowed-decl-fixme-codes",
+                "4101",
                 "--auto-namespace-map",
                 self.auto_namespace_map,
                 "--batch-files",

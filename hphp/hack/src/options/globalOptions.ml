@@ -45,6 +45,7 @@ type t = {
   tco_disallow_byref_dynamic_calls: bool;
   tco_disallow_byref_calls: bool;
   ignored_fixme_codes: ISet.t;
+  allowed_fixme_codes_strict: ISet.t;
   log_levels: int SMap.t;
   po_disable_lval_as_an_expression: bool;
   tco_shallow_class_decl: bool;
@@ -67,7 +68,7 @@ type t = {
   tco_disallow_invalid_arraykey_constraint: bool;
   po_enable_class_level_where_clauses: bool;
   po_disable_legacy_soft_typehints: bool;
-  po_disallowed_decl_fixmes: ISet.t;
+  po_allowed_decl_fixme_codes: ISet.t;
   po_allow_new_attribute_syntax: bool;
   tco_global_inference: bool;
   tco_gi_reinfer_types: string list;
@@ -203,6 +204,7 @@ let default =
     tco_disallow_byref_dynamic_calls = false;
     tco_disallow_byref_calls = true;
     ignored_fixme_codes = Errors.default_ignored_fixme_codes;
+    allowed_fixme_codes_strict = ISet.empty;
     log_levels = SMap.empty;
     po_disable_lval_as_an_expression = true;
     tco_shallow_class_decl = false;
@@ -225,7 +227,7 @@ let default =
     tco_disallow_invalid_arraykey_constraint = false;
     po_enable_class_level_where_clauses = false;
     po_disable_legacy_soft_typehints = true;
-    po_disallowed_decl_fixmes = ISet.of_list [];
+    po_allowed_decl_fixme_codes = ISet.of_list [];
     po_allow_new_attribute_syntax = false;
     tco_global_inference = false;
     tco_gi_reinfer_types = [];
@@ -302,6 +304,7 @@ let make
       default.tco_disallow_byref_dynamic_calls)
     ?(tco_disallow_byref_calls = default.tco_disallow_byref_calls)
     ?(ignored_fixme_codes = default.ignored_fixme_codes)
+    ?(allowed_fixme_codes_strict = default.allowed_fixme_codes_strict)
     ?(log_levels = default.log_levels)
     ?(po_disable_lval_as_an_expression =
       default.po_disable_lval_as_an_expression)
@@ -332,7 +335,7 @@ let make
       default.po_enable_class_level_where_clauses)
     ?(po_disable_legacy_soft_typehints =
       default.po_disable_legacy_soft_typehints)
-    ?(po_disallowed_decl_fixmes = default.po_disallowed_decl_fixmes)
+    ?(po_allowed_decl_fixme_codes = default.po_allowed_decl_fixme_codes)
     ?(po_allow_new_attribute_syntax = default.po_allow_new_attribute_syntax)
     ?(tco_global_inference = default.tco_global_inference)
     ?(tco_gi_reinfer_types = default.tco_gi_reinfer_types)
@@ -394,6 +397,7 @@ let make
     po_auto_namespace_map;
     po_codegen = false;
     ignored_fixme_codes;
+    allowed_fixme_codes_strict;
     po_deregister_php_stdlib;
     po_disallow_execution_operator;
     po_disallow_toplevel_requires;
@@ -432,7 +436,7 @@ let make
     tco_disallow_invalid_arraykey_constraint;
     po_enable_class_level_where_clauses;
     po_disable_legacy_soft_typehints;
-    po_disallowed_decl_fixmes;
+    po_allowed_decl_fixme_codes;
     po_allow_new_attribute_syntax;
     tco_global_inference;
     tco_gi_reinfer_types;
@@ -551,6 +555,8 @@ let tco_disallow_byref_calls t = t.tco_disallow_byref_calls
 
 let ignored_fixme_codes t = t.ignored_fixme_codes
 
+let allowed_fixme_codes_strict t = t.allowed_fixme_codes_strict
+
 let log_levels t = t.log_levels
 
 let po_disable_lval_as_an_expression t = t.po_disable_lval_as_an_expression
@@ -597,7 +603,7 @@ let po_enable_class_level_where_clauses t =
 
 let po_disable_legacy_soft_typehints t = t.po_disable_legacy_soft_typehints
 
-let po_disallowed_decl_fixmes t = t.po_disallowed_decl_fixmes
+let po_allowed_decl_fixme_codes t = t.po_allowed_decl_fixme_codes
 
 let po_allow_new_attribute_syntax t = t.po_allow_new_attribute_syntax
 
