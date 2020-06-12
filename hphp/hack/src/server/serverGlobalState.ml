@@ -13,8 +13,9 @@ type t = {
   saved_tmp: Path.t;
   saved_gi_tmp: string;
   trace: bool;
-  fixme_codes: ISet.t;
   allowed_fixme_codes_strict: ISet.t;
+  allowed_fixme_codes_partial: ISet.t;
+  codes_not_raised_partial: ISet.t;
   strict_codes: ISet.t;
   paths_to_ignore: Str.regexp list;
   no_load: bool;
@@ -28,8 +29,9 @@ let save ~logging_init =
     saved_tmp = Path.make Relative_path.(path_of_prefix Tmp);
     saved_gi_tmp = Typing_global_inference.get_path ();
     trace = !Typing_deps.trace;
-    fixme_codes = !Errors.ignored_fixme_codes;
     allowed_fixme_codes_strict = !Errors.allowed_fixme_codes_strict;
+    allowed_fixme_codes_partial = !Errors.allowed_fixme_codes_partial;
+    codes_not_raised_partial = !Errors.codes_not_raised_partial;
     strict_codes = !Errors.error_codes_treated_strictly;
     paths_to_ignore = FilesToIgnore.get_paths_to_ignore ();
     no_load = ServerLoadFlag.get_no_load ();
@@ -49,8 +51,9 @@ let restore state ~(worker_id : int) =
   Relative_path.(set_path_prefix Tmp state.saved_tmp);
   Typing_global_inference.restore_path state.saved_gi_tmp;
   Typing_deps.trace := state.trace;
-  Errors.ignored_fixme_codes := state.fixme_codes;
   Errors.allowed_fixme_codes_strict := state.allowed_fixme_codes_strict;
+  Errors.allowed_fixme_codes_partial := state.allowed_fixme_codes_partial;
+  Errors.codes_not_raised_partial := state.codes_not_raised_partial;
   Errors.error_codes_treated_strictly := state.strict_codes;
   FilesToIgnore.set_paths_to_ignore state.paths_to_ignore;
   ServerLoadFlag.set_no_load state.no_load;
@@ -67,7 +70,6 @@ let to_string state =
     else
       "false"
   in
-  let fixme_codes = ISet.to_string state.fixme_codes in
   let strict_codes = ISet.to_string state.strict_codes in
   (* OCaml regexps cannot be re-serialized to strings *)
   let paths_to_ignore = "(...)" in
@@ -77,7 +79,6 @@ let to_string state =
     ("saved_tmp", saved_tmp);
     ("saved_gi_tmp", state.saved_gi_tmp);
     ("trace", trace);
-    ("fixme_codes", fixme_codes);
     ("strict_codes", strict_codes);
     ("paths_to_ignore", paths_to_ignore);
   ]
