@@ -21,7 +21,6 @@ module Phase = Typing_phase
 module SN = Naming_special_names
 module Cls = Decl_provider.Class
 module MakeType = Typing_make_type
-module SubType = Typing_subtype
 
 (*****************************************************************************)
 (* Helpers *)
@@ -352,23 +351,16 @@ let check_override
            * which is checked elsewhere *)
           env
         | _ ->
-          (* these unify errors are collected into errorl *)
-          let ety_env = Phase.env_with_self env ~quiet:true in
-          let (env, ft2) =
-            Phase.localize_ft ~ety_env ~def_pos:(Reason.to_pos r2) env ft2
-          in
-          let (env, ft1) =
-            Phase.localize_ft ~ety_env ~def_pos:(Reason.to_pos r1) env ft1
-          in
-          SubType.(
+          Typing_subtype_method.(
             (* Add deps here when we override *)
-            subtype_method
+            subtype_method_decl
               ~extra_info:
-                {
-                  method_info = Some (member_name, is_static);
-                  class_ty = Some (DeclTy class_ty);
-                  parent_class_ty = Some (DeclTy parent_ty);
-                }
+                Typing_subtype.
+                  {
+                    method_info = Some (member_name, is_static);
+                    class_ty = Some (DeclTy class_ty);
+                    parent_class_ty = Some (DeclTy parent_ty);
+                  }
               ~check_return:(not ignore_fun_return)
               env
               r2
@@ -429,27 +421,42 @@ let check_override
 let check_const_override
     env const_name parent_class class_ parent_class_const class_const on_error =
   let check_params = should_check_params parent_class class_ in
-  let member_not_unique =
-    (* Similar to should_check_member_unique, we check if there are multiple
-      concrete implementations of class constants with no override.
-      (Currently overriding interface constants is not supported in HHVM, but
-      we should allow it in Hack files)
-    *)
+
+  (* Shared preconditons for member_not_unique and is_bad_interface_const_override *)
+  let interface_pre_checks =
     match Cls.kind parent_class with
     | Ast_defs.Cinterface ->
       (* Synthetic  *)
       (not class_const.cc_synthesized)
       (* The parent we are checking is synthetic, no point in checking *)
       && (not parent_class_const.cc_synthesized)
-      (* defined on original class *)
-      && String.( <> ) class_const.cc_origin (Cls.name class_)
-      (* defined from parent class, nothing to check *)
-      && String.( <> ) class_const.cc_origin parent_class_const.cc_origin
-      (* Only check if there are multiple concrete definitions *)
+      (* Only check if parent and child have concrete definitions *)
       && (not class_const.cc_abstract)
       && not parent_class_const.cc_abstract
     | _ -> false
   in
+  let member_not_unique =
+    (* Similar to should_check_member_unique, we check if there are multiple
+      concrete implementations of class constants with no override.
+    *)
+    interface_pre_checks
+    (* defined on original class *)
+    && String.( <> ) class_const.cc_origin (Cls.name class_)
+    (* defined from parent class, nothing to check *)
+    && String.( <> ) class_const.cc_origin parent_class_const.cc_origin
+  in
+  let is_bad_interface_const_override =
+    (* HHVM does not support one specific case of overriding constants:
+     If the original constant was defined as non-abstract in an interface,
+     it cannot be overridden when implementing or extending that interface. *)
+
+    (* Check that the constant is indeed defined in class_ *)
+    interface_pre_checks && String.( = ) class_const.cc_origin (Cls.name class_)
+  in
+  let is_abstract_concrete_override =
+    (not parent_class_const.cc_abstract) && class_const.cc_abstract
+  in
+
   if check_params then
     if member_not_unique then
       Errors.multiple_concrete_defs
@@ -460,7 +467,14 @@ let check_const_override
         const_name
         (Cls.name class_)
         on_error
-    else if (not parent_class_const.cc_abstract) && class_const.cc_abstract then
+    else if is_bad_interface_const_override then
+      Errors.concrete_const_interface_override
+        class_const.cc_pos
+        parent_class_const.cc_pos
+        parent_class_const.cc_origin
+        const_name
+        on_error
+    else if is_abstract_concrete_override then
       Errors.abstract_concrete_override
         class_const.cc_pos
         parent_class_const.cc_pos

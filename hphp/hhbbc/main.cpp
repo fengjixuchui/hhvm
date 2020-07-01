@@ -304,13 +304,8 @@ std::vector<SString> load_input(F&& fun) {
     gd.NoticeOnBuiltinDynamicCalls;
   RO::EvalHackArrCompatIsArrayNotices =
     gd.HackArrCompatIsArrayNotices;
-  RO::EvalHackArrCompatTypeHintNotices =
-    gd.HackArrCompatTypeHintNotices;
-  RO::EvalHackArrCompatDVCmpNotices =
-    gd.HackArrCompatDVCmpNotices;
   RO::EvalHackArrCompatSerializeNotices =
     gd.HackArrCompatSerializeNotices;
-  RO::EvalHackArrCompatSpecialization = gd.HackArrCompatSpecialization;
   RO::EvalHackArrDVArrs = gd.HackArrDVArrs;
   RO::EvalAbortBuildOnVerifyError = gd.AbortBuildOnVerifyError;
   RO::EnableArgsInBacktraces = gd.EnableArgsInBacktraces;
@@ -328,6 +323,9 @@ std::vector<SString> load_input(F&& fun) {
   } else {
     RO::EvalEnforceGenericsUB = 1;
   }
+
+  RO::EvalWidenIsArray = gd.WidenIsArray;
+  RO::EvalWidenIsArrayLogs = gd.WidenIsArrayLogs;
 
   auto const units = Repo::get().enumerateUnits(RepoIdCentral, true);
   auto const size = units.size();
@@ -413,14 +411,8 @@ void write_global_data(
     RuntimeOption::EvalNoticeOnBuiltinDynamicCalls;
   gd.HackArrCompatIsArrayNotices =
     RuntimeOption::EvalHackArrCompatIsArrayNotices;
-  gd.HackArrCompatTypeHintNotices =
-    RuntimeOption::EvalHackArrCompatTypeHintNotices;
-  gd.HackArrCompatDVCmpNotices =
-    RuntimeOption::EvalHackArrCompatDVCmpNotices;
   gd.HackArrCompatSerializeNotices =
     RuntimeOption::EvalHackArrCompatSerializeNotices;
-  gd.HackArrCompatSpecialization =
-    RuntimeOption::EvalHackArrCompatSpecialization;
   gd.HackArrDVArrs = RuntimeOption::EvalHackArrDVArrs;
   gd.InitialNamedEntityTableSize  =
     RuntimeOption::EvalInitialNamedEntityTableSize;
@@ -432,6 +424,8 @@ void write_global_data(
   gd.ArrayProvenance = RuntimeOption::EvalArrayProvenance;
   gd.StrictArrayFillKeys = RuntimeOption::StrictArrayFillKeys;
   gd.EnableFuncStringInterop = RO::EvalEnableFuncStringInterop;
+  gd.WidenIsArray = RO::EvalWidenIsArray;
+  gd.WidenIsArrayLogs = RO::EvalWidenIsArrayLogs;
 
   for (auto const& elm : RuntimeOption::ConstantFunctions) {
     gd.ConstantFunctions.push_back(elm);

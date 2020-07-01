@@ -20,11 +20,9 @@
 #include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/mixed-array-defs.h"
 #include "hphp/runtime/base/packed-array-defs.h"
-#include "hphp/runtime/base/record-array.h"
 #include "hphp/runtime/base/set-array.h"
 
 #include "hphp/runtime/vm/class-meth-data.h"
-#include "hphp/runtime/vm/globals-array.h"
 #include "hphp/runtime/vm/native-data.h"
 #include "hphp/runtime/vm/resumable.h"
 #include "hphp/runtime/vm/rfunc-data.h"
@@ -60,13 +58,12 @@ namespace HPHP {
  * (a pointer to somewhere in the body). The start-bit map marks the location
  * of the start of each object. One bit represents kSmallSizeAlign bytes.
  */
-struct alignas(kSmallSizeAlign) Slab : HeapObject {
+struct Slab : HeapObject {
 
   char* init() {
     initHeader_32(HeaderKind::Slab, 0);
     clearStarts();
     return start();
-    static_assert(sizeof(*this) % kSmallSizeAlign == 0, "");
   }
 
   /*
@@ -108,9 +105,16 @@ struct alignas(kSmallSizeAlign) Slab : HeapObject {
     return slab;
   }
 
-  char* start() { return (char*)(this + 1); }
+  static char* align(const void* addr) {
+    auto const a = reinterpret_cast<intptr_t>(addr);
+    auto const mask = RO::EvalSlabAllocAlign - 1;
+    assertx((mask & (mask + 1)) == 0);
+    return reinterpret_cast<char*>(a + (-a & mask));
+  }
+
+  char* start() { return align(this + 1); }
   char* end() { return (char*)this + size(); }
-  const char* start() const { return (const char*)(this + 1); }
+  const char* start() const { return align(this + 1); }
   const char* end() const { return (const char*)this + size(); }
 
   struct InitMasks;
@@ -253,20 +257,18 @@ inline size_t allocSize(const HeapObject* h) {
 
   // Ordering depends on header-kind.h.
   static constexpr uint16_t kind_sizes[] = {
-    0, /* Packed */
-    0, /* BespokeVArray */
     0, /* Mixed */
     0, /* BespokeDArray */
-    sizeClass<GlobalsArray>(),
-    0, /* RecordArray */
+    0, /* Packed */
+    0, /* BespokeVArray */
     0, /* Plain */
     0, /* BespokeArray */
-    0, /* Vec */
-    0, /* BespokeVec */
-    0, /* Dict */
-    0, /* BespokeDict */
     0, /* Keyset */
     0, /* BespokeKeyset */
+    0, /* Dict */
+    0, /* BespokeDict */
+    0, /* Vec */
+    0, /* BespokeVec */
     0, /* String */
     0, /* Resource */
     sizeClass<ClsMethData>(),
@@ -298,7 +300,6 @@ inline size_t allocSize(const HeapObject* h) {
   };
 #define CHECKSIZE(knd, type) \
   static_assert(kind_sizes[(int)HeaderKind::knd] == sizeClass<type>(), #knd);
-  CHECKSIZE(Globals, GlobalsArray)
   CHECKSIZE(ClsMeth, ClsMethData)
   CHECKSIZE(AsyncFuncWH, c_AsyncFunctionWaitHandle)
   CHECKSIZE(Vector, c_Vector)
@@ -316,7 +317,6 @@ inline size_t allocSize(const HeapObject* h) {
   CHECKSIZE(Packed)
   CHECKSIZE(Mixed)
   CHECKSIZE(Plain)
-  CHECKSIZE(RecordArray)
   CHECKSIZE(Dict)
   CHECKSIZE(Vec)
   CHECKSIZE(Keyset)
@@ -352,7 +352,6 @@ inline size_t allocSize(const HeapObject* h) {
   switch (kind) {
     case HeaderKind::Packed:
     case HeaderKind::Vec:
-    case HeaderKind::RecordArray:
       // size = kSizeIndex2Size[h->aux16>>8]
       size = PackedArray::heapSize(static_cast<const ArrayData*>(h));
       assertx(size == MemoryManager::sizeClass(size));
@@ -455,7 +454,6 @@ inline size_t allocSize(const HeapObject* h) {
     case HeaderKind::Slab:
     case HeaderKind::NativeObject:
     case HeaderKind::AsyncFuncWH:
-    case HeaderKind::Globals:
     case HeaderKind::Vector:
     case HeaderKind::Map:
     case HeaderKind::Set:

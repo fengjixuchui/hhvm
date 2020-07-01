@@ -171,7 +171,6 @@ prefixed_flags!(
     JIT_ENABLE_RENAME_FUNCTION,
     LOG_EXTERN_COMPILER_PERF,
     RX_IS_ENABLED,
-    WIDEN_IS_ARRAY,
 );
 impl Default for HhvmFlags {
     fn default() -> HhvmFlags {
@@ -257,6 +256,7 @@ prefixed_flags!(
     ENABLE_COROUTINES,
     ENABLE_FIRST_CLASS_FUNCTION_POINTERS,
     ENABLE_XHP_CLASS_MODIFIER,
+    DISABLE_ARRAY_CAST,
     DISABLE_ARRAY,
     RUST_EMITTER,
 );
@@ -686,6 +686,9 @@ mod tests {
   "hhvm.hack.lang.disable_array": {
     "global_value": false
   },
+  "hhvm.hack.lang.disable_array_cast": {
+    "global_value": false
+  },
   "hhvm.hack.lang.disable_legacy_attribute_syntax": {
     "global_value": false
   },
@@ -735,9 +738,6 @@ mod tests {
     "global_value": false
   },
   "hhvm.rx_is_enabled": {
-    "global_value": false
-  },
-  "hhvm.widen_is_array": {
     "global_value": false
   }
 }"#;
@@ -1133,11 +1133,9 @@ bitflags! {
         const CONST_DEFAULT_LAMBDA_ARGS = 1 << 45;
         const ENABLE_XHP_CLASS_MODIFIER = 1 << 46;
         const ENABLE_FIRST_CLASS_FUNCTION_POINTERS = 1 << 47;
-        /// Widen the default behavior of `is_array` from "is exactly a PHP array" to
-        /// "is any kind of CoW container" (i.e. `HH\is_any_array`)
-        const WIDEN_IS_ARRAY = 1 << 48;
         const DISABLE_XHP_ELEMENT_MANGLING = 1 << 49;
         const DISABLE_ARRAY = 1 << 50;
         const RUST_EMITTER = 1 << 51;
+        const DISABLE_ARRAY_CAST = 1 << 52;
     }
 }

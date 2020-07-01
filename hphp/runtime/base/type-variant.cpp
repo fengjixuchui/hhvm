@@ -370,16 +370,11 @@ static bool isAllowedAsConstantValueImpl(TypedValue tv) {
     case KindOfVec:
     case KindOfDict:
     case KindOfArray: {
-      if (tv.m_data.parr->isGlobalsArrayKind()) return false;
-
-      bool allowed = true;
-      IterateV(
-        tv.m_data.parr,
-        [&] (TypedValue v) {
-          if (!isAllowedAsConstantValueImpl(v)) allowed = false;
-          return !allowed;
-        }
-      );
+      auto allowed = true;
+      IterateV(tv.m_data.parr, [&] (TypedValue v) {
+        if (!isAllowedAsConstantValueImpl(v)) allowed = false;
+        return !allowed;
+      });
       return allowed;
     }
 
@@ -510,7 +505,7 @@ Array Variant::toPHPArrayHelper() const {
     case KindOfVArray:
     case KindOfPersistentArray:
     case KindOfArray:         return Array(m_data.parr);
-    case KindOfObject:        return m_data.pobj->toArray();
+    case KindOfObject:        return m_data.pobj->toArray().toPHPArray();
     case KindOfResource:      return m_data.pres->data()->o_toArray();
     case KindOfRFunc:
       raise_convert_rfunc_to_type("array");

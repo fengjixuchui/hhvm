@@ -21,8 +21,8 @@
 #include <string>
 
 #include "hphp/util/portability.h"
-#include "hphp/runtime/base/annot-type.h"
 #include "hphp/runtime/base/datatype.h"
+#include "hphp/runtime/base/ham-runtime-option.h"
 
 #ifdef ERROR
 #undef ERROR
@@ -41,6 +41,7 @@ struct Func;
 struct ArrayData;
 struct StringData;
 struct TypeConstraint;
+struct TypedValue;
 
 enum class HackStrictOption;
 
@@ -183,8 +184,6 @@ void raise_resolve_undefined(const StringData* name, const Class* c = nullptr);
 void raise_convert_object_to_string(const char* cls_name);
 void raise_convert_record_to_type(const char* typeName);
 void raise_convert_rfunc_to_type(const char* typeName);
-void raise_recordarray_promotion_notice(const std::string& op);
-void raise_recordarray_unsupported_op_notice(const std::string& op);
 
 ///////////////////////////////////////////////////////////////////////////////
 /*

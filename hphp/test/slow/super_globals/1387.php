@@ -1,20 +1,12 @@
 <?hh
 
 function f() {
-  foreach (HH\global_keys() as $k) {
-    if ($k == 'a') {
-      $GLOBALS[$k] = -1;
-    }
-  }
-
-  var_dump($GLOBALS['a']);
-  $b = $GLOBALS['GLOBALS'];
-  $b['a'] = 0;
-  var_dump($GLOBALS['a']);
+  var_dump(\HH\global_get('a'));
+  \HH\global_set('a', -1);
+  var_dump(\HH\global_get('a'));
 }
 <<__EntryPoint>>
 function entrypoint_1387(): void {
-
-  $GLOBALS['a'] = 100;
+  \HH\global_set('a', 100);
   f();
 }

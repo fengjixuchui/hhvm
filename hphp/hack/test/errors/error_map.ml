@@ -252,6 +252,7 @@ RepeatedRecordFieldName = 3083
 PhpLambdaDisallowed = 3084
 EntryPointArguments = 3085
 VariadicMemoize = 3086
+AbstractMethodMemoize = 3087
 
 Typing Errors:
 AbstractClassFinalDEPRECATED = 4001
@@ -627,4 +628,5 @@ ArrayAccessWrite = 4370
 InvalidArrayKeyWrite = 4371
 NullMemberWrite = 4372
 NonObjectMemberWrite = 4373
+ConcreteConstInterfaceOverride = 4374
   |}]

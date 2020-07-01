@@ -90,6 +90,8 @@ type t = {
   glean_reponame: string;
   symbol_write_root_path: string;
   symbol_write_hhi_path: string;
+  symbol_write_ignore_paths: string list;
+  symbol_write_index_paths: string list;
   po_disallow_func_ptrs_in_constants: bool;
   tco_error_php_lambdas: bool;
   tco_disallow_discarded_nullable_awaitables: bool;
@@ -102,8 +104,9 @@ type t = {
   po_disable_array: bool;
   tco_enable_systemlib_annotations: bool;
   tco_pu_enabled_paths: bool * Relative_path.t list;
+  tco_widen_is_array: bool;
 }
-[@@deriving show]
+[@@deriving eq, show]
 
 let tco_experimental_isarray = "is_array"
 
@@ -250,6 +253,8 @@ let default =
     glean_reponame = "www.autocomplete";
     symbol_write_root_path = "www";
     symbol_write_hhi_path = "hhi";
+    symbol_write_ignore_paths = [];
+    symbol_write_index_paths = [];
     po_disallow_func_ptrs_in_constants = false;
     tco_error_php_lambdas = false;
     tco_disallow_discarded_nullable_awaitables = false;
@@ -262,6 +267,7 @@ let default =
     po_disable_array = false;
     tco_enable_systemlib_annotations = false;
     tco_pu_enabled_paths = (false, []);
+    tco_widen_is_array = false;
   }
 
 let make
@@ -360,6 +366,8 @@ let make
     ?(glean_reponame = default.glean_reponame)
     ?(symbol_write_root_path = default.symbol_write_root_path)
     ?(symbol_write_hhi_path = default.symbol_write_hhi_path)
+    ?(symbol_write_ignore_paths = default.symbol_write_ignore_paths)
+    ?(symbol_write_index_paths = default.symbol_write_index_paths)
     ?(po_disallow_func_ptrs_in_constants =
       default.po_disallow_func_ptrs_in_constants)
     ?(tco_error_php_lambdas = default.tco_error_php_lambdas)
@@ -377,6 +385,7 @@ let make
     ?(tco_enable_systemlib_annotations =
       default.tco_enable_systemlib_annotations)
     ?(tco_pu_enabled_paths = default.tco_pu_enabled_paths)
+    ?(tco_widen_is_array = default.tco_widen_is_array)
     () =
   {
     tco_experimental_features;
@@ -461,6 +470,8 @@ let make
     glean_reponame;
     symbol_write_root_path;
     symbol_write_hhi_path;
+    symbol_write_ignore_paths;
+    symbol_write_index_paths;
     po_disallow_func_ptrs_in_constants;
     tco_error_php_lambdas;
     tco_disallow_discarded_nullable_awaitables;
@@ -473,6 +484,7 @@ let make
     po_disable_array;
     tco_enable_systemlib_annotations;
     tco_pu_enabled_paths;
+    tco_widen_is_array;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -649,6 +661,10 @@ let symbol_write_root_path t = t.symbol_write_root_path
 
 let symbol_write_hhi_path t = t.symbol_write_hhi_path
 
+let symbol_write_ignore_paths t = t.symbol_write_ignore_paths
+
+let symbol_write_index_paths t = t.symbol_write_index_paths
+
 let set_global_inference t = { t with tco_global_inference = true }
 
 let set_ordered_solving t b = { t with tco_ordered_solving = b }
@@ -681,3 +697,5 @@ let po_disable_array t = t.po_disable_array
 let tco_enable_systemlib_annotations t = t.tco_enable_systemlib_annotations
 
 let tco_pu_enabled_paths t = t.tco_pu_enabled_paths
+
+let tco_widen_is_array t = t.tco_widen_is_array

@@ -70,7 +70,6 @@ bool canDCE(IRInstruction* inst) {
   case ConvDblToArr:
   case ConvIntToArr:
   case ConvFuncToArr:
-  case ConvArrToBool:
   case ConvDblToBool:
   case ConvIntToBool:
   case ConvStrToBool:
@@ -215,7 +214,6 @@ bool canDCE(IRInstruction* inst) {
   case LdRetVal:
   case Mov:
   case CountArray:
-  case CountArrayFast:
   case CountVec:
   case CountDict:
   case CountKeyset:
@@ -383,6 +381,7 @@ bool canDCE(IRInstruction* inst) {
   case AssertLoc:
   case AssertStk:
   case AssertMBase:
+  case CheckImplicitContextNull:
   case CheckInit:
   case CheckInitMem:
   case CheckCold:
@@ -491,7 +490,6 @@ bool canDCE(IRInstruction* inst) {
   case InitPackedLayoutArrayLoop:
   case NewKeysetArray:
   case NewRecord:
-  case NewRecordArray:
   case NewStructArray:
   case NewStructDArray:
   case NewStructDict:
@@ -510,6 +508,7 @@ bool canDCE(IRInstruction* inst) {
   case GenericRetDecRefs:
   case StClsInitElem:
   case StMem:
+  case StImplicitContext:
   case StIterBase:
   case StIterType:
   case StIterEnd:
@@ -756,12 +755,8 @@ bool canDCE(IRInstruction* inst) {
   case NSameVec:
   case SameDict:
   case NSameDict:
-    return
-      !RuntimeOption::EvalHackArrCompatCheckCompare &&
-      !RuntimeOption::EvalHackArrCompatDVCmpNotices;
-
   case IsTypeStruct:
-    return !opcodeMayRaise(IsTypeStruct);
+    return !opcodeMayRaise(inst->op());
   }
   not_reached();
 }

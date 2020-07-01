@@ -463,6 +463,10 @@ inline bool Func::hasThisInBody() const {
   return cls() && !isStatic();
 }
 
+inline bool Func::hasNoContextAttr() const {
+  return m_attrs & AttrNoContext;
+}
+
 inline bool Func::isAbstract() const {
   return m_attrs & AttrAbstract;
 }
@@ -631,6 +635,13 @@ inline bool Func::supportsAsyncEagerReturn() const {
 
 inline bool Func::isDynamicallyCallable() const {
   return m_attrs & AttrDynamicallyCallable;
+}
+
+inline folly::Optional<int64_t> Func::dynCallSampleRate() const {
+  if (auto const ex = extShared()) {
+    if (ex->m_dynCallSampleRate >= 0) return ex->m_dynCallSampleRate;
+  }
+  return folly::none;
 }
 
 inline bool Func::isMethCaller() const {

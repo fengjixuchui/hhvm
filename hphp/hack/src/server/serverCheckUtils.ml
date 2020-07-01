@@ -14,13 +14,12 @@ open ServerLocalConfig.RemoteTypeCheck
 let should_do_remote
     (genv : ServerEnv.genv)
     (opts : TypecheckerOptions.t)
-    (fnl : Relative_path.Set.t)
+    ~(file_count : int)
     (errors : Errors.t) : bool =
   let remote_type_check = TypecheckerOptions.remote_type_check opts in
   let remote_type_check_threshold =
     TypecheckerOptions.remote_type_check_threshold opts
   in
-  let file_count = Relative_path.Set.cardinal fnl in
   let do_remote =
     if remote_type_check then begin
       Hh_logger.log "Remote type checking is enabled";
@@ -81,7 +80,7 @@ let start_typing_delegate genv env : env =
     genv.local_config
   in
   let {
-    declaration_threshold = defer_class_declaration_threshold;
+    declaration_threshold;
     heartbeat_period;
     max_batch_size;
     min_batch_size;
@@ -114,6 +113,14 @@ let start_typing_delegate genv env : env =
       ~min_batch_size
       ~raise_on_failure
   in
+  let tcopt =
+    GlobalOptions.
+      {
+        env.tcopt with
+        tco_defer_class_declaration_threshold = Some declaration_threshold;
+        tco_prefetch_deferred_files = prefetch_deferred_files;
+      }
+  in
   let root = Relative_path.path_of_prefix Relative_path.Root in
   {
     env with
@@ -124,20 +131,20 @@ let start_typing_delegate genv env : env =
           Typing_service_delegate.start
             Typing_service_types.
               {
-                defer_class_declaration_threshold;
                 heartbeat_period;
                 init_id;
                 mergebase;
                 num_workers;
-                prefetch_deferred_files;
                 recheck_id;
                 root;
                 server =
                   ServerApi.make_local_server_api
                     env.naming_table
                     ~root
+                    ~init_id
                     ~ignore_hh_version:
                       (ServerArgs.ignore_hh_version genv.options);
+                tcopt;
                 version_specifier;
                 worker_min_log_level;
                 transport_channel;

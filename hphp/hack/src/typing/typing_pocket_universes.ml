@@ -19,14 +19,15 @@ let class_get_pu_member_type ?from_class env ty enum member name =
   in
   match dty with
   | None -> (env, None)
-  | Some (ety_env, (_, dty)) ->
+  | Some (ety_env, (_, _, dty)) ->
     let (env, lty) = Phase.localize ~ety_env env dty in
     (env, Some lty)
 
 let reduce_pu_type_access env base enum atom name =
   let (env, base) = Env.expand_type env base in
   match class_get_pu_member_type env base (snd enum) atom (snd name) with
-  | (_env, None) -> assert false (* already caught in localization *)
+  (* already caught in naming *)
+  | (_env, None) -> (env, mk (Reason.Rwitness (fst name), TUtils.tany env))
   | (env, Some lty) ->
     (* Not sure if this expand is necessary, ask Catg *)
     let (env, lty) = Env.expand_type env lty in
@@ -96,9 +97,9 @@ let expand_pocket_universes env reason base enum (ty : locl_ty) tyname =
     let (env, ty) = expand_atom env reason base enum member tyname in
     (env, Some ty)
   | (r, Tgeneric s) -> apply env reason (Reason.to_pos r) s tyname
-  | (r, Tdependent (dep_ty, lty)) ->
-    let (env, lty) = Env.expand_type env lty in
-    (match deref lty with
+  | (r, Tdependent (dep_ty, bound)) ->
+    let (env, bound) = Env.expand_type env bound in
+    (match deref bound with
     | (_, Tpu _) ->
       let new_r =
         (* Patch the location for better error reporting *)
@@ -109,6 +110,8 @@ let expand_pocket_universes env reason base enum (ty : locl_ty) tyname =
         | _ -> r
       in
       let gen = DependentKind.to_string dep_ty in
+      (* TODO(T59317869): play well with flow sensitivity *)
+      let env = Env.add_upper_bound_global env gen bound in
       apply env new_r (Reason.to_pos r) gen tyname
     | (_, Tgeneric gen) ->
       (* Patch the location for better error reporting *)

@@ -38,10 +38,7 @@ std::string show(const Repo::GlobalData& gd) {
   SHOW(HackArrCompatNotices);
   SHOW(HackArrCompatIsArrayNotices);
   SHOW(HackArrCompatIsVecDictNotices);
-  SHOW(HackArrCompatTypeHintNotices);
-  SHOW(HackArrCompatDVCmpNotices);
   SHOW(HackArrCompatSerializeNotices);
-  SHOW(HackArrCompatSpecialization);
   SHOW(HackArrDVArrs);
   SHOW(EnableIntrinsicsExtension);
   SHOW(ForbidDynamicCallsToFunc);
@@ -60,6 +57,8 @@ std::string show(const Repo::GlobalData& gd) {
   SHOW(ArrayProvenance);
   SHOW(StrictArrayFillKeys);
   SHOW(EnableFuncStringInterop);
+  SHOW(WidenIsArray);
+  SHOW(WidenIsArrayLogs);
 #undef SHOW
   return out;
 }

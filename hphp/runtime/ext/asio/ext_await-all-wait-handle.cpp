@@ -194,11 +194,6 @@ Object HHVM_STATIC_METHOD(AwaitAllWaitHandle, fromArray,
         MixedArray::IterateV(MixedArray::asMixed(ad), fn);
       });
 
-    case ArrayData::kGlobalsKind:
-      // APC can't store WaitHandles, GlobalsArray is used only for
-      // $GLOBALS, which contain non-WaitHandles.
-      failArray();
-
     case ArrayData::kVecKind:
     case ArrayData::kDictKind:
     case ArrayData::kKeysetKind:
@@ -206,10 +201,6 @@ Object HHVM_STATIC_METHOD(AwaitAllWaitHandle, fromArray,
     case ArrayData::kBespokeDictKind:
     case ArrayData::kBespokeKeysetKind:
       // Shouldn't get Hack arrays
-      not_reached();
-
-    case ArrayData::kRecordKind:
-      // TODO: T47449944
       not_reached();
 
     case ArrayData::kBespokeArrayKind:

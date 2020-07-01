@@ -139,7 +139,15 @@ void Repo::setCliFile(const std::string& cliFile) {
 
 size_t Repo::stringLengthLimit() const {
   static const size_t limit = sqlite3_limit(m_dbc, SQLITE_LIMIT_LENGTH, -1);
-  return limit;
+  assertx(limit > 8);
+
+  // In addition to restricting the size of text and blob fields, during an
+  // INSERT or SELECT operation an entire row is encoded as blob, therefore,
+  // SQLITE_LIMIT_LENGTH controls the maximum total size of a row. We currently
+  // store litstrs in a table with an INTEGER key and a TEXT litstr, the size of
+  // the litstr must leave room for an integer, which can require between 1 and
+  // 8 bytes.
+  return limit - 8;
 }
 
 bool Repo::hasGlobalData() {
@@ -256,8 +264,6 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
     // and interactions well enough to feel comfortable fixing now.
     RuntimeOption::EnableIntrinsicsExtension =
       s_globalData.EnableIntrinsicsExtension;
-    RuntimeOption::EvalHackArrCompatSpecialization =
-      s_globalData.HackArrCompatSpecialization;
     RuntimeOption::PHP7_Builtins            = s_globalData.PHP7_Builtins;
     RuntimeOption::PHP7_NoHexNumerics       = s_globalData.PHP7_NoHexNumerics;
     RuntimeOption::PHP7_Substr              = s_globalData.PHP7_Substr;
@@ -288,6 +294,12 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
       s_globalData.IsCompatibleClsMethType;
     RuntimeOption::EvalEmitClsMethPointers = s_globalData.EmitClsMethPointers;
     RO::EvalEnableFuncStringInterop = s_globalData.EnableFuncStringInterop;
+
+    RO::EvalHackArrCompatIsArrayNotices =
+      s_globalData.HackArrCompatIsArrayNotices;
+
+    RO::EvalWidenIsArray = s_globalData.WidenIsArray;
+    RO::EvalWidenIsArrayLogs = s_globalData.WidenIsArrayLogs;
 
     RuntimeOption::ConstantFunctions.clear();
     for (auto const& elm : s_globalData.ConstantFunctions) {

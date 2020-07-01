@@ -16,6 +16,7 @@
 
 #include "hphp/runtime/vm/jit/irlower-internal.h"
 
+#include "hphp/runtime/base/implicit-context.h"
 #include "hphp/runtime/base/object-data.h"
 #include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/resumable.h"
@@ -486,6 +487,13 @@ void cgAFWHBlockOn(IRLS& env, const IRInstruction* inst) {
   // parent->m_child = child;
   auto const childOff = AFWH::childrenOff() + AFWH::Node::childOff();
   v << store{child, parentAR[ar_rel(childOff)]};
+
+  if (RO::EvalEnableImplicitContext) {
+    // parent->m_implicitContext = *ImplicitContext::activeCtx
+    auto const implicitContext = v.makeReg();
+    v << load{rvmtl()[ImplicitContext::activeCtx.handle()], implicitContext};
+    v << store{implicitContext, parentAR[ar_rel(AFWH::implicitContextOff())]};
+  }
 }
 
 void cgAFWHPushTailFrame(IRLS& env, const IRInstruction* inst) {
@@ -508,12 +516,11 @@ void cgAFWHPushTailFrame(IRLS& env, const IRInstruction* inst) {
 
   // Check that we have room for another ID in m_tailFrameIds by testing its
   // highest bit. See comments in async-function-wait-handle.h for details.
-  static_assert(sizeof(ActRec::m_tailFrameIds) == 8, "");
+  static_assert(AFWH::kNumTailFrames == 4, "");
   static_assert(sizeof(AsyncFrameId) == 2, "");
   always_assert(0 < id && id <= kMaxAsyncFrameId);
   auto const sf3 = v.makeReg();
-  auto constexpr kTailFramesOff = AFWH::arOff() + AROFF(m_tailFrameIds);
-  v << testbim{-0b10000000, wh[kTailFramesOff + 7], sf3};
+  v << testbim{-0b10000000, wh[AFWH::tailFramesOff() + 7], sf3};
   ifThen(v, CC_Z, sf3, taken);
 
   // Push the new ID into the least-significant bits of m_tailFrameIds.
@@ -521,10 +528,10 @@ void cgAFWHPushTailFrame(IRLS& env, const IRInstruction* inst) {
   auto const shifted = v.makeReg();
   auto const new_val = v.makeReg();
   auto const shift = safe_cast<int32_t>(8 * sizeof(AsyncFrameId));
-  v << load{wh[kTailFramesOff], old_val};
+  v << load{wh[AFWH::tailFramesOff()], old_val};
   v << shlqi{shift, old_val, shifted, v.makeReg()};
   v << orqi{safe_cast<int32_t>(id), shifted, new_val, v.makeReg()};
-  v << store{new_val, wh[kTailFramesOff]};
+  v << store{new_val, wh[AFWH::tailFramesOff()]};
 }
 
 ///////////////////////////////////////////////////////////////////////////////

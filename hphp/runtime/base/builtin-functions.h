@@ -60,6 +60,8 @@ void NEVER_INLINE throw_invalid_property_name(const String& name);
 [[noreturn]]
 void NEVER_INLINE throw_call_reified_func_without_generics(const Func* f);
 
+[[noreturn]] void NEVER_INLINE throw_implicit_context_exception(std::string);
+
 [[noreturn]]
 void throw_exception(const Object& e);
 
@@ -116,6 +118,27 @@ inline void maybe_raise_array_serialization_notice(
   if (RuntimeOption::EvalLogArrayProvenance && arrprov::arrayWantsTag(ad)) {
     raise_array_serialization_notice(site, ad);
   }
+}
+
+inline bool is_any_array(const TypedValue* c, bool logOnHackArrays) {
+  assertx(tvIsPlausible(*c));
+  if (tvIsClsMeth(c) && RO::EvalIsCompatibleClsMethType) {
+    if (RO::EvalIsVecNotices) {
+      raise_notice(Strings::CLSMETH_COMPAT_IS_ANY_ARR);
+    }
+    return true;
+  }
+
+  if (logOnHackArrays && RO::EvalWidenIsArrayLogs) {
+    if (tvIsVec(c)) {
+      raise_hackarr_compat_notice(Strings::HACKARR_COMPAT_VEC_IS_ARR);
+    } else if (tvIsDict(c)) {
+      raise_hackarr_compat_notice(Strings::HACKARR_COMPAT_DICT_IS_ARR);
+    } else if (tvIsKeyset(c)) {
+      raise_hackarr_compat_notice(Strings::HACKARR_COMPAT_KEYSET_IS_ARR);
+    }
+  }
+  return tvIsArrayLike(c);
 }
 
 inline bool is_array(const TypedValue* c, bool logOnHackArrays) {
@@ -175,7 +198,7 @@ inline bool is_vec(const TypedValue* c) {
     return false;
   }
 
-  if (tvIsArray(c) && c->m_data.parr->isVArray()) {
+  if (tvIsArrayLike(c) && c->m_data.parr->isVArray()) {
     hacLogging(Strings::HACKARR_COMPAT_VARR_IS_VEC);
     maybe_raise_array_serialization_notice(SerializationSite::IsVec, c);
   }
@@ -193,7 +216,7 @@ inline bool is_dict(const TypedValue* c) {
   auto const hacLogging = [&](const char* msg) {
     if (RO::EvalHackArrCompatIsVecDictNotices) raise_hackarr_compat_notice(msg);
   };
-  if (tvIsArray(c) && c->m_data.parr->isDArray()) {
+  if (tvIsArrayLike(c) && c->m_data.parr->isDArray()) {
     hacLogging(Strings::HACKARR_COMPAT_DARR_IS_DICT);
     maybe_raise_array_serialization_notice(SerializationSite::IsDict, c);
   }
@@ -213,7 +236,7 @@ inline bool is_varray(const TypedValue* c) {
   // only dynamic calls to is_varray will remain at that point.
   if (RuntimeOption::EvalHackArrDVArrs) return is_vec(c);
 
-  if (tvIsVArray(c) || (tvIsArray(c) && c->m_data.parr->isVArray())) {
+  if (tvIsArrayLike(c) && c->m_data.parr->isVArray()) {
     maybe_raise_array_serialization_notice(SerializationSite::IsVArray, c);
     return true;
   }
@@ -233,6 +256,23 @@ inline bool is_varray(const TypedValue* c) {
   return false;
 }
 
+inline bool is_vec_or_varray(const TypedValue* c) {
+  assertx(tvIsPlausible(*c));
+
+  if (tvIsVec(c) || (tvIsArrayLike(c) && c->m_data.parr->isVArray())) {
+    return true;
+  }
+
+  if (tvIsClsMeth(c) && RO::EvalIsCompatibleClsMethType) {
+    if (RO::EvalIsVecNotices) {
+      raise_notice(Strings::CLSMETH_COMPAT_IS_VEC_OR_VARR);
+    }
+    return true;
+  }
+
+  return false;
+}
+
 inline bool is_darray(const TypedValue* c) {
   assertx(tvIsPlausible(*c));
 
@@ -241,7 +281,7 @@ inline bool is_darray(const TypedValue* c) {
   // only dynamic calls to is_darray will remain at that point.
   if (RuntimeOption::EvalHackArrDVArrs) return is_dict(c);
 
-  if (tvIsDArray(c) || (tvIsArray(c) && c->m_data.parr->isDArray())) {
+  if (tvIsArrayLike(c) && c->m_data.parr->isDArray()) {
     maybe_raise_array_serialization_notice(SerializationSite::IsDArray, c);
     return true;
   }
@@ -253,6 +293,16 @@ inline bool is_darray(const TypedValue* c) {
     hacLogging(Strings::HACKARR_COMPAT_DICT_IS_DARR);
     maybe_raise_array_serialization_notice(SerializationSite::IsDArray, c);
   }
+  return false;
+}
+
+inline bool is_dict_or_darray(const TypedValue* c) {
+  assertx(tvIsPlausible(*c));
+
+  if (tvIsDict(c) || (tvIsArrayLike(c) && c->m_data.parr->isDArray())) {
+    return true;
+  }
+
   return false;
 }
 

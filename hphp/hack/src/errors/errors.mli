@@ -279,6 +279,9 @@ val new_abstract_record : Pos.t * string -> unit
 
 val abstract_const_usage : Pos.t -> Pos.t -> string -> unit
 
+val concrete_const_interface_override :
+  Pos.t -> Pos.t -> string -> string -> typing_error_callback -> unit
+
 val const_without_typehint : Pos.t * string -> unit
 
 val prop_without_typehint : string -> Pos.t * string -> unit
@@ -1052,6 +1055,8 @@ val pu_invalid_access : Pos.t -> string -> unit
 
 val pu_reserved_syntax : Pos.t -> unit
 
+val pu_case_in_trait : Pos.t -> string -> unit
+
 val lvar_in_obj_get : Pos.t -> unit
 
 val invalid_freeze_target : Pos.t -> Pos.t -> string -> unit
@@ -1151,6 +1156,8 @@ val coroutine_in_constructor : Pos.t -> unit
 
 val pu_duplication : Pos.t -> string -> string -> string -> unit
 
+val pu_duplication_in_instance : Pos.t -> string -> string -> string -> unit
+
 val pu_not_in_class : Pos.t -> string -> string -> unit
 
 val illegal_use_of_dynamically_callable : Pos.t -> Pos.t -> string -> unit
@@ -1224,6 +1231,8 @@ val maybe_mutable_methods_must_be_reactive : Pos.t -> string -> unit
 val entrypoint_arguments : Pos.t -> unit
 
 val variadic_memoize : Pos.t -> unit
+
+val abstract_method_memoize : Pos.t -> unit
 
 val reassign_maybe_mutable_var : in_collection:bool -> Pos.t -> unit
 

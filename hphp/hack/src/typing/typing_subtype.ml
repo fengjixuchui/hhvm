@@ -111,6 +111,46 @@ module ConditionTypes = struct
     | _ -> do_localize ty
 end
 
+(* Fetch all the constraints of a `Tpu_type_access(tparam, tyname)`, which
+ * are stored in a PU definition, and filter them to only keep upper bounds
+ *)
+let get_tpu_type_param_upper_bounds env tparam tyname =
+  (* Filter the decl type parameter constraints to only keep the `as` ones *)
+  let filter_constraints env ety_env decl_tparam =
+    List.filter_map_env env decl_tparam.tp_constraints ~f:(fun env (ck, dty) ->
+        match ck with
+        (* Only keep the "as" constraints *)
+        | Ast_defs.Constraint_as ->
+          let (env, lty) = Phase.localize ~ety_env env dty in
+          (env, Some lty)
+        | _ -> (env, None))
+  in
+  (* when tparam is bound by a Tpu(C, E), we look at the definition
+   * of the PU to get the constraints on `case type tyname`.
+   * We accumulate such constraints in `acc`
+   *)
+  let get_case_type_constraints env cls enum acc =
+    (* Get the type parameter associated to tyname in this PU *)
+    let (env, info) = TUtils.class_get_pu_type env cls enum tyname in
+    let (env, ltys) =
+      match info with
+      | None -> (env, [])
+      | Some (ety_env, (_, decl_tparam)) ->
+        filter_constraints env ety_env decl_tparam
+    in
+    (env, List.rev_append acc ltys)
+  in
+  (* Get upper bounds of the tparam generic *)
+  let upper_bounds = Env.get_upper_bounds env tparam in
+  Typing_set.fold
+    (fun bound (env, acc) ->
+      match get_node bound with
+      (* Only inspect Tpu bounds *)
+      | Tpu (cls, (_, enum)) -> get_case_type_constraints env cls enum acc
+      | _ -> (env, acc))
+    upper_bounds
+    (env, [])
+
 (* Given a pair of types `ty_sub` and `ty_super` attempt to apply simplifications
  * and add to the accumulated constraints in `constraints` any necessary and
  * sufficient [(t1,ck1,u1);...;(tn,ckn,un)] such that
@@ -526,6 +566,50 @@ and simplify_subtype_i
           |> (* Turn error into a generic error about the type parameter *)
           if_unsat invalid
         | (_, Tdynamic) when subtype_env.treat_dynamic_as_bottom -> valid ()
+        | (_, Tpu_type_access ((_pm, msub), (_pn, nsub))) ->
+          (* If member is actually an expression dependent type,
+           * we need to update this_ty
+           *)
+          let this_ty =
+            if DependentKind.is_generic_dep_ty msub && Option.is_none this_ty
+            then
+              Some ty_sub
+            else
+              this_ty
+          in
+          (*
+           * We are checking if msub:@nsub is a subtype of ty_super.
+           * Since msub is a generic parameter, we are scanning all of its
+           * upper bounds and look for all C:@E.
+           * We then scan the PU definition of these C:@E to gather the 'as'
+           * constraints on the type `case type nsub`.
+           *
+           * Finally, we attempt to use those in recursive subtype calls
+           * to check if they are <: ty_super.
+           *)
+          let (env, upper_bounds) =
+            get_tpu_type_param_upper_bounds env msub nsub
+          in
+          let rec try_bounds tyl env =
+            match tyl with
+            | [] -> invalid_env env
+            | [ty] ->
+              simplify_subtype_i
+                ~subtype_env
+                ~this_ty
+                (LoclType ty)
+                ty_super
+                env
+            | ty :: tyl ->
+              env
+              |> try_bounds tyl
+              ||| simplify_subtype_i
+                    ~subtype_env
+                    ~this_ty
+                    (LoclType ty)
+                    ty_super
+          in
+          env |> try_bounds upper_bounds |> if_unsat invalid
         | _ -> invalid ()
       end
   in
@@ -1242,7 +1326,12 @@ and simplify_subtype_i
       | LoclType lty ->
         (match (deref lty, prim_ty) with
         | ((_, Tprim (Nast.Tint | Nast.Tfloat)), Nast.Tnum) -> valid ()
-        | ((_, Tprim (Nast.Tint | Nast.Tstring)), Nast.Tarraykey) -> valid ()
+        | ((_, Tprim (Nast.Tatom _)), Nast.Tstring) -> valid ()
+        | ((_, Tpu (_, _)), Nast.Tstring) -> valid ()
+        | ((_, Tprim (Nast.Tatom _ | Nast.Tint | Nast.Tstring)), Nast.Tarraykey)
+          ->
+          valid ()
+        | ((_, Tpu (_, _)), Nast.Tarraykey) -> valid ()
         | ((_, Tprim prim_sub), _) when Aast.equal_tprim prim_sub prim_ty ->
           valid ()
         | ((_, Toption arg_ty_sub), Nast.Tnull) ->
@@ -1365,7 +1454,8 @@ and simplify_subtype_i
        *   1. A is no more optional than B
        *   2. A's type <: B.type
        *)
-      let simplify_subtype_shape_field r_sub name res sft_sub sft_super =
+      let simplify_subtype_shape_field
+          r_sub name res (sft_sub, explicit_sub) (sft_super, _) =
         match (sft_sub.sft_optional, sft_super.sft_optional) with
         | (_, true)
         | (false, false) ->
@@ -1381,15 +1471,14 @@ and simplify_subtype_i
                  let printable_name =
                    TUtils.get_printable_shape_field_name name
                  in
-                 match get_reason sft_sub.sft_ty with
-                 | Reason.Rmissing_required_field _ ->
-                   Errors.missing_field
+                 if explicit_sub then
+                   Errors.required_field_is_optional
                      (Reason.to_pos r_sub)
                      (Reason.to_pos r_super)
                      printable_name
                      subtype_env.on_error
-                 | _ ->
-                   Errors.required_field_is_optional
+                 else
+                   Errors.missing_field
                      (Reason.to_pos r_sub)
                      (Reason.to_pos r_super)
                      printable_name
@@ -1397,7 +1486,7 @@ and simplify_subtype_i
       in
       let lookup_shape_field_type name r shape_kind fdm =
         match ShapeMap.find_opt name fdm with
-        | Some sft -> sft
+        | Some sft -> (sft, true)
         | None ->
           let printable_name = TUtils.get_printable_shape_field_name name in
           let sft_ty =
@@ -1409,7 +1498,7 @@ and simplify_subtype_i
               MakeType.mixed
                 (Reason.Rmissing_optional_field (Reason.to_pos r, printable_name))
           in
-          { sft_ty; sft_optional = true }
+          ({ sft_ty; sft_optional = true }, false)
       in
       (match ety_sub with
       | ConstraintType _ -> default_subtype env
@@ -3289,141 +3378,6 @@ let add_constraints p env constraints =
   let add_constraint env (ty1, ck, ty2) = add_constraint p env ck ty1 ty2 in
   List.fold_left constraints ~f:add_constraint ~init:env
 
-(** Check that the method with signature ft_sub can be used to override
- * (is a subtype of) method with signature ft_super.
- *
- * This goes beyond subtyping on function types because methods can have
- * generic parameters with bounds, and `where` constraints.
- *
- * Suppose ft_super is of the form
- *    <T1 csuper1, ..., Tn csupern>(tsuper1, ..., tsuperm) : tsuper where wsuper
- * and ft_sub is of the form
- *    <T1 csub1, ..., Tn csubn>(tsub1, ..., tsubm) : tsub where wsub
- * where csuperX and csubX are constraints on type parameters and wsuper and
- * wsub are 'where' constraints. Note that all types in the superclass,
- * including constraints (so csuperX, tsuperX, tsuper and wsuper) have had
- * any class type parameters instantiated appropriately according to
- * the actual arguments of the superclass. For example, suppose we have
- *
- *   class Super<T> {
- *     function foo<Tu as A<T>>(T $x) : B<T> where T super C<T>
- *   }
- *   class Sub extends Super<D> {
- *     ...override of foo...
- *   }
- * then the actual signature in the superclass that we need to check is
- *     function foo<Tu as A<D>>(D $x) : B<D> where D super C<D>
- * Note in particular the general form of the 'where' constraint.
- *
- * (Currently, this instantiation happens in
- *   Typing_extends.check_class_implements which in turn calls
- *   Decl_instantiate.instantiate_ce)
- *
- * Then for ft_sub to be a subtype of ft_super it must be the case that
- * (1) tsuper1 <: tsub1, ..., tsupern <: tsubn (under constraints
- *     T1 csuper1, ..., Tn csupern and wsuper).
- *
- *     This is contravariant subtyping on parameter types.
- *
- * (2) tsub <: tsuper (under constraints T1 csuper1, ..., Tn csupern and wsuper)
- *     This is covariant subtyping on result type. For constraints consider
- *       e.g. consider ft_super = <T super I>(): T
- *                 and ft_sub = <T>(): I
- *
- * (3) The constraints for ft_super entail the constraints for ft_sub, because
- *     we might be calling the function having checked that csuperX are
- *     satisfied but the definition of the function (e.g. consider an override)
- *     has been checked under csubX.
- *     More precisely, we must assume constraints T1 csuper1, ..., Tn csupern
- *     and wsuper, and check that T1 satisfies csub1, ..., Tn satisfies csubn
- *     and that wsub holds under those assumptions.
- *)
-let subtype_method
-    ~(check_return : bool)
-    ~(extra_info : reactivity_extra_info)
-    (env : env)
-    (r_sub : Reason.t)
-    (ft_sub : locl_fun_type)
-    (r_super : Reason.t)
-    (ft_super : locl_fun_type)
-    (on_error : Errors.typing_error_callback) : env =
-  Env.log_env_change "subtype_method" env
-  @@
-  let old_tpenv = Env.get_tpenv env in
-  (* We check constraint entailment and contravariant parameter/covariant result
-   * subtyping in the context of the ft_super constraints. But we'd better
-   * restore tpenv afterwards *)
-  let add_tparams_constraints env (tparams : locl_tparam list) =
-    let add_bound env { tp_name = (pos, name); tp_constraints = cstrl; _ } =
-      List.fold_left cstrl ~init:env ~f:(fun env (ck, ty) ->
-          let tparam_ty = MakeType.generic (Reason.Rwitness pos) name in
-          add_constraint pos env ck tparam_ty ty)
-    in
-    List.fold_left tparams ~f:add_bound ~init:env
-  in
-  let p_sub = Reason.to_pos r_sub in
-  let add_where_constraints env (cstrl : locl_where_constraint list) =
-    List.fold_left cstrl ~init:env ~f:(fun env (ty1, ck, ty2) ->
-        add_constraint p_sub env ck ty1 ty2)
-  in
-  let env = add_tparams_constraints env ft_super.ft_tparams in
-  let env = add_where_constraints env ft_super.ft_where_constraints in
-  let (env, prop) =
-    simplify_subtype_funs
-      ~subtype_env:(make_subtype_env on_error)
-      ~check_return
-      ~extra_info
-      r_sub
-      ft_sub
-      r_super
-      ft_super
-      env
-  in
-  let (env, prop) = prop_to_env env prop on_error in
-  let env = Env.add_subtype_prop env prop in
-  ignore (process_simplify_subtype_result prop);
-
-  (* This is (3) above *)
-  let check_tparams_constraints env tparams =
-    let check_tparam_constraints
-        env { tp_name = (p, name); tp_constraints = cstrl; _ } =
-      List.fold_left cstrl ~init:env ~f:(fun env (ck, cstr_ty) ->
-          let tgeneric = MakeType.generic (Reason.Rwitness p) name in
-          Typing_generic_constraint.check_constraint
-            env
-            ck
-            tgeneric
-            ~cstr_ty
-            on_error)
-    in
-    List.fold_left tparams ~init:env ~f:check_tparam_constraints
-  in
-  let check_where_constraints env cstrl =
-    List.fold_left cstrl ~init:env ~f:(fun env (ty1, ck, ty2) ->
-        Typing_generic_constraint.check_constraint
-          env
-          ck
-          ty1
-          ~cstr_ty:ty2
-          on_error)
-  in
-  (* We only do this if the ft_tparam lengths match. Currently we don't even
-   * report this as an error, indeed different names for type parameters.
-   * TODO: make it an error to override with wrong number of type parameters
-   *)
-  let env =
-    if
-      Int.( <> )
-        (List.length ft_sub.ft_tparams)
-        (List.length ft_super.ft_tparams)
-    then
-      env
-    else
-      check_tparams_constraints env ft_sub.ft_tparams
-  in
-  let env = check_where_constraints env ft_sub.ft_where_constraints in
-  Env.env_with_tpenv env old_tpenv
-
 let sub_type_with_dynamic_as_bottom
     (env : env)
     (ty_sub : locl_ty)
@@ -3474,6 +3428,35 @@ let sub_type_i env ty1 ty2 on_error =
     env
     ty1
     ty2
+
+let subtype_funs
+    ~(check_return : bool)
+    ~(extra_info : reactivity_extra_info)
+    ~on_error
+    (r_sub : Reason.t)
+    (ft_sub : locl_fun_type)
+    (r_super : Reason.t)
+    (ft_super : locl_fun_type)
+    env : env =
+  let old_env = env in
+  let (env, prop) =
+    simplify_subtype_funs
+      ~subtype_env:(make_subtype_env on_error)
+      ~check_return
+      ~extra_info
+      r_sub
+      ft_sub
+      r_super
+      ft_super
+      env
+  in
+  let (env, prop) = prop_to_env env prop on_error in
+  let env = Env.add_subtype_prop env prop in
+  let succeeded = process_simplify_subtype_result prop in
+  if succeeded then
+    env
+  else
+    old_env
 
 let sub_type_or_fail env ty1 ty2 fail =
   sub_type env ty1 ty2 (fun ?code:_ _ -> fail ())

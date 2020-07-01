@@ -485,7 +485,7 @@ bool VariableUnserializer::matchString(folly::StringPiece str) {
   const char* p = m_buf;
   assertx(p <= m_end);
   int total = 0;
-  if (*p == 'S') {
+  if (*p == 'S' && type() == VariableUnserializer::Type::APCSerialize) {
     total = 2 + 8 + 1;
     if (p + total > m_end) return false;
     p++;
@@ -552,6 +552,7 @@ void VariableUnserializer::unserializeProp(ObjectData* obj,
     // Unserialize as a dynamic property. If this is the first, we need to
     // pre-allocate space in the array to ensure the elements don't move during
     // unserialization.
+    obj->reserveDynProps(nProp);
     t = obj->makeDynProp(realKey.get());
   } else {
     // We'll check if this doesn't violate the type-hint once we're done
@@ -1007,7 +1008,7 @@ void VariableUnserializer::unserializeVariant(
             if (!TypeStructure::coerceToTypeStructureList_SERDE_ONLY(t)) {
               throwInvalidOFormat(clsName);
             }
-            assertx(tvIsVecOrVArray(t));
+            assertx(tvIsHAMSafeVArray(t));
             obj = Object{cls, t.val().parr};
           } else {
             obj = Object{cls};

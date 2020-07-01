@@ -126,10 +126,6 @@ SSATmp* gen(State& env, Opcode op, Args&&... args) {
   return gen(env, op, env.insts.top()->bcctx(), std::forward<Args>(args)...);
 }
 
-bool arrayKindNeedsVsize(const ArrayData::ArrayKind kind) {
-  return kind == ArrayData::kGlobalsKind;
-}
-
 //////////////////////////////////////////////////////////////////////
 
 DEBUG_ONLY bool validate(const State& env,
@@ -2160,15 +2156,6 @@ SSATmp* simplifyConvClsMethToKeyset(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
-SSATmp* simplifyConvArrToBool(State& env, const IRInstruction* inst) {
-  auto const src = inst->src(0);
-  auto const kind = src->type().arrSpec().kind();
-  if (src->isA(TStaticArr) || (kind && !arrayKindNeedsVsize(*kind))) {
-    return gen(env, ConvIntToBool, gen(env, CountArrayFast, src));
-  }
-  return nullptr;
-}
-
 SSATmp* simplifyConvDblToBool(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
   if (src->hasConstVal()) {
@@ -2291,7 +2278,10 @@ SSATmp* simplifyConvTVToBool(State& env, const IRInstruction* inst) {
 
   if (srcType <= TBool) return src;
   if (srcType <= TNull) return cns(env, false);
-  if (srcType <= TArr)  return gen(env, ConvArrToBool, src);
+  if (srcType <= TArr) {
+    auto const length = gen(env, CountArray, src);
+    return gen(env, NeqInt, length, cns(env, 0));
+  }
   if (srcType <= TVec) {
     auto const length = gen(env, CountVec, src);
     return gen(env, NeqInt, length, cns(env, 0));
@@ -2613,7 +2603,6 @@ SSATmp* simplifyRaiseHackArrPropNotice(State& env, const IRInstruction* inst) {
 }
 
 SSATmp* simplifyCheckDVArray(State& env, const IRInstruction* inst) {
-  if (!RO::EvalHackArrCompatSpecialization) return nullptr;
   auto const src = inst->src(0);
   if (src->type().subtypeOfAny(TVArr, TDArr)) {
     gen(env, Nop);
@@ -3336,21 +3325,6 @@ SSATmp* simplifyCount(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
-
-SSATmp* simplifyCountArray(State& env, const IRInstruction* inst) {
-  auto const src = inst->src(0);
-  auto const ty = src->type();
-
-  if (src->hasConstVal()) return cns(env, src->arrVal()->size());
-
-  auto const kind = ty.arrSpec().kind();
-
-  if (kind && !arrayKindNeedsVsize(*kind))
-    return gen(env, CountArrayFast, src);
-
-  return nullptr;
-}
-
 namespace {
 SSATmp* simplifyCountHelper(
   State& env,
@@ -3374,7 +3348,7 @@ SSATmp* simplifyCountHelper(
 }
 }
 
-SSATmp* simplifyCountArrayFast(State& env, const IRInstruction* inst) {
+SSATmp* simplifyCountArray(State& env, const IRInstruction* inst) {
   return simplifyCountHelper(env, inst, TArr);
 }
 
@@ -3730,7 +3704,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(ConcatStr4)
   X(ConcatIntStr)
   X(ConcatStrInt)
-  X(ConvArrToBool)
   X(ConvArrToDbl)
   X(ConvBoolToArr)
   X(ConvBoolToDbl)
@@ -3783,7 +3756,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(DblAsBits)
   X(Count)
   X(CountArray)
-  X(CountArrayFast)
   X(CountVec)
   X(CountDict)
   X(CountKeyset)

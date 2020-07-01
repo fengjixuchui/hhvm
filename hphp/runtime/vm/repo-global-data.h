@@ -101,19 +101,17 @@ struct Repo::GlobalData {
   bool HackArrCompatNotices = false;
   bool HackArrCompatIsArrayNotices = false;
   bool HackArrCompatIsVecDictNotices = false;
-  bool HackArrCompatTypeHintNotices = false;
-  bool HackArrCompatDVCmpNotices = false;
   bool HackArrCompatSerializeNotices = false;
-
-  /*
-   * Are d/varrays their own types, distinct from arrays and from each other?
-   */
-  bool HackArrCompatSpecialization = false;
 
   /*
    * Are d/varrays dicts and vecs?
    */
   bool HackArrDVArrs = false;
+
+  /* Do we widen the behavior of `is_array` to `is_any_array`? */
+  bool WidenIsArray = false;
+  /* Do we logs for Hack arrays flowing into `is_array` post widening? */
+  bool WidenIsArrayLogs = true;
 
   /*
    * Should the extension containing HHVM intrinsics be enabled?
@@ -200,10 +198,7 @@ struct Repo::GlobalData {
       (HackArrCompatNotices)
       (HackArrCompatIsArrayNotices)
       (HackArrCompatIsVecDictNotices)
-      (HackArrCompatTypeHintNotices)
-      (HackArrCompatDVCmpNotices)
       (HackArrCompatSerializeNotices)
-      (HackArrCompatSpecialization)
       (HackArrDVArrs)
       (EnableIntrinsicsExtension)
       (ForbidDynamicCallsToFunc)
@@ -222,6 +217,8 @@ struct Repo::GlobalData {
       (ArrayProvenance)
       (StrictArrayFillKeys)
       (EnableFuncStringInterop)
+      (WidenIsArray)
+      (WidenIsArrayLogs)
       ;
   }
 };

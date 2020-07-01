@@ -477,13 +477,15 @@ module StdlibFunctions = struct
 
   let type_structure = "\\HH\\type_structure"
 
-  let mark_legacy_hack_array = "\\HH\\mark_legacy_hack_array"
-
   let array_mark_legacy = "\\HH\\array_mark_legacy"
 
   let is_php_array = "\\HH\\is_php_array"
 
   let is_any_array = "\\HH\\is_any_array"
+
+  let is_dict_or_darray = "\\HH\\is_dict_or_darray"
+
+  let is_vec_or_varray = "\\HH\\is_vec_or_varray"
 end
 
 module Typehints = struct

@@ -165,14 +165,8 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable,
     RuntimeOption::EvalInitialStaticStringTableSize;
   gd.HackArrCompatIsArrayNotices =
     RuntimeOption::EvalHackArrCompatIsArrayNotices;
-  gd.HackArrCompatTypeHintNotices =
-    RuntimeOption::EvalHackArrCompatTypeHintNotices;
-  gd.HackArrCompatDVCmpNotices =
-    RuntimeOption::EvalHackArrCompatDVCmpNotices;
   gd.HackArrCompatSerializeNotices =
     RuntimeOption::EvalHackArrCompatSerializeNotices;
-  gd.HackArrCompatSpecialization =
-    RuntimeOption::EvalHackArrCompatSpecialization;
   gd.HackArrDVArrs = RuntimeOption::EvalHackArrDVArrs;
   gd.AbortBuildOnVerifyError = RuntimeOption::EvalAbortBuildOnVerifyError;
   gd.EmitClsMethPointers = RuntimeOption::EvalEmitClsMethPointers;
@@ -180,6 +174,8 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable,
   gd.IsCompatibleClsMethType = RuntimeOption::EvalIsCompatibleClsMethType;
   gd.StrictArrayFillKeys = RuntimeOption::StrictArrayFillKeys;
   gd.EnableFuncStringInterop = RO::EvalEnableFuncStringInterop;
+  gd.WidenIsArray = RO::EvalWidenIsArray;
+  gd.WidenIsArrayLogs = RO::EvalWidenIsArrayLogs;
 
   for (auto a : Option::APCProfile) {
     gd.APCProfile.emplace_back(StringData::MakeStatic(folly::StringPiece(a)));

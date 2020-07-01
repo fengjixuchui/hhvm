@@ -35,7 +35,6 @@
 #include "hphp/runtime/base/set-array.h"
 #include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/server/memory-stats.h"
-#include "hphp/runtime/vm/globals-array.h"
 #include "hphp/runtime/vm/interp-helpers.h"
 
 #include "hphp/util/exception.h"
@@ -269,20 +268,18 @@ static_assert(ArrayFunctions::NK == ArrayData::ArrayKind::kNumKinds,
               "add new kinds here");
 
 #define DISPATCH(entry)                           \
-  { PackedArray::entry,      /* varray */         \
-    BespokeArray::entry,     /* bespoke varray */ \
-    MixedArray::entry,       /* darray */         \
+  { MixedArray::entry,       /* darray */         \
     BespokeArray::entry,     /* bespoke darray */ \
-    GlobalsArray::entry,                          \
-    RecordArray::entry,                           \
+    PackedArray::entry,      /* varray */         \
+    BespokeArray::entry,     /* bespoke varray */ \
     MixedArray::entry,       /* plain array */    \
     BespokeArray::entry,     /* bespoke array */  \
-    PackedArray::entry##Vec, /* vec */            \
-    BespokeArray::entry,     /* bespoke vec */    \
-    MixedArray::entry##Dict, /* dict */           \
-    BespokeArray::entry,     /* bespoke dict */   \
     SetArray::entry,         /* keyset */         \
     BespokeArray::entry,     /* bespoke keyset */ \
+    MixedArray::entry##Dict, /* dict */           \
+    BespokeArray::entry,     /* bespoke dict */   \
+    PackedArray::entry##Vec, /* vec */            \
+    BespokeArray::entry,     /* bespoke vec */    \
   },
 
 /*
@@ -378,13 +375,8 @@ const ArrayFunctions g_array_funcs = {
   /*
    * size_t Vsize(const ArrayData*)
    *
-   *   This entry point essentially is only for GlobalsArray;
-   *   all the other cases are not_reached().
-   *
-   *   Because of particulars of how GlobalsArray works,
-   *   determining the size of the array is an O(N) operation---we set
-   *   the size field in the generic ArrayData header to -1 in that
-   *   case and dispatch through this entry point.
+   *   This entry point is only for bespoke array-likes; for vanilla array
+   *   layouts, this function is not_reached().
    */
   DISPATCH(Vsize)
 
@@ -550,8 +542,6 @@ const ArrayFunctions g_array_funcs = {
    *
    *   Explicitly request that an array be copied.  This API does
    *   /not/ actually guarantee a copy occurs.
-   *
-   *   (E.g. GlobalsArray doesn't copy here.)
    */
   DISPATCH(Copy)
 
@@ -560,8 +550,8 @@ const ArrayFunctions g_array_funcs = {
    *
    *   Copy an array, allocating the new array with malloc() instead
    *   of from the request local allocator.  This function does
-   *   guarantee the returned array is a new copy---but it may throw a
-   *   fatal error if this cannot be accomplished (e.g. for $GLOBALS).
+   *   guarantee the returned array is a new copy, but it may throw a
+   *   fatal error if this cannot be accomplished.
    */
   DISPATCH(CopyStatic)
 
@@ -754,14 +744,7 @@ bool ArrayData::EqualHelper(const ArrayData* ad1, const ArrayData* ad2,
   assertx(IMPLIES(ad1->isHackArrayType(), !bothVanilla(ad1, ad2)));
 
   if (ad1 == ad2) return true;
-
-  if (!ArrayData::dvArrayEqual(ad1, ad2)) {
-    if (RO::EvalHackArrCompatSpecialization) return false;
-    if (RO::EvalHackArrCompatDVCmpNotices) {
-      raiseHackArrCompatDVArrCmp(ad1, ad2, /* is relational */ false);
-    }
-  }
-
+  if (!ArrayData::dvArrayEqual(ad1, ad2)) return false;
   if (ad1->size() != ad2->size()) return false;
 
   // Prevent circular referenced objects/arrays or deep ones.
@@ -803,21 +786,13 @@ int64_t ArrayData::CompareHelper(const ArrayData* ad1, const ArrayData* ad2) {
   assertx(IMPLIES(ad1->isVecType(), !bothVanilla(ad1, ad2)));
 
   if (!ArrayData::dvArrayEqual(ad1, ad2)) {
-    if (RO::EvalHackArrCompatSpecialization) {
-      if (ad1->isVArray()) throw_varray_compare_exception();
-      if (ad1->isDArray()) throw_darray_compare_exception();
-      if (ad2->isVArray()) throw_varray_compare_exception();
-      if (ad2->isDArray()) throw_darray_compare_exception();
-      always_assert(false);
-    } else if (RO::EvalHackArrCompatDVCmpNotices) {
-      raiseHackArrCompatDVArrCmp(ad1, ad2, /* is relational */ true);
-    }
+    if (ad1->isVArray()) throw_varray_compare_exception();
+    if (ad1->isDArray()) throw_darray_compare_exception();
+    if (ad2->isVArray()) throw_varray_compare_exception();
+    if (ad2->isDArray()) throw_darray_compare_exception();
+    always_assert(false);
   } else if (ad1->isDArray()) {
-    if (RO::EvalHackArrCompatSpecialization) {
-      throw_darray_compare_exception();
-    } else if (RO::EvalHackArrCompatDVCmpNotices) {
-      raise_hackarr_compat_notice("Comparing two darrays relationally");
-    }
+    throw_darray_compare_exception();
   }
 
   auto const size1 = ad1->size();
@@ -1021,34 +996,30 @@ Variant ArrayData::each() {
 // helpers
 
 void ArrayData::getNotFound(int64_t k) const {
-  assertx(kind() != kGlobalsKind);
   if (isHackArrayType()) throwOOBArrayKeyException(k, this);
   throwArrayIndexException(k, false);
 }
 
 void ArrayData::getNotFound(const StringData* k) const {
-  assertx(kind() != kGlobalsKind);
   if (isVecType()) throwInvalidArrayKeyException(k, this);
   if (isHackArrayType()) throwOOBArrayKeyException(k, this);
   throwArrayKeyException(k, false);
 }
 
 const char* ArrayData::kindToString(ArrayKind kind) {
-  std::array<const char*, 14> names = {{
-    "PackedKind",
-    "BespokeVArrayKind",
+  std::array<const char*, 12> names = {{
     "MixedKind",
     "BespokeDArrayKind",
-    "GlobalsKind",
-    "RecordKind",
+    "PackedKind",
+    "BespokeVArrayKind",
     "PlainKind",
     "BespokeArrayKind",
-    "VecKind",
-    "BespokeVecKind",
-    "DictKind",
-    "BespokeDictKind",
     "KeysetKind",
     "BespokeKeysetKind",
+    "DictKind",
+    "BespokeDictKind",
+    "VecKind",
+    "BespokeVecKind",
   }};
   static_assert(names.size() == kNumKinds, "add new kinds here");
   return names[kind];
@@ -1143,10 +1114,8 @@ void throwInvalidArrayKeyException(const TypedValue* key, const ArrayData* ad) {
     if (ad->isDictType()) return std::make_pair("dict", "int or string");
     if (ad->isKeysetType()) return std::make_pair("keyset", "int or string");
     assertx(ad->isPHPArrayType());
-    if (RO::EvalHackArrCompatSpecialization) {
-      if (ad->isVArray()) return std::make_pair("varray", "int");
-      if (ad->isDArray()) return std::make_pair("darray", "int or string");
-    }
+    if (ad->isVArray()) return std::make_pair("varray", "int");
+    if (ad->isDArray()) return std::make_pair("darray", "int or string");
     return std::make_pair("array", "int or string");
   }();
   SystemLib::throwInvalidArgumentExceptionObject(

@@ -282,6 +282,7 @@ void populate_block(ParseUnitState& puState,
   auto decode_stringvec = [&] {
     auto const vecLen = decode_iva(pc);
     CompactVector<LSString> keys;
+    keys.reserve(vecLen);
     for (auto i = size_t{0}; i < vecLen; ++i) {
       keys.push_back(ue.lookupLitstr(decode<int32_t>(pc)));
     }
@@ -653,6 +654,7 @@ void build_cfg(ParseUnitState& puState,
     auto const id = kv.second.first;
     blk->multiSucc = predSuccCounts[id].second > 1;
     blk->multiPred = predSuccCounts[id].first > 1;
+    blk->hhbcs.shrink_to_fit();
     func.blocks[id] = std::move(kv.second.second);
   }
 }
@@ -666,8 +668,8 @@ void add_frame_variables(php::Func& func, const FuncEmitter& fe) {
         param.typeConstraint,
         param.userType,
         param.upperBounds,
-        param.phpCode,
         param.userAttributes,
+        param.phpCode,
         param.builtinType,
         param.isInOut(),
         param.isVariadic()
@@ -691,6 +693,8 @@ void add_frame_variables(php::Func& func, const FuncEmitter& fe) {
 
   func.numIters = fe.numIterators();
 }
+
+const StaticString s_DynamicallyCallable("__DynamicallyCallable");
 
 std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
                                       php::Unit* unit,
@@ -734,6 +738,20 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
     return false;
   }();
 
+  ret->sampleDynamicCalls = [&] {
+    if (!(fe.attrs & AttrDynamicallyCallable)) return false;
+
+    auto const it = fe.userAttributes.find(s_DynamicallyCallable.get());
+    if (it == fe.userAttributes.end()) return false;
+
+    assertx(isArrayLikeType(type(it->second)));
+    auto const rate = val(it->second).parr->get(int64_t(0));
+    if (!isIntType(type(rate)) || val(rate).num < 0) return false;
+
+    ret->attrs = Attr(ret->attrs & ~AttrDynamicallyCallable);
+    return true;
+  }();
+
   add_frame_variables(*ret, fe);
 
   if (!RuntimeOption::ConstantFunctions.empty()) {
@@ -752,8 +770,7 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
       auto blk         = php::Block{};
       blk.exnNodeId    = NoExnNodeId;
 
-      blk.hhbcs.push_back(gen_constant(it->second));
-      blk.hhbcs.push_back(bc::RetC {});
+      blk.hhbcs = {gen_constant(it->second), bc::RetC {}};
       ret->blocks.emplace_back(std::move(blk));
 
       ret->dvEntries.resize(fe.params.size(), NoBlockId);
@@ -897,6 +914,8 @@ std::unique_ptr<php::Record> parse_record(php::Unit* unit,
   return ret;
 }
 
+const StaticString s_DynamicallyConstructible("__DynamicallyConstructible");
+
 std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
                                         php::Unit* unit,
                                         const PreClassEmitter& pce) {
@@ -917,6 +936,21 @@ std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
   ret->hasReifiedGenerics = ret->userAttributes.find(s___Reified.get()) !=
                             ret->userAttributes.end();
   ret->hasConstProp       = false;
+
+  ret->sampleDynamicConstruct = [&] {
+    if (!(ret->attrs & AttrDynamicallyConstructible)) return false;
+
+    auto const it = ret->userAttributes.find(s_DynamicallyConstructible.get());
+    if (it == ret->userAttributes.end()) return false;
+
+    assertx(isArrayLikeType(type(it->second)));
+    auto const rate = val(it->second).parr->get(int64_t(0));
+    if (!isIntType(type(rate)) || val(rate).num < 0) return false;
+
+    ret->attrs = Attr(ret->attrs & ~AttrDynamicallyConstructible);
+    return true;
+  }();
+
 
   for (auto& iface : pce.interfaces()) {
     ret->interfaceNames.push_back(iface);

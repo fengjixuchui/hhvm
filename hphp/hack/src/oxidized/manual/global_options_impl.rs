@@ -96,12 +96,15 @@ impl Default for GlobalOptions {
             glean_reponame: String::new(),
             symbol_write_root_path: String::new(),
             symbol_write_hhi_path: String::new(),
+            symbol_write_ignore_paths: vec![],
+            symbol_write_index_paths: vec![],
             po_enable_first_class_function_pointers: false,
             po_disable_modes: false,
             po_disable_hh_ignore_error: false,
             po_disable_array: false,
             tco_enable_systemlib_annotations: false,
             tco_pu_enabled_paths: (false, vec![]),
+            tco_widen_is_array: false,
         }
     }
 }

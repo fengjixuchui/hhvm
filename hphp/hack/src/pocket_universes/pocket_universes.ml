@@ -95,6 +95,12 @@ let new_ pos cls args : T.expr =
   let tany = T.tany pos in
   (tany, New (class_id pos cls, [], args, None, tany))
 
+let assign pos target expr =
+  let tany = T.tany pos in
+  (pos, Expr (tany, Binop (Ast_defs.Eq None, target, expr)))
+
+let assign_lvar pos target expr = assign pos (lvar pos target) expr
+
 (* Get method from class *)
 let obj_get pos var_name method_name : T.expr =
   (T.tany pos, Obj_get (lvar pos var_name, id pos method_name, OG_nullthrows))
@@ -127,6 +133,12 @@ let error_msg cls instance_name name =
      }
     }
 
+   If the class uses traits T1, .., Tn, then the default case calls the
+   pu$Field_name$Expr_name method on traits T1, .., Tn, catching method
+   not found errors via reflection (as explained below for the Members function).
+   Given the semantics of trait method override, it is necessary to perform
+   manually the search on the used traits.
+
    If the class extends a superclass, the raise statement is replaced with
    a call to parent::pu$Field_name$Expr_name.
 
@@ -135,12 +147,14 @@ let error_msg cls instance_name name =
    or is self-contained.  In this case the accessor functions include the
    default call to parent.  Type checking ensures that the default case is
    not reachable if the PU was not inherited from the super-class.
+
 *)
 let gen_pu_accessor
     (fun_name : string)
     (pos : pos)
     (final : bool)
     (extends : bool)
+    (uses : string list)
     (info : (string * T.expr) list)
     (error : string) : T.method_ =
   let var_name = "$atom" in
@@ -152,16 +166,81 @@ let gen_pu_accessor
       ~init:[]
       info
   in
-  let default =
-    if extends then
-      let parent_call = class_const pos "parent" fun_name in
-      let call = call pos parent_call [var_atom] in
-      Default (pos, [return pos call])
-    else
-      let open Ast_defs in
-      let msg = (T.tany pos, Binop (Dot, str pos error, var_atom)) in
-      Default (pos, [(pos, Throw (new_ pos "\\Exception" [msg]))])
+  let do_default (extends : bool) (uses : string list) =
+    let tany = T.tany pos in
+    let do_extends =
+      (* returns a stmt_, to be used in the default  *)
+      if extends then
+        let parent_call = class_const pos "parent" fun_name in
+        let call = call pos parent_call [var_atom] in
+        return pos call
+      else
+        let open Ast_defs in
+        let msg = (tany, Binop (Dot, str pos error, var_atom)) in
+        (pos, Throw (new_ pos "\\Exception" [msg]))
+    in
+    match uses with
+    | [] -> Default (pos, [do_extends])
+    | _ :: _ ->
+      let uses_list =
+        List.map ~f:(fun x -> AFvalue (str pos (Utils.strip_ns x))) uses
+      in
+      let default_block =
+        [
+          (* $trait_classes = vec[MyTraitA::class, MyTraitB::class]; *)
+          assign_lvar
+            pos
+            "$trait_classes"
+            (tany, Collection ((pos, "vec"), None, uses_list));
+          (* foreach ($trait_classes as $trait_class) *)
+          ( pos,
+            Foreach
+              ( lvar pos "$trait_classes",
+                As_v (lvar pos "$trait_class"),
+                [
+                  ( pos,
+                    Try
+                      ( [
+                          (* $class = new ReflectionClass($trait_class); *)
+                          assign_lvar
+                            pos
+                            "$class"
+                            (new_
+                               pos
+                               "ReflectionClass"
+                               [lvar pos "$trait_class"]);
+                          (*  $method = $class->getMethod('pu$E$value'); *)
+                          assign_lvar
+                            pos
+                            "$method"
+                            (call
+                               pos
+                               (obj_get pos "$class" "getMethod")
+                               [str pos fun_name]);
+                          (* return $method->invoke(null,$atom); *)
+                          return
+                            pos
+                            (call
+                               pos
+                               (obj_get pos "$method" "invoke")
+                               [(tany, Null); var_atom]);
+                        ],
+                        [
+                          (* catch (Exception $_) {} *)
+                          ( (pos, "Exception"),
+                            (pos, Local_id.make_unscoped "$_"),
+                            [] );
+                        ],
+                        [] ) );
+                ] ) );
+          (* parent::pu$E$value($atom), or raise an exception *)
+          do_extends;
+        ]
+      in
+      Default (pos, default_block)
   in
+
+  let default = do_default extends uses in
   let cases = cases @ [default] in
   let body =
     { fb_ast = [(pos, Switch (var_atom, cases))]; fb_annotation = () }
@@ -215,19 +294,38 @@ let gen_pu_accessor
 *)
 
 (* As for accessors, we do not have a reliable way to detect, whenever a
-   PU is defined in a subclass, if the PU is inherited from the superclass.
-   We thus systematically perform a call to Members() in the parent class to
-   check if there are instances of the PU defined in the superclass.
-   As the Members method might not exist in the superclass, we encapsulate
+   PU is defined in a subclass, if the PU is inherited from the superclass,
+   or if instances are defined in traits being used.  We thus systematically
+   perform a call to Members() in the used traits and in the parent class to
+   check if there are instances of the PU defined in the trait/superclass.
+   As the Members method might not exist in the trait/superclass, we encapsulate
    the call using reflection and catch the eventual exception.
    Reflection can be slow, but Memoization ensures that the class hierarchy
    is explored only once.
 
+   The general shape is:
+
   <<__Memoize, __Override>>
   public static function pu$E$Members() : keyset<string> {
     $result = keyset[ .. strings based on local PU instances ...];
-    $class = new ReflectionClass(parent::class);
+    // exploring used traits
+    $traits = vec[ ... used traits ...];
+    foreach ($traits as $traits_class) {
+      try {
+        $class = new ReflectionClass($traits_class);
+        // might throw if the method is not in the parent class
+        $method = $class->getMethod('pu$E$Members');
+        // method is here, call it
+        $parent_members = $method->invoke(null);
+        foreach ($parent_members as $p) {
+          $result[] = $p;
+        }
+      } catch (ReflectionException $_) {
+      }
+    }
+    // exploring the parent
     try {
+      $class = new ReflectionClass(parent::class);
       // might throw if the method is not in the parent class
       $method = $class->getMethod('pu$E$Members');
       // method is here, call it
@@ -241,62 +339,99 @@ let gen_pu_accessor
    return $result;
   }
 *)
-let gen_Members_extends instance_name pos (pu_members : T.pu_member list) =
+let gen_Members_search
+    instance_name
+    pos
+    (extends : bool)
+    (uses : string list)
+    (pu_members : T.pu_member list) =
   let tany = T.tany pos in
   let m_Members = pu_name_mangle instance_name "Members" in
   let mems =
     List.map ~f:(fun x -> AFvalue (str pos (snd x.pum_atom))) pu_members
   in
-  let assign target expr =
-    (pos, Expr (tany, Binop (Ast_defs.Eq None, target, expr)))
+  let uses_list =
+    List.map ~f:(fun x -> AFvalue (str pos (Utils.strip_ns x))) uses
   in
-  let assign_lvar target expr = assign (lvar pos target) expr in
+  let update_members_from expr =
+    [
+      ( pos,
+        (* try { *)
+        Try
+          ( [
+              (* $class = new ReflectionClass(parent::class / $traits_class) *)
+              assign_lvar pos "$class" (new_ pos "ReflectionClass" [expr]);
+              (* $method = $class->getMethod('pu$E$Members'); *)
+              assign_lvar
+                pos
+                "$method"
+                (call
+                   pos
+                   (obj_get pos "$class" "getMethod")
+                   [str pos m_Members]);
+              (* $parent_members = $method->invoke(null); *)
+              assign_lvar
+                pos
+                "$parent_members"
+                (call pos (obj_get pos "$method" "invoke") [(tany, Null)]);
+              (* foreach ($parent_members as $p) { $result[] = $p; } *)
+              ( pos,
+                Foreach
+                  ( lvar pos "$parent_members",
+                    As_v (lvar pos "$p"),
+                    [
+                      assign
+                        pos
+                        (tany, Array_get (lvar pos "$result", None))
+                        (lvar pos "$p");
+                    ] ) );
+            ],
+            (* } catch (ReflectionException $_) { } *)
+            [
+              ( (pos, "ReflectionException"),
+                (pos, Local_id.make_unscoped "$_"),
+                [] );
+            ],
+            [] ) );
+    ]
+  in
+  let members_traits =
+    if List.is_empty uses then
+      []
+    else
+      [
+        (* $traits_classes = vec[ ... used traits ...] *)
+        assign_lvar
+          pos
+          "$traits_classes"
+          (tany, Collection ((pos, "vec"), None, uses_list));
+        (* foreach ($traits_classes as $traits_class) *)
+        ( pos,
+          Foreach
+            ( lvar pos "$traits_classes",
+              As_v (lvar pos "$traits_class"),
+              update_members_from (lvar pos "$traits_class") ) );
+      ]
+  in
+  let members_parent =
+    if not extends then
+      []
+    else
+      update_members_from (class_const pos "parent" "class")
+  in
   let body =
     {
       fb_ast =
         [
           (* $result = keyset[ ... names of local instances ... ] *)
-          assign_lvar "$result" (tany, Collection ((pos, "keyset"), None, mems));
-          (* $class = new ReflectionClass(parent::class) *)
           assign_lvar
-            "$class"
-            (new_ pos "ReflectionClass" [class_const pos "parent" "class"]);
-          ( pos,
-            (* try { *)
-            Try
-              ( [
-                  (* $method = $class->getMethod('pu$E$Members'); *)
-                  assign_lvar
-                    "$method"
-                    (call
-                       pos
-                       (obj_get pos "$class" "getMethod")
-                       [str pos m_Members]);
-                  (* $parent_members = $method->invoke(null); *)
-                  assign_lvar
-                    "$parent_members"
-                    (call pos (obj_get pos "$method" "invoke") [(tany, Null)]);
-                  (* foreach ($parent_members as $p) { $result[] = $p; } *)
-                  ( pos,
-                    Foreach
-                      ( lvar pos "$parent_members",
-                        As_v (lvar pos "$p"),
-                        [
-                          assign
-                            (tany, Array_get (lvar pos "$result", None))
-                            (lvar pos "$p");
-                        ] ) );
-                ],
-                (* } catch (ReflectionException $_) { } *)
-                [
-                  ( (pos, "ReflectionException"),
-                    (pos, Local_id.make_unscoped "$_"),
-                    [] );
-                ],
-                [] ) );
-          (* return $result; *)
-          return pos (lvar pos "$result");
-        ];
+            pos
+            "$result"
+            (tany, Collection ((pos, "keyset"), None, mems));
+        ]
+        @ members_traits
+        @ members_parent
+        @ [(* return $result; *) return pos (lvar pos "$result")];
       fb_annotation = ();
     }
   in
@@ -327,7 +462,7 @@ let gen_Members_extends instance_name pos (pu_members : T.pu_member list) =
     return keyset[ .. strings based on local PU instances ...];
    }
  *)
-let gen_Members_no_extends instance_name pos (pu_members : T.pu_member list) =
+let gen_Members_no_search instance_name pos (pu_members : T.pu_member list) =
   let tany = T.tany pos in
   let m_Members = pu_name_mangle instance_name "Members" in
   let mems =
@@ -360,15 +495,18 @@ let gen_Members_no_extends instance_name pos (pu_members : T.pu_member list) =
   }
 
 (* Returns the generated methods (accessors + Members) *)
-let gen_pu_methods (class_name : string) (extends : bool) (instance : T.pu_enum)
-    : T.method_ list =
+let gen_pu_methods
+    (class_name : string)
+    (extends : bool)
+    (uses : string list)
+    (instance : T.pu_enum) : T.method_ list =
   let pu_members = instance.pu_members in
   let (pos, instance_name) = instance.pu_name in
   let m_Members =
-    if extends then
-      gen_Members_extends instance_name pos pu_members
+    if extends || not (List.is_empty uses) then
+      gen_Members_search instance_name pos extends uses pu_members
     else
-      gen_Members_no_extends instance_name pos pu_members
+      gen_Members_no_search instance_name pos pu_members
   in
   let info = process_class_enum pu_members in
   let accessors =
@@ -377,7 +515,14 @@ let gen_pu_methods (class_name : string) (extends : bool) (instance : T.pu_enum)
         let fun_name = pu_name_mangle instance_name expr_name in
         let error = error_msg class_name instance_name expr_name in
         let hd =
-          gen_pu_accessor fun_name pos instance.pu_is_final extends info error
+          gen_pu_accessor
+            fun_name
+            pos
+            instance.pu_is_final
+            extends
+            uses
+            info
+            error
         in
         hd :: acc)
       info
@@ -425,13 +570,19 @@ let erase_stmt stmt = visitor#on_stmt () stmt
 
 let erase_fun f = visitor#on_fun_ () f
 
-let process_pufields class_name extends (pu_enums : T.pu_enum list) =
-  List.concat_map ~f:(gen_pu_methods class_name extends) pu_enums
+let process_pufields class_name extends uses (pu_enums : T.pu_enum list) =
+  List.concat_map ~f:(gen_pu_methods class_name uses extends) pu_enums
 
 let update_class c =
+  let trait_name_from_hint th =
+    match snd th with
+    | Happly ((_, tid), _) -> Some tid
+    | _ -> None
+  in
   let methods =
     process_pufields
       (snd c.c_name)
+      (List.filter_map ~f:trait_name_from_hint c.c_uses)
       (not (List.is_empty c.c_extends))
       c.c_pu_enums
   in

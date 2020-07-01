@@ -27,7 +27,6 @@
 #include "hphp/runtime/server/memory-stats.h"
 #include "hphp/runtime/vm/jit/irgen-minstr.h"
 #include "hphp/runtime/vm/jit/translator.h"
-#include "hphp/runtime/vm/globals-array.h"
 #include "hphp/runtime/vm/instance-bits.h"
 #include "hphp/runtime/vm/memo-cache.h"
 #include "hphp/runtime/vm/native-data.h"
@@ -1012,18 +1011,11 @@ void Class::checkPropTypeRedefinition(Slot slot) const {
       oldProp.cls->name(),
       newTCName
     );
-
-  if (result == TypeConstraint::EquivalentResult::DVArray &&
-      !RO::EvalHackArrCompatSpecialization) {
-      assertx(RuntimeOption::EvalHackArrCompatTypeHintNotices);
-      raise_hackarr_compat_notice(msg);
-    } else {
-      raise_property_typehint_error(
-        msg,
-        oldTC.isSoft() && newTC.isSoft(),
-        oldTC.isUpperBound() || newTC.isUpperBound()
-      );
-    }
+    raise_property_typehint_error(
+      msg,
+      oldTC.isSoft() && newTC.isSoft(),
+      oldTC.isUpperBound() || newTC.isUpperBound()
+    );
   }
 
   if (RuntimeOption::EvalEnforceGenericsUB > 0 &&
@@ -1395,7 +1387,7 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) con
       // Type constants with the low bit set are already resolved and can be
       // returned after masking out that bit.
       //
-      // We can't check isDictOrDArray here because we're using that low bit as
+      // We can't check isHAMSafeDArray here because we're using that low bit as
       // a marker; instead, check isArrayLike and do the stricter check below.
       assertx(isArrayLikeType(type(cnsVal)));
       assertx(!isRefcountedType(type(cnsVal)));
@@ -1403,7 +1395,7 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) con
       auto const rawData = reinterpret_cast<intptr_t>(typeCns);
       if (rawData & 0x1) {
         auto const resolved = reinterpret_cast<ArrayData*>(rawData ^ 0x1);
-        assertx(resolved->isDictOrDArray());
+        assertx(resolved->isHAMSafeDArray());
         return make_persistent_array_like_tv(resolved);
       }
       if (what == ClsCnsLookup::IncludeTypesPartial) {
@@ -1413,6 +1405,14 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) con
       return *cnsVal;
     }
   }
+
+  /*
+   * We use a sentinel static array to mark constants that are being evaluated
+   * during recursive resolution. This array is never exposed to the rest of
+   * the runtime, so we can test for it by pointer equality.
+   */
+  static auto const s_sentinelVec = PackedArray::CopyStatic(staticEmptyVec());
+  assertx(s_sentinelVec != staticEmptyVec());
 
   /*
    * We have either a constant with a non-scalar initializer or an unresolved
@@ -1434,11 +1434,10 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) con
   if (m_nonScalarConstantCache.isInit()) {
     auto const cCns = clsCnsData->get(clsCnsName);
     if (cCns.is_init()) {
-      // There's an entry in the cache for this (type) constant. If its the
-      // globals array, this (type) constant is recursively defined, so raise
-      // an error. Otherwise just return it.
-      if (UNLIKELY(isArrayType(cCns.type()) &&
-                   cCns.val().parr == get_global_variables())) {
+      // There's an entry in the cache for this (type) constant. If it's the
+      // sentinel value, the constant is recursively defined - throw an error.
+      // Otherwise, return the cached result.
+      if (UNLIKELY(tvIsVec(cCns) && val(cCns).parr == s_sentinelVec)) {
         raise_error(
           folly::sformat(
             "Cannot declare self-referencing {} '{}::{}'",
@@ -1463,9 +1462,9 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) con
   }
 
   // We're going to run the 86cinit to get the constant's value, or try to
-  // resolve the type constant. Store the globals array in the (type)
-  // constant's cache entry to prevent recursion.
-  auto marker = make_array_like_tv(get_global_variables());
+  // resolve the type constant. Store the sentinel value as this (type)
+  // constant's cache entry // so that we can detect recursion.
+  auto marker = make_array_like_tv(s_sentinelVec);
   clsCnsData.set(StrNR(clsCnsName), tvAsCVarRef(&marker), true /* isKey */);
 
   if (cns.isType()) {
@@ -1481,7 +1480,7 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName, ClsCnsLookup what) con
     } catch (const Exception& e) {
       raise_error(e.getMessage());
     }
-    assertx(resolvedTS.isDictOrDArray());
+    assertx(resolvedTS.isHAMSafeDArray());
 
     auto const ad = ArrayData::GetScalarArray(std::move(resolvedTS));
     if (persistent) {
@@ -2487,7 +2486,7 @@ void Class::setProperties() {
           && (preProp->attrs() & VisibilityAttrs)
              > (parentProp->attrs & VisibilityAttrs)) {
         raise_error(
-          "Access level to %s::$%s() must be %s (as in class %s) or weaker",
+          "Access level to %s::$%s must be %s (as in class %s) or weaker",
           m_preClass->name()->data(), preProp->name()->data(),
           attrToVisibilityStr(parentProp->attrs),
           m_parent->name()->data());
@@ -2636,7 +2635,7 @@ void Class::setProperties() {
         if ((preProp->attrs() & VisibilityAttrs)
             > (parentSProp.attrs & VisibilityAttrs)) {
           raise_error(
-            "Access level to %s::$%s() must be %s (as in class %s) or weaker",
+            "Access level to %s::$%s must be %s (as in class %s) or weaker",
             m_preClass->name()->data(), preProp->name()->data(),
             attrToVisibilityStr(parentSProp.attrs),
             m_parent->name()->data());
@@ -3112,7 +3111,7 @@ void Class::setReifiedData() {
   }
   if (m_hasReifiedGenerics) {
     auto tv = it->second;
-    assertx(tvIsVecOrVArray(tv));
+    assertx(tvIsHAMSafeVArray(tv));
     allocExtraData();
     m_extra.raw()->m_reifiedGenericsInfo =
       extractSizeAndPosFromReifiedAttribute(tv.m_data.parr);

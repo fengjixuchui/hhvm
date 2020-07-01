@@ -54,12 +54,11 @@ enum class HeaderKind : uint8_t {
   //  5. We support fast mask-compare tests for packed and mixed layouts.
 
   // dvarrays, with bespoke counterparts
-  Packed, BespokeVArray, Mixed, BespokeDArray,
-  // Plain PHP arrays. Globals is supported, but deprecated; RecordArray is
-  // incompatible with both dvarray specialization and with bespoke arrays.
-  Globals, RecordArray, Plain, BespokeArray,
+  Mixed, BespokeDArray, Packed, BespokeVArray,
+  // Plain PHP arrays.
+  Plain, BespokeArray,
   // Hack arrays, with bespoke counterparts
-  Vec, BespokeVec, Dict, BespokeDict, Keyset, BespokeKeyset,
+  Keyset, BespokeKeyset, Dict, BespokeDict, Vec, BespokeVec,
 
   // Other ordinary refcounted heap objects
   String, Resource, ClsMeth, Record, RFunc,
@@ -150,7 +149,7 @@ enum class GCBits : uint8_t {};
  * padding with ONE_BIT_REFCOUNT.
  *
  * 0       32     40      48            56
- * [ cnt | kind | marks | arrBits      | sizeClass ] Packed, Vec, RecordArray
+ * [ cnt | kind | marks | arrBits      | sizeClass ] Packed, Vec
  * [ cnt | kind | marks | arrBits      | keyTypes  ] Mixed, Dict
  * [ cnt | kind | marks |                          ] Empty, Globals, Keyset
  * [ cnt | kind | marks | sizeClass:16             ] String
@@ -283,7 +282,7 @@ inline constexpr bool isObjectKind(HeaderKind k) {
 }
 
 inline constexpr bool isArrayKind(HeaderKind k) {
-  return k >= HeaderKind::Packed && k <= HeaderKind::BespokeKeyset;
+  return k >= HeaderKind::Mixed && k <= HeaderKind::BespokeVec;
 }
 
 inline constexpr bool isFreeKind(HeaderKind k) {

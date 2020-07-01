@@ -297,6 +297,10 @@ Instruction set
   Returns S0, with Nullptr removed from its type. This instruction currently
   supports a very limited range of types but can be expanded if needed.
 
+| CheckImplicitContextNull, ND, NA, B
+
+  If the implicit context on RDS is null, branch to block B.
+
 | CheckSmashableClass, ND, S(Smashable) S(Cls), B
 
   If the lower 32 bits of S0 does not match class pointer S1, branch to block B.
@@ -482,8 +486,6 @@ To darray conversion:
 
 
 To bool conversions:
-
-| ConvArrToBool,               D(Bool), S(Arr),                           NF
 
 | ConvDblToBool,               D(Bool), S(Dbl),                           NF
 
@@ -1582,13 +1584,6 @@ To string conversions:
   This instruction assumes it can take the values from the stack
   without increfing them.
 
-| NewRecordArray<offset,keys...>, DArrRecord, S(RecDesc) S(StkPtr), PRc|CRc
-
-  Allocate a new record array, given the type S0 and N immediate keys
-  and taking N elements off the stack given by S1, at `offset'.
-  This instruction assumes it can take the values from the stack
-  without increfing them.
-
 | NewStructArray<offset,keys...>,  D(Arr),         S(StkPtr), PRc|CRc
 
 | NewStructDArray<offset,keys...>, DDArr,          S(StkPtr), PRc|CRc
@@ -1812,6 +1807,10 @@ To string conversions:
 
   Store S1 into the location pointed to by S0.
 
+| StImplicitContext, ND, S(Obj), NF
+
+  Stores the implicit context from RDS to the WaitHandle in S0.
+
 | StLoc<localId>, ND, S(FramePtr) S(Cell), NF
 
   Store S1 to local number localId on the frame pointed to by S0.
@@ -2002,8 +2001,6 @@ To string conversions:
 
 | CountArray,      D(Int), S(Arr),    NF
 
-| CountArrayFast,  D(Int), S(Arr),    NF
-
 | CountVec,        D(Int), S(Vec),    NF
 
 | CountDict,       D(Int), S(Dict),   NF
@@ -2012,11 +2009,8 @@ To string conversions:
 
 | CountCollection, D(Int), S(Obj),    NF
 
-  Computes the number of elements in S0 using the same definition as Count, but
-  with a restriction on the input type.
-
-  CountArray expects any array. CountArrayFast expects an array whose kind is
-  not kGlobalsKind. CountCollection expects a collection object.
+  Computes the number of elements in S0 using the same definition as Count,
+  but with a restriction on the input type that allows for optimizations.
 
 | Nop, ND, NA, NF
 

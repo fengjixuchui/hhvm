@@ -255,7 +255,8 @@ module NastCheck = struct
     | RepeatedRecordFieldName
     | PhpLambdaDisallowed
     | EntryPointArguments
-    | VariadicMemoize (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | VariadicMemoize
+    | AbstractMethodMemoize (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -635,7 +636,8 @@ module Typing = struct
     | ArrayAccessWrite
     | InvalidArrayKeyWrite
     | NullMemberWrite
-    | NonObjectMemberWrite (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | NonObjectMemberWrite
+    | ConcreteConstInterfaceOverride (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum

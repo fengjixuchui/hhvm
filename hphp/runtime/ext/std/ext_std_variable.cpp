@@ -16,6 +16,7 @@
 */
 #include "hphp/runtime/ext/std/ext_std_variable.h"
 
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/builtin-functions.h"
@@ -24,7 +25,6 @@
 #include "hphp/runtime/base/variable-unserializer.h"
 #include "hphp/runtime/base/zend-functions.h"
 #include "hphp/runtime/vm/class-meth-data-ref.h"
-#include "hphp/runtime/vm/globals-array.h"
 
 #include "hphp/runtime/vm/jit/translator-inline.h"
 
@@ -129,7 +129,7 @@ bool HHVM_FUNCTION(HH_is_php_array, const Variant& v) {
 
 bool HHVM_FUNCTION(is_array, const Variant& v) {
   if (UNLIKELY(RuntimeOption::EvalWidenIsArray)) {
-    return HHVM_FUNCTION(HH_is_any_array, v);
+    return is_any_array(v.asTypedValue(), /* logOnHackArrays = */ true);
   }
   return is_array(v.asTypedValue(), /*logOnHackArrays=*/true);
 }
@@ -154,6 +154,14 @@ bool HHVM_FUNCTION(HH_is_darray, const Variant& val) {
   return is_darray(val.asTypedValue());
 }
 
+bool HHVM_FUNCTION(HH_is_dict_or_darray, const Variant& val) {
+  return is_dict_or_darray(val.asTypedValue());
+}
+
+bool HHVM_FUNCTION(HH_is_vec_or_varray, const Variant& val) {
+  return is_vec_or_varray(val.asTypedValue());
+}
+
 bool HHVM_FUNCTION(HH_is_any_array, const Variant& val) {
   if (tvIsClsMeth(val.asTypedValue())) {
     if (RuntimeOption::EvalIsCompatibleClsMethType) {
@@ -175,7 +183,7 @@ bool HHVM_FUNCTION(HH_is_list_like, const Variant& val) {
   }
   auto const& ty = val.getType();
   if (!isArrayLikeType(ty)) return false;
-  if (isVecType(ty) || isVArrayType(ty)) return true;
+  if (isVecType(ty)) return true;
   auto const& arr = val.asCArrRef();
   return arr->isVectorData();
 }
@@ -656,10 +664,6 @@ bool HHVM_FUNCTION(HH_is_late_init_sprop_init,
   return type(lookup.val) != KindOfUninit;
 }
 
-Array HHVM_FUNCTION(HH_global_keys) {
-  return Array(get_global_variables()->keys());
-}
-
 bool HHVM_FUNCTION(HH_global_key_exists, StringArg key) {
   return g_context->m_globalVarEnv->lookup(key.get()) != nullptr;
 }
@@ -684,6 +688,8 @@ void StandardExtension::initVariable() {
   HHVM_FALIAS(HH\\is_keyset, HH_is_keyset);
   HHVM_FALIAS(HH\\is_varray, HH_is_varray);
   HHVM_FALIAS(HH\\is_darray, HH_is_darray);
+  HHVM_FALIAS(HH\\is_vec_or_varray, HH_is_vec_or_varray);
+  HHVM_FALIAS(HH\\is_dict_or_darray, HH_is_dict_or_darray);
   HHVM_FALIAS(HH\\is_any_array, HH_is_any_array);
   HHVM_FALIAS(HH\\is_php_array, HH_is_php_array);
   HHVM_FALIAS(HH\\is_list_like, HH_is_list_like);
@@ -712,7 +718,6 @@ void StandardExtension::initVariable() {
   HHVM_FALIAS(HH\\Lib\\_Private\\Native\\last_key, HH_last_key);
   HHVM_FALIAS(HH\\is_late_init_prop_init, HH_is_late_init_prop_init);
   HHVM_FALIAS(HH\\is_late_init_sprop_init, HH_is_late_init_sprop_init);
-  HHVM_FALIAS(HH\\global_keys, HH_global_keys);
   HHVM_FALIAS(HH\\global_key_exists, HH_global_key_exists);
 
   if (RuntimeOption::EnableIntrinsicsExtension) {

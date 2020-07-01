@@ -715,19 +715,33 @@ let write_symbol_info_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
         | None -> acc
         | Some _ -> path :: acc)
   in
-  (* ensuring we are writing to fresh files *)
-  let dir_exists = (try Sys.is_directory out_dir with _ -> false) in
-  if dir_exists then
-    failwith "JSON Write Directory Exists"
-  else
-    Sys_utils.mkdir_p out_dir;
+  (* Ensure we are writing to fresh files *)
+  let is_invalid =
+    try
+      if not (Sys.is_directory out_dir) then
+        true
+      else
+        Array.length (Sys.readdir out_dir) > 0
+    with _ ->
+      Sys_utils.mkdir_p out_dir;
+      false
+  in
+  if is_invalid then failwith "JSON write directory is invalid or non-empty";
 
   Hh_logger.log "Writing JSON to: %s" out_dir;
 
   let ctx = Provider_utils.ctx_from_server_env env in
   let root_path = env.swriteopt.symbol_write_root_path in
   let hhi_path = env.swriteopt.symbol_write_hhi_path in
-  Symbol_info_writer.go genv.workers ctx out_dir root_path hhi_path files;
+  let ignore_paths = env.swriteopt.symbol_write_ignore_paths in
+  Symbol_info_writer.go
+    genv.workers
+    ctx
+    out_dir
+    root_path
+    hhi_path
+    ignore_paths
+    files;
 
   (env, t)
 
@@ -745,16 +759,6 @@ let full_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
     else
       load_naming_table genv env
   in
-  let env =
-    let remote_enabled =
-      genv.ServerEnv.local_config.SLC.remote_type_check
-        .SLC.RemoteTypeCheck.enabled
-    in
-    if remote_enabled && is_check_mode then
-      start_typing_delegate genv env
-    else
-      env
-  in
   if not is_check_mode then
     SearchServiceRunner.update_fileinfo_map env.naming_table SearchUtils.Init;
   let fast = Naming_table.to_fast env.naming_table in
@@ -765,7 +769,24 @@ let full_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
       ~f:(fun x m -> Relative_path.Map.remove m x)
       ~init:fast
   in
-  type_check genv env (Relative_path.Map.keys fast) t
+  let fnl = Relative_path.Map.keys fast in
+  let env =
+    if is_check_mode then
+      let should_start_delegate =
+        ServerCheckUtils.should_do_remote
+          genv
+          env.tcopt
+          ~file_count:(List.length fnl)
+          env.errorl
+      in
+      if should_start_delegate then
+        start_typing_delegate genv env
+      else
+        env
+    else
+      env
+  in
+  type_check genv env fnl t
 
 let parse_only_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
     ServerEnv.env * float =

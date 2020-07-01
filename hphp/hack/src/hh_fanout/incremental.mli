@@ -17,8 +17,9 @@ type dep_graph_delta = (Typing_deps.Dep.t * Typing_deps.Dep.t) HashSet.t
 
 (** Any options which would affect the results of the returned fanouts. *)
 type client_config = {
-  from: string;
+  client_id: string;
   dep_table_saved_state_path: Path.t;
+  errors_saved_state_path: Path.t;
   naming_table_saved_state_path: Naming_sqlite.db_path;
 }
 
@@ -57,6 +58,19 @@ class type cursor =
       MultiWorker.worker list ->
       Relative_path.Set.t ->
       cursor
+
+    (** Typecheck the files in the fanout for this cursor.
+
+    Returns a cursor with the typechecking errors cached. The resulting
+    cursor is NOT persisted to disk. The caller is responsible for persisting
+    it using `State.add_cursor`.
+
+    If no new cursor was created (because no additional work needed to be
+    performed, i.e. the typechecking errors were already cached for this
+    cursor), then returns `None` instead of `Some cursor`.
+    *)
+    method calculate_errors :
+      Provider_context.t -> MultiWorker.worker list -> Errors.t * cursor option
   end
 
 class type state =

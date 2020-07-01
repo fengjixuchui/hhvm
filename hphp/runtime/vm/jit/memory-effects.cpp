@@ -1007,6 +1007,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case StMem:
     return PureStore { pointee(inst.src(0)), inst.src(1), inst.src(0) };
 
+  case StImplicitContext:
+    return may_load_store(AEmpty, AEmpty);
+
   case LdClsInitElem:
     return PureLoad { AHeapAny };
 
@@ -1142,7 +1145,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     }
 
   case NewRecord:
-  case NewRecordArray:
     {
       auto const extra = inst.extra<NewStructData>();
       auto const stack_in = AStack {
@@ -1579,6 +1581,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case AssertNonNull:
   case CheckNonNull:
   case CheckNullptr:
+  case CheckImplicitContextNull:
   case CheckSmashableClass:
   case Ceil:
   case Floor:
@@ -1712,10 +1715,8 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case IncStat:
   case ContPreNext:
   case ContStartedCheck:
-  case ConvArrToBool:
   case ConvArrToDbl:
   case CountArray:
-  case CountArrayFast:
   case CountVec:
   case CountDict:
   case CountKeyset:

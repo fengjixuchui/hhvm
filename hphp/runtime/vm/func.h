@@ -657,6 +657,11 @@ struct Func final {
   bool hasThisInBody() const;
 
   /*
+   * Does this function have the __NoContext attribute?
+   */
+  bool hasNoContextAttr() const;
+
+  /*
    * Is this Func owned by a PreClass?
    *
    * A PreFunc may be "adopted" by a Class when clone() is called, but only the
@@ -921,6 +926,14 @@ struct Func final {
    * Is this func allowed to be called dynamically?
    */
   bool isDynamicallyCallable() const;
+
+  /*
+   * If this function is called dynamically should we raise sampled warnings?
+   *
+   * N.B. When errors are enabled for dynamic calls this overrides that behavior
+   *      for functions which specify it.
+   */
+  folly::Optional<int64_t> dynCallSampleRate() const;
 
   /*
    * Is this a meth_caller func?
@@ -1216,6 +1229,7 @@ private:
     UpperBoundVec m_returnUBs;
     Offset m_past;  // Only read if SharedData::m_pastDelta is kSmallDeltaLimit
     int m_line2;    // Only read if SharedData::m_line2 is kSmallDeltaLimit
+    int64_t m_dynCallSampleRate;
   };
 
   /*

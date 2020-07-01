@@ -28,7 +28,7 @@ use naming_special_names_rust::{
     special_idents, superglobals, typehints, user_attributes,
 };
 use ocaml_helper::int_of_str_opt;
-use options::{CompilerFlags, HhvmFlags, Options};
+use options::{CompilerFlags, HhvmFlags, LangFlags, Options};
 use oxidized::{
     aast, aast_defs,
     aast_visitor::{visit, visit_mut, AstParams, Node, NodeMut, Visitor, VisitorMut},
@@ -1303,14 +1303,15 @@ fn is_struct_init(
     env: &Env,
     fields: &[tast::Afield],
     allow_numerics: bool,
-) -> bool {
+) -> Result<bool> {
     let mut are_all_keys_non_numeric_strings = true;
     let mut uniq_keys = std::collections::HashSet::<String>::new();
     for f in fields.iter() {
         if let tast::Afield::AFkvalue(key, _) = f {
             // TODO(hrust): if key is String, don't clone and call fold_expr
             let mut key = key.clone();
-            ast_constant_folder::fold_expr(&mut key, e, &env.namespace);
+            ast_constant_folder::fold_expr(&mut key, e, &env.namespace)
+                .map_err(|e| unrecoverable(format!("{}", e)))?;
             if let tast::Expr(_, tast::Expr_::String(s)) = key {
                 are_all_keys_non_numeric_strings =
                     are_all_keys_non_numeric_strings && non_numeric(&s);
@@ -1324,10 +1325,10 @@ fn is_struct_init(
     }
     let num_keys = fields.len();
     let limit = *(e.options().max_array_elem_size_on_the_stack.get()) as usize;
-    (allow_numerics || are_all_keys_non_numeric_strings)
+    Ok((allow_numerics || are_all_keys_non_numeric_strings)
         && uniq_keys.len() == num_keys
         && num_keys <= limit
-        && num_keys != 0
+        && num_keys != 0)
 }
 
 fn emit_struct_array<C: FnOnce(&mut Emitter, Vec<String>) -> Result<InstrSeq>>(
@@ -1345,7 +1346,8 @@ fn emit_struct_array<C: FnOnce(&mut Emitter, Vec<String>) -> Result<InstrSeq>>(
                 E(_, E_::String(s)) => Ok((s.clone(), emit_expr(e, env, v)?)),
                 _ => {
                     let mut k = k.clone();
-                    ast_constant_folder::fold_expr(&mut k, e, &env.namespace);
+                    ast_constant_folder::fold_expr(&mut k, e, &env.namespace)
+                        .map_err(|e| unrecoverable(format!("{}", e)))?;
                     match k {
                         E(_, E_::String(s)) => Ok((s.clone(), emit_expr(e, env, v)?)),
                         _ => Err(unrecoverable("Key must be a string")),
@@ -1373,7 +1375,7 @@ fn emit_dynamic_collection(
     let pos = &expr.0;
     let count = fields.len();
     let emit_dict = |e: &mut Emitter| {
-        if is_struct_init(e, env, fields, true) {
+        if is_struct_init(e, env, fields, true)? {
             emit_struct_array(e, env, pos, fields, |_, x| Ok(instr::newstructdict(x)))
         } else {
             let ctor = InstructLitConst::NewDictArray(count as isize);
@@ -1381,7 +1383,7 @@ fn emit_dynamic_collection(
         }
     };
     let emit_collection_helper = |e: &mut Emitter, ctype| {
-        if is_struct_init(e, env, fields, true) {
+        if is_struct_init(e, env, fields, true)? {
             Ok(InstrSeq::gather(vec![
                 emit_struct_array(e, env, pos, fields, |_, x| Ok(instr::newstructdict(x)))?,
                 emit_pos(pos),
@@ -1443,7 +1445,7 @@ fn emit_dynamic_collection(
             })
         }
         E_::Darray(_) => {
-            if is_struct_init(e, env, fields, false /* allow_numerics */) {
+            if is_struct_init(e, env, fields, false /* allow_numerics */)? {
                 let hack_arr_dv_arrs = hack_arr_dv_arrs(e.options());
                 emit_struct_array(e, env, pos, fields, |_, arg| {
                     let instr = if hack_arr_dv_arrs {
@@ -1465,7 +1467,7 @@ fn emit_dynamic_collection(
         _ => {
             if is_packed_init(e.options(), fields, true /* hack_arr_compat */) {
                 emit_value_only_collection(e, env, pos, fields, InstructLitConst::NewPackedArray)
-            } else if is_struct_init(e, env, fields, false /* allow_numerics */) {
+            } else if is_struct_init(e, env, fields, false /* allow_numerics */)? {
                 emit_struct_array(e, env, pos, fields, |_, x| Ok(instr::newstructarray(x)))
             } else if is_packed_init(e.options(), fields, false /* hack_arr_compat*/) {
                 let constr = InstructLitConst::NewArray(count as isize);
@@ -1558,18 +1560,12 @@ fn emit_record(
     e: &mut Emitter,
     env: &Env,
     pos: &Pos,
-    (cid, is_array, es): &(tast::Sid, bool, Vec<(tast::Expr, tast::Expr)>),
+    (cid, es): &(tast::Sid, Vec<(tast::Expr, tast::Expr)>),
 ) -> Result {
     let es = mk_afkvalues(es);
     let id = class::Type::from_ast_name_and_mangle(&cid.1);
     emit_symbol_refs::State::add_class(e, id.clone());
-    emit_struct_array(e, env, pos, &es, |_, keys| {
-        if *is_array {
-            Ok(instr::new_recordarray(id, keys))
-        } else {
-            Ok(instr::new_record(id, keys))
-        }
-    })
+    emit_struct_array(e, env, pos, &es, |_, keys| Ok(instr::new_record(id, keys)))
 }
 
 fn emit_call_isset_expr(e: &mut Emitter, env: &Env, outer_pos: &Pos, expr: &tast::Expr) -> Result {
@@ -2612,6 +2608,9 @@ fn emit_special_function(
                 })?,
             )))
         }
+        ("__hhvm_internal_getmemokeyl", &[E(_, E_::Lvar(ref param))]) if e.systemlib() => Ok(Some(
+            instr::getmemokeyl(local::Type::Named(local_id::get_name(&param.1).into())),
+        )),
         _ => Ok(
             match (
                 args,
@@ -2875,7 +2874,6 @@ fn emit_is(e: &mut Emitter, env: &Env, pos: &Pos, h: &tast::Hint) -> Result {
 }
 
 fn istype_op(opts: &Options, id: impl AsRef<str>) -> Option<IstypeOp> {
-    let widen_is_array = opts.hhvm.flags.contains(HhvmFlags::WIDEN_IS_ARRAY);
     let hack_arr_dv_arrs = hack_arr_dv_arrs(opts);
     use IstypeOp::*;
     match id.as_ref() {
@@ -2883,7 +2881,7 @@ fn istype_op(opts: &Options, id: impl AsRef<str>) -> Option<IstypeOp> {
         "is_bool" => Some(OpBool),
         "is_float" | "is_real" | "is_double" => Some(OpDbl),
         "is_string" => Some(OpStr),
-        "is_array" => Some(if widen_is_array { OpArrLike } else { OpArr }),
+        "is_array" => Some(OpArr),
         "is_object" => Some(OpObj),
         "is_null" => Some(OpNull),
         "is_scalar" => Some(OpScalar),
@@ -4375,8 +4373,23 @@ fn emit_cast(
                 typehints::INT => instr::cast_int(),
                 typehints::BOOL => instr::cast_bool(),
                 typehints::STRING => instr::cast_string(),
-                typehints::ARRAY => instr::cast_array(),
                 typehints::FLOAT => instr::cast_double(),
+                typehints::ARRAY => {
+                    let disable_array_cast = e
+                        .options()
+                        .hhvm
+                        .hack_lang
+                        .flags
+                        .contains(LangFlags::DISABLE_ARRAY_CAST);
+                    if disable_array_cast {
+                        return Err(emit_fatal::raise_fatal_parse(
+                            pos,
+                            "(array) cast is no longer supported",
+                        ));
+                    } else {
+                        instr::cast_array()
+                    }
+                }
                 _ => {
                     return Err(emit_fatal::raise_fatal_parse(
                         pos,

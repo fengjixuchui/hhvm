@@ -400,6 +400,10 @@ let load ~silent config_filename options =
       ?glean_reponame:(string_opt "glean_reponame" config)
       ?symbol_write_root_path:(string_opt "symbol_write_root_path" config)
       ?symbol_write_hhi_path:(string_opt "symbol_write_hhi_path" config)
+      ?symbol_write_ignore_paths:
+        (string_list_opt "symbol_write_ignore_paths" config)
+      ?symbol_write_index_paths:
+        (string_list_opt "symbol_write_index_paths" config)
       ?po_disallow_func_ptrs_in_constants:
         (bool_opt "disallow_func_ptrs_in_constants" config)
       ?tco_error_php_lambdas:(bool_opt "error_php_lambdas" config)
@@ -428,6 +432,7 @@ let load ~silent config_filename options =
           Some
             ( false,
               List.map ~f:(fun suffix -> Relative_path.from_root ~suffix) l ))
+      ?tco_widen_is_array:(bool_opt "widen_is_array" config)
       ()
   in
   Errors.allowed_fixme_codes_strict :=

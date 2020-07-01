@@ -1310,7 +1310,6 @@ and check_constant_expr env (pos, e) =
   | Aast.Call (_, (_, Aast.Id (_, cn)), _, el, unpacked_element)
     when String.equal cn SN.AutoimportedFunctions.fun_
          || String.equal cn SN.AutoimportedFunctions.class_meth
-         || String.equal cn SN.StdlibFunctions.mark_legacy_hack_array
          || String.equal cn SN.StdlibFunctions.array_mark_legacy
          (* Tuples are not really function calls, they are just parsed that way*)
          || String.equal cn SN.SpecialFunctions.tuple ->
@@ -2277,10 +2276,10 @@ and expr_ env p (e : Nast.expr_) =
         oexpr env unpacked_element,
         p )
   | Aast.New _ -> failwith "ast_to_nast aast.new"
-  | Aast.Record (id, is_array, l) ->
+  | Aast.Record (id, l) ->
     let () = check_name id in
     let l = List.map l (fun (e1, e2) -> (expr env e1, expr env e2)) in
-    N.Record (id, is_array, l)
+    N.Record (id, l)
   | Aast.Efun (f, idl) ->
     let idl =
       List.fold_right idl ~init:[] ~f:(fun ((p, x) as id) acc ->
@@ -2524,6 +2523,7 @@ and class_pu_enum env pu_enum =
     in
     List.map ~f:member pu_enum.pu_members
   in
+  let pu_case_types = type_paraml env pu_case_types in
   {
     pu_annotation = ();
     pu_name = pu_enum.pu_name;

@@ -290,12 +290,10 @@ bool opcodeMayRaise(Opcode opc) {
   case NSameVec:
   case SameDict:
   case SameVec:
-    return RuntimeOption::EvalHackArrCompatDVCmpNotices ||
-           RuntimeOption::EvalHackArrCompatCheckCompare;
+    return RuntimeOption::EvalHackArrCompatCheckCompare;
 
   case IsTypeStruct:
     return RuntimeOption::EvalHackArrCompatIsArrayNotices ||
-           RuntimeOption::EvalHackArrCompatTypeHintNotices ||
            RuntimeOption::EvalIsExprEnableUnresolvedWarning ||
            RuntimeOption::EvalIsVecNotices;
 
@@ -438,7 +436,6 @@ bool opcodeMayRaise(Opcode opc) {
   case NeqVec:
   case NewKeysetArray:
   case NewRecord:
-  case NewRecordArray:
   case OODeclExists:
   case OrdStrIdx:
   case PrintBool:
@@ -562,6 +559,7 @@ bool opcodeMayRaise(Opcode opc) {
   case CheckDArray:
   case CheckDVArray:
   case CheckDictOffset:
+  case CheckImplicitContextNull:
   case CheckInit:
   case CheckInitMem:
   case CheckIter:
@@ -603,7 +601,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ContStarted:
   case ContStartedCheck:
   case ContValid:
-  case ConvArrToBool:
   case ConvArrToDArr:
   case ConvArrToDbl:
   case ConvArrToNonDVArr:
@@ -637,7 +634,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ConvVecToVArr:
   case ConvPtrToLval:
   case CountArray:
-  case CountArrayFast:
   case CountCollection:
   case CountDict:
   case CountKeyset:
@@ -970,6 +966,7 @@ bool opcodeMayRaise(Opcode opc) {
   case StLocRange:
   case StMBase:
   case StMem:
+  case StImplicitContext:
   case StOutValue:
   case StrictlyIntegerConv:
   case StringIsset:

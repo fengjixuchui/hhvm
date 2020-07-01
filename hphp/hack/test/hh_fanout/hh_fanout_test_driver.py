@@ -42,10 +42,20 @@ def copy(source: Path, dest: Path) -> None:
     shutil.copy(source, dest)
 
 
-def exec(args: List[str]) -> str:
-    log(f"Running: {' '.join(args)}")
-    result = subprocess.check_output(args, stderr=subprocess.DEVNULL)
-    return result.decode()
+def exec(args: List[str], *, raise_on_error: bool = True) -> str:
+    command_line = " ".join(args)
+    log(f"Running: {command_line}")
+    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout = result.stdout
+    if raise_on_error and result.returncode != 0:
+        # stderr is pretty noisy ordinarily, and causes the logs to be
+        # truncated with its length, so only surface it in cases of error.
+        stderr = result.stderr.decode()
+        raise RuntimeError(
+            f"Command {command_line} failed with return code {result.returncode}.\n"
+            + f"Stderr: {stderr}\n"
+        )
+    return stdout.decode()
 
 
 @dataclass
@@ -64,21 +74,23 @@ class SavedStateInfo:
 def generate_saved_state(env: Env, target_dir: Path) -> SavedStateInfo:
     saved_state_path = os.path.join(target_dir, "dep_table")
     naming_table_path = os.path.join(target_dir, "naming_table.sqlite")
-    subprocess.check_call(
-        [env.hh_server_path, env.root_dir, "--save-state", saved_state_path],
-        # Don't include the "No errors!" output in the test output.
-        stdout=sys.stderr,
+    exec(
+        [
+            env.hh_server_path,
+            env.root_dir,
+            "--save-state",
+            saved_state_path,
+            "--gen-saved-ignore-type-errors",
+        ]
     )
-    subprocess.check_call(
+    exec(
         [
             env.hh_server_path,
             "--check",
             env.root_dir,
             "--save-naming",
             naming_table_path,
-        ],
-        # Don't include the "No errors!" output in the test output.
-        stdout=sys.stderr,
+        ]
     )
     return SavedStateInfo(
         dep_table_path=saved_state_path + ".sql", naming_table_path=naming_table_path
@@ -100,7 +112,7 @@ def run_hh_fanout(
     common_args = []
     common_args.extend(("--from", "integration-test"))
     common_args.extend(("--root", env.root_dir))
-    common_args.extend(("--verbosity", "high"))
+    common_args.extend(("--detail-level", "high"))
     common_args.extend(("--naming-table-path", saved_state_info.naming_table_path))
     common_args.extend(("--dep-table-path", saved_state_info.dep_table_path))
     common_args.extend(("--state-path", os.path.join(env.root_dir, "hh_fanout_state")))
@@ -115,10 +127,57 @@ def run_hh_fanout(
 
     # Also include the debug output for when the test cases fail and need to be
     # debugged.
-    debug_result = exec([env.hh_fanout_path, "debug", *common_args, *args])
-    debug_result = json.loads(debug_result)
-    result["debug"] = debug_result["debug"]
+    if len(args) == 1:
+        debug_result = exec([env.hh_fanout_path, "debug", *common_args, *args])
+        debug_result = json.loads(debug_result)
+        result["debug"] = debug_result["debug"]
+    return result
 
+
+def run_hh_fanout_calculate_errors(
+    env: Env, saved_state_info: SavedStateInfo, cursor: Cursor
+) -> Dict[str, object]:
+    args = []
+    args.extend(("--from", "integration-test"))
+    args.extend(("--root", env.root_dir))
+    args.extend(("--detail-level", "high"))
+    args.extend(("--naming-table-path", saved_state_info.naming_table_path))
+    args.extend(("--dep-table-path", saved_state_info.dep_table_path))
+    args.extend(("--state-path", os.path.join(env.root_dir, "hh_fanout_state")))
+    args.extend(("--cursor", cursor))
+
+    result = exec([env.hh_fanout_path, "calculate-errors", *args])
+    result = json.loads(result)
+    return result
+
+
+def run_hh_fanout_calculate_errors_pretty_print(
+    env: Env, saved_state_info: SavedStateInfo, work_dir: Path, cursor: Cursor
+) -> str:
+    args = []
+    args.extend(("--from", "integration-test"))
+    args.extend(("--root", env.root_dir))
+    args.extend(("--detail-level", "high"))
+    args.extend(("--naming-table-path", saved_state_info.naming_table_path))
+    args.extend(("--dep-table-path", saved_state_info.dep_table_path))
+    args.extend(("--state-path", os.path.join(env.root_dir, "hh_fanout_state")))
+    args.extend(("--cursor", cursor))
+    args.append("--pretty-print")
+
+    result = exec([env.hh_fanout_path, "calculate-errors", *args])
+    result = result.replace(work_dir, "")
+    result = result.strip()
+    return result
+
+
+def run_hh_server_check(env: Env, work_dir: Path) -> str:
+    result = exec(
+        [env.hh_server_path, "--check", work_dir, "--no-load"],
+        # Returns 1 when there's typechecking errors.
+        raise_on_error=False,
+    )
+    result = result.replace(work_dir, "")
+    result = result.strip()
     return result
 
 

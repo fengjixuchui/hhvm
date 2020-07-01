@@ -5,6 +5,7 @@ const FB_UNSERIALIZE_NONSTRING_VALUE = 0;
 const FB_UNSERIALIZE_UNEXPECTED_END = 0;
 const FB_UNSERIALIZE_UNRECOGNIZED_OBJECT_TYPE = 0;
 const FB_UNSERIALIZE_UNEXPECTED_ARRAY_KEY_TYPE = 0;
+const FB_UNSERIALIZE_MAX_DEPTH_EXCEEDED = 0;
 
 const FB_SERIALIZE_HACK_ARRAYS = 0;
 const FB_SERIALIZE_HACK_ARRAYS_AND_KEYSETS = 0;
@@ -28,6 +29,8 @@ const SETPROFILE_FLAGS_RESUME_AWARE = 16;
 /* This flag enables access to $this upon instance method entry in the
  * setprofile handler. It *may break* in the future. */
 const SETPROFILE_FLAGS_THIS_OBJECT__MAY_BREAK = 32;
+
+const int PREG_FB__PRIVATE__HSL_IMPL = (1 << 29);
 
 <<__PHPStdLib, __Pure>>
 function fb_serialize($thing, int $options = 0);
@@ -104,6 +107,4 @@ function int_mul_overflow(int $a, int $b): int;
  * manipulate rounding of the result.
  */
 function int_mul_add_overflow(int $a, int $b, int $bias): int;
-
-const int PREG_FB__PRIVATE__HSL_IMPL = (1 << 29);
 } // HH namespace

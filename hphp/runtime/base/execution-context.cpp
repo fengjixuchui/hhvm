@@ -51,6 +51,7 @@
 #include "hphp/runtime/base/apc-stats.h"
 #include "hphp/runtime/base/apc-typed-value.h"
 #include "hphp/runtime/base/extended-logger.h"
+#include "hphp/runtime/base/implicit-context.h"
 #include "hphp/runtime/debugger/debugger.h"
 #include "hphp/runtime/ext/std/ext_std_output.h"
 #include "hphp/runtime/ext/string/ext_string.h"
@@ -59,7 +60,6 @@
 #include "hphp/runtime/server/cli-server.h"
 #include "hphp/runtime/server/server-stats.h"
 #include "hphp/runtime/vm/debug/debug.h"
-#include "hphp/runtime/vm/globals-array.h"
 #include "hphp/runtime/vm/jit/enter-tc.h"
 #include "hphp/runtime/vm/jit/tc.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
@@ -640,6 +640,13 @@ void ExecutionContext::executeFunctions(ShutdownType type) {
       RuntimeOption::PspCpuTimeoutSeconds
   );
 
+  if (RO::EvalEnableImplicitContext) {
+    // If the main request terminated with a C++ exception, we would not
+    // have cleared the implicit context since that logic is
+    // done in a PHP try-finally. Let's clear the implicit context here.
+    *ImplicitContext::activeCtx = nullptr;
+  }
+
   // We mustn't destroy any callbacks until we're done with all
   // of them. So hold them in tmp.
   // XXX still true in a world without destructors?
@@ -652,6 +659,9 @@ void ExecutionContext::executeFunctions(ShutdownType type) {
       funcs.get(),
       [](TypedValue v) {
         vm_call_user_func(VarNR{v}, init_null_variant);
+        // Implicit context should not have leaked between each call
+        assertx(!RO::EvalEnableImplicitContext ||
+                !(*ImplicitContext::activeCtx));
       }
     );
     tmp.append(funcs);
@@ -1415,6 +1425,8 @@ void ExecutionContext::requestInit() {
     assertx(!SystemLib::s_hhas_unit || SystemLib::s_hhas_unit->isEmpty());
   }
 
+  if (RO::EvalEnableImplicitContext) *ImplicitContext::activeCtx = nullptr;
+
   profileRequestStart();
 
   HHProf::Request::StartProfiling();
@@ -1752,6 +1764,15 @@ void ExecutionContext::resumeAsyncFunc(Resumable* resumable,
   SCOPE_EXIT { assertx(tl_regState == VMRegState::CLEAN); };
 
   auto fp = resumable->actRec();
+
+  if (RO::EvalEnableImplicitContext) {
+    *ImplicitContext::activeCtx = [&] {
+      if (!fp->func()->isGenerator()) return frame_afwh(fp)->m_implicitContext;
+      auto gen = frame_async_generator(fp);
+      return gen->getWaitHandle()->m_implicitContext;
+    }();
+  }
+
   // We don't need to check for space for the ActRec (unlike generally
   // in normal re-entry), because the ActRec isn't on the stack.
   checkStack(vmStack(), fp->func(), 0);
@@ -1787,6 +1808,15 @@ void ExecutionContext::resumeAsyncFuncThrow(Resumable* resumable,
   SCOPE_EXIT { assertx(tl_regState == VMRegState::CLEAN); };
 
   auto fp = resumable->actRec();
+
+  if (RO::EvalEnableImplicitContext) {
+    *ImplicitContext::activeCtx = [&] {
+      if (!fp->func()->isGenerator()) return frame_afwh(fp)->m_implicitContext;
+      auto gen = frame_async_generator(fp);
+      return gen->getWaitHandle()->m_implicitContext;
+    }();
+  }
+
   checkStack(vmStack(), fp->func(), 0);
 
   // decref after we hold reference to the exception
@@ -1942,7 +1972,7 @@ Variant ExecutionContext::getEvaledArg(const StringData* val,
 
   // Default arg values are not currently allowed to depend on class context.
   auto v = Variant::attach(
-    g_context->invokeFuncFew(func, nullptr)
+    g_context->invokeFuncFew(func, nullptr, 0, nullptr, true, true)
   );
   auto const lv = m_evaledArgs.lvalForce(key, AccessFlags::Key);
   tvSet(*v.asTypedValue(), lv);
@@ -2149,9 +2179,10 @@ ExecutionContext::evalPHPDebugger(Unit* unit, int frame) {
 
     auto const uninit_cls = Unit::loadClass(s_uninitClsName.get());
 
-    Array globals{get_global_variables()};
+    auto globals = Array();
+    auto const global = fp && fp->m_varEnv && fp->m_varEnv->isGlobalScope();
     auto& env = [&] () -> Array& {
-      if (fp && fp->m_varEnv && fp->m_varEnv->isGlobalScope()) return globals;
+      if (global) return globals;
       if (m_debuggerEnv.isNull()) m_debuggerEnv = Array::CreateDArray();
       return m_debuggerEnv;
     }();
@@ -2208,7 +2239,11 @@ ExecutionContext::evalPHPDebugger(Unit* unit, int frame) {
           }
         }
       }
-      auto const val = env.lookup(StrNR{f->localVarName(id)});
+      auto const val = [&]{
+        if (!global) return env.lookup(StrNR{f->localVarName(id)});
+        auto const rval = fp->m_varEnv->lookup(f->localVarName(id));
+        return rval ? *rval : make_tv<KindOfUninit>();
+      }();
       if (val.is_init()) args.append(val);
       else appendUninit();
     }
@@ -2232,7 +2267,11 @@ ExecutionContext::evalPHPDebugger(Unit* unit, int frame) {
           fp->m_varEnv->unset(f->localVarName(id));
           break;
         case StoreEnv:
-          env.remove(StrNR{f->localVarName(id)});
+          if (global) {
+            fp->m_varEnv->unset(f->localVarName(id));
+          } else {
+            env.remove(StrNR{f->localVarName(id)});
+          }
           break;
         }
         continue;
@@ -2245,7 +2284,11 @@ ExecutionContext::evalPHPDebugger(Unit* unit, int frame) {
         fp->m_varEnv->set(f->localVarName(id), &tv);
         break;
       case StoreEnv:
-        env.set(StrNR{f->localVarName(id)}, tv);
+        if (global) {
+          fp->m_varEnv->set(f->localVarName(id), &tv);
+        } else {
+          env.set(StrNR{f->localVarName(id)}, tv);
+        }
         break;
       }
     }

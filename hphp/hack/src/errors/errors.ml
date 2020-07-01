@@ -1541,6 +1541,19 @@ let abstract_const_usage usage_pos decl_pos name =
       (decl_pos, "Declaration is here");
     ]
 
+let concrete_const_interface_override
+    child_pos parent_pos parent_origin name (on_error : typing_error_callback) =
+  let parent_origin = strip_ns parent_origin in
+  on_error
+    ~code:(Typing.err_code Typing.ConcreteConstInterfaceOverride)
+    [
+      ( child_pos,
+        "Non-abstract constants defined in an interface cannot be overridden when implementing or extending that interface."
+      );
+      ( parent_pos,
+        "You could make " ^ name ^ " abstract in " ^ parent_origin ^ "." );
+    ]
+
 let const_without_typehint sid =
   let (pos, name) = sid in
   let msg =
@@ -1682,6 +1695,12 @@ let invalid_mutability_in_return_type_hint pos =
     pos
     "OwnedMutable is the only mutability related hint allowed in return type annotation for reactive function types."
 
+let pu_case_in_trait pos kind =
+  add
+    (Naming.err_code Naming.PocketUniversesNotInClass)
+    pos
+    (sprintf "Case %s is not allowed in traits" kind)
+
 let pu_duplication pos kind name seen =
   let name = strip_ns name in
   let seen = strip_ns seen in
@@ -1689,6 +1708,14 @@ let pu_duplication pos kind name seen =
     (Naming.err_code Naming.PocketUniversesDuplication)
     pos
     (sprintf "Pocket Universe %s %s is already declared in %s" kind name seen)
+
+let pu_duplication_in_instance pos kind name seen =
+  let name = strip_ns name in
+  let seen = strip_ns seen in
+  add
+    (Naming.err_code Naming.PocketUniversesDuplication)
+    pos
+    (sprintf "%s %s is already assigned in %s" kind name seen)
 
 let pu_not_in_class pos name loc =
   let name = strip_ns name in
@@ -2105,6 +2132,12 @@ let variadic_memoize pos =
     (NastCheck.err_code NastCheck.VariadicMemoize)
     pos
     "Memoized functions cannot be variadic."
+
+let abstract_method_memoize pos =
+  add
+    (NastCheck.err_code NastCheck.AbstractMethodMemoize)
+    pos
+    "Abstract methods cannot be memoized."
 
 let inout_params_special pos =
   add

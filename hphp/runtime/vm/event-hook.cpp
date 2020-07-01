@@ -242,7 +242,7 @@ static Array get_frame_args(const ActRec* ar) {
   auto const variadic = ar->func()->hasVariadicCaptureParam();
   if (variadic && numArgs > numNonVariadic) {
     auto const arr = frame_local(ar, numNonVariadic);
-    if (tvIsVecOrVArray(arr)) {
+    if (tvIsHAMSafeVArray(arr)) {
       numArgs = numNonVariadic + val(arr).parr->size();
     } else {
       numArgs = numNonVariadic;
@@ -360,7 +360,7 @@ static Variant call_intercept_handler_callback(
     if (!origCallee->hasReifiedGenerics()) return Array();
     // Reified generics is the first non param local
     auto const generics = frame_local(ar, origCallee->numParams());
-    assertx(tvIsVecOrVArray(generics));
+    assertx(tvIsHAMSafeVArray(generics));
     return Array(val(generics).parr);
   }();
   auto ret = Variant::attach(
@@ -883,10 +883,10 @@ void EventHook::onFunctionSuspendYield(ActRec* suspending) {
 }
 
 void EventHook::onFunctionReturn(ActRec* ar, TypedValue retval) {
-  // The locals are already gone. Tell everyone. We can't trashVarEnv() here
-  // because we may use the punned tailFrameIds in the handler for backtracing.
+  // The locals are already gone. Tell everyone.
   ar->setLocalsDecRefd();
   ar->trashThis();
+  ar->trashVarEnv();
 
   try {
     auto const flags = handle_request_surprise();
@@ -918,10 +918,10 @@ void EventHook::onFunctionReturn(ActRec* ar, TypedValue retval) {
 }
 
 void EventHook::onFunctionUnwind(ActRec* ar, ObjectData* phpException) {
-  // The locals are already gone. Tell everyone. We can't trashVarEnv() here
-  // because we may use the punned tailFrameIds in the handler for backtracing.
+  // The locals are already gone. Tell everyone.
   ar->setLocalsDecRefd();
   ar->trashThis();
+  ar->trashVarEnv();
 
   // TODO(#2329497) can't handle_request_surprise() yet, unwinder unable to
   // replace fault

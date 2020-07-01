@@ -50,6 +50,7 @@
 #include "hphp/runtime/base/enum-util.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/hhprof.h"
+#include "hphp/runtime/base/implicit-context.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/object-data.h"
@@ -102,7 +103,6 @@
 #include "hphp/runtime/vm/debugger-hook.h"
 #include "hphp/runtime/vm/event-hook.h"
 #include "hphp/runtime/ext/functioncredential/ext_functioncredential.h"
-#include "hphp/runtime/vm/globals-array.h"
 #include "hphp/runtime/vm/hh-utils.h"
 #include "hphp/runtime/vm/hhbc-codec.h"
 #include "hphp/runtime/vm/hhbc.h"
@@ -306,7 +306,19 @@ static inline Class* frameStaticClass(ActRec* fp) {
 //=============================================================================
 // VarEnv.
 
-const StaticString s_GLOBALS("GLOBALS");
+namespace {
+const StaticString
+  s_argc("argc"),
+  s_argv("argv"),
+  s__SERVER("_SERVER"),
+  s__GET("_GET"),
+  s__POST("_POST"),
+  s__COOKIE("_COOKIE"),
+  s__FILES("_FILES"),
+  s__ENV("_ENV"),
+  s__REQUEST("_REQUEST"),
+  s_HTTP_RAW_POST_DATA("HTTP_RAW_POST_DATA");
+}
 
 void VarEnv::createGlobal() {
   assertx(!g_context->m_globalVarEnv);
@@ -319,11 +331,17 @@ VarEnv::VarEnv()
   , m_global(true)
 {
   TRACE(3, "Creating VarEnv %p [global scope]\n", this);
-  ARRPROV_USE_RUNTIME_LOCATION();
-  auto globals_var = Variant::attach(
-    new (tl_heap->objMalloc(sizeof(GlobalsArray))) GlobalsArray(&m_nvTable)
-  );
-  m_nvTable.set(s_GLOBALS.get(), globals_var.asTypedValue());
+  Variant arr(ArrayData::CreateDArray());
+  m_nvTable.set(s_argc.get(),               init_null_variant.asTypedValue());
+  m_nvTable.set(s_argv.get(),               init_null_variant.asTypedValue());
+  m_nvTable.set(s__SERVER.get(),            arr.asTypedValue());
+  m_nvTable.set(s__GET.get(),               arr.asTypedValue());
+  m_nvTable.set(s__POST.get(),              arr.asTypedValue());
+  m_nvTable.set(s__COOKIE.get(),            arr.asTypedValue());
+  m_nvTable.set(s__FILES.get(),             arr.asTypedValue());
+  m_nvTable.set(s__ENV.get(),               arr.asTypedValue());
+  m_nvTable.set(s__REQUEST.get(),           arr.asTypedValue());
+  m_nvTable.set(s_HTTP_RAW_POST_DATA.get(), init_null_variant.asTypedValue());
 }
 
 VarEnv::VarEnv(ActRec* fp)
@@ -360,11 +378,8 @@ VarEnv::~VarEnv() {
      * not supposed to run destructors for objects that are live at
      * the end of a request.
      */
-    m_nvTable.unset(s_GLOBALS.get());
     m_nvTable.leak();
   }
-  // at this point, m_nvTable is destructed, and GlobalsArray
-  // has a dangling pointer to it.
 }
 
 void VarEnv::deallocate(ActRec* fp) {
@@ -444,22 +459,11 @@ void VarEnv::set(const StringData* name, tv_rval tv) {
 }
 
 tv_lval VarEnv::lookup(const StringData* name) {
-  auto const lval = m_nvTable.lookup(name);
-  if (lval && isArrayType(type(lval)) && val(lval).parr->isGlobalsArrayKind() &&
-      isGlobalScope() && s_GLOBALS.equal(name)) {
-    raise_hackarr_compat_notice("lookup returning $GLOBALS array");
-  }
-  return lval;
+  return m_nvTable.lookup(name);
 }
 
 tv_lval VarEnv::lookupAdd(const StringData* name) {
-  auto const lval = m_nvTable.lookupAdd(name);
-  assertx(lval);
-  if (isArrayType(type(lval)) && val(lval).parr->isGlobalsArrayKind() &&
-      isGlobalScope() && s_GLOBALS.equal(name)) {
-    raise_hackarr_compat_notice("lookup returning $GLOBALS array");
-  }
-  return lval;
+  return m_nvTable.lookupAdd(name);
 }
 
 bool VarEnv::unset(const StringData* name) {
@@ -470,8 +474,6 @@ bool VarEnv::unset(const StringData* name) {
 const StaticString s_reified_generics_var("0ReifiedGenerics");
 
 Array VarEnv::getDefinedVariables() const {
-  // NOTE: If isGlobalScope, we're exposing a GlobalsArray here with the key
-  // "GLOBALS". That's okay - getDefinedVariables is only used by debuggers.
   Array ret = Array::CreateDArray();
 
   NameValueTable::Iterator iter(&m_nvTable);
@@ -1044,7 +1046,7 @@ static void prepareFuncEntry(ActRec *ar, Array&& generics) {
   if (UNLIKELY(nargs > nparams)) {
     // All extra arguments are expected to be packed in a varray.
     assertx(nargs == nparams + 1);
-    assertx(tvIsVecOrVArray(stack.topC()));
+    assertx(tvIsHAMSafeVArray(stack.topC()));
     auto const unpackArgs = stack.topC()->m_data.parr;
     assertx(!unpackArgs->empty());
     if (!func->hasVariadicCaptureParam()) {
@@ -1137,6 +1139,17 @@ void checkForReifiedGenericsErrors(const ActRec* ar, bool hasGenerics) {
   );
   checkFunReifiedGenericMismatch(ar->m_func, val(generics).parr);
 }
+
+void checkImplicitContextErrors(const ActRec* ar) {
+  if (!RO::EvalEnableImplicitContext ||
+      !ar->func()->hasNoContextAttr() ||
+      *ImplicitContext::activeCtx == nullptr) {
+    return;
+  }
+  throw_implicit_context_exception(folly::to<std::string>(
+    "Function ", ar->func()->fullName()->data(), " has implicit context "
+    "but is marked with __NoContext"));
+}
 } // namespace
 
 static void dispatch();
@@ -1188,6 +1201,7 @@ void enterVMAtFunc(ActRec* enterFnAr, Array&& generics, bool hasInOut,
   checkForReifiedGenericsErrors(enterFnAr, hasGenerics);
   calleeDynamicCallChecks(enterFnAr->func(), dynamicCall,
                           allowDynCallNoPointer);
+  checkImplicitContextErrors(enterFnAr);
   if (!EventHook::FunctionCall(enterFnAr, EventHook::NormalFunc)) return;
   checkStack(vmStack(), enterFnAr->m_func, 0);
   assertx(vmfp()->func()->contains(vmpc()));
@@ -1561,12 +1575,6 @@ void newRecordImpl(const StringData* s,
 OPTBLD_INLINE void iopNewRecord(const StringData* s, imm_array<int32_t> ids) {
   newRecordImpl(s, ids, RecordData::newRecord,
                 [] (Stack& st, RecordData* r) { st.pushRecordNoRc(r); });
-}
-
-OPTBLD_INLINE void iopNewRecordArray(const StringData* s,
-                                     imm_array<int32_t> ids) {
-  newRecordImpl(s, ids, RecordArray::newRecordArray,
-                [] (Stack& st, RecordArray* r) { st.pushRecordArrayNoRc(r); });
 }
 
 OPTBLD_INLINE void iopAddElemC() {
@@ -2676,7 +2684,7 @@ OPTBLD_INLINE void iopClassGetC() {
 
 OPTBLD_INLINE void iopClassGetTS() {
   auto const cell = vmStack().topC();
-  if (!tvIsDictOrDArray(cell)) {
+  if (!tvIsHAMSafeDArray(cell)) {
     raise_error("Reified type must be a type structure");
   }
   auto const ts = cell->m_data.parr;
@@ -3163,27 +3171,28 @@ inline void checkThis(ActRec* fp) {
 }
 
 OPTBLD_INLINE const TypedValue* memoGetImpl(LocalRange keys) {
-  assertx(vmfp()->m_func->isMemoizeWrapper());
-  assertx(keys.first + keys.count <= vmfp()->m_func->numLocals());
+  auto const fp = vmfp();
+  auto const func = fp->func();
+  assertx(func->isMemoizeWrapper());
+  assertx(keys.first + keys.count <= func->numLocals());
 
   for (auto i = 0; i < keys.count; ++i) {
-    auto const key = frame_local(vmfp(), keys.first + i);
+    auto const key = frame_local(fp, keys.first + i);
     if (!isIntType(type(key)) && !isStringType(type(key))) {
       raise_error("Memoization keys can only be ints or strings");
     }
   }
 
   auto const c = [&] () -> const TypedValue* {
-    auto const func = vmfp()->m_func;
     if (!func->isMethod() || func->isStatic()) {
       auto const lsbCls =
-        func->isMemoizeWrapperLSB() ? vmfp()->getClass() : nullptr;
+        func->isMemoizeWrapperLSB() ? fp->getClass() : nullptr;
       if (keys.count > 0) {
         auto cache =
           lsbCls ? rds::bindLSBMemoCache(lsbCls, func)
                  : rds::bindStaticMemoCache(func);
         if (!cache.isInit()) return nullptr;
-        auto const keysBegin = frame_local(vmfp(), keys.first + keys.count - 1);
+        auto const keysBegin = frame_local(fp, keys.first + keys.count - 1);
         if (auto getter = memoCacheGetForKeyCount(keys.count)) {
           return getter(*cache, keysBegin);
         }
@@ -3200,8 +3209,8 @@ OPTBLD_INLINE const TypedValue* memoGetImpl(LocalRange keys) {
       return cache.isInit() ? cache.get() : nullptr;
     }
 
-    checkThis(vmfp());
-    auto const this_ = vmfp()->getThis();
+    checkThis(fp);
+    auto const this_ = fp->getThis();
     auto const cls = func->cls();
     assertx(this_->instanceof(cls));
     assertx(cls->hasMemoSlots());
@@ -3227,7 +3236,7 @@ OPTBLD_INLINE const TypedValue* memoGetImpl(LocalRange keys) {
           makeSharedOnlyKey(func->getFuncId())
         );
       }
-      auto const keysBegin = frame_local(vmfp(), keys.first + keys.count - 1);
+      auto const keysBegin = frame_local(fp, keys.first + keys.count - 1);
       if (auto const getter = sharedMemoCacheGetForKeyCount(keys.count)) {
         return getter(cache, func->getFuncId(), keysBegin);
       }
@@ -3239,7 +3248,7 @@ OPTBLD_INLINE const TypedValue* memoGetImpl(LocalRange keys) {
     }
 
     assertx(keys.count > 0);
-    auto const keysBegin = frame_local(vmfp(), keys.first + keys.count - 1);
+    auto const keysBegin = frame_local(fp, keys.first + keys.count - 1);
     if (auto const getter = memoCacheGetForKeyCount(keys.count)) {
       return getter(cache, keysBegin);
     }
@@ -3286,27 +3295,27 @@ OPTBLD_INLINE void iopMemoGetEager(PC& pc,
 namespace {
 
 OPTBLD_INLINE void memoSetImpl(LocalRange keys, TypedValue val) {
-  assertx(vmfp()->m_func->isMemoizeWrapper());
-  assertx(keys.first + keys.count <= vmfp()->m_func->numLocals());
+  auto const fp = vmfp();
+  auto const func = fp->func();
+  assertx(func->isMemoizeWrapper());
+  assertx(keys.first + keys.count <= func->numLocals());
   assertx(tvIsPlausible(val));
 
   for (auto i = 0; i < keys.count; ++i) {
-    auto const key = frame_local(vmfp(), keys.first + i);
+    auto const key = frame_local(fp, keys.first + i);
     if (!isIntType(type(key)) && !isStringType(type(key))) {
       raise_error("Memoization keys can only be ints or strings");
     }
   }
 
-  auto const func = vmfp()->m_func;
   if (!func->isMethod() || func->isStatic()) {
-    auto const lsbCls =
-      func->isMemoizeWrapperLSB() ? vmfp()->getClass() : nullptr;
+    auto const lsbCls = func->isMemoizeWrapperLSB() ? fp->getClass() : nullptr;
     if (keys.count > 0) {
       auto cache =
         lsbCls ? rds::bindLSBMemoCache(lsbCls, func)
                : rds::bindStaticMemoCache(func);
       if (!cache.isInit()) cache.initWith(nullptr);
-      auto const keysBegin = frame_local(vmfp(), keys.first + keys.count - 1);
+      auto const keysBegin = frame_local(fp, keys.first + keys.count - 1);
       if (auto setter = memoCacheSetForKeyCount(keys.count)) {
         return setter(*cache, keysBegin, val);
       }
@@ -3330,8 +3339,8 @@ OPTBLD_INLINE void memoSetImpl(LocalRange keys, TypedValue val) {
     return;
   }
 
-  checkThis(vmfp());
-  auto const this_ = vmfp()->getThis();
+  checkThis(fp);
+  auto const this_ = fp->getThis();
   auto const cls = func->cls();
   assertx(this_->instanceof(cls));
   assertx(cls->hasMemoSlots());
@@ -3359,7 +3368,7 @@ OPTBLD_INLINE void memoSetImpl(LocalRange keys, TypedValue val) {
         val
       );
     }
-    auto const keysBegin = frame_local(vmfp(), keys.first + keys.count - 1);
+    auto const keysBegin = frame_local(fp, keys.first + keys.count - 1);
     if (auto const setter = sharedMemoCacheSetForKeyCount(keys.count)) {
       return setter(cache, func->getFuncId(), keysBegin, val);
     }
@@ -3372,7 +3381,7 @@ OPTBLD_INLINE void memoSetImpl(LocalRange keys, TypedValue val) {
   }
 
   assertx(keys.count > 0);
-  auto const keysBegin = frame_local(vmfp(), keys.first + keys.count - 1);
+  auto const keysBegin = frame_local(fp, keys.first + keys.count - 1);
   if (auto const setter = memoCacheSetForKeyCount(keys.count)) {
     return setter(cache, keysBegin, val);
   }
@@ -3448,7 +3457,6 @@ OPTBLD_INLINE static bool isTypeHelper(TypedValue val, IsTypeOp op) {
   case IsTypeOp::Bool:   return is_bool(&val);
   case IsTypeOp::Int:    return is_int(&val);
   case IsTypeOp::Dbl:    return is_double(&val);
-  case IsTypeOp::Arr:    return is_array(&val, !vmfp()->m_func->isBuiltin());
   case IsTypeOp::PHPArr: return is_array(&val, /* logOnHackArrays = */ false);
   case IsTypeOp::Vec:    return is_vec(&val);
   case IsTypeOp::Dict:   return is_dict(&val);
@@ -3459,15 +3467,13 @@ OPTBLD_INLINE static bool isTypeHelper(TypedValue val, IsTypeOp op) {
   case IsTypeOp::Str:    return is_string(&val);
   case IsTypeOp::Res:    return tvIsResource(val);
   case IsTypeOp::Scalar: return HHVM_FN(is_scalar)(tvAsCVarRef(val));
-  case IsTypeOp::ArrLike:
-    if (RuntimeOption::EvalIsCompatibleClsMethType &&
-        tvIsClsMeth(val)) {
-      if (RO::EvalIsVecNotices) {
-        raise_notice(Strings::CLSMETH_COMPAT_IS_ANY_ARR);
-      }
-      return true;
+  case IsTypeOp::Arr:
+    if (!RO::EvalWidenIsArray) {
+      return is_array(&val, !vmfp()->m_func->isBuiltin());
     }
-    return tvIsArrayLike(val);
+    return is_any_array(&val, !vmfp()->m_func->isBuiltin());
+  case IsTypeOp::ArrLike:
+    return is_any_array(&val, /* logOnHackArrays = */ false);
   case IsTypeOp::ClsMeth: return is_clsmeth(&val);
   case IsTypeOp::Func: return is_fun(&val);
   }
@@ -3534,9 +3540,15 @@ OPTBLD_INLINE void iopAKExists() {
   vmStack().replaceTV<KindOfBoolean>(result);
 }
 
+const StaticString
+  s_implicit_context_set("HH\\ImplicitContext::set"),
+  s_implicit_context_genSet("HH\\ImplicitContext::genSet");
+
 OPTBLD_INLINE void iopGetMemoKeyL(named_local_var loc) {
   DEBUG_ONLY auto const func = vmfp()->m_func;
-  assertx(func->isMemoizeWrapper());
+  assertx(func->isMemoizeWrapper() ||
+          func->fullName()->isame(s_implicit_context_set.get()) ||
+          func->fullName()->isame(s_implicit_context_genSet.get()));
 
   assertx(tvIsPlausible(*loc.lval));
 
@@ -3831,7 +3843,7 @@ bool doFCall(ActRec* ar, uint32_t numArgs, bool hasUnpack,
         int(vmfp()->func()->base()));
 
   try {
-    assertx(!callFlags.hasGenerics() || tvIsVecOrVArray(vmStack().topC()));
+    assertx(!callFlags.hasGenerics() || tvIsHAMSafeVArray(vmStack().topC()));
     auto generics = callFlags.hasGenerics()
       ? Array::attach(vmStack().topC()->m_data.parr) : Array();
     if (callFlags.hasGenerics()) vmStack().discard();
@@ -3854,6 +3866,7 @@ bool doFCall(ActRec* ar, uint32_t numArgs, bool hasUnpack,
 
     checkForReifiedGenericsErrors(ar, callFlags.hasGenerics());
     calleeDynamicCallChecks(ar->func(), callFlags.isDynamicCall());
+    checkImplicitContextErrors(ar);
     return EventHook::FunctionCall(ar, EventHook::NormalFunc);
   } catch (...) {
     // Manually unwind the pre-live or live frame, as we may be called from JIT
@@ -4473,7 +4486,7 @@ OPTBLD_INLINE void iopNewObjR() {
 
   auto const reified = [&] () -> ArrayData* {
     if (reifiedCell->m_type == KindOfNull) return nullptr;
-    if (!tvIsVecOrVArray(reifiedCell)) {
+    if (!tvIsHAMSafeVArray(reifiedCell)) {
       raise_error("Attempting NewObjR with invalid reified generics");
     }
     return reifiedCell->m_data.parr;
@@ -4495,7 +4508,7 @@ OPTBLD_INLINE void iopNewObjRD(Id id) {
 
   auto const reified = [&] () -> ArrayData* {
     if (tsList->m_type == KindOfNull) return nullptr;
-    if (!tvIsVecOrVArray(tsList)) {
+    if (!tvIsHAMSafeVArray(tsList)) {
       raise_error("Attempting NewObjRD with invalid reified generics");
     }
     return tsList->m_data.parr;
@@ -4912,7 +4925,7 @@ OPTBLD_INLINE void iopVerifyParamType(local_var param) {
 OPTBLD_INLINE void iopVerifyParamTypeTS(local_var param) {
   iopVerifyParamType(param);
   auto const cell = vmStack().topC();
-  assertx(tvIsDictOrDArray(cell));
+  assertx(tvIsHAMSafeDArray(cell));
   auto isTypeVar = tcCouldBeReified(vmfp()->m_func, param.index);
   bool warn = false;
   if ((isTypeVar || tvIsObject(param.lval)) &&
@@ -4975,7 +4988,7 @@ OPTBLD_INLINE void iopVerifyRetTypeC() {
 OPTBLD_INLINE void iopVerifyRetTypeTS() {
   verifyRetTypeImpl(1); // TypedValue is the second element on the stack
   auto const ts = vmStack().topC();
-  assertx(tvIsDictOrDArray(ts));
+  assertx(tvIsHAMSafeDArray(ts));
   auto const cell = vmStack().indC(1);
   bool isTypeVar = tcCouldBeReified(vmfp()->m_func, TypeConstraint::ReturnId);
   bool warn = false;
@@ -5460,6 +5473,9 @@ OPTBLD_INLINE void asyncSuspendE(PC origpc, PC& pc) {
     auto waitHandle = c_AsyncFunctionWaitHandle::Create<true>(
       fp, func->numSlotsInFrame(), nullptr, suspendOffset, child);
 
+    if (RO::EvalEnableImplicitContext) {
+      waitHandle->m_implicitContext = *ImplicitContext::activeCtx;
+    }
     // Call the suspend hook. It will decref the newly allocated waitHandle
     // if it throws.
     EventHook::FunctionSuspendAwaitEF(fp, waitHandle->actRec());
@@ -5482,6 +5498,10 @@ OPTBLD_INLINE void asyncSuspendE(PC origpc, PC& pc) {
     // Create new AsyncGeneratorWaitHandle.
     auto waitHandle = c_AsyncGeneratorWaitHandle::Create(
       fp, nullptr, suspendOffset, child);
+
+    if (RO::EvalEnableImplicitContext) {
+      waitHandle->m_implicitContext = *ImplicitContext::activeCtx;
+    }
 
     // Call the suspend hook. It will decref the newly allocated waitHandle
     // if it throws.
@@ -5516,10 +5536,16 @@ OPTBLD_INLINE void asyncSuspendR(PC origpc, PC& pc) {
 
   // Await child and suspend the async function/generator. May throw.
   if (!func->isGenerator()) {  // Async function.
+    if (RO::EvalEnableImplicitContext) {
+      frame_afwh(fp)->m_implicitContext = *ImplicitContext::activeCtx;
+    }
     frame_afwh(fp)->await(suspendOffset, std::move(child));
   } else {  // Async generator.
     auto const gen = frame_async_generator(fp);
     gen->resumable()->setResumeAddr(nullptr, suspendOffset);
+    if (RO::EvalEnableImplicitContext) {
+      gen->getWaitHandle()->m_implicitContext = *ImplicitContext::activeCtx;
+    }
     gen->getWaitHandle()->await(std::move(child));
   }
 

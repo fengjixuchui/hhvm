@@ -2651,7 +2651,7 @@ and expr_
       p
       (Aast.New (tc, tal, tel, typed_unpack_element, (p1, ctor_fty)))
       ty
-  | Record ((pos, id), _is_array, field_values) ->
+  | Record ((pos, id), field_values) ->
     (match Decl_provider.get_record_def (Env.get_ctx env) id with
     | Some rd ->
       if rd.rdt_abstract then Errors.new_abstract_record (pos, id);
@@ -3949,6 +3949,8 @@ and assign_ p ur env e1 ty2 =
     (* If we ever extend fake members from $x->a to more complicated lvalues
       such as $x->a->b, we would need to call forget_prefixed_members on
       other lvalues as well. *)
+    | (_, Obj_get (_, (_, Id (_, property)), _)) ->
+      Env.forget_suffixed_members env property Reason.(Blame (p, BSassignment))
     | _ -> env
   in
   match e1 with
@@ -3976,22 +3978,12 @@ and assign_ p ur env e1 ty2 =
     make_result env (fst e1) (Aast.List (List.rev reversed_tel)) ty2
   | (pobj, Obj_get (obj, (pm, Id ((_, member_name) as m)), nullflavor)) ->
     let lenv = env.lenv in
-    let no_fakes = LEnv.env_with_empty_fakes env in
-    (* In this section, we check that the assignment is compatible with
-     * the real type of a member. Remember that members can change
-     * type (cf fake_members). But when we assign a value to $this->x,
-     * we want to make sure that the type assign to $this->x is compatible
-     * with the actual type hint. In this portion of the code, type-check
-     * the assignment in an environment without fakes, and therefore
-     * check that the assignment is compatible with the type of
-     * the member.
-     *)
     let nullsafe =
       match nullflavor with
       | OG_nullthrows -> None
       | OG_nullsafe -> Some pobj
     in
-    let (env, tobj, obj_ty) = expr ~accept_using_var:true no_fakes obj in
+    let (env, tobj, obj_ty) = expr ~accept_using_var:true env obj in
     let env = might_throw env in
     let (env, (result, _tal)) =
       TOG.obj_get
@@ -5166,7 +5158,7 @@ and dispatch_call
             else
               let case_ty =
                 match SMap.find_opt case et.tpu_case_values with
-                | Some (_, case) -> case
+                | Some (_, _, case) -> case
                 | None ->
                   Errors.pu_typing case_pos "identifier" case;
                   MakeType.err (Reason.Rwitness case_pos)
@@ -5195,7 +5187,9 @@ and dispatch_call
                 let f
                     env
                     _key
-                    { tp_name = pu_case_type_name; tp_reified = _reified; _ } =
+                    ( _,
+                      { tp_name = pu_case_type_name; tp_reified = _reified; _ }
+                    ) =
                   (* Update position to point to the function call site
                    * rather than to the PU enum definition
                    *)
@@ -6662,13 +6656,26 @@ and condition
     in
     env
   | Aast.Call (Cnormal, ((p, _), Aast.Id (_, f)), _, [lv], None)
+    when tparamet && String.equal f SN.StdlibFunctions.is_dict_or_darray ->
+    safely_refine_is_array env `HackDictOrDArray p f lv
+  | Aast.Call (Cnormal, ((p, _), Aast.Id (_, f)), _, [lv], None)
+    when tparamet && String.equal f SN.StdlibFunctions.is_vec_or_varray ->
+    safely_refine_is_array env `HackVecOrVArray p f lv
+  | Aast.Call (Cnormal, ((p, _), Aast.Id (_, f)), _, [lv], None)
     when tparamet && String.equal f SN.StdlibFunctions.is_any_array ->
     safely_refine_is_array env `AnyArray p f lv
   | Aast.Call (Cnormal, ((p, _), Aast.Id (_, f)), _, [lv], None)
-    when tparamet
-         && ( String.equal f SN.StdlibFunctions.is_array
-            || String.equal f SN.StdlibFunctions.is_php_array ) ->
+    when tparamet && String.equal f SN.StdlibFunctions.is_php_array ->
     safely_refine_is_array env `PHPArray p f lv
+  | Aast.Call (Cnormal, ((p, _), Aast.Id (_, f)), _, [lv], None)
+    when tparamet && String.equal f SN.StdlibFunctions.is_array ->
+    let kind =
+      if TCO.widen_is_array (Env.get_tcopt env) then
+        `AnyArray
+      else
+        `PHPArray
+    in
+    safely_refine_is_array env kind p f lv
   | Aast.Call
       ( Cnormal,
         (_, Aast.Class_const ((_, Aast.CI (_, class_name)), (_, method_name))),
@@ -6942,6 +6949,16 @@ and safely_refine_is_array env ty p pred_name arg_expr =
         in
         MakeType.varray_or_darray r tk tv
       in
+      let any_array_ty =
+        MakeType.union
+          r
+          [
+            MakeType.dict r tarrkey tfresh;
+            MakeType.vec r tfresh;
+            MakeType.keyset r tarrkey;
+            array_ty;
+          ]
+      in
       (* This is the refined type of e inside the branch *)
       let refined_ty =
         match ty with
@@ -6949,15 +6966,13 @@ and safely_refine_is_array env ty p pred_name arg_expr =
         | `HackVec -> MakeType.vec r tfresh
         | `HackKeyset -> MakeType.keyset r tarrkey
         | `PHPArray -> array_ty
-        | `AnyArray ->
+        | `AnyArray -> any_array_ty
+        | `HackDictOrDArray ->
           MakeType.union
             r
-            [
-              MakeType.dict r tarrkey tfresh;
-              MakeType.vec r tfresh;
-              MakeType.keyset r tarrkey;
-              array_ty;
-            ]
+            [MakeType.dict r tarrkey tfresh; MakeType.darray r tarrkey tfresh]
+        | `HackVecOrVArray ->
+          MakeType.union r [MakeType.vec r tfresh; MakeType.varray r tfresh]
       in
       (* Add constraints on generic parameters that must
        * hold for refined_ty <:arg_ty. For example, if arg_ty is Traversable<T>
@@ -7034,18 +7049,13 @@ and typedef_def ctx typedef =
   let tdecl = Env.get_typedef env (snd typedef.t_name) in
   Typing_helpers.add_decl_errors
     Option.(map tdecl (fun tdecl -> value_exn tdecl.td_decl_errors));
-  let t_tparams : decl_tparam list =
-    List.map
-      typedef.t_tparams
-      ~f:(Decl_hint.aast_tparam_to_decl_tparam env.decl_env)
-  in
-  let (env, constraints) =
-    Phase.localize_generic_parameters_with_bounds
+  let env =
+    Phase.localize_and_add_ast_generic_parameters_and_where_constraints
+      (fst typedef.t_name)
       env
-      t_tparams
-      ~ety_env:(Phase.env_with_self env)
+      typedef.t_tparams
+      []
   in
-  let env = SubType.add_constraints (fst typedef.t_name) env constraints in
   NastCheck.typedef env typedef;
   let {
     t_annotation = ();

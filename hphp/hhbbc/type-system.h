@@ -193,6 +193,8 @@ struct Type;
 
 //////////////////////////////////////////////////////////////////////
 
+constexpr size_t kTRepBitsStored = 48;
+
 enum trep : uint64_t {
   BBottom   = 0,
 
@@ -243,6 +245,10 @@ enum trep : uint64_t {
   BCKeysetN = 1ULL << 37, // counted non-empty keyset
 
   BRecord   = 1ULL << 38,
+
+  // NOTE: We only have kTRepBitsStored = 48 bits available.
+  // We can bump that to 56 bits, at the cost of a taking a few
+  // more instructions to load or store the Type::m_bits field.
 
   BSPArr    = BSPArrE | BSPArrN,
   BCPArr    = BCPArrE | BCPArrN,
@@ -445,7 +451,7 @@ enum trep : uint64_t {
               BRecord,
   BCell     = BUninit | BInitCell,
 
-  BTop      = static_cast<uint64_t>(-1),
+  BTop      = (uint64_t{1} << kTRepBitsStored) - 1,
 };
 
 constexpr trep operator~(trep a) {
@@ -866,12 +872,7 @@ private:
   friend bool could_contain_objects(const Type&);
   friend bool could_copy_on_write(const Type&);
   friend Type loosen_staticness(Type);
-  // loosen_dvarrayness has no effect post dvarray specialization.
-  //
-  // For object properties, we still need to loosen types afterwards -
-  // loosen_dvarrayness_always doesn't check specialization status.
   friend Type loosen_dvarrayness(Type);
-  friend Type loosen_dvarrayness_always(Type);
   friend Type loosen_provenance(Type);
   friend Type loosen_values(Type);
   friend Type loosen_emptiness(Type);
@@ -897,6 +898,7 @@ private:
   struct DDHelperFn;
 
 private:
+  trep bits() const { return trep(m_bits); }
   static Type unctxHelper(Type, bool&);
   static Type unionArrLike(Type a, Type b);
   template<class Ret, class T, class Function>
@@ -915,7 +917,7 @@ private:
   ProvTag getProvTag() const;
 
 private:
-  trep m_bits;
+  uint64_t m_bits : kTRepBitsStored;
   DataTag m_dataTag = DataTag::None;
   Data m_data;
 };

@@ -710,7 +710,7 @@ resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
                                                            cnsName.m_data.pstr,
                                                            true);
         if (!cnst || !cnst->val || !cnst->isTypeconst ||
-            !tvIsDictOrDArray(&*cnst->val)) {
+            !tvIsHAMSafeDArray(&*cnst->val)) {
           return nullptr;
         }
         if (checkNoOverrideOnFirst && i == 0 && !cnst->isNoOverride) {
@@ -982,11 +982,6 @@ void in(ISS& env, const bc::NewRecord& op) {
   discard(env, op.keys.size());
   auto const rrec = env.index.resolve_record(op.str1);
   push(env, rrec ? exactRecord(*rrec) : TRecord);
-}
-
-void in(ISS& env, const bc::NewRecordArray& op) {
-  discard(env, op.keys.size());
-  push(env, TArr);
 }
 
 void in(ISS& env, const bc::NewStructArray& op) {
@@ -1486,7 +1481,6 @@ std::pair<Type,bool> resolveSame(ISS& env) {
   // arrays inside these arrays.
   auto warningsEnabled =
     (RuntimeOption::EvalHackArrCompatNotices ||
-     RuntimeOption::EvalHackArrCompatDVCmpNotices ||
      RuntimeOption::EvalEmitClsMethPointers);
 
   auto const result = [&] {
@@ -1590,12 +1584,8 @@ bool sameJmpImpl(ISS& env, Op sameOp, const JmpOp& jmp) {
   if (ty0.couldBe(BFunc | BCls) && ty1.couldBe(BStr)) return false;
   if (ty1.couldBe(BFunc | BCls) && ty0.couldBe(BStr)) return false;
 
-  // We need to loosen away the d/varray bits here because array comparison does
-  // not take into account the difference.
-  auto isect = intersection_of(
-    loosen_provenance(loosen_dvarrayness(ty0)),
-    loosen_provenance(loosen_dvarrayness(ty1))
-  );
+  // We need to loosen provenance here because it doesn't affect same / equal.
+  auto isect = intersection_of(loosen_provenance(ty0), loosen_provenance(ty1));
 
   // Unfortunately, floating point negative zero and positive zero are
   // different, but are identical using as far as Same is concerened. We should
@@ -2642,8 +2632,19 @@ void in(ISS& env, const bc::AKExists& /*op*/) {
   push(env, TBool);
 }
 
+const StaticString
+  s_implicit_context_set("HH\\ImplicitContext::set"),
+  s_implicit_context_genSet("HH\\ImplicitContext::genSet");
+
 void in(ISS& env, const bc::GetMemoKeyL& op) {
-  always_assert(env.ctx.func->isMemoizeWrapper);
+  auto const func = env.ctx.func;
+  auto const name = folly::to<std::string>(
+    func && func->cls ? func->cls->name->data() : "",
+    func && func->cls ? "::" : "",
+    func ? func->name->data() : "");
+  always_assert(func->isMemoizeWrapper ||
+                name == s_implicit_context_set.get()->toCppString() ||
+                name == s_implicit_context_genSet.get()->toCppString());
 
   auto const rclsIMemoizeParam = env.index.builtin_class(s_IMemoizeParam.get());
   auto const tyIMemoizeParam = subObj(rclsIMemoizeParam);
@@ -3107,14 +3108,11 @@ void isTypeStructImpl(ISS& env, SArray inputTS) {
     case TypeStructure::Kind::T_void:
     case TypeStructure::Kind::T_null:
       return check(ts_type);
+    // TODO(kshaunak): Change `deopt` for tuple to "vec", for shape to "dict".
     case TypeStructure::Kind::T_tuple:
-      return RuntimeOption::EvalHackArrCompatTypeHintNotices
-        ? check(ts_type, TDArr)
-        : check(ts_type);
+      return check(ts_type, TDArr);
     case TypeStructure::Kind::T_shape:
-      return RuntimeOption::EvalHackArrCompatTypeHintNotices
-        ? check(ts_type, TVArr)
-        : check(ts_type);
+      return check(ts_type, TVArr);
     case TypeStructure::Kind::T_dict:
       return check(ts_type, TDArr);
     case TypeStructure::Kind::T_vec:
@@ -4865,8 +4863,7 @@ void in(ISS& env, const bc::VerifyParamType& op) {
   for (auto const& constraint : tcs) {
     if (constraint->hasConstraint() && !constraint->isTypeVar() &&
       !constraint->isTypeConstant()) {
-      auto t =
-        loosen_dvarrayness(env.index.lookup_constraint(env.ctx, *constraint));
+      auto t = env.index.lookup_constraint(env.ctx, *constraint);
       if (constraint->isThis() && couldBeMocked(t)) {
         t = unctx(std::move(t));
       }
@@ -4946,8 +4943,7 @@ void verifyRetImpl(ISS& env, const TCVec& tcs,
     // We can safely assume that either VerifyRetTypeC will
     // throw or it will produce a value whose type is compatible with the
     // return type constraint.
-    auto tcT = remove_uninit(
-      loosen_dvarrayness(env.index.lookup_constraint(env.ctx, *constraint)));
+    auto tcT = remove_uninit(env.index.lookup_constraint(env.ctx, *constraint));
 
     // If tcT could be an interface or trait, we upcast it to TObj/TOptObj.
     // Why?  Because we want uphold the invariant that we only refine return

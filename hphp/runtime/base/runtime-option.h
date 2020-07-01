@@ -90,7 +90,8 @@ struct RepoOptions {
   E(bool,           EmitInstMethPointers,           EmitFuncPointers) \
   H(bool,           EnableXHPClassModifier,         false)            \
   H(bool,           DisableXHPElementMangling,      false)            \
-  H(bool,           DisableArray,                   false)            \
+  H(bool,           DisableArray,                   true)             \
+  H(bool,           DisableArrayCast,               false)            \
   /**/
 
   /**/
@@ -788,6 +789,7 @@ struct RuntimeOption {
    * 2 - Throw when incrementing or decrementing non numeric types
    */                                                                   \
   F(uint32_t, WarnOnIncDecInvalidType, 0)                               \
+  F(bool, EnableImplicitContext,       false)                           \
   F(bool, MoreAccurateMemStats,        true)                            \
   F(bool, AllowScopeBinding,           false)                           \
   F(bool, JitNoGdb,                    true)                            \
@@ -1013,6 +1015,7 @@ struct RuntimeOption {
   F(uint32_t, GCSampleRate,            0)                               \
   F(uint32_t, HeapAllocSampleRequests, 0)                               \
   F(uint32_t, HeapAllocSampleBytes,    256 * 1024)                      \
+  F(uint32_t, SlabAllocAlign,          64)                              \
   F(int64_t, GCMinTrigger,             64L<<20)                         \
   F(double, GCTriggerPct,              0.5)                             \
   F(bool, TwoPhaseGC,                  false)                           \
@@ -1103,26 +1106,12 @@ struct RuntimeOption {
   F(bool, HackArrCompatIsArrayNotices, false)                           \
   /* Raise notices when is_vec or is_dict  is called with a v/darray */ \
   F(bool, HackArrCompatIsVecDictNotices, false)                         \
-  /* Raise a notice when a varray is promoted to a darray through:      \
-   * - inserting at a key that would force the array to be mixed        \
-   * - unsetting _any_ key                                              \
-   */                                                                   \
-  F(bool, HackArrCompatCheckVarrayPromote, false)                       \
-  /* Raise a notice when a varray is implicitly appended to by          \
-   * inserting at n == count(arr)                                       \
-   */                                                                   \
-  F(bool, HackArrCompatCheckImplicitVarrayAppend, false)                \
-  F(bool, HackArrCompatTypeHintNotices, true)                           \
-  F(bool, HackArrCompatDVCmpNotices, false)                             \
   F(bool, HackArrCompatSerializeNotices, false)                         \
   /* Raise notices when fb_compact_*() would change behavior */         \
   F(bool, HackArrCompatCompactSerializeNotices, false)                  \
   /* Raises notice when a function that returns a PHP array, not */     \
   /* a v/darray, is called */                                           \
   F(bool, HackArrCompatArrayProducingFuncNotices, false)                \
-  /* This is the flag for "specialization", meaning that darray and     \
-   * varray are their own types, distinct from array and each other. */ \
-  F(bool, HackArrCompatSpecialization, false)                           \
   /* This is the flag for "unification", meaning that darrays are       \
    * replaced by dicts and varrays by vecs. */                          \
   F(bool, HackArrDVArrs, false)                                         \
@@ -1205,7 +1194,6 @@ struct RuntimeOption {
   F(bool, ForbidDivisionByZero, true)                                   \
   /* Enables Hack records. */                                           \
   F(bool, HackRecords, false)                                           \
-  F(bool, HackRecordArrays, false)                                           \
   /*                                                                    \
    * Control dynamic calls to functions and dynamic constructs of       \
    * classes which haven't opted into being called that way.            \
@@ -1319,14 +1307,18 @@ struct RuntimeOption {
      2 - throw */                                                       \
   F(uint64_t, DynamicClsMethLevel, 1)                                   \
   F(bool, APCSerializeFuncs, true)                                      \
-  /* When set, `is_array` becomes equivalent to `is_any_array` or
-   * `isTvArrayLike` instead of being a strict KindOfArray check.
+  /* When set:
+   * - `is_array` becomes equivalent to `is_any_array` or
+   *  `isTvArrayLike` instead of being a strict KindOfArray check.
+   * - For safety, we still log when these calls receive Hack arrays.
+   *   See `SuppressWidenIsArrayLogs`.
    */                                                                   \
   F(bool, WidenIsArray, false)                                          \
+  F(bool, WidenIsArrayLogs, true)                                       \
   F(bool, EnablePerFileCoverage, false)                                 \
   F(bool, NoUseMagicMethods, false)                                     \
   /* Should we use the autoload map from the repo */                    \
-  F(bool, UseRepoAutoloadMap, false)                                    \
+  F(bool, UseRepoAutoloadMap, true)                                     \
   /* */
 
 private:

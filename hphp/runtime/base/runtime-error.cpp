@@ -190,14 +190,6 @@ void raise_hackarr_compat_notice(const std::string& msg) {
   raise_notice("Hack Array Compat: %s", msg.c_str());
 }
 
-void raise_recordarray_promotion_notice(const std::string& op) {
-  raise_notice("Record-array to mixed-array promotion for %s", op.c_str());
-}
-
-void raise_recordarray_unsupported_op_notice(const std::string& op) {
-  raise_notice("Opertation not supported for records: %s", op.c_str());
-}
-
 #define HC(Opt, opt) \
   void raise_hac_##opt##_notice(const std::string& msg) {       \
     if (UNLIKELY(RID().getSuppressHAC##Opt##Notices())) return; \
@@ -738,7 +730,7 @@ std::string param_type_error_message(
   assertx(param_num > 0);
 
   auto const actual_type = [&]{
-    if (RO::EvalHackArrCompatSpecialization && tvIsArray(actual_value)) {
+    if (tvIsArray(actual_value)) {
       auto const ad = val(actual_value).parr;
       if (ad->isVArray()) return "varray";
       if (ad->isDArray()) return "darray";

@@ -59,8 +59,11 @@ let parsing
   Hh_logger.log "Heap size: %d" hs;
   Stats.(stats.init_parsing_heap_size <- hs);
 
-  (* TODO: log a count of the number of files parsed... 0 is a placeholder *)
-  HackEventLogger.parsing_end t hs ~parsed_count:0;
+  (* The true count of how many files we parsed is wrapped up in the get_next closure.
+  But our caller provides us 'count' option in cases where it knows the number in
+  advance, e.g. during init. We'll log that for now. In future it'd be nice to
+  log the actual number parsed. *)
+  HackEventLogger.parsing_end_for_init t hs ~parsed_count:count;
   let env =
     { env with naming_table; errorl = Errors.merge errorl env.errorl }
   in
@@ -99,7 +102,7 @@ let naming (env : ServerEnv.env) (t : float) : ServerEnv.env * float =
   in
   let hs = SharedMem.heap_size () in
   Hh_logger.log "Heap size: %d" hs;
-  HackEventLogger.global_naming_end t;
+  HackEventLogger.global_naming_end t hs;
   (env, Hh_logger.log_duration "Naming" t)
 
 let is_path_in_range (path : string) (range : ServerArgs.files_to_check_range) :
@@ -195,10 +198,11 @@ let type_check
         ~memory_cap
         ~check_info:(ServerCheckUtils.get_check_info genv env)
     in
-    let hs = SharedMem.heap_size () in
-    Hh_logger.log "Heap size: %d" hs;
+    let heap_size = SharedMem.heap_size () in
+    Hh_logger.log "Heap size: %d" heap_size;
     HackEventLogger.type_check_end
       (ServerUtils.log_hash_stats telemetry)
+      ~heap_size
       ~started_count:count
       ~count
       ~experiments:genv.local_config.ServerLocalConfig.experiments

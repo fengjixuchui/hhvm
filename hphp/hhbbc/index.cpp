@@ -87,6 +87,23 @@ const StaticString s_Generator("Generator");
 
 //////////////////////////////////////////////////////////////////////
 
+// HHBBC consumes a LOT of memory, so we keep representation types small.
+template <typename T, size_t Expected, size_t Actual = sizeof(T)>
+constexpr bool CheckSize() { static_assert(Expected == Actual); return true; };
+static_assert(CheckSize<php::Block, 24>(), "");
+static_assert(CheckSize<php::Local, use_lowptr ? 12 : 16>(), "");
+static_assert(CheckSize<php::Param, use_lowptr ? 64 : 88>(), "");
+static_assert(CheckSize<php::Func, use_lowptr ? 160 : 192>(), "");
+
+// Likewise, we also keep the bytecode and immediate types small.
+static_assert(CheckSize<Bytecode, use_lowptr ? 32 : 40>(), "");
+static_assert(CheckSize<MKey, 16>(), "");
+static_assert(CheckSize<IterArgs, 16>(), "");
+static_assert(CheckSize<FCallArgs, 8>(), "");
+static_assert(CheckSize<RepoAuthType, 8>(), "");
+
+//////////////////////////////////////////////////////////////////////
+
 /*
  * One-to-many case insensitive map, where the keys are static strings
  * and the values are some kind of pointer.
@@ -601,10 +618,7 @@ const MagicMapInfo magicMethods[] {
 //////////////////////////////////////////////////////////////////////
 
 namespace res {
-Record::Record(const Index* idx, Either<SString, RecordInfo*> val)
-  : index(idx)
-  , val(val)
-{}
+Record::Record(Either<SString, RecordInfo*> val) : val(val) {}
 
 bool Record::same(const Record& o) const {
   return val == o.val;
@@ -683,14 +697,10 @@ folly::Optional<Record> Record::commonAncestor(const Record& r) const {
   if (ancestor == nullptr) {
     return folly::none;
   }
-  return res::Record { index, ancestor };
+  return res::Record { ancestor };
 }
 
-Class::Class(const Index* idx,
-             Either<SString,ClassInfo*> val)
-  : index(idx)
-  , val(val)
-{}
+Class::Class(Either<SString,ClassInfo*> val) : val(val) {}
 
 // Class type operations here are very conservative for now.
 
@@ -872,14 +882,14 @@ folly::Optional<Class> Class::commonAncestor(const Class& o) const {
   if (ancestor == nullptr) {
     return folly::none;
   }
-  return res::Class { index, ancestor };
+  return res::Class { ancestor };
 }
 
 folly::Optional<res::Class> Class::parent() const {
   if (!val.right()) return folly::none;
   auto parent = val.right()->parent;
   if (!parent) return folly::none;
-  return res::Class { index, parent };
+  return res::Class { parent };
 }
 
 const php::Class* Class::cls() const {
@@ -2099,26 +2109,7 @@ struct NamingEnv {
   NamingEnv(php::Program* program, IndexData& index, TypeInfoData<T>& tid) :
       program{program}, index{index}, tid{tid} {}
 
-  struct Define;
 
-  // Returns TypeInfo for a given name, if either:
-  // a) that name corresponds to a unique TypeInfo, or
-  // b) he TypeInfo for that name was selected in scope with NamingEnv::Define
-  TypeInfo<T>* try_lookup(SString name,
-                          const ISStringToOneT<TypeInfo<T>*>& map) const {
-    auto const it = map.find(name);
-    // We're resolving in topological order; we shouldn't be here
-    // unless we know there's at least one resolution of this class.
-    assertx(it != map.end());
-    return it->second;
-  }
-
-  TypeInfo<T>* lookup(SString name,
-                      const ISStringToOneT<TypeInfo<T>*>& map) const {
-    auto const ret = try_lookup(name, map);
-    assertx(ret);
-    return ret;
-  }
 
   php::Program*                              program;
   IndexData&                                 index;
@@ -2127,29 +2118,6 @@ struct NamingEnv {
     const T*,
     TypeInfo<T>*,
     pointer_hash<T>>                          resolved;
-private:
-  ISStringToOne<TypeInfo<T>>   names;
-};
-
-template<typename T>
-struct NamingEnv<T>::Define {
-  explicit Define(NamingEnv& env, SString n, TypeInfo<T>* ti, const T* t)
-      : env(env), n(n) {
-    ITRACE(2, "defining {} {} for {}\n", PhpTypeHelper<T>::name(), n, t->name);
-    always_assert(!env.names.count(n));
-    env.names[n] = ti;
-  }
-  ~Define() {
-    env.names.erase(n);
-  }
-
-  Define(const Define&) = delete;
-  Define& operator=(const Define&) = delete;
-
-private:
-  Trace::Indent indent;
-  NamingEnv<T>& env;
-  SString n;
 };
 
 using ClassNamingEnv = NamingEnv<php::Class>;
@@ -2544,30 +2512,10 @@ void flatten_traits(ClassNamingEnv& env, ClassInfo* cinfo) {
  */
 void resolve_combinations(RecordNamingEnv& env,
                           const php::Record* rec) {
-
-  auto resolve_one = [&] (SString name) {
-    if (env.try_lookup(name, env.index.recordInfo)) return true;
-    auto const range = copy_range(env.index.recordInfo, name);
-    assertx(range.size() > 1);
-    for (auto& kv : range) {
-      RecordNamingEnv::Define def{env, name, kv.second, rec};
-      resolve_combinations(env, rec);
-    }
-    return false;
-  };
-
-  // Recurse with all combinations of parents.
-  if (rec->parentName) {
-    if (!resolve_one(rec->parentName)) return;
-  }
-
-  // Everything is defined in the naming environment here.  (We
-  // returned early if something didn't exist.)
-
   auto rinfo = std::make_unique<RecordInfo>();
   rinfo->rec = rec;
   if (rec->parentName) {
-    auto const parent = env.lookup(rec->parentName, env.index.recordInfo);
+    auto const parent = env.index.recordInfo.at(rec->parentName);
     if (parent->rec->attrs & AttrFinal) {
       ITRACE(2,
              "Resolve combinations failed for `{}' because "
@@ -2593,38 +2541,11 @@ void resolve_combinations(RecordNamingEnv& env,
  */
 void resolve_combinations(ClassNamingEnv& env,
                           const php::Class* cls) {
-
-  auto resolve_one = [&] (SString name) {
-    if (env.try_lookup(name, env.index.classInfo)) return true;
-    auto const range = copy_range(env.index.classInfo, name);
-    assertx(range.size() > 1);
-    for (auto& kv : range) {
-      ClassNamingEnv::Define def{env, name, kv.second, cls};
-      resolve_combinations(env, cls);
-    }
-    return false;
-  };
-
-  // Recurse with all combinations of bases and interfaces in the
-  // naming environment.
-  if (cls->parentName) {
-    if (!resolve_one(cls->parentName)) return;
-  }
-  for (auto& iname : cls->interfaceNames) {
-    if (!resolve_one(iname)) return;
-  }
-  for (auto& tname : cls->usedTraitNames) {
-    if (!resolve_one(tname)) return;
-  }
-
-  // Everything is defined in the naming environment here.  (We
-  // returned early if something didn't exist.)
-
   auto cinfo = std::make_unique<ClassInfo>();
   cinfo->cls = cls;
   auto const& map = env.index.classInfo;
   if (cls->parentName) {
-    cinfo->parent   = env.lookup(cls->parentName, map);
+    cinfo->parent   = map.at(cls->parentName);
     cinfo->baseList = cinfo->parent->baseList;
     if (cinfo->parent->cls->attrs & (AttrInterface | AttrTrait)) {
       ITRACE(2,
@@ -2637,7 +2558,7 @@ void resolve_combinations(ClassNamingEnv& env,
   cinfo->baseList.push_back(cinfo.get());
 
   for (auto& iname : cls->interfaceNames) {
-    auto const iface = env.lookup(iname, map);
+    auto const iface = map.at(iname);
     if (!(iface->cls->attrs & AttrInterface)) {
       ITRACE(2,
              "Resolve combinations failed for `{}' because `{}' "
@@ -2649,7 +2570,7 @@ void resolve_combinations(ClassNamingEnv& env,
   }
 
   for (auto& tname : cls->usedTraitNames) {
-    auto const trait = env.lookup(tname, map);
+    auto const trait = map.at(tname);
     if (!(trait->cls->attrs & AttrTrait)) {
       ITRACE(2,
              "Resolve combinations failed for `{}' because `{}' "
@@ -3448,8 +3369,7 @@ Type context_sensitive_return_type(IndexData& data,
         const_cast<php::Func*>(finfo->func),
         finfo->func->cls
       };
-      auto t = loosen_dvarrayness(
-        data.m_index->lookup_constraint(ctx, constraint));
+      auto t = data.m_index->lookup_constraint(ctx, constraint);
       return callCtx.args[i].strictlyMoreRefined(t);
     }
     return callCtx.args[i].strictSubtypeOf(TInitCell);
@@ -3807,11 +3727,10 @@ void buildTypeInfoData(TypeInfoData<T>& tid,
 
 template<typename T>
 void preresolveTypes(NamingEnv<T>& env,
-                     TypeInfoData<T>& tid,
                      const ISStringToOneT<TypeInfo<T>*>& tmap) {
   while(true) {
-    auto const ix = tid.cqFront++;
-    if (ix == tid.cqBack) {
+    auto const ix = env.tid.cqFront++;
+    if (ix == env.tid.cqBack) {
       // we've consumed everything where all dependencies are
       // satisfied. There may still be some pseudo-cycles that can
       // be broken though.
@@ -3820,8 +3739,8 @@ void preresolveTypes(NamingEnv<T>& env,
       // A', and then end up here, since both A and B' still have
       // one dependency. But both A and B' can be resolved at this
       // point
-      for (auto it = tid.depCounts.begin();
-           it != tid.depCounts.end();
+      for (auto it = env.tid.depCounts.begin();
+           it != env.tid.depCounts.end();
           ) {
         auto canResolve = true;
         auto const checkCanResolve = [&] (SString name) {
@@ -3831,18 +3750,18 @@ void preresolveTypes(NamingEnv<T>& env,
         if (canResolve) {
           FTRACE(2, "Breaking pseudo-cycle for {} {}:{}\n",
                  PhpTypeHelper<T>::name(), it->first->name, (void*)it->first);
-          tid.queue[tid.cqBack++] = it->first;
-          it = tid.depCounts.erase(it);
-          tid.hasPseudoCycles = true;
+          env.tid.queue[env.tid.cqBack++] = it->first;
+          it = env.tid.depCounts.erase(it);
+          env.tid.hasPseudoCycles = true;
         } else {
           ++it;
         }
       }
-      if (ix == tid.cqBack) {
+      if (ix == env.tid.cqBack) {
         break;
       }
     }
-    auto const t = tid.queue[ix];
+    auto const t = env.tid.queue[ix];
     Trace::Bump bumper{
       Trace::hhbbc_index, kSystemLibBump, is_systemlib_part(*t->unit)
     };
@@ -3877,7 +3796,7 @@ Index::Index(php::Program* program)
   {
     trace_time preresolve_records("preresolve records");
     RecordNamingEnv env{program, *m_data, rid};
-    preresolveTypes(env, rid, m_data->recordInfo);
+    preresolveTypes(env, m_data->recordInfo);
   }
 
   ClassInfoData cid;
@@ -3889,7 +3808,7 @@ Index::Index(php::Program* program)
   {
     trace_time preresolve_classes("preresolve classes");
     ClassNamingEnv env{program, *m_data, cid};
-    preresolveTypes(env, cid, m_data->classInfo);
+    preresolveTypes(env, m_data->classInfo);
   }
 
   for (auto &it : m_data->typeAliases) {
@@ -4408,7 +4327,7 @@ folly::Optional<T> Index::resolve_type_impl(SString name) const {
         }
         always_assert(0);
       }
-      return T { this, tinfo };
+      return T { tinfo };
     }
     break;
   }
@@ -4417,7 +4336,7 @@ folly::Optional<T> Index::resolve_type_impl(SString name) const {
   if (!m_data->enums.count(name) &&
       !m_data->typeAliases.count(name) &&
       !omap.count(name)) {
-    return T { this, name };
+    return T { name };
   }
 
   return folly::none;
@@ -4453,12 +4372,12 @@ res::Class Index::resolve_class(const php::Class* cls) const {
   if (result && (RuntimeOption::RepoAuthoritative ||
                  (!RuntimeOption::EvalJitEnableRenameFunction &&
                   cls->attrs & AttrBuiltin))) {
-    return res::Class { this, result };
+    return res::Class { result };
   }
 
   // We know its a class, not an enum or type alias, so return
   // by name
-  return res::Class { this, cls->name.get() };
+  return res::Class { cls->name.get() };
 }
 
 folly::Optional<res::Class> Index::resolve_class(Context ctx,
@@ -4497,10 +4416,10 @@ Index::resolve_type_name(SString inName) const {
     [&] (boost::blank) { return Ret{}; },
     [&] (SString s) {
       return (res.type == AnnotType::Record) ?
-             Ret{res::Record{this, s}} : Ret{res::Class{this, s}};
+             Ret{res::Record{s}} : Ret{res::Class{s}};
     },
-    [&] (ClassInfo* c) { return res::Class{this, c}; },
-    [&] (RecordInfo* r) { return res::Record{this, r}; }
+    [&] (ClassInfo* c) { return res::Class{c}; },
+    [&] (RecordInfo* r) { return res::Record{r}; }
   );
   return { res.type, res.nullable, val };
 }
@@ -4628,7 +4547,7 @@ Index::ConstraintResolution Index::resolve_named_type(
       [&] (RecordInfo*) { always_assert(false); return nullptr; }
     );
     if (val.isNull()) return ConstraintResolution{ folly::none, true };
-    auto ty = resolve({ this, val });
+    auto ty = resolve(res::Class { val });
     if (ty && res.nullable) *ty = opt(std::move(*ty));
     return ConstraintResolution{ std::move(ty), false };
   } else if (res.type == AnnotType::Record) {
@@ -4640,7 +4559,7 @@ Index::ConstraintResolution Index::resolve_named_type(
       [&] (RecordInfo* r) { return r; }
     );
     if (val.isNull()) return ConstraintResolution{ folly::none, true };
-    return subRecord({ this, val });
+    return subRecord(res::Record { val });
   }
 
   return get_type_for_annotated_type(ctx, res.type, res.nullable,
@@ -5053,18 +4972,7 @@ Type Index::lookup_constraint(Context ctx,
 bool Index::satisfies_constraint(Context ctx, const Type& t,
                                  const TypeConstraint& tc) const {
   auto const tcType = get_type_for_constraint<false>(ctx, tc, t);
-  if (t.moreRefined(loosen_dvarrayness(tcType))) {
-    // For d/varrays, we might satisfy the constraint, but still not want to
-    // optimize away the type-check (because we'll raise a notice on a d/varray
-    // mismatch), so do some additional checking here to rule that out.
-    if (!RuntimeOption::EvalHackArrCompatTypeHintNotices) return true;
-    if (!tcType.subtypeOrNull(BArr) || tcType.subtypeOf(BNull)) return true;
-    assertx(t.subtypeOrNull(BArr));
-    if (tcType.subtypeOrNull(BVArr)) return t.subtypeOrNull(BVArr);
-    if (tcType.subtypeOrNull(BDArr)) return t.subtypeOrNull(BDArr);
-    if (tcType.subtypeOrNull(BPArr)) return t.subtypeOrNull(BPArr);
-  }
-  return false;
+  return t.moreRefined(tcType);
 }
 
 bool Index::could_have_reified_type(Context ctx,
@@ -5090,7 +4998,7 @@ bool Index::could_have_reified_type(Context ctx,
     [&] (ClassInfo* c) { return c; },
     [&] (RecordInfo*) { always_assert(false); return nullptr; }
   );
-  res::Class rcls{this, val};
+  res::Class rcls{val};
   return rcls.couldHaveReifiedGenerics();
 }
 
@@ -5782,15 +5690,14 @@ void Index::init_return_type(const php::Func* func) {
         (RuntimeOption::EvalEnforceGenericsUB < 2 && tc.isUpperBound())) {
       return TBottom;
     }
-    return loosen_dvarrayness(
-      lookup_constraint(
-        Context {
-          func->unit,
-            const_cast<php::Func*>(func),
-            func->cls && func->cls->closureContextCls ?
-            func->cls->closureContextCls : func->cls
-            },
-        tc)
+    return lookup_constraint(
+      Context {
+        func->unit,
+          const_cast<php::Func*>(func),
+          func->cls && func->cls->closureContextCls ?
+          func->cls->closureContextCls : func->cls
+      },
+      tc
     );
   };
 
@@ -6323,9 +6230,9 @@ bool Index::must_be_derived_from(const php::Class* cls,
   auto const clsClasses    = find_range(m_data->classInfo, cls->name);
   auto const parentClasses = find_range(m_data->classInfo, parent->name);
   for (auto& kvCls : clsClasses) {
-    auto const rCls = res::Class { this, kvCls.second };
+    auto const rCls = res::Class { kvCls.second };
     for (auto& kvPar : parentClasses) {
-      auto const rPar = res::Class { this, kvPar.second };
+      auto const rPar = res::Class { kvPar.second };
       if (!rCls.mustBeSubtypeOf(rPar)) return false;
     }
   }
@@ -6341,9 +6248,9 @@ Index::could_be_related(const php::Class* cls,
   auto const clsClasses    = find_range(m_data->classInfo, cls->name);
   auto const parentClasses = find_range(m_data->classInfo, parent->name);
   for (auto& kvCls : clsClasses) {
-    auto const rCls = res::Class { this, kvCls.second };
+    auto const rCls = res::Class { kvCls.second };
     for (auto& kvPar : parentClasses) {
-      auto const rPar = res::Class { this, kvPar.second };
+      auto const rPar = res::Class { kvPar.second };
       if (rCls.couldBe(rPar)) return true;
     }
   }

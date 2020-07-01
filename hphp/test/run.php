@@ -85,9 +85,9 @@ function has_multi_request_mode($options) {
 
 function test_repo($options, $test) {
   if (isset($options['repo-out'])) {
-    $test = $options['repo-out'] . '/' . str_replace('/', '.', $test);
+    return $options['repo-out'] . '/' . str_replace('/', '.', $test) . '.repo';
   }
-  return "$test.repo";
+  return Status::getTestTmpPath($test, 'repo');
 }
 
 function jit_serialize_option(string $cmd, $test, $options, $serialize) {
@@ -668,7 +668,7 @@ function find_tests($files, darray $options = null) {
     $files = varray['quick'];
   }
   if ($files == varray['all']) {
-    $files = varray['quick', 'slow', 'zend', 'fastcgi'];
+    $files = varray['quick', 'slow', 'zend', 'fastcgi', 'http', 'debugger'];
     if (is_dir(hphp_home() . '/hphp/facebook/test')) {
       $files[] = 'facebook';
     }
@@ -1677,7 +1677,7 @@ class Status {
             break;
 
           case Status::MODE_TESTPILOT:
-            Status::sayTestpilot($test, 'passed', $stime, $etime);
+            Status::sayTestpilot($test, 'passed', $stime, $etime, $time);
             break;
 
           case Status::MODE_RECORD_FAILURES:
@@ -1708,7 +1708,7 @@ class Status {
             break;
 
           case Status::MODE_TESTPILOT:
-            Status::sayTestpilot($test, 'not_relevant', $stime, $etime);
+            Status::sayTestpilot($test, 'not_relevant', $stime, $etime, $time);
             break;
 
           case Status::MODE_RECORD_FAILURES:
@@ -1735,7 +1735,7 @@ class Status {
             break;
 
           case Status::MODE_TESTPILOT:
-            Status::sayTestpilot($test, 'failed', $stime, $etime);
+            Status::sayTestpilot($test, 'failed', $stime, $etime, $time);
             break;
 
           case Status::MODE_RECORD_FAILURES:
@@ -1786,10 +1786,10 @@ class Status {
     }
   }
 
-  public static function sayTestpilot($test, $status, $stime, $etime) {
+  public static function sayTestpilot($test, $status, $stime, $etime, $time) {
     $start = darray['op' => 'start', 'test' => $test];
     $end = darray['op' => 'test_done', 'test' => $test, 'status' => $status,
-                 'start_time' => $stime, 'end_time' => $etime];
+                 'start_time' => $stime, 'end_time' => $etime, 'time' => $time];
     if ($status == 'failed') {
       $end['details'] = self::utf8Sanitize(Status::diffForTest($test));
     }
@@ -1872,28 +1872,17 @@ function clean_intermediate_files($test, $options) {
   if (isset($options['no-clean'])) {
     return;
   }
-  $exts = varray[
-    // normal test output will go here if we're run with --write-to-checkout
-    'out',
-    'diff',
-    // repo mode tests
-    'repo',
-    // tests in --hhas-round-trip mode
-    'round_trip.hhas',
-    // tests in --hhbbc2 mode
-    'before.round_trip.hhas',
-    'after.round_trip.hhas',
-  ];
-  foreach ($exts as $ext) {
-    if ($ext == 'repo') {
-      $file = test_repo($options, $test);
-    } else {
+  if (isset($options['write-to-checkout'])) {
+    // in --write-to-checkout mode, normal test output goes next to the test
+    $exts = varray[
+      'out',
+      'diff',
+    ];
+    foreach ($exts as $ext) {
       $file = "$test.$ext";
-    }
-    if (is_dir($file)) {
-      Status::removeDirectory($file);
-    } else if (file_exists($file)) {
-      unlink($file);
+      if (file_exists($file)) {
+        unlink($file);
+      }
     }
   }
   $tmp_exts = varray[
@@ -1902,6 +1891,11 @@ function clean_intermediate_files($test, $options) {
     'diff',
     // scratch directory the test may write to
     'tmpdir',
+    // tests in --hhas-round-trip mode
+    'round_trip.hhas',
+    // tests in --hhbbc2 mode
+    'before.round_trip.hhas',
+    'after.round_trip.hhas',
     // temporary autoloader DB and associated cruft
     // We have at most two modes for now - see hhvm_cmd_impl
     'autoloadDB.0',
@@ -1920,6 +1914,11 @@ function clean_intermediate_files($test, $options) {
     } else if (file_exists($file)) {
       unlink($file);
     }
+  }
+  // repo mode uses a directory that may or may not be in the run's tmpdir
+  $repo = test_repo($options, $test);
+  if (is_dir($repo)) {
+    Status::removeDirectory($repo);
   }
 }
 
@@ -2199,7 +2198,7 @@ function dump_hhas_cmd(string $hhvm_cmd, $test, $hhas_file) {
 }
 
 function dump_hhas_to_temp(string $hhvm_cmd, $test) {
-  $temp_file = $test . '.round_trip.hhas';
+  $temp_file = Status::getTestTmpPath($test, 'round_trip.hhas');
   $cmd = dump_hhas_cmd($hhvm_cmd, $test, $temp_file);
   $ret = -1;
   system("$cmd &> /dev/null", inout $ret);
@@ -2275,7 +2274,12 @@ function run_config_cli(
 ) {
   $cmd = timeout_prefix() . $cmd;
 
-  $cmd_env['HPHP_TEST_TMPDIR'] = Status::createTestTmpDir($test);
+  if (isset($options['repo']) && !isset($options['repo-out'])) {
+    // we already created it in run_test
+    $cmd_env['HPHP_TEST_TMPDIR'] = Status::getTestTmpPath($test, 'tmpdir');
+  } else {
+    $cmd_env['HPHP_TEST_TMPDIR'] = Status::createTestTmpDir($test);
+  }
   if (isset($options['log'])) {
     $cmd_env['TRACE'] = 'printir:1';
     $cmd_env['HPHP_TRACE_FILE'] = $test . '.log';
@@ -2587,11 +2591,16 @@ function run_test($options, $test) {
     }
 
     $test_repo = test_repo($options, $test);
-    $hphp_hhvm_repo = "$test_repo/hhvm.hhbc";
-    $hhbbc_hhvm_repo = "$test_repo/hhvm.hhbbc";
-    $hphp_hackc_repo = "$test_repo/hackc.hhbc";
-    $hhbbc_hackc_repo = "$test_repo/hackc.hhbbc";
-    shell_exec("rm -f \"$hphp_hhvm_repo\" \"$hhbbc_hhvm_repo\" \"$hphp_hackc_repo\" \"$hhbbc_hackc_repo\" ");
+    if (isset($options['repo-out'])) {
+      // we may need to clean up after a previous run
+      $repo_files = vec['hhvm.hhbc', 'hhvm.hhbbc', 'hackc.hhbc', 'hackc.hhbbc'];
+      foreach ($repo_files as $repo_file) {
+        @unlink("$test_repo/$repo_file");
+      }
+    } else {
+      // create tmpdir now so that we can write repos
+      Status::createTestTmpDir($test);
+    }
 
     $program = isset($options['hackc']) ? "hackc" : "hhvm";
 
@@ -2616,6 +2625,8 @@ function run_test($options, $test) {
         count($hhvm) === 1,
         "get_options forbids modes because we're not runnig code"
       );
+      // create tmpdir now so that we can write hhas
+      Status::createTestTmpDir($test);
       $hhas_temp1 = dump_hhas_to_temp($hhvm[0], "$test.before");
       if ($hhas_temp1 === false) {
         Status::writeDiff($test, "dumping hhas after first hhbbc pass failed");
@@ -2660,11 +2671,14 @@ function run_test($options, $test) {
 
   if (isset($options['hhas-round-trip'])) {
     invariant(substr($test, -5) !== ".hhas", "skip_test should have skipped");
+    // create tmpdir now so that we can write hhas
+    Status::createTestTmpDir($test);
     // dumping hhas, not running code so arbitrarily picking a mode
     $hhas_temp = dump_hhas_to_temp($hhvm[0], $test);
     if ($hhas_temp === false) {
       $err = "system failed: " .
-        dump_hhas_cmd($hhvm[0], $test, $test.'.round_trip.hhas') .
+        dump_hhas_cmd($hhvm[0], $test,
+          Status::getTestTmpPath($test, 'round_trip.hhas')) .
         "\n";
       Status::writeDiff($test, $err);
       return false;

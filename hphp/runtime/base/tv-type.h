@@ -44,8 +44,6 @@ CASE(Int)
 CASE(Double)
 CASE(String)
 CASE(Array)
-CASE(DArray)
-CASE(VArray)
 CASE(ArrayLike)
 CASE(HackArray)
 CASE(Vec)
@@ -61,15 +59,15 @@ CASE(Record)
 #undef CASE
 
 template<typename T>
-ALWAYS_INLINE bool tvIsVecOrVArray(const T& tv) {
+ALWAYS_INLINE bool tvIsHAMSafeVArray(const T& tv) {
   if (RO::EvalHackArrDVArrs) return tvIsVec(tv);
-  return tvIsArray(tv) && val(tv).parr->isVArray();
+  return tvIsArrayLike(tv) && val(tv).parr->isVArray();
 }
 
 template<typename T>
-ALWAYS_INLINE bool tvIsDictOrDArray(const T& tv) {
+ALWAYS_INLINE bool tvIsHAMSafeDArray(const T& tv) {
   if (RO::EvalHackArrDVArrs) return tvIsDict(tv);
-  return tvIsArray(tv) && val(tv).parr->isDArray();
+  return tvIsArrayLike(tv) && val(tv).parr->isDArray();
 }
 
 template<typename T>

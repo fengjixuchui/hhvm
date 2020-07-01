@@ -239,6 +239,8 @@ bool supportsGVN(const IRInstruction* inst) {
   case CmpBool:
   case SameObj:
   case NSameObj:
+  case SameArr:
+  case NSameArr:
   case SameVec:
   case NSameVec:
   case SameDict:
@@ -303,7 +305,7 @@ bool supportsGVN(const IRInstruction* inst) {
   case OrdStr:
   case ChrInt:
   case CheckRange:
-  case CountArrayFast:
+  case CountArray:
   case CountVec:
   case CountDict:
   case CountKeyset:
@@ -318,10 +320,6 @@ bool supportsGVN(const IRInstruction* inst) {
     // Resources can change type without generating a new SSATmp,
     // so its not safe to GVN
     return !opcodeMayRaise(IsTypeStruct) && !inst->src(1)->type().maybe(TRes);
-
-  case SameArr:
-  case NSameArr:
-    return !RuntimeOption::EvalHackArrCompatDVCmpNotices;
 
   default:
     return false;

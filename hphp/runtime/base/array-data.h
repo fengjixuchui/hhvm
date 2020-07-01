@@ -83,20 +83,18 @@ struct ArrayData : MaybeCountable {
    * kNumKinds-1 since we use these values to index into a table.
    */
   enum ArrayKind : uint8_t {
-    kPackedKind,        // varray: vec-like array with keys in range [0..size)
-    kBespokeVArrayKind,
     kMixedKind,         // darray: dict-like array with int or string keys
     kBespokeDArrayKind,
-    kGlobalsKind,       // GlobalsArray for the awful $GLOBALS['GLOBALS']
-    kRecordKind,        // RecordArray (backed by a record and a MixedArray)
+    kPackedKind,        // varray: vec-like array with keys in range [0..size)
+    kBespokeVArrayKind,
     kPlainKind,         // Plain PHP array (backed by MixedArray)
     kBespokeArrayKind,
-    kVecKind,
-    kBespokeVecKind,
-    kDictKind,
-    kBespokeDictKind,
     kKeysetKind,
     kBespokeKeysetKind,
+    kDictKind,
+    kBespokeDictKind,
+    kVecKind,
+    kBespokeVecKind,
     kNumKinds           // Insert new values before kNumKinds.
   };
 
@@ -215,9 +213,7 @@ public:
   size_t vsize() const;
 
   /*
-   * Fast-path number of elements.
-   *
-   * Only valid for arrays that aren't GlobalsArray or BespokeArray.
+   * Fast-path number of elements. Only valid for vanilla array-likes.
    */
   size_t getSize() const;
 
@@ -244,11 +240,9 @@ public:
   bool isPackedKind() const;
   bool isMixedKind() const;
   bool isPlainKind() const;
-  bool isGlobalsArrayKind() const;
   bool isDictKind() const;
   bool isVecKind() const;
   bool isKeysetKind() const;
-  bool isRecordArrayKind() const;
 
   /*
    * Whether the array has a particular Hack type
@@ -314,8 +308,8 @@ public:
   bool isDArray() const;
   bool isDVArray() const;
   bool isNotDVArray() const;
-  bool isVecOrVArray() const;
-  bool isDictOrDArray() const;
+  bool isHAMSafeVArray() const;
+  bool isHAMSafeDArray() const;
 
   static bool dvArrayEqual(const ArrayData* a, const ArrayData* b);
 
@@ -545,8 +539,8 @@ public:
   // PHP array functions.
 
   /*
-   * Called prior to sorting this array. Some array kinds, such as struct-like
-   * RecordArrays, have layouts that are overly constrained to sort in-place.
+   * Called prior to sorting this array. Some array kinds
+   * have layouts that are overly constrained to sort in-place.
    */
   ArrayData* escalateForSort(SortFunction sort_function);
 
@@ -753,16 +747,14 @@ protected:
   friend struct BaseMap;
   friend struct c_Map;
   friend struct c_ImmMap;
-  friend struct RecordArray;
 
   // The following fields are blocked into unions with qwords so we
   // can combine the stores when initializing arrays.  (gcc won't do
   // this on its own.)
 
-  // note that m_size does not store the array size for GlobalsArray (where it
-  // is -1) or for BespokeArray (where it is ~bespoke_id) and you must call the
-  // size arraydata method to get the size of these arrays (or, future-proofing
-  // here:) or for any array with the sign bit of its m_size set.
+  // note that m_size does not store the array size for bespoke array-likes -
+  // instead, it is ~BespokeID. Call size() instead for bespokearray-likes,
+  // (or in general, to future-proof code).
   union {
     struct {
       uint32_t m_size;
@@ -775,10 +767,8 @@ protected:
 static_assert(ArrayData::kPackedKind == uint8_t(HeaderKind::Packed), "");
 static_assert(ArrayData::kMixedKind == uint8_t(HeaderKind::Mixed), "");
 static_assert(ArrayData::kPlainKind == uint8_t(HeaderKind::Plain), "");
-static_assert(ArrayData::kGlobalsKind == uint8_t(HeaderKind::Globals), "");
 static_assert(ArrayData::kDictKind == uint8_t(HeaderKind::Dict), "");
 static_assert(ArrayData::kVecKind == uint8_t(HeaderKind::Vec), "");
-static_assert(ArrayData::kRecordKind == uint8_t(HeaderKind::RecordArray), "");
 
 //////////////////////////////////////////////////////////////////////
 

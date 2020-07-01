@@ -30,7 +30,7 @@ let test_dmesg_parser () =
       "[3034339.262439] Out of memory: Kill process 2758734 (hh_server) score 253 or sacrifice child";
     ]
   in
-  Sys_utils.find_oom_in_dmesg_output
+  Sys_utils.For_test.find_oom_in_dmesg_output
     test_process_data.ServerProcess.pid
     "hh_server"
     input
@@ -194,7 +194,7 @@ let test_compute_tast_counting () =
   in
 
   Asserter.Int_asserter.assert_equals
-    111
+    108
     (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
     "There should be this many decl_accessor_count for shared_mem provider";
   Asserter.Int_asserter.assert_equals
@@ -223,7 +223,7 @@ let test_compute_tast_counting () =
         Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
       in
       Asserter.Int_asserter.assert_equals
-        51
+        49
         (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
         "There should be this many decl_accessor_count for local_memory provider";
       Asserter.Int_asserter.assert_equals

@@ -248,7 +248,7 @@ and _ ty_ =
       (** The type of a generic parameter. The constraints on a generic parameter
        * are accessed through the lenv.tpenv component of the environment, which
        * is set up when checking the body of a function or method. See uses of
-       * Typing_phase.localize_generic_parameters_with_bounds.
+       * Typing_phase.add_generic_parameters_and_constraints.
        *)
   | Tunion : 'phase ty list -> 'phase ty_
       (** Union type.
@@ -462,3 +462,7 @@ let get_pos t = Reason.to_pos (get_reason t)
 let mk_constraint_type p = p
 
 let deref_constraint_type p = p
+
+let get_reason_i = function
+  | LoclType lty -> get_reason lty
+  | ConstraintType (r, _) -> r

@@ -418,6 +418,12 @@ void checkMethCaller(const Func* func, const Class* ctx) {
     ));
   }
 
+  if (isTrait(cls)) {
+    SystemLib::throwInvalidArgumentExceptionObject(folly::sformat(
+      "meth_caller(): class {} is a trait", func->methCallerClsName()->data()
+    ));
+  }
+
   auto const meth = cls->lookupMethod(func->methCallerMethName());
   if (!meth) {
     SystemLib::throwInvalidArgumentExceptionObject(folly::sformat(
@@ -739,6 +745,10 @@ void throw_call_reified_func_without_generics(const Func* f) {
     f->fullName()->data()
   );
   SystemLib::throwBadMethodCallExceptionObject(msg);
+}
+
+void throw_implicit_context_exception(std::string s) {
+  SystemLib::throwInvalidOperationExceptionObject(s);
 }
 
 void throw_iterator_not_valid() {

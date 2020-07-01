@@ -574,15 +574,50 @@ SSATmp* opt_type_structure_classname(IRGS& env, const ParamPrep& params) {
 SSATmp* opt_is_list_like(IRGS& env, const ParamPrep& params) {
   if (params.size() != 1) return nullptr;
   auto const type = params[0].value->type();
-  // Type might be a Ptr here, so the maybe() below will go wrong if we don't
-  // bail out here.
-  if (!(type <= TInitCell)) return nullptr;
   if (type <= TClsMeth) {
     raiseClsMethToVecWarningHelper(env, params);
     return cns(env, true);
   }
   if (!type.maybe(TArrLike)) return cns(env, false);
   if (type.subtypeOfAny(TVec, TPackedArr)) return cns(env, true);
+  return nullptr;
+}
+
+SSATmp* opt_is_vec_or_varray(IRGS& env, const ParamPrep& params) {
+  if (params.size() != 1) return nullptr;
+  auto const type = params[0].value->type();
+
+  if (type.subtypeOfAny(TVec, TVArr)) {
+    return cns(env, true);
+  }
+
+  if (type <= TClsMeth && RO::EvalIsCompatibleClsMethType) {
+    if (RO::EvalIsVecNotices) {
+      auto const msg = makeStaticString(Strings::CLSMETH_COMPAT_IS_VEC_OR_VARR);
+      gen(env, RaiseNotice, make_opt_catch(env, params), cns(env, msg));
+    }
+    return cns(env, true);
+  }
+
+  if (!type.maybe(TVec) && !type.maybe(TVArr)) {
+    return cns(env, false);
+  }
+
+  return nullptr;
+}
+
+SSATmp* opt_is_dict_or_darray(IRGS& env, const ParamPrep& params) {
+  if (params.size() != 1) return nullptr;
+  auto const type = params[0].value->type();
+
+  if (type.subtypeOfAny(TDict, TDArr)) {
+    return cns(env, true);
+  }
+
+  if (!type.maybe(TDict) && !type.maybe(TDArr)) {
+    return cns(env, false);
+  }
+
   return nullptr;
 }
 
@@ -611,7 +646,7 @@ SSATmp* opt_foldable(IRGS& env,
     variadicArgs = variadic->variantVal().asCArrRef().get();
     numVariadicArgs = variadicArgs->size();
 
-    if (numVariadicArgs && !variadicArgs->isVecOrVArray()) return nullptr;
+    if (numVariadicArgs && !variadicArgs->isHAMSafeVArray()) return nullptr;
 
     assertx(variadicArgs->isStatic());
     numNonDefaultArgs = func->numNonVariadicParams();
@@ -981,7 +1016,7 @@ SSATmp* opt_shapes_idx(IRGS& env, const ParamPrep& params) {
   // params[0] is the array, for which we may need to do a dvarray check.
   auto const arr = [&]() -> SSATmp* {
     auto const val = params[0].value;
-    if (!(RO::EvalHackArrCompatTypeHintNotices && val->isA(TArr))) return val;
+    if (!val->isA(TArr)) return val;
 
     // Rather than just emitting a notice here, we interp and side-exit for
     // non-darrays so that we can use layout information in the main trace.
@@ -1177,6 +1212,8 @@ const hphp_fast_string_imap<OptEmitFn> s_opt_emit_fns{
   {"hh\\type_structure", opt_type_structure},
   {"hh\\type_structure_classname", opt_type_structure_classname},
   {"hh\\is_list_like", opt_is_list_like},
+  {"HH\\is_dict_or_darray", opt_is_dict_or_darray},
+  {"HH\\is_vec_or_varray", opt_is_vec_or_varray},
   {"HH\\Lib\\_Private\\Native\\first", opt_container_first},
   {"HH\\Lib\\_Private\\Native\\last", opt_container_last},
   {"HH\\Lib\\_Private\\Native\\first_key", opt_container_first_key},
@@ -1649,7 +1686,7 @@ jit::vector<SSATmp*> realize_params(IRGS& env,
   auto const genFail = [&](uint32_t param, SSATmp* val) {
     auto const expected_type = [&]{
       auto const& tc = callee->params()[param].typeConstraint;
-      if (RO::EvalHackArrCompatSpecialization && tc.isArray()) {
+      if (tc.isArray()) {
         if (tc.isVArray()) return s_varray.get();
         if (tc.isDArray()) return s_darray.get();
         if (tc.isVArrayOrDArray()) return s_varray_or_darray.get();
@@ -1663,7 +1700,6 @@ jit::vector<SSATmp*> realize_params(IRGS& env,
   };
 
   auto const needDVCheck = [&](uint32_t param, const Type& ty) {
-    if (!RuntimeOption::EvalHackArrCompatTypeHintNotices) return false;
     if (!callee->params()[param].typeConstraint.isArray()) return false;
     return ty <= TArr;
   };
@@ -1671,20 +1707,9 @@ jit::vector<SSATmp*> realize_params(IRGS& env,
   auto const dvCheck = [&](uint32_t param, SSATmp* val) {
     assertx(needDVCheck(param, val->type()));
     auto const& tc = callee->params()[param].typeConstraint;
-    ifThen(
-      env,
+    ifThen(env,
       [&](Block* taken) { doDVArrChecks(env, val, taken, tc); },
-      [&]{
-        if (RO::EvalHackArrCompatSpecialization) return genFail(param, val);
-        gen(
-          env,
-          RaiseHackArrParamNotice,
-          RaiseHackArrParamNoticeData { tc, int32_t(param), false },
-          maker.makeUnusualCatch(),
-          val,
-          cns(env, callee)
-        );
-      }
+      [&]{ genFail(param, val); }
     );
   };
 
@@ -2634,10 +2659,15 @@ void emitAKExists(IRGS& env) {
 }
 
 //////////////////////////////////////////////////////////////////////
+const StaticString
+  s_implicit_context_set("HH\\ImplicitContext::set"),
+  s_implicit_context_genSet("HH\\ImplicitContext::genSet");
 
 void emitGetMemoKeyL(IRGS& env, NamedLocal loc) {
   DEBUG_ONLY auto const func = curFunc(env);
-  assertx(func->isMemoizeWrapper());
+  assertx(func->isMemoizeWrapper() ||
+          func->fullName()->isame(s_implicit_context_set.get()) ||
+          func->fullName()->isame(s_implicit_context_genSet.get()));
 
   auto const value = ldLocWarn(
     env,

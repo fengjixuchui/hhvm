@@ -7,7 +7,7 @@
  *
  *)
 
-type t = GlobalOptions.t [@@deriving show]
+type t = GlobalOptions.t [@@deriving eq, show]
 
 let num_local_workers = GlobalOptions.tco_num_local_workers
 
@@ -143,3 +143,5 @@ let disallow_discarded_nullable_awaitables =
 
 let enable_systemlib_annotations =
   GlobalOptions.tco_enable_systemlib_annotations
+
+let widen_is_array = GlobalOptions.tco_widen_is_array

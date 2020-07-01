@@ -221,6 +221,10 @@ type t = {
   symbol_write_root_path: string;
   (* Path prefix to use for hhi files when writing symbol info to JSON *)
   symbol_write_hhi_path: string;
+  (* Filepaths to ignore when writing symbol info to JSON, relative to path prefix, eg: root|foo.php *)
+  symbol_write_ignore_paths: string list;
+  (* When set, write indexing data for these filepaths only. Relative to repository root, eg: bar.php for root|bar.php *)
+  symbol_write_index_paths: string list;
   (* Flag to disallow HH\fun and HH\class_meth in constants and constant initializers *)
   po_disallow_func_ptrs_in_constants: bool;
   (* Flag to report an error on php style anonymous functions *)
@@ -255,8 +259,12 @@ type t = {
    * Paths are relative to the path of .hhconfig
    *)
   tco_pu_enabled_paths: bool * Relative_path.t list;
+  (* Companion option to the runtime's `Eval.WidenIsArray`: changes `is_array`
+   * to use the same inference rules as `is_any_array`.
+   *)
+  tco_widen_is_array: bool;
 }
-[@@deriving show]
+[@@deriving eq, show]
 
 val make :
   ?po_deregister_php_stdlib:bool ->
@@ -340,6 +348,8 @@ val make :
   ?glean_reponame:string ->
   ?symbol_write_root_path:string ->
   ?symbol_write_hhi_path:string ->
+  ?symbol_write_ignore_paths:string list ->
+  ?symbol_write_index_paths:string list ->
   ?po_disallow_func_ptrs_in_constants:bool ->
   ?tco_error_php_lambdas:bool ->
   ?tco_disallow_discarded_nullable_awaitables:bool ->
@@ -352,6 +362,7 @@ val make :
   ?po_disable_array:bool ->
   ?tco_enable_systemlib_annotations:bool ->
   ?tco_pu_enabled_paths:bool * Relative_path.t list ->
+  ?tco_widen_is_array:bool ->
   unit ->
   t
 
@@ -545,6 +556,10 @@ val symbol_write_root_path : t -> string
 
 val symbol_write_hhi_path : t -> string
 
+val symbol_write_ignore_paths : t -> string list
+
+val symbol_write_index_paths : t -> string list
+
 val po_disallow_func_ptrs_in_constants : t -> bool
 
 val tco_error_php_lambdas : t -> bool
@@ -568,3 +583,5 @@ val po_disable_array : t -> bool
 val tco_enable_systemlib_annotations : t -> bool
 
 val tco_pu_enabled_paths : t -> bool * Relative_path.t list
+
+val tco_widen_is_array : t -> bool

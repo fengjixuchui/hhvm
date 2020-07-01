@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<cb67f1801551f71b503ed40d45cd541a>>
+// @generated SignedSource<<62c63faf8c256a36ab2b425234490025>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -269,6 +269,7 @@ pub enum NastCheck {
     PhpLambdaDisallowed,
     EntryPointArguments,
     VariadicMemoize,
+    AbstractMethodMemoize,
 }
 
 #[derive(
@@ -659,6 +660,7 @@ pub enum Typing {
     InvalidArrayKeyWrite,
     NullMemberWrite,
     NonObjectMemberWrite,
+    ConcreteConstInterfaceOverride,
 }
 
 #[derive(

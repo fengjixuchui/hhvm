@@ -226,6 +226,11 @@ String PageletTransport::getResults(
   int &code,
   int64_t timeout_ms
 ) {
+  // Make sure that we only ever return a varray or null.
+  if (!headers.isNull() && !headers.isVArray()) {
+    headers = Array::CreateVArray();
+  }
+
   {
     Lock lock(this);
     while (!m_done && m_pipeline.empty()) {
@@ -300,14 +305,18 @@ struct PageletWorker
   : JobQueueWorker<PageletTransport*,Server*,true,false,JobQueueDropVMStack>
 {
   void doJob(PageletTransport *job) override {
+    static auto pageletTimeInQueueCounter =
+      ServiceData::createTimeSeries("pagelet_time_in_queue",
+        { ServiceData::StatsType::AVG, ServiceData::StatsType::SUM });
     try {
+      int64_t job_created_time = to_ms(job->getStartTimer());
       job->onRequestStart(job->getStartTimer());
       int timeout = job->getTimeoutSeconds();
       if (timeout > 0) {
         timespec ts;
         Timer::GetMonotonicTime(ts);
         int64_t delta_ms =
-          to_ms(job->getStartTimer()) + timeout * 1000 - to_ms(ts);
+          job_created_time + timeout * 1000 - to_ms(ts);
         if (delta_ms > 500) {
           timeout = (delta_ms + 500) / 1000;
         } else {
@@ -316,6 +325,10 @@ struct PageletWorker
       } else {
         timeout = 0;
       }
+      timespec handler_start_time_ts;
+      Timer::GetMonotonicTime(handler_start_time_ts);
+      auto time_spent_in_queue = to_ms(handler_start_time_ts) - job_created_time;
+      pageletTimeInQueueCounter->addValue(time_spent_in_queue);
       HttpRequestHandler(timeout).run(job);
       job->decRefCount();
     } catch (...) {

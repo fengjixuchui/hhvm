@@ -300,17 +300,18 @@ let shallow_typeconst_to_typeconst_type child_class mro subst stc =
   in
   (snd ttc_name, typeconst)
 
-let shallow_pu_enum_to_pu_enum_type spu =
-  let to_member { spum_atom; spum_types; spum_exprs } =
+let shallow_pu_enum_to_pu_enum_type origin spu =
+  let to_member origin { spum_atom; spum_types; spum_exprs } =
     {
       tpum_atom = spum_atom;
+      tpum_origin = origin;
       tpum_types =
         List.fold
           ~init:SMap.empty
           ~f:
             begin
               fun acc (k, t) ->
-              SMap.add (snd k) (k, t) acc
+              SMap.add (snd k) (origin, k, t) acc
             end
           spum_types;
       tpum_exprs =
@@ -319,7 +320,7 @@ let shallow_pu_enum_to_pu_enum_type spu =
           ~f:
             begin
               fun acc k ->
-              SMap.add (snd k) k acc
+              SMap.add (snd k) (origin, k) acc
             end
           spum_exprs;
     }
@@ -327,6 +328,8 @@ let shallow_pu_enum_to_pu_enum_type spu =
   let { spu_name; spu_is_final; spu_case_types; spu_case_values; spu_members } =
     spu
   in
+  let enum_name = snd spu_name in
+  let origin = { pu_class = origin; pu_enum = enum_name } in
   {
     tpu_name = spu_name;
     tpu_is_final = spu_is_final;
@@ -337,7 +340,7 @@ let shallow_pu_enum_to_pu_enum_type spu =
           begin
             fun acc tp ->
             let sid = snd tp.tp_name in
-            SMap.add sid tp acc
+            SMap.add sid (origin, tp) acc
           end
         spu_case_types;
     tpu_case_values =
@@ -346,7 +349,7 @@ let shallow_pu_enum_to_pu_enum_type spu =
         ~f:
           begin
             fun acc (k, t) ->
-            SMap.add (snd k) (k, t) acc
+            SMap.add (snd k) (origin, k, t) acc
           end
         spu_case_values;
     tpu_members =
@@ -355,7 +358,7 @@ let shallow_pu_enum_to_pu_enum_type spu =
         ~f:
           begin
             fun acc pum ->
-            SMap.add (snd pum.spum_atom) (to_member pum) acc
+            SMap.add (snd pum.spum_atom) (to_member origin pum) acc
           end
         spu_members;
   }

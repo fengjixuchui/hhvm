@@ -233,8 +233,6 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
   BIND_HAC_OPTION(CheckArrayKeyCast, Notices)
   BIND_HAC_OPTION(CheckArrayPlus, Notices)
   BIND_HAC_OPTION_SELF(IsArrayNotices)
-  BIND_HAC_OPTION_SELF(TypeHintNotices)
-  BIND_HAC_OPTION_SELF(DVCmpNotices)
   BIND_HAC_OPTION_SELF(SerializeNotices)
   BIND_HAC_OPTION_SELF(CompactSerializeNotices)
 
@@ -306,6 +304,15 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
   Config::Bind(RuntimeOption::EvalEnableFuncStringInterop, ini, config,
                "EnableFuncStringInterop",
                RuntimeOption::EvalEnableFuncStringInterop);
+
+  Config::Bind(RuntimeOption::EvalWidenIsArray, ini, config,
+               "WidenIsArray",
+               RuntimeOption::EvalWidenIsArray);
+
+  Config::Bind(RuntimeOption::EvalWidenIsArrayLogs, ini, config,
+               "WidenIsArrayLogs",
+               RuntimeOption::EvalWidenIsArrayLogs);
+
 
   // Temporary, during file-cache migration.
   Config::Bind(FileCache::UseNewCache, ini, config, "UseNewCache", false);

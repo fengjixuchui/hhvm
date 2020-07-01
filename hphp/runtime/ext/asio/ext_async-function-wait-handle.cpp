@@ -17,6 +17,7 @@
 
 #include "hphp/runtime/ext/asio/ext_async-function-wait-handle.h"
 
+#include "hphp/runtime/base/implicit-context.h"
 #include "hphp/runtime/ext/asio/asio-blockable.h"
 #include "hphp/runtime/ext/asio/asio-context.h"
 #include "hphp/runtime/ext/asio/asio-context-enter.h"
@@ -67,12 +68,8 @@ SrcKey getAsyncFrame(AsyncFrameId id) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-constexpr auto kNumTailFrames =
-  sizeof(ActRec::m_tailFrameIds) / sizeof(AsyncFrameId);
-
 bool c_AsyncFunctionWaitHandle::hasTailFrames() const {
-  return tailFrame(0) != 0 &&
-         tailFrame(kNumTailFrames - 1) != kInvalidAsyncFrameId;
+  return tailFrame(kNumTailFrames - 1) != kInvalidAsyncFrameId;
 }
 
 size_t c_AsyncFunctionWaitHandle::firstTailFrameIndex() const {
@@ -90,9 +87,7 @@ size_t c_AsyncFunctionWaitHandle::lastTailFrameIndex() const {
 
 AsyncFrameId c_AsyncFunctionWaitHandle::tailFrame(size_t index) const {
   assertx(0 <= index && index < kNumTailFrames);
-  auto const raw = actRec()->getTailFrameIds();
-  auto const idx = kNumTailFrames - index - 1;
-  return (raw >> (8 * sizeof(AsyncFrameId) * idx)) & kInvalidAsyncFrameId;
+  return m_tailFrameIds[kNumTailFrames - index - 1];
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -137,9 +132,7 @@ c_AsyncFunctionWaitHandle::Create(const ActRec* fp,
   auto const waitHandle = new (resumable + 1) c_AsyncFunctionWaitHandle();
   assertx(waitHandle->hasExactlyOneRef());
   waitHandle->actRec()->setReturnVMExit();
-  if (!mayUseVV || !(fp->func()->attrs() & AttrMayUseVV)) {
-    waitHandle->actRec()->setTailFrameIds(-1);
-  }
+  waitHandle->m_packedTailFrameIds = -1;
   assertx(!waitHandle->hasTailFrames());
   waitHandle->initialize(child);
   return waitHandle;
@@ -214,6 +207,9 @@ void c_AsyncFunctionWaitHandle::await(Offset suspendOffset,
                                       req::ptr<c_WaitableWaitHandle>&& child) {
   // Prepare child for establishing dependency. May throw.
   prepareChild(child.get());
+  if (RO::EvalEnableImplicitContext) {
+    this->m_implicitContext = *ImplicitContext::activeCtx;
+  }
 
   // Suspend the async function.
   resumable()->setResumeAddr(nullptr, suspendOffset);

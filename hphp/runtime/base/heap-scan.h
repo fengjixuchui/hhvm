@@ -42,7 +42,6 @@
 
 #include "hphp/runtime/server/server-note.h"
 
-#include "hphp/runtime/vm/globals-array.h"
 #include "hphp/runtime/vm/named-entity.h"
 #include "hphp/runtime/vm/named-entity-defs.h"
 #include "hphp/runtime/vm/runtime.h"
@@ -116,10 +115,6 @@ inline void scanHeapObject(const HeapObject* h, type_scan::Scanner& scanner) {
       return static_cast<const MixedArray*>(h)->scan(scanner);
     case HeaderKind::Keyset:
       return static_cast<const SetArray*>(h)->scan(scanner);
-    case HeaderKind::Globals:
-      return static_cast<const GlobalsArray*>(h)->scan(scanner);
-    case HeaderKind::RecordArray:
-      return static_cast<const RecordArray*>(h)->scan(scanner);
     case HeaderKind::BespokeArray:
     case HeaderKind::BespokeVArray:
     case HeaderKind::BespokeDArray:
@@ -227,11 +222,6 @@ inline void RecordBase::scan(type_scan::Scanner& scanner) const {
 
 inline void RecordData::scan(type_scan::Scanner& scanner) const {
   RecordBase::scan(scanner);
-}
-
-inline void RecordArray::scan(type_scan::Scanner& scanner) const {
-  RecordBase::scan(scanner);
-  scanner.scan(extraFieldMap());
 }
 
 inline void ObjectData::scan(type_scan::Scanner& scanner) const {

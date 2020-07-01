@@ -13,9 +13,10 @@ type state_backend = OCaml_state_backend
 
 type env = {
   from: string;
+  client_id: string;
   root: Path.t;
   ignore_hh_version: bool;
-  verbosity: Calculate_fanout.Verbosity.t;
+  detail_level: Calculate_fanout.Detail_level.t;
   naming_table_path: Path.t option;
   dep_table_path: Path.t option;
   watchman_sockname: Path.t option;
@@ -33,6 +34,7 @@ type saved_state_result = {
   naming_table: Naming_table.t;
   naming_table_path: Path.t;
   dep_table_path: Path.t;
+  errors_path: Path.t;
   saved_state_changed_files: Relative_path.Set.t;
 }
 
@@ -47,7 +49,8 @@ let set_up_global_environment (env : env) : setup_result =
     ServerEnvBuild.make_genv server_args server_config server_local_config []
     (* no workers *)
   in
-  let server_env = ServerEnvBuild.make_env genv.ServerEnv.config in
+  let init_id = Random_id.short_string () in
+  let server_env = ServerEnvBuild.make_env ~init_id genv.ServerEnv.config in
   (* We need shallow class declarations so that we can invalidate individual
   members in a class hierarchy. *)
   let server_env =
@@ -96,9 +99,18 @@ let load_saved_state ~(env : env) ~(setup_result : setup_result) :
           ( saved_state_info
               .Saved_state_loader.Naming_table_info.naming_table_path,
             changed_files ))
-  and (dep_table_path, dep_table_changed_files) =
+  and (dep_table_path, errors_path, dep_table_changed_files) =
     match env.dep_table_path with
-    | Some dep_table_path -> Lwt.return (dep_table_path, [])
+    | Some dep_table_path ->
+      let errors_path =
+        dep_table_path
+        |> Path.to_string
+        |> Filename.split_extension
+        |> fst
+        |> SaveStateService.get_errors_filename
+        |> Path.make
+      in
+      Lwt.return (dep_table_path, errors_path, [])
     | None ->
       let%lwt dep_table_saved_state =
         State_loader_lwt.load
@@ -118,6 +130,8 @@ let load_saved_state ~(env : env) ~(setup_result : setup_result) :
         Lwt.return
           ( saved_state_info
               .Saved_state_loader.Naming_and_dep_table_info.dep_table_path,
+            saved_state_info
+              .Saved_state_loader.Naming_and_dep_table_info.errors_path,
             changed_files ))
   in
   let changed_files =
@@ -158,6 +172,7 @@ let load_saved_state ~(env : env) ~(setup_result : setup_result) :
       naming_table;
       naming_table_path;
       dep_table_path;
+      errors_path;
       saved_state_changed_files = changed_files;
     }
 
@@ -197,8 +212,9 @@ let advance_cursor
       let client_id =
         incremental_state#look_up_client_id
           {
-            Incremental.from = env.from;
+            Incremental.client_id = env.client_id;
             dep_table_saved_state_path = saved_state_result.dep_table_path;
+            errors_saved_state_path = saved_state_result.errors_path;
             naming_table_saved_state_path =
               Naming_sqlite.Db_path
                 (Path.to_string saved_state_result.naming_table_path);
@@ -274,7 +290,7 @@ let mode_calculate
     telemetry = calculate_fanout_telemetry;
   } =
     Calculate_fanout.go
-      ~verbosity:env.verbosity
+      ~detail_level:env.detail_level
       ~old_naming_table
       ~new_naming_table
       ~file_deltas
@@ -324,14 +340,87 @@ let mode_calculate
   Hh_json.json_to_multiline_output Out_channel.stdout json;
   Lwt.return_unit
 
-let verbosity_arg =
+let mode_calculate_errors
+    ~(env : env) ~(cursor_id : string option) ~(pretty_print : bool) :
+    unit Lwt.t =
+  let { ctx; workers } = set_up_global_environment env in
+  let incremental_state = make_incremental_state ~env in
+  let cursor =
+    match cursor_id with
+    | Some cursor_id ->
+      incremental_state#look_up_cursor ~client_id:None ~cursor_id
+    | None ->
+      incremental_state#make_default_cursor
+        (Incremental.Client_id env.client_id)
+  in
+  let cursor =
+    match cursor with
+    | Error message -> failwith ("Cursor not found: " ^ message)
+    | Ok cursor -> cursor
+  in
+
+  let (errors, cursor) = cursor#calculate_errors ctx workers in
+  let cursor_id =
+    match cursor with
+    | Some cursor ->
+      let cursor_id = incremental_state#add_cursor cursor in
+      incremental_state#save;
+      cursor_id
+    | None ->
+      let cursor_id =
+        Option.value_exn
+          cursor_id
+          ~message:
+            ( "Internal invariant failure -- "
+            ^ "expected a new cursor to be generated, "
+            ^ "given that no cursor was passed in." )
+      in
+      Incremental.Cursor_id cursor_id
+  in
+
+  let error_list =
+    errors |> Errors.get_sorted_error_list |> List.map ~f:Errors.to_absolute
+  in
+  ( if pretty_print then
+    ServerError.print_error_list
+      stdout
+      ~error_list
+      ~stale_msg:None
+      ~output_json:false
+      ~save_state_result:None
+      ~recheck_stats:None
+  else
+    let json =
+      ServerError.get_error_list_json
+        error_list
+        ~save_state_result:None
+        ~recheck_stats:None
+    in
+    let json =
+      match json with
+      | Hh_json.JSON_Object props ->
+        let props =
+          [
+            ( "cursor",
+              let (Incremental.Cursor_id cursor_id) = cursor_id in
+              Hh_json.JSON_String cursor_id );
+          ]
+          @ props
+        in
+        Hh_json.JSON_Object props
+      | _ -> failwith "Expected error JSON to be an object"
+    in
+    Hh_json.json_to_multiline_output Out_channel.stdout json );
+  Lwt.return_unit
+
+let detail_level_arg =
   Command.Arg_type.create (fun x ->
       match x with
-      | "low" -> Calculate_fanout.Verbosity.Low
-      | "high" -> Calculate_fanout.Verbosity.High
+      | "low" -> Calculate_fanout.Detail_level.Low
+      | "high" -> Calculate_fanout.Detail_level.High
       | other ->
         Printf.eprintf
-          "Invalid verbosity: %s (valid values are 'low', 'high')"
+          "Invalid detail level: %s (valid values are 'low', 'high')"
           other;
         exit 1)
 
@@ -347,16 +436,24 @@ let parse_env () =
       "--from"
       (required string)
       ~doc:"FROM A descriptive string indicating the caller of this program."
+  and client_id =
+    flag
+      "--client-id"
+      (optional string)
+      ~doc:
+        ( "CLIENT-ID A string identifying the caller of this program. "
+        ^ "Use the same string across multiple callers to reuse hh_fanout cursors and intermediate results. "
+        ^ "If not provided, defaults to the value for 'from'." )
   and root =
     flag
       "--root"
       (optional string)
       ~doc:
         "DIR The root directory to run in. If not set, will attempt to locate one by searching upwards for an `.hhconfig` file."
-  and verbosity =
+  and detail_level =
     flag
-      "--verbosity"
-      (optional_with_default Calculate_fanout.Verbosity.Low verbosity_arg)
+      "--detail-level"
+      (optional_with_default Calculate_fanout.Detail_level.Low detail_level_arg)
       ~doc:
         "VERBOSITY How much debugging output to include in the result. May slow down the query."
   and ignore_hh_version =
@@ -421,18 +518,36 @@ let parse_env () =
       of the directory that we invoked this executable from. *)
   Sys.chdir (Path.to_string root);
   Relative_path.set_path_prefix Relative_path.Root root;
+  Relative_path.set_path_prefix Relative_path.Hhi (Hhi.get_hhi_root ());
+  Relative_path.set_path_prefix Relative_path.Tmp (Path.make "/tmp");
   let changed_files =
     changed_files
     |> Sys_utils.parse_path_list
+    |> List.filter ~f:FindUtils.file_filter
     |> List.map ~f:(fun path -> Relative_path.create_detect_prefix path)
     |> Relative_path.Set.of_list
   in
 
+  let client_id =
+    (* We always require 'from'. We don't want to make the user write out a
+    client ID multiple times when they're using/debugging `hh_fanout`
+    interactively, so provide a default value in that case.
+
+    Most of the time, `from` and `client_id` will be the same anyways. An
+    example of reuse might occur when the IDE service wants to take advantage
+    of any work that the bulk typechecker has already done with regards to
+    updating the dependency graph. *)
+    match client_id with
+    | Some client_id -> client_id
+    | None -> from
+  in
+
   {
     from;
+    client_id;
     root;
     ignore_hh_version;
-    verbosity;
+    detail_level;
     naming_table_path;
     dep_table_path;
     watchman_sockname;
@@ -458,6 +573,7 @@ let calculate_subcommand =
      let input_files =
        input_files
        |> Sys_utils.parse_path_list
+       |> List.filter ~f:FindUtils.file_filter
        |> List.map ~f:Path.make
        |> Path.Set.of_list
      in
@@ -466,9 +582,34 @@ let calculate_subcommand =
 
      (fun () -> Lwt_main.run (mode_calculate ~env ~input_files ~cursor_id)))
 
+let calculate_errors_subcommand =
+  let open Command.Param in
+  let open Command.Let_syntax in
+  Command.basic
+    ~summary:"Produce typechecking errors for the codebase"
+    (let%map env = parse_env ()
+     and cursor_id =
+       flag
+         "--cursor"
+         (optional string)
+         ~doc:
+           ( "CURSOR The cursor returned by a previous request to `calculate`. "
+           ^ "If not provided, uses the cursor corresponding to the saved-state."
+           )
+     and pretty_print =
+       flag
+         "--pretty-print"
+         no_arg
+         ~doc:
+           "Pretty-print the errors to stdout, rather than returning a JSON object."
+     in
+
+     fun () ->
+       Lwt_main.run (mode_calculate_errors ~env ~cursor_id ~pretty_print))
+
 let mode_debug ~(env : env) ~(path : Path.t) ~(cursor_id : string option) :
     unit Lwt.t =
-  let ({ ctx; workers; _ } as setup_result) = set_up_global_environment env in
+  let ({ ctx; workers } as setup_result) = set_up_global_environment env in
   let%lwt ({ naming_table = old_naming_table; _ } as saved_state_result) =
     load_saved_state ~env ~setup_result
   in
@@ -596,6 +737,7 @@ let () =
        ~summary:"Provides access to Hack's dependency graph"
        [
          ("calculate", calculate_subcommand);
+         ("calculate-errors", calculate_errors_subcommand);
          ("debug", debug_subcommand);
          ("query", query_subcommand);
          ("query-path", query_path_subcommand);

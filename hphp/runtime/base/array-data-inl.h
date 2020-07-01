@@ -146,25 +146,18 @@ inline ArrayData::ArrayKind ArrayData::kind() const {
   return static_cast<ArrayKind>(m_kind);
 }
 
-inline bool ArrayData::noCopyOnWrite() const {
-  // GlobalsArray doesn't support COW.
-  return kind() == kGlobalsKind;
-}
-
 inline bool ArrayData::isPackedKind() const { return kind() == kPackedKind; }
 inline bool ArrayData::isMixedKind() const { return kind() == kMixedKind; }
 inline bool ArrayData::isPlainKind() const { return kind() == kPlainKind; }
-inline bool ArrayData::isGlobalsArrayKind() const { return kind() == kGlobalsKind; }
 inline bool ArrayData::isVecKind() const { return kind() == kVecKind; }
 inline bool ArrayData::isDictKind() const { return kind() == kDictKind; }
 inline bool ArrayData::isKeysetKind() const { return kind() == kKeysetKind; }
-inline bool ArrayData::isRecordArrayKind() const { return kind() == kRecordKind; }
 
 inline bool ArrayData::isPHPArrayType() const {
-  return kind() < kVecKind;
+  return kind() < kKeysetKind;
 }
 inline bool ArrayData::isHackArrayType() const {
-  return kind() >= kVecKind;
+  return kind() >= kKeysetKind;
 }
 
 inline bool ArrayData::isVecType() const {
@@ -178,17 +171,17 @@ inline bool ArrayData::isKeysetType() const {
 }
 
 inline bool ArrayData::hasVanillaPackedLayout() const {
-  static_assert(kNumKinds == 14);
-  static_assert(kPackedKind == 0);
-  static_assert(kVecKind == 8);
+  static_assert(kNumKinds == 12);
+  static_assert(kPackedKind == 2);
+  static_assert(kVecKind == 10);
   // Equivalent to: isPackedKind() || isVecKind()
   return kind() % 8 == kPackedKind;
 }
 inline bool ArrayData::hasVanillaMixedLayout() const {
-  static_assert(kNumKinds == 14);
-  static_assert(kMixedKind == 2);
-  static_assert(kPlainKind == 6);
-  static_assert(kDictKind == 10);
+  static_assert(kNumKinds == 12);
+  static_assert(kMixedKind == 0);
+  static_assert(kPlainKind == 4);
+  static_assert(kDictKind == 8);
   // Equivalent to: isMixedKind() || isPlainKind() || isDictKind()
   return kind() % 4 == kMixedKind;
 }
@@ -202,37 +195,37 @@ inline bool ArrayData::bothVanilla(const ArrayData* ad1, const ArrayData* ad2) {
 }
 
 inline bool ArrayData::isVArray() const {
-  static_assert(kPackedKind == 0);
-  static_assert(kBespokeVArrayKind == 1);
-  return kind() <= kBespokeVArrayKind;
+  return (kind() & ~kBespokeKindMask) == kPackedKind;
 }
 
 inline bool ArrayData::isDArray() const {
-  return (kind() & ~kBespokeKindMask) == kMixedKind;
+  static_assert(kMixedKind == 0);
+  static_assert(kBespokeDArrayKind == 1);
+  return kind() <= kBespokeDArrayKind;
 }
 
 inline bool ArrayData::isDVArray() const {
-  static_assert(kPackedKind == 0);
-  static_assert(kBespokeVArrayKind == 1);
-  static_assert(kMixedKind == 2);
-  static_assert(kBespokeDArrayKind == 3);
-  return kind() <= kBespokeDArrayKind;
+  static_assert(kMixedKind == 0);
+  static_assert(kBespokeDArrayKind == 1);
+  static_assert(kPackedKind == 2);
+  static_assert(kBespokeVArrayKind == 3);
+  return kind() <= kBespokeVArrayKind;
 }
 
 inline bool ArrayData::isNotDVArray() const { return !isDVArray(); }
 
-inline bool ArrayData::isVecOrVArray() const {
+inline bool ArrayData::isHAMSafeVArray() const {
   return RuntimeOption::EvalHackArrDVArrs ? isVecType() : isVArray();
 }
-inline bool ArrayData::isDictOrDArray() const {
+inline bool ArrayData::isHAMSafeDArray() const {
   return RuntimeOption::EvalHackArrDVArrs ? isDictType() : isDArray();
 }
 
 inline bool ArrayData::dvArrayEqual(const ArrayData* a, const ArrayData* b) {
-  static_assert(kPackedKind == 0);
-  static_assert(kBespokeVArrayKind == 1);
-  static_assert(kMixedKind == 2);
-  static_assert(kBespokeDArrayKind == 3);
+  static_assert(kMixedKind == 0);
+  static_assert(kBespokeDArrayKind == 1);
+  static_assert(kPackedKind == 2);
+  static_assert(kBespokeVArrayKind == 3);
   return std::min(uint8_t(a->kind() & ~kBespokeKindMask), uint8_t{4}) ==
          std::min(uint8_t(b->kind() & ~kBespokeKindMask), uint8_t{4});
 }
@@ -289,8 +282,6 @@ DataType ArrayData::toDataType() const {
     case kBespokeDArrayKind:
     case kPlainKind:
     case kBespokeArrayKind:
-    case kGlobalsKind:
-    case kRecordKind:
       return KindOfArray;
 
     case kVecKind:
@@ -328,8 +319,6 @@ DataType ArrayData::toPersistentDataType() const {
     case kBespokeDArrayKind:
     case kPlainKind:
     case kBespokeArrayKind:
-    case kGlobalsKind:
-    case kRecordKind:
       return KindOfPersistentArray;
 
     case kVecKind:

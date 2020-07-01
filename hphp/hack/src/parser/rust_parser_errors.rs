@@ -288,7 +288,6 @@ where
     fn end_offset(n: &'a Syntax<Token, Value>) -> usize {
         // TODO: this logic should be moved to SyntaxTrait::position, when implemented
         let w = n.width();
-        let w = if w > 0 { w - 1 } else { w };
         n.leading_start_offset() + n.leading_width() + w
     }
 
@@ -4344,8 +4343,8 @@ where
             (!self_.env.parser_options.po_disallow_func_ptrs_in_constants
                 && (text == Self::strip_hh_ns(sn::autoimported_functions::FUN_)
                     || text == Self::strip_hh_ns(sn::autoimported_functions::CLASS_METH)))
-                || (text == sn::std_lib_functions::MARK_LEGACY_HACK_ARRAY)
                 || (text == sn::std_lib_functions::ARRAY_MARK_LEGACY)
+                || (text == Self::strip_ns(sn::std_lib_functions::ARRAY_MARK_LEGACY))
         };
 
         let is_namey = |self_: &Self, token: &Token| -> bool {

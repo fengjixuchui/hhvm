@@ -246,6 +246,7 @@ let parse_options () =
   let allowed_fixme_codes_partial = ref ISet.empty in
   let codes_not_raised_partial = ref ISet.empty in
   let allowed_decl_fixme_codes = ref ISet.empty in
+  let widen_is_array = ref false in
   let options =
     [
       ("--ifc", Arg.String set_ifc, " Run the flow analysis");
@@ -580,6 +581,9 @@ let parse_options () =
               |> List.map ~f:int_of_string
               |> ISet.of_list),
         "List of fixmes that are allowed in declarations." );
+      ( "--widen-is-array",
+        Arg.Set widen_is_array,
+        "Infer union of array-like types for `is_array`." );
     ]
   in
   let options = Arg.align ~limit:25 options in
@@ -654,6 +658,7 @@ let parse_options () =
       ~tco_enable_systemlib_annotations:!enable_systemlib_annotations
       ~tco_pu_enabled_paths:(!enable_pocket_universes_syntax, [])
       ~po_allowed_decl_fixme_codes:!allowed_decl_fixme_codes
+      ~tco_widen_is_array:!widen_is_array
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -1616,9 +1621,10 @@ let handle_mode
     let naming_table = Naming_table.create files_info in
     Naming_table.iter naming_table Typing_deps.update_file;
     let genv = ServerEnvBuild.default_genv in
+    let init_id = Random_id.short_string () in
     let env =
       {
-        (ServerEnvBuild.make_env genv.ServerEnv.config) with
+        (ServerEnvBuild.make_env ~init_id genv.ServerEnv.config) with
         ServerEnv.naming_table;
         ServerEnv.tcopt = Provider_context.get_tcopt ctx;
       }
@@ -1651,9 +1657,10 @@ let handle_mode
     let naming_table = Naming_table.create files_info in
     Naming_table.iter naming_table Typing_deps.update_file;
     let genv = ServerEnvBuild.default_genv in
+    let init_id = Random_id.short_string () in
     let env =
       {
-        (ServerEnvBuild.make_env genv.ServerEnv.config) with
+        (ServerEnvBuild.make_env ~init_id genv.ServerEnv.config) with
         ServerEnv.naming_table;
         ServerEnv.tcopt = Provider_context.get_tcopt ctx;
       }

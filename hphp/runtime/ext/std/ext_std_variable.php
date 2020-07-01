@@ -217,6 +217,12 @@ namespace HH {
   <<__Native, __Pure>>
   function is_php_array(<<__MaybeMutable>> mixed $var): bool;
 
+  <<__Native, __IsFoldable, __Pure>>
+  function is_dict_or_darray(<<__MaybeMutable>> mixed $var): bool;
+
+  <<__Native, __IsFoldable, __Pure>>
+  function is_vec_or_varray(<<__MaybeMutable>> mixed $var): bool;
+
   /*
    * Check if the input is an array-like containing only integer keys running
    * from 0 to N-1, in that order.
@@ -268,13 +274,6 @@ namespace HH {
    */
   <<__Native>>
   function is_late_init_sprop_init(string $cls, string $prop): bool;
-
-  /*
-   * Return all of the keys of the globals array shared between
-   * runtime and user code. Currently backed by $GLOBALS.
-   */
-  <<__Native>>
-  function global_keys(): keyset<string>;
 
   /*
    * Does the key exist in the globals array shared between runtime
